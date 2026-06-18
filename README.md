@@ -1,158 +1,93 @@
 # project61-agentOS-happylegend
 
-## 项目信息
+Agent-OS is an operating-system design project for the OS function challenge track. This branch ports the project to a uCore-based RISC-V kernel and implements Agent process management, structured tool calls, context history, file metadata indexing, Agent wait/wake loops, and a multi-Agent recovery demo.
 
-| 项目 | 内容 |
-| --- | --- |
-| 比赛 | 2026 年全国大学生计算机系统能力大赛-操作系统设计赛（全国）-OS 功能挑战赛道 |
-| 选题编号 | project61 |
-| 赛题名称 | 面向 AI 智能体的操作系统内核（Agent-OS） |
-| 队伍名称 | happy-legend |
-| 平台 Project ID | 39809 |
-| GitLab 仓库 | https://gitlab.eduxiji.net/T2026106149911107/project3136859-388870 |
+The current delivery target is the `uCore` branch. The project-specific implementation is concentrated in `os/agent.c`, `os/agent.h`, `os/proc.c`, `os/syscall.c`, `os/trap.c`, and the Agent user tests under `user/src/`.
 
-## 项目简介
+## What Is Implemented
 
-本项目围绕 Agent-OS 赛题，探索让操作系统内核感知、管理和支持 AI Agent 的机制。项目目标是在教学操作系统内核中实现 Agent 进程、结构化内核交互、上下文路径管理等能力，并形成可在 QEMU 中运行和演示的系统。
+- Agent process creation with per-process metadata, role-independent Agent identity, and a fixed user-visible Agent Context area.
+- Four-page Agent Context mapped below the trapframe, with kernel-private shadow pages as the authoritative history and user pages as a fast read-only-by-convention mirror.
+- Batched structured tool execution through `agent_run(ops, results, count, flags)`, supporting up to 64 operations per syscall.
+- Context Path v2 with 128 visible records, FIFO replacement, short payload/result summaries, rollback, clear, point query, and full snapshot.
+- Tool registry with ID-based fast dispatch and name-based legacy compatibility.
+- File metadata service with indexed query by status, stage, and kind, used by the demo and benchmark.
+- Agent Loop primitives: watch, wait, wake, heartbeat, and event delivery.
+- Multi-Agent laboratory recovery demo covering monitoring, diagnosis, authorization check, recovery action, duplicate detection, and final report query.
 
-文档体系参考操作系统内核项目和软件架构文档惯例重构：README 负责快速运行，主设计文档解释架构和关键决策，API/ABI 文档说明用户态与内核边界，验证文档给出可复现证据。
+## Repository Layout
 
-## 基底来源
+- `os/`: uCore kernel source and Agent kernel implementation.
+- `user/include/agent.h`: user-space Agent ABI definitions.
+- `user/lib/syscall.c`: user-space syscall wrappers.
+- `user/src/agentfinal_ucore.c`: final correctness verification for Agent-OS on uCore.
+- `user/src/agentbench_ucore.c`: performance benchmark for batched calls, direct context reads, snapshots, index queries, and event wait/wake.
+- `user/src/labdemo_ucore.c`: end-to-end multi-Agent demonstration.
+- `docs/`: design, API, verification, testing, traceability, and demo documents.
 
-本项目当前以 MIT PDOS 的 [xv6-riscv](https://github.com/mit-pdos/xv6-riscv) 作为教学操作系统基底。仓库中的 `kernel/`、`user/`、`mkfs/`、`Makefile` 等基础代码来自 xv6-riscv，后续将在此基础上实现 Agent-OS 相关能力。
+## Environment
 
-原始 xv6-riscv 说明和许可文件已保留：
+Recommended environment:
 
-- [docs/xv6-riscv-README](docs/xv6-riscv-README)
-- [THIRD_PARTY/xv6-riscv-LICENSE](THIRD_PARTY/xv6-riscv-LICENSE)
+- WSL2 Ubuntu 26.04 or a recent Linux distribution.
+- `make`
+- `qemu-system-riscv64`
+- `riscv64-linux-gnu-gcc`
+- `riscv64-linux-gnu-binutils`
 
-## 赛题对应关系
+The Makefile also accepts `riscv64-unknown-elf-` if that toolchain is installed. In the current WSL environment the verified toolchain is `riscv64-linux-gnu-`.
 
-| 赛题任务 | 项目目标 | 当前状态 |
-| --- | --- | --- |
-| 任务一：Agent 进程创建与地址空间设计 | 支持 Agent 进程概念和上下文空间 | 已完成增强实现 |
-| 任务二：Agent 与内核结构化交互 | 支持结构化工具调用和结果返回 | 已完成增强实现 |
-| 任务三：上下文路径管理 | 记录并查询 Agent 多轮调用上下文 | 已完成增强实现 |
-| 任务四：面向 Agent 查询优化的文件系统扩展 | 支持面向 Agent 的文件查询能力 | 待评估 |
-| 任务五：Agent Loop 内核运行机制 | 支持 Agent 循环触发、等待和唤醒 | 待评估 |
-| 任务六：综合演示与创新 | 用完整场景展示 Agent-OS 能力 | 待设计 |
-
-## 构建与运行
-
-已验证开发环境：WSL2 Ubuntu 26.04。
-
-通用运行要求：Linux 环境，安装 RISC-V GCC/binutils、QEMU riscv64、make、git。使用 `make qemu` 构建和运行。
+## Build
 
 ```bash
-cd project61-agentOS-happylegend
-make qemu
+make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=agent
+make build TOOLPREFIX=riscv64-linux-gnu- LOG=warn INIT_PROC=agentfinal_ucore
 ```
 
-进入 xv6 shell 后运行最终功能验收程序：
+`CHAPTER=agent` builds the Agent-OS verification programs and the user shell.
 
-```sh
-agentfinal
-```
+## Final Verification
 
-预期输出包括 4 页 Agent Context、64 路批量工具调用、Context Snapshot、短文本历史记录、用户镜像篡改边界、128 条容量 FIFO 淘汰和直接 Context 一致性检查：
-
-```text
-agentfinal: context size=16384 capacity=128
-agentfinal: batch first_seq=1 last_seq=64
-agentfinal: short_text_history=1 payload=final result=final
-agentfinal: snapshot count=64 latest=64
-agentfinal: direct_dirty_before_snapshot=1
-agentfinal: tamper_protected=1
-agentfinal: fifo oldest=65 latest=192 dropped=64
-agentfinal: direct_context_match=1
-agentfinal: passed
-```
-
-进入 xv6 shell 后运行最终性能验收程序：
-
-```sh
-agentbench
-```
-
-输出包括 scalar run、batch run、direct Context、context query 和 context snapshot 的吞吐对比。下列数值是一次样例输出，`ticks` 会随宿主机和 QEMU 状态波动：
-
-```text
-agentbench: case ops ticks ops_per_tick speedup_x100
-agentbench: scalar_run ops=65536 ticks=16 ops_per_tick=4096 speedup_x100=100
-agentbench: batch_run ops=65536 ticks=2 ops_per_tick=32768 speedup_x100=800
-agentbench: direct_context ops=1000000 ticks=0 ops_per_tick=1000000 speedup_x100=24414
-agentbench: context_query ops=2048 ticks=0 ops_per_tick=2048 speedup_x100=50
-agentbench: context_snapshot ops=262144 ticks=3 ops_per_tick=87381 speedup_x100=4266
-agentbench: latest_sequence=131072 dropped=130944 capacity=128
-agentbench: passed
-```
-
-完整回归还可以运行以下辅助测试。`agentexec` 可直接从 shell 运行，也可作为 Agent `exec("agentexec")` 的目标程序：
-
-```sh
-agentexec
-agentcall
-contexttest
-agentstress
-```
-
-进入 xv6 shell 后会看到 `$` 提示符。退出 QEMU：
-
-```text
-Ctrl-a x
-```
-
-如需清理构建产物：
+For deterministic verification, run each final program as the init process:
 
 ```bash
-make clean
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfinal_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER=agent
 ```
 
-当前交付材料包括：
+Or run the scripted sequence:
 
-- 内核代码；
-- 用户态测试程序；
-- QEMU 运行和演示说明；
-- 测试记录与结果分析；
-- 任务一至三演示材料。
+```bash
+bash scripts/run-agent-tests.sh
+```
 
-仍需补充：
+Expected success markers:
 
-- 任务四至六实现和验证；
-- 综合演示场景；
-- 进展汇报幻灯片；
-- 作品演示视频。
+- `agentfinal_ucore: passed`
+- `agentbench_ucore: passed`
+- `labdemo_ucore: passed`
 
-## 文档与演示
+The benchmark prints a table in the form:
 
-| 材料 | 位置 |
-| --- | --- |
-| 文档索引 | [docs/README.md](docs/README.md) |
-| 文档标准采用说明 | [docs/documentation-standard.md](docs/documentation-standard.md) |
-| 主设计文档 | [docs/design.md](docs/design.md) |
-| 赛题要求追踪表 | [docs/requirements-traceability.md](docs/requirements-traceability.md) |
-| API 与 ABI | [docs/api.md](docs/api.md) |
-| 验证与性能评估 | [docs/verification.md](docs/verification.md) |
-| 测试内容详细说明 | [docs/testing-details.md](docs/testing-details.md) |
-| 演示脚本 | [docs/demo-script.md](docs/demo-script.md) |
-| xv6 文件系统内说明 | [README](README) |
-| xv6-riscv 原始说明 | [docs/xv6-riscv-README](docs/xv6-riscv-README) |
-| 任务一细节附录 | [docs/task1-agent-process.md](docs/task1-agent-process.md) |
-| 任务二细节附录 | [docs/task2-agent-call.md](docs/task2-agent-call.md) |
-| 任务三细节附录 | [docs/task3-context-path.md](docs/task3-context-path.md) |
-| 当前测试记录 | [docs/test-record.md](docs/test-record.md) |
-| 源代码许可 | [LICENSE](LICENSE) |
-| 文档与答辩材料许可 | [DOCUMENTATION_LICENSE.md](DOCUMENTATION_LICENSE.md) |
-| 第三方声明 | [NOTICE](NOTICE) |
-| 进展汇报幻灯片 | 待补充 |
-| 演示视频 | 待补充 |
+```text
+case ops ticks ops_per_tick speedup_x100
+```
 
-## 许可声明
+Tick values vary across QEMU runs. The important evidence is successful execution, stable relative trends, and no kernel panic.
 
-本仓库作为参赛作品提交的源代码采用 [Apache License 2.0](LICENSE) 许可，满足赛事对源代码开源协议的要求。
+## Documentation
 
-xv6-riscv 基底代码和原始说明保留其上游版权与许可声明，详见 [THIRD_PARTY/xv6-riscv-LICENSE](THIRD_PARTY/xv6-riscv-LICENSE) 和 [docs/xv6-riscv-README](docs/xv6-riscv-README)。这些第三方声明是上游代码合规要求的一部分，不应删除。
+Start with:
 
-本队伍原创的技术文档、答辩材料、汇报幻灯片和演示视频采用 [Creative Commons Attribution-ShareAlike 4.0 International](https://creativecommons.org/licenses/by-sa/4.0/) 许可，详见 [DOCUMENTATION_LICENSE.md](DOCUMENTATION_LICENSE.md)。
+- `docs/design.md`
+- `docs/api.md`
+- `docs/verification.md`
+- `docs/testing-details.md`
+- `docs/demo-script.md`
+- `docs/requirements-traceability.md`
+- `docs/test-record.md`
 
-如后续引用、复制或改编非本队伍来源的代码、文档或公开项目内容，将在对应源码位置、文档位置、设计文档和答辩材料中明确标注来源、用途、授权信息及本项目的增量贡献。对 xv6-riscv 的改动也会在设计文档和答辩材料中说明。
+## License
+
+Source code is distributed under GPL-3.0. Technical documents, demo scripts, and presentation-oriented materials are distributed under CC-BY-SA 4.0. See `LICENSE`, `DOCUMENTATION_LICENSE.md`, and `NOTICE`.

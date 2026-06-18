@@ -1,0 +1,255 @@
+#include <agent.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#define TOOL_OPS 8192
+#define SNAPSHOT_ROUNDS 256
+#define DIRECT_READS 50000
+#define FILE_OPS 1024
+#define WAIT_OPS 32
+
+static struct agent_op ops[AGENT_BATCH_MAX];
+static struct agent_result results[AGENT_BATCH_MAX];
+static struct agent_context_record records[AGENT_CONTEXT_MAX_RECORDS];
+
+static void check(int ok, const char *msg)
+{
+	if (!ok) {
+		printf("agentbench_ucore: check failed: %s\n", msg);
+		exit(1);
+	}
+}
+
+static int now_ms(void)
+{
+	return (int)get_mtime();
+}
+
+static int elapsed(int start, int end)
+{
+	int d = end - start;
+	return d <= 0 ? 1 : d;
+}
+
+static void print_perf(const char *name, int ops_count, int ticks,
+		       int base_ops, int base_ticks)
+{
+	int speed = (ops_count * base_ticks * 100) / (ticks * base_ops);
+	printf("agentbench_ucore: %s ops=%d ticks=%d ops_per_tick=%d speedup_x100=%d\n",
+	       name, ops_count, ticks, ops_count / ticks, speed);
+}
+
+static void fill_echo_batch(uint64 base)
+{
+	for (int i = 0; i < AGENT_BATCH_MAX; i++) {
+		memset(&ops[i], 0, sizeof(ops[i]));
+		ops[i].version = AGENT_CALL_VERSION;
+		ops[i].tool_id = AGENT_TOOL_ECHO;
+		ops[i].request_id = base + i;
+		ops[i].arg0 = i;
+		ops[i].arg1 = i + 1;
+		strcpy(ops[i].payload, "bench");
+	}
+}
+
+static int bench_scalar(void)
+{
+	struct agent_op op;
+	struct agent_result res;
+	int start;
+
+	memset(&op, 0, sizeof(op));
+	op.version = AGENT_CALL_VERSION;
+	op.tool_id = AGENT_TOOL_ECHO;
+	strcpy(op.payload, "scalar");
+	start = now_ms();
+	for (int i = 0; i < TOOL_OPS; i++) {
+		op.request_id = i + 1;
+		check(agent_run(&op, &res, 1, 0) == 1, "scalar run");
+		check(res.status == AGENT_STATUS_OK, "scalar status");
+	}
+	return elapsed(start, now_ms());
+}
+
+static int bench_batch(void)
+{
+	int rounds = TOOL_OPS / AGENT_BATCH_MAX;
+	int start = now_ms();
+
+	for (int i = 0; i < rounds; i++) {
+		fill_echo_batch(100000 + i * AGENT_BATCH_MAX);
+		check(agent_run(ops, results, AGENT_BATCH_MAX, 0) ==
+			      AGENT_BATCH_MAX,
+		      "batch run");
+	}
+	return elapsed(start, now_ms());
+}
+
+static int bench_direct(struct agent_info *info)
+{
+	volatile struct agent_context_header *h;
+	volatile uint64 sum = 0;
+	int start;
+
+	h = (struct agent_context_header *)info->context_base;
+	start = now_ms();
+	for (int i = 0; i < DIRECT_READS; i++)
+		sum += h->latest_sequence;
+	check(sum > 0, "direct sum");
+	return elapsed(start, now_ms());
+}
+
+static int bench_query(void)
+{
+	int start = now_ms();
+
+	for (int i = 0; i < SNAPSHOT_ROUNDS; i++)
+		check(context_query(0, records, 1) >= 1, "context query");
+	return elapsed(start, now_ms());
+}
+
+static int bench_snapshot(int *total)
+{
+	struct agent_context_header header;
+	int n;
+	int start = now_ms();
+
+	*total = 0;
+	for (int i = 0; i < SNAPSHOT_ROUNDS; i++) {
+		n = context_snapshot(&header, records,
+				     AGENT_CONTEXT_MAX_RECORDS);
+		check(n >= 1, "context snapshot");
+		*total += n;
+	}
+	return elapsed(start, now_ms());
+}
+
+static int bench_file_query(uint64 flags)
+{
+	struct agent_file_query q;
+	struct agent_file_query_result r;
+	int start;
+
+	memset(&q, 0, sizeof(q));
+	q.flags = flags;
+	q.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(q.project, "lab-gene-x");
+	strcpy(q.workflow, "nightly-regression");
+	strcpy(q.run_id, "RUN-042");
+	strcpy(q.stage, "align");
+	start = now_ms();
+	for (int i = 0; i < FILE_OPS; i++) {
+		check(agent_file_query(&q, &r) >= 1, "file query");
+		check(r.total_hits >= 1, "file hits");
+	}
+	return elapsed(start, now_ms());
+}
+
+static void run_waiter(int ready_fd, int ack_fd)
+{
+	struct agent_event event;
+	char ch = 'r';
+
+	check(agent_watch(AGENT_EVENT_MESSAGE, "bench") == 0, "watch");
+	check(write(ready_fd, &ch, 1) == 1, "ready");
+	for (int i = 0; i < WAIT_OPS; i++) {
+		check(agent_wait(&event, 200) == AGENT_STATUS_OK, "wait");
+		ch = 'a';
+		check(write(ack_fd, &ch, 1) == 1, "ack");
+	}
+	exit(0);
+}
+
+static int bench_wait_wake(void)
+{
+	int ready[2];
+	int ack[2];
+	int pid;
+	int status = 0;
+	char ch;
+	struct agent_event event;
+	int start;
+
+	check(pipe(ready) == 0, "ready pipe");
+	check(pipe(ack) == 0, "ack pipe");
+	pid = agent_create();
+	check(pid >= 0, "create waiter");
+	if (pid == 0) {
+		close(ready[0]);
+		close(ack[0]);
+		run_waiter(ready[1], ack[1]);
+	}
+	close(ready[1]);
+	close(ack[1]);
+	check(read(ready[0], &ch, 1) == 1, "read ready");
+	memset(&event, 0, sizeof(event));
+	event.type = AGENT_EVENT_MESSAGE;
+	strcpy(event.payload, "bench");
+	start = now_ms();
+	for (int i = 0; i < WAIT_OPS; i++) {
+		event.corr_id = i + 1;
+		check(agent_wake(pid, &event) == 0, "wake");
+		check(read(ack[0], &ch, 1) == 1, "read ack");
+	}
+	check(waitpid(pid, &status) == pid, "wait waiter");
+	check(status == 0, "waiter status");
+	return elapsed(start, now_ms());
+}
+
+static void run_agent_bench(void)
+{
+	struct agent_info info;
+	int scalar;
+	int batch;
+	int direct;
+	int query;
+	int snapshot;
+	int snapshot_records;
+	int scan;
+	int index;
+	int waitwake;
+
+	check(agent_info(&info) == 0, "info");
+	check(context_clear() == 0, "clear");
+	check(agent_file_meta_init() == 0, "meta init");
+	scalar = bench_scalar();
+	batch = bench_batch();
+	direct = bench_direct(&info);
+	query = bench_query();
+	snapshot = bench_snapshot(&snapshot_records);
+	scan = bench_file_query(AGENT_FILE_QUERY_SCAN);
+	index = bench_file_query(AGENT_FILE_QUERY_USE_INDEX);
+	waitwake = bench_wait_wake();
+
+	printf("agentbench_ucore: case ops ticks ops_per_tick speedup_x100\n");
+	print_perf("scalar_agent_run", TOOL_OPS, scalar, TOOL_OPS, scalar);
+	print_perf("batch_agent_run", TOOL_OPS, batch, TOOL_OPS, scalar);
+	print_perf("direct_context", DIRECT_READS, direct, TOOL_OPS, scalar);
+	print_perf("context_query", SNAPSHOT_ROUNDS, query, SNAPSHOT_ROUNDS,
+		   query);
+	print_perf("context_snapshot", snapshot_records, snapshot,
+		   SNAPSHOT_ROUNDS, query);
+	print_perf("file_scan_query", FILE_OPS, scan, FILE_OPS, scan);
+	print_perf("file_index_query", FILE_OPS, index, FILE_OPS, scan);
+	print_perf("event_wait_wake", WAIT_OPS, waitwake, WAIT_OPS, waitwake);
+	printf("agentbench_ucore: passed\n");
+	exit(0);
+}
+
+int main(void)
+{
+	int pid;
+	int status = 0;
+
+	printf("agentbench_ucore: Agent-OS on uCore benchmark\n");
+	pid = agent_create();
+	check(pid >= 0, "create bench agent");
+	if (pid == 0)
+		run_agent_bench();
+	check(waitpid(pid, &status) == pid, "wait bench");
+	check(status == 0, "bench status");
+	printf("agentbench_ucore: parent passed\n");
+	return 0;
+}

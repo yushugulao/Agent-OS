@@ -1,16 +1,7 @@
-project61-agentOS-happylegend
+# Notice
 
-Source code:
-The competition work source code in this repository is released under Apache
-License 2.0. See LICENSE.
+This project is based on the uCore tutorial code and user test structure from the LearningOS/uCore-Tutorial-Code and LearningOS/uCore-Tutorial-Test projects. The project-specific Agent-OS implementation, tests, and documentation were developed for the operating system design competition.
 
-Third-party base system:
-This project is based on xv6-riscv. Original xv6-riscv copyright and license
-notices are retained in THIRD_PARTY/xv6-riscv-LICENSE, and the original xv6
-README is retained in docs/xv6-riscv-README.
+Source code license: GPL-3.0.
 
-Documentation and presentation materials:
-Original technical documentation, defense materials, presentation slides, and
-demo video materials created by the happy-legend team are released under
-Creative Commons Attribution-ShareAlike 4.0 International. See
-DOCUMENTATION_LICENSE.md.
+Documentation license: CC-BY-SA-4.0.

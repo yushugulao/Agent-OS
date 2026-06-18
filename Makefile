@@ -1,81 +1,59 @@
-K=kernel
-U=user
+.PHONY: clean build user run debug test .FORCE
+all: build
 
-OBJS = \
-  $K/entry.o \
-  $K/start.o \
-  $K/console.o \
-  $K/printf.o \
-  $K/uart.o \
-  $K/kalloc.o \
-  $K/spinlock.o \
-  $K/string.o \
-  $K/main.o \
-  $K/vm.o \
-  $K/proc.o \
-  $K/agent.o \
-  $K/swtch.o \
-  $K/trampoline.o \
-  $K/trap.o \
-  $K/syscall.o \
-  $K/sysproc.o \
-  $K/bio.o \
-  $K/fs.o \
-  $K/log.o \
-  $K/sleeplock.o \
-  $K/file.o \
-  $K/pipe.o \
-  $K/exec.o \
-  $K/sysfile.o \
-  $K/kernelvec.o \
-  $K/plic.o \
-  $K/virtio_disk.o
+K = os
+U = user
+F = nfs
 
-# riscv64-unknown-elf- or riscv64-linux-gnu-
-# perhaps in /opt/riscv/bin
-#TOOLPREFIX = 
-
-# Try to infer the correct TOOLPREFIX if not set
-ifndef TOOLPREFIX
-TOOLPREFIX := $(shell if riscv64-unknown-elf-objdump -i 2>&1 | grep 'elf64-big' >/dev/null 2>&1; \
-	then echo 'riscv64-unknown-elf-'; \
-	elif riscv64-elf-objdump -i 2>&1 | grep 'elf64-big' >/dev/null 2>&1; \
-	then echo 'riscv64-elf-'; \
-	elif riscv64-none-elf-objdump -i 2>&1 | grep 'elf64-big' >/dev/null 2>&1; \
-	then echo 'riscv64-none-elf-'; \
-	elif riscv64-linux-gnu-objdump -i 2>&1 | grep 'elf64-big' >/dev/null 2>&1; \
-	then echo 'riscv64-linux-gnu-'; \
-	elif riscv64-unknown-linux-gnu-objdump -i 2>&1 | grep 'elf64-big' >/dev/null 2>&1; \
-	then echo 'riscv64-unknown-linux-gnu-'; \
-	else echo "***" 1>&2; \
-	echo "*** Error: Couldn't find a riscv64 version of GCC/binutils." 1>&2; \
-	echo "*** To turn off this error, run 'gmake TOOLPREFIX= ...'." 1>&2; \
-	echo "***" 1>&2; exit 1; fi)
-endif
-
-QEMU = qemu-system-riscv64
-MIN_QEMU_VERSION = 7.2
-
+TOOLPREFIX ?= $(shell if command -v riscv64-unknown-elf-gcc >/dev/null 2>&1; then echo riscv64-unknown-elf-; else echo riscv64-linux-gnu-; fi)
 CC = $(TOOLPREFIX)gcc
+AS = $(TOOLPREFIX)gcc
 LD = $(TOOLPREFIX)ld
 OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
+PY = python3
+GDB = $(TOOLPREFIX)gdb
+CP = cp
+BUILDDIR = build
+C_SRCS = $(wildcard $K/*.c)
+AS_SRCS = $(wildcard $K/*.S)
+C_OBJS = $(addprefix $(BUILDDIR)/, $(addsuffix .o, $(basename $(C_SRCS))))
+AS_OBJS = $(addprefix $(BUILDDIR)/, $(addsuffix .o, $(basename $(AS_SRCS))))
+OBJS = $(sort $(C_OBJS) $(AS_OBJS))
 
-CFLAGS = -Wall -Werror -Wno-unknown-attributes -O -fno-omit-frame-pointer -ggdb -gdwarf-2
-CFLAGS += -march=rv64gc
-CFLAGS += -std=gnu99
+HEADER_DEP = $(addsuffix .d, $(basename $(C_OBJS)))
+
+ifeq (,$(findstring initproc.o,$(OBJS)))
+	AS_OBJS += $(BUILDDIR)/$K/initproc.o
+endif
+
+INIT_PROC ?= usershell
+
+$(K)/initproc.o: $K/initproc.S
+$(K)/initproc.S: scripts/initproc.py .FORCE
+	@$(PY) scripts/initproc.py $(INIT_PROC)
+
+CFLAGS = -Wall -Werror -O -fno-omit-frame-pointer -ggdb
 CFLAGS += -MD
+CFLAGS += -march=rv64imac_zicsr_zifencei -mabi=lp64
 CFLAGS += -mcmodel=medany
-CFLAGS += -ffreestanding
-CFLAGS += -fno-common -nostdlib
-CFLAGS += -fno-builtin-strncpy -fno-builtin-strncmp -fno-builtin-strlen -fno-builtin-memset
-CFLAGS += -fno-builtin-memmove -fno-builtin-memcmp -fno-builtin-log -fno-builtin-bzero
-CFLAGS += -fno-builtin-strchr -fno-builtin-exit -fno-builtin-malloc -fno-builtin-putc
-CFLAGS += -fno-builtin-free
-CFLAGS += -fno-builtin-memcpy -Wno-main
-CFLAGS += -fno-builtin-printf -fno-builtin-fprintf -fno-builtin-vprintf
-CFLAGS += -I.
+CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
+CFLAGS += -I$K
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
+
+LOG ?= error
+
+ifeq ($(LOG), error)
+CFLAGS += -D LOG_LEVEL_ERROR
+else ifeq ($(LOG), warn)
+CFLAGS += -D LOG_LEVEL_WARN
+else ifeq ($(LOG), info)
+CFLAGS += -D LOG_LEVEL_INFO
+else ifeq ($(LOG), debug)
+CFLAGS += -D LOG_LEVEL_DEBUG
+else ifeq ($(LOG), trace)
+CFLAGS += -D LOG_LEVEL_TRACE
+endif
 
 # Disable PIE when possible (for Ubuntu 16.10 toolchain)
 ifneq ($(shell $(CC) -dumpspecs 2>/dev/null | grep -e '[^f]no-pie'),)
@@ -85,123 +63,86 @@ ifneq ($(shell $(CC) -dumpspecs 2>/dev/null | grep -e '[^f]nopie'),)
 CFLAGS += -fno-pie -nopie
 endif
 
+# empty target
+.FORCE:
+
 LDFLAGS = -z max-page-size=4096
 
-$K/kernel: $(OBJS) $K/kernel.ld
-	$(LD) $(LDFLAGS) -T $K/kernel.ld -o $K/kernel $(OBJS) 
-	$(OBJDUMP) -S $K/kernel > $K/kernel.asm
-	$(OBJDUMP) -t $K/kernel | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $K/kernel.sym
+$(AS_OBJS): $(BUILDDIR)/$K/%.o : $K/%.S
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-$K/%.o: $K/%.S
-	$(CC) -march=rv64gc -g -c -o $@ $<
+$(C_OBJS): $(BUILDDIR)/$K/%.o : $K/%.c  $(BUILDDIR)/$K/%.d
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
 
-tags: $(OBJS)
-	etags kernel/*.S kernel/*.c
+$(HEADER_DEP): $(BUILDDIR)/$K/%.d : $K/%.c
+	@mkdir -p $(@D)
+	@set -e; rm -f $@; $(CC) -MM $< $(INCLUDEFLAGS) > $@.$$$$; \
+        sed 's,\($*\)\.o[ :]*,\1.o $@ : ,g' < $@.$$$$ > $@; \
+        rm -f $@.$$$$
 
-ULIB = $U/ulib.o $U/usys.o $U/printf.o $U/umalloc.o
+INIT_PROC ?= usershell
 
-_%: %.o $(ULIB) $U/user.ld
-	$(LD) $(LDFLAGS) -T $U/user.ld -o $@ $< $(ULIB)
-	$(OBJDUMP) -S $@ > $*.asm
-	$(OBJDUMP) -t $@ | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $*.sym
+build: build/kernel
 
-$U/usys.S : $U/usys.pl
-	perl $U/usys.pl > $U/usys.S
+build/kernel: $(OBJS) os/kernel.ld
+	$(LD) $(LDFLAGS) -T os/kernel.ld -o $(BUILDDIR)/kernel $(OBJS)
+	$(OBJDUMP) -S $(BUILDDIR)/kernel > $(BUILDDIR)/kernel.asm
+	$(OBJDUMP) -t $(BUILDDIR)/kernel | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(BUILDDIR)/kernel.sym
+	@echo 'Build kernel done'
 
-$U/usys.o : $U/usys.S
-	$(CC) $(CFLAGS) -c -o $U/usys.o $U/usys.S
+clean:
+	rm -rf $(BUILDDIR) os/initproc.S
+	rm -f $(F)/*.img
 
-$U/_forktest: $U/forktest.o $(ULIB)
-	# forktest has less library code linked in - needs to be small
-	# in order to be able to max out the proc table.
-	$(LD) $(LDFLAGS) -N -e main -Ttext 0 -o $U/_forktest $U/forktest.o $U/ulib.o $U/usys.o
-	$(OBJDUMP) -S $U/_forktest > $U/forktest.asm
-
-mkfs/mkfs: mkfs/mkfs.c $K/fs.h $K/param.h
-	gcc -Wno-unknown-attributes -I. -o mkfs/mkfs mkfs/mkfs.c
-
-# Prevent deletion of intermediate files, e.g. cat.o, after first build, so
-# that disk image changes after first build are persistent until clean.  More
-# details:
-# http://www.gnu.org/software/make/manual/html_node/Chained-Rules.html
-.PRECIOUS: %.o
-
-UPROGS=\
-	$U/_cat\
-	$U/_echo\
-	$U/_forktest\
-	$U/_grep\
-	$U/_init\
-	$U/_kill\
-	$U/_ln\
-	$U/_ls\
-	$U/_mkdir\
-	$U/_rm\
-	$U/_sh\
-	$U/_stressfs\
-	$U/_usertests\
-	$U/_grind\
-	$U/_wc\
-	$U/_zombie\
-	$U/_logstress\
-	$U/_forphan\
-	$U/_dorphan\
-	$U/_agentdemo\
-	$U/_agentcall\
-	$U/_agentexec\
-	$U/_contexttest\
-	$U/_agentstress\
-	$U/_agentfinal\
-	$U/_agentbench\
-
-fs.img: mkfs/mkfs README $(UPROGS)
-	mkfs/mkfs fs.img README $(UPROGS)
-
--include kernel/*.d user/*.d
-
-clean: 
-	rm -f *.tex *.dvi *.idx *.aux *.log *.ind *.ilg \
-	*/*.o */*.d */*.asm */*.sym \
-	$K/kernel fs.img \
-	mkfs/mkfs .gdbinit \
-        $U/usys.S \
-	$(UPROGS)
-
-# try to generate a unique GDB port
-GDBPORT = $(shell expr `id -u` % 5000 + 25000)
-# QEMU's gdb stub command line changed in 0.11
-QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
-	then echo "-gdb tcp::$(GDBPORT)"; \
-	else echo "-s -p $(GDBPORT)"; fi)
-ifndef CPUS
-CPUS := 3
+# BOARD
+BOARD		?= qemu
+SBI			?= opensbi
+ifeq ($(SBI), rustsbi)
+BOOTLOADER	:= ./bootloader/rustsbi-qemu.bin
+else
+BOOTLOADER	:= default
 endif
 
-QEMUOPTS = -machine virt -bios none -kernel $K/kernel -m 128M -smp $(CPUS) -nographic
-QEMUOPTS += -global virtio-mmio.force-legacy=false
-QEMUOPTS += -drive file=fs.img,if=none,format=raw,id=x0
-QEMUOPTS += -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
+QEMU = qemu-system-riscv64
+QEMUOPTS = \
+	-nographic \
+	-machine virt \
+	-bios $(BOOTLOADER) \
+	-kernel build/kernel	\
+	-drive file=$(F)/fs-copy.img,if=none,format=raw,id=x0 \
+    -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 
-qemu: check-qemu-version $K/kernel fs.img
+$(F)/fs.img:
+	make -C $(F)
+
+$(F)/fs-copy.img: $(F)/fs.img
+	@$(CP) $< $@
+
+run: build/kernel $(F)/fs-copy.img
 	$(QEMU) $(QEMUOPTS)
 
-.gdbinit: .gdbinit.tmpl-riscv
-	sed "s/:1234/:$(GDBPORT)/" < $^ > $@
+# QEMU's gdb stub command line changed in 0.11
+QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
+	then echo "-gdb tcp::15234"; \
+	else echo "-s -p 15234"; fi)
 
-qemu-gdb: $K/kernel .gdbinit fs.img
-	@echo "*** Now run 'gdb' in another window." 1>&2
+debug: build/kernel .gdbinit
+	@tmux new-session -d \
+		$(QEMU) $(QEMUOPTS) -S $(QEMUGDB) && \
+		tmux split-window -h "$(GDB) -ex 'target remote localhost:15234'" && \
+		tmux -2 attach-session -d
+
+gdbserver: build/kernel
 	$(QEMU) $(QEMUOPTS) -S $(QEMUGDB)
 
-print-gdbport:
-	@echo $(GDBPORT)
+gdbclient:
+	$(GDB) -ex "target remote localhost:15234"
 
-QEMU_VERSION := $(shell $(QEMU) --version | head -n 1 | sed -E 's/^QEMU emulator version ([0-9]+\.[0-9]+)\..*/\1/')
-check-qemu-version:
-	@if [ "$(shell echo "$(QEMU_VERSION) >= $(MIN_QEMU_VERSION)" | bc)" -eq 0 ]; then \
-		echo "ERROR: Need qemu version >= $(MIN_QEMU_VERSION)"; \
-		exit 1; \
-	fi
+CHAPTER ?= $(shell git rev-parse --abbrev-ref HEAD | grep -oP 'ch\K[0-9]' || echo 8)
 
-.PHONY: fmt
-fmt:
-	clang-format -i $(wildcard kernel/*.[ch] user/*.[ch] mkfs/*.c)
+user:
+	make -C user CHAPTER=$(CHAPTER) BASE=$(BASE)
+
+test: user run

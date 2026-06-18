@@ -1,271 +1,101 @@
 # 测试内容详细说明
 
-本文补充说明最终验收程序的测试意图、测试步骤、关键断言和证明范围。快速运行命令和最新输出见 [verification.md](verification.md)，原始输出摘要见 [test-record.md](test-record.md)。
+## agentfinal_ucore
 
-## 总体测试目标
-
-当前最终验收只关注任务一至三：
-
-| 任务 | 测试目标 |
-| --- | --- |
-| 任务一 | 验证 Agent 进程能创建，PCB 字段和 Agent Context 地址空间正确初始化，普通父进程和 Agent 子进程能共存 |
-| 任务二 | 验证用户态 Agent 能通过结构化 ABI 批量调用内核工具，工具结果按 sequence 写回 Context |
-| 任务三 | 验证 Context Path 能维护多轮短文本摘要历史，支持 snapshot 查询，超出容量后按 FIFO 淘汰，并且用户态直接读取镜像和 syscall snapshot 结果一致 |
-
-最终入口是两个用户态程序：
-
-| 程序 | 定位 |
-| --- | --- |
-| `agentfinal` | 功能正确性验收，失败时打印 `check failed` 并退出非 0 |
-| `agentbench` | 性能趋势验收，输出 scalar、batch、direct context、query、snapshot 的吞吐对比 |
-
-## `agentfinal` 详细测试内容
-
-源码位置：[../user/agentfinal.c](../user/agentfinal.c)。
-
-### 1. Agent 创建和父子进程关系
+`agentfinal_ucore` 是最终正确性测试，覆盖 Agent-OS 的主要功能面。
 
 测试步骤：
 
-1. 普通进程调用 `agent_create()`。
-2. 父进程等待子进程退出。
-3. 子进程作为 Agent 执行后续检查。
-4. 父进程检查子进程退出状态为 0。
-
-关键断言：
-
-| 断言 | 目的 |
-| --- | --- |
-| `agent_create()` 返回值大于等于 0 | 证明 Agent 创建系统调用成功 |
-| 父进程 `wait()` 得到状态 0 | 证明 Agent 子进程完整跑完测试且未被异常杀死 |
-
-对应赛题要求：Agent 进程能够成功创建，普通进程和 Agent 进程可以共存。
-
-### 2. Agent 身份和 Context 映射
-
-测试步骤：
-
-1. Agent 子进程调用 `agent_info()`。
-2. 检查 `is_agent`、`context_size` 等元信息。
-3. 直接把 `info.context_base` 转换为 `struct agent_context_header *`。
-4. 从用户态直接读取 Context header 和 latest result 区。
-
-关键断言：
-
-| 断言 | 目的 |
-| --- | --- |
-| `agent_info(&info) == 0` | Agent 信息接口可用 |
-| `info.is_agent == 1` | 当前子进程已经被标记为 Agent |
-| `info.context_size == AGENT_CONTEXT_SIZE` | Context 大小与内核 ABI 一致，当前为 16384 字节 |
-| `direct_header->magic == AGENT_CONTEXT_MAGIC` | Context header 已正确初始化 |
-| `direct_header->capacity == AGENT_CONTEXT_MAX_RECORDS` | Context Path 容量正确，当前为 128 条 |
-
-对应赛题要求：PCB 扩展字段正确初始化，Agent Context 区在用户地址空间中正确分配，Agent 可直接访问 Context。
-
-### 3. 第一批 64 个工具调用
-
-测试步骤：
-
-1. 构造 64 个 `struct agent_op`。
-2. 工具按 `i % 4` 分布为 `echo`、`pid_info`、`ctx_stat`、`read_context`。
-3. 调用一次 `agent_run(ops, results, 64, 0)`。
-4. 检查每条 result 的状态和 sequence。
-5. 直接读取 Context latest result，确认最近结果序号为 64。
-
-关键断言：
-
-| 断言 | 目的 |
-| --- | --- |
-| `agent_run(...) == AGENT_BATCH_MAX` | 批量 syscall 成功执行 64 个 op |
-| `results[i].status == AGENT_STATUS_OK` | 每个工具调用都成功 |
-| `results[i].sequence == first_sequence + i` | 批量调用内部 sequence 连续递增 |
-| `latest->sequence == AGENT_BATCH_MAX` | 最新结果已写入 Agent Context |
-
-对应赛题要求：用户态 Agent 能调用至少 3 个内核工具，请求和响应为结构化格式，工具调用结果能写入 Agent Context。当前一次批量调用覆盖 4 类工具。
-
-### 4. 第一次 Context Snapshot
-
-测试步骤：
-
-1. 调用 `context_snapshot(&header, snapshot_records, 128)`。
-2. 检查返回记录数为 64。
-3. 检查 header 中最新 sequence 为 64。
-4. 检查 snapshot 第一条和最后一条记录分别为 1 和 64。
-5. 检查第一条 echo 记录中的 16 字节 payload/result 摘要。
-6. 用 `check_snapshot_matches_direct()` 将 snapshot records 与用户态直接读取的 Context 镜像 records 对比。
-
-关键断言：
-
-| 断言 | 目的 |
-| --- | --- |
-| `n == AGENT_BATCH_MAX` | snapshot 返回当前可见的 64 条历史 |
-| `header.latest_sequence == AGENT_BATCH_MAX` | header 元信息与执行次数一致 |
-| `snapshot_records[0].sequence == 1` | 最早记录正确 |
-| `snapshot_records[n - 1].sequence == 64` | 最新记录正确 |
-| `snapshot_records[0].payload/result == "final"` | 证明 Context Path 保存短文本历史摘要 |
-| direct record 的 `sequence/tool_id/status/payload/result` 与 snapshot 匹配 | 证明首次同步后 syscall snapshot 和用户镜像视图一致 |
-
-对应赛题要求：系统能维护工具调用路径，Agent 可从 Context 区读取路径数据。
-
-### 5. 用户镜像篡改防护
-
-测试步骤：
-
-1. 用户态直接修改 Context 镜像中第一条 record 的 `sequence/tool_id/status/payload/result`。
-2. 在调用 snapshot 前直接读取镜像，确认脏数据确实对 direct read 可见。
-3. 再次调用 `context_snapshot()`。
-4. 检查 snapshot 返回的 record 仍是内核 shadow 中的原始值。
-5. 检查 direct Context 镜像已被刷新回原始值。
-
-关键断言：
-
-| 断言 | 目的 |
-| --- | --- |
-| `snapshot_records[0].sequence == sequence` | 用户态篡改镜像不影响内核权威 sequence |
-| `snapshot_records[0].tool_id == tool_id` | 用户态篡改镜像不影响内核权威工具 ID |
-| `snapshot_records[0].status == status` | 用户态篡改镜像不影响内核权威状态 |
-| snapshot 前 direct record 可见 `dirty` 文本 | 说明 direct Context 是高速镜像，不是可信边界 |
-| snapshot 后 payload/result 恢复为 `final` | 说明 snapshot 会刷新镜像并返回 shadow 权威短文本摘要 |
-| direct record 被恢复 | `context_snapshot()` 会将 shadow 权威历史重新同步到用户镜像 |
-
-验证目的：证明当前 Context Path 的可信状态保存在内核 shadow 中，用户态 Context 只是可直接读取的镜像。
-
-### 6. FIFO 淘汰和 128 条容量验证
-
-测试步骤：
-
-1. 再执行两批 `agent_run()`，每批 64 个 op。
-2. 总工具调用数达到 192。
-3. 调用 `context_snapshot()` 查询当前可见记录。
-4. 检查 Context Path 容量为 128 条。
-5. 检查最早可见 sequence 为 65，最新 sequence 为 192，淘汰条数为 64。
-6. 再次对比 snapshot records 与用户态直接读取的 Context records。
-
-关键断言：
-
-| 断言 | 目的 |
-| --- | --- |
-| `n == AGENT_CONTEXT_MAX_RECORDS` | 可见记录达到容量上限 128 |
-| `header.oldest_sequence == 65` | 前 64 条已被 FIFO 淘汰 |
-| `header.latest_sequence == 192` | 最新记录序号正确 |
-| `header.dropped_records == 64` | 淘汰计数正确 |
-| `snapshot_records[0].sequence == 65` | 当前最早可见记录正确 |
-| `snapshot_records[n - 1].sequence == 192` | 当前最新可见记录正确 |
-| snapshot 和 direct context 匹配 | 证明淘汰后内核 shadow 和用户镜像视图仍一致 |
-
-对应赛题要求：连续 5 轮以上调用能维护路径，路径超长时不会导致内核 OOM，而是按固定容量淘汰旧记录。当前验证规模为 192 次调用，远超过 5 轮要求。
-
-## `agentbench` 详细测试内容
-
-源码位置：[../user/agentbench.c](../user/agentbench.c)。
-
-`agentbench` 的目标不是证明绝对时间，而是证明优化方向有效：减少 syscall 次数、减少 Context 复制、用 snapshot 批量读取历史。
-
-### 1. Scalar Run 基线
-
-测试步骤：
-
-1. 构造 1 个 `echo` op。
-2. 循环 65536 次调用 `agent_run(&op, &res, 1, 0)`。
-3. 每次检查返回值和 result 状态。
-4. 用 `uptime()` 统计 xv6 tick。
-
-意义：这是批量调用的对照组。虽然仍使用新 ABI，但每次 syscall 只执行 1 个 op，因此可以反映频繁 syscall 的成本。
-
-### 2. Batch Run
-
-测试步骤：
-
-1. 每轮构造 64 个 `echo` op。
-2. 循环 1024 轮，总 op 数仍为 65536。
-3. 每轮调用一次 `agent_run(batch_ops, batch_results, 64, 0)`。
-4. 检查每批第一条和最后一条 sequence 连续。
-
-意义：与 scalar run 执行相同数量的工具操作，但 syscall 次数从 65536 次减少到 1024 次。一次样例记录中 batch run 为 2 ticks，scalar run 为 16 ticks；具体 tick 会波动，但批量 ABI 对端到端吞吐仍明显有效。
-
-### 3. Direct Context Read
-
-测试步骤：
-
-1. 调用 `agent_info()` 获取 `context_base`。
-2. 用户态直接读取 Context header 中的 `total_calls`、`latest_sequence`、`dropped_records`。
-3. 循环 1000000 次。
-4. 用 `uptime()` 统计 tick。
-
-意义：验证 Context 用户镜像读路径不需要 syscall，也不需要内核复制。最新记录中 1000000 次直接读低于 1 tick，说明该路径开销很低。由于 xv6 tick 粒度粗，文档只把它作为低开销证据，不作为零成本证明。
-
-### 4. Context Query
-
-测试步骤：
-
-1. 循环 2048 次调用 `context_query(0, &record, 1)`。
-2. 每次只查询 1 条可见记录。
-3. 检查每次返回 1。
-
-意义：这是逐条查询 Context Path 的对照组，用于和 snapshot 批量查询比较。
-
-### 5. Context Snapshot
-
-测试步骤：
-
-1. 循环 2048 次调用 `context_snapshot(&header, snapshot_records, 128)`。
-2. 每次返回完整 128 条可见记录。
-3. 检查返回记录数为 128。
-4. 统计总返回记录数 262144。
-
-意义：与 `context_query` 相比，snapshot 每次 syscall 返回一批 records。引入内核 shadow 后 snapshot 会先刷新用户镜像，具体 tick 会波动；验证重点是它一次 syscall 批量返回 128 条记录并保持 `agentbench: passed`。
-
-### 6. 性能表字段解释
-
-| 字段 | 含义 |
-| --- | --- |
-| `case` | 测试场景名称 |
-| `ops` | 当前场景统计的操作数或返回记录数 |
-| `ticks` | xv6 `uptime()` 差值 |
-| `ops_per_tick` | 每 tick 完成的操作数；若 ticks 为 0，按 1 tick 保守估算 |
-| `speedup_x100` | 相对对照组的放大 100 倍速度比，例如 1600 表示约 16.00 倍 |
-
-性能结果受 QEMU、宿主机负载和 xv6 tick 粒度影响。评审时应关注相对趋势：batch 优于 scalar，direct context 低于 syscall 查询，snapshot 优于逐条 query。
-
-## 辅助回归测试内容
-
-除最终入口外，当前仍保留 `agentcall`、`contexttest`、`agentstress` 和 `agentexec` 作为回归程序。
-
-| 程序 | 当前重点断言 |
-| --- | --- |
-| `agentcall` | legacy `tool_call()` 的工具名/ID 解析、参数键名错误、参数类型错误、64 字节 payload 不截断、Agent 坏输出指针无副作用、合法 lazy 输出缓冲 prefault、多 Agent mailbox 和历史 wrap |
-| `contexttest` | `context_push/query/rollback/clear`、128 条容量 FIFO、短文本 payload/result 历史、rollback 空历史/已淘汰/未来 sequence 返回 `AGENT_STATUS_NOT_FOUND` |
-| `agentstress` | Agent 多次 exec、exec 失败后 Context 指针保持有效、连续创建退出、`sbrk` 不越过 Agent Context、普通进程未映射 Agent Context 特殊页、父进程堆越过 Context 后拒绝创建 Agent |
-| `agentexec` | 既可作为 Agent exec 目标，也可从 shell 直跑 wrapper 路径 |
-
-其中 `agentcall` 的坏输出指针测试会先发送一条正常 mailbox 消息，再用坏响应指针尝试发送覆盖消息。通过条件是发送者的 `agent_call_count` 和 `context_path_count` 不变，接收者最终仍读到正常消息 `hello-agent`，从而证明预检失败时没有执行工具副作用。
-
-`agentcall` 还会用 `sbrklazy()` 分配但不预先触碰 response/result 输出页，分别验证 legacy `tool_call()` 和批量 `agent_run()` 能通过 writable-prefault 接受合法 lazy 输出缓冲。对应输出为 `agent lazy_output: legacy=1 batch=1`。
-
-`agentstress` 的父进程越界测试会让普通进程先把堆扩展到 `AGENT_CONTEXT_BASE` 以上，再分别在未触碰页和已触碰页两种情况下调用 `agent_create()`。通过条件是两次创建均失败且系统无 panic，对应输出为 `agentstress: parent_over_context_rejected=1`。
-
-## 与赛题要求的对应关系
-
-| 测试内容 | 覆盖的赛题点 |
-| --- | --- |
-| `agent_create()`、`agent_info()`、Context header 检查 | 任务一 Agent 进程创建、PCB 字段、地址空间设计 |
-| 64 个 `agent_op` 批量执行 | 任务二结构化工具调用、至少 3 个工具、响应写回 |
-| sequence 连续性检查 | 任务三多轮调用路径维护 |
-| direct context 与 snapshot 对比 | 任务三 Agent 从 Context 镜像读取路径数据 |
-| short_text_history 检查 | 证明 Context Path 保存 128 条短文本摘要路径，而不是只保存 latest |
-| tamper 防护测试 | 证明 Context Path 权威历史保存在内核 shadow 中，并说明 direct Context 只是高速镜像 |
-| 192 次 op 和 FIFO 元信息检查 | 任务三路径超长自动淘汰、不 OOM |
-| legacy 参数和坏指针回归 | 证明兼容 API 的错误语义和副作用边界 |
-| rollback not found 回归 | 证明历史节点不存在可通过状态码区分 |
-| lazy 输出缓冲回归 | 证明合法 lazy `sbrk` 输出页不会被预检误杀，非法坏指针仍无副作用 |
-| 父进程越界创建回归 | 证明普通父进程堆越过 Agent Context 后不能直接创建重叠 Agent |
-| scalar/batch/query/snapshot 性能表 | 创新增强：高性能批量执行和批量 Context 查询 |
-
-## 当前测试边界
-
-| 边界 | 说明 |
-| --- | --- |
-| 不覆盖任务四至六 | 文件索引、Agent Loop、综合场景还未实现 |
-| tick 粒度较粗 | 当前性能数据适合证明趋势，不适合精确微基准结论 |
-| 最终入口主要验证成功路径 | legacy 错误路径由 `agentcall` 当前回归覆盖，最终成品入口主要关注高性能成功路径 |
-| 不设固定性能阈值 | 避免 QEMU 波动导致误判，以输出吞吐表和相对差异作为评审证据 |
+1. 父进程调用 `agent_create()` 创建 Agent 子进程。
+2. 子进程调用 `agent_info()`，检查自己是 Agent，并检查 Context 基址和大小。
+3. 直接读取 Agent Context header，检查 magic、version 和容量。
+4. 调用 `context_clear()`，保证后续 sequence 从干净状态开始。
+5. 构造 64 个 echo 操作，使用一次 `agent_run()` 批量执行。
+6. 检查第一条和最后一条 result 的 sequence，确认 batch 内 sequence 连续递增。
+7. 直接读取 latest result，确认用户镜像已同步。
+8. 调用 `context_snapshot()`，检查返回 64 条有序记录。
+9. 检查短 payload/result 是否进入 Context record。
+10. 手动篡改用户态 Context 镜像中的第一条 record。
+11. 再次调用 `context_snapshot()`，确认返回内容仍来自内核 shadow。
+12. 检查 snapshot 后用户镜像被刷新。
+13. 继续批量写入直到超过 128 条容量，检查 FIFO 淘汰结果。
+14. 初始化文件元数据，按 stage 查询，检查命中数量和 `used_index`。
+15. 注册 message watch，向自己投递事件，再用 `agent_wait()` 收到事件。
+16. 子进程输出 `agentfinal_ucore: passed`，父进程等待子进程并输出 `agentfinal_ucore: parent passed`。
+
+该测试证明：
+
+- Agent 创建可用。
+- Agent Context 映射可用。
+- 批量工具调用可用。
+- Context Path 可保存有序历史。
+- kernel shadow 能防止用户态伪造历史。
+- 128 条容量和 FIFO 元信息正确。
+- 文件元数据索引可用。
+- Agent wait/wake 可用。
+
+## agentbench_ucore
+
+`agentbench_ucore` 是性能和吞吐测试。它不使用固定耗时阈值，而是输出可对比的 tick 统计。
+
+测试项目：
+
+1. `scalar_agent_run`：8192 次单操作 `agent_run()`。
+2. `batch_agent_run`：8192 次操作按 64 条一组批量提交。
+3. `direct_context`：直接读取用户态 Context 镜像中的 latest sequence。
+4. `context_query`：多次用 syscall 查询单条 Context record。
+5. `context_snapshot`：多次用 syscall 批量获取 Context records。
+6. `file_scan_query`：构造不走索引的文件查询。
+7. `file_index_query`：构造可走索引的文件查询。
+8. `event_wait_wake`：父进程多次唤醒等待中的 Agent 子进程。
+
+输出字段：
+
+- `ops`：执行的逻辑操作数量。
+- `ticks`：消耗的内核 tick 数。
+- `ops_per_tick`：每 tick 完成的操作数。
+- `speedup_x100`：相对基线放大 100 倍后的速度比。
+
+该测试证明：
+
+- 批量接口能减少 syscall 开销。
+- 直接读 Context 适合高频读取最新状态。
+- snapshot 比逐条 query 更适合批量历史查询。
+- 文件索引查询路径可观测。
+- 事件等待和唤醒可以稳定运行。
+
+## labdemo_ucore
+
+`labdemo_ucore` 是面向答辩的最终场景测试。它把底层能力串成一个可解释的多 Agent 工作流。
+
+角色：
+
+- sentinel：监听失败事件。
+- investigator：查询失败原因和影响范围。
+- recovery：执行恢复动作。
+
+流程：
+
+1. 父进程初始化文件元数据。
+2. 父进程创建 recovery、investigator、sentinel 三个 Agent。
+3. sentinel 注册 `status=failed` 的文件状态监听。
+4. investigator 注册 message 监听。
+5. recovery 注册 recovery message 监听。
+6. 父进程把 align 阶段的文件状态改成 failed，制造故障。
+7. sentinel 收到失败事件，通过 `query_file` 找到失败文件。
+8. sentinel 尝试执行恢复动作，能力检查返回 denied。
+9. sentinel 通过消息唤醒 investigator。
+10. investigator 查询文件摘要和依赖关系，并快照自己的 Context。
+11. investigator 唤醒 recovery。
+12. recovery 通过能力检查，执行 `rerun_stage`。
+13. recovery 再次执行同一动作，内核返回 duplicate。
+14. 父进程等待三个 Agent 结束，输出最终 recovered。
+
+该测试证明：
+
+- 多 Agent 可以并发存在。
+- 文件状态变化可以触发事件。
+- Agent 之间可以用内核事件通信。
+- 工具调用结果进入 Context，便于审计。
+- 简单权限控制和重复操作检测可用。
+- 最终场景不是孤立 API 展示，而是组合后的系统行为。

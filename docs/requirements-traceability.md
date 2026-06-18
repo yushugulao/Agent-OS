@@ -1,67 +1,129 @@
-# 赛题要求追踪表
+# 赛题要求对应说明
 
-本文按 ISO/IEC/IEEE 29148 的需求可追踪思想裁剪编写。每条需求都给出来源、当前状态、实现位置、验证证据和剩余缺口。
-
-## 状态定义
-
-| 状态 | 含义 |
-| --- | --- |
-| 已验证 | 已有实现和用户态测试输出证明 |
-| 部分实现 | 有基础能力，但未覆盖赛题完整语义 |
-| 未实现 | 尚无可验收实现 |
-| 文档待补 | 功能存在，但评审材料仍需补强 |
-
-## 总体交付要求
-
-| ID | 赛题要求 | 状态 | 实现/材料 | 验证证据 |
-| --- | --- | --- | --- | --- |
-| G-1 | 在教学操作系统内核中实现 Agent-OS 功能模块 | 已验证 | `kernel/agent.c`、`kernel/agent.h`、`kernel/proc.c` | `agentfinal`、`agentbench` |
-| G-2 | 系统可在 QEMU 上运行 | 已验证 | `Makefile`、`fs.img` | `make qemu` 后运行用户态测试 |
-| G-3 | 提供内核代码 | 已验证 | `kernel/` | Git 仓库源码 |
-| G-4 | 提供用户态测试程序 | 已验证 | `user/agentfinal.c`、`user/agentbench.c`、`user/agentcall.c`、`user/contexttest.c`、`user/agentstress.c`、`user/agentexec.c` | [verification.md](verification.md) |
-| G-5 | 提供综合演示场景 | 未实现 | 待设计 | 当前只有基础演示程序 |
-| G-6 | 提供设计文档和运行说明 | 文档待补 | [../README.md](../README.md)、[design.md](design.md)、[demo-script.md](demo-script.md) | 本次文档重构补齐框架 |
+本文档说明当前 uCore 分支与赛题功能要求之间的对应关系。表述重点放在已经实现并可运行验证的内容。
 
 ## 任务一：Agent 进程创建与地址空间设计
 
-| ID | 赛题要求 | 状态 | 实现位置 | 验证证据 |
-| --- | --- | --- | --- | --- |
-| T1-1 | Agent 进程能成功创建 | 已验证 | `agent_create()`、`agent_fork()`、`agent_make()` | `agentfinal` |
-| T1-2 | PCB 扩展字段正确初始化 | 已验证 | `struct proc` Agent 字段、`agent_clear_metadata()`、`agent_make()` | `agent_info()`、`agentfinal` |
-| T1-3 | Agent Context 区在用户地址空间中正确分配 | 已验证 | `agent_map_context()`、`AGENT_CONTEXT_BASE` | `agentfinal: context size=16384 capacity=128` |
-| T1-4 | Agent 进程可直接读写 Context | 已验证 | Agent Context 用户镜像页和内核 shadow 权威页；直接读是高速镜像，可信历史以 snapshot 为准 | `agentfinal: direct_context_match=1`、`agentfinal: direct_dirty_before_snapshot=1`、`agentfinal: tamper_protected=1` |
-| T1-5 | 普通进程和 Agent 进程可共存，互不影响 | 已验证 | 普通父进程创建并等待 Agent 子进程；普通进程不安装 Agent metadata/context；父进程堆越过 Agent Context 起点时拒绝创建 Agent | `agentfinal`、`agentstress: parent_over_context_rejected=1` |
-| T1-6 | `exec`/`exit` 后生命周期稳定 | 扩展增强 | `exec.c` 延迟安装 Context 指针，`proc.c` 释放路径 | `agentexec`、`agentstress: exec_failure_preserved=1` |
+已实现内容：
 
-## 任务二：Agent 与内核结构化交互
+- `agent_create()` 创建 Agent 子进程。
+- `struct proc` 中保存 Agent 类型、Context 页面、调用计数、事件状态和心跳状态。
+- 每个 Agent 映射 4 页 Agent Context。
+- 普通进程调用 Agent-only 接口会被拒绝。
+- `agent_info()` 可查询 Agent 身份、Context 地址、Context 大小和运行统计。
 
-| ID | 赛题要求 | 状态 | 实现位置 | 验证证据 |
-| --- | --- | --- | --- | --- |
-| T2-1 | 用户态 Agent 测试程序能成功调用至少 3 个内核工具 | 已验证 | `agent_tools[]` 9 个工具、`agent_run()` | `agentfinal` 批量调用 4 类工具 |
-| T2-2 | 每个工具请求和响应均为结构化格式 | 已验证 | `struct agent_op`、`struct agent_result`、`struct agent_tool_desc` | `agentfinal`、`agentbench` |
-| T2-3 | 提供工具列表及参数说明 | 已验证 | `tool_list()`、`agent_tool_list()` | `tool_list: total=9` |
-| T2-4 | 工具调用结果可写入 Agent Context | 已验证 | `agent_append_context()` 写 shadow 权威页并同步用户镜像 | `agentfinal` 读取 latest 和 snapshot |
-| T2-5 | 错误路径有明确返回 | 扩展增强 | `AGENT_STATUS_*`、legacy 键名/类型校验、输出指针 writable-prefault 预检、Context 空间错误返回 `NO_SPACE` | `agentcall` 验证未知工具、坏版本、坏参数、普通进程调用、坏输出指针无副作用、lazy 输出页可用 |
-| T2-6 | 工具解析性能优化 | 扩展增强 | `agent_run()` 批量执行、ID O(1) 查找、legacy name 兼容查找 | `agentbench` |
+验证来源：
 
-## 任务三：上下文路径管理
+- `agentfinal_ucore` 检查 `agent_info()`、Context base、Context size、Context magic 和 Context capacity。
+- `labdemo_ucore` 同时创建三个 Agent，验证多 Agent 并存。
 
-| ID | 赛题要求 | 状态 | 实现位置 | 验证证据 |
-| --- | --- | --- | --- | --- |
-| T3-1 | Agent 测试程序执行 5 轮以上连续工具调用 | 已验证 | `agentfinal` 批量调用 | 连续 192 个 op |
-| T3-2 | 系统正确维护 128 条短文本摘要路径 | 已验证 | shadow 权威 `agent_context_record[128]` 环形记录，record 含 16 字节 payload/result 摘要 | `agentfinal: short_text_history=1`、`contexttest: short_text_history=1` |
-| T3-3 | Agent 可直接从 Context 区高速读取路径数据 | 已验证 | Agent Context 用户镜像可读；`context_snapshot()` 可刷新并返回可信 shadow 历史 | `agentbench: direct_context`、`agentfinal: direct_context_match=1` |
-| T3-4 | 路径超长时自动淘汰，不导致内核 OOM | 已验证 | 固定容量 FIFO 环形覆盖 | `agentfinal: fifo oldest=65 latest=192 dropped=64` |
-| T3-5 | 支持批量上下文快照和可区分 rollback 错误 | 扩展增强 | `context_snapshot`、`context_query`、`context_rollback` | `agentfinal`、`agentbench`、`contexttest: rollback_not_found=-5` |
+高于基础要求的部分：
 
-## 任务四至六当前缺口
+- Context 使用 kernel shadow 加 user mirror，防止用户态伪造历史。
+- Context 大小扩大到 4 页。
+- Agent 事件状态和心跳状态进入进程元数据。
 
-| ID | 赛题方向 | 当前状态 | 说明 |
-| --- | --- | --- | --- |
-| T4 | 面向 Agent 查询优化的文件系统扩展 | 部分实现 | 只有 `query_file` 元数据查询，未实现索引、属性过滤、语义查询或批量查询 |
-| T5 | Agent Loop 内核运行机制 | 部分实现 | 只有 `loop_state` 和心跳字段预留，未实现心跳触发、等待队列、唤醒 |
-| T6 | 综合演示与创新 | 未实现 | 需要构建完整场景、演示脚本、视频和创新点叙述 |
+## 任务二：Agent 工具调用机制
 
-## 追踪结论
+已实现内容：
 
-任务一至三的基础验收项已有实现和测试证据。需要注意，任务三当前保存的是固定容量的短文本摘要路径，不承诺完整 raw 请求/响应日志。当前主要短板不在基础功能，而在任务四至六、综合演示、性能测量精度和最终答辩材料。
+- `agent_run()` 支持一次 syscall 执行最多 64 个工具操作。
+- 工具表支持 18 个工具。
+- 工具调用返回结构化 result。
+- 工具调用自动写入 Context Path。
+- `agent_tool_list()` 可查询工具描述。
+- `agent_call()` 保留为兼容接口。
+
+验证来源：
+
+- `agentfinal_ucore` 验证 64 个工具调用的 batch sequence。
+- `agentbench_ucore` 对比 scalar 和 batch 的吞吐。
+- `labdemo_ucore` 使用 query_file、capability_check、send_message、read_file_summary、dependency_query、rerun_stage 等工具完成场景。
+
+高于基础要求的部分：
+
+- 工具 ID 快速分发。
+- 批量 syscall。
+- 结构化错误码。
+- 权限检查和重复动作检测。
+
+## 任务三：Context Path
+
+已实现内容：
+
+- 工具调用自动追加 Context record。
+- `context_push()` 支持手动追加记录。
+- `context_query()` 支持按 sequence 查询。
+- `context_snapshot()` 一次返回 header 和有序 records。
+- `context_rollback()` 支持回滚到可见 sequence。
+- `context_clear()` 支持清空 Context。
+- 超过 128 条后 FIFO 淘汰，并维护 oldest/latest/dropped。
+
+验证来源：
+
+- `agentfinal_ucore` 验证短文本历史、snapshot、篡改保护和 FIFO 淘汰。
+- `agentbench_ucore` 对比 query 和 snapshot。
+- `labdemo_ucore` 通过 investigator 的 Context snapshot 展示审计能力。
+
+高于基础要求的部分：
+
+- kernel shadow 权威历史。
+- 4 页共享镜像。
+- 128 条短文本摘要路径。
+- snapshot fast path。
+
+## 任务四：文件系统相关 Agent 能力
+
+当前实现范围：
+
+- 实现了内核级文件元数据表。
+- 支持 status、stage、kind 索引。
+- 支持文件摘要、依赖关系和状态查询。
+- 文件状态变化可以触发 Agent 事件。
+
+边界说明：
+
+- 当前没有实现对真实磁盘目录的全量后台索引。
+- 当前文件元数据由内核演示数据和 `agent_file_meta_set()` 提供。
+
+验证来源：
+
+- `agentfinal_ucore` 验证 indexed file query。
+- `agentbench_ucore` 输出 scan query 和 index query。
+- `labdemo_ucore` 使用文件状态变更驱动故障恢复场景。
+
+## 任务五：Agent Loop
+
+当前实现范围：
+
+- `agent_watch()` 注册监听条件。
+- `agent_wait()` 阻塞等待事件。
+- `agent_wake()` 投递事件。
+- `agent_heartbeat()` 设置心跳。
+- 文件状态变化可以唤醒匹配 Agent。
+
+验证来源：
+
+- `agentfinal_ucore` 验证自唤醒。
+- `agentbench_ucore` 验证多次 wait/wake。
+- `labdemo_ucore` 使用 sentinel、investigator、recovery 三个 Agent 串联事件。
+
+## 任务六：综合演示
+
+当前实现范围：
+
+- `labdemo_ucore` 提供完整多 Agent 场景。
+- 场景覆盖故障注入、事件监听、索引查询、权限拒绝、跨 Agent 通信、依赖分析、恢复执行、重复动作检测和最终报告查询。
+
+验证来源：
+
+- `labdemo_ucore: passed`
+
+## 尚未覆盖的高级方向
+
+以下内容可以作为后续增强，但不影响当前 uCore 分支的已实现功能判断：
+
+- 对真实文件系统目录进行持续后台扫描。
+- 更复杂的权限模型，例如按 Agent role 绑定能力集合。
+- 更完整的 Agent 调度策略，例如优先级、长期队列和取消机制。
+- 将 Context Path 扩展为可持久化日志。

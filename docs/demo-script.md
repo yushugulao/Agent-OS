@@ -1,73 +1,115 @@
-# 演示脚本
-
-本文用于现场评审或录制演示视频。当前脚本覆盖任务一至三最终高性能成品，任务四至六完成后需要继续扩展。
+# 最终演示讲解稿
 
 ## 1. 开场说明
 
-说明项目定位：
+本项目把 Agent-OS 推进到 uCore 内核上。我们实现的不是普通用户态脚本，而是内核级 Agent 进程、结构化工具调用、上下文历史、文件元数据索引和 Agent 事件循环。
 
-- 基于 xv6-riscv 的 Agent-OS 内核扩展。
-- 当前重点完成任务一至三：Agent 进程、批量结构化内核工具调用、Context Path。
-- 设计目标是让 Agent 进程通过 `agent_run` 批量调用内核工具，直接读取 Context 镜像，并在需要可信历史时使用 `context_snapshot` 读取内核 shadow 权威记录。
-
-## 2. 构建和启动
-
-在 Linux/WSL2 Ubuntu 中执行：
+演示会运行三个程序：
 
 ```bash
-cd project61-agentOS-happylegend
-make fs.img
-make qemu
+agentfinal_ucore
+agentbench_ucore
+labdemo_ucore
 ```
 
-进入 xv6 shell 后看到 `$` 提示符。
+其中 `agentfinal_ucore` 证明功能正确，`agentbench_ucore` 给出性能证据，`labdemo_ucore` 展示完整场景。
 
-## 3. 最终功能演示
+## 2. 正确性演示
 
-执行：
+运行：
 
-```sh
-agentfinal
+```bash
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfinal_ucore CHAPTER=agent
 ```
 
-讲解点：
+重点解释输出：
 
-- 普通父进程通过 `agent_create` 创建 Agent 子进程。
-- Agent Context 为 4 页，大小 16384 字节，Context Path 容量 128 条。
-- `agent_run` 一次批量执行 64 个结构化工具 op，sequence 连续。
-- Context Path 保存 128 条短文本摘要路径，record 中包含 payload/result 摘要。
-- `context_snapshot` 一次返回 header 和可见路径记录，并刷新被用户态改脏的 Context 镜像。
-- `direct_dirty_before_snapshot=1` 表示直接读路径是高速镜像，`tamper_protected=1` 表示可信历史不被镜像篡改污染。
-- 192 次 op 后 FIFO 淘汰正确：`oldest=65 latest=192 dropped=64`。
-- snapshot 和用户态直接读 Context 的记录一致。
+- `context size=16384 capacity=128`：每个 Agent 有 4 页 Context，最多保留 128 条可见历史。
+- `batch first_seq=1 last_seq=64`：一次 syscall 执行 64 个工具调用，并保证 sequence 连续。
+- `short_text_history=1`：Context Path 不只保存数字，也保存短 payload/result 摘要。
+- `tamper_protected=1`：用户态直接修改 Context 镜像不能伪造内核权威历史。
+- `fifo oldest=65 latest=192 dropped=64`：超过容量后按 FIFO 淘汰，元信息正确。
+- `file_query ... used_index=1`：文件元数据查询走索引路径。
+- `event_wait=1`：Agent 事件等待和唤醒可用。
 
-## 4. 性能演示
-
-执行：
-
-```sh
-agentbench
-```
-
-讲解点：
-
-- `scalar_run` 是一次 syscall 执行一个 op。
-- `batch_run` 是一次 syscall 执行 64 个 op，展示端到端吞吐提升。
-- `direct_context` 展示用户态直接读 Context 的低开销。
-- `context_snapshot` 展示一次 syscall 批量返回 128 条路径记录。
-
-## 5. 当前边界和后续计划
-
-- 现在是参照任务一、任务二、任务三做了一个比较高性能的demo，之后我们要实现任务四以后的几个任务，回过头来也要改改当前成果，为后续任务作相应适配。
-- Context Path 当前是固定容量短文本摘要历史，不是完整 raw 请求/响应日志。
-- `query_file` 只是文件元数据查询，不等于任务四完整文件系统查询优化。
-- 任务五 Agent Loop 目前只有字段和调用状态预留，还没有完整心跳/等待/唤醒。
-- 任务六综合场景尚待设计，后续可围绕系统管理员 Agent 或文件检索 Agent 展开。
-
-## 6. 退出 QEMU
-
-按：
+最后出现：
 
 ```text
-Ctrl-a x
+agentfinal_ucore: passed
+agentfinal_ucore: parent passed
 ```
+
+## 3. 性能演示
+
+运行：
+
+```bash
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAPTER=agent
+```
+
+重点解释：
+
+- `scalar_agent_run` 是单个工具调用的基线。
+- `batch_agent_run` 展示批量 syscall 的吞吐提升。
+- `direct_context` 展示用户态直接读 Context 镜像的低成本。
+- `context_query` 和 `context_snapshot` 对比逐条查询和批量快照。
+- `file_scan_query` 和 `file_index_query` 对比扫描路径和索引路径。
+- `event_wait_wake` 证明事件机制不仅能跑通，也被纳入性能验证。
+
+性能数字会随 QEMU 和宿主机负载波动。答辩时应强调相对趋势和设计原因：减少 syscall 次数、减少重复拷贝、减少线性扫描。
+
+最后出现：
+
+```text
+agentbench_ucore: passed
+agentbench_ucore: parent passed
+```
+
+## 4. 场景演示
+
+运行：
+
+```bash
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER=agent
+```
+
+场景设定：
+
+一个实验流水线有多个阶段，包括 align、analyze、report、archive。系统中有多个 Agent：
+
+- sentinel 负责发现失败。
+- investigator 负责分析原因。
+- recovery 负责恢复。
+
+演示流程：
+
+1. 父进程初始化文件元数据。
+2. 三个 Agent 被创建。
+3. sentinel 监听 `status=failed`。
+4. 父进程注入 align 阶段失败。
+5. sentinel 收到事件并查询文件索引。
+6. sentinel 尝试恢复但权限不足，被内核拒绝。
+7. sentinel 唤醒 investigator。
+8. investigator 查询摘要和依赖，确认影响范围。
+9. investigator 唤醒 recovery。
+10. recovery 通过权限检查并执行恢复。
+11. recovery 重复执行同一恢复动作，内核识别为 duplicate。
+12. 最终查询报告文件，系统输出 recovered。
+
+关键输出：
+
+```text
+agentos:event type=WATCH_REGISTERED role=sentinel filter=status=failed
+agentos:event type=INCIDENT_CREATED id=INC-RUN-042-ALIGN-OOM stage=align
+agentos:event type=TOOL_CALL role=sentinel tool=query_file ...
+agentos:event type=AUDIT role=sentinel action=rerun_stage result=DENIED
+agentos:event type=CONTEXT_SNAPSHOT role=investigator ...
+agentos:event type=ACTION role=recovery stage=align status=OK
+agentos:event type=AUDIT role=recovery action=rerun_align result=DUPLICATE
+agentos:event type=FINAL status=RECOVERED
+labdemo_ucore: passed
+```
+
+## 5. 结尾总结
+
+本项目在 uCore 上实现了 Agent 进程、工具调用、Context Path、文件元数据索引和 Agent Loop。最终场景证明这些功能可以组合成一个完整的内核级 Agent 协作系统，而不是只停留在分散 syscall 的层面。
