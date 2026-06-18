@@ -6,9 +6,9 @@
 
 测试环境：
 
-- WSL2 Ubuntu
-- QEMU riscv64
-- `riscv64-linux-gnu-` 工具链
+- WSL2 Ubuntu；
+- QEMU riscv64；
+- `riscv64-linux-gnu-` 工具链。
 
 ## 构建
 
@@ -20,6 +20,16 @@ make build TOOLPREFIX=riscv64-linux-gnu- LOG=warn INIT_PROC=agentfinal_ucore
 ```
 
 结果：通过。
+
+## 完整脚本
+
+执行：
+
+```bash
+bash scripts/run-agent-tests.sh
+```
+
+结果：通过。脚本依次运行 `agentfinal_ucore`、`agentbench_ucore`、`labdemo_ucore`，均找到对应 passed 标记。
 
 ## agentfinal_ucore 样例输出
 
@@ -61,19 +71,36 @@ agentbench_ucore: parent passed
 
 ```text
 labdemo_ucore: Agent-OS laboratory recovery demo
-agentos:event type=AGENT_CREATED role=recovery ...
-agentos:event type=AGENT_CREATED role=investigator ...
-agentos:event type=AGENT_CREATED role=sentinel ...
+labdemo_ucore: created role=recovery pid=2 context=0x0000003ffffea000
+agentos:event type=AGENT_CREATED role=recovery pid=2 context=0x0000003ffffea000
+labdemo_ucore: created role=investigator pid=3 context=0x0000003ffffea000
+labdemo_ucore: created role=sentinel pid=4 context=0x0000003ffffea000
+agentos:event type=AGENT_CREATED role=sentinel pid=4 context=0x0000003ffffea000
 agentos:event type=WATCH_REGISTERED role=sentinel filter=status=failed
+agentos:event type=AGENT_CREATED role=investigator pid=3 context=0x0000003ffffea000
 agentos:event type=INCIDENT_CREATED id=INC-RUN-042-ALIGN-OOM stage=align
-agentos:event type=TOOL_CALL role=sentinel tool=query_file hits=1 used_index=1 ...
-agentos:event type=AUDIT role=sentinel action=rerun_stage result=DENIED ...
-agentos:event type=MESSAGE from=sentinel to=investigator status=OK ...
-agentos:event type=CONTEXT_SNAPSHOT role=investigator records=4 ...
-agentos:event type=ACTION role=recovery stage=align status=OK ...
-agentos:event type=AUDIT role=recovery action=rerun_align result=DUPLICATE ...
+labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042
+agentos:event type=TOOL_CALL role=sentinel tool=query_file hits=1 used_index=1 seq=4
+agentos:event type=AUDIT role=sentinel action=rerun_stage result=DENIED seq=5
+agentos:event type=MESSAGE from=sentinel to=investigator status=OK seq=6
+labdemo_ucore: investigator reason=align output is ready before injected failure
+labdemo_ucore: affected stages=align+analyze+report+archive
+agentos:event type=CONTEXT_SNAPSHOT role=investigator records=4 latest=4
+agentos:event type=ACTION role=recovery stage=align status=OK seq=4
+agentos:event type=AUDIT role=recovery action=rerun_align result=DUPLICATE seq=5
+labdemo_ucore: final report_query hits=2 used_index=1 scanned=7
 agentos:event type=FINAL status=RECOVERED
 labdemo_ucore: passed
 ```
 
 结论：多 Agent 场景通过，能够展示监控、诊断、恢复和审计过程。
+
+## 提交前检查记录
+
+已检查：
+
+- `git diff --check` 通过；
+- 仓库内容未包含敏感 token 字符串；
+- 当前 `HEAD` 中没有旧版内核关键字；
+- 当前 `HEAD` 中没有旧 `kernel/`、旧 `mkfs/`、旧测试入口残留；
+- 本地 `uCore` 分支已推送到 `origin/uCore`。
