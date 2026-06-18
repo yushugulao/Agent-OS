@@ -40,6 +40,11 @@ static void run_agent_child(void)
 
 	check(agent_info(&info) == 0, "agent_info");
 	check(info.is_agent == 1, "is agent");
+	check(info.agent_role == AGENT_ROLE_ORCHESTRATOR, "orchestrator role");
+	check((info.capability_mask & AGENT_CAP_META_WRITE) != 0,
+	      "meta write cap");
+	check((info.capability_mask & AGENT_CAP_ORCHESTRATE) != 0,
+	      "orchestrate cap");
 	check(info.context_base == AGENT_CONTEXT_BASE, "context base");
 	check(info.context_size == AGENT_CONTEXT_SIZE, "context size");
 	direct_header = (struct agent_context_header *)info.context_base;
@@ -134,8 +139,8 @@ int main(void)
 	int status = 0;
 
 	printf("agentfinal_ucore: Agent-OS on uCore final verification\n");
-	pid = agent_create();
-	check(pid >= 0, "agent_create");
+	pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
+	check(pid >= 0, "agent_create_role orchestrator");
 	if (pid == 0)
 		run_agent_child();
 	check(waitpid(pid, &status) == pid, "wait child");

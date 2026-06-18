@@ -178,7 +178,7 @@ static void inject_failure(void)
 	printf("agentos:event type=INCIDENT_CREATED id=INC-RUN-042-ALIGN-OOM stage=align\n");
 }
 
-int main(void)
+static void run_orchestrator(void)
 {
 	int sentinel_pid;
 	int ready_pipe[2];
@@ -187,19 +187,19 @@ int main(void)
 	int ready_count = 0;
 	char ch;
 
-	printf("labdemo_ucore: Agent-OS laboratory recovery demo\n");
+	created("orchestrator");
 	check(agent_file_meta_init() == 0, "meta init");
 	check(pipe(ready_pipe) == 0, "pipe");
 	ready_fd = ready_pipe[1];
-	recovery_pid = agent_create();
+	recovery_pid = agent_create_role(AGENT_ROLE_RECOVERY);
 	check(recovery_pid >= 0, "create recovery");
 	if (recovery_pid == 0)
 		run_recovery();
-	investigator_pid = agent_create();
+	investigator_pid = agent_create_role(AGENT_ROLE_INVESTIGATOR);
 	check(investigator_pid >= 0, "create investigator");
 	if (investigator_pid == 0)
 		run_investigator();
-	sentinel_pid = agent_create();
+	sentinel_pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	check(sentinel_pid >= 0, "create sentinel");
 	if (sentinel_pid == 0)
 		run_sentinel();
@@ -215,5 +215,22 @@ int main(void)
 	}
 	check(ok == 3, "three agents");
 	printf("labdemo_ucore: passed\n");
+	exit(0);
+}
+
+int main(void)
+{
+	int orchestrator_pid;
+	int status = 0;
+
+	printf("labdemo_ucore: Agent-OS laboratory recovery demo\n");
+	orchestrator_pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
+	check(orchestrator_pid >= 0, "create orchestrator");
+	if (orchestrator_pid == 0)
+		run_orchestrator();
+	check(waitpid(orchestrator_pid, &status) == orchestrator_pid,
+	      "wait orchestrator");
+	check(status == 0, "orchestrator status");
+	printf("labdemo_ucore: parent passed\n");
 	return 0;
 }

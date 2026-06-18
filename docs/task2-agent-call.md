@@ -72,9 +72,9 @@ legacy 请求和响应结构：
 | `file_meta_init` | 10 | 无 | 初始化任务四文件元数据表 |
 | `read_file_summary` | 11 | selector | 返回文件摘要 |
 | `dependency_query` | 12 | stage | 返回阶段影响范围 |
-| `capability_check` | 13 | role、action | 检查角色权限 |
-| `rerun_stage` | 14 | role、stage | 受控恢复动作 |
-| `write_report` | 15 | role、payload | 写报告状态 |
+| `capability_check` | 13 | legacy role、action | 按当前进程真实 capability 检查动作，并返回真实 role/capability |
+| `rerun_stage` | 14 | legacy role、stage | 只有具备 `RECOVER_STAGE` 的 Agent 可执行受控恢复动作 |
+| `write_report` | 15 | legacy role、payload | 只有具备 `REPORT_WRITE` 的 Agent 可写报告状态 |
 | `agent_watch` | 16 | event_type、filter | 注册事件 watch |
 | `agent_wait` | 17 | timeout | 工具表可发现项；实际等待用 syscall |
 | `agent_heartbeat` | 18 | interval | 设置心跳 |
@@ -94,7 +94,7 @@ legacy 请求和响应结构：
 | `AGENT_STATUS_DENIED` | 权限检查拒绝 |
 | `AGENT_STATUS_DUPLICATE` | 重复恢复动作被识别 |
 
-最终功能验收程序 `agentfinal_ucore` 会覆盖批量工具调用、sequence 连续性、Context 写入和 Context Snapshot。`labdemo_ucore` 覆盖 denied 和 duplicate 两类业务错误。
+最终功能验收程序 `agentfinal_ucore` 会覆盖批量工具调用、sequence 连续性、Context 写入和 Context Snapshot。`labdemo_ucore` 覆盖 denied 和 duplicate 两类业务错误。`agentsecurity_ucore` 专门覆盖用户态伪造 role 仍被内核真实 capability 拒绝的负向路径。
 
 ## Agent Context 写入
 
@@ -132,8 +132,8 @@ agentfinal_ucore: passed
 `agentbench_ucore`：
 
 ```text
-agentbench_ucore: scalar_agent_run ops=8192 ticks=126 ops_per_tick=65 speedup_x100=100
-agentbench_ucore: batch_agent_run ops=8192 ticks=67 ops_per_tick=122 speedup_x100=188
+agentbench_ucore: scalar_agent_run ops=8192 ticks=118 ops_per_tick=69 speedup_x100=100
+agentbench_ucore: batch_agent_run ops=8192 ticks=70 ops_per_tick=117 speedup_x100=168
 ```
 
 `labdemo_ucore`：
@@ -141,4 +141,11 @@ agentbench_ucore: batch_agent_run ops=8192 ticks=67 ops_per_tick=122 speedup_x10
 ```text
 agentos:event type=AUDIT role=sentinel action=rerun_stage result=DENIED
 agentos:event type=AUDIT role=recovery action=rerun_align result=DUPLICATE
+```
+
+`agentsecurity_ucore`：
+
+```text
+agentsecurity_ucore: sentinel spoof_denied=1
+agentsecurity_ucore: recovery rerun_ok=1 duplicate=1
 ```

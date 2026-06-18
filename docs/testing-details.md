@@ -9,10 +9,12 @@
 ### 1.1 测试流程
 
 1. 父进程打印 `Agent-OS on uCore final verification`。
-2. 父进程调用 `agent_create()` 创建 Agent 子进程。
+2. 父进程调用 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)` 创建 orchestrator Agent 子进程。
 3. 子进程调用 `agent_info()`。
 4. 子进程检查：
    - `info.is_agent == 1`；
+   - `info.agent_role == AGENT_ROLE_ORCHESTRATOR`；
+   - capability mask 包含 `AGENT_CAP_META_WRITE` 和 `AGENT_CAP_ORCHESTRATE`；
    - `info.context_base == AGENT_CONTEXT_BASE`；
    - `info.context_size == AGENT_CONTEXT_SIZE`。
 5. 子进程把 `info.context_base` 转成 `struct agent_context_header *`，直接读取 Context header。
@@ -62,8 +64,8 @@ agentfinal_ucore: parent passed
 
 | 覆盖点 | 证明方式 |
 | --- | --- |
-| Agent 创建 | 父进程创建 Agent 子进程 |
-| Agent PCB 字段 | `agent_info()` 返回 Agent 状态和 Context 信息 |
+| Agent 创建 | pid 1 父进程创建 orchestrator Agent 子进程 |
+| Agent PCB 字段 | `agent_info()` 返回 Agent 状态、真实 role、capability 和 Context 信息 |
 | Agent Context 映射 | 直接读取 header 和 latest result |
 | 批量工具调用 | 一次 `agent_run()` 执行 64 个 echo op |
 | Context Path 写入 | snapshot 返回 64 条记录 |
@@ -72,10 +74,13 @@ agentfinal_ucore: parent passed
 | FIFO 淘汰 | 192 条调用后只保留 128 条，oldest/latest/dropped 正确 |
 | 文件索引 | `agent_file_query()` 使用索引路径 |
 | Agent 事件 | watch/wake/wait 自唤醒成功 |
+| 特权 Agent 能力 | orchestrator 能初始化文件元数据并向自身投递事件 |
 
 ## 2. `agentbench_ucore`
 
 `agentbench_ucore` 是性能和吞吐测试。它不使用固定耗时阈值，而是输出可对比的 tick 统计。
+
+benchmark 主进程通过 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)` 创建 orchestrator Agent，文件元数据初始化、文件查询、事件投递等需要权限的操作都在 orchestrator 内执行。wait/wake 子测试中的 waiter Agent 使用最低权限 sentinel role。
 
 ### 2.1 测试项目
 
@@ -103,14 +108,14 @@ agentfinal_ucore: parent passed
 
 ```text
 agentbench_ucore: case ops ticks ops_per_tick speedup_x100
-agentbench_ucore: scalar_agent_run ops=8192 ticks=126 ops_per_tick=65 speedup_x100=100
-agentbench_ucore: batch_agent_run ops=8192 ticks=67 ops_per_tick=122 speedup_x100=188
-agentbench_ucore: direct_context ops=50000 ticks=1 ops_per_tick=50000 speedup_x100=76904
-agentbench_ucore: context_query ops=256 ticks=2 ops_per_tick=128 speedup_x100=100
-agentbench_ucore: context_snapshot ops=32768 ticks=23 ops_per_tick=1424 speedup_x100=1113
-agentbench_ucore: file_scan_query ops=1024 ticks=27 ops_per_tick=37 speedup_x100=100
-agentbench_ucore: file_index_query ops=1024 ticks=22 ops_per_tick=46 speedup_x100=122
-agentbench_ucore: event_wait_wake ops=32 ticks=4 ops_per_tick=8 speedup_x100=100
+agentbench_ucore: scalar_agent_run ops=8192 ticks=118 ops_per_tick=69 speedup_x100=100
+agentbench_ucore: batch_agent_run ops=8192 ticks=70 ops_per_tick=117 speedup_x100=168
+agentbench_ucore: direct_context ops=50000 ticks=1 ops_per_tick=50000 speedup_x100=72021
+agentbench_ucore: context_query ops=256 ticks=3 ops_per_tick=85 speedup_x100=100
+agentbench_ucore: context_snapshot ops=32768 ticks=23 ops_per_tick=1424 speedup_x100=1669
+agentbench_ucore: file_scan_query ops=1024 ticks=26 ops_per_tick=39 speedup_x100=100
+agentbench_ucore: file_index_query ops=1024 ticks=23 ops_per_tick=44 speedup_x100=113
+agentbench_ucore: event_wait_wake ops=32 ticks=5 ops_per_tick=6 speedup_x100=100
 agentbench_ucore: passed
 agentbench_ucore: parent passed
 ```
@@ -151,27 +156,29 @@ tick 数值随环境波动，评审时应结合设计解释看相对趋势。
 
 ### 3.2 流程
 
-1. 父进程调用 `agent_file_meta_init()` 安装演示文件元数据。
-2. 父进程创建 recovery、investigator、sentinel 三个 Agent。
-3. 三个 Agent 分别输出自己的 role、pid 和 Context 地址。
-4. sentinel 注册 `status=failed` 的文件状态监听。
-5. investigator 注册 `investigate` 消息监听。
-6. recovery 注册 `recover` 消息监听。
-7. 父进程更新 align 阶段文件元数据，把状态改为 failed。
-8. 内核投递 `AGENT_EVENT_FILE_STATUS`。
-9. sentinel 调用 `agent_wait()` 收到失败事件。
-10. sentinel 通过 `query_file` 找到失败工件。
-11. sentinel 尝试执行恢复动作，`capability_check` 返回 denied。
-12. sentinel 通过消息唤醒 investigator。
-13. investigator 查询 align 文件摘要，得到故障原因。
-14. investigator 查询 dependency，得到影响阶段。
-15. investigator 调用 `context_snapshot()` 展示自身审计历史。
-16. investigator 通过消息唤醒 recovery。
-17. recovery 通过 capability 检查。
-18. recovery 执行 `rerun_stage align`。
-19. recovery 再次执行同一动作，内核返回 duplicate。
-20. recovery 写报告并查询 report 文件。
-21. 父进程等待三个 Agent 退出，输出 `labdemo_ucore: passed`。
+1. 普通 init 调用 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)` 创建 orchestrator。
+2. orchestrator 调用 `agent_file_meta_init()` 安装演示文件元数据。
+3. orchestrator 创建 recovery、investigator、sentinel 三个角色 Agent。
+4. 三个角色 Agent 分别输出自己的 role、pid 和 Context 地址。
+5. sentinel 注册 `status=failed` 的文件状态监听。
+6. investigator 注册 `investigate` 消息监听。
+7. recovery 注册 `recover` 消息监听。
+8. orchestrator 更新 align 阶段文件元数据，把状态改为 failed。
+9. 内核投递 `AGENT_EVENT_FILE_STATUS`。
+10. sentinel 调用 `agent_wait()` 收到失败事件。
+11. sentinel 通过 `query_file` 找到失败工件。
+12. sentinel 尝试执行恢复动作，`capability_check` 按真实 sentinel role 返回 denied。
+13. sentinel 通过消息唤醒 investigator。
+14. investigator 查询 align 文件摘要，得到故障原因。
+15. investigator 查询 dependency，得到影响阶段。
+16. investigator 调用 `context_snapshot()` 展示自身审计历史。
+17. investigator 通过消息唤醒 recovery。
+18. recovery 通过 capability 检查。
+19. recovery 执行 `rerun_stage align`。
+20. recovery 再次执行同一动作，内核返回 duplicate。
+21. recovery 写报告并查询 report 文件。
+22. orchestrator 等待三个角色 Agent 退出，输出 `labdemo_ucore: passed`。
+23. 普通 init 等待 orchestrator 退出，输出 `labdemo_ucore: parent passed`。
 
 ### 3.3 关键输出
 
@@ -195,7 +202,8 @@ labdemo_ucore: passed
 | 覆盖点 | 证明方式 |
 | --- | --- |
 | 多 Agent 并存 | 同时创建 sentinel、investigator、recovery |
-| 文件状态事件 | 父进程注入 failed 状态后唤醒 sentinel |
+| 控制面权限 | 普通 init 只启动 orchestrator；元数据初始化、失败注入和角色 Agent 创建都由 orchestrator 完成 |
+| 文件状态事件 | orchestrator 注入 failed 状态后唤醒 sentinel |
 | 文件属性查询 | sentinel 查询失败工件 |
 | 依赖查询 | investigator 查询 align 的影响范围 |
 | 权限控制 | sentinel 恢复动作被拒绝 |
@@ -204,7 +212,56 @@ labdemo_ucore: passed
 | 幂等恢复 | recovery 第二次 rerun 返回 duplicate |
 | 最终状态 | 输出 `FINAL status=RECOVERED` |
 
-## 4. 运行方式和复现建议
+## 4. `agentsecurity_ucore`
+
+`agentsecurity_ucore` 是权限边界负向测试，专门覆盖审阅中指出的“普通进程能直接改全局元数据或伪造事件”“用户态自报 role 可绕过权限”的问题。
+
+### 4.1 测试流程
+
+1. 普通 init 调用 `agent_wake()`，预期返回 `-1`。
+2. 普通 init 调用 `agent_file_meta_init()`，预期返回 `-1`。
+3. 普通 init 调用 `agent_file_meta_set()`，预期返回 `-1`。
+4. 普通 init 创建 orchestrator Agent。
+5. orchestrator 通过 `agent_info()` 检查真实 role 和 capability mask。
+6. orchestrator 初始化文件元数据，并把 align 阶段置为 failed。
+7. orchestrator 创建 sentinel Agent。
+8. sentinel 检查真实 role/capability mask。
+9. sentinel 把 `agent_op.arg0` 伪造成 `AGENT_ROLE_RECOVERY` 后调用 `capability_check("rerun_stage")`，预期仍返回 `AGENT_STATUS_DENIED`。
+10. sentinel 继续伪造 recovery 调用 `rerun_stage align`，预期返回 `AGENT_STATUS_DENIED`。
+11. sentinel 继续伪造 recovery 调用 `write_report`，预期返回 `AGENT_STATUS_DENIED`。
+12. sentinel 直接调用 `agent_file_meta_set()`，预期返回 `AGENT_STATUS_DENIED`。
+13. sentinel 查询 align 状态仍为 failed，证明拒绝路径没有改变文件状态。
+14. orchestrator 创建 recovery Agent。
+15. recovery 检查真实 role/capability mask。
+16. recovery 调用 `rerun_stage align`，即使 `agent_op.arg0` 填成 sentinel，也按真实 recovery role 成功。
+17. recovery 使用同一 corr_id 再次调用 `rerun_stage align`，预期返回 `AGENT_STATUS_DUPLICATE`。
+18. recovery 调用 `write_report` 成功。
+19. orchestrator 查询 align 状态变为 ok，测试输出 `agentsecurity_ucore: passed`。
+
+### 4.2 关键输出
+
+```text
+agentsecurity_ucore: plain_process_denied=1
+agentsecurity_ucore: role=orchestrator capability_checked=1
+agentsecurity_ucore: role=sentinel capability_checked=1
+agentsecurity_ucore: sentinel spoof_denied=1
+agentsecurity_ucore: role=recovery capability_checked=1
+agentsecurity_ucore: recovery rerun_ok=1 duplicate=1
+agentsecurity_ucore: passed
+```
+
+### 4.3 覆盖结论
+
+| 覆盖点 | 证明方式 |
+| --- | --- |
+| 普通进程不能直接投递事件 | `agent_wake()` 返回 `-1` |
+| 普通进程不能直接修改文件元数据 | `agent_file_meta_init()`、`agent_file_meta_set()` 返回 `-1` |
+| 用户态 role 参数不可信 | sentinel 伪造 recovery 仍被拒绝 |
+| 文件状态拒绝路径无副作用 | sentinel 伪造 rerun 后 align 仍为 failed |
+| recovery 权限来自真实 PCB 字段 | recovery 即使传入 sentinel role，也能按真实权限恢复 |
+| 重复恢复被识别 | 相同 corr_id 第二次 rerun 返回 duplicate |
+
+## 5. 运行方式和复现建议
 
 推荐用脚本运行完整测试：
 
@@ -218,6 +275,7 @@ bash scripts/run-agent-tests.sh
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfinal_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent
 ```
 
 不要在同一工作树中并行启动多个 QEMU 测试，因为 `nfs/fs-copy.img` 会被多个进程同时访问，可能造成镜像锁冲突。

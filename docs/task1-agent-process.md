@@ -19,10 +19,11 @@
 
 | 系统调用 | 作用 |
 | --- | --- |
-| `agent_create()` | 创建一个 Agent 子进程 |
+| `agent_create()` | 创建最低权限 sentinel Agent 子进程，保留兼容入口 |
+| `agent_create_role(int role)` | 创建指定角色 Agent 子进程；pid 1 普通 init 只能创建 orchestrator，具备 orchestrate 能力的 Agent 可创建其他角色 |
 | `agent_info(struct agent_info *)` | 查询当前进程的 Agent 状态、Agent ID、Agent Context、配额、Loop 状态和路径元信息 |
 
-当前任务一能力由 `agentfinal_ucore` 和 `labdemo_ucore` 共同验证，覆盖 Agent 创建、Context 映射、多个 Agent 并存和退出路径。
+当前任务一能力由 `agentfinal_ucore`、`labdemo_ucore` 和 `agentsecurity_ucore` 共同验证，覆盖 Agent 创建、Context 映射、多个 Agent 并存、角色能力绑定和退出路径。
 
 ## 进程元数据
 
@@ -33,6 +34,7 @@
 | `is_agent` | 是否为 Agent 进程 |
 | `agent_type` | Agent 类型，普通进程为 `AGENT_TYPE_NONE`，Agent 进程为 `AGENT_TYPE_AGENT` |
 | `agent_id` | Agent 进程 ID，启动周期内递增分配 |
+| `agent_role` | 当前 Agent 的真实内核角色 |
 | `agent_ctx_base` | Agent Context 用户虚拟地址起点 |
 | `agent_ctx_size` | Agent Context 大小 |
 | `heartbeat_interval` | Agent 心跳周期，`agent_heartbeat()` 可设置 |
@@ -53,7 +55,7 @@
 | `wait_count` | 当前 Agent 调用等待次数 |
 | `timeout_count` | 等待超时次数 |
 | `last_heartbeat_tick` | 最近心跳 tick |
-| `capability_mask` | 当前 Agent 能力位 |
+| `capability_mask` | 当前 Agent 能力位，由内核按 `agent_role` 分配 |
 
 普通进程的 `is_agent` 为 0，`agent_id` 为 0，且不会安装 Agent metadata 或 Agent Context 特殊映射。普通进程调用 Agent-only syscall 时会返回错误。
 
@@ -83,21 +85,21 @@ Agent Context 使用固定高地址用户虚拟区：
 ```mermaid
 sequenceDiagram
     participant P as 普通父进程
-    participant S as sys_agent_create
+    participant S as sys_agent_create / sys_agent_create_role
     participant K as proc.c
     participant A as agent_make
     participant C as Agent Context
-    P->>S: agent_create()
-    S->>K: agent_create_proc()
+    P->>S: agent_create() / agent_create_role(role)
+    S->>K: agent_create_proc() / agent_create_role_proc(role)
     K->>K: 复制基础进程状态
-    K->>A: 标记子进程为 Agent
+    K->>A: 标记子进程为 Agent 并绑定 role/capability
     A->>C: 分配 shadow 页和镜像页
     A->>C: 初始化 Context header
     A-->>K: 完成
     K-->>P: 返回子进程 pid
 ```
 
-子进程从 `agent_create()` 返回 0 后继续执行用户代码，并可以立即调用 `agent_info()`、`agent_run()`、`context_snapshot()` 等 Agent syscall。
+子进程从 `agent_create()` 或 `agent_create_role()` 返回 0 后继续执行用户代码，并可以立即调用 `agent_info()`、`agent_run()`、`context_snapshot()` 等 Agent syscall。
 
 ## 释放流程
 
@@ -107,15 +109,16 @@ Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 
 
 `agentfinal_ucore` 中的任务一验证路径：
 
-1. 普通父进程调用 `agent_create()`。
+1. 普通父进程调用 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)`。
 2. 子进程调用 `agent_info()`。
 3. 子进程确认 `is_agent == 1`。
-4. 子进程确认 Context base 和 size 与 ABI 常量一致。
-5. 子进程直接读取 Agent Context header。
-6. 子进程执行后续工具调用和 Context 测试。
-7. 父进程等待子进程退出并检查状态。
+4. 子进程确认 `agent_role == AGENT_ROLE_ORCHESTRATOR`，且 capability mask 包含 `META_WRITE` 和 `ORCHESTRATE`。
+5. 子进程确认 Context base 和 size 与 ABI 常量一致。
+6. 子进程直接读取 Agent Context header。
+7. 子进程执行后续工具调用和 Context 测试。
+8. 父进程等待子进程退出并检查状态。
 
-`labdemo_ucore` 进一步证明多个 Agent 可以并存：
+`labdemo_ucore` 进一步证明多个 Agent 可以并存。普通 init 只创建 orchestrator，orchestrator 再创建：
 
 - recovery；
 - investigator；
@@ -138,7 +141,7 @@ Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 
 
 | 边界 | 说明 |
 | --- | --- |
-| Agent 创建参数 | 当前 `agent_create()` 不接收角色、配额、能力参数；角色主要由演示程序约定 |
+| Agent 创建参数 | `agent_create()` 保持最低权限 sentinel 兼容入口；复杂配额和自定义能力仍未开放给用户态 |
 | Agent exec 场景 | 当前最终测试不把 exec 作为主验收入口 |
 | 长期资源统计 | 当前统计足够支撑测试和演示，未做完整平台级资源审计 |
 
@@ -151,7 +154,8 @@ agentfinal_ucore: parent passed
 ```
 
 ```text
-labdemo_ucore: created role=recovery pid=2 context=0x0000003ffffea000
-labdemo_ucore: created role=investigator pid=3 context=0x0000003ffffea000
-labdemo_ucore: created role=sentinel pid=4 context=0x0000003ffffea000
+labdemo_ucore: created role=orchestrator pid=2 context=0x0000003ffffea000
+labdemo_ucore: created role=recovery pid=3 context=0x0000003ffffea000
+labdemo_ucore: created role=investigator pid=4 context=0x0000003ffffea000
+labdemo_ucore: created role=sentinel pid=5 context=0x0000003ffffea000
 ```

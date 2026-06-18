@@ -32,6 +32,7 @@ uCore 分支不是只做任务一至三的最小版本。当前交付以任务�
 - `user/src/agentfinal_ucore.c`
 - `user/src/agentbench_ucore.c`
 - `user/src/labdemo_ucore.c`
+- `user/src/agentsecurity_ucore.c`
 
 `os/` 是内核目录，`user/` 是用户态程序与测试目录，`nfs/` 用于生成用户程序文件系统镜像。
 
@@ -82,6 +83,7 @@ bash scripts/run-agent-tests.sh
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfinal_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent
 ```
 
 如果希望进入用户 shell，可以运行：
@@ -96,6 +98,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=usershell CHAPTER=age
 agentfinal_ucore
 agentbench_ucore
 labdemo_ucore
+agentsecurity_ucore
 ```
 
 ## 最终测试入口
@@ -104,7 +107,8 @@ labdemo_ucore
 | --- | --- | --- |
 | `agentfinal_ucore` | 任务一至三功能验收，同时覆盖文件索引和事件自唤醒 | `agentfinal_ucore: passed` |
 | `agentbench_ucore` | 任务一至五性能验证，包括 batch、direct context、snapshot、文件查询和 wait/wake | `agentbench_ucore: passed` |
-| `labdemo_ucore` | 多 Agent 综合演示，覆盖监控、诊断、恢复、权限拒绝和重复动作识别 | `labdemo_ucore: passed` |
+| `labdemo_ucore` | 多 Agent 综合演示，普通 init 只启动 orchestrator，后续元数据初始化、事件注入和角色 Agent 创建都由 orchestrator 完成 | `labdemo_ucore: passed` |
+| `agentsecurity_ucore` | 权限边界负向测试，覆盖普通进程直接写元数据/投事件、sentinel 伪造 recovery、真实 recovery 幂等恢复 | `agentsecurity_ucore: passed` |
 
 `agentfinal_ucore` 预期输出包括：
 
@@ -130,6 +134,7 @@ agentbench_ucore: case ops ticks ops_per_tick speedup_x100
 `labdemo_ucore` 会输出结构化演示事件，例如：
 
 ```text
+agentos:event type=AGENT_CREATED role=orchestrator
 agentos:event type=WATCH_REGISTERED role=sentinel filter=status=failed
 agentos:event type=INCIDENT_CREATED id=INC-RUN-042-ALIGN-OOM stage=align
 agentos:event type=TOOL_CALL role=sentinel tool=query_file hits=1 used_index=1
@@ -138,6 +143,18 @@ agentos:event type=ACTION role=recovery stage=align status=OK
 agentos:event type=AUDIT role=recovery action=rerun_align result=DUPLICATE
 agentos:event type=FINAL status=RECOVERED
 labdemo_ucore: passed
+```
+
+`agentsecurity_ucore` 预期输出包括：
+
+```text
+agentsecurity_ucore: plain_process_denied=1
+agentsecurity_ucore: role=orchestrator capability_checked=1
+agentsecurity_ucore: role=sentinel capability_checked=1
+agentsecurity_ucore: sentinel spoof_denied=1
+agentsecurity_ucore: role=recovery capability_checked=1
+agentsecurity_ucore: recovery rerun_ok=1 duplicate=1
+agentsecurity_ucore: passed
 ```
 
 ## 当前交付材料

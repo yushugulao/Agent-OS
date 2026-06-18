@@ -174,7 +174,7 @@ static int bench_wait_wake(void)
 
 	check(pipe(ready) == 0, "ready pipe");
 	check(pipe(ack) == 0, "ack pipe");
-	pid = agent_create();
+	pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	check(pid >= 0, "create waiter");
 	if (pid == 0) {
 		close(ready[0]);
@@ -212,6 +212,11 @@ static void run_agent_bench(void)
 	int waitwake;
 
 	check(agent_info(&info) == 0, "info");
+	check(info.agent_role == AGENT_ROLE_ORCHESTRATOR, "orchestrator role");
+	check((info.capability_mask & AGENT_CAP_META_WRITE) != 0,
+	      "meta write cap");
+	check((info.capability_mask & AGENT_CAP_ORCHESTRATE) != 0,
+	      "orchestrate cap");
 	check(context_clear() == 0, "clear");
 	check(agent_file_meta_init() == 0, "meta init");
 	scalar = bench_scalar();
@@ -244,7 +249,7 @@ int main(void)
 	int status = 0;
 
 	printf("agentbench_ucore: Agent-OS on uCore benchmark\n");
-	pid = agent_create();
+	pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
 	check(pid >= 0, "create bench agent");
 	if (pid == 0)
 		run_agent_bench();

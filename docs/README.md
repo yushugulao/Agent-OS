@@ -12,7 +12,7 @@
 | 4 | [requirements-traceability.md](requirements-traceability.md) | 赛题要求到实现位置、测试证据和文档材料的对应表 |
 | 5 | [api.md](api.md) | 系统调用、Agent ABI、工具协议和错误语义 |
 | 6 | [verification.md](verification.md) | 验证计划、测试覆盖表、性能数据摘要 |
-| 7 | [testing-details.md](testing-details.md) | `agentfinal_ucore`、`agentbench_ucore` 和 `labdemo_ucore` 的逐项测试说明 |
+| 7 | [testing-details.md](testing-details.md) | `agentfinal_ucore`、`agentbench_ucore`、`labdemo_ucore` 和 `agentsecurity_ucore` 的逐项测试说明 |
 | 8 | [demo-script.md](demo-script.md) | 评审现场或视频演示脚本 |
 
 ## 详细附录

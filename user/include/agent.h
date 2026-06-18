@@ -92,6 +92,17 @@
 #define AGENT_ROLE_RECOVERY      3
 #define AGENT_ROLE_ORCHESTRATOR  4
 
+#define AGENT_CAP_META_READ     (1ULL << 0)
+#define AGENT_CAP_CONTENT_READ  (1ULL << 1)
+#define AGENT_CAP_PROCESS_READ  (1ULL << 2)
+#define AGENT_CAP_MESSAGE_SEND  (1ULL << 3)
+#define AGENT_CAP_WATCH         (1ULL << 4)
+#define AGENT_CAP_RECOVER_STAGE (1ULL << 5)
+#define AGENT_CAP_REPORT_WRITE  (1ULL << 6)
+#define AGENT_CAP_AUDIT_WRITE   (1ULL << 7)
+#define AGENT_CAP_META_WRITE    (1ULL << 8)
+#define AGENT_CAP_ORCHESTRATE   (1ULL << 9)
+
 #define AGENT_DEP_PREPARE (1ULL << 0)
 #define AGENT_DEP_ALIGN   (1ULL << 1)
 #define AGENT_DEP_ANALYZE (1ULL << 2)
@@ -101,6 +112,7 @@
 struct agent_info {
 	int is_agent;
 	int agent_id;
+	int agent_role;
 	uint64 context_base;
 	uint64 context_size;
 	int agent_type;
@@ -275,6 +287,7 @@ struct agent_file_query_result {
 };
 
 int agent_create(void);
+int agent_create_role(int role);
 int agent_info(struct agent_info *info);
 int agent_run(struct agent_op *ops, struct agent_result *results, int count, uint64 flags);
 int agent_call(struct agent_request *req, struct agent_response *resp);

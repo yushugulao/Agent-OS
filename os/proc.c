@@ -314,7 +314,7 @@ void freeproc(struct proc *p)
 	p->state = P_UNUSED;
 }
 
-static int fork_common(int make_agent)
+static int fork_common(int make_agent, int agent_role)
 {
 	struct proc *np;
 	struct proc *p = curr_proc();
@@ -343,7 +343,7 @@ static int fork_common(int make_agent)
 	// currently only copy main thread
 	struct thread *nt = &np->threads[allocthread(np, 0, 0)],
 		      *t = &p->threads[0];
-	if (make_agent && agent_make(np) < 0) {
+	if (make_agent && agent_make_role(np, agent_role) < 0) {
 		freeproc(np);
 		return -1;
 	}
@@ -358,12 +358,17 @@ static int fork_common(int make_agent)
 
 int fork()
 {
-	return fork_common(0);
+	return fork_common(0, AGENT_ROLE_SENTINEL);
 }
 
 int agent_create_proc()
 {
-	return fork_common(1);
+	return fork_common(1, AGENT_ROLE_SENTINEL);
+}
+
+int agent_create_role_proc(int role)
+{
+	return fork_common(1, role);
 }
 
 int push_argv(struct proc *p, char **argv)

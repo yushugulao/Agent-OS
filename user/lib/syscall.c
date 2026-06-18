@@ -270,6 +270,11 @@ int agent_create(void)
 	return syscall(SYS_agent_create);
 }
 
+int agent_create_role(int role)
+{
+	return syscall(SYS_agent_create_role, role);
+}
+
 int agent_info(struct agent_info *info)
 {
 	return syscall(SYS_agent_info, info);

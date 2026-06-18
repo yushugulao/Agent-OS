@@ -12,6 +12,7 @@
 agentfinal_ucore
 agentbench_ucore
 labdemo_ucore
+agentsecurity_ucore
 ```
 
 三者分工：
@@ -20,7 +21,8 @@ labdemo_ucore
 | --- | --- |
 | `agentfinal_ucore` | 证明任务一至三核心功能正确，同时检查文件索引和事件自唤醒 |
 | `agentbench_ucore` | 给出批量调用、Context 直接读、snapshot、文件索引、wait/wake 的性能证据 |
-| `labdemo_ucore` | 展示一个完整多 Agent 实验恢复场景 |
+| `labdemo_ucore` | 展示一个由 orchestrator 控制的多 Agent 实验恢复场景 |
+| `agentsecurity_ucore` | 展示普通进程和低权限 Agent 无法越权 |
 
 ## 2. 环境和运行方式
 
@@ -43,6 +45,7 @@ bash scripts/run-agent-tests.sh
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfinal_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent
 ```
 
 ## 3. 正确性演示
@@ -152,20 +155,21 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER
 - report；
 - archive。
 
-系统中有三个 Agent：
+系统中有一个 orchestrator 控制 Agent，以及三个业务 Agent：
 
 | 角色 | 职责 |
 | --- | --- |
+| orchestrator | 初始化文件元数据、创建业务 Agent、注入失败事件 |
 | sentinel | 发现失败事件 |
 | investigator | 分析失败原因和影响范围 |
 | recovery | 执行恢复动作 |
 
 ### 5.2 讲解流程
 
-1. 父进程初始化文件元数据。
-2. 父进程创建三个 Agent。
+1. 普通 init 只创建 orchestrator。
+2. orchestrator 初始化文件元数据并创建三个业务 Agent。
 3. sentinel 监听 `status=failed`。
-4. 父进程注入 align 阶段失败。
+4. orchestrator 注入 align 阶段失败。
 5. sentinel 收到事件并查询文件索引。
 6. sentinel 尝试恢复但权限不足，被内核拒绝。
 7. sentinel 唤醒 investigator。
@@ -208,5 +212,13 @@ labdemo_ucore: passed
 ## 6. 结尾总结
 
 本项目在 uCore 上实现了 Agent 进程、工具调用、Context Path、文件元数据索引和 Agent Loop。最终场景证明这些功能可以组合成一个完整的内核级 Agent 协作系统，而不是只停留在分散 syscall 的层面。
+
+补充安全验证可运行：
+
+```bash
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent
+```
+
+该程序证明普通进程不能直接投递事件或修改 Agent 文件元数据，sentinel 也不能通过伪造 `AGENT_ROLE_RECOVERY` 获得恢复权限。
 
 当前版本已经具备任务一至三的增强实现，并完成任务四、任务五和任务六的演示级实现。后续可以继续增强真实文件系统后台索引、长期 Agent 调度、云端 LLM Gateway 和可视化大屏。

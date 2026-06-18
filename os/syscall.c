@@ -464,6 +464,9 @@ void syscall()
 	case SYS_agent_create:
 		ret = sys_agent_create();
 		break;
+	case SYS_agent_create_role:
+		ret = sys_agent_create_role(args[0]);
+		break;
 	case SYS_agent_info:
 		ret = sys_agent_info(args[0]);
 		break;

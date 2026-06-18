@@ -42,6 +42,7 @@ bash scripts/run-agent-tests.sh
 3. `make run ... INIT_PROC=agentfinal_ucore`
 4. `make run ... INIT_PROC=agentbench_ucore`
 5. `make run ... INIT_PROC=labdemo_ucore`
+6. `make run ... INIT_PROC=agentsecurity_ucore`
 
 也可以手动分别运行：
 
@@ -49,6 +50,7 @@ bash scripts/run-agent-tests.sh
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfinal_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent
 ```
 
 通过标准：
@@ -61,6 +63,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER
 | 任务一至三功能 | `agentfinal_ucore: passed` |
 | 任务一至五性能 | `agentbench_ucore: passed` |
 | 综合场景 | `labdemo_ucore: passed` |
+| 权限边界 | `agentsecurity_ucore: passed` |
 
 ## 测试覆盖表
 
@@ -68,7 +71,8 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER
 | --- | --- | --- |
 | `agentfinal_ucore` | Agent 创建、4 页 Context、批量工具调用、短文本历史、直接读 Context 镜像、Context Snapshot、FIFO 淘汰、篡改边界、文件索引、自唤醒事件 | `agentfinal_ucore: passed` |
 | `agentbench_ucore` | scalar vs batch、direct Context、context_query vs context_snapshot、文件扫描 vs 索引、event wait/wake | `agentbench_ucore: passed` |
-| `labdemo_ucore` | 三 Agent 综合场景、文件属性查询、依赖查询、事件等待、消息唤醒、权限拒绝、幂等恢复、报告查询、结构化 `agentos:event` | `labdemo_ucore: passed` |
+| `labdemo_ucore` | orchestrator 控制的多 Agent 综合场景、文件属性查询、依赖查询、事件等待、消息唤醒、权限拒绝、幂等恢复、报告查询、结构化 `agentos:event` | `labdemo_ucore: passed` |
+| `agentsecurity_ucore` | 普通进程敏感调用拒绝、sentinel 伪造 recovery 拒绝、recovery 真实权限恢复、重复 corr_id 拒绝、role/capability mask 检查 | `agentsecurity_ucore: passed` |
 
 综合演示主入口是 `labdemo_ucore`。`agentfinal_ucore` 和 `agentbench_ucore` 是任务一至三高性能底座和任务四/五演示能力的回归入口。
 
@@ -91,6 +95,7 @@ agentfinal_ucore: parent passed
 
 ```text
 labdemo_ucore: Agent-OS laboratory recovery demo
+agentos:event type=AGENT_CREATED role=orchestrator
 agentos:event type=WATCH_REGISTERED role=sentinel filter=status=failed
 agentos:event type=INCIDENT_CREATED id=INC-RUN-042-ALIGN-OOM stage=align
 agentos:event type=TOOL_CALL role=sentinel tool=query_file hits=1 used_index=1
@@ -103,18 +108,31 @@ agentos:event type=FINAL status=RECOVERED
 labdemo_ucore: passed
 ```
 
+权限边界输出摘要：
+
+```text
+agentsecurity_ucore: Agent permission boundary test
+agentsecurity_ucore: plain_process_denied=1
+agentsecurity_ucore: role=orchestrator capability_checked=1
+agentsecurity_ucore: role=sentinel capability_checked=1
+agentsecurity_ucore: sentinel spoof_denied=1
+agentsecurity_ucore: role=recovery capability_checked=1
+agentsecurity_ucore: recovery rerun_ok=1 duplicate=1
+agentsecurity_ucore: passed
+```
+
 ## 最新性能数据
 
 ```text
 agentbench_ucore: case ops ticks ops_per_tick speedup_x100
-agentbench_ucore: scalar_agent_run ops=8192 ticks=126 ops_per_tick=65 speedup_x100=100
-agentbench_ucore: batch_agent_run ops=8192 ticks=67 ops_per_tick=122 speedup_x100=188
-agentbench_ucore: direct_context ops=50000 ticks=1 ops_per_tick=50000 speedup_x100=76904
-agentbench_ucore: context_query ops=256 ticks=2 ops_per_tick=128 speedup_x100=100
-agentbench_ucore: context_snapshot ops=32768 ticks=23 ops_per_tick=1424 speedup_x100=1113
-agentbench_ucore: file_scan_query ops=1024 ticks=27 ops_per_tick=37 speedup_x100=100
-agentbench_ucore: file_index_query ops=1024 ticks=22 ops_per_tick=46 speedup_x100=122
-agentbench_ucore: event_wait_wake ops=32 ticks=4 ops_per_tick=8 speedup_x100=100
+agentbench_ucore: scalar_agent_run ops=8192 ticks=118 ops_per_tick=69 speedup_x100=100
+agentbench_ucore: batch_agent_run ops=8192 ticks=70 ops_per_tick=117 speedup_x100=168
+agentbench_ucore: direct_context ops=50000 ticks=1 ops_per_tick=50000 speedup_x100=72021
+agentbench_ucore: context_query ops=256 ticks=3 ops_per_tick=85 speedup_x100=100
+agentbench_ucore: context_snapshot ops=32768 ticks=23 ops_per_tick=1424 speedup_x100=1669
+agentbench_ucore: file_scan_query ops=1024 ticks=26 ops_per_tick=39 speedup_x100=100
+agentbench_ucore: file_index_query ops=1024 ticks=23 ops_per_tick=44 speedup_x100=113
+agentbench_ucore: event_wait_wake ops=32 ticks=5 ops_per_tick=6 speedup_x100=100
 agentbench_ucore: passed
 ```
 
@@ -133,7 +151,7 @@ agentbench_ucore: passed
 | Agent 进程能成功创建，PCB 扩展字段正确初始化 | `agentfinal_ucore` |
 | Agent Context 区正确分配，Agent 可直接读取 | `agentfinal_ucore` 直接读取 header/latest/record |
 | 用户态篡改 Context 镜像不影响内核权威历史 | `agentfinal_ucore: tamper_protected=1` |
-| 普通进程和 Agent 进程共存 | `agent_create` 由普通父进程创建 Agent 子进程 |
+| 普通进程和 Agent 进程共存 | `agent_create_role` 由 pid 1 普通 init 创建 orchestrator；普通进程不能直接执行敏感 Agent syscall |
 | 用户态 Agent 能调用至少 3 个内核工具 | `agentfinal_ucore`、`labdemo_ucore` |
 | 请求和响应为结构化格式 | `agent_op`、`agent_result` |
 | 5 轮以上连续工具调用并维护路径 | `agentfinal_ucore` 连续 192 次 op |
@@ -145,6 +163,7 @@ agentbench_ucore: passed
 | Agent watch/wait 和文件状态唤醒 | `labdemo_ucore` |
 | 消息触发 Agent 事件 | `labdemo_ucore` 中 sentinel->investigator、investigator->recovery 消息 |
 | 权限拒绝和幂等恢复 | `labdemo_ucore` 中 denied 和 duplicate 输出 |
+| 权限不能由用户态 role 参数伪造 | `agentsecurity_ucore` 中 sentinel 伪造 recovery 仍返回 `AGENT_STATUS_DENIED` |
 
 ## 仍需补充的验证
 

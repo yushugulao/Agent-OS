@@ -311,3 +311,4 @@
 #define SYS_agent_file_meta_init 514
 #define SYS_agent_file_meta_set 515
 #define SYS_agent_file_query 516
+#define SYS_agent_create_role 517

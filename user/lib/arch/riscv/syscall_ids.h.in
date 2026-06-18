@@ -314,3 +314,4 @@
 #define __NR_agent_file_meta_init 514
 #define __NR_agent_file_meta_set 515
 #define __NR_agent_file_query 516
+#define __NR_agent_create_role 517

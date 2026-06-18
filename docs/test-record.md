@@ -29,7 +29,7 @@ make build TOOLPREFIX=riscv64-linux-gnu- LOG=warn INIT_PROC=agentfinal_ucore
 bash scripts/run-agent-tests.sh
 ```
 
-结果：通过。脚本依次运行 `agentfinal_ucore`、`agentbench_ucore`、`labdemo_ucore`，均找到对应 passed 标记。
+结果：通过。脚本依次运行 `agentfinal_ucore`、`agentbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`，均找到对应 passed 标记。
 
 ## agentfinal_ucore 样例输出
 
@@ -53,14 +53,14 @@ agentfinal_ucore: parent passed
 ```text
 agentbench_ucore: Agent-OS on uCore benchmark
 agentbench_ucore: case ops ticks ops_per_tick speedup_x100
-agentbench_ucore: scalar_agent_run ops=8192 ticks=126 ops_per_tick=65 speedup_x100=100
-agentbench_ucore: batch_agent_run ops=8192 ticks=67 ops_per_tick=122 speedup_x100=188
-agentbench_ucore: direct_context ops=50000 ticks=1 ops_per_tick=50000 speedup_x100=76904
-agentbench_ucore: context_query ops=256 ticks=2 ops_per_tick=128 speedup_x100=100
-agentbench_ucore: context_snapshot ops=32768 ticks=23 ops_per_tick=1424 speedup_x100=1113
-agentbench_ucore: file_scan_query ops=1024 ticks=27 ops_per_tick=37 speedup_x100=100
-agentbench_ucore: file_index_query ops=1024 ticks=22 ops_per_tick=46 speedup_x100=122
-agentbench_ucore: event_wait_wake ops=32 ticks=4 ops_per_tick=8 speedup_x100=100
+agentbench_ucore: scalar_agent_run ops=8192 ticks=118 ops_per_tick=69 speedup_x100=100
+agentbench_ucore: batch_agent_run ops=8192 ticks=70 ops_per_tick=117 speedup_x100=168
+agentbench_ucore: direct_context ops=50000 ticks=1 ops_per_tick=50000 speedup_x100=72021
+agentbench_ucore: context_query ops=256 ticks=3 ops_per_tick=85 speedup_x100=100
+agentbench_ucore: context_snapshot ops=32768 ticks=23 ops_per_tick=1424 speedup_x100=1669
+agentbench_ucore: file_scan_query ops=1024 ticks=26 ops_per_tick=39 speedup_x100=100
+agentbench_ucore: file_index_query ops=1024 ticks=23 ops_per_tick=44 speedup_x100=113
+agentbench_ucore: event_wait_wake ops=32 ticks=5 ops_per_tick=6 speedup_x100=100
 agentbench_ucore: passed
 agentbench_ucore: parent passed
 ```
@@ -71,13 +71,15 @@ agentbench_ucore: parent passed
 
 ```text
 labdemo_ucore: Agent-OS laboratory recovery demo
-labdemo_ucore: created role=recovery pid=2 context=0x0000003ffffea000
-agentos:event type=AGENT_CREATED role=recovery pid=2 context=0x0000003ffffea000
-labdemo_ucore: created role=investigator pid=3 context=0x0000003ffffea000
-labdemo_ucore: created role=sentinel pid=4 context=0x0000003ffffea000
-agentos:event type=AGENT_CREATED role=sentinel pid=4 context=0x0000003ffffea000
+labdemo_ucore: created role=orchestrator pid=2 context=0x0000003ffffea000
+agentos:event type=AGENT_CREATED role=orchestrator pid=2 context=0x0000003ffffea000
+labdemo_ucore: created role=investigator pid=4 context=0x0000003ffffea000
+agentos:event type=AGENT_CREATED role=investigator pid=4 context=0x0000003ffffea000
+labdemo_ucore: created role=sentinel pid=5 context=0x0000003ffffea000
+agentos:event type=AGENT_CREATED role=sentinel pid=5 context=0x0000003ffffea000
 agentos:event type=WATCH_REGISTERED role=sentinel filter=status=failed
-agentos:event type=AGENT_CREATED role=investigator pid=3 context=0x0000003ffffea000
+labdemo_ucore: created role=recovery pid=3 context=0x0000003ffffea000
+agentos:event type=AGENT_CREATED role=recovery pid=3 context=0x0000003ffffea000
 agentos:event type=INCIDENT_CREATED id=INC-RUN-042-ALIGN-OOM stage=align
 labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042
 agentos:event type=TOOL_CALL role=sentinel tool=query_file hits=1 used_index=1 seq=4
@@ -91,9 +93,26 @@ agentos:event type=AUDIT role=recovery action=rerun_align result=DUPLICATE seq=5
 labdemo_ucore: final report_query hits=2 used_index=1 scanned=7
 agentos:event type=FINAL status=RECOVERED
 labdemo_ucore: passed
+labdemo_ucore: parent passed
 ```
 
 结论：多 Agent 场景通过，能够展示监控、诊断、恢复和审计过程。
+
+## agentsecurity_ucore 样例输出
+
+```text
+agentsecurity_ucore: Agent permission boundary test
+agentsecurity_ucore: plain_process_denied=1
+agentsecurity_ucore: role=orchestrator capability_checked=1
+agentsecurity_ucore: role=sentinel capability_checked=1
+agentsecurity_ucore: sentinel spoof_denied=1
+agentsecurity_ucore: role=recovery capability_checked=1
+agentsecurity_ucore: recovery rerun_ok=1 duplicate=1
+agentsecurity_ucore: passed
+agentsecurity_ucore: parent passed
+```
+
+结论：普通进程不能直接投递事件或修改 Agent 文件元数据；sentinel 不能通过用户态传入 recovery role 伪造恢复权限；recovery 的恢复能力来自内核真实 role/capability，重复 corr_id 被识别为 duplicate。
 
 ## 提交前检查记录
 

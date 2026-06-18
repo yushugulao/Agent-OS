@@ -52,7 +52,7 @@
 | report | 报告生成 |
 | archive | 归档 |
 
-`labdemo_ucore` 会在运行中调用 `agent_file_meta_set()`，把 `RUN-042` 的 align 阶段状态改为 failed，从而触发 sentinel Agent。
+`labdemo_ucore` 中由 orchestrator Agent 调用 `agent_file_meta_set()`，把 `RUN-042` 的 align 阶段状态改为 failed，从而触发 sentinel Agent。普通进程不能直接初始化或修改这张全局元数据表。
 
 ## 查询路径
 
@@ -94,6 +94,8 @@ project=lab-gene-x;run_id=RUN-042;status=failed
 
 文件查询成功后会追加 Context record。这样 Agent 的“看到什么文件、做出什么判断”可以在 Context Path 中回放。
 
+文件元数据写接口要求调用者是 Agent 且具备 `AGENT_CAP_META_WRITE`。当前只有 orchestrator 拥有该能力；sentinel、investigator 和 recovery 可按各自能力读取元数据或内容，但不能直接改写全局文件状态。
+
 在 `labdemo_ucore` 中：
 
 1. sentinel 查询失败文件；
@@ -109,7 +111,7 @@ project=lab-gene-x;run_id=RUN-042;status=failed
 这正是 `labdemo_ucore` 的启动条件：
 
 1. sentinel 注册 failed 状态监听；
-2. 父进程把 align 阶段文件更新为 failed；
+2. orchestrator 把 align 阶段文件更新为 failed；
 3. sentinel 从 `agent_wait()` 返回；
 4. sentinel 查询失败文件并启动后续分析。
 

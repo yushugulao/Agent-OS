@@ -26,5 +26,6 @@ make build TOOLPREFIX="${TOOLPREFIX}" LOG=warn INIT_PROC=agentfinal_ucore
 run_case agentfinal_ucore "agentfinal_ucore: passed"
 run_case agentbench_ucore "agentbench_ucore: passed"
 run_case labdemo_ucore "labdemo_ucore: passed"
+run_case agentsecurity_ucore "agentsecurity_ucore: passed"
 
 echo "[agent-tests] all Agent-OS uCore checks passed"

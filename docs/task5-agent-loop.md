@@ -86,7 +86,7 @@ int agent_wait(struct agent_event *event, int timeout_ticks);
 `agentbench_ucore` 用 wait/wake 压测验证该路径：
 
 ```text
-agentbench_ucore: event_wait_wake ops=32 ticks=4 ops_per_tick=8 speedup_x100=100
+agentbench_ucore: event_wait_wake ops=32 ticks=5 ops_per_tick=6 speedup_x100=100
 ```
 
 ## Wake
@@ -138,7 +138,7 @@ int agent_heartbeat(int interval_ticks);
 
 任务四和任务五的结合点是 `agent_file_meta_set()`：
 
-1. 父进程或 Agent 更新文件元数据；
+1. 具备 `AGENT_CAP_META_WRITE` 的 Agent 更新文件元数据；
 2. 如果状态字段发生变化，内核构造 `AGENT_EVENT_FILE_STATUS`；
 3. 内核查找匹配 watch 的 Agent；
 4. 把事件投递给目标 Agent；
@@ -155,7 +155,7 @@ labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042
 
 ## 消息事件
 
-`AGENT_TOOL_SEND_MESSAGE` 和 `agent_wake()` 都可以向目标 Agent 发送消息事件。消息事件用于多 Agent 协作。
+`AGENT_TOOL_SEND_MESSAGE` 和 `agent_wake()` 都可以向目标 Agent 发送消息事件。消息事件用于多 Agent 协作。`agent_wake()` 是 Agent-only syscall，调用者必须具备 `AGENT_CAP_MESSAGE_SEND` 或 `AGENT_CAP_ORCHESTRATE`；普通进程直接调用会返回 `-1`。
 
 `labdemo_ucore` 中两段消息：
 
@@ -205,7 +205,7 @@ agentfinal_ucore: event_wait=1 payload=self wake
 `agentbench_ucore`：
 
 ```text
-agentbench_ucore: event_wait_wake ops=32 ticks=4 ops_per_tick=8 speedup_x100=100
+agentbench_ucore: event_wait_wake ops=32 ticks=5 ops_per_tick=6 speedup_x100=100
 ```
 
 `labdemo_ucore`：

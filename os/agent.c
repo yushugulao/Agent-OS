@@ -144,6 +144,7 @@ void agent_clear_metadata(struct proc *p)
 	p->is_agent = 0;
 	p->agent_type = AGENT_TYPE_NONE;
 	p->agent_id = 0;
+	p->agent_role = 0;
 	p->agent_ctx_base = 0;
 	p->agent_ctx_size = 0;
 	p->agent_call_count = 0;
@@ -178,6 +179,85 @@ void agent_clear_metadata(struct proc *p)
 	p->agent_timeout_count = 0;
 	p->agent_last_heartbeat_tick = 0;
 	p->agent_capability_mask = 0;
+}
+
+static int agent_role_valid(int role)
+{
+	return role >= AGENT_ROLE_SENTINEL && role <= AGENT_ROLE_ORCHESTRATOR;
+}
+
+static uint64 agent_all_capabilities(void)
+{
+	return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
+	       AGENT_CAP_PROCESS_READ | AGENT_CAP_MESSAGE_SEND |
+	       AGENT_CAP_WATCH | AGENT_CAP_RECOVER_STAGE |
+	       AGENT_CAP_REPORT_WRITE | AGENT_CAP_AUDIT_WRITE |
+	       AGENT_CAP_META_WRITE | AGENT_CAP_ORCHESTRATE;
+}
+
+static uint64 agent_role_capability_mask(int role)
+{
+	switch (role) {
+	case AGENT_ROLE_SENTINEL:
+		return AGENT_CAP_META_READ | AGENT_CAP_PROCESS_READ |
+		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
+		       AGENT_CAP_AUDIT_WRITE;
+	case AGENT_ROLE_INVESTIGATOR:
+		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
+		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
+		       AGENT_CAP_AUDIT_WRITE;
+	case AGENT_ROLE_RECOVERY:
+		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
+		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
+		       AGENT_CAP_RECOVER_STAGE | AGENT_CAP_REPORT_WRITE |
+		       AGENT_CAP_AUDIT_WRITE;
+	case AGENT_ROLE_ORCHESTRATOR:
+		return agent_all_capabilities();
+	default:
+		return 0;
+	}
+}
+
+static int agent_has_cap(struct proc *p, uint64 cap)
+{
+	return p->is_agent && (p->agent_capability_mask & cap) == cap;
+}
+
+static int agent_has_any_cap(struct proc *p, uint64 caps)
+{
+	return p->is_agent && (p->agent_capability_mask & caps) != 0;
+}
+
+static uint64 agent_cap_for_action(char *action)
+{
+	if (strncmp(action, "rerun_stage", AGENT_OP_PAYLOAD_SIZE) == 0)
+		return AGENT_CAP_RECOVER_STAGE;
+	if (strncmp(action, "write_report", AGENT_OP_PAYLOAD_SIZE) == 0)
+		return AGENT_CAP_REPORT_WRITE;
+	if (strncmp(action, "query", AGENT_OP_PAYLOAD_SIZE) == 0 ||
+	    strncmp(action, "query_file", AGENT_OP_PAYLOAD_SIZE) == 0 ||
+	    strncmp(action, "read_meta", AGENT_OP_PAYLOAD_SIZE) == 0)
+		return AGENT_CAP_META_READ;
+	if (strncmp(action, "read_file_summary", AGENT_OP_PAYLOAD_SIZE) == 0 ||
+	    strncmp(action, "read_content", AGENT_OP_PAYLOAD_SIZE) == 0)
+		return AGENT_CAP_CONTENT_READ;
+	if (strncmp(action, "send_message", AGENT_OP_PAYLOAD_SIZE) == 0)
+		return AGENT_CAP_MESSAGE_SEND;
+	if (strncmp(action, "watch", AGENT_OP_PAYLOAD_SIZE) == 0)
+		return AGENT_CAP_WATCH;
+	if (strncmp(action, "meta_write", AGENT_OP_PAYLOAD_SIZE) == 0 ||
+	    strncmp(action, "file_meta_write", AGENT_OP_PAYLOAD_SIZE) == 0)
+		return AGENT_CAP_META_WRITE;
+	if (strncmp(action, "orchestrate", AGENT_OP_PAYLOAD_SIZE) == 0)
+		return AGENT_CAP_ORCHESTRATE;
+	return 0;
+}
+
+static int agent_action_allowed(struct proc *p, char *action)
+{
+	uint64 cap = agent_cap_for_action(action);
+
+	return cap != 0 && agent_has_cap(p, cap);
 }
 
 void agent_free_proc_context(struct proc *p)
@@ -444,8 +524,10 @@ bad:
 	return -1;
 }
 
-int agent_make(struct proc *p)
+int agent_make_role(struct proc *p, int role)
 {
+	if (!agent_role_valid(role))
+		return -1;
 	if (p->max_page * PAGE_SIZE > AGENT_CONTEXT_BASE)
 		return -1;
 	if (agent_map_context(p) < 0)
@@ -453,17 +535,13 @@ int agent_make(struct proc *p)
 	p->is_agent = 1;
 	p->agent_type = AGENT_TYPE_AGENT;
 	p->agent_id = agent_alloc_id();
+	p->agent_role = role;
 	p->agent_ctx_base = AGENT_CONTEXT_BASE;
 	p->agent_ctx_size = AGENT_CONTEXT_SIZE;
 	p->heartbeat_interval = 0;
 	p->resource_quota = AGENT_CONTEXT_MAX_RECORDS;
 	p->loop_state = AGENT_LOOP_IDLE;
-	p->agent_capability_mask = AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
-				   AGENT_CAP_PROCESS_READ |
-				   AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
-				   AGENT_CAP_RECOVER_STAGE |
-				   AGENT_CAP_REPORT_WRITE |
-				   AGENT_CAP_AUDIT_WRITE;
+	p->agent_capability_mask = agent_role_capability_mask(role);
 	p->agent_last_heartbeat_tick = agent_ticks();
 	if (agent_init_context(p) < 0) {
 		agent_free_proc_context(p);
@@ -472,11 +550,17 @@ int agent_make(struct proc *p)
 	return 0;
 }
 
+int agent_make(struct proc *p)
+{
+	return agent_make_role(p, AGENT_ROLE_SENTINEL);
+}
+
 static void agent_info_fill(struct proc *p, struct agent_info *info)
 {
 	memset(info, 0, sizeof(*info));
 	info->is_agent = p->is_agent;
 	info->agent_id = p->agent_id;
+	info->agent_role = p->agent_role;
 	info->context_base = p->agent_ctx_base;
 	info->context_size = p->agent_ctx_size;
 	info->agent_type = p->agent_type;
@@ -898,18 +982,6 @@ static void agent_stage_text(uint64 mask, char *out, int n)
 		safestrcpy(out, "prepare+align+analyze+report+archive", n);
 }
 
-static int agent_role_allows(uint64 role, char *action)
-{
-	if (strncmp(action, "rerun_stage", AGENT_OP_PAYLOAD_SIZE) == 0 ||
-	    strncmp(action, "write_report", AGENT_OP_PAYLOAD_SIZE) == 0)
-		return role == AGENT_ROLE_RECOVERY ||
-		       role == AGENT_ROLE_ORCHESTRATOR;
-	if (strncmp(action, "query", AGENT_OP_PAYLOAD_SIZE) == 0)
-		return role >= AGENT_ROLE_SENTINEL &&
-		       role <= AGENT_ROLE_ORCHESTRATOR;
-	return 0;
-}
-
 static int agent_action_seen(uint64 corr_id)
 {
 	if (corr_id == 0)
@@ -1149,6 +1221,11 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 		agent_result_text(res, "ctx_stat");
 		break;
 	case AGENT_TOOL_QUERY_PROCESS:
+		if (!agent_has_cap(p, AGENT_CAP_PROCESS_READ)) {
+			res->status = AGENT_STATUS_DENIED;
+			agent_result_text(res, "denied");
+			break;
+		}
 		agent_collect_proc_snapshot(op->arg0 == AGENT_TYPE_AGENT,
 					    &snapshot);
 		res->value0 = snapshot.used;
@@ -1157,6 +1234,11 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 		agent_result_text(res, "query_process");
 		break;
 	case AGENT_TOOL_GET_SYSTEM_STATUS:
+		if (!agent_has_cap(p, AGENT_CAP_PROCESS_READ)) {
+			res->status = AGENT_STATUS_DENIED;
+			agent_result_text(res, "denied");
+			break;
+		}
 		agent_collect_proc_snapshot(0, &snapshot);
 		res->value0 = snapshot.used;
 		res->value1 = snapshot.agents;
@@ -1175,6 +1257,11 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 		agent_result_text(res, "read_context");
 		break;
 	case AGENT_TOOL_QUERY_FILE:
+		if (!agent_has_cap(p, AGENT_CAP_META_READ)) {
+			res->status = AGENT_STATUS_DENIED;
+			agent_result_text(res, "denied");
+			break;
+		}
 		if (agent_text_empty(op->payload)) {
 			res->status = AGENT_STATUS_BAD_PARAM;
 			agent_result_text(res, "path_required");
@@ -1209,6 +1296,11 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 		agent_result_text(res, "query_file");
 		break;
 	case AGENT_TOOL_SEND_MESSAGE:
+		if (!agent_has_cap(p, AGENT_CAP_MESSAGE_SEND)) {
+			res->status = AGENT_STATUS_DENIED;
+			agent_result_text(res, "denied");
+			break;
+		}
 		if (op->arg0 == 0 || agent_text_empty(op->payload)) {
 			res->status = AGENT_STATUS_BAD_PARAM;
 			agent_result_text(res, "message_required");
@@ -1249,12 +1341,22 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 		}
 		break;
 	case AGENT_TOOL_FILE_META_INIT:
+		if (!agent_has_cap(p, AGENT_CAP_META_WRITE)) {
+			res->status = AGENT_STATUS_DENIED;
+			agent_result_text(res, "denied");
+			break;
+		}
 		agent_file_install_default();
 		agent_action_history_count = 0;
 		res->value0 = AGENT_FILE_META_MAX;
 		agent_result_text(res, "file_meta_init");
 		break;
 	case AGENT_TOOL_READ_FILE_SUMMARY:
+		if (!agent_has_cap(p, AGENT_CAP_CONTENT_READ)) {
+			res->status = AGENT_STATUS_DENIED;
+			agent_result_text(res, "denied");
+			break;
+		}
 		found = agent_file_find(op->payload);
 		if (found < 0) {
 			res->status = AGENT_STATUS_NOT_FOUND;
@@ -1267,6 +1369,11 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 		}
 		break;
 	case AGENT_TOOL_DEPENDENCY_QUERY:
+		if (!agent_has_cap(p, AGENT_CAP_META_READ)) {
+			res->status = AGENT_STATUS_DENIED;
+			agent_result_text(res, "denied");
+			break;
+		}
 		if (agent_dependency_for_stage(op->payload, &deps) < 0) {
 			res->status = AGENT_STATUS_NOT_FOUND;
 			agent_result_text(res, "stage_not_found");
@@ -1281,16 +1388,19 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 		agent_stage_text(deps, res->result, sizeof(res->result));
 		break;
 	case AGENT_TOOL_CAPABILITY_CHECK:
-		if (agent_role_allows(op->arg0, op->payload)) {
+		res->value1 = p->agent_role;
+		res->value2 = p->agent_capability_mask;
+		if (agent_action_allowed(p, op->payload)) {
 			res->value0 = 1;
 			agent_result_text(res, "allow");
 		} else {
+			res->value0 = 0;
 			res->status = AGENT_STATUS_DENIED;
 			agent_result_text(res, "denied");
 		}
 		break;
 	case AGENT_TOOL_RERUN_STAGE:
-		if (!agent_role_allows(op->arg0, "rerun_stage")) {
+		if (!agent_has_cap(p, AGENT_CAP_RECOVER_STAGE)) {
 			res->status = AGENT_STATUS_DENIED;
 			agent_result_text(res, "denied");
 			agent_deliver_watchers(p->pid, AGENT_EVENT_POLICY_DENIED,
@@ -1332,7 +1442,7 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 		res->value2 = delivered;
 		break;
 	case AGENT_TOOL_WRITE_REPORT:
-		if (!agent_role_allows(op->arg0, "write_report")) {
+		if (!agent_has_cap(p, AGENT_CAP_REPORT_WRITE)) {
 			res->status = AGENT_STATUS_DENIED;
 			agent_result_text(res, "denied");
 			break;
@@ -1343,6 +1453,11 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 		agent_result_text(res, "report_written");
 		break;
 	case AGENT_TOOL_AGENT_WATCH:
+		if (!agent_has_cap(p, AGENT_CAP_WATCH)) {
+			res->status = AGENT_STATUS_DENIED;
+			agent_result_text(res, "denied");
+			break;
+		}
 		if (op->arg0 > AGENT_EVENT_CONTEXT_LIMIT) {
 			res->status = AGENT_STATUS_BAD_PARAM;
 			agent_result_text(res, "bad_event_type");
@@ -1402,6 +1517,21 @@ static int agent_user_range_mapped(struct proc *p, uint64 addr, uint64 len)
 int sys_agent_create(void)
 {
 	return agent_create_proc();
+}
+
+int sys_agent_create_role(int role)
+{
+	struct proc *p = curr_proc();
+
+	if (!agent_role_valid(role))
+		return AGENT_STATUS_BAD_PARAM;
+	if (p->is_agent) {
+		if (!agent_has_cap(p, AGENT_CAP_ORCHESTRATE))
+			return AGENT_STATUS_DENIED;
+	} else if (p->pid != 1 || role != AGENT_ROLE_ORCHESTRATOR) {
+		return -1;
+	}
+	return agent_create_role_proc(role);
 }
 
 int sys_agent_info(uint64 addr)
@@ -1641,6 +1771,8 @@ int sys_agent_watch(int event_type, uint64 filteraddr)
 
 	if (!p->is_agent)
 		return -1;
+	if (!agent_has_cap(p, AGENT_CAP_WATCH))
+		return AGENT_STATUS_DENIED;
 	if (event_type < AGENT_EVENT_NONE ||
 	    event_type > AGENT_EVENT_CONTEXT_LIMIT)
 		return AGENT_STATUS_BAD_PARAM;
@@ -1743,6 +1875,10 @@ int sys_agent_wake(int pid, uint64 eventaddr)
 	struct agent_event event;
 	char payload[AGENT_EVENT_PAYLOAD_SIZE];
 
+	if (!p->is_agent)
+		return -1;
+	if (!agent_has_any_cap(p, AGENT_CAP_MESSAGE_SEND | AGENT_CAP_ORCHESTRATE))
+		return AGENT_STATUS_DENIED;
 	if (eventaddr == 0)
 		return AGENT_STATUS_BAD_PARAM;
 	if (copyin(p->pagetable, (char *)&event, eventaddr, sizeof(event)) < 0)
@@ -1757,6 +1893,12 @@ int sys_agent_wake(int pid, uint64 eventaddr)
 
 int sys_agent_file_meta_init(void)
 {
+	struct proc *p = curr_proc();
+
+	if (!p->is_agent)
+		return -1;
+	if (!agent_has_cap(p, AGENT_CAP_META_WRITE))
+		return AGENT_STATUS_DENIED;
 	agent_action_history_count = 0;
 	agent_file_install_default();
 	return 0;
@@ -1770,6 +1912,10 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 	int status_changed = 0;
 	char event_payload[AGENT_EVENT_PAYLOAD_SIZE];
 
+	if (!p->is_agent)
+		return -1;
+	if (!agent_has_cap(p, AGENT_CAP_META_WRITE))
+		return AGENT_STATUS_DENIED;
 	if (copyin(p->pagetable, (char *)&meta, metaaddr, sizeof(meta)) < 0)
 		return -1;
 	meta.physical_name[sizeof(meta.physical_name) - 1] = 0;
@@ -1869,6 +2015,8 @@ int sys_agent_file_query(uint64 queryaddr, uint64 resultaddr)
 
 	if (!p->is_agent)
 		return -1;
+	if (!agent_has_cap(p, AGENT_CAP_META_READ))
+		return AGENT_STATUS_DENIED;
 	if (copyin(p->pagetable, (char *)&query, queryaddr,
 		   sizeof(query)) < 0)
 		return -1;

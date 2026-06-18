@@ -4,7 +4,7 @@
 
 ## 系统调用
 
-Agent-OS 在 uCore syscall 编号空间中使用 500 至 516：
+Agent-OS 在 uCore syscall 编号空间中使用 500 至 517：
 
 | syscall | 编号 | 用户态原型 | 说明 |
 | --- | ---: | --- | --- |
@@ -25,6 +25,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 516：
 | `agent_file_meta_init` | 514 | `int agent_file_meta_init(void)` | 初始化任务四演示文件元数据表 |
 | `agent_file_meta_set` | 515 | `int agent_file_meta_set(struct agent_file_meta *)` | 插入或合并更新文件元数据，状态变化可触发事件 |
 | `agent_file_query` | 516 | `int agent_file_query(struct agent_file_query *, struct agent_file_query_result *)` | Agent 文件属性查询，成功后写入 Context Path |
+| `agent_create_role` | 517 | `int agent_create_role(int role)` | 按真实内核角色创建 Agent 子进程 |
 
 `agent_run` 和 `context_snapshot` 是最终成品主路径。`agent_call` 保留为 legacy 兼容入口。
 
@@ -60,6 +61,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 516：
 | --- | --- |
 | `is_agent` | 当前进程是否为 Agent |
 | `agent_id` | 当前 Agent ID |
+| `agent_role` | 当前 Agent 的真实内核角色；普通进程为 0 |
 | `context_base` / `context_size` | Agent Context 用户虚拟地址和大小 |
 | `agent_type` | Agent 类型，当前支持普通进程和 Agent 进程 |
 | `heartbeat_interval` | 心跳间隔 |
@@ -79,6 +81,37 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 516：
 | `wait_count` / `timeout_count` | 等待与超时统计 |
 | `last_heartbeat_tick` | 最近心跳 tick |
 | `capability_mask` | 当前 Agent 能力位 |
+
+## 角色与 capability
+
+`agent_create()` 保留兼容语义，默认创建最低权限 `AGENT_ROLE_SENTINEL`。`agent_create_role(role)` 用于创建指定角色 Agent：
+
+| 调用者 | 允许行为 |
+| --- | --- |
+| pid 1 的普通 init | 只允许创建 `AGENT_ROLE_ORCHESTRATOR`，用于启动演示控制面 |
+| 具备 `AGENT_CAP_ORCHESTRATE` 的 Agent | 允许创建任意合法角色 |
+| 其他普通进程 | 返回 `-1`，不创建 Agent |
+| 不具备 orchestrate 能力的 Agent | 返回 `AGENT_STATUS_DENIED` |
+
+当前角色能力如下：
+
+| 角色 | capability |
+| --- | --- |
+| `AGENT_ROLE_SENTINEL` | `META_READ`、`PROCESS_READ`、`MESSAGE_SEND`、`WATCH`、`AUDIT_WRITE` |
+| `AGENT_ROLE_INVESTIGATOR` | `META_READ`、`CONTENT_READ`、`MESSAGE_SEND`、`WATCH`、`AUDIT_WRITE` |
+| `AGENT_ROLE_RECOVERY` | `META_READ`、`CONTENT_READ`、`MESSAGE_SEND`、`WATCH`、`RECOVER_STAGE`、`REPORT_WRITE`、`AUDIT_WRITE` |
+| `AGENT_ROLE_ORCHESTRATOR` | 全部能力，包括 `META_WRITE` 和 `ORCHESTRATE` |
+
+敏感授权只使用内核 `struct proc` 中的 `agent_role` 和 `agent_capability_mask`。`agent_op.arg0` 中传入的 role 只保留为 legacy/demo 参数，不参与 `capability_check`、`rerun_stage`、`write_report` 等敏感工具授权。
+
+Agent-only 直接 syscall 的权限边界：
+
+| syscall | 普通进程 | Agent capability 要求 |
+| --- | --- | --- |
+| `agent_wake` | 返回 `-1` | `MESSAGE_SEND` 或 `ORCHESTRATE` |
+| `agent_file_meta_init` | 返回 `-1` | `META_WRITE` |
+| `agent_file_meta_set` | 返回 `-1` | `META_WRITE` |
+| `agent_file_query` | 返回 `-1` | `META_READ` |
 
 ## 高性能请求结构
 
@@ -154,9 +187,9 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 516：
 | 10 | `file_meta_init` | `none` | 初始化任务四演示文件元数据表 |
 | 11 | `read_file_summary` | `selector:string` | 按物理名、逻辑路径或 stage 返回摘要 |
 | 12 | `dependency_query` | `stage:string` | 返回某阶段影响范围 |
-| 13 | `capability_check` | `role:uint64,action:string` | 检查角色是否允许执行动作 |
-| 14 | `rerun_stage` | `role:uint64,stage:string` | 幂等执行受控恢复动作 |
-| 15 | `write_report` | `role:uint64,payload:string` | 写恢复报告工件状态 |
+| 13 | `capability_check` | `legacy_role:uint64,action:string` | 按当前进程真实 capability 检查动作；返回真实 role 和 capability mask |
+| 14 | `rerun_stage` | `legacy_role:uint64,stage:string` | 只有具备 `RECOVER_STAGE` 的 Agent 可执行幂等恢复动作 |
+| 15 | `write_report` | `legacy_role:uint64,payload:string` | 只有具备 `REPORT_WRITE` 的 Agent 可写恢复报告工件状态 |
 | 16 | `agent_watch` | `event_type:uint64,filter:string` | 注册 Agent Loop watch |
 | 17 | `agent_wait` | `timeout:uint64` | 工具表可发现项；结构化事件返回使用 syscall |
 | 18 | `agent_heartbeat` | `interval:uint64` | 设置心跳间隔 |

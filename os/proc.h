@@ -67,6 +67,7 @@ struct proc {
 	int is_agent;
 	int agent_type;
 	int agent_id;
+	int agent_role;
 	uint64 agent_ctx_base;
 	uint64 agent_ctx_size;
 	uint64 agent_call_count;
@@ -115,6 +116,7 @@ void sched();
 void yield();
 int fork();
 int agent_create_proc();
+int agent_create_role_proc(int role);
 int exec(char *, char **);
 int wait(int, int *);
 void add_task(struct thread *);

@@ -108,6 +108,8 @@
 #define AGENT_CAP_RECOVER_STAGE (1ULL << 5)
 #define AGENT_CAP_REPORT_WRITE  (1ULL << 6)
 #define AGENT_CAP_AUDIT_WRITE   (1ULL << 7)
+#define AGENT_CAP_META_WRITE    (1ULL << 8)
+#define AGENT_CAP_ORCHESTRATE   (1ULL << 9)
 
 #define AGENT_DEP_PREPARE (1ULL << 0)
 #define AGENT_DEP_ALIGN   (1ULL << 1)
@@ -118,6 +120,7 @@
 struct agent_info {
 	int is_agent;
 	int agent_id;
+	int agent_role;
 	uint64 context_base;
 	uint64 context_size;
 	int agent_type;
@@ -298,10 +301,13 @@ void agent_clear_metadata(struct proc *p);
 int agent_map_context(struct proc *p);
 void agent_free_proc_context(struct proc *p);
 int agent_make(struct proc *p);
+int agent_make_role(struct proc *p, int role);
 int agent_create_proc(void);
+int agent_create_role_proc(int role);
 void agent_tick(void);
 
 int sys_agent_create(void);
+int sys_agent_create_role(int role);
 int sys_agent_info(uint64 addr);
 int sys_agent_run(uint64 opsaddr, uint64 resultsaddr, int count, uint64 flags);
 int sys_agent_call(uint64 reqaddr, uint64 respaddr);

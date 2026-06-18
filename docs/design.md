@@ -24,7 +24,7 @@ uCore 分支的目标不是简单复刻旧版实现，而是在保留任务一�
 
 | 优先级 | 质量目标 | 可验证方式 |
 | ---: | --- | --- |
-| 1 | 稳定性 | `agentfinal_ucore`、`agentbench_ucore`、`labdemo_ucore` 均通过且无 kernel panic |
+| 1 | 稳定性 | `agentfinal_ucore`、`agentbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore` 均通过且无 kernel panic |
 | 2 | 可验收性 | 每个赛题要求能追踪到实现、测试和文档 |
 | 3 | 模块化 | Agent 逻辑集中在 `os/agent.c`，系统调用层只做分发和参数传递 |
 | 4 | 性能 | 批量工具调用、用户态直接读 Context、批量 Context Snapshot、文件索引查询 |
@@ -85,8 +85,9 @@ flowchart LR
 | 批量 Snapshot | `context_snapshot()` 一次返回 header 和按时间顺序排列的可见路径 |
 | 文件查询引擎 | Agent 子系统维护 128 条文件元数据表，提供扫描路径和 status/stage/kind 索引路径 |
 | Agent Loop | 每个 Agent 可注册 watch，等待文件状态、消息等事件，支持 timeout 和 heartbeat |
+| 内核角色与能力绑定 | `struct proc` 保存真实 `agent_role` 和 capability mask，敏感工具和 syscall 只按内核字段授权，不信任用户态传入的 role |
 | 结构化事件 | `labdemo_ucore` 输出 `agentos:event type=... key=value`，为最终大屏和 LLM Gateway 保留解析契约 |
-| 测试驱动验收 | 用 `agentfinal_ucore` 做任务一至三功能验证，用 `agentbench_ucore` 做性能验证，用 `labdemo_ucore` 做综合场景验证 |
+| 测试驱动验收 | 用 `agentfinal_ucore` 做任务一至三功能验证，用 `agentbench_ucore` 做性能验证，用 `labdemo_ucore` 做综合场景验证，用 `agentsecurity_ucore` 做权限边界负向验证 |
 
 ## 5. 构件视图
 
@@ -98,7 +99,8 @@ flowchart TB
         U1["agentfinal_ucore"]
         U2["agentbench_ucore"]
         U3["labdemo_ucore"]
-        U4["usershell"]
+        U4["agentsecurity_ucore"]
+        U5["usershell"]
     end
     subgraph ABI["用户态 ABI"]
         A1["user/include/agent.h"]
@@ -128,7 +130,7 @@ flowchart TB
 | --- | --- | --- |
 | 用户态 ABI 声明 | `user/include/agent.h` | 暴露 Agent 结构体、常量和 syscall 原型 |
 | syscall wrapper | `user/lib/syscall.c` | 封装 `agent_create`、`agent_run`、`context_snapshot` 等用户态调用 |
-| syscall 编号 | `user/lib/syscall_ids.h`、`os/syscall_ids.h` | 注册 500 到 516 的 Agent syscall 编号 |
+| syscall 编号 | `user/lib/syscall_ids.h`、`os/syscall_ids.h` | 注册 500 到 517 的 Agent syscall 编号 |
 | syscall 分发 | `os/syscall.c` | 根据 syscall id 调用 Agent 内核函数 |
 | Agent ABI 与常量 | `os/agent.h` | 定义结构体、工具 ID、状态码、Context 布局 |
 | Agent 核心逻辑 | `os/agent.c` | Agent 初始化、工具执行、Context Path、文件元数据、事件等待 |
@@ -137,7 +139,8 @@ flowchart TB
 | 最终功能验收 | `user/src/agentfinal_ucore.c` | Agent 创建、4 页 Context、批量工具调用、短文本历史、snapshot、FIFO、事件 |
 | 性能基准 | `user/src/agentbench_ucore.c` | scalar run、batch run、direct Context、query/snapshot、文件查询、wait/wake |
 | 综合演示 | `user/src/labdemo_ucore.c` | 三 Agent 故障诊断、文件查询、事件唤醒、受控恢复和报告 |
-| 构建脚本 | `scripts/run-agent-tests.sh` | 顺序运行三项最终验证 |
+| 权限边界测试 | `user/src/agentsecurity_ucore.c` | 普通进程直接敏感调用、sentinel 伪造 role、recovery 幂等恢复 |
+| 构建脚本 | `scripts/run-agent-tests.sh` | 顺序运行四项最终验证 |
 
 ## 6. 运行视图
 
@@ -146,11 +149,11 @@ flowchart TB
 ```mermaid
 sequenceDiagram
     participant U as 用户程序
-    participant S as sys_agent_create
+    participant S as sys_agent_create / sys_agent_create_role
     participant P as proc.c
     participant A as agent_make
     participant C as Agent Context
-    U->>S: agent_create()
+    U->>S: agent_create() / agent_create_role(role)
     S->>P: agent_create_proc()
     P->>A: 初始化 Agent 元数据
     A->>C: 分配 shadow 页和用户镜像页
@@ -196,7 +199,7 @@ sequenceDiagram
 
 ```mermaid
 sequenceDiagram
-    participant P as labdemo 父进程
+    participant P as Orchestrator Agent
     participant S as Sentinel Agent
     participant A as os/agent.c
     participant F as File Metadata Index
@@ -220,7 +223,7 @@ flowchart TB
     QEMU["QEMU virt machine + OpenSBI"]
     Kernel["uCore kernel build/kernel"]
     FS["nfs/fs.img"]
-    Tests["agentfinal_ucore / agentbench_ucore / labdemo_ucore"]
+    Tests["agentfinal_ucore / agentbench_ucore / labdemo_ucore / agentsecurity_ucore"]
     Host --> WSL --> Toolchain --> QEMU --> Kernel
     FS --> QEMU
     QEMU --> Tests
@@ -253,7 +256,15 @@ Agent-only syscall 对普通进程、非法参数、未知工具、历史节点�
 
 Agent Loop 使用进程字段保存 watch 条件、事件状态、等待次数、超时次数和心跳信息。`agent_wait()` 在没有事件时让当前 Agent 等待；`agent_wake()`、文件状态变化和消息工具可以唤醒目标 Agent。时钟中断调用 `agent_tick()` 更新心跳和 timeout 相关状态。
 
-### 8.6 性能
+### 8.6 角色与能力
+
+Agent 的真实角色保存在内核 `struct proc.agent_role` 中，能力保存在 `agent_capability_mask` 中。`agent_create()` 默认只创建最低权限 sentinel；pid 1 的普通 init 只能通过 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)` 创建 orchestrator；具备 `AGENT_CAP_ORCHESTRATE` 的 Agent 才能创建 recovery、investigator、sentinel 等其他角色。
+
+敏感授权不读取用户态传入的 role。`capability_check`、`rerun_stage`、`write_report`、文件元数据写入和事件投递都按当前进程真实 capability 判断。因此 sentinel 即使把 `agent_op.arg0` 填成 recovery，也不能获得恢复或写报告能力。
+
+`labdemo_ucore` 中普通 init 只启动 orchestrator Agent；文件元数据初始化、失败注入和子 Agent 创建都由 orchestrator 发起。`agentsecurity_ucore` 专门覆盖普通进程直接调用 `agent_wake()`、`agent_file_meta_init()`、`agent_file_meta_set()` 失败，以及 sentinel 伪造 recovery 被拒绝。
+
+### 8.7 性能
 
 性能优化集中在四个方面：
 
@@ -268,7 +279,7 @@ Agent Loop 使用进程字段保存 watch 条件、事件状态、等待次数�
 
 | 决策 | 选择 | 理由 | 取舍 |
 | --- | --- | --- | --- |
-| Agent 创建方式 | 使用 `agent_create()` 创建 Agent 子进程 | 与 uCore 现有进程模型结合最直接，易验证 | 暂未支持复杂创建配置 |
+| Agent 创建方式 | 使用 `agent_create()` 兼容创建 sentinel，使用 `agent_create_role()` 创建指定角色 Agent | 与 uCore 现有进程模型结合直接，且能把 role/capability 绑定到内核 PCB | 暂未支持用户态自定义配额或任意 capability 组合 |
 | Context 地址 | 固定高地址 `AGENT_CONTEXT_BASE`，当前 4 页 | 便于用户态直接定位，并给 Context Path 留出 128 条容量 | 每个 Agent 固定占用 4 页 |
 | 工具协议 | 最终热路径为 `agent_op` / `agent_result` | 比字符串键名协议更紧凑，适合批量执行 | 工具名说明通过工具表提供 |
 | Context Path 容量 | 固定 128 条环形记录，每条包含 16 字节 payload/result 短文本摘要 | 可证明 FIFO 淘汰，并显著提高多轮路径容量 | 不保存完整 raw 请求/响应；更长或完整历史需要后续持久化 |
@@ -293,6 +304,7 @@ Agent Loop 使用进程字段保存 watch 条件、事件状态、等待次数�
 | 文件属性查询和索引 | `agentfinal_ucore`、`agentbench_ucore`、`labdemo_ucore` |
 | Agent Loop 等待和唤醒 | `agentfinal_ucore`、`agentbench_ucore`、`labdemo_ucore` |
 | 综合场景 | `labdemo_ucore: passed` |
+| 权限边界不能由用户态伪造 | `agentsecurity_ucore: passed` |
 
 详细验证见 [verification.md](verification.md) 和 [test-record.md](test-record.md)。
 
