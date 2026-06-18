@@ -1,0 +1,16 @@
+project61-agentOS-happylegend
+
+Source code:
+The competition work source code in this repository is released under Apache
+License 2.0. See LICENSE.
+
+Third-party base system:
+This project is based on xv6-riscv. Original xv6-riscv copyright and license
+notices are retained in THIRD_PARTY/xv6-riscv-LICENSE, and the original xv6
+README is retained in docs/xv6-riscv-README.
+
+Documentation and presentation materials:
+Original technical documentation, defense materials, presentation slides, and
+demo video materials created by the happy-legend team are released under
+Creative Commons Attribution-ShareAlike 4.0 International. See
+DOCUMENTATION_LICENSE.md.
