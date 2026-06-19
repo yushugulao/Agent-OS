@@ -1,7 +1,22 @@
 # Notice
 
-This project is based on the uCore tutorial code and user test structure from the LearningOS/uCore-Tutorial-Code and LearningOS/uCore-Tutorial-Test projects. The project-specific Agent-OS implementation, tests, and documentation were developed for the operating system design competition.
+This project is based on the uCore tutorial code and user test structure from the LearningOS/uCore-Tutorial-Code-2025S and LearningOS/uCore-Tutorial-Test-2025S projects. These upstream projects are GPL-3.0 projects.
 
-Source code license: GPL-3.0.
+Project-specific Agent-OS implementation code, user tests, build integration, and executable helper scripts are distributed under GPL-3.0 together with the submitted source tree.
 
-Documentation license: CC-BY-SA-4.0.
+Technical documents, verification notes, Markdown demo narratives, and defense materials produced by the team are distributed under CC BY-SA 4.0.
+
+The optional `bootloader/rustsbi-qemu.bin` file is a third-party RustSBI firmware binary. The RustSBI upstream project is licensed under MIT or Mulan PSL v2. This binary is retained only as an optional bootloader path; the verified default run path uses OpenSBI through QEMU.
+
+Primary license files:
+
+- Source code license: `LICENSE` (GPL-3.0).
+- Documentation and defense material license: `DOCUMENTATION_LICENSE.md` (CC BY-SA 4.0).
+- License policy and future material rules: `LICENSE_POLICY.md`.
+
+Reference URLs:
+
+- LearningOS/uCore-Tutorial-Code-2025S: https://github.com/LearningOS/uCore-Tutorial-Code-2025S
+- LearningOS/uCore-Tutorial-Test-2025S: https://github.com/LearningOS/uCore-Tutorial-Test-2025S
+- RustSBI: https://github.com/rustsbi/rustsbi
+- CC BY-SA 4.0 legal code: https://creativecommons.org/licenses/by-sa/4.0/legalcode

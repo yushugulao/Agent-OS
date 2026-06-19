@@ -258,6 +258,7 @@ agentsecurity_ucore: parent passed
 | 当前测试记录 | [docs/test-record.md](docs/test-record.md) |
 | 源代码许可 | [LICENSE](LICENSE) |
 | 文档与答辩材料许可 | [DOCUMENTATION_LICENSE.md](DOCUMENTATION_LICENSE.md) |
+| 许可合规策略 | [LICENSE_POLICY.md](LICENSE_POLICY.md) |
 | 第三方声明 | [NOTICE](NOTICE) |
 
 ## 仍需补充
@@ -273,6 +274,8 @@ agentsecurity_ucore: parent passed
 
 本仓库作为参赛作品提交的源代码采用 [GPL-3.0](LICENSE) 许可。
 
-本队伍原创的技术文档、答辩材料、汇报幻灯片和演示视频采用 Creative Commons Attribution-ShareAlike 4.0 International 许可，详见 [DOCUMENTATION_LICENSE.md](DOCUMENTATION_LICENSE.md)。
+本队伍原创的技术文档、答辩材料、汇报幻灯片和演示视频采用 Creative Commons Attribution-ShareAlike 4.0 International，即 CC BY-SA 4.0 许可，详见 [DOCUMENTATION_LICENSE.md](DOCUMENTATION_LICENSE.md)。
+
+可执行脚本、构建文件、CI 工作流、用户态测试程序和内核代码均按源代码处理，遵循 GPL-3.0；Markdown 技术文档、答辩材料、图表、幻灯片和视频按文档材料处理，遵循 CC BY-SA 4.0。完整规则见 [LICENSE_POLICY.md](LICENSE_POLICY.md)。
 
 第三方来源和许可说明见 [NOTICE](NOTICE)。如后续引用、复制或改编非本队伍来源的代码、文档或公开项目内容，将在对应源码位置、文档位置、设计文档和答辩材料中明确标注来源、用途、授权信息及本项目的增量贡献。

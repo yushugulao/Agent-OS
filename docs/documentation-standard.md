@@ -23,6 +23,7 @@
 | 内核职责划分清晰 | 文档必须说明用户态 API、系统调用层、Agent 子系统、进程/页表/文件元数据服务之间的职责划分 |
 | 证据和结论分离 | `test-record.md` 存放输出记录，`verification.md` 给出验证结论和覆盖范围 |
 | 详细度分层 | 主设计文档解释总体方案，任务文档作为细节附录，避免 README 过长 |
+| 许可清晰 | 源代码遵循 GPL-3.0，技术文档和答辩材料遵循 CC BY-SA 4.0，第三方来源写入 NOTICE |
 
 ## uCore 分支文档口径
 
@@ -37,6 +38,7 @@ uCore 分支文档按当前代码事实编写：
 - 任务五当前是可验证的 watch/unwatch、FIFO 事件队列、wait/wake、有限 timeout 睡眠、heartbeat event delivery；不表述为完整平台级长期调度器。
 - 性能数据是样例输出，复跑时 tick 数值会波动；文件查询性能重点看候选记录数差异和多轮 tick 观测。
 - event wait/wake 输出是计时观测，不表述为调度器性能结论。
+- 源代码和可执行脚本按 GPL-3.0 处理；Markdown 技术文档、答辩材料、幻灯片和视频按 CC BY-SA 4.0 处理；新增第三方材料必须同步更新 [../NOTICE](../NOTICE) 和 [../LICENSE_POLICY.md](../LICENSE_POLICY.md)。
 
 ## 外部参考
 

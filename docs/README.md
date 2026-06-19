@@ -27,6 +27,7 @@
 | [test-record.md](test-record.md) | 测试记录和关键输出 |
 | [../LICENSE](../LICENSE) | 源代码 GPL-3.0 |
 | [../DOCUMENTATION_LICENSE.md](../DOCUMENTATION_LICENSE.md) | 文档与答辩材料 CC BY-SA 4.0 |
+| [../LICENSE_POLICY.md](../LICENSE_POLICY.md) | 源代码、文档、答辩材料和第三方材料的许可合规规则 |
 | [../NOTICE](../NOTICE) | 第三方来源和许可声明 |
 
 ## 文档维护约定
