@@ -29,7 +29,7 @@ make build TOOLPREFIX=riscv64-linux-gnu- LOG=warn INIT_PROC=agentfinal_ucore
 bash scripts/run-agent-tests.sh
 ```
 
-结果：通过。脚本依次运行 `agentfinal_ucore`、`agentfs_ucore`、`agentloop_ucore`、`agentbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`，均找到对应 `parent passed` 标记，且日志中没有 `check failed`、`panic` 或 `unknown syscall`。
+结果：通过。脚本依次运行 `agentfinal_ucore`、`agentfs_ucore`、`agentloop_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`，均找到对应 `parent passed` 标记，且日志中没有 `check failed`、`panic` 或 `unknown syscall`。
 
 ## agentfinal_ucore 样例输出
 
@@ -59,6 +59,8 @@ agentfs_ucore: Agent FS metadata test
 agentfs_ucore: default_inode dev=1 inum=11 scanned=2
 agentfs_ucore: custom_inode dev=1 inum=17 size=7
 agentfs_ucore: bulk_index scan=108 index=6 hits=1
+agentfs_ucore: scan_index_consistent=1
+agentfs_ucore: truncated_query total=100 returned=3 truncated=1
 agentfs_ucore: .agentmeta_reload=1
 agentfs_ucore: clear_status=1
 agentfs_ucore: delete_clears_metadata=1
@@ -90,19 +92,22 @@ agentloop_ucore: parent passed
 ```text
 agentbench_ucore: Agent-OS on uCore benchmark
 agentbench_ucore: timeout_heartbeat=1
-agentbench_ucore: repeated_ticks scalar_min=4 scalar_avg=4 scalar_max=5 batch_min=2 batch_avg=2 batch_max=3
+agentbench_ucore: repeated_ticks scalar_min=5 scalar_avg=5 scalar_max=6 batch_min=3 batch_avg=3 batch_max=4
 agentbench_ucore: file_query_records scan_records=107 index_records=6
 agentbench_ucore: case ops ticks ops_per_tick speedup_x100
 agentbench_ucore: scalar_agent_run ops=256 ticks=5 ops_per_tick=51 speedup_x100=100
-agentbench_ucore: batch_agent_run ops=256 ticks=2 ops_per_tick=128 speedup_x100=250
+agentbench_ucore: batch_agent_run ops=256 ticks=3 ops_per_tick=85 speedup_x100=166
 agentbench_ucore: direct_context ops=5000 ticks=1 ops_per_tick=5000 speedup_x100=9765
 agentbench_ucore: context_query ops=16 ticks=1 ops_per_tick=16 speedup_x100=100
-agentbench_ucore: context_snapshot ops=2048 ticks=2 ops_per_tick=1024 speedup_x100=6400
-agentbench_ucore: file_scan_query ops=64 ticks=5 ops_per_tick=12 speedup_x100=100
-agentbench_ucore: file_index_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=250
-agentbench_ucore: event_wait_wake ops=8 ticks=2 ops_per_tick=4 speedup_x100=100
+agentbench_ucore: context_snapshot ops=2048 ticks=3 ops_per_tick=682 speedup_x100=4266
+agentbench_ucore: file_scan_query ops=64 ticks=6 ops_per_tick=10 speedup_x100=100
+agentbench_ucore: file_index_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=300
+agentbench_ucore: busy_poll_query ops=128 ticks=5 ops_per_tick=25 speedup_x100=100
+agentbench_ucore: event_wait_wake ops=8 ticks=3 ops_per_tick=2 speedup_x100=100
+agentbench_ucore: busy_poll_vs_wait busy_ops=128 busy_ticks=5 wait_ops=8 wait_ticks=3
 agentbench_ucore: passed
 agentbench_ucore: parent passed
+labbench_ucore: parent passed
 ```
 
 结论：batch、direct context 和 snapshot 的性能趋势符合设计预期；文件查询输出了 scan/index 候选记录数差异。tick 数值会随运行环境波动。
@@ -112,26 +117,32 @@ agentbench_ucore: parent passed
 ```text
 labdemo_ucore: Agent-OS laboratory recovery demo
 labdemo_ucore: created role=orchestrator pid=2 context=0x0000003ffffe9000
-agentos:event type=AGENT_CREATED role=orchestrator pid=2 context=0x0000003ffffe9000
+agentos:event type=AGENT_CREATED tick=... role=orchestrator pid=2 context=0x0000003ffffe9000
+agentos:event type=RUN_OBJECT tick=... project=lab-gene-x workflow=nightly-regression run_id=RUN-042 desired_state=RECOVERED policy=minimal_rerun
 labdemo_ucore: created role=investigator pid=4 context=0x0000003ffffe9000
-agentos:event type=AGENT_CREATED role=investigator pid=4 context=0x0000003ffffe9000
+agentos:event type=AGENT_CREATED tick=... role=investigator pid=4 context=0x0000003ffffe9000
 labdemo_ucore: created role=sentinel pid=5 context=0x0000003ffffe9000
-agentos:event type=AGENT_CREATED role=sentinel pid=5 context=0x0000003ffffe9000
-agentos:event type=WATCH_REGISTERED role=sentinel filter=status=failed
+agentos:event type=AGENT_CREATED tick=... role=sentinel pid=5 context=0x0000003ffffe9000
+agentos:event type=WATCH_REGISTERED tick=... role=sentinel event=FILE_STATUS filter=status=failed
 labdemo_ucore: created role=recovery pid=3 context=0x0000003ffffe9000
-agentos:event type=AGENT_CREATED role=recovery pid=3 context=0x0000003ffffe9000
-agentos:event type=INCIDENT_CREATED id=INC-RUN-042-ALIGN-OOM stage=align
+agentos:event type=AGENT_CREATED tick=... role=recovery pid=3 context=0x0000003ffffe9000
+agentos:event type=INCIDENT_CREATED tick=... id=INC-RUN-042-ALIGN-OOM project=lab-gene-x workflow=nightly-regression run_id=RUN-042 stage=align reason=memory_limit
 labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042;project=lab-gene-x
-agentos:event type=TOOL_CALL role=sentinel tool=query_file hits=1 used_index=1 seq=4
-agentos:event type=AUDIT role=sentinel action=rerun_stage result=DENIED seq=5
-agentos:event type=MESSAGE from=sentinel to=investigator status=OK seq=6
+agentos:event type=TOOL_CALL tick=... role=sentinel tool=query_file project=lab-gene-x run_id=RUN-042 status=failed hits=1 used_index=1 seq=4
+agentos:event type=AUDIT tick=... role=sentinel action=rerun_stage result=DENIED reason=capability corr_id=RUN-042-align-rerun-1 seq=5
+agentos:event type=MESSAGE tick=... from=sentinel to=investigator status=OK corr_id=MSG-RUN-042-S-I seq=6
 labdemo_ucore: investigator reason=align output is ready before injected failure
 labdemo_ucore: affected stages=align+analyze+report+archive
-agentos:event type=CONTEXT_SNAPSHOT role=investigator records=4 latest=4
-agentos:event type=ACTION role=recovery stage=align status=OK seq=4
-agentos:event type=AUDIT role=recovery action=rerun_align result=DUPLICATE seq=5
+agentos:event type=LLM_CALL tick=... mode=template task=explain_root_cause llm_request_id=LLM-RUN-042-RCA-1 project=lab-gene-x run_id=RUN-042 refs=3,4 status=OK
+agentos:event type=LLM_RESULT tick=... mode=template llm_request_id=LLM-RUN-042-RCA-1 llm_status=OK llm_explanation=memory_limit referenced_sequences=3,4 confidence=medium
+agentos:event type=PLAN_CREATED tick=... role=investigator plan=PLAN-RUN-042-RECOVER-1 project=lab-gene-x run_id=RUN-042 actions=align,report skip=prepare refs=3,4
+agentos:event type=CONTEXT_SNAPSHOT tick=... role=investigator records=4 latest=4
+agentos:event type=MESSAGE tick=... from=investigator to=recovery status=OK corr_id=MSG-RUN-042-I-R plan=PLAN-RUN-042-RECOVER-1 seq=5
+agentos:event type=ACTION tick=... role=recovery stage=align status=OK corr_id=RUN-042-align-rerun-1 plan=PLAN-RUN-042-RECOVER-1 seq=4 duplicate=0
+agentos:event type=AUDIT tick=... role=recovery action=rerun_align result=DUPLICATE corr_id=RUN-042-align-rerun-1 plan=PLAN-RUN-042-RECOVER-1 seq=5
+agentos:event type=REPORT tick=... role=recovery project=lab-gene-x run_id=RUN-042 file=RUN-042-recovery.md status=OK corr_id=RUN-042-report-write-1 plan=PLAN-RUN-042-RECOVER-1 seq=6 llm_enhanced=0
 labdemo_ucore: final report_query hits=2 used_index=1 scanned=7
-agentos:event type=FINAL status=RECOVERED
+agentos:event type=FINAL tick=... project=lab-gene-x run_id=RUN-042 status=RECOVERED plan=PLAN-RUN-042-RECOVER-1
 labdemo_ucore: passed
 labdemo_ucore: parent passed
 ```

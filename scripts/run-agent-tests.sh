@@ -44,6 +44,7 @@ run_case agentfinal_ucore "agentfinal_ucore: parent passed"
 run_case agentfs_ucore "agentfs_ucore: parent passed"
 run_case agentloop_ucore "agentloop_ucore: parent passed"
 run_case agentbench_ucore "agentbench_ucore: parent passed"
+run_case labbench_ucore "labbench_ucore: parent passed"
 run_case labdemo_ucore "labdemo_ucore: parent passed"
 run_case agentsecurity_ucore "agentsecurity_ucore: parent passed"
 

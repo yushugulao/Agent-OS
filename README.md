@@ -33,6 +33,7 @@ uCore 分支不是只做任务一至三的最小版本。当前交付以任务�
 - `user/src/agentfs_ucore.c`
 - `user/src/agentloop_ucore.c`
 - `user/src/agentbench_ucore.c`
+- `user/src/labbench_ucore.c`
 - `user/src/labdemo_ucore.c`
 - `user/src/agentsecurity_ucore.c`
 
@@ -90,6 +91,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfinal_ucore CHAP
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfs_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentloop_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labbench_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent
 ```
@@ -116,6 +118,7 @@ agentfinal_ucore
 agentfs_ucore
 agentloop_ucore
 agentbench_ucore
+labbench_ucore
 labdemo_ucore
 agentsecurity_ucore
 ```
@@ -129,7 +132,8 @@ shell 中启动的测试程序是 `usershell` 的直接普通子进程，内核�
 | `agentfinal_ucore` | 任务一至三功能验收，同时覆盖 `context_detail()`、Context record flags、用户自管 cache、名称协议、文件索引和事件自唤醒 | `agentfinal_ucore: parent passed` |
 | `agentfs_ucore` | 任务四文件系统/inode 关联验收，覆盖真实文件绑定、字段清空、删除清理、`.agentmeta` 重新加载、scan/index 差异和不存在 selector | `agentfs_ucore: parent passed` |
 | `agentloop_ucore` | 任务五 Agent Loop 验收，覆盖 FIFO 顺序、队列满丢弃、多 watch、unwatch、有限 timeout 睡眠、TIMER unwatch、heartbeat wake/stop | `agentloop_ucore: parent passed` |
-| `agentbench_ucore` | 任务一至五性能与计时验证，包括 batch、direct context、snapshot、文件查询候选记录数、timeout/heartbeat 和 wait/wake | `agentbench_ucore: parent passed` |
+| `agentbench_ucore` | 任务一至五性能与计时验证，包括 batch、direct context、snapshot、文件查询候选记录数、timeout/heartbeat、busy polling 和 wait/wake | `agentbench_ucore: parent passed` |
+| `labbench_ucore` | 面向演示规划的性能入口，包装运行 `agentbench_ucore`，便于后续升级为 `labbench --full` | `labbench_ucore: parent passed` |
 | `labdemo_ucore` | 多 Agent 综合演示，普通 init 只启动 orchestrator，后续元数据初始化、事件注入和角色 Agent 创建都由 orchestrator 完成 | `labdemo_ucore: parent passed` |
 | `agentsecurity_ucore` | 权限限制负向测试，覆盖初始化前索引查询、legacy mismatch、legacy 参数校验、syscall-only 工具拒绝、普通进程直接写元数据/投事件、sentinel 伪造 recovery、多 run 定向恢复 | `agentsecurity_ucore: parent passed` |
 
@@ -154,9 +158,11 @@ agentfinal_ucore: passed
 
 ```text
 agentbench_ucore: timeout_heartbeat=1
-agentbench_ucore: repeated_ticks scalar_min=4 scalar_avg=4 scalar_max=5 batch_min=2 batch_avg=2 batch_max=3
+agentbench_ucore: repeated_ticks scalar_min=5 scalar_avg=5 scalar_max=6 batch_min=3 batch_avg=3 batch_max=4
 agentbench_ucore: file_query_records scan_records=107 index_records=6
 agentbench_ucore: case ops ticks ops_per_tick speedup_x100
+agentbench_ucore: busy_poll_query ops=128 ...
+agentbench_ucore: busy_poll_vs_wait busy_ops=128 ...
 ```
 
 `ticks` 会随 QEMU 和宿主机负载波动，评审时应关注测试是否通过、scan/index 候选记录数差异、多轮 min/avg/max 观测和相对趋势，而不是固定绝对数值。
@@ -167,6 +173,8 @@ agentbench_ucore: case ops ticks ops_per_tick speedup_x100
 agentfs_ucore: default_inode dev=1 inum=11 scanned=2
 agentfs_ucore: custom_inode dev=1 inum=17 size=7
 agentfs_ucore: bulk_index scan=108 index=6 hits=1
+agentfs_ucore: scan_index_consistent=1
+agentfs_ucore: truncated_query total=100 returned=3 truncated=1
 agentfs_ucore: .agentmeta_reload=1
 agentfs_ucore: clear_status=1
 agentfs_ucore: delete_clears_metadata=1
@@ -191,14 +199,19 @@ agentloop_ucore: parent passed
 `labdemo_ucore` 会输出结构化演示事件，例如：
 
 ```text
-agentos:event type=AGENT_CREATED role=orchestrator
-agentos:event type=WATCH_REGISTERED role=sentinel filter=status=failed
-agentos:event type=INCIDENT_CREATED id=INC-RUN-042-ALIGN-OOM stage=align
-agentos:event type=TOOL_CALL role=sentinel tool=query_file hits=1 used_index=1
-agentos:event type=AUDIT role=sentinel action=rerun_stage result=DENIED
-agentos:event type=ACTION role=recovery stage=align status=OK
-agentos:event type=AUDIT role=recovery action=rerun_align result=DUPLICATE
-agentos:event type=FINAL status=RECOVERED
+agentos:event type=AGENT_CREATED tick=... role=orchestrator pid=... context=...
+agentos:event type=RUN_OBJECT tick=... project=lab-gene-x workflow=nightly-regression run_id=RUN-042 desired_state=RECOVERED policy=minimal_rerun
+agentos:event type=WATCH_REGISTERED tick=... role=sentinel event=FILE_STATUS filter=status=failed
+agentos:event type=INCIDENT_CREATED tick=... id=INC-RUN-042-ALIGN-OOM project=lab-gene-x workflow=nightly-regression run_id=RUN-042 stage=align reason=memory_limit
+agentos:event type=TOOL_CALL tick=... role=sentinel tool=query_file project=lab-gene-x run_id=RUN-042 status=failed hits=1 used_index=1 seq=...
+agentos:event type=AUDIT tick=... role=sentinel action=rerun_stage result=DENIED reason=capability corr_id=RUN-042-align-rerun-1 seq=...
+agentos:event type=MESSAGE tick=... from=sentinel to=investigator status=OK corr_id=MSG-RUN-042-S-I seq=...
+agentos:event type=LLM_CALL tick=... mode=template task=explain_root_cause llm_request_id=LLM-RUN-042-RCA-1 project=lab-gene-x run_id=RUN-042 refs=... status=OK
+agentos:event type=LLM_RESULT tick=... mode=template llm_request_id=LLM-RUN-042-RCA-1 llm_status=OK llm_explanation=memory_limit referenced_sequences=... confidence=medium
+agentos:event type=PLAN_CREATED tick=... role=investigator plan=PLAN-RUN-042-RECOVER-1 project=lab-gene-x run_id=RUN-042 actions=align,report skip=prepare refs=...
+agentos:event type=ACTION tick=... role=recovery stage=align status=OK corr_id=RUN-042-align-rerun-1 plan=PLAN-RUN-042-RECOVER-1 seq=... duplicate=0
+agentos:event type=REPORT tick=... role=recovery project=lab-gene-x run_id=RUN-042 file=RUN-042-recovery.md status=OK corr_id=RUN-042-report-write-1 plan=PLAN-RUN-042-RECOVER-1 seq=... llm_enhanced=0
+agentos:event type=FINAL tick=... project=lab-gene-x run_id=RUN-042 status=RECOVERED plan=PLAN-RUN-042-RECOVER-1
 labdemo_ucore: passed
 labdemo_ucore: parent passed
 ```

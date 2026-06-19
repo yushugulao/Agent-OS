@@ -6,13 +6,14 @@
 
 本项目在 uCore 内核上实现 Agent-OS。它不是普通用户态脚本，而是内核级 Agent 进程、结构化工具调用、上下文历史、文件元数据索引和 Agent 事件运行机制。
 
-当前演示分为六部分：
+当前演示分为七部分：
 
 ```bash
 agentfinal_ucore
 agentfs_ucore
 agentloop_ucore
 agentbench_ucore
+labbench_ucore
 labdemo_ucore
 agentsecurity_ucore
 ```
@@ -24,7 +25,8 @@ agentsecurity_ucore
 | `agentfinal_ucore` | 证明任务一至三核心功能正确，同时检查文件索引和事件自唤醒 |
 | `agentfs_ucore` | 证明任务四已经绑定真实 inode、支持私有 `.agentmeta` 重新加载和索引查询 |
 | `agentloop_ucore` | 证明任务五的 FIFO 事件队列、unwatch、有限 timeout 睡眠、TIMER unwatch 和 heartbeat stop |
-| `agentbench_ucore` | 给出批量调用、Context 直接读、snapshot、文件索引候选记录数的性能证据，并验证 timeout/heartbeat 与 wait/wake 计时 |
+| `agentbench_ucore` | 给出批量调用、Context 直接读、snapshot、文件索引候选记录数的性能证据，并验证 timeout/heartbeat、busy polling 与 wait/wake 计时 |
+| `labbench_ucore` | 初步演示规划中的性能入口，当前包装运行 `agentbench_ucore`，后续可升级为 `labbench --full` |
 | `labdemo_ucore` | 展示一个由 orchestrator 控制的多 Agent 实验恢复场景 |
 | `agentsecurity_ucore` | 展示普通进程和低权限 Agent 无法越权，并验证普通 mail 与多 run 精确恢复 |
 
@@ -50,6 +52,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfinal_ucore CHAP
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfs_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentloop_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labbench_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent
 ```
@@ -201,6 +204,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAP
 | `file_index_query` | 文件元数据索引路径 |
 | `file_query_records` | 直接展示扫描路径和索引路径检查的候选记录数量 |
 | `timeout_heartbeat` | 无事件等待会 timeout，心跳字段可通过 `agent_info()` 观察 |
+| `busy_poll_query` | 用户态轮询查询路径的计时观测 |
 | `event_wait_wake` | Agent Loop 等待和唤醒计时观测 |
 
 说明性能数字会随 QEMU 和宿主机负载波动。答辩时应强调相对趋势和设计原因：减少 syscall 次数、减少重复查询、减少线性扫描。
@@ -249,25 +253,31 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER
 6. sentinel 尝试恢复但权限不足，被内核拒绝。
 7. sentinel 唤醒 investigator。
 8. investigator 查询摘要和依赖，确认影响范围。
-9. investigator 输出 Context Snapshot，证明决策过程可审计。
-10. investigator 唤醒 recovery。
-11. recovery 通过权限检查并执行恢复。
-12. recovery 重复执行同一恢复动作，内核识别为 duplicate。
-13. 最终查询报告文件，系统输出 recovered。
+9. investigator 输出模板 LLM 解释事件和恢复计划事件，预留最终 LLM Gateway 和 Planner/Auditor 拆分入口。
+10. investigator 输出 Context Snapshot，证明决策过程可审计。
+11. investigator 唤醒 recovery。
+12. recovery 通过权限检查并执行恢复。
+13. recovery 重复执行同一恢复动作，内核识别为 duplicate。
+14. recovery 写报告状态并输出带 corr_id 的 report 事件。
+15. 最终查询报告文件，系统输出 recovered。
 
 ### 7.3 关键输出
 
 ```text
-agentos:event type=WATCH_REGISTERED role=sentinel filter=status=failed
-agentos:event type=INCIDENT_CREATED id=INC-RUN-042-ALIGN-OOM stage=align
+agentos:event type=RUN_OBJECT tick=... project=lab-gene-x workflow=nightly-regression run_id=RUN-042 desired_state=RECOVERED
+agentos:event type=WATCH_REGISTERED tick=... role=sentinel event=FILE_STATUS filter=status=failed
+agentos:event type=INCIDENT_CREATED tick=... id=INC-RUN-042-ALIGN-OOM project=lab-gene-x run_id=RUN-042 stage=align reason=memory_limit
 labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042;project=lab-gene-x
-agentos:event type=TOOL_CALL role=sentinel tool=query_file hits=1 used_index=1
-agentos:event type=AUDIT role=sentinel action=rerun_stage result=DENIED
-agentos:event type=MESSAGE from=sentinel to=investigator status=OK
-agentos:event type=CONTEXT_SNAPSHOT role=investigator records=4
-agentos:event type=ACTION role=recovery stage=align status=OK
-agentos:event type=AUDIT role=recovery action=rerun_align result=DUPLICATE
-agentos:event type=FINAL status=RECOVERED
+agentos:event type=TOOL_CALL tick=... role=sentinel tool=query_file project=lab-gene-x run_id=RUN-042 status=failed hits=1 used_index=1
+agentos:event type=LLM_CALL tick=... mode=template task=explain_root_cause llm_request_id=LLM-RUN-042-RCA-1 refs=3,4 status=OK
+agentos:event type=PLAN_CREATED tick=... role=investigator plan=PLAN-RUN-042-RECOVER-1 actions=align,report skip=prepare refs=3,4
+agentos:event type=AUDIT tick=... role=sentinel action=rerun_stage result=DENIED reason=capability corr_id=RUN-042-align-rerun-1
+agentos:event type=MESSAGE tick=... from=sentinel to=investigator status=OK corr_id=MSG-RUN-042-S-I
+agentos:event type=CONTEXT_SNAPSHOT tick=... role=investigator records=4
+agentos:event type=ACTION tick=... role=recovery stage=align status=OK corr_id=RUN-042-align-rerun-1 plan=PLAN-RUN-042-RECOVER-1
+agentos:event type=AUDIT tick=... role=recovery action=rerun_align result=DUPLICATE corr_id=RUN-042-align-rerun-1 plan=PLAN-RUN-042-RECOVER-1
+agentos:event type=REPORT tick=... role=recovery file=RUN-042-recovery.md status=OK corr_id=RUN-042-report-write-1 plan=PLAN-RUN-042-RECOVER-1
+agentos:event type=FINAL tick=... status=RECOVERED plan=PLAN-RUN-042-RECOVER-1
 labdemo_ucore: passed
 labdemo_ucore: parent passed
 ```
@@ -279,11 +289,14 @@ labdemo_ucore: parent passed
 | `WATCH_REGISTERED` | Agent Loop 注册成功 |
 | `INCIDENT_CREATED` | 文件状态变化触发事件 |
 | `TOOL_CALL ... query_file` | Agent 使用文件元数据索引查询失败工件 |
+| `LLM_CALL` | 当前使用模板模式预留最终 LLM Gateway 输入输出契约 |
+| `PLAN_CREATED` | 恢复计划使用稳定 plan id，后续可拆分 Planner/Auditor |
 | `DENIED` | 内核权限检查生效，sentinel 不能直接恢复 |
 | `MESSAGE` | Agent 间通过内核事件通信 |
 | `CONTEXT_SNAPSHOT` | investigator 的判断过程进入 Context Path |
-| `ACTION ... status=OK` | recovery 执行恢复动作 |
+| `ACTION ... corr_id=...` | recovery 执行带幂等 ID 的恢复动作 |
 | `DUPLICATE` | 幂等表拒绝重复恢复 |
+| `REPORT` | recovery 写入恢复报告状态，后续可接 LLM 报告润色 |
 | `FINAL status=RECOVERED` | 场景完成 |
 
 ## 8. 结尾总结

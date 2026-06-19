@@ -8,12 +8,26 @@ static int recovery_pid;
 static int investigator_pid;
 static int ready_fd = -1;
 
+#define DEMO_PROJECT "lab-gene-x"
+#define DEMO_WORKFLOW "nightly-regression"
+#define DEMO_RUN "RUN-042"
+#define DEMO_INCIDENT "INC-RUN-042-ALIGN-OOM"
+#define DEMO_PLAN "PLAN-RUN-042-RECOVER-1"
+#define DEMO_ALIGN_CORR "RUN-042-align-rerun-1"
+#define DEMO_REPORT_CORR "RUN-042-report-write-1"
+#define DEMO_LLM_REQUEST "LLM-RUN-042-RCA-1"
+
 static void check(int ok, const char *msg)
 {
 	if (!ok) {
 		printf("labdemo_ucore: check failed: %s\n", msg);
 		exit(1);
 	}
+}
+
+static int event_tick(void)
+{
+	return (int)get_mtime();
 }
 
 static void make_op(struct agent_op *op, int tool, uint64 id, uint64 arg0,
@@ -42,8 +56,8 @@ static void created(const char *role)
 	check(agent_info(&info) == 0, "agent info");
 	printf("labdemo_ucore: created role=%s pid=%d context=%p\n", role,
 	       getpid(), (void *)info.context_base);
-	printf("agentos:event type=AGENT_CREATED role=%s pid=%d context=%p\n",
-	       role, getpid(), (void *)info.context_base);
+	printf("agentos:event type=AGENT_CREATED tick=%d role=%s pid=%d context=%p\n",
+	       event_tick(), role, getpid(), (void *)info.context_base);
 }
 
 static void ready(char c)
@@ -63,27 +77,33 @@ static void run_sentinel(void)
 	check(agent_watch(AGENT_EVENT_FILE_STATUS, "status=failed") == 0,
 	      "watch failed");
 	ready('S');
-	printf("agentos:event type=WATCH_REGISTERED role=sentinel filter=status=failed\n");
+	printf("agentos:event type=WATCH_REGISTERED tick=%d role=sentinel event=FILE_STATUS filter=status=failed\n",
+	       event_tick());
+	printf("agentos:event type=AGENT_STATE tick=%d role=sentinel state=WAITING\n",
+	       event_tick());
 	check(agent_wait(&event, 300) == AGENT_STATUS_OK, "sentinel wait");
 	printf("labdemo_ucore: sentinel event payload=%s\n", event.payload);
+	printf("agentos:event type=AGENT_STATE tick=%d role=sentinel state=RUNNING event_id=%d corr_id=%d\n",
+	       event_tick(), (int)event.event_id, (int)event.corr_id);
 
 	make_op(&op, AGENT_TOOL_QUERY_FILE, 1001, 0,
-		"project=lab-gene-x;run_id=RUN-042;status=failed");
+		"project=" DEMO_PROJECT ";run_id=" DEMO_RUN ";status=failed");
 	run_one(&op, &res, AGENT_STATUS_OK, "query failed files");
-	printf("agentos:event type=TOOL_CALL role=sentinel tool=query_file hits=%d used_index=%d seq=%d\n",
-	       (int)res.value0, (int)(res.value2 & 1), (int)res.sequence);
+	printf("agentos:event type=TOOL_CALL tick=%d role=sentinel tool=query_file project=%s run_id=%s status=failed hits=%d used_index=%d seq=%d\n",
+	       event_tick(), DEMO_PROJECT, DEMO_RUN, (int)res.value0,
+	       (int)(res.value2 & 1), (int)res.sequence);
 
 	make_op(&op, AGENT_TOOL_CAPABILITY_CHECK, 1002,
 		AGENT_ROLE_SENTINEL, "rerun_stage");
 	run_one(&op, &res, AGENT_STATUS_DENIED, "sentinel denied");
-	printf("agentos:event type=AUDIT role=sentinel action=rerun_stage result=DENIED seq=%d\n",
-	       (int)res.sequence);
+	printf("agentos:event type=AUDIT tick=%d role=sentinel action=rerun_stage result=DENIED reason=capability corr_id=%s seq=%d\n",
+	       event_tick(), DEMO_ALIGN_CORR, (int)res.sequence);
 
 	make_op(&op, AGENT_TOOL_SEND_MESSAGE, 1003, investigator_pid,
-		"investigate RUN-042 align");
+		"investigate " DEMO_RUN " align");
 	run_one(&op, &res, AGENT_STATUS_OK, "message investigator");
-	printf("agentos:event type=MESSAGE from=sentinel to=investigator status=OK seq=%d\n",
-	       (int)res.sequence);
+	printf("agentos:event type=MESSAGE tick=%d from=sentinel to=investigator status=OK corr_id=MSG-%s-S-I seq=%d\n",
+	       event_tick(), DEMO_RUN, (int)res.sequence);
 	exit(0);
 }
 
@@ -95,6 +115,8 @@ static void run_investigator(void)
 	struct agent_context_header header;
 	struct agent_context_record records[8];
 	int n;
+	int summary_seq;
+	int dependency_seq;
 
 	created("investigator");
 	check(agent_watch(AGENT_EVENT_MESSAGE, "investigate") == 0,
@@ -104,17 +126,33 @@ static void run_investigator(void)
 	      "investigator wait");
 	make_op(&op, AGENT_TOOL_READ_FILE_SUMMARY, 2001, 0, "align");
 	run_one(&op, &res, AGENT_STATUS_OK, "read summary");
+	summary_seq = res.sequence;
 	printf("labdemo_ucore: investigator reason=%s\n", res.result);
+	printf("agentos:event type=TOOL_CALL tick=%d role=investigator tool=read_file_summary stage=align status=OK seq=%d\n",
+	       event_tick(), summary_seq);
 	make_op(&op, AGENT_TOOL_DEPENDENCY_QUERY, 2002, 0, "align");
 	run_one(&op, &res, AGENT_STATUS_OK, "dependency");
+	dependency_seq = res.sequence;
 	printf("labdemo_ucore: affected stages=%s\n", res.result);
+	printf("agentos:event type=TOOL_CALL tick=%d role=investigator tool=dependency_query stage=align impact=%s seq=%d\n",
+	       event_tick(), res.result, dependency_seq);
+	printf("agentos:event type=LLM_CALL tick=%d mode=template task=explain_root_cause llm_request_id=%s project=%s run_id=%s refs=%d,%d status=OK\n",
+	       event_tick(), DEMO_LLM_REQUEST, DEMO_PROJECT, DEMO_RUN,
+	       summary_seq, dependency_seq);
+	printf("agentos:event type=LLM_RESULT tick=%d mode=template llm_request_id=%s llm_status=OK llm_explanation=memory_limit referenced_sequences=%d,%d confidence=medium\n",
+	       event_tick(), DEMO_LLM_REQUEST, summary_seq, dependency_seq);
+	printf("agentos:event type=PLAN_CREATED tick=%d role=investigator plan=%s project=%s run_id=%s actions=align,report skip=prepare refs=%d,%d\n",
+	       event_tick(), DEMO_PLAN, DEMO_PROJECT, DEMO_RUN, summary_seq,
+	       dependency_seq);
 	n = context_snapshot(&header, records, 8);
 	check(n >= 1, "investigator context");
-	printf("agentos:event type=CONTEXT_SNAPSHOT role=investigator records=%d latest=%d\n",
-	       n, (int)header.latest_sequence);
+	printf("agentos:event type=CONTEXT_SNAPSHOT tick=%d role=investigator records=%d latest=%d\n",
+	       event_tick(), n, (int)header.latest_sequence);
 	make_op(&op, AGENT_TOOL_SEND_MESSAGE, 2003, recovery_pid,
-		"recover RUN-042 align");
+		"recover " DEMO_RUN " align plan=" DEMO_PLAN);
 	run_one(&op, &res, AGENT_STATUS_OK, "message recovery");
+	printf("agentos:event type=MESSAGE tick=%d from=investigator to=recovery status=OK corr_id=MSG-%s-I-R plan=%s seq=%d\n",
+	       event_tick(), DEMO_RUN, DEMO_PLAN, (int)res.sequence);
 	exit(0);
 }
 
@@ -133,30 +171,38 @@ static void run_recovery(void)
 	make_op(&op, AGENT_TOOL_CAPABILITY_CHECK, 3001,
 		AGENT_ROLE_RECOVERY, "rerun_stage");
 	run_one(&op, &res, AGENT_STATUS_OK, "capability");
+	printf("agentos:event type=AUDIT tick=%d role=recovery action=rerun_stage result=ALLOW plan=%s seq=%d\n",
+	       event_tick(), DEMO_PLAN, (int)res.sequence);
+	printf("agentos:event type=AUDIT tick=%d role=recovery action=rerun_prepare result=DENIED reason=unaffected plan=%s\n",
+	       event_tick(), DEMO_PLAN);
 	make_op(&op, AGENT_TOOL_RERUN_STAGE, 4201, AGENT_ROLE_RECOVERY,
-		"stage=align;run_id=RUN-042;project=lab-gene-x");
+		"stage=align;run_id=" DEMO_RUN ";project=" DEMO_PROJECT);
 	run_one(&op, &res, AGENT_STATUS_OK, "rerun align");
-	printf("agentos:event type=ACTION role=recovery stage=align status=OK seq=%d\n",
-	       (int)res.sequence);
+	printf("agentos:event type=ACTION tick=%d role=recovery stage=align status=OK corr_id=%s plan=%s seq=%d duplicate=0\n",
+	       event_tick(), DEMO_ALIGN_CORR, DEMO_PLAN, (int)res.sequence);
 	make_op(&op, AGENT_TOOL_RERUN_STAGE, 4201, AGENT_ROLE_RECOVERY,
-		"stage=align;run_id=RUN-042;project=lab-gene-x");
+		"stage=align;run_id=" DEMO_RUN ";project=" DEMO_PROJECT);
 	run_one(&op, &res, AGENT_STATUS_DUPLICATE, "duplicate");
-	printf("agentos:event type=AUDIT role=recovery action=rerun_align result=DUPLICATE seq=%d\n",
-	       (int)res.sequence);
+	printf("agentos:event type=AUDIT tick=%d role=recovery action=rerun_align result=DUPLICATE corr_id=%s plan=%s seq=%d\n",
+	       event_tick(), DEMO_ALIGN_CORR, DEMO_PLAN, (int)res.sequence);
 	make_op(&op, AGENT_TOOL_WRITE_REPORT, 4202, AGENT_ROLE_RECOVERY,
-		"stage=report;run_id=RUN-042;project=lab-gene-x");
+		"stage=report;run_id=" DEMO_RUN ";project=" DEMO_PROJECT);
 	run_one(&op, &res, AGENT_STATUS_OK, "write report");
+	printf("agentos:event type=REPORT tick=%d role=recovery project=%s run_id=%s file=RUN-042-recovery.md status=OK corr_id=%s plan=%s seq=%d llm_enhanced=0\n",
+	       event_tick(), DEMO_PROJECT, DEMO_RUN, DEMO_REPORT_CORR,
+	       DEMO_PLAN, (int)res.sequence);
 	memset(&query, 0, sizeof(query));
 	query.flags = AGENT_FILE_QUERY_USE_INDEX;
 	query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
-	strcpy(query.project, "lab-gene-x");
-	strcpy(query.run_id, "RUN-042");
+	strcpy(query.project, DEMO_PROJECT);
+	strcpy(query.run_id, DEMO_RUN);
 	strcpy(query.status, "ok");
 	strcpy(query.kind, "report");
 	check(agent_file_query(&query, &result) >= 1, "final query");
 	printf("labdemo_ucore: final report_query hits=%d used_index=%d scanned=%d\n",
 	       result.total_hits, result.used_index, result.scanned_records);
-	printf("agentos:event type=FINAL status=RECOVERED\n");
+	printf("agentos:event type=FINAL tick=%d project=%s run_id=%s status=RECOVERED plan=%s\n",
+	       event_tick(), DEMO_PROJECT, DEMO_RUN, DEMO_PLAN);
 	exit(0);
 }
 
@@ -167,9 +213,9 @@ static void inject_failure(void)
 	memset(&meta, 0, sizeof(meta));
 	meta.fid = 3;
 	strcpy(meta.physical_name, "lab_RUN042_align_err");
-	strcpy(meta.project, "lab-gene-x");
-	strcpy(meta.workflow, "nightly-regression");
-	strcpy(meta.run_id, "RUN-042");
+	strcpy(meta.project, DEMO_PROJECT);
+	strcpy(meta.workflow, DEMO_WORKFLOW);
+	strcpy(meta.run_id, DEMO_RUN);
 	strcpy(meta.stage, "align");
 	strcpy(meta.kind, "log");
 	strcpy(meta.status, "failed");
@@ -177,7 +223,9 @@ static void inject_failure(void)
 	meta.dependency_mask = AGENT_DEP_ALIGN | AGENT_DEP_ANALYZE |
 			       AGENT_DEP_REPORT | AGENT_DEP_ARCHIVE;
 	check(agent_file_meta_set(&meta) == 0, "inject failure");
-	printf("agentos:event type=INCIDENT_CREATED id=INC-RUN-042-ALIGN-OOM stage=align\n");
+	printf("agentos:event type=INCIDENT_CREATED tick=%d id=%s project=%s workflow=%s run_id=%s stage=align reason=memory_limit\n",
+	       event_tick(), DEMO_INCIDENT, DEMO_PROJECT, DEMO_WORKFLOW,
+	       DEMO_RUN);
 }
 
 static void run_orchestrator(void)
@@ -190,6 +238,8 @@ static void run_orchestrator(void)
 	char ch;
 
 	created("orchestrator");
+	printf("agentos:event type=RUN_OBJECT tick=%d project=%s workflow=%s run_id=%s desired_state=RECOVERED policy=minimal_rerun\n",
+	       event_tick(), DEMO_PROJECT, DEMO_WORKFLOW, DEMO_RUN);
 	check(agent_file_meta_init() == 0, "meta init");
 	check(pipe(ready_pipe) == 0, "pipe");
 	ready_fd = ready_pipe[1];

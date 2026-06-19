@@ -88,7 +88,7 @@ flowchart LR
 | Agent Loop | 每个 Agent 有 16 槽 FIFO 事件队列和最多 8 条 watch，等待文件状态、消息和 heartbeat 事件，有限 timeout 进入睡眠 |
 | 内核角色与能力绑定 | `struct proc` 保存真实 `agent_role` 和 capability mask，敏感工具和 syscall 只按内核字段授权，不信任用户态传入的 role |
 | 结构化事件 | `labdemo_ucore` 输出 `agentos:event type=... key=value`，为最终大屏和 LLM Gateway 保留解析契约 |
-| 测试驱动验收 | 用 `agentfinal_ucore` 做任务一至三功能验证，用 `agentfs_ucore` 验证文件系统 metadata，用 `agentloop_ucore` 验证事件队列，用 `agentbench_ucore` 做性能验证，用 `labdemo_ucore` 做综合场景验证，用 `agentsecurity_ucore` 做权限限制负向验证 |
+| 测试驱动验收 | 用 `agentfinal_ucore` 做任务一至三功能验证，用 `agentfs_ucore` 验证文件系统 metadata，用 `agentloop_ucore` 验证事件队列，用 `agentbench_ucore` 和 `labbench_ucore` 做性能验证，用 `labdemo_ucore` 做综合场景验证，用 `agentsecurity_ucore` 做权限限制负向验证 |
 
 ## 5. 构件视图
 
@@ -98,7 +98,7 @@ flowchart LR
 flowchart TB
     subgraph User["user/"]
         U1["agentfinal_ucore"]
-        U2["agentbench_ucore"]
+        U2["agentbench_ucore / labbench_ucore"]
         U3["labdemo_ucore"]
         U4["agentsecurity_ucore"]
         U5["usershell"]
@@ -138,9 +138,9 @@ flowchart TB
 | PCB 和生命周期 | `os/proc.h`、`os/proc.c` | 保存 Agent 元数据，处理 create/exit 和 Context 释放 |
 | 时钟事件 | `os/trap.c`、`os/timer.c` | 定时调用 `agent_tick()`，支持 heartbeat 和 timeout |
 | 最终功能验收 | `user/src/agentfinal_ucore.c` | Agent 创建、5 页 Context、批量工具调用、短文本历史、`context_detail()`、用户自管 cache、名称协议、snapshot、FIFO、事件 |
-| 文件系统测试 | `user/src/agentfs_ucore.c` | 真实文件 inode 绑定、字段清空、删除清理、`.agentmeta` 重新加载、scan/index 差异、不存在 selector |
+| 文件系统测试 | `user/src/agentfs_ucore.c` | 真实文件 inode 绑定、字段清空、删除清理、`.agentmeta` 重新加载、scan/index 差异和一致性、truncated 标志、不存在 selector |
 | Agent Loop 测试 | `user/src/agentloop_ucore.c` | FIFO 顺序、队列满、多 watch、unwatch、有限 timeout 睡眠、TIMER unwatch、heartbeat wake/stop |
-| 性能基准 | `user/src/agentbench_ucore.c` | scalar run、batch run、direct Context、query/snapshot、文件查询候选记录数、timeout/heartbeat、wait/wake 计时 |
+| 性能基准 | `user/src/agentbench_ucore.c`、`user/src/labbench_ucore.c` | scalar run、batch run、direct Context、query/snapshot、文件查询候选记录数、timeout/heartbeat、busy polling、wait/wake 计时 |
 | 综合演示 | `user/src/labdemo_ucore.c` | 三 Agent 故障诊断、文件查询、事件唤醒、受控恢复和报告 |
 | 权限限制测试 | `user/src/agentsecurity_ucore.c` | 普通进程直接敏感调用、sentinel 伪造 role、recovery 幂等恢复 |
 | 构建脚本 | `scripts/run-agent-tests.sh` | 顺序运行六项最终验证 |
@@ -276,7 +276,7 @@ Agent 的真实角色保存在内核 `struct proc.agent_role` 中，能力保存
 3. 用户态可直接读取 Context 镜像中的 header 和 latest result。
 4. `context_snapshot()` 一次返回多条有序历史，避免逐条 query。
 
-文件查询性能通过扫描路径和索引路径的候选记录数差异体现。当前索引覆盖 `status`、`stage` 和 `kind`，`agentbench_ucore` 同时输出多轮 tick min/avg/max 观测。
+文件查询性能通过扫描路径和索引路径的候选记录数差异体现。当前索引覆盖 `status`、`stage` 和 `kind`，`agentfs_ucore` 会检查 scan/index 返回语义一致和结果截断标志，`agentbench_ucore` 同时输出多轮 tick min/avg/max 观测。`labbench_ucore` 是面向初步演示规划的性能入口，当前包装运行 `agentbench_ucore`，后续可扩展为 `labbench --full`。
 
 ## 9. 架构决策
 
@@ -291,7 +291,7 @@ Agent 的真实角色保存在内核 `struct proc.agent_role` 中，能力保存
 | 文件查询实现 | 采用 Agent 子系统元数据表、`dev + inum` 主键和私有 `.agentmeta` 元数据文件 | 关联真实 uCore 根目录文件，同时保留属性查询、索引优化和重新加载能力 | 尚未实现后台线程持续扫描整棵目录 |
 | Agent Loop | watch/unwatch/wait/wake/heartbeat 独立 syscall | 等待事件不放进 batch 热路径，行为更清晰 | 后续仍需优先级和取消等待 |
 | 基础 syscall 兼容 | 实现 `SYS_trace=410`、`SYS_mailread=401`、`SYS_mailwrite=402` | 满足代表性 uCore 基础测试和普通进程消息接口 | 不把当前工作扩大成全部 chapter 的完整兼容验收 |
-| 演示日志契约 | 输出 `agentos:event type=... key=value` | 后续大屏和 LLM Gateway 不需要重写核心演示程序 | 当前仓库尚未实现宿主机大屏 |
+| 演示日志契约 | 输出 `agentos:event type=... key=value`，包含 plan、corr_id、模板 LLM refs 和 report 字段 | 后续大屏和 LLM Gateway 不需要重写核心演示程序 | 当前仓库尚未实现宿主机大屏 |
 | 文档结构 | 主设计文档 + API/验证/追踪 + 分任务附录 | 满足架构说明、关键决策、测试和运行说明 | 文档数量增加，需要维护一致性 |
 
 ## 10. 质量要求与验证
@@ -306,7 +306,7 @@ Agent 的真实角色保存在内核 `struct proc.agent_role` 中，能力保存
 | 用户自管 Context cache 不被 snapshot 覆盖 | `agentfinal_ucore: user_cache_preserved=1` |
 | 名称协议结构化工具调用可用 | `agentfinal_ucore: legacy_name_protocol=1` |
 | 路径超长自动淘汰 | `agentfinal_ucore` 验证 128 容量 FIFO |
-| 有性能数据 | `agentbench_ucore` 输出吞吐表 |
+| 有性能数据 | `agentbench_ucore` 输出吞吐表，`labbench_ucore` 提供演示规划入口 |
 | 文件属性查询、inode 关联、私有 `.agentmeta` 和索引 | `agentfinal_ucore`、`agentfs_ucore: .agentmeta_reload=1`、`agentbench_ucore`、`labdemo_ucore` |
 | Agent Loop 等待、超时、心跳和唤醒 | `agentfinal_ucore`、`agentloop_ucore: timeout_sleep_no_poll=1`、`agentloop_ucore: timer_unwatch=1`、`agentbench_ucore: timeout_heartbeat=1`、`labdemo_ucore` |
 | 综合场景 | `labdemo_ucore: passed` |

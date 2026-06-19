@@ -47,8 +47,9 @@ bash scripts/run-agent-tests.sh
 6. `make run ... INIT_PROC=agentfs_ucore`
 7. `make run ... INIT_PROC=agentloop_ucore`
 8. `make run ... INIT_PROC=agentbench_ucore`
-9. `make run ... INIT_PROC=labdemo_ucore`
-10. `make run ... INIT_PROC=agentsecurity_ucore`
+9. `make run ... INIT_PROC=labbench_ucore`
+10. `make run ... INIT_PROC=labdemo_ucore`
+11. `make run ... INIT_PROC=agentsecurity_ucore`
 
 也可以手动分别运行：
 
@@ -57,6 +58,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfinal_ucore CHAP
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfs_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentloop_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labbench_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent
 ```
@@ -72,6 +74,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore C
 | 任务四文件系统能力 | `agentfs_ucore: parent passed` |
 | 任务五 Agent Loop | `agentloop_ucore: parent passed` |
 | 任务一至五性能 | `agentbench_ucore: parent passed` |
+| 演示规划性能入口 | `labbench_ucore: parent passed` |
 | 综合场景 | `labdemo_ucore: parent passed` |
 | 权限限制 | `agentsecurity_ucore: parent passed` |
 
@@ -80,9 +83,10 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore C
 | 测试程序 | 覆盖范围 | 关键通过输出 |
 | --- | --- | --- |
 | `agentfinal_ucore` | Agent 创建、5 页 Context、批量工具调用、短文本历史、`context_detail()`、用户自管 cache、名称协议、直接读 Context 镜像、Context Snapshot、FIFO 淘汰、篡改保护、文件索引、自唤醒事件 | `agentfinal_ucore: passed` |
-| `agentfs_ucore` | 真实文件 inode 绑定、字段清空、文件删除清理、`.agentmeta` 重新加载、接近 128 条文件元数据下的 scan/index 差异、不存在 selector 返回 NOT_FOUND | `agentfs_ucore: parent passed` |
+| `agentfs_ucore` | 真实文件 inode 绑定、字段清空、文件删除清理、`.agentmeta` 重新加载、接近 128 条文件元数据下的 scan/index 差异和一致性、结果截断标志、不存在 selector 返回 NOT_FOUND | `agentfs_ucore: parent passed` |
 | `agentloop_ucore` | FIFO 事件顺序、队列满丢弃、多 watch、unwatch、有限 timeout 睡眠、TIMER unwatch、heartbeat wake/stop | `agentloop_ucore: parent passed` |
-| `agentbench_ucore` | scalar vs batch、direct Context、context_query vs context_snapshot、文件扫描 vs 索引候选记录数、timeout/heartbeat 断言、event wait/wake 计时观测 | `agentbench_ucore: parent passed` |
+| `agentbench_ucore` | scalar vs batch、direct Context、context_query vs context_snapshot、文件扫描 vs 索引候选记录数、timeout/heartbeat 断言、busy polling 和 event wait/wake 计时观测 | `agentbench_ucore: parent passed` |
+| `labbench_ucore` | 初步演示规划中的性能入口，包装运行 `agentbench_ucore`，后续可升级为 `labbench --full` | `labbench_ucore: parent passed` |
 | `labdemo_ucore` | orchestrator 控制的多 Agent 综合场景、文件属性查询、依赖查询、事件等待、消息唤醒、权限拒绝、幂等恢复、报告查询、结构化 `agentos:event` | `labdemo_ucore: parent passed` |
 | `agentsecurity_ucore` | 初始化前索引查询、legacy tool mismatch、普通进程敏感调用拒绝、`.agentmeta` 普通访问保护、pid 1 直接子进程启动 orchestrator、sentinel 伪造 recovery 拒绝、多 run 定向恢复、重复 corr_id 拒绝、role/capability mask 检查 | `agentsecurity_ucore: parent passed` |
 
@@ -113,6 +117,8 @@ agentfinal_ucore: parent passed
 agentfs_ucore: default_inode dev=1 inum=11 scanned=2
 agentfs_ucore: custom_inode dev=1 inum=17 size=7
 agentfs_ucore: bulk_index scan=108 index=6 hits=1
+agentfs_ucore: scan_index_consistent=1
+agentfs_ucore: truncated_query total=100 returned=3 truncated=1
 agentfs_ucore: .agentmeta_reload=1
 agentfs_ucore: clear_status=1
 agentfs_ucore: delete_clears_metadata=1
@@ -138,17 +144,18 @@ agentloop_ucore: parent passed
 
 ```text
 labdemo_ucore: Agent-OS laboratory recovery demo
-agentos:event type=AGENT_CREATED role=orchestrator
-agentos:event type=WATCH_REGISTERED role=sentinel filter=status=failed
-agentos:event type=INCIDENT_CREATED id=INC-RUN-042-ALIGN-OOM stage=align
+agentos:event type=AGENT_CREATED tick=... role=orchestrator
+agentos:event type=RUN_OBJECT tick=... project=lab-gene-x workflow=nightly-regression run_id=RUN-042 desired_state=RECOVERED
+agentos:event type=WATCH_REGISTERED tick=... role=sentinel event=FILE_STATUS filter=status=failed
+agentos:event type=INCIDENT_CREATED tick=... id=INC-RUN-042-ALIGN-OOM project=lab-gene-x run_id=RUN-042 stage=align reason=memory_limit
 labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042;project=lab-gene-x
-agentos:event type=TOOL_CALL role=sentinel tool=query_file hits=1 used_index=1
-agentos:event type=AUDIT role=sentinel action=rerun_stage result=DENIED
-agentos:event type=MESSAGE from=sentinel to=investigator status=OK
-agentos:event type=CONTEXT_SNAPSHOT role=investigator records=4
-agentos:event type=ACTION role=recovery stage=align status=OK
-agentos:event type=AUDIT role=recovery action=rerun_align result=DUPLICATE
-agentos:event type=FINAL status=RECOVERED
+agentos:event type=TOOL_CALL tick=... role=sentinel tool=query_file project=lab-gene-x run_id=RUN-042 status=failed hits=1 used_index=1
+agentos:event type=LLM_CALL tick=... mode=template task=explain_root_cause llm_request_id=LLM-RUN-042-RCA-1 status=OK
+agentos:event type=PLAN_CREATED tick=... role=investigator plan=PLAN-RUN-042-RECOVER-1 actions=align,report skip=prepare
+agentos:event type=AUDIT tick=... role=sentinel action=rerun_stage result=DENIED corr_id=RUN-042-align-rerun-1
+agentos:event type=ACTION tick=... role=recovery stage=align status=OK corr_id=RUN-042-align-rerun-1
+agentos:event type=REPORT tick=... role=recovery project=lab-gene-x run_id=RUN-042 file=RUN-042-recovery.md status=OK corr_id=RUN-042-report-write-1 plan=PLAN-RUN-042-RECOVER-1 seq=... llm_enhanced=0
+agentos:event type=FINAL tick=... status=RECOVERED plan=PLAN-RUN-042-RECOVER-1
 labdemo_ucore: passed
 labdemo_ucore: parent passed
 ```
@@ -180,19 +187,22 @@ agentsecurity_ucore: parent passed
 
 ```text
 agentbench_ucore: timeout_heartbeat=1
-agentbench_ucore: repeated_ticks scalar_min=4 scalar_avg=4 scalar_max=5 batch_min=2 batch_avg=2 batch_max=3
+agentbench_ucore: repeated_ticks scalar_min=5 scalar_avg=5 scalar_max=6 batch_min=3 batch_avg=3 batch_max=4
 agentbench_ucore: file_query_records scan_records=107 index_records=6
 agentbench_ucore: case ops ticks ops_per_tick speedup_x100
 agentbench_ucore: scalar_agent_run ops=256 ticks=5 ops_per_tick=51 speedup_x100=100
-agentbench_ucore: batch_agent_run ops=256 ticks=2 ops_per_tick=128 speedup_x100=250
+agentbench_ucore: batch_agent_run ops=256 ticks=3 ops_per_tick=85 speedup_x100=166
 agentbench_ucore: direct_context ops=5000 ticks=1 ops_per_tick=5000 speedup_x100=9765
 agentbench_ucore: context_query ops=16 ticks=1 ops_per_tick=16 speedup_x100=100
-agentbench_ucore: context_snapshot ops=2048 ticks=2 ops_per_tick=1024 speedup_x100=6400
-agentbench_ucore: file_scan_query ops=64 ticks=5 ops_per_tick=12 speedup_x100=100
-agentbench_ucore: file_index_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=250
-agentbench_ucore: event_wait_wake ops=8 ticks=2 ops_per_tick=4 speedup_x100=100
+agentbench_ucore: context_snapshot ops=2048 ticks=3 ops_per_tick=682 speedup_x100=4266
+agentbench_ucore: file_scan_query ops=64 ticks=6 ops_per_tick=10 speedup_x100=100
+agentbench_ucore: file_index_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=300
+agentbench_ucore: busy_poll_query ops=128 ticks=5 ops_per_tick=25 speedup_x100=100
+agentbench_ucore: event_wait_wake ops=8 ticks=3 ops_per_tick=2 speedup_x100=100
+agentbench_ucore: busy_poll_vs_wait busy_ops=128 busy_ticks=5 wait_ops=8 wait_ticks=3
 agentbench_ucore: passed
 agentbench_ucore: parent passed
+labbench_ucore: parent passed
 ```
 
 说明：
@@ -202,7 +212,7 @@ agentbench_ucore: parent passed
 - `direct_context` 直接读取用户态 Context 镜像，不进入内核。
 - `context_snapshot` 一次返回最多 128 条可见记录，按返回记录数计算吞吐。
 - 文件索引查询的提升幅度与数据分布有关；当前测试保证能观察到 scan/index 两条路径，并输出候选记录数差异。
-- `event_wait_wake` 是事件等待与唤醒的计时观测，`speedup_x100=100` 表示该项自己的基线，不表示相对另一个事件实现加速。
+- `busy_poll_query` 和 `event_wait_wake` 同时输出，用于展示轮询路径与事件路径都可观测；不设置固定 tick 阈值。
 
 ## 基础兼容抽测
 

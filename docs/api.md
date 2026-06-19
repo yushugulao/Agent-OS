@@ -308,6 +308,8 @@ Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。队列满时返回 `AGENT_
 | `AGENT_EVENT_JOB_DONE` | 作业完成 |
 | `AGENT_EVENT_POLICY_DENIED` | 策略拒绝 |
 | `AGENT_EVENT_CONTEXT_LIMIT` | Context 限制事件 |
+| `AGENT_EVENT_LLM_DONE` | LLM Gateway 返回解释或摘要；当前作为最终成品预留事件 |
+| `AGENT_EVENT_DASHBOARD_EXPORT` | 可视化导出完成；当前作为最终成品预留事件 |
 
 `agent_heartbeat_stop()` 是用户态便利 wrapper，内部调用 `agent_heartbeat(0)`。heartbeat 到期产生 `AGENT_EVENT_TIMER` 时仍需匹配 TIMER watch；删除 TIMER watch 后，heartbeat 不会投递可消费 TIMER 事件。
 

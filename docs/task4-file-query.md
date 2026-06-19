@@ -81,7 +81,7 @@
 
 `agentsecurity_ucore` 还会在初始化前先执行一次 indexed query，确认未初始化索引不会卡住；随后同时构造 `RUN-042` 和 `RUN-999` 两个 failed run，用于验证恢复动作只修改 selector 指定的目标 run。
 
-`agentfs_ucore` 会创建额外真实文件，绑定自定义元数据，并验证重新调用 `agent_file_meta_init()` 时自定义数据来自 `.agentmeta` 重新加载，而不是被默认表覆盖。它还会验证字段清空、文件删除清理和 selector 未命中，并生成接近 128 条真实文件元数据，让扫描路径和索引路径的 `scanned_records` 差异明显。
+`agentfs_ucore` 会创建额外真实文件，绑定自定义元数据，并验证重新调用 `agent_file_meta_init()` 时自定义数据来自 `.agentmeta` 重新加载，而不是被默认表覆盖。它还会验证字段清空、文件删除清理、selector 未命中、scan/index 返回语义一致、结果超过 `max_hits` 时设置 `truncated`，并生成接近 128 条真实文件元数据，让扫描路径和索引路径的 `scanned_records` 差异明显。
 
 ## 查询路径
 
@@ -187,7 +187,7 @@ align+analyze+report+archive
 ```text
 agentbench_ucore: file_query_records scan_records=107 index_records=6
 agentbench_ucore: file_scan_query ops=64 ticks=5 ops_per_tick=12 speedup_x100=100
-agentbench_ucore: file_index_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=250
+agentbench_ucore: file_index_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=300
 ```
 
 这证明当前系统同时具备：
@@ -231,6 +231,8 @@ agentsecurity_ucore: scoped_report=1
 agentfs_ucore: default_inode dev=1 inum=11 scanned=2
 agentfs_ucore: custom_inode dev=1 inum=17 size=7
 agentfs_ucore: bulk_index scan=108 index=6 hits=1
+agentfs_ucore: scan_index_consistent=1
+agentfs_ucore: truncated_query total=100 returned=3 truncated=1
 agentfs_ucore: .agentmeta_reload=1
 agentfs_ucore: clear_status=1
 agentfs_ucore: delete_clears_metadata=1

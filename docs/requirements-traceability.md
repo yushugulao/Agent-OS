@@ -18,7 +18,7 @@
 | G-1 | 在教学操作系统内核中实现 Agent-OS 功能模块 | 已验证 | `os/agent.c`、`os/agent.h`、`os/proc.c` | `agentfinal_ucore`、`agentbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore` |
 | G-2 | 系统可在 QEMU 上运行 | 已验证 | `Makefile`、`nfs/fs.img` | `scripts/run-agent-tests.sh` |
 | G-3 | 提供内核代码 | 已验证 | `os/` | Git 仓库源码 |
-| G-4 | 提供用户态测试程序 | 已验证 | `agentfinal_ucore`、`agentfs_ucore`、`agentloop_ucore`、`agentbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore` | [verification.md](verification.md) |
+| G-4 | 提供用户态测试程序 | 已验证 | `agentfinal_ucore`、`agentfs_ucore`、`agentloop_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore` | [verification.md](verification.md) |
 | G-5 | 提供综合演示场景 | 已验证 | `user/src/labdemo_ucore.c` | `labdemo_ucore: passed` |
 | G-6 | 提供设计文档和运行说明 | 已验证 | [../README.md](../README.md)、[design.md](design.md)、[demo-script.md](demo-script.md) | 本文档、[verification.md](verification.md) |
 | G-7 | 保留代表性的 uCore 基础 syscall 兼容性 | 已验证 | `SYS_trace`、`SYS_mailread`、`SYS_mailwrite` | `ch3_trace` 输出 `Test trace OK!`；`agentsecurity_ucore: mail_basic=1` |
@@ -68,8 +68,8 @@
 | --- | --- | --- | --- | --- |
 | T4-1 | Agent 可按文件属性查询实验工件 | 已验证 | `struct agent_file_meta`、`agent_file_query()`、`AGENT_TOOL_QUERY_FILE` 属性 payload | `labdemo_ucore: tool=query_file hits=1 used_index=1` |
 | T4-2 | 支持项目、工作流、运行、阶段、类型、状态、摘要、逻辑路径字段 | 已验证 | `os/agent.h` 中 `agent_file_meta` / `agent_file_query` | [task4-file-query.md](task4-file-query.md)、`labdemo_ucore` |
-| T4-3 | 有扫描路径和索引路径 | 已验证 | `agent_file_query()`、status/stage/kind 索引桶 | `agentfs_ucore: bulk_index scan=108 index=6 hits=1`、`agentbench_ucore: file_scan_query/file_index_query` |
-| T4-4 | 查询结果包含命中、截断、扫描数、是否使用索引和 tick | 已验证 | `struct agent_file_query_result` | `agentbench_ucore` 性能表 |
+| T4-3 | 有扫描路径和索引路径 | 已验证 | `agent_file_query()`、status/stage/kind 索引桶 | `agentfs_ucore: bulk_index scan=108 index=6 hits=1`、`agentfs_ucore: scan_index_consistent=1`、`agentbench_ucore: file_scan_query/file_index_query` |
+| T4-4 | 查询结果包含命中、截断、扫描数、是否使用索引和 tick | 已验证 | `struct agent_file_query_result` | `agentfs_ucore: truncated_query total=100 returned=3 truncated=1`、`agentbench_ucore` 性能表 |
 | T4-5 | 支持依赖关系查询，服务最小恢复 | 已验证 | `AGENT_TOOL_DEPENDENCY_QUERY`、dependency mask | `labdemo_ucore: affected stages=align+analyze+report+archive` |
 | T4-6 | 查询写入 Context Path，可用于报告回放 | 已验证 | 文件查询和工具调用均追加 Context | `labdemo_ucore`、`context_snapshot` |
 | T4-7 | 文件元数据写入只能由具备权限的 Agent 执行 | 扩展增强 | `agent_file_meta_init()`、`agent_file_meta_set()` 要求 Agent 且具备 `AGENT_CAP_META_WRITE` | `agentsecurity_ucore: plain_process_denied=1`、`sentinel meta write denied` |
@@ -89,7 +89,7 @@
 | T5-3 | 文件状态变化能唤醒目标 Agent | 已验证 | `agent_file_meta_set()` 投递包含 status、stage、run_id、project 的 `AGENT_EVENT_FILE_STATUS` | `labdemo_ucore` sentinel 收到 failed 事件 |
 | T5-4 | 消息能触发 Agent 事件 | 已验证 | `send_message` 工具、`agent_wake()` | `labdemo_ucore` sentinel->investigator、investigator->recovery |
 | T5-5 | 心跳字段可设置、可按 TIMER watch 投递事件、可停止 | 已验证 | `agent_heartbeat()`、`agent_heartbeat_stop()`、TIMER watch/unwatch | `agentbench_ucore: timeout_heartbeat=1`、`agentloop_ucore: timer_unwatch=1`、`agentloop_ucore: heartbeat_wake_stop=1` |
-| T5-6 | event wait/wake 可计时观测并稳定完成 | 已验证 | `agentbench_ucore` | `agentbench_ucore: event_wait_wake`；该项以自身为基线，不作为相对加速结论 |
+| T5-6 | busy polling 和 event wait/wake 可计时观测并稳定完成 | 已验证 | `agentbench_ucore` | `agentbench_ucore: busy_poll_query`、`agentbench_ucore: event_wait_wake`、`agentbench_ucore: busy_poll_vs_wait`；不设置固定 tick 阈值 |
 | T5-7 | 事件处理写入 Context Path | 已验证 | `agent_wait()` 成功消费事件后追加 Context | `labdemo_ucore` 和 [task5-agent-loop.md](task5-agent-loop.md) |
 | T5-8 | 普通进程不能直接伪造事件 | 扩展增强 | `agent_wake()` 要求 Agent 且具备 `MESSAGE_SEND` 或 `ORCHESTRATE` | `agentsecurity_ucore` 普通进程调用 `agent_wake()` 返回 `-1` |
 | T5-9 | 事件队列满时拒绝新事件且不覆盖旧事件 | 扩展增强 | `AGENT_EVENT_QUEUE_CAP=16`、FIFO queue | `agentloop_ucore: overflow_dropped=1` |
@@ -99,9 +99,9 @@
 | ID | 赛题方向 | 当前状态 | 说明 |
 | --- | --- | --- | --- |
 | T6-1 | 综合演示程序 | 已验证 | `labdemo_ucore` 串联任务一至五，输出 `agentos:event` |
-| T6-2 | 性能和计时演示程序 | 已验证 | `agentbench_ucore` 输出批量工具、Context、文件查询性能，以及事件等待计时观测 |
+| T6-2 | 性能和计时演示程序 | 已验证 | `agentbench_ucore` 输出批量工具、Context、文件查询性能，以及轮询/事件等待计时观测；`labbench_ucore` 作为演示规划入口包装运行 |
 | T6-3 | 权限限制演示程序 | 已验证 | `agentsecurity_ucore` 输出普通进程拒绝、usershell 等价启动路径、初始化前索引查询、legacy mismatch、sentinel 伪造拒绝、recovery 幂等恢复和定向恢复 |
-| T6-4 | 云端 LLM Gateway | 未实现 | 当前只保留结构化事件和工具结果，尚未接真实云端 LLM |
+| T6-4 | 云端 LLM Gateway | 未实现 | 当前保留结构化事件、模板 `LLM_CALL` / `LLM_RESULT`、referenced sequence、plan 和 corr_id 字段，尚未接真实云端 LLM |
 | T6-5 | 可视化大屏 | 未实现 | 当前已输出 `agentos:event`，大屏解析器尚未实现 |
 
 ## 追踪结论

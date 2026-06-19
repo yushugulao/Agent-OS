@@ -46,6 +46,8 @@
 | `AGENT_EVENT_JOB_DONE` | 作业完成 | 预留 |
 | `AGENT_EVENT_POLICY_DENIED` | 策略拒绝 | 预留或工具结果 |
 | `AGENT_EVENT_CONTEXT_LIMIT` | Context 限制事件 | 预留 |
+| `AGENT_EVENT_LLM_DONE` | LLM Gateway 返回解释或摘要 | 当前预留 |
+| `AGENT_EVENT_DASHBOARD_EXPORT` | 可视化导出完成 | 当前预留 |
 
 事件结构 `struct agent_event` 包含 type、source_pid、target_pid、status、event_id、tick、corr_id 和 payload。
 
@@ -70,7 +72,7 @@ int agent_unwatch(int event_type, const char *filter);
 `labdemo_ucore` 中 sentinel 注册：
 
 ```text
-agentos:event type=WATCH_REGISTERED role=sentinel filter=status=failed
+agentos:event type=WATCH_REGISTERED tick=... role=sentinel event=FILE_STATUS filter=status=failed
 ```
 
 ## Wait
@@ -91,14 +93,16 @@ int agent_wait(struct agent_event *event, int timeout_ticks);
 
 当前有限 timeout 也会进入 `SLEEPING` 状态，由事件入队、heartbeat 到期或 deadline 到期唤醒，不通过反复 `yield()` 消耗 CPU。`agent_info.wait_loop_count` 用于观察等待检查次数，`agentloop_ucore` 会验证有限 timeout 的循环次数保持在很小范围。
 
-`agentbench_ucore` 先验证无事件等待会返回 timeout，并检查 `timeout_count` 增加；随后用 wait/wake 计时观测验证等待和唤醒路径：
+`agentbench_ucore` 先验证无事件等待会返回 timeout，并检查 `timeout_count` 增加；随后输出 busy polling 查询和 wait/wake 的计时观测，便于评委看到轮询路径与事件路径的成本都可测：
 
 ```text
 agentbench_ucore: timeout_heartbeat=1
-agentbench_ucore: event_wait_wake ops=8 ticks=2 ops_per_tick=4 speedup_x100=100
+agentbench_ucore: busy_poll_query ops=128 ticks=5 ops_per_tick=25 speedup_x100=100
+agentbench_ucore: event_wait_wake ops=8 ticks=3 ops_per_tick=2 speedup_x100=100
+agentbench_ucore: busy_poll_vs_wait busy_ops=128 busy_ticks=5 wait_ops=8 wait_ticks=3
 ```
 
-这里的 `speedup_x100=100` 是 `event_wait_wake` 自身的计时基线，不表示相对另一个事件实现加速。
+这里的 `speedup_x100=100` 是单项自身的计时基线。`busy_poll_vs_wait` 用于展示两个路径的观测数据，不设置固定 tick 阈值。
 
 ## Wake
 
@@ -163,7 +167,7 @@ int agent_heartbeat_stop(void);
 `labdemo_ucore` 中：
 
 ```text
-agentos:event type=INCIDENT_CREATED id=INC-RUN-042-ALIGN-OOM stage=align
+agentos:event type=INCIDENT_CREATED tick=... id=INC-RUN-042-ALIGN-OOM project=lab-gene-x workflow=nightly-regression run_id=RUN-042 stage=align reason=memory_limit
 labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042;project=lab-gene-x
 ```
 
@@ -195,7 +199,7 @@ Agent Loop 行为会写入 Context Path：
 `labdemo_ucore` 中 investigator 输出：
 
 ```text
-agentos:event type=CONTEXT_SNAPSHOT role=investigator records=4 latest=4
+agentos:event type=CONTEXT_SNAPSHOT tick=... role=investigator records=4 latest=...
 ```
 
 说明 investigator 的推理和工具调用历史可以通过 snapshot 查看。
@@ -222,7 +226,7 @@ agentfinal_ucore: event_wait=1 payload=self wake
 
 ```text
 agentbench_ucore: timeout_heartbeat=1
-agentbench_ucore: event_wait_wake ops=8 ticks=2 ops_per_tick=4 speedup_x100=100
+agentbench_ucore: event_wait_wake ops=8 ticks=3 ops_per_tick=2 speedup_x100=100
 ```
 
 `agentloop_ucore`：
@@ -240,10 +244,13 @@ agentloop_ucore: passed
 `labdemo_ucore`：
 
 ```text
-agentos:event type=WATCH_REGISTERED role=sentinel filter=status=failed
+agentos:event type=WATCH_REGISTERED tick=... role=sentinel event=FILE_STATUS filter=status=failed
+agentos:event type=LLM_CALL tick=... mode=template task=explain_root_cause llm_request_id=LLM-RUN-042-RCA-1 project=lab-gene-x run_id=RUN-042 refs=... status=OK
+agentos:event type=LLM_RESULT tick=... mode=template llm_request_id=LLM-RUN-042-RCA-1 llm_status=OK llm_explanation=memory_limit referenced_sequences=... confidence=medium
+agentos:event type=PLAN_CREATED tick=... role=investigator plan=PLAN-RUN-042-RECOVER-1 project=lab-gene-x run_id=RUN-042 actions=align,report skip=prepare refs=...
 labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042;project=lab-gene-x
-agentos:event type=MESSAGE from=sentinel to=investigator status=OK
-agentos:event type=FINAL status=RECOVERED
+agentos:event type=MESSAGE tick=... from=sentinel to=investigator status=OK corr_id=MSG-RUN-042-S-I seq=...
+agentos:event type=FINAL tick=... project=lab-gene-x run_id=RUN-042 status=RECOVERED plan=PLAN-RUN-042-RECOVER-1
 labdemo_ucore: passed
 ```
 

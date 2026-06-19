@@ -135,7 +135,7 @@ agentfinal_ucore: passed
 `agentbench_ucore`：
 
 ```text
-agentbench_ucore: repeated_ticks scalar_min=4 scalar_avg=4 scalar_max=5 batch_min=2 batch_avg=2 batch_max=3
+agentbench_ucore: repeated_ticks scalar_min=5 scalar_avg=5 scalar_max=6 batch_min=3 batch_avg=3 batch_max=4
 agentbench_ucore: scalar_agent_run ops=256 ticks=4 ops_per_tick=64 speedup_x100=100
 agentbench_ucore: batch_agent_run ops=256 ticks=2 ops_per_tick=128 speedup_x100=200
 ```

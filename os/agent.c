@@ -2113,7 +2113,7 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 			agent_result_text(res, "denied");
 			break;
 		}
-		if (op->arg0 > AGENT_EVENT_CONTEXT_LIMIT) {
+		if (op->arg0 > AGENT_EVENT_MAX) {
 			res->status = AGENT_STATUS_BAD_PARAM;
 			agent_result_text(res, "bad_event_type");
 			break;
@@ -2619,7 +2619,7 @@ int sys_agent_watch(int event_type, uint64 filteraddr)
 	if (!agent_has_cap(p, AGENT_CAP_WATCH))
 		return AGENT_STATUS_DENIED;
 	if (event_type < AGENT_EVENT_NONE ||
-	    event_type > AGENT_EVENT_CONTEXT_LIMIT)
+	    event_type > AGENT_EVENT_MAX)
 		return AGENT_STATUS_BAD_PARAM;
 	memset(filter, 0, sizeof(filter));
 	if (filteraddr != 0 &&
@@ -2645,7 +2645,7 @@ int sys_agent_unwatch(int event_type, uint64 filteraddr)
 	if (!agent_has_cap(p, AGENT_CAP_WATCH))
 		return AGENT_STATUS_DENIED;
 	if (event_type < AGENT_EVENT_NONE ||
-	    event_type > AGENT_EVENT_CONTEXT_LIMIT)
+	    event_type > AGENT_EVENT_MAX)
 		return AGENT_STATUS_BAD_PARAM;
 	memset(filter, 0, sizeof(filter));
 	if (filteraddr != 0 &&

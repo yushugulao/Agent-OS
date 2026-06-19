@@ -9,6 +9,7 @@
 #define DIRECT_READS 5000
 #define FILE_OPS 64
 #define WAIT_OPS 8
+#define BUSY_POLL_OPS 128
 
 static struct agent_op ops[AGENT_BATCH_MAX];
 static struct agent_result results[AGENT_BATCH_MAX];
@@ -202,6 +203,26 @@ static int bench_file_query(uint64 flags)
 	return elapsed(start, now_ms());
 }
 
+static int bench_busy_poll_query(void)
+{
+	int start;
+
+	memset(&bench_file_query_arg, 0, sizeof(bench_file_query_arg));
+	bench_file_query_arg.flags = AGENT_FILE_QUERY_USE_INDEX;
+	bench_file_query_arg.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(bench_file_query_arg.project, "bench");
+	strcpy(bench_file_query_arg.workflow, "metadata");
+	strcpy(bench_file_query_arg.run_id, "RUN-BENCH");
+	strcpy(bench_file_query_arg.status, "not-ready");
+	start = now_ms();
+	for (int i = 0; i < BUSY_POLL_OPS; i++) {
+		check(agent_file_query(&bench_file_query_arg,
+				       &bench_file_query_result) == 0,
+		      "busy poll no hit");
+	}
+	return elapsed(start, now_ms());
+}
+
 static void run_waiter(int ready_fd, int ack_fd)
 {
 	struct agent_event event;
@@ -293,6 +314,7 @@ static void run_agent_bench(void)
 	int scan_records;
 	int index_records;
 	int waitwake;
+	int busypoll;
 	int scalar_runs[3];
 	int batch_runs[3];
 	int scalar_min;
@@ -323,6 +345,7 @@ static void run_agent_bench(void)
 	scan_records = bench_file_query_result.scanned_records;
 	index = bench_file_query(AGENT_FILE_QUERY_USE_INDEX);
 	index_records = bench_file_query_result.scanned_records;
+	busypoll = bench_busy_poll_query();
 	waitwake = bench_wait_wake();
 
 	printf("agentbench_ucore: repeated_ticks scalar_min=%d scalar_avg=%d scalar_max=%d batch_min=%d batch_avg=%d batch_max=%d\n",
@@ -339,7 +362,11 @@ static void run_agent_bench(void)
 		   SNAPSHOT_ROUNDS, query);
 	print_perf("file_scan_query", FILE_OPS, scan, FILE_OPS, scan);
 	print_perf("file_index_query", FILE_OPS, index, FILE_OPS, scan);
+	print_perf("busy_poll_query", BUSY_POLL_OPS, busypoll,
+		   BUSY_POLL_OPS, busypoll);
 	print_perf("event_wait_wake", WAIT_OPS, waitwake, WAIT_OPS, waitwake);
+	printf("agentbench_ucore: busy_poll_vs_wait busy_ops=%d busy_ticks=%d wait_ops=%d wait_ticks=%d\n",
+	       BUSY_POLL_OPS, busypoll, WAIT_OPS, waitwake);
 	printf("agentbench_ucore: passed\n");
 	exit(0);
 }

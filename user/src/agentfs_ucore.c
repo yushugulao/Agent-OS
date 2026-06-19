@@ -117,11 +117,31 @@ static void check_index_scan_gap(void)
 	check(agent_file_query(&fs_query, &scan) >= 1, "bulk scan query");
 	fs_query.flags = AGENT_FILE_QUERY_USE_INDEX;
 	check(agent_file_query(&fs_query, &index) >= 1, "bulk index query");
+	check(scan.total_hits == index.total_hits, "scan index hits");
+	check(scan.returned == index.returned, "scan index returned");
+	check(strcmp(scan.hits[0].physical_name,
+		     index.hits[0].physical_name) == 0,
+	      "scan index first hit");
 	check(scan.scanned_records > index.scanned_records,
 	      "index scans fewer records");
 	printf("agentfs_ucore: bulk_index scan=%d index=%d hits=%d\n",
 	       scan.scanned_records, index.scanned_records,
 	       index.total_hits);
+	printf("agentfs_ucore: scan_index_consistent=1\n");
+
+	memset(&fs_query, 0, sizeof(fs_query));
+	fs_query.flags = AGENT_FILE_QUERY_USE_INDEX;
+	fs_query.max_hits = 3;
+	strcpy(fs_query.project, "issue4");
+	strcpy(fs_query.run_id, "RUN-BULK");
+	strcpy(fs_query.stage, "bulk");
+	check(agent_file_query(&fs_query, &index) == 3,
+	      "truncated index query");
+	check(index.total_hits > index.returned, "truncated hit count");
+	check(index.returned == 3, "truncated returned");
+	check(index.truncated == 1, "truncated flag");
+	printf("agentfs_ucore: truncated_query total=%d returned=%d truncated=%d\n",
+	       index.total_hits, index.returned, index.truncated);
 }
 
 static void run_agent(void)

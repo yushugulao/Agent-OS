@@ -113,6 +113,8 @@ agentfinal_ucore: parent passed
 agentfs_ucore: default_inode dev=1 inum=11 scanned=2
 agentfs_ucore: custom_inode dev=1 inum=17 size=7
 agentfs_ucore: bulk_index scan=108 index=6 hits=1
+agentfs_ucore: scan_index_consistent=1
+agentfs_ucore: truncated_query total=100 returned=3 truncated=1
 agentfs_ucore: .agentmeta_reload=1
 agentfs_ucore: clear_status=1
 agentfs_ucore: delete_clears_metadata=1
@@ -191,6 +193,7 @@ benchmark 主进程通过 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)` 创建 or
 | `file_scan_query` | 64 | 强制扫描文件元数据表 |
 | `file_index_query` | 64 | 使用文件元数据索引路径 |
 | `timeout_heartbeat` | 1 | 验证无事件等待返回 timeout，且 heartbeat 字段可通过 `agent_info()` 观察 |
+| `busy_poll_query` | 128 | 模拟用户态持续查询无事件条件，作为轮询路径计时观测 |
 | `event_wait_wake` | 8 | 父进程多次唤醒等待中的 Agent 子进程，并输出计时观测 |
 
 ### 4.2 输出字段
@@ -206,19 +209,22 @@ benchmark 主进程通过 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)` 创建 or
 
 ```text
 agentbench_ucore: timeout_heartbeat=1
-agentbench_ucore: repeated_ticks scalar_min=4 scalar_avg=4 scalar_max=5 batch_min=2 batch_avg=2 batch_max=3
+agentbench_ucore: repeated_ticks scalar_min=5 scalar_avg=5 scalar_max=6 batch_min=3 batch_avg=3 batch_max=4
 agentbench_ucore: file_query_records scan_records=107 index_records=6
 agentbench_ucore: case ops ticks ops_per_tick speedup_x100
 agentbench_ucore: scalar_agent_run ops=256 ticks=5 ops_per_tick=51 speedup_x100=100
-agentbench_ucore: batch_agent_run ops=256 ticks=2 ops_per_tick=128 speedup_x100=250
+agentbench_ucore: batch_agent_run ops=256 ticks=3 ops_per_tick=85 speedup_x100=166
 agentbench_ucore: direct_context ops=5000 ticks=1 ops_per_tick=5000 speedup_x100=9765
 agentbench_ucore: context_query ops=16 ticks=1 ops_per_tick=16 speedup_x100=100
-agentbench_ucore: context_snapshot ops=2048 ticks=2 ops_per_tick=1024 speedup_x100=6400
+agentbench_ucore: context_snapshot ops=2048 ticks=3 ops_per_tick=682 speedup_x100=4266
 agentbench_ucore: file_scan_query ops=64 ticks=5 ops_per_tick=12 speedup_x100=100
-agentbench_ucore: file_index_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=250
-agentbench_ucore: event_wait_wake ops=8 ticks=2 ops_per_tick=4 speedup_x100=100
+agentbench_ucore: file_index_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=300
+agentbench_ucore: busy_poll_query ops=128 ticks=5 ops_per_tick=25 speedup_x100=100
+agentbench_ucore: event_wait_wake ops=8 ticks=3 ops_per_tick=2 speedup_x100=100
+agentbench_ucore: busy_poll_vs_wait busy_ops=128 busy_ticks=5 wait_ops=8 wait_ticks=3
 agentbench_ucore: passed
 agentbench_ucore: parent passed
+labbench_ucore: parent passed
 ```
 
 ### 4.4 性能解释
@@ -230,7 +236,7 @@ agentbench_ucore: parent passed
 | `context_snapshot` vs `context_query` | 批量历史查询减少多次 syscall 和多次遍历 |
 | `file_index_query` vs `file_scan_query` | 文件元数据索引减少候选记录检查，`file_query_records` 直接输出候选记录数差异 |
 | `timeout_heartbeat` | Agent Loop 的超时和心跳字段有直接断言，不只依赖场景日志 |
-| `event_wait_wake` | Agent Loop 不只是功能演示，也能输出计时观测 |
+| `busy_poll_query` / `event_wait_wake` | Agent Loop 不只是功能演示，也能输出轮询路径和等待唤醒路径的计时观测 |
 
 tick 数值随环境波动，评审时应结合多轮 min/avg/max、候选记录数和设计解释看相对趋势。
 
@@ -273,30 +279,38 @@ tick 数值随环境波动，评审时应结合多轮 min/avg/max、候选记录
 13. sentinel 通过消息唤醒 investigator。
 14. investigator 查询 align 文件摘要，得到故障原因。
 15. investigator 查询 dependency，得到影响阶段。
-16. investigator 调用 `context_snapshot()` 展示自身审计历史。
-17. investigator 通过消息唤醒 recovery。
-18. recovery 通过 capability 检查。
-19. recovery 执行 `rerun_stage align`。
-20. recovery 再次执行同一动作，内核返回 duplicate。
-21. recovery 写报告并查询 report 文件。
-22. orchestrator 等待三个角色 Agent 退出，输出 `labdemo_ucore: passed`。
-23. 普通 init 等待 orchestrator 退出，输出 `labdemo_ucore: parent passed`。
+16. investigator 输出模板 `LLM_CALL` / `LLM_RESULT` 事件和 `PLAN_CREATED` 事件，预留最终 LLM Gateway 和 Planner/Auditor 拆分入口。
+17. investigator 调用 `context_snapshot()` 展示自身审计历史。
+18. investigator 通过消息唤醒 recovery。
+19. recovery 通过 capability 检查。
+20. recovery 执行 `rerun_stage align`。
+21. recovery 再次执行同一动作，内核返回 duplicate。
+22. recovery 写报告并查询 report 文件。
+23. recovery 输出带 `corr_id` 和 plan id 的 `AUDIT`、`ACTION`、`REPORT` 和 `FINAL` 事件。
+24. orchestrator 等待三个角色 Agent 退出，输出 `labdemo_ucore: passed`。
+25. 普通 init 等待 orchestrator 退出，输出 `labdemo_ucore: parent passed`。
 
 ### 5.3 关键输出
 
 ```text
-agentos:event type=WATCH_REGISTERED role=sentinel filter=status=failed
-agentos:event type=INCIDENT_CREATED id=INC-RUN-042-ALIGN-OOM stage=align
+agentos:event type=RUN_OBJECT tick=... project=lab-gene-x workflow=nightly-regression run_id=RUN-042 desired_state=RECOVERED policy=minimal_rerun
+agentos:event type=WATCH_REGISTERED tick=... role=sentinel event=FILE_STATUS filter=status=failed
+agentos:event type=INCIDENT_CREATED tick=... id=INC-RUN-042-ALIGN-OOM project=lab-gene-x workflow=nightly-regression run_id=RUN-042 stage=align reason=memory_limit
 labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042;project=lab-gene-x
-agentos:event type=TOOL_CALL role=sentinel tool=query_file hits=1 used_index=1
-agentos:event type=AUDIT role=sentinel action=rerun_stage result=DENIED
-agentos:event type=MESSAGE from=sentinel to=investigator status=OK
+agentos:event type=TOOL_CALL tick=... role=sentinel tool=query_file project=lab-gene-x run_id=RUN-042 status=failed hits=1 used_index=1 seq=...
+agentos:event type=AUDIT tick=... role=sentinel action=rerun_stage result=DENIED reason=capability corr_id=RUN-042-align-rerun-1 seq=...
+agentos:event type=MESSAGE tick=... from=sentinel to=investigator status=OK corr_id=MSG-RUN-042-S-I seq=...
 labdemo_ucore: investigator reason=align output is ready before injected failure
 labdemo_ucore: affected stages=align+analyze+report+archive
-agentos:event type=CONTEXT_SNAPSHOT role=investigator records=4
-agentos:event type=ACTION role=recovery stage=align status=OK
-agentos:event type=AUDIT role=recovery action=rerun_align result=DUPLICATE
-agentos:event type=FINAL status=RECOVERED
+agentos:event type=LLM_CALL tick=... mode=template task=explain_root_cause llm_request_id=LLM-RUN-042-RCA-1 project=lab-gene-x run_id=RUN-042 refs=... status=OK
+agentos:event type=LLM_RESULT tick=... mode=template llm_request_id=LLM-RUN-042-RCA-1 llm_status=OK llm_explanation=memory_limit referenced_sequences=... confidence=medium
+agentos:event type=PLAN_CREATED tick=... role=investigator plan=PLAN-RUN-042-RECOVER-1 project=lab-gene-x run_id=RUN-042 actions=align,report skip=prepare refs=...
+agentos:event type=CONTEXT_SNAPSHOT tick=... role=investigator records=4 latest=...
+agentos:event type=MESSAGE tick=... from=investigator to=recovery status=OK corr_id=MSG-RUN-042-I-R plan=PLAN-RUN-042-RECOVER-1 seq=...
+agentos:event type=ACTION tick=... role=recovery stage=align status=OK corr_id=RUN-042-align-rerun-1 plan=PLAN-RUN-042-RECOVER-1 seq=... duplicate=0
+agentos:event type=AUDIT tick=... role=recovery action=rerun_align result=DUPLICATE corr_id=RUN-042-align-rerun-1 plan=PLAN-RUN-042-RECOVER-1 seq=...
+agentos:event type=REPORT tick=... role=recovery project=lab-gene-x run_id=RUN-042 file=RUN-042-recovery.md status=OK corr_id=RUN-042-report-write-1 plan=PLAN-RUN-042-RECOVER-1 seq=... llm_enhanced=0
+agentos:event type=FINAL tick=... project=lab-gene-x run_id=RUN-042 status=RECOVERED plan=PLAN-RUN-042-RECOVER-1
 labdemo_ucore: passed
 ```
 
