@@ -1547,8 +1547,25 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 			agent_result_text(res, "denied");
 			break;
 		}
-		agent_file_update_status("report", "ok",
-					 "recovery report written");
+		if (agent_contains(op->payload, "=") ||
+		    agent_contains(op->payload, ":")) {
+			agent_parse_selector(op->payload, selector_stage,
+					     sizeof(selector_stage),
+					     selector_project,
+					     sizeof(selector_project),
+					     selector_run_id,
+					     sizeof(selector_run_id));
+			if (!selector_stage[0])
+				safestrcpy(selector_stage, "report",
+					   sizeof(selector_stage));
+			agent_file_update_status_select(selector_stage,
+							selector_project,
+							selector_run_id, "ok",
+							"recovery report written");
+		} else {
+			agent_file_update_status("report", "ok",
+						 "recovery report written");
+		}
 		res->value0 = op->request_id;
 		agent_result_text(res, "report_written");
 		break;
@@ -1936,6 +1953,10 @@ int sys_agent_wait(uint64 eventaddr, int timeout_ticks)
 			break;
 		}
 		p->loop_state = AGENT_LOOP_WAITING;
+		if (timeout_ticks >= 0) {
+			yield();
+			continue;
+		}
 		t->state = SLEEPING;
 		sched();
 	}

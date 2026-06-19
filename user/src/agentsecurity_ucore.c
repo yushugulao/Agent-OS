@@ -81,6 +81,23 @@ static void set_align_failed(const char *run_id, int fid, const char *physical)
 	check(agent_file_meta_set(&meta) == 0, "set failed meta");
 }
 
+static void set_report_failed(const char *run_id, int fid, const char *physical)
+{
+	struct agent_file_meta meta;
+
+	memset(&meta, 0, sizeof(meta));
+	meta.fid = fid;
+	strcpy(meta.physical_name, physical);
+	strcpy(meta.project, "lab-gene-x");
+	strcpy(meta.workflow, "nightly-regression");
+	strcpy(meta.run_id, run_id);
+	strcpy(meta.stage, "report");
+	strcpy(meta.kind, "report");
+	strcpy(meta.status, "failed");
+	strcpy(meta.summary, "report waits for scoped recovery");
+	check(agent_file_meta_set(&meta) == 0, "set report meta");
+}
+
 static void check_align_status(const char *run_id, const char *status)
 {
 	struct agent_file_query query;
@@ -95,6 +112,23 @@ static void check_align_status(const char *run_id, const char *status)
 	strcpy(query.status, status);
 	check(agent_file_query(&query, &result) >= 1, "query align status");
 	check(result.total_hits >= 1, "align status hit");
+}
+
+static void check_report_status(const char *run_id, const char *status)
+{
+	struct agent_file_query query;
+	struct agent_file_query_result result;
+
+	memset(&query, 0, sizeof(query));
+	query.flags = AGENT_FILE_QUERY_USE_INDEX;
+	query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(query.project, "lab-gene-x");
+	strcpy(query.run_id, run_id);
+	strcpy(query.stage, "report");
+	strcpy(query.kind, "report");
+	strcpy(query.status, status);
+	check(agent_file_query(&query, &result) >= 1, "query report status");
+	check(result.total_hits >= 1, "report status hit");
 }
 
 static void check_preinit_index_query(void)
@@ -198,7 +232,7 @@ static void run_recovery(void)
 		"stage=align;run_id=RUN-999;project=lab-gene-x");
 	run_one(&op, &res, AGENT_STATUS_DUPLICATE, "recovery duplicate");
 	make_op(&op, AGENT_TOOL_WRITE_REPORT, 9102, AGENT_ROLE_SENTINEL,
-		"security recovery report");
+		"stage=report;run_id=RUN-999;project=lab-gene-x");
 	run_one(&op, &res, AGENT_STATUS_OK, "recovery write report");
 	printf("agentsecurity_ucore: recovery rerun_ok=1 duplicate=1\n");
 	exit(0);
@@ -215,6 +249,8 @@ static void run_orchestrator(void)
 	check_legacy_tool_mismatch();
 	set_align_failed("RUN-042", 3, "lab_RUN042_align_err");
 	set_align_failed("RUN-999", 30, "lab_RUN999_align_err");
+	set_report_failed("RUN-042", 40, "lab_RUN042_report_err");
+	set_report_failed("RUN-999", 41, "lab_RUN999_report_err");
 	pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	check(pid >= 0, "create sentinel");
 	if (pid == 0)
@@ -223,6 +259,8 @@ static void run_orchestrator(void)
 	check(status == 0, "sentinel status");
 	check_align_status("RUN-042", "failed");
 	check_align_status("RUN-999", "failed");
+	check_report_status("RUN-042", "failed");
+	check_report_status("RUN-999", "failed");
 	pid = agent_create_role(AGENT_ROLE_RECOVERY);
 	check(pid >= 0, "create recovery");
 	if (pid == 0)
@@ -231,7 +269,10 @@ static void run_orchestrator(void)
 	check(status == 0, "recovery status");
 	check_align_status("RUN-999", "ok");
 	check_align_status("RUN-042", "failed");
+	check_report_status("RUN-999", "ok");
+	check_report_status("RUN-042", "failed");
 	printf("agentsecurity_ucore: scoped_rerun=1\n");
+	printf("agentsecurity_ucore: scoped_report=1\n");
 	printf("agentsecurity_ucore: passed\n");
 	exit(0);
 }
@@ -253,12 +294,28 @@ static void check_plain_process_denied(void)
 	printf("agentsecurity_ucore: plain_process_denied=1\n");
 }
 
+static void check_plain_mail(void)
+{
+	char msg[] = "mail-ok";
+	char out[16];
+	int n;
+
+	memset(out, 0, sizeof(out));
+	check(mailread(out, sizeof(out)) == 0, "empty mail");
+	n = strlen(msg) + 1;
+	check(mailwrite(getpid(), msg, n) == n, "mail write");
+	check(mailread(out, sizeof(out)) == n, "mail read");
+	check(strcmp(out, msg) == 0, "mail text");
+	printf("agentsecurity_ucore: mail_basic=1\n");
+}
+
 int main(void)
 {
 	int pid;
 	int status = 0;
 
-	printf("agentsecurity_ucore: Agent permission boundary test\n");
+	printf("agentsecurity_ucore: Agent permission test\n");
+	check_plain_mail();
 	check_plain_process_denied();
 	check_plain_child_orchestrator_allowed();
 	pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);

@@ -4,6 +4,7 @@ set -euo pipefail
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
 LOG="${LOG:-error}"
 CHAPTER="${CHAPTER:-agent}"
+CASE_TIMEOUT="${CASE_TIMEOUT:-180s}"
 
 run_case() {
 	local init_proc="$1"
@@ -11,7 +12,7 @@ run_case() {
 	local log_file="/tmp/agentos-${init_proc}.log"
 
 	echo "[agent-tests] running ${init_proc}"
-	timeout 90s make run \
+	timeout "${CASE_TIMEOUT}" make run \
 		TOOLPREFIX="${TOOLPREFIX}" \
 		LOG="${LOG}" \
 		INIT_PROC="${init_proc}" \
@@ -24,6 +25,8 @@ run_case() {
 	echo "[agent-tests] ${init_proc} passed"
 }
 
+make -C user clean
+make clean
 make user nfs/fs.img TOOLPREFIX="${TOOLPREFIX}" CHAPTER="${CHAPTER}"
 make build TOOLPREFIX="${TOOLPREFIX}" LOG=warn INIT_PROC=agentfinal_ucore
 

@@ -71,6 +71,8 @@ Agent Context 使用固定高地址用户虚拟区：
 | 权限 | 用户态镜像可读写，不可执行 |
 | 记录容量 | 128 条 |
 
+这个权限说明只针对 Agent Context 特殊页。普通用户程序页仍由 uCore flat binary loader 按基底方式映射，当前不声明完整用户程序 W^X。
+
 该区域位于 trapframe 下方，只有 Agent 进程在创建时安装 Agent Context 特殊映射。内核在 `struct proc` 中保存 4 个用户镜像页地址和 4 个 shadow 权威页地址，写 header、latest result 和 Context Path record 时先写内核 shadow 页，再同步到用户镜像页。
 
 这种设计的效果：
@@ -137,9 +139,9 @@ Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 
 - capability mask；
 - 与任务四、五、六共享的 Agent 状态。
 
-## 已知边界
+## 已知限制
 
-| 边界 | 说明 |
+| 限制项 | 说明 |
 | --- | --- |
 | Agent 创建参数 | `agent_create()` 保持最低权限 sentinel 兼容入口；复杂配额和自定义能力仍未开放给用户态 |
 | Agent exec 场景 | 当前最终测试不把 exec 作为主验收入口 |

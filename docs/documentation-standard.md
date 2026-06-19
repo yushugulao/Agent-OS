@@ -20,7 +20,7 @@
 | 评审优先 | README 必须能让评委快速构建、运行和定位材料 |
 | 需求可追踪 | 每条关键赛题要求都要能找到实现位置和测试证据 |
 | 架构多视图 | 不只给一个模块表，还要给运行流程、部署环境、接口和质量要求 |
-| 内核边界清晰 | 文档必须说明用户态 API、系统调用层、Agent 子系统、进程/页表/文件元数据服务之间的边界 |
+| 内核职责划分清晰 | 文档必须说明用户态 API、系统调用层、Agent 子系统、进程/页表/文件元数据服务之间的职责划分 |
 | 证据和结论分离 | `test-record.md` 存放输出记录，`verification.md` 给出验证结论和覆盖范围 |
 | 详细度分层 | 主设计文档解释总体方案，任务文档作为细节附录，避免 README 过长 |
 
@@ -32,9 +32,11 @@ uCore 分支文档按当前代码事实编写：
 - 用户态 ABI 以 `user/include/agent.h` 为准。
 - 内核 ABI 以 `os/agent.h` 为准。
 - 最终测试入口是 `agentfinal_ucore`、`agentbench_ucore`、`labdemo_ucore` 和 `agentsecurity_ucore`。
+- Agent 交付以 `CHAPTER=agent` 为验收主路径；`ch3_trace` 作为代表性 uCore 基础 syscall 抽测材料。
 - 任务四当前是内核文件元数据表和索引查询服务，不表述为真实磁盘目录后台扫描。
-- 任务五当前是可验证的 watch/wait/wake/heartbeat/event delivery，不表述为完整平台级长期调度器。
+- 任务五当前是可验证的 watch/wait/wake/timeout/heartbeat/event delivery，不表述为完整平台级长期调度器。
 - 性能数据是一次样例输出，复跑时 tick 数值会波动。
+- event wait/wake 输出是计时观测，不表述为调度器性能结论。
 
 ## 外部参考
 

@@ -10,6 +10,9 @@
 #define NTHREAD (16)
 #define FD_BUFFER_SIZE (16)
 #define LOCK_POOL_SIZE (8)
+#define SYSCALL_COUNT_MAX (600)
+#define MAILBOX_SLOT_COUNT (16)
+#define MAILBOX_PAYLOAD_SIZE (256)
 
 struct file;
 
@@ -64,6 +67,13 @@ struct proc {
 	struct mutex mutex_pool[LOCK_POOL_SIZE];
 	struct semaphore semaphore_pool[LOCK_POOL_SIZE];
 	struct condvar condvar_pool[LOCK_POOL_SIZE];
+	uint64 syscall_count[SYSCALL_COUNT_MAX];
+	char mail_payload[MAILBOX_SLOT_COUNT][MAILBOX_PAYLOAD_SIZE];
+	int mail_len[MAILBOX_SLOT_COUNT];
+	int mail_from[MAILBOX_SLOT_COUNT];
+	int mail_head;
+	int mail_tail;
+	int mail_count;
 	int is_agent;
 	int agent_type;
 	int agent_id;

@@ -20,9 +20,9 @@ agentsecurity_ucore
 | 程序 | 作用 |
 | --- | --- |
 | `agentfinal_ucore` | 证明任务一至三核心功能正确，同时检查文件索引和事件自唤醒 |
-| `agentbench_ucore` | 给出批量调用、Context 直接读、snapshot、文件索引、wait/wake 的性能证据 |
+| `agentbench_ucore` | 给出批量调用、Context 直接读、snapshot、文件索引的性能证据，并验证 timeout/heartbeat 与 wait/wake 计时 |
 | `labdemo_ucore` | 展示一个由 orchestrator 控制的多 Agent 实验恢复场景 |
-| `agentsecurity_ucore` | 展示普通进程和低权限 Agent 无法越权 |
+| `agentsecurity_ucore` | 展示普通进程和低权限 Agent 无法越权，并验证普通 mail 与多 run 精确恢复 |
 
 ## 2. 环境和运行方式
 
@@ -126,7 +126,8 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAP
 | `context_snapshot` | 一次返回多条历史，适合批量读取 |
 | `file_scan_query` | 文件元数据扫描路径 |
 | `file_index_query` | 文件元数据索引路径 |
-| `event_wait_wake` | Agent Loop 等待和唤醒性能 |
+| `timeout_heartbeat` | 无事件等待会 timeout，心跳字段可通过 `agent_info()` 观察 |
+| `event_wait_wake` | Agent Loop 等待和唤醒计时观测 |
 
 说明性能数字会随 QEMU 和宿主机负载波动。答辩时应强调相对趋势和设计原因：减少 syscall 次数、减少重复查询、减少线性扫描。
 
@@ -221,6 +222,6 @@ labdemo_ucore: parent passed
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent
 ```
 
-该程序证明普通进程不能直接投递事件或修改 Agent 文件元数据，usershell 等价路径可以创建 orchestrator，初始化前索引查询不会卡住，legacy 工具 ID/名称不一致会失败，sentinel 也不能通过伪造 `AGENT_ROLE_RECOVERY` 获得恢复权限，recovery 只会恢复 selector 指定的 run。
+该程序证明普通进程 mail 最小路径可用；普通进程不能直接投递事件或修改 Agent 文件元数据；usershell 等价路径可以创建 orchestrator；初始化前索引查询不会卡住；legacy 工具 ID/名称不一致会失败；sentinel 也不能通过伪造 `AGENT_ROLE_RECOVERY` 获得恢复权限；recovery 只会恢复和写入 selector 指定的 run。
 
 当前版本已经具备任务一至三的增强实现，并完成任务四、任务五和任务六的演示级实现。后续可以继续增强真实文件系统后台索引、长期 Agent 调度、云端 LLM Gateway 和可视化大屏。

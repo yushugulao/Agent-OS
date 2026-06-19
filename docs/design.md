@@ -38,9 +38,9 @@ uCore 分支的目标不是简单复刻旧版实现，而是在保留任务一�
 | 运行环境 | QEMU virt machine，OpenSBI 默认启动 |
 | 开发环境 | 已验证 WSL2 Ubuntu 26.04；通用要求为 Linux、RISC-V GCC/binutils、QEMU riscv64、make、git |
 | 编译工具链 | 已验证 `riscv64-linux-gnu-`；Makefile 可接受 `riscv64-unknown-elf-` |
-| 兼容性 | 保持 uCore 基础用户程序和系统调用结构；Agent syscall 使用 500 起的扩展编号 |
+| 兼容性 | Agent 交付以 `CHAPTER=agent` 为验收主路径；补充验证 `trace` 和普通进程 mail 等代表性基础 syscall；Agent syscall 使用 500 起的扩展编号 |
 | 当前范围 | 任务一至三增强实现；任务四、任务五、任务六为演示级增强实现 |
-| 当前边界 | 未实现真实磁盘目录持续扫描、云端 LLM Gateway、宿主机可视化大屏 |
+| 当前限制 | 未实现真实磁盘目录持续扫描、云端 LLM Gateway、宿主机可视化大屏 |
 
 ## 3. 上下文与范围
 
@@ -70,6 +70,7 @@ flowchart LR
 | Context Path 手动 push/query/rollback/clear/snapshot | 已实现 |
 | 文件元数据表、属性查询、索引查询 | 已实现演示级能力 |
 | Agent Loop 心跳、等待、唤醒 | 已实现 watch/wait/heartbeat/event delivery/timeout |
+| 代表性 uCore 基础 syscall | 已实现 `trace`、`mailread`、`mailwrite` |
 | 综合场景 | 已实现 `labdemo_ucore` 综合演示 |
 | LLM Gateway 和可视化大屏 | 未实现，已通过结构化事件输出预留解析契约 |
 
@@ -87,7 +88,7 @@ flowchart LR
 | Agent Loop | 每个 Agent 可注册 watch，等待文件状态、消息等事件，支持 timeout 和 heartbeat |
 | 内核角色与能力绑定 | `struct proc` 保存真实 `agent_role` 和 capability mask，敏感工具和 syscall 只按内核字段授权，不信任用户态传入的 role |
 | 结构化事件 | `labdemo_ucore` 输出 `agentos:event type=... key=value`，为最终大屏和 LLM Gateway 保留解析契约 |
-| 测试驱动验收 | 用 `agentfinal_ucore` 做任务一至三功能验证，用 `agentbench_ucore` 做性能验证，用 `labdemo_ucore` 做综合场景验证，用 `agentsecurity_ucore` 做权限边界负向验证 |
+| 测试驱动验收 | 用 `agentfinal_ucore` 做任务一至三功能验证，用 `agentbench_ucore` 做性能验证，用 `labdemo_ucore` 做综合场景验证，用 `agentsecurity_ucore` 做权限限制负向验证 |
 
 ## 5. 构件视图
 
@@ -137,9 +138,9 @@ flowchart TB
 | PCB 和生命周期 | `os/proc.h`、`os/proc.c` | 保存 Agent 元数据，处理 create/exit 和 Context 释放 |
 | 时钟事件 | `os/trap.c`、`os/timer.c` | 定时调用 `agent_tick()`，支持 heartbeat 和 timeout |
 | 最终功能验收 | `user/src/agentfinal_ucore.c` | Agent 创建、4 页 Context、批量工具调用、短文本历史、snapshot、FIFO、事件 |
-| 性能基准 | `user/src/agentbench_ucore.c` | scalar run、batch run、direct Context、query/snapshot、文件查询、wait/wake |
+| 性能基准 | `user/src/agentbench_ucore.c` | scalar run、batch run、direct Context、query/snapshot、文件查询、timeout/heartbeat、wait/wake 计时 |
 | 综合演示 | `user/src/labdemo_ucore.c` | 三 Agent 故障诊断、文件查询、事件唤醒、受控恢复和报告 |
-| 权限边界测试 | `user/src/agentsecurity_ucore.c` | 普通进程直接敏感调用、sentinel 伪造 role、recovery 幂等恢复 |
+| 权限限制测试 | `user/src/agentsecurity_ucore.c` | 普通进程直接敏感调用、sentinel 伪造 role、recovery 幂等恢复 |
 | 构建脚本 | `scripts/run-agent-tests.sh` | 顺序运行四项最终验证 |
 
 ## 6. 运行视图
@@ -237,7 +238,7 @@ flowchart TB
 
 ### 8.2 地址空间隔离
 
-只有 Agent 进程会安装 Agent Context 特殊映射和对应 metadata。普通进程调用 Agent-only syscall 时返回错误。Agent Context 固定在 trapframe 下方，用户态 ABI 中定义为 `AGENT_CONTEXT_BASE`。该地址对每个 Agent 是相同虚拟地址，但映射到不同的物理页。
+只有 Agent 进程会安装 Agent Context 特殊映射和对应 metadata。普通进程调用 Agent-only syscall 时返回错误。Agent Context 固定在 trapframe 下方，用户态 ABI 中定义为 `AGENT_CONTEXT_BASE`。该地址对每个 Agent 是相同虚拟地址，但映射到不同的物理页。当前实现保证 Agent Context 4 页不可执行；普通用户程序其他页面仍按当前 uCore 装载方式映射，不宣称全局 W^X。
 
 ### 8.3 shadow 权威历史
 
@@ -287,6 +288,7 @@ Agent 的真实角色保存在内核 `struct proc.agent_role` 中，能力保存
 | 批量执行 | `agent_run()` 一次最多 64 个 op | 减少 syscall 次数，提高端到端吞吐 | 单个 op 错误通过 result 表达 |
 | 文件查询实现 | 采用 Agent 子系统内核元数据表和索引桶 | 避免大幅改动 uCore 文件系统主路径，稳定证明属性查询和索引优化 | 不是完整真实目录后台索引 |
 | Agent Loop | watch/wait/wake/heartbeat 独立 syscall | 阻塞等待不放进 batch 热路径，行为更清晰 | 后续仍需更完整调度策略 |
+| 基础 syscall 兼容 | 实现 `SYS_trace=410`、`SYS_mailread=401`、`SYS_mailwrite=402` | 满足代表性 uCore 基础测试和普通进程消息接口 | 不把当前工作扩大成全部 chapter 的完整兼容验收 |
 | 演示日志契约 | 输出 `agentos:event type=... key=value` | 后续大屏和 LLM Gateway 不需要重写核心演示程序 | 当前仓库尚未实现宿主机大屏 |
 | 文档结构 | 主设计文档 + API/验证/追踪 + 分任务附录 | 满足架构说明、关键决策、测试和运行说明 | 文档数量增加，需要维护一致性 |
 
@@ -302,9 +304,10 @@ Agent 的真实角色保存在内核 `struct proc.agent_role` 中，能力保存
 | 路径超长自动淘汰 | `agentfinal_ucore` 验证 128 容量 FIFO |
 | 有性能数据 | `agentbench_ucore` 输出吞吐表 |
 | 文件属性查询和索引 | `agentfinal_ucore`、`agentbench_ucore`、`labdemo_ucore` |
-| Agent Loop 等待和唤醒 | `agentfinal_ucore`、`agentbench_ucore`、`labdemo_ucore` |
+| Agent Loop 等待、超时、心跳和唤醒 | `agentfinal_ucore`、`agentbench_ucore: timeout_heartbeat=1`、`labdemo_ucore` |
 | 综合场景 | `labdemo_ucore: passed` |
-| 权限边界不能由用户态伪造 | `agentsecurity_ucore: passed` |
+| 权限不能由用户态伪造 | `agentsecurity_ucore: passed` |
+| 代表性 uCore 基础 syscall | `ch3_trace`、`agentsecurity_ucore: mail_basic=1` |
 
 详细验证见 [verification.md](verification.md) 和 [test-record.md](test-record.md)。
 

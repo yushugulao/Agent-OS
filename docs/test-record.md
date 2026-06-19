@@ -1,7 +1,5 @@
 # 测试记录
 
-记录时间：2026-06-19
-
 测试分支：`uCore`
 
 测试环境：
@@ -15,6 +13,8 @@
 执行：
 
 ```bash
+make -C user clean
+make clean
 make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=agent
 make build TOOLPREFIX=riscv64-linux-gnu- LOG=warn INIT_PROC=agentfinal_ucore
 ```
@@ -52,15 +52,16 @@ agentfinal_ucore: parent passed
 
 ```text
 agentbench_ucore: Agent-OS on uCore benchmark
+agentbench_ucore: timeout_heartbeat=1
 agentbench_ucore: case ops ticks ops_per_tick speedup_x100
-agentbench_ucore: scalar_agent_run ops=8192 ticks=119 ops_per_tick=68 speedup_x100=100
-agentbench_ucore: batch_agent_run ops=8192 ticks=72 ops_per_tick=113 speedup_x100=165
-agentbench_ucore: direct_context ops=50000 ticks=1 ops_per_tick=50000 speedup_x100=72631
-agentbench_ucore: context_query ops=256 ticks=3 ops_per_tick=85 speedup_x100=100
-agentbench_ucore: context_snapshot ops=32768 ticks=22 ops_per_tick=1489 speedup_x100=1745
-agentbench_ucore: file_scan_query ops=1024 ticks=28 ops_per_tick=36 speedup_x100=100
-agentbench_ucore: file_index_query ops=1024 ticks=23 ops_per_tick=44 speedup_x100=121
-agentbench_ucore: event_wait_wake ops=32 ticks=3 ops_per_tick=10 speedup_x100=100
+agentbench_ucore: scalar_agent_run ops=256 ticks=5 ops_per_tick=51 speedup_x100=100
+agentbench_ucore: batch_agent_run ops=256 ticks=1 ops_per_tick=256 speedup_x100=500
+agentbench_ucore: direct_context ops=5000 ticks=1 ops_per_tick=5000 speedup_x100=9765
+agentbench_ucore: context_query ops=16 ticks=1 ops_per_tick=16 speedup_x100=100
+agentbench_ucore: context_snapshot ops=2048 ticks=1 ops_per_tick=2048 speedup_x100=12800
+agentbench_ucore: file_scan_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=100
+agentbench_ucore: file_index_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=100
+agentbench_ucore: event_wait_wake ops=8 ticks=2 ops_per_tick=4 speedup_x100=100
 agentbench_ucore: passed
 agentbench_ucore: parent passed
 ```
@@ -101,7 +102,8 @@ labdemo_ucore: parent passed
 ## agentsecurity_ucore 样例输出
 
 ```text
-agentsecurity_ucore: Agent permission boundary test
+agentsecurity_ucore: Agent permission test
+agentsecurity_ucore: mail_basic=1
 agentsecurity_ucore: plain_process_denied=1
 agentsecurity_ucore: role=orchestrator_child capability_checked=1
 agentsecurity_ucore: plain_child_orchestrator=1
@@ -113,18 +115,38 @@ agentsecurity_ucore: sentinel spoof_denied=1
 agentsecurity_ucore: role=recovery capability_checked=1
 agentsecurity_ucore: recovery rerun_ok=1 duplicate=1
 agentsecurity_ucore: scoped_rerun=1
+agentsecurity_ucore: scoped_report=1
 agentsecurity_ucore: passed
 agentsecurity_ucore: parent passed
 ```
 
-结论：普通进程不能直接投递事件或修改 Agent 文件元数据；pid 1 的普通直接子进程可创建 orchestrator，保证 usershell 手动测试路径可用；初始化前索引查询不会阻塞；legacy `tool_id` 和 `tool_name` 不一致会失败；sentinel 不能通过用户态传入 recovery role 伪造恢复权限；recovery 的恢复能力来自内核真实 role/capability，重复 corr_id 被识别为 duplicate，且定向恢复不会误修改其他 run。
+结论：普通进程 mail 最小路径可用；普通进程不能直接投递事件或修改 Agent 文件元数据；pid 1 的普通直接子进程可创建 orchestrator，保证 usershell 手动测试路径可用；初始化前索引查询不会阻塞；legacy `tool_id` 和 `tool_name` 不一致会失败；sentinel 不能通过用户态传入 recovery role 伪造恢复权限；recovery 的恢复能力来自内核真实 role/capability，重复 corr_id 被识别为 duplicate，且定向恢复和报告写入不会误修改其他 run。
 
-## 提交前检查记录
+## ch3_trace 基础兼容抽测
+
+执行：
+
+```bash
+make -C user clean
+make clean
+make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=3
+timeout 60s make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=ch3_trace CHAPTER=3
+```
+
+样例输出：
+
+```text
+string from task trace test
+Test trace OK!
+```
+
+结论：`SYS_trace=410` 已接入 syscall 分发表，`TRACE_READ`、`TRACE_WRITE` 和 `TRACE_SYSCALL` 可被基础用户程序验证。
+
+## 代码与材料检查
 
 已检查：
 
 - `git diff --check` 通过；
 - 仓库内容未包含敏感 token 字符串；
-- 当前 `HEAD` 中没有旧版内核关键字；
-- 当前 `HEAD` 中没有旧 `kernel/`、旧 `mkfs/`、旧测试入口残留；
-- 本地 `uCore` 分支已推送到 `origin/uCore`。
+- 仓库内容没有旧版内核关键字；
+- 仓库内容没有旧版目录或旧测试入口残留。

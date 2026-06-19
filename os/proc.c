@@ -139,9 +139,16 @@ found:
 	p->exit_code = 0;
 	p->pagetable = uvmcreate();
 	memset((void *)p->files, 0, sizeof(struct file *) * FD_BUFFER_SIZE);
-		p->next_mutex_id = 0;
+	p->next_mutex_id = 0;
 	p->next_semaphore_id = 0;
 	p->next_condvar_id = 0;
+	memset(p->syscall_count, 0, sizeof(p->syscall_count));
+	memset(p->mail_payload, 0, sizeof(p->mail_payload));
+	memset(p->mail_len, 0, sizeof(p->mail_len));
+	memset(p->mail_from, 0, sizeof(p->mail_from));
+	p->mail_head = 0;
+	p->mail_tail = 0;
+	p->mail_count = 0;
 	agent_clear_metadata(p);
 	return p;
 }
@@ -338,6 +345,13 @@ static int fork_common(int make_agent, int agent_role)
 			np->files[i] = p->files[i];
 		}
 	}
+	memset(np->syscall_count, 0, sizeof(np->syscall_count));
+	memset(np->mail_payload, 0, sizeof(np->mail_payload));
+	memset(np->mail_len, 0, sizeof(np->mail_len));
+	memset(np->mail_from, 0, sizeof(np->mail_from));
+	np->mail_head = 0;
+	np->mail_tail = 0;
+	np->mail_count = 0;
 
 	np->parent = p;
 	// currently only copy main thread

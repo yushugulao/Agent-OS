@@ -1,8 +1,10 @@
 # Agent-OS API 与 ABI
 
-本文档描述用户态程序与 Agent-OS 内核扩展之间的稳定边界。结构体和常量定义以内核态 `os/agent.h` 和用户态 `user/include/agent.h` 为准。
+本文档描述用户态程序与 Agent-OS 内核扩展之间的稳定接口约定。结构体和常量定义以内核态 `os/agent.h` 和用户态 `user/include/agent.h` 为准。
 
 ## 系统调用
+
+### Agent-OS syscall
 
 Agent-OS 在 uCore syscall 编号空间中使用 500 至 517：
 
@@ -29,6 +31,20 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 517：
 
 `agent_run` 和 `context_snapshot` 是最终成品主路径。`agent_call` 保留为 legacy 兼容入口。
 
+### uCore 基础兼容 syscall
+
+| syscall | 编号 | 用户态原型 | 说明 |
+| --- | ---: | --- | --- |
+| `mailread` | 401 | `int mailread(void *buf, int len)` | 非阻塞读取当前进程普通 mail 队列；无消息返回 0 |
+| `mailwrite` | 402 | `int mailwrite(int pid, void *buf, int len)` | 向目标普通进程 mail 队列写入最多 256 字节 |
+| `trace` | 410 | `int trace(enum trace_request req, unsigned long id, uint8 data)` | 支持 `TRACE_READ`、`TRACE_WRITE` 和 syscall 计数查询 |
+
+这些接口用于保留代表性基础 uCore 用户测试能力。Agent-OS 的最终验收主路径仍是 `CHAPTER=agent` 下的四个专项程序。
+
+`mailread` / `mailwrite` 使用每进程 16 槽普通消息队列，每条最多 256 字节。`mailread` 无消息时返回 0，成功时返回读取字节数；`mailwrite` 成功时返回写入字节数。目标不存在、长度非法、队列满或用户指针错误返回 `-1`。
+
+`trace` 的 `TRACE_READ` / `TRACE_WRITE` 只做 1 字节用户地址读写检查。`TRACE_SYSCALL` 返回对应 syscall ID 的累计进入次数，查询 `SYS_trace` 时本次 `trace` 调用也计入。当前只承诺 Agent Context 4 页不可执行；普通用户程序其他页仍按当前 uCore 装载方式映射，不宣称全局 W^X。
+
 ## Agent Context ABI
 
 | 项目 | 值 |
@@ -39,7 +55,9 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 517：
 | 当前大小 | 16384 字节 |
 | 记录容量 | `AGENT_CONTEXT_MAX_RECORDS = 128` |
 | Context 版本 | `AGENT_CONTEXT_VERSION = 2` |
-| 权限 | 用户镜像可读写，不可执行；内核 shadow 副本不可被用户态访问 |
+| 权限 | Agent Context 用户镜像页可读写、不可执行；内核 shadow 副本不可被用户态访问 |
+
+说明：上述权限只描述 Agent Context 特殊页。当前 uCore 分支仍使用 flat binary loader，普通用户程序正文、数据和 bss 所在页沿用基底 loader 的 RWX 映射；本项目没有在本轮把普通用户程序装载流程重构为完整 W^X。
 
 布局：
 
@@ -105,7 +123,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 517：
 
 敏感授权只使用内核 `struct proc` 中的 `agent_role` 和 `agent_capability_mask`。`agent_op.arg0` 中传入的 role 只保留为 legacy/demo 参数，不参与 `capability_check`、`rerun_stage`、`write_report` 等敏感工具授权。
 
-Agent-only 直接 syscall 的权限边界：
+Agent-only 直接 syscall 的权限要求：
 
 | syscall | 普通进程 | Agent capability 要求 |
 | --- | --- | --- |
@@ -190,7 +208,7 @@ Agent-only 直接 syscall 的权限边界：
 | 12 | `dependency_query` | `stage:string` | 返回某阶段影响范围 |
 | 13 | `capability_check` | `legacy_role:uint64,action:string` | 按当前进程真实 capability 检查动作；返回真实 role 和 capability mask |
 | 14 | `rerun_stage` | `legacy_role:uint64,stage:string` | 只有具备 `RECOVER_STAGE` 的 Agent 可执行幂等恢复动作 |
-| 15 | `write_report` | `legacy_role:uint64,payload:string` | 只有具备 `REPORT_WRITE` 的 Agent 可写恢复报告工件状态 |
+| 15 | `write_report` | `legacy_role:uint64,payload:string` | 只有具备 `REPORT_WRITE` 的 Agent 可写恢复报告工件状态；支持 `stage=report;run_id=...;project=...` selector |
 | 16 | `agent_watch` | `event_type:uint64,filter:string` | 注册 Agent Loop watch |
 | 17 | `agent_wait` | `timeout:uint64` | 工具表可发现项；结构化事件返回使用 syscall |
 | 18 | `agent_heartbeat` | `interval:uint64` | 设置心跳间隔 |

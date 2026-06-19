@@ -83,11 +83,14 @@ int agent_wait(struct agent_event *event, int timeout_ticks);
 4. 超过 `timeout_ticks` 后返回 `AGENT_STATUS_TIMEOUT`。
 5. 成功消费事件后追加 Context record。
 
-`agentbench_ucore` 用 wait/wake 压测验证该路径：
+`agentbench_ucore` 先验证无事件等待会返回 timeout，并检查 `timeout_count` 增加；随后用 wait/wake 计时观测验证等待和唤醒路径：
 
 ```text
-agentbench_ucore: event_wait_wake ops=32 ticks=3 ops_per_tick=10 speedup_x100=100
+agentbench_ucore: timeout_heartbeat=1
+agentbench_ucore: event_wait_wake ops=8 ticks=2 ops_per_tick=4 speedup_x100=100
 ```
+
+这里的 `speedup_x100=100` 是 `event_wait_wake` 自身的计时基线，不表示相对另一个事件实现加速。
 
 ## Wake
 
@@ -132,7 +135,7 @@ int agent_heartbeat(int interval_ticks);
 3. 更新时间字段。
 4. 后续 `agent_info()` 可观察 last heartbeat tick。
 
-当前 `labdemo_ucore` 中 sentinel 启动后调用 heartbeat，用于证明 Agent Loop 元数据不只是文档字段，而是实际可设置。
+当前 `agentbench_ucore` 会调用 `agent_heartbeat()`，随后用 `agent_info()` 检查 `heartbeat_interval` 和 `last_heartbeat_tick`。这证明 Agent Loop 元数据不只是文档字段，而是实际可设置、可观察。
 
 ## 文件状态事件
 
@@ -184,9 +187,9 @@ agentos:event type=CONTEXT_SNAPSHOT role=investigator records=4 latest=4
 
 说明 investigator 的推理和工具调用历史可以通过 snapshot 查看。
 
-## 当前边界
+## 当前限制
 
-| 边界 | 说明 |
+| 限制项 | 说明 |
 | --- | --- |
 | 调度策略 | 当前没有实现优先级、抢占策略或长期任务队列 |
 | 事件容量 | 当前是简单事件状态和演示级投递，不是完整消息队列服务 |
@@ -205,7 +208,8 @@ agentfinal_ucore: event_wait=1 payload=self wake
 `agentbench_ucore`：
 
 ```text
-agentbench_ucore: event_wait_wake ops=32 ticks=3 ops_per_tick=10 speedup_x100=100
+agentbench_ucore: timeout_heartbeat=1
+agentbench_ucore: event_wait_wake ops=8 ticks=2 ops_per_tick=4 speedup_x100=100
 ```
 
 `labdemo_ucore`：
@@ -226,6 +230,6 @@ labdemo_ucore: passed
 - 事件优先级；
 - wait 取消；
 - 长期任务队列；
-- Agent 角色和能力绑定；
+- 更细粒度的角色/capability 策略；
 - 内核调度器感知 Agent 状态；
 - 与 LLM Gateway 联动，让 LLM 决定下一步工具调用。

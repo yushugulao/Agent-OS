@@ -21,6 +21,7 @@
 | G-4 | 提供用户态测试程序 | 已验证 | `user/src/agentfinal_ucore.c`、`user/src/agentbench_ucore.c`、`user/src/labdemo_ucore.c`、`user/src/agentsecurity_ucore.c` | [verification.md](verification.md) |
 | G-5 | 提供综合演示场景 | 已验证 | `user/src/labdemo_ucore.c` | `labdemo_ucore: passed` |
 | G-6 | 提供设计文档和运行说明 | 已验证 | [../README.md](../README.md)、[design.md](design.md)、[demo-script.md](demo-script.md) | 本文档、[verification.md](verification.md) |
+| G-7 | 保留代表性的 uCore 基础 syscall 兼容性 | 已验证 | `SYS_trace`、`SYS_mailread`、`SYS_mailwrite` | `ch3_trace` 输出 `Test trace OK!`；`agentsecurity_ucore: mail_basic=1` |
 
 ## 任务一：Agent 进程创建与地址空间设计
 
@@ -69,7 +70,7 @@
 | T4-6 | 查询写入 Context Path，可用于报告回放 | 已验证 | 文件查询和工具调用均追加 Context | `labdemo_ucore`、`context_snapshot` |
 | T4-7 | 文件元数据写入只能由具备权限的 Agent 执行 | 扩展增强 | `agent_file_meta_init()`、`agent_file_meta_set()` 要求 Agent 且具备 `AGENT_CAP_META_WRITE` | `agentsecurity_ucore: plain_process_denied=1`、`sentinel meta write denied` |
 | T4-8 | 索引初始化前查询安全 | 扩展增强 | `agentinit()` 初始化 status/stage/kind 索引桶为 `-1` | `agentsecurity_ucore: preinit_index_query=1` |
-| T4-9 | 多 run 恢复只修改目标 run | 扩展增强 | `rerun_stage` 支持 `stage=...;run_id=...;project=...` selector | `agentsecurity_ucore: scoped_rerun=1` |
+| T4-9 | 多 run 恢复和报告写入只修改目标 run | 扩展增强 | `rerun_stage` 和 `write_report` 支持 `stage=...;run_id=...;project=...` selector | `agentsecurity_ucore: scoped_rerun=1`、`agentsecurity_ucore: scoped_report=1` |
 | T4-10 | 对真实磁盘目录做持续后台扫描 | 未实现 | 无 | 后续增强方向 |
 
 ## 任务五：Agent Loop 内核运行机制
@@ -77,11 +78,11 @@
 | ID | 赛题要求 | 状态 | 实现位置 | 验证证据 |
 | --- | --- | --- | --- | --- |
 | T5-1 | Agent 可注册 watch | 已验证 | `agent_watch()`、`AGENT_TOOL_AGENT_WATCH` | `labdemo_ucore: WATCH_REGISTERED` |
-| T5-2 | Agent 可等待事件并 timeout | 已验证 | `agent_wait()`、`AGENT_STATUS_TIMEOUT` | `agentbench_ucore` wait/wake 压测 |
+| T5-2 | Agent 可等待事件并 timeout | 已验证 | `agent_wait()`、`AGENT_STATUS_TIMEOUT`、`timeout_count` | `agentbench_ucore: timeout_heartbeat=1` |
 | T5-3 | 文件状态变化能唤醒目标 Agent | 已验证 | `agent_file_meta_set()` 投递包含 status、stage、run_id、project 的 `AGENT_EVENT_FILE_STATUS` | `labdemo_ucore` sentinel 收到 failed 事件 |
 | T5-4 | 消息能触发 Agent 事件 | 已验证 | `send_message` 工具、`agent_wake()` | `labdemo_ucore` sentinel->investigator、investigator->recovery |
-| T5-5 | 心跳字段可设置并通过 Agent 信息观察 | 已验证 | `agent_heartbeat()`、`agent_info.last_heartbeat_tick` | `labdemo_ucore` Sentinel 调用 heartbeat |
-| T5-6 | event wait/wake 有性能对比 | 已验证 | `agentbench_ucore` | `agentbench_ucore: event_wait_wake` |
+| T5-5 | 心跳字段可设置并通过 Agent 信息观察 | 已验证 | `agent_heartbeat()`、`agent_info.heartbeat_interval`、`agent_info.last_heartbeat_tick` | `agentbench_ucore: timeout_heartbeat=1` |
+| T5-6 | event wait/wake 可计时观测并稳定完成 | 已验证 | `agentbench_ucore` | `agentbench_ucore: event_wait_wake`；该项以自身为基线，不作为相对加速结论 |
 | T5-7 | 事件处理写入 Context Path | 已验证 | `agent_wait()` 成功消费事件后追加 Context | `labdemo_ucore` 和 [task5-agent-loop.md](task5-agent-loop.md) |
 | T5-8 | 普通进程不能直接伪造事件 | 扩展增强 | `agent_wake()` 要求 Agent 且具备 `MESSAGE_SEND` 或 `ORCHESTRATE` | `agentsecurity_ucore` 普通进程调用 `agent_wake()` 返回 `-1` |
 
@@ -90,11 +91,11 @@
 | ID | 赛题方向 | 当前状态 | 说明 |
 | --- | --- | --- | --- |
 | T6-1 | 综合演示程序 | 已验证 | `labdemo_ucore` 串联任务一至五，输出 `agentos:event` |
-| T6-2 | 性能演示程序 | 已验证 | `agentbench_ucore` 输出批量工具、Context、文件查询和事件等待性能 |
-| T6-3 | 权限边界演示程序 | 已验证 | `agentsecurity_ucore` 输出普通进程拒绝、usershell 等价启动路径、初始化前索引查询、legacy mismatch、sentinel 伪造拒绝、recovery 幂等恢复和定向恢复 |
+| T6-2 | 性能和计时演示程序 | 已验证 | `agentbench_ucore` 输出批量工具、Context、文件查询性能，以及事件等待计时观测 |
+| T6-3 | 权限限制演示程序 | 已验证 | `agentsecurity_ucore` 输出普通进程拒绝、usershell 等价启动路径、初始化前索引查询、legacy mismatch、sentinel 伪造拒绝、recovery 幂等恢复和定向恢复 |
 | T6-4 | 云端 LLM Gateway | 未实现 | 当前只保留结构化事件和工具结果，尚未接真实云端 LLM |
 | T6-5 | 可视化大屏 | 未实现 | 当前已输出 `agentos:event`，大屏解析器尚未实现 |
 
 ## 追踪结论
 
-任务一至三已有增强实现和测试证据，并且在 Context 容量、批量工具调用、Context shadow 可信历史、snapshot 查询和性能测试方面高于最小要求。任务四和任务五已有可运行的演示级实现，并补充了内核真实 role/capability 授权和负向测试，能够支撑综合场景和性能对比。当前主要短板在真实文件系统后台索引、长期 Agent 调度策略、云端 LLM Gateway、可视化大屏、演示视频和答辩材料。
+任务一至三已有增强实现和测试证据，并且在 Context 容量、批量工具调用、Context shadow 可信历史、snapshot 查询和性能测试方面高于最小要求。任务四和任务五已有可运行的演示级实现，并补充了内核真实 role/capability 授权和负向测试，能够支撑综合场景、性能数据和事件计时观测。当前主要短板在真实文件系统后台索引、长期 Agent 调度策略、云端 LLM Gateway、可视化大屏、演示视频和答辩材料。

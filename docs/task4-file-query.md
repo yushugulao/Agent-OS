@@ -1,6 +1,6 @@
 # 任务四：面向 Agent 查询优化的文件系统扩展
 
-本文是 [design.md](design.md) 的任务四细节附录，重点说明 uCore 分支当前实现的文件元数据表、属性查询、索引路径、依赖查询和演示边界。
+本文是 [design.md](design.md) 的任务四细节附录，重点说明 uCore 分支当前实现的文件元数据表、属性查询、索引路径、依赖查询和演示范围。
 
 ## 目标
 
@@ -100,7 +100,13 @@ project=lab-gene-x;run_id=RUN-042;status=failed
 stage=align;run_id=RUN-999;project=lab-gene-x
 ```
 
-内核会同时匹配 stage、run_id 和 project。这样恢复动作不会因为同一个 stage 上存在多个 run 而误修改其他文件元数据。
+报告写入工具 `AGENT_TOOL_WRITE_REPORT` 也支持 selector 风格，例如：
+
+```text
+stage=report;run_id=RUN-999;project=lab-gene-x
+```
+
+内核会同时匹配 stage、run_id 和 project。这样恢复动作和报告写入不会因为同一个 stage 上存在多个 run 而误修改其他文件元数据。
 
 ## 与 Context Path 的关系
 
@@ -152,8 +158,8 @@ align+analyze+report+archive
 `agentbench_ucore` 对比扫描路径和索引路径：
 
 ```text
-agentbench_ucore: file_scan_query ops=1024 ticks=28 ops_per_tick=36 speedup_x100=100
-agentbench_ucore: file_index_query ops=1024 ticks=23 ops_per_tick=44 speedup_x100=121
+agentbench_ucore: file_scan_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=100
+agentbench_ucore: file_index_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=100
 ```
 
 这证明当前系统同时具备：
@@ -181,18 +187,19 @@ labdemo_ucore: final report_query hits=2 used_index=1 scanned=7
 - recovery 后能查询报告文件；
 - 查询路径使用索引。
 
-`agentsecurity_ucore` 中的文件查询和恢复边界证据：
+`agentsecurity_ucore` 中的文件查询和恢复范围证据：
 
 ```text
 agentsecurity_ucore: preinit_index_query=1
 agentsecurity_ucore: scoped_rerun=1
+agentsecurity_ucore: scoped_report=1
 ```
 
-这些输出说明索引初始化前查询安全，且 recovery 只恢复 selector 指定的 run。
+这些输出说明索引初始化前查询安全，且 recovery 只恢复和写入 selector 指定的 run。
 
-## 当前边界
+## 当前限制
 
-| 边界 | 说明 |
+| 限制项 | 说明 |
 | --- | --- |
 | 元数据来源 | 当前来自内核演示数据和 `agent_file_meta_set()` |
 | 真实文件系统扫描 | 尚未实现对目录树的持续后台扫描 |

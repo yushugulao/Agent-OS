@@ -84,7 +84,7 @@ agentfinal_ucore: tamper_protected=1
 5. 更新 count、head、oldest、latest、dropped。
 6. 同步用户镜像。
 
-手动 `context_push()` 使用同一个 sequence 流，保证手动记录和工具调用记录在同一时间线中。
+手动 `context_push()` 使用同一个 sequence 流，保证手动记录和工具调用记录按同一顺序排列。
 
 ## 查询接口
 
@@ -129,14 +129,14 @@ Context Path 有三种读取方式：
 `agentbench_ucore` 对比了 direct、query 和 snapshot：
 
 ```text
-agentbench_ucore: direct_context ops=50000 ticks=1 ops_per_tick=50000 speedup_x100=72631
-agentbench_ucore: context_query ops=256 ticks=3 ops_per_tick=85 speedup_x100=100
-agentbench_ucore: context_snapshot ops=32768 ticks=22 ops_per_tick=1489 speedup_x100=1745
+agentbench_ucore: direct_context ops=5000 ticks=1 ops_per_tick=5000 speedup_x100=9765
+agentbench_ucore: context_query ops=16 ticks=1 ops_per_tick=16 speedup_x100=100
+agentbench_ucore: context_snapshot ops=2048 ticks=1 ops_per_tick=2048 speedup_x100=12800
 ```
 
-## 当前边界
+## 当前限制
 
-| 边界 | 说明 |
+| 限制项 | 说明 |
 | --- | --- |
 | 历史容量 | 固定 128 条 |
 | 文本长度 | payload/result 各保存 16 字节摘要 |

@@ -1,6 +1,6 @@
 # 任务二：Agent 与内核结构化交互
 
-本文是 [design.md](design.md) 的任务二细节附录，重点展开结构化工具调用、工具表、错误语义和 Agent Context 写入路径。系统总体边界和 ABI 汇总见 [api.md](api.md)。
+本文是 [design.md](design.md) 的任务二细节附录，重点展开结构化工具调用、工具表、错误语义和 Agent Context 写入路径。系统总体接口分工和 ABI 汇总见 [api.md](api.md)。
 
 任务二的目标是在 Agent 进程机制基础上，提供 Agent 进程与内核之间的结构化工具调用接口。uCore 分支的最终热路径使用 `agent_op` / `agent_result` 和 `agent_run()` 批量 ABI，一次 syscall 最多执行 64 个工具 op；legacy `agent_request` / `agent_response` 仍保留作语义兼容。
 
@@ -74,7 +74,7 @@ legacy 请求和响应结构：
 | `dependency_query` | 12 | stage | 返回阶段影响范围 |
 | `capability_check` | 13 | legacy role、action | 按当前进程真实 capability 检查动作，并返回真实 role/capability |
 | `rerun_stage` | 14 | legacy role、stage | 只有具备 `RECOVER_STAGE` 的 Agent 可执行受控恢复动作 |
-| `write_report` | 15 | legacy role、payload | 只有具备 `REPORT_WRITE` 的 Agent 可写报告状态 |
+| `write_report` | 15 | legacy role、payload | 只有具备 `REPORT_WRITE` 的 Agent 可写报告状态；支持 `stage=report;run_id=...;project=...` selector |
 | `agent_watch` | 16 | event_type、filter | 注册事件 watch |
 | `agent_wait` | 17 | timeout | 工具表可发现项；实际等待用 syscall |
 | `agent_heartbeat` | 18 | interval | 设置心跳 |
@@ -132,8 +132,8 @@ agentfinal_ucore: passed
 `agentbench_ucore`：
 
 ```text
-agentbench_ucore: scalar_agent_run ops=8192 ticks=119 ops_per_tick=68 speedup_x100=100
-agentbench_ucore: batch_agent_run ops=8192 ticks=72 ops_per_tick=113 speedup_x100=165
+agentbench_ucore: scalar_agent_run ops=256 ticks=5 ops_per_tick=51 speedup_x100=100
+agentbench_ucore: batch_agent_run ops=256 ticks=1 ops_per_tick=256 speedup_x100=500
 ```
 
 `labdemo_ucore`：

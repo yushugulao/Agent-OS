@@ -134,21 +134,23 @@ static void run_recovery(void)
 		AGENT_ROLE_RECOVERY, "rerun_stage");
 	run_one(&op, &res, AGENT_STATUS_OK, "capability");
 	make_op(&op, AGENT_TOOL_RERUN_STAGE, 4201, AGENT_ROLE_RECOVERY,
-		"align");
+		"stage=align;run_id=RUN-042;project=lab-gene-x");
 	run_one(&op, &res, AGENT_STATUS_OK, "rerun align");
 	printf("agentos:event type=ACTION role=recovery stage=align status=OK seq=%d\n",
 	       (int)res.sequence);
 	make_op(&op, AGENT_TOOL_RERUN_STAGE, 4201, AGENT_ROLE_RECOVERY,
-		"align");
+		"stage=align;run_id=RUN-042;project=lab-gene-x");
 	run_one(&op, &res, AGENT_STATUS_DUPLICATE, "duplicate");
 	printf("agentos:event type=AUDIT role=recovery action=rerun_align result=DUPLICATE seq=%d\n",
 	       (int)res.sequence);
 	make_op(&op, AGENT_TOOL_WRITE_REPORT, 4202, AGENT_ROLE_RECOVERY,
-		"RUN-042 recovery report");
+		"stage=report;run_id=RUN-042;project=lab-gene-x");
 	run_one(&op, &res, AGENT_STATUS_OK, "write report");
 	memset(&query, 0, sizeof(query));
 	query.flags = AGENT_FILE_QUERY_USE_INDEX;
 	query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(query.project, "lab-gene-x");
+	strcpy(query.run_id, "RUN-042");
 	strcpy(query.status, "ok");
 	strcpy(query.kind, "report");
 	check(agent_file_query(&query, &result) >= 1, "final query");

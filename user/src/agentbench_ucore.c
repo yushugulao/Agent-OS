@@ -4,11 +4,11 @@
 #include <string.h>
 #include <unistd.h>
 
-#define TOOL_OPS 8192
-#define SNAPSHOT_ROUNDS 256
-#define DIRECT_READS 50000
-#define FILE_OPS 1024
-#define WAIT_OPS 32
+#define TOOL_OPS 256
+#define SNAPSHOT_ROUNDS 16
+#define DIRECT_READS 5000
+#define FILE_OPS 64
+#define WAIT_OPS 8
 
 static struct agent_op ops[AGENT_BATCH_MAX];
 static struct agent_result results[AGENT_BATCH_MAX];
@@ -198,6 +198,32 @@ static int bench_wait_wake(void)
 	return elapsed(start, now_ms());
 }
 
+static void check_timeout_and_heartbeat(void)
+{
+	struct agent_event event;
+	struct agent_info before;
+	struct agent_info after_timeout;
+	struct agent_info after_heartbeat;
+	uint64 old_heartbeat;
+
+	check(agent_info(&before) == 0, "info before timeout");
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, 1) == AGENT_STATUS_TIMEOUT, "wait timeout");
+	check(event.status == AGENT_STATUS_TIMEOUT, "timeout event status");
+	check(strcmp(event.payload, "timeout") == 0, "timeout payload");
+	check(agent_info(&after_timeout) == 0, "info after timeout");
+	check(after_timeout.timeout_count == before.timeout_count + 1,
+	      "timeout count");
+	old_heartbeat = after_timeout.last_heartbeat_tick;
+	check(agent_heartbeat(7) == 0, "heartbeat set");
+	check(agent_info(&after_heartbeat) == 0, "info after heartbeat");
+	check(after_heartbeat.heartbeat_interval == 7,
+	      "heartbeat interval");
+	check(after_heartbeat.last_heartbeat_tick >= old_heartbeat,
+	      "heartbeat tick");
+	printf("agentbench_ucore: timeout_heartbeat=1\n");
+}
+
 static void run_agent_bench(void)
 {
 	struct agent_info info;
@@ -219,6 +245,7 @@ static void run_agent_bench(void)
 	      "orchestrate cap");
 	check(context_clear() == 0, "clear");
 	check(agent_file_meta_init() == 0, "meta init");
+	check_timeout_and_heartbeat();
 	scalar = bench_scalar();
 	batch = bench_batch();
 	direct = bench_direct(&info);

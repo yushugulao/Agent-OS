@@ -16,7 +16,7 @@
 
 本项目围绕 Agent-OS 赛题，在 uCore 教学操作系统内核中实现面向 Agent 的内核支持层。当前系统能够识别 Agent 进程，提供结构化内核工具调用，维护 Agent 多轮工具调用历史，并扩展出文件元数据查询、事件等待/唤醒和多 Agent 故障恢复演示。
 
-uCore 分支不是只做任务一至三的最小版本。当前交付以任务一、任务二、任务三为高性能底座，同时实现了任务四、任务五和任务六的可运行演示级能力。文档结构按旧版项目文档风格重构：README 负责快速运行和材料索引，主设计文档解释架构和关键决策，API/ABI 文档说明用户态与内核边界，验证文档给出可复现证据，分任务文档展开细节。
+uCore 分支不是只做任务一至三的最小版本。当前交付以任务一、任务二、任务三为高性能底座，同时实现了任务四、任务五和任务六的可运行演示级能力。文档结构按旧版项目文档风格重构：README 负责快速运行和材料索引，主设计文档解释架构和关键决策，API/ABI 文档说明用户态与内核的接口分工，验证文档给出可复现证据，分任务文档展开细节。
 
 ## 基底来源
 
@@ -35,6 +35,8 @@ uCore 分支不是只做任务一至三的最小版本。当前交付以任务�
 - `user/src/agentsecurity_ucore.c`
 
 `os/` 是内核目录，`user/` 是用户态程序与测试目录，`nfs/` 用于生成用户程序文件系统镜像。
+
+交付验收主路径使用 `CHAPTER=agent`。同时，内核保留并补充了部分 uCore 基础接口，例如 `trace` 和普通进程 mail；验证材料中包含 `ch3_trace` 抽测，用于证明代表性的基础 syscall 仍可运行。仓库中其他 chapter 测试文件保留为教学代码材料，不作为本项目最终验收入口。
 
 ## 赛题对应关系
 
@@ -67,6 +69,8 @@ uCore 分支不是只做任务一至三的最小版本。当前交付以任务�
 
 ```bash
 cd project61-agentOS-happylegend-uCore
+make -C user clean
+make clean
 make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=agent
 make build TOOLPREFIX=riscv64-linux-gnu- LOG=warn INIT_PROC=agentfinal_ucore
 ```
@@ -84,6 +88,15 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfinal_ucore CHAP
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent
+```
+
+代表性 uCore 基础 syscall 抽测：
+
+```bash
+make -C user clean
+make clean
+make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=3
+timeout 60s make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=ch3_trace CHAPTER=3
 ```
 
 如果希望进入用户 shell，可以运行：
@@ -108,9 +121,9 @@ shell 中启动的测试程序是 `usershell` 的直接普通子进程，内核�
 | 程序 | 定位 | 期望通过输出 |
 | --- | --- | --- |
 | `agentfinal_ucore` | 任务一至三功能验收，同时覆盖文件索引和事件自唤醒 | `agentfinal_ucore: parent passed` |
-| `agentbench_ucore` | 任务一至五性能验证，包括 batch、direct context、snapshot、文件查询和 wait/wake | `agentbench_ucore: parent passed` |
+| `agentbench_ucore` | 任务一至五性能与计时验证，包括 batch、direct context、snapshot、文件查询、timeout/heartbeat 和 wait/wake | `agentbench_ucore: parent passed` |
 | `labdemo_ucore` | 多 Agent 综合演示，普通 init 只启动 orchestrator，后续元数据初始化、事件注入和角色 Agent 创建都由 orchestrator 完成 | `labdemo_ucore: parent passed` |
-| `agentsecurity_ucore` | 权限边界负向测试，覆盖初始化前索引查询、legacy mismatch、普通进程直接写元数据/投事件、sentinel 伪造 recovery、多 run 定向恢复 | `agentsecurity_ucore: parent passed` |
+| `agentsecurity_ucore` | 权限限制负向测试，覆盖初始化前索引查询、legacy mismatch、普通进程直接写元数据/投事件、sentinel 伪造 recovery、多 run 定向恢复 | `agentsecurity_ucore: parent passed` |
 
 `agentfinal_ucore` 预期输出包括：
 
@@ -128,6 +141,7 @@ agentfinal_ucore: passed
 `agentbench_ucore` 输出性能表，字段含义如下：
 
 ```text
+agentbench_ucore: timeout_heartbeat=1
 agentbench_ucore: case ops ticks ops_per_tick speedup_x100
 ```
 
@@ -151,6 +165,7 @@ labdemo_ucore: parent passed
 `agentsecurity_ucore` 预期输出包括：
 
 ```text
+agentsecurity_ucore: mail_basic=1
 agentsecurity_ucore: plain_process_denied=1
 agentsecurity_ucore: role=orchestrator_child capability_checked=1
 agentsecurity_ucore: plain_child_orchestrator=1
@@ -162,6 +177,7 @@ agentsecurity_ucore: sentinel spoof_denied=1
 agentsecurity_ucore: role=recovery capability_checked=1
 agentsecurity_ucore: recovery rerun_ok=1 duplicate=1
 agentsecurity_ucore: scoped_rerun=1
+agentsecurity_ucore: scoped_report=1
 agentsecurity_ucore: passed
 agentsecurity_ucore: parent passed
 ```
