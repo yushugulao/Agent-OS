@@ -29,7 +29,7 @@ legacy 请求和响应结构：
 | --- | --- |
 | `struct agent_request` | `version`、`tool_id`、`tool_name`、`request_id`、`arg0_key`、`arg0_type`、`arg0`、`arg1_key`、`arg1_type`、`arg1`、`payload_key`、`payload_type`、`payload` |
 | `struct agent_response` | `version`、`status`、`tool_id`、`tool_name`、`request_id`、`sequence`、`value0`、`value1`、`value2`、`result` |
-| `struct agent_tool_desc` | `tool_id`、`name`、`params`、`description` |
+| `struct agent_tool_desc` | `tool_id`、`flags`、`name`、`params`、`description` |
 
 `agent_run()` 只走 `tool_id`，避免热路径字符串扫描。legacy 请求既可以通过 `tool_id` 选择工具，也可以通过 `tool_name` 选择工具。
 
@@ -56,7 +56,7 @@ legacy 请求和响应结构：
 
 ## 内核工具
 
-当前实现 18 个工具，任务二基础工具和任务四、五扩展工具共用同一套工具表：
+当前实现 19 个工具，任务二基础工具和任务四、五扩展工具共用同一套工具表：
 
 | 工具 | `tool_id` | 输入 | 输出 |
 | --- | ---: | --- | --- |
@@ -76,8 +76,9 @@ legacy 请求和响应结构：
 | `rerun_stage` | 14 | legacy role、stage | 只有具备 `RECOVER_STAGE` 的 Agent 可执行受控恢复动作 |
 | `write_report` | 15 | legacy role、payload | 只有具备 `REPORT_WRITE` 的 Agent 可写报告状态；支持 `stage=report;run_id=...;project=...` selector |
 | `agent_watch` | 16 | event_type、filter | 注册事件 watch |
-| `agent_wait` | 17 | timeout | 工具表可发现项；实际等待用 syscall |
-| `agent_heartbeat` | 18 | interval | 设置心跳 |
+| `agent_wait` | 17 | timeout | syscall-only 工具表可发现项；`agent_run()` 调用返回 `AGENT_STATUS_BAD_PARAM` |
+| `agent_heartbeat` | 18 | interval | 设置或停止心跳，`interval=0` 表示停止 |
+| `context_push` | 19 | record | 手动 Context 节点使用的内部工具 ID |
 
 ## 错误处理
 
@@ -116,7 +117,8 @@ legacy 请求和响应结构：
 - 文件属性查询可以作为 `AGENT_TOOL_QUERY_FILE` 执行；
 - 文件摘要和依赖查询作为工具执行；
 - 权限检查和恢复动作作为工具执行；
-- watch 和 heartbeat 可以通过工具表发现；
+- watch、heartbeat 和 context push 可以通过工具表发现；
+- `agent_wait` 只允许通过 `agent_wait()` syscall 执行，避免在批量热路径中阻塞整个 batch；
 - wait/wake 使用独立 syscall，因为 wait 可能阻塞，不适合作为 batch 热路径。
 
 ## 验证证据

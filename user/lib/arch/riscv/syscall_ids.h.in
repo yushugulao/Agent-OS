@@ -315,3 +315,5 @@
 #define __NR_agent_file_meta_set 515
 #define __NR_agent_file_query 516
 #define __NR_agent_create_role 517
+#define __NR_agent_unwatch 518
+#define __NR_context_detail 519

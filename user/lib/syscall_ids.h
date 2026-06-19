@@ -312,3 +312,5 @@
 #define SYS_agent_file_meta_set 515
 #define SYS_agent_file_query 516
 #define SYS_agent_create_role 517
+#define SYS_agent_unwatch 518
+#define SYS_context_detail 519

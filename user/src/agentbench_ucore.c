@@ -13,6 +13,9 @@
 static struct agent_op ops[AGENT_BATCH_MAX];
 static struct agent_result results[AGENT_BATCH_MAX];
 static struct agent_context_record records[AGENT_CONTEXT_MAX_RECORDS];
+static struct agent_file_meta bench_meta;
+static struct agent_file_query bench_file_query_arg;
+static struct agent_file_query_result bench_file_query_result;
 
 static void check(int ok, const char *msg)
 {
@@ -51,6 +54,39 @@ static void fill_echo_batch(uint64 base)
 		ops[i].arg0 = i;
 		ops[i].arg1 = i + 1;
 		strcpy(ops[i].payload, "bench");
+	}
+}
+
+static void make_code(char *out, char prefix, int n)
+{
+	out[0] = prefix;
+	out[1] = '0' + (n / 100) % 10;
+	out[2] = '0' + (n / 10) % 10;
+	out[3] = '0' + n % 10;
+	out[4] = 0;
+}
+
+static void seed_file_bench_metadata(void)
+{
+	char name[8];
+	char status[8];
+
+	for (int i = 0; i < 100; i++) {
+		make_code(name, 'p', i);
+		make_code(status, 'b', i);
+		memset(&bench_meta, 0, sizeof(bench_meta));
+		bench_meta.fid = 500 + i;
+		strcpy(bench_meta.physical_name, name);
+		strcpy(bench_meta.logical_path, name);
+		strcpy(bench_meta.project, "bench");
+		strcpy(bench_meta.workflow, "metadata");
+		strcpy(bench_meta.run_id, "RUN-BENCH");
+		strcpy(bench_meta.stage, "bulk");
+		strcpy(bench_meta.kind, "artifact");
+		strcpy(bench_meta.status, status);
+		strcpy(bench_meta.summary, "benchmark metadata");
+		bench_meta.dependency_mask = AGENT_DEP_PREPARE;
+		check(agent_file_meta_set(&bench_meta) == 0, "bench meta set");
 	}
 }
 
@@ -128,21 +164,22 @@ static int bench_snapshot(int *total)
 
 static int bench_file_query(uint64 flags)
 {
-	struct agent_file_query q;
-	struct agent_file_query_result r;
 	int start;
 
-	memset(&q, 0, sizeof(q));
-	q.flags = flags;
-	q.max_hits = AGENT_FILE_QUERY_MAX_HITS;
-	strcpy(q.project, "lab-gene-x");
-	strcpy(q.workflow, "nightly-regression");
-	strcpy(q.run_id, "RUN-042");
-	strcpy(q.stage, "align");
+	memset(&bench_file_query_arg, 0, sizeof(bench_file_query_arg));
+	bench_file_query_arg.flags = flags;
+	bench_file_query_arg.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(bench_file_query_arg.project, "bench");
+	strcpy(bench_file_query_arg.workflow, "metadata");
+	strcpy(bench_file_query_arg.run_id, "RUN-BENCH");
+	strcpy(bench_file_query_arg.stage, "bulk");
+	strcpy(bench_file_query_arg.status, "b042");
 	start = now_ms();
 	for (int i = 0; i < FILE_OPS; i++) {
-		check(agent_file_query(&q, &r) >= 1, "file query");
-		check(r.total_hits >= 1, "file hits");
+		check(agent_file_query(&bench_file_query_arg,
+				       &bench_file_query_result) >= 1,
+		      "file query");
+		check(bench_file_query_result.total_hits >= 1, "file hits");
 	}
 	return elapsed(start, now_ms());
 }
@@ -245,6 +282,7 @@ static void run_agent_bench(void)
 	      "orchestrate cap");
 	check(context_clear() == 0, "clear");
 	check(agent_file_meta_init() == 0, "meta init");
+	seed_file_bench_metadata();
 	check_timeout_and_heartbeat();
 	scalar = bench_scalar();
 	batch = bench_batch();

@@ -28,32 +28,36 @@
    - 直接读取 latest result 的 sequence 为 64。
 10. 子进程调用 `context_snapshot()`，检查返回 64 条有序记录。
 11. 子进程检查第 8 条记录的 payload/result 短文本为 `ucore-final`。
-12. 子进程手动篡改用户态 Context 镜像中的第一条记录 sequence。
-13. 子进程再次调用 `context_snapshot()`。
-14. 子进程检查 snapshot 返回的第一条记录仍为原始 sequence，并检查用户镜像被刷新。
-15. 子进程继续批量写入 128 条记录，使总调用达到 192 条。
-16. 子进程再次 snapshot，检查 FIFO 淘汰：
+12. 子进程调用 `context_detail()`，检查完整 `agent_op`、完整 `agent_result` 和 `SYSTEM` flag。
+13. 子进程手动篡改用户态 Context 镜像中的第一条记录 sequence。
+14. 子进程再次调用 `context_snapshot()`。
+15. 子进程检查 snapshot 返回的第一条记录仍为原始 sequence，并检查用户镜像被刷新。
+16. 子进程调用 `context_push()` 追加手动记录，检查 `MANUAL` flag 和 detail ring。
+17. 子进程继续批量写入 128 条记录，使总记录达到 193 条。
+18. 子进程再次 snapshot，检查 FIFO 淘汰：
    - count 为 128；
-   - oldest 为 65；
-   - latest 为 192；
-   - dropped 为 64。
-17. 子进程调用 `agent_file_meta_init()` 初始化文件元数据。
-18. 子进程按 `project=lab-gene-x`、`run_id=RUN-042`、`stage=align` 查询文件。
-19. 子进程检查查询命中，且 `used_index == 1`。
-20. 子进程注册 message watch。
-21. 子进程用 `agent_wake()` 向自己投递事件。
-22. 子进程调用 `agent_wait()`，检查成功收到 `self wake`。
-23. 子进程输出 `agentfinal_ucore: passed` 并退出。
-24. 父进程等待子进程退出，检查退出状态为 0，输出 `agentfinal_ucore: parent passed`。
+   - oldest 为 66；
+   - latest 为 193；
+   - dropped 为 65。
+19. 子进程调用 `agent_file_meta_init()` 初始化文件元数据。
+20. 子进程按 `project=lab-gene-x`、`run_id=RUN-042`、`stage=align` 查询文件。
+21. 子进程检查查询命中，且 `used_index == 1`。
+22. 子进程注册 message watch。
+23. 子进程用 `agent_wake()` 向自己投递事件。
+24. 子进程调用 `agent_wait()`，检查成功收到 `self wake`。
+25. 子进程输出 `agentfinal_ucore: passed` 并退出。
+26. 父进程等待子进程退出，检查退出状态为 0，输出 `agentfinal_ucore: parent passed`。
 
 ### 1.2 关键输出
 
 ```text
-agentfinal_ucore: context size=16384 capacity=128
+agentfinal_ucore: context size=20480 capacity=128
 agentfinal_ucore: batch first_seq=1 last_seq=64
 agentfinal_ucore: short_text_history=1 payload=ucore-final result=ucore-final
+agentfinal_ucore: context_detail=1 sequence=8
 agentfinal_ucore: tamper_protected=1
-agentfinal_ucore: fifo oldest=65 latest=192 dropped=64
+agentfinal_ucore: record_flags system=1 manual=1 truncated=0
+agentfinal_ucore: fifo oldest=66 latest=193 dropped=65
 agentfinal_ucore: file_query hits=2 scanned=2 used_index=1
 agentfinal_ucore: event_wait=1 payload=self wake
 agentfinal_ucore: passed
@@ -70,19 +74,101 @@ agentfinal_ucore: parent passed
 | 批量工具调用 | 一次 `agent_run()` 执行 64 个 echo op |
 | Context Path 写入 | snapshot 返回 64 条记录 |
 | 短文本历史 | payload/result 短摘要可查询 |
+| 完整详情 | `context_detail()` 返回完整 op/result 和 flags |
 | shadow 防篡改 | 用户镜像被写坏后，snapshot 仍返回权威历史 |
-| FIFO 淘汰 | 192 条调用后只保留 128 条，oldest/latest/dropped 正确 |
+| 手动记录 | `context_push()` 记录 `MANUAL` flag |
+| FIFO 淘汰 | 193 条记录后只保留 128 条，oldest/latest/dropped 正确 |
 | 文件索引 | `agent_file_query()` 使用索引路径 |
 | Agent 事件 | watch/wake/wait 自唤醒成功 |
 | 特权 Agent 能力 | orchestrator 能初始化文件元数据并向自身投递事件 |
 
-## 2. `agentbench_ucore`
+## 2. `agentfs_ucore`
+
+`agentfs_ucore` 是任务四文件系统能力测试，重点证明 Agent 文件元数据不只是内存演示表，而是能绑定真实根目录文件 inode，并写入 `.agentmeta` 隐藏元数据文件。
+
+### 2.1 测试流程
+
+1. 父进程创建 orchestrator Agent 子进程。
+2. 子进程调用 `agent_file_meta_init()`，加载或创建默认真实演示文件。
+3. 子进程查询默认 `RUN-042` 文件，检查返回项包含真实 `dev`、`inum` 和 `size`。
+4. 子进程创建自定义真实文件，写入内容。
+5. 子进程用 `agent_file_meta_set()` 将自定义逻辑属性绑定到该真实文件。
+6. 子进程查询自定义文件，检查 `dev + inum` 和文件大小与真实文件一致。
+7. 子进程写入接近 128 条真实文件元数据，制造足够的数据量。
+8. 子进程分别运行扫描查询和索引查询，检查索引路径的 `scanned_records` 明显更少。
+9. 子进程清空某条记录的 status，确认属性更新生效。
+10. 子进程删除绑定文件，确认关联元数据随文件删除被清理。
+11. 子进程调用 `write_report` 指向不存在的 selector，确认返回 `AGENT_STATUS_NOT_FOUND`。
+
+### 2.2 关键输出
+
+```text
+agentfs_ucore: default_inode dev=1 inum=11 scanned=2
+agentfs_ucore: custom_inode dev=1 inum=17 size=7
+agentfs_ucore: bulk_index scan=108 index=6 hits=1
+agentfs_ucore: clear_status=1
+agentfs_ucore: delete_clears_metadata=1
+agentfs_ucore: missing_selector_not_found=1
+agentfs_ucore: passed
+agentfs_ucore: parent passed
+```
+
+### 2.3 覆盖结论
+
+| 覆盖点 | 证明方式 |
+| --- | --- |
+| 真实 inode 绑定 | 查询结果返回 `dev`、`inum`、`size` |
+| `.agentmeta` 可写入 | 默认元数据来自 `.agentmeta` 或初始化后写入的固定格式表 |
+| scan/index 差异 | 接近 128 条记录下输出 `bulk_index scan=108 index=6` |
+| 属性删除 | 清空 status 后查询行为符合预期 |
+| 文件删除同步 | 删除真实文件后关联元数据被清理 |
+| 未命中 selector | `write_report` 对不存在目标返回 `AGENT_STATUS_NOT_FOUND` |
+
+## 3. `agentloop_ucore`
+
+`agentloop_ucore` 是任务五事件运行机制测试，重点证明 FIFO 事件队列、watch/unwatch、timeout 和 heartbeat stop 都可运行。
+
+### 3.1 测试流程
+
+1. 父进程创建 orchestrator Agent 子进程。
+2. 子进程注册 message watch。
+3. 子进程连续投递多个事件，调用 `agent_wait()` 检查 FIFO 顺序。
+4. 子进程填满 16 槽事件队列，再尝试投递第 17 个事件，确认返回 `AGENT_STATUS_NO_SPACE` 且旧事件没有被覆盖。
+5. 子进程删除 watch，再投递相同事件，确认不会唤醒。
+6. 子进程重新注册 watch，调用有限 timeout wait，确认线程进入睡眠并由 timeout 唤醒。
+7. 子进程注册 TIMER watch，启动 heartbeat，确认 heartbeat 事件可唤醒等待。
+8. 子进程调用 `agent_heartbeat_stop()`，确认停止后不再产生 heartbeat 事件。
+
+### 3.2 关键输出
+
+```text
+agentloop_ucore: fifo=1
+agentloop_ucore: overflow_dropped=1
+agentloop_ucore: unwatch=1
+agentloop_ucore: timeout_sleep=1
+agentloop_ucore: heartbeat_wake_stop=1
+agentloop_ucore: passed
+agentloop_ucore: parent passed
+```
+
+### 3.3 覆盖结论
+
+| 覆盖点 | 证明方式 |
+| --- | --- |
+| FIFO 顺序 | 多事件按投递顺序被消费 |
+| 队列满语义 | 满队列返回 `AGENT_STATUS_NO_SPACE`，旧事件不被覆盖 |
+| watch 删除 | `agent_unwatch()` 后相同事件不再匹配 |
+| timeout 计数 | 有限 timeout wait 返回 `AGENT_STATUS_TIMEOUT`，并更新等待和超时统计 |
+| heartbeat 唤醒 | 注册 TIMER watch 后可收到 heartbeat 事件 |
+| heartbeat 停止 | stop 后不再继续产生 heartbeat 事件 |
+
+## 4. `agentbench_ucore`
 
 `agentbench_ucore` 是性能和吞吐测试。它不使用固定耗时阈值，而是输出可对比的 tick 统计。
 
 benchmark 主进程通过 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)` 创建 orchestrator Agent，文件元数据初始化、文件查询、事件投递等需要权限的操作都在 orchestrator 内执行。wait/wake 子测试中的 waiter Agent 使用最低权限 sentinel role。
 
-### 2.1 测试项目
+### 4.1 测试项目
 
 | 项目 | 操作数 | 测试内容 |
 | --- | ---: | --- |
@@ -96,7 +182,7 @@ benchmark 主进程通过 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)` 创建 or
 | `timeout_heartbeat` | 1 | 验证无事件等待返回 timeout，且 heartbeat 字段可通过 `agent_info()` 观察 |
 | `event_wait_wake` | 8 | 父进程多次唤醒等待中的 Agent 子进程，并输出计时观测 |
 
-### 2.2 输出字段
+### 4.2 输出字段
 
 | 字段 | 含义 |
 | --- | --- |
@@ -105,24 +191,24 @@ benchmark 主进程通过 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)` 创建 or
 | `ops_per_tick` | 每 tick 完成的操作数 |
 | `speedup_x100` | 相对基线放大 100 倍后的速度比 |
 
-### 2.3 当前样例输出
+### 4.3 当前样例输出
 
 ```text
 agentbench_ucore: timeout_heartbeat=1
 agentbench_ucore: case ops ticks ops_per_tick speedup_x100
-agentbench_ucore: scalar_agent_run ops=256 ticks=4 ops_per_tick=64 speedup_x100=100
-agentbench_ucore: batch_agent_run ops=256 ticks=2 ops_per_tick=128 speedup_x100=200
-agentbench_ucore: direct_context ops=5000 ticks=1 ops_per_tick=5000 speedup_x100=7812
+agentbench_ucore: scalar_agent_run ops=256 ticks=5 ops_per_tick=51 speedup_x100=100
+agentbench_ucore: batch_agent_run ops=256 ticks=2 ops_per_tick=128 speedup_x100=250
+agentbench_ucore: direct_context ops=5000 ticks=1 ops_per_tick=5000 speedup_x100=9765
 agentbench_ucore: context_query ops=16 ticks=1 ops_per_tick=16 speedup_x100=100
 agentbench_ucore: context_snapshot ops=2048 ticks=2 ops_per_tick=1024 speedup_x100=6400
-agentbench_ucore: file_scan_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=100
-agentbench_ucore: file_index_query ops=64 ticks=1 ops_per_tick=64 speedup_x100=200
+agentbench_ucore: file_scan_query ops=64 ticks=5 ops_per_tick=12 speedup_x100=100
+agentbench_ucore: file_index_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=250
 agentbench_ucore: event_wait_wake ops=8 ticks=2 ops_per_tick=4 speedup_x100=100
 agentbench_ucore: passed
 agentbench_ucore: parent passed
 ```
 
-### 2.4 性能解释
+### 4.4 性能解释
 
 | 对比 | 设计含义 |
 | --- | --- |
@@ -135,11 +221,11 @@ agentbench_ucore: parent passed
 
 tick 数值随环境波动，评审时应结合设计解释看相对趋势。
 
-## 3. `labdemo_ucore`
+## 5. `labdemo_ucore`
 
 `labdemo_ucore` 是面向答辩的最终场景测试。它把底层能力串成一个可解释的多 Agent 工作流。
 
-### 3.1 场景设定
+### 5.1 场景设定
 
 实验流水线包含多个阶段：
 
@@ -157,7 +243,7 @@ tick 数值随环境波动，评审时应结合设计解释看相对趋势。
 | investigator | 查询失败原因和影响范围 |
 | recovery | 执行受控恢复动作并验证结果 |
 
-### 3.2 流程
+### 5.2 流程
 
 1. 普通 init 调用 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)` 创建 orchestrator。
 2. orchestrator 调用 `agent_file_meta_init()` 安装演示文件元数据。
@@ -183,7 +269,7 @@ tick 数值随环境波动，评审时应结合设计解释看相对趋势。
 22. orchestrator 等待三个角色 Agent 退出，输出 `labdemo_ucore: passed`。
 23. 普通 init 等待 orchestrator 退出，输出 `labdemo_ucore: parent passed`。
 
-### 3.3 关键输出
+### 5.3 关键输出
 
 ```text
 agentos:event type=WATCH_REGISTERED role=sentinel filter=status=failed
@@ -201,7 +287,7 @@ agentos:event type=FINAL status=RECOVERED
 labdemo_ucore: passed
 ```
 
-### 3.4 覆盖结论
+### 5.4 覆盖结论
 
 | 覆盖点 | 证明方式 |
 | --- | --- |
@@ -216,11 +302,11 @@ labdemo_ucore: passed
 | 幂等恢复 | recovery 第二次 rerun 返回 duplicate |
 | 最终状态 | 输出 `FINAL status=RECOVERED` |
 
-## 4. `agentsecurity_ucore`
+## 6. `agentsecurity_ucore`
 
 `agentsecurity_ucore` 是权限限制负向测试，专门覆盖审阅中指出的“普通进程能直接改全局元数据或伪造事件”“用户态自报 role 可绕过权限”的问题。
 
-### 4.1 测试流程
+### 6.1 测试流程
 
 1. 普通 init 验证 `mailread()` 无消息返回 0，`mailwrite()` 写入自己成功，随后 `mailread()` 能读回相同内容。
 2. 普通 init 调用 `agent_wake()`，预期返回 `-1`。
@@ -248,7 +334,7 @@ labdemo_ucore: passed
 24. orchestrator 查询 `RUN-999` 的 align 和 report 变为 ok，`RUN-042` 仍为 failed，证明恢复和报告写入没有跨 run 修改。
 25. 测试输出 `agentsecurity_ucore: passed` 和 `agentsecurity_ucore: parent passed`。
 
-### 4.2 关键输出
+### 6.2 关键输出
 
 ```text
 agentsecurity_ucore: mail_basic=1
@@ -258,6 +344,7 @@ agentsecurity_ucore: plain_child_orchestrator=1
 agentsecurity_ucore: role=orchestrator capability_checked=1
 agentsecurity_ucore: preinit_index_query=1
 agentsecurity_ucore: legacy_tool_mismatch=1
+agentsecurity_ucore: legacy_param_validation=1 syscall_only=1
 agentsecurity_ucore: role=sentinel capability_checked=1
 agentsecurity_ucore: sentinel spoof_denied=1
 agentsecurity_ucore: role=recovery capability_checked=1
@@ -268,7 +355,7 @@ agentsecurity_ucore: passed
 agentsecurity_ucore: parent passed
 ```
 
-### 4.3 覆盖结论
+### 6.3 覆盖结论
 
 | 覆盖点 | 证明方式 |
 | --- | --- |
@@ -278,13 +365,14 @@ agentsecurity_ucore: parent passed
 | usershell 手动运行路径可用 | pid 1 的普通直接子进程可创建 orchestrator |
 | 初始化前索引查询安全 | 未调用 `agent_file_meta_init()` 前，索引查询返回 0 条命中且不阻塞 |
 | legacy 工具名和工具 ID 不一致会失败 | `agent_call()` 返回 `AGENT_STATUS_BAD_REQUEST` 和 `tool_mismatch` |
+| legacy 参数键和类型校验 | 错误参数返回 `AGENT_STATUS_BAD_PARAM`，syscall-only 工具不能走 batch |
 | 用户态 role 参数不可信 | sentinel 伪造 recovery 仍被拒绝 |
 | 文件状态拒绝路径无副作用 | sentinel 伪造 rerun 后 align 仍为 failed |
 | recovery 权限来自真实 PCB 字段 | recovery 即使传入 sentinel role，也能按真实权限恢复 |
 | 重复恢复被识别 | 相同 corr_id 第二次 rerun 返回 duplicate |
 | 多 run 恢复和报告写入不会误伤 | 只恢复和写入 selector 指定的 `RUN-999`，`RUN-042` 保持 failed |
 
-## 5. 运行方式和复现建议
+## 7. 运行方式和复现建议
 
 推荐用脚本运行完整测试：
 
@@ -296,6 +384,8 @@ bash scripts/run-agent-tests.sh
 
 ```bash
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfinal_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfs_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentloop_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent

@@ -32,7 +32,11 @@
 #define AGENT_TOOL_AGENT_WATCH       16
 #define AGENT_TOOL_AGENT_WAIT        17
 #define AGENT_TOOL_AGENT_HEARTBEAT   18
-#define AGENT_TOOL_COUNT             18
+#define AGENT_TOOL_CONTEXT_PUSH      19
+#define AGENT_TOOL_COUNT             19
+
+#define AGENT_TOOL_F_CALLABLE     1
+#define AGENT_TOOL_F_SYSCALL_ONLY 2
 
 #define AGENT_STATUS_OK           0
 #define AGENT_STATUS_BAD_REQUEST -1
@@ -61,8 +65,8 @@
 #define AGENT_BATCH_MAX         64
 
 #define AGENT_CONTEXT_MAGIC       0x4147435458543031ULL
-#define AGENT_CONTEXT_VERSION     2
-#define AGENT_CONTEXT_PAGES       4
+#define AGENT_CONTEXT_VERSION     3
+#define AGENT_CONTEXT_PAGES       5
 #define AGENT_CONTEXT_SIZE        (AGENT_CONTEXT_PAGES * PAGE_SIZE)
 #define AGENT_CONTEXT_MAX_RECORDS 128
 #define AGENT_CONTEXT_HEADER_OFFSET 0
@@ -71,6 +75,28 @@
 #define AGENT_CONTEXT_RECORDS_OFFSET PAGE_SIZE
 #define AGENT_CONTEXT_BASE \
 	(TRAPFRAME - (16 + AGENT_CONTEXT_PAGES) * PAGE_SIZE)
+
+#define AGENT_CONTEXT_RECORD_F_SYSTEM    1
+#define AGENT_CONTEXT_RECORD_F_MANUAL    2
+#define AGENT_CONTEXT_RECORD_F_TRUNCATED 4
+
+#define AGENT_EVENT_QUEUE_CAP 16
+#define AGENT_WATCH_MAX       8
+
+#define AGENT_FILE_META_F_DELETE  1
+#define AGENT_FILE_META_F_PERSIST 2
+
+#define AGENT_FILE_META_UPDATE_PHYSICAL   (1ULL << 0)
+#define AGENT_FILE_META_UPDATE_LOGICAL    (1ULL << 1)
+#define AGENT_FILE_META_UPDATE_PROJECT    (1ULL << 2)
+#define AGENT_FILE_META_UPDATE_WORKFLOW   (1ULL << 3)
+#define AGENT_FILE_META_UPDATE_RUN_ID     (1ULL << 4)
+#define AGENT_FILE_META_UPDATE_STAGE      (1ULL << 5)
+#define AGENT_FILE_META_UPDATE_KIND       (1ULL << 6)
+#define AGENT_FILE_META_UPDATE_STATUS     (1ULL << 7)
+#define AGENT_FILE_META_UPDATE_SUMMARY    (1ULL << 8)
+#define AGENT_FILE_META_UPDATE_DEPENDENCY (1ULL << 9)
+#define AGENT_FILE_META_UPDATE_ALL        0x3ffULL
 
 #define AGENT_FILE_META_MAX       128
 #define AGENT_FILE_QUERY_MAX_HITS 8
@@ -139,7 +165,11 @@ struct agent_info {
 	uint64 records_offset;
 	uint64 event_count;
 	uint64 event_dropped;
+	uint64 event_queue_count;
+	uint64 watch_count;
 	uint64 wait_count;
+	uint64 wait_sleep_count;
+	uint64 wait_wakeup_count;
 	uint64 timeout_count;
 	uint64 last_heartbeat_tick;
 	uint64 capability_mask;
@@ -190,10 +220,18 @@ struct agent_context_record {
 	uint64 value1;
 	uint64 value2;
 	uint64 tick;
+	uint64 flags;
 	int tool_id;
 	int status;
 	char payload[AGENT_CONTEXT_TEXT_SIZE];
 	char result[AGENT_CONTEXT_TEXT_SIZE];
+};
+
+struct agent_context_detail {
+	uint64 sequence;
+	uint64 flags;
+	struct agent_op op;
+	struct agent_result result;
 };
 
 struct agent_request {
@@ -227,6 +265,7 @@ struct agent_response {
 
 struct agent_tool_desc {
 	int tool_id;
+	uint64 flags;
 	char name[AGENT_TOOL_NAME_SIZE];
 	char params[AGENT_TOOL_PARAMS_SIZE];
 	char description[AGENT_TOOL_DESC_SIZE];
@@ -257,6 +296,12 @@ struct agent_file_meta {
 	char summary[AGENT_FILE_SUMMARY_SIZE];
 	uint64 dependency_mask;
 	uint64 updated_tick;
+	uint64 flags;
+	uint64 dev;
+	uint64 inum;
+	uint64 size;
+	uint64 fs_generation;
+	uint64 update_mask;
 };
 
 struct agent_file_hit {
@@ -268,6 +313,10 @@ struct agent_file_hit {
 	char status[AGENT_FILE_FIELD_SIZE];
 	char summary[AGENT_FILE_SUMMARY_SIZE];
 	uint64 dependency_mask;
+	uint64 dev;
+	uint64 inum;
+	uint64 size;
+	uint64 fs_generation;
 };
 
 struct agent_file_query {
@@ -295,6 +344,7 @@ struct agent_file_query_result {
 };
 
 struct proc;
+struct inode;
 
 void agentinit(void);
 void agent_clear_metadata(struct proc *p);
@@ -305,6 +355,10 @@ int agent_make_role(struct proc *p, int role);
 int agent_create_proc(void);
 int agent_create_role_proc(int role);
 void agent_tick(void);
+void agent_fs_note_create(struct inode *ip, char *path);
+void agent_fs_note_write(struct inode *ip);
+void agent_fs_note_truncate(struct inode *ip);
+void agent_fs_note_delete(struct inode *ip);
 
 int sys_agent_create(void);
 int sys_agent_create_role(int role);
@@ -315,9 +369,11 @@ int sys_agent_tool_list(uint64 addr, int max);
 int sys_context_push(uint64 recordaddr);
 int sys_context_query(uint64 start_sequence, uint64 outaddr, int max);
 int sys_context_snapshot(uint64 headeraddr, uint64 recordsaddr, int max);
+int sys_context_detail(uint64 sequence, uint64 detailaddr);
 int sys_context_rollback(uint64 sequence);
 int sys_context_clear(void);
 int sys_agent_watch(int event_type, uint64 filteraddr);
+int sys_agent_unwatch(int event_type, uint64 filteraddr);
 int sys_agent_wait(uint64 eventaddr, int timeout_ticks);
 int sys_agent_heartbeat(int interval_ticks);
 int sys_agent_wake(int pid, uint64 eventaddr);

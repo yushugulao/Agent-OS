@@ -6,7 +6,7 @@
 
 ### Agent-OS syscall
 
-Agent-OS 在 uCore syscall 编号空间中使用 500 至 517：
+Agent-OS 在 uCore syscall 编号空间中使用 500 至 520：
 
 | syscall | 编号 | 用户态原型 | 说明 |
 | --- | ---: | --- | --- |
@@ -28,6 +28,8 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 517：
 | `agent_file_meta_set` | 515 | `int agent_file_meta_set(struct agent_file_meta *)` | 插入或合并更新文件元数据，状态变化可触发事件 |
 | `agent_file_query` | 516 | `int agent_file_query(struct agent_file_query *, struct agent_file_query_result *)` | Agent 文件属性查询，成功后写入 Context Path |
 | `agent_create_role` | 517 | `int agent_create_role(int role)` | 按真实内核角色创建 Agent 子进程 |
+| `agent_unwatch` | 518 | `int agent_unwatch(int, const char *)` | 删除匹配 watch；`AGENT_EVENT_NONE` 加空 filter 表示清空全部 watch |
+| `context_detail` | 519 | `int context_detail(uint64, struct agent_context_detail *)` | 按 sequence 查询完整工具调用详情 |
 
 `agent_run` 和 `context_snapshot` 是最终成品主路径。`agent_call` 保留为 legacy 兼容入口。
 
@@ -39,11 +41,11 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 517：
 | `mailwrite` | 402 | `int mailwrite(int pid, void *buf, int len)` | 向目标普通进程 mail 队列写入最多 256 字节 |
 | `trace` | 410 | `int trace(enum trace_request req, unsigned long id, uint8 data)` | 支持 `TRACE_READ`、`TRACE_WRITE` 和 syscall 计数查询 |
 
-这些接口用于保留代表性基础 uCore 用户测试能力。Agent-OS 的最终验收主路径仍是 `CHAPTER=agent` 下的四个专项程序。
+这些接口用于保留代表性基础 uCore 用户测试能力。Agent-OS 的最终验收主路径仍是 `CHAPTER=agent` 下的专项程序。
 
 `mailread` / `mailwrite` 使用每进程 16 槽普通消息队列，每条最多 256 字节。`mailread` 无消息时返回 0，成功时返回读取字节数；`mailwrite` 成功时返回写入字节数。目标不存在、长度非法、队列满或用户指针错误返回 `-1`。
 
-`trace` 的 `TRACE_READ` / `TRACE_WRITE` 只做 1 字节用户地址读写检查。`TRACE_SYSCALL` 返回对应 syscall ID 的累计进入次数，查询 `SYS_trace` 时本次 `trace` 调用也计入。当前只承诺 Agent Context 4 页不可执行；普通用户程序其他页仍按当前 uCore 装载方式映射，不宣称全局 W^X。
+`trace` 的 `TRACE_READ` / `TRACE_WRITE` 只做 1 字节用户地址读写检查。`TRACE_SYSCALL` 返回对应 syscall ID 的累计进入次数，查询 `SYS_trace` 时本次 `trace` 调用也计入。当前只承诺 Agent Context 特殊页不可执行；普通用户程序其他页仍按当前 uCore 装载方式映射，不宣称全局 W^X。
 
 ## Agent Context ABI
 
@@ -51,10 +53,10 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 517：
 | --- | --- |
 | 起始地址 | `AGENT_CONTEXT_BASE` |
 | 用户态计算 | `AGENT_TRAPFRAME - (16 + AGENT_CONTEXT_PAGES) * AGENT_PAGE_SIZE` |
-| 大小 | `AGENT_CONTEXT_SIZE = 4 * 4096` |
-| 当前大小 | 16384 字节 |
+| 大小 | `AGENT_CONTEXT_SIZE = 5 * 4096` |
+| 当前大小 | 20480 字节 |
 | 记录容量 | `AGENT_CONTEXT_MAX_RECORDS = 128` |
-| Context 版本 | `AGENT_CONTEXT_VERSION = 2` |
+| Context 版本 | `AGENT_CONTEXT_VERSION = 3` |
 | 权限 | Agent Context 用户镜像页可读写、不可执行；内核 shadow 副本不可被用户态访问 |
 
 说明：上述权限只描述 Agent Context 特殊页。当前 uCore 分支仍使用 flat binary loader，普通用户程序正文、数据和 bss 所在页沿用基底 loader 的 RWX 映射；本项目没有在本轮把普通用户程序装载流程重构为完整 W^X。
@@ -67,9 +69,9 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 517：
 | `sizeof(struct agent_context_header)` | `struct agent_result` |
 | `AGENT_CONTEXT_RECORDS_OFFSET = 4096` | `struct agent_context_record[128]` |
 
-内核在 `struct proc` 中同时保存 4 个用户镜像页和 4 个内核私有 shadow 页。header、latest result 和 record 的权威数据先写入 shadow 页，再同步到用户镜像页。用户态直接写镜像页不会改变 `context_query()` 或 `context_snapshot()` 返回的权威历史。
+内核在 `struct proc` 中同时保存 5 个用户镜像页和 5 个内核私有 shadow 页。header、latest result 和 record 的权威数据先写入 shadow 页，再同步到用户镜像页。用户态直接写镜像页不会改变 `context_query()` 或 `context_snapshot()` 返回的权威历史。
 
-直接读 Context 镜像是可信 Agent 自身的高速缓存路径；如果需要可信历史，应使用 `context_snapshot()` 刷新并读取 shadow 权威数据。
+直接读 Context 镜像是可信 Agent 自身的高速缓存路径；如果需要可信历史，应使用 `context_snapshot()` 刷新并读取 shadow 权威数据。若需要完整请求和完整响应，应使用 `context_detail(sequence, out)`，不要把 16 字节短摘要 record 当作完整日志。
 
 ## Agent 信息结构
 
@@ -95,10 +97,13 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 517：
 | `context_path_rollback_count` | 成功回滚次数 |
 | `latest_response_offset` | latest result 在 Agent Context 中的偏移 |
 | `records_offset` | record 区在 Agent Context 中的偏移 |
-| `event_count` / `event_dropped` | 事件统计 |
-| `wait_count` / `timeout_count` | 等待与超时统计 |
+| `event_queue_count` / `event_count` / `event_dropped` | 当前队列长度、累计事件数和丢弃计数 |
+| `watch_count` | 当前有效 watch 条件数 |
+| `wait_count` / `wait_sleep_count` / `wait_wakeup_count` / `timeout_count` | 等待、进入等待路径、被唤醒和超时统计 |
 | `last_heartbeat_tick` | 最近心跳 tick |
 | `capability_mask` | 当前 Agent 能力位 |
+
+事件队列容量为 `AGENT_EVENT_QUEUE_CAP = 16`。watch 数量上限为 `AGENT_WATCH_MAX = 8`。
 
 ## 角色与 capability
 
@@ -185,7 +190,7 @@ Agent-only 直接 syscall 的权限要求：
 | `AGENT_STATUS_NOT_AGENT` | -3 | 普通进程调用 Agent-only 接口 |
 | `AGENT_STATUS_BAD_PARAM` | -4 | 参数键、类型或必要参数错误 |
 | `AGENT_STATUS_NOT_FOUND` | -5 | 文件、Agent 或历史节点不存在 |
-| `AGENT_STATUS_NO_SPACE` | -6 | Context 空间、事件槽或布局不可用 |
+| `AGENT_STATUS_NO_SPACE` | -6 | Context 空间、事件队列或布局不可用 |
 | `AGENT_STATUS_TIMEOUT` | -7 | `agent_wait()` 等待超时 |
 | `AGENT_STATUS_DENIED` | -8 | capability 或角色权限拒绝 |
 | `AGENT_STATUS_DUPLICATE` | -9 | 重复恢复动作被识别 |
@@ -210,8 +215,16 @@ Agent-only 直接 syscall 的权限要求：
 | 14 | `rerun_stage` | `legacy_role:uint64,stage:string` | 只有具备 `RECOVER_STAGE` 的 Agent 可执行幂等恢复动作 |
 | 15 | `write_report` | `legacy_role:uint64,payload:string` | 只有具备 `REPORT_WRITE` 的 Agent 可写恢复报告工件状态；支持 `stage=report;run_id=...;project=...` selector |
 | 16 | `agent_watch` | `event_type:uint64,filter:string` | 注册 Agent Loop watch |
-| 17 | `agent_wait` | `timeout:uint64` | 工具表可发现项；结构化事件返回使用 syscall |
-| 18 | `agent_heartbeat` | `interval:uint64` | 设置心跳间隔 |
+| 17 | `agent_wait` | `timeout:uint64` | syscall-only 可发现项；`agent_run()` 调用返回 `AGENT_STATUS_BAD_PARAM` |
+| 18 | `agent_heartbeat` | `interval:uint64` | 设置心跳间隔；`interval=0` 停止心跳 |
+| 19 | `context_push` | `record` | 手动 Context 节点使用的内部工具 ID |
+
+工具描述中 `flags` 表示调用方式：
+
+| flag | 含义 |
+| --- | --- |
+| `AGENT_TOOL_F_CALLABLE` | 可通过 `agent_run()` 执行 |
+| `AGENT_TOOL_F_SYSCALL_ONLY` | 只作为工具表可发现项，必须通过对应 syscall 执行 |
 
 ## 任务四文件查询 ABI
 
@@ -228,6 +241,23 @@ Agent-only 直接 syscall 的权限要求：
 - `summary`
 - `dependency_mask`
 - `updated_tick`
+- `flags`
+- `dev`
+- `inum`
+- `size`
+- `fs_generation`
+- `update_mask`
+
+文件元数据主键优先使用真实文件的 `dev + inum`。`physical_name` 必须能解析为 uCore 根目录中的真实短文件名，复杂逻辑路径保存在 `logical_path` 等 Agent 属性字段中。根目录隐藏文件 `.agentmeta` 保存固定格式元数据表，`agent_file_meta_init()` 会优先加载它；缺失时创建默认演示文件并写入 `.agentmeta`。
+
+`update_mask` 用于精确更新字段，也允许清空字段。例如只清空 status 时传入 `AGENT_FILE_META_UPDATE_STATUS` 并让 `status` 为空字符串。
+
+`flags` 支持：
+
+| flag | 含义 |
+| --- | --- |
+| `AGENT_FILE_META_F_DELETE` | 按 path/fid/dev+inum 删除元数据 |
+| `AGENT_FILE_META_F_PERSIST` | 更新后写入 `.agentmeta` |
 
 `struct agent_file_query` 以空字符串表示“不限制该字段”。`flags` 支持：
 
@@ -247,7 +277,11 @@ Agent-only 直接 syscall 的权限要求：
 | `scanned_records` | 本次检查了多少条候选记录 |
 | `query_ticks` | 查询内部 tick 差值 |
 
+每条 hit 还返回 `dev`、`inum`、`size` 和 `fs_generation`，用于证明查询结果来自真实文件绑定和当前元数据版本。
+
 ## 任务五 Agent Loop ABI
+
+Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。队列满时返回 `AGENT_STATUS_NO_SPACE`，不会覆盖旧事件。每个 Agent 最多注册 8 条 watch。相同 `event_type + filter` 会替换原 watch，`agent_unwatch()` 可删除匹配 watch 或清空全部 watch。
 
 `struct agent_event` 是事件等待和唤醒结构：
 
@@ -272,6 +306,8 @@ Agent-only 直接 syscall 的权限要求：
 | `AGENT_EVENT_POLICY_DENIED` | 策略拒绝 |
 | `AGENT_EVENT_CONTEXT_LIMIT` | Context 限制事件 |
 
+`agent_heartbeat_stop()` 是用户态便利 wrapper，内部调用 `agent_heartbeat(0)`。
+
 ## Context Path 接口
 
 | 接口 | 行为 |
@@ -279,7 +315,16 @@ Agent-only 直接 syscall 的权限要求：
 | `context_push(record)` | 追加手动节点，内核分配新的 sequence |
 | `context_query(start_sequence, out, max)` | 从 `start_sequence` 起按时间顺序复制仍可见记录；`start_sequence=0` 表示从最早可见记录开始 |
 | `context_snapshot(header, records, max)` | 一次返回 header 和按时间顺序排列的可见 records |
+| `context_detail(sequence, out)` | 返回最近 128 条完整详情中指定 sequence 对应的 `agent_op`、`agent_result` 和 flags |
 | `context_rollback(sequence)` | 回滚到仍可见 sequence；不存在时返回 `AGENT_STATUS_NOT_FOUND` |
 | `context_clear()` | 清空记录、计数和 latest response |
 
-`struct agent_context_record` 保存工具 ID、状态码、sequence、request_id、数值槽、tick，以及 16 字节 payload/result 短文本摘要；工具名称可通过 `agent_tool_list()` 按 `tool_id` 解释。它不是完整 raw 请求/响应日志，不保存全部参数键名、参数类型或完整长文本。超过 128 条记录时，Context Path 按 FIFO 覆盖旧记录，并更新 `oldest_sequence`、`latest_sequence` 和 `dropped_records`。
+`struct agent_context_record` 保存工具 ID、状态码、sequence、request_id、数值槽、tick、flags，以及 16 字节 payload/result 短文本摘要；工具名称可通过 `agent_tool_list()` 按 `tool_id` 解释。它不是完整 raw 请求/响应日志，不保存全部参数键名、参数类型或完整长文本。超过 128 条记录时，Context Path 按 FIFO 覆盖旧记录，并更新 `oldest_sequence`、`latest_sequence` 和 `dropped_records`。
+
+Context record flags：
+
+| flag | 含义 |
+| --- | --- |
+| `AGENT_CONTEXT_RECORD_F_SYSTEM` | 内核自动工具或系统事件记录 |
+| `AGENT_CONTEXT_RECORD_F_MANUAL` | `context_push()` 手动记录 |
+| `AGENT_CONTEXT_RECORD_F_TRUNCATED` | payload 或 result 短摘要发生截断 |

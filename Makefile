@@ -29,7 +29,7 @@ endif
 
 INIT_PROC ?= usershell
 
-$(K)/initproc.o: $K/initproc.S
+$(BUILDDIR)/$(K)/initproc.o: $(K)/initproc.S .FORCE
 $(K)/initproc.S: scripts/initproc.py .FORCE
 	@$(PY) scripts/initproc.py $(INIT_PROC)
 

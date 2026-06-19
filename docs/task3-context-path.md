@@ -6,17 +6,18 @@
 
 任务三要求系统维护 Agent 多轮工具调用上下文，使 Agent 能看到自己历史调用路径，并能在路径过长时自动淘汰旧记录。
 
-uCore 分支实现的是 128 条固定容量短文本摘要路径。它不保存完整 raw 请求/响应日志，而是保存评审可见、内核可快速维护的摘要记录。
+uCore 分支实现的是“128 条固定容量短文本摘要路径 + 最近 128 条完整详情”。摘要 record 用于快速展示和高频查询，`context_detail(sequence, out)` 用于查看完整 `agent_op`、`agent_result` 和记录 flags。
 
 ## Context 布局
 
-Agent Context 共 4 页：
+Agent Context 共 5 页：
 
 | 区域 | 偏移 | 内容 |
 | --- | ---: | --- |
 | header | 0 | `struct agent_context_header` |
 | latest | `sizeof(struct agent_context_header)` | `struct agent_result` |
 | records | 4096 | `struct agent_context_record[128]` |
+| 完整详情区 | record 区之后 | 最近 128 条 `struct agent_context_detail` |
 
 `struct agent_context_header` 关键字段：
 
@@ -46,8 +47,18 @@ Agent Context 共 4 页：
 | `tick` | 写入时 tick |
 | `tool_id` | 工具 ID |
 | `status` | 工具结果状态 |
+| `flags` | `SYSTEM`、`MANUAL`、`TRUNCATED` 等记录标志 |
 | `payload` | 16 字节 payload 摘要 |
 | `result` | 16 字节 result 摘要 |
+
+`struct agent_context_detail` 保存：
+
+| 字段 | 说明 |
+| --- | --- |
+| `sequence` | 与摘要 record 相同的 sequence |
+| `flags` | 记录来源和截断信息 |
+| `op` | 完整 `struct agent_op` |
+| `result` | 完整 `struct agent_result` |
 
 ## shadow 权威历史
 
@@ -92,10 +103,11 @@ agentfinal_ucore: tamper_protected=1
 | --- | --- |
 | `context_query(start_sequence, out, max)` | 从指定 sequence 开始返回可见记录；`start_sequence=0` 表示从最早可见记录开始 |
 | `context_snapshot(header, records, max)` | 一次返回 header 和有序 records，是推荐读取方式 |
+| `context_detail(sequence, out)` | 查询仍在最近 128 条完整详情记录中的完整请求/响应 |
 | `context_rollback(sequence)` | 回滚到仍可见 sequence |
 | `context_clear()` | 清空记录和元信息 |
 
-`context_snapshot()` 是最终测试和演示的主路径，因为它一次 syscall 就能拿到 header 和多条记录。
+`context_snapshot()` 是最终测试和演示的主路径，因为它一次 syscall 就能拿到 header 和多条记录。`context_detail()` 用于在需要完整审计证据时补充摘要 record 中没有保存的完整参数和结果。
 
 ## FIFO 淘汰
 
@@ -106,14 +118,14 @@ agentfinal_ucore: tamper_protected=1
 | 字段 | 期望 |
 | --- | ---: |
 | `count` | 128 |
-| `oldest_sequence` | 65 |
-| `latest_sequence` | 192 |
-| `dropped_records` | 64 |
+| `oldest_sequence` | 66 |
+| `latest_sequence` | 193 |
+| `dropped_records` | 65 |
 
 对应输出：
 
 ```text
-agentfinal_ucore: fifo oldest=65 latest=192 dropped=64
+agentfinal_ucore: fifo oldest=66 latest=193 dropped=65
 ```
 
 ## 性能路径
@@ -140,14 +152,16 @@ agentbench_ucore: context_snapshot ops=2048 ticks=2 ops_per_tick=1024 speedup_x1
 | --- | --- |
 | 历史容量 | 固定 128 条 |
 | 文本长度 | payload/result 各保存 16 字节摘要 |
-| 完整日志 | 不保存完整 raw 请求、完整参数键名或长文本 |
+| 完整详情容量 | 最近 128 条可通过 `context_detail()` 查询；更早详情会随环形记录淘汰 |
 | 持久化 | Context Path 当前随进程生命周期存在，不持久化到磁盘 |
 
 ## 验证证据
 
 ```text
 agentfinal_ucore: short_text_history=1 payload=ucore-final result=ucore-final
+agentfinal_ucore: context_detail=1 sequence=8
+agentfinal_ucore: record_flags system=1 manual=1 truncated=0
 agentfinal_ucore: tamper_protected=1
-agentfinal_ucore: fifo oldest=65 latest=192 dropped=64
+agentfinal_ucore: fifo oldest=66 latest=193 dropped=65
 agentfinal_ucore: passed
 ```

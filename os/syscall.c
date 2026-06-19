@@ -58,7 +58,7 @@ uint64 console_read(uint64 va, uint64 len)
 
 uint64 sys_write(int fd, uint64 va, uint64 len)
 {
-	if (fd < 0 || fd > FD_BUFFER_SIZE)
+	if (fd < 0 || fd >= FD_BUFFER_SIZE)
 		return -1;
 	struct proc *p = curr_proc();
 	struct file *f = p->files[fd];
@@ -80,7 +80,7 @@ uint64 sys_write(int fd, uint64 va, uint64 len)
 
 uint64 sys_read(int fd, uint64 va, uint64 len)
 {
-	if (fd < 0 || fd > FD_BUFFER_SIZE)
+	if (fd < 0 || fd >= FD_BUFFER_SIZE)
 		return -1;
 	struct proc *p = curr_proc();
 	struct file *f = p->files[fd];
@@ -290,9 +290,21 @@ uint64 sys_openat(uint64 va, uint64 omode, uint64 _flags)
 	return fileopen(path, omode);
 }
 
+uint64 sys_unlinkat(int dirfd, uint64 va, uint64 flags)
+{
+	struct proc *p = curr_proc();
+	char path[200];
+
+	if (dirfd != -100 || flags != 0)
+		return -1;
+	if (copyinstr(p->pagetable, path, va, sizeof(path)) < 0)
+		return -1;
+	return fileunlink(path);
+}
+
 uint64 sys_close(int fd)
 {
-	if (fd < 0 || fd > FD_BUFFER_SIZE)
+	if (fd < 0 || fd >= FD_BUFFER_SIZE)
 		return -1;
 	struct proc *p = curr_proc();
 	struct file *f = p->files[fd];
@@ -490,6 +502,9 @@ void syscall()
 	case SYS_openat:
 		ret = sys_openat(args[0], args[1], args[2]);
 		break;
+	case SYS_unlinkat:
+		ret = sys_unlinkat(args[0], args[1], args[2]);
+		break;
 	case SYS_close:
 		ret = sys_close(args[0]);
 		break;
@@ -595,6 +610,9 @@ void syscall()
 	case SYS_context_snapshot:
 		ret = sys_context_snapshot(args[0], args[1], args[2]);
 		break;
+	case SYS_context_detail:
+		ret = sys_context_detail(args[0], args[1]);
+		break;
 	case SYS_context_rollback:
 		ret = sys_context_rollback(args[0]);
 		break;
@@ -603,6 +621,9 @@ void syscall()
 		break;
 	case SYS_agent_watch:
 		ret = sys_agent_watch(args[0], args[1]);
+		break;
+	case SYS_agent_unwatch:
+		ret = sys_agent_unwatch(args[0], args[1]);
 		break;
 	case SYS_agent_wait:
 		ret = sys_agent_wait(args[0], args[1]);

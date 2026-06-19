@@ -94,6 +94,8 @@ static struct inode *create(char *path, short type)
 		panic("create: dirlink");
 
 	iput(dp);
+	if (type == T_FILE)
+		agent_fs_note_create(ip, path);
 	return ip;
 }
 
@@ -134,8 +136,45 @@ int fileopen(char *path, uint64 omode)
 	f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
 	if ((omode & O_TRUNC) && ip->type == T_FILE) {
 		itrunc(ip);
+		agent_fs_note_truncate(ip);
 	}
 	return fd;
+}
+
+int fileunlink(char *path)
+{
+	struct inode *dp;
+	struct inode *ip;
+	uint inum = 0;
+
+	dp = root_dir();
+	ivalid(dp);
+	if ((ip = dirlookup(dp, path, 0)) == 0) {
+		iput(dp);
+		return -1;
+	}
+	ivalid(ip);
+	if (ip->type != T_FILE) {
+		iput(ip);
+		iput(dp);
+		return -1;
+	}
+	agent_fs_note_delete(ip);
+	itrunc(ip);
+	ip->type = 0;
+	ip->agent_meta_slot = 0;
+	ip->agent_meta_flags = 0;
+	ip->agent_meta_version = 0;
+	iupdate(ip);
+	if (dirunlink(dp, path, &inum) < 0) {
+		iput(ip);
+		iput(dp);
+		return -1;
+	}
+	ip->valid = 0;
+	iput(ip);
+	iput(dp);
+	return 0;
 }
 
 // Write data to inode.
@@ -143,8 +182,10 @@ uint64 inodewrite(struct file *f, uint64 va, uint64 len)
 {
 	int r;
 	ivalid(f->ip);
-	if ((r = writei(f->ip, 1, va, f->off, len)) > 0)
+	if ((r = writei(f->ip, 1, va, f->off, len)) > 0) {
 		f->off += r;
+		agent_fs_note_write(f->ip);
+	}
 	return r;
 }
 

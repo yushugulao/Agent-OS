@@ -12,7 +12,7 @@
 | 4 | [requirements-traceability.md](requirements-traceability.md) | 赛题要求到实现位置、测试证据和文档材料的对应表 |
 | 5 | [api.md](api.md) | 系统调用、Agent ABI、工具协议和错误语义 |
 | 6 | [verification.md](verification.md) | 验证计划、测试覆盖表、性能数据摘要 |
-| 7 | [testing-details.md](testing-details.md) | `agentfinal_ucore`、`agentbench_ucore`、`labdemo_ucore` 和 `agentsecurity_ucore` 的逐项测试说明 |
+| 7 | [testing-details.md](testing-details.md) | `agentfinal_ucore`、`agentfs_ucore`、`agentloop_ucore`、`agentbench_ucore`、`labdemo_ucore` 和 `agentsecurity_ucore` 的逐项测试说明 |
 | 8 | [demo-script.md](demo-script.md) | 评审现场或视频演示脚本 |
 
 ## 详细附录
@@ -22,8 +22,8 @@
 | [task1-agent-process.md](task1-agent-process.md) | 任务一 Agent 进程与地址空间设计细节 |
 | [task2-agent-call.md](task2-agent-call.md) | 任务二结构化工具调用设计细节 |
 | [task3-context-path.md](task3-context-path.md) | 任务三 Context Path 设计细节 |
-| [task4-file-query.md](task4-file-query.md) | 任务四文件属性查询、索引和依赖查询设计细节 |
-| [task5-agent-loop.md](task5-agent-loop.md) | 任务五 watch/wait/heartbeat/event delivery 设计细节 |
+| [task4-file-query.md](task4-file-query.md) | 任务四文件属性查询、真实 inode 关联、`.agentmeta` 隐藏元数据文件、索引和依赖查询设计细节 |
+| [task5-agent-loop.md](task5-agent-loop.md) | 任务五 watch/unwatch、FIFO 事件队列、wait/timeout、heartbeat 设计细节 |
 | [test-record.md](test-record.md) | 测试记录和关键输出 |
 | [../LICENSE](../LICENSE) | 源代码 GPL-3.0 |
 | [../DOCUMENTATION_LICENSE.md](../DOCUMENTATION_LICENSE.md) | 文档与答辩材料 CC BY-SA 4.0 |

@@ -36,7 +36,7 @@ CH5_BASE_TESTS := ch5b_ $(CH3_BASE_TESTS) usershell
 CH6_BASE_TESTS := ch6b_ $(CH5_BASE_TESTS)
 CH7_BASE_TESTS := ch7b_ $(CH6_BASE_TESTS)
 CH8_BASE_TESTS := ch8b_ $(CH7_BASE_TESTS)
-AGENT_TESTS := agentfinal_ucore agentbench_ucore labdemo_ucore agentsecurity_ucore
+AGENT_TESTS := agentfinal_ucore agentfs_ucore agentloop_ucore agentbench_ucore labdemo_ucore agentsecurity_ucore
 
 CH2_TESTS := $(CH2_BASE_TESTS)
 CH3_TESTS := $(CH3_BASE_TESTS) ch3_

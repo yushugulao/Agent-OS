@@ -6,17 +6,20 @@
 
 任务五希望操作系统支持 Agent 长期运行机制，使 Agent 不只是主动调用工具，还能等待内核事件、被文件状态变化唤醒、按心跳维护状态，并参与多 Agent 协作。
 
-当前 uCore 分支实现的是可验证的 Agent Loop 演示级机制：
+当前 uCore 分支实现的是可验证的 Agent Loop 内核机制：
 
-- Agent 可注册 watch；
-- Agent 可阻塞等待事件；
+- Agent 最多可注册 8 条 watch；
+- Agent 可删除指定 watch，或一次清空全部 watch；
+- 每个 Agent 有 16 槽 FIFO 事件队列；
+- Agent 可等待事件，有限 timeout 会计数，事件入队会唤醒目标 Agent；
 - 其他 Agent 或内核工具可唤醒目标 Agent；
 - 文件元数据状态变化可触发事件；
-- Agent 可设置 heartbeat；
+- Agent 可设置 heartbeat，注册 TIMER watch 后可收到 heartbeat 事件；
+- Agent 可通过 `agent_heartbeat_stop()` 停止 heartbeat；
 - 等待、唤醒和事件消费会写入 Context Path；
 - 综合场景用三个 Agent 串联事件流程。
 
-当前还不是完整平台级 Agent 调度器，不包含优先级、取消、长期任务队列和复杂调度策略。
+当前还不是完整平台级 Agent 调度器，不包含优先级、取消等待和复杂调度策略。
 
 ## Loop 状态
 
@@ -52,6 +55,7 @@
 
 ```c
 int agent_watch(int event_type, const char *filter);
+int agent_unwatch(int event_type, const char *filter);
 ```
 
 语义：
@@ -60,6 +64,8 @@ int agent_watch(int event_type, const char *filter);
 2. `event_type` 可以是具体事件类型，也可以是 `AGENT_EVENT_NONE` 表示不过滤类型。
 3. `filter` 是简单短文本包含匹配。
 4. 注册成功后，后续事件 payload 包含 filter 时可唤醒该 Agent。
+5. 相同 `event_type + filter` 的 watch 会被替换。
+6. `agent_unwatch(AGENT_EVENT_NONE, "")` 会清空当前 Agent 的全部 watch。
 
 `labdemo_ucore` 中 sentinel 注册：
 
@@ -83,6 +89,8 @@ int agent_wait(struct agent_event *event, int timeout_ticks);
 4. 超过 `timeout_ticks` 后返回 `AGENT_STATUS_TIMEOUT`。
 5. 成功消费事件后追加 Context record。
 
+当前有限 timeout 使用定时等待路径；无限等待可进入睡眠，由事件入队或 heartbeat 到期唤醒。
+
 `agentbench_ucore` 先验证无事件等待会返回 timeout，并检查 `timeout_count` 增加；随后用 wait/wake 计时观测验证等待和唤醒路径：
 
 ```text
@@ -105,8 +113,10 @@ int agent_wake(int pid, struct agent_event *event);
 1. 查找目标 pid。
 2. 检查目标是否为 Agent。
 3. 检查目标 watch 是否匹配事件类型和 payload。
-4. 写入目标事件槽。
+4. 写入目标 FIFO 事件队列。
 5. 唤醒目标进程。
+
+队列满时返回 `AGENT_STATUS_NO_SPACE`，不会覆盖旧事件。`send_message` 工具在目标队列满时也返回 `AGENT_STATUS_NO_SPACE`，并避免留下不可感知的消息副作用。
 
 `agentfinal_ucore` 用自唤醒验证最小路径：
 
@@ -126,16 +136,18 @@ agentos:event type=MESSAGE from=sentinel to=investigator status=OK
 
 ```c
 int agent_heartbeat(int interval_ticks);
+int agent_heartbeat_stop(void);
 ```
 
 语义：
 
 1. 当前进程必须是 Agent。
-2. 设置心跳间隔。
-3. 更新时间字段。
-4. 后续 `agent_info()` 可观察 last heartbeat tick。
+2. `agent_heartbeat(interval)` 设置心跳间隔。
+3. `agent_heartbeat_stop()` 是用户态便利 wrapper，内部调用 `agent_heartbeat(0)`，停止后不再投递 heartbeat 事件。
+4. 注册 `AGENT_EVENT_TIMER` watch 后，heartbeat 到期会投递 `timer=heartbeat` 事件。
+5. 后续 `agent_info()` 可观察 last heartbeat tick。
 
-当前 `agentbench_ucore` 会调用 `agent_heartbeat()`，随后用 `agent_info()` 检查 `heartbeat_interval` 和 `last_heartbeat_tick`。这证明 Agent Loop 元数据不只是文档字段，而是实际可设置、可观察。
+当前 `agentbench_ucore` 会调用 `agent_heartbeat()`，随后用 `agent_info()` 检查 `heartbeat_interval` 和 `last_heartbeat_tick`。`agentloop_ucore` 进一步验证 heartbeat 可以唤醒等待中的 Agent，停止后不会继续产生 heartbeat 事件。
 
 ## 文件状态事件
 
@@ -192,7 +204,7 @@ agentos:event type=CONTEXT_SNAPSHOT role=investigator records=4 latest=4
 | 限制项 | 说明 |
 | --- | --- |
 | 调度策略 | 当前没有实现优先级、抢占策略或长期任务队列 |
-| 事件容量 | 当前是简单事件状态和演示级投递，不是完整消息队列服务 |
+| 事件容量 | 当前每 Agent 固定 16 槽 FIFO，队列满时拒绝新事件 |
 | 取消机制 | 当前没有取消等待或取消任务接口 |
 | 多核复杂竞态 | 当前按 uCore 当前运行环境和测试路径验证，后续可扩展更强锁设计 |
 | LLM 驱动 | 当前由用户测试程序驱动，不接真实 LLM |
@@ -212,6 +224,17 @@ agentbench_ucore: timeout_heartbeat=1
 agentbench_ucore: event_wait_wake ops=8 ticks=2 ops_per_tick=4 speedup_x100=100
 ```
 
+`agentloop_ucore`：
+
+```text
+agentloop_ucore: fifo=1
+agentloop_ucore: overflow_dropped=1
+agentloop_ucore: unwatch=1
+agentloop_ucore: timeout_sleep=1
+agentloop_ucore: heartbeat_wake_stop=1
+agentloop_ucore: passed
+```
+
 `labdemo_ucore`：
 
 ```text
@@ -226,7 +249,6 @@ labdemo_ucore: passed
 
 后续可以把任务五推进为更完整的 Agent Loop：
 
-- 每个 Agent 多事件队列；
 - 事件优先级；
 - wait 取消；
 - 长期任务队列；

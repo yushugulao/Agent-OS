@@ -14,9 +14,9 @@
 
 ## 项目简介
 
-本项目围绕 Agent-OS 赛题，在 uCore 教学操作系统内核中实现面向 Agent 的内核支持层。当前系统能够识别 Agent 进程，提供结构化内核工具调用，维护 Agent 多轮工具调用历史，并扩展出文件元数据查询、事件等待/唤醒和多 Agent 故障恢复演示。
+本项目围绕 Agent-OS 赛题，在 uCore 教学操作系统内核中实现面向 Agent 的内核支持层。当前系统能够识别 Agent 进程，提供结构化内核工具调用，维护 Agent 多轮工具调用历史，并扩展出真实文件 inode 关联的 Agent 文件元数据查询、事件队列等待/唤醒和多 Agent 故障恢复演示。
 
-uCore 分支不是只做任务一至三的最小版本。当前交付以任务一、任务二、任务三为高性能底座，同时实现了任务四、任务五和任务六的可运行演示级能力。文档结构按旧版项目文档风格重构：README 负责快速运行和材料索引，主设计文档解释架构和关键决策，API/ABI 文档说明用户态与内核的接口分工，验证文档给出可复现证据，分任务文档展开细节。
+uCore 分支不是只做任务一至三的最小版本。当前交付以任务一、任务二、任务三为高性能底座，同时实现任务四的文件元数据与 inode 关联、任务五的有界事件队列和等待/唤醒、任务六的多 Agent 综合演示。文档结构按旧版项目文档风格重构：README 负责快速运行和材料索引，主设计文档解释架构和关键决策，API/ABI 文档说明用户态与内核的接口分工，验证文档给出可复现证据，分任务文档展开细节。
 
 ## 基底来源
 
@@ -30,6 +30,8 @@ uCore 分支不是只做任务一至三的最小版本。当前交付以任务�
 - `user/include/agent.h`
 - `user/lib/syscall.c`
 - `user/src/agentfinal_ucore.c`
+- `user/src/agentfs_ucore.c`
+- `user/src/agentloop_ucore.c`
 - `user/src/agentbench_ucore.c`
 - `user/src/labdemo_ucore.c`
 - `user/src/agentsecurity_ucore.c`
@@ -45,11 +47,11 @@ uCore 分支不是只做任务一至三的最小版本。当前交付以任务�
 | 任务一：Agent 进程创建与地址空间设计 | 支持 Agent 进程概念、进程元数据和 Agent Context 地址空间 | 已完成增强实现 |
 | 任务二：Agent 与内核结构化交互 | 支持结构化工具调用、工具表、结果返回和错误语义 | 已完成增强实现 |
 | 任务三：上下文路径管理 | 记录、查询、快照、回滚 Agent 多轮调用历史 | 已完成增强实现 |
-| 任务四：面向 Agent 查询优化的文件系统扩展 | 支持文件元数据表、属性查询、索引路径和依赖查询 | 已完成演示级增强实现 |
-| 任务五：Agent Loop 内核运行机制 | 支持 watch、wait、wake、heartbeat 和事件投递 | 已完成演示级增强实现 |
+| 任务四：面向 Agent 查询优化的文件系统扩展 | 支持文件元数据表、真实 inode 关联、`.agentmeta` 持久化、属性查询、索引路径和依赖查询 | 已完成增强实现 |
+| 任务五：Agent Loop 内核运行机制 | 支持 16 槽事件队列、watch/unwatch、wait/timeout、heartbeat 唤醒和事件投递 | 已完成增强实现 |
 | 任务六：综合演示与创新 | 用多 Agent 实验恢复场景串联任务一至五 | 已完成 `labdemo_ucore` 综合演示 |
 
-需要明确：任务四当前实现的是内核文件元数据服务和索引查询，不是对真实磁盘目录的持续后台扫描；任务五当前实现的是可验证的事件等待与唤醒机制，不是完整平台级 Agent 调度系统。
+需要明确：任务四已经把 Agent 文件元数据绑定到 uCore 根目录真实文件的 `dev + inum`，并用根目录隐藏文件 `.agentmeta` 保存固定格式元数据表；当前尚未实现后台线程持续扫描整棵目录。任务五已经实现有界 FIFO 事件队列、watch/unwatch、事件唤醒、timeout 计数和 heartbeat 定时事件；当前尚未实现优先级调度和取消等待接口。
 
 ## 构建与运行
 
@@ -85,6 +87,8 @@ bash scripts/run-agent-tests.sh
 
 ```bash
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfinal_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfs_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentloop_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent
@@ -109,6 +113,8 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=usershell CHAPTER=age
 
 ```sh
 agentfinal_ucore
+agentfs_ucore
+agentloop_ucore
 agentbench_ucore
 labdemo_ucore
 agentsecurity_ucore
@@ -120,19 +126,23 @@ shell 中启动的测试程序是 `usershell` 的直接普通子进程，内核�
 
 | 程序 | 定位 | 期望通过输出 |
 | --- | --- | --- |
-| `agentfinal_ucore` | 任务一至三功能验收，同时覆盖文件索引和事件自唤醒 | `agentfinal_ucore: parent passed` |
+| `agentfinal_ucore` | 任务一至三功能验收，同时覆盖 `context_detail()`、Context record flags、文件索引和事件自唤醒 | `agentfinal_ucore: parent passed` |
+| `agentfs_ucore` | 任务四文件系统/inode 关联验收，覆盖真实文件绑定、字段清空、删除清理、`.agentmeta` 写入、scan/index 差异和不存在 selector | `agentfs_ucore: parent passed` |
+| `agentloop_ucore` | 任务五 Agent Loop 验收，覆盖 FIFO 顺序、队列满丢弃、多 watch、unwatch、timeout、heartbeat wake/stop | `agentloop_ucore: parent passed` |
 | `agentbench_ucore` | 任务一至五性能与计时验证，包括 batch、direct context、snapshot、文件查询、timeout/heartbeat 和 wait/wake | `agentbench_ucore: parent passed` |
 | `labdemo_ucore` | 多 Agent 综合演示，普通 init 只启动 orchestrator，后续元数据初始化、事件注入和角色 Agent 创建都由 orchestrator 完成 | `labdemo_ucore: parent passed` |
-| `agentsecurity_ucore` | 权限限制负向测试，覆盖初始化前索引查询、legacy mismatch、普通进程直接写元数据/投事件、sentinel 伪造 recovery、多 run 定向恢复 | `agentsecurity_ucore: parent passed` |
+| `agentsecurity_ucore` | 权限限制负向测试，覆盖初始化前索引查询、legacy mismatch、legacy 参数校验、syscall-only 工具拒绝、普通进程直接写元数据/投事件、sentinel 伪造 recovery、多 run 定向恢复 | `agentsecurity_ucore: parent passed` |
 
 `agentfinal_ucore` 预期输出包括：
 
 ```text
-agentfinal_ucore: context size=16384 capacity=128
+agentfinal_ucore: context size=20480 capacity=128
 agentfinal_ucore: batch first_seq=1 last_seq=64
 agentfinal_ucore: short_text_history=1 payload=ucore-final result=ucore-final
+agentfinal_ucore: context_detail=1 sequence=8
 agentfinal_ucore: tamper_protected=1
-agentfinal_ucore: fifo oldest=65 latest=192 dropped=64
+agentfinal_ucore: record_flags system=1 manual=1 truncated=0
+agentfinal_ucore: fifo oldest=66 latest=193 dropped=65
 agentfinal_ucore: file_query hits=2 scanned=2 used_index=1
 agentfinal_ucore: event_wait=1 payload=self wake
 agentfinal_ucore: passed
@@ -146,6 +156,31 @@ agentbench_ucore: case ops ticks ops_per_tick speedup_x100
 ```
 
 `ticks` 会随 QEMU 和宿主机负载波动，评审时应关注测试是否通过、相对趋势是否符合设计，而不是固定绝对数值。
+
+`agentfs_ucore` 预期输出包括：
+
+```text
+agentfs_ucore: default_inode dev=1 inum=11 scanned=2
+agentfs_ucore: custom_inode dev=1 inum=17 size=7
+agentfs_ucore: bulk_index scan=108 index=6 hits=1
+agentfs_ucore: clear_status=1
+agentfs_ucore: delete_clears_metadata=1
+agentfs_ucore: missing_selector_not_found=1
+agentfs_ucore: passed
+agentfs_ucore: parent passed
+```
+
+`agentloop_ucore` 预期输出包括：
+
+```text
+agentloop_ucore: fifo=1
+agentloop_ucore: overflow_dropped=1
+agentloop_ucore: unwatch=1
+agentloop_ucore: timeout_sleep=1
+agentloop_ucore: heartbeat_wake_stop=1
+agentloop_ucore: passed
+agentloop_ucore: parent passed
+```
 
 `labdemo_ucore` 会输出结构化演示事件，例如：
 
@@ -172,6 +207,7 @@ agentsecurity_ucore: plain_child_orchestrator=1
 agentsecurity_ucore: role=orchestrator capability_checked=1
 agentsecurity_ucore: preinit_index_query=1
 agentsecurity_ucore: legacy_tool_mismatch=1
+agentsecurity_ucore: legacy_param_validation=1 syscall_only=1
 agentsecurity_ucore: role=sentinel capability_checked=1
 agentsecurity_ucore: sentinel spoof_denied=1
 agentsecurity_ucore: role=recovery capability_checked=1
@@ -206,8 +242,8 @@ agentsecurity_ucore: parent passed
 
 ## 仍需补充
 
-- 更复杂的真实目录后台扫描和持久化文件索引；
-- 更完整的 Agent 调度策略、优先级和取消机制；
+- 后台线程持续扫描真实目录并自动维护索引；
+- Agent 事件优先级、取消等待和更复杂调度策略；
 - 云端 LLM Gateway；
 - 宿主机可视化大屏；
 - 进展汇报幻灯片；

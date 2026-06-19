@@ -313,6 +313,11 @@ int context_snapshot(struct agent_context_header *header,
 	return syscall(SYS_context_snapshot, header, records, max);
 }
 
+int context_detail(uint64 sequence, struct agent_context_detail *detail)
+{
+	return syscall(SYS_context_detail, sequence, detail);
+}
+
 int context_rollback(uint64 sequence)
 {
 	return syscall(SYS_context_rollback, sequence);
@@ -328,6 +333,11 @@ int agent_watch(int event_type, const char *filter)
 	return syscall(SYS_agent_watch, event_type, filter);
 }
 
+int agent_unwatch(int event_type, const char *filter)
+{
+	return syscall(SYS_agent_unwatch, event_type, filter);
+}
+
 int agent_wait(struct agent_event *event, int timeout_ticks)
 {
 	return syscall(SYS_agent_wait, event, timeout_ticks);
@@ -336,6 +346,11 @@ int agent_wait(struct agent_event *event, int timeout_ticks)
 int agent_heartbeat(int interval_ticks)
 {
 	return syscall(SYS_agent_heartbeat, interval_ticks);
+}
+
+int agent_heartbeat_stop(void)
+{
+	return agent_heartbeat(0);
 }
 
 int agent_wake(int pid, struct agent_event *event)

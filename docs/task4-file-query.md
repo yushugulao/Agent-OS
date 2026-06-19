@@ -1,6 +1,6 @@
 # 任务四：面向 Agent 查询优化的文件系统扩展
 
-本文是 [design.md](design.md) 的任务四细节附录，重点说明 uCore 分支当前实现的文件元数据表、属性查询、索引路径、依赖查询和演示范围。
+本文是 [design.md](design.md) 的任务四细节附录，重点说明 uCore 分支当前实现的文件元数据表、真实 inode 关联、`.agentmeta` 隐藏元数据文件、属性查询、索引路径和依赖查询。
 
 ## 目标
 
@@ -9,6 +9,9 @@
 当前 uCore 分支实现的是内核级文件元数据服务：
 
 - 支持最多 128 条文件元数据；
+- 以真实文件的 `dev + inum` 作为主要身份；
+- 要求 `physical_name` 能解析到 uCore 根目录中的真实文件名；
+- 使用根目录 `.agentmeta` 隐藏元数据文件保存固定格式元数据表；
 - 支持扫描查询；
 - 支持 status、stage、kind 索引查询；
 - 支持摘要查询；
@@ -16,7 +19,7 @@
 - 文件状态变化可以触发 Agent 事件；
 - 查询结果会写入 Context Path。
 
-当前没有实现对真实磁盘目录的持续后台扫描。这是后续增强方向。
+当前没有实现后台线程持续扫描整棵目录。这是后续增强方向。
 
 ## 数据结构
 
@@ -37,14 +40,32 @@
 | `summary` | 文件摘要 |
 | `dependency_mask` | 依赖阶段位图 |
 | `updated_tick` | 最近更新时间 |
+| `flags` | 删除、持久化等元数据操作标志 |
+| `dev` | 真实文件设备号 |
+| `inum` | 真实文件 inode 号 |
+| `size` | 真实文件大小 |
+| `fs_generation` | 文件系统侧更新代数 |
+| `update_mask` | 本次更新哪些字段 |
 
 查询结构 `struct agent_file_query` 以空字符串表示“不限制该字段”。结果结构 `struct agent_file_query_result` 返回命中数、返回数、扫描数、是否使用索引、是否截断、tick 和最多 8 条命中。
 
 内核启动时 `agentinit()` 会把 status、stage、kind 三类索引桶初始化为 `-1`。因此即使测试程序在调用 `agent_file_meta_init()` 前先执行带索引查询，也会返回 0 条命中，而不会沿着未初始化链表扫描。
 
+## inode 关联和隐藏元数据文件
+
+任务四不是只保存一张脱离文件系统的演示表。当前实现会把 Agent 元数据绑定到真实 uCore 根目录文件：
+
+1. `agent_file_meta_init()` 优先读取 `.agentmeta` 隐藏元数据文件。
+2. 如果 `.agentmeta` 不存在，内核创建默认演示文件，例如 `r42align`、`r42report`。
+3. 每条持久化元数据保存 `physical_name`、`dev`、`inum`、`size` 和 `fs_generation`。
+4. `fileopen(O_CREATE)`、写入、截断、删除会通知 Agent 子系统刷新或删除关联元数据。
+5. `agent_file_meta_set()` 支持 `AGENT_FILE_META_F_DELETE` 删除属性，支持 `AGENT_FILE_META_F_PERSIST` 写入 `.agentmeta`。
+
+这套实现让查询结果中的文件身份可以追溯到真实 inode，同时保留 Agent 需要的 project、workflow、run、stage、kind、status 等高层属性。
+
 ## 初始化数据
 
-`agent_file_meta_init()` 安装演示数据，用于 `agentfinal_ucore`、`agentbench_ucore` 和 `labdemo_ucore`。演示数据模拟一个实验流水线：
+`agent_file_meta_init()` 安装或加载演示数据，用于 `agentfinal_ucore`、`agentfs_ucore`、`agentbench_ucore` 和 `labdemo_ucore`。演示数据模拟一个实验流水线：
 
 | 阶段 | 含义 |
 | --- | --- |
@@ -57,6 +78,8 @@
 `labdemo_ucore` 中由 orchestrator Agent 调用 `agent_file_meta_set()`，把 `RUN-042` 的 align 阶段状态改为 failed，从而触发 sentinel Agent。普通进程不能直接初始化或修改这张全局元数据表。
 
 `agentsecurity_ucore` 还会在初始化前先执行一次 indexed query，确认未初始化索引不会卡住；随后同时构造 `RUN-042` 和 `RUN-999` 两个 failed run，用于验证恢复动作只修改 selector 指定的目标 run。
+
+`agentfs_ucore` 会创建额外真实文件，绑定自定义元数据，并验证字段清空、文件删除清理和 selector 未命中。它还会生成接近 128 条真实文件元数据，让扫描路径和索引路径的 `scanned_records` 差异明显。
 
 ## 查询路径
 
@@ -108,6 +131,8 @@ stage=report;run_id=RUN-999;project=lab-gene-x
 
 内核会同时匹配 stage、run_id 和 project。这样恢复动作和报告写入不会因为同一个 stage 上存在多个 run 而误修改其他文件元数据。
 
+`query_file` 对空查询、未知 key 和坏格式片段返回 `AGENT_STATUS_BAD_PARAM`，不会静默忽略错误条件。
+
 ## 与 Context Path 的关系
 
 文件查询成功后会追加 Context record。这样 Agent 的“看到什么文件、做出什么判断”可以在 Context Path 中回放。
@@ -158,8 +183,8 @@ align+analyze+report+archive
 `agentbench_ucore` 对比扫描路径和索引路径：
 
 ```text
-agentbench_ucore: file_scan_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=100
-agentbench_ucore: file_index_query ops=64 ticks=1 ops_per_tick=64 speedup_x100=200
+agentbench_ucore: file_scan_query ops=64 ticks=5 ops_per_tick=12 speedup_x100=100
+agentbench_ucore: file_index_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=250
 ```
 
 这证明当前系统同时具备：
@@ -197,13 +222,25 @@ agentsecurity_ucore: scoped_report=1
 
 这些输出说明索引初始化前查询安全，且 recovery 只恢复和写入 selector 指定的 run。
 
+`agentfs_ucore` 中的真实文件关联证据：
+
+```text
+agentfs_ucore: default_inode dev=1 inum=11 scanned=2
+agentfs_ucore: custom_inode dev=1 inum=17 size=7
+agentfs_ucore: bulk_index scan=108 index=6 hits=1
+agentfs_ucore: clear_status=1
+agentfs_ucore: delete_clears_metadata=1
+agentfs_ucore: missing_selector_not_found=1
+agentfs_ucore: passed
+```
+
 ## 当前限制
 
 | 限制项 | 说明 |
 | --- | --- |
-| 元数据来源 | 当前来自内核演示数据和 `agent_file_meta_set()` |
-| 真实文件系统扫描 | 尚未实现对目录树的持续后台扫描 |
-| 持久化索引 | 当前索引在内存中，重启后重新初始化 |
+| 元数据来源 | 当前来自 `.agentmeta`、默认真实文件和 `agent_file_meta_set()` |
+| 真实文件系统扫描 | 尚未实现后台线程持续扫描整棵目录 |
+| 持久化索引 | 元数据表可写入 `.agentmeta`；内存索引启动后根据元数据重建 |
 | 查询语法 | 当前支持结构体字段查询和简单 `key=value` 字符串 |
 | 查询规模 | 当前最多 128 条元数据，最多返回 8 条 hit |
 
@@ -211,9 +248,9 @@ agentsecurity_ucore: scoped_report=1
 
 后续可以把任务四推进为完整文件系统能力：
 
-- 扫描真实目录；
-- 给 inode 或目录项增加 Agent 元数据；
-- 把索引持久化到磁盘；
+- 后台扫描真实目录；
+- 把更多 Agent 元数据直接纳入 inode 或目录项；
+- 支持索引增量持久化；
 - 支持更复杂查询条件；
 - 支持按时间、大小、版本、生产者 Agent 查询；
 - 将文件查询结果直接喂给 LLM Gateway。

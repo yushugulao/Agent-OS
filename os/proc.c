@@ -237,6 +237,26 @@ void scheduler()
 	for (;;) {
 		t = fetch_task();
 		if (t == NULL) {
+			int live = 0;
+			for (struct proc *p = pool; p < &pool[NPROC]; p++) {
+				if (p->state != P_USED)
+					continue;
+				for (int i = 0; i < NTHREAD; i++) {
+					if (p->threads[i].state == SLEEPING ||
+					    p->threads[i].state == RUNNABLE ||
+					    p->threads[i].state == RUNNING) {
+						live = 1;
+						break;
+					}
+				}
+				if (live)
+					break;
+			}
+			if (live) {
+				intr_on();
+				asm volatile("wfi");
+				continue;
+			}
 			infof("all app are over!");
 			shutdown();
 			for (;;)
@@ -313,9 +333,10 @@ void freeproc(struct proc *p)
 	p->pagetable = 0;
 	p->max_page = 0;
 	p->ustack_base = 0;
-	for (int i = 0; i > FD_BUFFER_SIZE; i++) {
+	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
 		if (p->files[i] != NULL) {
 			fileclose(p->files[i]);
+			p->files[i] = NULL;
 		}
 	}
 	p->state = P_UNUSED;

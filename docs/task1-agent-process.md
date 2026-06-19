@@ -9,7 +9,7 @@
 当前 uCore 分支不是只做“能创建一个特殊进程”的最小实现，而是在任务一基础上加入：
 
 - Agent PCB 元数据；
-- 4 页 Agent Context；
+- 5 页 Agent Context；
 - kernel shadow 权威历史；
 - user mirror 高速读取镜像；
 - Agent 退出释放；
@@ -66,21 +66,21 @@ Agent Context 使用固定高地址用户虚拟区：
 | 项目 | 值 |
 | --- | --- |
 | 起始地址 | `AGENT_CONTEXT_BASE` |
-| 大小 | `AGENT_CONTEXT_SIZE = 4 * 4096` |
-| 当前实测大小 | 16384 字节 |
+| 大小 | `AGENT_CONTEXT_SIZE = 5 * 4096` |
+| 当前实测大小 | 20480 字节 |
 | 权限 | 用户态镜像可读写，不可执行 |
 | 记录容量 | 128 条 |
 
 这个权限说明只针对 Agent Context 特殊页。普通用户程序页仍由 uCore flat binary loader 按基底方式映射，当前不声明完整用户程序 W^X。
 
-该区域位于 trapframe 下方，只有 Agent 进程在创建时安装 Agent Context 特殊映射。内核在 `struct proc` 中保存 4 个用户镜像页地址和 4 个 shadow 权威页地址，写 header、latest result 和 Context Path record 时先写内核 shadow 页，再同步到用户镜像页。
+该区域位于 trapframe 下方，只有 Agent 进程在创建时安装 Agent Context 特殊映射。内核在 `struct proc` 中保存 5 个用户镜像页地址和 5 个 shadow 权威页地址，写 header、latest result 和 Context Path record 时先写内核 shadow 页，再同步到用户镜像页。
 
 这种设计的效果：
 
 1. Agent 可以直接读取 Context 镜像，减少 syscall。
 2. 内核仍掌握权威历史，防止用户态伪造 Context Path。
 3. 固定地址简化用户态 ABI。
-4. 4 页容量足以容纳 header、latest result 和 128 条记录。
+4. 5 页容量足以容纳 header、latest result、128 条摘要记录和最近 128 条完整详情记录。
 
 ## 创建流程
 
@@ -105,7 +105,7 @@ sequenceDiagram
 
 ## 释放流程
 
-Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 Agent 元数据。当前三个最终测试均会创建 Agent 子进程并等待其退出，用于覆盖正常释放路径。
+Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 Agent 元数据。当前最终测试均会创建 Agent 子进程并等待其退出，用于覆盖正常释放路径。
 
 ## 演示路径
 
@@ -132,7 +132,7 @@ Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 
 
 相比最小任务一要求，当前实现额外加入：
 
-- 4 页 Context，而不是单页或小固定缓冲；
+- 5 页 Context，而不是单页或小固定缓冲；
 - shadow 权威历史；
 - Context Path 元信息；
 - 事件统计和心跳字段；
@@ -150,7 +150,7 @@ Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 
 ## 验证证据
 
 ```text
-agentfinal_ucore: context size=16384 capacity=128
+agentfinal_ucore: context size=20480 capacity=128
 agentfinal_ucore: passed
 agentfinal_ucore: parent passed
 ```

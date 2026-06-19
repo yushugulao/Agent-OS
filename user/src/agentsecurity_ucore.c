@@ -139,7 +139,7 @@ static void check_preinit_index_query(void)
 	memset(&query, 0, sizeof(query));
 	query.flags = AGENT_FILE_QUERY_USE_INDEX;
 	query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
-	strcpy(query.status, "ok");
+	strcpy(query.status, "preinit-missing");
 	check(agent_file_query(&query, &result) == 0, "preinit query return");
 	check(result.total_hits == 0, "preinit query hits");
 	printf("agentsecurity_ucore: preinit_index_query=1\n");
@@ -161,6 +161,50 @@ static void check_legacy_tool_mismatch(void)
 	check(resp.status == AGENT_STATUS_BAD_REQUEST, "legacy mismatch status");
 	check(strcmp(resp.result, "tool_mismatch") == 0, "legacy mismatch text");
 	printf("agentsecurity_ucore: legacy_tool_mismatch=1\n");
+}
+
+static void check_legacy_param_validation(void)
+{
+	struct agent_request req;
+	struct agent_response resp;
+	struct agent_op op;
+	struct agent_result res;
+
+	memset(&req, 0, sizeof(req));
+	memset(&resp, 0, sizeof(resp));
+	req.version = AGENT_CALL_VERSION;
+	req.tool_id = AGENT_TOOL_ECHO;
+	req.request_id = 8401;
+	strcpy(req.tool_name, "echo");
+	strcpy(req.payload_key, "payload");
+	req.payload_type = AGENT_PARAM_STRING;
+	strcpy(req.arg0_key, "arg0");
+	req.arg0_type = AGENT_PARAM_UINT64;
+	strcpy(req.arg1_key, "arg1");
+	req.arg1_type = AGENT_PARAM_UINT64;
+	req.arg0 = 11;
+	req.arg1 = 12;
+	strcpy(req.payload, "legacy-ok");
+	check(agent_call(&req, &resp) == 0, "legacy echo");
+	check(resp.status == AGENT_STATUS_OK, "legacy echo status");
+	check(strcmp(resp.result, "legacy-ok") == 0, "legacy echo result");
+
+	strcpy(req.payload_key, "bad_payload");
+	check(agent_call(&req, &resp) == 0, "legacy bad payload key");
+	check(resp.status == AGENT_STATUS_BAD_PARAM,
+	      "legacy bad payload status");
+	check(strcmp(resp.result, "bad_payload_key") == 0,
+	      "legacy bad payload text");
+
+	memset(&op, 0, sizeof(op));
+	op.version = AGENT_CALL_VERSION;
+	op.tool_id = AGENT_TOOL_AGENT_WAIT;
+	op.request_id = 8402;
+	check(agent_run(&op, &res, 1, 0) == 1, "syscall only run");
+	check(res.status == AGENT_STATUS_BAD_PARAM, "syscall only status");
+	check(strcmp(res.result, "use_agent_wait_syscall") == 0,
+	      "syscall only text");
+	printf("agentsecurity_ucore: legacy_param_validation=1 syscall_only=1\n");
 }
 
 static void run_min_orchestrator(void)
@@ -231,9 +275,18 @@ static void run_recovery(void)
 	make_op(&op, AGENT_TOOL_RERUN_STAGE, 9101, AGENT_ROLE_SENTINEL,
 		"stage=align;run_id=RUN-999;project=lab-gene-x");
 	run_one(&op, &res, AGENT_STATUS_DUPLICATE, "recovery duplicate");
+	make_op(&op, AGENT_TOOL_RERUN_STAGE, 9101, AGENT_ROLE_SENTINEL,
+		"stage=align;run_id=RUN-998;project=lab-gene-x");
+	run_one(&op, &res, AGENT_STATUS_OK, "same request other run");
+	make_op(&op, AGENT_TOOL_RERUN_STAGE, 9103, AGENT_ROLE_SENTINEL,
+		"stage=align;run_id=RUN-NOPE;project=lab-gene-x");
+	run_one(&op, &res, AGENT_STATUS_NOT_FOUND, "missing rerun target");
 	make_op(&op, AGENT_TOOL_WRITE_REPORT, 9102, AGENT_ROLE_SENTINEL,
 		"stage=report;run_id=RUN-999;project=lab-gene-x");
 	run_one(&op, &res, AGENT_STATUS_OK, "recovery write report");
+	make_op(&op, AGENT_TOOL_WRITE_REPORT, 9104, AGENT_ROLE_SENTINEL,
+		"stage=report;run_id=RUN-NOPE;project=lab-gene-x");
+	run_one(&op, &res, AGENT_STATUS_NOT_FOUND, "missing report target");
 	printf("agentsecurity_ucore: recovery rerun_ok=1 duplicate=1\n");
 	exit(0);
 }
@@ -247,10 +300,12 @@ static void run_orchestrator(void)
 	check_preinit_index_query();
 	check(agent_file_meta_init() == 0, "meta init");
 	check_legacy_tool_mismatch();
-	set_align_failed("RUN-042", 3, "lab_RUN042_align_err");
-	set_align_failed("RUN-999", 30, "lab_RUN999_align_err");
-	set_report_failed("RUN-042", 40, "lab_RUN042_report_err");
-	set_report_failed("RUN-999", 41, "lab_RUN999_report_err");
+	check_legacy_param_validation();
+	set_align_failed("RUN-042", 3, "r42aerr");
+	set_align_failed("RUN-999", 30, "r999aerr");
+	set_align_failed("RUN-998", 31, "r998aerr");
+	set_report_failed("RUN-042", 40, "r42rerr");
+	set_report_failed("RUN-999", 41, "r999rerr");
 	pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	check(pid >= 0, "create sentinel");
 	if (pid == 0)
@@ -259,6 +314,7 @@ static void run_orchestrator(void)
 	check(status == 0, "sentinel status");
 	check_align_status("RUN-042", "failed");
 	check_align_status("RUN-999", "failed");
+	check_align_status("RUN-998", "failed");
 	check_report_status("RUN-042", "failed");
 	check_report_status("RUN-999", "failed");
 	pid = agent_create_role(AGENT_ROLE_RECOVERY);
@@ -268,6 +324,7 @@ static void run_orchestrator(void)
 	check(waitpid(pid, &status) == pid, "wait recovery");
 	check(status == 0, "recovery status");
 	check_align_status("RUN-999", "ok");
+	check_align_status("RUN-998", "ok");
 	check_align_status("RUN-042", "failed");
 	check_report_status("RUN-999", "ok");
 	check_report_status("RUN-042", "failed");
