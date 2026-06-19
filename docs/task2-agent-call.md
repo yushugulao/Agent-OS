@@ -2,14 +2,14 @@
 
 本文是 [design.md](design.md) 的任务二细节附录，重点展开结构化工具调用、工具表、错误语义和 Agent Context 写入路径。系统总体接口分工和 ABI 汇总见 [api.md](api.md)。
 
-任务二的目标是在 Agent 进程机制基础上，提供 Agent 进程与内核之间的结构化工具调用接口。uCore 分支的最终热路径使用 `agent_op` / `agent_result` 和 `agent_run()` 批量 ABI，一次 syscall 最多执行 64 个工具 op；legacy `agent_request` / `agent_response` 仍保留作语义兼容。
+任务二的目标是在 Agent 进程机制基础上，提供 Agent 进程与内核之间的结构化工具调用接口。uCore 分支的最终热路径使用 `agent_op` / `agent_result` 和 `agent_run()` 批量 ABI，一次 syscall 最多执行 64 个工具 op；`agent_request` / `agent_response` 作为赛题“工具名称 + 参数键值列表”的正式名称协议入口。
 
 ## 接口
 
 | 接口 | 说明 |
 | --- | --- |
 | `agent_run(struct agent_op *, struct agent_result *, int, uint64)` | 最终高性能批量工具调用入口 |
-| `agent_call(struct agent_request *, struct agent_response *)` | legacy 结构化工具调用入口 |
+| `agent_call(struct agent_request *, struct agent_response *)` | 名称协议结构化工具调用入口 |
 | `agent_tool_list(struct agent_tool_desc *, int)` | Agent 工具列表查询入口 |
 
 系统调用层只负责分发，Agent 相关逻辑集中在 `os/agent.c`。这样工具表、工具执行、Context 写入、文件属性查询、Agent Loop 和消息读写位于同一个模块，便于统一维护。
@@ -23,7 +23,7 @@
 | `struct agent_op` | `version`、`tool_id`、`request_id`、`arg0`、`arg1`、`flags`、`payload` |
 | `struct agent_result` | `version`、`status`、`tool_id`、`request_id`、`sequence`、`value0`、`value1`、`value2`、`result` |
 
-legacy 请求和响应结构：
+名称协议请求和响应结构：
 
 | 结构 | 关键字段 |
 | --- | --- |
@@ -31,7 +31,7 @@ legacy 请求和响应结构：
 | `struct agent_response` | `version`、`status`、`tool_id`、`tool_name`、`request_id`、`sequence`、`value0`、`value1`、`value2`、`result` |
 | `struct agent_tool_desc` | `tool_id`、`flags`、`name`、`params`、`description` |
 
-`agent_run()` 只走 `tool_id`，避免热路径字符串扫描。legacy 请求既可以通过 `tool_id` 选择工具，也可以通过 `tool_name` 选择工具。
+`agent_run()` 只走 `tool_id`，避免热路径字符串扫描。`agent_call()` 既可以通过 `tool_id` 选择工具，也可以通过 `tool_name` 选择工具；只传 `tool_name` 时，内核按工具表名称解析，并校验参数键和类型。
 
 ## 批量执行
 
@@ -95,7 +95,7 @@ legacy 请求和响应结构：
 | `AGENT_STATUS_DENIED` | 权限检查拒绝 |
 | `AGENT_STATUS_DUPLICATE` | 重复恢复动作被识别 |
 
-最终功能验收程序 `agentfinal_ucore` 会覆盖批量工具调用、sequence 连续性、Context 写入和 Context Snapshot。`labdemo_ucore` 覆盖 denied 和 duplicate 两类业务错误。`agentsecurity_ucore` 专门覆盖用户态伪造 role 仍被内核真实 capability 拒绝的负向路径，并覆盖 legacy `agent_call()` 中 `tool_id` 和 `tool_name` 不一致时返回 `AGENT_STATUS_BAD_REQUEST` / `tool_mismatch`。
+最终功能验收程序 `agentfinal_ucore` 会覆盖批量工具调用、sequence 连续性、Context 写入、Context Snapshot，并用 name-only `agent_call()` 验证 `echo`、`query_file`、`pid_info` 三个工具。`labdemo_ucore` 覆盖 denied 和 duplicate 两类业务错误。`agentsecurity_ucore` 专门覆盖用户态伪造 role 仍被内核真实 capability 拒绝的负向路径，并覆盖 `agent_call()` 中 `tool_id` 和 `tool_name` 不一致时返回 `AGENT_STATUS_BAD_REQUEST` / `tool_mismatch`。
 
 ## Agent Context 写入
 
@@ -128,12 +128,14 @@ legacy 请求和响应结构：
 ```text
 agentfinal_ucore: batch first_seq=1 last_seq=64
 agentfinal_ucore: short_text_history=1 payload=ucore-final result=ucore-final
+agentfinal_ucore: legacy_name_protocol=1
 agentfinal_ucore: passed
 ```
 
 `agentbench_ucore`：
 
 ```text
+agentbench_ucore: repeated_ticks scalar_min=4 scalar_avg=4 scalar_max=5 batch_min=2 batch_avg=2 batch_max=3
 agentbench_ucore: scalar_agent_run ops=256 ticks=4 ops_per_tick=64 speedup_x100=100
 agentbench_ucore: batch_agent_run ops=256 ticks=2 ops_per_tick=128 speedup_x100=200
 ```

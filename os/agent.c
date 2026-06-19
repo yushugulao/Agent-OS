@@ -153,17 +153,37 @@ static int agent_contains(char *haystack, char *needle)
 
 static int agent_context_layout_ok(void)
 {
+	uint64 cache_offset;
+
 	if (AGENT_CONTEXT_LATEST_RESPONSE_OFFSET !=
 	    sizeof(struct agent_context_header))
 		return 0;
 	if (AGENT_CONTEXT_RECORDS_OFFSET != PAGE_SIZE)
 		return 0;
-	if (AGENT_CONTEXT_RECORDS_OFFSET +
-		    AGENT_CONTEXT_MAX_RECORDS *
-			    sizeof(struct agent_context_record) >
-	    AGENT_CONTEXT_SIZE)
+	cache_offset = AGENT_CONTEXT_RECORDS_OFFSET +
+		       AGENT_CONTEXT_MAX_RECORDS *
+			       sizeof(struct agent_context_record);
+	if (cache_offset > AGENT_CONTEXT_SIZE)
+		return 0;
+	if (cache_offset == AGENT_CONTEXT_SIZE)
 		return 0;
 	return 1;
+}
+
+static uint64 agent_context_user_cache_offset(void)
+{
+	return AGENT_CONTEXT_RECORDS_OFFSET +
+	       AGENT_CONTEXT_MAX_RECORDS *
+		       sizeof(struct agent_context_record);
+}
+
+static uint64 agent_context_user_cache_size(void)
+{
+	uint64 offset = agent_context_user_cache_offset();
+
+	if (offset >= AGENT_CONTEXT_SIZE)
+		return 0;
+	return AGENT_CONTEXT_SIZE - offset;
 }
 
 static void agent_free_shadow(uint64 *kva)
@@ -215,6 +235,7 @@ void agent_clear_metadata(struct proc *p)
 	p->agent_event_count = 0;
 	p->agent_event_dropped = 0;
 	p->agent_wait_count = 0;
+	p->agent_wait_loop_count = 0;
 	p->agent_wait_sleep_count = 0;
 	p->agent_wait_wakeup_count = 0;
 	p->agent_timeout_count = 0;
@@ -412,13 +433,8 @@ static int agent_sync_context_range(struct proc *p, uint64 offset, uint64 len)
 
 static int agent_sync_context_all(struct proc *p)
 {
-	for (int i = 0; i < AGENT_CONTEXT_PAGES; i++) {
-		if (p->agent_shadow_kva[i] == 0 || p->agent_ctx_kva[i] == 0)
-			return -1;
-		memmove((void *)p->agent_ctx_kva[i],
-			(void *)p->agent_shadow_kva[i], PAGE_SIZE);
-	}
-	return 0;
+	return agent_sync_context_range(p, 0,
+					agent_context_user_cache_offset());
 }
 
 static struct agent_context_header *agent_header_ptr(struct proc *p)
@@ -480,6 +496,8 @@ static void agent_fill_header(struct proc *p,
 	header->rollback_count = p->context_path_rollback_count;
 	header->latest_response_offset = p->latest_response_offset;
 	header->records_offset = p->records_offset;
+	header->user_cache_offset = agent_context_user_cache_offset();
+	header->user_cache_size = agent_context_user_cache_size();
 }
 
 static int agent_write_header(struct proc *p)
@@ -635,6 +653,7 @@ static void agent_info_fill(struct proc *p, struct agent_info *info)
 	info->event_queue_count = p->agent_event_count_queued;
 	info->watch_count = p->agent_watch_count;
 	info->wait_count = p->agent_wait_count;
+	info->wait_loop_count = p->agent_wait_loop_count;
 	info->wait_sleep_count = p->agent_wait_sleep_count;
 	info->wait_wakeup_count = p->agent_wait_wakeup_count;
 	info->timeout_count = p->agent_timeout_count;
@@ -779,7 +798,7 @@ static void agent_slot_name(int slot, char *out, int n)
 	out[4] = '0' + slot % 10;
 }
 
-static int agent_file_uses_meta_store_name(char *path)
+int agent_file_is_meta_store_name(char *path)
 {
 	return path && strncmp(path, AGENT_META_STORE_NAME, DIRSIZ) == 0;
 }
@@ -790,7 +809,7 @@ static void agent_file_normalize_physical(int slot, struct agent_file_meta *m)
 
 	if (m->physical_name[0] == 0 ||
 	    strlen(m->physical_name) >= DIRSIZ ||
-	    agent_file_uses_meta_store_name(m->physical_name)) {
+	    agent_file_is_meta_store_name(m->physical_name)) {
 		agent_slot_name(slot, generated, sizeof(generated));
 		safestrcpy(m->physical_name, generated,
 			   sizeof(m->physical_name));
@@ -831,9 +850,14 @@ static int agent_file_load(void)
 	struct inode *ip;
 	struct agent_meta_store *store = &agent_meta_store_buf;
 	int n;
+	int used = 0;
 
-	if (agent_file_loaded)
-		return 0;
+	if (agent_file_loaded) {
+		for (int i = 0; i < AGENT_FILE_META_MAX; i++)
+			if (agent_files[i].used)
+				used++;
+		return used;
+	}
 	memset(agent_files, 0, sizeof(agent_files));
 	ip = agent_fs_lookup_or_create(AGENT_META_STORE_NAME, 0);
 	if (ip) {
@@ -845,14 +869,16 @@ static int agent_file_load(void)
 			memmove(agent_files, store->records,
 				sizeof(agent_files));
 			for (int i = 0; i < AGENT_FILE_META_MAX; i++)
-				if (agent_files[i].used)
+				if (agent_files[i].used) {
+					used++;
 					agent_file_bind_slot(i);
+				}
 		}
 		iput(ip);
 	}
 	agent_file_loaded = 1;
 	agent_file_rebuild_indexes();
-	return 0;
+	return used;
 }
 
 static int agent_file_persist(void)
@@ -936,7 +962,7 @@ void agent_fs_note_create(struct inode *ip, char *path)
 	int slot = -1;
 
 	if (agent_meta_store_busy || ip == 0 || path == 0 ||
-	    agent_file_uses_meta_store_name(path))
+	    agent_file_is_meta_store_name(path))
 		return;
 	agent_file_load();
 	ivalid(ip);
@@ -1468,8 +1494,7 @@ static int agent_queue_event(struct proc *target, int source_pid, int type,
 
 	if (!target->is_agent)
 		return 0;
-	if (type != AGENT_EVENT_TIMER &&
-	    !agent_filter_matches(target, type, payload))
+	if (!agent_filter_matches(target, type, payload))
 		return 0;
 	if (target->agent_event_count_queued >= AGENT_EVENT_QUEUE_CAP) {
 		target->agent_event_dropped++;
@@ -1893,10 +1918,14 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 			agent_result_text(res, "denied");
 			break;
 		}
-		agent_file_install_default();
 		agent_action_history_count = 0;
 		memset(agent_action_history, 0, sizeof(agent_action_history));
-		res->value0 = AGENT_FILE_META_MAX;
+		agent_file_loaded = 0;
+		res->value0 = agent_file_load();
+		if (res->value0 == 0) {
+			agent_file_install_default();
+			res->value0 = 7;
+		}
 		agent_result_text(res, "file_meta_init");
 		break;
 	case AGENT_TOOL_READ_FILE_SUMMARY:
@@ -2645,6 +2674,7 @@ int sys_agent_wait(uint64 eventaddr, int timeout_ticks)
 	memset(&event, 0, sizeof(event));
 	p->agent_wait_count++;
 	for (;;) {
+		p->agent_wait_loop_count++;
 		if (agent_event_dequeue(p, &event)) {
 			p->loop_state = AGENT_LOOP_RUNNING;
 			p->agent_wait_deadline_valid = 0;
@@ -2677,9 +2707,6 @@ int sys_agent_wait(uint64 eventaddr, int timeout_ticks)
 		if (timeout_ticks >= 0) {
 			p->agent_wait_deadline_valid = 1;
 			p->agent_wait_deadline = start + timeout_ticks;
-			p->agent_wait_sleep_count++;
-			yield();
-			continue;
 		} else {
 			p->agent_wait_deadline_valid = 0;
 			p->agent_wait_deadline = 0;
@@ -2755,7 +2782,9 @@ int sys_agent_file_meta_init(void)
 		return AGENT_STATUS_DENIED;
 	agent_action_history_count = 0;
 	memset(agent_action_history, 0, sizeof(agent_action_history));
-	agent_file_install_default();
+	agent_file_loaded = 0;
+	if (agent_file_load() <= 0)
+		agent_file_install_default();
 	return 0;
 }
 
@@ -3005,8 +3034,7 @@ void agent_tick(void)
 	for (struct proc *p = pool; p < &pool[NPROC]; p++) {
 		if (p->state == P_UNUSED || !p->is_agent)
 			continue;
-		if (p->loop_state == AGENT_LOOP_WAITING &&
-		    p->agent_wait_deadline_valid &&
+		if (p->agent_wait_deadline_valid &&
 		    now >= p->agent_wait_deadline) {
 			p->agent_wait_deadline_valid = 0;
 			agent_wake_threads(p);

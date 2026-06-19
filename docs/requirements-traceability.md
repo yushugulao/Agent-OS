@@ -47,6 +47,7 @@
 | T2-7 | 敏感工具授权不信任用户态自报 role | 扩展增强 | `capability_check`、`rerun_stage`、`write_report` 均读取当前 PCB capability | `agentsecurity_ucore: sentinel spoof_denied=1` |
 | T2-8 | legacy `tool_id` 和 `tool_name` 不一致时拒绝执行 | 扩展增强 | `sys_agent_call()` 先校验 ID 对应工具名，错误时返回 `AGENT_STATUS_BAD_REQUEST` 和 `tool_mismatch` | `agentsecurity_ucore: legacy_tool_mismatch=1` |
 | T2-9 | legacy 参数键/类型错误被拒绝，syscall-only 工具不能走 batch | 扩展增强 | legacy 参数校验、`AGENT_TOOL_F_SYSCALL_ONLY` | `agentsecurity_ucore: legacy_param_validation=1 syscall_only=1` |
+| T2-10 | 工具名称 + 参数键值列表协议可作为正式入口 | 已验证 | `agent_call()` 支持 name-only 请求和 key/type 校验 | `agentfinal_ucore: legacy_name_protocol=1` |
 
 ## 任务三：上下文路径管理
 
@@ -59,6 +60,7 @@
 | T3-5 | 支持批量上下文快照和 rollback | 已验证 | `context_snapshot`、`context_query`、`context_rollback`、`context_clear` | `agentfinal_ucore`、`agentbench_ucore` |
 | T3-6 | 用户态篡改 Context 镜像不影响内核权威历史 | 扩展增强 | kernel shadow + user mirror | `agentfinal_ucore: tamper_protected=1` |
 | T3-7 | 可区分系统自动记录和手动记录，并能查询完整工具详情 | 扩展增强 | record flags、detail ring、`context_detail()` | `agentfinal_ucore: record_flags system=1 manual=1 truncated=0`、`context_detail=1` |
+| T3-8 | Agent 有可自管的 Context cache，且不影响内核可信历史 | 扩展增强 | `agent_context_header.user_cache_offset/user_cache_size`，snapshot 只刷新内核管理区 | `agentfinal_ucore: user_cache_preserved=1` |
 
 ## 任务四：面向 Agent 查询优化的文件系统扩展
 
@@ -74,18 +76,19 @@
 | T4-8 | 索引初始化前查询安全 | 扩展增强 | `agentinit()` 初始化 status/stage/kind 索引桶为 `-1` | `agentsecurity_ucore: preinit_index_query=1` |
 | T4-9 | 多 run 恢复和报告写入只修改目标 run | 扩展增强 | `rerun_stage` 和 `write_report` 支持 `stage=...;run_id=...;project=...` selector | `agentsecurity_ucore: scoped_rerun=1`、`agentsecurity_ucore: scoped_report=1` |
 | T4-10 | 文件元数据绑定真实 uCore 根目录 inode | 已验证 | `agent_fs_note_create/write/truncate/delete()`、`dev + inum` 主键 | `agentfs_ucore: default_inode`、`agentfs_ucore: custom_inode` |
-| T4-11 | 元数据可写入并重新加载 | 已验证 | `.agentmeta` 固定格式隐藏元数据文件 | `agentfs_ucore` |
-| T4-12 | 对真实磁盘目录做后台持续扫描 | 未实现 | 无 | 后续增强方向 |
+| T4-11 | 元数据可写入并重新加载 | 已验证 | 私有 `.agentmeta` 固定格式元数据文件 | `agentfs_ucore: .agentmeta_reload=1` |
+| T4-12 | 普通文件 syscall 不能直接访问 Agent 元数据后端 | 已验证 | `fileopen()` / `fileunlink()` 对 `.agentmeta` 返回 `-1` | `agentsecurity_ucore: .agentmeta_protected=1` |
+| T4-13 | 对真实磁盘目录做后台持续扫描 | 未实现 | 无 | 后续增强方向 |
 
 ## 任务五：Agent Loop 内核运行机制
 
 | ID | 赛题要求 | 状态 | 实现位置 | 验证证据 |
 | --- | --- | --- | --- | --- |
 | T5-1 | Agent 可注册和删除 watch | 已验证 | `agent_watch()`、`agent_unwatch()`、`AGENT_WATCH_MAX=8` | `labdemo_ucore: WATCH_REGISTERED`、`agentloop_ucore: unwatch=1` |
-| T5-2 | Agent 可等待事件并 timeout | 已验证 | `agent_wait()`、`AGENT_STATUS_TIMEOUT`、`timeout_count`、事件等待路径 | `agentbench_ucore: timeout_heartbeat=1`、`agentloop_ucore: timeout_sleep=1` |
+| T5-2 | Agent 可等待事件并 timeout | 已验证 | `agent_wait()`、`AGENT_STATUS_TIMEOUT`、`timeout_count`、有限 timeout 睡眠等待路径 | `agentbench_ucore: timeout_heartbeat=1`、`agentloop_ucore: timeout_sleep_no_poll=1` |
 | T5-3 | 文件状态变化能唤醒目标 Agent | 已验证 | `agent_file_meta_set()` 投递包含 status、stage、run_id、project 的 `AGENT_EVENT_FILE_STATUS` | `labdemo_ucore` sentinel 收到 failed 事件 |
 | T5-4 | 消息能触发 Agent 事件 | 已验证 | `send_message` 工具、`agent_wake()` | `labdemo_ucore` sentinel->investigator、investigator->recovery |
-| T5-5 | 心跳字段可设置、可投递 TIMER 事件、可停止 | 已验证 | `agent_heartbeat()`、`agent_heartbeat_stop()`、TIMER watch | `agentbench_ucore: timeout_heartbeat=1`、`agentloop_ucore: heartbeat_wake_stop=1` |
+| T5-5 | 心跳字段可设置、可按 TIMER watch 投递事件、可停止 | 已验证 | `agent_heartbeat()`、`agent_heartbeat_stop()`、TIMER watch/unwatch | `agentbench_ucore: timeout_heartbeat=1`、`agentloop_ucore: timer_unwatch=1`、`agentloop_ucore: heartbeat_wake_stop=1` |
 | T5-6 | event wait/wake 可计时观测并稳定完成 | 已验证 | `agentbench_ucore` | `agentbench_ucore: event_wait_wake`；该项以自身为基线，不作为相对加速结论 |
 | T5-7 | 事件处理写入 Context Path | 已验证 | `agent_wait()` 成功消费事件后追加 Context | `labdemo_ucore` 和 [task5-agent-loop.md](task5-agent-loop.md) |
 | T5-8 | 普通进程不能直接伪造事件 | 扩展增强 | `agent_wake()` 要求 Agent 且具备 `MESSAGE_SEND` 或 `ORCHESTRATE` | `agentsecurity_ucore` 普通进程调用 `agent_wake()` 返回 `-1` |
@@ -103,4 +106,4 @@
 
 ## 追踪结论
 
-任务一至三已有增强实现和测试证据，并且在 Context 容量、批量工具调用、Context shadow 可信历史、detail 查询、snapshot 查询和性能测试方面高于最小要求。任务四已经实现真实 inode 关联、`.agentmeta` 隐藏元数据文件、属性查询和索引查询；任务五已经实现 16 槽 FIFO 事件队列、watch/unwatch、wait/timeout 和 heartbeat wake/stop。当前主要短板在后台目录扫描、事件优先级和取消等待、云端 LLM Gateway、可视化大屏、演示视频和答辩材料。
+任务一至三已有增强实现和测试证据，并且在 Context 容量、批量工具调用、Context shadow 可信历史、用户自管 cache、detail 查询、snapshot 查询和性能测试方面高于最小要求。任务四已经实现真实 inode 关联、私有 `.agentmeta` 元数据文件、属性查询和索引查询；任务五已经实现 16 槽 FIFO 事件队列、watch/unwatch、有限 timeout 睡眠等待和 heartbeat wake/stop。当前主要短板在后台目录扫描、事件优先级和取消等待、云端 LLM Gateway、可视化大屏、演示视频和答辩材料。

@@ -66,7 +66,7 @@
 #define AGENT_CONTEXT_PAGES 5
 #define AGENT_CONTEXT_SIZE (AGENT_CONTEXT_PAGES * AGENT_PAGE_SIZE)
 #define AGENT_CONTEXT_MAGIC 0x4147435458543031ULL
-#define AGENT_CONTEXT_VERSION 3
+#define AGENT_CONTEXT_VERSION 4
 #define AGENT_CONTEXT_MAX_RECORDS 128
 #define AGENT_USER_TOP (1L << (9 + 9 + 9 + 12 - 1))
 #define AGENT_TRAMPOLINE (AGENT_USER_TOP - AGENT_PAGE_SIZE)
@@ -164,6 +164,7 @@ struct agent_info {
 	uint64 event_queue_count;
 	uint64 watch_count;
 	uint64 wait_count;
+	uint64 wait_loop_count;
 	uint64 wait_sleep_count;
 	uint64 wait_wakeup_count;
 	uint64 timeout_count;
@@ -206,6 +207,8 @@ struct agent_context_header {
 	uint64 rollback_count;
 	uint64 latest_response_offset;
 	uint64 records_offset;
+	uint64 user_cache_offset;
+	uint64 user_cache_size;
 };
 
 struct agent_context_record {

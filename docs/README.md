@@ -22,8 +22,8 @@
 | [task1-agent-process.md](task1-agent-process.md) | 任务一 Agent 进程与地址空间设计细节 |
 | [task2-agent-call.md](task2-agent-call.md) | 任务二结构化工具调用设计细节 |
 | [task3-context-path.md](task3-context-path.md) | 任务三 Context Path 设计细节 |
-| [task4-file-query.md](task4-file-query.md) | 任务四文件属性查询、真实 inode 关联、`.agentmeta` 隐藏元数据文件、索引和依赖查询设计细节 |
-| [task5-agent-loop.md](task5-agent-loop.md) | 任务五 watch/unwatch、FIFO 事件队列、wait/timeout、heartbeat 设计细节 |
+| [task4-file-query.md](task4-file-query.md) | 任务四文件属性查询、真实 inode 关联、私有 `.agentmeta` 元数据文件、索引和依赖查询设计细节 |
+| [task5-agent-loop.md](task5-agent-loop.md) | 任务五 watch/unwatch、FIFO 事件队列、wait/timeout 睡眠、heartbeat 设计细节 |
 | [test-record.md](test-record.md) | 测试记录和关键输出 |
 | [../LICENSE](../LICENSE) | 源代码 GPL-3.0 |
 | [../DOCUMENTATION_LICENSE.md](../DOCUMENTATION_LICENSE.md) | 文档与答辩材料 CC BY-SA 4.0 |

@@ -22,9 +22,9 @@ agentsecurity_ucore
 | 程序 | 作用 |
 | --- | --- |
 | `agentfinal_ucore` | 证明任务一至三核心功能正确，同时检查文件索引和事件自唤醒 |
-| `agentfs_ucore` | 证明任务四已经绑定真实 inode、支持 `.agentmeta` 和索引查询 |
-| `agentloop_ucore` | 证明任务五的 FIFO 事件队列、unwatch、timeout 和 heartbeat stop |
-| `agentbench_ucore` | 给出批量调用、Context 直接读、snapshot、文件索引的性能证据，并验证 timeout/heartbeat 与 wait/wake 计时 |
+| `agentfs_ucore` | 证明任务四已经绑定真实 inode、支持私有 `.agentmeta` 重新加载和索引查询 |
+| `agentloop_ucore` | 证明任务五的 FIFO 事件队列、unwatch、有限 timeout 睡眠、TIMER unwatch 和 heartbeat stop |
+| `agentbench_ucore` | 给出批量调用、Context 直接读、snapshot、文件索引候选记录数的性能证据，并验证 timeout/heartbeat 与 wait/wake 计时 |
 | `labdemo_ucore` | 展示一个由 orchestrator 控制的多 Agent 实验恢复场景 |
 | `agentsecurity_ucore` | 展示普通进程和低权限 Agent 无法越权，并验证普通 mail 与多 run 精确恢复 |
 
@@ -96,6 +96,13 @@ agentfinal_ucore: tamper_protected=1
 说明用户态直接修改 Context 镜像不能伪造内核权威历史。当前设计同时兼顾直接读性能和可信 snapshot。
 
 ```text
+agentfinal_ucore: user_cache_preserved=1 offset=17408 size=3072
+agentfinal_ucore: legacy_name_protocol=1
+```
+
+说明 Context 尾部提供 Agent 自管 cache，snapshot 不会覆盖它；`agent_call()` 也能按工具名称和参数键值列表完成正式结构化调用。
+
+```text
 agentfinal_ucore: fifo oldest=66 latest=193 dropped=65
 ```
 
@@ -135,6 +142,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfs_ucore CHAPTER
 | `default_inode` | 默认演示元数据已经绑定真实根目录文件的 `dev/inum` |
 | `custom_inode` | 用户态创建的新文件也能绑定 Agent 元数据 |
 | `bulk_index` | 接近 128 条记录时，索引路径检查的候选记录少于扫描路径 |
+| `.agentmeta_reload` | 再次初始化时从私有 `.agentmeta` 重新加载自定义元数据 |
 | `clear_status` | 属性清空能够生效 |
 | `delete_clears_metadata` | 删除真实文件会同步清理 Agent 元数据 |
 | `missing_selector_not_found` | 恢复/报告 selector 没有命中时返回明确失败 |
@@ -161,7 +169,8 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentloop_ucore CHAPT
 | `fifo=1` | 事件按照投递顺序被消费 |
 | `overflow_dropped=1` | 16 槽队列满时拒绝新事件，不覆盖旧事件 |
 | `unwatch=1` | watch 可删除 |
-| `timeout_sleep=1` | 有限 timeout 等待进入睡眠，不通过循环消耗 CPU |
+| `timeout_sleep_no_poll=1` | 有限 timeout 等待进入睡眠，不通过循环消耗 CPU |
+| `timer_unwatch=1` | TIMER watch 删除后，heartbeat 不再投递可消费 TIMER 事件 |
 | `heartbeat_wake_stop=1` | heartbeat 能唤醒 Agent，停止后不再投递 |
 
 最后看到：
@@ -190,6 +199,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAP
 | `context_snapshot` | 一次返回多条历史，适合批量读取 |
 | `file_scan_query` | 文件元数据扫描路径 |
 | `file_index_query` | 文件元数据索引路径 |
+| `file_query_records` | 直接展示扫描路径和索引路径检查的候选记录数量 |
 | `timeout_heartbeat` | 无事件等待会 timeout，心跳字段可通过 `agent_info()` 观察 |
 | `event_wait_wake` | Agent Loop 等待和唤醒计时观测 |
 

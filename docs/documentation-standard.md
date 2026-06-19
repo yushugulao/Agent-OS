@@ -33,9 +33,9 @@ uCore 分支文档按当前代码事实编写：
 - 内核 ABI 以 `os/agent.h` 为准。
 - 最终测试入口是 `agentfinal_ucore`、`agentfs_ucore`、`agentloop_ucore`、`agentbench_ucore`、`labdemo_ucore` 和 `agentsecurity_ucore`。
 - Agent 交付以 `CHAPTER=agent` 为验收主路径；`ch3_trace` 作为代表性 uCore 基础 syscall 抽测材料。
-- 任务四当前是绑定真实 inode 的内核文件元数据表、`.agentmeta` 隐藏元数据文件和索引查询服务；不表述为后台线程持续扫描整棵目录。
-- 任务五当前是可验证的 watch/unwatch、FIFO 事件队列、wait/wake/timeout/heartbeat event delivery；不表述为完整平台级长期调度器。
-- 性能数据是一次样例输出，复跑时 tick 数值会波动。
+- 任务四当前是绑定真实 inode 的内核文件元数据表、私有 `.agentmeta` 元数据文件、重新加载和索引查询服务；不表述为后台线程持续扫描整棵目录。
+- 任务五当前是可验证的 watch/unwatch、FIFO 事件队列、wait/wake、有限 timeout 睡眠、heartbeat event delivery；不表述为完整平台级长期调度器。
+- 性能数据是样例输出，复跑时 tick 数值会波动；文件查询性能重点看候选记录数差异和多轮 tick 观测。
 - event wait/wake 输出是计时观测，不表述为调度器性能结论。
 
 ## 外部参考

@@ -44,6 +44,24 @@ static void print_perf(const char *name, int ops_count, int ticks,
 	       name, ops_count, ticks, ops_count / ticks, speed);
 }
 
+static void tick_stats(int *values, int n, int *min, int *avg, int *max)
+{
+	int sum = 0;
+
+	*min = values[0];
+	*max = values[0];
+	for (int i = 0; i < n; i++) {
+		if (values[i] < *min)
+			*min = values[i];
+		if (values[i] > *max)
+			*max = values[i];
+		sum += values[i];
+	}
+	*avg = sum / n;
+	if (*avg <= 0)
+		*avg = 1;
+}
+
 static void fill_echo_batch(uint64 base)
 {
 	for (int i = 0; i < AGENT_BATCH_MAX; i++) {
@@ -272,7 +290,15 @@ static void run_agent_bench(void)
 	int snapshot_records;
 	int scan;
 	int index;
+	int scan_records;
+	int index_records;
 	int waitwake;
+	int scalar_runs[3];
+	int batch_runs[3];
+	int scalar_min;
+	int scalar_max;
+	int batch_min;
+	int batch_max;
 
 	check(agent_info(&info) == 0, "info");
 	check(info.agent_role == AGENT_ROLE_ORCHESTRATOR, "orchestrator role");
@@ -284,15 +310,25 @@ static void run_agent_bench(void)
 	check(agent_file_meta_init() == 0, "meta init");
 	seed_file_bench_metadata();
 	check_timeout_and_heartbeat();
-	scalar = bench_scalar();
-	batch = bench_batch();
+	for (int i = 0; i < 3; i++) {
+		scalar_runs[i] = bench_scalar();
+		batch_runs[i] = bench_batch();
+	}
+	tick_stats(scalar_runs, 3, &scalar_min, &scalar, &scalar_max);
+	tick_stats(batch_runs, 3, &batch_min, &batch, &batch_max);
 	direct = bench_direct(&info);
 	query = bench_query();
 	snapshot = bench_snapshot(&snapshot_records);
 	scan = bench_file_query(AGENT_FILE_QUERY_SCAN);
+	scan_records = bench_file_query_result.scanned_records;
 	index = bench_file_query(AGENT_FILE_QUERY_USE_INDEX);
+	index_records = bench_file_query_result.scanned_records;
 	waitwake = bench_wait_wake();
 
+	printf("agentbench_ucore: repeated_ticks scalar_min=%d scalar_avg=%d scalar_max=%d batch_min=%d batch_avg=%d batch_max=%d\n",
+	       scalar_min, scalar, scalar_max, batch_min, batch, batch_max);
+	printf("agentbench_ucore: file_query_records scan_records=%d index_records=%d\n",
+	       scan_records, index_records);
 	printf("agentbench_ucore: case ops ticks ops_per_tick speedup_x100\n");
 	print_perf("scalar_agent_run", TOOL_OPS, scalar, TOOL_OPS, scalar);
 	print_perf("batch_agent_run", TOOL_OPS, batch, TOOL_OPS, scalar);

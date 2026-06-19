@@ -65,7 +65,7 @@
 #define AGENT_BATCH_MAX         64
 
 #define AGENT_CONTEXT_MAGIC       0x4147435458543031ULL
-#define AGENT_CONTEXT_VERSION     3
+#define AGENT_CONTEXT_VERSION     4
 #define AGENT_CONTEXT_PAGES       5
 #define AGENT_CONTEXT_SIZE        (AGENT_CONTEXT_PAGES * PAGE_SIZE)
 #define AGENT_CONTEXT_MAX_RECORDS 128
@@ -168,6 +168,7 @@ struct agent_info {
 	uint64 event_queue_count;
 	uint64 watch_count;
 	uint64 wait_count;
+	uint64 wait_loop_count;
 	uint64 wait_sleep_count;
 	uint64 wait_wakeup_count;
 	uint64 timeout_count;
@@ -210,6 +211,8 @@ struct agent_context_header {
 	uint64 rollback_count;
 	uint64 latest_response_offset;
 	uint64 records_offset;
+	uint64 user_cache_offset;
+	uint64 user_cache_size;
 };
 
 struct agent_context_record {
@@ -359,6 +362,7 @@ void agent_fs_note_create(struct inode *ip, char *path);
 void agent_fs_note_write(struct inode *ip);
 void agent_fs_note_truncate(struct inode *ip);
 void agent_fs_note_delete(struct inode *ip);
+int agent_file_is_meta_store_name(char *path);
 
 int sys_agent_create(void);
 int sys_agent_create_role(int role);

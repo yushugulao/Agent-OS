@@ -109,6 +109,7 @@ struct proc {
 	uint64 agent_event_count;
 	uint64 agent_event_dropped;
 	uint64 agent_wait_count;
+	uint64 agent_wait_loop_count;
 	uint64 agent_wait_sleep_count;
 	uint64 agent_wait_wakeup_count;
 	uint64 agent_timeout_count;

@@ -6,14 +6,14 @@
 
 ### Agent-OS syscall
 
-Agent-OS 在 uCore syscall 编号空间中使用 500 至 520：
+Agent-OS 在 uCore syscall 编号空间中使用 500 至 519：
 
 | syscall | 编号 | 用户态原型 | 说明 |
 | --- | ---: | --- | --- |
 | `agent_create` | 500 | `int agent_create(void)` | 创建 Agent 子进程 |
 | `agent_info` | 501 | `int agent_info(struct agent_info *)` | 查询当前进程 Agent 元信息 |
 | `agent_run` | 502 | `int agent_run(struct agent_op *, struct agent_result *, int, uint64)` | 高性能批量工具调用入口 |
-| `agent_call` | 503 | `int agent_call(struct agent_request *, struct agent_response *)` | legacy 结构化工具调用 |
+| `agent_call` | 503 | `int agent_call(struct agent_request *, struct agent_response *)` | 正式名称协议入口，使用工具名称和参数键值列表 |
 | `agent_tool_list` | 504 | `int agent_tool_list(struct agent_tool_desc *, int)` | 查询工具列表 |
 | `context_push` | 505 | `int context_push(struct agent_context_record *)` | 手动追加 Context Path 节点 |
 | `context_query` | 506 | `int context_query(uint64, struct agent_context_record *, int)` | 按 sequence 查询可见 Context Path |
@@ -31,7 +31,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 520：
 | `agent_unwatch` | 518 | `int agent_unwatch(int, const char *)` | 删除匹配 watch；`AGENT_EVENT_NONE` 加空 filter 表示清空全部 watch |
 | `context_detail` | 519 | `int context_detail(uint64, struct agent_context_detail *)` | 按 sequence 查询完整工具调用详情 |
 
-`agent_run` 和 `context_snapshot` 是最终成品主路径。`agent_call` 保留为 legacy 兼容入口。
+`agent_run` 和 `context_snapshot` 是最终成品性能主路径。`agent_call` 是赛题“工具名称 + 参数键值列表”结构化协议的正式入口，也兼容已有演示程序。
 
 ### uCore 基础兼容 syscall
 
@@ -56,7 +56,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 520：
 | 大小 | `AGENT_CONTEXT_SIZE = 5 * 4096` |
 | 当前大小 | 20480 字节 |
 | 记录容量 | `AGENT_CONTEXT_MAX_RECORDS = 128` |
-| Context 版本 | `AGENT_CONTEXT_VERSION = 3` |
+| Context 版本 | `AGENT_CONTEXT_VERSION = 4` |
 | 权限 | Agent Context 用户镜像页可读写、不可执行；内核 shadow 副本不可被用户态访问 |
 
 说明：上述权限只描述 Agent Context 特殊页。当前 uCore 分支仍使用 flat binary loader，普通用户程序正文、数据和 bss 所在页沿用基底 loader 的 RWX 映射；本项目没有在本轮把普通用户程序装载流程重构为完整 W^X。
@@ -68,10 +68,12 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 520：
 | `0` | `struct agent_context_header` |
 | `sizeof(struct agent_context_header)` | `struct agent_result` |
 | `AGENT_CONTEXT_RECORDS_OFFSET = 4096` | `struct agent_context_record[128]` |
+| `header.user_cache_offset` | 用户自管 cache 起点，当前测试输出为 17408 |
+| `header.user_cache_size` | 用户自管 cache 大小，当前测试输出为 3072 |
 
 内核在 `struct proc` 中同时保存 5 个用户镜像页和 5 个内核私有 shadow 页。header、latest result 和 record 的权威数据先写入 shadow 页，再同步到用户镜像页。用户态直接写镜像页不会改变 `context_query()` 或 `context_snapshot()` 返回的权威历史。
 
-直接读 Context 镜像是可信 Agent 自身的高速缓存路径；如果需要可信历史，应使用 `context_snapshot()` 刷新并读取 shadow 权威数据。若需要完整请求和完整响应，应使用 `context_detail(sequence, out)`，不要把 16 字节短摘要 record 当作完整日志。
+用户自管 cache 区位于 Context 尾部，不进入 shadow 权威历史，也不会被 `context_snapshot()` 刷新覆盖。它只用于 Agent 自己保存策略缓存或临时状态，不能作为内核可信历史。若需要可信历史，应使用 `context_snapshot()` 刷新并读取 shadow 权威数据。若需要完整请求和完整响应，应使用 `context_detail(sequence, out)`，不要把 16 字节短摘要 record 当作完整日志。
 
 ## Agent 信息结构
 
@@ -100,6 +102,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 520：
 | `event_queue_count` / `event_count` / `event_dropped` | 当前队列长度、累计事件数和丢弃计数 |
 | `watch_count` | 当前有效 watch 条件数 |
 | `wait_count` / `wait_sleep_count` / `wait_wakeup_count` / `timeout_count` | 等待、进入等待路径、被唤醒和超时统计 |
+| `wait_loop_count` | `agent_wait()` 的检查循环次数，用于证明有限 timeout 不反复轮询 |
 | `last_heartbeat_tick` | 最近心跳 tick |
 | `capability_mask` | 当前 Agent 能力位 |
 
@@ -161,9 +164,9 @@ Agent-only 直接 syscall 的权限要求：
 
 `agent_run()` 一次最多执行 `AGENT_BATCH_MAX = 64` 个 op。单个 op 的工具错误写入对应 result；用户指针错误、count 非法或非 Agent 调用返回 `-1`。
 
-## Legacy 请求结构
+## 名称协议请求结构
 
-`struct agent_request` / `struct agent_response` 保留，用于历史程序和语义兼容；最终性能测试不使用该热路径。`struct agent_request` 的关键字段：
+`struct agent_request` / `struct agent_response` 是赛题“工具名称 + 参数键值列表”的正式结构化协议入口；性能主路径仍使用更紧凑的 `agent_op` / `agent_result`。`struct agent_request` 的关键字段：
 
 | 字段 | 说明 |
 | --- | --- |
@@ -178,7 +181,7 @@ Agent-only 直接 syscall 的权限要求：
 | `payload_type` | 字符串参数类型 |
 | `payload` | 短字符串 payload |
 
-当 `tool_id` 和 `tool_name` 同时提供时，内核先用 ID 定位工具，再校验名称是否匹配。不匹配时 legacy `agent_call()` 返回 `AGENT_STATUS_BAD_REQUEST`，结果文本为 `tool_mismatch`，不会执行工具。
+当 `tool_id` 和 `tool_name` 同时提供时，内核先用 ID 定位工具，再校验名称是否匹配。不匹配时 `agent_call()` 返回 `AGENT_STATUS_BAD_REQUEST`，结果文本为 `tool_mismatch`，不会执行工具。只提供 `tool_name` 时，内核按工具表名称解析工具，并继续校验参数键和类型。
 
 ## 错误码
 
@@ -248,7 +251,7 @@ Agent-only 直接 syscall 的权限要求：
 - `fs_generation`
 - `update_mask`
 
-文件元数据主键优先使用真实文件的 `dev + inum`。`physical_name` 必须能解析为 uCore 根目录中的真实短文件名，复杂逻辑路径保存在 `logical_path` 等 Agent 属性字段中。根目录隐藏文件 `.agentmeta` 保存固定格式元数据表，`agent_file_meta_init()` 会优先加载它；缺失时创建默认演示文件并写入 `.agentmeta`。
+文件元数据主键优先使用真实文件的 `dev + inum`。`physical_name` 必须能解析为 uCore 根目录中的真实短文件名，复杂逻辑路径保存在 `logical_path` 等 Agent 属性字段中。根目录私有文件 `.agentmeta` 保存固定格式元数据表，`agent_file_meta_init()` 会强制重新加载它；文件不存在、格式错误或没有有效记录时才安装默认演示数据。普通文件 syscall 不能直接 `open/create/unlink` `.agentmeta`，Agent 子系统内部 helper 负责读写该后端文件。
 
 `update_mask` 用于精确更新字段，也允许清空字段。例如只清空 status 时传入 `AGENT_FILE_META_UPDATE_STATUS` 并让 `status` 为空字符串。
 
@@ -281,7 +284,7 @@ Agent-only 直接 syscall 的权限要求：
 
 ## 任务五 Agent Loop ABI
 
-Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。队列满时返回 `AGENT_STATUS_NO_SPACE`，不会覆盖旧事件。每个 Agent 最多注册 8 条 watch。相同 `event_type + filter` 会替换原 watch，`agent_unwatch()` 可删除匹配 watch 或清空全部 watch。
+Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。队列满时返回 `AGENT_STATUS_NO_SPACE`，不会覆盖旧事件。每个 Agent 最多注册 8 条 watch。相同 `event_type + filter` 会替换原 watch，`agent_unwatch()` 可删除匹配 watch 或清空全部 watch。有限 timeout 的 `agent_wait()` 会进入睡眠，由事件入队、heartbeat 到期或 deadline 到期唤醒；`agent_info.wait_loop_count` 用于观察该路径没有反复轮询。
 
 `struct agent_event` 是事件等待和唤醒结构：
 
@@ -306,7 +309,7 @@ Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。队列满时返回 `AGENT_
 | `AGENT_EVENT_POLICY_DENIED` | 策略拒绝 |
 | `AGENT_EVENT_CONTEXT_LIMIT` | Context 限制事件 |
 
-`agent_heartbeat_stop()` 是用户态便利 wrapper，内部调用 `agent_heartbeat(0)`。
+`agent_heartbeat_stop()` 是用户态便利 wrapper，内部调用 `agent_heartbeat(0)`。heartbeat 到期产生 `AGENT_EVENT_TIMER` 时仍需匹配 TIMER watch；删除 TIMER watch 后，heartbeat 不会投递可消费 TIMER 事件。
 
 ## Context Path 接口
 
@@ -319,7 +322,7 @@ Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。队列满时返回 `AGENT_
 | `context_rollback(sequence)` | 回滚到仍可见 sequence；不存在时返回 `AGENT_STATUS_NOT_FOUND` |
 | `context_clear()` | 清空记录、计数和 latest response |
 
-`struct agent_context_record` 保存工具 ID、状态码、sequence、request_id、数值槽、tick、flags，以及 16 字节 payload/result 短文本摘要；工具名称可通过 `agent_tool_list()` 按 `tool_id` 解释。它不是完整 raw 请求/响应日志，不保存全部参数键名、参数类型或完整长文本。超过 128 条记录时，Context Path 按 FIFO 覆盖旧记录，并更新 `oldest_sequence`、`latest_sequence` 和 `dropped_records`。
+`struct agent_context_record` 保存工具 ID、状态码、sequence、request_id、数值槽、tick、flags，以及 16 字节 payload/result 短文本摘要；工具名称可通过 `agent_tool_list()` 按 `tool_id` 解释。它不是完整 raw 请求/响应日志，不保存全部参数键名、参数类型或完整长文本。最近 128 条完整详情保存在内核 PCB 的 detail ring 中，通过 `context_detail()` 查询，不放在用户 Context 页内。超过 128 条记录时，Context Path 按 FIFO 覆盖旧记录，并更新 `oldest_sequence`、`latest_sequence` 和 `dropped_records`。
 
 Context record flags：
 

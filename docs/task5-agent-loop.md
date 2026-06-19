@@ -11,10 +11,10 @@
 - Agent 最多可注册 8 条 watch；
 - Agent 可删除指定 watch，或一次清空全部 watch；
 - 每个 Agent 有 16 槽 FIFO 事件队列；
-- Agent 可等待事件，有限 timeout 会计数，事件入队会唤醒目标 Agent；
+- Agent 可等待事件，有限 timeout 会进入睡眠并由 tick 唤醒，事件入队会唤醒目标 Agent；
 - 其他 Agent 或内核工具可唤醒目标 Agent；
 - 文件元数据状态变化可触发事件；
-- Agent 可设置 heartbeat，注册 TIMER watch 后可收到 heartbeat 事件；
+- Agent 可设置 heartbeat，注册 TIMER watch 后可收到 heartbeat 事件；删除 TIMER watch 后不会消费 TIMER 事件；
 - Agent 可通过 `agent_heartbeat_stop()` 停止 heartbeat；
 - 等待、唤醒和事件消费会写入 Context Path；
 - 综合场景用三个 Agent 串联事件流程。
@@ -89,7 +89,7 @@ int agent_wait(struct agent_event *event, int timeout_ticks);
 4. 超过 `timeout_ticks` 后返回 `AGENT_STATUS_TIMEOUT`。
 5. 成功消费事件后追加 Context record。
 
-当前有限 timeout 使用定时等待路径；无限等待可进入睡眠，由事件入队或 heartbeat 到期唤醒。
+当前有限 timeout 也会进入 `SLEEPING` 状态，由事件入队、heartbeat 到期或 deadline 到期唤醒，不通过反复 `yield()` 消耗 CPU。`agent_info.wait_loop_count` 用于观察等待检查次数，`agentloop_ucore` 会验证有限 timeout 的循环次数保持在很小范围。
 
 `agentbench_ucore` 先验证无事件等待会返回 timeout，并检查 `timeout_count` 增加；随后用 wait/wake 计时观测验证等待和唤醒路径：
 
@@ -146,8 +146,9 @@ int agent_heartbeat_stop(void);
 3. `agent_heartbeat_stop()` 是用户态便利 wrapper，内部调用 `agent_heartbeat(0)`，停止后不再投递 heartbeat 事件。
 4. 注册 `AGENT_EVENT_TIMER` watch 后，heartbeat 到期会投递 `timer=heartbeat` 事件。
 5. 后续 `agent_info()` 可观察 last heartbeat tick。
+6. 删除 TIMER watch 后，heartbeat 到期不会投递可消费 TIMER 事件。
 
-当前 `agentbench_ucore` 会调用 `agent_heartbeat()`，随后用 `agent_info()` 检查 `heartbeat_interval` 和 `last_heartbeat_tick`。`agentloop_ucore` 进一步验证 heartbeat 可以唤醒等待中的 Agent，停止后不会继续产生 heartbeat 事件。
+当前 `agentbench_ucore` 会调用 `agent_heartbeat()`，随后用 `agent_info()` 检查 `heartbeat_interval` 和 `last_heartbeat_tick`。`agentloop_ucore` 进一步验证 heartbeat 可以唤醒等待中的 Agent、删除 TIMER watch 后不再消费 TIMER 事件、停止后不会继续产生 heartbeat 事件。
 
 ## 文件状态事件
 
@@ -230,7 +231,8 @@ agentbench_ucore: event_wait_wake ops=8 ticks=2 ops_per_tick=4 speedup_x100=100
 agentloop_ucore: fifo=1
 agentloop_ucore: overflow_dropped=1
 agentloop_ucore: unwatch=1
-agentloop_ucore: timeout_sleep=1
+agentloop_ucore: timeout_sleep_no_poll=1
+agentloop_ucore: timer_unwatch=1
 agentloop_ucore: heartbeat_wake_stop=1
 agentloop_ucore: passed
 ```

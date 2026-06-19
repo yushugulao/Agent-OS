@@ -1,6 +1,6 @@
 # 任务四：面向 Agent 查询优化的文件系统扩展
 
-本文是 [design.md](design.md) 的任务四细节附录，重点说明 uCore 分支当前实现的文件元数据表、真实 inode 关联、`.agentmeta` 隐藏元数据文件、属性查询、索引路径和依赖查询。
+本文是 [design.md](design.md) 的任务四细节附录，重点说明 uCore 分支当前实现的文件元数据表、真实 inode 关联、私有 `.agentmeta` 元数据文件、属性查询、索引路径和依赖查询。
 
 ## 目标
 
@@ -11,7 +11,7 @@
 - 支持最多 128 条文件元数据；
 - 以真实文件的 `dev + inum` 作为主要身份；
 - 要求 `physical_name` 能解析到 uCore 根目录中的真实文件名；
-- 使用根目录 `.agentmeta` 隐藏元数据文件保存固定格式元数据表；
+- 使用根目录私有 `.agentmeta` 元数据文件保存固定格式元数据表；
 - 支持扫描查询；
 - 支持 status、stage、kind 索引查询；
 - 支持摘要查询；
@@ -51,15 +51,17 @@
 
 内核启动时 `agentinit()` 会把 status、stage、kind 三类索引桶初始化为 `-1`。因此即使测试程序在调用 `agent_file_meta_init()` 前先执行带索引查询，也会返回 0 条命中，而不会沿着未初始化链表扫描。
 
-## inode 关联和隐藏元数据文件
+## inode 关联和私有元数据文件
 
 任务四不是只保存一张脱离文件系统的演示表。当前实现会把 Agent 元数据绑定到真实 uCore 根目录文件：
 
-1. `agent_file_meta_init()` 优先读取 `.agentmeta` 隐藏元数据文件。
-2. 如果 `.agentmeta` 不存在，内核创建默认演示文件，例如 `r42align`、`r42report`。
+1. `agent_file_meta_init()` 会先强制重新加载 `.agentmeta` 私有元数据文件。
+2. 如果 `.agentmeta` 不存在、格式错误或没有有效记录，内核才创建默认演示文件，例如 `r42align`、`r42report`。
 3. 每条持久化元数据保存 `physical_name`、`dev`、`inum`、`size` 和 `fs_generation`。
 4. `fileopen(O_CREATE)`、写入、截断、删除会通知 Agent 子系统刷新或删除关联元数据。
 5. `agent_file_meta_set()` 支持 `AGENT_FILE_META_F_DELETE` 删除属性，支持 `AGENT_FILE_META_F_PERSIST` 写入 `.agentmeta`。
+
+`.agentmeta` 是 Agent 子系统内部后端文件。普通文件 syscall 直接 `open(".agentmeta")`、`open(O_CREATE)` 或 `unlink(".agentmeta")` 会返回 `-1`；Agent 子系统内部 helper 仍可读写它，用于持久化和重新加载元数据。
 
 这套实现让查询结果中的文件身份可以追溯到真实 inode，同时保留 Agent 需要的 project、workflow、run、stage、kind、status 等高层属性。
 
@@ -79,7 +81,7 @@
 
 `agentsecurity_ucore` 还会在初始化前先执行一次 indexed query，确认未初始化索引不会卡住；随后同时构造 `RUN-042` 和 `RUN-999` 两个 failed run，用于验证恢复动作只修改 selector 指定的目标 run。
 
-`agentfs_ucore` 会创建额外真实文件，绑定自定义元数据，并验证字段清空、文件删除清理和 selector 未命中。它还会生成接近 128 条真实文件元数据，让扫描路径和索引路径的 `scanned_records` 差异明显。
+`agentfs_ucore` 会创建额外真实文件，绑定自定义元数据，并验证重新调用 `agent_file_meta_init()` 时自定义数据来自 `.agentmeta` 重新加载，而不是被默认表覆盖。它还会验证字段清空、文件删除清理和 selector 未命中，并生成接近 128 条真实文件元数据，让扫描路径和索引路径的 `scanned_records` 差异明显。
 
 ## 查询路径
 
@@ -180,9 +182,10 @@ align+analyze+report+archive
 
 ## 性能验证
 
-`agentbench_ucore` 对比扫描路径和索引路径：
+`agentbench_ucore` 对比扫描路径和索引路径。tick 数值只作为观测，重点看 `scan_records` 与 `index_records` 的候选记录数差异：
 
 ```text
+agentbench_ucore: file_query_records scan_records=107 index_records=6
 agentbench_ucore: file_scan_query ops=64 ticks=5 ops_per_tick=12 speedup_x100=100
 agentbench_ucore: file_index_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=250
 ```
@@ -192,7 +195,7 @@ agentbench_ucore: file_index_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=2
 - 可观测扫描路径；
 - 可观测索引路径；
 - 可输出 `used_index` 和 `scanned_records`；
-- 能用性能表解释索引价值。
+- 能用候选记录数和多轮 tick 观测解释索引价值。
 
 ## 综合场景中的证据
 
@@ -228,6 +231,7 @@ agentsecurity_ucore: scoped_report=1
 agentfs_ucore: default_inode dev=1 inum=11 scanned=2
 agentfs_ucore: custom_inode dev=1 inum=17 size=7
 agentfs_ucore: bulk_index scan=108 index=6 hits=1
+agentfs_ucore: .agentmeta_reload=1
 agentfs_ucore: clear_status=1
 agentfs_ucore: delete_clears_metadata=1
 agentfs_ucore: missing_selector_not_found=1
@@ -238,9 +242,9 @@ agentfs_ucore: passed
 
 | 限制项 | 说明 |
 | --- | --- |
-| 元数据来源 | 当前来自 `.agentmeta`、默认真实文件和 `agent_file_meta_set()` |
+| 元数据来源 | 当前来自私有 `.agentmeta`、默认真实文件和 `agent_file_meta_set()` |
 | 真实文件系统扫描 | 尚未实现后台线程持续扫描整棵目录 |
-| 持久化索引 | 元数据表可写入 `.agentmeta`；内存索引启动后根据元数据重建 |
+| 持久化索引 | 元数据表可写入并重新加载 `.agentmeta`；内存索引启动后根据元数据重建 |
 | 查询语法 | 当前支持结构体字段查询和简单 `key=value` 字符串 |
 | 查询规模 | 当前最多 128 条元数据，最多返回 8 条 hit |
 

@@ -40,7 +40,9 @@ agentfinal_ucore: batch first_seq=1 last_seq=64
 agentfinal_ucore: short_text_history=1 payload=ucore-final result=ucore-final
 agentfinal_ucore: context_detail=1 sequence=8
 agentfinal_ucore: tamper_protected=1
+agentfinal_ucore: user_cache_preserved=1 offset=17408 size=3072
 agentfinal_ucore: record_flags system=1 manual=1 truncated=0
+agentfinal_ucore: legacy_name_protocol=1
 agentfinal_ucore: fifo oldest=66 latest=193 dropped=65
 agentfinal_ucore: file_query hits=2 scanned=2 used_index=1
 agentfinal_ucore: event_wait=1 payload=self wake
@@ -48,7 +50,7 @@ agentfinal_ucore: passed
 agentfinal_ucore: parent passed
 ```
 
-结论：Agent 创建、Context 映射、batch 调用、短文本历史、完整 detail 查询、篡改保护、手动/系统记录区分、FIFO 淘汰、文件索引和事件等待均通过。
+结论：Agent 创建、Context 映射、batch 调用、短文本历史、完整 detail 查询、篡改保护、用户自管 cache、名称协议、手动/系统记录区分、FIFO 淘汰、文件索引和事件等待均通过。
 
 ## agentfs_ucore 样例输出
 
@@ -57,6 +59,7 @@ agentfs_ucore: Agent FS metadata test
 agentfs_ucore: default_inode dev=1 inum=11 scanned=2
 agentfs_ucore: custom_inode dev=1 inum=17 size=7
 agentfs_ucore: bulk_index scan=108 index=6 hits=1
+agentfs_ucore: .agentmeta_reload=1
 agentfs_ucore: clear_status=1
 agentfs_ucore: delete_clears_metadata=1
 agentfs_ucore: missing_selector_not_found=1
@@ -64,7 +67,7 @@ agentfs_ucore: passed
 agentfs_ucore: parent passed
 ```
 
-结论：文件元数据可绑定真实根目录文件 inode，查询结果包含 `dev`、`inum`、`size`；接近 128 条记录时 scan/index 的 `scanned_records` 差异可见；属性清空、文件删除同步和不存在 selector 返回 `NOT_FOUND` 均通过。
+结论：文件元数据可绑定真实根目录文件 inode，查询结果包含 `dev`、`inum`、`size`；自定义 metadata 可从私有 `.agentmeta` 重新加载；接近 128 条记录时 scan/index 的 `scanned_records` 差异可见；属性清空、文件删除同步和不存在 selector 返回 `NOT_FOUND` 均通过。
 
 ## agentloop_ucore 样例输出
 
@@ -73,19 +76,22 @@ agentloop_ucore: Agent event queue test
 agentloop_ucore: fifo=1
 agentloop_ucore: overflow_dropped=1
 agentloop_ucore: unwatch=1
-agentloop_ucore: timeout_sleep=1
+agentloop_ucore: timeout_sleep_no_poll=1
+agentloop_ucore: timer_unwatch=1
 agentloop_ucore: heartbeat_wake_stop=1
 agentloop_ucore: passed
 agentloop_ucore: parent passed
 ```
 
-结论：16 槽 FIFO 事件队列顺序正确，队列满时拒绝新事件且不覆盖旧事件；`agent_unwatch()`、timeout、heartbeat 唤醒和停止均通过。
+结论：16 槽 FIFO 事件队列顺序正确，队列满时拒绝新事件且不覆盖旧事件；`agent_unwatch()`、有限 timeout 睡眠、TIMER unwatch、heartbeat 唤醒和停止均通过。
 
 ## agentbench_ucore 样例输出
 
 ```text
 agentbench_ucore: Agent-OS on uCore benchmark
 agentbench_ucore: timeout_heartbeat=1
+agentbench_ucore: repeated_ticks scalar_min=4 scalar_avg=4 scalar_max=5 batch_min=2 batch_avg=2 batch_max=3
+agentbench_ucore: file_query_records scan_records=107 index_records=6
 agentbench_ucore: case ops ticks ops_per_tick speedup_x100
 agentbench_ucore: scalar_agent_run ops=256 ticks=5 ops_per_tick=51 speedup_x100=100
 agentbench_ucore: batch_agent_run ops=256 ticks=2 ops_per_tick=128 speedup_x100=250
@@ -99,7 +105,7 @@ agentbench_ucore: passed
 agentbench_ucore: parent passed
 ```
 
-结论：batch、direct context 和 snapshot 的性能趋势符合设计预期。tick 数值会随运行环境波动。
+结论：batch、direct context 和 snapshot 的性能趋势符合设计预期；文件查询输出了 scan/index 候选记录数差异。tick 数值会随运行环境波动。
 
 ## labdemo_ucore 样例输出
 
@@ -138,6 +144,7 @@ labdemo_ucore: parent passed
 agentsecurity_ucore: Agent permission test
 agentsecurity_ucore: mail_basic=1
 agentsecurity_ucore: plain_process_denied=1
+agentsecurity_ucore: .agentmeta_protected=1
 agentsecurity_ucore: role=orchestrator_child capability_checked=1
 agentsecurity_ucore: plain_child_orchestrator=1
 agentsecurity_ucore: role=orchestrator capability_checked=1
@@ -154,7 +161,7 @@ agentsecurity_ucore: passed
 agentsecurity_ucore: parent passed
 ```
 
-结论：普通进程 mail 最小路径可用；普通进程不能直接投递事件或修改 Agent 文件元数据；pid 1 的普通直接子进程可创建 orchestrator，保证 usershell 手动测试路径可用；初始化前索引查询不会阻塞；legacy `tool_id` 和 `tool_name` 不一致会失败；legacy 参数 key/type 错误会返回 `BAD_PARAM`；syscall-only 工具不能通过 batch 执行；sentinel 不能通过用户态传入 recovery role 伪造恢复权限；recovery 的恢复能力来自内核真实 role/capability，重复 corr_id 被识别为 duplicate，且定向恢复和报告写入不会误修改其他 run。
+结论：普通进程 mail 最小路径可用；普通进程不能直接投递事件、修改 Agent 文件元数据或访问私有 `.agentmeta`；pid 1 的普通直接子进程可创建 orchestrator，保证 usershell 手动测试路径可用；初始化前索引查询不会阻塞；legacy `tool_id` 和 `tool_name` 不一致会失败；legacy 参数 key/type 错误会返回 `BAD_PARAM`；syscall-only 工具不能通过 batch 执行；sentinel 不能通过用户态传入 recovery role 伪造恢复权限；recovery 的恢复能力来自内核真实 role/capability，重复 corr_id 被识别为 duplicate，且定向恢复和报告写入不会误修改其他 run。
 
 ## ch3_trace 基础兼容抽测
 

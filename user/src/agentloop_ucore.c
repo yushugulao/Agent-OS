@@ -76,7 +76,9 @@ static void run_agent(void)
 	      "timeout count");
 	check(after.wait_sleep_count > before.wait_sleep_count,
 	      "sleep count");
-	printf("agentloop_ucore: timeout_sleep=1\n");
+	check(after.wait_loop_count <= before.wait_loop_count + 3,
+	      "finite timeout no polling");
+	printf("agentloop_ucore: timeout_sleep_no_poll=1\n");
 
 	check(agent_watch(AGENT_EVENT_TIMER, "heartbeat") == 0,
 	      "watch heartbeat");
@@ -86,6 +88,13 @@ static void run_agent(void)
 	check(event.type == AGENT_EVENT_TIMER, "heartbeat type");
 	check(strcmp(event.payload, "timer=heartbeat") == 0,
 	      "heartbeat payload");
+	check(agent_unwatch(AGENT_EVENT_TIMER, "heartbeat") == 1,
+	      "unwatch heartbeat");
+	check(agent_heartbeat(1) == 0, "heartbeat after unwatch");
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, 3) == AGENT_STATUS_TIMEOUT,
+	      "heartbeat unwatched timeout");
+	printf("agentloop_ucore: timer_unwatch=1\n");
 	check(agent_heartbeat_stop() == 0, "heartbeat stop");
 	memset(&event, 0, sizeof(event));
 	check(agent_wait(&event, 3) == AGENT_STATUS_TIMEOUT,

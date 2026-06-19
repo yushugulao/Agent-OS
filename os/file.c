@@ -107,6 +107,10 @@ int fileopen(char *path, uint64 omode)
 	int fd;
 	struct file *f;
 	struct inode *ip;
+
+	if (agent_file_is_meta_store_name(path))
+		return -1;
+
 	if (omode & O_CREATE) {
 		ip = create(path, T_FILE);
 		if (ip == 0) {
@@ -146,6 +150,9 @@ int fileunlink(char *path)
 	struct inode *dp;
 	struct inode *ip;
 	uint inum = 0;
+
+	if (agent_file_is_meta_store_name(path))
+		return -1;
 
 	dp = root_dir();
 	ivalid(dp);

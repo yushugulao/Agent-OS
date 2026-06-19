@@ -14,6 +14,8 @@ static struct agent_context_record final_manual;
 static struct agent_file_query final_query;
 static struct agent_file_query_result final_query_result;
 static struct agent_event final_event;
+static struct agent_request final_req;
+static struct agent_response final_resp;
 
 static void check(int ok, const char *msg)
 {
@@ -32,6 +34,52 @@ static void make_echo(struct agent_op *op, uint64 id, const char *text)
 	op->arg0 = id;
 	op->arg1 = id + 1;
 	strcpy(op->payload, text);
+}
+
+static void check_legacy_name_protocol(void)
+{
+	struct agent_request *req = &final_req;
+	struct agent_response *resp = &final_resp;
+
+	memset(req, 0, sizeof(*req));
+	memset(resp, 0, sizeof(*resp));
+	req->version = AGENT_CALL_VERSION;
+	req->request_id = 7101;
+	strcpy(req->tool_name, "echo");
+	strcpy(req->payload_key, "payload");
+	req->payload_type = AGENT_PARAM_STRING;
+	strcpy(req->arg0_key, "arg0");
+	req->arg0_type = AGENT_PARAM_UINT64;
+	strcpy(req->arg1_key, "arg1");
+	req->arg1_type = AGENT_PARAM_UINT64;
+	req->arg0 = 21;
+	req->arg1 = 22;
+	strcpy(req->payload, "legacy-name");
+	check(agent_call(req, resp) == 0, "legacy name echo");
+	check(resp->status == AGENT_STATUS_OK, "legacy echo status");
+	check(strcmp(resp->result, "legacy-name") == 0, "legacy echo text");
+
+	memset(req, 0, sizeof(*req));
+	memset(resp, 0, sizeof(*resp));
+	req->version = AGENT_CALL_VERSION;
+	req->request_id = 7102;
+	strcpy(req->tool_name, "pid_info");
+	check(agent_call(req, resp) == 0, "legacy name pid");
+	check(resp->status == AGENT_STATUS_OK, "legacy pid status");
+	check(resp->value2 == 1, "legacy pid agent");
+
+	memset(req, 0, sizeof(*req));
+	memset(resp, 0, sizeof(*resp));
+	req->version = AGENT_CALL_VERSION;
+	req->request_id = 7103;
+	strcpy(req->tool_name, "query_file");
+	strcpy(req->payload_key, "path");
+	req->payload_type = AGENT_PARAM_STRING;
+	strcpy(req->payload, "r42align");
+	check(agent_call(req, resp) == 0, "legacy name query_file");
+	check(resp->status == AGENT_STATUS_OK, "legacy query_file status");
+	check(resp->value1 != 0, "legacy query_file inum");
+	printf("agentfinal_ucore: legacy_name_protocol=1\n");
 }
 
 static void run_agent_child(void)
@@ -106,6 +154,17 @@ static void run_agent_child(void)
 	      "snapshot refreshes mirror");
 	printf("agentfinal_ucore: tamper_protected=1\n");
 
+	check(header->user_cache_size >= 16, "user cache size");
+	strcpy((char *)(info->context_base + header->user_cache_offset),
+	       "cache-ok");
+	n = context_snapshot(header, records, AGENT_CONTEXT_MAX_RECORDS);
+	check(n == AGENT_BATCH_MAX, "snapshot after cache");
+	check(strcmp((char *)(info->context_base + header->user_cache_offset),
+		     "cache-ok") == 0,
+	      "user cache preserved");
+	printf("agentfinal_ucore: user_cache_preserved=1 offset=%d size=%d\n",
+	       (int)header->user_cache_offset, (int)header->user_cache_size);
+
 	memset(manual, 0, sizeof(*manual));
 	manual->tool_id = AGENT_TOOL_CONTEXT_PUSH;
 	manual->request_id = 6501;
@@ -153,6 +212,7 @@ static void run_agent_child(void)
 	check(qr->used_index == 1, "file query index");
 	printf("agentfinal_ucore: file_query hits=%d scanned=%d used_index=%d\n",
 	       qr->total_hits, qr->scanned_records, qr->used_index);
+	check_legacy_name_protocol();
 
 	check(agent_watch(AGENT_EVENT_MESSAGE, "self") == 0, "watch");
 	memset(event, 0, sizeof(*event));

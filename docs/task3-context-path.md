@@ -6,7 +6,7 @@
 
 任务三要求系统维护 Agent 多轮工具调用上下文，使 Agent 能看到自己历史调用路径，并能在路径过长时自动淘汰旧记录。
 
-uCore 分支实现的是“128 条固定容量短文本摘要路径 + 最近 128 条完整详情”。摘要 record 用于快速展示和高频查询，`context_detail(sequence, out)` 用于查看完整 `agent_op`、`agent_result` 和记录 flags。
+uCore 分支实现的是“128 条固定容量短文本摘要路径 + 最近 128 条完整详情 + 用户自管 cache”。摘要 record 用于快速展示和高频查询，`context_detail(sequence, out)` 用于查看内核 PCB 中保存的完整 `agent_op`、`agent_result` 和记录 flags。用户自管 cache 位于 Context 尾部，用于 Agent 自己保存临时策略状态，不进入内核可信历史。
 
 ## Context 布局
 
@@ -17,7 +17,7 @@ Agent Context 共 5 页：
 | header | 0 | `struct agent_context_header` |
 | latest | `sizeof(struct agent_context_header)` | `struct agent_result` |
 | records | 4096 | `struct agent_context_record[128]` |
-| 完整详情区 | record 区之后 | 最近 128 条 `struct agent_context_detail` |
+| user cache | `header.user_cache_offset` | Agent 自管缓存区，当前测试输出为 offset 17408、size 3072 |
 
 `struct agent_context_header` 关键字段：
 
@@ -35,6 +35,8 @@ Agent Context 共 5 页：
 | `rollback_count` | 成功 rollback 次数 |
 | `latest_response_offset` | latest result 偏移 |
 | `records_offset` | record 区偏移 |
+| `user_cache_offset` | 用户自管 cache 起点 |
+| `user_cache_size` | 用户自管 cache 大小 |
 
 `struct agent_context_record` 关键字段：
 
@@ -51,7 +53,7 @@ Agent Context 共 5 页：
 | `payload` | 16 字节 payload 摘要 |
 | `result` | 16 字节 result 摘要 |
 
-`struct agent_context_detail` 保存：
+最近 128 条完整详情保存在内核 PCB 的 detail ring 中，不放在用户 Context 页内。`struct agent_context_detail` 保存：
 
 | 字段 | 说明 |
 | --- | --- |
@@ -71,17 +73,21 @@ Context 使用双份数据：
 
 所有写入先进入 kernel shadow，再同步到 user mirror。`context_query()` 和 `context_snapshot()` 都读取 shadow。用户态即使直接写坏镜像，也不能伪造内核返回的历史。
 
-`agentfinal_ucore` 的篡改测试：
+`agentfinal_ucore` 的篡改和 cache 测试：
 
 1. 用户态把 user mirror 中第一条记录 sequence 改成 9999。
 2. 调用 `context_snapshot()`。
 3. snapshot 返回原始 sequence。
-4. snapshot 同步 user mirror，使直接读也恢复为原始内容。
+4. snapshot 同步 user mirror，使直接读也恢复为原始内容；
+5. 用户态向 `user_cache_offset` 写入 `cache-ok`；
+6. 再次调用 `context_snapshot()`；
+7. cache 内容仍然保留，证明 snapshot 只刷新内核管理区，不覆盖用户自管 cache。
 
 对应输出：
 
 ```text
 agentfinal_ucore: tamper_protected=1
+agentfinal_ucore: user_cache_preserved=1 offset=17408 size=3072
 ```
 
 ## 写入路径
@@ -103,7 +109,7 @@ agentfinal_ucore: tamper_protected=1
 | --- | --- |
 | `context_query(start_sequence, out, max)` | 从指定 sequence 开始返回可见记录；`start_sequence=0` 表示从最早可见记录开始 |
 | `context_snapshot(header, records, max)` | 一次返回 header 和有序 records，是推荐读取方式 |
-| `context_detail(sequence, out)` | 查询仍在最近 128 条完整详情记录中的完整请求/响应 |
+| `context_detail(sequence, out)` | 查询仍在内核 detail ring 中的最近 128 条完整请求/响应 |
 | `context_rollback(sequence)` | 回滚到仍可见 sequence |
 | `context_clear()` | 清空记录和元信息 |
 
@@ -153,6 +159,7 @@ agentbench_ucore: context_snapshot ops=2048 ticks=2 ops_per_tick=1024 speedup_x1
 | 历史容量 | 固定 128 条 |
 | 文本长度 | payload/result 各保存 16 字节摘要 |
 | 完整详情容量 | 最近 128 条可通过 `context_detail()` 查询；更早详情会随环形记录淘汰 |
+| 用户自管 cache | 不进入 Context Path，不被 snapshot 覆盖，内核不把它作为可信历史 |
 | 持久化 | Context Path 当前随进程生命周期存在，不持久化到磁盘 |
 
 ## 验证证据
@@ -162,6 +169,7 @@ agentfinal_ucore: short_text_history=1 payload=ucore-final result=ucore-final
 agentfinal_ucore: context_detail=1 sequence=8
 agentfinal_ucore: record_flags system=1 manual=1 truncated=0
 agentfinal_ucore: tamper_protected=1
+agentfinal_ucore: user_cache_preserved=1 offset=17408 size=3072
 agentfinal_ucore: fifo oldest=66 latest=193 dropped=65
 agentfinal_ucore: passed
 ```

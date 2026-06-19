@@ -147,6 +147,14 @@ static void run_agent(void)
 	printf("agentfs_ucore: custom_inode dev=%d inum=%d size=%d\n",
 	       (int)fs_result.hits[0].dev, (int)fs_result.hits[0].inum,
 	       (int)fs_result.hits[0].size);
+
+	check(agent_file_meta_init() == 0, "meta reload");
+	check(query_stage("issue4", "RUN-FS", "ingest", "ok", &fs_result) >= 1,
+	      "reload keeps custom query");
+	check(strcmp(fs_result.hits[0].physical_name, name) == 0,
+	      "reload keeps physical name");
+	printf("agentfs_ucore: .agentmeta_reload=1\n");
+
 	check_index_scan_gap();
 
 	set_meta(name, "", AGENT_FILE_META_UPDATE_STATUS);

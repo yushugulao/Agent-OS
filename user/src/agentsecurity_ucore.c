@@ -1,4 +1,5 @@
 #include <agent.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -338,6 +339,7 @@ static void check_plain_process_denied(void)
 {
 	struct agent_event event;
 	struct agent_file_meta meta;
+	int fd;
 
 	memset(&event, 0, sizeof(event));
 	event.type = AGENT_EVENT_MESSAGE;
@@ -348,7 +350,13 @@ static void check_plain_process_denied(void)
 	check(agent_wake(1, &event) == -1, "plain wake denied");
 	check(agent_file_meta_init() == -1, "plain meta init denied");
 	check(agent_file_meta_set(&meta) == -1, "plain meta set denied");
+	fd = open(".agentmeta", O_RDONLY);
+	check(fd == -1, "plain open agentmeta denied");
+	fd = open(".agentmeta", O_CREATE | O_RDWR);
+	check(fd == -1, "plain create agentmeta denied");
+	check(unlink(".agentmeta") == -1, "plain unlink agentmeta denied");
 	printf("agentsecurity_ucore: plain_process_denied=1\n");
+	printf("agentsecurity_ucore: .agentmeta_protected=1\n");
 }
 
 static void check_plain_mail(void)

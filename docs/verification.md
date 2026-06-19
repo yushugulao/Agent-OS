@@ -79,12 +79,12 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore C
 
 | 测试程序 | 覆盖范围 | 关键通过输出 |
 | --- | --- | --- |
-| `agentfinal_ucore` | Agent 创建、5 页 Context、批量工具调用、短文本历史、`context_detail()`、直接读 Context 镜像、Context Snapshot、FIFO 淘汰、篡改保护、文件索引、自唤醒事件 | `agentfinal_ucore: passed` |
-| `agentfs_ucore` | 真实文件 inode 绑定、字段清空、文件删除清理、`.agentmeta` 写入、接近 128 条文件元数据下的 scan/index 差异、不存在 selector 返回 NOT_FOUND | `agentfs_ucore: parent passed` |
-| `agentloop_ucore` | FIFO 事件顺序、队列满丢弃、多 watch、unwatch、timeout、heartbeat wake/stop | `agentloop_ucore: parent passed` |
-| `agentbench_ucore` | scalar vs batch、direct Context、context_query vs context_snapshot、文件扫描 vs 索引、timeout/heartbeat 断言、event wait/wake 计时观测 | `agentbench_ucore: parent passed` |
+| `agentfinal_ucore` | Agent 创建、5 页 Context、批量工具调用、短文本历史、`context_detail()`、用户自管 cache、名称协议、直接读 Context 镜像、Context Snapshot、FIFO 淘汰、篡改保护、文件索引、自唤醒事件 | `agentfinal_ucore: passed` |
+| `agentfs_ucore` | 真实文件 inode 绑定、字段清空、文件删除清理、`.agentmeta` 重新加载、接近 128 条文件元数据下的 scan/index 差异、不存在 selector 返回 NOT_FOUND | `agentfs_ucore: parent passed` |
+| `agentloop_ucore` | FIFO 事件顺序、队列满丢弃、多 watch、unwatch、有限 timeout 睡眠、TIMER unwatch、heartbeat wake/stop | `agentloop_ucore: parent passed` |
+| `agentbench_ucore` | scalar vs batch、direct Context、context_query vs context_snapshot、文件扫描 vs 索引候选记录数、timeout/heartbeat 断言、event wait/wake 计时观测 | `agentbench_ucore: parent passed` |
 | `labdemo_ucore` | orchestrator 控制的多 Agent 综合场景、文件属性查询、依赖查询、事件等待、消息唤醒、权限拒绝、幂等恢复、报告查询、结构化 `agentos:event` | `labdemo_ucore: parent passed` |
-| `agentsecurity_ucore` | 初始化前索引查询、legacy tool mismatch、普通进程敏感调用拒绝、pid 1 直接子进程启动 orchestrator、sentinel 伪造 recovery 拒绝、多 run 定向恢复、重复 corr_id 拒绝、role/capability mask 检查 | `agentsecurity_ucore: parent passed` |
+| `agentsecurity_ucore` | 初始化前索引查询、legacy tool mismatch、普通进程敏感调用拒绝、`.agentmeta` 普通访问保护、pid 1 直接子进程启动 orchestrator、sentinel 伪造 recovery 拒绝、多 run 定向恢复、重复 corr_id 拒绝、role/capability mask 检查 | `agentsecurity_ucore: parent passed` |
 
 综合演示主入口是 `labdemo_ucore`。`agentfinal_ucore` 和 `agentbench_ucore` 是任务一至三高性能底座和任务四/五演示能力的持续验证入口。
 
@@ -97,7 +97,9 @@ agentfinal_ucore: batch first_seq=1 last_seq=64
 agentfinal_ucore: short_text_history=1 payload=ucore-final result=ucore-final
 agentfinal_ucore: tamper_protected=1
 agentfinal_ucore: context_detail=1 sequence=8
+agentfinal_ucore: user_cache_preserved=1 offset=17408 size=3072
 agentfinal_ucore: record_flags system=1 manual=1 truncated=0
+agentfinal_ucore: legacy_name_protocol=1
 agentfinal_ucore: fifo oldest=66 latest=193 dropped=65
 agentfinal_ucore: file_query hits=2 scanned=2 used_index=1
 agentfinal_ucore: event_wait=1 payload=self wake
@@ -111,6 +113,7 @@ agentfinal_ucore: parent passed
 agentfs_ucore: default_inode dev=1 inum=11 scanned=2
 agentfs_ucore: custom_inode dev=1 inum=17 size=7
 agentfs_ucore: bulk_index scan=108 index=6 hits=1
+agentfs_ucore: .agentmeta_reload=1
 agentfs_ucore: clear_status=1
 agentfs_ucore: delete_clears_metadata=1
 agentfs_ucore: missing_selector_not_found=1
@@ -124,7 +127,8 @@ Agent Loop 测试输出摘要：
 agentloop_ucore: fifo=1
 agentloop_ucore: overflow_dropped=1
 agentloop_ucore: unwatch=1
-agentloop_ucore: timeout_sleep=1
+agentloop_ucore: timeout_sleep_no_poll=1
+agentloop_ucore: timer_unwatch=1
 agentloop_ucore: heartbeat_wake_stop=1
 agentloop_ucore: passed
 agentloop_ucore: parent passed
@@ -155,6 +159,7 @@ labdemo_ucore: parent passed
 agentsecurity_ucore: Agent permission test
 agentsecurity_ucore: mail_basic=1
 agentsecurity_ucore: plain_process_denied=1
+agentsecurity_ucore: .agentmeta_protected=1
 agentsecurity_ucore: role=orchestrator_child capability_checked=1
 agentsecurity_ucore: plain_child_orchestrator=1
 agentsecurity_ucore: role=orchestrator capability_checked=1
@@ -175,6 +180,8 @@ agentsecurity_ucore: parent passed
 
 ```text
 agentbench_ucore: timeout_heartbeat=1
+agentbench_ucore: repeated_ticks scalar_min=4 scalar_avg=4 scalar_max=5 batch_min=2 batch_avg=2 batch_max=3
+agentbench_ucore: file_query_records scan_records=107 index_records=6
 agentbench_ucore: case ops ticks ops_per_tick speedup_x100
 agentbench_ucore: scalar_agent_run ops=256 ticks=5 ops_per_tick=51 speedup_x100=100
 agentbench_ucore: batch_agent_run ops=256 ticks=2 ops_per_tick=128 speedup_x100=250
@@ -194,7 +201,7 @@ agentbench_ucore: parent passed
 - `batch_agent_run` 与 `scalar_agent_run` 执行同样数量的 echo 工具操作，前者将 64 个 op 合并为一次 syscall。
 - `direct_context` 直接读取用户态 Context 镜像，不进入内核。
 - `context_snapshot` 一次返回最多 128 条可见记录，按返回记录数计算吞吐。
-- 文件索引查询的提升幅度与数据分布有关；当前测试保证能观察到 scan/index 两条路径。
+- 文件索引查询的提升幅度与数据分布有关；当前测试保证能观察到 scan/index 两条路径，并输出候选记录数差异。
 - `event_wait_wake` 是事件等待与唤醒的计时观测，`speedup_x100=100` 表示该项自己的基线，不表示相对另一个事件实现加速。
 
 ## 基础兼容抽测
@@ -228,20 +235,22 @@ agentsecurity_ucore: mail_basic=1
 | Agent 进程能成功创建，PCB 扩展字段正确初始化 | `agentfinal_ucore` |
 | Agent Context 区正确分配，Agent 可直接读取 | `agentfinal_ucore` 直接读取 header/latest/record |
 | 用户态篡改 Context 镜像不影响内核权威历史 | `agentfinal_ucore: tamper_protected=1` |
+| 用户自管 Context cache 不被 snapshot 覆盖 | `agentfinal_ucore: user_cache_preserved=1` |
 | 普通进程和 Agent 进程共存 | `agent_create_role` 由 pid 1 普通 init 或 pid 1 直接普通子进程创建 orchestrator；普通进程不能直接执行敏感 Agent syscall |
 | 用户态 Agent 能调用至少 3 个内核工具 | `agentfinal_ucore`、`labdemo_ucore` |
-| 请求和响应为结构化格式 | `agent_op`、`agent_result` |
+| 请求和响应为结构化格式 | `agent_op`、`agent_result`、`agent_request`、`agent_response` |
+| 工具名称 + 参数键值列表协议可用 | `agentfinal_ucore: legacy_name_protocol=1` |
 | 5 轮以上连续工具调用并维护路径 | `agentfinal_ucore` 连续 192 次 op |
 | Context Path 保存 128 条短文本摘要路径 | `agentfinal_ucore: short_text_history=1` |
 | Agent 直接从 Context 高速读取路径数据 | `agentbench_ucore: direct_context` |
 | 路径超长自动淘汰且不 OOM | `agentfinal_ucore` 验证 `oldest=66 latest=193 dropped=65` |
 | 完整工具调用详情可查询 | `agentfinal_ucore: context_detail=1` |
-| 文件属性查询、真实 inode 关联和索引路径 | `agentfinal_ucore`、`agentfs_ucore`、`agentbench_ucore`、`labdemo_ucore` |
+| 文件属性查询、真实 inode 关联、私有 `.agentmeta` 和索引路径 | `agentfinal_ucore`、`agentfs_ucore: .agentmeta_reload=1`、`agentbench_ucore`、`labdemo_ucore` |
 | 初始化前索引查询不会卡死 | `agentsecurity_ucore: preinit_index_query=1` |
 | legacy `tool_id` / `tool_name` 不匹配会失败 | `agentsecurity_ucore: legacy_tool_mismatch=1` |
 | 文件依赖查询和最小恢复 | `labdemo_ucore: affected stages=align+analyze+report+archive` |
 | Agent watch/wait 和文件状态唤醒 | `agentloop_ucore`、`labdemo_ucore` |
-| Agent wait timeout、heartbeat 字段更新和 heartbeat 事件停止 | `agentbench_ucore: timeout_heartbeat=1`、`agentloop_ucore: heartbeat_wake_stop=1` |
+| Agent wait timeout、heartbeat 字段更新和 heartbeat 事件停止 | `agentbench_ucore: timeout_heartbeat=1`、`agentloop_ucore: timeout_sleep_no_poll=1`、`agentloop_ucore: timer_unwatch=1`、`agentloop_ucore: heartbeat_wake_stop=1` |
 | 消息触发 Agent 事件 | `labdemo_ucore` 中 sentinel->investigator、investigator->recovery 消息 |
 | 权限拒绝和幂等恢复 | `labdemo_ucore` 中 denied 和 duplicate 输出 |
 | 权限不能由用户态 role 参数伪造 | `agentsecurity_ucore` 中 sentinel 伪造 recovery 仍返回 `AGENT_STATUS_DENIED` |
@@ -252,7 +261,7 @@ agentsecurity_ucore: mail_basic=1
 
 | 方向 | 当前缺口 |
 | --- | --- |
-| 后台目录扫描 | 当前是显式元数据更新、真实 inode 绑定和 `.agentmeta` 隐藏元数据文件，不含后台线程持续扫描 |
+| 后台目录扫描 | 当前是显式元数据更新、真实 inode 绑定和私有 `.agentmeta` 元数据文件，不含后台线程持续扫描 |
 | 长期 Agent 调度 | 当前验证 watch/unwatch、FIFO 事件队列、wait/wake/timeout/heartbeat，不含优先级和取消机制 |
 | 最终成品 LLM Gateway | 当前只预留结构化事件和工具输出，未接真实云端 LLM |
 | 最终成品可视化大屏 | 当前输出 `agentos:event`，但宿主机大屏尚未实现 |

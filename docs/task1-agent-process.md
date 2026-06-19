@@ -12,6 +12,7 @@
 - 5 页 Agent Context；
 - kernel shadow 权威历史；
 - user mirror 高速读取镜像；
+- 用户自管 Context cache；
 - Agent 退出释放；
 - 与后续任务二至五共用的状态字段。
 
@@ -50,9 +51,11 @@
 | `context_path_rollback_count` | 成功回滚 Context Path 的次数 |
 | `latest_response_offset` | 最近一次结构化响应在 Agent Context 中的偏移 |
 | `records_offset` | Context Path 记录数组在 Agent Context 中的偏移 |
+| `user_cache_offset` / `user_cache_size` | 通过 Context header 暴露的用户自管 cache 位置和大小 |
 | `event_count` | 当前 Agent 已接收事件数 |
 | `event_dropped` | 事件投递失败或被丢弃计数 |
 | `wait_count` | 当前 Agent 调用等待次数 |
+| `wait_loop_count` | `agent_wait()` 检查循环次数，用于观察有限 timeout 没有反复轮询 |
 | `timeout_count` | 等待超时次数 |
 | `last_heartbeat_tick` | 最近心跳 tick |
 | `capability_mask` | 当前 Agent 能力位，由内核按 `agent_role` 分配 |
@@ -80,7 +83,9 @@ Agent Context 使用固定高地址用户虚拟区：
 1. Agent 可以直接读取 Context 镜像，减少 syscall。
 2. 内核仍掌握权威历史，防止用户态伪造 Context Path。
 3. 固定地址简化用户态 ABI。
-4. 5 页容量足以容纳 header、latest result、128 条摘要记录和最近 128 条完整详情记录。
+4. 5 页容量足以容纳 header、latest result、128 条摘要记录，并在尾部保留用户自管 cache。
+
+完整工具调用详情保存在内核 PCB 的 detail ring 中，通过 `context_detail()` 查询；它不占用用户 Context 页。这样用户 Context 可以同时承担高速镜像和 Agent 自管缓存，不把完整详情暴露为可被用户态直接改写的内存。
 
 ## 创建流程
 

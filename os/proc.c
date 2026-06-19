@@ -153,6 +153,17 @@ found:
 	return p;
 }
 
+static void wake_proc_threads(struct proc *p)
+{
+	for (int i = 0; i < NTHREAD; i++) {
+		struct thread *t = &p->threads[i];
+		if (t->state == SLEEPING) {
+			t->state = RUNNABLE;
+			add_task(t);
+		}
+	}
+}
+
 inline uint64 get_thread_trapframe_va(int tid)
 {
 	return TRAPFRAME - tid * TRAP_PAGE_SIZE;
@@ -253,6 +264,7 @@ void scheduler()
 					break;
 			}
 			if (live) {
+				set_kerneltrap();
 				intr_on();
 				asm volatile("wfi");
 				continue;
@@ -493,8 +505,7 @@ int wait(int pid, int *code)
 		if (!havekids) {
 			return -1;
 		}
-		t->state = RUNNABLE;
-		add_task(t);
+		t->state = SLEEPING;
 		sched();
 	}
 }
@@ -516,6 +527,7 @@ void exit(int code)
 		if (p->parent != NULL) {
 			// Parent should `wait`
 			p->state = ZOMBIE;
+			wake_proc_threads(p->parent);
 		}
 		// Set the `parent` of all children to NULL
 		struct proc *np;
