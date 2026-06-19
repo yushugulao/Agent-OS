@@ -129,9 +129,9 @@ Context Path 有三种读取方式：
 `agentbench_ucore` 对比了 direct、query 和 snapshot：
 
 ```text
-agentbench_ucore: direct_context ops=5000 ticks=1 ops_per_tick=5000 speedup_x100=9765
+agentbench_ucore: direct_context ops=5000 ticks=1 ops_per_tick=5000 speedup_x100=7812
 agentbench_ucore: context_query ops=16 ticks=1 ops_per_tick=16 speedup_x100=100
-agentbench_ucore: context_snapshot ops=2048 ticks=1 ops_per_tick=2048 speedup_x100=12800
+agentbench_ucore: context_snapshot ops=2048 ticks=2 ops_per_tick=1024 speedup_x100=6400
 ```
 
 ## 当前限制

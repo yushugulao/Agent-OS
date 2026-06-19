@@ -132,8 +132,8 @@ agentfinal_ucore: passed
 `agentbench_ucore`：
 
 ```text
-agentbench_ucore: scalar_agent_run ops=256 ticks=5 ops_per_tick=51 speedup_x100=100
-agentbench_ucore: batch_agent_run ops=256 ticks=1 ops_per_tick=256 speedup_x100=500
+agentbench_ucore: scalar_agent_run ops=256 ticks=4 ops_per_tick=64 speedup_x100=100
+agentbench_ucore: batch_agent_run ops=256 ticks=2 ops_per_tick=128 speedup_x100=200
 ```
 
 `labdemo_ucore`：

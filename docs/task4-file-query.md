@@ -159,7 +159,7 @@ align+analyze+report+archive
 
 ```text
 agentbench_ucore: file_scan_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=100
-agentbench_ucore: file_index_query ops=64 ticks=2 ops_per_tick=32 speedup_x100=100
+agentbench_ucore: file_index_query ops=64 ticks=1 ops_per_tick=64 speedup_x100=200
 ```
 
 这证明当前系统同时具备：
