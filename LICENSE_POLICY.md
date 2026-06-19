@@ -42,12 +42,13 @@ When adding third-party source code, documentation, figures, binaries, or genera
 3. Record the source, purpose, and license in [NOTICE](NOTICE).
 4. For defense slides or videos, include a visible CC BY-SA 4.0 notice and attribution page.
 
-## Compliance Check
+## Pre-Submission Review
 
-Run the local check before packaging or uploading materials:
+Before packaging or uploading materials, review the repository against these points:
 
-```sh
-bash scripts/check-license-compliance.sh
-```
-
-The script checks that the required license files and repository-level statements are present and that project documents do not contain common incompatible license markers.
+- `LICENSE` is present and states GPL-3.0 for source code.
+- `DOCUMENTATION_LICENSE.md` is present and states CC BY-SA 4.0 for technical documents and defense materials.
+- `NOTICE` records third-party code, test structure, firmware binaries, documentation, images, or generated assets used by the project.
+- New source-like files follow GPL-3.0 unless a compatible third-party notice states otherwise.
+- New documents, slides, diagrams, and videos include or reference the CC BY-SA 4.0 notice.
+- No closed-source, private-use, non-open, noncommercial-only, no-derivatives, or otherwise incompatible material is included in the submitted repository.
