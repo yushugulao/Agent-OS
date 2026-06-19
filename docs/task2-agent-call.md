@@ -94,7 +94,7 @@ legacy 请求和响应结构：
 | `AGENT_STATUS_DENIED` | 权限检查拒绝 |
 | `AGENT_STATUS_DUPLICATE` | 重复恢复动作被识别 |
 
-最终功能验收程序 `agentfinal_ucore` 会覆盖批量工具调用、sequence 连续性、Context 写入和 Context Snapshot。`labdemo_ucore` 覆盖 denied 和 duplicate 两类业务错误。`agentsecurity_ucore` 专门覆盖用户态伪造 role 仍被内核真实 capability 拒绝的负向路径。
+最终功能验收程序 `agentfinal_ucore` 会覆盖批量工具调用、sequence 连续性、Context 写入和 Context Snapshot。`labdemo_ucore` 覆盖 denied 和 duplicate 两类业务错误。`agentsecurity_ucore` 专门覆盖用户态伪造 role 仍被内核真实 capability 拒绝的负向路径，并覆盖 legacy `agent_call()` 中 `tool_id` 和 `tool_name` 不一致时返回 `AGENT_STATUS_BAD_REQUEST` / `tool_mismatch`。
 
 ## Agent Context 写入
 
@@ -132,8 +132,8 @@ agentfinal_ucore: passed
 `agentbench_ucore`：
 
 ```text
-agentbench_ucore: scalar_agent_run ops=8192 ticks=118 ops_per_tick=69 speedup_x100=100
-agentbench_ucore: batch_agent_run ops=8192 ticks=70 ops_per_tick=117 speedup_x100=168
+agentbench_ucore: scalar_agent_run ops=8192 ticks=119 ops_per_tick=68 speedup_x100=100
+agentbench_ucore: batch_agent_run ops=8192 ticks=72 ops_per_tick=113 speedup_x100=165
 ```
 
 `labdemo_ucore`：
@@ -148,4 +148,5 @@ agentos:event type=AUDIT role=recovery action=rerun_align result=DUPLICATE
 ```text
 agentsecurity_ucore: sentinel spoof_denied=1
 agentsecurity_ucore: recovery rerun_ok=1 duplicate=1
+agentsecurity_ucore: legacy_tool_mismatch=1
 ```

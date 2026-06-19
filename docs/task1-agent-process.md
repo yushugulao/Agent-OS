@@ -20,7 +20,7 @@
 | 系统调用 | 作用 |
 | --- | --- |
 | `agent_create()` | 创建最低权限 sentinel Agent 子进程，保留兼容入口 |
-| `agent_create_role(int role)` | 创建指定角色 Agent 子进程；pid 1 普通 init 只能创建 orchestrator，具备 orchestrate 能力的 Agent 可创建其他角色 |
+| `agent_create_role(int role)` | 创建指定角色 Agent 子进程；pid 1 普通 init 和 pid 1 的直接普通子进程只能创建 orchestrator，具备 orchestrate 能力的 Agent 可创建其他角色 |
 | `agent_info(struct agent_info *)` | 查询当前进程的 Agent 状态、Agent ID、Agent Context、配额、Loop 状态和路径元信息 |
 
 当前任务一能力由 `agentfinal_ucore`、`labdemo_ucore` 和 `agentsecurity_ucore` 共同验证，覆盖 Agent 创建、Context 映射、多个 Agent 并存、角色能力绑定和退出路径。

@@ -63,6 +63,9 @@ static int agent_file_kind_next[AGENT_FILE_META_MAX];
 static uint64 agent_action_history[AGENT_ACTION_HISTORY_MAX];
 static int agent_action_history_count;
 
+static void agent_file_reset_indexes(void);
+static void agent_query_from_payload(struct agent_file_query *q, char *payload);
+
 struct agent_proc_snapshot {
 	int used;
 	int agents;
@@ -73,6 +76,9 @@ void agentinit(void)
 {
 	nextagentid = 1;
 	next_event_id = 1;
+	agent_action_history_count = 0;
+	memset(agent_files, 0, sizeof(agent_files));
+	agent_file_reset_indexes();
 }
 
 static uint64 agent_ticks(void)
@@ -258,6 +264,13 @@ static int agent_action_allowed(struct proc *p, char *action)
 	uint64 cap = agent_cap_for_action(action);
 
 	return cap != 0 && agent_has_cap(p, cap);
+}
+
+static int agent_plain_can_create_orchestrator(struct proc *p)
+{
+	if (p->pid == 1)
+		return 1;
+	return p->parent && p->parent->pid == 1 && !p->parent->is_agent;
 }
 
 void agent_free_proc_context(struct proc *p)
@@ -1106,13 +1119,76 @@ static int agent_append_system_context(struct proc *p, int tool_id,
 	return 0;
 }
 
-static void agent_file_update_status(char *stage, char *status, char *summary)
+static void agent_text_append(char *dst, int n, char *src)
+{
+	int len;
+
+	if (n <= 0 || src == 0)
+		return;
+	len = strlen(dst);
+	if (len >= n - 1)
+		return;
+	safestrcpy(dst + len, src, n - len);
+}
+
+static void agent_file_event_payload(struct agent_file_meta *meta, char *out,
+				     int n)
+{
+	memset(out, 0, n);
+	if (meta->status[0]) {
+		agent_text_append(out, n, "status=");
+		agent_text_append(out, n, meta->status);
+	}
+	if (meta->stage[0]) {
+		agent_text_append(out, n, ";stage=");
+		agent_text_append(out, n, meta->stage);
+	}
+	if (meta->run_id[0]) {
+		agent_text_append(out, n, ";run_id=");
+		agent_text_append(out, n, meta->run_id);
+	}
+	if (meta->project[0]) {
+		agent_text_append(out, n, ";project=");
+		agent_text_append(out, n, meta->project);
+	}
+	if (!out[0])
+		safestrcpy(out, "status=changed", n);
+}
+
+static void agent_parse_selector(char *payload, char *stage, int stage_n,
+				 char *project, int project_n, char *run_id,
+				 int run_id_n)
+{
+	struct agent_file_query query;
+
+	memset(stage, 0, stage_n);
+	memset(project, 0, project_n);
+	memset(run_id, 0, run_id_n);
+	if (agent_contains(payload, "=") || agent_contains(payload, ":")) {
+		agent_query_from_payload(&query, payload);
+		safestrcpy(stage, query.stage, stage_n);
+		safestrcpy(project, query.project, project_n);
+		safestrcpy(run_id, query.run_id, run_id_n);
+	} else {
+		safestrcpy(stage, payload, stage_n);
+	}
+}
+
+static void agent_file_update_status_select(char *stage, char *project,
+					    char *run_id, char *status,
+					    char *summary)
 {
 	for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
 		if (!agent_files[i].used)
 			continue;
 		if (strncmp(agent_files[i].stage, stage,
-			    sizeof(agent_files[i].stage)) == 0) {
+			    sizeof(agent_files[i].stage)) == 0 &&
+		    (!project[0] ||
+		     strncmp(agent_files[i].project, project,
+			     sizeof(agent_files[i].project)) == 0) &&
+		    (!run_id[0] ||
+		     strncmp(agent_files[i].run_id, run_id,
+			     sizeof(agent_files[i].run_id)) == 0)) {
 			safestrcpy(agent_files[i].status, status,
 				   sizeof(agent_files[i].status));
 			if (summary && summary[0])
@@ -1122,6 +1198,11 @@ static void agent_file_update_status(char *stage, char *status, char *summary)
 		}
 	}
 	agent_file_rebuild_indexes();
+}
+
+static void agent_file_update_status(char *stage, char *status, char *summary)
+{
+	agent_file_update_status_select(stage, "", "", status, summary);
 }
 
 static void agent_query_from_payload(struct agent_file_query *q, char *payload)
@@ -1194,6 +1275,9 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 	int found;
 	int delivered;
 	char event_payload[AGENT_EVENT_PAYLOAD_SIZE];
+	char selector_stage[AGENT_FILE_FIELD_SIZE];
+	char selector_project[AGENT_FILE_PROJECT_SIZE];
+	char selector_run_id[AGENT_FILE_FIELD_SIZE];
 
 	if (op->version != AGENT_CALL_VERSION) {
 		res->status = AGENT_STATUS_BAD_REQUEST;
@@ -1413,29 +1497,45 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 			agent_result_text(res, "duplicate");
 			break;
 		}
-		if (agent_dependency_for_stage(op->payload, &deps) < 0) {
+		agent_parse_selector(op->payload, selector_stage,
+				     sizeof(selector_stage), selector_project,
+				     sizeof(selector_project), selector_run_id,
+				     sizeof(selector_run_id));
+		if (agent_dependency_for_stage(selector_stage, &deps) < 0) {
 			res->status = AGENT_STATUS_NOT_FOUND;
 			agent_result_text(res, "stage_not_found");
 			break;
 		}
-		agent_file_update_status(op->payload, "ok", "rerun completed");
-		if (strncmp(op->payload, "align", AGENT_OP_PAYLOAD_SIZE) == 0) {
-			agent_file_update_status("analyze", "ok",
-						 "rerun after align");
-			agent_file_update_status("report", "ok",
-						 "report regenerated");
+		agent_file_update_status_select(selector_stage, selector_project,
+						selector_run_id, "ok",
+						"rerun completed");
+		if (strncmp(selector_stage, "align", sizeof(selector_stage)) == 0) {
+			agent_file_update_status_select("analyze",
+							selector_project,
+							selector_run_id, "ok",
+							"rerun after align");
+			agent_file_update_status_select("report",
+							selector_project,
+							selector_run_id, "ok",
+							"report regenerated");
 		}
 		agent_action_remember(op->request_id);
 		res->value0 = deps;
 		res->value1 = op->request_id;
 		agent_result_text(res, "rerun_ok");
-		if (strncmp(op->payload, "align", AGENT_OP_PAYLOAD_SIZE) == 0)
-			safestrcpy(event_payload,
-				   "status=ok;stage=align;action=rerun",
-				   sizeof(event_payload));
-		else
-			safestrcpy(event_payload, "status=ok;action=rerun",
-				   sizeof(event_payload));
+		memset(event_payload, 0, sizeof(event_payload));
+		agent_text_append(event_payload, sizeof(event_payload),
+				  "status=ok;stage=");
+		agent_text_append(event_payload, sizeof(event_payload),
+				  selector_stage);
+		if (selector_run_id[0]) {
+			agent_text_append(event_payload, sizeof(event_payload),
+					  ";run_id=");
+			agent_text_append(event_payload, sizeof(event_payload),
+					  selector_run_id);
+		}
+		agent_text_append(event_payload, sizeof(event_payload),
+				  ";action=rerun");
 		delivered = agent_deliver_watchers(p->pid, AGENT_EVENT_JOB_DONE,
 						   op->request_id,
 						   event_payload);
@@ -1528,7 +1628,8 @@ int sys_agent_create_role(int role)
 	if (p->is_agent) {
 		if (!agent_has_cap(p, AGENT_CAP_ORCHESTRATE))
 			return AGENT_STATUS_DENIED;
-	} else if (p->pid != 1 || role != AGENT_ROLE_ORCHESTRATOR) {
+	} else if (role != AGENT_ROLE_ORCHESTRATOR ||
+		   !agent_plain_can_create_orchestrator(p)) {
 		return -1;
 	}
 	return agent_create_role_proc(role);
@@ -1990,16 +2091,8 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 		agent_files[slot].dependency_mask = meta.dependency_mask;
 	agent_files[slot].updated_tick = agent_ticks();
 	agent_file_rebuild_indexes();
-	if (strncmp(meta.status, "failed", sizeof(meta.status)) == 0 &&
-	    strncmp(meta.stage, "align", sizeof(meta.stage)) == 0)
-		safestrcpy(event_payload,
-			   "status=failed;stage=align;run_id=RUN-042",
-			   sizeof(event_payload));
-	else if (strncmp(meta.status, "failed", sizeof(meta.status)) == 0)
-		safestrcpy(event_payload, "status=failed",
-			   sizeof(event_payload));
-	else
-		safestrcpy(event_payload, meta.status, sizeof(event_payload));
+	agent_file_event_payload(&agent_files[slot], event_payload,
+				 sizeof(event_payload));
 	if (status_changed && meta.status[0])
 		agent_deliver_watchers(p->pid, AGENT_EVENT_FILE_STATUS,
 				       meta.fid, event_payload);
@@ -2074,6 +2167,15 @@ int sys_agent_call(uint64 reqaddr, uint64 respaddr)
 	if (!tool) {
 		resp.status = AGENT_STATUS_UNKNOWN_TOOL;
 		safestrcpy(resp.result, "unknown_tool", sizeof(resp.result));
+		return copyout(p->pagetable, respaddr, (char *)&resp,
+			       sizeof(resp));
+	}
+	if (req.tool_id && req.tool_name[0] &&
+	    strncmp(req.tool_name, tool->name, AGENT_TOOL_NAME_SIZE) != 0) {
+		resp.status = AGENT_STATUS_BAD_REQUEST;
+		resp.tool_id = req.tool_id;
+		safestrcpy(resp.tool_name, tool->name, sizeof(resp.tool_name));
+		safestrcpy(resp.result, "tool_mismatch", sizeof(resp.result));
 		return copyout(p->pagetable, respaddr, (char *)&resp,
 			       sizeof(resp));
 	}

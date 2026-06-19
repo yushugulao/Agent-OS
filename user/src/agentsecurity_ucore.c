@@ -62,16 +62,16 @@ static void check_role(int role, const char *name)
 	printf("agentsecurity_ucore: role=%s capability_checked=1\n", name);
 }
 
-static void set_align_failed(void)
+static void set_align_failed(const char *run_id, int fid, const char *physical)
 {
 	struct agent_file_meta meta;
 
 	memset(&meta, 0, sizeof(meta));
-	meta.fid = 3;
-	strcpy(meta.physical_name, "lab_RUN042_align_err");
+	meta.fid = fid;
+	strcpy(meta.physical_name, physical);
 	strcpy(meta.project, "lab-gene-x");
 	strcpy(meta.workflow, "nightly-regression");
-	strcpy(meta.run_id, "RUN-042");
+	strcpy(meta.run_id, run_id);
 	strcpy(meta.stage, "align");
 	strcpy(meta.kind, "log");
 	strcpy(meta.status, "failed");
@@ -81,7 +81,7 @@ static void set_align_failed(void)
 	check(agent_file_meta_set(&meta) == 0, "set failed meta");
 }
 
-static void check_align_status(const char *status)
+static void check_align_status(const char *run_id, const char *status)
 {
 	struct agent_file_query query;
 	struct agent_file_query_result result;
@@ -90,11 +90,72 @@ static void check_align_status(const char *status)
 	query.flags = AGENT_FILE_QUERY_USE_INDEX;
 	query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
 	strcpy(query.project, "lab-gene-x");
-	strcpy(query.run_id, "RUN-042");
+	strcpy(query.run_id, run_id);
 	strcpy(query.stage, "align");
 	strcpy(query.status, status);
 	check(agent_file_query(&query, &result) >= 1, "query align status");
 	check(result.total_hits >= 1, "align status hit");
+}
+
+static void check_preinit_index_query(void)
+{
+	struct agent_file_query query;
+	struct agent_file_query_result result;
+
+	memset(&query, 0, sizeof(query));
+	query.flags = AGENT_FILE_QUERY_USE_INDEX;
+	query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(query.status, "ok");
+	check(agent_file_query(&query, &result) == 0, "preinit query return");
+	check(result.total_hits == 0, "preinit query hits");
+	printf("agentsecurity_ucore: preinit_index_query=1\n");
+}
+
+static void check_legacy_tool_mismatch(void)
+{
+	struct agent_request req;
+	struct agent_response resp;
+
+	memset(&req, 0, sizeof(req));
+	memset(&resp, 0, sizeof(resp));
+	req.version = AGENT_CALL_VERSION;
+	req.tool_id = AGENT_TOOL_ECHO;
+	req.request_id = 8301;
+	strcpy(req.tool_name, "pid_info");
+	strcpy(req.payload, "mismatch-payload");
+	check(agent_call(&req, &resp) == 0, "legacy mismatch call");
+	check(resp.status == AGENT_STATUS_BAD_REQUEST, "legacy mismatch status");
+	check(strcmp(resp.result, "tool_mismatch") == 0, "legacy mismatch text");
+	printf("agentsecurity_ucore: legacy_tool_mismatch=1\n");
+}
+
+static void run_min_orchestrator(void)
+{
+	check_role(AGENT_ROLE_ORCHESTRATOR, "orchestrator_child");
+	exit(0);
+}
+
+static void check_plain_child_orchestrator_allowed(void)
+{
+	int wrapper_pid;
+	int agent_pid;
+	int status = 0;
+
+	wrapper_pid = fork();
+	check(wrapper_pid >= 0, "fork wrapper");
+	if (wrapper_pid == 0) {
+		agent_pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
+		check(agent_pid >= 0, "plain child create orchestrator");
+		if (agent_pid == 0)
+			run_min_orchestrator();
+		check(waitpid(agent_pid, &status) == agent_pid,
+		      "wait child orchestrator");
+		check(status == 0, "child orchestrator status");
+		exit(0);
+	}
+	check(waitpid(wrapper_pid, &status) == wrapper_pid, "wait wrapper");
+	check(status == 0, "wrapper status");
+	printf("agentsecurity_ucore: plain_child_orchestrator=1\n");
 }
 
 static void run_sentinel(void)
@@ -119,7 +180,7 @@ static void run_sentinel(void)
 	strcpy(meta.status, "ok");
 	check(agent_file_meta_set(&meta) == AGENT_STATUS_DENIED,
 	      "sentinel meta write denied");
-	check_align_status("failed");
+	check_align_status("RUN-042", "failed");
 	printf("agentsecurity_ucore: sentinel spoof_denied=1\n");
 	exit(0);
 }
@@ -131,10 +192,10 @@ static void run_recovery(void)
 
 	check_role(AGENT_ROLE_RECOVERY, "recovery");
 	make_op(&op, AGENT_TOOL_RERUN_STAGE, 9101, AGENT_ROLE_SENTINEL,
-		"align");
+		"stage=align;run_id=RUN-999;project=lab-gene-x");
 	run_one(&op, &res, AGENT_STATUS_OK, "recovery rerun");
 	make_op(&op, AGENT_TOOL_RERUN_STAGE, 9101, AGENT_ROLE_SENTINEL,
-		"align");
+		"stage=align;run_id=RUN-999;project=lab-gene-x");
 	run_one(&op, &res, AGENT_STATUS_DUPLICATE, "recovery duplicate");
 	make_op(&op, AGENT_TOOL_WRITE_REPORT, 9102, AGENT_ROLE_SENTINEL,
 		"security recovery report");
@@ -149,22 +210,28 @@ static void run_orchestrator(void)
 	int status = 0;
 
 	check_role(AGENT_ROLE_ORCHESTRATOR, "orchestrator");
+	check_preinit_index_query();
 	check(agent_file_meta_init() == 0, "meta init");
-	set_align_failed();
+	check_legacy_tool_mismatch();
+	set_align_failed("RUN-042", 3, "lab_RUN042_align_err");
+	set_align_failed("RUN-999", 30, "lab_RUN999_align_err");
 	pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	check(pid >= 0, "create sentinel");
 	if (pid == 0)
 		run_sentinel();
 	check(waitpid(pid, &status) == pid, "wait sentinel");
 	check(status == 0, "sentinel status");
-	check_align_status("failed");
+	check_align_status("RUN-042", "failed");
+	check_align_status("RUN-999", "failed");
 	pid = agent_create_role(AGENT_ROLE_RECOVERY);
 	check(pid >= 0, "create recovery");
 	if (pid == 0)
 		run_recovery();
 	check(waitpid(pid, &status) == pid, "wait recovery");
 	check(status == 0, "recovery status");
-	check_align_status("ok");
+	check_align_status("RUN-999", "ok");
+	check_align_status("RUN-042", "failed");
+	printf("agentsecurity_ucore: scoped_rerun=1\n");
 	printf("agentsecurity_ucore: passed\n");
 	exit(0);
 }
@@ -193,6 +260,7 @@ int main(void)
 
 	printf("agentsecurity_ucore: Agent permission boundary test\n");
 	check_plain_process_denied();
+	check_plain_child_orchestrator_allowed();
 	pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
 	check(pid >= 0, "create orchestrator");
 	if (pid == 0)

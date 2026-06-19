@@ -101,14 +101,16 @@ labdemo_ucore
 agentsecurity_ucore
 ```
 
+shell 中启动的测试程序是 `usershell` 的直接普通子进程，内核允许这类进程创建 orchestrator Agent，因此该手动路径与 `INIT_PROC=...` 路径都可用。
+
 ## 最终测试入口
 
 | 程序 | 定位 | 期望通过输出 |
 | --- | --- | --- |
-| `agentfinal_ucore` | 任务一至三功能验收，同时覆盖文件索引和事件自唤醒 | `agentfinal_ucore: passed` |
-| `agentbench_ucore` | 任务一至五性能验证，包括 batch、direct context、snapshot、文件查询和 wait/wake | `agentbench_ucore: passed` |
-| `labdemo_ucore` | 多 Agent 综合演示，普通 init 只启动 orchestrator，后续元数据初始化、事件注入和角色 Agent 创建都由 orchestrator 完成 | `labdemo_ucore: passed` |
-| `agentsecurity_ucore` | 权限边界负向测试，覆盖普通进程直接写元数据/投事件、sentinel 伪造 recovery、真实 recovery 幂等恢复 | `agentsecurity_ucore: passed` |
+| `agentfinal_ucore` | 任务一至三功能验收，同时覆盖文件索引和事件自唤醒 | `agentfinal_ucore: parent passed` |
+| `agentbench_ucore` | 任务一至五性能验证，包括 batch、direct context、snapshot、文件查询和 wait/wake | `agentbench_ucore: parent passed` |
+| `labdemo_ucore` | 多 Agent 综合演示，普通 init 只启动 orchestrator，后续元数据初始化、事件注入和角色 Agent 创建都由 orchestrator 完成 | `labdemo_ucore: parent passed` |
+| `agentsecurity_ucore` | 权限边界负向测试，覆盖初始化前索引查询、legacy mismatch、普通进程直接写元数据/投事件、sentinel 伪造 recovery、多 run 定向恢复 | `agentsecurity_ucore: parent passed` |
 
 `agentfinal_ucore` 预期输出包括：
 
@@ -143,18 +145,25 @@ agentos:event type=ACTION role=recovery stage=align status=OK
 agentos:event type=AUDIT role=recovery action=rerun_align result=DUPLICATE
 agentos:event type=FINAL status=RECOVERED
 labdemo_ucore: passed
+labdemo_ucore: parent passed
 ```
 
 `agentsecurity_ucore` 预期输出包括：
 
 ```text
 agentsecurity_ucore: plain_process_denied=1
+agentsecurity_ucore: role=orchestrator_child capability_checked=1
+agentsecurity_ucore: plain_child_orchestrator=1
 agentsecurity_ucore: role=orchestrator capability_checked=1
+agentsecurity_ucore: preinit_index_query=1
+agentsecurity_ucore: legacy_tool_mismatch=1
 agentsecurity_ucore: role=sentinel capability_checked=1
 agentsecurity_ucore: sentinel spoof_denied=1
 agentsecurity_ucore: role=recovery capability_checked=1
 agentsecurity_ucore: recovery rerun_ok=1 duplicate=1
+agentsecurity_ucore: scoped_rerun=1
 agentsecurity_ucore: passed
+agentsecurity_ucore: parent passed
 ```
 
 ## 当前交付材料

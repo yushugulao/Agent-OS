@@ -185,6 +185,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER
 ```text
 agentos:event type=WATCH_REGISTERED role=sentinel filter=status=failed
 agentos:event type=INCIDENT_CREATED id=INC-RUN-042-ALIGN-OOM stage=align
+labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042;project=lab-gene-x
 agentos:event type=TOOL_CALL role=sentinel tool=query_file hits=1 used_index=1
 agentos:event type=AUDIT role=sentinel action=rerun_stage result=DENIED
 agentos:event type=MESSAGE from=sentinel to=investigator status=OK
@@ -193,6 +194,7 @@ agentos:event type=ACTION role=recovery stage=align status=OK
 agentos:event type=AUDIT role=recovery action=rerun_align result=DUPLICATE
 agentos:event type=FINAL status=RECOVERED
 labdemo_ucore: passed
+labdemo_ucore: parent passed
 ```
 
 ### 5.4 讲解重点
@@ -219,6 +221,6 @@ labdemo_ucore: passed
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent
 ```
 
-该程序证明普通进程不能直接投递事件或修改 Agent 文件元数据，sentinel 也不能通过伪造 `AGENT_ROLE_RECOVERY` 获得恢复权限。
+该程序证明普通进程不能直接投递事件或修改 Agent 文件元数据，usershell 等价路径可以创建 orchestrator，初始化前索引查询不会卡住，legacy 工具 ID/名称不一致会失败，sentinel 也不能通过伪造 `AGENT_ROLE_RECOVERY` 获得恢复权限，recovery 只会恢复 selector 指定的 run。
 
 当前版本已经具备任务一至三的增强实现，并完成任务四、任务五和任务六的演示级实现。后续可以继续增强真实文件系统后台索引、长期 Agent 调度、云端 LLM Gateway 和可视化大屏。

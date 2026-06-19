@@ -89,6 +89,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 517：
 | 调用者 | 允许行为 |
 | --- | --- |
 | pid 1 的普通 init | 只允许创建 `AGENT_ROLE_ORCHESTRATOR`，用于启动演示控制面 |
+| pid 1 的直接普通子进程 | 只允许创建 `AGENT_ROLE_ORCHESTRATOR`，用于支持 `usershell` 手动运行测试程序 |
 | 具备 `AGENT_CAP_ORCHESTRATE` 的 Agent | 允许创建任意合法角色 |
 | 其他普通进程 | 返回 `-1`，不创建 Agent |
 | 不具备 orchestrate 能力的 Agent | 返回 `AGENT_STATUS_DENIED` |
@@ -154,7 +155,7 @@ Agent-only 直接 syscall 的权限边界：
 | `payload_type` | 字符串参数类型 |
 | `payload` | 短字符串 payload |
 
-当 `tool_id` 和 `tool_name` 同时提供时，内核先用 ID 定位工具，再校验名称是否匹配。
+当 `tool_id` 和 `tool_name` 同时提供时，内核先用 ID 定位工具，再校验名称是否匹配。不匹配时 legacy `agent_call()` 返回 `AGENT_STATUS_BAD_REQUEST`，结果文本为 `tool_mismatch`，不会执行工具。
 
 ## 错误码
 

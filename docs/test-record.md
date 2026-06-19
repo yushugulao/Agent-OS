@@ -29,7 +29,7 @@ make build TOOLPREFIX=riscv64-linux-gnu- LOG=warn INIT_PROC=agentfinal_ucore
 bash scripts/run-agent-tests.sh
 ```
 
-结果：通过。脚本依次运行 `agentfinal_ucore`、`agentbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`，均找到对应 passed 标记。
+结果：通过。脚本依次运行 `agentfinal_ucore`、`agentbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`，均找到对应 `parent passed` 标记，且日志中没有 `check failed`、`panic` 或 `unknown syscall`。
 
 ## agentfinal_ucore 样例输出
 
@@ -53,14 +53,14 @@ agentfinal_ucore: parent passed
 ```text
 agentbench_ucore: Agent-OS on uCore benchmark
 agentbench_ucore: case ops ticks ops_per_tick speedup_x100
-agentbench_ucore: scalar_agent_run ops=8192 ticks=118 ops_per_tick=69 speedup_x100=100
-agentbench_ucore: batch_agent_run ops=8192 ticks=70 ops_per_tick=117 speedup_x100=168
-agentbench_ucore: direct_context ops=50000 ticks=1 ops_per_tick=50000 speedup_x100=72021
+agentbench_ucore: scalar_agent_run ops=8192 ticks=119 ops_per_tick=68 speedup_x100=100
+agentbench_ucore: batch_agent_run ops=8192 ticks=72 ops_per_tick=113 speedup_x100=165
+agentbench_ucore: direct_context ops=50000 ticks=1 ops_per_tick=50000 speedup_x100=72631
 agentbench_ucore: context_query ops=256 ticks=3 ops_per_tick=85 speedup_x100=100
-agentbench_ucore: context_snapshot ops=32768 ticks=23 ops_per_tick=1424 speedup_x100=1669
-agentbench_ucore: file_scan_query ops=1024 ticks=26 ops_per_tick=39 speedup_x100=100
-agentbench_ucore: file_index_query ops=1024 ticks=23 ops_per_tick=44 speedup_x100=113
-agentbench_ucore: event_wait_wake ops=32 ticks=5 ops_per_tick=6 speedup_x100=100
+agentbench_ucore: context_snapshot ops=32768 ticks=22 ops_per_tick=1489 speedup_x100=1745
+agentbench_ucore: file_scan_query ops=1024 ticks=28 ops_per_tick=36 speedup_x100=100
+agentbench_ucore: file_index_query ops=1024 ticks=23 ops_per_tick=44 speedup_x100=121
+agentbench_ucore: event_wait_wake ops=32 ticks=3 ops_per_tick=10 speedup_x100=100
 agentbench_ucore: passed
 agentbench_ucore: parent passed
 ```
@@ -81,7 +81,7 @@ agentos:event type=WATCH_REGISTERED role=sentinel filter=status=failed
 labdemo_ucore: created role=recovery pid=3 context=0x0000003ffffea000
 agentos:event type=AGENT_CREATED role=recovery pid=3 context=0x0000003ffffea000
 agentos:event type=INCIDENT_CREATED id=INC-RUN-042-ALIGN-OOM stage=align
-labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042
+labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042;project=lab-gene-x
 agentos:event type=TOOL_CALL role=sentinel tool=query_file hits=1 used_index=1 seq=4
 agentos:event type=AUDIT role=sentinel action=rerun_stage result=DENIED seq=5
 agentos:event type=MESSAGE from=sentinel to=investigator status=OK seq=6
@@ -103,16 +103,21 @@ labdemo_ucore: parent passed
 ```text
 agentsecurity_ucore: Agent permission boundary test
 agentsecurity_ucore: plain_process_denied=1
+agentsecurity_ucore: role=orchestrator_child capability_checked=1
+agentsecurity_ucore: plain_child_orchestrator=1
 agentsecurity_ucore: role=orchestrator capability_checked=1
+agentsecurity_ucore: preinit_index_query=1
+agentsecurity_ucore: legacy_tool_mismatch=1
 agentsecurity_ucore: role=sentinel capability_checked=1
 agentsecurity_ucore: sentinel spoof_denied=1
 agentsecurity_ucore: role=recovery capability_checked=1
 agentsecurity_ucore: recovery rerun_ok=1 duplicate=1
+agentsecurity_ucore: scoped_rerun=1
 agentsecurity_ucore: passed
 agentsecurity_ucore: parent passed
 ```
 
-结论：普通进程不能直接投递事件或修改 Agent 文件元数据；sentinel 不能通过用户态传入 recovery role 伪造恢复权限；recovery 的恢复能力来自内核真实 role/capability，重复 corr_id 被识别为 duplicate。
+结论：普通进程不能直接投递事件或修改 Agent 文件元数据；pid 1 的普通直接子进程可创建 orchestrator，保证 usershell 手动测试路径可用；初始化前索引查询不会阻塞；legacy `tool_id` 和 `tool_name` 不一致会失败；sentinel 不能通过用户态传入 recovery role 伪造恢复权限；recovery 的恢复能力来自内核真实 role/capability，重复 corr_id 被识别为 duplicate，且定向恢复不会误修改其他 run。
 
 ## 提交前检查记录
 

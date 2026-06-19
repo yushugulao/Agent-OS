@@ -129,9 +129,9 @@ Context Path 有三种读取方式：
 `agentbench_ucore` 对比了 direct、query 和 snapshot：
 
 ```text
-agentbench_ucore: direct_context ops=50000 ticks=1 ops_per_tick=50000 speedup_x100=76904
-agentbench_ucore: context_query ops=256 ticks=2 ops_per_tick=128 speedup_x100=100
-agentbench_ucore: context_snapshot ops=32768 ticks=23 ops_per_tick=1424 speedup_x100=1113
+agentbench_ucore: direct_context ops=50000 ticks=1 ops_per_tick=50000 speedup_x100=72631
+agentbench_ucore: context_query ops=256 ticks=3 ops_per_tick=85 speedup_x100=100
+agentbench_ucore: context_snapshot ops=32768 ticks=22 ops_per_tick=1489 speedup_x100=1745
 ```
 
 ## 当前边界

@@ -108,14 +108,14 @@ benchmark 主进程通过 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)` 创建 or
 
 ```text
 agentbench_ucore: case ops ticks ops_per_tick speedup_x100
-agentbench_ucore: scalar_agent_run ops=8192 ticks=118 ops_per_tick=69 speedup_x100=100
-agentbench_ucore: batch_agent_run ops=8192 ticks=70 ops_per_tick=117 speedup_x100=168
-agentbench_ucore: direct_context ops=50000 ticks=1 ops_per_tick=50000 speedup_x100=72021
+agentbench_ucore: scalar_agent_run ops=8192 ticks=119 ops_per_tick=68 speedup_x100=100
+agentbench_ucore: batch_agent_run ops=8192 ticks=72 ops_per_tick=113 speedup_x100=165
+agentbench_ucore: direct_context ops=50000 ticks=1 ops_per_tick=50000 speedup_x100=72631
 agentbench_ucore: context_query ops=256 ticks=3 ops_per_tick=85 speedup_x100=100
-agentbench_ucore: context_snapshot ops=32768 ticks=23 ops_per_tick=1424 speedup_x100=1669
-agentbench_ucore: file_scan_query ops=1024 ticks=26 ops_per_tick=39 speedup_x100=100
-agentbench_ucore: file_index_query ops=1024 ticks=23 ops_per_tick=44 speedup_x100=113
-agentbench_ucore: event_wait_wake ops=32 ticks=5 ops_per_tick=6 speedup_x100=100
+agentbench_ucore: context_snapshot ops=32768 ticks=22 ops_per_tick=1489 speedup_x100=1745
+agentbench_ucore: file_scan_query ops=1024 ticks=28 ops_per_tick=36 speedup_x100=100
+agentbench_ucore: file_index_query ops=1024 ticks=23 ops_per_tick=44 speedup_x100=121
+agentbench_ucore: event_wait_wake ops=32 ticks=3 ops_per_tick=10 speedup_x100=100
 agentbench_ucore: passed
 agentbench_ucore: parent passed
 ```
@@ -185,6 +185,7 @@ tick 数值随环境波动，评审时应结合设计解释看相对趋势。
 ```text
 agentos:event type=WATCH_REGISTERED role=sentinel filter=status=failed
 agentos:event type=INCIDENT_CREATED id=INC-RUN-042-ALIGN-OOM stage=align
+labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042;project=lab-gene-x
 agentos:event type=TOOL_CALL role=sentinel tool=query_file hits=1 used_index=1
 agentos:event type=AUDIT role=sentinel action=rerun_stage result=DENIED
 agentos:event type=MESSAGE from=sentinel to=investigator status=OK
@@ -221,33 +222,44 @@ labdemo_ucore: passed
 1. 普通 init 调用 `agent_wake()`，预期返回 `-1`。
 2. 普通 init 调用 `agent_file_meta_init()`，预期返回 `-1`。
 3. 普通 init 调用 `agent_file_meta_set()`，预期返回 `-1`。
-4. 普通 init 创建 orchestrator Agent。
-5. orchestrator 通过 `agent_info()` 检查真实 role 和 capability mask。
-6. orchestrator 初始化文件元数据，并把 align 阶段置为 failed。
-7. orchestrator 创建 sentinel Agent。
-8. sentinel 检查真实 role/capability mask。
-9. sentinel 把 `agent_op.arg0` 伪造成 `AGENT_ROLE_RECOVERY` 后调用 `capability_check("rerun_stage")`，预期仍返回 `AGENT_STATUS_DENIED`。
-10. sentinel 继续伪造 recovery 调用 `rerun_stage align`，预期返回 `AGENT_STATUS_DENIED`。
-11. sentinel 继续伪造 recovery 调用 `write_report`，预期返回 `AGENT_STATUS_DENIED`。
-12. sentinel 直接调用 `agent_file_meta_set()`，预期返回 `AGENT_STATUS_DENIED`。
-13. sentinel 查询 align 状态仍为 failed，证明拒绝路径没有改变文件状态。
-14. orchestrator 创建 recovery Agent。
-15. recovery 检查真实 role/capability mask。
-16. recovery 调用 `rerun_stage align`，即使 `agent_op.arg0` 填成 sentinel，也按真实 recovery role 成功。
-17. recovery 使用同一 corr_id 再次调用 `rerun_stage align`，预期返回 `AGENT_STATUS_DUPLICATE`。
-18. recovery 调用 `write_report` 成功。
-19. orchestrator 查询 align 状态变为 ok，测试输出 `agentsecurity_ucore: passed`。
+4. 普通 init 创建一个普通子进程，子进程作为 usershell 等价路径创建 orchestrator Agent。
+5. orchestrator 子 Agent 通过 `agent_info()` 检查真实 role 和 capability mask。
+6. 普通 init 创建主 orchestrator Agent。
+7. orchestrator 在未初始化元数据前执行带索引查询，预期返回 0 条命中且不会阻塞。
+8. orchestrator 初始化文件元数据。
+9. orchestrator 使用 legacy `agent_call()` 传入不一致的 `tool_id` 和 `tool_name`，预期返回 `AGENT_STATUS_BAD_REQUEST` 和 `tool_mismatch`。
+10. orchestrator 分别把 `RUN-042` 和 `RUN-999` 的 align 阶段置为 failed。
+11. orchestrator 创建 sentinel Agent。
+12. sentinel 检查真实 role/capability mask。
+13. sentinel 把 `agent_op.arg0` 伪造成 `AGENT_ROLE_RECOVERY` 后调用 `capability_check("rerun_stage")`，预期仍返回 `AGENT_STATUS_DENIED`。
+14. sentinel 继续伪造 recovery 调用 `rerun_stage align`，预期返回 `AGENT_STATUS_DENIED`。
+15. sentinel 继续伪造 recovery 调用 `write_report`，预期返回 `AGENT_STATUS_DENIED`。
+16. sentinel 直接调用 `agent_file_meta_set()`，预期返回 `AGENT_STATUS_DENIED`。
+17. sentinel 查询 `RUN-042` 和 `RUN-999` 状态仍为 failed，证明拒绝路径没有改变文件状态。
+18. orchestrator 创建 recovery Agent。
+19. recovery 检查真实 role/capability mask。
+20. recovery 调用 `rerun_stage`，payload 使用 `stage=align;run_id=RUN-999;project=lab-gene-x` 定向选择目标 run；即使 `agent_op.arg0` 填成 sentinel，也按真实 recovery role 成功。
+21. recovery 使用同一 corr_id 再次调用同一 selector，预期返回 `AGENT_STATUS_DUPLICATE`。
+22. recovery 调用 `write_report` 成功。
+23. orchestrator 查询 `RUN-999` 变为 ok，`RUN-042` 仍为 failed，证明恢复动作没有跨 run 修改。
+24. 测试输出 `agentsecurity_ucore: passed` 和 `agentsecurity_ucore: parent passed`。
 
 ### 4.2 关键输出
 
 ```text
 agentsecurity_ucore: plain_process_denied=1
+agentsecurity_ucore: role=orchestrator_child capability_checked=1
+agentsecurity_ucore: plain_child_orchestrator=1
 agentsecurity_ucore: role=orchestrator capability_checked=1
+agentsecurity_ucore: preinit_index_query=1
+agentsecurity_ucore: legacy_tool_mismatch=1
 agentsecurity_ucore: role=sentinel capability_checked=1
 agentsecurity_ucore: sentinel spoof_denied=1
 agentsecurity_ucore: role=recovery capability_checked=1
 agentsecurity_ucore: recovery rerun_ok=1 duplicate=1
+agentsecurity_ucore: scoped_rerun=1
 agentsecurity_ucore: passed
+agentsecurity_ucore: parent passed
 ```
 
 ### 4.3 覆盖结论
@@ -256,10 +268,14 @@ agentsecurity_ucore: passed
 | --- | --- |
 | 普通进程不能直接投递事件 | `agent_wake()` 返回 `-1` |
 | 普通进程不能直接修改文件元数据 | `agent_file_meta_init()`、`agent_file_meta_set()` 返回 `-1` |
+| usershell 手动运行路径可用 | pid 1 的普通直接子进程可创建 orchestrator |
+| 初始化前索引查询安全 | 未调用 `agent_file_meta_init()` 前，索引查询返回 0 条命中且不阻塞 |
+| legacy 工具名和工具 ID 不一致会失败 | `agent_call()` 返回 `AGENT_STATUS_BAD_REQUEST` 和 `tool_mismatch` |
 | 用户态 role 参数不可信 | sentinel 伪造 recovery 仍被拒绝 |
 | 文件状态拒绝路径无副作用 | sentinel 伪造 rerun 后 align 仍为 failed |
 | recovery 权限来自真实 PCB 字段 | recovery 即使传入 sentinel role，也能按真实权限恢复 |
 | 重复恢复被识别 | 相同 corr_id 第二次 rerun 返回 duplicate |
+| 多 run 恢复不会误伤 | 只恢复 selector 指定的 `RUN-999`，`RUN-042` 保持 failed |
 
 ## 5. 运行方式和复现建议
 

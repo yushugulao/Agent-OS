@@ -86,7 +86,7 @@ int agent_wait(struct agent_event *event, int timeout_ticks);
 `agentbench_ucore` 用 wait/wake 压测验证该路径：
 
 ```text
-agentbench_ucore: event_wait_wake ops=32 ticks=5 ops_per_tick=6 speedup_x100=100
+agentbench_ucore: event_wait_wake ops=32 ticks=3 ops_per_tick=10 speedup_x100=100
 ```
 
 ## Wake
@@ -148,7 +148,7 @@ int agent_heartbeat(int interval_ticks);
 
 ```text
 agentos:event type=INCIDENT_CREATED id=INC-RUN-042-ALIGN-OOM stage=align
-labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042
+labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042;project=lab-gene-x
 ```
 
 说明文件状态变化成功唤醒 sentinel。
@@ -205,14 +205,14 @@ agentfinal_ucore: event_wait=1 payload=self wake
 `agentbench_ucore`：
 
 ```text
-agentbench_ucore: event_wait_wake ops=32 ticks=5 ops_per_tick=6 speedup_x100=100
+agentbench_ucore: event_wait_wake ops=32 ticks=3 ops_per_tick=10 speedup_x100=100
 ```
 
 `labdemo_ucore`：
 
 ```text
 agentos:event type=WATCH_REGISTERED role=sentinel filter=status=failed
-labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042
+labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042;project=lab-gene-x
 agentos:event type=MESSAGE from=sentinel to=investigator status=OK
 agentos:event type=FINAL status=RECOVERED
 labdemo_ucore: passed

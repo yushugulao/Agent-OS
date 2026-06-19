@@ -30,7 +30,7 @@
 | T1-2 | PCB 扩展字段正确初始化 | 已验证 | `struct proc` Agent 字段、`agent_role`、`agent_capability_mask`、`agent_clear_metadata()`、`agent_make_role()` | `agent_info()`、`agentfinal_ucore`、`agentsecurity_ucore` |
 | T1-3 | Agent Context 区在用户地址空间中正确分配 | 已验证 | `agent_map_context()`、`AGENT_CONTEXT_BASE` | `agentfinal_ucore: context size=16384 capacity=128` |
 | T1-4 | Agent 进程可直接读取 Context 镜像 | 已验证 | Agent Context 用户镜像页和内核 shadow 权威页 | `agentfinal_ucore` 读取 header/latest |
-| T1-5 | 普通进程和 Agent 进程可共存，互不影响 | 已验证 | 普通父进程创建并等待 Agent 子进程；普通进程不安装 Agent metadata/context，且不能直接调用敏感 Agent syscall | `agentfinal_ucore`、`labdemo_ucore`、`agentsecurity_ucore` |
+| T1-5 | 普通进程和 Agent 进程可共存，互不影响 | 已验证 | 普通父进程创建并等待 Agent 子进程；普通进程不安装 Agent metadata/context，且不能直接调用敏感 Agent syscall；pid 1 的普通直接子进程可创建 orchestrator，支持 usershell 手动测试路径 | `agentfinal_ucore`、`labdemo_ucore`、`agentsecurity_ucore: plain_child_orchestrator=1` |
 | T1-6 | Agent 退出后资源能释放 | 已验证 | `agent_free_proc_context()`、`freeproc()` | 三个最终测试均正常退出 |
 
 ## 任务二：Agent 与内核结构化交互
@@ -41,9 +41,10 @@
 | T2-2 | 每个工具请求和响应均为结构化格式 | 已验证 | `struct agent_op`、`struct agent_result`、`struct agent_tool_desc` | `agentfinal_ucore`、`agentbench_ucore` |
 | T2-3 | 提供工具列表及参数说明 | 已验证 | `agent_tool_list()`、`agent_tools[]` | [api.md](api.md) 工具表 |
 | T2-4 | 工具调用结果可写入 Agent Context | 已验证 | `agent_append_context()` 写 shadow 权威页并同步用户镜像 | `agentfinal_ucore` 读取 latest 和 snapshot |
-| T2-5 | 错误路径有明确返回 | 已验证 | `AGENT_STATUS_*`、工具执行状态码、真实 role/capability 授权 | `labdemo_ucore` 验证 denied 和 duplicate；`agentsecurity_ucore` 验证伪造 role 被拒绝 |
+| T2-5 | 错误路径有明确返回 | 已验证 | `AGENT_STATUS_*`、工具执行状态码、真实 role/capability 授权、legacy 工具 ID/名称一致性检查 | `labdemo_ucore` 验证 denied 和 duplicate；`agentsecurity_ucore` 验证伪造 role 被拒绝和 `legacy_tool_mismatch=1` |
 | T2-6 | 工具解析性能优化 | 扩展增强 | `agent_run()` 批量执行、ID 分发 | `agentbench_ucore` |
 | T2-7 | 敏感工具授权不信任用户态自报 role | 扩展增强 | `capability_check`、`rerun_stage`、`write_report` 均读取当前 PCB capability | `agentsecurity_ucore: sentinel spoof_denied=1` |
+| T2-8 | legacy `tool_id` 和 `tool_name` 不一致时拒绝执行 | 扩展增强 | `sys_agent_call()` 先校验 ID 对应工具名，错误时返回 `AGENT_STATUS_BAD_REQUEST` 和 `tool_mismatch` | `agentsecurity_ucore: legacy_tool_mismatch=1` |
 
 ## 任务三：上下文路径管理
 
@@ -67,7 +68,9 @@
 | T4-5 | 支持依赖关系查询，服务最小恢复 | 已验证 | `AGENT_TOOL_DEPENDENCY_QUERY`、dependency mask | `labdemo_ucore: affected stages=align+analyze+report+archive` |
 | T4-6 | 查询写入 Context Path，可用于报告回放 | 已验证 | 文件查询和工具调用均追加 Context | `labdemo_ucore`、`context_snapshot` |
 | T4-7 | 文件元数据写入只能由具备权限的 Agent 执行 | 扩展增强 | `agent_file_meta_init()`、`agent_file_meta_set()` 要求 Agent 且具备 `AGENT_CAP_META_WRITE` | `agentsecurity_ucore: plain_process_denied=1`、`sentinel meta write denied` |
-| T4-8 | 对真实磁盘目录做持续后台扫描 | 未实现 | 无 | 后续增强方向 |
+| T4-8 | 索引初始化前查询安全 | 扩展增强 | `agentinit()` 初始化 status/stage/kind 索引桶为 `-1` | `agentsecurity_ucore: preinit_index_query=1` |
+| T4-9 | 多 run 恢复只修改目标 run | 扩展增强 | `rerun_stage` 支持 `stage=...;run_id=...;project=...` selector | `agentsecurity_ucore: scoped_rerun=1` |
+| T4-10 | 对真实磁盘目录做持续后台扫描 | 未实现 | 无 | 后续增强方向 |
 
 ## 任务五：Agent Loop 内核运行机制
 
@@ -75,7 +78,7 @@
 | --- | --- | --- | --- | --- |
 | T5-1 | Agent 可注册 watch | 已验证 | `agent_watch()`、`AGENT_TOOL_AGENT_WATCH` | `labdemo_ucore: WATCH_REGISTERED` |
 | T5-2 | Agent 可等待事件并 timeout | 已验证 | `agent_wait()`、`AGENT_STATUS_TIMEOUT` | `agentbench_ucore` wait/wake 压测 |
-| T5-3 | 文件状态变化能唤醒目标 Agent | 已验证 | `agent_file_meta_set()` 投递 `AGENT_EVENT_FILE_STATUS` | `labdemo_ucore` sentinel 收到 failed 事件 |
+| T5-3 | 文件状态变化能唤醒目标 Agent | 已验证 | `agent_file_meta_set()` 投递包含 status、stage、run_id、project 的 `AGENT_EVENT_FILE_STATUS` | `labdemo_ucore` sentinel 收到 failed 事件 |
 | T5-4 | 消息能触发 Agent 事件 | 已验证 | `send_message` 工具、`agent_wake()` | `labdemo_ucore` sentinel->investigator、investigator->recovery |
 | T5-5 | 心跳字段可设置并通过 Agent 信息观察 | 已验证 | `agent_heartbeat()`、`agent_info.last_heartbeat_tick` | `labdemo_ucore` Sentinel 调用 heartbeat |
 | T5-6 | event wait/wake 有性能对比 | 已验证 | `agentbench_ucore` | `agentbench_ucore: event_wait_wake` |
@@ -88,7 +91,7 @@
 | --- | --- | --- | --- |
 | T6-1 | 综合演示程序 | 已验证 | `labdemo_ucore` 串联任务一至五，输出 `agentos:event` |
 | T6-2 | 性能演示程序 | 已验证 | `agentbench_ucore` 输出批量工具、Context、文件查询和事件等待性能 |
-| T6-3 | 权限边界演示程序 | 已验证 | `agentsecurity_ucore` 输出普通进程拒绝、sentinel 伪造拒绝、recovery 幂等恢复 |
+| T6-3 | 权限边界演示程序 | 已验证 | `agentsecurity_ucore` 输出普通进程拒绝、usershell 等价启动路径、初始化前索引查询、legacy mismatch、sentinel 伪造拒绝、recovery 幂等恢复和定向恢复 |
 | T6-4 | 云端 LLM Gateway | 未实现 | 当前只保留结构化事件和工具结果，尚未接真实云端 LLM |
 | T6-5 | 可视化大屏 | 未实现 | 当前已输出 `agentos:event`，大屏解析器尚未实现 |
 

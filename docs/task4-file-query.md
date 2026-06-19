@@ -40,6 +40,8 @@
 
 查询结构 `struct agent_file_query` 以空字符串表示“不限制该字段”。结果结构 `struct agent_file_query_result` 返回命中数、返回数、扫描数、是否使用索引、是否截断、tick 和最多 8 条命中。
 
+内核启动时 `agentinit()` 会把 status、stage、kind 三类索引桶初始化为 `-1`。因此即使测试程序在调用 `agent_file_meta_init()` 前先执行带索引查询，也会返回 0 条命中，而不会沿着未初始化链表扫描。
+
 ## 初始化数据
 
 `agent_file_meta_init()` 安装演示数据，用于 `agentfinal_ucore`、`agentbench_ucore` 和 `labdemo_ucore`。演示数据模拟一个实验流水线：
@@ -53,6 +55,8 @@
 | archive | 归档 |
 
 `labdemo_ucore` 中由 orchestrator Agent 调用 `agent_file_meta_set()`，把 `RUN-042` 的 align 阶段状态改为 failed，从而触发 sentinel Agent。普通进程不能直接初始化或修改这张全局元数据表。
+
+`agentsecurity_ucore` 还会在初始化前先执行一次 indexed query，确认未初始化索引不会卡住；随后同时构造 `RUN-042` 和 `RUN-999` 两个 failed run，用于验证恢复动作只修改 selector 指定的目标 run。
 
 ## 查询路径
 
@@ -89,6 +93,14 @@
 ```text
 project=lab-gene-x;run_id=RUN-042;status=failed
 ```
+
+恢复工具 `AGENT_TOOL_RERUN_STAGE` 支持同样的 selector 风格，例如：
+
+```text
+stage=align;run_id=RUN-999;project=lab-gene-x
+```
+
+内核会同时匹配 stage、run_id 和 project。这样恢复动作不会因为同一个 stage 上存在多个 run 而误修改其他文件元数据。
 
 ## 与 Context Path 的关系
 
@@ -140,8 +152,8 @@ align+analyze+report+archive
 `agentbench_ucore` 对比扫描路径和索引路径：
 
 ```text
-agentbench_ucore: file_scan_query ops=1024 ticks=27 ops_per_tick=37 speedup_x100=100
-agentbench_ucore: file_index_query ops=1024 ticks=22 ops_per_tick=46 speedup_x100=122
+agentbench_ucore: file_scan_query ops=1024 ticks=28 ops_per_tick=36 speedup_x100=100
+agentbench_ucore: file_index_query ops=1024 ticks=23 ops_per_tick=44 speedup_x100=121
 ```
 
 这证明当前系统同时具备：
@@ -168,6 +180,15 @@ labdemo_ucore: final report_query hits=2 used_index=1 scanned=7
 - investigator 能读取摘要和依赖；
 - recovery 后能查询报告文件；
 - 查询路径使用索引。
+
+`agentsecurity_ucore` 中的文件查询和恢复边界证据：
+
+```text
+agentsecurity_ucore: preinit_index_query=1
+agentsecurity_ucore: scoped_rerun=1
+```
+
+这些输出说明索引初始化前查询安全，且 recovery 只恢复 selector 指定的 run。
 
 ## 当前边界
 
