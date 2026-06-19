@@ -238,7 +238,7 @@ labbench_ucore: parent passed
 | `timeout_heartbeat` | Agent Loop 的超时和心跳字段有直接断言，不只依赖场景日志 |
 | `busy_poll_query` / `event_wait_wake` | Agent Loop 不只是功能演示，也能输出轮询路径和等待唤醒路径的计时观测 |
 
-tick 数值随环境波动，评审时应结合多轮 min/avg/max、候选记录数和设计解释看相对趋势。
+tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、候选记录数和设计解释看相对趋势。
 
 ## 5. `labdemo_ucore`
 

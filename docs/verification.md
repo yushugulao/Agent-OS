@@ -1,6 +1,6 @@
 # 验证与性能评估
 
-本文档给出 uCore 分支最终成品的评审可复现验证入口。逐项测试说明见 [testing-details.md](testing-details.md)，测试输出摘要保存在 [test-record.md](test-record.md)。
+本文档给出 uCore 分支最终成品的可复现验证入口。逐项测试说明见 [testing-details.md](testing-details.md)，测试输出摘要保存在 [test-record.md](test-record.md)。
 
 ## 验证环境
 

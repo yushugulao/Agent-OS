@@ -93,7 +93,7 @@ int agent_wait(struct agent_event *event, int timeout_ticks);
 
 当前有限 timeout 也会进入 `SLEEPING` 状态，由事件入队、heartbeat 到期或 deadline 到期唤醒，不通过反复 `yield()` 消耗 CPU。`agent_info.wait_loop_count` 用于观察等待检查次数，`agentloop_ucore` 会验证有限 timeout 的循环次数保持在很小范围。
 
-`agentbench_ucore` 先验证无事件等待会返回 timeout，并检查 `timeout_count` 增加；随后输出 busy polling 查询和 wait/wake 的计时观测，便于评委看到轮询路径与事件路径的成本都可测：
+`agentbench_ucore` 先验证无事件等待会返回 timeout，并检查 `timeout_count` 增加；随后输出 busy polling 查询和 wait/wake 的计时观测，便于用户看到轮询路径与事件路径的成本都可测：
 
 ```text
 agentbench_ucore: timeout_heartbeat=1

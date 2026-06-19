@@ -142,7 +142,7 @@ Context Path 有三种读取方式：
 | --- | --- |
 | 直接读 user mirror | 高频读取 latest 状态或可信 Agent 自身调试 |
 | `context_query()` | 查询少量历史记录 |
-| `context_snapshot()` | 批量读取当前可见历史，推荐评审和演示使用 |
+| `context_snapshot()` | 批量读取当前可见历史，推荐展示和演示使用 |
 
 `agentbench_ucore` 对比了 direct、query 和 snapshot：
 

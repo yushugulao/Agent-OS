@@ -1,6 +1,6 @@
 # Agent-OS 主设计文档
 
-本文是 uCore 分支的主设计文档。结构参考 ISO/IEC/IEEE 42010、IEEE 1016 和 arc42，并按操作系统内核项目评审需要裁剪。
+本文是 uCore 分支的主设计文档。结构参考 ISO/IEC/IEEE 42010、IEEE 1016 和 arc42，并按操作系统内核项目展示和复现需要裁剪。
 
 ## 1. 引言与目标
 
@@ -14,11 +14,11 @@ uCore 分支的目标不是简单复刻旧版实现，而是在保留任务一�
 
 | 角色 | 关注点 |
 | --- | --- |
-| 竞赛评委 | 是否能在 QEMU 中稳定运行；是否完成赛题基础任务；设计是否清晰、有创新点、有验证证据 |
+| 项目用户 | 是否能在 QEMU 中稳定运行；是否完成赛题基础任务；设计是否清晰、有创新点、有验证证据 |
 | 开发者 | Agent 子系统是否模块化；系统调用 ABI 是否稳定；后续任务四、五、六是否容易继续扩展 |
 | 用户态 Agent 程序 | 是否能用结构化接口请求内核工具；是否能高速读取 Context 镜像；是否能在需要可信历史时使用 snapshot |
 | 操作系统内核 | 是否保持普通进程兼容性；是否控制地址空间、锁、生命周期和错误路径 |
-| 演示和答辩材料 | 是否能把底层 syscall 串成一个评委容易理解的多 Agent 场景 |
+| 演示和答辩材料 | 是否能把底层 syscall 串成一个用户容易理解的多 Agent 场景 |
 
 ### 1.3 质量目标
 
@@ -48,7 +48,7 @@ uCore 分支的目标不是简单复刻旧版实现，而是在保留任务一�
 
 ```mermaid
 flowchart LR
-    Judge["评委/参赛者"] --> Build["make user / make build / make run"]
+    User["用户/参赛者"] --> Build["make user / make build / make run"]
     Build --> QEMU["QEMU virt machine"]
     QEMU --> UserAgent["用户态 Agent 测试程序"]
     UserAgent --> Syscall["Agent 系统调用 ABI"]

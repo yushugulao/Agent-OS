@@ -1,6 +1,6 @@
 # 文档索引
 
-本目录是评审阅读入口。文档结构参考操作系统和软件架构领域常见做法：README 负责快速运行，设计文档负责解释架构和关键决策，API/ABI 文档负责说明用户态与内核的接口分工，验证文档负责给出可复现证据。
+本目录是项目文档阅读入口。文档结构参考操作系统和软件架构领域常见做法：README 负责快速运行，设计文档负责解释架构和关键决策，API/ABI 文档负责说明用户态与内核的接口分工，验证文档负责给出可复现证据。
 
 ## 推荐阅读顺序
 
@@ -13,7 +13,7 @@
 | 5 | [api.md](api.md) | 系统调用、Agent ABI、工具协议和错误语义 |
 | 6 | [verification.md](verification.md) | 验证计划、测试覆盖表、性能数据摘要 |
 | 7 | [testing-details.md](testing-details.md) | `agentfinal_ucore`、`agentfs_ucore`、`agentloop_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore` 和 `agentsecurity_ucore` 的逐项测试说明 |
-| 8 | [demo-script.md](demo-script.md) | 评审现场或视频演示脚本 |
+| 8 | [demo-script.md](demo-script.md) | 现场讲解或视频演示脚本 |
 
 ## 详细附录
 
@@ -27,7 +27,6 @@
 | [test-record.md](test-record.md) | 测试记录和关键输出 |
 | [../LICENSE](../LICENSE) | 源代码 GPL-3.0 |
 | [../DOCUMENTATION_LICENSE.md](../DOCUMENTATION_LICENSE.md) | 文档与答辩材料 CC BY-SA 4.0 |
-| [../LICENSE_POLICY.md](../LICENSE_POLICY.md) | 源代码、文档、答辩材料和第三方材料的许可合规规则 |
 | [../NOTICE](../NOTICE) | 第三方来源和许可声明 |
 
 ## 文档维护约定

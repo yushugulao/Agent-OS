@@ -1,6 +1,6 @@
 # 最终演示讲解稿
 
-本文档用于评审现场讲解或录制演示视频。推荐演示顺序是：先讲系统目标，再跑正确性测试，再跑性能测试，最后跑多 Agent 综合场景。
+本文档用于现场讲解或录制演示视频。推荐演示顺序是：先讲系统目标，再跑正确性测试，再跑性能测试，最后跑多 Agent 综合场景。
 
 ## 1. 开场说明
 
@@ -83,7 +83,7 @@ agentfinal_ucore: batch first_seq=1 last_seq=64
 agentfinal_ucore: short_text_history=1 payload=ucore-final result=ucore-final
 ```
 
-说明 Context Path 保存短 payload/result 摘要，评审可以看到多轮调用的内容，不只是数字计数。
+说明 Context Path 保存短 payload/result 摘要，读者可以看到多轮调用的内容，不只是数字计数。
 
 ```text
 agentfinal_ucore: context_detail=1 sequence=8
