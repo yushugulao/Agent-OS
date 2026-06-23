@@ -153,6 +153,8 @@ UPROGS=\
 	$U/_agentstress\
 	$U/_agentfinal\
 	$U/_agentbench\
+	$U/_labdemo\
+	$U/_labbench\
 
 fs.img: mkfs/mkfs README $(UPROGS)
 	mkfs/mkfs fs.img README $(UPROGS)

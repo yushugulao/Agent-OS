@@ -1,9 +1,12 @@
+// SPDX-License-Identifier: Apache-2.0
+
 struct agent_info {
   int is_agent;
   int agent_id;
   uint64 context_base;
   uint64 context_size;
   int agent_type;
+  int agent_role;
   int heartbeat_interval;
   int resource_quota;
   int loop_state;
@@ -17,6 +20,12 @@ struct agent_info {
   uint64 context_path_rollback_count;
   uint64 latest_response_offset;
   uint64 records_offset;
+  uint64 event_count;
+  uint64 event_dropped;
+  uint64 wait_count;
+  uint64 timeout_count;
+  uint64 last_heartbeat_tick;
+  uint64 capability_mask;
 };
 
 #define AGENT_CALL_VERSION 1
@@ -27,6 +36,7 @@ struct agent_info {
 #define AGENT_LOOP_NONE    0
 #define AGENT_LOOP_IDLE    1
 #define AGENT_LOOP_RUNNING 2
+#define AGENT_LOOP_WAITING 3
 
 #define AGENT_TOOL_ECHO              1
 #define AGENT_TOOL_PID_INFO          2
@@ -37,7 +47,16 @@ struct agent_info {
 #define AGENT_TOOL_QUERY_FILE        7
 #define AGENT_TOOL_SEND_MESSAGE      8
 #define AGENT_TOOL_READ_MESSAGE      9
-#define AGENT_TOOL_COUNT             9
+#define AGENT_TOOL_FILE_META_INIT    10
+#define AGENT_TOOL_READ_FILE_SUMMARY 11
+#define AGENT_TOOL_DEPENDENCY_QUERY  12
+#define AGENT_TOOL_CAPABILITY_CHECK  13
+#define AGENT_TOOL_RERUN_STAGE       14
+#define AGENT_TOOL_WRITE_REPORT      15
+#define AGENT_TOOL_AGENT_WATCH       16
+#define AGENT_TOOL_AGENT_WAIT        17
+#define AGENT_TOOL_AGENT_HEARTBEAT   18
+#define AGENT_TOOL_COUNT             18
 
 #define AGENT_STATUS_OK           0
 #define AGENT_STATUS_BAD_REQUEST -1
@@ -46,6 +65,9 @@ struct agent_info {
 #define AGENT_STATUS_BAD_PARAM   -4
 #define AGENT_STATUS_NOT_FOUND   -5
 #define AGENT_STATUS_NO_SPACE    -6
+#define AGENT_STATUS_TIMEOUT     -7
+#define AGENT_STATUS_DENIED      -8
+#define AGENT_STATUS_DUPLICATE   -9
 
 #define AGENT_PARAM_NONE   0
 #define AGENT_PARAM_UINT64 1
@@ -61,6 +83,53 @@ struct agent_info {
 #define AGENT_FAST_RESULT_SIZE AGENT_PAYLOAD_SIZE
 #define AGENT_CONTEXT_TEXT_SIZE 16
 #define AGENT_BATCH_MAX        64
+
+#define AGENT_FILE_META_MAX        128
+#define AGENT_FILE_QUERY_MAX_HITS  8
+#define AGENT_FILE_NAME_SIZE       32
+#define AGENT_FILE_LOGICAL_SIZE    80
+#define AGENT_FILE_PROJECT_SIZE    16
+#define AGENT_FILE_WORKFLOW_SIZE   24
+#define AGENT_FILE_FIELD_SIZE      16
+#define AGENT_FILE_SUMMARY_SIZE    96
+#define AGENT_EVENT_PAYLOAD_SIZE   64
+#define AGENT_WATCH_FILTER_SIZE    64
+
+#define AGENT_FILE_QUERY_USE_INDEX 1
+#define AGENT_FILE_QUERY_SCAN      2
+
+#define AGENT_FILE_META_UPDATE_DEPS (1ULL << 0)
+#define AGENT_FILE_META_DELETE      (1ULL << 1)
+
+#define AGENT_EVENT_NONE           0
+#define AGENT_EVENT_FILE_STATUS    1
+#define AGENT_EVENT_MESSAGE        2
+#define AGENT_EVENT_TIMER          3
+#define AGENT_EVENT_JOB_DONE       4
+#define AGENT_EVENT_POLICY_DENIED  5
+#define AGENT_EVENT_CONTEXT_LIMIT  6
+
+#define AGENT_ROLE_SENTINEL      1
+#define AGENT_ROLE_INVESTIGATOR  2
+#define AGENT_ROLE_RECOVERY      3
+#define AGENT_ROLE_ORCHESTRATOR  4
+
+#define AGENT_CAP_META_READ      (1ULL << 0)
+#define AGENT_CAP_CONTENT_READ   (1ULL << 1)
+#define AGENT_CAP_PROCESS_READ   (1ULL << 2)
+#define AGENT_CAP_MESSAGE_SEND   (1ULL << 3)
+#define AGENT_CAP_WATCH          (1ULL << 4)
+#define AGENT_CAP_RECOVER_STAGE  (1ULL << 5)
+#define AGENT_CAP_REPORT_WRITE   (1ULL << 6)
+#define AGENT_CAP_AUDIT_WRITE    (1ULL << 7)
+#define AGENT_CAP_EVENT_WAKE     (1ULL << 8)
+#define AGENT_CAP_META_WRITE     (1ULL << 9)
+
+#define AGENT_DEP_PREPARE (1ULL << 0)
+#define AGENT_DEP_ALIGN   (1ULL << 1)
+#define AGENT_DEP_ANALYZE (1ULL << 2)
+#define AGENT_DEP_REPORT  (1ULL << 3)
+#define AGENT_DEP_ARCHIVE (1ULL << 4)
 
 #define AGENT_CONTEXT_MAGIC 0x4147435458543031ULL
 #define AGENT_CONTEXT_VERSION 1
@@ -154,6 +223,70 @@ struct agent_context_record {
   int status;
   char payload[AGENT_CONTEXT_TEXT_SIZE];
   char result[AGENT_CONTEXT_TEXT_SIZE];
+};
+
+struct agent_event {
+  int type;
+  int source_pid;
+  int target_pid;
+  int status;
+  uint64 event_id;
+  uint64 tick;
+  uint64 corr_id;
+  char payload[AGENT_EVENT_PAYLOAD_SIZE];
+};
+
+struct agent_file_meta {
+  int used;
+  int fid;
+  char physical_name[AGENT_FILE_NAME_SIZE];
+  char logical_path[AGENT_FILE_LOGICAL_SIZE];
+  char project[AGENT_FILE_PROJECT_SIZE];
+  char workflow[AGENT_FILE_WORKFLOW_SIZE];
+  char run_id[AGENT_FILE_FIELD_SIZE];
+  char stage[AGENT_FILE_FIELD_SIZE];
+  char kind[AGENT_FILE_FIELD_SIZE];
+  char status[AGENT_FILE_FIELD_SIZE];
+  char summary[AGENT_FILE_SUMMARY_SIZE];
+  uint64 dependency_mask;
+  uint64 updated_tick;
+  uint64 update_mask;
+};
+
+struct agent_file_hit {
+  int fid;
+  char physical_name[AGENT_FILE_NAME_SIZE];
+  char logical_path[AGENT_FILE_LOGICAL_SIZE];
+  char stage[AGENT_FILE_FIELD_SIZE];
+  char kind[AGENT_FILE_FIELD_SIZE];
+  char status[AGENT_FILE_FIELD_SIZE];
+  char summary[AGENT_FILE_SUMMARY_SIZE];
+  uint64 dependency_mask;
+};
+
+struct agent_file_query {
+  uint64 flags;
+  int fid;
+  int max_hits;
+  char physical_name[AGENT_FILE_NAME_SIZE];
+  char logical_path[AGENT_FILE_LOGICAL_SIZE];
+  char project[AGENT_FILE_PROJECT_SIZE];
+  char workflow[AGENT_FILE_WORKFLOW_SIZE];
+  char run_id[AGENT_FILE_FIELD_SIZE];
+  char stage[AGENT_FILE_FIELD_SIZE];
+  char kind[AGENT_FILE_FIELD_SIZE];
+  char status[AGENT_FILE_FIELD_SIZE];
+  char summary_contains[AGENT_FILE_FIELD_SIZE];
+};
+
+struct agent_file_query_result {
+  int total_hits;
+  int returned;
+  int used_index;
+  int truncated;
+  int scanned_records;
+  uint64 query_ticks;
+  struct agent_file_hit hits[AGENT_FILE_QUERY_MAX_HITS];
 };
 
 #define AGENT_CONTEXT_HEADER_OFFSET 0

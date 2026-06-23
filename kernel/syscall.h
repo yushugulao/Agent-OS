@@ -33,3 +33,14 @@
 #define SYS_context_clear 32
 #define SYS_agent_run 33
 #define SYS_context_snapshot 34
+#define SYS_agent_watch 35
+#define SYS_agent_wait 36
+#define SYS_agent_heartbeat 37
+#define SYS_agent_wake 38
+#define SYS_agent_file_meta_init 39
+#define SYS_agent_file_meta_set 40
+#define SYS_agent_file_query 41
+#define SYS_agent_set_role 42
+#define SYS_agent_create_role 43
+#define SYS_agent_unwatch 44
+#define SYS_agent_heartbeat_stop 45

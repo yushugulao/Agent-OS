@@ -6,6 +6,9 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "vm.h"
+#include "agent.h"
+
+extern struct proc proc[NPROC];
 
 uint64
 sys_exit(void)
@@ -38,6 +41,38 @@ uint64
 sys_agent_create(void)
 {
   return kagentfork();
+}
+
+uint64
+sys_agent_create_role(void)
+{
+  struct proc *p = myproc();
+  struct proc *pp;
+  int role;
+  int orchestrator_alive = 0;
+
+  argint(0, &role);
+  if (role < AGENT_ROLE_SENTINEL || role > AGENT_ROLE_ORCHESTRATOR)
+    return -1;
+  if (p->is_agent) {
+    if (p->agent_role != AGENT_ROLE_ORCHESTRATOR &&
+        role != AGENT_ROLE_SENTINEL)
+      return AGENT_STATUS_DENIED;
+  } else if (role != AGENT_ROLE_SENTINEL &&
+             role != AGENT_ROLE_ORCHESTRATOR) {
+    return -1;
+  } else if (role == AGENT_ROLE_ORCHESTRATOR) {
+    for (pp = proc; pp < &proc[NPROC]; pp++) {
+      acquire(&pp->lock);
+      if (pp->state != UNUSED && pp->is_agent &&
+          pp->agent_role == AGENT_ROLE_ORCHESTRATOR)
+        orchestrator_alive = 1;
+      release(&pp->lock);
+      if (orchestrator_alive)
+        return -1;
+    }
+  }
+  return kagentfork_role(role);
 }
 
 uint64
@@ -134,6 +169,100 @@ uint64
 sys_context_clear(void)
 {
   return agent_context_clear();
+}
+
+uint64
+sys_agent_watch(void)
+{
+  int event_type;
+  uint64 filteraddr;
+
+  argint(0, &event_type);
+  argaddr(1, &filteraddr);
+  return agent_watch(event_type, filteraddr);
+}
+
+uint64
+sys_agent_unwatch(void)
+{
+  int event_type;
+  uint64 filteraddr;
+
+  argint(0, &event_type);
+  argaddr(1, &filteraddr);
+  return agent_unwatch(event_type, filteraddr);
+}
+
+uint64
+sys_agent_wait(void)
+{
+  uint64 eventaddr;
+  int timeout_ticks;
+
+  argaddr(0, &eventaddr);
+  argint(1, &timeout_ticks);
+  return agent_wait(eventaddr, timeout_ticks);
+}
+
+uint64
+sys_agent_heartbeat(void)
+{
+  int interval_ticks;
+
+  argint(0, &interval_ticks);
+  return agent_heartbeat(interval_ticks);
+}
+
+uint64
+sys_agent_heartbeat_stop(void)
+{
+  return agent_heartbeat_stop();
+}
+
+uint64
+sys_agent_wake(void)
+{
+  int pid;
+  uint64 eventaddr;
+
+  argint(0, &pid);
+  argaddr(1, &eventaddr);
+  return agent_wake(pid, eventaddr);
+}
+
+uint64
+sys_agent_file_meta_init(void)
+{
+  return agent_file_meta_init();
+}
+
+uint64
+sys_agent_file_meta_set(void)
+{
+  uint64 metaaddr;
+
+  argaddr(0, &metaaddr);
+  return agent_file_meta_set(metaaddr);
+}
+
+uint64
+sys_agent_file_query(void)
+{
+  uint64 queryaddr;
+  uint64 resultaddr;
+
+  argaddr(0, &queryaddr);
+  argaddr(1, &resultaddr);
+  return agent_file_query(queryaddr, resultaddr);
+}
+
+uint64
+sys_agent_set_role(void)
+{
+  int role;
+
+  argint(0, &role);
+  return agent_set_role(role);
 }
 
 uint64

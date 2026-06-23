@@ -263,12 +263,14 @@ growproc(int n)
 }
 
 static int
-fork_common(int make_agent)
+fork_common(int make_agent, int agent_role)
 {
   int i, pid;
   struct proc *np;
   struct proc *p = myproc();
 
+  if (make_agent && agent_role <= 0)
+    agent_role = AGENT_ROLE_SENTINEL;
   if (make_agent && p->sz > AGENT_CONTEXT_BASE)
     return -1;
 
@@ -286,7 +288,7 @@ fork_common(int make_agent)
   np->sz = p->sz;
 
   if (make_agent) {
-    if (agent_make(np, np->pagetable) < 0) {
+    if (agent_make(np, np->pagetable, agent_role) < 0) {
       freeproc(np);
       release(&np->lock);
       return -1;
@@ -327,14 +329,20 @@ fork_common(int make_agent)
 int
 kfork(void)
 {
-  return fork_common(0);
+  return fork_common(0, 0);
 }
 
 // Create an Agent process, copying the parent and mapping Agent Context.
 int
 kagentfork(void)
 {
-  return fork_common(1);
+  return fork_common(1, AGENT_ROLE_SENTINEL);
+}
+
+int
+kagentfork_role(int role)
+{
+  return fork_common(1, role);
 }
 
 // Pass p's abandoned children to init.

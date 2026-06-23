@@ -9,6 +9,10 @@ struct agent_context_record;
 struct agent_op;
 struct agent_result;
 struct agent_context_header;
+struct agent_event;
+struct agent_file_meta;
+struct agent_file_query;
+struct agent_file_query_result;
 
 // system calls
 int fork(void);
@@ -34,6 +38,7 @@ int pause(int);
 int uptime(void);
 int agent_fork(void);
 int agent_create(void);
+int agent_create_role(int);
 int agent_info(struct agent_info *);
 int agent_call(struct agent_request *, struct agent_response *);
 int agent_tool_list(struct agent_tool_desc *, int);
@@ -46,6 +51,17 @@ int context_snapshot(struct agent_context_header *, struct agent_context_record 
                      int);
 int context_rollback(uint64);
 int context_clear(void);
+int agent_watch(int, const char *);
+int agent_unwatch(int, const char *);
+int agent_wait(struct agent_event *, int);
+int agent_heartbeat(int);
+int agent_heartbeat_stop(void);
+int agent_wake(int, struct agent_event *);
+int agent_set_role(int);
+int agent_file_meta_init(void);
+int agent_file_meta_set(struct agent_file_meta *);
+int agent_file_query(struct agent_file_query *,
+                     struct agent_file_query_result *);
 
 // ulib.c
 int stat(const char *, struct stat *);

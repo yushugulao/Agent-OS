@@ -1,6 +1,8 @@
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
+
 # 任务二：Agent 与内核结构化交互
 
-本文是 [design.md](design.md) 的任务二细节附录，重点展开结构化工具调用、工具表、错误语义和 Agent Context 写入路径。系统总体边界和 ABI 汇总见 [api.md](api.md)。
+本文是 [design.md](design.md) 的任务二细节附录，重点展开结构化工具调用、工具表、错误语义和 Agent Context 写入路径。系统总体接口和职责划分、ABI 汇总见 [api.md](api.md)。
 
 任务二的目标是在 Agent 进程机制基础上，提供 Agent 进程与内核之间的结构化工具调用接口。最终热路径使用 `agent_op` / `agent_result` 和 `agent_run()` 批量 ABI，一次 syscall 最多执行 64 个工具 op；legacy `agent_request` / `agent_response` 仍保留作语义兼容。
 
@@ -14,7 +16,7 @@
 | `tool_list(struct agent_tool_desc *, int)` | 与赛题 `sys_tool_list` 对应的别名入口 |
 | `agent_run(struct agent_op *, struct agent_result *, int, uint64)` | 最终高性能批量工具调用入口 |
 
-系统调用层只负责读取参数并转发，Agent 相关逻辑集中在 `kernel/agent.c`。这样工具表、工具执行、Context 写入和 mailbox 读写位于同一个模块，后续扩展任务四或任务五时不需要继续膨胀 `sysproc.c`。
+系统调用层只负责读取参数并转发，Agent 相关逻辑集中在 `kernel/agent.c`。这样工具表、工具执行、Context 写入、文件属性查询、Agent Loop 和 mailbox 读写位于同一个模块，避免 `sysproc.c` 膨胀。
 
 ## 协议
 
@@ -39,7 +41,7 @@ legacy 请求和响应结构仍定义在 `kernel/agent.h`：
 
 ## 内核工具
 
-当前实现 9 个工具：
+当前实现 18 个工具，任务二基础工具和任务四、五扩展工具共用同一套工具表：
 
 | 工具 | `tool_id` | 输入 | 输出 |
 | --- | --- | --- | --- |
@@ -49,9 +51,18 @@ legacy 请求和响应结构仍定义在 `kernel/agent.h`：
 | `query_process` | `AGENT_TOOL_QUERY_PROCESS` | 可选 `type:uint64` | 返回进程数量、Agent 数量和可运行进程数量 |
 | `get_system_status` | `AGENT_TOOL_GET_SYSTEM_STATUS` | 无 | 返回进程数量、Agent 数量和系统 tick |
 | `read_context` | `AGENT_TOOL_READ_CONTEXT` | 无 | 返回本次调用追加后的 Context Path 记录数、head 和总调用次数 |
-| `query_file` | `AGENT_TOOL_QUERY_FILE` | `path:string` | 返回目标文件 inode 类型、inode 号和大小 |
+| `query_file` | `AGENT_TOOL_QUERY_FILE` | `path:string`、`fid:uint64` 或 `key=value` filters | 兼容路径查询；属性查询返回命中数、扫描数、索引使用情况和首个命中文件 |
 | `send_message` | `AGENT_TOOL_SEND_MESSAGE` | `target_pid:uint64`、`message:string` | 向目标 Agent 邮箱写入消息 |
 | `read_message` | `AGENT_TOOL_READ_MESSAGE` | 无 | 读取当前 Agent 邮箱消息 |
+| `file_meta_init` | `AGENT_TOOL_FILE_META_INIT` | 无 | 初始化任务四文件元数据表 |
+| `read_file_summary` | `AGENT_TOOL_READ_FILE_SUMMARY` | `selector:string` | 返回文件摘要 |
+| `dependency_query` | `AGENT_TOOL_DEPENDENCY_QUERY` | `stage:string` | 返回阶段影响范围 |
+| `capability_check` | `AGENT_TOOL_CAPABILITY_CHECK` | `action:string` | 检查当前 Agent PCB 中的 capability |
+| `rerun_stage` | `AGENT_TOOL_RERUN_STAGE` | `stage:string` | 受控恢复动作 |
+| `write_report` | `AGENT_TOOL_WRITE_REPORT` | `payload:string` | 只更新恢复报告工件的内存元数据状态 |
+| `agent_watch` | `AGENT_TOOL_AGENT_WATCH` | `event_type:uint64`、`filter:string` | 注册事件 watch |
+| `agent_wait` | `AGENT_TOOL_AGENT_WAIT` | `timeout:uint64` | 工具表可发现项；结构化事件返回使用 syscall |
+| `agent_heartbeat` | `AGENT_TOOL_AGENT_HEARTBEAT` | `interval:uint64` | 设置心跳 |
 
 ## 错误处理
 
@@ -72,7 +83,7 @@ legacy 请求和响应结构仍定义在 `kernel/agent.h`：
 
 `read_context` 工具返回同一时间点的 post-state：本次工具调用先获得 sequence，再把这次调用计入即将写入的 Context Path 统计，因此返回的 count、head 和 total calls 与调用追加后的状态一致。legacy `tool_call()` 如果工具已成功执行但 Context 布局不可用，会返回结构化 `AGENT_STATUS_NO_SPACE` 响应，而不是把普通坏用户指针和内部空间错误混在一起。
 
-`query_file` 当前属于任务二工具调用层面的文件信息查询，用于证明 Agent 可通过结构化接口请求内核查询文件元数据；它还不是任务四要求的完整文件系统索引、属性过滤或内容查询扩展。
+`query_file` 现在同时保留两种语义：payload 是普通路径时走 xv6 inode 查询兼容路径；payload 是 `key=value` 条件串时走任务四文件属性查询引擎，返回 hits、scanned、used_index/truncated 和首个命中文件。属性查询支持 `fid=...` 精确回查；空查询、未知 key、空 value 或坏格式片段返回 `AGENT_STATUS_BAD_PARAM`。
 
 ## Agent Context 写入
 

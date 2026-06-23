@@ -113,6 +113,17 @@ extern uint64 sys_context_query(void);
 extern uint64 sys_context_snapshot(void);
 extern uint64 sys_context_rollback(void);
 extern uint64 sys_context_clear(void);
+extern uint64 sys_agent_watch(void);
+extern uint64 sys_agent_unwatch(void);
+extern uint64 sys_agent_wait(void);
+extern uint64 sys_agent_heartbeat(void);
+extern uint64 sys_agent_heartbeat_stop(void);
+extern uint64 sys_agent_wake(void);
+extern uint64 sys_agent_file_meta_init(void);
+extern uint64 sys_agent_file_meta_set(void);
+extern uint64 sys_agent_file_query(void);
+extern uint64 sys_agent_set_role(void);
+extern uint64 sys_agent_create_role(void);
 
 // An array mapping syscall numbers from syscall.h
 // to the function that handles the system call.
@@ -152,6 +163,17 @@ static uint64 (*syscalls[])(void) = {
   [SYS_context_snapshot] sys_context_snapshot,
   [SYS_context_rollback] sys_context_rollback,
   [SYS_context_clear] sys_context_clear,
+  [SYS_agent_watch] sys_agent_watch,
+  [SYS_agent_unwatch] sys_agent_unwatch,
+  [SYS_agent_wait] sys_agent_wait,
+  [SYS_agent_heartbeat] sys_agent_heartbeat,
+  [SYS_agent_heartbeat_stop] sys_agent_heartbeat_stop,
+  [SYS_agent_wake] sys_agent_wake,
+  [SYS_agent_file_meta_init] sys_agent_file_meta_init,
+  [SYS_agent_file_meta_set] sys_agent_file_meta_set,
+  [SYS_agent_file_query] sys_agent_file_query,
+  [SYS_agent_set_role] sys_agent_set_role,
+  [SYS_agent_create_role] sys_agent_create_role,
   // clang-format on
 };
 

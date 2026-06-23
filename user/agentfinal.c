@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 #include "kernel/types.h"
 #include "kernel/stat.h"
 #include "kernel/riscv.h"

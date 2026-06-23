@@ -7,7 +7,7 @@ License 2.0. See LICENSE.
 Third-party base system:
 This project is based on xv6-riscv. Original xv6-riscv copyright and license
 notices are retained in THIRD_PARTY/xv6-riscv-LICENSE, and the original xv6
-README is retained in docs/xv6-riscv-README.
+README is retained in THIRD_PARTY/xv6-riscv-README.
 
 Documentation and presentation materials:
 Original technical documentation, defense materials, presentation slides, and

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 #include "kernel/types.h"
 #include "kernel/stat.h"
 #include "kernel/memlayout.h"
@@ -101,13 +103,15 @@ run_agent(void)
   fill_record(&record, 19, 19);
   check(context_push(&record) == 0, "push after rollback");
   check(agent_info(&info) == 0, "agent_info after branch push");
-  check(info.context_path_latest == 11, "latest after branch push");
+  check(info.context_path_latest == AGENT_CONTEXT_MAX_RECORDS + 3,
+        "latest after branch push");
   check(info.context_path_count == 9, "count after branch push");
 
   memset(query_out, 0, sizeof(query_out));
   n = context_query(0, query_out, AGENT_CONTEXT_MAX_RECORDS);
   check(n == 9, "query count after branch push");
-  check(query_out[n - 1].sequence == 11, "branch latest sequence");
+  check(query_out[n - 1].sequence == AGENT_CONTEXT_MAX_RECORDS + 3,
+        "branch latest sequence");
 
   check(context_clear() == 0, "clear");
   check(agent_info(&info) == 0, "agent_info after clear");
@@ -121,7 +125,8 @@ run_agent(void)
   printf("contexttest: short_text_history=1 payload=%s result=%s\n",
          sample_payload, sample_result);
   printf("contexttest: rollback_not_found=%d\n", AGENT_STATUS_NOT_FOUND);
-  printf("contexttest: rollback latest=10 branch_latest=11\n");
+  printf("contexttest: rollback latest=10 branch_latest=%d\n",
+         AGENT_CONTEXT_MAX_RECORDS + 3);
   printf("contexttest: passed\n");
 }
 

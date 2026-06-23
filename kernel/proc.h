@@ -78,6 +78,8 @@ struct trapframe {
 
 enum procstate { UNUSED, USED, SLEEPING, RUNNABLE, RUNNING, ZOMBIE };
 
+#define AGENT_EVENT_QUEUE_MAX 8
+
 // Per-process state
 struct proc {
   struct spinlock lock;
@@ -99,6 +101,7 @@ struct proc {
   struct trapframe *trapframe; // data page for trampoline.S
   int is_agent;                // Non-zero if this is an Agent process
   int agent_type;              // Agent type for structured metadata
+  int agent_role;              // Current Agent role for capability checks
   int agent_id;                // Stable Agent identifier within this boot
   uint64 agent_ctx_base;       // User VA of the Agent Context region
   uint64 agent_ctx_size;       // Size of the Agent Context region
@@ -120,6 +123,25 @@ struct proc {
   int agent_mailbox_valid;     // Non-zero if mailbox has a message
   int agent_mailbox_from;      // Sender pid for the mailbox message
   char agent_mailbox[64];      // Minimal per-Agent message mailbox
+  int agent_watch_valid;       // Non-zero if this Agent has an active watch
+  int agent_watch_event_type;  // Event type this Agent is waiting for
+  char agent_watch_filter[64]; // Short key/value filter for Agent Loop
+  int agent_event_head;        // Next pending event to consume
+  int agent_event_tail;        // Next queue slot to fill
+  int agent_event_queued;      // Pending events in FIFO
+  int agent_event_type[AGENT_EVENT_QUEUE_MAX];
+  int agent_event_source_pid[AGENT_EVENT_QUEUE_MAX];
+  uint64 agent_event_id[AGENT_EVENT_QUEUE_MAX];
+  uint64 agent_event_tick[AGENT_EVENT_QUEUE_MAX];
+  uint64 agent_event_corr_id[AGENT_EVENT_QUEUE_MAX];
+  char agent_event_payload[AGENT_EVENT_QUEUE_MAX][64];
+  uint64 agent_event_count;    // Delivered events
+  uint64 agent_event_dropped;  // Events dropped due to full event queue
+  uint64 agent_wait_count;     // Successful wait calls
+  uint64 agent_timeout_count;  // Timed-out wait calls
+  uint64 agent_wait_deadline;  // Tick deadline for finite waits, or 0
+  uint64 agent_last_heartbeat_tick;// Last heartbeat tick
+  uint64 agent_capability_mask;// Current role capability mask
   struct context context;      // swtch() here to run process
   struct file *ofile[NOFILE];  // Open files
   struct inode *cwd;           // Current directory

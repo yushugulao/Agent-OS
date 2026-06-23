@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: Apache-2.0
+
 #include "kernel/types.h"
 #include "kernel/stat.h"
 #include "kernel/riscv.h"
@@ -149,16 +151,18 @@ bench_context_snapshot(int rounds, int *records)
 static void
 print_perf(char *name, int ops, int ticks, int base_ops, int base_ticks)
 {
-  int ops_per_tick;
-  int speedup_x100;
-  int calc_ticks;
-  int calc_base_ticks;
+  uint64 ops_per_tick;
+  uint64 speedup_x100;
+  uint64 calc_ticks;
+  uint64 calc_base_ticks;
 
   calc_ticks = ticks > 0 ? ticks : 1;
   calc_base_ticks = base_ticks > 0 ? base_ticks : 1;
   ops_per_tick = ops / calc_ticks;
-  speedup_x100 = (ops * calc_base_ticks * 100) / (calc_ticks * base_ops);
-  printf("agentbench: %s ops=%d ticks=%d ops_per_tick=%d speedup_x100=%d\n",
+  speedup_x100 = ((uint64)ops * calc_base_ticks * 100) /
+                 (calc_ticks * (uint64)base_ops);
+  check(speedup_x100 > 0, "perf speedup overflow");
+  printf("agentbench: %s ops=%d ticks=%d ops_per_tick=%ld speedup_x100=%ld\n",
          name, ops, ticks, ops_per_tick, speedup_x100);
 }
 

@@ -83,6 +83,7 @@ int             cpuid(void);
 void            kexit(int);
 int             kfork(void);
 int             kagentfork(void);
+int             kagentfork_role(int);
 int             growproc(int);
 void            proc_mapstacks(pagetable_t);
 pagetable_t     proc_pagetable(struct proc *);
@@ -107,7 +108,7 @@ void            procdump(void);
 // agent.c
 void            agentinit(void);
 void            agent_clear_metadata(struct proc*);
-int             agent_make(struct proc*, pagetable_t);
+int             agent_make(struct proc*, pagetable_t, int);
 int             agent_prepare_context(pagetable_t, uint64*, uint64*);
 void            agent_discard_prepared_context(pagetable_t, uint64*);
 void            agent_install_context(struct proc*, uint64*, uint64*);
@@ -123,6 +124,17 @@ int             agent_context_query(uint64, uint64, int);
 int             agent_context_snapshot(uint64, uint64, int);
 int             agent_context_rollback(uint64);
 int             agent_context_clear(void);
+int             agent_watch(int, uint64);
+int             agent_unwatch(int, uint64);
+int             agent_wait(uint64, int);
+int             agent_heartbeat(int);
+int             agent_heartbeat_stop(void);
+int             agent_wake(int, uint64);
+int             agent_set_role(int);
+int             agent_file_meta_init(void);
+int             agent_file_meta_set(uint64);
+int             agent_file_query(uint64, uint64);
+void            agent_tick(void);
 
 // swtch.S
 void            swtch(struct context*, struct context*);

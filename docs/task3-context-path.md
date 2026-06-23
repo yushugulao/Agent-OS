@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
+
 # 任务三：上下文路径管理
 
 本文是 [design.md](design.md) 的任务三细节附录，重点展开 Context Path 布局、自动记录、手动操作和验证。需求完成度和验证结论见 [requirements-traceability.md](requirements-traceability.md) 与 [verification.md](verification.md)。
@@ -28,7 +30,7 @@ Agent Context 当前大小为 16384 字节，布局如下：
 - 16 字节 result 短文本摘要；
 - tick 时间戳。
 
-历史 record 不保存工具名字符串、完整参数键名、参数类型、`arg1` 或完整 raw 请求/响应文本；工具名通过工具表按 `tool_id` 解释，最近一次完整 64 字节结果文本保存在 latest `struct agent_result` 中。当前取舍是“128 条短文本摘要路径”，不是无限或完整日志。`struct agent_context_record` 当前为 96 字节，3 页记录区正好容纳 128 条；内核 record 读写 helper 支持跨物理页边界，因此不要求 record 大小整除 `PGSIZE`。
+历史 record 不保存工具名字符串、完整参数键名、参数类型、`arg1` 或完整 raw 请求/响应文本；工具名通过工具表按 `tool_id` 解释，最近一次完整 64 字节结果文本保存在 latest `struct agent_result` 中。当前取舍是“128 条短文本摘要路径”，不是无限或完整日志。`struct agent_context_record` 当前为 96 字节，3 页记录区正好容纳 128 条；内核 record 读写 helper 支持跨物理页读写，因此不要求 record 大小整除 `PGSIZE`。
 
 当记录数超过容量后，新的记录会覆盖最旧槽位。当前 `resource_quota` 与 `context_path_capacity` 均为 128。
 
@@ -39,10 +41,10 @@ Agent Context 当前大小为 16384 字节，布局如下：
 | `context_push(struct agent_context_record *)` | 手动追加一个上下文节点，使用同一 sequence 流 |
 | `context_query(uint64 start_sequence, struct agent_context_record *, int max)` | 按时间顺序查询当前仍可见的路径记录 |
 | `context_snapshot(struct agent_context_header *, struct agent_context_record *, int max)` | 一次返回 header 和按时间顺序排列的可见路径记录 |
-| `context_rollback(uint64 sequence)` | 回滚到仍在 Context 中的历史节点；不存在时返回 `AGENT_STATUS_NOT_FOUND` |
+| `context_rollback(uint64 sequence)` | 裁剪到仍在 Context 中的历史节点；不存在时返回 `AGENT_STATUS_NOT_FOUND` |
 | `context_clear()` | 清空当前 Agent 的 Context Path |
 
-工具调用仍会自动追加路径记录；手动 push 与自动记录共用 `agent_call_count`，保证 sequence 单调推进。发生 FIFO 覆盖时，header 中的 `dropped_records` 会递增，用户态可判断历史是否被淘汰。`context_query()` 和 `context_snapshot()` 都从内核 shadow 页读取权威记录。直接读取 Agent Context 是高速镜像路径，适合可信 Agent 自读；`context_snapshot()` 返回前会刷新用户镜像，避免用户态篡改镜像污染内核权威查询结果。
+工具调用仍会自动追加路径记录；手动 push 与自动记录共用 `agent_call_count`，保证 sequence 单调推进。`context_rollback()` 只裁剪当前仍可见的记录，不把 `agent_call_count` 改回旧值；因此 rollback 后继续 `context_push()` 或工具调用会拿到新的、更大的 sequence，避免旧编号被重新使用。`context_query()` 按环形槽中的可见记录顺序遍历，不要求 sequence 连续。发生 FIFO 覆盖时，header 中的 `dropped_records` 会递增，用户态可判断历史是否被淘汰。`context_query()` 和 `context_snapshot()` 都从内核 shadow 页读取权威记录。直接读取 Agent Context 是高速镜像路径，适合可信 Agent 自读；`context_snapshot()` 返回前会刷新用户镜像，避免用户态篡改镜像污染内核权威查询结果。
 
 ## 验证
 
@@ -59,3 +61,13 @@ agentfinal: passed
 ```
 
 该验证证明当前实现已经不是只保存最近一次响应，而是能保存多轮工具调用路径，并且在记录数超过容量后按环形队列覆盖旧记录。后续仍可继续扩展为按条件查询历史节点、跨 Agent 共享上下文或持久化路径。
+
+`contexttest` 额外验证 rollback 后的 sequence 分配规则：
+
+```text
+contexttest: rollback_not_found=-5
+contexttest: rollback latest=10 branch_latest=131
+contexttest: passed
+```
+
+这里 `branch_latest=131` 说明系统裁剪到了 sequence 10，但后续 push 没有复用 11，而是继续使用全局递增的新编号。

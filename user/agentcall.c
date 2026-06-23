@@ -1,9 +1,13 @@
+// SPDX-License-Identifier: Apache-2.0
+
 #include "kernel/types.h"
 #include "kernel/stat.h"
 #include "kernel/memlayout.h"
 #include "kernel/riscv.h"
 #include "kernel/agent.h"
 #include "user/user.h"
+
+static struct agent_tool_desc tool_descs[AGENT_TOOL_COUNT];
 
 static void
 check(int condition, const char *message)
@@ -121,17 +125,16 @@ test_agent_lazy_outputs(void)
 static void
 print_tool_list(void)
 {
-  struct agent_tool_desc tools[AGENT_TOOL_COUNT];
   int total;
   int i;
 
-  memset(tools, 0, sizeof(tools));
-  total = tool_list(tools, AGENT_TOOL_COUNT);
+  memset(tool_descs, 0, sizeof(tool_descs));
+  total = tool_list(tool_descs, AGENT_TOOL_COUNT);
   check(total == AGENT_TOOL_COUNT, "tool_list total");
   printf("tool_list: total=%d\n", total);
   for (i = 0; i < total; i++) {
-    printf("tool_list[%d]: id=%d name=%s params=%s\n", i, tools[i].tool_id,
-           tools[i].name, tools[i].params);
+    printf("tool_list[%d]: id=%d name=%s params=%s\n", i,
+           tool_descs[i].tool_id, tool_descs[i].name, tool_descs[i].params);
   }
 }
 
@@ -367,6 +370,20 @@ run_sender(int target_pid)
   check(strcmp(resp.result, "bad_payload_type") == 0,
         "bad payload type result");
   printf("error bad_payload_type: status=%d seq=%ld result=%s\n",
+         resp.status, resp.sequence, resp.result);
+
+  prepare_request(&req, AGENT_TOOL_QUERY_FILE, 131, "query_file", "path",
+                  "unknown_key=value", 0, 0, 0, 0);
+  run_tool(&req, &resp, AGENT_STATUS_BAD_PARAM);
+  check(strcmp(resp.result, "bad_query") == 0, "bad query key result");
+  printf("error bad_query_key: status=%d seq=%ld result=%s\n", resp.status,
+         resp.sequence, resp.result);
+
+  prepare_request(&req, AGENT_TOOL_QUERY_FILE, 132, "query_file", "path",
+                  "project=", 0, 0, 0, 0);
+  run_tool(&req, &resp, AGENT_STATUS_BAD_PARAM);
+  check(strcmp(resp.result, "bad_query") == 0, "bad query value result");
+  printf("error bad_query_value: status=%d seq=%ld result=%s\n",
          resp.status, resp.sequence, resp.result);
 
   prepare_request(&req, 0, 14, "pid_info", 0, "", "arg0", 1, 0, 0);

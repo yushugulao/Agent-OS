@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
+
 # project61-agentOS-happylegend
 
 ## 项目信息
@@ -15,7 +17,7 @@
 
 本项目围绕 Agent-OS 赛题，探索让操作系统内核感知、管理和支持 AI Agent 的机制。项目目标是在教学操作系统内核中实现 Agent 进程、结构化内核交互、上下文路径管理等能力，并形成可在 QEMU 中运行和演示的系统。
 
-文档体系参考操作系统内核项目和软件架构文档惯例重构：README 负责快速运行，主设计文档解释架构和关键决策，API/ABI 文档说明用户态与内核边界，验证文档给出可复现证据。
+文档体系参考操作系统内核项目和软件架构文档惯例重构：README 负责快速运行，主设计文档解释架构和关键决策，API/ABI 文档说明用户态与内核接口，验证文档给出可复现证据。
 
 ## 基底来源
 
@@ -23,7 +25,7 @@
 
 原始 xv6-riscv 说明和许可文件已保留：
 
-- [docs/xv6-riscv-README](docs/xv6-riscv-README)
+- [THIRD_PARTY/xv6-riscv-README](THIRD_PARTY/xv6-riscv-README)
 - [THIRD_PARTY/xv6-riscv-LICENSE](THIRD_PARTY/xv6-riscv-LICENSE)
 
 ## 赛题对应关系
@@ -32,10 +34,10 @@
 | --- | --- | --- |
 | 任务一：Agent 进程创建与地址空间设计 | 支持 Agent 进程概念和上下文空间 | 已完成增强实现 |
 | 任务二：Agent 与内核结构化交互 | 支持结构化工具调用和结果返回 | 已完成增强实现 |
-| 任务三：上下文路径管理 | 记录并查询 Agent 多轮调用上下文 | 已完成增强实现 |
-| 任务四：面向 Agent 查询优化的文件系统扩展 | 支持面向 Agent 的文件查询能力 | 待评估 |
-| 任务五：Agent Loop 内核运行机制 | 支持 Agent 循环触发、等待和唤醒 | 待评估 |
-| 任务六：综合演示与创新 | 用完整场景展示 Agent-OS 能力 | 待设计 |
+| 任务三：上下文路径管理 | 记录并查询 128 条短文本摘要历史 | 已完成增强实现 |
+| 任务四：Agent 子系统内核元数据表版本的文件查询扩展 | 支持按 fid、项目、运行、阶段、状态、类型、摘要查询文件元数据，支持插入、删除和扫描/索引对比 | 原型能力已完成；不声明为真实 xv6 inode 扩展 |
+| 任务五：Agent Loop 内核运行机制 | 支持 watch/unwatch、wait、heartbeat/heartbeat_stop、event delivery/timeout，文件状态和 mailbox 可唤醒 Agent | 原型能力已完成 |
+| 任务六：综合演示与创新 | 用夜间实验批量复测故障诊断与受控恢复场景串联任务一至五 | 已有 `labdemo` 初步综合演示 |
 
 ## 构建与运行
 
@@ -51,10 +53,16 @@ make qemu
 进入 xv6 shell 后运行最终功能验收程序：
 
 ```sh
+labdemo
+labbench
 agentfinal
 ```
 
-预期输出包括 4 页 Agent Context、64 路批量工具调用、Context Snapshot、短文本历史记录、用户镜像篡改边界、128 条容量 FIFO 淘汰和直接 Context 一致性检查：
+`labdemo` 是当前任务四、任务五和综合场景主入口。普通父进程只引导创建 Orchestrator，Recovery、Investigator、Sentinel 由 Orchestrator 创建。Orchestrator 初始化元数据并注入 `RUN-042` 的 `align` 阶段失败，展示文件属性查询、事件唤醒、Agent 间消息、权限拒绝、幂等恢复和单个恢复报告工件元数据更新。同一 QEMU 会话中连续运行两次 `labdemo` 均应输出 `labdemo: passed`。
+
+`labbench` 是任务四、任务五性能和可靠性入口。它输出文件扫描查询 vs 属性索引查询、`fid` 查询、元数据插入/删除、selector 限定报告更新、轮询查询基线、event wait/wake 路径、scalar tool call vs batch `agent_run`、`context_query` vs `context_snapshot`、capability check、duplicate reject，以及角色自升权拒绝、`heartbeat_stop`、`unwatch`、依赖掩码驱动恢复、短事件 payload 回查、事件队列满、mailbox 满队列、文件状态满队列的测试结果。
+
+`agentfinal` 继续作为任务一至三高性能底座复测。预期输出包括 4 页 Agent Context、64 路批量工具调用、Context Snapshot、短文本历史记录、用户镜像篡改防护范围、128 条容量 FIFO 淘汰和直接 Context 一致性检查：
 
 ```text
 agentfinal: context size=16384 capacity=128
@@ -78,16 +86,16 @@ agentbench
 
 ```text
 agentbench: case ops ticks ops_per_tick speedup_x100
-agentbench: scalar_run ops=65536 ticks=16 ops_per_tick=4096 speedup_x100=100
-agentbench: batch_run ops=65536 ticks=2 ops_per_tick=32768 speedup_x100=800
-agentbench: direct_context ops=1000000 ticks=0 ops_per_tick=1000000 speedup_x100=24414
-agentbench: context_query ops=2048 ticks=0 ops_per_tick=2048 speedup_x100=50
+agentbench: scalar_run ops=65536 ticks=20 ops_per_tick=3276 speedup_x100=100
+agentbench: batch_run ops=65536 ticks=3 ops_per_tick=21845 speedup_x100=666
+agentbench: direct_context ops=1000000 ticks=0 ops_per_tick=1000000 speedup_x100=30517
+agentbench: context_query ops=2048 ticks=0 ops_per_tick=2048 speedup_x100=62
 agentbench: context_snapshot ops=262144 ticks=3 ops_per_tick=87381 speedup_x100=4266
 agentbench: latest_sequence=131072 dropped=130944 capacity=128
 agentbench: passed
 ```
 
-完整回归还可以运行以下辅助测试。`agentexec` 可直接从 shell 运行，也可作为 Agent `exec("agentexec")` 的目标程序：
+完整复测还可以运行以下辅助测试。`agentexec` 可直接从 shell 运行，也可作为 Agent `exec("agentexec")` 的目标程序：
 
 ```sh
 agentexec
@@ -114,12 +122,14 @@ make clean
 - 用户态测试程序；
 - QEMU 运行和演示说明；
 - 测试记录与结果分析；
-- 任务一至三演示材料。
+- 任务一至五演示材料；
+- `labdemo` 综合演示入口；
+- `labbench` 性能演示入口。
 
 仍需补充：
 
-- 任务四至六实现和验证；
-- 综合演示场景；
+- 最终成品阶段的云端 LLM Gateway；
+- 最终成品阶段的宿主机可视化大屏；
 - 进展汇报幻灯片；
 - 作品演示视频。
 
@@ -136,10 +146,12 @@ make clean
 | 测试内容详细说明 | [docs/testing-details.md](docs/testing-details.md) |
 | 演示脚本 | [docs/demo-script.md](docs/demo-script.md) |
 | xv6 文件系统内说明 | [README](README) |
-| xv6-riscv 原始说明 | [docs/xv6-riscv-README](docs/xv6-riscv-README) |
+| xv6-riscv 原始说明 | [THIRD_PARTY/xv6-riscv-README](THIRD_PARTY/xv6-riscv-README) |
 | 任务一细节附录 | [docs/task1-agent-process.md](docs/task1-agent-process.md) |
 | 任务二细节附录 | [docs/task2-agent-call.md](docs/task2-agent-call.md) |
 | 任务三细节附录 | [docs/task3-context-path.md](docs/task3-context-path.md) |
+| 任务四细节附录 | [docs/task4-file-query.md](docs/task4-file-query.md) |
+| 任务五细节附录 | [docs/task5-agent-loop.md](docs/task5-agent-loop.md) |
 | 当前测试记录 | [docs/test-record.md](docs/test-record.md) |
 | 源代码许可 | [LICENSE](LICENSE) |
 | 文档与答辩材料许可 | [DOCUMENTATION_LICENSE.md](DOCUMENTATION_LICENSE.md) |
@@ -151,7 +163,7 @@ make clean
 
 本仓库作为参赛作品提交的源代码采用 [Apache License 2.0](LICENSE) 许可，满足赛事对源代码开源协议的要求。
 
-xv6-riscv 基底代码和原始说明保留其上游版权与许可声明，详见 [THIRD_PARTY/xv6-riscv-LICENSE](THIRD_PARTY/xv6-riscv-LICENSE) 和 [docs/xv6-riscv-README](docs/xv6-riscv-README)。这些第三方声明是上游代码合规要求的一部分，不应删除。
+xv6-riscv 基底代码和原始说明保留其上游版权与许可声明，详见 [THIRD_PARTY/xv6-riscv-LICENSE](THIRD_PARTY/xv6-riscv-LICENSE) 和 [THIRD_PARTY/xv6-riscv-README](THIRD_PARTY/xv6-riscv-README)。这些第三方声明是上游代码合规要求的一部分，不应删除。
 
 本队伍原创的技术文档、答辩材料、汇报幻灯片和演示视频采用 [Creative Commons Attribution-ShareAlike 4.0 International](https://creativecommons.org/licenses/by-sa/4.0/) 许可，详见 [DOCUMENTATION_LICENSE.md](DOCUMENTATION_LICENSE.md)。
 

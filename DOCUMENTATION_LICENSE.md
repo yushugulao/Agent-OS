@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
+
 # Documentation License
 
 Project documentation and presentation materials created by the happy-legend
@@ -23,7 +25,7 @@ Current covered files include:
 - `docs/*.md`
 
 Future presentation slides and demo videos produced by the team for this
-project should state that they are licensed under CC BY-SA 4.0.
+project must state that they are licensed under CC BY-SA 4.0.
 
 ## Exclusions
 
@@ -31,7 +33,7 @@ This documentation license does not replace or modify third-party notices,
 upstream documentation, or software licenses that must remain under their
 original terms. In this repository, excluded third-party materials include:
 
-- `docs/xv6-riscv-README`
+- `THIRD_PARTY/xv6-riscv-README`
 - `THIRD_PARTY/xv6-riscv-LICENSE`
 - `LICENSE`
 

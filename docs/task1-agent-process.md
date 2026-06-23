@@ -1,3 +1,5 @@
+<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
+
 # 任务一：Agent 进程创建与地址空间设计
 
 本文是 [design.md](design.md) 的任务一细节附录，重点展开 Agent 进程生命周期和地址空间设计。总体架构、关键决策和质量要求以主设计文档为准。
@@ -16,7 +18,7 @@
 | `agent_fork()` | 创建一个子进程，并将子进程标记为 Agent 进程 |
 | `agent_info(struct agent_info *)` | 查询当前进程的 Agent 状态、Agent ID、Agent Context、配额、Loop 状态和路径元信息 |
 
-当前任务一能力由 `agentfinal` 和 `agentstress` 共同验证，覆盖 Agent 创建、Context 映射、生命周期和地址空间边界。
+当前任务一能力由 `agentfinal` 和 `agentstress` 共同验证，覆盖 Agent 创建、Context 映射、生命周期和地址空间限制。
 
 ## 进程元数据
 
@@ -26,12 +28,13 @@
 | --- | --- |
 | `is_agent` | 是否为 Agent 进程 |
 | `agent_type` | Agent 类型，普通进程为 `AGENT_TYPE_NONE`，Agent 进程为 `AGENT_TYPE_AGENT` |
+| `agent_role` | 当前 Agent 角色；默认创建为 Sentinel。普通进程只能创建 Sentinel，或在没有存活 Orchestrator 时引导一个 Orchestrator；Recovery、Investigator 等工作 Agent 由 Orchestrator 创建。`agent_set_role()` 只能确认当前角色 |
 | `agent_id` | Agent 进程 ID，启动周期内递增分配 |
 | `agent_ctx_base` | Agent Context 用户虚拟地址起点 |
 | `agent_ctx_size` | Agent Context 大小 |
-| `heartbeat_interval` | Agent 心跳周期，当前默认值为 0，后续任务五可使用 |
+| `heartbeat_interval` | Agent 心跳周期，`agent_heartbeat()` 可设置 |
 | `resource_quota` | Agent Context Path 记录配额，当前为 128 条 |
-| `loop_state` | Agent Loop 状态，当前在工具调用时进入 `AGENT_LOOP_RUNNING`，结束后回到 `AGENT_LOOP_IDLE` |
+| `loop_state` | Agent Loop 状态，支持 `IDLE`、`RUNNING`、`WAITING` |
 | `context_path_count` | 当前有效 Context Path 记录数 |
 | `context_path_capacity` | Context Path 最大记录数 |
 | `context_path_head` | 下一条 Context Path 写入槽位 |
@@ -67,8 +70,8 @@ Agent Context 使用固定高地址用户虚拟区：
 4. 子进程向 Agent Context 写入 `AGT` 并读回，验证地址区可访问。
 5. 父进程等待 Agent 子进程退出。
 
-压力回归还覆盖一个边界：普通进程先用 lazy `sbrk` 把堆扩展到 `AGENT_CONTEXT_BASE` 以上，分别在未触碰页和已触碰并映射页两种情况下调用 `agent_create()`，预期均返回失败而不是 kernel panic。对应输出为 `agentstress: parent_over_context_rejected=1`。
+压力复测还覆盖一个地址限制场景：普通进程先用 lazy `sbrk` 把堆扩展到 `AGENT_CONTEXT_BASE` 以上，分别在未触碰页和已触碰并映射页两种情况下调用 `agent_create()`，预期均返回失败而不是 kernel panic。对应输出为 `agentstress: parent_over_context_rejected=1`。
 
 ## 当前扩展
 
-当前实现已经不只是最小 Agent 身份标记，还补充了赛题命名兼容入口 `agent_create()`、父进程地址空间边界检查、配额、Loop 状态、Context Path 元信息和 4 页高性能 Context 镜像。最终验收程序 `agentfinal` 会验证 Context 大小、容量和直接读取一致性；`agentstress` 验证 exec 生命周期、sbrk 边界和父进程越界创建拒绝。后续任务五可以继续使用 `heartbeat_interval` 和 `loop_state` 扩展真正的 Agent Loop 调度机制。
+当前实现已经不只是最小 Agent 身份标记，还补充了赛题命名兼容入口 `agent_create()`、父进程地址空间限制检查、配额、Loop 状态、Context Path 元信息、事件统计、capability mask 和 4 页高性能 Context 镜像。`agentfinal` 会验证 Context 大小、容量和直接读取一致性；`agentstress` 验证 exec 生命周期、sbrk 增长上限和父进程越界创建拒绝；`labdemo` 和 `labbench` 验证 `WAITING` 状态、事件唤醒、心跳和 Agent Loop 统计。
