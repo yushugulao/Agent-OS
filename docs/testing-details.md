@@ -330,6 +330,43 @@
 
 `agentstress` 的父进程越界测试会让普通进程先把堆扩展到 `AGENT_CONTEXT_BASE` 以上，再分别在未触碰页和已触碰页两种情况下调用 `agent_create()`。通过条件是两次创建均失败且系统无 panic，对应输出为 `agentstress: parent_over_context_rejected=1`。
 
+## 宿主机事件解析器、LLM Gateway 与 replay/live 大屏测试
+
+源码位置：[../host/gateway/parser.mjs](../host/gateway/parser.mjs)。
+
+Phase 1 新增宿主机侧 parser，用于把 `labdemo` / `labbench` 的 `agentos:event` 串口输出转换为后续可消费的 JSON event。Phase 2 在 parser 之上新增 LLM Gateway，用 OpenAI-compatible Chat Completions 接口生成 `LLM_ANALYSIS`；没有 API key、网络失败或云端返回非 JSON 时自动走离线 fallback。Phase 3 新增 Node Gateway 和 Vite replay 大屏，Gateway 提供 `/api/replay` 和 `/events` SSE。Phase 4 新增 live QEMU 数据源，自动运行 `labdemo` 和可选 `labbench`，把串口事件实时推送到同一大屏。
+
+测试命令：
+
+```bash
+npm run host:test
+npm run host:replay
+npm run host:dashboard:build
+npm run host:live
+```
+
+测试项：
+
+| case | 测试方法 | 证明点 |
+| --- | --- | --- |
+| key/value parser | 解析带内部 `=` 的 `payload=fid=4;status=failed...` | 文件状态短 payload 不会被误拆成多个顶层字段 |
+| summary parser | 解析带空格的 summary 文本 | LLM Gateway 后续可读取完整摘要证据 |
+| raw log | 输入普通 `labdemo:` 行 | 普通日志保留为 raw，不影响事件流 |
+| unknown event | 输入未来事件类型 | parser 输出 `known=false`，不崩溃 |
+| labdemo fixture | 回放 `host/fixtures/labdemo.log` | 可解析 25 条事件，最终状态为 `RECOVERED` |
+| labbench fixture | 回放 `host/fixtures/labbench.log` | 可解析 `BENCH` 指标事件 |
+| missing API key | 不设置 `LLM_API_KEY` | 输出 `LLM_ANALYSIS mode=fallback reason=missing_api_key` |
+| mock cloud | 测试中模拟 `/chat/completions` 返回合法 JSON | 输出 `LLM_ANALYSIS mode=cloud` |
+| bad JSON | 模拟云端返回非 JSON 内容 | fallback，不中断 replay |
+| network error | 模拟 fetch 抛错 | fallback，不中断 replay |
+| dashboard replay API | `dashboard.test.mjs` 启动 Gateway 并请求 `/api/replay` | 返回完整 replay，包含 28 条事件、`RECOVERED`、`LLM_ANALYSIS` |
+| dashboard SSE | `dashboard.test.mjs` 连接 `/events` | SSE 能推送同一 replay 事件流，不需要启动 QEMU |
+| dashboard build | `vite build --config host/dashboard/vite.config.mjs` | Vite 前端能生产构建，说明页面入口和静态资源有效 |
+| live source mock | `live.test.mjs` 用模拟命令输出 `agentos:event` | live 数据源可解析串口行、生成 `FINAL status=RECOVERED` 和 fallback `LLM_ANALYSIS` |
+| live QEMU | `npm run host:live` | 启动 QEMU 并捕获 `labdemo` live 事件，最终 `final=RECOVERED` |
+
+`host:replay` 输出每条结构化事件的 JSON 摘要，并在末尾输出 `host:replay total_events=... final=RECOVERED llm=fallback/cloud`。`npm run host:dev` 会同时启动 Gateway 和 Vite，默认地址为 `http://127.0.0.1:8787` 和 `http://127.0.0.1:5173`，用于人工审查 replay 大屏。`npm run host:live` 启动 live Gateway、Vite 大屏和 QEMU，Windows 默认通过 WSL 执行 `make qemu`。
+
 ## 与赛题要求的对应关系
 
 | 测试内容 | 覆盖的赛题点 |
@@ -347,12 +384,15 @@
 | lazy 输出缓冲复测 | 证明合法 lazy `sbrk` 输出页不会被预检误杀，非法坏指针仍无副作用 |
 | 父进程越界创建复测 | 证明普通父进程堆越过 Agent Context 后不能直接创建重叠 Agent |
 | scalar/batch/query/snapshot 性能表 | 创新增强：高性能批量执行和批量 Context 查询 |
+| host parser fixture | 任务六宿主机 LLM Gateway 和大屏的事件输入契约 |
+| LLM Gateway fallback/cloud mock | 任务六云端 LLM Gateway 的配置、调用格式和离线兜底 |
+| dashboard replay/live API/SSE/build | 任务六宿主机可视化大屏，展示 4 个 Agent、事件链路、LLM 分析、REPORT、FINAL 和 BENCH 指标 |
 
 ## 当前测试覆盖范围和限制
 
 | 测试限制 | 说明 |
 | --- | --- |
-| 任务六仍是初步综合演示 | `labdemo` 已串联任务一至五，但最终 LLM Gateway 和可视化大屏尚未接入 |
+| 任务六仍在分阶段实现 | `labdemo` 已串联任务一至五；Phase 1/2/3/4 已完成宿主机事件契约、parser、LLM Gateway、fallback、replay 大屏和 live QEMU 串口接入；演示视频和答辩材料仍需补充 |
 | tick 粒度较粗 | 当前性能数据适合证明趋势，不适合精确微基准结论 |
 | 事件队列容量有限 | 当前为每 Agent 8 槽 FIFO，测试覆盖投递、等待、唤醒、FIFO 顺序、满队列拒绝和 dropped 统计；最终可扩展容量和优先级 |
 | 文件查询是内核元数据表 | 当前不改 xv6 inode 主路径；最终可迁移为 inode 扩展或持久化索引 |

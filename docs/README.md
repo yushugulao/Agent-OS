@@ -26,6 +26,7 @@
 | [task3-context-path.md](task3-context-path.md) | 任务三 Context Path 设计细节 |
 | [task4-file-query.md](task4-file-query.md) | 任务四 Agent 子系统内存元数据表查询、索引和依赖查询设计细节 |
 | [task5-agent-loop.md](task5-agent-loop.md) | 任务五 watch/wait/heartbeat/event delivery 设计细节 |
+| [task6-llm-dashboard.md](task6-llm-dashboard.md) | 任务六 LLM Gateway 与宿主机可视化大屏分阶段设计 |
 | [test-record.md](test-record.md) | 当前测试记录和关键输出 |
 | [../THIRD_PARTY/xv6-riscv-README](../THIRD_PARTY/xv6-riscv-README) | xv6-riscv 原始说明 |
 | [../LICENSE](../LICENSE) | 源代码 Apache License 2.0 |

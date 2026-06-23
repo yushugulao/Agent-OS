@@ -52,6 +52,10 @@ agentstress
 | --- | --- | --- |
 | `labdemo` | 四 Agent 综合场景、文件属性查询、依赖查询、事件等待、mailbox 唤醒、权限拒绝、幂等恢复、报告元数据更新、结构化 `agentos:event` | `labdemo: passed` |
 | `labbench` | 文件扫描 vs 索引、`fid` 查询、元数据插入/删除、轮询查询基线、wait/wake 路径、scalar vs batch、context_query vs snapshot、capability、duplicate reject、事件队列溢出、短事件 payload 回查、角色创建权限、`unwatch` 和 `heartbeat_stop` | `labbench: passed` |
+| `npm run host:test` | 宿主机事件 parser、未知事件兼容、LLM fallback、mock cloud、坏 JSON、网络失败 fallback、Gateway replay API/SSE 和 live source 模拟串口 | `host:test live=passed` |
+| `npm run host:replay` | fixture 回放、`LLM_ANALYSIS` 生成、无 key fallback 演示 | `host:replay total_events=28 final=RECOVERED llm=fallback` |
+| `npm run host:dashboard:build` | Vite replay 大屏生产构建 | `built in ...ms` |
+| `npm run host:live` | 启动 QEMU，自动运行 `labdemo`/可选 `labbench`，实时解析串口事件并推送大屏 | `host:live done status=done ... final=RECOVERED` |
 | `agentfinal` | Agent 创建、4 页 Context、批量工具调用、短文本历史、直接读 Context 镜像、Context Snapshot、FIFO 淘汰、篡改防护范围 | `agentfinal: passed` |
 | `agentbench` | scalar run、batch run、direct Context、context_query、context_snapshot 吞吐 | `agentbench: passed` |
 | `agentexec` | shell 直跑 wrapper 和 Agent exec 成功路径 | `agentexec: wrapper status=0` |
@@ -147,6 +151,63 @@ agentbench: passed
 - `direct_context` 的 tick 为 0，表示该测试中 1000000 次直接读低于一个 xv6 tick；`speedup_x100` 使用 1 tick 作为保守下界计算。
 - `context_snapshot` 一次返回最多 128 条可见记录，按返回记录数计算吞吐。
 
+## 宿主机 replay 大屏验证
+
+宿主机大屏支持 replay 和 live 两种数据源。replay 不需要启动 QEMU，可直接从 fixture 回放 `labdemo` 和 `labbench` 事件。
+
+```bash
+npm install
+npm run host:test
+npm run host:replay
+npm run host:dashboard:build
+npm run host:dev
+```
+
+`npm run host:dev` 默认启动两个本地服务：
+
+| 服务 | 地址 | 验证内容 |
+| --- | --- | --- |
+| Gateway | `http://127.0.0.1:8787` | `/health`、`/api/replay`、`/events` SSE |
+| Dashboard | `http://127.0.0.1:5173` | Agent 卡片、事件时间线、LLM 分析、恢复报告、BENCH 指标 |
+
+页面人工检查点：
+
+| 检查点 | 期望 |
+| --- | --- |
+| 顶部状态 | 显示 `RECOVERED`，并显示数据源、网关、事件流和 LLM 模式 |
+| Agent 协作拓扑 | 首屏显示 Orchestrator、Sentinel、Investigator、Recovery 四个节点和中心故障/完成节点 |
+| 协作连线 | 能看到 sentinel -> investigator -> recovery 的消息链路，以及 recovery 到中心节点的恢复动作高亮 |
+| Agent 卡片 | 四个 Agent 卡片显示 pid、Context 区和最新动作 |
+| 关键事件流 | 显示 `INCIDENT_CREATED`、`TOOL_CALL`、`MESSAGE`、`AUDIT`、`ACTION`、`REPORT`、`FINAL` |
+| LLM Analysis | 显示 `LLM_ANALYSIS` 的 summary、root cause、recommended action、risk 和 evidence refs |
+| Recovery Report | 显示 `lab_RUN042_recovery_report` |
+| Benchmark Signals | 显示 `file_scan_query` 和 `duplicate_reject` 等 BENCH 指标 |
+
+## 宿主机 live QEMU 验证
+
+live 模式会启动 QEMU，自动向 xv6 shell 输入 `labdemo`，默认继续输入 `labbench`，并把串口中的 `agentos:event` 实时推送给 Gateway 和大屏。Windows PowerShell 默认通过 WSL 执行 `make qemu`。
+
+```powershell
+npm run host:live
+```
+
+快速只验证综合恢复主线：
+
+```powershell
+$env:HOST_LIVE_RUN_BENCH='0'
+$env:HOST_LIVE_DASHBOARD='0'
+$env:HOST_LIVE_TIMEOUT_MS='90000'
+$env:LLM_API_KEY=''
+npm run host:live
+```
+
+本地验证输出：
+
+```text
+host:live gateway=http://127.0.0.1:8787 command="wsl -e bash -lc "cd '/mnt/c/Users/Lenovo/Desktop/sophomore/OScompetition/env/project3136859-388870-kang' && make qemu"" bench=off
+host:live done status=done events=23 final=RECOVERED llm=fallback
+```
+
 ## 覆盖到的赛题验收项
 
 | 赛题验收项 | 证据 |
@@ -179,6 +240,6 @@ agentbench: passed
 
 | 方向 | 当前缺口 |
 | --- | --- |
-| 最终成品 LLM Gateway | 当前只预留 `llm_status=template` 和引用字段，未接真实云端 LLM |
-| 最终成品可视化大屏 | 当前输出 `agentos:event`，但宿主机大屏尚未实现 |
+| 最终成品 LLM Gateway | 已实现宿主机 OpenAI-compatible Gateway、mock cloud 和 fallback 验证；真实 provider 需要配置 `.env` 和网络后现场验证 |
+| live QEMU 可视化串接 | 已接入并完成 `labdemo` live 验证；完整 `labbench` live 可作为现场延长演示 |
 | 性能可信度 | xv6 tick 粒度粗，后续可补更细粒度计数 |

@@ -5,6 +5,9 @@ _*
 *.asm
 *.sym
 *.img
+.env
+node_modules/
+host/dashboard/dist/
 /mkfs/mkfs
 /kernel/kernel
 /user/usys.S

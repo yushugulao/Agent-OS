@@ -37,7 +37,7 @@
 | 任务三：上下文路径管理 | 记录并查询 128 条短文本摘要历史 | 已完成增强实现 |
 | 任务四：Agent 子系统内核元数据表版本的文件查询扩展 | 支持按 fid、项目、运行、阶段、状态、类型、摘要查询文件元数据，支持插入、删除和扫描/索引对比 | 原型能力已完成；不声明为真实 xv6 inode 扩展 |
 | 任务五：Agent Loop 内核运行机制 | 支持 watch/unwatch、wait、heartbeat/heartbeat_stop、event delivery/timeout，文件状态和 mailbox 可唤醒 Agent | 原型能力已完成 |
-| 任务六：综合演示与创新 | 用夜间实验批量复测故障诊断与受控恢复场景串联任务一至五 | 已有 `labdemo` 初步综合演示 |
+| 任务六：综合演示与创新 | 用夜间实验批量复测故障诊断与受控恢复场景串联任务一至五，并提供宿主机 LLM Gateway、replay 大屏和 live QEMU 串接 | 已完成可验证版本；演示视频/幻灯片待补 |
 
 ## 构建与运行
 
@@ -116,6 +116,47 @@ Ctrl-a x
 make clean
 ```
 
+宿主机 LLM Gateway 和 replay 大屏使用 Node + Vite。首次运行先安装依赖：
+
+```bash
+npm install
+```
+
+无 QEMU 回放验证：
+
+```bash
+npm run host:test
+npm run host:replay
+npm run host:dashboard:build
+```
+
+启动宿主机 replay 大屏：
+
+```bash
+npm run host:dev
+```
+
+默认页面地址为 `http://127.0.0.1:5173`，Gateway 地址为 `http://127.0.0.1:8787`。页面会读取 fixture replay，展示 4 个 Agent、事件时间线、`LLM_ANALYSIS`、恢复报告和 `BENCH` 指标。真实云端 LLM 可复制 `.env.example` 为 `.env` 后配置 OpenAI-compatible API；没有 key 或网络失败时自动使用 fallback。
+
+启动 live QEMU 大屏：
+
+```bash
+npm run host:live
+```
+
+Windows PowerShell 下该命令默认通过 WSL 执行 `make qemu`，自动在 xv6 shell 中运行 `labdemo` 和 `labbench`，实时解析串口中的 `agentos:event` 并推送到同一个大屏。若只想快速验证综合恢复主线，可运行：
+
+```powershell
+$env:HOST_LIVE_RUN_BENCH='0'
+npm run host:live
+```
+
+关键通过输出为：
+
+```text
+host:live done status=done events=... final=RECOVERED llm=fallback
+```
+
 当前交付材料包括：
 
 - 内核代码；
@@ -124,12 +165,14 @@ make clean
 - 测试记录与结果分析；
 - 任务一至五演示材料；
 - `labdemo` 综合演示入口；
-- `labbench` 性能演示入口。
+- `labbench` 性能演示入口；
+- 宿主机事件解析器；
+- OpenAI-compatible LLM Gateway 和 fallback；
+- Node + Vite replay/live 可视化大屏；
+- live QEMU 串口事件接入。
 
 仍需补充：
 
-- 最终成品阶段的云端 LLM Gateway；
-- 最终成品阶段的宿主机可视化大屏；
 - 进展汇报幻灯片；
 - 作品演示视频。
 
@@ -152,6 +195,7 @@ make clean
 | 任务三细节附录 | [docs/task3-context-path.md](docs/task3-context-path.md) |
 | 任务四细节附录 | [docs/task4-file-query.md](docs/task4-file-query.md) |
 | 任务五细节附录 | [docs/task5-agent-loop.md](docs/task5-agent-loop.md) |
+| 任务六细节附录 | [docs/task6-llm-dashboard.md](docs/task6-llm-dashboard.md) |
 | 当前测试记录 | [docs/test-record.md](docs/test-record.md) |
 | 源代码许可 | [LICENSE](LICENSE) |
 | 文档与答辩材料许可 | [DOCUMENTATION_LICENSE.md](DOCUMENTATION_LICENSE.md) |

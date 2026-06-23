@@ -2,7 +2,7 @@
 
 # 演示脚本
 
-本文用于现场评审或录制演示视频。当前主线是“夜间实验批量复测故障诊断与受控恢复”，覆盖任务一至五，并为最终 LLM Gateway 和可视化大屏保留 `agentos:event` 输出。
+本文用于现场评审或录制演示视频。当前主线是“夜间实验批量复测故障诊断与受控恢复”，覆盖任务一至五，并通过宿主机 LLM Gateway 和 Node + Vite replay 大屏展示 `agentos:event` 事件流。
 
 ## 1. 开场说明
 
@@ -15,7 +15,7 @@
 建议强调：
 
 - 这不是聊天程序，而是操作系统为 Agent 工作流提供身份、工具、上下文、文件查询、事件和权限控制。
-- LLM 和大屏是最终成品增强层，当前阶段已输出稳定 `agentos:event` 便于后续接入。
+- LLM Gateway 和 replay/live 大屏运行在宿主机侧，不改变 xv6 内核 ABI；live 模式会自动启动 QEMU 并解析串口事件。
 
 ## 2. 构建和启动
 
@@ -76,9 +76,93 @@ labdemo: passed
 - `fid=4` 说明事件只携带短摘要时，Agent 仍可通过 `query_file(fid=...)` 回查完整元数据。
 - `sentinel state=WAITING` 和 `FILE_STATUS` 事件说明 Agent Loop 已经进入等待/唤醒路径。
 - `DENIED` 和 `DUPLICATE` 说明恢复动作有权限限制和幂等要求。
-- `agentos:event` 是后续可视化大屏和 LLM Gateway 的稳定输入。
+- `agentos:event` 是宿主机可视化大屏和 LLM Gateway 的稳定输入。
 
-## 4. 性能演示
+## 4. LLM Gateway 回放演示
+
+Phase 2 已支持宿主机侧 LLM Gateway。该演示不需要重新启动 QEMU，先用 fixture 回放验证 Gateway 输出：
+
+```bash
+npm run host:replay
+```
+
+无 API key 或现场网络不可用时，预期看到 fallback 分析：
+
+```text
+{"line":0,"type":"LLM_ANALYSIS","known":true,"fields":{"type":"LLM_ANALYSIS","mode":"fallback",...}}
+host:replay total_events=28 final=RECOVERED llm=fallback
+```
+
+如果要接入 DeepSeek、GLM 或其他 OpenAI-compatible API，复制 `.env.example` 为 `.env`，配置：
+
+```text
+LLM_API_BASE_URL=https://api.deepseek.com/v1
+LLM_API_KEY=<your key>
+LLM_MODEL=deepseek-chat
+LLM_PROVIDER_NAME=deepseek
+LLM_OFFLINE_FALLBACK=1
+```
+
+再次运行 `npm run host:replay`。云端调用成功时 `LLM_ANALYSIS` 的 `mode` 为 `cloud`；如果 key、网络或返回格式有问题，Gateway 自动回到 `mode=fallback`，不影响演示继续。
+
+讲解点：
+
+- LLM Gateway 不改变 xv6 内核 ABI，而是消费 `agentos:event` 结构化事件流。
+- OpenAI-compatible 表示使用 `/chat/completions`、`model`、`messages` 和 Bearer key 这一套请求格式，不绑定单一厂商。
+- fallback 确保评审现场没有外网或 API key 时仍能展示完整 Agent 分析。
+
+## 5. Replay/Live 大屏演示
+
+Phase 3 已提供 Node + Vite replay 大屏。首次运行先安装依赖：
+
+```bash
+npm install
+```
+
+启动 replay Gateway 和 Vite：
+
+```bash
+npm run host:dev
+```
+
+终端会输出两个本地地址：
+
+```text
+host:gateway url=http://127.0.0.1:8787 events=28 final=RECOVERED llm=fallback
+host:dashboard url=http://127.0.0.1:5173
+```
+
+打开 `http://127.0.0.1:5173` 后，建议按以下顺序讲解：
+
+1. 顶部状态显示 `lab-gene-x / RUN-042` 和最终 `RECOVERED`。
+2. 首屏的 Agent 协作拓扑展示 Sentinel、Investigator、Recovery 围绕故障事件接力处理，连线高亮表示消息、工具调用、审计和恢复动作已经发生。
+3. 右侧 LLM Analysis 展示云端或 fallback 生成的故障摘要、根因、建议动作、风险和证据引用。
+4. 下方四个 Agent 卡片给出 pid、Context 区和最新动作，说明拓扑中的节点都对应真实 Agent 进程。
+5. 关键事件流保留 `INCIDENT_CREATED`、`TOOL_CALL`、`MESSAGE`、`ACTION`、`REPORT`、`FINAL` 等事件，但不再作为主要视觉中心。
+6. Recovery Report 展示恢复报告工件，Benchmark Signals 展示 `labbench` 指标。
+
+页面上的“加载回放”会从 `/api/replay` 一次性加载完整事件；“流式播放事件”会通过 `/events` SSE 逐条接收同一 replay 事件流。replay 模式不需要启动 QEMU，适合录制视频和无硬件环境时演示最终效果。
+
+启动 live QEMU 大屏：
+
+```bash
+npm run host:live
+```
+
+Windows PowerShell 下该命令默认通过 WSL 执行 `make qemu`，自动运行 `labdemo` 和 `labbench`，并把串口事件实时推送到同一大屏。快速只演示恢复主线时可关闭 `labbench`：
+
+```powershell
+$env:HOST_LIVE_RUN_BENCH='0'
+npm run host:live
+```
+
+讲解点：
+
+- 大屏顶部“数据源”显示回放或实时。
+- live 模式中的 Agent 协作拓扑、卡片和关键事件流来自 QEMU 串口，而不是 fixture。
+- 关键通过输出是 `host:live done status=done ... final=RECOVERED`。
+
+## 6. 性能演示
 
 执行：
 
@@ -117,7 +201,7 @@ labbench: passed
 
 说明：xv6 tick 粒度较粗，具体数字会波动；演示重点是每个对比项都有可复现输出，且程序稳定通过。
 
-## 5. 底座复测
+## 7. 底座复测
 
 如需展示任务一至三高性能底座，继续运行：
 
@@ -137,14 +221,14 @@ agentexec
 
 `agentcall` 中普通进程写 Agent Context 的负向测试会触发一次用户态 page fault 输出，这是预期行为；最终仍以 `agentcall: strict validation passed` 为通过标志。
 
-## 6. 当前实现限制
+## 8. 当前实现限制
 
 - 当前文件查询使用 Agent 子系统内核元数据表，不直接修改 xv6 inode 主结构。
 - 当前事件队列是每 Agent 8 槽 FIFO，满队列返回 `NO_SPACE` 并记录 dropped；最终可扩展优先级和更大容量。
-- 当前 LLM 为模板预留字段，未接云端 API。
-- 当前可视化大屏未实现，但 `agentos:event` 已作为后续解析契约。
+- 当前 LLM Gateway 已支持 OpenAI-compatible API 和离线 fallback；真实 DeepSeek/GLM/OpenAI 等 provider 需要现场配置 `.env` 和网络。
+- 当前可视化大屏已支持 fixture replay、SSE 事件流、Agent 协作拓扑和 live QEMU 串口接入。
 
-## 7. 退出 QEMU
+## 9. 退出 QEMU
 
 按：
 

@@ -203,6 +203,30 @@ legacy `tool_call()` 会按工具表校验参数键名和类型。键名或类�
 
 `agent_unwatch(event_type, filter)` 删除匹配的 watch；当 `event_type=AGENT_EVENT_NONE` 且 filter 为空时，清空当前 Agent 的全部 watch。`agent_heartbeat_stop()` 等价于把 heartbeat 间隔设为 0，停止后不会再投递 heartbeat timer 事件。`agent_tick()` 只在 timeout 到期或 heartbeat 事件需要投递时唤醒等待 Agent，避免每个 tick 唤醒所有等待者。
 
+## 宿主机事件契约
+
+最终成品阶段的 LLM Gateway 和可视化大屏不新增内核 ABI，先复用 xv6 串口中的 `agentos:event` 行作为宿主机输入契约。事件格式为：
+
+```text
+agentos:event type=TOOL_CALL role=sentinel tool=query_file status=OK seq=1 hits=1 used_index=1
+```
+
+宿主机解析器将每一行转换为 JSON event：
+
+| 字段 | 含义 |
+| --- | --- |
+| `kind` | `event` 或 `raw`；普通 `labdemo:` / `labbench:` 行为 raw log |
+| `type` | `agentos:event` 的 `type` 字段 |
+| `known` | 当前 parser 是否认识该事件类型 |
+| `fields` | 解析出的键值字段；整数值转换为 number，其他值保留为 string |
+| `raw` | 原始日志行 |
+
+当前已固化的宿主机事件类型包括 `LAB_INIT`、`AGENT_CREATED`、`WATCH_REGISTERED`、`AGENT_STATE`、`INCIDENT_CREATED`、`TOOL_CALL`、`MESSAGE`、`AUDIT`、`ACTION`、`CONTEXT_SNAPSHOT`、`REPORT`、`FINAL`、`BENCH` 和 `LLM_ANALYSIS`。未知类型不会导致解析失败，而是以 `known=false` 输出，便于后续阶段继续扩展。
+
+字段值允许包含内部 `=`，例如 `payload=fid=4;status=failed;stage=align;run_id=RUN-042;truncated=0`。解析器只把空格后出现的新 `key=` 识别为下一个字段，因此短 payload 和 summary 文本可完整保留。
+
+`LLM_ANALYSIS` 由宿主机 LLM Gateway 生成，不来自 xv6 内核。它复用同一 JSON event 结构，关键字段为 `mode`、`provider`、`status`、`summary`、`root_cause`、`recommended_action`、`risk` 和 `evidence_refs`；fallback 时还包含 `reason`。该事件用于后续可视化大屏展示云端或离线分析结果，不改变内核 ABI。
+
 ## Context Path 接口
 
 | 接口 | 行为 |

@@ -37,7 +37,7 @@
 | 运行架构 | RISC-V 64，QEMU 模拟器 |
 | 开发环境 | 已验证 WSL2 Ubuntu 26.04；通用要求为 Linux、RISC-V GCC/binutils、QEMU riscv64、make、git |
 | 兼容性 | 保留 xv6 原有用户程序和基础系统调用行为；旧 Agent ABI 仅作 legacy 语义兼容 |
-| 当前范围 | 已强化任务一至五；任务六已有初步综合演示，最终 LLM Gateway 和可视化大屏尚未实现 |
+| 当前范围 | 已强化任务一至五；任务六已有综合演示、宿主机事件解析器、LLM Gateway/fallback、Vite replay/live 大屏和 live QEMU 串接 |
 
 ## 3. 上下文与范围
 
@@ -68,6 +68,9 @@ flowchart LR
 | 文件属性查询、索引、摘要、fid 回查、删除和依赖查询 | 已实现任务四内核元数据表版本能力 |
 | Agent Loop 心跳、停止心跳、等待、唤醒、watch/unwatch | 已实现 watch/unwatch/wait/heartbeat/heartbeat_stop/event delivery/timeout |
 | 综合场景 | 已实现 `labdemo` 初步综合演示 |
+| 宿主机事件解析 | 已实现 `host/gateway/parser.mjs`，可把 `agentos:event` 转为 JSON event |
+| LLM Gateway | 已实现 OpenAI-compatible Chat Completions 调用、`.env` 配置和离线 fallback，当前通过 fixture/mock 验证 |
+| 宿主机可视化大屏 | 已实现 Node + Vite replay/live 大屏，Gateway 提供 `/api/replay` 和 `/events` SSE |
 
 ## 4. 解决方案策略
 
@@ -82,6 +85,8 @@ flowchart LR
 | 文件查询引擎 | Agent 子系统维护 128 条内存文件元数据表，提供 fid 查询、插入/删除、扫描路径和 status/run_id/stage/kind 多索引候选选择 |
 | Agent Loop | 每个 Agent 有 watch 过滤器和 8 槽 FIFO 事件队列，支持 unwatch 和 heartbeat_stop，文件状态和 mailbox 消息可唤醒等待 Agent |
 | 结构化事件 | `labdemo` 和 `labbench` 输出 `agentos:event`，`labdemo` 使用进程共享打印锁保证事件行适合解析，为最终大屏和 LLM Gateway 保留解析契约 |
+| LLM Gateway | 宿主机 Node 脚本读取结构化事件，优先调用 OpenAI-compatible `/chat/completions`，缺 key、网络失败或坏 JSON 时输出 deterministic `LLM_ANALYSIS mode=fallback` |
+| Replay/Live 大屏 | Gateway 用 fixture 或 QEMU 串口生成事件流，Vite 页面展示 Agent 卡片、事件时间线、LLM 分析、恢复报告和 BENCH 指标 |
 | 测试驱动验收 | 用 `labdemo` 做综合场景验证，用 `labbench` 输出任务四/五性能对比；`agentfinal`/`agentbench` 保留为任务一至三底座复测 |
 
 ## 5. 构件视图
@@ -210,13 +215,16 @@ sequenceDiagram
 ```mermaid
 flowchart TB
     Host["Windows 主机"]
+    HostDash["Node Gateway + Vite Dashboard"]
     WSL["WSL2 Ubuntu 26.04"]
     Toolchain["RISC-V GCC/binutils + QEMU riscv64 + make"]
     QEMU["QEMU virt machine"]
     XV6["xv6-riscv kernel + fs.img"]
     Shell["xv6 shell"]
     Tests["labdemo / labbench / agentfinal / agentbench"]
+    Host --> HostDash
     Host --> WSL --> Toolchain --> QEMU --> XV6 --> Shell --> Tests
+    Tests --> HostDash
 ```
 
 ## 8. 横切概念
@@ -257,7 +265,9 @@ Agent Loop 使用 `agent_event_lock` 保护 watch 和事件 FIFO。`agent_wait()
 | 批量执行 | `agent_run()` 一次最多 64 个 op | 减少 syscall 次数，提高端到端吞吐 | 单个 op 错误通过 result 表达 |
 | 文件查询实现 | 先采用 Agent 子系统内核内存元数据表和索引桶 | 避免改动 xv6 inode 主路径，稳定证明属性查询、fid 回查、插入/删除和索引优化 | 最终可迁移到 inode 扩展或持久化索引 |
 | Agent Loop 事件队列 | 每 Agent 8 槽 FIFO 事件队列，满队列返回 `AGENT_STATUS_NO_SPACE` 并记录 dropped | 避免突发事件覆盖旧事件，同时保持 xv6 锁设计简单；`agent_wake`、mailbox 和文件状态路径均覆盖溢出反馈 | 最终可继续扩展优先级和更大容量 |
-| 演示日志契约 | 输出 `agentos:event type=... key=value`，并用共享打印锁保持行级稳定 | 后续大屏和 LLM Gateway 不需要重写核心演示程序 | 当前仓库尚未实现宿主机大屏 |
+| 演示日志契约 | 输出 `agentos:event type=... key=value`，并用共享打印锁保持行级稳定 | 大屏和 LLM Gateway 不需要重写核心演示程序 | replay 和 live 均复用同一事件契约 |
+| LLM Gateway 接口 | 使用 OpenAI-compatible Chat Completions，配置 `base_url/api_key/model/provider` | DeepSeek、GLM、OpenAI 等兼容服务可通过 `.env` 切换 | 真实云端效果依赖现场 key 和网络，因此保留 fallback |
+| 大屏通信 | Gateway 提供 `/api/replay` 和 `/events` SSE，前端通过 Vite 页面消费 | 少依赖，适合单向演示事件流 | replay/live 共用同一前端路径 |
 | 文档结构 | 主设计文档 + API/验证/追踪 + 分任务附录 | 满足架构说明、关键决策、测试和运行说明 | 文档数量增加，需要维护一致性 |
 
 ## 10. 质量要求与验证
@@ -285,8 +295,8 @@ Agent Loop 使用 `agent_event_lock` 保护 watch 和事件 FIFO。`agent_wait()
 | `agentbench` 使用 xv6 tick | 分辨率较粗，短路径差异不明显 | 增加循环次数或补充指令级计数机制 |
 | 文件查询尚未持久化到 inode | 当前是 Agent 子系统内核内存元数据表 | 最终可迁移到 inode 扩展、索引文件或平台对象存储 |
 | 事件队列容量有限 | 高频事件超过 8 槽后会被拒绝并计入 dropped | 当前 `labbench` 覆盖溢出返回和 FIFO 顺序；后续可扩展容量和优先级 |
-| LLM Gateway 未接入 | 当前只有模板字段和 `agentos:event` 预留 | 后续实现宿主机 LLM Gateway 和 schema 校验 |
-| 可视化大屏未实现 | 当前只能看 shell/串口输出 | 后续解析 `agentos:event` 构建大屏 |
+| 真实云端 LLM 依赖外部服务 | 当前 Gateway 已有 mock cloud 和 fallback 验证，真实 DeepSeek/GLM/OpenAI 需要 API key 和网络 | `.env.example` 给出配置项；无 key 或失败时自动 fallback |
+| live QEMU 完整演示时长 | live 模式已能自动运行 `labdemo` 并可选运行 `labbench` | 现场可按时间选择是否开启 `HOST_LIVE_RUN_BENCH` |
 
 ## 12. 术语表
 
@@ -300,4 +310,6 @@ Agent Loop 使用 `agent_event_lock` 保护 watch 和事件 FIFO。`agent_wait()
 | 文件元数据表 | Agent 子系统维护的科研平台工件属性表，服务任务四查询优化 |
 | Agent Loop | watch、wait、heartbeat、event delivery 和 timeout 组成的 Agent 事件运行机制 |
 | agentos:event | shell 输出中的稳定键值事件格式，供后续大屏和 LLM Gateway 解析 |
+| LLM Gateway | 宿主机侧根据 Agent 事件流调用云端或 fallback 生成 `LLM_ANALYSIS` 的模块 |
+| Replay/Live 大屏 | 宿主机 Vite 页面，用 fixture 或 QEMU live 事件流展示 Agent 状态、LLM 分析和性能指标 |
 | ABI | 用户态和内核态共同遵守的结构体、常量和系统调用约定 |

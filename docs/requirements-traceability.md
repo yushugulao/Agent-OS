@@ -86,11 +86,11 @@
 
 | ID | 赛题方向 | 当前状态 | 说明 |
 | --- | --- | --- | --- |
-| T6-1 | 综合演示程序 | 部分实现 | `labdemo` 串联任务一至五，输出 `agentos:event`；最终大屏和 LLM 尚未接入 |
+| T6-1 | 综合演示程序 | 已验证 | `labdemo` 串联任务一至五，输出 `agentos:event`；宿主机 replay/live 均可生成 `LLM_ANALYSIS` 并显示在 Vite 大屏 |
 | T6-2 | 性能演示程序 | 已验证 | `labbench` 输出文件查询、事件等待、批量工具、Context、权限、幂等性能 |
-| T6-3 | 云端 LLM Gateway | 未实现 | 当前只预留 `llm_status=template`、`refs` 等字段 |
-| T6-4 | 可视化大屏 | 未实现 | 当前已输出 `agentos:event`，大屏解析器尚未实现 |
+| T6-3 | 云端 LLM Gateway | 已验证 | 宿主机 `host/gateway/llm.mjs` 支持 OpenAI-compatible Chat Completions、`.env` 配置和离线 fallback；mock cloud、坏 JSON、网络失败、无 key 和本地 DeepSeek 兼容调用已验证 |
+| T6-4 | 可视化大屏 | 已验证 | 当前已实现 Node + Vite replay/live 大屏、Gateway `/api/replay` 和 `/events` SSE；live QEMU 数据源已接入 |
 
 ## 追踪结论
 
-任务一至五已有实现和测试证据。需要注意，任务三当前保存的是固定容量的短文本摘要路径，不承诺完整 raw 请求/响应日志；任务四当前使用 Agent 子系统内核元数据表，不直接修改 xv6 inode 主结构；任务五当前事件队列是 8 槽 FIFO，仍不是最终平台级优先级队列。当前主要短板在最终成品阶段的云端 LLM Gateway、可视化大屏、演示视频和答辩材料。
+任务一至五已有实现和测试证据。需要注意，任务三当前保存的是固定容量的短文本摘要路径，不承诺完整 raw 请求/响应日志；任务四当前使用 Agent 子系统内核元数据表，不直接修改 xv6 inode 主结构；任务五当前事件队列是 8 槽 FIFO，仍不是最终平台级优先级队列。任务六已完成宿主机事件解析、LLM Gateway/fallback、replay 大屏和 live QEMU 串接，当前主要短板在演示视频和答辩材料。
