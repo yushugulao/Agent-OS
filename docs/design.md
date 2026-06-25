@@ -8,12 +8,12 @@ The kernel does not know about Agent roles, Agent Context, tool batches, file me
 
 ## Runtime Shape
 
-The current runtime has three layers:
+The current runtime has four parts:
 
 1. Upstream uCore kernel.
 2. Restored uCore user library and program build flow.
 3. `rp_plain`, a native user process that carries the research platform catalog, feature groups, mature platform mappings, and self-check logic.
-4. `rp_orch`, a native user process that runs twenty-four platform programs through ordinary `fork`, `exec`, and `waitpid`.
+4. `rp_orch`, a native user process that runs twenty-five platform programs through ordinary `fork`, `exec`, and `waitpid`.
 
 The user process deliberately uses ordinary C data structures and ordinary uCore process execution. This makes the result a baseline for later comparison with the Agent-OS kernel-enhanced version.
 
@@ -50,6 +50,7 @@ The platform programs add an executable multi-process shape:
 - `rp_evidence`
 - `rp_llm_bridge`
 - `rp_privacy`
+- `rp_execobs`
 - `rp_package`
 - `rp_delta`
 - `rp_release`
@@ -124,6 +125,10 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_llmeval` | LLM bridge | privacy, package, release, dossier, metrics, compare, orchestrator | template response evaluation cases, grounded answer count, route switches, and fallback use |
 | `rp_privacy` | privacy | release | outbound packet review result |
 | `rp_compliance` | privacy | package, release, dossier, metrics, compare, orchestrator | policy compliance result covering access profiles, data use rules, LLM packets, secret placement, and license checks |
+| `rp_execplan` | execution observer | package, dossier, metrics, compare, orchestrator | plain-kernel execution plan, workflow step count, scheduled task count, worker slots, retry items, and LLM packet count |
+| `rp_worker` | execution observer | package, metrics, compare, orchestrator | worker health, heartbeat count, queue actions, and failure handling actions |
+| `rp_timeline` | execution observer | release, package, dossier, metrics, compare, orchestrator | run timeline, stage order, tick span, and critical path |
+| `rp_execobs` | execution observer | release, package, dossier, metrics, compare, orchestrator | observer packet summary connecting execution plan, timeline, worker health, and evidence readiness |
 | `rp_package` | package | compare | packaged artifact and release summary |
 | `rp_diff` | delta | release, dossier, metrics, compare, orchestrator | release candidate difference summary across report, data, figures, risk, and reproduction evidence |
 | `rp_delta` | delta | release, dossier, metrics, compare, orchestrator | release delta review with accepted item count, blocked count, package, risk, and reproduction status |

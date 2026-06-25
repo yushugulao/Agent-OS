@@ -29,6 +29,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_llmlog", "request_packets=3");
 	ok = ok && rp_file_contains("rp_relay", "mode=host_file_relay");
 	ok = ok && rp_file_contains("rp_relay", "relay_packets=3");
+	ok = ok && rp_file_contains("rp_execobs", "observer=ready");
+	ok = ok && rp_file_contains("rp_timeline", "events=9");
+	ok = ok && rp_file_contains("rp_worker", "heartbeats=4");
 	ok = ok && rp_file_contains("rp_policy", "license_checks=2");
 	ok = ok && rp_file_contains("rp_compliance", "decision=accepted");
 	ok = ok && rp_file_contains("rp_audit", "release=ready");
@@ -36,8 +39,8 @@ int main(void)
 	if (!ok) return 1;
 	if (!rp_write_file("rp_package",
 			   "package=research-evidence-package\n"
-			   "artifacts=15\n"
-			   "checks=31\n"
+			   "artifacts=16\n"
+			   "checks=34\n"
 			   "release=ready\n"
 			   "status=ready\n")) {
 		return 1;
@@ -78,10 +81,11 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=package.attach_llm_eval;target=rp_llmeval;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_evidence_path;target=rp_provpath;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_data_records;target=rp_dataprof;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_execobs;target=rp_execobs;status=ok")) return 1;
 	if (!rp_append_status("package=ready")) return 1;
 	if (!rp_append_status("datarel=ready")) return 1;
 	if (!rp_append_status("dataver=ready")) return 1;
 	if (!rp_append_status("repro=ready")) return 1;
-	printf("rp_package: artifacts=15 checks=31 fair=passed repro=ready status=ready\n");
+	printf("rp_package: artifacts=16 checks=34 fair=passed repro=ready status=ready\n");
 	return 0;
 }

@@ -23,14 +23,15 @@ int main(void)
 			   "msg=13;from=planner;to=dossier;task=prepare_review_material\n"
 			   "msg=14;from=planner;to=metrics;task=measure_plain_kernel\n"
 			   "msg=15;from=planner;to=governance;task=register_risk_capa\n"
-			   "msg=16;from=planner;to=delta;task=review_release_delta\n")) {
+			   "msg=16;from=planner;to=delta;task=review_release_delta\n"
+			   "msg=17;from=planner;to=execobs;task=observe_execution\n")) {
 		return 1;
 	}
 	if (!rp_write_file("rp_sched",
-			   "queue_items=16\n"
-			   "ready_items=16\n"
+			   "queue_items=17\n"
+			   "ready_items=17\n"
 			   "priority_high=3\n"
-			   "priority_normal=13\n"
+			   "priority_normal=14\n"
 			   "retry_policy=minimal_rerun\n"
 			   "deadline_model=stage_order\n"
 			   "status=ready\n")) {
@@ -52,7 +53,8 @@ int main(void)
 			   "msg=13;owner=dossier;stage=material;prio=N;class=paper;state=ready\n"
 			   "msg=14;owner=metrics;stage=measure;prio=N;class=telemetry;state=ready\n"
 			   "msg=15;owner=governance;stage=risk_capa;prio=N;class=review;state=ready\n"
-			   "msg=16;owner=delta;stage=release_delta;prio=N;class=release;state=ready\n")) {
+			   "msg=16;owner=delta;stage=release_delta;prio=N;class=release;state=ready\n"
+			   "msg=17;owner=execobs;stage=execution_trace;prio=N;class=telemetry;state=ready\n")) {
 		return 1;
 	}
 	if (!rp_write_file("rp_budget",
@@ -110,6 +112,6 @@ int main(void)
 	if (!rp_append_status("budget=ready")) return 1;
 	if (!rp_append_status("wfio=ready")) return 1;
 	if (!rp_append_status("policy=ready")) return 1;
-	printf("rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 messages=16 schedule=ready status=planned\n");
+	printf("rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 messages=17 schedule=ready status=planned\n");
 	return 0;
 }
