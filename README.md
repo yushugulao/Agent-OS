@@ -45,6 +45,7 @@ user/src/rp_release.c
 user/src/rp_dossier.c
 user/src/rp_metrics.c
 user/src/rp_backend.c
+user/src/rp_consistency.c
 user/src/rp_compare_plain.c
 ```
 
@@ -59,7 +60,7 @@ user/src/rp_compare_plain.c
 - A plain user-space research run simulation with planning, literature, analysis, review, writing, repair, and audit roles.
 - Local catalog search for workflow, Agent, evidence, provenance, and LLM related platform objects.
 
-`rp_orch` runs twenty-nine platform programs as separate uCore user processes:
+`rp_orch` runs thirty platform programs as separate uCore user processes:
 
 - catalog,
 - object store,
@@ -87,8 +88,9 @@ user/src/rp_compare_plain.c
 - release delta review,
 - release decision,
 - final dossier,
-- metrics service,
 - backend scenario,
+- cross-file consistency check,
+- metrics service,
 - plain-kernel comparison.
 
 It uses ordinary `fork`, `exec`, and `waitpid`. This provides a plain-kernel baseline for the later Agent-OS multi-Agent version.
@@ -185,6 +187,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_backend_exec`
 - `rp_backend_export`
 - `rp_study`
+- `rp_consistency`
 - `rp_compare`
 
 Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_compare` after all children exit, then prints `state_ok=1`.
@@ -224,7 +227,7 @@ rp_plain: passed
 Expected orchestrator output:
 
 ```text
-rp_orch: start programs=29
+rp_orch: start programs=30
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_object_store: records=8 status=ready
 rp_object_query: hits=8 ready_hits=7 status=ready
@@ -251,10 +254,11 @@ rp_package: artifacts=19 checks=40 fair=passed repro=ready status=ready
 rp_delta: items=20 reviews=1 decision=accepted status=ready
 rp_release: decision=release checks=17 status=ready
 rp_dossier: sections=36 review_board=accepted submit=ready status=ready
-rp_metrics: telemetry_spans=8 acks=20 tools=70 delta_items=20 status=ready
 rp_backend: cases=4 executable=2 exports=1 status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=29 state_files=91 acks=22 tools=76 status=ready
-rp_orch: programs_ok=29 programs_total=29
+rp_consistency: checks=28 tasks=21 llm=3 backend=4 status=ready
+rp_metrics: telemetry_spans=8 acks=23 tools=79 delta_items=20 status=ready
+rp_compare_plain: plain_kernel=passed objects=500 programs=30 state_files=92 acks=23 tools=79 status=ready
+rp_orch: programs_ok=30 programs_total=30
 rp_orch: state_ok=1
 rp_orch: passed
 ```
@@ -275,7 +279,7 @@ No output means the directories match.
 
 ## Next Work
 
-The current native programs prove that the plain uCore kernel can boot and run a research-platform-shaped catalog process plus a multi-process workflow with ordinary file-backed object storage, task messages, role acknowledgements, tool logs, scheduling records, task records, workflow import/export description, resource budget, project policy, risk register, CAPA records, failure classification, retry records, query, task ranking, run view, run configuration, workflow invocation, completion actions, execution plan, worker health, execution timeline, observer evidence, lineage, site export, data dictionary, data profile records, figure records, calculation replay, samples, quality, protocol, SOP, experiment, trial records, lab operations, personnel training, telemetry, health summary, evidence, claim records, provenance paths, knowledge, semantic summary, systematic review summary, multi-round review, report revision package, LLM packet queue, host relay description, prompt routing, LLM audit log, LLM evaluation, privacy review, compliance record, release delta review, FAIR data release, data product summary, data product versioning, reproduction package, release, dossier, review governance, submission package, backend scenario evidence, AgentCompare metrics, and comparison services. Further migration work should move more behavior from embedded tables into active user-space services:
+The current native programs prove that the plain uCore kernel can boot and run a research-platform-shaped catalog process plus a multi-process workflow with ordinary file-backed object storage, task messages, role acknowledgements, tool logs, scheduling records, task records, workflow import/export description, resource budget, project policy, risk register, CAPA records, failure classification, retry records, query, task ranking, run view, run configuration, workflow invocation, completion actions, execution plan, worker health, execution timeline, observer evidence, lineage, site export, data dictionary, data profile records, figure records, calculation replay, samples, quality, protocol, SOP, experiment, trial records, lab operations, personnel training, telemetry, health summary, evidence, claim records, provenance paths, knowledge, semantic summary, systematic review summary, multi-round review, report revision package, LLM packet queue, host relay description, prompt routing, LLM audit log, LLM evaluation, privacy review, compliance record, release delta review, FAIR data release, data product summary, data product versioning, reproduction package, release, dossier, review governance, submission package, backend scenario evidence, cross-file consistency checks, AgentCompare metrics, and comparison services. Further migration work should move more behavior from embedded tables into active user-space services:
 
 - Persistent platform state files in the uCore root file system.
 - Expand the planner, retriever, analyst, reviewer, governance, writer, repair, auditor, object query, lineage, export, scheduling, task ranking, workflow import/export, resource budget, project policy, risk register, CAPA records, release delta review, run configuration, workflow invocation, workflow completion, execution observer, backend scenario, failure classification, retry handling, run views, data dictionary, data profile records, figure records, calculation replay, sample, quality, protocol, SOP, experiment, trial records, lab operations, telemetry, health summaries, evidence, claim records, provenance paths, knowledge, FAIR data release, data product versioning, reproduction, review governance, LLM packet queue, host relay description, prompt routing, LLM evaluation, privacy, compliance, release, dossier, submission, and AgentCompare programs beyond the current fixed records.

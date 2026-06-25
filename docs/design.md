@@ -13,7 +13,7 @@ The current runtime has four parts:
 1. Upstream uCore kernel.
 2. Restored uCore user library and program build flow.
 3. `rp_plain`, a native user process that carries the research platform catalog, feature groups, mature platform mappings, and self-check logic.
-4. `rp_orch`, a native user process that runs twenty-nine platform programs through ordinary `fork`, `exec`, and `waitpid`.
+4. `rp_orch`, a native user process that runs thirty platform programs through ordinary `fork`, `exec`, and `waitpid`.
 
 The user process deliberately uses ordinary C data structures and ordinary uCore process execution. This makes the result a baseline for later comparison with the Agent-OS kernel-enhanced version.
 
@@ -58,8 +58,9 @@ The platform programs add an executable multi-process shape:
 - `rp_delta`
 - `rp_release`
 - `rp_dossier`
-- `rp_metrics`
 - `rp_backend`
+- `rp_consistency`
+- `rp_metrics`
 - `rp_compare_plain`
 
 These programs do not require Agent syscalls. They are ordinary uCore processes that make the plain-kernel baseline closer to the original multi-role research Agent platform.
@@ -160,6 +161,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_backend_exec` | backend scenario | compare, orchestrator | backend scenario execution result for executable and planned cases |
 | `rp_backend_export` | backend scenario | compare, orchestrator | backend scenario export record |
 | `rp_study` | backend scenario | compare, orchestrator | same-workflow backend study summary |
+| `rp_consistency` | consistency checker | metrics, compare, orchestrator | derived checks across task records, LLM packets, workflow invocation, completion hooks, and backend cases |
 | `rp_compare` | compare | orchestrator | plain-kernel execution summary |
 
 This is intentionally implemented without new syscalls. It uses only `open`, `read`, `write`, `close`, `fork`, `exec`, and `waitpid`.

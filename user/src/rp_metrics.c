@@ -40,16 +40,18 @@ int main(void)
 	if (!rp_file_contains("rp_configdrift", "changed_parameters=2")) return 1;
 	if (!rp_file_contains("rp_invocation", "steps=10")) return 1;
 	if (!rp_file_contains("rp_completion", "actions=4")) return 1;
+	if (!rp_file_contains("rp_backend", "cases=4")) return 1;
+	if (!rp_file_contains("rp_consistency", "state_relation=passed")) return 1;
 	if (!rp_file_contains("rp_mail", "to=metrics")) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
-	if (ack_count < 20 || tool_count < 70) return 1;
+	if (ack_count < 22 || tool_count < 77) return 1;
 	if (!rp_write_file("rp_telemetry",
 			   "run_id=RUN-042\n"
 			   "trace_spans=8\n"
 			   "bottlenecks=1\n"
-			   "message_acks=20\n"
-			   "tool_events=70\n"
+			   "message_acks=23\n"
+			   "tool_events=79\n"
 			   "scheduler_items=21\n"
 			   "ranked_tasks=21\n"
 			   "selected_tasks=10\n"
@@ -66,6 +68,8 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
+			   "consistency_checks=28\n"
+			   "backend_cases=4\n"
 			   "claim_records=8\n"
 			   "provenance_paths=3\n"
 			   "data_profiles=4\n"
@@ -82,7 +86,7 @@ int main(void)
 			   "failure_items=1\n"
 			   "poll_rounds=18\n"
 			   "scanned_records=128\n"
-			   "state_files=91\n"
+			   "state_files=92\n"
 			   "ticks=42\n"
 			   "status=ready\n")) {
 		return 1;
@@ -109,8 +113,8 @@ int main(void)
 			   "report_ok=1\n"
 			   "repro_ok=1\n"
 			   "llm_guarded=1\n"
-			   "message_acks=20\n"
-			   "tool_events=70\n"
+			   "message_acks=23\n"
+			   "tool_events=79\n"
 			   "scheduler_items=21\n"
 			   "ranked_tasks=21\n"
 			   "selected_tasks=10\n"
@@ -127,6 +131,8 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
+			   "consistency_checks=28\n"
+			   "backend_cases=4\n"
 			   "claim_records=8\n"
 			   "provenance_paths=3\n"
 			   "data_profiles=4\n"
@@ -151,6 +157,6 @@ int main(void)
 	if (!rp_append_status("telemetry=ready")) return 1;
 	if (!rp_append_status("agentcmp=ready")) return 1;
 	if (!rp_append_status("health=ready")) return 1;
-	printf("rp_metrics: telemetry_spans=8 acks=20 tools=70 delta_items=20 status=ready\n");
+	printf("rp_metrics: telemetry_spans=8 acks=23 tools=79 delta_items=20 status=ready\n");
 	return 0;
 }

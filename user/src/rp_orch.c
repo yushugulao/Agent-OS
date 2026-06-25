@@ -30,8 +30,9 @@ static const char *PROGRAMS[] = {
 	"rp_delta",
 	"rp_release",
 	"rp_dossier",
-	"rp_metrics",
 	"rp_backend",
+	"rp_consistency",
+	"rp_metrics",
 	"rp_compare_plain",
 };
 
@@ -158,6 +159,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_status", "backend_exec=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "backend_export=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "study=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "consistency=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "compare=ready");
 	state_ok = state_ok && rp_file_contains("rp_audit", "status=passed");
 	state_ok = state_ok && rp_file_contains("rp_compare", "plain_kernel=passed");
@@ -213,12 +215,14 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_completion", "actions=4");
 	state_ok = state_ok && rp_file_contains("rp_backend", "cases=4");
 	state_ok = state_ok && rp_file_contains("rp_backend_exec", "passed_cases=2");
+	state_ok = state_ok && rp_file_contains("rp_consistency", "state_relation=passed");
+	state_ok = state_ok && rp_file_contains("rp_consistency", "checks=28");
 	state_ok = state_ok && rp_file_contains("rp_repro", "notebook_replay=passed");
 	state_ok = state_ok && rp_file_contains("rp_submit", "review_response=ready");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "report_ok=1");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "repro_ok=1");
-	state_ok = state_ok && rp_file_contains("rp_agentcmp", "message_acks=20");
-	state_ok = state_ok && rp_file_contains("rp_agentcmp", "tool_events=70");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "message_acks=23");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "tool_events=79");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "scheduler_items=21");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "ranked_tasks=21");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "selected_tasks=10");
@@ -248,9 +252,11 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_backend_export", "exports=1");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "health_ok=1");
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=metrics;msg=14;status=ready");
+	state_ok = state_ok && rp_file_contains("rp_ack", "ack=consistency;msg=22;status=ready");
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=metrics.measure_plain");
-	state_ok = state_ok && (rp_count_lines("rp_ack") >= 22);
-	state_ok = state_ok && (rp_count_lines("rp_tool") >= 76);
+	state_ok = state_ok && rp_file_contains("rp_tool", "tool=consistency.check_tasks");
+	state_ok = state_ok && (rp_count_lines("rp_ack") >= 23);
+	state_ok = state_ok && (rp_count_lines("rp_tool") >= 79);
 	state_ok = state_ok && rp_file_contains("rp_protocol", "ethics=approved");
 	printf("rp_orch: state_ok=%d\n", state_ok);
 	if (!state_ok) {

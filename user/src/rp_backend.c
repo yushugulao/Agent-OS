@@ -4,9 +4,7 @@
 int main(void)
 {
 	int ok = 1;
-	ok = ok && rp_file_contains("rp_agentcmp", "status=ready");
 	ok = ok && rp_file_contains("rp_package", "status=ready");
-	ok = ok && rp_file_contains("rp_telemetry", "status=ready");
 	ok = ok && rp_file_contains("rp_runconf", "candidate=agentos-ucore");
 	ok = ok && rp_file_contains("rp_invocation", "status=recovered");
 	ok = ok && rp_file_contains("rp_completion", "status=ready");

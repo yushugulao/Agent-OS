@@ -103,6 +103,39 @@ static RP_UNUSED int rp_count_token(const char *path, const char *needle)
 	return count;
 }
 
+static RP_UNUSED int rp_parse_decimal(const char *s)
+{
+	int value = 0;
+	int found = 0;
+	while (*s >= '0' && *s <= '9') {
+		found = 1;
+		value = value * 10 + (*s - '0');
+		s++;
+	}
+	return found ? value : -1;
+}
+
+static RP_UNUSED int rp_get_int_value(const char *path, const char *key)
+{
+	char *buf = rp_state_buf;
+	int n = rp_read_file(path, buf, RP_STATE_BUFFER_SIZE);
+	if (n < 0) return -1;
+	int key_len = (int)strlen(key);
+	for (int i = 0; i <= n - key_len; i++) {
+		int same = 1;
+		for (int j = 0; j < key_len; j++) {
+			if (buf[i + j] != key[j]) {
+				same = 0;
+				break;
+			}
+		}
+		if (same) {
+			return rp_parse_decimal(buf + i + key_len);
+		}
+	}
+	return -1;
+}
+
 static RP_UNUSED int rp_append_file(const char *path, const char *line)
 {
 	char *buf = rp_state_buf;
