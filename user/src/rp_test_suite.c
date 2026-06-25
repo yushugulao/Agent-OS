@@ -145,25 +145,68 @@ int main(void)
 	ok = ok && require_file_token("rp_agent_run", "agent_decisions=8");
 
 	ok = ok && require_file_token("rp_llmq", "secret_policy=no_secret_in_ucore");
+	ok = ok && require_file_token("rp_llmq", "queue_validation=passed");
+	ok = ok && require_file_token("rp_llmq", "schema_checks=3");
+	ok = ok && require_file_token("rp_llmq", "dispatch_ready=3");
+	ok = ok && require_file_token("rp_llmq", "route_decisions=3");
+	ok = ok && require_file_token("rp_llmq", "secret_policy_records=3");
 	ok = ok && require_file_token("rp_llm_resp", "responses=3");
 	ok = ok && require_file_token("rp_llm_resp", "matched_requests=3");
+	ok = ok && require_file_token("rp_llm_resp", "response_join=passed");
+	ok = ok && require_file_token("rp_llm_resp", "response_hash_records=3");
+	ok = ok && require_file_token("rp_llm_resp", "grounded_references=5");
+	ok = ok && require_file_token("rp_llm_resp", "template_provider=plain_ucore_deterministic");
+	ok = ok && require_file_token("rp_llm_resp", "host_cloud_provider=optional");
 	ok = ok && require_file_token("rp_llm_resp", "host_relay_roundtrip=ready");
 	ok = ok && require_file_token("rp_llm_resp", "match=q1->r1,q2->r2,q3->r3");
 	ok = ok && require_file_token("rp_relay", "network_stack=host_only");
+	ok = ok && require_file_token("rp_relay", "queue_consumer=rp_llm_relay");
+	ok = ok && require_file_token("rp_relay", "handoff_contract=ordinary_files");
+	ok = ok && require_file_token("rp_relay", "request_validation=passed");
+	ok = ok && require_file_token("rp_relay", "response_validation=passed");
 	ok = ok && require_file_token("rp_llm_packets", "packets=3");
+	ok = ok && require_file_token("rp_llm_packets", "validated_packets=3");
+	ok = ok && require_file_token("rp_llm_packets", "dispatch_records=3");
+	ok = ok && require_file_token("rp_llm_packets", "response_join=passed");
+	ok = ok && require_file_token("rp_llm_packets", "packet_schema=passed");
+	ok = ok && require_file_token("rp_llm_packets", "retry_policy=template_fallback");
 	ok = ok && require_file_token("rp_llm_packets", "matched_responses=3");
 	ok = ok && require_file_token("rp_llm_packets", "roundtrip=ready");
 	ok = ok && require_file_token("rp_llm_routes", "routes=4");
+	ok = ok && require_file_token("rp_llm_routes", "route_policy=deterministic_then_host_optional");
+	ok = ok && require_file_token("rp_llm_routes", "route_decision=review_summary->template");
+	ok = ok && require_file_token("rp_llm_routes", "route_decision=method_check->template");
+	ok = ok && require_file_token("rp_llm_routes", "route_decision=recovery_note->template");
 	ok = ok && require_file_token("rp_llm_routes", "roundtrip_routes=3");
 	ok = ok && require_file_token("rp_llm_guard", "secrets_in_ucore=0");
+	ok = ok && require_file_token("rp_llm_guard", "payload_hashes=3");
+	ok = ok && require_file_token("rp_llm_guard", "pii_scan=passed");
+	ok = ok && require_file_token("rp_llm_guard", "secret_scan=passed");
+	ok = ok && require_file_token("rp_llm_guard", "blocked_packets=0");
 	ok = ok && require_file_token("rp_llm_hostreq", "template_mode=ready");
 	ok = ok && require_file_token("rp_llm_hostreq", "host_request_records=3");
 	ok = ok && require_file_token("rp_llm_hostreq", "host_response_records=3");
+	ok = ok && require_file_token("rp_llm_hostreq", "host_request_manifest=ready");
+	ok = ok && require_file_token("rp_llm_hostreq", "host_response_manifest=ready");
+	ok = ok && require_file_token("rp_llm_hostreq", "cloud_disabled_reason=host_env_absent_in_plain_ucore");
+	ok = ok && require_file_token("rp_llm_hostreq", "template_execution=ready");
 	ok = ok && require_file_token("rp_llm_hostreq", "roundtrip=ready");
 	ok = ok && require_file_token("rp_llm_fallback", "fallback_cases=1");
+	ok = ok && require_file_token("rp_llm_fallback", "fallback_decision=template_for_missing_key");
+	ok = ok && require_file_token("rp_llm_fallback", "fallback_decision=template_for_network_loss");
+	ok = ok && require_file_token("rp_llm_fallback", "fallback_decision=stop_for_privacy_reject");
+	ok = ok && require_file_token("rp_llm_fallback", "fallback_trace=rp_llm_guard->rp_llm_fallback->rp_llm_resp");
 	ok = ok && require_file_token("rp_llm_fallback", "offline_template_verified=1");
 	ok = ok && require_file_token("rp_prompt", "provider_policy=host_relay");
 	ok = ok && require_file_token("rp_llmeval", "passed=7");
+	ok = ok && require_file_token("rp_llmeval", "queue_checks=3");
+	ok = ok && require_file_token("rp_llmeval", "route_checks=3");
+	ok = ok && require_file_token("rp_llmeval", "privacy_checks=3");
+	ok = ok && require_file_token("rp_llmeval", "fallback_checks=3");
+	ok = ok && require_file_token("rp_llmlog", "queue_validation=passed");
+	ok = ok && require_file_token("rp_llmlog", "dispatch_records=3");
+	ok = ok && require_file_token("rp_llmlog", "response_join=passed");
+	ok = ok && require_file_token("rp_llmlog", "secret_scan=passed");
 	ok = ok && require_file_token("rp_privacy", "decision=accepted");
 	ok = ok && require_file_token("rp_compliance", "decision=accepted");
 
@@ -626,7 +669,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=548\n"
+			   "tests=591\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -674,6 +717,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=548 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=591 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }
