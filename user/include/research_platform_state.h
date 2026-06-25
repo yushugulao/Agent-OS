@@ -68,6 +68,38 @@ static RP_UNUSED int rp_file_contains(const char *path, const char *needle)
 	return 0;
 }
 
+static RP_UNUSED int rp_count_lines(const char *path)
+{
+	char buf[768];
+	int n = rp_read_file(path, buf, sizeof(buf));
+	if (n < 0) return -1;
+	int count = 0;
+	for (int i = 0; i < n; i++) {
+		if (buf[i] == '\n') count++;
+	}
+	return count;
+}
+
+static RP_UNUSED int rp_count_token(const char *path, const char *needle)
+{
+	char buf[768];
+	int n = rp_read_file(path, buf, sizeof(buf));
+	if (n < 0) return -1;
+	int count = 0;
+	int needle_len = (int)strlen(needle);
+	for (int i = 0; i <= n - needle_len; i++) {
+		int same = 1;
+		for (int j = 0; j < needle_len; j++) {
+			if (buf[i + j] != needle[j]) {
+				same = 0;
+				break;
+			}
+		}
+		if (same) count++;
+	}
+	return count;
+}
+
 static RP_UNUSED int rp_append_status(const char *line)
 {
 	char buf[768];

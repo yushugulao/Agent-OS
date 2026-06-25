@@ -15,8 +15,8 @@ It is not the Agent-OS kernel-enhanced version. There are no Agent syscalls, Age
 The first native uCore entries are:
 
 ```text
-user/src/research_platform_ucore_plain.c
-user/src/research_platform_orchestrator.c
+user/src/rp_plain.c
+user/src/rp_orch.c
 user/src/rp_catalog.c
 user/src/rp_planner.c
 user/src/rp_retriever.c
@@ -31,7 +31,7 @@ user/src/rp_package.c
 user/src/rp_compare_plain.c
 ```
 
-`research_platform_ucore_plain` is a normal uCore user process. It embeds the current pure user-space research platform catalog and validates:
+`rp_plain` is a normal uCore user process. It embeds the current pure user-space research platform catalog and validates:
 
 - 500 platform object counters.
 - 120 service names.
@@ -42,16 +42,20 @@ user/src/rp_compare_plain.c
 - A plain user-space research run simulation with planning, literature, analysis, review, writing, repair, and audit roles.
 - Local catalog search for workflow, Agent, evidence, provenance, and LLM related platform objects.
 
-`research_platform_orchestrator` runs twelve platform programs as separate uCore user processes:
+`rp_orch` runs sixteen platform programs as separate uCore user processes:
 
 - catalog,
+- object store,
+- object query,
+- lineage,
+- site export,
 - planner,
 - retriever,
 - analyst,
 - reviewer,
 - writer,
 - repair,
-- auditor.
+- auditor,
 - query,
 - evidence,
 - package,
@@ -71,6 +75,10 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_status`
 - `rp_objects`
 - `rp_services`
+- `rp_object_records`
+- `rp_object_query`
+- `rp_lineage`
+- `rp_site`
 - `rp_query`
 - `rp_evidence`
 - `rp_package`
@@ -81,7 +89,7 @@ Each program validates the files it depends on before writing its own artifact. 
 The program prints:
 
 ```text
-research_platform_ucore_plain: passed
+rp_plain: passed
 ```
 
 when the built-in checks pass.
@@ -95,26 +103,30 @@ cd /mnt/e/计算机操作系统能力竞赛/project61-agentOS-happylegend-uCore
 make -C user clean
 make clean
 make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform
-make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=research_platform_ucore_plain
-timeout 45s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=research_platform_ucore_plain
-make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=research_platform_orchestrator
-timeout 45s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=research_platform_orchestrator
+make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=rp_plain
+timeout 45s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=rp_plain
+make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=rp_orch
+timeout 45s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=rp_orch
 ```
 
 Expected key output:
 
 ```text
-research_platform_ucore_plain summary
+rp_plain summary
 objects=500 object_total=102790 services=120 features=28 feature_units=299 checks=13 references=6 mappings=6
 catalog_ok=1 checks_ok=1 mature_ok=1 run_ok=1 search_ok=1
-research_platform_ucore_plain: passed
+rp_plain: passed
 ```
 
 Expected orchestrator output:
 
 ```text
-research_platform_orchestrator: start programs=12
+rp_orch: start programs=16
 rp_catalog: objects=500 services=120 features=28 status=ready
+rp_object_store: records=8 status=ready
+rp_object_query: hits=8 ready_hits=7 status=ready
+rp_lineage: edges=7 status=ready
+rp_site_export: pages=6 status=ready
 rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 status=planned
 rp_retriever: literature=3 evidence_links=5 status=ready
 rp_analyst: datasets=4 statistics=6 figures=3 status=ready
@@ -125,10 +137,10 @@ rp_auditor: provenance=verified release=ready package=ready status=passed
 rp_query: workflow=34 agent=26 evidence=10 status=ready
 rp_evidence: claims=8 links=5 provenance=12 status=ready
 rp_package: artifacts=8 checks=13 release=ready status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=12 status=ready
-research_platform_orchestrator: programs_ok=12 programs_total=12
-research_platform_orchestrator: state_ok=1
-research_platform_orchestrator: passed
+rp_compare_plain: plain_kernel=passed objects=500 programs=16 status=ready
+rp_orch: programs_ok=16 programs_total=16
+rp_orch: state_ok=1
+rp_orch: passed
 ```
 
 The current upstream uCore kernel prints `all app are over!` after the init user program exits. In this branch that message means the plain user program finished and the kernel reached its existing no-more-apps path.
@@ -147,10 +159,10 @@ No output means the directories match.
 
 ## Next Work
 
-The current native programs prove that the plain uCore kernel can boot and run a research-platform-shaped catalog process plus a multi-process workflow with ordinary file-backed state, query, evidence, package, and comparison services. Further migration work should move more behavior from embedded tables into active user-space services:
+The current native programs prove that the plain uCore kernel can boot and run a research-platform-shaped catalog process plus a multi-process workflow with ordinary file-backed object storage, query, lineage, site export, evidence, package, and comparison services. Further migration work should move more behavior from embedded tables into active user-space services:
 
 - Persistent platform state files in the uCore root file system.
-- Expand the planner, retriever, analyst, reviewer, writer, repair, and auditor programs beyond the current fixed records.
+- Expand the planner, retriever, analyst, reviewer, writer, repair, auditor, object query, lineage, and export programs beyond the current fixed records.
 - A user-space message protocol using only unchanged uCore syscalls.
 - A host LLM gateway bridge exposed as ordinary input/output files or console packets.
 - More executable checks for workflow portability, release review, and AgentCompare comparison.

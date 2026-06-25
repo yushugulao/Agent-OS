@@ -5,6 +5,10 @@
 
 static const char *PROGRAMS[] = {
 	"rp_catalog",
+	"rp_object_store",
+	"rp_object_query",
+	"rp_lineage",
+	"rp_site_export",
 	"rp_planner",
 	"rp_retriever",
 	"rp_analyst",
@@ -24,7 +28,7 @@ static int run_child(const char *program)
 	if (pid == 0) {
 		char *argv[] = { (char *)program, 0 };
 		if (exec(program, argv) < 0) {
-			printf("research_platform_orchestrator: exec_failed program=%s\n", program);
+			printf("rp_orch: exec_failed program=%s\n", program);
 			exit(1);
 		}
 		exit(1);
@@ -32,11 +36,11 @@ static int run_child(const char *program)
 	int code = -1;
 	int got = waitpid(pid, &code);
 	if (got != pid) {
-		printf("research_platform_orchestrator: wait_failed program=%s\n", program);
+		printf("rp_orch: wait_failed program=%s\n", program);
 		return 0;
 	}
 	if (code != 0) {
-		printf("research_platform_orchestrator: child_failed program=%s code=%d\n", program, code);
+		printf("rp_orch: child_failed program=%s code=%d\n", program, code);
 		return 0;
 	}
 	return 1;
@@ -46,17 +50,21 @@ int main(void)
 {
 	int total = (int)(sizeof(PROGRAMS) / sizeof(PROGRAMS[0]));
 	int ok = 0;
-	printf("research_platform_orchestrator: start programs=%d\n", total);
+	printf("rp_orch: start programs=%d\n", total);
 	for (int i = 0; i < total; i++) {
 		ok += run_child(PROGRAMS[i]);
 	}
-	printf("research_platform_orchestrator: programs_ok=%d programs_total=%d\n", ok, total);
+	printf("rp_orch: programs_ok=%d programs_total=%d\n", ok, total);
 	if (ok != total) {
-		printf("research_platform_orchestrator: failed\n");
+		printf("rp_orch: failed\n");
 		return 1;
 	}
 	int state_ok = 1;
 	state_ok = state_ok && rp_file_contains("rp_status", "catalog=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "object_store=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "object_query=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "lineage=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "site_export=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "planner=planned");
 	state_ok = state_ok && rp_file_contains("rp_status", "retriever=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "analyst=ready");
@@ -70,11 +78,14 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_status", "compare=ready");
 	state_ok = state_ok && rp_file_contains("rp_audit", "status=passed");
 	state_ok = state_ok && rp_file_contains("rp_compare", "plain_kernel=passed");
-	printf("research_platform_orchestrator: state_ok=%d\n", state_ok);
+	state_ok = state_ok && rp_file_contains("rp_object_query", "hits=8");
+	state_ok = state_ok && rp_file_contains("rp_lineage", "edges=7");
+	state_ok = state_ok && rp_file_contains("rp_site", "pages=6");
+	printf("rp_orch: state_ok=%d\n", state_ok);
 	if (!state_ok) {
-		printf("research_platform_orchestrator: failed\n");
+		printf("rp_orch: failed\n");
 		return 1;
 	}
-	printf("research_platform_orchestrator: passed\n");
+	printf("rp_orch: passed\n");
 	return 0;
 }

@@ -788,7 +788,7 @@ static int search_catalog(const char *needle) {
 }
 
 static void print_summary(void) {
-    printf("research_platform_ucore_plain summary\n");
+    printf("rp_plain summary\n");
     printf("objects=%d object_total=%d services=%d features=%d feature_units=%d checks=%d references=%d mappings=%d\n",
            ARRAY_LEN(OBJECTS), sum_objects(), ARRAY_LEN(SERVICES), ARRAY_LEN(FEATURES), sum_feature_units(), ARRAY_LEN(CHECKS), ARRAY_LEN(REFERENCES), ARRAY_LEN(MAPPINGS));
     printf("search workflow=%d agent=%d evidence=%d provenance=%d llm=%d\n",
@@ -813,9 +813,9 @@ int main(int argc, char **argv) {
     print_summary();
     int ok = selftest();
     if (!ok) {
-        printf("research_platform_ucore_plain: failed\n");
+        printf("rp_plain: failed\n");
         return 1;
     }
-    printf("research_platform_ucore_plain: passed\n");
+    printf("rp_plain: passed\n");
     return 0;
 }
