@@ -149,6 +149,21 @@ int main(void)
 	if (!rp_append_file("rp_runner", "custom_contains=Stage DAG,Agent Decisions,Artifacts,LLM Relay")) return 1;
 	if (!rp_append_file("rp_runner", "custom_status=ok")) return 1;
 	if (!rp_append_file("rp_runner", "custom_batch_status=ok")) return 1;
+	if (rp_host_seed_has("kind=research_run")) {
+		char seed_run[48];
+		if (!rp_host_seed_copy_value("run_id=", seed_run, sizeof(seed_run))) {
+			rp_copy_text(seed_run, sizeof(seed_run), "RUN-905");
+		}
+		if (!rp_append_host_action_line("rp_runner", "host_action_run=usable-run:", seed_run)) return 1;
+		if (!rp_append_file("rp_runner", "host_action_kind=research_run")) return 1;
+		if (!rp_append_file("rp_runner", "host_action_stages=5")) return 1;
+		if (!rp_append_file("rp_runner", "host_action_artifacts=6")) return 1;
+		if (!rp_append_file("rp_runner", "host_action_report=host action research task completed from seeded inbox")) return 1;
+		if (!rp_append_file("rp_runner", "host_action_status=completed")) return 1;
+	}
+	if (rp_host_seed_has("kind=agentcompare")) {
+		if (!rp_append_file("rp_runner", "host_action_compare=plain_ucore;status=ready")) return 1;
+	}
 	if (!rp_append_file("rp_runner", "real_artifact_items=5")) return 1;
 	if (!rp_append_file("rp_runner", "derived_alignment=rp_artifact:rp_align_table")) return 1;
 	if (!rp_append_file("rp_runner", "derived_metrics=rp_artifact:rp_metrics_json,rp_artifact:rp_gene_counts_csv")) return 1;

@@ -35,6 +35,31 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "sha_records=9");
 	ok = ok && rp_file_contains("rp_runner", "dynamic_input_runs=4");
 	ok = ok && rp_file_contains("rp_runner", "dynamic_run=usable-run:RUN-904");
+	if (rp_host_seed_has("kind=research_run")) {
+		char seed_run[48];
+		char token[120];
+		if (!rp_host_seed_copy_value("run_id=", seed_run, sizeof(seed_run))) {
+			rp_copy_text(seed_run, sizeof(seed_run), "RUN-905");
+		}
+		rp_copy_text(token, sizeof(token), "host_action_run_id=");
+		rp_append_text(token, sizeof(token), seed_run);
+		ok = ok && rp_file_contains("rp_input", token);
+		rp_copy_text(token, sizeof(token), "host_action_research_run=usable-run:");
+		rp_append_text(token, sizeof(token), seed_run);
+		ok = ok && rp_file_contains("rp_input", token);
+		rp_copy_text(token, sizeof(token), "host_action_run=usable-run:");
+		rp_append_text(token, sizeof(token), seed_run);
+		ok = ok && rp_file_contains("rp_runner", token);
+		ok = ok && rp_file_contains("rp_runner", "host_action_status=completed");
+		ok = ok && rp_file_contains("rp_agentcmp", "host_action_research_input=ready");
+		ok = ok && rp_file_contains("rp_actionio", "host_action_research_run=1");
+	}
+	if (rp_host_seed_has("kind=agentcompare")) {
+		ok = ok && rp_file_contains("rp_runner", "host_action_compare=plain_ucore;status=ready");
+		ok = ok && rp_file_contains("rp_agentcmp", "host_action_compare_requested=1");
+		ok = ok && rp_file_contains("rp_agentcmp", "host_action_compare_profile=plain_ucore");
+		ok = ok && rp_file_contains("rp_actionio", "host_action_agentcompare=1");
+	}
 	ok = ok && rp_file_contains("rp_lit", "literature_search=usable-literature-search:RUN-900:1");
 	ok = ok && rp_file_contains("rp_knowledge", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
 	ok = ok && rp_file_contains("rp_claimrec", "claim=8");
@@ -440,7 +465,16 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=168;message_acks=42;tool_events=144;action_state_records=12;test_cases=693;action_side_effect_records=16;llm_queue_checks=3;llm_guard_checks=3;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;status=ready")) return 1;
+	if (rp_host_seed_has("kind=research_run")) {
+		if (!rp_append_file("rp_agentcmp", "host_action_research_verified=1")) return 1;
+	}
+	if (rp_host_seed_has("kind=agentcompare")) {
+		if (!rp_append_file("rp_agentcmp", "host_action_compare_verified=1")) return 1;
+	}
 	if (!rp_append_status("compare=ready")) return 1;
+	if (rp_host_seed_count() > 0) {
+		printf("rp_compare_plain: host_actions=%d verified\n", rp_host_seed_count());
+	}
 	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=42 state_files=168 acks=42 tools=144 dynamic=4 reader=1 status=ready\n");
 	return 0;
 }

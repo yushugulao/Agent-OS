@@ -130,6 +130,26 @@ int main(void)
 	ok = ok && require_file_token("rp_runner", "dynamic_input_runs=4");
 	ok = ok && require_file_token("rp_runner", "dynamic_run=usable-run:RUN-904;source=api;status=queued;next=validate");
 	ok = ok && require_file_token("rp_runner", "dynamic_replay_plan=RUN-900->RUN-904");
+	if (rp_host_seed_has("kind=research_run")) {
+		char seed_run[48];
+		char token[120];
+		if (!rp_host_seed_copy_value("run_id=", seed_run, sizeof(seed_run))) {
+			rp_copy_text(seed_run, sizeof(seed_run), "RUN-905");
+		}
+		rp_copy_text(token, sizeof(token), "host_action_run_id=");
+		rp_append_text(token, sizeof(token), seed_run);
+		ok = ok && require_file_token("rp_input", token);
+		rp_copy_text(token, sizeof(token), "host_action_run=usable-run:");
+		rp_append_text(token, sizeof(token), seed_run);
+		ok = ok && require_file_token("rp_runner", token);
+		ok = ok && require_file_token("rp_runner", "host_action_status=completed");
+		ok = ok && require_file_token("rp_agentcmp", "host_action_research_input=ready");
+	}
+	if (rp_host_seed_has("kind=agentcompare")) {
+		ok = ok && require_file_token("rp_runner", "host_action_compare=plain_ucore;status=ready");
+		ok = ok && require_file_token("rp_agentcmp", "host_action_compare_requested=1");
+		ok = ok && require_file_token("rp_agentcmp", "host_action_compare_profile=plain_ucore");
+	}
 	ok = ok && require_file_token("rp_runner", "workbench=usable-workbench:RUN-900:plain-ucore");
 	ok = ok && require_file_token("rp_runner", "workbench_tasks=9");
 	ok = ok && require_file_token("rp_runner", "workbench_export=usable-workbench-export:RUN-900:1");

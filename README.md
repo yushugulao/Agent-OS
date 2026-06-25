@@ -412,7 +412,7 @@ python host_tools/plain_ucore_action_runner.py --actions runtime/plain_ucore_rea
 python host_tools/test_plain_ucore_action_runner.py
 ```
 
-The runner writes `state-next/rp_host_action_queue`, `state-next/rp_host_action_plan`, `state-next/rp_host_action_inbox`, `actions.json`, and `runner-summary.json`. With `--run-ucore`, it writes the inbox text into a generated user-build header, builds the ordinary user programs, runs `rp_orch`, and writes `ucore-run.log`. The queue and plan files stay in the host run package because the upstream uCore teaching file system has tight inode capacity.
+The runner writes `state-next/rp_host_action_queue`, `state-next/rp_host_action_plan`, `state-next/rp_host_action_inbox`, `actions.json`, and `runner-summary.json`. With `--run-ucore`, it writes the inbox text into a generated user-build header, builds the ordinary user programs, runs `rp_orch`, and writes `ucore-run.log`. The queue and plan files stay in the host run package because the upstream uCore teaching file system has tight inode capacity. Seeded `/actions/research/run` records are reflected in `rp_input`, `rp_runner`, and `rp_agentcmp`; seeded `/actions/agentcompare/run` records are reflected in `rp_runner`, `rp_actionio`, and `rp_agentcmp`.
 
 The reader is a host-side viewer and action-capture service for plain uCore output. It does not modify `os/`, `nfs/`, or `scripts`, and it does not add Agent-OS kernel features.
 

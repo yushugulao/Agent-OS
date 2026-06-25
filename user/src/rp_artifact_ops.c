@@ -104,6 +104,18 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (rp_host_seed_has("kind=research_run")) {
+		char seed_run[48];
+		if (!rp_host_seed_copy_value("run_id=", seed_run, sizeof(seed_run))) {
+			rp_copy_text(seed_run, sizeof(seed_run), "RUN-905");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_run_id=", seed_run)) return 1;
+		if (!rp_append_host_action_line("rp_input", "host_action_research_run=usable-run:", seed_run)) return 1;
+		if (!rp_append_file("rp_input", "host_action_source=rp_host_action_seed")) return 1;
+		if (!rp_append_file("rp_input", "host_action_state=accepted")) return 1;
+		if (!rp_append_file("rp_input", "host_action_dataset_rows=4")) return 1;
+		if (!rp_append_file("rp_input", "host_action_validation=passed")) return 1;
+	}
 	if (!rp_write_file("rp_input_fastq",
 			   "@RUN-042-read-1\n"
 			   "ACGTACGTACGT\n"

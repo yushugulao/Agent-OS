@@ -180,7 +180,7 @@ test_plain_ucore_reader: passed
 test_plain_ucore_action_runner: passed
 ```
 
-The action runner check verifies that captured host actions become `state-next/rp_host_action_queue`, `state-next/rp_host_action_plan`, `state-next/rp_host_action_inbox`, `actions.json`, and `runner-summary.json`. The optional runner path can also write the inbox text into a generated user-build header and execute `rp_orch` without changing the kernel source.
+The action runner check verifies that captured host actions become `state-next/rp_host_action_queue`, `state-next/rp_host_action_plan`, `state-next/rp_host_action_inbox`, `actions.json`, and `runner-summary.json`. The optional runner path can also write the inbox text into a generated user-build header and execute `rp_orch` without changing the kernel source. In the seeded run, `rp_web_export` prints `host_reader_actions=<n>`, `rp_compare_plain` prints `host_actions=<n> verified`, and the ordinary user programs write host-action effects into `rp_input`, `rp_runner`, `rp_actionio`, and `rp_agentcmp`.
 
 ## Current Coverage
 

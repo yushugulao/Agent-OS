@@ -306,6 +306,18 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (rp_host_seed_has("kind=research_run")) {
+		char seed_run[48];
+		if (!rp_host_seed_copy_value("run_id=", seed_run, sizeof(seed_run))) {
+			rp_copy_text(seed_run, sizeof(seed_run), "RUN-905");
+		}
+		if (!rp_append_host_action_line("rp_agentcmp", "host_action_research_run=usable-run:", seed_run)) return 1;
+		if (!rp_append_file("rp_agentcmp", "host_action_research_input=ready")) return 1;
+	}
+	if (rp_host_seed_has("kind=agentcompare")) {
+		if (!rp_append_file("rp_agentcmp", "host_action_compare_requested=1")) return 1;
+		if (!rp_append_file("rp_agentcmp", "host_action_compare_profile=plain_ucore")) return 1;
+	}
 	if (!rp_append_file("rp_ack", "ack=metrics;msg=14;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=metrics.measure_plain;target=rp_agentcmp;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=metrics.write_health;target=rp_health;status=ok")) return 1;
