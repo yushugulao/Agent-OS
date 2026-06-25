@@ -65,6 +65,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_retry_plan", "retry_items=1");
 	ok = ok && rp_file_contains("rp_run_events", "events=8");
 	ok = ok && rp_file_contains("rp_artifact_manifest", "manifest_records=4");
+	ok = ok && rp_file_contains("rp_review2", "review_summary=all_review_comments_resolved");
+	ok = ok && rp_file_contains("rp_review2", "action_items=2");
 	ok = ok && rp_file_contains("rp_agents", "agents=7");
 	ok = ok && rp_file_contains("rp_decisions", "decisions=8");
 	ok = ok && rp_file_contains("rp_handoff", "handoffs=6");
@@ -87,6 +89,11 @@ int main(void)
 			   "provenance_bundle=ready\n"
 			   "manifest_sources=rp_report_text,rp_chart_data,rp_artifact_manifest,rp_stage_log,rp_agents,rp_llm_packets\n"
 			   "review_sources=rp_review,rp_review2,rp_revision,rp_resrev,rp_peerresp,rp_dossier\n"
+			   "review_threads=2\n"
+			   "review_comments=3\n"
+			   "review_action_items=2\n"
+			   "review_thread_source=rp_review2\n"
+			   "review_action_source=rp_review2\n"
 			   "provenance_sources=rp_evidence,rp_claimrec,rp_provpath,rp_lineage,rp_repro,rp_audit\n"
 			   "custom_sources=rp_input,rp_runner,rp_uresrun\n"
 			   "download_index=report_bundle,evidence_bundle,provenance_bundle\n"
@@ -112,6 +119,7 @@ int main(void)
 			   "delivery_manifest_detail=deliverables=8;audience=reviewer;bundle=rp_package\n"
 			   "export_bundle_detail=bundle_units=3;raw_links=5;checksums=6;provenance_source=rp_provpath;delivery_manifest=rp_package\n"
 			   "review_page_detail=page=research-run;artifact_links=6;decision_controls=2;export_bundle=rp_package\n"
+			   "review_page_sections=Human Reviews,Delivery Manifests,Revision Tasks,Review Threads,Action Items\n"
 			   "real_inputs=1\n"
 			   "data_pipeline=1\n"
 			   "stage_logs=1\n"

@@ -7,6 +7,8 @@ int main(void)
 	if (!rp_file_contains("rp_release", "decision=release")) return 1;
 	if (!rp_file_contains("rp_wfio", "compatibility_checks=6")) return 1;
 	if (!rp_file_contains("rp_review2", "rounds=2")) return 1;
+	if (!rp_file_contains("rp_review2", "review_threads=2")) return 1;
+	if (!rp_file_contains("rp_review2", "action_items=2")) return 1;
 	if (!rp_file_contains("rp_revision", "draft_versions=3")) return 1;
 	if (!rp_file_contains("rp_dataver", "release_candidate=v2")) return 1;
 	if (!rp_file_contains("rp_repro", "status=ready")) return 1;
@@ -142,6 +144,8 @@ int main(void)
 			   "trial_records=4\n"
 			   "workflow_exports=2\n"
 			   "review_rounds=2\n"
+			   "review_threads=2\n"
+			   "review_action_items=2\n"
 			   "data_versions=2\n"
 			   "retry_attempts=2\n"
 			   "relay_packets=3\n"
@@ -241,6 +245,8 @@ int main(void)
 			   "trial_records=4\n"
 			   "workflow_exports=2\n"
 			   "review_rounds=2\n"
+			   "review_threads=2\n"
+			   "review_action_items=2\n"
 			   "data_versions=2\n"
 			   "retry_attempts=2\n"
 			   "relay_packets=3\n"

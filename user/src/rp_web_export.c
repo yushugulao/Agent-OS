@@ -31,6 +31,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_package", "artifact_links=6");
 	ok = ok && rp_file_contains("rp_package", "human_reviews=1");
 	ok = ok && rp_file_contains("rp_package", "revision_tasks=1");
+	ok = ok && rp_file_contains("rp_package", "review_threads=2");
+	ok = ok && rp_file_contains("rp_review2", "action_items=2");
 	ok = ok && rp_file_contains("rp_dataset_collection", "items=4");
 	ok = ok && rp_file_contains("rp_input", "custom_run=usable-run:RUN-900");
 	ok = ok && rp_file_contains("rp_input", "custom_requests=3");
@@ -98,6 +100,7 @@ int main(void)
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner\n"
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
 			   "human_reviews=1;revision_tasks=1;latest_revision_task=usable-revision-task:RUN-900:1\n"
+			   "review_threads=2;review_comments=3;review_action_items=2;review_thread_source=rp_review2\n"
 			   "revised_run=usable-run:RUN-900-rev1\n"
 			   "workflow=lab-gene-x\n"
 			   "stages=5\n"
@@ -218,6 +221,9 @@ int main(void)
 			   "peer_review_response=rp_peerresp\n"
 			   "fair_package=rp_fairpkg\n"
 			   "review_items=10\n"
+			   "review_threads=2\n"
+			   "review_comments=3\n"
+			   "review_action_items=2\n"
 			   "journal_targets=2\n"
 			   "status=ready\n")) {
 		return 1;
@@ -344,6 +350,7 @@ int main(void)
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner\n"
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
 			   "human_reviews=1;revision_tasks=1;revised_run=usable-run:RUN-900-rev1\n"
+			   "review_threads=2;review_comments=3;review_action_items=2\n"
 			   "runner_detail_fields=16\n"
 			   "evidence_package=rp_package\n"
 			   "package_manifest=ready\n"

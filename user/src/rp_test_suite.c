@@ -125,6 +125,14 @@ int main(void)
 	ok = ok && require_file_token("rp_knowledge", "synthesis=ready");
 	ok = ok && require_file_token("rp_knowledge", "library_sources=1");
 	ok = ok && require_file_token("rp_knowledge", "citation_key=library2026");
+	ok = ok && require_file_token("rp_review2", "review_threads=2");
+	ok = ok && require_file_token("rp_review2", "thread=review-thread:RUN-042:methods");
+	ok = ok && require_file_token("rp_review2", "thread=review-thread:RUN-042:repro");
+	ok = ok && require_file_token("rp_review2", "comment=review-comment:RUN-042:1");
+	ok = ok && require_file_token("rp_review2", "comment=review-comment:RUN-042:2");
+	ok = ok && require_file_token("rp_review2", "action_item=action-item:RUN-042:methods");
+	ok = ok && require_file_token("rp_review2", "action_item=action-item:RUN-042:repro");
+	ok = ok && require_file_token("rp_review2", "review_summary=all_review_comments_resolved");
 
 	ok = ok && require_file_token("rp_runconf", "profiles=2");
 	ok = ok && require_file_token("rp_invocation", "status=recovered");
@@ -163,6 +171,10 @@ int main(void)
 	ok = ok && require_file_token("rp_package", "revision_tasks=1");
 	ok = ok && require_file_token("rp_package", "revision_task=usable-revision-task:RUN-900:1;status=completed");
 	ok = ok && require_file_token("rp_package", "revision_task_completed=usable-revision-task:RUN-900:1;new_run=usable-run:RUN-900-rev1");
+	ok = ok && require_file_token("rp_package", "review_threads=2");
+	ok = ok && require_file_token("rp_package", "review_comments=3");
+	ok = ok && require_file_token("rp_package", "review_action_items=2");
+	ok = ok && require_file_token("rp_package", "review_page_sections=Human Reviews,Delivery Manifests,Revision Tasks,Review Threads,Action Items");
 	ok = ok && require_file_token("rp_release", "decision=release");
 	ok = ok && require_file_token("rp_dossier", "sections=36");
 
@@ -220,6 +232,8 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_run", "latest_review=usable-review:RUN-900:1");
 	ok = ok && require_file_token("rp_ui_run", "latest_revision_task=usable-revision-task:RUN-900:1");
 	ok = ok && require_file_token("rp_ui_run", "revised_run=usable-run:RUN-900-rev1");
+	ok = ok && require_file_token("rp_ui_run", "review_threads=2");
+	ok = ok && require_file_token("rp_ui_run", "review_action_items=2");
 	ok = ok && require_file_token("rp_ui_agent", "page=agent-detail");
 	ok = ok && require_file_token("rp_ui_agent", "decisions=8");
 	ok = ok && require_file_token("rp_ui_agent", "decision_rows=8");
@@ -254,6 +268,8 @@ int main(void)
 	ok = ok && require_file_token("rp_api_run", "human_reviews=1");
 	ok = ok && require_file_token("rp_api_run", "revision_tasks=1");
 	ok = ok && require_file_token("rp_api_run", "revised_run=usable-run:RUN-900-rev1");
+	ok = ok && require_file_token("rp_api_run", "review_threads=2");
+	ok = ok && require_file_token("rp_api_run", "review_action_items=2");
 	ok = ok && require_file_token("rp_api_run", "timeline_rows=5");
 	ok = ok && require_file_token("rp_api_run", "dependency_checks=5");
 	ok = ok && require_file_token("rp_api_run", "manifest_support_entries=2");
@@ -325,16 +341,18 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "post_routes=8");
 	ok = ok && require_file_token("rp_web_bundle", "human_reviews=1");
 	ok = ok && require_file_token("rp_web_bundle", "revision_tasks=1");
+	ok = ok && require_file_token("rp_web_bundle", "review_threads=2");
+	ok = ok && require_file_token("rp_web_bundle", "review_action_items=2");
 	ok = ok && require_file_token("rp_web_bundle", "custom_research_files=1");
 	ok = ok && require_file_token("rp_web_bundle", "custom_research_runs=3");
 
 	ok = ok && require_count("ack", rp_count_lines("rp_ack"), 38);
-	ok = ok && require_count("tool", rp_count_lines("rp_tool"), 130);
+	ok = ok && require_count("tool", rp_count_lines("rp_tool"), 131);
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=260\n"
+			   "tests=280\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -355,6 +373,7 @@ int main(void)
 			   "export_package=passed\n"
 			   "delivery_manifest=passed\n"
 			   "human_review_revision=passed\n"
+			   "review_thread_actions=passed\n"
 			   "llm_relay=passed\n"
 			   "agent_compare=passed\n"
 			   "consistency=passed\n"
@@ -373,6 +392,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=260 catalog=passed data=passed services=passed actions=passed custom=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=280 catalog=passed data=passed services=passed actions=passed custom=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }

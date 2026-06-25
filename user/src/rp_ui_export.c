@@ -34,6 +34,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_package", "decision_controls=2");
 	ok = ok && rp_file_contains("rp_package", "human_reviews=1");
 	ok = ok && rp_file_contains("rp_package", "revision_tasks=1");
+	ok = ok && rp_file_contains("rp_package", "review_threads=2");
+	ok = ok && rp_file_contains("rp_review2", "action_items=2");
 	ok = ok && rp_file_contains("rp_runner", "revision_run=usable-run:RUN-900-rev1");
 	ok = ok && rp_file_contains("rp_agents", "agents=7");
 	ok = ok && rp_file_contains("rp_decisions", "decisions=8");
@@ -98,6 +100,10 @@ int main(void)
 			   "revision_tasks=1\n"
 			   "latest_revision_task=usable-revision-task:RUN-900:1\n"
 			   "revised_run=usable-run:RUN-900-rev1\n"
+			   "review_threads=2\n"
+			   "review_comments=3\n"
+			   "review_action_items=2\n"
+			   "review_thread_source=rp_review2\n"
 			   "llm_relay=rp_llm_packets,rp_llm_routes,rp_llm_guard,rp_llm_hostreq,rp_llm_fallback\n"
 			   "status=ready\n")) {
 		return 1;

@@ -33,6 +33,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_diff", "changed_items=20");
 	ok = ok && rp_file_contains("rp_wfio", "compatibility_checks=6");
 	ok = ok && rp_file_contains("rp_review2", "rounds=2");
+	ok = ok && rp_file_contains("rp_review2", "review_threads=2");
+	ok = ok && rp_file_contains("rp_review2", "action_items=2");
 	ok = ok && rp_file_contains("rp_revision", "draft_versions=3");
 	ok = ok && rp_file_contains("rp_datadic", "schema_drift=0");
 	ok = ok && rp_file_contains("rp_compute", "replay=ready");
@@ -136,6 +138,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_package", "decision_controls=2");
 	ok = ok && rp_file_contains("rp_package", "human_reviews=1");
 	ok = ok && rp_file_contains("rp_package", "revision_tasks=1");
+	ok = ok && rp_file_contains("rp_package", "review_action_items=2");
 	ok = ok && rp_file_contains("rp_runner", "revision_status=completed");
 	ok = ok && rp_file_contains("rp_runner", "revision_run=usable-run:RUN-900-rev1");
 	ok = ok && rp_file_contains("rp_query", "workflow_hits=34");
@@ -180,6 +183,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_ui_run", "page=run-detail");
 	ok = ok && rp_file_contains("rp_ui_run", "timeline_rows=5");
 	ok = ok && rp_file_contains("rp_ui_run", "artifact_preview=rp_report_text,rp_chart_data,rp_artifact");
+	ok = ok && rp_file_contains("rp_ui_run", "review_threads=2");
 	ok = ok && rp_file_contains("rp_ui_agent", "page=agent-detail");
 	ok = ok && rp_file_contains("rp_ui_agent", "decision_rows=8");
 	ok = ok && rp_file_contains("rp_ui_evidence", "page=evidence-detail");
@@ -211,6 +215,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_run", "request_form=rp_input");
 	ok = ok && rp_file_contains("rp_api_run", "delivery_manifest=rp_package");
 	ok = ok && rp_file_contains("rp_api_run", "bibliography=rp_runner");
+	ok = ok && rp_file_contains("rp_api_run", "review_action_items=2");
 	ok = ok && rp_file_contains("rp_api_run", "timeline_rows=5");
 	ok = ok && rp_file_contains("rp_api_run", "dependency_checks=5");
 	ok = ok && rp_file_contains("rp_api_run", "manifest_support_entries=2");
@@ -258,7 +263,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "export_bundle=rp_package");
 	ok = ok && rp_file_contains("rp_web_bundle", "library_sources=rp_knowledge");
 	ok = ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
-	ok = ok && rp_file_contains("rp_tests", "tests=260");
+	ok = ok && rp_file_contains("rp_web_bundle", "review_threads=2");
+	ok = ok && rp_file_contains("rp_tests", "tests=280");
 	ok = ok && rp_file_contains("rp_tests", "status=passed");
 	ok = ok && rp_file_contains("rp_ack", "ack=consistency;msg=22;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=consistency.check_backend");
@@ -280,7 +286,7 @@ int main(void)
 	if (!ok) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
-	if (ack_count < 39 || tool_count < 142) {
+	if (ack_count < 39 || tool_count < 143) {
 		printf("rp_compare_plain: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		return 1;
 	}
@@ -292,7 +298,7 @@ int main(void)
 			   "programs=39\n"
 			   "state_files=169\n"
 			   "message_acks=39\n"
-			   "tool_events=142\n"
+			   "tool_events=143\n"
 			   "consistency_checks=86\n"
 			   "runner_stages=5\n"
 			   "workflow_runner_files=5\n"
@@ -326,11 +332,14 @@ int main(void)
 			   "human_reviews=1\n"
 			   "revision_tasks=1\n"
 			   "revision_runs=1\n"
-			   "test_cases=260\n"
+			   "review_threads=2\n"
+			   "review_comments=3\n"
+			   "review_action_items=2\n"
+			   "test_cases=280\n"
 			   "status=ready\n")) {
 		return 1;
 	}
 	if (!rp_append_status("compare=ready")) return 1;
-	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=39 state_files=169 acks=39 tools=142 status=ready\n");
+	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=39 state_files=169 acks=39 tools=143 status=ready\n");
 	return 0;
 }
