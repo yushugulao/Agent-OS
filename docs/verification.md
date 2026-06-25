@@ -35,7 +35,11 @@ rp_repair
 rp_auditor
 rp_query
 rp_evidence
+rp_llm_bridge
+rp_privacy
 rp_package
+rp_release
+rp_dossier
 rp_compare_plain
 ```
 
@@ -73,7 +77,7 @@ timeout 45s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INI
 Observed key output:
 
 ```text
-rp_orch: start programs=16
+rp_orch: start programs=20
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_object_store: records=8 status=ready
 rp_object_query: hits=8 ready_hits=7 status=ready
@@ -88,9 +92,13 @@ rp_repair: failed_stage=align action=minimal_rerun status=recovered
 rp_auditor: provenance=verified release=ready package=ready status=passed
 rp_query: workflow=34 agent=26 evidence=10 status=ready
 rp_evidence: claims=8 links=5 provenance=12 status=ready
+rp_llm_bridge: requests=1 responses=1 mode=template status=ready
+rp_privacy: checked=2 redactions=0 status=ready
 rp_package: artifacts=8 checks=13 release=ready status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=16 status=ready
-rp_orch: programs_ok=16 programs_total=16
+rp_release: decision=release checks=4 status=ready
+rp_dossier: sections=8 status=ready
+rp_compare_plain: plain_kernel=passed objects=500 programs=20 status=ready
+rp_orch: programs_ok=20 programs_total=20
 rp_orch: state_ok=1
 rp_orch: passed
 ```
@@ -118,8 +126,8 @@ This first native uCore version validates:
 - platform self-check status,
 - catalog search,
 - a complete research run simulation with one failed stage repaired in user space.
-- multi-process execution with sixteen ordinary uCore user programs.
+- multi-process execution with twenty ordinary uCore user programs.
 - ordinary file-backed state exchange across role programs.
-- object catalog, reusable object records, object query, lineage, site export, evidence, package, and plain-kernel comparison files.
+- object catalog, reusable object records, object query, lineage, site export, evidence, LLM packet, privacy, package, release, dossier, and plain-kernel comparison files.
 
 It does not use Agent-OS kernel features. That is intentional for this plain-kernel baseline.

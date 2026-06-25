@@ -13,7 +13,7 @@ The current runtime has three layers:
 1. Upstream uCore kernel.
 2. Restored uCore user library and program build flow.
 3. `rp_plain`, a native user process that carries the research platform catalog, feature groups, mature platform mappings, and self-check logic.
-4. `rp_orch`, a native user process that runs sixteen platform programs through ordinary `fork`, `exec`, and `waitpid`.
+4. `rp_orch`, a native user process that runs twenty platform programs through ordinary `fork`, `exec`, and `waitpid`.
 
 The user process deliberately uses ordinary C data structures and ordinary uCore process execution. This makes the result a baseline for later comparison with the Agent-OS kernel-enhanced version.
 
@@ -46,7 +46,11 @@ The platform programs add an executable multi-process shape:
 - `rp_auditor`
 - `rp_query`
 - `rp_evidence`
+- `rp_llm_bridge`
+- `rp_privacy`
 - `rp_package`
+- `rp_release`
+- `rp_dossier`
 - `rp_compare_plain`
 
 These programs do not require Agent syscalls. They are ordinary uCore processes that make the plain-kernel baseline closer to the original multi-role research Agent platform.
@@ -73,7 +77,12 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_site` | site export | compare | exported site page summary |
 | `rp_query` | query | compare | selected search result counts |
 | `rp_evidence` | evidence | package | claims, links, provenance node count |
+| `rp_llm_req` | LLM bridge | privacy | host LLM request packet without embedded secrets |
+| `rp_llm_resp` | LLM bridge | privacy, compare | deterministic template LLM response |
+| `rp_privacy` | privacy | release | outbound packet review result |
 | `rp_package` | package | compare | packaged artifact and release summary |
+| `rp_release` | release | dossier, compare | release decision from package, audit, privacy, and LLM packet state |
+| `rp_dossier` | dossier | compare | final review material summary |
 | `rp_compare` | compare | orchestrator | plain-kernel execution summary |
 
 This is intentionally implemented without new syscalls. It uses only `open`, `read`, `write`, `close`, `fork`, `exec`, and `waitpid`.

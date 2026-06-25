@@ -18,7 +18,11 @@ static const char *PROGRAMS[] = {
 	"rp_auditor",
 	"rp_query",
 	"rp_evidence",
+	"rp_llm_bridge",
+	"rp_privacy",
 	"rp_package",
+	"rp_release",
+	"rp_dossier",
 	"rp_compare_plain",
 };
 
@@ -74,13 +78,20 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_status", "auditor=passed");
 	state_ok = state_ok && rp_file_contains("rp_status", "query=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "evidence=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "llm_bridge=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "privacy=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "package=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "release=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "dossier=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "compare=ready");
 	state_ok = state_ok && rp_file_contains("rp_audit", "status=passed");
 	state_ok = state_ok && rp_file_contains("rp_compare", "plain_kernel=passed");
 	state_ok = state_ok && rp_file_contains("rp_object_query", "hits=8");
 	state_ok = state_ok && rp_file_contains("rp_lineage", "edges=7");
 	state_ok = state_ok && rp_file_contains("rp_site", "pages=6");
+	state_ok = state_ok && rp_file_contains("rp_llm_resp", "status=ready");
+	state_ok = state_ok && rp_file_contains("rp_release", "decision=release");
+	state_ok = state_ok && rp_file_contains("rp_dossier", "sections=8");
 	printf("rp_orch: state_ok=%d\n", state_ok);
 	if (!state_ok) {
 		printf("rp_orch: failed\n");

@@ -42,7 +42,7 @@ user/src/rp_compare_plain.c
 - A plain user-space research run simulation with planning, literature, analysis, review, writing, repair, and audit roles.
 - Local catalog search for workflow, Agent, evidence, provenance, and LLM related platform objects.
 
-`rp_orch` runs sixteen platform programs as separate uCore user processes:
+`rp_orch` runs twenty platform programs as separate uCore user processes:
 
 - catalog,
 - object store,
@@ -58,7 +58,11 @@ user/src/rp_compare_plain.c
 - auditor,
 - query,
 - evidence,
+- LLM bridge,
+- privacy review,
 - package,
+- release decision,
+- final dossier,
 - plain-kernel comparison.
 
 It uses ordinary `fork`, `exec`, and `waitpid`. This provides a plain-kernel baseline for the later Agent-OS multi-Agent version.
@@ -81,7 +85,12 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_site`
 - `rp_query`
 - `rp_evidence`
+- `rp_llm_req`
+- `rp_llm_resp`
+- `rp_privacy`
 - `rp_package`
+- `rp_release`
+- `rp_dossier`
 - `rp_compare`
 
 Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_compare` after all children exit, then prints `state_ok=1`.
@@ -121,7 +130,7 @@ rp_plain: passed
 Expected orchestrator output:
 
 ```text
-rp_orch: start programs=16
+rp_orch: start programs=20
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_object_store: records=8 status=ready
 rp_object_query: hits=8 ready_hits=7 status=ready
@@ -136,9 +145,13 @@ rp_repair: failed_stage=align action=minimal_rerun status=recovered
 rp_auditor: provenance=verified release=ready package=ready status=passed
 rp_query: workflow=34 agent=26 evidence=10 status=ready
 rp_evidence: claims=8 links=5 provenance=12 status=ready
+rp_llm_bridge: requests=1 responses=1 mode=template status=ready
+rp_privacy: checked=2 redactions=0 status=ready
 rp_package: artifacts=8 checks=13 release=ready status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=16 status=ready
-rp_orch: programs_ok=16 programs_total=16
+rp_release: decision=release checks=4 status=ready
+rp_dossier: sections=8 status=ready
+rp_compare_plain: plain_kernel=passed objects=500 programs=20 status=ready
+rp_orch: programs_ok=20 programs_total=20
 rp_orch: state_ok=1
 rp_orch: passed
 ```
@@ -159,12 +172,12 @@ No output means the directories match.
 
 ## Next Work
 
-The current native programs prove that the plain uCore kernel can boot and run a research-platform-shaped catalog process plus a multi-process workflow with ordinary file-backed object storage, query, lineage, site export, evidence, package, and comparison services. Further migration work should move more behavior from embedded tables into active user-space services:
+The current native programs prove that the plain uCore kernel can boot and run a research-platform-shaped catalog process plus a multi-process workflow with ordinary file-backed object storage, query, lineage, site export, evidence, LLM packet, privacy review, package, release, dossier, and comparison services. Further migration work should move more behavior from embedded tables into active user-space services:
 
 - Persistent platform state files in the uCore root file system.
-- Expand the planner, retriever, analyst, reviewer, writer, repair, auditor, object query, lineage, and export programs beyond the current fixed records.
+- Expand the planner, retriever, analyst, reviewer, writer, repair, auditor, object query, lineage, export, LLM packet, privacy, release, and dossier programs beyond the current fixed records.
 - A user-space message protocol using only unchanged uCore syscalls.
-- A host LLM gateway bridge exposed as ordinary input/output files or console packets.
+- A host LLM relay that consumes the existing ordinary request files and writes ordinary response files.
 - More executable checks for workflow portability, release review, and AgentCompare comparison.
 
 The later Agent-OS enhanced kernel version should use the same object names, role names, and output contracts so both kernels can run the same demonstration scenario.
