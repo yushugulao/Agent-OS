@@ -9,7 +9,7 @@ The plain uCore platform should keep the same object names and output contract a
 ## Planned Increments
 
 1. Add a small file-backed platform state store using ordinary uCore files.
-2. Split the monolithic native program into planner, retriever, analyst, reviewer, writer, repair, and auditor user programs.
+2. Expand planner, retriever, analyst, reviewer, writer, repair, and auditor user programs beyond status output.
 3. Add a simple message protocol using files, pipes, or process exit/status patterns available in unchanged uCore.
 4. Move selected checks from static counters into active operations over stored records.
 5. Add an AgentCompare plain-kernel runner that emits the same high-level result fields as the future Agent-OS runner.

@@ -36,7 +36,7 @@ CH5_BASE_TESTS := ch5b_ $(CH3_BASE_TESTS) usershell
 CH6_BASE_TESTS := ch6b_ $(CH5_BASE_TESTS)
 CH7_BASE_TESTS := ch7b_ $(CH6_BASE_TESTS)
 CH8_BASE_TESTS := ch8b_ $(CH7_BASE_TESTS)
-PLATFORM_TESTS := usershell research_platform_ucore_plain
+PLATFORM_TESTS := usershell research_platform_ucore_plain research_platform_orchestrator rp_planner rp_retriever rp_analyst rp_reviewer rp_writer rp_repair rp_auditor
 
 CH2_TESTS := $(CH2_BASE_TESTS)
 CH3_TESTS := $(CH3_BASE_TESTS) ch3_

@@ -13,6 +13,7 @@ The current runtime has three layers:
 1. Upstream uCore kernel.
 2. Restored uCore user library and program build flow.
 3. `research_platform_ucore_plain`, a native user process that carries the research platform catalog, feature groups, mature platform mappings, and self-check logic.
+4. `research_platform_orchestrator`, a native user process that runs seven role programs through ordinary `fork`, `exec`, and `waitpid`.
 
 The user process deliberately uses ordinary C data structures and ordinary uCore process execution. This makes the result a baseline for later comparison with the Agent-OS kernel-enhanced version.
 
@@ -29,6 +30,18 @@ The native program preserves the platform vocabulary and scale from the pure use
 
 The first native version stores these as compact static tables. This is intentionally simple: it proves that a large platform-shaped program can run as a normal process on unchanged uCore before deeper user-space services are added.
 
+The role programs add an executable multi-process shape:
+
+- `rp_planner`
+- `rp_retriever`
+- `rp_analyst`
+- `rp_reviewer`
+- `rp_writer`
+- `rp_repair`
+- `rp_auditor`
+
+These programs do not require Agent syscalls. They are ordinary uCore processes that make the plain-kernel baseline closer to the original multi-role research Agent platform.
+
 ## Upstream Kernel Guarantee
 
 The `os`, `nfs`, and `scripts` directories are copied from the upstream uCore 2025S source. Kernel verification uses directory comparison rather than source comments.
@@ -36,6 +49,8 @@ The `os`, `nfs`, and `scripts` directories are copied from the upstream uCore 20
 The only implementation changes needed for the first native platform step are in ordinary user-space files:
 
 - `user/src/research_platform_ucore_plain.c`
+- `user/src/research_platform_orchestrator.c`
+- `user/src/rp_*.c`
 - `user/Makefile`
 - `user/src/usershell.c`
 

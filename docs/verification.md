@@ -20,9 +20,17 @@ The user image contains:
 ```text
 usershell
 research_platform_ucore_plain
+research_platform_orchestrator
+rp_planner
+rp_retriever
+rp_analyst
+rp_reviewer
+rp_writer
+rp_repair
+rp_auditor
 ```
 
-## Run
+## Run Catalog Program
 
 ```bash
 timeout 45s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=research_platform_ucore_plain
@@ -47,6 +55,27 @@ all app are over!
 
 after the init program exits. The platform result is taken from the `passed` line before that kernel termination path.
 
+## Run Role Orchestrator
+
+```bash
+timeout 45s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=research_platform_orchestrator
+```
+
+Observed key output:
+
+```text
+research_platform_orchestrator: start roles=7
+rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 status=planned
+rp_retriever: literature=3 evidence_links=5 status=ready
+rp_analyst: datasets=4 statistics=6 figures=3 status=ready
+rp_reviewer: claims=8 protocol_checks=5 release_checks=4 status=accepted
+rp_writer: sections=6 citations=9 response_items=3 status=packaged
+rp_repair: failed_stage=align action=minimal_rerun status=recovered
+rp_auditor: provenance=verified release=ready package=ready status=passed
+research_platform_orchestrator: roles_ok=7 roles_total=7
+research_platform_orchestrator: passed
+```
+
 ## Kernel Source Check
 
 From the repository root:
@@ -70,5 +99,6 @@ This first native uCore version validates:
 - platform self-check status,
 - catalog search,
 - a complete research run simulation with one failed stage repaired in user space.
+- multi-process role execution with seven ordinary uCore user programs.
 
 It does not use Agent-OS kernel features. That is intentional for this plain-kernel baseline.
