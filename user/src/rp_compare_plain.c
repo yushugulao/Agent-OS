@@ -332,6 +332,11 @@ int main(void)
 	ok = ok && rp_file_contains("rp_uresrun", "LLM Relay");
 	ok = ok && rp_file_contains("rp_actionio", "Stage DAG");
 	ok = ok && rp_file_contains("rp_actionio", "passed_cases=3");
+	ok = ok && rp_file_contains("rp_actionio", "action_state_records=12");
+	ok = ok && rp_file_contains("rp_actionio", "action_step=workbench_advance");
+	ok = ok && rp_file_contains("rp_actionio", "action_step=notebook_download");
+	ok = ok && rp_file_contains("rp_actionio", "action_step=bundle_download");
+	ok = ok && rp_file_contains("rp_actionio", "state_after_actions=workbench:ready,review:needs_revision,revision:completed,bundle:ready");
 	ok = ok && rp_file_contains("rp_web_bundle", "api_payloads=14");
 	ok = ok && rp_file_contains("rp_web_bundle", "downloadable_units=3");
 	ok = ok && rp_file_contains("rp_web_bundle", "static_site_pages=42");
@@ -353,7 +358,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "coherence_checks=9");
 	ok = ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
 	ok = ok && rp_file_contains("rp_web_bundle", "review_threads=2");
-	ok = ok && rp_file_contains("rp_tests", "tests=510");
+	ok = ok && rp_file_contains("rp_tests", "tests=526");
 	ok = ok && rp_file_contains("rp_tests", "workbench=passed");
 	ok = ok && rp_file_contains("rp_tests", "static_site=passed");
 	ok = ok && rp_file_contains("rp_tests", "workflow_portability=passed");
@@ -383,7 +388,7 @@ int main(void)
 		printf("rp_compare_plain: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		return 1;
 	}
-	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=168;message_acks=42;tool_events=144;test_cases=510;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=168;message_acks=42;tool_events=144;action_state_records=12;test_cases=526;status=ready")) return 1;
 	if (!rp_append_status("compare=ready")) return 1;
 	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=42 state_files=168 acks=42 tools=144 status=ready\n");
 	return 0;

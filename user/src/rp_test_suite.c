@@ -511,6 +511,10 @@ int main(void)
 	ok = ok && require_file_token("rp_api_action", "delivery_manifest_builder=1");
 	ok = ok && require_file_token("rp_api_action", "human_review_form=1");
 	ok = ok && require_file_token("rp_api_action", "revision_task_runner=1");
+	ok = ok && require_file_token("rp_api_action", "workbench_advance=1");
+	ok = ok && require_file_token("rp_api_action", "notebook_download=1");
+	ok = ok && require_file_token("rp_api_action", "bundle_download=1");
+	ok = ok && require_file_token("rp_api_action", "action_state_records=12");
 	ok = ok && require_file_token("rp_api_action", "export_bundle=rp_package");
 	ok = ok && require_file_token("rp_api_know", "library_sources=rp_knowledge");
 	ok = ok && require_file_token("rp_actionio", "requests=8");
@@ -527,6 +531,15 @@ int main(void)
 	ok = ok && require_file_token("rp_actionio", "revision_inputs=rp_review2,rp_revision");
 	ok = ok && require_file_token("rp_actionio", "applied_changes=2");
 	ok = ok && require_file_token("rp_actionio", "revision_status=completed");
+	ok = ok && require_file_token("rp_actionio", "action_state_records=12");
+	ok = ok && require_file_token("rp_actionio", "action_step=workbench_advance");
+	ok = ok && require_file_token("rp_actionio", "action_step=notebook_download");
+	ok = ok && require_file_token("rp_actionio", "action_step=bundle_download");
+	ok = ok && require_file_token("rp_actionio", "action_step=review_page_open");
+	ok = ok && require_file_token("rp_actionio", "action_trace=rp_input->rp_runner->rp_review2->rp_revision->rp_package->rp_web_bundle");
+	ok = ok && require_file_token("rp_actionio", "idempotent_action_keys=8");
+	ok = ok && require_file_token("rp_actionio", "state_after_actions=workbench:ready,review:needs_revision,revision:completed,bundle:ready");
+	ok = ok && require_file_token("rp_actionio", "download_outputs=reproducible-analysis.ipynb,research-evidence-bundle.zip,delivery-manifest.md");
 	ok = ok && require_file_token("rp_uresrun", "run_id=usable-run:RUN-900");
 	ok = ok && require_file_token("rp_uresrun", "runs=3");
 	ok = ok && require_file_token("rp_uresrun", "run_id_2=usable-run:RUN-901");
@@ -551,6 +564,7 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "downloadable_units=3");
 	ok = ok && require_file_token("rp_web_bundle", "notebook_export=rp_nbexec");
 	ok = ok && require_file_token("rp_web_bundle", "notebook_download=rp_repro");
+	ok = ok && require_file_token("rp_web_bundle", "active_actions=rp_actionio");
 	ok = ok && require_file_token("rp_web_bundle", "static_site_pages=42");
 	ok = ok && require_file_token("rp_web_bundle", "render_sections=7");
 	ok = ok && require_file_token("rp_web_bundle", "artifact_previews=3");
@@ -589,7 +603,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=510\n"
+			   "tests=526\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -599,6 +613,7 @@ int main(void)
 			   "runtime_services=passed\n"
 			   "notebook_export=passed\n"
 			   "api_actions=passed\n"
+			   "active_actions=passed\n"
 			   "custom_research=passed\n"
 			   "research_input=passed\n"
 			   "workbench=passed\n"
@@ -636,6 +651,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=510 catalog=passed data=passed services=passed actions=passed custom=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=526 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }

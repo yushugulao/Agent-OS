@@ -554,7 +554,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_uresrun", "dataset_rows_total=9");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "Comparison Metrics");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "passed_cases=3");
-	state_ok = state_ok && rp_file_contains("rp_tests", "tests=510");
+	state_ok = state_ok && rp_file_contains("rp_tests", "tests=526");
 	state_ok = state_ok && rp_file_contains("rp_tests", "static_site=passed");
 	state_ok = state_ok && rp_file_contains("rp_tests", "workflow_portability=passed");
 	state_ok = state_ok && rp_file_contains("rp_tests", "coherence=passed");
