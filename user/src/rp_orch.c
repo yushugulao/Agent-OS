@@ -259,6 +259,12 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_package", "downloadable_units=3");
 	state_ok = state_ok && rp_file_contains("rp_package", "custom_sources=rp_input,rp_runner,rp_uresrun");
 	state_ok = state_ok && rp_file_contains("rp_package", "delivery_manifest=rp_package");
+	state_ok = state_ok && rp_file_contains("rp_package", "delivery_files=8");
+	state_ok = state_ok && rp_file_contains("rp_package", "delivery_checks=3");
+	state_ok = state_ok && rp_file_contains("rp_package", "delivery_check=human_review;status=pass");
+	state_ok = state_ok && rp_file_contains("rp_package", "delivery_manifest_json=delivery-manifest.json");
+	state_ok = state_ok && rp_file_contains("rp_package", "evidence_bundle_zip=research-evidence-bundle.zip");
+	state_ok = state_ok && rp_file_contains("rp_package", "evidence_bundle_entries=12");
 	state_ok = state_ok && rp_file_contains("rp_package", "deliverables=8");
 	state_ok = state_ok && rp_file_contains("rp_package", "raw_links=5");
 	state_ok = state_ok && rp_file_contains("rp_package", "decision_controls=2");
@@ -403,6 +409,9 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_api_run", "custom_research_runs=3");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "request_form=rp_input");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "delivery_manifest=rp_package");
+	state_ok = state_ok && rp_file_contains("rp_api_run", "delivery_files=8");
+	state_ok = state_ok && rp_file_contains("rp_api_run", "delivery_checks=3");
+	state_ok = state_ok && rp_file_contains("rp_api_run", "evidence_bundle_zip=research-evidence-bundle.zip");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "bibliography=rp_runner");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "review_action_items=2");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "timeline_rows=5");
@@ -415,6 +424,9 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "manifest_records=4");
 	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "evidence_package=rp_package");
 	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "export_bundle=rp_package");
+	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "delivery_files=8");
+	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "delivery_checks=3");
+	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "evidence_bundle_entries=12");
 	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "library_sources=rp_knowledge");
 	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "preview_files=rp_report_text,rp_chart_data,rp_artifact");
 	state_ok = state_ok && rp_file_contains("rp_api_data", "dataset_snapshots=2");
@@ -431,6 +443,9 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "artifact_previews=3");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "runner_detail_fields=16");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "delivery_manifest=rp_package");
+	state_ok = state_ok && rp_file_contains("rp_web_bundle", "delivery_files=8");
+	state_ok = state_ok && rp_file_contains("rp_web_bundle", "delivery_checks=3");
+	state_ok = state_ok && rp_file_contains("rp_web_bundle", "evidence_bundle_entries=12");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "export_bundle=rp_package");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "library_sources=rp_knowledge");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
@@ -453,7 +468,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_uresrun", "dataset_rows_total=9");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "Comparison Metrics");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "passed_cases=3");
-	state_ok = state_ok && rp_file_contains("rp_tests", "tests=280");
+	state_ok = state_ok && rp_file_contains("rp_tests", "tests=302");
 	state_ok = state_ok && rp_file_contains("rp_tests", "status=passed");
 	state_ok = state_ok && rp_file_contains("rp_litrev", "papers=9");
 	state_ok = state_ok && rp_file_contains("rp_citegraph", "bibtex_entries=9");
@@ -538,7 +553,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=web_export.write_bundle");
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=test_suite.check_artifacts");
 	state_ok = state_ok && (rp_count_lines("rp_ack") >= 37);
-	state_ok = state_ok && (rp_count_lines("rp_tool") >= 140);
+	state_ok = state_ok && (rp_count_lines("rp_tool") >= 143);
 	state_ok = state_ok && rp_file_contains("rp_protocol", "ethics=approved");
 	printf("rp_orch: state_ok=%d\n", state_ok);
 	if (!state_ok) {

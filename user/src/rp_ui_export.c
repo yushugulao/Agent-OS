@@ -30,6 +30,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
 	ok = ok && rp_file_contains("rp_runner", "custom_status=ok");
 	ok = ok && rp_file_contains("rp_package", "deliverables=8");
+	ok = ok && rp_file_contains("rp_package", "delivery_files=8");
+	ok = ok && rp_file_contains("rp_package", "delivery_checks=3");
+	ok = ok && rp_file_contains("rp_package", "evidence_bundle_zip=research-evidence-bundle.zip");
 	ok = ok && rp_file_contains("rp_package", "raw_links=5");
 	ok = ok && rp_file_contains("rp_package", "decision_controls=2");
 	ok = ok && rp_file_contains("rp_package", "human_reviews=1");
@@ -93,8 +96,12 @@ int main(void)
 			   "bibliography=rp_runner\n"
 			   "citation_plan=rp_runner\n"
 			   "delivery_manifest=rp_package\n"
+			   "delivery_files=8\n"
+			   "delivery_checks=3\n"
+			   "delivery_manifest_json=delivery-manifest.json\n"
 			   "review_page=rp_package\n"
 			   "export_bundle=rp_package\n"
+			   "evidence_bundle_zip=research-evidence-bundle.zip\n"
 			   "human_reviews=1\n"
 			   "latest_review=usable-review:RUN-900:1\n"
 			   "revision_tasks=1\n"
@@ -129,7 +136,10 @@ int main(void)
 			   "artifact=rp_artifact\n"
 			   "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest\n"
 			   "delivery_manifest=rp_package\n"
+			   "delivery_files=8\n"
+			   "delivery_checks=3\n"
 			   "export_bundle=rp_package\n"
+			   "evidence_bundle_zip=research-evidence-bundle.zip\n"
 			   "llm_guard=rp_llm_guard\n"
 			   "status=ready\n")) {
 		return 1;

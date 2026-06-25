@@ -27,6 +27,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "citation_plan_entries=3");
 	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
 	ok = ok && rp_file_contains("rp_package", "deliverables=8");
+	ok = ok && rp_file_contains("rp_package", "delivery_files=8");
+	ok = ok && rp_file_contains("rp_package", "delivery_checks=3");
+	ok = ok && rp_file_contains("rp_package", "evidence_bundle_zip=research-evidence-bundle.zip");
+	ok = ok && rp_file_contains("rp_package", "bundle_files=human_reviews.json,delivery_manifests.json,revision_tasks.json,delivery-manifest.json,delivery-manifest.md");
 	ok = ok && rp_file_contains("rp_package", "raw_links=5");
 	ok = ok && rp_file_contains("rp_package", "artifact_links=6");
 	ok = ok && rp_file_contains("rp_package", "human_reviews=1");
@@ -99,6 +103,8 @@ int main(void)
 			   "request_form=rp_input;upload_files=rp_input\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner\n"
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
+			   "delivery_files=8;delivery_checks=3;latest_delivery_status=ready\n"
+			   "evidence_bundle_zip=research-evidence-bundle.zip\n"
 			   "human_reviews=1;revision_tasks=1;latest_revision_task=usable-revision-task:RUN-900:1\n"
 			   "review_threads=2;review_comments=3;review_action_items=2;review_thread_source=rp_review2\n"
 			   "revised_run=usable-run:RUN-900-rev1\n"
@@ -171,8 +177,11 @@ int main(void)
 			   "evidence_package=rp_package;download_index=rp_package\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner\n"
 			   "delivery_manifest=rp_package;export_bundle=rp_package;review_page=rp_package\n"
+			   "delivery_files=8;delivery_checks=3\n"
 			   "raw_downloads=5;upload_files=rp_input\n"
 			   "bundle_items=18\n"
+			   "evidence_bundle_zip=research-evidence-bundle.zip\n"
+			   "evidence_bundle_entries=12\n"
 			   "downloadable_units=3\n"
 			   "report=rp_report_text\n"
 			   "chart=rp_chart_data\n"
@@ -349,6 +358,8 @@ int main(void)
 			   "request_form=rp_input;upload_files=rp_input\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner\n"
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
+			   "delivery_files=8;delivery_checks=3;evidence_bundle_entries=12\n"
+			   "bundle_files=human_reviews.json,delivery_manifests.json,revision_tasks.json,delivery-manifest.json,delivery-manifest.md\n"
 			   "human_reviews=1;revision_tasks=1;revised_run=usable-run:RUN-900-rev1\n"
 			   "review_threads=2;review_comments=3;review_action_items=2\n"
 			   "runner_detail_fields=16\n"
