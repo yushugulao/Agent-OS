@@ -4,6 +4,7 @@
 #include <research_platform_state.h>
 
 static const char *PROGRAMS[] = {
+	"rp_catalog",
 	"rp_planner",
 	"rp_retriever",
 	"rp_analyst",
@@ -11,6 +12,10 @@ static const char *PROGRAMS[] = {
 	"rp_writer",
 	"rp_repair",
 	"rp_auditor",
+	"rp_query",
+	"rp_evidence",
+	"rp_package",
+	"rp_compare_plain",
 };
 
 static int run_child(const char *program)
@@ -41,16 +46,17 @@ int main(void)
 {
 	int total = (int)(sizeof(PROGRAMS) / sizeof(PROGRAMS[0]));
 	int ok = 0;
-	printf("research_platform_orchestrator: start roles=%d\n", total);
+	printf("research_platform_orchestrator: start programs=%d\n", total);
 	for (int i = 0; i < total; i++) {
 		ok += run_child(PROGRAMS[i]);
 	}
-	printf("research_platform_orchestrator: roles_ok=%d roles_total=%d\n", ok, total);
+	printf("research_platform_orchestrator: programs_ok=%d programs_total=%d\n", ok, total);
 	if (ok != total) {
 		printf("research_platform_orchestrator: failed\n");
 		return 1;
 	}
 	int state_ok = 1;
+	state_ok = state_ok && rp_file_contains("rp_status", "catalog=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "planner=planned");
 	state_ok = state_ok && rp_file_contains("rp_status", "retriever=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "analyst=ready");
@@ -58,7 +64,12 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_status", "writer=packaged");
 	state_ok = state_ok && rp_file_contains("rp_status", "repair=recovered");
 	state_ok = state_ok && rp_file_contains("rp_status", "auditor=passed");
+	state_ok = state_ok && rp_file_contains("rp_status", "query=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "evidence=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "package=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "compare=ready");
 	state_ok = state_ok && rp_file_contains("rp_audit", "status=passed");
+	state_ok = state_ok && rp_file_contains("rp_compare", "plain_kernel=passed");
 	printf("research_platform_orchestrator: state_ok=%d\n", state_ok);
 	if (!state_ok) {
 		printf("research_platform_orchestrator: failed\n");

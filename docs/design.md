@@ -13,7 +13,7 @@ The current runtime has three layers:
 1. Upstream uCore kernel.
 2. Restored uCore user library and program build flow.
 3. `research_platform_ucore_plain`, a native user process that carries the research platform catalog, feature groups, mature platform mappings, and self-check logic.
-4. `research_platform_orchestrator`, a native user process that runs seven role programs through ordinary `fork`, `exec`, and `waitpid`.
+4. `research_platform_orchestrator`, a native user process that runs twelve platform programs through ordinary `fork`, `exec`, and `waitpid`.
 
 The user process deliberately uses ordinary C data structures and ordinary uCore process execution. This makes the result a baseline for later comparison with the Agent-OS kernel-enhanced version.
 
@@ -30,8 +30,9 @@ The native program preserves the platform vocabulary and scale from the pure use
 
 The first native version stores these as compact static tables. This is intentionally simple: it proves that a large platform-shaped program can run as a normal process on unchanged uCore before deeper user-space services are added.
 
-The role programs add an executable multi-process shape:
+The platform programs add an executable multi-process shape:
 
+- `rp_catalog`
 - `rp_planner`
 - `rp_retriever`
 - `rp_analyst`
@@ -39,6 +40,10 @@ The role programs add an executable multi-process shape:
 - `rp_writer`
 - `rp_repair`
 - `rp_auditor`
+- `rp_query`
+- `rp_evidence`
+- `rp_package`
+- `rp_compare_plain`
 
 These programs do not require Agent syscalls. They are ordinary uCore processes that make the plain-kernel baseline closer to the original multi-role research Agent platform.
 
@@ -56,6 +61,12 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_fix` | repair | auditor | repaired stage and generated artifact |
 | `rp_audit` | auditor | orchestrator | final provenance, release, package status |
 | `rp_status` | all role programs | orchestrator | role-level status summary |
+| `rp_objects` | catalog | query, compare | object counts and platform scale |
+| `rp_services` | catalog | query | service search counts |
+| `rp_query` | query | compare | selected search result counts |
+| `rp_evidence` | evidence | package | claims, links, provenance node count |
+| `rp_package` | package | compare | packaged artifact and release summary |
+| `rp_compare` | compare | orchestrator | plain-kernel execution summary |
 
 This is intentionally implemented without new syscalls. It uses only `open`, `read`, `write`, `close`, `fork`, `exec`, and `waitpid`.
 
