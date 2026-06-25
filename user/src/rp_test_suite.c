@@ -566,6 +566,7 @@ int main(void)
 	ok = ok && require_file_token("rp_api_home", "research_form=rp_input");
 	ok = ok && require_file_token("rp_api_home", "upload_files=rp_input");
 	ok = ok && require_file_token("rp_api_home", "dynamic_inputs=4");
+	ok = ok && require_file_token("rp_api_home", "reader_contract=rp_web_bundle");
 	ok = ok && require_file_token("rp_api_home", "library_sources=rp_knowledge");
 	ok = ok && require_file_token("rp_api_home", "nav_items=12");
 	ok = ok && require_file_token("rp_api_home", "static_site_pages=42");
@@ -575,6 +576,9 @@ int main(void)
 	ok = ok && require_file_token("rp_api_run", "request_form=rp_input");
 	ok = ok && require_file_token("rp_api_run", "upload_files=rp_input");
 	ok = ok && require_file_token("rp_api_run", "dynamic_input_queue=rp_input");
+	ok = ok && require_file_token("rp_api_run", "reader_contract=rp_web_bundle");
+	ok = ok && require_file_token("rp_api_run", "reader_view=run-detail");
+	ok = ok && require_file_token("rp_api_run", "reader_refresh=rp_web_bundle");
 	ok = ok && require_file_token("rp_api_run", "workspace_imports=1");
 	ok = ok && require_file_token("rp_api_run", "workbench=rp_runner");
 	ok = ok && require_file_token("rp_api_run", "bibliography=rp_runner");
@@ -640,6 +644,7 @@ int main(void)
 	ok = ok && require_file_token("rp_api_action", "revision_task_runner=1");
 	ok = ok && require_file_token("rp_api_action", "dynamic_submit=/actions/research/run");
 	ok = ok && require_file_token("rp_api_action", "live_update_feed=rp_web_bundle");
+	ok = ok && require_file_token("rp_api_action", "reader_contract=rp_web_bundle");
 	ok = ok && require_file_token("rp_api_action", "workbench_advance=1");
 	ok = ok && require_file_token("rp_api_action", "notebook_download=1");
 	ok = ok && require_file_token("rp_api_action", "bundle_download=1");
@@ -726,6 +731,17 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "dynamic_inputs=4");
 	ok = ok && require_file_token("rp_web_bundle", "host_ui_events=10");
 	ok = ok && require_file_token("rp_web_bundle", "live_update_feed=rp_web_bundle");
+	ok = ok && require_file_token("rp_web_bundle", "reader_contract=host_plain_ucore_v2");
+	ok = ok && require_file_token("rp_web_bundle", "reader_contract_version=2");
+	ok = ok && require_file_token("rp_web_bundle", "reader_ready=1");
+	ok = ok && require_file_token("rp_web_bundle", "reader_views=14");
+	ok = ok && require_file_token("rp_web_bundle", "reader_actions=8");
+	ok = ok && require_file_token("rp_web_bundle", "reader_payload_files=rp_api_home");
+	ok = ok && require_file_token("rp_web_bundle", "reader_refresh_files=rp_web_routes");
+	ok = ok && require_file_token("rp_web_bundle", "reader_required_sections=routes,payloads,actions,live_update,downloads,compare");
+	ok = ok && require_file_token("rp_web_bundle", "reader_event_stream=rp_web_bundle");
+	ok = ok && require_file_token("rp_web_bundle", "reader_fallback=rp_site");
+	ok = ok && require_file_token("rp_web_bundle", "reader_state_source=plain_ucore_files");
 	ok = ok && require_file_token("rp_web_bundle", "workbench=rp_runner");
 	ok = ok && require_file_token("rp_web_bundle", "workbench_tasks=9");
 	ok = ok && require_file_token("rp_web_bundle", "workbench_export=rp_runner");
@@ -758,7 +774,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=677\n"
+			   "tests=693\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -807,6 +823,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=677 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=693 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }
