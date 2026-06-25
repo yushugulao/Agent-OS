@@ -10,9 +10,18 @@ int main(void)
 	ok = ok && rp_file_contains("rp_review", "decision=accepted_after_repair");
 	ok = ok && rp_file_contains("rp_report", "status=packaged");
 	ok = ok && rp_file_contains("rp_fix", "status=recovered");
+	ok = ok && rp_file_contains("rp_datadic", "schema_drift=0");
+	ok = ok && rp_file_contains("rp_compute", "replay=ready");
+	ok = ok && rp_file_contains("rp_labops", "maintenance=passed");
 	if (!ok) return 1;
 	if (!rp_write_file("rp_audit",
-			   "provenance=verified\nrelease=ready\npackage=ready\nstatus=passed\n")) {
+			   "provenance=verified\n"
+			   "release=ready\n"
+			   "package=ready\n"
+			   "schema=verified\n"
+			   "replay=verified\n"
+			   "labops=verified\n"
+			   "status=passed\n")) {
 		return 1;
 	}
 	if (!rp_append_status("auditor=passed")) return 1;

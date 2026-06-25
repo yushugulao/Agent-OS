@@ -5,6 +5,8 @@ int main(void)
 {
 	if (!rp_file_contains("rp_plan", "run=RUN-042")) return 1;
 	if (!rp_file_contains("rp_data", "datasets=4")) return 1;
+	if (!rp_file_contains("rp_datadic", "schema_fields=17")) return 1;
+	if (!rp_file_contains("rp_compute", "replay=ready")) return 1;
 	if (!rp_file_contains("rp_review", "status=accepted")) return 1;
 	if (!rp_write_file("rp_samples",
 			   "sample:S-001:cohort-A:input:ready\n"
@@ -54,11 +56,30 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_write_file("rp_labops",
+			   "instruments=2\n"
+			   "reservations=1\n"
+			   "reagent_lots=2\n"
+			   "inventory_transactions=6\n"
+			   "maintenance=passed\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_training",
+			   "personnel=3\n"
+			   "requirements=4\n"
+			   "competency_checks=3\n"
+			   "gaps=0\n"
+			   "status=ready\n")) {
+		return 1;
+	}
 	if (!rp_append_status("samples=ready")) return 1;
 	if (!rp_append_status("quality=ready")) return 1;
 	if (!rp_append_status("protocol=ready")) return 1;
 	if (!rp_append_status("sop=ready")) return 1;
 	if (!rp_append_status("experiment=ready")) return 1;
-	printf("rp_lab: samples=4 quality_checks=7 protocol_checks=5 trials=4 status=ready\n");
+	if (!rp_append_status("labops=ready")) return 1;
+	if (!rp_append_status("training=ready")) return 1;
+	printf("rp_lab: samples=4 quality_checks=7 protocol_checks=5 trials=4 labops=ready status=ready\n");
 	return 0;
 }

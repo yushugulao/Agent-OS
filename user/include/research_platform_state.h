@@ -42,7 +42,7 @@ static RP_UNUSED int rp_read_file(const char *path, char *buf, int cap)
 
 static RP_UNUSED int rp_file_contains(const char *path, const char *needle)
 {
-	char buf[512];
+	char buf[1024];
 	int n = rp_read_file(path, buf, sizeof(buf));
 	if (n < 0) {
 		printf("rp_state: missing path=%s\n", path);
@@ -70,7 +70,7 @@ static RP_UNUSED int rp_file_contains(const char *path, const char *needle)
 
 static RP_UNUSED int rp_count_lines(const char *path)
 {
-	char buf[768];
+	char buf[1024];
 	int n = rp_read_file(path, buf, sizeof(buf));
 	if (n < 0) return -1;
 	int count = 0;
@@ -82,7 +82,7 @@ static RP_UNUSED int rp_count_lines(const char *path)
 
 static RP_UNUSED int rp_count_token(const char *path, const char *needle)
 {
-	char buf[768];
+	char buf[1024];
 	int n = rp_read_file(path, buf, sizeof(buf));
 	if (n < 0) return -1;
 	int count = 0;
@@ -102,7 +102,7 @@ static RP_UNUSED int rp_count_token(const char *path, const char *needle)
 
 static RP_UNUSED int rp_append_status(const char *line)
 {
-	char buf[768];
+	char buf[2048];
 	int n = rp_read_file("rp_status", buf, sizeof(buf));
 	if (n < 0) {
 		buf[0] = 0;

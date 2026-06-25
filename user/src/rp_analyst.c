@@ -8,7 +8,28 @@ int main(void)
 			   "datasets=4\nstatistics=6\nfigures=3\nfailed_stage=align\nstatus=needs_repair\n")) {
 		return 1;
 	}
+	if (!rp_write_file("rp_datadic",
+			   "dataset=count-table\n"
+			   "schema_fields=17\n"
+			   "primary_keys=2\n"
+			   "controlled_terms=7\n"
+			   "transform_specs=4\n"
+			   "schema_drift=0\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_compute",
+			   "notebook_cells=4\n"
+			   "stat_tests=6\n"
+			   "figures=3\n"
+			   "calculation_jobs=1\n"
+			   "replay=ready\n"
+			   "status=ready\n")) {
+		return 1;
+	}
 	if (!rp_append_status("analyst=ready")) return 1;
-	printf("rp_analyst: datasets=4 statistics=6 figures=3 status=ready\n");
+	if (!rp_append_status("datadict=ready")) return 1;
+	if (!rp_append_status("compute=ready")) return 1;
+	printf("rp_analyst: datasets=4 statistics=6 figures=3 schema_fields=17 replay=ready status=ready\n");
 	return 0;
 }

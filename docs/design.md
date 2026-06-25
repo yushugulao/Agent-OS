@@ -66,12 +66,16 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_plan` | planner | retriever, analyst, auditor | run id, workflow, assignments, repair policy |
 | `rp_lit` | retriever | reviewer, auditor | literature count and evidence links |
 | `rp_data` | analyst | reviewer, repair, auditor | datasets, statistics, figures, failed stage |
+| `rp_datadic` | analyst | lab, package, compare | schema fields, controlled terms, transform specs, drift result |
+| `rp_compute` | analyst | lab, package, compare | notebook replay, statistics, calculation job, figure summary |
 | `rp_samples` | samples | quality, SOP | sample sheet, cohort, and custody summary |
 | `rp_quality` | quality | protocol, experiment, compare | data quality and schema validation result |
 | `rp_review` | reviewer | writer, auditor | claim review and release decision |
 | `rp_protocol` | protocol | SOP, compare | protocol, ethics, analysis plan, and amendment status |
 | `rp_soplog` | SOP execution | experiment | controlled SOP execution evidence |
 | `rp_exper` | experiment | telemetry | experiment campaign and selected best trial |
+| `rp_labops` | lab | package, compare | instrument, reagent, inventory, reservation, and maintenance summary |
+| `rp_training` | lab | package, compare | personnel training and competency summary |
 | `rp_report` | writer | auditor | report sections, citations, response items |
 | `rp_fix` | repair | auditor | repaired stage and generated artifact |
 | `rp_telemetry` | telemetry | AgentCompare | trace, bottleneck, poll, scan, and tick observations |
@@ -88,12 +92,16 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_knowledge` | evidence | package, compare | knowledge, semantic, and systematic review summary |
 | `rp_llm_req` | LLM bridge | privacy | host LLM request packet without embedded secrets |
 | `rp_llm_resp` | LLM bridge | privacy, compare | deterministic template LLM response |
+| `rp_prompt` | LLM bridge | privacy, package, compare | prompt versions, route policy, token budget, and evaluation cases |
+| `rp_llmlog` | LLM bridge | privacy, package, compare | transcript count, packet audit, privacy status, and replay status |
 | `rp_privacy` | privacy | release | outbound packet review result |
 | `rp_package` | package | compare | packaged artifact and release summary |
 | `rp_datarel` | package | release, dossier, compare | FAIR data, data product, DOI, and publication readiness |
+| `rp_repro` | package | release, dossier, compare | environment locks, notebook replay, reproduction checks, and research object crate |
 | `rp_release` | release | dossier, compare | release decision from package, audit, privacy, and LLM packet state |
 | `rp_dossier` | dossier | compare | final review material summary |
 | `rp_reviewops` | dossier | compare | review board, vote, risk, mitigation, and governance result |
+| `rp_submit` | dossier | compare | journal target, cover letter, data availability, and review response package |
 | `rp_agentcmp` | AgentCompare metrics | compare | plain-kernel comparison counters |
 | `rp_compare` | compare | orchestrator | plain-kernel execution summary |
 

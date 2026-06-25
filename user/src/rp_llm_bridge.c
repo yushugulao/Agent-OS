@@ -22,7 +22,28 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_write_file("rp_prompt",
+			   "prompt_versions=2\n"
+			   "routes=3\n"
+			   "budget_tokens=4096\n"
+			   "provider_policy=host_relay\n"
+			   "eval_cases=5\n"
+			   "secret_refs=3\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_llmlog",
+			   "transcripts=3\n"
+			   "request_packets=1\n"
+			   "response_packets=1\n"
+			   "privacy_checked=1\n"
+			   "replay=ready\n"
+			   "status=ready\n")) {
+		return 1;
+	}
 	if (!rp_append_status("llm_bridge=ready")) return 1;
-	printf("rp_llm_bridge: requests=1 responses=1 mode=template status=ready\n");
+	if (!rp_append_status("promptops=ready")) return 1;
+	if (!rp_append_status("llmtrace=ready")) return 1;
+	printf("rp_llm_bridge: requests=1 responses=1 routes=3 mode=template status=ready\n");
 	return 0;
 }
