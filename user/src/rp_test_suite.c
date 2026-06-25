@@ -47,10 +47,25 @@ int main(void)
 	ok = ok && require_file_token("rp_input", "custom_dataset_rows=3");
 	ok = ok && require_file_token("rp_input", "custom_dataset_rows_total=9");
 	ok = ok && require_file_token("rp_stage_state", "stages=5");
+	ok = ok && require_file_token("rp_stage_state", "command=align:agent-align");
+	ok = ok && require_file_token("rp_stage_state", "command=package:assemble");
+	ok = ok && require_file_token("rp_stage_state", "dependency_checks=5");
+	ok = ok && require_file_token("rp_stage_state", "outputs=5");
 	ok = ok && require_file_token("rp_cache_index", "cache_hits=1");
+	ok = ok && require_file_token("rp_cache_index", "cache_policy=content_keyed");
+	ok = ok && require_file_token("rp_cache_index", "reuse_stage=profile");
+	ok = ok && require_file_token("rp_cache_index", "refreshed_stage=align");
 	ok = ok && require_file_token("rp_retry_plan", "retry_items=1");
+	ok = ok && require_file_token("rp_retry_plan", "failure_reason=tool_output_missing");
+	ok = ok && require_file_token("rp_retry_plan", "rerun_outputs=rp_artifact");
+	ok = ok && require_file_token("rp_retry_plan", "skip_stages=ingest,profile,review,package");
 	ok = ok && require_file_token("rp_run_events", "events=8");
+	ok = ok && require_file_token("rp_run_events", "decision=retry_align_only");
+	ok = ok && require_file_token("rp_run_events", "report_ref=rp_report_text");
+	ok = ok && require_file_token("rp_run_events", "evidence_ref=rp_evidence");
 	ok = ok && require_file_token("rp_artifact_manifest", "manifest_records=4");
+	ok = ok && require_file_token("rp_artifact_manifest", "support=stage_log;path=rp_stage_log;status=ready");
+	ok = ok && require_file_token("rp_artifact_manifest", "support_entries=2");
 	ok = ok && require_file_token("rp_runner", "custom_source=rp_input");
 	ok = ok && require_file_token("rp_runner", "custom_runs=3");
 	ok = ok && require_file_token("rp_runner", "custom_dataset_rows=3");
@@ -151,6 +166,8 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_run", "runner_exec=");
 	ok = ok && require_file_token("rp_ui_run", "timeline_rows=5");
 	ok = ok && require_file_token("rp_ui_run", "artifact_preview=rp_report_text,rp_chart_data,rp_artifact");
+	ok = ok && require_file_token("rp_ui_run", "dependency_checks=5");
+	ok = ok && require_file_token("rp_ui_run", "retry_reason=tool_output_missing");
 	ok = ok && require_file_token("rp_ui_agent", "page=agent-detail");
 	ok = ok && require_file_token("rp_ui_agent", "decisions=8");
 	ok = ok && require_file_token("rp_ui_agent", "decision_rows=8");
@@ -170,6 +187,8 @@ int main(void)
 	ok = ok && require_file_token("rp_api_run", "custom_research=rp_runner");
 	ok = ok && require_file_token("rp_api_run", "custom_research_runs=3");
 	ok = ok && require_file_token("rp_api_run", "timeline_rows=5");
+	ok = ok && require_file_token("rp_api_run", "dependency_checks=5");
+	ok = ok && require_file_token("rp_api_run", "manifest_support_entries=2");
 	ok = ok && require_file_token("rp_api_agents", "agents=7");
 	ok = ok && require_file_token("rp_api_evidence", "provenance_paths=3");
 	ok = ok && require_file_token("rp_api_evidence", "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest");
@@ -206,6 +225,7 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "downloadable_units=3");
 	ok = ok && require_file_token("rp_web_bundle", "render_sections=7");
 	ok = ok && require_file_token("rp_web_bundle", "artifact_previews=3");
+	ok = ok && require_file_token("rp_web_bundle", "runner_detail_fields=16");
 	ok = ok && require_file_token("rp_web_bundle", "post_routes=5");
 	ok = ok && require_file_token("rp_web_bundle", "custom_research_files=1");
 	ok = ok && require_file_token("rp_web_bundle", "custom_research_runs=3");
@@ -216,7 +236,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=168\n"
+			   "tests=188\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -227,6 +247,7 @@ int main(void)
 			   "api_actions=passed\n"
 			   "custom_research=passed\n"
 			   "workflow=passed\n"
+			   "workflow_runner_detail=passed\n"
 			   "artifact_ops=passed\n"
 			   "agent_collaboration=passed\n"
 			   "ui_export=passed\n"
@@ -251,6 +272,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=168 catalog=passed data=passed services=passed actions=passed custom=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=188 catalog=passed data=passed services=passed actions=passed custom=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }

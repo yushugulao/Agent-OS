@@ -189,11 +189,11 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_data_quality` | data pipeline | package, consistency, metrics, UI export, compare, orchestrator | data-quality rule results for the dataset |
 | `rp_data_transform` | data pipeline | package, consistency, metrics, UI export, compare, orchestrator | transform records for normalization and sample-sheet join |
 | `rp_dataset_collection` | data pipeline | package, consistency, metrics, UI export, compare, orchestrator | final dataset collection tied to input, sample, count, and artifact sources |
-| `rp_stage_state` | workflow runner | package, consistency, metrics, UI export, compare, orchestrator | executable stage-state table derived from the DAG and logs |
-| `rp_cache_index` | workflow runner | package, consistency, metrics, UI export, compare, orchestrator | cache hit and miss records for all five stages |
-| `rp_retry_plan` | workflow runner | package, consistency, metrics, UI export, compare, orchestrator | retry item for the failed align stage with reason and action |
-| `rp_run_events` | workflow runner | package, consistency, metrics, UI export, compare, orchestrator | run-level event stream for start, cache, failure, retry, recovery, and package events |
-| `rp_artifact_manifest` | workflow runner | package, consistency, metrics, UI export, compare, orchestrator | generated artifact manifest for input, intermediate, report, and chart outputs |
+| `rp_stage_state` | workflow runner | package, consistency, metrics, UI export, compare, orchestrator | executable stage-state table with command, output, dependency-check, and result fields |
+| `rp_cache_index` | workflow runner | package, consistency, metrics, UI export, compare, orchestrator | cache hit and miss records plus cache policy, reused stage, and refreshed stage |
+| `rp_retry_plan` | workflow runner | package, consistency, metrics, UI export, compare, orchestrator | retry item for the failed align stage with failure reason, rerun input/output, and skipped stages |
+| `rp_run_events` | workflow runner | package, consistency, metrics, UI export, compare, orchestrator | run-level event stream with retry decision, report reference, and evidence reference |
+| `rp_artifact_manifest` | workflow runner | package, consistency, metrics, UI export, compare, orchestrator | generated artifact manifest for input, intermediate, report, chart, stage-log, and package-index outputs |
 | `rp_agents` | Agent collaboration | package, consistency, metrics, UI export, compare, orchestrator | seven role records for orchestrator, retriever, analyst, reviewer, writer, recovery, and auditor |
 | `rp_decisions` | Agent collaboration | package, consistency, metrics, UI export, compare, orchestrator | eight concrete decisions tied to plan, evidence, failure, recovery, report, audit, and comparison records |
 | `rp_handoff` | Agent collaboration | package, consistency, metrics, UI export, compare, orchestrator | six role-to-role handoff records with source artifacts |
@@ -262,7 +262,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_actionio` | Host Web/API export | test suite, compare, orchestrator | compact request, response, redirect, host export, and AgentCompare action record |
 | `rp_uresrun` | Host Web/API export | test suite, compare, orchestrator | usable research run and export result record derived from the request and dataset embedded in existing uCore state files |
 | `rp_web_bundle` | Host Web/API export | test suite, compare, orchestrator | bundle summary tying routes, API payloads, POST action payloads, UI pages, UI render sections, artifact preview entries, package export indexes, runner files, custom research fields, research service files, and relay files together |
-| `rp_tests` | test suite | compare, orchestrator | 168 user-space checks over catalog, data pipeline, service surface records, workflow, artifacts, package export indexes, UI render data, workflow runner files, custom research fields, Agent collaboration, UI data, Host Web/API export files, POST action records, LLM relay, AgentCompare, and consistency records |
+| `rp_tests` | test suite | compare, orchestrator | 188 user-space checks over catalog, data pipeline, service surface records, workflow, artifacts, package export indexes, UI render data, workflow runner files, workflow runner detail fields, custom research fields, Agent collaboration, UI data, Host Web/API export files, POST action records, LLM relay, AgentCompare, and consistency records |
 | `rp_compare` | compare | orchestrator | plain-kernel execution summary |
 
 This is intentionally implemented without new syscalls. It uses only `open`, `read`, `write`, `close`, `fork`, `exec`, and `waitpid`.

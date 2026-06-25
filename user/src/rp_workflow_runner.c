@@ -21,6 +21,13 @@ int main(void)
 			   "stage=profile;order=3;input=rp_artifact;attempts=1;state=cached\n"
 			   "stage=review;order=4;input=rp_claimrec;attempts=1;state=accepted\n"
 			   "stage=package;order=5;input=rp_report_text;attempts=1;state=ready\n"
+			   "command=ingest:read_fastq;output=rp_input\n"
+			   "command=align:agent-align;output=rp_artifact;first_status=failed;second_status=recovered\n"
+			   "command=profile:reuse_cache;output=rp_compute;cache=hit\n"
+			   "command=review:claim_review;output=rp_review;claims=8\n"
+			   "command=package:assemble;output=rp_package;report=rp_report_text\n"
+			   "dependency_checks=5\n"
+			   "outputs=5\n"
 			   "stages=5\n"
 			   "done=5\n"
 			   "recovered=1\n"
@@ -35,6 +42,9 @@ int main(void)
 			   "cache_key=profile:RUN-042;state=hit;source=rp_compute\n"
 			   "cache_key=review:RUN-042;state=miss;source=rp_claimrec\n"
 			   "cache_key=package:RUN-042;state=miss;source=rp_report_text\n"
+			   "cache_policy=content_keyed\n"
+			   "reuse_stage=profile\n"
+			   "refreshed_stage=align\n"
 			   "cache_records=5\n"
 			   "cache_hits=1\n"
 			   "cache_misses=4\n"
@@ -47,6 +57,10 @@ int main(void)
 			   "failed_stage=align\n"
 			   "retry_stage=align\n"
 			   "attempts=2\n"
+			   "failure_reason=tool_output_missing\n"
+			   "rerun_inputs=rp_input_fastq\n"
+			   "rerun_outputs=rp_artifact\n"
+			   "skip_stages=ingest,profile,review,package\n"
 			   "dedupe_key=RUN-042:align\n"
 			   "minimal_rerun=1\n"
 			   "status=ready\n")) {
@@ -62,6 +76,9 @@ int main(void)
 			   "event=6;stage=review;action=claim_review;status=accepted\n"
 			   "event=7;stage=package;action=manifest_ready;status=ready\n"
 			   "event=8;stage=run;action=finish;status=ready\n"
+			   "decision=retry_align_only;reason=tool_output_missing\n"
+			   "report_ref=rp_report_text\n"
+			   "evidence_ref=rp_evidence\n"
 			   "events=8\n"
 			   "status=ready\n")) {
 		return 1;
@@ -73,7 +90,10 @@ int main(void)
 			   "record=2;kind=artifact;path=rp_artifact;status=recovered\n"
 			   "record=3;kind=report;path=rp_report_text;status=ready\n"
 			   "record=4;kind=chart;path=rp_chart_data;status=ready\n"
+			   "support=stage_log;path=rp_stage_log;status=ready\n"
+			   "support=package_index;path=rp_package;status=ready\n"
 			   "manifest_records=4\n"
+			   "support_entries=2\n"
 			   "status=ready\n")) {
 		return 1;
 	}

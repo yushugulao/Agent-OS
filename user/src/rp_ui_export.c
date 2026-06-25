@@ -7,6 +7,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "status=ready");
 	ok = ok && rp_file_contains("rp_stage_dag", "failed_stage=align");
 	ok = ok && rp_file_contains("rp_stage_state", "stages=5");
+	ok = ok && rp_file_contains("rp_stage_state", "dependency_checks=5");
+	ok = ok && rp_file_contains("rp_retry_plan", "failure_reason=tool_output_missing");
+	ok = ok && rp_file_contains("rp_artifact_manifest", "support_entries=2");
 	ok = ok && rp_file_contains("rp_cache_index", "cache_hits=1");
 	ok = ok && rp_file_contains("rp_retry_plan", "retry_items=1");
 	ok = ok && rp_file_contains("rp_run_events", "events=8");
@@ -60,6 +63,9 @@ int main(void)
 			   "chart=rp_chart_data\n"
 			   "timeline_rows=5\n"
 			   "artifact_preview=rp_report_text,rp_chart_data,rp_artifact\n"
+			   "dependency_checks=5\n"
+			   "stage_outputs=5\n"
+			   "retry_reason=tool_output_missing\n"
 			   "runner_exec=rp_stage_state,rp_cache_index,rp_retry_plan,rp_run_events,rp_artifact_manifest\n"
 			   "data_pipeline=rp_ingest_files,rp_dataset_snapshot,rp_data_preview,rp_data_quality,rp_data_transform,rp_dataset_collection\n"
 			   "research_services=rp_sreg,rp_instr,rp_resrev,rp_semindex,rp_runenv\n"

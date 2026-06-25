@@ -138,10 +138,16 @@ int main(void)
 	ok = ok && rp_file_contains("rp_stage_dag", "failed_stage=align");
 	ok = ok && rp_file_contains("rp_stage_log", "status=ready");
 	ok = ok && rp_file_contains("rp_stage_state", "stages=5");
+	ok = ok && rp_file_contains("rp_stage_state", "dependency_checks=5");
+	ok = ok && rp_file_contains("rp_stage_state", "command=align:agent-align");
 	ok = ok && rp_file_contains("rp_cache_index", "cache_hits=1");
+	ok = ok && rp_file_contains("rp_cache_index", "cache_policy=content_keyed");
 	ok = ok && rp_file_contains("rp_retry_plan", "retry_items=1");
+	ok = ok && rp_file_contains("rp_retry_plan", "failure_reason=tool_output_missing");
 	ok = ok && rp_file_contains("rp_run_events", "events=8");
+	ok = ok && rp_file_contains("rp_run_events", "decision=retry_align_only");
 	ok = ok && rp_file_contains("rp_artifact_manifest", "manifest_records=4");
+	ok = ok && rp_file_contains("rp_artifact_manifest", "support_entries=2");
 	ok = ok && rp_file_contains("rp_artifact", "status=recovered");
 	ok = ok && rp_file_contains("rp_report_text", "RUN-042 Recovery Report");
 	ok = ok && rp_file_contains("rp_chart_data", "chart=stage_attempts");
@@ -190,6 +196,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_run", "custom_research=rp_runner");
 	ok = ok && rp_file_contains("rp_api_run", "custom_research_runs=3");
 	ok = ok && rp_file_contains("rp_api_run", "timeline_rows=5");
+	ok = ok && rp_file_contains("rp_api_run", "dependency_checks=5");
+	ok = ok && rp_file_contains("rp_api_run", "manifest_support_entries=2");
 	ok = ok && rp_file_contains("rp_api_agents", "agents=7");
 	ok = ok && rp_file_contains("rp_api_evidence", "provenance_paths=3");
 	ok = ok && rp_file_contains("rp_api_evidence", "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest");
@@ -220,8 +228,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "downloadable_units=3");
 	ok = ok && rp_file_contains("rp_web_bundle", "render_sections=7");
 	ok = ok && rp_file_contains("rp_web_bundle", "artifact_previews=3");
+	ok = ok && rp_file_contains("rp_web_bundle", "runner_detail_fields=16");
 	ok = ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
-	ok = ok && rp_file_contains("rp_tests", "tests=168");
+	ok = ok && rp_file_contains("rp_tests", "tests=188");
 	ok = ok && rp_file_contains("rp_tests", "status=passed");
 	ok = ok && rp_file_contains("rp_ack", "ack=consistency;msg=22;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=consistency.check_backend");
@@ -259,6 +268,7 @@ int main(void)
 			   "consistency_checks=86\n"
 			   "runner_stages=5\n"
 			   "workflow_runner_files=5\n"
+			   "runner_detail_fields=16\n"
 			   "package_bundle_items=18\n"
 			   "downloadable_units=3\n"
 			   "data_pipeline_files=6\n"
@@ -281,7 +291,7 @@ int main(void)
 			   "web_api_payloads=14\n"
 			   "web_action_routes=5\n"
 			   "web_action_outputs=2\n"
-			   "test_cases=168\n"
+			   "test_cases=188\n"
 			   "status=ready\n")) {
 		return 1;
 	}

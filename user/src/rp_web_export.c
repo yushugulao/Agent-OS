@@ -8,6 +8,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_ui_home", "nav_items=12");
 	ok = ok && rp_file_contains("rp_ui_run", "runner_exec=");
 	ok = ok && rp_file_contains("rp_ui_run", "timeline_rows=5");
+	ok = ok && rp_file_contains("rp_ui_run", "dependency_checks=5");
+	ok = ok && rp_file_contains("rp_ui_run", "retry_reason=tool_output_missing");
 	ok = ok && rp_file_contains("rp_ui_agent", "decisions=8");
 	ok = ok && rp_file_contains("rp_ui_agent", "decision_rows=8");
 	ok = ok && rp_file_contains("rp_ui_evidence", "stage_log=rp_stage_log");
@@ -81,12 +83,16 @@ int main(void)
 			   "retry_stage=align\n"
 			   "timeline_rows=5\n"
 			   "artifact_preview=rp_report_text,rp_chart_data,rp_artifact\n"
+			   "dependency_checks=5\n"
+			   "stage_outputs=5\n"
+			   "retry_reason=tool_output_missing\n"
 			   "runner_exec_files=5\n"
 			   "stage_state=rp_stage_state\n"
 			   "cache_index=rp_cache_index\n"
 			   "retry_plan=rp_retry_plan\n"
 			   "run_events=rp_run_events\n"
 			   "artifact_manifest=rp_artifact_manifest\n"
+			   "manifest_support_entries=2\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -291,6 +297,7 @@ int main(void)
 			   "source_pages=5\n"
 			   "render_sections=7\n"
 			   "artifact_previews=3\n"
+			   "runner_detail_fields=16\n"
 			   "evidence_package=rp_package\n"
 			   "package_manifest=ready\n"
 			   "downloadable_units=3\n"

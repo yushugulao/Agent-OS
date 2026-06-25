@@ -328,10 +328,16 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_dataset_collection", "items=4");
 	state_ok = state_ok && rp_file_contains("rp_runner", "stages=5");
 	state_ok = state_ok && rp_file_contains("rp_stage_state", "stages=5");
+	state_ok = state_ok && rp_file_contains("rp_stage_state", "dependency_checks=5");
+	state_ok = state_ok && rp_file_contains("rp_stage_state", "command=align:agent-align");
 	state_ok = state_ok && rp_file_contains("rp_cache_index", "cache_hits=1");
+	state_ok = state_ok && rp_file_contains("rp_cache_index", "cache_policy=content_keyed");
 	state_ok = state_ok && rp_file_contains("rp_retry_plan", "retry_items=1");
+	state_ok = state_ok && rp_file_contains("rp_retry_plan", "failure_reason=tool_output_missing");
 	state_ok = state_ok && rp_file_contains("rp_run_events", "events=8");
+	state_ok = state_ok && rp_file_contains("rp_run_events", "decision=retry_align_only");
 	state_ok = state_ok && rp_file_contains("rp_artifact_manifest", "manifest_records=4");
+	state_ok = state_ok && rp_file_contains("rp_artifact_manifest", "support_entries=2");
 	state_ok = state_ok && rp_file_contains("rp_stage_log", "status=ready");
 	state_ok = state_ok && rp_file_contains("rp_artifact", "status=recovered");
 	state_ok = state_ok && rp_file_contains("rp_input", "custom_run=usable-run:RUN-900");
@@ -371,6 +377,8 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_api_run", "custom_research=rp_runner");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "custom_research_runs=3");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "timeline_rows=5");
+	state_ok = state_ok && rp_file_contains("rp_api_run", "dependency_checks=5");
+	state_ok = state_ok && rp_file_contains("rp_api_run", "manifest_support_entries=2");
 	state_ok = state_ok && rp_file_contains("rp_api_agents", "agents=7");
 	state_ok = state_ok && rp_file_contains("rp_api_evidence", "provenance_paths=3");
 	state_ok = state_ok && rp_file_contains("rp_api_evidence", "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest");
@@ -389,6 +397,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "downloadable_units=3");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "render_sections=7");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "artifact_previews=3");
+	state_ok = state_ok && rp_file_contains("rp_web_bundle", "runner_detail_fields=16");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "requests=5");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "responses=5");
@@ -402,7 +411,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_uresrun", "dataset_rows_total=9");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "Comparison Metrics");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "passed_cases=3");
-	state_ok = state_ok && rp_file_contains("rp_tests", "tests=168");
+	state_ok = state_ok && rp_file_contains("rp_tests", "tests=188");
 	state_ok = state_ok && rp_file_contains("rp_tests", "status=passed");
 	state_ok = state_ok && rp_file_contains("rp_litrev", "papers=9");
 	state_ok = state_ok && rp_file_contains("rp_citegraph", "bibtex_entries=9");
