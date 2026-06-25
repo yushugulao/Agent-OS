@@ -85,12 +85,15 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_site` | site export | compare | exported site page summary |
 | `rp_query` | query | compare | selected search result counts |
 | `rp_evidence` | evidence | package | claims, links, provenance node count |
+| `rp_knowledge` | evidence | package, compare | knowledge, semantic, and systematic review summary |
 | `rp_llm_req` | LLM bridge | privacy | host LLM request packet without embedded secrets |
 | `rp_llm_resp` | LLM bridge | privacy, compare | deterministic template LLM response |
 | `rp_privacy` | privacy | release | outbound packet review result |
 | `rp_package` | package | compare | packaged artifact and release summary |
+| `rp_datarel` | package | release, dossier, compare | FAIR data, data product, DOI, and publication readiness |
 | `rp_release` | release | dossier, compare | release decision from package, audit, privacy, and LLM packet state |
 | `rp_dossier` | dossier | compare | final review material summary |
+| `rp_reviewops` | dossier | compare | review board, vote, risk, mitigation, and governance result |
 | `rp_agentcmp` | AgentCompare metrics | compare | plain-kernel comparison counters |
 | `rp_compare` | compare | orchestrator | plain-kernel execution summary |
 

@@ -10,7 +10,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_site", "pages=6");
 	ok = ok && rp_file_contains("rp_llm_resp", "status=ready");
 	ok = ok && rp_file_contains("rp_release", "decision=release");
-	ok = ok && rp_file_contains("rp_dossier", "sections=8");
+	ok = ok && rp_file_contains("rp_dossier", "sections=10");
+	ok = ok && rp_file_contains("rp_knowledge", "semantic_relations=6");
+	ok = ok && rp_file_contains("rp_datarel", "fair=passed");
+	ok = ok && rp_file_contains("rp_reviewops", "governance=passed");
 	ok = ok && rp_file_contains("rp_agentcmp", "report_ok=1");
 	ok = ok && rp_file_contains("rp_protocol", "ethics=approved");
 	ok = ok && rp_file_contains("rp_quality", "passed=7");

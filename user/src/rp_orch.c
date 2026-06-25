@@ -86,11 +86,14 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_status", "auditor=passed");
 	state_ok = state_ok && rp_file_contains("rp_status", "query=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "evidence=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "knowledge=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "llm_bridge=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "privacy=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "package=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "datarel=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "release=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "dossier=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "reviewops=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "agentcmp=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "compare=ready");
 	state_ok = state_ok && rp_file_contains("rp_audit", "status=passed");
@@ -100,7 +103,10 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_site", "pages=6");
 	state_ok = state_ok && rp_file_contains("rp_llm_resp", "status=ready");
 	state_ok = state_ok && rp_file_contains("rp_release", "decision=release");
-	state_ok = state_ok && rp_file_contains("rp_dossier", "sections=8");
+	state_ok = state_ok && rp_file_contains("rp_dossier", "sections=10");
+	state_ok = state_ok && rp_file_contains("rp_knowledge", "synthesis=ready");
+	state_ok = state_ok && rp_file_contains("rp_datarel", "fair=passed");
+	state_ok = state_ok && rp_file_contains("rp_reviewops", "governance=passed");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "report_ok=1");
 	state_ok = state_ok && rp_file_contains("rp_protocol", "ethics=approved");
 	printf("rp_orch: state_ok=%d\n", state_ok);

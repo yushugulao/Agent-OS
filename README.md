@@ -99,12 +99,15 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_site`
 - `rp_query`
 - `rp_evidence`
+- `rp_knowledge`
 - `rp_llm_req`
 - `rp_llm_resp`
 - `rp_privacy`
 - `rp_package`
+- `rp_datarel`
 - `rp_release`
 - `rp_dossier`
+- `rp_reviewops`
 - `rp_agentcmp`
 - `rp_compare`
 
@@ -160,12 +163,12 @@ rp_writer: sections=6 citations=9 response_items=3 status=packaged
 rp_repair: failed_stage=align action=minimal_rerun status=recovered
 rp_auditor: provenance=verified release=ready package=ready status=passed
 rp_query: workflow=34 agent=26 evidence=10 status=ready
-rp_evidence: claims=8 links=5 provenance=12 status=ready
+rp_evidence: claims=8 links=5 provenance=12 knowledge=4 status=ready
 rp_llm_bridge: requests=1 responses=1 mode=template status=ready
 rp_privacy: checked=2 redactions=0 status=ready
-rp_package: artifacts=8 checks=13 release=ready status=ready
+rp_package: artifacts=8 checks=13 fair=passed status=ready
 rp_release: decision=release checks=4 status=ready
-rp_dossier: sections=8 status=ready
+rp_dossier: sections=10 review_board=accepted status=ready
 rp_metrics: telemetry_spans=6 scanned=128 report_ok=1 status=ready
 rp_compare_plain: plain_kernel=passed objects=500 programs=22 status=ready
 rp_orch: programs_ok=22 programs_total=22
@@ -189,10 +192,10 @@ No output means the directories match.
 
 ## Next Work
 
-The current native programs prove that the plain uCore kernel can boot and run a research-platform-shaped catalog process plus a multi-process workflow with ordinary file-backed object storage, query, lineage, site export, samples, quality, protocol, SOP, experiment, telemetry, evidence, LLM packet, privacy review, package, release, dossier, AgentCompare metrics, and comparison services. Further migration work should move more behavior from embedded tables into active user-space services:
+The current native programs prove that the plain uCore kernel can boot and run a research-platform-shaped catalog process plus a multi-process workflow with ordinary file-backed object storage, query, lineage, site export, samples, quality, protocol, SOP, experiment, telemetry, evidence, knowledge, semantic summary, systematic review summary, LLM packet, privacy review, FAIR data release, data product summary, package, release, dossier, review governance, AgentCompare metrics, and comparison services. Further migration work should move more behavior from embedded tables into active user-space services:
 
 - Persistent platform state files in the uCore root file system.
-- Expand the planner, retriever, analyst, reviewer, writer, repair, auditor, object query, lineage, export, sample, quality, protocol, SOP, experiment, telemetry, LLM packet, privacy, release, dossier, and AgentCompare programs beyond the current fixed records.
+- Expand the planner, retriever, analyst, reviewer, writer, repair, auditor, object query, lineage, export, sample, quality, protocol, SOP, experiment, telemetry, evidence, knowledge, FAIR data release, review governance, LLM packet, privacy, release, dossier, and AgentCompare programs beyond the current fixed records.
 - A user-space message protocol using only unchanged uCore syscalls.
 - A host LLM relay that consumes the existing ordinary request files and writes ordinary response files.
 - More executable checks for workflow portability, release review, and AgentCompare comparison.

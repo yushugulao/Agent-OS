@@ -94,12 +94,12 @@ rp_writer: sections=6 citations=9 response_items=3 status=packaged
 rp_repair: failed_stage=align action=minimal_rerun status=recovered
 rp_auditor: provenance=verified release=ready package=ready status=passed
 rp_query: workflow=34 agent=26 evidence=10 status=ready
-rp_evidence: claims=8 links=5 provenance=12 status=ready
+rp_evidence: claims=8 links=5 provenance=12 knowledge=4 status=ready
 rp_llm_bridge: requests=1 responses=1 mode=template status=ready
 rp_privacy: checked=2 redactions=0 status=ready
-rp_package: artifacts=8 checks=13 release=ready status=ready
+rp_package: artifacts=8 checks=13 fair=passed status=ready
 rp_release: decision=release checks=4 status=ready
-rp_dossier: sections=8 status=ready
+rp_dossier: sections=10 review_board=accepted status=ready
 rp_metrics: telemetry_spans=6 scanned=128 report_ok=1 status=ready
 rp_compare_plain: plain_kernel=passed objects=500 programs=22 status=ready
 rp_orch: programs_ok=22 programs_total=22
@@ -132,6 +132,6 @@ This first native uCore version validates:
 - a complete research run simulation with one failed stage repaired in user space.
 - multi-process execution with twenty-two ordinary uCore user programs.
 - ordinary file-backed state exchange across role programs.
-- object catalog, reusable object records, object query, lineage, site export, samples, quality, protocol, SOP, experiment, telemetry, evidence, LLM packet, privacy, package, release, dossier, AgentCompare metrics, and plain-kernel comparison files.
+- object catalog, reusable object records, object query, lineage, site export, samples, quality, protocol, SOP, experiment, telemetry, evidence, knowledge, LLM packet, privacy, FAIR data release, package, release, dossier, review governance, AgentCompare metrics, and plain-kernel comparison files.
 
 It does not use Agent-OS kernel features. That is intentional for this plain-kernel baseline.
