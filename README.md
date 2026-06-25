@@ -22,12 +22,18 @@ user/src/rp_planner.c
 user/src/rp_retriever.c
 user/src/rp_analyst.c
 user/src/rp_reviewer.c
+user/src/rp_lab.c
 user/src/rp_writer.c
 user/src/rp_repair.c
 user/src/rp_auditor.c
 user/src/rp_query.c
 user/src/rp_evidence.c
+user/src/rp_llm_bridge.c
+user/src/rp_privacy.c
 user/src/rp_package.c
+user/src/rp_release.c
+user/src/rp_dossier.c
+user/src/rp_metrics.c
 user/src/rp_compare_plain.c
 ```
 
@@ -42,7 +48,7 @@ user/src/rp_compare_plain.c
 - A plain user-space research run simulation with planning, literature, analysis, review, writing, repair, and audit roles.
 - Local catalog search for workflow, Agent, evidence, provenance, and LLM related platform objects.
 
-`rp_orch` runs twenty platform programs as separate uCore user processes:
+`rp_orch` runs twenty-two platform programs as separate uCore user processes:
 
 - catalog,
 - object store,
@@ -53,6 +59,7 @@ user/src/rp_compare_plain.c
 - retriever,
 - analyst,
 - reviewer,
+- lab evidence service,
 - writer,
 - repair,
 - auditor,
@@ -63,6 +70,7 @@ user/src/rp_compare_plain.c
 - package,
 - release decision,
 - final dossier,
+- metrics service,
 - plain-kernel comparison.
 
 It uses ordinary `fork`, `exec`, and `waitpid`. This provides a plain-kernel baseline for the later Agent-OS multi-Agent version.
@@ -72,9 +80,15 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_plan`
 - `rp_lit`
 - `rp_data`
+- `rp_samples`
+- `rp_quality`
 - `rp_review`
+- `rp_protocol`
+- `rp_soplog`
+- `rp_exper`
 - `rp_report`
 - `rp_fix`
+- `rp_telemetry`
 - `rp_audit`
 - `rp_status`
 - `rp_objects`
@@ -91,6 +105,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_package`
 - `rp_release`
 - `rp_dossier`
+- `rp_agentcmp`
 - `rp_compare`
 
 Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_compare` after all children exit, then prints `state_ok=1`.
@@ -130,7 +145,7 @@ rp_plain: passed
 Expected orchestrator output:
 
 ```text
-rp_orch: start programs=20
+rp_orch: start programs=22
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_object_store: records=8 status=ready
 rp_object_query: hits=8 ready_hits=7 status=ready
@@ -140,6 +155,7 @@ rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 status=planned
 rp_retriever: literature=3 evidence_links=5 status=ready
 rp_analyst: datasets=4 statistics=6 figures=3 status=ready
 rp_reviewer: claims=8 protocol_checks=5 release_checks=4 status=accepted
+rp_lab: samples=4 quality_checks=7 protocol_checks=5 trials=4 status=ready
 rp_writer: sections=6 citations=9 response_items=3 status=packaged
 rp_repair: failed_stage=align action=minimal_rerun status=recovered
 rp_auditor: provenance=verified release=ready package=ready status=passed
@@ -150,8 +166,9 @@ rp_privacy: checked=2 redactions=0 status=ready
 rp_package: artifacts=8 checks=13 release=ready status=ready
 rp_release: decision=release checks=4 status=ready
 rp_dossier: sections=8 status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=20 status=ready
-rp_orch: programs_ok=20 programs_total=20
+rp_metrics: telemetry_spans=6 scanned=128 report_ok=1 status=ready
+rp_compare_plain: plain_kernel=passed objects=500 programs=22 status=ready
+rp_orch: programs_ok=22 programs_total=22
 rp_orch: state_ok=1
 rp_orch: passed
 ```
@@ -172,10 +189,10 @@ No output means the directories match.
 
 ## Next Work
 
-The current native programs prove that the plain uCore kernel can boot and run a research-platform-shaped catalog process plus a multi-process workflow with ordinary file-backed object storage, query, lineage, site export, evidence, LLM packet, privacy review, package, release, dossier, and comparison services. Further migration work should move more behavior from embedded tables into active user-space services:
+The current native programs prove that the plain uCore kernel can boot and run a research-platform-shaped catalog process plus a multi-process workflow with ordinary file-backed object storage, query, lineage, site export, samples, quality, protocol, SOP, experiment, telemetry, evidence, LLM packet, privacy review, package, release, dossier, AgentCompare metrics, and comparison services. Further migration work should move more behavior from embedded tables into active user-space services:
 
 - Persistent platform state files in the uCore root file system.
-- Expand the planner, retriever, analyst, reviewer, writer, repair, auditor, object query, lineage, export, LLM packet, privacy, release, and dossier programs beyond the current fixed records.
+- Expand the planner, retriever, analyst, reviewer, writer, repair, auditor, object query, lineage, export, sample, quality, protocol, SOP, experiment, telemetry, LLM packet, privacy, release, dossier, and AgentCompare programs beyond the current fixed records.
 - A user-space message protocol using only unchanged uCore syscalls.
 - A host LLM relay that consumes the existing ordinary request files and writes ordinary response files.
 - More executable checks for workflow portability, release review, and AgentCompare comparison.

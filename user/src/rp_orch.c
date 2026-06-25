@@ -13,6 +13,7 @@ static const char *PROGRAMS[] = {
 	"rp_retriever",
 	"rp_analyst",
 	"rp_reviewer",
+	"rp_lab",
 	"rp_writer",
 	"rp_repair",
 	"rp_auditor",
@@ -23,6 +24,7 @@ static const char *PROGRAMS[] = {
 	"rp_package",
 	"rp_release",
 	"rp_dossier",
+	"rp_metrics",
 	"rp_compare_plain",
 };
 
@@ -72,9 +74,15 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_status", "planner=planned");
 	state_ok = state_ok && rp_file_contains("rp_status", "retriever=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "analyst=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "samples=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "quality=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "reviewer=accepted");
+	state_ok = state_ok && rp_file_contains("rp_status", "protocol=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "sop=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "experiment=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "writer=packaged");
 	state_ok = state_ok && rp_file_contains("rp_status", "repair=recovered");
+	state_ok = state_ok && rp_file_contains("rp_status", "telemetry=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "auditor=passed");
 	state_ok = state_ok && rp_file_contains("rp_status", "query=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "evidence=ready");
@@ -83,6 +91,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_status", "package=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "release=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "dossier=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "agentcmp=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "compare=ready");
 	state_ok = state_ok && rp_file_contains("rp_audit", "status=passed");
 	state_ok = state_ok && rp_file_contains("rp_compare", "plain_kernel=passed");
@@ -92,6 +101,8 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_llm_resp", "status=ready");
 	state_ok = state_ok && rp_file_contains("rp_release", "decision=release");
 	state_ok = state_ok && rp_file_contains("rp_dossier", "sections=8");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "report_ok=1");
+	state_ok = state_ok && rp_file_contains("rp_protocol", "ethics=approved");
 	printf("rp_orch: state_ok=%d\n", state_ok);
 	if (!state_ok) {
 		printf("rp_orch: failed\n");
