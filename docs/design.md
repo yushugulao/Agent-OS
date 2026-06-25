@@ -104,6 +104,8 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_rank` | query | metrics, compare, orchestrator | task ranking result derived from `rp_taskrec` |
 | `rp_runview` | query | metrics, compare, orchestrator | run-level view that joins query hits, scheduler state, failure count, and budget state |
 | `rp_evidence` | evidence | package | claims, links, provenance node count |
+| `rp_claimrec` | evidence | LLM bridge, package, dossier, metrics, compare, orchestrator | claim-level support records linked to data, protocol, recovery, privacy, release, and reproduction sources |
+| `rp_provpath` | evidence | LLM bridge, package, dossier, metrics, compare, orchestrator | provenance path summary with node count, edge count, claim count, and critical path count |
 | `rp_knowledge` | evidence | package, compare | knowledge, semantic, and systematic review summary |
 | `rp_llm_req` | LLM bridge | privacy | host LLM request packet without embedded secrets |
 | `rp_llmq` | LLM bridge | privacy, package, release, dossier, metrics, compare, orchestrator | host relay request queue, route selection, and per-request secret policy |

@@ -4,6 +4,8 @@
 int main(void)
 {
 	if (!rp_file_contains("rp_evidence", "claims=8")) return 1;
+	if (!rp_file_contains("rp_claimrec", "claim=8")) return 1;
+	if (!rp_file_contains("rp_provpath", "critical_paths=3")) return 1;
 	if (!rp_file_contains("rp_report", "status=packaged")) return 1;
 	if (!rp_file_contains("rp_mail", "to=llm")) return 1;
 	if (!rp_write_file("rp_llm_req",
@@ -24,7 +26,7 @@ int main(void)
 			   "route_fallback=recovery_note\n"
 			   "q1=review_summary;claims=8;evidence_links=5;secret_policy=no_secret_in_ucore\n"
 			   "q2=method_check;protocol_checks=5;data_schema=17;secret_policy=no_secret_in_ucore\n"
-			   "q3=recovery_note;failed_stage=align;attempts=2;secret_policy=no_secret_in_ucore\n"
+			   "q3=recovery_note;failed_stage=align;attempts=2;prov_paths=3;secret_policy=no_secret_in_ucore\n"
 			   "status=ready\n")) {
 		return 1;
 	}

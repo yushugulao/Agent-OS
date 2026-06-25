@@ -7,6 +7,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_report", "status=packaged");
 	ok = ok && rp_file_contains("rp_revision", "final_status=ready");
 	ok = ok && rp_file_contains("rp_evidence", "status=ready");
+	ok = ok && rp_file_contains("rp_claimrec", "claim=8");
+	ok = ok && rp_file_contains("rp_provpath", "critical_paths=3");
 	ok = ok && rp_file_contains("rp_knowledge", "synthesis=ready");
 	ok = ok && rp_file_contains("rp_wfio", "compatibility_checks=6");
 	ok = ok && rp_file_contains("rp_datadic", "schema_fields=17");
@@ -28,7 +30,7 @@ int main(void)
 	if (!rp_write_file("rp_package",
 			   "package=research-evidence-package\n"
 			   "artifacts=12\n"
-			   "checks=21\n"
+			   "checks=23\n"
 			   "release=ready\n"
 			   "status=ready\n")) {
 		return 1;
@@ -67,10 +69,11 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=package.version_data;target=rp_dataver;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.build_repro;target=rp_repro;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_llm_eval;target=rp_llmeval;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_evidence_path;target=rp_provpath;status=ok")) return 1;
 	if (!rp_append_status("package=ready")) return 1;
 	if (!rp_append_status("datarel=ready")) return 1;
 	if (!rp_append_status("dataver=ready")) return 1;
 	if (!rp_append_status("repro=ready")) return 1;
-	printf("rp_package: artifacts=12 checks=21 fair=passed repro=ready status=ready\n");
+	printf("rp_package: artifacts=12 checks=23 fair=passed repro=ready status=ready\n");
 	return 0;
 }

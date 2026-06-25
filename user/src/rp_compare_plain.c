@@ -10,8 +10,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_site", "pages=6");
 	ok = ok && rp_file_contains("rp_llm_resp", "responses=3");
 	ok = ok && rp_file_contains("rp_release", "decision=release");
-	ok = ok && rp_file_contains("rp_dossier", "sections=20");
+	ok = ok && rp_file_contains("rp_dossier", "sections=22");
 	ok = ok && rp_file_contains("rp_knowledge", "semantic_relations=6");
+	ok = ok && rp_file_contains("rp_claimrec", "claim=8");
+	ok = ok && rp_file_contains("rp_provpath", "critical_paths=3");
 	ok = ok && rp_file_contains("rp_datarel", "fair=passed");
 	ok = ok && rp_file_contains("rp_dataver", "release_candidate=v2");
 	ok = ok && rp_file_contains("rp_reviewops", "governance=passed");
@@ -43,10 +45,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentcmp", "report_ok=1");
 	ok = ok && rp_file_contains("rp_agentcmp", "repro_ok=1");
 	ok = ok && rp_file_contains("rp_agentcmp", "message_acks=14");
-	ok = ok && rp_file_contains("rp_agentcmp", "tool_events=36");
+	ok = ok && rp_file_contains("rp_agentcmp", "tool_events=39");
 	ok = ok && rp_file_contains("rp_agentcmp", "scheduler_items=14");
 	ok = ok && rp_file_contains("rp_agentcmp", "ranked_tasks=14");
 	ok = ok && rp_file_contains("rp_agentcmp", "selected_tasks=5");
+	ok = ok && rp_file_contains("rp_agentcmp", "claim_records=8");
+	ok = ok && rp_file_contains("rp_agentcmp", "provenance_paths=3");
 	ok = ok && rp_file_contains("rp_agentcmp", "workflow_exports=2");
 	ok = ok && rp_file_contains("rp_agentcmp", "review_rounds=2");
 	ok = ok && rp_file_contains("rp_agentcmp", "data_versions=2");
@@ -69,13 +73,13 @@ int main(void)
 			   "agentos_kernel=pending\n"
 			   "objects=500\n"
 			   "programs=22\n"
-			   "state_files=60\n"
+			   "state_files=62\n"
 			   "message_acks=15\n"
-			   "tool_events=38\n"
+			   "tool_events=41\n"
 			   "status=ready\n")) {
 		return 1;
 	}
 	if (!rp_append_status("compare=ready")) return 1;
-	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=22 state_files=60 acks=15 tools=38 status=ready\n");
+	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=22 state_files=62 acks=15 tools=41 status=ready\n");
 	return 0;
 }
