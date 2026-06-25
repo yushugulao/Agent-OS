@@ -42,6 +42,9 @@ int main(void)
 			   "custom_runs=3\n"
 			   "status=recovered\n"
 			   "cards=run,custom_research,agents,evidence,data,bio,lab,publication,knowledge,runtime,llm_relay,compare\n"
+			   "nav_items=12\n"
+			   "primary_cards=12\n"
+			   "home_sections=overview,run,custom_research,agents,evidence,data,services,llm,compare\n"
 			   "source=plain_ucore_files\n"
 			   "status=ready\n")) {
 		return 1;
@@ -55,6 +58,8 @@ int main(void)
 			   "retry_stage=align\n"
 			   "report=rp_report_text\n"
 			   "chart=rp_chart_data\n"
+			   "timeline_rows=5\n"
+			   "artifact_preview=rp_report_text,rp_chart_data,rp_artifact\n"
 			   "runner_exec=rp_stage_state,rp_cache_index,rp_retry_plan,rp_run_events,rp_artifact_manifest\n"
 			   "data_pipeline=rp_ingest_files,rp_dataset_snapshot,rp_data_preview,rp_data_quality,rp_data_transform,rp_dataset_collection\n"
 			   "research_services=rp_sreg,rp_instr,rp_resrev,rp_semindex,rp_runenv\n"
@@ -70,6 +75,7 @@ int main(void)
 			   "messages=21\n"
 			   "acks=26\n"
 			   "decisions=8\n"
+			   "decision_rows=8\n"
 			   "handoffs=6\n"
 			   "decision_records=rp_agents,rp_decisions,rp_handoff,rp_deliberation,rp_agent_run\n"
 			   "status=ready\n")) {
@@ -82,6 +88,7 @@ int main(void)
 			   "critical_paths=3\n"
 			   "stage_log=rp_stage_log\n"
 			   "artifact=rp_artifact\n"
+			   "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest\n"
 			   "llm_guard=rp_llm_guard\n"
 			   "status=ready\n")) {
 		return 1;
@@ -95,6 +102,7 @@ int main(void)
 			   "pain_user_permissions=1\n"
 			   "pain_untrusted_context=1\n"
 			   "pain_rebuild_steps=6\n"
+			   "metric_rows=8\n"
 			   "relay_protocol_files=5\n"
 			   "workflow_runner_files=5\n"
 			   "data_pipeline_files=6\n"

@@ -5,10 +5,15 @@ int main(void)
 {
 	int ok = 1;
 	ok = ok && rp_file_contains("rp_ui_home", "page=home");
+	ok = ok && rp_file_contains("rp_ui_home", "nav_items=12");
 	ok = ok && rp_file_contains("rp_ui_run", "runner_exec=");
+	ok = ok && rp_file_contains("rp_ui_run", "timeline_rows=5");
 	ok = ok && rp_file_contains("rp_ui_agent", "decisions=8");
+	ok = ok && rp_file_contains("rp_ui_agent", "decision_rows=8");
 	ok = ok && rp_file_contains("rp_ui_evidence", "stage_log=rp_stage_log");
+	ok = ok && rp_file_contains("rp_ui_evidence", "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest");
 	ok = ok && rp_file_contains("rp_ui_compare", "page=compare-metrics");
+	ok = ok && rp_file_contains("rp_ui_compare", "metric_rows=8");
 	ok = ok && rp_file_contains("rp_artifact_manifest", "manifest_records=4");
 	ok = ok && rp_file_contains("rp_llm_hostreq", "template_mode=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "status=ready");
@@ -58,6 +63,8 @@ int main(void)
 			   "run_id=RUN-042\n"
 			   "custom_run=usable-run:RUN-900\n"
 			   "custom_runs=3\n"
+			   "nav_items=12\n"
+			   "primary_cards=12\n"
 			   "cards=run,custom_research,agents,evidence,data,llm_relay,compare\n"
 			   "source=rp_ui_home\n"
 			   "status=ready\n")) {
@@ -72,6 +79,8 @@ int main(void)
 			   "stages=5\n"
 			   "failed_stage=align\n"
 			   "retry_stage=align\n"
+			   "timeline_rows=5\n"
+			   "artifact_preview=rp_report_text,rp_chart_data,rp_artifact\n"
 			   "runner_exec_files=5\n"
 			   "stage_state=rp_stage_state\n"
 			   "cache_index=rp_cache_index\n"
@@ -86,6 +95,7 @@ int main(void)
 			   "agents=7\n"
 			   "messages=21\n"
 			   "decisions=8\n"
+			   "decision_rows=8\n"
 			   "handoffs=6\n"
 			   "records=rp_agents,rp_decisions,rp_handoff,rp_deliberation,rp_agent_run\n"
 			   "status=ready\n")) {
@@ -99,6 +109,7 @@ int main(void)
 			   "stage_log=rp_stage_log\n"
 			   "artifact=rp_artifact\n"
 			   "manifest=rp_artifact_manifest\n"
+			   "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest\n"
 			   "llm_guard=rp_llm_guard\n"
 			   "status=ready\n")) {
 		return 1;
@@ -124,8 +135,10 @@ int main(void)
 			   "stages=5\n"
 			   "artifact_records=4\n"
 			   "manifest_records=4\n"
+			   "preview_files=rp_report_text,rp_chart_data,rp_artifact\n"
 			   "package_manifest=ready\n"
 			   "evidence_package=rp_package\n"
+			   "download_index=rp_package\n"
 			   "bundle_items=18\n"
 			   "downloadable_units=3\n"
 			   "report=rp_report_text\n"
@@ -276,6 +289,8 @@ int main(void)
 			   "api_payloads=14\n"
 			   "action_payloads=1\n"
 			   "source_pages=5\n"
+			   "render_sections=7\n"
+			   "artifact_previews=3\n"
 			   "evidence_package=rp_package\n"
 			   "package_manifest=ready\n"
 			   "downloadable_units=3\n"

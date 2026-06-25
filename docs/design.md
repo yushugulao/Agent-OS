@@ -240,11 +240,11 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_backend_export` | backend scenario | compare, orchestrator | backend scenario export record |
 | `rp_study` | backend scenario | compare, orchestrator | same-workflow backend study summary |
 | `rp_consistency` | consistency checker | metrics, compare, orchestrator | derived checks across task records, LLM packets, relay protocol files, workflow invocation, completion hooks, backend cases, runner artifacts, workflow runner execution files, and service surface records |
-| `rp_ui_home` | UI export | compare, orchestrator | home page data for the host web service |
-| `rp_ui_run` | UI export | compare, orchestrator | run-detail page data for RUN-042 |
-| `rp_ui_agent` | UI export | compare, orchestrator | Agent-detail page data for role messages and decisions |
-| `rp_ui_evidence` | UI export | compare, orchestrator | evidence-detail page data with stage log and recovered artifact links |
-| `rp_ui_compare` | UI export | compare, orchestrator | comparison page data for plain-kernel pain points |
+| `rp_ui_home` | UI export | compare, orchestrator | home page data for the host web service with navigation and primary cards |
+| `rp_ui_run` | UI export | compare, orchestrator | run-detail page data for RUN-042 with timeline rows and artifact preview entries |
+| `rp_ui_agent` | UI export | compare, orchestrator | Agent-detail page data for role messages, decisions, and decision rows |
+| `rp_ui_evidence` | UI export | compare, orchestrator | evidence-detail page data with stage log, recovered artifact links, and preview files |
+| `rp_ui_compare` | UI export | compare, orchestrator | comparison page data for plain-kernel pain points and metric rows |
 | `rp_web_routes` | Host Web/API export | test suite, compare, orchestrator | route manifest for thirteen host-rendered GET views and five POST action entries |
 | `rp_api_home` | Host Web/API export | test suite, compare, orchestrator | API payload for the host web home page |
 | `rp_api_run` | Host Web/API export | test suite, compare, orchestrator | API payload for RUN-042 run detail with runner execution files and custom research run reference |
@@ -261,8 +261,8 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_api_action` | Host Web/API export | test suite, compare, orchestrator | action contract for host workflow run, host workflow export, AgentCompare run, custom research run, and custom research export |
 | `rp_actionio` | Host Web/API export | test suite, compare, orchestrator | compact request, response, redirect, host export, and AgentCompare action record |
 | `rp_uresrun` | Host Web/API export | test suite, compare, orchestrator | usable research run and export result record derived from the request and dataset embedded in existing uCore state files |
-| `rp_web_bundle` | Host Web/API export | test suite, compare, orchestrator | bundle summary tying routes, API payloads, POST action payloads, UI pages, package export indexes, runner files, custom research fields, research service files, and relay files together |
-| `rp_tests` | test suite | compare, orchestrator | 154 user-space checks over catalog, data pipeline, service surface records, workflow, artifacts, package export indexes, workflow runner files, custom research fields, Agent collaboration, UI data, Host Web/API export files, POST action records, LLM relay, AgentCompare, and consistency records |
+| `rp_web_bundle` | Host Web/API export | test suite, compare, orchestrator | bundle summary tying routes, API payloads, POST action payloads, UI pages, UI render sections, artifact preview entries, package export indexes, runner files, custom research fields, research service files, and relay files together |
+| `rp_tests` | test suite | compare, orchestrator | 168 user-space checks over catalog, data pipeline, service surface records, workflow, artifacts, package export indexes, UI render data, workflow runner files, custom research fields, Agent collaboration, UI data, Host Web/API export files, POST action records, LLM relay, AgentCompare, and consistency records |
 | `rp_compare` | compare | orchestrator | plain-kernel execution summary |
 
 This is intentionally implemented without new syscalls. It uses only `open`, `read`, `write`, `close`, `fork`, `exec`, and `waitpid`.
