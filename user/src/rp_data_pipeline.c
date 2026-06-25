@@ -1,0 +1,85 @@
+#include <stdio.h>
+#include <research_platform_state.h>
+
+int main(void)
+{
+	int ok = 1;
+	ok = ok && rp_file_contains("rp_input_fastq", "@RUN-042-read-1");
+	ok = ok && rp_file_contains("rp_datadic", "schema_fields=17");
+	ok = ok && rp_file_contains("rp_dataprof", "profiles=4");
+	ok = ok && rp_file_contains("rp_quality", "passed=7");
+	if (!ok) return 1;
+
+	if (!rp_write_file("rp_ingest_files",
+			   "run_id=RUN-042\n"
+			   "files=2\n"
+			   "file=1;path=rp_input_fastq;kind=fastq;records=2;bytes=72;status=ready\n"
+			   "file=2;path=rp_samples;kind=sample_sheet;records=4;bytes=128;status=ready\n"
+			   "scan_status=ready\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_dataset_snapshot",
+			   "dataset=lab-gene-x-input\n"
+			   "snapshots=2\n"
+			   "snapshot=raw;files=2;records=6;status=ready\n"
+			   "snapshot=normalized;files=2;records=6;transform=normalize_fastq;status=ready\n"
+			   "total_bytes=200\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_data_preview",
+			   "previews=2\n"
+			   "preview=fastq;rows=2;columns=4;source=rp_input_fastq;status=ready\n"
+			   "preview=samples;rows=4;columns=4;source=rp_samples;status=ready\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_data_quality",
+			   "dataset=lab-gene-x-input\n"
+			   "rules=7\n"
+			   "passed=7\n"
+			   "failed=0\n"
+			   "min_reads=2\n"
+			   "sample_sheet_valid=1\n"
+			   "decision=accepted\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_data_transform",
+			   "transforms=2\n"
+			   "transform=normalize_fastq;input=rp_input_fastq;output=rp_dataset_snapshot;status=ready\n"
+			   "transform=join_sample_sheet;input=rp_samples;output=rp_dataset_collection;status=ready\n"
+			   "validations=2\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_dataset_collection",
+			   "collection=lab-gene-x-run042-analysis\n"
+			   "items=4\n"
+			   "item=raw_fastq;source=rp_input_fastq;status=ready\n"
+			   "item=samples;source=rp_samples;status=ready\n"
+			   "item=counts;source=rp_data;status=ready\n"
+			   "item=artifact;source=rp_artifact;status=ready\n"
+			   "export=ready\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_append_file("rp_ack", "ack=data_pipeline;msg=data;status=ready")) return 1;
+	if (!rp_append_file("rp_tool", "tool=data_pipeline.scan_files;target=rp_ingest_files;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=data_pipeline.snapshot;target=rp_dataset_snapshot;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=data_pipeline.preview;target=rp_data_preview;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=data_pipeline.quality;target=rp_data_quality;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=data_pipeline.transform;target=rp_data_transform;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=data_pipeline.collection;target=rp_dataset_collection;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=data_pipeline.export;target=rp_dataset_collection;status=ok")) return 1;
+	if (!rp_append_status("data_pipeline=ready")) return 1;
+	if (!rp_append_status("ingest_files=ready")) return 1;
+	if (!rp_append_status("dataset_snapshot=ready")) return 1;
+	if (!rp_append_status("data_preview=ready")) return 1;
+	if (!rp_append_status("data_quality=ready")) return 1;
+	if (!rp_append_status("data_transform=ready")) return 1;
+	if (!rp_append_status("dataset_collection=ready")) return 1;
+	printf("rp_data_pipeline: files=2 snapshots=2 previews=2 quality=passed transforms=2 status=ready\n");
+	return 0;
+}

@@ -15,6 +15,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_claimrec", "claim=8");
 	ok = ok && rp_file_contains("rp_provpath", "critical_paths=3");
 	ok = ok && rp_file_contains("rp_dataprof", "profiles=4");
+	ok = ok && rp_file_contains("rp_ingest_files", "files=2");
+	ok = ok && rp_file_contains("rp_dataset_snapshot", "snapshots=2");
+	ok = ok && rp_file_contains("rp_data_preview", "previews=2");
+	ok = ok && rp_file_contains("rp_data_quality", "passed=7");
+	ok = ok && rp_file_contains("rp_data_transform", "transforms=2");
+	ok = ok && rp_file_contains("rp_dataset_collection", "items=4");
 	ok = ok && rp_file_contains("rp_figrec", "exported=3");
 	ok = ok && rp_file_contains("rp_trialrec", "selected=trial-3");
 	ok = ok && rp_file_contains("rp_datarel", "fair=passed");
@@ -58,8 +64,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_submit", "data_availability=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "report_ok=1");
 	ok = ok && rp_file_contains("rp_agentcmp", "repro_ok=1");
-	ok = ok && rp_file_contains("rp_agentcmp", "message_acks=27");
-	ok = ok && rp_file_contains("rp_agentcmp", "tool_events=106");
+	ok = ok && rp_file_contains("rp_agentcmp", "message_acks=28");
+	ok = ok && rp_file_contains("rp_agentcmp", "tool_events=115");
 	ok = ok && rp_file_contains("rp_agentcmp", "scheduler_items=21");
 	ok = ok && rp_file_contains("rp_agentcmp", "ranked_tasks=21");
 	ok = ok && rp_file_contains("rp_agentcmp", "selected_tasks=10");
@@ -72,6 +78,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentcmp", "claim_records=8");
 	ok = ok && rp_file_contains("rp_agentcmp", "provenance_paths=3");
 	ok = ok && rp_file_contains("rp_agentcmp", "data_profiles=4");
+	ok = ok && rp_file_contains("rp_agentcmp", "data_pipeline_files=6");
+	ok = ok && rp_file_contains("rp_agentcmp", "data_quality_checks=7");
 	ok = ok && rp_file_contains("rp_agentcmp", "figure_records=3");
 	ok = ok && rp_file_contains("rp_agentcmp", "trial_records=4");
 	ok = ok && rp_file_contains("rp_agentcmp", "workflow_exports=2");
@@ -92,7 +100,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_tool", "tool=metrics.measure_plain");
 	ok = ok && rp_file_contains("rp_protocol", "ethics=approved");
 	ok = ok && rp_file_contains("rp_quality", "passed=7");
-	ok = ok && rp_file_contains("rp_package", "artifacts=42");
+	ok = ok && rp_file_contains("rp_package", "artifacts=48");
 	ok = ok && rp_file_contains("rp_query", "workflow_hits=34");
 	ok = ok && rp_file_contains("rp_execobs", "observer=ready");
 	ok = ok && rp_file_contains("rp_timeline", "events=9");
@@ -122,31 +130,44 @@ int main(void)
 	ok = ok && rp_file_contains("rp_study", "arms=2");
 	ok = ok && rp_file_contains("rp_consistency", "state_relation=passed");
 	ok = ok && rp_file_contains("rp_consistency", "task_records=21");
-	ok = ok && rp_file_contains("rp_consistency", "checks=50");
+	ok = ok && rp_file_contains("rp_consistency", "checks=56");
 	ok = ok && rp_file_contains("rp_consistency", "runner_stages=5");
 	ok = ok && rp_file_contains("rp_ui_home", "page=home");
 	ok = ok && rp_file_contains("rp_ui_run", "page=run-detail");
 	ok = ok && rp_file_contains("rp_ui_agent", "page=agent-detail");
 	ok = ok && rp_file_contains("rp_ui_evidence", "page=evidence-detail");
 	ok = ok && rp_file_contains("rp_ui_compare", "page=compare-metrics");
-	ok = ok && rp_file_contains("rp_tests", "tests=64");
+	ok = ok && rp_file_contains("rp_web_routes", "routes=7");
+	ok = ok && rp_file_contains("rp_api_home", "api=home");
+	ok = ok && rp_file_contains("rp_api_run", "runner_exec_files=5");
+	ok = ok && rp_file_contains("rp_api_agents", "agents=7");
+	ok = ok && rp_file_contains("rp_api_evidence", "provenance_paths=3");
+	ok = ok && rp_file_contains("rp_api_compare", "workflow_runner_files=5");
+	ok = ok && rp_file_contains("rp_api_artifacts", "manifest_records=4");
+	ok = ok && rp_file_contains("rp_api_data", "dataset_snapshots=2");
+	ok = ok && rp_file_contains("rp_web_bundle", "api_payloads=7");
+	ok = ok && rp_file_contains("rp_tests", "tests=82");
 	ok = ok && rp_file_contains("rp_tests", "status=passed");
 	ok = ok && rp_file_contains("rp_ack", "ack=consistency;msg=22;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=consistency.check_backend");
 	ok = ok && rp_file_contains("rp_ack", "ack=ui_export;msg=ui;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=ui_export.write_compare");
+	ok = ok && rp_file_contains("rp_ack", "ack=web_export;msg=web;status=ready");
+	ok = ok && rp_file_contains("rp_tool", "tool=web_export.write_bundle");
 	ok = ok && rp_file_contains("rp_ack", "ack=test_suite;msg=test;status=passed");
 	ok = ok && rp_file_contains("rp_tool", "tool=test_suite.check_compare");
 	ok = ok && rp_file_contains("rp_ack", "ack=agent_collab;msg=agents;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=agent_collab.write_decisions");
 	ok = ok && rp_file_contains("rp_ack", "ack=llm_relay;msg=relay;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=llm_relay.write_packets");
+	ok = ok && rp_file_contains("rp_ack", "ack=data_pipeline;msg=data;status=ready");
+	ok = ok && rp_file_contains("rp_tool", "tool=data_pipeline.collection");
 	ok = ok && rp_file_contains("rp_ack", "ack=workflow_runner;msg=runner;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=workflow_runner.write_manifest");
 	if (!ok) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
-	if (ack_count < 29 || tool_count < 119) {
+	if (ack_count < 31 || tool_count < 140) {
 		printf("rp_compare_plain: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		return 1;
 	}
@@ -155,22 +176,27 @@ int main(void)
 			   "plain_kernel=passed\n"
 			   "agentos_kernel=pending\n"
 			   "objects=500\n"
-			   "programs=36\n"
-			   "state_files=121\n"
-			   "message_acks=29\n"
-			   "tool_events=119\n"
-			   "consistency_checks=50\n"
+			   "programs=38\n"
+			   "state_files=136\n"
+			   "message_acks=31\n"
+			   "tool_events=140\n"
+			   "consistency_checks=56\n"
 			   "runner_stages=5\n"
 			   "workflow_runner_files=5\n"
+			   "data_pipeline_files=6\n"
+			   "dataset_snapshots=2\n"
+			   "data_quality_checks=7\n"
 			   "relay_protocol_files=5\n"
 			   "agent_roles=7\n"
 			   "collaboration_decisions=8\n"
 			   "ui_pages=5\n"
-			   "test_cases=64\n"
+			   "web_routes=7\n"
+			   "web_api_payloads=7\n"
+			   "test_cases=82\n"
 			   "status=ready\n")) {
 		return 1;
 	}
 	if (!rp_append_status("compare=ready")) return 1;
-	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=36 state_files=121 acks=29 tools=119 status=ready\n");
+	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=38 state_files=136 acks=31 tools=140 status=ready\n");
 	return 0;
 }

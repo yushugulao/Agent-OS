@@ -47,6 +47,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_artifact", "status=recovered");
 	ok = ok && rp_file_contains("rp_report_text", "status=ready");
 	ok = ok && rp_file_contains("rp_chart_data", "status=ready");
+	ok = ok && rp_file_contains("rp_ingest_files", "files=2");
+	ok = ok && rp_file_contains("rp_dataset_snapshot", "snapshots=2");
+	ok = ok && rp_file_contains("rp_data_preview", "previews=2");
+	ok = ok && rp_file_contains("rp_data_quality", "passed=7");
+	ok = ok && rp_file_contains("rp_data_transform", "transforms=2");
+	ok = ok && rp_file_contains("rp_dataset_collection", "items=4");
 	ok = ok && rp_file_contains("rp_stage_state", "stages=5");
 	ok = ok && rp_file_contains("rp_cache_index", "cache_hits=1");
 	ok = ok && rp_file_contains("rp_retry_plan", "retry_items=1");
@@ -64,9 +70,10 @@ int main(void)
 	if (!ok) return 1;
 	if (!rp_write_file("rp_package",
 			   "package=research-evidence-package\n"
-			   "artifacts=42\n"
-			   "checks=63\n"
+			   "artifacts=48\n"
+			   "checks=69\n"
 			   "real_inputs=1\n"
+			   "data_pipeline=1\n"
 			   "stage_logs=1\n"
 			   "chart_data=1\n"
 			   "workflow_runner=1\n"
@@ -119,11 +126,12 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=package.attach_completion;target=rp_completion;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_runner_artifacts;target=rp_runner;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_workflow_runner;target=rp_stage_state;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_data_pipeline;target=rp_dataset_collection;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_agent_collab;target=rp_agent_run;status=ok")) return 1;
 	if (!rp_append_status("package=ready")) return 1;
 	if (!rp_append_status("datarel=ready")) return 1;
 	if (!rp_append_status("dataver=ready")) return 1;
 	if (!rp_append_status("repro=ready")) return 1;
-	printf("rp_package: artifacts=42 checks=63 fair=passed repro=ready status=ready\n");
+	printf("rp_package: artifacts=48 checks=69 fair=passed repro=ready status=ready\n");
 	return 0;
 }

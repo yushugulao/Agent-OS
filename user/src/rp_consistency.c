@@ -20,6 +20,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_artifact", "status=recovered");
 	ok = ok && rp_file_contains("rp_report_text", "status=ready");
 	ok = ok && rp_file_contains("rp_chart_data", "status=ready");
+	ok = ok && rp_file_contains("rp_ingest_files", "files=2");
+	ok = ok && rp_file_contains("rp_dataset_snapshot", "snapshots=2");
+	ok = ok && rp_file_contains("rp_data_preview", "previews=2");
+	ok = ok && rp_file_contains("rp_data_quality", "passed=7");
+	ok = ok && rp_file_contains("rp_data_transform", "transforms=2");
+	ok = ok && rp_file_contains("rp_dataset_collection", "items=4");
 	ok = ok && rp_file_contains("rp_stage_state", "stages=5");
 	ok = ok && rp_file_contains("rp_cache_index", "cache_hits=1");
 	ok = ok && rp_file_contains("rp_retry_plan", "retry_items=1");
@@ -130,6 +136,12 @@ int main(void)
 	int agent_decisions = rp_get_int_value("rp_decisions", "decisions=");
 	int agent_handoffs = rp_get_int_value("rp_handoff", "handoffs=");
 	int deliberation_items = rp_get_int_value("rp_deliberation", "items=");
+	int ingested_files = rp_get_int_value("rp_ingest_files", "files=");
+	int snapshots = rp_get_int_value("rp_dataset_snapshot", "snapshots=");
+	int previews = rp_get_int_value("rp_data_preview", "previews=");
+	int quality_rules = rp_get_int_value("rp_data_quality", "passed=");
+	int transforms = rp_get_int_value("rp_data_transform", "transforms=");
+	int collection_items = rp_get_int_value("rp_dataset_collection", "items=");
 	ok = ok && require_equal("runner_stages", runner_stages, 5);
 	ok = ok && require_equal("runner_retries", runner_retries, 1);
 	ok = ok && require_equal("runner_cache_hits", runner_cache_hits, 1);
@@ -146,17 +158,23 @@ int main(void)
 	ok = ok && require_equal("agent_decisions", agent_decisions, 8);
 	ok = ok && require_equal("agent_handoffs", agent_handoffs, 6);
 	ok = ok && require_equal("deliberation_items", deliberation_items, 5);
+	ok = ok && require_equal("ingested_files", ingested_files, 2);
+	ok = ok && require_equal("dataset_snapshots", snapshots, 2);
+	ok = ok && require_equal("data_previews", previews, 2);
+	ok = ok && require_equal("data_quality_rules", quality_rules, 7);
+	ok = ok && require_equal("data_transforms", transforms, 2);
+	ok = ok && require_equal("dataset_collection_items", collection_items, 4);
 
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
-	if (ack_count < 25 || tool_count < 101) {
+	if (ack_count < 26 || tool_count < 109) {
 		printf("rp_consistency: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		ok = 0;
 	}
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=50\n"
+			   "checks=56\n"
 			   "task_records=21\n"
 			   "ready_tasks=21\n"
 			   "high_tasks=4\n"
@@ -177,6 +195,12 @@ int main(void)
 			   "workflow_runner_files=5\n"
 			   "workflow_events=8\n"
 			   "workflow_manifest_records=4\n"
+			   "data_pipeline_files=6\n"
+			   "dataset_snapshots=2\n"
+			   "data_previews=2\n"
+			   "data_quality_checks=7\n"
+			   "data_transforms=2\n"
+			   "dataset_collection_items=4\n"
 			   "agent_roles=7\n"
 			   "agent_messages=21\n"
 			   "agent_decisions=8\n"
@@ -190,7 +214,8 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_tasks;target=rp_consistency;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_llm;target=rp_consistency;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend;target=rp_consistency;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline;target=rp_consistency;status=ok")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=50 tasks=21 llm=3 relay=5 workflow=5 backend=4 artifacts=4 agents=7 status=ready\n");
+	printf("rp_consistency: checks=56 tasks=21 llm=3 relay=5 workflow=5 data=6 backend=4 artifacts=4 agents=7 status=ready\n");
 	return 0;
 }

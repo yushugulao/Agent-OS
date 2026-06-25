@@ -44,6 +44,12 @@ int main(void)
 	ok = ok && require_file_token("rp_retry_plan", "retry_items=1");
 	ok = ok && require_file_token("rp_run_events", "events=8");
 	ok = ok && require_file_token("rp_artifact_manifest", "manifest_records=4");
+	ok = ok && require_file_token("rp_ingest_files", "files=2");
+	ok = ok && require_file_token("rp_dataset_snapshot", "snapshots=2");
+	ok = ok && require_file_token("rp_data_preview", "previews=2");
+	ok = ok && require_file_token("rp_data_quality", "passed=7");
+	ok = ok && require_file_token("rp_data_transform", "transforms=2");
+	ok = ok && require_file_token("rp_dataset_collection", "items=4");
 	ok = ok && require_file_token("rp_agents", "agents=7");
 	ok = ok && require_file_token("rp_decisions", "decisions=8");
 	ok = ok && require_file_token("rp_handoff", "handoffs=6");
@@ -71,19 +77,20 @@ int main(void)
 	ok = ok && require_file_token("rp_runconf", "profiles=2");
 	ok = ok && require_file_token("rp_invocation", "status=recovered");
 	ok = ok && require_file_token("rp_completion", "actions=4");
-	ok = ok && require_file_token("rp_package", "artifacts=42");
+	ok = ok && require_file_token("rp_package", "artifacts=48");
 	ok = ok && require_file_token("rp_release", "decision=release");
 	ok = ok && require_file_token("rp_dossier", "sections=36");
 
 	ok = ok && require_file_token("rp_agentcmp", "context_trusted=0");
-	ok = ok && require_file_token("rp_agentcmp", "message_acks=27");
-	ok = ok && require_file_token("rp_agentcmp", "tool_events=106");
+	ok = ok && require_file_token("rp_agentcmp", "message_acks=28");
+	ok = ok && require_file_token("rp_agentcmp", "tool_events=115");
 	ok = ok && require_file_token("rp_agentcmp", "agent_roles=7");
 	ok = ok && require_file_token("rp_agentcmp", "relay_protocol_files=5");
 	ok = ok && require_file_token("rp_agentcmp", "workflow_runner_files=5");
+	ok = ok && require_file_token("rp_agentcmp", "data_pipeline_files=6");
 	ok = ok && require_file_token("rp_backend", "cases=4");
-	ok = ok && require_file_token("rp_consistency", "checks=50");
-	ok = ok && require_file_token("rp_telemetry", "metric_files=120");
+	ok = ok && require_file_token("rp_consistency", "checks=56");
+	ok = ok && require_file_token("rp_telemetry", "metric_files=126");
 
 	ok = ok && require_file_token("rp_ui_home", "page=home");
 	ok = ok && require_file_token("rp_ui_run", "page=run-detail");
@@ -93,19 +100,30 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_evidence", "page=evidence-detail");
 	ok = ok && require_file_token("rp_ui_compare", "page=compare-metrics");
 	ok = ok && require_file_token("rp_ui_compare", "relay_protocol_files=5");
+	ok = ok && require_file_token("rp_web_routes", "routes=7");
+	ok = ok && require_file_token("rp_api_home", "api=home");
+	ok = ok && require_file_token("rp_api_run", "runner_exec_files=5");
+	ok = ok && require_file_token("rp_api_agents", "agents=7");
+	ok = ok && require_file_token("rp_api_evidence", "provenance_paths=3");
+	ok = ok && require_file_token("rp_api_compare", "workflow_runner_files=5");
+	ok = ok && require_file_token("rp_api_artifacts", "manifest_records=4");
+	ok = ok && require_file_token("rp_api_data", "dataset_snapshots=2");
+	ok = ok && require_file_token("rp_web_bundle", "api_payloads=7");
 
-	ok = ok && require_count("ack", rp_count_lines("rp_ack"), 28);
-	ok = ok && require_count("tool", rp_count_lines("rp_tool"), 111);
+	ok = ok && require_count("ack", rp_count_lines("rp_ack"), 30);
+	ok = ok && require_count("tool", rp_count_lines("rp_tool"), 130);
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=64\n"
+			   "tests=82\n"
 			   "catalog=passed\n"
+			   "data_pipeline=passed\n"
 			   "workflow=passed\n"
 			   "artifact_ops=passed\n"
 			   "agent_collaboration=passed\n"
 			   "ui_export=passed\n"
+			   "host_web_export=passed\n"
 			   "llm_relay=passed\n"
 			   "agent_compare=passed\n"
 			   "consistency=passed\n"
@@ -113,15 +131,17 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=test_suite;msg=test;status=passed")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.check_catalog;target=rp_tests;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.check_workflow;target=rp_tests;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.check_artifacts;target=rp_tests;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.check_ui;target=rp_tests;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.check_llm;target=rp_tests;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.check_compare;target=rp_tests;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.check_consistency;target=rp_tests;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=test_suite.write_result;target=rp_tests;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=test_suite.cat;ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=test_suite.data;ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=test_suite.workflow;ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=test_suite.check_artifacts;ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=test_suite.ui;ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=test_suite.web;ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=test_suite.llm;ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=test_suite.check_compare;ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=64 catalog=passed artifacts=passed workflow=passed collaboration=passed ui=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=82 catalog=passed data=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }

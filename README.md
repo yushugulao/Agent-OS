@@ -41,6 +41,7 @@ user/src/rp_execobs.c
 user/src/rp_invoke.c
 user/src/rp_complete.c
 user/src/rp_artifact_ops.c
+user/src/rp_data_pipeline.c
 user/src/rp_workflow_runner.c
 user/src/rp_agent_collab.c
 user/src/rp_package.c
@@ -51,6 +52,7 @@ user/src/rp_metrics.c
 user/src/rp_backend.c
 user/src/rp_consistency.c
 user/src/rp_ui_export.c
+user/src/rp_web_export.c
 user/src/rp_test_suite.c
 user/src/rp_compare_plain.c
 ```
@@ -66,7 +68,7 @@ user/src/rp_compare_plain.c
 - A plain user-space research run simulation with planning, literature, analysis, review, writing, repair, and audit roles.
 - Local catalog search for workflow, Agent, evidence, provenance, and LLM related platform objects.
 
-`rp_orch` runs thirty-six platform programs as separate uCore user processes:
+`rp_orch` runs thirty-eight platform programs as separate uCore user processes:
 
 - catalog,
 - object store,
@@ -92,6 +94,7 @@ user/src/rp_compare_plain.c
 - workflow invocation,
 - workflow completion,
 - real artifact operations,
+- data ingestion and dataset pipeline,
 - workflow runner execution evidence,
 - Agent collaboration evidence,
 - package,
@@ -102,6 +105,7 @@ user/src/rp_compare_plain.c
 - cross-file consistency check,
 - metrics service,
 - UI data export,
+- Host Web/API export contract,
 - test suite,
 - plain-kernel comparison.
 
@@ -196,6 +200,12 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_artifact`
 - `rp_report_text`
 - `rp_chart_data`
+- `rp_ingest_files`
+- `rp_dataset_snapshot`
+- `rp_data_preview`
+- `rp_data_quality`
+- `rp_data_transform`
+- `rp_dataset_collection`
 - `rp_runner`
 - `rp_stage_state`
 - `rp_cache_index`
@@ -228,6 +238,15 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_ui_agent`
 - `rp_ui_evidence`
 - `rp_ui_compare`
+- `rp_web_routes`
+- `rp_api_home`
+- `rp_api_run`
+- `rp_api_agents`
+- `rp_api_evidence`
+- `rp_api_compare`
+- `rp_api_artifacts`
+- `rp_api_data`
+- `rp_web_bundle`
 - `rp_tests`
 - `rp_compare`
 
@@ -268,7 +287,7 @@ rp_plain: passed
 Expected orchestrator output:
 
 ```text
-rp_orch: start programs=36
+rp_orch: start programs=38
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_object_store: records=8 status=ready
 rp_object_query: hits=8 ready_hits=7 status=ready
@@ -293,19 +312,21 @@ rp_execobs: timeline=9 workers=4 controls=5 observer=ready status=ready
 rp_invoke: steps=10 attempts=12 outputs=6 status=recovered
 rp_complete: hooks=4 events=1 actions=4 status=ready
 rp_artifact_ops: inputs=2 stages=5 retries=1 artifacts=4 status=ready
+rp_data_pipeline: files=2 snapshots=2 previews=2 quality=passed transforms=2 status=ready
 rp_workflow_runner: stages=5 events=8 retries=1 cache_hits=1 status=ready
 rp_agent_collab: agents=7 messages=21 decisions=8 handoffs=6 status=ready
-rp_package: artifacts=42 checks=63 fair=passed repro=ready status=ready
+rp_package: artifacts=48 checks=69 fair=passed repro=ready status=ready
 rp_delta: items=20 reviews=1 decision=accepted status=ready
 rp_release: decision=release checks=17 status=ready
 rp_dossier: sections=36 review_board=accepted submit=ready status=ready
 rp_backend: cases=4 executable=2 exports=1 status=ready
-rp_consistency: checks=50 tasks=21 llm=3 relay=5 workflow=5 backend=4 artifacts=4 agents=7 status=ready
-rp_metrics: telemetry_spans=8 acks=27 tools=106 delta_items=20 status=ready
+rp_consistency: checks=56 tasks=21 llm=3 relay=5 workflow=5 data=6 backend=4 artifacts=4 agents=7 status=ready
+rp_metrics: telemetry_spans=8 acks=28 tools=115 delta_items=20 status=ready
 rp_ui_export: pages=5 run=RUN-042 compare=ready status=ready
-rp_test_suite: tests=64 catalog=passed artifacts=passed workflow=passed collaboration=passed ui=passed llm=passed compare=passed status=passed
-rp_compare_plain: plain_kernel=passed objects=500 programs=36 state_files=121 acks=29 tools=119 status=ready
-rp_orch: programs_ok=36 programs_total=36
+rp_web_export: routes=7 api_payloads=7 bundle=ready status=ready
+rp_test_suite: tests=82 catalog=passed data=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed
+rp_compare_plain: plain_kernel=passed objects=500 programs=38 state_files=136 acks=31 tools=140 status=ready
+rp_orch: programs_ok=38 programs_total=38
 rp_orch: state_ok=1
 rp_orch: passed
 ```
@@ -326,12 +347,12 @@ No output means the directories match.
 
 ## Next Work
 
-The current native programs prove that the plain uCore kernel can boot and run a research-platform-shaped catalog process plus a multi-process workflow with ordinary file-backed object storage, task messages, role acknowledgements, tool logs, scheduling records, task records, workflow import/export description, resource budget, project policy, risk register, CAPA records, failure classification, retry records, query, task ranking, run view, run configuration, workflow invocation, completion actions, execution plan, worker health, execution timeline, observer evidence, concrete input files, stage DAG, stage logs, workflow runner execution state, cache records, retry plan, run events, artifact manifest, recovered artifacts, report text, chart data, Agent collaboration evidence, file-backed Host LLM Relay protocol, host UI data exports, user-space test suite, lineage, site export, data dictionary, data profile records, figure records, calculation replay, samples, quality, protocol, SOP, experiment, trial records, lab operations, personnel training, telemetry, health summary, evidence, claim records, provenance paths, knowledge, semantic summary, systematic review summary, multi-round review, report revision package, LLM packet queue, host relay description, prompt routing, LLM audit log, LLM evaluation, privacy review, compliance record, release delta review, FAIR data release, data product summary, data product versioning, reproduction package, release, dossier, review governance, submission package, backend scenario evidence, cross-file consistency checks, AgentCompare metrics, and comparison services. Further migration work should move more behavior from embedded tables into active user-space services:
+The current native programs prove that the plain uCore kernel can boot and run a research-platform-shaped catalog process plus a multi-process workflow with ordinary file-backed object storage, task messages, role acknowledgements, tool logs, scheduling records, task records, workflow import/export description, resource budget, project policy, risk register, CAPA records, failure classification, retry records, query, task ranking, run view, run configuration, workflow invocation, completion actions, execution plan, worker health, execution timeline, observer evidence, concrete input files, data ingestion records, dataset snapshots, data previews, quality results, transform records, dataset collections, stage DAG, stage logs, workflow runner execution state, cache records, retry plan, run events, artifact manifest, recovered artifacts, report text, chart data, Agent collaboration evidence, file-backed Host LLM Relay protocol, host UI data exports, Host Web/API payload contract, user-space test suite, lineage, site export, data dictionary, data profile records, figure records, calculation replay, samples, quality, protocol, SOP, experiment, trial records, lab operations, personnel training, telemetry, health summary, evidence, claim records, provenance paths, knowledge, semantic summary, systematic review summary, multi-round review, report revision package, LLM packet queue, host relay description, prompt routing, LLM audit log, LLM evaluation, privacy review, compliance record, release delta review, FAIR data release, data product summary, data product versioning, reproduction package, release, dossier, review governance, submission package, backend scenario evidence, cross-file consistency checks, AgentCompare metrics, and comparison services. Further migration work should move more behavior from embedded tables into active user-space services:
 
 - Persistent platform state files in the uCore root file system.
 - Expand the planner, retriever, analyst, reviewer, governance, writer, repair, auditor, object query, lineage, export, scheduling, task ranking, workflow import/export, resource budget, project policy, risk register, CAPA records, release delta review, run configuration, workflow invocation, workflow completion, execution observer, backend scenario, failure classification, retry handling, run views, data dictionary, data profile records, figure records, calculation replay, sample, quality, protocol, SOP, experiment, trial records, lab operations, telemetry, health summaries, evidence, claim records, provenance paths, knowledge, FAIR data release, data product versioning, reproduction, review governance, LLM packet queue, host relay description, prompt routing, LLM evaluation, privacy, compliance, release, dossier, submission, and AgentCompare programs beyond the current fixed records.
 - A richer user-space coordination protocol using only unchanged uCore syscalls.
 - A host LLM relay that consumes the existing ordinary request files and writes ordinary response files.
-- More executable checks for workflow portability, workflow runner execution, release review, and AgentCompare comparison.
+- More executable checks for workflow portability, workflow runner execution, Host Web/API payload export, release review, and AgentCompare comparison.
 
 The later Agent-OS enhanced kernel version should use the same object names, role names, and output contracts so both kernels can run the same demonstration scenario.

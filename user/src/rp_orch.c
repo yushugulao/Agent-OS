@@ -28,6 +28,7 @@ static const char *PROGRAMS[] = {
 	"rp_invoke",
 	"rp_complete",
 	"rp_artifact_ops",
+	"rp_data_pipeline",
 	"rp_workflow_runner",
 	"rp_agent_collab",
 	"rp_package",
@@ -38,6 +39,7 @@ static const char *PROGRAMS[] = {
 	"rp_consistency",
 	"rp_metrics",
 	"rp_ui_export",
+	"rp_web_export",
 	"rp_test_suite",
 	"rp_compare_plain",
 };
@@ -155,6 +157,13 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_status", "actions=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "complete_export=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "input=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "data_pipeline=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "ingest_files=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "dataset_snapshot=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "data_preview=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "data_quality=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "data_transform=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "dataset_collection=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "runner=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "stage_dag=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "artifact_ops=ready");
@@ -185,6 +194,16 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_status", "ui_agent=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "ui_evidence=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "ui_compare=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "web_export=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "web_routes=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "web_bundle=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "api_home=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "api_run=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "api_agents=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "api_evidence=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "api_compare=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "api_artifacts=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "api_data=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "tests=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "backend=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "backend_exec=ready");
@@ -252,7 +271,13 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_backend", "cases=4");
 	state_ok = state_ok && rp_file_contains("rp_backend_exec", "passed_cases=2");
 	state_ok = state_ok && rp_file_contains("rp_consistency", "state_relation=passed");
-	state_ok = state_ok && rp_file_contains("rp_consistency", "checks=50");
+	state_ok = state_ok && rp_file_contains("rp_consistency", "checks=56");
+	state_ok = state_ok && rp_file_contains("rp_ingest_files", "files=2");
+	state_ok = state_ok && rp_file_contains("rp_dataset_snapshot", "snapshots=2");
+	state_ok = state_ok && rp_file_contains("rp_data_preview", "previews=2");
+	state_ok = state_ok && rp_file_contains("rp_data_quality", "passed=7");
+	state_ok = state_ok && rp_file_contains("rp_data_transform", "transforms=2");
+	state_ok = state_ok && rp_file_contains("rp_dataset_collection", "items=4");
 	state_ok = state_ok && rp_file_contains("rp_runner", "stages=5");
 	state_ok = state_ok && rp_file_contains("rp_stage_state", "stages=5");
 	state_ok = state_ok && rp_file_contains("rp_cache_index", "cache_hits=1");
@@ -269,14 +294,23 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_ui_home", "page=home");
 	state_ok = state_ok && rp_file_contains("rp_ui_run", "run_id=RUN-042");
 	state_ok = state_ok && rp_file_contains("rp_ui_compare", "pain_file_scans=128");
-	state_ok = state_ok && rp_file_contains("rp_tests", "tests=64");
+	state_ok = state_ok && rp_file_contains("rp_web_routes", "routes=7");
+	state_ok = state_ok && rp_file_contains("rp_api_home", "api=home");
+	state_ok = state_ok && rp_file_contains("rp_api_run", "runner_exec_files=5");
+	state_ok = state_ok && rp_file_contains("rp_api_agents", "agents=7");
+	state_ok = state_ok && rp_file_contains("rp_api_evidence", "provenance_paths=3");
+	state_ok = state_ok && rp_file_contains("rp_api_compare", "workflow_runner_files=5");
+	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "manifest_records=4");
+	state_ok = state_ok && rp_file_contains("rp_api_data", "dataset_snapshots=2");
+	state_ok = state_ok && rp_file_contains("rp_web_bundle", "api_payloads=7");
+	state_ok = state_ok && rp_file_contains("rp_tests", "tests=82");
 	state_ok = state_ok && rp_file_contains("rp_tests", "status=passed");
 	state_ok = state_ok && rp_file_contains("rp_repro", "notebook_replay=passed");
 	state_ok = state_ok && rp_file_contains("rp_submit", "review_response=ready");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "report_ok=1");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "repro_ok=1");
-	state_ok = state_ok && rp_file_contains("rp_agentcmp", "message_acks=27");
-	state_ok = state_ok && rp_file_contains("rp_agentcmp", "tool_events=106");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "message_acks=28");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "tool_events=115");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "scheduler_items=21");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "ranked_tasks=21");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "selected_tasks=10");
@@ -294,6 +328,8 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "workflow_exports=2");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "review_rounds=2");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "data_versions=2");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "data_pipeline_files=6");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "data_quality_checks=7");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "retry_attempts=2");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "relay_packets=3");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "llm_requests=3");
@@ -313,21 +349,25 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=metrics;msg=14;status=ready");
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=consistency;msg=22;status=ready");
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=artifact_ops;msg=artifact;status=ready");
+	state_ok = state_ok && rp_file_contains("rp_ack", "ack=data_pipeline;msg=data;status=ready");
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=workflow_runner;msg=runner;status=ready");
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=agent_collab;msg=agents;status=ready");
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=llm_relay;msg=relay;status=ready");
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=ui_export;msg=ui;status=ready");
+	state_ok = state_ok && rp_file_contains("rp_ack", "ack=web_export;msg=web;status=ready");
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=test_suite;msg=test;status=passed");
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=metrics.measure_plain");
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=consistency.check_tasks");
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=artifact_ops.write_artifact");
+	state_ok = state_ok && rp_file_contains("rp_tool", "tool=data_pipeline.collection");
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=workflow_runner.write_stage_state");
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=agent_collab.write_decisions");
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=llm_relay.write_packets");
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=ui_export.write_compare");
+	state_ok = state_ok && rp_file_contains("rp_tool", "tool=web_export.write_bundle");
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=test_suite.check_artifacts");
-	state_ok = state_ok && (rp_count_lines("rp_ack") >= 29);
-	state_ok = state_ok && (rp_count_lines("rp_tool") >= 119);
+	state_ok = state_ok && (rp_count_lines("rp_ack") >= 31);
+	state_ok = state_ok && (rp_count_lines("rp_tool") >= 140);
 	state_ok = state_ok && rp_file_contains("rp_protocol", "ethics=approved");
 	printf("rp_orch: state_ok=%d\n", state_ok);
 	if (!state_ok) {

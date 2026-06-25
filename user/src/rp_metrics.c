@@ -54,6 +54,12 @@ int main(void)
 	if (!rp_file_contains("rp_artifact_manifest", "manifest_records=4")) return 1;
 	if (!rp_file_contains("rp_artifact", "status=recovered")) return 1;
 	if (!rp_file_contains("rp_chart_data", "status=ready")) return 1;
+	if (!rp_file_contains("rp_ingest_files", "files=2")) return 1;
+	if (!rp_file_contains("rp_dataset_snapshot", "snapshots=2")) return 1;
+	if (!rp_file_contains("rp_data_preview", "previews=2")) return 1;
+	if (!rp_file_contains("rp_data_quality", "passed=7")) return 1;
+	if (!rp_file_contains("rp_data_transform", "transforms=2")) return 1;
+	if (!rp_file_contains("rp_dataset_collection", "items=4")) return 1;
 	if (!rp_file_contains("rp_agents", "agents=7")) return 1;
 	if (!rp_file_contains("rp_decisions", "decisions=8")) return 1;
 	if (!rp_file_contains("rp_handoff", "handoffs=6")) return 1;
@@ -63,13 +69,13 @@ int main(void)
 	if (!rp_file_contains("rp_mail", "to=metrics")) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
-	if (ack_count < 26 || tool_count < 104) return 1;
+	if (ack_count < 27 || tool_count < 113) return 1;
 	if (!rp_write_file("rp_telemetry",
 			   "run_id=RUN-042\n"
 			   "trace_spans=8\n"
 			   "bottlenecks=1\n"
-			   "message_acks=27\n"
-			   "tool_events=106\n"
+			   "message_acks=28\n"
+			   "tool_events=115\n"
 			   "scheduler_items=21\n"
 			   "ranked_tasks=21\n"
 			   "selected_tasks=10\n"
@@ -86,7 +92,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=50\n"
+			   "consistency_checks=56\n"
 			   "runner_stages=5\n"
 			   "runner_retries=1\n"
 			   "runner_cache_hits=1\n"
@@ -94,6 +100,12 @@ int main(void)
 			   "workflow_events=8\n"
 			   "workflow_manifest_records=4\n"
 			   "artifact_records=2\n"
+			   "data_pipeline_files=6\n"
+			   "dataset_snapshots=2\n"
+			   "data_previews=2\n"
+			   "data_quality_checks=7\n"
+			   "data_transforms=2\n"
+			   "dataset_collection_items=4\n"
 			   "relay_protocol_files=5\n"
 			   "relay_routes=4\n"
 			   "host_request_files=1\n"
@@ -119,7 +131,7 @@ int main(void)
 			   "failure_items=1\n"
 			   "poll_rounds=18\n"
 			   "scanned_records=128\n"
-			   "metric_files=120\n"
+			   "metric_files=126\n"
 			   "ticks=42\n"
 			   "status=ready\n")) {
 		return 1;
@@ -146,8 +158,8 @@ int main(void)
 			   "report_ok=1\n"
 			   "repro_ok=1\n"
 			   "llm_guarded=1\n"
-			   "message_acks=27\n"
-			   "tool_events=106\n"
+			   "message_acks=28\n"
+			   "tool_events=115\n"
 			   "scheduler_items=21\n"
 			   "ranked_tasks=21\n"
 			   "selected_tasks=10\n"
@@ -164,7 +176,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=50\n"
+			   "consistency_checks=56\n"
 			   "runner_stages=5\n"
 			   "runner_retries=1\n"
 			   "runner_cache_hits=1\n"
@@ -172,6 +184,12 @@ int main(void)
 			   "workflow_events=8\n"
 			   "workflow_manifest_records=4\n"
 			   "artifact_records=2\n"
+			   "data_pipeline_files=6\n"
+			   "dataset_snapshots=2\n"
+			   "data_previews=2\n"
+			   "data_quality_checks=7\n"
+			   "data_transforms=2\n"
+			   "dataset_collection_items=4\n"
 			   "relay_protocol_files=5\n"
 			   "relay_routes=4\n"
 			   "host_request_files=1\n"
@@ -205,6 +223,6 @@ int main(void)
 	if (!rp_append_status("telemetry=ready")) return 1;
 	if (!rp_append_status("agentcmp=ready")) return 1;
 	if (!rp_append_status("health=ready")) return 1;
-	printf("rp_metrics: telemetry_spans=8 acks=27 tools=106 delta_items=20 status=ready\n");
+	printf("rp_metrics: telemetry_spans=8 acks=28 tools=115 delta_items=20 status=ready\n");
 	return 0;
 }

@@ -13,7 +13,7 @@ The current runtime has four parts:
 1. Upstream uCore kernel.
 2. Restored uCore user library and program build flow.
 3. `rp_plain`, a native user process that carries the research platform catalog, feature groups, mature platform mappings, and self-check logic.
-4. `rp_orch`, a native user process that runs thirty-six platform programs through ordinary `fork`, `exec`, and `waitpid`.
+4. `rp_orch`, a native user process that runs thirty-eight platform programs through ordinary `fork`, `exec`, and `waitpid`.
 
 The user process deliberately uses ordinary C data structures and ordinary uCore process execution. This makes the result a baseline for later comparison with the Agent-OS kernel-enhanced version.
 
@@ -21,8 +21,9 @@ The user process deliberately uses ordinary C data structures and ordinary uCore
 
 The host-side research Agent platform is moving toward real HTTP UI, real artifact operations, a small workflow runner, and a host LLM relay. The unchanged uCore branch should mirror those concepts with ordinary files and ordinary user programs:
 
-- UI pages become exported state files for home, run detail, Agent detail, evidence detail, and comparison views.
+- UI pages become exported state files and Host Web/API payload files for home, run detail, Agent detail, evidence detail, artifact, and comparison views.
 - Artifact operations become reads from input files and writes to intermediate files, reports, logs, and chart-data files.
+- Data pipeline behavior becomes ordinary files for input scanning, dataset snapshots, data preview, quality checks, transformations, and dataset collection export.
 - Workflow runner behavior becomes stage records with dependencies, failure, retry, cache, and log fields.
 - LLM calls become request queue and response files. Template responses can be produced inside uCore; cloud access and secrets stay on the host.
 - Agent collaboration becomes explicit role messages, acknowledgements, decisions, recovery actions, and audit records.
@@ -67,6 +68,7 @@ The platform programs add an executable multi-process shape:
 - `rp_invoke`
 - `rp_complete`
 - `rp_artifact_ops`
+- `rp_data_pipeline`
 - `rp_workflow_runner`
 - `rp_agent_collab`
 - `rp_package`
@@ -77,6 +79,7 @@ The platform programs add an executable multi-process shape:
 - `rp_consistency`
 - `rp_metrics`
 - `rp_ui_export`
+- `rp_web_export`
 - `rp_test_suite`
 - `rp_compare_plain`
 
@@ -176,6 +179,12 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_report_text` | artifact operations | package, compare, UI export | report text generated from the recovered run |
 | `rp_chart_data` | artifact operations | package, compare, UI export | chart-ready stage attempt data for the host UI |
 | `rp_runner` | artifact operations | consistency, compare, orchestrator | plain uCore stage runner summary with retries and cache hits |
+| `rp_ingest_files` | data pipeline | package, consistency, metrics, UI export, compare, orchestrator | concrete input-file scan result for RUN-042 |
+| `rp_dataset_snapshot` | data pipeline | package, consistency, metrics, UI export, compare, orchestrator | raw and normalized dataset snapshot summary |
+| `rp_data_preview` | data pipeline | package, consistency, metrics, UI export, compare, orchestrator | preview rows and columns for FASTQ and sample records |
+| `rp_data_quality` | data pipeline | package, consistency, metrics, UI export, compare, orchestrator | data-quality rule results for the dataset |
+| `rp_data_transform` | data pipeline | package, consistency, metrics, UI export, compare, orchestrator | transform records for normalization and sample-sheet join |
+| `rp_dataset_collection` | data pipeline | package, consistency, metrics, UI export, compare, orchestrator | final dataset collection tied to input, sample, count, and artifact sources |
 | `rp_stage_state` | workflow runner | package, consistency, metrics, UI export, compare, orchestrator | executable stage-state table derived from the DAG and logs |
 | `rp_cache_index` | workflow runner | package, consistency, metrics, UI export, compare, orchestrator | cache hit and miss records for all five stages |
 | `rp_retry_plan` | workflow runner | package, consistency, metrics, UI export, compare, orchestrator | retry item for the failed align stage with reason and action |
@@ -207,7 +216,16 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_ui_agent` | UI export | compare, orchestrator | Agent-detail page data for role messages and decisions |
 | `rp_ui_evidence` | UI export | compare, orchestrator | evidence-detail page data with stage log and recovered artifact links |
 | `rp_ui_compare` | UI export | compare, orchestrator | comparison page data for plain-kernel pain points |
-| `rp_tests` | test suite | compare, orchestrator | 64 user-space checks over catalog, workflow, artifacts, workflow runner files, Agent collaboration, UI data, LLM relay, AgentCompare, and consistency records |
+| `rp_web_routes` | Host Web/API export | test suite, compare, orchestrator | route manifest for host-rendered home, run, Agent, evidence, data, artifact, and comparison views |
+| `rp_api_home` | Host Web/API export | test suite, compare, orchestrator | API payload for the host web home page |
+| `rp_api_run` | Host Web/API export | test suite, compare, orchestrator | API payload for RUN-042 run detail with runner execution files |
+| `rp_api_agents` | Host Web/API export | test suite, compare, orchestrator | API payload for role messages, decisions, and handoffs |
+| `rp_api_evidence` | Host Web/API export | test suite, compare, orchestrator | API payload for claims, provenance paths, stage log, artifact, manifest, and LLM guard |
+| `rp_api_compare` | Host Web/API export | test suite, compare, orchestrator | API payload for plain-kernel comparison signals |
+| `rp_api_artifacts` | Host Web/API export | test suite, compare, orchestrator | API payload for input, stage, manifest, report, chart, and LLM relay artifacts |
+| `rp_api_data` | Host Web/API export | test suite, compare, orchestrator | API payload for input-file scan, dataset snapshots, previews, quality, transforms, and collection records |
+| `rp_web_bundle` | Host Web/API export | test suite, compare, orchestrator | bundle summary tying routes, API payloads, UI pages, runner files, and relay files together |
+| `rp_tests` | test suite | compare, orchestrator | 82 user-space checks over catalog, data pipeline, workflow, artifacts, workflow runner files, Agent collaboration, UI data, Host Web/API export files, LLM relay, AgentCompare, and consistency records |
 | `rp_compare` | compare | orchestrator | plain-kernel execution summary |
 
 This is intentionally implemented without new syscalls. It uses only `open`, `read`, `write`, `close`, `fork`, `exec`, and `waitpid`.

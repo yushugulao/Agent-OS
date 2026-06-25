@@ -17,6 +17,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentcmp", "status=ready");
 	ok = ok && rp_file_contains("rp_telemetry", "status=ready");
 	ok = ok && rp_file_contains("rp_consistency", "state_relation=passed");
+	ok = ok && rp_file_contains("rp_dataset_collection", "items=4");
 	ok = ok && rp_file_contains("rp_agents", "agents=7");
 	ok = ok && rp_file_contains("rp_decisions", "decisions=8");
 	ok = ok && rp_file_contains("rp_handoff", "handoffs=6");
@@ -30,7 +31,7 @@ int main(void)
 			   "title=Research Agent Platform\n"
 			   "run=RUN-042\n"
 			   "status=recovered\n"
-			   "cards=run,agents,evidence,llm_relay,compare\n"
+			   "cards=run,agents,evidence,data,llm_relay,compare\n"
 			   "source=plain_ucore_files\n"
 			   "status=ready\n")) {
 		return 1;
@@ -45,6 +46,7 @@ int main(void)
 			   "report=rp_report_text\n"
 			   "chart=rp_chart_data\n"
 			   "runner_exec=rp_stage_state,rp_cache_index,rp_retry_plan,rp_run_events,rp_artifact_manifest\n"
+			   "data_pipeline=rp_ingest_files,rp_dataset_snapshot,rp_data_preview,rp_data_quality,rp_data_transform,rp_dataset_collection\n"
 			   "llm_relay=rp_llm_packets,rp_llm_routes,rp_llm_guard,rp_llm_hostreq,rp_llm_fallback\n"
 			   "status=ready\n")) {
 		return 1;
@@ -82,8 +84,9 @@ int main(void)
 			   "pain_rebuild_steps=6\n"
 			   "relay_protocol_files=5\n"
 			   "workflow_runner_files=5\n"
-			   "message_acks=27\n"
-			   "tool_events=106\n"
+			   "data_pipeline_files=6\n"
+			   "message_acks=28\n"
+			   "tool_events=115\n"
 			   "status=ready\n")) {
 		return 1;
 	}
