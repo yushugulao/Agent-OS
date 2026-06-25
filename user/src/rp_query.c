@@ -9,11 +9,32 @@ int main(void)
 	ok = ok && rp_file_contains("rp_services", "agent=26");
 	ok = ok && rp_file_contains("rp_services", "evidence=10");
 	ok = ok && rp_file_contains("rp_sched", "queue_items=14");
+	ok = ok && rp_file_contains("rp_taskrec", "msg=14");
 	ok = ok && rp_file_contains("rp_fail", "status=ready");
 	ok = ok && rp_file_contains("rp_budget", "decision=within_budget");
 	if (!ok) return 1;
+	int task_lines = rp_count_lines("rp_taskrec");
+	int high_tasks = rp_count_token("rp_taskrec", "prio=H");
+	int critical_tasks = rp_count_token("rp_taskrec", "class=critical");
+	int ready_tasks = rp_count_token("rp_taskrec", "state=ready");
+	if (task_lines != 14 || high_tasks != 3 || critical_tasks != 4 || ready_tasks != 14) {
+		printf("rp_query: bad_task_records lines=%d high=%d critical=%d ready=%d\n",
+		       task_lines, high_tasks, critical_tasks, ready_tasks);
+		return 1;
+	}
 	if (!rp_write_file("rp_query",
 			   "query=workflow,agent,evidence\nworkflow_hits=34\nagent_hits=26\nevidence_hits=10\nstatus=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_rank",
+			   "source=rp_taskrec\n"
+			   "records=14\n"
+			   "ready=14\n"
+			   "high=3\n"
+			   "critical=4\n"
+			   "selected=5\n"
+			   "selected_stages=literature,profile,align,decision,measure\n"
+			   "status=ready\n")) {
 		return 1;
 	}
 	if (!rp_write_file("rp_runview",
@@ -22,14 +43,19 @@ int main(void)
 			   "agent_hits=26\n"
 			   "evidence_hits=10\n"
 			   "scheduler_items=14\n"
+			   "ranked_tasks=14\n"
+			   "selected_tasks=5\n"
+			   "critical_tasks=4\n"
 			   "failure_items=1\n"
 			   "budget_state=within_budget\n"
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_append_file("rp_tool", "tool=query.rank_tasks;target=rp_rank;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=query.build_runview;target=rp_runview;status=ok")) return 1;
 	if (!rp_append_status("query=ready")) return 1;
+	if (!rp_append_status("rank=ready")) return 1;
 	if (!rp_append_status("runview=ready")) return 1;
-	printf("rp_query: workflow=34 agent=26 evidence=10 runview=ready status=ready\n");
+	printf("rp_query: workflow=34 agent=26 evidence=10 ranked=14 selected=5 status=ready\n");
 	return 0;
 }

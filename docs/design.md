@@ -68,6 +68,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_ack` | role programs | metrics, compare, orchestrator | role acknowledgements for completed tasks |
 | `rp_tool` | role programs | metrics, compare, orchestrator | tool-level operation log written by ordinary user programs |
 | `rp_sched` | planner | metrics, compare, orchestrator | task queue size, priority summary, retry policy, and stage-order deadline model |
+| `rp_taskrec` | planner | query, metrics, compare, orchestrator | task-level records with owner, stage, priority, class, and ready state |
 | `rp_budget` | planner | query, metrics, compare, orchestrator | token, tick, storage, and worker-slot budget summary |
 | `rp_wfio` | planner | package, dossier, metrics, compare, orchestrator | workflow import/export formats, portable step count, and compatibility checks |
 | `rp_retryq` | planner | repair | pending retry item for the failed align stage |
@@ -100,6 +101,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_lineage` | lineage | site export, compare | workflow artifact relationships |
 | `rp_site` | site export | compare | exported site page summary |
 | `rp_query` | query | compare | selected search result counts |
+| `rp_rank` | query | metrics, compare, orchestrator | task ranking result derived from `rp_taskrec` |
 | `rp_runview` | query | metrics, compare, orchestrator | run-level view that joins query hits, scheduler state, failure count, and budget state |
 | `rp_evidence` | evidence | package | claims, links, provenance node count |
 | `rp_knowledge` | evidence | package, compare | knowledge, semantic, and systematic review summary |

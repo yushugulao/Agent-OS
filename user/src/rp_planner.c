@@ -34,6 +34,23 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_write_file("rp_taskrec",
+			   "msg=1;owner=retriever;stage=literature;prio=H;class=critical;state=ready\n"
+			   "msg=2;owner=analyst;stage=profile;prio=H;class=critical;state=ready\n"
+			   "msg=3;owner=reviewer;stage=claims;prio=N;class=review;state=ready\n"
+			   "msg=4;owner=lab;stage=records;prio=N;class=lab;state=ready\n"
+			   "msg=5;owner=writer;stage=report;prio=N;class=paper;state=ready\n"
+			   "msg=6;owner=repair;stage=align;prio=H;class=critical;state=ready\n"
+			   "msg=7;owner=auditor;stage=release;prio=N;class=review;state=ready\n"
+			   "msg=8;owner=evidence;stage=path;prio=N;class=knowledge;state=ready\n"
+			   "msg=9;owner=llm;stage=packet;prio=N;class=llm;state=ready\n"
+			   "msg=10;owner=privacy;stage=packet_check;prio=N;class=llm;state=ready\n"
+			   "msg=11;owner=package;stage=package;prio=N;class=paper;state=ready\n"
+			   "msg=12;owner=release;stage=decision;prio=N;class=critical;state=ready\n"
+			   "msg=13;owner=dossier;stage=material;prio=N;class=paper;state=ready\n"
+			   "msg=14;owner=metrics;stage=measure;prio=N;class=telemetry;state=ready\n")) {
+		return 1;
+	}
 	if (!rp_write_file("rp_budget",
 			   "run_id=RUN-042\n"
 			   "token_budget=4096\n"
@@ -67,11 +84,13 @@ int main(void)
 	if (!rp_append_file("rp_ack", "ack=planner;msg=0;status=sent")) return 1;
 	if (!rp_append_file("rp_tool", "tool=planner.create_plan;target=rp_plan;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=planner.schedule_tasks;target=rp_sched;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=planner.write_taskrec;target=rp_taskrec;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=planner.assign_budget;target=rp_budget;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=planner.workflow_io;target=rp_wfio;status=ok")) return 1;
 	if (!rp_append_status("planner=planned")) return 1;
 	if (!rp_append_status("mail=ready")) return 1;
 	if (!rp_append_status("schedule=ready")) return 1;
+	if (!rp_append_status("taskrec=ready")) return 1;
 	if (!rp_append_status("budget=ready")) return 1;
 	if (!rp_append_status("wfio=ready")) return 1;
 	printf("rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 messages=14 schedule=ready status=planned\n");

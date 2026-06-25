@@ -23,6 +23,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_budget", "decision=within_budget");
 	ok = ok && rp_file_contains("rp_fail", "failure_class=tool_output_missing");
 	ok = ok && rp_file_contains("rp_runview", "scheduler_items=14");
+	ok = ok && rp_file_contains("rp_taskrec", "msg=14");
+	ok = ok && rp_file_contains("rp_rank", "selected=5");
+	ok = ok && rp_file_contains("rp_runview", "ranked_tasks=14");
 	ok = ok && rp_file_contains("rp_health", "healthy=4");
 	ok = ok && rp_file_contains("rp_labops", "maintenance=passed");
 	ok = ok && rp_file_contains("rp_training", "gaps=0");
@@ -36,8 +39,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentcmp", "report_ok=1");
 	ok = ok && rp_file_contains("rp_agentcmp", "repro_ok=1");
 	ok = ok && rp_file_contains("rp_agentcmp", "message_acks=14");
-	ok = ok && rp_file_contains("rp_agentcmp", "tool_events=30");
+	ok = ok && rp_file_contains("rp_agentcmp", "tool_events=32");
 	ok = ok && rp_file_contains("rp_agentcmp", "scheduler_items=14");
+	ok = ok && rp_file_contains("rp_agentcmp", "ranked_tasks=14");
+	ok = ok && rp_file_contains("rp_agentcmp", "selected_tasks=5");
 	ok = ok && rp_file_contains("rp_agentcmp", "workflow_exports=2");
 	ok = ok && rp_file_contains("rp_agentcmp", "review_rounds=2");
 	ok = ok && rp_file_contains("rp_agentcmp", "data_versions=2");
@@ -58,13 +63,13 @@ int main(void)
 			   "agentos_kernel=pending\n"
 			   "objects=500\n"
 			   "programs=22\n"
-			   "state_files=56\n"
+			   "state_files=58\n"
 			   "message_acks=15\n"
-			   "tool_events=32\n"
+			   "tool_events=34\n"
 			   "status=ready\n")) {
 		return 1;
 	}
 	if (!rp_append_status("compare=ready")) return 1;
-	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=22 state_files=56 acks=15 tools=32 status=ready\n");
+	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=22 state_files=58 acks=15 tools=34 status=ready\n");
 	return 0;
 }
