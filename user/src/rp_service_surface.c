@@ -167,6 +167,8 @@ static int write_knowledge_services(void)
 			   "papers=9\n"
 			   "screened=17\n"
 			   "included=9\n"
+			   "library_sources=1\n"
+			   "library_tag=reusable\n"
 			   "prisma_records=1\n"
 			   "risk_of_bias_records=3\n"
 			   "status=ready\n")) {
@@ -175,6 +177,8 @@ static int write_knowledge_services(void)
 	if (!rp_write_file("rp_citegraph",
 			   "citations=14\n"
 			   "bibtex_entries=9\n"
+			   "library_source=library2026\n"
+			   "citation_plan_entries=3\n"
 			   "missing_keys=0\n"
 			   "duplicate_keys=0\n"
 			   "reference_integrity=passed\n"

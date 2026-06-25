@@ -23,6 +23,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_package", "downloadable_units=3");
 	ok = ok && rp_file_contains("rp_input", "form_fields=8");
 	ok = ok && rp_file_contains("rp_input", "csv_rows_total=9");
+	ok = ok && rp_file_contains("rp_input", "library_sources=1");
+	ok = ok && rp_file_contains("rp_runner", "citation_plan_entries=3");
+	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
 	ok = ok && rp_file_contains("rp_package", "deliverables=8");
 	ok = ok && rp_file_contains("rp_package", "raw_links=5");
 	ok = ok && rp_file_contains("rp_package", "artifact_links=6");
@@ -72,6 +75,7 @@ int main(void)
 			   "custom_runs=3\n"
 			   "research_form=rp_input\n"
 			   "upload_files=rp_input\n"
+			   "library_sources=rp_knowledge\n"
 			   "nav_items=12\n"
 			   "primary_cards=12\n"
 			   "cards=run,custom_research,agents,evidence,data,llm_relay,compare\n"
@@ -84,6 +88,7 @@ int main(void)
 			   "run_id=RUN-042\n"
 			   "custom_research=rp_runner;custom_research_runs=3\n"
 			   "request_form=rp_input;upload_files=rp_input\n"
+			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner\n"
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
 			   "workflow=lab-gene-x\n"
 			   "stages=5\n"
@@ -152,6 +157,7 @@ int main(void)
 			   "preview_files=rp_report_text,rp_chart_data,rp_artifact\n"
 			   "package_manifest=ready\n"
 			   "evidence_package=rp_package;download_index=rp_package\n"
+			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner\n"
 			   "delivery_manifest=rp_package;export_bundle=rp_package;review_page=rp_package\n"
 			   "raw_downloads=5;upload_files=rp_input\n"
 			   "bundle_items=18\n"
@@ -213,6 +219,7 @@ int main(void)
 			   "citation_graph=rp_citegraph\n"
 			   "semantic_index=rp_semindex\n"
 			   "knowledge_answers=rp_kanswers\n"
+			   "library_sources=rp_knowledge\n"
 			   "documents=17\n"
 			   "answers=4\n"
 			   "status=ready\n")) {
@@ -249,6 +256,7 @@ int main(void)
 			   "request=2;path=/actions/host-workflow/export;workflow_run_id=RUN-042\n"
 			   "request=3;path=/actions/agentcompare/run;profile=plain_ucore\n"
 			   "request=4;path=/actions/research/run;provider=template;source_request=rp_input;dataset_file=rp_input;custom_runs=3\n"
+			   "library_query=tag=reusable;source=rp_knowledge\n"
 			   "request=5;path=/actions/research/export;run_id=usable-run:RUN-900\n"
 			   "responses=5\n"
 			   "response=1;status=303;location=/runs/RUN-042;effect=host_workflow_run\n"
@@ -276,6 +284,7 @@ int main(void)
 			   "run_id_2=usable-run:RUN-901\n"
 			   "run_id_3=usable-run:RUN-902\n"
 			   "source_request=rp_input;source_form=rp_input;upload_files=rp_input\n"
+			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner\n"
 			   "source_dataset=rp_input;source_run=rp_runner\n"
 			   "title=Browser started study\n"
 			   "title_2=Second browser study\n"
@@ -309,6 +318,7 @@ int main(void)
 			   "render_sections=7\n"
 			   "artifact_previews=3\n"
 			   "request_form=rp_input;upload_files=rp_input\n"
+			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner\n"
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
 			   "runner_detail_fields=16\n"
 			   "evidence_package=rp_package\n"

@@ -43,7 +43,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_completion", "actions=4");
 	ok = ok && rp_file_contains("rp_input", "form_fields=8");
 	ok = ok && rp_file_contains("rp_input", "csv_rows_total=9");
+	ok = ok && rp_file_contains("rp_input", "library_sources=1");
+	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
 	ok = ok && rp_file_contains("rp_runner", "status=ready");
+	ok = ok && rp_file_contains("rp_runner", "library_source_count=1");
 	ok = ok && rp_file_contains("rp_stage_dag", "status=ready");
 	ok = ok && rp_file_contains("rp_stage_log", "status=ready");
 	ok = ok && rp_file_contains("rp_artifact", "status=recovered");
@@ -88,6 +91,9 @@ int main(void)
 			   "package_reader=host_web_bundle\n"
 			   "request_form=rp_input\n"
 			   "upload_files=rp_input\n"
+			   "library_sources=rp_knowledge\n"
+			   "bibliography=rp_runner\n"
+			   "citation_plan=rp_runner\n"
 			   "delivery_manifest=rp_package\n"
 			   "export_bundle=rp_package\n"
 			   "review_page=rp_package\n"

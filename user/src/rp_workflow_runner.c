@@ -12,6 +12,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_input", "custom_run=usable-run:RUN-900");
 	ok = ok && rp_file_contains("rp_input", "custom_requests=3");
 	ok = ok && rp_file_contains("rp_input", "custom_dataset_rows=3");
+	ok = ok && rp_file_contains("rp_input", "library_sources=1");
+	ok = ok && rp_file_contains("rp_knowledge", "library_tag=reusable");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_stage_state",
@@ -108,6 +110,12 @@ int main(void)
 	if (!rp_append_file("rp_runner", "custom_artifacts=36")) return 1;
 	if (!rp_append_file("rp_runner", "custom_agent_messages=21")) return 1;
 	if (!rp_append_file("rp_runner", "custom_agent_decisions=15")) return 1;
+	if (!rp_append_file("rp_runner", "library_source_count=1")) return 1;
+	if (!rp_append_file("rp_runner", "library_tag=reusable")) return 1;
+	if (!rp_append_file("rp_runner", "library_source=usable-source:library2026:1")) return 1;
+	if (!rp_append_file("rp_runner", "library_backed_run=usable-run:RUN-900")) return 1;
+	if (!rp_append_file("rp_runner", "bibliography_entries=3")) return 1;
+	if (!rp_append_file("rp_runner", "citation_plan_entries=3")) return 1;
 	if (!rp_append_file("rp_runner", "custom_analysis=mean_control:12,mean_treatment:20,stronger:treatment")) return 1;
 	if (!rp_append_file("rp_runner", "custom_analysis_2=mean_control:8,mean_treatment:13,stronger:treatment")) return 1;
 	if (!rp_append_file("rp_runner", "custom_analysis_3=mean_control:30,mean_treatment:28,stronger:control")) return 1;

@@ -36,6 +36,8 @@ int main(void)
 			   "custom_outputs=stage_dag,analysis,report,review,export\n"
 			   "request_form=form_fields=8;request_count=3;source_mode=pasted_or_uploaded;provider_options=template,host-relay;delivery_audience=reviewer;reviewer=Wang\n"
 			   "upload_files=uploads=2;csv_rows_total=9;reference_entries=2;dataset_target=rp_input\n"
+			   "library_sources=1;library_tag=reusable;library_source_id=usable-source:library2026:1;citation_key=library2026\n"
+			   "library_backed_run=usable-run:RUN-900;source_tag=reusable;selected_library_sources=1\n"
 			   "status=ready\n")) {
 		return 1;
 	}

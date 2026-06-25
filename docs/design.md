@@ -22,9 +22,9 @@ The user process deliberately uses ordinary C data structures and ordinary uCore
 The host-side research Agent platform is moving toward real HTTP UI, real artifact operations, a small workflow runner, and a host LLM relay. The unchanged uCore branch should mirror those concepts with ordinary files and ordinary user programs:
 
 - UI pages become exported state files and Host Web/API payload files for home, run detail, Agent detail, evidence detail, artifact, and comparison views.
-- HTTP POST actions become ordinary request and response files for host workflow execution, host workflow export, AgentCompare execution, custom research execution, and custom research export.
+- HTTP POST actions become ordinary request and response files for host workflow execution, host workflow export, AgentCompare execution, custom research execution, reusable source lookup, and custom research export.
 - Artifact operations become reads from input files and writes to intermediate files, reports, logs, and chart-data files.
-- Custom research tasks are represented as ordinary files: `rp_input` carries the compact dataset, submitted form fields, uploaded CSV/reference summaries, and `rp_runner` appends three derived custom runs, stages, analysis, report, review, and export result.
+- Custom research tasks are represented as ordinary files: `rp_input` carries the compact dataset, submitted form fields, uploaded CSV/reference summaries, reusable source selection, and `rp_runner` appends three derived custom runs, stages, analysis, bibliography, citation plan, report, review, and export result.
 - Data pipeline behavior becomes ordinary files for input scanning, dataset snapshots, data preview, quality checks, transformations, and dataset collection export.
 - Bio, lab resource, publication, knowledge, and runtime service behavior becomes ordinary files with short names that fit the uCore root directory entry size.
 - Workflow runner behavior becomes stage records with dependencies, failure, retry, cache, and log fields.
@@ -247,7 +247,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_ui_compare` | UI export | compare, orchestrator | comparison page data for plain-kernel pain points and metric rows |
 | `rp_web_routes` | Host Web/API export | test suite, compare, orchestrator | route manifest for thirteen host-rendered GET views and five POST action entries |
 | `rp_api_home` | Host Web/API export | test suite, compare, orchestrator | API payload for the host web home page |
-| `rp_api_run` | Host Web/API export | test suite, compare, orchestrator | API payload for RUN-042 run detail with runner execution files, request form, uploaded files, delivery manifest, review page, and custom research run reference |
+| `rp_api_run` | Host Web/API export | test suite, compare, orchestrator | API payload for RUN-042 run detail with runner execution files, request form, uploaded files, reusable source selection, bibliography, citation plan, delivery manifest, review page, and custom research run reference |
 | `rp_api_agents` | Host Web/API export | test suite, compare, orchestrator | API payload for role messages, decisions, and handoffs |
 | `rp_api_evidence` | Host Web/API export | test suite, compare, orchestrator | API payload for claims, provenance paths, stage log, artifact, manifest, and LLM guard |
 | `rp_api_compare` | Host Web/API export | test suite, compare, orchestrator | API payload for plain-kernel comparison signals |
@@ -258,11 +258,11 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_api_pub` | Host Web/API export | test suite, compare, orchestrator | API payload for result review, publication plan, peer response, and FAIR package |
 | `rp_api_know` | Host Web/API export | test suite, compare, orchestrator | API payload for literature review, citation graph, semantic index, and knowledge answers |
 | `rp_api_runtime` | Host Web/API export | test suite, compare, orchestrator | API payload for runtime environment, notebook replay, ELN, and worker pool files |
-| `rp_api_action` | Host Web/API export | test suite, compare, orchestrator | action contract for host workflow run, host workflow export, AgentCompare run, custom research run, and custom research export |
+| `rp_api_action` | Host Web/API export | test suite, compare, orchestrator | action contract for host workflow run, host workflow export, AgentCompare run, custom research run, reusable source lookup, and custom research export |
 | `rp_actionio` | Host Web/API export | test suite, compare, orchestrator | compact request, response, redirect, host export, and AgentCompare action record |
 | `rp_uresrun` | Host Web/API export | test suite, compare, orchestrator | usable research run and export result record derived from the request form, uploaded files, compact dataset, and runner output |
-| `rp_web_bundle` | Host Web/API export | test suite, compare, orchestrator | bundle summary tying routes, API payloads, POST action payloads, UI pages, UI render sections, artifact preview entries, delivery manifest, review page, package export indexes, runner files, custom research fields, research service files, and relay files together |
-| `rp_tests` | test suite | compare, orchestrator | 221 user-space checks over catalog, data pipeline, service surface records, workflow, artifacts, package export indexes, delivery manifest, review page, UI render data, workflow runner files, workflow runner detail fields, custom research fields, Agent collaboration, UI data, Host Web/API export files, POST action records, LLM relay, AgentCompare, and consistency records |
+| `rp_web_bundle` | Host Web/API export | test suite, compare, orchestrator | bundle summary tying routes, API payloads, POST action payloads, UI pages, UI render sections, artifact preview entries, reusable source selection, delivery manifest, review page, package export indexes, runner files, custom research fields, research service files, and relay files together |
+| `rp_tests` | test suite | compare, orchestrator | 241 user-space checks over catalog, data pipeline, service surface records, workflow, artifacts, package export indexes, delivery manifest, review page, UI render data, workflow runner files, workflow runner detail fields, custom research fields, reusable source selection, bibliography, citation plan, Agent collaboration, UI data, Host Web/API export files, POST action records, LLM relay, AgentCompare, and consistency records |
 | `rp_compare` | compare | orchestrator | plain-kernel execution summary |
 
 This is intentionally implemented without new syscalls. It uses only `open`, `read`, `write`, `close`, `fork`, `exec`, and `waitpid`.

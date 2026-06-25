@@ -44,6 +44,11 @@ int main(void)
 			   "semantic_entities=9\n"
 			   "semantic_relations=6\n"
 			   "systematic_records=5\n"
+			   "library_sources=1\n"
+			   "library_tag=reusable\n"
+			   "library_source_id=usable-source:library2026:1\n"
+			   "citation_key=library2026\n"
+			   "library_query=reusable\n"
 			   "synthesis=ready\n"
 			   "status=ready\n")) {
 		return 1;

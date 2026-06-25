@@ -25,6 +25,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_input", "custom_requests=3");
 	ok = ok && rp_file_contains("rp_input", "form_fields=8");
 	ok = ok && rp_file_contains("rp_input", "uploads=2");
+	ok = ok && rp_file_contains("rp_input", "library_sources=1");
+	ok = ok && rp_file_contains("rp_runner", "library_source_count=1");
+	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
 	ok = ok && rp_file_contains("rp_runner", "custom_status=ok");
 	ok = ok && rp_file_contains("rp_package", "deliverables=8");
 	ok = ok && rp_file_contains("rp_package", "raw_links=5");
@@ -52,6 +55,7 @@ int main(void)
 			   "cards=run,custom_research,agents,evidence,data,bio,lab,publication,knowledge,runtime,llm_relay,compare\n"
 			   "research_form=rp_input\n"
 			   "upload_files=rp_input\n"
+			   "library_sources=rp_knowledge\n"
 			   "nav_items=12\n"
 			   "primary_cards=12\n"
 			   "home_sections=overview,run,custom_research,agents,evidence,data,services,llm,compare\n"
@@ -80,6 +84,9 @@ int main(void)
 			   "custom_research_runs=3\n"
 			   "request_form=rp_input\n"
 			   "upload_files=rp_input\n"
+			   "library_sources=rp_knowledge\n"
+			   "bibliography=rp_runner\n"
+			   "citation_plan=rp_runner\n"
 			   "delivery_manifest=rp_package\n"
 			   "review_page=rp_package\n"
 			   "export_bundle=rp_package\n"

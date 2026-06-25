@@ -12,6 +12,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_release", "decision=release");
 	ok = ok && rp_file_contains("rp_dossier", "sections=36");
 	ok = ok && rp_file_contains("rp_knowledge", "semantic_relations=6");
+	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
 	ok = ok && rp_file_contains("rp_claimrec", "claim=8");
 	ok = ok && rp_file_contains("rp_provpath", "critical_paths=3");
 	ok = ok && rp_file_contains("rp_dataprof", "profiles=4");
@@ -188,9 +189,11 @@ int main(void)
 	ok = ok && rp_file_contains("rp_input", "custom_dataset_rows=3");
 	ok = ok && rp_file_contains("rp_input", "form_fields=8");
 	ok = ok && rp_file_contains("rp_input", "csv_rows_total=9");
+	ok = ok && rp_file_contains("rp_input", "library_sources=1");
 	ok = ok && rp_file_contains("rp_runner", "custom_source=rp_input");
 	ok = ok && rp_file_contains("rp_runner", "custom_runs=3");
 	ok = ok && rp_file_contains("rp_runner", "custom_agent_decisions=15");
+	ok = ok && rp_file_contains("rp_runner", "citation_plan_entries=3");
 	ok = ok && rp_file_contains("rp_web_routes", "routes=18");
 	ok = ok && rp_file_contains("rp_web_routes", "get_routes=13");
 	ok = ok && rp_file_contains("rp_web_routes", "post_routes=5");
@@ -203,6 +206,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_run", "custom_research_runs=3");
 	ok = ok && rp_file_contains("rp_api_run", "request_form=rp_input");
 	ok = ok && rp_file_contains("rp_api_run", "delivery_manifest=rp_package");
+	ok = ok && rp_file_contains("rp_api_run", "bibliography=rp_runner");
 	ok = ok && rp_file_contains("rp_api_run", "timeline_rows=5");
 	ok = ok && rp_file_contains("rp_api_run", "dependency_checks=5");
 	ok = ok && rp_file_contains("rp_api_run", "manifest_support_entries=2");
@@ -213,6 +217,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_artifacts", "manifest_records=4");
 	ok = ok && rp_file_contains("rp_api_artifacts", "evidence_package=rp_package");
 	ok = ok && rp_file_contains("rp_api_artifacts", "export_bundle=rp_package");
+	ok = ok && rp_file_contains("rp_api_artifacts", "library_sources=rp_knowledge");
 	ok = ok && rp_file_contains("rp_api_artifacts", "preview_files=rp_report_text,rp_chart_data,rp_artifact");
 	ok = ok && rp_file_contains("rp_api_data", "dataset_snapshots=2");
 	ok = ok && rp_file_contains("rp_api_bio", "sample_registry=rp_sreg");
@@ -226,10 +231,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_actionio", "completed=5");
 	ok = ok && rp_file_contains("rp_actionio", "dataset_file=rp_input");
 	ok = ok && rp_file_contains("rp_actionio", "generated_runs=3");
+	ok = ok && rp_file_contains("rp_actionio", "tag=reusable");
 	ok = ok && rp_file_contains("rp_uresrun", "runs=3");
 	ok = ok && rp_file_contains("rp_uresrun", "run_id_3=usable-run:RUN-902");
 	ok = ok && rp_file_contains("rp_uresrun", "source_form=rp_input");
 	ok = ok && rp_file_contains("rp_uresrun", "export_bundle=rp_package");
+	ok = ok && rp_file_contains("rp_uresrun", "library_sources=rp_knowledge");
 	ok = ok && rp_file_contains("rp_uresrun", "artifacts=36");
 	ok = ok && rp_file_contains("rp_uresrun", "dataset_rows=3");
 	ok = ok && rp_file_contains("rp_uresrun", "LLM Relay");
@@ -242,8 +249,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "runner_detail_fields=16");
 	ok = ok && rp_file_contains("rp_web_bundle", "delivery_manifest=rp_package");
 	ok = ok && rp_file_contains("rp_web_bundle", "export_bundle=rp_package");
+	ok = ok && rp_file_contains("rp_web_bundle", "library_sources=rp_knowledge");
 	ok = ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
-	ok = ok && rp_file_contains("rp_tests", "tests=221");
+	ok = ok && rp_file_contains("rp_tests", "tests=241");
 	ok = ok && rp_file_contains("rp_tests", "status=passed");
 	ok = ok && rp_file_contains("rp_ack", "ack=consistency;msg=22;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=consistency.check_backend");
@@ -302,11 +310,13 @@ int main(void)
 			   "custom_research_files=1\n"
 			   "research_input_files=2\n"
 			   "delivery_files=3\n"
+			   "library_sources=1\n"
+			   "citation_plan_entries=3\n"
 			   "web_routes=18\n"
 			   "web_api_payloads=14\n"
 			   "web_action_routes=5\n"
 			   "web_action_outputs=2\n"
-			   "test_cases=221\n"
+			   "test_cases=241\n"
 			   "status=ready\n")) {
 		return 1;
 	}

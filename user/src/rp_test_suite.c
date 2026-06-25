@@ -54,6 +54,10 @@ int main(void)
 	ok = ok && require_file_token("rp_input", "uploads=2");
 	ok = ok && require_file_token("rp_input", "csv_rows_total=9");
 	ok = ok && require_file_token("rp_input", "reference_entries=2");
+	ok = ok && require_file_token("rp_input", "library_sources=1");
+	ok = ok && require_file_token("rp_input", "library_tag=reusable");
+	ok = ok && require_file_token("rp_input", "library_source_id=usable-source:library2026:1");
+	ok = ok && require_file_token("rp_input", "source_tag=reusable");
 	ok = ok && require_file_token("rp_stage_state", "stages=5");
 	ok = ok && require_file_token("rp_stage_state", "command=align:agent-align");
 	ok = ok && require_file_token("rp_stage_state", "command=package:assemble");
@@ -80,6 +84,10 @@ int main(void)
 	ok = ok && require_file_token("rp_runner", "custom_analysis=mean_control:12,mean_treatment:20,stronger:treatment");
 	ok = ok && require_file_token("rp_runner", "custom_analysis_2=mean_control:8,mean_treatment:13,stronger:treatment");
 	ok = ok && require_file_token("rp_runner", "custom_analysis_3=mean_control:30,mean_treatment:28,stronger:control");
+	ok = ok && require_file_token("rp_runner", "library_source_count=1");
+	ok = ok && require_file_token("rp_runner", "library_source=usable-source:library2026:1");
+	ok = ok && require_file_token("rp_runner", "bibliography_entries=3");
+	ok = ok && require_file_token("rp_runner", "citation_plan_entries=3");
 	ok = ok && require_file_token("rp_ingest_files", "files=2");
 	ok = ok && require_file_token("rp_dataset_snapshot", "snapshots=2");
 	ok = ok && require_file_token("rp_data_preview", "previews=2");
@@ -109,6 +117,8 @@ int main(void)
 	ok = ok && require_file_token("rp_claimrec", "claim=8");
 	ok = ok && require_file_token("rp_provpath", "critical_paths=3");
 	ok = ok && require_file_token("rp_knowledge", "synthesis=ready");
+	ok = ok && require_file_token("rp_knowledge", "library_sources=1");
+	ok = ok && require_file_token("rp_knowledge", "citation_key=library2026");
 
 	ok = ok && require_file_token("rp_runconf", "profiles=2");
 	ok = ok && require_file_token("rp_invocation", "status=recovered");
@@ -124,6 +134,9 @@ int main(void)
 	ok = ok && require_file_token("rp_package", "download_index=report_bundle,evidence_bundle,provenance_bundle");
 	ok = ok && require_file_token("rp_package", "request_form=rp_input");
 	ok = ok && require_file_token("rp_package", "upload_files=rp_input");
+	ok = ok && require_file_token("rp_package", "library_sources=rp_knowledge");
+	ok = ok && require_file_token("rp_package", "bibliography=rp_runner");
+	ok = ok && require_file_token("rp_package", "citation_plan=rp_runner");
 	ok = ok && require_file_token("rp_package", "delivery_manifest=rp_package");
 	ok = ok && require_file_token("rp_package", "export_bundle=rp_package");
 	ok = ok && require_file_token("rp_package", "review_page=rp_package");
@@ -208,12 +221,15 @@ int main(void)
 	ok = ok && require_file_token("rp_api_home", "custom_runs=3");
 	ok = ok && require_file_token("rp_api_home", "research_form=rp_input");
 	ok = ok && require_file_token("rp_api_home", "upload_files=rp_input");
+	ok = ok && require_file_token("rp_api_home", "library_sources=rp_knowledge");
 	ok = ok && require_file_token("rp_api_home", "nav_items=12");
 	ok = ok && require_file_token("rp_api_run", "runner_exec_files=5");
 	ok = ok && require_file_token("rp_api_run", "custom_research=rp_runner");
 	ok = ok && require_file_token("rp_api_run", "custom_research_runs=3");
 	ok = ok && require_file_token("rp_api_run", "request_form=rp_input");
 	ok = ok && require_file_token("rp_api_run", "upload_files=rp_input");
+	ok = ok && require_file_token("rp_api_run", "bibliography=rp_runner");
+	ok = ok && require_file_token("rp_api_run", "citation_plan=rp_runner");
 	ok = ok && require_file_token("rp_api_run", "delivery_manifest=rp_package");
 	ok = ok && require_file_token("rp_api_run", "review_page=rp_package");
 	ok = ok && require_file_token("rp_api_run", "export_bundle=rp_package");
@@ -233,6 +249,7 @@ int main(void)
 	ok = ok && require_file_token("rp_api_artifacts", "export_bundle=rp_package");
 	ok = ok && require_file_token("rp_api_artifacts", "review_page=rp_package");
 	ok = ok && require_file_token("rp_api_artifacts", "raw_downloads=5");
+	ok = ok && require_file_token("rp_api_artifacts", "library_sources=rp_knowledge");
 	ok = ok && require_file_token("rp_api_data", "dataset_snapshots=2");
 	ok = ok && require_file_token("rp_api_bio", "sample_registry=rp_sreg");
 	ok = ok && require_file_token("rp_api_labres", "instrument_registry=rp_instr");
@@ -242,11 +259,13 @@ int main(void)
 	ok = ok && require_file_token("rp_api_action", "actions=5");
 	ok = ok && require_file_token("rp_api_action", "delivery_manifest_builder=1");
 	ok = ok && require_file_token("rp_api_action", "export_bundle=rp_package");
+	ok = ok && require_file_token("rp_api_know", "library_sources=rp_knowledge");
 	ok = ok && require_file_token("rp_actionio", "requests=5");
 	ok = ok && require_file_token("rp_actionio", "responses=5");
 	ok = ok && require_file_token("rp_actionio", "redirects=5");
 	ok = ok && require_file_token("rp_actionio", "dataset_file=rp_input");
 	ok = ok && require_file_token("rp_actionio", "generated_runs=3");
+	ok = ok && require_file_token("rp_actionio", "tag=reusable");
 	ok = ok && require_file_token("rp_actionio", "delivery_manifest=rp_package");
 	ok = ok && require_file_token("rp_uresrun", "run_id=usable-run:RUN-900");
 	ok = ok && require_file_token("rp_uresrun", "runs=3");
@@ -255,6 +274,7 @@ int main(void)
 	ok = ok && require_file_token("rp_uresrun", "source_run=rp_runner");
 	ok = ok && require_file_token("rp_uresrun", "source_form=rp_input");
 	ok = ok && require_file_token("rp_uresrun", "upload_files=rp_input");
+	ok = ok && require_file_token("rp_uresrun", "library_sources=rp_knowledge");
 	ok = ok && require_file_token("rp_uresrun", "delivery_manifest=rp_package");
 	ok = ok && require_file_token("rp_uresrun", "export_bundle=rp_package");
 	ok = ok && require_file_token("rp_uresrun", "dataset_rows=3");
@@ -269,6 +289,7 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "artifact_previews=3");
 	ok = ok && require_file_token("rp_web_bundle", "request_form=rp_input");
 	ok = ok && require_file_token("rp_web_bundle", "upload_files=rp_input");
+	ok = ok && require_file_token("rp_web_bundle", "library_sources=rp_knowledge");
 	ok = ok && require_file_token("rp_web_bundle", "delivery_manifest=rp_package");
 	ok = ok && require_file_token("rp_web_bundle", "review_page=rp_package");
 	ok = ok && require_file_token("rp_web_bundle", "export_bundle=rp_package");
@@ -283,7 +304,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=221\n"
+			   "tests=241\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -321,6 +342,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=221 catalog=passed data=passed services=passed actions=passed custom=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=241 catalog=passed data=passed services=passed actions=passed custom=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }
