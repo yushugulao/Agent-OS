@@ -57,6 +57,16 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_write_file("rp_trialrec",
+			   "campaign=campaign:RUN-042:param-sweep\n"
+			   "trial=1;param=baseline;delta=0;status=complete\n"
+			   "trial=2;param=threshold-low;delta=7;status=complete\n"
+			   "trial=3;param=threshold-mid;delta=12;status=selected\n"
+			   "trial=4;param=threshold-high;delta=9;status=complete\n"
+			   "selected=trial-3\n"
+			   "status=ready\n")) {
+		return 1;
+	}
 	if (!rp_write_file("rp_labops",
 			   "instruments=2\n"
 			   "reservations=1\n"
@@ -76,14 +86,16 @@ int main(void)
 	}
 	if (!rp_append_file("rp_ack", "ack=lab;msg=4;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=lab.prepare_samples;target=rp_samples;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=lab.record_trials;target=rp_trialrec;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=lab.verify_training;target=rp_training;status=ok")) return 1;
 	if (!rp_append_status("samples=ready")) return 1;
 	if (!rp_append_status("quality=ready")) return 1;
 	if (!rp_append_status("protocol=ready")) return 1;
 	if (!rp_append_status("sop=ready")) return 1;
 	if (!rp_append_status("experiment=ready")) return 1;
+	if (!rp_append_status("trialrec=ready")) return 1;
 	if (!rp_append_status("labops=ready")) return 1;
 	if (!rp_append_status("training=ready")) return 1;
-	printf("rp_lab: samples=4 quality_checks=7 protocol_checks=5 trials=4 labops=ready status=ready\n");
+	printf("rp_lab: samples=4 quality_checks=7 protocol_checks=5 trials=4 trial_records=4 status=ready\n");
 	return 0;
 }

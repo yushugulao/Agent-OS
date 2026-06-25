@@ -80,7 +80,9 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_status", "retriever=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "analyst=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "datadict=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "dataprof=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "compute=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "figrec=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "failure=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "samples=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "quality=ready");
@@ -89,6 +91,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_status", "protocol=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "sop=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "experiment=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "trialrec=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "labops=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "training=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "writer=packaged");
@@ -129,7 +132,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_site", "pages=6");
 	state_ok = state_ok && rp_file_contains("rp_llm_resp", "responses=3");
 	state_ok = state_ok && rp_file_contains("rp_release", "decision=release");
-	state_ok = state_ok && rp_file_contains("rp_dossier", "sections=22");
+	state_ok = state_ok && rp_file_contains("rp_dossier", "sections=25");
 	state_ok = state_ok && rp_file_contains("rp_knowledge", "synthesis=ready");
 	state_ok = state_ok && rp_file_contains("rp_claimrec", "claim=8");
 	state_ok = state_ok && rp_file_contains("rp_provpath", "critical_paths=3");
@@ -151,7 +154,10 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_runview", "budget_state=within_budget");
 	state_ok = state_ok && rp_file_contains("rp_health", "healthy=4");
 	state_ok = state_ok && rp_file_contains("rp_datadic", "schema_drift=0");
+	state_ok = state_ok && rp_file_contains("rp_dataprof", "profiles=4");
 	state_ok = state_ok && rp_file_contains("rp_compute", "replay=ready");
+	state_ok = state_ok && rp_file_contains("rp_figrec", "exported=3");
+	state_ok = state_ok && rp_file_contains("rp_trialrec", "selected=trial-3");
 	state_ok = state_ok && rp_file_contains("rp_labops", "maintenance=passed");
 	state_ok = state_ok && rp_file_contains("rp_training", "competency_checks=3");
 	state_ok = state_ok && rp_file_contains("rp_prompt", "routes=4");
@@ -164,12 +170,15 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "report_ok=1");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "repro_ok=1");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "message_acks=14");
-	state_ok = state_ok && rp_file_contains("rp_agentcmp", "tool_events=39");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "tool_events=43");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "scheduler_items=14");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "ranked_tasks=14");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "selected_tasks=5");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "claim_records=8");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "provenance_paths=3");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "data_profiles=4");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "figure_records=3");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "trial_records=4");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "workflow_exports=2");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "review_rounds=2");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "data_versions=2");
@@ -182,7 +191,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=metrics;msg=14;status=ready");
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=metrics.measure_plain");
 	state_ok = state_ok && (rp_count_lines("rp_ack") >= 15);
-	state_ok = state_ok && (rp_count_lines("rp_tool") >= 41);
+	state_ok = state_ok && (rp_count_lines("rp_tool") >= 45);
 	state_ok = state_ok && rp_file_contains("rp_protocol", "ethics=approved");
 	printf("rp_orch: state_ok=%d\n", state_ok);
 	if (!state_ok) {

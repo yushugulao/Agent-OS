@@ -75,7 +75,9 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_lit` | retriever | reviewer, auditor | literature count and evidence links |
 | `rp_data` | analyst | reviewer, repair, auditor | datasets, statistics, figures, failed stage |
 | `rp_datadic` | analyst | lab, package, compare | schema fields, controlled terms, transform specs, drift result |
+| `rp_dataprof` | analyst | package, dossier, metrics, compare, orchestrator | data profile records with row count, column count, missing cells, outlier checks, and normalization status |
 | `rp_compute` | analyst | lab, package, compare | notebook replay, statistics, calculation job, figure summary |
+| `rp_figrec` | analyst | package, dossier, metrics, compare, orchestrator | figure-level records with type, source file, export count, and readiness |
 | `rp_fail` | analyst | repair, auditor, package, metrics, compare | failure class, severity, recoverability, and recommended action |
 | `rp_samples` | samples | quality, SOP | sample sheet, cohort, and custody summary |
 | `rp_quality` | quality | protocol, experiment, compare | data quality and schema validation result |
@@ -84,6 +86,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_protocol` | protocol | SOP, compare | protocol, ethics, analysis plan, and amendment status |
 | `rp_soplog` | SOP execution | experiment | controlled SOP execution evidence |
 | `rp_exper` | experiment | telemetry | experiment campaign and selected best trial |
+| `rp_trialrec` | lab | package, dossier, metrics, compare, orchestrator | trial-level records for parameter sweep, selected trial, and completion state |
 | `rp_labops` | lab | package, compare | instrument, reagent, inventory, reservation, and maintenance summary |
 | `rp_training` | lab | package, compare | personnel training and competency summary |
 | `rp_report` | writer | auditor | report sections, citations, response items |
