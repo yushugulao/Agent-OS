@@ -26,6 +26,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentcmp", "coherence_checks=9");
 	ok = ok && rp_file_contains("rp_package", "package_manifest=ready");
 	ok = ok && rp_file_contains("rp_package", "downloadable_units=3");
+	ok = ok && rp_file_contains("rp_site", "pages=42");
+	ok = ok && rp_file_contains("rp_site", "json_payloads=14");
 	ok = ok && rp_file_contains("rp_input", "form_fields=8");
 	ok = ok && rp_file_contains("rp_input", "csv_rows_total=9");
 	ok = ok && rp_file_contains("rp_input", "library_sources=1");
@@ -99,6 +101,8 @@ int main(void)
 			   "library_sources=rp_knowledge\n"
 			   "nav_items=12\n"
 			   "primary_cards=12\n"
+			   "static_site_pages=42\n"
+			   "static_site=rp_site\n"
 			   "cards=run,custom_research,agents,evidence,data,llm_relay,compare\n"
 			   "source=rp_ui_home\n"
 			   "status=ready\n")) {
@@ -406,6 +410,10 @@ int main(void)
 			   "evidence_package=rp_package\n"
 			   "package_manifest=ready\n"
 			   "downloadable_units=3\n"
+			   "static_site=rp_site\n"
+			   "static_site_pages=42\n"
+			   "static_site_json_payloads=14\n"
+			   "static_site_download_links=8\n"
 			   "runner_files=5\n"
 			   "workflow_portability_records=1\n"
 			   "data_pipeline_files=6\n"

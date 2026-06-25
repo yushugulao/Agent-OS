@@ -23,7 +23,9 @@ int main(void)
 	ok = ok && require_file_token("rp_services", "workflow=34");
 	ok = ok && require_file_token("rp_object_query", "hits=8");
 	ok = ok && require_file_token("rp_lineage", "edges=7");
-	ok = ok && require_file_token("rp_site", "pages=6");
+	ok = ok && require_file_token("rp_site", "pages=42");
+	ok = ok && require_file_token("rp_site", "page=agentos_readiness");
+	ok = ok && require_file_token("rp_site", "json_payloads=14");
 
 	ok = ok && require_file_token("rp_plan", "workflow=lab-gene-x");
 	ok = ok && require_file_token("rp_sched", "queue_items=21");
@@ -222,6 +224,7 @@ int main(void)
 	ok = ok && require_file_token("rp_package", "package_manifest=ready");
 	ok = ok && require_file_token("rp_package", "bundle_items=18");
 	ok = ok && require_file_token("rp_package", "downloadable_units=3");
+	ok = ok && require_file_token("rp_package", "static_site_pages=42");
 	ok = ok && require_file_token("rp_package", "evidence_bundle=ready");
 	ok = ok && require_file_token("rp_package", "review_bundle=ready");
 	ok = ok && require_file_token("rp_package", "provenance_bundle=ready");
@@ -364,6 +367,7 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_home", "page=home");
 	ok = ok && require_file_token("rp_ui_home", "nav_items=12");
 	ok = ok && require_file_token("rp_ui_home", "primary_cards=12");
+	ok = ok && require_file_token("rp_ui_home", "static_site_pages=42");
 	ok = ok && require_file_token("rp_ui_run", "page=run-detail");
 	ok = ok && require_file_token("rp_ui_run", "runner_exec=");
 	ok = ok && require_file_token("rp_ui_run", "timeline_rows=5");
@@ -414,6 +418,7 @@ int main(void)
 	ok = ok && require_file_token("rp_api_home", "upload_files=rp_input");
 	ok = ok && require_file_token("rp_api_home", "library_sources=rp_knowledge");
 	ok = ok && require_file_token("rp_api_home", "nav_items=12");
+	ok = ok && require_file_token("rp_api_home", "static_site_pages=42");
 	ok = ok && require_file_token("rp_api_run", "runner_exec_files=5");
 	ok = ok && require_file_token("rp_api_run", "custom_research=rp_runner");
 	ok = ok && require_file_token("rp_api_run", "custom_research_runs=3");
@@ -513,6 +518,7 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "api_payloads=14");
 	ok = ok && require_file_token("rp_web_bundle", "evidence_package=rp_package");
 	ok = ok && require_file_token("rp_web_bundle", "downloadable_units=3");
+	ok = ok && require_file_token("rp_web_bundle", "static_site_pages=42");
 	ok = ok && require_file_token("rp_web_bundle", "render_sections=7");
 	ok = ok && require_file_token("rp_web_bundle", "artifact_previews=3");
 	ok = ok && require_file_token("rp_web_bundle", "request_form=rp_input");
@@ -547,7 +553,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=462\n"
+			   "tests=474\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -569,6 +575,7 @@ int main(void)
 			   "ui_export=passed\n"
 			   "host_web_export=passed\n"
 			   "ui_render_data=passed\n"
+			   "static_site=passed\n"
 			   "export_package=passed\n"
 			   "delivery_manifest=passed\n"
 			   "human_review_revision=passed\n"
@@ -591,6 +598,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=462 catalog=passed data=passed services=passed actions=passed custom=passed portability=passed coherence=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=474 catalog=passed data=passed services=passed actions=passed custom=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }

@@ -4,7 +4,8 @@
 int main(void)
 {
 	if (!rp_file_contains("rp_release", "decision=release")) return 1;
-	if (!rp_file_contains("rp_site", "pages=6")) return 1;
+	if (!rp_file_contains("rp_site", "pages=42")) return 1;
+	if (!rp_file_contains("rp_site", "page=agentos_readiness")) return 1;
 	if (!rp_file_contains("rp_wfio", "portable_steps=10")) return 1;
 	if (!rp_file_contains("rp_review2", "rounds=2")) return 1;
 	if (!rp_file_contains("rp_revision", "draft_versions=3")) return 1;
@@ -38,7 +39,9 @@ int main(void)
 			   "run_id=RUN-042\n"
 			   "sections=36\n"
 			   "includes=plan,wfio,policy,compliance,risk,capa,diff,delta,run-configuration,workflow-invocation,workflow-completion,execution-plan,execution-observer,lit,data,data-profile,figures,trials,review,review-rounds,revision,report,evidence,claim-records,provenance-paths,lineage,knowledge,data-version,data-release,retry,repro,llm-relay,llm-queue,llm-eval,llm-governance,release\n"
-			   "site_pages=6\n"
+			   "site_pages=42\n"
+			   "site_json_payloads=14\n"
+			   "site_download_links=8\n"
 			   "status=ready\n")) {
 		return 1;
 	}

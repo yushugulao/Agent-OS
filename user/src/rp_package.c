@@ -35,6 +35,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_llm_hostreq", "template_mode=ready");
 	ok = ok && rp_file_contains("rp_llm_fallback", "fallback_cases=1");
 	ok = ok && rp_file_contains("rp_execobs", "observer=ready");
+	ok = ok && rp_file_contains("rp_site", "pages=42");
+	ok = ok && rp_file_contains("rp_site", "page=agentos_readiness");
 	ok = ok && rp_file_contains("rp_timeline", "events=9");
 	ok = ok && rp_file_contains("rp_worker", "heartbeats=4");
 	ok = ok && rp_file_contains("rp_runconf", "profiles=2");
@@ -106,6 +108,10 @@ int main(void)
 			   "custom_sources=rp_input,rp_runner,rp_uresrun\n"
 			   "download_index=report_bundle,evidence_bundle,provenance_bundle\n"
 			   "package_reader=host_web_bundle\n"
+			   "static_site=rp_site\n"
+			   "static_site_pages=42\n"
+			   "static_site_json_payloads=14\n"
+			   "static_site_download_links=8\n"
 			   "request_form=rp_input\n"
 			   "upload_files=rp_input\n"
 			   "workspace_imports=1\n"

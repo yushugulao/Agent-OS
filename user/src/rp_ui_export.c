@@ -33,6 +33,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "library_source_count=1");
 	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
 	ok = ok && rp_file_contains("rp_knowledge", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
+	ok = ok && rp_file_contains("rp_site", "pages=42");
+	ok = ok && rp_file_contains("rp_site", "page=agentos_readiness");
 	ok = ok && rp_file_contains("rp_wfio", "package=workflow-portability");
 	ok = ok && rp_file_contains("rp_runner", "custom_status=ok");
 	ok = ok && rp_file_contains("rp_package", "deliverables=8");
@@ -74,6 +76,8 @@ int main(void)
 			   "library_sources=rp_knowledge\n"
 			   "nav_items=12\n"
 			   "primary_cards=12\n"
+			   "static_site_pages=42\n"
+			   "static_site=rp_site\n"
 			   "home_sections=overview,run,custom_research,agents,evidence,data,services,llm,compare\n"
 			   "source=plain_ucore_files\n"
 			   "status=ready\n")) {
@@ -179,6 +183,7 @@ int main(void)
 			   "pain_untrusted_context=1\n"
 			   "pain_rebuild_steps=6\n"
 			   "metric_rows=8\n"
+			   "static_site_pages=42\n"
 			   "coherence_checks=9\n"
 			   "namespace_checks=12\n"
 			   "surface_checks=13\n"

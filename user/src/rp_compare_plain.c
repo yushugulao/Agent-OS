@@ -7,7 +7,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_objects", "objects=500");
 	ok = ok && rp_file_contains("rp_object_query", "hits=8");
 	ok = ok && rp_file_contains("rp_lineage", "edges=7");
-	ok = ok && rp_file_contains("rp_site", "pages=6");
+	ok = ok && rp_file_contains("rp_site", "pages=42");
+	ok = ok && rp_file_contains("rp_site", "page=agentos_readiness");
 	ok = ok && rp_file_contains("rp_llm_resp", "responses=3");
 	ok = ok && rp_file_contains("rp_release", "decision=release");
 	ok = ok && rp_file_contains("rp_dossier", "sections=36");
@@ -163,6 +164,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_package", "artifacts=48");
 	ok = ok && rp_file_contains("rp_package", "package_manifest=ready");
 	ok = ok && rp_file_contains("rp_package", "downloadable_units=3");
+	ok = ok && rp_file_contains("rp_package", "static_site_pages=42");
 	ok = ok && rp_file_contains("rp_package", "custom_sources=rp_input,rp_runner,rp_uresrun");
 	ok = ok && rp_file_contains("rp_package", "workspace_imports=1");
 	ok = ok && rp_file_contains("rp_package", "delivery_manifest=rp_package");
@@ -232,6 +234,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_consistency", "runner_stages=5");
 	ok = ok && rp_file_contains("rp_ui_home", "page=home");
 	ok = ok && rp_file_contains("rp_ui_home", "nav_items=12");
+	ok = ok && rp_file_contains("rp_ui_home", "static_site_pages=42");
 	ok = ok && rp_file_contains("rp_ui_run", "page=run-detail");
 	ok = ok && rp_file_contains("rp_ui_run", "timeline_rows=5");
 	ok = ok && rp_file_contains("rp_ui_run", "artifact_preview=rp_report_text,rp_chart_data,rp_artifact");
@@ -264,6 +267,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_home", "custom_run=usable-run:RUN-900");
 	ok = ok && rp_file_contains("rp_api_home", "custom_runs=3");
 	ok = ok && rp_file_contains("rp_api_home", "nav_items=12");
+	ok = ok && rp_file_contains("rp_api_home", "static_site_pages=42");
 	ok = ok && rp_file_contains("rp_api_run", "runner_exec_files=5");
 	ok = ok && rp_file_contains("rp_api_run", "custom_research=rp_runner");
 	ok = ok && rp_file_contains("rp_api_run", "custom_research_runs=3");
@@ -318,6 +322,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_actionio", "passed_cases=3");
 	ok = ok && rp_file_contains("rp_web_bundle", "api_payloads=14");
 	ok = ok && rp_file_contains("rp_web_bundle", "downloadable_units=3");
+	ok = ok && rp_file_contains("rp_web_bundle", "static_site_pages=42");
 	ok = ok && rp_file_contains("rp_web_bundle", "render_sections=7");
 	ok = ok && rp_file_contains("rp_web_bundle", "artifact_previews=3");
 	ok = ok && rp_file_contains("rp_web_bundle", "runner_detail_fields=16");
@@ -335,7 +340,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "coherence_checks=9");
 	ok = ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
 	ok = ok && rp_file_contains("rp_web_bundle", "review_threads=2");
-	ok = ok && rp_file_contains("rp_tests", "tests=462");
+	ok = ok && rp_file_contains("rp_tests", "tests=474");
+	ok = ok && rp_file_contains("rp_tests", "static_site=passed");
 	ok = ok && rp_file_contains("rp_tests", "workflow_portability=passed");
 	ok = ok && rp_file_contains("rp_tests", "coherence=passed");
 	ok = ok && rp_file_contains("rp_tests", "status=passed");
@@ -405,6 +411,9 @@ int main(void)
 			   "agent_roles=7\n"
 			   "collaboration_decisions=8\n"
 			   "ui_pages=5\n"
+			   "static_site_pages=42\n"
+			   "static_site_json_payloads=14\n"
+			   "static_site_download_links=8\n"
 			   "ui_render_sections=7\n"
 			   "artifact_previews=3\n"
 			   "custom_research_runs=3\n"
@@ -435,7 +444,7 @@ int main(void)
 			   "review_threads=2\n"
 			   "review_comments=3\n"
 			   "review_action_items=2\n"
-			   "test_cases=462\n"
+			   "test_cases=474\n"
 			   "status=ready\n")) {
 		return 1;
 	}
