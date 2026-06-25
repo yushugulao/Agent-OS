@@ -13,9 +13,20 @@ The current runtime has four parts:
 1. Upstream uCore kernel.
 2. Restored uCore user library and program build flow.
 3. `rp_plain`, a native user process that carries the research platform catalog, feature groups, mature platform mappings, and self-check logic.
-4. `rp_orch`, a native user process that runs thirty platform programs through ordinary `fork`, `exec`, and `waitpid`.
+4. `rp_orch`, a native user process that runs thirty-six platform programs through ordinary `fork`, `exec`, and `waitpid`.
 
 The user process deliberately uses ordinary C data structures and ordinary uCore process execution. This makes the result a baseline for later comparison with the Agent-OS kernel-enhanced version.
+
+## Host-Service Split
+
+The host-side research Agent platform is moving toward real HTTP UI, real artifact operations, a small workflow runner, and a host LLM relay. The unchanged uCore branch should mirror those concepts with ordinary files and ordinary user programs:
+
+- UI pages become exported state files for home, run detail, Agent detail, evidence detail, and comparison views.
+- Artifact operations become reads from input files and writes to intermediate files, reports, logs, and chart-data files.
+- Workflow runner behavior becomes stage records with dependencies, failure, retry, cache, and log fields.
+- LLM calls become request queue and response files. Template responses can be produced inside uCore; cloud access and secrets stay on the host.
+- Agent collaboration becomes explicit role messages, acknowledgements, decisions, recovery actions, and audit records.
+- AgentCompare keeps the same result names while showing what is weaker on the plain kernel: file scans, convention-based state, user-space-only permission checks, untrusted context, reconstruction cost, and longer recovery steps.
 
 ## Preserved Platform Concepts
 
@@ -49,11 +60,15 @@ The platform programs add an executable multi-process shape:
 - `rp_query`
 - `rp_evidence`
 - `rp_llm_bridge`
+- `rp_llm_relay`
 - `rp_privacy`
 - `rp_runconf`
 - `rp_execobs`
 - `rp_invoke`
 - `rp_complete`
+- `rp_artifact_ops`
+- `rp_workflow_runner`
+- `rp_agent_collab`
 - `rp_package`
 - `rp_delta`
 - `rp_release`
@@ -61,6 +76,8 @@ The platform programs add an executable multi-process shape:
 - `rp_backend`
 - `rp_consistency`
 - `rp_metrics`
+- `rp_ui_export`
+- `rp_test_suite`
 - `rp_compare_plain`
 
 These programs do not require Agent syscalls. They are ordinary uCore processes that make the plain-kernel baseline closer to the original multi-role research Agent platform.
@@ -128,6 +145,11 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_prompt` | LLM bridge | privacy, package, compare | prompt versions, route policy, token budget, and evaluation cases |
 | `rp_llmlog` | LLM bridge | privacy, package, compare | transcript count, packet audit, privacy status, and replay status |
 | `rp_llmeval` | LLM bridge | privacy, package, release, dossier, metrics, compare, orchestrator | template response evaluation cases, grounded answer count, route switches, and fallback use |
+| `rp_llm_packets` | LLM relay | privacy, package, consistency, metrics, compare, orchestrator | packet-level host relay contract for three LLM requests |
+| `rp_llm_routes` | LLM relay | privacy, package, consistency, metrics, compare, orchestrator | route table for template and optional host cloud execution |
+| `rp_llm_guard` | LLM relay | privacy, package, consistency, metrics, compare, orchestrator | secret and outbound ownership check for relay packets |
+| `rp_llm_hostreq` | LLM relay | privacy, package, consistency, compare, orchestrator | host request handoff contract with no secret material in uCore |
+| `rp_llm_fallback` | LLM relay | privacy, package, consistency, metrics, compare, orchestrator | fallback handling for missing cloud key, network loss, and privacy rejection |
 | `rp_privacy` | privacy | release | outbound packet review result |
 | `rp_compliance` | privacy | package, release, dossier, metrics, compare, orchestrator | policy compliance result covering access profiles, data use rules, LLM packets, secret placement, and license checks |
 | `rp_params` | run configuration | package, metrics, compare, orchestrator | baseline and candidate parameter set summary |
@@ -146,6 +168,24 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_completion` | workflow completion | package, release, dossier, metrics, compare, orchestrator | completion event, invocation status, action count, export count, and final status |
 | `rp_actions` | workflow completion | metrics, compare, orchestrator | notification, runbook, evidence export, and audit action results |
 | `rp_complete_export` | workflow completion | package, compare, orchestrator | completion event export record |
+| `rp_input` | artifact operations | package, consistency, compare, orchestrator | concrete input manifest for RUN-042 |
+| `rp_input_fastq` | artifact operations | artifact operations | ordinary input data read by the artifact operation program |
+| `rp_stage_dag` | artifact operations | package, consistency, compare, orchestrator | stage dependency, cache, failure, and retry record |
+| `rp_stage_log` | artifact operations | package, consistency, compare, orchestrator | per-stage execution log for ingest, align, profile, review, and package stages |
+| `rp_artifact` | artifact operations | package, consistency, compare, orchestrator | recovered align-stage artifact tied to the concrete input |
+| `rp_report_text` | artifact operations | package, compare, UI export | report text generated from the recovered run |
+| `rp_chart_data` | artifact operations | package, compare, UI export | chart-ready stage attempt data for the host UI |
+| `rp_runner` | artifact operations | consistency, compare, orchestrator | plain uCore stage runner summary with retries and cache hits |
+| `rp_stage_state` | workflow runner | package, consistency, metrics, UI export, compare, orchestrator | executable stage-state table derived from the DAG and logs |
+| `rp_cache_index` | workflow runner | package, consistency, metrics, UI export, compare, orchestrator | cache hit and miss records for all five stages |
+| `rp_retry_plan` | workflow runner | package, consistency, metrics, UI export, compare, orchestrator | retry item for the failed align stage with reason and action |
+| `rp_run_events` | workflow runner | package, consistency, metrics, UI export, compare, orchestrator | run-level event stream for start, cache, failure, retry, recovery, and package events |
+| `rp_artifact_manifest` | workflow runner | package, consistency, metrics, UI export, compare, orchestrator | generated artifact manifest for input, intermediate, report, and chart outputs |
+| `rp_agents` | Agent collaboration | package, consistency, metrics, UI export, compare, orchestrator | seven role records for orchestrator, retriever, analyst, reviewer, writer, recovery, and auditor |
+| `rp_decisions` | Agent collaboration | package, consistency, metrics, UI export, compare, orchestrator | eight concrete decisions tied to plan, evidence, failure, recovery, report, audit, and comparison records |
+| `rp_handoff` | Agent collaboration | package, consistency, metrics, UI export, compare, orchestrator | six role-to-role handoff records with source artifacts |
+| `rp_deliberation` | Agent collaboration | package, consistency, compare, orchestrator | discussion items for failure recovery, cache reuse, host relay, evidence quality, and release |
+| `rp_agent_run` | Agent collaboration | package, consistency, metrics, compare, orchestrator | Agent collaboration summary for RUN-042 |
 | `rp_package` | package | compare | packaged artifact and release summary |
 | `rp_diff` | delta | release, dossier, metrics, compare, orchestrator | release candidate difference summary across report, data, figures, risk, and reproduction evidence |
 | `rp_delta` | delta | release, dossier, metrics, compare, orchestrator | release delta review with accepted item count, blocked count, package, risk, and reproduction status |
@@ -161,7 +201,13 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_backend_exec` | backend scenario | compare, orchestrator | backend scenario execution result for executable and planned cases |
 | `rp_backend_export` | backend scenario | compare, orchestrator | backend scenario export record |
 | `rp_study` | backend scenario | compare, orchestrator | same-workflow backend study summary |
-| `rp_consistency` | consistency checker | metrics, compare, orchestrator | derived checks across task records, LLM packets, workflow invocation, completion hooks, and backend cases |
+| `rp_consistency` | consistency checker | metrics, compare, orchestrator | derived checks across task records, LLM packets, relay protocol files, workflow invocation, completion hooks, backend cases, runner artifacts, and workflow runner execution files |
+| `rp_ui_home` | UI export | compare, orchestrator | home page data for the host web service |
+| `rp_ui_run` | UI export | compare, orchestrator | run-detail page data for RUN-042 |
+| `rp_ui_agent` | UI export | compare, orchestrator | Agent-detail page data for role messages and decisions |
+| `rp_ui_evidence` | UI export | compare, orchestrator | evidence-detail page data with stage log and recovered artifact links |
+| `rp_ui_compare` | UI export | compare, orchestrator | comparison page data for plain-kernel pain points |
+| `rp_tests` | test suite | compare, orchestrator | 64 user-space checks over catalog, workflow, artifacts, workflow runner files, Agent collaboration, UI data, LLM relay, AgentCompare, and consistency records |
 | `rp_compare` | compare | orchestrator | plain-kernel execution summary |
 
 This is intentionally implemented without new syscalls. It uses only `open`, `read`, `write`, `close`, `fork`, `exec`, and `waitpid`.

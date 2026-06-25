@@ -1,0 +1,103 @@
+#include <stdio.h>
+#include <research_platform_state.h>
+
+int main(void)
+{
+	int ok = 1;
+	ok = ok && rp_file_contains("rp_runner", "status=ready");
+	ok = ok && rp_file_contains("rp_stage_dag", "failed_stage=align");
+	ok = ok && rp_file_contains("rp_stage_state", "stages=5");
+	ok = ok && rp_file_contains("rp_cache_index", "cache_hits=1");
+	ok = ok && rp_file_contains("rp_retry_plan", "retry_items=1");
+	ok = ok && rp_file_contains("rp_run_events", "events=8");
+	ok = ok && rp_file_contains("rp_artifact_manifest", "manifest_records=4");
+	ok = ok && rp_file_contains("rp_report_text", "RUN-042 Recovery Report");
+	ok = ok && rp_file_contains("rp_chart_data", "chart=stage_attempts");
+	ok = ok && rp_file_contains("rp_evidence", "status=ready");
+	ok = ok && rp_file_contains("rp_agentcmp", "status=ready");
+	ok = ok && rp_file_contains("rp_telemetry", "status=ready");
+	ok = ok && rp_file_contains("rp_consistency", "state_relation=passed");
+	ok = ok && rp_file_contains("rp_agents", "agents=7");
+	ok = ok && rp_file_contains("rp_decisions", "decisions=8");
+	ok = ok && rp_file_contains("rp_handoff", "handoffs=6");
+	ok = ok && rp_file_contains("rp_agent_run", "status=ready");
+	ok = ok && rp_file_contains("rp_llm_packets", "packets=3");
+	ok = ok && rp_file_contains("rp_llm_routes", "routes=4");
+	ok = ok && rp_file_contains("rp_llm_guard", "secrets_in_ucore=0");
+	if (!ok) return 1;
+	if (!rp_write_file("rp_ui_home",
+			   "page=home\n"
+			   "title=Research Agent Platform\n"
+			   "run=RUN-042\n"
+			   "status=recovered\n"
+			   "cards=run,agents,evidence,llm_relay,compare\n"
+			   "source=plain_ucore_files\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_ui_run",
+			   "page=run-detail\n"
+			   "run_id=RUN-042\n"
+			   "workflow=lab-gene-x\n"
+			   "stages=5\n"
+			   "failed_stage=align\n"
+			   "retry_stage=align\n"
+			   "report=rp_report_text\n"
+			   "chart=rp_chart_data\n"
+			   "runner_exec=rp_stage_state,rp_cache_index,rp_retry_plan,rp_run_events,rp_artifact_manifest\n"
+			   "llm_relay=rp_llm_packets,rp_llm_routes,rp_llm_guard,rp_llm_hostreq,rp_llm_fallback\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_ui_agent",
+			   "page=agent-detail\n"
+			   "agents=orchestrator,retriever,analyst,reviewer,writer,recovery,auditor\n"
+			   "messages=21\n"
+			   "acks=26\n"
+			   "decisions=8\n"
+			   "handoffs=6\n"
+			   "decision_records=rp_agents,rp_decisions,rp_handoff,rp_deliberation,rp_agent_run\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_ui_evidence",
+			   "page=evidence-detail\n"
+			   "claims=8\n"
+			   "evidence_links=5\n"
+			   "critical_paths=3\n"
+			   "stage_log=rp_stage_log\n"
+			   "artifact=rp_artifact\n"
+			   "llm_guard=rp_llm_guard\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_ui_compare",
+			   "page=compare-metrics\n"
+			   "plain_kernel=passed\n"
+			   "agentos_kernel=pending\n"
+			   "pain_file_scans=128\n"
+			   "pain_state_convention=1\n"
+			   "pain_user_permissions=1\n"
+			   "pain_untrusted_context=1\n"
+			   "pain_rebuild_steps=6\n"
+			   "relay_protocol_files=5\n"
+			   "workflow_runner_files=5\n"
+			   "message_acks=27\n"
+			   "tool_events=106\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_append_file("rp_ack", "ack=ui_export;msg=ui;status=ready")) return 1;
+	if (!rp_append_file("rp_tool", "tool=ui_export.write_home;target=rp_ui_home;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=ui_export.write_run;target=rp_ui_run;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=ui_export.write_agent;target=rp_ui_agent;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=ui_export.write_evidence;target=rp_ui_evidence;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=ui_export.write_compare;target=rp_ui_compare;status=ok")) return 1;
+	if (!rp_append_status("ui_home=ready")) return 1;
+	if (!rp_append_status("ui_run=ready")) return 1;
+	if (!rp_append_status("ui_agent=ready")) return 1;
+	if (!rp_append_status("ui_evidence=ready")) return 1;
+	if (!rp_append_status("ui_compare=ready")) return 1;
+	printf("rp_ui_export: pages=5 run=RUN-042 compare=ready status=ready\n");
+	return 0;
+}

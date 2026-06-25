@@ -29,6 +29,11 @@ int main(void)
 	ok = ok && rp_file_contains("rp_llmlog", "request_packets=3");
 	ok = ok && rp_file_contains("rp_relay", "mode=host_file_relay");
 	ok = ok && rp_file_contains("rp_relay", "relay_packets=3");
+	ok = ok && rp_file_contains("rp_llm_packets", "packets=3");
+	ok = ok && rp_file_contains("rp_llm_routes", "routes=4");
+	ok = ok && rp_file_contains("rp_llm_guard", "secrets_in_ucore=0");
+	ok = ok && rp_file_contains("rp_llm_hostreq", "template_mode=ready");
+	ok = ok && rp_file_contains("rp_llm_fallback", "fallback_cases=1");
 	ok = ok && rp_file_contains("rp_execobs", "observer=ready");
 	ok = ok && rp_file_contains("rp_timeline", "events=9");
 	ok = ok && rp_file_contains("rp_worker", "heartbeats=4");
@@ -36,6 +41,22 @@ int main(void)
 	ok = ok && rp_file_contains("rp_configval", "validations=2");
 	ok = ok && rp_file_contains("rp_invocation", "status=recovered");
 	ok = ok && rp_file_contains("rp_completion", "actions=4");
+	ok = ok && rp_file_contains("rp_runner", "status=ready");
+	ok = ok && rp_file_contains("rp_stage_dag", "status=ready");
+	ok = ok && rp_file_contains("rp_stage_log", "status=ready");
+	ok = ok && rp_file_contains("rp_artifact", "status=recovered");
+	ok = ok && rp_file_contains("rp_report_text", "status=ready");
+	ok = ok && rp_file_contains("rp_chart_data", "status=ready");
+	ok = ok && rp_file_contains("rp_stage_state", "stages=5");
+	ok = ok && rp_file_contains("rp_cache_index", "cache_hits=1");
+	ok = ok && rp_file_contains("rp_retry_plan", "retry_items=1");
+	ok = ok && rp_file_contains("rp_run_events", "events=8");
+	ok = ok && rp_file_contains("rp_artifact_manifest", "manifest_records=4");
+	ok = ok && rp_file_contains("rp_agents", "agents=7");
+	ok = ok && rp_file_contains("rp_decisions", "decisions=8");
+	ok = ok && rp_file_contains("rp_handoff", "handoffs=6");
+	ok = ok && rp_file_contains("rp_deliberation", "items=5");
+	ok = ok && rp_file_contains("rp_agent_run", "agent_decisions=8");
 	ok = ok && rp_file_contains("rp_policy", "license_checks=2");
 	ok = ok && rp_file_contains("rp_compliance", "decision=accepted");
 	ok = ok && rp_file_contains("rp_audit", "release=ready");
@@ -43,8 +64,14 @@ int main(void)
 	if (!ok) return 1;
 	if (!rp_write_file("rp_package",
 			   "package=research-evidence-package\n"
-			   "artifacts=19\n"
-			   "checks=40\n"
+			   "artifacts=42\n"
+			   "checks=63\n"
+			   "real_inputs=1\n"
+			   "stage_logs=1\n"
+			   "chart_data=1\n"
+			   "workflow_runner=1\n"
+			   "agent_collaboration=1\n"
+			   "llm_relay_protocol=1\n"
 			   "release=ready\n"
 			   "status=ready\n")) {
 		return 1;
@@ -83,16 +110,20 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=package.version_data;target=rp_dataver;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.build_repro;target=rp_repro;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_llm_eval;target=rp_llmeval;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_llm_relay_protocol;target=rp_llm_packets;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_evidence_path;target=rp_provpath;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_data_records;target=rp_dataprof;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_execobs;target=rp_execobs;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_run_config;target=rp_runconf;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_invocation;target=rp_invocation;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_completion;target=rp_completion;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_runner_artifacts;target=rp_runner;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_workflow_runner;target=rp_stage_state;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_agent_collab;target=rp_agent_run;status=ok")) return 1;
 	if (!rp_append_status("package=ready")) return 1;
 	if (!rp_append_status("datarel=ready")) return 1;
 	if (!rp_append_status("dataver=ready")) return 1;
 	if (!rp_append_status("repro=ready")) return 1;
-	printf("rp_package: artifacts=19 checks=40 fair=passed repro=ready status=ready\n");
+	printf("rp_package: artifacts=42 checks=63 fair=passed repro=ready status=ready\n");
 	return 0;
 }
