@@ -13,7 +13,7 @@ The current runtime has three layers:
 1. Upstream uCore kernel.
 2. Restored uCore user library and program build flow.
 3. `rp_plain`, a native user process that carries the research platform catalog, feature groups, mature platform mappings, and self-check logic.
-4. `rp_orch`, a native user process that runs twenty-two platform programs through ordinary `fork`, `exec`, and `waitpid`.
+4. `rp_orch`, a native user process that runs twenty-three platform programs through ordinary `fork`, `exec`, and `waitpid`.
 
 The user process deliberately uses ordinary C data structures and ordinary uCore process execution. This makes the result a baseline for later comparison with the Agent-OS kernel-enhanced version.
 
@@ -42,6 +42,7 @@ The platform programs add an executable multi-process shape:
 - `rp_analyst`
 - `rp_reviewer`
 - `rp_lab`
+- `rp_governance`
 - `rp_writer`
 - `rp_repair`
 - `rp_auditor`
@@ -90,6 +91,8 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_trialrec` | lab | package, dossier, metrics, compare, orchestrator | trial-level records for parameter sweep, selected trial, and completion state |
 | `rp_labops` | lab | package, compare | instrument, reagent, inventory, reservation, and maintenance summary |
 | `rp_training` | lab | package, compare | personnel training and competency summary |
+| `rp_risk` | governance | auditor, package, release, dossier, metrics, compare, orchestrator | risk register with mitigation status for failed tools, protocol deviation, and LLM outbound control |
+| `rp_capa` | governance | auditor, package, release, dossier, metrics, compare, orchestrator | corrective and preventive action records with verification evidence |
 | `rp_report` | writer | auditor | report sections, citations, response items |
 | `rp_revision` | writer | package, dossier, metrics, compare, orchestrator | report draft versions, review response items, and resolved comment count |
 | `rp_fix` | repair | auditor | repaired stage and generated artifact |

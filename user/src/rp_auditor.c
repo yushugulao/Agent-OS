@@ -15,6 +15,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_datadic", "schema_drift=0");
 	ok = ok && rp_file_contains("rp_compute", "replay=ready");
 	ok = ok && rp_file_contains("rp_labops", "maintenance=passed");
+	ok = ok && rp_file_contains("rp_risk", "open_risks=0");
+	ok = ok && rp_file_contains("rp_capa", "verifications=2");
 	ok = ok && rp_file_contains("rp_mail", "to=auditor");
 	if (!ok) return 1;
 	if (!rp_write_file("rp_audit",
@@ -24,6 +26,8 @@ int main(void)
 			   "schema=verified\n"
 			   "replay=verified\n"
 			   "labops=verified\n"
+			   "risk=verified\n"
+			   "capa=verified\n"
 			   "retry=verified\n"
 			   "failure=verified\n"
 			   "status=passed\n")) {

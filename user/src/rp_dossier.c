@@ -15,6 +15,8 @@ int main(void)
 	if (!rp_file_contains("rp_trialrec", "selected=trial-3")) return 1;
 	if (!rp_file_contains("rp_policy", "access_profiles=4")) return 1;
 	if (!rp_file_contains("rp_compliance", "checks=8")) return 1;
+	if (!rp_file_contains("rp_risk", "risk_items=3")) return 1;
+	if (!rp_file_contains("rp_capa", "capa_actions=2")) return 1;
 	if (!rp_file_contains("rp_datarel", "publication_targets=1")) return 1;
 	if (!rp_file_contains("rp_dataver", "release_candidate=v2")) return 1;
 	if (!rp_file_contains("rp_repro", "notebook_replay=passed")) return 1;
@@ -27,8 +29,8 @@ int main(void)
 	if (!rp_write_file("rp_dossier",
 			   "dossier_id=dossier:RUN-042:plain-ucore\n"
 			   "run_id=RUN-042\n"
-			   "sections=27\n"
-			   "includes=plan,wfio,policy,compliance,lit,data,data-profile,figures,trials,review,review-rounds,revision,report,evidence,claim-records,provenance-paths,lineage,knowledge,data-version,data-release,retry,repro,llm-relay,llm-queue,llm-eval,llm-governance,release\n"
+			   "sections=29\n"
+			   "includes=plan,wfio,policy,compliance,risk,capa,lit,data,data-profile,figures,trials,review,review-rounds,revision,report,evidence,claim-records,provenance-paths,lineage,knowledge,data-version,data-release,retry,repro,llm-relay,llm-queue,llm-eval,llm-governance,release\n"
 			   "site_pages=6\n"
 			   "status=ready\n")) {
 		return 1;
@@ -57,6 +59,6 @@ int main(void)
 	if (!rp_append_status("dossier=ready")) return 1;
 	if (!rp_append_status("reviewops=ready")) return 1;
 	if (!rp_append_status("submit=ready")) return 1;
-	printf("rp_dossier: sections=27 review_board=accepted submit=ready status=ready\n");
+	printf("rp_dossier: sections=29 review_board=accepted submit=ready status=ready\n");
 	return 0;
 }

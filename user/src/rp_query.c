@@ -8,8 +8,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_services", "workflow=34");
 	ok = ok && rp_file_contains("rp_services", "agent=26");
 	ok = ok && rp_file_contains("rp_services", "evidence=10");
-	ok = ok && rp_file_contains("rp_sched", "queue_items=14");
-	ok = ok && rp_file_contains("rp_taskrec", "msg=14");
+	ok = ok && rp_file_contains("rp_sched", "queue_items=15");
+	ok = ok && rp_file_contains("rp_taskrec", "msg=15");
 	ok = ok && rp_file_contains("rp_fail", "status=ready");
 	ok = ok && rp_file_contains("rp_budget", "decision=within_budget");
 	if (!ok) return 1;
@@ -17,7 +17,7 @@ int main(void)
 	int high_tasks = rp_count_token("rp_taskrec", "prio=H");
 	int critical_tasks = rp_count_token("rp_taskrec", "class=critical");
 	int ready_tasks = rp_count_token("rp_taskrec", "state=ready");
-	if (task_lines != 14 || high_tasks != 3 || critical_tasks != 4 || ready_tasks != 14) {
+	if (task_lines != 15 || high_tasks != 3 || critical_tasks != 4 || ready_tasks != 15) {
 		printf("rp_query: bad_task_records lines=%d high=%d critical=%d ready=%d\n",
 		       task_lines, high_tasks, critical_tasks, ready_tasks);
 		return 1;
@@ -28,12 +28,12 @@ int main(void)
 	}
 	if (!rp_write_file("rp_rank",
 			   "source=rp_taskrec\n"
-			   "records=14\n"
-			   "ready=14\n"
+			   "records=15\n"
+			   "ready=15\n"
 			   "high=3\n"
 			   "critical=4\n"
-			   "selected=5\n"
-			   "selected_stages=literature,profile,align,decision,measure\n"
+			   "selected=6\n"
+			   "selected_stages=literature,profile,align,decision,measure,risk_capa\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -42,9 +42,9 @@ int main(void)
 			   "workflow_hits=34\n"
 			   "agent_hits=26\n"
 			   "evidence_hits=10\n"
-			   "scheduler_items=14\n"
-			   "ranked_tasks=14\n"
-			   "selected_tasks=5\n"
+			   "scheduler_items=15\n"
+			   "ranked_tasks=15\n"
+			   "selected_tasks=6\n"
 			   "critical_tasks=4\n"
 			   "failure_items=1\n"
 			   "budget_state=within_budget\n"
@@ -56,6 +56,6 @@ int main(void)
 	if (!rp_append_status("query=ready")) return 1;
 	if (!rp_append_status("rank=ready")) return 1;
 	if (!rp_append_status("runview=ready")) return 1;
-	printf("rp_query: workflow=34 agent=26 evidence=10 ranked=14 selected=5 status=ready\n");
+	printf("rp_query: workflow=34 agent=26 evidence=10 ranked=15 selected=6 status=ready\n");
 	return 0;
 }

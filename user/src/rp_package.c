@@ -18,6 +18,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_labops", "maintenance=passed");
 	ok = ok && rp_file_contains("rp_trialrec", "selected=trial-3");
 	ok = ok && rp_file_contains("rp_training", "gaps=0");
+	ok = ok && rp_file_contains("rp_risk", "open_risks=0");
+	ok = ok && rp_file_contains("rp_capa", "capa_actions=2");
 	ok = ok && rp_file_contains("rp_fail", "recoverable=1");
 	ok = ok && rp_file_contains("rp_retrylog", "final_result=recovered");
 	ok = ok && rp_file_contains("rp_prompt", "routes=4");
@@ -34,8 +36,8 @@ int main(void)
 	if (!ok) return 1;
 	if (!rp_write_file("rp_package",
 			   "package=research-evidence-package\n"
-			   "artifacts=13\n"
-			   "checks=28\n"
+			   "artifacts=15\n"
+			   "checks=31\n"
 			   "release=ready\n"
 			   "status=ready\n")) {
 		return 1;
@@ -80,6 +82,6 @@ int main(void)
 	if (!rp_append_status("datarel=ready")) return 1;
 	if (!rp_append_status("dataver=ready")) return 1;
 	if (!rp_append_status("repro=ready")) return 1;
-	printf("rp_package: artifacts=13 checks=28 fair=passed repro=ready status=ready\n");
+	printf("rp_package: artifacts=15 checks=31 fair=passed repro=ready status=ready\n");
 	return 0;
 }
