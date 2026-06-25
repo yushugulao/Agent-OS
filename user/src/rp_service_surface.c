@@ -170,6 +170,13 @@ static int write_knowledge_services(void)
 			   "library_sources=1\n"
 			   "library_tag=reusable\n"
 			   "prisma_records=1\n"
+			   "literature_search=usable-literature-search:RUN-900:1\n"
+			   "search_strategies=2\n"
+			   "screening_decisions=9\n"
+			   "evidence_extractions=3\n"
+			   "protocol=usable-evidence-protocol:RUN-900:1\n"
+			   "prisma_flow=usable-prisma-flow:RUN-900:1\n"
+			   "synthesis=usable-evidence-synthesis:RUN-900:1\n"
 			   "risk_of_bias_records=3\n"
 			   "status=ready\n")) {
 		return 0;

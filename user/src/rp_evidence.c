@@ -49,6 +49,12 @@ int main(void)
 			   "library_source_id=usable-source:library2026:1\n"
 			   "citation_key=library2026\n"
 			   "library_query=reusable\n"
+			   "literature_search_id=usable-literature-search:RUN-900:1\n"
+			   "screening_decisions=9;included=3;excluded=6\n"
+			   "evidence_extractions=3;fields=mechanism,evidence_type,reported_outcome\n"
+			   "evidence_protocol=usable-evidence-protocol:RUN-900:1;status=registered\n"
+			   "prisma_flow=usable-prisma-flow:RUN-900:1;identified=9;included=3\n"
+			   "evidence_synthesis=usable-evidence-synthesis:RUN-900:1;themes=traceability,reproducibility,recovery\n"
 			   "synthesis=ready\n"
 			   "status=ready\n")) {
 		return 1;

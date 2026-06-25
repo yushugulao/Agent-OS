@@ -27,9 +27,11 @@ int main(void)
 	ok = ok && rp_file_contains("rp_input", "custom_requests=3");
 	ok = ok && rp_file_contains("rp_input", "form_fields=8");
 	ok = ok && rp_file_contains("rp_input", "uploads=2");
+	ok = ok && rp_file_contains("rp_input", "workspace_import=workspace:RUN-900:folder");
 	ok = ok && rp_file_contains("rp_input", "library_sources=1");
 	ok = ok && rp_file_contains("rp_runner", "library_source_count=1");
 	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
+	ok = ok && rp_file_contains("rp_knowledge", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
 	ok = ok && rp_file_contains("rp_runner", "custom_status=ok");
 	ok = ok && rp_file_contains("rp_package", "deliverables=8");
 	ok = ok && rp_file_contains("rp_package", "delivery_files=8");
@@ -97,7 +99,10 @@ int main(void)
 			   "custom_research_runs=3\n"
 			   "request_form=rp_input\n"
 			   "upload_files=rp_input\n"
+			   "workspace_imports=1\n"
 			   "library_sources=rp_knowledge\n"
+			   "evidence_protocols=1\n"
+			   "evidence_extractions=3\n"
 			   "bibliography=rp_runner\n"
 			   "citation_plan=rp_runner\n"
 			   "delivery_manifest=rp_package\n"
@@ -141,6 +146,11 @@ int main(void)
 			   "claims=8\n"
 			   "evidence_links=5\n"
 			   "critical_paths=3\n"
+			   "literature_search=usable-literature-search:RUN-900:1\n"
+			   "screening_decisions=9\n"
+			   "evidence_protocol=usable-evidence-protocol:RUN-900:1\n"
+			   "prisma_flow=usable-prisma-flow:RUN-900:1\n"
+			   "evidence_synthesis=usable-evidence-synthesis:RUN-900:1\n"
 			   "stage_log=rp_stage_log\n"
 			   "artifact=rp_artifact\n"
 			   "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest,rp_artifact:rp_align_table,rp_artifact:rp_metrics_json\n"

@@ -13,6 +13,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_dossier", "sections=36");
 	ok = ok && rp_file_contains("rp_knowledge", "semantic_relations=6");
 	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
+	ok = ok && rp_file_contains("rp_input", "workspace_import=workspace:RUN-900:folder");
+	ok = ok && rp_file_contains("rp_lit", "literature_search=usable-literature-search:RUN-900:1");
+	ok = ok && rp_file_contains("rp_knowledge", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
 	ok = ok && rp_file_contains("rp_claimrec", "claim=8");
 	ok = ok && rp_file_contains("rp_provpath", "critical_paths=3");
 	ok = ok && rp_file_contains("rp_dataprof", "profiles=4");
@@ -135,6 +138,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_peerresp", "responses=6");
 	ok = ok && rp_file_contains("rp_fairpkg", "fair_checks=8");
 	ok = ok && rp_file_contains("rp_litrev", "papers=9");
+	ok = ok && rp_file_contains("rp_litrev", "evidence_extractions=3");
+	ok = ok && rp_file_contains("rp_litrev", "prisma_flow=usable-prisma-flow:RUN-900:1");
 	ok = ok && rp_file_contains("rp_citegraph", "citations=14");
 	ok = ok && rp_file_contains("rp_semindex", "documents=17");
 	ok = ok && rp_file_contains("rp_kanswers", "answers=4");
@@ -150,6 +155,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_package", "package_manifest=ready");
 	ok = ok && rp_file_contains("rp_package", "downloadable_units=3");
 	ok = ok && rp_file_contains("rp_package", "custom_sources=rp_input,rp_runner,rp_uresrun");
+	ok = ok && rp_file_contains("rp_package", "workspace_imports=1");
 	ok = ok && rp_file_contains("rp_package", "delivery_manifest=rp_package");
 	ok = ok && rp_file_contains("rp_package", "delivery_files=8");
 	ok = ok && rp_file_contains("rp_package", "delivery_file=report_md;path=rp_report_text;required=1;exists=1");
@@ -169,6 +175,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_package", "revision_evidence=rp_revision");
 	ok = ok && rp_file_contains("rp_package", "review_action_items=2");
 	ok = ok && rp_file_contains("rp_package", "llm_matched_responses=3");
+	ok = ok && rp_file_contains("rp_package", "evidence_protocols=1");
+	ok = ok && rp_file_contains("rp_package", "evidence_extractions=3");
 	ok = ok && rp_file_contains("rp_runner", "revision_status=completed");
 	ok = ok && rp_file_contains("rp_runner", "revision_run=usable-run:RUN-900-rev1");
 	ok = ok && rp_file_contains("rp_runner", "revision_delta=rp_revision");
@@ -217,6 +225,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_ui_run", "artifact_preview=rp_report_text,rp_chart_data,rp_artifact");
 	ok = ok && rp_file_contains("rp_ui_run", "review_threads=2");
 	ok = ok && rp_file_contains("rp_ui_run", "revision_delta=rp_revision");
+	ok = ok && rp_file_contains("rp_ui_evidence", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
 	ok = ok && rp_file_contains("rp_ui_agent", "page=agent-detail");
 	ok = ok && rp_file_contains("rp_ui_agent", "decision_rows=8");
 	ok = ok && rp_file_contains("rp_ui_evidence", "page=evidence-detail");
@@ -254,6 +263,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_run", "timeline_rows=5");
 	ok = ok && rp_file_contains("rp_api_run", "dependency_checks=5");
 	ok = ok && rp_file_contains("rp_api_run", "manifest_support_entries=2");
+	ok = ok && rp_file_contains("rp_api_know", "evidence_protocols=1");
 	ok = ok && rp_file_contains("rp_api_agents", "agents=7");
 	ok = ok && rp_file_contains("rp_api_evidence", "provenance_paths=3");
 	ok = ok && rp_file_contains("rp_api_evidence", "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest");
@@ -305,9 +315,11 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "export_bundle=rp_package");
 	ok = ok && rp_file_contains("rp_web_bundle", "revision_delta=rp_revision");
 	ok = ok && rp_file_contains("rp_web_bundle", "library_sources=rp_knowledge");
+	ok = ok && rp_file_contains("rp_web_bundle", "workspace_imports=1");
+	ok = ok && rp_file_contains("rp_web_bundle", "evidence_protocols=1");
 	ok = ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
 	ok = ok && rp_file_contains("rp_web_bundle", "review_threads=2");
-	ok = ok && rp_file_contains("rp_tests", "tests=365");
+	ok = ok && rp_file_contains("rp_tests", "tests=408");
 	ok = ok && rp_file_contains("rp_tests", "status=passed");
 	ok = ok && rp_file_contains("rp_ack", "ack=consistency;msg=22;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=consistency.check_backend");
@@ -374,6 +386,10 @@ int main(void)
 			   "delivery_checks=3\n"
 			   "evidence_bundle_entries=12\n"
 			   "library_sources=1\n"
+			   "workspace_imports=1\n"
+			   "evidence_protocols=1\n"
+			   "evidence_extractions=3\n"
+			   "prisma_flows=1\n"
 			   "citation_plan_entries=3\n"
 			   "web_routes=21\n"
 			   "web_api_payloads=14\n"
@@ -387,7 +403,7 @@ int main(void)
 			   "review_threads=2\n"
 			   "review_comments=3\n"
 			   "review_action_items=2\n"
-			   "test_cases=365\n"
+			   "test_cases=408\n"
 			   "status=ready\n")) {
 		return 1;
 	}

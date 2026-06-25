@@ -43,8 +43,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_completion", "actions=4");
 	ok = ok && rp_file_contains("rp_input", "form_fields=8");
 	ok = ok && rp_file_contains("rp_input", "csv_rows_total=9");
+	ok = ok && rp_file_contains("rp_input", "workspace_import=workspace:RUN-900:folder");
 	ok = ok && rp_file_contains("rp_input", "library_sources=1");
 	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
+	ok = ok && rp_file_contains("rp_knowledge", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
 	ok = ok && rp_file_contains("rp_runner", "status=ready");
 	ok = ok && rp_file_contains("rp_runner", "library_source_count=1");
 	ok = ok && rp_file_contains("rp_runner", "revision_task_id=usable-revision-task:RUN-900:1");
@@ -104,7 +106,15 @@ int main(void)
 			   "package_reader=host_web_bundle\n"
 			   "request_form=rp_input\n"
 			   "upload_files=rp_input\n"
+			   "workspace_imports=1\n"
+			   "workspace_import=workspace:RUN-900:folder;manifest=workspace-manifest.json;template=usable-template:workspace-900\n"
 			   "library_sources=rp_knowledge\n"
+			   "evidence_review_files=3\n"
+			   "evidence_protocols=1\n"
+			   "screening_decisions=9\n"
+			   "evidence_extractions=3\n"
+			   "prisma_flows=1\n"
+			   "evidence_synthesis_files=2\n"
 			   "bibliography=rp_runner\n"
 			   "citation_plan=rp_runner\n"
 			   "delivery_manifest=rp_package\n"
@@ -145,6 +155,7 @@ int main(void)
 			   "evidence_bundle_zip=research-evidence-bundle.zip\n"
 			   "evidence_bundle_entries=12\n"
 			   "evidence_bundle_contains=run.json,artifacts.json,human_reviews.json,delivery_manifests.json,revision_tasks.json\n"
+			   "evidence_bundle_contains_extra=screening_decisions.json,evidence_extractions.json,evidence_protocols.json,prisma_flow.json,evidence_synthesis.md\n"
 			   "evidence_bundle_delivery_files=2\n"
 			   "evidence_bundle_checksum=stable-evidence-bundle\n"
 			   "bundle_files=human_reviews.json,delivery_manifests.json,revision_tasks.json,delivery-manifest.json,delivery-manifest.md\n"

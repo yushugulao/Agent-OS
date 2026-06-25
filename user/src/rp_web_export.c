@@ -28,8 +28,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_input", "form_fields=8");
 	ok = ok && rp_file_contains("rp_input", "csv_rows_total=9");
 	ok = ok && rp_file_contains("rp_input", "library_sources=1");
+	ok = ok && rp_file_contains("rp_input", "workspace_import=workspace:RUN-900:folder");
 	ok = ok && rp_file_contains("rp_runner", "citation_plan_entries=3");
 	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
+	ok = ok && rp_file_contains("rp_knowledge", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
 	ok = ok && rp_file_contains("rp_package", "deliverables=8");
 	ok = ok && rp_file_contains("rp_package", "delivery_files=8");
 	ok = ok && rp_file_contains("rp_package", "delivery_checks=3");
@@ -104,8 +106,8 @@ int main(void)
 			   "api=run-detail\n"
 			   "run_id=RUN-042\n"
 			   "custom_research=rp_runner;custom_research_runs=3\n"
-			   "request_form=rp_input;upload_files=rp_input\n"
-			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner\n"
+			   "request_form=rp_input;upload_files=rp_input;workspace_imports=1\n"
+			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner;evidence_protocols=1;evidence_extractions=3\n"
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
 			   "delivery_files=8;delivery_checks=3;latest_delivery_status=ready\n"
 			   "evidence_bundle_zip=research-evidence-bundle.zip\n"
@@ -150,6 +152,11 @@ int main(void)
 			   "claims=8\n"
 			   "links=5\n"
 			   "provenance_paths=3\n"
+			   "literature_search=usable-literature-search:RUN-900:1\n"
+			   "screening_decisions=9\n"
+			   "evidence_protocol=usable-evidence-protocol:RUN-900:1\n"
+			   "prisma_flow=usable-prisma-flow:RUN-900:1\n"
+			   "evidence_synthesis=usable-evidence-synthesis:RUN-900:1\n"
 			   "stage_log=rp_stage_log\n"
 			   "artifact=rp_artifact\n"
 			   "manifest=rp_artifact_manifest\n"
@@ -254,6 +261,9 @@ int main(void)
 			   "semantic_index=rp_semindex\n"
 			   "knowledge_answers=rp_kanswers\n"
 			   "library_sources=rp_knowledge\n"
+			   "evidence_protocols=1\n"
+			   "evidence_extractions=3\n"
+			   "prisma_flows=1\n"
 			   "documents=17\n"
 			   "answers=4\n"
 			   "status=ready\n")) {
@@ -366,10 +376,11 @@ int main(void)
 			   "render_sections=7\n"
 			   "artifact_previews=3\n"
 			   "real_artifact_items=5\n"
-			   "request_form=rp_input;upload_files=rp_input\n"
-			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner\n"
+			   "request_form=rp_input;upload_files=rp_input;workspace_imports=1\n"
+			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner;evidence_protocols=1;evidence_extractions=3\n"
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
 			   "delivery_files=8;delivery_checks=3;evidence_bundle_entries=12\n"
+			   "prisma_flows=1\n"
 			   "bundle_files=human_reviews.json,delivery_manifests.json,revision_tasks.json,delivery-manifest.json,delivery-manifest.md\n"
 			   "human_reviews=1;revision_tasks=1;revised_run=usable-run:RUN-900-rev1\n"
 			   "revision_delta=rp_revision\n"

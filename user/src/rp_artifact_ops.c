@@ -87,6 +87,12 @@ int main(void)
 			   "upload_files=uploads=2;csv_rows_total=9;reference_entries=2;dataset_target=rp_input\n"
 			   "library_sources=1;library_tag=reusable;library_source_id=usable-source:library2026:1;citation_key=library2026\n"
 			   "library_backed_run=usable-run:RUN-900;source_tag=reusable;selected_library_sources=1\n"
+			   "workspace_import=workspace:RUN-900:folder;files=4;csv=1;refs=2;notes=1;manifest=workspace-manifest.json\n"
+			   "workspace_file=expr.csv;kind=dataset;rows=3;target=usable-dataset:workspace-900:expr\n"
+			   "workspace_file=refs.bib;kind=references;entries=2;target=usable-source:workspace-900:refs\n"
+			   "workspace_file=notes.md;kind=notes;target=usable-template:workspace-900\n"
+			   "workspace_template=usable-template:workspace-900;status=ready\n"
+			   "workspace_run=usable-run:RUN-903;template=usable-template:workspace-900;status=ready\n"
 			   "status=ready\n")) {
 		return 1;
 	}

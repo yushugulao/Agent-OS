@@ -70,6 +70,11 @@ int main(void)
 	ok = ok && require_file_token("rp_input", "library_tag=reusable");
 	ok = ok && require_file_token("rp_input", "library_source_id=usable-source:library2026:1");
 	ok = ok && require_file_token("rp_input", "source_tag=reusable");
+	ok = ok && require_file_token("rp_input", "workspace_import=workspace:RUN-900:folder");
+	ok = ok && require_file_token("rp_input", "workspace_file=expr.csv");
+	ok = ok && require_file_token("rp_input", "workspace_file=refs.bib");
+	ok = ok && require_file_token("rp_input", "workspace_template=usable-template:workspace-900");
+	ok = ok && require_file_token("rp_input", "workspace_run=usable-run:RUN-903");
 	ok = ok && require_file_token("rp_stage_state", "stages=5");
 	ok = ok && require_file_token("rp_stage_state", "command=align:agent-align");
 	ok = ok && require_file_token("rp_stage_state", "output=rp_artifact:rp_align_table");
@@ -150,12 +155,22 @@ int main(void)
 	ok = ok && require_file_token("rp_privacy", "decision=accepted");
 	ok = ok && require_file_token("rp_compliance", "decision=accepted");
 
+	ok = ok && require_file_token("rp_lit", "literature_search=usable-literature-search:RUN-900:1");
+	ok = ok && require_file_token("rp_lit", "screening_decisions=9;included=3;excluded=6");
+	ok = ok && require_file_token("rp_lit", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
+	ok = ok && require_file_token("rp_lit", "prisma_flow=usable-prisma-flow:RUN-900:1");
 	ok = ok && require_file_token("rp_evidence", "status=ready");
 	ok = ok && require_file_token("rp_claimrec", "claim=8");
 	ok = ok && require_file_token("rp_provpath", "critical_paths=3");
 	ok = ok && require_file_token("rp_knowledge", "synthesis=ready");
 	ok = ok && require_file_token("rp_knowledge", "library_sources=1");
 	ok = ok && require_file_token("rp_knowledge", "citation_key=library2026");
+	ok = ok && require_file_token("rp_knowledge", "literature_search_id=usable-literature-search:RUN-900:1");
+	ok = ok && require_file_token("rp_knowledge", "screening_decisions=9;included=3;excluded=6");
+	ok = ok && require_file_token("rp_knowledge", "evidence_extractions=3");
+	ok = ok && require_file_token("rp_knowledge", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
+	ok = ok && require_file_token("rp_knowledge", "prisma_flow=usable-prisma-flow:RUN-900:1");
+	ok = ok && require_file_token("rp_knowledge", "evidence_synthesis=usable-evidence-synthesis:RUN-900:1");
 	ok = ok && require_file_token("rp_review2", "review_threads=2");
 	ok = ok && require_file_token("rp_review2", "thread=review-thread:RUN-042:methods");
 	ok = ok && require_file_token("rp_review2", "thread=review-thread:RUN-042:repro");
@@ -189,7 +204,15 @@ int main(void)
 	ok = ok && require_file_token("rp_package", "download_index=report_bundle,evidence_bundle,provenance_bundle");
 	ok = ok && require_file_token("rp_package", "request_form=rp_input");
 	ok = ok && require_file_token("rp_package", "upload_files=rp_input");
+	ok = ok && require_file_token("rp_package", "workspace_imports=1");
+	ok = ok && require_file_token("rp_package", "workspace_import=workspace:RUN-900:folder");
 	ok = ok && require_file_token("rp_package", "library_sources=rp_knowledge");
+	ok = ok && require_file_token("rp_package", "evidence_review_files=3");
+	ok = ok && require_file_token("rp_package", "evidence_protocols=1");
+	ok = ok && require_file_token("rp_package", "screening_decisions=9");
+	ok = ok && require_file_token("rp_package", "evidence_extractions=3");
+	ok = ok && require_file_token("rp_package", "prisma_flows=1");
+	ok = ok && require_file_token("rp_package", "evidence_synthesis_files=2");
 	ok = ok && require_file_token("rp_package", "bibliography=rp_runner");
 	ok = ok && require_file_token("rp_package", "citation_plan=rp_runner");
 	ok = ok && require_file_token("rp_package", "delivery_manifest=rp_package");
@@ -217,6 +240,7 @@ int main(void)
 	ok = ok && require_file_token("rp_package", "evidence_bundle_zip=research-evidence-bundle.zip");
 	ok = ok && require_file_token("rp_package", "evidence_bundle_entries=12");
 	ok = ok && require_file_token("rp_package", "evidence_bundle_contains=run.json,artifacts.json,human_reviews.json,delivery_manifests.json,revision_tasks.json");
+	ok = ok && require_file_token("rp_package", "evidence_bundle_contains_extra=screening_decisions.json");
 	ok = ok && require_file_token("rp_package", "evidence_bundle_delivery_files=2");
 	ok = ok && require_file_token("rp_package", "evidence_bundle_checksum=stable-evidence-bundle");
 	ok = ok && require_file_token("rp_package", "bundle_files=human_reviews.json,delivery_manifests.json,revision_tasks.json,delivery-manifest.json,delivery-manifest.md");
@@ -281,6 +305,12 @@ int main(void)
 	ok = ok && require_file_token("rp_fairpkg", "fair_checks=8");
 	ok = ok && require_file_token("rp_pubop", "op=result_review");
 	ok = ok && require_file_token("rp_litrev", "papers=9");
+	ok = ok && require_file_token("rp_litrev", "search_strategies=2");
+	ok = ok && require_file_token("rp_litrev", "screening_decisions=9");
+	ok = ok && require_file_token("rp_litrev", "evidence_extractions=3");
+	ok = ok && require_file_token("rp_litrev", "protocol=usable-evidence-protocol:RUN-900:1");
+	ok = ok && require_file_token("rp_litrev", "prisma_flow=usable-prisma-flow:RUN-900:1");
+	ok = ok && require_file_token("rp_litrev", "synthesis=usable-evidence-synthesis:RUN-900:1");
 	ok = ok && require_file_token("rp_citegraph", "bibtex_entries=9");
 	ok = ok && require_file_token("rp_semindex", "documents=17");
 	ok = ok && require_file_token("rp_kanswers", "answers=4");
@@ -308,6 +338,8 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_run", "delivery_files=8");
 	ok = ok && require_file_token("rp_ui_run", "delivery_checks=3");
 	ok = ok && require_file_token("rp_ui_run", "delivery_manifest_json=delivery-manifest.json");
+	ok = ok && require_file_token("rp_ui_run", "workspace_imports=1");
+	ok = ok && require_file_token("rp_ui_run", "evidence_protocols=1");
 	ok = ok && require_file_token("rp_ui_run", "evidence_bundle_zip=research-evidence-bundle.zip");
 	ok = ok && require_file_token("rp_ui_run", "llm_roundtrip=ready");
 	ok = ok && require_file_token("rp_ui_run", "llm_response_file=rp_llm_resp");
@@ -318,6 +350,9 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_agent", "decision_rows=8");
 	ok = ok && require_file_token("rp_ui_evidence", "page=evidence-detail");
 	ok = ok && require_file_token("rp_ui_evidence", "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest");
+	ok = ok && require_file_token("rp_ui_evidence", "literature_search=usable-literature-search:RUN-900:1");
+	ok = ok && require_file_token("rp_ui_evidence", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
+	ok = ok && require_file_token("rp_ui_evidence", "prisma_flow=usable-prisma-flow:RUN-900:1");
 	ok = ok && require_file_token("rp_ui_evidence", "delivery_files=8");
 	ok = ok && require_file_token("rp_ui_evidence", "delivery_checks=3");
 	ok = ok && require_file_token("rp_ui_evidence", "evidence_bundle_zip=research-evidence-bundle.zip");
@@ -343,7 +378,9 @@ int main(void)
 	ok = ok && require_file_token("rp_api_run", "custom_research_runs=3");
 	ok = ok && require_file_token("rp_api_run", "request_form=rp_input");
 	ok = ok && require_file_token("rp_api_run", "upload_files=rp_input");
+	ok = ok && require_file_token("rp_api_run", "workspace_imports=1");
 	ok = ok && require_file_token("rp_api_run", "bibliography=rp_runner");
+	ok = ok && require_file_token("rp_api_run", "evidence_protocols=1");
 	ok = ok && require_file_token("rp_api_run", "citation_plan=rp_runner");
 	ok = ok && require_file_token("rp_api_run", "delivery_manifest=rp_package");
 	ok = ok && require_file_token("rp_api_run", "delivery_files=8");
@@ -367,6 +404,8 @@ int main(void)
 	ok = ok && require_file_token("rp_api_agents", "agents=7");
 	ok = ok && require_file_token("rp_api_evidence", "provenance_paths=3");
 	ok = ok && require_file_token("rp_api_evidence", "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest");
+	ok = ok && require_file_token("rp_api_evidence", "literature_search=usable-literature-search:RUN-900:1");
+	ok = ok && require_file_token("rp_api_evidence", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
 	ok = ok && require_file_token("rp_api_compare", "workflow_runner_files=5");
 	ok = ok && require_file_token("rp_api_artifacts", "manifest_records=4");
 	ok = ok && require_file_token("rp_api_artifacts", "evidence_package=rp_package");
@@ -389,6 +428,8 @@ int main(void)
 	ok = ok && require_file_token("rp_api_labres", "instrument_registry=rp_instr");
 	ok = ok && require_file_token("rp_api_pub", "result_review=rp_resrev");
 	ok = ok && require_file_token("rp_api_know", "semantic_index=rp_semindex");
+	ok = ok && require_file_token("rp_api_know", "evidence_protocols=1");
+	ok = ok && require_file_token("rp_api_know", "evidence_extractions=3");
 	ok = ok && require_file_token("rp_api_runtime", "runtime_env=rp_runenv");
 	ok = ok && require_file_token("rp_api_action", "actions=8");
 	ok = ok && require_file_token("rp_api_action", "delivery_manifest_builder=1");
@@ -434,7 +475,10 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "artifact_previews=3");
 	ok = ok && require_file_token("rp_web_bundle", "request_form=rp_input");
 	ok = ok && require_file_token("rp_web_bundle", "upload_files=rp_input");
+	ok = ok && require_file_token("rp_web_bundle", "workspace_imports=1");
 	ok = ok && require_file_token("rp_web_bundle", "library_sources=rp_knowledge");
+	ok = ok && require_file_token("rp_web_bundle", "evidence_protocols=1");
+	ok = ok && require_file_token("rp_web_bundle", "prisma_flows=1");
 	ok = ok && require_file_token("rp_web_bundle", "delivery_manifest=rp_package");
 	ok = ok && require_file_token("rp_web_bundle", "delivery_files=8");
 	ok = ok && require_file_token("rp_web_bundle", "delivery_checks=3");
@@ -459,7 +503,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=365\n"
+			   "tests=408\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -470,6 +514,8 @@ int main(void)
 			   "api_actions=passed\n"
 			   "custom_research=passed\n"
 			   "research_input=passed\n"
+			   "workspace_import=passed\n"
+			   "literature_protocol=passed\n"
 			   "workflow=passed\n"
 			   "workflow_runner_detail=passed\n"
 			   "artifact_ops=passed\n"
@@ -499,6 +545,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=365 catalog=passed data=passed services=passed actions=passed custom=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=408 catalog=passed data=passed services=passed actions=passed custom=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }
