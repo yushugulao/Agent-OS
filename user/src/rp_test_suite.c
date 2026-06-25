@@ -91,6 +91,14 @@ int main(void)
 	ok = ok && require_file_token("rp_invocation", "status=recovered");
 	ok = ok && require_file_token("rp_completion", "actions=4");
 	ok = ok && require_file_token("rp_package", "artifacts=48");
+	ok = ok && require_file_token("rp_package", "package_manifest=ready");
+	ok = ok && require_file_token("rp_package", "bundle_items=18");
+	ok = ok && require_file_token("rp_package", "downloadable_units=3");
+	ok = ok && require_file_token("rp_package", "evidence_bundle=ready");
+	ok = ok && require_file_token("rp_package", "review_bundle=ready");
+	ok = ok && require_file_token("rp_package", "provenance_bundle=ready");
+	ok = ok && require_file_token("rp_package", "custom_sources=rp_input,rp_runner,rp_uresrun");
+	ok = ok && require_file_token("rp_package", "download_index=report_bundle,evidence_bundle,provenance_bundle");
 	ok = ok && require_file_token("rp_release", "decision=release");
 	ok = ok && require_file_token("rp_dossier", "sections=36");
 
@@ -157,6 +165,8 @@ int main(void)
 	ok = ok && require_file_token("rp_api_evidence", "provenance_paths=3");
 	ok = ok && require_file_token("rp_api_compare", "workflow_runner_files=5");
 	ok = ok && require_file_token("rp_api_artifacts", "manifest_records=4");
+	ok = ok && require_file_token("rp_api_artifacts", "evidence_package=rp_package");
+	ok = ok && require_file_token("rp_api_artifacts", "downloadable_units=3");
 	ok = ok && require_file_token("rp_api_data", "dataset_snapshots=2");
 	ok = ok && require_file_token("rp_api_bio", "sample_registry=rp_sreg");
 	ok = ok && require_file_token("rp_api_labres", "instrument_registry=rp_instr");
@@ -180,6 +190,8 @@ int main(void)
 	ok = ok && require_file_token("rp_actionio", "Agent Decisions");
 	ok = ok && require_file_token("rp_actionio", "user_on_plain_ucore_real_artifacts");
 	ok = ok && require_file_token("rp_web_bundle", "api_payloads=14");
+	ok = ok && require_file_token("rp_web_bundle", "evidence_package=rp_package");
+	ok = ok && require_file_token("rp_web_bundle", "downloadable_units=3");
 	ok = ok && require_file_token("rp_web_bundle", "post_routes=5");
 	ok = ok && require_file_token("rp_web_bundle", "custom_research_files=1");
 	ok = ok && require_file_token("rp_web_bundle", "custom_research_runs=3");
@@ -190,7 +202,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=142\n"
+			   "tests=154\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -205,6 +217,7 @@ int main(void)
 			   "agent_collaboration=passed\n"
 			   "ui_export=passed\n"
 			   "host_web_export=passed\n"
+			   "export_package=passed\n"
 			   "llm_relay=passed\n"
 			   "agent_compare=passed\n"
 			   "consistency=passed\n"
@@ -223,6 +236,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=142 catalog=passed data=passed services=passed actions=passed custom=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=154 catalog=passed data=passed services=passed actions=passed custom=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }

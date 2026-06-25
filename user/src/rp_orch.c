@@ -248,6 +248,9 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_status", "compare=ready");
 	state_ok = state_ok && rp_file_contains("rp_audit", "status=passed");
 	state_ok = state_ok && rp_file_contains("rp_compare", "plain_kernel=passed");
+	state_ok = state_ok && rp_file_contains("rp_package", "package_manifest=ready");
+	state_ok = state_ok && rp_file_contains("rp_package", "downloadable_units=3");
+	state_ok = state_ok && rp_file_contains("rp_package", "custom_sources=rp_input,rp_runner,rp_uresrun");
 	state_ok = state_ok && rp_file_contains("rp_object_query", "hits=8");
 	state_ok = state_ok && rp_file_contains("rp_lineage", "edges=7");
 	state_ok = state_ok && rp_file_contains("rp_site", "pages=6");
@@ -364,6 +367,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_api_evidence", "provenance_paths=3");
 	state_ok = state_ok && rp_file_contains("rp_api_compare", "workflow_runner_files=5");
 	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "manifest_records=4");
+	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "evidence_package=rp_package");
 	state_ok = state_ok && rp_file_contains("rp_api_data", "dataset_snapshots=2");
 	state_ok = state_ok && rp_file_contains("rp_api_bio", "sample_registry=rp_sreg");
 	state_ok = state_ok && rp_file_contains("rp_api_labres", "instrument_registry=rp_instr");
@@ -372,6 +376,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_api_runtime", "runtime_env=rp_runenv");
 	state_ok = state_ok && rp_file_contains("rp_api_action", "actions=5");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "api_payloads=14");
+	state_ok = state_ok && rp_file_contains("rp_web_bundle", "downloadable_units=3");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "requests=5");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "responses=5");
@@ -385,7 +390,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_uresrun", "dataset_rows_total=9");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "Comparison Metrics");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "passed_cases=3");
-	state_ok = state_ok && rp_file_contains("rp_tests", "tests=142");
+	state_ok = state_ok && rp_file_contains("rp_tests", "tests=154");
 	state_ok = state_ok && rp_file_contains("rp_tests", "status=passed");
 	state_ok = state_ok && rp_file_contains("rp_litrev", "papers=9");
 	state_ok = state_ok && rp_file_contains("rp_citegraph", "bibtex_entries=9");

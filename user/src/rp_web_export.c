@@ -12,6 +12,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_artifact_manifest", "manifest_records=4");
 	ok = ok && rp_file_contains("rp_llm_hostreq", "template_mode=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "status=ready");
+	ok = ok && rp_file_contains("rp_package", "package_manifest=ready");
+	ok = ok && rp_file_contains("rp_package", "downloadable_units=3");
 	ok = ok && rp_file_contains("rp_dataset_collection", "items=4");
 	ok = ok && rp_file_contains("rp_input", "custom_run=usable-run:RUN-900");
 	ok = ok && rp_file_contains("rp_input", "custom_requests=3");
@@ -122,6 +124,10 @@ int main(void)
 			   "stages=5\n"
 			   "artifact_records=4\n"
 			   "manifest_records=4\n"
+			   "package_manifest=ready\n"
+			   "evidence_package=rp_package\n"
+			   "bundle_items=18\n"
+			   "downloadable_units=3\n"
 			   "report=rp_report_text\n"
 			   "chart=rp_chart_data\n"
 			   "llm_relay_files=5\n"
@@ -270,6 +276,9 @@ int main(void)
 			   "api_payloads=14\n"
 			   "action_payloads=1\n"
 			   "source_pages=5\n"
+			   "evidence_package=rp_package\n"
+			   "package_manifest=ready\n"
+			   "downloadable_units=3\n"
 			   "runner_files=5\n"
 			   "data_pipeline_files=6\n"
 			   "custom_research_files=1\n"

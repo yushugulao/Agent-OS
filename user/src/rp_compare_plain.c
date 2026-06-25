@@ -126,6 +126,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_protocol", "ethics=approved");
 	ok = ok && rp_file_contains("rp_quality", "passed=7");
 	ok = ok && rp_file_contains("rp_package", "artifacts=48");
+	ok = ok && rp_file_contains("rp_package", "package_manifest=ready");
+	ok = ok && rp_file_contains("rp_package", "downloadable_units=3");
+	ok = ok && rp_file_contains("rp_package", "custom_sources=rp_input,rp_runner,rp_uresrun");
 	ok = ok && rp_file_contains("rp_query", "workflow_hits=34");
 	ok = ok && rp_file_contains("rp_execobs", "observer=ready");
 	ok = ok && rp_file_contains("rp_timeline", "events=9");
@@ -183,6 +186,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_evidence", "provenance_paths=3");
 	ok = ok && rp_file_contains("rp_api_compare", "workflow_runner_files=5");
 	ok = ok && rp_file_contains("rp_api_artifacts", "manifest_records=4");
+	ok = ok && rp_file_contains("rp_api_artifacts", "evidence_package=rp_package");
 	ok = ok && rp_file_contains("rp_api_data", "dataset_snapshots=2");
 	ok = ok && rp_file_contains("rp_api_bio", "sample_registry=rp_sreg");
 	ok = ok && rp_file_contains("rp_api_labres", "instrument_registry=rp_instr");
@@ -203,8 +207,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_actionio", "Stage DAG");
 	ok = ok && rp_file_contains("rp_actionio", "passed_cases=3");
 	ok = ok && rp_file_contains("rp_web_bundle", "api_payloads=14");
+	ok = ok && rp_file_contains("rp_web_bundle", "downloadable_units=3");
 	ok = ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
-	ok = ok && rp_file_contains("rp_tests", "tests=142");
+	ok = ok && rp_file_contains("rp_tests", "tests=154");
 	ok = ok && rp_file_contains("rp_tests", "status=passed");
 	ok = ok && rp_file_contains("rp_ack", "ack=consistency;msg=22;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=consistency.check_backend");
@@ -242,6 +247,8 @@ int main(void)
 			   "consistency_checks=86\n"
 			   "runner_stages=5\n"
 			   "workflow_runner_files=5\n"
+			   "package_bundle_items=18\n"
+			   "downloadable_units=3\n"
 			   "data_pipeline_files=6\n"
 			   "dataset_snapshots=2\n"
 			   "data_quality_checks=7\n"
@@ -260,7 +267,7 @@ int main(void)
 			   "web_api_payloads=14\n"
 			   "web_action_routes=5\n"
 			   "web_action_outputs=2\n"
-			   "test_cases=142\n"
+			   "test_cases=154\n"
 			   "status=ready\n")) {
 		return 1;
 	}
