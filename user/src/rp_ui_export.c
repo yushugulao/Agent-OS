@@ -23,7 +23,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_dataset_collection", "items=4");
 	ok = ok && rp_file_contains("rp_input", "custom_run=usable-run:RUN-900");
 	ok = ok && rp_file_contains("rp_input", "custom_requests=3");
+	ok = ok && rp_file_contains("rp_input", "form_fields=8");
+	ok = ok && rp_file_contains("rp_input", "uploads=2");
 	ok = ok && rp_file_contains("rp_runner", "custom_status=ok");
+	ok = ok && rp_file_contains("rp_package", "deliverables=8");
+	ok = ok && rp_file_contains("rp_package", "raw_links=5");
+	ok = ok && rp_file_contains("rp_package", "decision_controls=2");
 	ok = ok && rp_file_contains("rp_agents", "agents=7");
 	ok = ok && rp_file_contains("rp_decisions", "decisions=8");
 	ok = ok && rp_file_contains("rp_handoff", "handoffs=6");
@@ -45,6 +50,8 @@ int main(void)
 			   "custom_runs=3\n"
 			   "status=recovered\n"
 			   "cards=run,custom_research,agents,evidence,data,bio,lab,publication,knowledge,runtime,llm_relay,compare\n"
+			   "research_form=rp_input\n"
+			   "upload_files=rp_input\n"
 			   "nav_items=12\n"
 			   "primary_cards=12\n"
 			   "home_sections=overview,run,custom_research,agents,evidence,data,services,llm,compare\n"
@@ -71,6 +78,11 @@ int main(void)
 			   "research_services=rp_sreg,rp_instr,rp_resrev,rp_semindex,rp_runenv\n"
 			   "custom_research=rp_runner\n"
 			   "custom_research_runs=3\n"
+			   "request_form=rp_input\n"
+			   "upload_files=rp_input\n"
+			   "delivery_manifest=rp_package\n"
+			   "review_page=rp_package\n"
+			   "export_bundle=rp_package\n"
 			   "llm_relay=rp_llm_packets,rp_llm_routes,rp_llm_guard,rp_llm_hostreq,rp_llm_fallback\n"
 			   "status=ready\n")) {
 		return 1;
@@ -95,6 +107,8 @@ int main(void)
 			   "stage_log=rp_stage_log\n"
 			   "artifact=rp_artifact\n"
 			   "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest\n"
+			   "delivery_manifest=rp_package\n"
+			   "export_bundle=rp_package\n"
 			   "llm_guard=rp_llm_guard\n"
 			   "status=ready\n")) {
 		return 1;

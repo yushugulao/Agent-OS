@@ -129,6 +129,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_package", "package_manifest=ready");
 	ok = ok && rp_file_contains("rp_package", "downloadable_units=3");
 	ok = ok && rp_file_contains("rp_package", "custom_sources=rp_input,rp_runner,rp_uresrun");
+	ok = ok && rp_file_contains("rp_package", "delivery_manifest=rp_package");
+	ok = ok && rp_file_contains("rp_package", "deliverables=8");
+	ok = ok && rp_file_contains("rp_package", "raw_links=5");
+	ok = ok && rp_file_contains("rp_package", "decision_controls=2");
 	ok = ok && rp_file_contains("rp_query", "workflow_hits=34");
 	ok = ok && rp_file_contains("rp_execobs", "observer=ready");
 	ok = ok && rp_file_contains("rp_timeline", "events=9");
@@ -182,6 +186,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_input", "custom_run_2=usable-run:RUN-901");
 	ok = ok && rp_file_contains("rp_input", "custom_run_3=usable-run:RUN-902");
 	ok = ok && rp_file_contains("rp_input", "custom_dataset_rows=3");
+	ok = ok && rp_file_contains("rp_input", "form_fields=8");
+	ok = ok && rp_file_contains("rp_input", "csv_rows_total=9");
 	ok = ok && rp_file_contains("rp_runner", "custom_source=rp_input");
 	ok = ok && rp_file_contains("rp_runner", "custom_runs=3");
 	ok = ok && rp_file_contains("rp_runner", "custom_agent_decisions=15");
@@ -195,6 +201,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_run", "runner_exec_files=5");
 	ok = ok && rp_file_contains("rp_api_run", "custom_research=rp_runner");
 	ok = ok && rp_file_contains("rp_api_run", "custom_research_runs=3");
+	ok = ok && rp_file_contains("rp_api_run", "request_form=rp_input");
+	ok = ok && rp_file_contains("rp_api_run", "delivery_manifest=rp_package");
 	ok = ok && rp_file_contains("rp_api_run", "timeline_rows=5");
 	ok = ok && rp_file_contains("rp_api_run", "dependency_checks=5");
 	ok = ok && rp_file_contains("rp_api_run", "manifest_support_entries=2");
@@ -204,6 +212,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_compare", "workflow_runner_files=5");
 	ok = ok && rp_file_contains("rp_api_artifacts", "manifest_records=4");
 	ok = ok && rp_file_contains("rp_api_artifacts", "evidence_package=rp_package");
+	ok = ok && rp_file_contains("rp_api_artifacts", "export_bundle=rp_package");
 	ok = ok && rp_file_contains("rp_api_artifacts", "preview_files=rp_report_text,rp_chart_data,rp_artifact");
 	ok = ok && rp_file_contains("rp_api_data", "dataset_snapshots=2");
 	ok = ok && rp_file_contains("rp_api_bio", "sample_registry=rp_sreg");
@@ -219,6 +228,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_actionio", "generated_runs=3");
 	ok = ok && rp_file_contains("rp_uresrun", "runs=3");
 	ok = ok && rp_file_contains("rp_uresrun", "run_id_3=usable-run:RUN-902");
+	ok = ok && rp_file_contains("rp_uresrun", "source_form=rp_input");
+	ok = ok && rp_file_contains("rp_uresrun", "export_bundle=rp_package");
 	ok = ok && rp_file_contains("rp_uresrun", "artifacts=36");
 	ok = ok && rp_file_contains("rp_uresrun", "dataset_rows=3");
 	ok = ok && rp_file_contains("rp_uresrun", "LLM Relay");
@@ -229,8 +240,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "render_sections=7");
 	ok = ok && rp_file_contains("rp_web_bundle", "artifact_previews=3");
 	ok = ok && rp_file_contains("rp_web_bundle", "runner_detail_fields=16");
+	ok = ok && rp_file_contains("rp_web_bundle", "delivery_manifest=rp_package");
+	ok = ok && rp_file_contains("rp_web_bundle", "export_bundle=rp_package");
 	ok = ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
-	ok = ok && rp_file_contains("rp_tests", "tests=188");
+	ok = ok && rp_file_contains("rp_tests", "tests=221");
 	ok = ok && rp_file_contains("rp_tests", "status=passed");
 	ok = ok && rp_file_contains("rp_ack", "ack=consistency;msg=22;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=consistency.check_backend");
@@ -287,11 +300,13 @@ int main(void)
 			   "artifact_previews=3\n"
 			   "custom_research_runs=3\n"
 			   "custom_research_files=1\n"
+			   "research_input_files=2\n"
+			   "delivery_files=3\n"
 			   "web_routes=18\n"
 			   "web_api_payloads=14\n"
 			   "web_action_routes=5\n"
 			   "web_action_outputs=2\n"
-			   "test_cases=188\n"
+			   "test_cases=221\n"
 			   "status=ready\n")) {
 		return 1;
 	}

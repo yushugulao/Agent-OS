@@ -173,6 +173,8 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_status", "actions=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "complete_export=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "input=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "request_form=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "upload_files=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "data_pipeline=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "ingest_files=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "dataset_snapshot=ready");
@@ -202,6 +204,9 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_status", "datarel=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "dataver=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "repro=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "delivery_manifest=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "export_bundle=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "review_page=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "diff=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "delta=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "release=ready");
@@ -251,6 +256,10 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_package", "package_manifest=ready");
 	state_ok = state_ok && rp_file_contains("rp_package", "downloadable_units=3");
 	state_ok = state_ok && rp_file_contains("rp_package", "custom_sources=rp_input,rp_runner,rp_uresrun");
+	state_ok = state_ok && rp_file_contains("rp_package", "delivery_manifest=rp_package");
+	state_ok = state_ok && rp_file_contains("rp_package", "deliverables=8");
+	state_ok = state_ok && rp_file_contains("rp_package", "raw_links=5");
+	state_ok = state_ok && rp_file_contains("rp_package", "decision_controls=2");
 	state_ok = state_ok && rp_file_contains("rp_object_query", "hits=8");
 	state_ok = state_ok && rp_file_contains("rp_lineage", "edges=7");
 	state_ok = state_ok && rp_file_contains("rp_site", "pages=6");
@@ -345,6 +354,8 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_input", "custom_run_2=usable-run:RUN-901");
 	state_ok = state_ok && rp_file_contains("rp_input", "custom_run_3=usable-run:RUN-902");
 	state_ok = state_ok && rp_file_contains("rp_input", "custom_dataset_rows=3");
+	state_ok = state_ok && rp_file_contains("rp_input", "form_fields=8");
+	state_ok = state_ok && rp_file_contains("rp_input", "csv_rows_total=9");
 	state_ok = state_ok && rp_file_contains("rp_runner", "custom_source=rp_input");
 	state_ok = state_ok && rp_file_contains("rp_runner", "custom_runs=3");
 	state_ok = state_ok && rp_file_contains("rp_runner", "custom_status=ok");
@@ -376,6 +387,8 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_api_run", "runner_exec_files=5");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "custom_research=rp_runner");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "custom_research_runs=3");
+	state_ok = state_ok && rp_file_contains("rp_api_run", "request_form=rp_input");
+	state_ok = state_ok && rp_file_contains("rp_api_run", "delivery_manifest=rp_package");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "timeline_rows=5");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "dependency_checks=5");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "manifest_support_entries=2");
@@ -385,6 +398,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_api_compare", "workflow_runner_files=5");
 	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "manifest_records=4");
 	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "evidence_package=rp_package");
+	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "export_bundle=rp_package");
 	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "preview_files=rp_report_text,rp_chart_data,rp_artifact");
 	state_ok = state_ok && rp_file_contains("rp_api_data", "dataset_snapshots=2");
 	state_ok = state_ok && rp_file_contains("rp_api_bio", "sample_registry=rp_sreg");
@@ -398,6 +412,8 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "render_sections=7");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "artifact_previews=3");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "runner_detail_fields=16");
+	state_ok = state_ok && rp_file_contains("rp_web_bundle", "delivery_manifest=rp_package");
+	state_ok = state_ok && rp_file_contains("rp_web_bundle", "export_bundle=rp_package");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "requests=5");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "responses=5");
@@ -408,10 +424,12 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_uresrun", "runs=3");
 	state_ok = state_ok && rp_file_contains("rp_uresrun", "run_id_2=usable-run:RUN-901");
 	state_ok = state_ok && rp_file_contains("rp_uresrun", "source_run=rp_runner");
+	state_ok = state_ok && rp_file_contains("rp_uresrun", "source_form=rp_input");
+	state_ok = state_ok && rp_file_contains("rp_uresrun", "export_bundle=rp_package");
 	state_ok = state_ok && rp_file_contains("rp_uresrun", "dataset_rows_total=9");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "Comparison Metrics");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "passed_cases=3");
-	state_ok = state_ok && rp_file_contains("rp_tests", "tests=188");
+	state_ok = state_ok && rp_file_contains("rp_tests", "tests=221");
 	state_ok = state_ok && rp_file_contains("rp_tests", "status=passed");
 	state_ok = state_ok && rp_file_contains("rp_litrev", "papers=9");
 	state_ok = state_ok && rp_file_contains("rp_citegraph", "bibtex_entries=9");

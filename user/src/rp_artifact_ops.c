@@ -34,6 +34,8 @@ int main(void)
 			   "custom_row_3=S6,control,30\n"
 			   "custom_row_3=S7,treatment,28\n"
 			   "custom_outputs=stage_dag,analysis,report,review,export\n"
+			   "request_form=form_fields=8;request_count=3;source_mode=pasted_or_uploaded;provider_options=template,host-relay;delivery_audience=reviewer;reviewer=Wang\n"
+			   "upload_files=uploads=2;csv_rows_total=9;reference_entries=2;dataset_target=rp_input\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -126,6 +128,8 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_report;target=rp_report_text;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_chart;target=rp_chart_data;status=ok")) return 1;
 	if (!rp_append_status("input=ready")) return 1;
+	if (!rp_append_status("request_form=ready")) return 1;
+	if (!rp_append_status("upload_files=ready")) return 1;
 	if (!rp_append_status("runner=ready")) return 1;
 	if (!rp_append_status("stage_dag=ready")) return 1;
 	if (!rp_append_status("artifact_ops=ready")) return 1;

@@ -41,6 +41,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_configval", "validations=2");
 	ok = ok && rp_file_contains("rp_invocation", "status=recovered");
 	ok = ok && rp_file_contains("rp_completion", "actions=4");
+	ok = ok && rp_file_contains("rp_input", "form_fields=8");
+	ok = ok && rp_file_contains("rp_input", "csv_rows_total=9");
 	ok = ok && rp_file_contains("rp_runner", "status=ready");
 	ok = ok && rp_file_contains("rp_stage_dag", "status=ready");
 	ok = ok && rp_file_contains("rp_stage_log", "status=ready");
@@ -84,6 +86,15 @@ int main(void)
 			   "custom_sources=rp_input,rp_runner,rp_uresrun\n"
 			   "download_index=report_bundle,evidence_bundle,provenance_bundle\n"
 			   "package_reader=host_web_bundle\n"
+			   "request_form=rp_input\n"
+			   "upload_files=rp_input\n"
+			   "delivery_manifest=rp_package\n"
+			   "export_bundle=rp_package\n"
+			   "review_page=rp_package\n"
+			   "raw_downloads=5\n"
+			   "delivery_manifest_detail=deliverables=8;audience=reviewer;bundle=rp_package\n"
+			   "export_bundle_detail=bundle_units=3;raw_links=5;checksums=6;provenance_source=rp_provpath;delivery_manifest=rp_package\n"
+			   "review_page_detail=page=research-run;artifact_links=6;decision_controls=2;export_bundle=rp_package\n"
 			   "real_inputs=1\n"
 			   "data_pipeline=1\n"
 			   "stage_logs=1\n"
@@ -144,6 +155,9 @@ int main(void)
 	if (!rp_append_status("datarel=ready")) return 1;
 	if (!rp_append_status("dataver=ready")) return 1;
 	if (!rp_append_status("repro=ready")) return 1;
+	if (!rp_append_status("delivery_manifest=ready")) return 1;
+	if (!rp_append_status("export_bundle=ready")) return 1;
+	if (!rp_append_status("review_page=ready")) return 1;
 	printf("rp_package: artifacts=48 checks=69 fair=passed repro=ready status=ready\n");
 	return 0;
 }

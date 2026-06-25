@@ -21,6 +21,11 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentcmp", "status=ready");
 	ok = ok && rp_file_contains("rp_package", "package_manifest=ready");
 	ok = ok && rp_file_contains("rp_package", "downloadable_units=3");
+	ok = ok && rp_file_contains("rp_input", "form_fields=8");
+	ok = ok && rp_file_contains("rp_input", "csv_rows_total=9");
+	ok = ok && rp_file_contains("rp_package", "deliverables=8");
+	ok = ok && rp_file_contains("rp_package", "raw_links=5");
+	ok = ok && rp_file_contains("rp_package", "artifact_links=6");
 	ok = ok && rp_file_contains("rp_dataset_collection", "items=4");
 	ok = ok && rp_file_contains("rp_input", "custom_run=usable-run:RUN-900");
 	ok = ok && rp_file_contains("rp_input", "custom_requests=3");
@@ -65,6 +70,8 @@ int main(void)
 			   "run_id=RUN-042\n"
 			   "custom_run=usable-run:RUN-900\n"
 			   "custom_runs=3\n"
+			   "research_form=rp_input\n"
+			   "upload_files=rp_input\n"
 			   "nav_items=12\n"
 			   "primary_cards=12\n"
 			   "cards=run,custom_research,agents,evidence,data,llm_relay,compare\n"
@@ -75,8 +82,9 @@ int main(void)
 	if (!rp_write_file("rp_api_run",
 			   "api=run-detail\n"
 			   "run_id=RUN-042\n"
-			   "custom_research=rp_runner\n"
-			   "custom_research_runs=3\n"
+			   "custom_research=rp_runner;custom_research_runs=3\n"
+			   "request_form=rp_input;upload_files=rp_input\n"
+			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
 			   "workflow=lab-gene-x\n"
 			   "stages=5\n"
 			   "failed_stage=align\n"
@@ -143,8 +151,9 @@ int main(void)
 			   "manifest_records=4\n"
 			   "preview_files=rp_report_text,rp_chart_data,rp_artifact\n"
 			   "package_manifest=ready\n"
-			   "evidence_package=rp_package\n"
-			   "download_index=rp_package\n"
+			   "evidence_package=rp_package;download_index=rp_package\n"
+			   "delivery_manifest=rp_package;export_bundle=rp_package;review_page=rp_package\n"
+			   "raw_downloads=5;upload_files=rp_input\n"
 			   "bundle_items=18\n"
 			   "downloadable_units=3\n"
 			   "report=rp_report_text\n"
@@ -228,6 +237,8 @@ int main(void)
 			   "agentcompare_run=/actions/agentcompare/run\n"
 			   "research_run=/actions/research/run\n"
 			   "research_export=/actions/research/export\n"
+			   "delivery_manifest_builder=1\n"
+			   "export_bundle=rp_package\n"
 			   "redirect_status=303\n"
 			   "status=ready\n")) {
 		return 1;
@@ -244,7 +255,7 @@ int main(void)
 			   "response=2;status=303;location=/runs/RUN-042;effect=host_workflow_export\n"
 			   "response=3;status=303;location=/compare;effect=agentcompare_run\n"
 			   "response=4;status=303;location=/research/usable-run:RUN-900;effect=usable_research_run;generated_runs=3\n"
-			   "response=5;status=303;location=/research/usable-run:RUN-900;effect=usable_research_export\n"
+			   "response=5;status=303;location=/research/usable-run:RUN-900;effect=usable_research_export;delivery_manifest=rp_package;export_bundle=rp_package\n"
 			   "actions=5\n"
 			   "completed=5\n"
 			   "failed=0\n"
@@ -264,9 +275,8 @@ int main(void)
 			   "run_id=usable-run:RUN-900\n"
 			   "run_id_2=usable-run:RUN-901\n"
 			   "run_id_3=usable-run:RUN-902\n"
-			   "source_request=rp_input\n"
-			   "source_dataset=rp_input\n"
-			   "source_run=rp_runner\n"
+			   "source_request=rp_input;source_form=rp_input;upload_files=rp_input\n"
+			   "source_dataset=rp_input;source_run=rp_runner\n"
 			   "title=Browser started study\n"
 			   "title_2=Second browser study\n"
 			   "title_3=Contrasting browser study\n"
@@ -281,7 +291,8 @@ int main(void)
 			   "analysis=mean_control:12,mean_treatment:20,stronger:treatment\n"
 			   "analysis_2=mean_control:8,mean_treatment:13,stronger:treatment\n"
 			   "analysis_3=mean_control:30,mean_treatment:28,stronger:control\n"
-			   "export=review_html\n"
+			   "export=review_html;review_page=rp_package\n"
+			   "delivery_manifest=rp_package;export_bundle=rp_package;raw_downloads=5\n"
 			   "export_sections=6\n"
 			   "contains=Stage DAG,Agent Decisions,Artifacts,LLM Relay\n"
 			   "status=ok\n")) {
@@ -297,6 +308,8 @@ int main(void)
 			   "source_pages=5\n"
 			   "render_sections=7\n"
 			   "artifact_previews=3\n"
+			   "request_form=rp_input;upload_files=rp_input\n"
+			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
 			   "runner_detail_fields=16\n"
 			   "evidence_package=rp_package\n"
 			   "package_manifest=ready\n"

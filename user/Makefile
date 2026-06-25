@@ -36,7 +36,8 @@ CH5_BASE_TESTS := ch5b_ $(CH3_BASE_TESTS) usershell
 CH6_BASE_TESTS := ch6b_ $(CH5_BASE_TESTS)
 CH7_BASE_TESTS := ch7b_ $(CH6_BASE_TESTS)
 CH8_BASE_TESTS := ch8b_ $(CH7_BASE_TESTS)
-PLATFORM_TESTS := usershell rp_plain rp_orch rp_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_agent_collab rp_package rp_delta rp_release rp_dossier rp_service_surface rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_test_suite rp_compare_plain
+PLATFORM_PLAIN_TESTS := usershell rp_plain
+PLATFORM_TESTS := usershell rp_orch rp_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_agent_collab rp_package rp_delta rp_release rp_dossier rp_service_surface rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_test_suite rp_compare_plain
 
 CH2_TESTS := $(CH2_BASE_TESTS)
 CH3_TESTS := $(CH3_BASE_TESTS) ch3_
@@ -89,6 +90,8 @@ else ifeq ($(CHAPTER), 8_only)
 CH_TESTS := ch8_
 else ifeq ($(CHAPTER), platform)
 CH_TESTS := $(PLATFORM_TESTS)
+else ifeq ($(CHAPTER), platform_plain)
+CH_TESTS := $(PLATFORM_PLAIN_TESTS)
 else
 CH_TESTS := $(PLATFORM_TESTS)
 endif
