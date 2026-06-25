@@ -119,6 +119,16 @@ int main(void)
 	ok = ok && require_file_token("rp_runner", "revision_status=completed");
 	ok = ok && require_file_token("rp_runner", "revision_run=usable-run:RUN-900-rev1");
 	ok = ok && require_file_token("rp_runner", "revision_delta=rp_revision");
+	ok = ok && require_file_token("rp_runner", "workbench=usable-workbench:RUN-900:plain-ucore");
+	ok = ok && require_file_token("rp_runner", "workbench_tasks=9");
+	ok = ok && require_file_token("rp_runner", "workbench_export=usable-workbench-export:RUN-900:1");
+	ok = ok && require_file_token("rp_runner", "workbench_task_done=8");
+	ok = ok && require_file_token("rp_runner", "workbench_next_task=delivery_manifest");
+	ok = ok && require_file_token("rp_runner", "workbench_task=inspect_workspace;status=done");
+	ok = ok && require_file_token("rp_runner", "workbench_task=delivery_manifest;status=waiting");
+	ok = ok && require_file_token("rp_runner", "workspace_inspection=usable-workspace-inspection:RUN-900:1");
+	ok = ok && require_file_token("rp_runner", "workspace_import=usable-workspace-import:RUN-900:1");
+	ok = ok && require_file_token("rp_runner", "workspace_file=metadata.tsv;kind=metadata;rows=3");
 	ok = ok && require_file_token("rp_ingest_files", "files=2");
 	ok = ok && require_file_token("rp_ingest_files", "derived_items=5");
 	ok = ok && require_file_token("rp_dataset_snapshot", "snapshots=2");
@@ -220,7 +230,7 @@ int main(void)
 	ok = ok && require_file_token("rp_runconf", "profiles=2");
 	ok = ok && require_file_token("rp_invocation", "status=recovered");
 	ok = ok && require_file_token("rp_completion", "actions=4");
-	ok = ok && require_file_token("rp_package", "artifacts=48");
+	ok = ok && require_file_token("rp_package", "artifacts=52");
 	ok = ok && require_file_token("rp_package", "package_manifest=ready");
 	ok = ok && require_file_token("rp_package", "bundle_items=18");
 	ok = ok && require_file_token("rp_package", "downloadable_units=3");
@@ -229,6 +239,9 @@ int main(void)
 	ok = ok && require_file_token("rp_package", "review_bundle=ready");
 	ok = ok && require_file_token("rp_package", "provenance_bundle=ready");
 	ok = ok && require_file_token("rp_package", "custom_sources=rp_input,rp_runner,rp_uresrun");
+	ok = ok && require_file_token("rp_package", "workbench=rp_runner");
+	ok = ok && require_file_token("rp_package", "workbench_tasks=9");
+	ok = ok && require_file_token("rp_package", "workbench_export=rp_runner");
 	ok = ok && require_file_token("rp_package", "download_index=report_bundle,evidence_bundle,provenance_bundle");
 	ok = ok && require_file_token("rp_package", "request_form=rp_input");
 	ok = ok && require_file_token("rp_package", "upload_files=rp_input");
@@ -307,7 +320,7 @@ int main(void)
 	ok = ok && require_file_token("rp_dossier", "sections=36");
 
 	ok = ok && require_file_token("rp_agentcmp", "context_trusted=0");
-	ok = ok && require_file_token("rp_agentcmp", "message_acks=33");
+	ok = ok && require_file_token("rp_agentcmp", "message_acks=34");
 	ok = ok && require_file_token("rp_agentcmp", "tool_events=115");
 	ok = ok && require_file_token("rp_agentcmp", "agent_roles=7");
 	ok = ok && require_file_token("rp_agentcmp", "relay_protocol_files=5");
@@ -321,6 +334,8 @@ int main(void)
 	ok = ok && require_file_token("rp_backend", "cases=4");
 	ok = ok && require_file_token("rp_consistency", "checks=101");
 	ok = ok && require_file_token("rp_consistency", "coherence_checks=9");
+	ok = ok && require_file_token("rp_consistency", "workbench_records=4");
+	ok = ok && require_file_token("rp_consistency", "workbench_tasks=9");
 	ok = ok && require_file_token("rp_consistency", "namespace_checks=12");
 	ok = ok && require_file_token("rp_consistency", "surface_checks=13");
 	ok = ok && require_file_token("rp_consistency", "status_semantics=11");
@@ -383,6 +398,7 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_run", "delivery_checks=3");
 	ok = ok && require_file_token("rp_ui_run", "delivery_manifest_json=delivery-manifest.json");
 	ok = ok && require_file_token("rp_ui_run", "workspace_imports=1");
+	ok = ok && require_file_token("rp_ui_run", "workbench=rp_runner");
 	ok = ok && require_file_token("rp_ui_run", "evidence_protocols=1");
 	ok = ok && require_file_token("rp_ui_run", "evidence_bundle_zip=research-evidence-bundle.zip");
 	ok = ok && require_file_token("rp_ui_run", "llm_roundtrip=ready");
@@ -405,8 +421,9 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_compare", "metric_rows=8");
 	ok = ok && require_file_token("rp_ui_compare", "coherence_checks=9");
 	ok = ok && require_file_token("rp_ui_compare", "relay_protocol_files=5");
-	ok = ok && require_file_token("rp_web_routes", "routes=21");
-	ok = ok && require_file_token("rp_web_routes", "get_routes=13");
+	ok = ok && require_file_token("rp_web_routes", "routes=22");
+	ok = ok && require_file_token("rp_web_routes", "get_routes=14");
+	ok = ok && require_file_token("rp_web_routes", "route=/research/workbench/{id}");
 	ok = ok && require_file_token("rp_web_routes", "post_routes=8");
 	ok = ok && require_file_token("rp_web_routes", "action=/actions/research/review");
 	ok = ok && require_file_token("rp_web_routes", "action=/actions/research/revision-task");
@@ -425,6 +442,7 @@ int main(void)
 	ok = ok && require_file_token("rp_api_run", "request_form=rp_input");
 	ok = ok && require_file_token("rp_api_run", "upload_files=rp_input");
 	ok = ok && require_file_token("rp_api_run", "workspace_imports=1");
+	ok = ok && require_file_token("rp_api_run", "workbench=rp_runner");
 	ok = ok && require_file_token("rp_api_run", "bibliography=rp_runner");
 	ok = ok && require_file_token("rp_api_run", "evidence_protocols=1");
 	ok = ok && require_file_token("rp_api_run", "citation_plan=rp_runner");
@@ -506,6 +524,8 @@ int main(void)
 	ok = ok && require_file_token("rp_uresrun", "revision_status=completed");
 	ok = ok && require_file_token("rp_uresrun", "source_run=rp_runner");
 	ok = ok && require_file_token("rp_uresrun", "source_form=rp_input");
+	ok = ok && require_file_token("rp_uresrun", "workbench=rp_runner");
+	ok = ok && require_file_token("rp_uresrun", "workbench_export=rp_runner");
 	ok = ok && require_file_token("rp_uresrun", "upload_files=rp_input");
 	ok = ok && require_file_token("rp_uresrun", "library_sources=rp_knowledge");
 	ok = ok && require_file_token("rp_uresrun", "delivery_manifest=rp_package");
@@ -524,6 +544,9 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "request_form=rp_input");
 	ok = ok && require_file_token("rp_web_bundle", "upload_files=rp_input");
 	ok = ok && require_file_token("rp_web_bundle", "workspace_imports=1");
+	ok = ok && require_file_token("rp_web_bundle", "workbench=rp_runner");
+	ok = ok && require_file_token("rp_web_bundle", "workbench_tasks=9");
+	ok = ok && require_file_token("rp_web_bundle", "workbench_export=rp_runner");
 	ok = ok && require_file_token("rp_web_bundle", "library_sources=rp_knowledge");
 	ok = ok && require_file_token("rp_web_bundle", "evidence_protocols=1");
 	ok = ok && require_file_token("rp_web_bundle", "prisma_flows=1");
@@ -553,7 +576,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=474\n"
+			   "tests=492\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -564,6 +587,7 @@ int main(void)
 			   "api_actions=passed\n"
 			   "custom_research=passed\n"
 			   "research_input=passed\n"
+			   "workbench=passed\n"
 			   "workspace_import=passed\n"
 			   "literature_protocol=passed\n"
 			   "workflow_portability=passed\n"
@@ -598,6 +622,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=474 catalog=passed data=passed services=passed actions=passed custom=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=492 catalog=passed data=passed services=passed actions=passed custom=passed workbench=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }

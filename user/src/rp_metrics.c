@@ -51,6 +51,7 @@ int main(void)
 	if (!rp_file_contains("rp_invocation", "steps=10")) return 1;
 	if (!rp_file_contains("rp_completion", "actions=4")) return 1;
 	if (!rp_file_contains("rp_runner", "stages=5")) return 1;
+	if (!rp_file_contains("rp_runner", "workbench_tasks=9")) return 1;
 	if (!rp_file_contains("rp_stage_state", "stages=5")) return 1;
 	if (!rp_file_contains("rp_cache_index", "cache_hits=1")) return 1;
 	if (!rp_file_contains("rp_retry_plan", "retry_items=1")) return 1;
@@ -84,7 +85,7 @@ int main(void)
 			   "run_id=RUN-042\n"
 			   "trace_spans=8\n"
 			   "bottlenecks=1\n"
-			   "message_acks=33\n"
+			   "message_acks=34\n"
 			   "tool_events=115\n"
 			   "scheduler_items=21\n"
 			   "ranked_tasks=21\n"
@@ -119,6 +120,8 @@ int main(void)
 			   "workflow_runner_files=5\n"
 			   "workflow_events=8\n"
 			   "workflow_manifest_records=4\n"
+			   "workbench_records=4\n"
+			   "workbench_tasks=9\n"
 			   "artifact_records=2\n"
 			   "data_pipeline_files=6\n"
 			   "dataset_snapshots=2\n"
@@ -198,7 +201,7 @@ int main(void)
 			   "report_ok=1\n"
 			   "repro_ok=1\n"
 			   "llm_guarded=1\n"
-			   "message_acks=33\n"
+			   "message_acks=34\n"
 			   "tool_events=115\n"
 			   "scheduler_items=21\n"
 			   "ranked_tasks=21\n"
@@ -233,6 +236,8 @@ int main(void)
 			   "workflow_runner_files=5\n"
 			   "workflow_events=8\n"
 			   "workflow_manifest_records=4\n"
+			   "workbench_records=4\n"
+			   "workbench_tasks=9\n"
 			   "artifact_records=2\n"
 			   "data_pipeline_files=6\n"
 			   "dataset_snapshots=2\n"
@@ -293,6 +298,6 @@ int main(void)
 	if (!rp_append_status("telemetry=ready")) return 1;
 	if (!rp_append_status("agentcmp=ready")) return 1;
 	if (!rp_append_status("health=ready")) return 1;
-	printf("rp_metrics: telemetry_spans=8 acks=33 tools=115 services=25 delta_items=20 status=ready\n");
+	printf("rp_metrics: telemetry_spans=8 acks=34 tools=115 services=25 delta_items=20 status=ready\n");
 	return 0;
 }

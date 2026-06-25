@@ -15,6 +15,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_backend_exec", "status=ready");
 	ok = ok && rp_file_contains("rp_mail", "to=backend");
 	ok = ok && rp_file_contains("rp_runner", "status=ready");
+	ok = ok && rp_file_contains("rp_runner", "workbench_tasks=9");
+	ok = ok && rp_file_contains("rp_runner", "workbench_export=usable-workbench-export:RUN-900:1");
 	ok = ok && rp_file_contains("rp_stage_dag", "status=ready");
 	ok = ok && rp_file_contains("rp_stage_log", "status=ready");
 	ok = ok && rp_file_contains("rp_artifact", "status=recovered");
@@ -154,6 +156,8 @@ int main(void)
 	int runner_stages = rp_get_int_value("rp_runner", "stages=");
 	int runner_retries = rp_get_int_value("rp_runner", "retries=");
 	int runner_cache_hits = rp_get_int_value("rp_runner", "cache_hits=");
+	int workbench_tasks = rp_get_int_value("rp_runner", "workbench_tasks=");
+	int workbench_done = rp_get_int_value("rp_runner", "workbench_task_done=");
 	int dag_edges = rp_get_int_value("rp_stage_dag", "edges=");
 	int log_lines = rp_get_int_value("rp_stage_log", "lines=");
 	int artifact_records = rp_get_int_value("rp_artifact", "records=");
@@ -176,6 +180,8 @@ int main(void)
 	ok = ok && require_equal("runner_stages", runner_stages, 5);
 	ok = ok && require_equal("runner_retries", runner_retries, 1);
 	ok = ok && require_equal("runner_cache_hits", runner_cache_hits, 1);
+	ok = ok && require_equal("workbench_tasks", workbench_tasks, 9);
+	ok = ok && require_equal("workbench_done", workbench_done, 8);
 	ok = ok && require_equal("dag_edges", dag_edges, runner_stages - 1);
 	ok = ok && require_equal("stage_log_lines", log_lines, runner_stages);
 	ok = ok && require_equal("artifact_records", artifact_records, 2);
@@ -280,6 +286,9 @@ int main(void)
 			   "runner_stages=5\n"
 			   "runner_retries=1\n"
 			   "runner_cache_hits=1\n"
+			   "workbench_records=4\n"
+			   "workbench_tasks=9\n"
+			   "workbench_done=8\n"
 			   "artifact_records=2\n"
 			   "workflow_runner_files=5\n"
 			   "workflow_events=8\n"

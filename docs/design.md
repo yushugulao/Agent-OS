@@ -13,7 +13,7 @@ The current runtime has four parts:
 1. Upstream uCore kernel.
 2. Restored uCore user library and program build flow.
 3. `rp_plain`, a native user process that carries the research platform catalog, feature groups, mature platform mappings, and self-check logic.
-4. `rp_orch`, a native user process that runs forty platform programs through ordinary `fork`, `exec`, and `waitpid`.
+4. `rp_orch`, a native user process that runs forty-one platform programs through ordinary `fork`, `exec`, and `waitpid`.
 
 The user process deliberately uses ordinary C data structures and ordinary uCore process execution. This makes the result a baseline for later comparison with the Agent-OS kernel-enhanced version.
 
@@ -74,6 +74,7 @@ The platform programs add an executable multi-process shape:
 - `rp_artifact_ops`
 - `rp_data_pipeline`
 - `rp_workflow_runner`
+- `rp_workbench`
 - `rp_agent_collab`
 - `rp_package`
 - `rp_delta`
@@ -183,7 +184,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_artifact` | artifact operations | package, consistency, compare, orchestrator | recovered align-stage artifact tied to the concrete input, including normalized FASTQ, alignment table, metrics JSON, gene-count CSV, and archive-manifest sections |
 | `rp_report_text` | artifact operations | package, compare, UI export | report text generated from the recovered run |
 | `rp_chart_data` | artifact operations | package, compare, UI export | chart-ready stage attempt data for the host UI |
-| `rp_runner` | artifact operations | consistency, compare, orchestrator | plain uCore stage runner summary with retries and cache hits |
+| `rp_runner` | artifact operations, workflow runner, workbench | consistency, compare, orchestrator | plain uCore stage runner summary with retries and cache hits, plus compact research workbench task state, workspace inspection/import references, generated template/run references, human review state, delivery-manifest task state, and workbench export reference |
 | `rp_ingest_files` | data pipeline | package, consistency, metrics, UI export, compare, orchestrator | concrete input-file scan result for RUN-042 |
 | `rp_dataset_snapshot` | data pipeline | package, consistency, metrics, UI export, compare, orchestrator | raw and normalized dataset snapshot summary |
 | `rp_data_preview` | data pipeline | package, consistency, metrics, UI export, compare, orchestrator | preview rows and columns for FASTQ and sample records |
@@ -246,9 +247,9 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_ui_agent` | UI export | compare, orchestrator | Agent-detail page data for role messages, decisions, and decision rows |
 | `rp_ui_evidence` | UI export | compare, orchestrator | evidence-detail page data with stage log, recovered artifact links, and preview files |
 | `rp_ui_compare` | UI export | compare, orchestrator | comparison page data for plain-kernel pain points and metric rows |
-| `rp_web_routes` | Host Web/API export | test suite, compare, orchestrator | route manifest for thirteen host-rendered GET views and eight POST action entries |
+| `rp_web_routes` | Host Web/API export | test suite, compare, orchestrator | route manifest for fourteen host-rendered GET views and eight POST action entries |
 | `rp_api_home` | Host Web/API export | test suite, compare, orchestrator | API payload for the host web home page |
-| `rp_api_run` | Host Web/API export | test suite, compare, orchestrator | API payload for RUN-042 run detail with runner execution files, request form, uploaded files, workspace-import reference, reusable source selection, bibliography, citation plan, evidence protocol summary, delivery manifest details, evidence bundle link, review page, human review records, revision-task records, revision-delta reference, and custom research run reference |
+| `rp_api_run` | Host Web/API export | test suite, compare, orchestrator | API payload for RUN-042 run detail with runner execution files, request form, uploaded files, workbench state, workspace-import reference, reusable source selection, bibliography, citation plan, evidence protocol summary, delivery manifest details, evidence bundle link, review page, human review records, revision-task records, revision-delta reference, and custom research run reference |
 | `rp_api_agents` | Host Web/API export | test suite, compare, orchestrator | API payload for role messages, decisions, and handoffs |
 | `rp_api_evidence` | Host Web/API export | test suite, compare, orchestrator | API payload for claims, provenance paths, literature search, screening decisions, evidence protocol, PRISMA-style flow, synthesis, stage log, artifact, manifest, and LLM guard |
 | `rp_api_compare` | Host Web/API export | test suite, compare, orchestrator | API payload for plain-kernel comparison signals |
@@ -261,9 +262,9 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_api_runtime` | Host Web/API export | test suite, compare, orchestrator | API payload for runtime environment, notebook replay, ELN, and worker pool files |
 | `rp_api_action` | Host Web/API export | test suite, compare, orchestrator | action contract for host workflow run, host workflow export, AgentCompare run, custom research run, reusable source lookup, custom research export, human review, revision-task creation, and revised-run execution |
 | `rp_actionio` | Host Web/API export | test suite, compare, orchestrator | compact request, response, redirect, host export, human-review, revision-task, applied-change, revised-run, and AgentCompare action record |
-| `rp_uresrun` | Host Web/API export | test suite, compare, orchestrator | usable research run, revised-run, and export result record derived from the request form, uploaded files, compact dataset, and runner output |
-| `rp_web_bundle` | Host Web/API export | test suite, compare, orchestrator | bundle summary tying routes, API payloads, POST action payloads, static review site records, UI pages, UI render sections, artifact preview entries, workspace-import records, reusable source selection, evidence protocol records, delivery file rows, delivery checks, evidence bundle entries, review page, package export indexes, revision-delta reference, runner files, custom research fields, research service files, and relay files together |
-| `rp_tests` | test suite | compare, orchestrator | 474 user-space checks over catalog, data pipeline, service surface records, workflow, workflow portability records, migration plans, rehearsal cases, object naming, surface reachability, status semantics, references, evidence trace, run-state explanation, lifecycle order, delivery consistency, AgentOS readiness, static review site records, derived FASTQ/alignment/metrics/count/archive files, artifacts, package export indexes, delivery file rows, delivery checks, delivery manifest names, evidence bundle contents, review page, human review records, requested-change records, applied revision changes, revision-task records, review thread records, review comment records, action item records, UI render data, workflow runner files, workflow runner detail fields, custom research fields, workspace-import records, reusable source selection, bibliography, citation plan, literature search, screening decisions, evidence extraction, evidence protocol, PRISMA-style flow, Agent collaboration, UI data, Host Web/API export files, POST action records, LLM relay request/packet/response matching, AgentCompare, and consistency records |
+| `rp_uresrun` | Host Web/API export | test suite, compare, orchestrator | usable research run, revised-run, workbench reference, and export result record derived from the request form, uploaded files, compact dataset, and runner output |
+| `rp_web_bundle` | Host Web/API export | test suite, compare, orchestrator | bundle summary tying routes, API payloads, POST action payloads, static review site records, UI pages, UI render sections, artifact preview entries, workbench state, workspace-import records, reusable source selection, evidence protocol records, delivery file rows, delivery checks, evidence bundle entries, review page, package export indexes, revision-delta reference, runner files, custom research fields, research service files, and relay files together |
+| `rp_tests` | test suite | compare, orchestrator | 492 user-space checks over catalog, data pipeline, service surface records, workflow, workflow portability records, migration plans, rehearsal cases, object naming, surface reachability, status semantics, references, evidence trace, run-state explanation, lifecycle order, delivery consistency, AgentOS readiness, static review site records, derived FASTQ/alignment/metrics/count/archive files, artifacts, package export indexes, delivery file rows, delivery checks, delivery manifest names, evidence bundle contents, review page, human review records, requested-change records, applied revision changes, revision-task records, review thread records, review comment records, action item records, UI render data, workflow runner files, workflow runner detail fields, custom research fields, workbench task state, workspace-import records, reusable source selection, bibliography, citation plan, literature search, screening decisions, evidence extraction, evidence protocol, PRISMA-style flow, Agent collaboration, UI data, Host Web/API export files, POST action records, LLM relay request/packet/response matching, AgentCompare, and consistency records |
 | `rp_compare` | compare | orchestrator | plain-kernel execution summary |
 
 This is intentionally implemented without new syscalls. It uses only `open`, `read`, `write`, `close`, `fork`, `exec`, and `waitpid`.

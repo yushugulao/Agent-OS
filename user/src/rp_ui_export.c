@@ -30,6 +30,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_input", "uploads=2");
 	ok = ok && rp_file_contains("rp_input", "workspace_import=workspace:RUN-900:folder");
 	ok = ok && rp_file_contains("rp_input", "library_sources=1");
+	ok = ok && rp_file_contains("rp_runner", "workbench_tasks=9");
+	ok = ok && rp_file_contains("rp_runner", "workbench_export=usable-workbench-export:RUN-900:1");
 	ok = ok && rp_file_contains("rp_runner", "library_source_count=1");
 	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
 	ok = ok && rp_file_contains("rp_knowledge", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
@@ -73,6 +75,7 @@ int main(void)
 			   "cards=run,custom_research,agents,evidence,data,bio,lab,publication,knowledge,runtime,llm_relay,compare\n"
 			   "research_form=rp_input\n"
 			   "upload_files=rp_input\n"
+			   "workbench=rp_runner\n"
 			   "library_sources=rp_knowledge\n"
 			   "nav_items=12\n"
 			   "primary_cards=12\n"
@@ -106,6 +109,9 @@ int main(void)
 			   "request_form=rp_input\n"
 			   "upload_files=rp_input\n"
 			   "workspace_imports=1\n"
+			   "workbench=rp_runner\n"
+			   "workbench_tasks=9\n"
+			   "workbench_export=rp_runner\n"
 			   "library_sources=rp_knowledge\n"
 			   "evidence_protocols=1\n"
 			   "evidence_extractions=3\n"
@@ -203,7 +209,7 @@ int main(void)
 			   "publication_service_files=5\n"
 			   "knowledge_service_files=5\n"
 			   "runtime_service_files=5\n"
-			   "message_acks=33\n"
+			   "message_acks=34\n"
 			   "tool_events=115\n"
 			   "status=ready\n")) {
 		return 1;

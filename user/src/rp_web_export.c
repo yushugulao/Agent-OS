@@ -32,6 +32,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_input", "csv_rows_total=9");
 	ok = ok && rp_file_contains("rp_input", "library_sources=1");
 	ok = ok && rp_file_contains("rp_input", "workspace_import=workspace:RUN-900:folder");
+	ok = ok && rp_file_contains("rp_runner", "workbench=usable-workbench:RUN-900:plain-ucore");
+	ok = ok && rp_file_contains("rp_runner", "workbench_tasks=9");
 	ok = ok && rp_file_contains("rp_runner", "citation_plan_entries=3");
 	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
 	ok = ok && rp_file_contains("rp_knowledge", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
@@ -63,12 +65,13 @@ int main(void)
 
 	if (!rp_write_file("rp_web_routes",
 			   "service=host-web-ui\n"
-			   "routes=21\n"
-			   "get_routes=13\n"
+			   "routes=22\n"
+			   "get_routes=14\n"
 			   "post_routes=8\n"
 			   "route=/;payload=rp_api_home;status=ready\n"
 			   "route=/run/RUN-042;payload=rp_api_run;status=ready\n"
 			   "route=/research/{run_id};payload=rp_uresrun;status=ready\n"
+			   "route=/research/workbench/{id};payload=rp_runner;status=ready\n"
 			   "route=/agents;payload=rp_api_agents;status=ready\n"
 			   "route=/evidence;payload=rp_api_evidence;status=ready\n"
 			   "route=/compare;payload=rp_api_compare;status=ready\n"
@@ -98,6 +101,7 @@ int main(void)
 			   "custom_runs=3\n"
 			   "research_form=rp_input\n"
 			   "upload_files=rp_input\n"
+			   "workbench=rp_runner\n"
 			   "library_sources=rp_knowledge\n"
 			   "nav_items=12\n"
 			   "primary_cards=12\n"
@@ -113,6 +117,7 @@ int main(void)
 			   "run_id=RUN-042\n"
 			   "custom_research=rp_runner;custom_research_runs=3\n"
 			   "request_form=rp_input;upload_files=rp_input;workspace_imports=1\n"
+			   "workbench=rp_runner;workbench_tasks=9;workbench_export=rp_runner\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner;evidence_protocols=1;evidence_extractions=3\n"
 			   "workflow_portability=rp_wfio;adapter_specs=6;migration_steps=9;rehearsal_cases=4\n"
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
@@ -361,6 +366,7 @@ int main(void)
 			   "revision_task_id=usable-revision-task:RUN-900:1\n"
 			   "revision_status=completed\n"
 			   "source_request=rp_input;source_form=rp_input;upload_files=rp_input\n"
+			   "workbench=rp_runner;workbench_export=rp_runner\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner\n"
 			   "source_dataset=rp_input;source_run=rp_runner\n"
 			   "title=Browser started study\n"
@@ -386,8 +392,8 @@ int main(void)
 	}
 	if (!rp_write_file("rp_web_bundle",
 			   "bundle=host-web-ui\n"
-			   "routes=21\n"
-			   "get_routes=13\n"
+			   "routes=22\n"
+			   "get_routes=14\n"
 			   "post_routes=8\n"
 			   "api_payloads=14\n"
 			   "action_payloads=1\n"
@@ -396,6 +402,7 @@ int main(void)
 			   "artifact_previews=3\n"
 			   "real_artifact_items=5\n"
 			   "request_form=rp_input;upload_files=rp_input;workspace_imports=1\n"
+			   "workbench=rp_runner;workbench_tasks=9;workbench_export=rp_runner\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner;evidence_protocols=1;evidence_extractions=3\n"
 			   "workflow_portability=rp_wfio;adapter_specs=6;migration_steps=9;rehearsal_cases=4\n"
 			   "coherence_checks=9;namespace_checks=12;surface_checks=13;agentos_readiness_checks=7\n"
@@ -459,6 +466,6 @@ int main(void)
 	if (!rp_append_status("actionio=ready")) return 1;
 	if (!rp_append_status("usable_research=ready")) return 1;
 	if (!rp_append_status("action_exports=ready")) return 1;
-	printf("rp_web_export: routes=21 api_payloads=14 actions=8 bundle=ready status=ready\n");
+	printf("rp_web_export: routes=22 api_payloads=14 actions=8 bundle=ready status=ready\n");
 	return 0;
 }

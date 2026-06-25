@@ -47,6 +47,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_input", "csv_rows_total=9");
 	ok = ok && rp_file_contains("rp_input", "workspace_import=workspace:RUN-900:folder");
 	ok = ok && rp_file_contains("rp_input", "library_sources=1");
+	ok = ok && rp_file_contains("rp_runner", "workbench=usable-workbench:RUN-900:plain-ucore");
+	ok = ok && rp_file_contains("rp_runner", "workbench_tasks=9");
+	ok = ok && rp_file_contains("rp_runner", "workspace_inspection=usable-workspace-inspection:RUN-900:1");
+	ok = ok && rp_file_contains("rp_runner", "workbench_export=usable-workbench-export:RUN-900:1");
 	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
 	ok = ok && rp_file_contains("rp_knowledge", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
 	ok = ok && rp_file_contains("rp_wfio", "decision=ready_for_agentos");
@@ -88,8 +92,8 @@ int main(void)
 	if (!ok) return 1;
 	if (!rp_write_file("rp_package",
 			   "package=research-evidence-package\n"
-			   "artifacts=48\n"
-			   "checks=69\n"
+			   "artifacts=52\n"
+			   "checks=75\n"
 			   "package_manifest=ready\n"
 			   "bundle_items=18\n"
 			   "downloadable_units=3\n"
@@ -106,6 +110,10 @@ int main(void)
 			   "review_action_source=rp_review2\n"
 			   "provenance_sources=rp_evidence,rp_claimrec,rp_provpath,rp_lineage,rp_repro,rp_audit\n"
 			   "custom_sources=rp_input,rp_runner,rp_uresrun\n"
+			   "workbench=rp_runner\n"
+			   "workbench_tasks=9\n"
+			   "workbench_export=rp_runner\n"
+			   "workspace_inspection=rp_runner\n"
 			   "download_index=report_bundle,evidence_bundle,provenance_bundle\n"
 			   "package_reader=host_web_bundle\n"
 			   "static_site=rp_site\n"
@@ -246,6 +254,6 @@ int main(void)
 	if (!rp_append_status("review_page=ready")) return 1;
 	if (!rp_append_status("human_review=ready")) return 1;
 	if (!rp_append_status("revision_task_package=ready")) return 1;
-	printf("rp_package: artifacts=48 checks=69 fair=passed repro=ready status=ready\n");
+	printf("rp_package: artifacts=52 checks=75 fair=passed repro=ready status=ready\n");
 	return 0;
 }

@@ -44,6 +44,7 @@ user/src/rp_complete.c
 user/src/rp_artifact_ops.c
 user/src/rp_data_pipeline.c
 user/src/rp_workflow_runner.c
+user/src/rp_workbench.c
 user/src/rp_agent_collab.c
 user/src/rp_package.c
 user/src/rp_delta.c
@@ -70,7 +71,7 @@ user/src/rp_compare_plain.c
 - A plain user-space research run simulation with planning, literature, analysis, review, writing, repair, and audit roles.
 - Local catalog search for workflow, Agent, evidence, provenance, and LLM related platform objects.
 
-`rp_orch` runs forty platform programs as separate uCore user processes:
+`rp_orch` runs forty-one platform programs as separate uCore user processes:
 
 - catalog,
 - object store,
@@ -99,6 +100,7 @@ user/src/rp_compare_plain.c
 - real artifact operations,
 - data ingestion and dataset pipeline,
 - workflow runner execution evidence,
+- research workbench task state,
 - Agent collaboration evidence,
 - package,
 - release delta review,
@@ -326,7 +328,7 @@ rp_plain: passed
 Expected orchestrator output:
 
 ```text
-rp_orch: start programs=40
+rp_orch: start programs=41
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_object_store: records=8 status=ready
 rp_object_query: hits=8 ready_hits=7 status=ready
@@ -354,20 +356,21 @@ rp_complete: hooks=4 events=1 actions=4 status=ready
 rp_artifact_ops: inputs=2 stages=5 retries=1 artifacts=4 custom_requests=3 status=ready
 rp_data_pipeline: files=2 snapshots=2 previews=2 quality=passed transforms=2 status=ready
 rp_workflow_runner: stages=5 events=8 retries=1 cache_hits=1 custom_runs=3 status=ready
+rp_workbench: tasks=9 workspace_files=4 runs=4 exports=1 status=ready
 rp_agent_collab: agents=7 messages=21 decisions=8 handoffs=6 status=ready
-rp_package: artifacts=48 checks=69 fair=passed repro=ready status=ready
+rp_package: artifacts=52 checks=75 fair=passed repro=ready status=ready
 rp_delta: items=20 reviews=1 decision=accepted status=ready
 rp_release: decision=release checks=17 status=ready
 rp_dossier: sections=36 review_board=accepted submit=ready status=ready
 rp_service_surface: bio=ready lab_resources=ready publication=ready knowledge=ready runtime=ready status=ready
 rp_backend: cases=4 executable=2 exports=1 status=ready
 rp_consistency: checks=101 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 backend=4 artifacts=4 agents=7 status=ready
-rp_metrics: telemetry_spans=8 acks=33 tools=115 services=25 delta_items=20 status=ready
+rp_metrics: telemetry_spans=8 acks=34 tools=115 services=25 delta_items=20 status=ready
 rp_ui_export: pages=5 run=RUN-042 custom_runs=3 compare=ready status=ready
-rp_web_export: routes=21 api_payloads=14 actions=8 bundle=ready status=ready
-rp_test_suite: tests=474 catalog=passed data=passed services=passed actions=passed custom=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed
-rp_compare_plain: plain_kernel=passed objects=500 programs=40 state_files=169 acks=40 tools=144 status=ready
-rp_orch: programs_ok=40 programs_total=40
+rp_web_export: routes=22 api_payloads=14 actions=8 bundle=ready status=ready
+rp_test_suite: tests=492 catalog=passed data=passed services=passed actions=passed custom=passed workbench=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed
+rp_compare_plain: plain_kernel=passed objects=500 programs=41 state_files=169 acks=41 tools=144 status=ready
+rp_orch: programs_ok=41 programs_total=41
 rp_orch: state_ok=1
 rp_orch: passed
 ```

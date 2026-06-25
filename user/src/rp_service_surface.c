@@ -267,7 +267,7 @@ static int write_runtime_services(void)
 			     "op=eln_sign;signatures=2;status=ok\n"
 			     "op=worker_heartbeat;workers=4;status=ok\n"
 			     "op=host_llm_request;packets=3;status=ok\n"
-			     "op=object_account;artifacts=48;status=ok\n"
+			     "op=object_account;artifacts=52;status=ok\n"
 			     "op=secret_policy;secret_values=0;status=ok\n"
 			     "status=ready\n");
 }
