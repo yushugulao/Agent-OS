@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+"""Self-test for the plain uCore host reader."""
+
+from __future__ import annotations
+
+import json
+import tempfile
+from pathlib import Path
+
+import plain_ucore_reader
+
+
+STATE_FILES = {
+    "rp_web_bundle": """bundle=host-web-ui
+reader_contract=host_plain_ucore_v2
+reader_contract_version=2
+reader_ready=1
+reader_views=14
+reader_actions=8
+reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
+reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_web_bundle
+reader_required_sections=routes,payloads,actions,live_update,downloads,compare
+reader_event_stream=rp_web_bundle
+reader_fallback=rp_site
+reader_state_source=plain_ucore_files
+dynamic_inputs=4
+status=ready
+""",
+    "rp_web_routes": "routes=22\nget_routes=14\npost_routes=8\nstatus=ready\n",
+    "rp_api_home": "api=home\nreader_contract=rp_web_bundle\nstatus=ready\n",
+    "rp_api_run": "api=run-detail\nreader_contract=rp_web_bundle\nreader_view=run-detail\nstatus=ready\n",
+    "rp_api_agents": "api=agent-detail\nagents=7\nstatus=ready\n",
+    "rp_api_evidence": "api=evidence-detail\nclaims=8\nstatus=ready\n",
+    "rp_api_compare": "api=compare-metrics\nplain_kernel=passed\nstatus=ready\n",
+    "rp_api_artifacts": "api=artifacts\nmanifest_records=4\nstatus=ready\n",
+    "rp_api_data": "api=data\ndataset_snapshots=2\nstatus=ready\n",
+    "rp_api_bio": "api=bio\nsample_registry=rp_sreg\nstatus=ready\n",
+    "rp_api_labres": "api=lab-resources\ninstrument_registry=rp_instr\nstatus=ready\n",
+    "rp_api_pub": "api=publication\nresult_review=rp_resrev\nstatus=ready\n",
+    "rp_api_know": "api=knowledge\nsemantic_index=rp_semindex\nstatus=ready\n",
+    "rp_api_runtime": "api=runtime\nruntime_env=rp_runenv\nstatus=ready\n",
+    "rp_api_action": "api=actions\nreader_contract=rp_web_bundle\nactions=8\nstatus=ready\n",
+    "rp_ui_home": "page=home\nstatus=ready\n",
+    "rp_ui_run": "page=run-detail\nstatus=ready\n",
+    "rp_ui_agent": "page=agent-detail\nstatus=ready\n",
+    "rp_ui_evidence": "page=evidence-detail\nstatus=ready\n",
+    "rp_ui_compare": "page=compare-metrics\nstatus=ready\n",
+    "rp_runner": "workbench_tasks=9\nstatus=ready\n",
+    "rp_artifact": "status=recovered\n",
+    "rp_agents": "agents=7\n",
+    "rp_decisions": "decisions=8\n",
+    "rp_evidence": "claims=8\n",
+    "rp_package": "delivery_files=8\n",
+    "rp_agentcmp": "plain_kernel=passed\n",
+    "rp_consistency": "checks=113\n",
+    "rp_artifact_manifest": "manifest_records=4\n",
+    "rp_input": "dynamic_submissions=4\n",
+    "rp_dataset_snapshot": "snapshots=2\n",
+    "rp_data_quality": "passed=7\n",
+}
+
+
+def main() -> int:
+    with tempfile.TemporaryDirectory() as state_tmp, tempfile.TemporaryDirectory() as out_tmp:
+        state_dir = Path(state_tmp)
+        out_dir = Path(out_tmp)
+        for name, text in STATE_FILES.items():
+            (state_dir / name).write_text(text, encoding="utf-8")
+
+        summary = plain_ucore_reader.render_site(state_dir, out_dir)
+        assert summary["status"] == "ready", summary
+        assert summary["pages"] == 8, summary
+        assert (out_dir / "index.html").exists()
+        assert (out_dir / "run.html").exists()
+        assert (out_dir / "api" / "rp_api_home.json").exists()
+
+        saved = json.loads((out_dir / "reader-summary.json").read_text(encoding="utf-8"))
+        assert saved["contract"]["contract"] == "host_plain_ucore_v2"
+        assert saved["contract"]["missing_payload_files"] == []
+        assert saved["contract"]["missing_refresh_files"] == []
+        assert saved["status"] == "ready"
+    print("test_plain_ucore_reader: passed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

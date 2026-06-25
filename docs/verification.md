@@ -164,6 +164,20 @@ diff -qr ../_upstream_ucore_2025S/scripts ./scripts
 
 Expected result: no diff output.
 
+## Host Reader Check
+
+The host reader can be tested without booting uCore because it builds a small temporary `rp_*` state set and verifies the `host_plain_ucore_v2` contract.
+
+```bash
+python host_tools/test_plain_ucore_reader.py
+```
+
+Expected output:
+
+```text
+test_plain_ucore_reader: passed
+```
+
 ## Current Coverage
 
 This first native uCore version validates:
