@@ -20,6 +20,9 @@ int main(void)
 	if (!rp_file_contains("rp_compliance", "decision=accepted")) return 1;
 	if (!rp_file_contains("rp_execobs", "observer=ready")) return 1;
 	if (!rp_file_contains("rp_timeline", "critical_path=align_repair")) return 1;
+	if (!rp_file_contains("rp_runconf", "profiles=2")) return 1;
+	if (!rp_file_contains("rp_invocation", "status=recovered")) return 1;
+	if (!rp_file_contains("rp_completion", "status=ready")) return 1;
 	if (!rp_file_contains("rp_mail", "to=release")) return 1;
 	if (!rp_write_file("rp_release",
 			   "release_id=release:RUN-042:plain-ucore\n"
@@ -41,6 +44,9 @@ int main(void)
 			   "compliance=accepted\n"
 			   "execution=observed\n"
 			   "timeline=ready\n"
+			   "run_configuration=ready\n"
+			   "invocation=recovered\n"
+			   "completion=ready\n"
 			   "decision=release\n"
 			   "status=ready\n")) {
 		return 1;
@@ -48,6 +54,6 @@ int main(void)
 	if (!rp_append_file("rp_ack", "ack=release;msg=12;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=release.decide;target=rp_release;status=ok")) return 1;
 	if (!rp_append_status("release=ready")) return 1;
-	printf("rp_release: decision=release checks=14 status=ready\n");
+	printf("rp_release: decision=release checks=17 status=ready\n");
 	return 0;
 }

@@ -5,10 +5,10 @@ int main(void)
 {
 	int ok = 1;
 	ok = ok && rp_file_contains("rp_plan", "run=RUN-042");
-	ok = ok && rp_file_contains("rp_sched", "queue_items=17");
-	ok = ok && rp_file_contains("rp_taskrec", "msg=17");
-	ok = ok && rp_file_contains("rp_rank", "selected=8");
-	ok = ok && rp_file_contains("rp_runview", "ranked_tasks=17");
+	ok = ok && rp_file_contains("rp_sched", "queue_items=21");
+	ok = ok && rp_file_contains("rp_taskrec", "msg=21");
+	ok = ok && rp_file_contains("rp_rank", "selected=10");
+	ok = ok && rp_file_contains("rp_runview", "ranked_tasks=21");
 	ok = ok && rp_file_contains("rp_fix", "status=recovered");
 	ok = ok && rp_file_contains("rp_retrylog", "final_result=recovered");
 	ok = ok && rp_file_contains("rp_llmq", "queued=3");
@@ -19,7 +19,7 @@ int main(void)
 			   "run_id=RUN-042\n"
 			   "execution_plan=plain-user-processes\n"
 			   "workflow_steps=10\n"
-			   "scheduled_tasks=17\n"
+			   "scheduled_tasks=21\n"
 			   "worker_slots=4\n"
 			   "retry_items=1\n"
 			   "llm_packets=3\n"

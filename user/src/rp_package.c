@@ -32,6 +32,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_execobs", "observer=ready");
 	ok = ok && rp_file_contains("rp_timeline", "events=9");
 	ok = ok && rp_file_contains("rp_worker", "heartbeats=4");
+	ok = ok && rp_file_contains("rp_runconf", "profiles=2");
+	ok = ok && rp_file_contains("rp_configval", "validations=2");
+	ok = ok && rp_file_contains("rp_invocation", "status=recovered");
+	ok = ok && rp_file_contains("rp_completion", "actions=4");
 	ok = ok && rp_file_contains("rp_policy", "license_checks=2");
 	ok = ok && rp_file_contains("rp_compliance", "decision=accepted");
 	ok = ok && rp_file_contains("rp_audit", "release=ready");
@@ -39,8 +43,8 @@ int main(void)
 	if (!ok) return 1;
 	if (!rp_write_file("rp_package",
 			   "package=research-evidence-package\n"
-			   "artifacts=16\n"
-			   "checks=34\n"
+			   "artifacts=19\n"
+			   "checks=40\n"
 			   "release=ready\n"
 			   "status=ready\n")) {
 		return 1;
@@ -82,10 +86,13 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=package.attach_evidence_path;target=rp_provpath;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_data_records;target=rp_dataprof;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_execobs;target=rp_execobs;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_run_config;target=rp_runconf;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_invocation;target=rp_invocation;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_completion;target=rp_completion;status=ok")) return 1;
 	if (!rp_append_status("package=ready")) return 1;
 	if (!rp_append_status("datarel=ready")) return 1;
 	if (!rp_append_status("dataver=ready")) return 1;
 	if (!rp_append_status("repro=ready")) return 1;
-	printf("rp_package: artifacts=16 checks=34 fair=passed repro=ready status=ready\n");
+	printf("rp_package: artifacts=19 checks=40 fair=passed repro=ready status=ready\n");
 	return 0;
 }

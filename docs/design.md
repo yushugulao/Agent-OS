@@ -13,7 +13,7 @@ The current runtime has four parts:
 1. Upstream uCore kernel.
 2. Restored uCore user library and program build flow.
 3. `rp_plain`, a native user process that carries the research platform catalog, feature groups, mature platform mappings, and self-check logic.
-4. `rp_orch`, a native user process that runs twenty-five platform programs through ordinary `fork`, `exec`, and `waitpid`.
+4. `rp_orch`, a native user process that runs twenty-nine platform programs through ordinary `fork`, `exec`, and `waitpid`.
 
 The user process deliberately uses ordinary C data structures and ordinary uCore process execution. This makes the result a baseline for later comparison with the Agent-OS kernel-enhanced version.
 
@@ -50,12 +50,16 @@ The platform programs add an executable multi-process shape:
 - `rp_evidence`
 - `rp_llm_bridge`
 - `rp_privacy`
+- `rp_runconf`
 - `rp_execobs`
+- `rp_invoke`
+- `rp_complete`
 - `rp_package`
 - `rp_delta`
 - `rp_release`
 - `rp_dossier`
 - `rp_metrics`
+- `rp_backend`
 - `rp_compare_plain`
 
 These programs do not require Agent syscalls. They are ordinary uCore processes that make the plain-kernel baseline closer to the original multi-role research Agent platform.
@@ -125,10 +129,22 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_llmeval` | LLM bridge | privacy, package, release, dossier, metrics, compare, orchestrator | template response evaluation cases, grounded answer count, route switches, and fallback use |
 | `rp_privacy` | privacy | release | outbound packet review result |
 | `rp_compliance` | privacy | package, release, dossier, metrics, compare, orchestrator | policy compliance result covering access profiles, data use rules, LLM packets, secret placement, and license checks |
+| `rp_params` | run configuration | package, metrics, compare, orchestrator | baseline and candidate parameter set summary |
+| `rp_runconf` | run configuration | package, release, dossier, metrics, compare, orchestrator | baseline and candidate run configuration profiles |
+| `rp_configval` | run configuration | package, metrics, compare, orchestrator | profile validation result with checked items and warnings |
+| `rp_configdrift` | run configuration | metrics, compare, orchestrator | baseline and candidate configuration difference summary |
 | `rp_execplan` | execution observer | package, dossier, metrics, compare, orchestrator | plain-kernel execution plan, workflow step count, scheduled task count, worker slots, retry items, and LLM packet count |
 | `rp_worker` | execution observer | package, metrics, compare, orchestrator | worker health, heartbeat count, queue actions, and failure handling actions |
 | `rp_timeline` | execution observer | release, package, dossier, metrics, compare, orchestrator | run timeline, stage order, tick span, and critical path |
 | `rp_execobs` | execution observer | release, package, dossier, metrics, compare, orchestrator | observer packet summary connecting execution plan, timeline, worker health, and evidence readiness |
+| `rp_invocation` | workflow invocation | package, release, dossier, metrics, compare, orchestrator | invocation identity, template, step count, output count, cache reuse, and final status |
+| `rp_steps` | workflow invocation | metrics, compare, orchestrator | step status counts for completed, cached, failed, and recovered stages |
+| `rp_attempts` | workflow invocation | package, metrics, compare, orchestrator | attempt count, retry count, worker, cache actions, and final result |
+| `rp_invoke_export` | workflow invocation | package, compare, orchestrator | invocation export record |
+| `rp_hooks` | workflow completion | compare, orchestrator | completion hook count by action type |
+| `rp_completion` | workflow completion | package, release, dossier, metrics, compare, orchestrator | completion event, invocation status, action count, export count, and final status |
+| `rp_actions` | workflow completion | metrics, compare, orchestrator | notification, runbook, evidence export, and audit action results |
+| `rp_complete_export` | workflow completion | package, compare, orchestrator | completion event export record |
 | `rp_package` | package | compare | packaged artifact and release summary |
 | `rp_diff` | delta | release, dossier, metrics, compare, orchestrator | release candidate difference summary across report, data, figures, risk, and reproduction evidence |
 | `rp_delta` | delta | release, dossier, metrics, compare, orchestrator | release delta review with accepted item count, blocked count, package, risk, and reproduction status |
@@ -140,6 +156,10 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_reviewops` | dossier | compare | review board, vote, risk, mitigation, and governance result |
 | `rp_submit` | dossier | compare | journal target, cover letter, data availability, and review response package |
 | `rp_agentcmp` | AgentCompare metrics | compare | plain-kernel comparison counters |
+| `rp_backend` | backend scenario | compare, orchestrator | same-workflow backend scenario case count and planned Agent-OS cases |
+| `rp_backend_exec` | backend scenario | compare, orchestrator | backend scenario execution result for executable and planned cases |
+| `rp_backend_export` | backend scenario | compare, orchestrator | backend scenario export record |
+| `rp_study` | backend scenario | compare, orchestrator | same-workflow backend study summary |
 | `rp_compare` | compare | orchestrator | plain-kernel execution summary |
 
 This is intentionally implemented without new syscalls. It uses only `open`, `read`, `write`, `close`, `fork`, `exec`, and `waitpid`.

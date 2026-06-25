@@ -24,14 +24,18 @@ int main(void)
 			   "msg=14;from=planner;to=metrics;task=measure_plain_kernel\n"
 			   "msg=15;from=planner;to=governance;task=register_risk_capa\n"
 			   "msg=16;from=planner;to=delta;task=review_release_delta\n"
-			   "msg=17;from=planner;to=execobs;task=observe_execution\n")) {
+			   "msg=17;from=planner;to=execobs;task=observe_execution\n"
+			   "msg=18;from=planner;to=runconf;task=validate_run_configuration\n"
+			   "msg=19;from=planner;to=invoke;task=record_workflow_invocation\n"
+			   "msg=20;from=planner;to=completion;task=process_workflow_completion\n"
+			   "msg=21;from=planner;to=backend;task=prepare_backend_scenario\n")) {
 		return 1;
 	}
 	if (!rp_write_file("rp_sched",
-			   "queue_items=17\n"
-			   "ready_items=17\n"
-			   "priority_high=3\n"
-			   "priority_normal=14\n"
+			   "queue_items=21\n"
+			   "ready_items=21\n"
+			   "priority_high=4\n"
+			   "priority_normal=17\n"
 			   "retry_policy=minimal_rerun\n"
 			   "deadline_model=stage_order\n"
 			   "status=ready\n")) {
@@ -54,7 +58,11 @@ int main(void)
 			   "msg=14;owner=metrics;stage=measure;prio=N;class=telemetry;state=ready\n"
 			   "msg=15;owner=governance;stage=risk_capa;prio=N;class=review;state=ready\n"
 			   "msg=16;owner=delta;stage=release_delta;prio=N;class=release;state=ready\n"
-			   "msg=17;owner=execobs;stage=execution_trace;prio=N;class=telemetry;state=ready\n")) {
+			   "msg=17;owner=execobs;stage=execution_trace;prio=N;class=telemetry;state=ready\n"
+			   "msg=18;owner=runconf;stage=run_configuration;prio=N;class=config;state=ready\n"
+			   "msg=19;owner=invoke;stage=workflow_invocation;prio=H;class=execution;state=ready\n"
+			   "msg=20;owner=completion;stage=completion_hooks;prio=N;class=execution;state=ready\n"
+			   "msg=21;owner=backend;stage=backend_scenario;prio=N;class=compare;state=ready\n")) {
 		return 1;
 	}
 	if (!rp_write_file("rp_budget",
@@ -112,6 +120,6 @@ int main(void)
 	if (!rp_append_status("budget=ready")) return 1;
 	if (!rp_append_status("wfio=ready")) return 1;
 	if (!rp_append_status("policy=ready")) return 1;
-	printf("rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 messages=17 schedule=ready status=planned\n");
+	printf("rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 messages=21 schedule=ready status=planned\n");
 	return 0;
 }

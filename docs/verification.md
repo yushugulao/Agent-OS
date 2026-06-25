@@ -39,12 +39,16 @@ rp_query
 rp_evidence
 rp_llm_bridge
 rp_privacy
+rp_runconf
 rp_execobs
+rp_invoke
+rp_complete
 rp_package
 rp_delta
 rp_release
 rp_dossier
 rp_metrics
+rp_backend
 rp_compare_plain
 ```
 
@@ -82,13 +86,13 @@ timeout 45s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INI
 Observed key output:
 
 ```text
-rp_orch: start programs=25
+rp_orch: start programs=29
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_object_store: records=8 status=ready
 rp_object_query: hits=8 ready_hits=7 status=ready
 rp_lineage: edges=7 status=ready
 rp_site_export: pages=6 status=ready
-rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 messages=17 schedule=ready status=planned
+rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 messages=21 schedule=ready status=planned
 rp_retriever: literature=3 evidence_links=5 status=ready
 rp_analyst: datasets=4 profiles=4 statistics=6 figures=3 failure=tool_output_missing status=ready
 rp_reviewer: claims=8 protocol_checks=5 release_checks=4 rounds=2 status=accepted
@@ -97,18 +101,22 @@ rp_governance: risks=3 capa=2 deviations=1 status=ready
 rp_writer: sections=8 citations=9 revisions=3 status=packaged
 rp_repair: failed_stage=align action=minimal_rerun attempts=2 status=recovered
 rp_auditor: provenance=verified release=ready package=ready status=passed
-rp_query: workflow=34 agent=26 evidence=10 ranked=17 selected=8 status=ready
+rp_query: workflow=34 agent=26 evidence=10 ranked=21 selected=10 status=ready
 rp_evidence: claims=8 links=5 claim_records=8 paths=3 status=ready
 rp_llm_bridge: requests=3 responses=3 routes=4 eval=7 relay=ready status=ready
 rp_privacy: checked=8 packets=3 redactions=0 compliance=accepted status=ready
+rp_runconf: profiles=2 validations=2 drift=1 status=ready
 rp_execobs: timeline=9 workers=4 controls=5 observer=ready status=ready
-rp_package: artifacts=16 checks=34 fair=passed repro=ready status=ready
+rp_invoke: steps=10 attempts=12 outputs=6 status=recovered
+rp_complete: hooks=4 events=1 actions=4 status=ready
+rp_package: artifacts=19 checks=40 fair=passed repro=ready status=ready
 rp_delta: items=20 reviews=1 decision=accepted status=ready
-rp_release: decision=release checks=14 status=ready
-rp_dossier: sections=33 review_board=accepted submit=ready status=ready
-rp_metrics: telemetry_spans=8 acks=17 tools=56 delta_items=20 status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=25 state_files=75 acks=18 tools=58 status=ready
-rp_orch: programs_ok=25 programs_total=25
+rp_release: decision=release checks=17 status=ready
+rp_dossier: sections=36 review_board=accepted submit=ready status=ready
+rp_metrics: telemetry_spans=8 acks=20 tools=70 delta_items=20 status=ready
+rp_backend: cases=4 executable=2 exports=1 status=ready
+rp_compare_plain: plain_kernel=passed objects=500 programs=29 state_files=91 acks=22 tools=76 status=ready
+rp_orch: programs_ok=29 programs_total=29
 rp_orch: state_ok=1
 rp_orch: passed
 ```
@@ -136,8 +144,8 @@ This first native uCore version validates:
 - platform self-check status,
 - catalog search,
 - a complete research run simulation with one failed stage repaired in user space.
-- multi-process execution with twenty-five ordinary uCore user programs.
+- multi-process execution with twenty-nine ordinary uCore user programs.
 - ordinary file-backed state exchange across role programs.
-- object catalog, reusable object records, object query, lineage, site export, task messages, role acknowledgements, tool logs, scheduling records, task records, task ranking, workflow import/export description, resource budget, project policy, risk register, CAPA records, release delta review, execution plan, worker health, execution timeline, observer evidence, failure classification, retry records, run views, data dictionary, data profile records, figure records, calculation replay, samples, quality, protocol, SOP, experiment, trial records, lab operations, training, telemetry, health summaries, evidence, claim records, provenance paths, knowledge, multi-round review, report revision package, LLM packet queue, host relay description, prompt routing, LLM audit log, LLM evaluation, privacy, compliance record, FAIR data release, data product versioning, reproduction package, package, release, dossier, review governance, submission package, AgentCompare metrics, and plain-kernel comparison files.
+- object catalog, reusable object records, object query, lineage, site export, task messages, role acknowledgements, tool logs, scheduling records, task records, task ranking, workflow import/export description, resource budget, project policy, risk register, CAPA records, release delta review, run configuration, workflow invocation, workflow completion, execution plan, worker health, execution timeline, observer evidence, failure classification, retry records, run views, data dictionary, data profile records, figure records, calculation replay, samples, quality, protocol, SOP, experiment, trial records, lab operations, training, telemetry, health summaries, evidence, claim records, provenance paths, knowledge, multi-round review, report revision package, LLM packet queue, host relay description, prompt routing, LLM audit log, LLM evaluation, privacy, compliance record, FAIR data release, data product versioning, reproduction package, package, release, dossier, review governance, submission package, backend scenario evidence, AgentCompare metrics, and plain-kernel comparison files.
 
 It does not use Agent-OS kernel features. That is intentional for this plain-kernel baseline.

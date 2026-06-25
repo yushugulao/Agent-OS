@@ -7,6 +7,9 @@
 #include <unistd.h>
 
 #define RP_UNUSED __attribute__((unused))
+#define RP_STATE_BUFFER_SIZE 8192
+
+static RP_UNUSED char rp_state_buf[RP_STATE_BUFFER_SIZE];
 
 static RP_UNUSED int rp_write_file(const char *path, const char *body)
 {
@@ -42,8 +45,8 @@ static RP_UNUSED int rp_read_file(const char *path, char *buf, int cap)
 
 static RP_UNUSED int rp_file_contains(const char *path, const char *needle)
 {
-	static char buf[4096];
-	int n = rp_read_file(path, buf, sizeof(buf));
+	char *buf = rp_state_buf;
+	int n = rp_read_file(path, buf, RP_STATE_BUFFER_SIZE);
 	if (n < 0) {
 		printf("rp_state: missing path=%s\n", path);
 		return 0;
@@ -70,8 +73,8 @@ static RP_UNUSED int rp_file_contains(const char *path, const char *needle)
 
 static RP_UNUSED int rp_count_lines(const char *path)
 {
-	static char buf[4096];
-	int n = rp_read_file(path, buf, sizeof(buf));
+	char *buf = rp_state_buf;
+	int n = rp_read_file(path, buf, RP_STATE_BUFFER_SIZE);
 	if (n < 0) return -1;
 	int count = 0;
 	for (int i = 0; i < n; i++) {
@@ -82,8 +85,8 @@ static RP_UNUSED int rp_count_lines(const char *path)
 
 static RP_UNUSED int rp_count_token(const char *path, const char *needle)
 {
-	static char buf[4096];
-	int n = rp_read_file(path, buf, sizeof(buf));
+	char *buf = rp_state_buf;
+	int n = rp_read_file(path, buf, RP_STATE_BUFFER_SIZE);
 	if (n < 0) return -1;
 	int count = 0;
 	int needle_len = (int)strlen(needle);
@@ -102,14 +105,14 @@ static RP_UNUSED int rp_count_token(const char *path, const char *needle)
 
 static RP_UNUSED int rp_append_file(const char *path, const char *line)
 {
-	static char buf[4096];
-	int n = rp_read_file(path, buf, sizeof(buf));
+	char *buf = rp_state_buf;
+	int n = rp_read_file(path, buf, RP_STATE_BUFFER_SIZE);
 	if (n < 0) {
 		buf[0] = 0;
 	}
 	int used = (int)strlen(buf);
 	int add = (int)strlen(line);
-	if (used + add + 2 >= (int)sizeof(buf)) {
+	if (used + add + 2 >= RP_STATE_BUFFER_SIZE) {
 		printf("rp_state: append_full path=%s\n", path);
 		return 0;
 	}
