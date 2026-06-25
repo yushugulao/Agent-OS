@@ -70,6 +70,17 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_write_file("rp_policy",
+			   "run_id=RUN-042\n"
+			   "access_profiles=4\n"
+			   "data_use_rules=5\n"
+			   "llm_outbound_rules=4\n"
+			   "license_checks=2\n"
+			   "retention=release_package_only\n"
+			   "decision=ready\n"
+			   "status=ready\n")) {
+		return 1;
+	}
 	if (!rp_write_file("rp_retryq",
 			   "retry_item=align\n"
 			   "owner=repair\n"
@@ -87,12 +98,14 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=planner.write_taskrec;target=rp_taskrec;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=planner.assign_budget;target=rp_budget;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=planner.workflow_io;target=rp_wfio;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=planner.write_policy;target=rp_policy;status=ok")) return 1;
 	if (!rp_append_status("planner=planned")) return 1;
 	if (!rp_append_status("mail=ready")) return 1;
 	if (!rp_append_status("schedule=ready")) return 1;
 	if (!rp_append_status("taskrec=ready")) return 1;
 	if (!rp_append_status("budget=ready")) return 1;
 	if (!rp_append_status("wfio=ready")) return 1;
+	if (!rp_append_status("policy=ready")) return 1;
 	printf("rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 messages=14 schedule=ready status=planned\n");
 	return 0;
 }

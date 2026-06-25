@@ -71,6 +71,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_taskrec` | planner | query, metrics, compare, orchestrator | task-level records with owner, stage, priority, class, and ready state |
 | `rp_budget` | planner | query, metrics, compare, orchestrator | token, tick, storage, and worker-slot budget summary |
 | `rp_wfio` | planner | package, dossier, metrics, compare, orchestrator | workflow import/export formats, portable step count, and compatibility checks |
+| `rp_policy` | planner | privacy, package, dossier, metrics, compare, orchestrator | access profiles, data use rules, LLM outbound rules, license checks, and retention policy |
 | `rp_retryq` | planner | repair | pending retry item for the failed align stage |
 | `rp_lit` | retriever | reviewer, auditor | literature count and evidence links |
 | `rp_data` | analyst | reviewer, repair, auditor | datasets, statistics, figures, failed stage |
@@ -118,6 +119,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_llmlog` | LLM bridge | privacy, package, compare | transcript count, packet audit, privacy status, and replay status |
 | `rp_llmeval` | LLM bridge | privacy, package, release, dossier, metrics, compare, orchestrator | template response evaluation cases, grounded answer count, route switches, and fallback use |
 | `rp_privacy` | privacy | release | outbound packet review result |
+| `rp_compliance` | privacy | package, release, dossier, metrics, compare, orchestrator | policy compliance result covering access profiles, data use rules, LLM packets, secret placement, and license checks |
 | `rp_package` | package | compare | packaged artifact and release summary |
 | `rp_datarel` | package | release, dossier, compare | FAIR data, data product, DOI, and publication readiness |
 | `rp_dataver` | package | release, dossier, metrics, compare, orchestrator | data product versions, snapshots, schema versions, and release candidate |

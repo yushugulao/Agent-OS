@@ -96,12 +96,12 @@ rp_auditor: provenance=verified release=ready package=ready status=passed
 rp_query: workflow=34 agent=26 evidence=10 ranked=14 selected=5 status=ready
 rp_evidence: claims=8 links=5 claim_records=8 paths=3 status=ready
 rp_llm_bridge: requests=3 responses=3 routes=4 eval=7 relay=ready status=ready
-rp_privacy: checked=7 packets=3 redactions=0 status=ready
-rp_package: artifacts=12 checks=26 fair=passed repro=ready status=ready
-rp_release: decision=release checks=7 status=ready
-rp_dossier: sections=25 review_board=accepted submit=ready status=ready
-rp_metrics: telemetry_spans=8 acks=14 tools=43 data_profiles=4 trials=4 status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=22 state_files=65 acks=15 tools=45 status=ready
+rp_privacy: checked=8 packets=3 redactions=0 compliance=accepted status=ready
+rp_package: artifacts=13 checks=28 fair=passed repro=ready status=ready
+rp_release: decision=release checks=8 status=ready
+rp_dossier: sections=27 review_board=accepted submit=ready status=ready
+rp_metrics: telemetry_spans=8 acks=14 tools=45 compliance=accepted status=ready
+rp_compare_plain: plain_kernel=passed objects=500 programs=22 state_files=67 acks=15 tools=47 status=ready
 rp_orch: programs_ok=22 programs_total=22
 rp_orch: state_ok=1
 rp_orch: passed
@@ -132,6 +132,6 @@ This first native uCore version validates:
 - a complete research run simulation with one failed stage repaired in user space.
 - multi-process execution with twenty-two ordinary uCore user programs.
 - ordinary file-backed state exchange across role programs.
-- object catalog, reusable object records, object query, lineage, site export, task messages, role acknowledgements, tool logs, scheduling records, task records, task ranking, workflow import/export description, resource budget, failure classification, retry records, run views, data dictionary, data profile records, figure records, calculation replay, samples, quality, protocol, SOP, experiment, trial records, lab operations, training, telemetry, health summaries, evidence, claim records, provenance paths, knowledge, multi-round review, report revision package, LLM packet queue, host relay description, prompt routing, LLM audit log, LLM evaluation, privacy, FAIR data release, data product versioning, reproduction package, package, release, dossier, review governance, submission package, AgentCompare metrics, and plain-kernel comparison files.
+- object catalog, reusable object records, object query, lineage, site export, task messages, role acknowledgements, tool logs, scheduling records, task records, task ranking, workflow import/export description, resource budget, project policy, failure classification, retry records, run views, data dictionary, data profile records, figure records, calculation replay, samples, quality, protocol, SOP, experiment, trial records, lab operations, training, telemetry, health summaries, evidence, claim records, provenance paths, knowledge, multi-round review, report revision package, LLM packet queue, host relay description, prompt routing, LLM audit log, LLM evaluation, privacy, compliance record, FAIR data release, data product versioning, reproduction package, package, release, dossier, review governance, submission package, AgentCompare metrics, and plain-kernel comparison files.
 
 It does not use Agent-OS kernel features. That is intentional for this plain-kernel baseline.

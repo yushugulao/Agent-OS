@@ -28,19 +28,23 @@ int main(void)
 	if (!rp_file_contains("rp_llmq", "queued=3")) return 1;
 	if (!rp_file_contains("rp_llmeval", "passed=7")) return 1;
 	if (!rp_file_contains("rp_llmlog", "request_packets=3")) return 1;
+	if (!rp_file_contains("rp_policy", "access_profiles=4")) return 1;
+	if (!rp_file_contains("rp_compliance", "decision=accepted")) return 1;
 	if (!rp_file_contains("rp_mail", "to=metrics")) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
-	if (ack_count < 14 || tool_count < 43) return 1;
+	if (ack_count < 14 || tool_count < 45) return 1;
 	if (!rp_write_file("rp_telemetry",
 			   "run_id=RUN-042\n"
 			   "trace_spans=8\n"
 			   "bottlenecks=1\n"
 			   "message_acks=14\n"
-			   "tool_events=43\n"
+			   "tool_events=45\n"
 			   "scheduler_items=14\n"
 			   "ranked_tasks=14\n"
 			   "selected_tasks=5\n"
+			   "policy_checks=8\n"
+			   "compliance=accepted\n"
 			   "claim_records=8\n"
 			   "provenance_paths=3\n"
 			   "data_profiles=4\n"
@@ -57,7 +61,7 @@ int main(void)
 			   "failure_items=1\n"
 			   "poll_rounds=18\n"
 			   "scanned_records=128\n"
-			   "state_files=65\n"
+			   "state_files=67\n"
 			   "ticks=42\n"
 			   "status=ready\n")) {
 		return 1;
@@ -85,10 +89,12 @@ int main(void)
 			   "repro_ok=1\n"
 			   "llm_guarded=1\n"
 			   "message_acks=14\n"
-			   "tool_events=43\n"
+			   "tool_events=45\n"
 			   "scheduler_items=14\n"
 			   "ranked_tasks=14\n"
 			   "selected_tasks=5\n"
+			   "policy_checks=8\n"
+			   "compliance=accepted\n"
 			   "claim_records=8\n"
 			   "provenance_paths=3\n"
 			   "data_profiles=4\n"
@@ -113,6 +119,6 @@ int main(void)
 	if (!rp_append_status("telemetry=ready")) return 1;
 	if (!rp_append_status("agentcmp=ready")) return 1;
 	if (!rp_append_status("health=ready")) return 1;
-	printf("rp_metrics: telemetry_spans=8 acks=14 tools=43 data_profiles=4 trials=4 status=ready\n");
+	printf("rp_metrics: telemetry_spans=8 acks=14 tools=45 compliance=accepted status=ready\n");
 	return 0;
 }

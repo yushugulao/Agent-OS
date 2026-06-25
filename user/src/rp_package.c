@@ -27,13 +27,15 @@ int main(void)
 	ok = ok && rp_file_contains("rp_llmlog", "request_packets=3");
 	ok = ok && rp_file_contains("rp_relay", "mode=host_file_relay");
 	ok = ok && rp_file_contains("rp_relay", "relay_packets=3");
+	ok = ok && rp_file_contains("rp_policy", "license_checks=2");
+	ok = ok && rp_file_contains("rp_compliance", "decision=accepted");
 	ok = ok && rp_file_contains("rp_audit", "release=ready");
 	ok = ok && rp_file_contains("rp_mail", "to=package");
 	if (!ok) return 1;
 	if (!rp_write_file("rp_package",
 			   "package=research-evidence-package\n"
-			   "artifacts=12\n"
-			   "checks=26\n"
+			   "artifacts=13\n"
+			   "checks=28\n"
 			   "release=ready\n"
 			   "status=ready\n")) {
 		return 1;
@@ -78,6 +80,6 @@ int main(void)
 	if (!rp_append_status("datarel=ready")) return 1;
 	if (!rp_append_status("dataver=ready")) return 1;
 	if (!rp_append_status("repro=ready")) return 1;
-	printf("rp_package: artifacts=12 checks=26 fair=passed repro=ready status=ready\n");
+	printf("rp_package: artifacts=13 checks=28 fair=passed repro=ready status=ready\n");
 	return 0;
 }
