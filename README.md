@@ -402,7 +402,9 @@ python host_tools/plain_ucore_reader.py --state-dir path/to/rp-state --out-dir r
 python host_tools/test_plain_ucore_reader.py
 ```
 
-The reader is a host-side viewer for plain uCore output. It does not modify `os/`, `nfs/`, or `scripts`, and it does not add Agent-OS kernel features.
+With `--serve`, the reader exposes `/api/reader-summary`, `/api/contract`, `/api/state/{name}`, `/api/live`, static pages, and `/actions/...` POST capture. Action requests are written to `host-actions.jsonl`; use `--write-state-actions` only when the host should also append an action inbox record beside the `rp_*` state files.
+
+The reader is a host-side viewer and action-capture service for plain uCore output. It does not modify `os/`, `nfs/`, or `scripts`, and it does not add Agent-OS kernel features.
 
 ## Next Work
 

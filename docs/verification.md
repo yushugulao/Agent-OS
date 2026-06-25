@@ -166,7 +166,7 @@ Expected result: no diff output.
 
 ## Host Reader Check
 
-The host reader can be tested without booting uCore because it builds a small temporary `rp_*` state set and verifies the `host_plain_ucore_v2` contract.
+The host reader can be tested without booting uCore because it builds a small temporary `rp_*` state set and verifies the `host_plain_ucore_v2` contract. The same check also starts the local HTTP handler, reads `/api/contract` and `/api/state/rp_api_home`, posts to `/actions/research/run`, and verifies that the action record is written.
 
 ```bash
 python host_tools/test_plain_ucore_reader.py

@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import json
 import tempfile
+import threading
+from http.server import ThreadingHTTPServer
 from pathlib import Path
+from urllib import request
 
 import plain_ucore_reader
 
@@ -79,6 +82,41 @@ def main() -> int:
         assert saved["contract"]["missing_payload_files"] == []
         assert saved["contract"]["missing_refresh_files"] == []
         assert saved["status"] == "ready"
+
+        handler = plain_ucore_reader.make_service_handler(state_dir, out_dir, write_state=True)
+        server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        base = f"http://127.0.0.1:{server.server_address[1]}"
+        try:
+            with request.urlopen(base + "/api/contract", timeout=5) as response:
+                contract = json.loads(response.read().decode("utf-8"))
+            assert contract["contract"]["contract"] == "host_plain_ucore_v2"
+
+            with request.urlopen(base + "/api/state/rp_api_home", timeout=5) as response:
+                home = json.loads(response.read().decode("utf-8"))
+            assert home["values"]["api"] == "home"
+
+            action = request.Request(
+                base + "/actions/research/run",
+                data=json.dumps({"run_id": "RUN-999", "source": "test"}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with request.urlopen(action, timeout=5) as response:
+                result = json.loads(response.read().decode("utf-8"))
+            assert result["status"] == "accepted"
+            assert result["path"] == "/actions/research/run"
+            assert (out_dir / "host-actions.jsonl").exists()
+            assert "path=/actions/research/run" in (state_dir / "rp_host_action_inbox").read_text(encoding="utf-8")
+
+            with request.urlopen(base + "/index.html", timeout=5) as response:
+                index_html = response.read().decode("utf-8")
+            assert "Rendered from plain uCore state files" in index_html
+        finally:
+            server.shutdown()
+            server.server_close()
+            thread.join(timeout=5)
     print("test_plain_ucore_reader: passed")
     return 0
 

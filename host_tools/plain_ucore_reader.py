@@ -6,10 +6,10 @@ from __future__ import annotations
 import argparse
 import html
 import json
-import os
-from http.server import ThreadingHTTPServer, SimpleHTTPRequestHandler
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import parse_qs, unquote, urlparse
 
 
 PAGE_SPECS = [
@@ -191,9 +191,131 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
     return summary
 
 
-def serve_dir(out_dir: Path, port: int) -> None:
-    os.chdir(out_dir)
-    server = ThreadingHTTPServer(("127.0.0.1", port), SimpleHTTPRequestHandler)
+def append_action_record(out_dir: Path, state_dir: Path, action_path: str, payload: dict[str, object], write_state: bool) -> dict[str, object]:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    action_log = out_dir / "host-actions.jsonl"
+    sequence = 1
+    if action_log.exists():
+        sequence += sum(1 for line in action_log.read_text(encoding="utf-8").splitlines() if line.strip())
+    record = {
+        "sequence": sequence,
+        "path": action_path,
+        "payload": payload,
+        "status": "accepted",
+    }
+    with action_log.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+    if write_state:
+        inbox = state_dir / "rp_host_action_inbox"
+        with inbox.open("a", encoding="utf-8") as handle:
+            handle.write(f"action={sequence};path={action_path};status=accepted\n")
+    write_json(out_dir / "last-action.json", record)
+    return record
+
+
+def parse_request_body(headers: object, body: bytes) -> dict[str, object]:
+    content_type = ""
+    if hasattr(headers, "get"):
+        content_type = headers.get("Content-Type", "")  # type: ignore[assignment]
+    text = body.decode("utf-8", errors="replace")
+    if "application/json" in content_type:
+        try:
+            data = json.loads(text or "{}")
+            if isinstance(data, dict):
+                return data
+            return {"value": data}
+        except json.JSONDecodeError:
+            return {"raw": text, "parse_error": "json"}
+    if "application/x-www-form-urlencoded" in content_type:
+        parsed = parse_qs(text, keep_blank_values=True)
+        return {key: values[-1] if values else "" for key, values in parsed.items()}
+    return {"raw": text}
+
+
+def make_service_handler(state_dir: Path, out_dir: Path, write_state: bool) -> type[BaseHTTPRequestHandler]:
+    class PlainUCoreReaderHandler(BaseHTTPRequestHandler):
+        server_version = "PlainUCoreReader/0.2"
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+        def send_json(self, status: int, data: object) -> None:
+            payload = json.dumps(data, indent=2, ensure_ascii=False).encode("utf-8")
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def send_text_file(self, path: Path, content_type: str) -> None:
+            data = path.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self) -> None:
+            parsed = urlparse(self.path)
+            path = parsed.path
+            if path == "/api/reader-summary":
+                self.send_json(200, render_site(state_dir, out_dir))
+                return
+            if path == "/api/contract":
+                state = load_state(state_dir)
+                contract = reader_contract(state)
+                self.send_json(200, {"contract": contract, "problems": validate_contract(contract)})
+                return
+            if path == "/api/live":
+                summary = render_site(state_dir, out_dir)
+                action_log = out_dir / "host-actions.jsonl"
+                action_count = 0
+                if action_log.exists():
+                    action_count = sum(1 for line in action_log.read_text(encoding="utf-8").splitlines() if line.strip())
+                self.send_json(200, {"summary": summary, "action_count": action_count})
+                return
+            if path.startswith("/api/state/"):
+                name = unquote(path[len("/api/state/") :])
+                state = load_state(state_dir)
+                item = state.get(name)
+                if not item:
+                    self.send_json(404, {"error": "state_not_found", "name": name})
+                    return
+                self.send_json(200, {"name": name, "values": item["values"], "lines": item["lines"]})
+                return
+
+            render_site(state_dir, out_dir)
+            rel = "index.html" if path in ("", "/") else path.lstrip("/")
+            if "/" in rel or "\\" in rel or ".." in rel:
+                self.send_json(404, {"error": "not_found"})
+                return
+            file_path = out_dir / rel
+            if not file_path.exists() or not file_path.is_file():
+                self.send_json(404, {"error": "not_found"})
+                return
+            content_type = "text/html; charset=utf-8" if file_path.suffix == ".html" else "application/octet-stream"
+            if file_path.suffix == ".json":
+                content_type = "application/json; charset=utf-8"
+            self.send_text_file(file_path, content_type)
+
+        def do_POST(self) -> None:
+            parsed = urlparse(self.path)
+            if not parsed.path.startswith("/actions/"):
+                self.send_json(404, {"error": "action_not_found"})
+                return
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            body = self.rfile.read(length) if length > 0 else b""
+            payload = parse_request_body(self.headers, body)
+            record = append_action_record(out_dir, state_dir, parsed.path, payload, write_state)
+            render_site(state_dir, out_dir)
+            self.send_json(202, record)
+
+    return PlainUCoreReaderHandler
+
+
+def serve_dir(state_dir: Path, out_dir: Path, port: int, write_state: bool) -> None:
+    handler = make_service_handler(state_dir, out_dir, write_state)
+    server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     print(f"plain_ucore_reader: serving http://127.0.0.1:{port}/")
     server.serve_forever()
 
@@ -202,8 +324,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Render plain uCore research platform state for host viewing.")
     parser.add_argument("--state-dir", type=Path, required=True, help="Directory containing rp_* state files.")
     parser.add_argument("--out-dir", type=Path, required=True, help="Output directory for static HTML and JSON.")
-    parser.add_argument("--serve", action="store_true", help="Serve the rendered output after generation.")
+    parser.add_argument("--serve", action="store_true", help="Serve dynamic host pages, APIs, and POST action capture.")
     parser.add_argument("--port", type=int, default=8767, help="Local port for --serve.")
+    parser.add_argument("--write-state-actions", action="store_true", help="Also append POST action records to the state directory.")
     args = parser.parse_args()
 
     summary = render_site(args.state_dir, args.out_dir)
@@ -217,7 +340,7 @@ def main() -> int:
             print(f"plain_ucore_reader: problem={problem}")
         return 1
     if args.serve:
-        serve_dir(args.out_dir, args.port)
+        serve_dir(args.state_dir, args.out_dir, args.port, args.write_state_actions)
     return 0
 
 
