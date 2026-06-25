@@ -8,9 +8,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_object_query", "hits=8");
 	ok = ok && rp_file_contains("rp_lineage", "edges=7");
 	ok = ok && rp_file_contains("rp_site", "pages=6");
-	ok = ok && rp_file_contains("rp_llm_resp", "status=ready");
+	ok = ok && rp_file_contains("rp_llm_resp", "responses=3");
 	ok = ok && rp_file_contains("rp_release", "decision=release");
-	ok = ok && rp_file_contains("rp_dossier", "sections=18");
+	ok = ok && rp_file_contains("rp_dossier", "sections=20");
 	ok = ok && rp_file_contains("rp_knowledge", "semantic_relations=6");
 	ok = ok && rp_file_contains("rp_datarel", "fair=passed");
 	ok = ok && rp_file_contains("rp_dataver", "release_candidate=v2");
@@ -30,7 +30,11 @@ int main(void)
 	ok = ok && rp_file_contains("rp_labops", "maintenance=passed");
 	ok = ok && rp_file_contains("rp_training", "gaps=0");
 	ok = ok && rp_file_contains("rp_prompt", "provider_policy=host_relay");
+	ok = ok && rp_file_contains("rp_prompt", "routes=4");
+	ok = ok && rp_file_contains("rp_llmq", "queued=3");
+	ok = ok && rp_file_contains("rp_llmeval", "passed=7");
 	ok = ok && rp_file_contains("rp_llmlog", "privacy_checked=1");
+	ok = ok && rp_file_contains("rp_llmlog", "request_packets=3");
 	ok = ok && rp_file_contains("rp_sched", "queue_items=14");
 	ok = ok && rp_file_contains("rp_retrylog", "attempts=2");
 	ok = ok && rp_file_contains("rp_relay", "network_stack=host_only");
@@ -39,7 +43,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentcmp", "report_ok=1");
 	ok = ok && rp_file_contains("rp_agentcmp", "repro_ok=1");
 	ok = ok && rp_file_contains("rp_agentcmp", "message_acks=14");
-	ok = ok && rp_file_contains("rp_agentcmp", "tool_events=32");
+	ok = ok && rp_file_contains("rp_agentcmp", "tool_events=36");
 	ok = ok && rp_file_contains("rp_agentcmp", "scheduler_items=14");
 	ok = ok && rp_file_contains("rp_agentcmp", "ranked_tasks=14");
 	ok = ok && rp_file_contains("rp_agentcmp", "selected_tasks=5");
@@ -47,7 +51,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentcmp", "review_rounds=2");
 	ok = ok && rp_file_contains("rp_agentcmp", "data_versions=2");
 	ok = ok && rp_file_contains("rp_agentcmp", "retry_attempts=2");
-	ok = ok && rp_file_contains("rp_agentcmp", "relay_packets=2");
+	ok = ok && rp_file_contains("rp_agentcmp", "relay_packets=3");
+	ok = ok && rp_file_contains("rp_agentcmp", "llm_requests=3");
+	ok = ok && rp_file_contains("rp_agentcmp", "llm_eval_passed=7");
 	ok = ok && rp_file_contains("rp_agentcmp", "run_views=1");
 	ok = ok && rp_file_contains("rp_agentcmp", "health_ok=1");
 	ok = ok && rp_file_contains("rp_ack", "ack=metrics;msg=14;status=ready");
@@ -63,13 +69,13 @@ int main(void)
 			   "agentos_kernel=pending\n"
 			   "objects=500\n"
 			   "programs=22\n"
-			   "state_files=58\n"
+			   "state_files=60\n"
 			   "message_acks=15\n"
-			   "tool_events=34\n"
+			   "tool_events=38\n"
 			   "status=ready\n")) {
 		return 1;
 	}
 	if (!rp_append_status("compare=ready")) return 1;
-	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=22 state_files=58 acks=15 tools=34 status=ready\n");
+	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=22 state_files=60 acks=15 tools=38 status=ready\n");
 	return 0;
 }

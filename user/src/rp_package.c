@@ -15,16 +15,20 @@ int main(void)
 	ok = ok && rp_file_contains("rp_training", "gaps=0");
 	ok = ok && rp_file_contains("rp_fail", "recoverable=1");
 	ok = ok && rp_file_contains("rp_retrylog", "final_result=recovered");
-	ok = ok && rp_file_contains("rp_prompt", "routes=3");
+	ok = ok && rp_file_contains("rp_prompt", "routes=4");
+	ok = ok && rp_file_contains("rp_llmq", "queued=3");
+	ok = ok && rp_file_contains("rp_llmeval", "passed=7");
 	ok = ok && rp_file_contains("rp_llmlog", "replay=ready");
+	ok = ok && rp_file_contains("rp_llmlog", "request_packets=3");
 	ok = ok && rp_file_contains("rp_relay", "mode=host_file_relay");
+	ok = ok && rp_file_contains("rp_relay", "relay_packets=3");
 	ok = ok && rp_file_contains("rp_audit", "release=ready");
 	ok = ok && rp_file_contains("rp_mail", "to=package");
 	if (!ok) return 1;
 	if (!rp_write_file("rp_package",
 			   "package=research-evidence-package\n"
 			   "artifacts=12\n"
-			   "checks=19\n"
+			   "checks=21\n"
 			   "release=ready\n"
 			   "status=ready\n")) {
 		return 1;
@@ -62,10 +66,11 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=package.build_artifacts;target=rp_package;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.version_data;target=rp_dataver;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.build_repro;target=rp_repro;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_llm_eval;target=rp_llmeval;status=ok")) return 1;
 	if (!rp_append_status("package=ready")) return 1;
 	if (!rp_append_status("datarel=ready")) return 1;
 	if (!rp_append_status("dataver=ready")) return 1;
 	if (!rp_append_status("repro=ready")) return 1;
-	printf("rp_package: artifacts=12 checks=19 fair=passed repro=ready status=ready\n");
+	printf("rp_package: artifacts=12 checks=21 fair=passed repro=ready status=ready\n");
 	return 0;
 }

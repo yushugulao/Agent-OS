@@ -11,6 +11,8 @@ int main(void)
 	if (!rp_file_contains("rp_repro", "reproduction_checks=9")) return 1;
 	if (!rp_file_contains("rp_repro", "retry_replay=passed")) return 1;
 	if (!rp_file_contains("rp_relay", "status=ready")) return 1;
+	if (!rp_file_contains("rp_llmq", "queued=3")) return 1;
+	if (!rp_file_contains("rp_llmeval", "passed=7")) return 1;
 	if (!rp_file_contains("rp_mail", "to=release")) return 1;
 	if (!rp_write_file("rp_release",
 			   "release_id=release:RUN-042:plain-ucore\n"
@@ -23,6 +25,8 @@ int main(void)
 			   "repro=ready\n"
 			   "relay=ready\n"
 			   "llm_packet=ready\n"
+			   "llm_queue=ready\n"
+			   "llm_eval=passed\n"
 			   "decision=release\n"
 			   "status=ready\n")) {
 		return 1;
@@ -30,6 +34,6 @@ int main(void)
 	if (!rp_append_file("rp_ack", "ack=release;msg=12;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=release.decide;target=rp_release;status=ok")) return 1;
 	if (!rp_append_status("release=ready")) return 1;
-	printf("rp_release: decision=release checks=5 status=ready\n");
+	printf("rp_release: decision=release checks=7 status=ready\n");
 	return 0;
 }

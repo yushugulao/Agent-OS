@@ -106,10 +106,12 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_evidence` | evidence | package | claims, links, provenance node count |
 | `rp_knowledge` | evidence | package, compare | knowledge, semantic, and systematic review summary |
 | `rp_llm_req` | LLM bridge | privacy | host LLM request packet without embedded secrets |
+| `rp_llmq` | LLM bridge | privacy, package, release, dossier, metrics, compare, orchestrator | host relay request queue, route selection, and per-request secret policy |
 | `rp_llm_resp` | LLM bridge | privacy, compare | deterministic template LLM response |
 | `rp_relay` | LLM bridge | privacy, package, release, dossier, compare | host-file relay mode, secret location, network ownership, and fallback policy |
 | `rp_prompt` | LLM bridge | privacy, package, compare | prompt versions, route policy, token budget, and evaluation cases |
 | `rp_llmlog` | LLM bridge | privacy, package, compare | transcript count, packet audit, privacy status, and replay status |
+| `rp_llmeval` | LLM bridge | privacy, package, release, dossier, metrics, compare, orchestrator | template response evaluation cases, grounded answer count, route switches, and fallback use |
 | `rp_privacy` | privacy | release | outbound packet review result |
 | `rp_package` | package | compare | packaged artifact and release summary |
 | `rp_datarel` | package | release, dossier, compare | FAIR data, data product, DOI, and publication readiness |

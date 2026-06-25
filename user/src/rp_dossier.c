@@ -13,13 +13,15 @@ int main(void)
 	if (!rp_file_contains("rp_repro", "notebook_replay=passed")) return 1;
 	if (!rp_file_contains("rp_retrylog", "attempts=2")) return 1;
 	if (!rp_file_contains("rp_prompt", "provider_policy=host_relay")) return 1;
+	if (!rp_file_contains("rp_llmq", "queued=3")) return 1;
+	if (!rp_file_contains("rp_llmeval", "passed=7")) return 1;
 	if (!rp_file_contains("rp_relay", "network_stack=host_only")) return 1;
 	if (!rp_file_contains("rp_mail", "to=dossier")) return 1;
 	if (!rp_write_file("rp_dossier",
 			   "dossier_id=dossier:RUN-042:plain-ucore\n"
 			   "run_id=RUN-042\n"
-			   "sections=18\n"
-			   "includes=plan,wfio,lit,data,review,review-rounds,revision,report,evidence,lineage,knowledge,data-version,data-release,retry,repro,llm-relay,llm-governance,release\n"
+			   "sections=20\n"
+			   "includes=plan,wfio,lit,data,review,review-rounds,revision,report,evidence,lineage,knowledge,data-version,data-release,retry,repro,llm-relay,llm-queue,llm-eval,llm-governance,release\n"
 			   "site_pages=6\n"
 			   "status=ready\n")) {
 		return 1;
@@ -48,6 +50,6 @@ int main(void)
 	if (!rp_append_status("dossier=ready")) return 1;
 	if (!rp_append_status("reviewops=ready")) return 1;
 	if (!rp_append_status("submit=ready")) return 1;
-	printf("rp_dossier: sections=18 review_board=accepted submit=ready status=ready\n");
+	printf("rp_dossier: sections=20 review_board=accepted submit=ready status=ready\n");
 	return 0;
 }
