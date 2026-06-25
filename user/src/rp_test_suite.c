@@ -190,6 +190,31 @@ int main(void)
 	ok = ok && require_file_token("rp_revision", "change=2;target=chart_caption");
 	ok = ok && require_file_token("rp_revision", "revised_run=usable-run:RUN-900-rev1");
 
+	ok = ok && require_file_token("rp_wfio", "imports=5");
+	ok = ok && require_file_token("rp_wfio", "format=snakemake");
+	ok = ok && require_file_token("rp_wfio", "format=galaxy");
+	ok = ok && require_file_token("rp_wfio", "format=dvc");
+	ok = ok && require_file_token("rp_wfio", "format=cwl");
+	ok = ok && require_file_token("rp_wfio", "format=nextflow");
+	ok = ok && require_file_token("rp_wfio", "normalized_steps=15");
+	ok = ok && require_file_token("rp_wfio", "shared_run_id=RUN-042");
+	ok = ok && require_file_token("rp_wfio", "adapter_specs=6");
+	ok = ok && require_file_token("rp_wfio", "adapter_reports=6");
+	ok = ok && require_file_token("rp_wfio", "unsupported_steps=0");
+	ok = ok && require_file_token("rp_wfio", "plans=3");
+	ok = ok && require_file_token("rp_wfio", "migration_steps=9");
+	ok = ok && require_file_token("rp_wfio", "work_items=6");
+	ok = ok && require_file_token("rp_wfio", "tool_mappings=8");
+	ok = ok && require_file_token("rp_wfio", "risk_items=4");
+	ok = ok && require_file_token("rp_wfio", "rehearsals=2");
+	ok = ok && require_file_token("rp_wfio", "cases=4");
+	ok = ok && require_file_token("rp_wfio", "passed_cases=3");
+	ok = ok && require_file_token("rp_wfio", "manual_review_cases=1");
+	ok = ok && require_file_token("rp_wfio", "adapter_reports=6");
+	ok = ok && require_file_token("rp_wfio", "blocking_items=0");
+	ok = ok && require_file_token("rp_wfio", "decision=ready_for_agentos");
+	ok = ok && require_file_token("rp_wfio", "package=workflow-portability");
+
 	ok = ok && require_file_token("rp_runconf", "profiles=2");
 	ok = ok && require_file_token("rp_invocation", "status=recovered");
 	ok = ok && require_file_token("rp_completion", "actions=4");
@@ -213,6 +238,11 @@ int main(void)
 	ok = ok && require_file_token("rp_package", "evidence_extractions=3");
 	ok = ok && require_file_token("rp_package", "prisma_flows=1");
 	ok = ok && require_file_token("rp_package", "evidence_synthesis_files=2");
+	ok = ok && require_file_token("rp_package", "workflow_portability=rp_wfio");
+	ok = ok && require_file_token("rp_package", "portability_exports=5");
+	ok = ok && require_file_token("rp_package", "adapter_specs=6");
+	ok = ok && require_file_token("rp_package", "migration_steps=9");
+	ok = ok && require_file_token("rp_package", "rehearsal_cases=4");
 	ok = ok && require_file_token("rp_package", "bibliography=rp_runner");
 	ok = ok && require_file_token("rp_package", "citation_plan=rp_runner");
 	ok = ok && require_file_token("rp_package", "delivery_manifest=rp_package");
@@ -286,7 +316,7 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "knowledge_service_files=5");
 	ok = ok && require_file_token("rp_agentcmp", "runtime_service_files=5");
 	ok = ok && require_file_token("rp_backend", "cases=4");
-	ok = ok && require_file_token("rp_consistency", "checks=86");
+	ok = ok && require_file_token("rp_consistency", "checks=92");
 	ok = ok && require_file_token("rp_telemetry", "metric_files=151");
 
 	ok = ok && require_file_token("rp_sreg", "samples=8");
@@ -479,6 +509,7 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "library_sources=rp_knowledge");
 	ok = ok && require_file_token("rp_web_bundle", "evidence_protocols=1");
 	ok = ok && require_file_token("rp_web_bundle", "prisma_flows=1");
+	ok = ok && require_file_token("rp_web_bundle", "workflow_portability=rp_wfio");
 	ok = ok && require_file_token("rp_web_bundle", "delivery_manifest=rp_package");
 	ok = ok && require_file_token("rp_web_bundle", "delivery_files=8");
 	ok = ok && require_file_token("rp_web_bundle", "delivery_checks=3");
@@ -503,7 +534,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=408\n"
+			   "tests=438\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -516,6 +547,7 @@ int main(void)
 			   "research_input=passed\n"
 			   "workspace_import=passed\n"
 			   "literature_protocol=passed\n"
+			   "workflow_portability=passed\n"
 			   "workflow=passed\n"
 			   "workflow_runner_detail=passed\n"
 			   "artifact_ops=passed\n"
@@ -545,6 +577,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=408 catalog=passed data=passed services=passed actions=passed custom=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=438 catalog=passed data=passed services=passed actions=passed custom=passed portability=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }

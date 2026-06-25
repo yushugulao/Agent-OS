@@ -10,6 +10,7 @@ static const char *PROGRAMS[] = {
 	"rp_lineage",
 	"rp_site_export",
 	"rp_planner",
+	"rp_portability",
 	"rp_retriever",
 	"rp_analyst",
 	"rp_reviewer",
@@ -94,6 +95,11 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_status", "taskrec=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "budget=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "wfio=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "portability=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "adapters=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "migration=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "port_rehearsal=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "port_review=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "policy=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "retriever=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "analyst=ready");
@@ -277,6 +283,9 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_package", "llm_matched_responses=3");
 	state_ok = state_ok && rp_file_contains("rp_package", "evidence_protocols=1");
 	state_ok = state_ok && rp_file_contains("rp_package", "evidence_extractions=3");
+	state_ok = state_ok && rp_file_contains("rp_package", "workflow_portability=rp_wfio");
+	state_ok = state_ok && rp_file_contains("rp_package", "portability_exports=5");
+	state_ok = state_ok && rp_file_contains("rp_package", "migration_steps=9");
 	state_ok = state_ok && rp_file_contains("rp_object_query", "hits=8");
 	state_ok = state_ok && rp_file_contains("rp_lineage", "edges=7");
 	state_ok = state_ok && rp_file_contains("rp_site", "pages=6");
@@ -291,6 +300,13 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_dataver", "release_candidate=v2");
 	state_ok = state_ok && rp_file_contains("rp_reviewops", "governance=passed");
 	state_ok = state_ok && rp_file_contains("rp_wfio", "portable_steps=10");
+	state_ok = state_ok && rp_file_contains("rp_wfio", "imports=5");
+	state_ok = state_ok && rp_file_contains("rp_wfio", "format=nextflow");
+	state_ok = state_ok && rp_file_contains("rp_wfio", "adapter_specs=6");
+	state_ok = state_ok && rp_file_contains("rp_wfio", "migration_steps=9");
+	state_ok = state_ok && rp_file_contains("rp_wfio", "cases=4");
+	state_ok = state_ok && rp_file_contains("rp_wfio", "decision=ready_for_agentos");
+	state_ok = state_ok && rp_file_contains("rp_wfio", "package=workflow-portability");
 	state_ok = state_ok && rp_file_contains("rp_policy", "access_profiles=4");
 	state_ok = state_ok && rp_file_contains("rp_compliance", "decision=accepted");
 	state_ok = state_ok && rp_file_contains("rp_review2", "remaining_blockers=0");
@@ -362,7 +378,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_backend", "cases=4");
 	state_ok = state_ok && rp_file_contains("rp_backend_exec", "passed_cases=2");
 	state_ok = state_ok && rp_file_contains("rp_consistency", "state_relation=passed");
-	state_ok = state_ok && rp_file_contains("rp_consistency", "checks=86");
+	state_ok = state_ok && rp_file_contains("rp_consistency", "checks=92");
 	state_ok = state_ok && rp_file_contains("rp_ingest_files", "files=2");
 	state_ok = state_ok && rp_file_contains("rp_ingest_files", "derived_items=5");
 	state_ok = state_ok && rp_file_contains("rp_dataset_snapshot", "snapshots=2");
@@ -511,7 +527,8 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_uresrun", "dataset_rows_total=9");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "Comparison Metrics");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "passed_cases=3");
-	state_ok = state_ok && rp_file_contains("rp_tests", "tests=408");
+	state_ok = state_ok && rp_file_contains("rp_tests", "tests=438");
+	state_ok = state_ok && rp_file_contains("rp_tests", "workflow_portability=passed");
 	state_ok = state_ok && rp_file_contains("rp_tests", "status=passed");
 	state_ok = state_ok && rp_file_contains("rp_litrev", "papers=9");
 	state_ok = state_ok && rp_file_contains("rp_litrev", "evidence_extractions=3");
@@ -545,7 +562,9 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "data_profiles=4");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "figure_records=3");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "trial_records=4");
-	state_ok = state_ok && rp_file_contains("rp_agentcmp", "workflow_exports=2");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "workflow_exports=5");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "migration_steps=9");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "portability_rehearsal_cases=4");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "review_rounds=2");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "data_versions=2");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "data_pipeline_files=6");
@@ -577,6 +596,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=runtime_services;msg=run;status=ready");
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=publication_services;msg=pub;status=ready");
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=metrics;msg=14;status=ready");
+	state_ok = state_ok && rp_file_contains("rp_ack", "ack=portability;msg=wf;status=ready");
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=consistency;msg=22;status=ready");
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=artifact_ops;msg=artifact;status=ready");
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=data_pipeline;msg=data;status=ready");
@@ -588,6 +608,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=api_actions;msg=action;status=ready");
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=test_suite;msg=test;status=passed");
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=metrics.measure_plain");
+	state_ok = state_ok && rp_file_contains("rp_tool", "tool=portability.plan_migration");
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=consistency.check_tasks");
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=artifact_ops.write_artifact");
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=data_pipeline.collection");
@@ -598,7 +619,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=web_export.write_bundle");
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=test_suite.check_artifacts");
 	state_ok = state_ok && (rp_count_lines("rp_ack") >= 37);
-	state_ok = state_ok && (rp_count_lines("rp_tool") >= 143);
+	state_ok = state_ok && (rp_count_lines("rp_tool") >= 144);
 	state_ok = state_ok && rp_file_contains("rp_protocol", "ethics=approved");
 	printf("rp_orch: state_ok=%d\n", state_ok);
 	if (!state_ok) {

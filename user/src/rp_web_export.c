@@ -32,6 +32,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "citation_plan_entries=3");
 	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
 	ok = ok && rp_file_contains("rp_knowledge", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
+	ok = ok && rp_file_contains("rp_wfio", "package=workflow-portability");
 	ok = ok && rp_file_contains("rp_package", "deliverables=8");
 	ok = ok && rp_file_contains("rp_package", "delivery_files=8");
 	ok = ok && rp_file_contains("rp_package", "delivery_checks=3");
@@ -108,6 +109,7 @@ int main(void)
 			   "custom_research=rp_runner;custom_research_runs=3\n"
 			   "request_form=rp_input;upload_files=rp_input;workspace_imports=1\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner;evidence_protocols=1;evidence_extractions=3\n"
+			   "workflow_portability=rp_wfio;adapter_specs=6;migration_steps=9;rehearsal_cases=4\n"
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
 			   "delivery_files=8;delivery_checks=3;latest_delivery_status=ready\n"
 			   "evidence_bundle_zip=research-evidence-bundle.zip\n"
@@ -176,6 +178,7 @@ int main(void)
 			   "rebuild_steps=6\n"
 			   "data_pipeline_files=6\n"
 			   "workflow_runner_files=5\n"
+			   "workflow_portability_records=1\n"
 			   "relay_protocol_files=5\n"
 			   "status=ready\n")) {
 		return 1;
@@ -261,6 +264,7 @@ int main(void)
 			   "semantic_index=rp_semindex\n"
 			   "knowledge_answers=rp_kanswers\n"
 			   "library_sources=rp_knowledge\n"
+			   "workflow_portability=rp_wfio\n"
 			   "evidence_protocols=1\n"
 			   "evidence_extractions=3\n"
 			   "prisma_flows=1\n"
@@ -378,6 +382,7 @@ int main(void)
 			   "real_artifact_items=5\n"
 			   "request_form=rp_input;upload_files=rp_input;workspace_imports=1\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner;evidence_protocols=1;evidence_extractions=3\n"
+			   "workflow_portability=rp_wfio;adapter_specs=6;migration_steps=9;rehearsal_cases=4\n"
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
 			   "delivery_files=8;delivery_checks=3;evidence_bundle_entries=12\n"
 			   "prisma_flows=1\n"
@@ -390,6 +395,7 @@ int main(void)
 			   "package_manifest=ready\n"
 			   "downloadable_units=3\n"
 			   "runner_files=5\n"
+			   "workflow_portability_records=1\n"
 			   "data_pipeline_files=6\n"
 			   "custom_research_files=1\n"
 			   "custom_research_runs=3\n"

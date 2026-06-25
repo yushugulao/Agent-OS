@@ -32,6 +32,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "library_source_count=1");
 	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
 	ok = ok && rp_file_contains("rp_knowledge", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
+	ok = ok && rp_file_contains("rp_wfio", "package=workflow-portability");
 	ok = ok && rp_file_contains("rp_runner", "custom_status=ok");
 	ok = ok && rp_file_contains("rp_package", "deliverables=8");
 	ok = ok && rp_file_contains("rp_package", "delivery_files=8");
@@ -105,6 +106,9 @@ int main(void)
 			   "evidence_extractions=3\n"
 			   "bibliography=rp_runner\n"
 			   "citation_plan=rp_runner\n"
+			   "workflow_portability=rp_wfio\n"
+			   "adapter_specs=6\n"
+			   "migration_steps=9\n"
 			   "delivery_manifest=rp_package\n"
 			   "delivery_files=8\n"
 			   "delivery_checks=3\n"
@@ -176,6 +180,7 @@ int main(void)
 			   "metric_rows=8\n"
 			   "relay_protocol_files=5\n"
 			   "workflow_runner_files=5\n"
+			   "workflow_portability_records=1\n"
 			   "data_pipeline_files=6\n"
 			   "bio_service_files=5\n"
 			   "lab_resource_files=5\n"

@@ -47,6 +47,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_input", "library_sources=1");
 	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
 	ok = ok && rp_file_contains("rp_knowledge", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
+	ok = ok && rp_file_contains("rp_wfio", "decision=ready_for_agentos");
+	ok = ok && rp_file_contains("rp_wfio", "package=workflow-portability");
 	ok = ok && rp_file_contains("rp_runner", "status=ready");
 	ok = ok && rp_file_contains("rp_runner", "library_source_count=1");
 	ok = ok && rp_file_contains("rp_runner", "revision_task_id=usable-revision-task:RUN-900:1");
@@ -115,6 +117,11 @@ int main(void)
 			   "evidence_extractions=3\n"
 			   "prisma_flows=1\n"
 			   "evidence_synthesis_files=2\n"
+			   "workflow_portability=rp_wfio\n"
+			   "portability_exports=5\n"
+			   "adapter_specs=6\n"
+			   "migration_steps=9\n"
+			   "rehearsal_cases=4\n"
 			   "bibliography=rp_runner\n"
 			   "citation_plan=rp_runner\n"
 			   "delivery_manifest=rp_package\n"

@@ -6,6 +6,8 @@ int main(void)
 	if (!rp_file_contains("rp_fix", "status=recovered")) return 1;
 	if (!rp_file_contains("rp_release", "decision=release")) return 1;
 	if (!rp_file_contains("rp_wfio", "compatibility_checks=6")) return 1;
+	if (!rp_file_contains("rp_wfio", "package=workflow-portability")) return 1;
+	if (!rp_file_contains("rp_wfio", "migration_steps=9")) return 1;
 	if (!rp_file_contains("rp_review2", "rounds=2")) return 1;
 	if (!rp_file_contains("rp_review2", "review_threads=2")) return 1;
 	if (!rp_file_contains("rp_review2", "action_items=2")) return 1;
@@ -99,7 +101,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=86\n"
+			   "consistency_checks=92\n"
 			   "runner_stages=5\n"
 			   "runner_retries=1\n"
 			   "runner_cache_hits=1\n"
@@ -142,7 +144,10 @@ int main(void)
 			   "data_profiles=4\n"
 			   "figure_records=3\n"
 			   "trial_records=4\n"
-			   "workflow_exports=2\n"
+			   "workflow_exports=5\n"
+			   "workflow_portability_records=1\n"
+			   "migration_steps=9\n"
+			   "portability_rehearsal_cases=4\n"
 			   "review_rounds=2\n"
 			   "review_threads=2\n"
 			   "review_action_items=2\n"
@@ -200,7 +205,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=86\n"
+			   "consistency_checks=92\n"
 			   "runner_stages=5\n"
 			   "runner_retries=1\n"
 			   "runner_cache_hits=1\n"
@@ -243,7 +248,10 @@ int main(void)
 			   "data_profiles=4\n"
 			   "figure_records=3\n"
 			   "trial_records=4\n"
-			   "workflow_exports=2\n"
+			   "workflow_exports=5\n"
+			   "workflow_portability_records=1\n"
+			   "migration_steps=9\n"
+			   "portability_rehearsal_cases=4\n"
 			   "review_rounds=2\n"
 			   "review_threads=2\n"
 			   "review_action_items=2\n"

@@ -102,13 +102,14 @@ timeout 45s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INI
 Observed key output:
 
 ```text
-rp_orch: start programs=39
+rp_orch: start programs=40
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_object_store: records=8 status=ready
 rp_object_query: hits=8 ready_hits=7 status=ready
 rp_lineage: edges=7 status=ready
 rp_site_export: pages=6 status=ready
 rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 messages=21 schedule=ready status=planned
+rp_portability: imports=5 adapters=6 migration_steps=9 rehearsals=2 status=ready
 rp_retriever: literature=3 evidence_links=5 status=ready
 rp_analyst: datasets=4 profiles=4 statistics=6 figures=3 failure=tool_output_missing status=ready
 rp_reviewer: claims=8 protocol_checks=5 release_checks=4 rounds=2 status=accepted
@@ -136,13 +137,13 @@ rp_release: decision=release checks=17 status=ready
 rp_dossier: sections=36 review_board=accepted submit=ready status=ready
 rp_service_surface: bio=ready lab_resources=ready publication=ready knowledge=ready runtime=ready status=ready
 rp_backend: cases=4 executable=2 exports=1 status=ready
-rp_consistency: checks=86 tasks=21 llm=3 relay=5 workflow=5 data=6 services=25 backend=4 artifacts=4 agents=7 status=ready
+rp_consistency: checks=92 tasks=21 llm=3 relay=5 workflow=5 portability=6 data=6 services=25 backend=4 artifacts=4 agents=7 status=ready
 rp_metrics: telemetry_spans=8 acks=33 tools=115 services=25 delta_items=20 status=ready
 rp_ui_export: pages=5 run=RUN-042 custom_runs=3 compare=ready status=ready
 rp_web_export: routes=21 api_payloads=14 actions=8 bundle=ready status=ready
-rp_test_suite: tests=408 catalog=passed data=passed services=passed actions=passed custom=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed
-rp_compare_plain: plain_kernel=passed objects=500 programs=39 state_files=169 acks=39 tools=143 status=ready
-rp_orch: programs_ok=39 programs_total=39
+rp_test_suite: tests=438 catalog=passed data=passed services=passed actions=passed custom=passed portability=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed
+rp_compare_plain: plain_kernel=passed objects=500 programs=40 state_files=169 acks=40 tools=144 status=ready
+rp_orch: programs_ok=40 programs_total=40
 rp_orch: state_ok=1
 rp_orch: passed
 ```
@@ -170,10 +171,10 @@ This first native uCore version validates:
 - platform self-check status,
 - catalog search,
 - a complete research run simulation with one failed stage repaired in user space.
-- multi-process execution with thirty-nine ordinary uCore user programs.
+- multi-process execution with forty ordinary uCore user programs.
 - ordinary file-backed state exchange across role programs.
 - active cross-file consistency checks across tasks, LLM packets, workflow invocation, completion hooks, backend cases, and runner artifacts.
-- user-space test suite with 408 checks over catalog, data pipeline, bio services, lab resource services, publication services, knowledge services, runtime services, workflow, artifact operations, derived FASTQ/alignment/metrics/count/archive sections, workflow runner files, workflow runner detail fields, custom research fields, request-form sections, uploaded-material sections, reusable-source sections, workspace-import records, bibliography, citation plan, literature search, screening decisions, evidence extraction, evidence protocol, PRISMA-style flow, package export indexes, delivery file rows, delivery checks, delivery manifest file names, evidence bundle contents, review page, human review records, revision-task records, review thread records, review comment records, action item records, Host UI render data, Agent collaboration, UI export, Host Web/API export files, file-backed POST action records, LLM relay request/packet/response matching, AgentCompare, and consistency records.
+- user-space test suite with 438 checks over catalog, data pipeline, bio services, lab resource services, publication services, knowledge services, runtime services, workflow, workflow portability records, adapter summaries, migration plans, rehearsal cases, artifact operations, derived FASTQ/alignment/metrics/count/archive sections, workflow runner files, workflow runner detail fields, custom research fields, request-form sections, uploaded-material sections, reusable-source sections, workspace-import records, bibliography, citation plan, literature search, screening decisions, evidence extraction, evidence protocol, PRISMA-style flow, package export indexes, delivery file rows, delivery checks, delivery manifest file names, evidence bundle contents, review page, human review records, revision-task records, review thread records, review comment records, action item records, Host UI render data, Agent collaboration, UI export, Host Web/API export files, file-backed POST action records, LLM relay request/packet/response matching, AgentCompare, and consistency records.
 - object catalog, reusable object records, object query, lineage, site export, task messages, role acknowledgements, tool logs, scheduling records, task records, task ranking, workflow import/export description, resource budget, project policy, risk register, CAPA records, release delta review, run configuration, workflow invocation, workflow completion, execution plan, worker health, execution timeline, observer evidence, concrete input files, three custom research requests, nine small CSV-style rows, request-form, uploaded-material, reusable-source, workspace-import, generated workspace-template, and workspace-run sections, three derived custom run summaries, human review records, revision-task records, one revised run record, review thread records, review comment records, action item records, bibliography and citation-plan records, literature search, candidate screening, evidence extraction, evidence protocol, PRISMA-style flow, evidence synthesis, input-file scan records, normalized FASTQ, alignment table, metrics JSON, gene-count CSV, and archive manifest sections inside `rp_artifact`, dataset snapshots, data previews, quality results, transform records, dataset collections, stage DAG, stage logs, workflow runner execution state, stage command/output records, dependency checks, content-keyed cache records, retry plan with failure reason and rerun input/output fields, run events with retry decisions and report/evidence references, artifact manifest with support links, recovered artifacts, report text, chart data, package export indexes for report, evidence, provenance, reusable source selection, reviewer delivery, eight delivery file rows, three delivery checks, delivery manifest JSON/Markdown names, evidence bundle zip name, evidence bundle contents, raw artifacts, and review page sections, UI navigation, timeline rows, artifact previews, Agent decision rows, evidence previews, comparison metric rows, Host Web/API route and payload files, file-backed action request and response files, failure classification, retry records, run views, data dictionary, data profile records, figure records, calculation replay, samples, quality, protocol, SOP, experiment, trial records, lab operations, training, sample registry, ethics review, data access review, cohort view, instrument registry, inventory, procurement, resource scheduling, result review, publication plan, peer review response, FAIR package, literature review, citation graph, semantic index, knowledge answers, runtime environment records, notebook replay records, ELN records, worker pool records, telemetry, health summaries, evidence, claim records, provenance paths, knowledge, multi-round review, report revision package, LLM packet queue, host relay request/response handoff, prompt routing, LLM audit log, LLM evaluation, privacy, compliance record, FAIR data release, data product versioning, reproduction package, package, release, dossier, review governance, submission package, backend scenario evidence, AgentCompare metrics, and plain-kernel comparison files.
 
 It does not use Agent-OS kernel features. That is intentional for this plain-kernel baseline.

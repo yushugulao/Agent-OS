@@ -66,6 +66,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_eln", "eln_entries=3");
 	ok = ok && rp_file_contains("rp_wpool", "worker_pools=2");
 	ok = ok && rp_file_contains("rp_runop", "ops=7");
+	ok = ok && rp_file_contains("rp_wfio", "imports=5");
+	ok = ok && rp_file_contains("rp_wfio", "adapter_specs=6");
+	ok = ok && rp_file_contains("rp_wfio", "migration_steps=9");
+	ok = ok && rp_file_contains("rp_wfio", "cases=4");
+	ok = ok && rp_file_contains("rp_wfio", "blocking_items=0");
+	ok = ok && rp_file_contains("rp_wfio", "package=workflow-portability");
 	if (!ok) return 1;
 
 	int task_lines = rp_count_lines("rp_taskrec");
@@ -204,6 +210,11 @@ int main(void)
 	int runtime_envs = rp_get_int_value("rp_runenv", "environments=");
 	int notebook_cells = rp_get_int_value("rp_nbexec", "executed_cells=");
 	int eln_entries = rp_get_int_value("rp_eln", "eln_entries=");
+	int portability_imports = rp_get_int_value("rp_wfio", "portability_imports=");
+	int adapter_specs = rp_get_int_value("rp_wfio", "adapter_specs=");
+	int migration_steps = rp_get_int_value("rp_wfio", "migration_steps=");
+	int rehearsal_cases = rp_get_int_value("rp_wfio", "cases=");
+	int blocking_items = rp_get_int_value("rp_wfio", "blocking_items=");
 	ok = ok && require_equal("bio_samples", bio_samples, 8);
 	ok = ok && require_equal("bio_aliquots", bio_aliquots, 12);
 	ok = ok && require_equal("access_requests", access_requests, 3);
@@ -218,6 +229,11 @@ int main(void)
 	ok = ok && require_equal("runtime_envs", runtime_envs, 4);
 	ok = ok && require_equal("notebook_cells", notebook_cells, 8);
 	ok = ok && require_equal("eln_entries", eln_entries, 3);
+	ok = ok && require_equal("portability_imports", portability_imports, 5);
+	ok = ok && require_equal("adapter_specs", adapter_specs, 6);
+	ok = ok && require_equal("migration_steps", migration_steps, 9);
+	ok = ok && require_equal("rehearsal_cases", rehearsal_cases, 4);
+	ok = ok && require_equal("blocking_items", blocking_items, 0);
 
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
@@ -228,7 +244,7 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=86\n"
+			   "checks=92\n"
 			   "task_records=21\n"
 			   "ready_tasks=21\n"
 			   "high_tasks=4\n"
@@ -275,6 +291,10 @@ int main(void)
 			   "runtime_service_files=5\n"
 			   "runtime_envs=4\n"
 			   "notebook_cells=8\n"
+			   "workflow_portability_records=1\n"
+			   "adapter_specs=6\n"
+			   "migration_steps=9\n"
+			   "portability_rehearsal_cases=4\n"
 			   "state_relation=passed\n"
 			   "status=ready\n")) {
 		return 1;
@@ -285,6 +305,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend;target=rp_consistency;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline;target=rp_consistency;status=ok")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=86 tasks=21 llm=3 relay=5 workflow=5 data=6 services=25 backend=4 artifacts=4 agents=7 status=ready\n");
+	printf("rp_consistency: checks=92 tasks=21 llm=3 relay=5 workflow=5 portability=6 data=6 services=25 backend=4 artifacts=4 agents=7 status=ready\n");
 	return 0;
 }
