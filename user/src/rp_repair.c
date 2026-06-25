@@ -4,6 +4,7 @@
 int main(void)
 {
 	if (!rp_file_contains("rp_data", "failed_stage=align")) return 1;
+	if (!rp_file_contains("rp_fail", "recoverable=1")) return 1;
 	if (!rp_file_contains("rp_mail", "to=repair")) return 1;
 	if (!rp_file_contains("rp_retryq", "status=pending")) return 1;
 	if (!rp_write_file("rp_fix",

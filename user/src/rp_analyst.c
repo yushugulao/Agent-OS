@@ -28,12 +28,23 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_write_file("rp_fail",
+			   "failed_stage=align\n"
+			   "failure_class=tool_output_missing\n"
+			   "severity=medium\n"
+			   "recoverable=1\n"
+			   "recommended_action=minimal_rerun\n"
+			   "status=ready\n")) {
+		return 1;
+	}
 	if (!rp_append_file("rp_ack", "ack=analyst;msg=2;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=analyst.profile_dataset;target=rp_datadic;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=analyst.replay_notebook;target=rp_compute;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=analyst.classify_failure;target=rp_fail;status=ok")) return 1;
 	if (!rp_append_status("analyst=ready")) return 1;
 	if (!rp_append_status("datadict=ready")) return 1;
 	if (!rp_append_status("compute=ready")) return 1;
-	printf("rp_analyst: datasets=4 statistics=6 figures=3 schema_fields=17 replay=ready status=ready\n");
+	if (!rp_append_status("failure=ready")) return 1;
+	printf("rp_analyst: datasets=4 statistics=6 figures=3 schema_fields=17 failure=tool_output_missing status=ready\n");
 	return 0;
 }

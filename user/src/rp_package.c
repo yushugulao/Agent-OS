@@ -11,6 +11,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_compute", "replay=ready");
 	ok = ok && rp_file_contains("rp_labops", "maintenance=passed");
 	ok = ok && rp_file_contains("rp_training", "gaps=0");
+	ok = ok && rp_file_contains("rp_fail", "recoverable=1");
 	ok = ok && rp_file_contains("rp_retrylog", "final_result=recovered");
 	ok = ok && rp_file_contains("rp_prompt", "routes=3");
 	ok = ok && rp_file_contains("rp_llmlog", "replay=ready");

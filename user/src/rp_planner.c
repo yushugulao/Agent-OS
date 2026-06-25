@@ -34,6 +34,16 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_write_file("rp_budget",
+			   "run_id=RUN-042\n"
+			   "token_budget=4096\n"
+			   "qemu_ticks_budget=64\n"
+			   "storage_files_budget=64\n"
+			   "worker_slots=4\n"
+			   "decision=within_budget\n"
+			   "status=ready\n")) {
+		return 1;
+	}
 	if (!rp_write_file("rp_retryq",
 			   "retry_item=align\n"
 			   "owner=repair\n"
@@ -48,9 +58,11 @@ int main(void)
 	if (!rp_append_file("rp_ack", "ack=planner;msg=0;status=sent")) return 1;
 	if (!rp_append_file("rp_tool", "tool=planner.create_plan;target=rp_plan;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=planner.schedule_tasks;target=rp_sched;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=planner.assign_budget;target=rp_budget;status=ok")) return 1;
 	if (!rp_append_status("planner=planned")) return 1;
 	if (!rp_append_status("mail=ready")) return 1;
 	if (!rp_append_status("schedule=ready")) return 1;
+	if (!rp_append_status("budget=ready")) return 1;
 	printf("rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 messages=14 schedule=ready status=planned\n");
 	return 0;
 }

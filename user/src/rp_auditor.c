@@ -10,6 +10,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_review", "decision=accepted_after_repair");
 	ok = ok && rp_file_contains("rp_report", "status=packaged");
 	ok = ok && rp_file_contains("rp_fix", "status=recovered");
+	ok = ok && rp_file_contains("rp_fail", "failure_class=tool_output_missing");
 	ok = ok && rp_file_contains("rp_retrylog", "status=ready");
 	ok = ok && rp_file_contains("rp_datadic", "schema_drift=0");
 	ok = ok && rp_file_contains("rp_compute", "replay=ready");
@@ -24,6 +25,7 @@ int main(void)
 			   "replay=verified\n"
 			   "labops=verified\n"
 			   "retry=verified\n"
+			   "failure=verified\n"
 			   "status=passed\n")) {
 		return 1;
 	}

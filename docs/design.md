@@ -68,11 +68,13 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_ack` | role programs | metrics, compare, orchestrator | role acknowledgements for completed tasks |
 | `rp_tool` | role programs | metrics, compare, orchestrator | tool-level operation log written by ordinary user programs |
 | `rp_sched` | planner | metrics, compare, orchestrator | task queue size, priority summary, retry policy, and stage-order deadline model |
+| `rp_budget` | planner | query, metrics, compare, orchestrator | token, tick, storage, and worker-slot budget summary |
 | `rp_retryq` | planner | repair | pending retry item for the failed align stage |
 | `rp_lit` | retriever | reviewer, auditor | literature count and evidence links |
 | `rp_data` | analyst | reviewer, repair, auditor | datasets, statistics, figures, failed stage |
 | `rp_datadic` | analyst | lab, package, compare | schema fields, controlled terms, transform specs, drift result |
 | `rp_compute` | analyst | lab, package, compare | notebook replay, statistics, calculation job, figure summary |
+| `rp_fail` | analyst | repair, auditor, package, metrics, compare | failure class, severity, recoverability, and recommended action |
 | `rp_samples` | samples | quality, SOP | sample sheet, cohort, and custody summary |
 | `rp_quality` | quality | protocol, experiment, compare | data quality and schema validation result |
 | `rp_review` | reviewer | writer, auditor | claim review and release decision |
@@ -85,6 +87,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_fix` | repair | auditor | repaired stage and generated artifact |
 | `rp_retrylog` | repair | auditor, package, dossier, compare | retry attempts, dedupe key, backoff ticks, and final result |
 | `rp_telemetry` | telemetry | AgentCompare | trace, bottleneck, poll, scan, and tick observations |
+| `rp_health` | telemetry | compare, orchestrator | worker health, budget state, failure count, retry count, and view status |
 | `rp_audit` | auditor | orchestrator | final provenance, release, package status |
 | `rp_status` | all role programs | orchestrator | role-level status summary |
 | `rp_objects` | catalog | query, compare | object counts and platform scale |
@@ -94,6 +97,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_lineage` | lineage | site export, compare | workflow artifact relationships |
 | `rp_site` | site export | compare | exported site page summary |
 | `rp_query` | query | compare | selected search result counts |
+| `rp_runview` | query | metrics, compare, orchestrator | run-level view that joins query hits, scheduler state, failure count, and budget state |
 | `rp_evidence` | evidence | package | claims, links, provenance node count |
 | `rp_knowledge` | evidence | package, compare | knowledge, semantic, and systematic review summary |
 | `rp_llm_req` | LLM bridge | privacy | host LLM request packet without embedded secrets |
