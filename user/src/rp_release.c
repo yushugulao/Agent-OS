@@ -7,6 +7,7 @@ int main(void)
 	if (!rp_file_contains("rp_audit", "status=passed")) return 1;
 	if (!rp_file_contains("rp_privacy", "decision=accepted")) return 1;
 	if (!rp_file_contains("rp_datarel", "fair=passed")) return 1;
+	if (!rp_file_contains("rp_dataver", "release_candidate=v2")) return 1;
 	if (!rp_file_contains("rp_repro", "reproduction_checks=9")) return 1;
 	if (!rp_file_contains("rp_repro", "retry_replay=passed")) return 1;
 	if (!rp_file_contains("rp_relay", "status=ready")) return 1;
@@ -18,6 +19,7 @@ int main(void)
 			   "audit=passed\n"
 			   "privacy=accepted\n"
 			   "fair=passed\n"
+			   "data_version=v2\n"
 			   "repro=ready\n"
 			   "relay=ready\n"
 			   "llm_packet=ready\n"

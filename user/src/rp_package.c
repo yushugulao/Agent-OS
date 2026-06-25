@@ -5,8 +5,10 @@ int main(void)
 {
 	int ok = 1;
 	ok = ok && rp_file_contains("rp_report", "status=packaged");
+	ok = ok && rp_file_contains("rp_revision", "final_status=ready");
 	ok = ok && rp_file_contains("rp_evidence", "status=ready");
 	ok = ok && rp_file_contains("rp_knowledge", "synthesis=ready");
+	ok = ok && rp_file_contains("rp_wfio", "compatibility_checks=6");
 	ok = ok && rp_file_contains("rp_datadic", "schema_fields=17");
 	ok = ok && rp_file_contains("rp_compute", "replay=ready");
 	ok = ok && rp_file_contains("rp_labops", "maintenance=passed");
@@ -37,6 +39,15 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_write_file("rp_dataver",
+			   "product=data-product:RUN-042\n"
+			   "versions=2\n"
+			   "snapshots=3\n"
+			   "schema_versions=2\n"
+			   "release_candidate=v2\n"
+			   "status=ready\n")) {
+		return 1;
+	}
 	if (!rp_write_file("rp_repro",
 			   "env_locks=4\n"
 			   "notebook_replay=passed\n"
@@ -49,9 +60,11 @@ int main(void)
 	}
 	if (!rp_append_file("rp_ack", "ack=package;msg=11;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.build_artifacts;target=rp_package;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.version_data;target=rp_dataver;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.build_repro;target=rp_repro;status=ok")) return 1;
 	if (!rp_append_status("package=ready")) return 1;
 	if (!rp_append_status("datarel=ready")) return 1;
+	if (!rp_append_status("dataver=ready")) return 1;
 	if (!rp_append_status("repro=ready")) return 1;
 	printf("rp_package: artifacts=12 checks=19 fair=passed repro=ready status=ready\n");
 	return 0;

@@ -69,6 +69,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_tool` | role programs | metrics, compare, orchestrator | tool-level operation log written by ordinary user programs |
 | `rp_sched` | planner | metrics, compare, orchestrator | task queue size, priority summary, retry policy, and stage-order deadline model |
 | `rp_budget` | planner | query, metrics, compare, orchestrator | token, tick, storage, and worker-slot budget summary |
+| `rp_wfio` | planner | package, dossier, metrics, compare, orchestrator | workflow import/export formats, portable step count, and compatibility checks |
 | `rp_retryq` | planner | repair | pending retry item for the failed align stage |
 | `rp_lit` | retriever | reviewer, auditor | literature count and evidence links |
 | `rp_data` | analyst | reviewer, repair, auditor | datasets, statistics, figures, failed stage |
@@ -78,12 +79,14 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_samples` | samples | quality, SOP | sample sheet, cohort, and custody summary |
 | `rp_quality` | quality | protocol, experiment, compare | data quality and schema validation result |
 | `rp_review` | reviewer | writer, auditor | claim review and release decision |
+| `rp_review2` | reviewer | writer, dossier, metrics, compare, orchestrator | multi-round review threads, comment resolution, and remaining blocker count |
 | `rp_protocol` | protocol | SOP, compare | protocol, ethics, analysis plan, and amendment status |
 | `rp_soplog` | SOP execution | experiment | controlled SOP execution evidence |
 | `rp_exper` | experiment | telemetry | experiment campaign and selected best trial |
 | `rp_labops` | lab | package, compare | instrument, reagent, inventory, reservation, and maintenance summary |
 | `rp_training` | lab | package, compare | personnel training and competency summary |
 | `rp_report` | writer | auditor | report sections, citations, response items |
+| `rp_revision` | writer | package, dossier, metrics, compare, orchestrator | report draft versions, review response items, and resolved comment count |
 | `rp_fix` | repair | auditor | repaired stage and generated artifact |
 | `rp_retrylog` | repair | auditor, package, dossier, compare | retry attempts, dedupe key, backoff ticks, and final result |
 | `rp_telemetry` | telemetry | AgentCompare | trace, bottleneck, poll, scan, and tick observations |
@@ -108,6 +111,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_privacy` | privacy | release | outbound packet review result |
 | `rp_package` | package | compare | packaged artifact and release summary |
 | `rp_datarel` | package | release, dossier, compare | FAIR data, data product, DOI, and publication readiness |
+| `rp_dataver` | package | release, dossier, metrics, compare, orchestrator | data product versions, snapshots, schema versions, and release candidate |
 | `rp_repro` | package | release, dossier, compare | environment locks, notebook replay, reproduction checks, and research object crate |
 | `rp_release` | release | dossier, compare | release decision from package, audit, privacy, and LLM packet state |
 | `rp_dossier` | dossier | compare | final review material summary |

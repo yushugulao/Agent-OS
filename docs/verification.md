@@ -88,9 +88,9 @@ rp_site_export: pages=6 status=ready
 rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 messages=14 schedule=ready status=planned
 rp_retriever: literature=3 evidence_links=5 status=ready
 rp_analyst: datasets=4 statistics=6 figures=3 schema_fields=17 failure=tool_output_missing status=ready
-rp_reviewer: claims=8 protocol_checks=5 release_checks=4 status=accepted
+rp_reviewer: claims=8 protocol_checks=5 release_checks=4 rounds=2 status=accepted
 rp_lab: samples=4 quality_checks=7 protocol_checks=5 trials=4 labops=ready status=ready
-rp_writer: sections=8 citations=9 response_items=3 status=packaged
+rp_writer: sections=8 citations=9 revisions=3 status=packaged
 rp_repair: failed_stage=align action=minimal_rerun attempts=2 status=recovered
 rp_auditor: provenance=verified release=ready package=ready status=passed
 rp_query: workflow=34 agent=26 evidence=10 runview=ready status=ready
@@ -99,9 +99,9 @@ rp_llm_bridge: requests=1 responses=1 routes=3 relay=ready mode=template status=
 rp_privacy: checked=5 redactions=0 status=ready
 rp_package: artifacts=12 checks=19 fair=passed repro=ready status=ready
 rp_release: decision=release checks=5 status=ready
-rp_dossier: sections=14 review_board=accepted submit=ready status=ready
-rp_metrics: telemetry_spans=8 acks=14 tools=26 sched=14 retry=2 health=ready scanned=128 status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=22 state_files=52 acks=15 tools=28 status=ready
+rp_dossier: sections=18 review_board=accepted submit=ready status=ready
+rp_metrics: telemetry_spans=8 acks=14 tools=30 sched=14 review=2 data_versions=2 status=ready
+rp_compare_plain: plain_kernel=passed objects=500 programs=22 state_files=56 acks=15 tools=32 status=ready
 rp_orch: programs_ok=22 programs_total=22
 rp_orch: state_ok=1
 rp_orch: passed
@@ -132,6 +132,6 @@ This first native uCore version validates:
 - a complete research run simulation with one failed stage repaired in user space.
 - multi-process execution with twenty-two ordinary uCore user programs.
 - ordinary file-backed state exchange across role programs.
-- object catalog, reusable object records, object query, lineage, site export, task messages, role acknowledgements, tool logs, scheduling records, resource budget, failure classification, retry records, run views, data dictionary, calculation replay, samples, quality, protocol, SOP, experiment, lab operations, training, telemetry, health summaries, evidence, knowledge, LLM packet, host relay description, prompt routing, LLM audit log, privacy, FAIR data release, reproduction package, package, release, dossier, review governance, submission package, AgentCompare metrics, and plain-kernel comparison files.
+- object catalog, reusable object records, object query, lineage, site export, task messages, role acknowledgements, tool logs, scheduling records, workflow import/export description, resource budget, failure classification, retry records, run views, data dictionary, calculation replay, samples, quality, protocol, SOP, experiment, lab operations, training, telemetry, health summaries, evidence, knowledge, multi-round review, report revision package, LLM packet, host relay description, prompt routing, LLM audit log, privacy, FAIR data release, data product versioning, reproduction package, package, release, dossier, review governance, submission package, AgentCompare metrics, and plain-kernel comparison files.
 
 It does not use Agent-OS kernel features. That is intentional for this plain-kernel baseline.

@@ -87,6 +87,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_tool`
 - `rp_sched`
 - `rp_budget`
+- `rp_wfio`
 - `rp_retryq`
 - `rp_lit`
 - `rp_data`
@@ -96,12 +97,14 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_samples`
 - `rp_quality`
 - `rp_review`
+- `rp_review2`
 - `rp_protocol`
 - `rp_soplog`
 - `rp_exper`
 - `rp_labops`
 - `rp_training`
 - `rp_report`
+- `rp_revision`
 - `rp_fix`
 - `rp_retrylog`
 - `rp_telemetry`
@@ -126,6 +129,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_privacy`
 - `rp_package`
 - `rp_datarel`
+- `rp_dataver`
 - `rp_repro`
 - `rp_release`
 - `rp_dossier`
@@ -180,9 +184,9 @@ rp_site_export: pages=6 status=ready
 rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 messages=14 schedule=ready status=planned
 rp_retriever: literature=3 evidence_links=5 status=ready
 rp_analyst: datasets=4 statistics=6 figures=3 schema_fields=17 failure=tool_output_missing status=ready
-rp_reviewer: claims=8 protocol_checks=5 release_checks=4 status=accepted
+rp_reviewer: claims=8 protocol_checks=5 release_checks=4 rounds=2 status=accepted
 rp_lab: samples=4 quality_checks=7 protocol_checks=5 trials=4 labops=ready status=ready
-rp_writer: sections=8 citations=9 response_items=3 status=packaged
+rp_writer: sections=8 citations=9 revisions=3 status=packaged
 rp_repair: failed_stage=align action=minimal_rerun attempts=2 status=recovered
 rp_auditor: provenance=verified release=ready package=ready status=passed
 rp_query: workflow=34 agent=26 evidence=10 runview=ready status=ready
@@ -191,9 +195,9 @@ rp_llm_bridge: requests=1 responses=1 routes=3 relay=ready mode=template status=
 rp_privacy: checked=5 redactions=0 status=ready
 rp_package: artifacts=12 checks=19 fair=passed repro=ready status=ready
 rp_release: decision=release checks=5 status=ready
-rp_dossier: sections=14 review_board=accepted submit=ready status=ready
-rp_metrics: telemetry_spans=8 acks=14 tools=26 sched=14 retry=2 health=ready scanned=128 status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=22 state_files=52 acks=15 tools=28 status=ready
+rp_dossier: sections=18 review_board=accepted submit=ready status=ready
+rp_metrics: telemetry_spans=8 acks=14 tools=30 sched=14 review=2 data_versions=2 status=ready
+rp_compare_plain: plain_kernel=passed objects=500 programs=22 state_files=56 acks=15 tools=32 status=ready
 rp_orch: programs_ok=22 programs_total=22
 rp_orch: state_ok=1
 rp_orch: passed
@@ -215,10 +219,10 @@ No output means the directories match.
 
 ## Next Work
 
-The current native programs prove that the plain uCore kernel can boot and run a research-platform-shaped catalog process plus a multi-process workflow with ordinary file-backed object storage, task messages, role acknowledgements, tool logs, scheduling records, resource budget, failure classification, retry records, query, run view, lineage, site export, data dictionary, calculation replay, samples, quality, protocol, SOP, experiment, lab operations, personnel training, telemetry, health summary, evidence, knowledge, semantic summary, systematic review summary, LLM packet, host relay description, prompt routing, LLM audit log, privacy review, FAIR data release, data product summary, reproduction package, release, dossier, review governance, submission package, AgentCompare metrics, and comparison services. Further migration work should move more behavior from embedded tables into active user-space services:
+The current native programs prove that the plain uCore kernel can boot and run a research-platform-shaped catalog process plus a multi-process workflow with ordinary file-backed object storage, task messages, role acknowledgements, tool logs, scheduling records, workflow import/export description, resource budget, failure classification, retry records, query, run view, lineage, site export, data dictionary, calculation replay, samples, quality, protocol, SOP, experiment, lab operations, personnel training, telemetry, health summary, evidence, knowledge, semantic summary, systematic review summary, multi-round review, report revision package, LLM packet, host relay description, prompt routing, LLM audit log, privacy review, FAIR data release, data product summary, data product versioning, reproduction package, release, dossier, review governance, submission package, AgentCompare metrics, and comparison services. Further migration work should move more behavior from embedded tables into active user-space services:
 
 - Persistent platform state files in the uCore root file system.
-- Expand the planner, retriever, analyst, reviewer, writer, repair, auditor, object query, lineage, export, scheduling, resource budget, failure classification, retry handling, run views, data dictionary, calculation replay, sample, quality, protocol, SOP, experiment, lab operations, telemetry, health summaries, evidence, knowledge, FAIR data release, reproduction, review governance, LLM packet, host relay description, prompt routing, privacy, release, dossier, submission, and AgentCompare programs beyond the current fixed records.
+- Expand the planner, retriever, analyst, reviewer, writer, repair, auditor, object query, lineage, export, scheduling, workflow import/export, resource budget, failure classification, retry handling, run views, data dictionary, calculation replay, sample, quality, protocol, SOP, experiment, lab operations, telemetry, health summaries, evidence, knowledge, FAIR data release, data product versioning, reproduction, review governance, LLM packet, host relay description, prompt routing, privacy, release, dossier, submission, and AgentCompare programs beyond the current fixed records.
 - A richer user-space coordination protocol using only unchanged uCore syscalls.
 - A host LLM relay that consumes the existing ordinary request files and writes ordinary response files.
 - More executable checks for workflow portability, release review, and AgentCompare comparison.
