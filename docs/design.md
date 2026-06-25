@@ -13,7 +13,7 @@ The current runtime has three layers:
 1. Upstream uCore kernel.
 2. Restored uCore user library and program build flow.
 3. `rp_plain`, a native user process that carries the research platform catalog, feature groups, mature platform mappings, and self-check logic.
-4. `rp_orch`, a native user process that runs twenty-three platform programs through ordinary `fork`, `exec`, and `waitpid`.
+4. `rp_orch`, a native user process that runs twenty-four platform programs through ordinary `fork`, `exec`, and `waitpid`.
 
 The user process deliberately uses ordinary C data structures and ordinary uCore process execution. This makes the result a baseline for later comparison with the Agent-OS kernel-enhanced version.
 
@@ -51,6 +51,7 @@ The platform programs add an executable multi-process shape:
 - `rp_llm_bridge`
 - `rp_privacy`
 - `rp_package`
+- `rp_delta`
 - `rp_release`
 - `rp_dossier`
 - `rp_metrics`
@@ -124,6 +125,8 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_privacy` | privacy | release | outbound packet review result |
 | `rp_compliance` | privacy | package, release, dossier, metrics, compare, orchestrator | policy compliance result covering access profiles, data use rules, LLM packets, secret placement, and license checks |
 | `rp_package` | package | compare | packaged artifact and release summary |
+| `rp_diff` | delta | release, dossier, metrics, compare, orchestrator | release candidate difference summary across report, data, figures, risk, and reproduction evidence |
+| `rp_delta` | delta | release, dossier, metrics, compare, orchestrator | release delta review with accepted item count, blocked count, package, risk, and reproduction status |
 | `rp_datarel` | package | release, dossier, compare | FAIR data, data product, DOI, and publication readiness |
 | `rp_dataver` | package | release, dossier, metrics, compare, orchestrator | data product versions, snapshots, schema versions, and release candidate |
 | `rp_repro` | package | release, dossier, compare | environment locks, notebook replay, reproduction checks, and research object crate |

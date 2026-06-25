@@ -17,9 +17,9 @@ int main(void)
 	if (!rp_file_contains("rp_trialrec", "selected=trial-3")) return 1;
 	if (!rp_file_contains("rp_risk", "open_risks=0")) return 1;
 	if (!rp_file_contains("rp_capa", "verifications=2")) return 1;
-	if (!rp_file_contains("rp_sched", "queue_items=15")) return 1;
+	if (!rp_file_contains("rp_sched", "queue_items=16")) return 1;
 	if (!rp_file_contains("rp_taskrec", "class=critical")) return 1;
-	if (!rp_file_contains("rp_rank", "selected=6")) return 1;
+	if (!rp_file_contains("rp_rank", "selected=7")) return 1;
 	if (!rp_file_contains("rp_budget", "decision=within_budget")) return 1;
 	if (!rp_file_contains("rp_retrylog", "attempts=2")) return 1;
 	if (!rp_file_contains("rp_runview", "status=ready")) return 1;
@@ -32,23 +32,27 @@ int main(void)
 	if (!rp_file_contains("rp_llmlog", "request_packets=3")) return 1;
 	if (!rp_file_contains("rp_policy", "access_profiles=4")) return 1;
 	if (!rp_file_contains("rp_compliance", "decision=accepted")) return 1;
+	if (!rp_file_contains("rp_delta", "items=20")) return 1;
+	if (!rp_file_contains("rp_diff", "changed_items=20")) return 1;
 	if (!rp_file_contains("rp_mail", "to=metrics")) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
-	if (ack_count < 15 || tool_count < 48) return 1;
+	if (ack_count < 16 || tool_count < 51) return 1;
 	if (!rp_write_file("rp_telemetry",
 			   "run_id=RUN-042\n"
 			   "trace_spans=8\n"
 			   "bottlenecks=1\n"
-			   "message_acks=15\n"
-			   "tool_events=48\n"
-			   "scheduler_items=15\n"
-			   "ranked_tasks=15\n"
-			   "selected_tasks=6\n"
+			   "message_acks=16\n"
+			   "tool_events=51\n"
+			   "scheduler_items=16\n"
+			   "ranked_tasks=16\n"
+			   "selected_tasks=7\n"
 			   "policy_checks=8\n"
 			   "compliance=accepted\n"
 			   "risk_items=3\n"
 			   "capa_actions=2\n"
+			   "delta_items=20\n"
+			   "diff_records=1\n"
 			   "claim_records=8\n"
 			   "provenance_paths=3\n"
 			   "data_profiles=4\n"
@@ -65,7 +69,7 @@ int main(void)
 			   "failure_items=1\n"
 			   "poll_rounds=18\n"
 			   "scanned_records=128\n"
-			   "state_files=69\n"
+			   "state_files=71\n"
 			   "ticks=42\n"
 			   "status=ready\n")) {
 		return 1;
@@ -92,15 +96,17 @@ int main(void)
 			   "report_ok=1\n"
 			   "repro_ok=1\n"
 			   "llm_guarded=1\n"
-			   "message_acks=15\n"
-			   "tool_events=48\n"
-			   "scheduler_items=15\n"
-			   "ranked_tasks=15\n"
-			   "selected_tasks=6\n"
+			   "message_acks=16\n"
+			   "tool_events=51\n"
+			   "scheduler_items=16\n"
+			   "ranked_tasks=16\n"
+			   "selected_tasks=7\n"
 			   "policy_checks=8\n"
 			   "compliance=accepted\n"
 			   "risk_items=3\n"
 			   "capa_actions=2\n"
+			   "delta_items=20\n"
+			   "diff_records=1\n"
 			   "claim_records=8\n"
 			   "provenance_paths=3\n"
 			   "data_profiles=4\n"
@@ -125,6 +131,6 @@ int main(void)
 	if (!rp_append_status("telemetry=ready")) return 1;
 	if (!rp_append_status("agentcmp=ready")) return 1;
 	if (!rp_append_status("health=ready")) return 1;
-	printf("rp_metrics: telemetry_spans=8 acks=15 tools=48 risks=3 capa=2 status=ready\n");
+	printf("rp_metrics: telemetry_spans=8 acks=16 tools=51 delta_items=20 status=ready\n");
 	return 0;
 }

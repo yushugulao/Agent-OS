@@ -12,6 +12,8 @@ int main(void)
 	if (!rp_file_contains("rp_repro", "retry_replay=passed")) return 1;
 	if (!rp_file_contains("rp_risk", "open_risks=0")) return 1;
 	if (!rp_file_contains("rp_capa", "verifications=2")) return 1;
+	if (!rp_file_contains("rp_delta", "decision=accepted")) return 1;
+	if (!rp_file_contains("rp_diff", "changed_items=20")) return 1;
 	if (!rp_file_contains("rp_relay", "status=ready")) return 1;
 	if (!rp_file_contains("rp_llmq", "queued=3")) return 1;
 	if (!rp_file_contains("rp_llmeval", "passed=7")) return 1;
@@ -28,6 +30,8 @@ int main(void)
 			   "repro=ready\n"
 			   "risk=accepted\n"
 			   "capa=verified\n"
+			   "delta=accepted\n"
+			   "diff=ready\n"
 			   "relay=ready\n"
 			   "llm_packet=ready\n"
 			   "llm_queue=ready\n"
@@ -40,6 +44,6 @@ int main(void)
 	if (!rp_append_file("rp_ack", "ack=release;msg=12;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=release.decide;target=rp_release;status=ok")) return 1;
 	if (!rp_append_status("release=ready")) return 1;
-	printf("rp_release: decision=release checks=10 status=ready\n");
+	printf("rp_release: decision=release checks=12 status=ready\n");
 	return 0;
 }

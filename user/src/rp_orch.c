@@ -23,6 +23,7 @@ static const char *PROGRAMS[] = {
 	"rp_llm_bridge",
 	"rp_privacy",
 	"rp_package",
+	"rp_delta",
 	"rp_release",
 	"rp_dossier",
 	"rp_metrics",
@@ -124,6 +125,8 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_status", "datarel=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "dataver=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "repro=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "diff=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "delta=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "release=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "dossier=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "reviewops=ready");
@@ -138,7 +141,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_site", "pages=6");
 	state_ok = state_ok && rp_file_contains("rp_llm_resp", "responses=3");
 	state_ok = state_ok && rp_file_contains("rp_release", "decision=release");
-	state_ok = state_ok && rp_file_contains("rp_dossier", "sections=29");
+	state_ok = state_ok && rp_file_contains("rp_dossier", "sections=31");
 	state_ok = state_ok && rp_file_contains("rp_knowledge", "synthesis=ready");
 	state_ok = state_ok && rp_file_contains("rp_claimrec", "claim=8");
 	state_ok = state_ok && rp_file_contains("rp_provpath", "critical_paths=3");
@@ -150,10 +153,10 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_compliance", "decision=accepted");
 	state_ok = state_ok && rp_file_contains("rp_review2", "remaining_blockers=0");
 	state_ok = state_ok && rp_file_contains("rp_revision", "draft_versions=3");
-	state_ok = state_ok && rp_file_contains("rp_sched", "queue_items=15");
-	state_ok = state_ok && rp_file_contains("rp_taskrec", "msg=15");
-	state_ok = state_ok && rp_file_contains("rp_rank", "selected=6");
-	state_ok = state_ok && rp_file_contains("rp_runview", "ranked_tasks=15");
+	state_ok = state_ok && rp_file_contains("rp_sched", "queue_items=16");
+	state_ok = state_ok && rp_file_contains("rp_taskrec", "msg=16");
+	state_ok = state_ok && rp_file_contains("rp_rank", "selected=7");
+	state_ok = state_ok && rp_file_contains("rp_runview", "ranked_tasks=16");
 	state_ok = state_ok && rp_file_contains("rp_budget", "decision=within_budget");
 	state_ok = state_ok && rp_file_contains("rp_fail", "recoverable=1");
 	state_ok = state_ok && rp_file_contains("rp_retrylog", "attempts=2");
@@ -168,6 +171,8 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_trialrec", "selected=trial-3");
 	state_ok = state_ok && rp_file_contains("rp_risk", "open_risks=0");
 	state_ok = state_ok && rp_file_contains("rp_capa", "verifications=2");
+	state_ok = state_ok && rp_file_contains("rp_diff", "changed_items=20");
+	state_ok = state_ok && rp_file_contains("rp_delta", "decision=accepted");
 	state_ok = state_ok && rp_file_contains("rp_labops", "maintenance=passed");
 	state_ok = state_ok && rp_file_contains("rp_training", "competency_checks=3");
 	state_ok = state_ok && rp_file_contains("rp_prompt", "routes=4");
@@ -179,15 +184,17 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_submit", "review_response=ready");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "report_ok=1");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "repro_ok=1");
-	state_ok = state_ok && rp_file_contains("rp_agentcmp", "message_acks=15");
-	state_ok = state_ok && rp_file_contains("rp_agentcmp", "tool_events=48");
-	state_ok = state_ok && rp_file_contains("rp_agentcmp", "scheduler_items=15");
-	state_ok = state_ok && rp_file_contains("rp_agentcmp", "ranked_tasks=15");
-	state_ok = state_ok && rp_file_contains("rp_agentcmp", "selected_tasks=6");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "message_acks=16");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "tool_events=51");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "scheduler_items=16");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "ranked_tasks=16");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "selected_tasks=7");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "policy_checks=8");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "compliance=accepted");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "risk_items=3");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "capa_actions=2");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "delta_items=20");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "diff_records=1");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "claim_records=8");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "provenance_paths=3");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "data_profiles=4");
@@ -204,8 +211,8 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "health_ok=1");
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=metrics;msg=14;status=ready");
 	state_ok = state_ok && rp_file_contains("rp_tool", "tool=metrics.measure_plain");
-	state_ok = state_ok && (rp_count_lines("rp_ack") >= 16);
-	state_ok = state_ok && (rp_count_lines("rp_tool") >= 50);
+	state_ok = state_ok && (rp_count_lines("rp_ack") >= 17);
+	state_ok = state_ok && (rp_count_lines("rp_tool") >= 53);
 	state_ok = state_ok && rp_file_contains("rp_protocol", "ethics=approved");
 	printf("rp_orch: state_ok=%d\n", state_ok);
 	if (!state_ok) {
