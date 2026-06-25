@@ -78,6 +78,8 @@ int main(void)
 	if (!rp_file_contains("rp_semindex", "documents=17")) return 1;
 	if (!rp_file_contains("rp_runenv", "environments=4")) return 1;
 	if (!rp_file_contains("rp_mail", "to=metrics")) return 1;
+	if (!rp_file_contains("rp_nbexec", "notebook=reproducible-analysis.ipynb")) return 1;
+	if (!rp_file_contains("rp_repro", "downloadable_units=4")) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
 	if (ack_count < 27 || tool_count < 113) return 1;
@@ -85,7 +87,7 @@ int main(void)
 			   "run_id=RUN-042\n"
 			   "trace_spans=8\n"
 			   "bottlenecks=1\n"
-			   "message_acks=34\n"
+			   "message_acks=35\n"
 			   "tool_events=115\n"
 			   "scheduler_items=21\n"
 			   "ranked_tasks=21\n"
@@ -153,6 +155,8 @@ int main(void)
 			   "runtime_service_files=5\n"
 			   "runtime_envs=4\n"
 			   "notebook_cells=8\n"
+			   "notebook_exports=2\n"
+			   "downloadable_units=4\n"
 			   "claim_records=8\n"
 			   "provenance_paths=3\n"
 			   "data_profiles=4\n"
@@ -201,7 +205,7 @@ int main(void)
 			   "report_ok=1\n"
 			   "repro_ok=1\n"
 			   "llm_guarded=1\n"
-			   "message_acks=34\n"
+			   "message_acks=35\n"
 			   "tool_events=115\n"
 			   "scheduler_items=21\n"
 			   "ranked_tasks=21\n"
@@ -269,6 +273,8 @@ int main(void)
 			   "runtime_service_files=5\n"
 			   "runtime_envs=4\n"
 			   "notebook_cells=8\n"
+			   "notebook_exports=2\n"
+			   "downloadable_units=4\n"
 			   "claim_records=8\n"
 			   "provenance_paths=3\n"
 			   "data_profiles=4\n"
@@ -298,6 +304,6 @@ int main(void)
 	if (!rp_append_status("telemetry=ready")) return 1;
 	if (!rp_append_status("agentcmp=ready")) return 1;
 	if (!rp_append_status("health=ready")) return 1;
-	printf("rp_metrics: telemetry_spans=8 acks=34 tools=115 services=25 delta_items=20 status=ready\n");
+	printf("rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 delta_items=20 status=ready\n");
 	return 0;
 }

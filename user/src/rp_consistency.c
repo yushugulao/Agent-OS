@@ -65,6 +65,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_knowop", "ops=6");
 	ok = ok && rp_file_contains("rp_runenv", "environments=4");
 	ok = ok && rp_file_contains("rp_nbexec", "notebooks=2");
+	ok = ok && rp_file_contains("rp_nbexec", "notebook=reproducible-analysis.ipynb");
+	ok = ok && rp_file_contains("rp_repro", "downloadable_units=4");
 	ok = ok && rp_file_contains("rp_eln", "eln_entries=3");
 	ok = ok && rp_file_contains("rp_wpool", "worker_pools=2");
 	ok = ok && rp_file_contains("rp_runop", "ops=7");
@@ -215,6 +217,8 @@ int main(void)
 	int knowledge_answers = rp_get_int_value("rp_kanswers", "answers=");
 	int runtime_envs = rp_get_int_value("rp_runenv", "environments=");
 	int notebook_cells = rp_get_int_value("rp_nbexec", "executed_cells=");
+	int notebook_exports = rp_get_int_value("rp_nbexec", "exports=");
+	int downloadable_units = rp_get_int_value("rp_repro", "downloadable_units=");
 	int eln_entries = rp_get_int_value("rp_eln", "eln_entries=");
 	int portability_imports = rp_get_int_value("rp_wfio", "portability_imports=");
 	int adapter_specs = rp_get_int_value("rp_wfio", "adapter_specs=");
@@ -234,6 +238,8 @@ int main(void)
 	ok = ok && require_equal("knowledge_answers", knowledge_answers, 4);
 	ok = ok && require_equal("runtime_envs", runtime_envs, 4);
 	ok = ok && require_equal("notebook_cells", notebook_cells, 8);
+	ok = ok && require_equal("notebook_exports", notebook_exports, 2);
+	ok = ok && require_equal("downloadable_units", downloadable_units, 4);
 	ok = ok && require_equal("eln_entries", eln_entries, 3);
 	ok = ok && require_equal("portability_imports", portability_imports, 5);
 	ok = ok && require_equal("adapter_specs", adapter_specs, 6);
@@ -319,6 +325,8 @@ int main(void)
 			   "runtime_service_files=5\n"
 			   "runtime_envs=4\n"
 			   "notebook_cells=8\n"
+			   "notebook_exports=2\n"
+			   "downloadable_units=4\n"
 			   "workflow_portability_records=1\n"
 			   "adapter_specs=6\n"
 			   "migration_steps=9\n"

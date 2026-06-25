@@ -38,6 +38,7 @@ static const char *PROGRAMS[] = {
 	"rp_release",
 	"rp_dossier",
 	"rp_service_surface",
+	"rp_notebook_export",
 	"rp_backend",
 	"rp_consistency",
 	"rp_metrics",
@@ -210,6 +211,9 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_status", "runtime_services=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "runtime_env=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "notebook_exec=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "notebook_export=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "notebook_package=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "download_manifest=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "eln_record=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "worker_pool=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "package=ready");
@@ -266,7 +270,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_status", "consistency=ready");
 	state_ok = state_ok && rp_file_contains("rp_status", "compare=ready");
 	state_ok = state_ok && rp_file_contains("rp_audit", "status=passed");
-	state_ok = state_ok && rp_file_contains("rp_compare", "plain_kernel=passed");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "plain_kernel=passed");
 	state_ok = state_ok && rp_file_contains("rp_package", "package_manifest=ready");
 	state_ok = state_ok && rp_file_contains("rp_package", "downloadable_units=3");
 	state_ok = state_ok && rp_file_contains("rp_package", "custom_sources=rp_input,rp_runner,rp_uresrun");
@@ -446,6 +450,9 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_agent_run", "agent_messages=21");
 	state_ok = state_ok && rp_file_contains("rp_runenv", "environments=4");
 	state_ok = state_ok && rp_file_contains("rp_nbexec", "executed_cells=8");
+	state_ok = state_ok && rp_file_contains("rp_nbexec", "notebook=reproducible-analysis.ipynb");
+	state_ok = state_ok && rp_file_contains("rp_nbexec", "exports=2");
+	state_ok = state_ok && rp_file_contains("rp_repro", "downloadable_units=4");
 	state_ok = state_ok && rp_file_contains("rp_eln", "integrity_checks=3");
 	state_ok = state_ok && rp_file_contains("rp_wpool", "worker_pools=2");
 	state_ok = state_ok && rp_file_contains("rp_runop", "op=notebook_replay");
@@ -547,7 +554,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_uresrun", "dataset_rows_total=9");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "Comparison Metrics");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "passed_cases=3");
-	state_ok = state_ok && rp_file_contains("rp_tests", "tests=492");
+	state_ok = state_ok && rp_file_contains("rp_tests", "tests=510");
 	state_ok = state_ok && rp_file_contains("rp_tests", "static_site=passed");
 	state_ok = state_ok && rp_file_contains("rp_tests", "workflow_portability=passed");
 	state_ok = state_ok && rp_file_contains("rp_tests", "coherence=passed");
@@ -568,7 +575,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_submit", "review_response=ready");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "report_ok=1");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "repro_ok=1");
-	state_ok = state_ok && rp_file_contains("rp_agentcmp", "message_acks=34");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "message_acks=35");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "tool_events=115");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "scheduler_items=21");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "ranked_tasks=21");
@@ -611,6 +618,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "lab_resource_files=5");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "knowledge_service_files=5");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "runtime_service_files=5");
+	state_ok = state_ok && rp_file_contains("rp_agentcmp", "notebook_exports=2");
 	state_ok = state_ok && rp_file_contains("rp_agentcmp", "publication_service_files=5");
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=lab_resources;msg=res;status=ready");
 	state_ok = state_ok && rp_file_contains("rp_ack", "ack=knowledge_services;msg=know;status=ready");

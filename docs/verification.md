@@ -60,6 +60,7 @@ rp_delta
 rp_release
 rp_dossier
 rp_service_surface
+rp_notebook_export
 rp_backend
 rp_consistency
 rp_metrics
@@ -103,7 +104,7 @@ timeout 45s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INI
 Observed key output:
 
 ```text
-rp_orch: start programs=41
+rp_orch: start programs=42
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_object_store: records=8 status=ready
 rp_object_query: hits=8 ready_hits=7 status=ready
@@ -138,14 +139,15 @@ rp_delta: items=20 reviews=1 decision=accepted status=ready
 rp_release: decision=release checks=17 status=ready
 rp_dossier: sections=36 review_board=accepted submit=ready status=ready
 rp_service_surface: bio=ready lab_resources=ready publication=ready knowledge=ready runtime=ready status=ready
+rp_notebook_export: notebooks=2 cells=8 downloads=4 status=ready
 rp_backend: cases=4 executable=2 exports=1 status=ready
 rp_consistency: checks=101 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 backend=4 artifacts=4 agents=7 status=ready
-rp_metrics: telemetry_spans=8 acks=34 tools=115 services=25 delta_items=20 status=ready
+rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 delta_items=20 status=ready
 rp_ui_export: pages=5 run=RUN-042 custom_runs=3 compare=ready status=ready
 rp_web_export: routes=22 api_payloads=14 actions=8 bundle=ready status=ready
-rp_test_suite: tests=492 catalog=passed data=passed services=passed actions=passed custom=passed workbench=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed
-rp_compare_plain: plain_kernel=passed objects=500 programs=41 state_files=169 acks=41 tools=144 status=ready
-rp_orch: programs_ok=41 programs_total=41
+rp_test_suite: tests=510 catalog=passed data=passed services=passed actions=passed custom=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed
+rp_compare_plain: plain_kernel=passed objects=500 programs=42 state_files=168 acks=42 tools=144 status=ready
+rp_orch: programs_ok=42 programs_total=42
 rp_orch: state_ok=1
 rp_orch: passed
 ```
@@ -173,7 +175,7 @@ This first native uCore version validates:
 - platform self-check status,
 - catalog search,
 - a complete research run simulation with one failed stage repaired in user space.
-- multi-process execution with forty-one ordinary uCore user programs.
+- multi-process execution with forty-two ordinary uCore user programs.
 - ordinary file-backed state exchange across role programs.
 - active cross-file consistency checks across tasks, LLM packets, workflow invocation, completion hooks, backend cases, and runner artifacts.
 - user-space test suite with 492 checks over catalog, data pipeline, bio services, lab resource services, publication services, knowledge services, runtime services, workflow, workflow portability records, adapter summaries, migration plans, rehearsal cases, object naming, surface reachability, status semantics, references, evidence trace, run-state explanation, lifecycle order, delivery consistency, AgentOS readiness, static review site pages, artifact operations, derived FASTQ/alignment/metrics/count/archive sections, workflow runner files, workflow runner detail fields, custom research fields, workbench task state, request-form sections, uploaded-material sections, reusable-source sections, workspace-import records, bibliography, citation plan, literature search, screening decisions, evidence extraction, evidence protocol, PRISMA-style flow, package export indexes, delivery file rows, delivery checks, delivery manifest file names, evidence bundle contents, review page, human review records, revision-task records, review thread records, review comment records, action item records, Host UI render data, Agent collaboration, UI export, Host Web/API export files, file-backed POST action records, LLM relay request/packet/response matching, AgentCompare, and consistency records.

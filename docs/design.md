@@ -13,7 +13,7 @@ The current runtime has four parts:
 1. Upstream uCore kernel.
 2. Restored uCore user library and program build flow.
 3. `rp_plain`, a native user process that carries the research platform catalog, feature groups, mature platform mappings, and self-check logic.
-4. `rp_orch`, a native user process that runs forty-one platform programs through ordinary `fork`, `exec`, and `waitpid`.
+4. `rp_orch`, a native user process that runs forty-two platform programs through ordinary `fork`, `exec`, and `waitpid`.
 
 The user process deliberately uses ordinary C data structures and ordinary uCore process execution. This makes the result a baseline for later comparison with the Agent-OS kernel-enhanced version.
 
@@ -81,6 +81,7 @@ The platform programs add an executable multi-process shape:
 - `rp_release`
 - `rp_dossier`
 - `rp_service_surface`
+- `rp_notebook_export`
 - `rp_backend`
 - `rp_consistency`
 - `rp_metrics`
@@ -232,7 +233,8 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_kanswers` | service surface | consistency, compare, orchestrator | grounded knowledge answer records |
 | `rp_knowop` | service surface | consistency, test suite, orchestrator | knowledge operation record |
 | `rp_runenv` | service surface | consistency, metrics, UI export, Web/API export, compare, orchestrator | runtime environment locks, validation, host relay mode, and secret-value count |
-| `rp_nbexec` | service surface | consistency, compare, orchestrator | executable notebook replay summary |
+| `rp_nbexec` | service surface and notebook export | consistency, metrics, UI export, Web/API export, test suite, compare, orchestrator | executable notebook replay summary plus compact notebook cell, execution, output, and export records |
+| `rp_repro` | package and notebook export | release, dossier, compare, test suite, orchestrator | reproduction checks plus reproducible-notebook download reference |
 | `rp_eln` | service surface | consistency, compare, orchestrator | ELN entries, signatures, attachments, and integrity checks |
 | `rp_wpool` | service surface | consistency, compare, orchestrator | worker pool, worker, heartbeat, slot, and queue-depth summary |
 | `rp_runop` | service surface | consistency, test suite, orchestrator | runtime operation record |
@@ -265,7 +267,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_uresrun` | Host Web/API export | test suite, compare, orchestrator | usable research run, revised-run, workbench reference, and export result record derived from the request form, uploaded files, compact dataset, and runner output |
 | `rp_web_bundle` | Host Web/API export | test suite, compare, orchestrator | bundle summary tying routes, API payloads, POST action payloads, static review site records, UI pages, UI render sections, artifact preview entries, workbench state, workspace-import records, reusable source selection, evidence protocol records, delivery file rows, delivery checks, evidence bundle entries, review page, package export indexes, revision-delta reference, runner files, custom research fields, research service files, and relay files together |
 | `rp_tests` | test suite | compare, orchestrator | 492 user-space checks over catalog, data pipeline, service surface records, workflow, workflow portability records, migration plans, rehearsal cases, object naming, surface reachability, status semantics, references, evidence trace, run-state explanation, lifecycle order, delivery consistency, AgentOS readiness, static review site records, derived FASTQ/alignment/metrics/count/archive files, artifacts, package export indexes, delivery file rows, delivery checks, delivery manifest names, evidence bundle contents, review page, human review records, requested-change records, applied revision changes, revision-task records, review thread records, review comment records, action item records, UI render data, workflow runner files, workflow runner detail fields, custom research fields, workbench task state, workspace-import records, reusable source selection, bibliography, citation plan, literature search, screening decisions, evidence extraction, evidence protocol, PRISMA-style flow, Agent collaboration, UI data, Host Web/API export files, POST action records, LLM relay request/packet/response matching, AgentCompare, and consistency records |
-| `rp_compare` | compare | orchestrator | plain-kernel execution summary |
+| `rp_agentcmp` | AgentCompare metrics and compare | compare, orchestrator | plain-kernel execution summary and comparison counters |
 
 This is intentionally implemented without new syscalls. It uses only `open`, `read`, `write`, `close`, `fork`, `exec`, and `waitpid`.
 

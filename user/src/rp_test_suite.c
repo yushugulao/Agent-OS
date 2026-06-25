@@ -320,7 +320,7 @@ int main(void)
 	ok = ok && require_file_token("rp_dossier", "sections=36");
 
 	ok = ok && require_file_token("rp_agentcmp", "context_trusted=0");
-	ok = ok && require_file_token("rp_agentcmp", "message_acks=34");
+	ok = ok && require_file_token("rp_agentcmp", "message_acks=35");
 	ok = ok && require_file_token("rp_agentcmp", "tool_events=115");
 	ok = ok && require_file_token("rp_agentcmp", "agent_roles=7");
 	ok = ok && require_file_token("rp_agentcmp", "relay_protocol_files=5");
@@ -331,6 +331,7 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "publication_service_files=5");
 	ok = ok && require_file_token("rp_agentcmp", "knowledge_service_files=5");
 	ok = ok && require_file_token("rp_agentcmp", "runtime_service_files=5");
+	ok = ok && require_file_token("rp_agentcmp", "notebook_exports=2");
 	ok = ok && require_file_token("rp_backend", "cases=4");
 	ok = ok && require_file_token("rp_consistency", "checks=101");
 	ok = ok && require_file_token("rp_consistency", "coherence_checks=9");
@@ -375,6 +376,10 @@ int main(void)
 	ok = ok && require_file_token("rp_knowop", "op=llm_grounding");
 	ok = ok && require_file_token("rp_runenv", "environments=4");
 	ok = ok && require_file_token("rp_nbexec", "executed_cells=8");
+	ok = ok && require_file_token("rp_nbexec", "notebook=reproducible-analysis.ipynb");
+	ok = ok && require_file_token("rp_nbexec", "cell=2;type=code;source=load_artifact_paths");
+	ok = ok && require_file_token("rp_nbexec", "execution=RUN-042:repro-notebook;status=passed");
+	ok = ok && require_file_token("rp_repro", "downloadable_units=4");
 	ok = ok && require_file_token("rp_eln", "eln_entries=3");
 	ok = ok && require_file_token("rp_wpool", "worker_pools=2");
 	ok = ok && require_file_token("rp_runop", "op=host_llm_request");
@@ -403,6 +408,8 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_run", "evidence_bundle_zip=research-evidence-bundle.zip");
 	ok = ok && require_file_token("rp_ui_run", "llm_roundtrip=ready");
 	ok = ok && require_file_token("rp_ui_run", "llm_response_file=rp_llm_resp");
+	ok = ok && require_file_token("rp_ui_run", "notebook_export=rp_nbexec");
+	ok = ok && require_file_token("rp_ui_run", "notebook_download=rp_repro");
 	ok = ok && require_file_token("rp_ui_run", "review_threads=2");
 	ok = ok && require_file_token("rp_ui_run", "review_action_items=2");
 	ok = ok && require_file_token("rp_ui_agent", "page=agent-detail");
@@ -421,6 +428,7 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_compare", "metric_rows=8");
 	ok = ok && require_file_token("rp_ui_compare", "coherence_checks=9");
 	ok = ok && require_file_token("rp_ui_compare", "relay_protocol_files=5");
+	ok = ok && require_file_token("rp_ui_compare", "notebook_exports=2");
 	ok = ok && require_file_token("rp_web_routes", "routes=22");
 	ok = ok && require_file_token("rp_web_routes", "get_routes=14");
 	ok = ok && require_file_token("rp_web_routes", "route=/research/workbench/{id}");
@@ -453,6 +461,8 @@ int main(void)
 	ok = ok && require_file_token("rp_api_run", "evidence_bundle_zip=research-evidence-bundle.zip");
 	ok = ok && require_file_token("rp_api_run", "llm_roundtrip=ready");
 	ok = ok && require_file_token("rp_api_run", "llm_response_file=rp_llm_resp");
+	ok = ok && require_file_token("rp_api_run", "notebook_export=rp_nbexec");
+	ok = ok && require_file_token("rp_api_run", "notebook_download=rp_repro");
 	ok = ok && require_file_token("rp_api_run", "review_page=rp_package");
 	ok = ok && require_file_token("rp_api_run", "export_bundle=rp_package");
 	ok = ok && require_file_token("rp_api_run", "human_reviews=1");
@@ -475,6 +485,7 @@ int main(void)
 	ok = ok && require_file_token("rp_api_artifacts", "manifest_records=4");
 	ok = ok && require_file_token("rp_api_artifacts", "evidence_package=rp_package");
 	ok = ok && require_file_token("rp_api_artifacts", "downloadable_units=3");
+	ok = ok && require_file_token("rp_api_artifacts", "notebook_downloadable=1");
 	ok = ok && require_file_token("rp_api_artifacts", "preview_files=rp_report_text,rp_chart_data,rp_artifact");
 	ok = ok && require_file_token("rp_api_artifacts", "download_index=rp_package");
 	ok = ok && require_file_token("rp_api_artifacts", "delivery_manifest=rp_package");
@@ -538,6 +549,8 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "api_payloads=14");
 	ok = ok && require_file_token("rp_web_bundle", "evidence_package=rp_package");
 	ok = ok && require_file_token("rp_web_bundle", "downloadable_units=3");
+	ok = ok && require_file_token("rp_web_bundle", "notebook_export=rp_nbexec");
+	ok = ok && require_file_token("rp_web_bundle", "notebook_download=rp_repro");
 	ok = ok && require_file_token("rp_web_bundle", "static_site_pages=42");
 	ok = ok && require_file_token("rp_web_bundle", "render_sections=7");
 	ok = ok && require_file_token("rp_web_bundle", "artifact_previews=3");
@@ -576,7 +589,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=492\n"
+			   "tests=510\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -584,6 +597,7 @@ int main(void)
 			   "publication_services=passed\n"
 			   "knowledge_services=passed\n"
 			   "runtime_services=passed\n"
+			   "notebook_export=passed\n"
 			   "api_actions=passed\n"
 			   "custom_research=passed\n"
 			   "research_input=passed\n"
@@ -622,6 +636,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=492 catalog=passed data=passed services=passed actions=passed custom=passed workbench=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=510 catalog=passed data=passed services=passed actions=passed custom=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }

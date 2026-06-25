@@ -61,6 +61,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_resrev", "review_items=10");
 	ok = ok && rp_file_contains("rp_semindex", "documents=17");
 	ok = ok && rp_file_contains("rp_runenv", "environments=4");
+	ok = ok && rp_file_contains("rp_nbexec", "notebook=reproducible-analysis.ipynb");
+	ok = ok && rp_file_contains("rp_repro", "downloadable_units=4");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_web_routes",
@@ -121,6 +123,7 @@ int main(void)
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner;evidence_protocols=1;evidence_extractions=3\n"
 			   "workflow_portability=rp_wfio;adapter_specs=6;migration_steps=9;rehearsal_cases=4\n"
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
+			   "notebook_export=rp_nbexec;notebook_download=rp_repro\n"
 			   "delivery_files=8;delivery_checks=3;latest_delivery_status=ready\n"
 			   "evidence_bundle_zip=research-evidence-bundle.zip\n"
 			   "llm_roundtrip=ready;llm_response_file=rp_llm_resp\n"
@@ -221,6 +224,7 @@ int main(void)
 			   "evidence_bundle_zip=research-evidence-bundle.zip\n"
 			   "evidence_bundle_entries=12\n"
 			   "downloadable_units=3\n"
+			   "notebook_downloadable=1\n"
 			   "report=rp_report_text\n"
 			   "chart=rp_chart_data\n"
 			   "llm_relay_files=5\n"
@@ -297,6 +301,8 @@ int main(void)
 			   "api=runtime\n"
 			   "runtime_env=rp_runenv\n"
 			   "notebook_exec=rp_nbexec\n"
+			   "notebook_export=rp_nbexec\n"
+			   "download_manifest=rp_repro\n"
 			   "eln_record=rp_eln\n"
 			   "worker_pool=rp_wpool\n"
 			   "environments=4\n"
@@ -417,6 +423,7 @@ int main(void)
 			   "evidence_package=rp_package\n"
 			   "package_manifest=ready\n"
 			   "downloadable_units=3\n"
+			   "notebook_export=rp_nbexec;notebook_download=rp_repro\n"
 			   "static_site=rp_site\n"
 			   "static_site_pages=42\n"
 			   "static_site_json_payloads=14\n"

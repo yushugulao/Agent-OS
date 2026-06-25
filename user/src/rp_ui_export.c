@@ -64,6 +64,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_resrev", "review_items=10");
 	ok = ok && rp_file_contains("rp_semindex", "documents=17");
 	ok = ok && rp_file_contains("rp_runenv", "environments=4");
+	ok = ok && rp_file_contains("rp_nbexec", "notebook=reproducible-analysis.ipynb");
+	ok = ok && rp_file_contains("rp_repro", "downloadable_units=4");
 	if (!ok) return 1;
 	if (!rp_write_file("rp_ui_home",
 			   "page=home\n"
@@ -141,6 +143,8 @@ int main(void)
 			   "llm_relay=rp_llm_packets,rp_llm_routes,rp_llm_guard,rp_llm_hostreq,rp_llm_fallback\n"
 			   "llm_roundtrip=ready\n"
 			   "llm_response_file=rp_llm_resp\n"
+			   "notebook_export=rp_nbexec\n"
+			   "notebook_download=rp_repro\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -209,7 +213,9 @@ int main(void)
 			   "publication_service_files=5\n"
 			   "knowledge_service_files=5\n"
 			   "runtime_service_files=5\n"
-			   "message_acks=34\n"
+			   "notebook_exports=2\n"
+			   "downloadable_units=4\n"
+			   "message_acks=35\n"
 			   "tool_events=115\n"
 			   "status=ready\n")) {
 		return 1;
