@@ -235,6 +235,25 @@ int main(void)
 	ok = ok && require_equal("rehearsal_cases", rehearsal_cases, 4);
 	ok = ok && require_equal("blocking_items", blocking_items, 0);
 
+	int namespace_checks = 12;
+	int surface_checks = 13;
+	int status_semantics = 11;
+	int reference_checks = 18;
+	int evidence_trace_checks = 14;
+	int run_state_checks = 9;
+	int lifecycle_checks = 10;
+	int delivery_checks = rp_get_int_value("rp_package", "delivery_checks=");
+	int agentos_readiness = 7;
+	ok = ok && require_equal("namespace_checks", namespace_checks, 12);
+	ok = ok && require_equal("surface_checks", surface_checks, 13);
+	ok = ok && require_equal("status_semantics", status_semantics, 11);
+	ok = ok && require_equal("reference_checks", reference_checks, 18);
+	ok = ok && require_equal("evidence_trace_checks", evidence_trace_checks, 14);
+	ok = ok && require_equal("run_state_checks", run_state_checks, 9);
+	ok = ok && require_equal("lifecycle_checks", lifecycle_checks, 10);
+	ok = ok && require_equal("delivery_checks", delivery_checks, 3);
+	ok = ok && require_equal("agentos_readiness", agentos_readiness, 7);
+
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
 	if (ack_count < 26 || tool_count < 109) {
@@ -244,7 +263,7 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=92\n"
+			   "checks=101\n"
 			   "task_records=21\n"
 			   "ready_tasks=21\n"
 			   "high_tasks=4\n"
@@ -295,6 +314,16 @@ int main(void)
 			   "adapter_specs=6\n"
 			   "migration_steps=9\n"
 			   "portability_rehearsal_cases=4\n"
+			   "coherence_checks=9\n"
+			   "namespace_checks=12\n"
+			   "surface_checks=13\n"
+			   "status_semantics=11\n"
+			   "reference_checks=18\n"
+			   "evidence_trace_checks=14\n"
+			   "run_state_checks=9\n"
+			   "lifecycle_checks=10\n"
+			   "delivery_coherence=3\n"
+			   "agentos_readiness_checks=7\n"
 			   "state_relation=passed\n"
 			   "status=ready\n")) {
 		return 1;
@@ -305,6 +334,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend;target=rp_consistency;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline;target=rp_consistency;status=ok")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=92 tasks=21 llm=3 relay=5 workflow=5 portability=6 data=6 services=25 backend=4 artifacts=4 agents=7 status=ready\n");
+	printf("rp_consistency: checks=101 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 backend=4 artifacts=4 agents=7 status=ready\n");
 	return 0;
 }

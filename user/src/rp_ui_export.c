@@ -20,6 +20,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_chart_data", "chart=stage_attempts");
 	ok = ok && rp_file_contains("rp_evidence", "status=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "status=ready");
+	ok = ok && rp_file_contains("rp_agentcmp", "coherence_checks=9");
 	ok = ok && rp_file_contains("rp_telemetry", "status=ready");
 	ok = ok && rp_file_contains("rp_consistency", "state_relation=passed");
 	ok = ok && rp_file_contains("rp_dataset_collection", "items=4");
@@ -178,6 +179,16 @@ int main(void)
 			   "pain_untrusted_context=1\n"
 			   "pain_rebuild_steps=6\n"
 			   "metric_rows=8\n"
+			   "coherence_checks=9\n"
+			   "namespace_checks=12\n"
+			   "surface_checks=13\n"
+			   "status_semantics=11\n"
+			   "reference_checks=18\n"
+			   "evidence_trace_checks=14\n"
+			   "run_state_checks=9\n"
+			   "lifecycle_checks=10\n"
+			   "delivery_coherence=3\n"
+			   "agentos_readiness_checks=7\n"
 			   "relay_protocol_files=5\n"
 			   "workflow_runner_files=5\n"
 			   "workflow_portability_records=1\n"

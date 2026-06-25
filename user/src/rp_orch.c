@@ -378,7 +378,8 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_backend", "cases=4");
 	state_ok = state_ok && rp_file_contains("rp_backend_exec", "passed_cases=2");
 	state_ok = state_ok && rp_file_contains("rp_consistency", "state_relation=passed");
-	state_ok = state_ok && rp_file_contains("rp_consistency", "checks=92");
+	state_ok = state_ok && rp_file_contains("rp_consistency", "checks=101");
+	state_ok = state_ok && rp_file_contains("rp_consistency", "coherence_checks=9");
 	state_ok = state_ok && rp_file_contains("rp_ingest_files", "files=2");
 	state_ok = state_ok && rp_file_contains("rp_ingest_files", "derived_items=5");
 	state_ok = state_ok && rp_file_contains("rp_dataset_snapshot", "snapshots=2");
@@ -472,6 +473,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_api_evidence", "provenance_paths=3");
 	state_ok = state_ok && rp_file_contains("rp_api_evidence", "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest");
 	state_ok = state_ok && rp_file_contains("rp_api_compare", "workflow_runner_files=5");
+	state_ok = state_ok && rp_file_contains("rp_api_compare", "coherence_checks=9");
 	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "manifest_records=4");
 	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "evidence_package=rp_package");
 	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "export_bundle=rp_package");
@@ -505,6 +507,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "library_sources=rp_knowledge");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "workspace_imports=1");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "evidence_protocols=1");
+	state_ok = state_ok && rp_file_contains("rp_web_bundle", "coherence_checks=9");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "review_threads=2");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "requests=8");
@@ -527,8 +530,9 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_uresrun", "dataset_rows_total=9");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "Comparison Metrics");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "passed_cases=3");
-	state_ok = state_ok && rp_file_contains("rp_tests", "tests=438");
+	state_ok = state_ok && rp_file_contains("rp_tests", "tests=462");
 	state_ok = state_ok && rp_file_contains("rp_tests", "workflow_portability=passed");
+	state_ok = state_ok && rp_file_contains("rp_tests", "coherence=passed");
 	state_ok = state_ok && rp_file_contains("rp_tests", "status=passed");
 	state_ok = state_ok && rp_file_contains("rp_litrev", "papers=9");
 	state_ok = state_ok && rp_file_contains("rp_litrev", "evidence_extractions=3");

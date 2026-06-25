@@ -316,7 +316,17 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "knowledge_service_files=5");
 	ok = ok && require_file_token("rp_agentcmp", "runtime_service_files=5");
 	ok = ok && require_file_token("rp_backend", "cases=4");
-	ok = ok && require_file_token("rp_consistency", "checks=92");
+	ok = ok && require_file_token("rp_consistency", "checks=101");
+	ok = ok && require_file_token("rp_consistency", "coherence_checks=9");
+	ok = ok && require_file_token("rp_consistency", "namespace_checks=12");
+	ok = ok && require_file_token("rp_consistency", "surface_checks=13");
+	ok = ok && require_file_token("rp_consistency", "status_semantics=11");
+	ok = ok && require_file_token("rp_consistency", "reference_checks=18");
+	ok = ok && require_file_token("rp_consistency", "evidence_trace_checks=14");
+	ok = ok && require_file_token("rp_consistency", "run_state_checks=9");
+	ok = ok && require_file_token("rp_consistency", "lifecycle_checks=10");
+	ok = ok && require_file_token("rp_consistency", "delivery_coherence=3");
+	ok = ok && require_file_token("rp_consistency", "agentos_readiness_checks=7");
 	ok = ok && require_file_token("rp_telemetry", "metric_files=151");
 
 	ok = ok && require_file_token("rp_sreg", "samples=8");
@@ -389,6 +399,7 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_evidence", "llm_roundtrip=rp_llmq,rp_llm_packets,rp_llm_resp");
 	ok = ok && require_file_token("rp_ui_compare", "page=compare-metrics");
 	ok = ok && require_file_token("rp_ui_compare", "metric_rows=8");
+	ok = ok && require_file_token("rp_ui_compare", "coherence_checks=9");
 	ok = ok && require_file_token("rp_ui_compare", "relay_protocol_files=5");
 	ok = ok && require_file_token("rp_web_routes", "routes=21");
 	ok = ok && require_file_token("rp_web_routes", "get_routes=13");
@@ -437,6 +448,7 @@ int main(void)
 	ok = ok && require_file_token("rp_api_evidence", "literature_search=usable-literature-search:RUN-900:1");
 	ok = ok && require_file_token("rp_api_evidence", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
 	ok = ok && require_file_token("rp_api_compare", "workflow_runner_files=5");
+	ok = ok && require_file_token("rp_api_compare", "coherence_checks=9");
 	ok = ok && require_file_token("rp_api_artifacts", "manifest_records=4");
 	ok = ok && require_file_token("rp_api_artifacts", "evidence_package=rp_package");
 	ok = ok && require_file_token("rp_api_artifacts", "downloadable_units=3");
@@ -510,6 +522,7 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "evidence_protocols=1");
 	ok = ok && require_file_token("rp_web_bundle", "prisma_flows=1");
 	ok = ok && require_file_token("rp_web_bundle", "workflow_portability=rp_wfio");
+	ok = ok && require_file_token("rp_web_bundle", "coherence_checks=9");
 	ok = ok && require_file_token("rp_web_bundle", "delivery_manifest=rp_package");
 	ok = ok && require_file_token("rp_web_bundle", "delivery_files=8");
 	ok = ok && require_file_token("rp_web_bundle", "delivery_checks=3");
@@ -534,7 +547,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=438\n"
+			   "tests=462\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -548,6 +561,7 @@ int main(void)
 			   "workspace_import=passed\n"
 			   "literature_protocol=passed\n"
 			   "workflow_portability=passed\n"
+			   "coherence=passed\n"
 			   "workflow=passed\n"
 			   "workflow_runner_detail=passed\n"
 			   "artifact_ops=passed\n"
@@ -577,6 +591,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=438 catalog=passed data=passed services=passed actions=passed custom=passed portability=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=462 catalog=passed data=passed services=passed actions=passed custom=passed portability=passed coherence=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }

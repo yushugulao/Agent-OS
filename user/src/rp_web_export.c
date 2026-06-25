@@ -23,6 +23,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_llm_hostreq", "roundtrip=ready");
 	ok = ok && rp_file_contains("rp_llm_resp", "matched_requests=3");
 	ok = ok && rp_file_contains("rp_agentcmp", "status=ready");
+	ok = ok && rp_file_contains("rp_agentcmp", "coherence_checks=9");
 	ok = ok && rp_file_contains("rp_package", "package_manifest=ready");
 	ok = ok && rp_file_contains("rp_package", "downloadable_units=3");
 	ok = ok && rp_file_contains("rp_input", "form_fields=8");
@@ -179,6 +180,16 @@ int main(void)
 			   "data_pipeline_files=6\n"
 			   "workflow_runner_files=5\n"
 			   "workflow_portability_records=1\n"
+			   "coherence_checks=9\n"
+			   "namespace_checks=12\n"
+			   "surface_checks=13\n"
+			   "status_semantics=11\n"
+			   "reference_checks=18\n"
+			   "evidence_trace_checks=14\n"
+			   "run_state_checks=9\n"
+			   "lifecycle_checks=10\n"
+			   "delivery_coherence=3\n"
+			   "agentos_readiness_checks=7\n"
 			   "relay_protocol_files=5\n"
 			   "status=ready\n")) {
 		return 1;
@@ -383,6 +394,7 @@ int main(void)
 			   "request_form=rp_input;upload_files=rp_input;workspace_imports=1\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner;evidence_protocols=1;evidence_extractions=3\n"
 			   "workflow_portability=rp_wfio;adapter_specs=6;migration_steps=9;rehearsal_cases=4\n"
+			   "coherence_checks=9;namespace_checks=12;surface_checks=13;agentos_readiness_checks=7\n"
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
 			   "delivery_files=8;delivery_checks=3;evidence_bundle_entries=12\n"
 			   "prisma_flows=1\n"

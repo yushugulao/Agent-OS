@@ -227,7 +227,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_study", "arms=2");
 	ok = ok && rp_file_contains("rp_consistency", "state_relation=passed");
 	ok = ok && rp_file_contains("rp_consistency", "task_records=21");
-	ok = ok && rp_file_contains("rp_consistency", "checks=92");
+	ok = ok && rp_file_contains("rp_consistency", "checks=101");
+	ok = ok && rp_file_contains("rp_consistency", "coherence_checks=9");
 	ok = ok && rp_file_contains("rp_consistency", "runner_stages=5");
 	ok = ok && rp_file_contains("rp_ui_home", "page=home");
 	ok = ok && rp_file_contains("rp_ui_home", "nav_items=12");
@@ -243,6 +244,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_ui_evidence", "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest");
 	ok = ok && rp_file_contains("rp_ui_compare", "page=compare-metrics");
 	ok = ok && rp_file_contains("rp_ui_compare", "metric_rows=8");
+	ok = ok && rp_file_contains("rp_ui_compare", "coherence_checks=9");
 	ok = ok && rp_file_contains("rp_input", "custom_run=usable-run:RUN-900");
 	ok = ok && rp_file_contains("rp_input", "custom_requests=3");
 	ok = ok && rp_file_contains("rp_input", "custom_run_2=usable-run:RUN-901");
@@ -279,6 +281,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_evidence", "provenance_paths=3");
 	ok = ok && rp_file_contains("rp_api_evidence", "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest");
 	ok = ok && rp_file_contains("rp_api_compare", "workflow_runner_files=5");
+	ok = ok && rp_file_contains("rp_api_compare", "coherence_checks=9");
 	ok = ok && rp_file_contains("rp_api_artifacts", "manifest_records=4");
 	ok = ok && rp_file_contains("rp_api_artifacts", "evidence_package=rp_package");
 	ok = ok && rp_file_contains("rp_api_artifacts", "export_bundle=rp_package");
@@ -329,10 +332,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "workspace_imports=1");
 	ok = ok && rp_file_contains("rp_web_bundle", "evidence_protocols=1");
 	ok = ok && rp_file_contains("rp_web_bundle", "workflow_portability=rp_wfio");
+	ok = ok && rp_file_contains("rp_web_bundle", "coherence_checks=9");
 	ok = ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
 	ok = ok && rp_file_contains("rp_web_bundle", "review_threads=2");
-	ok = ok && rp_file_contains("rp_tests", "tests=438");
+	ok = ok && rp_file_contains("rp_tests", "tests=462");
 	ok = ok && rp_file_contains("rp_tests", "workflow_portability=passed");
+	ok = ok && rp_file_contains("rp_tests", "coherence=passed");
 	ok = ok && rp_file_contains("rp_tests", "status=passed");
 	ok = ok && rp_file_contains("rp_ack", "ack=consistency;msg=22;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=consistency.check_backend");
@@ -367,7 +372,17 @@ int main(void)
 			   "state_files=169\n"
 			   "message_acks=40\n"
 			   "tool_events=144\n"
-			   "consistency_checks=92\n"
+			   "consistency_checks=101\n"
+			   "coherence_checks=9\n"
+			   "namespace_checks=12\n"
+			   "surface_checks=13\n"
+			   "status_semantics=11\n"
+			   "reference_checks=18\n"
+			   "evidence_trace_checks=14\n"
+			   "run_state_checks=9\n"
+			   "lifecycle_checks=10\n"
+			   "delivery_coherence=3\n"
+			   "agentos_readiness_checks=7\n"
 			   "runner_stages=5\n"
 			   "workflow_runner_files=5\n"
 			   "runner_detail_fields=16\n"
@@ -420,7 +435,7 @@ int main(void)
 			   "review_threads=2\n"
 			   "review_comments=3\n"
 			   "review_action_items=2\n"
-			   "test_cases=438\n"
+			   "test_cases=462\n"
 			   "status=ready\n")) {
 		return 1;
 	}
