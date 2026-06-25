@@ -32,8 +32,11 @@ int main(void)
 	ok = ok && rp_file_contains("rp_input", "csv_rows_total=9");
 	ok = ok && rp_file_contains("rp_input", "library_sources=1");
 	ok = ok && rp_file_contains("rp_input", "workspace_import=workspace:RUN-900:folder");
+	ok = ok && rp_file_contains("rp_input", "dynamic_submissions=4");
+	ok = ok && rp_file_contains("rp_input", "dynamic_queue=plain_ucore_file_backed");
 	ok = ok && rp_file_contains("rp_runner", "workbench=usable-workbench:RUN-900:plain-ucore");
 	ok = ok && rp_file_contains("rp_runner", "workbench_tasks=9");
+	ok = ok && rp_file_contains("rp_runner", "dynamic_input_runs=4");
 	ok = ok && rp_file_contains("rp_runner", "citation_plan_entries=3");
 	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
 	ok = ok && rp_file_contains("rp_knowledge", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
@@ -103,6 +106,9 @@ int main(void)
 			   "custom_runs=3\n"
 			   "research_form=rp_input\n"
 			   "upload_files=rp_input\n"
+			   "dynamic_inputs=4\n"
+			   "dynamic_queue=rp_input\n"
+			   "live_update_feed=rp_web_bundle\n"
 			   "workbench=rp_runner\n"
 			   "library_sources=rp_knowledge\n"
 			   "nav_items=12\n"
@@ -119,6 +125,7 @@ int main(void)
 			   "run_id=RUN-042\n"
 			   "custom_research=rp_runner;custom_research_runs=3\n"
 			   "request_form=rp_input;upload_files=rp_input;workspace_imports=1\n"
+			   "dynamic_input_queue=rp_input;dynamic_input_runs=4;live_update_feed=rp_web_bundle\n"
 			   "workbench=rp_runner;workbench_tasks=9;workbench_export=rp_runner\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner;evidence_protocols=1;evidence_extractions=3\n"
 			   "workflow_portability=rp_wfio;adapter_specs=6;migration_steps=9;rehearsal_cases=4\n"
@@ -236,6 +243,8 @@ int main(void)
 	if (!rp_write_file("rp_api_data",
 			   "api=data\n"
 			   "run_id=RUN-042\n"
+			   "dynamic_inputs=4\n"
+			   "dynamic_queue=rp_input\n"
 			   "ingested_files=2\n"
 			   "dataset_snapshots=2\n"
 			   "previews=2\n"
@@ -318,6 +327,8 @@ int main(void)
 			   "agentcompare_run=/actions/agentcompare/run\n"
 			   "research_run=/actions/research/run\n"
 			   "research_export=/actions/research/export\n"
+			   "dynamic_submit=/actions/research/run\n"
+			   "live_update_feed=rp_web_bundle\n"
 			   "research_review=/actions/research/review\n"
 			   "research_revision_task=/actions/research/revision-task\n"
 			   "research_run_revision=/actions/research/run-revision-task\n"
@@ -468,6 +479,7 @@ int main(void)
 			   "artifact_previews=3\n"
 			   "real_artifact_items=5\n"
 			   "request_form=rp_input;upload_files=rp_input;workspace_imports=1\n"
+			   "dynamic_inputs=4;dynamic_queue=rp_input;live_update_feed=rp_web_bundle;host_ui_events=10\n"
 			   "workbench=rp_runner;workbench_tasks=9;workbench_export=rp_runner\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner;evidence_protocols=1;evidence_extractions=3\n"
 			   "workflow_portability=rp_wfio;adapter_specs=6;migration_steps=9;rehearsal_cases=4\n"

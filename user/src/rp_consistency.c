@@ -23,6 +23,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "commands=6");
 	ok = ok && rp_file_contains("rp_runner", "events=8");
 	ok = ok && rp_file_contains("rp_runner", "files=9");
+	ok = ok && rp_file_contains("rp_input", "dynamic_submissions=4");
+	ok = ok && rp_file_contains("rp_input", "dynamic_validation=passed");
+	ok = ok && rp_file_contains("rp_runner", "dynamic_input_runs=4");
+	ok = ok && rp_file_contains("rp_runner", "dynamic_run=usable-run:RUN-904");
 	ok = ok && rp_file_contains("rp_stage_dag", "status=ready");
 	ok = ok && rp_file_contains("rp_stage_log", "status=ready");
 	ok = ok && rp_file_contains("rp_artifact", "status=recovered");
@@ -166,6 +170,8 @@ int main(void)
 	int runner_cache_hits = rp_get_int_value("rp_runner", "cache_hits=");
 	int workbench_tasks = rp_get_int_value("rp_runner", "workbench_tasks=");
 	int workbench_done = rp_get_int_value("rp_runner", "workbench_task_done=");
+	int dynamic_submissions = rp_get_int_value("rp_input", "dynamic_submissions=");
+	int dynamic_input_runs = rp_get_int_value("rp_runner", "dynamic_input_runs=");
 	int dag_edges = rp_get_int_value("rp_stage_dag", "edges=");
 	int log_lines = rp_get_int_value("rp_stage_log", "lines=");
 	int artifact_records = rp_get_int_value("rp_artifact", "records=");
@@ -190,6 +196,8 @@ int main(void)
 	ok = ok && require_equal("runner_cache_hits", runner_cache_hits, 1);
 	ok = ok && require_equal("workbench_tasks", workbench_tasks, 9);
 	ok = ok && require_equal("workbench_done", workbench_done, 8);
+	ok = ok && require_equal("dynamic_submissions", dynamic_submissions, 4);
+	ok = ok && require_equal("dynamic_input_runs", dynamic_input_runs, dynamic_submissions);
 	ok = ok && require_equal("dag_edges", dag_edges, runner_stages - 1);
 	ok = ok && require_equal("stage_log_lines", log_lines, runner_stages);
 	ok = ok && require_equal("artifact_records", artifact_records, 2);
@@ -281,7 +289,7 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=107\n"
+			   "checks=113\n"
 			   "task_records=21\n"
 			   "ready_tasks=21\n"
 			   "high_tasks=4\n"
@@ -301,6 +309,10 @@ int main(void)
 			   "workbench_records=10\n"
 			   "workbench_tasks=9\n"
 			   "workbench_done=8\n"
+			   "dynamic_input_records=8\n"
+			   "dynamic_submissions=4\n"
+			   "dynamic_input_runs=4\n"
+			   "host_ui_events=10\n"
 			   "artifact_records=2\n"
 			   "workflow_runner_files=5\n"
 			   "workflow_events=8\n"
@@ -357,6 +369,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend;target=rp_consistency;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline;target=rp_consistency;status=ok")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=107 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 backend=4 artifacts=4 agents=7 status=ready\n");
+	printf("rp_consistency: checks=113 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 backend=4 artifacts=4 agents=7 dynamic=4 status=ready\n");
 	return 0;
 }

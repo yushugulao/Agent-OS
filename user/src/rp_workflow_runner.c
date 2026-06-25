@@ -113,6 +113,9 @@ int main(void)
 	if (!rp_append_file("rp_runner", "custom_run=usable-run:RUN-900")) return 1;
 	if (!rp_append_file("rp_runner", "custom_run_2=usable-run:RUN-901")) return 1;
 	if (!rp_append_file("rp_runner", "custom_run_3=usable-run:RUN-902")) return 1;
+	if (!rp_append_file("rp_runner", "dynamic_input_runs=4")) return 1;
+	if (!rp_append_file("rp_runner", "dynamic_run=usable-run:RUN-904;source=api;status=queued;next=validate")) return 1;
+	if (!rp_append_file("rp_runner", "dynamic_replay_plan=RUN-900->RUN-904;shared_template=usable-template:workspace-900")) return 1;
 	if (!rp_append_file("rp_runner", "human_review_id=usable-review:RUN-900:1")) return 1;
 	if (!rp_append_file("rp_runner", "human_review_decision=needs_revision")) return 1;
 	if (!rp_append_file("rp_runner", "revision_task_id=usable-revision-task:RUN-900:1")) return 1;

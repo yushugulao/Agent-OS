@@ -93,6 +93,14 @@ int main(void)
 			   "workspace_file=notes.md;kind=notes;target=usable-template:workspace-900\n"
 			   "workspace_template=usable-template:workspace-900;status=ready\n"
 			   "workspace_run=usable-run:RUN-903;template=usable-template:workspace-900;status=ready\n"
+			   "dynamic_submissions=4\n"
+			   "dynamic_submission=1;source=form;run=RUN-900;state=accepted;rows=3\n"
+			   "dynamic_submission=2;source=upload;run=RUN-901;state=accepted;rows=2\n"
+			   "dynamic_submission=3;source=workspace;run=RUN-903;state=accepted;files=4\n"
+			   "dynamic_submission=4;source=api;run=RUN-904;state=queued;rows=4\n"
+			   "dynamic_validation=passed;dedupe=passed;schema=sample,group,value\n"
+			   "dynamic_queue=plain_ucore_file_backed;accepted=3;pending=1\n"
+			   "host_ui_feed=rp_web_bundle;events=10;source=rp_input\n"
 			   "status=ready\n")) {
 		return 1;
 	}

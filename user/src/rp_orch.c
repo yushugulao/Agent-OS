@@ -411,7 +411,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_backend", "cases=4");
 	state_ok = state_ok && rp_file_contains("rp_backend_exec", "passed_cases=2");
 	state_ok = state_ok && rp_file_contains("rp_consistency", "state_relation=passed");
-	state_ok = state_ok && rp_file_contains("rp_consistency", "checks=107");
+	state_ok = state_ok && rp_file_contains("rp_consistency", "checks=113");
 	state_ok = state_ok && rp_file_contains("rp_consistency", "coherence_checks=9");
 	state_ok = state_ok && rp_file_contains("rp_ingest_files", "files=2");
 	state_ok = state_ok && rp_file_contains("rp_ingest_files", "derived_items=5");
@@ -453,8 +453,13 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_input", "form_fields=8");
 	state_ok = state_ok && rp_file_contains("rp_input", "csv_rows_total=9");
 	state_ok = state_ok && rp_file_contains("rp_input", "library_sources=1");
+	state_ok = state_ok && rp_file_contains("rp_input", "dynamic_submissions=4");
+	state_ok = state_ok && rp_file_contains("rp_input", "dynamic_validation=passed");
+	state_ok = state_ok && rp_file_contains("rp_input", "dynamic_queue=plain_ucore_file_backed");
 	state_ok = state_ok && rp_file_contains("rp_runner", "custom_source=rp_input");
 	state_ok = state_ok && rp_file_contains("rp_runner", "custom_runs=3");
+	state_ok = state_ok && rp_file_contains("rp_runner", "dynamic_input_runs=4");
+	state_ok = state_ok && rp_file_contains("rp_runner", "dynamic_run=usable-run:RUN-904");
 	state_ok = state_ok && rp_file_contains("rp_runner", "workbench=usable-workbench:RUN-900:plain-ucore");
 	state_ok = state_ok && rp_file_contains("rp_runner", "workbench_tasks=9");
 	state_ok = state_ok && rp_file_contains("rp_runner", "workbench_task_done=8");
@@ -492,6 +497,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_ui_home", "page=home");
 	state_ok = state_ok && rp_file_contains("rp_ui_home", "nav_items=12");
 	state_ok = state_ok && rp_file_contains("rp_ui_home", "static_site_pages=42");
+	state_ok = state_ok && rp_file_contains("rp_ui_home", "dynamic_inputs=4");
 	state_ok = state_ok && rp_file_contains("rp_ui_run", "run_id=RUN-042");
 	state_ok = state_ok && rp_file_contains("rp_ui_run", "timeline_rows=5");
 	state_ok = state_ok && rp_file_contains("rp_ui_run", "artifact_preview=rp_report_text,rp_chart_data,rp_artifact");
@@ -507,12 +513,14 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_api_home", "api=home");
 	state_ok = state_ok && rp_file_contains("rp_api_home", "custom_run=usable-run:RUN-900");
 	state_ok = state_ok && rp_file_contains("rp_api_home", "custom_runs=3");
+	state_ok = state_ok && rp_file_contains("rp_api_home", "dynamic_inputs=4");
 	state_ok = state_ok && rp_file_contains("rp_api_home", "nav_items=12");
 	state_ok = state_ok && rp_file_contains("rp_api_home", "static_site_pages=42");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "runner_exec_files=5");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "custom_research=rp_runner");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "custom_research_runs=3");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "request_form=rp_input");
+	state_ok = state_ok && rp_file_contains("rp_api_run", "dynamic_input_queue=rp_input");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "delivery_manifest=rp_package");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "delivery_files=8");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "delivery_checks=3");
@@ -551,6 +559,8 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_api_action", "precondition_checks=8");
 	state_ok = state_ok && rp_file_contains("rp_api_action", "side_effect_records=16");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "api_payloads=14");
+	state_ok = state_ok && rp_file_contains("rp_web_bundle", "dynamic_inputs=4");
+	state_ok = state_ok && rp_file_contains("rp_web_bundle", "host_ui_events=10");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "downloadable_units=3");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "static_site_pages=42");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "action_validation=passed");
@@ -600,7 +610,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_uresrun", "dataset_rows_total=9");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "Comparison Metrics");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "passed_cases=3");
-	state_ok = state_ok && rp_file_contains("rp_tests", "tests=653");
+	state_ok = state_ok && rp_file_contains("rp_tests", "tests=677");
 	state_ok = state_ok && rp_file_contains("rp_tests", "static_site=passed");
 	state_ok = state_ok && rp_file_contains("rp_tests", "workflow_portability=passed");
 	state_ok = state_ok && rp_file_contains("rp_tests", "coherence=passed");

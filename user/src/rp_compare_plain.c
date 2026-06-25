@@ -15,6 +15,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_knowledge", "semantic_relations=6");
 	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
 	ok = ok && rp_file_contains("rp_input", "workspace_import=workspace:RUN-900:folder");
+	ok = ok && rp_file_contains("rp_input", "dynamic_submissions=4");
+	ok = ok && rp_file_contains("rp_input", "dynamic_queue=plain_ucore_file_backed");
 	ok = ok && rp_file_contains("rp_runner", "workbench=usable-workbench:RUN-900:plain-ucore");
 	ok = ok && rp_file_contains("rp_runner", "workbench_tasks=9");
 	ok = ok && rp_file_contains("rp_runner", "workspace_inspection=usable-workspace-inspection:RUN-900:1");
@@ -31,6 +33,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "continuation_guide=ready");
 	ok = ok && rp_file_contains("rp_runner", "events=8");
 	ok = ok && rp_file_contains("rp_runner", "sha_records=9");
+	ok = ok && rp_file_contains("rp_runner", "dynamic_input_runs=4");
+	ok = ok && rp_file_contains("rp_runner", "dynamic_run=usable-run:RUN-904");
 	ok = ok && rp_file_contains("rp_lit", "literature_search=usable-literature-search:RUN-900:1");
 	ok = ok && rp_file_contains("rp_knowledge", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
 	ok = ok && rp_file_contains("rp_claimrec", "claim=8");
@@ -261,10 +265,11 @@ int main(void)
 	ok = ok && rp_file_contains("rp_study", "arms=2");
 	ok = ok && rp_file_contains("rp_consistency", "state_relation=passed");
 	ok = ok && rp_file_contains("rp_consistency", "task_records=21");
-	ok = ok && rp_file_contains("rp_consistency", "checks=107");
+	ok = ok && rp_file_contains("rp_consistency", "checks=113");
 	ok = ok && rp_file_contains("rp_consistency", "coherence_checks=9");
 	ok = ok && rp_file_contains("rp_consistency", "runner_stages=5");
 	ok = ok && rp_file_contains("rp_consistency", "workbench_records=10");
+	ok = ok && rp_file_contains("rp_consistency", "dynamic_input_records=8");
 	ok = ok && rp_file_contains("rp_consistency", "workbench_tasks=9");
 	ok = ok && rp_file_contains("rp_ui_home", "page=home");
 	ok = ok && rp_file_contains("rp_ui_home", "nav_items=12");
@@ -301,11 +306,13 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_home", "api=home");
 	ok = ok && rp_file_contains("rp_api_home", "custom_run=usable-run:RUN-900");
 	ok = ok && rp_file_contains("rp_api_home", "custom_runs=3");
+	ok = ok && rp_file_contains("rp_api_home", "dynamic_inputs=4");
 	ok = ok && rp_file_contains("rp_api_home", "nav_items=12");
 	ok = ok && rp_file_contains("rp_api_home", "static_site_pages=42");
 	ok = ok && rp_file_contains("rp_api_run", "runner_exec_files=5");
 	ok = ok && rp_file_contains("rp_api_run", "custom_research=rp_runner");
 	ok = ok && rp_file_contains("rp_api_run", "custom_research_runs=3");
+	ok = ok && rp_file_contains("rp_api_run", "dynamic_input_queue=rp_input");
 	ok = ok && rp_file_contains("rp_api_run", "request_form=rp_input");
 	ok = ok && rp_file_contains("rp_api_run", "delivery_manifest=rp_package");
 	ok = ok && rp_file_contains("rp_api_run", "llm_roundtrip=ready");
@@ -385,6 +392,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "library_sources=rp_knowledge");
 	ok = ok && rp_file_contains("rp_web_bundle", "workspace_imports=1");
 	ok = ok && rp_file_contains("rp_web_bundle", "workbench=rp_runner");
+	ok = ok && rp_file_contains("rp_web_bundle", "dynamic_inputs=4");
+	ok = ok && rp_file_contains("rp_web_bundle", "host_ui_events=10");
 	ok = ok && rp_file_contains("rp_web_bundle", "evidence_protocols=1");
 	ok = ok && rp_file_contains("rp_web_bundle", "workflow_portability=rp_wfio");
 	ok = ok && rp_file_contains("rp_web_bundle", "coherence_checks=9");
@@ -392,7 +401,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "review_threads=2");
 	ok = ok && rp_file_contains("rp_web_bundle", "action_validation=passed");
 	ok = ok && rp_file_contains("rp_web_bundle", "side_effect_records=16");
-	ok = ok && rp_file_contains("rp_tests", "tests=653");
+	ok = ok && rp_file_contains("rp_tests", "tests=677");
 	ok = ok && rp_file_contains("rp_tests", "workbench=passed");
 	ok = ok && rp_file_contains("rp_tests", "static_site=passed");
 	ok = ok && rp_file_contains("rp_tests", "workflow_portability=passed");
@@ -422,8 +431,8 @@ int main(void)
 		printf("rp_compare_plain: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		return 1;
 	}
-	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=168;message_acks=42;tool_events=144;action_state_records=12;test_cases=653;action_side_effect_records=16;llm_queue_checks=3;llm_guard_checks=3;workbench_exports=7;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=168;message_acks=42;tool_events=144;action_state_records=12;test_cases=677;action_side_effect_records=16;llm_queue_checks=3;llm_guard_checks=3;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;status=ready")) return 1;
 	if (!rp_append_status("compare=ready")) return 1;
-	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=42 state_files=168 acks=42 tools=144 status=ready\n");
+	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=42 state_files=168 acks=42 tools=144 dynamic=4 status=ready\n");
 	return 0;
 }

@@ -52,6 +52,8 @@ int main(void)
 	if (!rp_file_contains("rp_completion", "actions=4")) return 1;
 	if (!rp_file_contains("rp_runner", "stages=5")) return 1;
 	if (!rp_file_contains("rp_runner", "workbench_tasks=9")) return 1;
+	if (!rp_file_contains("rp_input", "dynamic_submissions=4")) return 1;
+	if (!rp_file_contains("rp_runner", "dynamic_input_runs=4")) return 1;
 	if (!rp_file_contains("rp_stage_state", "stages=5")) return 1;
 	if (!rp_file_contains("rp_cache_index", "cache_hits=1")) return 1;
 	if (!rp_file_contains("rp_retry_plan", "retry_items=1")) return 1;
@@ -105,7 +107,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=107\n"
+			   "consistency_checks=113\n"
 			   "coherence_checks=9\n"
 			   "namespace_checks=12\n"
 			   "surface_checks=13\n"
@@ -124,6 +126,9 @@ int main(void)
 			   "workflow_manifest_records=4\n"
 			   "workbench_records=10\n"
 			   "workbench_tasks=9\n"
+			   "dynamic_input_records=8\n"
+			   "dynamic_submissions=4\n"
+			   "host_ui_events=10\n"
 			   "artifact_records=2\n"
 			   "data_pipeline_files=6\n"
 			   "dataset_snapshots=2\n"
@@ -223,7 +228,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=107\n"
+			   "consistency_checks=113\n"
 			   "coherence_checks=9\n"
 			   "namespace_checks=12\n"
 			   "surface_checks=13\n"
@@ -242,6 +247,9 @@ int main(void)
 			   "workflow_manifest_records=4\n"
 			   "workbench_records=10\n"
 			   "workbench_tasks=9\n"
+			   "dynamic_input_records=8\n"
+			   "dynamic_submissions=4\n"
+			   "host_ui_events=10\n"
 			   "artifact_records=2\n"
 			   "data_pipeline_files=6\n"
 			   "dataset_snapshots=2\n"
@@ -304,6 +312,6 @@ int main(void)
 	if (!rp_append_status("telemetry=ready")) return 1;
 	if (!rp_append_status("agentcmp=ready")) return 1;
 	if (!rp_append_status("health=ready")) return 1;
-	printf("rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 delta_items=20 status=ready\n");
+	printf("rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 delta_items=20 dynamic=4 status=ready\n");
 	return 0;
 }
