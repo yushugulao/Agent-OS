@@ -47,6 +47,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_knowledge", "citation_key=library2026");
 	ok = ok && rp_file_contains("rp_runner", "status=ready");
 	ok = ok && rp_file_contains("rp_runner", "library_source_count=1");
+	ok = ok && rp_file_contains("rp_runner", "revision_task_id=usable-revision-task:RUN-900:1");
+	ok = ok && rp_file_contains("rp_runner", "revision_run=usable-run:RUN-900-rev1");
 	ok = ok && rp_file_contains("rp_stage_dag", "status=ready");
 	ok = ok && rp_file_contains("rp_stage_log", "status=ready");
 	ok = ok && rp_file_contains("rp_artifact", "status=recovered");
@@ -97,6 +99,15 @@ int main(void)
 			   "delivery_manifest=rp_package\n"
 			   "export_bundle=rp_package\n"
 			   "review_page=rp_package\n"
+			   "human_reviews=1\n"
+			   "human_review=usable-review:RUN-900:1;reviewer=Wang;decision=needs_revision;requested_changes=2\n"
+			   "review_note=clarify_reproducibility_and_chart_caption\n"
+			   "revision_tasks=1\n"
+			   "revision_task=usable-revision-task:RUN-900:1;status=completed;owner=Wang;requested_changes=2\n"
+			   "revision_task_source=usable-review:RUN-900:1\n"
+			   "revision_task_completed=usable-revision-task:RUN-900:1;new_run=usable-run:RUN-900-rev1\n"
+			   "revision_run=usable-run:RUN-900-rev1\n"
+			   "revision_task_export=revision_tasks.json\n"
 			   "raw_downloads=5\n"
 			   "delivery_manifest_detail=deliverables=8;audience=reviewer;bundle=rp_package\n"
 			   "export_bundle_detail=bundle_units=3;raw_links=5;checksums=6;provenance_source=rp_provpath;delivery_manifest=rp_package\n"
@@ -157,6 +168,8 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=package.attach_workflow_runner;target=rp_stage_state;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_data_pipeline;target=rp_dataset_collection;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_agent_collab;target=rp_agent_run;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_human_review;target=rp_package;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_revision_task;target=rp_runner;status=ok")) return 1;
 	if (!rp_append_status("package=ready")) return 1;
 	if (!rp_append_status("datarel=ready")) return 1;
 	if (!rp_append_status("dataver=ready")) return 1;
@@ -164,6 +177,8 @@ int main(void)
 	if (!rp_append_status("delivery_manifest=ready")) return 1;
 	if (!rp_append_status("export_bundle=ready")) return 1;
 	if (!rp_append_status("review_page=ready")) return 1;
+	if (!rp_append_status("human_review=ready")) return 1;
+	if (!rp_append_status("revision_task_package=ready")) return 1;
 	printf("rp_package: artifacts=48 checks=69 fair=passed repro=ready status=ready\n");
 	return 0;
 }

@@ -103,6 +103,14 @@ int main(void)
 	if (!rp_append_file("rp_runner", "custom_run=usable-run:RUN-900")) return 1;
 	if (!rp_append_file("rp_runner", "custom_run_2=usable-run:RUN-901")) return 1;
 	if (!rp_append_file("rp_runner", "custom_run_3=usable-run:RUN-902")) return 1;
+	if (!rp_append_file("rp_runner", "human_review_id=usable-review:RUN-900:1")) return 1;
+	if (!rp_append_file("rp_runner", "human_review_decision=needs_revision")) return 1;
+	if (!rp_append_file("rp_runner", "revision_task_id=usable-revision-task:RUN-900:1")) return 1;
+	if (!rp_append_file("rp_runner", "revision_requested_changes=2")) return 1;
+	if (!rp_append_file("rp_runner", "revision_status=completed")) return 1;
+	if (!rp_append_file("rp_runner", "revision_run=usable-run:RUN-900-rev1")) return 1;
+	if (!rp_append_file("rp_runner", "revision_reason=reviewer_requested_changes")) return 1;
+	if (!rp_append_file("rp_runner", "revision_artifacts=12")) return 1;
 	if (!rp_append_file("rp_runner", "custom_source=rp_input")) return 1;
 	if (!rp_append_file("rp_runner", "custom_dataset_rows=3")) return 1;
 	if (!rp_append_file("rp_runner", "custom_dataset_rows_total=9")) return 1;
@@ -138,6 +146,7 @@ int main(void)
 	if (!rp_append_status("retry_plan=ready")) return 1;
 	if (!rp_append_status("artifact_manifest=ready")) return 1;
 	if (!rp_append_status("custom_research=ready")) return 1;
+	if (!rp_append_status("revision_task=ready")) return 1;
 	printf("rp_workflow_runner: stages=5 events=8 retries=1 cache_hits=1 custom_runs=3 status=ready\n");
 	return 0;
 }

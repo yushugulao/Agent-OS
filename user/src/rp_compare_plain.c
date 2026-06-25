@@ -134,6 +134,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_package", "deliverables=8");
 	ok = ok && rp_file_contains("rp_package", "raw_links=5");
 	ok = ok && rp_file_contains("rp_package", "decision_controls=2");
+	ok = ok && rp_file_contains("rp_package", "human_reviews=1");
+	ok = ok && rp_file_contains("rp_package", "revision_tasks=1");
+	ok = ok && rp_file_contains("rp_runner", "revision_status=completed");
+	ok = ok && rp_file_contains("rp_runner", "revision_run=usable-run:RUN-900-rev1");
 	ok = ok && rp_file_contains("rp_query", "workflow_hits=34");
 	ok = ok && rp_file_contains("rp_execobs", "observer=ready");
 	ok = ok && rp_file_contains("rp_timeline", "events=9");
@@ -194,9 +198,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "custom_runs=3");
 	ok = ok && rp_file_contains("rp_runner", "custom_agent_decisions=15");
 	ok = ok && rp_file_contains("rp_runner", "citation_plan_entries=3");
-	ok = ok && rp_file_contains("rp_web_routes", "routes=18");
+	ok = ok && rp_file_contains("rp_web_routes", "routes=21");
 	ok = ok && rp_file_contains("rp_web_routes", "get_routes=13");
-	ok = ok && rp_file_contains("rp_web_routes", "post_routes=5");
+	ok = ok && rp_file_contains("rp_web_routes", "post_routes=8");
 	ok = ok && rp_file_contains("rp_api_home", "api=home");
 	ok = ok && rp_file_contains("rp_api_home", "custom_run=usable-run:RUN-900");
 	ok = ok && rp_file_contains("rp_api_home", "custom_runs=3");
@@ -225,15 +229,18 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_pub", "result_review=rp_resrev");
 	ok = ok && rp_file_contains("rp_api_know", "semantic_index=rp_semindex");
 	ok = ok && rp_file_contains("rp_api_runtime", "runtime_env=rp_runenv");
-	ok = ok && rp_file_contains("rp_api_action", "actions=5");
-	ok = ok && rp_file_contains("rp_actionio", "requests=5");
-	ok = ok && rp_file_contains("rp_actionio", "responses=5");
-	ok = ok && rp_file_contains("rp_actionio", "completed=5");
+	ok = ok && rp_file_contains("rp_api_action", "actions=8");
+	ok = ok && rp_file_contains("rp_api_action", "revision_task_runner=1");
+	ok = ok && rp_file_contains("rp_actionio", "requests=8");
+	ok = ok && rp_file_contains("rp_actionio", "responses=8");
+	ok = ok && rp_file_contains("rp_actionio", "completed=8");
 	ok = ok && rp_file_contains("rp_actionio", "dataset_file=rp_input");
 	ok = ok && rp_file_contains("rp_actionio", "generated_runs=3");
 	ok = ok && rp_file_contains("rp_actionio", "tag=reusable");
+	ok = ok && rp_file_contains("rp_actionio", "effect=revision_run_created");
 	ok = ok && rp_file_contains("rp_uresrun", "runs=3");
 	ok = ok && rp_file_contains("rp_uresrun", "run_id_3=usable-run:RUN-902");
+	ok = ok && rp_file_contains("rp_uresrun", "revision_run=usable-run:RUN-900-rev1");
 	ok = ok && rp_file_contains("rp_uresrun", "source_form=rp_input");
 	ok = ok && rp_file_contains("rp_uresrun", "export_bundle=rp_package");
 	ok = ok && rp_file_contains("rp_uresrun", "library_sources=rp_knowledge");
@@ -251,7 +258,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "export_bundle=rp_package");
 	ok = ok && rp_file_contains("rp_web_bundle", "library_sources=rp_knowledge");
 	ok = ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
-	ok = ok && rp_file_contains("rp_tests", "tests=241");
+	ok = ok && rp_file_contains("rp_tests", "tests=260");
 	ok = ok && rp_file_contains("rp_tests", "status=passed");
 	ok = ok && rp_file_contains("rp_ack", "ack=consistency;msg=22;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=consistency.check_backend");
@@ -273,7 +280,7 @@ int main(void)
 	if (!ok) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
-	if (ack_count < 39 || tool_count < 140) {
+	if (ack_count < 39 || tool_count < 142) {
 		printf("rp_compare_plain: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		return 1;
 	}
@@ -285,7 +292,7 @@ int main(void)
 			   "programs=39\n"
 			   "state_files=169\n"
 			   "message_acks=39\n"
-			   "tool_events=140\n"
+			   "tool_events=142\n"
 			   "consistency_checks=86\n"
 			   "runner_stages=5\n"
 			   "workflow_runner_files=5\n"
@@ -312,15 +319,18 @@ int main(void)
 			   "delivery_files=3\n"
 			   "library_sources=1\n"
 			   "citation_plan_entries=3\n"
-			   "web_routes=18\n"
+			   "web_routes=21\n"
 			   "web_api_payloads=14\n"
-			   "web_action_routes=5\n"
+			   "web_action_routes=8\n"
 			   "web_action_outputs=2\n"
-			   "test_cases=241\n"
+			   "human_reviews=1\n"
+			   "revision_tasks=1\n"
+			   "revision_runs=1\n"
+			   "test_cases=260\n"
 			   "status=ready\n")) {
 		return 1;
 	}
 	if (!rp_append_status("compare=ready")) return 1;
-	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=39 state_files=169 acks=39 tools=140 status=ready\n");
+	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=39 state_files=169 acks=39 tools=142 status=ready\n");
 	return 0;
 }

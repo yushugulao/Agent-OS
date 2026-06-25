@@ -29,11 +29,15 @@ int main(void)
 	ok = ok && rp_file_contains("rp_package", "deliverables=8");
 	ok = ok && rp_file_contains("rp_package", "raw_links=5");
 	ok = ok && rp_file_contains("rp_package", "artifact_links=6");
+	ok = ok && rp_file_contains("rp_package", "human_reviews=1");
+	ok = ok && rp_file_contains("rp_package", "revision_tasks=1");
 	ok = ok && rp_file_contains("rp_dataset_collection", "items=4");
 	ok = ok && rp_file_contains("rp_input", "custom_run=usable-run:RUN-900");
 	ok = ok && rp_file_contains("rp_input", "custom_requests=3");
 	ok = ok && rp_file_contains("rp_runner", "custom_runs=3");
 	ok = ok && rp_file_contains("rp_runner", "custom_status=ok");
+	ok = ok && rp_file_contains("rp_runner", "revision_status=completed");
+	ok = ok && rp_file_contains("rp_runner", "revision_run=usable-run:RUN-900-rev1");
 	ok = ok && rp_file_contains("rp_sreg", "samples=8");
 	ok = ok && rp_file_contains("rp_instr", "instruments=4");
 	ok = ok && rp_file_contains("rp_resrev", "review_items=10");
@@ -43,9 +47,9 @@ int main(void)
 
 	if (!rp_write_file("rp_web_routes",
 			   "service=host-web-ui\n"
-			   "routes=18\n"
+			   "routes=21\n"
 			   "get_routes=13\n"
-			   "post_routes=5\n"
+			   "post_routes=8\n"
 			   "route=/;payload=rp_api_home;status=ready\n"
 			   "route=/run/RUN-042;payload=rp_api_run;status=ready\n"
 			   "route=/research/{run_id};payload=rp_uresrun;status=ready\n"
@@ -64,6 +68,9 @@ int main(void)
 			   "action=/actions/agentcompare/run;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/research/run;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/research/export;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/review;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/revision-task;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/run-revision-task;method=POST;payload=rp_api_action;status=ready\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -90,6 +97,8 @@ int main(void)
 			   "request_form=rp_input;upload_files=rp_input\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner\n"
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
+			   "human_reviews=1;revision_tasks=1;latest_revision_task=usable-revision-task:RUN-900:1\n"
+			   "revised_run=usable-run:RUN-900-rev1\n"
 			   "workflow=lab-gene-x\n"
 			   "stages=5\n"
 			   "failed_stage=align\n"
@@ -238,38 +247,49 @@ int main(void)
 	}
 	if (!rp_write_file("rp_api_action",
 			   "api=actions\n"
-			   "actions=5\n"
+			   "actions=8\n"
 			   "host_workflow_run=/actions/host-workflow/run\n"
 			   "host_workflow_export=/actions/host-workflow/export\n"
 			   "agentcompare_run=/actions/agentcompare/run\n"
 			   "research_run=/actions/research/run\n"
 			   "research_export=/actions/research/export\n"
+			   "research_review=/actions/research/review\n"
+			   "research_revision_task=/actions/research/revision-task\n"
+			   "research_run_revision=/actions/research/run-revision-task\n"
 			   "delivery_manifest_builder=1\n"
+			   "human_review_form=1\n"
+			   "revision_task_runner=1\n"
 			   "export_bundle=rp_package\n"
 			   "redirect_status=303\n"
 			   "status=ready\n")) {
 		return 1;
 	}
 	if (!rp_write_file("rp_actionio",
-			   "requests=5\n"
+			   "requests=8\n"
 			   "request=1;path=/actions/host-workflow/run;run_id=RUN-042;inject_failure=1;use_cache=1\n"
 			   "request=2;path=/actions/host-workflow/export;workflow_run_id=RUN-042\n"
 			   "request=3;path=/actions/agentcompare/run;profile=plain_ucore\n"
 			   "request=4;path=/actions/research/run;provider=template;source_request=rp_input;dataset_file=rp_input;custom_runs=3\n"
 			   "library_query=tag=reusable;source=rp_knowledge\n"
 			   "request=5;path=/actions/research/export;run_id=usable-run:RUN-900\n"
-			   "responses=5\n"
+			   "request=6;path=/actions/research/review;run_id=usable-run:RUN-900;decision=needs_revision;reviewer=Wang\n"
+			   "request=7;path=/actions/research/revision-task;review_id=usable-review:RUN-900:1;requested_changes=2\n"
+			   "request=8;path=/actions/research/run-revision-task;task_id=usable-revision-task:RUN-900:1;provider=template\n"
+			   "responses=8\n"
 			   "response=1;status=303;location=/runs/RUN-042;effect=host_workflow_run\n"
 			   "response=2;status=303;location=/runs/RUN-042;effect=host_workflow_export\n"
 			   "response=3;status=303;location=/compare;effect=agentcompare_run\n"
 			   "response=4;status=303;location=/research/usable-run:RUN-900;effect=usable_research_run;generated_runs=3\n"
 			   "response=5;status=303;location=/research/usable-run:RUN-900;effect=usable_research_export;delivery_manifest=rp_package;export_bundle=rp_package\n"
-			   "actions=5\n"
-			   "completed=5\n"
+			   "response=6;status=303;location=/research/usable-run:RUN-900;effect=human_review;review_id=usable-review:RUN-900:1\n"
+			   "response=7;status=303;location=/research/usable-run:RUN-900;effect=revision_task_created;task_id=usable-revision-task:RUN-900:1\n"
+			   "response=8;status=303;location=/research/usable-run:RUN-900-rev1;effect=revision_run_created;new_run=usable-run:RUN-900-rev1\n"
+			   "actions=8\n"
+			   "completed=8\n"
 			   "failed=0\n"
-			   "redirects=5\n"
-			   "state_writes=11\n"
-			   "audit_records=5\n"
+			   "redirects=8\n"
+			   "state_writes=14\n"
+			   "audit_records=8\n"
 			   "host_export=review_html\n"
 			   "host_contains=Stage DAG,Agent Decisions,Custom Research,Comparison Metrics\n"
 			   "compare_runs=1\n"
@@ -283,6 +303,9 @@ int main(void)
 			   "run_id=usable-run:RUN-900\n"
 			   "run_id_2=usable-run:RUN-901\n"
 			   "run_id_3=usable-run:RUN-902\n"
+			   "revision_run=usable-run:RUN-900-rev1\n"
+			   "revision_task_id=usable-revision-task:RUN-900:1\n"
+			   "revision_status=completed\n"
 			   "source_request=rp_input;source_form=rp_input;upload_files=rp_input\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner\n"
 			   "source_dataset=rp_input;source_run=rp_runner\n"
@@ -309,9 +332,9 @@ int main(void)
 	}
 	if (!rp_write_file("rp_web_bundle",
 			   "bundle=host-web-ui\n"
-			   "routes=18\n"
+			   "routes=21\n"
 			   "get_routes=13\n"
-			   "post_routes=5\n"
+			   "post_routes=8\n"
 			   "api_payloads=14\n"
 			   "action_payloads=1\n"
 			   "source_pages=5\n"
@@ -320,6 +343,7 @@ int main(void)
 			   "request_form=rp_input;upload_files=rp_input\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner\n"
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
+			   "human_reviews=1;revision_tasks=1;revised_run=usable-run:RUN-900-rev1\n"
 			   "runner_detail_fields=16\n"
 			   "evidence_package=rp_package\n"
 			   "package_manifest=ready\n"
@@ -367,6 +391,6 @@ int main(void)
 	if (!rp_append_status("actionio=ready")) return 1;
 	if (!rp_append_status("usable_research=ready")) return 1;
 	if (!rp_append_status("action_exports=ready")) return 1;
-	printf("rp_web_export: routes=18 api_payloads=14 actions=5 bundle=ready status=ready\n");
+	printf("rp_web_export: routes=21 api_payloads=14 actions=8 bundle=ready status=ready\n");
 	return 0;
 }

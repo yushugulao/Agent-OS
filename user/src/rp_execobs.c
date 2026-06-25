@@ -32,7 +32,7 @@ int main(void)
 			   "busy=0\n"
 			   "stalled=0\n"
 			   "heartbeats=4\n"
-			   "queue_actions=5\n"
+			   "queue_actions=8\n"
 			   "failure_actions=2\n"
 			   "status=ready\n")) {
 		return 1;
@@ -53,7 +53,7 @@ int main(void)
 			   "execution_packets=4\n"
 			   "timeline_events=9\n"
 			   "worker_health=ready\n"
-			   "control_actions=5\n"
+			   "control_actions=8\n"
 			   "failure_actions=2\n"
 			   "evidence=ready\n"
 			   "status=ready\n")) {
@@ -68,6 +68,6 @@ int main(void)
 	if (!rp_append_status("worker=ready")) return 1;
 	if (!rp_append_status("timeline=ready")) return 1;
 	if (!rp_append_status("execobs=ready")) return 1;
-	printf("rp_execobs: timeline=9 workers=4 controls=5 observer=ready status=ready\n");
+	printf("rp_execobs: timeline=9 workers=4 controls=8 observer=ready status=ready\n");
 	return 0;
 }
