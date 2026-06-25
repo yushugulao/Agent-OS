@@ -59,10 +59,15 @@ int main(void)
 	ok = ok && rp_file_contains("rp_retrylog", "attempts=2");
 	ok = ok && rp_file_contains("rp_relay", "network_stack=host_only");
 	ok = ok && rp_file_contains("rp_llm_packets", "packets=3");
+	ok = ok && rp_file_contains("rp_llm_packets", "matched_responses=3");
+	ok = ok && rp_file_contains("rp_llm_packets", "roundtrip=ready");
 	ok = ok && rp_file_contains("rp_llm_routes", "routes=4");
 	ok = ok && rp_file_contains("rp_llm_guard", "secrets_in_ucore=0");
 	ok = ok && rp_file_contains("rp_llm_hostreq", "cloud_mode=optional_host_side");
+	ok = ok && rp_file_contains("rp_llm_hostreq", "roundtrip=ready");
+	ok = ok && rp_file_contains("rp_llm_resp", "host_relay_roundtrip=ready");
 	ok = ok && rp_file_contains("rp_llm_fallback", "fallback_cases=1");
+	ok = ok && rp_file_contains("rp_llm_fallback", "offline_template_verified=1");
 	ok = ok && rp_file_contains("rp_repro", "notebook_replay=passed");
 	ok = ok && rp_file_contains("rp_submit", "data_availability=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "report_ok=1");
@@ -148,6 +153,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_package", "human_reviews=1");
 	ok = ok && rp_file_contains("rp_package", "revision_tasks=1");
 	ok = ok && rp_file_contains("rp_package", "review_action_items=2");
+	ok = ok && rp_file_contains("rp_package", "llm_matched_responses=3");
 	ok = ok && rp_file_contains("rp_runner", "revision_status=completed");
 	ok = ok && rp_file_contains("rp_runner", "revision_run=usable-run:RUN-900-rev1");
 	ok = ok && rp_file_contains("rp_query", "workflow_hits=34");
@@ -223,6 +229,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_run", "custom_research_runs=3");
 	ok = ok && rp_file_contains("rp_api_run", "request_form=rp_input");
 	ok = ok && rp_file_contains("rp_api_run", "delivery_manifest=rp_package");
+	ok = ok && rp_file_contains("rp_api_run", "llm_roundtrip=ready");
 	ok = ok && rp_file_contains("rp_api_run", "bibliography=rp_runner");
 	ok = ok && rp_file_contains("rp_api_run", "review_action_items=2");
 	ok = ok && rp_file_contains("rp_api_run", "timeline_rows=5");
@@ -235,6 +242,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_artifacts", "manifest_records=4");
 	ok = ok && rp_file_contains("rp_api_artifacts", "evidence_package=rp_package");
 	ok = ok && rp_file_contains("rp_api_artifacts", "export_bundle=rp_package");
+	ok = ok && rp_file_contains("rp_api_artifacts", "llm_matched_responses=3");
 	ok = ok && rp_file_contains("rp_api_artifacts", "library_sources=rp_knowledge");
 	ok = ok && rp_file_contains("rp_api_artifacts", "preview_files=rp_report_text,rp_chart_data,rp_artifact");
 	ok = ok && rp_file_contains("rp_api_data", "dataset_snapshots=2");
@@ -272,11 +280,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "delivery_files=8");
 	ok = ok && rp_file_contains("rp_web_bundle", "delivery_checks=3");
 	ok = ok && rp_file_contains("rp_web_bundle", "evidence_bundle_entries=12");
+	ok = ok && rp_file_contains("rp_web_bundle", "llm_roundtrip=ready");
 	ok = ok && rp_file_contains("rp_web_bundle", "export_bundle=rp_package");
 	ok = ok && rp_file_contains("rp_web_bundle", "library_sources=rp_knowledge");
 	ok = ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
 	ok = ok && rp_file_contains("rp_web_bundle", "review_threads=2");
-	ok = ok && rp_file_contains("rp_tests", "tests=302");
+	ok = ok && rp_file_contains("rp_tests", "tests=322");
 	ok = ok && rp_file_contains("rp_tests", "status=passed");
 	ok = ok && rp_file_contains("rp_ack", "ack=consistency;msg=22;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=consistency.check_backend");
@@ -326,6 +335,8 @@ int main(void)
 			   "knowledge_service_files=5\n"
 			   "runtime_service_files=5\n"
 			   "relay_protocol_files=5\n"
+			   "llm_roundtrip=ready\n"
+			   "llm_matched_responses=3\n"
 			   "agent_roles=7\n"
 			   "collaboration_decisions=8\n"
 			   "ui_pages=5\n"
@@ -349,7 +360,7 @@ int main(void)
 			   "review_threads=2\n"
 			   "review_comments=3\n"
 			   "review_action_items=2\n"
-			   "test_cases=302\n"
+			   "test_cases=322\n"
 			   "status=ready\n")) {
 		return 1;
 	}

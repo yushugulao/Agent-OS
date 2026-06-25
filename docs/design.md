@@ -147,15 +147,15 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_knowledge` | evidence | package, compare | knowledge, semantic, and systematic review summary |
 | `rp_llm_req` | LLM bridge | privacy | host LLM request packet without embedded secrets |
 | `rp_llmq` | LLM bridge | privacy, package, release, dossier, metrics, compare, orchestrator | host relay request queue, route selection, and per-request secret policy |
-| `rp_llm_resp` | LLM bridge | privacy, compare | deterministic template LLM response |
+| `rp_llm_resp` | LLM bridge | privacy, compare | deterministic template LLM responses matched back to request ids |
 | `rp_relay` | LLM bridge | privacy, package, release, dossier, compare | host-file relay mode, secret location, network ownership, and fallback policy |
 | `rp_prompt` | LLM bridge | privacy, package, compare | prompt versions, route policy, token budget, and evaluation cases |
 | `rp_llmlog` | LLM bridge | privacy, package, compare | transcript count, packet audit, privacy status, and replay status |
 | `rp_llmeval` | LLM bridge | privacy, package, release, dossier, metrics, compare, orchestrator | template response evaluation cases, grounded answer count, route switches, and fallback use |
-| `rp_llm_packets` | LLM relay | privacy, package, consistency, metrics, compare, orchestrator | packet-level host relay contract for three LLM requests |
+| `rp_llm_packets` | LLM relay | privacy, package, consistency, metrics, compare, orchestrator | packet-level host relay contract with request and response ids for three LLM requests |
 | `rp_llm_routes` | LLM relay | privacy, package, consistency, metrics, compare, orchestrator | route table for template and optional host cloud execution |
 | `rp_llm_guard` | LLM relay | privacy, package, consistency, metrics, compare, orchestrator | secret and outbound ownership check for relay packets |
-| `rp_llm_hostreq` | LLM relay | privacy, package, consistency, compare, orchestrator | host request handoff contract with no secret material in uCore |
+| `rp_llm_hostreq` | LLM relay | privacy, package, consistency, compare, orchestrator | host request and response handoff contract with no secret material in uCore |
 | `rp_llm_fallback` | LLM relay | privacy, package, consistency, metrics, compare, orchestrator | fallback handling for missing cloud key, network loss, and privacy rejection |
 | `rp_privacy` | privacy | release | outbound packet review result |
 | `rp_compliance` | privacy | package, release, dossier, metrics, compare, orchestrator | policy compliance result covering access profiles, data use rules, LLM packets, secret placement, and license checks |
@@ -262,7 +262,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_actionio` | Host Web/API export | test suite, compare, orchestrator | compact request, response, redirect, host export, human-review, revision-task, revised-run, and AgentCompare action record |
 | `rp_uresrun` | Host Web/API export | test suite, compare, orchestrator | usable research run, revised-run, and export result record derived from the request form, uploaded files, compact dataset, and runner output |
 | `rp_web_bundle` | Host Web/API export | test suite, compare, orchestrator | bundle summary tying routes, API payloads, POST action payloads, UI pages, UI render sections, artifact preview entries, reusable source selection, delivery file rows, delivery checks, evidence bundle entries, review page, package export indexes, runner files, custom research fields, research service files, and relay files together |
-| `rp_tests` | test suite | compare, orchestrator | 302 user-space checks over catalog, data pipeline, service surface records, workflow, artifacts, package export indexes, delivery file rows, delivery checks, delivery manifest names, evidence bundle contents, review page, human review records, revision-task records, review thread records, review comment records, action item records, UI render data, workflow runner files, workflow runner detail fields, custom research fields, reusable source selection, bibliography, citation plan, Agent collaboration, UI data, Host Web/API export files, POST action records, LLM relay, AgentCompare, and consistency records |
+| `rp_tests` | test suite | compare, orchestrator | 322 user-space checks over catalog, data pipeline, service surface records, workflow, artifacts, package export indexes, delivery file rows, delivery checks, delivery manifest names, evidence bundle contents, review page, human review records, revision-task records, review thread records, review comment records, action item records, UI render data, workflow runner files, workflow runner detail fields, custom research fields, reusable source selection, bibliography, citation plan, Agent collaboration, UI data, Host Web/API export files, POST action records, LLM relay request/packet/response matching, AgentCompare, and consistency records |
 | `rp_compare` | compare | orchestrator | plain-kernel execution summary |
 
 This is intentionally implemented without new syscalls. It uses only `open`, `read`, `write`, `close`, `fork`, `exec`, and `waitpid`.

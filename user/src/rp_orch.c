@@ -271,6 +271,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_package", "human_reviews=1");
 	state_ok = state_ok && rp_file_contains("rp_package", "revision_tasks=1");
 	state_ok = state_ok && rp_file_contains("rp_package", "review_action_items=2");
+	state_ok = state_ok && rp_file_contains("rp_package", "llm_matched_responses=3");
 	state_ok = state_ok && rp_file_contains("rp_object_query", "hits=8");
 	state_ok = state_ok && rp_file_contains("rp_lineage", "edges=7");
 	state_ok = state_ok && rp_file_contains("rp_site", "pages=6");
@@ -325,10 +326,15 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_llmlog", "privacy_checked=1");
 	state_ok = state_ok && rp_file_contains("rp_llmlog", "request_packets=3");
 	state_ok = state_ok && rp_file_contains("rp_llm_packets", "packets=3");
+	state_ok = state_ok && rp_file_contains("rp_llm_packets", "matched_responses=3");
+	state_ok = state_ok && rp_file_contains("rp_llm_packets", "roundtrip=ready");
 	state_ok = state_ok && rp_file_contains("rp_llm_routes", "routes=4");
 	state_ok = state_ok && rp_file_contains("rp_llm_guard", "secrets_in_ucore=0");
 	state_ok = state_ok && rp_file_contains("rp_llm_hostreq", "cloud_mode=optional_host_side");
+	state_ok = state_ok && rp_file_contains("rp_llm_hostreq", "roundtrip=ready");
 	state_ok = state_ok && rp_file_contains("rp_llm_fallback", "fallback_cases=1");
+	state_ok = state_ok && rp_file_contains("rp_llm_fallback", "offline_template_verified=1");
+	state_ok = state_ok && rp_file_contains("rp_llm_resp", "host_relay_roundtrip=ready");
 	state_ok = state_ok && rp_file_contains("rp_sreg", "samples=8");
 	state_ok = state_ok && rp_file_contains("rp_ethics", "consent_forms=6");
 	state_ok = state_ok && rp_file_contains("rp_access", "approved=2");
@@ -412,6 +418,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_api_run", "delivery_files=8");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "delivery_checks=3");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "evidence_bundle_zip=research-evidence-bundle.zip");
+	state_ok = state_ok && rp_file_contains("rp_api_run", "llm_roundtrip=ready");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "bibliography=rp_runner");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "review_action_items=2");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "timeline_rows=5");
@@ -427,6 +434,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "delivery_files=8");
 	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "delivery_checks=3");
 	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "evidence_bundle_entries=12");
+	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "llm_matched_responses=3");
 	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "library_sources=rp_knowledge");
 	state_ok = state_ok && rp_file_contains("rp_api_artifacts", "preview_files=rp_report_text,rp_chart_data,rp_artifact");
 	state_ok = state_ok && rp_file_contains("rp_api_data", "dataset_snapshots=2");
@@ -446,6 +454,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "delivery_files=8");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "delivery_checks=3");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "evidence_bundle_entries=12");
+	state_ok = state_ok && rp_file_contains("rp_web_bundle", "llm_roundtrip=ready");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "export_bundle=rp_package");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "library_sources=rp_knowledge");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
@@ -468,7 +477,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_uresrun", "dataset_rows_total=9");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "Comparison Metrics");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "passed_cases=3");
-	state_ok = state_ok && rp_file_contains("rp_tests", "tests=302");
+	state_ok = state_ok && rp_file_contains("rp_tests", "tests=322");
 	state_ok = state_ok && rp_file_contains("rp_tests", "status=passed");
 	state_ok = state_ok && rp_file_contains("rp_litrev", "papers=9");
 	state_ok = state_ok && rp_file_contains("rp_citegraph", "bibtex_entries=9");

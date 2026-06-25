@@ -9,14 +9,18 @@ int main(void)
 	ok = ok && rp_file_contains("rp_relay", "mode=host_file_relay");
 	ok = ok && rp_file_contains("rp_prompt", "provider_policy=host_relay");
 	ok = ok && rp_file_contains("rp_llm_resp", "responses=3");
+	ok = ok && rp_file_contains("rp_llm_resp", "host_relay_roundtrip=ready");
+	ok = ok && rp_file_contains("rp_llm_resp", "match=q1->r1,q2->r2,q3->r3");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_llm_packets",
 			   "run_id=RUN-042\n"
-			   "packet=1;route=review_summary;mode=template;secret_ref=host_env;status=ready\n"
-			   "packet=2;route=method_check;mode=template;secret_ref=host_env;status=ready\n"
-			   "packet=3;route=recovery_note;mode=template;secret_ref=host_env;status=ready\n"
+			   "packet=1;request=q1;route=review_summary;mode=template;secret_ref=host_env;response=r1;status=ready\n"
+			   "packet=2;request=q2;route=method_check;mode=template;secret_ref=host_env;response=r2;status=ready\n"
+			   "packet=3;request=q3;route=recovery_note;mode=template;secret_ref=host_env;response=r3;status=ready\n"
 			   "packets=3\n"
+			   "matched_responses=3\n"
+			   "roundtrip=ready\n"
 			   "cloud_capable=1\n"
 			   "ucore_network=0\n"
 			   "status=ready\n")) {
@@ -29,6 +33,7 @@ int main(void)
 			   "route=recovery_note;provider=template_or_cloud;budget=1024;status=ready\n"
 			   "route=fallback_summary;provider=template;budget=512;status=ready\n"
 			   "routes=4\n"
+			   "roundtrip_routes=3\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -46,6 +51,11 @@ int main(void)
 			   "run_id=RUN-042\n"
 			   "request_file=rp_llm_packets\n"
 			   "response_file=rp_llm_resp\n"
+			   "source_queue=rp_llmq\n"
+			   "host_request_records=3\n"
+			   "host_response_records=3\n"
+			   "matched_responses=3\n"
+			   "roundtrip=ready\n"
 			   "cloud_mode=optional_host_side\n"
 			   "template_mode=ready\n"
 			   "required_host_env=OPENAI_API_KEY\n"
@@ -59,6 +69,7 @@ int main(void)
 			   "case=missing_cloud_key;action=template_response;status=ready\n"
 			   "case=network_unavailable;action=template_response;status=ready\n"
 			   "case=privacy_reject;action=stop_before_host;status=ready\n"
+			   "offline_template_verified=1\n"
 			   "status=ready\n")) {
 		return 1;
 	}

@@ -45,8 +45,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_handoff", "handoffs=6");
 	ok = ok && rp_file_contains("rp_agent_run", "status=ready");
 	ok = ok && rp_file_contains("rp_llm_packets", "packets=3");
+	ok = ok && rp_file_contains("rp_llm_packets", "matched_responses=3");
 	ok = ok && rp_file_contains("rp_llm_routes", "routes=4");
 	ok = ok && rp_file_contains("rp_llm_guard", "secrets_in_ucore=0");
+	ok = ok && rp_file_contains("rp_llm_hostreq", "roundtrip=ready");
 	ok = ok && rp_file_contains("rp_sreg", "samples=8");
 	ok = ok && rp_file_contains("rp_instr", "instruments=4");
 	ok = ok && rp_file_contains("rp_resrev", "review_items=10");
@@ -112,6 +114,8 @@ int main(void)
 			   "review_action_items=2\n"
 			   "review_thread_source=rp_review2\n"
 			   "llm_relay=rp_llm_packets,rp_llm_routes,rp_llm_guard,rp_llm_hostreq,rp_llm_fallback\n"
+			   "llm_roundtrip=ready\n"
+			   "llm_response_file=rp_llm_resp\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -141,6 +145,7 @@ int main(void)
 			   "export_bundle=rp_package\n"
 			   "evidence_bundle_zip=research-evidence-bundle.zip\n"
 			   "llm_guard=rp_llm_guard\n"
+			   "llm_roundtrip=rp_llmq,rp_llm_packets,rp_llm_resp\n"
 			   "status=ready\n")) {
 		return 1;
 	}

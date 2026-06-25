@@ -151,6 +151,8 @@ int main(void)
 			   "workflow_runner=1\n"
 			   "agent_collaboration=1\n"
 			   "llm_relay_protocol=1\n"
+			   "llm_roundtrip=rp_llmq,rp_llm_packets,rp_llm_resp\n"
+			   "llm_matched_responses=3\n"
 			   "release=ready\n"
 			   "status=ready\n")) {
 		return 1;

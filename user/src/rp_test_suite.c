@@ -108,12 +108,22 @@ int main(void)
 
 	ok = ok && require_file_token("rp_llmq", "secret_policy=no_secret_in_ucore");
 	ok = ok && require_file_token("rp_llm_resp", "responses=3");
+	ok = ok && require_file_token("rp_llm_resp", "matched_requests=3");
+	ok = ok && require_file_token("rp_llm_resp", "host_relay_roundtrip=ready");
+	ok = ok && require_file_token("rp_llm_resp", "match=q1->r1,q2->r2,q3->r3");
 	ok = ok && require_file_token("rp_relay", "network_stack=host_only");
 	ok = ok && require_file_token("rp_llm_packets", "packets=3");
+	ok = ok && require_file_token("rp_llm_packets", "matched_responses=3");
+	ok = ok && require_file_token("rp_llm_packets", "roundtrip=ready");
 	ok = ok && require_file_token("rp_llm_routes", "routes=4");
+	ok = ok && require_file_token("rp_llm_routes", "roundtrip_routes=3");
 	ok = ok && require_file_token("rp_llm_guard", "secrets_in_ucore=0");
 	ok = ok && require_file_token("rp_llm_hostreq", "template_mode=ready");
+	ok = ok && require_file_token("rp_llm_hostreq", "host_request_records=3");
+	ok = ok && require_file_token("rp_llm_hostreq", "host_response_records=3");
+	ok = ok && require_file_token("rp_llm_hostreq", "roundtrip=ready");
 	ok = ok && require_file_token("rp_llm_fallback", "fallback_cases=1");
+	ok = ok && require_file_token("rp_llm_fallback", "offline_template_verified=1");
 	ok = ok && require_file_token("rp_prompt", "provider_policy=host_relay");
 	ok = ok && require_file_token("rp_llmeval", "passed=7");
 	ok = ok && require_file_token("rp_privacy", "decision=accepted");
@@ -199,6 +209,8 @@ int main(void)
 	ok = ok && require_file_token("rp_package", "review_comments=3");
 	ok = ok && require_file_token("rp_package", "review_action_items=2");
 	ok = ok && require_file_token("rp_package", "review_page_sections=Human Reviews,Delivery Manifests,Revision Tasks,Review Threads,Action Items");
+	ok = ok && require_file_token("rp_package", "llm_roundtrip=rp_llmq,rp_llm_packets,rp_llm_resp");
+	ok = ok && require_file_token("rp_package", "llm_matched_responses=3");
 	ok = ok && require_file_token("rp_release", "decision=release");
 	ok = ok && require_file_token("rp_dossier", "sections=36");
 
@@ -260,6 +272,8 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_run", "delivery_checks=3");
 	ok = ok && require_file_token("rp_ui_run", "delivery_manifest_json=delivery-manifest.json");
 	ok = ok && require_file_token("rp_ui_run", "evidence_bundle_zip=research-evidence-bundle.zip");
+	ok = ok && require_file_token("rp_ui_run", "llm_roundtrip=ready");
+	ok = ok && require_file_token("rp_ui_run", "llm_response_file=rp_llm_resp");
 	ok = ok && require_file_token("rp_ui_run", "review_threads=2");
 	ok = ok && require_file_token("rp_ui_run", "review_action_items=2");
 	ok = ok && require_file_token("rp_ui_agent", "page=agent-detail");
@@ -270,6 +284,7 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_evidence", "delivery_files=8");
 	ok = ok && require_file_token("rp_ui_evidence", "delivery_checks=3");
 	ok = ok && require_file_token("rp_ui_evidence", "evidence_bundle_zip=research-evidence-bundle.zip");
+	ok = ok && require_file_token("rp_ui_evidence", "llm_roundtrip=rp_llmq,rp_llm_packets,rp_llm_resp");
 	ok = ok && require_file_token("rp_ui_compare", "page=compare-metrics");
 	ok = ok && require_file_token("rp_ui_compare", "metric_rows=8");
 	ok = ok && require_file_token("rp_ui_compare", "relay_protocol_files=5");
@@ -298,6 +313,8 @@ int main(void)
 	ok = ok && require_file_token("rp_api_run", "delivery_checks=3");
 	ok = ok && require_file_token("rp_api_run", "latest_delivery_status=ready");
 	ok = ok && require_file_token("rp_api_run", "evidence_bundle_zip=research-evidence-bundle.zip");
+	ok = ok && require_file_token("rp_api_run", "llm_roundtrip=ready");
+	ok = ok && require_file_token("rp_api_run", "llm_response_file=rp_llm_resp");
 	ok = ok && require_file_token("rp_api_run", "review_page=rp_package");
 	ok = ok && require_file_token("rp_api_run", "export_bundle=rp_package");
 	ok = ok && require_file_token("rp_api_run", "human_reviews=1");
@@ -323,6 +340,8 @@ int main(void)
 	ok = ok && require_file_token("rp_api_artifacts", "export_bundle=rp_package");
 	ok = ok && require_file_token("rp_api_artifacts", "evidence_bundle_zip=research-evidence-bundle.zip");
 	ok = ok && require_file_token("rp_api_artifacts", "evidence_bundle_entries=12");
+	ok = ok && require_file_token("rp_api_artifacts", "llm_roundtrip=ready");
+	ok = ok && require_file_token("rp_api_artifacts", "llm_matched_responses=3");
 	ok = ok && require_file_token("rp_api_artifacts", "review_page=rp_package");
 	ok = ok && require_file_token("rp_api_artifacts", "raw_downloads=5");
 	ok = ok && require_file_token("rp_api_artifacts", "library_sources=rp_knowledge");
@@ -378,6 +397,7 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "delivery_checks=3");
 	ok = ok && require_file_token("rp_web_bundle", "evidence_bundle_entries=12");
 	ok = ok && require_file_token("rp_web_bundle", "bundle_files=human_reviews.json,delivery_manifests.json,revision_tasks.json,delivery-manifest.json,delivery-manifest.md");
+	ok = ok && require_file_token("rp_web_bundle", "llm_roundtrip=ready");
 	ok = ok && require_file_token("rp_web_bundle", "review_page=rp_package");
 	ok = ok && require_file_token("rp_web_bundle", "export_bundle=rp_package");
 	ok = ok && require_file_token("rp_web_bundle", "runner_detail_fields=16");
@@ -395,7 +415,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=302\n"
+			   "tests=322\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -435,6 +455,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=302 catalog=passed data=passed services=passed actions=passed custom=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=322 catalog=passed data=passed services=passed actions=passed custom=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }

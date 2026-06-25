@@ -12,9 +12,12 @@ int main(void)
 	if (!rp_file_contains("rp_llmeval", "passed=7")) return 1;
 	if (!rp_file_contains("rp_llmlog", "privacy_checked=1")) return 1;
 	if (!rp_file_contains("rp_llm_packets", "cloud_capable=1")) return 1;
+	if (!rp_file_contains("rp_llm_packets", "roundtrip=ready")) return 1;
 	if (!rp_file_contains("rp_llm_routes", "routes=4")) return 1;
 	if (!rp_file_contains("rp_llm_guard", "secrets_in_ucore=0")) return 1;
 	if (!rp_file_contains("rp_llm_hostreq", "secret_material=not_in_ucore")) return 1;
+	if (!rp_file_contains("rp_llm_hostreq", "matched_responses=3")) return 1;
+	if (!rp_file_contains("rp_llm_resp", "host_relay_roundtrip=ready")) return 1;
 	if (!rp_file_contains("rp_llm_fallback", "fallback_cases=1")) return 1;
 	if (!rp_file_contains("rp_policy", "llm_outbound_rules=4")) return 1;
 	if (!rp_file_contains("rp_policy", "data_use_rules=5")) return 1;

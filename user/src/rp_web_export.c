@@ -18,6 +18,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_ui_compare", "metric_rows=8");
 	ok = ok && rp_file_contains("rp_artifact_manifest", "manifest_records=4");
 	ok = ok && rp_file_contains("rp_llm_hostreq", "template_mode=ready");
+	ok = ok && rp_file_contains("rp_llm_hostreq", "roundtrip=ready");
+	ok = ok && rp_file_contains("rp_llm_resp", "matched_requests=3");
 	ok = ok && rp_file_contains("rp_agentcmp", "status=ready");
 	ok = ok && rp_file_contains("rp_package", "package_manifest=ready");
 	ok = ok && rp_file_contains("rp_package", "downloadable_units=3");
@@ -105,6 +107,7 @@ int main(void)
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
 			   "delivery_files=8;delivery_checks=3;latest_delivery_status=ready\n"
 			   "evidence_bundle_zip=research-evidence-bundle.zip\n"
+			   "llm_roundtrip=ready;llm_response_file=rp_llm_resp\n"
 			   "human_reviews=1;revision_tasks=1;latest_revision_task=usable-revision-task:RUN-900:1\n"
 			   "review_threads=2;review_comments=3;review_action_items=2;review_thread_source=rp_review2\n"
 			   "revised_run=usable-run:RUN-900-rev1\n"
@@ -186,6 +189,8 @@ int main(void)
 			   "report=rp_report_text\n"
 			   "chart=rp_chart_data\n"
 			   "llm_relay_files=5\n"
+			   "llm_roundtrip=ready\n"
+			   "llm_matched_responses=3\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -372,6 +377,7 @@ int main(void)
 			   "custom_research_runs=3\n"
 			   "research_service_files=25\n"
 			   "llm_relay_files=5\n"
+			   "llm_roundtrip=ready\n"
 			   "agent_records=5\n"
 			   "status=ready\n")) {
 		return 1;
