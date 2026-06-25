@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import argparse
 import html
+import importlib
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from threading import Lock
 from typing import Iterable
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -20,7 +22,7 @@ PAGE_SPECS = [
     ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency"]),
     ("artifacts.html", "Artifacts", "rp_api_artifacts", ["rp_artifact", "rp_artifact_manifest", "rp_package"]),
     ("data.html", "Data", "rp_api_data", ["rp_input", "rp_dataset_snapshot", "rp_data_quality"]),
-    ("actions.html", "Actions", "rp_api_action", ["rp_actionio", "rp_web_routes", "rp_web_bundle"]),
+    ("actions.html", "Actions", "rp_api_action", ["rp_actionio", "rp_host_run_result", "rp_web_routes", "rp_web_bundle"]),
 ]
 
 
@@ -213,6 +215,33 @@ def append_action_record(out_dir: Path, state_dir: Path, action_path: str, paylo
     return record
 
 
+def run_action_package(
+    state_dir: Path,
+    out_dir: Path,
+    repo_dir: Path,
+    run_root: Path,
+    timeout_seconds: int,
+    wsl_distro: str,
+    runner_module: object | None = None,
+) -> dict[str, object]:
+    runner = runner_module or importlib.import_module("plain_ucore_action_runner")
+    action_log = out_dir / "host-actions.jsonl"
+    actions = runner.read_jsonl(action_log)  # type: ignore[attr-defined]
+    run_root.mkdir(parents=True, exist_ok=True)
+    run_dir = run_root / f"run-{len(actions):04d}"
+    package_summary = runner.prepare_action_state(actions, state_dir, run_dir)  # type: ignore[attr-defined]
+    run_summary = runner.run_plain_ucore(repo_dir, run_dir, timeout_seconds, wsl_distro)  # type: ignore[attr-defined]
+    runner.publish_next_state(run_dir / "state-next", state_dir)  # type: ignore[attr-defined]
+    result = {
+        "package": package_summary,
+        "run": run_summary,
+        "run_dir": str(run_dir),
+        "status": "ready" if run_summary.get("passed") else "failed",
+    }
+    write_json(out_dir / "last-run.json", result)
+    return result
+
+
 def parse_request_body(headers: object, body: bytes) -> dict[str, object]:
     content_type = ""
     if hasattr(headers, "get"):
@@ -232,9 +261,23 @@ def parse_request_body(headers: object, body: bytes) -> dict[str, object]:
     return {"raw": text}
 
 
-def make_service_handler(state_dir: Path, out_dir: Path, write_state: bool) -> type[BaseHTTPRequestHandler]:
+def make_service_handler(
+    state_dir: Path,
+    out_dir: Path,
+    write_state: bool,
+    auto_run_ucore: bool = False,
+    repo_dir: Path | None = None,
+    run_root: Path | None = None,
+    runner_timeout: int = 80,
+    wsl_distro: str = "Ubuntu",
+    runner_module: object | None = None,
+) -> type[BaseHTTPRequestHandler]:
+    action_lock = Lock()
+    actual_repo_dir = repo_dir or Path(".")
+    actual_run_root = run_root or (out_dir / "auto-runs")
+
     class PlainUCoreReaderHandler(BaseHTTPRequestHandler):
-        server_version = "PlainUCoreReader/0.2"
+        server_version = "PlainUCoreReader/0.3"
 
         def log_message(self, format: str, *args: object) -> None:
             return
@@ -272,7 +315,9 @@ def make_service_handler(state_dir: Path, out_dir: Path, write_state: bool) -> t
                 action_count = 0
                 if action_log.exists():
                     action_count = sum(1 for line in action_log.read_text(encoding="utf-8").splitlines() if line.strip())
-                self.send_json(200, {"summary": summary, "action_count": action_count})
+                last_run_path = out_dir / "last-run.json"
+                last_run = json.loads(last_run_path.read_text(encoding="utf-8")) if last_run_path.exists() else {}
+                self.send_json(200, {"summary": summary, "action_count": action_count, "last_run": last_run})
                 return
             if path.startswith("/api/state/"):
                 name = unquote(path[len("/api/state/") :])
@@ -306,15 +351,49 @@ def make_service_handler(state_dir: Path, out_dir: Path, write_state: bool) -> t
             length = int(self.headers.get("Content-Length", "0") or "0")
             body = self.rfile.read(length) if length > 0 else b""
             payload = parse_request_body(self.headers, body)
-            record = append_action_record(out_dir, state_dir, parsed.path, payload, write_state)
-            render_site(state_dir, out_dir)
-            self.send_json(202, record)
+            with action_lock:
+                record = append_action_record(out_dir, state_dir, parsed.path, payload, write_state)
+                run_result = {}
+                if auto_run_ucore:
+                    run_result = run_action_package(
+                        state_dir,
+                        out_dir,
+                        actual_repo_dir,
+                        actual_run_root,
+                        runner_timeout,
+                        wsl_distro,
+                        runner_module,
+                    )
+                render_site(state_dir, out_dir)
+            status = 202
+            if run_result and run_result.get("status") != "ready":
+                status = 500
+            self.send_json(status, {"action": record, "run": run_result})
 
     return PlainUCoreReaderHandler
 
 
-def serve_dir(state_dir: Path, out_dir: Path, port: int, write_state: bool) -> None:
-    handler = make_service_handler(state_dir, out_dir, write_state)
+def serve_dir(
+    state_dir: Path,
+    out_dir: Path,
+    port: int,
+    write_state: bool,
+    auto_run_ucore: bool,
+    repo_dir: Path,
+    run_root: Path,
+    runner_timeout: int,
+    wsl_distro: str,
+) -> None:
+    handler = make_service_handler(
+        state_dir,
+        out_dir,
+        write_state,
+        auto_run_ucore,
+        repo_dir,
+        run_root,
+        runner_timeout,
+        wsl_distro,
+    )
     server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     print(f"plain_ucore_reader: serving http://127.0.0.1:{port}/")
     server.serve_forever()
@@ -327,6 +406,11 @@ def main() -> int:
     parser.add_argument("--serve", action="store_true", help="Serve dynamic host pages, APIs, and POST action capture.")
     parser.add_argument("--port", type=int, default=8767, help="Local port for --serve.")
     parser.add_argument("--write-state-actions", action="store_true", help="Also append POST action records to the state directory.")
+    parser.add_argument("--auto-run-ucore", action="store_true", help="After each POST action, prepare action state, run rp_orch, and refresh the served state directory.")
+    parser.add_argument("--repo-dir", type=Path, default=Path("."), help="Repository root used by --auto-run-ucore.")
+    parser.add_argument("--run-root", type=Path, default=Path("runtime/plain_ucore_auto_runs"), help="Directory for automatic action packages and QEMU logs.")
+    parser.add_argument("--timeout", type=int, default=80, help="QEMU run timeout in seconds for --auto-run-ucore.")
+    parser.add_argument("--wsl-distro", default="Ubuntu", help="WSL distribution name on Windows.")
     args = parser.parse_args()
 
     summary = render_site(args.state_dir, args.out_dir)
@@ -340,7 +424,17 @@ def main() -> int:
             print(f"plain_ucore_reader: problem={problem}")
         return 1
     if args.serve:
-        serve_dir(args.state_dir, args.out_dir, args.port, args.write_state_actions)
+        serve_dir(
+            args.state_dir,
+            args.out_dir,
+            args.port,
+            args.write_state_actions,
+            args.auto_run_ucore,
+            args.repo_dir,
+            args.run_root,
+            args.timeout,
+            args.wsl_distro,
+        )
     return 0
 
 

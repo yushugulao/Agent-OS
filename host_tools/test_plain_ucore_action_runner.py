@@ -124,6 +124,27 @@ def main() -> int:
         assert "kind=research_run" in header
         assert "\\n" in header
 
+        runner.write_run_result_state(
+            next_state,
+            {
+                "passed": True,
+                "embedded_action_records": 7,
+                "log": str(run_dir / "ucore-run.log"),
+            },
+            "rp_web_export: host_reader_actions=7\nrp_compare_plain: host_actions=7 verified\nrp_orch: passed\n",
+        )
+        result_state = read(next_state / "rp_host_run_result")
+        assert "passed=1" in result_state
+        assert "embedded_action_records=7" in result_state
+        assert "qemu_rp_web_export: host_reader_actions=7" in result_state
+        assert "qemu_rp_compare_plain: host_actions=7 verified" in result_state
+        assert "qemu_orch_passed=1" in result_state
+
+        publish_dir = root / "published"
+        runner.publish_next_state(next_state, publish_dir)
+        assert (publish_dir / "rp_host_run_result").exists()
+        assert (publish_dir / "rp_host_action_inbox").exists()
+
     print("test_plain_ucore_action_runner: passed")
     return 0
 

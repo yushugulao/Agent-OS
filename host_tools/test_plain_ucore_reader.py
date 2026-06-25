@@ -13,6 +13,41 @@ from urllib import request
 import plain_ucore_reader
 
 
+class FakeRunner:
+    @staticmethod
+    def read_jsonl(path: Path) -> list[dict[str, object]]:
+        return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+
+    @staticmethod
+    def prepare_action_state(actions: list[dict[str, object]], state_dir: Path, run_dir: Path) -> dict[str, object]:
+        next_state = run_dir / "state-next"
+        next_state.mkdir(parents=True, exist_ok=True)
+        for item in state_dir.iterdir():
+            if item.is_file() and item.name.startswith("rp_"):
+                (next_state / item.name).write_text(item.read_text(encoding="utf-8"), encoding="utf-8")
+        lines = [
+            "action={};path={};kind=test;status=accepted".format(action["sequence"], action["path"])
+            for action in actions
+        ]
+        (next_state / "rp_host_action_inbox").write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return {"actions": len(actions), "accepted": len(actions), "status": "ready"}
+
+    @staticmethod
+    def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_distro: str) -> dict[str, object]:
+        next_state = run_dir / "state-next"
+        (next_state / "rp_host_run_result").write_text(
+            "host_runner=fake\npassed=1\nqemu_orch_passed=1\nstatus=ready\n",
+            encoding="utf-8",
+        )
+        return {"passed": True, "status": "ready", "embedded_action_records": 1, "log": str(run_dir / "fake.log")}
+
+    @staticmethod
+    def publish_next_state(next_state: Path, state_dir: Path) -> None:
+        for item in next_state.iterdir():
+            if item.is_file() and item.name.startswith("rp_"):
+                (state_dir / item.name).write_text(item.read_text(encoding="utf-8"), encoding="utf-8")
+
+
 STATE_FILES = {
     "rp_web_bundle": """bundle=host-web-ui
 reader_contract=host_plain_ucore_v2
@@ -83,7 +118,15 @@ def main() -> int:
         assert saved["contract"]["missing_refresh_files"] == []
         assert saved["status"] == "ready"
 
-        handler = plain_ucore_reader.make_service_handler(state_dir, out_dir, write_state=True)
+        handler = plain_ucore_reader.make_service_handler(
+            state_dir,
+            out_dir,
+            write_state=True,
+            auto_run_ucore=True,
+            repo_dir=Path("."),
+            run_root=out_dir / "auto-runs",
+            runner_module=FakeRunner,
+        )
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -105,10 +148,18 @@ def main() -> int:
             )
             with request.urlopen(action, timeout=5) as response:
                 result = json.loads(response.read().decode("utf-8"))
-            assert result["status"] == "accepted"
-            assert result["path"] == "/actions/research/run"
+            assert result["action"]["status"] == "accepted"
+            assert result["action"]["path"] == "/actions/research/run"
+            assert result["run"]["status"] == "ready"
             assert (out_dir / "host-actions.jsonl").exists()
             assert "path=/actions/research/run" in (state_dir / "rp_host_action_inbox").read_text(encoding="utf-8")
+            assert "qemu_orch_passed=1" in (state_dir / "rp_host_run_result").read_text(encoding="utf-8")
+            assert (out_dir / "last-run.json").exists()
+
+            with request.urlopen(base + "/api/live", timeout=5) as response:
+                live = json.loads(response.read().decode("utf-8"))
+            assert live["action_count"] == 1
+            assert live["last_run"]["status"] == "ready"
 
             with request.urlopen(base + "/index.html", timeout=5) as response:
                 index_html = response.read().decode("utf-8")

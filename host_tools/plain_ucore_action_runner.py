@@ -259,6 +259,41 @@ def write_seed_header(next_state: Path, repo_dir: Path) -> int:
     return len([line for line in text.splitlines() if line.strip()])
 
 
+def find_log_value(text: str, prefix: str) -> str:
+    for line in text.splitlines():
+        if prefix in line:
+            return line.strip()
+    return ""
+
+
+def write_run_result_state(next_state: Path, run_summary: dict[str, object], log_text: str) -> None:
+    passed = bool(run_summary.get("passed"))
+    lines = [
+        "host_runner=plain_ucore_action_runner",
+        f"status={'ready' if passed else 'failed'}",
+        f"passed={1 if passed else 0}",
+        f"embedded_action_records={run_summary.get('embedded_action_records', 0)}",
+        f"log={line_value(run_summary.get('log', ''))}",
+    ]
+    host_reader_actions = find_log_value(log_text, "rp_web_export: host_reader_actions=")
+    host_actions_verified = find_log_value(log_text, "rp_compare_plain: host_actions=")
+    orch_passed = find_log_value(log_text, "rp_orch: passed")
+    if host_reader_actions:
+        lines.append("qemu_" + host_reader_actions)
+    if host_actions_verified:
+        lines.append("qemu_" + host_actions_verified)
+    if orch_passed:
+        lines.append("qemu_orch_passed=1")
+    write_text(next_state / "rp_host_run_result", "\n".join(lines) + "\n")
+
+
+def publish_next_state(next_state: Path, state_dir: Path) -> None:
+    state_dir.mkdir(parents=True, exist_ok=True)
+    for item in sorted(next_state.iterdir()):
+        if item.is_file() and item.name.startswith("rp_"):
+            shutil.copy2(item, state_dir / item.name)
+
+
 def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_distro: str) -> dict[str, object]:
     repo_dir = repo_dir.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -303,6 +338,7 @@ def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_dis
         "log": str(log_path),
         "status": "ready" if passed else "failed",
     }
+    write_run_result_state(next_state, summary, text)
     write_json(run_dir / "ucore-run-summary.json", summary)
     return summary
 
@@ -332,6 +368,7 @@ def main() -> int:
     parser.add_argument("--repo-dir", type=Path, default=Path("."), help="Repository root for --run-ucore.")
     parser.add_argument("--timeout", type=int, default=80, help="QEMU run timeout in seconds.")
     parser.add_argument("--wsl-distro", default="Ubuntu", help="WSL distribution name on Windows.")
+    parser.add_argument("--update-state-dir", action="store_true", help="Copy prepared rp_* action state and run result back to --state-dir.")
     args = parser.parse_args()
 
     extra_payload: dict[str, str] = {}
@@ -350,6 +387,8 @@ def main() -> int:
     )
     if args.run_ucore:
         run_summary = run_plain_ucore(args.repo_dir, args.run_dir, args.timeout, args.wsl_distro)
+        if args.update_state_dir:
+            publish_next_state(args.run_dir / "state-next", args.state_dir)
         print("plain_ucore_action_runner: ucore_status={status} passed={passed}".format(**run_summary))
         return 0 if run_summary["passed"] else 1
     return 0

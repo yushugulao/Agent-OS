@@ -166,7 +166,7 @@ Expected result: no diff output.
 
 ## Host Reader Check
 
-The host reader can be tested without booting uCore because it builds a small temporary `rp_*` state set and verifies the `host_plain_ucore_v2` contract. The same check also starts the local HTTP handler, reads `/api/contract` and `/api/state/rp_api_home`, posts to `/actions/research/run`, and verifies that the action record is written.
+The host reader can be tested without booting uCore because it builds a small temporary `rp_*` state set and verifies the `host_plain_ucore_v2` contract. The same check also starts the local HTTP handler, reads `/api/contract` and `/api/state/rp_api_home`, posts to `/actions/research/run`, verifies that the action record is written, exercises the auto-run hook with a fake runner, checks `rp_host_run_result`, and confirms `/api/live` reports the latest run.
 
 ```bash
 python host_tools/test_plain_ucore_reader.py
@@ -180,7 +180,7 @@ test_plain_ucore_reader: passed
 test_plain_ucore_action_runner: passed
 ```
 
-The action runner check verifies that captured host actions become `state-next/rp_host_action_queue`, `state-next/rp_host_action_plan`, `state-next/rp_host_action_inbox`, `actions.json`, and `runner-summary.json`. The optional runner path can also write the inbox text into a generated user-build header and execute `rp_orch` without changing the kernel source. In seeded runs, `rp_web_export` prints `host_reader_actions=<n>`, `rp_compare_plain` prints `host_actions=<n> verified`, and the ordinary user programs write host-action effects into `rp_input`, `rp_runner`, `rp_review2`, `rp_revision`, `rp_package`, `rp_nbexec`, `rp_actionio`, and `rp_agentcmp`.
+The action runner check verifies that captured host actions become `state-next/rp_host_action_queue`, `state-next/rp_host_action_plan`, `state-next/rp_host_action_inbox`, `actions.json`, and `runner-summary.json`. It also checks `rp_host_run_result` generation and state publication. The optional runner path can write the inbox text into a generated user-build header and execute `rp_orch` without changing the kernel source. In seeded runs, `rp_web_export` prints `host_reader_actions=<n>`, `rp_compare_plain` prints `host_actions=<n> verified`, and the ordinary user programs write host-action effects into `rp_input`, `rp_runner`, `rp_review2`, `rp_revision`, `rp_package`, `rp_nbexec`, `rp_actionio`, and `rp_agentcmp`.
 
 ## Current Coverage
 
