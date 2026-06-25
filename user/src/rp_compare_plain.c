@@ -64,7 +64,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_submit", "data_availability=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "report_ok=1");
 	ok = ok && rp_file_contains("rp_agentcmp", "repro_ok=1");
-	ok = ok && rp_file_contains("rp_agentcmp", "message_acks=28");
+	ok = ok && rp_file_contains("rp_agentcmp", "message_acks=33");
 	ok = ok && rp_file_contains("rp_agentcmp", "tool_events=115");
 	ok = ok && rp_file_contains("rp_agentcmp", "scheduler_items=21");
 	ok = ok && rp_file_contains("rp_agentcmp", "ranked_tasks=21");
@@ -96,6 +96,31 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentcmp", "handoffs=6");
 	ok = ok && rp_file_contains("rp_agentcmp", "relay_protocol_files=5");
 	ok = ok && rp_file_contains("rp_agentcmp", "workflow_runner_files=5");
+	ok = ok && rp_file_contains("rp_agentcmp", "bio_service_files=5");
+	ok = ok && rp_file_contains("rp_agentcmp", "lab_resource_files=5");
+	ok = ok && rp_file_contains("rp_agentcmp", "publication_service_files=5");
+	ok = ok && rp_file_contains("rp_agentcmp", "knowledge_service_files=5");
+	ok = ok && rp_file_contains("rp_agentcmp", "runtime_service_files=5");
+	ok = ok && rp_file_contains("rp_sreg", "samples=8");
+	ok = ok && rp_file_contains("rp_ethics", "ethics=approved");
+	ok = ok && rp_file_contains("rp_access", "requests=3");
+	ok = ok && rp_file_contains("rp_cohort", "cohorts=2");
+	ok = ok && rp_file_contains("rp_instr", "instruments=4");
+	ok = ok && rp_file_contains("rp_invent", "inventory_items=9");
+	ok = ok && rp_file_contains("rp_procure", "requests=3");
+	ok = ok && rp_file_contains("rp_ressched", "bookings=6");
+	ok = ok && rp_file_contains("rp_resrev", "review_items=10");
+	ok = ok && rp_file_contains("rp_pubplan", "journal_targets=2");
+	ok = ok && rp_file_contains("rp_peerresp", "responses=6");
+	ok = ok && rp_file_contains("rp_fairpkg", "fair_checks=8");
+	ok = ok && rp_file_contains("rp_litrev", "papers=9");
+	ok = ok && rp_file_contains("rp_citegraph", "citations=14");
+	ok = ok && rp_file_contains("rp_semindex", "documents=17");
+	ok = ok && rp_file_contains("rp_kanswers", "answers=4");
+	ok = ok && rp_file_contains("rp_runenv", "environments=4");
+	ok = ok && rp_file_contains("rp_nbexec", "executed_cells=8");
+	ok = ok && rp_file_contains("rp_eln", "eln_entries=3");
+	ok = ok && rp_file_contains("rp_wpool", "workers=4");
 	ok = ok && rp_file_contains("rp_ack", "ack=metrics;msg=14;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=metrics.measure_plain");
 	ok = ok && rp_file_contains("rp_protocol", "ethics=approved");
@@ -130,14 +155,14 @@ int main(void)
 	ok = ok && rp_file_contains("rp_study", "arms=2");
 	ok = ok && rp_file_contains("rp_consistency", "state_relation=passed");
 	ok = ok && rp_file_contains("rp_consistency", "task_records=21");
-	ok = ok && rp_file_contains("rp_consistency", "checks=56");
+	ok = ok && rp_file_contains("rp_consistency", "checks=86");
 	ok = ok && rp_file_contains("rp_consistency", "runner_stages=5");
 	ok = ok && rp_file_contains("rp_ui_home", "page=home");
 	ok = ok && rp_file_contains("rp_ui_run", "page=run-detail");
 	ok = ok && rp_file_contains("rp_ui_agent", "page=agent-detail");
 	ok = ok && rp_file_contains("rp_ui_evidence", "page=evidence-detail");
 	ok = ok && rp_file_contains("rp_ui_compare", "page=compare-metrics");
-	ok = ok && rp_file_contains("rp_web_routes", "routes=7");
+	ok = ok && rp_file_contains("rp_web_routes", "routes=12");
 	ok = ok && rp_file_contains("rp_api_home", "api=home");
 	ok = ok && rp_file_contains("rp_api_run", "runner_exec_files=5");
 	ok = ok && rp_file_contains("rp_api_agents", "agents=7");
@@ -145,8 +170,13 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_compare", "workflow_runner_files=5");
 	ok = ok && rp_file_contains("rp_api_artifacts", "manifest_records=4");
 	ok = ok && rp_file_contains("rp_api_data", "dataset_snapshots=2");
-	ok = ok && rp_file_contains("rp_web_bundle", "api_payloads=7");
-	ok = ok && rp_file_contains("rp_tests", "tests=82");
+	ok = ok && rp_file_contains("rp_api_bio", "sample_registry=rp_sreg");
+	ok = ok && rp_file_contains("rp_api_labres", "instrument_registry=rp_instr");
+	ok = ok && rp_file_contains("rp_api_pub", "result_review=rp_resrev");
+	ok = ok && rp_file_contains("rp_api_know", "semantic_index=rp_semindex");
+	ok = ok && rp_file_contains("rp_api_runtime", "runtime_env=rp_runenv");
+	ok = ok && rp_file_contains("rp_web_bundle", "api_payloads=12");
+	ok = ok && rp_file_contains("rp_tests", "tests=112");
 	ok = ok && rp_file_contains("rp_tests", "status=passed");
 	ok = ok && rp_file_contains("rp_ack", "ack=consistency;msg=22;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=consistency.check_backend");
@@ -167,7 +197,7 @@ int main(void)
 	if (!ok) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
-	if (ack_count < 31 || tool_count < 140) {
+	if (ack_count < 36 || tool_count < 140) {
 		printf("rp_compare_plain: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		return 1;
 	}
@@ -176,27 +206,32 @@ int main(void)
 			   "plain_kernel=passed\n"
 			   "agentos_kernel=pending\n"
 			   "objects=500\n"
-			   "programs=38\n"
-			   "state_files=136\n"
-			   "message_acks=31\n"
+			   "programs=39\n"
+			   "state_files=166\n"
+			   "message_acks=36\n"
 			   "tool_events=140\n"
-			   "consistency_checks=56\n"
+			   "consistency_checks=86\n"
 			   "runner_stages=5\n"
 			   "workflow_runner_files=5\n"
 			   "data_pipeline_files=6\n"
 			   "dataset_snapshots=2\n"
 			   "data_quality_checks=7\n"
+			   "bio_service_files=5\n"
+			   "lab_resource_files=5\n"
+			   "publication_service_files=5\n"
+			   "knowledge_service_files=5\n"
+			   "runtime_service_files=5\n"
 			   "relay_protocol_files=5\n"
 			   "agent_roles=7\n"
 			   "collaboration_decisions=8\n"
 			   "ui_pages=5\n"
-			   "web_routes=7\n"
-			   "web_api_payloads=7\n"
-			   "test_cases=82\n"
+			   "web_routes=12\n"
+			   "web_api_payloads=12\n"
+			   "test_cases=112\n"
 			   "status=ready\n")) {
 		return 1;
 	}
 	if (!rp_append_status("compare=ready")) return 1;
-	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=38 state_files=136 acks=31 tools=140 status=ready\n");
+	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=39 state_files=166 acks=36 tools=140 status=ready\n");
 	return 0;
 }

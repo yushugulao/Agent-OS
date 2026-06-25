@@ -41,6 +41,31 @@ int main(void)
 	ok = ok && rp_file_contains("rp_handoff", "handoffs=6");
 	ok = ok && rp_file_contains("rp_deliberation", "items=5");
 	ok = ok && rp_file_contains("rp_agent_run", "agent_messages=21");
+	ok = ok && rp_file_contains("rp_sreg", "samples=8");
+	ok = ok && rp_file_contains("rp_ethics", "ethics=approved");
+	ok = ok && rp_file_contains("rp_access", "requests=3");
+	ok = ok && rp_file_contains("rp_cohort", "cohorts=2");
+	ok = ok && rp_file_contains("rp_bioop", "ops=7");
+	ok = ok && rp_file_contains("rp_instr", "instruments=4");
+	ok = ok && rp_file_contains("rp_invent", "inventory_items=9");
+	ok = ok && rp_file_contains("rp_procure", "requests=3");
+	ok = ok && rp_file_contains("rp_ressched", "bookings=6");
+	ok = ok && rp_file_contains("rp_labresop", "ops=6");
+	ok = ok && rp_file_contains("rp_resrev", "review_items=10");
+	ok = ok && rp_file_contains("rp_pubplan", "journal_targets=2");
+	ok = ok && rp_file_contains("rp_peerresp", "responses=6");
+	ok = ok && rp_file_contains("rp_fairpkg", "fair_checks=8");
+	ok = ok && rp_file_contains("rp_pubop", "ops=6");
+	ok = ok && rp_file_contains("rp_litrev", "papers=9");
+	ok = ok && rp_file_contains("rp_citegraph", "citations=14");
+	ok = ok && rp_file_contains("rp_semindex", "documents=17");
+	ok = ok && rp_file_contains("rp_kanswers", "answers=4");
+	ok = ok && rp_file_contains("rp_knowop", "ops=6");
+	ok = ok && rp_file_contains("rp_runenv", "environments=4");
+	ok = ok && rp_file_contains("rp_nbexec", "notebooks=2");
+	ok = ok && rp_file_contains("rp_eln", "eln_entries=3");
+	ok = ok && rp_file_contains("rp_wpool", "worker_pools=2");
+	ok = ok && rp_file_contains("rp_runop", "ops=7");
 	if (!ok) return 1;
 
 	int task_lines = rp_count_lines("rp_taskrec");
@@ -165,6 +190,35 @@ int main(void)
 	ok = ok && require_equal("data_transforms", transforms, 2);
 	ok = ok && require_equal("dataset_collection_items", collection_items, 4);
 
+	int bio_samples = rp_get_int_value("rp_sreg", "samples=");
+	int bio_aliquots = rp_get_int_value("rp_sreg", "aliquots=");
+	int access_requests = rp_get_int_value("rp_access", "requests=");
+	int instruments = rp_get_int_value("rp_instr", "instruments=");
+	int inventory_items = rp_get_int_value("rp_invent", "inventory_items=");
+	int resource_bookings = rp_get_int_value("rp_ressched", "bookings=");
+	int result_review_items = rp_get_int_value("rp_resrev", "review_items=");
+	int fair_checks = rp_get_int_value("rp_fairpkg", "fair_checks=");
+	int lit_papers = rp_get_int_value("rp_litrev", "papers=");
+	int semantic_docs = rp_get_int_value("rp_semindex", "documents=");
+	int knowledge_answers = rp_get_int_value("rp_kanswers", "answers=");
+	int runtime_envs = rp_get_int_value("rp_runenv", "environments=");
+	int notebook_cells = rp_get_int_value("rp_nbexec", "executed_cells=");
+	int eln_entries = rp_get_int_value("rp_eln", "eln_entries=");
+	ok = ok && require_equal("bio_samples", bio_samples, 8);
+	ok = ok && require_equal("bio_aliquots", bio_aliquots, 12);
+	ok = ok && require_equal("access_requests", access_requests, 3);
+	ok = ok && require_equal("instruments", instruments, 4);
+	ok = ok && require_equal("inventory_items", inventory_items, 9);
+	ok = ok && require_equal("resource_bookings", resource_bookings, 6);
+	ok = ok && require_equal("result_review_items", result_review_items, 10);
+	ok = ok && require_equal("fair_checks", fair_checks, 8);
+	ok = ok && require_equal("lit_papers", lit_papers, 9);
+	ok = ok && require_equal("semantic_docs", semantic_docs, 17);
+	ok = ok && require_equal("knowledge_answers", knowledge_answers, 4);
+	ok = ok && require_equal("runtime_envs", runtime_envs, 4);
+	ok = ok && require_equal("notebook_cells", notebook_cells, 8);
+	ok = ok && require_equal("eln_entries", eln_entries, 3);
+
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
 	if (ack_count < 26 || tool_count < 109) {
@@ -174,7 +228,7 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=56\n"
+			   "checks=86\n"
 			   "task_records=21\n"
 			   "ready_tasks=21\n"
 			   "high_tasks=4\n"
@@ -206,6 +260,21 @@ int main(void)
 			   "agent_decisions=8\n"
 			   "agent_handoffs=6\n"
 			   "deliberation_items=5\n"
+			   "bio_service_files=5\n"
+			   "bio_samples=8\n"
+			   "bio_aliquots=12\n"
+			   "lab_resource_files=5\n"
+			   "instrument_count=4\n"
+			   "inventory_items=9\n"
+			   "publication_service_files=5\n"
+			   "result_review_items=10\n"
+			   "fair_checks=8\n"
+			   "knowledge_service_files=5\n"
+			   "semantic_documents=17\n"
+			   "knowledge_answers=4\n"
+			   "runtime_service_files=5\n"
+			   "runtime_envs=4\n"
+			   "notebook_cells=8\n"
 			   "state_relation=passed\n"
 			   "status=ready\n")) {
 		return 1;
@@ -216,6 +285,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend;target=rp_consistency;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline;target=rp_consistency;status=ok")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=56 tasks=21 llm=3 relay=5 workflow=5 data=6 backend=4 artifacts=4 agents=7 status=ready\n");
+	printf("rp_consistency: checks=86 tasks=21 llm=3 relay=5 workflow=5 data=6 services=25 backend=4 artifacts=4 agents=7 status=ready\n");
 	return 0;
 }

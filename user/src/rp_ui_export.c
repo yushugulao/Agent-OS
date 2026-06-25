@@ -25,13 +25,18 @@ int main(void)
 	ok = ok && rp_file_contains("rp_llm_packets", "packets=3");
 	ok = ok && rp_file_contains("rp_llm_routes", "routes=4");
 	ok = ok && rp_file_contains("rp_llm_guard", "secrets_in_ucore=0");
+	ok = ok && rp_file_contains("rp_sreg", "samples=8");
+	ok = ok && rp_file_contains("rp_instr", "instruments=4");
+	ok = ok && rp_file_contains("rp_resrev", "review_items=10");
+	ok = ok && rp_file_contains("rp_semindex", "documents=17");
+	ok = ok && rp_file_contains("rp_runenv", "environments=4");
 	if (!ok) return 1;
 	if (!rp_write_file("rp_ui_home",
 			   "page=home\n"
 			   "title=Research Agent Platform\n"
 			   "run=RUN-042\n"
 			   "status=recovered\n"
-			   "cards=run,agents,evidence,data,llm_relay,compare\n"
+			   "cards=run,agents,evidence,data,bio,lab,publication,knowledge,runtime,llm_relay,compare\n"
 			   "source=plain_ucore_files\n"
 			   "status=ready\n")) {
 		return 1;
@@ -47,6 +52,7 @@ int main(void)
 			   "chart=rp_chart_data\n"
 			   "runner_exec=rp_stage_state,rp_cache_index,rp_retry_plan,rp_run_events,rp_artifact_manifest\n"
 			   "data_pipeline=rp_ingest_files,rp_dataset_snapshot,rp_data_preview,rp_data_quality,rp_data_transform,rp_dataset_collection\n"
+			   "research_services=rp_sreg,rp_instr,rp_resrev,rp_semindex,rp_runenv\n"
 			   "llm_relay=rp_llm_packets,rp_llm_routes,rp_llm_guard,rp_llm_hostreq,rp_llm_fallback\n"
 			   "status=ready\n")) {
 		return 1;
@@ -85,7 +91,12 @@ int main(void)
 			   "relay_protocol_files=5\n"
 			   "workflow_runner_files=5\n"
 			   "data_pipeline_files=6\n"
-			   "message_acks=28\n"
+			   "bio_service_files=5\n"
+			   "lab_resource_files=5\n"
+			   "publication_service_files=5\n"
+			   "knowledge_service_files=5\n"
+			   "runtime_service_files=5\n"
+			   "message_acks=33\n"
 			   "tool_events=115\n"
 			   "status=ready\n")) {
 		return 1;

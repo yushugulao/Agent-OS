@@ -66,6 +66,11 @@ int main(void)
 	if (!rp_file_contains("rp_agent_run", "agent_messages=21")) return 1;
 	if (!rp_file_contains("rp_backend", "cases=4")) return 1;
 	if (!rp_file_contains("rp_consistency", "state_relation=passed")) return 1;
+	if (!rp_file_contains("rp_sreg", "samples=8")) return 1;
+	if (!rp_file_contains("rp_instr", "instruments=4")) return 1;
+	if (!rp_file_contains("rp_resrev", "review_items=10")) return 1;
+	if (!rp_file_contains("rp_semindex", "documents=17")) return 1;
+	if (!rp_file_contains("rp_runenv", "environments=4")) return 1;
 	if (!rp_file_contains("rp_mail", "to=metrics")) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
@@ -74,7 +79,7 @@ int main(void)
 			   "run_id=RUN-042\n"
 			   "trace_spans=8\n"
 			   "bottlenecks=1\n"
-			   "message_acks=28\n"
+			   "message_acks=33\n"
 			   "tool_events=115\n"
 			   "scheduler_items=21\n"
 			   "ranked_tasks=21\n"
@@ -92,7 +97,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=56\n"
+			   "consistency_checks=86\n"
 			   "runner_stages=5\n"
 			   "runner_retries=1\n"
 			   "runner_cache_hits=1\n"
@@ -115,6 +120,21 @@ int main(void)
 			   "handoffs=6\n"
 			   "deliberation_items=5\n"
 			   "backend_cases=4\n"
+			   "bio_service_files=5\n"
+			   "bio_samples=8\n"
+			   "bio_aliquots=12\n"
+			   "lab_resource_files=5\n"
+			   "instrument_count=4\n"
+			   "inventory_items=9\n"
+			   "publication_service_files=5\n"
+			   "result_review_items=10\n"
+			   "fair_checks=8\n"
+			   "knowledge_service_files=5\n"
+			   "semantic_documents=17\n"
+			   "knowledge_answers=4\n"
+			   "runtime_service_files=5\n"
+			   "runtime_envs=4\n"
+			   "notebook_cells=8\n"
 			   "claim_records=8\n"
 			   "provenance_paths=3\n"
 			   "data_profiles=4\n"
@@ -131,7 +151,7 @@ int main(void)
 			   "failure_items=1\n"
 			   "poll_rounds=18\n"
 			   "scanned_records=128\n"
-			   "metric_files=126\n"
+			   "metric_files=151\n"
 			   "ticks=42\n"
 			   "status=ready\n")) {
 		return 1;
@@ -158,7 +178,7 @@ int main(void)
 			   "report_ok=1\n"
 			   "repro_ok=1\n"
 			   "llm_guarded=1\n"
-			   "message_acks=28\n"
+			   "message_acks=33\n"
 			   "tool_events=115\n"
 			   "scheduler_items=21\n"
 			   "ranked_tasks=21\n"
@@ -176,7 +196,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=56\n"
+			   "consistency_checks=86\n"
 			   "runner_stages=5\n"
 			   "runner_retries=1\n"
 			   "runner_cache_hits=1\n"
@@ -199,6 +219,21 @@ int main(void)
 			   "handoffs=6\n"
 			   "deliberation_items=5\n"
 			   "backend_cases=4\n"
+			   "bio_service_files=5\n"
+			   "bio_samples=8\n"
+			   "bio_aliquots=12\n"
+			   "lab_resource_files=5\n"
+			   "instrument_count=4\n"
+			   "inventory_items=9\n"
+			   "publication_service_files=5\n"
+			   "result_review_items=10\n"
+			   "fair_checks=8\n"
+			   "knowledge_service_files=5\n"
+			   "semantic_documents=17\n"
+			   "knowledge_answers=4\n"
+			   "runtime_service_files=5\n"
+			   "runtime_envs=4\n"
+			   "notebook_cells=8\n"
 			   "claim_records=8\n"
 			   "provenance_paths=3\n"
 			   "data_profiles=4\n"
@@ -223,6 +258,6 @@ int main(void)
 	if (!rp_append_status("telemetry=ready")) return 1;
 	if (!rp_append_status("agentcmp=ready")) return 1;
 	if (!rp_append_status("health=ready")) return 1;
-	printf("rp_metrics: telemetry_spans=8 acks=28 tools=115 delta_items=20 status=ready\n");
+	printf("rp_metrics: telemetry_spans=8 acks=33 tools=115 services=25 delta_items=20 status=ready\n");
 	return 0;
 }

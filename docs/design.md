@@ -13,7 +13,7 @@ The current runtime has four parts:
 1. Upstream uCore kernel.
 2. Restored uCore user library and program build flow.
 3. `rp_plain`, a native user process that carries the research platform catalog, feature groups, mature platform mappings, and self-check logic.
-4. `rp_orch`, a native user process that runs thirty-eight platform programs through ordinary `fork`, `exec`, and `waitpid`.
+4. `rp_orch`, a native user process that runs thirty-nine platform programs through ordinary `fork`, `exec`, and `waitpid`.
 
 The user process deliberately uses ordinary C data structures and ordinary uCore process execution. This makes the result a baseline for later comparison with the Agent-OS kernel-enhanced version.
 
@@ -24,6 +24,7 @@ The host-side research Agent platform is moving toward real HTTP UI, real artifa
 - UI pages become exported state files and Host Web/API payload files for home, run detail, Agent detail, evidence detail, artifact, and comparison views.
 - Artifact operations become reads from input files and writes to intermediate files, reports, logs, and chart-data files.
 - Data pipeline behavior becomes ordinary files for input scanning, dataset snapshots, data preview, quality checks, transformations, and dataset collection export.
+- Bio, lab resource, publication, knowledge, and runtime service behavior becomes ordinary files with short names that fit the uCore root directory entry size.
 - Workflow runner behavior becomes stage records with dependencies, failure, retry, cache, and log fields.
 - LLM calls become request queue and response files. Template responses can be produced inside uCore; cloud access and secrets stay on the host.
 - Agent collaboration becomes explicit role messages, acknowledgements, decisions, recovery actions, and audit records.
@@ -75,6 +76,7 @@ The platform programs add an executable multi-process shape:
 - `rp_delta`
 - `rp_release`
 - `rp_dossier`
+- `rp_service_surface`
 - `rp_backend`
 - `rp_consistency`
 - `rp_metrics`
@@ -205,18 +207,43 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_dossier` | dossier | compare | final review material summary |
 | `rp_reviewops` | dossier | compare | review board, vote, risk, mitigation, and governance result |
 | `rp_submit` | dossier | compare | journal target, cover letter, data availability, and review response package |
+| `rp_sreg` | service surface | consistency, metrics, UI export, Web/API export, compare, orchestrator | sample registry with sample, aliquot, cohort, and custody counts |
+| `rp_ethics` | service surface | consistency, test suite, compare, orchestrator | ethics, consent, privacy, and deidentification review record |
+| `rp_access` | service surface | consistency, test suite, compare, orchestrator | data access request result with approved and denied requests |
+| `rp_cohort` | service surface | consistency, test suite, compare, orchestrator | cohort balance and annotation summary |
+| `rp_bioop` | service surface | consistency, test suite, orchestrator | bio service operation record |
+| `rp_instr` | service surface | consistency, metrics, UI export, Web/API export, compare, orchestrator | instrument registry with readiness and maintenance count |
+| `rp_invent` | service surface | consistency, compare, orchestrator | inventory item, reservation, reagent, and transaction summary |
+| `rp_procure` | service surface | consistency, compare, orchestrator | procurement requests, vendors, orders, receipts, and budget state |
+| `rp_ressched` | service surface | consistency, compare, orchestrator | resource booking, conflict, training, and ready-slot summary |
+| `rp_labresop` | service surface | consistency, test suite, orchestrator | lab resource operation record |
+| `rp_resrev` | service surface | consistency, metrics, UI export, Web/API export, compare, orchestrator | result review item count and acceptance status |
+| `rp_pubplan` | service surface | consistency, compare, orchestrator | publication target, figure, section, data availability, and code availability plan |
+| `rp_peerresp` | service surface | consistency, compare, orchestrator | peer-review response package summary |
+| `rp_fairpkg` | service surface | consistency, compare, orchestrator | FAIR package checks and DOI record |
+| `rp_pubop` | service surface | consistency, test suite, orchestrator | publication operation record |
+| `rp_litrev` | service surface | consistency, compare, orchestrator | systematic review screening, inclusion, PRISMA, and risk-of-bias summary |
+| `rp_citegraph` | service surface | consistency, compare, orchestrator | citation graph and BibTeX integrity summary |
+| `rp_semindex` | service surface | consistency, metrics, UI export, Web/API export, compare, orchestrator | semantic index with document, chunk, entity, relation, and tag counts |
+| `rp_kanswers` | service surface | consistency, compare, orchestrator | grounded knowledge answer records |
+| `rp_knowop` | service surface | consistency, test suite, orchestrator | knowledge operation record |
+| `rp_runenv` | service surface | consistency, metrics, UI export, Web/API export, compare, orchestrator | runtime environment locks, validation, host relay mode, and secret-value count |
+| `rp_nbexec` | service surface | consistency, compare, orchestrator | executable notebook replay summary |
+| `rp_eln` | service surface | consistency, compare, orchestrator | ELN entries, signatures, attachments, and integrity checks |
+| `rp_wpool` | service surface | consistency, compare, orchestrator | worker pool, worker, heartbeat, slot, and queue-depth summary |
+| `rp_runop` | service surface | consistency, test suite, orchestrator | runtime operation record |
 | `rp_agentcmp` | AgentCompare metrics | compare | plain-kernel comparison counters |
 | `rp_backend` | backend scenario | compare, orchestrator | same-workflow backend scenario case count and planned Agent-OS cases |
 | `rp_backend_exec` | backend scenario | compare, orchestrator | backend scenario execution result for executable and planned cases |
 | `rp_backend_export` | backend scenario | compare, orchestrator | backend scenario export record |
 | `rp_study` | backend scenario | compare, orchestrator | same-workflow backend study summary |
-| `rp_consistency` | consistency checker | metrics, compare, orchestrator | derived checks across task records, LLM packets, relay protocol files, workflow invocation, completion hooks, backend cases, runner artifacts, and workflow runner execution files |
+| `rp_consistency` | consistency checker | metrics, compare, orchestrator | derived checks across task records, LLM packets, relay protocol files, workflow invocation, completion hooks, backend cases, runner artifacts, workflow runner execution files, and service surface records |
 | `rp_ui_home` | UI export | compare, orchestrator | home page data for the host web service |
 | `rp_ui_run` | UI export | compare, orchestrator | run-detail page data for RUN-042 |
 | `rp_ui_agent` | UI export | compare, orchestrator | Agent-detail page data for role messages and decisions |
 | `rp_ui_evidence` | UI export | compare, orchestrator | evidence-detail page data with stage log and recovered artifact links |
 | `rp_ui_compare` | UI export | compare, orchestrator | comparison page data for plain-kernel pain points |
-| `rp_web_routes` | Host Web/API export | test suite, compare, orchestrator | route manifest for host-rendered home, run, Agent, evidence, data, artifact, and comparison views |
+| `rp_web_routes` | Host Web/API export | test suite, compare, orchestrator | route manifest for host-rendered home, run, Agent, evidence, data, artifact, comparison, bio, lab resource, publication, knowledge, and runtime views |
 | `rp_api_home` | Host Web/API export | test suite, compare, orchestrator | API payload for the host web home page |
 | `rp_api_run` | Host Web/API export | test suite, compare, orchestrator | API payload for RUN-042 run detail with runner execution files |
 | `rp_api_agents` | Host Web/API export | test suite, compare, orchestrator | API payload for role messages, decisions, and handoffs |
@@ -224,8 +251,13 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_api_compare` | Host Web/API export | test suite, compare, orchestrator | API payload for plain-kernel comparison signals |
 | `rp_api_artifacts` | Host Web/API export | test suite, compare, orchestrator | API payload for input, stage, manifest, report, chart, and LLM relay artifacts |
 | `rp_api_data` | Host Web/API export | test suite, compare, orchestrator | API payload for input-file scan, dataset snapshots, previews, quality, transforms, and collection records |
-| `rp_web_bundle` | Host Web/API export | test suite, compare, orchestrator | bundle summary tying routes, API payloads, UI pages, runner files, and relay files together |
-| `rp_tests` | test suite | compare, orchestrator | 82 user-space checks over catalog, data pipeline, workflow, artifacts, workflow runner files, Agent collaboration, UI data, Host Web/API export files, LLM relay, AgentCompare, and consistency records |
+| `rp_api_bio` | Host Web/API export | test suite, compare, orchestrator | API payload for sample registry, ethics, data access, and cohort service files |
+| `rp_api_labres` | Host Web/API export | test suite, compare, orchestrator | API payload for instruments, inventory, procurement, and resource scheduling |
+| `rp_api_pub` | Host Web/API export | test suite, compare, orchestrator | API payload for result review, publication plan, peer response, and FAIR package |
+| `rp_api_know` | Host Web/API export | test suite, compare, orchestrator | API payload for literature review, citation graph, semantic index, and knowledge answers |
+| `rp_api_runtime` | Host Web/API export | test suite, compare, orchestrator | API payload for runtime environment, notebook replay, ELN, and worker pool files |
+| `rp_web_bundle` | Host Web/API export | test suite, compare, orchestrator | bundle summary tying routes, API payloads, UI pages, runner files, research service files, and relay files together |
+| `rp_tests` | test suite | compare, orchestrator | 112 user-space checks over catalog, data pipeline, service surface records, workflow, artifacts, workflow runner files, Agent collaboration, UI data, Host Web/API export files, LLM relay, AgentCompare, and consistency records |
 | `rp_compare` | compare | orchestrator | plain-kernel execution summary |
 
 This is intentionally implemented without new syscalls. It uses only `open`, `read`, `write`, `close`, `fork`, `exec`, and `waitpid`.

@@ -82,15 +82,46 @@ int main(void)
 	ok = ok && require_file_token("rp_dossier", "sections=36");
 
 	ok = ok && require_file_token("rp_agentcmp", "context_trusted=0");
-	ok = ok && require_file_token("rp_agentcmp", "message_acks=28");
+	ok = ok && require_file_token("rp_agentcmp", "message_acks=33");
 	ok = ok && require_file_token("rp_agentcmp", "tool_events=115");
 	ok = ok && require_file_token("rp_agentcmp", "agent_roles=7");
 	ok = ok && require_file_token("rp_agentcmp", "relay_protocol_files=5");
 	ok = ok && require_file_token("rp_agentcmp", "workflow_runner_files=5");
 	ok = ok && require_file_token("rp_agentcmp", "data_pipeline_files=6");
+	ok = ok && require_file_token("rp_agentcmp", "bio_service_files=5");
+	ok = ok && require_file_token("rp_agentcmp", "lab_resource_files=5");
+	ok = ok && require_file_token("rp_agentcmp", "publication_service_files=5");
+	ok = ok && require_file_token("rp_agentcmp", "knowledge_service_files=5");
+	ok = ok && require_file_token("rp_agentcmp", "runtime_service_files=5");
 	ok = ok && require_file_token("rp_backend", "cases=4");
-	ok = ok && require_file_token("rp_consistency", "checks=56");
-	ok = ok && require_file_token("rp_telemetry", "metric_files=126");
+	ok = ok && require_file_token("rp_consistency", "checks=86");
+	ok = ok && require_file_token("rp_telemetry", "metric_files=151");
+
+	ok = ok && require_file_token("rp_sreg", "samples=8");
+	ok = ok && require_file_token("rp_ethics", "ethics=approved");
+	ok = ok && require_file_token("rp_access", "approved=2");
+	ok = ok && require_file_token("rp_cohort", "cohorts=2");
+	ok = ok && require_file_token("rp_bioop", "op=access_decision");
+	ok = ok && require_file_token("rp_instr", "instruments=4");
+	ok = ok && require_file_token("rp_invent", "inventory_items=9");
+	ok = ok && require_file_token("rp_procure", "requests=3");
+	ok = ok && require_file_token("rp_ressched", "bookings=6");
+	ok = ok && require_file_token("rp_labresop", "op=schedule_assess");
+	ok = ok && require_file_token("rp_resrev", "review_items=10");
+	ok = ok && require_file_token("rp_pubplan", "journal_targets=2");
+	ok = ok && require_file_token("rp_peerresp", "responses=6");
+	ok = ok && require_file_token("rp_fairpkg", "fair_checks=8");
+	ok = ok && require_file_token("rp_pubop", "op=result_review");
+	ok = ok && require_file_token("rp_litrev", "papers=9");
+	ok = ok && require_file_token("rp_citegraph", "bibtex_entries=9");
+	ok = ok && require_file_token("rp_semindex", "documents=17");
+	ok = ok && require_file_token("rp_kanswers", "answers=4");
+	ok = ok && require_file_token("rp_knowop", "op=llm_grounding");
+	ok = ok && require_file_token("rp_runenv", "environments=4");
+	ok = ok && require_file_token("rp_nbexec", "executed_cells=8");
+	ok = ok && require_file_token("rp_eln", "eln_entries=3");
+	ok = ok && require_file_token("rp_wpool", "worker_pools=2");
+	ok = ok && require_file_token("rp_runop", "op=host_llm_request");
 
 	ok = ok && require_file_token("rp_ui_home", "page=home");
 	ok = ok && require_file_token("rp_ui_run", "page=run-detail");
@@ -100,7 +131,7 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_evidence", "page=evidence-detail");
 	ok = ok && require_file_token("rp_ui_compare", "page=compare-metrics");
 	ok = ok && require_file_token("rp_ui_compare", "relay_protocol_files=5");
-	ok = ok && require_file_token("rp_web_routes", "routes=7");
+	ok = ok && require_file_token("rp_web_routes", "routes=12");
 	ok = ok && require_file_token("rp_api_home", "api=home");
 	ok = ok && require_file_token("rp_api_run", "runner_exec_files=5");
 	ok = ok && require_file_token("rp_api_agents", "agents=7");
@@ -108,17 +139,27 @@ int main(void)
 	ok = ok && require_file_token("rp_api_compare", "workflow_runner_files=5");
 	ok = ok && require_file_token("rp_api_artifacts", "manifest_records=4");
 	ok = ok && require_file_token("rp_api_data", "dataset_snapshots=2");
-	ok = ok && require_file_token("rp_web_bundle", "api_payloads=7");
+	ok = ok && require_file_token("rp_api_bio", "sample_registry=rp_sreg");
+	ok = ok && require_file_token("rp_api_labres", "instrument_registry=rp_instr");
+	ok = ok && require_file_token("rp_api_pub", "result_review=rp_resrev");
+	ok = ok && require_file_token("rp_api_know", "semantic_index=rp_semindex");
+	ok = ok && require_file_token("rp_api_runtime", "runtime_env=rp_runenv");
+	ok = ok && require_file_token("rp_web_bundle", "api_payloads=12");
 
-	ok = ok && require_count("ack", rp_count_lines("rp_ack"), 30);
+	ok = ok && require_count("ack", rp_count_lines("rp_ack"), 35);
 	ok = ok && require_count("tool", rp_count_lines("rp_tool"), 130);
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=82\n"
+			   "tests=112\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
+			   "bio_services=passed\n"
+			   "lab_resources=passed\n"
+			   "publication_services=passed\n"
+			   "knowledge_services=passed\n"
+			   "runtime_services=passed\n"
 			   "workflow=passed\n"
 			   "artifact_ops=passed\n"
 			   "agent_collaboration=passed\n"
@@ -142,6 +183,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=82 catalog=passed data=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=112 catalog=passed data=passed services=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }

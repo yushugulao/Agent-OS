@@ -13,11 +13,16 @@ int main(void)
 	ok = ok && rp_file_contains("rp_llm_hostreq", "template_mode=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "status=ready");
 	ok = ok && rp_file_contains("rp_dataset_collection", "items=4");
+	ok = ok && rp_file_contains("rp_sreg", "samples=8");
+	ok = ok && rp_file_contains("rp_instr", "instruments=4");
+	ok = ok && rp_file_contains("rp_resrev", "review_items=10");
+	ok = ok && rp_file_contains("rp_semindex", "documents=17");
+	ok = ok && rp_file_contains("rp_runenv", "environments=4");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_web_routes",
 			   "service=host-web-ui\n"
-			   "routes=7\n"
+			   "routes=12\n"
 			   "route=/;payload=rp_api_home;status=ready\n"
 			   "route=/run/RUN-042;payload=rp_api_run;status=ready\n"
 			   "route=/agents;payload=rp_api_agents;status=ready\n"
@@ -25,6 +30,11 @@ int main(void)
 			   "route=/compare;payload=rp_api_compare;status=ready\n"
 			   "route=/artifacts;payload=rp_api_artifacts;status=ready\n"
 			   "route=/data;payload=rp_api_data;status=ready\n"
+			   "route=/bio;payload=rp_api_bio;status=ready\n"
+			   "route=/lab-resources;payload=rp_api_labres;status=ready\n"
+			   "route=/publication;payload=rp_api_pub;status=ready\n"
+			   "route=/knowledge;payload=rp_api_know;status=ready\n"
+			   "route=/runtime;payload=rp_api_runtime;status=ready\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -114,13 +124,69 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_write_file("rp_api_bio",
+			   "api=bio\n"
+			   "sample_registry=rp_sreg\n"
+			   "ethics_review=rp_ethics\n"
+			   "access_requests=rp_access\n"
+			   "cohort_view=rp_cohort\n"
+			   "sample_count=8\n"
+			   "access_requests_count=3\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_api_labres",
+			   "api=lab-resources\n"
+			   "instrument_registry=rp_instr\n"
+			   "inventory=rp_invent\n"
+			   "procurement=rp_procure\n"
+			   "resource_schedule=rp_ressched\n"
+			   "instrument_count=4\n"
+			   "bookings=6\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_api_pub",
+			   "api=publication\n"
+			   "result_review=rp_resrev\n"
+			   "publication_plan=rp_pubplan\n"
+			   "peer_review_response=rp_peerresp\n"
+			   "fair_package=rp_fairpkg\n"
+			   "review_items=10\n"
+			   "journal_targets=2\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_api_know",
+			   "api=knowledge\n"
+			   "lit_review=rp_litrev\n"
+			   "citation_graph=rp_citegraph\n"
+			   "semantic_index=rp_semindex\n"
+			   "knowledge_answers=rp_kanswers\n"
+			   "documents=17\n"
+			   "answers=4\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_api_runtime",
+			   "api=runtime\n"
+			   "runtime_env=rp_runenv\n"
+			   "notebook_exec=rp_nbexec\n"
+			   "eln_record=rp_eln\n"
+			   "worker_pool=rp_wpool\n"
+			   "environments=4\n"
+			   "executed_cells=8\n"
+			   "status=ready\n")) {
+		return 1;
+	}
 	if (!rp_write_file("rp_web_bundle",
 			   "bundle=host-web-ui\n"
-			   "routes=7\n"
-			   "api_payloads=7\n"
+			   "routes=12\n"
+			   "api_payloads=12\n"
 			   "source_pages=5\n"
 			   "runner_files=5\n"
 			   "data_pipeline_files=6\n"
+			   "research_service_files=25\n"
 			   "llm_relay_files=5\n"
 			   "agent_records=5\n"
 			   "status=ready\n")) {
@@ -148,6 +214,11 @@ int main(void)
 	if (!rp_append_status("api_compare=ready")) return 1;
 	if (!rp_append_status("api_artifacts=ready")) return 1;
 	if (!rp_append_status("api_data=ready")) return 1;
-	printf("rp_web_export: routes=7 api_payloads=7 bundle=ready status=ready\n");
+	if (!rp_append_status("api_bio=ready")) return 1;
+	if (!rp_append_status("api_lab_resources=ready")) return 1;
+	if (!rp_append_status("api_publication=ready")) return 1;
+	if (!rp_append_status("api_knowledge=ready")) return 1;
+	if (!rp_append_status("api_runtime=ready")) return 1;
+	printf("rp_web_export: routes=12 api_payloads=12 bundle=ready status=ready\n");
 	return 0;
 }
