@@ -115,7 +115,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_samples` | samples | quality, SOP | sample sheet, cohort, and custody summary |
 | `rp_quality` | quality | protocol, experiment, compare | data quality and schema validation result |
 | `rp_review` | reviewer | writer, auditor | claim review and release decision |
-| `rp_review2` | reviewer | writer, dossier, metrics, package, UI export, Host Web/API export, compare, orchestrator | multi-round review threads, comments, action items, resolution state, and remaining blocker count |
+| `rp_review2` | reviewer | writer, dossier, metrics, package, UI export, Host Web/API export, compare, orchestrator | multi-round review threads, comments, action items, requested changes, revision task reference, resolution state, and remaining blocker count |
 | `rp_protocol` | protocol | SOP, compare | protocol, ethics, analysis plan, and amendment status |
 | `rp_soplog` | SOP execution | experiment | controlled SOP execution evidence |
 | `rp_exper` | experiment | telemetry | experiment campaign and selected best trial |
@@ -125,7 +125,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_risk` | governance | auditor, package, release, dossier, metrics, compare, orchestrator | risk register with mitigation status for failed tools, protocol deviation, and LLM outbound control |
 | `rp_capa` | governance | auditor, package, release, dossier, metrics, compare, orchestrator | corrective and preventive action records with verification evidence |
 | `rp_report` | writer | auditor | report sections, citations, response items |
-| `rp_revision` | writer | package, dossier, metrics, compare, orchestrator | report draft versions, review response items, and resolved comment count |
+| `rp_revision` | writer | package, dossier, metrics, compare, orchestrator | report draft versions, review response items, applied revision changes, revised-run reference, and resolved comment count |
 | `rp_fix` | repair | auditor | repaired stage and generated artifact |
 | `rp_retrylog` | repair | auditor, package, dossier, compare | retry attempts, dedupe key, backoff ticks, and final result |
 | `rp_telemetry` | telemetry | AgentCompare | trace, bottleneck, poll, scan, and tick observations |
@@ -199,7 +199,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_handoff` | Agent collaboration | package, consistency, metrics, UI export, compare, orchestrator | six role-to-role handoff records with source artifacts |
 | `rp_deliberation` | Agent collaboration | package, consistency, compare, orchestrator | discussion items for failure recovery, cache reuse, host relay, evidence quality, and release |
 | `rp_agent_run` | Agent collaboration | package, consistency, metrics, compare, orchestrator | Agent collaboration summary for RUN-042 |
-| `rp_package` | package | UI export, Host Web/API export, compare, test suite, orchestrator | packaged artifact summary plus report, evidence, provenance, reviewer delivery, eight delivery file rows, three delivery checks, delivery manifest JSON/Markdown names, evidence bundle contents, review threads, action items, and review-page sections |
+| `rp_package` | package | UI export, Host Web/API export, compare, test suite, orchestrator | packaged artifact summary plus report, evidence, provenance, reviewer delivery, eight delivery file rows, three delivery checks, delivery manifest JSON/Markdown names, evidence bundle contents, review threads, applied revision changes, action items, and review-page sections |
 | `rp_diff` | delta | release, dossier, metrics, compare, orchestrator | release candidate difference summary across report, data, figures, risk, and reproduction evidence |
 | `rp_delta` | delta | release, dossier, metrics, compare, orchestrator | release delta review with accepted item count, blocked count, package, risk, and reproduction status |
 | `rp_datarel` | package | release, dossier, compare | FAIR data, data product, DOI, and publication readiness |
@@ -241,13 +241,13 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_study` | backend scenario | compare, orchestrator | same-workflow backend study summary |
 | `rp_consistency` | consistency checker | metrics, compare, orchestrator | derived checks across task records, LLM packets, relay protocol files, workflow invocation, completion hooks, backend cases, runner artifacts, workflow runner execution files, and service surface records |
 | `rp_ui_home` | UI export | compare, orchestrator | home page data for the host web service with navigation and primary cards |
-| `rp_ui_run` | UI export | compare, orchestrator | run-detail page data for RUN-042 with timeline rows and artifact preview entries |
+| `rp_ui_run` | UI export | compare, orchestrator | run-detail page data for RUN-042 with timeline rows, artifact preview entries, and revision-delta reference |
 | `rp_ui_agent` | UI export | compare, orchestrator | Agent-detail page data for role messages, decisions, and decision rows |
 | `rp_ui_evidence` | UI export | compare, orchestrator | evidence-detail page data with stage log, recovered artifact links, and preview files |
 | `rp_ui_compare` | UI export | compare, orchestrator | comparison page data for plain-kernel pain points and metric rows |
 | `rp_web_routes` | Host Web/API export | test suite, compare, orchestrator | route manifest for thirteen host-rendered GET views and eight POST action entries |
 | `rp_api_home` | Host Web/API export | test suite, compare, orchestrator | API payload for the host web home page |
-| `rp_api_run` | Host Web/API export | test suite, compare, orchestrator | API payload for RUN-042 run detail with runner execution files, request form, uploaded files, reusable source selection, bibliography, citation plan, delivery manifest details, evidence bundle link, review page, human review records, revision-task records, and custom research run reference |
+| `rp_api_run` | Host Web/API export | test suite, compare, orchestrator | API payload for RUN-042 run detail with runner execution files, request form, uploaded files, reusable source selection, bibliography, citation plan, delivery manifest details, evidence bundle link, review page, human review records, revision-task records, revision-delta reference, and custom research run reference |
 | `rp_api_agents` | Host Web/API export | test suite, compare, orchestrator | API payload for role messages, decisions, and handoffs |
 | `rp_api_evidence` | Host Web/API export | test suite, compare, orchestrator | API payload for claims, provenance paths, stage log, artifact, manifest, and LLM guard |
 | `rp_api_compare` | Host Web/API export | test suite, compare, orchestrator | API payload for plain-kernel comparison signals |
@@ -259,10 +259,10 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_api_know` | Host Web/API export | test suite, compare, orchestrator | API payload for literature review, citation graph, semantic index, and knowledge answers |
 | `rp_api_runtime` | Host Web/API export | test suite, compare, orchestrator | API payload for runtime environment, notebook replay, ELN, and worker pool files |
 | `rp_api_action` | Host Web/API export | test suite, compare, orchestrator | action contract for host workflow run, host workflow export, AgentCompare run, custom research run, reusable source lookup, custom research export, human review, revision-task creation, and revised-run execution |
-| `rp_actionio` | Host Web/API export | test suite, compare, orchestrator | compact request, response, redirect, host export, human-review, revision-task, revised-run, and AgentCompare action record |
+| `rp_actionio` | Host Web/API export | test suite, compare, orchestrator | compact request, response, redirect, host export, human-review, revision-task, applied-change, revised-run, and AgentCompare action record |
 | `rp_uresrun` | Host Web/API export | test suite, compare, orchestrator | usable research run, revised-run, and export result record derived from the request form, uploaded files, compact dataset, and runner output |
-| `rp_web_bundle` | Host Web/API export | test suite, compare, orchestrator | bundle summary tying routes, API payloads, POST action payloads, UI pages, UI render sections, artifact preview entries, reusable source selection, delivery file rows, delivery checks, evidence bundle entries, review page, package export indexes, runner files, custom research fields, research service files, and relay files together |
-| `rp_tests` | test suite | compare, orchestrator | 340 user-space checks over catalog, data pipeline, service surface records, workflow, derived FASTQ/alignment/metrics/count/archive files, artifacts, package export indexes, delivery file rows, delivery checks, delivery manifest names, evidence bundle contents, review page, human review records, revision-task records, review thread records, review comment records, action item records, UI render data, workflow runner files, workflow runner detail fields, custom research fields, reusable source selection, bibliography, citation plan, Agent collaboration, UI data, Host Web/API export files, POST action records, LLM relay request/packet/response matching, AgentCompare, and consistency records |
+| `rp_web_bundle` | Host Web/API export | test suite, compare, orchestrator | bundle summary tying routes, API payloads, POST action payloads, UI pages, UI render sections, artifact preview entries, reusable source selection, delivery file rows, delivery checks, evidence bundle entries, review page, package export indexes, revision-delta reference, runner files, custom research fields, research service files, and relay files together |
+| `rp_tests` | test suite | compare, orchestrator | 365 user-space checks over catalog, data pipeline, service surface records, workflow, derived FASTQ/alignment/metrics/count/archive files, artifacts, package export indexes, delivery file rows, delivery checks, delivery manifest names, evidence bundle contents, review page, human review records, requested-change records, applied revision changes, revision-task records, review thread records, review comment records, action item records, UI render data, workflow runner files, workflow runner detail fields, custom research fields, reusable source selection, bibliography, citation plan, Agent collaboration, UI data, Host Web/API export files, POST action records, LLM relay request/packet/response matching, AgentCompare, and consistency records |
 | `rp_compare` | compare | orchestrator | plain-kernel execution summary |
 
 This is intentionally implemented without new syscalls. It uses only `open`, `read`, `write`, `close`, `fork`, `exec`, and `waitpid`.

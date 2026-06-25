@@ -117,8 +117,12 @@ int main(void)
 	if (!rp_append_file("rp_runner", "human_review_decision=needs_revision")) return 1;
 	if (!rp_append_file("rp_runner", "revision_task_id=usable-revision-task:RUN-900:1")) return 1;
 	if (!rp_append_file("rp_runner", "revision_requested_changes=2")) return 1;
+	if (!rp_append_file("rp_runner", "revision_change=methods_retry_scope;status=applied")) return 1;
+	if (!rp_append_file("rp_runner", "revision_change=chart_caption;status=applied")) return 1;
 	if (!rp_append_file("rp_runner", "revision_status=completed")) return 1;
 	if (!rp_append_file("rp_runner", "revision_run=usable-run:RUN-900-rev1")) return 1;
+	if (!rp_append_file("rp_runner", "revision_delta=rp_revision")) return 1;
+	if (!rp_append_file("rp_runner", "revision_review_source=rp_review2")) return 1;
 	if (!rp_append_file("rp_runner", "revision_reason=reviewer_requested_changes")) return 1;
 	if (!rp_append_file("rp_runner", "revision_artifacts=12")) return 1;
 	if (!rp_append_file("rp_runner", "custom_source=rp_input")) return 1;

@@ -112,6 +112,8 @@ int main(void)
 			   "revision_tasks=1\n"
 			   "latest_revision_task=usable-revision-task:RUN-900:1\n"
 			   "revised_run=usable-run:RUN-900-rev1\n"
+			   "revision_changes=2\n"
+			   "revision_delta=rp_revision\n"
 			   "review_threads=2\n"
 			   "review_comments=3\n"
 			   "review_action_items=2\n"

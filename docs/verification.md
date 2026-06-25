@@ -140,7 +140,7 @@ rp_consistency: checks=86 tasks=21 llm=3 relay=5 workflow=5 data=6 services=25 b
 rp_metrics: telemetry_spans=8 acks=33 tools=115 services=25 delta_items=20 status=ready
 rp_ui_export: pages=5 run=RUN-042 custom_runs=3 compare=ready status=ready
 rp_web_export: routes=21 api_payloads=14 actions=8 bundle=ready status=ready
-rp_test_suite: tests=340 catalog=passed data=passed services=passed actions=passed custom=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed
+rp_test_suite: tests=365 catalog=passed data=passed services=passed actions=passed custom=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed
 rp_compare_plain: plain_kernel=passed objects=500 programs=39 state_files=169 acks=39 tools=143 status=ready
 rp_orch: programs_ok=39 programs_total=39
 rp_orch: state_ok=1

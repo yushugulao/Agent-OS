@@ -23,6 +23,15 @@ int main(void)
 			   "draft_versions=3\n"
 			   "response_items=3\n"
 			   "resolved_comments=3\n"
+			   "revision_task=usable-revision-task:RUN-900:1\n"
+			   "review_id=usable-review:RUN-900:1\n"
+			   "source_run=usable-run:RUN-900\n"
+			   "revised_run=usable-run:RUN-900-rev1\n"
+			   "applied_changes=2\n"
+			   "change=1;target=methods;request=methods_retry_scope;before=retry_scope_implicit;after=retry_scope_explicit;status=applied\n"
+			   "change=2;target=chart_caption;request=chart_caption;before=caption_short;after=caption_links_stage_attempts;status=applied\n"
+			   "report_delta=methods_and_caption_updated\n"
+			   "revision_evidence=rp_review2,rp_report,rp_report_text,rp_chart_data\n"
 			   "final_status=ready\n"
 			   "status=ready\n")) {
 		return 1;

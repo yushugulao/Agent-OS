@@ -19,7 +19,7 @@ asm_dir := asm
 arch_dir := lib/arch/riscv
 
 CFLAGS := -std=gnu11 -march=rv64imac_zicsr_zifencei -mabi=lp64 -mcmodel=medany
-CFLAGS += -fno-builtin -nostdinc -fno-stack-protector -ggdb -Wall
+CFLAGS += -fno-builtin -nostdinc -fno-stack-protector -ggdb -Wall -Os
 CFLAGS += -fno-pie -static -Iinclude -Ilib -I$(arch_dir)
 LDFLAGS := -nostdlib -T $(arch_dir)/user.ld -Wl,-Ttext=0x1000
 

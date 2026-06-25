@@ -270,6 +270,8 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_package", "decision_controls=2");
 	state_ok = state_ok && rp_file_contains("rp_package", "human_reviews=1");
 	state_ok = state_ok && rp_file_contains("rp_package", "revision_tasks=1");
+	state_ok = state_ok && rp_file_contains("rp_package", "revision_change_count=2");
+	state_ok = state_ok && rp_file_contains("rp_package", "revision_evidence=rp_revision");
 	state_ok = state_ok && rp_file_contains("rp_package", "review_action_items=2");
 	state_ok = state_ok && rp_file_contains("rp_package", "llm_matched_responses=3");
 	state_ok = state_ok && rp_file_contains("rp_object_query", "hits=8");
@@ -292,7 +294,12 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_review2", "review_threads=2");
 	state_ok = state_ok && rp_file_contains("rp_review2", "action_items=2");
 	state_ok = state_ok && rp_file_contains("rp_review2", "review_summary=all_review_comments_resolved");
+	state_ok = state_ok && rp_file_contains("rp_review2", "human_review=usable-review:RUN-900:1");
+	state_ok = state_ok && rp_file_contains("rp_review2", "requested_change=methods_retry_scope");
+	state_ok = state_ok && rp_file_contains("rp_review2", "requested_change=chart_caption");
 	state_ok = state_ok && rp_file_contains("rp_revision", "draft_versions=3");
+	state_ok = state_ok && rp_file_contains("rp_revision", "applied_changes=2");
+	state_ok = state_ok && rp_file_contains("rp_revision", "report_delta=methods_and_caption_updated");
 	state_ok = state_ok && rp_file_contains("rp_sched", "queue_items=21");
 	state_ok = state_ok && rp_file_contains("rp_taskrec", "msg=21");
 	state_ok = state_ok && rp_file_contains("rp_rank", "selected=10");
@@ -412,6 +419,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_ui_run", "timeline_rows=5");
 	state_ok = state_ok && rp_file_contains("rp_ui_run", "artifact_preview=rp_report_text,rp_chart_data,rp_artifact");
 	state_ok = state_ok && rp_file_contains("rp_ui_run", "review_threads=2");
+	state_ok = state_ok && rp_file_contains("rp_ui_run", "revision_delta=rp_revision");
 	state_ok = state_ok && rp_file_contains("rp_ui_agent", "decision_rows=8");
 	state_ok = state_ok && rp_file_contains("rp_ui_evidence", "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest");
 	state_ok = state_ok && rp_file_contains("rp_ui_compare", "pain_file_scans=128");
@@ -433,6 +441,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_api_run", "llm_roundtrip=ready");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "bibliography=rp_runner");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "review_action_items=2");
+	state_ok = state_ok && rp_file_contains("rp_api_run", "revision_delta=rp_revision");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "timeline_rows=5");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "dependency_checks=5");
 	state_ok = state_ok && rp_file_contains("rp_api_run", "manifest_support_entries=2");
@@ -468,6 +477,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "evidence_bundle_entries=12");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "llm_roundtrip=ready");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "export_bundle=rp_package");
+	state_ok = state_ok && rp_file_contains("rp_web_bundle", "revision_delta=rp_revision");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "library_sources=rp_knowledge");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
 	state_ok = state_ok && rp_file_contains("rp_web_bundle", "review_threads=2");
@@ -475,6 +485,8 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_actionio", "responses=8");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "actions=8");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "effect=revision_run_created");
+	state_ok = state_ok && rp_file_contains("rp_actionio", "applied_changes=2");
+	state_ok = state_ok && rp_file_contains("rp_actionio", "revision_status=completed");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "dataset_file=rp_input");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "generated_runs=3");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "tag=reusable");
@@ -489,7 +501,7 @@ int main(void)
 	state_ok = state_ok && rp_file_contains("rp_uresrun", "dataset_rows_total=9");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "Comparison Metrics");
 	state_ok = state_ok && rp_file_contains("rp_actionio", "passed_cases=3");
-	state_ok = state_ok && rp_file_contains("rp_tests", "tests=340");
+	state_ok = state_ok && rp_file_contains("rp_tests", "tests=365");
 	state_ok = state_ok && rp_file_contains("rp_tests", "status=passed");
 	state_ok = state_ok && rp_file_contains("rp_litrev", "papers=9");
 	state_ok = state_ok && rp_file_contains("rp_citegraph", "bibtex_entries=9");
