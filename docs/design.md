@@ -67,6 +67,8 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_mail` | planner | role programs | task messages for role-level user-space coordination |
 | `rp_ack` | role programs | metrics, compare, orchestrator | role acknowledgements for completed tasks |
 | `rp_tool` | role programs | metrics, compare, orchestrator | tool-level operation log written by ordinary user programs |
+| `rp_sched` | planner | metrics, compare, orchestrator | task queue size, priority summary, retry policy, and stage-order deadline model |
+| `rp_retryq` | planner | repair | pending retry item for the failed align stage |
 | `rp_lit` | retriever | reviewer, auditor | literature count and evidence links |
 | `rp_data` | analyst | reviewer, repair, auditor | datasets, statistics, figures, failed stage |
 | `rp_datadic` | analyst | lab, package, compare | schema fields, controlled terms, transform specs, drift result |
@@ -81,6 +83,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_training` | lab | package, compare | personnel training and competency summary |
 | `rp_report` | writer | auditor | report sections, citations, response items |
 | `rp_fix` | repair | auditor | repaired stage and generated artifact |
+| `rp_retrylog` | repair | auditor, package, dossier, compare | retry attempts, dedupe key, backoff ticks, and final result |
 | `rp_telemetry` | telemetry | AgentCompare | trace, bottleneck, poll, scan, and tick observations |
 | `rp_audit` | auditor | orchestrator | final provenance, release, package status |
 | `rp_status` | all role programs | orchestrator | role-level status summary |
@@ -95,6 +98,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_knowledge` | evidence | package, compare | knowledge, semantic, and systematic review summary |
 | `rp_llm_req` | LLM bridge | privacy | host LLM request packet without embedded secrets |
 | `rp_llm_resp` | LLM bridge | privacy, compare | deterministic template LLM response |
+| `rp_relay` | LLM bridge | privacy, package, release, dossier, compare | host-file relay mode, secret location, network ownership, and fallback policy |
 | `rp_prompt` | LLM bridge | privacy, package, compare | prompt versions, route policy, token budget, and evaluation cases |
 | `rp_llmlog` | LLM bridge | privacy, package, compare | transcript count, packet audit, privacy status, and replay status |
 | `rp_privacy` | privacy | release | outbound packet review result |

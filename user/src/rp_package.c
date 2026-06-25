@@ -11,8 +11,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_compute", "replay=ready");
 	ok = ok && rp_file_contains("rp_labops", "maintenance=passed");
 	ok = ok && rp_file_contains("rp_training", "gaps=0");
+	ok = ok && rp_file_contains("rp_retrylog", "final_result=recovered");
 	ok = ok && rp_file_contains("rp_prompt", "routes=3");
 	ok = ok && rp_file_contains("rp_llmlog", "replay=ready");
+	ok = ok && rp_file_contains("rp_relay", "mode=host_file_relay");
 	ok = ok && rp_file_contains("rp_audit", "release=ready");
 	ok = ok && rp_file_contains("rp_mail", "to=package");
 	if (!ok) return 1;
@@ -38,6 +40,7 @@ int main(void)
 			   "env_locks=4\n"
 			   "notebook_replay=passed\n"
 			   "reproduction_checks=9\n"
+			   "retry_replay=passed\n"
 			   "calculation_exports=1\n"
 			   "research_object_crates=1\n"
 			   "status=ready\n")) {

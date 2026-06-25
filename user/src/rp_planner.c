@@ -24,12 +24,33 @@ int main(void)
 			   "msg=14;from=planner;to=metrics;task=measure_plain_kernel\n")) {
 		return 1;
 	}
+	if (!rp_write_file("rp_sched",
+			   "queue_items=14\n"
+			   "ready_items=14\n"
+			   "priority_high=3\n"
+			   "priority_normal=11\n"
+			   "retry_policy=minimal_rerun\n"
+			   "deadline_model=stage_order\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_retryq",
+			   "retry_item=align\n"
+			   "owner=repair\n"
+			   "attempt=0\n"
+			   "dedupe_key=RUN-042:align\n"
+			   "reason=failed_stage\n"
+			   "status=pending\n")) {
+		return 1;
+	}
 	if (!rp_write_file("rp_ack", "")) return 1;
 	if (!rp_write_file("rp_tool", "")) return 1;
 	if (!rp_append_file("rp_ack", "ack=planner;msg=0;status=sent")) return 1;
 	if (!rp_append_file("rp_tool", "tool=planner.create_plan;target=rp_plan;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=planner.schedule_tasks;target=rp_sched;status=ok")) return 1;
 	if (!rp_append_status("planner=planned")) return 1;
 	if (!rp_append_status("mail=ready")) return 1;
-	printf("rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 messages=14 status=planned\n");
+	if (!rp_append_status("schedule=ready")) return 1;
+	printf("rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 messages=14 schedule=ready status=planned\n");
 	return 0;
 }

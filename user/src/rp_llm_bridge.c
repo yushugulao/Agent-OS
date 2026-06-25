@@ -23,6 +23,16 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_write_file("rp_relay",
+			   "mode=host_file_relay\n"
+			   "request_file=rp_llm_req\n"
+			   "response_file=rp_llm_resp\n"
+			   "secret_location=host_environment\n"
+			   "network_stack=host_only\n"
+			   "fallback=template_response\n"
+			   "status=ready\n")) {
+		return 1;
+	}
 	if (!rp_write_file("rp_prompt",
 			   "prompt_versions=2\n"
 			   "routes=3\n"
@@ -45,9 +55,11 @@ int main(void)
 	if (!rp_append_file("rp_ack", "ack=llm;msg=9;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=llm.prepare_packet;target=rp_llm_req;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=llm.template_response;target=rp_llm_resp;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=llm.define_relay;target=rp_relay;status=ok")) return 1;
 	if (!rp_append_status("llm_bridge=ready")) return 1;
+	if (!rp_append_status("relay=ready")) return 1;
 	if (!rp_append_status("promptops=ready")) return 1;
 	if (!rp_append_status("llmtrace=ready")) return 1;
-	printf("rp_llm_bridge: requests=1 responses=1 routes=3 mode=template status=ready\n");
+	printf("rp_llm_bridge: requests=1 responses=1 routes=3 relay=ready mode=template status=ready\n");
 	return 0;
 }

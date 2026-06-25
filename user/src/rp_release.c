@@ -8,6 +8,8 @@ int main(void)
 	if (!rp_file_contains("rp_privacy", "decision=accepted")) return 1;
 	if (!rp_file_contains("rp_datarel", "fair=passed")) return 1;
 	if (!rp_file_contains("rp_repro", "reproduction_checks=9")) return 1;
+	if (!rp_file_contains("rp_repro", "retry_replay=passed")) return 1;
+	if (!rp_file_contains("rp_relay", "status=ready")) return 1;
 	if (!rp_file_contains("rp_mail", "to=release")) return 1;
 	if (!rp_write_file("rp_release",
 			   "release_id=release:RUN-042:plain-ucore\n"
@@ -17,6 +19,7 @@ int main(void)
 			   "privacy=accepted\n"
 			   "fair=passed\n"
 			   "repro=ready\n"
+			   "relay=ready\n"
 			   "llm_packet=ready\n"
 			   "decision=release\n"
 			   "status=ready\n")) {
