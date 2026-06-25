@@ -1,5 +1,67 @@
 #include <stdio.h>
 #include <research_platform_state.h>
+#include <rp_host_action_seed.h>
+
+static int text_contains_silent(const char *text, const char *needle)
+{
+	int needle_len = (int)strlen(needle);
+	int text_len = (int)strlen(text);
+	if (needle_len > text_len) return 0;
+	for (int i = 0; i <= text_len - needle_len; i++) {
+		int same = 1;
+		for (int j = 0; j < needle_len; j++) {
+			if (text[i + j] != needle[j]) {
+				same = 0;
+				break;
+			}
+		}
+		if (same) return 1;
+	}
+	return 0;
+}
+
+static int file_contains_silent(const char *path, const char *needle)
+{
+	char buf[1024];
+	int n = rp_read_file(path, buf, sizeof(buf));
+	if (n < 0) return 0;
+	return text_contains_silent(buf, needle);
+}
+
+static int count_lines_silent(const char *text)
+{
+	int n = (int)strlen(text);
+	if (n <= 0) return 0;
+	int count = 0;
+	for (int i = 0; i < n; i++) {
+		if (text[i] == '\n') count++;
+	}
+	if (text[n - 1] != '\n') count++;
+	return count;
+}
+
+static void make_host_action_count_line(char *out, int cap, int count)
+{
+	const char *prefix = "host_reader_actions=";
+	int pos = 0;
+	for (int i = 0; prefix[i] && pos + 1 < cap; i++) {
+		out[pos++] = prefix[i];
+	}
+	if (count <= 0) {
+		if (pos + 1 < cap) out[pos++] = '0';
+	} else {
+		char digits[16];
+		int ndigits = 0;
+		while (count > 0 && ndigits < (int)sizeof(digits)) {
+			digits[ndigits++] = (char)('0' + (count % 10));
+			count /= 10;
+		}
+		for (int i = ndigits - 1; i >= 0 && pos + 1 < cap; i--) {
+			out[pos++] = digits[i];
+		}
+	}
+	out[pos] = 0;
+}
 
 int main(void)
 {
@@ -526,6 +588,45 @@ int main(void)
 			   "agent_records=5\n"
 			   "status=ready\n")) {
 		return 1;
+	}
+
+	const char *host_action_seed = RP_HOST_ACTION_SEED;
+	int host_actions = count_lines_silent(host_action_seed);
+	int host_action_seeded = host_actions > 0;
+	if (!host_action_seeded) {
+		host_actions = rp_count_lines("rp_host_action_inbox");
+	}
+	if (host_actions > 0) {
+		char line[160];
+		make_host_action_count_line(line, sizeof(line), host_actions);
+		if (!rp_append_file("rp_actionio", line)) return 1;
+		if (host_action_seeded) {
+			if (!rp_append_file("rp_actionio", "host_action_source=rp_host_action_seed")) return 1;
+		} else if (!rp_append_file("rp_actionio", "host_action_source=rp_host_action_inbox")) {
+			return 1;
+		}
+		if (!host_action_seeded && rp_count_lines("rp_host_action_queue") > 0) {
+			if (!rp_append_file("rp_actionio", "host_action_queue=rp_host_action_queue")) return 1;
+		}
+		if (!host_action_seeded && rp_count_lines("rp_host_action_plan") > 0) {
+			if (!rp_append_file("rp_actionio", "host_action_plan=rp_host_action_plan")) return 1;
+		}
+		if ((host_action_seeded && text_contains_silent(host_action_seed, "kind=research_run")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=research_run"))) {
+			if (!rp_append_file("rp_actionio", "host_action_research_run=1")) return 1;
+		}
+		if ((host_action_seeded && text_contains_silent(host_action_seed, "kind=agentcompare")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=agentcompare"))) {
+			if (!rp_append_file("rp_actionio", "host_action_agentcompare=1")) return 1;
+		}
+		if (!rp_append_file("rp_web_bundle", line)) return 1;
+		if (host_action_seeded) {
+			if (!rp_append_file("rp_web_bundle", "host_action_source=rp_host_action_seed")) return 1;
+		} else if (!rp_append_file("rp_web_bundle", "host_action_source=rp_host_action_inbox")) {
+			return 1;
+		}
+		if (!rp_append_status("host_reader_actions=ready")) return 1;
+		printf("rp_web_export: host_reader_actions=%d\n", host_actions);
 	}
 
 	if (!rp_append_file("rp_ack", "ack=web_export;msg=web;status=ready")) return 1;

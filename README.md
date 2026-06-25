@@ -404,6 +404,16 @@ python host_tools/test_plain_ucore_reader.py
 
 With `--serve`, the reader exposes `/api/reader-summary`, `/api/contract`, `/api/state/{name}`, `/api/live`, static pages, and `/actions/...` POST capture. Action requests are written to `host-actions.jsonl`; use `--write-state-actions` only when the host should also append an action inbox record beside the `rp_*` state files.
 
+The action runner turns captured host actions into ordinary uCore state files for the next run:
+
+```bash
+python host_tools/plain_ucore_action_runner.py --actions runtime/plain_ucore_reader/host-actions.jsonl --state-dir path/to/rp-state --run-dir runtime/plain_ucore_actions
+python host_tools/plain_ucore_action_runner.py --actions runtime/plain_ucore_reader/host-actions.jsonl --state-dir path/to/rp-state --run-dir runtime/plain_ucore_actions --run-ucore --repo-dir .
+python host_tools/test_plain_ucore_action_runner.py
+```
+
+The runner writes `state-next/rp_host_action_queue`, `state-next/rp_host_action_plan`, `state-next/rp_host_action_inbox`, `actions.json`, and `runner-summary.json`. With `--run-ucore`, it writes the inbox text into a generated user-build header, builds the ordinary user programs, runs `rp_orch`, and writes `ucore-run.log`. The queue and plan files stay in the host run package because the upstream uCore teaching file system has tight inode capacity.
+
 The reader is a host-side viewer and action-capture service for plain uCore output. It does not modify `os/`, `nfs/`, or `scripts`, and it does not add Agent-OS kernel features.
 
 ## Next Work

@@ -170,13 +170,17 @@ The host reader can be tested without booting uCore because it builds a small te
 
 ```bash
 python host_tools/test_plain_ucore_reader.py
+python host_tools/test_plain_ucore_action_runner.py
 ```
 
 Expected output:
 
 ```text
 test_plain_ucore_reader: passed
+test_plain_ucore_action_runner: passed
 ```
+
+The action runner check verifies that captured host actions become `state-next/rp_host_action_queue`, `state-next/rp_host_action_plan`, `state-next/rp_host_action_inbox`, `actions.json`, and `runner-summary.json`. The optional runner path can also write the inbox text into a generated user-build header and execute `rp_orch` without changing the kernel source.
 
 ## Current Coverage
 

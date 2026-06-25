@@ -14,13 +14,14 @@ build_dir := build
 elf_dir := $(build_dir)/$(ARCH)
 obj_dir := $(build_dir)/obj
 bin_dir := $(build_dir)/bin
+generated_dir := $(build_dir)/generated
 out_dir := target
 asm_dir := asm
 arch_dir := lib/arch/riscv
 
 CFLAGS := -std=gnu11 -march=rv64imac_zicsr_zifencei -mabi=lp64 -mcmodel=medany
 CFLAGS += -fno-builtin -nostdinc -fno-stack-protector -ggdb -Wall -Os
-CFLAGS += -fno-pie -static -Iinclude -Ilib -I$(arch_dir)
+CFLAGS += -fno-pie -static -Iinclude -Ilib -I$(arch_dir) -I$(generated_dir)
 LDFLAGS := -nostdlib -T $(arch_dir)/user.ld -Wl,-Ttext=0x1000
 
 LIB_C := $(wildcard lib/*.c)
@@ -28,6 +29,7 @@ LIB_OBJS := $(patsubst %.c,$(obj_dir)/%.o,$(LIB_C))
 CRT_OBJ := $(obj_dir)/$(arch_dir)/crt.o
 SRCS := $(wildcard $(app_dir)/*.c)
 APPS := $(patsubst $(app_dir)/%.c,%,$(SRCS))
+GENERATED_HEADERS := $(generated_dir)/rp_host_action_seed.h
 
 CH2_BASE_TESTS := ch2b_
 CH3_BASE_TESTS := ch3b_ $(CH2_BASE_TESTS)
@@ -98,7 +100,11 @@ endif
 
 SELECTED_APPS = $(foreach t,$(CH_TESTS),$(filter $(t)%,$(APPS)))
 
-$(obj_dir)/%.o: %.c
+$(GENERATED_HEADERS):
+	@mkdir -p $(@D)
+	@printf '%s\n' '#ifndef __RP_HOST_ACTION_SEED_H__' '#define __RP_HOST_ACTION_SEED_H__' '#define RP_HOST_ACTION_SEED ""' '#endif' > $@
+
+$(obj_dir)/%.o: %.c $(GENERATED_HEADERS)
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c $< -o $@
 
