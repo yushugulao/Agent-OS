@@ -17,6 +17,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "status=ready");
 	ok = ok && rp_file_contains("rp_runner", "workbench_tasks=9");
 	ok = ok && rp_file_contains("rp_runner", "workbench_export=usable-workbench-export:RUN-900:1");
+	ok = ok && rp_file_contains("rp_runner", "status=ready");
+	ok = ok && rp_file_contains("rp_runner", "citation_count=5");
+	ok = ok && rp_file_contains("rp_runner", "handoff=ready");
+	ok = ok && rp_file_contains("rp_runner", "commands=6");
+	ok = ok && rp_file_contains("rp_runner", "events=8");
+	ok = ok && rp_file_contains("rp_runner", "files=9");
 	ok = ok && rp_file_contains("rp_stage_dag", "status=ready");
 	ok = ok && rp_file_contains("rp_stage_log", "status=ready");
 	ok = ok && rp_file_contains("rp_artifact", "status=recovered");
@@ -275,7 +281,7 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=101\n"
+			   "checks=107\n"
 			   "task_records=21\n"
 			   "ready_tasks=21\n"
 			   "high_tasks=4\n"
@@ -292,7 +298,7 @@ int main(void)
 			   "runner_stages=5\n"
 			   "runner_retries=1\n"
 			   "runner_cache_hits=1\n"
-			   "workbench_records=4\n"
+			   "workbench_records=10\n"
 			   "workbench_tasks=9\n"
 			   "workbench_done=8\n"
 			   "artifact_records=2\n"
@@ -351,6 +357,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend;target=rp_consistency;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline;target=rp_consistency;status=ok")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=101 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 backend=4 artifacts=4 agents=7 status=ready\n");
+	printf("rp_consistency: checks=107 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 backend=4 artifacts=4 agents=7 status=ready\n");
 	return 0;
 }
