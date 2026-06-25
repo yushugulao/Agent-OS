@@ -1,5 +1,4 @@
 #include "console.h"
-#include "agent.h"
 #include "defs.h"
 #include "loader.h"
 #include "sync.h"
@@ -7,26 +6,6 @@
 #include "syscall_ids.h"
 #include "timer.h"
 #include "trap.h"
-
-extern struct proc pool[NPROC];
-
-enum trace_request {
-	TRACE_READ,
-	TRACE_WRITE,
-	TRACE_SYSCALL,
-};
-
-static int user_can_write(pagetable_t pagetable, uint64 va)
-{
-	pte_t *pte;
-
-	if (va >= MAXVA)
-		return 0;
-	pte = walk(pagetable, va, 0);
-	if (pte == 0)
-		return 0;
-	return (*pte & PTE_V) && (*pte & PTE_U) && (*pte & PTE_W);
-}
 
 uint64 console_write(uint64 va, uint64 len)
 {
@@ -46,10 +25,7 @@ uint64 console_read(uint64 va, uint64 len)
 	char str[MAX_STR_LEN];
 	tracef("read size = %d", len);
 	for (int i = 0; i < len; ++i) {
-		int c;
-		do {
-			c = consgetc();
-		} while (c < 0);
+		int c = consgetc();
 		str[i] = c;
 	}
 	copyout(p->pagetable, va, str, len);
@@ -58,7 +34,7 @@ uint64 console_read(uint64 va, uint64 len)
 
 uint64 sys_write(int fd, uint64 va, uint64 len)
 {
-	if (fd < 0 || fd >= FD_BUFFER_SIZE)
+	if (fd < 0 || fd > FD_BUFFER_SIZE)
 		return -1;
 	struct proc *p = curr_proc();
 	struct file *f = p->files[fd];
@@ -80,7 +56,7 @@ uint64 sys_write(int fd, uint64 va, uint64 len)
 
 uint64 sys_read(int fd, uint64 va, uint64 len)
 {
-	if (fd < 0 || fd >= FD_BUFFER_SIZE)
+	if (fd < 0 || fd > FD_BUFFER_SIZE)
 		return -1;
 	struct proc *p = curr_proc();
 	struct file *f = p->files[fd];
@@ -134,82 +110,6 @@ uint64 sys_getppid()
 	return p->parent == NULL ? IDLE_PID : p->parent->pid;
 }
 
-int sys_trace(int req, uint64 id, uint8 data)
-{
-	struct proc *p = curr_proc();
-	uint8 value;
-
-	switch (req) {
-	case TRACE_READ:
-		if (copyin(p->pagetable, (char *)&value, id, sizeof(value)) < 0)
-			return -1;
-		return value;
-	case TRACE_WRITE:
-		if (!user_can_write(p->pagetable, id))
-			return -1;
-		value = data;
-		if (copyout(p->pagetable, id, (char *)&value, sizeof(value)) < 0)
-			return -1;
-		return 0;
-	case TRACE_SYSCALL:
-		if (id >= SYSCALL_COUNT_MAX)
-			return -1;
-		return p->syscall_count[id];
-	default:
-		return -1;
-	}
-}
-
-int sys_mailwrite(int pid, uint64 buf, int len)
-{
-	struct proc *target = 0;
-	struct proc *sender = curr_proc();
-	char payload[MAILBOX_PAYLOAD_SIZE];
-	int slot;
-
-	if (len <= 0 || len > MAILBOX_PAYLOAD_SIZE)
-		return -1;
-	for (struct proc *p = pool; p < &pool[NPROC]; p++) {
-		if (p->state != P_UNUSED && p->pid == pid) {
-			target = p;
-			break;
-		}
-	}
-	if (target == 0 || target->mail_count >= MAILBOX_SLOT_COUNT)
-		return -1;
-	if (copyin(sender->pagetable, payload, buf, len) < 0)
-		return -1;
-	slot = target->mail_tail;
-	memmove(target->mail_payload[slot], payload, len);
-	target->mail_len[slot] = len;
-	target->mail_from[slot] = sender->pid;
-	target->mail_tail = (target->mail_tail + 1) % MAILBOX_SLOT_COUNT;
-	target->mail_count++;
-	return len;
-}
-
-int sys_mailread(uint64 buf, int len)
-{
-	struct proc *p = curr_proc();
-	int slot;
-	int n;
-
-	if (len <= 0 || len > MAILBOX_PAYLOAD_SIZE)
-		return -1;
-	if (p->mail_count <= 0)
-		return 0;
-	slot = p->mail_head;
-	n = MIN(len, p->mail_len[slot]);
-	if (copyout(p->pagetable, buf, p->mail_payload[slot], n) < 0)
-		return -1;
-	memset(p->mail_payload[slot], 0, sizeof(p->mail_payload[slot]));
-	p->mail_len[slot] = 0;
-	p->mail_from[slot] = 0;
-	p->mail_head = (p->mail_head + 1) % MAILBOX_SLOT_COUNT;
-	p->mail_count--;
-	return n;
-}
-
 uint64 sys_clone()
 {
 	debugf("fork!");
@@ -250,35 +150,32 @@ uint64 sys_wait(int pid, uint64 va)
 uint64 sys_pipe(uint64 fdarray)
 {
 	struct proc *p = curr_proc();
-	int fd0 = -1, fd1 = -1;
+	uint64 fd0, fd1;
 	struct file *f0, *f1;
+	if (f0 < 0 || f1 < 0) {
+		return -1;
+	}
 	f0 = filealloc();
 	f1 = filealloc();
-	if (f0 == 0 || f1 == 0)
-		goto err0;
 	if (pipealloc(f0, f1) < 0)
 		goto err0;
 	fd0 = fdalloc(f0);
 	fd1 = fdalloc(f1);
 	if (fd0 < 0 || fd1 < 0)
-		goto err1;
+		goto err0;
 	if (copyout(p->pagetable, fdarray, (char *)&fd0, sizeof(fd0)) < 0 ||
-	    copyout(p->pagetable, fdarray + sizeof(int), (char *)&fd1,
+	    copyout(p->pagetable, fdarray + sizeof(uint64), (char *)&fd1,
 		    sizeof(fd1)) < 0) {
 		goto err1;
 	}
 	return 0;
 
 err1:
-	if (fd0 >= 0)
-		p->files[fd0] = 0;
-	if (fd1 >= 0)
-		p->files[fd1] = 0;
+	p->files[fd0] = 0;
+	p->files[fd1] = 0;
 err0:
-	if (f0)
-		fileclose(f0);
-	if (f1)
-		fileclose(f1);
+	fileclose(f0);
+	fileclose(f1);
 	return -1;
 }
 
@@ -290,21 +187,9 @@ uint64 sys_openat(uint64 va, uint64 omode, uint64 _flags)
 	return fileopen(path, omode);
 }
 
-uint64 sys_unlinkat(int dirfd, uint64 va, uint64 flags)
-{
-	struct proc *p = curr_proc();
-	char path[200];
-
-	if (dirfd != -100 || flags != 0)
-		return -1;
-	if (copyinstr(p->pagetable, path, va, sizeof(path)) < 0)
-		return -1;
-	return fileunlink(path);
-}
-
 uint64 sys_close(int fd)
 {
-	if (fd < 0 || fd >= FD_BUFFER_SIZE)
+	if (fd < 0 || fd > FD_BUFFER_SIZE)
 		return -1;
 	struct proc *p = curr_proc();
 	struct file *f = p->files[fd];
@@ -486,8 +371,6 @@ void syscall()
 	int id = trapframe->a7, ret;
 	uint64 args[6] = { trapframe->a0, trapframe->a1, trapframe->a2,
 			   trapframe->a3, trapframe->a4, trapframe->a5 };
-	if (id >= 0 && id < SYSCALL_COUNT_MAX)
-		curr_proc()->syscall_count[id]++;
 	if (id != SYS_write && id != SYS_read && id != SYS_sched_yield) {
 		debugf("syscall %d args = [%x, %x, %x, %x, %x, %x]", id,
 		       args[0], args[1], args[2], args[3], args[4], args[5]);
@@ -501,9 +384,6 @@ void syscall()
 		break;
 	case SYS_openat:
 		ret = sys_openat(args[0], args[1], args[2]);
-		break;
-	case SYS_unlinkat:
-		ret = sys_unlinkat(args[0], args[1], args[2]);
 		break;
 	case SYS_close:
 		ret = sys_close(args[0]);
@@ -525,15 +405,6 @@ void syscall()
 		break;
 	case SYS_getppid:
 		ret = sys_getppid();
-		break;
-	case SYS_mailread:
-		ret = sys_mailread(args[0], args[1]);
-		break;
-	case SYS_mailwrite:
-		ret = sys_mailwrite(args[0], args[1], args[2]);
-		break;
-	case SYS_trace:
-		ret = sys_trace(args[0], args[1], args[2]);
 		break;
 	case SYS_clone: // SYS_fork
 		ret = sys_clone();
@@ -582,66 +453,6 @@ void syscall()
 		break;
 	case SYS_condvar_wait:
 		ret = sys_condvar_wait(args[0], args[1]);
-		break;
-	case SYS_agent_create:
-		ret = sys_agent_create();
-		break;
-	case SYS_agent_create_role:
-		ret = sys_agent_create_role(args[0]);
-		break;
-	case SYS_agent_info:
-		ret = sys_agent_info(args[0]);
-		break;
-	case SYS_agent_run:
-		ret = sys_agent_run(args[0], args[1], args[2], args[3]);
-		break;
-	case SYS_agent_call:
-		ret = sys_agent_call(args[0], args[1]);
-		break;
-	case SYS_agent_tool_list:
-		ret = sys_agent_tool_list(args[0], args[1]);
-		break;
-	case SYS_context_push:
-		ret = sys_context_push(args[0]);
-		break;
-	case SYS_context_query:
-		ret = sys_context_query(args[0], args[1], args[2]);
-		break;
-	case SYS_context_snapshot:
-		ret = sys_context_snapshot(args[0], args[1], args[2]);
-		break;
-	case SYS_context_detail:
-		ret = sys_context_detail(args[0], args[1]);
-		break;
-	case SYS_context_rollback:
-		ret = sys_context_rollback(args[0]);
-		break;
-	case SYS_context_clear:
-		ret = sys_context_clear();
-		break;
-	case SYS_agent_watch:
-		ret = sys_agent_watch(args[0], args[1]);
-		break;
-	case SYS_agent_unwatch:
-		ret = sys_agent_unwatch(args[0], args[1]);
-		break;
-	case SYS_agent_wait:
-		ret = sys_agent_wait(args[0], args[1]);
-		break;
-	case SYS_agent_heartbeat:
-		ret = sys_agent_heartbeat(args[0]);
-		break;
-	case SYS_agent_wake:
-		ret = sys_agent_wake(args[0], args[1]);
-		break;
-	case SYS_agent_file_meta_init:
-		ret = sys_agent_file_meta_init();
-		break;
-	case SYS_agent_file_meta_set:
-		ret = sys_agent_file_meta_set(args[0]);
-		break;
-	case SYS_agent_file_query:
-		ret = sys_agent_file_query(args[0], args[1]);
 		break;
 	// LAB5: (2) you may need to add case SYS_enable_deadlock_detect here
 	default:

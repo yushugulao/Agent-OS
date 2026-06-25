@@ -22,7 +22,7 @@ BASE:
 
 * target/bin : all `.bin` file
 * target/elf : all `.elf` file (Used for extended lab)
-* asm : the assembly of testcases.
+* asm : the assembly of testcases.  
 
 ### Dev Log
 

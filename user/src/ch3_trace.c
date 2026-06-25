@@ -43,7 +43,7 @@ int main()
 	assert_eq(u, *(volatile uint8 *)&v);
 
 	assert(-1 != trace_read((uint8 *)main));
-
+    
     puts("Test trace OK!");
 	return 0;
 }

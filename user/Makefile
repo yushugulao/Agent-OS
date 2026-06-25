@@ -36,15 +36,16 @@ CH5_BASE_TESTS := ch5b_ $(CH3_BASE_TESTS) usershell
 CH6_BASE_TESTS := ch6b_ $(CH5_BASE_TESTS)
 CH7_BASE_TESTS := ch7b_ $(CH6_BASE_TESTS)
 CH8_BASE_TESTS := ch8b_ $(CH7_BASE_TESTS)
-AGENT_TESTS := agentfinal_ucore agentfs_ucore agentloop_ucore agentbench_ucore labbench_ucore labdemo_ucore agentsecurity_ucore
+PLATFORM_TESTS := usershell research_platform_ucore_plain
 
 CH2_TESTS := $(CH2_BASE_TESTS)
 CH3_TESTS := $(CH3_BASE_TESTS) ch3_
 CH4_TESTS := $(CH4_BASE_TESTS) ch4_ ch3b_sleep ch3_
 CH5_TESTS_BASE := ch5b_ $(CH4_TESTS) ch5_ ch5t_ usershell
+CH5_SCHED_TEST := ch5t_
 CH6_TESTS := $(CH6_BASE_TESTS) ch6_ ch5_ ch4_
 CH7_TESTS := $(CH7_BASE_TESTS) ch7_
-CH8_TESTS := $(CH8_BASE_TESTS) ch8_ $(AGENT_TESTS)
+CH8_TESTS := $(CH8_BASE_TESTS) ch8_
 
 ifeq ($(BASE), 1)
 CH2_TESTS := $(CH2_BASE_TESTS)
@@ -53,27 +54,43 @@ CH4_TESTS := $(CH4_BASE_TESTS)
 CH5_TESTS_BASE := $(CH5_BASE_TESTS)
 CH6_TESTS := $(CH6_BASE_TESTS)
 CH7_TESTS := $(CH7_BASE_TESTS)
-CH8_TESTS := $(CH8_BASE_TESTS) $(AGENT_TESTS)
+CH8_TESTS := $(CH8_BASE_TESTS)
 endif
 
 ifeq ($(CHAPTER), 2)
 CH_TESTS := $(CH2_TESTS)
+else ifeq ($(CHAPTER), 2_bad)
+CH_TESTS := __ch2_bad_
 else ifeq ($(CHAPTER), 3)
 CH_TESTS := $(CH3_TESTS)
 else ifeq ($(CHAPTER), 4)
 CH_TESTS := $(CH4_TESTS)
+else ifeq ($(CHAPTER), 4_3)
+CH_TESTS := $(CH4_BASE_TESTS) ch3b_sleep
+else ifeq ($(CHAPTER), 4_only)
+CH_TESTS := ch4_ ch4b_
 else ifeq ($(CHAPTER), 5)
 CH_TESTS := $(CH5_TESTS_BASE)
+else ifeq ($(CHAPTER), 5_only)
+CH_TESTS := ch5_ ch5b_ ch5t_
+else ifeq ($(CHAPTER), 5t)
+CH_TESTS := $(CH5_SCHED_TEST)
 else ifeq ($(CHAPTER), 6)
 CH_TESTS := $(CH6_TESTS)
+else ifeq ($(CHAPTER), 6_only)
+CH_TESTS := ch6_ ch6b_
 else ifeq ($(CHAPTER), 7)
 CH_TESTS := $(CH7_TESTS)
+else ifeq ($(CHAPTER), 7_only)
+CH_TESTS := ch7_ ch7b_
 else ifeq ($(CHAPTER), 8)
 CH_TESTS := $(CH8_TESTS)
-else ifeq ($(CHAPTER), agent)
-CH_TESTS := usershell $(AGENT_TESTS)
+else ifeq ($(CHAPTER), 8_only)
+CH_TESTS := ch8_
+else ifeq ($(CHAPTER), platform)
+CH_TESTS := $(PLATFORM_TESTS)
 else
-CH_TESTS := usershell $(AGENT_TESTS)
+CH_TESTS := $(PLATFORM_TESTS)
 endif
 
 SELECTED_APPS = $(foreach t,$(CH_TESTS),$(filter $(t)%,$(APPS)))

@@ -6,7 +6,6 @@
 
 void kvm_init();
 void kvmmap(pagetable_t, uint64, uint64, uint64, int);
-pte_t *walk(pagetable_t, uint64, int);
 int mappages(pagetable_t, uint64, uint64, uint64, int);
 pagetable_t uvmcreate();
 int uvmcopy(pagetable_t, pagetable_t, uint64);

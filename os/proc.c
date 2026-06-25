@@ -142,26 +142,8 @@ found:
 	p->next_mutex_id = 0;
 	p->next_semaphore_id = 0;
 	p->next_condvar_id = 0;
-	memset(p->syscall_count, 0, sizeof(p->syscall_count));
-	memset(p->mail_payload, 0, sizeof(p->mail_payload));
-	memset(p->mail_len, 0, sizeof(p->mail_len));
-	memset(p->mail_from, 0, sizeof(p->mail_from));
-	p->mail_head = 0;
-	p->mail_tail = 0;
-	p->mail_count = 0;
-	agent_clear_metadata(p);
+	// LAB5: (1) you may initialize your new proc variables here
 	return p;
-}
-
-static void wake_proc_threads(struct proc *p)
-{
-	for (int i = 0; i < NTHREAD; i++) {
-		struct thread *t = &p->threads[i];
-		if (t->state == SLEEPING) {
-			t->state = RUNNABLE;
-			add_task(t);
-		}
-	}
 }
 
 inline uint64 get_thread_trapframe_va(int tid)
@@ -248,31 +230,7 @@ void scheduler()
 	for (;;) {
 		t = fetch_task();
 		if (t == NULL) {
-			int live = 0;
-			for (struct proc *p = pool; p < &pool[NPROC]; p++) {
-				if (p->state != P_USED)
-					continue;
-				for (int i = 0; i < NTHREAD; i++) {
-					if (p->threads[i].state == SLEEPING ||
-					    p->threads[i].state == RUNNABLE ||
-					    p->threads[i].state == RUNNING) {
-						live = 1;
-						break;
-					}
-				}
-				if (live)
-					break;
-			}
-			if (live) {
-				set_kerneltrap();
-				intr_on();
-				asm volatile("wfi");
-				continue;
-			}
-			infof("all app are over!");
-			shutdown();
-			for (;;)
-				;
+			panic("all app are over!\n");
 		}
 		// throw out freed threads
 		if (t->state != RUNNABLE) {
@@ -336,25 +294,20 @@ void freeproc(struct proc *p)
 		}
 		t->state = T_UNUSED;
 	}
-	if (p->is_agent)
-		agent_free_proc_context(p);
-	else
-		agent_clear_metadata(p);
 	if (p->pagetable)
 		freepagetable(p->pagetable, p->max_page);
 	p->pagetable = 0;
 	p->max_page = 0;
 	p->ustack_base = 0;
-	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
+	for (int i = 0; i > FD_BUFFER_SIZE; i++) {
 		if (p->files[i] != NULL) {
 			fileclose(p->files[i]);
-			p->files[i] = NULL;
 		}
 	}
 	p->state = P_UNUSED;
 }
 
-static int fork_common(int make_agent, int agent_role)
+int fork()
 {
 	struct proc *np;
 	struct proc *p = curr_proc();
@@ -365,8 +318,7 @@ static int fork_common(int make_agent, int agent_role)
 	}
 	// Copy user memory from parent to child.
 	if (uvmcopy(p->pagetable, np->pagetable, p->max_page) < 0) {
-		freeproc(np);
-		return -1;
+		panic("uvmcopy\n");
 	}
 	np->max_page = p->max_page;
 	np->ustack_base = p->ustack_base;
@@ -378,22 +330,11 @@ static int fork_common(int make_agent, int agent_role)
 			np->files[i] = p->files[i];
 		}
 	}
-	memset(np->syscall_count, 0, sizeof(np->syscall_count));
-	memset(np->mail_payload, 0, sizeof(np->mail_payload));
-	memset(np->mail_len, 0, sizeof(np->mail_len));
-	memset(np->mail_from, 0, sizeof(np->mail_from));
-	np->mail_head = 0;
-	np->mail_tail = 0;
-	np->mail_count = 0;
 
 	np->parent = p;
 	// currently only copy main thread
 	struct thread *nt = &np->threads[allocthread(np, 0, 0)],
 		      *t = &p->threads[0];
-	if (make_agent && agent_make_role(np, agent_role) < 0) {
-		freeproc(np);
-		return -1;
-	}
 	// copy saved user registers.
 	*(nt->trapframe) = *(t->trapframe);
 	// Cause fork to return 0 in the child.
@@ -401,21 +342,6 @@ static int fork_common(int make_agent, int agent_role)
 	nt->state = RUNNABLE;
 	add_task(nt);
 	return np->pid;
-}
-
-int fork()
-{
-	return fork_common(0, AGENT_ROLE_SENTINEL);
-}
-
-int agent_create_proc()
-{
-	return fork_common(1, AGENT_ROLE_SENTINEL);
-}
-
-int agent_create_role_proc(int role)
-{
-	return fork_common(1, role);
 }
 
 int push_argv(struct proc *p, char **argv)
@@ -505,7 +431,8 @@ int wait(int pid, int *code)
 		if (!havekids) {
 			return -1;
 		}
-		t->state = SLEEPING;
+		t->state = RUNNABLE;
+		add_task(t);
 		sched();
 	}
 }
@@ -527,7 +454,6 @@ void exit(int code)
 		if (p->parent != NULL) {
 			// Parent should `wait`
 			p->state = ZOMBIE;
-			wake_proc_threads(p->parent);
 		}
 		// Set the `parent` of all children to NULL
 		struct proc *np;

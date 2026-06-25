@@ -70,6 +70,5 @@ enum Interrupt {
 
 void trap_init();
 void usertrapret();
-void set_kerneltrap();
 
 #endif // TRAP_H

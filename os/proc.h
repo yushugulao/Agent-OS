@@ -4,15 +4,11 @@
 #include "riscv.h"
 #include "types.h"
 #include "sync.h"
-#include "agent.h"
 
 #define NPROC (128)
 #define NTHREAD (16)
 #define FD_BUFFER_SIZE (16)
 #define LOCK_POOL_SIZE (8)
-#define SYSCALL_COUNT_MAX (600)
-#define MAILBOX_SLOT_COUNT (16)
-#define MAILBOX_PAYLOAD_SIZE (256)
 
 struct file;
 
@@ -67,59 +63,9 @@ struct proc {
 	struct mutex mutex_pool[LOCK_POOL_SIZE];
 	struct semaphore semaphore_pool[LOCK_POOL_SIZE];
 	struct condvar condvar_pool[LOCK_POOL_SIZE];
-	uint64 syscall_count[SYSCALL_COUNT_MAX];
-	char mail_payload[MAILBOX_SLOT_COUNT][MAILBOX_PAYLOAD_SIZE];
-	int mail_len[MAILBOX_SLOT_COUNT];
-	int mail_from[MAILBOX_SLOT_COUNT];
-	int mail_head;
-	int mail_tail;
-	int mail_count;
-	int is_agent;
-	int agent_type;
-	int agent_id;
-	int agent_role;
-	uint64 agent_ctx_base;
-	uint64 agent_ctx_size;
-	uint64 agent_call_count;
-	int heartbeat_interval;
-	int resource_quota;
-	int loop_state;
-	uint64 context_path_count;
-	uint64 context_path_capacity;
-	uint64 context_path_head;
-	uint64 context_path_oldest;
-	uint64 context_path_latest;
-	uint64 context_path_dropped;
-	uint64 context_path_rollback_count;
-	uint64 latest_response_offset;
-	uint64 records_offset;
-	uint64 agent_ctx_kva[AGENT_CONTEXT_PAGES];
-	uint64 agent_shadow_kva[AGENT_CONTEXT_PAGES];
-	int agent_mailbox_valid;
-	int agent_mailbox_from;
-	char agent_mailbox[AGENT_EVENT_PAYLOAD_SIZE];
-	int agent_watch_count;
-	int agent_watch_valid[AGENT_WATCH_MAX];
-	int agent_watch_event_type[AGENT_WATCH_MAX];
-	char agent_watch_filter[AGENT_WATCH_MAX][AGENT_WATCH_FILTER_SIZE];
-	struct agent_event agent_events[AGENT_EVENT_QUEUE_CAP];
-	int agent_event_head;
-	int agent_event_tail;
-	int agent_event_count_queued;
-	uint64 agent_event_count;
-	uint64 agent_event_dropped;
-	uint64 agent_wait_count;
-	uint64 agent_wait_loop_count;
-	uint64 agent_wait_sleep_count;
-	uint64 agent_wait_wakeup_count;
-	uint64 agent_timeout_count;
-	int agent_wait_deadline_valid;
-	uint64 agent_wait_deadline;
-	uint64 agent_last_heartbeat_tick;
-	uint64 agent_capability_mask;
-	uint64 agent_detail_count;
-	uint64 agent_detail_head;
-	struct agent_context_detail agent_details[AGENT_CONTEXT_MAX_RECORDS];
+	// LAB5: (1) Define your variables for deadlock detect here.
+	//			 You may need a flag to record if detection enabled,
+	//       and some arrays for detection algorithm.
 };
 
 int cpuid();
@@ -131,8 +77,6 @@ void scheduler() __attribute__((noreturn));
 void sched();
 void yield();
 int fork();
-int agent_create_proc();
-int agent_create_role_proc(int role);
 int exec(char *, char **);
 int wait(int, int *);
 void add_task(struct thread *);

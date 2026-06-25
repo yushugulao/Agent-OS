@@ -15,9 +15,6 @@ struct inode {
 	int ref; // Reference count
 	int valid; // inode has been read from disk?
 	short type; // copy of disk inode
-	short agent_meta_slot;
-	short agent_meta_flags;
-	short agent_meta_version;
 	uint size;
 	uint addrs[NDIRECT + 1];
 	// LAB4: You may need to add link count here
@@ -60,7 +57,6 @@ int pipewrite(struct pipe *, uint64, int);
 void fileclose(struct file *);
 struct file *filealloc();
 int fileopen(char *, uint64);
-int fileunlink(char *);
 uint64 inodewrite(struct file *, uint64, uint64);
 uint64 inoderead(struct file *, uint64, uint64);
 struct file *stdio_init(int);

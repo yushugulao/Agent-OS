@@ -45,7 +45,7 @@ SECTIONS
         *(.data.*)
         *(.sdata .sdata.*)
     }
-
+    
     . = ALIGN(4K);
     e_data = .;
     .bss : {
@@ -65,3 +65,4 @@ SECTIONS
 }
 ''')
     f.close()
+

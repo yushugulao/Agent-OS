@@ -1,278 +1,86 @@
-# project61-agentOS-happylegend
+# project61-agentOS-happylegend: plain uCore research platform branch
 
-## 项目信息
+This branch is the plain-kernel baseline for the research Agent platform.
 
-| 项目 | 内容 |
-| --- | --- |
-| 比赛 | 2026 年全国大学生计算机系统能力大赛-操作系统设计赛（全国）-OS 功能挑战赛道 |
-| 选题编号 | project61 |
-| 赛题名称 | 面向 AI 智能体的操作系统内核（Agent-OS） |
-| 队伍名称 | happy-legend |
-| 平台 Project ID | 39809 |
-| GitLab 仓库 | https://gitlab.eduxiji.net/T2026106149911107/project3136859-388870 |
-| 当前交付分支 | `uCore` |
+The kernel source under `os/`, the file-system builder under `nfs/`, and the boot/init helper under `scripts/` are restored from the upstream uCore 2025S source. The research platform work in this branch is placed in ordinary user space.
 
-## 项目简介
+## Purpose
 
-本项目围绕 Agent-OS 赛题，在 uCore 教学操作系统内核中实现面向 Agent 的内核支持层。当前系统能够识别 Agent 进程，提供结构化内核工具调用，维护 Agent 多轮工具调用历史，并扩展出真实文件 inode 关联的 Agent 文件元数据查询、事件队列等待/唤醒和多 Agent 故障恢复演示。
+The branch answers one specific question: how far the research Agent platform can run on an unchanged uCore kernel before the later Agent-OS enhanced kernel is used.
 
-uCore 分支不是只做任务一至三的最小版本。当前交付以任务一、任务二、任务三为高性能底座，同时实现任务四的文件元数据与 inode 关联、任务五的有界事件队列和等待/唤醒、任务六的多 Agent 综合演示。文档结构按旧版项目文档风格重构：README 负责快速运行和材料索引，主设计文档解释架构和关键决策，API/ABI 文档说明用户态与内核的接口分工，验证文档给出可复现证据，分任务文档展开细节。
+It is not the Agent-OS kernel-enhanced version. There are no Agent syscalls, Agent Context pages, kernel file metadata indexes, or kernel Agent event queues in `os/`.
 
-## 基底来源
+## Current User Program
 
-当前分支以 uCore 教学操作系统代码为基础，并引入 uCore 用户测试目录结构。项目相关实现主要集中在：
+The first native uCore entry is:
 
-- `os/agent.c`
-- `os/agent.h`
-- `os/proc.c`
-- `os/syscall.c`
-- `os/trap.c`
-- `user/include/agent.h`
-- `user/lib/syscall.c`
-- `user/src/agentfinal_ucore.c`
-- `user/src/agentfs_ucore.c`
-- `user/src/agentloop_ucore.c`
-- `user/src/agentbench_ucore.c`
-- `user/src/labbench_ucore.c`
-- `user/src/labdemo_ucore.c`
-- `user/src/agentsecurity_ucore.c`
+```text
+user/src/research_platform_ucore_plain.c
+```
 
-`os/` 是内核目录，`user/` 是用户态程序与测试目录，`nfs/` 用于生成用户程序文件系统镜像。
+It is a normal uCore user process. It embeds the current pure user-space research platform catalog and validates:
 
-交付验收主路径使用 `CHAPTER=agent`。同时，内核保留并补充了部分 uCore 基础接口，例如 `trace` 和普通进程 mail；验证材料中包含 `ch3_trace` 抽测，用于证明代表性的基础 syscall 仍可运行。仓库中其他 chapter 测试文件保留为教学代码材料，不作为本项目最终验收入口。
+- 500 platform object counters.
+- 120 service names.
+- 28 feature groups.
+- 13 platform self-check groups.
+- 6 reference research platforms: Galaxy, AiiDA, DVC, MLflow, Nextflow, Snakemake.
+- 6 mature capability mappings with a target coverage ratio of at least 30%.
+- A plain user-space research run simulation with planning, literature, analysis, review, writing, repair, and audit roles.
+- Local catalog search for workflow, Agent, evidence, provenance, and LLM related platform objects.
 
-## 赛题对应关系
+The program prints:
 
-| 赛题任务 | 项目目标 | 当前状态 |
-| --- | --- | --- |
-| 任务一：Agent 进程创建与地址空间设计 | 支持 Agent 进程概念、进程元数据和 Agent Context 地址空间 | 已完成增强实现 |
-| 任务二：Agent 与内核结构化交互 | 支持结构化工具调用、工具表、结果返回和错误语义 | 已完成增强实现 |
-| 任务三：上下文路径管理 | 记录、查询、快照、回滚 Agent 多轮调用历史，并提供用户自管 cache 区 | 已完成增强实现 |
-| 任务四：面向 Agent 查询优化的文件系统扩展 | 支持文件元数据表、真实 inode 关联、私有 `.agentmeta` 持久化、属性查询、索引路径和依赖查询 | 已完成增强实现 |
-| 任务五：Agent Loop 内核运行机制 | 支持 16 槽事件队列、watch/unwatch、真实睡眠 wait/timeout、heartbeat 唤醒和事件投递 | 已完成增强实现 |
-| 任务六：综合演示与创新 | 用多 Agent 实验恢复场景串联任务一至五 | 已完成 `labdemo_ucore` 综合演示 |
+```text
+research_platform_ucore_plain: passed
+```
 
-需要明确：任务四已经把 Agent 文件元数据绑定到 uCore 根目录真实文件的 `dev + inum`，并用根目录私有文件 `.agentmeta` 保存固定格式元数据表；普通 `open/create/unlink` 不能直接访问 `.agentmeta`。当前尚未实现后台线程持续扫描整棵目录。任务五已经实现有界 FIFO 事件队列、watch/unwatch、事件唤醒、有限 timeout 睡眠等待和 heartbeat 定时事件；TIMER 事件需要注册对应 watch 才能被消费，当前尚未实现优先级调度和取消等待接口。
+when the built-in checks pass.
 
-## 构建与运行
+## Build And Run
 
-已验证开发环境：WSL2 Ubuntu 26.04。
-
-通用运行要求：
-
-- Linux 环境；
-- RISC-V GCC/binutils；
-- QEMU riscv64；
-- make；
-- git。
-
-当前验证使用 `riscv64-linux-gnu-` 工具链。
-
-构建用户程序、文件系统镜像和内核：
+In WSL Ubuntu:
 
 ```bash
-cd project61-agentOS-happylegend-uCore
+cd /mnt/e/计算机操作系统能力竞赛/project61-agentOS-happylegend-uCore
 make -C user clean
 make clean
-make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=agent
-make build TOOLPREFIX=riscv64-linux-gnu- LOG=warn INIT_PROC=agentfinal_ucore
+make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform
+make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=research_platform_ucore_plain
+timeout 45s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=research_platform_ucore_plain
 ```
 
-推荐使用脚本顺序运行最终测试：
+Expected key output:
+
+```text
+research_platform_ucore_plain summary
+objects=500 object_total=102790 services=120 features=28 feature_units=299 checks=13 references=6 mappings=6
+catalog_ok=1 checks_ok=1 mature_ok=1 run_ok=1 search_ok=1
+research_platform_ucore_plain: passed
+```
+
+The current upstream uCore kernel prints `all app are over!` after the init user program exits. In this branch that message means the plain user program finished and the kernel reached its existing no-more-apps path.
+
+## Kernel Source Check
+
+Use these checks to verify that this branch keeps the kernel source unchanged:
 
 ```bash
-bash scripts/run-agent-tests.sh
+diff -qr ../_upstream_ucore_2025S/os ./os
+diff -qr ../_upstream_ucore_2025S/nfs ./nfs
+diff -qr ../_upstream_ucore_2025S/scripts ./scripts
 ```
 
-也可以分别以 init 进程方式运行：
+No output means the directories match.
 
-```bash
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfinal_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfs_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentloop_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labbench_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent
-```
+## Next Work
 
-代表性 uCore 基础 syscall 抽测：
+The current native program proves that the plain uCore kernel can boot and run a research-platform-shaped user process with the same catalog scale as the pure Python platform. Further migration work should move more behavior from embedded tables into active user-space services:
 
-```bash
-make -C user clean
-make clean
-make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=3
-timeout 60s make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=ch3_trace CHAPTER=3
-```
+- Persistent platform state files in the uCore root file system.
+- Multi-process planner, retriever, analyst, reviewer, writer, repair, and auditor programs.
+- A user-space message protocol using only unchanged uCore syscalls.
+- A host LLM gateway bridge exposed as ordinary input/output files or console packets.
+- More executable checks for workflow portability, evidence tracing, release review, and AgentCompare comparison.
 
-如果希望进入用户 shell，可以运行：
-
-```bash
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=usershell CHAPTER=agent
-```
-
-进入 shell 后可手动运行：
-
-```sh
-agentfinal_ucore
-agentfs_ucore
-agentloop_ucore
-agentbench_ucore
-labbench_ucore
-labdemo_ucore
-agentsecurity_ucore
-```
-
-shell 中启动的测试程序是 `usershell` 的直接普通子进程，内核允许这类进程创建 orchestrator Agent，因此该手动路径与 `INIT_PROC=...` 路径都可用。
-
-## 最终测试入口
-
-| 程序 | 定位 | 期望通过输出 |
-| --- | --- | --- |
-| `agentfinal_ucore` | 任务一至三功能验收，同时覆盖 `context_detail()`、Context record flags、用户自管 cache、名称协议、文件索引和事件自唤醒 | `agentfinal_ucore: parent passed` |
-| `agentfs_ucore` | 任务四文件系统/inode 关联验收，覆盖真实文件绑定、字段清空、删除清理、`.agentmeta` 重新加载、scan/index 差异和不存在 selector | `agentfs_ucore: parent passed` |
-| `agentloop_ucore` | 任务五 Agent Loop 验收，覆盖 FIFO 顺序、队列满丢弃、多 watch、unwatch、有限 timeout 睡眠、TIMER unwatch、heartbeat wake/stop | `agentloop_ucore: parent passed` |
-| `agentbench_ucore` | 任务一至五性能与计时验证，包括 batch、direct context、snapshot、文件查询候选记录数、timeout/heartbeat、busy polling 和 wait/wake | `agentbench_ucore: parent passed` |
-| `labbench_ucore` | 面向演示规划的性能入口，包装运行 `agentbench_ucore`，便于后续升级为 `labbench --full` | `labbench_ucore: parent passed` |
-| `labdemo_ucore` | 多 Agent 综合演示，普通 init 只启动 orchestrator，后续元数据初始化、事件注入和角色 Agent 创建都由 orchestrator 完成 | `labdemo_ucore: parent passed` |
-| `agentsecurity_ucore` | 权限限制负向测试，覆盖初始化前索引查询、legacy mismatch、legacy 参数校验、syscall-only 工具拒绝、普通进程直接写元数据/投事件、sentinel 伪造 recovery、多 run 定向恢复 | `agentsecurity_ucore: parent passed` |
-
-`agentfinal_ucore` 预期输出包括：
-
-```text
-agentfinal_ucore: context size=20480 capacity=128
-agentfinal_ucore: batch first_seq=1 last_seq=64
-agentfinal_ucore: short_text_history=1 payload=ucore-final result=ucore-final
-agentfinal_ucore: context_detail=1 sequence=8
-agentfinal_ucore: tamper_protected=1
-agentfinal_ucore: user_cache_preserved=1 offset=17408 size=3072
-agentfinal_ucore: record_flags system=1 manual=1 truncated=0
-agentfinal_ucore: legacy_name_protocol=1
-agentfinal_ucore: fifo oldest=66 latest=193 dropped=65
-agentfinal_ucore: file_query hits=2 scanned=2 used_index=1
-agentfinal_ucore: event_wait=1 payload=self wake
-agentfinal_ucore: passed
-```
-
-`agentbench_ucore` 输出性能表，字段含义如下：
-
-```text
-agentbench_ucore: timeout_heartbeat=1
-agentbench_ucore: repeated_ticks scalar_min=5 scalar_avg=5 scalar_max=6 batch_min=3 batch_avg=3 batch_max=4
-agentbench_ucore: file_query_records scan_records=107 index_records=6
-agentbench_ucore: case ops ticks ops_per_tick speedup_x100
-agentbench_ucore: busy_poll_query ops=128 ...
-agentbench_ucore: busy_poll_vs_wait busy_ops=128 ...
-```
-
-`ticks` 会随 QEMU 和宿主机负载波动，阅读性能数据时应关注测试是否通过、scan/index 候选记录数差异、多轮 min/avg/max 观测和相对趋势，而不是固定绝对数值。
-
-`agentfs_ucore` 预期输出包括：
-
-```text
-agentfs_ucore: default_inode dev=1 inum=11 scanned=2
-agentfs_ucore: custom_inode dev=1 inum=17 size=7
-agentfs_ucore: bulk_index scan=108 index=6 hits=1
-agentfs_ucore: scan_index_consistent=1
-agentfs_ucore: truncated_query total=100 returned=3 truncated=1
-agentfs_ucore: .agentmeta_reload=1
-agentfs_ucore: clear_status=1
-agentfs_ucore: delete_clears_metadata=1
-agentfs_ucore: missing_selector_not_found=1
-agentfs_ucore: passed
-agentfs_ucore: parent passed
-```
-
-`agentloop_ucore` 预期输出包括：
-
-```text
-agentloop_ucore: fifo=1
-agentloop_ucore: overflow_dropped=1
-agentloop_ucore: unwatch=1
-agentloop_ucore: timeout_sleep_no_poll=1
-agentloop_ucore: timer_unwatch=1
-agentloop_ucore: heartbeat_wake_stop=1
-agentloop_ucore: passed
-agentloop_ucore: parent passed
-```
-
-`labdemo_ucore` 会输出结构化演示事件，例如：
-
-```text
-agentos:event type=AGENT_CREATED tick=... role=orchestrator pid=... context=...
-agentos:event type=RUN_OBJECT tick=... project=lab-gene-x workflow=nightly-regression run_id=RUN-042 desired_state=RECOVERED policy=minimal_rerun
-agentos:event type=WATCH_REGISTERED tick=... role=sentinel event=FILE_STATUS filter=status=failed
-agentos:event type=INCIDENT_CREATED tick=... id=INC-RUN-042-ALIGN-OOM project=lab-gene-x workflow=nightly-regression run_id=RUN-042 stage=align reason=memory_limit
-agentos:event type=TOOL_CALL tick=... role=sentinel tool=query_file project=lab-gene-x run_id=RUN-042 status=failed hits=1 used_index=1 seq=...
-agentos:event type=AUDIT tick=... role=sentinel action=rerun_stage result=DENIED reason=capability corr_id=RUN-042-align-rerun-1 seq=...
-agentos:event type=MESSAGE tick=... from=sentinel to=investigator status=OK corr_id=MSG-RUN-042-S-I seq=...
-agentos:event type=LLM_CALL tick=... mode=template task=explain_root_cause llm_request_id=LLM-RUN-042-RCA-1 project=lab-gene-x run_id=RUN-042 refs=... status=OK
-agentos:event type=LLM_RESULT tick=... mode=template llm_request_id=LLM-RUN-042-RCA-1 llm_status=OK llm_explanation=memory_limit referenced_sequences=... confidence=medium
-agentos:event type=PLAN_CREATED tick=... role=investigator plan=PLAN-RUN-042-RECOVER-1 project=lab-gene-x run_id=RUN-042 actions=align,report skip=prepare refs=...
-agentos:event type=ACTION tick=... role=recovery stage=align status=OK corr_id=RUN-042-align-rerun-1 plan=PLAN-RUN-042-RECOVER-1 seq=... duplicate=0
-agentos:event type=REPORT tick=... role=recovery project=lab-gene-x run_id=RUN-042 file=RUN-042-recovery.md status=OK corr_id=RUN-042-report-write-1 plan=PLAN-RUN-042-RECOVER-1 seq=... llm_enhanced=0
-agentos:event type=FINAL tick=... project=lab-gene-x run_id=RUN-042 status=RECOVERED plan=PLAN-RUN-042-RECOVER-1
-labdemo_ucore: passed
-labdemo_ucore: parent passed
-```
-
-`agentsecurity_ucore` 预期输出包括：
-
-```text
-agentsecurity_ucore: mail_basic=1
-agentsecurity_ucore: plain_process_denied=1
-agentsecurity_ucore: .agentmeta_protected=1
-agentsecurity_ucore: role=orchestrator_child capability_checked=1
-agentsecurity_ucore: plain_child_orchestrator=1
-agentsecurity_ucore: role=orchestrator capability_checked=1
-agentsecurity_ucore: preinit_index_query=1
-agentsecurity_ucore: legacy_tool_mismatch=1
-agentsecurity_ucore: legacy_param_validation=1 syscall_only=1
-agentsecurity_ucore: role=sentinel capability_checked=1
-agentsecurity_ucore: sentinel spoof_denied=1
-agentsecurity_ucore: role=recovery capability_checked=1
-agentsecurity_ucore: recovery rerun_ok=1 duplicate=1
-agentsecurity_ucore: scoped_rerun=1
-agentsecurity_ucore: scoped_report=1
-agentsecurity_ucore: passed
-agentsecurity_ucore: parent passed
-```
-
-## 当前交付材料
-
-| 材料 | 位置 |
-| --- | --- |
-| 文档索引 | [docs/README.md](docs/README.md) |
-| 文档标准采用说明 | [docs/documentation-standard.md](docs/documentation-standard.md) |
-| 主设计文档 | [docs/design.md](docs/design.md) |
-| 赛题要求追踪表 | [docs/requirements-traceability.md](docs/requirements-traceability.md) |
-| API 与 ABI | [docs/api.md](docs/api.md) |
-| 验证与性能评估 | [docs/verification.md](docs/verification.md) |
-| 测试内容详细说明 | [docs/testing-details.md](docs/testing-details.md) |
-| 演示脚本 | [docs/demo-script.md](docs/demo-script.md) |
-| 任务一细节附录 | [docs/task1-agent-process.md](docs/task1-agent-process.md) |
-| 任务二细节附录 | [docs/task2-agent-call.md](docs/task2-agent-call.md) |
-| 任务三细节附录 | [docs/task3-context-path.md](docs/task3-context-path.md) |
-| 任务四细节附录 | [docs/task4-file-query.md](docs/task4-file-query.md) |
-| 任务五细节附录 | [docs/task5-agent-loop.md](docs/task5-agent-loop.md) |
-| 当前测试记录 | [docs/test-record.md](docs/test-record.md) |
-| 源代码许可 | [LICENSE](LICENSE) |
-| 文档与答辩材料许可 | [DOCUMENTATION_LICENSE.md](DOCUMENTATION_LICENSE.md) |
-| 第三方声明 | [NOTICE](NOTICE) |
-
-## 仍需补充
-
-- 后台线程持续扫描真实目录并自动维护索引；
-- Agent 事件优先级、取消等待和更复杂调度策略；
-- 云端 LLM Gateway；
-- 宿主机可视化大屏；
-- 进展汇报幻灯片；
-- 作品演示视频。
-
-## 许可声明
-
-源代码许可：[GPL-3.0](LICENSE)。
-
-技术文档、汇报幻灯片和演示视频许可：[CC BY-SA 4.0](DOCUMENTATION_LICENSE.md)。
-
-第三方来源和许可说明见 [NOTICE](NOTICE)。
+The later Agent-OS enhanced kernel version should use the same object names, role names, and output contracts so both kernels can run the same demonstration scenario.
