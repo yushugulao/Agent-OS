@@ -245,6 +245,12 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=package.attach_agent_collab;target=rp_agent_run;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_human_review;target=rp_package;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_revision_task;target=rp_runner;status=ok")) return 1;
+	if (rp_host_seed_has("kind=bundle_export") ||
+	    rp_host_seed_has("kind=research_export") ||
+	    rp_host_seed_has("kind=delivery")) {
+		if (!rp_append_file("rp_package", "host_action_export_bundle=ready;source=rp_host_action_seed")) return 1;
+		if (!rp_append_file("rp_package", "host_action_delivery_manifest=ready")) return 1;
+	}
 	if (!rp_append_status("package=ready")) return 1;
 	if (!rp_append_status("datarel=ready")) return 1;
 	if (!rp_append_status("dataver=ready")) return 1;

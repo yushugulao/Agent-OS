@@ -37,6 +37,10 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=reviewer.check_claims;target=rp_review;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=reviewer.multi_round;target=rp_review2;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=reviewer.write_action_items;target=rp_review2;status=ok")) return 1;
+	if (rp_host_seed_has("kind=human_review")) {
+		if (!rp_append_file("rp_review2", "host_action_human_review=usable-review:HOST:1;decision=needs_revision;source=rp_host_action_seed")) return 1;
+		if (!rp_append_file("rp_review2", "host_action_review_note=seeded_review_request_applied")) return 1;
+	}
 	if (!rp_append_status("reviewer=accepted")) return 1;
 	if (!rp_append_status("review2=ready")) return 1;
 	printf("rp_reviewer: claims=8 protocol_checks=5 release_checks=4 rounds=2 status=accepted\n");

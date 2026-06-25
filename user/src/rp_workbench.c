@@ -119,6 +119,13 @@ int main(void)
 			   "file=rp_report_text;kind=report;sha=plain-hash-009\n"
 			   "manifest_status=ready")) return 1;
 
+	if (rp_host_seed_has("kind=workbench_complete") ||
+	    rp_host_seed_has("kind=workbench_advance") ||
+	    rp_host_seed_has("kind=workbench_export")) {
+		if (!rp_append_file("rp_runner", "host_action_workbench=completed;status=ready;source=rp_host_action_seed")) return 1;
+		if (!rp_append_file("rp_runner", "host_action_workbench_next=delivery_manifest_ready")) return 1;
+	}
+
 	if (!rp_append_file("rp_ack", "ack=workbench;msg=research_board;status=ready")) return 1;
 	if (!rp_append_status("workbench=ready")) return 1;
 	if (!rp_append_status("workbench_tasks=ready")) return 1;

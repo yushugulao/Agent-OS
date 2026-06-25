@@ -39,6 +39,12 @@ int main(void)
 	if (!rp_append_file("rp_ack", "ack=writer;msg=5;status=packaged")) return 1;
 	if (!rp_append_file("rp_tool", "tool=writer.assemble_report;target=rp_report;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=writer.apply_revision;target=rp_revision;status=ok")) return 1;
+	if (rp_host_seed_has("kind=revision_task")) {
+		if (!rp_append_file("rp_revision", "host_action_revision_task=created;status=ready;source=rp_host_action_seed")) return 1;
+	}
+	if (rp_host_seed_has("kind=revision_run")) {
+		if (!rp_append_file("rp_revision", "host_action_revision_run=completed;status=completed;source=rp_host_action_seed")) return 1;
+	}
 	if (!rp_append_status("writer=packaged")) return 1;
 	if (!rp_append_status("revision=ready")) return 1;
 	printf("rp_writer: sections=8 citations=9 revisions=3 status=packaged\n");

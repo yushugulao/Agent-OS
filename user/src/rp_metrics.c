@@ -318,6 +318,22 @@ int main(void)
 		if (!rp_append_file("rp_agentcmp", "host_action_compare_requested=1")) return 1;
 		if (!rp_append_file("rp_agentcmp", "host_action_compare_profile=plain_ucore")) return 1;
 	}
+	if (rp_host_seed_has("kind=human_review")) {
+		if (!rp_append_file("rp_agentcmp", "host_action_review_requested=1")) return 1;
+	}
+	if (rp_host_seed_has("kind=revision_task") || rp_host_seed_has("kind=revision_run")) {
+		if (!rp_append_file("rp_agentcmp", "host_action_revision_requested=1")) return 1;
+	}
+	if (rp_host_seed_has("kind=workbench_complete") ||
+	    rp_host_seed_has("kind=workbench_advance") ||
+	    rp_host_seed_has("kind=workbench_export")) {
+		if (!rp_append_file("rp_agentcmp", "host_action_workbench_requested=1")) return 1;
+	}
+	if (rp_host_seed_has("kind=bundle_export") ||
+	    rp_host_seed_has("kind=research_export") ||
+	    rp_host_seed_has("kind=notebook_export")) {
+		if (!rp_append_file("rp_agentcmp", "host_action_export_requested=1")) return 1;
+	}
 	if (!rp_append_file("rp_ack", "ack=metrics;msg=14;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=metrics.measure_plain;target=rp_agentcmp;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=metrics.write_health;target=rp_health;status=ok")) return 1;

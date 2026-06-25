@@ -164,6 +164,12 @@ int main(void)
 	if (rp_host_seed_has("kind=agentcompare")) {
 		if (!rp_append_file("rp_runner", "host_action_compare=plain_ucore;status=ready")) return 1;
 	}
+	if (rp_host_seed_has("kind=host_workflow")) {
+		if (!rp_append_file("rp_runner", "host_action_workflow=executed;status=ready")) return 1;
+	}
+	if (rp_host_seed_has("kind=revision_run")) {
+		if (!rp_append_file("rp_runner", "host_action_revision_run=usable-run:RUN-900-rev2;status=completed")) return 1;
+	}
 	if (!rp_append_file("rp_runner", "real_artifact_items=5")) return 1;
 	if (!rp_append_file("rp_runner", "derived_alignment=rp_artifact:rp_align_table")) return 1;
 	if (!rp_append_file("rp_runner", "derived_metrics=rp_artifact:rp_metrics_json,rp_artifact:rp_gene_counts_csv")) return 1;

@@ -52,16 +52,36 @@ def main() -> int:
                 {
                     "path": "/actions/research/workbench-complete",
                     "payload": {"workbench": "usable-workbench:RUN-900"},
-                }
+                },
+                {
+                    "path": "/actions/research/review",
+                    "payload": {"decision": "needs_revision"},
+                },
+                {
+                    "path": "/actions/research/revision-task",
+                    "payload": {"targets": "methods,chart_caption"},
+                },
+                {
+                    "path": "/actions/research/export-notebook",
+                    "payload": {"format": "ipynb"},
+                },
+                {
+                    "path": "/actions/research/export-bundle",
+                    "payload": {"bundle": "evidence"},
+                },
             ],
         )
         summary = runner.prepare_action_state(loaded, state_dir, run_dir)
 
-        assert summary["actions"] == 3
-        assert summary["accepted"] == 3
+        assert summary["actions"] == 7
+        assert summary["accepted"] == 7
         assert "research_run" in summary["kinds"]
         assert "agentcompare" in summary["kinds"]
         assert "workbench_complete" in summary["kinds"]
+        assert "human_review" in summary["kinds"]
+        assert "revision_task" in summary["kinds"]
+        assert "notebook_export" in summary["kinds"]
+        assert "bundle_export" in summary["kinds"]
 
         next_state = run_dir / "state-next"
         assert (next_state / "rp_input").exists()
@@ -73,6 +93,10 @@ def main() -> int:
         assert "kind=research_run" in queue
         assert "kind=agentcompare" in queue
         assert "kind=workbench_complete" in queue
+        assert "kind=human_review" in queue
+        assert "kind=revision_task" in queue
+        assert "kind=notebook_export" in queue
+        assert "kind=bundle_export" in queue
         assert "run_id=RUN-999" in queue
         assert "workbench=usable-workbench:RUN-900" in queue
         assert "status=ready" in queue
@@ -95,7 +119,7 @@ def main() -> int:
 
         records = runner.write_seed_header(next_state, root)
         header = read(root / "user" / "build" / "generated" / "rp_host_action_seed.h")
-        assert records == 3
+        assert records == 7
         assert "#define RP_HOST_ACTION_SEED" in header
         assert "kind=research_run" in header
         assert "\\n" in header

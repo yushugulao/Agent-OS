@@ -150,6 +150,42 @@ int main(void)
 		ok = ok && require_file_token("rp_agentcmp", "host_action_compare_requested=1");
 		ok = ok && require_file_token("rp_agentcmp", "host_action_compare_profile=plain_ucore");
 	}
+	if (rp_host_seed_has("kind=human_review")) {
+		ok = ok && require_file_token("rp_review2", "host_action_human_review=usable-review:HOST:1");
+		ok = ok && require_file_token("rp_agentcmp", "host_action_review_requested=1");
+		ok = ok && require_file_token("rp_actionio", "host_action_human_review=1");
+	}
+	if (rp_host_seed_has("kind=revision_task")) {
+		ok = ok && require_file_token("rp_revision", "host_action_revision_task=created");
+		ok = ok && require_file_token("rp_agentcmp", "host_action_revision_requested=1");
+		ok = ok && require_file_token("rp_actionio", "host_action_revision=1");
+	}
+	if (rp_host_seed_has("kind=revision_run")) {
+		ok = ok && require_file_token("rp_revision", "host_action_revision_run=completed");
+		ok = ok && require_file_token("rp_runner", "host_action_revision_run=usable-run:RUN-900-rev2");
+		ok = ok && require_file_token("rp_actionio", "host_action_revision=1");
+	}
+	if (rp_host_seed_has("kind=workbench_complete") ||
+	    rp_host_seed_has("kind=workbench_advance") ||
+	    rp_host_seed_has("kind=workbench_export")) {
+		ok = ok && require_file_token("rp_runner", "host_action_workbench=completed");
+		ok = ok && require_file_token("rp_agentcmp", "host_action_workbench_requested=1");
+		ok = ok && require_file_token("rp_actionio", "host_action_workbench=1");
+	}
+	if (rp_host_seed_has("kind=bundle_export") ||
+	    rp_host_seed_has("kind=research_export") ||
+	    rp_host_seed_has("kind=delivery")) {
+		ok = ok && require_file_token("rp_package", "host_action_export_bundle=ready");
+		ok = ok && require_file_token("rp_actionio", "host_action_export=1");
+	}
+	if (rp_host_seed_has("kind=notebook_export")) {
+		ok = ok && require_file_token("rp_nbexec", "host_action_notebook_export=ready");
+		ok = ok && require_file_token("rp_agentcmp", "host_action_export_requested=1");
+		ok = ok && require_file_token("rp_actionio", "host_action_export=1");
+	}
+	if (rp_host_seed_count() > 0) {
+		ok = ok && require_file_token("rp_web_bundle", "host_action_state_files=rp_input,rp_runner,rp_review2,rp_revision,rp_package,rp_nbexec,rp_agentcmp");
+	}
 	ok = ok && require_file_token("rp_runner", "workbench=usable-workbench:RUN-900:plain-ucore");
 	ok = ok && require_file_token("rp_runner", "workbench_tasks=9");
 	ok = ok && require_file_token("rp_runner", "workbench_export=usable-workbench-export:RUN-900:1");

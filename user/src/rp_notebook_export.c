@@ -24,6 +24,9 @@ int main(void)
 	if (!rp_append_file("rp_nbexec", "export=notebook_json;path=reproducible-analysis.ipynb;status=ready")) return 1;
 	if (!rp_append_file("rp_nbexec", "export=notebook_markdown;path=manual-executable-analysis.md;status=ready")) return 1;
 	if (!rp_append_file("rp_nbexec", "download=repro_notebook;path=reproducible-analysis.ipynb;status=ready")) return 1;
+	if (rp_host_seed_has("kind=notebook_export")) {
+		if (!rp_append_file("rp_nbexec", "host_action_notebook_export=ready;path=reproducible-analysis.ipynb;source=rp_host_action_seed")) return 1;
+	}
 	if (!rp_append_file("rp_repro", "notebook_export=rp_nbexec;exports=2;downloadable_units=4;download=reproducible-analysis.ipynb")) return 1;
 	if (!rp_append_file("rp_ack", "ack=notebook_export;msg=notebook;status=ready")) return 1;
 	if (!rp_append_status("notebook_export=ready")) return 1;

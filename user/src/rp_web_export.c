@@ -619,12 +619,39 @@ int main(void)
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=agentcompare"))) {
 			if (!rp_append_file("rp_actionio", "host_action_agentcompare=1")) return 1;
 		}
+		if ((host_action_seeded && text_contains_silent(host_action_seed, "kind=human_review")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=human_review"))) {
+			if (!rp_append_file("rp_actionio", "host_action_human_review=1")) return 1;
+		}
+		if ((host_action_seeded && text_contains_silent(host_action_seed, "kind=revision_task")) ||
+		    (host_action_seeded && text_contains_silent(host_action_seed, "kind=revision_run")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=revision_task")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=revision_run"))) {
+			if (!rp_append_file("rp_actionio", "host_action_revision=1")) return 1;
+		}
+		if ((host_action_seeded && text_contains_silent(host_action_seed, "kind=workbench_complete")) ||
+		    (host_action_seeded && text_contains_silent(host_action_seed, "kind=workbench_advance")) ||
+		    (host_action_seeded && text_contains_silent(host_action_seed, "kind=workbench_export")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_complete")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_advance")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_export"))) {
+			if (!rp_append_file("rp_actionio", "host_action_workbench=1")) return 1;
+		}
+		if ((host_action_seeded && text_contains_silent(host_action_seed, "kind=bundle_export")) ||
+		    (host_action_seeded && text_contains_silent(host_action_seed, "kind=research_export")) ||
+		    (host_action_seeded && text_contains_silent(host_action_seed, "kind=notebook_export")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=bundle_export")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=research_export")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=notebook_export"))) {
+			if (!rp_append_file("rp_actionio", "host_action_export=1")) return 1;
+		}
 		if (!rp_append_file("rp_web_bundle", line)) return 1;
 		if (host_action_seeded) {
 			if (!rp_append_file("rp_web_bundle", "host_action_source=rp_host_action_seed")) return 1;
 		} else if (!rp_append_file("rp_web_bundle", "host_action_source=rp_host_action_inbox")) {
 			return 1;
 		}
+		if (!rp_append_file("rp_web_bundle", "host_action_state_files=rp_input,rp_runner,rp_review2,rp_revision,rp_package,rp_nbexec,rp_agentcmp")) return 1;
 		if (!rp_append_status("host_reader_actions=ready")) return 1;
 		printf("rp_web_export: host_reader_actions=%d\n", host_actions);
 	}
