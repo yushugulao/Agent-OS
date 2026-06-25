@@ -17,15 +17,22 @@ int main(void)
 			   "records=2\n"
 			   "bytes=96\n"
 			   "checksum=input-demo-042\n"
-			   "custom_request=usable-research\n"
+			   "custom_requests=3\n"
 			   "custom_run=usable-run:RUN-900\n"
+			   "custom_run_2=usable-run:RUN-901\n"
+			   "custom_run_3=usable-run:RUN-902\n"
 			   "custom_title=Browser started study\n"
 			   "custom_question=Can this platform run a custom research task?\n"
 			   "custom_provider=template\n"
 			   "custom_dataset_rows=3\n"
+			   "custom_dataset_rows_total=9\n"
 			   "custom_row=S1,control,12\n"
 			   "custom_row=S2,treatment,19\n"
 			   "custom_row=S3,treatment,21\n"
+			   "custom_row_2=S4,control,8\n"
+			   "custom_row_2=S5,treatment,13\n"
+			   "custom_row_3=S6,control,30\n"
+			   "custom_row_3=S7,treatment,28\n"
 			   "custom_outputs=stage_dag,analysis,report,review,export\n"
 			   "status=ready\n")) {
 		return 1;
@@ -123,6 +130,6 @@ int main(void)
 	if (!rp_append_status("stage_dag=ready")) return 1;
 	if (!rp_append_status("artifact_ops=ready")) return 1;
 	if (!rp_append_status("research_request=ready")) return 1;
-	printf("rp_artifact_ops: inputs=2 stages=5 retries=1 artifacts=4 custom_request=1 status=ready\n");
+	printf("rp_artifact_ops: inputs=2 stages=5 retries=1 artifacts=4 custom_requests=3 status=ready\n");
 	return 0;
 }

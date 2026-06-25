@@ -14,6 +14,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentcmp", "status=ready");
 	ok = ok && rp_file_contains("rp_dataset_collection", "items=4");
 	ok = ok && rp_file_contains("rp_input", "custom_run=usable-run:RUN-900");
+	ok = ok && rp_file_contains("rp_input", "custom_requests=3");
+	ok = ok && rp_file_contains("rp_runner", "custom_runs=3");
 	ok = ok && rp_file_contains("rp_runner", "custom_status=ok");
 	ok = ok && rp_file_contains("rp_sreg", "samples=8");
 	ok = ok && rp_file_contains("rp_instr", "instruments=4");
@@ -29,7 +31,7 @@ int main(void)
 			   "post_routes=5\n"
 			   "route=/;payload=rp_api_home;status=ready\n"
 			   "route=/run/RUN-042;payload=rp_api_run;status=ready\n"
-			   "route=/research/usable-run:RUN-900;payload=rp_uresrun;status=ready\n"
+			   "route=/research/{run_id};payload=rp_uresrun;status=ready\n"
 			   "route=/agents;payload=rp_api_agents;status=ready\n"
 			   "route=/evidence;payload=rp_api_evidence;status=ready\n"
 			   "route=/compare;payload=rp_api_compare;status=ready\n"
@@ -53,6 +55,7 @@ int main(void)
 			   "title=Research Agent Platform\n"
 			   "run_id=RUN-042\n"
 			   "custom_run=usable-run:RUN-900\n"
+			   "custom_runs=3\n"
 			   "cards=run,custom_research,agents,evidence,data,llm_relay,compare\n"
 			   "source=rp_ui_home\n"
 			   "status=ready\n")) {
@@ -62,6 +65,7 @@ int main(void)
 			   "api=run-detail\n"
 			   "run_id=RUN-042\n"
 			   "custom_research=rp_runner\n"
+			   "custom_research_runs=3\n"
 			   "workflow=lab-gene-x\n"
 			   "stages=5\n"
 			   "failed_stage=align\n"
@@ -208,19 +212,19 @@ int main(void)
 			   "request=1;path=/actions/host-workflow/run;run_id=RUN-042;inject_failure=1;use_cache=1\n"
 			   "request=2;path=/actions/host-workflow/export;workflow_run_id=RUN-042\n"
 			   "request=3;path=/actions/agentcompare/run;profile=plain_ucore\n"
-			   "request=4;path=/actions/research/run;provider=template;source_request=rp_input;dataset_file=rp_input\n"
+			   "request=4;path=/actions/research/run;provider=template;source_request=rp_input;dataset_file=rp_input;custom_runs=3\n"
 			   "request=5;path=/actions/research/export;run_id=usable-run:RUN-900\n"
 			   "responses=5\n"
 			   "response=1;status=303;location=/runs/RUN-042;effect=host_workflow_run\n"
 			   "response=2;status=303;location=/runs/RUN-042;effect=host_workflow_export\n"
 			   "response=3;status=303;location=/compare;effect=agentcompare_run\n"
-			   "response=4;status=303;location=/research/usable-run:RUN-900;effect=usable_research_run\n"
+			   "response=4;status=303;location=/research/usable-run:RUN-900;effect=usable_research_run;generated_runs=3\n"
 			   "response=5;status=303;location=/research/usable-run:RUN-900;effect=usable_research_export\n"
 			   "actions=5\n"
 			   "completed=5\n"
 			   "failed=0\n"
 			   "redirects=5\n"
-			   "state_writes=9\n"
+			   "state_writes=11\n"
 			   "audit_records=5\n"
 			   "host_export=review_html\n"
 			   "host_contains=Stage DAG,Agent Decisions,Custom Research,Comparison Metrics\n"
@@ -231,19 +235,27 @@ int main(void)
 		return 1;
 	}
 	if (!rp_write_file("rp_uresrun",
+			   "runs=3\n"
 			   "run_id=usable-run:RUN-900\n"
+			   "run_id_2=usable-run:RUN-901\n"
+			   "run_id_3=usable-run:RUN-902\n"
 			   "source_request=rp_input\n"
 			   "source_dataset=rp_input\n"
 			   "source_run=rp_runner\n"
 			   "title=Browser started study\n"
+			   "title_2=Second browser study\n"
+			   "title_3=Contrasting browser study\n"
 			   "question=Can this platform run a custom research task?\n"
 			   "provider=template\n"
 			   "dataset_rows=3\n"
+			   "dataset_rows_total=9\n"
 			   "stages=5\n"
-			   "artifacts=12\n"
-			   "agent_messages=7\n"
-			   "agent_decisions=5\n"
+			   "artifacts=36\n"
+			   "agent_messages=21\n"
+			   "agent_decisions=15\n"
 			   "analysis=mean_control:12,mean_treatment:20,stronger:treatment\n"
+			   "analysis_2=mean_control:8,mean_treatment:13,stronger:treatment\n"
+			   "analysis_3=mean_control:30,mean_treatment:28,stronger:control\n"
 			   "export=review_html\n"
 			   "export_sections=6\n"
 			   "contains=Stage DAG,Agent Decisions,Artifacts,LLM Relay\n"
@@ -261,6 +273,7 @@ int main(void)
 			   "runner_files=5\n"
 			   "data_pipeline_files=6\n"
 			   "custom_research_files=1\n"
+			   "custom_research_runs=3\n"
 			   "research_service_files=25\n"
 			   "llm_relay_files=5\n"
 			   "agent_records=5\n"

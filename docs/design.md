@@ -24,7 +24,7 @@ The host-side research Agent platform is moving toward real HTTP UI, real artifa
 - UI pages become exported state files and Host Web/API payload files for home, run detail, Agent detail, evidence detail, artifact, and comparison views.
 - HTTP POST actions become ordinary request and response files for host workflow execution, host workflow export, AgentCompare execution, custom research execution, and custom research export.
 - Artifact operations become reads from input files and writes to intermediate files, reports, logs, and chart-data files.
-- Custom research tasks are represented inside existing state files: `rp_input` carries the request and small CSV dataset, while `rp_runner` appends the derived custom run, stages, analysis, report, review, and export result.
+- Custom research tasks are represented inside existing state files: `rp_input` carries three requests and nine small CSV-style rows, while `rp_runner` appends three derived custom runs, stages, analysis, report, review, and export result.
 - Data pipeline behavior becomes ordinary files for input scanning, dataset snapshots, data preview, quality checks, transformations, and dataset collection export.
 - Bio, lab resource, publication, knowledge, and runtime service behavior becomes ordinary files with short names that fit the uCore root directory entry size.
 - Workflow runner behavior becomes stage records with dependencies, failure, retry, cache, and log fields.
@@ -262,7 +262,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_actionio` | Host Web/API export | test suite, compare, orchestrator | compact request, response, redirect, host export, and AgentCompare action record |
 | `rp_uresrun` | Host Web/API export | test suite, compare, orchestrator | usable research run and export result record derived from the request and dataset embedded in existing uCore state files |
 | `rp_web_bundle` | Host Web/API export | test suite, compare, orchestrator | bundle summary tying routes, API payloads, POST action payloads, UI pages, runner files, custom research fields, research service files, and relay files together |
-| `rp_tests` | test suite | compare, orchestrator | 132 user-space checks over catalog, data pipeline, service surface records, workflow, artifacts, workflow runner files, custom research fields, Agent collaboration, UI data, Host Web/API export files, POST action records, LLM relay, AgentCompare, and consistency records |
+| `rp_tests` | test suite | compare, orchestrator | 142 user-space checks over catalog, data pipeline, service surface records, workflow, artifacts, workflow runner files, custom research fields, Agent collaboration, UI data, Host Web/API export files, POST action records, LLM relay, AgentCompare, and consistency records |
 | `rp_compare` | compare | orchestrator | plain-kernel execution summary |
 
 This is intentionally implemented without new syscalls. It uses only `open`, `read`, `write`, `close`, `fork`, `exec`, and `waitpid`.

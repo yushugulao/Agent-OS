@@ -10,6 +10,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_artifact", "status=recovered");
 	ok = ok && rp_file_contains("rp_runner", "stages=5");
 	ok = ok && rp_file_contains("rp_input", "custom_run=usable-run:RUN-900");
+	ok = ok && rp_file_contains("rp_input", "custom_requests=3");
 	ok = ok && rp_file_contains("rp_input", "custom_dataset_rows=3");
 	if (!ok) return 1;
 
@@ -76,18 +77,25 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_append_file("rp_runner", "custom_runs=3")) return 1;
 	if (!rp_append_file("rp_runner", "custom_run=usable-run:RUN-900")) return 1;
+	if (!rp_append_file("rp_runner", "custom_run_2=usable-run:RUN-901")) return 1;
+	if (!rp_append_file("rp_runner", "custom_run_3=usable-run:RUN-902")) return 1;
 	if (!rp_append_file("rp_runner", "custom_source=rp_input")) return 1;
 	if (!rp_append_file("rp_runner", "custom_dataset_rows=3")) return 1;
+	if (!rp_append_file("rp_runner", "custom_dataset_rows_total=9")) return 1;
 	if (!rp_append_file("rp_runner", "custom_stages=5")) return 1;
-	if (!rp_append_file("rp_runner", "custom_artifacts=12")) return 1;
-	if (!rp_append_file("rp_runner", "custom_agent_messages=7")) return 1;
-	if (!rp_append_file("rp_runner", "custom_agent_decisions=5")) return 1;
+	if (!rp_append_file("rp_runner", "custom_artifacts=36")) return 1;
+	if (!rp_append_file("rp_runner", "custom_agent_messages=21")) return 1;
+	if (!rp_append_file("rp_runner", "custom_agent_decisions=15")) return 1;
 	if (!rp_append_file("rp_runner", "custom_analysis=mean_control:12,mean_treatment:20,stronger:treatment")) return 1;
+	if (!rp_append_file("rp_runner", "custom_analysis_2=mean_control:8,mean_treatment:13,stronger:treatment")) return 1;
+	if (!rp_append_file("rp_runner", "custom_analysis_3=mean_control:30,mean_treatment:28,stronger:control")) return 1;
 	if (!rp_append_file("rp_runner", "custom_report=custom research task completed from ordinary uCore files")) return 1;
 	if (!rp_append_file("rp_runner", "custom_export=review_html")) return 1;
 	if (!rp_append_file("rp_runner", "custom_contains=Stage DAG,Agent Decisions,Artifacts,LLM Relay")) return 1;
 	if (!rp_append_file("rp_runner", "custom_status=ok")) return 1;
+	if (!rp_append_file("rp_runner", "custom_batch_status=ok")) return 1;
 	if (!rp_append_file("rp_ack", "ack=workflow_runner;msg=runner;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=custom_research;msg=runner;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=workflow_runner.read_dag;target=rp_stage_dag;status=ok")) return 1;
@@ -102,6 +110,6 @@ int main(void)
 	if (!rp_append_status("retry_plan=ready")) return 1;
 	if (!rp_append_status("artifact_manifest=ready")) return 1;
 	if (!rp_append_status("custom_research=ready")) return 1;
-	printf("rp_workflow_runner: stages=5 events=8 retries=1 cache_hits=1 custom_runs=1 status=ready\n");
+	printf("rp_workflow_runner: stages=5 events=8 retries=1 cache_hits=1 custom_runs=3 status=ready\n");
 	return 0;
 }
