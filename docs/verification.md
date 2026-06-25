@@ -73,6 +73,7 @@ rp_writer: sections=6 citations=9 response_items=3 status=packaged
 rp_repair: failed_stage=align action=minimal_rerun status=recovered
 rp_auditor: provenance=verified release=ready package=ready status=passed
 research_platform_orchestrator: roles_ok=7 roles_total=7
+research_platform_orchestrator: state_ok=1
 research_platform_orchestrator: passed
 ```
 
@@ -100,5 +101,6 @@ This first native uCore version validates:
 - catalog search,
 - a complete research run simulation with one failed stage repaired in user space.
 - multi-process role execution with seven ordinary uCore user programs.
+- ordinary file-backed state exchange across role programs.
 
 It does not use Agent-OS kernel features. That is intentional for this plain-kernel baseline.

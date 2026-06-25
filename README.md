@@ -49,6 +49,19 @@ user/src/rp_auditor.c
 
 It uses ordinary `fork`, `exec`, and `waitpid`. This provides a plain-kernel baseline for the later Agent-OS multi-Agent version.
 
+The role programs also exchange state through ordinary root-file-system files:
+
+- `rp_plan`
+- `rp_lit`
+- `rp_data`
+- `rp_review`
+- `rp_report`
+- `rp_fix`
+- `rp_audit`
+- `rp_status`
+
+Each role validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status` and `rp_audit` after all children exit, then prints `state_ok=1`.
+
 The program prints:
 
 ```text
@@ -93,6 +106,7 @@ rp_writer: sections=6 citations=9 response_items=3 status=packaged
 rp_repair: failed_stage=align action=minimal_rerun status=recovered
 rp_auditor: provenance=verified release=ready package=ready status=passed
 research_platform_orchestrator: roles_ok=7 roles_total=7
+research_platform_orchestrator: state_ok=1
 research_platform_orchestrator: passed
 ```
 
@@ -112,10 +126,10 @@ No output means the directories match.
 
 ## Next Work
 
-The current native program proves that the plain uCore kernel can boot and run a research-platform-shaped user process with the same catalog scale as the pure Python platform. Further migration work should move more behavior from embedded tables into active user-space services:
+The current native programs prove that the plain uCore kernel can boot and run a research-platform-shaped catalog process plus a multi-process role workflow with ordinary file-backed state. Further migration work should move more behavior from embedded tables into active user-space services:
 
 - Persistent platform state files in the uCore root file system.
-- Expand the planner, retriever, analyst, reviewer, writer, repair, and auditor programs beyond status output.
+- Expand the planner, retriever, analyst, reviewer, writer, repair, and auditor programs beyond the current fixed records.
 - A user-space message protocol using only unchanged uCore syscalls.
 - A host LLM gateway bridge exposed as ordinary input/output files or console packets.
 - More executable checks for workflow portability, evidence tracing, release review, and AgentCompare comparison.

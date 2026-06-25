@@ -42,6 +42,23 @@ The role programs add an executable multi-process shape:
 
 These programs do not require Agent syscalls. They are ordinary uCore processes that make the plain-kernel baseline closer to the original multi-role research Agent platform.
 
+## User-Space State Protocol
+
+The orchestrator and role programs use ordinary files as their state protocol:
+
+| File | Writer | Reader | Meaning |
+| --- | --- | --- | --- |
+| `rp_plan` | planner | retriever, analyst, auditor | run id, workflow, assignments, repair policy |
+| `rp_lit` | retriever | reviewer, auditor | literature count and evidence links |
+| `rp_data` | analyst | reviewer, repair, auditor | datasets, statistics, figures, failed stage |
+| `rp_review` | reviewer | writer, auditor | claim review and release decision |
+| `rp_report` | writer | auditor | report sections, citations, response items |
+| `rp_fix` | repair | auditor | repaired stage and generated artifact |
+| `rp_audit` | auditor | orchestrator | final provenance, release, package status |
+| `rp_status` | all role programs | orchestrator | role-level status summary |
+
+This is intentionally implemented without new syscalls. It uses only `open`, `read`, `write`, `close`, `fork`, `exec`, and `waitpid`.
+
 ## Upstream Kernel Guarantee
 
 The `os`, `nfs`, and `scripts` directories are copied from the upstream uCore 2025S source. Kernel verification uses directory comparison rather than source comments.
@@ -51,6 +68,7 @@ The only implementation changes needed for the first native platform step are in
 - `user/src/research_platform_ucore_plain.c`
 - `user/src/research_platform_orchestrator.c`
 - `user/src/rp_*.c`
+- `user/include/research_platform_state.h`
 - `user/Makefile`
 - `user/src/usershell.c`
 

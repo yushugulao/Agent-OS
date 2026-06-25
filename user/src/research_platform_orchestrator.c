@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <research_platform_state.h>
 
 static const char *PROGRAMS[] = {
 	"rp_planner",
@@ -46,6 +47,20 @@ int main(void)
 	}
 	printf("research_platform_orchestrator: roles_ok=%d roles_total=%d\n", ok, total);
 	if (ok != total) {
+		printf("research_platform_orchestrator: failed\n");
+		return 1;
+	}
+	int state_ok = 1;
+	state_ok = state_ok && rp_file_contains("rp_status", "planner=planned");
+	state_ok = state_ok && rp_file_contains("rp_status", "retriever=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "analyst=ready");
+	state_ok = state_ok && rp_file_contains("rp_status", "reviewer=accepted");
+	state_ok = state_ok && rp_file_contains("rp_status", "writer=packaged");
+	state_ok = state_ok && rp_file_contains("rp_status", "repair=recovered");
+	state_ok = state_ok && rp_file_contains("rp_status", "auditor=passed");
+	state_ok = state_ok && rp_file_contains("rp_audit", "status=passed");
+	printf("research_platform_orchestrator: state_ok=%d\n", state_ok);
+	if (!state_ok) {
 		printf("research_platform_orchestrator: failed\n");
 		return 1;
 	}
