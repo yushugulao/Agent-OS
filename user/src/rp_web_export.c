@@ -13,6 +13,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_llm_hostreq", "template_mode=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "status=ready");
 	ok = ok && rp_file_contains("rp_dataset_collection", "items=4");
+	ok = ok && rp_file_contains("rp_input", "custom_run=usable-run:RUN-900");
+	ok = ok && rp_file_contains("rp_runner", "custom_status=ok");
 	ok = ok && rp_file_contains("rp_sreg", "samples=8");
 	ok = ok && rp_file_contains("rp_instr", "instruments=4");
 	ok = ok && rp_file_contains("rp_resrev", "review_items=10");
@@ -22,11 +24,12 @@ int main(void)
 
 	if (!rp_write_file("rp_web_routes",
 			   "service=host-web-ui\n"
-			   "routes=17\n"
-			   "get_routes=12\n"
+			   "routes=18\n"
+			   "get_routes=13\n"
 			   "post_routes=5\n"
 			   "route=/;payload=rp_api_home;status=ready\n"
 			   "route=/run/RUN-042;payload=rp_api_run;status=ready\n"
+			   "route=/research/usable-run:RUN-900;payload=rp_uresrun;status=ready\n"
 			   "route=/agents;payload=rp_api_agents;status=ready\n"
 			   "route=/evidence;payload=rp_api_evidence;status=ready\n"
 			   "route=/compare;payload=rp_api_compare;status=ready\n"
@@ -49,7 +52,8 @@ int main(void)
 			   "api=home\n"
 			   "title=Research Agent Platform\n"
 			   "run_id=RUN-042\n"
-			   "cards=run,agents,evidence,data,llm_relay,compare\n"
+			   "custom_run=usable-run:RUN-900\n"
+			   "cards=run,custom_research,agents,evidence,data,llm_relay,compare\n"
 			   "source=rp_ui_home\n"
 			   "status=ready\n")) {
 		return 1;
@@ -57,6 +61,7 @@ int main(void)
 	if (!rp_write_file("rp_api_run",
 			   "api=run-detail\n"
 			   "run_id=RUN-042\n"
+			   "custom_research=rp_runner\n"
 			   "workflow=lab-gene-x\n"
 			   "stages=5\n"
 			   "failed_stage=align\n"
@@ -203,7 +208,7 @@ int main(void)
 			   "request=1;path=/actions/host-workflow/run;run_id=RUN-042;inject_failure=1;use_cache=1\n"
 			   "request=2;path=/actions/host-workflow/export;workflow_run_id=RUN-042\n"
 			   "request=3;path=/actions/agentcompare/run;profile=plain_ucore\n"
-			   "request=4;path=/actions/research/run;provider=template;dataset=inline\n"
+			   "request=4;path=/actions/research/run;provider=template;source_request=rp_input;dataset_file=rp_input\n"
 			   "request=5;path=/actions/research/export;run_id=usable-run:RUN-900\n"
 			   "responses=5\n"
 			   "response=1;status=303;location=/runs/RUN-042;effect=host_workflow_run\n"
@@ -215,10 +220,10 @@ int main(void)
 			   "completed=5\n"
 			   "failed=0\n"
 			   "redirects=5\n"
-			   "state_writes=8\n"
+			   "state_writes=9\n"
 			   "audit_records=5\n"
 			   "host_export=review_html\n"
-			   "host_contains=Stage DAG,Agent Decisions,Comparison Metrics\n"
+			   "host_contains=Stage DAG,Agent Decisions,Custom Research,Comparison Metrics\n"
 			   "compare_runs=1\n"
 			   "passed_cases=3\n"
 			   "metrics_case=user_on_plain_ucore_real_artifacts\n"
@@ -227,13 +232,18 @@ int main(void)
 	}
 	if (!rp_write_file("rp_uresrun",
 			   "run_id=usable-run:RUN-900\n"
+			   "source_request=rp_input\n"
+			   "source_dataset=rp_input\n"
+			   "source_run=rp_runner\n"
 			   "title=Browser started study\n"
 			   "question=Can this platform run a custom research task?\n"
 			   "provider=template\n"
-			   "dataset_rows=2\n"
+			   "dataset_rows=3\n"
 			   "stages=5\n"
 			   "artifacts=12\n"
 			   "agent_messages=7\n"
+			   "agent_decisions=5\n"
+			   "analysis=mean_control:12,mean_treatment:20,stronger:treatment\n"
 			   "export=review_html\n"
 			   "export_sections=6\n"
 			   "contains=Stage DAG,Agent Decisions,Artifacts,LLM Relay\n"
@@ -242,14 +252,15 @@ int main(void)
 	}
 	if (!rp_write_file("rp_web_bundle",
 			   "bundle=host-web-ui\n"
-			   "routes=17\n"
-			   "get_routes=12\n"
+			   "routes=18\n"
+			   "get_routes=13\n"
 			   "post_routes=5\n"
-			   "api_payloads=13\n"
+			   "api_payloads=14\n"
 			   "action_payloads=1\n"
 			   "source_pages=5\n"
 			   "runner_files=5\n"
 			   "data_pipeline_files=6\n"
+			   "custom_research_files=1\n"
 			   "research_service_files=25\n"
 			   "llm_relay_files=5\n"
 			   "agent_records=5\n"
@@ -289,6 +300,6 @@ int main(void)
 	if (!rp_append_status("actionio=ready")) return 1;
 	if (!rp_append_status("usable_research=ready")) return 1;
 	if (!rp_append_status("action_exports=ready")) return 1;
-	printf("rp_web_export: routes=17 api_payloads=13 actions=5 bundle=ready status=ready\n");
+	printf("rp_web_export: routes=18 api_payloads=14 actions=5 bundle=ready status=ready\n");
 	return 0;
 }

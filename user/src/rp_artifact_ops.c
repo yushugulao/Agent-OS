@@ -17,6 +17,16 @@ int main(void)
 			   "records=2\n"
 			   "bytes=96\n"
 			   "checksum=input-demo-042\n"
+			   "custom_request=usable-research\n"
+			   "custom_run=usable-run:RUN-900\n"
+			   "custom_title=Browser started study\n"
+			   "custom_question=Can this platform run a custom research task?\n"
+			   "custom_provider=template\n"
+			   "custom_dataset_rows=3\n"
+			   "custom_row=S1,control,12\n"
+			   "custom_row=S2,treatment,19\n"
+			   "custom_row=S3,treatment,21\n"
+			   "custom_outputs=stage_dag,analysis,report,review,export\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -100,6 +110,7 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=artifact_ops;msg=artifact;status=ready")) return 1;
+	if (!rp_append_file("rp_ack", "ack=research_request;msg=input;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_input;target=rp_input;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=artifact_ops.read_input;target=rp_input_fastq;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_dag;target=rp_stage_dag;status=ok")) return 1;
@@ -111,6 +122,7 @@ int main(void)
 	if (!rp_append_status("runner=ready")) return 1;
 	if (!rp_append_status("stage_dag=ready")) return 1;
 	if (!rp_append_status("artifact_ops=ready")) return 1;
-	printf("rp_artifact_ops: inputs=2 stages=5 retries=1 artifacts=4 status=ready\n");
+	if (!rp_append_status("research_request=ready")) return 1;
+	printf("rp_artifact_ops: inputs=2 stages=5 retries=1 artifacts=4 custom_request=1 status=ready\n");
 	return 0;
 }

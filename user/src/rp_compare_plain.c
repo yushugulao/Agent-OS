@@ -162,10 +162,17 @@ int main(void)
 	ok = ok && rp_file_contains("rp_ui_agent", "page=agent-detail");
 	ok = ok && rp_file_contains("rp_ui_evidence", "page=evidence-detail");
 	ok = ok && rp_file_contains("rp_ui_compare", "page=compare-metrics");
-	ok = ok && rp_file_contains("rp_web_routes", "routes=17");
+	ok = ok && rp_file_contains("rp_input", "custom_run=usable-run:RUN-900");
+	ok = ok && rp_file_contains("rp_input", "custom_dataset_rows=3");
+	ok = ok && rp_file_contains("rp_runner", "custom_source=rp_input");
+	ok = ok && rp_file_contains("rp_runner", "custom_agent_decisions=5");
+	ok = ok && rp_file_contains("rp_web_routes", "routes=18");
+	ok = ok && rp_file_contains("rp_web_routes", "get_routes=13");
 	ok = ok && rp_file_contains("rp_web_routes", "post_routes=5");
 	ok = ok && rp_file_contains("rp_api_home", "api=home");
+	ok = ok && rp_file_contains("rp_api_home", "custom_run=usable-run:RUN-900");
 	ok = ok && rp_file_contains("rp_api_run", "runner_exec_files=5");
+	ok = ok && rp_file_contains("rp_api_run", "custom_research=rp_runner");
 	ok = ok && rp_file_contains("rp_api_agents", "agents=7");
 	ok = ok && rp_file_contains("rp_api_evidence", "provenance_paths=3");
 	ok = ok && rp_file_contains("rp_api_compare", "workflow_runner_files=5");
@@ -180,12 +187,15 @@ int main(void)
 	ok = ok && rp_file_contains("rp_actionio", "requests=5");
 	ok = ok && rp_file_contains("rp_actionio", "responses=5");
 	ok = ok && rp_file_contains("rp_actionio", "completed=5");
+	ok = ok && rp_file_contains("rp_actionio", "dataset_file=rp_input");
 	ok = ok && rp_file_contains("rp_uresrun", "artifacts=12");
+	ok = ok && rp_file_contains("rp_uresrun", "dataset_rows=3");
 	ok = ok && rp_file_contains("rp_uresrun", "LLM Relay");
 	ok = ok && rp_file_contains("rp_actionio", "Stage DAG");
 	ok = ok && rp_file_contains("rp_actionio", "passed_cases=3");
-	ok = ok && rp_file_contains("rp_web_bundle", "api_payloads=13");
-	ok = ok && rp_file_contains("rp_tests", "tests=122");
+	ok = ok && rp_file_contains("rp_web_bundle", "api_payloads=14");
+	ok = ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
+	ok = ok && rp_file_contains("rp_tests", "tests=132");
 	ok = ok && rp_file_contains("rp_tests", "status=passed");
 	ok = ok && rp_file_contains("rp_ack", "ack=consistency;msg=22;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=consistency.check_backend");
@@ -207,7 +217,7 @@ int main(void)
 	if (!ok) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
-	if (ack_count < 37 || tool_count < 140) {
+	if (ack_count < 39 || tool_count < 140) {
 		printf("rp_compare_plain: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		return 1;
 	}
@@ -218,7 +228,7 @@ int main(void)
 			   "objects=500\n"
 			   "programs=39\n"
 			   "state_files=169\n"
-			   "message_acks=37\n"
+			   "message_acks=39\n"
 			   "tool_events=140\n"
 			   "consistency_checks=86\n"
 			   "runner_stages=5\n"
@@ -235,15 +245,17 @@ int main(void)
 			   "agent_roles=7\n"
 			   "collaboration_decisions=8\n"
 			   "ui_pages=5\n"
-			   "web_routes=17\n"
-			   "web_api_payloads=13\n"
+			   "custom_research_runs=1\n"
+			   "custom_research_files=1\n"
+			   "web_routes=18\n"
+			   "web_api_payloads=14\n"
 			   "web_action_routes=5\n"
 			   "web_action_outputs=2\n"
-			   "test_cases=122\n"
+			   "test_cases=132\n"
 			   "status=ready\n")) {
 		return 1;
 	}
 	if (!rp_append_status("compare=ready")) return 1;
-	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=39 state_files=169 acks=37 tools=140 status=ready\n");
+	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=39 state_files=169 acks=39 tools=140 status=ready\n");
 	return 0;
 }
