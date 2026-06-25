@@ -36,6 +36,18 @@ int main(void)
 	ok = ok && require_file_token("rp_stage_dag", "failed_stage=align");
 	ok = ok && require_file_token("rp_stage_log", "first_attempt status=failed");
 	ok = ok && require_file_token("rp_artifact", "status=recovered");
+	ok = ok && require_file_token("rp_artifact", "section=rp_normalized_fastq");
+	ok = ok && require_file_token("rp_artifact", "normalized_read=RUN-042-read-2;sequence=ACGTTCGTACGA");
+	ok = ok && require_file_token("rp_artifact", "section=rp_align_table");
+	ok = ok && require_file_token("rp_artifact", "align_row=RUN-042-read-2;diffs=2");
+	ok = ok && require_file_token("rp_artifact", "\"reads\":2");
+	ok = ok && require_file_token("rp_artifact", "\"variants\":2");
+	ok = ok && require_file_token("rp_artifact", "section=rp_gene_counts_csv;geneA=18");
+	ok = ok && require_file_token("rp_artifact", "geneB=11");
+	ok = ok && require_file_token("rp_artifact", "section=rp_archive_manifest;files=5");
+	ok = ok && require_file_token("rp_artifact", "archive_file=rp_gene_counts_csv");
+	ok = ok && require_file_token("rp_artifact", "normalized_fastq=section:rp_normalized_fastq");
+	ok = ok && require_file_token("rp_artifact", "align_table=section:rp_align_table");
 	ok = ok && require_file_token("rp_report_text", "Recovery reran only the align stage");
 	ok = ok && require_file_token("rp_chart_data", "stage,attempts,status");
 	ok = ok && require_file_token("rp_runner", "cache_hits=1");
@@ -60,6 +72,8 @@ int main(void)
 	ok = ok && require_file_token("rp_input", "source_tag=reusable");
 	ok = ok && require_file_token("rp_stage_state", "stages=5");
 	ok = ok && require_file_token("rp_stage_state", "command=align:agent-align");
+	ok = ok && require_file_token("rp_stage_state", "output=rp_artifact:rp_align_table");
+	ok = ok && require_file_token("rp_stage_state", "output=rp_artifact:rp_metrics_json,rp_artifact:rp_gene_counts_csv");
 	ok = ok && require_file_token("rp_stage_state", "command=package:assemble");
 	ok = ok && require_file_token("rp_stage_state", "dependency_checks=5");
 	ok = ok && require_file_token("rp_stage_state", "outputs=5");
@@ -76,6 +90,7 @@ int main(void)
 	ok = ok && require_file_token("rp_run_events", "report_ref=rp_report_text");
 	ok = ok && require_file_token("rp_run_events", "evidence_ref=rp_evidence");
 	ok = ok && require_file_token("rp_artifact_manifest", "manifest_records=4");
+	ok = ok && require_file_token("rp_artifact_manifest", "real_artifact_items=5");
 	ok = ok && require_file_token("rp_artifact_manifest", "support=stage_log;path=rp_stage_log;status=ready");
 	ok = ok && require_file_token("rp_artifact_manifest", "support_entries=2");
 	ok = ok && require_file_token("rp_runner", "custom_source=rp_input");
@@ -95,10 +110,13 @@ int main(void)
 	ok = ok && require_file_token("rp_runner", "revision_status=completed");
 	ok = ok && require_file_token("rp_runner", "revision_run=usable-run:RUN-900-rev1");
 	ok = ok && require_file_token("rp_ingest_files", "files=2");
+	ok = ok && require_file_token("rp_ingest_files", "derived_items=5");
 	ok = ok && require_file_token("rp_dataset_snapshot", "snapshots=2");
+	ok = ok && require_file_token("rp_dataset_snapshot", "normalized_fastq=rp_artifact:rp_normalized_fastq");
 	ok = ok && require_file_token("rp_data_preview", "previews=2");
 	ok = ok && require_file_token("rp_data_quality", "passed=7");
 	ok = ok && require_file_token("rp_data_transform", "transforms=2");
+	ok = ok && require_file_token("rp_data_transform", "derived=alignment");
 	ok = ok && require_file_token("rp_dataset_collection", "items=4");
 	ok = ok && require_file_token("rp_agents", "agents=7");
 	ok = ok && require_file_token("rp_decisions", "decisions=8");
@@ -415,7 +433,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=322\n"
+			   "tests=340\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -455,6 +473,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=322 catalog=passed data=passed services=passed actions=passed custom=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=340 catalog=passed data=passed services=passed actions=passed custom=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }

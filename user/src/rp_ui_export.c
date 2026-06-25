@@ -14,6 +14,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_retry_plan", "retry_items=1");
 	ok = ok && rp_file_contains("rp_run_events", "events=8");
 	ok = ok && rp_file_contains("rp_artifact_manifest", "manifest_records=4");
+	ok = ok && rp_file_contains("rp_artifact_manifest", "real_artifact_items=5");
+	ok = ok && rp_file_contains("rp_artifact", "archive_file=rp_metrics_json");
 	ok = ok && rp_file_contains("rp_report_text", "RUN-042 Recovery Report");
 	ok = ok && rp_file_contains("rp_chart_data", "chart=stage_attempts");
 	ok = ok && rp_file_contains("rp_evidence", "status=ready");
@@ -83,9 +85,10 @@ int main(void)
 			   "report=rp_report_text\n"
 			   "chart=rp_chart_data\n"
 			   "timeline_rows=5\n"
-			   "artifact_preview=rp_report_text,rp_chart_data,rp_artifact\n"
+			   "artifact_preview=rp_report_text,rp_chart_data,rp_artifact,rp_artifact:rp_align_table,rp_artifact:rp_metrics_json\n"
 			   "dependency_checks=5\n"
 			   "stage_outputs=5\n"
+			   "real_artifact_items=5\n"
 			   "retry_reason=tool_output_missing\n"
 			   "runner_exec=rp_stage_state,rp_cache_index,rp_retry_plan,rp_run_events,rp_artifact_manifest\n"
 			   "data_pipeline=rp_ingest_files,rp_dataset_snapshot,rp_data_preview,rp_data_quality,rp_data_transform,rp_dataset_collection\n"
@@ -138,7 +141,7 @@ int main(void)
 			   "critical_paths=3\n"
 			   "stage_log=rp_stage_log\n"
 			   "artifact=rp_artifact\n"
-			   "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest\n"
+			   "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest,rp_artifact:rp_align_table,rp_artifact:rp_metrics_json\n"
 			   "delivery_manifest=rp_package\n"
 			   "delivery_files=8\n"
 			   "delivery_checks=3\n"

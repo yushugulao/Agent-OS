@@ -17,6 +17,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_ui_compare", "page=compare-metrics");
 	ok = ok && rp_file_contains("rp_ui_compare", "metric_rows=8");
 	ok = ok && rp_file_contains("rp_artifact_manifest", "manifest_records=4");
+	ok = ok && rp_file_contains("rp_artifact_manifest", "real_artifact_items=5");
+	ok = ok && rp_file_contains("rp_artifact", "archive_file=rp_gene_counts_csv");
 	ok = ok && rp_file_contains("rp_llm_hostreq", "template_mode=ready");
 	ok = ok && rp_file_contains("rp_llm_hostreq", "roundtrip=ready");
 	ok = ok && rp_file_contains("rp_llm_resp", "matched_requests=3");
@@ -116,9 +118,10 @@ int main(void)
 			   "failed_stage=align\n"
 			   "retry_stage=align\n"
 			   "timeline_rows=5\n"
-			   "artifact_preview=rp_report_text,rp_chart_data,rp_artifact\n"
+			   "artifact_preview=rp_report_text,rp_chart_data,rp_artifact,rp_artifact:rp_align_table,rp_artifact:rp_metrics_json\n"
 			   "dependency_checks=5\n"
 			   "stage_outputs=5\n"
+			   "real_artifact_items=5\n"
 			   "retry_reason=tool_output_missing\n"
 			   "runner_exec_files=5\n"
 			   "stage_state=rp_stage_state\n"
@@ -149,7 +152,7 @@ int main(void)
 			   "stage_log=rp_stage_log\n"
 			   "artifact=rp_artifact\n"
 			   "manifest=rp_artifact_manifest\n"
-			   "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest\n"
+			   "preview_files=rp_stage_log,rp_artifact,rp_artifact_manifest,rp_artifact:rp_align_table,rp_artifact:rp_metrics_json\n"
 			   "llm_guard=rp_llm_guard\n"
 			   "status=ready\n")) {
 		return 1;
@@ -175,13 +178,14 @@ int main(void)
 			   "stages=5\n"
 			   "artifact_records=4\n"
 			   "manifest_records=4\n"
-			   "preview_files=rp_report_text,rp_chart_data,rp_artifact\n"
+			   "preview_files=rp_report_text,rp_chart_data,rp_artifact,rp_artifact:rp_align_table,rp_artifact:rp_metrics_json\n"
 			   "package_manifest=ready\n"
 			   "evidence_package=rp_package;download_index=rp_package\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner\n"
 			   "delivery_manifest=rp_package;export_bundle=rp_package;review_page=rp_package\n"
 			   "delivery_files=8;delivery_checks=3\n"
 			   "raw_downloads=5;upload_files=rp_input\n"
+			   "real_artifact_items=5\n"
 			   "bundle_items=18\n"
 			   "evidence_bundle_zip=research-evidence-bundle.zip\n"
 			   "evidence_bundle_entries=12\n"
@@ -360,6 +364,7 @@ int main(void)
 			   "source_pages=5\n"
 			   "render_sections=7\n"
 			   "artifact_previews=3\n"
+			   "real_artifact_items=5\n"
 			   "request_form=rp_input;upload_files=rp_input\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner\n"
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"

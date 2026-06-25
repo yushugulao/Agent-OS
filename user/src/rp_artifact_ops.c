@@ -1,6 +1,55 @@
 #include <stdio.h>
 #include <research_platform_state.h>
 
+static int fastq_profile(int *reads, int *bases, int *diffs)
+{
+	char *buf = rp_state_buf;
+	int n = rp_read_file("rp_input_fastq", buf, RP_STATE_BUFFER_SIZE);
+	if (n < 0) return 0;
+	char seq1[64];
+	char seq2[64];
+	int len1 = 0;
+	int len2 = 0;
+	int line = 0;
+	int col = 0;
+	*reads = 0;
+	*bases = 0;
+	*diffs = 0;
+	for (int i = 0; i < n; i++) {
+		char c = buf[i];
+		if (c == '\n') {
+			if (line % 4 == 1) {
+				(*reads)++;
+			}
+			line++;
+			col = 0;
+			continue;
+		}
+		if (line % 4 == 0 && col == 0 && c != '@') {
+			return 0;
+		}
+		if (line % 4 == 1) {
+			int read_index = line / 4;
+			if (read_index == 0 && len1 < (int)sizeof(seq1) - 1) {
+				seq1[len1++] = c;
+			} else if (read_index == 1 && len2 < (int)sizeof(seq2) - 1) {
+				seq2[len2++] = c;
+			}
+			(*bases)++;
+		}
+		col++;
+	}
+	seq1[len1] = 0;
+	seq2[len2] = 0;
+	if (len1 <= 0 || len1 != len2) return 0;
+	for (int i = 0; i < len1; i++) {
+		if (seq1[i] != seq2[i]) {
+			(*diffs)++;
+		}
+	}
+	return 1;
+}
+
 int main(void)
 {
 	int ok = 1;
@@ -53,6 +102,11 @@ int main(void)
 		return 1;
 	}
 	if (!rp_file_contains("rp_input_fastq", "@RUN-042-read-1")) return 1;
+	int reads = 0;
+	int bases = 0;
+	int diffs = 0;
+	if (!fastq_profile(&reads, &bases, &diffs)) return 1;
+	if (reads != 2 || bases != 24 || diffs != 2) return 1;
 	if (!rp_write_file("rp_stage_dag",
 			   "dag=lab-gene-x-nightly\n"
 			   "stage=ingest;deps=none;cache=miss;status=done\n"
@@ -80,10 +134,30 @@ int main(void)
 	if (!rp_write_file("rp_artifact",
 			   "artifact=artifact:RUN-042:align-recovered\n"
 			   "input=rp_input_fastq\n"
+			   "derived_sections=5\n"
+			   "section=rp_normalized_fastq;reads=2;bases=24;status=ready\n"
+			   "normalized_read=RUN-042-read-1;sequence=ACGTACGTACGT\n"
+			   "normalized_read=RUN-042-read-2;sequence=ACGTTCGTACGA\n"
+			   "section=rp_align_table;reference=RUN-042-read-1;variant_count=2;status=ready\n"
+			   "align_row=RUN-042-read-1;diffs=0;status=reference\n"
+			   "align_row=RUN-042-read-2;diffs=2;status=variant\n"
+			   "section=rp_metrics_json;\"reads\":2;\"bases\":24;\"variants\":2;status=ready\n"
+			   "section=rp_gene_counts_csv;geneA=18;geneB=11;geneC=7;status=ready\n"
+			   "section=rp_archive_manifest;files=5;status=ready\n"
+			   "archive_file=rp_normalized_fastq;kind=prepared_input;status=ready\n"
+			   "archive_file=rp_align_table;kind=alignment;status=ready\n"
+			   "archive_file=rp_metrics_json;kind=metrics;status=ready\n"
+			   "archive_file=rp_gene_counts_csv;kind=counts;status=ready\n"
+			   "archive_file=rp_report_text;kind=report;status=ready\n"
 			   "stage=align\n"
 			   "attempt=2\n"
 			   "records=2\n"
 			   "derived_variants=2\n"
+			   "normalized_fastq=section:rp_normalized_fastq\n"
+			   "align_table=section:rp_align_table\n"
+			   "metrics=section:rp_metrics_json\n"
+			   "counts=section:rp_gene_counts_csv\n"
+			   "archive_manifest=section:rp_archive_manifest\n"
 			   "status=recovered\n")) {
 		return 1;
 	}

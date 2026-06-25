@@ -5,6 +5,10 @@ int main(void)
 {
 	int ok = 1;
 	ok = ok && rp_file_contains("rp_input_fastq", "@RUN-042-read-1");
+	ok = ok && rp_file_contains("rp_artifact", "normalized_read=RUN-042-read-2;sequence=ACGTTCGTACGA");
+	ok = ok && rp_file_contains("rp_artifact", "section=rp_align_table");
+	ok = ok && rp_file_contains("rp_artifact", "\"variants\":2");
+	ok = ok && rp_file_contains("rp_artifact", "section=rp_gene_counts_csv;geneA=18");
 	ok = ok && rp_file_contains("rp_datadic", "schema_fields=17");
 	ok = ok && rp_file_contains("rp_dataprof", "profiles=4");
 	ok = ok && rp_file_contains("rp_quality", "passed=7");
@@ -15,6 +19,8 @@ int main(void)
 			   "files=2\n"
 			   "file=1;path=rp_input_fastq;kind=fastq;records=2;bytes=72;status=ready\n"
 			   "file=2;path=rp_samples;kind=sample_sheet;records=4;bytes=128;status=ready\n"
+			   "derived_items=5\n"
+			   "derived=rp_artifact:rp_normalized_fastq,rp_artifact:rp_align_table,rp_artifact:rp_metrics_json,rp_artifact:rp_gene_counts_csv,rp_artifact:rp_archive_manifest\n"
 			   "scan_status=ready\n"
 			   "status=ready\n")) {
 		return 1;
@@ -23,15 +29,16 @@ int main(void)
 			   "dataset=lab-gene-x-input\n"
 			   "snapshots=2\n"
 			   "snapshot=raw;files=2;records=6;status=ready\n"
-			   "snapshot=normalized;files=2;records=6;transform=normalize_fastq;status=ready\n"
+			   "snapshot=normalized;files=2;records=6;transform=normalize_fastq;normalized_fastq=rp_artifact:rp_normalized_fastq;status=ready\n"
 			   "total_bytes=200\n"
 			   "status=ready\n")) {
 		return 1;
 	}
 	if (!rp_write_file("rp_data_preview",
 			   "previews=2\n"
-			   "preview=fastq;rows=2;columns=4;source=rp_input_fastq;status=ready\n"
+			   "preview=fastq;rows=2;columns=4;source=rp_artifact:rp_normalized_fastq;status=ready\n"
 			   "preview=samples;rows=4;columns=4;source=rp_samples;status=ready\n"
+			   "derived_preview=alignment;rows=2;columns=3;source=rp_artifact:rp_align_table;status=ready\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -41,6 +48,8 @@ int main(void)
 			   "passed=7\n"
 			   "failed=0\n"
 			   "min_reads=2\n"
+			   "derived_variants=2\n"
+			   "metrics_section=rp_artifact:rp_metrics_json\n"
 			   "sample_sheet_valid=1\n"
 			   "decision=accepted\n"
 			   "status=ready\n")) {
@@ -50,7 +59,10 @@ int main(void)
 			   "transforms=2\n"
 			   "transform=normalize_fastq;input=rp_input_fastq;output=rp_dataset_snapshot;status=ready\n"
 			   "transform=join_sample_sheet;input=rp_samples;output=rp_dataset_collection;status=ready\n"
-			   "validations=2\n"
+			   "derived=alignment;input=rp_artifact:rp_normalized_fastq;output=rp_artifact:rp_align_table;status=ready\n"
+			   "derived=metrics;input=rp_artifact:rp_align_table;output=rp_artifact:rp_metrics_json,rp_artifact:rp_gene_counts_csv;status=ready\n"
+			   "derived_transform_steps=2\n"
+			   "validations=4\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -59,8 +71,9 @@ int main(void)
 			   "items=4\n"
 			   "item=raw_fastq;source=rp_input_fastq;status=ready\n"
 			   "item=samples;source=rp_samples;status=ready\n"
-			   "item=counts;source=rp_data;status=ready\n"
+			   "item=counts;source=rp_artifact:rp_gene_counts_csv;status=ready\n"
 			   "item=artifact;source=rp_artifact;status=ready\n"
+			   "derived_artifacts=5\n"
 			   "export=ready\n"
 			   "status=ready\n")) {
 		return 1;

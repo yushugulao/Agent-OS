@@ -7,6 +7,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_stage_dag", "failed_stage=align");
 	ok = ok && rp_file_contains("rp_stage_log", "first_attempt status=failed");
 	ok = ok && rp_file_contains("rp_input_fastq", "@RUN-042-read-1");
+	ok = ok && rp_file_contains("rp_artifact", "normalized_read=RUN-042-read-2");
+	ok = ok && rp_file_contains("rp_artifact", "align_row=RUN-042-read-2;diffs=2");
+	ok = ok && rp_file_contains("rp_artifact", "\"reads\":2");
+	ok = ok && rp_file_contains("rp_artifact", "geneB=11");
 	ok = ok && rp_file_contains("rp_artifact", "status=recovered");
 	ok = ok && rp_file_contains("rp_runner", "stages=5");
 	ok = ok && rp_file_contains("rp_input", "custom_run=usable-run:RUN-900");
@@ -19,13 +23,13 @@ int main(void)
 	if (!rp_write_file("rp_stage_state",
 			   "run_id=RUN-042\n"
 			   "stage=ingest;order=1;input=rp_input_fastq;attempts=1;state=done\n"
-			   "stage=align;order=2;input=rp_input_fastq;attempts=2;state=recovered\n"
-			   "stage=profile;order=3;input=rp_artifact;attempts=1;state=cached\n"
+			   "stage=align;order=2;input=rp_artifact:rp_normalized_fastq;attempts=2;state=recovered\n"
+			   "stage=profile;order=3;input=rp_artifact:rp_align_table;attempts=1;state=cached\n"
 			   "stage=review;order=4;input=rp_claimrec;attempts=1;state=accepted\n"
 			   "stage=package;order=5;input=rp_report_text;attempts=1;state=ready\n"
-			   "command=ingest:read_fastq;output=rp_input\n"
-			   "command=align:agent-align;output=rp_artifact;first_status=failed;second_status=recovered\n"
-			   "command=profile:reuse_cache;output=rp_compute;cache=hit\n"
+			   "command=ingest:read_fastq;output=rp_artifact:rp_normalized_fastq\n"
+			   "command=align:agent-align;output=rp_artifact:rp_align_table;first_status=failed;second_status=recovered\n"
+			   "command=profile:derive_metrics;output=rp_artifact:rp_metrics_json,rp_artifact:rp_gene_counts_csv;cache=hit\n"
 			   "command=review:claim_review;output=rp_review;claims=8\n"
 			   "command=package:assemble;output=rp_package;report=rp_report_text\n"
 			   "dependency_checks=5\n"
@@ -89,12 +93,18 @@ int main(void)
 			   "run_id=RUN-042\n"
 			   "manifest=plain-ucore-runner-artifacts\n"
 			   "record=1;kind=input;path=rp_input_fastq;status=ready\n"
-			   "record=2;kind=artifact;path=rp_artifact;status=recovered\n"
-			   "record=3;kind=report;path=rp_report_text;status=ready\n"
-			   "record=4;kind=chart;path=rp_chart_data;status=ready\n"
+			   "record=2;kind=prepared_input;path=rp_artifact;section=rp_normalized_fastq;status=ready\n"
+			   "record=3;kind=alignment;path=rp_artifact;section=rp_align_table;status=ready\n"
+			   "record=4;kind=metrics;path=rp_artifact;section=rp_metrics_json;status=ready\n"
+			   "record=5;kind=counts;path=rp_artifact;section=rp_gene_counts_csv;status=ready\n"
+			   "record=6;kind=artifact;path=rp_artifact;status=recovered\n"
+			   "record=7;kind=report;path=rp_report_text;status=ready\n"
+			   "record=8;kind=chart;path=rp_chart_data;status=ready\n"
+			   "record=9;kind=archive;path=rp_artifact;section=rp_archive_manifest;status=ready\n"
 			   "support=stage_log;path=rp_stage_log;status=ready\n"
 			   "support=package_index;path=rp_package;status=ready\n"
 			   "manifest_records=4\n"
+			   "real_artifact_items=5\n"
 			   "support_entries=2\n"
 			   "status=ready\n")) {
 		return 1;
@@ -132,6 +142,9 @@ int main(void)
 	if (!rp_append_file("rp_runner", "custom_contains=Stage DAG,Agent Decisions,Artifacts,LLM Relay")) return 1;
 	if (!rp_append_file("rp_runner", "custom_status=ok")) return 1;
 	if (!rp_append_file("rp_runner", "custom_batch_status=ok")) return 1;
+	if (!rp_append_file("rp_runner", "real_artifact_items=5")) return 1;
+	if (!rp_append_file("rp_runner", "derived_alignment=rp_artifact:rp_align_table")) return 1;
+	if (!rp_append_file("rp_runner", "derived_metrics=rp_artifact:rp_metrics_json,rp_artifact:rp_gene_counts_csv")) return 1;
 	if (!rp_append_file("rp_ack", "ack=workflow_runner;msg=runner;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=custom_research;msg=runner;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=workflow_runner.read_dag;target=rp_stage_dag;status=ok")) return 1;

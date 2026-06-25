@@ -17,11 +17,19 @@ int main(void)
 	ok = ok && rp_file_contains("rp_provpath", "critical_paths=3");
 	ok = ok && rp_file_contains("rp_dataprof", "profiles=4");
 	ok = ok && rp_file_contains("rp_ingest_files", "files=2");
+	ok = ok && rp_file_contains("rp_ingest_files", "derived_items=5");
 	ok = ok && rp_file_contains("rp_dataset_snapshot", "snapshots=2");
+	ok = ok && rp_file_contains("rp_dataset_snapshot", "normalized_fastq=rp_artifact:rp_normalized_fastq");
 	ok = ok && rp_file_contains("rp_data_preview", "previews=2");
 	ok = ok && rp_file_contains("rp_data_quality", "passed=7");
 	ok = ok && rp_file_contains("rp_data_transform", "transforms=2");
+	ok = ok && rp_file_contains("rp_data_transform", "derived=alignment");
 	ok = ok && rp_file_contains("rp_dataset_collection", "items=4");
+	ok = ok && rp_file_contains("rp_artifact", "normalized_read=RUN-042-read-2;sequence=ACGTTCGTACGA");
+	ok = ok && rp_file_contains("rp_artifact", "section=rp_align_table");
+	ok = ok && rp_file_contains("rp_artifact", "\"variants\":2");
+	ok = ok && rp_file_contains("rp_artifact", "section=rp_gene_counts_csv;geneA=18");
+	ok = ok && rp_file_contains("rp_artifact", "section=rp_archive_manifest;files=5");
 	ok = ok && rp_file_contains("rp_figrec", "exported=3");
 	ok = ok && rp_file_contains("rp_trialrec", "selected=trial-3");
 	ok = ok && rp_file_contains("rp_datarel", "fair=passed");
@@ -174,6 +182,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_run_events", "events=8");
 	ok = ok && rp_file_contains("rp_run_events", "decision=retry_align_only");
 	ok = ok && rp_file_contains("rp_artifact_manifest", "manifest_records=4");
+	ok = ok && rp_file_contains("rp_artifact_manifest", "real_artifact_items=5");
 	ok = ok && rp_file_contains("rp_artifact_manifest", "support_entries=2");
 	ok = ok && rp_file_contains("rp_artifact", "status=recovered");
 	ok = ok && rp_file_contains("rp_report_text", "RUN-042 Recovery Report");
@@ -285,7 +294,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "library_sources=rp_knowledge");
 	ok = ok && rp_file_contains("rp_web_bundle", "custom_research_files=1");
 	ok = ok && rp_file_contains("rp_web_bundle", "review_threads=2");
-	ok = ok && rp_file_contains("rp_tests", "tests=322");
+	ok = ok && rp_file_contains("rp_tests", "tests=340");
 	ok = ok && rp_file_contains("rp_tests", "status=passed");
 	ok = ok && rp_file_contains("rp_ack", "ack=consistency;msg=22;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=consistency.check_backend");
@@ -327,6 +336,9 @@ int main(void)
 			   "package_bundle_items=18\n"
 			   "downloadable_units=3\n"
 			   "data_pipeline_files=6\n"
+			   "real_artifact_items=5\n"
+			   "derived_alignment=rp_artifact:rp_align_table\n"
+			   "derived_metrics=rp_artifact:rp_metrics_json,rp_artifact:rp_gene_counts_csv\n"
 			   "dataset_snapshots=2\n"
 			   "data_quality_checks=7\n"
 			   "bio_service_files=5\n"
@@ -360,7 +372,7 @@ int main(void)
 			   "review_threads=2\n"
 			   "review_comments=3\n"
 			   "review_action_items=2\n"
-			   "test_cases=322\n"
+			   "test_cases=340\n"
 			   "status=ready\n")) {
 		return 1;
 	}

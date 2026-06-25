@@ -52,6 +52,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_stage_dag", "status=ready");
 	ok = ok && rp_file_contains("rp_stage_log", "status=ready");
 	ok = ok && rp_file_contains("rp_artifact", "status=recovered");
+	ok = ok && rp_file_contains("rp_artifact", "section=rp_archive_manifest;files=5");
+	ok = ok && rp_file_contains("rp_artifact", "\"variants\":2");
+	ok = ok && rp_file_contains("rp_artifact", "geneC=7");
 	ok = ok && rp_file_contains("rp_report_text", "status=ready");
 	ok = ok && rp_file_contains("rp_chart_data", "status=ready");
 	ok = ok && rp_file_contains("rp_ingest_files", "files=2");
@@ -88,6 +91,7 @@ int main(void)
 			   "review_bundle=ready\n"
 			   "provenance_bundle=ready\n"
 			   "manifest_sources=rp_report_text,rp_chart_data,rp_artifact_manifest,rp_stage_log,rp_agents,rp_llm_packets\n"
+			   "derived_sources=rp_artifact:rp_normalized_fastq,rp_artifact:rp_align_table,rp_artifact:rp_metrics_json,rp_artifact:rp_gene_counts_csv,rp_artifact:rp_archive_manifest\n"
 			   "review_sources=rp_review,rp_review2,rp_revision,rp_resrev,rp_peerresp,rp_dossier\n"
 			   "review_threads=2\n"
 			   "review_comments=3\n"
@@ -145,6 +149,7 @@ int main(void)
 			   "review_page_detail=page=research-run;artifact_links=6;decision_controls=2;export_bundle=rp_package\n"
 			   "review_page_sections=Human Reviews,Delivery Manifests,Revision Tasks,Review Threads,Action Items\n"
 			   "real_inputs=1\n"
+			   "real_artifact_items=5\n"
 			   "data_pipeline=1\n"
 			   "stage_logs=1\n"
 			   "chart_data=1\n"
