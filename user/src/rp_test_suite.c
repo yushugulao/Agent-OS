@@ -515,6 +515,11 @@ int main(void)
 	ok = ok && require_file_token("rp_api_action", "notebook_download=1");
 	ok = ok && require_file_token("rp_api_action", "bundle_download=1");
 	ok = ok && require_file_token("rp_api_action", "action_state_records=12");
+	ok = ok && require_file_token("rp_api_action", "validated_requests=8");
+	ok = ok && require_file_token("rp_api_action", "precondition_checks=8");
+	ok = ok && require_file_token("rp_api_action", "side_effect_records=16");
+	ok = ok && require_file_token("rp_api_action", "action_audit_log=rp_actionio");
+	ok = ok && require_file_token("rp_api_action", "download_manifest=rp_package");
 	ok = ok && require_file_token("rp_api_action", "export_bundle=rp_package");
 	ok = ok && require_file_token("rp_api_know", "library_sources=rp_knowledge");
 	ok = ok && require_file_token("rp_actionio", "requests=8");
@@ -532,6 +537,19 @@ int main(void)
 	ok = ok && require_file_token("rp_actionio", "applied_changes=2");
 	ok = ok && require_file_token("rp_actionio", "revision_status=completed");
 	ok = ok && require_file_token("rp_actionio", "action_state_records=12");
+	ok = ok && require_file_token("rp_actionio", "request_validation=passed");
+	ok = ok && require_file_token("rp_actionio", "validated_requests=8");
+	ok = ok && require_file_token("rp_actionio", "precondition_checks=8");
+	ok = ok && require_file_token("rp_actionio", "precheck=1;path=/actions/host-workflow/run");
+	ok = ok && require_file_token("rp_actionio", "precheck=4;path=/actions/research/run");
+	ok = ok && require_file_token("rp_actionio", "precheck=8;path=/actions/research/run-revision-task");
+	ok = ok && require_file_token("rp_actionio", "side_effect_records=16");
+	ok = ok && require_file_token("rp_actionio", "state_write=1;target=rp_stage_state");
+	ok = ok && require_file_token("rp_actionio", "state_write=6;target=rp_runner;field=human_review");
+	ok = ok && require_file_token("rp_actionio", "state_write=8;target=rp_runner;field=revision_run");
+	ok = ok && require_file_token("rp_actionio", "state_write=10;target=rp_package;field=download_manifest");
+	ok = ok && require_file_token("rp_actionio", "idempotency_checks=8");
+	ok = ok && require_file_token("rp_actionio", "idempotency_key=research_run:usable-run:RUN-900;state=accepted");
 	ok = ok && require_file_token("rp_actionio", "action_step=workbench_advance");
 	ok = ok && require_file_token("rp_actionio", "action_step=notebook_download");
 	ok = ok && require_file_token("rp_actionio", "action_step=bundle_download");
@@ -539,6 +557,8 @@ int main(void)
 	ok = ok && require_file_token("rp_actionio", "action_trace=rp_input->rp_runner->rp_review2->rp_revision->rp_package->rp_web_bundle");
 	ok = ok && require_file_token("rp_actionio", "idempotent_action_keys=8");
 	ok = ok && require_file_token("rp_actionio", "state_after_actions=workbench:ready,review:needs_revision,revision:completed,bundle:ready");
+	ok = ok && require_file_token("rp_actionio", "post_action_state=rp_stage_state,rp_package,rp_runner,rp_revision,rp_agentcmp");
+	ok = ok && require_file_token("rp_actionio", "download_manifest_generated=1");
 	ok = ok && require_file_token("rp_actionio", "download_outputs=reproducible-analysis.ipynb,research-evidence-bundle.zip,delivery-manifest.md");
 	ok = ok && require_file_token("rp_uresrun", "run_id=usable-run:RUN-900");
 	ok = ok && require_file_token("rp_uresrun", "runs=3");
@@ -565,6 +585,9 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "notebook_export=rp_nbexec");
 	ok = ok && require_file_token("rp_web_bundle", "notebook_download=rp_repro");
 	ok = ok && require_file_token("rp_web_bundle", "active_actions=rp_actionio");
+	ok = ok && require_file_token("rp_web_bundle", "action_validation=passed");
+	ok = ok && require_file_token("rp_web_bundle", "side_effect_records=16");
+	ok = ok && require_file_token("rp_web_bundle", "download_manifest_generated=1");
 	ok = ok && require_file_token("rp_web_bundle", "static_site_pages=42");
 	ok = ok && require_file_token("rp_web_bundle", "render_sections=7");
 	ok = ok && require_file_token("rp_web_bundle", "artifact_previews=3");
@@ -603,7 +626,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=526\n"
+			   "tests=548\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -651,6 +674,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=526 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=548 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }
