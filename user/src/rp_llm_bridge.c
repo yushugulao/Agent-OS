@@ -5,6 +5,7 @@ int main(void)
 {
 	if (!rp_file_contains("rp_evidence", "claims=8")) return 1;
 	if (!rp_file_contains("rp_report", "status=packaged")) return 1;
+	if (!rp_file_contains("rp_mail", "to=llm")) return 1;
 	if (!rp_write_file("rp_llm_req",
 			   "provider=template\n"
 			   "run_id=RUN-042\n"
@@ -41,6 +42,9 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_append_file("rp_ack", "ack=llm;msg=9;status=ready")) return 1;
+	if (!rp_append_file("rp_tool", "tool=llm.prepare_packet;target=rp_llm_req;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=llm.template_response;target=rp_llm_resp;status=ok")) return 1;
 	if (!rp_append_status("llm_bridge=ready")) return 1;
 	if (!rp_append_status("promptops=ready")) return 1;
 	if (!rp_append_status("llmtrace=ready")) return 1;

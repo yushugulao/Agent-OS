@@ -14,6 +14,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_prompt", "routes=3");
 	ok = ok && rp_file_contains("rp_llmlog", "replay=ready");
 	ok = ok && rp_file_contains("rp_audit", "release=ready");
+	ok = ok && rp_file_contains("rp_mail", "to=package");
 	if (!ok) return 1;
 	if (!rp_write_file("rp_package",
 			   "package=research-evidence-package\n"
@@ -42,6 +43,9 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_append_file("rp_ack", "ack=package;msg=11;status=ready")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.build_artifacts;target=rp_package;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.build_repro;target=rp_repro;status=ok")) return 1;
 	if (!rp_append_status("package=ready")) return 1;
 	if (!rp_append_status("datarel=ready")) return 1;
 	if (!rp_append_status("repro=ready")) return 1;

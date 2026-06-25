@@ -10,7 +10,7 @@ The plain uCore platform should keep the same object names and output contract a
 
 1. Expand the current reusable object collections into larger workflow, evidence, knowledge, dataset, report, FAIR data release, reproduction, LLM packet, prompt routing, sample, protocol, experiment, telemetry, and review records.
 2. Expand catalog, query, object query, lineage, site export, evidence, knowledge, package, data release, reproduction, review governance, release, dossier, submission, compare, planner, retriever, analyst, data dictionary, calculation replay, sample, quality, protocol, SOP, experiment, lab operations, telemetry, reviewer, writer, repair, auditor, LLM packet, prompt routing, privacy, and AgentCompare programs beyond the current fixed records.
-3. Add a simple message protocol using files, pipes, or process exit/status patterns available in unchanged uCore.
+3. Deepen the current file-backed task message, acknowledgement, and tool-log protocol with richer scheduling cases.
 4. Move selected checks from static counters into active operations over stored records.
 5. Add an AgentCompare plain-kernel runner that emits the same high-level result fields as the future Agent-OS runner.
 6. Add a host-side LLM relay that consumes the prepared ordinary request files and writes ordinary response files.

@@ -9,6 +9,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_review", "status=accepted");
 	ok = ok && rp_file_contains("rp_fix", "status=recovered");
 	ok = ok && rp_file_contains("rp_audit", "status=passed");
+	ok = ok && rp_file_contains("rp_mail", "to=evidence");
 	if (!ok) return 1;
 	if (!rp_write_file("rp_evidence",
 			   "claims=8\nevidence_links=5\nprovenance_nodes=12\nrun=RUN-042\nstatus=ready\n")) {
@@ -24,6 +25,9 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_append_file("rp_ack", "ack=evidence;msg=8;status=ready")) return 1;
+	if (!rp_append_file("rp_tool", "tool=evidence.build_path;target=rp_evidence;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=evidence.synthesize_knowledge;target=rp_knowledge;status=ok")) return 1;
 	if (!rp_append_status("evidence=ready")) return 1;
 	if (!rp_append_status("knowledge=ready")) return 1;
 	printf("rp_evidence: claims=8 links=5 provenance=12 knowledge=4 status=ready\n");

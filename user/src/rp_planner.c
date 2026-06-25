@@ -7,7 +7,29 @@ int main(void)
 			   "run=RUN-042\nworkflow=lab-gene-x\nassignments=7\npolicy=minimal_rerun\nstatus=planned\n")) {
 		return 1;
 	}
+	if (!rp_write_file("rp_mail",
+			   "msg=1;from=planner;to=retriever;task=collect_literature\n"
+			   "msg=2;from=planner;to=analyst;task=profile_dataset\n"
+			   "msg=3;from=planner;to=reviewer;task=review_claims\n"
+			   "msg=4;from=planner;to=lab;task=prepare_lab_records\n"
+			   "msg=5;from=planner;to=writer;task=assemble_report\n"
+			   "msg=6;from=planner;to=repair;task=repair_failed_stage\n"
+			   "msg=7;from=planner;to=auditor;task=verify_release\n"
+			   "msg=8;from=planner;to=evidence;task=build_evidence_path\n"
+			   "msg=9;from=planner;to=llm;task=prepare_llm_packet\n"
+			   "msg=10;from=planner;to=privacy;task=review_llm_packet\n"
+			   "msg=11;from=planner;to=package;task=build_release_package\n"
+			   "msg=12;from=planner;to=release;task=decide_release\n"
+			   "msg=13;from=planner;to=dossier;task=prepare_review_material\n"
+			   "msg=14;from=planner;to=metrics;task=measure_plain_kernel\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_ack", "")) return 1;
+	if (!rp_write_file("rp_tool", "")) return 1;
+	if (!rp_append_file("rp_ack", "ack=planner;msg=0;status=sent")) return 1;
+	if (!rp_append_file("rp_tool", "tool=planner.create_plan;target=rp_plan;status=ok")) return 1;
 	if (!rp_append_status("planner=planned")) return 1;
-	printf("rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 status=planned\n");
+	if (!rp_append_status("mail=ready")) return 1;
+	printf("rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 messages=14 status=planned\n");
 	return 0;
 }

@@ -82,6 +82,9 @@ It uses ordinary `fork`, `exec`, and `waitpid`. This provides a plain-kernel bas
 The role programs also exchange state through ordinary root-file-system files:
 
 - `rp_plan`
+- `rp_mail`
+- `rp_ack`
+- `rp_tool`
 - `rp_lit`
 - `rp_data`
 - `rp_datadic`
@@ -166,7 +169,7 @@ rp_object_store: records=8 status=ready
 rp_object_query: hits=8 ready_hits=7 status=ready
 rp_lineage: edges=7 status=ready
 rp_site_export: pages=6 status=ready
-rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 status=planned
+rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 messages=14 status=planned
 rp_retriever: literature=3 evidence_links=5 status=ready
 rp_analyst: datasets=4 statistics=6 figures=3 schema_fields=17 replay=ready status=ready
 rp_reviewer: claims=8 protocol_checks=5 release_checks=4 status=accepted
@@ -181,8 +184,8 @@ rp_privacy: checked=4 redactions=0 status=ready
 rp_package: artifacts=12 checks=19 fair=passed repro=ready status=ready
 rp_release: decision=release checks=5 status=ready
 rp_dossier: sections=12 review_board=accepted submit=ready status=ready
-rp_metrics: telemetry_spans=8 scanned=128 report_ok=1 repro_ok=1 status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=22 state_files=41 status=ready
+rp_metrics: telemetry_spans=8 acks=14 tools=20 scanned=128 report_ok=1 repro_ok=1 status=ready
+rp_compare_plain: plain_kernel=passed objects=500 programs=22 state_files=44 acks=15 tools=21 status=ready
 rp_orch: programs_ok=22 programs_total=22
 rp_orch: state_ok=1
 rp_orch: passed
@@ -204,11 +207,11 @@ No output means the directories match.
 
 ## Next Work
 
-The current native programs prove that the plain uCore kernel can boot and run a research-platform-shaped catalog process plus a multi-process workflow with ordinary file-backed object storage, query, lineage, site export, data dictionary, calculation replay, samples, quality, protocol, SOP, experiment, lab operations, personnel training, telemetry, evidence, knowledge, semantic summary, systematic review summary, LLM packet, prompt routing, LLM audit log, privacy review, FAIR data release, data product summary, reproduction package, release, dossier, review governance, submission package, AgentCompare metrics, and comparison services. Further migration work should move more behavior from embedded tables into active user-space services:
+The current native programs prove that the plain uCore kernel can boot and run a research-platform-shaped catalog process plus a multi-process workflow with ordinary file-backed object storage, task messages, role acknowledgements, tool logs, query, lineage, site export, data dictionary, calculation replay, samples, quality, protocol, SOP, experiment, lab operations, personnel training, telemetry, evidence, knowledge, semantic summary, systematic review summary, LLM packet, prompt routing, LLM audit log, privacy review, FAIR data release, data product summary, reproduction package, release, dossier, review governance, submission package, AgentCompare metrics, and comparison services. Further migration work should move more behavior from embedded tables into active user-space services:
 
 - Persistent platform state files in the uCore root file system.
 - Expand the planner, retriever, analyst, reviewer, writer, repair, auditor, object query, lineage, export, data dictionary, calculation replay, sample, quality, protocol, SOP, experiment, lab operations, telemetry, evidence, knowledge, FAIR data release, reproduction, review governance, LLM packet, prompt routing, privacy, release, dossier, submission, and AgentCompare programs beyond the current fixed records.
-- A user-space message protocol using only unchanged uCore syscalls.
+- A richer user-space coordination protocol using only unchanged uCore syscalls.
 - A host LLM relay that consumes the existing ordinary request files and writes ordinary response files.
 - More executable checks for workflow portability, release review, and AgentCompare comparison.
 

@@ -24,6 +24,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_submit", "data_availability=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "report_ok=1");
 	ok = ok && rp_file_contains("rp_agentcmp", "repro_ok=1");
+	ok = ok && rp_file_contains("rp_agentcmp", "message_acks=14");
+	ok = ok && rp_file_contains("rp_agentcmp", "tool_events=20");
+	ok = ok && rp_file_contains("rp_ack", "ack=metrics;msg=14;status=ready");
+	ok = ok && rp_file_contains("rp_tool", "tool=metrics.measure_plain");
 	ok = ok && rp_file_contains("rp_protocol", "ethics=approved");
 	ok = ok && rp_file_contains("rp_quality", "passed=7");
 	ok = ok && rp_file_contains("rp_package", "status=ready");
@@ -35,11 +39,13 @@ int main(void)
 			   "agentos_kernel=pending\n"
 			   "objects=500\n"
 			   "programs=22\n"
-			   "state_files=41\n"
+			   "state_files=44\n"
+			   "message_acks=15\n"
+			   "tool_events=21\n"
 			   "status=ready\n")) {
 		return 1;
 	}
 	if (!rp_append_status("compare=ready")) return 1;
-	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=22 state_files=41 status=ready\n");
+	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=22 state_files=44 acks=15 tools=21 status=ready\n");
 	return 0;
 }

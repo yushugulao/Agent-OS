@@ -8,6 +8,7 @@ int main(void)
 	if (!rp_file_contains("rp_datarel", "publication_targets=1")) return 1;
 	if (!rp_file_contains("rp_repro", "notebook_replay=passed")) return 1;
 	if (!rp_file_contains("rp_prompt", "provider_policy=host_relay")) return 1;
+	if (!rp_file_contains("rp_mail", "to=dossier")) return 1;
 	if (!rp_write_file("rp_dossier",
 			   "dossier_id=dossier:RUN-042:plain-ucore\n"
 			   "run_id=RUN-042\n"
@@ -35,6 +36,9 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_append_file("rp_ack", "ack=dossier;msg=13;status=ready")) return 1;
+	if (!rp_append_file("rp_tool", "tool=dossier.prepare_material;target=rp_dossier;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=dossier.prepare_submission;target=rp_submit;status=ok")) return 1;
 	if (!rp_append_status("dossier=ready")) return 1;
 	if (!rp_append_status("reviewops=ready")) return 1;
 	if (!rp_append_status("submit=ready")) return 1;

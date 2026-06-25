@@ -13,6 +13,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_datadic", "schema_drift=0");
 	ok = ok && rp_file_contains("rp_compute", "replay=ready");
 	ok = ok && rp_file_contains("rp_labops", "maintenance=passed");
+	ok = ok && rp_file_contains("rp_mail", "to=auditor");
 	if (!ok) return 1;
 	if (!rp_write_file("rp_audit",
 			   "provenance=verified\n"
@@ -24,6 +25,8 @@ int main(void)
 			   "status=passed\n")) {
 		return 1;
 	}
+	if (!rp_append_file("rp_ack", "ack=auditor;msg=7;status=passed")) return 1;
+	if (!rp_append_file("rp_tool", "tool=auditor.verify_provenance;target=rp_audit;status=ok")) return 1;
 	if (!rp_append_status("auditor=passed")) return 1;
 	printf("rp_auditor: provenance=verified release=ready package=ready status=passed\n");
 	return 0;

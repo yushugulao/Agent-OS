@@ -64,6 +64,9 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | File | Writer | Reader | Meaning |
 | --- | --- | --- | --- |
 | `rp_plan` | planner | retriever, analyst, auditor | run id, workflow, assignments, repair policy |
+| `rp_mail` | planner | role programs | task messages for role-level user-space coordination |
+| `rp_ack` | role programs | metrics, compare, orchestrator | role acknowledgements for completed tasks |
+| `rp_tool` | role programs | metrics, compare, orchestrator | tool-level operation log written by ordinary user programs |
 | `rp_lit` | retriever | reviewer, auditor | literature count and evidence links |
 | `rp_data` | analyst | reviewer, repair, auditor | datasets, statistics, figures, failed stage |
 | `rp_datadic` | analyst | lab, package, compare | schema fields, controlled terms, transform specs, drift result |
