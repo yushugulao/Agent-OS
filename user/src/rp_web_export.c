@@ -22,7 +22,9 @@ int main(void)
 
 	if (!rp_write_file("rp_web_routes",
 			   "service=host-web-ui\n"
-			   "routes=12\n"
+			   "routes=17\n"
+			   "get_routes=12\n"
+			   "post_routes=5\n"
 			   "route=/;payload=rp_api_home;status=ready\n"
 			   "route=/run/RUN-042;payload=rp_api_run;status=ready\n"
 			   "route=/agents;payload=rp_api_agents;status=ready\n"
@@ -35,6 +37,11 @@ int main(void)
 			   "route=/publication;payload=rp_api_pub;status=ready\n"
 			   "route=/knowledge;payload=rp_api_know;status=ready\n"
 			   "route=/runtime;payload=rp_api_runtime;status=ready\n"
+			   "action=/actions/host-workflow/run;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/host-workflow/export;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/agentcompare/run;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/run;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/export;method=POST;payload=rp_api_action;status=ready\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -179,10 +186,67 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_write_file("rp_api_action",
+			   "api=actions\n"
+			   "actions=5\n"
+			   "host_workflow_run=/actions/host-workflow/run\n"
+			   "host_workflow_export=/actions/host-workflow/export\n"
+			   "agentcompare_run=/actions/agentcompare/run\n"
+			   "research_run=/actions/research/run\n"
+			   "research_export=/actions/research/export\n"
+			   "redirect_status=303\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_actionio",
+			   "requests=5\n"
+			   "request=1;path=/actions/host-workflow/run;run_id=RUN-042;inject_failure=1;use_cache=1\n"
+			   "request=2;path=/actions/host-workflow/export;workflow_run_id=RUN-042\n"
+			   "request=3;path=/actions/agentcompare/run;profile=plain_ucore\n"
+			   "request=4;path=/actions/research/run;provider=template;dataset=inline\n"
+			   "request=5;path=/actions/research/export;run_id=usable-run:RUN-900\n"
+			   "responses=5\n"
+			   "response=1;status=303;location=/runs/RUN-042;effect=host_workflow_run\n"
+			   "response=2;status=303;location=/runs/RUN-042;effect=host_workflow_export\n"
+			   "response=3;status=303;location=/compare;effect=agentcompare_run\n"
+			   "response=4;status=303;location=/research/usable-run:RUN-900;effect=usable_research_run\n"
+			   "response=5;status=303;location=/research/usable-run:RUN-900;effect=usable_research_export\n"
+			   "actions=5\n"
+			   "completed=5\n"
+			   "failed=0\n"
+			   "redirects=5\n"
+			   "state_writes=8\n"
+			   "audit_records=5\n"
+			   "host_export=review_html\n"
+			   "host_contains=Stage DAG,Agent Decisions,Comparison Metrics\n"
+			   "compare_runs=1\n"
+			   "passed_cases=3\n"
+			   "metrics_case=user_on_plain_ucore_real_artifacts\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_uresrun",
+			   "run_id=usable-run:RUN-900\n"
+			   "title=Browser started study\n"
+			   "question=Can this platform run a custom research task?\n"
+			   "provider=template\n"
+			   "dataset_rows=2\n"
+			   "stages=5\n"
+			   "artifacts=12\n"
+			   "agent_messages=7\n"
+			   "export=review_html\n"
+			   "export_sections=6\n"
+			   "contains=Stage DAG,Agent Decisions,Artifacts,LLM Relay\n"
+			   "status=ok\n")) {
+		return 1;
+	}
 	if (!rp_write_file("rp_web_bundle",
 			   "bundle=host-web-ui\n"
-			   "routes=12\n"
-			   "api_payloads=12\n"
+			   "routes=17\n"
+			   "get_routes=12\n"
+			   "post_routes=5\n"
+			   "api_payloads=13\n"
+			   "action_payloads=1\n"
 			   "source_pages=5\n"
 			   "runner_files=5\n"
 			   "data_pipeline_files=6\n"
@@ -194,6 +258,7 @@ int main(void)
 	}
 
 	if (!rp_append_file("rp_ack", "ack=web_export;msg=web;status=ready")) return 1;
+	if (!rp_append_file("rp_ack", "ack=api_actions;msg=action;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=web_export.read_ui;target=rp_ui_home;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=web_export.write_routes;target=rp_web_routes;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=web_export.write_home_api;target=rp_api_home;status=ok")) return 1;
@@ -219,6 +284,11 @@ int main(void)
 	if (!rp_append_status("api_publication=ready")) return 1;
 	if (!rp_append_status("api_knowledge=ready")) return 1;
 	if (!rp_append_status("api_runtime=ready")) return 1;
-	printf("rp_web_export: routes=12 api_payloads=12 bundle=ready status=ready\n");
+	if (!rp_append_status("api_action=ready")) return 1;
+	if (!rp_append_status("api_actions=ready")) return 1;
+	if (!rp_append_status("actionio=ready")) return 1;
+	if (!rp_append_status("usable_research=ready")) return 1;
+	if (!rp_append_status("action_exports=ready")) return 1;
+	printf("rp_web_export: routes=17 api_payloads=13 actions=5 bundle=ready status=ready\n");
 	return 0;
 }

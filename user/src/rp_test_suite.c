@@ -131,7 +131,8 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_evidence", "page=evidence-detail");
 	ok = ok && require_file_token("rp_ui_compare", "page=compare-metrics");
 	ok = ok && require_file_token("rp_ui_compare", "relay_protocol_files=5");
-	ok = ok && require_file_token("rp_web_routes", "routes=12");
+	ok = ok && require_file_token("rp_web_routes", "routes=17");
+	ok = ok && require_file_token("rp_web_routes", "post_routes=5");
 	ok = ok && require_file_token("rp_api_home", "api=home");
 	ok = ok && require_file_token("rp_api_run", "runner_exec_files=5");
 	ok = ok && require_file_token("rp_api_agents", "agents=7");
@@ -144,15 +145,24 @@ int main(void)
 	ok = ok && require_file_token("rp_api_pub", "result_review=rp_resrev");
 	ok = ok && require_file_token("rp_api_know", "semantic_index=rp_semindex");
 	ok = ok && require_file_token("rp_api_runtime", "runtime_env=rp_runenv");
-	ok = ok && require_file_token("rp_web_bundle", "api_payloads=12");
+	ok = ok && require_file_token("rp_api_action", "actions=5");
+	ok = ok && require_file_token("rp_actionio", "requests=5");
+	ok = ok && require_file_token("rp_actionio", "responses=5");
+	ok = ok && require_file_token("rp_actionio", "redirects=5");
+	ok = ok && require_file_token("rp_uresrun", "run_id=usable-run:RUN-900");
+	ok = ok && require_file_token("rp_uresrun", "Stage DAG");
+	ok = ok && require_file_token("rp_actionio", "Agent Decisions");
+	ok = ok && require_file_token("rp_actionio", "user_on_plain_ucore_real_artifacts");
+	ok = ok && require_file_token("rp_web_bundle", "api_payloads=13");
+	ok = ok && require_file_token("rp_web_bundle", "post_routes=5");
 
-	ok = ok && require_count("ack", rp_count_lines("rp_ack"), 35);
+	ok = ok && require_count("ack", rp_count_lines("rp_ack"), 36);
 	ok = ok && require_count("tool", rp_count_lines("rp_tool"), 130);
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=112\n"
+			   "tests=122\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -160,6 +170,7 @@ int main(void)
 			   "publication_services=passed\n"
 			   "knowledge_services=passed\n"
 			   "runtime_services=passed\n"
+			   "api_actions=passed\n"
 			   "workflow=passed\n"
 			   "artifact_ops=passed\n"
 			   "agent_collaboration=passed\n"
@@ -183,6 +194,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=112 catalog=passed data=passed services=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=122 catalog=passed data=passed services=passed actions=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
 	return 0;
 }
