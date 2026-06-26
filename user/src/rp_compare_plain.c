@@ -50,6 +50,15 @@ int main(void)
 		rp_copy_text(token, sizeof(token), "host_action_run=usable-run:");
 		rp_append_text(token, sizeof(token), seed_run);
 		ok = ok && rp_file_contains("rp_runner", token);
+		rp_copy_text(token, sizeof(token), "host_report_run_id=");
+		rp_append_text(token, sizeof(token), seed_run);
+		ok = ok && rp_file_contains("rp_report_text", token);
+		rp_copy_text(token, sizeof(token), "host_manifest_run_id=");
+		rp_append_text(token, sizeof(token), seed_run);
+		ok = ok && rp_file_contains("rp_artifact_manifest", token);
+		rp_copy_text(token, sizeof(token), "host_action_run_id=");
+		rp_append_text(token, sizeof(token), seed_run);
+		ok = ok && rp_file_contains("rp_api_compare", token);
 		ok = ok && rp_file_contains("rp_runner", "host_action_status=completed");
 		ok = ok && rp_file_contains("rp_agentcmp", "host_action_research_input=ready");
 		ok = ok && rp_file_contains("rp_actionio", "host_action_research_run=1");
@@ -68,6 +77,15 @@ int main(void)
 		rp_copy_text(token, sizeof(token), "host_action_compare_profile=");
 		rp_append_text(token, sizeof(token), profile);
 		ok = ok && rp_file_contains("rp_agentcmp", token);
+		rp_copy_text(token, sizeof(token), "host_report_compare_profile=");
+		rp_append_text(token, sizeof(token), profile);
+		ok = ok && rp_file_contains("rp_report_text", token);
+		rp_copy_text(token, sizeof(token), "host_manifest_compare_profile=");
+		rp_append_text(token, sizeof(token), profile);
+		ok = ok && rp_file_contains("rp_artifact_manifest", token);
+		rp_copy_text(token, sizeof(token), "host_action_compare_profile=");
+		rp_append_text(token, sizeof(token), profile);
+		ok = ok && rp_file_contains("rp_api_compare", token);
 		ok = ok && rp_file_contains("rp_actionio", "host_action_agentcompare=1");
 	}
 	if (rp_host_seed_has("kind=human_review")) {
@@ -87,6 +105,15 @@ int main(void)
 		rp_copy_text(token, sizeof(token), "host_action_review_decision=");
 		rp_append_text(token, sizeof(token), decision);
 		ok = ok && rp_file_contains("rp_review2", token);
+		rp_copy_text(token, sizeof(token), "host_report_reviewer=");
+		rp_append_text(token, sizeof(token), reviewer);
+		ok = ok && rp_file_contains("rp_report_text", token);
+		rp_copy_text(token, sizeof(token), "host_report_review_decision=");
+		rp_append_text(token, sizeof(token), decision);
+		ok = ok && rp_file_contains("rp_report_text", token);
+		rp_copy_text(token, sizeof(token), "host_action_reviewer=");
+		rp_append_text(token, sizeof(token), reviewer);
+		ok = ok && rp_file_contains("rp_api_compare", token);
 		ok = ok && rp_file_contains("rp_agentcmp", "host_action_review_requested=1");
 		ok = ok && rp_file_contains("rp_actionio", "host_action_human_review=1");
 	}
@@ -100,6 +127,15 @@ int main(void)
 		rp_copy_text(token, sizeof(token), "host_action_revision_targets=");
 		rp_append_text(token, sizeof(token), targets);
 		ok = ok && rp_file_contains("rp_revision", token);
+		rp_copy_text(token, sizeof(token), "host_report_revision_targets=");
+		rp_append_text(token, sizeof(token), targets);
+		ok = ok && rp_file_contains("rp_report_text", token);
+		rp_copy_text(token, sizeof(token), "host_manifest_revision_targets=");
+		rp_append_text(token, sizeof(token), targets);
+		ok = ok && rp_file_contains("rp_artifact_manifest", token);
+		rp_copy_text(token, sizeof(token), "host_action_revision_targets=");
+		rp_append_text(token, sizeof(token), targets);
+		ok = ok && rp_file_contains("rp_api_compare", token);
 		ok = ok && rp_file_contains("rp_agentcmp", "host_action_revision_requested=1");
 		ok = ok && rp_file_contains("rp_actionio", "host_action_revision=1");
 	}
@@ -137,6 +173,16 @@ int main(void)
 		rp_copy_text(token, sizeof(token), "host_action_export_bundle_name=");
 		rp_append_text(token, sizeof(token), bundle);
 		ok = ok && rp_file_contains("rp_package", token);
+		ok = ok && rp_file_contains("rp_package", "host_action_bundle_contents=report,manifest,notebook,compare");
+		rp_copy_text(token, sizeof(token), "host_report_bundle=");
+		rp_append_text(token, sizeof(token), bundle);
+		ok = ok && rp_file_contains("rp_report_text", token);
+		rp_copy_text(token, sizeof(token), "host_manifest_bundle=");
+		rp_append_text(token, sizeof(token), bundle);
+		ok = ok && rp_file_contains("rp_artifact_manifest", token);
+		rp_copy_text(token, sizeof(token), "host_action_bundle=");
+		rp_append_text(token, sizeof(token), bundle);
+		ok = ok && rp_file_contains("rp_api_compare", token);
 		ok = ok && rp_file_contains("rp_actionio", "host_action_export=1");
 	}
 	if (rp_host_seed_has("kind=notebook_export")) {
@@ -149,6 +195,9 @@ int main(void)
 		rp_copy_text(token, sizeof(token), "host_action_notebook_format=");
 		rp_append_text(token, sizeof(token), format);
 		ok = ok && rp_file_contains("rp_nbexec", token);
+		rp_copy_text(token, sizeof(token), "host_manifest_notebook_format=");
+		rp_append_text(token, sizeof(token), format);
+		ok = ok && rp_file_contains("rp_artifact_manifest", token);
 		ok = ok && rp_file_contains("rp_agentcmp", "host_action_export_requested=1");
 		ok = ok && rp_file_contains("rp_actionio", "host_action_export=1");
 	}

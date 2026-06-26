@@ -268,6 +268,7 @@ int main(void)
 		rp_append_text(line, sizeof(line), ";source=rp_host_action_seed");
 		if (!rp_append_file("rp_package", line)) return 1;
 		if (!rp_append_host_action_line("rp_package", "host_action_export_bundle_name=", bundle)) return 1;
+		if (!rp_append_file("rp_package", "host_action_bundle_contents=report,manifest,notebook,compare")) return 1;
 		if (!rp_append_file("rp_package", "host_action_delivery_manifest=ready")) return 1;
 	}
 	if (!rp_append_status("package=ready")) return 1;

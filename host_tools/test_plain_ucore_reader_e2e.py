@@ -89,9 +89,21 @@ def main() -> int:
             assert any("host_action_revision_targets=methods,chart_caption,statistics" in line for line in rp_revision["lines"]), rp_revision
             assert any("host_action_revision_task_id=usable-revision-task:RUN-E2E:1" in line for line in rp_revision["lines"]), rp_revision
             assert any("host_action_revision_run=completed" in line for line in rp_revision["lines"]), rp_revision
+            rp_report = read_json(base + "/api/state/rp_report_text")
+            assert any("host_report_run_id=RUN-E2E" in line for line in rp_report["lines"]), rp_report
+            assert any("host_report_reviewer=Wang" in line for line in rp_report["lines"]), rp_report
+            assert any("host_report_revision_targets=methods,chart_caption,statistics" in line for line in rp_report["lines"]), rp_report
+            assert any("host_report_bundle=reviewer-evidence" in line for line in rp_report["lines"]), rp_report
+            assert any("host_report_compare_profile=plain_ucore_batch" in line for line in rp_report["lines"]), rp_report
+            rp_manifest = read_json(base + "/api/state/rp_artifact_manifest")
+            assert any("host_manifest_run_id=RUN-E2E" in line for line in rp_manifest["lines"]), rp_manifest
+            assert any("host_manifest_revision_targets=methods,chart_caption,statistics" in line for line in rp_manifest["lines"]), rp_manifest
+            assert any("host_manifest_bundle=reviewer-evidence" in line for line in rp_manifest["lines"]), rp_manifest
+            assert any("host_manifest_compare_profile=plain_ucore_batch" in line for line in rp_manifest["lines"]), rp_manifest
             rp_package = read_json(base + "/api/state/rp_package")
             assert any("host_action_export_bundle=ready" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_export_bundle_name=reviewer-evidence" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_bundle_contents=report,manifest,notebook,compare" in line for line in rp_package["lines"]), rp_package
             rp_nbexec = read_json(base + "/api/state/rp_nbexec")
             assert any("host_action_notebook_export=ready" in line for line in rp_nbexec["lines"]), rp_nbexec
             assert any("host_action_notebook_format=ipynb" in line for line in rp_nbexec["lines"]), rp_nbexec
@@ -104,6 +116,11 @@ def main() -> int:
             rp_agentcmp = read_json(base + "/api/state/rp_agentcmp")
             assert any("host_action_compare_requested=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_compare_profile=plain_ucore_batch" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            rp_api_compare = read_json(base + "/api/state/rp_api_compare")
+            assert any("host_action_payload_applied=1" in line for line in rp_api_compare["lines"]), rp_api_compare
+            assert any("host_action_run_id=RUN-E2E" in line for line in rp_api_compare["lines"]), rp_api_compare
+            assert any("host_action_bundle=reviewer-evidence" in line for line in rp_api_compare["lines"]), rp_api_compare
+            assert any("host_action_compare_profile=plain_ucore_batch" in line for line in rp_api_compare["lines"]), rp_api_compare
             rp_result = read_json(base + "/api/state/rp_host_run_result")
             assert rp_result["values"]["qemu_orch_passed"] == "1", rp_result
             assert int(rp_result["values"]["extracted_state_files"]) >= 100, rp_result

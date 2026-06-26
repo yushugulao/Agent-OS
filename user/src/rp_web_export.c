@@ -277,6 +277,44 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (rp_host_seed_count() > 0) {
+		if (!rp_append_file("rp_api_compare", "host_action_payload_applied=1")) return 1;
+		if (rp_host_seed_has("kind=research_run")) {
+			char seed_run[48];
+			if (!rp_host_seed_copy_value_for_kind("kind=research_run", "run_id=", seed_run, sizeof(seed_run))) {
+				rp_copy_text(seed_run, sizeof(seed_run), "RUN-905");
+			}
+			if (!rp_append_host_action_line("rp_api_compare", "host_action_run_id=", seed_run)) return 1;
+		}
+		if (rp_host_seed_has("kind=human_review")) {
+			char reviewer[48];
+			if (!rp_host_seed_copy_value_for_kind("kind=human_review", "reviewer=", reviewer, sizeof(reviewer))) {
+				rp_copy_text(reviewer, sizeof(reviewer), "HOST");
+			}
+			if (!rp_append_host_action_line("rp_api_compare", "host_action_reviewer=", reviewer)) return 1;
+		}
+		if (rp_host_seed_has("kind=revision_task")) {
+			char targets[80];
+			if (!rp_host_seed_copy_value_for_kind("kind=revision_task", "targets=", targets, sizeof(targets))) {
+				rp_copy_text(targets, sizeof(targets), "methods,chart_caption");
+			}
+			if (!rp_append_host_action_line("rp_api_compare", "host_action_revision_targets=", targets)) return 1;
+		}
+		if (rp_host_seed_has("kind=bundle_export")) {
+			char bundle[48];
+			if (!rp_host_seed_copy_value_for_kind("kind=bundle_export", "bundle=", bundle, sizeof(bundle))) {
+				rp_copy_text(bundle, sizeof(bundle), "evidence");
+			}
+			if (!rp_append_host_action_line("rp_api_compare", "host_action_bundle=", bundle)) return 1;
+		}
+		if (rp_host_seed_has("kind=agentcompare")) {
+			char profile[48];
+			if (!rp_host_seed_copy_value_for_kind("kind=agentcompare", "profile=", profile, sizeof(profile))) {
+				rp_copy_text(profile, sizeof(profile), "plain_ucore");
+			}
+			if (!rp_append_host_action_line("rp_api_compare", "host_action_compare_profile=", profile)) return 1;
+		}
+	}
 	if (!rp_write_file("rp_api_artifacts",
 			   "api=artifacts\n"
 			   "inputs=2\n"

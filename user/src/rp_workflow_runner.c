@@ -109,6 +109,44 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (rp_host_seed_count() > 0) {
+		if (!rp_append_file("rp_artifact_manifest", "host_manifest_payload_applied=1")) return 1;
+		if (rp_host_seed_has("kind=research_run")) {
+			char seed_run[48];
+			if (!rp_host_seed_copy_value_for_kind("kind=research_run", "run_id=", seed_run, sizeof(seed_run))) {
+				rp_copy_text(seed_run, sizeof(seed_run), "RUN-905");
+			}
+			if (!rp_append_host_action_line("rp_artifact_manifest", "host_manifest_run_id=", seed_run)) return 1;
+		}
+		if (rp_host_seed_has("kind=revision_task")) {
+			char targets[80];
+			if (!rp_host_seed_copy_value_for_kind("kind=revision_task", "targets=", targets, sizeof(targets))) {
+				rp_copy_text(targets, sizeof(targets), "methods,chart_caption");
+			}
+			if (!rp_append_host_action_line("rp_artifact_manifest", "host_manifest_revision_targets=", targets)) return 1;
+		}
+		if (rp_host_seed_has("kind=notebook_export")) {
+			char format[32];
+			if (!rp_host_seed_copy_value_for_kind("kind=notebook_export", "format=", format, sizeof(format))) {
+				rp_copy_text(format, sizeof(format), "ipynb");
+			}
+			if (!rp_append_host_action_line("rp_artifact_manifest", "host_manifest_notebook_format=", format)) return 1;
+		}
+		if (rp_host_seed_has("kind=bundle_export")) {
+			char bundle[48];
+			if (!rp_host_seed_copy_value_for_kind("kind=bundle_export", "bundle=", bundle, sizeof(bundle))) {
+				rp_copy_text(bundle, sizeof(bundle), "evidence");
+			}
+			if (!rp_append_host_action_line("rp_artifact_manifest", "host_manifest_bundle=", bundle)) return 1;
+		}
+		if (rp_host_seed_has("kind=agentcompare")) {
+			char profile[48];
+			if (!rp_host_seed_copy_value_for_kind("kind=agentcompare", "profile=", profile, sizeof(profile))) {
+				rp_copy_text(profile, sizeof(profile), "plain_ucore");
+			}
+			if (!rp_append_host_action_line("rp_artifact_manifest", "host_manifest_compare_profile=", profile)) return 1;
+		}
+	}
 	if (!rp_append_file("rp_runner", "custom_runs=3")) return 1;
 	if (!rp_append_file("rp_runner", "custom_run=usable-run:RUN-900")) return 1;
 	if (!rp_append_file("rp_runner", "custom_run_2=usable-run:RUN-901")) return 1;
