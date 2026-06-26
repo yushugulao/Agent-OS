@@ -301,6 +301,28 @@ static int write_startup_health_surface(void)
 			      "platform_doctor=ready;checks=8;workspace=pass;template=pass;cloud_llm=optional;provider_health=offline:1,cloud:0,ready_cloud:0;downloads=markdown,json");
 }
 
+static int write_research_product_surface(void)
+{
+	if (!rp_append_file("rp_runop",
+			    "project_scaffold=templates:3,files:8,launch:sample,download:ready,status=ready")) {
+		return 0;
+	}
+	if (!rp_append_file("rp_runop",
+			    "dataset_product=previews:2,visualizations:2,cards:2,answers:2,runs:2,comparisons:1,portfolio:ready,status=ready")) {
+		return 0;
+	}
+	if (!rp_append_file("rp_runop",
+			    "source_portfolio=sources:2,citations:4,tags:2,portfolio:ready,status=ready")) {
+		return 0;
+	}
+	if (!rp_append_file("rp_runop",
+			    "study_protocol_reproduction=packages:1,review:approved,action_plan:ready,action_execution:ready,comparison:ready,status=ready")) {
+		return 0;
+	}
+	return rp_append_file("rp_runop",
+			      "project_bundle_cache=latest:ready,reload:pass,refresh:ready,downloads:cached_or_refresh,status=ready");
+}
+
 static int write_advanced_surface(void)
 {
 	if (!rp_append_file("rp_runop",
@@ -410,6 +432,7 @@ int main(void)
 	if (!write_knowledge_services()) return 1;
 	if (!write_runtime_services()) return 1;
 	if (!write_startup_health_surface()) return 1;
+	if (!write_research_product_surface()) return 1;
 	if (!write_advanced_surface()) return 1;
 	if (!write_agentos_surface_binding()) return 1;
 
@@ -445,6 +468,7 @@ int main(void)
 	if (!rp_append_status("worker_pool=ready")) return 1;
 	if (!rp_append_status("startup_health=ready")) return 1;
 	if (!rp_append_status("platform_doctor=ready")) return 1;
+	if (!rp_append_status("research_products=ready")) return 1;
 	if (!rp_append_status("advanced_surface=ready")) return 1;
 	printf("rp_service_surface: bio=ready lab_resources=ready publication=ready knowledge=ready runtime=ready status=ready\n");
 	return 0;

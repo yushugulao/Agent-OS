@@ -94,6 +94,14 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runop", "deepseek_provider=registered");
 	ok = ok && rp_file_contains("rp_runop", "platform_doctor=ready;checks=8");
 	ok = ok && rp_file_contains("rp_runop", "cloud_llm=optional");
+	ok = ok && rp_file_contains("rp_runop", "project_scaffold=templates:3");
+	ok = ok && rp_file_contains("rp_runop", "dataset_product=previews:2");
+	ok = ok && rp_file_contains("rp_runop", "visualizations:2");
+	ok = ok && rp_file_contains("rp_runop", "source_portfolio=sources:2");
+	ok = ok && rp_file_contains("rp_runop", "study_protocol_reproduction=packages:1");
+	ok = ok && rp_file_contains("rp_runop", "action_execution:ready");
+	ok = ok && rp_file_contains("rp_runop", "project_bundle_cache=latest:ready");
+	ok = ok && rp_file_contains("rp_runop", "downloads:cached_or_refresh");
 	ok = ok && rp_file_contains("rp_protocol", "protocol_compliance_reports=1");
 	ok = ok && rp_file_contains("rp_protocol", "protocol_amendments=1");
 	ok = ok && rp_file_contains("rp_soplog", "sop_executions=1");
@@ -320,7 +328,7 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=120\n"
+			   "checks=138\n"
 			   "task_records=21\n"
 			   "ready_tasks=21\n"
 			   "high_tasks=4\n"
@@ -389,6 +397,13 @@ int main(void)
 			   "configuration_health=ready\n"
 			   "platform_doctor_checks=8\n"
 			   "secret_values_written=0\n"
+			   "research_product_checks=18\n"
+			   "project_scaffold_files=8\n"
+			   "dataset_product_exports=9\n"
+			   "dataset_product_runs=2\n"
+			   "source_portfolio_exports=1\n"
+			   "study_protocol_reproduction_checks=5\n"
+			   "project_bundle_cache=ready\n"
 			   "research_search_saved=2\n"
 			   "project_surface_actions=4\n"
 			   "study_protocol_checks=6\n"
@@ -431,6 +446,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=120 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
+	printf("rp_consistency: checks=138 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 products=18 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
 	return 0;
 }

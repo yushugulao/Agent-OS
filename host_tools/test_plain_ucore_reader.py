@@ -282,7 +282,7 @@ status=ready
         "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;detail_checks=kernel;result=planned\n"
         "study_handoff=rp_backend_exec->rp_agentcmp;status=ready\n"
     ),
-    "rp_consistency": "checks=120\nartifact_provenance=3\nartifact_dossier_checks=4\nartifact_path_rebuild_files=6\nartifact_path_rebuild_steps=7\n",
+    "rp_consistency": "checks=138\nresearch_product_checks=18\nproject_scaffold_files=8\ndataset_product_exports=9\nstudy_protocol_reproduction_checks=5\nproject_bundle_cache=ready\nartifact_provenance=3\nartifact_dossier_checks=4\nartifact_path_rebuild_files=6\nartifact_path_rebuild_steps=7\n",
     "rp_artifact_manifest": (
         "record=1;kind=input;path=rp_input_fastq;status=ready\n"
         "record=3;kind=alignment;path=rp_artifact;section=rp_align_table;status=ready\n"

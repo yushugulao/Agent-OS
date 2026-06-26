@@ -96,6 +96,11 @@ int main(void)
 	if (!rp_file_contains("rp_runop", "startup_health=quickstart:ready")) return 1;
 	if (!rp_file_contains("rp_runop", "configuration_health=settings:ready")) return 1;
 	if (!rp_file_contains("rp_runop", "platform_doctor=ready;checks=8")) return 1;
+	if (!rp_file_contains("rp_runop", "project_scaffold=templates:3")) return 1;
+	if (!rp_file_contains("rp_runop", "dataset_product=previews:2")) return 1;
+	if (!rp_file_contains("rp_runop", "source_portfolio=sources:2")) return 1;
+	if (!rp_file_contains("rp_runop", "study_protocol_reproduction=packages:1")) return 1;
+	if (!rp_file_contains("rp_runop", "project_bundle_cache=latest:ready")) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
 	if (ack_count < 27 || tool_count < 113) return 1;
@@ -129,7 +134,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=120\n"
+			   "consistency_checks=138\n"
 			   "coherence_checks=9\n"
 			   "namespace_checks=12\n"
 			   "surface_checks=13\n"
@@ -189,6 +194,13 @@ int main(void)
 			   "configuration_health=ready\n"
 			   "platform_doctor_checks=8\n"
 			   "secret_values_written=0\n"
+			   "research_product_checks=18\n"
+			   "project_scaffold_files=8\n"
+			   "dataset_product_exports=9\n"
+			   "dataset_product_runs=2\n"
+			   "source_portfolio_exports=1\n"
+			   "study_protocol_reproduction_checks=5\n"
+			   "project_bundle_cache=ready\n"
 			   "research_search_saved=2\n"
 			   "project_surface_actions=4\n"
 			   "study_protocol_checks=6\n"
@@ -265,7 +277,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=120\n"
+			   "consistency_checks=138\n"
 			   "coherence_checks=9\n"
 			   "namespace_checks=12\n"
 			   "surface_checks=13\n"
@@ -323,6 +335,13 @@ int main(void)
 			   "startup_checks=8\n"
 			   "platform_doctor_checks=8\n"
 			   "secret_values_written=0\n"
+			   "research_product_checks=18\n"
+			   "project_scaffold_files=8\n"
+			   "dataset_product_exports=9\n"
+			   "dataset_product_runs=2\n"
+			   "source_portfolio_exports=1\n"
+			   "study_protocol_reproduction_checks=5\n"
+			   "project_bundle_cache=ready\n"
 			   "claim_records=8\n"
 			   "provenance_paths=3\n"
 			   "data_profiles=4\n"
@@ -408,6 +427,6 @@ int main(void)
 	if (!rp_append_status("telemetry=ready")) return 1;
 	if (!rp_append_status("agentcmp=ready")) return 1;
 	if (!rp_append_status("health=ready")) return 1;
-	printf("rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 delta_items=20 dynamic=4 status=ready\n");
+	printf("rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 products=18 delta_items=20 dynamic=4 status=ready\n");
 	return 0;
 }
