@@ -183,9 +183,9 @@ int main(void)
 
 	if (!rp_write_file("rp_web_routes",
 			   "service=host-web-ui\n"
-			   "routes=22\n"
+			   "routes=42\n"
 			   "get_routes=14\n"
-			   "post_routes=8\n"
+			   "post_routes=28\n"
 			   "route=/;payload=rp_api_home;status=ready\n"
 			   "route=/run/RUN-042;payload=rp_api_run;status=ready\n"
 			   "route=/research/{run_id};payload=rp_uresrun;status=ready\n"
@@ -208,6 +208,26 @@ int main(void)
 			   "action=/actions/research/review;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/research/revision-task;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/research/run-revision-task;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/operations-report;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/operations-advance-next;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/operations-execute-next-plan;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/workbench-delivery-dashboard;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/workbench-delivery-execute-next;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/workbench-quality-gate;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/workbench-quality-repair-plan;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/workbench-quality-repair-execute;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/workbench-plan-queue-row;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/workbench-plan-queue-execute;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/workbench-action-item;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/project-space;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/project-space-note;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/project-space-action-item;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/project-space-answer;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/project-space-repair-execute;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research-search/save;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research-search/export;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research-search/note;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research-search/action-item;method=POST;payload=rp_api_action;status=ready\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -653,7 +673,7 @@ int main(void)
 	}
 	if (!rp_write_file("rp_api_action",
 			   "api=actions\n"
-			   "actions=8\n"
+			   "actions=28\n"
 			   "host_workflow_run=/actions/host-workflow/run\n"
 			   "host_workflow_export=/actions/host-workflow/export\n"
 			   "agentcompare_run=/actions/agentcompare/run\n"
@@ -665,9 +685,36 @@ int main(void)
 			   "research_review=/actions/research/review\n"
 			   "research_revision_task=/actions/research/revision-task\n"
 			   "research_run_revision=/actions/research/run-revision-task\n"
+			   "operations_report=/actions/research/operations-report\n"
+			   "operations_advance_next=/actions/research/operations-advance-next\n"
+			   "operations_execute_next_plan=/actions/research/operations-execute-next-plan\n"
+			   "workbench_delivery_dashboard=/actions/research/workbench-delivery-dashboard\n"
+			   "workbench_delivery_execute_next=/actions/research/workbench-delivery-execute-next\n"
+			   "workbench_quality_gate=/actions/research/workbench-quality-gate\n"
+			   "workbench_quality_repair_plan=/actions/research/workbench-quality-repair-plan\n"
+			   "workbench_quality_repair_execute=/actions/research/workbench-quality-repair-execute\n"
+			   "workbench_plan_queue_row=/actions/research/workbench-plan-queue-row\n"
+			   "workbench_plan_queue_execute=/actions/research/workbench-plan-queue-execute\n"
+			   "workbench_action_item=/actions/research/workbench-action-item\n"
+			   "project_space=/actions/research/project-space\n"
+			   "project_space_note=/actions/research/project-space-note\n"
+			   "project_space_action_item=/actions/research/project-space-action-item\n"
+			   "project_space_answer=/actions/research/project-space-answer\n"
+			   "project_space_repair_execute=/actions/research/project-space-repair-execute\n"
+			   "research_search_save=/actions/research-search/save\n"
+			   "research_search_export=/actions/research-search/export\n"
+			   "research_search_note=/actions/research-search/note\n"
+			   "research_search_action_item=/actions/research-search/action-item\n"
 			   "delivery_manifest_builder=1\n"
 			   "human_review_form=1\n"
 			   "revision_task_runner=1\n"
+			   "operations_actions=3\n"
+			   "quality_actions=3\n"
+			   "delivery_actions=2\n"
+			   "project_space_actions=5\n"
+			   "research_search_actions=4\n"
+			   "plan_queue_actions=2\n"
+			   "action_item_actions=1\n"
 			   "workbench_advance=1\n"
 			   "notebook_download=1\n"
 			   "bundle_download=1\n"
@@ -891,9 +938,9 @@ int main(void)
 	}
 	if (!rp_write_file("rp_web_bundle",
 			   "bundle=host-web-ui\n"
-			   "routes=22\n"
+			   "routes=42\n"
 			   "get_routes=14\n"
-			   "post_routes=8\n"
+			   "post_routes=28\n"
 			   "api_payloads=14\n"
 			   "action_payloads=1\n"
 			   "action_state_records=12\n"
@@ -931,7 +978,7 @@ int main(void)
 			   "reader_contract_version=2\n"
 			   "reader_ready=1\n"
 			   "reader_views=14\n"
-			   "reader_actions=8\n"
+			   "reader_actions=28\n"
 			   "reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes\n"
 			   "reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_web_bundle\n"
 			   "reader_required_sections=routes,payloads,actions,live_update,downloads,compare\n"
@@ -1044,6 +1091,24 @@ int main(void)
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=notebook_export"))) {
 			if (!rp_append_file("rp_actionio", "host_action_export=1")) return 1;
 		}
+		if ((host_action_seeded && rp_host_seed_has_platform_ops_action()) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=operations_")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=project_space")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=research_search")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_quality")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_delivery")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_plan_queue")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_action_item"))) {
+			char value[96];
+			if (!rp_append_file("rp_actionio", "host_action_platform_ops=1")) return 1;
+			if (!rp_append_file("rp_actionio", "host_action_platform_ops_outputs=rp_runner,rp_package,rp_api_action,rp_web_bundle")) return 1;
+			if (host_action_seeded && rp_host_seed_copy_platform_ops_value("query=", value, sizeof(value))) {
+				if (!rp_append_host_action_line("rp_actionio", "host_action_search_query=", value)) return 1;
+			}
+			if (host_action_seeded && rp_host_seed_copy_platform_ops_value("project_id=", value, sizeof(value))) {
+				if (!rp_append_host_action_line("rp_actionio", "host_action_project_id=", value)) return 1;
+			}
+		}
 		if (!rp_append_file("rp_web_bundle", line)) return 1;
 		if (host_action_seeded) {
 			if (!rp_append_file("rp_web_bundle", "host_action_source=rp_host_action_seed")) return 1;
@@ -1069,6 +1134,23 @@ int main(void)
 		if ((host_action_seeded && host_seed_has_workbench_action()) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench"))) {
 			if (!rp_append_file("rp_web_bundle", "host_action_workbench_outputs=rp_runner,rp_revision,rp_package")) return 1;
+		}
+		if ((host_action_seeded && rp_host_seed_has_platform_ops_action()) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=operations_")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=project_space")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=research_search")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_quality")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_delivery")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_plan_queue")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_action_item"))) {
+			char value[96];
+			if (!rp_append_file("rp_web_bundle", "host_action_platform_ops=rp_runner,rp_package,rp_api_action")) return 1;
+			if (host_action_seeded && rp_host_seed_copy_platform_ops_value("query=", value, sizeof(value))) {
+				if (!rp_append_host_action_line("rp_web_bundle", "host_action_search_query=", value)) return 1;
+			}
+			if (host_action_seeded && rp_host_seed_copy_platform_ops_value("project_id=", value, sizeof(value))) {
+				if (!rp_append_host_action_line("rp_web_bundle", "host_action_project_id=", value)) return 1;
+			}
 		}
 		if (!rp_append_status("host_reader_actions=ready")) return 1;
 		printf("rp_web_export: host_reader_actions=%d\n", host_actions);
@@ -1108,6 +1190,6 @@ int main(void)
 	if (!rp_append_status("actionio=ready")) return 1;
 	if (!rp_append_status("usable_research=ready")) return 1;
 	if (!rp_append_status("action_exports=ready")) return 1;
-	printf("rp_web_export: routes=22 api_payloads=14 actions=8 bundle=ready status=ready\n");
+	printf("rp_web_export: routes=42 api_payloads=14 actions=28 bundle=ready status=ready\n");
 	return 0;
 }

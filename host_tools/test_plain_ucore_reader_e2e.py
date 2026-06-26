@@ -39,7 +39,7 @@ def main() -> int:
             auto_run_ucore=True,
             repo_dir=repo_dir,
             run_root=run_root,
-            runner_timeout=90,
+            runner_timeout=180,
         )
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -100,6 +100,26 @@ def main() -> int:
                 {"path": "/actions/research/workbench-file-verify", "payload": {"workbench": "W1", "manifest": "mf.json"}},
                 {"path": "/actions/research/workbench-complete", "payload": {"workbench": "W1", "review_decision": "approved"}},
                 {"path": "/actions/research/export-workbench", "payload": {"workbench": "W1", "bundle": "wb.zip"}},
+                {"path": "/actions/research/operations-report", "payload": {"format": "markdown"}},
+                {"path": "/actions/research/operations-advance-next", "payload": {"provider_id": "template", "max_steps": "5", "review_decision": "approved", "delivery_audience": "reviewer"}},
+                {"path": "/actions/research/operations-execute-next-plan", "payload": {"provider_id": "template", "max_steps": "6", "answer_question": "What next?", "delivery_audience": "reviewer"}},
+                {"path": "/actions/research/workbench-delivery-dashboard", "payload": {"query": "ready", "include_clean": "1"}},
+                {"path": "/actions/research/workbench-delivery-execute-next", "payload": {"query": "ready", "provider_id": "template", "max_steps": "4", "answer_question": "Repair delivery?"}},
+                {"path": "/actions/research/workbench-quality-gate", "payload": {"workbench_id": "W1"}},
+                {"path": "/actions/research/workbench-quality-repair-plan", "payload": {"workbench_id": "W1"}},
+                {"path": "/actions/research/workbench-quality-repair-execute", "payload": {"workbench_id": "W1", "repair_id": "repair1", "action_key": "export_file_manifest_and_verify", "provider_id": "template", "max_steps": "3"}},
+                {"path": "/actions/research/workbench-plan-queue-row", "payload": {"workbench_id": "W1", "source_type": "readiness", "source_id": "literature_search", "status": "done"}},
+                {"path": "/actions/research/workbench-plan-queue-execute", "payload": {"workbench_id": "W1", "source_type": "readiness", "source_id": "literature_search", "provider_id": "template", "max_steps": "4"}},
+                {"path": "/actions/research/workbench-action-item", "payload": {"workbench_id": "W1", "title": "Review search hits", "instruction": "Check citations", "priority": "high", "status": "open"}},
+                {"path": "/actions/research/project-space", "payload": {"workbench_id": "W1", "project_id": "lab-gene-x", "query": "recovery"}},
+                {"path": "/actions/research/project-space-note", "payload": {"workbench_id": "W1", "kind": "decision", "title": "Project scope", "body": "Keep recovered evidence first."}},
+                {"path": "/actions/research/project-space-action-item", "payload": {"workbench_id": "W1", "title": "Project task", "instruction": "Prepare handoff", "priority": "high"}},
+                {"path": "/actions/research/project-space-answer", "payload": {"workbench_id": "W1", "question": "What is ready?", "limit": "6"}},
+                {"path": "/actions/research/project-space-repair-execute", "payload": {"workbench_id": "W1", "repair_id": "repair1", "provider_id": "template", "max_steps": "4"}},
+                {"path": "/actions/research-search/save", "payload": {"query": "recovery evidence", "name": "Recovery search"}},
+                {"path": "/actions/research-search/export", "payload": {"query": "recovery evidence", "limit": "20"}},
+                {"path": "/actions/research-search/note", "payload": {"workbench_id": "W1", "query": "recovery evidence", "title": "Search note", "note": "Keep hits."}},
+                {"path": "/actions/research-search/action-item", "payload": {"workbench_id": "W1", "query": "recovery evidence", "title": "Review search hits", "instruction": "Promote key hit", "priority": "high"}},
                 {"path": "/actions/research/export-notebook", "payload": {"run_id": "R1", "format": "ipynb"}},
                 {"path": "/actions/research/export-bundle", "payload": {"run_id": "R1", "bundle": "ev"}},
                 {"path": "/actions/agentcompare/run", "payload": {"profile": "pb"}},
@@ -205,6 +225,25 @@ def main() -> int:
             assert any("host_action_workbench_completion=ready" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_workbench_export=ready" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_workbench_bundle=wb.zip" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_platform_ops=ready" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_operations_report=exported" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_operations_advance=executed" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_operations_plan_execute=executed" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_delivery_dashboard=ready" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_delivery_repair_execute=done" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_quality_gate=checked" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_quality_repair_plan=ready" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_quality_repair_execute=done" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_plan_queue_row=updated" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_plan_queue_execute=done" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_workbench_action_item=created" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_project_space=ready" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_project_note=recorded" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_project_action_item=created" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_project_answer=generated" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_project_repair=executed" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_research_search=ready" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_search_query=recovery evidence" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_research_inputs=applied" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_dataset_title=D1" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_template_name=TP1" in line for line in rp_runner["lines"]), rp_runner
@@ -285,6 +324,14 @@ def main() -> int:
             assert any("host_action_workbench_row_status=done" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_workbench_runbook_format=markdown" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_workbench_timeline_format=html" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_platform_ops_package=ready" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_quality_gate=checked" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_quality_repair_plan=ready" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_quality_repair_execute=done" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_delivery_dashboard=ready" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_plan_queue=ready" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_project_space=ready" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_research_search=ready" in line for line in rp_package["lines"]), rp_package
             rp_nbexec = read_json(base + "/api/state/rp_nbexec")
             assert any("host_action_notebook_export=ready" in line for line in rp_nbexec["lines"]), rp_nbexec
             assert any("host_action_notebook_format=ipynb" in line for line in rp_nbexec["lines"]), rp_nbexec
@@ -320,12 +367,16 @@ def main() -> int:
             assert any("host_action_revision=1" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_workbench=1" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_workbench_outputs=rp_runner,rp_revision,rp_package" in line for line in rp_actionio["lines"]), rp_actionio
+            assert any("host_action_platform_ops=1" in line for line in rp_actionio["lines"]), rp_actionio
+            assert any("host_action_platform_ops_outputs=rp_runner,rp_package,rp_api_action,rp_web_bundle" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_export=1" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_agentcompare=1" in line for line in rp_actionio["lines"]), rp_actionio
             rp_web_bundle = read_json(base + "/api/state/rp_web_bundle")
             assert any("host_action_research_inputs=rp_input,rp_runner,rp_api_run" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_evidence_inputs=rp_lit,rp_knowledge,rp_api_evidence" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_workbench_outputs=rp_runner,rp_revision,rp_package" in line for line in rp_web_bundle["lines"]), rp_web_bundle
+            assert any("host_action_platform_ops=rp_runner,rp_package,rp_api_action" in line for line in rp_web_bundle["lines"]), rp_web_bundle
+            assert any("host_action_search_query=recovery evidence" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             rp_agentcmp = read_json(base + "/api/state/rp_agentcmp")
             assert any("host_action_compare_requested=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_compare_profile=pb" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -351,6 +402,12 @@ def main() -> int:
             assert any("host_action_workbench_row_status=done" in line for line in rp_api_compare["lines"]), rp_api_compare
             assert any("host_action_workbench_handoff_scope=full" in line for line in rp_api_compare["lines"]), rp_api_compare
             assert any("host_action_workbench_bundle=wb.zip" in line for line in rp_api_compare["lines"]), rp_api_compare
+            rp_api_action = read_json(base + "/api/state/rp_api_action")
+            assert any("actions=28" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("operations_report=/actions/research/operations-report" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("workbench_quality_gate=/actions/research/workbench-quality-gate" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("project_space=/actions/research/project-space" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("research_search_export=/actions/research-search/export" in line for line in rp_api_action["lines"]), rp_api_action
             rp_api_run = read_json(base + "/api/state/rp_api_run")
             assert any("host_action_title=T1" in line for line in rp_api_run["lines"]), rp_api_run
             assert any("host_action_question=Q1" in line for line in rp_api_run["lines"]), rp_api_run

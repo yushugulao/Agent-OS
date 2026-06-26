@@ -198,6 +198,76 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (rp_host_seed_has_platform_ops_action()) {
+		char value[96];
+		if (!rp_append_file("rp_package", "host_action_platform_ops_package=ready")) return 1;
+		if (rp_host_seed_has("kind=workbench_quality_gate")) {
+			if (!rp_append_file("rp_package", "host_action_quality_package=ready")) return 1;
+			if (!rp_append_file("rp_package", "host_action_quality_gate=checked")) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_quality_repair_plan")) {
+			if (!rp_append_file("rp_package", "host_action_quality_repair_plan=ready")) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_quality_repair_execute")) {
+			if (!rp_append_file("rp_package", "host_action_quality_repair_execute=done")) return 1;
+			if (rp_host_seed_copy_platform_ops_value("repair_id=", value, sizeof(value))) {
+				if (!rp_append_host_action_line("rp_package", "host_action_quality_repair_id=", value)) return 1;
+			}
+		}
+		if (rp_host_seed_copy_platform_ops_value("workbench_id=", value, sizeof(value))) {
+			if (!rp_append_host_action_line("rp_package", "host_action_quality_workbench=", value)) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_delivery_dashboard")) {
+			if (!rp_append_file("rp_package", "host_action_delivery_dashboard=ready")) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_delivery_execute_next")) {
+			if (!rp_append_file("rp_package", "host_action_delivery_repair_execute=done")) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_plan_queue_row") ||
+		    rp_host_seed_has("kind=workbench_plan_queue_execute")) {
+			if (!rp_append_file("rp_package", "host_action_plan_queue=ready")) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_action_item")) {
+			if (!rp_append_file("rp_package", "host_action_workbench_action_item=created")) return 1;
+			if (rp_host_seed_copy_platform_ops_value("title=", value, sizeof(value))) {
+				if (!rp_append_host_action_line("rp_package", "host_action_action_item_title=", value)) return 1;
+			}
+		}
+		if (rp_host_seed_has("kind=operations_report")) {
+			if (!rp_append_file("rp_package", "host_action_operations_report=exported")) return 1;
+		}
+		if (rp_host_seed_has("kind=operations_advance_next") ||
+		    rp_host_seed_has("kind=operations_execute_next_plan")) {
+			if (!rp_append_file("rp_package", "host_action_operations_next=executed")) return 1;
+		}
+		if (rp_host_seed_has("kind=project_space")) {
+			if (!rp_append_file("rp_package", "host_action_project_space=ready")) return 1;
+			if (rp_host_seed_copy_platform_ops_value("project_id=", value, sizeof(value))) {
+				if (!rp_append_host_action_line("rp_package", "host_action_project_id=", value)) return 1;
+			}
+		}
+		if (rp_host_seed_has("kind=project_space_note")) {
+			if (!rp_append_file("rp_package", "host_action_project_note=recorded")) return 1;
+		}
+		if (rp_host_seed_has("kind=project_space_action_item")) {
+			if (!rp_append_file("rp_package", "host_action_project_action_item=created")) return 1;
+		}
+		if (rp_host_seed_has("kind=project_space_answer")) {
+			if (!rp_append_file("rp_package", "host_action_project_answer=generated")) return 1;
+		}
+		if (rp_host_seed_has("kind=project_space_repair_execute")) {
+			if (!rp_append_file("rp_package", "host_action_project_repair=executed")) return 1;
+		}
+		if (rp_host_seed_has("kind=research_search_save") ||
+		    rp_host_seed_has("kind=research_search_export") ||
+		    rp_host_seed_has("kind=research_search_note") ||
+		    rp_host_seed_has("kind=research_search_action_item")) {
+			if (!rp_append_file("rp_package", "host_action_research_search=ready")) return 1;
+			if (rp_host_seed_copy_platform_ops_value("query=", value, sizeof(value))) {
+				if (!rp_append_host_action_line("rp_package", "host_action_search_query=", value)) return 1;
+			}
+		}
+	}
 	if (!rp_write_file("rp_datarel",
 			   "fair_checks=5\n"
 			   "fair=passed\n"

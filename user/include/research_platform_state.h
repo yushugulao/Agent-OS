@@ -12,7 +12,7 @@
 #define RP_HOST_SEED_ARG_MARK "__rp_seed_v1__"
 
 static RP_UNUSED char rp_state_buf[RP_STATE_BUFFER_SIZE];
-static RP_UNUSED char rp_host_seed_buf[4096];
+static RP_UNUSED char rp_host_seed_buf[8192];
 static RP_UNUSED int rp_host_seed_loaded;
 extern int __argc;
 extern char **__argv;
@@ -291,11 +291,19 @@ static RP_UNUSED int rp_host_seed_has_workbench_action(void)
 	       rp_host_seed_has("kind=workbench_manuscript_revision_task") ||
 	       rp_host_seed_has("kind=workbench_task_board") ||
 	       rp_host_seed_has("kind=workbench_task_board_row") ||
+	       rp_host_seed_has("kind=workbench_plan_queue_row") ||
+	       rp_host_seed_has("kind=workbench_plan_queue_execute") ||
 	       rp_host_seed_has("kind=workbench_runbook") ||
 	       rp_host_seed_has("kind=workbench_timeline") ||
 	       rp_host_seed_has("kind=workbench_file_manifest") ||
 	       rp_host_seed_has("kind=workbench_file_verify") ||
-	       rp_host_seed_has("kind=workbench_export");
+	       rp_host_seed_has("kind=workbench_export") ||
+	       rp_host_seed_has("kind=workbench_quality_gate") ||
+	       rp_host_seed_has("kind=workbench_quality_repair_plan") ||
+	       rp_host_seed_has("kind=workbench_quality_repair_execute") ||
+	       rp_host_seed_has("kind=workbench_action_item") ||
+	       rp_host_seed_has("kind=workbench_delivery_dashboard") ||
+	       rp_host_seed_has("kind=workbench_delivery_execute_next");
 }
 
 static RP_UNUSED int rp_host_seed_copy_workbench_value(const char *key, char *out, int cap)
@@ -323,11 +331,19 @@ static RP_UNUSED int rp_host_seed_copy_workbench_value(const char *key, char *ou
 		"kind=workbench_manuscript_revision_task",
 		"kind=workbench_task_board",
 		"kind=workbench_task_board_row",
+		"kind=workbench_plan_queue_row",
+		"kind=workbench_plan_queue_execute",
 		"kind=workbench_runbook",
 		"kind=workbench_timeline",
 		"kind=workbench_file_manifest",
 		"kind=workbench_file_verify",
-		"kind=workbench_export"
+		"kind=workbench_export",
+		"kind=workbench_quality_gate",
+		"kind=workbench_quality_repair_plan",
+		"kind=workbench_quality_repair_execute",
+		"kind=workbench_action_item",
+		"kind=workbench_delivery_dashboard",
+		"kind=workbench_delivery_execute_next"
 	};
 	for (int i = 0; i < (int)(sizeof(kinds) / sizeof(kinds[0])); i++) {
 		if (rp_host_seed_copy_value_for_kind(kinds[i], key, out, cap)) return 1;
@@ -356,6 +372,60 @@ static RP_UNUSED int rp_host_seed_has_research_data_action(void)
 {
 	return rp_host_seed_has_research_input_action() ||
 	       rp_host_seed_has_evidence_input_action();
+}
+
+static RP_UNUSED int rp_host_seed_has_platform_ops_action(void)
+{
+	return rp_host_seed_has("kind=operations_report") ||
+	       rp_host_seed_has("kind=operations_advance_next") ||
+	       rp_host_seed_has("kind=operations_execute_next_plan") ||
+	       rp_host_seed_has("kind=project_space") ||
+	       rp_host_seed_has("kind=project_space_note") ||
+	       rp_host_seed_has("kind=project_space_action_item") ||
+	       rp_host_seed_has("kind=project_space_answer") ||
+	       rp_host_seed_has("kind=project_space_repair_execute") ||
+	       rp_host_seed_has("kind=research_search_save") ||
+	       rp_host_seed_has("kind=research_search_export") ||
+	       rp_host_seed_has("kind=research_search_note") ||
+	       rp_host_seed_has("kind=research_search_action_item") ||
+	       rp_host_seed_has("kind=workbench_delivery_dashboard") ||
+	       rp_host_seed_has("kind=workbench_delivery_execute_next") ||
+	       rp_host_seed_has("kind=workbench_quality_gate") ||
+	       rp_host_seed_has("kind=workbench_quality_repair_plan") ||
+	       rp_host_seed_has("kind=workbench_quality_repair_execute") ||
+	       rp_host_seed_has("kind=workbench_plan_queue_row") ||
+	       rp_host_seed_has("kind=workbench_plan_queue_execute") ||
+	       rp_host_seed_has("kind=workbench_action_item");
+}
+
+static RP_UNUSED int rp_host_seed_copy_platform_ops_value(const char *key, char *out, int cap)
+{
+	const char *kinds[] = {
+		"kind=operations_report",
+		"kind=operations_advance_next",
+		"kind=operations_execute_next_plan",
+		"kind=research_search_save",
+		"kind=research_search_export",
+		"kind=research_search_note",
+		"kind=research_search_action_item",
+		"kind=project_space",
+		"kind=project_space_note",
+		"kind=project_space_action_item",
+		"kind=project_space_answer",
+		"kind=project_space_repair_execute",
+		"kind=workbench_delivery_dashboard",
+		"kind=workbench_delivery_execute_next",
+		"kind=workbench_quality_gate",
+		"kind=workbench_quality_repair_plan",
+		"kind=workbench_quality_repair_execute",
+		"kind=workbench_plan_queue_row",
+		"kind=workbench_plan_queue_execute",
+		"kind=workbench_action_item"
+	};
+	for (int i = 0; i < (int)(sizeof(kinds) / sizeof(kinds[0])); i++) {
+		if (rp_host_seed_copy_value_for_kind(kinds[i], key, out, cap)) return 1;
+	}
+	return 0;
 }
 
 static RP_UNUSED int rp_host_seed_copy_workspace_value(const char *key, char *out, int cap)

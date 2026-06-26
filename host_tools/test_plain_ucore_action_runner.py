@@ -190,6 +190,86 @@ def main() -> int:
                     "payload": {"workbench": "usable-workbench:RUN-900", "bundle": "workbench-bundle.zip"},
                 },
                 {
+                    "path": "/actions/research/operations-report",
+                    "payload": {"format": "markdown"},
+                },
+                {
+                    "path": "/actions/research/operations-advance-next",
+                    "payload": {"provider_id": "template", "max_steps": "5", "review_decision": "approved", "delivery_audience": "reviewer"},
+                },
+                {
+                    "path": "/actions/research/operations-execute-next-plan",
+                    "payload": {"provider_id": "template", "max_steps": "6", "answer_question": "What next?", "delivery_audience": "reviewer"},
+                },
+                {
+                    "path": "/actions/research/workbench-delivery-dashboard",
+                    "payload": {"query": "ready", "include_clean": "1"},
+                },
+                {
+                    "path": "/actions/research/workbench-delivery-execute-next",
+                    "payload": {"query": "ready", "provider_id": "template", "max_steps": "4", "answer_question": "Repair delivery?"},
+                },
+                {
+                    "path": "/actions/research/workbench-quality-gate",
+                    "payload": {"workbench_id": "usable-workbench:RUN-900"},
+                },
+                {
+                    "path": "/actions/research/workbench-quality-repair-plan",
+                    "payload": {"workbench_id": "usable-workbench:RUN-900"},
+                },
+                {
+                    "path": "/actions/research/workbench-quality-repair-execute",
+                    "payload": {"workbench_id": "usable-workbench:RUN-900", "repair_id": "repair1", "action_key": "export_file_manifest_and_verify", "provider_id": "template", "max_steps": "3"},
+                },
+                {
+                    "path": "/actions/research/workbench-plan-queue-row",
+                    "payload": {"workbench_id": "usable-workbench:RUN-900", "source_type": "readiness", "source_id": "literature_search", "status": "done"},
+                },
+                {
+                    "path": "/actions/research/workbench-plan-queue-execute",
+                    "payload": {"workbench_id": "usable-workbench:RUN-900", "source_type": "readiness", "source_id": "literature_search", "provider_id": "template", "max_steps": "4"},
+                },
+                {
+                    "path": "/actions/research/workbench-action-item",
+                    "payload": {"workbench_id": "usable-workbench:RUN-900", "title": "Review search hits", "instruction": "Check citations", "priority": "high", "status": "open"},
+                },
+                {
+                    "path": "/actions/research/project-space",
+                    "payload": {"workbench_id": "usable-workbench:RUN-900", "project_id": "lab-gene-x", "query": "recovery"},
+                },
+                {
+                    "path": "/actions/research/project-space-note",
+                    "payload": {"workbench_id": "usable-workbench:RUN-900", "kind": "decision", "title": "Project scope", "body": "Keep recovered evidence first."},
+                },
+                {
+                    "path": "/actions/research/project-space-action-item",
+                    "payload": {"workbench_id": "usable-workbench:RUN-900", "title": "Project task", "instruction": "Prepare handoff", "priority": "high"},
+                },
+                {
+                    "path": "/actions/research/project-space-answer",
+                    "payload": {"workbench_id": "usable-workbench:RUN-900", "question": "What is ready?", "limit": "6"},
+                },
+                {
+                    "path": "/actions/research/project-space-repair-execute",
+                    "payload": {"workbench_id": "usable-workbench:RUN-900", "repair_id": "repair1", "provider_id": "template", "max_steps": "4"},
+                },
+                {
+                    "path": "/actions/research-search/save",
+                    "payload": {"query": "recovery evidence", "name": "Recovery search"},
+                },
+                {
+                    "path": "/actions/research-search/export",
+                    "payload": {"query": "recovery evidence", "limit": "20"},
+                },
+                {
+                    "path": "/actions/research-search/note",
+                    "payload": {"workbench_id": "usable-workbench:RUN-900", "query": "recovery evidence", "title": "Search note", "note": "Keep hits."},
+                },
+                {
+                    "path": "/actions/research-search/action-item",
+                    "payload": {"workbench_id": "usable-workbench:RUN-900", "query": "recovery evidence", "title": "Review search hits", "instruction": "Promote key hit", "priority": "high"},
+                },
+                {
                     "path": "/actions/research/review",
                     "payload": {"run_id": "RUN-999", "reviewer": "Wang", "decision": "needs_revision"},
                 },
@@ -208,7 +288,7 @@ def main() -> int:
             ],
         )
         summary = runner.prepare_action_state(loaded, state_dir, run_dir)
-        expected_actions = 41
+        expected_actions = 61
 
         assert summary["actions"] == expected_actions
         assert summary["accepted"] == expected_actions
@@ -249,6 +329,26 @@ def main() -> int:
         assert "workbench_file_manifest" in summary["kinds"]
         assert "workbench_file_verify" in summary["kinds"]
         assert "workbench_export" in summary["kinds"]
+        assert "operations_report" in summary["kinds"]
+        assert "operations_advance_next" in summary["kinds"]
+        assert "operations_execute_next_plan" in summary["kinds"]
+        assert "workbench_delivery_dashboard" in summary["kinds"]
+        assert "workbench_delivery_execute_next" in summary["kinds"]
+        assert "workbench_quality_gate" in summary["kinds"]
+        assert "workbench_quality_repair_plan" in summary["kinds"]
+        assert "workbench_quality_repair_execute" in summary["kinds"]
+        assert "workbench_plan_queue_row" in summary["kinds"]
+        assert "workbench_plan_queue_execute" in summary["kinds"]
+        assert "workbench_action_item" in summary["kinds"]
+        assert "project_space" in summary["kinds"]
+        assert "project_space_note" in summary["kinds"]
+        assert "project_space_action_item" in summary["kinds"]
+        assert "project_space_answer" in summary["kinds"]
+        assert "project_space_repair_execute" in summary["kinds"]
+        assert "research_search_save" in summary["kinds"]
+        assert "research_search_export" in summary["kinds"]
+        assert "research_search_note" in summary["kinds"]
+        assert "research_search_action_item" in summary["kinds"]
         assert "human_review" in summary["kinds"]
         assert "revision_task" in summary["kinds"]
         assert "notebook_export" in summary["kinds"]
@@ -298,6 +398,26 @@ def main() -> int:
         assert "kind=workbench_file_manifest" in queue
         assert "kind=workbench_file_verify" in queue
         assert "kind=workbench_export" in queue
+        assert "kind=operations_report" in queue
+        assert "kind=operations_advance_next" in queue
+        assert "kind=operations_execute_next_plan" in queue
+        assert "kind=workbench_delivery_dashboard" in queue
+        assert "kind=workbench_delivery_execute_next" in queue
+        assert "kind=workbench_quality_gate" in queue
+        assert "kind=workbench_quality_repair_plan" in queue
+        assert "kind=workbench_quality_repair_execute" in queue
+        assert "kind=workbench_plan_queue_row" in queue
+        assert "kind=workbench_plan_queue_execute" in queue
+        assert "kind=workbench_action_item" in queue
+        assert "kind=project_space" in queue
+        assert "kind=project_space_note" in queue
+        assert "kind=project_space_action_item" in queue
+        assert "kind=project_space_answer" in queue
+        assert "kind=project_space_repair_execute" in queue
+        assert "kind=research_search_save" in queue
+        assert "kind=research_search_export" in queue
+        assert "kind=research_search_note" in queue
+        assert "kind=research_search_action_item" in queue
         assert "kind=human_review" in queue
         assert "kind=revision_task" in queue
         assert "kind=notebook_export" in queue
@@ -343,6 +463,10 @@ def main() -> int:
         assert "timeline_format=html" in queue
         assert "manifest=delivery-manifest.json" in queue
         assert "bundle=workbench-bundle.zip" in queue
+        assert "repair_id=repair1" in queue
+        assert "action_key=export_file_manifest_and_verify" in queue
+        assert "project_id=lab-gene-x" in queue
+        assert "name=Recovery search" in queue
         assert "status=ready" in queue
 
         plan = read(next_state / "rp_host_action_plan")
@@ -383,6 +507,9 @@ def main() -> int:
         assert "kind=workbench_file_manifest" in plan
         assert "kind=workbench_file_verify" in plan
         assert "kind=workbench_export" in plan
+        assert "kind=operations_report" in plan
+        assert "kind=project_space" in plan
+        assert "kind=research_search_export" in plan
 
         inbox = read(next_state / "rp_host_action_inbox")
         assert "/actions/research/run" in inbox
@@ -419,6 +546,11 @@ def main() -> int:
         assert "/actions/research/workbench-file-manifest" in inbox
         assert "/actions/research/workbench-file-verify" in inbox
         assert "/actions/research/export-workbench" in inbox
+        assert "/actions/research/operations-report" in inbox
+        assert "/actions/research/workbench-quality-gate" in inbox
+        assert "/actions/research/workbench-plan-queue-execute" in inbox
+        assert "/actions/research/project-space" in inbox
+        assert "/actions/research-search/export" in inbox
 
         assert (run_dir / "actions.json").exists()
         assert (run_dir / "runner-summary.json").exists()
@@ -459,6 +591,26 @@ def main() -> int:
         assert runner.action_kind("/actions/research/workbench-file-manifest") == "workbench_file_manifest"
         assert runner.action_kind("/actions/research/workbench-file-verify") == "workbench_file_verify"
         assert runner.action_kind("/actions/research/export-workbench") == "workbench_export"
+        assert runner.action_kind("/actions/research/operations-report") == "operations_report"
+        assert runner.action_kind("/actions/research/operations-advance-next") == "operations_advance_next"
+        assert runner.action_kind("/actions/research/operations-execute-next-plan") == "operations_execute_next_plan"
+        assert runner.action_kind("/actions/research/workbench-delivery-dashboard") == "workbench_delivery_dashboard"
+        assert runner.action_kind("/actions/research/workbench-delivery-execute-next") == "workbench_delivery_execute_next"
+        assert runner.action_kind("/actions/research/workbench-quality-gate") == "workbench_quality_gate"
+        assert runner.action_kind("/actions/research/workbench-quality-repair-plan") == "workbench_quality_repair_plan"
+        assert runner.action_kind("/actions/research/workbench-quality-repair-execute") == "workbench_quality_repair_execute"
+        assert runner.action_kind("/actions/research/workbench-plan-queue-row") == "workbench_plan_queue_row"
+        assert runner.action_kind("/actions/research/workbench-plan-queue-execute") == "workbench_plan_queue_execute"
+        assert runner.action_kind("/actions/research/workbench-action-item") == "workbench_action_item"
+        assert runner.action_kind("/actions/research/project-space") == "project_space"
+        assert runner.action_kind("/actions/research/project-space-note") == "project_space_note"
+        assert runner.action_kind("/actions/research/project-space-action-item") == "project_space_action_item"
+        assert runner.action_kind("/actions/research/project-space-answer") == "project_space_answer"
+        assert runner.action_kind("/actions/research/project-space-repair-execute") == "project_space_repair_execute"
+        assert runner.action_kind("/actions/research-search/save") == "research_search_save"
+        assert runner.action_kind("/actions/research-search/export") == "research_search_export"
+        assert runner.action_kind("/actions/research-search/note") == "research_search_note"
+        assert runner.action_kind("/actions/research-search/action-item") == "research_search_action_item"
         assert runner.action_kind("/actions/research/export-notebook") == "notebook_export"
         assert runner.action_kind("/actions/unknown") == "generic"
 
@@ -485,6 +637,10 @@ def main() -> int:
         assert "kind=workbench_manuscript" in seed_file
         assert "kind=workbench_task_board_row" in seed_file
         assert "kind=workbench_file_verify" in seed_file
+        assert "kind=operations_report" in seed_file
+        assert "kind=workbench_quality_gate" in seed_file
+        assert "kind=project_space" in seed_file
+        assert "kind=research_search_export" in seed_file
         assert "source_text=" not in seed_file
 
         runner.write_run_result_state(

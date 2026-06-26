@@ -103,6 +103,10 @@ def action_kind(path: str) -> str:
         return "workbench_task_board"
     if path.endswith("/research/workbench-task-board-row"):
         return "workbench_task_board_row"
+    if path.endswith("/research/workbench-plan-queue-row"):
+        return "workbench_plan_queue_row"
+    if path.endswith("/research/workbench-plan-queue-execute"):
+        return "workbench_plan_queue_execute"
     if path.endswith("/research/workbench-runbook"):
         return "workbench_runbook"
     if path.endswith("/research/workbench-timeline"):
@@ -113,6 +117,42 @@ def action_kind(path: str) -> str:
         return "workbench_file_verify"
     if path.endswith("/research/workbench-complete"):
         return "workbench_complete"
+    if path.endswith("/research/workbench-quality-gate"):
+        return "workbench_quality_gate"
+    if path.endswith("/research/workbench-quality-repair-plan"):
+        return "workbench_quality_repair_plan"
+    if path.endswith("/research/workbench-quality-repair-execute"):
+        return "workbench_quality_repair_execute"
+    if path.endswith("/research/workbench-action-item"):
+        return "workbench_action_item"
+    if path.endswith("/research/workbench-delivery-dashboard"):
+        return "workbench_delivery_dashboard"
+    if path.endswith("/research/workbench-delivery-execute-next"):
+        return "workbench_delivery_execute_next"
+    if path.endswith("/research/operations-report"):
+        return "operations_report"
+    if path.endswith("/research/operations-advance-next"):
+        return "operations_advance_next"
+    if path.endswith("/research/operations-execute-next-plan"):
+        return "operations_execute_next_plan"
+    if path.endswith("/research/project-space"):
+        return "project_space"
+    if path.endswith("/research/project-space-note"):
+        return "project_space_note"
+    if path.endswith("/research/project-space-action-item"):
+        return "project_space_action_item"
+    if path.endswith("/research/project-space-answer"):
+        return "project_space_answer"
+    if path.endswith("/research/project-space-repair-execute"):
+        return "project_space_repair_execute"
+    if path.endswith("/research-search/save"):
+        return "research_search_save"
+    if path.endswith("/research-search/export"):
+        return "research_search_export"
+    if path.endswith("/research-search/note"):
+        return "research_search_note"
+    if path.endswith("/research-search/action-item"):
+        return "research_search_action_item"
     if path.endswith("/research/export-workbench"):
         return "workbench_export"
     if path.endswith("/research/export-notebook"):
@@ -308,11 +348,31 @@ def compact_seed_text(text: str) -> str:
         "workbench_manuscript_revision_task": {"revision_task", "revision_status"},
         "workbench_task_board": {"board_filter"},
         "workbench_task_board_row": {"row_id", "row_status"},
+        "workbench_plan_queue_row": {"workbench_id", "plan_item_id", "source_type", "source_id", "status"},
+        "workbench_plan_queue_execute": {"workbench_id", "plan_item_id", "source_type", "source_id", "provider_id", "max_steps"},
         "workbench_runbook": {"runbook_format"},
         "workbench_timeline": {"timeline_format"},
         "workbench_file_manifest": {"workbench", "manifest"},
         "workbench_file_verify": {"workbench", "manifest"},
         "workbench_export": {"workbench", "bundle"},
+        "workbench_quality_gate": {"workbench_id"},
+        "workbench_quality_repair_plan": {"workbench_id"},
+        "workbench_quality_repair_execute": {"workbench_id", "repair_id", "action_key", "provider_id", "max_steps", "answer_question"},
+        "workbench_action_item": {"workbench_id", "title", "instruction", "priority", "status", "source_query"},
+        "workbench_delivery_dashboard": {"tag", "query", "include_clean"},
+        "workbench_delivery_execute_next": {"tag", "query", "provider_id", "max_steps", "answer_question"},
+        "operations_report": {"format"},
+        "operations_advance_next": {"provider_id", "max_steps", "review_decision", "delivery_audience"},
+        "operations_execute_next_plan": {"provider_id", "max_steps", "answer_question", "delivery_audience"},
+        "project_space": {"workbench_id", "project_id", "query"},
+        "project_space_note": {"workbench_id", "kind", "title", "body", "tags"},
+        "project_space_action_item": {"workbench_id", "title", "instruction", "priority", "status", "source_query"},
+        "project_space_answer": {"workbench_id", "question", "limit"},
+        "project_space_repair_execute": {"workbench_id", "repair_id", "provider_id", "max_steps"},
+        "research_search_save": {"query", "name"},
+        "research_search_export": {"query", "limit"},
+        "research_search_note": {"workbench_id", "query", "title", "note", "limit"},
+        "research_search_action_item": {"workbench_id", "query", "title", "instruction", "priority", "limit"},
     }
     lines: list[str] = []
     for raw in text.splitlines():
@@ -421,9 +481,13 @@ def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_dis
         write_json(run_dir / "ucore-run-summary.json", summary)
         return summary
     embedded_records = write_seed_header(next_state, repo_dir)
+    seed_file = next_state / "rp_host_action_seed"
+    seed_file_bash = bash_path(seed_file)
     run_command_text = (
         f"cd {shell_quote(repo_bash)} && "
         "make user TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded >/dev/null"
+        " && "
+        f"cp {shell_quote(seed_file_bash)} user/target/bin/rp_host_action_seed"
         " && "
         "rm -rf nfs/fs nfs/fs.img nfs/fs-copy.img && "
         "make nfs/fs.img >/dev/null && "

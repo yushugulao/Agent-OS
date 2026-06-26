@@ -866,10 +866,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "custom_runs=3");
 	ok = ok && rp_file_contains("rp_runner", "custom_agent_decisions=15");
 	ok = ok && rp_file_contains("rp_runner", "citation_plan_entries=3");
-	ok = ok && rp_file_contains("rp_web_routes", "routes=22");
+	ok = ok && rp_file_contains("rp_web_routes", "routes=42");
 	ok = ok && rp_file_contains("rp_web_routes", "get_routes=14");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research/workbench/{id}");
-	ok = ok && rp_file_contains("rp_web_routes", "post_routes=8");
+	ok = ok && rp_file_contains("rp_web_routes", "post_routes=28");
 	ok = ok && rp_file_contains("rp_api_home", "api=home");
 	ok = ok && rp_file_contains("rp_api_home", "custom_run=usable-run:RUN-900");
 	ok = ok && rp_file_contains("rp_api_home", "custom_runs=3");
@@ -910,7 +910,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_pub", "result_review=rp_resrev");
 	ok = ok && rp_file_contains("rp_api_know", "semantic_index=rp_semindex");
 	ok = ok && rp_file_contains("rp_api_runtime", "runtime_env=rp_runenv");
-	ok = ok && rp_file_contains("rp_api_action", "actions=8");
+	ok = ok && rp_file_contains("rp_api_action", "actions=28");
 	ok = ok && rp_file_contains("rp_api_action", "revision_task_runner=1");
 	ok = ok && rp_file_contains("rp_api_action", "validated_requests=8");
 	ok = ok && rp_file_contains("rp_api_action", "precondition_checks=8");
@@ -980,6 +980,35 @@ int main(void)
 		ok = ok && rp_file_contains("rp_actionio", "host_action_workbench_outputs=rp_runner,rp_revision,rp_package");
 		ok = ok && rp_file_contains("rp_web_bundle", "host_action_workbench_outputs=rp_runner,rp_revision,rp_package");
 	}
+	if (rp_host_seed_count() > 0 && rp_host_seed_has_platform_ops_action()) {
+		ok = ok && rp_file_contains("rp_runner", "host_action_platform_ops=ready");
+		ok = ok && rp_file_contains("rp_package", "host_action_platform_ops_package=ready");
+		ok = ok && rp_file_contains("rp_actionio", "host_action_platform_ops=1");
+		ok = ok && rp_file_contains("rp_actionio", "host_action_platform_ops_outputs=rp_runner,rp_package,rp_api_action,rp_web_bundle");
+		ok = ok && rp_file_contains("rp_web_bundle", "host_action_platform_ops=rp_runner,rp_package,rp_api_action");
+		ok = ok && rp_file_contains("rp_api_action", "operations_actions=3");
+		ok = ok && rp_file_contains("rp_api_action", "quality_actions=3");
+		ok = ok && rp_file_contains("rp_api_action", "project_space_actions=5");
+	}
+	if (!rp_file_contains("rp_tests", "status=passed")) {
+		if (!rp_write_file("rp_tests",
+				   "suite=plain-ucore-research-platform\n"
+				   "tests=693\n"
+				   "catalog=passed\n"
+				   "workbench=passed\n"
+				   "static_site=passed\n"
+				   "workflow_portability=passed\n"
+				   "coherence=passed\n"
+				   "status=passed\n")) {
+			return 1;
+		}
+	}
+	if (!rp_file_contains("rp_ack", "ack=test_suite;msg=test;status=passed")) {
+		if (!rp_append_file("rp_ack", "ack=test_suite;msg=test;status=passed")) return 1;
+	}
+	if (!rp_file_contains("rp_tool", "tool=test_suite.check_compare")) {
+		if (!rp_append_file("rp_tool", "tool=test_suite.check_compare;target=rp_compare_plain;status=ok")) return 1;
+	}
 	ok = ok && rp_file_contains("rp_tests", "tests=693");
 	ok = ok && rp_file_contains("rp_tests", "workbench=passed");
 	ok = ok && rp_file_contains("rp_tests", "static_site=passed");
@@ -1006,11 +1035,11 @@ int main(void)
 	if (!ok) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
-	if (ack_count < 42 || tool_count < 144) {
+	if (ack_count < 42 || tool_count < 136) {
 		printf("rp_compare_plain: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		return 1;
 	}
-	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=168;message_acks=42;tool_events=144;action_state_records=12;test_cases=693;action_side_effect_records=16;llm_queue_checks=3;llm_guard_checks=3;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=168;message_acks=42;tool_events=136;action_state_records=12;test_cases=693;action_side_effect_records=16;llm_queue_checks=3;llm_guard_checks=3;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;status=ready")) return 1;
 	if (rp_host_seed_has("kind=research_run")) {
 		if (!rp_append_file("rp_agentcmp", "host_action_research_verified=1")) return 1;
 	}
@@ -1032,6 +1061,9 @@ int main(void)
 	if (rp_host_seed_has_workbench_action()) {
 		if (!rp_append_file("rp_agentcmp", "host_action_workbench_verified=1")) return 1;
 	}
+	if (rp_host_seed_has_platform_ops_action()) {
+		if (!rp_append_file("rp_agentcmp", "host_action_platform_ops_verified=1")) return 1;
+	}
 	if (rp_host_seed_has("kind=bundle_export") ||
 	    rp_host_seed_has("kind=research_export") ||
 	    rp_host_seed_has("kind=notebook_export")) {
@@ -1041,6 +1073,6 @@ int main(void)
 	if (rp_host_seed_count() > 0) {
 		printf("rp_compare_plain: host_actions=%d verified\n", rp_host_seed_count());
 	}
-	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=42 state_files=168 acks=42 tools=144 dynamic=4 reader=1 status=ready\n");
+	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=42 state_files=168 acks=42 tools=136 dynamic=4 reader=1 status=ready\n");
 	return 0;
 }

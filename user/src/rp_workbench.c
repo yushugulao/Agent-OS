@@ -7,6 +7,7 @@ static char workbench_ops[960];
 static char workbench_row[192];
 static char workbench_docs[1024];
 static char workbench_fast[2600];
+static char workbench_ops_view[1800];
 
 static void append_workbench_summary_value(char *line, int cap, const char *kind, const char *key, const char *prefix, const char *fallback)
 {
@@ -56,6 +57,74 @@ static int append_fast_workbench_host_line(void)
 	return rp_append_file("rp_runner", line);
 }
 
+static int append_platform_ops_host_line(void)
+{
+	if (!rp_host_seed_has_platform_ops_action()) return 1;
+	char *line = workbench_ops_view;
+	rp_copy_text(line, sizeof(workbench_ops_view), "host_action_platform_ops=ready;");
+	if (rp_host_seed_has("kind=operations_report")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_operations_report=exported;");
+	}
+	if (rp_host_seed_has("kind=operations_advance_next")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_operations_advance=executed;");
+	}
+	if (rp_host_seed_has("kind=operations_execute_next_plan")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_operations_plan_execute=executed;");
+	}
+	if (rp_host_seed_has("kind=workbench_delivery_dashboard")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_delivery_dashboard=ready;");
+	}
+	if (rp_host_seed_has("kind=workbench_delivery_execute_next")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_delivery_repair_execute=done;");
+	}
+	if (rp_host_seed_has("kind=workbench_quality_gate")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_quality_gate=checked;");
+	}
+	if (rp_host_seed_has("kind=workbench_quality_repair_plan")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_quality_repair_plan=ready;");
+	}
+	if (rp_host_seed_has("kind=workbench_quality_repair_execute")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_quality_repair_execute=done;");
+	}
+	if (rp_host_seed_has("kind=workbench_plan_queue_row")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_plan_queue_row=updated;");
+	}
+	if (rp_host_seed_has("kind=workbench_plan_queue_execute")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_plan_queue_execute=done;");
+	}
+	if (rp_host_seed_has("kind=workbench_action_item")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_workbench_action_item=created;");
+	}
+	if (rp_host_seed_has("kind=project_space")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_project_space=ready;");
+	}
+	if (rp_host_seed_has("kind=project_space_note")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_project_note=recorded;");
+	}
+	if (rp_host_seed_has("kind=project_space_action_item")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_project_action_item=created;");
+	}
+	if (rp_host_seed_has("kind=project_space_answer")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_project_answer=generated;");
+		append_workbench_summary_value(line, sizeof(workbench_ops_view), "kind=project_space_answer", "question=", "host_action_project_question=", "What is ready?");
+	}
+	if (rp_host_seed_has("kind=project_space_repair_execute")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_project_repair=executed;");
+	}
+	if (rp_host_seed_has("kind=research_search_save") ||
+	    rp_host_seed_has("kind=research_search_export") ||
+	    rp_host_seed_has("kind=research_search_note") ||
+	    rp_host_seed_has("kind=research_search_action_item")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_research_search=ready;");
+		if (rp_host_seed_copy_platform_ops_value("query=", workbench_value, sizeof(workbench_value))) {
+			rp_append_text(line, sizeof(workbench_ops_view), "host_action_search_query=");
+			rp_append_text(line, sizeof(workbench_ops_view), workbench_value);
+			rp_append_text(line, sizeof(workbench_ops_view), ";");
+		}
+	}
+	return rp_append_file("rp_runner", line);
+}
+
 int main(void)
 {
 	int ok = 1;
@@ -74,6 +143,7 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!append_fast_workbench_host_line()) return 1;
+	if (!append_platform_ops_host_line()) return 1;
 
 	if (!rp_append_file("rp_runner", "workbench=usable-workbench:RUN-900:plain-ucore")) return 1;
 	if (!rp_append_file("rp_runner", "workbench_tasks=9")) return 1;
