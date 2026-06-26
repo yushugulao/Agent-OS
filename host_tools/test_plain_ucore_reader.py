@@ -226,7 +226,10 @@ def main() -> int:
         assert "Backend Evidence In Runner" in run_html
         assert "Backend Case Narratives" in run_html
         assert "Operations Report Narrative" in run_html
+        assert "Operations Source Files" in run_html
         assert "operations_report" in run_html
+        assert "rp_review_pack" in run_html
+        assert "operations_handoff" in run_html
         assert "Run Action Trace" in run_html
         assert "batch_tool_context" in run_html
         assert "execution_plan:pass:record:baseline" in run_html
@@ -291,7 +294,9 @@ def main() -> int:
         assert "Review Workbench Summary" in review_html
         assert "Review Project Summary" in review_html
         assert "Operations Report Narrative" in review_html
+        assert "Operations Source Files" in review_html
         assert "project_followup" in review_html
+        assert "backend_evidence" in review_html
         assert "Review Action Trace" in review_html
         assert "Handoff Checks" in review_html
         assert "send_to_reviewer" in review_html
@@ -315,6 +320,7 @@ def main() -> int:
         assert "Stage Logs" in artifacts_html
         assert "Review And LLM Signals" in artifacts_html
         assert "Host Artifact Actions" in artifacts_html
+        assert "Operations Source Files" in artifacts_html
         assert "rp_align_table" in artifacts_html
         assert "rp_retry_plan" in artifacts_html
         assert "artifact_manifest" in artifacts_html

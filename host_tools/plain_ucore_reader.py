@@ -303,6 +303,45 @@ def operations_report_narrative(state: dict[str, dict[str, object]]) -> list[dic
     return [row for row in rows if any(value for key, value in row.items() if key != "source")]
 
 
+def first_source_record(state: dict[str, dict[str, object]], name: str, prefixes: tuple[str, ...]) -> str:
+    rows = state_prefixed_lines(state, name, prefixes)
+    return rows[0] if rows else ""
+
+
+def operations_source_files(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
+    specs = [
+        ("operations_report", "rp_review_pack", ("operations_handoff=",), "run.html,review.html"),
+        ("operations_report", "rp_package", ("host_action_operations_report=",), "run.html,review.html"),
+        ("operations_report", "rp_runner", ("workbench_tasks=", "workbench_next_task="), "run.html,review.html"),
+        ("execution_plan", "rp_package", ("host_action_operations_next=", "host_action_quality_gate=", "host_action_quality_repair_execute="), "run.html,review.html"),
+        ("workbench_delivery", "rp_review_pack", ("workbench_handoff=",), "run.html,review.html"),
+        ("workbench_delivery", "rp_runner", ("host_action_workbench_id=", "host_action_workbench_task="), "run.html,review.html"),
+        ("workbench_delivery", "rp_package", ("host_action_workbench_manifest=", "host_action_workbench_bundle="), "run.html,review.html,artifacts.html"),
+        ("project_followup", "rp_review_pack", ("project_handoff=",), "review.html"),
+        ("project_followup", "rp_package", ("host_action_project_id=", "host_action_project_space=", "host_action_project_action_item="), "review.html"),
+        ("backend_evidence", "rp_backend_exec", ("runner_report=",), "run.html,compare.html,review.html"),
+        ("backend_evidence", "rp_runner", ("backend_evidence_report=",), "run.html,review.html"),
+        ("backend_evidence", "rp_report_text", ("backend_evidence_report=",), "run.html,review.html"),
+        ("backend_evidence", "rp_review_pack", ("backend_evidence_review=",), "review.html"),
+    ]
+    rows: list[dict[str, str]] = []
+    for section, name, prefixes, page_view in specs:
+        record = first_source_record(state, name, prefixes)
+        if not record:
+            continue
+        parsed = parse_kv_record(record)
+        rows.append(
+            {
+                "operation_section": section,
+                "state_file": name,
+                "record": record,
+                "rendered_page": page_view,
+                "status": parsed.get("status", "present"),
+            }
+        )
+    return rows
+
+
 def render_record_panel(
     title: str,
     columns: list[tuple[str, str]],
@@ -506,6 +545,11 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 [("Section", "operation_section"), ("Source", "source"), ("Detail", "detail"), ("Status", "status")],
                 operations_report_narrative(state),
             ),
+            render_record_panel(
+                "Operations Source Files",
+                [("Section", "operation_section"), ("State File", "state_file"), ("Record", "record"), ("Rendered Page", "rendered_page"), ("Status", "status")],
+                operations_source_files(state),
+            ),
         ]
     if file_name == "agents.html":
         return [
@@ -681,6 +725,11 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
             ),
             render_line_panel("Review And LLM Signals", review_signal_rows),
             render_line_panel("Host Artifact Actions", host_action_rows),
+            render_record_panel(
+                "Operations Source Files",
+                [("Section", "operation_section"), ("State File", "state_file"), ("Record", "record"), ("Rendered Page", "rendered_page"), ("Status", "status")],
+                operations_source_files(state),
+            ),
         ]
     if file_name == "review.html":
         review_evidence_rows = (
@@ -752,6 +801,11 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 "Operations Report Narrative",
                 [("Section", "operation_section"), ("Source", "source"), ("Detail", "detail"), ("Status", "status")],
                 operations_report_narrative(state),
+            ),
+            render_record_panel(
+                "Operations Source Files",
+                [("Section", "operation_section"), ("State File", "state_file"), ("Record", "record"), ("Rendered Page", "rendered_page"), ("Status", "status")],
+                operations_source_files(state),
             ),
         ]
     if file_name == "llm.html":
