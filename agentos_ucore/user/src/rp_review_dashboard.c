@@ -23,6 +23,11 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "reader_contract=host_plain_ucore_v2");
 	ok = ok && rp_file_contains("rp_runner", "backend_evidence_report=rp_backend_exec");
 	ok = ok && rp_file_contains("rp_report_text", "backend_evidence_report=rp_backend_exec");
+	ok = ok && rp_file_contains("rp_protocol", "protocol_compliance_reports=1");
+	ok = ok && rp_file_contains("rp_protocol", "protocol_amendments=1");
+	ok = ok && rp_file_contains("rp_soplog", "sop_executions=1");
+	ok = ok && rp_file_contains("rp_risk", "decision_support=decision:agentos-final-demo-backend");
+	ok = ok && rp_file_contains("rp_capa", "capa_charts=deviations-by-severity");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_review_dashboard",
@@ -37,6 +42,12 @@ int main(void)
 			   "section=agents;source=rp_agents,rp_decisions,rp_handoff,rp_agent_run;status=ready\n"
 			   "section=delivery;source=rp_package,rp_release,rp_dossier;status=ready\n"
 			   "section=compare;source=rp_agentcmp,rp_consistency,rp_api_compare;status=plain-kernel\n"
+			   "subsection=protocol_compliance;source=rp_protocol;reports=1;findings=3;status=reviewable\n"
+			   "subsection=protocol_amendments;source=rp_protocol;amendments=1;decisions=1;status=applied\n"
+			   "subsection=sop_execution;source=rp_soplog;executions=1;step_results=4;deviation_reviews=1;status=completed_with_deviation\n"
+			   "subsection=risk_capa;source=rp_risk,rp_capa;risks=3;mitigations=3;reviews=1;capa_actions=2;verifications=2;status=ready\n"
+			   "subsection=decision_support;source=rp_risk;options=3;criteria=5;scores=15;selected=select_agentos_ucore_hybrid\n"
+			   "subsection=provenance_export;source=rp_provpath,rp_lineage;nodes=150;links=250;views=1;status=ready\n"
 			   "gate=required_files;status=pass;source=rp_package\n"
 			   "gate=human_review;status=pass;source=rp_review2\n"
 			   "gate=llm_packet_guard;status=pass;source=rp_llm_guard\n"

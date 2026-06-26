@@ -20,7 +20,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_trialrec", "selected=trial-3");
 	ok = ok && rp_file_contains("rp_training", "gaps=0");
 	ok = ok && rp_file_contains("rp_risk", "open_risks=0");
+	ok = ok && rp_file_contains("rp_risk", "decision_support=decision:agentos-final-demo-backend");
 	ok = ok && rp_file_contains("rp_capa", "capa_actions=2");
+	ok = ok && rp_file_contains("rp_capa", "capa_charts=deviations-by-severity");
+	ok = ok && rp_file_contains("rp_protocol", "protocol_compliance_reports=1");
+	ok = ok && rp_file_contains("rp_protocol", "protocol_amendments=1");
+	ok = ok && rp_file_contains("rp_soplog", "sop_executions=1");
 	ok = ok && rp_file_contains("rp_fail", "recoverable=1");
 	ok = ok && rp_file_contains("rp_retrylog", "final_result=recovered");
 	ok = ok && rp_file_contains("rp_prompt", "routes=4");
@@ -132,6 +137,7 @@ int main(void)
 			   "evidence_extractions=3\n"
 			   "prisma_flows=1\n"
 			   "evidence_synthesis_files=2\n"
+			   "governance_bundle=protocol:2,sop:1,risk:1,capa:2,decision:1\n"
 			   "workflow_portability=rp_wfio\n"
 			   "portability_exports=5\n"
 			   "adapter_specs=6\n"
@@ -178,6 +184,7 @@ int main(void)
 			   "evidence_bundle_entries=12\n"
 			   "evidence_bundle_contains=run.json,artifacts.json,human_reviews.json,delivery_manifests.json,revision_tasks.json\n"
 			   "evidence_bundle_contains_extra=screening_decisions.json,evidence_extractions.json,evidence_protocols.json,prisma_flow.json,evidence_synthesis.md\n"
+			   "provenance_graph=unified;nodes=150;links=250;views=1;exports=1\n"
 			   "evidence_bundle_delivery_files=2\n"
 			   "evidence_bundle_checksum=stable-evidence-bundle\n"
 			   "bundle_files=human_reviews.json,delivery_manifests.json,revision_tasks.json,delivery-manifest.json,delivery-manifest.md\n"

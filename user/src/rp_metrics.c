@@ -22,6 +22,10 @@ int main(void)
 	if (!rp_file_contains("rp_trialrec", "selected=trial-3")) return 1;
 	if (!rp_file_contains("rp_risk", "open_risks=0")) return 1;
 	if (!rp_file_contains("rp_capa", "verifications=2")) return 1;
+	if (!rp_file_contains("rp_risk", "decision_support=decision:agentos-final-demo-backend")) return 1;
+	if (!rp_file_contains("rp_protocol", "protocol_compliance_reports=1")) return 1;
+	if (!rp_file_contains("rp_protocol", "protocol_amendments=1")) return 1;
+	if (!rp_file_contains("rp_soplog", "sop_executions=1")) return 1;
 	if (!rp_file_contains("rp_sched", "queue_items=21")) return 1;
 	if (!rp_file_contains("rp_taskrec", "class=critical")) return 1;
 	if (!rp_file_contains("rp_rank", "selected=10")) return 1;
@@ -105,6 +109,14 @@ int main(void)
 			   "compliance=accepted\n"
 			   "risk_items=3\n"
 			   "capa_actions=2\n"
+			   "risk_mitigations=3\n"
+			   "risk_reviews=1\n"
+			   "capa_verifications=2\n"
+			   "protocol_compliance_reports=1\n"
+			   "protocol_compliance_findings=3\n"
+			   "protocol_amendments=1\n"
+			   "sop_executions=1\n"
+			   "decision_support_packets=1\n"
 			   "delta_items=20\n"
 			   "diff_records=1\n"
 			   "timeline_events=9\n"
@@ -232,6 +244,11 @@ int main(void)
 			   "compliance=accepted\n"
 			   "risk_items=3\n"
 			   "capa_actions=2\n"
+			   "risk_reviews=1\n"
+			   "protocol_compliance_reports=1\n"
+			   "protocol_amendments=1\n"
+			   "sop_executions=1\n"
+			   "decision_support_packets=1\n"
 			   "delta_items=20\n"
 			   "diff_records=1\n"
 			   "timeline_events=9\n"

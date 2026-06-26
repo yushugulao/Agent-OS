@@ -1464,6 +1464,12 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "runner_cases=4");
 	ok = ok && require_file_token("rp_agentcmp", "runner_passed=2");
 	ok = ok && require_file_token("rp_agentcmp", "runner_planned=2");
+	ok = ok && require_file_token("rp_agentcmp", "research_governance_checks=18");
+	ok = ok && require_file_token("rp_protocol", "protocol_compliance_reports=1");
+	ok = ok && require_file_token("rp_protocol", "protocol_amendments=1");
+	ok = ok && require_file_token("rp_soplog", "sop_executions=1");
+	ok = ok && require_file_token("rp_risk", "decision_support=decision:agentos-final-demo-backend");
+	ok = ok && require_file_token("rp_package", "provenance_graph=unified");
 	ok = ok && require_file_token("rp_package", "llm_roundtrip=rp_llmq,rp_llm_packets,rp_llm_resp");
 	ok = ok && require_file_token("rp_package", "delivery_file=llm_trace;path=rp_llm_packets;required=0;exists=1");
 	ok = ok && require_file_token("rp_review_dashboard", "gate=llm_packet_guard;status=pass;source=rp_llm_guard");

@@ -88,6 +88,13 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runop", "package_intake:packages:1");
 	ok = ok && rp_file_contains("rp_runop", "agentos_advanced_surface=kernel_bound");
 	ok = ok && rp_file_contains("rp_runop", "context_authority=shadow");
+	ok = ok && rp_file_contains("rp_protocol", "protocol_compliance_reports=1");
+	ok = ok && rp_file_contains("rp_protocol", "protocol_amendments=1");
+	ok = ok && rp_file_contains("rp_soplog", "sop_executions=1");
+	ok = ok && rp_file_contains("rp_risk", "risk_reviews=1");
+	ok = ok && rp_file_contains("rp_risk", "decision_support=decision:agentos-final-demo-backend");
+	ok = ok && rp_file_contains("rp_capa", "capa_charts=deviations-by-severity");
+	ok = ok && rp_file_contains("rp_package", "provenance_graph=unified");
 	ok = ok && rp_file_contains("rp_wfio", "imports=5");
 	ok = ok && rp_file_contains("rp_wfio", "adapter_specs=6");
 	ok = ok && rp_file_contains("rp_wfio", "migration_steps=9");
@@ -375,6 +382,19 @@ int main(void)
 			   "research_search_saved=2\n"
 			   "project_surface_actions=4\n"
 			   "study_protocol_checks=6\n"
+			   "protocol_compliance_reports=1\n"
+			   "protocol_compliance_findings=3\n"
+			   "protocol_amendments=1\n"
+			   "protocol_amendment_decisions=1\n"
+			   "sop_executions=1\n"
+			   "sop_step_results=4\n"
+			   "sop_deviation_reviews=1\n"
+			   "risk_mitigations=3\n"
+			   "risk_reviews=1\n"
+			   "capa_verifications=2\n"
+			   "decision_support_packets=1\n"
+			   "provenance_graph_nodes=150\n"
+			   "provenance_graph_links=250\n"
 			   "dataset_answer_files=4\n"
 			   "package_intake_files=5\n"
 			   "workflow_portability_records=1\n"

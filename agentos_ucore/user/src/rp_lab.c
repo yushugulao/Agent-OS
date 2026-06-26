@@ -35,14 +35,32 @@ int main(void)
 			   "analysis_plan=locked\n"
 			   "checks=5\n"
 			   "amendments=1\n"
+			   "protocol_runs=1\n"
+			   "protocol_run=protocol-run:RUN-042:recovery;status=passed;checklist=run_recovered,report_exists,ethics,analysis,claims\n"
+			   "protocol_compliance_reports=1\n"
+			   "protocol_compliance_report=protocol-compliance:RUN-042:recovery;checked=12;passed=8;failed=1;decision=minor_amendment\n"
+			   "protocol_compliance_findings=3\n"
+			   "protocol_finding=ethics;status=passed;source=rp_protocol\n"
+			   "protocol_finding=analysis;status=passed;source=rp_compute\n"
+			   "protocol_finding=claims;status=needs_review;source=rp_claimrec\n"
+			   "protocol_amendments=1\n"
+			   "protocol_amendment=protocol-amendment:RUN-042:recovery:1;decision=approved;status=applied;added_steps=1;added_checks=1\n"
+			   "protocol_amendment_decisions=1\n"
 			   "decision=accepted\n"
 			   "status=ready\n")) {
 		return 1;
 	}
 	if (!rp_write_file("rp_soplog",
 			   "sop=SOP-LIB-PREP:v2\n"
+			   "sop_documents=1\n"
+			   "sop_versions=1\n"
 			   "steps=4\n"
 			   "completed=4\n"
+			   "sop_executions=1\n"
+			   "sop_execution=sop-execution:RUN-042:manual-qc;status=completed_with_deviation;operator=auditor\n"
+			   "sop_step_results=4\n"
+			   "sop_deviation_reviews=1\n"
+			   "sop_deviation_review=sop-deviation:RUN-042:manual-qc:01;severity=minor;decision=accepted;reviewer=qa-lead\n"
 			   "deviation=handled\n"
 			   "training=qualified\n"
 			   "status=ready\n")) {
