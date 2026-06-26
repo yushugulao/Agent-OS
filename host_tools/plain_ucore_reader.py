@@ -163,6 +163,56 @@ def render_metric_cards(metrics: list[tuple[str, object, str]]) -> str:
     return "<section class='metrics'>{}</section>".format("".join(cards))
 
 
+def render_summary_panel(title: str, items: list[tuple[str, object, str]]) -> str:
+    rows = []
+    for label, value, source in items:
+        rows.append(
+            "<article class='summary-item'><span>{}</span><strong>{}</strong><small>{}</small></article>".format(
+                html.escape(label),
+                html.escape(str(value)),
+                html.escape(source),
+            )
+        )
+    return "<section class='panel summary-panel'><h2>{}</h2><div class='summary-grid'>{}</div></section>".format(
+        html.escape(title),
+        "".join(rows),
+    )
+
+
+def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> str:
+    report_items = [
+        ("Run", metric_value(state, [("rp_report_text", "host_report_run_id"), ("rp_input", "host_action_run_id")]), "rp_report_text"),
+        ("Reviewer", metric_value(state, [("rp_report_text", "host_report_reviewer"), ("rp_review2", "host_action_reviewer")]), "rp_review2"),
+        ("Decision", metric_value(state, [("rp_report_text", "host_report_review_decision"), ("rp_review2", "host_action_review_decision")]), "rp_review2"),
+        ("Revision Targets", metric_value(state, [("rp_report_text", "host_report_revision_targets"), ("rp_revision", "host_action_revision_targets")]), "rp_revision"),
+        ("Bundle", metric_value(state, [("rp_report_text", "host_report_bundle"), ("rp_package", "host_action_export_bundle_name")]), "rp_package"),
+        ("Compare Profile", metric_value(state, [("rp_report_text", "host_report_compare_profile"), ("rp_agentcmp", "host_action_compare_profile")]), "rp_agentcmp"),
+    ]
+    evidence_items = [
+        ("Manifest Run", metric_value(state, [("rp_artifact_manifest", "host_manifest_run_id"), ("rp_report_text", "host_report_run_id")]), "rp_artifact_manifest"),
+        ("Notebook Format", metric_value(state, [("rp_artifact_manifest", "host_manifest_notebook_format"), ("rp_nbexec", "host_action_notebook_format")]), "rp_nbexec"),
+        ("Bundle", metric_value(state, [("rp_artifact_manifest", "host_manifest_bundle"), ("rp_package", "host_action_export_bundle_name")]), "rp_package"),
+        ("Contents", metric_value(state, [("rp_package", "host_action_bundle_contents")]), "rp_package"),
+        ("Evidence Entries", metric_value(state, [("rp_package", "evidence_bundle_entries")]), "rp_package"),
+        ("Manifest Records", metric_value(state, [("rp_artifact_manifest", "manifest_records")]), "rp_artifact_manifest"),
+    ]
+    compare_items = [
+        ("Payload Applied", metric_value(state, [("rp_api_compare", "host_action_payload_applied")]), "rp_api_compare"),
+        ("Run", metric_value(state, [("rp_api_compare", "host_action_run_id")]), "rp_api_compare"),
+        ("Reviewer", metric_value(state, [("rp_api_compare", "host_action_reviewer")]), "rp_api_compare"),
+        ("Revision Targets", metric_value(state, [("rp_api_compare", "host_action_revision_targets")]), "rp_api_compare"),
+        ("Bundle", metric_value(state, [("rp_api_compare", "host_action_bundle")]), "rp_api_compare"),
+        ("Compare Profile", metric_value(state, [("rp_api_compare", "host_action_compare_profile")]), "rp_api_compare"),
+    ]
+    if file_name == "run.html":
+        return render_summary_panel("Research Output", report_items)
+    if file_name in ("evidence.html", "artifacts.html"):
+        return render_summary_panel("Evidence Package", evidence_items)
+    if file_name == "compare.html":
+        return render_summary_panel("Compare Summary", compare_items)
+    return ""
+
+
 def render_table(title: str, rows: Iterable[str]) -> str:
     body = []
     for row in rows:
@@ -310,6 +360,11 @@ def page_html(title: str, nav: str, sections: list[str]) -> str:
     .metric strong {{ display: block; font-size: 24px; margin: 8px 0 6px; overflow-wrap: anywhere; }}
     .metric small {{ color: #6b7c8f; }}
     .panel {{ background: white; border: 1px solid #d9e2ec; border-radius: 6px; padding: 16px; margin: 0 0 16px; overflow-x: auto; }}
+    .summary-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }}
+    .summary-item {{ border: 1px solid #d9e2ec; border-radius: 6px; padding: 11px; background: #fbfdff; }}
+    .summary-item span {{ color: #52616f; font-size: 13px; }}
+    .summary-item strong {{ display: block; margin: 7px 0 5px; font-size: 17px; overflow-wrap: anywhere; }}
+    .summary-item small {{ color: #6b7c8f; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
     th {{ width: 240px; text-align: left; color: #334e68; background: #f0f4f8; }}
     th, td {{ border: 1px solid #d9e2ec; padding: 7px 9px; vertical-align: top; }}
@@ -382,6 +437,9 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
             )
         )
         sections = [render_overview(file_name, state, contract, len(actions), last_run)]
+        summary_panel = render_page_summary(file_name, state)
+        if summary_panel:
+            sections.append(summary_panel)
         if file_name == "actions.html":
             sections.append(render_action_panel())
             sections.append(render_action_log(actions))

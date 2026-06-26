@@ -394,7 +394,7 @@ No output means the directories match.
 
 ## Host Reader
 
-The `host_tools/plain_ucore_reader.py` utility renders ordinary `rp_*` state files into host-viewable HTML pages and API JSON files. It consumes the `host_plain_ucore_v2` reader contract written by `rp_web_bundle`. The generated pages use a sidebar, page-level summary cards, state tables, host-action history, and a batch-action editor for running the same research flow through plain uCore.
+The `host_tools/plain_ucore_reader.py` utility renders ordinary `rp_*` state files into host-viewable HTML pages and API JSON files. It consumes the `host_plain_ucore_v2` reader contract written by `rp_web_bundle`. The generated pages use a sidebar, page-level summary cards, research-output summaries, evidence-package summaries, comparison summaries, state tables, host-action history, and a batch-action editor for running the same research flow through plain uCore.
 
 ```bash
 python host_tools/plain_ucore_reader.py --state-dir path/to/rp-state --out-dir runtime/plain_ucore_reader

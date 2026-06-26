@@ -115,6 +115,12 @@ def main() -> int:
         assert "Plain uCore Research" in index_html
         assert "State Files" in index_html
         assert "Dynamic Inputs" in index_html
+        run_html = (out_dir / "run.html").read_text(encoding="utf-8")
+        assert "Research Output" in run_html
+        compare_html = (out_dir / "compare.html").read_text(encoding="utf-8")
+        assert "Compare Summary" in compare_html
+        artifacts_html = (out_dir / "artifacts.html").read_text(encoding="utf-8")
+        assert "Evidence Package" in artifacts_html
         actions_html = (out_dir / "actions.html").read_text(encoding="utf-8")
         assert "Batch Actions" in actions_html
         assert "/actions/research/run" in actions_html

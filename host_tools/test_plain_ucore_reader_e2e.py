@@ -129,7 +129,16 @@ def main() -> int:
             run_html = read_text(base + "/run.html")
             assert "Plain uCore Research" in run_html
             assert "Workbench Tasks" in run_html
+            assert "Research Output" in run_html
+            assert "RUN-E2E" in run_html
+            assert "reviewer-evidence" in run_html
             assert "host_action_revision_run" in run_html
+            artifacts_html = read_text(base + "/artifacts.html")
+            assert "Evidence Package" in artifacts_html
+            assert "reviewer-evidence" in artifacts_html
+            compare_html = read_text(base + "/compare.html")
+            assert "Compare Summary" in compare_html
+            assert "plain_ucore_batch" in compare_html
             actions_html = read_text(base + "/actions.html")
             assert "Batch Actions" in actions_html
             assert "Host Actions" in actions_html
