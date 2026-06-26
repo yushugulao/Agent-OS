@@ -25,7 +25,7 @@ PAGE_SPECS = [
     ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency", "rp_backend", "rp_backend_exec", "rp_study"]),
     ("artifacts.html", "Artifacts", "rp_api_artifacts", ["rp_artifact", "rp_artifact_manifest", "rp_package"]),
     ("delivery.html", "Delivery", "rp_package", ["rp_nbexec", "rp_uresrun", "rp_artifact_manifest", "rp_review_pack"]),
-    ("data.html", "Data", "rp_api_data", ["rp_input", "rp_dataset_snapshot", "rp_data_quality"]),
+    ("data.html", "Data", "rp_api_data", ["rp_input", "rp_ingest_files", "rp_dataset_snapshot", "rp_data_preview", "rp_data_quality", "rp_data_transform", "rp_dataset_collection"]),
     ("services.html", "Services", "rp_api_bio", ["rp_api_labres", "rp_api_pub", "rp_api_know", "rp_api_runtime", "rp_bioop", "rp_labresop", "rp_pubop", "rp_knowop", "rp_runop"]),
     ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets"]),
     ("actions.html", "Actions", "rp_api_action", ["rp_actionio", "rp_host_run_result", "rp_web_routes", "rp_web_bundle"]),
@@ -1063,6 +1063,16 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Bundle", metric_value(state, [("rp_package", "host_action_workbench_bundle"), ("rp_report_text", "host_report_workbench_bundle"), ("rp_uresrun", "host_action_workbench_bundle")]), "rp_package"),
         ("Notebook", metric_value(state, [("rp_nbexec", "host_action_notebook_format"), ("rp_web_bundle", "notebook_export")]), "rp_nbexec"),
     ]
+    data_items = [
+        ("Ingested Files", metric_value(state, [("rp_ingest_files", "files"), ("rp_api_data", "ingested_files")]), "rp_ingest_files"),
+        ("Snapshots", metric_value(state, [("rp_dataset_snapshot", "snapshots"), ("rp_api_data", "dataset_snapshots")]), "rp_dataset_snapshot"),
+        ("Previews", metric_value(state, [("rp_data_preview", "previews"), ("rp_api_data", "previews")]), "rp_data_preview"),
+        ("Quality Checks", metric_value(state, [("rp_data_quality", "passed"), ("rp_api_data", "quality_checks")]), "rp_data_quality"),
+        ("Transforms", metric_value(state, [("rp_data_transform", "transforms"), ("rp_api_data", "transforms")]), "rp_data_transform"),
+        ("Collection Items", metric_value(state, [("rp_dataset_collection", "items"), ("rp_api_data", "collection_items")]), "rp_dataset_collection"),
+        ("Manifest", metric_value(state, [("rp_api_data", "host_action_file_manifest"), ("rp_ingest_files", "host_file_manifest")]), "rp_api_data"),
+        ("Verified", metric_value(state, [("rp_api_data", "host_action_file_verified"), ("rp_data_quality", "host_file_verify_verified")]), "rp_api_data"),
+    ]
     compare_items = [
         ("Payload Applied", metric_value(state, [("rp_api_compare", "host_action_payload_applied")]), "rp_api_compare"),
         ("Run", metric_value(state, [("rp_api_compare", "host_action_run_id")]), "rp_api_compare"),
@@ -1112,6 +1122,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Workflow Runner", workflow_items)
     if file_name == "workbench.html":
         return render_summary_panel("Research Workbench", workbench_items)
+    if file_name == "data.html":
+        return render_summary_panel("Data Pipeline", data_items)
     if file_name == "review.html":
         return render_summary_panel("Review Dashboard", review_items)
     if file_name == "compare.html":
@@ -1656,6 +1668,83 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 "Runtime Service Files",
                 [("Operation", "op"), ("Request", "request"), ("Result", "result"), ("Workers", "workers"), ("Status", "status")],
                 state_records(state, "rp_runop", "op"),
+            ),
+        ]
+    if file_name == "data.html":
+        return [
+            render_record_panel(
+                "Ingested Input Files",
+                [("File", "file"), ("Path", "path"), ("Kind", "kind"), ("Records", "records"), ("Bytes", "bytes"), ("Status", "status")],
+                state_records(state, "rp_ingest_files", "file"),
+            ),
+            render_record_panel(
+                "Dataset Snapshots",
+                [("Snapshot", "snapshot"), ("Files", "files"), ("Records", "records"), ("Transform", "transform"), ("Normalized FASTQ", "normalized_fastq"), ("Status", "status")],
+                state_records(state, "rp_dataset_snapshot", "snapshot"),
+            ),
+            render_record_panel(
+                "Data Preview Records",
+                [("Preview", "preview"), ("Rows", "rows"), ("Columns", "columns"), ("Source", "source"), ("Status", "status")],
+                state_records(state, "rp_data_preview", "preview"),
+            ),
+            render_record_panel(
+                "Derived Data Preview",
+                [("Preview", "derived_preview"), ("Rows", "rows"), ("Columns", "columns"), ("Source", "source"), ("Status", "status")],
+                state_records(state, "rp_data_preview", "derived_preview"),
+            ),
+            render_record_panel(
+                "Data Quality State",
+                [("State File", "state_file"), ("Key", "key"), ("Value", "value")],
+                key_value_rows(
+                    state,
+                    ("rp_data_quality", "rp_api_data"),
+                    (
+                        "dataset=",
+                        "rules=",
+                        "passed=",
+                        "failed=",
+                        "min_reads=",
+                        "derived_variants=",
+                        "metrics_section=",
+                        "sample_sheet_valid=",
+                        "decision=",
+                        "host_file_verify",
+                        "host_action_file_verify",
+                        "host_action_file_verified=",
+                        "host_action_file_missing=",
+                    ),
+                ),
+            ),
+            render_record_panel(
+                "Data Transform Records",
+                [("Transform", "transform"), ("Input", "input"), ("Output", "output"), ("Status", "status")],
+                state_records(state, "rp_data_transform", "transform"),
+            ),
+            render_record_panel(
+                "Derived Data Products",
+                [("Derived", "derived"), ("Input", "input"), ("Output", "output"), ("Status", "status")],
+                state_records(state, "rp_data_transform", "derived"),
+            ),
+            render_record_panel(
+                "Dataset Collection",
+                [("Item", "item"), ("Source", "source"), ("Status", "status")],
+                state_records(state, "rp_dataset_collection", "item"),
+            ),
+            render_record_panel(
+                "Data Manifest Verification",
+                [("State File", "state_file"), ("Key", "key"), ("Value", "value")],
+                key_value_rows(
+                    state,
+                    ("rp_ingest_files", "rp_data_quality", "rp_dataset_collection", "rp_api_data"),
+                    (
+                        "host_file_manifest",
+                        "host_file_verify",
+                        "host_action_file_manifest",
+                        "host_action_file_sha_records=",
+                        "host_action_file_verified=",
+                        "host_action_file_missing=",
+                    ),
+                ),
             ),
         ]
     if file_name == "compare.html":
@@ -2990,6 +3079,12 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
             sections.append(action_output_detail_panel("Delivery Action Output Details", state, actions, {"delivery", "workbench", "operations", "project", "artifact"}))
             sections.append(action_impact_panel("Delivery Action Impact", state, actions, {"delivery", "workbench", "operations", "project", "artifact"}))
             sections.append(action_delta_panel("Delivery Action Delta", state, actions, {"delivery", "workbench", "operations", "project", "artifact"}))
+        if file_name == "data.html":
+            sections.append(action_trace_panel("Data Action Trace", actions, {"run", "inputs", "workbench", "artifact"}))
+            sections.append(action_output_panel("Data Action Output Links", state, actions, {"run", "inputs", "workbench", "artifact"}))
+            sections.append(action_output_detail_panel("Data Action Output Details", state, actions, {"run", "inputs", "workbench", "artifact"}))
+            sections.append(action_impact_panel("Data Action Impact", state, actions, {"run", "inputs", "workbench", "artifact"}))
+            sections.append(action_delta_panel("Data Action Delta", state, actions, {"run", "inputs", "workbench", "artifact"}))
         if file_name == "llm.html":
             sections.append(action_trace_panel("LLM Action Trace", actions, {"llm"}))
             sections.append(action_output_panel("LLM Action Output Links", state, actions, {"llm"}))

@@ -869,6 +869,29 @@ def main() -> int:
             assert "mf.json" in workbench_html
             assert "wb.zip" in workbench_html
             assert "host_action_notebook_format" in workbench_html
+            data_html = read_text(base + "/data.html")
+            assert "Data Pipeline" in data_html
+            assert "Ingested Input Files" in data_html
+            assert "Dataset Snapshots" in data_html
+            assert "Data Preview Records" in data_html
+            assert "Derived Data Preview" in data_html
+            assert "Data Quality State" in data_html
+            assert "Data Transform Records" in data_html
+            assert "Derived Data Products" in data_html
+            assert "Dataset Collection" in data_html
+            assert "Data Manifest Verification" in data_html
+            assert "Data Action Trace" in data_html
+            assert "rp_input_fastq" in data_html
+            assert "rp_samples" in data_html
+            assert "normalize_fastq" in data_html
+            assert "rp_artifact:rp_align_table" in data_html
+            assert "host_input_dataset_rows" in data_html
+            assert "host_file_manifest" in data_html
+            assert "mf.json" in data_html
+            assert "host_file_verify" in data_html
+            assert "passed" in data_html
+            assert "host_action_file_verified" in data_html
+            assert "11" in data_html
             artifacts_html = read_text(base + "/artifacts.html")
             assert "Evidence Package" in artifacts_html
             assert "ev" in artifacts_html

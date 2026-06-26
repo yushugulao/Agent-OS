@@ -83,7 +83,7 @@ status=ready
     "rp_api_evidence": "api=evidence-detail\nclaims=8\nstatus=ready\n",
     "rp_api_compare": "api=compare-metrics\nplain_kernel=passed\nfile_scans=128\nstate_convention=1\nuser_permission_only=1\ncontext_trusted=0\nrebuild_steps=6\nstatus=ready\n",
     "rp_api_artifacts": "api=artifacts\nmanifest_records=4\nstatus=ready\n",
-    "rp_api_data": "api=data\ndataset_snapshots=2\nstatus=ready\n",
+    "rp_api_data": "api=data\ndataset_snapshots=2\npreviews=2\nquality_checks=7\ntransforms=2\ncollection_items=4\nhost_action_file_manifest=mf.json\nhost_action_file_verify=passed\nhost_action_file_verified=11\nhost_action_file_missing=0\nstatus=ready\n",
     "rp_api_bio": "api=bio\nsample_registry=rp_sreg\nstatus=ready\n",
     "rp_api_labres": "api=lab-resources\ninstrument_registry=rp_instr\nstatus=ready\n",
     "rp_api_pub": "api=publication\nresult_review=rp_resrev\nstatus=ready\n",
@@ -267,8 +267,63 @@ status=ready
     "rp_stage_log": "log=align first_attempt status=failed reason=tool_output_missing\nhost_artifact_log=clean.log;stage=clean;level=warn;message=adapter_trimmed\n",
     "rp_chart_data": "chart=stage_attempts\nhost_artifact_chart=qc-chart.json;type=line;data_file=clean.metrics.json;points=12\n",
     "rp_input": "dynamic_submissions=4\n",
-    "rp_dataset_snapshot": "snapshots=2\n",
-    "rp_data_quality": "passed=7\n",
+    "rp_ingest_files": (
+        "run_id=RUN-042\n"
+        "files=2\n"
+        "file=1;path=rp_input_fastq;kind=fastq;records=2;bytes=72;status=ready\n"
+        "file=2;path=rp_samples;kind=sample_sheet;records=4;bytes=128;status=ready\n"
+        "derived_items=5\n"
+        "host_file_manifest=mf.json\n"
+        "host_file_manifest_files=11\n"
+        "host_file_manifest_sha_records=11\n"
+        "status=ready\n"
+    ),
+    "rp_dataset_snapshot": (
+        "dataset=lab-gene-x-input\n"
+        "snapshots=2\n"
+        "snapshot=raw;files=2;records=6;status=ready\n"
+        "snapshot=normalized;files=2;records=6;transform=normalize_fastq;normalized_fastq=rp_artifact:rp_normalized_fastq;status=ready\n"
+        "status=ready\n"
+    ),
+    "rp_data_preview": (
+        "previews=2\n"
+        "preview=fastq;rows=2;columns=4;source=rp_artifact:rp_normalized_fastq;status=ready\n"
+        "preview=samples;rows=4;columns=4;source=rp_samples;status=ready\n"
+        "derived_preview=alignment;rows=2;columns=3;source=rp_artifact:rp_align_table;status=ready\n"
+        "status=ready\n"
+    ),
+    "rp_data_quality": (
+        "dataset=lab-gene-x-input\n"
+        "rules=7\n"
+        "passed=7\n"
+        "failed=0\n"
+        "metrics_section=rp_artifact:rp_metrics_json\n"
+        "decision=accepted\n"
+        "host_file_manifest=mf.json\n"
+        "host_file_verify=passed\n"
+        "host_file_verify_verified=11\n"
+        "host_file_verify_missing=0\n"
+        "status=ready\n"
+    ),
+    "rp_data_transform": (
+        "transforms=2\n"
+        "transform=normalize_fastq;input=rp_input_fastq;output=rp_dataset_snapshot;status=ready\n"
+        "transform=join_sample_sheet;input=rp_samples;output=rp_dataset_collection;status=ready\n"
+        "derived=alignment;input=rp_artifact:rp_normalized_fastq;output=rp_artifact:rp_align_table;status=ready\n"
+        "derived=metrics;input=rp_artifact:rp_align_table;output=rp_artifact:rp_metrics_json,rp_artifact:rp_gene_counts_csv;status=ready\n"
+        "status=ready\n"
+    ),
+    "rp_dataset_collection": (
+        "collection=lab-gene-x-run042-analysis\n"
+        "items=4\n"
+        "item=raw_fastq;source=rp_input_fastq;status=ready\n"
+        "item=samples;source=rp_samples;status=ready\n"
+        "item=counts;source=rp_artifact:rp_gene_counts_csv;status=ready\n"
+        "item=artifact;source=rp_artifact;status=ready\n"
+        "host_file_manifest=mf.json\n"
+        "host_file_verified_items=11\n"
+        "status=ready\n"
+    ),
     "rp_review_dashboard": (
         "dashboard=research-review\n"
         "run=RUN-042\n"
@@ -329,6 +384,7 @@ def main() -> int:
         assert (out_dir / "workbench.html").exists()
         assert (out_dir / "review.html").exists()
         assert (out_dir / "delivery.html").exists()
+        assert (out_dir / "data.html").exists()
         assert (out_dir / "llm.html").exists()
         assert (out_dir / "api" / "rp_api_home.json").exists()
         index_html = (out_dir / "index.html").read_text(encoding="utf-8")
@@ -409,6 +465,22 @@ def main() -> int:
         assert "markdown" in workbench_html
         assert "delivery-manifest.json" in workbench_html
         assert "workbench-bundle.zip" in workbench_html
+        data_html = (out_dir / "data.html").read_text(encoding="utf-8")
+        assert "Data Pipeline" in data_html
+        assert "Ingested Input Files" in data_html
+        assert "Dataset Snapshots" in data_html
+        assert "Data Preview Records" in data_html
+        assert "Derived Data Preview" in data_html
+        assert "Data Quality State" in data_html
+        assert "Data Transform Records" in data_html
+        assert "Derived Data Products" in data_html
+        assert "Dataset Collection" in data_html
+        assert "Data Manifest Verification" in data_html
+        assert "rp_input_fastq" in data_html
+        assert "normalize_fastq" in data_html
+        assert "rp_artifact:rp_align_table" in data_html
+        assert "mf.json" in data_html
+        assert "host_file_verify" in data_html
         compare_html = (out_dir / "compare.html").read_text(encoding="utf-8")
         assert "Compare Summary" in compare_html
         assert "Compare Metrics" in compare_html
