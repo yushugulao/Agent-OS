@@ -343,10 +343,14 @@ def main() -> int:
             rp_artifact_manifest = read_json(base + "/api/state/rp_artifact_manifest")
             assert any("host_workflow_artifact_action=clean.metrics.json;kind=metrics;sha256=sha-host-wf1;bytes=4096" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
             assert any("host_workflow_report_action=workflow-report.md;format=markdown;sections=5;status=ready" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
+            assert any("dossier=artifact-detail;source=rp_artifact;stage_log=rp_stage_log;chart=rp_chart_data;review_pack=rp_review_pack;status=ready" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
+            assert any("dossier_item=alignment;path=rp_artifact;section=rp_align_table;status=ready" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
             rp_artifact = read_json(base + "/api/state/rp_artifact")
             assert any("host_artifact_actions=applied" in line for line in rp_artifact["lines"]), rp_artifact
             assert any("host_artifact_input=reads_R1.fastq;kind=fastq;sha256=sha-host-input;bytes=2048;source=upload" in line for line in rp_artifact["lines"]), rp_artifact
             assert any("host_artifact_derive=reads_R1.fastq;output=clean_reads.fastq;operation=trim;stage=clean;sha256=sha-host-derived" in line for line in rp_artifact["lines"]), rp_artifact
+            assert any("artifact_dossier=rp_input_fastq,rp_normalized_fastq,rp_align_table,rp_metrics_json,rp_gene_counts_csv,rp_chart_data,rp_stage_log" in line for line in rp_artifact["lines"]), rp_artifact
+            assert any("artifact_review_link=rp_artifact_manifest->rp_review_pack->rp_package" in line for line in rp_artifact["lines"]), rp_artifact
             rp_stage_log = read_json(base + "/api/state/rp_stage_log")
             assert any("host_artifact_log=clean.log;stage=clean;level=warn;message=adapter_trimmed" in line for line in rp_stage_log["lines"]), rp_stage_log
             rp_chart_data = read_json(base + "/api/state/rp_chart_data")
@@ -686,6 +690,13 @@ def main() -> int:
             artifacts_html = read_text(base + "/artifacts.html")
             assert "Evidence Package" in artifacts_html
             assert "ev" in artifacts_html
+            assert "Artifact Manifest Records" in artifacts_html
+            assert "Artifact Dossier" in artifacts_html
+            assert "Derived Artifact Sections" in artifacts_html
+            assert "Archive Files" in artifacts_html
+            assert "Host Artifact Actions" in artifacts_html
+            assert "artifact-detail" in artifacts_html
+            assert "host_artifact_chart" in artifacts_html
             agents_html = read_text(base + "/agents.html")
             assert "Agent Detail" in agents_html
             assert "Agent Roster" in agents_html

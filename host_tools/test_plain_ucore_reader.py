@@ -96,7 +96,14 @@ status=ready
     "rp_ui_evidence": "page=evidence-detail\nscreening_decisions=9\nevidence_protocol=usable-evidence-protocol:RUN-900:1\nstatus=ready\n",
     "rp_ui_compare": "page=compare-metrics\npain_file_scans=128\npain_state_convention=1\npain_user_permissions=1\npain_rebuild_steps=6\nstatus=ready\n",
     "rp_runner": "workbench_tasks=9\nstatus=ready\n",
-    "rp_artifact": "status=recovered\n",
+    "rp_artifact": (
+        "section=rp_normalized_fastq;reads=2;bases=24;status=ready\n"
+        "section=rp_align_table;reference=RUN-042-read-1;variant_count=2;status=ready\n"
+        "archive_file=rp_align_table;kind=alignment;status=ready\n"
+        "artifact_dossier=rp_input_fastq,rp_normalized_fastq,rp_align_table,rp_metrics_json,rp_gene_counts_csv,rp_chart_data,rp_stage_log\n"
+        "artifact_review_link=rp_artifact_manifest->rp_review_pack->rp_package\n"
+        "status=recovered\n"
+    ),
     "rp_agents": "agent=orchestrator;role=control;state=active;msg=4\nagent=recovery;role=repair;state=recovered;msg=3\nagents=7\nmessages=21\n",
     "rp_decisions": "decision=1;actor=orchestrator;choice=start_workflow;basis=rp_plan\ndecision=5;actor=recovery;choice=rerun_align_only;basis=rp_retryq\ndecisions=8\n",
     "rp_handoff": "handoff=planner->retriever;artifact=rp_plan;status=done\nhandoff=recovery->writer;artifact=rp_artifact;status=done\nhandoffs=6\n",
@@ -110,7 +117,14 @@ status=ready
     "rp_package": "delivery_files=8\nevidence_bundle_entries=12\n",
     "rp_agentcmp": "plain_kernel=passed\ntest_cases=693\nhandoffs=6\n",
     "rp_consistency": "checks=113\n",
-    "rp_artifact_manifest": "manifest_records=4\n",
+    "rp_artifact_manifest": (
+        "record=1;kind=input;path=rp_input_fastq;status=ready\n"
+        "record=3;kind=alignment;path=rp_artifact;section=rp_align_table;status=ready\n"
+        "dossier=artifact-detail;source=rp_artifact;stage_log=rp_stage_log;chart=rp_chart_data;review_pack=rp_review_pack;status=ready\n"
+        "manifest_records=4\n"
+    ),
+    "rp_stage_log": "log=align first_attempt status=failed reason=tool_output_missing\nhost_artifact_log=clean.log;stage=clean;level=warn;message=adapter_trimmed\n",
+    "rp_chart_data": "chart=stage_attempts\nhost_artifact_chart=qc-chart.json;type=line;data_file=clean.metrics.json;points=12\n",
     "rp_input": "dynamic_submissions=4\n",
     "rp_dataset_snapshot": "snapshots=2\n",
     "rp_data_quality": "passed=7\n",
@@ -204,6 +218,14 @@ def main() -> int:
         assert "Consistency Signals" in compare_html
         artifacts_html = (out_dir / "artifacts.html").read_text(encoding="utf-8")
         assert "Evidence Package" in artifacts_html
+        assert "Artifact Manifest Records" in artifacts_html
+        assert "Artifact Dossier" in artifacts_html
+        assert "Derived Artifact Sections" in artifacts_html
+        assert "Archive Files" in artifacts_html
+        assert "Stage Logs" in artifacts_html
+        assert "Host Artifact Actions" in artifacts_html
+        assert "rp_align_table" in artifacts_html
+        assert "host_artifact_chart" in artifacts_html
         actions_html = (out_dir / "actions.html").read_text(encoding="utf-8")
         assert "Batch Actions" in actions_html
         assert "/actions/research/run" in actions_html

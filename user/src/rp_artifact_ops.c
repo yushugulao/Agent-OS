@@ -422,6 +422,8 @@ int main(void)
 			   "metrics=section:rp_metrics_json\n"
 			   "counts=section:rp_gene_counts_csv\n"
 			   "archive_manifest=section:rp_archive_manifest\n"
+			   "artifact_dossier=rp_input_fastq,rp_normalized_fastq,rp_align_table,rp_metrics_json,rp_gene_counts_csv,rp_chart_data,rp_stage_log\n"
+			   "artifact_review_link=rp_artifact_manifest->rp_review_pack->rp_package\n"
 			   "status=recovered\n")) {
 		return 1;
 	}

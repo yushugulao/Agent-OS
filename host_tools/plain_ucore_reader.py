@@ -418,6 +418,44 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
             render_line_panel("Plain Kernel Signals", compare_rows),
             render_line_panel("Consistency Signals", check_rows),
         ]
+    if file_name == "artifacts.html":
+        host_action_rows = []
+        for name, prefixes in (
+            ("rp_artifact", ("host_artifact_",)),
+            ("rp_artifact_manifest", ("host_artifact_manifest_", "host_workflow_artifact_action=")),
+            ("rp_stage_log", ("host_artifact_log=",)),
+            ("rp_chart_data", ("host_artifact_chart=",)),
+        ):
+            for line in state_prefixed_lines(state, name, prefixes):
+                host_action_rows.append((name, line))
+        return [
+            render_record_panel(
+                "Artifact Manifest Records",
+                [("Record", "record"), ("Kind", "kind"), ("Path", "path"), ("Section", "section"), ("Status", "status")],
+                state_records(state, "rp_artifact_manifest", "record"),
+            ),
+            render_record_panel(
+                "Artifact Dossier",
+                [("Dossier", "dossier"), ("Source", "source"), ("Stage Log", "stage_log"), ("Chart", "chart"), ("Review Pack", "review_pack"), ("Status", "status")],
+                state_records(state, "rp_artifact_manifest", "dossier"),
+            ),
+            render_record_panel(
+                "Derived Artifact Sections",
+                [("Section", "section"), ("Reads", "reads"), ("Bases", "bases"), ("Reference", "reference"), ("Variants", "variant_count"), ("Status", "status")],
+                state_records(state, "rp_artifact", "section"),
+            ),
+            render_record_panel(
+                "Archive Files",
+                [("Archive File", "archive_file"), ("Kind", "kind"), ("Status", "status")],
+                state_records(state, "rp_artifact", "archive_file"),
+            ),
+            render_record_panel(
+                "Stage Logs",
+                [("Log", "log"), ("Status", "status"), ("Reason", "reason"), ("Artifact", "artifact")],
+                state_records(state, "rp_stage_log", "log"),
+            ),
+            render_line_panel("Host Artifact Actions", host_action_rows),
+        ]
     if file_name == "review.html":
         return [
             render_record_panel(
