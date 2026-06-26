@@ -375,6 +375,26 @@ int main(void)
 			if (!rp_append_host_action_line("rp_package", "host_action_workflow_observer_events=", value)) return 1;
 		}
 	}
+	if (rp_host_seed_has_workflow_portability_action()) {
+		char value[96];
+		if (!rp_append_file("rp_package", "host_action_portability_package=ready")) return 1;
+		if (!rp_host_seed_copy_workflow_portability_value("import_id=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "workflow-import:host-nextflow");
+		}
+		if (!rp_append_host_action_line("rp_package", "host_action_portability_import=", value)) return 1;
+		if (!rp_host_seed_copy_workflow_portability_value("target_runtime=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "agentos-ucore");
+		}
+		if (!rp_append_host_action_line("rp_package", "host_action_portability_target=", value)) return 1;
+		if (!rp_host_seed_copy_workflow_portability_value("compare_profile=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "compare-profile:host-nextflow:migration");
+		}
+		if (!rp_append_host_action_line("rp_package", "host_action_portability_profile=", value)) return 1;
+		if (!rp_host_seed_copy_workflow_portability_value("package=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "workflow-portability-host.zip");
+		}
+		if (!rp_append_host_action_line("rp_package", "host_action_portability_bundle=", value)) return 1;
+	}
 	if (rp_host_seed_has("kind=workbench_handoff_package") ||
 	    rp_host_seed_has("kind=workbench_export") ||
 	    rp_host_seed_has("kind=workbench_file_manifest") ||

@@ -448,6 +448,16 @@ static RP_UNUSED int rp_host_seed_copy_llm_value(const char *key, char *out, int
 	return 0;
 }
 
+static RP_UNUSED int rp_host_seed_has_workflow_portability_action(void)
+{
+	return rp_host_seed_has("kind=workflow_portability");
+}
+
+static RP_UNUSED int rp_host_seed_copy_workflow_portability_value(const char *key, char *out, int cap)
+{
+	return rp_host_seed_copy_value_for_kind("kind=workflow_portability", key, out, cap);
+}
+
 static RP_UNUSED int rp_host_seed_copy_workspace_value(const char *key, char *out, int cap)
 {
 	if (rp_host_seed_copy_value_for_kind("kind=workspace_inspect", key, out, cap)) return 1;

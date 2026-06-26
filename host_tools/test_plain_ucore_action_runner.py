@@ -278,6 +278,10 @@ def main() -> int:
                     "payload": {"workflow_id": "WF1", "run_id": "RUN-999", "format": "json", "bundle": "wf.zip"},
                 },
                 {
+                    "path": "/actions/workflow-portability/run",
+                    "payload": {"import_id": "workflow-import:WF1:nextflow", "source_format": "nextflow", "source": "main.wf1.nf", "target_runtime": "agentos-ucore", "execution_plan": "workflow-migration-execution-plan:WF1:agentcompare", "compare_profile": "compare-profile:WF1:migration", "scenario_id": "backend-scenario:WF1", "rehearsal_status": "passed", "readiness_decision": "ready_for_agentos", "package": "wf-portability.zip"},
+                },
+                {
                     "path": "/actions/research/llm-relay-request",
                     "payload": {"request_id": "llm-q1", "run_id": "RUN-999", "route": "review_summary", "provider": "host-relay", "prompt": "summarize_recovery_evidence", "budget": "2048", "secret_ref": "host_env"},
                 },
@@ -308,7 +312,7 @@ def main() -> int:
             ],
         )
         summary = runner.prepare_action_state(loaded, state_dir, run_dir)
-        expected_actions = 66
+        expected_actions = 67
 
         assert summary["actions"] == expected_actions
         assert summary["accepted"] == expected_actions
@@ -371,6 +375,7 @@ def main() -> int:
         assert "research_search_action_item" in summary["kinds"]
         assert "host_workflow" in summary["kinds"]
         assert "host_workflow_export" in summary["kinds"]
+        assert "workflow_portability" in summary["kinds"]
         assert "llm_relay_request" in summary["kinds"]
         assert "llm_relay_response" in summary["kinds"]
         assert "llm_relay_fallback" in summary["kinds"]
@@ -448,6 +453,7 @@ def main() -> int:
         assert "kind=research_search_action_item" in queue
         assert "kind=host_workflow" in queue
         assert "kind=host_workflow_export" in queue
+        assert "kind=workflow_portability" in queue
         assert "kind=human_review" in queue
         assert "kind=revision_task" in queue
         assert "kind=notebook_export" in queue
@@ -504,6 +510,14 @@ def main() -> int:
         assert "cache_hit_stage=analyze" in queue
         assert "observer_events=12" in queue
         assert "bundle=wf.zip" in queue
+        assert "import_id=workflow-import:WF1:nextflow" in queue
+        assert "source_format=nextflow" in queue
+        assert "source=main.wf1.nf" in queue
+        assert "target_runtime=agentos-ucore" in queue
+        assert "execution_plan=workflow-migration-execution-plan:WF1:agentcompare" in queue
+        assert "compare_profile=compare-profile:WF1:migration" in queue
+        assert "scenario_id=backend-scenario:WF1" in queue
+        assert "package=wf-portability.zip" in queue
         assert "status=ready" in queue
 
         plan = read(next_state / "rp_host_action_plan")
@@ -549,6 +563,7 @@ def main() -> int:
         assert "kind=research_search_export" in plan
         assert "kind=host_workflow" in plan
         assert "kind=host_workflow_export" in plan
+        assert "kind=workflow_portability" in plan
         assert "kind=llm_relay_request" in plan
         assert "kind=llm_relay_response" in plan
         assert "kind=llm_relay_fallback" in plan
@@ -595,6 +610,7 @@ def main() -> int:
         assert "/actions/research-search/export" in inbox
         assert "/actions/host-workflow/run" in inbox
         assert "/actions/host-workflow/export" in inbox
+        assert "/actions/workflow-portability/run" in inbox
         assert "/actions/research/llm-relay-request" in inbox
         assert "/actions/research/llm-relay-response" in inbox
         assert "/actions/research/llm-relay-fallback" in inbox
@@ -660,6 +676,7 @@ def main() -> int:
         assert runner.action_kind("/actions/research-search/action-item") == "research_search_action_item"
         assert runner.action_kind("/actions/host-workflow/run") == "host_workflow"
         assert runner.action_kind("/actions/host-workflow/export") == "host_workflow_export"
+        assert runner.action_kind("/actions/workflow-portability/run") == "workflow_portability"
         assert runner.action_kind("/actions/research/llm-relay-request") == "llm_relay_request"
         assert runner.action_kind("/actions/research/llm-relay-response") == "llm_relay_response"
         assert runner.action_kind("/actions/research/llm-relay-fallback") == "llm_relay_fallback"
@@ -698,6 +715,7 @@ def main() -> int:
         assert "kind=research_search_export" in seed_file
         assert "kind=host_workflow" in seed_file
         assert "kind=host_workflow_export" in seed_file
+        assert "kind=workflow_portability" in seed_file
         assert "kind=llm_relay_request" in seed_file
         assert "kind=llm_relay_response" in seed_file
         assert "kind=llm_relay_fallback" in seed_file
@@ -707,6 +725,14 @@ def main() -> int:
         assert "worker_slots=2" in seed_file
         assert "queue_depth=5" in seed_file
         assert "bundle=wf.zip" in seed_file
+        assert "import_id=workflow-import:WF1:nextflow" in seed_file
+        assert "source_format=nextflow" in seed_file
+        assert "source=main.wf1.nf" in seed_file
+        assert "target_runtime=agentos-ucore" in seed_file
+        assert "execution_plan=workflow-migration-execution-plan:WF1:agentcompare" in seed_file
+        assert "compare_profile=compare-profile:WF1:migration" in seed_file
+        assert "scenario_id=backend-scenario:WF1" in seed_file
+        assert "package=wf-portability.zip" in seed_file
         assert "request_id=llm-q1" in seed_file
         assert "response_id=llm-r1" in seed_file
         assert "summary=Recovered_evidence_ready" in seed_file

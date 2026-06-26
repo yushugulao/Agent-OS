@@ -1,6 +1,14 @@
 #include <stdio.h>
 #include <research_platform_state.h>
 
+static int copy_port_value(const char *key, const char *fallback, char *out, int cap)
+{
+	if (!rp_host_seed_copy_workflow_portability_value(key, out, cap)) {
+		rp_copy_text(out, cap, fallback);
+	}
+	return 1;
+}
+
 int main(void)
 {
 	if (!rp_file_contains("rp_wfio", "portable_steps=10")) return 1;
@@ -41,6 +49,44 @@ int main(void)
 	if (!rp_append_file("rp_wfio", "blocking_items=0")) return 1;
 	if (!rp_append_file("rp_wfio", "decision=ready_for_agentos")) return 1;
 	if (!rp_append_file("rp_wfio", "package=workflow-portability")) return 1;
+	if (rp_host_seed_has_workflow_portability_action()) {
+		char import_id[80];
+		char source_format[32];
+		char source[64];
+		char target_runtime[48];
+		char execution_plan[96];
+		char compare_profile[80];
+		char scenario_id[80];
+		char rehearsal_status[32];
+		char readiness_decision[48];
+		char package[64];
+		char line[192];
+		copy_port_value("import_id=", "workflow-import:host-nextflow", import_id, sizeof(import_id));
+		copy_port_value("source_format=", "nextflow", source_format, sizeof(source_format));
+		copy_port_value("source=", "main.host.nf", source, sizeof(source));
+		copy_port_value("target_runtime=", "agentos-ucore", target_runtime, sizeof(target_runtime));
+		copy_port_value("execution_plan=", "workflow-migration-execution-plan:host-nextflow:agentcompare", execution_plan, sizeof(execution_plan));
+		copy_port_value("compare_profile=", "compare-profile:host-nextflow:migration", compare_profile, sizeof(compare_profile));
+		copy_port_value("scenario_id=", "backend-scenario:host-nextflow", scenario_id, sizeof(scenario_id));
+		copy_port_value("rehearsal_status=", "passed", rehearsal_status, sizeof(rehearsal_status));
+		copy_port_value("readiness_decision=", "ready_for_agentos", readiness_decision, sizeof(readiness_decision));
+		copy_port_value("package=", "workflow-portability-host.zip", package, sizeof(package));
+		if (!rp_append_file("rp_wfio", "host_portability_payload=applied")) return 1;
+		rp_copy_text(line, sizeof(line), "host_portability_import=");
+		rp_append_text(line, sizeof(line), import_id);
+		rp_append_text(line, sizeof(line), ";format=");
+		rp_append_text(line, sizeof(line), source_format);
+		rp_append_text(line, sizeof(line), ";source=");
+		rp_append_text(line, sizeof(line), source);
+		if (!rp_append_file("rp_wfio", line)) return 1;
+		if (!rp_append_host_action_line("rp_wfio", "host_portability_target=", target_runtime)) return 1;
+		if (!rp_append_host_action_line("rp_wfio", "host_portability_execution_plan=", execution_plan)) return 1;
+		if (!rp_append_host_action_line("rp_wfio", "host_portability_compare_profile=", compare_profile)) return 1;
+		if (!rp_append_host_action_line("rp_wfio", "host_portability_scenario=", scenario_id)) return 1;
+		if (!rp_append_host_action_line("rp_wfio", "host_portability_rehearsal=", rehearsal_status)) return 1;
+		if (!rp_append_host_action_line("rp_wfio", "host_portability_decision=", readiness_decision)) return 1;
+		if (!rp_append_host_action_line("rp_wfio", "host_portability_package=", package)) return 1;
+	}
 	if (!rp_append_file("rp_ack", "ack=portability;msg=wf;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=portability.plan_migration;target=rp_wfio;status=ok")) return 1;
 	if (!rp_append_status("portability=ready")) return 1;

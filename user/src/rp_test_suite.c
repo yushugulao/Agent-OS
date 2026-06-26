@@ -1087,10 +1087,10 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_compare", "coherence_checks=9");
 	ok = ok && require_file_token("rp_ui_compare", "relay_protocol_files=5");
 	ok = ok && require_file_token("rp_ui_compare", "notebook_exports=2");
-	ok = ok && require_file_token("rp_web_routes", "routes=45");
+	ok = ok && require_file_token("rp_web_routes", "routes=46");
 	ok = ok && require_file_token("rp_web_routes", "get_routes=14");
 	ok = ok && require_file_token("rp_web_routes", "route=/research/workbench/{id}");
-	ok = ok && require_file_token("rp_web_routes", "post_routes=31");
+	ok = ok && require_file_token("rp_web_routes", "post_routes=32");
 	ok = ok && require_file_token("rp_web_routes", "action=/actions/research/review");
 	ok = ok && require_file_token("rp_web_routes", "action=/actions/research/revision-task");
 	ok = ok && require_file_token("rp_web_routes", "action=/actions/research/run-revision-task");
@@ -1172,7 +1172,8 @@ int main(void)
 	ok = ok && require_file_token("rp_api_know", "evidence_protocols=1");
 	ok = ok && require_file_token("rp_api_know", "evidence_extractions=3");
 	ok = ok && require_file_token("rp_api_runtime", "runtime_env=rp_runenv");
-	ok = ok && require_file_token("rp_api_action", "actions=31");
+	ok = ok && require_file_token("rp_api_action", "actions=32");
+	ok = ok && require_file_token("rp_api_action", "workflow_portability_run=/actions/workflow-portability/run");
 	ok = ok && require_file_token("rp_api_action", "delivery_manifest_builder=1");
 	ok = ok && require_file_token("rp_api_action", "human_review_form=1");
 	ok = ok && require_file_token("rp_api_action", "revision_task_runner=1");
@@ -1276,7 +1277,7 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "reader_contract_version=2");
 	ok = ok && require_file_token("rp_web_bundle", "reader_ready=1");
 	ok = ok && require_file_token("rp_web_bundle", "reader_views=14");
-	ok = ok && require_file_token("rp_web_bundle", "reader_actions=31");
+	ok = ok && require_file_token("rp_web_bundle", "reader_actions=32");
 	ok = ok && require_file_token("rp_web_bundle", "reader_payload_files=rp_api_home");
 	ok = ok && require_file_token("rp_web_bundle", "reader_refresh_files=rp_web_routes");
 	ok = ok && require_file_token("rp_web_bundle", "reader_required_sections=routes,payloads,actions,live_update,downloads,compare");
@@ -1300,7 +1301,7 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "review_page=rp_package");
 	ok = ok && require_file_token("rp_web_bundle", "export_bundle=rp_package");
 	ok = ok && require_file_token("rp_web_bundle", "runner_detail_fields=16");
-	ok = ok && require_file_token("rp_web_bundle", "post_routes=31");
+	ok = ok && require_file_token("rp_web_bundle", "post_routes=32");
 	ok = ok && require_file_token("rp_web_bundle", "human_reviews=1");
 	ok = ok && require_file_token("rp_web_bundle", "revision_tasks=1");
 	ok = ok && require_file_token("rp_web_bundle", "revision_delta=rp_revision");
@@ -1345,6 +1346,16 @@ int main(void)
 		ok = ok && require_file_token("rp_actionio", "host_action_platform_ops=1");
 		ok = ok && require_file_token("rp_actionio", "host_action_platform_ops_outputs=rp_runner,rp_package,rp_api_action,rp_web_bundle");
 		ok = ok && require_file_token("rp_web_bundle", "host_action_platform_ops=rp_runner,rp_package,rp_api_action");
+	}
+	if (rp_host_seed_count() > 0 && rp_host_seed_has_workflow_portability_action()) {
+		ok = ok && require_file_token("rp_wfio", "host_portability_payload=applied");
+		ok = ok && require_file_token("rp_wfio", "host_portability_import=");
+		ok = ok && require_file_token("rp_wfio", "host_portability_target=");
+		ok = ok && require_file_token("rp_wfio", "host_portability_compare_profile=");
+		ok = ok && require_file_token("rp_package", "host_action_portability_package=ready");
+		ok = ok && require_file_token("rp_actionio", "host_action_portability=1");
+		ok = ok && require_file_token("rp_actionio", "host_action_portability_outputs=rp_wfio,rp_package,rp_agentcmp");
+		ok = ok && require_file_token("rp_web_bundle", "host_action_portability_outputs=rp_wfio,rp_package,rp_agentcmp");
 	}
 	if (rp_host_seed_count() > 0 && rp_host_seed_has_llm_relay_action()) {
 		ok = ok && require_file_token("rp_llm_req", "host_llm_request_id=");

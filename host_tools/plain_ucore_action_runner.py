@@ -173,6 +173,8 @@ def action_kind(path: str) -> str:
         return "host_workflow"
     if path.endswith("/host-workflow/export"):
         return "host_workflow_export"
+    if path.endswith("/workflow-portability/run"):
+        return "workflow_portability"
     return "generic"
 
 
@@ -215,6 +217,8 @@ def action_plan_line(record: dict[str, object]) -> str:
         return f"plan={sequence};kind=agentcompare;prepare=rp_agentcmp;execute=rp_orch;collect=rp_compare_plain;status=ready"
     if kind == "host_workflow":
         return f"plan={sequence};kind=host_workflow;prepare=rp_stage_dag;execute=rp_orch;collect=rp_artifact_manifest;status=ready"
+    if kind == "workflow_portability":
+        return f"plan={sequence};kind=workflow_portability;prepare=rp_wfio;execute=rp_orch;collect=rp_compare_plain;status=ready"
     return f"plan={sequence};kind={kind};prepare=rp_host_action_queue;execute=rp_orch;collect=rp_web_bundle;status=ready"
 
 
@@ -405,6 +409,7 @@ def compact_seed_text(text: str) -> str:
         "research_search_action_item": {"workbench_id", "query", "title"},
         "host_workflow": {"workflow_id", "run_id", "engine", "dag", "retry_stage", "cache_hit_stage", "worker_slots", "queue_depth", "observer_events", "retry_reason"},
         "host_workflow_export": {"workflow_id", "run_id", "format", "bundle"},
+        "workflow_portability": {"import_id", "source_format", "source", "target_runtime", "execution_plan", "compare_profile", "scenario_id", "rehearsal_status", "readiness_decision", "package"},
         "llm_relay_request": {"request_id", "route", "provider"},
         "llm_relay_response": {"response_id", "summary"},
         "llm_relay_fallback": {"case", "action"},
