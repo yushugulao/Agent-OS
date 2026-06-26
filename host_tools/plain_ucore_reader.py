@@ -334,6 +334,65 @@ def source_line_for_keys(state: dict[str, dict[str, object]], name: str, key_spe
     return ""
 
 
+def state_reference_file(reference: str) -> str:
+    return reference.split(":", 1)[0].strip()
+
+
+def source_line_for_reference(state: dict[str, dict[str, object]], reference: str) -> str:
+    name, _, target = reference.partition(":")
+    name = name.strip()
+    target = target.strip()
+    lines = [line.strip() for line in state_lines(state, name) if line.strip()]
+    if not lines:
+        return ""
+    if not target:
+        return lines[0]
+    for line in lines:
+        record = parse_kv_record(line)
+        if any(value == target for value in record.values()):
+            return line
+        if target in line:
+            return line
+    return ""
+
+
+def artifact_source_map(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
+    fields = (
+        "input",
+        "prepared",
+        "artifact",
+        "metrics",
+        "chart",
+        "failure",
+        "retry",
+        "event",
+        "manifest",
+        "report",
+        "review",
+        "review_pack",
+        "llm_quality",
+        "delivery",
+    )
+    rows: list[dict[str, str]] = []
+    for path in state_records(state, "rp_artifact_manifest", "artifact_review_path"):
+        path_name = path.get("artifact_review_path", "")
+        for field in fields:
+            reference = path.get(field, "")
+            if not reference:
+                continue
+            rows.append(
+                {
+                    "artifact_path": path_name,
+                    "field": field,
+                    "reference": reference,
+                    "state_file": state_reference_file(reference),
+                    "source_line": source_line_for_reference(state, reference),
+                    "status": path.get("status", ""),
+                }
+            )
+    return rows
+
+
 def operations_source_files(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
     specs = [
         ("operations_report", "rp_review_pack", ("operations_handoff=",), "run.html,review.html"),
@@ -1274,6 +1333,18 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                     ("Status", "status"),
                 ],
                 state_records(state, "rp_artifact_manifest", "artifact_review_path"),
+            ),
+            render_record_panel(
+                "Artifact Source Map",
+                [
+                    ("Path", "artifact_path"),
+                    ("Field", "field"),
+                    ("Reference", "reference"),
+                    ("State File", "state_file"),
+                    ("Source Line", "source_line"),
+                    ("Status", "status"),
+                ],
+                artifact_source_map(state),
             ),
             render_record_panel(
                 "Dossier Checks",

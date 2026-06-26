@@ -835,8 +835,11 @@ def main() -> int:
             assert "Derived Artifact Sections" in artifacts_html
             assert "Artifact Provenance" in artifacts_html
             assert "Artifact Review Path" in artifacts_html
+            assert "Artifact Source Map" in artifacts_html
             assert "quality_to_package" in artifacts_html
             assert "recovery_to_review" in artifacts_html
+            assert "section=rp_align_table" in artifacts_html
+            assert "align first_attempt status=failed reason=tool_output_missing" in artifacts_html
             assert "Dossier Checks" in artifacts_html
             assert "Archive Files" in artifacts_html
             assert "Review And LLM Signals" in artifacts_html
