@@ -42,9 +42,42 @@ STATE = {
     "rp_web_bundle": "reader_ready=1\n",
     "rp_api_runtime": "api=runtime\nstatus=ready\n",
     "rp_report_text": "report=ready\n",
-    "rp_runner": "runner=ready\n",
+    "rp_runner": (
+        "runner=ready\n"
+        "workbench=usable-workbench:RUN-900:plain-ucore\n"
+        "workbench_tasks=9\n"
+        "workbench_next_task=delivery_manifest\n"
+        "host_action_workbench_id=W1\n"
+        "host_action_workbench_task=human_review\n"
+        "host_action_workbench_task_status=waiting\n"
+        "host_action_workbench_manifest=mf.json\n"
+        "host_action_workbench_verified_files=11\n"
+        "host_action_workbench_missing_files=0\n"
+        "host_action_workbench_bundle=wb.zip\n"
+        "backend_evidence_report=rp_backend_exec\n"
+    ),
     "rp_revision": "revision=ready\n",
-    "rp_package": "package=ready\n",
+    "rp_package": (
+        "package=ready\n"
+        "delivery_files=8\n"
+        "host_action_operations_report=exported\n"
+        "host_action_operations_next=executed\n"
+        "host_action_quality_gate=checked\n"
+        "host_action_quality_repair_execute=done\n"
+        "host_action_workbench_completion=ready\n"
+        "host_action_workbench_manifest=mf.json\n"
+        "host_action_workbench_verified_files=11\n"
+        "host_action_workbench_missing_files=0\n"
+        "host_action_workbench_bundle=wb.zip\n"
+        "host_action_project_space=ready\n"
+        "host_action_project_id=lab-gene-x\n"
+        "host_action_project_note=recorded\n"
+        "host_action_project_action_item=created\n"
+        "host_action_project_answer=generated\n"
+        "host_action_project_repair=executed\n"
+        "host_action_research_search=ready\n"
+        "status=ready\n"
+    ),
     "rp_api_run": "api=run\n",
     "rp_api_evidence": "api=evidence\n",
     "rp_agent_run": "agent_run=ready\n",
@@ -128,6 +161,9 @@ def main() -> int:
             assert "backend_evidence_review=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;source=rp_review_dashboard;status=ready" in reviewpack
             assert "backend_action_review=retry-recovery;action=rerun_align;review=recovered;plain_cost=retry_file_stage_file;agentos_replace=event_context;status=passed" in reviewpack
             assert "backend_action_review=agentos-context;action=kernel_context;review=target;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;status=planned" in reviewpack
+            assert "operations_handoff=rp_runner+rp_package;tasks=9;next=delivery_manifest;report=exported;plan=executed;quality=checked;repair=done;backend=rp_backend_exec;status=ready" in reviewpack
+            assert "workbench_handoff=rp_runner+rp_package;workbench=W1;task=human_review;task_status=waiting;manifest=mf.json;verified=11;missing=0;bundle=wb.zip;status=ready" in reviewpack
+            assert "project_handoff=rp_package;project=lab-gene-x;space=ready;note=recorded;action_item=created;answer=generated;repair=executed;search=ready;status=ready" in reviewpack
             summary_json = json.loads((out_dir / "llm-relay-summary.json").read_text(encoding="utf-8"))
             assert summary_json["response_status"]["relay-host-q1"] == "ok", summary_json
             assert summary_json["quality"] == {"checked": 24, "passed": 24, "blocked": 0}, summary_json

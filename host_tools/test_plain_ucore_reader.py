@@ -185,6 +185,9 @@ status=ready
         "action=send_to_reviewer;owner=orchestrator;artifact=rp_review_pack;status=ready\n"
         "action=open_operations_report;owner=orchestrator;artifact=rp_runner;status=ready\n"
         "bridge=delivery_to_operations;delivery=rp_package;operations=rp_runner;project=rp_package;status=ready\n"
+        "operations_handoff=rp_runner+rp_package;tasks=9;next=delivery_manifest;report=exported;plan=executed;quality=checked;repair=done;backend=rp_backend_exec;status=ready\n"
+        "workbench_handoff=rp_runner+rp_package;workbench=W1;task=human_review;task_status=waiting;manifest=mf.json;verified=11;missing=0;bundle=wb.zip;status=ready\n"
+        "project_handoff=rp_package;project=lab-gene-x;space=ready;note=recorded;action_item=created;answer=generated;repair=executed;search=ready;status=ready\n"
         "status=ready\n"
     ),
     "rp_llm_req": "host_relay_request=q1;route=review_summary;provider=template;prompt_hash=abc;source=rp_llmq\n",
@@ -280,9 +283,15 @@ def main() -> int:
         assert "rerun_align" in review_html
         assert "kernel_context_path" in review_html
         assert "Review Pack Bridges" in review_html
+        assert "Review Operations Summary" in review_html
+        assert "Review Workbench Summary" in review_html
+        assert "Review Project Summary" in review_html
         assert "Handoff Checks" in review_html
         assert "send_to_reviewer" in review_html
         assert "delivery_to_operations" in review_html
+        assert "delivery_manifest" in review_html
+        assert "lab-gene-x" in review_html
+        assert "mf.json" in review_html
         assert "ready_for_reviewer" in review_html
         assert "plan&gt;data&gt;review&gt;repair&gt;audit" in evidence_html
         assert "Plain Kernel Signals" in compare_html

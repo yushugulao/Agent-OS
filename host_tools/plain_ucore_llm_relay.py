@@ -165,6 +165,48 @@ def backend_action_review_lines(state_dir: Path) -> list[str]:
     return lines
 
 
+def review_handoff_lines(state_dir: Path) -> list[str]:
+    runner = parse_state_values(read_text(state_dir / "rp_runner"))
+    package = parse_state_values(read_text(state_dir / "rp_package"))
+    lines: list[str] = []
+    if runner.get("backend_evidence_report") or runner.get("workbench_next_task") or package.get("host_action_operations_report"):
+        lines.append(
+            "operations_handoff=rp_runner+rp_package;"
+            f"tasks={line_value(runner.get('workbench_tasks', ''))};next={line_value(runner.get('workbench_next_task', ''))};"
+            f"report={line_value(package.get('host_action_operations_report', runner.get('host_action_operations_report', '')))};"
+            f"plan={line_value(package.get('host_action_operations_next', runner.get('host_action_operations_plan_execute', '')))};"
+            f"quality={line_value(package.get('host_action_quality_gate', runner.get('host_action_quality_gate', '')))};"
+            f"repair={line_value(package.get('host_action_quality_repair_execute', runner.get('host_action_quality_repair_execute', '')))};"
+            f"backend={line_value(runner.get('backend_evidence_report', ''))};"
+            f"status={line_value(package.get('status', runner.get('status', '')))}"
+        )
+    if runner.get("workbench") or runner.get("host_action_workbench_id") or package.get("host_action_workbench_package"):
+        lines.append(
+            "workbench_handoff=rp_runner+rp_package;"
+            f"workbench={line_value(runner.get('host_action_workbench_id', runner.get('workbench', '')))};"
+            f"task={line_value(runner.get('host_action_workbench_task', runner.get('workbench_next_task', '')))};"
+            f"task_status={line_value(runner.get('host_action_workbench_task_status', ''))};"
+            f"manifest={line_value(package.get('host_action_workbench_manifest', runner.get('host_action_workbench_manifest', '')))};"
+            f"verified={line_value(package.get('host_action_workbench_verified_files', runner.get('host_action_workbench_verified_files', '')))};"
+            f"missing={line_value(package.get('host_action_workbench_missing_files', runner.get('host_action_workbench_missing_files', '')))};"
+            f"bundle={line_value(package.get('host_action_workbench_bundle', runner.get('host_action_workbench_bundle', '')))};"
+            f"status={line_value(package.get('host_action_workbench_completion', runner.get('host_action_workbench_completion', package.get('status', ''))))}"
+        )
+    if package.get("host_action_project_space") or package.get("host_action_project_id"):
+        lines.append(
+            "project_handoff=rp_package;"
+            f"project={line_value(package.get('host_action_project_id', ''))};"
+            f"space={line_value(package.get('host_action_project_space', ''))};"
+            f"note={line_value(package.get('host_action_project_note', ''))};"
+            f"action_item={line_value(package.get('host_action_project_action_item', ''))};"
+            f"answer={line_value(package.get('host_action_project_answer', ''))};"
+            f"repair={line_value(package.get('host_action_project_repair', ''))};"
+            f"search={line_value(package.get('host_action_research_search', ''))};"
+            f"status={line_value(package.get('status', ''))}"
+        )
+    return lines
+
+
 def copy_state(src: Path, dst: Path) -> None:
     dst.mkdir(parents=True, exist_ok=True)
     if src.resolve() == dst.resolve():
@@ -457,6 +499,8 @@ def append_relay_state(out_dir: Path, requests: list[RelayRequest], responses: l
         "backend_evidence_review=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;source=rp_review_dashboard;status=ready",
     )
     for line in backend_action_review_lines(out_dir):
+        append_line(out_dir / "rp_review_pack", line)
+    for line in review_handoff_lines(out_dir):
         append_line(out_dir / "rp_review_pack", line)
     first_ok = next((response for response in responses if response.status in {"ok", "config_missing"}), responses[0] if responses else None)
     if first_ok is not None:

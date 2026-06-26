@@ -657,6 +657,21 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 [("Bridge", "bridge"), ("Delivery", "delivery"), ("Operations", "operations"), ("Project", "project"), ("Status", "status")],
                 state_records(state, "rp_review_pack", "bridge"),
             ),
+            render_record_panel(
+                "Review Operations Summary",
+                [("Source", "operations_handoff"), ("Tasks", "tasks"), ("Next", "next"), ("Report", "report"), ("Plan", "plan"), ("Quality", "quality"), ("Repair", "repair"), ("Backend", "backend"), ("Status", "status")],
+                state_records(state, "rp_review_pack", "operations_handoff"),
+            ),
+            render_record_panel(
+                "Review Workbench Summary",
+                [("Source", "workbench_handoff"), ("Workbench", "workbench"), ("Task", "task"), ("Task Status", "task_status"), ("Manifest", "manifest"), ("Verified", "verified"), ("Missing", "missing"), ("Bundle", "bundle"), ("Status", "status")],
+                state_records(state, "rp_review_pack", "workbench_handoff"),
+            ),
+            render_record_panel(
+                "Review Project Summary",
+                [("Source", "project_handoff"), ("Project", "project"), ("Space", "space"), ("Note", "note"), ("Action Item", "action_item"), ("Answer", "answer"), ("Repair", "repair"), ("Search", "search"), ("Status", "status")],
+                state_records(state, "rp_review_pack", "project_handoff"),
+            ),
         ]
     if file_name == "llm.html":
         return [

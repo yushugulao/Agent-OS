@@ -653,6 +653,9 @@ def main() -> int:
             assert any("backend_evidence_review=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;source=rp_review_dashboard;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
             assert any("backend_action_review=retry-recovery;action=rerun_align;review=recovered;plain_cost=retry_file_stage_file;agentos_replace=event_context;status=passed" in line for line in rp_review_pack["lines"]), rp_review_pack
             assert any("backend_action_review=agentos-context;action=kernel_context;review=target;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;status=planned" in line for line in rp_review_pack["lines"]), rp_review_pack
+            assert any("operations_handoff=rp_runner+rp_package;tasks=9;next=delivery_manifest;report=exported;plan=executed;quality=checked;repair=done;backend=rp_backend_exec;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
+            assert any("workbench_handoff=rp_runner+rp_package;workbench=W1;task=hr;task_status=waiting;manifest=mf.json;verified=11;missing=0;bundle=wb.zip;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
+            assert any("project_handoff=rp_package;project=lab-gene-x;space=ready;note=recorded;action_item=created;answer=generated;repair=executed;search=ready;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
             rp_package = read_json(base + "/api/state/rp_package")
             assert any("review_pack_bridge=delivery_manifest,operations_report,project_space,workbench_handoff" in line for line in rp_package["lines"]), rp_package
             assert any("review_pack_action=sync_operations_next;source=rp_runner;status=ready" in line for line in rp_package["lines"]), rp_package
@@ -810,9 +813,15 @@ def main() -> int:
             assert "Review Backend Evidence" in review_html
             assert "Review Backend Actions" in review_html
             assert "Review Pack Bridges" in review_html
+            assert "Review Operations Summary" in review_html
+            assert "Review Workbench Summary" in review_html
+            assert "Review Project Summary" in review_html
             assert "Handoff Checks" in review_html
             assert "send_to_reviewer" in review_html
             assert "delivery_to_operations" in review_html
+            assert "lab-gene-x" in review_html
+            assert "mf.json" in review_html
+            assert "delivery_manifest" in review_html
             assert "backend_evidence_review" in review_html
             assert "backend_review_evidence" in review_html
             assert "rerun_align" in review_html
