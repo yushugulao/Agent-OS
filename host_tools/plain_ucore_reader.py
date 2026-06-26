@@ -393,6 +393,50 @@ def artifact_source_map(state: dict[str, dict[str, object]]) -> list[dict[str, s
     return rows
 
 
+def split_state_references(value: str) -> list[str]:
+    refs: list[str] = []
+    for chunk in value.replace("+", ",").split(","):
+        reference = chunk.strip()
+        if reference.startswith("rp_"):
+            refs.append(reference)
+    return refs
+
+
+def review_source_map(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
+    specs = (
+        ("dashboard_section", "rp_review_dashboard", "section", ("source",)),
+        ("dashboard_gate", "rp_review_dashboard", "gate", ("source",)),
+        ("dashboard_handoff", "rp_review_dashboard", "handoff", ("artifact",)),
+        ("dashboard_backend", "rp_review_dashboard", "backend_review_evidence", ("backend_review_evidence", "review_pack")),
+        ("pack_evidence", "rp_review_pack", "evidence", ("source",)),
+        ("pack_backend", "rp_review_pack", "backend_evidence_review", ("backend_evidence_review", "source")),
+        ("pack_action", "rp_review_pack", "action", ("artifact",)),
+        ("pack_bridge", "rp_review_pack", "bridge", ("delivery", "operations", "project")),
+        ("pack_operations", "rp_review_pack", "operations_handoff", ("operations_handoff", "backend")),
+        ("pack_workbench", "rp_review_pack", "workbench_handoff", ("workbench_handoff",)),
+        ("pack_project", "rp_review_pack", "project_handoff", ("project_handoff",)),
+        ("pack_quality", "rp_review_pack", "host_relay_quality", ("source",)),
+    )
+    rows: list[dict[str, str]] = []
+    for source_kind, file_name, record_key, fields in specs:
+        for record in state_records(state, file_name, record_key):
+            record_name = record.get(record_key, "")
+            for field in fields:
+                for reference in split_state_references(record.get(field, "")):
+                    rows.append(
+                        {
+                            "source_kind": source_kind,
+                            "record": record_name,
+                            "field": field,
+                            "reference": reference,
+                            "state_file": state_reference_file(reference),
+                            "source_line": source_line_for_reference(state, reference),
+                            "status": record.get("status", ""),
+                        }
+                    )
+    return rows
+
+
 def operations_source_files(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
     specs = [
         ("operations_report", "rp_review_pack", ("operations_handoff=",), "run.html,review.html"),
@@ -1399,6 +1443,19 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 "Review Evidence Pack",
                 [("Evidence", "evidence"), ("Backend Evidence", "backend_evidence_review"), ("Source", "source"), ("Plain Costs", "plain_costs"), ("AgentOS Replacements", "agentos_replacements"), ("Risks", "risks"), ("Status", "status")],
                 review_evidence_rows,
+            ),
+            render_record_panel(
+                "Review Source Map",
+                [
+                    ("Kind", "source_kind"),
+                    ("Record", "record"),
+                    ("Field", "field"),
+                    ("Reference", "reference"),
+                    ("State File", "state_file"),
+                    ("Source Line", "source_line"),
+                    ("Status", "status"),
+                ],
+                review_source_map(state),
             ),
             render_record_panel(
                 "Review Backend Evidence",

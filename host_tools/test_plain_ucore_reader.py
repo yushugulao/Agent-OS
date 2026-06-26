@@ -396,6 +396,10 @@ def main() -> int:
         assert "Review Sections" in review_html
         assert "Review Gates" in review_html
         assert "Review Evidence Pack" in review_html
+        assert "Review Source Map" in review_html
+        assert "record=1;kind=input;path=rp_input_fastq;status=ready" in review_html
+        assert "host_relay_eval_batch=checked:6;passed:6;blocked:0;status=ready" in review_html
+        assert "runner_case=plain-ucore" in review_html
         assert "Review Backend Evidence" in review_html
         assert "Review Backend Actions" in review_html
         assert "backend_evidence_review" in review_html
@@ -571,6 +575,7 @@ def main() -> int:
             assert "Review Action Delta" in review_html
             assert "Operations Report Narrative" in review_html
             assert "Report Source Map" in review_html
+            assert "Review Source Map" in review_html
             assert "backend_evidence_report" in review_html
             assert "review_gate" in review_html
             assert "/actions/research/review" in review_html

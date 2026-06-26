@@ -883,6 +883,10 @@ def main() -> int:
             assert "Review Sections" in review_html
             assert "Review Gates" in review_html
             assert "Review Evidence Pack" in review_html
+            assert "Review Source Map" in review_html
+            assert "rp_artifact_manifest" in review_html
+            assert "host_relay_eval_batch" in review_html
+            assert "executions=1" in review_html
             assert "Review Backend Evidence" in review_html
             assert "Review Backend Actions" in review_html
             assert "Review Pack Bridges" in review_html
