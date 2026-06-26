@@ -86,6 +86,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runop", "study_protocol:protocols:2");
 	ok = ok && rp_file_contains("rp_runop", "dataset_answer:datasets:2");
 	ok = ok && rp_file_contains("rp_runop", "package_intake:packages:1");
+	ok = ok && rp_file_contains("rp_runop", "agentos_advanced_surface=kernel_bound");
+	ok = ok && rp_file_contains("rp_runop", "context_authority=shadow");
 	ok = ok && rp_file_contains("rp_wfio", "imports=5");
 	ok = ok && rp_file_contains("rp_wfio", "adapter_specs=6");
 	ok = ok && rp_file_contains("rp_wfio", "migration_steps=9");

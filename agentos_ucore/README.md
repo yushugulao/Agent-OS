@@ -305,7 +305,7 @@ labdemo_ucore: parent passed
 
 ## 科研 Agent 平台入口
 
-`CHAPTER=platform_agentos` 会构建完整科研 Agent 平台程序，并额外加入 `rp_agentos_orch` 作为改造内核目标的主入口。该入口先创建 orchestrator Agent，记录 Agent Context、批量工具调用、Context 快照和文件元数据服务的使用证据，再执行完整 `rp_orch` 工作流。
+`CHAPTER=platform_agentos` 会构建完整科研 Agent 平台程序，并额外加入 `rp_agentos_orch` 作为改造内核目标的主入口。该入口先创建 orchestrator Agent，记录 Agent Context、批量工具调用、Context 快照和文件元数据服务的使用证据，再执行完整 `rp_orch` 工作流。科研平台的高级服务界面阶段还会创建一个 sentinel Agent，执行 `echo + read_context` 批量工具调用，读取 Context 快照，并在 `rp_runop` 中写入 `agentos_advanced_surface=kernel_bound`，用于证明高级平台能力已经接入内核 Agent 执行历史，而不是只停留在普通用户态文件记录。
 
 运行方式：
 

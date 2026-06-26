@@ -1475,7 +1475,9 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "runner_cases=4");
 	ok = ok && require_file_token("rp_agentcmp", "runner_passed=4");
 	ok = ok && require_file_token("rp_agentcmp", "runner_planned=0");
-	ok = ok && require_file_token("rp_agentcmp", "agentos_kernel=observed;context_snapshot=1;metadata_index=1;batch_tool=1;status=ready");
+	ok = ok && require_file_token("rp_agentcmp", "agentos_kernel=observed;context_snapshot=1;metadata_index=1;batch_tool=1;advanced_surface_kernel=1;status=ready");
+	ok = ok && require_file_token("rp_runop", "agentos_advanced_surface=kernel_bound");
+	ok = ok && require_file_token("rp_runop", "agentos_advanced_surface_detail=tool:echo,tool:read_context");
 	ok = ok && require_file_token("rp_package", "llm_roundtrip=rp_llmq,rp_llm_packets,rp_llm_resp");
 	ok = ok && require_file_token("rp_package", "delivery_file=llm_trace;path=rp_llm_packets;required=0;exists=1");
 	ok = ok && require_file_token("rp_review_dashboard", "gate=llm_packet_guard;status=pass;source=rp_llm_guard");

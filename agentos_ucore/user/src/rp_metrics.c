@@ -89,6 +89,8 @@ int main(void)
 	if (!rp_file_contains("rp_runop", "study_protocol:protocols:2")) return 1;
 	if (!rp_file_contains("rp_runop", "dataset_answer:datasets:2")) return 1;
 	if (!rp_file_contains("rp_runop", "package_intake:packages:1")) return 1;
+	if (!rp_file_contains("rp_runop", "agentos_advanced_surface=kernel_bound")) return 1;
+	if (!rp_file_contains("rp_runop", "agentos_advanced_surface_detail=tool:echo,tool:read_context")) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
 	if (ack_count < 27 || tool_count < 113) return 1;
