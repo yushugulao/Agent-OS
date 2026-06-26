@@ -101,6 +101,11 @@ status=ready
         "host_report_title=Static Study\n"
         "host_report_question=Can static state render the report source map?\n"
         "host_report_provider=template\n"
+        "report_source=run_setup;state_file=rp_report_text;source_key=host_report_run_id;linked_sources=rp_input,rp_api_run;status=ready\n"
+        "report_source=workflow;state_file=rp_stage_state;source_key=host_workflow_run_id;linked_sources=rp_stage_dag,rp_run_events,rp_retry_plan;status=ready\n"
+        "report_source=artifacts;state_file=rp_artifact_manifest;source_key=artifact_review_path;linked_sources=rp_artifact,rp_stage_log,rp_chart_data;status=ready\n"
+        "report_source=llm;state_file=rp_llm_resp;source_key=host_relay_response;linked_sources=rp_llm_req,rp_llm_packets,rp_llmeval,rp_llm_guard;status=ready\n"
+        "report_source=review;state_file=rp_review_dashboard;source_key=section,gate,decision;linked_sources=rp_review_pack,rp_review2,rp_revision;status=ready\n"
         "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index;status=ready\n"
         "status=ready\n"
     ),
@@ -318,6 +323,7 @@ def main() -> int:
         assert "Backend Case Narratives" in run_html
         assert "Report Source Map" in run_html
         assert "run_setup" in run_html
+        assert "host_workflow_run_id" in run_html
         assert "Linked Sources" in run_html
         assert "rp_llm_req,rp_llm_packets,rp_llmeval,rp_llm_guard" in run_html
         assert "Operations Report Narrative" in run_html

@@ -1312,6 +1312,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_study", "study_handoff=rp_backend_exec->rp_agentcmp;status=ready");
 	ok = ok && rp_file_contains("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;status=ready");
 	ok = ok && rp_file_contains("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index;status=ready");
+	ok = ok && rp_file_contains("rp_report_text", "report_source=workflow;state_file=rp_stage_state;source_key=host_workflow_run_id");
+	ok = ok && rp_file_contains("rp_report_text", "report_source=llm;state_file=rp_llm_resp;source_key=host_relay_response");
+	ok = ok && rp_file_contains("rp_report_text", "report_source=backend;state_file=rp_report_text;source_key=backend_evidence_report");
 	if (!ok) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");

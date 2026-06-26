@@ -436,6 +436,9 @@ int main(void)
 			   "Recovery reran only the align stage and reused cached profile data.\n"
 			   "Evidence links: rp_evidence, rp_claimrec, rp_provpath, rp_stage_log.\n"
 			   "Release state: ready.\n"
+			   "report_source=workflow;state_file=rp_stage_state;source_key=host_workflow_run_id\n"
+			   "report_source=llm;state_file=rp_llm_resp;source_key=host_relay_response\n"
+			   "report_source=backend;state_file=rp_report_text;source_key=backend_evidence_report\n"
 			   "status=ready\n")) {
 		return 1;
 	}

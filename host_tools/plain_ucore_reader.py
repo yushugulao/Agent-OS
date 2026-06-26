@@ -358,6 +358,20 @@ def operations_source_files(state: dict[str, dict[str, object]]) -> list[dict[st
 
 
 def report_source_map(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
+    platform_rows: dict[str, dict[str, str]] = {}
+    for record in state_records(state, "rp_report_text", "report_source"):
+        section = record.get("report_source", "")
+        if not section:
+            continue
+        platform_rows[section] = {
+            "report_section": section,
+            "state_file": record.get("state_file", ""),
+            "source_line": record.get("source_line", record.get("source_key", "")),
+            "linked_sources": record.get("linked_sources", ""),
+            "review_page": record.get("review_page", "run.html,review.html"),
+            "status": record.get("status", ""),
+        }
+
     specs = [
         ("run_setup", "rp_report_text", ("host_report_run_id=", "host_report_title=", "host_report_question=", "host_report_provider="), "rp_input,rp_api_run"),
         ("workflow", "rp_stage_state", ("host_workflow_run_id=", "host_workflow_engine=", "stage=align;"), "rp_stage_dag,rp_run_events,rp_retry_plan"),
@@ -377,13 +391,17 @@ def report_source_map(state: dict[str, dict[str, object]]) -> list[dict[str, str
         rows.append(
             {
                 "report_section": section,
-                "state_file": name,
-                "source_line": record,
-                "linked_sources": linked_sources,
-                "review_page": "run.html,review.html",
-                "status": parsed.get("status", "present"),
+                "state_file": platform_rows.get(section, {}).get("state_file") or name,
+                "source_line": platform_rows.get(section, {}).get("source_line") or record,
+                "linked_sources": platform_rows.get(section, {}).get("linked_sources") or linked_sources,
+                "review_page": platform_rows.get(section, {}).get("review_page") or "run.html,review.html",
+                "status": platform_rows.get(section, {}).get("status") or parsed.get("status", "present"),
             }
         )
+    known_sections = {row["report_section"] for row in rows}
+    for section, row in platform_rows.items():
+        if section not in known_sections:
+            rows.append(row)
     return rows
 
 

@@ -421,6 +421,9 @@ def main() -> int:
             assert any("host_report_workbench_note_title=Scope" in line for line in rp_report["lines"]), rp_report
             assert any("host_report_workbench_manifest=mf.json" in line for line in rp_report["lines"]), rp_report
             assert any("host_report_workbench_bundle=wb.zip" in line for line in rp_report["lines"]), rp_report
+            assert any("report_source=workflow;state_file=rp_stage_state;source_key=host_workflow_run_id" in line for line in rp_report["lines"]), rp_report
+            assert any("report_source=llm;state_file=rp_llm_resp;source_key=host_relay_response" in line for line in rp_report["lines"]), rp_report
+            assert any("report_source=backend;state_file=rp_report_text;source_key=backend_evidence_report" in line for line in rp_report["lines"]), rp_report
             rp_manifest = read_json(base + "/api/state/rp_artifact_manifest")
             assert any("host_manifest_run_id=R1" in line for line in rp_manifest["lines"]), rp_manifest
             assert any("host_manifest_revision_targets=m,c,s" in line for line in rp_manifest["lines"]), rp_manifest
