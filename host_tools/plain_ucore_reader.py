@@ -113,6 +113,56 @@ def write_json(path: Path, data: object) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def read_json_file(path: Path) -> dict[str, object]:
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if isinstance(data, dict):
+            return data
+    except json.JSONDecodeError:
+        return {}
+    return {}
+
+
+def read_jsonl_file(path: Path) -> list[dict[str, object]]:
+    if not path.exists():
+        return []
+    records: list[dict[str, object]] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+            if isinstance(data, dict):
+                records.append(data)
+        except json.JSONDecodeError:
+            continue
+    return records
+
+
+def metric_value(state: dict[str, dict[str, object]], sources: list[tuple[str, str]], default: str = "n/a") -> str:
+    for name, key in sources:
+        value = state_values(state, name).get(key, "")
+        if value:
+            return value
+    return default
+
+
+def render_metric_cards(metrics: list[tuple[str, object, str]]) -> str:
+    cards = []
+    for label, value, source in metrics:
+        cards.append(
+            "<article class='metric'><span>{}</span><strong>{}</strong><small>{}</small></article>".format(
+                html.escape(label),
+                html.escape(str(value)),
+                html.escape(source),
+            )
+        )
+    return "<section class='metrics'>{}</section>".format("".join(cards))
+
+
 def render_table(title: str, rows: Iterable[str]) -> str:
     body = []
     for row in rows:
@@ -128,7 +178,109 @@ def render_table(title: str, rows: Iterable[str]) -> str:
         )
     if not body:
         body.append("<tr><td colspan='2'>No source rows</td></tr>")
-    return "<section><h2>{}</h2><table>{}</table></section>".format(html.escape(title), "".join(body))
+    return "<section class='panel'><h2>{}</h2><table>{}</table></section>".format(html.escape(title), "".join(body))
+
+
+def render_action_log(actions: list[dict[str, object]]) -> str:
+    rows = []
+    for record in actions[-12:]:
+        rows.append(
+            "<tr><td>{}</td><td>{}</td><td>{}</td></tr>".format(
+                html.escape(str(record.get("sequence", ""))),
+                html.escape(str(record.get("path", ""))),
+                html.escape(str(record.get("status", ""))),
+            )
+        )
+    if not rows:
+        rows.append("<tr><td colspan='3'>No host actions</td></tr>")
+    return (
+        "<section class='panel'><h2>Host Actions</h2>"
+        "<table><tr><th>Sequence</th><th>Path</th><th>Status</th></tr>{}</table></section>"
+    ).format("".join(rows))
+
+
+def default_batch_payload() -> str:
+    actions = {
+        "actions": [
+            {"path": "/actions/research/run", "payload": {"run_id": "RUN-WEB", "source": "reader-ui"}},
+            {"path": "/actions/research/review", "payload": {"run_id": "RUN-WEB", "decision": "needs_revision"}},
+            {"path": "/actions/research/revision-task", "payload": {"review_id": "usable-review:HOST:1", "targets": "methods,chart_caption"}},
+            {"path": "/actions/research/run-revision-task", "payload": {"task_id": "usable-revision-task:RUN-900:1"}},
+            {"path": "/actions/research/export-notebook", "payload": {"run_id": "RUN-WEB", "format": "ipynb"}},
+            {"path": "/actions/research/export-bundle", "payload": {"run_id": "RUN-WEB", "bundle": "evidence"}},
+            {"path": "/actions/agentcompare/run", "payload": {"profile": "plain_ucore"}},
+        ]
+    }
+    return json.dumps(actions, indent=2)
+
+
+def render_action_panel() -> str:
+    return """<section class='panel action-panel'>
+  <h2>Batch Actions</h2>
+  <textarea id='batch-payload' spellcheck='false'>{payload}</textarea>
+  <div class='action-row'>
+    <button type='button' onclick='sendBatch()'>Run Batch</button>
+    <output id='batch-status'>idle</output>
+  </div>
+</section>""".format(payload=html.escape(default_batch_payload()))
+
+
+def render_overview(
+    file_name: str,
+    state: dict[str, dict[str, object]],
+    contract: dict[str, object],
+    action_count: int,
+    last_run: dict[str, object],
+) -> str:
+    last_status = str(last_run.get("status", "none"))
+    common = [
+        ("State Files", len(state), "plain uCore output"),
+        ("Host Actions", action_count, "reader log"),
+        ("Last Run", last_status, "QEMU path"),
+    ]
+    page_metrics: dict[str, list[tuple[str, object, str]]] = {
+        "index.html": [
+            ("Contract", contract.get("contract", ""), "rp_web_bundle"),
+            ("Views", contract.get("views", ""), "reader contract"),
+            ("Dynamic Inputs", metric_value(state, [("rp_web_bundle", "dynamic_inputs"), ("rp_input", "dynamic_submissions")]), "rp_input"),
+        ],
+        "run.html": [
+            ("Run Status", metric_value(state, [("rp_runner", "status"), ("rp_api_run", "status")]), "rp_runner"),
+            ("Workbench Tasks", metric_value(state, [("rp_runner", "workbench_tasks")]), "rp_runner"),
+            ("Artifacts", metric_value(state, [("rp_runner", "host_action_artifacts"), ("rp_package", "artifacts")]), "rp_package"),
+        ],
+        "agents.html": [
+            ("Agents", metric_value(state, [("rp_agents", "agents"), ("rp_api_agents", "agents")]), "rp_agents"),
+            ("Decisions", metric_value(state, [("rp_decisions", "decisions")]), "rp_decisions"),
+            ("Messages", metric_value(state, [("rp_handoff", "handoffs"), ("rp_mail", "messages")]), "role files"),
+        ],
+        "evidence.html": [
+            ("Claims", metric_value(state, [("rp_evidence", "claims"), ("rp_api_evidence", "claims")]), "rp_evidence"),
+            ("Delivery Files", metric_value(state, [("rp_package", "delivery_files")]), "rp_package"),
+            ("Review Comments", metric_value(state, [("rp_review2", "comments")]), "rp_review2"),
+        ],
+        "compare.html": [
+            ("Plain Kernel", metric_value(state, [("rp_agentcmp", "plain_kernel"), ("rp_api_compare", "plain_kernel")]), "rp_agentcmp"),
+            ("Checks", metric_value(state, [("rp_consistency", "checks")]), "rp_consistency"),
+            ("QEMU", metric_value(state, [("rp_host_run_result", "qemu_orch_passed")]), "rp_host_run_result"),
+        ],
+        "artifacts.html": [
+            ("Manifest Records", metric_value(state, [("rp_artifact_manifest", "manifest_records"), ("rp_api_artifacts", "manifest_records")]), "rp_artifact_manifest"),
+            ("Real Items", metric_value(state, [("rp_artifact_manifest", "real_artifact_items"), ("rp_package", "real_artifact_items")]), "rp_package"),
+            ("Package", metric_value(state, [("rp_package", "status")]), "rp_package"),
+        ],
+        "data.html": [
+            ("Submissions", metric_value(state, [("rp_input", "dynamic_submissions")]), "rp_input"),
+            ("Snapshots", metric_value(state, [("rp_dataset_snapshot", "snapshots"), ("rp_api_data", "dataset_snapshots")]), "rp_dataset_snapshot"),
+            ("Quality", metric_value(state, [("rp_data_quality", "passed")]), "rp_data_quality"),
+        ],
+        "actions.html": [
+            ("Configured Actions", metric_value(state, [("rp_api_action", "actions"), ("rp_web_bundle", "reader_actions")]), "rp_api_action"),
+            ("Action Source", metric_value(state, [("rp_actionio", "host_action_source"), ("rp_web_bundle", "host_action_source")]), "rp_actionio"),
+            ("uCore Result", metric_value(state, [("rp_host_run_result", "status")]), "rp_host_run_result"),
+        ],
+    }
+    return render_metric_cards(page_metrics.get(file_name, []) + common)
 
 
 def page_html(title: str, nav: str, sections: list[str]) -> str:
@@ -139,23 +291,67 @@ def page_html(title: str, nav: str, sections: list[str]) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{title}</title>
   <style>
-    body {{ margin: 0; font-family: Arial, sans-serif; color: #1f2933; background: #f6f8fb; }}
-    header {{ background: #102a43; color: white; padding: 18px 24px; }}
-    nav {{ display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 24px; background: #d9e2ec; }}
-    nav a {{ color: #102a43; text-decoration: none; font-weight: 700; }}
-    main {{ padding: 20px 24px 40px; max-width: 1180px; margin: 0 auto; }}
-    section {{ background: white; border: 1px solid #d9e2ec; border-radius: 6px; padding: 16px; margin: 0 0 16px; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin: 0; font-family: Arial, sans-serif; color: #1d2733; background: #f5f7fa; }}
+    .app {{ min-height: 100vh; display: grid; grid-template-columns: 220px minmax(0, 1fr); }}
+    .sidebar {{ background: #12343b; color: white; padding: 20px 14px; }}
+    .brand {{ font-size: 18px; font-weight: 700; margin: 0 0 18px; }}
+    nav {{ display: grid; gap: 6px; }}
+    nav a {{ color: #d6f5ef; text-decoration: none; font-weight: 700; padding: 9px 10px; border-radius: 6px; }}
+    nav a.active {{ background: #2b7a78; color: white; }}
+    main {{ padding: 22px 28px 40px; max-width: 1320px; width: 100%; }}
+    header {{ display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 18px; }}
     h1, h2 {{ margin: 0 0 12px; }}
+    header p {{ margin: 4px 0 0; color: #5c6f82; }}
+    .badge {{ background: #def7ec; color: #0f5132; border: 1px solid #a7e3c1; border-radius: 999px; padding: 6px 10px; font-weight: 700; }}
+    .metrics {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; margin: 0 0 16px; }}
+    .metric {{ background: white; border: 1px solid #d9e2ec; border-radius: 6px; padding: 13px; min-height: 96px; }}
+    .metric span {{ color: #52616f; font-size: 13px; }}
+    .metric strong {{ display: block; font-size: 24px; margin: 8px 0 6px; overflow-wrap: anywhere; }}
+    .metric small {{ color: #6b7c8f; }}
+    .panel {{ background: white; border: 1px solid #d9e2ec; border-radius: 6px; padding: 16px; margin: 0 0 16px; overflow-x: auto; }}
     table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
     th {{ width: 240px; text-align: left; color: #334e68; background: #f0f4f8; }}
     th, td {{ border: 1px solid #d9e2ec; padding: 7px 9px; vertical-align: top; }}
     code {{ background: #f0f4f8; padding: 2px 4px; border-radius: 3px; }}
+    textarea {{ width: 100%; min-height: 220px; resize: vertical; font: 13px Consolas, monospace; border: 1px solid #bcccdc; border-radius: 6px; padding: 10px; }}
+    .action-row {{ display: flex; align-items: center; gap: 12px; margin-top: 10px; }}
+    button {{ border: 0; background: #2b7a78; color: white; border-radius: 6px; padding: 9px 14px; font-weight: 700; cursor: pointer; }}
+    output {{ color: #334e68; font-weight: 700; }}
+    @media (max-width: 760px) {{
+      .app {{ grid-template-columns: 1fr; }}
+      .sidebar {{ position: static; }}
+      main {{ padding: 18px; }}
+      header {{ align-items: flex-start; flex-direction: column; }}
+    }}
   </style>
+  <script>
+    async function sendBatch() {{
+      const status = document.getElementById('batch-status');
+      status.value = 'running';
+      try {{
+        const response = await fetch('/actions/batch', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: document.getElementById('batch-payload').value
+        }});
+        const data = await response.json();
+        status.value = response.ok ? 'ready: ' + (data.actions || []).length + ' actions' : 'failed';
+        if (response.ok) window.location.reload();
+      }} catch (error) {{
+        status.value = 'failed';
+      }}
+    }}
+  </script>
 </head>
 <body>
-  <header><h1>{title}</h1><p>Rendered from plain uCore state files.</p></header>
-  {nav}
-  <main>{sections}</main>
+  <div class="app">
+    <aside class="sidebar"><p class="brand">Plain uCore Research</p>{nav}</aside>
+    <main>
+      <header><div><h1>{title}</h1><p>Rendered from plain uCore state files.</p></div><span class="badge">live files</span></header>
+      {sections}
+    </main>
+  </div>
 </body>
 </html>
 """.format(title=html.escape(title), nav=nav, sections="\n".join(sections))
@@ -167,15 +363,29 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
     problems = validate_contract(contract)
     out_dir.mkdir(parents=True, exist_ok=True)
     api_dir = out_dir / "api"
+    action_log = out_dir / "host-actions.jsonl"
+    actions = read_jsonl_file(action_log)
+    last_run = read_json_file(out_dir / "last-run.json")
 
     for name, item in state.items():
         write_json(api_dir / f"{name}.json", {"name": name, "values": item["values"], "lines": item["lines"]})
 
-    nav = "<nav>{}</nav>".format(
-        " ".join(f"<a href='{html.escape(file)}'>{html.escape(title)}</a>" for file, title, _, _ in PAGE_SPECS)
-    )
     for file_name, title, primary, extras in PAGE_SPECS:
-        sections = [render_table(primary, state_lines(state, primary))]
+        nav = "<nav>{}</nav>".format(
+            "".join(
+                "<a class='{cls}' href='{href}'>{label}</a>".format(
+                    cls="active" if file == file_name else "",
+                    href=html.escape(file),
+                    label=html.escape(nav_title),
+                )
+                for file, nav_title, _, _ in PAGE_SPECS
+            )
+        )
+        sections = [render_overview(file_name, state, contract, len(actions), last_run)]
+        if file_name == "actions.html":
+            sections.append(render_action_panel())
+            sections.append(render_action_log(actions))
+        sections.append(render_table(primary, state_lines(state, primary)))
         for extra in extras:
             sections.append(render_table(extra, state_lines(state, extra)))
         (out_dir / file_name).write_text(page_html(title, nav, sections), encoding="utf-8")
@@ -185,6 +395,8 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
         "state_files": len(state),
         "pages": len(PAGE_SPECS),
         "api_json_files": len(state),
+        "action_count": len(actions),
+        "last_run_status": last_run.get("status", ""),
         "contract": contract,
         "problems": problems,
         "status": "ready" if not problems else "invalid",

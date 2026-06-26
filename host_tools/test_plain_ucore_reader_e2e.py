@@ -103,8 +103,12 @@ def main() -> int:
             assert any("qemu_rp_compare_plain: host_actions=7 verified" in line for line in rp_result["lines"]), rp_result
 
             run_html = read_text(base + "/run.html")
+            assert "Plain uCore Research" in run_html
+            assert "Workbench Tasks" in run_html
             assert "host_action_revision_run" in run_html
             actions_html = read_text(base + "/actions.html")
+            assert "Batch Actions" in actions_html
+            assert "Host Actions" in actions_html
             assert "qemu_orch_passed" in actions_html
             assert "host_action_revision" in actions_html
         finally:

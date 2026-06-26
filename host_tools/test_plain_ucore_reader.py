@@ -111,12 +111,20 @@ def main() -> int:
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "api" / "rp_api_home.json").exists()
+        index_html = (out_dir / "index.html").read_text(encoding="utf-8")
+        assert "Plain uCore Research" in index_html
+        assert "State Files" in index_html
+        assert "Dynamic Inputs" in index_html
+        actions_html = (out_dir / "actions.html").read_text(encoding="utf-8")
+        assert "Batch Actions" in actions_html
+        assert "/actions/research/run" in actions_html
 
         saved = json.loads((out_dir / "reader-summary.json").read_text(encoding="utf-8"))
         assert saved["contract"]["contract"] == "host_plain_ucore_v2"
         assert saved["contract"]["missing_payload_files"] == []
         assert saved["contract"]["missing_refresh_files"] == []
         assert saved["status"] == "ready"
+        assert saved["action_count"] == 0
 
         handler = plain_ucore_reader.make_service_handler(
             state_dir,
@@ -185,6 +193,9 @@ def main() -> int:
                 live = json.loads(response.read().decode("utf-8"))
             assert live["action_count"] == 3, live
             assert "path=/actions/research/export-bundle" in (state_dir / "rp_host_action_inbox").read_text(encoding="utf-8")
+            actions_html = (out_dir / "actions.html").read_text(encoding="utf-8")
+            assert "Host Actions" in actions_html
+            assert "/actions/research/export-bundle" in actions_html
 
             bad_batch = request.Request(
                 base + "/actions/batch",
