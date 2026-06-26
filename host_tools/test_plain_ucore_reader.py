@@ -126,6 +126,13 @@ status=ready
         "decision=ready_for_reviewer;basis=required_files,human_review,llm_packet_guard,workflow_recovered\n"
         "status=ready\n"
     ),
+    "rp_review_pack": (
+        "pack=review-evidence\n"
+        "evidence=llm_quality;source=rp_llmeval;passed=7;status=pass\n"
+        "evidence=delivery_ready;source=rp_package;files=8;status=pass\n"
+        "action=send_to_reviewer;owner=orchestrator;artifact=rp_review_pack;status=ready\n"
+        "status=ready\n"
+    ),
     "rp_llm_req": "host_relay_request=q1;route=review_summary;provider=template;prompt_hash=abc;source=rp_llmq\n",
     "rp_llm_resp": "host_relay_process=plain_ucore_llm_relay;mode=template;requests=1;responses=1;status=ready\nhost_relay_response=relay-q1;request=q1;summary=ready;citations=5;status=ok\n",
     "rp_llmeval": "host_relay_eval_batch=checked:6;passed:6;blocked:0;status=ready\nhost_relay_eval=q1;response=relay-q1;checks=6;passed=6;status=passed\n",
@@ -183,6 +190,8 @@ def main() -> int:
         assert "Review Dashboard" in review_html
         assert "Review Sections" in review_html
         assert "Review Gates" in review_html
+        assert "Review Evidence Pack" in review_html
+        assert "send_to_reviewer" in review_html
         assert "ready_for_reviewer" in review_html
         assert "plan&gt;data&gt;review&gt;repair&gt;audit" in evidence_html
         assert "Plain Kernel Signals" in compare_html

@@ -1160,14 +1160,16 @@ int main(void)
 	ok = ok && rp_file_contains("rp_review_dashboard", "decision=ready_for_reviewer");
 	ok = ok && rp_file_contains("rp_ack", "ack=review_dashboard;msg=reviewdash;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=review_dashboard.aggregate");
+	ok = ok && rp_file_contains("rp_ack", "ack=review_pack;msg=pack;status=ready");
+	ok = ok && rp_file_contains("rp_tool", "tool=review_pack.assemble");
 	if (!ok) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
-	if (ack_count < 43 || tool_count < 137) {
+	if (ack_count < 44 || tool_count < 138) {
 		printf("rp_compare_plain: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		return 1;
 	}
-	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=169;message_acks=43;tool_events=137;action_state_records=12;test_cases=699;action_side_effect_records=16;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=170;message_acks=44;tool_events=138;action_state_records=12;test_cases=705;action_side_effect_records=16;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;status=ready")) return 1;
 	if (rp_host_seed_has("kind=research_run")) {
 		if (!rp_append_file("rp_agentcmp", "host_action_research_verified=1")) return 1;
 	}
@@ -1210,6 +1212,6 @@ int main(void)
 	if (rp_host_seed_count() > 0) {
 		printf("rp_compare_plain: host_actions=%d verified\n", rp_host_seed_count());
 	}
-	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=42 state_files=169 acks=43 tools=137 dynamic=4 reader=1 status=ready\n");
+	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=42 state_files=170 acks=44 tools=138 dynamic=4 reader=1 status=ready\n");
 	return 0;
 }

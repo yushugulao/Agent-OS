@@ -19,7 +19,7 @@ PAGE_SPECS = [
     ("run.html", "Run Detail", "rp_api_run", ["rp_ui_run", "rp_runner", "rp_artifact"]),
     ("agents.html", "Agents", "rp_api_agents", ["rp_ui_agent", "rp_agents", "rp_decisions"]),
     ("evidence.html", "Evidence", "rp_api_evidence", ["rp_ui_evidence", "rp_evidence", "rp_package"]),
-    ("review.html", "Review", "rp_review_dashboard", ["rp_review2", "rp_revision", "rp_package", "rp_report_text"]),
+    ("review.html", "Review", "rp_review_dashboard", ["rp_review_pack", "rp_review2", "rp_revision", "rp_package", "rp_report_text"]),
     ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency"]),
     ("artifacts.html", "Artifacts", "rp_api_artifacts", ["rp_artifact", "rp_artifact_manifest", "rp_package"]),
     ("data.html", "Data", "rp_api_data", ["rp_input", "rp_dataset_snapshot", "rp_data_quality"]),
@@ -286,9 +286,10 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Run", metric_value(state, [("rp_review_dashboard", "run"), ("rp_report_text", "host_report_run_id")]), "rp_review_dashboard"),
         ("Sections", metric_value(state, [("rp_review_dashboard", "sections")]), "rp_review_dashboard"),
         ("Decision", metric_value(state, [("rp_review_dashboard", "decision")]), "rp_review_dashboard"),
+        ("Evidence Pack", metric_value(state, [("rp_review_pack", "pack")]), "rp_review_pack"),
         ("Human Review", metric_value(state, [("rp_review2", "decision"), ("rp_report_text", "host_report_review_decision")]), "rp_review2"),
         ("Delivery", metric_value(state, [("rp_package", "latest_delivery_status"), ("rp_package", "status")]), "rp_package"),
-        ("Host Relay Quality", metric_value(state, [("rp_review_dashboard", "host_relay_quality")]), "rp_review_dashboard"),
+        ("Host Relay Quality", metric_value(state, [("rp_review_pack", "host_relay_quality"), ("rp_review_dashboard", "host_relay_quality")]), "rp_review_pack"),
     ]
     if file_name == "run.html":
         return render_summary_panel("Research Output", report_items)
@@ -339,6 +340,7 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
     review_items = [
         ("Workflow", metric_value(state, [("rp_review_dashboard", "section")]), "rp_review_dashboard"),
         ("Required Files", metric_value(state, [("rp_review_dashboard", "gate")]), "rp_review_dashboard"),
+        ("Pack Action", metric_value(state, [("rp_review_pack", "action")]), "rp_review_pack"),
         ("Revision", metric_value(state, [("rp_revision", "final_status")]), "rp_revision"),
         ("Review Threads", metric_value(state, [("rp_review2", "review_threads")]), "rp_review2"),
         ("Action Items", metric_value(state, [("rp_review2", "action_items")]), "rp_review2"),
@@ -435,6 +437,16 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 "Review Decisions",
                 [("Decision", "decision"), ("Basis", "basis")],
                 state_records(state, "rp_review_dashboard", "decision"),
+            ),
+            render_record_panel(
+                "Review Evidence Pack",
+                [("Evidence", "evidence"), ("Source", "source"), ("Status", "status")],
+                state_records(state, "rp_review_pack", "evidence"),
+            ),
+            render_record_panel(
+                "Review Pack Actions",
+                [("Action", "action"), ("Owner", "owner"), ("Status", "status")],
+                state_records(state, "rp_review_pack", "action"),
             ),
         ]
     if file_name == "llm.html":
@@ -625,6 +637,7 @@ def render_overview(
         "review.html": [
             ("Sections", metric_value(state, [("rp_review_dashboard", "sections")]), "rp_review_dashboard"),
             ("Decision", metric_value(state, [("rp_review_dashboard", "decision")]), "rp_review_dashboard"),
+            ("Pack", metric_value(state, [("rp_review_pack", "pack")]), "rp_review_pack"),
             ("Delivery", metric_value(state, [("rp_package", "latest_delivery_status"), ("rp_package", "status")]), "rp_package"),
         ],
         "llm.html": [

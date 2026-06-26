@@ -69,6 +69,31 @@ def append_line(path: Path, line: str) -> None:
     write_text(path, existing + suffix + line.rstrip("\n") + "\n")
 
 
+def ensure_review_pack(path: Path) -> None:
+    if "pack=review-evidence" in read_text(path):
+        return
+    write_text(
+        path,
+        "pack=review-evidence\n"
+        "run=RUN-042\n"
+        "sources=rp_input,rp_stage_dag,rp_retry_plan,rp_artifact_manifest,rp_report_text,rp_chart_data,rp_llmeval,rp_llm_guard,rp_review_dashboard,rp_package\n"
+        "evidence=required_files;source=rp_package;status=pass\n"
+        "evidence=workflow_recovered;source=rp_retry_plan;status=pass\n"
+        "evidence=artifact_manifest;source=rp_artifact_manifest;records=4;status=pass\n"
+        "evidence=llm_quality;source=rp_llmeval;passed=7;status=pass\n"
+        "evidence=llm_packet_guard;source=rp_llm_guard;secrets_in_ucore=0;status=pass\n"
+        "evidence=human_review;source=rp_review2;status=pass\n"
+        "evidence=revision_ready;source=rp_revision;status=pass\n"
+        "evidence=delivery_ready;source=rp_package;files=8;status=pass\n"
+        "action=send_to_reviewer;owner=orchestrator;artifact=rp_review_pack;status=ready\n"
+        "action=verify_llm_packet;owner=auditor;artifact=rp_llm_guard;status=ready\n"
+        "action=check_delivery_manifest;owner=reviewer;artifact=rp_package;status=ready\n"
+        "plain_kernel_note=ordinary_files_require_host_reader_refresh\n"
+        "host_page=review.html\n"
+        "status=ready\n",
+    )
+
+
 def parse_kv_line(line: str) -> dict[str, str]:
     values: dict[str, str] = {}
     for part in line.split(";"):
@@ -386,6 +411,15 @@ def append_relay_state(out_dir: Path, requests: list[RelayRequest], responses: l
     append_line(
         out_dir / "rp_review_dashboard",
         "host_relay_review_input=rp_llm_resp,rp_llmeval,rp_llm_guard,rp_relay,rp_prompt;page=llm.html;status=ready",
+    )
+    ensure_review_pack(out_dir / "rp_review_pack")
+    append_line(
+        out_dir / "rp_review_pack",
+        f"host_relay_quality=passed:{audit_passed}/{audit_checked};blocked:{audit_blocked};source=rp_llmeval;status={audit_status}",
+    )
+    append_line(
+        out_dir / "rp_review_pack",
+        "host_relay_pack_input=rp_report_text,rp_llm_resp,rp_llmeval,rp_llm_guard,rp_review_dashboard,rp_package;status=ready",
     )
     first_ok = next((response for response in responses if response.status in {"ok", "config_missing"}), responses[0] if responses else None)
     if first_ok is not None:

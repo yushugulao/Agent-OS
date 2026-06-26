@@ -1327,6 +1327,8 @@ int main(void)
 	ok = ok && require_file_token("rp_review_dashboard", "decision=ready_for_reviewer");
 	ok = ok && require_file_token("rp_ack", "ack=review_dashboard;msg=reviewdash;status=ready");
 	ok = ok && require_file_token("rp_tool", "tool=review_dashboard.aggregate");
+	ok = ok && require_file_token("rp_ack", "ack=review_pack;msg=pack;status=ready");
+	ok = ok && require_file_token("rp_tool", "tool=review_pack.assemble");
 	ok = ok && require_file_token("rp_web_bundle", "custom_research_files=1");
 	ok = ok && require_file_token("rp_web_bundle", "custom_research_runs=3");
 	if (rp_host_seed_count() > 0 &&
@@ -1429,7 +1431,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=699\n"
+			   "tests=705\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -1478,6 +1480,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=699 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=705 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
 	return 0;
 }
