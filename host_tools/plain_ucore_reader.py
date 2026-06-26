@@ -209,6 +209,29 @@ def state_prefixed_lines(state: dict[str, dict[str, object]], name: str, prefixe
     return rows
 
 
+def backend_case_narratives(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
+    reports = {row.get("runner_report", ""): row for row in state_records(state, "rp_backend_exec", "runner_report")}
+    rows: list[dict[str, str]] = []
+    for detail in state_records(state, "rp_backend_exec", "runner_detail"):
+        case = detail.get("runner_detail", "")
+        report = reports.get(case, {})
+        rows.append(
+            {
+                "runner_narrative": case,
+                "summary": "{}:{}:{}:{}".format(
+                    detail.get("req", ""),
+                    detail.get("obs", ""),
+                    detail.get("act", ""),
+                    detail.get("review", ""),
+                ),
+                "plain_cost": report.get("plain_cost", ""),
+                "agentos_replace": report.get("agentos_replace", ""),
+                "next": report.get("status", ""),
+            }
+        )
+    return rows
+
+
 def render_record_panel(
     title: str,
     columns: list[tuple[str, str]],
@@ -395,6 +418,17 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                     ("Status", "status"),
                 ],
                 state_records(state, "rp_runner", "backend_evidence_report"),
+            ),
+            render_record_panel(
+                "Backend Case Narratives",
+                [
+                    ("Case", "runner_narrative"),
+                    ("Summary", "summary"),
+                    ("Plain Cost", "plain_cost"),
+                    ("AgentOS Replace", "agentos_replace"),
+                    ("Next", "next"),
+                ],
+                backend_case_narratives(state),
             ),
         ]
     if file_name == "agents.html":

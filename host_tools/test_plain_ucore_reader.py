@@ -218,7 +218,10 @@ def main() -> int:
         assert "Backend Evidence" in run_html
         assert "Backend Evidence In Report" in run_html
         assert "Backend Evidence In Runner" in run_html
+        assert "Backend Case Narratives" in run_html
         assert "batch_tool_context" in run_html
+        assert "execution_plan:pass:record:baseline" in run_html
+        assert "context_path:planned:kernel_context:target" in run_html
         assert "risks" in run_html
         compare_html = (out_dir / "compare.html").read_text(encoding="utf-8")
         assert "Compare Summary" in compare_html

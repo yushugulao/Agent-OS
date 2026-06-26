@@ -758,7 +758,10 @@ def main() -> int:
             assert "host_action_dataset_title" in run_html
             assert "Backend Evidence In Report" in run_html
             assert "Backend Evidence In Runner" in run_html
+            assert "Backend Case Narratives" in run_html
             assert "batch_tool_context" in run_html
+            assert "execution_plan:pass:record:baseline" in run_html
+            assert "context_path:planned:kernel_context:target" in run_html
             assert "risks" in run_html
             artifacts_html = read_text(base + "/artifacts.html")
             assert "Evidence Package" in artifacts_html
