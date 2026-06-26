@@ -203,12 +203,12 @@ def default_batch_payload() -> str:
     actions = {
         "actions": [
             {"path": "/actions/research/run", "payload": {"run_id": "RUN-WEB", "source": "reader-ui"}},
-            {"path": "/actions/research/review", "payload": {"run_id": "RUN-WEB", "decision": "needs_revision"}},
-            {"path": "/actions/research/revision-task", "payload": {"review_id": "usable-review:HOST:1", "targets": "methods,chart_caption"}},
-            {"path": "/actions/research/run-revision-task", "payload": {"task_id": "usable-revision-task:RUN-900:1"}},
+            {"path": "/actions/research/review", "payload": {"run_id": "RUN-WEB", "reviewer": "Wang", "decision": "needs_revision"}},
+            {"path": "/actions/research/revision-task", "payload": {"review_id": "usable-review:Wang:1", "targets": "methods,chart_caption,statistics"}},
+            {"path": "/actions/research/run-revision-task", "payload": {"run_id": "RUN-WEB", "task_id": "usable-revision-task:RUN-WEB:1"}},
             {"path": "/actions/research/export-notebook", "payload": {"run_id": "RUN-WEB", "format": "ipynb"}},
-            {"path": "/actions/research/export-bundle", "payload": {"run_id": "RUN-WEB", "bundle": "evidence"}},
-            {"path": "/actions/agentcompare/run", "payload": {"profile": "plain_ucore"}},
+            {"path": "/actions/research/export-bundle", "payload": {"run_id": "RUN-WEB", "bundle": "reviewer-evidence"}},
+            {"path": "/actions/agentcompare/run", "payload": {"profile": "plain_ucore_batch"}},
         ]
     }
     return json.dumps(actions, indent=2)

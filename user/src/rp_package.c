@@ -248,7 +248,26 @@ int main(void)
 	if (rp_host_seed_has("kind=bundle_export") ||
 	    rp_host_seed_has("kind=research_export") ||
 	    rp_host_seed_has("kind=delivery")) {
-		if (!rp_append_file("rp_package", "host_action_export_bundle=ready;source=rp_host_action_seed")) return 1;
+		char bundle[48];
+		char run_id[48];
+		char line[160];
+		if (!rp_host_seed_copy_value_for_kind("kind=bundle_export", "bundle=", bundle, sizeof(bundle)) &&
+		    !rp_host_seed_copy_value_for_kind("kind=research_export", "bundle=", bundle, sizeof(bundle)) &&
+		    !rp_host_seed_copy_value_for_kind("kind=delivery", "bundle=", bundle, sizeof(bundle))) {
+			rp_copy_text(bundle, sizeof(bundle), "evidence");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=bundle_export", "run_id=", run_id, sizeof(run_id)) &&
+		    !rp_host_seed_copy_value_for_kind("kind=research_export", "run_id=", run_id, sizeof(run_id)) &&
+		    !rp_host_seed_copy_value_for_kind("kind=delivery", "run_id=", run_id, sizeof(run_id))) {
+			rp_copy_text(run_id, sizeof(run_id), "RUN-900");
+		}
+		rp_copy_text(line, sizeof(line), "host_action_export_bundle=ready;run_id=");
+		rp_append_text(line, sizeof(line), run_id);
+		rp_append_text(line, sizeof(line), ";bundle=");
+		rp_append_text(line, sizeof(line), bundle);
+		rp_append_text(line, sizeof(line), ";source=rp_host_action_seed");
+		if (!rp_append_file("rp_package", line)) return 1;
+		if (!rp_append_host_action_line("rp_package", "host_action_export_bundle_name=", bundle)) return 1;
 		if (!rp_append_file("rp_package", "host_action_delivery_manifest=ready")) return 1;
 	}
 	if (!rp_append_status("package=ready")) return 1;

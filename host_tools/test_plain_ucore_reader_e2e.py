@@ -48,12 +48,12 @@ def main() -> int:
         try:
             actions = [
                 {"path": "/actions/research/run", "payload": {"run_id": "RUN-E2E", "source": "reader-e2e"}},
-                {"path": "/actions/research/review", "payload": {"run_id": "RUN-E2E", "decision": "needs_revision"}},
-                {"path": "/actions/research/revision-task", "payload": {"review_id": "usable-review:HOST:1", "targets": "methods,chart_caption"}},
-                {"path": "/actions/research/run-revision-task", "payload": {"task_id": "usable-revision-task:RUN-900:1"}},
+                {"path": "/actions/research/review", "payload": {"run_id": "RUN-E2E", "reviewer": "Wang", "decision": "needs_revision"}},
+                {"path": "/actions/research/revision-task", "payload": {"review_id": "usable-review:Wang:1", "targets": "methods,chart_caption,statistics"}},
+                {"path": "/actions/research/run-revision-task", "payload": {"run_id": "RUN-E2E", "task_id": "usable-revision-task:RUN-E2E:1"}},
                 {"path": "/actions/research/export-notebook", "payload": {"run_id": "RUN-E2E", "format": "ipynb"}},
-                {"path": "/actions/research/export-bundle", "payload": {"run_id": "RUN-E2E", "bundle": "evidence"}},
-                {"path": "/actions/agentcompare/run", "payload": {"profile": "plain_ucore"}},
+                {"path": "/actions/research/export-bundle", "payload": {"run_id": "RUN-E2E", "bundle": "reviewer-evidence"}},
+                {"path": "/actions/agentcompare/run", "payload": {"profile": "plain_ucore_batch"}},
             ]
             action = request.Request(
                 base + "/actions/batch",
@@ -79,16 +79,22 @@ def main() -> int:
             assert any("host_action_run_id=RUN-E2E" in line for line in rp_input["lines"]), rp_input
             rp_runner = read_json(base + "/api/state/rp_runner")
             assert any("host_action_status=completed" in line for line in rp_runner["lines"]), rp_runner
-            assert any("host_action_revision_run=usable-run:RUN-900-rev2" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_revision_run=usable-run:RUN-E2E-rev2" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_compare=plain_ucore_batch" in line for line in rp_runner["lines"]), rp_runner
             rp_review = read_json(base + "/api/state/rp_review2")
-            assert any("host_action_human_review=usable-review:HOST:1" in line for line in rp_review["lines"]), rp_review
+            assert any("host_action_human_review=usable-review:Wang:1" in line for line in rp_review["lines"]), rp_review
+            assert any("host_action_review_decision=needs_revision" in line for line in rp_review["lines"]), rp_review
             rp_revision = read_json(base + "/api/state/rp_revision")
             assert any("host_action_revision_task=created" in line for line in rp_revision["lines"]), rp_revision
+            assert any("host_action_revision_targets=methods,chart_caption,statistics" in line for line in rp_revision["lines"]), rp_revision
+            assert any("host_action_revision_task_id=usable-revision-task:RUN-E2E:1" in line for line in rp_revision["lines"]), rp_revision
             assert any("host_action_revision_run=completed" in line for line in rp_revision["lines"]), rp_revision
             rp_package = read_json(base + "/api/state/rp_package")
             assert any("host_action_export_bundle=ready" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_export_bundle_name=reviewer-evidence" in line for line in rp_package["lines"]), rp_package
             rp_nbexec = read_json(base + "/api/state/rp_nbexec")
             assert any("host_action_notebook_export=ready" in line for line in rp_nbexec["lines"]), rp_nbexec
+            assert any("host_action_notebook_format=ipynb" in line for line in rp_nbexec["lines"]), rp_nbexec
             rp_actionio = read_json(base + "/api/state/rp_actionio")
             assert any("host_action_research_run=1" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_human_review=1" in line for line in rp_actionio["lines"]), rp_actionio
@@ -97,6 +103,7 @@ def main() -> int:
             assert any("host_action_agentcompare=1" in line for line in rp_actionio["lines"]), rp_actionio
             rp_agentcmp = read_json(base + "/api/state/rp_agentcmp")
             assert any("host_action_compare_requested=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("host_action_compare_profile=plain_ucore_batch" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_result = read_json(base + "/api/state/rp_host_run_result")
             assert rp_result["values"]["qemu_orch_passed"] == "1", rp_result
             assert int(rp_result["values"]["extracted_state_files"]) >= 100, rp_result

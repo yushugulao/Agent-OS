@@ -171,6 +171,68 @@ static RP_UNUSED __attribute__((noinline)) int rp_host_seed_copy_value(const cha
 	return 0;
 }
 
+static RP_UNUSED int rp_slice_contains(const char *text, int start, int end, const char *needle)
+{
+	int needle_len = (int)strlen(needle);
+	if (needle_len <= 0 || start < 0 || end < start || needle_len > end - start) return 0;
+	for (int i = start; i <= end - needle_len; i++) {
+		int same = 1;
+		for (int j = 0; j < needle_len; j++) {
+			if (text[i + j] != needle[j]) {
+				same = 0;
+				break;
+			}
+		}
+		if (same) return 1;
+	}
+	return 0;
+}
+
+static RP_UNUSED int rp_copy_key_from_slice(const char *text, int start, int end, const char *key, char *out, int cap)
+{
+	int key_len = (int)strlen(key);
+	if (cap <= 0 || key_len <= 0 || key_len > end - start) return 0;
+	for (int i = start; i <= end - key_len; i++) {
+		int same = 1;
+		for (int j = 0; j < key_len; j++) {
+			if (text[i + j] != key[j]) {
+				same = 0;
+				break;
+			}
+		}
+		if (!same) continue;
+		int pos = i + key_len;
+		int out_pos = 0;
+		while (pos < end && text[pos] != ';' && text[pos] != '\n' && out_pos + 1 < cap) {
+			out[out_pos++] = text[pos++];
+		}
+		out[out_pos] = 0;
+		return out_pos > 0;
+	}
+	return 0;
+}
+
+static RP_UNUSED __attribute__((noinline)) int rp_host_seed_copy_value_for_kind(
+	const char *kind_token,
+	const char *key,
+	char *out,
+	int cap)
+{
+	const char *text = rp_host_seed_text();
+	int text_len = (int)strlen(text);
+	int line_start = 0;
+	for (int pos = 0; pos <= text_len; pos++) {
+		if (pos != text_len && text[pos] != '\n') continue;
+		if (rp_slice_contains(text, line_start, pos, kind_token)) {
+			if (rp_copy_key_from_slice(text, line_start, pos, key, out, cap)) {
+				return 1;
+			}
+		}
+		line_start = pos + 1;
+	}
+	return 0;
+}
+
 static RP_UNUSED void rp_copy_text(char *dst, int cap, const char *src)
 {
 	if (cap <= 0) return;

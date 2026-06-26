@@ -133,7 +133,7 @@ int main(void)
 	if (rp_host_seed_has("kind=research_run")) {
 		char seed_run[48];
 		char token[120];
-		if (!rp_host_seed_copy_value("run_id=", seed_run, sizeof(seed_run))) {
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "run_id=", seed_run, sizeof(seed_run))) {
 			rp_copy_text(seed_run, sizeof(seed_run), "RUN-905");
 		}
 		rp_copy_text(token, sizeof(token), "host_action_run_id=");
@@ -146,23 +146,64 @@ int main(void)
 		ok = ok && require_file_token("rp_agentcmp", "host_action_research_input=ready");
 	}
 	if (rp_host_seed_has("kind=agentcompare")) {
-		ok = ok && require_file_token("rp_runner", "host_action_compare=plain_ucore;status=ready");
+		char profile[48];
+		char token[120];
+		if (!rp_host_seed_copy_value_for_kind("kind=agentcompare", "profile=", profile, sizeof(profile))) {
+			rp_copy_text(profile, sizeof(profile), "plain_ucore");
+		}
+		rp_copy_text(token, sizeof(token), "host_action_compare=");
+		rp_append_text(token, sizeof(token), profile);
+		rp_append_text(token, sizeof(token), ";status=ready");
+		ok = ok && require_file_token("rp_runner", token);
 		ok = ok && require_file_token("rp_agentcmp", "host_action_compare_requested=1");
-		ok = ok && require_file_token("rp_agentcmp", "host_action_compare_profile=plain_ucore");
+		rp_copy_text(token, sizeof(token), "host_action_compare_profile=");
+		rp_append_text(token, sizeof(token), profile);
+		ok = ok && require_file_token("rp_agentcmp", token);
 	}
 	if (rp_host_seed_has("kind=human_review")) {
-		ok = ok && require_file_token("rp_review2", "host_action_human_review=usable-review:HOST:1");
+		char reviewer[48];
+		char decision[48];
+		char token[140];
+		if (!rp_host_seed_copy_value_for_kind("kind=human_review", "reviewer=", reviewer, sizeof(reviewer))) {
+			rp_copy_text(reviewer, sizeof(reviewer), "HOST");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=human_review", "decision=", decision, sizeof(decision))) {
+			rp_copy_text(decision, sizeof(decision), "needs_revision");
+		}
+		rp_copy_text(token, sizeof(token), "host_action_human_review=usable-review:");
+		rp_append_text(token, sizeof(token), reviewer);
+		rp_append_text(token, sizeof(token), ":1");
+		ok = ok && require_file_token("rp_review2", token);
+		rp_copy_text(token, sizeof(token), "host_action_review_decision=");
+		rp_append_text(token, sizeof(token), decision);
+		ok = ok && require_file_token("rp_review2", token);
 		ok = ok && require_file_token("rp_agentcmp", "host_action_review_requested=1");
 		ok = ok && require_file_token("rp_actionio", "host_action_human_review=1");
 	}
 	if (rp_host_seed_has("kind=revision_task")) {
 		ok = ok && require_file_token("rp_revision", "host_action_revision_task=created");
+		char targets[80];
+		char token[120];
+		if (!rp_host_seed_copy_value_for_kind("kind=revision_task", "targets=", targets, sizeof(targets))) {
+			rp_copy_text(targets, sizeof(targets), "methods,chart_caption");
+		}
+		rp_copy_text(token, sizeof(token), "host_action_revision_targets=");
+		rp_append_text(token, sizeof(token), targets);
+		ok = ok && require_file_token("rp_revision", token);
 		ok = ok && require_file_token("rp_agentcmp", "host_action_revision_requested=1");
 		ok = ok && require_file_token("rp_actionio", "host_action_revision=1");
 	}
 	if (rp_host_seed_has("kind=revision_run")) {
 		ok = ok && require_file_token("rp_revision", "host_action_revision_run=completed");
-		ok = ok && require_file_token("rp_runner", "host_action_revision_run=usable-run:RUN-900-rev2");
+		char revision_run[48];
+		char token[130];
+		if (!rp_host_seed_copy_value_for_kind("kind=revision_run", "run_id=", revision_run, sizeof(revision_run))) {
+			rp_copy_text(revision_run, sizeof(revision_run), "RUN-900");
+		}
+		rp_copy_text(token, sizeof(token), "host_action_revision_run=usable-run:");
+		rp_append_text(token, sizeof(token), revision_run);
+		rp_append_text(token, sizeof(token), "-rev2");
+		ok = ok && require_file_token("rp_runner", token);
 		ok = ok && require_file_token("rp_actionio", "host_action_revision=1");
 	}
 	if (rp_host_seed_has("kind=workbench_complete") ||
@@ -176,10 +217,28 @@ int main(void)
 	    rp_host_seed_has("kind=research_export") ||
 	    rp_host_seed_has("kind=delivery")) {
 		ok = ok && require_file_token("rp_package", "host_action_export_bundle=ready");
+		char bundle[48];
+		char token[120];
+		if (!rp_host_seed_copy_value_for_kind("kind=bundle_export", "bundle=", bundle, sizeof(bundle)) &&
+		    !rp_host_seed_copy_value_for_kind("kind=research_export", "bundle=", bundle, sizeof(bundle)) &&
+		    !rp_host_seed_copy_value_for_kind("kind=delivery", "bundle=", bundle, sizeof(bundle))) {
+			rp_copy_text(bundle, sizeof(bundle), "evidence");
+		}
+		rp_copy_text(token, sizeof(token), "host_action_export_bundle_name=");
+		rp_append_text(token, sizeof(token), bundle);
+		ok = ok && require_file_token("rp_package", token);
 		ok = ok && require_file_token("rp_actionio", "host_action_export=1");
 	}
 	if (rp_host_seed_has("kind=notebook_export")) {
 		ok = ok && require_file_token("rp_nbexec", "host_action_notebook_export=ready");
+		char format[32];
+		char token[96];
+		if (!rp_host_seed_copy_value_for_kind("kind=notebook_export", "format=", format, sizeof(format))) {
+			rp_copy_text(format, sizeof(format), "ipynb");
+		}
+		rp_copy_text(token, sizeof(token), "host_action_notebook_format=");
+		rp_append_text(token, sizeof(token), format);
+		ok = ok && require_file_token("rp_nbexec", token);
 		ok = ok && require_file_token("rp_agentcmp", "host_action_export_requested=1");
 		ok = ok && require_file_token("rp_actionio", "host_action_export=1");
 	}

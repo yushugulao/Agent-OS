@@ -38,7 +38,29 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=reviewer.multi_round;target=rp_review2;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=reviewer.write_action_items;target=rp_review2;status=ok")) return 1;
 	if (rp_host_seed_has("kind=human_review")) {
-		if (!rp_append_file("rp_review2", "host_action_human_review=usable-review:HOST:1;decision=needs_revision;source=rp_host_action_seed")) return 1;
+		char reviewer[48];
+		char decision[48];
+		char run_id[48];
+		char line[180];
+		if (!rp_host_seed_copy_value_for_kind("kind=human_review", "reviewer=", reviewer, sizeof(reviewer))) {
+			rp_copy_text(reviewer, sizeof(reviewer), "HOST");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=human_review", "decision=", decision, sizeof(decision))) {
+			rp_copy_text(decision, sizeof(decision), "needs_revision");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=human_review", "run_id=", run_id, sizeof(run_id))) {
+			rp_copy_text(run_id, sizeof(run_id), "RUN-900");
+		}
+		rp_copy_text(line, sizeof(line), "host_action_human_review=usable-review:");
+		rp_append_text(line, sizeof(line), reviewer);
+		rp_append_text(line, sizeof(line), ":1;run_id=");
+		rp_append_text(line, sizeof(line), run_id);
+		rp_append_text(line, sizeof(line), ";decision=");
+		rp_append_text(line, sizeof(line), decision);
+		rp_append_text(line, sizeof(line), ";source=rp_host_action_seed");
+		if (!rp_append_file("rp_review2", line)) return 1;
+		if (!rp_append_host_action_line("rp_review2", "host_action_reviewer=", reviewer)) return 1;
+		if (!rp_append_host_action_line("rp_review2", "host_action_review_decision=", decision)) return 1;
 		if (!rp_append_file("rp_review2", "host_action_review_note=seeded_review_request_applied")) return 1;
 	}
 	if (!rp_append_status("reviewer=accepted")) return 1;

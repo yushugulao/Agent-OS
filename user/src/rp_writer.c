@@ -41,9 +41,29 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=writer.apply_revision;target=rp_revision;status=ok")) return 1;
 	if (rp_host_seed_has("kind=revision_task")) {
 		if (!rp_append_file("rp_revision", "host_action_revision_task=created;status=ready;source=rp_host_action_seed")) return 1;
+		char targets[80];
+		char review_id[80];
+		if (!rp_host_seed_copy_value_for_kind("kind=revision_task", "targets=", targets, sizeof(targets))) {
+			rp_copy_text(targets, sizeof(targets), "methods,chart_caption");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=revision_task", "review_id=", review_id, sizeof(review_id))) {
+			rp_copy_text(review_id, sizeof(review_id), "usable-review:RUN-900:1");
+		}
+		if (!rp_append_host_action_line("rp_revision", "host_action_revision_targets=", targets)) return 1;
+		if (!rp_append_host_action_line("rp_revision", "host_action_revision_review=", review_id)) return 1;
 	}
 	if (rp_host_seed_has("kind=revision_run")) {
 		if (!rp_append_file("rp_revision", "host_action_revision_run=completed;status=completed;source=rp_host_action_seed")) return 1;
+		char task_id[80];
+		char run_id[48];
+		if (!rp_host_seed_copy_value_for_kind("kind=revision_run", "task_id=", task_id, sizeof(task_id))) {
+			rp_copy_text(task_id, sizeof(task_id), "usable-revision-task:RUN-900:1");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=revision_run", "run_id=", run_id, sizeof(run_id))) {
+			rp_copy_text(run_id, sizeof(run_id), "RUN-900");
+		}
+		if (!rp_append_host_action_line("rp_revision", "host_action_revision_task_id=", task_id)) return 1;
+		if (!rp_append_host_action_line("rp_revision", "host_action_revision_source_run=", run_id)) return 1;
 	}
 	if (!rp_append_status("writer=packaged")) return 1;
 	if (!rp_append_status("revision=ready")) return 1;

@@ -37,7 +37,7 @@ def main() -> int:
                 "sequence": 2,
                 "path": "/actions/agentcompare/run",
                 "status": "accepted",
-                "payload": {"profile": "plain_ucore"},
+                "payload": {"profile": "plain_ucore_batch"},
             },
         ]
         actions_path.write_text(
@@ -55,11 +55,11 @@ def main() -> int:
                 },
                 {
                     "path": "/actions/research/review",
-                    "payload": {"decision": "needs_revision"},
+                    "payload": {"run_id": "RUN-999", "reviewer": "Wang", "decision": "needs_revision"},
                 },
                 {
                     "path": "/actions/research/revision-task",
-                    "payload": {"targets": "methods,chart_caption"},
+                    "payload": {"review_id": "usable-review:Wang:1", "targets": "methods,chart_caption,statistics"},
                 },
                 {
                     "path": "/actions/research/export-notebook",
@@ -67,7 +67,7 @@ def main() -> int:
                 },
                 {
                     "path": "/actions/research/export-bundle",
-                    "payload": {"bundle": "evidence"},
+                    "payload": {"run_id": "RUN-999", "bundle": "reviewer-evidence"},
                 },
             ],
         )
@@ -98,6 +98,10 @@ def main() -> int:
         assert "kind=notebook_export" in queue
         assert "kind=bundle_export" in queue
         assert "run_id=RUN-999" in queue
+        assert "reviewer=Wang" in queue
+        assert "targets=methods,chart_caption,statistics" in queue
+        assert "bundle=reviewer-evidence" in queue
+        assert "profile=plain_ucore_batch" in queue
         assert "workbench=usable-workbench:RUN-900" in queue
         assert "status=ready" in queue
 

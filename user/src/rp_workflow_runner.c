@@ -151,7 +151,7 @@ int main(void)
 	if (!rp_append_file("rp_runner", "custom_batch_status=ok")) return 1;
 	if (rp_host_seed_has("kind=research_run")) {
 		char seed_run[48];
-		if (!rp_host_seed_copy_value("run_id=", seed_run, sizeof(seed_run))) {
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "run_id=", seed_run, sizeof(seed_run))) {
 			rp_copy_text(seed_run, sizeof(seed_run), "RUN-905");
 		}
 		if (!rp_append_host_action_line("rp_runner", "host_action_run=usable-run:", seed_run)) return 1;
@@ -162,13 +162,29 @@ int main(void)
 		if (!rp_append_file("rp_runner", "host_action_status=completed")) return 1;
 	}
 	if (rp_host_seed_has("kind=agentcompare")) {
-		if (!rp_append_file("rp_runner", "host_action_compare=plain_ucore;status=ready")) return 1;
+		char profile[48];
+		char line[120];
+		if (!rp_host_seed_copy_value_for_kind("kind=agentcompare", "profile=", profile, sizeof(profile))) {
+			rp_copy_text(profile, sizeof(profile), "plain_ucore");
+		}
+		rp_copy_text(line, sizeof(line), "host_action_compare=");
+		rp_append_text(line, sizeof(line), profile);
+		rp_append_text(line, sizeof(line), ";status=ready");
+		if (!rp_append_file("rp_runner", line)) return 1;
 	}
 	if (rp_host_seed_has("kind=host_workflow")) {
 		if (!rp_append_file("rp_runner", "host_action_workflow=executed;status=ready")) return 1;
 	}
 	if (rp_host_seed_has("kind=revision_run")) {
-		if (!rp_append_file("rp_runner", "host_action_revision_run=usable-run:RUN-900-rev2;status=completed")) return 1;
+		char revision_run[48];
+		char line[128];
+		if (!rp_host_seed_copy_value_for_kind("kind=revision_run", "run_id=", revision_run, sizeof(revision_run))) {
+			rp_copy_text(revision_run, sizeof(revision_run), "RUN-900");
+		}
+		rp_copy_text(line, sizeof(line), "host_action_revision_run=usable-run:");
+		rp_append_text(line, sizeof(line), revision_run);
+		rp_append_text(line, sizeof(line), "-rev2;status=completed");
+		if (!rp_append_file("rp_runner", line)) return 1;
 	}
 	if (!rp_append_file("rp_runner", "real_artifact_items=5")) return 1;
 	if (!rp_append_file("rp_runner", "derived_alignment=rp_artifact:rp_align_table")) return 1;

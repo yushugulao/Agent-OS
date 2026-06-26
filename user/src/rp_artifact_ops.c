@@ -106,7 +106,7 @@ int main(void)
 	}
 	if (rp_host_seed_has("kind=research_run")) {
 		char seed_run[48];
-		if (!rp_host_seed_copy_value("run_id=", seed_run, sizeof(seed_run))) {
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "run_id=", seed_run, sizeof(seed_run))) {
 			rp_copy_text(seed_run, sizeof(seed_run), "RUN-905");
 		}
 		if (!rp_append_host_action_line("rp_input", "host_action_run_id=", seed_run)) return 1;
