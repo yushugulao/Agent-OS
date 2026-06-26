@@ -198,6 +198,15 @@ def main() -> int:
             assert any("host_action_workbench_graph_format=dot" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_workbench_citation_format=bibtex" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_workbench_manuscript_format=markdown" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workbench_completion=ready" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workbench_readiness=checked" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workbench_answer_audit=passed" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workbench_notes_filter=decision" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workbench_board_filter=open" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workbench_row_id=usable-workbench:RUN-E2E:board:task:human_review" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workbench_row_status=done" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workbench_runbook_format=markdown" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workbench_timeline_format=html" in line for line in rp_package["lines"]), rp_package
             rp_nbexec = read_json(base + "/api/state/rp_nbexec")
             assert any("host_action_notebook_export=ready" in line for line in rp_nbexec["lines"]), rp_nbexec
             assert any("host_action_notebook_format=ipynb" in line for line in rp_nbexec["lines"]), rp_nbexec
@@ -206,8 +215,11 @@ def main() -> int:
             assert any("host_action_human_review=1" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_revision=1" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_workbench=1" in line for line in rp_actionio["lines"]), rp_actionio
+            assert any("host_action_workbench_outputs=rp_runner,rp_revision,rp_package" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_export=1" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_agentcompare=1" in line for line in rp_actionio["lines"]), rp_actionio
+            rp_web_bundle = read_json(base + "/api/state/rp_web_bundle")
+            assert any("host_action_workbench_outputs=rp_runner,rp_revision,rp_package" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             rp_agentcmp = read_json(base + "/api/state/rp_agentcmp")
             assert any("host_action_compare_requested=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_compare_profile=plain_ucore_batch" in line for line in rp_agentcmp["lines"]), rp_agentcmp

@@ -839,6 +839,7 @@ int main(void)
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_file_verify")) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_export"))) {
 			if (!rp_append_file("rp_actionio", "host_action_workbench=1")) return 1;
+			if (!rp_append_file("rp_actionio", "host_action_workbench_outputs=rp_runner,rp_revision,rp_package")) return 1;
 		}
 		if ((host_action_seeded && text_contains_silent(host_action_seed, "kind=bundle_export")) ||
 		    (host_action_seeded && text_contains_silent(host_action_seed, "kind=research_export")) ||
@@ -855,6 +856,10 @@ int main(void)
 			return 1;
 		}
 		if (!rp_append_file("rp_web_bundle", "host_action_state_files=rp_input,rp_runner,rp_review2,rp_revision,rp_package,rp_nbexec,rp_agentcmp")) return 1;
+		if ((host_action_seeded && host_seed_has_workbench_action()) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench"))) {
+			if (!rp_append_file("rp_web_bundle", "host_action_workbench_outputs=rp_runner,rp_revision,rp_package")) return 1;
+		}
 		if (!rp_append_status("host_reader_actions=ready")) return 1;
 		printf("rp_web_export: host_reader_actions=%d\n", host_actions);
 	}
