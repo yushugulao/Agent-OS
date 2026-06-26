@@ -788,6 +788,9 @@ def main() -> int:
             assert "Backend Evidence In Report" in run_html
             assert "Backend Evidence In Runner" in run_html
             assert "Backend Case Narratives" in run_html
+            assert "Report Source Map" in run_html
+            assert "run_setup" in run_html
+            assert "rp_llm_req,rp_llm_packets,rp_llmeval,rp_llm_guard" in run_html
             assert "Operations Report Narrative" in run_html
             assert "Operations Source Files" in run_html
             assert "operations_report" in run_html
@@ -877,6 +880,7 @@ def main() -> int:
             assert "Review Operations Summary" in review_html
             assert "Review Workbench Summary" in review_html
             assert "Review Project Summary" in review_html
+            assert "Report Source Map" in review_html
             assert "Operations Report Narrative" in review_html
             assert "Operations Source Files" in review_html
             assert "project_followup" in review_html

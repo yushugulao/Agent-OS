@@ -357,6 +357,36 @@ def operations_source_files(state: dict[str, dict[str, object]]) -> list[dict[st
     return rows
 
 
+def report_source_map(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
+    specs = [
+        ("run_setup", "rp_report_text", ("host_report_run_id=", "host_report_title=", "host_report_question=", "host_report_provider="), "rp_input,rp_api_run"),
+        ("workflow", "rp_stage_state", ("host_workflow_run_id=", "host_workflow_engine=", "stage=align;"), "rp_stage_dag,rp_run_events,rp_retry_plan"),
+        ("artifacts", "rp_artifact_manifest", ("artifact_review_path=raw_to_report", "artifact_review_path=quality_to_package"), "rp_artifact,rp_stage_log,rp_chart_data"),
+        ("llm", "rp_llm_resp", ("host_relay_response=", "host_llm_response_summary="), "rp_llm_req,rp_llm_packets,rp_llmeval,rp_llm_guard"),
+        ("review", "rp_review_dashboard", ("section=llm", "gate=llm_packet_guard", "decision="), "rp_review_pack,rp_review2,rp_revision"),
+        ("workbench", "rp_report_text", ("host_report_workbench=", "host_report_workbench_question=", "host_report_workbench_manifest="), "rp_runner,rp_package,rp_revision"),
+        ("backend", "rp_report_text", ("backend_evidence_report=",), "rp_backend_exec,rp_agentcmp,rp_study"),
+        ("delivery", "rp_package", ("delivery_file=report_md", "host_relay_delivery_file=", "evidence_bundle_entries="), "rp_artifact_manifest,rp_review_pack"),
+    ]
+    rows: list[dict[str, str]] = []
+    for section, name, prefixes, linked_sources in specs:
+        record = first_source_record(state, name, prefixes)
+        if not record:
+            continue
+        parsed = parse_kv_record(record)
+        rows.append(
+            {
+                "report_section": section,
+                "state_file": name,
+                "source_line": record,
+                "linked_sources": linked_sources,
+                "review_page": "run.html,review.html",
+                "status": parsed.get("status", "present"),
+            }
+        )
+    return rows
+
+
 def command_output_for_stage(state: dict[str, dict[str, object]], stage: str) -> dict[str, str]:
     for row in state_records(state, "rp_stage_state", "command"):
         command = row.get("command", "")
@@ -963,6 +993,18 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 workflow_evidence_links(state),
             ),
             render_record_panel(
+                "Report Source Map",
+                [
+                    ("Report Section", "report_section"),
+                    ("State File", "state_file"),
+                    ("Source Line", "source_line"),
+                    ("Linked Sources", "linked_sources"),
+                    ("Review Page", "review_page"),
+                    ("Status", "status"),
+                ],
+                report_source_map(state),
+            ),
+            render_record_panel(
                 "Backend Evidence In Report",
                 [
                     ("Report", "backend_evidence_report"),
@@ -1290,6 +1332,18 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 "Review Project Summary",
                 [("Source", "project_handoff"), ("Project", "project"), ("Space", "space"), ("Note", "note"), ("Action Item", "action_item"), ("Answer", "answer"), ("Repair", "repair"), ("Search", "search"), ("Status", "status")],
                 state_records(state, "rp_review_pack", "project_handoff"),
+            ),
+            render_record_panel(
+                "Report Source Map",
+                [
+                    ("Report Section", "report_section"),
+                    ("State File", "state_file"),
+                    ("Source Line", "source_line"),
+                    ("Linked Sources", "linked_sources"),
+                    ("Review Page", "review_page"),
+                    ("Status", "status"),
+                ],
+                report_source_map(state),
             ),
             render_record_panel(
                 "Operations Report Narrative",

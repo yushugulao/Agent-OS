@@ -96,7 +96,14 @@ status=ready
     "rp_ui_evidence": "page=evidence-detail\nscreening_decisions=9\nevidence_protocol=usable-evidence-protocol:RUN-900:1\nstatus=ready\n",
     "rp_ui_compare": "page=compare-metrics\npain_file_scans=128\npain_state_convention=1\npain_user_permissions=1\npain_rebuild_steps=6\nstatus=ready\n",
     "rp_runner": "workbench_tasks=9\nbackend_evidence_report=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;status=ready\nstatus=ready\n",
-    "rp_report_text": "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index;status=ready\nstatus=ready\n",
+    "rp_report_text": (
+        "host_report_run_id=RUN-042\n"
+        "host_report_title=Static Study\n"
+        "host_report_question=Can static state render the report source map?\n"
+        "host_report_provider=template\n"
+        "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index;status=ready\n"
+        "status=ready\n"
+    ),
     "rp_stage_state": (
         "run_id=RUN-042\n"
         "stage=ingest;order=1;input=rp_input_fastq;attempts=1;state=done\n"
@@ -309,6 +316,10 @@ def main() -> int:
         assert "Backend Evidence In Report" in run_html
         assert "Backend Evidence In Runner" in run_html
         assert "Backend Case Narratives" in run_html
+        assert "Report Source Map" in run_html
+        assert "run_setup" in run_html
+        assert "Linked Sources" in run_html
+        assert "rp_llm_req,rp_llm_packets,rp_llmeval,rp_llm_guard" in run_html
         assert "Operations Report Narrative" in run_html
         assert "Operations Source Files" in run_html
         assert "operations_report" in run_html
@@ -386,6 +397,7 @@ def main() -> int:
         assert "Review Operations Summary" in review_html
         assert "Review Workbench Summary" in review_html
         assert "Review Project Summary" in review_html
+        assert "Report Source Map" in review_html
         assert "Operations Report Narrative" in review_html
         assert "Operations Source Files" in review_html
         assert "project_followup" in review_html
@@ -545,6 +557,7 @@ def main() -> int:
             assert "Review Action Impact" in review_html
             assert "Review Action Delta" in review_html
             assert "Operations Report Narrative" in review_html
+            assert "Report Source Map" in review_html
             assert "backend_evidence_report" in review_html
             assert "review_gate" in review_html
             assert "/actions/research/review" in review_html
@@ -555,8 +568,9 @@ def main() -> int:
             assert "Run Action Output Details" in run_html
             assert "Run Action Impact" in run_html
             assert "Run Action Delta" in run_html
+            assert "Report Source Map" in run_html
             assert "rp_report_text" in run_html
-            assert "dynamic_submissions=4" in run_html
+            assert "run_setup" in run_html
             assert "artifact_path" in run_html
             assert "/actions/research/export-bundle" in run_html
             compare_html = (out_dir / "compare.html").read_text(encoding="utf-8")
