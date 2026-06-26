@@ -54,6 +54,10 @@ def main() -> int:
                     "payload": {"title": "Host reusable response table", "dataset_rows": "6", "columns": "sample,group,value"},
                 },
                 {
+                    "path": "/actions/research/studio-launch",
+                    "payload": {"title": "Studio cytokine evidence", "goal": "Determine whether recovery evidence is ready", "direction": "evidence review", "material_notes": "Small demonstration table for the studio workflow.", "provider_id": "template", "workbench_id": "W1", "latest_run_id": "R1", "latest_answer_id": "answer1"},
+                },
+                {
                     "path": "/actions/research/library-source",
                     "payload": {"citation_key": "hostlibrary2026", "tags": "host reusable"},
                 },
@@ -376,12 +380,13 @@ def main() -> int:
             ],
         )
         summary = runner.prepare_action_state(loaded, state_dir, run_dir)
-        expected_actions = 83
+        expected_actions = 84
 
         assert summary["actions"] == expected_actions
         assert summary["accepted"] == expected_actions
         assert "research_run" in summary["kinds"]
         assert "dataset" in summary["kinds"]
+        assert "studio_launch" in summary["kinds"]
         assert "library_source" in summary["kinds"]
         assert "template" in summary["kinds"]
         assert "workspace_inspect" in summary["kinds"]
@@ -473,6 +478,7 @@ def main() -> int:
         queue = read(next_state / "rp_host_action_queue")
         assert "kind=research_run" in queue
         assert "kind=dataset" in queue
+        assert "kind=studio_launch" in queue
         assert "kind=library_source" in queue
         assert "kind=template" in queue
         assert "kind=workspace_inspect" in queue
@@ -551,6 +557,13 @@ def main() -> int:
         assert "kind=bundle_export" in queue
         assert "run_id=RUN-999" in queue
         assert "title=Host reusable response table" in queue
+        assert "title=Studio cytokine evidence" in queue
+        assert "goal=Determine whether recovery evidence is ready" in queue
+        assert "direction=evidence review" in queue
+        assert "material_notes=Small demonstration table for the studio workflow." in queue
+        assert "workbench_id=W1" in queue
+        assert "latest_run_id=R1" in queue
+        assert "latest_answer_id=answer1" in queue
         assert "citation_key=hostlibrary2026" in queue
         assert "name=Host response template" in queue
         assert "root=host-workspace" in queue
@@ -631,6 +644,7 @@ def main() -> int:
         assert "collect=rp_web_bundle" in plan
         assert "collect=rp_compare_plain" in plan
         assert "kind=dataset" in plan
+        assert "kind=studio_launch" in plan
         assert "kind=library_source" in plan
         assert "kind=template" in plan
         assert "kind=workspace_inspect" in plan
@@ -694,6 +708,7 @@ def main() -> int:
         inbox = read(next_state / "rp_host_action_inbox")
         assert "/actions/research/run" in inbox
         assert "/actions/research/dataset" in inbox
+        assert "/actions/research/studio-launch" in inbox
         assert "/actions/research/library-source" in inbox
         assert "/actions/research/template" in inbox
         assert "/actions/research/inspect-workspace" in inbox
@@ -759,6 +774,7 @@ def main() -> int:
 
         assert runner.action_kind("/actions/research/run-revision") == "revision_run"
         assert runner.action_kind("/actions/research/dataset") == "dataset"
+        assert runner.action_kind("/actions/research/studio-launch") == "studio_launch"
         assert runner.action_kind("/actions/research/library-source") == "library_source"
         assert runner.action_kind("/actions/research/template") == "template"
         assert runner.action_kind("/actions/research/inspect-workspace") == "workspace_inspect"
@@ -845,6 +861,12 @@ def main() -> int:
         assert "#define RP_HOST_ACTION_SEED" in header
         assert "kind=research_run" in seed_file
         assert "kind=dataset" in seed_file
+        assert "kind=studio_launch" in seed_file
+        assert "title=Studio cytokine evidence" in seed_file
+        assert "goal=Determine whether recovery evidence is ready" in seed_file
+        assert "workbench_id=W1" in seed_file
+        assert "material_notes=Small demonstration table for the studio workflow." not in seed_file
+        assert "latest_answer_id=answer1" not in seed_file
         assert "kind=library_source" in seed_file
         assert "kind=template" in seed_file
         assert "kind=workspace_inspect" in seed_file

@@ -1,4 +1,5 @@
 #include <stdio.h>
+#define RP_ENABLE_HOST_ACTION_SEED 1
 #include <research_platform_state.h>
 
 static int require_equal(const char *name, int actual, int expected)
@@ -124,6 +125,20 @@ int main(void)
 		ok = ok && rp_file_contains("rp_runner", "host_action_status=completed");
 		ok = ok && rp_file_contains("rp_agentcmp", "host_action_research_input=ready");
 		ok = ok && rp_file_contains("rp_actionio", "host_action_research_run=1");
+	}
+	if (rp_host_seed_has("kind=studio_launch")) {
+		ok = ok && rp_file_contains("rp_studio", "host_action_studio_launch=accepted");
+		ok = ok && rp_file_contains("rp_studio", "studio_session=usable-research-studio-session:");
+		ok = ok && rp_file_contains("rp_studio", "studio_material=host_action");
+		ok = ok && rp_file_contains("rp_studio", "studio_links=host_action");
+		ok = ok && check_seed_value("kind=studio_launch", "title=", "Studio evidence review", "rp_studio", "host_action_studio_title=");
+		ok = ok && check_seed_value("kind=studio_launch", "goal=", "Turn pasted materials into a workbench answer", "rp_studio", "host_action_studio_goal=");
+		ok = ok && check_seed_value("kind=studio_launch", "direction=", "evidence review", "rp_studio", "host_action_studio_direction=");
+		ok = ok && check_seed_value("kind=studio_launch", "provider_id=", "template", "rp_studio", "host_action_studio_provider=");
+		ok = ok && rp_file_contains("rp_runner", "host_action_studio_session=usable-research-studio-session:");
+		ok = ok && rp_file_contains("rp_package", "host_action_studio_session=ready");
+		ok = ok && rp_file_contains("rp_actionio", "host_action_studio=1");
+		ok = ok && rp_file_contains("rp_web_bundle", "host_action_studio_outputs=rp_studio,rp_runner,rp_package");
 	}
 	if (rp_host_seed_has_research_data_action()) {
 		ok = ok && rp_file_contains("rp_uresrun", "host_action_research_inputs=ready");
@@ -720,7 +735,7 @@ int main(void)
 		ok = ok && rp_file_contains("rp_actionio", "host_action_export=1");
 	}
 	if (rp_host_seed_count() > 0) {
-		ok = ok && rp_file_contains("rp_web_bundle", "host_action_state_files=rp_input,rp_runner,rp_review2,rp_revision,rp_package,rp_nbexec,rp_agentcmp");
+		ok = ok && rp_file_contains("rp_web_bundle", "host_action_state_files=rp_input,rp_studio,rp_runner,rp_review2,rp_revision,rp_package,rp_nbexec,rp_agentcmp");
 	}
 	ok = ok && rp_file_contains("rp_lit", "literature_search=usable-literature-search:RUN-900:1");
 	ok = ok && rp_file_contains("rp_knowledge", "evidence_protocol=usable-evidence-protocol:RUN-900:1");
@@ -1001,10 +1016,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "custom_runs=3");
 	ok = ok && rp_file_contains("rp_runner", "custom_agent_decisions=15");
 	ok = ok && rp_file_contains("rp_runner", "citation_plan_entries=3");
-	ok = ok && rp_file_contains("rp_web_routes", "routes=63");
-	ok = ok && rp_file_contains("rp_web_routes", "get_routes=15");
+	ok = ok && rp_file_contains("rp_web_routes", "routes=65");
+	ok = ok && rp_file_contains("rp_web_routes", "get_routes=16");
+	ok = ok && rp_file_contains("rp_web_routes", "route=/research-studio");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research/workbench/{id}");
-	ok = ok && rp_file_contains("rp_web_routes", "post_routes=48");
+	ok = ok && rp_file_contains("rp_web_routes", "post_routes=49");
+	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/research/studio-launch");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/host-workflow/stage-attempt");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/host-workflow/report-export");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/research/artifact-input");
@@ -1052,7 +1069,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_pub", "result_review=rp_resrev");
 	ok = ok && rp_file_contains("rp_api_know", "semantic_index=rp_semindex");
 	ok = ok && rp_file_contains("rp_api_runtime", "runtime_env=rp_runenv");
-	ok = ok && rp_file_contains("rp_api_action", "actions=48");
+	ok = ok && rp_file_contains("rp_api_action", "actions=49");
+	ok = ok && rp_file_contains("rp_api_action", "research_studio_launch=/actions/research/studio-launch");
 	ok = ok && rp_file_contains("rp_api_action", "host_workflow_stage=/actions/host-workflow/stage-attempt");
 	ok = ok && rp_file_contains("rp_api_action", "host_workflow_report=/actions/host-workflow/report-export");
 	ok = ok && rp_file_contains("rp_api_action", "artifact_input=/actions/research/artifact-input");
@@ -1125,8 +1143,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "review_threads=2");
 	ok = ok && rp_file_contains("rp_web_bundle", "action_validation=passed");
 	ok = ok && rp_file_contains("rp_web_bundle", "side_effect_records=16");
-	ok = ok && rp_file_contains("rp_web_bundle", "reader_actions=48");
-	ok = ok && rp_file_contains("rp_web_bundle", "post_routes=48");
+	ok = ok && rp_file_contains("rp_web_bundle", "reader_views=20");
+	ok = ok && rp_file_contains("rp_web_bundle", "reader_actions=49");
+	ok = ok && rp_file_contains("rp_web_bundle", "post_routes=49");
+	ok = ok && rp_file_contains("rp_web_bundle", "reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle");
+	ok = ok && rp_file_contains("rp_studio", "studio=usable-research-studio");
+	ok = ok && rp_file_contains("rp_studio", "studio_session=usable-research-studio-session:W1:1");
 	if (rp_host_seed_count() > 0 && rp_host_seed_has_workbench_action()) {
 		ok = ok && rp_file_contains("rp_actionio", "host_action_workbench_outputs=rp_runner,rp_revision,rp_package");
 		ok = ok && rp_file_contains("rp_web_bundle", "host_action_workbench_outputs=rp_runner,rp_revision,rp_package");

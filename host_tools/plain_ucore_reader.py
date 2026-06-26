@@ -19,6 +19,7 @@ PAGE_SPECS = [
     ("run.html", "Run Detail", "rp_api_run", ["rp_ui_run", "rp_runner", "rp_artifact"]),
     ("workflow.html", "Workflow", "rp_stage_state", ["rp_stage_dag", "rp_cache_index", "rp_retry_plan", "rp_run_events", "rp_worker", "rp_execobs"]),
     ("workbench.html", "Workbench", "rp_runner", ["rp_report_text", "rp_revision", "rp_package", "rp_review_pack", "rp_nbexec", "rp_uresrun"]),
+    ("studio.html", "Studio", "rp_studio", ["rp_runner", "rp_package", "rp_review_pack", "rp_actionio", "rp_web_bundle"]),
     ("project.html", "Project", "rp_package", ["rp_runner", "rp_review_pack", "rp_actionio", "rp_web_bundle"]),
     ("agents.html", "Agents", "rp_api_agents", ["rp_ui_agent", "rp_agents", "rp_decisions"]),
     ("evidence.html", "Evidence", "rp_api_evidence", ["rp_ui_evidence", "rp_evidence", "rp_package"]),
@@ -1064,6 +1065,18 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Bundle", metric_value(state, [("rp_package", "host_action_workbench_bundle"), ("rp_report_text", "host_report_workbench_bundle"), ("rp_uresrun", "host_action_workbench_bundle")]), "rp_package"),
         ("Notebook", metric_value(state, [("rp_nbexec", "host_action_notebook_format"), ("rp_web_bundle", "notebook_export")]), "rp_nbexec"),
     ]
+    studio_rows = state_records(state, "rp_studio", "studio_session")
+    studio_record = studio_rows[-1] if studio_rows else {}
+    studio_items = [
+        ("Session", studio_record.get("studio_session") or metric_value(state, [("rp_studio", "latest_session")]), "rp_studio"),
+        ("Title", studio_record.get("title") or metric_value(state, [("rp_studio", "host_action_studio_title")]), "rp_studio"),
+        ("Goal", studio_record.get("goal") or metric_value(state, [("rp_studio", "host_action_studio_goal")]), "rp_studio"),
+        ("Direction", studio_record.get("direction") or metric_value(state, [("rp_studio", "host_action_studio_direction")]), "rp_studio"),
+        ("Workbench", studio_record.get("workbench") or metric_value(state, [("rp_studio", "host_action_studio_workbench")]), "rp_studio"),
+        ("Run", studio_record.get("run") or metric_value(state, [("rp_studio", "host_action_studio_run")]), "rp_studio"),
+        ("Answer", studio_record.get("answer") or metric_value(state, [("rp_studio", "host_action_studio_answer")]), "rp_studio"),
+        ("Decision", studio_record.get("decision") or metric_value(state, [("rp_studio", "host_action_studio_decision")]), "rp_studio"),
+    ]
     data_items = [
         ("Ingested Files", metric_value(state, [("rp_ingest_files", "files"), ("rp_api_data", "ingested_files")]), "rp_ingest_files"),
         ("Snapshots", metric_value(state, [("rp_dataset_snapshot", "snapshots"), ("rp_api_data", "dataset_snapshots")]), "rp_dataset_snapshot"),
@@ -1135,6 +1148,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Workflow Runner", workflow_items)
     if file_name == "workbench.html":
         return render_summary_panel("Research Workbench", workbench_items)
+    if file_name == "studio.html":
+        return render_summary_panel("Research Studio", studio_items)
     if file_name == "data.html":
         return render_summary_panel("Data Pipeline", data_items)
     if file_name == "project.html":
@@ -1830,6 +1845,33 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 project_source_rows,
             ),
         ]
+    if file_name == "studio.html":
+        return [
+            render_record_panel(
+                "Studio Sessions",
+                [("Session", "studio_session"), ("Title", "title"), ("Goal", "goal"), ("Direction", "direction"), ("Workbench", "workbench"), ("Run", "run"), ("Answer", "answer"), ("Decision", "decision"), ("Status", "status")],
+                state_records(state, "rp_studio", "studio_session"),
+            ),
+            render_record_panel(
+                "Studio Materials",
+                [("Material", "studio_material"), ("Notes", "notes"), ("Rows", "csv_rows"), ("References", "references"), ("Workspace", "workspace"), ("Status", "status")],
+                state_records(state, "rp_studio", "studio_material"),
+            ),
+            render_record_panel(
+                "Studio Links",
+                [("Links", "studio_links"), ("Studio", "studio"), ("Workbench", "workbench"), ("Project", "project"), ("Download", "download"), ("Status", "status")],
+                state_records(state, "rp_studio", "studio_links"),
+            ),
+            render_record_panel(
+                "Studio Host Actions",
+                [("State File", "state_file"), ("Key", "key"), ("Value", "value")],
+                key_value_rows(
+                    state,
+                    ("rp_studio", "rp_runner", "rp_package", "rp_actionio", "rp_web_bundle"),
+                    ("host_action_studio_", "studio_session=", "studio_material=", "studio_links="),
+                ),
+            ),
+        ]
     if file_name == "compare.html":
         compare_rows = [
             ("File Scans", metric_value(state, [("rp_api_compare", "file_scans"), ("rp_ui_compare", "pain_file_scans")])),
@@ -2224,6 +2266,8 @@ def render_action_log(actions: list[dict[str, object]]) -> str:
 
 
 def action_trace_group(path: str) -> str:
+    if "/research/studio-launch" in path:
+        return "studio"
     if "/workflow-portability/" in path:
         return "portability"
     if "/host-workflow/" in path:
@@ -2279,6 +2323,9 @@ def payload_summary(payload: object) -> str:
         "request_id",
         "response_id",
         "profile",
+        "title",
+        "goal",
+        "direction",
     ]
     parts: list[str] = []
     seen: set[str] = set()
@@ -2320,6 +2367,8 @@ def action_trace_panel(title: str, actions: list[dict[str, object]], groups: set
 
 
 def action_output_spec(path: str, group: str) -> tuple[str, str]:
+    if group == "studio":
+        return "rp_studio,rp_runner,rp_package,rp_actionio,rp_web_bundle", "studio.html,workbench.html,project.html"
     if group == "workflow":
         return "rp_stage_dag,rp_stage_state,rp_run_events,rp_cache_index,rp_retry_plan,rp_worker,rp_execobs,rp_artifact_manifest,rp_package", "run.html,artifacts.html"
     if group == "artifact":
@@ -2348,6 +2397,8 @@ def action_output_spec(path: str, group: str) -> tuple[str, str]:
 
 
 def action_evidence_prefixes(path: str, group: str) -> tuple[str, ...]:
+    if group == "studio":
+        return ("host_action_studio_", "studio_session=", "studio_material=", "studio_links=")
     if path.endswith("/host-workflow/stage-attempt"):
         return ("host_workflow_stage_action=",)
     if path.endswith("/host-workflow/cache-decision"):
@@ -2487,7 +2538,9 @@ def action_output_detail_links(state: dict[str, dict[str, object]], actions: lis
 
 def action_impact_specs(path: str, group: str) -> list[tuple[str, str, tuple[str, ...], str]]:
     specs: list[tuple[str, str, tuple[str, ...], str]] = []
-    if group in {"run", "inputs", "workbench", "review", "delivery", "operations", "project", "compare"}:
+    if group == "studio":
+        specs.append(("studio_session", "rp_studio", ("studio_session=", "host_action_studio_"), "studio.html,workbench.html"))
+    if group in {"run", "inputs", "workbench", "review", "delivery", "operations", "project", "compare", "studio"}:
         pages = "run.html,review.html,project.html" if group == "project" else "run.html,review.html"
         specs.append(("report_section", "rp_report_text", ("host_report_", "host_relay_report_summary=", "backend_evidence_report="), pages))
     if group in {"workflow", "artifact", "delivery", "operations"}:
@@ -2847,6 +2900,7 @@ def default_batch_payload() -> str:
     actions = {
         "actions": [
             {"path": "/actions/research/run", "payload": {"run_id": "RUN-WEB", "source": "reader-ui"}},
+            {"path": "/actions/research/studio-launch", "payload": {"title": "Studio evidence review", "goal": "Turn pasted materials into a workbench answer", "direction": "evidence review", "material_notes": "Browser supplied notes and table rows.", "provider_id": "template", "workbench_id": "W1", "latest_run_id": "RUN-WEB", "latest_answer_id": "answer-web"}},
             {"path": "/actions/research/review", "payload": {"run_id": "RUN-WEB", "reviewer": "Wang", "decision": "needs_revision"}},
             {"path": "/actions/research/revision-task", "payload": {"review_id": "usable-review:Wang:1", "targets": "methods,chart_caption,statistics"}},
             {"path": "/actions/research/run-revision-task", "payload": {"run_id": "RUN-WEB", "task_id": "usable-revision-task:RUN-WEB:1"}},
@@ -2947,6 +3001,12 @@ def render_overview(
             ("Task", metric_value(state, [("rp_runner", "host_action_workbench_task"), ("rp_report_text", "host_report_workbench_task")]), "rp_runner"),
             ("Manifest", metric_value(state, [("rp_package", "host_action_workbench_manifest"), ("rp_report_text", "host_report_workbench_manifest")]), "rp_package"),
             ("Bundle", metric_value(state, [("rp_package", "host_action_workbench_bundle"), ("rp_report_text", "host_report_workbench_bundle")]), "rp_package"),
+        ],
+        "studio.html": [
+            ("Sessions", metric_value(state, [("rp_studio", "sessions")]), "rp_studio"),
+            ("Latest Session", metric_value(state, [("rp_studio", "latest_session"), ("rp_studio", "host_action_studio_session")]), "rp_studio"),
+            ("Title", metric_value(state, [("rp_studio", "host_action_studio_title")]), "rp_studio"),
+            ("Goal", metric_value(state, [("rp_studio", "host_action_studio_goal")]), "rp_studio"),
         ],
         "agents.html": [
             ("Agents", metric_value(state, [("rp_agents", "agents"), ("rp_api_agents", "agents")]), "rp_agents"),
@@ -3142,11 +3202,17 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
             sections.append(action_impact_panel("Workflow Action Impact", state, actions, {"workflow", "artifact"}))
             sections.append(action_delta_panel("Workflow Action Delta", state, actions, {"workflow", "artifact"}))
         if file_name == "workbench.html":
-            sections.append(action_trace_panel("Workbench Action Trace", actions, {"workbench", "review", "delivery", "operations", "project"}))
-            sections.append(action_output_panel("Workbench Action Output Links", state, actions, {"workbench", "review", "delivery", "operations", "project"}))
-            sections.append(action_output_detail_panel("Workbench Action Output Details", state, actions, {"workbench", "review", "delivery", "operations", "project"}))
-            sections.append(action_impact_panel("Workbench Action Impact", state, actions, {"workbench", "review", "delivery", "operations", "project"}))
-            sections.append(action_delta_panel("Workbench Action Delta", state, actions, {"workbench", "review", "delivery", "operations", "project"}))
+            sections.append(action_trace_panel("Workbench Action Trace", actions, {"studio", "workbench", "review", "delivery", "operations", "project"}))
+            sections.append(action_output_panel("Workbench Action Output Links", state, actions, {"studio", "workbench", "review", "delivery", "operations", "project"}))
+            sections.append(action_output_detail_panel("Workbench Action Output Details", state, actions, {"studio", "workbench", "review", "delivery", "operations", "project"}))
+            sections.append(action_impact_panel("Workbench Action Impact", state, actions, {"studio", "workbench", "review", "delivery", "operations", "project"}))
+            sections.append(action_delta_panel("Workbench Action Delta", state, actions, {"studio", "workbench", "review", "delivery", "operations", "project"}))
+        if file_name == "studio.html":
+            sections.append(action_trace_panel("Studio Action Trace", actions, {"studio", "workbench", "run", "inputs"}))
+            sections.append(action_output_panel("Studio Action Output Links", state, actions, {"studio", "workbench", "run", "inputs"}))
+            sections.append(action_output_detail_panel("Studio Action Output Details", state, actions, {"studio", "workbench", "run", "inputs"}))
+            sections.append(action_impact_panel("Studio Action Impact", state, actions, {"studio", "workbench", "run", "inputs"}))
+            sections.append(action_delta_panel("Studio Action Delta", state, actions, {"studio", "workbench", "run", "inputs"}))
         if file_name == "compare.html":
             sections.append(action_trace_panel("Compare Action Trace", actions, {"compare", "portability", "workflow", "artifact"}))
             sections.append(action_output_panel("Compare Action Output Links", state, actions, {"compare", "portability", "workflow", "artifact"}))
@@ -3177,11 +3243,11 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
             sections.append(action_impact_panel("Data Action Impact", state, actions, {"run", "inputs", "workbench", "artifact"}))
             sections.append(action_delta_panel("Data Action Delta", state, actions, {"run", "inputs", "workbench", "artifact"}))
         if file_name == "project.html":
-            sections.append(action_trace_panel("Project Action Trace", actions, {"project", "operations", "workbench", "review", "delivery"}))
-            sections.append(action_output_panel("Project Action Output Links", state, actions, {"project", "operations", "workbench", "review", "delivery"}))
-            sections.append(action_output_detail_panel("Project Action Output Details", state, actions, {"project", "operations", "workbench", "review", "delivery"}))
-            sections.append(action_impact_panel("Project Action Impact", state, actions, {"project", "operations", "workbench", "review", "delivery"}))
-            sections.append(action_delta_panel("Project Action Delta", state, actions, {"project", "operations", "workbench", "review", "delivery"}))
+            sections.append(action_trace_panel("Project Action Trace", actions, {"studio", "project", "operations", "workbench", "review", "delivery"}))
+            sections.append(action_output_panel("Project Action Output Links", state, actions, {"studio", "project", "operations", "workbench", "review", "delivery"}))
+            sections.append(action_output_detail_panel("Project Action Output Details", state, actions, {"studio", "project", "operations", "workbench", "review", "delivery"}))
+            sections.append(action_impact_panel("Project Action Impact", state, actions, {"studio", "project", "operations", "workbench", "review", "delivery"}))
+            sections.append(action_delta_panel("Project Action Delta", state, actions, {"studio", "project", "operations", "workbench", "review", "delivery"}))
         if file_name == "llm.html":
             sections.append(action_trace_panel("LLM Action Trace", actions, {"llm"}))
             sections.append(action_output_panel("LLM Action Output Links", state, actions, {"llm"}))
@@ -3190,10 +3256,10 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
             sections.append(action_delta_panel("LLM Action Delta", state, actions, {"llm"}))
         if file_name == "actions.html":
             sections.append(render_action_panel())
-            sections.append(action_output_panel("Action Output Links", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
-            sections.append(action_output_detail_panel("Action Output Details", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
-            sections.append(action_impact_panel("Action Impact", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
-            sections.append(action_delta_panel("Action Delta", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
+            sections.append(action_output_panel("Action Output Links", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "studio", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
+            sections.append(action_output_detail_panel("Action Output Details", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "studio", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
+            sections.append(action_impact_panel("Action Impact", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "studio", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
+            sections.append(action_delta_panel("Action Delta", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "studio", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
             sections.append(render_action_log(actions))
         sections.append(render_table(primary, state_lines(state, primary)))
         for extra in extras:

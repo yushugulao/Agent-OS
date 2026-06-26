@@ -65,10 +65,10 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=19
-reader_actions=48
+reader_views=20
+reader_actions=49
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
-reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_web_bundle
+reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
 reader_required_sections=routes,payloads,actions,live_update,downloads,compare
 reader_event_stream=rp_web_bundle
 reader_fallback=rp_site
@@ -76,7 +76,7 @@ reader_state_source=plain_ucore_files
 dynamic_inputs=4
 status=ready
 """,
-    "rp_web_routes": "routes=63\nget_routes=15\npost_routes=48\nstatus=ready\n",
+    "rp_web_routes": "routes=65\nget_routes=16\npost_routes=49\nroute=/research-studio;payload=rp_studio;status=ready\naction=/actions/research/studio-launch;method=POST;payload=rp_api_action;status=ready\nstatus=ready\n",
     "rp_api_home": "api=home\nreader_contract=rp_web_bundle\nstatus=ready\n",
     "rp_api_run": "api=run-detail\nreader_contract=rp_web_bundle\nreader_view=run-detail\nstatus=ready\n",
     "rp_api_agents": "api=agent-detail\nagents=7\nstatus=ready\n",
@@ -89,7 +89,19 @@ status=ready
     "rp_api_pub": "api=publication\nresult_review=rp_resrev\nstatus=ready\n",
     "rp_api_know": "api=knowledge\nsemantic_index=rp_semindex\nstatus=ready\n",
     "rp_api_runtime": "api=runtime\nruntime_env=rp_runenv\nstatus=ready\n",
-    "rp_api_action": "api=actions\nreader_contract=rp_web_bundle\nactions=48\nstatus=ready\n",
+    "rp_api_action": "api=actions\nreader_contract=rp_web_bundle\nactions=49\nresearch_studio_launch=/actions/research/studio-launch\nstatus=ready\n",
+    "rp_studio": (
+        "studio=usable-research-studio\n"
+        "sessions=1\n"
+        "latest_session=usable-research-studio-session:W1:1\n"
+        "studio_session=usable-research-studio-session:W1:1;title=Studio cytokine evidence;goal=Determine whether recovery evidence is ready;direction=evidence review;workbench=W1;run=R1;answer=answer1;decision=studio_completed;status=ready\n"
+        "studio_material=host_action;notes=Small demonstration table for the studio workflow.;csv_rows=host;references=host;workspace=host_input;status=ready\n"
+        "studio_links=host_action;studio=/research-studio;workbench=/research/workbench/W1;project=/research/project/lab-gene-x;download=/download/research-studio-session/usable-research-studio-session-W1-1;status=ready\n"
+        "host_action_studio_title=Studio cytokine evidence\n"
+        "host_action_studio_goal=Determine whether recovery evidence is ready\n"
+        "host_action_studio_direction=evidence review\n"
+        "status=ready\n"
+    ),
     "rp_bioop": "ops=7\nop=sample_lookup;records=8;status=ok\nop=access_decision;requests=3;status=ok\n",
     "rp_labresop": "ops=6\nop=schedule_assess;bookings=6;status=ok\nop=training_gate;requirements=4;status=ok\n",
     "rp_pubop": "ops=6\nop=result_review;items=10;status=ok\nop=fair_package;checks=8;status=ok\n",
@@ -387,7 +399,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 15, summary
+        assert summary["pages"] == 16, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -646,6 +658,16 @@ def main() -> int:
         assert "artifact_manifest" in artifacts_html
         assert "host_relay_eval_batch" in artifacts_html
         assert "host_artifact_chart" in artifacts_html
+        studio_html = (out_dir / "studio.html").read_text(encoding="utf-8")
+        assert "Research Studio" in studio_html
+        assert "Studio Sessions" in studio_html
+        assert "Studio Materials" in studio_html
+        assert "Studio Links" in studio_html
+        assert "Studio Host Actions" in studio_html
+        assert "Studio cytokine evidence" in studio_html
+        assert "Determine whether recovery evidence is ready" in studio_html
+        assert "usable-research-studio-session:W1:1" in studio_html
+        assert "/download/research-studio-session/usable-research-studio-session-W1-1" in studio_html
         actions_html = (out_dir / "actions.html").read_text(encoding="utf-8")
         assert "Batch Actions" in actions_html
         assert "Action Output Links" in actions_html
@@ -699,6 +721,11 @@ def main() -> int:
             with request.urlopen(base + "/api/state/rp_api_home", timeout=5) as response:
                 home = json.loads(response.read().decode("utf-8"))
             assert home["values"]["api"] == "home"
+
+            with request.urlopen(base + "/api/state/rp_studio", timeout=5) as response:
+                studio = json.loads(response.read().decode("utf-8"))
+            assert any(line == "studio=usable-research-studio" for line in studio["lines"])
+            assert any("studio_session=usable-research-studio-session:W1:1" in line for line in studio["lines"])
 
             action = request.Request(
                 base + "/actions/research/run",

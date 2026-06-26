@@ -1,4 +1,5 @@
 #include <stdio.h>
+#define RP_ENABLE_HOST_ACTION_SEED 1
 #include <research_platform_state.h>
 
 static int require_file_token(const char *path, const char *token)
@@ -1150,10 +1151,10 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_compare", "coherence_checks=9");
 	ok = ok && require_file_token("rp_ui_compare", "relay_protocol_files=5");
 	ok = ok && require_file_token("rp_ui_compare", "notebook_exports=2");
-	ok = ok && require_file_token("rp_web_routes", "routes=63");
-	ok = ok && require_file_token("rp_web_routes", "get_routes=15");
+	ok = ok && require_file_token("rp_web_routes", "routes=65");
+	ok = ok && require_file_token("rp_web_routes", "get_routes=16");
 	ok = ok && require_file_token("rp_web_routes", "route=/research/workbench/{id}");
-	ok = ok && require_file_token("rp_web_routes", "post_routes=48");
+	ok = ok && require_file_token("rp_web_routes", "post_routes=49");
 	ok = ok && require_file_token("rp_web_routes", "action=/actions/host-workflow/stage-attempt");
 	ok = ok && require_file_token("rp_web_routes", "action=/actions/host-workflow/report-export");
 	ok = ok && require_file_token("rp_web_routes", "action=/actions/research/artifact-input");
@@ -1241,7 +1242,8 @@ int main(void)
 	ok = ok && require_file_token("rp_api_know", "evidence_protocols=1");
 	ok = ok && require_file_token("rp_api_know", "evidence_extractions=3");
 	ok = ok && require_file_token("rp_api_runtime", "runtime_env=rp_runenv");
-	ok = ok && require_file_token("rp_api_action", "actions=48");
+	ok = ok && require_file_token("rp_api_action", "actions=49");
+	ok = ok && require_file_token("rp_api_action", "research_studio_launch=/actions/research/studio-launch");
 	ok = ok && require_file_token("rp_api_action", "host_workflow_stage=/actions/host-workflow/stage-attempt");
 	ok = ok && require_file_token("rp_api_action", "host_workflow_report=/actions/host-workflow/report-export");
 	ok = ok && require_file_token("rp_api_action", "artifact_input=/actions/research/artifact-input");
@@ -1352,8 +1354,8 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "reader_contract=host_plain_ucore_v2");
 	ok = ok && require_file_token("rp_web_bundle", "reader_contract_version=2");
 	ok = ok && require_file_token("rp_web_bundle", "reader_ready=1");
-	ok = ok && require_file_token("rp_web_bundle", "reader_views=19");
-	ok = ok && require_file_token("rp_web_bundle", "reader_actions=48");
+	ok = ok && require_file_token("rp_web_bundle", "reader_views=20");
+	ok = ok && require_file_token("rp_web_bundle", "reader_actions=49");
 	ok = ok && require_file_token("rp_web_bundle", "reader_payload_files=rp_api_home");
 	ok = ok && require_file_token("rp_web_bundle", "reader_refresh_files=rp_web_routes");
 	ok = ok && require_file_token("rp_web_bundle", "reader_required_sections=routes,payloads,actions,live_update,downloads,compare");
@@ -1377,7 +1379,7 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "review_page=rp_package");
 	ok = ok && require_file_token("rp_web_bundle", "export_bundle=rp_package");
 	ok = ok && require_file_token("rp_web_bundle", "runner_detail_fields=16");
-	ok = ok && require_file_token("rp_web_bundle", "post_routes=48");
+	ok = ok && require_file_token("rp_web_bundle", "post_routes=49");
 	ok = ok && require_file_token("rp_web_bundle", "human_reviews=1");
 	ok = ok && require_file_token("rp_web_bundle", "revision_tasks=1");
 	ok = ok && require_file_token("rp_web_bundle", "revision_delta=rp_revision");

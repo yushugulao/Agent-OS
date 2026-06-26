@@ -31,6 +31,8 @@ def read_jsonl(path: Path) -> list[dict[str, object]]:
 
 
 def action_kind(path: str) -> str:
+    if path.endswith("/research/studio-launch"):
+        return "studio_launch"
     if path.endswith("/research/library-source"):
         return "library_source"
     if path.endswith("/research/inspect-workspace"):
@@ -245,6 +247,8 @@ def action_plan_line(record: dict[str, object]) -> str:
     sequence = line_value(record.get("sequence", ""))
     if kind == "research_run":
         return f"plan={sequence};kind=research_run;prepare=rp_input;execute=rp_orch;collect=rp_web_bundle;status=ready"
+    if kind == "studio_launch":
+        return f"plan={sequence};kind=studio_launch;prepare=rp_input;execute=rp_orch;collect=rp_studio;status=ready"
     if kind == "agentcompare":
         return f"plan={sequence};kind=agentcompare;prepare=rp_agentcmp;execute=rp_orch;collect=rp_compare_plain;status=ready"
     if kind in {
@@ -397,6 +401,7 @@ def c_string_literal(text: str) -> str:
 
 def compact_seed_text(text: str) -> str:
     keep_by_kind = {
+        "studio_launch": {"title", "goal", "workbench_id", "workbench"},
         "research_run": {"run_id", "title", "question", "provider", "dataset_rows", "reference_entries", "workspace_files", "csv_file", "reference_file"},
         "dataset": {"title", "dataset_rows", "columns"},
         "library_source": {"citation_key", "tags"},

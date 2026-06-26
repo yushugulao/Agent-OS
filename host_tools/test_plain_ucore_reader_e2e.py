@@ -64,6 +64,19 @@ def main() -> int:
                         "reference_file": "r.bib",
                     },
                 },
+                {
+                    "path": "/actions/research/studio-launch",
+                    "payload": {
+                        "title": "Studio cytokine evidence",
+                        "goal": "Recovery evidence ready",
+                        "direction": "evidence review",
+                        "material_notes": "Small demonstration table for the studio workflow.",
+                        "provider_id": "template",
+                        "workbench_id": "W1",
+                        "latest_run_id": "R1",
+                        "latest_answer_id": "answer1",
+                    },
+                },
                 {"path": "/actions/research/dataset", "payload": {"title": "D1", "dataset_rows": "6", "columns": "a,b,c", "tags": "h"}},
                 {"path": "/actions/research/library-source", "payload": {"citation_key": "c1", "tags": "h", "source_text": "@c"}},
                 {"path": "/actions/research/template", "payload": {"name": "TP1", "question": "TQ", "provider_id": "template", "dataset_tags": "h", "library_tags": "h"}},
@@ -306,6 +319,21 @@ def main() -> int:
             assert any("host_action_workflow_export=wf.zip" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_workflow_export_format=json" in line for line in rp_runner["lines"]), rp_runner
             assert any("backend_evidence_report=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;status=ready" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_studio_session=usable-research-studio-session:W1" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_studio_title=Studio cytokine evidence" in line for line in rp_runner["lines"]), rp_runner
+            rp_studio = read_json(base + "/api/state/rp_studio")
+            assert any("host_action_studio_launch=accepted" in line for line in rp_studio["lines"]), rp_studio
+            assert any("host_action_studio_title=Studio cytokine evidence" in line for line in rp_studio["lines"]), rp_studio
+            assert any("host_action_studio_goal=Recovery evidence ready" in line for line in rp_studio["lines"]), rp_studio
+            assert any("studio_session=usable-research-studio-session:W1:1" in line for line in rp_studio["lines"]), rp_studio
+            assert any("studio_material=host_action;notes=Pasted notes and table rows" in line for line in rp_studio["lines"]), rp_studio
+            studio_html = read_text(base + "/studio.html")
+            assert "Research Studio" in studio_html
+            assert "Studio Sessions" in studio_html
+            assert "Studio Materials" in studio_html
+            assert "Studio Action Trace" in studio_html
+            assert "Studio cytokine evidence" in studio_html
+            assert "Recovery evidence ready" in studio_html
             rp_stage_dag = read_json(base + "/api/state/rp_stage_dag")
             assert any("host_workflow_id=WF1" in line for line in rp_stage_dag["lines"]), rp_stage_dag
             assert any("host_workflow_engine=plain-c-runner" in line for line in rp_stage_dag["lines"]), rp_stage_dag
@@ -688,7 +716,7 @@ def main() -> int:
             assert any("host_action_workbench_handoff_scope=full" in line for line in rp_api_compare["lines"]), rp_api_compare
             assert any("host_action_workbench_bundle=wb.zip" in line for line in rp_api_compare["lines"]), rp_api_compare
             rp_api_action = read_json(base + "/api/state/rp_api_action")
-            assert any("actions=48" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("actions=49" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("host_workflow_stage=/actions/host-workflow/stage-attempt" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("host_workflow_report=/actions/host-workflow/report-export" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("artifact_input=/actions/research/artifact-input" in line for line in rp_api_action["lines"]), rp_api_action

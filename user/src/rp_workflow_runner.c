@@ -1,4 +1,5 @@
 #include <stdio.h>
+#define RP_ENABLE_HOST_ACTION_SEED 1
 #include <research_platform_state.h>
 
 static int append_artifact_manifest_input(void)

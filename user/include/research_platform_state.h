@@ -8,12 +8,20 @@
 #include <rp_host_action_seed.h>
 
 #define RP_UNUSED __attribute__((unused))
+#ifndef RP_STATE_BUFFER_SIZE
+#ifdef RP_ENABLE_HOST_ACTION_SEED
 #define RP_STATE_BUFFER_SIZE 8192
+#else
+#define RP_STATE_BUFFER_SIZE 6144
+#endif
+#endif
 #define RP_HOST_SEED_ARG_MARK "__rp_seed_v1__"
 
 static RP_UNUSED char rp_state_buf[RP_STATE_BUFFER_SIZE];
+#ifdef RP_ENABLE_HOST_ACTION_SEED
 static RP_UNUSED char rp_host_seed_buf[8192];
 static RP_UNUSED int rp_host_seed_loaded;
+#endif
 extern int __argc;
 extern char **__argv;
 
@@ -129,6 +137,7 @@ static RP_UNUSED int rp_text_contains(const char *text, const char *needle)
 
 static RP_UNUSED __attribute__((noinline)) const char *rp_host_seed_text(void)
 {
+#ifdef RP_ENABLE_HOST_ACTION_SEED
 	if (!rp_host_seed_loaded) {
 		int out = 0;
 		if (__argc > 2 && __argv && __argv[1] && strcmp(__argv[1], RP_HOST_SEED_ARG_MARK) == 0) {
@@ -157,6 +166,9 @@ static RP_UNUSED __attribute__((noinline)) const char *rp_host_seed_text(void)
 		rp_host_seed_loaded = 1;
 	}
 	return rp_host_seed_buf;
+#else
+	return RP_HOST_ACTION_SEED;
+#endif
 }
 
 static RP_UNUSED int rp_host_seed_has(const char *needle)
