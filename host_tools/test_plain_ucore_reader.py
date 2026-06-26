@@ -85,15 +85,16 @@ status=ready
     "rp_ui_compare": "page=compare-metrics\npain_file_scans=128\npain_state_convention=1\npain_user_permissions=1\npain_rebuild_steps=6\nstatus=ready\n",
     "rp_runner": "workbench_tasks=9\nstatus=ready\n",
     "rp_artifact": "status=recovered\n",
-    "rp_agents": "agents=7\nmessages=21\n",
-    "rp_decisions": "decisions=8\n",
-    "rp_handoff": "handoffs=6\n",
-    "rp_deliberation": "items=5\n",
+    "rp_agents": "agent=orchestrator;role=control;state=active;msg=4\nagent=recovery;role=repair;state=recovered;msg=3\nagents=7\nmessages=21\n",
+    "rp_decisions": "decision=1;actor=orchestrator;choice=start_workflow;basis=rp_plan\ndecision=5;actor=recovery;choice=rerun_align_only;basis=rp_retryq\ndecisions=8\n",
+    "rp_handoff": "handoff=planner->retriever;artifact=rp_plan;status=done\nhandoff=recovery->writer;artifact=rp_artifact;status=done\nhandoffs=6\n",
+    "rp_deliberation": "item=1;topic=failed_align;vote=recoverable;source=rp_stage_log\nitems=5\n",
     "rp_agent_run": "agent_messages=21\nagent_decisions=8\n",
     "rp_evidence": "claims=8\nevidence_links=5\n",
     "rp_lit": "evidence_links=5\nscreening_decisions=9\n",
-    "rp_provpath": "critical_paths=3\n",
-    "rp_knowledge": "evidence_protocol=usable-evidence-protocol:RUN-900:1\n",
+    "rp_claimrec": "claim=1;kind=result;source=rp_data;evidence=lit-a,calc-a;status=supported\nclaim=3;kind=recovery;source=rp_fix;evidence=retrylog-a;status=supported\n",
+    "rp_provpath": "critical_paths=3\npath1=plan>data>review>repair>audit\npath2=plan>lit>evidence>knowledge>package\n",
+    "rp_knowledge": "literature_search_id=usable-literature-search:RUN-900:1\nscreening_decisions=9;included=3;excluded=6\nevidence_extractions=3;fields=mechanism,evidence_type,reported_outcome\nevidence_protocol=usable-evidence-protocol:RUN-900:1;status=registered\nprisma_flow=usable-prisma-flow:RUN-900:1;identified=9;included=3\nevidence_synthesis=usable-evidence-synthesis:RUN-900:1;themes=traceability,reproducibility,recovery\n",
     "rp_package": "delivery_files=8\nevidence_bundle_entries=12\n",
     "rp_agentcmp": "plain_kernel=passed\ntest_cases=693\nhandoffs=6\n",
     "rp_consistency": "checks=113\n",
@@ -130,12 +131,24 @@ def main() -> int:
         assert "128" in compare_html
         agents_html = (out_dir / "agents.html").read_text(encoding="utf-8")
         assert "Agent Detail" in agents_html
+        assert "Agent Roster" in agents_html
+        assert "Decision Flow" in agents_html
+        assert "Handoff Flow" in agents_html
+        assert "orchestrator" in agents_html
+        assert "rerun_align_only" in agents_html
         assert "Handoffs" in agents_html
         assert "rp_handoff" in agents_html
         evidence_html = (out_dir / "evidence.html").read_text(encoding="utf-8")
         assert "Evidence Detail" in evidence_html
+        assert "Claim Records" in evidence_html
+        assert "Provenance Paths" in evidence_html
+        assert "Evidence Protocol Files" in evidence_html
+        assert "retrylog-a" in evidence_html
         assert "Evidence Protocol" in evidence_html
         assert "usable-evidence-protocol:RUN-900:1" in evidence_html
+        assert "plan&gt;data&gt;review&gt;repair&gt;audit" in evidence_html
+        assert "Plain Kernel Signals" in compare_html
+        assert "Consistency Signals" in compare_html
         artifacts_html = (out_dir / "artifacts.html").read_text(encoding="utf-8")
         assert "Evidence Package" in artifacts_html
         actions_html = (out_dir / "actions.html").read_text(encoding="utf-8")

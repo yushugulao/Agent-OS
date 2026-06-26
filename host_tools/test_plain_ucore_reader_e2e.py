@@ -138,15 +138,28 @@ def main() -> int:
             assert "reviewer-evidence" in artifacts_html
             agents_html = read_text(base + "/agents.html")
             assert "Agent Detail" in agents_html
+            assert "Agent Roster" in agents_html
+            assert "Decision Flow" in agents_html
+            assert "Handoff Flow" in agents_html
+            assert "orchestrator" in agents_html
+            assert "rerun_align_only" in agents_html
+            assert "planner-&gt;retriever" in agents_html
             assert "Handoffs" in agents_html
             assert "rp_handoff" in agents_html
             evidence_html = read_text(base + "/evidence.html")
             assert "Evidence Detail" in evidence_html
+            assert "Claim Records" in evidence_html
+            assert "Provenance Paths" in evidence_html
+            assert "Evidence Protocol Files" in evidence_html
+            assert "retrylog-a" in evidence_html
+            assert "plan&gt;data&gt;review&gt;repair&gt;audit" in evidence_html
             assert "Evidence Protocol" in evidence_html
             assert "usable-evidence-protocol:RUN-900:1" in evidence_html
             compare_html = read_text(base + "/compare.html")
             assert "Compare Summary" in compare_html
             assert "Compare Metrics" in compare_html
+            assert "Plain Kernel Signals" in compare_html
+            assert "Consistency Signals" in compare_html
             assert "File Scans" in compare_html
             assert "Rebuild Steps" in compare_html
             assert "plain_ucore_batch" in compare_html

@@ -179,6 +179,74 @@ def render_summary_panel(title: str, items: list[tuple[str, object, str]]) -> st
     )
 
 
+def parse_kv_record(line: str) -> dict[str, str]:
+    record: dict[str, str] = {}
+    for part in line.split(";"):
+        part = part.strip()
+        if "=" in part:
+            key, value = part.split("=", 1)
+            record[key.strip()] = value.strip()
+    return record
+
+
+def state_records(state: dict[str, dict[str, object]], name: str, prefix_key: str) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for line in state_lines(state, name):
+        record = parse_kv_record(line)
+        if prefix_key in record:
+            rows.append(record)
+    return rows
+
+
+def state_prefixed_lines(state: dict[str, dict[str, object]], name: str, prefixes: tuple[str, ...]) -> list[str]:
+    rows: list[str] = []
+    for line in state_lines(state, name):
+        stripped = line.strip()
+        if any(stripped.startswith(prefix) for prefix in prefixes):
+            rows.append(stripped)
+    return rows
+
+
+def render_record_panel(
+    title: str,
+    columns: list[tuple[str, str]],
+    rows: list[dict[str, str]],
+    empty_text: str = "No matching records",
+) -> str:
+    head = "".join("<th>{}</th>".format(html.escape(label)) for label, _ in columns)
+    body = []
+    for row in rows:
+        body.append(
+            "<tr>{}</tr>".format(
+                "".join("<td>{}</td>".format(html.escape(row.get(key, ""))) for _, key in columns)
+            )
+        )
+    if not body:
+        body.append("<tr><td colspan='{}'>{}</td></tr>".format(len(columns), html.escape(empty_text)))
+    return "<section class='panel'><h2>{}</h2><table><tr>{}</tr>{}</table></section>".format(
+        html.escape(title),
+        head,
+        "".join(body),
+    )
+
+
+def render_line_panel(title: str, rows: list[tuple[str, str]], empty_text: str = "No matching records") -> str:
+    body = []
+    for label, value in rows:
+        body.append(
+            "<tr><th>{}</th><td>{}</td></tr>".format(
+                html.escape(label),
+                html.escape(value),
+            )
+        )
+    if not body:
+        body.append("<tr><td colspan='2'>{}</td></tr>".format(html.escape(empty_text)))
+    return "<section class='panel'><h2>{}</h2><table>{}</table></section>".format(
+        html.escape(title),
+        "".join(body),
+    )
+
+
 def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> str:
     report_items = [
         ("Run", metric_value(state, [("rp_report_text", "host_report_run_id"), ("rp_input", "host_action_run_id")]), "rp_report_text"),
@@ -245,6 +313,66 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
     if file_name == "compare.html":
         return render_summary_panel("Compare Metrics", compare_items)
     return ""
+
+
+def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) -> list[str]:
+    if file_name == "agents.html":
+        return [
+            render_record_panel(
+                "Agent Roster",
+                [("Agent", "agent"), ("Role", "role"), ("State", "state"), ("Messages", "msg")],
+                state_records(state, "rp_agents", "agent"),
+            ),
+            render_record_panel(
+                "Decision Flow",
+                [("Decision", "decision"), ("Actor", "actor"), ("Choice", "choice"), ("Basis", "basis")],
+                state_records(state, "rp_decisions", "decision"),
+            ),
+            render_record_panel(
+                "Handoff Flow",
+                [("Handoff", "handoff"), ("Artifact", "artifact"), ("Status", "status")],
+                state_records(state, "rp_handoff", "handoff"),
+            ),
+        ]
+    if file_name == "evidence.html":
+        paths = [(line.split("=", 1)[0], line.split("=", 1)[1]) for line in state_prefixed_lines(state, "rp_provpath", ("path",)) if "=" in line]
+        protocol_rows = []
+        for line in state_prefixed_lines(state, "rp_knowledge", ("literature_search_id=", "screening_decisions=", "evidence_extractions=", "evidence_protocol=", "prisma_flow=", "evidence_synthesis=")):
+            key, value = line.split("=", 1)
+            protocol_rows.append((key, value))
+        return [
+            render_record_panel(
+                "Claim Records",
+                [("Claim", "claim"), ("Kind", "kind"), ("Source", "source"), ("Evidence", "evidence"), ("Status", "status")],
+                state_records(state, "rp_claimrec", "claim"),
+            ),
+            render_line_panel("Provenance Paths", paths),
+            render_line_panel("Evidence Protocol Files", protocol_rows),
+        ]
+    if file_name == "compare.html":
+        compare_rows = [
+            ("File Scans", metric_value(state, [("rp_api_compare", "file_scans"), ("rp_ui_compare", "pain_file_scans")])),
+            ("State Convention", metric_value(state, [("rp_api_compare", "state_convention"), ("rp_ui_compare", "pain_state_convention")])),
+            ("User Permission", metric_value(state, [("rp_api_compare", "user_permission_only"), ("rp_ui_compare", "pain_user_permissions")])),
+            ("Context Trusted", metric_value(state, [("rp_api_compare", "context_trusted")])),
+            ("Rebuild Steps", metric_value(state, [("rp_api_compare", "rebuild_steps"), ("rp_ui_compare", "pain_rebuild_steps")])),
+            ("Data Pipeline Files", metric_value(state, [("rp_api_compare", "data_pipeline_files")])),
+            ("Workflow Runner Files", metric_value(state, [("rp_api_compare", "workflow_runner_files")])),
+            ("Reader Contract", metric_value(state, [("rp_agentcmp", "reader_contract")])),
+        ]
+        check_rows = [
+            ("Coherence Checks", metric_value(state, [("rp_api_compare", "coherence_checks"), ("rp_ui_compare", "coherence_checks")])),
+            ("Namespace Checks", metric_value(state, [("rp_api_compare", "namespace_checks"), ("rp_ui_compare", "namespace_checks")])),
+            ("Surface Checks", metric_value(state, [("rp_api_compare", "surface_checks"), ("rp_ui_compare", "surface_checks")])),
+            ("Status Semantics", metric_value(state, [("rp_api_compare", "status_semantics"), ("rp_ui_compare", "status_semantics")])),
+            ("Reference Checks", metric_value(state, [("rp_api_compare", "reference_checks"), ("rp_ui_compare", "reference_checks")])),
+            ("Evidence Trace Checks", metric_value(state, [("rp_api_compare", "evidence_trace_checks"), ("rp_ui_compare", "evidence_trace_checks")])),
+        ]
+        return [
+            render_line_panel("Plain Kernel Signals", compare_rows),
+            render_line_panel("Consistency Signals", check_rows),
+        ]
+    return []
 
 
 def render_table(title: str, rows: Iterable[str]) -> str:
@@ -477,6 +605,7 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
         detail_panel = render_detail_panel(file_name, state)
         if detail_panel:
             sections.append(detail_panel)
+        sections.extend(render_grouped_details(file_name, state))
         if file_name == "actions.html":
             sections.append(render_action_panel())
             sections.append(render_action_log(actions))
