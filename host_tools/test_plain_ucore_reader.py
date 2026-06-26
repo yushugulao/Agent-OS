@@ -97,6 +97,11 @@ status=ready
     "rp_ui_compare": "page=compare-metrics\npain_file_scans=128\npain_state_convention=1\npain_user_permissions=1\npain_rebuild_steps=6\nstatus=ready\n",
     "rp_runner": "workbench_tasks=9\nbackend_evidence_report=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;status=ready\nstatus=ready\n",
     "rp_report_text": "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index;status=ready\nstatus=ready\n",
+    "rp_execobs": (
+        "execution_view=stage_summary;stage=align;order=2;attempts=2;state=recovered;input=rp_artifact:rp_normalized_fastq;output=rp_artifact:rp_align_table;retry=rp_retry_plan;failure=tool_output_missing;worker=worker-2;event=4;status=recovered\n"
+        "execution_view=control_summary;dag=rp_stage_dag;cache=rp_cache_index;retry=rp_retry_plan;events=rp_run_events;workers=rp_worker;observer=rp_execobs;status=ready\n"
+        "host_execution_view=workflow_run;workflow=WF1;run_id=R1;engine=plain-c-runner;retry_stage=clean;cache_hit=analyze;worker_slots=2;queue_depth=5;observer_events=12;status=ready\n"
+    ),
     "rp_artifact": (
         "section=rp_normalized_fastq;reads=2;bases=24;status=ready\n"
         "section=rp_align_table;reference=RUN-042-read-1;variant_count=2;status=ready\n"
@@ -224,6 +229,12 @@ def main() -> int:
         assert "Dynamic Inputs" in index_html
         run_html = (out_dir / "run.html").read_text(encoding="utf-8")
         assert "Research Output" in run_html
+        assert "Workflow Execution View" in run_html
+        assert "stage_summary" in run_html
+        assert "workflow_run" in run_html
+        assert "plain-c-runner" in run_html
+        assert "worker-2" in run_html
+        assert "Queue Depth" in run_html
         assert "Backend Evidence" in run_html
         assert "Backend Evidence In Report" in run_html
         assert "Backend Evidence In Runner" in run_html

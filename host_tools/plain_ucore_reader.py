@@ -342,6 +342,84 @@ def operations_source_files(state: dict[str, dict[str, object]]) -> list[dict[st
     return rows
 
 
+def command_output_for_stage(state: dict[str, dict[str, object]], stage: str) -> dict[str, str]:
+    for row in state_records(state, "rp_stage_state", "command"):
+        command = row.get("command", "")
+        if command.startswith(stage + ":"):
+            return row
+    return {}
+
+
+def event_for_stage(state: dict[str, dict[str, object]], stage: str, preferred_status: str) -> str:
+    fallback = ""
+    for row in state_records(state, "rp_run_events", "event"):
+        if row.get("stage") != stage:
+            continue
+        event = row.get("event", "")
+        if row.get("status") == preferred_status:
+            return event
+        if not fallback:
+            fallback = event
+    return fallback
+
+
+def workflow_execution_view(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = (
+        state_records(state, "rp_execobs", "execution_view")
+        + state_records(state, "rp_execobs", "host_execution_view")
+    )
+    for stage in state_records(state, "rp_stage_state", "stage"):
+        stage_name = stage.get("stage", "")
+        command = command_output_for_stage(state, stage_name)
+        status = stage.get("state", "")
+        row = {
+            "execution_view": "stage_summary",
+            "stage": stage_name,
+            "order": stage.get("order", ""),
+            "attempts": stage.get("attempts", ""),
+            "state": status,
+            "input": stage.get("input", ""),
+            "output": command.get("output", ""),
+            "cache": command.get("cache", ""),
+            "retry": "rp_retry_plan" if stage_name == state_values(state, "rp_retry_plan").get("retry_stage", "") else "",
+            "failure": state_values(state, "rp_retry_plan").get("failure_reason", "") if stage_name == state_values(state, "rp_retry_plan").get("retry_stage", "") else "",
+            "event": event_for_stage(state, stage_name, status),
+            "status": status,
+        }
+        rows.append(row)
+    if rows:
+        rows.append(
+            {
+                "execution_view": "control_summary",
+                "dag": "rp_stage_dag",
+                "cache": "rp_cache_index",
+                "retry": "rp_retry_plan",
+                "events": "rp_run_events",
+                "workers": "rp_worker",
+                "observer": "rp_execobs",
+                "status": state_values(state, "rp_execobs").get("status", state_values(state, "rp_stage_state").get("status", "")),
+            }
+        )
+    stage_state = state_values(state, "rp_stage_state")
+    execobs = state_values(state, "rp_execobs")
+    if stage_state.get("host_workflow_run_id") or execobs.get("host_workflow_observer_events"):
+        rows.append(
+            {
+                "host_execution_view": "workflow_run",
+                "workflow": stage_state.get("host_workflow_id", ""),
+                "run_id": stage_state.get("host_workflow_run_id", ""),
+                "engine": stage_state.get("host_workflow_engine", ""),
+                "retry_stage": stage_state.get("host_workflow_retry_stage", state_values(state, "rp_retry_plan").get("host_workflow_retry_stage", "")),
+                "cache_hit": stage_state.get("host_workflow_cache_hit_stage", state_values(state, "rp_cache_index").get("host_workflow_cache_hit_stage", "")),
+                "worker_slots": stage_state.get("host_workflow_worker_slots", state_values(state, "rp_worker").get("host_workflow_worker_slots", "")),
+                "queue_depth": stage_state.get("host_workflow_queue_depth", state_values(state, "rp_worker").get("host_workflow_queue_depth", "")),
+                "observer_events": execobs.get("host_workflow_observer_events", ""),
+                "status": "ready",
+            }
+        )
+    return rows
+
+
 def render_record_panel(
     title: str,
     columns: list[tuple[str, str]],
@@ -508,6 +586,34 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
 def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) -> list[str]:
     if file_name == "run.html":
         return [
+            render_record_panel(
+                "Workflow Execution View",
+                [
+                    ("View", "execution_view"),
+                    ("Host View", "host_execution_view"),
+                    ("Workflow", "workflow"),
+                    ("Run", "run_id"),
+                    ("Engine", "engine"),
+                    ("Stage", "stage"),
+                    ("Order", "order"),
+                    ("Attempts", "attempts"),
+                    ("State", "state"),
+                    ("Input", "input"),
+                    ("Output", "output"),
+                    ("Cache", "cache"),
+                    ("Cache Hit", "cache_hit"),
+                    ("Retry", "retry"),
+                    ("Retry Stage", "retry_stage"),
+                    ("Failure", "failure"),
+                    ("Worker", "worker"),
+                    ("Worker Slots", "worker_slots"),
+                    ("Queue Depth", "queue_depth"),
+                    ("Event", "event"),
+                    ("Observer Events", "observer_events"),
+                    ("Status", "status"),
+                ],
+                workflow_execution_view(state),
+            ),
             render_record_panel(
                 "Backend Evidence In Report",
                 [

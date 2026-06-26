@@ -174,7 +174,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_execplan` | execution observer | package, dossier, metrics, compare, orchestrator | plain-kernel execution plan, workflow step count, scheduled task count, worker slots, retry items, and LLM packet count |
 | `rp_worker` | execution observer | package, metrics, compare, orchestrator | worker health, heartbeat count, queue actions, and failure handling actions |
 | `rp_timeline` | execution observer | release, package, dossier, metrics, compare, orchestrator | run timeline, stage order, tick span, and critical path |
-| `rp_execobs` | execution observer | release, package, dossier, metrics, compare, orchestrator | observer packet summary connecting execution plan, timeline, worker health, and evidence readiness |
+| `rp_execobs` | execution observer | release, package, dossier, metrics, compare, orchestrator | observer packet summary connecting execution plan, timeline, worker health, evidence readiness, and host-triggered workflow run observations used by the reader-derived workflow execution view |
 | `rp_invocation` | workflow invocation | package, release, dossier, metrics, compare, orchestrator | invocation identity, template, step count, output count, cache reuse, and final status |
 | `rp_steps` | workflow invocation | metrics, compare, orchestrator | step status counts for completed, cached, failed, and recovered stages |
 | `rp_attempts` | workflow invocation | package, metrics, compare, orchestrator | attempt count, retry count, worker, cache actions, and final result |

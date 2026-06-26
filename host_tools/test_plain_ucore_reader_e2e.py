@@ -764,6 +764,12 @@ def main() -> int:
             assert "host_action_workbench_note_title" in run_html
             assert "host_action_workbench_manuscript_format" in run_html
             assert "host_action_dataset_title" in run_html
+            assert "Workflow Execution View" in run_html
+            assert "stage_summary" in run_html
+            assert "control_summary" in run_html
+            assert "workflow_run" in run_html
+            assert "plain-c-runner" in run_html
+            assert "Queue Depth" in run_html
             assert "Backend Evidence In Report" in run_html
             assert "Backend Evidence In Runner" in run_html
             assert "Backend Case Narratives" in run_html
