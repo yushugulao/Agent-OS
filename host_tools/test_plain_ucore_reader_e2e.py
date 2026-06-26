@@ -579,7 +579,7 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=814" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=822" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("tool_events=138" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=12" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -594,6 +594,8 @@ def main() -> int:
             assert any("backend_runner_checks=12" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("backend_runner_detail_checks=24" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_detail_rows=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("backend_runner_report_checks=20" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("runner_report_rows=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_cases=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_passed=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_planned=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -602,6 +604,8 @@ def main() -> int:
             assert any("runner_verified_inputs=4" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_detail_rows=4" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_detail_schema=src,req,obs,act,review" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_report_rows=4" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_report_schema=plain_cost,agentos_replace,risk,status" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_case=plain-ucore" in line and "input_check=pass" in line and "artifact_check=pass" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_case=retry-recovery" in line and "att=2" in line and "retry=tool_output_missing" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_case=agentos-context" in line and "input_check=planned" in line for line in rp_backend_exec["lines"]), rp_backend_exec
@@ -609,6 +613,10 @@ def main() -> int:
             assert any("runner_detail=retry-recovery" in line and "act=rerun_align" in line and "review=recovered" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_detail=agentos-context" in line and "act=kernel_context" in line and "review=target" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_detail=agentos-fsmeta" in line and "act=kernel_fsmeta" in line and "review=target" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_report=plain-ucore" in line and "plain_cost=file_scan_manifest" in line and "agentos_replace=batch_tool_context" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_report=retry-recovery" in line and "risk=stale_retry" in line and "status=passed" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_report=agentos-context" in line and "agentos_replace=kernel_context_path" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_report=agentos-fsmeta" in line and "plain_cost=scan_records_128" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             rp_study = read_json(base + "/api/state/rp_study")
             assert any("detail_checks=4" in line for line in rp_study["lines"]), rp_study
             assert any("detail_checks=kernel" in line for line in rp_study["lines"]), rp_study
@@ -802,9 +810,12 @@ def main() -> int:
             assert "Backend Runner" in compare_html
             assert "Backend Runner Cases" in compare_html
             assert "Backend Case Details" in compare_html
+            assert "Backend Evidence Report" in compare_html
             assert "retry-recovery" in compare_html
             assert "rerun_align" in compare_html
             assert "kernel_fsmeta" in compare_html
+            assert "scan_records_128" in compare_html
+            assert "kernel_context_path" in compare_html
             assert "Input Check" in compare_html
             assert "tool_output_missing" in compare_html
             assert "kernel_required" in compare_html

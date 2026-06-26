@@ -117,7 +117,7 @@ status=ready
     "rp_provpath": "critical_paths=3\npath1=plan>data>review>repair>audit\npath2=plan>lit>evidence>knowledge>package\n",
     "rp_knowledge": "literature_search_id=usable-literature-search:RUN-900:1\nscreening_decisions=9;included=3;excluded=6\nevidence_extractions=3;fields=mechanism,evidence_type,reported_outcome\nevidence_protocol=usable-evidence-protocol:RUN-900:1;status=registered\nprisma_flow=usable-prisma-flow:RUN-900:1;identified=9;included=3\nevidence_synthesis=usable-evidence-synthesis:RUN-900:1;themes=traceability,reproducibility,recovery\n",
     "rp_package": "delivery_files=8\nevidence_bundle_entries=12\n",
-    "rp_agentcmp": "plain_kernel=passed\ntest_cases=814\nhandoffs=6\nreview_handoff_checks=12;review_sections=8;review_gates=6;review_decisions=3;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;status=ready\nllm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready\nworkflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready\nportability_backend_checks=12;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=2;planned_cases=2;status=ready\nbackend_runner_checks=12;runner_cases=4;runner_passed=2;runner_planned=2;plain_inputs=4;study_metrics=2;backend_runner_detail_checks=24;runner_detail_rows=4;status=ready\n",
+    "rp_agentcmp": "plain_kernel=passed\ntest_cases=822\nhandoffs=6\nreview_handoff_checks=12;review_sections=8;review_gates=6;review_decisions=3;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;status=ready\nllm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready\nworkflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready\nportability_backend_checks=12;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=2;planned_cases=2;status=ready\nbackend_runner_checks=12;runner_cases=4;runner_passed=2;runner_planned=2;plain_inputs=4;study_metrics=2;backend_runner_detail_checks=24;runner_detail_rows=4;backend_runner_report_checks=20;runner_report_rows=4;status=ready\n",
     "rp_backend_exec": (
         "runner_case=plain-ucore;input=rp_wfio;artifact=rp_artifact_manifest;result=passed;reason=native_programs_ok;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=3\n"
         "runner_case=retry-recovery;input=rp_retry_plan;artifact=rp_stage_state;result=passed;reason=recovered_align;input_check=pass;artifact_check=pass;att=2;retry=tool_output_missing;ticks=5\n"
@@ -128,6 +128,11 @@ status=ready
         "runner_detail=agentos-context;src=rp_wfio;req=context_path;obs=planned;act=kernel_context;review=target\n"
         "runner_detail=agentos-fsmeta;src=rp_artifact_manifest;req=metadata_index;obs=planned;act=kernel_fsmeta;review=target\n"
         "runner_detail_rows=4\nrunner_detail_schema=src,req,obs,act,review\n"
+        "runner_report=plain-ucore;plain_cost=file_scan_manifest;agentos_replace=batch_tool_context;risk=manual_state;status=passed\n"
+        "runner_report=retry-recovery;plain_cost=retry_file_stage_file;agentos_replace=event_context;risk=stale_retry;status=passed\n"
+        "runner_report=agentos-context;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;risk=untrusted_context;status=planned\n"
+        "runner_report=agentos-fsmeta;plain_cost=scan_records_128;agentos_replace=metadata_index;risk=scan_growth;status=planned\n"
+        "runner_report_rows=4\nrunner_report_schema=plain_cost,agentos_replace,risk,status\n"
         "runner_cases=4\nrunner_detail_fields=input_check,artifact_check,att,retry,ticks\nrunner_detail_checks=16\nrunner_verified_inputs=4\nrunner_passed=2\nrunner_planned=2\n"
     ),
     "rp_study": (
@@ -216,9 +221,12 @@ def main() -> int:
         assert "Backend Runner" in compare_html
         assert "Backend Runner Cases" in compare_html
         assert "Backend Case Details" in compare_html
+        assert "Backend Evidence Report" in compare_html
         assert "retry-recovery" in compare_html
         assert "rerun_align" in compare_html
         assert "kernel_fsmeta" in compare_html
+        assert "scan_records_128" in compare_html
+        assert "kernel_context_path" in compare_html
         assert "Input Check" in compare_html
         assert "tool_output_missing" in compare_html
         assert "kernel_required" in compare_html

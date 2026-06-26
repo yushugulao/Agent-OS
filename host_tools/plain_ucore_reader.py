@@ -417,6 +417,7 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
             ("Portability Checks", metric_value(state, [("rp_agentcmp", "workflow_portability_checks")])),
             ("Backend Checks", metric_value(state, [("rp_agentcmp", "portability_backend_checks")])),
             ("Backend Runner", metric_value(state, [("rp_agentcmp", "backend_runner_checks")])),
+            ("Backend Evidence", metric_value(state, [("rp_agentcmp", "backend_runner_report_checks")])),
             ("Reader Contract", metric_value(state, [("rp_agentcmp", "reader_contract")])),
         ]
         check_rows = [
@@ -457,6 +458,17 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                     ("Review", "review"),
                 ],
                 state_records(state, "rp_backend_exec", "runner_detail"),
+            ),
+            render_record_panel(
+                "Backend Evidence Report",
+                [
+                    ("Case", "runner_report"),
+                    ("Plain Cost", "plain_cost"),
+                    ("AgentOS Replace", "agentos_replace"),
+                    ("Risk", "risk"),
+                    ("Status", "status"),
+                ],
+                state_records(state, "rp_backend_exec", "runner_report"),
             ),
             render_record_panel(
                 "Backend Study Metrics",

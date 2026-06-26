@@ -1025,6 +1025,12 @@ int main(void)
 	ok = ok && require_file_token("rp_backend_exec", "runner_detail=agentos-fsmeta;src=rp_artifact_manifest;req=metadata_index;obs=planned;act=kernel_fsmeta;review=target");
 	ok = ok && require_file_token("rp_backend_exec", "runner_detail_rows=4");
 	ok = ok && require_file_token("rp_backend_exec", "runner_detail_schema=src,req,obs,act,review");
+	ok = ok && require_file_token("rp_backend_exec", "runner_report=plain-ucore;plain_cost=file_scan_manifest;agentos_replace=batch_tool_context;risk=manual_state;status=passed");
+	ok = ok && require_file_token("rp_backend_exec", "runner_report=retry-recovery;plain_cost=retry_file_stage_file;agentos_replace=event_context;risk=stale_retry;status=passed");
+	ok = ok && require_file_token("rp_backend_exec", "runner_report=agentos-context;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;risk=untrusted_context;status=planned");
+	ok = ok && require_file_token("rp_backend_exec", "runner_report=agentos-fsmeta;plain_cost=scan_records_128;agentos_replace=metadata_index;risk=scan_growth;status=planned");
+	ok = ok && require_file_token("rp_backend_exec", "runner_report_rows=4");
+	ok = ok && require_file_token("rp_backend_exec", "runner_report_schema=plain_cost,agentos_replace,risk,status");
 	ok = ok && require_file_token("rp_backend_exec", "runner_observed=rp_stage_state,rp_retry_plan,rp_artifact_manifest,rp_llmeval");
 	ok = ok && require_file_token("rp_backend_exec", "runner_detail_fields=input_check,artifact_check,att,retry,ticks");
 	ok = ok && require_file_token("rp_backend_exec", "runner_detail_checks=16");
@@ -1395,7 +1401,7 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "review_pack_actions=3");
 	ok = ok && require_file_token("rp_agentcmp", "review_pack_bridges=4");
 	ok = ok && require_file_token("rp_agentcmp", "review_handoff_checks=12;review_sections=8;review_gates=6");
-	ok = ok && require_file_token("rp_agentcmp", "test_cases=814");
+	ok = ok && require_file_token("rp_agentcmp", "test_cases=822");
 	ok = ok && require_file_token("rp_agentcmp", "llm_delivery_checks=16");
 	ok = ok && require_file_token("rp_agentcmp", "llm_queue=3");
 	ok = ok && require_file_token("rp_agentcmp", "llm_packets=3");
@@ -1420,6 +1426,8 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "backend_runner_checks=12");
 	ok = ok && require_file_token("rp_agentcmp", "backend_runner_detail_checks=24");
 	ok = ok && require_file_token("rp_agentcmp", "runner_detail_rows=4");
+	ok = ok && require_file_token("rp_agentcmp", "backend_runner_report_checks=20");
+	ok = ok && require_file_token("rp_agentcmp", "runner_report_rows=4");
 	ok = ok && require_file_token("rp_agentcmp", "runner_cases=4");
 	ok = ok && require_file_token("rp_agentcmp", "runner_passed=2");
 	ok = ok && require_file_token("rp_agentcmp", "runner_planned=2");
@@ -1537,7 +1545,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=814\n"
+			   "tests=822\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -1586,6 +1594,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=814 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=822 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
 	return 0;
 }
