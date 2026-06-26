@@ -117,6 +117,7 @@ def main() -> int:
             assert "bridge=delivery_to_operations;delivery=rp_package;operations=rp_runner;project=rp_package;status=ready" in reviewpack
             assert "host_relay_quality=passed:24/24;blocked:0;source=rp_llmeval;status=ready" in reviewpack
             assert "host_relay_pack_input=rp_report_text,rp_llm_resp,rp_llmeval,rp_llm_guard,rp_review_dashboard,rp_package;status=ready" in reviewpack
+            assert "backend_evidence_review=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;source=rp_review_dashboard;status=ready" in reviewpack
             summary_json = json.loads((out_dir / "llm-relay-summary.json").read_text(encoding="utf-8"))
             assert summary_json["response_status"]["relay-host-q1"] == "ok", summary_json
             assert summary_json["quality"] == {"checked": 24, "passed": 24, "blocked": 0}, summary_json

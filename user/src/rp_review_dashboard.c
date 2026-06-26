@@ -20,6 +20,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_run", "api=run-detail");
 	ok = ok && rp_file_contains("rp_api_evidence", "api=evidence-detail");
 	ok = ok && rp_file_contains("rp_web_bundle", "reader_contract=host_plain_ucore_v2");
+	ok = ok && rp_file_contains("rp_runner", "backend_evidence_report=rp_backend_exec");
+	ok = ok && rp_file_contains("rp_report_text", "backend_evidence_report=rp_backend_exec");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_review_dashboard",
@@ -46,6 +48,7 @@ int main(void)
 			   "decision=ready_for_reviewer;basis=required_files,human_review,llm_packet_guard,workflow_recovered\n"
 			   "decision=plain_kernel_limit;basis=file_state_scan,host_reader_refresh,user_space_contract\n"
 			   "decision=review_pack_ready;basis=delivery_manifest,operations_next,project_action_items,workbench_handoff\n"
+			   "backend_review_evidence=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;review_pack=rp_review_pack;status=ready\n"
 			   "pack_source=rp_package,rp_runner,rp_review_pack\n"
 			   "pack_bridge=delivery_manifest,operations_report,project_space,workbench_handoff\n"
 			   "host_page=review.html\n"
@@ -59,7 +62,7 @@ int main(void)
 	if (!rp_append_file("rp_agentcmp", "review_dashboard=ready;sections=8;gates=6;plain_kernel=ordinary_files")) return 1;
 	if (!rp_append_file("rp_ack", "ack=review_pack;msg=pack;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=review_pack.assemble")) return 1;
-	if (!rp_append_file("rp_agentcmp", "review_pack=ready;evidence_items=10;actions=5;plain_kernel=ordinary_files")) return 1;
+	if (!rp_append_file("rp_agentcmp", "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1")) return 1;
 	printf("rp_review_dashboard: sections=8 gates=6 review_pack=host-materialized status=ready\n");
 	return 0;
 }

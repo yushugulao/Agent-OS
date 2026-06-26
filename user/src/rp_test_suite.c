@@ -1389,21 +1389,24 @@ int main(void)
 	ok = ok && require_file_token("rp_review_dashboard", "gate=reader_contract;status=pass");
 	ok = ok && require_file_token("rp_review_dashboard", "decision=ready_for_reviewer");
 	ok = ok && require_file_token("rp_review_dashboard", "decision=review_pack_ready");
+	ok = ok && require_file_token("rp_review_dashboard", "backend_review_evidence=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;review_pack=rp_review_pack;status=ready");
 	ok = ok && require_file_token("rp_review_dashboard", "pack_source=rp_package,rp_runner,rp_review_pack");
 	ok = ok && require_file_token("rp_review_dashboard", "pack_bridge=delivery_manifest,operations_report,project_space,workbench_handoff");
 	ok = ok && require_file_token("rp_package", "review_pack_bridge=delivery_manifest,operations_report,project_space,workbench_handoff");
 	ok = ok && require_file_token("rp_package", "review_pack_action=deliver_to_reviewer;source=rp_package;status=ready");
 	ok = ok && require_file_token("rp_package", "review_pack_action=sync_operations_next;source=rp_runner;status=ready");
 	ok = ok && require_file_token("rp_package", "review_pack_action=resolve_project_items;source=rp_package;status=ready");
-	ok = ok && require_file_token("rp_agentcmp", "review_handoff_checks=12");
+	ok = ok && require_file_token("rp_agentcmp", "review_handoff_checks=13");
 	ok = ok && require_file_token("rp_agentcmp", "review_sections=8");
 	ok = ok && require_file_token("rp_agentcmp", "review_gates=6");
 	ok = ok && require_file_token("rp_agentcmp", "review_decisions=3");
 	ok = ok && require_file_token("rp_agentcmp", "review_handoffs=3");
 	ok = ok && require_file_token("rp_agentcmp", "review_pack_actions=3");
 	ok = ok && require_file_token("rp_agentcmp", "review_pack_bridges=4");
-	ok = ok && require_file_token("rp_agentcmp", "review_handoff_checks=12;review_sections=8;review_gates=6");
-	ok = ok && require_file_token("rp_agentcmp", "test_cases=830");
+	ok = ok && require_file_token("rp_agentcmp", "backend_review=1");
+	ok = ok && require_file_token("rp_agentcmp", "review_handoff_checks=13;review_sections=8;review_gates=6");
+	ok = ok && require_file_token("rp_agentcmp", "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1");
+	ok = ok && require_file_token("rp_agentcmp", "test_cases=838");
 	ok = ok && require_file_token("rp_agentcmp", "llm_delivery_checks=16");
 	ok = ok && require_file_token("rp_agentcmp", "llm_queue=3");
 	ok = ok && require_file_token("rp_agentcmp", "llm_packets=3");
@@ -1548,7 +1551,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=830\n"
+			   "tests=838\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -1597,6 +1600,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=830 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=838 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
 	return 0;
 }

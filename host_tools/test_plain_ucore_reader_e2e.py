@@ -581,9 +581,9 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=830" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=838" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("tool_events=138" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("review_handoff_checks=12" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_review_links=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -624,7 +624,8 @@ def main() -> int:
             assert any("detail_checks=4" in line for line in rp_study["lines"]), rp_study
             assert any("detail_checks=kernel" in line for line in rp_study["lines"]), rp_study
             assert any("review_dashboard=ready;sections=8;gates=6;plain_kernel=ordinary_files" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("review_pack=ready;evidence_items=10;actions=5;plain_kernel=ordinary_files" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("review_handoff_checks=13" in line and "backend_review=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_consistency = read_json(base + "/api/state/rp_consistency")
             assert any("checks=120" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("artifact_provenance=3" in line for line in rp_consistency["lines"]), rp_consistency
@@ -637,6 +638,7 @@ def main() -> int:
             assert any("gate=llm_packet_guard;status=pass;source=rp_llm_guard" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
             assert any("decision=ready_for_reviewer" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
             assert any("decision=review_pack_ready;basis=delivery_manifest,operations_next,project_action_items,workbench_handoff" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
+            assert any("backend_review_evidence=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;review_pack=rp_review_pack;status=ready" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
             assert any("pack_bridge=delivery_manifest,operations_report,project_space,workbench_handoff" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
             assert any("host_relay_quality=passed:24/24;blocked:0;source=rp_llmeval;status=ready" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
             rp_review_pack = read_json(base + "/api/state/rp_review_pack")
@@ -648,6 +650,7 @@ def main() -> int:
             assert any("action=open_operations_report;owner=orchestrator;artifact=rp_runner;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
             assert any("bridge=delivery_to_operations;delivery=rp_package;operations=rp_runner;project=rp_package;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
             assert any("host_relay_quality=passed:24/24;blocked:0;source=rp_llmeval;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
+            assert any("backend_evidence_review=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;source=rp_review_dashboard;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
             rp_package = read_json(base + "/api/state/rp_package")
             assert any("review_pack_bridge=delivery_manifest,operations_report,project_space,workbench_handoff" in line for line in rp_package["lines"]), rp_package
             assert any("review_pack_action=sync_operations_next;source=rp_runner;status=ready" in line for line in rp_package["lines"]), rp_package
@@ -799,10 +802,13 @@ def main() -> int:
             assert "Review Sections" in review_html
             assert "Review Gates" in review_html
             assert "Review Evidence Pack" in review_html
+            assert "Review Backend Evidence" in review_html
             assert "Review Pack Bridges" in review_html
             assert "Handoff Checks" in review_html
             assert "send_to_reviewer" in review_html
             assert "delivery_to_operations" in review_html
+            assert "backend_evidence_review" in review_html
+            assert "backend_review_evidence" in review_html
             assert "ready_for_reviewer" in review_html
             assert "host_relay_quality" in review_html
             compare_html = read_text(base + "/compare.html")

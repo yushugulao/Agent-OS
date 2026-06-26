@@ -573,6 +573,10 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
             render_line_panel("Host Artifact Actions", host_action_rows),
         ]
     if file_name == "review.html":
+        review_evidence_rows = (
+            state_records(state, "rp_review_pack", "evidence")
+            + state_records(state, "rp_review_pack", "backend_evidence_review")
+        )
         return [
             render_record_panel(
                 "Review Sections",
@@ -596,8 +600,13 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
             ),
             render_record_panel(
                 "Review Evidence Pack",
-                [("Evidence", "evidence"), ("Source", "source"), ("Status", "status")],
-                state_records(state, "rp_review_pack", "evidence"),
+                [("Evidence", "evidence"), ("Backend Evidence", "backend_evidence_review"), ("Source", "source"), ("Plain Costs", "plain_costs"), ("AgentOS Replacements", "agentos_replacements"), ("Risks", "risks"), ("Status", "status")],
+                review_evidence_rows,
+            ),
+            render_record_panel(
+                "Review Backend Evidence",
+                [("Backend Evidence", "backend_review_evidence"), ("Plain Costs", "plain_costs"), ("AgentOS Replacements", "agentos_replacements"), ("Risks", "risks"), ("Review Pack", "review_pack"), ("Status", "status")],
+                state_records(state, "rp_review_dashboard", "backend_review_evidence"),
             ),
             render_record_panel(
                 "Review Pack Actions",

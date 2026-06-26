@@ -430,6 +430,10 @@ def append_relay_state(out_dir: Path, requests: list[RelayRequest], responses: l
         out_dir / "rp_review_pack",
         "host_relay_pack_input=rp_report_text,rp_llm_resp,rp_llmeval,rp_llm_guard,rp_review_dashboard,rp_package;status=ready",
     )
+    append_line(
+        out_dir / "rp_review_pack",
+        "backend_evidence_review=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;source=rp_review_dashboard;status=ready",
+    )
     first_ok = next((response for response in responses if response.status in {"ok", "config_missing"}), responses[0] if responses else None)
     if first_ok is not None:
         append_line(

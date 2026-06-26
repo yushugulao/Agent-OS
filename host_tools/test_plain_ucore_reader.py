@@ -118,7 +118,7 @@ status=ready
     "rp_provpath": "critical_paths=3\npath1=plan>data>review>repair>audit\npath2=plan>lit>evidence>knowledge>package\n",
     "rp_knowledge": "literature_search_id=usable-literature-search:RUN-900:1\nscreening_decisions=9;included=3;excluded=6\nevidence_extractions=3;fields=mechanism,evidence_type,reported_outcome\nevidence_protocol=usable-evidence-protocol:RUN-900:1;status=registered\nprisma_flow=usable-prisma-flow:RUN-900:1;identified=9;included=3\nevidence_synthesis=usable-evidence-synthesis:RUN-900:1;themes=traceability,reproducibility,recovery\n",
     "rp_package": "delivery_files=8\nevidence_bundle_entries=12\n",
-    "rp_agentcmp": "plain_kernel=passed\ntest_cases=830\nhandoffs=6\nreview_handoff_checks=12;review_sections=8;review_gates=6;review_decisions=3;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;status=ready\nllm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready\nworkflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready\nportability_backend_checks=12;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=2;planned_cases=2;status=ready\nbackend_runner_checks=12;runner_cases=4;runner_passed=2;runner_planned=2;plain_inputs=4;study_metrics=2;backend_runner_detail_checks=24;runner_detail_rows=4;backend_runner_report_checks=20;runner_report_rows=4;backend_report_links=2;status=ready\n",
+    "rp_agentcmp": "plain_kernel=passed\ntest_cases=838\nhandoffs=6\nreview_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=3;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\nreview_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\nllm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready\nworkflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready\nportability_backend_checks=12;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=2;planned_cases=2;status=ready\nbackend_runner_checks=12;runner_cases=4;runner_passed=2;runner_planned=2;plain_inputs=4;study_metrics=2;backend_runner_detail_checks=24;runner_detail_rows=4;backend_runner_report_checks=20;runner_report_rows=4;backend_report_links=2;status=ready\n",
     "rp_backend_exec": (
         "runner_case=plain-ucore;input=rp_wfio;artifact=rp_artifact_manifest;result=passed;reason=native_programs_ok;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=3\n"
         "runner_case=retry-recovery;input=rp_retry_plan;artifact=rp_stage_state;result=passed;reason=recovered_align;input_check=pass;artifact_check=pass;att=2;retry=tool_output_missing;ticks=5\n"
@@ -168,6 +168,7 @@ status=ready
         "gate=llm_packet_guard;status=pass;source=rp_llm_guard\n"
         "handoff=orchestrator->reviewer;artifact=rp_review_dashboard;status=ready\n"
         "decision=ready_for_reviewer;basis=required_files,human_review,llm_packet_guard,workflow_recovered\n"
+        "backend_review_evidence=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;review_pack=rp_review_pack;status=ready\n"
         "status=ready\n"
     ),
     "rp_review_pack": (
@@ -177,6 +178,7 @@ status=ready
         "evidence=delivery_ready;source=rp_package;files=8;status=pass\n"
         "evidence=operations_ready;source=rp_runner;status=pass\n"
         "evidence=project_space_ready;source=rp_package;status=pass\n"
+        "backend_evidence_review=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;source=rp_review_dashboard;status=ready\n"
         "action=send_to_reviewer;owner=orchestrator;artifact=rp_review_pack;status=ready\n"
         "action=open_operations_report;owner=orchestrator;artifact=rp_runner;status=ready\n"
         "bridge=delivery_to_operations;delivery=rp_package;operations=rp_runner;project=rp_package;status=ready\n"
@@ -265,6 +267,9 @@ def main() -> int:
         assert "Review Sections" in review_html
         assert "Review Gates" in review_html
         assert "Review Evidence Pack" in review_html
+        assert "Review Backend Evidence" in review_html
+        assert "backend_evidence_review" in review_html
+        assert "backend_review_evidence" in review_html
         assert "Review Pack Bridges" in review_html
         assert "Handoff Checks" in review_html
         assert "send_to_reviewer" in review_html
