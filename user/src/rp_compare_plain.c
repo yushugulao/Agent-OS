@@ -1232,6 +1232,30 @@ int main(void)
 	ok = ok && rp_file_contains("rp_review_dashboard", "section=llm;source=rp_llm_req,rp_llm_resp,rp_llmeval,rp_llm_guard,rp_relay,rp_prompt;status=ready");
 	ok = ok && rp_file_contains("rp_review_dashboard", "gate=llm_packet_guard;status=pass;source=rp_llm_guard");
 	ok = ok && rp_file_contains("rp_runner", "citation=rp_llm_resp:response_join");
+	int portability_imports = rp_get_int_value("rp_wfio", "portability_imports=");
+	int portability_adapters = rp_get_int_value("rp_wfio", "adapter_specs=");
+	int portability_migration = rp_get_int_value("rp_wfio", "migration_steps=");
+	int portability_cases = rp_get_int_value("rp_wfio", "cases=");
+	int portability_rehearsals = rp_get_int_value("rp_wfio", "rehearsal_cases=");
+	int portability_blocking = rp_get_int_value("rp_wfio", "blocking_items=");
+	int package_portability_exports = rp_get_int_value("rp_package", "portability_exports=");
+	int package_portability_adapters = rp_get_int_value("rp_package", "adapter_specs=");
+	int package_portability_migration = rp_get_int_value("rp_package", "migration_steps=");
+	int package_portability_rehearsals = rp_get_int_value("rp_package", "rehearsal_cases=");
+	ok = ok && require_equal("portability_imports", portability_imports, 5);
+	ok = ok && require_equal("portability_adapters", portability_adapters, 6);
+	ok = ok && require_equal("portability_migration", portability_migration, 9);
+	ok = ok && require_equal("portability_cases", portability_cases, 4);
+	ok = ok && require_equal("portability_rehearsals", portability_rehearsals, 4);
+	ok = ok && require_equal("portability_blocking", portability_blocking, 0);
+	ok = ok && require_equal("package_portability_exports", package_portability_exports, 5);
+	ok = ok && require_equal("package_portability_adapters", package_portability_adapters, 6);
+	ok = ok && require_equal("package_portability_migration", package_portability_migration, 9);
+	ok = ok && require_equal("package_portability_rehearsals", package_portability_rehearsals, 4);
+	ok = ok && rp_file_contains("rp_package", "workflow_portability=rp_wfio");
+	ok = ok && rp_file_contains("rp_wfio", "decision=ready_for_agentos");
+	ok = ok && rp_file_contains("rp_wfio", "package=workflow-portability");
+	ok = ok && rp_file_contains("rp_web_bundle", "workflow_portability=rp_wfio");
 	if (!ok) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
@@ -1239,9 +1263,10 @@ int main(void)
 		printf("rp_compare_plain: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		return 1;
 	}
-	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=170;message_acks=44;tool_events=138;action_state_records=12;test_cases=752;action_side_effect_records=16;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=170;message_acks=44;tool_events=138;action_state_records=12;test_cases=766;action_side_effect_records=16;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "review_handoff_checks=12;review_sections=8;review_gates=6;review_decisions=3;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "llm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "workflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready")) return 1;
 	if (rp_host_seed_has("kind=research_run")) {
 		if (!rp_append_file("rp_agentcmp", "host_action_research_verified=1")) return 1;
 	}
