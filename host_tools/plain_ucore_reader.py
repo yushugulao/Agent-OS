@@ -22,6 +22,7 @@ PAGE_SPECS = [
     ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency"]),
     ("artifacts.html", "Artifacts", "rp_api_artifacts", ["rp_artifact", "rp_artifact_manifest", "rp_package"]),
     ("data.html", "Data", "rp_api_data", ["rp_input", "rp_dataset_snapshot", "rp_data_quality"]),
+    ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets"]),
     ("actions.html", "Actions", "rp_api_action", ["rp_actionio", "rp_host_run_result", "rp_web_routes", "rp_web_bundle"]),
 ]
 
@@ -272,12 +273,22 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Bundle", metric_value(state, [("rp_api_compare", "host_action_bundle")]), "rp_api_compare"),
         ("Compare Profile", metric_value(state, [("rp_api_compare", "host_action_compare_profile")]), "rp_api_compare"),
     ]
+    llm_items = [
+        ("Relay", metric_value(state, [("rp_llm_resp", "host_relay_process"), ("rp_relay", "mode")]), "rp_llm_resp"),
+        ("Quality", metric_value(state, [("rp_llmeval", "host_relay_eval_batch")]), "rp_llmeval"),
+        ("Guard", metric_value(state, [("rp_llm_guard", "host_relay_guard_batch")]), "rp_llm_guard"),
+        ("Replay", metric_value(state, [("rp_relay", "host_relay_replay_batch")]), "rp_relay"),
+        ("Routes", metric_value(state, [("rp_prompt", "host_relay_prompt_batch"), ("rp_prompt", "routes")]), "rp_prompt"),
+        ("Runtime", metric_value(state, [("rp_api_runtime", "host_llm_relay_quality")]), "rp_api_runtime"),
+    ]
     if file_name == "run.html":
         return render_summary_panel("Research Output", report_items)
     if file_name in ("evidence.html", "artifacts.html"):
         return render_summary_panel("Evidence Package", evidence_items)
     if file_name == "compare.html":
         return render_summary_panel("Compare Summary", compare_items)
+    if file_name == "llm.html":
+        return render_summary_panel("Relay Quality", llm_items)
     return ""
 
 
@@ -306,12 +317,22 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Rebuild Steps", metric_value(state, [("rp_api_compare", "rebuild_steps"), ("rp_ui_compare", "pain_rebuild_steps")]), "rp_api_compare"),
         ("Test Cases", metric_value(state, [("rp_agentcmp", "test_cases"), ("rp_tests", "tests")]), "rp_agentcmp"),
     ]
+    llm_items = [
+        ("Requests", metric_value(state, [("rp_llm_resp", "requests"), ("rp_llmq", "queued")]), "rp_llm_resp"),
+        ("Responses", metric_value(state, [("rp_llm_resp", "responses")]), "rp_llm_resp"),
+        ("Mode", metric_value(state, [("rp_llm_resp", "mode")]), "rp_llm_resp"),
+        ("Secret Material", metric_value(state, [("rp_llm_hostreq", "secret_material")]), "rp_llm_hostreq"),
+        ("Packet Secret", metric_value(state, [("rp_llm_packets", "secret_in_packet")]), "rp_llm_packets"),
+        ("Agent Decision", metric_value(state, [("rp_agent_run", "host_relay_agent_decision")]), "rp_agent_run"),
+    ]
     if file_name == "agents.html":
         return render_summary_panel("Agent Detail", agent_items)
     if file_name == "evidence.html":
         return render_summary_panel("Evidence Detail", evidence_items)
     if file_name == "compare.html":
         return render_summary_panel("Compare Metrics", compare_items)
+    if file_name == "llm.html":
+        return render_summary_panel("Relay State", llm_items)
     return ""
 
 
@@ -371,6 +392,34 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
         return [
             render_line_panel("Plain Kernel Signals", compare_rows),
             render_line_panel("Consistency Signals", check_rows),
+        ]
+    if file_name == "llm.html":
+        return [
+            render_record_panel(
+                "Relay Requests",
+                [("Request", "host_relay_request"), ("Route", "route"), ("Provider", "provider"), ("Prompt Hash", "prompt_hash"), ("Source", "source")],
+                state_records(state, "rp_llm_req", "host_relay_request"),
+            ),
+            render_record_panel(
+                "Relay Responses",
+                [("Response", "host_relay_response"), ("Request", "request"), ("Summary", "summary"), ("Citations", "citations"), ("Status", "status")],
+                state_records(state, "rp_llm_resp", "host_relay_response"),
+            ),
+            render_record_panel(
+                "Quality Checks",
+                [("Request", "host_relay_eval"), ("Response", "response"), ("Checks", "checks"), ("Passed", "passed"), ("Status", "status")],
+                state_records(state, "rp_llmeval", "host_relay_eval"),
+            ),
+            render_record_panel(
+                "Packet Guard",
+                [("Request", "host_relay_guard"), ("Prompt Hash", "prompt_hash"), ("Secret Ref", "secret_ref"), ("Secret In Packet", "secret_in_packet"), ("Status", "status")],
+                state_records(state, "rp_llm_guard", "host_relay_guard"),
+            ),
+            render_record_panel(
+                "Replay Records",
+                [("Request", "host_relay_replay"), ("Response", "response"), ("Prompt Hash", "prompt_hash"), ("Mode", "mode"), ("Status", "status")],
+                state_records(state, "rp_relay", "host_relay_replay"),
+            ),
         ]
     return []
 
@@ -528,6 +577,11 @@ def render_overview(
             ("Submissions", metric_value(state, [("rp_input", "dynamic_submissions")]), "rp_input"),
             ("Snapshots", metric_value(state, [("rp_dataset_snapshot", "snapshots"), ("rp_api_data", "dataset_snapshots")]), "rp_dataset_snapshot"),
             ("Quality", metric_value(state, [("rp_data_quality", "passed")]), "rp_data_quality"),
+        ],
+        "llm.html": [
+            ("Requests", metric_value(state, [("rp_llm_resp", "requests"), ("rp_llmq", "queued")]), "rp_llm_resp"),
+            ("Quality", metric_value(state, [("rp_llmeval", "host_relay_eval_batch"), ("rp_llmeval", "passed")]), "rp_llmeval"),
+            ("Guard", metric_value(state, [("rp_llm_guard", "host_relay_guard_batch"), ("rp_llm_guard", "secret_scan")]), "rp_llm_guard"),
         ],
         "actions.html": [
             ("Configured Actions", metric_value(state, [("rp_api_action", "actions"), ("rp_web_bundle", "reader_actions")]), "rp_api_action"),

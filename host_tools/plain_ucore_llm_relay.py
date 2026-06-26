@@ -41,6 +41,17 @@ class RelayResponse:
     error: str = ""
 
 
+@dataclass
+class RelayAudit:
+    request_id: str
+    response_id: str
+    prompt_hash: str
+    checks: int
+    passed: int
+    blocked: int
+    status: str
+
+
 def read_text(path: Path) -> str:
     if not path.exists():
         return ""
@@ -294,11 +305,45 @@ def execute_request(request: RelayRequest, mode: str) -> RelayResponse:
     )
 
 
+def audit_response(request: RelayRequest, response: RelayResponse) -> RelayAudit:
+    prompt_hash = digest_text(request.prompt)
+    checks = 6
+    passed = 0
+    if response.request_id == request.request_id:
+        passed += 1
+    if response.response_id:
+        passed += 1
+    if response.status in {"ok", "config_missing"}:
+        passed += 1
+    if response.summary.strip():
+        passed += 1
+    if response.citations.isdigit():
+        passed += 1
+    if request.secret_ref and "secret" not in request.prompt.lower():
+        passed += 1
+    blocked = 0 if passed == checks else 1
+    status = "passed" if passed == checks else "failed"
+    return RelayAudit(
+        request_id=request.request_id,
+        response_id=response.response_id,
+        prompt_hash=prompt_hash,
+        checks=checks,
+        passed=passed,
+        blocked=blocked,
+        status=status,
+    )
+
+
 def append_relay_state(out_dir: Path, requests: list[RelayRequest], responses: list[RelayResponse], mode: str) -> None:
     config = cloud_config()
     endpoint_present = "1" if config["endpoint"] else "0"
     key_present = "1" if config["api_key"] else "0"
     status = "ready" if all(response.status in {"ok", "config_missing"} for response in responses) else "partial"
+    audits = [audit_response(request, response) for request, response in zip(requests, responses)]
+    audit_checked = sum(audit.checks for audit in audits)
+    audit_passed = sum(audit.passed for audit in audits)
+    audit_blocked = sum(audit.blocked for audit in audits)
+    audit_status = "ready" if audit_checked == audit_passed and audit_blocked == 0 else "partial"
     append_line(out_dir / "rp_llm_resp", f"host_relay_process=plain_ucore_llm_relay;mode={line_value(mode)};requests={len(requests)};responses={len(responses)};status={status}")
     append_line(out_dir / "rp_llm_hostreq", f"host_relay_process=plain_ucore_llm_relay;endpoint_present={endpoint_present};key_present={key_present};model={line_value(config['model'])};secret_material=not_written;status={status}")
     append_line(out_dir / "rp_llm_packets", f"host_relay_packet_batch=requests:{len(requests)};responses:{len(responses)};status={status}")
@@ -306,6 +351,34 @@ def append_relay_state(out_dir: Path, requests: list[RelayRequest], responses: l
     append_line(out_dir / "rp_actionio", "host_llm_relay_process=plain_ucore_llm_relay;outputs=rp_llm_resp,rp_llm_hostreq,rp_llm_packets,rp_llmlog;status=ready")
     append_line(out_dir / "rp_web_bundle", "host_llm_relay_process=plain_ucore_llm_relay;refresh=rp_llm_resp,rp_llm_hostreq,rp_llm_packets;status=ready")
     append_line(out_dir / "rp_api_runtime", "host_llm_relay_process=plain_ucore_llm_relay;status=ready")
+    append_line(
+        out_dir / "rp_llmeval",
+        f"host_relay_eval_batch=checked:{audit_checked};passed:{audit_passed};blocked:{audit_blocked};status={audit_status}",
+    )
+    append_line(
+        out_dir / "rp_llm_guard",
+        f"host_relay_guard_batch=checked:{len(audits)};blocked:{audit_blocked};secret_values_written=0;status={audit_status}",
+    )
+    append_line(
+        out_dir / "rp_relay",
+        f"host_relay_replay_batch=requests:{len(requests)};responses:{len(responses)};matched:{len(audits) - audit_blocked};status={audit_status}",
+    )
+    append_line(
+        out_dir / "rp_prompt",
+        f"host_relay_prompt_batch=routes:{len({request.route for request in requests})};requests:{len(requests)};status={audit_status}",
+    )
+    append_line(
+        out_dir / "rp_api_runtime",
+        f"host_llm_relay_quality=passed:{audit_passed}/{audit_checked};blocked:{audit_blocked};source=rp_llmeval;status={audit_status}",
+    )
+    append_line(
+        out_dir / "rp_web_bundle",
+        f"host_llm_relay_quality=rp_llmeval,rp_llm_guard,rp_relay,rp_prompt;checked={audit_checked};passed={audit_passed};status={audit_status}",
+    )
+    append_line(
+        out_dir / "rp_agentcmp",
+        f"host_llm_relay_replay={audit_status};checked={audit_checked};blocked={audit_blocked};plain_kernel=ordinary_files",
+    )
     first_ok = next((response for response in responses if response.status in {"ok", "config_missing"}), responses[0] if responses else None)
     if first_ok is not None:
         append_line(
@@ -344,7 +417,7 @@ def append_relay_state(out_dir: Path, requests: list[RelayRequest], responses: l
             "host_relay_agent_decision=writer_use_relay_response;"
             f"response={line_value(first_ok.response_id)};status=ready",
         )
-    for request, response in zip(requests, responses):
+    for request, response, audit in zip(requests, responses, audits):
         prompt_hash = digest_text(request.prompt)
         append_line(
             out_dir / "rp_llm_req",
@@ -370,6 +443,30 @@ def append_relay_state(out_dir: Path, requests: list[RelayRequest], responses: l
             f"{line_value(request.request_id)};response={line_value(response.response_id)};status={line_value(response.status)};"
             f"error={line_value(response.error)}",
         )
+        append_line(
+            out_dir / "rp_llmeval",
+            "host_relay_eval="
+            f"{line_value(request.request_id)};response={line_value(response.response_id)};"
+            f"checks={audit.checks};passed={audit.passed};citations={line_value(response.citations)};status={line_value(audit.status)}",
+        )
+        append_line(
+            out_dir / "rp_llm_guard",
+            "host_relay_guard="
+            f"{line_value(request.request_id)};prompt_hash={audit.prompt_hash};secret_ref={line_value(request.secret_ref)};"
+            f"secret_in_packet=0;status={line_value(audit.status)}",
+        )
+        append_line(
+            out_dir / "rp_relay",
+            "host_relay_replay="
+            f"{line_value(request.request_id)};response={line_value(response.response_id)};"
+            f"prompt_hash={audit.prompt_hash};mode={line_value(response.mode)};status={line_value(audit.status)}",
+        )
+        append_line(
+            out_dir / "rp_prompt",
+            "host_relay_prompt_route="
+            f"{line_value(request.request_id)};route={line_value(request.route)};budget={line_value(request.budget)};"
+            f"prompt_hash={audit.prompt_hash};status=tracked",
+        )
 
 
 def run_relay(state_dir: Path, out_dir: Path, mode: str = "auto", summary_path: Path | None = None) -> dict[str, object]:
@@ -390,6 +487,11 @@ def run_relay(state_dir: Path, out_dir: Path, mode: str = "auto", summary_path: 
         "request_ids": [request.request_id for request in requests],
         "response_ids": [response.response_id for response in responses],
         "response_status": {response.response_id: response.status for response in responses},
+        "quality": {
+            "checked": sum(audit.checks for audit in [audit_response(request, response) for request, response in zip(requests, responses)]),
+            "passed": sum(audit.passed for audit in [audit_response(request, response) for request, response in zip(requests, responses)]),
+            "blocked": sum(audit.blocked for audit in [audit_response(request, response) for request, response in zip(requests, responses)]),
+        },
     }
     target = summary_path or (out_dir / "llm-relay-summary.json")
     write_text(target, json.dumps(summary, indent=2, ensure_ascii=False) + "\n")

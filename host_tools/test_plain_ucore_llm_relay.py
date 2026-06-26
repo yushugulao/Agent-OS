@@ -34,6 +34,10 @@ STATE = {
     "rp_llm_hostreq": "template_mode=ready\nstatus=ready\n",
     "rp_llm_packets": "packets=3\nstatus=ready\n",
     "rp_llmlog": "roundtrip=ready\nstatus=ready\n",
+    "rp_llmeval": "passed=7\n",
+    "rp_llm_guard": "secrets_in_ucore=0\n",
+    "rp_relay": "mode=host_file_relay\n",
+    "rp_prompt": "routes=4\n",
     "rp_actionio": "actions=ready\n",
     "rp_web_bundle": "reader_ready=1\n",
     "rp_api_runtime": "api=runtime\nstatus=ready\n",
@@ -44,6 +48,7 @@ STATE = {
     "rp_api_run": "api=run\n",
     "rp_api_evidence": "api=evidence\n",
     "rp_agent_run": "agent_run=ready\n",
+    "rp_agentcmp": "plain_kernel=passed\n",
 }
 
 
@@ -71,6 +76,18 @@ def main() -> int:
             assert "review_summary_supported_by_current_evidence" in resp
             packets = (out_dir / "rp_llm_packets").read_text(encoding="utf-8")
             assert "secret_in_packet=0" in packets
+            eval_state = (out_dir / "rp_llmeval").read_text(encoding="utf-8")
+            assert "host_relay_eval_batch=checked:24;passed:24;blocked:0;status=ready" in eval_state
+            assert "host_relay_eval=host-q1;response=relay-host-q1;checks=6;passed=6" in eval_state
+            guard = (out_dir / "rp_llm_guard").read_text(encoding="utf-8")
+            assert "host_relay_guard_batch=checked:4;blocked:0;secret_values_written=0;status=ready" in guard
+            assert "host_relay_guard=host-q1" in guard
+            replay = (out_dir / "rp_relay").read_text(encoding="utf-8")
+            assert "host_relay_replay_batch=requests:4;responses:4;matched:4;status=ready" in replay
+            assert "host_relay_replay=host-q1;response=relay-host-q1" in replay
+            prompt = (out_dir / "rp_prompt").read_text(encoding="utf-8")
+            assert "host_relay_prompt_batch=routes:3;requests:4;status=ready" in prompt
+            assert "host_relay_prompt_route=host-q1;route=review_summary" in prompt
             report = (out_dir / "rp_report_text").read_text(encoding="utf-8")
             assert "host_relay_report_summary=review_summary_supported_by_current_evidence" in report
             runner = (out_dir / "rp_runner").read_text(encoding="utf-8")
@@ -85,8 +102,11 @@ def main() -> int:
             assert "host_relay_grounding=citations:5" in api_evidence
             agent_run = (out_dir / "rp_agent_run").read_text(encoding="utf-8")
             assert "host_relay_agent_decision=writer_use_relay_response" in agent_run
+            agentcmp = (out_dir / "rp_agentcmp").read_text(encoding="utf-8")
+            assert "host_llm_relay_replay=ready;checked=24;blocked=0;plain_kernel=ordinary_files" in agentcmp
             summary_json = json.loads((out_dir / "llm-relay-summary.json").read_text(encoding="utf-8"))
             assert summary_json["response_status"]["relay-host-q1"] == "ok", summary_json
+            assert summary_json["quality"] == {"checked": 24, "passed": 24, "blocked": 0}, summary_json
 
         with tempfile.TemporaryDirectory() as state_tmp, tempfile.TemporaryDirectory() as out_tmp:
             state_dir = Path(state_tmp)

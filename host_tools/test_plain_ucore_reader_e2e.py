@@ -605,6 +605,18 @@ def main() -> int:
             rp_llm_packets = read_json(base + "/api/state/rp_llm_packets")
             assert any("host_llm_packet_request=llm-q1" in line for line in rp_llm_packets["lines"]), rp_llm_packets
             assert any("secret_in_packet=0" in line for line in rp_llm_packets["lines"]), rp_llm_packets
+            rp_llmeval = read_json(base + "/api/state/rp_llmeval")
+            assert any("host_relay_eval_batch=checked:24;passed:24;blocked:0;status=ready" in line for line in rp_llmeval["lines"]), rp_llmeval
+            assert any("host_relay_eval=llm-q1;response=relay-llm-q1;checks=6;passed=6" in line for line in rp_llmeval["lines"]), rp_llmeval
+            rp_llm_guard = read_json(base + "/api/state/rp_llm_guard")
+            assert any("host_relay_guard_batch=checked:4;blocked:0;secret_values_written=0;status=ready" in line for line in rp_llm_guard["lines"]), rp_llm_guard
+            assert any("host_relay_guard=llm-q1" in line for line in rp_llm_guard["lines"]), rp_llm_guard
+            rp_relay = read_json(base + "/api/state/rp_relay")
+            assert any("host_relay_replay_batch=requests:4;responses:4;matched:4;status=ready" in line for line in rp_relay["lines"]), rp_relay
+            assert any("host_relay_replay=llm-q1;response=relay-llm-q1" in line for line in rp_relay["lines"]), rp_relay
+            rp_prompt = read_json(base + "/api/state/rp_prompt")
+            assert any("host_relay_prompt_batch=routes:3;requests:4;status=ready" in line for line in rp_prompt["lines"]), rp_prompt
+            assert any("host_relay_prompt_route=llm-q1;route=review_summary" in line for line in rp_prompt["lines"]), rp_prompt
             rp_llm_hostreq = read_json(base + "/api/state/rp_llm_hostreq")
             assert any("host_llm_host_response=llm-r1" in line for line in rp_llm_hostreq["lines"]), rp_llm_hostreq
             assert any("secret_material=not_written" in line for line in rp_llm_hostreq["lines"]), rp_llm_hostreq
@@ -612,6 +624,7 @@ def main() -> int:
             assert any("host_llm_fallback_case=missing_cloud_key" in line for line in rp_llm_fallback["lines"]), rp_llm_fallback
             rp_api_runtime = read_json(base + "/api/state/rp_api_runtime")
             assert any("host_llm_request_id=llm-q1" in line for line in rp_api_runtime["lines"]), rp_api_runtime
+            assert any("host_llm_relay_quality=passed:24/24;blocked:0;source=rp_llmeval;status=ready" in line for line in rp_api_runtime["lines"]), rp_api_runtime
             rp_api_run = read_json(base + "/api/state/rp_api_run")
             assert any("host_action_title=T1" in line for line in rp_api_run["lines"]), rp_api_run
             assert any("host_action_question=Q1" in line for line in rp_api_run["lines"]), rp_api_run
@@ -683,6 +696,12 @@ def main() -> int:
             assert "Host Actions" in actions_html
             assert "qemu_orch_passed" in actions_html
             assert "host_action_revision" in actions_html
+            llm_html = read_text(base + "/llm.html")
+            assert "LLM Relay" in llm_html
+            assert "Relay Quality" in llm_html
+            assert "Quality Checks" in llm_html
+            assert "host_relay_eval_batch" in llm_html
+            assert "relay-llm-q1" in llm_html
         finally:
             server.shutdown()
             server.server_close()

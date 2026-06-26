@@ -114,6 +114,13 @@ status=ready
     "rp_input": "dynamic_submissions=4\n",
     "rp_dataset_snapshot": "snapshots=2\n",
     "rp_data_quality": "passed=7\n",
+    "rp_llm_req": "host_relay_request=q1;route=review_summary;provider=template;prompt_hash=abc;source=rp_llmq\n",
+    "rp_llm_resp": "host_relay_process=plain_ucore_llm_relay;mode=template;requests=1;responses=1;status=ready\nhost_relay_response=relay-q1;request=q1;summary=ready;citations=5;status=ok\n",
+    "rp_llmeval": "host_relay_eval_batch=checked:6;passed:6;blocked:0;status=ready\nhost_relay_eval=q1;response=relay-q1;checks=6;passed=6;status=passed\n",
+    "rp_llm_guard": "host_relay_guard_batch=checked:1;blocked:0;secret_values_written=0;status=ready\nhost_relay_guard=q1;prompt_hash=abc;secret_ref=host_env;secret_in_packet=0;status=passed\n",
+    "rp_relay": "host_relay_replay_batch=requests:1;responses:1;matched:1;status=ready\nhost_relay_replay=q1;response=relay-q1;prompt_hash=abc;mode=template;status=passed\n",
+    "rp_prompt": "host_relay_prompt_batch=routes:1;requests:1;status=ready\nhost_relay_prompt_route=q1;route=review_summary;budget=1024;prompt_hash=abc;status=tracked\n",
+    "rp_llm_packets": "host_relay_packet=q1;response=relay-q1;prompt_hash=abc;secret_in_packet=0;status=ok\n",
 }
 
 
@@ -126,9 +133,10 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 8, summary
+        assert summary["pages"] == 9, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
+        assert (out_dir / "llm.html").exists()
         assert (out_dir / "api" / "rp_api_home.json").exists()
         index_html = (out_dir / "index.html").read_text(encoding="utf-8")
         assert "Plain uCore Research" in index_html
@@ -166,6 +174,12 @@ def main() -> int:
         actions_html = (out_dir / "actions.html").read_text(encoding="utf-8")
         assert "Batch Actions" in actions_html
         assert "/actions/research/run" in actions_html
+        llm_html = (out_dir / "llm.html").read_text(encoding="utf-8")
+        assert "LLM Relay" in llm_html
+        assert "Relay Quality" in llm_html
+        assert "Quality Checks" in llm_html
+        assert "host_relay_eval_batch" in llm_html
+        assert "relay-q1" in llm_html
 
         saved = json.loads((out_dir / "reader-summary.json").read_text(encoding="utf-8"))
         assert saved["contract"]["contract"] == "host_plain_ucore_v2"
