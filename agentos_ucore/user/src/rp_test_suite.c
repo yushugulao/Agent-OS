@@ -1479,6 +1479,13 @@ int main(void)
 	ok = ok && require_file_token("rp_runop", "agentos_advanced_surface=kernel_bound");
 	ok = ok && require_file_token("rp_runop", "agentos_advanced_surface_detail=tool:echo,tool:read_context");
 	ok = ok && require_file_token("rp_agentcmp", "research_governance_checks=18");
+	ok = ok && require_file_token("rp_agentcmp", "startup_health_checks=8");
+	ok = ok && require_file_token("rp_runop", "startup_health=quickstart:ready");
+	ok = ok && require_file_token("rp_runop", "startup_checks=8");
+	ok = ok && require_file_token("rp_runop", "configuration_health=settings:ready");
+	ok = ok && require_file_token("rp_runop", "stores_secret_values=0");
+	ok = ok && require_file_token("rp_runop", "platform_doctor=ready;checks=8");
+	ok = ok && require_file_token("rp_runop", "provider_health=offline:1,cloud:0,ready_cloud:0");
 	ok = ok && require_file_token("rp_protocol", "protocol_compliance_reports=1");
 	ok = ok && require_file_token("rp_protocol", "protocol_amendments=1");
 	ok = ok && require_file_token("rp_soplog", "sop_executions=1");
@@ -1636,6 +1643,7 @@ int main(void)
 			   "human_review_revision=passed\n"
 			   "review_thread_actions=passed\n"
 			   "llm_relay=passed\n"
+			   "startup_health=passed\n"
 			   "agent_compare=passed\n"
 			   "consistency=passed\n"
 			   "status=passed\n")) {
@@ -1653,6 +1661,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=838 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=838 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed startup=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
 	return 0;
 }

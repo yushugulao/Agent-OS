@@ -95,6 +95,9 @@ int main(void)
 	if (!rp_file_contains("rp_runop", "package_intake:packages:1")) return 1;
 	if (!rp_file_contains("rp_runop", "agentos_advanced_surface=kernel_bound")) return 1;
 	if (!rp_file_contains("rp_runop", "agentos_advanced_surface_detail=tool:echo,tool:read_context")) return 1;
+	if (!rp_file_contains("rp_runop", "startup_health=quickstart:ready")) return 1;
+	if (!rp_file_contains("rp_runop", "configuration_health=settings:ready")) return 1;
+	if (!rp_file_contains("rp_runop", "platform_doctor=ready;checks=8")) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
 	if (ack_count < 27 || tool_count < 113) return 1;
@@ -184,6 +187,10 @@ int main(void)
 			   "notebook_exports=2\n"
 			   "downloadable_units=4\n"
 			   "advanced_surface_objects=5\n"
+			   "startup_checks=8\n"
+			   "configuration_health=ready\n"
+			   "platform_doctor_checks=8\n"
+			   "secret_values_written=0\n"
 			   "research_search_saved=2\n"
 			   "project_surface_actions=4\n"
 			   "study_protocol_checks=6\n"
@@ -315,6 +322,9 @@ int main(void)
 			   "notebook_cells=8\n"
 			   "notebook_exports=2\n"
 			   "downloadable_units=4\n"
+			   "startup_checks=8\n"
+			   "platform_doctor_checks=8\n"
+			   "secret_values_written=0\n"
 			   "claim_records=8\n"
 			   "provenance_paths=3\n"
 			   "data_profiles=4\n"

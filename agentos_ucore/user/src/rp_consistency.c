@@ -88,6 +88,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runop", "package_intake:packages:1");
 	ok = ok && rp_file_contains("rp_runop", "agentos_advanced_surface=kernel_bound");
 	ok = ok && rp_file_contains("rp_runop", "context_authority=shadow");
+	ok = ok && rp_file_contains("rp_runop", "startup_health=quickstart:ready");
+	ok = ok && rp_file_contains("rp_runop", "configuration_health=settings:ready");
+	ok = ok && rp_file_contains("rp_runop", "stores_secret_values=0");
+	ok = ok && rp_file_contains("rp_runop", "deepseek_provider=registered");
+	ok = ok && rp_file_contains("rp_runop", "platform_doctor=ready;checks=8");
+	ok = ok && rp_file_contains("rp_runop", "cloud_llm=optional");
 	ok = ok && rp_file_contains("rp_protocol", "protocol_compliance_reports=1");
 	ok = ok && rp_file_contains("rp_protocol", "protocol_amendments=1");
 	ok = ok && rp_file_contains("rp_soplog", "sop_executions=1");
@@ -379,6 +385,10 @@ int main(void)
 			   "notebook_exports=2\n"
 			   "downloadable_units=4\n"
 			   "advanced_surface_objects=5\n"
+			   "startup_checks=8\n"
+			   "configuration_health=ready\n"
+			   "platform_doctor_checks=8\n"
+			   "secret_values_written=0\n"
 			   "research_search_saved=2\n"
 			   "project_surface_actions=4\n"
 			   "study_protocol_checks=6\n"

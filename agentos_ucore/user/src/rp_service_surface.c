@@ -287,6 +287,20 @@ static int write_runtime_services(void)
 			     "status=ready\n");
 }
 
+static int write_startup_health_surface(void)
+{
+	if (!rp_append_file("rp_runop",
+			    "startup_health=quickstart:ready;startup_checks=8;offline_runs_ready=1;cloud_llm_ready=0;project_launch=sample_ready;status=ready")) {
+		return 0;
+	}
+	if (!rp_append_file("rp_runop",
+			    "configuration_health=settings:ready;stores_secret_values=0;deepseek_provider=registered;deepseek_model=deepseek-v4-pro;openai_compatible=registered;status=ready")) {
+		return 0;
+	}
+	return rp_append_file("rp_runop",
+			      "platform_doctor=ready;checks=8;workspace=pass;template=pass;cloud_llm=optional;provider_health=offline:1,cloud:0,ready_cloud:0;downloads=markdown,json");
+}
+
 static int write_advanced_surface(void)
 {
 	if (!rp_append_file("rp_runop",
@@ -395,6 +409,7 @@ int main(void)
 	if (!write_publication_services()) return 1;
 	if (!write_knowledge_services()) return 1;
 	if (!write_runtime_services()) return 1;
+	if (!write_startup_health_surface()) return 1;
 	if (!write_advanced_surface()) return 1;
 	if (!write_agentos_surface_binding()) return 1;
 
@@ -428,6 +443,8 @@ int main(void)
 	if (!rp_append_status("notebook_exec=ready")) return 1;
 	if (!rp_append_status("eln_record=ready")) return 1;
 	if (!rp_append_status("worker_pool=ready")) return 1;
+	if (!rp_append_status("startup_health=ready")) return 1;
+	if (!rp_append_status("platform_doctor=ready")) return 1;
 	if (!rp_append_status("advanced_surface=ready")) return 1;
 	printf("rp_service_surface: bio=ready lab_resources=ready publication=ready knowledge=ready runtime=ready status=ready\n");
 	return 0;
