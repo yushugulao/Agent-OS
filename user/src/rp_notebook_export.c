@@ -42,6 +42,26 @@ int main(void)
 		if (!rp_append_file("rp_nbexec", line)) return 1;
 		if (!rp_append_host_action_line("rp_nbexec", "host_action_notebook_format=", format)) return 1;
 	}
+	if (rp_host_seed_has_workbench_action()) {
+		char value[96];
+		if (!rp_append_file("rp_nbexec", "host_action_notebook_workbench=rp_runner")) return 1;
+		if (!rp_host_seed_copy_workbench_value("workbench=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "usable-workbench:RUN-900");
+		}
+		if (!rp_append_host_action_line("rp_nbexec", "host_action_notebook_workbench_id=", value)) return 1;
+		if (rp_host_seed_has("kind=workbench_brief") ||
+		    rp_host_seed_has("kind=workbench_evidence_dossier") ||
+		    rp_host_seed_has("kind=workbench_evidence_graph") ||
+		    rp_host_seed_has("kind=workbench_citations") ||
+		    rp_host_seed_has("kind=workbench_manuscript") ||
+		    rp_host_seed_has("kind=workbench_runbook") ||
+		    rp_host_seed_has("kind=workbench_timeline") ||
+		    rp_host_seed_has("kind=workbench_file_manifest") ||
+		    rp_host_seed_has("kind=workbench_file_verify") ||
+		    rp_host_seed_has("kind=workbench_export")) {
+			if (!rp_append_file("rp_nbexec", "host_action_notebook_workbench_docs=ready")) return 1;
+		}
+	}
 	if (!rp_append_file("rp_repro", "notebook_export=rp_nbexec;exports=2;downloadable_units=4;download=reproducible-analysis.ipynb")) return 1;
 	if (!rp_append_file("rp_ack", "ack=notebook_export;msg=notebook;status=ready")) return 1;
 	if (!rp_append_status("notebook_export=ready")) return 1;

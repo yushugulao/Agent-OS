@@ -146,6 +146,29 @@ int main(void)
 			}
 			if (!rp_append_host_action_line("rp_artifact_manifest", "host_manifest_compare_profile=", profile)) return 1;
 		}
+		if (rp_host_seed_has_workbench_action()) {
+			char value[96];
+			if (!rp_append_file("rp_artifact_manifest", "host_manifest_workbench_outputs=rp_runner,rp_revision,rp_package")) return 1;
+			if (!rp_host_seed_copy_workbench_value("workbench=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "usable-workbench:RUN-900");
+			}
+			if (!rp_append_host_action_line("rp_artifact_manifest", "host_manifest_workbench=", value)) return 1;
+			if (rp_host_seed_copy_workbench_value("task=", value, sizeof(value))) {
+				if (!rp_append_host_action_line("rp_artifact_manifest", "host_manifest_workbench_task=", value)) return 1;
+			}
+			if (rp_host_seed_copy_workbench_value("runbook_format=", value, sizeof(value))) {
+				if (!rp_append_host_action_line("rp_artifact_manifest", "host_manifest_workbench_runbook_format=", value)) return 1;
+			}
+			if (rp_host_seed_copy_workbench_value("timeline_format=", value, sizeof(value))) {
+				if (!rp_append_host_action_line("rp_artifact_manifest", "host_manifest_workbench_timeline_format=", value)) return 1;
+			}
+			if (rp_host_seed_copy_workbench_value("manifest=", value, sizeof(value))) {
+				if (!rp_append_host_action_line("rp_artifact_manifest", "host_manifest_workbench_manifest=", value)) return 1;
+			}
+			if (rp_host_seed_copy_workbench_value("bundle=", value, sizeof(value))) {
+				if (!rp_append_host_action_line("rp_artifact_manifest", "host_manifest_workbench_bundle=", value)) return 1;
+			}
+		}
 	}
 	if (!rp_append_file("rp_runner", "custom_runs=3")) return 1;
 	if (!rp_append_file("rp_runner", "custom_run=usable-run:RUN-900")) return 1;

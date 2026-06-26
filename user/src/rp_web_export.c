@@ -709,6 +709,26 @@ int main(void)
 			   "status=ok\n")) {
 		return 1;
 	}
+	if (rp_host_seed_count() > 0) {
+		if (!rp_append_file("rp_uresrun", "host_action_run_outputs=rp_report_text,rp_artifact_manifest,rp_nbexec,rp_package")) return 1;
+		if (rp_host_seed_has_workbench_action()) {
+			char value[96];
+			if (!rp_append_file("rp_uresrun", "host_action_workbench_outputs=rp_runner,rp_revision,rp_package")) return 1;
+			if (!rp_host_seed_copy_workbench_value("workbench=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "usable-workbench:RUN-900");
+			}
+			if (!rp_append_host_action_line("rp_uresrun", "host_action_workbench=", value)) return 1;
+			if (rp_host_seed_copy_workbench_value("task=", value, sizeof(value))) {
+				if (!rp_append_host_action_line("rp_uresrun", "host_action_workbench_task=", value)) return 1;
+			}
+			if (rp_host_seed_copy_workbench_value("manifest=", value, sizeof(value))) {
+				if (!rp_append_host_action_line("rp_uresrun", "host_action_workbench_manifest=", value)) return 1;
+			}
+			if (rp_host_seed_copy_workbench_value("bundle=", value, sizeof(value))) {
+				if (!rp_append_host_action_line("rp_uresrun", "host_action_workbench_bundle=", value)) return 1;
+			}
+		}
+	}
 	if (!rp_write_file("rp_web_bundle",
 			   "bundle=host-web-ui\n"
 			   "routes=22\n"

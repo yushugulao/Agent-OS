@@ -235,6 +235,74 @@ static RP_UNUSED __attribute__((noinline)) int rp_host_seed_copy_value_for_kind(
 	return 0;
 }
 
+static RP_UNUSED int rp_host_seed_has_workbench_action(void)
+{
+	return rp_host_seed_has("kind=workbench") ||
+	       rp_host_seed_has("kind=workbench_complete") ||
+	       rp_host_seed_has("kind=workbench_advance") ||
+	       rp_host_seed_has("kind=workbench_auto_advance") ||
+	       rp_host_seed_has("kind=workbench_task") ||
+	       rp_host_seed_has("kind=workbench_note") ||
+	       rp_host_seed_has("kind=workbench_notes") ||
+	       rp_host_seed_has("kind=workbench_handoff_package") ||
+	       rp_host_seed_has("kind=workbench_readiness") ||
+	       rp_host_seed_has("kind=workbench_answer") ||
+	       rp_host_seed_has("kind=workbench_answer_audit") ||
+	       rp_host_seed_has("kind=workbench_evidence_search") ||
+	       rp_host_seed_has("kind=workbench_brief") ||
+	       rp_host_seed_has("kind=workbench_evidence_dossier") ||
+	       rp_host_seed_has("kind=workbench_evidence_graph") ||
+	       rp_host_seed_has("kind=workbench_citations") ||
+	       rp_host_seed_has("kind=workbench_manuscript") ||
+	       rp_host_seed_has("kind=workbench_manuscript_audit") ||
+	       rp_host_seed_has("kind=workbench_manuscript_revision_plan") ||
+	       rp_host_seed_has("kind=workbench_manuscript_revision_task") ||
+	       rp_host_seed_has("kind=workbench_task_board") ||
+	       rp_host_seed_has("kind=workbench_task_board_row") ||
+	       rp_host_seed_has("kind=workbench_runbook") ||
+	       rp_host_seed_has("kind=workbench_timeline") ||
+	       rp_host_seed_has("kind=workbench_file_manifest") ||
+	       rp_host_seed_has("kind=workbench_file_verify") ||
+	       rp_host_seed_has("kind=workbench_export");
+}
+
+static RP_UNUSED int rp_host_seed_copy_workbench_value(const char *key, char *out, int cap)
+{
+	const char *kinds[] = {
+		"kind=workbench",
+		"kind=workbench_complete",
+		"kind=workbench_advance",
+		"kind=workbench_auto_advance",
+		"kind=workbench_task",
+		"kind=workbench_note",
+		"kind=workbench_notes",
+		"kind=workbench_handoff_package",
+		"kind=workbench_readiness",
+		"kind=workbench_answer",
+		"kind=workbench_answer_audit",
+		"kind=workbench_evidence_search",
+		"kind=workbench_brief",
+		"kind=workbench_evidence_dossier",
+		"kind=workbench_evidence_graph",
+		"kind=workbench_citations",
+		"kind=workbench_manuscript",
+		"kind=workbench_manuscript_audit",
+		"kind=workbench_manuscript_revision_plan",
+		"kind=workbench_manuscript_revision_task",
+		"kind=workbench_task_board",
+		"kind=workbench_task_board_row",
+		"kind=workbench_runbook",
+		"kind=workbench_timeline",
+		"kind=workbench_file_manifest",
+		"kind=workbench_file_verify",
+		"kind=workbench_export"
+	};
+	for (int i = 0; i < (int)(sizeof(kinds) / sizeof(kinds[0])); i++) {
+		if (rp_host_seed_copy_value_for_kind(kinds[i], key, out, cap)) return 1;
+	}
+	return 0;
+}
+
 static RP_UNUSED void rp_copy_text(char *dst, int cap, const char *src)
 {
 	if (cap <= 0) return;

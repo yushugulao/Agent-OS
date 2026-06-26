@@ -286,6 +286,10 @@ int main(void)
 		ok = ok && require_file_token("rp_actionio", "host_action_workbench=1");
 		ok = ok && require_file_token("rp_runner", "host_action_workbench_id=");
 		ok = ok && require_file_token("rp_api_compare", "host_action_workbench=");
+		ok = ok && require_file_token("rp_report_text", "host_report_workbench_outputs=rp_runner,rp_revision,rp_package");
+		ok = ok && require_file_token("rp_artifact_manifest", "host_manifest_workbench_outputs=rp_runner,rp_revision,rp_package");
+		ok = ok && require_file_token("rp_nbexec", "host_action_notebook_workbench=rp_runner");
+		ok = ok && require_file_token("rp_uresrun", "host_action_workbench_outputs=rp_runner,rp_revision,rp_package");
 	}
 	if (rp_host_seed_has("kind=workbench_answer")) {
 		char question[96];
@@ -376,6 +380,15 @@ int main(void)
 		rp_append_text(token, sizeof(token), manifest);
 		ok = ok && require_file_token("rp_runner", token);
 		ok = ok && require_file_token("rp_api_compare", token);
+		rp_copy_text(token, sizeof(token), "host_report_workbench_manifest=");
+		rp_append_text(token, sizeof(token), manifest);
+		ok = ok && require_file_token("rp_report_text", token);
+		rp_copy_text(token, sizeof(token), "host_manifest_workbench_manifest=");
+		rp_append_text(token, sizeof(token), manifest);
+		ok = ok && require_file_token("rp_artifact_manifest", token);
+		rp_copy_text(token, sizeof(token), "host_action_workbench_manifest=");
+		rp_append_text(token, sizeof(token), manifest);
+		ok = ok && require_file_token("rp_uresrun", token);
 	}
 	if (rp_host_seed_has("kind=workbench_notes")) {
 		ok = ok && require_file_token("rp_runner", "host_action_workbench_notes=exported");
@@ -445,17 +458,29 @@ int main(void)
 		ok = ok && require_file_token("rp_runner", "host_action_workbench_runbook=exported");
 		ok = ok && require_seed_value("kind=workbench_runbook", "runbook_format=", "markdown", "rp_runner", "host_action_workbench_runbook_format=");
 		ok = ok && require_seed_value("kind=workbench_runbook", "runbook_format=", "markdown", "rp_api_compare", "host_action_workbench_runbook_format=");
+		ok = ok && require_seed_value("kind=workbench_runbook", "runbook_format=", "markdown", "rp_artifact_manifest", "host_manifest_workbench_runbook_format=");
+		ok = ok && require_file_token("rp_nbexec", "host_action_notebook_workbench_docs=ready");
 	}
 	if (rp_host_seed_has("kind=workbench_timeline")) {
 		ok = ok && require_file_token("rp_runner", "host_action_workbench_timeline=exported");
 		ok = ok && require_seed_value("kind=workbench_timeline", "timeline_format=", "html", "rp_runner", "host_action_workbench_timeline_format=");
 		ok = ok && require_seed_value("kind=workbench_timeline", "timeline_format=", "html", "rp_api_compare", "host_action_workbench_timeline_format=");
+		ok = ok && require_seed_value("kind=workbench_timeline", "timeline_format=", "html", "rp_artifact_manifest", "host_manifest_workbench_timeline_format=");
+		ok = ok && require_file_token("rp_nbexec", "host_action_notebook_workbench_docs=ready");
 	}
-	if (rp_host_seed_has("kind=workbench_file_manifest")) ok = ok && require_file_token("rp_runner", "host_action_workbench_file_manifest=exported");
+	if (rp_host_seed_has("kind=workbench_file_manifest")) {
+		ok = ok && require_file_token("rp_runner", "host_action_workbench_file_manifest=exported");
+		ok = ok && require_seed_value("kind=workbench_file_manifest", "manifest=", "delivery-manifest.json", "rp_report_text", "host_report_workbench_manifest=");
+		ok = ok && require_seed_value("kind=workbench_file_manifest", "manifest=", "delivery-manifest.json", "rp_artifact_manifest", "host_manifest_workbench_manifest=");
+		ok = ok && require_seed_value("kind=workbench_file_manifest", "manifest=", "delivery-manifest.json", "rp_uresrun", "host_action_workbench_manifest=");
+	}
 	if (rp_host_seed_has("kind=workbench_export")) {
 		ok = ok && require_file_token("rp_runner", "host_action_workbench_export=ready");
 		ok = ok && require_seed_value("kind=workbench_export", "bundle=", "workbench-bundle.zip", "rp_runner", "host_action_workbench_bundle=");
 		ok = ok && require_seed_value("kind=workbench_export", "bundle=", "workbench-bundle.zip", "rp_api_compare", "host_action_workbench_bundle=");
+		ok = ok && require_seed_value("kind=workbench_export", "bundle=", "workbench-bundle.zip", "rp_report_text", "host_report_workbench_bundle=");
+		ok = ok && require_seed_value("kind=workbench_export", "bundle=", "workbench-bundle.zip", "rp_artifact_manifest", "host_manifest_workbench_bundle=");
+		ok = ok && require_seed_value("kind=workbench_export", "bundle=", "workbench-bundle.zip", "rp_uresrun", "host_action_workbench_bundle=");
 	}
 	if (rp_host_seed_has("kind=workbench_manuscript") ||
 	    rp_host_seed_has("kind=workbench_manuscript_audit") ||
