@@ -1013,13 +1013,23 @@ int main(void)
 	ok = ok && require_file_token("rp_backend_exec", "runner_case=retry-recovery;input=rp_retry_plan;artifact=rp_stage_state;result=passed");
 	ok = ok && require_file_token("rp_backend_exec", "runner_case=agentos-context;input=rp_wfio;artifact=agent_context;result=planned");
 	ok = ok && require_file_token("rp_backend_exec", "runner_case=agentos-fsmeta;input=rp_wfio;artifact=agent_file_meta;result=planned");
+	ok = ok && require_file_token("rp_backend_exec", "runner_case=plain-ucore;input=rp_wfio;artifact=rp_artifact_manifest;result=passed;reason=native_programs_ok;input_check=pass;artifact_check=pass");
+	ok = ok && require_file_token("rp_backend_exec", ";att=1;retry=none;ticks=3");
+	ok = ok && require_file_token("rp_backend_exec", "runner_case=retry-recovery;input=rp_retry_plan;artifact=rp_stage_state;result=passed;reason=recovered_align;input_check=pass;artifact_check=pass");
+	ok = ok && require_file_token("rp_backend_exec", ";att=2;retry=tool_output_missing;ticks=5");
+	ok = ok && require_file_token("rp_backend_exec", "runner_case=agentos-context;input=rp_wfio;artifact=agent_context;result=planned;reason=kernel_context;input_check=planned;artifact_check=planned;retry=kernel_required");
+	ok = ok && require_file_token("rp_backend_exec", "runner_case=agentos-fsmeta;input=rp_wfio;artifact=agent_file_meta;result=planned;reason=kernel_metadata;input_check=planned;artifact_check=planned;retry=kernel_required");
 	ok = ok && require_file_token("rp_backend_exec", "runner_observed=rp_stage_state,rp_retry_plan,rp_artifact_manifest,rp_llmeval");
+	ok = ok && require_file_token("rp_backend_exec", "runner_detail_fields=input_check,artifact_check,att,retry,ticks");
+	ok = ok && require_file_token("rp_backend_exec", "runner_detail_checks=16");
+	ok = ok && require_file_token("rp_backend_exec", "runner_verified_inputs=4");
 	ok = ok && require_file_token("rp_backend_exec", "runner_passed=2");
 	ok = ok && require_file_token("rp_backend_exec", "runner_planned=2");
 	ok = ok && require_file_token("rp_study", "workflow_portability=rp_wfio");
 	ok = ok && require_file_token("rp_study", "migration_status=baseline_ready_agentos_planned");
-	ok = ok && require_file_token("rp_study", "study_metric=plain_ucore;file_scans=128;context_trusted=0;rebuild_steps=6;result=passed");
-	ok = ok && require_file_token("rp_study", "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;result=planned");
+	ok = ok && require_file_token("rp_study", "study_metric=plain_ucore;file_scans=128;context_trusted=0;rebuild_steps=6;detail_checks=4;result=passed");
+	ok = ok && require_file_token("rp_study", "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;detail_checks=kernel;result=planned");
+	ok = ok && require_file_token("rp_study", "metrics=8");
 	ok = ok && require_file_token("rp_study", "study_handoff=rp_backend_exec->rp_agentcmp;status=ready");
 	ok = ok && require_file_token("rp_consistency", "checks=120");
 	ok = ok && require_file_token("rp_consistency", "artifact_provenance=3");
@@ -1379,7 +1389,7 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "review_pack_actions=3");
 	ok = ok && require_file_token("rp_agentcmp", "review_pack_bridges=4");
 	ok = ok && require_file_token("rp_agentcmp", "review_handoff_checks=12;review_sections=8;review_gates=6");
-	ok = ok && require_file_token("rp_agentcmp", "test_cases=790");
+	ok = ok && require_file_token("rp_agentcmp", "test_cases=806");
 	ok = ok && require_file_token("rp_agentcmp", "llm_delivery_checks=16");
 	ok = ok && require_file_token("rp_agentcmp", "llm_queue=3");
 	ok = ok && require_file_token("rp_agentcmp", "llm_packets=3");
@@ -1402,6 +1412,7 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "passed_cases=2");
 	ok = ok && require_file_token("rp_agentcmp", "planned_cases=2");
 	ok = ok && require_file_token("rp_agentcmp", "backend_runner_checks=12");
+	ok = ok && require_file_token("rp_agentcmp", "backend_runner_detail_checks=16");
 	ok = ok && require_file_token("rp_agentcmp", "runner_cases=4");
 	ok = ok && require_file_token("rp_agentcmp", "runner_passed=2");
 	ok = ok && require_file_token("rp_agentcmp", "runner_planned=2");
@@ -1519,7 +1530,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=790\n"
+			   "tests=806\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -1568,6 +1579,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=790 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=806 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
 	return 0;
 }

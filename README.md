@@ -126,7 +126,7 @@ It uses ordinary `fork`, `exec`, and `waitpid`. This provides a plain-kernel bas
 
 `rp_seed_orch` is the Host-action run entry. It runs the seeded program set used by the Host reader path. The action runner keeps the full captured Host action text in the host run package, writes a compact `rp_host_action_seed` file into the uCore image, and each native user program reads that ordinary file through the unchanged uCore file system. The seeded image omits the standalone `rp_test_suite` executable to stay within the upstream teaching file-system capacity; `rp_compare_plain` publishes the current test count in `rp_agentcmp` before it performs the final comparison checks.
 
-The Host Reader Compare page consumes `rp_backend_exec` and `rp_study` directly, so the visible page shows backend runner cases, their input files, generated artifacts, results, reasons, plain-uCore study metrics, planned Agent-OS metrics, and the backend scenario handoff status instead of only showing aggregate counts.
+The Host Reader Compare page consumes `rp_backend_exec` and `rp_study` directly, so the visible page shows backend runner cases, their input files, generated artifacts, content checks, attempts, retry reasons, results, plain-uCore study metrics, planned Agent-OS metrics, and the backend scenario handoff status instead of only showing aggregate counts.
 
 The role programs also exchange state through ordinary root-file-system files:
 
@@ -301,7 +301,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_review_pack`
 - `rp_agentcmp`
 
-The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 790-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the upstream teaching file-system inode limit.
+The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 806-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the upstream teaching file-system inode limit.
 
 Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_agentcmp` after all children exit, then prints `state_ok=1`.
 
@@ -435,7 +435,7 @@ It also verifies the workflow portability delivery path. It checks import count,
 
 The comparison step also checks that workflow portability and backend execution name the same execution plan, backend scenario, and compare profile. It verifies plain-uCore passed cases, planned AgentOS cases, and study records, then publishes `portability_backend_checks=12` in `rp_agentcmp`.
 
-The backend scenario now also writes compact case-runner evidence. It records four cases, the ordinary files read by the plain-uCore cases, the two planned AgentOS cases, and study metrics for plain file scans and future kernel-assisted execution, then publishes `backend_runner_checks=12` in `rp_agentcmp`.
+The backend scenario now also writes compact case-runner evidence. It records four cases, the ordinary files checked by the plain-uCore cases, attempt counts, retry reasons, the two planned AgentOS cases, and study metrics for plain file scans and future kernel-assisted execution, then publishes `backend_runner_checks=12` and `backend_runner_detail_checks=16` in `rp_agentcmp`.
 
 The action runner turns captured host actions into ordinary uCore state files for the next run:
 

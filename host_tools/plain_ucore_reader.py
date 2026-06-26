@@ -432,7 +432,18 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
             render_line_panel("Consistency Signals", check_rows),
             render_record_panel(
                 "Backend Runner Cases",
-                [("Case", "runner_case"), ("Input", "input"), ("Artifact", "artifact"), ("Result", "result"), ("Reason", "reason")],
+                [
+                    ("Case", "runner_case"),
+                    ("Input", "input"),
+                    ("Artifact", "artifact"),
+                    ("Result", "result"),
+                    ("Input Check", "input_check"),
+                    ("Artifact Check", "artifact_check"),
+                    ("Attempts", "att"),
+                    ("Retry", "retry"),
+                    ("Ticks", "ticks"),
+                    ("Reason", "reason"),
+                ],
                 state_records(state, "rp_backend_exec", "runner_case"),
             ),
             render_record_panel(

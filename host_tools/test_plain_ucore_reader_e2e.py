@@ -579,7 +579,7 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=790" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=806" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("tool_events=138" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=12" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -592,9 +592,19 @@ def main() -> int:
             assert any("passed_cases=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("planned_cases=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("backend_runner_checks=12" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("backend_runner_detail_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_cases=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_passed=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_planned=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            rp_backend_exec = read_json(base + "/api/state/rp_backend_exec")
+            assert any("runner_detail_checks=16" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_verified_inputs=4" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_case=plain-ucore" in line and "input_check=pass" in line and "artifact_check=pass" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_case=retry-recovery" in line and "att=2" in line and "retry=tool_output_missing" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_case=agentos-context" in line and "input_check=planned" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            rp_study = read_json(base + "/api/state/rp_study")
+            assert any("detail_checks=4" in line for line in rp_study["lines"]), rp_study
+            assert any("detail_checks=kernel" in line for line in rp_study["lines"]), rp_study
             assert any("review_dashboard=ready;sections=8;gates=6;plain_kernel=ordinary_files" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack=ready;evidence_items=10;actions=5;plain_kernel=ordinary_files" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_consistency = read_json(base + "/api/state/rp_consistency")
@@ -785,6 +795,9 @@ def main() -> int:
             assert "Backend Runner" in compare_html
             assert "Backend Runner Cases" in compare_html
             assert "retry-recovery" in compare_html
+            assert "Input Check" in compare_html
+            assert "tool_output_missing" in compare_html
+            assert "kernel_required" in compare_html
             assert "Backend Study Metrics" in compare_html
             assert "agentos_ucore" in compare_html
             assert "Backend Scenario Handoff" in compare_html
