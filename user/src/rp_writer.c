@@ -37,8 +37,8 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=writer;msg=5;status=packaged")) return 1;
-	if (!rp_append_file("rp_tool", "tool=writer.assemble_report;target=rp_report;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=writer.apply_revision;target=rp_revision;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=writer.assemble_report")) return 1;
+	if (!rp_append_file("rp_tool", "tool=writer.apply_revision")) return 1;
 	if (rp_host_seed_has("kind=revision_task")) {
 		if (!rp_append_file("rp_revision", "host_action_revision_task=created;status=ready;source=rp_host_action_seed")) return 1;
 		char targets[80];

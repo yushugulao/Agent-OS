@@ -60,10 +60,10 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=execobs;msg=17;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=execobs.build_plan;target=rp_execplan;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=execobs.check_workers;target=rp_worker;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=execobs.write_timeline;target=rp_timeline;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=execobs.package_observer;target=rp_execobs;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=execobs.build_plan")) return 1;
+	if (!rp_append_file("rp_tool", "tool=execobs.check_workers")) return 1;
+	if (!rp_append_file("rp_tool", "tool=execobs.write_timeline")) return 1;
+	if (!rp_append_file("rp_tool", "tool=execobs.package_observer")) return 1;
 	if (!rp_append_status("execplan=ready")) return 1;
 	if (!rp_append_status("worker=ready")) return 1;
 	if (!rp_append_status("timeline=ready")) return 1;

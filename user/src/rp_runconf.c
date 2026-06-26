@@ -53,10 +53,10 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=runconf;msg=18;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=runconf.write_params;target=rp_params;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=runconf.create_profiles;target=rp_runconf;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=runconf.validate_profiles;target=rp_configval;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=runconf.compare_profiles;target=rp_configdrift;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=runconf.write_params")) return 1;
+	if (!rp_append_file("rp_tool", "tool=runconf.create_profiles")) return 1;
+	if (!rp_append_file("rp_tool", "tool=runconf.validate_profiles")) return 1;
+	if (!rp_append_file("rp_tool", "tool=runconf.compare_profiles")) return 1;
 	if (!rp_append_status("params=ready")) return 1;
 	if (!rp_append_status("runconf=ready")) return 1;
 	if (!rp_append_status("configval=ready")) return 1;

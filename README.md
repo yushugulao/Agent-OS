@@ -131,7 +131,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_plan`
 - `rp_mail`
 - `rp_ack`
-- `rp_tool`
+- `rp_tool`, compact tool event names used for comparison and metrics
 - `rp_sched`
 - `rp_taskrec`
 - `rp_budget`
@@ -299,7 +299,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_review_pack`
 - `rp_agentcmp`
 
-The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 766-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the upstream teaching file-system inode limit.
+The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 778-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the upstream teaching file-system inode limit.
 
 Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_agentcmp` after all children exit, then prints `state_ok=1`.
 
@@ -430,6 +430,8 @@ The final comparison step now verifies the review handoff path after all user-sp
 The same final comparison step also verifies the LLM delivery path. It checks the ordinary-file queue, packets, matched responses, response file, quality record, packet guard, host-request manifest, package delivery entry, review dashboard LLM section, and workbench citation, then publishes `llm_delivery_checks=16` in `rp_agentcmp`.
 
 It also verifies the workflow portability delivery path. It checks import count, adapter count, migration steps, rehearsal cases, blocking items, package export fields, final migration decision, and Web bundle linkage, then publishes `workflow_portability_checks=14` in `rp_agentcmp`.
+
+The comparison step also checks that workflow portability and backend execution name the same execution plan, backend scenario, and compare profile. It verifies plain-uCore passed cases, planned AgentOS cases, and study records, then publishes `portability_backend_checks=12` in `rp_agentcmp`.
 
 The action runner turns captured host actions into ordinary uCore state files for the next run:
 

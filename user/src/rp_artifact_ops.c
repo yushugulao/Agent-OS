@@ -456,7 +456,7 @@ int main(void)
 		if (rp_host_seed_has("kind=artifact_derive") && !append_artifact_derive_action()) return 1;
 		if (rp_host_seed_has("kind=artifact_log") && !append_artifact_log_action()) return 1;
 		if (rp_host_seed_has("kind=artifact_chart") && !append_artifact_chart_action()) return 1;
-		if (!rp_append_file("rp_tool", "tool=artifact_ops.host_artifact_actions;target=rp_artifact;status=ok")) return 1;
+		if (!rp_append_file("rp_tool", "tool=artifact_ops.host_artifact_actions")) return 1;
 	}
 	if (rp_host_seed_count() > 0) {
 		if (rp_host_seed_has("kind=research_run")) {
@@ -558,13 +558,13 @@ int main(void)
 	}
 	if (!rp_append_file("rp_ack", "ack=artifact_ops;msg=artifact;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=research_request;msg=input;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_input;target=rp_input;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=artifact_ops.read_input;target=rp_input_fastq;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_dag;target=rp_stage_dag;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_log;target=rp_stage_log;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_artifact;target=rp_artifact;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_report;target=rp_report_text;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_chart;target=rp_chart_data;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_input")) return 1;
+	if (!rp_append_file("rp_tool", "tool=artifact_ops.read_input")) return 1;
+	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_dag")) return 1;
+	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_log")) return 1;
+	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_artifact")) return 1;
+	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_report")) return 1;
+	if (!rp_append_file("rp_tool", "tool=artifact_ops.write_chart")) return 1;
 	if (!rp_append_status("input=ready")) return 1;
 	if (!rp_append_status("request_form=ready")) return 1;
 	if (!rp_append_status("upload_files=ready")) return 1;

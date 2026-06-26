@@ -107,12 +107,12 @@ int main(void)
 	if (!rp_write_file("rp_ack", "")) return 1;
 	if (!rp_write_file("rp_tool", "")) return 1;
 	if (!rp_append_file("rp_ack", "ack=planner;msg=0;status=sent")) return 1;
-	if (!rp_append_file("rp_tool", "tool=planner.create_plan;target=rp_plan;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=planner.schedule_tasks;target=rp_sched;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=planner.write_taskrec;target=rp_taskrec;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=planner.assign_budget;target=rp_budget;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=planner.workflow_io;target=rp_wfio;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=planner.write_policy;target=rp_policy;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=planner.create_plan")) return 1;
+	if (!rp_append_file("rp_tool", "tool=planner.schedule_tasks")) return 1;
+	if (!rp_append_file("rp_tool", "tool=planner.write_taskrec")) return 1;
+	if (!rp_append_file("rp_tool", "tool=planner.assign_budget")) return 1;
+	if (!rp_append_file("rp_tool", "tool=planner.workflow_io")) return 1;
+	if (!rp_append_file("rp_tool", "tool=planner.write_policy")) return 1;
 	if (!rp_append_status("planner=planned")) return 1;
 	if (!rp_append_status("mail=ready")) return 1;
 	if (!rp_append_status("schedule=ready")) return 1;

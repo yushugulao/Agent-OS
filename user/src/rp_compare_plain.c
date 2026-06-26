@@ -759,6 +759,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_wfio", "adapter_specs=6");
 	ok = ok && rp_file_contains("rp_wfio", "migration_steps=9");
 	ok = ok && rp_file_contains("rp_wfio", "cases=4");
+	ok = ok && rp_file_contains("rp_wfio", "execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare");
+	ok = ok && rp_file_contains("rp_wfio", "backend_scenario=backend-scenario:RUN-042:agentcompare");
+	ok = ok && rp_file_contains("rp_wfio", "compare_profile=compare-profile:RUN-042:migration");
+	ok = ok && rp_file_contains("rp_wfio", "backend_binding=workflow-portability->rp_backend_exec");
 	ok = ok && rp_file_contains("rp_wfio", "decision=ready_for_agentos");
 	ok = ok && rp_file_contains("rp_wfio", "package=workflow-portability");
 	ok = ok && rp_file_contains("rp_review2", "rounds=2");
@@ -1153,7 +1157,7 @@ int main(void)
 		if (!rp_append_file("rp_ack", "ack=test_suite;msg=test;status=passed")) return 1;
 	}
 	if (!optional_file_contains("rp_tool", "tool=test_suite.check_compare")) {
-		if (!rp_append_file("rp_tool", "tool=test_suite.check_compare;target=rp_compare_plain;status=ok")) return 1;
+		if (!rp_append_file("rp_tool", "tool=test_suite.check_compare")) return 1;
 	}
 	ok = ok && rp_file_contains("rp_ack", "ack=consistency;msg=22;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=consistency.check_backend");
@@ -1256,6 +1260,21 @@ int main(void)
 	ok = ok && rp_file_contains("rp_wfio", "decision=ready_for_agentos");
 	ok = ok && rp_file_contains("rp_wfio", "package=workflow-portability");
 	ok = ok && rp_file_contains("rp_web_bundle", "workflow_portability=rp_wfio");
+	int backend_cases = rp_get_int_value("rp_backend", "cases=");
+	int backend_exec_passed = rp_get_int_value("rp_backend_exec", "passed_cases=");
+	int backend_exec_planned = rp_get_int_value("rp_backend_exec", "planned_cases=");
+	ok = ok && require_equal("backend_cases", backend_cases, 4);
+	ok = ok && require_equal("backend_exec_passed", backend_exec_passed, 2);
+	ok = ok && require_equal("backend_exec_planned", backend_exec_planned, 2);
+	ok = ok && rp_file_contains("rp_backend", "workflow_portability=rp_wfio");
+	ok = ok && rp_file_contains("rp_backend", "execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare");
+	ok = ok && rp_file_contains("rp_backend", "compare_profile=compare-profile:RUN-042:migration");
+	ok = ok && rp_file_contains("rp_backend_exec", "workflow_portability=rp_wfio");
+	ok = ok && rp_file_contains("rp_backend_exec", "scenario=backend-scenario:RUN-042:agentcompare");
+	ok = ok && rp_file_contains("rp_backend_exec", "case=plain-ucore;source=rp_wfio;status=passed");
+	ok = ok && rp_file_contains("rp_backend_exec", "case=agentos-ucore;source=rp_wfio;status=planned");
+	ok = ok && rp_file_contains("rp_study", "workflow_portability=rp_wfio");
+	ok = ok && rp_file_contains("rp_study", "migration_status=baseline_ready_agentos_planned");
 	if (!ok) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
@@ -1263,10 +1282,11 @@ int main(void)
 		printf("rp_compare_plain: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		return 1;
 	}
-	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=170;message_acks=44;tool_events=138;action_state_records=12;test_cases=766;action_side_effect_records=16;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=170;message_acks=44;tool_events=138;action_state_records=12;test_cases=778;action_side_effect_records=16;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "review_handoff_checks=12;review_sections=8;review_gates=6;review_decisions=3;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "llm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "workflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "portability_backend_checks=12;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=2;planned_cases=2;status=ready")) return 1;
 	if (rp_host_seed_has("kind=research_run")) {
 		if (!rp_append_file("rp_agentcmp", "host_action_research_verified=1")) return 1;
 	}

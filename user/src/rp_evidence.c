@@ -108,10 +108,10 @@ int main(void)
 		if (!rp_append_host_action_line("rp_knowledge", "host_action_protocol_outcome=", value)) return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=evidence;msg=8;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=evidence.build_path;target=rp_evidence;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=evidence.map_claims;target=rp_claimrec;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=evidence.trace_paths;target=rp_provpath;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=evidence.synthesize_knowledge;target=rp_knowledge;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=evidence.build_path")) return 1;
+	if (!rp_append_file("rp_tool", "tool=evidence.map_claims")) return 1;
+	if (!rp_append_file("rp_tool", "tool=evidence.trace_paths")) return 1;
+	if (!rp_append_file("rp_tool", "tool=evidence.synthesize_knowledge")) return 1;
 	if (!rp_append_status("evidence=ready")) return 1;
 	if (!rp_append_status("claimrec=ready")) return 1;
 	if (!rp_append_status("provpath=ready")) return 1;

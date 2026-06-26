@@ -55,10 +55,10 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=review_dashboard;msg=reviewdash;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=review_dashboard.aggregate;target=rp_review_dashboard;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=review_dashboard.aggregate")) return 1;
 	if (!rp_append_file("rp_agentcmp", "review_dashboard=ready;sections=8;gates=6;plain_kernel=ordinary_files")) return 1;
 	if (!rp_append_file("rp_ack", "ack=review_pack;msg=pack;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=review_pack.assemble;target=rp_review_pack;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=review_pack.assemble")) return 1;
 	if (!rp_append_file("rp_agentcmp", "review_pack=ready;evidence_items=10;actions=5;plain_kernel=ordinary_files")) return 1;
 	printf("rp_review_dashboard: sections=8 gates=6 review_pack=host-materialized status=ready\n");
 	return 0;

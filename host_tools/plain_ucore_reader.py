@@ -274,6 +274,7 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Bundle", metric_value(state, [("rp_api_compare", "host_action_bundle")]), "rp_api_compare"),
         ("Compare Profile", metric_value(state, [("rp_api_compare", "host_action_compare_profile")]), "rp_api_compare"),
         ("Portability Checks", metric_value(state, [("rp_agentcmp", "workflow_portability_checks")]), "rp_agentcmp"),
+        ("Backend Checks", metric_value(state, [("rp_agentcmp", "portability_backend_checks")]), "rp_agentcmp"),
     ]
     llm_items = [
         ("Relay", metric_value(state, [("rp_llm_resp", "host_relay_process"), ("rp_relay", "mode")]), "rp_llm_resp"),
@@ -333,6 +334,7 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Rebuild Steps", metric_value(state, [("rp_api_compare", "rebuild_steps"), ("rp_ui_compare", "pain_rebuild_steps")]), "rp_api_compare"),
         ("Test Cases", metric_value(state, [("rp_agentcmp", "test_cases"), ("rp_tests", "tests")]), "rp_agentcmp"),
         ("Portability Checks", metric_value(state, [("rp_agentcmp", "workflow_portability_checks")]), "rp_agentcmp"),
+        ("Backend Checks", metric_value(state, [("rp_agentcmp", "portability_backend_checks")]), "rp_agentcmp"),
     ]
     llm_items = [
         ("Requests", metric_value(state, [("rp_llm_resp", "requests"), ("rp_llmq", "queued")]), "rp_llm_resp"),
@@ -411,6 +413,7 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
             ("Data Pipeline Files", metric_value(state, [("rp_api_compare", "data_pipeline_files")])),
             ("Workflow Runner Files", metric_value(state, [("rp_api_compare", "workflow_runner_files")])),
             ("Portability Checks", metric_value(state, [("rp_agentcmp", "workflow_portability_checks")])),
+            ("Backend Checks", metric_value(state, [("rp_agentcmp", "portability_backend_checks")])),
             ("Reader Contract", metric_value(state, [("rp_agentcmp", "reader_contract")])),
         ]
         check_rows = [
@@ -694,6 +697,7 @@ def render_overview(
             ("Plain Kernel", metric_value(state, [("rp_agentcmp", "plain_kernel"), ("rp_api_compare", "plain_kernel")]), "rp_agentcmp"),
             ("Checks", metric_value(state, [("rp_consistency", "checks")]), "rp_consistency"),
             ("Portability Checks", metric_value(state, [("rp_agentcmp", "workflow_portability_checks")]), "rp_agentcmp"),
+            ("Backend Checks", metric_value(state, [("rp_agentcmp", "portability_backend_checks")]), "rp_agentcmp"),
             ("QEMU", metric_value(state, [("rp_host_run_result", "qemu_orch_passed")]), "rp_host_run_result"),
         ],
         "artifacts.html": [

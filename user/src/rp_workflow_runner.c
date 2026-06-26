@@ -679,12 +679,12 @@ int main(void)
 	if (!rp_append_file("rp_runner", "derived_metrics=rp_artifact:rp_metrics_json,rp_artifact:rp_gene_counts_csv")) return 1;
 	if (!rp_append_file("rp_ack", "ack=workflow_runner;msg=runner;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=custom_research;msg=runner;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=workflow_runner.read_dag;target=rp_stage_dag;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=workflow_runner.read_input;target=rp_input_fastq;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=workflow_runner.write_stage_state;target=rp_stage_state;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=workflow_runner.write_cache_index;target=rp_cache_index;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=workflow_runner.write_retry_plan;target=rp_retry_plan;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=workflow_runner.write_manifest;target=rp_artifact_manifest;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=workflow_runner.read_dag")) return 1;
+	if (!rp_append_file("rp_tool", "tool=workflow_runner.read_input")) return 1;
+	if (!rp_append_file("rp_tool", "tool=workflow_runner.write_stage_state")) return 1;
+	if (!rp_append_file("rp_tool", "tool=workflow_runner.write_cache_index")) return 1;
+	if (!rp_append_file("rp_tool", "tool=workflow_runner.write_retry_plan")) return 1;
+	if (!rp_append_file("rp_tool", "tool=workflow_runner.write_manifest")) return 1;
 	if (!rp_append_status("workflow_runner=ready")) return 1;
 	if (!rp_append_status("stage_state=ready")) return 1;
 	if (!rp_append_status("cache_index=ready")) return 1;

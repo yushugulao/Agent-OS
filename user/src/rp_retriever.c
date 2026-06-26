@@ -60,7 +60,7 @@ int main(void)
 		if (!rp_append_host_action_line("rp_lit", "host_action_protocol_question=", value)) return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=retriever;msg=1;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=retriever.search_literature;target=rp_lit;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=retriever.search_literature")) return 1;
 	if (!rp_append_status("retriever=ready")) return 1;
 	printf("rp_retriever: literature=3 evidence_links=5 status=ready\n");
 	return 0;

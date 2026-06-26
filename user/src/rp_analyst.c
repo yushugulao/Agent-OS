@@ -58,11 +58,11 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=analyst;msg=2;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=analyst.profile_dataset;target=rp_datadic;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=analyst.write_dataprof;target=rp_dataprof;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=analyst.replay_notebook;target=rp_compute;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=analyst.record_figures;target=rp_figrec;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=analyst.classify_failure;target=rp_fail;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=analyst.profile_dataset")) return 1;
+	if (!rp_append_file("rp_tool", "tool=analyst.write_dataprof")) return 1;
+	if (!rp_append_file("rp_tool", "tool=analyst.replay_notebook")) return 1;
+	if (!rp_append_file("rp_tool", "tool=analyst.record_figures")) return 1;
+	if (!rp_append_file("rp_tool", "tool=analyst.classify_failure")) return 1;
 	if (!rp_append_status("analyst=ready")) return 1;
 	if (!rp_append_status("datadict=ready")) return 1;
 	if (!rp_append_status("dataprof=ready")) return 1;

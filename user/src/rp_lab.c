@@ -85,9 +85,9 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=lab;msg=4;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=lab.prepare_samples;target=rp_samples;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=lab.record_trials;target=rp_trialrec;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=lab.verify_training;target=rp_training;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=lab.prepare_samples")) return 1;
+	if (!rp_append_file("rp_tool", "tool=lab.record_trials")) return 1;
+	if (!rp_append_file("rp_tool", "tool=lab.verify_training")) return 1;
 	if (!rp_append_status("samples=ready")) return 1;
 	if (!rp_append_status("quality=ready")) return 1;
 	if (!rp_append_status("protocol=ready")) return 1;

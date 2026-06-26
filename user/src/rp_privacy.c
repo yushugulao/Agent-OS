@@ -50,10 +50,10 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=privacy;msg=10;status=accepted")) return 1;
-	if (!rp_append_file("rp_tool", "tool=privacy.review_packet;target=rp_privacy;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=privacy.check_llm_queue;target=rp_llmq;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=privacy.check_relay_protocol;target=rp_llm_guard;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=privacy.write_compliance;target=rp_compliance;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=privacy.review_packet")) return 1;
+	if (!rp_append_file("rp_tool", "tool=privacy.check_llm_queue")) return 1;
+	if (!rp_append_file("rp_tool", "tool=privacy.check_relay_protocol")) return 1;
+	if (!rp_append_file("rp_tool", "tool=privacy.write_compliance")) return 1;
 	if (!rp_append_status("privacy=ready")) return 1;
 	if (!rp_append_status("compliance=ready")) return 1;
 	printf("rp_privacy: checked=13 packets=3 redactions=0 compliance=accepted status=ready\n");

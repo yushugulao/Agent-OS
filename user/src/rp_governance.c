@@ -31,9 +31,9 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=governance;msg=15;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=governance.register_risk;target=rp_risk;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=governance.verify_capa;target=rp_capa;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=governance.check_policy;target=rp_policy;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=governance.register_risk")) return 1;
+	if (!rp_append_file("rp_tool", "tool=governance.verify_capa")) return 1;
+	if (!rp_append_file("rp_tool", "tool=governance.check_policy")) return 1;
 	if (!rp_append_status("governance=ready")) return 1;
 	if (!rp_append_status("risk=ready")) return 1;
 	if (!rp_append_status("capa=ready")) return 1;

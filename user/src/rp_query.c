@@ -51,8 +51,8 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
-	if (!rp_append_file("rp_tool", "tool=query.rank_tasks;target=rp_rank;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=query.build_runview;target=rp_runview;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=query.rank_tasks")) return 1;
+	if (!rp_append_file("rp_tool", "tool=query.build_runview")) return 1;
 	if (!rp_append_status("query=ready")) return 1;
 	if (!rp_append_status("rank=ready")) return 1;
 	if (!rp_append_status("runview=ready")) return 1;

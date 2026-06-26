@@ -579,7 +579,7 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=766" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=778" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("tool_events=138" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=12" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -587,6 +587,10 @@ def main() -> int:
             assert any("llm_review_links=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("workflow_portability_checks=14" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("portability_package=workflow-portability" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("portability_backend_checks=12" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("backend_scenario=backend-scenario:RUN-042:agentcompare" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("passed_cases=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("planned_cases=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_dashboard=ready;sections=8;gates=6;plain_kernel=ordinary_files" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack=ready;evidence_items=10;actions=5;plain_kernel=ordinary_files" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_consistency = read_json(base + "/api/state/rp_consistency")
@@ -773,6 +777,7 @@ def main() -> int:
             assert "File Scans" in compare_html
             assert "Rebuild Steps" in compare_html
             assert "Portability Checks" in compare_html
+            assert "Backend Checks" in compare_html
             assert "pb" in compare_html
             actions_html = read_text(base + "/actions.html")
             assert "Batch Actions" in actions_html

@@ -21,8 +21,8 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=repair;msg=6;status=recovered")) return 1;
-	if (!rp_append_file("rp_tool", "tool=repair.rerun_stage;target=rp_fix;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=repair.record_retry;target=rp_retrylog;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=repair.rerun_stage")) return 1;
+	if (!rp_append_file("rp_tool", "tool=repair.record_retry")) return 1;
 	if (!rp_append_status("repair=recovered")) return 1;
 	if (!rp_append_status("retry=ready")) return 1;
 	printf("rp_repair: failed_stage=align action=minimal_rerun attempts=2 status=recovered\n");

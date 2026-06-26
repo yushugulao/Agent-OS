@@ -149,11 +149,11 @@ int main(void)
 		if (!rp_append_host_action_line("rp_llm_fallback", "host_llm_fallback_status=", fallback_status)) return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=llm_relay;msg=relay;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=llm_relay.write_packets;target=rp_llm_packets;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=llm_relay.write_routes;target=rp_llm_routes;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=llm_relay.write_guard;target=rp_llm_guard;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=llm_relay.write_hostreq;target=rp_llm_hostreq;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=llm_relay.write_fallback;target=rp_llm_fallback;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=llm_relay.write_packets")) return 1;
+	if (!rp_append_file("rp_tool", "tool=llm_relay.write_routes")) return 1;
+	if (!rp_append_file("rp_tool", "tool=llm_relay.write_guard")) return 1;
+	if (!rp_append_file("rp_tool", "tool=llm_relay.write_hostreq")) return 1;
+	if (!rp_append_file("rp_tool", "tool=llm_relay.write_fallback")) return 1;
 	if (!rp_append_status("llmrelay=ready")) return 1;
 	if (!rp_append_status("relay_packets=ready")) return 1;
 	if (!rp_append_status("relay_routes=ready")) return 1;

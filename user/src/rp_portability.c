@@ -46,6 +46,7 @@ int main(void)
 	if (!rp_append_file("rp_wfio", "source_formats=5")) return 1;
 	if (!rp_append_file("rp_wfio", "rehearsal_cases=4")) return 1;
 	if (!rp_append_file("rp_wfio", "same_run_id=RUN-042")) return 1;
+	if (!rp_append_file("rp_wfio", "execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;backend_scenario=backend-scenario:RUN-042:agentcompare;backend_binding=workflow-portability->rp_backend_exec;backend_cases=4;executable_cases=2;migration_execution=workflow-migration-execution-plan:RUN-042:agentcompare")) return 1;
 	if (!rp_append_file("rp_wfio", "blocking_items=0")) return 1;
 	if (!rp_append_file("rp_wfio", "decision=ready_for_agentos")) return 1;
 	if (!rp_append_file("rp_wfio", "package=workflow-portability")) return 1;
@@ -243,7 +244,7 @@ int main(void)
 		}
 	}
 	if (!rp_append_file("rp_ack", "ack=portability;msg=wf;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=portability.plan_migration;target=rp_wfio;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=portability.plan_migration")) return 1;
 	if (!rp_append_status("portability=ready")) return 1;
 	if (!rp_append_status("adapters=ready")) return 1;
 	if (!rp_append_status("migration=ready")) return 1;

@@ -34,9 +34,9 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=reviewer;msg=3;status=accepted")) return 1;
-	if (!rp_append_file("rp_tool", "tool=reviewer.check_claims;target=rp_review;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=reviewer.multi_round;target=rp_review2;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=reviewer.write_action_items;target=rp_review2;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=reviewer.check_claims")) return 1;
+	if (!rp_append_file("rp_tool", "tool=reviewer.multi_round")) return 1;
+	if (!rp_append_file("rp_tool", "tool=reviewer.write_action_items")) return 1;
 	if (rp_host_seed_has("kind=human_review")) {
 		char reviewer[48];
 		char decision[48];

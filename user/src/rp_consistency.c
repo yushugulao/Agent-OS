@@ -382,10 +382,10 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=consistency;msg=22;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=consistency.check_tasks;target=rp_consistency;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=consistency.check_llm;target=rp_consistency;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=consistency.check_backend;target=rp_consistency;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline;target=rp_consistency;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=consistency.check_tasks")) return 1;
+	if (!rp_append_file("rp_tool", "tool=consistency.check_llm")) return 1;
+	if (!rp_append_file("rp_tool", "tool=consistency.check_backend")) return 1;
+	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
 	printf("rp_consistency: checks=120 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
 	return 0;

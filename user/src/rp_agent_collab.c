@@ -78,11 +78,11 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=agent_collab;msg=agents;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=agent_collab.write_agents;target=rp_agents;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=agent_collab.write_decisions;target=rp_decisions;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=agent_collab.write_handoff;target=rp_handoff;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=agent_collab.write_deliberation;target=rp_deliberation;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=agent_collab.write_run;target=rp_agent_run;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=agent_collab.write_agents")) return 1;
+	if (!rp_append_file("rp_tool", "tool=agent_collab.write_decisions")) return 1;
+	if (!rp_append_file("rp_tool", "tool=agent_collab.write_handoff")) return 1;
+	if (!rp_append_file("rp_tool", "tool=agent_collab.write_deliberation")) return 1;
+	if (!rp_append_file("rp_tool", "tool=agent_collab.write_run")) return 1;
 	if (!rp_append_status("agents=ready")) return 1;
 	if (!rp_append_status("decisions=ready")) return 1;
 	if (!rp_append_status("handoff=ready")) return 1;

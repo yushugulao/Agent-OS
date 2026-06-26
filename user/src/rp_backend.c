@@ -9,10 +9,14 @@ int main(void)
 	ok = ok && rp_file_contains("rp_invocation", "status=recovered");
 	ok = ok && rp_file_contains("rp_completion", "status=ready");
 	ok = ok && rp_file_contains("rp_execobs", "observer=ready");
+	ok = ok && rp_file_contains("rp_wfio", "execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare");
+	ok = ok && rp_file_contains("rp_wfio", "backend_scenario=backend-scenario:RUN-042:agentcompare");
+	ok = ok && rp_file_contains("rp_wfio", "compare_profile=compare-profile:RUN-042:migration");
 	ok = ok && rp_file_contains("rp_mail", "to=backend");
 	if (!ok) return 1;
 	if (!rp_write_file("rp_backend",
 			   "scenario=backend-scenario:RUN-042:agentcompare\n"
+			   "workflow_portability=rp_wfio;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;binding=workflow-migration-binding:RUN-042:plain-ucore\n"
 			   "cases=4\n"
 			   "executable=2\n"
 			   "planned=2\n"
@@ -23,6 +27,7 @@ int main(void)
 	}
 	if (!rp_write_file("rp_backend_exec",
 			   "executions=1\n"
+			   "workflow_portability=rp_wfio;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;case=plain-ucore;source=rp_wfio;status=passed;case=agentos-ucore;source=rp_wfio;status=planned;portability_rehearsal_cases=4;portability_backend_passed=2\n"
 			   "passed_cases=2\n"
 			   "planned_cases=2\n"
 			   "indexed_candidate=ready\n"
@@ -40,6 +45,7 @@ int main(void)
 	}
 	if (!rp_write_file("rp_study",
 			   "study=same-workflow-backend-study\n"
+			   "workflow_portability=rp_wfio;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;migration_status=baseline_ready_agentos_planned\n"
 			   "arms=2\n"
 			   "metrics=6\n"
 			   "plain_kernel=recorded\n"
@@ -49,10 +55,10 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=backend;msg=21;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=backend.create_scenario;target=rp_backend;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=backend.record_execution;target=rp_backend_exec;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=backend.export_scenario;target=rp_backend_export;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=backend.write_study;target=rp_study;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=backend.create_scenario")) return 1;
+	if (!rp_append_file("rp_tool", "tool=backend.record_execution")) return 1;
+	if (!rp_append_file("rp_tool", "tool=backend.export_scenario")) return 1;
+	if (!rp_append_file("rp_tool", "tool=backend.write_study")) return 1;
 	if (!rp_append_status("backend=ready")) return 1;
 	if (!rp_append_status("backend_exec=ready")) return 1;
 	if (!rp_append_status("backend_export=ready")) return 1;

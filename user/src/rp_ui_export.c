@@ -233,11 +233,11 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=ui_export;msg=ui;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=ui_export.write_home;target=rp_ui_home;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=ui_export.write_run;target=rp_ui_run;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=ui_export.write_agent;target=rp_ui_agent;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=ui_export.write_evidence;target=rp_ui_evidence;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=ui_export.write_compare;target=rp_ui_compare;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=ui_export.write_home")) return 1;
+	if (!rp_append_file("rp_tool", "tool=ui_export.write_run")) return 1;
+	if (!rp_append_file("rp_tool", "tool=ui_export.write_agent")) return 1;
+	if (!rp_append_file("rp_tool", "tool=ui_export.write_evidence")) return 1;
+	if (!rp_append_file("rp_tool", "tool=ui_export.write_compare")) return 1;
 	if (!rp_append_status("ui_home=ready")) return 1;
 	if (!rp_append_status("ui_run=ready")) return 1;
 	if (!rp_append_status("ui_agent=ready")) return 1;

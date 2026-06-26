@@ -34,7 +34,7 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=auditor;msg=7;status=passed")) return 1;
-	if (!rp_append_file("rp_tool", "tool=auditor.verify_provenance;target=rp_audit;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=auditor.verify_provenance")) return 1;
 	if (!rp_append_status("auditor=passed")) return 1;
 	printf("rp_auditor: provenance=verified release=ready package=ready status=passed\n");
 	return 0;

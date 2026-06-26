@@ -51,10 +51,10 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=invoke;msg=19;status=recovered")) return 1;
-	if (!rp_append_file("rp_tool", "tool=invoke.create_invocation;target=rp_invocation;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=invoke.sync_steps;target=rp_steps;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=invoke.record_attempts;target=rp_attempts;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=invoke.export_invocation;target=rp_invoke_export;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=invoke.create_invocation")) return 1;
+	if (!rp_append_file("rp_tool", "tool=invoke.sync_steps")) return 1;
+	if (!rp_append_file("rp_tool", "tool=invoke.record_attempts")) return 1;
+	if (!rp_append_file("rp_tool", "tool=invoke.export_invocation")) return 1;
 	if (!rp_append_status("invocation=recovered")) return 1;
 	if (!rp_append_status("steps=ready")) return 1;
 	if (!rp_append_status("attempts=ready")) return 1;

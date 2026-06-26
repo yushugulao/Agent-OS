@@ -45,9 +45,9 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=completion;msg=20;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=completion.process_event;target=rp_completion;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=completion.execute_hooks;target=rp_actions;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=completion.export_event;target=rp_complete_export;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=completion.process_event")) return 1;
+	if (!rp_append_file("rp_tool", "tool=completion.execute_hooks")) return 1;
+	if (!rp_append_file("rp_tool", "tool=completion.export_event")) return 1;
 	if (!rp_append_status("hooks=ready")) return 1;
 	if (!rp_append_status("completion=ready")) return 1;
 	if (!rp_append_status("actions=ready")) return 1;

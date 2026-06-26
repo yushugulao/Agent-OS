@@ -363,8 +363,8 @@ int main(void)
 		if (!rp_append_file("rp_agentcmp", "host_action_export_requested=1")) return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=metrics;msg=14;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=metrics.measure_plain;target=rp_agentcmp;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=metrics.write_health;target=rp_health;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=metrics.measure_plain")) return 1;
+	if (!rp_append_file("rp_tool", "tool=metrics.write_health")) return 1;
 	if (!rp_append_status("telemetry=ready")) return 1;
 	if (!rp_append_status("agentcmp=ready")) return 1;
 	if (!rp_append_status("health=ready")) return 1;

@@ -64,8 +64,8 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=dossier;msg=13;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=dossier.prepare_material;target=rp_dossier;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=dossier.prepare_submission;target=rp_submit;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=dossier.prepare_material")) return 1;
+	if (!rp_append_file("rp_tool", "tool=dossier.prepare_submission")) return 1;
 	if (!rp_append_status("dossier=ready")) return 1;
 	if (!rp_append_status("reviewops=ready")) return 1;
 	if (!rp_append_status("submit=ready")) return 1;

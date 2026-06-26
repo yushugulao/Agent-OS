@@ -882,6 +882,11 @@ int main(void)
 	ok = ok && require_file_token("rp_wfio", "manual_review_cases=1");
 	ok = ok && require_file_token("rp_wfio", "adapter_reports=6");
 	ok = ok && require_file_token("rp_wfio", "blocking_items=0");
+	ok = ok && require_file_token("rp_wfio", "execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare");
+	ok = ok && require_file_token("rp_wfio", "compare_profile=compare-profile:RUN-042:migration");
+	ok = ok && require_file_token("rp_wfio", "backend_scenario=backend-scenario:RUN-042:agentcompare");
+	ok = ok && require_file_token("rp_wfio", "backend_binding=workflow-portability->rp_backend_exec");
+	ok = ok && require_file_token("rp_wfio", "migration_execution=workflow-migration-execution-plan:RUN-042:agentcompare");
 	ok = ok && require_file_token("rp_wfio", "decision=ready_for_agentos");
 	ok = ok && require_file_token("rp_wfio", "package=workflow-portability");
 
@@ -994,6 +999,16 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "dynamic_submissions=4");
 	ok = ok && require_file_token("rp_agentcmp", "host_ui_events=10");
 	ok = ok && require_file_token("rp_backend", "cases=4");
+	ok = ok && require_file_token("rp_backend", "workflow_portability=rp_wfio");
+	ok = ok && require_file_token("rp_backend", "execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare");
+	ok = ok && require_file_token("rp_backend", "compare_profile=compare-profile:RUN-042:migration");
+	ok = ok && require_file_token("rp_backend_exec", "workflow_portability=rp_wfio");
+	ok = ok && require_file_token("rp_backend_exec", "scenario=backend-scenario:RUN-042:agentcompare");
+	ok = ok && require_file_token("rp_backend_exec", "case=plain-ucore;source=rp_wfio;status=passed");
+	ok = ok && require_file_token("rp_backend_exec", "case=agentos-ucore;source=rp_wfio;status=planned");
+	ok = ok && require_file_token("rp_backend_exec", "portability_rehearsal_cases=4");
+	ok = ok && require_file_token("rp_study", "workflow_portability=rp_wfio");
+	ok = ok && require_file_token("rp_study", "migration_status=baseline_ready_agentos_planned");
 	ok = ok && require_file_token("rp_consistency", "checks=120");
 	ok = ok && require_file_token("rp_consistency", "artifact_provenance=3");
 	ok = ok && require_file_token("rp_consistency", "artifact_dossier_checks=4");
@@ -1352,7 +1367,7 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "review_pack_actions=3");
 	ok = ok && require_file_token("rp_agentcmp", "review_pack_bridges=4");
 	ok = ok && require_file_token("rp_agentcmp", "review_handoff_checks=12;review_sections=8;review_gates=6");
-	ok = ok && require_file_token("rp_agentcmp", "test_cases=766");
+	ok = ok && require_file_token("rp_agentcmp", "test_cases=778");
 	ok = ok && require_file_token("rp_agentcmp", "llm_delivery_checks=16");
 	ok = ok && require_file_token("rp_agentcmp", "llm_queue=3");
 	ok = ok && require_file_token("rp_agentcmp", "llm_packets=3");
@@ -1369,6 +1384,11 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "blocking_items=0");
 	ok = ok && require_file_token("rp_agentcmp", "portability_package=workflow-portability");
 	ok = ok && require_file_token("rp_agentcmp", "workflow_portability_checks=14;portability_imports=5;adapter_specs=6");
+	ok = ok && require_file_token("rp_agentcmp", "portability_backend_checks=12");
+	ok = ok && require_file_token("rp_agentcmp", "backend_scenario=backend-scenario:RUN-042:agentcompare");
+	ok = ok && require_file_token("rp_agentcmp", "compare_profile=compare-profile:RUN-042:migration");
+	ok = ok && require_file_token("rp_agentcmp", "passed_cases=2");
+	ok = ok && require_file_token("rp_agentcmp", "planned_cases=2");
 	ok = ok && require_file_token("rp_package", "llm_roundtrip=rp_llmq,rp_llm_packets,rp_llm_resp");
 	ok = ok && require_file_token("rp_package", "delivery_file=llm_trace;path=rp_llm_packets;required=0;exists=1");
 	ok = ok && require_file_token("rp_review_dashboard", "gate=llm_packet_guard;status=pass;source=rp_llm_guard");
@@ -1483,7 +1503,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=766\n"
+			   "tests=778\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -1532,6 +1552,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=766 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=778 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
 	return 0;
 }

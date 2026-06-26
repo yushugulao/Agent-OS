@@ -336,23 +336,23 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=package;msg=11;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.build_artifacts;target=rp_package;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.version_data;target=rp_dataver;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.build_repro;target=rp_repro;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_llm_eval;target=rp_llmeval;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_llm_relay_protocol;target=rp_llm_packets;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_evidence_path;target=rp_provpath;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_data_records;target=rp_dataprof;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_execobs;target=rp_execobs;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_run_config;target=rp_runconf;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_invocation;target=rp_invocation;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_completion;target=rp_completion;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_runner_artifacts;target=rp_runner;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_workflow_runner;target=rp_stage_state;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_data_pipeline;target=rp_dataset_collection;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_agent_collab;target=rp_agent_run;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_human_review;target=rp_package;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=package.attach_revision_task;target=rp_runner;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.build_artifacts")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.version_data")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.build_repro")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_llm_eval")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_llm_relay_protocol")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_evidence_path")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_data_records")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_execobs")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_run_config")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_invocation")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_completion")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_runner_artifacts")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_workflow_runner")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_data_pipeline")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_agent_collab")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_human_review")) return 1;
+	if (!rp_append_file("rp_tool", "tool=package.attach_revision_task")) return 1;
 	if (rp_host_seed_has("kind=bundle_export") ||
 	    rp_host_seed_has("kind=research_export") ||
 	    rp_host_seed_has("kind=delivery")) {

@@ -36,9 +36,9 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=delta;msg=16;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=delta.write_diff;target=rp_diff;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=delta.review_release_delta;target=rp_delta;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=delta.attach_repro_risk;target=rp_delta;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=delta.write_diff")) return 1;
+	if (!rp_append_file("rp_tool", "tool=delta.review_release_delta")) return 1;
+	if (!rp_append_file("rp_tool", "tool=delta.attach_repro_risk")) return 1;
 	if (!rp_append_status("diff=ready")) return 1;
 	if (!rp_append_status("delta=ready")) return 1;
 	printf("rp_delta: items=20 reviews=1 decision=accepted status=ready\n");

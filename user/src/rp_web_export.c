@@ -1326,16 +1326,16 @@ int main(void)
 
 	if (!rp_append_file("rp_ack", "ack=web_export;msg=web;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=api_actions;msg=action;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=web_export.read_ui;target=rp_ui_home;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=web_export.write_routes;target=rp_web_routes;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=web_export.write_home_api;target=rp_api_home;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=web_export.write_run_api;target=rp_api_run;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=web_export.write_agent_api;target=rp_api_agents;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=web_export.write_evidence_api;target=rp_api_evidence;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=web_export.write_compare_api;target=rp_api_compare;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=web_export.write_artifacts_api;target=rp_api_artifacts;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=web_export.write_data_api;target=rp_api_data;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=web_export.write_bundle;target=rp_web_bundle;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=web_export.read_ui")) return 1;
+	if (!rp_append_file("rp_tool", "tool=web_export.write_routes")) return 1;
+	if (!rp_append_file("rp_tool", "tool=web_export.write_home_api")) return 1;
+	if (!rp_append_file("rp_tool", "tool=web_export.write_run_api")) return 1;
+	if (!rp_append_file("rp_tool", "tool=web_export.write_agent_api")) return 1;
+	if (!rp_append_file("rp_tool", "tool=web_export.write_evidence_api")) return 1;
+	if (!rp_append_file("rp_tool", "tool=web_export.write_compare_api")) return 1;
+	if (!rp_append_file("rp_tool", "tool=web_export.write_artifacts_api")) return 1;
+	if (!rp_append_file("rp_tool", "tool=web_export.write_data_api")) return 1;
+	if (!rp_append_file("rp_tool", "tool=web_export.write_bundle")) return 1;
 	if (!rp_append_status("web_export=ready")) return 1;
 	if (!rp_append_status("web_routes=ready")) return 1;
 	if (!rp_append_status("web_bundle=ready")) return 1;

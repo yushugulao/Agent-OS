@@ -196,11 +196,11 @@ int main(void)
 		if (!rp_append_host_action_line("rp_llmeval", "host_llm_eval_fallback_status=", fallback_status)) return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=llm;msg=9;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=llm.prepare_packet;target=rp_llm_req;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=llm.route_queue;target=rp_llmq;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=llm.template_response;target=rp_llm_resp;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=llm.define_relay;target=rp_relay;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=llm.evaluate_packets;target=rp_llmeval;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=llm.prepare_packet")) return 1;
+	if (!rp_append_file("rp_tool", "tool=llm.route_queue")) return 1;
+	if (!rp_append_file("rp_tool", "tool=llm.template_response")) return 1;
+	if (!rp_append_file("rp_tool", "tool=llm.define_relay")) return 1;
+	if (!rp_append_file("rp_tool", "tool=llm.evaluate_packets")) return 1;
 	if (!rp_append_status("llm_bridge=ready")) return 1;
 	if (!rp_append_status("llmqueue=ready")) return 1;
 	if (!rp_append_status("relay=ready")) return 1;

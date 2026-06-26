@@ -140,13 +140,13 @@ int main(void)
 		}
 	}
 	if (!rp_append_file("rp_ack", "ack=data_pipeline;msg=data;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=data_pipeline.scan_files;target=rp_ingest_files;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=data_pipeline.snapshot;target=rp_dataset_snapshot;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=data_pipeline.preview;target=rp_data_preview;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=data_pipeline.quality;target=rp_data_quality;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=data_pipeline.transform;target=rp_data_transform;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=data_pipeline.collection;target=rp_dataset_collection;status=ok")) return 1;
-	if (!rp_append_file("rp_tool", "tool=data_pipeline.export;target=rp_dataset_collection;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=data_pipeline.scan_files")) return 1;
+	if (!rp_append_file("rp_tool", "tool=data_pipeline.snapshot")) return 1;
+	if (!rp_append_file("rp_tool", "tool=data_pipeline.preview")) return 1;
+	if (!rp_append_file("rp_tool", "tool=data_pipeline.quality")) return 1;
+	if (!rp_append_file("rp_tool", "tool=data_pipeline.transform")) return 1;
+	if (!rp_append_file("rp_tool", "tool=data_pipeline.collection")) return 1;
+	if (!rp_append_file("rp_tool", "tool=data_pipeline.export")) return 1;
 	if (!rp_append_status("data_pipeline=ready")) return 1;
 	if (!rp_append_status("ingest_files=ready")) return 1;
 	if (!rp_append_status("dataset_snapshot=ready")) return 1;

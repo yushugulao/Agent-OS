@@ -52,7 +52,7 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=release;msg=12;status=ready")) return 1;
-	if (!rp_append_file("rp_tool", "tool=release.decide;target=rp_release;status=ok")) return 1;
+	if (!rp_append_file("rp_tool", "tool=release.decide")) return 1;
 	if (!rp_append_status("release=ready")) return 1;
 	printf("rp_release: decision=release checks=17 status=ready\n");
 	return 0;
