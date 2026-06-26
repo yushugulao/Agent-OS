@@ -78,6 +78,32 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (rp_host_seed_has("kind=research_run")) {
+		char value[96];
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "dataset_rows=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "4");
+		}
+		if (!rp_append_host_action_line("rp_ingest_files", "host_input_dataset_rows=", value)) return 1;
+		if (!rp_append_host_action_line("rp_dataset_snapshot", "host_input_dataset_rows=", value)) return 1;
+		if (!rp_append_host_action_line("rp_data_preview", "host_input_dataset_rows=", value)) return 1;
+		if (!rp_append_host_action_line("rp_data_quality", "host_input_dataset_rows=", value)) return 1;
+		if (!rp_append_host_action_line("rp_dataset_collection", "host_input_dataset_rows=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "reference_entries=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "2");
+		}
+		if (!rp_append_host_action_line("rp_ingest_files", "host_input_reference_entries=", value)) return 1;
+		if (!rp_append_host_action_line("rp_dataset_collection", "host_input_reference_entries=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "workspace_files=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "4");
+		}
+		if (!rp_append_host_action_line("rp_ingest_files", "host_input_workspace_files=", value)) return 1;
+		if (!rp_append_host_action_line("rp_dataset_snapshot", "host_input_workspace_files=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "csv_file=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "expr.csv");
+		}
+		if (!rp_append_host_action_line("rp_ingest_files", "host_input_csv_file=", value)) return 1;
+		if (!rp_append_host_action_line("rp_data_preview", "host_input_csv_file=", value)) return 1;
+	}
 	if (!rp_append_file("rp_ack", "ack=data_pipeline;msg=data;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=data_pipeline.scan_files;target=rp_ingest_files;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=data_pipeline.snapshot;target=rp_dataset_snapshot;status=ok")) return 1;

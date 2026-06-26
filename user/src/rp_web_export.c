@@ -273,6 +273,36 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (rp_host_seed_has("kind=research_run")) {
+		char value[96];
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "title=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "Browser started study");
+		}
+		if (!rp_append_host_action_line("rp_api_home", "host_action_title=", value)) return 1;
+		if (!rp_append_host_action_line("rp_api_run", "host_action_title=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "question=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "Can this platform run a custom research task?");
+		}
+		if (!rp_append_host_action_line("rp_api_home", "host_action_question=", value)) return 1;
+		if (!rp_append_host_action_line("rp_api_run", "host_action_question=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "provider=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "template");
+		}
+		if (!rp_append_host_action_line("rp_api_home", "host_action_provider=", value)) return 1;
+		if (!rp_append_host_action_line("rp_api_run", "host_action_provider=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "dataset_rows=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "4");
+		}
+		if (!rp_append_host_action_line("rp_api_run", "host_action_dataset_rows=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "reference_entries=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "2");
+		}
+		if (!rp_append_host_action_line("rp_api_run", "host_action_reference_entries=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "workspace_files=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "4");
+		}
+		if (!rp_append_host_action_line("rp_api_run", "host_action_workspace_files=", value)) return 1;
+	}
 	if (!rp_write_file("rp_api_agents",
 			   "api=agent-detail\n"
 			   "agents=7\n"
@@ -711,6 +741,33 @@ int main(void)
 	}
 	if (rp_host_seed_count() > 0) {
 		if (!rp_append_file("rp_uresrun", "host_action_run_outputs=rp_report_text,rp_artifact_manifest,rp_nbexec,rp_package")) return 1;
+		if (rp_host_seed_has("kind=research_run")) {
+			char value[96];
+			if (!rp_host_seed_copy_value_for_kind("kind=research_run", "title=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "Browser started study");
+			}
+			if (!rp_append_host_action_line("rp_uresrun", "host_action_title=", value)) return 1;
+			if (!rp_host_seed_copy_value_for_kind("kind=research_run", "question=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "Can this platform run a custom research task?");
+			}
+			if (!rp_append_host_action_line("rp_uresrun", "host_action_question=", value)) return 1;
+			if (!rp_host_seed_copy_value_for_kind("kind=research_run", "provider=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "template");
+			}
+			if (!rp_append_host_action_line("rp_uresrun", "host_action_provider=", value)) return 1;
+			if (!rp_host_seed_copy_value_for_kind("kind=research_run", "dataset_rows=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "4");
+			}
+			if (!rp_append_host_action_line("rp_uresrun", "host_action_dataset_rows=", value)) return 1;
+			if (!rp_host_seed_copy_value_for_kind("kind=research_run", "reference_entries=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "2");
+			}
+			if (!rp_append_host_action_line("rp_uresrun", "host_action_reference_entries=", value)) return 1;
+			if (!rp_host_seed_copy_value_for_kind("kind=research_run", "workspace_files=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "4");
+			}
+			if (!rp_append_host_action_line("rp_uresrun", "host_action_workspace_files=", value)) return 1;
+		}
 		if (rp_host_seed_has_workbench_action()) {
 			char value[96];
 			if (!rp_append_file("rp_uresrun", "host_action_workbench_outputs=rp_runner,rp_revision,rp_package")) return 1;

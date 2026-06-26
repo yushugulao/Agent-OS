@@ -47,7 +47,21 @@ def main() -> int:
         base = f"http://127.0.0.1:{server.server_address[1]}"
         try:
             actions = [
-                {"path": "/actions/research/run", "payload": {"run_id": "RUN-E2E", "source": "reader-e2e"}},
+                {
+                    "path": "/actions/research/run",
+                    "payload": {
+                        "run_id": "RUN-E2E",
+                        "source": "reader-e2e",
+                        "title": "Host seeded gene study",
+                        "question": "Which imported evidence supports recovery?",
+                        "provider": "template",
+                        "dataset_rows": "7",
+                        "reference_entries": "3",
+                        "workspace_files": "5",
+                        "csv_file": "host-dataset.csv",
+                        "reference_file": "host-refs.bib",
+                    },
+                },
                 {"path": "/actions/research/review", "payload": {"run_id": "RUN-E2E", "reviewer": "Wang", "decision": "needs_revision"}},
                 {"path": "/actions/research/revision-task", "payload": {"review_id": "usable-review:Wang:1", "targets": "methods,chart_caption,statistics"}},
                 {"path": "/actions/research/run-revision-task", "payload": {"run_id": "RUN-E2E", "task_id": "usable-revision-task:RUN-E2E:1"}},
@@ -104,6 +118,22 @@ def main() -> int:
 
             rp_input = read_json(base + "/api/state/rp_input")
             assert any("host_action_run_id=RUN-E2E" in line for line in rp_input["lines"]), rp_input
+            assert any("host_action_title=Host seeded gene study" in line for line in rp_input["lines"]), rp_input
+            assert any("host_action_question=Which imported evidence supports recovery?" in line for line in rp_input["lines"]), rp_input
+            assert any("host_action_provider=template" in line for line in rp_input["lines"]), rp_input
+            assert any("host_action_dataset_rows_value=7" in line for line in rp_input["lines"]), rp_input
+            assert any("host_action_reference_entries=3" in line for line in rp_input["lines"]), rp_input
+            assert any("host_action_workspace_files=5" in line for line in rp_input["lines"]), rp_input
+            assert any("host_action_csv_file=host-dataset.csv" in line for line in rp_input["lines"]), rp_input
+            assert any("host_action_reference_file=host-refs.bib" in line for line in rp_input["lines"]), rp_input
+            rp_ingest = read_json(base + "/api/state/rp_ingest_files")
+            assert any("host_input_dataset_rows=7" in line for line in rp_ingest["lines"]), rp_ingest
+            assert any("host_input_reference_entries=3" in line for line in rp_ingest["lines"]), rp_ingest
+            assert any("host_input_workspace_files=5" in line for line in rp_ingest["lines"]), rp_ingest
+            assert any("host_input_csv_file=host-dataset.csv" in line for line in rp_ingest["lines"]), rp_ingest
+            rp_data_preview = read_json(base + "/api/state/rp_data_preview")
+            assert any("host_input_dataset_rows=7" in line for line in rp_data_preview["lines"]), rp_data_preview
+            assert any("host_input_csv_file=host-dataset.csv" in line for line in rp_data_preview["lines"]), rp_data_preview
             rp_runner = read_json(base + "/api/state/rp_runner")
             assert any("host_action_status=completed" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_revision_run=usable-run:RUN-E2E-rev2" in line for line in rp_runner["lines"]), rp_runner
@@ -180,6 +210,10 @@ def main() -> int:
             assert any("host_report_revision_targets=methods,chart_caption,statistics" in line for line in rp_report["lines"]), rp_report
             assert any("host_report_bundle=reviewer-evidence" in line for line in rp_report["lines"]), rp_report
             assert any("host_report_compare_profile=plain_ucore_batch" in line for line in rp_report["lines"]), rp_report
+            assert any("host_report_title=Host seeded gene study" in line for line in rp_report["lines"]), rp_report
+            assert any("host_report_question=Which imported evidence supports recovery?" in line for line in rp_report["lines"]), rp_report
+            assert any("host_report_provider=template" in line for line in rp_report["lines"]), rp_report
+            assert any("host_report_dataset_rows=7" in line for line in rp_report["lines"]), rp_report
             assert any("host_report_workbench_outputs=rp_runner,rp_revision,rp_package" in line for line in rp_report["lines"]), rp_report
             assert any("host_report_workbench=usable-workbench:RUN-E2E" in line for line in rp_report["lines"]), rp_report
             assert any("host_report_workbench_question=What is ready for review?" in line for line in rp_report["lines"]), rp_report
@@ -227,6 +261,12 @@ def main() -> int:
             assert any("host_action_notebook_workbench_docs=ready" in line for line in rp_nbexec["lines"]), rp_nbexec
             rp_uresrun = read_json(base + "/api/state/rp_uresrun")
             assert any("host_action_run_outputs=rp_report_text,rp_artifact_manifest,rp_nbexec,rp_package" in line for line in rp_uresrun["lines"]), rp_uresrun
+            assert any("host_action_title=Host seeded gene study" in line for line in rp_uresrun["lines"]), rp_uresrun
+            assert any("host_action_question=Which imported evidence supports recovery?" in line for line in rp_uresrun["lines"]), rp_uresrun
+            assert any("host_action_provider=template" in line for line in rp_uresrun["lines"]), rp_uresrun
+            assert any("host_action_dataset_rows=7" in line for line in rp_uresrun["lines"]), rp_uresrun
+            assert any("host_action_reference_entries=3" in line for line in rp_uresrun["lines"]), rp_uresrun
+            assert any("host_action_workspace_files=5" in line for line in rp_uresrun["lines"]), rp_uresrun
             assert any("host_action_workbench_outputs=rp_runner,rp_revision,rp_package" in line for line in rp_uresrun["lines"]), rp_uresrun
             assert any("host_action_workbench=usable-workbench:RUN-E2E" in line for line in rp_uresrun["lines"]), rp_uresrun
             assert any("host_action_workbench_manifest=delivery-manifest.json" in line for line in rp_uresrun["lines"]), rp_uresrun
@@ -266,6 +306,13 @@ def main() -> int:
             assert any("host_action_workbench_row_status=done" in line for line in rp_api_compare["lines"]), rp_api_compare
             assert any("host_action_workbench_handoff_scope=full" in line for line in rp_api_compare["lines"]), rp_api_compare
             assert any("host_action_workbench_bundle=workbench-bundle.zip" in line for line in rp_api_compare["lines"]), rp_api_compare
+            rp_api_run = read_json(base + "/api/state/rp_api_run")
+            assert any("host_action_title=Host seeded gene study" in line for line in rp_api_run["lines"]), rp_api_run
+            assert any("host_action_question=Which imported evidence supports recovery?" in line for line in rp_api_run["lines"]), rp_api_run
+            assert any("host_action_provider=template" in line for line in rp_api_run["lines"]), rp_api_run
+            assert any("host_action_dataset_rows=7" in line for line in rp_api_run["lines"]), rp_api_run
+            assert any("host_action_reference_entries=3" in line for line in rp_api_run["lines"]), rp_api_run
+            assert any("host_action_workspace_files=5" in line for line in rp_api_run["lines"]), rp_api_run
             rp_result = read_json(base + "/api/state/rp_host_run_result")
             assert rp_result["values"]["qemu_orch_passed"] == "1", rp_result
             assert int(rp_result["values"]["extracted_state_files"]) >= 100, rp_result

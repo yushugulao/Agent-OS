@@ -266,19 +266,39 @@ def c_string_literal(text: str) -> str:
     return "\"" + escaped + "\""
 
 
+def compact_seed_text(text: str) -> str:
+    lines: list[str] = []
+    for raw in text.splitlines():
+        fields = [field for field in raw.split(";") if field]
+        compact: list[str] = []
+        for field in fields:
+            if field.startswith("kind="):
+                compact.insert(0, field)
+            elif field.startswith("action=") or field.startswith("path=") or field.startswith("status="):
+                continue
+            else:
+                compact.append(field)
+        if compact:
+            lines.append(";".join(compact))
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
 def write_seed_header(next_state: Path, repo_dir: Path) -> int:
     inbox = next_state / "rp_host_action_inbox"
     text = inbox.read_text(encoding="utf-8") if inbox.is_file() else ""
+    seed_text = compact_seed_text(text)
     header = repo_dir / "user" / "build" / "generated" / "rp_host_action_seed.h"
     header.parent.mkdir(parents=True, exist_ok=True)
     header.write_text(
         "#ifndef __RP_HOST_ACTION_SEED_H__\n"
         "#define __RP_HOST_ACTION_SEED_H__\n"
-        f"#define RP_HOST_ACTION_SEED {c_string_literal(text)}\n"
+        f"#define RP_HOST_ACTION_SEED {c_string_literal(seed_text)}\n"
         "#endif\n",
         encoding="utf-8",
     )
-    return len([line for line in text.splitlines() if line.strip()])
+    return len([line for line in seed_text.splitlines() if line.strip()])
+
+
 
 
 def find_log_value(text: str, prefix: str) -> str:

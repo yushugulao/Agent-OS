@@ -115,6 +115,39 @@ int main(void)
 		if (!rp_append_file("rp_input", "host_action_state=accepted")) return 1;
 		if (!rp_append_file("rp_input", "host_action_dataset_rows=4")) return 1;
 		if (!rp_append_file("rp_input", "host_action_validation=passed")) return 1;
+		char value[96];
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "title=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "Browser started study");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_title=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "question=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "Can this platform run a custom research task?");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_question=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "provider=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "template");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_provider=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "dataset_rows=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "4");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_dataset_rows_value=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "reference_entries=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "2");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_reference_entries=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "workspace_files=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "4");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_workspace_files=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "csv_file=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "expr.csv");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_csv_file=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "reference_file=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "refs.bib");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_reference_file=", value)) return 1;
 	}
 	if (!rp_write_file("rp_input_fastq",
 			   "@RUN-042-read-1\n"
@@ -214,6 +247,23 @@ int main(void)
 				rp_copy_text(seed_run, sizeof(seed_run), "RUN-905");
 			}
 			if (!rp_append_host_action_line("rp_report_text", "host_report_run_id=", seed_run)) return 1;
+			char value[96];
+			if (!rp_host_seed_copy_value_for_kind("kind=research_run", "title=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "Browser started study");
+			}
+			if (!rp_append_host_action_line("rp_report_text", "host_report_title=", value)) return 1;
+			if (!rp_host_seed_copy_value_for_kind("kind=research_run", "question=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "Can this platform run a custom research task?");
+			}
+			if (!rp_append_host_action_line("rp_report_text", "host_report_question=", value)) return 1;
+			if (!rp_host_seed_copy_value_for_kind("kind=research_run", "provider=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "template");
+			}
+			if (!rp_append_host_action_line("rp_report_text", "host_report_provider=", value)) return 1;
+			if (!rp_host_seed_copy_value_for_kind("kind=research_run", "dataset_rows=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "4");
+			}
+			if (!rp_append_host_action_line("rp_report_text", "host_report_dataset_rows=", value)) return 1;
 		}
 		if (rp_host_seed_has("kind=human_review")) {
 			char reviewer[48];
