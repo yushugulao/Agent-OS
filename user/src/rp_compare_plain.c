@@ -367,6 +367,63 @@ int main(void)
 		ok = ok && check_seed_value("kind=workbench_export", "bundle=", "workbench-bundle.zip", "rp_runner", "host_action_workbench_bundle=");
 		ok = ok && check_seed_value("kind=workbench_export", "bundle=", "workbench-bundle.zip", "rp_api_compare", "host_action_workbench_bundle=");
 	}
+	if (rp_host_seed_has("kind=workbench_manuscript") ||
+	    rp_host_seed_has("kind=workbench_manuscript_audit") ||
+	    rp_host_seed_has("kind=workbench_manuscript_revision_plan") ||
+	    rp_host_seed_has("kind=workbench_manuscript_revision_task")) {
+		ok = ok && rp_file_contains("rp_revision", "host_action_workbench_writing=ready");
+	}
+	if (rp_host_seed_has("kind=workbench_manuscript")) {
+		ok = ok && check_seed_value("kind=workbench_manuscript", "manuscript_format=", "markdown", "rp_revision", "host_action_workbench_manuscript_format=");
+	}
+	if (rp_host_seed_has("kind=workbench_manuscript_audit")) {
+		ok = ok && check_seed_value("kind=workbench_manuscript_audit", "audit_scope=", "citations", "rp_revision", "host_action_workbench_audit_scope=");
+	}
+	if (rp_host_seed_has("kind=workbench_manuscript_revision_plan")) {
+		ok = ok && check_seed_value("kind=workbench_manuscript_revision_plan", "revision_area=", "methods", "rp_revision", "host_action_workbench_revision_area=");
+	}
+	if (rp_host_seed_has("kind=workbench_manuscript_revision_task")) {
+		ok = ok && check_seed_value("kind=workbench_manuscript_revision_task", "revision_task=", "1", "rp_revision", "host_action_workbench_revision_task=");
+		ok = ok && check_seed_value("kind=workbench_manuscript_revision_task", "revision_status=", "done", "rp_revision", "host_action_workbench_revision_status=");
+	}
+	if (rp_host_seed_has("kind=workbench_handoff_package") ||
+	    rp_host_seed_has("kind=workbench_export") ||
+	    rp_host_seed_has("kind=workbench_file_manifest") ||
+	    rp_host_seed_has("kind=workbench_file_verify") ||
+	    rp_host_seed_has("kind=workbench_brief") ||
+	    rp_host_seed_has("kind=workbench_evidence_dossier") ||
+	    rp_host_seed_has("kind=workbench_evidence_graph") ||
+	    rp_host_seed_has("kind=workbench_citations") ||
+	    rp_host_seed_has("kind=workbench_manuscript")) {
+		ok = ok && rp_file_contains("rp_package", "host_action_workbench_package=ready");
+	}
+	if (rp_host_seed_has("kind=workbench_handoff_package")) {
+		ok = ok && check_seed_value("kind=workbench_handoff_package", "handoff_scope=", "full", "rp_package", "host_action_workbench_handoff_scope=");
+	}
+	if (rp_host_seed_has("kind=workbench_export")) {
+		ok = ok && check_seed_value("kind=workbench_export", "bundle=", "workbench-bundle.zip", "rp_package", "host_action_workbench_bundle=");
+	}
+	if (rp_host_seed_has("kind=workbench_file_manifest")) {
+		ok = ok && check_seed_value("kind=workbench_file_manifest", "manifest=", "delivery-manifest.json", "rp_package", "host_action_workbench_manifest=");
+	}
+	if (!rp_host_seed_has("kind=workbench_file_manifest") && rp_host_seed_has("kind=workbench_file_verify")) {
+		ok = ok && check_seed_value("kind=workbench_file_verify", "manifest=", "delivery-manifest.json", "rp_package", "host_action_workbench_manifest=");
+	}
+	if (rp_host_seed_has("kind=workbench_brief")) {
+		ok = ok && check_seed_value("kind=workbench_brief", "brief_format=", "html", "rp_package", "host_action_workbench_brief_format=");
+	}
+	if (rp_host_seed_has("kind=workbench_evidence_dossier")) {
+		ok = ok && check_seed_value("kind=workbench_evidence_dossier", "dossier_format=", "markdown", "rp_package", "host_action_workbench_dossier_format=");
+	}
+	if (rp_host_seed_has("kind=workbench_evidence_graph")) {
+		ok = ok && check_seed_value("kind=workbench_evidence_graph", "graph_format=", "dot", "rp_package", "host_action_workbench_graph_format=");
+	}
+	if (rp_host_seed_has("kind=workbench_citations")) {
+		ok = ok && check_seed_value("kind=workbench_citations", "citation_format=", "bibtex", "rp_package", "host_action_workbench_citation_format=");
+	}
+	if (rp_host_seed_has("kind=workbench_manuscript")) {
+		ok = ok && check_seed_value("kind=workbench_manuscript", "manuscript_format=", "markdown", "rp_package", "host_action_workbench_manuscript_format=");
+	}
 	if (rp_host_seed_has("kind=bundle_export") ||
 	    rp_host_seed_has("kind=research_export") ||
 	    rp_host_seed_has("kind=delivery")) {

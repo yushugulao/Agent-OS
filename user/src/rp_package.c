@@ -271,6 +271,67 @@ int main(void)
 		if (!rp_append_file("rp_package", "host_action_bundle_contents=report,manifest,notebook,compare")) return 1;
 		if (!rp_append_file("rp_package", "host_action_delivery_manifest=ready")) return 1;
 	}
+	if (rp_host_seed_has("kind=workbench_handoff_package") ||
+	    rp_host_seed_has("kind=workbench_export") ||
+	    rp_host_seed_has("kind=workbench_file_manifest") ||
+	    rp_host_seed_has("kind=workbench_file_verify") ||
+	    rp_host_seed_has("kind=workbench_brief") ||
+	    rp_host_seed_has("kind=workbench_evidence_dossier") ||
+	    rp_host_seed_has("kind=workbench_evidence_graph") ||
+	    rp_host_seed_has("kind=workbench_citations") ||
+	    rp_host_seed_has("kind=workbench_manuscript")) {
+		char value[80];
+		if (!rp_append_file("rp_package", "host_action_workbench_package=ready;source=rp_host_action_seed")) return 1;
+		if (rp_host_seed_has("kind=workbench_handoff_package")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_handoff_package", "handoff_scope=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "full");
+			}
+			if (!rp_append_host_action_line("rp_package", "host_action_workbench_handoff_scope=", value)) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_export")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_export", "bundle=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "workbench-bundle.zip");
+			}
+			if (!rp_append_host_action_line("rp_package", "host_action_workbench_bundle=", value)) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_file_manifest") || rp_host_seed_has("kind=workbench_file_verify")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_file_manifest", "manifest=", value, sizeof(value)) &&
+			    !rp_host_seed_copy_value_for_kind("kind=workbench_file_verify", "manifest=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "delivery-manifest.json");
+			}
+			if (!rp_append_host_action_line("rp_package", "host_action_workbench_manifest=", value)) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_brief")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_brief", "brief_format=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "html");
+			}
+			if (!rp_append_host_action_line("rp_package", "host_action_workbench_brief_format=", value)) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_evidence_dossier")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_evidence_dossier", "dossier_format=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "markdown");
+			}
+			if (!rp_append_host_action_line("rp_package", "host_action_workbench_dossier_format=", value)) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_evidence_graph")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_evidence_graph", "graph_format=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "dot");
+			}
+			if (!rp_append_host_action_line("rp_package", "host_action_workbench_graph_format=", value)) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_citations")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_citations", "citation_format=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "bibtex");
+			}
+			if (!rp_append_host_action_line("rp_package", "host_action_workbench_citation_format=", value)) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_manuscript")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_manuscript", "manuscript_format=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "markdown");
+			}
+			if (!rp_append_host_action_line("rp_package", "host_action_workbench_manuscript_format=", value)) return 1;
+		}
+	}
 	if (!rp_append_status("package=ready")) return 1;
 	if (!rp_append_status("datarel=ready")) return 1;
 	if (!rp_append_status("dataver=ready")) return 1;

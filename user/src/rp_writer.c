@@ -65,6 +65,41 @@ int main(void)
 		if (!rp_append_host_action_line("rp_revision", "host_action_revision_task_id=", task_id)) return 1;
 		if (!rp_append_host_action_line("rp_revision", "host_action_revision_source_run=", run_id)) return 1;
 	}
+	if (rp_host_seed_has("kind=workbench_manuscript") ||
+	    rp_host_seed_has("kind=workbench_manuscript_audit") ||
+	    rp_host_seed_has("kind=workbench_manuscript_revision_plan") ||
+	    rp_host_seed_has("kind=workbench_manuscript_revision_task")) {
+		if (!rp_append_file("rp_revision", "host_action_workbench_writing=ready;source=rp_host_action_seed")) return 1;
+		char value[80];
+		if (rp_host_seed_has("kind=workbench_manuscript")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_manuscript", "manuscript_format=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "markdown");
+			}
+			if (!rp_append_host_action_line("rp_revision", "host_action_workbench_manuscript_format=", value)) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_manuscript_audit")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_manuscript_audit", "audit_scope=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "citations");
+			}
+			if (!rp_append_host_action_line("rp_revision", "host_action_workbench_audit_scope=", value)) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_manuscript_revision_plan")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_manuscript_revision_plan", "revision_area=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "methods");
+			}
+			if (!rp_append_host_action_line("rp_revision", "host_action_workbench_revision_area=", value)) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_manuscript_revision_task")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_manuscript_revision_task", "revision_task=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "1");
+			}
+			if (!rp_append_host_action_line("rp_revision", "host_action_workbench_revision_task=", value)) return 1;
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_manuscript_revision_task", "revision_status=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "done");
+			}
+			if (!rp_append_host_action_line("rp_revision", "host_action_workbench_revision_status=", value)) return 1;
+		}
+	}
 	if (!rp_append_status("writer=packaged")) return 1;
 	if (!rp_append_status("revision=ready")) return 1;
 	printf("rp_writer: sections=8 citations=9 revisions=3 status=packaged\n");
