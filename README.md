@@ -12,7 +12,19 @@ It is not the Agent-OS kernel-enhanced version. There are no Agent syscalls, Age
 
 ## Directory Rule
 
-This branch is planned to hold two comparable targets. The current root keeps the plain uCore target: `os/`, `nfs/`, `scripts/`, `user/`, and `host_tools/` continue to describe the research Agent platform running on ordinary uCore mechanisms. The later Agent-OS enhanced uCore target should be added in a separate top-level directory, such as `agentos_ucore/`, with its own kernel, user programs, tests, and documents. That keeps the plain-kernel comparison runnable while allowing the enhanced target to use new kernel services.
+This branch holds two comparable targets. The repository root keeps the plain uCore target: `os/`, `nfs/`, `scripts/`, `user/`, and `host_tools/` describe the research Agent platform running on ordinary uCore mechanisms. The Agent-OS enhanced uCore target is stored under `agentos_ucore/`, with its own kernel, user programs, tests, and documents. This keeps the plain-kernel comparison runnable while allowing the enhanced target to use new kernel services.
+
+See `docs/dual-targets.md` for the target layout and parity direction.
+
+Useful root commands:
+
+```bash
+make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform
+make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=rp_orch
+make agentos-user TOOLPREFIX=riscv64-linux-gnu-
+make agentos-build TOOLPREFIX=riscv64-linux-gnu-
+make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+```
 
 ## Current User Program
 

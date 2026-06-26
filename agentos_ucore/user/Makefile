@@ -1,0 +1,107 @@
+.DEFAULT_GOAL := target
+
+ARCH ?= riscv64
+CHAPTER ?= 8
+BASE ?= 0
+TOOLPREFIX ?= $(shell if command -v $(ARCH)-linux-musl-gcc >/dev/null 2>&1; then echo $(ARCH)-linux-musl-; else echo riscv64-linux-gnu-; fi)
+CC := $(TOOLPREFIX)gcc
+OBJCOPY := $(TOOLPREFIX)objcopy
+OBJDUMP := $(TOOLPREFIX)objdump
+CP := cp
+
+app_dir := src
+build_dir := build
+elf_dir := $(build_dir)/$(ARCH)
+obj_dir := $(build_dir)/obj
+bin_dir := $(build_dir)/bin
+out_dir := target
+asm_dir := asm
+arch_dir := lib/arch/riscv
+
+CFLAGS := -std=gnu11 -march=rv64imac_zicsr_zifencei -mabi=lp64 -mcmodel=medany
+CFLAGS += -fno-builtin -nostdinc -fno-stack-protector -ggdb -Wall
+CFLAGS += -fno-pie -static -Iinclude -Ilib -I$(arch_dir)
+LDFLAGS := -nostdlib -T $(arch_dir)/user.ld -Wl,-Ttext=0x1000
+
+LIB_C := $(wildcard lib/*.c)
+LIB_OBJS := $(patsubst %.c,$(obj_dir)/%.o,$(LIB_C))
+CRT_OBJ := $(obj_dir)/$(arch_dir)/crt.o
+SRCS := $(wildcard $(app_dir)/*.c)
+APPS := $(patsubst $(app_dir)/%.c,%,$(SRCS))
+
+CH2_BASE_TESTS := ch2b_
+CH3_BASE_TESTS := ch3b_ $(CH2_BASE_TESTS)
+CH4_BASE_TESTS := $(CH2_BASE_TESTS) ch3b_yield
+CH5_BASE_TESTS := ch5b_ $(CH3_BASE_TESTS) usershell
+CH6_BASE_TESTS := ch6b_ $(CH5_BASE_TESTS)
+CH7_BASE_TESTS := ch7b_ $(CH6_BASE_TESTS)
+CH8_BASE_TESTS := ch8b_ $(CH7_BASE_TESTS)
+AGENT_TESTS := agentfinal_ucore agentfs_ucore agentscan_ucore agentloop_ucore agentsched_ucore agentbench_ucore labbench_ucore labdemo_ucore agentsecurity_ucore
+
+CH2_TESTS := $(CH2_BASE_TESTS)
+CH3_TESTS := $(CH3_BASE_TESTS) ch3_
+CH4_TESTS := $(CH4_BASE_TESTS) ch4_ ch3b_sleep ch3_
+CH5_TESTS_BASE := ch5b_ $(CH4_TESTS) ch5_ ch5t_ usershell
+CH6_TESTS := $(CH6_BASE_TESTS) ch6_ ch5_ ch4_
+CH7_TESTS := $(CH7_BASE_TESTS) ch7_
+CH8_TESTS := $(CH8_BASE_TESTS) ch8_ $(AGENT_TESTS)
+
+ifeq ($(BASE), 1)
+CH2_TESTS := $(CH2_BASE_TESTS)
+CH3_TESTS := $(CH3_BASE_TESTS)
+CH4_TESTS := $(CH4_BASE_TESTS)
+CH5_TESTS_BASE := $(CH5_BASE_TESTS)
+CH6_TESTS := $(CH6_BASE_TESTS)
+CH7_TESTS := $(CH7_BASE_TESTS)
+CH8_TESTS := $(CH8_BASE_TESTS) $(AGENT_TESTS)
+endif
+
+ifeq ($(CHAPTER), 2)
+CH_TESTS := $(CH2_TESTS)
+else ifeq ($(CHAPTER), 3)
+CH_TESTS := $(CH3_TESTS)
+else ifeq ($(CHAPTER), 4)
+CH_TESTS := $(CH4_TESTS)
+else ifeq ($(CHAPTER), 5)
+CH_TESTS := $(CH5_TESTS_BASE)
+else ifeq ($(CHAPTER), 6)
+CH_TESTS := $(CH6_TESTS)
+else ifeq ($(CHAPTER), 7)
+CH_TESTS := $(CH7_TESTS)
+else ifeq ($(CHAPTER), 8)
+CH_TESTS := $(CH8_TESTS)
+else ifeq ($(CHAPTER), agent)
+CH_TESTS := usershell $(AGENT_TESTS)
+else
+CH_TESTS := usershell $(AGENT_TESTS)
+endif
+
+SELECTED_APPS = $(foreach t,$(CH_TESTS),$(filter $(t)%,$(APPS)))
+
+$(obj_dir)/%.o: %.c
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(CRT_OBJ): $(arch_dir)/crt.S
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(elf_dir)/%: $(app_dir)/%.c $(LIB_OBJS) $(CRT_OBJ)
+	@mkdir -p $(elf_dir) $(bin_dir) $(asm_dir)
+	$(CC) $(CFLAGS) $(LDFLAGS) $(CRT_OBJ) $(LIB_OBJS) $< -o $@
+	$(OBJDUMP) -d -S $@ > $(asm_dir)/$*.asm
+	$(OBJCOPY) -O binary $@ $(bin_dir)/$*
+
+binary: $(addprefix $(elf_dir)/,$(SELECTED_APPS))
+
+target: binary
+	@rm -rf $(out_dir)
+	@mkdir -p $(out_dir)/bin $(out_dir)/elf
+	@echo tests=$(CH_TESTS)
+	@for t in $(CH_TESTS); do \
+		for f in $(bin_dir)/$$t*; do [ -e "$$f" ] && cp "$$f" $(out_dir)/bin/; done; \
+		for f in $(elf_dir)/$$t*; do [ -e "$$f" ] && cp "$$f" $(out_dir)/elf/; done; \
+	done
+
+clean:
+	rm -rf $(asm_dir) $(build_dir) $(out_dir)

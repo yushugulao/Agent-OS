@@ -1,4 +1,4 @@
-.PHONY: clean build user run debug test agentos-user agentos-build agentos-clean agentos-test dual-clean .FORCE
+.PHONY: clean build user run debug test .FORCE
 all: build
 
 K = os
@@ -147,18 +147,3 @@ user:
 	make -C user CHAPTER=$(CHAPTER) BASE=$(BASE)
 
 test: user run
-
-agentos-user:
-	$(MAKE) -C agentos_ucore user TOOLPREFIX=$(TOOLPREFIX) CHAPTER=agent
-
-agentos-build:
-	$(MAKE) -C agentos_ucore user nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=agent
-	$(MAKE) -C agentos_ucore build TOOLPREFIX=$(TOOLPREFIX) LOG=warn INIT_PROC=agentfinal_ucore
-
-agentos-test:
-	cd agentos_ucore && TOOLPREFIX=$(TOOLPREFIX) bash scripts/run-agent-tests.sh
-
-agentos-clean:
-	$(MAKE) -C agentos_ucore clean
-
-dual-clean: clean agentos-clean
