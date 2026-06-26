@@ -994,7 +994,11 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "dynamic_submissions=4");
 	ok = ok && require_file_token("rp_agentcmp", "host_ui_events=10");
 	ok = ok && require_file_token("rp_backend", "cases=4");
-	ok = ok && require_file_token("rp_consistency", "checks=113");
+	ok = ok && require_file_token("rp_consistency", "checks=120");
+	ok = ok && require_file_token("rp_consistency", "artifact_provenance=3");
+	ok = ok && require_file_token("rp_consistency", "artifact_dossier_checks=4");
+	ok = ok && require_file_token("rp_consistency", "artifact_path_rebuild_files=6");
+	ok = ok && require_file_token("rp_consistency", "artifact_path_rebuild_steps=7");
 	ok = ok && require_file_token("rp_consistency", "coherence_checks=9");
 	ok = ok && require_file_token("rp_consistency", "workbench_records=10");
 	ok = ok && require_file_token("rp_consistency", "dynamic_input_records=8");
@@ -1442,7 +1446,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=716\n"
+			   "tests=724\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -1491,6 +1495,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=716 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=724 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
 	return 0;
 }

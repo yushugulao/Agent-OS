@@ -8,7 +8,7 @@ import tempfile
 import threading
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from urllib import request
+from urllib import error, request
 
 import plain_ucore_reader
 
@@ -154,8 +154,20 @@ def main() -> int:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            with request.urlopen(action, timeout=180) as response:
-                result = json.loads(response.read().decode("utf-8"))
+            try:
+                with request.urlopen(action, timeout=180) as response:
+                    result = json.loads(response.read().decode("utf-8"))
+            except error.HTTPError as exc:
+                body = exc.read().decode("utf-8", errors="replace")
+                log_tail = ""
+                try:
+                    detail = json.loads(body)
+                    log_path = Path(str(detail.get("run", {}).get("run", {}).get("log", "")))
+                    if log_path.exists():
+                        log_tail = "\n".join(log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-80:])
+                except Exception as tail_error:  # pragma: no cover - diagnostic path
+                    log_tail = f"unable to read log tail: {tail_error}"
+                raise AssertionError(f"batch action failed status={exc.code} body={body}\nlog_tail={log_tail}") from exc
             assert len(result["actions"]) == len(actions), result
             assert result["actions"][0]["path"] == "/actions/research/run", result
             assert result["actions"][-1]["path"] == "/actions/agentcompare/run", result
@@ -567,8 +579,15 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=724" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=138" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_dashboard=ready;sections=8;gates=6;plain_kernel=ordinary_files" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack=ready;evidence_items=10;actions=5;plain_kernel=ordinary_files" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            rp_consistency = read_json(base + "/api/state/rp_consistency")
+            assert any("checks=120" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("artifact_provenance=3" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("artifact_dossier_checks=4" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("artifact_path_rebuild_steps=7" in line for line in rp_consistency["lines"]), rp_consistency
             rp_review_dashboard = read_json(base + "/api/state/rp_review_dashboard")
             assert any("dashboard=research-review" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
             assert any("section=workflow;source=rp_stage_dag,rp_stage_state,rp_run_events,rp_retry_plan;status=recovered" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
@@ -696,6 +715,7 @@ def main() -> int:
             assert "Evidence Package" in artifacts_html
             assert "ev" in artifacts_html
             assert "Artifact Manifest Records" in artifacts_html
+            assert "Path Steps" in artifacts_html
             assert "Artifact Dossier" in artifacts_html
             assert "Derived Artifact Sections" in artifacts_html
             assert "Artifact Provenance" in artifacts_html

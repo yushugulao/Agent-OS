@@ -691,6 +691,8 @@ def render_overview(
         "artifacts.html": [
             ("Manifest Records", metric_value(state, [("rp_artifact_manifest", "manifest_records"), ("rp_api_artifacts", "manifest_records")]), "rp_artifact_manifest"),
             ("Real Items", metric_value(state, [("rp_artifact_manifest", "real_artifact_items"), ("rp_package", "real_artifact_items")]), "rp_package"),
+            ("Provenance", metric_value(state, [("rp_consistency", "artifact_provenance")]), "rp_consistency"),
+            ("Path Steps", metric_value(state, [("rp_consistency", "artifact_path_rebuild_steps")]), "rp_consistency"),
             ("Package", metric_value(state, [("rp_package", "status")]), "rp_package"),
         ],
         "data.html": [

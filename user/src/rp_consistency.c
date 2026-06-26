@@ -180,6 +180,8 @@ int main(void)
 	int retry_items = rp_get_int_value("rp_retry_plan", "retry_items=");
 	int run_events = rp_get_int_value("rp_run_events", "events=");
 	int manifest_records = rp_get_int_value("rp_artifact_manifest", "manifest_records=");
+	int artifact_provenance = rp_count_token("rp_artifact", "provenance=");
+	int dossier_checks = rp_count_token("rp_artifact_manifest", "dossier_check=");
 	int agent_roles = rp_get_int_value("rp_agents", "agents=");
 	int agent_messages = rp_get_int_value("rp_agents", "messages=");
 	int agent_decisions = rp_get_int_value("rp_decisions", "decisions=");
@@ -206,6 +208,14 @@ int main(void)
 	ok = ok && require_equal("retry_items", retry_items, 1);
 	ok = ok && require_equal("run_events", run_events, 8);
 	ok = ok && require_equal("manifest_records", manifest_records, 4);
+	ok = ok && require_equal("artifact_provenance", artifact_provenance, 3);
+	ok = ok && require_equal("dossier_checks", dossier_checks, 4);
+	ok = ok && rp_file_contains("rp_artifact", "provenance=rp_align_table;stage=align;event=4;retry=rp_retry_plan;review_gate=artifact_manifest;llm_quality=rp_llmeval;status=recovered");
+	ok = ok && rp_file_contains("rp_stage_state", "stage=align;order=2;input=rp_artifact:rp_normalized_fastq;attempts=2;state=recovered");
+	ok = ok && rp_file_contains("rp_run_events", "event=4;stage=align;action=rerun;status=recovered");
+	ok = ok && rp_file_contains("rp_retry_plan", "retry_stage=align");
+	ok = ok && rp_file_contains("rp_artifact_manifest", "dossier_check=review_gate;source=rp_review_dashboard;gate=artifact_manifest;status=pass");
+	ok = ok && rp_file_contains("rp_llmeval", "passed=7");
 	ok = ok && require_equal("agent_roles", agent_roles, 7);
 	ok = ok && require_equal("agent_messages", agent_messages, task_lines);
 	ok = ok && require_equal("agent_decisions", agent_decisions, 8);
@@ -289,7 +299,7 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=113\n"
+			   "checks=120\n"
 			   "task_records=21\n"
 			   "ready_tasks=21\n"
 			   "high_tasks=4\n"
@@ -314,6 +324,14 @@ int main(void)
 			   "dynamic_input_runs=4\n"
 			   "host_ui_events=10\n"
 			   "artifact_records=2\n"
+			   "artifact_provenance=3\n"
+			   "artifact_dossier_checks=4\n"
+			   "artifact_stage_links=2\n"
+			   "artifact_event_links=2\n"
+			   "artifact_review_links=1\n"
+			   "artifact_llm_links=1\n"
+			   "artifact_path_rebuild_files=6\n"
+			   "artifact_path_rebuild_steps=7\n"
 			   "workflow_runner_files=5\n"
 			   "workflow_events=8\n"
 			   "workflow_manifest_records=4\n"
@@ -369,6 +387,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend;target=rp_consistency;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline;target=rp_consistency;status=ok")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=113 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 backend=4 artifacts=4 agents=7 dynamic=4 status=ready\n");
+	printf("rp_consistency: checks=120 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
 	return 0;
 }

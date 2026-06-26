@@ -117,8 +117,8 @@ status=ready
     "rp_provpath": "critical_paths=3\npath1=plan>data>review>repair>audit\npath2=plan>lit>evidence>knowledge>package\n",
     "rp_knowledge": "literature_search_id=usable-literature-search:RUN-900:1\nscreening_decisions=9;included=3;excluded=6\nevidence_extractions=3;fields=mechanism,evidence_type,reported_outcome\nevidence_protocol=usable-evidence-protocol:RUN-900:1;status=registered\nprisma_flow=usable-prisma-flow:RUN-900:1;identified=9;included=3\nevidence_synthesis=usable-evidence-synthesis:RUN-900:1;themes=traceability,reproducibility,recovery\n",
     "rp_package": "delivery_files=8\nevidence_bundle_entries=12\n",
-    "rp_agentcmp": "plain_kernel=passed\ntest_cases=693\nhandoffs=6\n",
-    "rp_consistency": "checks=113\n",
+    "rp_agentcmp": "plain_kernel=passed\ntest_cases=724\nhandoffs=6\n",
+    "rp_consistency": "checks=120\nartifact_provenance=3\nartifact_dossier_checks=4\nartifact_path_rebuild_files=6\nartifact_path_rebuild_steps=7\n",
     "rp_artifact_manifest": (
         "record=1;kind=input;path=rp_input_fastq;status=ready\n"
         "record=3;kind=alignment;path=rp_artifact;section=rp_align_table;status=ready\n"
@@ -227,6 +227,7 @@ def main() -> int:
         artifacts_html = (out_dir / "artifacts.html").read_text(encoding="utf-8")
         assert "Evidence Package" in artifacts_html
         assert "Artifact Manifest Records" in artifacts_html
+        assert "Path Steps" in artifacts_html
         assert "Artifact Dossier" in artifacts_html
         assert "Derived Artifact Sections" in artifacts_html
         assert "Artifact Provenance" in artifacts_html
