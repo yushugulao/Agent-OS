@@ -286,6 +286,7 @@ def main() -> int:
         assert "Review Operations Summary" in review_html
         assert "Review Workbench Summary" in review_html
         assert "Review Project Summary" in review_html
+        assert "Review Action Trace" in review_html
         assert "Handoff Checks" in review_html
         assert "send_to_reviewer" in review_html
         assert "delivery_to_operations" in review_html
@@ -408,6 +409,10 @@ def main() -> int:
             actions_html = (out_dir / "actions.html").read_text(encoding="utf-8")
             assert "Host Actions" in actions_html
             assert "/actions/research/export-bundle" in actions_html
+            review_html = (out_dir / "review.html").read_text(encoding="utf-8")
+            assert "Review Action Trace" in review_html
+            assert "/actions/research/review" in review_html
+            assert "/actions/research/export-bundle" in review_html
 
             bad_batch = request.Request(
                 base + "/actions/batch",

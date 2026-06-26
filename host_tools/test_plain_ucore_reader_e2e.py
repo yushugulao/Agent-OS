@@ -816,6 +816,7 @@ def main() -> int:
             assert "Review Operations Summary" in review_html
             assert "Review Workbench Summary" in review_html
             assert "Review Project Summary" in review_html
+            assert "Review Action Trace" in review_html
             assert "Handoff Checks" in review_html
             assert "send_to_reviewer" in review_html
             assert "delivery_to_operations" in review_html
@@ -828,6 +829,11 @@ def main() -> int:
             assert "kernel_context_path" in review_html
             assert "ready_for_reviewer" in review_html
             assert "host_relay_quality" in review_html
+            assert "/actions/research/operations-report" in review_html
+            assert "/actions/research/workbench-file-verify" in review_html
+            assert "/actions/research/project-space" in review_html
+            assert "/actions/research/llm-relay-request" in review_html
+            assert "/actions/agentcompare/run" in review_html
             compare_html = read_text(base + "/compare.html")
             assert "Compare Summary" in compare_html
             assert "Compare Metrics" in compare_html

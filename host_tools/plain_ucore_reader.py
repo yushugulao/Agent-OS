@@ -740,6 +740,83 @@ def render_action_log(actions: list[dict[str, object]]) -> str:
     ).format("".join(rows))
 
 
+def review_action_group(path: str) -> str:
+    if "/operations-" in path:
+        return "operations"
+    if "/workbench" in path or "/export-workbench" in path:
+        return "workbench"
+    if "/project-space" in path or "/research-search/" in path:
+        return "project"
+    if "/llm-relay" in path:
+        return "llm"
+    if "/agentcompare/" in path:
+        return "compare"
+    if "/review" in path or "/revision" in path:
+        return "review"
+    if "/export-bundle" in path or "/delivery" in path:
+        return "delivery"
+    return ""
+
+
+def payload_summary(payload: object) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    preferred = [
+        "run_id",
+        "workbench",
+        "workbench_id",
+        "project_id",
+        "query",
+        "task",
+        "status",
+        "decision",
+        "manifest",
+        "verified",
+        "missing",
+        "bundle",
+        "request_id",
+        "response_id",
+        "profile",
+    ]
+    parts: list[str] = []
+    seen: set[str] = set()
+    for key in preferred:
+        if key in payload:
+            parts.append(f"{key}={payload[key]}")
+            seen.add(key)
+    for key in sorted(payload):
+        if key in seen:
+            continue
+        parts.append(f"{key}={payload[key]}")
+        if len(parts) >= 6:
+            break
+    return ";".join(str(part).replace("\n", " ").replace(";", ",") for part in parts)
+
+
+def review_action_trace_panel(actions: list[dict[str, object]]) -> str:
+    rows: list[dict[str, str]] = []
+    for record in actions:
+        path = str(record.get("path", ""))
+        group = review_action_group(path)
+        if not group:
+            continue
+        rows.append(
+            {
+                "action_trace": str(record.get("sequence", "")),
+                "group": group,
+                "path": path,
+                "payload": payload_summary(record.get("payload", {})),
+                "status": str(record.get("status", "")),
+            }
+        )
+    return render_record_panel(
+        "Review Action Trace",
+        [("Sequence", "action_trace"), ("Group", "group"), ("Path", "path"), ("Payload", "payload"), ("Status", "status")],
+        rows,
+        "No related host actions",
+    )
+
+
 def default_batch_payload() -> str:
     actions = {
         "actions": [
@@ -996,6 +1073,8 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
         if detail_panel:
             sections.append(detail_panel)
         sections.extend(render_grouped_details(file_name, state))
+        if file_name == "review.html":
+            sections.append(review_action_trace_panel(actions))
         if file_name == "actions.html":
             sections.append(render_action_panel())
             sections.append(render_action_log(actions))
