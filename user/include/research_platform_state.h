@@ -448,6 +448,39 @@ static RP_UNUSED int rp_host_seed_copy_llm_value(const char *key, char *out, int
 	return 0;
 }
 
+static RP_UNUSED int rp_host_seed_has_host_workflow_step_action(void)
+{
+	return rp_host_seed_has("kind=host_workflow_stage") ||
+	       rp_host_seed_has("kind=host_workflow_cache") ||
+	       rp_host_seed_has("kind=host_workflow_retry") ||
+	       rp_host_seed_has("kind=host_workflow_artifact") ||
+	       rp_host_seed_has("kind=host_workflow_report");
+}
+
+static RP_UNUSED int rp_host_seed_has_host_workflow_action(void)
+{
+	return rp_host_seed_has("kind=host_workflow") ||
+	       rp_host_seed_has("kind=host_workflow_export") ||
+	       rp_host_seed_has_host_workflow_step_action();
+}
+
+static RP_UNUSED int rp_host_seed_copy_host_workflow_value(const char *key, char *out, int cap)
+{
+	const char *kinds[] = {
+		"kind=host_workflow",
+		"kind=host_workflow_export",
+		"kind=host_workflow_stage",
+		"kind=host_workflow_cache",
+		"kind=host_workflow_retry",
+		"kind=host_workflow_artifact",
+		"kind=host_workflow_report"
+	};
+	for (int i = 0; i < (int)(sizeof(kinds) / sizeof(kinds[0])); i++) {
+		if (rp_host_seed_copy_value_for_kind(kinds[i], key, out, cap)) return 1;
+	}
+	return 0;
+}
+
 static RP_UNUSED int rp_host_seed_has_workflow_portability_run_action(void)
 {
 	return rp_host_seed_has("kind=workflow_portability");

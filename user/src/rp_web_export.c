@@ -183,9 +183,9 @@ int main(void)
 
 	if (!rp_write_file("rp_web_routes",
 			   "service=host-web-ui\n"
-			   "routes=52\n"
+			   "routes=57\n"
 			   "get_routes=14\n"
-			   "post_routes=38\n"
+			   "post_routes=43\n"
 			   "route=/;payload=rp_api_home;status=ready\n"
 			   "route=/run/RUN-042;payload=rp_api_run;status=ready\n"
 			   "route=/research/{run_id};payload=rp_uresrun;status=ready\n"
@@ -202,6 +202,11 @@ int main(void)
 			   "route=/runtime;payload=rp_api_runtime;status=ready\n"
 			   "action=/actions/host-workflow/run;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/host-workflow/export;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/host-workflow/stage-attempt;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/host-workflow/cache-decision;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/host-workflow/retry-decision;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/host-workflow/artifact-manifest;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/host-workflow/report-export;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/workflow-portability/run;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/workflow-portability/import;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/workflow-portability/plan;method=POST;payload=rp_api_action;status=ready\n"
@@ -738,9 +743,14 @@ int main(void)
 	}
 	if (!rp_write_file("rp_api_action",
 			   "api=actions\n"
-			   "actions=38\n"
+			   "actions=43\n"
 			   "host_workflow_run=/actions/host-workflow/run\n"
 			   "host_workflow_export=/actions/host-workflow/export\n"
+			   "host_workflow_stage=/actions/host-workflow/stage-attempt\n"
+			   "host_workflow_cache=/actions/host-workflow/cache-decision\n"
+			   "host_workflow_retry=/actions/host-workflow/retry-decision\n"
+			   "host_workflow_artifact=/actions/host-workflow/artifact-manifest\n"
+			   "host_workflow_report=/actions/host-workflow/report-export\n"
 			   "workflow_portability_run=/actions/workflow-portability/run\n"
 			   "workflow_portability_import=/actions/workflow-portability/import\n"
 			   "workflow_portability_plan=/actions/workflow-portability/plan\n"
@@ -1014,9 +1024,9 @@ int main(void)
 	}
 	if (!rp_write_file("rp_web_bundle",
 			   "bundle=host-web-ui\n"
-			   "routes=52\n"
+			   "routes=57\n"
 			   "get_routes=14\n"
-			   "post_routes=38\n"
+			   "post_routes=43\n"
 			   "api_payloads=14\n"
 			   "action_payloads=1\n"
 			   "action_state_records=12\n"
@@ -1054,7 +1064,7 @@ int main(void)
 			   "reader_contract_version=2\n"
 			   "reader_ready=1\n"
 			   "reader_views=14\n"
-			   "reader_actions=38\n"
+			   "reader_actions=43\n"
 			   "reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes\n"
 			   "reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_web_bundle\n"
 			   "reader_required_sections=routes,payloads,actions,live_update,downloads,compare\n"
@@ -1105,9 +1115,14 @@ int main(void)
 		}
 		if ((host_action_seeded && text_contains_silent(host_action_seed, "kind=host_workflow")) ||
 		    (host_action_seeded && text_contains_silent(host_action_seed, "kind=host_workflow_export")) ||
+		    (host_action_seeded && rp_host_seed_has_host_workflow_step_action()) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=host_workflow"))) {
 			if (!rp_append_file("rp_actionio", "host_action_workflow=1")) return 1;
 			if (!rp_append_file("rp_actionio", "host_action_workflow_outputs=rp_stage_dag,rp_stage_state,rp_run_events,rp_artifact_manifest,rp_package")) return 1;
+			if ((host_action_seeded && rp_host_seed_has_host_workflow_step_action()) ||
+			    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=host_workflow_"))) {
+				if (!rp_append_file("rp_actionio", "host_action_workflow_steps=5")) return 1;
+			}
 		}
 		if ((host_action_seeded && rp_host_seed_has_workflow_portability_action()) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workflow_portability"))) {
@@ -1230,8 +1245,13 @@ int main(void)
 		}
 		if ((host_action_seeded && text_contains_silent(host_action_seed, "kind=host_workflow")) ||
 		    (host_action_seeded && text_contains_silent(host_action_seed, "kind=host_workflow_export")) ||
+		    (host_action_seeded && rp_host_seed_has_host_workflow_step_action()) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=host_workflow"))) {
 			if (!rp_append_file("rp_web_bundle", "host_action_workflow_outputs=rp_stage_dag,rp_stage_state,rp_run_events,rp_artifact_manifest,rp_package")) return 1;
+			if ((host_action_seeded && rp_host_seed_has_host_workflow_step_action()) ||
+			    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=host_workflow_"))) {
+				if (!rp_append_file("rp_web_bundle", "host_action_workflow_steps=5")) return 1;
+			}
 		}
 		if ((host_action_seeded && rp_host_seed_has_workflow_portability_action()) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workflow_portability"))) {
@@ -1317,6 +1337,6 @@ int main(void)
 	if (!rp_append_status("actionio=ready")) return 1;
 	if (!rp_append_status("usable_research=ready")) return 1;
 	if (!rp_append_status("action_exports=ready")) return 1;
-	printf("rp_web_export: routes=52 api_payloads=14 actions=38 bundle=ready status=ready\n");
+	printf("rp_web_export: routes=57 api_payloads=14 actions=43 bundle=ready status=ready\n");
 	return 0;
 }

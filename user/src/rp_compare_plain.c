@@ -191,11 +191,10 @@ int main(void)
 		ok = ok && rp_file_contains("rp_api_compare", token);
 		ok = ok && rp_file_contains("rp_actionio", "host_action_agentcompare=1");
 	}
-	if (rp_host_seed_has("kind=host_workflow") || rp_host_seed_has("kind=host_workflow_export")) {
+	if (rp_host_seed_has_host_workflow_action()) {
 		char value[64];
 		char token[140];
-		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow", "workflow_id=", value, sizeof(value)) &&
-		    !rp_host_seed_copy_value_for_kind("kind=host_workflow_export", "workflow_id=", value, sizeof(value))) {
+		if (!rp_host_seed_copy_host_workflow_value("workflow_id=", value, sizeof(value))) {
 			rp_copy_text(value, sizeof(value), "wf-host-plain");
 		}
 		rp_copy_text(token, sizeof(token), "host_workflow_id=");
@@ -227,6 +226,17 @@ int main(void)
 			ok = ok && check_seed_value("kind=host_workflow_export", "bundle=", "workflow-export.zip", "rp_runner", "host_action_workflow_export=");
 			ok = ok && check_seed_value("kind=host_workflow_export", "format=", "json", "rp_package", "host_action_workflow_format=");
 		}
+	}
+	if (rp_host_seed_has_host_workflow_step_action()) {
+		ok = ok && rp_file_contains("rp_stage_state", "host_workflow_steps=applied");
+		ok = ok && rp_file_contains("rp_stage_state", "host_workflow_stage_action=");
+		ok = ok && rp_file_contains("rp_cache_index", "host_workflow_cache_action=");
+		ok = ok && rp_file_contains("rp_retry_plan", "host_workflow_retry_action=");
+		ok = ok && rp_file_contains("rp_artifact_manifest", "host_workflow_artifact_action=");
+		ok = ok && rp_file_contains("rp_report_text", "host_workflow_report_action=");
+		ok = ok && rp_file_contains("rp_package", "host_action_workflow_steps=ready");
+		ok = ok && rp_file_contains("rp_actionio", "host_action_workflow_steps=5");
+		ok = ok && rp_file_contains("rp_web_bundle", "host_action_workflow_steps=5");
 	}
 	if (rp_host_seed_has_workflow_portability_run_action()) {
 		ok = ok && rp_file_contains("rp_wfio", "host_portability_payload=applied");
@@ -969,10 +979,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "custom_runs=3");
 	ok = ok && rp_file_contains("rp_runner", "custom_agent_decisions=15");
 	ok = ok && rp_file_contains("rp_runner", "citation_plan_entries=3");
-	ok = ok && rp_file_contains("rp_web_routes", "routes=52");
+	ok = ok && rp_file_contains("rp_web_routes", "routes=57");
 	ok = ok && rp_file_contains("rp_web_routes", "get_routes=14");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research/workbench/{id}");
-	ok = ok && rp_file_contains("rp_web_routes", "post_routes=38");
+	ok = ok && rp_file_contains("rp_web_routes", "post_routes=43");
+	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/host-workflow/stage-attempt");
+	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/host-workflow/report-export");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/workflow-portability/run");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/workflow-portability/import");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/workflow-portability/package");
@@ -1016,7 +1028,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_pub", "result_review=rp_resrev");
 	ok = ok && rp_file_contains("rp_api_know", "semantic_index=rp_semindex");
 	ok = ok && rp_file_contains("rp_api_runtime", "runtime_env=rp_runenv");
-	ok = ok && rp_file_contains("rp_api_action", "actions=38");
+	ok = ok && rp_file_contains("rp_api_action", "actions=43");
+	ok = ok && rp_file_contains("rp_api_action", "host_workflow_stage=/actions/host-workflow/stage-attempt");
+	ok = ok && rp_file_contains("rp_api_action", "host_workflow_report=/actions/host-workflow/report-export");
 	ok = ok && rp_file_contains("rp_api_action", "workflow_portability_run=/actions/workflow-portability/run");
 	ok = ok && rp_file_contains("rp_api_action", "workflow_portability_import=/actions/workflow-portability/import");
 	ok = ok && rp_file_contains("rp_api_action", "workflow_portability_package=/actions/workflow-portability/package");

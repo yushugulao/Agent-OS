@@ -278,6 +278,26 @@ def main() -> int:
                     "payload": {"workflow_id": "WF1", "run_id": "RUN-999", "format": "json", "bundle": "wf.zip"},
                 },
                 {
+                    "path": "/actions/host-workflow/stage-attempt",
+                    "payload": {"workflow_id": "WF1", "run_id": "RUN-999", "stage": "clean", "attempt": "2", "status": "failed", "command": "clean_reads", "duration_ms": "1200"},
+                },
+                {
+                    "path": "/actions/host-workflow/cache-decision",
+                    "payload": {"workflow_id": "WF1", "run_id": "RUN-999", "stage": "analyze", "cache_key": "cache:WF1:analyze", "cache_result": "hit", "cache_policy": "content"},
+                },
+                {
+                    "path": "/actions/host-workflow/retry-decision",
+                    "payload": {"workflow_id": "WF1", "run_id": "RUN-999", "stage": "clean", "retry_reason": "checksum_mismatch", "next_attempt": "3", "decision": "rerun_stage"},
+                },
+                {
+                    "path": "/actions/host-workflow/artifact-manifest",
+                    "payload": {"workflow_id": "WF1", "run_id": "RUN-999", "artifact": "clean.metrics.json", "artifact_kind": "metrics", "sha256": "sha-host-wf1", "bytes": "4096"},
+                },
+                {
+                    "path": "/actions/host-workflow/report-export",
+                    "payload": {"workflow_id": "WF1", "run_id": "RUN-999", "report": "workflow-report.md", "format": "markdown", "sections": "5", "status": "ready"},
+                },
+                {
                     "path": "/actions/workflow-portability/run",
                     "payload": {"import_id": "workflow-import:WF1:nextflow", "source_format": "nextflow", "source": "main.wf1.nf", "target_runtime": "agentos-ucore", "execution_plan": "workflow-migration-execution-plan:WF1:agentcompare", "compare_profile": "compare-profile:WF1:migration", "scenario_id": "backend-scenario:WF1", "rehearsal_status": "passed", "readiness_decision": "ready_for_agentos", "package": "wf-portability.zip"},
                 },
@@ -336,7 +356,7 @@ def main() -> int:
             ],
         )
         summary = runner.prepare_action_state(loaded, state_dir, run_dir)
-        expected_actions = 73
+        expected_actions = 78
 
         assert summary["actions"] == expected_actions
         assert summary["accepted"] == expected_actions
@@ -399,6 +419,11 @@ def main() -> int:
         assert "research_search_action_item" in summary["kinds"]
         assert "host_workflow" in summary["kinds"]
         assert "host_workflow_export" in summary["kinds"]
+        assert "host_workflow_stage" in summary["kinds"]
+        assert "host_workflow_cache" in summary["kinds"]
+        assert "host_workflow_retry" in summary["kinds"]
+        assert "host_workflow_artifact" in summary["kinds"]
+        assert "host_workflow_report" in summary["kinds"]
         assert "workflow_portability" in summary["kinds"]
         assert "workflow_portability_import" in summary["kinds"]
         assert "workflow_portability_plan" in summary["kinds"]
@@ -483,6 +508,11 @@ def main() -> int:
         assert "kind=research_search_action_item" in queue
         assert "kind=host_workflow" in queue
         assert "kind=host_workflow_export" in queue
+        assert "kind=host_workflow_stage" in queue
+        assert "kind=host_workflow_cache" in queue
+        assert "kind=host_workflow_retry" in queue
+        assert "kind=host_workflow_artifact" in queue
+        assert "kind=host_workflow_report" in queue
         assert "kind=workflow_portability" in queue
         assert "kind=workflow_portability_import" in queue
         assert "kind=workflow_portability_plan" in queue
@@ -546,6 +576,15 @@ def main() -> int:
         assert "cache_hit_stage=analyze" in queue
         assert "observer_events=12" in queue
         assert "bundle=wf.zip" in queue
+        assert "stage=clean" in queue
+        assert "attempt=2" in queue
+        assert "command=clean_reads" in queue
+        assert "cache_key=cache:WF1:analyze" in queue
+        assert "cache_result=hit" in queue
+        assert "next_attempt=3" in queue
+        assert "artifact=clean.metrics.json" in queue
+        assert "sha256=sha-host-wf1" in queue
+        assert "report=workflow-report.md" in queue
         assert "import_id=workflow-import:WF1:nextflow" in queue
         assert "source_format=nextflow" in queue
         assert "source=main.wf1.nf" in queue
@@ -606,6 +645,11 @@ def main() -> int:
         assert "kind=research_search_export" in plan
         assert "kind=host_workflow" in plan
         assert "kind=host_workflow_export" in plan
+        assert "kind=host_workflow_stage" in plan
+        assert "kind=host_workflow_cache" in plan
+        assert "kind=host_workflow_retry" in plan
+        assert "kind=host_workflow_artifact" in plan
+        assert "kind=host_workflow_report" in plan
         assert "kind=workflow_portability" in plan
         assert "kind=workflow_portability_import" in plan
         assert "kind=workflow_portability_plan" in plan
@@ -659,6 +703,11 @@ def main() -> int:
         assert "/actions/research-search/export" in inbox
         assert "/actions/host-workflow/run" in inbox
         assert "/actions/host-workflow/export" in inbox
+        assert "/actions/host-workflow/stage-attempt" in inbox
+        assert "/actions/host-workflow/cache-decision" in inbox
+        assert "/actions/host-workflow/retry-decision" in inbox
+        assert "/actions/host-workflow/artifact-manifest" in inbox
+        assert "/actions/host-workflow/report-export" in inbox
         assert "/actions/workflow-portability/run" in inbox
         assert "/actions/workflow-portability/import" in inbox
         assert "/actions/workflow-portability/plan" in inbox
@@ -731,6 +780,11 @@ def main() -> int:
         assert runner.action_kind("/actions/research-search/action-item") == "research_search_action_item"
         assert runner.action_kind("/actions/host-workflow/run") == "host_workflow"
         assert runner.action_kind("/actions/host-workflow/export") == "host_workflow_export"
+        assert runner.action_kind("/actions/host-workflow/stage-attempt") == "host_workflow_stage"
+        assert runner.action_kind("/actions/host-workflow/cache-decision") == "host_workflow_cache"
+        assert runner.action_kind("/actions/host-workflow/retry-decision") == "host_workflow_retry"
+        assert runner.action_kind("/actions/host-workflow/artifact-manifest") == "host_workflow_artifact"
+        assert runner.action_kind("/actions/host-workflow/report-export") == "host_workflow_report"
         assert runner.action_kind("/actions/workflow-portability/run") == "workflow_portability"
         assert runner.action_kind("/actions/workflow-portability/import") == "workflow_portability_import"
         assert runner.action_kind("/actions/workflow-portability/plan") == "workflow_portability_plan"
@@ -776,6 +830,11 @@ def main() -> int:
         assert "kind=research_search_export" in seed_file
         assert "kind=host_workflow" in seed_file
         assert "kind=host_workflow_export" in seed_file
+        assert "kind=host_workflow_stage" in seed_file
+        assert "kind=host_workflow_cache" in seed_file
+        assert "kind=host_workflow_retry" in seed_file
+        assert "kind=host_workflow_artifact" in seed_file
+        assert "kind=host_workflow_report" in seed_file
         assert "kind=workflow_portability" in seed_file
         assert "kind=workflow_portability_import" in seed_file
         assert "kind=workflow_portability_plan" in seed_file
@@ -792,6 +851,11 @@ def main() -> int:
         assert "worker_slots=2" in seed_file
         assert "queue_depth=5" in seed_file
         assert "bundle=wf.zip" in seed_file
+        assert "attempt=2" in seed_file
+        assert "cache_key=cache:WF1:analyze" in seed_file
+        assert "next_attempt=3" in seed_file
+        assert "artifact=clean.metrics.json" in seed_file
+        assert "report=workflow-report.md" in seed_file
         assert "import_id=workflow-import:WF1:nextflow" in seed_file
         assert "source_format=nextflow" in seed_file
         assert "source=main.wf1.nf" in seed_file

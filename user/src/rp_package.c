@@ -375,6 +375,19 @@ int main(void)
 			if (!rp_append_host_action_line("rp_package", "host_action_workflow_observer_events=", value)) return 1;
 		}
 	}
+	if (rp_host_seed_has_host_workflow_step_action()) {
+		char value[96];
+		if (!rp_append_file("rp_package", "host_action_workflow_steps=ready")) return 1;
+		if (rp_host_seed_copy_value_for_kind("kind=host_workflow_artifact", "artifact=", value, sizeof(value))) {
+			if (!rp_append_host_action_line("rp_package", "host_action_workflow_artifact=", value)) return 1;
+		}
+		if (rp_host_seed_copy_value_for_kind("kind=host_workflow_report", "report=", value, sizeof(value))) {
+			if (!rp_append_host_action_line("rp_package", "host_action_workflow_report=", value)) return 1;
+		}
+		if (rp_host_seed_copy_value_for_kind("kind=host_workflow_retry", "decision=", value, sizeof(value))) {
+			if (!rp_append_host_action_line("rp_package", "host_action_workflow_retry_decision=", value)) return 1;
+		}
+	}
 	if (rp_host_seed_has_workflow_portability_action()) {
 		char value[96];
 		if (!rp_append_file("rp_package", "host_action_portability_package=ready")) return 1;

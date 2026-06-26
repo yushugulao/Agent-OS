@@ -173,6 +173,16 @@ def action_kind(path: str) -> str:
         return "host_workflow"
     if path.endswith("/host-workflow/export"):
         return "host_workflow_export"
+    if path.endswith("/host-workflow/stage-attempt"):
+        return "host_workflow_stage"
+    if path.endswith("/host-workflow/cache-decision"):
+        return "host_workflow_cache"
+    if path.endswith("/host-workflow/retry-decision"):
+        return "host_workflow_retry"
+    if path.endswith("/host-workflow/artifact-manifest"):
+        return "host_workflow_artifact"
+    if path.endswith("/host-workflow/report-export"):
+        return "host_workflow_report"
     if path.endswith("/workflow-portability/import"):
         return "workflow_portability_import"
     if path.endswith("/workflow-portability/plan"):
@@ -227,8 +237,15 @@ def action_plan_line(record: dict[str, object]) -> str:
         return f"plan={sequence};kind=research_run;prepare=rp_input;execute=rp_orch;collect=rp_web_bundle;status=ready"
     if kind == "agentcompare":
         return f"plan={sequence};kind=agentcompare;prepare=rp_agentcmp;execute=rp_orch;collect=rp_compare_plain;status=ready"
-    if kind == "host_workflow":
-        return f"plan={sequence};kind=host_workflow;prepare=rp_stage_dag;execute=rp_orch;collect=rp_artifact_manifest;status=ready"
+    if kind in {
+        "host_workflow",
+        "host_workflow_stage",
+        "host_workflow_cache",
+        "host_workflow_retry",
+        "host_workflow_artifact",
+        "host_workflow_report",
+    }:
+        return f"plan={sequence};kind={kind};prepare=rp_stage_dag;execute=rp_orch;collect=rp_artifact_manifest;status=ready"
     if kind in {
         "workflow_portability",
         "workflow_portability_import",
@@ -429,6 +446,11 @@ def compact_seed_text(text: str) -> str:
         "research_search_action_item": {"workbench_id", "query", "title"},
         "host_workflow": {"workflow_id", "run_id", "engine", "dag", "retry_stage", "cache_hit_stage", "worker_slots", "queue_depth", "observer_events", "retry_reason"},
         "host_workflow_export": {"workflow_id", "run_id", "format", "bundle"},
+        "host_workflow_stage": {"workflow_id", "run_id", "stage", "attempt", "status", "command", "duration_ms"},
+        "host_workflow_cache": {"workflow_id", "run_id", "stage", "cache_key", "cache_result", "cache_policy"},
+        "host_workflow_retry": {"workflow_id", "run_id", "stage", "retry_reason", "next_attempt", "decision"},
+        "host_workflow_artifact": {"workflow_id", "run_id", "artifact", "artifact_kind", "sha256", "bytes"},
+        "host_workflow_report": {"workflow_id", "run_id", "report", "format", "sections", "status"},
         "workflow_portability": {"import_id", "source_format", "source", "target_runtime", "execution_plan", "compare_profile", "scenario_id", "rehearsal_status", "readiness_decision", "package"},
         "workflow_portability_import": {"import_id", "source_format", "source", "normalized_steps", "adapter_id"},
         "workflow_portability_plan": {"import_id", "migration_plan", "target_runtime", "migration_steps", "risk_items"},

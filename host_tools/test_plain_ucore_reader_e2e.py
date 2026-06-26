@@ -122,6 +122,11 @@ def main() -> int:
                 {"path": "/actions/research-search/action-item", "payload": {"workbench_id": "W1", "query": "recovery evidence", "title": "Review search hits", "instruction": "Promote key hit", "priority": "high"}},
                 {"path": "/actions/host-workflow/run", "payload": {"workflow_id": "WF1", "run_id": "R1", "engine": "plain-c-runner", "stages": "6", "dag": "ingest>clean>analyze>review>package", "max_workers": "2", "worker_slots": "2", "queue_depth": "5", "observer_events": "12", "failed_stage": "clean", "retry_stage": "clean", "cache_hit_stage": "analyze", "retry_reason": "checksum_mismatch", "cache": "content"}},
                 {"path": "/actions/host-workflow/export", "payload": {"workflow_id": "WF1", "run_id": "R1", "format": "json", "bundle": "wf.zip"}},
+                {"path": "/actions/host-workflow/stage-attempt", "payload": {"workflow_id": "WF1", "run_id": "R1", "stage": "clean", "attempt": "2", "status": "failed", "command": "clean_reads", "duration_ms": "1200"}},
+                {"path": "/actions/host-workflow/cache-decision", "payload": {"workflow_id": "WF1", "run_id": "R1", "stage": "analyze", "cache_key": "cache:WF1:analyze", "cache_result": "hit", "cache_policy": "content"}},
+                {"path": "/actions/host-workflow/retry-decision", "payload": {"workflow_id": "WF1", "run_id": "R1", "stage": "clean", "retry_reason": "checksum_mismatch", "next_attempt": "3", "decision": "rerun_stage"}},
+                {"path": "/actions/host-workflow/artifact-manifest", "payload": {"workflow_id": "WF1", "run_id": "R1", "artifact": "clean.metrics.json", "artifact_kind": "metrics", "sha256": "sha-host-wf1", "bytes": "4096"}},
+                {"path": "/actions/host-workflow/report-export", "payload": {"workflow_id": "WF1", "run_id": "R1", "report": "workflow-report.md", "format": "markdown", "sections": "5", "status": "ready"}},
                 {"path": "/actions/workflow-portability/run", "payload": {"import_id": "workflow-import:WF1:nextflow", "source_format": "nextflow", "source": "main.wf1.nf", "target_runtime": "agentos-ucore", "execution_plan": "workflow-migration-execution-plan:WF1:agentcompare", "compare_profile": "compare-profile:WF1:migration", "scenario_id": "backend-scenario:WF1", "rehearsal_status": "passed", "readiness_decision": "ready_for_agentos", "package": "wf-portability.zip"}},
                 {"path": "/actions/workflow-portability/import", "payload": {"import_id": "workflow-import:WF1:nextflow", "source_format": "nextflow", "source": "main.wf1.nf", "normalized_steps": "15", "adapter_id": "adapter:WF1:nextflow"}},
                 {"path": "/actions/workflow-portability/plan", "payload": {"import_id": "workflow-import:WF1:nextflow", "migration_plan": "workflow-migration-plan:WF1", "target_runtime": "agentos-ucore", "migration_steps": "9", "risk_items": "4"}},
@@ -287,13 +292,18 @@ def main() -> int:
             assert any("host_workflow_retry_stage=clean" in line for line in rp_stage_state["lines"]), rp_stage_state
             assert any("host_workflow_cache_hit_stage=analyze" in line for line in rp_stage_state["lines"]), rp_stage_state
             assert any("host_workflow_worker_slots=2" in line for line in rp_stage_state["lines"]), rp_stage_state
+            assert any("host_workflow_steps=applied" in line for line in rp_stage_state["lines"]), rp_stage_state
+            assert any("host_workflow_stage_action=clean;attempt=2;status=failed;command=clean_reads;duration_ms=1200" in line for line in rp_stage_state["lines"]), rp_stage_state
             rp_run_events = read_json(base + "/api/state/rp_run_events")
             assert any("host_workflow_event=retry;stage=clean;reason=checksum_mismatch" in line for line in rp_run_events["lines"]), rp_run_events
+            assert any("host_workflow_event=stage_attempt;workflow=WF1;run_id=R1;stage=clean;status=failed" in line for line in rp_run_events["lines"]), rp_run_events
             assert any("host_workflow_event=finished" in line for line in rp_run_events["lines"]), rp_run_events
             rp_cache_index = read_json(base + "/api/state/rp_cache_index")
             assert any("host_workflow_cache_hit_stage=analyze" in line for line in rp_cache_index["lines"]), rp_cache_index
+            assert any("host_workflow_cache_action=analyze;key=cache:WF1:analyze;result=hit;policy=content" in line for line in rp_cache_index["lines"]), rp_cache_index
             rp_retry_plan = read_json(base + "/api/state/rp_retry_plan")
             assert any("host_workflow_retry_reason=checksum_mismatch" in line for line in rp_retry_plan["lines"]), rp_retry_plan
+            assert any("host_workflow_retry_action=clean;reason=checksum_mismatch;next_attempt=3;decision=rerun_stage" in line for line in rp_retry_plan["lines"]), rp_retry_plan
             rp_wfio = read_json(base + "/api/state/rp_wfio")
             assert any("host_portability_payload=applied" in line for line in rp_wfio["lines"]), rp_wfio
             assert any("host_portability_import=workflow-import:WF1:nextflow" in line for line in rp_wfio["lines"]), rp_wfio
@@ -319,6 +329,11 @@ def main() -> int:
             rp_execobs = read_json(base + "/api/state/rp_execobs")
             assert any("host_workflow_observer_events=12" in line for line in rp_execobs["lines"]), rp_execobs
             assert any("host_workflow_retry_reason=checksum_mismatch" in line for line in rp_execobs["lines"]), rp_execobs
+            rp_artifact_manifest = read_json(base + "/api/state/rp_artifact_manifest")
+            assert any("host_workflow_artifact_action=clean.metrics.json;kind=metrics;sha256=sha-host-wf1;bytes=4096" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
+            assert any("host_workflow_report_action=workflow-report.md;format=markdown;sections=5;status=ready" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
+            rp_report_text = read_json(base + "/api/state/rp_report_text")
+            assert any("host_workflow_report_action=workflow-report.md;format=markdown;sections=5;status=ready" in line for line in rp_report_text["lines"]), rp_report_text
             rp_lit = read_json(base + "/api/state/rp_lit")
             assert any("host_action_literature_query=prov" in line for line in rp_lit["lines"]), rp_lit
             assert any("host_action_literature_max_results=7" in line for line in rp_lit["lines"]), rp_lit
@@ -417,6 +432,10 @@ def main() -> int:
             assert any("host_action_workflow_retry_stage=clean" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_workflow_cache_hit_stage=analyze" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_workflow_worker_slots=2" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workflow_steps=ready" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workflow_artifact=clean.metrics.json" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workflow_report=workflow-report.md" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workflow_retry_decision=rerun_stage" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_portability_package=ready" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_portability_import=workflow-import:WF1:nextflow" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_portability_target=agentos-ucore" in line for line in rp_package["lines"]), rp_package
@@ -463,6 +482,7 @@ def main() -> int:
             assert any("host_action_platform_ops_outputs=rp_runner,rp_package,rp_api_action,rp_web_bundle" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_workflow=1" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_workflow_outputs=rp_stage_dag,rp_stage_state,rp_run_events,rp_artifact_manifest,rp_package" in line for line in rp_actionio["lines"]), rp_actionio
+            assert any("host_action_workflow_steps=5" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_portability=1" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_portability_outputs=rp_wfio,rp_package,rp_agentcmp" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_portability_profile=compare-profile:WF1:migration" in line for line in rp_actionio["lines"]), rp_actionio
@@ -490,6 +510,7 @@ def main() -> int:
             assert any("host_action_evidence_inputs=rp_lit,rp_knowledge,rp_api_evidence" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_workbench_outputs=rp_runner,rp_revision,rp_package" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_workflow_outputs=rp_stage_dag,rp_stage_state,rp_run_events,rp_artifact_manifest,rp_package" in line for line in rp_web_bundle["lines"]), rp_web_bundle
+            assert any("host_action_workflow_steps=5" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_portability_outputs=rp_wfio,rp_package,rp_agentcmp" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_portability_profile=compare-profile:WF1:migration" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_portability_steps=6" in line for line in rp_web_bundle["lines"]), rp_web_bundle
@@ -524,7 +545,9 @@ def main() -> int:
             assert any("host_action_workbench_handoff_scope=full" in line for line in rp_api_compare["lines"]), rp_api_compare
             assert any("host_action_workbench_bundle=wb.zip" in line for line in rp_api_compare["lines"]), rp_api_compare
             rp_api_action = read_json(base + "/api/state/rp_api_action")
-            assert any("actions=38" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("actions=43" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("host_workflow_stage=/actions/host-workflow/stage-attempt" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("host_workflow_report=/actions/host-workflow/report-export" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("operations_report=/actions/research/operations-report" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("workflow_portability_run=/actions/workflow-portability/run" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("workflow_portability_import=/actions/workflow-portability/import" in line for line in rp_api_action["lines"]), rp_api_action

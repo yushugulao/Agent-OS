@@ -320,6 +320,153 @@ int main(void)
 		if (!rp_append_host_action_line("rp_runner", "host_action_workflow_export=", bundle)) return 1;
 		if (!rp_append_host_action_line("rp_runner", "host_action_workflow_export_format=", format)) return 1;
 	}
+	if (rp_host_seed_has_host_workflow_step_action()) {
+		char workflow_id[64];
+		char run_id[48];
+		char value[96];
+		char other[96];
+		char third[96];
+		char fourth[96];
+		char fifth[96];
+		char line[220];
+		if (!rp_host_seed_copy_host_workflow_value("workflow_id=", workflow_id, sizeof(workflow_id))) {
+			rp_copy_text(workflow_id, sizeof(workflow_id), "wf-host-plain");
+		}
+		if (!rp_host_seed_copy_host_workflow_value("run_id=", run_id, sizeof(run_id))) {
+			rp_copy_text(run_id, sizeof(run_id), "RUN-042");
+		}
+		if (!rp_append_file("rp_stage_state", "host_workflow_steps=applied")) return 1;
+		if (rp_host_seed_has("kind=host_workflow_stage")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_stage", "stage=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "align");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_stage", "attempt=", other, sizeof(other))) {
+				rp_copy_text(other, sizeof(other), "2");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_stage", "status=", third, sizeof(third))) {
+				rp_copy_text(third, sizeof(third), "failed");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_stage", "command=", fourth, sizeof(fourth))) {
+				rp_copy_text(fourth, sizeof(fourth), "align_reads");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_stage", "duration_ms=", fifth, sizeof(fifth))) {
+				rp_copy_text(fifth, sizeof(fifth), "1200");
+			}
+			rp_copy_text(line, sizeof(line), "host_workflow_stage_action=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";attempt=");
+			rp_append_text(line, sizeof(line), other);
+			rp_append_text(line, sizeof(line), ";status=");
+			rp_append_text(line, sizeof(line), third);
+			rp_append_text(line, sizeof(line), ";command=");
+			rp_append_text(line, sizeof(line), fourth);
+			rp_append_text(line, sizeof(line), ";duration_ms=");
+			rp_append_text(line, sizeof(line), fifth);
+			if (!rp_append_file("rp_stage_state", line)) return 1;
+			rp_copy_text(line, sizeof(line), "host_workflow_event=stage_attempt;workflow=");
+			rp_append_text(line, sizeof(line), workflow_id);
+			rp_append_text(line, sizeof(line), ";run_id=");
+			rp_append_text(line, sizeof(line), run_id);
+			rp_append_text(line, sizeof(line), ";stage=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";status=");
+			rp_append_text(line, sizeof(line), third);
+			if (!rp_append_file("rp_run_events", line)) return 1;
+		}
+		if (rp_host_seed_has("kind=host_workflow_cache")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_cache", "stage=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "profile");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_cache", "cache_key=", other, sizeof(other))) {
+				rp_copy_text(other, sizeof(other), "cache:profile:R1");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_cache", "cache_result=", third, sizeof(third))) {
+				rp_copy_text(third, sizeof(third), "hit");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_cache", "cache_policy=", fourth, sizeof(fourth))) {
+				rp_copy_text(fourth, sizeof(fourth), "content");
+			}
+			rp_copy_text(line, sizeof(line), "host_workflow_cache_action=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";key=");
+			rp_append_text(line, sizeof(line), other);
+			rp_append_text(line, sizeof(line), ";result=");
+			rp_append_text(line, sizeof(line), third);
+			rp_append_text(line, sizeof(line), ";policy=");
+			rp_append_text(line, sizeof(line), fourth);
+			if (!rp_append_file("rp_cache_index", line)) return 1;
+		}
+		if (rp_host_seed_has("kind=host_workflow_retry")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_retry", "stage=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "align");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_retry", "retry_reason=", other, sizeof(other))) {
+				rp_copy_text(other, sizeof(other), "checksum_mismatch");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_retry", "next_attempt=", third, sizeof(third))) {
+				rp_copy_text(third, sizeof(third), "3");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_retry", "decision=", fourth, sizeof(fourth))) {
+				rp_copy_text(fourth, sizeof(fourth), "rerun_stage");
+			}
+			rp_copy_text(line, sizeof(line), "host_workflow_retry_action=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";reason=");
+			rp_append_text(line, sizeof(line), other);
+			rp_append_text(line, sizeof(line), ";next_attempt=");
+			rp_append_text(line, sizeof(line), third);
+			rp_append_text(line, sizeof(line), ";decision=");
+			rp_append_text(line, sizeof(line), fourth);
+			if (!rp_append_file("rp_retry_plan", line)) return 1;
+		}
+		if (rp_host_seed_has("kind=host_workflow_artifact")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_artifact", "artifact=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "align.bam");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_artifact", "artifact_kind=", other, sizeof(other))) {
+				rp_copy_text(other, sizeof(other), "alignment");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_artifact", "sha256=", third, sizeof(third))) {
+				rp_copy_text(third, sizeof(third), "sha-host-artifact");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_artifact", "bytes=", fourth, sizeof(fourth))) {
+				rp_copy_text(fourth, sizeof(fourth), "2048");
+			}
+			rp_copy_text(line, sizeof(line), "host_workflow_artifact_action=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";kind=");
+			rp_append_text(line, sizeof(line), other);
+			rp_append_text(line, sizeof(line), ";sha256=");
+			rp_append_text(line, sizeof(line), third);
+			rp_append_text(line, sizeof(line), ";bytes=");
+			rp_append_text(line, sizeof(line), fourth);
+			if (!rp_append_file("rp_artifact_manifest", line)) return 1;
+		}
+		if (rp_host_seed_has("kind=host_workflow_report")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_report", "report=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "workflow-report.md");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_report", "format=", other, sizeof(other))) {
+				rp_copy_text(other, sizeof(other), "markdown");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_report", "sections=", third, sizeof(third))) {
+				rp_copy_text(third, sizeof(third), "5");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_report", "status=", fourth, sizeof(fourth))) {
+				rp_copy_text(fourth, sizeof(fourth), "ready");
+			}
+			rp_copy_text(line, sizeof(line), "host_workflow_report_action=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";format=");
+			rp_append_text(line, sizeof(line), other);
+			rp_append_text(line, sizeof(line), ";sections=");
+			rp_append_text(line, sizeof(line), third);
+			rp_append_text(line, sizeof(line), ";status=");
+			rp_append_text(line, sizeof(line), fourth);
+			if (!rp_append_file("rp_report_text", line)) return 1;
+			if (!rp_append_file("rp_artifact_manifest", line)) return 1;
+		}
+	}
 	if (!rp_append_file("rp_runner", "custom_runs=3")) return 1;
 	if (!rp_append_file("rp_runner", "dynamic_input_runs=4")) return 1;
 	if (!rp_append_file("rp_runner", "dynamic_run=usable-run:RUN-904;source=api;status=queued;next=validate")) return 1;
