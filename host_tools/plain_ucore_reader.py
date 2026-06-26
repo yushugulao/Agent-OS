@@ -323,6 +323,17 @@ def first_source_record(state: dict[str, dict[str, object]], name: str, prefixes
     return rows[0] if rows else ""
 
 
+def source_line_for_keys(state: dict[str, dict[str, object]], name: str, key_spec: str) -> str:
+    keys = [key.strip() for key in key_spec.split(",") if key.strip()]
+    if not keys:
+        return ""
+    for line in state_lines(state, name):
+        record = parse_kv_record(line)
+        if any(key in record for key in keys):
+            return line.strip()
+    return ""
+
+
 def operations_source_files(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
     specs = [
         ("operations_report", "rp_review_pack", ("operations_handoff=",), "run.html,review.html"),
@@ -363,10 +374,12 @@ def report_source_map(state: dict[str, dict[str, object]]) -> list[dict[str, str
         section = record.get("report_source", "")
         if not section:
             continue
+        state_file = record.get("state_file", "")
+        source_key = record.get("source_key", "")
         platform_rows[section] = {
             "report_section": section,
-            "state_file": record.get("state_file", ""),
-            "source_line": record.get("source_line", record.get("source_key", "")),
+            "state_file": state_file,
+            "source_line": source_line_for_keys(state, state_file, source_key) or record.get("source_line", source_key),
             "linked_sources": record.get("linked_sources", ""),
             "review_page": record.get("review_page", "run.html,review.html"),
             "status": record.get("status", ""),

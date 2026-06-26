@@ -793,6 +793,9 @@ def main() -> int:
             assert "Backend Case Narratives" in run_html
             assert "Report Source Map" in run_html
             assert "run_setup" in run_html
+            assert "host_workflow_run_id=R1" in run_html
+            assert "host_relay_response=relay-llm-q1" in run_html
+            assert "backend_evidence_report=rp_backend_exec" in run_html
             assert "rp_llm_req,rp_llm_packets,rp_llmeval,rp_llm_guard" in run_html
             assert "Operations Report Narrative" in run_html
             assert "Operations Source Files" in run_html
