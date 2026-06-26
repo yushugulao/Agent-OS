@@ -225,6 +225,8 @@ def main() -> int:
         assert "Backend Evidence In Report" in run_html
         assert "Backend Evidence In Runner" in run_html
         assert "Backend Case Narratives" in run_html
+        assert "Operations Report Narrative" in run_html
+        assert "operations_report" in run_html
         assert "Run Action Trace" in run_html
         assert "batch_tool_context" in run_html
         assert "execution_plan:pass:record:baseline" in run_html
@@ -288,6 +290,8 @@ def main() -> int:
         assert "Review Operations Summary" in review_html
         assert "Review Workbench Summary" in review_html
         assert "Review Project Summary" in review_html
+        assert "Operations Report Narrative" in review_html
+        assert "project_followup" in review_html
         assert "Review Action Trace" in review_html
         assert "Handoff Checks" in review_html
         assert "send_to_reviewer" in review_html
@@ -413,6 +417,7 @@ def main() -> int:
             assert "/actions/research/export-bundle" in actions_html
             review_html = (out_dir / "review.html").read_text(encoding="utf-8")
             assert "Review Action Trace" in review_html
+            assert "Operations Report Narrative" in review_html
             assert "/actions/research/review" in review_html
             assert "/actions/research/export-bundle" in review_html
             run_html = (out_dir / "run.html").read_text(encoding="utf-8")

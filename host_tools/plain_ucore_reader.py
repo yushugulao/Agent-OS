@@ -232,6 +232,77 @@ def backend_case_narratives(state: dict[str, dict[str, object]]) -> list[dict[st
     return rows
 
 
+def operations_report_narrative(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
+    runner = state_values(state, "rp_runner")
+    package = state_values(state, "rp_package")
+    op_rows = state_records(state, "rp_review_pack", "operations_handoff")
+    workbench_rows = state_records(state, "rp_review_pack", "workbench_handoff")
+    project_rows = state_records(state, "rp_review_pack", "project_handoff")
+    op = op_rows[0] if op_rows else {}
+    workbench = workbench_rows[0] if workbench_rows else {}
+    project = project_rows[0] if project_rows else {}
+    rows = [
+        {
+            "operation_section": "operations_report",
+            "source": op.get("operations_handoff", "rp_runner+rp_package"),
+            "detail": "report={};tasks={};next={}".format(
+                op.get("report", package.get("host_action_operations_report", "")),
+                op.get("tasks", runner.get("workbench_tasks", "")),
+                op.get("next", runner.get("workbench_next_task", "")),
+            ),
+            "status": op.get("status", package.get("status", runner.get("status", ""))),
+        },
+        {
+            "operation_section": "execution_plan",
+            "source": "rp_package",
+            "detail": "plan={};quality={};repair={}".format(
+                op.get("plan", package.get("host_action_operations_next", "")),
+                op.get("quality", package.get("host_action_quality_gate", "")),
+                op.get("repair", package.get("host_action_quality_repair_execute", "")),
+            ),
+            "status": op.get("status", package.get("status", "")),
+        },
+        {
+            "operation_section": "workbench_delivery",
+            "source": workbench.get("workbench_handoff", "rp_runner+rp_package"),
+            "detail": "workbench={};task={};manifest={};verified={};missing={};bundle={}".format(
+                workbench.get("workbench", runner.get("host_action_workbench_id", runner.get("workbench", ""))),
+                workbench.get("task", runner.get("host_action_workbench_task", "")),
+                workbench.get("manifest", package.get("host_action_workbench_manifest", "")),
+                workbench.get("verified", package.get("host_action_workbench_verified_files", "")),
+                workbench.get("missing", package.get("host_action_workbench_missing_files", "")),
+                workbench.get("bundle", package.get("host_action_workbench_bundle", "")),
+            ),
+            "status": workbench.get("status", package.get("host_action_workbench_completion", "")),
+        },
+        {
+            "operation_section": "project_followup",
+            "source": project.get("project_handoff", "rp_package"),
+            "detail": "project={};space={};note={};action_item={};answer={};repair={}".format(
+                project.get("project", package.get("host_action_project_id", "")),
+                project.get("space", package.get("host_action_project_space", "")),
+                project.get("note", package.get("host_action_project_note", "")),
+                project.get("action_item", package.get("host_action_project_action_item", "")),
+                project.get("answer", package.get("host_action_project_answer", "")),
+                project.get("repair", package.get("host_action_project_repair", "")),
+            ),
+            "status": project.get("status", package.get("status", "")),
+        },
+        {
+            "operation_section": "backend_evidence",
+            "source": "rp_backend_exec",
+            "detail": "backend={};plain_costs={};agentos_replacements={};risks={}".format(
+                op.get("backend", runner.get("backend_evidence_report", "")),
+                runner.get("plain_costs", ""),
+                runner.get("agentos_replacements", ""),
+                runner.get("risks", ""),
+            ),
+            "status": runner.get("status", ""),
+        },
+    ]
+    return [row for row in rows if any(value for key, value in row.items() if key != "source")]
+
+
 def render_record_panel(
     title: str,
     columns: list[tuple[str, str]],
@@ -429,6 +500,11 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                     ("Next", "next"),
                 ],
                 backend_case_narratives(state),
+            ),
+            render_record_panel(
+                "Operations Report Narrative",
+                [("Section", "operation_section"), ("Source", "source"), ("Detail", "detail"), ("Status", "status")],
+                operations_report_narrative(state),
             ),
         ]
     if file_name == "agents.html":
@@ -671,6 +747,11 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 "Review Project Summary",
                 [("Source", "project_handoff"), ("Project", "project"), ("Space", "space"), ("Note", "note"), ("Action Item", "action_item"), ("Answer", "answer"), ("Repair", "repair"), ("Search", "search"), ("Status", "status")],
                 state_records(state, "rp_review_pack", "project_handoff"),
+            ),
+            render_record_panel(
+                "Operations Report Narrative",
+                [("Section", "operation_section"), ("Source", "source"), ("Detail", "detail"), ("Status", "status")],
+                operations_report_narrative(state),
             ),
         ]
     if file_name == "llm.html":
