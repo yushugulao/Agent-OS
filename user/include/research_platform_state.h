@@ -428,6 +428,26 @@ static RP_UNUSED int rp_host_seed_copy_platform_ops_value(const char *key, char 
 	return 0;
 }
 
+static RP_UNUSED int rp_host_seed_has_llm_relay_action(void)
+{
+	return rp_host_seed_has("kind=llm_relay_request") ||
+	       rp_host_seed_has("kind=llm_relay_response") ||
+	       rp_host_seed_has("kind=llm_relay_fallback");
+}
+
+static RP_UNUSED int rp_host_seed_copy_llm_value(const char *key, char *out, int cap)
+{
+	const char *kinds[] = {
+		"kind=llm_relay_request",
+		"kind=llm_relay_response",
+		"kind=llm_relay_fallback"
+	};
+	for (int i = 0; i < (int)(sizeof(kinds) / sizeof(kinds[0])); i++) {
+		if (rp_host_seed_copy_value_for_kind(kinds[i], key, out, cap)) return 1;
+	}
+	return 0;
+}
+
 static RP_UNUSED int rp_host_seed_copy_workspace_value(const char *key, char *out, int cap)
 {
 	if (rp_host_seed_copy_value_for_kind("kind=workspace_inspect", key, out, cap)) return 1;

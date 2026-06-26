@@ -443,6 +443,9 @@ def default_batch_payload() -> str:
             {"path": "/actions/research/export-workbench", "payload": {"workbench": "usable-workbench:RUN-WEB", "bundle": "workbench-bundle.zip"}},
             {"path": "/actions/research/export-notebook", "payload": {"run_id": "RUN-WEB", "format": "ipynb"}},
             {"path": "/actions/research/export-bundle", "payload": {"run_id": "RUN-WEB", "bundle": "reviewer-evidence"}},
+            {"path": "/actions/research/llm-relay-request", "payload": {"request_id": "llm-web-q1", "run_id": "RUN-WEB", "route": "review_summary", "provider": "host-relay", "prompt": "summarize_recovery_evidence", "budget": "2048", "secret_ref": "host_env"}},
+            {"path": "/actions/research/llm-relay-response", "payload": {"request_id": "llm-web-q1", "response_id": "llm-web-r1", "provider": "host-relay", "mode": "template", "summary": "Recovered_evidence_ready", "citations": "5"}},
+            {"path": "/actions/research/llm-relay-fallback", "payload": {"case": "missing_cloud_key", "action": "template_response", "reason": "host_env_absent", "fallback_status": "ready"}},
             {"path": "/actions/agentcompare/run", "payload": {"profile": "plain_ucore_batch"}},
         ]
     }

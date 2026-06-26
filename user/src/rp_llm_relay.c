@@ -1,6 +1,13 @@
 #include <stdio.h>
 #include <research_platform_state.h>
 
+static void copy_llm_value(const char *key, const char *fallback, char *out, int cap)
+{
+	if (!rp_host_seed_copy_llm_value(key, out, cap)) {
+		rp_copy_text(out, cap, fallback);
+	}
+}
+
 int main(void)
 {
 	int ok = 1;
@@ -93,6 +100,53 @@ int main(void)
 			   "offline_template_verified=1\n"
 			   "status=ready\n")) {
 		return 1;
+	}
+	if (rp_host_seed_has_llm_relay_action()) {
+		char request_id[64];
+		char response_id[64];
+		char route[64];
+		char provider[64];
+		char budget[32];
+		char secret_ref[64];
+		char mode[48];
+		char fallback_case[64];
+		char fallback_action[64];
+		char fallback_reason[80];
+		char fallback_status[48];
+
+		copy_llm_value("request_id=", "host-q1", request_id, sizeof(request_id));
+		copy_llm_value("response_id=", "host-r1", response_id, sizeof(response_id));
+		copy_llm_value("route=", "review_summary", route, sizeof(route));
+		copy_llm_value("provider=", "template", provider, sizeof(provider));
+		copy_llm_value("budget=", "1536", budget, sizeof(budget));
+		copy_llm_value("secret_ref=", "host_env", secret_ref, sizeof(secret_ref));
+		copy_llm_value("mode=", "template", mode, sizeof(mode));
+		copy_llm_value("case=", "missing_cloud_key", fallback_case, sizeof(fallback_case));
+		copy_llm_value("action=", "template_response", fallback_action, sizeof(fallback_action));
+		copy_llm_value("reason=", "host_env_absent", fallback_reason, sizeof(fallback_reason));
+		copy_llm_value("fallback_status=", "ready", fallback_status, sizeof(fallback_status));
+
+		if (!rp_append_host_action_line("rp_llm_packets", "host_llm_packet_request=", request_id)) return 1;
+		if (!rp_append_host_action_line("rp_llm_packets", "host_llm_packet_response=", response_id)) return 1;
+		if (!rp_append_host_action_line("rp_llm_packets", "host_llm_packet_route=", route)) return 1;
+		if (!rp_append_host_action_line("rp_llm_packets", "host_llm_packet_mode=", mode)) return 1;
+
+		if (!rp_append_host_action_line("rp_llm_routes", "host_llm_route=", route)) return 1;
+		if (!rp_append_host_action_line("rp_llm_routes", "host_llm_route_provider=", provider)) return 1;
+		if (!rp_append_host_action_line("rp_llm_routes", "host_llm_route_budget=", budget)) return 1;
+
+		if (!rp_append_host_action_line("rp_llm_guard", "host_llm_guard_secret_ref=", secret_ref)) return 1;
+		if (!rp_append_file("rp_llm_guard", "host_llm_guard_status=passed")) return 1;
+
+		if (!rp_append_host_action_line("rp_llm_hostreq", "host_llm_host_request=", request_id)) return 1;
+		if (!rp_append_host_action_line("rp_llm_hostreq", "host_llm_host_response=", response_id)) return 1;
+		if (!rp_append_host_action_line("rp_llm_hostreq", "host_llm_host_provider=", provider)) return 1;
+		if (!rp_append_host_action_line("rp_llm_hostreq", "host_llm_host_mode=", mode)) return 1;
+
+		if (!rp_append_host_action_line("rp_llm_fallback", "host_llm_fallback_case=", fallback_case)) return 1;
+		if (!rp_append_host_action_line("rp_llm_fallback", "host_llm_fallback_action=", fallback_action)) return 1;
+		if (!rp_append_host_action_line("rp_llm_fallback", "host_llm_fallback_reason=", fallback_reason)) return 1;
+		if (!rp_append_host_action_line("rp_llm_fallback", "host_llm_fallback_status=", fallback_status)) return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=llm_relay;msg=relay;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=llm_relay.write_packets;target=rp_llm_packets;status=ok")) return 1;

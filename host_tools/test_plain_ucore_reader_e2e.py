@@ -122,6 +122,9 @@ def main() -> int:
                 {"path": "/actions/research-search/action-item", "payload": {"workbench_id": "W1", "query": "recovery evidence", "title": "Review search hits", "instruction": "Promote key hit", "priority": "high"}},
                 {"path": "/actions/host-workflow/run", "payload": {"workflow_id": "WF1", "run_id": "R1", "engine": "plain-c-runner", "stages": "6", "dag": "ingest>clean>analyze>review>package", "max_workers": "2", "worker_slots": "2", "queue_depth": "5", "observer_events": "12", "failed_stage": "clean", "retry_stage": "clean", "cache_hit_stage": "analyze", "retry_reason": "checksum_mismatch", "cache": "content"}},
                 {"path": "/actions/host-workflow/export", "payload": {"workflow_id": "WF1", "run_id": "R1", "format": "json", "bundle": "wf.zip"}},
+                {"path": "/actions/research/llm-relay-request", "payload": {"request_id": "llm-q1", "run_id": "R1", "route": "review_summary", "provider": "host-relay", "prompt": "summarize_recovery_evidence", "budget": "2048", "secret_ref": "host_env"}},
+                {"path": "/actions/research/llm-relay-response", "payload": {"request_id": "llm-q1", "response_id": "llm-r1", "provider": "host-relay", "mode": "template", "summary": "Recovered_evidence_ready", "citations": "5"}},
+                {"path": "/actions/research/llm-relay-fallback", "payload": {"case": "missing_cloud_key", "action": "template_response", "reason": "host_env_absent", "fallback_status": "ready"}},
                 {"path": "/actions/research/export-notebook", "payload": {"run_id": "R1", "format": "ipynb"}},
                 {"path": "/actions/research/export-bundle", "payload": {"run_id": "R1", "bundle": "ev"}},
                 {"path": "/actions/agentcompare/run", "payload": {"profile": "pb"}},
@@ -427,6 +430,8 @@ def main() -> int:
             assert any("host_action_platform_ops_outputs=rp_runner,rp_package,rp_api_action,rp_web_bundle" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_workflow=1" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_workflow_outputs=rp_stage_dag,rp_stage_state,rp_run_events,rp_artifact_manifest,rp_package" in line for line in rp_actionio["lines"]), rp_actionio
+            assert any("host_action_llm_relay=1" in line for line in rp_actionio["lines"]), rp_actionio
+            assert any("host_action_llm_outputs=rp_llm_req,rp_llmq,rp_llm_resp,rp_llm_packets,rp_llm_hostreq,rp_llm_fallback" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_export=1" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_agentcompare=1" in line for line in rp_actionio["lines"]), rp_actionio
             rp_api_artifacts = read_json(base + "/api/state/rp_api_artifacts")
@@ -448,6 +453,7 @@ def main() -> int:
             assert any("host_action_evidence_inputs=rp_lit,rp_knowledge,rp_api_evidence" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_workbench_outputs=rp_runner,rp_revision,rp_package" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_workflow_outputs=rp_stage_dag,rp_stage_state,rp_run_events,rp_artifact_manifest,rp_package" in line for line in rp_web_bundle["lines"]), rp_web_bundle
+            assert any("host_action_llm_relay=rp_llm_req,rp_llmq,rp_llm_resp,rp_llm_packets,rp_llm_hostreq,rp_llm_fallback" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_platform_ops=rp_runner,rp_package,rp_api_action" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_search_query=recovery evidence" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             rp_agentcmp = read_json(base + "/api/state/rp_agentcmp")
@@ -476,11 +482,26 @@ def main() -> int:
             assert any("host_action_workbench_handoff_scope=full" in line for line in rp_api_compare["lines"]), rp_api_compare
             assert any("host_action_workbench_bundle=wb.zip" in line for line in rp_api_compare["lines"]), rp_api_compare
             rp_api_action = read_json(base + "/api/state/rp_api_action")
-            assert any("actions=28" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("actions=31" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("operations_report=/actions/research/operations-report" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("workbench_quality_gate=/actions/research/workbench-quality-gate" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("project_space=/actions/research/project-space" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("research_search_export=/actions/research-search/export" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("llm_relay_request=/actions/research/llm-relay-request" in line for line in rp_api_action["lines"]), rp_api_action
+            rp_llm_req = read_json(base + "/api/state/rp_llm_req")
+            assert any("host_llm_request_id=llm-q1" in line for line in rp_llm_req["lines"]), rp_llm_req
+            assert any("host_llm_provider=host-relay" in line for line in rp_llm_req["lines"]), rp_llm_req
+            rp_llm_resp = read_json(base + "/api/state/rp_llm_resp")
+            assert any("host_llm_response_id=llm-r1" in line for line in rp_llm_resp["lines"]), rp_llm_resp
+            assert any("host_llm_response_summary=Recovered_evidence_ready" in line for line in rp_llm_resp["lines"]), rp_llm_resp
+            rp_llm_packets = read_json(base + "/api/state/rp_llm_packets")
+            assert any("host_llm_packet_request=llm-q1" in line for line in rp_llm_packets["lines"]), rp_llm_packets
+            rp_llm_hostreq = read_json(base + "/api/state/rp_llm_hostreq")
+            assert any("host_llm_host_response=llm-r1" in line for line in rp_llm_hostreq["lines"]), rp_llm_hostreq
+            rp_llm_fallback = read_json(base + "/api/state/rp_llm_fallback")
+            assert any("host_llm_fallback_case=missing_cloud_key" in line for line in rp_llm_fallback["lines"]), rp_llm_fallback
+            rp_api_runtime = read_json(base + "/api/state/rp_api_runtime")
+            assert any("host_llm_request_id=llm-q1" in line for line in rp_api_runtime["lines"]), rp_api_runtime
             rp_api_run = read_json(base + "/api/state/rp_api_run")
             assert any("host_action_title=T1" in line for line in rp_api_run["lines"]), rp_api_run
             assert any("host_action_question=Q1" in line for line in rp_api_run["lines"]), rp_api_run

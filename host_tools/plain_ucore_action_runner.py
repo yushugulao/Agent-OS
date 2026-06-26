@@ -13,6 +13,8 @@ from typing import Iterable
 
 from plain_ucore_fs_extract import extract_state_files
 
+UCORE_FS_BLOCK_SIZE = 1024
+
 
 def read_jsonl(path: Path) -> list[dict[str, object]]:
     if not path.exists():
@@ -43,6 +45,12 @@ def action_kind(path: str) -> str:
         return "evidence_review"
     if path.endswith("/research/evidence-protocol"):
         return "evidence_protocol"
+    if path.endswith("/research/llm-relay-request"):
+        return "llm_relay_request"
+    if path.endswith("/research/llm-relay-response"):
+        return "llm_relay_response"
+    if path.endswith("/research/llm-relay-fallback"):
+        return "llm_relay_fallback"
     if path.endswith("/research/run"):
         return "research_run"
     if path.endswith("/research/rerun"):
@@ -220,6 +228,28 @@ def write_json(path: Path, data: object) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def write_fs_aligned_seed(path: Path, seed_text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    data = seed_text.encode("utf-8")
+    remainder = len(data) % UCORE_FS_BLOCK_SIZE
+    if remainder:
+        data += b"\0" * (UCORE_FS_BLOCK_SIZE - remainder)
+    path.write_bytes(data)
+
+
+def pad_file_for_ucore_fs(path: Path) -> None:
+    data = path.read_bytes()
+    remainder = len(data) % UCORE_FS_BLOCK_SIZE
+    if remainder:
+        path.write_bytes(data + b"\0" * (UCORE_FS_BLOCK_SIZE - remainder))
+
+
+def pad_state_files_for_ucore_fs(state_dir: Path) -> None:
+    for item in sorted(state_dir.iterdir()):
+        if item.is_file() and item.name.startswith("rp_"):
+            pad_file_for_ucore_fs(item)
+
+
 def prepare_action_state(actions: list[dict[str, object]], state_dir: Path, run_dir: Path) -> dict[str, object]:
     run_dir.mkdir(parents=True, exist_ok=True)
     next_state = run_dir / "state-next"
@@ -348,8 +378,8 @@ def compact_seed_text(text: str) -> str:
         "workbench_manuscript_revision_task": {"revision_task", "revision_status"},
         "workbench_task_board": {"board_filter"},
         "workbench_task_board_row": {"row_id", "row_status"},
-        "workbench_plan_queue_row": {"workbench_id", "plan_item_id", "source_type", "source_id", "status"},
-        "workbench_plan_queue_execute": {"workbench_id", "plan_item_id", "source_type", "source_id", "provider_id", "max_steps"},
+        "workbench_plan_queue_row": {"workbench_id", "plan_item_id", "status"},
+        "workbench_plan_queue_execute": {"workbench_id", "plan_item_id"},
         "workbench_runbook": {"runbook_format"},
         "workbench_timeline": {"timeline_format"},
         "workbench_file_manifest": {"workbench", "manifest", "files", "sha_records"},
@@ -357,29 +387,35 @@ def compact_seed_text(text: str) -> str:
         "workbench_export": {"workbench", "bundle"},
         "workbench_quality_gate": {"workbench_id"},
         "workbench_quality_repair_plan": {"workbench_id"},
-        "workbench_quality_repair_execute": {"workbench_id", "repair_id", "action_key", "provider_id", "max_steps", "answer_question"},
-        "workbench_action_item": {"workbench_id", "title", "instruction", "priority", "status", "source_query"},
-        "workbench_delivery_dashboard": {"tag", "query", "include_clean"},
-        "workbench_delivery_execute_next": {"tag", "query", "provider_id", "max_steps", "answer_question"},
+        "workbench_quality_repair_execute": {"workbench_id", "repair_id"},
+        "workbench_action_item": {"workbench_id", "title", "status"},
+        "workbench_delivery_dashboard": {"tag", "query"},
+        "workbench_delivery_execute_next": {"tag", "query"},
         "operations_report": {"format"},
-        "operations_advance_next": {"provider_id", "max_steps", "review_decision", "delivery_audience"},
-        "operations_execute_next_plan": {"provider_id", "max_steps", "answer_question", "delivery_audience"},
+        "operations_advance_next": {"review_decision"},
+        "operations_execute_next_plan": set(),
         "project_space": {"workbench_id", "project_id", "query"},
-        "project_space_note": {"workbench_id", "kind", "title", "body", "tags"},
-        "project_space_action_item": {"workbench_id", "title", "instruction", "priority", "status", "source_query"},
+        "project_space_note": {"workbench_id", "kind", "title"},
+        "project_space_action_item": {"workbench_id", "title", "status"},
         "project_space_answer": {"workbench_id", "question", "limit"},
-        "project_space_repair_execute": {"workbench_id", "repair_id", "provider_id", "max_steps"},
+        "project_space_repair_execute": {"workbench_id", "repair_id"},
         "research_search_save": {"query", "name"},
         "research_search_export": {"query", "limit"},
-        "research_search_note": {"workbench_id", "query", "title", "note", "limit"},
-        "research_search_action_item": {"workbench_id", "query", "title", "instruction", "priority", "limit"},
-        "host_workflow": {"workflow_id", "run_id", "engine", "stages", "dag", "max_workers", "cache", "failed_stage", "retry_stage", "cache_hit_stage", "worker_slots", "queue_depth", "observer_events", "retry_reason"},
+        "research_search_note": {"workbench_id", "query", "title"},
+        "research_search_action_item": {"workbench_id", "query", "title"},
+        "host_workflow": {"workflow_id", "run_id", "engine", "dag", "retry_stage", "cache_hit_stage", "worker_slots", "queue_depth", "observer_events", "retry_reason"},
         "host_workflow_export": {"workflow_id", "run_id", "format", "bundle"},
+        "llm_relay_request": {"request_id", "route", "provider"},
+        "llm_relay_response": {"response_id", "summary"},
+        "llm_relay_fallback": {"case", "action"},
     }
     lines: list[str] = []
     for raw in text.splitlines():
         fields = [field for field in raw.split(";") if field]
         kind = ""
+        saw_action_field = False
+        saw_path_field = False
+        saw_status_field = False
         for field in fields:
             if field.startswith("kind="):
                 kind = field.split("=", 1)[1]
@@ -389,10 +425,17 @@ def compact_seed_text(text: str) -> str:
         for field in fields:
             if field.startswith("kind="):
                 compact.insert(0, field)
-            elif field.startswith("action=") or field.startswith("path=") or field.startswith("status="):
-                continue
             else:
                 key = field.split("=", 1)[0]
+                if key == "action" and not saw_action_field:
+                    saw_action_field = True
+                    continue
+                if key == "path" and not saw_path_field:
+                    saw_path_field = True
+                    continue
+                if key == "status" and not saw_status_field:
+                    saw_status_field = True
+                    continue
                 if keep_keys is not None and key not in keep_keys:
                     continue
                 if kind.startswith("workbench_") and key == "workbench":
@@ -407,7 +450,7 @@ def write_seed_header(next_state: Path, repo_dir: Path) -> int:
     inbox = next_state / "rp_host_action_inbox"
     text = inbox.read_text(encoding="utf-8") if inbox.is_file() else ""
     seed_text = compact_seed_text(text)
-    write_text(next_state / "rp_host_action_seed", seed_text)
+    write_fs_aligned_seed(next_state / "rp_host_action_seed", seed_text)
     header = repo_dir / "user" / "build" / "generated" / "rp_host_action_seed.h"
     header.parent.mkdir(parents=True, exist_ok=True)
     header.write_text(
@@ -483,6 +526,7 @@ def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_dis
         write_json(run_dir / "ucore-run-summary.json", summary)
         return summary
     embedded_records = write_seed_header(next_state, repo_dir)
+    pad_state_files_for_ucore_fs(next_state)
     seed_file = next_state / "rp_host_action_seed"
     seed_file_bash = bash_path(seed_file)
     run_command_text = (

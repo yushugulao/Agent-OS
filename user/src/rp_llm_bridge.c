@@ -1,6 +1,13 @@
 #include <stdio.h>
 #include <research_platform_state.h>
 
+static void copy_llm_value(const char *key, const char *fallback, char *out, int cap)
+{
+	if (!rp_host_seed_copy_llm_value(key, out, cap)) {
+		rp_copy_text(out, cap, fallback);
+	}
+}
+
 int main(void)
 {
 	if (!rp_file_contains("rp_evidence", "claims=8")) return 1;
@@ -117,6 +124,76 @@ int main(void)
 			   "fallback_used=1\n"
 			   "status=ready\n")) {
 		return 1;
+	}
+	if (rp_host_seed_has_llm_relay_action()) {
+		char request_id[64];
+		char run_id[64];
+		char route[64];
+		char provider[64];
+		char prompt[96];
+		char budget[32];
+		char secret_ref[64];
+		char response_id[64];
+		char mode[48];
+		char summary[96];
+		char citations[32];
+		char fallback_case[64];
+		char fallback_action[64];
+		char fallback_reason[80];
+		char fallback_status[48];
+
+		copy_llm_value("request_id=", "host-q1", request_id, sizeof(request_id));
+		copy_llm_value("run_id=", "RUN-042", run_id, sizeof(run_id));
+		copy_llm_value("route=", "review_summary", route, sizeof(route));
+		copy_llm_value("provider=", "template", provider, sizeof(provider));
+		copy_llm_value("prompt=", "summarize_recovery", prompt, sizeof(prompt));
+		copy_llm_value("budget=", "1536", budget, sizeof(budget));
+		copy_llm_value("secret_ref=", "host_env", secret_ref, sizeof(secret_ref));
+		copy_llm_value("response_id=", "host-r1", response_id, sizeof(response_id));
+		copy_llm_value("mode=", "template", mode, sizeof(mode));
+		copy_llm_value("summary=", "host_response_ready", summary, sizeof(summary));
+		copy_llm_value("citations=", "5", citations, sizeof(citations));
+		copy_llm_value("case=", "missing_cloud_key", fallback_case, sizeof(fallback_case));
+		copy_llm_value("action=", "template_response", fallback_action, sizeof(fallback_action));
+		copy_llm_value("reason=", "host_env_absent", fallback_reason, sizeof(fallback_reason));
+		copy_llm_value("fallback_status=", "ready", fallback_status, sizeof(fallback_status));
+
+		if (!rp_append_host_action_line("rp_llm_req", "host_llm_request_id=", request_id)) return 1;
+		if (!rp_append_host_action_line("rp_llm_req", "host_llm_run_id=", run_id)) return 1;
+		if (!rp_append_host_action_line("rp_llm_req", "host_llm_route=", route)) return 1;
+		if (!rp_append_host_action_line("rp_llm_req", "host_llm_provider=", provider)) return 1;
+		if (!rp_append_host_action_line("rp_llm_req", "host_llm_prompt=", prompt)) return 1;
+		if (!rp_append_host_action_line("rp_llm_req", "host_llm_budget=", budget)) return 1;
+		if (!rp_append_host_action_line("rp_llm_req", "host_llm_secret_ref=", secret_ref)) return 1;
+
+		if (!rp_append_host_action_line("rp_llmq", "host_llm_queue_request=", request_id)) return 1;
+		if (!rp_append_host_action_line("rp_llmq", "host_llm_queue_route=", route)) return 1;
+		if (!rp_append_host_action_line("rp_llmq", "host_llm_queue_provider=", provider)) return 1;
+		if (!rp_append_host_action_line("rp_llmq", "host_llm_queue_budget=", budget)) return 1;
+
+		if (!rp_append_host_action_line("rp_llm_resp", "host_llm_response_id=", response_id)) return 1;
+		if (!rp_append_host_action_line("rp_llm_resp", "host_llm_response_request=", request_id)) return 1;
+		if (!rp_append_host_action_line("rp_llm_resp", "host_llm_response_provider=", provider)) return 1;
+		if (!rp_append_host_action_line("rp_llm_resp", "host_llm_response_mode=", mode)) return 1;
+		if (!rp_append_host_action_line("rp_llm_resp", "host_llm_response_summary=", summary)) return 1;
+		if (!rp_append_host_action_line("rp_llm_resp", "host_llm_response_citations=", citations)) return 1;
+
+		if (!rp_append_file("rp_relay", "host_llm_relay=ready")) return 1;
+		if (!rp_append_host_action_line("rp_relay", "host_llm_relay_request=", request_id)) return 1;
+		if (!rp_append_host_action_line("rp_relay", "host_llm_relay_response=", response_id)) return 1;
+		if (!rp_append_host_action_line("rp_relay", "host_llm_relay_provider=", provider)) return 1;
+
+		if (!rp_append_host_action_line("rp_prompt", "host_llm_prompt_route=", route)) return 1;
+		if (!rp_append_host_action_line("rp_prompt", "host_llm_prompt_text=", prompt)) return 1;
+		if (!rp_append_host_action_line("rp_prompt", "host_llm_prompt_budget=", budget)) return 1;
+
+		if (!rp_append_host_action_line("rp_llmlog", "host_llm_log_request=", request_id)) return 1;
+		if (!rp_append_host_action_line("rp_llmlog", "host_llm_log_response=", response_id)) return 1;
+		if (!rp_append_host_action_line("rp_llmlog", "host_llm_log_fallback=", fallback_case)) return 1;
+		if (!rp_append_host_action_line("rp_llmlog", "host_llm_log_fallback_action=", fallback_action)) return 1;
+		if (!rp_append_host_action_line("rp_llmlog", "host_llm_log_fallback_reason=", fallback_reason)) return 1;
+		if (!rp_append_host_action_line("rp_llmeval", "host_llm_eval_citations=", citations)) return 1;
+		if (!rp_append_host_action_line("rp_llmeval", "host_llm_eval_fallback_status=", fallback_status)) return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=llm;msg=9;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=llm.prepare_packet;target=rp_llm_req;status=ok")) return 1;
