@@ -225,6 +225,7 @@ def main() -> int:
         assert "Backend Evidence In Report" in run_html
         assert "Backend Evidence In Runner" in run_html
         assert "Backend Case Narratives" in run_html
+        assert "Run Action Trace" in run_html
         assert "batch_tool_context" in run_html
         assert "execution_plan:pass:record:baseline" in run_html
         assert "context_path:planned:kernel_context:target" in run_html
@@ -232,6 +233,7 @@ def main() -> int:
         compare_html = (out_dir / "compare.html").read_text(encoding="utf-8")
         assert "Compare Summary" in compare_html
         assert "Compare Metrics" in compare_html
+        assert "Compare Action Trace" in compare_html
         assert "File Scans" in compare_html
         assert "Portability Checks" in compare_html
         assert "Backend Checks" in compare_html
@@ -413,6 +415,11 @@ def main() -> int:
             assert "Review Action Trace" in review_html
             assert "/actions/research/review" in review_html
             assert "/actions/research/export-bundle" in review_html
+            run_html = (out_dir / "run.html").read_text(encoding="utf-8")
+            assert "Run Action Trace" in run_html
+            assert "/actions/research/export-bundle" in run_html
+            compare_html = (out_dir / "compare.html").read_text(encoding="utf-8")
+            assert "Compare Action Trace" in compare_html
 
             bad_batch = request.Request(
                 base + "/actions/batch",

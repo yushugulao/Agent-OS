@@ -740,21 +740,40 @@ def render_action_log(actions: list[dict[str, object]]) -> str:
     ).format("".join(rows))
 
 
-def review_action_group(path: str) -> str:
+def action_trace_group(path: str) -> str:
+    if "/workflow-portability/" in path:
+        return "portability"
+    if "/host-workflow/" in path:
+        return "workflow"
+    if "/artifact-" in path:
+        return "artifact"
     if "/operations-" in path:
         return "operations"
+    if "/llm-relay" in path:
+        return "llm"
     if "/workbench" in path or "/export-workbench" in path:
         return "workbench"
     if "/project-space" in path or "/research-search/" in path:
         return "project"
-    if "/llm-relay" in path:
-        return "llm"
     if "/agentcompare/" in path:
         return "compare"
     if "/review" in path or "/revision" in path:
         return "review"
     if "/export-bundle" in path or "/delivery" in path:
         return "delivery"
+    if path.endswith("/research/run") or path.endswith("/research/rerun"):
+        return "run"
+    if (
+        "/research/dataset" in path
+        or "/research/library-source" in path
+        or "/research/template" in path
+        or "/research/inspect-workspace" in path
+        or "/research/import-workspace" in path
+        or "/research/import-and-run" in path
+        or "/research/literature-search" in path
+        or "/research/evidence-" in path
+    ):
+        return "inputs"
     return ""
 
 
@@ -793,12 +812,12 @@ def payload_summary(payload: object) -> str:
     return ";".join(str(part).replace("\n", " ").replace(";", ",") for part in parts)
 
 
-def review_action_trace_panel(actions: list[dict[str, object]]) -> str:
+def action_trace_panel(title: str, actions: list[dict[str, object]], groups: set[str]) -> str:
     rows: list[dict[str, str]] = []
     for record in actions:
         path = str(record.get("path", ""))
-        group = review_action_group(path)
-        if not group:
+        group = action_trace_group(path)
+        if not group or group not in groups:
             continue
         rows.append(
             {
@@ -810,7 +829,7 @@ def review_action_trace_panel(actions: list[dict[str, object]]) -> str:
             }
         )
     return render_record_panel(
-        "Review Action Trace",
+        title,
         [("Sequence", "action_trace"), ("Group", "group"), ("Path", "path"), ("Payload", "payload"), ("Status", "status")],
         rows,
         "No related host actions",
@@ -1073,8 +1092,12 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
         if detail_panel:
             sections.append(detail_panel)
         sections.extend(render_grouped_details(file_name, state))
+        if file_name == "run.html":
+            sections.append(action_trace_panel("Run Action Trace", actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
+        if file_name == "compare.html":
+            sections.append(action_trace_panel("Compare Action Trace", actions, {"compare", "portability", "workflow", "artifact"}))
         if file_name == "review.html":
-            sections.append(review_action_trace_panel(actions))
+            sections.append(action_trace_panel("Review Action Trace", actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
         if file_name == "actions.html":
             sections.append(render_action_panel())
             sections.append(render_action_log(actions))

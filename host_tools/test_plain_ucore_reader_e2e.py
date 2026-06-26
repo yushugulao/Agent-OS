@@ -764,6 +764,11 @@ def main() -> int:
             assert "Backend Evidence In Report" in run_html
             assert "Backend Evidence In Runner" in run_html
             assert "Backend Case Narratives" in run_html
+            assert "Run Action Trace" in run_html
+            assert "/actions/research/run" in run_html
+            assert "/actions/host-workflow/run" in run_html
+            assert "/actions/research/artifact-package" in run_html
+            assert "/actions/research/llm-relay-request" in run_html
             assert "batch_tool_context" in run_html
             assert "execution_plan:pass:record:baseline" in run_html
             assert "context_path:planned:kernel_context:target" in run_html
@@ -837,6 +842,7 @@ def main() -> int:
             compare_html = read_text(base + "/compare.html")
             assert "Compare Summary" in compare_html
             assert "Compare Metrics" in compare_html
+            assert "Compare Action Trace" in compare_html
             assert "Plain Kernel Signals" in compare_html
             assert "Consistency Signals" in compare_html
             assert "File Scans" in compare_html
@@ -862,6 +868,9 @@ def main() -> int:
             assert "rp_backend_exec" in compare_html
             assert "rp_agentcmp" in compare_html
             assert "pb" in compare_html
+            assert "/actions/workflow-portability/run" in compare_html
+            assert "/actions/agentcompare/run" in compare_html
+            assert "/actions/host-workflow/retry-decision" in compare_html
             actions_html = read_text(base + "/actions.html")
             assert "Batch Actions" in actions_html
             assert "Host Actions" in actions_html
