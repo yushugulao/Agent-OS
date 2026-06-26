@@ -1049,11 +1049,28 @@ int main(void)
 	ok = ok && require_file_token("rp_agentos_kernel", "agent_context=present");
 	ok = ok && require_file_token("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;status=ready");
 	ok = ok && require_file_token("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index;status=ready");
-	ok = ok && require_file_token("rp_consistency", "checks=248");
+	ok = ok && require_file_token("rp_query", "knowledge_index=search_documents:1385");
+	ok = ok && require_file_token("rp_query", "provenance_nodes:406");
+	ok = ok && require_file_token("rp_query", "provenance_links:544");
+	ok = ok && require_file_token("rp_query", "events:6816");
+	ok = ok && require_file_token("rp_query", "context_records:348");
+	ok = ok && require_file_token("rp_query", "host_workflow_artifacts:150");
+	ok = ok && require_file_token("rp_query", "usable_artifacts:429");
+	ok = ok && require_file_token("rp_query", "usable_runs:20");
+	ok = ok && require_file_token("rp_query", "usable_stages:168");
+	ok = ok && require_file_token("rp_query", "usable_messages:223");
+	ok = ok && require_file_token("rp_query", "usable_decisions:203");
+	ok = ok && require_file_token("rp_consistency", "checks=270");
 	ok = ok && require_file_token("rp_consistency", "artifact_provenance=3");
 	ok = ok && require_file_token("rp_consistency", "artifact_dossier_checks=4");
 	ok = ok && require_file_token("rp_consistency", "artifact_path_rebuild_files=6");
 	ok = ok && require_file_token("rp_consistency", "artifact_path_rebuild_steps=7");
+	ok = ok && require_file_token("rp_consistency", "knowledge_index_checks=22");
+	ok = ok && require_file_token("rp_consistency", "search_documents=1385");
+	ok = ok && require_file_token("rp_consistency", "provenance_nodes=406");
+	ok = ok && require_file_token("rp_consistency", "provenance_links=544");
+	ok = ok && require_file_token("rp_consistency", "event_stream_records=6816");
+	ok = ok && require_file_token("rp_consistency", "context_records=348");
 	ok = ok && require_file_token("rp_consistency", "coherence_checks=9");
 	ok = ok && require_file_token("rp_consistency", "workbench_records=10");
 	ok = ok && require_file_token("rp_consistency", "advanced_surface_objects=5");
@@ -1450,7 +1467,15 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "programs=42");
 	ok = ok && require_file_token("rp_agentcmp", "state_files=170");
 	ok = ok && require_file_token("rp_agentcmp", "advanced_surface_objects=5");
-	ok = ok && require_file_token("rp_agentcmp", "test_cases=864");
+	ok = ok && require_file_token("rp_agentcmp", "test_cases=886");
+	ok = ok && require_file_token("rp_agentcmp", "knowledge_index_checks=22");
+	ok = ok && require_file_token("rp_agentcmp", "knowledge_index=search_documents:1385");
+	ok = ok && require_file_token("rp_agentcmp", "provenance_nodes:406");
+	ok = ok && require_file_token("rp_agentcmp", "provenance_links:544");
+	ok = ok && require_file_token("rp_agentcmp", "events:6816");
+	ok = ok && require_file_token("rp_agentcmp", "context_records:348");
+	ok = ok && require_file_token("rp_agentcmp", "usable_artifacts:429");
+	ok = ok && require_file_token("rp_agentcmp", "usable_runs:20");
 	ok = ok && require_file_token("rp_agentcmp", "llm_delivery_checks=16");
 	ok = ok && require_file_token("rp_agentcmp", "llm_queue=3");
 	ok = ok && require_file_token("rp_agentcmp", "llm_packets=3");
@@ -1502,6 +1527,8 @@ int main(void)
 	ok = ok && require_file_token("rp_consistency", "regulated_research_checks=32");
 	ok = ok && require_file_token("rp_agentcmp", "lab_governance_ops_checks=26");
 	ok = ok && require_file_token("rp_consistency", "lab_governance_ops_checks=26");
+	ok = ok && require_file_token("rp_agentcmp", "knowledge_index_checks=22");
+	ok = ok && require_file_token("rp_consistency", "knowledge_index_checks=22");
 	ok = ok && require_file_token("rp_runop", "runtime_assurance=secret_refs:3");
 	ok = ok && require_file_token("rp_runop", "model_registry:2");
 	ok = ok && require_file_token("rp_runop", "deployments:1");
@@ -1663,7 +1690,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=864\n"
+			   "tests=886\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -1701,6 +1728,7 @@ int main(void)
 			   "research_ops=passed\n"
 			   "regulated_research=passed\n"
 			   "lab_governance_ops=passed\n"
+			   "knowledge_index=passed\n"
 			   "agent_compare=passed\n"
 			   "consistency=passed\n"
 			   "status=passed\n")) {
@@ -1718,6 +1746,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=864 catalog=passed data=passed services=passed products=passed assurance=passed research_ops=passed regulated=passed lab_governance=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed startup=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=886 catalog=passed data=passed services=passed products=passed assurance=passed research_ops=passed regulated=passed lab_governance=passed knowledge_index=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed startup=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
 	return 0;
 }

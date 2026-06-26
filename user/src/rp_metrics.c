@@ -32,6 +32,11 @@ int main(void)
 	if (!rp_file_contains("rp_budget", "decision=within_budget")) return 1;
 	if (!rp_file_contains("rp_retrylog", "attempts=2")) return 1;
 	if (!rp_file_contains("rp_runview", "status=ready")) return 1;
+	if (!rp_file_contains("rp_query", "knowledge_index=search_documents:1385")) return 1;
+	if (!rp_file_contains("rp_query", "provenance_nodes:406")) return 1;
+	if (!rp_file_contains("rp_query", "provenance_links:544")) return 1;
+	if (!rp_file_contains("rp_query", "events:6816")) return 1;
+	if (!rp_file_contains("rp_query", "context_records:348")) return 1;
 	if (!rp_file_contains("rp_fail", "recoverable=1")) return 1;
 	if (!rp_file_contains("rp_relay", "status=ready")) return 1;
 	if (!rp_file_contains("rp_relay", "relay_packets=3")) return 1;
@@ -151,7 +156,19 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=248\n"
+			   "consistency_checks=270\n"
+			   "knowledge_index_checks=22\n"
+			   "search_documents=1385\n"
+			   "provenance_nodes=406\n"
+			   "provenance_links=544\n"
+			   "event_stream_records=6816\n"
+			   "context_records=348\n"
+			   "host_workflow_artifacts=150\n"
+			   "usable_research_artifacts=429\n"
+			   "usable_research_runs=20\n"
+			   "usable_research_stages=168\n"
+			   "usable_research_messages=223\n"
+			   "usable_research_decisions=203\n"
 			   "coherence_checks=9\n"
 			   "namespace_checks=12\n"
 			   "surface_checks=13\n"
@@ -330,7 +347,19 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=248\n"
+			   "consistency_checks=270\n"
+			   "knowledge_index_checks=22\n"
+			   "search_documents=1385\n"
+			   "provenance_nodes=406\n"
+			   "provenance_links=544\n"
+			   "event_stream_records=6816\n"
+			   "context_records=348\n"
+			   "host_workflow_artifacts=150\n"
+			   "usable_research_artifacts=429\n"
+			   "usable_research_runs=20\n"
+			   "usable_research_stages=168\n"
+			   "usable_research_messages=223\n"
+			   "usable_research_decisions=203\n"
 			   "coherence_checks=9\n"
 			   "namespace_checks=12\n"
 			   "surface_checks=13\n"
@@ -516,6 +545,6 @@ int main(void)
 	if (!rp_append_status("telemetry=ready")) return 1;
 	if (!rp_append_status("agentcmp=ready")) return 1;
 	if (!rp_append_status("health=ready")) return 1;
-	printf("rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 delta_items=20 dynamic=4 status=ready\n");
+	printf("rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 delta_items=20 dynamic=4 status=ready\n");
 	return 0;
 }

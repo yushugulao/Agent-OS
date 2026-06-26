@@ -13,6 +13,17 @@ int main(void)
 	int ok = 1;
 	ok = ok && rp_file_contains("rp_backend", "status=ready");
 	ok = ok && rp_file_contains("rp_backend_exec", "status=ready");
+	ok = ok && rp_file_contains("rp_query", "knowledge_index=search_documents:1385");
+	ok = ok && rp_file_contains("rp_query", "provenance_nodes:406");
+	ok = ok && rp_file_contains("rp_query", "provenance_links:544");
+	ok = ok && rp_file_contains("rp_query", "events:6816");
+	ok = ok && rp_file_contains("rp_query", "context_records:348");
+	ok = ok && rp_file_contains("rp_query", "host_workflow_artifacts:150");
+	ok = ok && rp_file_contains("rp_query", "usable_artifacts:429");
+	ok = ok && rp_file_contains("rp_query", "usable_runs:20");
+	ok = ok && rp_file_contains("rp_query", "usable_stages:168");
+	ok = ok && rp_file_contains("rp_query", "usable_messages:223");
+	ok = ok && rp_file_contains("rp_query", "usable_decisions:203");
 	ok = ok && rp_file_contains("rp_mail", "to=backend");
 	ok = ok && rp_file_contains("rp_runner", "status=ready");
 	ok = ok && rp_file_contains("rp_runner", "workbench_tasks=9");
@@ -366,7 +377,7 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=248\n"
+			   "checks=270\n"
 			   "task_records=21\n"
 			   "ready_tasks=21\n"
 			   "high_tasks=4\n"
@@ -511,6 +522,18 @@ int main(void)
 			   "delivery_coherence=3\n"
 			   "agentos_readiness_checks=7\n"
 			   "state_relation=passed\n"
+			   "knowledge_index_checks=22\n"
+			   "search_documents=1385\n"
+			   "provenance_nodes=406\n"
+			   "provenance_links=544\n"
+			   "event_stream_records=6816\n"
+			   "context_records=348\n"
+			   "host_workflow_artifacts=150\n"
+			   "usable_research_artifacts=429\n"
+			   "usable_research_runs=20\n"
+			   "usable_research_stages=168\n"
+			   "usable_research_messages=223\n"
+			   "usable_research_decisions=203\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -520,6 +543,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=248 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
+	printf("rp_consistency: checks=270 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
 	return 0;
 }

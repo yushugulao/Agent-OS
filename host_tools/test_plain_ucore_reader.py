@@ -259,7 +259,28 @@ status=ready
     ),
     "rp_nbexec": "host_action_notebook_format=ipynb\nhost_action_notebook_workbench_docs=ready\nstatus=ready\n",
     "rp_uresrun": "host_action_workbench_outputs=rp_runner,rp_revision,rp_package\nhost_action_workbench_manifest=delivery-manifest.json\nhost_action_workbench_bundle=workbench-bundle.zip\nstatus=ready\n",
-    "rp_agentcmp": "plain_kernel=passed\ntest_cases=864\nhandoffs=6\nreview_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=3;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\nreview_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\nllm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready\nworkflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready\nportability_backend_checks=12;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=2;planned_cases=2;status=ready\nbackend_runner_checks=12;runner_cases=4;runner_passed=2;runner_planned=2;plain_inputs=4;study_metrics=2;backend_runner_detail_checks=24;runner_detail_rows=4;backend_runner_report_checks=20;runner_report_rows=4;backend_report_links=2;status=ready\nlab_governance_ops_checks=26;approval_checks=2;protocol_governance_checks=4;sop_execution_checks=3;training_record_checks=4;status=ready\n",
+    "rp_query": (
+        "query=workflow,agent,evidence\n"
+        "workflow_hits=34\n"
+        "agent_hits=26\n"
+        "evidence_hits=10\n"
+        "knowledge_index=search_documents:1385,provenance_nodes:406,provenance_links:544,events:6816,context_records:348,host_workflow_artifacts:150,usable_artifacts:429,usable_runs:20,usable_stages:168,usable_messages:223,usable_decisions:203,status=ready\n"
+        "status=ready\n"
+    ),
+    "rp_agentcmp": (
+        "plain_kernel=passed\n"
+        "test_cases=886\n"
+        "handoffs=6\n"
+        "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=3;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
+        "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
+        "llm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready\n"
+        "workflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready\n"
+        "portability_backend_checks=12;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=2;planned_cases=2;status=ready\n"
+        "backend_runner_checks=12;runner_cases=4;runner_passed=2;runner_planned=2;plain_inputs=4;study_metrics=2;backend_runner_detail_checks=24;runner_detail_rows=4;backend_runner_report_checks=20;runner_report_rows=4;backend_report_links=2;status=ready\n"
+        "lab_governance_ops_checks=26;approval_checks=2;protocol_governance_checks=4;sop_execution_checks=3;training_record_checks=4;status=ready\n"
+        "knowledge_index_checks=22;status=ready\n"
+        "knowledge_index=search_documents:1385;provenance_nodes:406;provenance_links:544;events:6816;context_records:348;usable_artifacts:429;usable_runs:20;status=ready\n"
+    ),
     "rp_backend_exec": (
         "runner_case=plain-ucore;input=rp_wfio;artifact=rp_artifact_manifest;result=passed;reason=native_programs_ok;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=3\n"
         "runner_case=retry-recovery;input=rp_retry_plan;artifact=rp_stage_state;result=passed;reason=recovered_align;input_check=pass;artifact_check=pass;att=2;retry=tool_output_missing;ticks=5\n"
@@ -282,7 +303,7 @@ status=ready
         "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;detail_checks=kernel;result=planned\n"
         "study_handoff=rp_backend_exec->rp_agentcmp;status=ready\n"
     ),
-    "rp_consistency": "checks=248\nruntime_assurance_checks=24\nsecret_reference_checks=6\nmodel_registry_checks=5\nllm_proxy_replay_audits=2\ncollaboration_threads=2\nobservability_alerts=5\nresearch_ops_checks=28\nsemantic_graph_checks=6\nprompt_ops_checks=5\nrunbook_checks=7\nworker_ops_checks=5\nexecution_control_checks=5\nregulated_research_checks=32\nannotation_checks=5\nassay_plate_checks=4\ncohort_monitoring_checks=3\ndata_access_checks=4\nresearch_card_checks=4\nresearch_object_checks=5\nsample_custody_checks=3\nstatistical_design_checks=2\nworkflow_template_checks=2\nlab_governance_ops_checks=26\napproval_checks=2\nethics_protocol_checks=1\nprotocol_governance_checks=4\nsop_execution_checks=3\ntraining_record_checks=4\ninstrument_maintenance_checks=3\ninventory_transaction_checks=3\nprocurement_order_checks=2\nresource_budget_checks=2\nrun_queue_checks=1\nnotification_checks=1\nresearch_product_checks=18\nproject_scaffold_files=8\ndataset_product_exports=9\nstudy_protocol_reproduction_checks=5\nproject_bundle_cache=ready\nartifact_provenance=3\nartifact_dossier_checks=4\nartifact_path_rebuild_files=6\nartifact_path_rebuild_steps=7\n",
+    "rp_consistency": "checks=270\nruntime_assurance_checks=24\nsecret_reference_checks=6\nmodel_registry_checks=5\nllm_proxy_replay_audits=2\ncollaboration_threads=2\nobservability_alerts=5\nresearch_ops_checks=28\nsemantic_graph_checks=6\nprompt_ops_checks=5\nrunbook_checks=7\nworker_ops_checks=5\nexecution_control_checks=5\nregulated_research_checks=32\nannotation_checks=5\nassay_plate_checks=4\ncohort_monitoring_checks=3\ndata_access_checks=4\nresearch_card_checks=4\nresearch_object_checks=5\nsample_custody_checks=3\nstatistical_design_checks=2\nworkflow_template_checks=2\nlab_governance_ops_checks=26\napproval_checks=2\nethics_protocol_checks=1\nprotocol_governance_checks=4\nsop_execution_checks=3\ntraining_record_checks=4\ninstrument_maintenance_checks=3\ninventory_transaction_checks=3\nprocurement_order_checks=2\nresource_budget_checks=2\nrun_queue_checks=1\nnotification_checks=1\nresearch_product_checks=18\nproject_scaffold_files=8\ndataset_product_exports=9\nstudy_protocol_reproduction_checks=5\nproject_bundle_cache=ready\nartifact_provenance=3\nartifact_dossier_checks=4\nartifact_path_rebuild_files=6\nartifact_path_rebuild_steps=7\nknowledge_index_checks=22\nsearch_documents=1385\nprovenance_nodes=406\nprovenance_links=544\nevent_stream_records=6816\ncontext_records=348\nhost_workflow_artifacts=150\nusable_research_artifacts=429\nusable_research_runs=20\nusable_research_stages=168\nusable_research_messages=223\nusable_research_decisions=203\n",
     "rp_artifact_manifest": (
         "record=1;kind=input;path=rp_input_fastq;status=ready\n"
         "record=3;kind=alignment;path=rp_artifact;section=rp_align_table;status=ready\n"
