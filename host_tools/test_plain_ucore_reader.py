@@ -286,13 +286,21 @@ def main() -> int:
         assert "Research Output" in run_html
         assert "Workflow Execution View" in run_html
         assert "Workflow Control View" in run_html
+        assert "Workflow Evidence Links" in run_html
         assert "stage_summary" in run_html
         assert "stage_assignment" in run_html
+        assert "stage_evidence" in run_html
+        assert "artifact_provenance" in run_html
+        assert "artifact_review_path" in run_html
+        assert "review_delivery" in run_html
         assert "worker_pool" in run_html
         assert "cache_decision" in run_html
         assert "retry_decision" in run_html
         assert "rerun_selected_stage" in run_html
         assert "reuse_cached_artifact" in run_html
+        assert "rp_stage_log" in run_html
+        assert "rp_artifact_manifest" in run_html
+        assert "rp_review_dashboard" in run_html
         assert "workflow_run" in run_html
         assert "plain-c-runner" in run_html
         assert "worker-2" in run_html

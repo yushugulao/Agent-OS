@@ -507,6 +507,79 @@ def workflow_control_view(state: dict[str, dict[str, object]]) -> list[dict[str,
     return rows
 
 
+def workflow_evidence_links(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    retry = state_values(state, "rp_retry_plan")
+    retry_stage = retry.get("retry_stage", "")
+    for stage in state_records(state, "rp_stage_state", "stage"):
+        stage_name = stage.get("stage", "")
+        status = stage.get("state", "")
+        command = command_output_for_stage(state, stage_name)
+        rows.append(
+            {
+                "evidence_view": "stage_evidence",
+                "stage": stage_name,
+                "input": stage.get("input", ""),
+                "output": command.get("output", ""),
+                "event": event_for_stage(state, stage_name, status),
+                "retry": "rp_retry_plan" if stage_name == retry_stage else "",
+                "failure": retry.get("failure_reason", "") if stage_name == retry_stage else "",
+                "log": "rp_stage_log" if stage_name == retry_stage else "",
+                "manifest": "rp_artifact_manifest",
+                "report": "rp_report_text" if stage_name in {"review", "package"} else "",
+                "review": "rp_review_dashboard" if stage_name in {"review", "package"} else "",
+                "status": status,
+            }
+        )
+
+    for provenance in state_records(state, "rp_artifact", "provenance"):
+        rows.append(
+            {
+                "evidence_view": "artifact_provenance",
+                "stage": provenance.get("stage", ""),
+                "artifact": provenance.get("provenance", ""),
+                "event": provenance.get("event", ""),
+                "retry": provenance.get("retry", ""),
+                "cache": provenance.get("cache", ""),
+                "review": provenance.get("review_gate", ""),
+                "llm_quality": provenance.get("llm_quality", ""),
+                "status": provenance.get("status", ""),
+            }
+        )
+
+    for path in state_records(state, "rp_artifact_manifest", "artifact_review_path"):
+        rows.append(
+            {
+                "evidence_view": "artifact_review_path",
+                "path": path.get("artifact_review_path", ""),
+                "input": path.get("input", ""),
+                "prepared": path.get("prepared", ""),
+                "artifact": path.get("artifact", path.get("metrics", path.get("failure", ""))),
+                "retry": path.get("retry", ""),
+                "event": path.get("event", ""),
+                "report": path.get("report", ""),
+                "review": path.get("review", path.get("review_pack", "")),
+                "delivery": path.get("delivery", ""),
+                "status": path.get("status", ""),
+            }
+        )
+
+    review = state_values(state, "rp_review_dashboard")
+    package = state_values(state, "rp_package")
+    if review or package:
+        rows.append(
+            {
+                "evidence_view": "review_delivery",
+                "source": "rp_review_dashboard+rp_package",
+                "report": "rp_report_text",
+                "review": review.get("decision", review.get("status", "")),
+                "delivery": package.get("status", ""),
+                "status": review.get("status", package.get("status", "")),
+            }
+        )
+    return rows
+
+
 def workflow_execution_view(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = (
         state_records(state, "rp_execobs", "execution_view")
@@ -788,6 +861,31 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                     ("Status", "status"),
                 ],
                 workflow_control_view(state),
+            ),
+            render_record_panel(
+                "Workflow Evidence Links",
+                [
+                    ("View", "evidence_view"),
+                    ("Source", "source"),
+                    ("Path", "path"),
+                    ("Stage", "stage"),
+                    ("Input", "input"),
+                    ("Prepared", "prepared"),
+                    ("Output", "output"),
+                    ("Artifact", "artifact"),
+                    ("Event", "event"),
+                    ("Retry", "retry"),
+                    ("Failure", "failure"),
+                    ("Cache", "cache"),
+                    ("Log", "log"),
+                    ("Manifest", "manifest"),
+                    ("Report", "report"),
+                    ("Review", "review"),
+                    ("LLM Quality", "llm_quality"),
+                    ("Delivery", "delivery"),
+                    ("Status", "status"),
+                ],
+                workflow_evidence_links(state),
             ),
             render_record_panel(
                 "Backend Evidence In Report",
