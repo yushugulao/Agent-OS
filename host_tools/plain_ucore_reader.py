@@ -1475,6 +1475,37 @@ def first_matching_state_line(state: dict[str, dict[str, object]], outputs: str,
     return ""
 
 
+def matching_state_lines(
+    state: dict[str, dict[str, object]],
+    outputs: str,
+    prefixes: tuple[str, ...],
+    max_rows: int = 4,
+) -> list[tuple[str, str]]:
+    rows: list[tuple[str, str]] = []
+    for name in split_list(outputs):
+        for line in state_lines(state, name):
+            stripped = line.strip()
+            if any(stripped.startswith(prefix) for prefix in prefixes):
+                rows.append((name, stripped))
+                if len(rows) >= max_rows:
+                    return rows
+    if rows:
+        return rows
+    for name in split_list(outputs):
+        lines = state_lines(state, name)
+        if lines:
+            rows.append((name, lines[0].strip()))
+            if len(rows) >= max_rows:
+                break
+    return rows
+
+
+def detail_kind_from_line(line: str) -> str:
+    if "=" in line:
+        return line.split("=", 1)[0]
+    return "record"
+
+
 def action_output_links(state: dict[str, dict[str, object]], actions: list[dict[str, object]], groups: set[str]) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = []
     for record in actions:
@@ -1500,6 +1531,31 @@ def action_output_links(state: dict[str, dict[str, object]], actions: list[dict[
     return rows
 
 
+def action_output_detail_links(state: dict[str, dict[str, object]], actions: list[dict[str, object]], groups: set[str]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for record in actions:
+        path = str(record.get("path", ""))
+        group = action_trace_group(path)
+        if not group or group not in groups:
+            continue
+        outputs, pages = action_output_spec(path, group)
+        prefixes = action_evidence_prefixes(path, group)
+        for source_file, detail in matching_state_lines(state, outputs, prefixes):
+            rows.append(
+                {
+                    "action_detail": str(record.get("sequence", "")),
+                    "group": group,
+                    "path": path,
+                    "source_file": source_file,
+                    "detail_kind": detail_kind_from_line(detail),
+                    "detail": detail,
+                    "rendered_pages": pages,
+                    "status": "ready",
+                }
+            )
+    return rows
+
+
 def action_output_panel(title: str, state: dict[str, dict[str, object]], actions: list[dict[str, object]], groups: set[str]) -> str:
     return render_record_panel(
         title,
@@ -1515,6 +1571,24 @@ def action_output_panel(title: str, state: dict[str, dict[str, object]], actions
         ],
         action_output_links(state, actions, groups),
         "No related host action outputs",
+    )
+
+
+def action_output_detail_panel(title: str, state: dict[str, dict[str, object]], actions: list[dict[str, object]], groups: set[str]) -> str:
+    return render_record_panel(
+        title,
+        [
+            ("Sequence", "action_detail"),
+            ("Group", "group"),
+            ("Path", "path"),
+            ("State File", "source_file"),
+            ("Detail Kind", "detail_kind"),
+            ("Detail", "detail"),
+            ("Rendered Pages", "rendered_pages"),
+            ("Status", "status"),
+        ],
+        action_output_detail_links(state, actions, groups),
+        "No related host action detail rows",
     )
 
 
@@ -1777,17 +1851,22 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
         if file_name == "run.html":
             sections.append(action_trace_panel("Run Action Trace", actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
             sections.append(action_output_panel("Run Action Output Links", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
+            sections.append(action_output_detail_panel("Run Action Output Details", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
         if file_name == "compare.html":
             sections.append(action_trace_panel("Compare Action Trace", actions, {"compare", "portability", "workflow", "artifact"}))
             sections.append(action_output_panel("Compare Action Output Links", state, actions, {"compare", "portability", "workflow", "artifact"}))
+            sections.append(action_output_detail_panel("Compare Action Output Details", state, actions, {"compare", "portability", "workflow", "artifact"}))
         if file_name == "review.html":
             sections.append(action_trace_panel("Review Action Trace", actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
             sections.append(action_output_panel("Review Action Output Links", state, actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
+            sections.append(action_output_detail_panel("Review Action Output Details", state, actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
         if file_name == "artifacts.html":
             sections.append(action_output_panel("Artifact Action Output Links", state, actions, {"artifact", "workflow"}))
+            sections.append(action_output_detail_panel("Artifact Action Output Details", state, actions, {"artifact", "workflow"}))
         if file_name == "actions.html":
             sections.append(render_action_panel())
             sections.append(action_output_panel("Action Output Links", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
+            sections.append(action_output_detail_panel("Action Output Details", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
             sections.append(render_action_log(actions))
         sections.append(render_table(primary, state_lines(state, primary)))
         for extra in extras:

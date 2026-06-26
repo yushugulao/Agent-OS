@@ -316,6 +316,7 @@ def main() -> int:
         assert "operations_handoff" in run_html
         assert "Run Action Trace" in run_html
         assert "Run Action Output Links" in run_html
+        assert "Run Action Output Details" in run_html
         assert "batch_tool_context" in run_html
         assert "execution_plan:pass:record:baseline" in run_html
         assert "context_path:planned:kernel_context:target" in run_html
@@ -324,6 +325,7 @@ def main() -> int:
         assert "Compare Summary" in compare_html
         assert "Compare Metrics" in compare_html
         assert "Compare Action Trace" in compare_html
+        assert "Compare Action Output Details" in compare_html
         assert "File Scans" in compare_html
         assert "Portability Checks" in compare_html
         assert "Backend Checks" in compare_html
@@ -385,6 +387,7 @@ def main() -> int:
         assert "project_followup" in review_html
         assert "backend_evidence" in review_html
         assert "Review Action Trace" in review_html
+        assert "Review Action Output Details" in review_html
         assert "Handoff Checks" in review_html
         assert "send_to_reviewer" in review_html
         assert "delivery_to_operations" in review_html
@@ -419,6 +422,7 @@ def main() -> int:
         actions_html = (out_dir / "actions.html").read_text(encoding="utf-8")
         assert "Batch Actions" in actions_html
         assert "Action Output Links" in actions_html
+        assert "Action Output Details" in actions_html
         assert "/actions/research/run" in actions_html
         llm_html = (out_dir / "llm.html").read_text(encoding="utf-8")
         assert "LLM Relay" in llm_html
@@ -512,22 +516,29 @@ def main() -> int:
             actions_html = (out_dir / "actions.html").read_text(encoding="utf-8")
             assert "Host Actions" in actions_html
             assert "Action Output Links" in actions_html
+            assert "Action Output Details" in actions_html
             assert "rp_package" in actions_html
+            assert "delivery_files=8" in actions_html
             assert "/actions/research/export-bundle" in actions_html
             review_html = (out_dir / "review.html").read_text(encoding="utf-8")
             assert "Review Action Trace" in review_html
             assert "Review Action Output Links" in review_html
+            assert "Review Action Output Details" in review_html
             assert "Operations Report Narrative" in review_html
+            assert "backend_evidence_report" in review_html
             assert "/actions/research/review" in review_html
             assert "/actions/research/export-bundle" in review_html
             run_html = (out_dir / "run.html").read_text(encoding="utf-8")
             assert "Run Action Trace" in run_html
             assert "Run Action Output Links" in run_html
+            assert "Run Action Output Details" in run_html
             assert "rp_report_text" in run_html
+            assert "dynamic_submissions=4" in run_html
             assert "/actions/research/export-bundle" in run_html
             compare_html = (out_dir / "compare.html").read_text(encoding="utf-8")
             assert "Compare Action Trace" in compare_html
             assert "Compare Action Output Links" in compare_html
+            assert "Compare Action Output Details" in compare_html
 
             bad_batch = request.Request(
                 base + "/actions/batch",
