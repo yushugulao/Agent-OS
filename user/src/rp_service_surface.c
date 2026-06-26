@@ -109,15 +109,19 @@ static int write_lab_resources(void)
 			   "status=ready\n")) {
 		return 0;
 	}
-	return rp_write_file("rp_labresop",
-			     "ops=6\n"
-			     "op=instrument_check;records=4;status=ok\n"
-			     "op=inventory_reserve;items=4;status=ok\n"
-			     "op=procurement_plan;orders=2;status=ok\n"
-			     "op=schedule_assess;bookings=6;status=ok\n"
-			     "op=training_gate;requirements=4;status=ok\n"
-			     "op=cost_guard;budget=within_budget;status=ok\n"
-			     "status=ready\n");
+	if (!rp_write_file("rp_labresop",
+			   "ops=6\n"
+			   "op=instrument_check;records=4;status=ok\n"
+			   "op=inventory_reserve;items=4;status=ok\n"
+			   "op=procurement_plan;orders=2;status=ok\n"
+			   "op=schedule_assess;bookings=6;status=ok\n"
+			   "op=training_gate;requirements=4;status=ok\n"
+			   "op=cost_guard;budget=within_budget;status=ok\n"
+			   "status=ready\n")) {
+		return 0;
+	}
+	return rp_append_file("rp_labresop",
+			      "lab_governance_ops=approvals:2,ethics_protocols:1,protocol_compliance_reports:2,protocol_amendments:2,sop_executions:3,training_records:4,instrument_maintenance:3,inventory_transactions:14,procurement_orders:2,resource_budgets:3,run_queue_items:4,notifications:3,status=ready");
 }
 
 static int write_publication_services(void)
@@ -392,6 +396,7 @@ int main(void)
 	if (!rp_append_status("access_requests=ready")) return 1;
 	if (!rp_append_status("cohort_view=ready")) return 1;
 	if (!rp_append_status("lab_resources=ready")) return 1;
+	if (!rp_append_status("lab_governance_ops=ready")) return 1;
 	if (!rp_append_status("instrument_registry=ready")) return 1;
 	if (!rp_append_status("inventory=ready")) return 1;
 	if (!rp_append_status("procurement=ready")) return 1;

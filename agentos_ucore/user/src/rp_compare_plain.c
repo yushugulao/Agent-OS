@@ -984,7 +984,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_study", "arms=2");
 	ok = ok && rp_file_contains("rp_consistency", "state_relation=passed");
 	ok = ok && rp_file_contains("rp_consistency", "task_records=21");
-	ok = ok && rp_file_contains("rp_consistency", "checks=222");
+	ok = ok && rp_file_contains("rp_consistency", "checks=248");
 	ok = ok && rp_file_contains("rp_consistency", "artifact_provenance=3");
 	ok = ok && rp_file_contains("rp_consistency", "artifact_dossier_checks=4");
 	ok = ok && rp_file_contains("rp_consistency", "artifact_path_rebuild_steps=7");
@@ -1014,6 +1014,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_consistency", "research_product_checks=18");
 	ok = ok && rp_file_contains("rp_consistency", "runtime_assurance_checks=24");
 	ok = ok && rp_file_contains("rp_consistency", "research_ops_checks=28");
+	ok = ok && rp_file_contains("rp_consistency", "lab_governance_ops_checks=26");
 	ok = ok && rp_file_contains("rp_runop", "runtime_assurance=secret_refs:3");
 	ok = ok && rp_file_contains("rp_runop", "model_registry:2");
 	ok = ok && rp_file_contains("rp_runop", "llm_proxy_audits:2");
@@ -1025,6 +1026,11 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runop", "worker_ops:6");
 	ok = ok && rp_file_contains("rp_runop", "execution_controls:8");
 	ok = ok && rp_file_contains("rp_consistency", "regulated_research_checks=32");
+	ok = ok && rp_file_contains("rp_labresop", "lab_governance_ops=approvals:2");
+	ok = ok && rp_file_contains("rp_labresop", "protocol_compliance_reports:2");
+	ok = ok && rp_file_contains("rp_labresop", "sop_executions:3");
+	ok = ok && rp_file_contains("rp_labresop", "training_records:4");
+	ok = ok && rp_file_contains("rp_labresop", "run_queue_items:4");
 	ok = ok && rp_file_contains("rp_runop", "regulated_research=annotation_schemas:1");
 	ok = ok && rp_file_contains("rp_runop", "assay_plates:1");
 	ok = ok && rp_file_contains("rp_runop", "dataset_cards:1");
@@ -1418,7 +1424,7 @@ int main(void)
 		printf("rp_compare_plain: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		return 1;
 	}
-	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=170;message_acks=44;tool_events=138;action_state_records=12;test_cases=838;action_side_effect_records=16;service_page=1;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;advanced_surface_objects=5;startup_health_checks=8;research_product_checks=18;runtime_assurance_checks=24;research_ops_checks=28;regulated_research_checks=32;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=170;message_acks=44;tool_events=138;action_state_records=12;test_cases=864;action_side_effect_records=16;service_page=1;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;advanced_surface_objects=5;startup_health_checks=8;research_product_checks=18;runtime_assurance_checks=24;research_ops_checks=28;regulated_research_checks=32;lab_governance_ops_checks=26;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=3;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "llm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "workflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready")) return 1;
@@ -1468,6 +1474,6 @@ int main(void)
 	if (rp_host_seed_count() > 0) {
 		printf("rp_compare_plain: host_actions=%d verified\n", rp_host_seed_count());
 	}
-	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=42 state_files=170 acks=44 tools=138 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 reader=1 status=ready\n");
+	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=42 state_files=170 acks=44 tools=138 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 reader=1 status=ready\n");
 	return 0;
 }

@@ -81,6 +81,11 @@ int main(void)
 	if (!rp_file_contains("rp_consistency", "coherence_checks=9")) return 1;
 	if (!rp_file_contains("rp_sreg", "samples=8")) return 1;
 	if (!rp_file_contains("rp_instr", "instruments=4")) return 1;
+	if (!rp_file_contains("rp_labresop", "lab_governance_ops=approvals:2")) return 1;
+	if (!rp_file_contains("rp_labresop", "protocol_compliance_reports:2")) return 1;
+	if (!rp_file_contains("rp_labresop", "sop_executions:3")) return 1;
+	if (!rp_file_contains("rp_labresop", "training_records:4")) return 1;
+	if (!rp_file_contains("rp_labresop", "notifications:3")) return 1;
 	if (!rp_file_contains("rp_resrev", "review_items=10")) return 1;
 	if (!rp_file_contains("rp_semindex", "documents=17")) return 1;
 	if (!rp_file_contains("rp_runenv", "environments=4")) return 1;
@@ -146,7 +151,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=222\n"
+			   "consistency_checks=248\n"
 			   "coherence_checks=9\n"
 			   "namespace_checks=12\n"
 			   "surface_checks=13\n"
@@ -188,6 +193,18 @@ int main(void)
 			   "bio_samples=8\n"
 			   "bio_aliquots=12\n"
 			   "lab_resource_files=5\n"
+			   "lab_governance_ops_checks=26\n"
+			   "approval_checks=2\n"
+			   "ethics_protocol_checks=1\n"
+			   "protocol_governance_checks=4\n"
+			   "sop_execution_checks=3\n"
+			   "training_record_checks=4\n"
+			   "instrument_maintenance_checks=3\n"
+			   "inventory_transaction_checks=3\n"
+			   "procurement_order_checks=2\n"
+			   "resource_budget_checks=2\n"
+			   "run_queue_checks=1\n"
+			   "notification_checks=1\n"
 			   "instrument_count=4\n"
 			   "inventory_items=9\n"
 			   "publication_service_files=5\n"
@@ -313,7 +330,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=222\n"
+			   "consistency_checks=248\n"
 			   "coherence_checks=9\n"
 			   "namespace_checks=12\n"
 			   "surface_checks=13\n"
@@ -355,6 +372,18 @@ int main(void)
 			   "bio_samples=8\n"
 			   "bio_aliquots=12\n"
 			   "lab_resource_files=5\n"
+			   "lab_governance_ops_checks=26\n"
+			   "approval_checks=2\n"
+			   "ethics_protocol_checks=1\n"
+			   "protocol_governance_checks=4\n"
+			   "sop_execution_checks=3\n"
+			   "training_record_checks=4\n"
+			   "instrument_maintenance_checks=3\n"
+			   "inventory_transaction_checks=3\n"
+			   "procurement_order_checks=2\n"
+			   "resource_budget_checks=2\n"
+			   "run_queue_checks=1\n"
+			   "notification_checks=1\n"
 			   "instrument_count=4\n"
 			   "inventory_items=9\n"
 			   "publication_service_files=5\n"
@@ -487,6 +516,6 @@ int main(void)
 	if (!rp_append_status("telemetry=ready")) return 1;
 	if (!rp_append_status("agentcmp=ready")) return 1;
 	if (!rp_append_status("health=ready")) return 1;
-	printf("rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 products=18 assurance=24 research_ops=28 regulated=32 delta_items=20 dynamic=4 status=ready\n");
+	printf("rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 delta_items=20 dynamic=4 status=ready\n");
 	return 0;
 }

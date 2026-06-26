@@ -633,7 +633,7 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=838" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=864" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("tool_events=138" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -654,6 +654,7 @@ def main() -> int:
             assert any("runner_cases=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_passed=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_planned=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("lab_governance_ops_checks=26" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_backend_exec = read_json(base + "/api/state/rp_backend_exec")
             assert any("runner_detail_checks=16" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_verified_inputs=4" in line for line in rp_backend_exec["lines"]), rp_backend_exec
@@ -679,7 +680,7 @@ def main() -> int:
             assert any("review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line and "backend_review=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_consistency = read_json(base + "/api/state/rp_consistency")
-            assert any("checks=222" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("checks=248" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("runtime_assurance_checks=24" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("research_ops_checks=28" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("semantic_graph_checks=6" in line for line in rp_consistency["lines"]), rp_consistency
@@ -688,6 +689,12 @@ def main() -> int:
             assert any("worker_ops_checks=5" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("execution_control_checks=5" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("regulated_research_checks=32" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("lab_governance_ops_checks=26" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("approval_checks=2" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("protocol_governance_checks=4" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("sop_execution_checks=3" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("training_record_checks=4" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("notification_checks=1" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("annotation_checks=5" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("assay_plate_checks=4" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("cohort_monitoring_checks=3" in line for line in rp_consistency["lines"]), rp_consistency
@@ -820,6 +827,11 @@ def main() -> int:
             assert any("op=sample_lookup" in line for line in rp_bioop["lines"]), rp_bioop
             rp_labresop = read_json(base + "/api/state/rp_labresop")
             assert any("op=schedule_assess" in line for line in rp_labresop["lines"]), rp_labresop
+            assert any("lab_governance_ops=approvals:2" in line for line in rp_labresop["lines"]), rp_labresop
+            assert any("protocol_compliance_reports:2" in line for line in rp_labresop["lines"]), rp_labresop
+            assert any("sop_executions:3" in line for line in rp_labresop["lines"]), rp_labresop
+            assert any("training_records:4" in line for line in rp_labresop["lines"]), rp_labresop
+            assert any("notifications:3" in line for line in rp_labresop["lines"]), rp_labresop
             rp_pubop = read_json(base + "/api/state/rp_pubop")
             assert any("op=fair_package" in line for line in rp_pubop["lines"]), rp_pubop
             rp_knowop = read_json(base + "/api/state/rp_knowop")
