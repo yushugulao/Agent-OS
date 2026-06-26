@@ -1,4 +1,4 @@
-.PHONY: clean build user run debug test agentos-user agentos-build agentos-clean agentos-test dual-clean .FORCE
+.PHONY: clean build user run debug test agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run dual-clean .FORCE
 all: build
 
 K = os
@@ -152,11 +152,26 @@ agentos-user:
 	$(MAKE) -C agentos_ucore user TOOLPREFIX=$(TOOLPREFIX) CHAPTER=agent
 
 agentos-build:
+	rm -f agentos_ucore/nfs/fs.img agentos_ucore/nfs/fs-copy.img
 	$(MAKE) -C agentos_ucore user nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=agent
 	$(MAKE) -C agentos_ucore build TOOLPREFIX=$(TOOLPREFIX) LOG=warn INIT_PROC=agentfinal_ucore
 
 agentos-test:
+	rm -f agentos_ucore/nfs/fs.img agentos_ucore/nfs/fs-copy.img
 	cd agentos_ucore && TOOLPREFIX=$(TOOLPREFIX) bash scripts/run-agent-tests.sh
+
+agentos-platform-user:
+	$(MAKE) -C agentos_ucore user TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform_agentos
+
+agentos-platform-build:
+	rm -f agentos_ucore/nfs/fs.img agentos_ucore/nfs/fs-copy.img
+	$(MAKE) -C agentos_ucore user nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform_agentos
+	$(MAKE) -C agentos_ucore build TOOLPREFIX=$(TOOLPREFIX) LOG=warn INIT_PROC=rp_agentos_orch
+
+agentos-platform-run:
+	rm -f agentos_ucore/nfs/fs.img agentos_ucore/nfs/fs-copy.img
+	$(MAKE) -C agentos_ucore user nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform_agentos
+	$(MAKE) -C agentos_ucore run TOOLPREFIX=$(TOOLPREFIX) LOG=error INIT_PROC=rp_agentos_orch CHAPTER=platform_agentos
 
 agentos-clean:
 	$(MAKE) -C agentos_ucore clean

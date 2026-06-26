@@ -24,6 +24,8 @@ make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=rp_
 make agentos-user TOOLPREFIX=riscv64-linux-gnu-
 make agentos-build TOOLPREFIX=riscv64-linux-gnu-
 make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+make agentos-platform-build TOOLPREFIX=riscv64-linux-gnu-
+make agentos-platform-run TOOLPREFIX=riscv64-linux-gnu-
 ```
 
 ## Current User Program

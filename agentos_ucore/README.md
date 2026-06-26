@@ -303,6 +303,27 @@ labdemo_ucore: passed
 labdemo_ucore: parent passed
 ```
 
+## 科研 Agent 平台入口
+
+`CHAPTER=platform_agentos` 会构建完整科研 Agent 平台程序，并额外加入 `rp_agentos_orch` 作为改造内核目标的主入口。该入口先创建 orchestrator Agent，记录 Agent Context、批量工具调用、Context 快照和文件元数据服务的使用证据，再执行完整 `rp_orch` 工作流。
+
+运行方式：
+
+```bash
+make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_agentos
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=rp_agentos_orch CHAPTER=platform_agentos
+```
+
+预期关键输出包括：
+
+```text
+rp_agentos_orch: agent role=4 context=... latest=1
+rp_orch: programs_ok=42 programs_total=42
+rp_orch: passed
+rp_agentos_orch: kernel_agent=1 workflow=rp_orch status=ready
+rp_agentos_orch: passed
+```
+
 `agentsecurity_ucore` 预期输出包括：
 
 ```text

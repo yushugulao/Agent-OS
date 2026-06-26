@@ -14,7 +14,9 @@ SECTIONS {
     }
 
     .data : {
-        *(.data .rodata)
+        *(.data .data.*)
+        *(.rodata .rodata.*)
+        *(.srodata .srodata.*)
         *(.sdata .sdata.*)
     }
 

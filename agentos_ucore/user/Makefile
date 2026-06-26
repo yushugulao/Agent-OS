@@ -14,20 +14,23 @@ build_dir := build
 elf_dir := $(build_dir)/$(ARCH)
 obj_dir := $(build_dir)/obj
 bin_dir := $(build_dir)/bin
+generated_dir := $(build_dir)/generated
 out_dir := target
 asm_dir := asm
 arch_dir := lib/arch/riscv
 
 CFLAGS := -std=gnu11 -march=rv64imac_zicsr_zifencei -mabi=lp64 -mcmodel=medany
-CFLAGS += -fno-builtin -nostdinc -fno-stack-protector -ggdb -Wall
-CFLAGS += -fno-pie -static -Iinclude -Ilib -I$(arch_dir)
-LDFLAGS := -nostdlib -T $(arch_dir)/user.ld -Wl,-Ttext=0x1000
+CFLAGS += -fno-builtin -nostdinc -fno-stack-protector -ggdb -Wall -Os
+CFLAGS += -ffunction-sections -fdata-sections -fno-asynchronous-unwind-tables -fno-unwind-tables
+CFLAGS += -fno-pie -static -Iinclude -Ilib -I$(arch_dir) -I$(generated_dir)
+LDFLAGS := -nostdlib -T $(arch_dir)/user.ld -Wl,-Ttext=0x1000 -Wl,--gc-sections
 
 LIB_C := $(wildcard lib/*.c)
 LIB_OBJS := $(patsubst %.c,$(obj_dir)/%.o,$(LIB_C))
 CRT_OBJ := $(obj_dir)/$(arch_dir)/crt.o
 SRCS := $(wildcard $(app_dir)/*.c)
 APPS := $(patsubst $(app_dir)/%.c,%,$(SRCS))
+GENERATED_HEADERS := $(generated_dir)/rp_host_action_seed.h
 
 CH2_BASE_TESTS := ch2b_
 CH3_BASE_TESTS := ch3b_ $(CH2_BASE_TESTS)
@@ -37,6 +40,8 @@ CH6_BASE_TESTS := ch6b_ $(CH5_BASE_TESTS)
 CH7_BASE_TESTS := ch7b_ $(CH6_BASE_TESTS)
 CH8_BASE_TESTS := ch8b_ $(CH7_BASE_TESTS)
 AGENT_TESTS := agentfinal_ucore agentfs_ucore agentscan_ucore agentloop_ucore agentsched_ucore agentbench_ucore labbench_ucore labdemo_ucore agentsecurity_ucore
+PLATFORM_TESTS := rp_orch rp_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_workbench rp_agent_collab rp_package rp_delta rp_release rp_dossier rp_service_surface rp_notebook_export rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_review_dashboard rp_compare_plain
+PLATFORM_SEEDED_TESTS := rp_seed_orch rp_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_workbench rp_agent_collab rp_package rp_delta rp_release rp_dossier rp_service_surface rp_notebook_export rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_review_dashboard rp_compare_plain
 
 CH2_TESTS := $(CH2_BASE_TESTS)
 CH3_TESTS := $(CH3_BASE_TESTS) ch3_
@@ -72,13 +77,23 @@ else ifeq ($(CHAPTER), 8)
 CH_TESTS := $(CH8_TESTS)
 else ifeq ($(CHAPTER), agent)
 CH_TESTS := usershell $(AGENT_TESTS)
+else ifeq ($(CHAPTER), platform)
+CH_TESTS := $(PLATFORM_TESTS)
+else ifeq ($(CHAPTER), platform_seeded)
+CH_TESTS := $(PLATFORM_SEEDED_TESTS)
+else ifeq ($(CHAPTER), platform_agentos)
+CH_TESTS := rp_agentos_orch $(PLATFORM_TESTS)
 else
 CH_TESTS := usershell $(AGENT_TESTS)
 endif
 
 SELECTED_APPS = $(foreach t,$(CH_TESTS),$(filter $(t)%,$(APPS)))
 
-$(obj_dir)/%.o: %.c
+$(GENERATED_HEADERS):
+	@mkdir -p $(@D)
+	@printf '%s\n' '#ifndef __RP_HOST_ACTION_SEED_H__' '#define __RP_HOST_ACTION_SEED_H__' '#define RP_HOST_ACTION_SEED ""' '#endif' > $@
+
+$(obj_dir)/%.o: %.c $(GENERATED_HEADERS)
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -86,7 +101,7 @@ $(CRT_OBJ): $(arch_dir)/crt.S
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(elf_dir)/%: $(app_dir)/%.c $(LIB_OBJS) $(CRT_OBJ)
+$(elf_dir)/%: $(app_dir)/%.c $(LIB_OBJS) $(CRT_OBJ) $(GENERATED_HEADERS)
 	@mkdir -p $(elf_dir) $(bin_dir) $(asm_dir)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(CRT_OBJ) $(LIB_OBJS) $< -o $@
 	$(OBJDUMP) -d -S $@ > $(asm_dir)/$*.asm
