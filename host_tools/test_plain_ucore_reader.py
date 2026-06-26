@@ -161,6 +161,43 @@ def main() -> int:
             assert live["action_count"] == 1
             assert live["last_run"]["status"] == "ready"
 
+            batch = request.Request(
+                base + "/actions/batch",
+                data=json.dumps(
+                    {
+                        "actions": [
+                            {"path": "/actions/research/review", "payload": {"decision": "needs_revision"}},
+                            {"path": "/actions/research/export-bundle", "payload": {"bundle": "evidence"}},
+                        ]
+                    }
+                ).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            with request.urlopen(batch, timeout=5) as response:
+                batch_result = json.loads(response.read().decode("utf-8"))
+            assert len(batch_result["actions"]) == 2, batch_result
+            assert batch_result["actions"][0]["sequence"] == 2, batch_result
+            assert batch_result["actions"][1]["path"] == "/actions/research/export-bundle", batch_result
+            assert batch_result["run"]["status"] == "ready", batch_result
+
+            with request.urlopen(base + "/api/live", timeout=5) as response:
+                live = json.loads(response.read().decode("utf-8"))
+            assert live["action_count"] == 3, live
+            assert "path=/actions/research/export-bundle" in (state_dir / "rp_host_action_inbox").read_text(encoding="utf-8")
+
+            bad_batch = request.Request(
+                base + "/actions/batch",
+                data=json.dumps({"actions": [{"path": "/not-an-action", "payload": {}}]}).encode("utf-8"),
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                request.urlopen(bad_batch, timeout=5)
+                raise AssertionError("bad batch unexpectedly accepted")
+            except Exception as exc:
+                assert getattr(exc, "code", None) == 400, exc
+
             with request.urlopen(base + "/index.html", timeout=5) as response:
                 index_html = response.read().decode("utf-8")
             assert "Rendered from plain uCore state files" in index_html

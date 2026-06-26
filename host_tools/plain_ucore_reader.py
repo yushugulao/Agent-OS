@@ -193,26 +193,74 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
     return summary
 
 
-def append_action_record(out_dir: Path, state_dir: Path, action_path: str, payload: dict[str, object], write_state: bool) -> dict[str, object]:
+def count_action_records(action_log: Path) -> int:
+    if not action_log.exists():
+        return 0
+    return sum(1 for line in action_log.read_text(encoding="utf-8").splitlines() if line.strip())
+
+
+def append_action_records(
+    out_dir: Path,
+    state_dir: Path,
+    actions: list[dict[str, object]],
+    write_state: bool,
+) -> list[dict[str, object]]:
     out_dir.mkdir(parents=True, exist_ok=True)
     action_log = out_dir / "host-actions.jsonl"
-    sequence = 1
-    if action_log.exists():
-        sequence += sum(1 for line in action_log.read_text(encoding="utf-8").splitlines() if line.strip())
-    record = {
-        "sequence": sequence,
-        "path": action_path,
-        "payload": payload,
-        "status": "accepted",
-    }
+    sequence = count_action_records(action_log) + 1
+    records: list[dict[str, object]] = []
+    for action in actions:
+        action_path = str(action.get("path", ""))
+        payload = action.get("payload", {})
+        if not isinstance(payload, dict):
+            payload = {"value": payload}
+        records.append(
+            {
+                "sequence": sequence,
+                "path": action_path,
+                "payload": payload,
+                "status": "accepted",
+            }
+        )
+        sequence += 1
     with action_log.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, ensure_ascii=False) + "\n")
+        for record in records:
+            handle.write(json.dumps(record, ensure_ascii=False) + "\n")
     if write_state:
         inbox = state_dir / "rp_host_action_inbox"
         with inbox.open("a", encoding="utf-8") as handle:
-            handle.write(f"action={sequence};path={action_path};status=accepted\n")
-    write_json(out_dir / "last-action.json", record)
+            for record in records:
+                handle.write(f"action={record['sequence']};path={record['path']};status=accepted\n")
+    if records:
+        write_json(out_dir / "last-action.json", records[-1])
+        write_json(out_dir / "last-actions.json", records)
+    return records
+
+
+def append_action_record(out_dir: Path, state_dir: Path, action_path: str, payload: dict[str, object], write_state: bool) -> dict[str, object]:
+    records = append_action_records(out_dir, state_dir, [{"path": action_path, "payload": payload}], write_state)
+    record = records[0]
     return record
+
+
+def parse_batch_actions(payload: dict[str, object]) -> tuple[list[dict[str, object]], str]:
+    raw_actions = payload.get("actions")
+    if not isinstance(raw_actions, list) or not raw_actions:
+        return [], "actions must be a non-empty list"
+    actions: list[dict[str, object]] = []
+    for index, raw in enumerate(raw_actions, start=1):
+        if not isinstance(raw, dict):
+            return [], f"actions[{index}] must be an object"
+        path = raw.get("path")
+        if not isinstance(path, str) or not path.startswith("/actions/") or path == "/actions/batch":
+            return [], f"actions[{index}].path must be an action path"
+        item_payload = raw.get("payload", {})
+        if item_payload is None:
+            item_payload = {}
+        if not isinstance(item_payload, dict):
+            return [], f"actions[{index}].payload must be an object"
+        actions.append({"path": path, "payload": item_payload})
+    return actions, ""
 
 
 def run_action_package(
@@ -352,7 +400,16 @@ def make_service_handler(
             body = self.rfile.read(length) if length > 0 else b""
             payload = parse_request_body(self.headers, body)
             with action_lock:
-                record = append_action_record(out_dir, state_dir, parsed.path, payload, write_state)
+                batch_records: list[dict[str, object]] = []
+                record: dict[str, object] = {}
+                if parsed.path == "/actions/batch":
+                    batch_actions, error = parse_batch_actions(payload)
+                    if error:
+                        self.send_json(400, {"error": "invalid_batch", "detail": error})
+                        return
+                    batch_records = append_action_records(out_dir, state_dir, batch_actions, write_state)
+                else:
+                    record = append_action_record(out_dir, state_dir, parsed.path, payload, write_state)
                 run_result = {}
                 if auto_run_ucore:
                     run_result = run_action_package(
@@ -368,7 +425,10 @@ def make_service_handler(
             status = 202
             if run_result and run_result.get("status") != "ready":
                 status = 500
-            self.send_json(status, {"action": record, "run": run_result})
+            if batch_records:
+                self.send_json(status, {"actions": batch_records, "run": run_result})
+            else:
+                self.send_json(status, {"action": record, "run": run_result})
 
     return PlainUCoreReaderHandler
 
