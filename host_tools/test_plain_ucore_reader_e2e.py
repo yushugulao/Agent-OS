@@ -797,11 +797,15 @@ def main() -> int:
             assert "Run Action Trace" in run_html
             assert "Run Action Output Links" in run_html
             assert "Run Action Output Details" in run_html
+            assert "Run Action Impact" in run_html
             assert "rp_stage_state,rp_run_events" in run_html or "rp_stage_dag,rp_stage_state" in run_html
             assert "rp_artifact,rp_artifact_manifest" in run_html
             assert "rp_llm_req,rp_llmq" in run_html
             assert "host_workflow_stage_action" in run_html
             assert "host_llm_request_id" in run_html
+            assert "report_section" in run_html
+            assert "artifact_path" in run_html
+            assert "llm_packet" in run_html
             assert "/actions/research/run" in run_html
             assert "/actions/host-workflow/run" in run_html
             assert "/actions/research/artifact-package" in run_html
@@ -832,7 +836,9 @@ def main() -> int:
             assert "host_relay_eval_batch" in artifacts_html
             assert "host_artifact_chart" in artifacts_html
             assert "Artifact Action Output Details" in artifacts_html
+            assert "Artifact Action Impact" in artifacts_html
             assert "host_artifact_manifest_package" in artifacts_html
+            assert "artifact_review_path=raw_to_report" in artifacts_html
             agents_html = read_text(base + "/agents.html")
             assert "Agent Detail" in agents_html
             assert "Agent Roster" in agents_html
@@ -873,9 +879,11 @@ def main() -> int:
             assert "Review Action Trace" in review_html
             assert "Review Action Output Links" in review_html
             assert "Review Action Output Details" in review_html
+            assert "Review Action Impact" in review_html
             assert "rp_review2,rp_revision" in review_html
             assert "rp_runner,rp_revision,rp_package" in review_html
             assert "host_action_revision" in review_html
+            assert "llm_packet_guard" in review_html
             assert "Handoff Checks" in review_html
             assert "send_to_reviewer" in review_html
             assert "delivery_to_operations" in review_html
@@ -899,9 +907,11 @@ def main() -> int:
             assert "Compare Action Trace" in compare_html
             assert "Compare Action Output Links" in compare_html
             assert "Compare Action Output Details" in compare_html
+            assert "Compare Action Impact" in compare_html
             assert "rp_wfio,rp_package,rp_agentcmp" in compare_html
             assert "rp_agentcmp,rp_api_compare" in compare_html
             assert "host_portability_payload" in compare_html
+            assert "portability_package" in compare_html
             assert "Plain Kernel Signals" in compare_html
             assert "Consistency Signals" in compare_html
             assert "File Scans" in compare_html
@@ -934,12 +944,14 @@ def main() -> int:
             assert "Batch Actions" in actions_html
             assert "Action Output Links" in actions_html
             assert "Action Output Details" in actions_html
+            assert "Action Impact" in actions_html
             assert "Host Actions" in actions_html
             assert "rp_input,rp_runner,rp_report_text" in actions_html
             assert "rp_package,rp_artifact_manifest" in actions_html
             assert "qemu_orch_passed" in actions_html
             assert "host_action_revision" in actions_html
             assert "host_action_run_id" in actions_html
+            assert "host_report_run_id" in actions_html
             llm_html = read_text(base + "/llm.html")
             assert "LLM Relay" in llm_html
             assert "Relay Quality" in llm_html

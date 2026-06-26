@@ -1556,6 +1556,55 @@ def action_output_detail_links(state: dict[str, dict[str, object]], actions: lis
     return rows
 
 
+def action_impact_specs(path: str, group: str) -> list[tuple[str, str, tuple[str, ...], str]]:
+    specs: list[tuple[str, str, tuple[str, ...], str]] = []
+    if group in {"run", "inputs", "workbench", "review", "delivery", "operations", "project", "compare"}:
+        specs.append(("report_section", "rp_report_text", ("host_report_", "host_relay_report_summary=", "backend_evidence_report="), "run.html,review.html"))
+    if group in {"workflow", "artifact", "delivery", "operations"}:
+        specs.append(("artifact_path", "rp_artifact_manifest", ("artifact_review_path=", "host_artifact_manifest_", "host_workflow_artifact_action="), "artifacts.html,run.html"))
+    if group in {"review", "delivery", "operations", "project", "llm", "workflow", "artifact"}:
+        specs.append(("review_gate", "rp_review_dashboard", ("gate=", "section=", "decision=", "host_relay_quality=", "backend_review_evidence="), "review.html"))
+    if group == "llm":
+        specs.append(("llm_packet", "rp_llm_packets", ("host_llm_packet_", "host_relay_packet=", "secret_in_packet="), "llm.html,run.html,review.html"))
+        specs.append(("llm_quality", "rp_llmeval", ("host_relay_eval=", "host_relay_eval_batch="), "llm.html,review.html"))
+    if path.endswith("/research/artifact-package"):
+        specs.append(("delivery_package", "rp_package", ("host_action_export_", "host_action_bundle_", "delivery_files="), "review.html,artifacts.html"))
+    if path.endswith("/workflow-portability/package"):
+        specs.append(("portability_package", "rp_wfio", ("host_portability_package_action=", "host_portability_package="), "compare.html,actions.html"))
+    return specs
+
+
+def action_impact_links(state: dict[str, dict[str, object]], actions: list[dict[str, object]], groups: set[str]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    seen: set[tuple[str, str, str, str]] = set()
+    for record in actions:
+        path = str(record.get("path", ""))
+        group = action_trace_group(path)
+        if not group or group not in groups:
+            continue
+        for target, source_file, prefixes, pages in action_impact_specs(path, group):
+            for detail in state_prefixed_lines(state, source_file, prefixes)[:3]:
+                key = (str(record.get("sequence", "")), target, source_file, detail)
+                if key in seen:
+                    continue
+                seen.add(key)
+                parsed = parse_kv_record(detail)
+                rows.append(
+                    {
+                        "action_impact": str(record.get("sequence", "")),
+                        "group": group,
+                        "path": path,
+                        "target": target,
+                        "state_file": source_file,
+                        "detail_kind": detail_kind_from_line(detail),
+                        "detail": detail,
+                        "rendered_pages": pages,
+                        "status": parsed.get("status", "present"),
+                    }
+                )
+    return rows
+
+
 def action_output_panel(title: str, state: dict[str, dict[str, object]], actions: list[dict[str, object]], groups: set[str]) -> str:
     return render_record_panel(
         title,
@@ -1589,6 +1638,25 @@ def action_output_detail_panel(title: str, state: dict[str, dict[str, object]], 
         ],
         action_output_detail_links(state, actions, groups),
         "No related host action detail rows",
+    )
+
+
+def action_impact_panel(title: str, state: dict[str, dict[str, object]], actions: list[dict[str, object]], groups: set[str]) -> str:
+    return render_record_panel(
+        title,
+        [
+            ("Sequence", "action_impact"),
+            ("Group", "group"),
+            ("Path", "path"),
+            ("Target", "target"),
+            ("State File", "state_file"),
+            ("Detail Kind", "detail_kind"),
+            ("Detail", "detail"),
+            ("Rendered Pages", "rendered_pages"),
+            ("Status", "status"),
+        ],
+        action_impact_links(state, actions, groups),
+        "No related host action impact rows",
     )
 
 
@@ -1852,21 +1920,26 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
             sections.append(action_trace_panel("Run Action Trace", actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
             sections.append(action_output_panel("Run Action Output Links", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
             sections.append(action_output_detail_panel("Run Action Output Details", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
+            sections.append(action_impact_panel("Run Action Impact", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
         if file_name == "compare.html":
             sections.append(action_trace_panel("Compare Action Trace", actions, {"compare", "portability", "workflow", "artifact"}))
             sections.append(action_output_panel("Compare Action Output Links", state, actions, {"compare", "portability", "workflow", "artifact"}))
             sections.append(action_output_detail_panel("Compare Action Output Details", state, actions, {"compare", "portability", "workflow", "artifact"}))
+            sections.append(action_impact_panel("Compare Action Impact", state, actions, {"compare", "portability", "workflow", "artifact"}))
         if file_name == "review.html":
             sections.append(action_trace_panel("Review Action Trace", actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
             sections.append(action_output_panel("Review Action Output Links", state, actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
             sections.append(action_output_detail_panel("Review Action Output Details", state, actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
+            sections.append(action_impact_panel("Review Action Impact", state, actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
         if file_name == "artifacts.html":
             sections.append(action_output_panel("Artifact Action Output Links", state, actions, {"artifact", "workflow"}))
             sections.append(action_output_detail_panel("Artifact Action Output Details", state, actions, {"artifact", "workflow"}))
+            sections.append(action_impact_panel("Artifact Action Impact", state, actions, {"artifact", "workflow"}))
         if file_name == "actions.html":
             sections.append(render_action_panel())
             sections.append(action_output_panel("Action Output Links", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
             sections.append(action_output_detail_panel("Action Output Details", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
+            sections.append(action_impact_panel("Action Impact", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
             sections.append(render_action_log(actions))
         sections.append(render_table(primary, state_lines(state, primary)))
         for extra in extras:
