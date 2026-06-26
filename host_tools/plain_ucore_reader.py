@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 PAGE_SPECS = [
     ("index.html", "Home", "rp_api_home", ["rp_ui_home", "rp_web_bundle"]),
     ("run.html", "Run Detail", "rp_api_run", ["rp_ui_run", "rp_runner", "rp_artifact"]),
+    ("workflow.html", "Workflow", "rp_stage_state", ["rp_stage_dag", "rp_cache_index", "rp_retry_plan", "rp_run_events", "rp_worker", "rp_execobs"]),
     ("agents.html", "Agents", "rp_api_agents", ["rp_ui_agent", "rp_agents", "rp_decisions"]),
     ("evidence.html", "Evidence", "rp_api_evidence", ["rp_ui_evidence", "rp_evidence", "rp_package"]),
     ("review.html", "Review", "rp_review_dashboard", ["rp_review_pack", "rp_review2", "rp_revision", "rp_package", "rp_report_text"]),
@@ -1031,6 +1032,15 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Notebook", metric_value(state, [("rp_nbexec", "host_action_notebook_format"), ("rp_web_bundle", "notebook_export")]), "rp_nbexec"),
         ("Download Units", metric_value(state, [("rp_web_bundle", "downloadable_units")]), "rp_web_bundle"),
     ]
+    workflow_items = [
+        ("Workflow", metric_value(state, [("rp_stage_state", "host_workflow_id"), ("rp_plan", "workflow")]), "rp_stage_state"),
+        ("Run", metric_value(state, [("rp_stage_state", "host_workflow_run_id")]), "rp_stage_state"),
+        ("Engine", metric_value(state, [("rp_stage_state", "host_workflow_engine")]), "rp_stage_state"),
+        ("Retry Stage", metric_value(state, [("rp_retry_plan", "host_workflow_retry_stage"), ("rp_retry_plan", "retry_stage")]), "rp_retry_plan"),
+        ("Cache Hit", metric_value(state, [("rp_stage_state", "host_workflow_cache_hit_stage"), ("rp_cache_index", "host_workflow_cache_hit_stage")]), "rp_cache_index"),
+        ("Worker Slots", metric_value(state, [("rp_stage_state", "host_workflow_worker_slots"), ("rp_worker", "host_workflow_worker_slots")]), "rp_worker"),
+        ("Queue Depth", metric_value(state, [("rp_stage_state", "host_workflow_queue_depth"), ("rp_worker", "host_workflow_queue_depth")]), "rp_worker"),
+    ]
     compare_items = [
         ("Payload Applied", metric_value(state, [("rp_api_compare", "host_action_payload_applied")]), "rp_api_compare"),
         ("Run", metric_value(state, [("rp_api_compare", "host_action_run_id")]), "rp_api_compare"),
@@ -1076,6 +1086,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Evidence Package", evidence_items)
     if file_name == "delivery.html":
         return render_summary_panel("Delivery Package", delivery_items)
+    if file_name == "workflow.html":
+        return render_summary_panel("Workflow Runner", workflow_items)
     if file_name == "review.html":
         return render_summary_panel("Review Dashboard", review_items)
     if file_name == "compare.html":
@@ -1288,6 +1300,93 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 "Operations Source Files",
                 [("Section", "operation_section"), ("State File", "state_file"), ("Record", "record"), ("Rendered Page", "rendered_page"), ("Status", "status")],
                 operations_source_files(state),
+            ),
+        ]
+    if file_name == "workflow.html":
+        return [
+            render_record_panel(
+                "Workflow Execution View",
+                [
+                    ("View", "execution_view"),
+                    ("Host View", "host_execution_view"),
+                    ("Workflow", "workflow"),
+                    ("Run", "run_id"),
+                    ("Engine", "engine"),
+                    ("Stage", "stage"),
+                    ("Order", "order"),
+                    ("Attempts", "attempts"),
+                    ("State", "state"),
+                    ("Input", "input"),
+                    ("Output", "output"),
+                    ("Cache", "cache"),
+                    ("Cache Hit", "cache_hit"),
+                    ("Retry", "retry"),
+                    ("Retry Stage", "retry_stage"),
+                    ("Failure", "failure"),
+                    ("Worker", "worker"),
+                    ("Worker Slots", "worker_slots"),
+                    ("Queue Depth", "queue_depth"),
+                    ("Event", "event"),
+                    ("Observer Events", "observer_events"),
+                    ("Status", "status"),
+                ],
+                workflow_execution_view(state),
+            ),
+            render_record_panel(
+                "Workflow Control View",
+                [
+                    ("View", "control_view"),
+                    ("Source", "source"),
+                    ("Workflow", "workflow"),
+                    ("Run", "run_id"),
+                    ("Engine", "engine"),
+                    ("Stage", "stage"),
+                    ("Attempts", "attempts"),
+                    ("State", "state"),
+                    ("Cache Key", "cache_key"),
+                    ("Cache State", "cache_state"),
+                    ("Cache Policy", "cache_policy"),
+                    ("Input", "input"),
+                    ("Output", "output"),
+                    ("Dedupe Key", "dedupe_key"),
+                    ("Skip", "skip"),
+                    ("Worker Slots", "worker_slots"),
+                    ("Ready Workers", "ready_workers"),
+                    ("Busy Workers", "busy_workers"),
+                    ("Stalled Workers", "stalled_workers"),
+                    ("Queue Depth", "queue_depth"),
+                    ("Heartbeats", "heartbeats"),
+                    ("Event", "event"),
+                    ("Observer Events", "observer_events"),
+                    ("Action", "action"),
+                    ("Status", "status"),
+                ],
+                workflow_control_view(state),
+            ),
+            render_record_panel(
+                "Workflow Evidence Links",
+                [
+                    ("View", "evidence_view"),
+                    ("Source", "source"),
+                    ("Path", "path"),
+                    ("Stage", "stage"),
+                    ("Input", "input"),
+                    ("Prepared", "prepared"),
+                    ("Output", "output"),
+                    ("Artifact", "artifact"),
+                    ("Event", "event"),
+                    ("Retry", "retry"),
+                    ("Failure", "failure"),
+                    ("Cache", "cache"),
+                    ("Log", "log"),
+                    ("Manifest", "manifest"),
+                    ("Report", "report"),
+                    ("Review", "review"),
+                    ("LLM Quality", "llm_quality"),
+                    ("Delivery", "delivery"),
+                    ("Status", "status"),
+                ],
+                workflow_evidence_links(state),
             ),
         ]
     if file_name == "agents.html":
@@ -2543,6 +2642,12 @@ def render_overview(
             ("Workbench Tasks", metric_value(state, [("rp_runner", "workbench_tasks")]), "rp_runner"),
             ("Artifacts", metric_value(state, [("rp_runner", "host_action_artifacts"), ("rp_package", "artifacts")]), "rp_package"),
         ],
+        "workflow.html": [
+            ("Workflow", metric_value(state, [("rp_stage_state", "host_workflow_id"), ("rp_plan", "workflow")]), "rp_stage_state"),
+            ("Run", metric_value(state, [("rp_stage_state", "host_workflow_run_id")]), "rp_stage_state"),
+            ("Retry", metric_value(state, [("rp_retry_plan", "host_workflow_retry_stage"), ("rp_retry_plan", "retry_stage")]), "rp_retry_plan"),
+            ("Events", metric_value(state, [("rp_execobs", "host_workflow_observer_events"), ("rp_run_events", "events")]), "rp_execobs"),
+        ],
         "agents.html": [
             ("Agents", metric_value(state, [("rp_agents", "agents"), ("rp_api_agents", "agents")]), "rp_agents"),
             ("Decisions", metric_value(state, [("rp_decisions", "decisions")]), "rp_decisions"),
@@ -2724,6 +2829,12 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
             sections.append(action_output_detail_panel("Run Action Output Details", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
             sections.append(action_impact_panel("Run Action Impact", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
             sections.append(action_delta_panel("Run Action Delta", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
+        if file_name == "workflow.html":
+            sections.append(action_trace_panel("Workflow Action Trace", actions, {"workflow", "artifact"}))
+            sections.append(action_output_panel("Workflow Action Output Links", state, actions, {"workflow", "artifact"}))
+            sections.append(action_output_detail_panel("Workflow Action Output Details", state, actions, {"workflow", "artifact"}))
+            sections.append(action_impact_panel("Workflow Action Impact", state, actions, {"workflow", "artifact"}))
+            sections.append(action_delta_panel("Workflow Action Delta", state, actions, {"workflow", "artifact"}))
         if file_name == "compare.html":
             sections.append(action_trace_panel("Compare Action Trace", actions, {"compare", "portability", "workflow", "artifact"}))
             sections.append(action_output_panel("Compare Action Output Links", state, actions, {"compare", "portability", "workflow", "artifact"}))

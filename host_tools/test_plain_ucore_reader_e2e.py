@@ -836,6 +836,21 @@ def main() -> int:
             assert "execution_plan:pass:record:baseline" in run_html
             assert "context_path:planned:kernel_context:target" in run_html
             assert "risks" in run_html
+            workflow_html = read_text(base + "/workflow.html")
+            assert "Workflow Runner" in workflow_html
+            assert "Workflow Execution View" in workflow_html
+            assert "Workflow Control View" in workflow_html
+            assert "Workflow Evidence Links" in workflow_html
+            assert "workflow_run" in workflow_html
+            assert "R1" in workflow_html
+            assert "plain-c-runner" in workflow_html
+            assert "clean" in workflow_html
+            assert "checksum_mismatch" in workflow_html
+            assert "cache_decision" in workflow_html
+            assert "retry_decision" in workflow_html
+            assert "stage_evidence" in workflow_html
+            assert "rp_artifact_manifest" in workflow_html
+            assert "Workflow Action Trace" in workflow_html
             artifacts_html = read_text(base + "/artifacts.html")
             assert "Evidence Package" in artifacts_html
             assert "ev" in artifacts_html

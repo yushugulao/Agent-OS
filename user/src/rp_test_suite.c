@@ -1352,7 +1352,7 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "reader_contract=host_plain_ucore_v2");
 	ok = ok && require_file_token("rp_web_bundle", "reader_contract_version=2");
 	ok = ok && require_file_token("rp_web_bundle", "reader_ready=1");
-	ok = ok && require_file_token("rp_web_bundle", "reader_views=16");
+	ok = ok && require_file_token("rp_web_bundle", "reader_views=17");
 	ok = ok && require_file_token("rp_web_bundle", "reader_actions=48");
 	ok = ok && require_file_token("rp_web_bundle", "reader_payload_files=rp_api_home");
 	ok = ok && require_file_token("rp_web_bundle", "reader_refresh_files=rp_web_routes");

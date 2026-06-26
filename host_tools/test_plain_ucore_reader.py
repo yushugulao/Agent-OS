@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=16
+reader_views=17
 reader_actions=48
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_web_bundle
@@ -302,9 +302,10 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 12, summary
+        assert summary["pages"] == 13, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
+        assert (out_dir / "workflow.html").exists()
         assert (out_dir / "review.html").exists()
         assert (out_dir / "delivery.html").exists()
         assert (out_dir / "llm.html").exists()
@@ -362,6 +363,18 @@ def main() -> int:
         assert "execution_plan:pass:record:baseline" in run_html
         assert "context_path:planned:kernel_context:target" in run_html
         assert "risks" in run_html
+        workflow_html = (out_dir / "workflow.html").read_text(encoding="utf-8")
+        assert "Workflow Runner" in workflow_html
+        assert "Workflow Execution View" in workflow_html
+        assert "Workflow Control View" in workflow_html
+        assert "Workflow Evidence Links" in workflow_html
+        assert "workflow_run" in workflow_html
+        assert "R1" in workflow_html
+        assert "plain-c-runner" in workflow_html
+        assert "cache_decision" in workflow_html
+        assert "retry_decision" in workflow_html
+        assert "stage_evidence" in workflow_html
+        assert "rp_artifact_manifest" in workflow_html
         compare_html = (out_dir / "compare.html").read_text(encoding="utf-8")
         assert "Compare Summary" in compare_html
         assert "Compare Metrics" in compare_html
