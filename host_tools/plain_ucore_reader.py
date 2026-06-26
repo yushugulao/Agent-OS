@@ -437,6 +437,37 @@ def review_source_map(state: dict[str, dict[str, object]]) -> list[dict[str, str
     return rows
 
 
+def record_label(line: str) -> str:
+    first = line.split(";", 1)[0].strip()
+    if "=" in first:
+        return first
+    return "record"
+
+
+def delivery_source_map(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for source_file in ("rp_package", "rp_nbexec", "rp_uresrun"):
+        for line in state_lines(state, source_file):
+            record = parse_kv_record(line)
+            if not record:
+                continue
+            label = record_label(line)
+            for field, value in record.items():
+                for reference in split_state_references(value):
+                    rows.append(
+                        {
+                            "delivery_record": label,
+                            "field": field,
+                            "reference": reference,
+                            "state_file": state_reference_file(reference),
+                            "source_line": source_line_for_reference(state, reference),
+                            "source_file": source_file,
+                            "status": record.get("status", ""),
+                        }
+                    )
+    return rows
+
+
 def operations_source_files(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
     specs = [
         ("operations_report", "rp_review_pack", ("operations_handoff=",), "run.html,review.html"),
@@ -1391,6 +1422,19 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 artifact_source_map(state),
             ),
             render_record_panel(
+                "Delivery Source Map",
+                [
+                    ("Delivery Record", "delivery_record"),
+                    ("Field", "field"),
+                    ("Reference", "reference"),
+                    ("State File", "state_file"),
+                    ("Source Line", "source_line"),
+                    ("Source File", "source_file"),
+                    ("Status", "status"),
+                ],
+                delivery_source_map(state),
+            ),
+            render_record_panel(
                 "Dossier Checks",
                 [("Check", "dossier_check"), ("Source", "source"), ("Stage", "stage"), ("Event", "event"), ("Gate", "gate"), ("Status", "status")],
                 state_records(state, "rp_artifact_manifest", "dossier_check"),
@@ -1456,6 +1500,19 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                     ("Status", "status"),
                 ],
                 review_source_map(state),
+            ),
+            render_record_panel(
+                "Delivery Source Map",
+                [
+                    ("Delivery Record", "delivery_record"),
+                    ("Field", "field"),
+                    ("Reference", "reference"),
+                    ("State File", "state_file"),
+                    ("Source Line", "source_line"),
+                    ("Source File", "source_file"),
+                    ("Status", "status"),
+                ],
+                delivery_source_map(state),
             ),
             render_record_panel(
                 "Review Backend Evidence",

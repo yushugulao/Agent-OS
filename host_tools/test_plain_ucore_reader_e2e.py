@@ -836,6 +836,9 @@ def main() -> int:
             assert "Artifact Provenance" in artifacts_html
             assert "Artifact Review Path" in artifacts_html
             assert "Artifact Source Map" in artifacts_html
+            assert "Delivery Source Map" in artifacts_html
+            assert "delivery_file=report_md" in artifacts_html
+            assert "rp_report_text" in artifacts_html
             assert "quality_to_package" in artifacts_html
             assert "recovery_to_review" in artifacts_html
             assert "section=rp_align_table" in artifacts_html
@@ -884,6 +887,9 @@ def main() -> int:
             assert "Review Gates" in review_html
             assert "Review Evidence Pack" in review_html
             assert "Review Source Map" in review_html
+            assert "Delivery Source Map" in review_html
+            assert "delivery_file=report_md" in review_html
+            assert "rp_report_text" in review_html
             assert "rp_artifact_manifest" in review_html
             assert "host_relay_eval_batch" in review_html
             assert "executions=1" in review_html
