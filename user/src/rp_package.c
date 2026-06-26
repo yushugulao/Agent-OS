@@ -345,6 +345,7 @@ int main(void)
 		char workflow_id[64];
 		char bundle[48];
 		char format[32];
+		char value[48];
 		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow", "workflow_id=", workflow_id, sizeof(workflow_id)) &&
 		    !rp_host_seed_copy_value_for_kind("kind=host_workflow_export", "workflow_id=", workflow_id, sizeof(workflow_id))) {
 			rp_copy_text(workflow_id, sizeof(workflow_id), "wf-host-plain");
@@ -360,6 +361,19 @@ int main(void)
 		if (!rp_append_host_action_line("rp_package", "host_action_workflow_bundle=", bundle)) return 1;
 		if (!rp_append_host_action_line("rp_package", "host_action_workflow_format=", format)) return 1;
 		if (!rp_append_file("rp_package", "host_action_workflow_contents=stage_dag,stage_state,run_events,manifest")) return 1;
+		if (rp_host_seed_copy_value_for_kind("kind=host_workflow", "retry_stage=", value, sizeof(value))) {
+			if (!rp_append_host_action_line("rp_package", "host_action_workflow_retry_stage=", value)) return 1;
+		}
+		if (rp_host_seed_copy_value_for_kind("kind=host_workflow", "cache_hit_stage=", value, sizeof(value))) {
+			if (!rp_append_host_action_line("rp_package", "host_action_workflow_cache_hit_stage=", value)) return 1;
+		}
+		if (rp_host_seed_copy_value_for_kind("kind=host_workflow", "worker_slots=", value, sizeof(value)) ||
+		    rp_host_seed_copy_value_for_kind("kind=host_workflow", "max_workers=", value, sizeof(value))) {
+			if (!rp_append_host_action_line("rp_package", "host_action_workflow_worker_slots=", value)) return 1;
+		}
+		if (rp_host_seed_copy_value_for_kind("kind=host_workflow", "observer_events=", value, sizeof(value))) {
+			if (!rp_append_host_action_line("rp_package", "host_action_workflow_observer_events=", value)) return 1;
+		}
 	}
 	if (rp_host_seed_has("kind=workbench_handoff_package") ||
 	    rp_host_seed_has("kind=workbench_export") ||

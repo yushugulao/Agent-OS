@@ -271,7 +271,7 @@ def main() -> int:
                 },
                 {
                     "path": "/actions/host-workflow/run",
-                    "payload": {"workflow_id": "WF1", "run_id": "RUN-999", "engine": "plain-c-runner", "stages": "6", "dag": "ingest>clean>analyze>review>package", "max_workers": "2", "cache": "content"},
+                    "payload": {"workflow_id": "WF1", "run_id": "RUN-999", "engine": "plain-c-runner", "stages": "6", "dag": "ingest>clean>analyze>review>package", "max_workers": "2", "worker_slots": "2", "queue_depth": "5", "observer_events": "12", "failed_stage": "clean", "retry_stage": "clean", "cache_hit_stage": "analyze", "retry_reason": "checksum_mismatch", "cache": "content"},
                 },
                 {
                     "path": "/actions/host-workflow/export",
@@ -482,6 +482,9 @@ def main() -> int:
         assert "workflow_id=WF1" in queue
         assert "engine=plain-c-runner" in queue
         assert "dag=ingest>clean>analyze>review>package" in queue
+        assert "retry_stage=clean" in queue
+        assert "cache_hit_stage=analyze" in queue
+        assert "observer_events=12" in queue
         assert "bundle=wf.zip" in queue
         assert "status=ready" in queue
 
@@ -667,6 +670,9 @@ def main() -> int:
         assert "kind=host_workflow_export" in seed_file
         assert "workflow_id=WF1" in seed_file
         assert "engine=plain-c-runner" in seed_file
+        assert "retry_reason=checksum_mismatch" in seed_file
+        assert "worker_slots=2" in seed_file
+        assert "queue_depth=5" in seed_file
         assert "bundle=wf.zip" in seed_file
         assert "source_text=" not in seed_file
 

@@ -176,6 +176,14 @@ int main(void)
 		char engine[32];
 		char stages[16];
 		char dag[64];
+		char failed_stage[32];
+		char retry_stage[32];
+		char cache_hit_stage[32];
+		char worker_slots[16];
+		char queue_depth[16];
+		char observer_events[16];
+		char retry_reason[48];
+		char cache_policy[32];
 		char format[32];
 		char bundle[48];
 		char line[160];
@@ -196,6 +204,31 @@ int main(void)
 		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow", "dag=", dag, sizeof(dag))) {
 			rp_copy_text(dag, sizeof(dag), "ingest>align>profile>review>package");
 		}
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow", "failed_stage=", failed_stage, sizeof(failed_stage))) {
+			rp_copy_text(failed_stage, sizeof(failed_stage), "align");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow", "retry_stage=", retry_stage, sizeof(retry_stage))) {
+			rp_copy_text(retry_stage, sizeof(retry_stage), failed_stage);
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow", "cache_hit_stage=", cache_hit_stage, sizeof(cache_hit_stage))) {
+			rp_copy_text(cache_hit_stage, sizeof(cache_hit_stage), "profile");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow", "worker_slots=", worker_slots, sizeof(worker_slots)) &&
+		    !rp_host_seed_copy_value_for_kind("kind=host_workflow", "max_workers=", worker_slots, sizeof(worker_slots))) {
+			rp_copy_text(worker_slots, sizeof(worker_slots), "4");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow", "queue_depth=", queue_depth, sizeof(queue_depth))) {
+			rp_copy_text(queue_depth, sizeof(queue_depth), "8");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow", "observer_events=", observer_events, sizeof(observer_events))) {
+			rp_copy_text(observer_events, sizeof(observer_events), "9");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow", "retry_reason=", retry_reason, sizeof(retry_reason))) {
+			rp_copy_text(retry_reason, sizeof(retry_reason), "tool_output_missing");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow", "cache=", cache_policy, sizeof(cache_policy))) {
+			rp_copy_text(cache_policy, sizeof(cache_policy), "content");
+		}
 		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_export", "format=", format, sizeof(format))) {
 			rp_copy_text(format, sizeof(format), "json");
 		}
@@ -210,8 +243,27 @@ int main(void)
 		if (!rp_append_file("rp_stage_state", "host_workflow_state=executed")) return 1;
 		if (!rp_append_host_action_line("rp_stage_state", "host_workflow_run_id=", run_id)) return 1;
 		if (!rp_append_host_action_line("rp_stage_state", "host_workflow_engine=", engine)) return 1;
+		if (!rp_append_host_action_line("rp_stage_state", "host_workflow_failed_stage=", failed_stage)) return 1;
+		if (!rp_append_host_action_line("rp_stage_state", "host_workflow_retry_stage=", retry_stage)) return 1;
+		if (!rp_append_host_action_line("rp_stage_state", "host_workflow_cache_hit_stage=", cache_hit_stage)) return 1;
+		if (!rp_append_host_action_line("rp_stage_state", "host_workflow_worker_slots=", worker_slots)) return 1;
+		if (!rp_append_host_action_line("rp_stage_state", "host_workflow_queue_depth=", queue_depth)) return 1;
+		if (!rp_append_host_action_line("rp_cache_index", "host_workflow_cache_policy=", cache_policy)) return 1;
+		if (!rp_append_host_action_line("rp_cache_index", "host_workflow_cache_hit_stage=", cache_hit_stage)) return 1;
+		if (!rp_append_host_action_line("rp_retry_plan", "host_workflow_retry_stage=", retry_stage)) return 1;
+		if (!rp_append_host_action_line("rp_retry_plan", "host_workflow_retry_reason=", retry_reason)) return 1;
 		if (!rp_append_host_action_line("rp_run_events", "host_workflow_event=started;workflow=", workflow_id)) return 1;
+		rp_copy_text(line, sizeof(line), "host_workflow_event=retry;stage=");
+		rp_append_text(line, sizeof(line), retry_stage);
+		rp_append_text(line, sizeof(line), ";reason=");
+		rp_append_text(line, sizeof(line), retry_reason);
+		if (!rp_append_file("rp_run_events", line)) return 1;
 		if (!rp_append_file("rp_run_events", "host_workflow_event=finished;status=ready")) return 1;
+		if (!rp_append_host_action_line("rp_worker", "host_workflow_worker_slots=", worker_slots)) return 1;
+		if (!rp_append_host_action_line("rp_worker", "host_workflow_queue_depth=", queue_depth)) return 1;
+		if (!rp_append_host_action_line("rp_execobs", "host_workflow_observer_events=", observer_events)) return 1;
+		if (!rp_append_host_action_line("rp_execobs", "host_workflow_retry_reason=", retry_reason)) return 1;
+		if (!rp_append_host_action_line("rp_execobs", "host_workflow_worker_slots=", worker_slots)) return 1;
 		rp_copy_text(line, sizeof(line), "host_manifest_workflow=");
 		rp_append_text(line, sizeof(line), workflow_id);
 		rp_append_text(line, sizeof(line), ";run_id=");
@@ -233,6 +285,13 @@ int main(void)
 		rp_append_text(line, sizeof(line), ";engine=");
 		rp_append_text(line, sizeof(line), engine);
 		rp_append_text(line, sizeof(line), ";status=ready");
+		if (!rp_append_file("rp_runner", line)) return 1;
+		rp_copy_text(line, sizeof(line), "host_action_workflow_runtime=retry_stage:");
+		rp_append_text(line, sizeof(line), retry_stage);
+		rp_append_text(line, sizeof(line), ";cache_hit:");
+		rp_append_text(line, sizeof(line), cache_hit_stage);
+		rp_append_text(line, sizeof(line), ";workers:");
+		rp_append_text(line, sizeof(line), worker_slots);
 		if (!rp_append_file("rp_runner", line)) return 1;
 		if (!rp_append_host_action_line("rp_runner", "host_action_workflow_export=", bundle)) return 1;
 		if (!rp_append_host_action_line("rp_runner", "host_action_workflow_export_format=", format)) return 1;

@@ -205,6 +205,17 @@ int main(void)
 		ok = ok && rp_file_contains("rp_package", token);
 		ok = ok && rp_file_contains("rp_actionio", "host_action_workflow=1");
 		ok = ok && rp_file_contains("rp_web_bundle", "host_action_workflow_outputs=");
+		ok = ok && check_seed_value("kind=host_workflow", "retry_stage=", "align", "rp_retry_plan", "host_workflow_retry_stage=");
+		ok = ok && check_seed_value("kind=host_workflow", "cache_hit_stage=", "profile", "rp_cache_index", "host_workflow_cache_hit_stage=");
+		if (rp_host_seed_copy_value_for_kind("kind=host_workflow", "worker_slots=", value, sizeof(value)) ||
+		    rp_host_seed_copy_value_for_kind("kind=host_workflow", "max_workers=", value, sizeof(value))) {
+			rp_copy_text(token, sizeof(token), "host_workflow_worker_slots=");
+			rp_append_text(token, sizeof(token), value);
+			ok = ok && rp_file_contains("rp_worker", token);
+		} else {
+			ok = ok && rp_file_contains("rp_worker", "host_workflow_worker_slots=4");
+		}
+		ok = ok && check_seed_value("kind=host_workflow", "observer_events=", "9", "rp_execobs", "host_workflow_observer_events=");
 		if (rp_host_seed_has("kind=host_workflow_export")) {
 			ok = ok && check_seed_value("kind=host_workflow_export", "bundle=", "workflow-export.zip", "rp_runner", "host_action_workflow_export=");
 			ok = ok && check_seed_value("kind=host_workflow_export", "format=", "json", "rp_package", "host_action_workflow_format=");

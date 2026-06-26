@@ -120,7 +120,7 @@ def main() -> int:
                 {"path": "/actions/research-search/export", "payload": {"query": "recovery evidence", "limit": "20"}},
                 {"path": "/actions/research-search/note", "payload": {"workbench_id": "W1", "query": "recovery evidence", "title": "Search note", "note": "Keep hits."}},
                 {"path": "/actions/research-search/action-item", "payload": {"workbench_id": "W1", "query": "recovery evidence", "title": "Review search hits", "instruction": "Promote key hit", "priority": "high"}},
-                {"path": "/actions/host-workflow/run", "payload": {"workflow_id": "WF1", "run_id": "R1", "engine": "plain-c-runner", "stages": "6", "dag": "ingest>clean>analyze>review>package", "max_workers": "2", "cache": "content"}},
+                {"path": "/actions/host-workflow/run", "payload": {"workflow_id": "WF1", "run_id": "R1", "engine": "plain-c-runner", "stages": "6", "dag": "ingest>clean>analyze>review>package", "max_workers": "2", "worker_slots": "2", "queue_depth": "5", "observer_events": "12", "failed_stage": "clean", "retry_stage": "clean", "cache_hit_stage": "analyze", "retry_reason": "checksum_mismatch", "cache": "content"}},
                 {"path": "/actions/host-workflow/export", "payload": {"workflow_id": "WF1", "run_id": "R1", "format": "json", "bundle": "wf.zip"}},
                 {"path": "/actions/research/export-notebook", "payload": {"run_id": "R1", "format": "ipynb"}},
                 {"path": "/actions/research/export-bundle", "payload": {"run_id": "R1", "bundle": "ev"}},
@@ -263,8 +263,22 @@ def main() -> int:
             rp_stage_state = read_json(base + "/api/state/rp_stage_state")
             assert any("host_workflow_run_id=R1" in line for line in rp_stage_state["lines"]), rp_stage_state
             assert any("host_workflow_engine=plain-c-runner" in line for line in rp_stage_state["lines"]), rp_stage_state
+            assert any("host_workflow_retry_stage=clean" in line for line in rp_stage_state["lines"]), rp_stage_state
+            assert any("host_workflow_cache_hit_stage=analyze" in line for line in rp_stage_state["lines"]), rp_stage_state
+            assert any("host_workflow_worker_slots=2" in line for line in rp_stage_state["lines"]), rp_stage_state
             rp_run_events = read_json(base + "/api/state/rp_run_events")
+            assert any("host_workflow_event=retry;stage=clean;reason=checksum_mismatch" in line for line in rp_run_events["lines"]), rp_run_events
             assert any("host_workflow_event=finished" in line for line in rp_run_events["lines"]), rp_run_events
+            rp_cache_index = read_json(base + "/api/state/rp_cache_index")
+            assert any("host_workflow_cache_hit_stage=analyze" in line for line in rp_cache_index["lines"]), rp_cache_index
+            rp_retry_plan = read_json(base + "/api/state/rp_retry_plan")
+            assert any("host_workflow_retry_reason=checksum_mismatch" in line for line in rp_retry_plan["lines"]), rp_retry_plan
+            rp_worker = read_json(base + "/api/state/rp_worker")
+            assert any("host_workflow_worker_slots=2" in line for line in rp_worker["lines"]), rp_worker
+            assert any("host_workflow_queue_depth=5" in line for line in rp_worker["lines"]), rp_worker
+            rp_execobs = read_json(base + "/api/state/rp_execobs")
+            assert any("host_workflow_observer_events=12" in line for line in rp_execobs["lines"]), rp_execobs
+            assert any("host_workflow_retry_reason=checksum_mismatch" in line for line in rp_execobs["lines"]), rp_execobs
             rp_lit = read_json(base + "/api/state/rp_lit")
             assert any("host_action_literature_query=prov" in line for line in rp_lit["lines"]), rp_lit
             assert any("host_action_literature_max_results=7" in line for line in rp_lit["lines"]), rp_lit
@@ -351,6 +365,9 @@ def main() -> int:
             assert any("host_action_workflow_package=ready" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_workflow_id=WF1" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_workflow_bundle=wf.zip" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workflow_retry_stage=clean" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workflow_cache_hit_stage=analyze" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workflow_worker_slots=2" in line for line in rp_package["lines"]), rp_package
             rp_nbexec = read_json(base + "/api/state/rp_nbexec")
             assert any("host_action_notebook_export=ready" in line for line in rp_nbexec["lines"]), rp_nbexec
             assert any("host_action_notebook_format=ipynb" in line for line in rp_nbexec["lines"]), rp_nbexec
