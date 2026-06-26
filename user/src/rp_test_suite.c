@@ -1352,6 +1352,22 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "review_pack_actions=3");
 	ok = ok && require_file_token("rp_agentcmp", "review_pack_bridges=4");
 	ok = ok && require_file_token("rp_agentcmp", "review_handoff_checks=12;review_sections=8;review_gates=6");
+	ok = ok && require_file_token("rp_agentcmp", "llm_delivery_checks=16");
+	ok = ok && require_file_token("rp_agentcmp", "llm_queue=3");
+	ok = ok && require_file_token("rp_agentcmp", "llm_packets=3");
+	ok = ok && require_file_token("rp_agentcmp", "llm_responses=3");
+	ok = ok && require_file_token("rp_agentcmp", "llm_eval=7");
+	ok = ok && require_file_token("rp_agentcmp", "llm_guard=3");
+	ok = ok && require_file_token("rp_agentcmp", "llm_hostreq=3");
+	ok = ok && require_file_token("rp_agentcmp", "llm_review_links=2");
+	ok = ok && require_file_token("rp_package", "llm_roundtrip=rp_llmq,rp_llm_packets,rp_llm_resp");
+	ok = ok && require_file_token("rp_package", "delivery_file=llm_trace;path=rp_llm_packets;required=0;exists=1");
+	ok = ok && require_file_token("rp_review_dashboard", "gate=llm_packet_guard;status=pass;source=rp_llm_guard");
+	ok = ok && require_file_token("rp_runner", "citation=rp_llm_resp:response_join");
+	ok = ok && require_file_token("rp_llm_hostreq", "host_request_records=3");
+	ok = ok && require_file_token("rp_llm_hostreq", "host_response_records=3");
+	ok = ok && require_file_token("rp_llm_guard", "blocked_packets=0");
+	ok = ok && require_file_token("rp_relay", "relay_packets=3");
 	ok = ok && require_file_token("rp_ack", "ack=review_dashboard;msg=reviewdash;status=ready");
 	ok = ok && require_file_token("rp_tool", "tool=review_dashboard.aggregate");
 	ok = ok && require_file_token("rp_ack", "ack=review_pack;msg=pack;status=ready");
@@ -1458,7 +1474,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=736\n"
+			   "tests=752\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -1507,6 +1523,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=736 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=752 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
 	return 0;
 }

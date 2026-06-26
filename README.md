@@ -299,7 +299,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_review_pack`
 - `rp_agentcmp`
 
-The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 736-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the upstream teaching file-system inode limit.
+The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 752-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the upstream teaching file-system inode limit.
 
 Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_agentcmp` after all children exit, then prints `state_ok=1`.
 
@@ -426,6 +426,8 @@ With `--serve`, the reader exposes `/api/reader-summary`, `/api/contract`, `/api
 The artifact page now renders manifest records, the artifact dossier, derived sections, provenance records, dossier checks, archive files, stage logs, review/LLM signals, and host artifact actions from ordinary `rp_*` files, so generated artifacts are visible as concrete input-output and verification records instead of a single status line. `rp_consistency` also verifies the artifact path by checking the stage state, run event, retry plan, review gate, and LLM-quality source records.
 
 The final comparison step now verifies the review handoff path after all user-space state has been generated. It checks review dashboard sections, gates, decisions, handoffs, review-pack actions, delivery-to-operations/project/workbench bridge records, and publishes `review_handoff_checks=12` in `rp_agentcmp`.
+
+The same final comparison step also verifies the LLM delivery path. It checks the ordinary-file queue, packets, matched responses, response file, quality record, packet guard, host-request manifest, package delivery entry, review dashboard LLM section, and workbench citation, then publishes `llm_delivery_checks=16` in `rp_agentcmp`.
 
 The action runner turns captured host actions into ordinary uCore state files for the next run:
 

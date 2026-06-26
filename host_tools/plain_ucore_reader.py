@@ -280,6 +280,7 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Guard", metric_value(state, [("rp_llm_guard", "host_relay_guard_batch")]), "rp_llm_guard"),
         ("Replay", metric_value(state, [("rp_relay", "host_relay_replay_batch")]), "rp_relay"),
         ("Routes", metric_value(state, [("rp_prompt", "host_relay_prompt_batch"), ("rp_prompt", "routes")]), "rp_prompt"),
+        ("Delivery Checks", metric_value(state, [("rp_agentcmp", "llm_delivery_checks")]), "rp_agentcmp"),
         ("Runtime", metric_value(state, [("rp_api_runtime", "host_llm_relay_quality")]), "rp_api_runtime"),
     ]
     review_items = [
@@ -337,6 +338,7 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Mode", metric_value(state, [("rp_llm_resp", "mode")]), "rp_llm_resp"),
         ("Secret Material", metric_value(state, [("rp_llm_hostreq", "secret_material")]), "rp_llm_hostreq"),
         ("Packet Secret", metric_value(state, [("rp_llm_packets", "secret_in_packet")]), "rp_llm_packets"),
+        ("Native Checks", metric_value(state, [("rp_agentcmp", "llm_delivery_checks")]), "rp_agentcmp"),
         ("Agent Decision", metric_value(state, [("rp_agent_run", "host_relay_agent_decision")]), "rp_agent_run"),
     ]
     review_items = [
@@ -713,6 +715,7 @@ def render_overview(
             ("Requests", metric_value(state, [("rp_llm_resp", "requests"), ("rp_llmq", "queued")]), "rp_llm_resp"),
             ("Quality", metric_value(state, [("rp_llmeval", "host_relay_eval_batch"), ("rp_llmeval", "passed")]), "rp_llmeval"),
             ("Guard", metric_value(state, [("rp_llm_guard", "host_relay_guard_batch"), ("rp_llm_guard", "secret_scan")]), "rp_llm_guard"),
+            ("Delivery Checks", metric_value(state, [("rp_agentcmp", "llm_delivery_checks")]), "rp_agentcmp"),
         ],
         "actions.html": [
             ("Configured Actions", metric_value(state, [("rp_api_action", "actions"), ("rp_web_bundle", "reader_actions")]), "rp_api_action"),

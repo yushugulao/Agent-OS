@@ -579,10 +579,12 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=736" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=752" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("tool_events=138" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=12" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("llm_review_links=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_dashboard=ready;sections=8;gates=6;plain_kernel=ordinary_files" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack=ready;evidence_items=10;actions=5;plain_kernel=ordinary_files" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_consistency = read_json(base + "/api/state/rp_consistency")
@@ -778,6 +780,7 @@ def main() -> int:
             assert "LLM Relay" in llm_html
             assert "Relay Quality" in llm_html
             assert "Quality Checks" in llm_html
+            assert "Delivery Checks" in llm_html
             assert "host_relay_eval_batch" in llm_html
             assert "relay-llm-q1" in llm_html
         finally:

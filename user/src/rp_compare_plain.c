@@ -1205,6 +1205,33 @@ int main(void)
 	ok = ok && rp_file_contains("rp_package", "review_pack_action=resolve_project_items;source=rp_package;status=ready");
 	ok = ok && rp_file_contains("rp_runner", "workbench_next_task=delivery_manifest");
 	ok = ok && rp_file_contains("rp_api_action", "project_space_actions=5");
+	int llm_queue = rp_get_int_value("rp_llmq", "queued=");
+	int llm_packets = rp_get_int_value("rp_llm_packets", "packets=");
+	int llm_matched = rp_get_int_value("rp_llm_packets", "matched_responses=");
+	int llm_responses = rp_get_int_value("rp_llm_resp", "responses=");
+	int llm_eval = rp_get_int_value("rp_llmeval", "passed=");
+	int llm_guard = rp_get_int_value("rp_llm_guard", "checked_packets=");
+	int llm_blocked = rp_get_int_value("rp_llm_guard", "blocked_packets=");
+	int llm_relay = rp_get_int_value("rp_relay", "relay_packets=");
+	int llm_routes = rp_get_int_value("rp_prompt", "routes=");
+	int llm_host_requests = rp_get_int_value("rp_llm_hostreq", "host_request_records=");
+	int llm_host_responses = rp_get_int_value("rp_llm_hostreq", "host_response_records=");
+	ok = ok && require_equal("llm_queue", llm_queue, 3);
+	ok = ok && require_equal("llm_packets", llm_packets, 3);
+	ok = ok && require_equal("llm_matched", llm_matched, 3);
+	ok = ok && require_equal("llm_responses", llm_responses, 3);
+	ok = ok && require_equal("llm_eval", llm_eval, 7);
+	ok = ok && require_equal("llm_guard", llm_guard, 3);
+	ok = ok && require_equal("llm_blocked", llm_blocked, 0);
+	ok = ok && require_equal("llm_relay", llm_relay, 3);
+	ok = ok && require_equal("llm_routes", llm_routes, 4);
+	ok = ok && require_equal("llm_host_requests", llm_host_requests, 3);
+	ok = ok && require_equal("llm_host_responses", llm_host_responses, 3);
+	ok = ok && rp_file_contains("rp_package", "llm_roundtrip=rp_llmq,rp_llm_packets,rp_llm_resp");
+	ok = ok && rp_file_contains("rp_package", "delivery_file=llm_trace;path=rp_llm_packets;required=0;exists=1");
+	ok = ok && rp_file_contains("rp_review_dashboard", "section=llm;source=rp_llm_req,rp_llm_resp,rp_llmeval,rp_llm_guard,rp_relay,rp_prompt;status=ready");
+	ok = ok && rp_file_contains("rp_review_dashboard", "gate=llm_packet_guard;status=pass;source=rp_llm_guard");
+	ok = ok && rp_file_contains("rp_runner", "citation=rp_llm_resp:response_join");
 	if (!ok) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
@@ -1212,8 +1239,9 @@ int main(void)
 		printf("rp_compare_plain: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		return 1;
 	}
-	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=170;message_acks=44;tool_events=138;action_state_records=12;test_cases=736;action_side_effect_records=16;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=170;message_acks=44;tool_events=138;action_state_records=12;test_cases=752;action_side_effect_records=16;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "review_handoff_checks=12;review_sections=8;review_gates=6;review_decisions=3;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "llm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready")) return 1;
 	if (rp_host_seed_has("kind=research_run")) {
 		if (!rp_append_file("rp_agentcmp", "host_action_research_verified=1")) return 1;
 	}
