@@ -330,6 +330,19 @@ int main(void)
 	}
 	if (rp_host_seed_has("kind=workbench_complete") ||
 	    rp_host_seed_has("kind=workbench_advance") ||
+	    rp_host_seed_has("kind=workbench_auto_advance") ||
+	    rp_host_seed_has("kind=workbench_task") ||
+	    rp_host_seed_has("kind=workbench_readiness") ||
+	    rp_host_seed_has("kind=workbench_answer") ||
+	    rp_host_seed_has("kind=workbench_answer_audit") ||
+	    rp_host_seed_has("kind=workbench_evidence_search") ||
+	    rp_host_seed_has("kind=workbench_brief") ||
+	    rp_host_seed_has("kind=workbench_evidence_dossier") ||
+	    rp_host_seed_has("kind=workbench_evidence_graph") ||
+	    rp_host_seed_has("kind=workbench_runbook") ||
+	    rp_host_seed_has("kind=workbench_timeline") ||
+	    rp_host_seed_has("kind=workbench_file_manifest") ||
+	    rp_host_seed_has("kind=workbench_file_verify") ||
 	    rp_host_seed_has("kind=workbench_export")) {
 		if (!rp_append_file("rp_agentcmp", "host_action_workbench_requested=1")) return 1;
 	}

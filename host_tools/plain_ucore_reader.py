@@ -418,6 +418,8 @@ def default_batch_payload() -> str:
             {"path": "/actions/research/review", "payload": {"run_id": "RUN-WEB", "reviewer": "Wang", "decision": "needs_revision"}},
             {"path": "/actions/research/revision-task", "payload": {"review_id": "usable-review:Wang:1", "targets": "methods,chart_caption,statistics"}},
             {"path": "/actions/research/run-revision-task", "payload": {"run_id": "RUN-WEB", "task_id": "usable-revision-task:RUN-WEB:1"}},
+            {"path": "/actions/research/workbench-answer", "payload": {"workbench": "usable-workbench:RUN-WEB", "question": "What is ready for review?"}},
+            {"path": "/actions/research/workbench-evidence-search", "payload": {"workbench": "usable-workbench:RUN-WEB", "query": "recovery evidence"}},
             {"path": "/actions/research/export-notebook", "payload": {"run_id": "RUN-WEB", "format": "ipynb"}},
             {"path": "/actions/research/export-bundle", "payload": {"run_id": "RUN-WEB", "bundle": "reviewer-evidence"}},
             {"path": "/actions/agentcompare/run", "payload": {"profile": "plain_ucore_batch"}},

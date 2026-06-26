@@ -244,10 +244,50 @@ int main(void)
 	}
 	if (rp_host_seed_has("kind=workbench_complete") ||
 	    rp_host_seed_has("kind=workbench_advance") ||
+	    rp_host_seed_has("kind=workbench_auto_advance") ||
+	    rp_host_seed_has("kind=workbench_task") ||
+	    rp_host_seed_has("kind=workbench_readiness") ||
+	    rp_host_seed_has("kind=workbench_answer") ||
+	    rp_host_seed_has("kind=workbench_answer_audit") ||
+	    rp_host_seed_has("kind=workbench_evidence_search") ||
+	    rp_host_seed_has("kind=workbench_brief") ||
+	    rp_host_seed_has("kind=workbench_evidence_dossier") ||
+	    rp_host_seed_has("kind=workbench_evidence_graph") ||
+	    rp_host_seed_has("kind=workbench_runbook") ||
+	    rp_host_seed_has("kind=workbench_timeline") ||
+	    rp_host_seed_has("kind=workbench_file_manifest") ||
+	    rp_host_seed_has("kind=workbench_file_verify") ||
 	    rp_host_seed_has("kind=workbench_export")) {
 		ok = ok && require_file_token("rp_runner", "host_action_workbench=completed");
 		ok = ok && require_file_token("rp_agentcmp", "host_action_workbench_requested=1");
 		ok = ok && require_file_token("rp_actionio", "host_action_workbench=1");
+		ok = ok && require_file_token("rp_runner", "host_action_workbench_id=");
+		ok = ok && require_file_token("rp_api_compare", "host_action_workbench=");
+	}
+	if (rp_host_seed_has("kind=workbench_answer")) {
+		char question[96];
+		char token[140];
+		if (!rp_host_seed_copy_value_for_kind("kind=workbench_answer", "question=", question, sizeof(question))) {
+			rp_copy_text(question, sizeof(question), "What is ready for review?");
+		}
+		rp_copy_text(token, sizeof(token), "host_action_workbench_question=");
+		rp_append_text(token, sizeof(token), question);
+		ok = ok && require_file_token("rp_runner", token);
+		ok = ok && require_file_token("rp_api_compare", token);
+		ok = ok && require_file_token("rp_runner", "host_action_workbench_answer=generated");
+	}
+	if (rp_host_seed_has("kind=workbench_evidence_search")) {
+		char query[96];
+		char token[140];
+		if (!rp_host_seed_copy_value_for_kind("kind=workbench_evidence_search", "query=", query, sizeof(query))) {
+			rp_copy_text(query, sizeof(query), "recovery evidence");
+		}
+		rp_copy_text(token, sizeof(token), "host_action_workbench_evidence_query=");
+		rp_append_text(token, sizeof(token), query);
+		ok = ok && require_file_token("rp_runner", token);
+		rp_copy_text(token, sizeof(token), "host_action_workbench_query=");
+		rp_append_text(token, sizeof(token), query);
+		ok = ok && require_file_token("rp_api_compare", token);
 	}
 	if (rp_host_seed_has("kind=bundle_export") ||
 	    rp_host_seed_has("kind=research_export") ||

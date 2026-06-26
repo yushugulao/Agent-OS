@@ -54,6 +54,14 @@ def main() -> int:
                     "payload": {"workbench": "usable-workbench:RUN-900"},
                 },
                 {
+                    "path": "/actions/research/workbench-answer",
+                    "payload": {"workbench": "usable-workbench:RUN-900", "question": "What is ready for review?"},
+                },
+                {
+                    "path": "/actions/research/workbench-evidence-search",
+                    "payload": {"workbench": "usable-workbench:RUN-900", "query": "recovery evidence"},
+                },
+                {
                     "path": "/actions/research/review",
                     "payload": {"run_id": "RUN-999", "reviewer": "Wang", "decision": "needs_revision"},
                 },
@@ -73,11 +81,13 @@ def main() -> int:
         )
         summary = runner.prepare_action_state(loaded, state_dir, run_dir)
 
-        assert summary["actions"] == 7
-        assert summary["accepted"] == 7
+        assert summary["actions"] == 9
+        assert summary["accepted"] == 9
         assert "research_run" in summary["kinds"]
         assert "agentcompare" in summary["kinds"]
         assert "workbench_complete" in summary["kinds"]
+        assert "workbench_answer" in summary["kinds"]
+        assert "workbench_evidence_search" in summary["kinds"]
         assert "human_review" in summary["kinds"]
         assert "revision_task" in summary["kinds"]
         assert "notebook_export" in summary["kinds"]
@@ -93,6 +103,8 @@ def main() -> int:
         assert "kind=research_run" in queue
         assert "kind=agentcompare" in queue
         assert "kind=workbench_complete" in queue
+        assert "kind=workbench_answer" in queue
+        assert "kind=workbench_evidence_search" in queue
         assert "kind=human_review" in queue
         assert "kind=revision_task" in queue
         assert "kind=notebook_export" in queue
@@ -103,45 +115,55 @@ def main() -> int:
         assert "bundle=reviewer-evidence" in queue
         assert "profile=plain_ucore_batch" in queue
         assert "workbench=usable-workbench:RUN-900" in queue
+        assert "question=What is ready for review?" in queue
+        assert "query=recovery evidence" in queue
         assert "status=ready" in queue
 
         plan = read(next_state / "rp_host_action_plan")
         assert "collect=rp_web_bundle" in plan
         assert "collect=rp_compare_plain" in plan
         assert "kind=workbench_complete" in plan
+        assert "kind=workbench_answer" in plan
+        assert "kind=workbench_evidence_search" in plan
 
         inbox = read(next_state / "rp_host_action_inbox")
         assert "/actions/research/run" in inbox
         assert "/actions/agentcompare/run" in inbox
+        assert "/actions/research/workbench-answer" in inbox
+        assert "/actions/research/workbench-evidence-search" in inbox
 
         assert (run_dir / "actions.json").exists()
         assert (run_dir / "runner-summary.json").exists()
 
         assert runner.action_kind("/actions/research/run-revision") == "revision_run"
+        assert runner.action_kind("/actions/research/workbench-answer") == "workbench_answer"
+        assert runner.action_kind("/actions/research/workbench-evidence-search") == "workbench_evidence_search"
         assert runner.action_kind("/actions/research/export-notebook") == "notebook_export"
         assert runner.action_kind("/actions/unknown") == "generic"
 
         records = runner.write_seed_header(next_state, root)
         header = read(root / "user" / "build" / "generated" / "rp_host_action_seed.h")
-        assert records == 7
+        assert records == 9
         assert "#define RP_HOST_ACTION_SEED" in header
         assert "kind=research_run" in header
+        assert "kind=workbench_answer" in header
+        assert "kind=workbench_evidence_search" in header
         assert "\\n" in header
 
         runner.write_run_result_state(
             next_state,
             {
                 "passed": True,
-                "embedded_action_records": 7,
+                "embedded_action_records": 9,
                 "log": str(run_dir / "ucore-run.log"),
             },
-            "rp_web_export: host_reader_actions=7\nrp_compare_plain: host_actions=7 verified\nrp_orch: passed\n",
+            "rp_web_export: host_reader_actions=9\nrp_compare_plain: host_actions=9 verified\nrp_orch: passed\n",
         )
         result_state = read(next_state / "rp_host_run_result")
         assert "passed=1" in result_state
-        assert "embedded_action_records=7" in result_state
-        assert "qemu_rp_web_export: host_reader_actions=7" in result_state
-        assert "qemu_rp_compare_plain: host_actions=7 verified" in result_state
+        assert "embedded_action_records=9" in result_state
+        assert "qemu_rp_web_export: host_reader_actions=9" in result_state
+        assert "qemu_rp_compare_plain: host_actions=9 verified" in result_state
         assert "qemu_orch_passed=1" in result_state
 
         publish_dir = root / "published"
