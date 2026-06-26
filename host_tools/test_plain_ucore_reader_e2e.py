@@ -679,7 +679,13 @@ def main() -> int:
             assert any("review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line and "backend_review=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_consistency = read_json(base + "/api/state/rp_consistency")
-            assert any("checks=138" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("checks=162" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("runtime_assurance_checks=24" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("secret_reference_checks=6" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("model_registry_checks=5" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("llm_proxy_replay_audits=2" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("collaboration_threads=2" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("observability_alerts=5" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("research_product_checks=18" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("project_scaffold_files=8" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("dataset_product_exports=9" in line for line in rp_consistency["lines"]), rp_consistency

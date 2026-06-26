@@ -315,8 +315,12 @@ static int write_research_product_surface(void)
 			    "study_protocol_reproduction=packages:1,review:approved,action_plan:ready,action_execution:ready,comparison:ready,status=ready")) {
 		return 0;
 	}
+	if (!rp_append_file("rp_runop",
+			    "project_bundle_cache=latest:ready,reload:pass,refresh:ready,downloads:cached_or_refresh,status=ready")) {
+		return 0;
+	}
 	return rp_append_file("rp_runop",
-			      "project_bundle_cache=latest:ready,reload:pass,refresh:ready,downloads:cached_or_refresh,status=ready");
+			      "runtime_assurance=secret_refs:3,model_registry:2,deployments:1,llm_proxy_audits:2,collab_threads:2,obs_alerts:5,health:1,status=ready");
 }
 
 static int write_advanced_surface(void)

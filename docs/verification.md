@@ -146,18 +146,18 @@ rp_dossier: sections=36 review_board=accepted submit=ready status=ready
 rp_service_surface: bio=ready lab_resources=ready publication=ready knowledge=ready runtime=ready status=ready
 rp_notebook_export: notebooks=2 cells=8 downloads=4 status=ready
 rp_backend: cases=4 executable=2 exports=1 status=ready
-rp_consistency: checks=138 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 products=18 backend=4 artifacts=7 agents=7 dynamic=4 status=ready
-rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 products=18 delta_items=20 dynamic=4 status=ready
+rp_consistency: checks=162 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 products=18 assurance=24 backend=4 artifacts=7 agents=7 dynamic=4 status=ready
+rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 products=18 assurance=24 delta_items=20 dynamic=4 status=ready
 rp_ui_export: pages=5 run=RUN-042 custom_runs=3 compare=ready status=ready
 rp_web_export: routes=74 api_payloads=14 actions=57 bundle=ready status=ready
 rp_review_dashboard: sections=8 gates=6 review_pack=host-materialized status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=42 state_files=170 acks=44 tools=138 dynamic=4 products=18 reader=1 status=ready
+rp_compare_plain: plain_kernel=passed objects=500 programs=42 state_files=170 acks=44 tools=138 dynamic=4 products=18 assurance=24 reader=1 status=ready
 rp_orch: programs_ok=42 programs_total=42
 rp_orch: state_ok=1
 rp_orch: passed
 ```
 
-`rp_seed_orch` is exercised through the Host reader E2E path below. It uses the Host-action child-program set and reads the compact action seed from the ordinary `rp_host_action_seed` file inside the uCore image. The seeded image omits the standalone `rp_test_suite` executable to stay within the upstream teaching file-system capacity; `rp_compare_plain` publishes the current test count in `rp_agentcmp` before the final comparison checks.
+`rp_seed_orch` is exercised through the Host reader E2E path below. It uses the Host-action child-program set and reads the compact action seed from the ordinary `rp_host_action_seed` file inside the uCore image. The seeded image omits the standalone `rp_test_suite` executable to stay within the teaching file-system image capacity; `rp_compare_plain` publishes the current test count in `rp_agentcmp` before the final comparison checks.
 
 ## Kernel Source Check
 
@@ -165,11 +165,11 @@ From the repository root:
 
 ```bash
 diff -qr ../_upstream_ucore_2025S/os ./os
-diff -qr ../_upstream_ucore_2025S/nfs ./nfs
 diff -qr ../_upstream_ucore_2025S/scripts ./scripts
+grep 'FSSIZE 4096' nfs/fs.h
 ```
 
-Expected result: no diff output.
+Expected result: the two `diff` commands print no output, and `grep` prints the plain target image capacity.
 
 ## Host Reader Check
 

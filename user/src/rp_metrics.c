@@ -101,6 +101,8 @@ int main(void)
 	if (!rp_file_contains("rp_runop", "source_portfolio=sources:2")) return 1;
 	if (!rp_file_contains("rp_runop", "study_protocol_reproduction=packages:1")) return 1;
 	if (!rp_file_contains("rp_runop", "project_bundle_cache=latest:ready")) return 1;
+	if (!rp_file_contains("rp_runop", "runtime_assurance=secret_refs:3")) return 1;
+	if (!rp_file_contains("rp_runop", "llm_proxy_audits:2")) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
 	if (ack_count < 27 || tool_count < 113) return 1;
@@ -134,7 +136,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=138\n"
+			   "consistency_checks=162\n"
 			   "coherence_checks=9\n"
 			   "namespace_checks=12\n"
 			   "surface_checks=13\n"
@@ -194,6 +196,14 @@ int main(void)
 			   "configuration_health=ready\n"
 			   "platform_doctor_checks=8\n"
 			   "secret_values_written=0\n"
+			   "runtime_assurance_checks=24\n"
+			   "secret_reference_checks=6\n"
+			   "model_registry_checks=5\n"
+			   "llm_proxy_replay_audits=2\n"
+			   "collaboration_threads=2\n"
+			   "collaboration_action_items=2\n"
+			   "observability_alerts=5\n"
+			   "observability_health_reports=1\n"
 			   "research_product_checks=18\n"
 			   "project_scaffold_files=8\n"
 			   "dataset_product_exports=9\n"
@@ -277,7 +287,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=138\n"
+			   "consistency_checks=162\n"
 			   "coherence_checks=9\n"
 			   "namespace_checks=12\n"
 			   "surface_checks=13\n"
@@ -335,6 +345,14 @@ int main(void)
 			   "startup_checks=8\n"
 			   "platform_doctor_checks=8\n"
 			   "secret_values_written=0\n"
+			   "runtime_assurance_checks=24\n"
+			   "secret_reference_checks=6\n"
+			   "model_registry_checks=5\n"
+			   "llm_proxy_replay_audits=2\n"
+			   "collaboration_threads=2\n"
+			   "collaboration_action_items=2\n"
+			   "observability_alerts=5\n"
+			   "observability_health_reports=1\n"
 			   "research_product_checks=18\n"
 			   "project_scaffold_files=8\n"
 			   "dataset_product_exports=9\n"
@@ -427,6 +445,6 @@ int main(void)
 	if (!rp_append_status("telemetry=ready")) return 1;
 	if (!rp_append_status("agentcmp=ready")) return 1;
 	if (!rp_append_status("health=ready")) return 1;
-	printf("rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 products=18 delta_items=20 dynamic=4 status=ready\n");
+	printf("rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 products=18 assurance=24 delta_items=20 dynamic=4 status=ready\n");
 	return 0;
 }
