@@ -403,9 +403,10 @@ python host_tools/plain_ucore_reader.py --state-dir path/to/rp-state --out-dir r
 python host_tools/plain_ucore_fs_extract.py --image nfs/fs-copy.img --out-dir runtime/plain_ucore_extracted --repo-dir .
 python host_tools/test_plain_ucore_fs_extract.py
 python host_tools/test_plain_ucore_reader.py
+python host_tools/test_plain_ucore_reader_e2e.py
 ```
 
-With `--serve`, the reader exposes `/api/reader-summary`, `/api/contract`, `/api/state/{name}`, `/api/live`, static pages, and `/actions/...` POST capture. Action requests are written to `host-actions.jsonl`; use `--write-state-actions` only when the host should also append an action inbox record beside the `rp_*` state files. With `--auto-run-ucore`, each POST action also invokes the action runner, builds and runs `rp_orch`, writes `rp_host_run_result`, publishes the next state package back to the served state directory, and refreshes the generated pages.
+With `--serve`, the reader exposes `/api/reader-summary`, `/api/contract`, `/api/state/{name}`, `/api/live`, static pages, and `/actions/...` POST capture. Action requests are written to `host-actions.jsonl`; use `--write-state-actions` only when the host should also append an action inbox record beside the `rp_*` state files. With `--auto-run-ucore`, each POST action also invokes the action runner, builds and runs `rp_orch`, writes `rp_host_run_result`, extracts the generated state files, publishes the next state package back to the served state directory, and refreshes the generated pages. The end-to-end reader test starts the HTTP handler, posts a research action, runs plain uCore, extracts state from the file-system image, and verifies the refreshed API and HTML pages.
 
 The action runner turns captured host actions into ordinary uCore state files for the next run:
 
