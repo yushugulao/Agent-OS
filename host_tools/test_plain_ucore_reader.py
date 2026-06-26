@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=14
+reader_views=15
 reader_actions=48
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_web_bundle
@@ -90,6 +90,11 @@ status=ready
     "rp_api_know": "api=knowledge\nsemantic_index=rp_semindex\nstatus=ready\n",
     "rp_api_runtime": "api=runtime\nruntime_env=rp_runenv\nstatus=ready\n",
     "rp_api_action": "api=actions\nreader_contract=rp_web_bundle\nactions=48\nstatus=ready\n",
+    "rp_bioop": "ops=7\nop=sample_lookup;records=8;status=ok\nop=access_decision;requests=3;status=ok\n",
+    "rp_labresop": "ops=6\nop=schedule_assess;bookings=6;status=ok\nop=training_gate;requirements=4;status=ok\n",
+    "rp_pubop": "ops=6\nop=result_review;items=10;status=ok\nop=fair_package;checks=8;status=ok\n",
+    "rp_knowop": "ops=6\nop=query_answer;answers=4;status=ok\nop=llm_grounding;responses=3;status=ok\n",
+    "rp_runop": "ops=7\nop=worker_heartbeat;workers=4;status=ok\nop=host_llm_request;packets=3;status=ok\n",
     "rp_ui_home": "page=home\nstatus=ready\n",
     "rp_ui_run": "page=run-detail\nstatus=ready\n",
     "rp_ui_agent": "page=agent-detail\ndecision_records=rp_agents,rp_decisions,rp_handoff,rp_deliberation,rp_agent_run\nstatus=ready\n",
@@ -290,7 +295,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 10, summary
+        assert summary["pages"] == 11, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "review.html").exists()
@@ -435,6 +440,15 @@ def main() -> int:
         assert "lab-gene-x" in review_html
         assert "mf.json" in review_html
         assert "ready_for_reviewer" in review_html
+        services_html = (out_dir / "services.html").read_text(encoding="utf-8")
+        assert "Service Execution" in services_html
+        assert "Service Operation Records" in services_html
+        assert "sample_lookup" in services_html
+        assert "schedule_assess" in services_html
+        assert "fair_package" in services_html
+        assert "query_answer" in services_html
+        assert "worker_heartbeat" in services_html
+        assert "Bio Service Files" in services_html
         assert "plan&gt;data&gt;review&gt;repair&gt;audit" in evidence_html
         assert "Plain Kernel Signals" in compare_html
         assert "Consistency Signals" in compare_html

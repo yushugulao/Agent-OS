@@ -732,6 +732,16 @@ def main() -> int:
             rp_api_runtime = read_json(base + "/api/state/rp_api_runtime")
             assert any("host_llm_request_id=llm-q1" in line for line in rp_api_runtime["lines"]), rp_api_runtime
             assert any("host_llm_relay_quality=passed:24/24;blocked:0;source=rp_llmeval;status=ready" in line for line in rp_api_runtime["lines"]), rp_api_runtime
+            rp_bioop = read_json(base + "/api/state/rp_bioop")
+            assert any("op=sample_lookup" in line for line in rp_bioop["lines"]), rp_bioop
+            rp_labresop = read_json(base + "/api/state/rp_labresop")
+            assert any("op=schedule_assess" in line for line in rp_labresop["lines"]), rp_labresop
+            rp_pubop = read_json(base + "/api/state/rp_pubop")
+            assert any("op=fair_package" in line for line in rp_pubop["lines"]), rp_pubop
+            rp_knowop = read_json(base + "/api/state/rp_knowop")
+            assert any("op=query_answer" in line for line in rp_knowop["lines"]), rp_knowop
+            rp_runop = read_json(base + "/api/state/rp_runop")
+            assert any("op=worker_heartbeat" in line for line in rp_runop["lines"]), rp_runop
             rp_api_run = read_json(base + "/api/state/rp_api_run")
             assert any("host_action_title=T1" in line for line in rp_api_run["lines"]), rp_api_run
             assert any("host_action_question=Q1" in line for line in rp_api_run["lines"]), rp_api_run
@@ -881,6 +891,14 @@ def main() -> int:
             assert "Evidence Protocol" in evidence_html
             assert "usable-evidence-protocol:RUN-900:1" in evidence_html
             assert "host_action_protocol_title" in evidence_html
+            services_html = read_text(base + "/services.html")
+            assert "Service Execution" in services_html
+            assert "Service Operation Records" in services_html
+            assert "sample_lookup" in services_html
+            assert "schedule_assess" in services_html
+            assert "fair_package" in services_html
+            assert "query_answer" in services_html
+            assert "worker_heartbeat" in services_html
             review_html = read_text(base + "/review.html")
             assert "Review Dashboard" in review_html
             assert "Review Sections" in review_html

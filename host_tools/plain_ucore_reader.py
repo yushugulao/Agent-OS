@@ -23,6 +23,7 @@ PAGE_SPECS = [
     ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency", "rp_backend", "rp_backend_exec", "rp_study"]),
     ("artifacts.html", "Artifacts", "rp_api_artifacts", ["rp_artifact", "rp_artifact_manifest", "rp_package"]),
     ("data.html", "Data", "rp_api_data", ["rp_input", "rp_dataset_snapshot", "rp_data_quality"]),
+    ("services.html", "Services", "rp_api_bio", ["rp_api_labres", "rp_api_pub", "rp_api_know", "rp_api_runtime", "rp_bioop", "rp_labresop", "rp_pubop", "rp_knowop", "rp_runop"]),
     ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets"]),
     ("actions.html", "Actions", "rp_api_action", ["rp_actionio", "rp_host_run_result", "rp_web_routes", "rp_web_bundle"]),
 ]
@@ -465,6 +466,19 @@ def delivery_source_map(state: dict[str, dict[str, object]]) -> list[dict[str, s
                             "status": record.get("status", ""),
                         }
                     )
+    return rows
+
+
+def service_execution_records(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for source_file in ("rp_bioop", "rp_labresop", "rp_pubop", "rp_knowop", "rp_runop"):
+        for key in ("service_exec", "request", "route", "result", "op"):
+            for record in state_records(state, source_file, key):
+                item = dict(record)
+                if "kind" not in item:
+                    item["kind"] = "operation"
+                item["source_file"] = source_file
+                rows.append(item)
     return rows
 
 
@@ -985,6 +999,14 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Delivery Checks", metric_value(state, [("rp_agentcmp", "llm_delivery_checks")]), "rp_agentcmp"),
         ("Runtime", metric_value(state, [("rp_api_runtime", "host_llm_relay_quality")]), "rp_api_runtime"),
     ]
+    service_items = [
+        ("Bio Ops", metric_value(state, [("rp_bioop", "ops")]), "rp_bioop"),
+        ("Lab Ops", metric_value(state, [("rp_labresop", "ops")]), "rp_labresop"),
+        ("Publication Ops", metric_value(state, [("rp_pubop", "ops")]), "rp_pubop"),
+        ("Knowledge Ops", metric_value(state, [("rp_knowop", "ops")]), "rp_knowop"),
+        ("Runtime Ops", metric_value(state, [("rp_runop", "ops")]), "rp_runop"),
+        ("Service Files", metric_value(state, [("rp_web_bundle", "research_service_files"), ("rp_api_compare", "bio_service_files")]), "rp_web_bundle"),
+    ]
     review_items = [
         ("Run", metric_value(state, [("rp_review_dashboard", "run"), ("rp_report_text", "host_report_run_id")]), "rp_review_dashboard"),
         ("Sections", metric_value(state, [("rp_review_dashboard", "sections")]), "rp_review_dashboard"),
@@ -1006,6 +1028,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Compare Summary", compare_items)
     if file_name == "llm.html":
         return render_summary_panel("Relay Quality", llm_items)
+    if file_name == "services.html":
+        return render_summary_panel("Service Execution", service_items)
     return ""
 
 
@@ -1263,6 +1287,55 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                     ("Status", "status"),
                 ],
                 state_records(state, "rp_artifact_manifest", "artifact_review_path"),
+            ),
+        ]
+    if file_name == "services.html":
+        return [
+            render_record_panel(
+                "Service Operation Records",
+                [
+                    ("Kind", "kind"),
+                    ("Execution", "service_exec"),
+                    ("Operation", "op"),
+                    ("Request", "request"),
+                    ("Route", "route"),
+                    ("Result", "result"),
+                    ("Service", "service"),
+                    ("Source", "source"),
+                    ("Input", "input"),
+                    ("Output", "output"),
+                    ("Worker", "worker"),
+                    ("Capability", "capability"),
+                    ("Records", "records"),
+                    ("Source File", "source_file"),
+                    ("Status", "status"),
+                ],
+                service_execution_records(state),
+            ),
+            render_record_panel(
+                "Bio Service Files",
+                [("Operation", "op"), ("Request", "request"), ("Result", "result"), ("Records", "records"), ("Status", "status")],
+                state_records(state, "rp_bioop", "op"),
+            ),
+            render_record_panel(
+                "Lab Service Files",
+                [("Operation", "op"), ("Request", "request"), ("Result", "result"), ("Items", "items"), ("Status", "status")],
+                state_records(state, "rp_labresop", "op"),
+            ),
+            render_record_panel(
+                "Publication Service Files",
+                [("Operation", "op"), ("Request", "request"), ("Result", "result"), ("Checks", "checks"), ("Status", "status")],
+                state_records(state, "rp_pubop", "op"),
+            ),
+            render_record_panel(
+                "Knowledge Service Files",
+                [("Operation", "op"), ("Request", "request"), ("Result", "result"), ("Answers", "answers"), ("Status", "status")],
+                state_records(state, "rp_knowop", "op"),
+            ),
+            render_record_panel(
+                "Runtime Service Files",
+                [("Operation", "op"), ("Request", "request"), ("Result", "result"), ("Workers", "workers"), ("Status", "status")],
+                state_records(state, "rp_runop", "op"),
             ),
         ]
     if file_name == "compare.html":
@@ -2398,6 +2471,12 @@ def render_overview(
             ("Submissions", metric_value(state, [("rp_input", "dynamic_submissions")]), "rp_input"),
             ("Snapshots", metric_value(state, [("rp_dataset_snapshot", "snapshots"), ("rp_api_data", "dataset_snapshots")]), "rp_dataset_snapshot"),
             ("Quality", metric_value(state, [("rp_data_quality", "passed")]), "rp_data_quality"),
+        ],
+        "services.html": [
+            ("Bio Ops", metric_value(state, [("rp_bioop", "ops")]), "rp_bioop"),
+            ("Lab Ops", metric_value(state, [("rp_labresop", "ops")]), "rp_labresop"),
+            ("Knowledge Ops", metric_value(state, [("rp_knowop", "ops")]), "rp_knowop"),
+            ("Runtime Ops", metric_value(state, [("rp_runop", "ops")]), "rp_runop"),
         ],
         "review.html": [
             ("Sections", metric_value(state, [("rp_review_dashboard", "sections")]), "rp_review_dashboard"),
