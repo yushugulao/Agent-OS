@@ -328,11 +328,14 @@ int main(void)
 	if (rp_host_seed_has("kind=revision_task") || rp_host_seed_has("kind=revision_run")) {
 		if (!rp_append_file("rp_agentcmp", "host_action_revision_requested=1")) return 1;
 	}
-	if (rp_host_seed_has("kind=workbench_complete") ||
+	if (rp_host_seed_has("kind=workbench") ||
+	    rp_host_seed_has("kind=workbench_complete") ||
 	    rp_host_seed_has("kind=workbench_advance") ||
 	    rp_host_seed_has("kind=workbench_auto_advance") ||
 	    rp_host_seed_has("kind=workbench_task") ||
 	    rp_host_seed_has("kind=workbench_note") ||
+	    rp_host_seed_has("kind=workbench_notes") ||
+	    rp_host_seed_has("kind=workbench_handoff_package") ||
 	    rp_host_seed_has("kind=workbench_readiness") ||
 	    rp_host_seed_has("kind=workbench_answer") ||
 	    rp_host_seed_has("kind=workbench_answer_audit") ||
@@ -340,6 +343,13 @@ int main(void)
 	    rp_host_seed_has("kind=workbench_brief") ||
 	    rp_host_seed_has("kind=workbench_evidence_dossier") ||
 	    rp_host_seed_has("kind=workbench_evidence_graph") ||
+	    rp_host_seed_has("kind=workbench_citations") ||
+	    rp_host_seed_has("kind=workbench_manuscript") ||
+	    rp_host_seed_has("kind=workbench_manuscript_audit") ||
+	    rp_host_seed_has("kind=workbench_manuscript_revision_plan") ||
+	    rp_host_seed_has("kind=workbench_manuscript_revision_task") ||
+	    rp_host_seed_has("kind=workbench_task_board") ||
+	    rp_host_seed_has("kind=workbench_task_board_row") ||
 	    rp_host_seed_has("kind=workbench_runbook") ||
 	    rp_host_seed_has("kind=workbench_timeline") ||
 	    rp_host_seed_has("kind=workbench_file_manifest") ||

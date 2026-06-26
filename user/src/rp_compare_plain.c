@@ -1,6 +1,18 @@
 #include <stdio.h>
 #include <research_platform_state.h>
 
+static int check_seed_value(const char *kind, const char *key, const char *fallback, const char *path, const char *prefix)
+{
+	char value[96];
+	char token[160];
+	if (!rp_host_seed_copy_value_for_kind(kind, key, value, sizeof(value))) {
+		rp_copy_text(value, sizeof(value), fallback);
+	}
+	rp_copy_text(token, sizeof(token), prefix);
+	rp_append_text(token, sizeof(token), value);
+	return rp_file_contains(path, token);
+}
+
 int main(void)
 {
 	int ok = 1;
@@ -152,11 +164,14 @@ int main(void)
 		ok = ok && rp_file_contains("rp_runner", token);
 		ok = ok && rp_file_contains("rp_actionio", "host_action_revision=1");
 	}
-	if (rp_host_seed_has("kind=workbench_complete") ||
+	if (rp_host_seed_has("kind=workbench") ||
+	    rp_host_seed_has("kind=workbench_complete") ||
 	    rp_host_seed_has("kind=workbench_advance") ||
 	    rp_host_seed_has("kind=workbench_auto_advance") ||
 	    rp_host_seed_has("kind=workbench_task") ||
 	    rp_host_seed_has("kind=workbench_note") ||
+	    rp_host_seed_has("kind=workbench_notes") ||
+	    rp_host_seed_has("kind=workbench_handoff_package") ||
 	    rp_host_seed_has("kind=workbench_readiness") ||
 	    rp_host_seed_has("kind=workbench_answer") ||
 	    rp_host_seed_has("kind=workbench_answer_audit") ||
@@ -164,6 +179,13 @@ int main(void)
 	    rp_host_seed_has("kind=workbench_brief") ||
 	    rp_host_seed_has("kind=workbench_evidence_dossier") ||
 	    rp_host_seed_has("kind=workbench_evidence_graph") ||
+	    rp_host_seed_has("kind=workbench_citations") ||
+	    rp_host_seed_has("kind=workbench_manuscript") ||
+	    rp_host_seed_has("kind=workbench_manuscript_audit") ||
+	    rp_host_seed_has("kind=workbench_manuscript_revision_plan") ||
+	    rp_host_seed_has("kind=workbench_manuscript_revision_task") ||
+	    rp_host_seed_has("kind=workbench_task_board") ||
+	    rp_host_seed_has("kind=workbench_task_board_row") ||
 	    rp_host_seed_has("kind=workbench_runbook") ||
 	    rp_host_seed_has("kind=workbench_timeline") ||
 	    rp_host_seed_has("kind=workbench_file_manifest") ||
@@ -249,6 +271,101 @@ int main(void)
 		rp_append_text(token, sizeof(token), manifest);
 		ok = ok && rp_file_contains("rp_runner", token);
 		ok = ok && rp_file_contains("rp_api_compare", token);
+	}
+	if (rp_host_seed_has("kind=workbench")) {
+		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_created=1");
+		ok = ok && check_seed_value("kind=workbench", "workbench_title=", "RUN-900 workbench", "rp_runner", "host_action_workbench_title=");
+		ok = ok && check_seed_value("kind=workbench", "workbench_title=", "RUN-900 workbench", "rp_api_compare", "host_action_workbench_title=");
+		ok = ok && check_seed_value("kind=workbench", "literature_query=", "agent workflow provenance", "rp_runner", "host_action_workbench_literature_query=");
+		ok = ok && check_seed_value("kind=workbench", "literature_query=", "agent workflow provenance", "rp_api_compare", "host_action_workbench_literature_query=");
+	}
+	if (rp_host_seed_has("kind=workbench_advance")) {
+		ok = ok && check_seed_value("kind=workbench_advance", "task=", "delivery_manifest", "rp_runner", "host_action_workbench_task=");
+		ok = ok && check_seed_value("kind=workbench_advance", "task=", "delivery_manifest", "rp_api_compare", "host_action_workbench_advance_task=");
+	}
+	if (rp_host_seed_has("kind=workbench_auto_advance")) {
+		ok = ok && check_seed_value("kind=workbench_auto_advance", "step_limit=", "8", "rp_runner", "host_action_workbench_step_limit=");
+		ok = ok && check_seed_value("kind=workbench_auto_advance", "step_limit=", "8", "rp_api_compare", "host_action_workbench_step_limit=");
+	}
+	if (rp_host_seed_has("kind=workbench_notes")) {
+		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_notes=exported");
+		ok = ok && check_seed_value("kind=workbench_notes", "notes_filter=", "decision", "rp_runner", "host_action_workbench_notes_filter=");
+		ok = ok && check_seed_value("kind=workbench_notes", "notes_filter=", "decision", "rp_api_compare", "host_action_workbench_notes_filter=");
+	}
+	if (rp_host_seed_has("kind=workbench_handoff_package")) {
+		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_handoff=prepared");
+		ok = ok && check_seed_value("kind=workbench_handoff_package", "handoff_scope=", "full", "rp_runner", "host_action_workbench_handoff_scope=");
+		ok = ok && check_seed_value("kind=workbench_handoff_package", "handoff_scope=", "full", "rp_api_compare", "host_action_workbench_handoff_scope=");
+	}
+	if (rp_host_seed_has("kind=workbench_readiness")) ok = ok && rp_file_contains("rp_runner", "host_action_workbench_readiness=checked");
+	if (rp_host_seed_has("kind=workbench_answer_audit")) ok = ok && rp_file_contains("rp_runner", "host_action_workbench_answer_audit=passed");
+	if (rp_host_seed_has("kind=workbench_brief")) {
+		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_brief=exported");
+		ok = ok && check_seed_value("kind=workbench_brief", "brief_format=", "html", "rp_runner", "host_action_workbench_brief_format=");
+		ok = ok && check_seed_value("kind=workbench_brief", "brief_format=", "html", "rp_api_compare", "host_action_workbench_brief_format=");
+	}
+	if (rp_host_seed_has("kind=workbench_evidence_dossier")) {
+		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_evidence_dossier=exported");
+		ok = ok && check_seed_value("kind=workbench_evidence_dossier", "dossier_format=", "markdown", "rp_runner", "host_action_workbench_dossier_format=");
+		ok = ok && check_seed_value("kind=workbench_evidence_dossier", "dossier_format=", "markdown", "rp_api_compare", "host_action_workbench_dossier_format=");
+	}
+	if (rp_host_seed_has("kind=workbench_evidence_graph")) {
+		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_evidence_graph=exported");
+		ok = ok && check_seed_value("kind=workbench_evidence_graph", "graph_format=", "dot", "rp_runner", "host_action_workbench_graph_format=");
+		ok = ok && check_seed_value("kind=workbench_evidence_graph", "graph_format=", "dot", "rp_api_compare", "host_action_workbench_graph_format=");
+	}
+	if (rp_host_seed_has("kind=workbench_citations")) {
+		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_citations=exported");
+		ok = ok && check_seed_value("kind=workbench_citations", "citation_format=", "bibtex", "rp_runner", "host_action_workbench_citation_format=");
+		ok = ok && check_seed_value("kind=workbench_citations", "citation_format=", "bibtex", "rp_api_compare", "host_action_workbench_citation_format=");
+	}
+	if (rp_host_seed_has("kind=workbench_manuscript")) {
+		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_manuscript=exported");
+		ok = ok && check_seed_value("kind=workbench_manuscript", "manuscript_format=", "markdown", "rp_runner", "host_action_workbench_manuscript_format=");
+		ok = ok && check_seed_value("kind=workbench_manuscript", "manuscript_format=", "markdown", "rp_api_compare", "host_action_workbench_manuscript_format=");
+	}
+	if (rp_host_seed_has("kind=workbench_manuscript_audit")) {
+		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_manuscript_audit=passed");
+		ok = ok && check_seed_value("kind=workbench_manuscript_audit", "audit_scope=", "citations", "rp_runner", "host_action_workbench_audit_scope=");
+		ok = ok && check_seed_value("kind=workbench_manuscript_audit", "audit_scope=", "citations", "rp_api_compare", "host_action_workbench_audit_scope=");
+	}
+	if (rp_host_seed_has("kind=workbench_manuscript_revision_plan")) {
+		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_revision_plan=ready");
+		ok = ok && check_seed_value("kind=workbench_manuscript_revision_plan", "revision_area=", "methods", "rp_runner", "host_action_workbench_revision_area=");
+		ok = ok && check_seed_value("kind=workbench_manuscript_revision_plan", "revision_area=", "methods", "rp_api_compare", "host_action_workbench_revision_area=");
+	}
+	if (rp_host_seed_has("kind=workbench_manuscript_revision_task")) {
+		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_revision_task=updated");
+		ok = ok && check_seed_value("kind=workbench_manuscript_revision_task", "revision_task=", "1", "rp_runner", "host_action_workbench_revision_task=");
+		ok = ok && check_seed_value("kind=workbench_manuscript_revision_task", "revision_status=", "done", "rp_runner", "host_action_workbench_revision_status=");
+		ok = ok && check_seed_value("kind=workbench_manuscript_revision_task", "revision_status=", "done", "rp_api_compare", "host_action_workbench_revision_status=");
+	}
+	if (rp_host_seed_has("kind=workbench_task_board")) {
+		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_task_board=exported");
+		ok = ok && check_seed_value("kind=workbench_task_board", "board_filter=", "open", "rp_runner", "host_action_workbench_board_filter=");
+		ok = ok && check_seed_value("kind=workbench_task_board", "board_filter=", "open", "rp_api_compare", "host_action_workbench_board_filter=");
+	}
+	if (rp_host_seed_has("kind=workbench_task_board_row")) {
+		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_task_board_row=updated");
+		ok = ok && check_seed_value("kind=workbench_task_board_row", "row_id=", "usable-workbench:RUN-900:board:task:human_review", "rp_runner", "host_action_workbench_row_id=");
+		ok = ok && check_seed_value("kind=workbench_task_board_row", "row_status=", "done", "rp_runner", "host_action_workbench_row_status=");
+		ok = ok && check_seed_value("kind=workbench_task_board_row", "row_status=", "done", "rp_api_compare", "host_action_workbench_row_status=");
+	}
+	if (rp_host_seed_has("kind=workbench_runbook")) {
+		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_runbook=exported");
+		ok = ok && check_seed_value("kind=workbench_runbook", "runbook_format=", "markdown", "rp_runner", "host_action_workbench_runbook_format=");
+		ok = ok && check_seed_value("kind=workbench_runbook", "runbook_format=", "markdown", "rp_api_compare", "host_action_workbench_runbook_format=");
+	}
+	if (rp_host_seed_has("kind=workbench_timeline")) {
+		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_timeline=exported");
+		ok = ok && check_seed_value("kind=workbench_timeline", "timeline_format=", "html", "rp_runner", "host_action_workbench_timeline_format=");
+		ok = ok && check_seed_value("kind=workbench_timeline", "timeline_format=", "html", "rp_api_compare", "host_action_workbench_timeline_format=");
+	}
+	if (rp_host_seed_has("kind=workbench_file_manifest")) ok = ok && rp_file_contains("rp_runner", "host_action_workbench_file_manifest=exported");
+	if (rp_host_seed_has("kind=workbench_export")) {
+		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_export=ready");
+		ok = ok && check_seed_value("kind=workbench_export", "bundle=", "workbench-bundle.zip", "rp_runner", "host_action_workbench_bundle=");
+		ok = ok && check_seed_value("kind=workbench_export", "bundle=", "workbench-bundle.zip", "rp_api_compare", "host_action_workbench_bundle=");
 	}
 	if (rp_host_seed_has("kind=bundle_export") ||
 	    rp_host_seed_has("kind=research_export") ||
@@ -712,11 +829,14 @@ int main(void)
 	if (rp_host_seed_has("kind=revision_task") || rp_host_seed_has("kind=revision_run")) {
 		if (!rp_append_file("rp_agentcmp", "host_action_revision_verified=1")) return 1;
 	}
-	if (rp_host_seed_has("kind=workbench_complete") ||
+	if (rp_host_seed_has("kind=workbench") ||
+	    rp_host_seed_has("kind=workbench_complete") ||
 	    rp_host_seed_has("kind=workbench_advance") ||
 	    rp_host_seed_has("kind=workbench_auto_advance") ||
 	    rp_host_seed_has("kind=workbench_task") ||
 	    rp_host_seed_has("kind=workbench_note") ||
+	    rp_host_seed_has("kind=workbench_notes") ||
+	    rp_host_seed_has("kind=workbench_handoff_package") ||
 	    rp_host_seed_has("kind=workbench_readiness") ||
 	    rp_host_seed_has("kind=workbench_answer") ||
 	    rp_host_seed_has("kind=workbench_answer_audit") ||
@@ -724,6 +844,13 @@ int main(void)
 	    rp_host_seed_has("kind=workbench_brief") ||
 	    rp_host_seed_has("kind=workbench_evidence_dossier") ||
 	    rp_host_seed_has("kind=workbench_evidence_graph") ||
+	    rp_host_seed_has("kind=workbench_citations") ||
+	    rp_host_seed_has("kind=workbench_manuscript") ||
+	    rp_host_seed_has("kind=workbench_manuscript_audit") ||
+	    rp_host_seed_has("kind=workbench_manuscript_revision_plan") ||
+	    rp_host_seed_has("kind=workbench_manuscript_revision_task") ||
+	    rp_host_seed_has("kind=workbench_task_board") ||
+	    rp_host_seed_has("kind=workbench_task_board_row") ||
 	    rp_host_seed_has("kind=workbench_runbook") ||
 	    rp_host_seed_has("kind=workbench_timeline") ||
 	    rp_host_seed_has("kind=workbench_file_manifest") ||

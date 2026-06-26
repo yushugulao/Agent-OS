@@ -194,6 +194,7 @@ static RP_UNUSED int rp_copy_key_from_slice(const char *text, int start, int end
 	int found = 0;
 	if (cap <= 0 || key_len <= 0 || key_len > end - start) return 0;
 	for (int i = start; i <= end - key_len; i++) {
+		if (i > start && text[i - 1] != ';') continue;
 		int same = 1;
 		for (int j = 0; j < key_len; j++) {
 			if (text[i + j] != key[j]) {

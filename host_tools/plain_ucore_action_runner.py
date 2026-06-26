@@ -71,6 +71,10 @@ def action_kind(path: str) -> str:
         return "workbench_task"
     if path.endswith("/research/workbench-note"):
         return "workbench_note"
+    if path.endswith("/research/workbench-notes"):
+        return "workbench_notes"
+    if path.endswith("/research/workbench-handoff-package"):
+        return "workbench_handoff_package"
     if path.endswith("/research/workbench-readiness"):
         return "workbench_readiness"
     if path.endswith("/research/workbench-answer"):
@@ -85,6 +89,20 @@ def action_kind(path: str) -> str:
         return "workbench_evidence_dossier"
     if path.endswith("/research/workbench-evidence-graph"):
         return "workbench_evidence_graph"
+    if path.endswith("/research/workbench-citations"):
+        return "workbench_citations"
+    if path.endswith("/research/workbench-manuscript"):
+        return "workbench_manuscript"
+    if path.endswith("/research/workbench-manuscript-audit"):
+        return "workbench_manuscript_audit"
+    if path.endswith("/research/workbench-manuscript-revision-plan"):
+        return "workbench_manuscript_revision_plan"
+    if path.endswith("/research/workbench-manuscript-revision-task"):
+        return "workbench_manuscript_revision_task"
+    if path.endswith("/research/workbench-task-board"):
+        return "workbench_task_board"
+    if path.endswith("/research/workbench-task-board-row"):
+        return "workbench_task_board_row"
     if path.endswith("/research/workbench-runbook"):
         return "workbench_runbook"
     if path.endswith("/research/workbench-timeline"):
