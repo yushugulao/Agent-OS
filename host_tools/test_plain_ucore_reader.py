@@ -130,7 +130,11 @@ status=ready
         "pack=review-evidence\n"
         "evidence=llm_quality;source=rp_llmeval;passed=7;status=pass\n"
         "evidence=delivery_ready;source=rp_package;files=8;status=pass\n"
+        "evidence=operations_ready;source=rp_runner;status=pass\n"
+        "evidence=project_space_ready;source=rp_package;status=pass\n"
         "action=send_to_reviewer;owner=orchestrator;artifact=rp_review_pack;status=ready\n"
+        "action=open_operations_report;owner=orchestrator;artifact=rp_runner;status=ready\n"
+        "bridge=delivery_to_operations;delivery=rp_package;operations=rp_runner;project=rp_package;status=ready\n"
         "status=ready\n"
     ),
     "rp_llm_req": "host_relay_request=q1;route=review_summary;provider=template;prompt_hash=abc;source=rp_llmq\n",
@@ -191,7 +195,9 @@ def main() -> int:
         assert "Review Sections" in review_html
         assert "Review Gates" in review_html
         assert "Review Evidence Pack" in review_html
+        assert "Review Pack Bridges" in review_html
         assert "send_to_reviewer" in review_html
+        assert "delivery_to_operations" in review_html
         assert "ready_for_reviewer" in review_html
         assert "plan&gt;data&gt;review&gt;repair&gt;audit" in evidence_html
         assert "Plain Kernel Signals" in compare_html

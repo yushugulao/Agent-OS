@@ -110,6 +110,11 @@ def main() -> int:
             assert "host_relay_quality=passed:24/24;blocked:0;source=rp_llmeval;status=ready" in reviewdash
             assert "host_relay_review_input=rp_llm_resp,rp_llmeval,rp_llm_guard,rp_relay,rp_prompt;page=llm.html;status=ready" in reviewdash
             reviewpack = (out_dir / "rp_review_pack").read_text(encoding="utf-8")
+            assert "evidence=operations_ready;source=rp_runner;status=pass" in reviewpack
+            assert "evidence=project_space_ready;source=rp_package;status=pass" in reviewpack
+            assert "action=open_operations_report;owner=orchestrator;artifact=rp_runner;status=ready" in reviewpack
+            assert "action=close_project_items;owner=reviewer;artifact=rp_package;status=ready" in reviewpack
+            assert "bridge=delivery_to_operations;delivery=rp_package;operations=rp_runner;project=rp_package;status=ready" in reviewpack
             assert "host_relay_quality=passed:24/24;blocked:0;source=rp_llmeval;status=ready" in reviewpack
             assert "host_relay_pack_input=rp_report_text,rp_llm_resp,rp_llmeval,rp_llm_guard,rp_review_dashboard,rp_package;status=ready" in reviewpack
             summary_json = json.loads((out_dir / "llm-relay-summary.json").read_text(encoding="utf-8"))

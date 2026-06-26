@@ -70,28 +70,37 @@ def append_line(path: Path, line: str) -> None:
 
 
 def ensure_review_pack(path: Path) -> None:
-    if "pack=review-evidence" in read_text(path):
+    lines = [
+        "pack=review-evidence",
+        "run=RUN-042",
+        "sources=rp_input,rp_stage_dag,rp_retry_plan,rp_artifact_manifest,rp_report_text,rp_chart_data,rp_llmeval,rp_llm_guard,rp_review_dashboard,rp_package",
+        "evidence=required_files;source=rp_package;status=pass",
+        "evidence=workflow_recovered;source=rp_retry_plan;status=pass",
+        "evidence=artifact_manifest;source=rp_artifact_manifest;records=4;status=pass",
+        "evidence=llm_quality;source=rp_llmeval;passed=7;status=pass",
+        "evidence=llm_packet_guard;source=rp_llm_guard;secrets_in_ucore=0;status=pass",
+        "evidence=human_review;source=rp_review2;status=pass",
+        "evidence=revision_ready;source=rp_revision;status=pass",
+        "evidence=delivery_ready;source=rp_package;files=8;status=pass",
+        "evidence=operations_ready;source=rp_runner;status=pass",
+        "evidence=project_space_ready;source=rp_package;status=pass",
+        "action=send_to_reviewer;owner=orchestrator;artifact=rp_review_pack;status=ready",
+        "action=verify_llm_packet;owner=auditor;artifact=rp_llm_guard;status=ready",
+        "action=check_delivery_manifest;owner=reviewer;artifact=rp_package;status=ready",
+        "action=open_operations_report;owner=orchestrator;artifact=rp_runner;status=ready",
+        "action=close_project_items;owner=reviewer;artifact=rp_package;status=ready",
+        "bridge=delivery_to_operations;delivery=rp_package;operations=rp_runner;project=rp_package;status=ready",
+        "plain_kernel_note=ordinary_files_require_host_reader_refresh",
+        "host_page=review.html",
+        "status=ready",
+    ]
+    existing = read_text(path)
+    if "pack=review-evidence" not in existing:
+        write_text(path, "\n".join(lines) + "\n")
         return
-    write_text(
-        path,
-        "pack=review-evidence\n"
-        "run=RUN-042\n"
-        "sources=rp_input,rp_stage_dag,rp_retry_plan,rp_artifact_manifest,rp_report_text,rp_chart_data,rp_llmeval,rp_llm_guard,rp_review_dashboard,rp_package\n"
-        "evidence=required_files;source=rp_package;status=pass\n"
-        "evidence=workflow_recovered;source=rp_retry_plan;status=pass\n"
-        "evidence=artifact_manifest;source=rp_artifact_manifest;records=4;status=pass\n"
-        "evidence=llm_quality;source=rp_llmeval;passed=7;status=pass\n"
-        "evidence=llm_packet_guard;source=rp_llm_guard;secrets_in_ucore=0;status=pass\n"
-        "evidence=human_review;source=rp_review2;status=pass\n"
-        "evidence=revision_ready;source=rp_revision;status=pass\n"
-        "evidence=delivery_ready;source=rp_package;files=8;status=pass\n"
-        "action=send_to_reviewer;owner=orchestrator;artifact=rp_review_pack;status=ready\n"
-        "action=verify_llm_packet;owner=auditor;artifact=rp_llm_guard;status=ready\n"
-        "action=check_delivery_manifest;owner=reviewer;artifact=rp_package;status=ready\n"
-        "plain_kernel_note=ordinary_files_require_host_reader_refresh\n"
-        "host_page=review.html\n"
-        "status=ready\n",
-    )
+    for line in lines:
+        if line not in existing:
+            append_line(path, line)
 
 
 def parse_kv_line(line: str) -> dict[str, str]:

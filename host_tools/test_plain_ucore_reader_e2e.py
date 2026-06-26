@@ -559,19 +559,28 @@ def main() -> int:
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_dashboard=ready;sections=8;gates=6;plain_kernel=ordinary_files" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("review_pack=ready;evidence_items=8;actions=3;plain_kernel=ordinary_files" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("review_pack=ready;evidence_items=10;actions=5;plain_kernel=ordinary_files" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_review_dashboard = read_json(base + "/api/state/rp_review_dashboard")
             assert any("dashboard=research-review" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
             assert any("section=workflow;source=rp_stage_dag,rp_stage_state,rp_run_events,rp_retry_plan;status=recovered" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
             assert any("section=llm;source=rp_llm_req,rp_llm_resp,rp_llmeval,rp_llm_guard,rp_relay,rp_prompt;status=ready" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
             assert any("gate=llm_packet_guard;status=pass;source=rp_llm_guard" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
             assert any("decision=ready_for_reviewer" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
+            assert any("decision=review_pack_ready;basis=delivery_manifest,operations_next,project_action_items,workbench_handoff" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
+            assert any("pack_bridge=delivery_manifest,operations_report,project_space,workbench_handoff" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
             assert any("host_relay_quality=passed:24/24;blocked:0;source=rp_llmeval;status=ready" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
             rp_review_pack = read_json(base + "/api/state/rp_review_pack")
             assert any("pack=review-evidence" in line for line in rp_review_pack["lines"]), rp_review_pack
             assert any("evidence=llm_quality;source=rp_llmeval;passed=7;status=pass" in line for line in rp_review_pack["lines"]), rp_review_pack
+            assert any("evidence=operations_ready;source=rp_runner;status=pass" in line for line in rp_review_pack["lines"]), rp_review_pack
+            assert any("evidence=project_space_ready;source=rp_package;status=pass" in line for line in rp_review_pack["lines"]), rp_review_pack
             assert any("action=send_to_reviewer;owner=orchestrator;artifact=rp_review_pack;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
+            assert any("action=open_operations_report;owner=orchestrator;artifact=rp_runner;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
+            assert any("bridge=delivery_to_operations;delivery=rp_package;operations=rp_runner;project=rp_package;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
             assert any("host_relay_quality=passed:24/24;blocked:0;source=rp_llmeval;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
+            rp_package = read_json(base + "/api/state/rp_package")
+            assert any("review_pack_bridge=delivery_manifest,operations_report,project_space,workbench_handoff" in line for line in rp_package["lines"]), rp_package
+            assert any("review_pack_action=sync_operations_next;source=rp_runner;status=ready" in line for line in rp_package["lines"]), rp_package
             rp_api_compare = read_json(base + "/api/state/rp_api_compare")
             assert any("host_action_payload_applied=1" in line for line in rp_api_compare["lines"]), rp_api_compare
             assert any("host_action_run_id=R1" in line for line in rp_api_compare["lines"]), rp_api_compare
@@ -702,7 +711,9 @@ def main() -> int:
             assert "Review Sections" in review_html
             assert "Review Gates" in review_html
             assert "Review Evidence Pack" in review_html
+            assert "Review Pack Bridges" in review_html
             assert "send_to_reviewer" in review_html
+            assert "delivery_to_operations" in review_html
             assert "ready_for_reviewer" in review_html
             assert "host_relay_quality" in review_html
             compare_html = read_text(base + "/compare.html")

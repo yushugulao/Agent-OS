@@ -45,6 +45,9 @@ int main(void)
 			   "handoff=writer->auditor;artifact=rp_package;status=ready\n"
 			   "decision=ready_for_reviewer;basis=required_files,human_review,llm_packet_guard,workflow_recovered\n"
 			   "decision=plain_kernel_limit;basis=file_state_scan,host_reader_refresh,user_space_contract\n"
+			   "decision=review_pack_ready;basis=delivery_manifest,operations_next,project_action_items,workbench_handoff\n"
+			   "pack_source=rp_package,rp_runner,rp_review_pack\n"
+			   "pack_bridge=delivery_manifest,operations_report,project_space,workbench_handoff\n"
 			   "host_page=review.html\n"
 			   "api_source=rp_api_run,rp_api_evidence,rp_api_artifacts,rp_api_compare\n"
 			   "reader_source=rp_web_bundle\n"
@@ -56,7 +59,7 @@ int main(void)
 	if (!rp_append_file("rp_agentcmp", "review_dashboard=ready;sections=8;gates=6;plain_kernel=ordinary_files")) return 1;
 	if (!rp_append_file("rp_ack", "ack=review_pack;msg=pack;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=review_pack.assemble;target=rp_review_pack;status=ok")) return 1;
-	if (!rp_append_file("rp_agentcmp", "review_pack=ready;evidence_items=8;actions=3;plain_kernel=ordinary_files")) return 1;
+	if (!rp_append_file("rp_agentcmp", "review_pack=ready;evidence_items=10;actions=5;plain_kernel=ordinary_files")) return 1;
 	printf("rp_review_dashboard: sections=8 gates=6 review_pack=host-materialized status=ready\n");
 	return 0;
 }
