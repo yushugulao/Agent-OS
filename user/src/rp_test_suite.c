@@ -1320,6 +1320,13 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "revision_delta=rp_revision");
 	ok = ok && require_file_token("rp_web_bundle", "review_threads=2");
 	ok = ok && require_file_token("rp_web_bundle", "review_action_items=2");
+	ok = ok && require_file_token("rp_review_dashboard", "dashboard=research-review");
+	ok = ok && require_file_token("rp_review_dashboard", "section=workflow;source=rp_stage_dag,rp_stage_state,rp_run_events,rp_retry_plan;status=recovered");
+	ok = ok && require_file_token("rp_review_dashboard", "section=llm;source=rp_llm_req,rp_llm_resp,rp_llmeval,rp_llm_guard,rp_relay,rp_prompt;status=ready");
+	ok = ok && require_file_token("rp_review_dashboard", "gate=reader_contract;status=pass");
+	ok = ok && require_file_token("rp_review_dashboard", "decision=ready_for_reviewer");
+	ok = ok && require_file_token("rp_ack", "ack=review_dashboard;msg=reviewdash;status=ready");
+	ok = ok && require_file_token("rp_tool", "tool=review_dashboard.aggregate");
 	ok = ok && require_file_token("rp_web_bundle", "custom_research_files=1");
 	ok = ok && require_file_token("rp_web_bundle", "custom_research_runs=3");
 	if (rp_host_seed_count() > 0 &&
@@ -1416,13 +1423,13 @@ int main(void)
 		ok = ok && require_file_token("rp_web_bundle", "host_action_llm_relay=");
 	}
 
-	ok = ok && require_count("ack", rp_count_lines("rp_ack"), 38);
-	ok = ok && require_count("tool", rp_count_lines("rp_tool"), 133);
+	ok = ok && require_count("ack", rp_count_lines("rp_ack"), 39);
+	ok = ok && require_count("tool", rp_count_lines("rp_tool"), 134);
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=693\n"
+			   "tests=699\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -1471,6 +1478,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=693 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=699 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed compare=passed status=passed\n");
 	return 0;
 }

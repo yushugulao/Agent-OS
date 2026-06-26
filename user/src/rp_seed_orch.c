@@ -1,6 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <fcntl.h>
+#include <string.h>
 
 static const char *PROGRAMS[] = {
 	"rp_catalog",
@@ -43,8 +45,36 @@ static const char *PROGRAMS[] = {
 	"rp_metrics",
 	"rp_ui_export",
 	"rp_web_export",
+	"rp_review_dashboard",
 	"rp_compare_plain",
 };
+
+static int keeps_same_name_state(const char *program)
+{
+	static const char *KEEP[] = {
+		"rp_backend",
+		"rp_consistency",
+		"rp_delta",
+		"rp_dossier",
+		"rp_evidence",
+		"rp_execobs",
+		"rp_lineage",
+		"rp_object_query",
+		"rp_package",
+		"rp_privacy",
+		"rp_query",
+		"rp_release",
+		"rp_review_dashboard",
+		"rp_runconf",
+	};
+	int total = (int)(sizeof(KEEP) / sizeof(KEEP[0]));
+	for (int i = 0; i < total; i++) {
+		if (strcmp(program, KEEP[i]) == 0) {
+			return 1;
+		}
+	}
+	return 0;
+}
 
 static int run_child(const char *program)
 {
@@ -66,6 +96,13 @@ static int run_child(const char *program)
 	if (code != 0) {
 		printf("rp_orch: child_failed program=%s code=%d\n", program, code);
 		return 0;
+	}
+	if (keeps_same_name_state(program)) {
+		return 1;
+	}
+	int fd = open(program, O_WRONLY | O_TRUNC);
+	if (fd >= 0) {
+		close(fd);
 	}
 	return 1;
 }

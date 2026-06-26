@@ -19,6 +19,7 @@ PAGE_SPECS = [
     ("run.html", "Run Detail", "rp_api_run", ["rp_ui_run", "rp_runner", "rp_artifact"]),
     ("agents.html", "Agents", "rp_api_agents", ["rp_ui_agent", "rp_agents", "rp_decisions"]),
     ("evidence.html", "Evidence", "rp_api_evidence", ["rp_ui_evidence", "rp_evidence", "rp_package"]),
+    ("review.html", "Review", "rp_review_dashboard", ["rp_review2", "rp_revision", "rp_package", "rp_report_text"]),
     ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency"]),
     ("artifacts.html", "Artifacts", "rp_api_artifacts", ["rp_artifact", "rp_artifact_manifest", "rp_package"]),
     ("data.html", "Data", "rp_api_data", ["rp_input", "rp_dataset_snapshot", "rp_data_quality"]),
@@ -281,10 +282,20 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Routes", metric_value(state, [("rp_prompt", "host_relay_prompt_batch"), ("rp_prompt", "routes")]), "rp_prompt"),
         ("Runtime", metric_value(state, [("rp_api_runtime", "host_llm_relay_quality")]), "rp_api_runtime"),
     ]
+    review_items = [
+        ("Run", metric_value(state, [("rp_review_dashboard", "run"), ("rp_report_text", "host_report_run_id")]), "rp_review_dashboard"),
+        ("Sections", metric_value(state, [("rp_review_dashboard", "sections")]), "rp_review_dashboard"),
+        ("Decision", metric_value(state, [("rp_review_dashboard", "decision")]), "rp_review_dashboard"),
+        ("Human Review", metric_value(state, [("rp_review2", "decision"), ("rp_report_text", "host_report_review_decision")]), "rp_review2"),
+        ("Delivery", metric_value(state, [("rp_package", "latest_delivery_status"), ("rp_package", "status")]), "rp_package"),
+        ("Host Relay Quality", metric_value(state, [("rp_review_dashboard", "host_relay_quality")]), "rp_review_dashboard"),
+    ]
     if file_name == "run.html":
         return render_summary_panel("Research Output", report_items)
     if file_name in ("evidence.html", "artifacts.html"):
         return render_summary_panel("Evidence Package", evidence_items)
+    if file_name == "review.html":
+        return render_summary_panel("Review Dashboard", review_items)
     if file_name == "compare.html":
         return render_summary_panel("Compare Summary", compare_items)
     if file_name == "llm.html":
@@ -325,10 +336,20 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Packet Secret", metric_value(state, [("rp_llm_packets", "secret_in_packet")]), "rp_llm_packets"),
         ("Agent Decision", metric_value(state, [("rp_agent_run", "host_relay_agent_decision")]), "rp_agent_run"),
     ]
+    review_items = [
+        ("Workflow", metric_value(state, [("rp_review_dashboard", "section")]), "rp_review_dashboard"),
+        ("Required Files", metric_value(state, [("rp_review_dashboard", "gate")]), "rp_review_dashboard"),
+        ("Revision", metric_value(state, [("rp_revision", "final_status")]), "rp_revision"),
+        ("Review Threads", metric_value(state, [("rp_review2", "review_threads")]), "rp_review2"),
+        ("Action Items", metric_value(state, [("rp_review2", "action_items")]), "rp_review2"),
+        ("Report", metric_value(state, [("rp_report_text", "status")]), "rp_report_text"),
+    ]
     if file_name == "agents.html":
         return render_summary_panel("Agent Detail", agent_items)
     if file_name == "evidence.html":
         return render_summary_panel("Evidence Detail", evidence_items)
+    if file_name == "review.html":
+        return render_summary_panel("Review State", review_items)
     if file_name == "compare.html":
         return render_summary_panel("Compare Metrics", compare_items)
     if file_name == "llm.html":
@@ -392,6 +413,29 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
         return [
             render_line_panel("Plain Kernel Signals", compare_rows),
             render_line_panel("Consistency Signals", check_rows),
+        ]
+    if file_name == "review.html":
+        return [
+            render_record_panel(
+                "Review Sections",
+                [("Section", "section"), ("Source", "source"), ("Status", "status")],
+                state_records(state, "rp_review_dashboard", "section"),
+            ),
+            render_record_panel(
+                "Review Gates",
+                [("Gate", "gate"), ("Status", "status"), ("Source", "source")],
+                state_records(state, "rp_review_dashboard", "gate"),
+            ),
+            render_record_panel(
+                "Review Handoffs",
+                [("Handoff", "handoff"), ("Artifact", "artifact"), ("Status", "status")],
+                state_records(state, "rp_review_dashboard", "handoff"),
+            ),
+            render_record_panel(
+                "Review Decisions",
+                [("Decision", "decision"), ("Basis", "basis")],
+                state_records(state, "rp_review_dashboard", "decision"),
+            ),
         ]
     if file_name == "llm.html":
         return [
@@ -577,6 +621,11 @@ def render_overview(
             ("Submissions", metric_value(state, [("rp_input", "dynamic_submissions")]), "rp_input"),
             ("Snapshots", metric_value(state, [("rp_dataset_snapshot", "snapshots"), ("rp_api_data", "dataset_snapshots")]), "rp_dataset_snapshot"),
             ("Quality", metric_value(state, [("rp_data_quality", "passed")]), "rp_data_quality"),
+        ],
+        "review.html": [
+            ("Sections", metric_value(state, [("rp_review_dashboard", "sections")]), "rp_review_dashboard"),
+            ("Decision", metric_value(state, [("rp_review_dashboard", "decision")]), "rp_review_dashboard"),
+            ("Delivery", metric_value(state, [("rp_package", "latest_delivery_status"), ("rp_package", "status")]), "rp_package"),
         ],
         "llm.html": [
             ("Requests", metric_value(state, [("rp_llm_resp", "requests"), ("rp_llmq", "queued")]), "rp_llm_resp"),

@@ -58,6 +58,7 @@ user/src/rp_backend.c
 user/src/rp_consistency.c
 user/src/rp_ui_export.c
 user/src/rp_web_export.c
+user/src/rp_review_dashboard.c
 user/src/rp_test_suite.c
 user/src/rp_compare_plain.c
 ```
@@ -73,7 +74,7 @@ user/src/rp_compare_plain.c
 - A plain user-space research run simulation with planning, literature, analysis, review, writing, repair, and audit roles.
 - Local catalog search for workflow, Agent, evidence, provenance, and LLM related platform objects.
 
-`rp_orch` runs forty-one platform programs as separate uCore user processes:
+`rp_orch` runs forty-two platform programs as separate uCore user processes:
 
 - catalog,
 - object store,
@@ -115,6 +116,7 @@ user/src/rp_compare_plain.c
 - metrics service,
 - UI data export,
 - Host Web/API export contract,
+- review dashboard aggregation,
 - file-backed human review and revision-task actions,
 - test suite,
 - plain-kernel comparison.
@@ -238,6 +240,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_release`
 - `rp_dossier`
 - `rp_reviewops`
+- `rp_review_dashboard`
 - `rp_submit`
 - `rp_sreg`
 - `rp_ethics`
@@ -292,8 +295,9 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_actionio`
 - `rp_uresrun`
 - `rp_web_bundle`
-- `rp_tests`
 - `rp_agentcmp`
+
+The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current test count and comparison result in `rp_agentcmp` so the full seeded run stays inside the upstream teaching file-system inode limit.
 
 Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_agentcmp` after all children exit, then prints `state_ok=1`.
 
@@ -336,7 +340,7 @@ rp_plain: passed
 Expected orchestrator output:
 
 ```text
-rp_orch: start programs=41
+rp_orch: start programs=42
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_object_store: records=8 status=ready
 rp_object_query: hits=8 ready_hits=7 status=ready
@@ -377,8 +381,9 @@ rp_consistency: checks=113 tasks=21 llm=3 relay=5 workflow=5 portability=6 coher
 rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 delta_items=20 dynamic=4 status=ready
 rp_ui_export: pages=5 run=RUN-042 custom_runs=3 compare=ready status=ready
 rp_web_export: routes=62 api_payloads=14 actions=48 bundle=ready status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=41 state_files=168 acks=42 tools=136 dynamic=4 reader=1 status=ready
-rp_orch: programs_ok=41 programs_total=41
+rp_review_dashboard: sections=8 gates=6 status=ready
+rp_compare_plain: plain_kernel=passed objects=500 programs=42 state_files=169 acks=43 tools=137 dynamic=4 reader=1 status=ready
+rp_orch: programs_ok=42 programs_total=42
 rp_orch: state_ok=1
 rp_orch: passed
 ```
@@ -399,7 +404,7 @@ No output means the directories match.
 
 ## Host Reader
 
-The `host_tools/plain_ucore_reader.py` utility renders ordinary `rp_*` state files into host-viewable HTML pages and API JSON files. It consumes the `host_plain_ucore_v2` reader contract written by `rp_web_bundle`. The generated pages use a sidebar, page-level summary cards, research-output summaries, Agent detail summaries, Agent roster and decision-flow tables, evidence-package summaries, evidence detail summaries, claim/provenance/protocol tables, comparison summaries, compare metric summaries, LLM Relay request/response/quality tables, plain-kernel signal tables, state tables, host-action history, and a batch-action editor for running the same research flow through plain uCore.
+The `host_tools/plain_ucore_reader.py` utility renders ordinary `rp_*` state files into host-viewable HTML pages and API JSON files. It consumes the `host_plain_ucore_v2` reader contract written by `rp_web_bundle`. The generated pages use a sidebar, page-level summary cards, research-output summaries, Agent detail summaries, Agent roster and decision-flow tables, evidence-package summaries, evidence detail summaries, review dashboard sections and gates, claim/provenance/protocol tables, comparison summaries, compare metric summaries, LLM Relay request/response/quality tables, plain-kernel signal tables, state tables, host-action history, and a batch-action editor for running the same research flow through plain uCore.
 
 ```bash
 python host_tools/plain_ucore_reader.py --state-dir path/to/rp-state --out-dir runtime/plain_ucore_reader
@@ -426,7 +431,7 @@ python host_tools/test_plain_ucore_action_runner.py
 
 The runner writes `state-next/rp_host_action_queue`, `state-next/rp_host_action_plan`, `state-next/rp_host_action_inbox`, `actions.json`, and `runner-summary.json`. With `--run-ucore`, it keeps the full inbox text in the host run package, writes a compact `kind` plus payload seed to `state-next/rp_host_action_seed`, pads `rp_*` image inputs to the teaching file-system block size, copies the compact seed file into `user/target/bin/` before building `nfs/fs.img`, builds the ordinary user programs, runs `rp_seed_orch`, writes `ucore-run.log`, extracts text `rp_*` state files from `nfs/fs-copy.img`, and records QEMU result markers in `state-next/rp_host_run_result`. The queue and plan files stay in the host run package because the upstream uCore teaching file system has tight inode capacity. The compact seed file is small enough to fit in the image and avoids passing a large action batch through `exec` arguments. Seeded research, dataset, library, template, workspace, evidence, comparison, host-workflow, artifact operation, Host LLM Relay, human-review, revision, workbench, operations, project-space, research-search, notebook-export, and bundle-export actions are reflected in the ordinary state files used by the platform: `rp_input`, data pipeline files, `rp_runner`, `rp_review2`, `rp_revision`, `rp_package`, `rp_report_text`, `rp_artifact`, `rp_stage_log`, `rp_chart_data`, `rp_artifact_manifest`, `rp_nbexec`, `rp_uresrun`, `rp_actionio`, `rp_agentcmp`, and `rp_llm_*` relay files. Research-run payload fields now change the input, data, report, API, and usable-run summaries: title, question, provider, dataset row count, reference count, workspace file count, CSV filename, and reference filename are carried into `rp_input`, data pipeline files, `rp_report_text`, `rp_api_home`, `rp_api_run`, and `rp_uresrun`. Host workflow actions update `rp_stage_dag`, `rp_stage_state`, `rp_run_events`, `rp_artifact_manifest`, `rp_runner`, `rp_package`, `rp_actionio`, and `rp_web_bundle` with workflow id, run id, engine, stage count, DAG text, export format, export bundle, failed stage, retry stage, retry reason, cache policy, cache-hit stage, worker slots, queue depth, and observer event count. Host workflow stage/cache/retry/artifact/report actions additionally update `rp_stage_state`, `rp_run_events`, `rp_cache_index`, `rp_retry_plan`, `rp_artifact_manifest`, `rp_report_text`, package records, and action summaries with concrete attempt, cache key, retry decision, artifact hash, artifact size, report name, report format, and report section count. Artifact input/derive/log/chart/package actions update `rp_artifact`, `rp_stage_log`, `rp_chart_data`, `rp_artifact_manifest`, `rp_package`, `rp_actionio`, and `rp_web_bundle` with input filename, artifact kind, hash, byte count, source, derived output, operation, stage log, chart data, and package manifest fields. Host LLM Relay actions update `rp_llm_req`, `rp_llmq`, `rp_llm_resp`, `rp_llm_packets`, `rp_llm_hostreq`, `rp_llm_fallback`, `rp_api_runtime`, `rp_actionio`, and `rp_web_bundle` with request id, route, provider, response id, response summary, and fallback case. Writing-oriented workbench actions update `rp_revision`; handoff, manifest, brief, dossier, graph, citation, manuscript, task board, runbook, timeline, readiness, completion, and workbench export actions update `rp_package`; file-manifest and file-verify actions also update `rp_ingest_files`, `rp_data_quality`, `rp_dataset_collection`, `rp_artifact_manifest`, `rp_api_artifacts`, and `rp_api_data` with manifest file count, hash-record count, verified file count, and missing file count. The user programs read action-specific payload fields from the seed file, so `run_id`, workflow id, workflow engine, workflow DAG, workflow export bundle, workflow stage attempt, cache decision, retry decision, artifact record, artifact input, artifact output, artifact log, artifact chart, artifact package, report record, LLM request id, LLM route, LLM provider, LLM response id, LLM summary, LLM fallback case, reviewer, review decision, revision targets, revision task id, workbench id, workbench title, literature query, workbench question, evidence-search query, workbench task/status, workbench note kind/title/body, notes filter, handoff scope, brief format, dossier format, graph format, citation format, manuscript format, audit scope, revision area, revision task/status, board filter, board-row id/status, runbook format, timeline format, file-manifest name, file counts, hash counts, verification counts, notebook format, bundle name, and comparison profile change the resulting state files instead of being reduced to a fixed action type. The same payload values are also propagated into `rp_report_text`, `rp_artifact_manifest`, `rp_nbexec`, `rp_uresrun`, `rp_api_compare`, `rp_api_runtime`, and the package download summary, so the final reader pages show changed report, evidence, notebook, run, package, workflow, LLM relay, and comparison content.
 
-The host relay tool consumes the ordinary `rp_llmq`, `rp_llm_req`, and `rp_llm_packets` files and writes refreshed `rp_llm_resp`, `rp_llm_hostreq`, `rp_llm_packets`, `rp_llmlog`, `rp_actionio`, `rp_web_bundle`, and `rp_api_runtime` records. It also writes the selected relay response into `rp_report_text`, `rp_runner`, `rp_revision`, `rp_package`, `rp_api_run`, `rp_api_evidence`, and `rp_agent_run`, so the LLM result is visible in the research report, workbench answer, writing state, delivery package, and rendered API files. The same run now appends host-side quality records into `rp_llmeval`, packet guard records into `rp_llm_guard`, replay records into `rp_relay`, and route records into `rp_prompt`; `llm.html` renders those files as request, response, quality, guard, and replay tables. It writes prompt hashes and response summaries, not host secret values. This keeps the plain uCore branch compatible with template-mode demonstrations and with a host-managed cloud provider.
+The host relay tool consumes the ordinary `rp_llmq`, `rp_llm_req`, and `rp_llm_packets` files and writes refreshed `rp_llm_resp`, `rp_llm_hostreq`, `rp_llm_packets`, `rp_llmlog`, `rp_actionio`, `rp_web_bundle`, and `rp_api_runtime` records. It also writes the selected relay response into `rp_report_text`, `rp_runner`, `rp_revision`, `rp_package`, `rp_api_run`, `rp_api_evidence`, `rp_agent_run`, and `rp_review_dashboard`, so the LLM result is visible in the research report, workbench answer, writing state, delivery package, review dashboard, and rendered API files. The same run now appends host-side quality records into `rp_llmeval`, packet guard records into `rp_llm_guard`, replay records into `rp_relay`, and route records into `rp_prompt`; `llm.html` renders those files as request, response, quality, guard, and replay tables. It writes prompt hashes and response summaries, not host secret values. This keeps the plain uCore branch compatible with template-mode demonstrations and with a host-managed cloud provider.
 
 The reader is a host-side viewer and action-capture service for plain uCore output. It does not modify `os/`, `nfs/`, or `scripts`, and it does not add Agent-OS kernel features.
 

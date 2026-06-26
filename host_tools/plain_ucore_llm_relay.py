@@ -379,6 +379,14 @@ def append_relay_state(out_dir: Path, requests: list[RelayRequest], responses: l
         out_dir / "rp_agentcmp",
         f"host_llm_relay_replay={audit_status};checked={audit_checked};blocked={audit_blocked};plain_kernel=ordinary_files",
     )
+    append_line(
+        out_dir / "rp_review_dashboard",
+        f"host_relay_quality=passed:{audit_passed}/{audit_checked};blocked:{audit_blocked};source=rp_llmeval;status={audit_status}",
+    )
+    append_line(
+        out_dir / "rp_review_dashboard",
+        "host_relay_review_input=rp_llm_resp,rp_llmeval,rp_llm_guard,rp_relay,rp_prompt;page=llm.html;status=ready",
+    )
     first_ok = next((response for response in responses if response.status in {"ok", "config_missing"}), responses[0] if responses else None)
     if first_ok is not None:
         append_line(

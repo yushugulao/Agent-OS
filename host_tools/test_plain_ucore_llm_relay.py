@@ -49,6 +49,7 @@ STATE = {
     "rp_api_evidence": "api=evidence\n",
     "rp_agent_run": "agent_run=ready\n",
     "rp_agentcmp": "plain_kernel=passed\n",
+    "rp_review_dashboard": "dashboard=research-review\nstatus=ready\n",
 }
 
 
@@ -104,6 +105,9 @@ def main() -> int:
             assert "host_relay_agent_decision=writer_use_relay_response" in agent_run
             agentcmp = (out_dir / "rp_agentcmp").read_text(encoding="utf-8")
             assert "host_llm_relay_replay=ready;checked=24;blocked=0;plain_kernel=ordinary_files" in agentcmp
+            reviewdash = (out_dir / "rp_review_dashboard").read_text(encoding="utf-8")
+            assert "host_relay_quality=passed:24/24;blocked:0;source=rp_llmeval;status=ready" in reviewdash
+            assert "host_relay_review_input=rp_llm_resp,rp_llmeval,rp_llm_guard,rp_relay,rp_prompt;page=llm.html;status=ready" in reviewdash
             summary_json = json.loads((out_dir / "llm-relay-summary.json").read_text(encoding="utf-8"))
             assert summary_json["response_status"]["relay-host-q1"] == "ok", summary_json
             assert summary_json["quality"] == {"checked": 24, "passed": 24, "blocked": 0}, summary_json

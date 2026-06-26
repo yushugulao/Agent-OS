@@ -114,6 +114,18 @@ status=ready
     "rp_input": "dynamic_submissions=4\n",
     "rp_dataset_snapshot": "snapshots=2\n",
     "rp_data_quality": "passed=7\n",
+    "rp_review_dashboard": (
+        "dashboard=research-review\n"
+        "run=RUN-042\n"
+        "sections=8\n"
+        "section=workflow;source=rp_stage_dag,rp_stage_state,rp_run_events,rp_retry_plan;status=recovered\n"
+        "section=llm;source=rp_llm_req,rp_llm_resp,rp_llmeval,rp_llm_guard,rp_relay,rp_prompt;status=ready\n"
+        "gate=required_files;status=pass;source=rp_package\n"
+        "gate=llm_packet_guard;status=pass;source=rp_llm_guard\n"
+        "handoff=orchestrator->reviewer;artifact=rp_review_dashboard;status=ready\n"
+        "decision=ready_for_reviewer;basis=required_files,human_review,llm_packet_guard,workflow_recovered\n"
+        "status=ready\n"
+    ),
     "rp_llm_req": "host_relay_request=q1;route=review_summary;provider=template;prompt_hash=abc;source=rp_llmq\n",
     "rp_llm_resp": "host_relay_process=plain_ucore_llm_relay;mode=template;requests=1;responses=1;status=ready\nhost_relay_response=relay-q1;request=q1;summary=ready;citations=5;status=ok\n",
     "rp_llmeval": "host_relay_eval_batch=checked:6;passed:6;blocked:0;status=ready\nhost_relay_eval=q1;response=relay-q1;checks=6;passed=6;status=passed\n",
@@ -133,9 +145,10 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 9, summary
+        assert summary["pages"] == 10, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
+        assert (out_dir / "review.html").exists()
         assert (out_dir / "llm.html").exists()
         assert (out_dir / "api" / "rp_api_home.json").exists()
         index_html = (out_dir / "index.html").read_text(encoding="utf-8")
@@ -166,6 +179,11 @@ def main() -> int:
         assert "retrylog-a" in evidence_html
         assert "Evidence Protocol" in evidence_html
         assert "usable-evidence-protocol:RUN-900:1" in evidence_html
+        review_html = (out_dir / "review.html").read_text(encoding="utf-8")
+        assert "Review Dashboard" in review_html
+        assert "Review Sections" in review_html
+        assert "Review Gates" in review_html
+        assert "ready_for_reviewer" in review_html
         assert "plan&gt;data&gt;review&gt;repair&gt;audit" in evidence_html
         assert "Plain Kernel Signals" in compare_html
         assert "Consistency Signals" in compare_html
