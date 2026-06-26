@@ -184,6 +184,32 @@ int main(void)
 		ok = ok && rp_file_contains("rp_api_compare", token);
 		ok = ok && rp_file_contains("rp_actionio", "host_action_agentcompare=1");
 	}
+	if (rp_host_seed_has("kind=host_workflow") || rp_host_seed_has("kind=host_workflow_export")) {
+		char value[64];
+		char token[140];
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow", "workflow_id=", value, sizeof(value)) &&
+		    !rp_host_seed_copy_value_for_kind("kind=host_workflow_export", "workflow_id=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "wf-host-plain");
+		}
+		rp_copy_text(token, sizeof(token), "host_workflow_id=");
+		rp_append_text(token, sizeof(token), value);
+		ok = ok && rp_file_contains("rp_stage_dag", token);
+		rp_copy_text(token, sizeof(token), "host_action_workflow=");
+		rp_append_text(token, sizeof(token), value);
+		ok = ok && rp_file_contains("rp_runner", token);
+		rp_copy_text(token, sizeof(token), "host_manifest_workflow=");
+		rp_append_text(token, sizeof(token), value);
+		ok = ok && rp_file_contains("rp_artifact_manifest", token);
+		rp_copy_text(token, sizeof(token), "host_action_workflow_id=");
+		rp_append_text(token, sizeof(token), value);
+		ok = ok && rp_file_contains("rp_package", token);
+		ok = ok && rp_file_contains("rp_actionio", "host_action_workflow=1");
+		ok = ok && rp_file_contains("rp_web_bundle", "host_action_workflow_outputs=");
+		if (rp_host_seed_has("kind=host_workflow_export")) {
+			ok = ok && check_seed_value("kind=host_workflow_export", "bundle=", "workflow-export.zip", "rp_runner", "host_action_workflow_export=");
+			ok = ok && check_seed_value("kind=host_workflow_export", "format=", "json", "rp_package", "host_action_workflow_format=");
+		}
+	}
 	if (rp_host_seed_has("kind=human_review")) {
 		char reviewer[48];
 		char decision[48];

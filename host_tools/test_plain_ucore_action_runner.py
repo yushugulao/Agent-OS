@@ -270,6 +270,14 @@ def main() -> int:
                     "payload": {"workbench_id": "usable-workbench:RUN-900", "query": "recovery evidence", "title": "Review search hits", "instruction": "Promote key hit", "priority": "high"},
                 },
                 {
+                    "path": "/actions/host-workflow/run",
+                    "payload": {"workflow_id": "WF1", "run_id": "RUN-999", "engine": "plain-c-runner", "stages": "6", "dag": "ingest>clean>analyze>review>package", "max_workers": "2", "cache": "content"},
+                },
+                {
+                    "path": "/actions/host-workflow/export",
+                    "payload": {"workflow_id": "WF1", "run_id": "RUN-999", "format": "json", "bundle": "wf.zip"},
+                },
+                {
                     "path": "/actions/research/review",
                     "payload": {"run_id": "RUN-999", "reviewer": "Wang", "decision": "needs_revision"},
                 },
@@ -288,7 +296,7 @@ def main() -> int:
             ],
         )
         summary = runner.prepare_action_state(loaded, state_dir, run_dir)
-        expected_actions = 61
+        expected_actions = 63
 
         assert summary["actions"] == expected_actions
         assert summary["accepted"] == expected_actions
@@ -349,6 +357,8 @@ def main() -> int:
         assert "research_search_export" in summary["kinds"]
         assert "research_search_note" in summary["kinds"]
         assert "research_search_action_item" in summary["kinds"]
+        assert "host_workflow" in summary["kinds"]
+        assert "host_workflow_export" in summary["kinds"]
         assert "human_review" in summary["kinds"]
         assert "revision_task" in summary["kinds"]
         assert "notebook_export" in summary["kinds"]
@@ -418,6 +428,8 @@ def main() -> int:
         assert "kind=research_search_export" in queue
         assert "kind=research_search_note" in queue
         assert "kind=research_search_action_item" in queue
+        assert "kind=host_workflow" in queue
+        assert "kind=host_workflow_export" in queue
         assert "kind=human_review" in queue
         assert "kind=revision_task" in queue
         assert "kind=notebook_export" in queue
@@ -467,6 +479,10 @@ def main() -> int:
         assert "action_key=export_file_manifest_and_verify" in queue
         assert "project_id=lab-gene-x" in queue
         assert "name=Recovery search" in queue
+        assert "workflow_id=WF1" in queue
+        assert "engine=plain-c-runner" in queue
+        assert "dag=ingest>clean>analyze>review>package" in queue
+        assert "bundle=wf.zip" in queue
         assert "status=ready" in queue
 
         plan = read(next_state / "rp_host_action_plan")
@@ -510,6 +526,8 @@ def main() -> int:
         assert "kind=operations_report" in plan
         assert "kind=project_space" in plan
         assert "kind=research_search_export" in plan
+        assert "kind=host_workflow" in plan
+        assert "kind=host_workflow_export" in plan
 
         inbox = read(next_state / "rp_host_action_inbox")
         assert "/actions/research/run" in inbox
@@ -551,6 +569,8 @@ def main() -> int:
         assert "/actions/research/workbench-plan-queue-execute" in inbox
         assert "/actions/research/project-space" in inbox
         assert "/actions/research-search/export" in inbox
+        assert "/actions/host-workflow/run" in inbox
+        assert "/actions/host-workflow/export" in inbox
 
         assert (run_dir / "actions.json").exists()
         assert (run_dir / "runner-summary.json").exists()
@@ -611,6 +631,8 @@ def main() -> int:
         assert runner.action_kind("/actions/research-search/export") == "research_search_export"
         assert runner.action_kind("/actions/research-search/note") == "research_search_note"
         assert runner.action_kind("/actions/research-search/action-item") == "research_search_action_item"
+        assert runner.action_kind("/actions/host-workflow/run") == "host_workflow"
+        assert runner.action_kind("/actions/host-workflow/export") == "host_workflow_export"
         assert runner.action_kind("/actions/research/export-notebook") == "notebook_export"
         assert runner.action_kind("/actions/unknown") == "generic"
 
@@ -641,6 +663,11 @@ def main() -> int:
         assert "kind=workbench_quality_gate" in seed_file
         assert "kind=project_space" in seed_file
         assert "kind=research_search_export" in seed_file
+        assert "kind=host_workflow" in seed_file
+        assert "kind=host_workflow_export" in seed_file
+        assert "workflow_id=WF1" in seed_file
+        assert "engine=plain-c-runner" in seed_file
+        assert "bundle=wf.zip" in seed_file
         assert "source_text=" not in seed_file
 
         runner.write_run_result_state(

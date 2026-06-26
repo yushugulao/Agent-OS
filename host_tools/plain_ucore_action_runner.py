@@ -373,6 +373,8 @@ def compact_seed_text(text: str) -> str:
         "research_search_export": {"query", "limit"},
         "research_search_note": {"workbench_id", "query", "title", "note", "limit"},
         "research_search_action_item": {"workbench_id", "query", "title", "instruction", "priority", "limit"},
+        "host_workflow": {"workflow_id", "run_id", "engine", "stages", "dag", "max_workers", "cache"},
+        "host_workflow_export": {"workflow_id", "run_id", "format", "bundle"},
     }
     lines: list[str] = []
     for raw in text.splitlines():

@@ -170,6 +170,73 @@ int main(void)
 			}
 		}
 	}
+	if (rp_host_seed_has("kind=host_workflow") || rp_host_seed_has("kind=host_workflow_export")) {
+		char workflow_id[64];
+		char run_id[48];
+		char engine[32];
+		char stages[16];
+		char dag[64];
+		char format[32];
+		char bundle[48];
+		char line[160];
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow", "workflow_id=", workflow_id, sizeof(workflow_id)) &&
+		    !rp_host_seed_copy_value_for_kind("kind=host_workflow_export", "workflow_id=", workflow_id, sizeof(workflow_id))) {
+			rp_copy_text(workflow_id, sizeof(workflow_id), "wf-host-plain");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow", "run_id=", run_id, sizeof(run_id)) &&
+		    !rp_host_seed_copy_value_for_kind("kind=host_workflow_export", "run_id=", run_id, sizeof(run_id))) {
+			rp_copy_text(run_id, sizeof(run_id), "RUN-042");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow", "engine=", engine, sizeof(engine))) {
+			rp_copy_text(engine, sizeof(engine), "plain-c-runner");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow", "stages=", stages, sizeof(stages))) {
+			rp_copy_text(stages, sizeof(stages), "5");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow", "dag=", dag, sizeof(dag))) {
+			rp_copy_text(dag, sizeof(dag), "ingest>align>profile>review>package");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_export", "format=", format, sizeof(format))) {
+			rp_copy_text(format, sizeof(format), "json");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_export", "bundle=", bundle, sizeof(bundle))) {
+			rp_copy_text(bundle, sizeof(bundle), "workflow-export.zip");
+		}
+		if (!rp_append_file("rp_stage_dag", "host_workflow_payload=applied")) return 1;
+		if (!rp_append_host_action_line("rp_stage_dag", "host_workflow_id=", workflow_id)) return 1;
+		if (!rp_append_host_action_line("rp_stage_dag", "host_workflow_engine=", engine)) return 1;
+		if (!rp_append_host_action_line("rp_stage_dag", "host_workflow_dag=", dag)) return 1;
+		if (!rp_append_host_action_line("rp_stage_dag", "host_workflow_stages=", stages)) return 1;
+		if (!rp_append_file("rp_stage_state", "host_workflow_state=executed")) return 1;
+		if (!rp_append_host_action_line("rp_stage_state", "host_workflow_run_id=", run_id)) return 1;
+		if (!rp_append_host_action_line("rp_stage_state", "host_workflow_engine=", engine)) return 1;
+		if (!rp_append_host_action_line("rp_run_events", "host_workflow_event=started;workflow=", workflow_id)) return 1;
+		if (!rp_append_file("rp_run_events", "host_workflow_event=finished;status=ready")) return 1;
+		rp_copy_text(line, sizeof(line), "host_manifest_workflow=");
+		rp_append_text(line, sizeof(line), workflow_id);
+		rp_append_text(line, sizeof(line), ";run_id=");
+		rp_append_text(line, sizeof(line), run_id);
+		rp_append_text(line, sizeof(line), ";engine=");
+		rp_append_text(line, sizeof(line), engine);
+		rp_append_text(line, sizeof(line), ";stages=");
+		rp_append_text(line, sizeof(line), stages);
+		if (!rp_append_file("rp_artifact_manifest", line)) return 1;
+		rp_copy_text(line, sizeof(line), "host_manifest_workflow_export=");
+		rp_append_text(line, sizeof(line), bundle);
+		rp_append_text(line, sizeof(line), ";format=");
+		rp_append_text(line, sizeof(line), format);
+		if (!rp_append_file("rp_artifact_manifest", line)) return 1;
+		rp_copy_text(line, sizeof(line), "host_action_workflow=");
+		rp_append_text(line, sizeof(line), workflow_id);
+		rp_append_text(line, sizeof(line), ";run_id=");
+		rp_append_text(line, sizeof(line), run_id);
+		rp_append_text(line, sizeof(line), ";engine=");
+		rp_append_text(line, sizeof(line), engine);
+		rp_append_text(line, sizeof(line), ";status=ready");
+		if (!rp_append_file("rp_runner", line)) return 1;
+		if (!rp_append_host_action_line("rp_runner", "host_action_workflow_export=", bundle)) return 1;
+		if (!rp_append_host_action_line("rp_runner", "host_action_workflow_export_format=", format)) return 1;
+	}
 	if (!rp_append_file("rp_runner", "custom_runs=3")) return 1;
 	if (!rp_append_file("rp_runner", "dynamic_input_runs=4")) return 1;
 	if (!rp_append_file("rp_runner", "dynamic_run=usable-run:RUN-904;source=api;status=queued;next=validate")) return 1;
@@ -216,9 +283,6 @@ int main(void)
 		rp_append_text(line, sizeof(line), profile);
 		rp_append_text(line, sizeof(line), ";status=ready");
 		if (!rp_append_file("rp_runner", line)) return 1;
-	}
-	if (rp_host_seed_has("kind=host_workflow")) {
-		if (!rp_append_file("rp_runner", "host_action_workflow=executed;status=ready")) return 1;
 	}
 	if (rp_host_seed_has("kind=revision_run")) {
 		char revision_run[48];

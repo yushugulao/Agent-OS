@@ -341,6 +341,26 @@ int main(void)
 		if (!rp_append_file("rp_package", "host_action_bundle_contents=report,manifest,notebook,compare")) return 1;
 		if (!rp_append_file("rp_package", "host_action_delivery_manifest=ready")) return 1;
 	}
+	if (rp_host_seed_has("kind=host_workflow") || rp_host_seed_has("kind=host_workflow_export")) {
+		char workflow_id[64];
+		char bundle[48];
+		char format[32];
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow", "workflow_id=", workflow_id, sizeof(workflow_id)) &&
+		    !rp_host_seed_copy_value_for_kind("kind=host_workflow_export", "workflow_id=", workflow_id, sizeof(workflow_id))) {
+			rp_copy_text(workflow_id, sizeof(workflow_id), "wf-host-plain");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_export", "bundle=", bundle, sizeof(bundle))) {
+			rp_copy_text(bundle, sizeof(bundle), "workflow-export.zip");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=host_workflow_export", "format=", format, sizeof(format))) {
+			rp_copy_text(format, sizeof(format), "json");
+		}
+		if (!rp_append_file("rp_package", "host_action_workflow_package=ready")) return 1;
+		if (!rp_append_host_action_line("rp_package", "host_action_workflow_id=", workflow_id)) return 1;
+		if (!rp_append_host_action_line("rp_package", "host_action_workflow_bundle=", bundle)) return 1;
+		if (!rp_append_host_action_line("rp_package", "host_action_workflow_format=", format)) return 1;
+		if (!rp_append_file("rp_package", "host_action_workflow_contents=stage_dag,stage_state,run_events,manifest")) return 1;
+	}
 	if (rp_host_seed_has("kind=workbench_handoff_package") ||
 	    rp_host_seed_has("kind=workbench_export") ||
 	    rp_host_seed_has("kind=workbench_file_manifest") ||

@@ -120,6 +120,8 @@ def main() -> int:
                 {"path": "/actions/research-search/export", "payload": {"query": "recovery evidence", "limit": "20"}},
                 {"path": "/actions/research-search/note", "payload": {"workbench_id": "W1", "query": "recovery evidence", "title": "Search note", "note": "Keep hits."}},
                 {"path": "/actions/research-search/action-item", "payload": {"workbench_id": "W1", "query": "recovery evidence", "title": "Review search hits", "instruction": "Promote key hit", "priority": "high"}},
+                {"path": "/actions/host-workflow/run", "payload": {"workflow_id": "WF1", "run_id": "R1", "engine": "plain-c-runner", "stages": "6", "dag": "ingest>clean>analyze>review>package", "max_workers": "2", "cache": "content"}},
+                {"path": "/actions/host-workflow/export", "payload": {"workflow_id": "WF1", "run_id": "R1", "format": "json", "bundle": "wf.zip"}},
                 {"path": "/actions/research/export-notebook", "payload": {"run_id": "R1", "format": "ipynb"}},
                 {"path": "/actions/research/export-bundle", "payload": {"run_id": "R1", "bundle": "ev"}},
                 {"path": "/actions/agentcompare/run", "payload": {"profile": "pb"}},
@@ -251,6 +253,18 @@ def main() -> int:
             assert any("host_action_workspace_manifest=m.json" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_literature_query=prov" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_protocol_title=P1" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_workflow=WF1" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_workflow_export=wf.zip" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_workflow_export_format=json" in line for line in rp_runner["lines"]), rp_runner
+            rp_stage_dag = read_json(base + "/api/state/rp_stage_dag")
+            assert any("host_workflow_id=WF1" in line for line in rp_stage_dag["lines"]), rp_stage_dag
+            assert any("host_workflow_engine=plain-c-runner" in line for line in rp_stage_dag["lines"]), rp_stage_dag
+            assert any("host_workflow_dag=ingest>clean>analyze>review>package" in line for line in rp_stage_dag["lines"]), rp_stage_dag
+            rp_stage_state = read_json(base + "/api/state/rp_stage_state")
+            assert any("host_workflow_run_id=R1" in line for line in rp_stage_state["lines"]), rp_stage_state
+            assert any("host_workflow_engine=plain-c-runner" in line for line in rp_stage_state["lines"]), rp_stage_state
+            rp_run_events = read_json(base + "/api/state/rp_run_events")
+            assert any("host_workflow_event=finished" in line for line in rp_run_events["lines"]), rp_run_events
             rp_lit = read_json(base + "/api/state/rp_lit")
             assert any("host_action_literature_query=prov" in line for line in rp_lit["lines"]), rp_lit
             assert any("host_action_literature_max_results=7" in line for line in rp_lit["lines"]), rp_lit
@@ -302,6 +316,8 @@ def main() -> int:
             assert any("host_manifest_workbench_timeline_format=html" in line for line in rp_manifest["lines"]), rp_manifest
             assert any("host_manifest_workbench_manifest=mf.json" in line for line in rp_manifest["lines"]), rp_manifest
             assert any("host_manifest_workbench_bundle=wb.zip" in line for line in rp_manifest["lines"]), rp_manifest
+            assert any("host_manifest_workflow=WF1" in line for line in rp_manifest["lines"]), rp_manifest
+            assert any("host_manifest_workflow_export=wf.zip" in line for line in rp_manifest["lines"]), rp_manifest
             rp_package = read_json(base + "/api/state/rp_package")
             assert any("host_action_export_bundle=ready" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_export_bundle_name=ev" in line for line in rp_package["lines"]), rp_package
@@ -332,6 +348,9 @@ def main() -> int:
             assert any("host_action_plan_queue=ready" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_project_space=ready" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_research_search=ready" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workflow_package=ready" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workflow_id=WF1" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workflow_bundle=wf.zip" in line for line in rp_package["lines"]), rp_package
             rp_nbexec = read_json(base + "/api/state/rp_nbexec")
             assert any("host_action_notebook_export=ready" in line for line in rp_nbexec["lines"]), rp_nbexec
             assert any("host_action_notebook_format=ipynb" in line for line in rp_nbexec["lines"]), rp_nbexec
@@ -369,12 +388,15 @@ def main() -> int:
             assert any("host_action_workbench_outputs=rp_runner,rp_revision,rp_package" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_platform_ops=1" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_platform_ops_outputs=rp_runner,rp_package,rp_api_action,rp_web_bundle" in line for line in rp_actionio["lines"]), rp_actionio
+            assert any("host_action_workflow=1" in line for line in rp_actionio["lines"]), rp_actionio
+            assert any("host_action_workflow_outputs=rp_stage_dag,rp_stage_state,rp_run_events,rp_artifact_manifest,rp_package" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_export=1" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_agentcompare=1" in line for line in rp_actionio["lines"]), rp_actionio
             rp_web_bundle = read_json(base + "/api/state/rp_web_bundle")
             assert any("host_action_research_inputs=rp_input,rp_runner,rp_api_run" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_evidence_inputs=rp_lit,rp_knowledge,rp_api_evidence" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_workbench_outputs=rp_runner,rp_revision,rp_package" in line for line in rp_web_bundle["lines"]), rp_web_bundle
+            assert any("host_action_workflow_outputs=rp_stage_dag,rp_stage_state,rp_run_events,rp_artifact_manifest,rp_package" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_platform_ops=rp_runner,rp_package,rp_api_action" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_search_query=recovery evidence" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             rp_agentcmp = read_json(base + "/api/state/rp_agentcmp")
