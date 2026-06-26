@@ -899,6 +899,17 @@ def main() -> int:
             assert "fair_package" in services_html
             assert "query_answer" in services_html
             assert "worker_heartbeat" in services_html
+            delivery_html = read_text(base + "/delivery.html")
+            assert "Delivery Package" in delivery_html
+            assert "Delivery Files" in delivery_html
+            assert "Delivery Package Records" in delivery_html
+            assert "Delivery Source Map" in delivery_html
+            assert "Review Pack Delivery" in delivery_html
+            assert "Workbench Delivery" in delivery_html
+            assert "delivery_file=report_md" in delivery_html
+            assert "rp_report_text" in delivery_html
+            assert "delivery-manifest.json" in delivery_html
+            assert "Delivery Action Trace" in delivery_html
             review_html = read_text(base + "/review.html")
             assert "Review Dashboard" in review_html
             assert "Review Sections" in review_html

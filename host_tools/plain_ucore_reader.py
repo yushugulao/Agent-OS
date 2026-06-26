@@ -22,6 +22,7 @@ PAGE_SPECS = [
     ("review.html", "Review", "rp_review_dashboard", ["rp_review_pack", "rp_review2", "rp_revision", "rp_package", "rp_report_text"]),
     ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency", "rp_backend", "rp_backend_exec", "rp_study"]),
     ("artifacts.html", "Artifacts", "rp_api_artifacts", ["rp_artifact", "rp_artifact_manifest", "rp_package"]),
+    ("delivery.html", "Delivery", "rp_package", ["rp_nbexec", "rp_uresrun", "rp_artifact_manifest", "rp_review_pack"]),
     ("data.html", "Data", "rp_api_data", ["rp_input", "rp_dataset_snapshot", "rp_data_quality"]),
     ("services.html", "Services", "rp_api_bio", ["rp_api_labres", "rp_api_pub", "rp_api_know", "rp_api_runtime", "rp_bioop", "rp_labresop", "rp_pubop", "rp_knowop", "rp_runop"]),
     ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets"]),
@@ -479,6 +480,49 @@ def service_execution_records(state: dict[str, dict[str, object]]) -> list[dict[
                     item["kind"] = "operation"
                 item["source_file"] = source_file
                 rows.append(item)
+    return rows
+
+
+def delivery_action_records(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    delivery_keys = {
+        "delivery_files",
+        "delivery_file",
+        "delivery_check",
+        "delivery_manifest",
+        "downloadable_units",
+        "evidence_bundle_entries",
+        "host_manifest_bundle",
+        "host_manifest_notebook_format",
+        "host_action_bundle_contents",
+        "host_action_export_bundle_name",
+        "host_action_notebook_format",
+        "host_action_workbench_bundle",
+        "host_action_workbench_manifest",
+        "host_action_workbench_verified_files",
+        "host_action_workbench_missing_files",
+        "host_action_workbench_package",
+        "host_action_workbench_file_verify",
+        "host_action_workbench_completion",
+        "host_action_workbench_outputs",
+        "review_pack_bridge",
+        "review_page",
+        "package_manifest",
+        "notebook_export",
+        "notebook_download",
+        "host_action_protocol_title",
+    }
+    for source_file in ("rp_package", "rp_nbexec", "rp_uresrun", "rp_artifact_manifest", "rp_review_pack", "rp_web_bundle"):
+        for line in state_lines(state, source_file):
+            record = parse_kv_record(line)
+            if not record:
+                continue
+            if not any(key in delivery_keys or key.startswith("host_action_export_") for key in record):
+                continue
+            item = dict(record)
+            item["record"] = record_label(line)
+            item["source_file"] = source_file
+            rows.append(item)
     return rows
 
 
@@ -979,6 +1023,14 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Evidence Entries", metric_value(state, [("rp_package", "evidence_bundle_entries")]), "rp_package"),
         ("Manifest Records", metric_value(state, [("rp_artifact_manifest", "manifest_records")]), "rp_artifact_manifest"),
     ]
+    delivery_items = [
+        ("Delivery Files", metric_value(state, [("rp_package", "delivery_files")]), "rp_package"),
+        ("Delivery Checks", metric_value(state, [("rp_web_bundle", "delivery_checks")]), "rp_web_bundle"),
+        ("Evidence Entries", metric_value(state, [("rp_package", "evidence_bundle_entries"), ("rp_web_bundle", "evidence_bundle_entries")]), "rp_package"),
+        ("Bundle", metric_value(state, [("rp_package", "host_action_export_bundle_name"), ("rp_artifact_manifest", "host_manifest_bundle")]), "rp_package"),
+        ("Notebook", metric_value(state, [("rp_nbexec", "host_action_notebook_format"), ("rp_web_bundle", "notebook_export")]), "rp_nbexec"),
+        ("Download Units", metric_value(state, [("rp_web_bundle", "downloadable_units")]), "rp_web_bundle"),
+    ]
     compare_items = [
         ("Payload Applied", metric_value(state, [("rp_api_compare", "host_action_payload_applied")]), "rp_api_compare"),
         ("Run", metric_value(state, [("rp_api_compare", "host_action_run_id")]), "rp_api_compare"),
@@ -1022,6 +1074,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Research Output", report_items)
     if file_name in ("evidence.html", "artifacts.html"):
         return render_summary_panel("Evidence Package", evidence_items)
+    if file_name == "delivery.html":
+        return render_summary_panel("Delivery Package", delivery_items)
     if file_name == "review.html":
         return render_summary_panel("Review Dashboard", review_items)
     if file_name == "compare.html":
@@ -1287,6 +1341,53 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                     ("Status", "status"),
                 ],
                 state_records(state, "rp_artifact_manifest", "artifact_review_path"),
+            ),
+        ]
+    if file_name == "delivery.html":
+        return [
+            render_record_panel(
+                "Delivery Files",
+                [("Delivery File", "delivery_file"), ("Path", "path"), ("Required", "required"), ("Exists", "exists"), ("Status", "status")],
+                state_records(state, "rp_package", "delivery_file"),
+            ),
+            render_record_panel(
+                "Delivery Package Records",
+                [
+                    ("Record", "record"),
+                    ("Source File", "source_file"),
+                    ("Delivery Files", "delivery_files"),
+                    ("Evidence Entries", "evidence_bundle_entries"),
+                    ("Bundle", "host_action_export_bundle_name"),
+                    ("Notebook", "host_action_notebook_format"),
+                    ("Manifest", "host_action_workbench_manifest"),
+                    ("Verified", "host_action_workbench_verified_files"),
+                    ("Missing", "host_action_workbench_missing_files"),
+                    ("Status", "status"),
+                ],
+                delivery_action_records(state),
+            ),
+            render_record_panel(
+                "Delivery Source Map",
+                [
+                    ("Delivery Record", "delivery_record"),
+                    ("Field", "field"),
+                    ("Reference", "reference"),
+                    ("State File", "state_file"),
+                    ("Source Line", "source_line"),
+                    ("Source File", "source_file"),
+                    ("Status", "status"),
+                ],
+                delivery_source_map(state),
+            ),
+            render_record_panel(
+                "Review Pack Delivery",
+                [("Bridge", "bridge"), ("Delivery", "delivery"), ("Operations", "operations"), ("Project", "project"), ("Status", "status")],
+                state_records(state, "rp_review_pack", "bridge"),
+            ),
+            render_record_panel(
+                "Workbench Delivery",
+                [("Source", "workbench_handoff"), ("Workbench", "workbench"), ("Task", "task"), ("Manifest", "manifest"), ("Verified", "verified"), ("Missing", "missing"), ("Bundle", "bundle"), ("Status", "status")],
+                state_records(state, "rp_review_pack", "workbench_handoff"),
             ),
         ]
     if file_name == "services.html":
@@ -2467,6 +2568,12 @@ def render_overview(
             ("Path Steps", metric_value(state, [("rp_consistency", "artifact_path_rebuild_steps")]), "rp_consistency"),
             ("Package", metric_value(state, [("rp_package", "status")]), "rp_package"),
         ],
+        "delivery.html": [
+            ("Files", metric_value(state, [("rp_package", "delivery_files")]), "rp_package"),
+            ("Checks", metric_value(state, [("rp_web_bundle", "delivery_checks")]), "rp_web_bundle"),
+            ("Evidence", metric_value(state, [("rp_package", "evidence_bundle_entries")]), "rp_package"),
+            ("Downloads", metric_value(state, [("rp_web_bundle", "downloadable_units")]), "rp_web_bundle"),
+        ],
         "data.html": [
             ("Submissions", metric_value(state, [("rp_input", "dynamic_submissions")]), "rp_input"),
             ("Snapshots", metric_value(state, [("rp_dataset_snapshot", "snapshots"), ("rp_api_data", "dataset_snapshots")]), "rp_dataset_snapshot"),
@@ -2634,6 +2741,12 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
             sections.append(action_output_detail_panel("Artifact Action Output Details", state, actions, {"artifact", "workflow"}))
             sections.append(action_impact_panel("Artifact Action Impact", state, actions, {"artifact", "workflow"}))
             sections.append(action_delta_panel("Artifact Action Delta", state, actions, {"artifact", "workflow"}))
+        if file_name == "delivery.html":
+            sections.append(action_trace_panel("Delivery Action Trace", actions, {"delivery", "workbench", "operations", "project", "artifact"}))
+            sections.append(action_output_panel("Delivery Action Output Links", state, actions, {"delivery", "workbench", "operations", "project", "artifact"}))
+            sections.append(action_output_detail_panel("Delivery Action Output Details", state, actions, {"delivery", "workbench", "operations", "project", "artifact"}))
+            sections.append(action_impact_panel("Delivery Action Impact", state, actions, {"delivery", "workbench", "operations", "project", "artifact"}))
+            sections.append(action_delta_panel("Delivery Action Delta", state, actions, {"delivery", "workbench", "operations", "project", "artifact"}))
         if file_name == "llm.html":
             sections.append(action_trace_panel("LLM Action Trace", actions, {"llm"}))
             sections.append(action_output_panel("LLM Action Output Links", state, actions, {"llm"}))

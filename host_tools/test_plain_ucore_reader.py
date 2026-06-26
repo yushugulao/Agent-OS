@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=15
+reader_views=16
 reader_actions=48
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_web_bundle
@@ -199,8 +199,15 @@ status=ready
         "delivery_file=report_md;path=rp_report_text;required=1;exists=1;status=ready\n"
         "review_pack_bridge=delivery_manifest,operations_report,project_space,workbench_handoff\n"
         "review_pack_action=sync_operations_next;source=rp_runner;status=ready\n"
+        "host_action_export_bundle_name=reviewer-evidence\n"
+        "host_action_bundle_contents=12\n"
+        "host_action_workbench_manifest=delivery-manifest.json\n"
+        "host_action_workbench_verified_files=9\n"
+        "host_action_workbench_missing_files=0\n"
         "evidence_bundle_entries=12\n"
     ),
+    "rp_nbexec": "host_action_notebook_format=ipynb\nhost_action_notebook_workbench_docs=ready\nstatus=ready\n",
+    "rp_uresrun": "host_action_workbench_outputs=rp_runner,rp_revision,rp_package\nhost_action_workbench_manifest=delivery-manifest.json\nhost_action_workbench_bundle=workbench-bundle.zip\nstatus=ready\n",
     "rp_agentcmp": "plain_kernel=passed\ntest_cases=838\nhandoffs=6\nreview_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=3;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\nreview_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\nllm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready\nworkflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready\nportability_backend_checks=12;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=2;planned_cases=2;status=ready\nbackend_runner_checks=12;runner_cases=4;runner_passed=2;runner_planned=2;plain_inputs=4;study_metrics=2;backend_runner_detail_checks=24;runner_detail_rows=4;backend_runner_report_checks=20;runner_report_rows=4;backend_report_links=2;status=ready\n",
     "rp_backend_exec": (
         "runner_case=plain-ucore;input=rp_wfio;artifact=rp_artifact_manifest;result=passed;reason=native_programs_ok;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=3\n"
@@ -295,10 +302,11 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 11, summary
+        assert summary["pages"] == 12, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "review.html").exists()
+        assert (out_dir / "delivery.html").exists()
         assert (out_dir / "llm.html").exists()
         assert (out_dir / "api" / "rp_api_home.json").exists()
         index_html = (out_dir / "index.html").read_text(encoding="utf-8")
@@ -449,6 +457,18 @@ def main() -> int:
         assert "query_answer" in services_html
         assert "worker_heartbeat" in services_html
         assert "Bio Service Files" in services_html
+        delivery_html = (out_dir / "delivery.html").read_text(encoding="utf-8")
+        assert "Delivery Package" in delivery_html
+        assert "Delivery Files" in delivery_html
+        assert "Delivery Package Records" in delivery_html
+        assert "Delivery Source Map" in delivery_html
+        assert "Review Pack Delivery" in delivery_html
+        assert "Workbench Delivery" in delivery_html
+        assert "delivery_files=8" in delivery_html
+        assert "delivery_file=report_md" in delivery_html
+        assert "host_report_run_id=RUN-042" in delivery_html
+        assert "reviewer-evidence" in delivery_html
+        assert "delivery-manifest.json" in delivery_html
         assert "plan&gt;data&gt;review&gt;repair&gt;audit" in evidence_html
         assert "Plain Kernel Signals" in compare_html
         assert "Consistency Signals" in compare_html
@@ -590,7 +610,7 @@ def main() -> int:
             assert "Action Impact" in actions_html
             assert "Action Delta" in actions_html
             assert "rp_package" in actions_html
-            assert "delivery_files=8" in actions_html
+            assert "host_action_export_bundle_name=reviewer-evidence" in actions_html
             assert "report_section" in actions_html
             assert "/actions/research/export-bundle" in actions_html
             review_html = (out_dir / "review.html").read_text(encoding="utf-8")
