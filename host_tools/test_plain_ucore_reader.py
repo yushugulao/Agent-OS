@@ -97,6 +97,61 @@ status=ready
     "rp_ui_compare": "page=compare-metrics\npain_file_scans=128\npain_state_convention=1\npain_user_permissions=1\npain_rebuild_steps=6\nstatus=ready\n",
     "rp_runner": "workbench_tasks=9\nbackend_evidence_report=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;status=ready\nstatus=ready\n",
     "rp_report_text": "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index;status=ready\nstatus=ready\n",
+    "rp_stage_state": (
+        "run_id=RUN-042\n"
+        "stage=ingest;order=1;input=rp_input_fastq;attempts=1;state=done\n"
+        "stage=align;order=2;input=rp_artifact:rp_normalized_fastq;attempts=2;state=recovered\n"
+        "stage=profile;order=3;input=rp_artifact:rp_align_table;attempts=1;state=cached\n"
+        "command=ingest:read_fastq;output=rp_artifact:rp_normalized_fastq\n"
+        "command=align:agent-align;output=rp_artifact:rp_align_table;first_status=failed;second_status=recovered\n"
+        "command=profile:derive_metrics;output=rp_artifact:rp_metrics_json;cache=hit\n"
+        "host_workflow_id=WF1\n"
+        "host_workflow_run_id=R1\n"
+        "host_workflow_engine=plain-c-runner\n"
+        "host_workflow_retry_stage=clean\n"
+        "host_workflow_cache_hit_stage=analyze\n"
+        "host_workflow_worker_slots=2\n"
+        "host_workflow_queue_depth=5\n"
+        "status=ready\n"
+    ),
+    "rp_cache_index": (
+        "cache_key=ingest:RUN-042;state=miss;source=rp_input_fastq\n"
+        "cache_key=align:RUN-042;state=refreshed;source=rp_artifact\n"
+        "cache_key=profile:RUN-042;state=hit;source=rp_compute\n"
+        "cache_policy=content_keyed\n"
+        "host_workflow_cache_policy=content\n"
+        "host_workflow_cache_hit_stage=analyze\n"
+        "status=ready\n"
+    ),
+    "rp_retry_plan": (
+        "retry_stage=align\n"
+        "attempts=2\n"
+        "failure_reason=tool_output_missing\n"
+        "rerun_inputs=rp_input_fastq\n"
+        "rerun_outputs=rp_artifact\n"
+        "skip_stages=ingest,profile,review,package\n"
+        "dedupe_key=RUN-042:align\n"
+        "minimal_rerun=1\n"
+        "host_workflow_retry_stage=clean\n"
+        "host_workflow_retry_reason=checksum_mismatch\n"
+        "status=ready\n"
+    ),
+    "rp_run_events": (
+        "event=1;stage=ingest;action=read_input;status=done\n"
+        "event=4;stage=align;action=rerun;status=recovered\n"
+        "event=5;stage=profile;action=cache_lookup;status=hit\n"
+    ),
+    "rp_worker": (
+        "workers=4\n"
+        "ready=4\n"
+        "busy=0\n"
+        "stalled=0\n"
+        "heartbeats=4\n"
+        "queue_actions=8\n"
+        "host_workflow_worker_slots=2\n"
+        "host_workflow_queue_depth=5\n"
+        "status=ready\n"
+    ),
     "rp_execobs": (
         "execution_view=stage_summary;stage=align;order=2;attempts=2;state=recovered;input=rp_artifact:rp_normalized_fastq;output=rp_artifact:rp_align_table;retry=rp_retry_plan;failure=tool_output_missing;worker=worker-2;event=4;status=recovered\n"
         "execution_view=control_summary;dag=rp_stage_dag;cache=rp_cache_index;retry=rp_retry_plan;events=rp_run_events;workers=rp_worker;observer=rp_execobs;status=ready\n"
@@ -230,7 +285,14 @@ def main() -> int:
         run_html = (out_dir / "run.html").read_text(encoding="utf-8")
         assert "Research Output" in run_html
         assert "Workflow Execution View" in run_html
+        assert "Workflow Control View" in run_html
         assert "stage_summary" in run_html
+        assert "stage_assignment" in run_html
+        assert "worker_pool" in run_html
+        assert "cache_decision" in run_html
+        assert "retry_decision" in run_html
+        assert "rerun_selected_stage" in run_html
+        assert "reuse_cached_artifact" in run_html
         assert "workflow_run" in run_html
         assert "plain-c-runner" in run_html
         assert "worker-2" in run_html

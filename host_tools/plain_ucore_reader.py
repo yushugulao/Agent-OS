@@ -363,6 +363,150 @@ def event_for_stage(state: dict[str, dict[str, object]], stage: str, preferred_s
     return fallback
 
 
+def stage_from_cache_key(cache_key: str) -> str:
+    if ":" in cache_key:
+        return cache_key.split(":", 1)[0]
+    return cache_key
+
+
+def cache_action(cache_state: str) -> str:
+    if cache_state == "hit":
+        return "reuse_cached_artifact"
+    if cache_state == "refreshed":
+        return "refresh_artifact_record"
+    if cache_state == "miss":
+        return "execute_stage"
+    return cache_state
+
+
+def stage_control_action(stage_state: str, has_retry: bool, cache_state: str) -> str:
+    if has_retry:
+        return "rerun_selected_stage"
+    if cache_state == "hit" or stage_state == "cached":
+        return "reuse_cached_artifact"
+    if stage_state in {"accepted", "ready"}:
+        return "approve_stage_output"
+    if stage_state == "recovered":
+        return "verify_recovered_output"
+    if stage_state == "done":
+        return "record_stage_output"
+    return stage_state
+
+
+def workflow_control_view(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    worker = state_values(state, "rp_worker")
+    if worker:
+        rows.append(
+            {
+                "control_view": "worker_pool",
+                "source": "rp_worker",
+                "worker_slots": worker.get("host_workflow_worker_slots", worker.get("workers", "")),
+                "ready_workers": worker.get("ready", ""),
+                "busy_workers": worker.get("busy", ""),
+                "stalled_workers": worker.get("stalled", ""),
+                "queue_depth": worker.get("host_workflow_queue_depth", worker.get("queue_actions", "")),
+                "heartbeats": worker.get("heartbeats", ""),
+                "action": "assign_ready_workers",
+                "status": worker.get("status", ""),
+            }
+        )
+
+    retry = state_values(state, "rp_retry_plan")
+    retry_stage = retry.get("retry_stage", "")
+    host_retry_stage = retry.get("host_workflow_retry_stage", "")
+    cache_values = state_values(state, "rp_cache_index")
+    cache_by_stage: dict[str, dict[str, str]] = {}
+    for cache in state_records(state, "rp_cache_index", "cache_key"):
+        stage = stage_from_cache_key(cache.get("cache_key", ""))
+        if stage:
+            cache_by_stage[stage] = cache
+        rows.append(
+            {
+                "control_view": "cache_decision",
+                "source": "rp_cache_index",
+                "stage": stage,
+                "cache_key": cache.get("cache_key", ""),
+                "cache_state": cache.get("state", cache.get("cache_result", "")),
+                "cache_policy": cache_values.get("host_workflow_cache_policy", cache_values.get("cache_policy", "")),
+                "input": cache.get("source", ""),
+                "action": cache_action(cache.get("state", cache.get("cache_result", ""))),
+                "status": cache.get("state", cache.get("cache_result", "")),
+            }
+        )
+
+    if retry_stage:
+        rows.append(
+            {
+                "control_view": "retry_decision",
+                "source": "rp_retry_plan",
+                "stage": retry_stage,
+                "attempts": retry.get("attempts", retry.get("host_workflow_next_attempt", "")),
+                "failure": retry.get("host_workflow_retry_reason", retry.get("failure_reason", "")),
+                "input": retry.get("rerun_inputs", ""),
+                "output": retry.get("rerun_outputs", ""),
+                "dedupe_key": retry.get("dedupe_key", ""),
+                "skip": retry.get("skip_stages", ""),
+                "action": retry.get("host_workflow_retry_decision", "minimal_rerun" if retry.get("minimal_rerun") else "retry"),
+                "status": retry.get("status", ""),
+            }
+        )
+
+    if host_retry_stage:
+        rows.append(
+            {
+                "control_view": "host_retry_decision",
+                "source": "rp_retry_plan",
+                "stage": host_retry_stage,
+                "failure": retry.get("host_workflow_retry_reason", ""),
+                "action": retry.get("host_workflow_retry_decision", "rerun_stage"),
+                "status": retry.get("status", ""),
+            }
+        )
+
+    worker_slots = worker.get("host_workflow_worker_slots", worker.get("workers", ""))
+    for stage in state_records(state, "rp_stage_state", "stage"):
+        stage_name = stage.get("stage", "")
+        cache = cache_by_stage.get(stage_name, {})
+        stage_state = stage.get("state", "")
+        has_retry = stage_name == retry_stage
+        rows.append(
+            {
+                "control_view": "stage_assignment",
+                "source": "rp_stage_state",
+                "stage": stage_name,
+                "worker_slots": worker_slots,
+                "attempts": stage.get("attempts", ""),
+                "state": stage_state,
+                "cache_state": cache.get("state", ""),
+                "event": event_for_stage(state, stage_name, stage_state),
+                "action": stage_control_action(stage_state, has_retry, cache.get("state", "")),
+                "status": stage_state,
+            }
+        )
+
+    stage_state = state_values(state, "rp_stage_state")
+    execobs = state_values(state, "rp_execobs")
+    if stage_state.get("host_workflow_run_id") or execobs.get("host_workflow_observer_events"):
+        rows.append(
+            {
+                "control_view": "host_workflow_control",
+                "source": "rp_stage_state+rp_execobs",
+                "workflow": stage_state.get("host_workflow_id", ""),
+                "run_id": stage_state.get("host_workflow_run_id", ""),
+                "engine": stage_state.get("host_workflow_engine", ""),
+                "stage": stage_state.get("host_workflow_retry_stage", ""),
+                "cache_state": stage_state.get("host_workflow_cache_hit_stage", ""),
+                "worker_slots": stage_state.get("host_workflow_worker_slots", worker.get("host_workflow_worker_slots", "")),
+                "queue_depth": stage_state.get("host_workflow_queue_depth", worker.get("host_workflow_queue_depth", "")),
+                "observer_events": execobs.get("host_workflow_observer_events", ""),
+                "action": "observe_host_workflow",
+                "status": "ready",
+            }
+        )
+    return rows
+
+
 def workflow_execution_view(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
     rows: list[dict[str, str]] = (
         state_records(state, "rp_execobs", "execution_view")
@@ -613,6 +757,37 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                     ("Status", "status"),
                 ],
                 workflow_execution_view(state),
+            ),
+            render_record_panel(
+                "Workflow Control View",
+                [
+                    ("View", "control_view"),
+                    ("Source", "source"),
+                    ("Workflow", "workflow"),
+                    ("Run", "run_id"),
+                    ("Engine", "engine"),
+                    ("Stage", "stage"),
+                    ("Attempts", "attempts"),
+                    ("State", "state"),
+                    ("Cache Key", "cache_key"),
+                    ("Cache State", "cache_state"),
+                    ("Cache Policy", "cache_policy"),
+                    ("Input", "input"),
+                    ("Output", "output"),
+                    ("Dedupe Key", "dedupe_key"),
+                    ("Skip", "skip"),
+                    ("Worker Slots", "worker_slots"),
+                    ("Ready Workers", "ready_workers"),
+                    ("Busy Workers", "busy_workers"),
+                    ("Stalled Workers", "stalled_workers"),
+                    ("Queue Depth", "queue_depth"),
+                    ("Heartbeats", "heartbeats"),
+                    ("Event", "event"),
+                    ("Observer Events", "observer_events"),
+                    ("Action", "action"),
+                    ("Status", "status"),
+                ],
+                workflow_control_view(state),
             ),
             render_record_panel(
                 "Backend Evidence In Report",
