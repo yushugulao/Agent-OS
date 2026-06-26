@@ -1016,16 +1016,19 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "custom_runs=3");
 	ok = ok && rp_file_contains("rp_runner", "custom_agent_decisions=15");
 	ok = ok && rp_file_contains("rp_runner", "citation_plan_entries=3");
-	ok = ok && rp_file_contains("rp_web_routes", "routes=65");
-	ok = ok && rp_file_contains("rp_web_routes", "get_routes=16");
+	ok = ok && rp_file_contains("rp_web_routes", "routes=74");
+	ok = ok && rp_file_contains("rp_web_routes", "get_routes=17");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research-studio");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research/workbench/{id}");
-	ok = ok && rp_file_contains("rp_web_routes", "post_routes=49");
+	ok = ok && rp_file_contains("rp_web_routes", "route=/research/project/{id}/review");
+	ok = ok && rp_file_contains("rp_web_routes", "post_routes=57");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/research/studio-launch");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/host-workflow/stage-attempt");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/host-workflow/report-export");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/research/artifact-input");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/research/artifact-package");
+	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/research/project-release-gate");
+	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/research/project-provenance-graph");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/workflow-portability/run");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/workflow-portability/import");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/workflow-portability/package");
@@ -1069,12 +1072,16 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_pub", "result_review=rp_resrev");
 	ok = ok && rp_file_contains("rp_api_know", "semantic_index=rp_semindex");
 	ok = ok && rp_file_contains("rp_api_runtime", "runtime_env=rp_runenv");
-	ok = ok && rp_file_contains("rp_api_action", "actions=49");
+	ok = ok && rp_file_contains("rp_api_action", "actions=57");
 	ok = ok && rp_file_contains("rp_api_action", "research_studio_launch=/actions/research/studio-launch");
 	ok = ok && rp_file_contains("rp_api_action", "host_workflow_stage=/actions/host-workflow/stage-attempt");
 	ok = ok && rp_file_contains("rp_api_action", "host_workflow_report=/actions/host-workflow/report-export");
 	ok = ok && rp_file_contains("rp_api_action", "artifact_input=/actions/research/artifact-input");
 	ok = ok && rp_file_contains("rp_api_action", "artifact_package=/actions/research/artifact-package");
+	ok = ok && rp_file_contains("rp_api_action", "project_release_gate=/actions/research/project-release-gate");
+	ok = ok && rp_file_contains("rp_api_action", "project_snapshot=/actions/research/project-snapshot");
+	ok = ok && rp_file_contains("rp_api_action", "project_provenance_graph=/actions/research/project-provenance-graph");
+	ok = ok && rp_file_contains("rp_api_action", "project_delivery=/actions/research/project-delivery");
 	ok = ok && rp_file_contains("rp_api_action", "workflow_portability_run=/actions/workflow-portability/run");
 	ok = ok && rp_file_contains("rp_api_action", "workflow_portability_import=/actions/workflow-portability/import");
 	ok = ok && rp_file_contains("rp_api_action", "workflow_portability_package=/actions/workflow-portability/package");
@@ -1143,12 +1150,18 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "review_threads=2");
 	ok = ok && rp_file_contains("rp_web_bundle", "action_validation=passed");
 	ok = ok && rp_file_contains("rp_web_bundle", "side_effect_records=16");
-	ok = ok && rp_file_contains("rp_web_bundle", "reader_views=20");
-	ok = ok && rp_file_contains("rp_web_bundle", "reader_actions=49");
-	ok = ok && rp_file_contains("rp_web_bundle", "post_routes=49");
+	ok = ok && rp_file_contains("rp_web_bundle", "reader_views=21");
+	ok = ok && rp_file_contains("rp_web_bundle", "reader_actions=57");
+	ok = ok && rp_file_contains("rp_web_bundle", "post_routes=57");
 	ok = ok && rp_file_contains("rp_web_bundle", "reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle");
 	ok = ok && rp_file_contains("rp_studio", "studio=usable-research-studio");
 	ok = ok && rp_file_contains("rp_studio", "studio_session=usable-research-studio-session:W1:1");
+	ok = ok && rp_file_contains("rp_web_bundle", "project_review=ready");
+	ok = ok && rp_file_contains("rp_web_bundle", "release_gate=project-release-gate");
+	ok = ok && rp_file_contains("rp_web_bundle", "project_snapshot=project-snapshot");
+	ok = ok && rp_file_contains("rp_web_bundle", "reproducibility_audit=project-reproducibility-audit");
+	ok = ok && rp_file_contains("rp_web_bundle", "provenance_graph=project-provenance-graph");
+	ok = ok && rp_file_contains("rp_web_bundle", "project_delivery=project-delivery");
 	if (rp_host_seed_count() > 0 && rp_host_seed_has_workbench_action()) {
 		ok = ok && rp_file_contains("rp_actionio", "host_action_workbench_outputs=rp_runner,rp_revision,rp_package");
 		ok = ok && rp_file_contains("rp_web_bundle", "host_action_workbench_outputs=rp_runner,rp_revision,rp_package");
@@ -1162,6 +1175,12 @@ int main(void)
 		ok = ok && rp_file_contains("rp_api_action", "operations_actions=3");
 		ok = ok && rp_file_contains("rp_api_action", "quality_actions=3");
 		ok = ok && rp_file_contains("rp_api_action", "project_space_actions=5");
+		ok = ok && rp_file_contains("rp_api_action", "project_review_actions=8");
+		if (rp_host_seed_has("kind=project_release_gate")) {
+			ok = ok && rp_file_contains("rp_actionio", "host_action_project_review_outputs=rp_web_bundle");
+			ok = ok && rp_file_contains("rp_web_bundle", "host_action_project_release_gate=");
+			ok = ok && rp_file_contains("rp_web_bundle", "host_action_project_review=rp_web_bundle");
+		}
 	}
 	if (rp_host_seed_count() > 0 && rp_host_seed_has_artifact_action()) {
 		ok = ok && rp_file_contains("rp_artifact", "host_artifact_actions=applied");

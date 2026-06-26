@@ -165,6 +165,22 @@ def action_kind(path: str) -> str:
         return "project_space_answer"
     if path.endswith("/research/project-space-repair-execute"):
         return "project_space_repair_execute"
+    if path.endswith("/research/project-handoff-audit"):
+        return "project_handoff_audit"
+    if path.endswith("/research/project-release-gate"):
+        return "project_release_gate"
+    if path.endswith("/research/project-snapshot"):
+        return "project_snapshot"
+    if path.endswith("/research/project-snapshot-comparison"):
+        return "project_snapshot_comparison"
+    if path.endswith("/research/project-reproducibility-audit"):
+        return "project_reproducibility_audit"
+    if path.endswith("/research/project-provenance-graph"):
+        return "project_provenance_graph"
+    if path.endswith("/research/project-delivery"):
+        return "project_delivery"
+    if path.endswith("/research/package-intake"):
+        return "package_intake"
     if path.endswith("/research-search/save"):
         return "research_search_save"
     if path.endswith("/research-search/export"):
@@ -463,6 +479,14 @@ def compact_seed_text(text: str) -> str:
         "project_space_action_item": {"workbench_id", "title", "status"},
         "project_space_answer": {"workbench_id", "question", "limit"},
         "project_space_repair_execute": {"workbench_id", "repair_id"},
+        "project_handoff_audit": {"project_id", "scope", "decision"},
+        "project_release_gate": {"project_id", "decision", "checks", "required_actions", "suggested_actions"},
+        "project_snapshot": {"project_id", "snapshot_id", "files", "hash_records", "changes"},
+        "project_snapshot_comparison": {"project_id", "left", "right", "changed_files", "decision"},
+        "project_reproducibility_audit": {"project_id", "inputs", "outputs", "notebooks", "claim_audits", "decision"},
+        "project_provenance_graph": {"project_id", "nodes", "edges", "dot"},
+        "project_delivery": {"project_id", "bundle", "decision", "release_gate", "handoff"},
+        "package_intake": {"package_id", "label", "files", "sha256", "decision"},
         "research_search_save": {"query", "name"},
         "research_search_export": {"query", "limit"},
         "research_search_note": {"workbench_id", "query", "title"},

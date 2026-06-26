@@ -21,6 +21,7 @@ PAGE_SPECS = [
     ("workbench.html", "Workbench", "rp_runner", ["rp_report_text", "rp_revision", "rp_package", "rp_review_pack", "rp_nbexec", "rp_uresrun"]),
     ("studio.html", "Studio", "rp_studio", ["rp_runner", "rp_package", "rp_review_pack", "rp_actionio", "rp_web_bundle"]),
     ("project.html", "Project", "rp_package", ["rp_runner", "rp_review_pack", "rp_actionio", "rp_web_bundle"]),
+    ("project-review.html", "Project Review", "rp_web_bundle", ["rp_package", "rp_review_pack", "rp_runner", "rp_actionio"]),
     ("agents.html", "Agents", "rp_api_agents", ["rp_ui_agent", "rp_agents", "rp_decisions"]),
     ("evidence.html", "Evidence", "rp_api_evidence", ["rp_ui_evidence", "rp_evidence", "rp_package"]),
     ("review.html", "Review", "rp_review_dashboard", ["rp_review_pack", "rp_review2", "rp_revision", "rp_package", "rp_report_text"]),
@@ -1099,6 +1100,24 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Search", project_record.get("search") or metric_value(state, [("rp_package", "host_action_research_search"), ("rp_runner", "host_action_research_search")]), "rp_package"),
         ("Quality", metric_value(state, [("rp_package", "host_action_quality_gate"), ("rp_runner", "host_action_quality_gate")]), "rp_package"),
     ]
+    release_rows = state_records(state, "rp_web_bundle", "release_gate")
+    release_record = release_rows[-1] if release_rows else {}
+    snapshot_rows = state_records(state, "rp_web_bundle", "project_snapshot")
+    snapshot_record = snapshot_rows[-1] if snapshot_rows else {}
+    reproducibility_rows = state_records(state, "rp_web_bundle", "reproducibility_audit")
+    reproducibility_record = reproducibility_rows[-1] if reproducibility_rows else {}
+    delivery_rows = state_records(state, "rp_web_bundle", "project_delivery")
+    delivery_record = delivery_rows[-1] if delivery_rows else {}
+    project_review_items = [
+        ("Project", metric_value(state, [("rp_web_bundle", "project"), ("rp_package", "host_action_project_id"), ("rp_runner", "host_action_project_id")]), "rp_web_bundle"),
+        ("Release Gate", release_record.get("decision") or metric_value(state, [("rp_web_bundle", "host_action_project_release_gate")]), "rp_web_bundle"),
+        ("Snapshot", snapshot_record.get("status") or metric_value(state, [("rp_web_bundle", "host_action_project_snapshot")]), "rp_web_bundle"),
+        ("Reproducibility", reproducibility_record.get("decision") or metric_value(state, [("rp_web_bundle", "host_action_project_reproducibility")]), "rp_web_bundle"),
+        ("Provenance", metric_value(state, [("rp_web_bundle", "host_action_project_provenance_graph"), ("rp_web_bundle", "provenance_graph")]), "rp_web_bundle"),
+        ("Delivery", delivery_record.get("decision") or metric_value(state, [("rp_web_bundle", "host_action_project_delivery")]), "rp_web_bundle"),
+        ("Package Intake", metric_value(state, [("rp_web_bundle", "host_action_project_package_intake"), ("rp_web_bundle", "package_intake")]), "rp_web_bundle"),
+        ("Package Index", metric_value(state, [("rp_web_bundle", "package_index")]), "rp_web_bundle"),
+    ]
     compare_items = [
         ("Payload Applied", metric_value(state, [("rp_api_compare", "host_action_payload_applied")]), "rp_api_compare"),
         ("Run", metric_value(state, [("rp_api_compare", "host_action_run_id")]), "rp_api_compare"),
@@ -1154,6 +1173,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Data Pipeline", data_items)
     if file_name == "project.html":
         return render_summary_panel("Project Space", project_items)
+    if file_name == "project-review.html":
+        return render_summary_panel("Project Delivery Review", project_review_items)
     if file_name == "review.html":
         return render_summary_panel("Review Dashboard", review_items)
     if file_name == "compare.html":
@@ -1845,6 +1866,68 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 project_source_rows,
             ),
         ]
+    if file_name == "project-review.html":
+        return [
+            render_record_panel(
+                "Project Release Gate",
+                [("Gate", "release_gate"), ("Project", "project"), ("Decision", "decision"), ("Checks", "checks"), ("Required Actions", "required_actions"), ("Suggested Actions", "suggested_actions"), ("Status", "status")],
+                state_records(state, "rp_web_bundle", "release_gate"),
+            ),
+            render_record_panel(
+                "Project Snapshots",
+                [("Snapshot", "project_snapshot"), ("Project", "project"), ("Files", "files"), ("Present", "present"), ("Missing", "missing"), ("Hash Records", "hash_records"), ("Changes", "changes"), ("Status", "status")],
+                state_records(state, "rp_web_bundle", "project_snapshot"),
+            ),
+            render_record_panel(
+                "Snapshot Comparison",
+                [("Comparison", "snapshot_comparison"), ("Project", "project"), ("Left", "left"), ("Right", "right"), ("Changed Files", "changed_files"), ("Decision", "decision"), ("Status", "status")],
+                state_records(state, "rp_web_bundle", "snapshot_comparison"),
+            ),
+            render_record_panel(
+                "Project Reproducibility Audit",
+                [("Audit", "reproducibility_audit"), ("Project", "project"), ("Inputs", "inputs"), ("Outputs", "outputs"), ("Notebooks", "notebooks"), ("Claim Audits", "claim_audits"), ("Decision", "decision"), ("Status", "status")],
+                state_records(state, "rp_web_bundle", "reproducibility_audit"),
+            ),
+            render_record_panel(
+                "Project Provenance Graph",
+                [("Record", "provenance_graph"), ("Project", "project"), ("Nodes", "nodes"), ("Edges", "edges"), ("Dot", "dot"), ("From", "from"), ("To", "to"), ("Relation", "relation"), ("Status", "status")],
+                state_records(state, "rp_web_bundle", "provenance_graph") + state_records(state, "rp_web_bundle", "provenance_edge"),
+            ),
+            render_record_panel(
+                "Project Delivery Report",
+                [("Delivery", "project_delivery"), ("Project", "project"), ("Decision", "decision"), ("Bundle", "bundle"), ("Release Gate", "release_gate"), ("Handoff", "handoff"), ("Status", "status")],
+                state_records(state, "rp_web_bundle", "project_delivery"),
+            ),
+            render_record_panel(
+                "Project Package Index",
+                [("Index", "package_index"), ("Handoff", "handoff"), ("Release Gate", "release_gate"), ("Snapshot", "snapshot"), ("Reproducibility", "reproducibility"), ("Provenance", "provenance"), ("Status", "status")],
+                state_records(state, "rp_web_bundle", "package_index") + state_records(state, "rp_web_bundle", "package_intake"),
+            ),
+            render_record_panel(
+                "Project Review Host Actions",
+                [("State File", "state_file"), ("Key", "key"), ("Value", "value")],
+                key_value_rows(
+                    state,
+                    ("rp_web_bundle", "rp_actionio", "rp_package", "rp_review_pack"),
+                    (
+                        "host_action_project_review_",
+                        "host_action_project_release_gate",
+                        "host_action_project_snapshot",
+                        "host_action_project_reproducibility",
+                        "host_action_project_provenance",
+                        "host_action_project_delivery",
+                        "host_action_project_package_intake",
+                        "release_gate=",
+                        "project_snapshot=",
+                        "snapshot_comparison=",
+                        "reproducibility_audit=",
+                        "provenance_graph=",
+                        "project_delivery=",
+                        "package_index=",
+                    ),
+                ),
+            ),
+        ]
     if file_name == "studio.html":
         return [
             render_record_panel(
@@ -2280,6 +2363,16 @@ def action_trace_group(path: str) -> str:
         return "llm"
     if "/workbench" in path or "/export-workbench" in path:
         return "workbench"
+    if (
+        "/project-handoff-audit" in path
+        or "/project-release-gate" in path
+        or "/project-snapshot" in path
+        or "/project-reproducibility-audit" in path
+        or "/project-provenance-graph" in path
+        or "/project-delivery" in path
+        or "/package-intake" in path
+    ):
+        return "project"
     if "/project-space" in path or "/research-search/" in path:
         return "project"
     if "/agentcompare/" in path:
@@ -2384,7 +2477,7 @@ def action_output_spec(path: str, group: str) -> tuple[str, str]:
     if group == "operations":
         return "rp_runner,rp_package,rp_actionio,rp_web_bundle", "run.html,review.html,project.html,actions.html"
     if group == "project":
-        return "rp_runner,rp_package,rp_review_pack,rp_actionio,rp_web_bundle", "project.html,review.html,run.html"
+        return "rp_web_bundle,rp_package,rp_review_pack,rp_runner,rp_actionio", "project.html,project-review.html,review.html,run.html"
     if group == "compare":
         return "rp_agentcmp,rp_api_compare,rp_backend_exec,rp_study", "compare.html,review.html"
     if group == "portability":
@@ -2430,7 +2523,17 @@ def action_evidence_prefixes(path: str, group: str) -> tuple[str, ...]:
     if group == "operations":
         return ("host_action_operations_", "operations_handoff=")
     if group == "project":
-        return ("host_action_project_", "project_handoff=")
+        return (
+            "host_action_project_",
+            "project_handoff=",
+            "release_gate=",
+            "project_snapshot=",
+            "snapshot_comparison=",
+            "reproducibility_audit=",
+            "provenance_graph=",
+            "project_delivery=",
+            "package_index=",
+        )
     if group == "compare":
         return ("host_action_compare", "backend_runner", "study_metric=", "runner_case=")
     if group == "portability":
@@ -2809,6 +2912,12 @@ def action_delta_specs(path: str) -> list[tuple[str, str, str, str, str]]:
         return [("bundle", "bundle", "rp_report_text", "host_report_bundle", "host_report_bundle")]
     if path.endswith("/agentcompare/run"):
         return [("profile", "profile", "rp_report_text", "host_report_compare_profile", "host_report_compare_profile")]
+    if path.endswith("/research/project-release-gate"):
+        return [("decision", "decision", "rp_web_bundle", "host_action_project_release_gate", "host_action_project_release_gate")]
+    if path.endswith("/research/project-delivery"):
+        return [("bundle", "bundle", "rp_web_bundle", "host_action_project_delivery", "host_action_project_delivery")]
+    if path.endswith("/research/package-intake"):
+        return [("label", "label", "rp_web_bundle", "host_action_project_package_intake", "host_action_project_package_intake")]
     if "/workbench" in path or path.endswith("/research/export-workbench"):
         specs.append(("workbench", "workbench", "rp_report_text", "host_report_workbench", "host_report_workbench"))
         specs.append(("workbench_id", "workbench_id", "rp_report_text", "host_report_workbench", "host_report_workbench"))
@@ -2927,6 +3036,14 @@ def default_batch_payload() -> str:
             {"path": "/actions/research/workbench-handoff-package", "payload": {"workbench": "usable-workbench:RUN-WEB", "handoff_scope": "full"}},
             {"path": "/actions/research/workbench-complete", "payload": {"workbench": "usable-workbench:RUN-WEB", "review_decision": "approved"}},
             {"path": "/actions/research/export-workbench", "payload": {"workbench": "usable-workbench:RUN-WEB", "bundle": "workbench-bundle.zip"}},
+            {"path": "/actions/research/project-handoff-audit", "payload": {"project_id": "lab-gene-x", "scope": "full", "decision": "ready"}},
+            {"path": "/actions/research/project-release-gate", "payload": {"project_id": "lab-gene-x", "decision": "release", "checks": "6", "required_actions": "0", "suggested_actions": "2"}},
+            {"path": "/actions/research/project-snapshot", "payload": {"project_id": "lab-gene-x", "snapshot_id": "project-snapshot:lab-gene-x:1", "files": "11", "hash_records": "11", "changes": "0"}},
+            {"path": "/actions/research/project-snapshot-comparison", "payload": {"project_id": "lab-gene-x", "left": "snapshot0", "right": "snapshot1", "changed_files": "0", "decision": "stable"}},
+            {"path": "/actions/research/project-reproducibility-audit", "payload": {"project_id": "lab-gene-x", "inputs": "2", "outputs": "8", "notebooks": "2", "claim_audits": "1", "decision": "passed"}},
+            {"path": "/actions/research/project-provenance-graph", "payload": {"project_id": "lab-gene-x", "nodes": "9", "edges": "12", "dot": "project-provenance.dot"}},
+            {"path": "/actions/research/project-delivery", "payload": {"project_id": "lab-gene-x", "bundle": "project-bundle.zip", "decision": "ready", "release_gate": "release", "handoff": "ready"}},
+            {"path": "/actions/research/package-intake", "payload": {"package_id": "external-review", "label": "External review package", "files": "5", "sha256": "checked", "decision": "accepted"}},
             {"path": "/actions/research/export-notebook", "payload": {"run_id": "RUN-WEB", "format": "ipynb"}},
             {"path": "/actions/research/export-bundle", "payload": {"run_id": "RUN-WEB", "bundle": "reviewer-evidence"}},
             {"path": "/actions/research/llm-relay-request", "payload": {"request_id": "llm-web-q1", "run_id": "RUN-WEB", "route": "review_summary", "provider": "host-relay", "prompt": "summarize_recovery_evidence", "budget": "2048", "secret_ref": "host_env"}},
@@ -3049,6 +3166,14 @@ def render_overview(
             ("Space", metric_value(state, [("rp_package", "host_action_project_space"), ("rp_runner", "host_action_project_space")]), "rp_package"),
             ("Action Item", metric_value(state, [("rp_package", "host_action_project_action_item"), ("rp_runner", "host_action_project_action_item")]), "rp_package"),
             ("Search", metric_value(state, [("rp_package", "host_action_research_search"), ("rp_runner", "host_action_research_search")]), "rp_package"),
+        ],
+        "project-review.html": [
+            ("Project", metric_value(state, [("rp_web_bundle", "project"), ("rp_package", "host_action_project_id")]), "rp_web_bundle"),
+            ("Release Gate", metric_value(state, [("rp_web_bundle", "host_action_project_release_gate"), ("rp_web_bundle", "release_gate")]), "rp_web_bundle"),
+            ("Snapshot", metric_value(state, [("rp_web_bundle", "host_action_project_snapshot"), ("rp_web_bundle", "project_snapshot")]), "rp_web_bundle"),
+            ("Reproducibility", metric_value(state, [("rp_web_bundle", "host_action_project_reproducibility"), ("rp_web_bundle", "reproducibility_audit")]), "rp_web_bundle"),
+            ("Provenance", metric_value(state, [("rp_web_bundle", "host_action_project_provenance_graph"), ("rp_web_bundle", "provenance_graph")]), "rp_web_bundle"),
+            ("Delivery", metric_value(state, [("rp_web_bundle", "host_action_project_delivery"), ("rp_web_bundle", "project_delivery")]), "rp_web_bundle"),
         ],
         "services.html": [
             ("Bio Ops", metric_value(state, [("rp_bioop", "ops")]), "rp_bioop"),
@@ -3248,6 +3373,12 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
             sections.append(action_output_detail_panel("Project Action Output Details", state, actions, {"studio", "project", "operations", "workbench", "review", "delivery"}))
             sections.append(action_impact_panel("Project Action Impact", state, actions, {"studio", "project", "operations", "workbench", "review", "delivery"}))
             sections.append(action_delta_panel("Project Action Delta", state, actions, {"studio", "project", "operations", "workbench", "review", "delivery"}))
+        if file_name == "project-review.html":
+            sections.append(action_trace_panel("Project Review Action Trace", actions, {"project", "delivery", "operations", "workbench"}))
+            sections.append(action_output_panel("Project Review Action Output Links", state, actions, {"project", "delivery", "operations", "workbench"}))
+            sections.append(action_output_detail_panel("Project Review Action Output Details", state, actions, {"project", "delivery", "operations", "workbench"}))
+            sections.append(action_impact_panel("Project Review Action Impact", state, actions, {"project", "delivery", "operations", "workbench"}))
+            sections.append(action_delta_panel("Project Review Action Delta", state, actions, {"project", "delivery", "operations", "workbench"}))
         if file_name == "llm.html":
             sections.append(action_trace_panel("LLM Action Trace", actions, {"llm"}))
             sections.append(action_output_panel("LLM Action Output Links", state, actions, {"llm"}))

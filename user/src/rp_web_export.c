@@ -23,8 +23,8 @@ static int text_contains_silent(const char *text, const char *needle)
 
 static int file_contains_silent(const char *path, const char *needle)
 {
-	char buf[1024];
-	int n = rp_read_file(path, buf, sizeof(buf));
+	char *buf = rp_state_buf;
+	int n = rp_read_file(path, buf, RP_STATE_BUFFER_SIZE);
 	if (n < 0) return 0;
 	return text_contains_silent(buf, needle);
 }
@@ -184,14 +184,15 @@ int main(void)
 
 	if (!rp_write_file("rp_web_routes",
 			   "service=host-web-ui\n"
-			   "routes=65\n"
-			   "get_routes=16\n"
-			   "post_routes=49\n"
+			   "routes=74\n"
+			   "get_routes=17\n"
+			   "post_routes=57\n"
 			   "route=/;payload=rp_api_home;status=ready\n"
 			   "route=/run/RUN-042;payload=rp_api_run;status=ready\n"
 			   "route=/research-studio;payload=rp_studio;status=ready\n"
 			   "route=/research/{run_id};payload=rp_uresrun;status=ready\n"
 			   "route=/research/workbench/{id};payload=rp_runner;status=ready\n"
+			   "route=/research/project/{id}/review;payload=rp_web_bundle;status=ready\n"
 			   "route=/agents;payload=rp_api_agents;status=ready\n"
 			   "route=/evidence;payload=rp_api_evidence;status=ready\n"
 			   "route=/compare;payload=rp_api_compare;status=ready\n"
@@ -244,6 +245,14 @@ int main(void)
 			   "action=/actions/research/project-space-action-item;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/research/project-space-answer;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/research/project-space-repair-execute;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/project-handoff-audit;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/project-release-gate;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/project-snapshot;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/project-snapshot-comparison;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/project-reproducibility-audit;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/project-provenance-graph;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/project-delivery;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/package-intake;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/research-search/save;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/research-search/export;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/research-search/note;method=POST;payload=rp_api_action;status=ready\n"
@@ -751,7 +760,7 @@ int main(void)
 	}
 	if (!rp_write_file("rp_api_action",
 			   "api=actions\n"
-			   "actions=49\n"
+			   "actions=57\n"
 			   "host_workflow_run=/actions/host-workflow/run\n"
 			   "host_workflow_export=/actions/host-workflow/export\n"
 			   "host_workflow_stage=/actions/host-workflow/stage-attempt\n"
@@ -797,6 +806,14 @@ int main(void)
 			   "project_space_action_item=/actions/research/project-space-action-item\n"
 			   "project_space_answer=/actions/research/project-space-answer\n"
 			   "project_space_repair_execute=/actions/research/project-space-repair-execute\n"
+			   "project_handoff_audit=/actions/research/project-handoff-audit\n"
+			   "project_release_gate=/actions/research/project-release-gate\n"
+			   "project_snapshot=/actions/research/project-snapshot\n"
+			   "project_snapshot_comparison=/actions/research/project-snapshot-comparison\n"
+			   "project_reproducibility_audit=/actions/research/project-reproducibility-audit\n"
+			   "project_provenance_graph=/actions/research/project-provenance-graph\n"
+			   "project_delivery=/actions/research/project-delivery\n"
+			   "package_intake=/actions/research/package-intake\n"
 			   "research_search_save=/actions/research-search/save\n"
 			   "research_search_export=/actions/research-search/export\n"
 			   "research_search_note=/actions/research-search/note\n"
@@ -811,6 +828,7 @@ int main(void)
 			   "quality_actions=3\n"
 			   "delivery_actions=2\n"
 			   "project_space_actions=5\n"
+			   "project_review_actions=8\n"
 			   "studio_actions=1\n"
 			   "research_search_actions=4\n"
 			   "llm_relay_actions=3\n"
@@ -1050,9 +1068,9 @@ int main(void)
 	}
 	if (!rp_write_file("rp_web_bundle",
 			   "bundle=host-web-ui\n"
-			   "routes=65\n"
-			   "get_routes=16\n"
-			   "post_routes=49\n"
+			   "routes=74\n"
+			   "get_routes=17\n"
+			   "post_routes=57\n"
 			   "api_payloads=14\n"
 			   "action_payloads=1\n"
 			   "action_state_records=12\n"
@@ -1066,6 +1084,15 @@ int main(void)
 			   "request_form=rp_input;upload_files=rp_input;workspace_imports=1\n"
 			   "dynamic_inputs=4;dynamic_queue=rp_input;live_update_feed=rp_web_bundle;host_ui_events=10\n"
 			   "workbench=rp_runner;workbench_tasks=9;workbench_export=rp_runner\n"
+			   "project_review=ready;project=lab-gene-x;source=rp_web_bundle;status=ready\n"
+			   "release_gate=project-release-gate:lab-gene-x;project=lab-gene-x;decision=release;checks=6;required_actions=0;suggested_actions=2;status=ready\n"
+			   "project_snapshot=project-snapshot:lab-gene-x:1;project=lab-gene-x;files=11;present=11;missing=0;hash_records=11;changes=0;status=ready\n"
+			   "snapshot_comparison=project-snapshot-comparison:lab-gene-x:latest;project=lab-gene-x;left=project-snapshot:lab-gene-x:0;right=project-snapshot:lab-gene-x:1;changed_files=0;decision=stable;status=ready\n"
+			   "reproducibility_audit=project-reproducibility-audit:lab-gene-x;project=lab-gene-x;inputs=2;outputs=8;notebooks=2;claim_audits=1;decision=passed;status=ready\n"
+			   "provenance_graph=project-provenance-graph:lab-gene-x;project=lab-gene-x;nodes=9;edges=12;dot=project-provenance.dot;status=ready\n"
+			   "project_delivery=project-delivery:lab-gene-x;project=lab-gene-x;decision=ready;bundle=project-bundle.zip;release_gate=release;handoff=ready;status=ready\n"
+			   "package_intake=package-intake:external-review;label=External review package;decision=accepted;files=5;sha256=checked;status=ready\n"
+			   "package_index=project-package-index;handoff=ready;release_gate=release;snapshot=stable;reproducibility=passed;provenance=ready;status=ready\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner;evidence_protocols=1;evidence_extractions=3\n"
 			   "workflow_portability=rp_wfio;adapter_specs=6;migration_steps=9;rehearsal_cases=4\n"
 			   "coherence_checks=9;namespace_checks=12;surface_checks=13;agentos_readiness_checks=7\n"
@@ -1089,8 +1116,8 @@ int main(void)
 			   "reader_contract=host_plain_ucore_v2\n"
 			   "reader_contract_version=2\n"
 			   "reader_ready=1\n"
-			   "reader_views=20\n"
-			   "reader_actions=49\n"
+			   "reader_views=21\n"
+			   "reader_actions=57\n"
 			   "reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes\n"
 			   "reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle\n"
 			   "reader_required_sections=routes,payloads,actions,live_update,downloads,compare\n"
@@ -1325,6 +1352,8 @@ int main(void)
 		if ((host_action_seeded && rp_host_seed_has_platform_ops_action()) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=operations_")) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=project_space")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=project_")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=package_intake")) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=research_search")) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_quality")) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_delivery")) ||
@@ -1338,6 +1367,50 @@ int main(void)
 			}
 			if (host_action_seeded && rp_host_seed_copy_platform_ops_value("project_id=", value, sizeof(value))) {
 				if (!rp_append_host_action_line("rp_actionio", "host_action_project_id=", value)) return 1;
+			}
+			if (host_action_seeded && (rp_host_seed_has("kind=project_handoff_audit") ||
+			    rp_host_seed_has("kind=project_release_gate") ||
+			    rp_host_seed_has("kind=project_snapshot") ||
+			    rp_host_seed_has("kind=project_snapshot_comparison") ||
+			    rp_host_seed_has("kind=project_reproducibility_audit") ||
+			    rp_host_seed_has("kind=project_provenance_graph") ||
+			    rp_host_seed_has("kind=project_delivery") ||
+			    rp_host_seed_has("kind=package_intake"))) {
+				if (!rp_append_file("rp_actionio", "host_action_project_review=1")) return 1;
+				if (!rp_append_file("rp_actionio", "host_action_project_review_outputs=rp_web_bundle")) return 1;
+			}
+			if (host_action_seeded && rp_host_seed_has("kind=project_handoff_audit")) {
+				if (!rp_append_file("rp_web_bundle", "host_action_project_review_handoff=audited")) return 1;
+			}
+			if (host_action_seeded && rp_host_seed_has("kind=project_release_gate")) {
+				if (!rp_host_seed_copy_value_for_kind("kind=project_release_gate", "decision=", value, sizeof(value))) {
+					rp_copy_text(value, sizeof(value), "release");
+				}
+				if (!rp_append_host_action_line("rp_web_bundle", "host_action_project_release_gate=", value)) return 1;
+			}
+			if (host_action_seeded && rp_host_seed_has("kind=project_snapshot")) {
+				if (!rp_append_file("rp_web_bundle", "host_action_project_snapshot=recorded")) return 1;
+			}
+			if (host_action_seeded && rp_host_seed_has("kind=project_snapshot_comparison")) {
+				if (!rp_append_file("rp_web_bundle", "host_action_project_snapshot_comparison=stable")) return 1;
+			}
+			if (host_action_seeded && rp_host_seed_has("kind=project_reproducibility_audit")) {
+				if (!rp_append_file("rp_web_bundle", "host_action_project_reproducibility=passed")) return 1;
+			}
+			if (host_action_seeded && rp_host_seed_has("kind=project_provenance_graph")) {
+				if (!rp_append_file("rp_web_bundle", "host_action_project_provenance_graph=exported")) return 1;
+			}
+			if (host_action_seeded && rp_host_seed_has("kind=project_delivery")) {
+				if (!rp_host_seed_copy_value_for_kind("kind=project_delivery", "bundle=", value, sizeof(value))) {
+					rp_copy_text(value, sizeof(value), "project-bundle.zip");
+				}
+				if (!rp_append_host_action_line("rp_web_bundle", "host_action_project_delivery=", value)) return 1;
+			}
+			if (host_action_seeded && rp_host_seed_has("kind=package_intake")) {
+				if (!rp_host_seed_copy_value_for_kind("kind=package_intake", "label=", value, sizeof(value))) {
+					rp_copy_text(value, sizeof(value), "External review package");
+				}
+				if (!rp_append_host_action_line("rp_web_bundle", "host_action_project_package_intake=", value)) return 1;
 			}
 		}
 		if (!rp_append_file("rp_web_bundle", line)) return 1;
@@ -1414,6 +1487,8 @@ int main(void)
 		if ((host_action_seeded && rp_host_seed_has_platform_ops_action()) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=operations_")) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=project_space")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=project_")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=package_intake")) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=research_search")) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_quality")) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_delivery")) ||
@@ -1426,6 +1501,14 @@ int main(void)
 			}
 			if (host_action_seeded && rp_host_seed_copy_platform_ops_value("project_id=", value, sizeof(value))) {
 				if (!rp_append_host_action_line("rp_web_bundle", "host_action_project_id=", value)) return 1;
+			}
+			if (host_action_seeded && (rp_host_seed_has("kind=project_release_gate") ||
+			    rp_host_seed_has("kind=project_snapshot") ||
+			    rp_host_seed_has("kind=project_reproducibility_audit") ||
+			    rp_host_seed_has("kind=project_provenance_graph") ||
+			    rp_host_seed_has("kind=project_delivery") ||
+			    rp_host_seed_has("kind=package_intake"))) {
+				if (!rp_append_file("rp_web_bundle", "host_action_project_review=rp_web_bundle")) return 1;
 			}
 		}
 		if (!file_contains_silent("rp_runner", "backend_evidence_report=rp_backend_exec")) {
@@ -1472,6 +1555,6 @@ int main(void)
 	if (!rp_append_status("actionio=ready")) return 1;
 	if (!rp_append_status("usable_research=ready")) return 1;
 	if (!rp_append_status("action_exports=ready")) return 1;
-	printf("rp_web_export: routes=65 api_payloads=14 actions=49 bundle=ready status=ready\n");
+	printf("rp_web_export: routes=74 api_payloads=14 actions=57 bundle=ready status=ready\n");
 	return 0;
 }

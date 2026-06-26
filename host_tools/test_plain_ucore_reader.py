@@ -65,8 +65,8 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=20
-reader_actions=49
+reader_views=21
+reader_actions=57
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
 reader_required_sections=routes,payloads,actions,live_update,downloads,compare
@@ -74,9 +74,18 @@ reader_event_stream=rp_web_bundle
 reader_fallback=rp_site
 reader_state_source=plain_ucore_files
 dynamic_inputs=4
+project_review=ready;project=lab-gene-x;source=rp_web_bundle;status=ready
+release_gate=project-release-gate:lab-gene-x;project=lab-gene-x;decision=release;checks=6;required_actions=0;suggested_actions=2;status=ready
+project_snapshot=project-snapshot:lab-gene-x:1;project=lab-gene-x;files=11;present=11;missing=0;hash_records=11;changes=0;status=ready
+snapshot_comparison=project-snapshot-comparison:lab-gene-x:latest;project=lab-gene-x;left=old;right=new;changed_files=0;decision=stable;status=ready
+reproducibility_audit=project-reproducibility-audit:lab-gene-x;project=lab-gene-x;inputs=2;outputs=8;notebooks=2;claim_audits=1;decision=passed;status=ready
+provenance_graph=project-provenance-graph:lab-gene-x;project=lab-gene-x;nodes=9;edges=12;dot=project-provenance.dot;status=ready
+project_delivery=project-delivery:lab-gene-x;project=lab-gene-x;decision=ready;bundle=project-bundle.zip;release_gate=release;handoff=ready;status=ready
+package_intake=package-intake:external-review;label=External review package;decision=accepted;files=5;sha256=checked;status=ready
+package_index=project-package-index;handoff=ready;release_gate=release;snapshot=stable;reproducibility=passed;provenance=ready;status=ready
 status=ready
 """,
-    "rp_web_routes": "routes=65\nget_routes=16\npost_routes=49\nroute=/research-studio;payload=rp_studio;status=ready\naction=/actions/research/studio-launch;method=POST;payload=rp_api_action;status=ready\nstatus=ready\n",
+    "rp_web_routes": "routes=74\nget_routes=17\npost_routes=57\nroute=/research-studio;payload=rp_studio;status=ready\nroute=/research/project/{id}/review;payload=rp_web_bundle;status=ready\naction=/actions/research/studio-launch;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-release-gate;method=POST;payload=rp_api_action;status=ready\nstatus=ready\n",
     "rp_api_home": "api=home\nreader_contract=rp_web_bundle\nstatus=ready\n",
     "rp_api_run": "api=run-detail\nreader_contract=rp_web_bundle\nreader_view=run-detail\nstatus=ready\n",
     "rp_api_agents": "api=agent-detail\nagents=7\nstatus=ready\n",
@@ -89,7 +98,7 @@ status=ready
     "rp_api_pub": "api=publication\nresult_review=rp_resrev\nstatus=ready\n",
     "rp_api_know": "api=knowledge\nsemantic_index=rp_semindex\nstatus=ready\n",
     "rp_api_runtime": "api=runtime\nruntime_env=rp_runenv\nstatus=ready\n",
-    "rp_api_action": "api=actions\nreader_contract=rp_web_bundle\nactions=49\nresearch_studio_launch=/actions/research/studio-launch\nstatus=ready\n",
+    "rp_api_action": "api=actions\nreader_contract=rp_web_bundle\nactions=57\nresearch_studio_launch=/actions/research/studio-launch\nproject_release_gate=/actions/research/project-release-gate\nproject_review_actions=8\nstatus=ready\n",
     "rp_studio": (
         "studio=usable-research-studio\n"
         "sessions=1\n"
@@ -399,12 +408,13 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 16, summary
+        assert summary["pages"] == 17, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
         assert (out_dir / "workbench.html").exists()
         assert (out_dir / "project.html").exists()
+        assert (out_dir / "project-review.html").exists()
         assert (out_dir / "review.html").exists()
         assert (out_dir / "delivery.html").exists()
         assert (out_dir / "data.html").exists()
@@ -520,6 +530,17 @@ def main() -> int:
         assert "host_action_quality_repair_execute" in project_html
         assert "host_action_research_search" in project_html
         assert "project_followup" in project_html
+        project_review_html = (out_dir / "project-review.html").read_text(encoding="utf-8")
+        assert "Project Delivery Review" in project_review_html
+        assert "Project Release Gate" in project_review_html
+        assert "Project Snapshots" in project_review_html
+        assert "Project Reproducibility Audit" in project_review_html
+        assert "Project Provenance Graph" in project_review_html
+        assert "Project Delivery Report" in project_review_html
+        assert "Project Package Index" in project_review_html
+        assert "release" in project_review_html
+        assert "project-provenance.dot" in project_review_html
+        assert "project-bundle.zip" in project_review_html
         compare_html = (out_dir / "compare.html").read_text(encoding="utf-8")
         assert "Compare Summary" in compare_html
         assert "Compare Metrics" in compare_html

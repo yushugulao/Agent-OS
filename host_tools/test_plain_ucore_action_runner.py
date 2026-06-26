@@ -258,6 +258,38 @@ def main() -> int:
                     "payload": {"workbench_id": "usable-workbench:RUN-900", "repair_id": "repair1", "provider_id": "template", "max_steps": "4"},
                 },
                 {
+                    "path": "/actions/research/project-handoff-audit",
+                    "payload": {"project_id": "lab-gene-x", "scope": "full", "decision": "ready"},
+                },
+                {
+                    "path": "/actions/research/project-release-gate",
+                    "payload": {"project_id": "lab-gene-x", "decision": "release", "checks": "6", "required_actions": "0", "suggested_actions": "2"},
+                },
+                {
+                    "path": "/actions/research/project-snapshot",
+                    "payload": {"project_id": "lab-gene-x", "snapshot_id": "project-snapshot:lab-gene-x:1", "files": "11", "hash_records": "11", "changes": "0"},
+                },
+                {
+                    "path": "/actions/research/project-snapshot-comparison",
+                    "payload": {"project_id": "lab-gene-x", "left": "snapshot0", "right": "snapshot1", "changed_files": "0", "decision": "stable"},
+                },
+                {
+                    "path": "/actions/research/project-reproducibility-audit",
+                    "payload": {"project_id": "lab-gene-x", "inputs": "2", "outputs": "8", "notebooks": "2", "claim_audits": "1", "decision": "passed"},
+                },
+                {
+                    "path": "/actions/research/project-provenance-graph",
+                    "payload": {"project_id": "lab-gene-x", "nodes": "9", "edges": "12", "dot": "project-provenance.dot"},
+                },
+                {
+                    "path": "/actions/research/project-delivery",
+                    "payload": {"project_id": "lab-gene-x", "bundle": "project-bundle.zip", "decision": "ready", "release_gate": "release", "handoff": "ready"},
+                },
+                {
+                    "path": "/actions/research/package-intake",
+                    "payload": {"package_id": "external-review", "label": "External review package", "files": "5", "sha256": "checked", "decision": "accepted"},
+                },
+                {
                     "path": "/actions/research-search/save",
                     "payload": {"query": "recovery evidence", "name": "Recovery search"},
                 },
@@ -380,7 +412,7 @@ def main() -> int:
             ],
         )
         summary = runner.prepare_action_state(loaded, state_dir, run_dir)
-        expected_actions = 84
+        expected_actions = 92
 
         assert summary["actions"] == expected_actions
         assert summary["accepted"] == expected_actions
@@ -438,6 +470,14 @@ def main() -> int:
         assert "project_space_action_item" in summary["kinds"]
         assert "project_space_answer" in summary["kinds"]
         assert "project_space_repair_execute" in summary["kinds"]
+        assert "project_handoff_audit" in summary["kinds"]
+        assert "project_release_gate" in summary["kinds"]
+        assert "project_snapshot" in summary["kinds"]
+        assert "project_snapshot_comparison" in summary["kinds"]
+        assert "project_reproducibility_audit" in summary["kinds"]
+        assert "project_provenance_graph" in summary["kinds"]
+        assert "project_delivery" in summary["kinds"]
+        assert "package_intake" in summary["kinds"]
         assert "research_search_save" in summary["kinds"]
         assert "research_search_export" in summary["kinds"]
         assert "research_search_note" in summary["kinds"]
@@ -533,6 +573,14 @@ def main() -> int:
         assert "kind=project_space_action_item" in queue
         assert "kind=project_space_answer" in queue
         assert "kind=project_space_repair_execute" in queue
+        assert "kind=project_handoff_audit" in queue
+        assert "kind=project_release_gate" in queue
+        assert "kind=project_snapshot" in queue
+        assert "kind=project_snapshot_comparison" in queue
+        assert "kind=project_reproducibility_audit" in queue
+        assert "kind=project_provenance_graph" in queue
+        assert "kind=project_delivery" in queue
+        assert "kind=package_intake" in queue
         assert "kind=research_search_save" in queue
         assert "kind=research_search_export" in queue
         assert "kind=research_search_note" in queue
@@ -681,6 +729,7 @@ def main() -> int:
         assert "kind=workbench_export" in plan
         assert "kind=operations_report" in plan
         assert "kind=project_space" in plan
+        assert "kind=project_release_gate" in plan
         assert "kind=research_search_export" in plan
         assert "kind=host_workflow" in plan
         assert "kind=host_workflow_export" in plan
@@ -825,6 +874,14 @@ def main() -> int:
         assert runner.action_kind("/actions/research/project-space-action-item") == "project_space_action_item"
         assert runner.action_kind("/actions/research/project-space-answer") == "project_space_answer"
         assert runner.action_kind("/actions/research/project-space-repair-execute") == "project_space_repair_execute"
+        assert runner.action_kind("/actions/research/project-handoff-audit") == "project_handoff_audit"
+        assert runner.action_kind("/actions/research/project-release-gate") == "project_release_gate"
+        assert runner.action_kind("/actions/research/project-snapshot") == "project_snapshot"
+        assert runner.action_kind("/actions/research/project-snapshot-comparison") == "project_snapshot_comparison"
+        assert runner.action_kind("/actions/research/project-reproducibility-audit") == "project_reproducibility_audit"
+        assert runner.action_kind("/actions/research/project-provenance-graph") == "project_provenance_graph"
+        assert runner.action_kind("/actions/research/project-delivery") == "project_delivery"
+        assert runner.action_kind("/actions/research/package-intake") == "package_intake"
         assert runner.action_kind("/actions/research-search/save") == "research_search_save"
         assert runner.action_kind("/actions/research-search/export") == "research_search_export"
         assert runner.action_kind("/actions/research-search/note") == "research_search_note"
@@ -889,6 +946,10 @@ def main() -> int:
         assert "kind=operations_report" in seed_file
         assert "kind=workbench_quality_gate" in seed_file
         assert "kind=project_space" in seed_file
+        assert "kind=project_release_gate" in seed_file
+        assert "kind=project_provenance_graph" in seed_file
+        assert "project-provenance.dot" in seed_file
+        assert "project-bundle.zip" in seed_file
         assert "kind=research_search_export" in seed_file
         assert "kind=host_workflow" in seed_file
         assert "kind=host_workflow_export" in seed_file

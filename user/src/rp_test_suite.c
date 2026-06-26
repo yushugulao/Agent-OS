@@ -1151,14 +1151,17 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_compare", "coherence_checks=9");
 	ok = ok && require_file_token("rp_ui_compare", "relay_protocol_files=5");
 	ok = ok && require_file_token("rp_ui_compare", "notebook_exports=2");
-	ok = ok && require_file_token("rp_web_routes", "routes=65");
-	ok = ok && require_file_token("rp_web_routes", "get_routes=16");
+	ok = ok && require_file_token("rp_web_routes", "routes=74");
+	ok = ok && require_file_token("rp_web_routes", "get_routes=17");
 	ok = ok && require_file_token("rp_web_routes", "route=/research/workbench/{id}");
-	ok = ok && require_file_token("rp_web_routes", "post_routes=49");
+	ok = ok && require_file_token("rp_web_routes", "route=/research/project/{id}/review");
+	ok = ok && require_file_token("rp_web_routes", "post_routes=57");
 	ok = ok && require_file_token("rp_web_routes", "action=/actions/host-workflow/stage-attempt");
 	ok = ok && require_file_token("rp_web_routes", "action=/actions/host-workflow/report-export");
 	ok = ok && require_file_token("rp_web_routes", "action=/actions/research/artifact-input");
 	ok = ok && require_file_token("rp_web_routes", "action=/actions/research/artifact-package");
+	ok = ok && require_file_token("rp_web_routes", "action=/actions/research/project-release-gate");
+	ok = ok && require_file_token("rp_web_routes", "action=/actions/research/project-provenance-graph");
 	ok = ok && require_file_token("rp_web_routes", "action=/actions/research/review");
 	ok = ok && require_file_token("rp_web_routes", "action=/actions/research/revision-task");
 	ok = ok && require_file_token("rp_web_routes", "action=/actions/research/run-revision-task");
@@ -1242,12 +1245,16 @@ int main(void)
 	ok = ok && require_file_token("rp_api_know", "evidence_protocols=1");
 	ok = ok && require_file_token("rp_api_know", "evidence_extractions=3");
 	ok = ok && require_file_token("rp_api_runtime", "runtime_env=rp_runenv");
-	ok = ok && require_file_token("rp_api_action", "actions=49");
+	ok = ok && require_file_token("rp_api_action", "actions=57");
 	ok = ok && require_file_token("rp_api_action", "research_studio_launch=/actions/research/studio-launch");
 	ok = ok && require_file_token("rp_api_action", "host_workflow_stage=/actions/host-workflow/stage-attempt");
 	ok = ok && require_file_token("rp_api_action", "host_workflow_report=/actions/host-workflow/report-export");
 	ok = ok && require_file_token("rp_api_action", "artifact_input=/actions/research/artifact-input");
 	ok = ok && require_file_token("rp_api_action", "artifact_package=/actions/research/artifact-package");
+	ok = ok && require_file_token("rp_api_action", "project_release_gate=/actions/research/project-release-gate");
+	ok = ok && require_file_token("rp_api_action", "project_snapshot=/actions/research/project-snapshot");
+	ok = ok && require_file_token("rp_api_action", "project_provenance_graph=/actions/research/project-provenance-graph");
+	ok = ok && require_file_token("rp_api_action", "project_delivery=/actions/research/project-delivery");
 	ok = ok && require_file_token("rp_api_action", "workflow_portability_run=/actions/workflow-portability/run");
 	ok = ok && require_file_token("rp_api_action", "workflow_portability_import=/actions/workflow-portability/import");
 	ok = ok && require_file_token("rp_api_action", "workflow_portability_package=/actions/workflow-portability/package");
@@ -1264,6 +1271,7 @@ int main(void)
 	ok = ok && require_file_token("rp_api_action", "quality_actions=3");
 	ok = ok && require_file_token("rp_api_action", "delivery_actions=2");
 	ok = ok && require_file_token("rp_api_action", "project_space_actions=5");
+	ok = ok && require_file_token("rp_api_action", "project_review_actions=8");
 	ok = ok && require_file_token("rp_api_action", "research_search_actions=4");
 	ok = ok && require_file_token("rp_api_action", "artifact_actions=5");
 	ok = ok && require_file_token("rp_api_action", "plan_queue_actions=2");
@@ -1354,8 +1362,8 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "reader_contract=host_plain_ucore_v2");
 	ok = ok && require_file_token("rp_web_bundle", "reader_contract_version=2");
 	ok = ok && require_file_token("rp_web_bundle", "reader_ready=1");
-	ok = ok && require_file_token("rp_web_bundle", "reader_views=20");
-	ok = ok && require_file_token("rp_web_bundle", "reader_actions=49");
+	ok = ok && require_file_token("rp_web_bundle", "reader_views=21");
+	ok = ok && require_file_token("rp_web_bundle", "reader_actions=57");
 	ok = ok && require_file_token("rp_web_bundle", "reader_payload_files=rp_api_home");
 	ok = ok && require_file_token("rp_web_bundle", "reader_refresh_files=rp_web_routes");
 	ok = ok && require_file_token("rp_web_bundle", "reader_required_sections=routes,payloads,actions,live_update,downloads,compare");
@@ -1365,6 +1373,12 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "workbench=rp_runner");
 	ok = ok && require_file_token("rp_web_bundle", "workbench_tasks=9");
 	ok = ok && require_file_token("rp_web_bundle", "workbench_export=rp_runner");
+	ok = ok && require_file_token("rp_web_bundle", "project_review=ready");
+	ok = ok && require_file_token("rp_web_bundle", "release_gate=project-release-gate");
+	ok = ok && require_file_token("rp_web_bundle", "project_snapshot=project-snapshot");
+	ok = ok && require_file_token("rp_web_bundle", "reproducibility_audit=project-reproducibility-audit");
+	ok = ok && require_file_token("rp_web_bundle", "provenance_graph=project-provenance-graph");
+	ok = ok && require_file_token("rp_web_bundle", "project_delivery=project-delivery");
 	ok = ok && require_file_token("rp_web_bundle", "library_sources=rp_knowledge");
 	ok = ok && require_file_token("rp_web_bundle", "evidence_protocols=1");
 	ok = ok && require_file_token("rp_web_bundle", "prisma_flows=1");
@@ -1379,7 +1393,7 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "review_page=rp_package");
 	ok = ok && require_file_token("rp_web_bundle", "export_bundle=rp_package");
 	ok = ok && require_file_token("rp_web_bundle", "runner_detail_fields=16");
-	ok = ok && require_file_token("rp_web_bundle", "post_routes=49");
+	ok = ok && require_file_token("rp_web_bundle", "post_routes=57");
 	ok = ok && require_file_token("rp_web_bundle", "human_reviews=1");
 	ok = ok && require_file_token("rp_web_bundle", "revision_tasks=1");
 	ok = ok && require_file_token("rp_web_bundle", "revision_delta=rp_revision");
@@ -1490,6 +1504,12 @@ int main(void)
 		ok = ok && require_file_token("rp_actionio", "host_action_platform_ops=1");
 		ok = ok && require_file_token("rp_actionio", "host_action_platform_ops_outputs=rp_runner,rp_package,rp_api_action,rp_web_bundle");
 		ok = ok && require_file_token("rp_web_bundle", "host_action_platform_ops=rp_runner,rp_package,rp_api_action");
+		ok = ok && require_file_token("rp_api_action", "project_review_actions=8");
+		if (rp_host_seed_has("kind=project_release_gate")) {
+			ok = ok && require_file_token("rp_actionio", "host_action_project_review_outputs=rp_web_bundle");
+			ok = ok && require_file_token("rp_web_bundle", "host_action_project_release_gate=");
+			ok = ok && require_file_token("rp_web_bundle", "host_action_project_review=rp_web_bundle");
+		}
 	}
 	if (rp_host_seed_count() > 0 && rp_host_seed_has_host_workflow_step_action()) {
 		ok = ok && require_file_token("rp_stage_state", "host_workflow_steps=applied");

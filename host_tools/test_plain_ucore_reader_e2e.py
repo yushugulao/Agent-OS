@@ -131,6 +131,14 @@ def main() -> int:
                 {"path": "/actions/research/project-space-action-item", "payload": {"workbench_id": "W1", "title": "Project task", "instruction": "Prepare handoff", "priority": "high"}},
                 {"path": "/actions/research/project-space-answer", "payload": {"workbench_id": "W1", "question": "What is ready?", "limit": "6"}},
                 {"path": "/actions/research/project-space-repair-execute", "payload": {"workbench_id": "W1", "repair_id": "repair1", "provider_id": "template", "max_steps": "4"}},
+                {"path": "/actions/research/project-handoff-audit", "payload": {"project_id": "lab-gene-x", "scope": "full", "decision": "ready"}},
+                {"path": "/actions/research/project-release-gate", "payload": {"project_id": "lab-gene-x", "decision": "release", "checks": "6", "required_actions": "0", "suggested_actions": "2"}},
+                {"path": "/actions/research/project-snapshot", "payload": {"project_id": "lab-gene-x", "snapshot_id": "project-snapshot:lab-gene-x:1", "files": "11", "hash_records": "11", "changes": "0"}},
+                {"path": "/actions/research/project-snapshot-comparison", "payload": {"project_id": "lab-gene-x", "left": "snapshot0", "right": "snapshot1", "changed_files": "0", "decision": "stable"}},
+                {"path": "/actions/research/project-reproducibility-audit", "payload": {"project_id": "lab-gene-x", "inputs": "2", "outputs": "8", "notebooks": "2", "claim_audits": "1", "decision": "passed"}},
+                {"path": "/actions/research/project-provenance-graph", "payload": {"project_id": "lab-gene-x", "nodes": "9", "edges": "12", "dot": "project-provenance.dot"}},
+                {"path": "/actions/research/project-delivery", "payload": {"project_id": "lab-gene-x", "bundle": "project-bundle.zip", "decision": "ready", "release_gate": "release", "handoff": "ready"}},
+                {"path": "/actions/research/package-intake", "payload": {"package_id": "external-review", "label": "External review package", "files": "5", "sha256": "checked", "decision": "accepted"}},
                 {"path": "/actions/research-search/save", "payload": {"query": "recovery evidence", "name": "Recovery search"}},
                 {"path": "/actions/research-search/export", "payload": {"query": "recovery evidence", "limit": "20"}},
                 {"path": "/actions/research-search/note", "payload": {"workbench_id": "W1", "query": "recovery evidence", "title": "Search note", "note": "Keep hits."}},
@@ -609,6 +617,16 @@ def main() -> int:
             assert any("host_action_llm_relay=rp_llm_req,rp_llmq,rp_llm_resp,rp_llm_packets,rp_llm_hostreq,rp_llm_fallback" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_platform_ops=rp_runner,rp_package,rp_api_action" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_search_query=recovery evidence" in line for line in rp_web_bundle["lines"]), rp_web_bundle
+            assert any("host_action_project_review=rp_web_bundle" in line for line in rp_web_bundle["lines"]), rp_web_bundle
+            assert any("project_review=ready" in line for line in rp_web_bundle["lines"]), rp_web_bundle
+            assert any("release_gate=project-release-gate" in line for line in rp_web_bundle["lines"]), rp_web_bundle
+            assert any("project_snapshot=project-snapshot" in line for line in rp_web_bundle["lines"]), rp_web_bundle
+            assert any("reproducibility_audit=project-reproducibility-audit" in line for line in rp_web_bundle["lines"]), rp_web_bundle
+            assert any("provenance_graph=project-provenance-graph" in line for line in rp_web_bundle["lines"]), rp_web_bundle
+            assert any("project_delivery=project-delivery" in line for line in rp_web_bundle["lines"]), rp_web_bundle
+            assert any("host_action_project_release_gate=release" in line for line in rp_web_bundle["lines"]), rp_web_bundle
+            assert any("host_action_project_provenance_graph=exported" in line for line in rp_web_bundle["lines"]), rp_web_bundle
+            assert any("host_action_project_delivery=project-bundle.zip" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             rp_agentcmp = read_json(base + "/api/state/rp_agentcmp")
             assert any("host_action_compare_requested=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_compare_profile=pb" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -716,7 +734,7 @@ def main() -> int:
             assert any("host_action_workbench_handoff_scope=full" in line for line in rp_api_compare["lines"]), rp_api_compare
             assert any("host_action_workbench_bundle=wb.zip" in line for line in rp_api_compare["lines"]), rp_api_compare
             rp_api_action = read_json(base + "/api/state/rp_api_action")
-            assert any("actions=49" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("actions=57" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("host_workflow_stage=/actions/host-workflow/stage-attempt" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("host_workflow_report=/actions/host-workflow/report-export" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("artifact_input=/actions/research/artifact-input" in line for line in rp_api_action["lines"]), rp_api_action
@@ -727,6 +745,9 @@ def main() -> int:
             assert any("workflow_portability_package=/actions/workflow-portability/package" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("workbench_quality_gate=/actions/research/workbench-quality-gate" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("project_space=/actions/research/project-space" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("project_release_gate=/actions/research/project-release-gate" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("project_provenance_graph=/actions/research/project-provenance-graph" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("project_review_actions=8" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("research_search_export=/actions/research-search/export" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("llm_relay_request=/actions/research/llm-relay-request" in line for line in rp_api_action["lines"]), rp_api_action
             rp_llm_req = read_json(base + "/api/state/rp_llm_req")
@@ -942,6 +963,22 @@ def main() -> int:
             assert "recovery evidence" in project_html
             assert "/actions/research/project-space" in project_html
             assert "/actions/research-search/export" in project_html
+            project_review_html = read_text(base + "/project-review.html")
+            assert "Project Delivery Review" in project_review_html
+            assert "Project Release Gate" in project_review_html
+            assert "Project Snapshots" in project_review_html
+            assert "Snapshot Comparison" in project_review_html
+            assert "Project Reproducibility Audit" in project_review_html
+            assert "Project Provenance Graph" in project_review_html
+            assert "Project Delivery Report" in project_review_html
+            assert "Project Package Index" in project_review_html
+            assert "Project Review Action Trace" in project_review_html
+            assert "Project Review Action Output Details" in project_review_html
+            assert "release" in project_review_html
+            assert "project-provenance.dot" in project_review_html
+            assert "project-bundle.zip" in project_review_html
+            assert "/actions/research/project-release-gate" in project_review_html
+            assert "/actions/research/project-provenance-graph" in project_review_html
             artifacts_html = read_text(base + "/artifacts.html")
             assert "Evidence Package" in artifacts_html
             assert "ev" in artifacts_html
