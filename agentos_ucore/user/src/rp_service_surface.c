@@ -1,5 +1,16 @@
 #include <stdio.h>
+#define RP_ENABLE_HOST_ACTION_SEED 1
 #include <research_platform_state.h>
+
+static char seed_value[96];
+
+static int append_seed_value(const char *kind, const char *key, const char *prefix, const char *fallback)
+{
+	if (!rp_host_seed_copy_value_for_kind(kind, key, seed_value, sizeof(seed_value))) {
+		rp_copy_text(seed_value, sizeof(seed_value), fallback);
+	}
+	return rp_append_host_action_line("rp_runop", prefix, seed_value);
+}
 
 static int write_bio_services(void)
 {
@@ -272,6 +283,27 @@ static int write_runtime_services(void)
 			     "status=ready\n");
 }
 
+static int write_advanced_surface(void)
+{
+	if (!rp_append_file("rp_runop",
+			    "advanced_surface=objects:5;research_search:saved_queries:2,recent:5,exports:2,note_captures:1,action_captures:1;project_space:lab-gene-x,workbenches:1,runs:4,evidence_rows:18,action_items:4,release_gate:release;study_protocol:protocols:2,launches:2,protocol_runs:1,criteria:6,compliance:passed;dataset_answer:datasets:2,answers:2,run_comparisons:1,numeric_fields:3,evidence_files:4;package_intake:packages:1,files:5,sha256:checked,decision:accepted;status=ready")) {
+		return 0;
+	}
+	if (rp_host_seed_has("kind=research_search_save") ||
+	    rp_host_seed_has("kind=research_search_export") ||
+	    rp_host_seed_has("kind=research_search_note") ||
+	    rp_host_seed_has("kind=research_search_action_item")) {
+		if (!append_seed_value("kind=research_search_save", "query=", "host_action_search_query=", "recovery evidence")) return 0;
+	}
+	if (rp_host_seed_has("kind=project_space")) {
+		if (!append_seed_value("kind=project_space", "project=", "host_action_project=", "lab-gene-x")) return 0;
+	}
+	if (rp_host_seed_has("kind=package_intake")) {
+		if (!append_seed_value("kind=package_intake", "label=", "host_action_package_label=", "External review package")) return 0;
+	}
+	return 1;
+}
+
 int main(void)
 {
 	int ok = 1;
@@ -297,6 +329,7 @@ int main(void)
 	if (!write_publication_services()) return 1;
 	if (!write_knowledge_services()) return 1;
 	if (!write_runtime_services()) return 1;
+	if (!write_advanced_surface()) return 1;
 
 	if (!rp_append_file("rp_ack", "ack=bio_services;msg=bio;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=lab_resources;msg=res;status=ready")) return 1;
@@ -328,6 +361,7 @@ int main(void)
 	if (!rp_append_status("notebook_exec=ready")) return 1;
 	if (!rp_append_status("eln_record=ready")) return 1;
 	if (!rp_append_status("worker_pool=ready")) return 1;
+	if (!rp_append_status("advanced_surface=ready")) return 1;
 	printf("rp_service_surface: bio=ready lab_resources=ready publication=ready knowledge=ready runtime=ready status=ready\n");
 	return 0;
 }

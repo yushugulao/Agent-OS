@@ -1053,6 +1053,14 @@ int main(void)
 	ok = ok && require_file_token("rp_consistency", "artifact_path_rebuild_steps=7");
 	ok = ok && require_file_token("rp_consistency", "coherence_checks=9");
 	ok = ok && require_file_token("rp_consistency", "workbench_records=10");
+	ok = ok && require_file_token("rp_consistency", "advanced_surface_objects=5");
+	ok = ok && require_file_token("rp_runop", "advanced_surface=objects:5");
+	ok = ok && require_file_token("rp_runop", "research_search:saved_queries:2");
+	ok = ok && require_file_token("rp_runop", "project_space:lab-gene-x");
+	ok = ok && require_file_token("rp_runop", "study_protocol:protocols:2");
+	ok = ok && require_file_token("rp_runop", "dataset_answer:datasets:2");
+	ok = ok && require_file_token("rp_runop", "package_intake:packages:1");
+	ok = ok && require_file_token("rp_telemetry", "advanced_surface_objects=5");
 	ok = ok && require_file_token("rp_consistency", "dynamic_input_records=8");
 	ok = ok && require_file_token("rp_consistency", "dynamic_submissions=4");
 	ok = ok && require_file_token("rp_consistency", "host_ui_events=10");
@@ -1422,6 +1430,9 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "backend_review=1");
 	ok = ok && require_file_token("rp_agentcmp", "review_handoff_checks=13;review_sections=8;review_gates=6");
 	ok = ok && require_file_token("rp_agentcmp", "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1");
+	ok = ok && require_file_token("rp_agentcmp", "programs=42");
+	ok = ok && require_file_token("rp_agentcmp", "state_files=170");
+	ok = ok && require_file_token("rp_agentcmp", "advanced_surface_objects=5");
 	ok = ok && require_file_token("rp_agentcmp", "test_cases=838");
 	ok = ok && require_file_token("rp_agentcmp", "llm_delivery_checks=16");
 	ok = ok && require_file_token("rp_agentcmp", "llm_queue=3");

@@ -80,6 +80,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_eln", "eln_entries=3");
 	ok = ok && rp_file_contains("rp_wpool", "worker_pools=2");
 	ok = ok && rp_file_contains("rp_runop", "ops=7");
+	ok = ok && rp_file_contains("rp_runop", "advanced_surface=objects:5");
+	ok = ok && rp_file_contains("rp_runop", "research_search:saved_queries:2");
+	ok = ok && rp_file_contains("rp_runop", "project_space:lab-gene-x");
+	ok = ok && rp_file_contains("rp_runop", "study_protocol:protocols:2");
+	ok = ok && rp_file_contains("rp_runop", "dataset_answer:datasets:2");
+	ok = ok && rp_file_contains("rp_runop", "package_intake:packages:1");
 	ok = ok && rp_file_contains("rp_wfio", "imports=5");
 	ok = ok && rp_file_contains("rp_wfio", "adapter_specs=6");
 	ok = ok && rp_file_contains("rp_wfio", "migration_steps=9");
@@ -363,6 +369,12 @@ int main(void)
 			   "notebook_cells=8\n"
 			   "notebook_exports=2\n"
 			   "downloadable_units=4\n"
+			   "advanced_surface_objects=5\n"
+			   "research_search_saved=2\n"
+			   "project_surface_actions=4\n"
+			   "study_protocol_checks=6\n"
+			   "dataset_answer_files=4\n"
+			   "package_intake_files=5\n"
 			   "workflow_portability_records=1\n"
 			   "adapter_specs=6\n"
 			   "migration_steps=9\n"

@@ -83,6 +83,12 @@ int main(void)
 	if (!rp_file_contains("rp_mail", "to=metrics")) return 1;
 	if (!rp_file_contains("rp_nbexec", "notebook=reproducible-analysis.ipynb")) return 1;
 	if (!rp_file_contains("rp_repro", "downloadable_units=4")) return 1;
+	if (!rp_file_contains("rp_runop", "advanced_surface=objects:5")) return 1;
+	if (!rp_file_contains("rp_runop", "research_search:saved_queries:2")) return 1;
+	if (!rp_file_contains("rp_runop", "project_space:lab-gene-x")) return 1;
+	if (!rp_file_contains("rp_runop", "study_protocol:protocols:2")) return 1;
+	if (!rp_file_contains("rp_runop", "dataset_answer:datasets:2")) return 1;
+	if (!rp_file_contains("rp_runop", "package_intake:packages:1")) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
 	if (ack_count < 27 || tool_count < 113) return 1;
@@ -163,6 +169,12 @@ int main(void)
 			   "notebook_cells=8\n"
 			   "notebook_exports=2\n"
 			   "downloadable_units=4\n"
+			   "advanced_surface_objects=5\n"
+			   "research_search_saved=2\n"
+			   "project_surface_actions=4\n"
+			   "study_protocol_checks=6\n"
+			   "dataset_answer_files=4\n"
+			   "package_intake_files=5\n"
 			   "claim_records=8\n"
 			   "provenance_paths=3\n"
 			   "data_profiles=4\n"
