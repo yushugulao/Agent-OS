@@ -143,6 +143,28 @@ def line_value(value: object) -> str:
     return str(value).replace("\n", " ").replace(";", ",").strip()
 
 
+def backend_action_review_lines(state_dir: Path) -> list[str]:
+    details: list[dict[str, str]] = []
+    reports: dict[str, dict[str, str]] = {}
+    for raw in read_text(state_dir / "rp_backend_exec").splitlines():
+        record = parse_kv_line(raw)
+        if "runner_detail" in record:
+            details.append(record)
+        if "runner_report" in record:
+            reports[record["runner_report"]] = record
+    lines: list[str] = []
+    for detail in details:
+        case = detail.get("runner_detail", "")
+        report = reports.get(case, {})
+        lines.append(
+            "backend_action_review="
+            f"{line_value(case)};action={line_value(detail.get('act', ''))};review={line_value(detail.get('review', ''))};"
+            f"plain_cost={line_value(report.get('plain_cost', ''))};agentos_replace={line_value(report.get('agentos_replace', ''))};"
+            f"status={line_value(report.get('status', ''))}"
+        )
+    return lines
+
+
 def copy_state(src: Path, dst: Path) -> None:
     dst.mkdir(parents=True, exist_ok=True)
     if src.resolve() == dst.resolve():
@@ -434,6 +456,8 @@ def append_relay_state(out_dir: Path, requests: list[RelayRequest], responses: l
         out_dir / "rp_review_pack",
         "backend_evidence_review=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;source=rp_review_dashboard;status=ready",
     )
+    for line in backend_action_review_lines(out_dir):
+        append_line(out_dir / "rp_review_pack", line)
     first_ok = next((response for response in responses if response.status in {"ok", "config_missing"}), responses[0] if responses else None)
     if first_ok is not None:
         append_line(

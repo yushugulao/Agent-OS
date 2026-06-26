@@ -51,6 +51,14 @@ STATE = {
     "rp_agentcmp": "plain_kernel=passed\n",
     "rp_review_dashboard": "dashboard=research-review\nstatus=ready\n",
     "rp_review_pack": "pack=review-evidence\nstatus=ready\n",
+    "rp_backend_exec": (
+        "runner_detail=plain-ucore;src=rp_wfio;req=execution_plan;obs=pass;act=record;review=baseline\n"
+        "runner_detail=retry-recovery;src=rp_retry_plan+rp_stage_state;req=retry_stage+stage;obs=pass;act=rerun_align;review=recovered\n"
+        "runner_detail=agentos-context;src=rp_wfio;req=context_path;obs=planned;act=kernel_context;review=target\n"
+        "runner_report=plain-ucore;plain_cost=file_scan_manifest;agentos_replace=batch_tool_context;risk=manual_state;status=passed\n"
+        "runner_report=retry-recovery;plain_cost=retry_file_stage_file;agentos_replace=event_context;risk=stale_retry;status=passed\n"
+        "runner_report=agentos-context;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;risk=untrusted_context;status=planned\n"
+    ),
 }
 
 
@@ -118,6 +126,8 @@ def main() -> int:
             assert "host_relay_quality=passed:24/24;blocked:0;source=rp_llmeval;status=ready" in reviewpack
             assert "host_relay_pack_input=rp_report_text,rp_llm_resp,rp_llmeval,rp_llm_guard,rp_review_dashboard,rp_package;status=ready" in reviewpack
             assert "backend_evidence_review=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;source=rp_review_dashboard;status=ready" in reviewpack
+            assert "backend_action_review=retry-recovery;action=rerun_align;review=recovered;plain_cost=retry_file_stage_file;agentos_replace=event_context;status=passed" in reviewpack
+            assert "backend_action_review=agentos-context;action=kernel_context;review=target;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;status=planned" in reviewpack
             summary_json = json.loads((out_dir / "llm-relay-summary.json").read_text(encoding="utf-8"))
             assert summary_json["response_status"]["relay-host-q1"] == "ok", summary_json
             assert summary_json["quality"] == {"checked": 24, "passed": 24, "blocked": 0}, summary_json

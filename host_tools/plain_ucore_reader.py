@@ -643,6 +643,11 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 state_records(state, "rp_review_dashboard", "backend_review_evidence"),
             ),
             render_record_panel(
+                "Review Backend Actions",
+                [("Case", "backend_action_review"), ("Action", "action"), ("Review", "review"), ("Plain Cost", "plain_cost"), ("AgentOS Replace", "agentos_replace"), ("Status", "status")],
+                state_records(state, "rp_review_pack", "backend_action_review"),
+            ),
+            render_record_panel(
                 "Review Pack Actions",
                 [("Action", "action"), ("Owner", "owner"), ("Status", "status")],
                 state_records(state, "rp_review_pack", "action"),

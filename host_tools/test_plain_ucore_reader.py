@@ -179,6 +179,9 @@ status=ready
         "evidence=operations_ready;source=rp_runner;status=pass\n"
         "evidence=project_space_ready;source=rp_package;status=pass\n"
         "backend_evidence_review=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;source=rp_review_dashboard;status=ready\n"
+        "backend_action_review=plain-ucore;action=record;review=baseline;plain_cost=file_scan_manifest;agentos_replace=batch_tool_context;status=passed\n"
+        "backend_action_review=retry-recovery;action=rerun_align;review=recovered;plain_cost=retry_file_stage_file;agentos_replace=event_context;status=passed\n"
+        "backend_action_review=agentos-context;action=kernel_context;review=target;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;status=planned\n"
         "action=send_to_reviewer;owner=orchestrator;artifact=rp_review_pack;status=ready\n"
         "action=open_operations_report;owner=orchestrator;artifact=rp_runner;status=ready\n"
         "bridge=delivery_to_operations;delivery=rp_package;operations=rp_runner;project=rp_package;status=ready\n"
@@ -271,8 +274,11 @@ def main() -> int:
         assert "Review Gates" in review_html
         assert "Review Evidence Pack" in review_html
         assert "Review Backend Evidence" in review_html
+        assert "Review Backend Actions" in review_html
         assert "backend_evidence_review" in review_html
         assert "backend_review_evidence" in review_html
+        assert "rerun_align" in review_html
+        assert "kernel_context_path" in review_html
         assert "Review Pack Bridges" in review_html
         assert "Handoff Checks" in review_html
         assert "send_to_reviewer" in review_html
