@@ -104,6 +104,41 @@ int main(void)
 		if (!rp_append_host_action_line("rp_ingest_files", "host_input_csv_file=", value)) return 1;
 		if (!rp_append_host_action_line("rp_data_preview", "host_input_csv_file=", value)) return 1;
 	}
+	if (rp_host_seed_has("kind=workbench_file_manifest") ||
+	    rp_host_seed_has("kind=workbench_file_verify")) {
+		char value[96];
+		if (!rp_host_seed_copy_value_for_kind("kind=workbench_file_manifest", "manifest=", value, sizeof(value)) &&
+		    !rp_host_seed_copy_value_for_kind("kind=workbench_file_verify", "manifest=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "delivery-manifest.json");
+		}
+		if (!rp_append_host_action_line("rp_ingest_files", "host_file_manifest=", value)) return 1;
+		if (!rp_append_host_action_line("rp_dataset_collection", "host_file_manifest=", value)) return 1;
+		if (!rp_append_host_action_line("rp_data_quality", "host_file_manifest=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=workbench_file_manifest", "files=", value, sizeof(value)) &&
+		    !rp_host_seed_copy_value_for_kind("kind=workbench_file_verify", "files=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "9");
+		}
+		if (!rp_append_host_action_line("rp_ingest_files", "host_file_manifest_files=", value)) return 1;
+		if (!rp_append_host_action_line("rp_dataset_collection", "host_file_manifest_files=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=workbench_file_manifest", "sha_records=", value, sizeof(value)) &&
+		    !rp_host_seed_copy_value_for_kind("kind=workbench_file_verify", "sha_records=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "9");
+		}
+		if (!rp_append_host_action_line("rp_ingest_files", "host_file_manifest_sha_records=", value)) return 1;
+		if (!rp_append_host_action_line("rp_data_quality", "host_file_manifest_sha_records=", value)) return 1;
+		if (rp_host_seed_has("kind=workbench_file_verify")) {
+			if (!rp_append_file("rp_data_quality", "host_file_verify=passed")) return 1;
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_file_verify", "verified=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "9");
+			}
+			if (!rp_append_host_action_line("rp_data_quality", "host_file_verify_verified=", value)) return 1;
+			if (!rp_append_host_action_line("rp_dataset_collection", "host_file_verified_items=", value)) return 1;
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_file_verify", "missing=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "0");
+			}
+			if (!rp_append_host_action_line("rp_data_quality", "host_file_verify_missing=", value)) return 1;
+		}
+	}
 	if (!rp_append_file("rp_ack", "ack=data_pipeline;msg=data;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=data_pipeline.scan_files;target=rp_ingest_files;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=data_pipeline.snapshot;target=rp_dataset_snapshot;status=ok")) return 1;

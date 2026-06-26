@@ -96,8 +96,8 @@ def main() -> int:
                 {"path": "/actions/research/workbench-task-board-row", "payload": {"workbench": "W1", "row_id": "row1", "row_status": "done"}},
                 {"path": "/actions/research/workbench-runbook", "payload": {"workbench": "W1", "runbook_format": "markdown"}},
                 {"path": "/actions/research/workbench-timeline", "payload": {"workbench": "W1", "timeline_format": "html"}},
-                {"path": "/actions/research/workbench-file-manifest", "payload": {"workbench": "W1", "manifest": "mf.json"}},
-                {"path": "/actions/research/workbench-file-verify", "payload": {"workbench": "W1", "manifest": "mf.json"}},
+                {"path": "/actions/research/workbench-file-manifest", "payload": {"workbench": "W1", "manifest": "mf.json", "files": "11", "sha_records": "11"}},
+                {"path": "/actions/research/workbench-file-verify", "payload": {"workbench": "W1", "manifest": "mf.json", "files": "11", "sha_records": "11", "verified": "11", "missing": "0"}},
                 {"path": "/actions/research/workbench-complete", "payload": {"workbench": "W1", "review_decision": "approved"}},
                 {"path": "/actions/research/export-workbench", "payload": {"workbench": "W1", "bundle": "wb.zip"}},
                 {"path": "/actions/research/operations-report", "payload": {"format": "markdown"}},
@@ -168,9 +168,16 @@ def main() -> int:
             assert any("host_input_reference_entries=3" in line for line in rp_ingest["lines"]), rp_ingest
             assert any("host_input_workspace_files=5" in line for line in rp_ingest["lines"]), rp_ingest
             assert any("host_input_csv_file=d.csv" in line for line in rp_ingest["lines"]), rp_ingest
+            assert any("host_file_manifest=mf.json" in line for line in rp_ingest["lines"]), rp_ingest
+            assert any("host_file_manifest_files=11" in line for line in rp_ingest["lines"]), rp_ingest
+            assert any("host_file_manifest_sha_records=11" in line for line in rp_ingest["lines"]), rp_ingest
             rp_data_preview = read_json(base + "/api/state/rp_data_preview")
             assert any("host_input_dataset_rows=7" in line for line in rp_data_preview["lines"]), rp_data_preview
             assert any("host_input_csv_file=d.csv" in line for line in rp_data_preview["lines"]), rp_data_preview
+            rp_data_quality = read_json(base + "/api/state/rp_data_quality")
+            assert any("host_file_verify=passed" in line for line in rp_data_quality["lines"]), rp_data_quality
+            assert any("host_file_verify_verified=11" in line for line in rp_data_quality["lines"]), rp_data_quality
+            assert any("host_file_verify_missing=0" in line for line in rp_data_quality["lines"]), rp_data_quality
             rp_runner = read_json(base + "/api/state/rp_runner")
             assert any("host_action_status=completed" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_revision_run=usable-run:R1-rev2" in line for line in rp_runner["lines"]), rp_runner
@@ -224,6 +231,10 @@ def main() -> int:
             assert any("host_action_workbench_file_manifest=exported" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_workbench_file_verify=passed" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_workbench_manifest=mf.json" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_workbench_manifest_files=11" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_workbench_sha_records=11" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_workbench_verified_files=11" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_workbench_missing_files=0" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_workbench_completion=ready" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_workbench_export=ready" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_workbench_bundle=wb.zip" in line for line in rp_runner["lines"]), rp_runner
@@ -329,6 +340,11 @@ def main() -> int:
             assert any("host_manifest_workbench_runbook_format=markdown" in line for line in rp_manifest["lines"]), rp_manifest
             assert any("host_manifest_workbench_timeline_format=html" in line for line in rp_manifest["lines"]), rp_manifest
             assert any("host_manifest_workbench_manifest=mf.json" in line for line in rp_manifest["lines"]), rp_manifest
+            assert any("host_manifest_file_count=11" in line for line in rp_manifest["lines"]), rp_manifest
+            assert any("host_manifest_sha_records=11" in line for line in rp_manifest["lines"]), rp_manifest
+            assert any("host_manifest_file_verify=passed" in line for line in rp_manifest["lines"]), rp_manifest
+            assert any("host_manifest_verified_files=11" in line for line in rp_manifest["lines"]), rp_manifest
+            assert any("host_manifest_missing_files=0" in line for line in rp_manifest["lines"]), rp_manifest
             assert any("host_manifest_workbench_bundle=wb.zip" in line for line in rp_manifest["lines"]), rp_manifest
             assert any("host_manifest_workflow=WF1" in line for line in rp_manifest["lines"]), rp_manifest
             assert any("host_manifest_workflow_export=wf.zip" in line for line in rp_manifest["lines"]), rp_manifest
@@ -340,6 +356,10 @@ def main() -> int:
             assert any("host_action_workbench_handoff_scope=full" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_workbench_bundle=wb.zip" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_workbench_manifest=mf.json" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workbench_manifest_files=11" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workbench_sha_records=11" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workbench_verified_files=11" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_workbench_missing_files=0" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_workbench_brief_format=html" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_workbench_dossier_format=markdown" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_workbench_graph_format=dot" in line for line in rp_package["lines"]), rp_package
@@ -409,6 +429,20 @@ def main() -> int:
             assert any("host_action_workflow_outputs=rp_stage_dag,rp_stage_state,rp_run_events,rp_artifact_manifest,rp_package" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_export=1" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_agentcompare=1" in line for line in rp_actionio["lines"]), rp_actionio
+            rp_api_artifacts = read_json(base + "/api/state/rp_api_artifacts")
+            assert any("host_action_file_manifest=mf.json" in line for line in rp_api_artifacts["lines"]), rp_api_artifacts
+            assert any("host_action_file_manifest_files=11" in line for line in rp_api_artifacts["lines"]), rp_api_artifacts
+            assert any("host_action_file_sha_records=11" in line for line in rp_api_artifacts["lines"]), rp_api_artifacts
+            assert any("host_action_file_verify=passed" in line for line in rp_api_artifacts["lines"]), rp_api_artifacts
+            assert any("host_action_file_verified=11" in line for line in rp_api_artifacts["lines"]), rp_api_artifacts
+            assert any("host_action_file_missing=0" in line for line in rp_api_artifacts["lines"]), rp_api_artifacts
+            rp_api_data = read_json(base + "/api/state/rp_api_data")
+            assert any("host_action_file_manifest=mf.json" in line for line in rp_api_data["lines"]), rp_api_data
+            assert any("host_action_file_manifest_files=11" in line for line in rp_api_data["lines"]), rp_api_data
+            assert any("host_action_file_sha_records=11" in line for line in rp_api_data["lines"]), rp_api_data
+            assert any("host_action_file_verify=passed" in line for line in rp_api_data["lines"]), rp_api_data
+            assert any("host_action_file_verified=11" in line for line in rp_api_data["lines"]), rp_api_data
+            assert any("host_action_file_missing=0" in line for line in rp_api_data["lines"]), rp_api_data
             rp_web_bundle = read_json(base + "/api/state/rp_web_bundle")
             assert any("host_action_research_inputs=rp_input,rp_runner,rp_api_run" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_evidence_inputs=rp_lit,rp_knowledge,rp_api_evidence" in line for line in rp_web_bundle["lines"]), rp_web_bundle

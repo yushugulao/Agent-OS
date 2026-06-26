@@ -179,11 +179,11 @@ def main() -> int:
                 },
                 {
                     "path": "/actions/research/workbench-file-manifest",
-                    "payload": {"workbench": "usable-workbench:RUN-900", "manifest": "delivery-manifest.json"},
+                    "payload": {"workbench": "usable-workbench:RUN-900", "manifest": "delivery-manifest.json", "files": "9", "sha_records": "9"},
                 },
                 {
                     "path": "/actions/research/workbench-file-verify",
-                    "payload": {"workbench": "usable-workbench:RUN-900", "manifest": "delivery-manifest.json"},
+                    "payload": {"workbench": "usable-workbench:RUN-900", "manifest": "delivery-manifest.json", "files": "9", "sha_records": "9", "verified": "9", "missing": "0"},
                 },
                 {
                     "path": "/actions/research/export-workbench",
@@ -407,6 +407,9 @@ def main() -> int:
         assert "kind=workbench_timeline" in queue
         assert "kind=workbench_file_manifest" in queue
         assert "kind=workbench_file_verify" in queue
+        assert "sha_records=9" in queue
+        assert "verified=9" in queue
+        assert "missing=0" in queue
         assert "kind=workbench_export" in queue
         assert "kind=operations_report" in queue
         assert "kind=operations_advance_next" in queue
@@ -662,6 +665,9 @@ def main() -> int:
         assert "kind=workbench_manuscript" in seed_file
         assert "kind=workbench_task_board_row" in seed_file
         assert "kind=workbench_file_verify" in seed_file
+        assert "sha_records=9" in seed_file
+        assert "verified=9" in seed_file
+        assert "missing=0" in seed_file
         assert "kind=operations_report" in seed_file
         assert "kind=workbench_quality_gate" in seed_file
         assert "kind=project_space" in seed_file

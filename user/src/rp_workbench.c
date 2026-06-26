@@ -432,6 +432,15 @@ int main(void)
 			has_docs = 1;
 			rp_append_text(docs, sizeof(docs), "host_action_workbench_file_manifest=exported;");
 			append_workbench_summary_value(docs, sizeof(docs), "kind=workbench_file_manifest", "manifest=", "host_action_workbench_manifest=", "delivery-manifest.json");
+			append_workbench_summary_value(docs, sizeof(docs), "kind=workbench_file_manifest", "files=", "host_action_workbench_manifest_files=", "9");
+			append_workbench_summary_value(docs, sizeof(docs), "kind=workbench_file_manifest", "sha_records=", "host_action_workbench_sha_records=", "9");
+		}
+		if (rp_host_seed_has("kind=workbench_file_verify")) {
+			has_docs = 1;
+			rp_append_text(docs, sizeof(docs), "host_action_workbench_file_verify=passed;");
+			append_workbench_summary_value(docs, sizeof(docs), "kind=workbench_file_verify", "manifest=", "host_action_workbench_manifest=", "delivery-manifest.json");
+			append_workbench_summary_value(docs, sizeof(docs), "kind=workbench_file_verify", "verified=", "host_action_workbench_verified_files=", "9");
+			append_workbench_summary_value(docs, sizeof(docs), "kind=workbench_file_verify", "missing=", "host_action_workbench_missing_files=", "0");
 		}
 		if (rp_host_seed_has("kind=workbench_export")) {
 			has_docs = 1;
@@ -440,6 +449,32 @@ int main(void)
 		}
 		if (has_docs) {
 			if (!rp_append_file("rp_runner", docs)) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_file_manifest") ||
+		    rp_host_seed_has("kind=workbench_file_verify")) {
+			char *value = workbench_value;
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_file_manifest", "files=", value, sizeof(workbench_value)) &&
+			    !rp_host_seed_copy_value_for_kind("kind=workbench_file_verify", "files=", value, sizeof(workbench_value))) {
+				rp_copy_text(value, sizeof(workbench_value), "9");
+			}
+			if (!rp_append_host_action_line("rp_runner", "host_action_workbench_manifest_files=", value)) return 1;
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_file_manifest", "sha_records=", value, sizeof(workbench_value)) &&
+			    !rp_host_seed_copy_value_for_kind("kind=workbench_file_verify", "sha_records=", value, sizeof(workbench_value))) {
+				rp_copy_text(value, sizeof(workbench_value), "9");
+			}
+			if (!rp_append_host_action_line("rp_runner", "host_action_workbench_sha_records=", value)) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_file_verify")) {
+			char *value = workbench_value;
+			if (!rp_append_file("rp_runner", "host_action_workbench_file_verify=passed")) return 1;
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_file_verify", "verified=", value, sizeof(workbench_value))) {
+				rp_copy_text(value, sizeof(workbench_value), "9");
+			}
+			if (!rp_append_host_action_line("rp_runner", "host_action_workbench_verified_files=", value)) return 1;
+			if (!rp_host_seed_copy_value_for_kind("kind=workbench_file_verify", "missing=", value, sizeof(workbench_value))) {
+				rp_copy_text(value, sizeof(workbench_value), "0");
+			}
+			if (!rp_append_host_action_line("rp_runner", "host_action_workbench_missing_files=", value)) return 1;
 		}
 	}
 

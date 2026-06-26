@@ -396,6 +396,12 @@ int main(void)
 		rp_append_text(token, sizeof(token), manifest);
 		ok = ok && rp_file_contains("rp_runner", token);
 		ok = ok && rp_file_contains("rp_api_compare", token);
+		ok = ok && rp_file_contains("rp_data_quality", "host_file_verify=passed");
+		ok = ok && check_seed_value("kind=workbench_file_verify", "verified=", "9", "rp_runner", "host_action_workbench_verified_files=");
+		ok = ok && check_seed_value("kind=workbench_file_verify", "verified=", "9", "rp_data_quality", "host_file_verify_verified=");
+		ok = ok && check_seed_value("kind=workbench_file_verify", "verified=", "9", "rp_artifact_manifest", "host_manifest_verified_files=");
+		ok = ok && check_seed_value("kind=workbench_file_verify", "verified=", "9", "rp_api_artifacts", "host_action_file_verified=");
+		ok = ok && check_seed_value("kind=workbench_file_verify", "missing=", "0", "rp_api_data", "host_action_file_missing=");
 	}
 	if (rp_host_seed_has("kind=workbench")) {
 		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_created=1");
@@ -495,6 +501,11 @@ int main(void)
 		ok = ok && check_seed_value("kind=workbench_file_manifest", "manifest=", "delivery-manifest.json", "rp_report_text", "host_report_workbench_manifest=");
 		ok = ok && check_seed_value("kind=workbench_file_manifest", "manifest=", "delivery-manifest.json", "rp_artifact_manifest", "host_manifest_workbench_manifest=");
 		ok = ok && check_seed_value("kind=workbench_file_manifest", "manifest=", "delivery-manifest.json", "rp_uresrun", "host_action_workbench_manifest=");
+		ok = ok && check_seed_value("kind=workbench_file_manifest", "files=", "9", "rp_ingest_files", "host_file_manifest_files=");
+		ok = ok && check_seed_value("kind=workbench_file_manifest", "files=", "9", "rp_artifact_manifest", "host_manifest_file_count=");
+		ok = ok && check_seed_value("kind=workbench_file_manifest", "files=", "9", "rp_package", "host_action_workbench_manifest_files=");
+		ok = ok && check_seed_value("kind=workbench_file_manifest", "sha_records=", "9", "rp_api_artifacts", "host_action_file_sha_records=");
+		ok = ok && check_seed_value("kind=workbench_file_manifest", "sha_records=", "9", "rp_api_data", "host_action_file_sha_records=");
 	}
 	if (rp_host_seed_has("kind=workbench_export")) {
 		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_export=ready");
