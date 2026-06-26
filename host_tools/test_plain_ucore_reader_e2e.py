@@ -579,8 +579,10 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=724" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=736" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("tool_events=138" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("review_handoff_checks=12" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_dashboard=ready;sections=8;gates=6;plain_kernel=ordinary_files" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack=ready;evidence_items=10;actions=5;plain_kernel=ordinary_files" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_consistency = read_json(base + "/api/state/rp_consistency")
@@ -754,6 +756,7 @@ def main() -> int:
             assert "Review Gates" in review_html
             assert "Review Evidence Pack" in review_html
             assert "Review Pack Bridges" in review_html
+            assert "Handoff Checks" in review_html
             assert "send_to_reviewer" in review_html
             assert "delivery_to_operations" in review_html
             assert "ready_for_reviewer" in review_html

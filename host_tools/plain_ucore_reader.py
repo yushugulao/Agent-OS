@@ -290,6 +290,7 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Human Review", metric_value(state, [("rp_review2", "decision"), ("rp_report_text", "host_report_review_decision")]), "rp_review2"),
         ("Delivery", metric_value(state, [("rp_package", "latest_delivery_status"), ("rp_package", "status")]), "rp_package"),
         ("Bridge", metric_value(state, [("rp_review_pack", "bridge"), ("rp_package", "review_pack_bridge")]), "rp_review_pack"),
+        ("Handoff Checks", metric_value(state, [("rp_agentcmp", "review_handoff_checks")]), "rp_agentcmp"),
         ("Host Relay Quality", metric_value(state, [("rp_review_pack", "host_relay_quality"), ("rp_review_dashboard", "host_relay_quality")]), "rp_review_pack"),
     ]
     if file_name == "run.html":
@@ -343,6 +344,7 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Required Files", metric_value(state, [("rp_review_dashboard", "gate")]), "rp_review_dashboard"),
         ("Pack Action", metric_value(state, [("rp_review_pack", "action")]), "rp_review_pack"),
         ("Pack Bridge", metric_value(state, [("rp_review_pack", "bridge"), ("rp_package", "review_pack_bridge")]), "rp_review_pack"),
+        ("Native Checks", metric_value(state, [("rp_agentcmp", "review_handoff_checks")]), "rp_agentcmp"),
         ("Revision", metric_value(state, [("rp_revision", "final_status")]), "rp_revision"),
         ("Review Threads", metric_value(state, [("rp_review2", "review_threads")]), "rp_review2"),
         ("Action Items", metric_value(state, [("rp_review2", "action_items")]), "rp_review2"),
@@ -704,6 +706,7 @@ def render_overview(
             ("Sections", metric_value(state, [("rp_review_dashboard", "sections")]), "rp_review_dashboard"),
             ("Decision", metric_value(state, [("rp_review_dashboard", "decision")]), "rp_review_dashboard"),
             ("Pack", metric_value(state, [("rp_review_pack", "pack")]), "rp_review_pack"),
+            ("Handoff Checks", metric_value(state, [("rp_agentcmp", "review_handoff_checks")]), "rp_agentcmp"),
             ("Delivery", metric_value(state, [("rp_package", "latest_delivery_status"), ("rp_package", "status")]), "rp_package"),
         ],
         "llm.html": [

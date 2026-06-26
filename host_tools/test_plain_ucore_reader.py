@@ -117,7 +117,7 @@ status=ready
     "rp_provpath": "critical_paths=3\npath1=plan>data>review>repair>audit\npath2=plan>lit>evidence>knowledge>package\n",
     "rp_knowledge": "literature_search_id=usable-literature-search:RUN-900:1\nscreening_decisions=9;included=3;excluded=6\nevidence_extractions=3;fields=mechanism,evidence_type,reported_outcome\nevidence_protocol=usable-evidence-protocol:RUN-900:1;status=registered\nprisma_flow=usable-prisma-flow:RUN-900:1;identified=9;included=3\nevidence_synthesis=usable-evidence-synthesis:RUN-900:1;themes=traceability,reproducibility,recovery\n",
     "rp_package": "delivery_files=8\nevidence_bundle_entries=12\n",
-    "rp_agentcmp": "plain_kernel=passed\ntest_cases=724\nhandoffs=6\n",
+    "rp_agentcmp": "plain_kernel=passed\ntest_cases=736\nhandoffs=6\nreview_handoff_checks=12;review_sections=8;review_gates=6;review_decisions=3;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;status=ready\n",
     "rp_consistency": "checks=120\nartifact_provenance=3\nartifact_dossier_checks=4\nartifact_path_rebuild_files=6\nartifact_path_rebuild_steps=7\n",
     "rp_artifact_manifest": (
         "record=1;kind=input;path=rp_input_fastq;status=ready\n"
@@ -218,6 +218,7 @@ def main() -> int:
         assert "Review Gates" in review_html
         assert "Review Evidence Pack" in review_html
         assert "Review Pack Bridges" in review_html
+        assert "Handoff Checks" in review_html
         assert "send_to_reviewer" in review_html
         assert "delivery_to_operations" in review_html
         assert "ready_for_reviewer" in review_html

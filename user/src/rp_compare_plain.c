@@ -1,6 +1,13 @@
 #include <stdio.h>
 #include <research_platform_state.h>
 
+static int require_equal(const char *name, int actual, int expected)
+{
+	if (actual == expected) return 1;
+	printf("rp_compare_plain: mismatch %s actual=%d expected=%d\n", name, actual, expected);
+	return 0;
+}
+
 static int check_seed_value(const char *kind, const char *key, const char *fallback, const char *path, const char *prefix)
 {
 	char value[96];
@@ -1176,6 +1183,28 @@ int main(void)
 	ok = ok && rp_file_contains("rp_tool", "tool=review_dashboard.aggregate");
 	ok = ok && rp_file_contains("rp_ack", "ack=review_pack;msg=pack;status=ready");
 	ok = ok && rp_file_contains("rp_tool", "tool=review_pack.assemble");
+	int review_sections = rp_get_int_value("rp_review_dashboard", "sections=");
+	int review_gates = rp_count_token("rp_review_dashboard", "gate=");
+	int review_decisions = rp_count_token("rp_review_dashboard", "decision=");
+	int review_handoffs = rp_count_token("rp_review_dashboard", "handoff=");
+	int review_pack_actions = rp_count_token("rp_package", "review_pack_action=");
+	int review_bridge_paths = 0;
+	if (rp_file_contains("rp_package", "review_pack_bridge=delivery_manifest")) review_bridge_paths++;
+	if (rp_file_contains("rp_package", "operations_report")) review_bridge_paths++;
+	if (rp_file_contains("rp_package", "project_space")) review_bridge_paths++;
+	if (rp_file_contains("rp_package", "workbench_handoff")) review_bridge_paths++;
+	ok = ok && require_equal("review_sections", review_sections, 8);
+	ok = ok && require_equal("review_gates", review_gates, 6);
+	ok = ok && require_equal("review_decisions", review_decisions, 3);
+	ok = ok && require_equal("review_handoffs", review_handoffs, 3);
+	ok = ok && require_equal("review_pack_actions", review_pack_actions, 3);
+	ok = ok && require_equal("review_bridge_paths", review_bridge_paths, 4);
+	ok = ok && rp_file_contains("rp_review_dashboard", "pack_source=rp_package,rp_runner,rp_review_pack");
+	ok = ok && rp_file_contains("rp_review_dashboard", "pack_bridge=delivery_manifest,operations_report,project_space,workbench_handoff");
+	ok = ok && rp_file_contains("rp_package", "review_pack_action=deliver_to_reviewer;source=rp_package;status=ready");
+	ok = ok && rp_file_contains("rp_package", "review_pack_action=resolve_project_items;source=rp_package;status=ready");
+	ok = ok && rp_file_contains("rp_runner", "workbench_next_task=delivery_manifest");
+	ok = ok && rp_file_contains("rp_api_action", "project_space_actions=5");
 	if (!ok) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
@@ -1183,7 +1212,8 @@ int main(void)
 		printf("rp_compare_plain: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		return 1;
 	}
-	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=170;message_acks=44;tool_events=138;action_state_records=12;test_cases=724;action_side_effect_records=16;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=42;state_files=170;message_acks=44;tool_events=138;action_state_records=12;test_cases=736;action_side_effect_records=16;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "review_handoff_checks=12;review_sections=8;review_gates=6;review_decisions=3;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;status=ready")) return 1;
 	if (rp_host_seed_has("kind=research_run")) {
 		if (!rp_append_file("rp_agentcmp", "host_action_research_verified=1")) return 1;
 	}
