@@ -400,6 +400,8 @@ The `host_tools/plain_ucore_reader.py` utility renders ordinary `rp_*` state fil
 python host_tools/plain_ucore_reader.py --state-dir path/to/rp-state --out-dir runtime/plain_ucore_reader
 python host_tools/plain_ucore_reader.py --state-dir path/to/rp-state --out-dir runtime/plain_ucore_reader --serve --port 8767
 python host_tools/plain_ucore_reader.py --state-dir path/to/rp-state --out-dir runtime/plain_ucore_reader --serve --port 8767 --auto-run-ucore --repo-dir . --run-root runtime/plain_ucore_auto_runs
+python host_tools/plain_ucore_fs_extract.py --image nfs/fs-copy.img --out-dir runtime/plain_ucore_extracted --repo-dir .
+python host_tools/test_plain_ucore_fs_extract.py
 python host_tools/test_plain_ucore_reader.py
 ```
 
@@ -413,7 +415,7 @@ python host_tools/plain_ucore_action_runner.py --actions runtime/plain_ucore_rea
 python host_tools/test_plain_ucore_action_runner.py
 ```
 
-The runner writes `state-next/rp_host_action_queue`, `state-next/rp_host_action_plan`, `state-next/rp_host_action_inbox`, `actions.json`, and `runner-summary.json`. With `--run-ucore`, it writes the inbox text into a generated user-build header, builds the ordinary user programs, runs `rp_orch`, writes `ucore-run.log`, and records QEMU result markers in `state-next/rp_host_run_result`. The queue and plan files stay in the host run package because the upstream uCore teaching file system has tight inode capacity. Seeded research, comparison, human-review, revision, workbench, notebook-export, and bundle-export actions are reflected in the ordinary state files used by the platform: `rp_input`, `rp_runner`, `rp_review2`, `rp_revision`, `rp_package`, `rp_nbexec`, `rp_actionio`, and `rp_agentcmp`.
+The runner writes `state-next/rp_host_action_queue`, `state-next/rp_host_action_plan`, `state-next/rp_host_action_inbox`, `actions.json`, and `runner-summary.json`. With `--run-ucore`, it writes the inbox text into a generated user-build header, builds the ordinary user programs, runs `rp_orch`, writes `ucore-run.log`, extracts text `rp_*` state files from `nfs/fs-copy.img`, and records QEMU result markers in `state-next/rp_host_run_result`. The queue and plan files stay in the host run package because the upstream uCore teaching file system has tight inode capacity. Seeded research, comparison, human-review, revision, workbench, notebook-export, and bundle-export actions are reflected in the ordinary state files used by the platform: `rp_input`, `rp_runner`, `rp_review2`, `rp_revision`, `rp_package`, `rp_nbexec`, `rp_actionio`, and `rp_agentcmp`.
 
 The reader is a host-side viewer and action-capture service for plain uCore output. It does not modify `os/`, `nfs/`, or `scripts`, and it does not add Agent-OS kernel features.
 

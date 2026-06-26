@@ -11,6 +11,8 @@ import subprocess
 from pathlib import Path
 from typing import Iterable
 
+from plain_ucore_fs_extract import extract_state_files
+
 
 def read_jsonl(path: Path) -> list[dict[str, object]]:
     if not path.exists():
@@ -273,6 +275,7 @@ def write_run_result_state(next_state: Path, run_summary: dict[str, object], log
         f"status={'ready' if passed else 'failed'}",
         f"passed={1 if passed else 0}",
         f"embedded_action_records={run_summary.get('embedded_action_records', 0)}",
+        f"extracted_state_files={run_summary.get('extracted_state_files', 0)}",
         f"log={line_value(run_summary.get('log', ''))}",
     ]
     host_reader_actions = find_log_value(log_text, "rp_web_export: host_reader_actions=")
@@ -330,10 +333,22 @@ def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_dis
     code = run_command(make_wsl_command(run_command_text, wsl_distro), log_path, timeout_seconds + 30, append=True)
     text = log_path.read_text(encoding="utf-8", errors="replace")
     passed = "rp_orch: passed" in text and "child_failed" not in text and "ialloc" not in text
+    extract_summary: dict[str, object] = {"status": "skipped", "extracted_state_files": 0}
+    image_path = repo_dir / "nfs" / "fs-copy.img"
+    if image_path.exists():
+        extract_summary = extract_state_files(image_path, run_dir / "state-extracted", repo_dir)
+        for item in sorted((run_dir / "state-extracted").iterdir()):
+            if item.is_file() and item.name.startswith("rp_"):
+                shutil.copy2(item, next_state / item.name)
+    else:
+        passed = False
+        extract_summary = {"status": "missing_image", "extracted_state_files": 0}
     summary = {
         "commands": [clean_command, f"embedded_action_records={embedded_records}", run_command_text],
         "returncode": code,
         "embedded_action_records": embedded_records,
+        "extracted_state_files": extract_summary.get("extracted_state_files", 0),
+        "extract_status": extract_summary.get("status", "unknown"),
         "passed": passed,
         "log": str(log_path),
         "status": "ready" if passed else "failed",
