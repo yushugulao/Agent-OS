@@ -424,6 +424,9 @@ int main(void)
 			   "archive_manifest=section:rp_archive_manifest\n"
 			   "artifact_dossier=rp_input_fastq,rp_normalized_fastq,rp_align_table,rp_metrics_json,rp_gene_counts_csv,rp_chart_data,rp_stage_log\n"
 			   "artifact_review_link=rp_artifact_manifest->rp_review_pack->rp_package\n"
+			   "provenance=rp_align_table;stage=align;event=4;retry=rp_retry_plan;review_gate=artifact_manifest;llm_quality=rp_llmeval;status=recovered\n"
+			   "provenance=rp_metrics_json;stage=profile;event=5;cache=hit;review_gate=artifact_manifest;status=ready\n"
+			   "provenance=rp_report_text;stage=package;event=7;review_pack=rp_review_pack;status=ready\n"
 			   "status=recovered\n")) {
 		return 1;
 	}

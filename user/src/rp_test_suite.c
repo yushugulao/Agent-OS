@@ -64,6 +64,8 @@ int main(void)
 	ok = ok && require_file_token("rp_artifact", "align_table=section:rp_align_table");
 	ok = ok && require_file_token("rp_artifact", "artifact_dossier=rp_input_fastq,rp_normalized_fastq,rp_align_table");
 	ok = ok && require_file_token("rp_artifact", "artifact_review_link=rp_artifact_manifest->rp_review_pack->rp_package");
+	ok = ok && require_file_token("rp_artifact", "provenance=rp_align_table;stage=align");
+	ok = ok && require_file_token("rp_artifact", "provenance=rp_metrics_json;stage=profile");
 	ok = ok && require_file_token("rp_report_text", "Recovery reran only the align stage");
 	ok = ok && require_file_token("rp_chart_data", "stage,attempts,status");
 	ok = ok && require_file_token("rp_runner", "cache_hits=1");
@@ -123,6 +125,9 @@ int main(void)
 	ok = ok && require_file_token("rp_artifact_manifest", "support=stage_log;path=rp_stage_log;status=ready");
 	ok = ok && require_file_token("rp_artifact_manifest", "support_entries=2");
 	ok = ok && require_file_token("rp_artifact_manifest", "dossier=artifact-detail");
+	ok = ok && require_file_token("rp_artifact_manifest", "dossier_check=workflow_stage");
+	ok = ok && require_file_token("rp_artifact_manifest", "dossier_check=review_gate");
+	ok = ok && require_file_token("rp_artifact_manifest", "dossier_check=llm_quality");
 	ok = ok && require_file_token("rp_runner", "custom_source=rp_input");
 	ok = ok && require_file_token("rp_runner", "custom_runs=3");
 	ok = ok && require_file_token("rp_runner", "custom_dataset_rows=3");
@@ -1437,7 +1442,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=711\n"
+			   "tests=716\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -1486,6 +1491,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=711 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=716 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
 	return 0;
 }

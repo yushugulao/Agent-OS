@@ -428,6 +428,14 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
         ):
             for line in state_prefixed_lines(state, name, prefixes):
                 host_action_rows.append((name, line))
+        review_signal_rows = []
+        for name, prefixes in (
+            ("rp_review_dashboard", ("section=artifacts", "gate=artifact_manifest", "host_relay_quality=")),
+            ("rp_review_pack", ("evidence=artifact_manifest", "evidence=llm_quality")),
+            ("rp_llmeval", ("host_relay_eval_batch=",)),
+        ):
+            for line in state_prefixed_lines(state, name, prefixes):
+                review_signal_rows.append((name, line))
         return [
             render_record_panel(
                 "Artifact Manifest Records",
@@ -445,6 +453,16 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 state_records(state, "rp_artifact", "section"),
             ),
             render_record_panel(
+                "Artifact Provenance",
+                [("Provenance", "provenance"), ("Stage", "stage"), ("Event", "event"), ("Retry", "retry"), ("Cache", "cache"), ("Review Gate", "review_gate"), ("LLM Quality", "llm_quality"), ("Status", "status")],
+                state_records(state, "rp_artifact", "provenance"),
+            ),
+            render_record_panel(
+                "Dossier Checks",
+                [("Check", "dossier_check"), ("Source", "source"), ("Stage", "stage"), ("Event", "event"), ("Gate", "gate"), ("Status", "status")],
+                state_records(state, "rp_artifact_manifest", "dossier_check"),
+            ),
+            render_record_panel(
                 "Archive Files",
                 [("Archive File", "archive_file"), ("Kind", "kind"), ("Status", "status")],
                 state_records(state, "rp_artifact", "archive_file"),
@@ -454,6 +472,7 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 [("Log", "log"), ("Status", "status"), ("Reason", "reason"), ("Artifact", "artifact")],
                 state_records(state, "rp_stage_log", "log"),
             ),
+            render_line_panel("Review And LLM Signals", review_signal_rows),
             render_line_panel("Host Artifact Actions", host_action_rows),
         ]
     if file_name == "review.html":

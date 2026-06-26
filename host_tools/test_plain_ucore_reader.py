@@ -102,6 +102,8 @@ status=ready
         "archive_file=rp_align_table;kind=alignment;status=ready\n"
         "artifact_dossier=rp_input_fastq,rp_normalized_fastq,rp_align_table,rp_metrics_json,rp_gene_counts_csv,rp_chart_data,rp_stage_log\n"
         "artifact_review_link=rp_artifact_manifest->rp_review_pack->rp_package\n"
+        "provenance=rp_align_table;stage=align;event=4;retry=rp_retry_plan;review_gate=artifact_manifest;llm_quality=rp_llmeval;status=recovered\n"
+        "provenance=rp_metrics_json;stage=profile;event=5;cache=hit;review_gate=artifact_manifest;status=ready\n"
         "status=recovered\n"
     ),
     "rp_agents": "agent=orchestrator;role=control;state=active;msg=4\nagent=recovery;role=repair;state=recovered;msg=3\nagents=7\nmessages=21\n",
@@ -121,6 +123,9 @@ status=ready
         "record=1;kind=input;path=rp_input_fastq;status=ready\n"
         "record=3;kind=alignment;path=rp_artifact;section=rp_align_table;status=ready\n"
         "dossier=artifact-detail;source=rp_artifact;stage_log=rp_stage_log;chart=rp_chart_data;review_pack=rp_review_pack;status=ready\n"
+        "dossier_check=workflow_stage;source=rp_stage_state;stage=align;status=recovered\n"
+        "dossier_check=review_gate;source=rp_review_dashboard;gate=artifact_manifest;status=pass\n"
+        "dossier_check=llm_quality;source=rp_llmeval;status=host_checked\n"
         "manifest_records=4\n"
     ),
     "rp_stage_log": "log=align first_attempt status=failed reason=tool_output_missing\nhost_artifact_log=clean.log;stage=clean;level=warn;message=adapter_trimmed\n",
@@ -133,8 +138,10 @@ status=ready
         "run=RUN-042\n"
         "sections=8\n"
         "section=workflow;source=rp_stage_dag,rp_stage_state,rp_run_events,rp_retry_plan;status=recovered\n"
+        "section=artifacts;source=rp_artifact,rp_artifact_manifest,rp_report_text,rp_chart_data;status=ready\n"
         "section=llm;source=rp_llm_req,rp_llm_resp,rp_llmeval,rp_llm_guard,rp_relay,rp_prompt;status=ready\n"
         "gate=required_files;status=pass;source=rp_package\n"
+        "gate=artifact_manifest;status=pass;source=rp_artifact_manifest\n"
         "gate=llm_packet_guard;status=pass;source=rp_llm_guard\n"
         "handoff=orchestrator->reviewer;artifact=rp_review_dashboard;status=ready\n"
         "decision=ready_for_reviewer;basis=required_files,human_review,llm_packet_guard,workflow_recovered\n"
@@ -142,6 +149,7 @@ status=ready
     ),
     "rp_review_pack": (
         "pack=review-evidence\n"
+        "evidence=artifact_manifest;source=rp_artifact_manifest;records=4;status=pass\n"
         "evidence=llm_quality;source=rp_llmeval;passed=7;status=pass\n"
         "evidence=delivery_ready;source=rp_package;files=8;status=pass\n"
         "evidence=operations_ready;source=rp_runner;status=pass\n"
@@ -221,10 +229,16 @@ def main() -> int:
         assert "Artifact Manifest Records" in artifacts_html
         assert "Artifact Dossier" in artifacts_html
         assert "Derived Artifact Sections" in artifacts_html
+        assert "Artifact Provenance" in artifacts_html
+        assert "Dossier Checks" in artifacts_html
         assert "Archive Files" in artifacts_html
         assert "Stage Logs" in artifacts_html
+        assert "Review And LLM Signals" in artifacts_html
         assert "Host Artifact Actions" in artifacts_html
         assert "rp_align_table" in artifacts_html
+        assert "rp_retry_plan" in artifacts_html
+        assert "artifact_manifest" in artifacts_html
+        assert "host_relay_eval_batch" in artifacts_html
         assert "host_artifact_chart" in artifacts_html
         actions_html = (out_dir / "actions.html").read_text(encoding="utf-8")
         assert "Batch Actions" in actions_html

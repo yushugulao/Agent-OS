@@ -345,12 +345,17 @@ def main() -> int:
             assert any("host_workflow_report_action=workflow-report.md;format=markdown;sections=5;status=ready" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
             assert any("dossier=artifact-detail;source=rp_artifact;stage_log=rp_stage_log;chart=rp_chart_data;review_pack=rp_review_pack;status=ready" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
             assert any("dossier_item=alignment;path=rp_artifact;section=rp_align_table;status=ready" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
+            assert any("dossier_check=workflow_stage;source=rp_stage_state;stage=align;status=recovered" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
+            assert any("dossier_check=review_gate;source=rp_review_dashboard;gate=artifact_manifest;status=pass" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
+            assert any("dossier_check=llm_quality;source=rp_llmeval;status=host_checked" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
             rp_artifact = read_json(base + "/api/state/rp_artifact")
             assert any("host_artifact_actions=applied" in line for line in rp_artifact["lines"]), rp_artifact
             assert any("host_artifact_input=reads_R1.fastq;kind=fastq;sha256=sha-host-input;bytes=2048;source=upload" in line for line in rp_artifact["lines"]), rp_artifact
             assert any("host_artifact_derive=reads_R1.fastq;output=clean_reads.fastq;operation=trim;stage=clean;sha256=sha-host-derived" in line for line in rp_artifact["lines"]), rp_artifact
             assert any("artifact_dossier=rp_input_fastq,rp_normalized_fastq,rp_align_table,rp_metrics_json,rp_gene_counts_csv,rp_chart_data,rp_stage_log" in line for line in rp_artifact["lines"]), rp_artifact
             assert any("artifact_review_link=rp_artifact_manifest->rp_review_pack->rp_package" in line for line in rp_artifact["lines"]), rp_artifact
+            assert any("provenance=rp_align_table;stage=align;event=4;retry=rp_retry_plan;review_gate=artifact_manifest;llm_quality=rp_llmeval;status=recovered" in line for line in rp_artifact["lines"]), rp_artifact
+            assert any("provenance=rp_metrics_json;stage=profile;event=5;cache=hit;review_gate=artifact_manifest;status=ready" in line for line in rp_artifact["lines"]), rp_artifact
             rp_stage_log = read_json(base + "/api/state/rp_stage_log")
             assert any("host_artifact_log=clean.log;stage=clean;level=warn;message=adapter_trimmed" in line for line in rp_stage_log["lines"]), rp_stage_log
             rp_chart_data = read_json(base + "/api/state/rp_chart_data")
@@ -693,9 +698,15 @@ def main() -> int:
             assert "Artifact Manifest Records" in artifacts_html
             assert "Artifact Dossier" in artifacts_html
             assert "Derived Artifact Sections" in artifacts_html
+            assert "Artifact Provenance" in artifacts_html
+            assert "Dossier Checks" in artifacts_html
             assert "Archive Files" in artifacts_html
+            assert "Review And LLM Signals" in artifacts_html
             assert "Host Artifact Actions" in artifacts_html
             assert "artifact-detail" in artifacts_html
+            assert "rp_retry_plan" in artifacts_html
+            assert "artifact_manifest" in artifacts_html
+            assert "host_relay_eval_batch" in artifacts_html
             assert "host_artifact_chart" in artifacts_html
             agents_html = read_text(base + "/agents.html")
             assert "Agent Detail" in agents_html
