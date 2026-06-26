@@ -583,6 +583,26 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
             ),
             render_line_panel("Provenance Paths", paths),
             render_line_panel("Evidence Protocol Files", protocol_rows),
+            render_record_panel(
+                "Artifact Review Path",
+                [
+                    ("Path", "artifact_review_path"),
+                    ("Input", "input"),
+                    ("Prepared", "prepared"),
+                    ("Artifact", "artifact"),
+                    ("Metrics", "metrics"),
+                    ("Chart", "chart"),
+                    ("Failure", "failure"),
+                    ("Retry", "retry"),
+                    ("Event", "event"),
+                    ("Report", "report"),
+                    ("Review", "review"),
+                    ("Review Pack", "review_pack"),
+                    ("Delivery", "delivery"),
+                    ("Status", "status"),
+                ],
+                state_records(state, "rp_artifact_manifest", "artifact_review_path"),
+            ),
         ]
     if file_name == "compare.html":
         compare_rows = [
@@ -707,6 +727,26 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 "Artifact Provenance",
                 [("Provenance", "provenance"), ("Stage", "stage"), ("Event", "event"), ("Retry", "retry"), ("Cache", "cache"), ("Review Gate", "review_gate"), ("LLM Quality", "llm_quality"), ("Status", "status")],
                 state_records(state, "rp_artifact", "provenance"),
+            ),
+            render_record_panel(
+                "Artifact Review Path",
+                [
+                    ("Path", "artifact_review_path"),
+                    ("Input", "input"),
+                    ("Prepared", "prepared"),
+                    ("Artifact", "artifact"),
+                    ("Metrics", "metrics"),
+                    ("Chart", "chart"),
+                    ("Failure", "failure"),
+                    ("Retry", "retry"),
+                    ("Event", "event"),
+                    ("Report", "report"),
+                    ("Review", "review"),
+                    ("Review Pack", "review_pack"),
+                    ("Delivery", "delivery"),
+                    ("Status", "status"),
+                ],
+                state_records(state, "rp_artifact_manifest", "artifact_review_path"),
             ),
             render_record_panel(
                 "Dossier Checks",

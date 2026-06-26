@@ -361,6 +361,9 @@ def main() -> int:
             assert any("dossier_check=workflow_stage;source=rp_stage_state;stage=align;status=recovered" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
             assert any("dossier_check=review_gate;source=rp_review_dashboard;gate=artifact_manifest;status=pass" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
             assert any("dossier_check=llm_quality;source=rp_llmeval;status=host_checked" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
+            assert any("artifact_review_path=raw_to_report;input=rp_input_fastq;prepared=rp_artifact:rp_normalized_fastq;artifact=rp_artifact:rp_align_table;report=rp_report_text;review=rp_review_dashboard;status=ready" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
+            assert any("artifact_review_path=quality_to_package;metrics=rp_artifact:rp_metrics_json;chart=rp_chart_data;llm_quality=rp_llmeval;delivery=rp_package;status=ready" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
+            assert any("artifact_review_path=recovery_to_review;failure=rp_stage_log;retry=rp_retry_plan;event=rp_run_events:4;manifest=rp_artifact_manifest;review_pack=rp_review_pack;status=recovered" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
             rp_artifact = read_json(base + "/api/state/rp_artifact")
             assert any("host_artifact_actions=applied" in line for line in rp_artifact["lines"]), rp_artifact
             assert any("host_artifact_input=reads_R1.fastq;kind=fastq;sha256=sha-host-input;bytes=2048;source=upload" in line for line in rp_artifact["lines"]), rp_artifact
@@ -787,6 +790,9 @@ def main() -> int:
             assert "Artifact Dossier" in artifacts_html
             assert "Derived Artifact Sections" in artifacts_html
             assert "Artifact Provenance" in artifacts_html
+            assert "Artifact Review Path" in artifacts_html
+            assert "quality_to_package" in artifacts_html
+            assert "recovery_to_review" in artifacts_html
             assert "Dossier Checks" in artifacts_html
             assert "Archive Files" in artifacts_html
             assert "Review And LLM Signals" in artifacts_html
@@ -812,6 +818,8 @@ def main() -> int:
             assert "Claim Records" in evidence_html
             assert "Provenance Paths" in evidence_html
             assert "Evidence Protocol Files" in evidence_html
+            assert "Artifact Review Path" in evidence_html
+            assert "raw_to_report" in evidence_html
             assert "retrylog-a" in evidence_html
             assert "plan&gt;data&gt;review&gt;repair&gt;audit" in evidence_html
             assert "Evidence Protocol" in evidence_html
