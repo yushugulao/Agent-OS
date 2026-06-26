@@ -444,7 +444,10 @@ int main(void)
 	if (!rp_write_file("rp_api_compare",
 			   "api=compare-metrics\n"
 			   "plain_kernel=passed\n"
-			   "agentos_kernel=pending\n"
+			   "agentos_kernel=observed\n"
+			   "agentos_context_snapshot=1\n"
+			   "agentos_metadata_index=1\n"
+			   "agentos_batch_tool=1\n"
 			   "file_scans=128\n"
 			   "state_convention=1\n"
 			   "user_permission_only=1\n"
