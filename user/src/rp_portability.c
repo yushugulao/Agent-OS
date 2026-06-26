@@ -49,7 +49,7 @@ int main(void)
 	if (!rp_append_file("rp_wfio", "blocking_items=0")) return 1;
 	if (!rp_append_file("rp_wfio", "decision=ready_for_agentos")) return 1;
 	if (!rp_append_file("rp_wfio", "package=workflow-portability")) return 1;
-	if (rp_host_seed_has_workflow_portability_action()) {
+	if (rp_host_seed_has_workflow_portability_run_action()) {
 		char import_id[80];
 		char source_format[32];
 		char source[64];
@@ -86,6 +86,161 @@ int main(void)
 		if (!rp_append_host_action_line("rp_wfio", "host_portability_rehearsal=", rehearsal_status)) return 1;
 		if (!rp_append_host_action_line("rp_wfio", "host_portability_decision=", readiness_decision)) return 1;
 		if (!rp_append_host_action_line("rp_wfio", "host_portability_package=", package)) return 1;
+	}
+	if (rp_host_seed_has_workflow_portability_step_action()) {
+		char value[96];
+		char other[96];
+		char third[96];
+		char fourth[96];
+		char line[240];
+		if (!rp_append_file("rp_wfio", "host_portability_steps=applied")) return 1;
+		if (rp_host_seed_has("kind=workflow_portability_import")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_import", "import_id=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "workflow-import:host-nextflow");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_import", "source_format=", other, sizeof(other))) {
+				rp_copy_text(other, sizeof(other), "nextflow");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_import", "source=", third, sizeof(third))) {
+				rp_copy_text(third, sizeof(third), "main.host.nf");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_import", "normalized_steps=", fourth, sizeof(fourth))) {
+				rp_copy_text(fourth, sizeof(fourth), "15");
+			}
+			rp_copy_text(line, sizeof(line), "host_portability_import_action=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";format=");
+			rp_append_text(line, sizeof(line), other);
+			rp_append_text(line, sizeof(line), ";source=");
+			rp_append_text(line, sizeof(line), third);
+			rp_append_text(line, sizeof(line), ";normalized_steps=");
+			rp_append_text(line, sizeof(line), fourth);
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_import", "adapter_id=", other, sizeof(other))) {
+				rp_copy_text(other, sizeof(other), "adapter:nextflow");
+			}
+			rp_append_text(line, sizeof(line), ";adapter=");
+			rp_append_text(line, sizeof(line), other);
+			if (!rp_append_file("rp_wfio", line)) return 1;
+		}
+		if (rp_host_seed_has("kind=workflow_portability_plan")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_plan", "migration_plan=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "workflow-migration-plan:host-nextflow");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_plan", "target_runtime=", other, sizeof(other))) {
+				rp_copy_text(other, sizeof(other), "agentos-ucore");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_plan", "migration_steps=", third, sizeof(third))) {
+				rp_copy_text(third, sizeof(third), "9");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_plan", "risk_items=", fourth, sizeof(fourth))) {
+				rp_copy_text(fourth, sizeof(fourth), "4");
+			}
+			rp_copy_text(line, sizeof(line), "host_portability_plan_action=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";target=");
+			rp_append_text(line, sizeof(line), other);
+			rp_append_text(line, sizeof(line), ";steps=");
+			rp_append_text(line, sizeof(line), third);
+			rp_append_text(line, sizeof(line), ";risks=");
+			rp_append_text(line, sizeof(line), fourth);
+			if (!rp_append_file("rp_wfio", line)) return 1;
+		}
+		if (rp_host_seed_has("kind=workflow_portability_bind")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_bind", "execution_plan=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "workflow-migration-execution-plan:host-nextflow:agentcompare");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_bind", "compare_profile=", other, sizeof(other))) {
+				rp_copy_text(other, sizeof(other), "compare-profile:host-nextflow:migration");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_bind", "scenario_id=", third, sizeof(third))) {
+				rp_copy_text(third, sizeof(third), "backend-scenario:host-nextflow");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_bind", "backend_cases=", fourth, sizeof(fourth))) {
+				rp_copy_text(fourth, sizeof(fourth), "4");
+			}
+			rp_copy_text(line, sizeof(line), "host_portability_bind_action=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";profile=");
+			rp_append_text(line, sizeof(line), other);
+			rp_append_text(line, sizeof(line), ";scenario=");
+			rp_append_text(line, sizeof(line), third);
+			rp_append_text(line, sizeof(line), ";backend_cases=");
+			rp_append_text(line, sizeof(line), fourth);
+			if (!rp_append_file("rp_wfio", line)) return 1;
+		}
+		if (rp_host_seed_has("kind=workflow_portability_rehearse")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_rehearse", "rehearsal_id=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "workflow-rehearsal:host-nextflow");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_rehearse", "binding_id=", other, sizeof(other))) {
+				rp_copy_text(other, sizeof(other), "workflow-migration-binding:RUN-042:plain-ucore");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_rehearse", "rehearsal_status=", third, sizeof(third))) {
+				rp_copy_text(third, sizeof(third), "passed");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_rehearse", "observed_ready=", fourth, sizeof(fourth))) {
+				rp_copy_text(fourth, sizeof(fourth), "3");
+			}
+			rp_copy_text(line, sizeof(line), "host_portability_rehearse_action=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";binding=");
+			rp_append_text(line, sizeof(line), other);
+			rp_append_text(line, sizeof(line), ";status=");
+			rp_append_text(line, sizeof(line), third);
+			rp_append_text(line, sizeof(line), ";observed_ready=");
+			rp_append_text(line, sizeof(line), fourth);
+			if (rp_host_seed_copy_value_for_kind("kind=workflow_portability_rehearse", "skipped=", other, sizeof(other))) {
+				rp_append_text(line, sizeof(line), ";skipped=");
+				rp_append_text(line, sizeof(line), other);
+			}
+			if (!rp_append_file("rp_wfio", line)) return 1;
+		}
+		if (rp_host_seed_has("kind=workflow_portability_review")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_review", "review_id=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "workflow-migration-readiness:RUN-042");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_review", "readiness_decision=", other, sizeof(other))) {
+				rp_copy_text(other, sizeof(other), "ready_for_agentos");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_review", "blocking_items=", third, sizeof(third))) {
+				rp_copy_text(third, sizeof(third), "0");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_review", "work_items=", fourth, sizeof(fourth))) {
+				rp_copy_text(fourth, sizeof(fourth), "6");
+			}
+			rp_copy_text(line, sizeof(line), "host_portability_review_action=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";decision=");
+			rp_append_text(line, sizeof(line), other);
+			rp_append_text(line, sizeof(line), ";blocking_items=");
+			rp_append_text(line, sizeof(line), third);
+			rp_append_text(line, sizeof(line), ";work_items=");
+			rp_append_text(line, sizeof(line), fourth);
+			if (!rp_append_file("rp_wfio", line)) return 1;
+		}
+		if (rp_host_seed_has("kind=workflow_portability_package")) {
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_package", "package=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "workflow-portability-host.zip");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_package", "export_format=", other, sizeof(other))) {
+				rp_copy_text(other, sizeof(other), "zip");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_package", "import_id=", third, sizeof(third))) {
+				rp_copy_text(third, sizeof(third), "workflow-import:host-nextflow");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=workflow_portability_package", "bundle=", fourth, sizeof(fourth))) {
+				rp_copy_text(fourth, sizeof(fourth), "workflow-portability-host.zip");
+			}
+			rp_copy_text(line, sizeof(line), "host_portability_package_action=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";format=");
+			rp_append_text(line, sizeof(line), other);
+			rp_append_text(line, sizeof(line), ";import=");
+			rp_append_text(line, sizeof(line), third);
+			rp_append_text(line, sizeof(line), ";bundle=");
+			rp_append_text(line, sizeof(line), fourth);
+			if (!rp_append_file("rp_wfio", line)) return 1;
+		}
 	}
 	if (!rp_append_file("rp_ack", "ack=portability;msg=wf;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=portability.plan_migration;target=rp_wfio;status=ok")) return 1;

@@ -173,6 +173,18 @@ def action_kind(path: str) -> str:
         return "host_workflow"
     if path.endswith("/host-workflow/export"):
         return "host_workflow_export"
+    if path.endswith("/workflow-portability/import"):
+        return "workflow_portability_import"
+    if path.endswith("/workflow-portability/plan"):
+        return "workflow_portability_plan"
+    if path.endswith("/workflow-portability/bind"):
+        return "workflow_portability_bind"
+    if path.endswith("/workflow-portability/rehearse"):
+        return "workflow_portability_rehearse"
+    if path.endswith("/workflow-portability/review"):
+        return "workflow_portability_review"
+    if path.endswith("/workflow-portability/package"):
+        return "workflow_portability_package"
     if path.endswith("/workflow-portability/run"):
         return "workflow_portability"
     return "generic"
@@ -217,8 +229,16 @@ def action_plan_line(record: dict[str, object]) -> str:
         return f"plan={sequence};kind=agentcompare;prepare=rp_agentcmp;execute=rp_orch;collect=rp_compare_plain;status=ready"
     if kind == "host_workflow":
         return f"plan={sequence};kind=host_workflow;prepare=rp_stage_dag;execute=rp_orch;collect=rp_artifact_manifest;status=ready"
-    if kind == "workflow_portability":
-        return f"plan={sequence};kind=workflow_portability;prepare=rp_wfio;execute=rp_orch;collect=rp_compare_plain;status=ready"
+    if kind in {
+        "workflow_portability",
+        "workflow_portability_import",
+        "workflow_portability_plan",
+        "workflow_portability_bind",
+        "workflow_portability_rehearse",
+        "workflow_portability_review",
+        "workflow_portability_package",
+    }:
+        return f"plan={sequence};kind={kind};prepare=rp_wfio;execute=rp_orch;collect=rp_compare_plain;status=ready"
     return f"plan={sequence};kind={kind};prepare=rp_host_action_queue;execute=rp_orch;collect=rp_web_bundle;status=ready"
 
 
@@ -410,6 +430,12 @@ def compact_seed_text(text: str) -> str:
         "host_workflow": {"workflow_id", "run_id", "engine", "dag", "retry_stage", "cache_hit_stage", "worker_slots", "queue_depth", "observer_events", "retry_reason"},
         "host_workflow_export": {"workflow_id", "run_id", "format", "bundle"},
         "workflow_portability": {"import_id", "source_format", "source", "target_runtime", "execution_plan", "compare_profile", "scenario_id", "rehearsal_status", "readiness_decision", "package"},
+        "workflow_portability_import": {"import_id", "source_format", "source", "normalized_steps", "adapter_id"},
+        "workflow_portability_plan": {"import_id", "migration_plan", "target_runtime", "migration_steps", "risk_items"},
+        "workflow_portability_bind": {"execution_plan", "compare_profile", "scenario_id", "backend_cases"},
+        "workflow_portability_rehearse": {"rehearsal_id", "binding_id", "rehearsal_status", "observed_ready", "skipped"},
+        "workflow_portability_review": {"review_id", "readiness_decision", "blocking_items", "work_items"},
+        "workflow_portability_package": {"import_id", "package", "export_format", "bundle"},
         "llm_relay_request": {"request_id", "route", "provider"},
         "llm_relay_response": {"response_id", "summary"},
         "llm_relay_fallback": {"case", "action"},

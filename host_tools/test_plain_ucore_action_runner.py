@@ -282,6 +282,30 @@ def main() -> int:
                     "payload": {"import_id": "workflow-import:WF1:nextflow", "source_format": "nextflow", "source": "main.wf1.nf", "target_runtime": "agentos-ucore", "execution_plan": "workflow-migration-execution-plan:WF1:agentcompare", "compare_profile": "compare-profile:WF1:migration", "scenario_id": "backend-scenario:WF1", "rehearsal_status": "passed", "readiness_decision": "ready_for_agentos", "package": "wf-portability.zip"},
                 },
                 {
+                    "path": "/actions/workflow-portability/import",
+                    "payload": {"import_id": "workflow-import:WF1:nextflow", "source_format": "nextflow", "source": "main.wf1.nf", "normalized_steps": "15", "adapter_id": "adapter:WF1:nextflow"},
+                },
+                {
+                    "path": "/actions/workflow-portability/plan",
+                    "payload": {"import_id": "workflow-import:WF1:nextflow", "migration_plan": "workflow-migration-plan:WF1", "target_runtime": "agentos-ucore", "migration_steps": "9", "risk_items": "4"},
+                },
+                {
+                    "path": "/actions/workflow-portability/bind",
+                    "payload": {"execution_plan": "workflow-migration-execution-plan:WF1:agentcompare", "compare_profile": "compare-profile:WF1:migration", "scenario_id": "backend-scenario:WF1", "backend_cases": "4"},
+                },
+                {
+                    "path": "/actions/workflow-portability/rehearse",
+                    "payload": {"rehearsal_id": "workflow-rehearsal:WF1", "binding_id": "workflow-migration-binding:WF1", "rehearsal_status": "passed", "observed_ready": "3", "skipped": "1"},
+                },
+                {
+                    "path": "/actions/workflow-portability/review",
+                    "payload": {"review_id": "workflow-migration-readiness:WF1", "readiness_decision": "ready_for_agentos", "blocking_items": "0", "work_items": "6"},
+                },
+                {
+                    "path": "/actions/workflow-portability/package",
+                    "payload": {"import_id": "workflow-import:WF1:nextflow", "package": "wf-portability.zip", "export_format": "zip", "bundle": "wf-portability.zip"},
+                },
+                {
                     "path": "/actions/research/llm-relay-request",
                     "payload": {"request_id": "llm-q1", "run_id": "RUN-999", "route": "review_summary", "provider": "host-relay", "prompt": "summarize_recovery_evidence", "budget": "2048", "secret_ref": "host_env"},
                 },
@@ -312,7 +336,7 @@ def main() -> int:
             ],
         )
         summary = runner.prepare_action_state(loaded, state_dir, run_dir)
-        expected_actions = 67
+        expected_actions = 73
 
         assert summary["actions"] == expected_actions
         assert summary["accepted"] == expected_actions
@@ -376,6 +400,12 @@ def main() -> int:
         assert "host_workflow" in summary["kinds"]
         assert "host_workflow_export" in summary["kinds"]
         assert "workflow_portability" in summary["kinds"]
+        assert "workflow_portability_import" in summary["kinds"]
+        assert "workflow_portability_plan" in summary["kinds"]
+        assert "workflow_portability_bind" in summary["kinds"]
+        assert "workflow_portability_rehearse" in summary["kinds"]
+        assert "workflow_portability_review" in summary["kinds"]
+        assert "workflow_portability_package" in summary["kinds"]
         assert "llm_relay_request" in summary["kinds"]
         assert "llm_relay_response" in summary["kinds"]
         assert "llm_relay_fallback" in summary["kinds"]
@@ -454,6 +484,12 @@ def main() -> int:
         assert "kind=host_workflow" in queue
         assert "kind=host_workflow_export" in queue
         assert "kind=workflow_portability" in queue
+        assert "kind=workflow_portability_import" in queue
+        assert "kind=workflow_portability_plan" in queue
+        assert "kind=workflow_portability_bind" in queue
+        assert "kind=workflow_portability_rehearse" in queue
+        assert "kind=workflow_portability_review" in queue
+        assert "kind=workflow_portability_package" in queue
         assert "kind=human_review" in queue
         assert "kind=revision_task" in queue
         assert "kind=notebook_export" in queue
@@ -517,6 +553,13 @@ def main() -> int:
         assert "execution_plan=workflow-migration-execution-plan:WF1:agentcompare" in queue
         assert "compare_profile=compare-profile:WF1:migration" in queue
         assert "scenario_id=backend-scenario:WF1" in queue
+        assert "normalized_steps=15" in queue
+        assert "adapter_id=adapter:WF1:nextflow" in queue
+        assert "migration_plan=workflow-migration-plan:WF1" in queue
+        assert "backend_cases=4" in queue
+        assert "rehearsal_id=workflow-rehearsal:WF1" in queue
+        assert "readiness_decision=ready_for_agentos" in queue
+        assert "export_format=zip" in queue
         assert "package=wf-portability.zip" in queue
         assert "status=ready" in queue
 
@@ -564,6 +607,12 @@ def main() -> int:
         assert "kind=host_workflow" in plan
         assert "kind=host_workflow_export" in plan
         assert "kind=workflow_portability" in plan
+        assert "kind=workflow_portability_import" in plan
+        assert "kind=workflow_portability_plan" in plan
+        assert "kind=workflow_portability_bind" in plan
+        assert "kind=workflow_portability_rehearse" in plan
+        assert "kind=workflow_portability_review" in plan
+        assert "kind=workflow_portability_package" in plan
         assert "kind=llm_relay_request" in plan
         assert "kind=llm_relay_response" in plan
         assert "kind=llm_relay_fallback" in plan
@@ -611,6 +660,12 @@ def main() -> int:
         assert "/actions/host-workflow/run" in inbox
         assert "/actions/host-workflow/export" in inbox
         assert "/actions/workflow-portability/run" in inbox
+        assert "/actions/workflow-portability/import" in inbox
+        assert "/actions/workflow-portability/plan" in inbox
+        assert "/actions/workflow-portability/bind" in inbox
+        assert "/actions/workflow-portability/rehearse" in inbox
+        assert "/actions/workflow-portability/review" in inbox
+        assert "/actions/workflow-portability/package" in inbox
         assert "/actions/research/llm-relay-request" in inbox
         assert "/actions/research/llm-relay-response" in inbox
         assert "/actions/research/llm-relay-fallback" in inbox
@@ -677,6 +732,12 @@ def main() -> int:
         assert runner.action_kind("/actions/host-workflow/run") == "host_workflow"
         assert runner.action_kind("/actions/host-workflow/export") == "host_workflow_export"
         assert runner.action_kind("/actions/workflow-portability/run") == "workflow_portability"
+        assert runner.action_kind("/actions/workflow-portability/import") == "workflow_portability_import"
+        assert runner.action_kind("/actions/workflow-portability/plan") == "workflow_portability_plan"
+        assert runner.action_kind("/actions/workflow-portability/bind") == "workflow_portability_bind"
+        assert runner.action_kind("/actions/workflow-portability/rehearse") == "workflow_portability_rehearse"
+        assert runner.action_kind("/actions/workflow-portability/review") == "workflow_portability_review"
+        assert runner.action_kind("/actions/workflow-portability/package") == "workflow_portability_package"
         assert runner.action_kind("/actions/research/llm-relay-request") == "llm_relay_request"
         assert runner.action_kind("/actions/research/llm-relay-response") == "llm_relay_response"
         assert runner.action_kind("/actions/research/llm-relay-fallback") == "llm_relay_fallback"
@@ -716,6 +777,12 @@ def main() -> int:
         assert "kind=host_workflow" in seed_file
         assert "kind=host_workflow_export" in seed_file
         assert "kind=workflow_portability" in seed_file
+        assert "kind=workflow_portability_import" in seed_file
+        assert "kind=workflow_portability_plan" in seed_file
+        assert "kind=workflow_portability_bind" in seed_file
+        assert "kind=workflow_portability_rehearse" in seed_file
+        assert "kind=workflow_portability_review" in seed_file
+        assert "kind=workflow_portability_package" in seed_file
         assert "kind=llm_relay_request" in seed_file
         assert "kind=llm_relay_response" in seed_file
         assert "kind=llm_relay_fallback" in seed_file
@@ -732,6 +799,12 @@ def main() -> int:
         assert "execution_plan=workflow-migration-execution-plan:WF1:agentcompare" in seed_file
         assert "compare_profile=compare-profile:WF1:migration" in seed_file
         assert "scenario_id=backend-scenario:WF1" in seed_file
+        assert "normalized_steps=15" in seed_file
+        assert "migration_plan=workflow-migration-plan:WF1" in seed_file
+        assert "backend_cases=4" in seed_file
+        assert "rehearsal_id=workflow-rehearsal:WF1" in seed_file
+        assert "readiness_decision=ready_for_agentos" in seed_file
+        assert "export_format=zip" in seed_file
         assert "package=wf-portability.zip" in seed_file
         assert "request_id=llm-q1" in seed_file
         assert "response_id=llm-r1" in seed_file

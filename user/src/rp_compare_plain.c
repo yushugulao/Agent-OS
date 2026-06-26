@@ -228,7 +228,7 @@ int main(void)
 			ok = ok && check_seed_value("kind=host_workflow_export", "format=", "json", "rp_package", "host_action_workflow_format=");
 		}
 	}
-	if (rp_host_seed_has_workflow_portability_action()) {
+	if (rp_host_seed_has_workflow_portability_run_action()) {
 		ok = ok && rp_file_contains("rp_wfio", "host_portability_payload=applied");
 		ok = ok && check_seed_value("kind=workflow_portability", "import_id=", "workflow-import:host-nextflow", "rp_wfio", "host_portability_import=");
 		ok = ok && check_seed_value("kind=workflow_portability", "target_runtime=", "agentos-ucore", "rp_wfio", "host_portability_target=");
@@ -246,6 +246,22 @@ int main(void)
 		ok = ok && rp_file_contains("rp_actionio", "host_action_portability=1");
 		ok = ok && rp_file_contains("rp_actionio", "host_action_portability_outputs=rp_wfio,rp_package,rp_agentcmp");
 		ok = ok && rp_file_contains("rp_web_bundle", "host_action_portability_outputs=rp_wfio,rp_package,rp_agentcmp");
+	}
+	if (rp_host_seed_has_workflow_portability_step_action()) {
+		ok = ok && rp_file_contains("rp_wfio", "host_portability_steps=applied");
+		ok = ok && check_seed_value("kind=workflow_portability_import", "import_id=", "workflow-import:host-nextflow", "rp_wfio", "host_portability_import_action=");
+		ok = ok && rp_file_contains("rp_wfio", "host_portability_plan_action=");
+		ok = ok && rp_file_contains("rp_wfio", "target=agentos-ucore");
+		ok = ok && rp_file_contains("rp_wfio", "host_portability_bind_action=");
+		ok = ok && rp_file_contains("rp_wfio", "profile=");
+		ok = ok && rp_file_contains("rp_wfio", "host_portability_rehearse_action=");
+		ok = ok && rp_file_contains("rp_wfio", "status=passed");
+		ok = ok && rp_file_contains("rp_wfio", "host_portability_review_action=");
+		ok = ok && rp_file_contains("rp_wfio", "decision=ready_for_agentos");
+		ok = ok && check_seed_value("kind=workflow_portability_package", "package=", "workflow-portability-host.zip", "rp_wfio", "host_portability_package_action=");
+		ok = ok && rp_file_contains("rp_package", "host_action_portability_steps=ready");
+		ok = ok && rp_file_contains("rp_actionio", "host_action_portability_steps=6");
+		ok = ok && rp_file_contains("rp_web_bundle", "host_action_portability_steps=6");
 	}
 	if (rp_host_seed_has_llm_relay_action()) {
 		ok = ok && check_seed_value("kind=llm_relay_request", "request_id=", "host-q1", "rp_llm_req", "host_llm_request_id=");
@@ -953,11 +969,13 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "custom_runs=3");
 	ok = ok && rp_file_contains("rp_runner", "custom_agent_decisions=15");
 	ok = ok && rp_file_contains("rp_runner", "citation_plan_entries=3");
-	ok = ok && rp_file_contains("rp_web_routes", "routes=46");
+	ok = ok && rp_file_contains("rp_web_routes", "routes=52");
 	ok = ok && rp_file_contains("rp_web_routes", "get_routes=14");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research/workbench/{id}");
-	ok = ok && rp_file_contains("rp_web_routes", "post_routes=32");
+	ok = ok && rp_file_contains("rp_web_routes", "post_routes=38");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/workflow-portability/run");
+	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/workflow-portability/import");
+	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/workflow-portability/package");
 	ok = ok && rp_file_contains("rp_api_home", "api=home");
 	ok = ok && rp_file_contains("rp_api_home", "custom_run=usable-run:RUN-900");
 	ok = ok && rp_file_contains("rp_api_home", "custom_runs=3");
@@ -998,8 +1016,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_pub", "result_review=rp_resrev");
 	ok = ok && rp_file_contains("rp_api_know", "semantic_index=rp_semindex");
 	ok = ok && rp_file_contains("rp_api_runtime", "runtime_env=rp_runenv");
-	ok = ok && rp_file_contains("rp_api_action", "actions=32");
+	ok = ok && rp_file_contains("rp_api_action", "actions=38");
 	ok = ok && rp_file_contains("rp_api_action", "workflow_portability_run=/actions/workflow-portability/run");
+	ok = ok && rp_file_contains("rp_api_action", "workflow_portability_import=/actions/workflow-portability/import");
+	ok = ok && rp_file_contains("rp_api_action", "workflow_portability_package=/actions/workflow-portability/package");
 	ok = ok && rp_file_contains("rp_api_action", "revision_task_runner=1");
 	ok = ok && rp_file_contains("rp_api_action", "validated_requests=8");
 	ok = ok && rp_file_contains("rp_api_action", "precondition_checks=8");
@@ -1155,6 +1175,9 @@ int main(void)
 	}
 	if (rp_host_seed_has_workflow_portability_action()) {
 		if (!rp_append_file("rp_agentcmp", "host_action_portability_verified=1")) return 1;
+	}
+	if (rp_host_seed_has_workflow_portability_step_action()) {
+		if (!rp_append_file("rp_agentcmp", "host_action_portability_steps_verified=1")) return 1;
 	}
 	if (rp_host_seed_has("kind=bundle_export") ||
 	    rp_host_seed_has("kind=research_export") ||

@@ -447,6 +447,12 @@ def default_batch_payload() -> str:
             {"path": "/actions/research/llm-relay-response", "payload": {"request_id": "llm-web-q1", "response_id": "llm-web-r1", "provider": "host-relay", "mode": "template", "summary": "Recovered_evidence_ready", "citations": "5"}},
             {"path": "/actions/research/llm-relay-fallback", "payload": {"case": "missing_cloud_key", "action": "template_response", "reason": "host_env_absent", "fallback_status": "ready"}},
             {"path": "/actions/workflow-portability/run", "payload": {"import_id": "workflow-import:web-nextflow", "source_format": "nextflow", "source": "main.web.nf", "target_runtime": "agentos-ucore", "execution_plan": "workflow-migration-execution-plan:web-nextflow:agentcompare", "compare_profile": "compare-profile:web-nextflow:migration", "scenario_id": "backend-scenario:web-nextflow", "rehearsal_status": "passed", "readiness_decision": "ready_for_agentos", "package": "workflow-portability-web.zip"}},
+            {"path": "/actions/workflow-portability/import", "payload": {"import_id": "workflow-import:web-nextflow", "source_format": "nextflow", "source": "main.web.nf", "normalized_steps": "15", "adapter_id": "adapter:web-nextflow"}},
+            {"path": "/actions/workflow-portability/plan", "payload": {"import_id": "workflow-import:web-nextflow", "migration_plan": "workflow-migration-plan:web-nextflow", "target_runtime": "agentos-ucore", "migration_steps": "9", "risk_items": "4"}},
+            {"path": "/actions/workflow-portability/bind", "payload": {"execution_plan": "workflow-migration-execution-plan:web-nextflow:agentcompare", "compare_profile": "compare-profile:web-nextflow:migration", "scenario_id": "backend-scenario:web-nextflow", "backend_cases": "4"}},
+            {"path": "/actions/workflow-portability/rehearse", "payload": {"rehearsal_id": "workflow-rehearsal:web-nextflow", "binding_id": "workflow-migration-binding:web-nextflow", "rehearsal_status": "passed", "observed_ready": "3", "skipped": "1"}},
+            {"path": "/actions/workflow-portability/review", "payload": {"review_id": "workflow-migration-readiness:web-nextflow", "readiness_decision": "ready_for_agentos", "blocking_items": "0", "work_items": "6"}},
+            {"path": "/actions/workflow-portability/package", "payload": {"import_id": "workflow-import:web-nextflow", "package": "workflow-portability-web.zip", "export_format": "zip", "bundle": "workflow-portability-web.zip"}},
             {"path": "/actions/agentcompare/run", "payload": {"profile": "plain_ucore_batch"}},
         ]
     }

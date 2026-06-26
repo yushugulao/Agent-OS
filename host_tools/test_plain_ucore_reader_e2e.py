@@ -123,6 +123,12 @@ def main() -> int:
                 {"path": "/actions/host-workflow/run", "payload": {"workflow_id": "WF1", "run_id": "R1", "engine": "plain-c-runner", "stages": "6", "dag": "ingest>clean>analyze>review>package", "max_workers": "2", "worker_slots": "2", "queue_depth": "5", "observer_events": "12", "failed_stage": "clean", "retry_stage": "clean", "cache_hit_stage": "analyze", "retry_reason": "checksum_mismatch", "cache": "content"}},
                 {"path": "/actions/host-workflow/export", "payload": {"workflow_id": "WF1", "run_id": "R1", "format": "json", "bundle": "wf.zip"}},
                 {"path": "/actions/workflow-portability/run", "payload": {"import_id": "workflow-import:WF1:nextflow", "source_format": "nextflow", "source": "main.wf1.nf", "target_runtime": "agentos-ucore", "execution_plan": "workflow-migration-execution-plan:WF1:agentcompare", "compare_profile": "compare-profile:WF1:migration", "scenario_id": "backend-scenario:WF1", "rehearsal_status": "passed", "readiness_decision": "ready_for_agentos", "package": "wf-portability.zip"}},
+                {"path": "/actions/workflow-portability/import", "payload": {"import_id": "workflow-import:WF1:nextflow", "source_format": "nextflow", "source": "main.wf1.nf", "normalized_steps": "15", "adapter_id": "adapter:WF1:nextflow"}},
+                {"path": "/actions/workflow-portability/plan", "payload": {"import_id": "workflow-import:WF1:nextflow", "migration_plan": "workflow-migration-plan:WF1", "target_runtime": "agentos-ucore", "migration_steps": "9", "risk_items": "4"}},
+                {"path": "/actions/workflow-portability/bind", "payload": {"execution_plan": "workflow-migration-execution-plan:WF1:agentcompare", "compare_profile": "compare-profile:WF1:migration", "scenario_id": "backend-scenario:WF1", "backend_cases": "4"}},
+                {"path": "/actions/workflow-portability/rehearse", "payload": {"rehearsal_id": "workflow-rehearsal:WF1", "binding_id": "workflow-migration-binding:WF1", "rehearsal_status": "passed", "observed_ready": "3", "skipped": "1"}},
+                {"path": "/actions/workflow-portability/review", "payload": {"review_id": "workflow-migration-readiness:WF1", "readiness_decision": "ready_for_agentos", "blocking_items": "0", "work_items": "6"}},
+                {"path": "/actions/workflow-portability/package", "payload": {"import_id": "workflow-import:WF1:nextflow", "package": "wf-portability.zip", "export_format": "zip", "bundle": "wf-portability.zip"}},
                 {"path": "/actions/research/llm-relay-request", "payload": {"request_id": "llm-q1", "run_id": "R1", "route": "review_summary", "provider": "host-relay", "prompt": "summarize_recovery_evidence", "budget": "2048", "secret_ref": "host_env"}},
                 {"path": "/actions/research/llm-relay-response", "payload": {"request_id": "llm-q1", "response_id": "llm-r1", "provider": "host-relay", "mode": "template", "summary": "Recovered_evidence_ready", "citations": "5"}},
                 {"path": "/actions/research/llm-relay-fallback", "payload": {"case": "missing_cloud_key", "action": "template_response", "reason": "host_env_absent", "fallback_status": "ready"}},
@@ -300,6 +306,13 @@ def main() -> int:
             assert any("host_portability_rehearsal=passed" in line for line in rp_wfio["lines"]), rp_wfio
             assert any("host_portability_decision=ready_for_agentos" in line for line in rp_wfio["lines"]), rp_wfio
             assert any("host_portability_package=wf-portability.zip" in line for line in rp_wfio["lines"]), rp_wfio
+            assert any("host_portability_steps=applied" in line for line in rp_wfio["lines"]), rp_wfio
+            assert any("host_portability_import_action=workflow-import:WF1:nextflow;format=nextflow;source=main.wf1.nf" in line for line in rp_wfio["lines"]), rp_wfio
+            assert any("host_portability_plan_action=workflow-migration-plan:WF1;target=agentos-ucore;steps=9;risks=4" in line for line in rp_wfio["lines"]), rp_wfio
+            assert any("host_portability_bind_action=workflow-migration-execution-plan:WF1:agentcompare;profile=compare-profile:WF1:migration;scenario=backend-scenario:WF1;backend_cases=4" in line for line in rp_wfio["lines"]), rp_wfio
+            assert any("host_portability_rehearse_action=workflow-rehearsal:WF1;binding=workflow-migration-binding:WF1;status=passed;observed_ready=3;skipped=1" in line for line in rp_wfio["lines"]), rp_wfio
+            assert any("host_portability_review_action=workflow-migration-readiness:WF1;decision=ready_for_agentos;blocking_items=0;work_items=6" in line for line in rp_wfio["lines"]), rp_wfio
+            assert any("host_portability_package_action=wf-portability.zip;format=zip;import=workflow-import:WF1:nextflow;bundle=wf-portability.zip" in line for line in rp_wfio["lines"]), rp_wfio
             rp_worker = read_json(base + "/api/state/rp_worker")
             assert any("host_workflow_worker_slots=2" in line for line in rp_worker["lines"]), rp_worker
             assert any("host_workflow_queue_depth=5" in line for line in rp_worker["lines"]), rp_worker
@@ -409,6 +422,8 @@ def main() -> int:
             assert any("host_action_portability_target=agentos-ucore" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_portability_profile=compare-profile:WF1:migration" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_portability_bundle=wf-portability.zip" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_portability_steps=ready" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_portability_format=zip" in line for line in rp_package["lines"]), rp_package
             rp_nbexec = read_json(base + "/api/state/rp_nbexec")
             assert any("host_action_notebook_export=ready" in line for line in rp_nbexec["lines"]), rp_nbexec
             assert any("host_action_notebook_format=ipynb" in line for line in rp_nbexec["lines"]), rp_nbexec
@@ -451,6 +466,7 @@ def main() -> int:
             assert any("host_action_portability=1" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_portability_outputs=rp_wfio,rp_package,rp_agentcmp" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_portability_profile=compare-profile:WF1:migration" in line for line in rp_actionio["lines"]), rp_actionio
+            assert any("host_action_portability_steps=6" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_llm_relay=1" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_llm_outputs=rp_llm_req,rp_llmq,rp_llm_resp,rp_llm_packets,rp_llm_hostreq,rp_llm_fallback" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_export=1" in line for line in rp_actionio["lines"]), rp_actionio
@@ -476,6 +492,7 @@ def main() -> int:
             assert any("host_action_workflow_outputs=rp_stage_dag,rp_stage_state,rp_run_events,rp_artifact_manifest,rp_package" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_portability_outputs=rp_wfio,rp_package,rp_agentcmp" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_portability_profile=compare-profile:WF1:migration" in line for line in rp_web_bundle["lines"]), rp_web_bundle
+            assert any("host_action_portability_steps=6" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_llm_relay=rp_llm_req,rp_llmq,rp_llm_resp,rp_llm_packets,rp_llm_hostreq,rp_llm_fallback" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_platform_ops=rp_runner,rp_package,rp_api_action" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_search_query=recovery evidence" in line for line in rp_web_bundle["lines"]), rp_web_bundle
@@ -483,6 +500,7 @@ def main() -> int:
             assert any("host_action_compare_requested=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_compare_profile=pb" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_api_compare = read_json(base + "/api/state/rp_api_compare")
             assert any("host_action_payload_applied=1" in line for line in rp_api_compare["lines"]), rp_api_compare
             assert any("host_action_run_id=R1" in line for line in rp_api_compare["lines"]), rp_api_compare
@@ -506,9 +524,11 @@ def main() -> int:
             assert any("host_action_workbench_handoff_scope=full" in line for line in rp_api_compare["lines"]), rp_api_compare
             assert any("host_action_workbench_bundle=wb.zip" in line for line in rp_api_compare["lines"]), rp_api_compare
             rp_api_action = read_json(base + "/api/state/rp_api_action")
-            assert any("actions=32" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("actions=38" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("operations_report=/actions/research/operations-report" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("workflow_portability_run=/actions/workflow-portability/run" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("workflow_portability_import=/actions/workflow-portability/import" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("workflow_portability_package=/actions/workflow-portability/package" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("workbench_quality_gate=/actions/research/workbench-quality-gate" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("project_space=/actions/research/project-space" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("research_search_export=/actions/research-search/export" in line for line in rp_api_action["lines"]), rp_api_action

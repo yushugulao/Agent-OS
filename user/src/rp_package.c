@@ -394,6 +394,12 @@ int main(void)
 			rp_copy_text(value, sizeof(value), "workflow-portability-host.zip");
 		}
 		if (!rp_append_host_action_line("rp_package", "host_action_portability_bundle=", value)) return 1;
+		if (rp_host_seed_has_workflow_portability_step_action()) {
+			if (!rp_append_file("rp_package", "host_action_portability_steps=ready")) return 1;
+			if (rp_host_seed_copy_value_for_kind("kind=workflow_portability_package", "export_format=", value, sizeof(value))) {
+				if (!rp_append_host_action_line("rp_package", "host_action_portability_format=", value)) return 1;
+			}
+		}
 	}
 	if (rp_host_seed_has("kind=workbench_handoff_package") ||
 	    rp_host_seed_has("kind=workbench_export") ||
