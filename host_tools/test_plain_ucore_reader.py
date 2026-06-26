@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=18
+reader_views=19
 reader_actions=48
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_web_bundle
@@ -76,7 +76,7 @@ reader_state_source=plain_ucore_files
 dynamic_inputs=4
 status=ready
 """,
-    "rp_web_routes": "routes=62\nget_routes=14\npost_routes=48\nstatus=ready\n",
+    "rp_web_routes": "routes=63\nget_routes=15\npost_routes=48\nstatus=ready\n",
     "rp_api_home": "api=home\nreader_contract=rp_web_bundle\nstatus=ready\n",
     "rp_api_run": "api=run-detail\nreader_contract=rp_web_bundle\nreader_view=run-detail\nstatus=ready\n",
     "rp_api_agents": "api=agent-detail\nagents=7\nstatus=ready\n",
@@ -224,6 +224,16 @@ status=ready
         "host_action_workbench_manifest=delivery-manifest.json\n"
         "host_action_workbench_verified_files=9\n"
         "host_action_workbench_missing_files=0\n"
+        "host_action_project_id=lab-gene-x\n"
+        "host_action_project_space=ready\n"
+        "host_action_project_note=recorded\n"
+        "host_action_project_action_item=created\n"
+        "host_action_project_answer=generated\n"
+        "host_action_project_repair=executed\n"
+        "host_action_research_search=ready\n"
+        "host_action_quality_gate=checked\n"
+        "host_action_quality_repair_plan=ready\n"
+        "host_action_quality_repair_execute=done\n"
         "evidence_bundle_entries=12\n"
     ),
     "rp_nbexec": "host_action_notebook_format=ipynb\nhost_action_notebook_workbench_docs=ready\nstatus=ready\n",
@@ -377,11 +387,12 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 14, summary
+        assert summary["pages"] == 15, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
         assert (out_dir / "workbench.html").exists()
+        assert (out_dir / "project.html").exists()
         assert (out_dir / "review.html").exists()
         assert (out_dir / "delivery.html").exists()
         assert (out_dir / "data.html").exists()
@@ -481,6 +492,22 @@ def main() -> int:
         assert "rp_artifact:rp_align_table" in data_html
         assert "mf.json" in data_html
         assert "host_file_verify" in data_html
+        project_html = (out_dir / "project.html").read_text(encoding="utf-8")
+        assert "Project Space" in project_html
+        assert "Project Handoff" in project_html
+        assert "Project Evidence Package" in project_html
+        assert "Project Package Records" in project_html
+        assert "Project Quality And Repair" in project_html
+        assert "Project Search And Notes" in project_html
+        assert "Project Source Files" in project_html
+        assert "lab-gene-x" in project_html
+        assert "host_action_project_id" in project_html
+        assert "host_action_project_space" in project_html
+        assert "host_action_project_answer" in project_html
+        assert "host_action_quality_gate" in project_html
+        assert "host_action_quality_repair_execute" in project_html
+        assert "host_action_research_search" in project_html
+        assert "project_followup" in project_html
         compare_html = (out_dir / "compare.html").read_text(encoding="utf-8")
         assert "Compare Summary" in compare_html
         assert "Compare Metrics" in compare_html

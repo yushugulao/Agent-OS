@@ -183,8 +183,8 @@ int main(void)
 
 	if (!rp_write_file("rp_web_routes",
 			   "service=host-web-ui\n"
-			   "routes=62\n"
-			   "get_routes=14\n"
+			   "routes=63\n"
+			   "get_routes=15\n"
 			   "post_routes=48\n"
 			   "route=/;payload=rp_api_home;status=ready\n"
 			   "route=/run/RUN-042;payload=rp_api_run;status=ready\n"
@@ -1035,8 +1035,8 @@ int main(void)
 	}
 	if (!rp_write_file("rp_web_bundle",
 			   "bundle=host-web-ui\n"
-			   "routes=62\n"
-			   "get_routes=14\n"
+			   "routes=63\n"
+			   "get_routes=15\n"
 			   "post_routes=48\n"
 			   "api_payloads=14\n"
 			   "action_payloads=1\n"
@@ -1074,7 +1074,7 @@ int main(void)
 			   "reader_contract=host_plain_ucore_v2\n"
 			   "reader_contract_version=2\n"
 			   "reader_ready=1\n"
-			   "reader_views=18\n"
+			   "reader_views=19\n"
 			   "reader_actions=48\n"
 			   "reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes\n"
 			   "reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_web_bundle\n"
@@ -1358,6 +1358,6 @@ int main(void)
 	if (!rp_append_status("actionio=ready")) return 1;
 	if (!rp_append_status("usable_research=ready")) return 1;
 	if (!rp_append_status("action_exports=ready")) return 1;
-	printf("rp_web_export: routes=62 api_payloads=14 actions=48 bundle=ready status=ready\n");
+	printf("rp_web_export: routes=63 api_payloads=14 actions=48 bundle=ready status=ready\n");
 	return 0;
 }

@@ -19,6 +19,7 @@ PAGE_SPECS = [
     ("run.html", "Run Detail", "rp_api_run", ["rp_ui_run", "rp_runner", "rp_artifact"]),
     ("workflow.html", "Workflow", "rp_stage_state", ["rp_stage_dag", "rp_cache_index", "rp_retry_plan", "rp_run_events", "rp_worker", "rp_execobs"]),
     ("workbench.html", "Workbench", "rp_runner", ["rp_report_text", "rp_revision", "rp_package", "rp_review_pack", "rp_nbexec", "rp_uresrun"]),
+    ("project.html", "Project", "rp_package", ["rp_runner", "rp_review_pack", "rp_actionio", "rp_web_bundle"]),
     ("agents.html", "Agents", "rp_api_agents", ["rp_ui_agent", "rp_agents", "rp_decisions"]),
     ("evidence.html", "Evidence", "rp_api_evidence", ["rp_ui_evidence", "rp_evidence", "rp_package"]),
     ("review.html", "Review", "rp_review_dashboard", ["rp_review_pack", "rp_review2", "rp_revision", "rp_package", "rp_report_text"]),
@@ -544,12 +545,12 @@ def operations_source_files(state: dict[str, dict[str, object]]) -> list[dict[st
         ("operations_report", "rp_review_pack", ("operations_handoff=",), "run.html,review.html"),
         ("operations_report", "rp_package", ("host_action_operations_report=",), "run.html,review.html"),
         ("operations_report", "rp_runner", ("workbench_tasks=", "workbench_next_task="), "run.html,review.html"),
-        ("execution_plan", "rp_package", ("host_action_operations_next=", "host_action_quality_gate=", "host_action_quality_repair_execute="), "run.html,review.html"),
+        ("execution_plan", "rp_package", ("host_action_operations_next=", "host_action_quality_gate=", "host_action_quality_repair_execute="), "run.html,review.html,project.html"),
         ("workbench_delivery", "rp_review_pack", ("workbench_handoff=",), "run.html,review.html"),
         ("workbench_delivery", "rp_runner", ("host_action_workbench_id=", "host_action_workbench_task="), "run.html,review.html"),
         ("workbench_delivery", "rp_package", ("host_action_workbench_manifest=", "host_action_workbench_bundle="), "run.html,review.html,artifacts.html"),
-        ("project_followup", "rp_review_pack", ("project_handoff=",), "review.html"),
-        ("project_followup", "rp_package", ("host_action_project_id=", "host_action_project_space=", "host_action_project_action_item="), "review.html"),
+        ("project_followup", "rp_review_pack", ("project_handoff=",), "project.html,review.html"),
+        ("project_followup", "rp_package", ("host_action_project_id=", "host_action_project_space=", "host_action_project_action_item="), "project.html,review.html"),
         ("backend_evidence", "rp_backend_exec", ("runner_report=",), "run.html,compare.html,review.html"),
         ("backend_evidence", "rp_runner", ("backend_evidence_report=",), "run.html,review.html"),
         ("backend_evidence", "rp_report_text", ("backend_evidence_report=",), "run.html,review.html"),
@@ -1073,6 +1074,18 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Manifest", metric_value(state, [("rp_api_data", "host_action_file_manifest"), ("rp_ingest_files", "host_file_manifest")]), "rp_api_data"),
         ("Verified", metric_value(state, [("rp_api_data", "host_action_file_verified"), ("rp_data_quality", "host_file_verify_verified")]), "rp_api_data"),
     ]
+    project_rows = state_records(state, "rp_review_pack", "project_handoff")
+    project_record = project_rows[0] if project_rows else {}
+    project_items = [
+        ("Project", project_record.get("project") or metric_value(state, [("rp_package", "host_action_project_id"), ("rp_runner", "host_action_project_id")]), "rp_review_pack"),
+        ("Space", project_record.get("space") or metric_value(state, [("rp_package", "host_action_project_space"), ("rp_runner", "host_action_project_space")]), "rp_package"),
+        ("Note", project_record.get("note") or metric_value(state, [("rp_package", "host_action_project_note"), ("rp_runner", "host_action_project_note")]), "rp_package"),
+        ("Action Item", project_record.get("action_item") or metric_value(state, [("rp_package", "host_action_project_action_item"), ("rp_runner", "host_action_project_action_item")]), "rp_package"),
+        ("Answer", project_record.get("answer") or metric_value(state, [("rp_package", "host_action_project_answer"), ("rp_runner", "host_action_project_answer")]), "rp_package"),
+        ("Repair", project_record.get("repair") or metric_value(state, [("rp_package", "host_action_project_repair"), ("rp_runner", "host_action_project_repair")]), "rp_package"),
+        ("Search", project_record.get("search") or metric_value(state, [("rp_package", "host_action_research_search"), ("rp_runner", "host_action_research_search")]), "rp_package"),
+        ("Quality", metric_value(state, [("rp_package", "host_action_quality_gate"), ("rp_runner", "host_action_quality_gate")]), "rp_package"),
+    ]
     compare_items = [
         ("Payload Applied", metric_value(state, [("rp_api_compare", "host_action_payload_applied")]), "rp_api_compare"),
         ("Run", metric_value(state, [("rp_api_compare", "host_action_run_id")]), "rp_api_compare"),
@@ -1124,6 +1137,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Research Workbench", workbench_items)
     if file_name == "data.html":
         return render_summary_panel("Data Pipeline", data_items)
+    if file_name == "project.html":
+        return render_summary_panel("Project Space", project_items)
     if file_name == "review.html":
         return render_summary_panel("Review Dashboard", review_items)
     if file_name == "compare.html":
@@ -1747,6 +1762,74 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 ),
             ),
         ]
+    if file_name == "project.html":
+        project_source_rows = [
+            row for row in operations_source_files(state)
+            if row.get("operation_section") in {"project_followup", "execution_plan", "operations_report"}
+        ]
+        return [
+            render_record_panel(
+                "Project Handoff",
+                [("Source", "project_handoff"), ("Project", "project"), ("Space", "space"), ("Note", "note"), ("Action Item", "action_item"), ("Answer", "answer"), ("Repair", "repair"), ("Search", "search"), ("Status", "status")],
+                state_records(state, "rp_review_pack", "project_handoff"),
+            ),
+            render_record_panel(
+                "Project Evidence Package",
+                [("Evidence", "evidence"), ("Bridge", "bridge"), ("Source", "source"), ("Delivery", "delivery"), ("Operations", "operations"), ("Project", "project"), ("Status", "status")],
+                state_records(state, "rp_review_pack", "evidence") + state_records(state, "rp_review_pack", "bridge"),
+            ),
+            render_record_panel(
+                "Project Package Records",
+                [("State File", "state_file"), ("Key", "key"), ("Value", "value")],
+                key_value_rows(
+                    state,
+                    ("rp_runner", "rp_package", "rp_actionio", "rp_web_bundle"),
+                    (
+                        "host_action_project_",
+                        "host_action_research_search",
+                        "host_action_search_",
+                        "host_action_operations_",
+                        "host_action_delivery_",
+                        "host_action_plan_queue",
+                    ),
+                ),
+            ),
+            render_record_panel(
+                "Project Quality And Repair",
+                [("State File", "state_file"), ("Key", "key"), ("Value", "value")],
+                key_value_rows(
+                    state,
+                    ("rp_runner", "rp_package", "rp_review_pack"),
+                    (
+                        "host_action_quality_gate",
+                        "host_action_quality_repair",
+                        "operations_handoff=",
+                        "project_handoff=",
+                    ),
+                ),
+            ),
+            render_record_panel(
+                "Project Search And Notes",
+                [("State File", "state_file"), ("Key", "key"), ("Value", "value")],
+                key_value_rows(
+                    state,
+                    ("rp_runner", "rp_package", "rp_actionio", "rp_web_bundle", "rp_uresrun"),
+                    (
+                        "host_action_project_note",
+                        "host_action_project_action_item",
+                        "host_action_project_answer",
+                        "host_action_project_repair",
+                        "host_action_research_search",
+                        "host_action_search_",
+                    ),
+                ),
+            ),
+            render_record_panel(
+                "Project Source Files",
+                [("Section", "operation_section"), ("State File", "state_file"), ("Record", "record"), ("Rendered Page", "rendered_page"), ("Status", "status")],
+                project_source_rows,
+            ),
+        ]
     if file_name == "compare.html":
         compare_rows = [
             ("File Scans", metric_value(state, [("rp_api_compare", "file_scans"), ("rp_ui_compare", "pain_file_scans")])),
@@ -2244,15 +2327,15 @@ def action_output_spec(path: str, group: str) -> tuple[str, str]:
     if group == "llm":
         return "rp_llm_req,rp_llmq,rp_llm_resp,rp_llm_packets,rp_llm_hostreq,rp_llm_fallback,rp_api_runtime", "llm.html,run.html,review.html"
     if group == "workbench":
-        return "rp_runner,rp_revision,rp_package,rp_nbexec,rp_uresrun", "run.html,review.html"
+        return "rp_runner,rp_revision,rp_package,rp_nbexec,rp_uresrun", "run.html,review.html,project.html"
     if group == "review":
         return "rp_review2,rp_revision,rp_report_text,rp_review_dashboard,rp_review_pack", "review.html,run.html"
     if group == "delivery":
         return "rp_package,rp_artifact_manifest,rp_nbexec,rp_uresrun", "review.html,artifacts.html,run.html"
     if group == "operations":
-        return "rp_runner,rp_package,rp_actionio,rp_web_bundle", "run.html,review.html,actions.html"
+        return "rp_runner,rp_package,rp_actionio,rp_web_bundle", "run.html,review.html,project.html,actions.html"
     if group == "project":
-        return "rp_runner,rp_package,rp_review_pack", "review.html,run.html"
+        return "rp_runner,rp_package,rp_review_pack,rp_actionio,rp_web_bundle", "project.html,review.html,run.html"
     if group == "compare":
         return "rp_agentcmp,rp_api_compare,rp_backend_exec,rp_study", "compare.html,review.html"
     if group == "portability":
@@ -2405,11 +2488,13 @@ def action_output_detail_links(state: dict[str, dict[str, object]], actions: lis
 def action_impact_specs(path: str, group: str) -> list[tuple[str, str, tuple[str, ...], str]]:
     specs: list[tuple[str, str, tuple[str, ...], str]] = []
     if group in {"run", "inputs", "workbench", "review", "delivery", "operations", "project", "compare"}:
-        specs.append(("report_section", "rp_report_text", ("host_report_", "host_relay_report_summary=", "backend_evidence_report="), "run.html,review.html"))
+        pages = "run.html,review.html,project.html" if group == "project" else "run.html,review.html"
+        specs.append(("report_section", "rp_report_text", ("host_report_", "host_relay_report_summary=", "backend_evidence_report="), pages))
     if group in {"workflow", "artifact", "delivery", "operations"}:
         specs.append(("artifact_path", "rp_artifact_manifest", ("artifact_review_path=", "host_artifact_manifest_", "host_workflow_artifact_action="), "artifacts.html,run.html"))
     if group in {"review", "delivery", "operations", "project", "llm", "workflow", "artifact"}:
-        specs.append(("review_gate", "rp_review_dashboard", ("gate=", "section=", "decision=", "host_relay_quality=", "backend_review_evidence="), "review.html"))
+        pages = "review.html,project.html" if group == "project" else "review.html"
+        specs.append(("review_gate", "rp_review_dashboard", ("gate=", "section=", "decision=", "host_relay_quality=", "backend_review_evidence="), pages))
     if group == "llm":
         specs.append(("llm_packet", "rp_llm_packets", ("host_llm_packet_", "host_relay_packet=", "secret_in_packet="), "llm.html,run.html,review.html"))
         specs.append(("llm_quality", "rp_llmeval", ("host_relay_eval=", "host_relay_eval_batch="), "llm.html,review.html"))
@@ -2899,6 +2984,12 @@ def render_overview(
             ("Snapshots", metric_value(state, [("rp_dataset_snapshot", "snapshots"), ("rp_api_data", "dataset_snapshots")]), "rp_dataset_snapshot"),
             ("Quality", metric_value(state, [("rp_data_quality", "passed")]), "rp_data_quality"),
         ],
+        "project.html": [
+            ("Project", metric_value(state, [("rp_package", "host_action_project_id"), ("rp_runner", "host_action_project_id")]), "rp_package"),
+            ("Space", metric_value(state, [("rp_package", "host_action_project_space"), ("rp_runner", "host_action_project_space")]), "rp_package"),
+            ("Action Item", metric_value(state, [("rp_package", "host_action_project_action_item"), ("rp_runner", "host_action_project_action_item")]), "rp_package"),
+            ("Search", metric_value(state, [("rp_package", "host_action_research_search"), ("rp_runner", "host_action_research_search")]), "rp_package"),
+        ],
         "services.html": [
             ("Bio Ops", metric_value(state, [("rp_bioop", "ops")]), "rp_bioop"),
             ("Lab Ops", metric_value(state, [("rp_labresop", "ops")]), "rp_labresop"),
@@ -3085,6 +3176,12 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
             sections.append(action_output_detail_panel("Data Action Output Details", state, actions, {"run", "inputs", "workbench", "artifact"}))
             sections.append(action_impact_panel("Data Action Impact", state, actions, {"run", "inputs", "workbench", "artifact"}))
             sections.append(action_delta_panel("Data Action Delta", state, actions, {"run", "inputs", "workbench", "artifact"}))
+        if file_name == "project.html":
+            sections.append(action_trace_panel("Project Action Trace", actions, {"project", "operations", "workbench", "review", "delivery"}))
+            sections.append(action_output_panel("Project Action Output Links", state, actions, {"project", "operations", "workbench", "review", "delivery"}))
+            sections.append(action_output_detail_panel("Project Action Output Details", state, actions, {"project", "operations", "workbench", "review", "delivery"}))
+            sections.append(action_impact_panel("Project Action Impact", state, actions, {"project", "operations", "workbench", "review", "delivery"}))
+            sections.append(action_delta_panel("Project Action Delta", state, actions, {"project", "operations", "workbench", "review", "delivery"}))
         if file_name == "llm.html":
             sections.append(action_trace_panel("LLM Action Trace", actions, {"llm"}))
             sections.append(action_output_panel("LLM Action Output Links", state, actions, {"llm"}))

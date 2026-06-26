@@ -1150,8 +1150,8 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_compare", "coherence_checks=9");
 	ok = ok && require_file_token("rp_ui_compare", "relay_protocol_files=5");
 	ok = ok && require_file_token("rp_ui_compare", "notebook_exports=2");
-	ok = ok && require_file_token("rp_web_routes", "routes=62");
-	ok = ok && require_file_token("rp_web_routes", "get_routes=14");
+	ok = ok && require_file_token("rp_web_routes", "routes=63");
+	ok = ok && require_file_token("rp_web_routes", "get_routes=15");
 	ok = ok && require_file_token("rp_web_routes", "route=/research/workbench/{id}");
 	ok = ok && require_file_token("rp_web_routes", "post_routes=48");
 	ok = ok && require_file_token("rp_web_routes", "action=/actions/host-workflow/stage-attempt");
@@ -1352,7 +1352,7 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "reader_contract=host_plain_ucore_v2");
 	ok = ok && require_file_token("rp_web_bundle", "reader_contract_version=2");
 	ok = ok && require_file_token("rp_web_bundle", "reader_ready=1");
-	ok = ok && require_file_token("rp_web_bundle", "reader_views=18");
+	ok = ok && require_file_token("rp_web_bundle", "reader_views=19");
 	ok = ok && require_file_token("rp_web_bundle", "reader_actions=48");
 	ok = ok && require_file_token("rp_web_bundle", "reader_payload_files=rp_api_home");
 	ok = ok && require_file_token("rp_web_bundle", "reader_refresh_files=rp_web_routes");

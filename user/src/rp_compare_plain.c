@@ -1001,8 +1001,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "custom_runs=3");
 	ok = ok && rp_file_contains("rp_runner", "custom_agent_decisions=15");
 	ok = ok && rp_file_contains("rp_runner", "citation_plan_entries=3");
-	ok = ok && rp_file_contains("rp_web_routes", "routes=62");
-	ok = ok && rp_file_contains("rp_web_routes", "get_routes=14");
+	ok = ok && rp_file_contains("rp_web_routes", "routes=63");
+	ok = ok && rp_file_contains("rp_web_routes", "get_routes=15");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research/workbench/{id}");
 	ok = ok && rp_file_contains("rp_web_routes", "post_routes=48");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/host-workflow/stage-attempt");

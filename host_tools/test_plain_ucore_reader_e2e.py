@@ -892,6 +892,28 @@ def main() -> int:
             assert "passed" in data_html
             assert "host_action_file_verified" in data_html
             assert "11" in data_html
+            project_html = read_text(base + "/project.html")
+            assert "Project Space" in project_html
+            assert "Project Handoff" in project_html
+            assert "Project Evidence Package" in project_html
+            assert "Project Package Records" in project_html
+            assert "Project Quality And Repair" in project_html
+            assert "Project Search And Notes" in project_html
+            assert "Project Source Files" in project_html
+            assert "Project Action Trace" in project_html
+            assert "Project Action Output Details" in project_html
+            assert "Project Action Impact" in project_html
+            assert "Project Action Delta" in project_html
+            assert "lab-gene-x" in project_html
+            assert "host_action_project_id" in project_html
+            assert "host_action_project_space" in project_html
+            assert "host_action_project_answer" in project_html
+            assert "host_action_quality_gate" in project_html
+            assert "host_action_quality_repair_execute" in project_html
+            assert "host_action_search_query" in project_html
+            assert "recovery evidence" in project_html
+            assert "/actions/research/project-space" in project_html
+            assert "/actions/research-search/export" in project_html
             artifacts_html = read_text(base + "/artifacts.html")
             assert "Evidence Package" in artifacts_html
             assert "ev" in artifacts_html
