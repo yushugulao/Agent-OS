@@ -1390,6 +1390,134 @@ def action_trace_panel(title: str, actions: list[dict[str, object]], groups: set
     )
 
 
+def action_output_spec(path: str, group: str) -> tuple[str, str]:
+    if group == "workflow":
+        return "rp_stage_dag,rp_stage_state,rp_run_events,rp_cache_index,rp_retry_plan,rp_worker,rp_execobs,rp_artifact_manifest,rp_package", "run.html,artifacts.html"
+    if group == "artifact":
+        return "rp_artifact,rp_artifact_manifest,rp_stage_log,rp_chart_data,rp_package", "run.html,artifacts.html"
+    if group == "llm":
+        return "rp_llm_req,rp_llmq,rp_llm_resp,rp_llm_packets,rp_llm_hostreq,rp_llm_fallback,rp_api_runtime", "llm.html,run.html,review.html"
+    if group == "workbench":
+        return "rp_runner,rp_revision,rp_package,rp_nbexec,rp_uresrun", "run.html,review.html"
+    if group == "review":
+        return "rp_review2,rp_revision,rp_report_text,rp_review_dashboard,rp_review_pack", "review.html,run.html"
+    if group == "delivery":
+        return "rp_package,rp_artifact_manifest,rp_nbexec,rp_uresrun", "review.html,artifacts.html,run.html"
+    if group == "operations":
+        return "rp_runner,rp_package,rp_actionio,rp_web_bundle", "run.html,review.html,actions.html"
+    if group == "project":
+        return "rp_runner,rp_package,rp_review_pack", "review.html,run.html"
+    if group == "compare":
+        return "rp_agentcmp,rp_api_compare,rp_backend_exec,rp_study", "compare.html,review.html"
+    if group == "portability":
+        return "rp_wfio,rp_package,rp_agentcmp", "compare.html,actions.html"
+    if group == "inputs":
+        return "rp_input,rp_lit,rp_knowledge,rp_api_evidence,rp_uresrun", "run.html,evidence.html,data.html"
+    if group == "run" or path.endswith("/research/run"):
+        return "rp_input,rp_runner,rp_report_text,rp_api_run,rp_uresrun", "run.html"
+    return "rp_actionio,rp_web_bundle", "actions.html"
+
+
+def action_evidence_prefixes(path: str, group: str) -> tuple[str, ...]:
+    if path.endswith("/host-workflow/stage-attempt"):
+        return ("host_workflow_stage_action=",)
+    if path.endswith("/host-workflow/cache-decision"):
+        return ("host_workflow_cache_action=",)
+    if path.endswith("/host-workflow/retry-decision"):
+        return ("host_workflow_retry_action=",)
+    if path.endswith("/host-workflow/artifact-manifest"):
+        return ("host_workflow_artifact_action=",)
+    if path.endswith("/host-workflow/report-export"):
+        return ("host_workflow_report_action=",)
+    if path.endswith("/research/artifact-input"):
+        return ("host_artifact_manifest_input=", "host_artifact_input=")
+    if path.endswith("/research/artifact-derive"):
+        return ("host_artifact_manifest_derive=", "host_artifact_derive=")
+    if path.endswith("/research/artifact-log"):
+        return ("host_artifact_log=", "host_artifact_manifest_log=")
+    if path.endswith("/research/artifact-chart"):
+        return ("host_artifact_chart=", "host_artifact_manifest_chart=")
+    if path.endswith("/research/artifact-package"):
+        return ("host_artifact_package=", "host_artifact_manifest_package=")
+    if group == "llm":
+        return ("host_relay_", "host_action_llm_", "host_llm_")
+    if group == "workbench":
+        return ("host_action_workbench_", "host_report_workbench_", "host_manifest_workbench_")
+    if group == "review":
+        return ("host_action_review_", "host_action_revision_", "host_report_review_", "host_report_revision_")
+    if group == "delivery":
+        return ("host_action_export_", "host_action_bundle_", "host_manifest_bundle=", "host_action_workbench_package=")
+    if group == "operations":
+        return ("host_action_operations_", "operations_handoff=")
+    if group == "project":
+        return ("host_action_project_", "project_handoff=")
+    if group == "compare":
+        return ("host_action_compare", "backend_runner", "study_metric=", "runner_case=")
+    if group == "portability":
+        return ("host_portability_", "host_action_portability_")
+    if group == "inputs":
+        return ("host_action_", "literature_search_id=", "evidence_protocol=")
+    if group == "run":
+        return ("host_action_run_id=", "host_report_run_id=", "host_action_status=")
+    return ("host_action_",)
+
+
+def first_matching_state_line(state: dict[str, dict[str, object]], outputs: str, prefixes: tuple[str, ...]) -> str:
+    for name in split_list(outputs):
+        for line in state_lines(state, name):
+            stripped = line.strip()
+            if any(stripped.startswith(prefix) for prefix in prefixes):
+                return "{}:{}".format(name, stripped)
+    for name in split_list(outputs):
+        lines = state_lines(state, name)
+        if lines:
+            return "{}:{}".format(name, lines[0].strip())
+    return ""
+
+
+def action_output_links(state: dict[str, dict[str, object]], actions: list[dict[str, object]], groups: set[str]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for record in actions:
+        path = str(record.get("path", ""))
+        group = action_trace_group(path)
+        if not group or group not in groups:
+            continue
+        outputs, pages = action_output_spec(path, group)
+        existing_outputs = [name for name in split_list(outputs) if name in state]
+        evidence = first_matching_state_line(state, outputs, action_evidence_prefixes(path, group))
+        rows.append(
+            {
+                "action_output": str(record.get("sequence", "")),
+                "group": group,
+                "path": path,
+                "payload": payload_summary(record.get("payload", {})),
+                "ucore_outputs": ",".join(existing_outputs),
+                "rendered_pages": pages,
+                "evidence": evidence,
+                "status": "ready" if existing_outputs else str(record.get("status", "")),
+            }
+        )
+    return rows
+
+
+def action_output_panel(title: str, state: dict[str, dict[str, object]], actions: list[dict[str, object]], groups: set[str]) -> str:
+    return render_record_panel(
+        title,
+        [
+            ("Sequence", "action_output"),
+            ("Group", "group"),
+            ("Path", "path"),
+            ("Payload", "payload"),
+            ("uCore Outputs", "ucore_outputs"),
+            ("Rendered Pages", "rendered_pages"),
+            ("Evidence", "evidence"),
+            ("Status", "status"),
+        ],
+        action_output_links(state, actions, groups),
+        "No related host action outputs",
+    )
+
+
 def default_batch_payload() -> str:
     actions = {
         "actions": [
@@ -1648,12 +1776,18 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
         sections.extend(render_grouped_details(file_name, state))
         if file_name == "run.html":
             sections.append(action_trace_panel("Run Action Trace", actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
+            sections.append(action_output_panel("Run Action Output Links", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
         if file_name == "compare.html":
             sections.append(action_trace_panel("Compare Action Trace", actions, {"compare", "portability", "workflow", "artifact"}))
+            sections.append(action_output_panel("Compare Action Output Links", state, actions, {"compare", "portability", "workflow", "artifact"}))
         if file_name == "review.html":
             sections.append(action_trace_panel("Review Action Trace", actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
+            sections.append(action_output_panel("Review Action Output Links", state, actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
+        if file_name == "artifacts.html":
+            sections.append(action_output_panel("Artifact Action Output Links", state, actions, {"artifact", "workflow"}))
         if file_name == "actions.html":
             sections.append(render_action_panel())
+            sections.append(action_output_panel("Action Output Links", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
             sections.append(render_action_log(actions))
         sections.append(render_table(primary, state_lines(state, primary)))
         for extra in extras:
