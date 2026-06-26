@@ -18,6 +18,7 @@ PAGE_SPECS = [
     ("index.html", "Home", "rp_api_home", ["rp_ui_home", "rp_web_bundle"]),
     ("run.html", "Run Detail", "rp_api_run", ["rp_ui_run", "rp_runner", "rp_artifact"]),
     ("workflow.html", "Workflow", "rp_stage_state", ["rp_stage_dag", "rp_cache_index", "rp_retry_plan", "rp_run_events", "rp_worker", "rp_execobs"]),
+    ("workbench.html", "Workbench", "rp_runner", ["rp_report_text", "rp_revision", "rp_package", "rp_review_pack", "rp_nbexec", "rp_uresrun"]),
     ("agents.html", "Agents", "rp_api_agents", ["rp_ui_agent", "rp_agents", "rp_decisions"]),
     ("evidence.html", "Evidence", "rp_api_evidence", ["rp_ui_evidence", "rp_evidence", "rp_package"]),
     ("review.html", "Review", "rp_review_dashboard", ["rp_review_pack", "rp_review2", "rp_revision", "rp_package", "rp_report_text"]),
@@ -224,6 +225,17 @@ def state_prefixed_lines(state: dict[str, dict[str, object]], name: str, prefixe
         stripped = line.strip()
         if any(stripped.startswith(prefix) for prefix in prefixes):
             rows.append(stripped)
+    return rows
+
+
+def key_value_rows(state: dict[str, dict[str, object]], names: tuple[str, ...], prefixes: tuple[str, ...]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for name in names:
+        for line in state_prefixed_lines(state, name, prefixes):
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            rows.append({"state_file": name, "key": key, "value": value})
     return rows
 
 
@@ -1041,6 +1053,16 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Worker Slots", metric_value(state, [("rp_stage_state", "host_workflow_worker_slots"), ("rp_worker", "host_workflow_worker_slots")]), "rp_worker"),
         ("Queue Depth", metric_value(state, [("rp_stage_state", "host_workflow_queue_depth"), ("rp_worker", "host_workflow_queue_depth")]), "rp_worker"),
     ]
+    workbench_items = [
+        ("Workbench", metric_value(state, [("rp_runner", "host_action_workbench_id"), ("rp_report_text", "host_report_workbench"), ("rp_uresrun", "host_action_workbench")]), "rp_runner"),
+        ("Title", metric_value(state, [("rp_runner", "host_action_workbench_title"), ("rp_report_text", "host_report_workbench_title")]), "rp_runner"),
+        ("Question", metric_value(state, [("rp_runner", "host_action_workbench_question"), ("rp_report_text", "host_report_workbench_question")]), "rp_runner"),
+        ("Task", metric_value(state, [("rp_runner", "host_action_workbench_task"), ("rp_report_text", "host_report_workbench_task")]), "rp_runner"),
+        ("Readiness", metric_value(state, [("rp_runner", "host_action_workbench_readiness"), ("rp_package", "host_action_workbench_readiness")]), "rp_runner"),
+        ("Manifest", metric_value(state, [("rp_package", "host_action_workbench_manifest"), ("rp_report_text", "host_report_workbench_manifest"), ("rp_uresrun", "host_action_workbench_manifest")]), "rp_package"),
+        ("Bundle", metric_value(state, [("rp_package", "host_action_workbench_bundle"), ("rp_report_text", "host_report_workbench_bundle"), ("rp_uresrun", "host_action_workbench_bundle")]), "rp_package"),
+        ("Notebook", metric_value(state, [("rp_nbexec", "host_action_notebook_format"), ("rp_web_bundle", "notebook_export")]), "rp_nbexec"),
+    ]
     compare_items = [
         ("Payload Applied", metric_value(state, [("rp_api_compare", "host_action_payload_applied")]), "rp_api_compare"),
         ("Run", metric_value(state, [("rp_api_compare", "host_action_run_id")]), "rp_api_compare"),
@@ -1088,6 +1110,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Delivery Package", delivery_items)
     if file_name == "workflow.html":
         return render_summary_panel("Workflow Runner", workflow_items)
+    if file_name == "workbench.html":
+        return render_summary_panel("Research Workbench", workbench_items)
     if file_name == "review.html":
         return render_summary_panel("Review Dashboard", review_items)
     if file_name == "compare.html":
@@ -1387,6 +1411,102 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                     ("Status", "status"),
                 ],
                 workflow_evidence_links(state),
+            ),
+        ]
+    if file_name == "workbench.html":
+        return [
+            render_record_panel(
+                "Workbench Task State",
+                [("State File", "state_file"), ("Key", "key"), ("Value", "value")],
+                key_value_rows(
+                    state,
+                    ("rp_runner", "rp_report_text", "rp_api_compare"),
+                    (
+                        "workbench_tasks=",
+                        "workbench_next_task=",
+                        "host_action_workbench_id=",
+                        "host_action_workbench_title=",
+                        "host_action_workbench_literature_query=",
+                        "host_action_workbench_question=",
+                        "host_action_workbench_evidence_query=",
+                        "host_action_workbench_answer=",
+                        "host_action_workbench_answer_audit=",
+                        "host_action_workbench_readiness=",
+                        "host_action_workbench_task=",
+                        "host_action_workbench_task_status=",
+                        "host_action_workbench_step_limit=",
+                        "host_report_workbench=",
+                        "host_report_workbench_title=",
+                        "host_report_workbench_question=",
+                        "host_report_workbench_task=",
+                    ),
+                ),
+            ),
+            render_record_panel(
+                "Workbench Writing Outputs",
+                [("State File", "state_file"), ("Key", "key"), ("Value", "value")],
+                key_value_rows(
+                    state,
+                    ("rp_runner", "rp_revision", "rp_report_text", "rp_package", "rp_artifact_manifest"),
+                    (
+                        "host_action_workbench_note",
+                        "host_action_workbench_brief",
+                        "host_action_workbench_evidence_dossier",
+                        "host_action_workbench_dossier_format=",
+                        "host_action_workbench_evidence_graph",
+                        "host_action_workbench_graph_format=",
+                        "host_action_workbench_citations",
+                        "host_action_workbench_citation_format=",
+                        "host_action_workbench_manuscript",
+                        "host_action_workbench_audit_scope=",
+                        "host_action_workbench_revision",
+                        "host_action_workbench_runbook",
+                        "host_action_workbench_timeline",
+                        "host_report_workbench_note_title=",
+                    ),
+                ),
+            ),
+            render_record_panel(
+                "Workbench File Package",
+                [("State File", "state_file"), ("Key", "key"), ("Value", "value")],
+                key_value_rows(
+                    state,
+                    ("rp_package", "rp_artifact_manifest", "rp_review_pack", "rp_nbexec", "rp_uresrun", "rp_web_bundle"),
+                    (
+                        "workbench_handoff=",
+                        "host_action_workbench_outputs=",
+                        "host_action_workbench_manifest",
+                        "host_action_workbench_sha_records=",
+                        "host_action_workbench_verified_files=",
+                        "host_action_workbench_missing_files=",
+                        "host_action_workbench_bundle=",
+                        "host_action_workbench_package=",
+                        "host_action_workbench_completion=",
+                        "host_action_notebook",
+                        "host_manifest_workbench",
+                        "workbench=rp_runner",
+                        "workbench_export=",
+                    ),
+                ),
+            ),
+            render_record_panel(
+                "Workbench Review Board",
+                [("State File", "state_file"), ("Key", "key"), ("Value", "value")],
+                key_value_rows(
+                    state,
+                    ("rp_runner", "rp_revision", "rp_package", "rp_review_pack"),
+                    (
+                        "host_action_workbench_task_board",
+                        "host_action_workbench_board_filter=",
+                        "host_action_workbench_task_board_row=",
+                        "host_action_workbench_row_id=",
+                        "host_action_workbench_row_status=",
+                        "host_action_workbench_handoff=",
+                        "host_action_workbench_handoff_scope=",
+                        "host_action_workbench_completion=",
+                        "workbench_handoff=",
+                    ),
+                ),
             ),
         ]
     if file_name == "agents.html":
@@ -2648,6 +2768,12 @@ def render_overview(
             ("Retry", metric_value(state, [("rp_retry_plan", "host_workflow_retry_stage"), ("rp_retry_plan", "retry_stage")]), "rp_retry_plan"),
             ("Events", metric_value(state, [("rp_execobs", "host_workflow_observer_events"), ("rp_run_events", "events")]), "rp_execobs"),
         ],
+        "workbench.html": [
+            ("Workbench", metric_value(state, [("rp_runner", "host_action_workbench_id"), ("rp_report_text", "host_report_workbench"), ("rp_uresrun", "host_action_workbench")]), "rp_runner"),
+            ("Task", metric_value(state, [("rp_runner", "host_action_workbench_task"), ("rp_report_text", "host_report_workbench_task")]), "rp_runner"),
+            ("Manifest", metric_value(state, [("rp_package", "host_action_workbench_manifest"), ("rp_report_text", "host_report_workbench_manifest")]), "rp_package"),
+            ("Bundle", metric_value(state, [("rp_package", "host_action_workbench_bundle"), ("rp_report_text", "host_report_workbench_bundle")]), "rp_package"),
+        ],
         "agents.html": [
             ("Agents", metric_value(state, [("rp_agents", "agents"), ("rp_api_agents", "agents")]), "rp_agents"),
             ("Decisions", metric_value(state, [("rp_decisions", "decisions")]), "rp_decisions"),
@@ -2835,6 +2961,12 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
             sections.append(action_output_detail_panel("Workflow Action Output Details", state, actions, {"workflow", "artifact"}))
             sections.append(action_impact_panel("Workflow Action Impact", state, actions, {"workflow", "artifact"}))
             sections.append(action_delta_panel("Workflow Action Delta", state, actions, {"workflow", "artifact"}))
+        if file_name == "workbench.html":
+            sections.append(action_trace_panel("Workbench Action Trace", actions, {"workbench", "review", "delivery", "operations", "project"}))
+            sections.append(action_output_panel("Workbench Action Output Links", state, actions, {"workbench", "review", "delivery", "operations", "project"}))
+            sections.append(action_output_detail_panel("Workbench Action Output Details", state, actions, {"workbench", "review", "delivery", "operations", "project"}))
+            sections.append(action_impact_panel("Workbench Action Impact", state, actions, {"workbench", "review", "delivery", "operations", "project"}))
+            sections.append(action_delta_panel("Workbench Action Delta", state, actions, {"workbench", "review", "delivery", "operations", "project"}))
         if file_name == "compare.html":
             sections.append(action_trace_panel("Compare Action Trace", actions, {"compare", "portability", "workflow", "artifact"}))
             sections.append(action_output_panel("Compare Action Output Links", state, actions, {"compare", "portability", "workflow", "artifact"}))

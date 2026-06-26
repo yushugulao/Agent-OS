@@ -851,6 +851,24 @@ def main() -> int:
             assert "stage_evidence" in workflow_html
             assert "rp_artifact_manifest" in workflow_html
             assert "Workflow Action Trace" in workflow_html
+            workbench_html = read_text(base + "/workbench.html")
+            assert "Research Workbench" in workbench_html
+            assert "Workbench Task State" in workbench_html
+            assert "Workbench Writing Outputs" in workbench_html
+            assert "Workbench File Package" in workbench_html
+            assert "Workbench Review Board" in workbench_html
+            assert "Workbench Action Trace" in workbench_html
+            assert "W1" in workbench_html
+            assert "WB1" in workbench_html
+            assert "Ready?" in workbench_html
+            assert "Scope" in workbench_html
+            assert "host_action_workbench_manuscript_format" in workbench_html
+            assert "markdown" in workbench_html
+            assert "host_action_workbench_board_filter" in workbench_html
+            assert "open" in workbench_html
+            assert "mf.json" in workbench_html
+            assert "wb.zip" in workbench_html
+            assert "host_action_notebook_format" in workbench_html
             artifacts_html = read_text(base + "/artifacts.html")
             assert "Evidence Package" in artifacts_html
             assert "ev" in artifacts_html

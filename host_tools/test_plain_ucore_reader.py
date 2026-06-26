@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=17
+reader_views=18
 reader_actions=48
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_web_bundle
@@ -100,7 +100,27 @@ status=ready
     "rp_ui_agent": "page=agent-detail\ndecision_records=rp_agents,rp_decisions,rp_handoff,rp_deliberation,rp_agent_run\nstatus=ready\n",
     "rp_ui_evidence": "page=evidence-detail\nscreening_decisions=9\nevidence_protocol=usable-evidence-protocol:RUN-900:1\nstatus=ready\n",
     "rp_ui_compare": "page=compare-metrics\npain_file_scans=128\npain_state_convention=1\npain_user_permissions=1\npain_rebuild_steps=6\nstatus=ready\n",
-    "rp_runner": "workbench_tasks=9\nbackend_evidence_report=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;status=ready\nstatus=ready\n",
+    "rp_runner": (
+        "workbench_tasks=9\n"
+        "host_action_workbench_id=W1\n"
+        "host_action_workbench_title=WB1\n"
+        "host_action_workbench_literature_query=prov\n"
+        "host_action_workbench_question=Ready?\n"
+        "host_action_workbench_evidence_query=rec\n"
+        "host_action_workbench_answer=generated\n"
+        "host_action_workbench_answer_audit=passed\n"
+        "host_action_workbench_readiness=checked\n"
+        "host_action_workbench_task=human_review\n"
+        "host_action_workbench_task_status=waiting\n"
+        "host_action_workbench_note=recorded\n"
+        "host_action_workbench_note_title=Scope\n"
+        "host_action_workbench_manuscript=exported\n"
+        "host_action_workbench_manuscript_format=markdown\n"
+        "host_action_workbench_task_board=exported\n"
+        "host_action_workbench_board_filter=open\n"
+        "backend_evidence_report=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;status=ready\n"
+        "status=ready\n"
+    ),
     "rp_report_text": (
         "host_report_run_id=RUN-042\n"
         "host_report_title=Static Study\n"
@@ -302,10 +322,11 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 13, summary
+        assert summary["pages"] == 14, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
+        assert (out_dir / "workbench.html").exists()
         assert (out_dir / "review.html").exists()
         assert (out_dir / "delivery.html").exists()
         assert (out_dir / "llm.html").exists()
@@ -375,6 +396,19 @@ def main() -> int:
         assert "retry_decision" in workflow_html
         assert "stage_evidence" in workflow_html
         assert "rp_artifact_manifest" in workflow_html
+        workbench_html = (out_dir / "workbench.html").read_text(encoding="utf-8")
+        assert "Research Workbench" in workbench_html
+        assert "Workbench Task State" in workbench_html
+        assert "Workbench Writing Outputs" in workbench_html
+        assert "Workbench File Package" in workbench_html
+        assert "Workbench Review Board" in workbench_html
+        assert "W1" in workbench_html
+        assert "WB1" in workbench_html
+        assert "Ready?" in workbench_html
+        assert "Scope" in workbench_html
+        assert "markdown" in workbench_html
+        assert "delivery-manifest.json" in workbench_html
+        assert "workbench-bundle.zip" in workbench_html
         compare_html = (out_dir / "compare.html").read_text(encoding="utf-8")
         assert "Compare Summary" in compare_html
         assert "Compare Metrics" in compare_html

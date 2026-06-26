@@ -1074,7 +1074,7 @@ int main(void)
 			   "reader_contract=host_plain_ucore_v2\n"
 			   "reader_contract_version=2\n"
 			   "reader_ready=1\n"
-			   "reader_views=17\n"
+			   "reader_views=18\n"
 			   "reader_actions=48\n"
 			   "reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes\n"
 			   "reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_web_bundle\n"
