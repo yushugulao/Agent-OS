@@ -305,6 +305,7 @@ def main() -> int:
             assert any("host_action_workflow=WF1" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_workflow_export=wf.zip" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_workflow_export_format=json" in line for line in rp_runner["lines"]), rp_runner
+            assert any("backend_evidence_report=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;status=ready" in line for line in rp_runner["lines"]), rp_runner
             rp_stage_dag = read_json(base + "/api/state/rp_stage_dag")
             assert any("host_workflow_id=WF1" in line for line in rp_stage_dag["lines"]), rp_stage_dag
             assert any("host_workflow_engine=plain-c-runner" in line for line in rp_stage_dag["lines"]), rp_stage_dag
@@ -374,6 +375,7 @@ def main() -> int:
             assert any("host_artifact_chart=qc-chart.json;type=line;data_file=clean.metrics.json;points=12" in line for line in rp_chart_data["lines"]), rp_chart_data
             rp_report_text = read_json(base + "/api/state/rp_report_text")
             assert any("host_workflow_report_action=workflow-report.md;format=markdown;sections=5;status=ready" in line for line in rp_report_text["lines"]), rp_report_text
+            assert any("backend_evidence_report=rp_backend_exec" in line and "batch_tool_context,event_context,kernel_context_path,metadata_index" in line for line in rp_report_text["lines"]), rp_report_text
             rp_lit = read_json(base + "/api/state/rp_lit")
             assert any("host_action_literature_query=prov" in line for line in rp_lit["lines"]), rp_lit
             assert any("host_action_literature_max_results=7" in line for line in rp_lit["lines"]), rp_lit
@@ -579,7 +581,7 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=822" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=830" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("tool_events=138" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=12" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -596,6 +598,7 @@ def main() -> int:
             assert any("runner_detail_rows=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("backend_runner_report_checks=20" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_report_rows=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("backend_report_links=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_cases=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_passed=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_planned=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -750,6 +753,10 @@ def main() -> int:
             assert "host_action_workbench_note_title" in run_html
             assert "host_action_workbench_manuscript_format" in run_html
             assert "host_action_dataset_title" in run_html
+            assert "Backend Evidence In Report" in run_html
+            assert "Backend Evidence In Runner" in run_html
+            assert "batch_tool_context" in run_html
+            assert "risks" in run_html
             artifacts_html = read_text(base + "/artifacts.html")
             assert "Evidence Package" in artifacts_html
             assert "ev" in artifacts_html

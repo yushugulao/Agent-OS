@@ -273,7 +273,6 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_agentcmp`
 - `rp_backend`
 - `rp_backend_exec`
-- `rp_backend_export`
 - `rp_study`
 - `rp_consistency`
 - `rp_ui_home`
@@ -301,7 +300,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_review_pack`
 - `rp_agentcmp`
 
-The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 822-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the upstream teaching file-system inode limit.
+The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 830-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the upstream teaching file-system inode limit.
 
 Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_agentcmp` after all children exit, then prints `state_ok=1`.
 
@@ -435,7 +434,7 @@ It also verifies the workflow portability delivery path. It checks import count,
 
 The comparison step also checks that workflow portability and backend execution name the same execution plan, backend scenario, and compare profile. It verifies plain-uCore passed cases, planned AgentOS cases, and study records, then publishes `portability_backend_checks=12` in `rp_agentcmp`.
 
-The backend scenario now also writes compact case-runner evidence. It records four cases, the ordinary files checked by the plain-uCore cases, attempt counts, retry reasons, four source/requirement/observation/action/review rows, four cost/replacement/risk rows, the two planned AgentOS cases, and study metrics for plain file scans and future kernel-assisted execution, then publishes `backend_runner_checks=12`, `backend_runner_detail_checks=24`, `runner_detail_rows=4`, `backend_runner_report_checks=20`, and `runner_report_rows=4` in `rp_agentcmp`.
+The backend scenario now also writes compact case-runner evidence. It records four cases, the ordinary files checked by the plain-uCore cases, attempt counts, retry reasons, four source/requirement/observation/action/review rows, four cost/replacement/risk rows, the two planned AgentOS cases, and study metrics for plain file scans and future kernel-assisted execution. It also links the same backend evidence into `rp_runner` and `rp_report_text`, then publishes `backend_runner_checks=12`, `backend_runner_detail_checks=24`, `runner_detail_rows=4`, `backend_runner_report_checks=20`, `runner_report_rows=4`, and `backend_report_links=2` in `rp_agentcmp`.
 
 The action runner turns captured host actions into ordinary uCore state files for the next run:
 

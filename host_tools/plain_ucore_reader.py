@@ -257,6 +257,7 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Revision Targets", metric_value(state, [("rp_report_text", "host_report_revision_targets"), ("rp_revision", "host_action_revision_targets")]), "rp_revision"),
         ("Bundle", metric_value(state, [("rp_report_text", "host_report_bundle"), ("rp_package", "host_action_export_bundle_name")]), "rp_package"),
         ("Compare Profile", metric_value(state, [("rp_report_text", "host_report_compare_profile"), ("rp_agentcmp", "host_action_compare_profile")]), "rp_agentcmp"),
+        ("Backend Evidence", metric_value(state, [("rp_report_text", "backend_evidence_report"), ("rp_runner", "backend_evidence_report")]), "rp_report_text"),
     ]
     evidence_items = [
         ("Manifest Run", metric_value(state, [("rp_artifact_manifest", "host_manifest_run_id"), ("rp_report_text", "host_report_run_id")]), "rp_artifact_manifest"),
@@ -372,6 +373,30 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
 
 
 def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) -> list[str]:
+    if file_name == "run.html":
+        return [
+            render_record_panel(
+                "Backend Evidence In Report",
+                [
+                    ("Report", "backend_evidence_report"),
+                    ("Plain Costs", "plain_costs"),
+                    ("AgentOS Replacements", "agentos_replacements"),
+                    ("Status", "status"),
+                ],
+                state_records(state, "rp_report_text", "backend_evidence_report"),
+            ),
+            render_record_panel(
+                "Backend Evidence In Runner",
+                [
+                    ("Runner", "backend_evidence_report"),
+                    ("Plain Costs", "plain_costs"),
+                    ("AgentOS Replacements", "agentos_replacements"),
+                    ("Risks", "risks"),
+                    ("Status", "status"),
+                ],
+                state_records(state, "rp_runner", "backend_evidence_report"),
+            ),
+        ]
     if file_name == "agents.html":
         return [
             render_record_panel(

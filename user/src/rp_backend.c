@@ -62,14 +62,6 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
-	if (!rp_write_file("rp_backend_export",
-			   "exports=1\n"
-			   "format=markdown\n"
-			   "package=ready\n"
-			   "telemetry=attached\n"
-			   "status=ready\n")) {
-		return 1;
-	}
 	if (!rp_write_file("rp_study",
 			   "study=same-workflow-backend-study\n"
 			   "workflow_portability=rp_wfio;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;migration_status=baseline_ready_agentos_planned\n"
@@ -84,6 +76,8 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_append_file("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;status=ready")) return 1;
+	if (!rp_append_file("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=backend;msg=21;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=backend.create_scenario")) return 1;
 	if (!rp_append_file("rp_tool", "tool=backend.record_execution")) return 1;
@@ -91,7 +85,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=backend.write_study")) return 1;
 	if (!rp_append_status("backend=ready")) return 1;
 	if (!rp_append_status("backend_exec=ready")) return 1;
-	if (!rp_append_status("backend_export=ready")) return 1;
 	if (!rp_append_status("study=ready")) return 1;
 	printf("rp_backend: cases=4 executable=2 exports=1 status=ready\n");
 	return 0;

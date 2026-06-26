@@ -1043,6 +1043,8 @@ int main(void)
 	ok = ok && require_file_token("rp_study", "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;detail_checks=kernel;result=planned");
 	ok = ok && require_file_token("rp_study", "metrics=8");
 	ok = ok && require_file_token("rp_study", "study_handoff=rp_backend_exec->rp_agentcmp;status=ready");
+	ok = ok && require_file_token("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;status=ready");
+	ok = ok && require_file_token("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index;status=ready");
 	ok = ok && require_file_token("rp_consistency", "checks=120");
 	ok = ok && require_file_token("rp_consistency", "artifact_provenance=3");
 	ok = ok && require_file_token("rp_consistency", "artifact_dossier_checks=4");
@@ -1401,7 +1403,7 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "review_pack_actions=3");
 	ok = ok && require_file_token("rp_agentcmp", "review_pack_bridges=4");
 	ok = ok && require_file_token("rp_agentcmp", "review_handoff_checks=12;review_sections=8;review_gates=6");
-	ok = ok && require_file_token("rp_agentcmp", "test_cases=822");
+	ok = ok && require_file_token("rp_agentcmp", "test_cases=830");
 	ok = ok && require_file_token("rp_agentcmp", "llm_delivery_checks=16");
 	ok = ok && require_file_token("rp_agentcmp", "llm_queue=3");
 	ok = ok && require_file_token("rp_agentcmp", "llm_packets=3");
@@ -1428,6 +1430,7 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "runner_detail_rows=4");
 	ok = ok && require_file_token("rp_agentcmp", "backend_runner_report_checks=20");
 	ok = ok && require_file_token("rp_agentcmp", "runner_report_rows=4");
+	ok = ok && require_file_token("rp_agentcmp", "backend_report_links=2");
 	ok = ok && require_file_token("rp_agentcmp", "runner_cases=4");
 	ok = ok && require_file_token("rp_agentcmp", "runner_passed=2");
 	ok = ok && require_file_token("rp_agentcmp", "runner_planned=2");
@@ -1545,7 +1548,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=822\n"
+			   "tests=830\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -1594,6 +1597,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=822 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=830 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
 	return 0;
 }

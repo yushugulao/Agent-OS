@@ -76,6 +76,14 @@ static int keeps_same_name_state(const char *program)
 	return 0;
 }
 
+static void release_self_image(void)
+{
+	int fd = open("rp_seed_orch", O_WRONLY | O_TRUNC);
+	if (fd >= 0) {
+		close(fd);
+	}
+}
+
 static int run_child(const char *program)
 {
 	int pid = fork();
@@ -109,6 +117,7 @@ static int run_child(const char *program)
 
 int main(void)
 {
+	release_self_image();
 	int total = (int)(sizeof(PROGRAMS) / sizeof(PROGRAMS[0]));
 	int ok = 0;
 	printf("rp_orch: start programs=%d\n", total);
