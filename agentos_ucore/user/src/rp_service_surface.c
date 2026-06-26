@@ -327,8 +327,12 @@ static int write_research_product_surface(void)
 			    "runtime_assurance=secret_refs:3,model_registry:2,deployments:1,llm_proxy_audits:2,collab_threads:2,obs_alerts:5,health:1,status=ready")) {
 		return 0;
 	}
+	if (!rp_append_file("rp_runop",
+			    "research_ops=semantic_entities:8,semantic_relations:6,prompt_templates:2,prompt_versions:2,prompt_evaluations:1,runbook_steps:7,worker_ops:6,execution_controls:8,status=ready")) {
+		return 0;
+	}
 	return rp_append_file("rp_runop",
-			      "research_ops=semantic_entities:8,semantic_relations:6,prompt_templates:2,prompt_versions:2,prompt_evaluations:1,runbook_steps:7,worker_ops:6,execution_controls:8,status=ready");
+			      "regulated_research=annotation_schemas:1,annotation_tasks:3,assay_plates:1,plate_wells:6,cohort_records:2,data_access_requests:1,dataset_cards:1,model_cards:1,research_object_crates:1,research_object_entities:29,sample_custody_events:18,statistical_designs:1,workflow_templates:8,status=ready");
 }
 
 static int write_advanced_surface(void)

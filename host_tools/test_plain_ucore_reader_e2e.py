@@ -679,7 +679,7 @@ def main() -> int:
             assert any("review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line and "backend_review=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_consistency = read_json(base + "/api/state/rp_consistency")
-            assert any("checks=190" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("checks=222" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("runtime_assurance_checks=24" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("research_ops_checks=28" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("semantic_graph_checks=6" in line for line in rp_consistency["lines"]), rp_consistency
@@ -687,6 +687,13 @@ def main() -> int:
             assert any("runbook_checks=7" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("worker_ops_checks=5" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("execution_control_checks=5" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("regulated_research_checks=32" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("annotation_checks=5" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("assay_plate_checks=4" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("cohort_monitoring_checks=3" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("data_access_checks=4" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("research_object_checks=5" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("workflow_template_checks=2" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("secret_reference_checks=6" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("model_registry_checks=5" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("llm_proxy_replay_audits=2" in line for line in rp_consistency["lines"]), rp_consistency
@@ -703,6 +710,11 @@ def main() -> int:
             assert any("runbook_steps:7" in line for line in rp_runop["lines"]), rp_runop
             assert any("worker_ops:6" in line for line in rp_runop["lines"]), rp_runop
             assert any("execution_controls:8" in line for line in rp_runop["lines"]), rp_runop
+            assert any("regulated_research=annotation_schemas:1" in line for line in rp_runop["lines"]), rp_runop
+            assert any("assay_plates:1" in line for line in rp_runop["lines"]), rp_runop
+            assert any("dataset_cards:1" in line for line in rp_runop["lines"]), rp_runop
+            assert any("research_object_crates:1" in line for line in rp_runop["lines"]), rp_runop
+            assert any("workflow_templates:8" in line for line in rp_runop["lines"]), rp_runop
             assert any("artifact_provenance=3" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("artifact_dossier_checks=4" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("artifact_path_rebuild_steps=7" in line for line in rp_consistency["lines"]), rp_consistency

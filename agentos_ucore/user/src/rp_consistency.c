@@ -115,6 +115,19 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runop", "runbook_steps:7");
 	ok = ok && rp_file_contains("rp_runop", "worker_ops:6");
 	ok = ok && rp_file_contains("rp_runop", "execution_controls:8");
+	ok = ok && rp_file_contains("rp_runop", "regulated_research=annotation_schemas:1");
+	ok = ok && rp_file_contains("rp_runop", "annotation_tasks:3");
+	ok = ok && rp_file_contains("rp_runop", "assay_plates:1");
+	ok = ok && rp_file_contains("rp_runop", "plate_wells:6");
+	ok = ok && rp_file_contains("rp_runop", "cohort_records:2");
+	ok = ok && rp_file_contains("rp_runop", "data_access_requests:1");
+	ok = ok && rp_file_contains("rp_runop", "dataset_cards:1");
+	ok = ok && rp_file_contains("rp_runop", "model_cards:1");
+	ok = ok && rp_file_contains("rp_runop", "research_object_crates:1");
+	ok = ok && rp_file_contains("rp_runop", "research_object_entities:29");
+	ok = ok && rp_file_contains("rp_runop", "sample_custody_events:18");
+	ok = ok && rp_file_contains("rp_runop", "statistical_designs:1");
+	ok = ok && rp_file_contains("rp_runop", "workflow_templates:8");
 	ok = ok && rp_file_contains("rp_protocol", "protocol_compliance_reports=1");
 	ok = ok && rp_file_contains("rp_protocol", "protocol_amendments=1");
 	ok = ok && rp_file_contains("rp_soplog", "sop_executions=1");
@@ -341,7 +354,7 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=190\n"
+			   "checks=222\n"
 			   "task_records=21\n"
 			   "ready_tasks=21\n"
 			   "high_tasks=4\n"
@@ -424,6 +437,16 @@ int main(void)
 			   "runbook_checks=7\n"
 			   "worker_ops_checks=5\n"
 			   "execution_control_checks=5\n"
+			   "regulated_research_checks=32\n"
+			   "annotation_checks=5\n"
+			   "assay_plate_checks=4\n"
+			   "cohort_monitoring_checks=3\n"
+			   "data_access_checks=4\n"
+			   "research_card_checks=4\n"
+			   "research_object_checks=5\n"
+			   "sample_custody_checks=3\n"
+			   "statistical_design_checks=2\n"
+			   "workflow_template_checks=2\n"
 			   "research_product_checks=18\n"
 			   "project_scaffold_files=8\n"
 			   "dataset_product_exports=9\n"
@@ -473,6 +496,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=190 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 products=18 assurance=24 research_ops=28 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
+	printf("rp_consistency: checks=222 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 products=18 assurance=24 research_ops=28 regulated=32 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
 	return 0;
 }

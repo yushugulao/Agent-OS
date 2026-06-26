@@ -108,6 +108,11 @@ int main(void)
 	if (!rp_file_contains("rp_runop", "runbook_steps:7")) return 1;
 	if (!rp_file_contains("rp_runop", "worker_ops:6")) return 1;
 	if (!rp_file_contains("rp_runop", "execution_controls:8")) return 1;
+	if (!rp_file_contains("rp_runop", "regulated_research=annotation_schemas:1")) return 1;
+	if (!rp_file_contains("rp_runop", "assay_plates:1")) return 1;
+	if (!rp_file_contains("rp_runop", "data_access_requests:1")) return 1;
+	if (!rp_file_contains("rp_runop", "research_object_crates:1")) return 1;
+	if (!rp_file_contains("rp_runop", "workflow_templates:8")) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
 	if (ack_count < 27 || tool_count < 113) return 1;
@@ -141,7 +146,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=190\n"
+			   "consistency_checks=222\n"
 			   "coherence_checks=9\n"
 			   "namespace_checks=12\n"
 			   "surface_checks=13\n"
@@ -215,6 +220,16 @@ int main(void)
 			   "runbook_checks=7\n"
 			   "worker_ops_checks=5\n"
 			   "execution_control_checks=5\n"
+			   "regulated_research_checks=32\n"
+			   "annotation_checks=5\n"
+			   "assay_plate_checks=4\n"
+			   "cohort_monitoring_checks=3\n"
+			   "data_access_checks=4\n"
+			   "research_card_checks=4\n"
+			   "research_object_checks=5\n"
+			   "sample_custody_checks=3\n"
+			   "statistical_design_checks=2\n"
+			   "workflow_template_checks=2\n"
 			   "research_product_checks=18\n"
 			   "project_scaffold_files=8\n"
 			   "dataset_product_exports=9\n"
@@ -298,7 +313,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=190\n"
+			   "consistency_checks=222\n"
 			   "coherence_checks=9\n"
 			   "namespace_checks=12\n"
 			   "surface_checks=13\n"
@@ -370,6 +385,16 @@ int main(void)
 			   "runbook_checks=7\n"
 			   "worker_ops_checks=5\n"
 			   "execution_control_checks=5\n"
+			   "regulated_research_checks=32\n"
+			   "annotation_checks=5\n"
+			   "assay_plate_checks=4\n"
+			   "cohort_monitoring_checks=3\n"
+			   "data_access_checks=4\n"
+			   "research_card_checks=4\n"
+			   "research_object_checks=5\n"
+			   "sample_custody_checks=3\n"
+			   "statistical_design_checks=2\n"
+			   "workflow_template_checks=2\n"
 			   "research_product_checks=18\n"
 			   "project_scaffold_files=8\n"
 			   "dataset_product_exports=9\n"
@@ -462,6 +487,6 @@ int main(void)
 	if (!rp_append_status("telemetry=ready")) return 1;
 	if (!rp_append_status("agentcmp=ready")) return 1;
 	if (!rp_append_status("health=ready")) return 1;
-	printf("rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 products=18 assurance=24 research_ops=28 delta_items=20 dynamic=4 status=ready\n");
+	printf("rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 products=18 assurance=24 research_ops=28 regulated=32 delta_items=20 dynamic=4 status=ready\n");
 	return 0;
 }

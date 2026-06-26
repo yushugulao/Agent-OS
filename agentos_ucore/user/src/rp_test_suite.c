@@ -1049,7 +1049,7 @@ int main(void)
 	ok = ok && require_file_token("rp_agentos_kernel", "agent_context=present");
 	ok = ok && require_file_token("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;status=ready");
 	ok = ok && require_file_token("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index;status=ready");
-	ok = ok && require_file_token("rp_consistency", "checks=190");
+	ok = ok && require_file_token("rp_consistency", "checks=222");
 	ok = ok && require_file_token("rp_consistency", "artifact_provenance=3");
 	ok = ok && require_file_token("rp_consistency", "artifact_dossier_checks=4");
 	ok = ok && require_file_token("rp_consistency", "artifact_path_rebuild_files=6");
@@ -1492,6 +1492,8 @@ int main(void)
 	ok = ok && require_file_token("rp_consistency", "runtime_assurance_checks=24");
 	ok = ok && require_file_token("rp_agentcmp", "research_ops_checks=28");
 	ok = ok && require_file_token("rp_consistency", "research_ops_checks=28");
+	ok = ok && require_file_token("rp_agentcmp", "regulated_research_checks=32");
+	ok = ok && require_file_token("rp_consistency", "regulated_research_checks=32");
 	ok = ok && require_file_token("rp_runop", "runtime_assurance=secret_refs:3");
 	ok = ok && require_file_token("rp_runop", "model_registry:2");
 	ok = ok && require_file_token("rp_runop", "deployments:1");
@@ -1507,6 +1509,19 @@ int main(void)
 	ok = ok && require_file_token("rp_runop", "runbook_steps:7");
 	ok = ok && require_file_token("rp_runop", "worker_ops:6");
 	ok = ok && require_file_token("rp_runop", "execution_controls:8");
+	ok = ok && require_file_token("rp_runop", "regulated_research=annotation_schemas:1");
+	ok = ok && require_file_token("rp_runop", "annotation_tasks:3");
+	ok = ok && require_file_token("rp_runop", "assay_plates:1");
+	ok = ok && require_file_token("rp_runop", "plate_wells:6");
+	ok = ok && require_file_token("rp_runop", "cohort_records:2");
+	ok = ok && require_file_token("rp_runop", "data_access_requests:1");
+	ok = ok && require_file_token("rp_runop", "dataset_cards:1");
+	ok = ok && require_file_token("rp_runop", "model_cards:1");
+	ok = ok && require_file_token("rp_runop", "research_object_crates:1");
+	ok = ok && require_file_token("rp_runop", "research_object_entities:29");
+	ok = ok && require_file_token("rp_runop", "sample_custody_events:18");
+	ok = ok && require_file_token("rp_runop", "statistical_designs:1");
+	ok = ok && require_file_token("rp_runop", "workflow_templates:8");
 	ok = ok && require_file_token("rp_runop", "project_scaffold=templates:3");
 	ok = ok && require_file_token("rp_runop", "dataset_product=previews:2");
 	ok = ok && require_file_token("rp_runop", "visualizations:2");
@@ -1676,6 +1691,7 @@ int main(void)
 			   "research_products=passed\n"
 			   "runtime_assurance=passed\n"
 			   "research_ops=passed\n"
+			   "regulated_research=passed\n"
 			   "agent_compare=passed\n"
 			   "consistency=passed\n"
 			   "status=passed\n")) {
@@ -1693,6 +1709,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=838 catalog=passed data=passed services=passed products=passed assurance=passed research_ops=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed startup=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=838 catalog=passed data=passed services=passed products=passed assurance=passed research_ops=passed regulated=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed startup=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
 	return 0;
 }
