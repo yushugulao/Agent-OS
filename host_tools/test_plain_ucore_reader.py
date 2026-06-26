@@ -437,6 +437,11 @@ def main() -> int:
         assert "Relay Quality" in llm_html
         assert "Quality Checks" in llm_html
         assert "Delivery Checks" in llm_html
+        assert "LLM Action Trace" in llm_html
+        assert "LLM Action Output Links" in llm_html
+        assert "LLM Action Output Details" in llm_html
+        assert "LLM Action Impact" in llm_html
+        assert "LLM Action Delta" in llm_html
         assert "host_relay_eval_batch" in llm_html
         assert "relay-q1" in llm_html
 

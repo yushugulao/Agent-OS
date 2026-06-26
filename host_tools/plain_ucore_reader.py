@@ -2191,6 +2191,12 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
             sections.append(action_output_detail_panel("Artifact Action Output Details", state, actions, {"artifact", "workflow"}))
             sections.append(action_impact_panel("Artifact Action Impact", state, actions, {"artifact", "workflow"}))
             sections.append(action_delta_panel("Artifact Action Delta", state, actions, {"artifact", "workflow"}))
+        if file_name == "llm.html":
+            sections.append(action_trace_panel("LLM Action Trace", actions, {"llm"}))
+            sections.append(action_output_panel("LLM Action Output Links", state, actions, {"llm"}))
+            sections.append(action_output_detail_panel("LLM Action Output Details", state, actions, {"llm"}))
+            sections.append(action_impact_panel("LLM Action Impact", state, actions, {"llm"}))
+            sections.append(action_delta_panel("LLM Action Delta", state, actions, {"llm"}))
         if file_name == "actions.html":
             sections.append(render_action_panel())
             sections.append(action_output_panel("Action Output Links", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
