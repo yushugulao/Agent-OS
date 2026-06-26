@@ -149,6 +149,78 @@ int main(void)
 		}
 		if (!rp_append_host_action_line("rp_input", "host_action_reference_file=", value)) return 1;
 	}
+	if (rp_host_seed_has("kind=dataset")) {
+		char value[96];
+		if (!rp_append_file("rp_input", "host_action_dataset=registered")) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=dataset", "title=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "Reusable response table");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_dataset_title=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=dataset", "dataset_rows=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "3");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_dataset_rows=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=dataset", "columns=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "sample,group,value");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_dataset_columns=", value)) return 1;
+	}
+	if (rp_host_seed_has("kind=library_source")) {
+		char value[96];
+		if (!rp_append_file("rp_input", "host_action_library_source=registered")) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=library_source", "citation_key=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "agentlibrary2026");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_library_citation=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=library_source", "tags=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "agent reusable");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_library_tags=", value)) return 1;
+	}
+	if (rp_host_seed_has("kind=template")) {
+		char value[96];
+		if (!rp_append_file("rp_input", "host_action_template=registered")) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=template", "name=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "Reusable response comparison");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_template_name=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=template", "question=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "Which group is stronger?");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_template_question=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=template", "provider_id=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "template");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_template_provider=", value)) return 1;
+	}
+	if (rp_host_seed_has("kind=workspace_inspect") ||
+	    rp_host_seed_has("kind=workspace_import") ||
+	    rp_host_seed_has("kind=workspace_import_run")) {
+		char value[96];
+		if (!rp_append_file("rp_input", "host_action_workspace=observed")) return 1;
+		if (rp_host_seed_copy_value_for_kind("kind=workspace_inspect", "root=", value, sizeof(value)) ||
+		    rp_host_seed_copy_value_for_kind("kind=workspace_import", "root=", value, sizeof(value)) ||
+		    rp_host_seed_copy_value_for_kind("kind=workspace_import_run", "root=", value, sizeof(value))) {
+			if (!rp_append_host_action_line("rp_input", "host_action_workspace_root=", value)) return 1;
+		}
+		if (rp_host_seed_copy_value_for_kind("kind=workspace_inspect", "max_files=", value, sizeof(value)) ||
+		    rp_host_seed_copy_value_for_kind("kind=workspace_import", "max_files=", value, sizeof(value)) ||
+		    rp_host_seed_copy_value_for_kind("kind=workspace_import_run", "max_files=", value, sizeof(value))) {
+			if (!rp_append_host_action_line("rp_input", "host_action_workspace_max_files=", value)) return 1;
+		}
+		if (rp_host_seed_copy_value_for_kind("kind=workspace_import", "manifest=", value, sizeof(value)) ||
+		    rp_host_seed_copy_value_for_kind("kind=workspace_import_run", "manifest=", value, sizeof(value))) {
+			if (!rp_append_host_action_line("rp_input", "host_action_workspace_manifest=", value)) return 1;
+		}
+		if (rp_host_seed_copy_value_for_kind("kind=workspace_import", "title=", value, sizeof(value)) ||
+		    rp_host_seed_copy_value_for_kind("kind=workspace_import_run", "title=", value, sizeof(value))) {
+			if (!rp_append_host_action_line("rp_input", "host_action_workspace_title=", value)) return 1;
+		}
+		if (rp_host_seed_copy_value_for_kind("kind=workspace_import", "question=", value, sizeof(value)) ||
+		    rp_host_seed_copy_value_for_kind("kind=workspace_import_run", "question=", value, sizeof(value))) {
+			if (!rp_append_host_action_line("rp_input", "host_action_workspace_question=", value)) return 1;
+		}
+	}
 	if (!rp_write_file("rp_input_fastq",
 			   "@RUN-042-read-1\n"
 			   "ACGTACGTACGT\n"

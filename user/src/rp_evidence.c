@@ -59,6 +59,54 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (rp_host_seed_has("kind=library_source")) {
+		char value[96];
+		if (!rp_append_file("rp_knowledge", "host_action_library_source=registered")) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=library_source", "citation_key=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "agentlibrary2026");
+		}
+		if (!rp_append_host_action_line("rp_knowledge", "host_action_library_citation=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=library_source", "tags=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "agent reusable");
+		}
+		if (!rp_append_host_action_line("rp_knowledge", "host_action_library_tags=", value)) return 1;
+	}
+	if (rp_host_seed_has("kind=literature_search")) {
+		char value[96];
+		if (!rp_append_file("rp_knowledge", "host_action_literature_search=ready")) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=literature_search", "query=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "agent workflow provenance");
+		}
+		if (!rp_append_host_action_line("rp_knowledge", "host_action_literature_query=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=literature_search", "max_results=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "5");
+		}
+		if (!rp_append_host_action_line("rp_knowledge", "host_action_literature_max_results=", value)) return 1;
+	}
+	if (rp_host_seed_has("kind=evidence_review")) {
+		char value[96];
+		if (!rp_append_file("rp_knowledge", "host_action_evidence_review=ready")) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=evidence_review", "reviewer=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "wang");
+		}
+		if (!rp_append_host_action_line("rp_knowledge", "host_action_evidence_reviewer=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=evidence_review", "included=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "3");
+		}
+		if (!rp_append_host_action_line("rp_knowledge", "host_action_evidence_included=", value)) return 1;
+	}
+	if (rp_host_seed_has("kind=evidence_protocol")) {
+		char value[96];
+		if (!rp_append_file("rp_knowledge", "host_action_evidence_protocol=ready")) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=evidence_protocol", "title=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "Agent workflow evidence protocol");
+		}
+		if (!rp_append_host_action_line("rp_knowledge", "host_action_protocol_title=", value)) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=evidence_protocol", "outcome=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "traceability");
+		}
+		if (!rp_append_host_action_line("rp_knowledge", "host_action_protocol_outcome=", value)) return 1;
+	}
 	if (!rp_append_file("rp_ack", "ack=evidence;msg=8;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=evidence.build_path;target=rp_evidence;status=ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=evidence.map_claims;target=rp_claimrec;status=ok")) return 1;

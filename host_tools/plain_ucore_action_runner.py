@@ -267,9 +267,62 @@ def c_string_literal(text: str) -> str:
 
 
 def compact_seed_text(text: str) -> str:
+    keep_by_kind = {
+        "research_run": {"run_id", "title", "question", "provider", "dataset_rows", "reference_entries", "workspace_files", "csv_file", "reference_file"},
+        "dataset": {"title", "dataset_rows", "columns"},
+        "library_source": {"citation_key", "tags"},
+        "template": {"name", "question", "provider_id"},
+        "workspace_inspect": {"root", "max_files"},
+        "workspace_import": {"root", "max_files", "manifest", "title", "question"},
+        "workspace_import_run": {"root", "max_files", "manifest", "title", "question"},
+        "literature_search": {"query", "provider", "max_results"},
+        "evidence_review": {"search_id", "reviewer", "include_terms", "included"},
+        "evidence_protocol": {"title", "research_question", "outcome"},
+        "human_review": {"run_id", "reviewer", "decision"},
+        "revision_task": {"review_id", "targets"},
+        "revision_run": {"run_id", "task_id"},
+        "agentcompare": {"profile"},
+        "bundle_export": {"run_id", "bundle"},
+        "research_export": {"run_id", "bundle"},
+        "delivery": {"run_id", "bundle"},
+        "notebook_export": {"run_id", "format"},
+        "workbench": {"workbench", "workbench_title", "literature_query"},
+        "workbench_complete": {"workbench"},
+        "workbench_advance": {"workbench", "task"},
+        "workbench_auto_advance": {"step_limit"},
+        "workbench_task": {"workbench", "task", "status"},
+        "workbench_note": {"workbench", "note_kind", "title", "body"},
+        "workbench_notes": {"workbench", "notes_filter"},
+        "workbench_handoff_package": {"workbench", "handoff_scope"},
+        "workbench_readiness": {"workbench"},
+        "workbench_answer": {"question"},
+        "workbench_answer_audit": set(),
+        "workbench_evidence_search": {"query"},
+        "workbench_brief": {"workbench", "brief_format"},
+        "workbench_evidence_dossier": {"dossier_format"},
+        "workbench_evidence_graph": {"graph_format"},
+        "workbench_citations": {"citation_format"},
+        "workbench_manuscript": {"manuscript_format"},
+        "workbench_manuscript_audit": {"audit_scope"},
+        "workbench_manuscript_revision_plan": {"revision_area"},
+        "workbench_manuscript_revision_task": {"revision_task", "revision_status"},
+        "workbench_task_board": {"board_filter"},
+        "workbench_task_board_row": {"row_id", "row_status"},
+        "workbench_runbook": {"runbook_format"},
+        "workbench_timeline": {"timeline_format"},
+        "workbench_file_manifest": {"workbench", "manifest"},
+        "workbench_file_verify": {"workbench", "manifest"},
+        "workbench_export": {"workbench", "bundle"},
+    }
     lines: list[str] = []
     for raw in text.splitlines():
         fields = [field for field in raw.split(";") if field]
+        kind = ""
+        for field in fields:
+            if field.startswith("kind="):
+                kind = field.split("=", 1)[1]
+                break
+        keep_keys = keep_by_kind.get(kind)
         compact: list[str] = []
         for field in fields:
             if field.startswith("kind="):
@@ -277,6 +330,11 @@ def compact_seed_text(text: str) -> str:
             elif field.startswith("action=") or field.startswith("path=") or field.startswith("status="):
                 continue
             else:
+                key = field.split("=", 1)[0]
+                if keep_keys is not None and key not in keep_keys:
+                    continue
+                if kind.startswith("workbench_") and key == "workbench":
+                    continue
                 compact.append(field)
         if compact:
             lines.append(";".join(compact))
@@ -287,12 +345,14 @@ def write_seed_header(next_state: Path, repo_dir: Path) -> int:
     inbox = next_state / "rp_host_action_inbox"
     text = inbox.read_text(encoding="utf-8") if inbox.is_file() else ""
     seed_text = compact_seed_text(text)
+    write_text(next_state / "rp_host_action_seed", seed_text)
     header = repo_dir / "user" / "build" / "generated" / "rp_host_action_seed.h"
     header.parent.mkdir(parents=True, exist_ok=True)
     header.write_text(
         "#ifndef __RP_HOST_ACTION_SEED_H__\n"
         "#define __RP_HOST_ACTION_SEED_H__\n"
-        f"#define RP_HOST_ACTION_SEED {c_string_literal(seed_text)}\n"
+        f"#define RP_HOST_ACTION_SEED {c_string_literal('')}\n"
+        f"#define RP_HOST_ACTION_BOOTSTRAP_SEED {c_string_literal(seed_text)}\n"
         "#endif\n",
         encoding="utf-8",
     )
@@ -363,12 +423,12 @@ def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_dis
     embedded_records = write_seed_header(next_state, repo_dir)
     run_command_text = (
         f"cd {shell_quote(repo_bash)} && "
-        "make user TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform >/dev/null"
+        "make user TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded >/dev/null"
         " && "
-        "rm -f nfs/fs.img nfs/fs-copy.img && "
+        "rm -rf nfs/fs nfs/fs.img nfs/fs-copy.img && "
         "make nfs/fs.img >/dev/null && "
-        "make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=rp_orch >/dev/null && "
-        f"timeout {timeout_seconds}s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=rp_orch"
+        "make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded LOG=warn INIT_PROC=rp_seed_orch >/dev/null && "
+        f"timeout {timeout_seconds}s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded LOG=warn INIT_PROC=rp_seed_orch"
     )
     code = run_command(make_wsl_command(run_command_text, wsl_distro), log_path, timeout_seconds + 30, append=True)
     text = log_path.read_text(encoding="utf-8", errors="replace")
@@ -419,7 +479,7 @@ def main() -> int:
     parser.add_argument("--run-dir", type=Path, required=True, help="Directory for prepared action package and logs.")
     parser.add_argument("--add-action", action="append", default=[], help="Add an action path, for example /actions/research/run.")
     parser.add_argument("--payload", action="append", default=[], help="Payload key=value for --add-action records.")
-    parser.add_argument("--run-ucore", action="store_true", help="Run the plain uCore rp_orch path after preparing actions.")
+    parser.add_argument("--run-ucore", action="store_true", help="Run the plain uCore seeded path after preparing actions.")
     parser.add_argument("--repo-dir", type=Path, default=Path("."), help="Repository root for --run-ucore.")
     parser.add_argument("--timeout", type=int, default=80, help="QEMU run timeout in seconds.")
     parser.add_argument("--wsl-distro", default="Ubuntu", help="WSL distribution name on Windows.")

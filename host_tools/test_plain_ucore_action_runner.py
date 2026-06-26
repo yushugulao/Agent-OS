@@ -50,6 +50,38 @@ def main() -> int:
             loaded,
             [
                 {
+                    "path": "/actions/research/dataset",
+                    "payload": {"title": "Host reusable response table", "dataset_rows": "6", "columns": "sample,group,value"},
+                },
+                {
+                    "path": "/actions/research/library-source",
+                    "payload": {"citation_key": "hostlibrary2026", "tags": "host reusable"},
+                },
+                {
+                    "path": "/actions/research/template",
+                    "payload": {"name": "Host response template", "question": "Which host dataset group is stronger?", "provider_id": "template"},
+                },
+                {
+                    "path": "/actions/research/inspect-workspace",
+                    "payload": {"root": "host-workspace", "max_files": "9"},
+                },
+                {
+                    "path": "/actions/research/import-workspace",
+                    "payload": {"root": "host-workspace", "manifest": "host-workspace-manifest.json"},
+                },
+                {
+                    "path": "/actions/research/literature-search",
+                    "payload": {"query": "agent workflow provenance", "provider": "local", "max_results": "7"},
+                },
+                {
+                    "path": "/actions/research/evidence-review",
+                    "payload": {"search_id": "usable-literature-search:RUN-999:1", "reviewer": "Wang", "included": "4"},
+                },
+                {
+                    "path": "/actions/research/evidence-protocol",
+                    "payload": {"title": "Host evidence protocol", "research_question": "Which mechanisms improve traceability?", "outcome": "traceability"},
+                },
+                {
                     "path": "/actions/research/workbench",
                     "payload": {"workbench": "usable-workbench:RUN-900", "workbench_title": "RUN-900 workbench", "literature_query": "agent workflow provenance"},
                 },
@@ -176,11 +208,19 @@ def main() -> int:
             ],
         )
         summary = runner.prepare_action_state(loaded, state_dir, run_dir)
-        expected_actions = 33
+        expected_actions = 41
 
         assert summary["actions"] == expected_actions
         assert summary["accepted"] == expected_actions
         assert "research_run" in summary["kinds"]
+        assert "dataset" in summary["kinds"]
+        assert "library_source" in summary["kinds"]
+        assert "template" in summary["kinds"]
+        assert "workspace_inspect" in summary["kinds"]
+        assert "workspace_import" in summary["kinds"]
+        assert "literature_search" in summary["kinds"]
+        assert "evidence_review" in summary["kinds"]
+        assert "evidence_protocol" in summary["kinds"]
         assert "agentcompare" in summary["kinds"]
         assert "workbench" in summary["kinds"]
         assert "workbench_complete" in summary["kinds"]
@@ -222,6 +262,14 @@ def main() -> int:
 
         queue = read(next_state / "rp_host_action_queue")
         assert "kind=research_run" in queue
+        assert "kind=dataset" in queue
+        assert "kind=library_source" in queue
+        assert "kind=template" in queue
+        assert "kind=workspace_inspect" in queue
+        assert "kind=workspace_import" in queue
+        assert "kind=literature_search" in queue
+        assert "kind=evidence_review" in queue
+        assert "kind=evidence_protocol" in queue
         assert "kind=agentcompare" in queue
         assert "kind=workbench" in queue
         assert "kind=workbench_complete" in queue
@@ -255,6 +303,14 @@ def main() -> int:
         assert "kind=notebook_export" in queue
         assert "kind=bundle_export" in queue
         assert "run_id=RUN-999" in queue
+        assert "title=Host reusable response table" in queue
+        assert "citation_key=hostlibrary2026" in queue
+        assert "name=Host response template" in queue
+        assert "root=host-workspace" in queue
+        assert "manifest=host-workspace-manifest.json" in queue
+        assert "max_results=7" in queue
+        assert "included=4" in queue
+        assert "outcome=traceability" in queue
         assert "reviewer=Wang" in queue
         assert "targets=methods,chart_caption,statistics" in queue
         assert "bundle=reviewer-evidence" in queue
@@ -292,6 +348,14 @@ def main() -> int:
         plan = read(next_state / "rp_host_action_plan")
         assert "collect=rp_web_bundle" in plan
         assert "collect=rp_compare_plain" in plan
+        assert "kind=dataset" in plan
+        assert "kind=library_source" in plan
+        assert "kind=template" in plan
+        assert "kind=workspace_inspect" in plan
+        assert "kind=workspace_import" in plan
+        assert "kind=literature_search" in plan
+        assert "kind=evidence_review" in plan
+        assert "kind=evidence_protocol" in plan
         assert "kind=workbench" in plan
         assert "kind=workbench_complete" in plan
         assert "kind=workbench_advance" in plan
@@ -322,6 +386,14 @@ def main() -> int:
 
         inbox = read(next_state / "rp_host_action_inbox")
         assert "/actions/research/run" in inbox
+        assert "/actions/research/dataset" in inbox
+        assert "/actions/research/library-source" in inbox
+        assert "/actions/research/template" in inbox
+        assert "/actions/research/inspect-workspace" in inbox
+        assert "/actions/research/import-workspace" in inbox
+        assert "/actions/research/literature-search" in inbox
+        assert "/actions/research/evidence-review" in inbox
+        assert "/actions/research/evidence-protocol" in inbox
         assert "/actions/agentcompare/run" in inbox
         assert "/actions/research/workbench" in inbox
         assert "/actions/research/workbench-answer" in inbox
@@ -352,6 +424,15 @@ def main() -> int:
         assert (run_dir / "runner-summary.json").exists()
 
         assert runner.action_kind("/actions/research/run-revision") == "revision_run"
+        assert runner.action_kind("/actions/research/dataset") == "dataset"
+        assert runner.action_kind("/actions/research/library-source") == "library_source"
+        assert runner.action_kind("/actions/research/template") == "template"
+        assert runner.action_kind("/actions/research/inspect-workspace") == "workspace_inspect"
+        assert runner.action_kind("/actions/research/import-workspace") == "workspace_import"
+        assert runner.action_kind("/actions/research/import-and-run") == "workspace_import_run"
+        assert runner.action_kind("/actions/research/literature-search") == "literature_search"
+        assert runner.action_kind("/actions/research/evidence-review") == "evidence_review"
+        assert runner.action_kind("/actions/research/evidence-protocol") == "evidence_protocol"
         assert runner.action_kind("/actions/research/workbench") == "workbench"
         assert runner.action_kind("/actions/research/workbench-advance") == "workbench_advance"
         assert runner.action_kind("/actions/research/workbench-auto-advance") == "workbench_auto_advance"
@@ -383,19 +464,28 @@ def main() -> int:
 
         records = runner.write_seed_header(next_state, root)
         header = read(root / "user" / "build" / "generated" / "rp_host_action_seed.h")
+        seed_file = read(next_state / "rp_host_action_seed")
         assert records == expected_actions
         assert "#define RP_HOST_ACTION_SEED" in header
-        assert "kind=research_run" in header
-        assert "kind=workbench" in header
-        assert "kind=workbench_answer" in header
-        assert "kind=workbench_answer_audit" in header
-        assert "kind=workbench_evidence_search" in header
-        assert "kind=workbench_task" in header
-        assert "kind=workbench_note" in header
-        assert "kind=workbench_manuscript" in header
-        assert "kind=workbench_task_board_row" in header
-        assert "kind=workbench_file_verify" in header
-        assert "\\n" in header
+        assert "kind=research_run" in seed_file
+        assert "kind=dataset" in seed_file
+        assert "kind=library_source" in seed_file
+        assert "kind=template" in seed_file
+        assert "kind=workspace_inspect" in seed_file
+        assert "kind=workspace_import" in seed_file
+        assert "kind=literature_search" in seed_file
+        assert "kind=evidence_review" in seed_file
+        assert "kind=evidence_protocol" in seed_file
+        assert "kind=workbench" in seed_file
+        assert "kind=workbench_answer" in seed_file
+        assert "kind=workbench_answer_audit" in seed_file
+        assert "kind=workbench_evidence_search" in seed_file
+        assert "kind=workbench_task" in seed_file
+        assert "kind=workbench_note" in seed_file
+        assert "kind=workbench_manuscript" in seed_file
+        assert "kind=workbench_task_board_row" in seed_file
+        assert "kind=workbench_file_verify" in seed_file
+        assert "source_text=" not in seed_file
 
         runner.write_run_result_state(
             next_state,

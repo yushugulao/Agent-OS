@@ -9,8 +9,13 @@
 
 #define RP_UNUSED __attribute__((unused))
 #define RP_STATE_BUFFER_SIZE 8192
+#define RP_HOST_SEED_ARG_MARK "__rp_seed_v1__"
 
 static RP_UNUSED char rp_state_buf[RP_STATE_BUFFER_SIZE];
+static RP_UNUSED char rp_host_seed_buf[4096];
+static RP_UNUSED int rp_host_seed_loaded;
+extern int __argc;
+extern char **__argv;
 
 static RP_UNUSED int rp_write_file(const char *path, const char *body)
 {
@@ -124,7 +129,34 @@ static RP_UNUSED int rp_text_contains(const char *text, const char *needle)
 
 static RP_UNUSED __attribute__((noinline)) const char *rp_host_seed_text(void)
 {
-	return RP_HOST_ACTION_SEED;
+	if (!rp_host_seed_loaded) {
+		int out = 0;
+		if (__argc > 2 && __argv && __argv[1] && strcmp(__argv[1], RP_HOST_SEED_ARG_MARK) == 0) {
+			for (int arg = 2; arg < __argc && __argv[arg] && out + 1 < (int)sizeof(rp_host_seed_buf); arg++) {
+				const char *src = __argv[arg];
+				for (int i = 0; src[i] && out + 1 < (int)sizeof(rp_host_seed_buf); i++) {
+					rp_host_seed_buf[out++] = src[i];
+				}
+			}
+			rp_host_seed_buf[out] = 0;
+		} else {
+			int n = rp_read_file("rp_host_action_seed", rp_host_seed_buf, sizeof(rp_host_seed_buf));
+			if (n < 0) {
+				rp_host_seed_buf[0] = 0;
+			}
+		}
+		if (rp_host_seed_buf[0] == 0) {
+			const char *fallback = RP_HOST_ACTION_SEED;
+			int i = 0;
+			while (fallback[i] && i + 1 < (int)sizeof(rp_host_seed_buf)) {
+				rp_host_seed_buf[i] = fallback[i];
+				i++;
+			}
+			rp_host_seed_buf[i] = 0;
+		}
+		rp_host_seed_loaded = 1;
+	}
+	return rp_host_seed_buf;
 }
 
 static RP_UNUSED int rp_host_seed_has(const char *needle)
@@ -300,6 +332,37 @@ static RP_UNUSED int rp_host_seed_copy_workbench_value(const char *key, char *ou
 	for (int i = 0; i < (int)(sizeof(kinds) / sizeof(kinds[0])); i++) {
 		if (rp_host_seed_copy_value_for_kind(kinds[i], key, out, cap)) return 1;
 	}
+	return 0;
+}
+
+static RP_UNUSED int rp_host_seed_has_research_input_action(void)
+{
+	return rp_host_seed_has("kind=dataset") ||
+	       rp_host_seed_has("kind=library_source") ||
+	       rp_host_seed_has("kind=template") ||
+	       rp_host_seed_has("kind=workspace_inspect") ||
+	       rp_host_seed_has("kind=workspace_import") ||
+	       rp_host_seed_has("kind=workspace_import_run");
+}
+
+static RP_UNUSED int rp_host_seed_has_evidence_input_action(void)
+{
+	return rp_host_seed_has("kind=literature_search") ||
+	       rp_host_seed_has("kind=evidence_review") ||
+	       rp_host_seed_has("kind=evidence_protocol");
+}
+
+static RP_UNUSED int rp_host_seed_has_research_data_action(void)
+{
+	return rp_host_seed_has_research_input_action() ||
+	       rp_host_seed_has_evidence_input_action();
+}
+
+static RP_UNUSED int rp_host_seed_copy_workspace_value(const char *key, char *out, int cap)
+{
+	if (rp_host_seed_copy_value_for_kind("kind=workspace_inspect", key, out, cap)) return 1;
+	if (rp_host_seed_copy_value_for_kind("kind=workspace_import", key, out, cap)) return 1;
+	if (rp_host_seed_copy_value_for_kind("kind=workspace_import_run", key, out, cap)) return 1;
 	return 0;
 }
 

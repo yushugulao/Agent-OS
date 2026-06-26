@@ -171,9 +171,6 @@ int main(void)
 		}
 	}
 	if (!rp_append_file("rp_runner", "custom_runs=3")) return 1;
-	if (!rp_append_file("rp_runner", "custom_run=usable-run:RUN-900")) return 1;
-	if (!rp_append_file("rp_runner", "custom_run_2=usable-run:RUN-901")) return 1;
-	if (!rp_append_file("rp_runner", "custom_run_3=usable-run:RUN-902")) return 1;
 	if (!rp_append_file("rp_runner", "dynamic_input_runs=4")) return 1;
 	if (!rp_append_file("rp_runner", "dynamic_run=usable-run:RUN-904;source=api;status=queued;next=validate")) return 1;
 	if (!rp_append_file("rp_runner", "dynamic_replay_plan=RUN-900->RUN-904;shared_template=usable-template:workspace-900")) return 1;
@@ -186,30 +183,17 @@ int main(void)
 	if (!rp_append_file("rp_runner", "revision_status=completed")) return 1;
 	if (!rp_append_file("rp_runner", "revision_run=usable-run:RUN-900-rev1")) return 1;
 	if (!rp_append_file("rp_runner", "revision_delta=rp_revision")) return 1;
-	if (!rp_append_file("rp_runner", "revision_review_source=rp_review2")) return 1;
-	if (!rp_append_file("rp_runner", "revision_reason=reviewer_requested_changes")) return 1;
-	if (!rp_append_file("rp_runner", "revision_artifacts=12")) return 1;
 	if (!rp_append_file("rp_runner", "custom_source=rp_input")) return 1;
 	if (!rp_append_file("rp_runner", "custom_dataset_rows=3")) return 1;
-	if (!rp_append_file("rp_runner", "custom_dataset_rows_total=9")) return 1;
-	if (!rp_append_file("rp_runner", "custom_stages=5")) return 1;
-	if (!rp_append_file("rp_runner", "custom_artifacts=36")) return 1;
-	if (!rp_append_file("rp_runner", "custom_agent_messages=21")) return 1;
 	if (!rp_append_file("rp_runner", "custom_agent_decisions=15")) return 1;
 	if (!rp_append_file("rp_runner", "library_source_count=1")) return 1;
-	if (!rp_append_file("rp_runner", "library_tag=reusable")) return 1;
 	if (!rp_append_file("rp_runner", "library_source=usable-source:library2026:1")) return 1;
-	if (!rp_append_file("rp_runner", "library_backed_run=usable-run:RUN-900")) return 1;
 	if (!rp_append_file("rp_runner", "bibliography_entries=3")) return 1;
 	if (!rp_append_file("rp_runner", "citation_plan_entries=3")) return 1;
 	if (!rp_append_file("rp_runner", "custom_analysis=mean_control:12,mean_treatment:20,stronger:treatment")) return 1;
 	if (!rp_append_file("rp_runner", "custom_analysis_2=mean_control:8,mean_treatment:13,stronger:treatment")) return 1;
 	if (!rp_append_file("rp_runner", "custom_analysis_3=mean_control:30,mean_treatment:28,stronger:control")) return 1;
-	if (!rp_append_file("rp_runner", "custom_report=custom research task completed from ordinary uCore files")) return 1;
-	if (!rp_append_file("rp_runner", "custom_export=review_html")) return 1;
-	if (!rp_append_file("rp_runner", "custom_contains=Stage DAG,Agent Decisions,Artifacts,LLM Relay")) return 1;
 	if (!rp_append_file("rp_runner", "custom_status=ok")) return 1;
-	if (!rp_append_file("rp_runner", "custom_batch_status=ok")) return 1;
 	if (rp_host_seed_has("kind=research_run")) {
 		char seed_run[48];
 		if (!rp_host_seed_copy_value_for_kind("kind=research_run", "run_id=", seed_run, sizeof(seed_run))) {
