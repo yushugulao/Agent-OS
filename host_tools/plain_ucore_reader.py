@@ -200,6 +200,21 @@ def state_records(state: dict[str, dict[str, object]], name: str, prefix_key: st
     return rows
 
 
+def first_record_by_key(records: list[dict[str, str]], key: str, value: str) -> dict[str, str]:
+    for record in records:
+        if record.get(key, "") == value:
+            return record
+    return {}
+
+
+def first_value(state: dict[str, dict[str, object]], name: str, key: str) -> str:
+    for line in state_lines(state, name):
+        record = parse_kv_record(line)
+        if key in record and record[key]:
+            return record[key]
+    return ""
+
+
 def state_prefixed_lines(state: dict[str, dict[str, object]], name: str, prefixes: tuple[str, ...]) -> list[str]:
     rows: list[str] = []
     for line in state_lines(state, name):
@@ -575,6 +590,66 @@ def workflow_evidence_links(state: dict[str, dict[str, object]]) -> list[dict[st
                 "review": review.get("decision", review.get("status", "")),
                 "delivery": package.get("status", ""),
                 "status": review.get("status", package.get("status", "")),
+            }
+        )
+    return rows
+
+
+def llm_relay_flow(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
+    requests = state_records(state, "rp_llm_req", "host_relay_request")
+    packets = state_records(state, "rp_llm_packets", "host_relay_packet")
+    responses = state_records(state, "rp_llm_resp", "host_relay_response")
+    evals = state_records(state, "rp_llmeval", "host_relay_eval")
+    guards = state_records(state, "rp_llm_guard", "host_relay_guard")
+    replays = state_records(state, "rp_relay", "host_relay_replay")
+    prompts = state_records(state, "rp_prompt", "host_relay_prompt_route")
+
+    request_ids: list[str] = []
+    for record in requests:
+        request_id = record.get("host_relay_request", "")
+        if request_id and request_id not in request_ids:
+            request_ids.append(request_id)
+    for record in packets:
+        request_id = record.get("host_relay_packet", record.get("host_llm_packet_request", ""))
+        if request_id and request_id not in request_ids:
+            request_ids.append(request_id)
+    for key in ("rp_llm_req", "rp_llm_packets", "rp_api_runtime"):
+        request_id = first_value(state, key, "host_llm_request_id")
+        if request_id and request_id not in request_ids:
+            request_ids.append(request_id)
+    request_id = first_value(state, "rp_llm_packets", "host_llm_packet_request")
+    if request_id and request_id not in request_ids:
+        request_ids.append(request_id)
+
+    rows: list[dict[str, str]] = []
+    for request_id in request_ids:
+        request = first_record_by_key(requests, "host_relay_request", request_id)
+        packet = first_record_by_key(packets, "host_relay_packet", request_id)
+        response_id = packet.get("response", first_value(state, "rp_llm_packets", "host_llm_packet_response"))
+        response = first_record_by_key(responses, "request", request_id)
+        if not response and response_id:
+            response = first_record_by_key(responses, "host_relay_response", response_id)
+        if not response_id:
+            response_id = response.get("host_relay_response", first_value(state, "rp_llm_resp", "host_llm_response_id"))
+        eval_record = first_record_by_key(evals, "host_relay_eval", request_id)
+        guard = first_record_by_key(guards, "host_relay_guard", request_id)
+        replay = first_record_by_key(replays, "host_relay_replay", request_id)
+        prompt = first_record_by_key(prompts, "host_relay_prompt_route", request_id)
+        rows.append(
+            {
+                "flow": request_id,
+                "route": request.get("route", prompt.get("route", first_value(state, "rp_llm_packets", "host_llm_packet_route"))),
+                "provider": request.get("provider", first_value(state, "rp_llm_req", "host_llm_provider")),
+                "response": response_id,
+                "summary": response.get("summary", first_value(state, "rp_llm_resp", "host_llm_response_summary")),
+                "quality": eval_record.get("status", ""),
+                "checks": eval_record.get("passed", eval_record.get("checks", "")),
+                "guard": guard.get("status", ""),
+                "secret": guard.get("secret_in_packet", packet.get("secret_in_packet", first_value(state, "rp_llm_packets", "secret_in_packet"))),
+                "replay": replay.get("status", ""),
+                "prompt_hash": request.get("prompt_hash", prompt.get("prompt_hash", packet.get("prompt_hash", ""))),
+                "outputs": "rp_llm_req,rp_llm_packets,rp_llm_resp,rp_llmeval,rp_llm_guard,rp_relay,rp_prompt",
+                "status": response.get("status", eval_record.get("status", guard.get("status", packet.get("status", "")))),
             }
         )
     return rows
@@ -1229,6 +1304,25 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
         ]
     if file_name == "llm.html":
         return [
+            render_record_panel(
+                "LLM Relay Flow",
+                [
+                    ("Request", "flow"),
+                    ("Route", "route"),
+                    ("Provider", "provider"),
+                    ("Response", "response"),
+                    ("Summary", "summary"),
+                    ("Quality", "quality"),
+                    ("Checks", "checks"),
+                    ("Guard", "guard"),
+                    ("Secret In Packet", "secret"),
+                    ("Replay", "replay"),
+                    ("Prompt Hash", "prompt_hash"),
+                    ("Outputs", "outputs"),
+                    ("Status", "status"),
+                ],
+                llm_relay_flow(state),
+            ),
             render_record_panel(
                 "Relay Requests",
                 [("Request", "host_relay_request"), ("Route", "route"), ("Provider", "provider"), ("Prompt Hash", "prompt_hash"), ("Source", "source")],

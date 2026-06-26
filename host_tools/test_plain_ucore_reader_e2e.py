@@ -966,11 +966,13 @@ def main() -> int:
             assert "Relay Quality" in llm_html
             assert "Quality Checks" in llm_html
             assert "Delivery Checks" in llm_html
+            assert "LLM Relay Flow" in llm_html
             assert "LLM Action Trace" in llm_html
             assert "LLM Action Output Links" in llm_html
             assert "LLM Action Output Details" in llm_html
             assert "LLM Action Impact" in llm_html
             assert "LLM Action Delta" in llm_html
+            assert "rp_llm_req,rp_llm_packets,rp_llm_resp" in llm_html
             assert "/actions/research/llm-relay-request" in llm_html
             assert "host_llm_packet_request" in llm_html
             assert "host_llm_response_summary" in llm_html
