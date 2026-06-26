@@ -579,7 +579,7 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=806" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=814" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("tool_events=138" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=12" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -592,16 +592,23 @@ def main() -> int:
             assert any("passed_cases=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("planned_cases=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("backend_runner_checks=12" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("backend_runner_detail_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("backend_runner_detail_checks=24" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("runner_detail_rows=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_cases=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_passed=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_planned=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_backend_exec = read_json(base + "/api/state/rp_backend_exec")
             assert any("runner_detail_checks=16" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_verified_inputs=4" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_detail_rows=4" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_detail_schema=src,req,obs,act,review" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_case=plain-ucore" in line and "input_check=pass" in line and "artifact_check=pass" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_case=retry-recovery" in line and "att=2" in line and "retry=tool_output_missing" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_case=agentos-context" in line and "input_check=planned" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_detail=plain-ucore" in line and "act=record" in line and "review=baseline" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_detail=retry-recovery" in line and "act=rerun_align" in line and "review=recovered" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_detail=agentos-context" in line and "act=kernel_context" in line and "review=target" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_detail=agentos-fsmeta" in line and "act=kernel_fsmeta" in line and "review=target" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             rp_study = read_json(base + "/api/state/rp_study")
             assert any("detail_checks=4" in line for line in rp_study["lines"]), rp_study
             assert any("detail_checks=kernel" in line for line in rp_study["lines"]), rp_study
@@ -794,11 +801,15 @@ def main() -> int:
             assert "Backend Checks" in compare_html
             assert "Backend Runner" in compare_html
             assert "Backend Runner Cases" in compare_html
+            assert "Backend Case Details" in compare_html
             assert "retry-recovery" in compare_html
+            assert "rerun_align" in compare_html
+            assert "kernel_fsmeta" in compare_html
             assert "Input Check" in compare_html
             assert "tool_output_missing" in compare_html
             assert "kernel_required" in compare_html
             assert "Backend Study Metrics" in compare_html
+            assert "Detail Checks" in compare_html
             assert "agentos_ucore" in compare_html
             assert "Backend Scenario Handoff" in compare_html
             assert "rp_backend_exec" in compare_html

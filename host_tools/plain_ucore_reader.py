@@ -447,6 +447,18 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 state_records(state, "rp_backend_exec", "runner_case"),
             ),
             render_record_panel(
+                "Backend Case Details",
+                [
+                    ("Case", "runner_detail"),
+                    ("Source", "src"),
+                    ("Required", "req"),
+                    ("Observed", "obs"),
+                    ("Action", "act"),
+                    ("Review", "review"),
+                ],
+                state_records(state, "rp_backend_exec", "runner_detail"),
+            ),
+            render_record_panel(
                 "Backend Study Metrics",
                 [
                     ("Arm", "study_metric"),
@@ -455,6 +467,7 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                     ("Rebuild Steps", "rebuild_steps"),
                     ("Batch Tools", "batch_tools"),
                     ("Metadata Index", "metadata_index"),
+                    ("Detail Checks", "detail_checks"),
                     ("Result", "result"),
                 ],
                 state_records(state, "rp_study", "study_metric"),

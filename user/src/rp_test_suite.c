@@ -1019,6 +1019,12 @@ int main(void)
 	ok = ok && require_file_token("rp_backend_exec", ";att=2;retry=tool_output_missing;ticks=5");
 	ok = ok && require_file_token("rp_backend_exec", "runner_case=agentos-context;input=rp_wfio;artifact=agent_context;result=planned;reason=kernel_context;input_check=planned;artifact_check=planned;retry=kernel_required");
 	ok = ok && require_file_token("rp_backend_exec", "runner_case=agentos-fsmeta;input=rp_wfio;artifact=agent_file_meta;result=planned;reason=kernel_metadata;input_check=planned;artifact_check=planned;retry=kernel_required");
+	ok = ok && require_file_token("rp_backend_exec", "runner_detail=plain-ucore;src=rp_wfio;req=execution_plan;obs=pass;act=record;review=baseline");
+	ok = ok && require_file_token("rp_backend_exec", "runner_detail=retry-recovery;src=rp_retry_plan+rp_stage_state;req=retry_stage+stage;obs=pass;act=rerun_align;review=recovered");
+	ok = ok && require_file_token("rp_backend_exec", "runner_detail=agentos-context;src=rp_wfio;req=context_path;obs=planned;act=kernel_context;review=target");
+	ok = ok && require_file_token("rp_backend_exec", "runner_detail=agentos-fsmeta;src=rp_artifact_manifest;req=metadata_index;obs=planned;act=kernel_fsmeta;review=target");
+	ok = ok && require_file_token("rp_backend_exec", "runner_detail_rows=4");
+	ok = ok && require_file_token("rp_backend_exec", "runner_detail_schema=src,req,obs,act,review");
 	ok = ok && require_file_token("rp_backend_exec", "runner_observed=rp_stage_state,rp_retry_plan,rp_artifact_manifest,rp_llmeval");
 	ok = ok && require_file_token("rp_backend_exec", "runner_detail_fields=input_check,artifact_check,att,retry,ticks");
 	ok = ok && require_file_token("rp_backend_exec", "runner_detail_checks=16");
@@ -1389,7 +1395,7 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "review_pack_actions=3");
 	ok = ok && require_file_token("rp_agentcmp", "review_pack_bridges=4");
 	ok = ok && require_file_token("rp_agentcmp", "review_handoff_checks=12;review_sections=8;review_gates=6");
-	ok = ok && require_file_token("rp_agentcmp", "test_cases=806");
+	ok = ok && require_file_token("rp_agentcmp", "test_cases=814");
 	ok = ok && require_file_token("rp_agentcmp", "llm_delivery_checks=16");
 	ok = ok && require_file_token("rp_agentcmp", "llm_queue=3");
 	ok = ok && require_file_token("rp_agentcmp", "llm_packets=3");
@@ -1412,7 +1418,8 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "passed_cases=2");
 	ok = ok && require_file_token("rp_agentcmp", "planned_cases=2");
 	ok = ok && require_file_token("rp_agentcmp", "backend_runner_checks=12");
-	ok = ok && require_file_token("rp_agentcmp", "backend_runner_detail_checks=16");
+	ok = ok && require_file_token("rp_agentcmp", "backend_runner_detail_checks=24");
+	ok = ok && require_file_token("rp_agentcmp", "runner_detail_rows=4");
 	ok = ok && require_file_token("rp_agentcmp", "runner_cases=4");
 	ok = ok && require_file_token("rp_agentcmp", "runner_passed=2");
 	ok = ok && require_file_token("rp_agentcmp", "runner_planned=2");
@@ -1530,7 +1537,7 @@ int main(void)
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=806\n"
+			   "tests=814\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -1579,6 +1586,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=806 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=814 catalog=passed data=passed services=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
 	return 0;
 }
