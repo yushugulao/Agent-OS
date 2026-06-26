@@ -20,7 +20,7 @@ PAGE_SPECS = [
     ("agents.html", "Agents", "rp_api_agents", ["rp_ui_agent", "rp_agents", "rp_decisions"]),
     ("evidence.html", "Evidence", "rp_api_evidence", ["rp_ui_evidence", "rp_evidence", "rp_package"]),
     ("review.html", "Review", "rp_review_dashboard", ["rp_review_pack", "rp_review2", "rp_revision", "rp_package", "rp_report_text"]),
-    ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency"]),
+    ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency", "rp_backend", "rp_backend_exec", "rp_study"]),
     ("artifacts.html", "Artifacts", "rp_api_artifacts", ["rp_artifact", "rp_artifact_manifest", "rp_package"]),
     ("data.html", "Data", "rp_api_data", ["rp_input", "rp_dataset_snapshot", "rp_data_quality"]),
     ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets"]),
@@ -430,6 +430,29 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
         return [
             render_line_panel("Plain Kernel Signals", compare_rows),
             render_line_panel("Consistency Signals", check_rows),
+            render_record_panel(
+                "Backend Runner Cases",
+                [("Case", "runner_case"), ("Input", "input"), ("Artifact", "artifact"), ("Result", "result"), ("Reason", "reason")],
+                state_records(state, "rp_backend_exec", "runner_case"),
+            ),
+            render_record_panel(
+                "Backend Study Metrics",
+                [
+                    ("Arm", "study_metric"),
+                    ("File Scans", "file_scans"),
+                    ("Context Trusted", "context_trusted"),
+                    ("Rebuild Steps", "rebuild_steps"),
+                    ("Batch Tools", "batch_tools"),
+                    ("Metadata Index", "metadata_index"),
+                    ("Result", "result"),
+                ],
+                state_records(state, "rp_study", "study_metric"),
+            ),
+            render_record_panel(
+                "Backend Scenario Handoff",
+                [("Handoff", "study_handoff"), ("Status", "status")],
+                state_records(state, "rp_study", "study_handoff"),
+            ),
         ]
     if file_name == "artifacts.html":
         host_action_rows = []

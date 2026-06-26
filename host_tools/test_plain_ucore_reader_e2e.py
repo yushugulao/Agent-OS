@@ -783,6 +783,13 @@ def main() -> int:
             assert "Portability Checks" in compare_html
             assert "Backend Checks" in compare_html
             assert "Backend Runner" in compare_html
+            assert "Backend Runner Cases" in compare_html
+            assert "retry-recovery" in compare_html
+            assert "Backend Study Metrics" in compare_html
+            assert "agentos_ucore" in compare_html
+            assert "Backend Scenario Handoff" in compare_html
+            assert "rp_backend_exec" in compare_html
+            assert "rp_agentcmp" in compare_html
             assert "pb" in compare_html
             actions_html = read_text(base + "/actions.html")
             assert "Batch Actions" in actions_html

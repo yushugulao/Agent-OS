@@ -126,6 +126,8 @@ It uses ordinary `fork`, `exec`, and `waitpid`. This provides a plain-kernel bas
 
 `rp_seed_orch` is the Host-action run entry. It runs the seeded program set used by the Host reader path. The action runner keeps the full captured Host action text in the host run package, writes a compact `rp_host_action_seed` file into the uCore image, and each native user program reads that ordinary file through the unchanged uCore file system. The seeded image omits the standalone `rp_test_suite` executable to stay within the upstream teaching file-system capacity; `rp_compare_plain` publishes the current test count in `rp_agentcmp` before it performs the final comparison checks.
 
+The Host Reader Compare page consumes `rp_backend_exec` and `rp_study` directly, so the visible page shows backend runner cases, their input files, generated artifacts, results, reasons, plain-uCore study metrics, planned Agent-OS metrics, and the backend scenario handoff status instead of only showing aggregate counts.
+
 The role programs also exchange state through ordinary root-file-system files:
 
 - `rp_plan`
