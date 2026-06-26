@@ -156,6 +156,7 @@ int main(void)
 	    rp_host_seed_has("kind=workbench_advance") ||
 	    rp_host_seed_has("kind=workbench_auto_advance") ||
 	    rp_host_seed_has("kind=workbench_task") ||
+	    rp_host_seed_has("kind=workbench_note") ||
 	    rp_host_seed_has("kind=workbench_readiness") ||
 	    rp_host_seed_has("kind=workbench_answer") ||
 	    rp_host_seed_has("kind=workbench_answer_audit") ||
@@ -197,6 +198,56 @@ int main(void)
 		ok = ok && rp_file_contains("rp_runner", token);
 		rp_copy_text(token, sizeof(token), "host_action_workbench_query=");
 		rp_append_text(token, sizeof(token), query);
+		ok = ok && rp_file_contains("rp_api_compare", token);
+	}
+	if (rp_host_seed_has("kind=workbench_task")) {
+		char task[64];
+		char status[32];
+		char token[120];
+		if (!rp_host_seed_copy_value_for_kind("kind=workbench_task", "task=", task, sizeof(task))) {
+			rp_copy_text(task, sizeof(task), "human_review");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=workbench_task", "status=", status, sizeof(status))) {
+			rp_copy_text(status, sizeof(status), "waiting");
+		}
+		rp_copy_text(token, sizeof(token), "host_action_workbench_task=");
+		rp_append_text(token, sizeof(token), task);
+		ok = ok && rp_file_contains("rp_runner", token);
+		ok = ok && rp_file_contains("rp_api_compare", token);
+		rp_copy_text(token, sizeof(token), "host_action_workbench_task_status=");
+		rp_append_text(token, sizeof(token), status);
+		ok = ok && rp_file_contains("rp_runner", token);
+	}
+	if (rp_host_seed_has("kind=workbench_note")) {
+		char kind[48];
+		char title[80];
+		char token[140];
+		if (!rp_host_seed_copy_value_for_kind("kind=workbench_note", "note_kind=", kind, sizeof(kind))) {
+			rp_copy_text(kind, sizeof(kind), "decision");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=workbench_note", "title=", title, sizeof(title))) {
+			rp_copy_text(title, sizeof(title), "Scope decision");
+		}
+		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_note=recorded");
+		rp_copy_text(token, sizeof(token), "host_action_workbench_note_kind=");
+		rp_append_text(token, sizeof(token), kind);
+		ok = ok && rp_file_contains("rp_runner", token);
+		ok = ok && rp_file_contains("rp_api_compare", token);
+		rp_copy_text(token, sizeof(token), "host_action_workbench_note_title=");
+		rp_append_text(token, sizeof(token), title);
+		ok = ok && rp_file_contains("rp_runner", token);
+		ok = ok && rp_file_contains("rp_api_compare", token);
+	}
+	if (rp_host_seed_has("kind=workbench_file_verify")) {
+		char manifest[80];
+		char token[128];
+		if (!rp_host_seed_copy_value_for_kind("kind=workbench_file_verify", "manifest=", manifest, sizeof(manifest))) {
+			rp_copy_text(manifest, sizeof(manifest), "delivery-manifest.json");
+		}
+		ok = ok && rp_file_contains("rp_runner", "host_action_workbench_file_verify=passed");
+		rp_copy_text(token, sizeof(token), "host_action_workbench_manifest=");
+		rp_append_text(token, sizeof(token), manifest);
+		ok = ok && rp_file_contains("rp_runner", token);
 		ok = ok && rp_file_contains("rp_api_compare", token);
 	}
 	if (rp_host_seed_has("kind=bundle_export") ||
@@ -665,6 +716,7 @@ int main(void)
 	    rp_host_seed_has("kind=workbench_advance") ||
 	    rp_host_seed_has("kind=workbench_auto_advance") ||
 	    rp_host_seed_has("kind=workbench_task") ||
+	    rp_host_seed_has("kind=workbench_note") ||
 	    rp_host_seed_has("kind=workbench_readiness") ||
 	    rp_host_seed_has("kind=workbench_answer") ||
 	    rp_host_seed_has("kind=workbench_answer_audit") ||

@@ -53,6 +53,9 @@ def main() -> int:
                 {"path": "/actions/research/run-revision-task", "payload": {"run_id": "RUN-E2E", "task_id": "usable-revision-task:RUN-E2E:1"}},
                 {"path": "/actions/research/workbench-answer", "payload": {"workbench": "usable-workbench:RUN-E2E", "question": "What is ready for review?"}},
                 {"path": "/actions/research/workbench-evidence-search", "payload": {"workbench": "usable-workbench:RUN-E2E", "query": "recovery evidence"}},
+                {"path": "/actions/research/workbench-task", "payload": {"workbench": "usable-workbench:RUN-E2E", "task": "human_review", "status": "waiting"}},
+                {"path": "/actions/research/workbench-note", "payload": {"workbench": "usable-workbench:RUN-E2E", "note_kind": "decision", "title": "Scope decision", "body": "Use recovered evidence first."}},
+                {"path": "/actions/research/workbench-file-verify", "payload": {"workbench": "usable-workbench:RUN-E2E", "manifest": "delivery-manifest.json"}},
                 {"path": "/actions/research/export-notebook", "payload": {"run_id": "RUN-E2E", "format": "ipynb"}},
                 {"path": "/actions/research/export-bundle", "payload": {"run_id": "RUN-E2E", "bundle": "reviewer-evidence"}},
                 {"path": "/actions/agentcompare/run", "payload": {"profile": "plain_ucore_batch"}},
@@ -87,6 +90,13 @@ def main() -> int:
             assert any("host_action_workbench_question=What is ready for review?" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_workbench_evidence_query=recovery evidence" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_workbench_answer=generated" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_workbench_task=human_review" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_workbench_task_status=waiting" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_workbench_note=recorded" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_workbench_note_kind=decision" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_workbench_note_title=Scope decision" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_workbench_file_verify=passed" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_action_workbench_manifest=delivery-manifest.json" in line for line in rp_runner["lines"]), rp_runner
             rp_review = read_json(base + "/api/state/rp_review2")
             assert any("host_action_human_review=usable-review:Wang:1" in line for line in rp_review["lines"]), rp_review
             assert any("host_action_review_decision=needs_revision" in line for line in rp_review["lines"]), rp_review
@@ -131,10 +141,13 @@ def main() -> int:
             assert any("host_action_workbench=usable-workbench:RUN-E2E" in line for line in rp_api_compare["lines"]), rp_api_compare
             assert any("host_action_workbench_question=What is ready for review?" in line for line in rp_api_compare["lines"]), rp_api_compare
             assert any("host_action_workbench_query=recovery evidence" in line for line in rp_api_compare["lines"]), rp_api_compare
+            assert any("host_action_workbench_task=human_review" in line for line in rp_api_compare["lines"]), rp_api_compare
+            assert any("host_action_workbench_note_kind=decision" in line for line in rp_api_compare["lines"]), rp_api_compare
+            assert any("host_action_workbench_note_title=Scope decision" in line for line in rp_api_compare["lines"]), rp_api_compare
             rp_result = read_json(base + "/api/state/rp_host_run_result")
             assert rp_result["values"]["qemu_orch_passed"] == "1", rp_result
             assert int(rp_result["values"]["extracted_state_files"]) >= 100, rp_result
-            assert any("qemu_rp_compare_plain: host_actions=9 verified" in line for line in rp_result["lines"]), rp_result
+            assert any("qemu_rp_compare_plain: host_actions=12 verified" in line for line in rp_result["lines"]), rp_result
 
             run_html = read_text(base + "/run.html")
             assert "Plain uCore Research" in run_html
@@ -144,6 +157,7 @@ def main() -> int:
             assert "reviewer-evidence" in run_html
             assert "host_action_revision_run" in run_html
             assert "host_action_workbench_question" in run_html
+            assert "host_action_workbench_note_title" in run_html
             artifacts_html = read_text(base + "/artifacts.html")
             assert "Evidence Package" in artifacts_html
             assert "reviewer-evidence" in artifacts_html

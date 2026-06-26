@@ -140,6 +140,7 @@ int main(void)
 	    rp_host_seed_has("kind=workbench_advance") ||
 	    rp_host_seed_has("kind=workbench_auto_advance") ||
 	    rp_host_seed_has("kind=workbench_task") ||
+	    rp_host_seed_has("kind=workbench_note") ||
 	    rp_host_seed_has("kind=workbench_readiness") ||
 	    rp_host_seed_has("kind=workbench_answer") ||
 	    rp_host_seed_has("kind=workbench_answer_audit") ||
@@ -170,6 +171,13 @@ int main(void)
 			if (!append_workbench_seed_kind("kind=workbench_task", "workbench_task")) return 1;
 			if (!append_workbench_seed_value("kind=workbench_task", "task=", "host_action_workbench_task=", "human_review")) return 1;
 			if (!append_workbench_seed_value("kind=workbench_task", "status=", "host_action_workbench_task_status=", "waiting")) return 1;
+		}
+		if (rp_host_seed_has("kind=workbench_note")) {
+			if (!append_workbench_seed_kind("kind=workbench_note", "workbench_note")) return 1;
+			if (!append_workbench_seed_value("kind=workbench_note", "note_kind=", "host_action_workbench_note_kind=", "decision")) return 1;
+			if (!append_workbench_seed_value("kind=workbench_note", "title=", "host_action_workbench_note_title=", "Scope decision")) return 1;
+			if (!append_workbench_seed_value("kind=workbench_note", "body=", "host_action_workbench_note_body=", "Use recovered evidence first.")) return 1;
+			if (!rp_append_file("rp_runner", "host_action_workbench_note=recorded")) return 1;
 		}
 		if (rp_host_seed_has("kind=workbench_readiness")) {
 			if (!append_workbench_seed_kind("kind=workbench_readiness", "workbench_readiness")) return 1;
@@ -214,6 +222,7 @@ int main(void)
 		}
 		if (rp_host_seed_has("kind=workbench_file_verify")) {
 			if (!append_workbench_seed_kind("kind=workbench_file_verify", "workbench_file_verify")) return 1;
+			if (!append_workbench_seed_value("kind=workbench_file_verify", "manifest=", "host_action_workbench_manifest=", "delivery-manifest.json")) return 1;
 			if (!rp_append_file("rp_runner", "host_action_workbench_file_verify=passed")) return 1;
 		}
 		if (rp_host_seed_has("kind=workbench_export")) {

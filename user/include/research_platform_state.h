@@ -191,6 +191,7 @@ static RP_UNUSED int rp_slice_contains(const char *text, int start, int end, con
 static RP_UNUSED int rp_copy_key_from_slice(const char *text, int start, int end, const char *key, char *out, int cap)
 {
 	int key_len = (int)strlen(key);
+	int found = 0;
 	if (cap <= 0 || key_len <= 0 || key_len > end - start) return 0;
 	for (int i = start; i <= end - key_len; i++) {
 		int same = 1;
@@ -207,9 +208,9 @@ static RP_UNUSED int rp_copy_key_from_slice(const char *text, int start, int end
 			out[out_pos++] = text[pos++];
 		}
 		out[out_pos] = 0;
-		return out_pos > 0;
+		if (out_pos > 0) found = 1;
 	}
-	return 0;
+	return found;
 }
 
 static RP_UNUSED __attribute__((noinline)) int rp_host_seed_copy_value_for_kind(

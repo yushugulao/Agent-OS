@@ -332,6 +332,7 @@ int main(void)
 	    rp_host_seed_has("kind=workbench_advance") ||
 	    rp_host_seed_has("kind=workbench_auto_advance") ||
 	    rp_host_seed_has("kind=workbench_task") ||
+	    rp_host_seed_has("kind=workbench_note") ||
 	    rp_host_seed_has("kind=workbench_readiness") ||
 	    rp_host_seed_has("kind=workbench_answer") ||
 	    rp_host_seed_has("kind=workbench_answer_audit") ||

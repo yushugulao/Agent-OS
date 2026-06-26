@@ -70,6 +70,7 @@ static int host_seed_has_workbench_action(void)
 	       rp_host_seed_has("kind=workbench_advance") ||
 	       rp_host_seed_has("kind=workbench_auto_advance") ||
 	       rp_host_seed_has("kind=workbench_task") ||
+	       rp_host_seed_has("kind=workbench_note") ||
 	       rp_host_seed_has("kind=workbench_readiness") ||
 	       rp_host_seed_has("kind=workbench_answer") ||
 	       rp_host_seed_has("kind=workbench_answer_audit") ||
@@ -88,7 +89,7 @@ static int copy_workbench_value(const char *key, char *out, int cap)
 {
 	const char *kinds[] = {
 		"kind=workbench", "kind=workbench_complete", "kind=workbench_advance",
-		"kind=workbench_auto_advance", "kind=workbench_task", "kind=workbench_readiness",
+		"kind=workbench_auto_advance", "kind=workbench_task", "kind=workbench_note", "kind=workbench_readiness",
 		"kind=workbench_answer", "kind=workbench_answer_audit", "kind=workbench_evidence_search",
 		"kind=workbench_brief", "kind=workbench_evidence_dossier", "kind=workbench_evidence_graph",
 		"kind=workbench_runbook", "kind=workbench_timeline", "kind=workbench_file_manifest",
@@ -366,6 +367,15 @@ int main(void)
 			}
 			if (copy_workbench_value("task=", detail, sizeof(detail))) {
 				if (!rp_append_host_action_line("rp_api_compare", "host_action_workbench_task=", detail)) return 1;
+			}
+			if (copy_workbench_value("note_kind=", detail, sizeof(detail))) {
+				if (!rp_append_host_action_line("rp_api_compare", "host_action_workbench_note_kind=", detail)) return 1;
+			}
+			if (copy_workbench_value("title=", detail, sizeof(detail))) {
+				if (!rp_append_host_action_line("rp_api_compare", "host_action_workbench_note_title=", detail)) return 1;
+			}
+			if (copy_workbench_value("manifest=", detail, sizeof(detail))) {
+				if (!rp_append_host_action_line("rp_api_compare", "host_action_workbench_manifest=", detail)) return 1;
 			}
 		}
 	}
@@ -727,6 +737,7 @@ int main(void)
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_advance")) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_auto_advance")) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_task")) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_note")) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_readiness")) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_answer")) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=workbench_answer_audit")) ||

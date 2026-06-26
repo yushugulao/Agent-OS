@@ -69,6 +69,8 @@ def action_kind(path: str) -> str:
         return "workbench_auto_advance"
     if path.endswith("/research/workbench-task"):
         return "workbench_task"
+    if path.endswith("/research/workbench-note"):
+        return "workbench_note"
     if path.endswith("/research/workbench-readiness"):
         return "workbench_readiness"
     if path.endswith("/research/workbench-answer"):
