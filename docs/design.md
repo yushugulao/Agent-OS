@@ -32,7 +32,7 @@ The host-side research Agent platform is moving toward real HTTP UI, real artifa
 - Bio, lab resource, publication, knowledge, and runtime service behavior becomes ordinary files with short names that fit the uCore root directory entry size.
 - Workflow runner behavior becomes stage records with dependencies, failure, retry, cache, log, worker, queue, and observer fields.
 - Workflow portability actions carry import id, source format, target runtime, execution plan, compare profile, scenario id, rehearsal status, readiness decision, and package name into `rp_wfio`; package, action, Web bundle, and compare records then reference the same values.
-- LLM calls become request queue and response files. Template responses can be produced inside uCore; cloud access and secrets stay on the host.
+- LLM calls become request queue and response files. Template responses can be produced inside uCore, and `host_tools/plain_ucore_llm_relay.py` can refresh those files from the host side in template mode or OpenAI-compatible mode. Cloud access and secrets stay on the host.
 - Agent collaboration becomes explicit role messages, acknowledgements, decisions, recovery actions, and audit records.
 - AgentCompare keeps the same result names while showing what is weaker on the plain kernel: file scans, convention-based state, user-space-only permission checks, untrusted context, reconstruction cost, and longer recovery steps.
 
@@ -153,15 +153,15 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_knowledge` | evidence | package, compare | knowledge, semantic, literature-search, screening, evidence-extraction, evidence-protocol, PRISMA-style flow, and synthesis summary |
 | `rp_llm_req` | LLM bridge | privacy | host LLM request packet without embedded secrets |
 | `rp_llmq` | LLM bridge | privacy, package, release, dossier, metrics, compare, orchestrator | host relay request queue, queue validation, route selection, dispatch readiness, and per-request secret policy |
-| `rp_llm_resp` | LLM bridge | privacy, compare | deterministic template LLM responses matched back to request ids, response hash records, and grounded reference count |
+| `rp_llm_resp` | LLM bridge and host relay | privacy, compare | deterministic template LLM responses, host relay response summaries, request-id matching, response hash records, and grounded reference count |
 | `rp_relay` | LLM bridge | privacy, package, release, dossier, compare | host-file relay mode, secret location, network ownership, request validation, response validation, and fallback policy |
 | `rp_prompt` | LLM bridge | privacy, package, compare | prompt versions, route policy, token budget, and evaluation cases |
-| `rp_llmlog` | LLM bridge | privacy, package, compare | transcript count, packet audit, privacy status, and replay status |
+| `rp_llmlog` | LLM bridge and host relay | privacy, package, compare | transcript count, packet audit, privacy status, replay status, and host relay execution records |
 | `rp_llmeval` | LLM bridge | privacy, package, release, dossier, metrics, compare, orchestrator | template response evaluation cases, grounded answer count, route switches, and fallback use |
-| `rp_llm_packets` | LLM relay | privacy, package, consistency, metrics, compare, orchestrator | packet-level host relay contract with request and response ids, packet schema checks, dispatch records, and response join state for three LLM requests |
+| `rp_llm_packets` | LLM relay | privacy, package, consistency, metrics, compare, orchestrator | packet-level host relay contract with request and response ids, packet schema checks, dispatch records, response join state, prompt hashes, and `secret_in_packet=0` records |
 | `rp_llm_routes` | LLM relay | privacy, package, consistency, metrics, compare, orchestrator | route table, route policy, and route decisions for template and optional host cloud execution |
 | `rp_llm_guard` | LLM relay | privacy, package, consistency, metrics, compare, orchestrator | secret scan, payload hash, outbound ownership, and packet blocking check for relay packets |
-| `rp_llm_hostreq` | LLM relay | privacy, package, consistency, compare, orchestrator | host request and response handoff contract with request/response manifests and no secret material in uCore |
+| `rp_llm_hostreq` | LLM relay | privacy, package, consistency, compare, orchestrator | host request and response handoff contract with request/response manifests, host relay configuration presence flags, and no secret material in uCore |
 | `rp_llm_fallback` | LLM relay | privacy, package, consistency, metrics, compare, orchestrator | fallback handling and fallback trace for missing cloud key, network loss, and privacy rejection |
 | `rp_privacy` | privacy | release | outbound packet review result |
 | `rp_compliance` | privacy | package, release, dossier, metrics, compare, orchestrator | policy compliance result covering access profiles, data use rules, LLM packets, secret placement, and license checks |

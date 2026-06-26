@@ -48,6 +48,18 @@ class FakeRunner:
                 (state_dir / item.name).write_text(item.read_text(encoding="utf-8"), encoding="utf-8")
 
 
+class FakeRelay:
+    @staticmethod
+    def run_relay(state_dir: Path, out_dir: Path, mode: str, summary_path: Path) -> dict[str, object]:
+        (out_dir / "rp_llm_resp").write_text(
+            "host_relay_process=fake;mode={};status=ready\n".format(mode),
+            encoding="utf-8",
+        )
+        summary = {"relay": "fake", "mode": mode, "requests": 1, "responses": 1, "status": "ready"}
+        summary_path.write_text(json.dumps(summary, ensure_ascii=False) + "\n", encoding="utf-8")
+        return summary
+
+
 STATE_FILES = {
     "rp_web_bundle": """bundle=host-web-ui
 reader_contract=host_plain_ucore_v2
@@ -170,6 +182,9 @@ def main() -> int:
             repo_dir=Path("."),
             run_root=out_dir / "auto-runs",
             runner_module=FakeRunner,
+            auto_llm_relay=True,
+            llm_relay_mode="template",
+            llm_relay_module=FakeRelay,
         )
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -195,10 +210,14 @@ def main() -> int:
             assert result["action"]["status"] == "accepted"
             assert result["action"]["path"] == "/actions/research/run"
             assert result["run"]["status"] == "ready"
+            assert result["relay"]["status"] == "ready"
+            assert result["relay"]["mode"] == "template"
             assert (out_dir / "host-actions.jsonl").exists()
             assert "path=/actions/research/run" in (state_dir / "rp_host_action_inbox").read_text(encoding="utf-8")
             assert "qemu_orch_passed=1" in (state_dir / "rp_host_run_result").read_text(encoding="utf-8")
+            assert "host_relay_process=fake" in (state_dir / "rp_llm_resp").read_text(encoding="utf-8")
             assert (out_dir / "last-run.json").exists()
+            assert (out_dir / "llm-relay-summary.json").exists()
 
             with request.urlopen(base + "/api/live", timeout=5) as response:
                 live = json.loads(response.read().decode("utf-8"))

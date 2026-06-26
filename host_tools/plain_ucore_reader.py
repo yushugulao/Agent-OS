@@ -769,6 +769,16 @@ def run_action_package(
     return result
 
 
+def run_llm_relay_package(
+    state_dir: Path,
+    out_dir: Path,
+    mode: str,
+    relay_module: object | None = None,
+) -> dict[str, object]:
+    relay = relay_module or importlib.import_module("plain_ucore_llm_relay")
+    return relay.run_relay(state_dir, state_dir, mode, out_dir / "llm-relay-summary.json")  # type: ignore[attr-defined]
+
+
 def parse_request_body(headers: object, body: bytes) -> dict[str, object]:
     content_type = ""
     if hasattr(headers, "get"):
@@ -798,6 +808,9 @@ def make_service_handler(
     runner_timeout: int = 80,
     wsl_distro: str = "Ubuntu",
     runner_module: object | None = None,
+    auto_llm_relay: bool = False,
+    llm_relay_mode: str = "auto",
+    llm_relay_module: object | None = None,
 ) -> type[BaseHTTPRequestHandler]:
     action_lock = Lock()
     actual_repo_dir = repo_dir or Path(".")
@@ -900,14 +913,22 @@ def make_service_handler(
                         wsl_distro,
                         runner_module,
                     )
+                relay_result = {}
+                if auto_llm_relay:
+                    relay_result = run_llm_relay_package(
+                        state_dir,
+                        out_dir,
+                        llm_relay_mode,
+                        llm_relay_module,
+                    )
                 render_site(state_dir, out_dir)
             status = 202
             if run_result and run_result.get("status") != "ready":
                 status = 500
             if batch_records:
-                self.send_json(status, {"actions": batch_records, "run": run_result})
+                self.send_json(status, {"actions": batch_records, "run": run_result, "relay": relay_result})
             else:
-                self.send_json(status, {"action": record, "run": run_result})
+                self.send_json(status, {"action": record, "run": run_result, "relay": relay_result})
 
     return PlainUCoreReaderHandler
 
@@ -922,6 +943,8 @@ def serve_dir(
     run_root: Path,
     runner_timeout: int,
     wsl_distro: str,
+    auto_llm_relay: bool,
+    llm_relay_mode: str,
 ) -> None:
     handler = make_service_handler(
         state_dir,
@@ -932,6 +955,8 @@ def serve_dir(
         run_root,
         runner_timeout,
         wsl_distro,
+        auto_llm_relay=auto_llm_relay,
+        llm_relay_mode=llm_relay_mode,
     )
     server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     print(f"plain_ucore_reader: serving http://127.0.0.1:{port}/")
@@ -946,6 +971,8 @@ def main() -> int:
     parser.add_argument("--port", type=int, default=8767, help="Local port for --serve.")
     parser.add_argument("--write-state-actions", action="store_true", help="Also append POST action records to the state directory.")
     parser.add_argument("--auto-run-ucore", action="store_true", help="After each POST action, prepare action state, run rp_orch, and refresh the served state directory.")
+    parser.add_argument("--auto-run-llm-relay", action="store_true", help="After each POST action, run the host LLM relay over refreshed rp_* state files.")
+    parser.add_argument("--llm-relay-mode", default="auto", choices=["auto", "template", "mock", "openai-compatible", "cloud"], help="Execution mode for --auto-run-llm-relay.")
     parser.add_argument("--repo-dir", type=Path, default=Path("."), help="Repository root used by --auto-run-ucore.")
     parser.add_argument("--run-root", type=Path, default=Path("runtime/plain_ucore_auto_runs"), help="Directory for automatic action packages and QEMU logs.")
     parser.add_argument("--timeout", type=int, default=80, help="QEMU run timeout in seconds for --auto-run-ucore.")
@@ -973,6 +1000,8 @@ def main() -> int:
             args.run_root,
             args.timeout,
             args.wsl_distro,
+            args.auto_run_llm_relay,
+            args.llm_relay_mode,
         )
     return 0
 

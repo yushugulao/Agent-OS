@@ -40,6 +40,8 @@ def main() -> int:
             repo_dir=repo_dir,
             run_root=run_root,
             runner_timeout=180,
+            auto_llm_relay=True,
+            llm_relay_mode="template",
         )
         server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
         thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -158,6 +160,9 @@ def main() -> int:
             assert result["actions"][0]["path"] == "/actions/research/run", result
             assert result["actions"][-1]["path"] == "/actions/agentcompare/run", result
             assert result["run"]["status"] == "ready", result
+            assert result["relay"]["status"] == "ready", result
+            assert result["relay"]["mode"] == "template", result
+            assert result["relay"]["requests"] >= 1, result
             extracted = int(result["run"]["run"]["extracted_state_files"])
             assert extracted >= 100, result
 
@@ -591,10 +596,14 @@ def main() -> int:
             rp_llm_resp = read_json(base + "/api/state/rp_llm_resp")
             assert any("host_llm_response_id=llm-r1" in line for line in rp_llm_resp["lines"]), rp_llm_resp
             assert any("host_llm_response_summary=Recovered_evidence_ready" in line for line in rp_llm_resp["lines"]), rp_llm_resp
+            assert any("host_relay_process=plain_ucore_llm_relay" in line for line in rp_llm_resp["lines"]), rp_llm_resp
+            assert any("host_relay_response=relay-llm-q1" in line for line in rp_llm_resp["lines"]), rp_llm_resp
             rp_llm_packets = read_json(base + "/api/state/rp_llm_packets")
             assert any("host_llm_packet_request=llm-q1" in line for line in rp_llm_packets["lines"]), rp_llm_packets
+            assert any("secret_in_packet=0" in line for line in rp_llm_packets["lines"]), rp_llm_packets
             rp_llm_hostreq = read_json(base + "/api/state/rp_llm_hostreq")
             assert any("host_llm_host_response=llm-r1" in line for line in rp_llm_hostreq["lines"]), rp_llm_hostreq
+            assert any("secret_material=not_written" in line for line in rp_llm_hostreq["lines"]), rp_llm_hostreq
             rp_llm_fallback = read_json(base + "/api/state/rp_llm_fallback")
             assert any("host_llm_fallback_case=missing_cloud_key" in line for line in rp_llm_fallback["lines"]), rp_llm_fallback
             rp_api_runtime = read_json(base + "/api/state/rp_api_runtime")
