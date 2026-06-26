@@ -37,6 +37,13 @@ STATE = {
     "rp_actionio": "actions=ready\n",
     "rp_web_bundle": "reader_ready=1\n",
     "rp_api_runtime": "api=runtime\nstatus=ready\n",
+    "rp_report_text": "report=ready\n",
+    "rp_runner": "runner=ready\n",
+    "rp_revision": "revision=ready\n",
+    "rp_package": "package=ready\n",
+    "rp_api_run": "api=run\n",
+    "rp_api_evidence": "api=evidence\n",
+    "rp_agent_run": "agent_run=ready\n",
 }
 
 
@@ -64,6 +71,20 @@ def main() -> int:
             assert "review_summary_supported_by_current_evidence" in resp
             packets = (out_dir / "rp_llm_packets").read_text(encoding="utf-8")
             assert "secret_in_packet=0" in packets
+            report = (out_dir / "rp_report_text").read_text(encoding="utf-8")
+            assert "host_relay_report_summary=review_summary_supported_by_current_evidence" in report
+            runner = (out_dir / "rp_runner").read_text(encoding="utf-8")
+            assert "host_relay_workbench_answer=review_summary_supported_by_current_evidence" in runner
+            revision = (out_dir / "rp_revision").read_text(encoding="utf-8")
+            assert "host_relay_writer_summary=review_summary_supported_by_current_evidence" in revision
+            package = (out_dir / "rp_package").read_text(encoding="utf-8")
+            assert "host_relay_delivery_file=llm_response" in package
+            api_run = (out_dir / "rp_api_run").read_text(encoding="utf-8")
+            assert "host_relay_report_summary=review_summary_supported_by_current_evidence" in api_run
+            api_evidence = (out_dir / "rp_api_evidence").read_text(encoding="utf-8")
+            assert "host_relay_grounding=citations:5" in api_evidence
+            agent_run = (out_dir / "rp_agent_run").read_text(encoding="utf-8")
+            assert "host_relay_agent_decision=writer_use_relay_response" in agent_run
             summary_json = json.loads((out_dir / "llm-relay-summary.json").read_text(encoding="utf-8"))
             assert summary_json["response_status"]["relay-host-q1"] == "ok", summary_json
 

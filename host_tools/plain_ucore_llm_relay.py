@@ -306,6 +306,44 @@ def append_relay_state(out_dir: Path, requests: list[RelayRequest], responses: l
     append_line(out_dir / "rp_actionio", "host_llm_relay_process=plain_ucore_llm_relay;outputs=rp_llm_resp,rp_llm_hostreq,rp_llm_packets,rp_llmlog;status=ready")
     append_line(out_dir / "rp_web_bundle", "host_llm_relay_process=plain_ucore_llm_relay;refresh=rp_llm_resp,rp_llm_hostreq,rp_llm_packets;status=ready")
     append_line(out_dir / "rp_api_runtime", "host_llm_relay_process=plain_ucore_llm_relay;status=ready")
+    first_ok = next((response for response in responses if response.status in {"ok", "config_missing"}), responses[0] if responses else None)
+    if first_ok is not None:
+        append_line(
+            out_dir / "rp_report_text",
+            "host_relay_report_summary="
+            f"{line_value(first_ok.summary)};request={line_value(first_ok.request_id)};"
+            f"response={line_value(first_ok.response_id)};citations={line_value(first_ok.citations)};status={line_value(first_ok.status)}",
+        )
+        append_line(
+            out_dir / "rp_runner",
+            "host_relay_workbench_answer="
+            f"{line_value(first_ok.summary)};request={line_value(first_ok.request_id)};source=rp_llm_resp;status=ready",
+        )
+        append_line(
+            out_dir / "rp_revision",
+            "host_relay_writer_summary="
+            f"{line_value(first_ok.summary)};mode={line_value(first_ok.mode)};response={line_value(first_ok.response_id)};status=ready",
+        )
+        append_line(
+            out_dir / "rp_package",
+            "host_relay_delivery_file=llm_response;path=rp_llm_resp;"
+            f"response={line_value(first_ok.response_id)};status=ready",
+        )
+        append_line(
+            out_dir / "rp_api_run",
+            "host_relay_report_summary="
+            f"{line_value(first_ok.summary)};response={line_value(first_ok.response_id)};status=ready",
+        )
+        append_line(
+            out_dir / "rp_api_evidence",
+            "host_relay_grounding="
+            f"citations:{line_value(first_ok.citations)};response={line_value(first_ok.response_id)};status=ready",
+        )
+        append_line(
+            out_dir / "rp_agent_run",
+            "host_relay_agent_decision=writer_use_relay_response;"
+            f"response={line_value(first_ok.response_id)};status=ready",
+        )
     for request, response in zip(requests, responses):
         prompt_hash = digest_text(request.prompt)
         append_line(

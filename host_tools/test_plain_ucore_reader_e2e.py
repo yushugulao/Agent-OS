@@ -289,6 +289,7 @@ def main() -> int:
             assert any("host_action_workspace_manifest=m.json" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_literature_query=prov" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_protocol_title=P1" in line for line in rp_runner["lines"]), rp_runner
+            assert any("host_relay_workbench_answer=review_summary_supported_by_current_evidence" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_workflow=WF1" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_workflow_export=wf.zip" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_workflow_export_format=json" in line for line in rp_runner["lines"]), rp_runner
@@ -376,12 +377,14 @@ def main() -> int:
             assert any("host_action_workbench_revision_area=methods" in line for line in rp_revision["lines"]), rp_revision
             assert any("host_action_workbench_revision_task=1" in line for line in rp_revision["lines"]), rp_revision
             assert any("host_action_workbench_revision_status=done" in line for line in rp_revision["lines"]), rp_revision
+            assert any("host_relay_writer_summary=review_summary_supported_by_current_evidence" in line for line in rp_revision["lines"]), rp_revision
             rp_report = read_json(base + "/api/state/rp_report_text")
             assert any("host_report_run_id=R1" in line for line in rp_report["lines"]), rp_report
             assert any("host_report_reviewer=Wang" in line for line in rp_report["lines"]), rp_report
             assert any("host_report_revision_targets=m,c,s" in line for line in rp_report["lines"]), rp_report
             assert any("host_report_bundle=ev" in line for line in rp_report["lines"]), rp_report
             assert any("host_report_compare_profile=pb" in line for line in rp_report["lines"]), rp_report
+            assert any("host_relay_report_summary=review_summary_supported_by_current_evidence" in line for line in rp_report["lines"]), rp_report
             assert any("host_report_title=T1" in line for line in rp_report["lines"]), rp_report
             assert any("host_report_question=Q1" in line for line in rp_report["lines"]), rp_report
             assert any("host_report_provider=template" in line for line in rp_report["lines"]), rp_report
@@ -451,6 +454,7 @@ def main() -> int:
             assert any("host_action_project_space=ready" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_research_search=ready" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_workflow_package=ready" in line for line in rp_package["lines"]), rp_package
+            assert any("host_relay_delivery_file=llm_response" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_workflow_id=WF1" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_workflow_bundle=wf.zip" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_workflow_retry_stage=clean" in line for line in rp_package["lines"]), rp_package
@@ -620,11 +624,13 @@ def main() -> int:
             assert any("host_action_library_citation=c1" in line for line in rp_api_run["lines"]), rp_api_run
             assert any("host_action_template_name=TP1" in line for line in rp_api_run["lines"]), rp_api_run
             assert any("host_action_workspace_root=ws" in line for line in rp_api_run["lines"]), rp_api_run
+            assert any("host_relay_report_summary=review_summary_supported_by_current_evidence" in line for line in rp_api_run["lines"]), rp_api_run
             rp_api_evidence = read_json(base + "/api/state/rp_api_evidence")
             assert any("host_action_evidence_inputs=ready" in line for line in rp_api_evidence["lines"]), rp_api_evidence
             assert any("host_action_literature_query=prov" in line for line in rp_api_evidence["lines"]), rp_api_evidence
             assert any("host_action_evidence_included=4" in line for line in rp_api_evidence["lines"]), rp_api_evidence
             assert any("host_action_protocol_title=P1" in line for line in rp_api_evidence["lines"]), rp_api_evidence
+            assert any("host_relay_grounding=citations:5" in line for line in rp_api_evidence["lines"]), rp_api_evidence
             rp_result = read_json(base + "/api/state/rp_host_run_result")
             assert rp_result["values"]["qemu_orch_passed"] == "1", rp_result
             assert int(rp_result["values"]["extracted_state_files"]) >= 100, rp_result
