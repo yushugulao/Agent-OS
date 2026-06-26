@@ -107,6 +107,14 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runop", "llm_proxy_audits:2");
 	ok = ok && rp_file_contains("rp_runop", "collab_threads:2");
 	ok = ok && rp_file_contains("rp_runop", "obs_alerts:5");
+	ok = ok && rp_file_contains("rp_runop", "research_ops=semantic_entities:8");
+	ok = ok && rp_file_contains("rp_runop", "semantic_relations:6");
+	ok = ok && rp_file_contains("rp_runop", "prompt_templates:2");
+	ok = ok && rp_file_contains("rp_runop", "prompt_versions:2");
+	ok = ok && rp_file_contains("rp_runop", "prompt_evaluations:1");
+	ok = ok && rp_file_contains("rp_runop", "runbook_steps:7");
+	ok = ok && rp_file_contains("rp_runop", "worker_ops:6");
+	ok = ok && rp_file_contains("rp_runop", "execution_controls:8");
 	ok = ok && rp_file_contains("rp_protocol", "protocol_compliance_reports=1");
 	ok = ok && rp_file_contains("rp_protocol", "protocol_amendments=1");
 	ok = ok && rp_file_contains("rp_soplog", "sop_executions=1");
@@ -333,7 +341,7 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=162\n"
+			   "checks=190\n"
 			   "task_records=21\n"
 			   "ready_tasks=21\n"
 			   "high_tasks=4\n"
@@ -410,6 +418,12 @@ int main(void)
 			   "collaboration_action_items=2\n"
 			   "observability_alerts=5\n"
 			   "observability_health_reports=1\n"
+			   "research_ops_checks=28\n"
+			   "semantic_graph_checks=6\n"
+			   "prompt_ops_checks=5\n"
+			   "runbook_checks=7\n"
+			   "worker_ops_checks=5\n"
+			   "execution_control_checks=5\n"
 			   "research_product_checks=18\n"
 			   "project_scaffold_files=8\n"
 			   "dataset_product_exports=9\n"
@@ -459,6 +473,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=162 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 products=18 assurance=24 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
+	printf("rp_consistency: checks=190 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 products=18 assurance=24 research_ops=28 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
 	return 0;
 }

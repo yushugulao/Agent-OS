@@ -115,7 +115,7 @@ status=ready
     "rp_labresop": "ops=6\nop=schedule_assess;bookings=6;status=ok\nop=training_gate;requirements=4;status=ok\n",
     "rp_pubop": "ops=6\nop=result_review;items=10;status=ok\nop=fair_package;checks=8;status=ok\n",
     "rp_knowop": "ops=6\nop=query_answer;answers=4;status=ok\nop=llm_grounding;responses=3;status=ok\n",
-    "rp_runop": "ops=7\nop=worker_heartbeat;workers=4;status=ok\nop=host_llm_request;packets=3;status=ok\n",
+    "rp_runop": "ops=7\nop=worker_heartbeat;workers=4;status=ok\nop=host_llm_request;packets=3;status=ok\nruntime_assurance=secret_refs:3,model_registry:2,deployments:1,llm_proxy_audits:2,collab_threads:2,obs_alerts:5,health:1,status=ready\nresearch_ops=semantic_entities:8,semantic_relations:6,prompt_templates:2,prompt_versions:2,prompt_evaluations:1,runbook_steps:7,worker_ops:6,execution_controls:8,status=ready\n",
     "rp_ui_home": "page=home\nstatus=ready\n",
     "rp_ui_run": "page=run-detail\nstatus=ready\n",
     "rp_ui_agent": "page=agent-detail\ndecision_records=rp_agents,rp_decisions,rp_handoff,rp_deliberation,rp_agent_run\nstatus=ready\n",
@@ -282,7 +282,7 @@ status=ready
         "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;detail_checks=kernel;result=planned\n"
         "study_handoff=rp_backend_exec->rp_agentcmp;status=ready\n"
     ),
-    "rp_consistency": "checks=162\nruntime_assurance_checks=24\nsecret_reference_checks=6\nmodel_registry_checks=5\nllm_proxy_replay_audits=2\ncollaboration_threads=2\nobservability_alerts=5\nresearch_product_checks=18\nproject_scaffold_files=8\ndataset_product_exports=9\nstudy_protocol_reproduction_checks=5\nproject_bundle_cache=ready\nartifact_provenance=3\nartifact_dossier_checks=4\nartifact_path_rebuild_files=6\nartifact_path_rebuild_steps=7\n",
+    "rp_consistency": "checks=190\nruntime_assurance_checks=24\nsecret_reference_checks=6\nmodel_registry_checks=5\nllm_proxy_replay_audits=2\ncollaboration_threads=2\nobservability_alerts=5\nresearch_ops_checks=28\nsemantic_graph_checks=6\nprompt_ops_checks=5\nrunbook_checks=7\nworker_ops_checks=5\nexecution_control_checks=5\nresearch_product_checks=18\nproject_scaffold_files=8\ndataset_product_exports=9\nstudy_protocol_reproduction_checks=5\nproject_bundle_cache=ready\nartifact_provenance=3\nartifact_dossier_checks=4\nartifact_path_rebuild_files=6\nartifact_path_rebuild_steps=7\n",
     "rp_artifact_manifest": (
         "record=1;kind=input;path=rp_input_fastq;status=ready\n"
         "record=3;kind=alignment;path=rp_artifact;section=rp_align_table;status=ready\n"

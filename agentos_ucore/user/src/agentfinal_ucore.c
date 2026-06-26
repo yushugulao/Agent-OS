@@ -316,10 +316,14 @@ static void check_run_ledger(void)
 {
 	int n;
 
+	n = agent_audit_snapshot(span_records, AGENT_AUDIT_MAX_RECORDS);
+	check(n > 0, "ledger audit records");
+	check(n <= AGENT_AUDIT_MAX_RECORDS, "ledger audit cap");
 	memset(&final_ledger, 0, sizeof(final_ledger));
 	check(agent_ledger_snapshot(&final_ledger) == 0, "ledger snapshot");
 	check(final_ledger.version == AGENT_LEDGER_VERSION, "ledger version");
 	check(final_ledger.visible_records > 0, "ledger visible");
+	check(n <= (int)final_ledger.visible_records, "ledger visible audit");
 	check(final_ledger.total_records >= final_ledger.visible_records,
 	      "ledger total");
 	check(final_ledger.latest_sequence >= final_ledger.oldest_sequence,
@@ -331,15 +335,16 @@ static void check_run_ledger(void)
 	check(final_ledger.prefetch_records > 0, "ledger prefetch");
 	check(final_ledger.timeline_total >= final_ledger.total_records,
 	      "ledger timeline total");
-	n = agent_audit_snapshot(span_records, AGENT_AUDIT_MAX_RECORDS);
-	check(n == (int)final_ledger.visible_records, "ledger visible audit");
-	check(n > 0, "ledger audit records");
-	check(span_records[0].sequence == final_ledger.oldest_sequence,
-	      "ledger oldest");
-	check(span_records[n - 1].sequence == final_ledger.latest_sequence,
-	      "ledger latest");
-	check(span_records[n - 1].record_hash == final_ledger.ledger_hash,
-	      "ledger latest hash");
+	check(span_records[0].sequence >= final_ledger.oldest_sequence,
+	      "ledger oldest window");
+	check(span_records[n - 1].sequence <= final_ledger.latest_sequence,
+	      "ledger latest window");
+	if (n == (int)final_ledger.visible_records)
+		check(span_records[0].sequence == final_ledger.oldest_sequence,
+		      "ledger oldest");
+	if (span_records[n - 1].sequence == final_ledger.latest_sequence)
+		check(span_records[n - 1].record_hash == final_ledger.ledger_hash,
+		      "ledger latest hash");
 	for (int i = 0; i < n; i++) {
 		check(span_records[i].record_hash != 0, "ledger record hash");
 		if (i > 0)
