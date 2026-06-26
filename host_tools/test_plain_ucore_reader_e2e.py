@@ -136,8 +136,19 @@ def main() -> int:
             artifacts_html = read_text(base + "/artifacts.html")
             assert "Evidence Package" in artifacts_html
             assert "reviewer-evidence" in artifacts_html
+            agents_html = read_text(base + "/agents.html")
+            assert "Agent Detail" in agents_html
+            assert "Handoffs" in agents_html
+            assert "rp_handoff" in agents_html
+            evidence_html = read_text(base + "/evidence.html")
+            assert "Evidence Detail" in evidence_html
+            assert "Evidence Protocol" in evidence_html
+            assert "usable-evidence-protocol:RUN-900:1" in evidence_html
             compare_html = read_text(base + "/compare.html")
             assert "Compare Summary" in compare_html
+            assert "Compare Metrics" in compare_html
+            assert "File Scans" in compare_html
+            assert "Rebuild Steps" in compare_html
             assert "plain_ucore_batch" in compare_html
             actions_html = read_text(base + "/actions.html")
             assert "Batch Actions" in actions_html

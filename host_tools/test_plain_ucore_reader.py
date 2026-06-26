@@ -69,7 +69,7 @@ status=ready
     "rp_api_run": "api=run-detail\nreader_contract=rp_web_bundle\nreader_view=run-detail\nstatus=ready\n",
     "rp_api_agents": "api=agent-detail\nagents=7\nstatus=ready\n",
     "rp_api_evidence": "api=evidence-detail\nclaims=8\nstatus=ready\n",
-    "rp_api_compare": "api=compare-metrics\nplain_kernel=passed\nstatus=ready\n",
+    "rp_api_compare": "api=compare-metrics\nplain_kernel=passed\nfile_scans=128\nstate_convention=1\nuser_permission_only=1\ncontext_trusted=0\nrebuild_steps=6\nstatus=ready\n",
     "rp_api_artifacts": "api=artifacts\nmanifest_records=4\nstatus=ready\n",
     "rp_api_data": "api=data\ndataset_snapshots=2\nstatus=ready\n",
     "rp_api_bio": "api=bio\nsample_registry=rp_sreg\nstatus=ready\n",
@@ -80,16 +80,22 @@ status=ready
     "rp_api_action": "api=actions\nreader_contract=rp_web_bundle\nactions=8\nstatus=ready\n",
     "rp_ui_home": "page=home\nstatus=ready\n",
     "rp_ui_run": "page=run-detail\nstatus=ready\n",
-    "rp_ui_agent": "page=agent-detail\nstatus=ready\n",
-    "rp_ui_evidence": "page=evidence-detail\nstatus=ready\n",
-    "rp_ui_compare": "page=compare-metrics\nstatus=ready\n",
+    "rp_ui_agent": "page=agent-detail\ndecision_records=rp_agents,rp_decisions,rp_handoff,rp_deliberation,rp_agent_run\nstatus=ready\n",
+    "rp_ui_evidence": "page=evidence-detail\nscreening_decisions=9\nevidence_protocol=usable-evidence-protocol:RUN-900:1\nstatus=ready\n",
+    "rp_ui_compare": "page=compare-metrics\npain_file_scans=128\npain_state_convention=1\npain_user_permissions=1\npain_rebuild_steps=6\nstatus=ready\n",
     "rp_runner": "workbench_tasks=9\nstatus=ready\n",
     "rp_artifact": "status=recovered\n",
-    "rp_agents": "agents=7\n",
+    "rp_agents": "agents=7\nmessages=21\n",
     "rp_decisions": "decisions=8\n",
-    "rp_evidence": "claims=8\n",
-    "rp_package": "delivery_files=8\n",
-    "rp_agentcmp": "plain_kernel=passed\n",
+    "rp_handoff": "handoffs=6\n",
+    "rp_deliberation": "items=5\n",
+    "rp_agent_run": "agent_messages=21\nagent_decisions=8\n",
+    "rp_evidence": "claims=8\nevidence_links=5\n",
+    "rp_lit": "evidence_links=5\nscreening_decisions=9\n",
+    "rp_provpath": "critical_paths=3\n",
+    "rp_knowledge": "evidence_protocol=usable-evidence-protocol:RUN-900:1\n",
+    "rp_package": "delivery_files=8\nevidence_bundle_entries=12\n",
+    "rp_agentcmp": "plain_kernel=passed\ntest_cases=693\nhandoffs=6\n",
     "rp_consistency": "checks=113\n",
     "rp_artifact_manifest": "manifest_records=4\n",
     "rp_input": "dynamic_submissions=4\n",
@@ -119,6 +125,17 @@ def main() -> int:
         assert "Research Output" in run_html
         compare_html = (out_dir / "compare.html").read_text(encoding="utf-8")
         assert "Compare Summary" in compare_html
+        assert "Compare Metrics" in compare_html
+        assert "File Scans" in compare_html
+        assert "128" in compare_html
+        agents_html = (out_dir / "agents.html").read_text(encoding="utf-8")
+        assert "Agent Detail" in agents_html
+        assert "Handoffs" in agents_html
+        assert "rp_handoff" in agents_html
+        evidence_html = (out_dir / "evidence.html").read_text(encoding="utf-8")
+        assert "Evidence Detail" in evidence_html
+        assert "Evidence Protocol" in evidence_html
+        assert "usable-evidence-protocol:RUN-900:1" in evidence_html
         artifacts_html = (out_dir / "artifacts.html").read_text(encoding="utf-8")
         assert "Evidence Package" in artifacts_html
         actions_html = (out_dir / "actions.html").read_text(encoding="utf-8")

@@ -213,6 +213,40 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
     return ""
 
 
+def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> str:
+    agent_items = [
+        ("Agents", metric_value(state, [("rp_agents", "agents"), ("rp_api_agents", "agents")]), "rp_agents"),
+        ("Messages", metric_value(state, [("rp_agents", "messages"), ("rp_agent_run", "agent_messages")]), "rp_agents"),
+        ("Decisions", metric_value(state, [("rp_decisions", "decisions"), ("rp_agent_run", "agent_decisions")]), "rp_decisions"),
+        ("Handoffs", metric_value(state, [("rp_handoff", "handoffs"), ("rp_agentcmp", "handoffs")]), "rp_handoff"),
+        ("Deliberation Items", metric_value(state, [("rp_deliberation", "items"), ("rp_metrics", "deliberation_items")]), "rp_deliberation"),
+        ("Decision Records", metric_value(state, [("rp_ui_agent", "decision_records"), ("rp_api_agents", "records")]), "rp_ui_agent"),
+    ]
+    evidence_items = [
+        ("Claims", metric_value(state, [("rp_claimrec", "claim"), ("rp_evidence", "claims"), ("rp_api_evidence", "claims")]), "rp_evidence"),
+        ("Evidence Links", metric_value(state, [("rp_lit", "evidence_links"), ("rp_evidence", "evidence_links")]), "rp_lit"),
+        ("Critical Paths", metric_value(state, [("rp_provpath", "critical_paths"), ("rp_api_evidence", "provenance_paths")]), "rp_provpath"),
+        ("Screening Decisions", metric_value(state, [("rp_lit", "screening_decisions"), ("rp_ui_evidence", "screening_decisions")]), "rp_lit"),
+        ("Evidence Protocol", metric_value(state, [("rp_knowledge", "evidence_protocol"), ("rp_ui_evidence", "evidence_protocol")]), "rp_knowledge"),
+        ("Bundle Entries", metric_value(state, [("rp_package", "evidence_bundle_entries")]), "rp_package"),
+    ]
+    compare_items = [
+        ("File Scans", metric_value(state, [("rp_api_compare", "file_scans"), ("rp_ui_compare", "pain_file_scans")]), "rp_api_compare"),
+        ("State Convention", metric_value(state, [("rp_api_compare", "state_convention"), ("rp_ui_compare", "pain_state_convention")]), "rp_api_compare"),
+        ("User Permission", metric_value(state, [("rp_api_compare", "user_permission_only"), ("rp_ui_compare", "pain_user_permissions")]), "rp_api_compare"),
+        ("Context Trusted", metric_value(state, [("rp_api_compare", "context_trusted")]), "rp_api_compare"),
+        ("Rebuild Steps", metric_value(state, [("rp_api_compare", "rebuild_steps"), ("rp_ui_compare", "pain_rebuild_steps")]), "rp_api_compare"),
+        ("Test Cases", metric_value(state, [("rp_agentcmp", "test_cases"), ("rp_tests", "tests")]), "rp_agentcmp"),
+    ]
+    if file_name == "agents.html":
+        return render_summary_panel("Agent Detail", agent_items)
+    if file_name == "evidence.html":
+        return render_summary_panel("Evidence Detail", evidence_items)
+    if file_name == "compare.html":
+        return render_summary_panel("Compare Metrics", compare_items)
+    return ""
+
+
 def render_table(title: str, rows: Iterable[str]) -> str:
     body = []
     for row in rows:
@@ -440,6 +474,9 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
         summary_panel = render_page_summary(file_name, state)
         if summary_panel:
             sections.append(summary_panel)
+        detail_panel = render_detail_panel(file_name, state)
+        if detail_panel:
+            sections.append(detail_panel)
         if file_name == "actions.html":
             sections.append(render_action_panel())
             sections.append(render_action_log(actions))
