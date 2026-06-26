@@ -54,7 +54,7 @@ reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
 reader_views=14
-reader_actions=43
+reader_actions=48
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_web_bundle
 reader_required_sections=routes,payloads,actions,live_update,downloads,compare
@@ -64,7 +64,7 @@ reader_state_source=plain_ucore_files
 dynamic_inputs=4
 status=ready
 """,
-    "rp_web_routes": "routes=57\nget_routes=14\npost_routes=43\nstatus=ready\n",
+    "rp_web_routes": "routes=62\nget_routes=14\npost_routes=48\nstatus=ready\n",
     "rp_api_home": "api=home\nreader_contract=rp_web_bundle\nstatus=ready\n",
     "rp_api_run": "api=run-detail\nreader_contract=rp_web_bundle\nreader_view=run-detail\nstatus=ready\n",
     "rp_api_agents": "api=agent-detail\nagents=7\nstatus=ready\n",
@@ -77,7 +77,7 @@ status=ready
     "rp_api_pub": "api=publication\nresult_review=rp_resrev\nstatus=ready\n",
     "rp_api_know": "api=knowledge\nsemantic_index=rp_semindex\nstatus=ready\n",
     "rp_api_runtime": "api=runtime\nruntime_env=rp_runenv\nstatus=ready\n",
-    "rp_api_action": "api=actions\nreader_contract=rp_web_bundle\nactions=43\nstatus=ready\n",
+    "rp_api_action": "api=actions\nreader_contract=rp_web_bundle\nactions=48\nstatus=ready\n",
     "rp_ui_home": "page=home\nstatus=ready\n",
     "rp_ui_run": "page=run-detail\nstatus=ready\n",
     "rp_ui_agent": "page=agent-detail\ndecision_records=rp_agents,rp_decisions,rp_handoff,rp_deliberation,rp_agent_run\nstatus=ready\n",

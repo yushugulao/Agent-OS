@@ -298,6 +298,26 @@ def main() -> int:
                     "payload": {"workflow_id": "WF1", "run_id": "RUN-999", "report": "workflow-report.md", "format": "markdown", "sections": "5", "status": "ready"},
                 },
                 {
+                    "path": "/actions/research/artifact-input",
+                    "payload": {"run_id": "RUN-999", "file": "reads_R1.fastq", "artifact_kind": "fastq", "sha256": "sha-host-input", "bytes": "2048", "source": "upload"},
+                },
+                {
+                    "path": "/actions/research/artifact-derive",
+                    "payload": {"run_id": "RUN-999", "input": "reads_R1.fastq", "output": "clean_reads.fastq", "operation": "trim", "stage": "clean", "sha256": "sha-host-derived"},
+                },
+                {
+                    "path": "/actions/research/artifact-log",
+                    "payload": {"run_id": "RUN-999", "stage": "clean", "log": "clean.log", "level": "warn", "message": "adapter_trimmed"},
+                },
+                {
+                    "path": "/actions/research/artifact-chart",
+                    "payload": {"run_id": "RUN-999", "chart": "qc-chart.json", "chart_type": "line", "data_file": "clean.metrics.json", "points": "12"},
+                },
+                {
+                    "path": "/actions/research/artifact-package",
+                    "payload": {"run_id": "RUN-999", "package": "artifact-bundle.zip", "manifest": "artifact-manifest.json", "files": "5", "status": "ready"},
+                },
+                {
                     "path": "/actions/workflow-portability/run",
                     "payload": {"import_id": "workflow-import:WF1:nextflow", "source_format": "nextflow", "source": "main.wf1.nf", "target_runtime": "agentos-ucore", "execution_plan": "workflow-migration-execution-plan:WF1:agentcompare", "compare_profile": "compare-profile:WF1:migration", "scenario_id": "backend-scenario:WF1", "rehearsal_status": "passed", "readiness_decision": "ready_for_agentos", "package": "wf-portability.zip"},
                 },
@@ -356,7 +376,7 @@ def main() -> int:
             ],
         )
         summary = runner.prepare_action_state(loaded, state_dir, run_dir)
-        expected_actions = 78
+        expected_actions = 83
 
         assert summary["actions"] == expected_actions
         assert summary["accepted"] == expected_actions
@@ -424,6 +444,11 @@ def main() -> int:
         assert "host_workflow_retry" in summary["kinds"]
         assert "host_workflow_artifact" in summary["kinds"]
         assert "host_workflow_report" in summary["kinds"]
+        assert "artifact_input" in summary["kinds"]
+        assert "artifact_derive" in summary["kinds"]
+        assert "artifact_log" in summary["kinds"]
+        assert "artifact_chart" in summary["kinds"]
+        assert "artifact_package" in summary["kinds"]
         assert "workflow_portability" in summary["kinds"]
         assert "workflow_portability_import" in summary["kinds"]
         assert "workflow_portability_plan" in summary["kinds"]
@@ -650,6 +675,11 @@ def main() -> int:
         assert "kind=host_workflow_retry" in plan
         assert "kind=host_workflow_artifact" in plan
         assert "kind=host_workflow_report" in plan
+        assert "kind=artifact_input" in plan
+        assert "kind=artifact_derive" in plan
+        assert "kind=artifact_log" in plan
+        assert "kind=artifact_chart" in plan
+        assert "kind=artifact_package" in plan
         assert "kind=workflow_portability" in plan
         assert "kind=workflow_portability_import" in plan
         assert "kind=workflow_portability_plan" in plan
@@ -708,6 +738,11 @@ def main() -> int:
         assert "/actions/host-workflow/retry-decision" in inbox
         assert "/actions/host-workflow/artifact-manifest" in inbox
         assert "/actions/host-workflow/report-export" in inbox
+        assert "/actions/research/artifact-input" in inbox
+        assert "/actions/research/artifact-derive" in inbox
+        assert "/actions/research/artifact-log" in inbox
+        assert "/actions/research/artifact-chart" in inbox
+        assert "/actions/research/artifact-package" in inbox
         assert "/actions/workflow-portability/run" in inbox
         assert "/actions/workflow-portability/import" in inbox
         assert "/actions/workflow-portability/plan" in inbox
@@ -785,6 +820,11 @@ def main() -> int:
         assert runner.action_kind("/actions/host-workflow/retry-decision") == "host_workflow_retry"
         assert runner.action_kind("/actions/host-workflow/artifact-manifest") == "host_workflow_artifact"
         assert runner.action_kind("/actions/host-workflow/report-export") == "host_workflow_report"
+        assert runner.action_kind("/actions/research/artifact-input") == "artifact_input"
+        assert runner.action_kind("/actions/research/artifact-derive") == "artifact_derive"
+        assert runner.action_kind("/actions/research/artifact-log") == "artifact_log"
+        assert runner.action_kind("/actions/research/artifact-chart") == "artifact_chart"
+        assert runner.action_kind("/actions/research/artifact-package") == "artifact_package"
         assert runner.action_kind("/actions/workflow-portability/run") == "workflow_portability"
         assert runner.action_kind("/actions/workflow-portability/import") == "workflow_portability_import"
         assert runner.action_kind("/actions/workflow-portability/plan") == "workflow_portability_plan"
@@ -835,6 +875,11 @@ def main() -> int:
         assert "kind=host_workflow_retry" in seed_file
         assert "kind=host_workflow_artifact" in seed_file
         assert "kind=host_workflow_report" in seed_file
+        assert "kind=artifact_input" in seed_file
+        assert "kind=artifact_derive" in seed_file
+        assert "kind=artifact_log" in seed_file
+        assert "kind=artifact_chart" in seed_file
+        assert "kind=artifact_package" in seed_file
         assert "kind=workflow_portability" in seed_file
         assert "kind=workflow_portability_import" in seed_file
         assert "kind=workflow_portability_plan" in seed_file
@@ -856,6 +901,11 @@ def main() -> int:
         assert "next_attempt=3" in seed_file
         assert "artifact=clean.metrics.json" in seed_file
         assert "report=workflow-report.md" in seed_file
+        assert "file=reads_R1.fastq" in seed_file
+        assert "output=clean_reads.fastq" in seed_file
+        assert "log=clean.log" in seed_file
+        assert "chart=qc-chart.json" in seed_file
+        assert "package=artifact-bundle.zip" in seed_file
         assert "import_id=workflow-import:WF1:nextflow" in seed_file
         assert "source_format=nextflow" in seed_file
         assert "source=main.wf1.nf" in seed_file

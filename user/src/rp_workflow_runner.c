@@ -1,6 +1,138 @@
 #include <stdio.h>
 #include <research_platform_state.h>
 
+static int append_artifact_manifest_input(void)
+{
+	char file[64];
+	char kind[32];
+	char sha[64];
+	char bytes[32];
+	char source[48];
+	char line[240];
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "file=", file, sizeof(file))) {
+		rp_copy_text(file, sizeof(file), "reads_R1.fastq");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "artifact_kind=", kind, sizeof(kind))) {
+		rp_copy_text(kind, sizeof(kind), "fastq");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "sha256=", sha, sizeof(sha))) {
+		rp_copy_text(sha, sizeof(sha), "sha-host-input");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "bytes=", bytes, sizeof(bytes))) {
+		rp_copy_text(bytes, sizeof(bytes), "2048");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "source=", source, sizeof(source))) {
+		rp_copy_text(source, sizeof(source), "upload");
+	}
+	rp_copy_text(line, sizeof(line), "host_artifact_manifest_input=");
+	rp_append_text(line, sizeof(line), file);
+	rp_append_text(line, sizeof(line), ";kind=");
+	rp_append_text(line, sizeof(line), kind);
+	rp_append_text(line, sizeof(line), ";sha256=");
+	rp_append_text(line, sizeof(line), sha);
+	rp_append_text(line, sizeof(line), ";bytes=");
+	rp_append_text(line, sizeof(line), bytes);
+	rp_append_text(line, sizeof(line), ";source=");
+	rp_append_text(line, sizeof(line), source);
+	return rp_append_file("rp_artifact_manifest", line);
+}
+
+static int append_artifact_manifest_derive(void)
+{
+	char input[64];
+	char output[64];
+	char operation[48];
+	char stage[48];
+	char sha[64];
+	char line[240];
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "input=", input, sizeof(input))) {
+		rp_copy_text(input, sizeof(input), "reads_R1.fastq");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "output=", output, sizeof(output))) {
+		rp_copy_text(output, sizeof(output), "clean_reads.fastq");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "operation=", operation, sizeof(operation))) {
+		rp_copy_text(operation, sizeof(operation), "trim");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "stage=", stage, sizeof(stage))) {
+		rp_copy_text(stage, sizeof(stage), "clean");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "sha256=", sha, sizeof(sha))) {
+		rp_copy_text(sha, sizeof(sha), "sha-host-derived");
+	}
+	rp_copy_text(line, sizeof(line), "host_artifact_manifest_derive=");
+	rp_append_text(line, sizeof(line), input);
+	rp_append_text(line, sizeof(line), ";output=");
+	rp_append_text(line, sizeof(line), output);
+	rp_append_text(line, sizeof(line), ";operation=");
+	rp_append_text(line, sizeof(line), operation);
+	rp_append_text(line, sizeof(line), ";stage=");
+	rp_append_text(line, sizeof(line), stage);
+	rp_append_text(line, sizeof(line), ";sha256=");
+	rp_append_text(line, sizeof(line), sha);
+	return rp_append_file("rp_artifact_manifest", line);
+}
+
+static int append_artifact_manifest_chart(void)
+{
+	char chart[64];
+	char chart_type[32];
+	char data_file[64];
+	char points[32];
+	char line[220];
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_chart", "chart=", chart, sizeof(chart))) {
+		rp_copy_text(chart, sizeof(chart), "qc-chart.json");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_chart", "chart_type=", chart_type, sizeof(chart_type))) {
+		rp_copy_text(chart_type, sizeof(chart_type), "line");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_chart", "data_file=", data_file, sizeof(data_file))) {
+		rp_copy_text(data_file, sizeof(data_file), "clean.metrics.json");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_chart", "points=", points, sizeof(points))) {
+		rp_copy_text(points, sizeof(points), "12");
+	}
+	rp_copy_text(line, sizeof(line), "host_artifact_manifest_chart=");
+	rp_append_text(line, sizeof(line), chart);
+	rp_append_text(line, sizeof(line), ";type=");
+	rp_append_text(line, sizeof(line), chart_type);
+	rp_append_text(line, sizeof(line), ";data_file=");
+	rp_append_text(line, sizeof(line), data_file);
+	rp_append_text(line, sizeof(line), ";points=");
+	rp_append_text(line, sizeof(line), points);
+	return rp_append_file("rp_artifact_manifest", line);
+}
+
+static int append_artifact_manifest_package(void)
+{
+	char package[64];
+	char manifest[64];
+	char files[32];
+	char status[32];
+	char line[220];
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_package", "package=", package, sizeof(package))) {
+		rp_copy_text(package, sizeof(package), "artifact-bundle.zip");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_package", "manifest=", manifest, sizeof(manifest))) {
+		rp_copy_text(manifest, sizeof(manifest), "artifact-manifest.json");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_package", "files=", files, sizeof(files))) {
+		rp_copy_text(files, sizeof(files), "5");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_package", "status=", status, sizeof(status))) {
+		rp_copy_text(status, sizeof(status), "ready");
+	}
+	rp_copy_text(line, sizeof(line), "host_artifact_manifest_package=");
+	rp_append_text(line, sizeof(line), package);
+	rp_append_text(line, sizeof(line), ";manifest=");
+	rp_append_text(line, sizeof(line), manifest);
+	rp_append_text(line, sizeof(line), ";files=");
+	rp_append_text(line, sizeof(line), files);
+	rp_append_text(line, sizeof(line), ";status=");
+	rp_append_text(line, sizeof(line), status);
+	return rp_append_file("rp_artifact_manifest", line);
+}
+
 int main(void)
 {
 	int ok = 1;
@@ -192,6 +324,14 @@ int main(void)
 			if (rp_host_seed_copy_workbench_value("bundle=", value, sizeof(value))) {
 				if (!rp_append_host_action_line("rp_artifact_manifest", "host_manifest_workbench_bundle=", value)) return 1;
 			}
+		}
+		if (rp_host_seed_has_artifact_action()) {
+			if (!rp_append_file("rp_artifact_manifest", "host_artifact_manifest_actions=applied")) return 1;
+			if (rp_host_seed_has("kind=artifact_input") && !append_artifact_manifest_input()) return 1;
+			if (rp_host_seed_has("kind=artifact_derive") && !append_artifact_manifest_derive()) return 1;
+			if (rp_host_seed_has("kind=artifact_log") && !rp_append_file("rp_artifact_manifest", "host_artifact_manifest_log=rp_stage_log")) return 1;
+			if (rp_host_seed_has("kind=artifact_chart") && !append_artifact_manifest_chart()) return 1;
+			if (rp_host_seed_has("kind=artifact_package") && !append_artifact_manifest_package()) return 1;
 		}
 	}
 	if (rp_host_seed_has("kind=host_workflow") || rp_host_seed_has("kind=host_workflow_export")) {

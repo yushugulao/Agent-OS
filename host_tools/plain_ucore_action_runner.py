@@ -51,6 +51,16 @@ def action_kind(path: str) -> str:
         return "llm_relay_response"
     if path.endswith("/research/llm-relay-fallback"):
         return "llm_relay_fallback"
+    if path.endswith("/research/artifact-input"):
+        return "artifact_input"
+    if path.endswith("/research/artifact-derive"):
+        return "artifact_derive"
+    if path.endswith("/research/artifact-log"):
+        return "artifact_log"
+    if path.endswith("/research/artifact-chart"):
+        return "artifact_chart"
+    if path.endswith("/research/artifact-package"):
+        return "artifact_package"
     if path.endswith("/research/run"):
         return "research_run"
     if path.endswith("/research/rerun"):
@@ -246,6 +256,14 @@ def action_plan_line(record: dict[str, object]) -> str:
         "host_workflow_report",
     }:
         return f"plan={sequence};kind={kind};prepare=rp_stage_dag;execute=rp_orch;collect=rp_artifact_manifest;status=ready"
+    if kind in {
+        "artifact_input",
+        "artifact_derive",
+        "artifact_log",
+        "artifact_chart",
+        "artifact_package",
+    }:
+        return f"plan={sequence};kind={kind};prepare=rp_artifact;execute=rp_artifact_ops;collect=rp_artifact_manifest;status=ready"
     if kind in {
         "workflow_portability",
         "workflow_portability_import",
@@ -451,6 +469,11 @@ def compact_seed_text(text: str) -> str:
         "host_workflow_retry": {"workflow_id", "run_id", "stage", "retry_reason", "next_attempt", "decision"},
         "host_workflow_artifact": {"workflow_id", "run_id", "artifact", "artifact_kind", "sha256", "bytes"},
         "host_workflow_report": {"workflow_id", "run_id", "report", "format", "sections", "status"},
+        "artifact_input": {"run_id", "file", "artifact_kind", "sha256", "bytes", "source"},
+        "artifact_derive": {"run_id", "input", "output", "operation", "stage", "sha256"},
+        "artifact_log": {"run_id", "stage", "log", "level", "message"},
+        "artifact_chart": {"run_id", "chart", "chart_type", "data_file", "points"},
+        "artifact_package": {"run_id", "package", "manifest", "files", "status"},
         "workflow_portability": {"import_id", "source_format", "source", "target_runtime", "execution_plan", "compare_profile", "scenario_id", "rehearsal_status", "readiness_decision", "package"},
         "workflow_portability_import": {"import_id", "source_format", "source", "normalized_steps", "adapter_id"},
         "workflow_portability_plan": {"import_id", "migration_plan", "target_runtime", "migration_steps", "risk_items"},

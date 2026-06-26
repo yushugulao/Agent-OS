@@ -127,6 +127,11 @@ def main() -> int:
                 {"path": "/actions/host-workflow/retry-decision", "payload": {"workflow_id": "WF1", "run_id": "R1", "stage": "clean", "retry_reason": "checksum_mismatch", "next_attempt": "3", "decision": "rerun_stage"}},
                 {"path": "/actions/host-workflow/artifact-manifest", "payload": {"workflow_id": "WF1", "run_id": "R1", "artifact": "clean.metrics.json", "artifact_kind": "metrics", "sha256": "sha-host-wf1", "bytes": "4096"}},
                 {"path": "/actions/host-workflow/report-export", "payload": {"workflow_id": "WF1", "run_id": "R1", "report": "workflow-report.md", "format": "markdown", "sections": "5", "status": "ready"}},
+                {"path": "/actions/research/artifact-input", "payload": {"run_id": "R1", "file": "reads_R1.fastq", "artifact_kind": "fastq", "sha256": "sha-host-input", "bytes": "2048", "source": "upload"}},
+                {"path": "/actions/research/artifact-derive", "payload": {"run_id": "R1", "input": "reads_R1.fastq", "output": "clean_reads.fastq", "operation": "trim", "stage": "clean", "sha256": "sha-host-derived"}},
+                {"path": "/actions/research/artifact-log", "payload": {"run_id": "R1", "stage": "clean", "log": "clean.log", "level": "warn", "message": "adapter_trimmed"}},
+                {"path": "/actions/research/artifact-chart", "payload": {"run_id": "R1", "chart": "qc-chart.json", "chart_type": "line", "data_file": "clean.metrics.json", "points": "12"}},
+                {"path": "/actions/research/artifact-package", "payload": {"run_id": "R1", "package": "artifact-bundle.zip", "manifest": "artifact-manifest.json", "files": "5", "status": "ready"}},
                 {"path": "/actions/workflow-portability/run", "payload": {"import_id": "workflow-import:WF1:nextflow", "source_format": "nextflow", "source": "main.wf1.nf", "target_runtime": "agentos-ucore", "execution_plan": "workflow-migration-execution-plan:WF1:agentcompare", "compare_profile": "compare-profile:WF1:migration", "scenario_id": "backend-scenario:WF1", "rehearsal_status": "passed", "readiness_decision": "ready_for_agentos", "package": "wf-portability.zip"}},
                 {"path": "/actions/workflow-portability/import", "payload": {"import_id": "workflow-import:WF1:nextflow", "source_format": "nextflow", "source": "main.wf1.nf", "normalized_steps": "15", "adapter_id": "adapter:WF1:nextflow"}},
                 {"path": "/actions/workflow-portability/plan", "payload": {"import_id": "workflow-import:WF1:nextflow", "migration_plan": "workflow-migration-plan:WF1", "target_runtime": "agentos-ucore", "migration_steps": "9", "risk_items": "4"}},
@@ -332,6 +337,14 @@ def main() -> int:
             rp_artifact_manifest = read_json(base + "/api/state/rp_artifact_manifest")
             assert any("host_workflow_artifact_action=clean.metrics.json;kind=metrics;sha256=sha-host-wf1;bytes=4096" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
             assert any("host_workflow_report_action=workflow-report.md;format=markdown;sections=5;status=ready" in line for line in rp_artifact_manifest["lines"]), rp_artifact_manifest
+            rp_artifact = read_json(base + "/api/state/rp_artifact")
+            assert any("host_artifact_actions=applied" in line for line in rp_artifact["lines"]), rp_artifact
+            assert any("host_artifact_input=reads_R1.fastq;kind=fastq;sha256=sha-host-input;bytes=2048;source=upload" in line for line in rp_artifact["lines"]), rp_artifact
+            assert any("host_artifact_derive=reads_R1.fastq;output=clean_reads.fastq;operation=trim;stage=clean;sha256=sha-host-derived" in line for line in rp_artifact["lines"]), rp_artifact
+            rp_stage_log = read_json(base + "/api/state/rp_stage_log")
+            assert any("host_artifact_log=clean.log;stage=clean;level=warn;message=adapter_trimmed" in line for line in rp_stage_log["lines"]), rp_stage_log
+            rp_chart_data = read_json(base + "/api/state/rp_chart_data")
+            assert any("host_artifact_chart=qc-chart.json;type=line;data_file=clean.metrics.json;points=12" in line for line in rp_chart_data["lines"]), rp_chart_data
             rp_report_text = read_json(base + "/api/state/rp_report_text")
             assert any("host_workflow_report_action=workflow-report.md;format=markdown;sections=5;status=ready" in line for line in rp_report_text["lines"]), rp_report_text
             rp_lit = read_json(base + "/api/state/rp_lit")
@@ -392,6 +405,12 @@ def main() -> int:
             assert any("host_manifest_workbench_bundle=wb.zip" in line for line in rp_manifest["lines"]), rp_manifest
             assert any("host_manifest_workflow=WF1" in line for line in rp_manifest["lines"]), rp_manifest
             assert any("host_manifest_workflow_export=wf.zip" in line for line in rp_manifest["lines"]), rp_manifest
+            assert any("host_artifact_manifest_actions=applied" in line for line in rp_manifest["lines"]), rp_manifest
+            assert any("host_artifact_manifest_input=reads_R1.fastq;kind=fastq;sha256=sha-host-input;bytes=2048;source=upload" in line for line in rp_manifest["lines"]), rp_manifest
+            assert any("host_artifact_manifest_derive=reads_R1.fastq;output=clean_reads.fastq;operation=trim;stage=clean;sha256=sha-host-derived" in line for line in rp_manifest["lines"]), rp_manifest
+            assert any("host_artifact_manifest_log=rp_stage_log" in line for line in rp_manifest["lines"]), rp_manifest
+            assert any("host_artifact_manifest_chart=qc-chart.json;type=line;data_file=clean.metrics.json;points=12" in line for line in rp_manifest["lines"]), rp_manifest
+            assert any("host_artifact_manifest_package=artifact-bundle.zip;manifest=artifact-manifest.json;files=5;status=ready" in line for line in rp_manifest["lines"]), rp_manifest
             rp_package = read_json(base + "/api/state/rp_package")
             assert any("host_action_export_bundle=ready" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_export_bundle_name=ev" in line for line in rp_package["lines"]), rp_package
@@ -443,6 +462,9 @@ def main() -> int:
             assert any("host_action_portability_bundle=wf-portability.zip" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_portability_steps=ready" in line for line in rp_package["lines"]), rp_package
             assert any("host_action_portability_format=zip" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_artifacts=ready" in line for line in rp_package["lines"]), rp_package
+            assert any("host_action_artifact_outputs=rp_artifact,rp_artifact_manifest,rp_stage_log,rp_chart_data,rp_package" in line for line in rp_package["lines"]), rp_package
+            assert any("host_artifact_package=artifact-bundle.zip;manifest=artifact-manifest.json;files=5;status=ready" in line for line in rp_package["lines"]), rp_package
             rp_nbexec = read_json(base + "/api/state/rp_nbexec")
             assert any("host_action_notebook_export=ready" in line for line in rp_nbexec["lines"]), rp_nbexec
             assert any("host_action_notebook_format=ipynb" in line for line in rp_nbexec["lines"]), rp_nbexec
@@ -487,6 +509,8 @@ def main() -> int:
             assert any("host_action_portability_outputs=rp_wfio,rp_package,rp_agentcmp" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_portability_profile=compare-profile:WF1:migration" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_portability_steps=6" in line for line in rp_actionio["lines"]), rp_actionio
+            assert any("host_action_artifacts=1" in line for line in rp_actionio["lines"]), rp_actionio
+            assert any("host_action_artifact_outputs=rp_artifact,rp_artifact_manifest,rp_stage_log,rp_chart_data,rp_package" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_llm_relay=1" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_llm_outputs=rp_llm_req,rp_llmq,rp_llm_resp,rp_llm_packets,rp_llm_hostreq,rp_llm_fallback" in line for line in rp_actionio["lines"]), rp_actionio
             assert any("host_action_export=1" in line for line in rp_actionio["lines"]), rp_actionio
@@ -514,6 +538,8 @@ def main() -> int:
             assert any("host_action_portability_outputs=rp_wfio,rp_package,rp_agentcmp" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_portability_profile=compare-profile:WF1:migration" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_portability_steps=6" in line for line in rp_web_bundle["lines"]), rp_web_bundle
+            assert any("host_action_artifacts=1" in line for line in rp_web_bundle["lines"]), rp_web_bundle
+            assert any("host_action_artifact_outputs=rp_artifact,rp_artifact_manifest,rp_stage_log,rp_chart_data,rp_package" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_llm_relay=rp_llm_req,rp_llmq,rp_llm_resp,rp_llm_packets,rp_llm_hostreq,rp_llm_fallback" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_platform_ops=rp_runner,rp_package,rp_api_action" in line for line in rp_web_bundle["lines"]), rp_web_bundle
             assert any("host_action_search_query=recovery evidence" in line for line in rp_web_bundle["lines"]), rp_web_bundle
@@ -522,6 +548,7 @@ def main() -> int:
             assert any("host_action_compare_profile=pb" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_api_compare = read_json(base + "/api/state/rp_api_compare")
             assert any("host_action_payload_applied=1" in line for line in rp_api_compare["lines"]), rp_api_compare
             assert any("host_action_run_id=R1" in line for line in rp_api_compare["lines"]), rp_api_compare
@@ -545,9 +572,11 @@ def main() -> int:
             assert any("host_action_workbench_handoff_scope=full" in line for line in rp_api_compare["lines"]), rp_api_compare
             assert any("host_action_workbench_bundle=wb.zip" in line for line in rp_api_compare["lines"]), rp_api_compare
             rp_api_action = read_json(base + "/api/state/rp_api_action")
-            assert any("actions=43" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("actions=48" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("host_workflow_stage=/actions/host-workflow/stage-attempt" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("host_workflow_report=/actions/host-workflow/report-export" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("artifact_input=/actions/research/artifact-input" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("artifact_package=/actions/research/artifact-package" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("operations_report=/actions/research/operations-report" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("workflow_portability_run=/actions/workflow-portability/run" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("workflow_portability_import=/actions/workflow-portability/import" in line for line in rp_api_action["lines"]), rp_api_action

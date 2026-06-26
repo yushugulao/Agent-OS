@@ -198,6 +198,39 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (rp_host_seed_has_artifact_action()) {
+		if (!rp_append_file("rp_package", "host_action_artifacts=ready")) return 1;
+		if (!rp_append_file("rp_package", "host_action_artifact_outputs=rp_artifact,rp_artifact_manifest,rp_stage_log,rp_chart_data,rp_package")) return 1;
+		if (rp_host_seed_has("kind=artifact_package")) {
+			char package[64];
+			char manifest[64];
+			char files[32];
+			char status[32];
+			char line[220];
+			if (!rp_host_seed_copy_value_for_kind("kind=artifact_package", "package=", package, sizeof(package))) {
+				rp_copy_text(package, sizeof(package), "artifact-bundle.zip");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=artifact_package", "manifest=", manifest, sizeof(manifest))) {
+				rp_copy_text(manifest, sizeof(manifest), "artifact-manifest.json");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=artifact_package", "files=", files, sizeof(files))) {
+				rp_copy_text(files, sizeof(files), "5");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=artifact_package", "status=", status, sizeof(status))) {
+				rp_copy_text(status, sizeof(status), "ready");
+			}
+			rp_copy_text(line, sizeof(line), "host_artifact_package=");
+			rp_append_text(line, sizeof(line), package);
+			rp_append_text(line, sizeof(line), ";manifest=");
+			rp_append_text(line, sizeof(line), manifest);
+			rp_append_text(line, sizeof(line), ";files=");
+			rp_append_text(line, sizeof(line), files);
+			rp_append_text(line, sizeof(line), ";status=");
+			rp_append_text(line, sizeof(line), status);
+			if (!rp_append_file("rp_package", line)) return 1;
+			if (!rp_append_file("rp_package", "host_action_artifact_package=ready")) return 1;
+		}
+	}
 	if (rp_host_seed_has_platform_ops_action()) {
 		char value[96];
 		if (!rp_append_file("rp_package", "host_action_platform_ops_package=ready")) return 1;

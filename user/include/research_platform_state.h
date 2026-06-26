@@ -481,6 +481,30 @@ static RP_UNUSED int rp_host_seed_copy_host_workflow_value(const char *key, char
 	return 0;
 }
 
+static RP_UNUSED int rp_host_seed_has_artifact_action(void)
+{
+	return rp_host_seed_has("kind=artifact_input") ||
+	       rp_host_seed_has("kind=artifact_derive") ||
+	       rp_host_seed_has("kind=artifact_log") ||
+	       rp_host_seed_has("kind=artifact_chart") ||
+	       rp_host_seed_has("kind=artifact_package");
+}
+
+static RP_UNUSED int rp_host_seed_copy_artifact_value(const char *key, char *out, int cap)
+{
+	const char *kinds[] = {
+		"kind=artifact_input",
+		"kind=artifact_derive",
+		"kind=artifact_log",
+		"kind=artifact_chart",
+		"kind=artifact_package"
+	};
+	for (int i = 0; i < (int)(sizeof(kinds) / sizeof(kinds[0])); i++) {
+		if (rp_host_seed_copy_value_for_kind(kinds[i], key, out, cap)) return 1;
+	}
+	return 0;
+}
+
 static RP_UNUSED int rp_host_seed_has_workflow_portability_run_action(void)
 {
 	return rp_host_seed_has("kind=workflow_portability");

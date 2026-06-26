@@ -50,6 +50,139 @@ static int fastq_profile(int *reads, int *bases, int *diffs)
 	return 1;
 }
 
+static int append_artifact_input_action(void)
+{
+	char file[64];
+	char kind[32];
+	char sha[64];
+	char bytes[32];
+	char source[48];
+	char line[240];
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "file=", file, sizeof(file))) {
+		rp_copy_text(file, sizeof(file), "reads_R1.fastq");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "artifact_kind=", kind, sizeof(kind))) {
+		rp_copy_text(kind, sizeof(kind), "fastq");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "sha256=", sha, sizeof(sha))) {
+		rp_copy_text(sha, sizeof(sha), "sha-host-input");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "bytes=", bytes, sizeof(bytes))) {
+		rp_copy_text(bytes, sizeof(bytes), "2048");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_input", "source=", source, sizeof(source))) {
+		rp_copy_text(source, sizeof(source), "upload");
+	}
+	rp_copy_text(line, sizeof(line), "host_artifact_input=");
+	rp_append_text(line, sizeof(line), file);
+	rp_append_text(line, sizeof(line), ";kind=");
+	rp_append_text(line, sizeof(line), kind);
+	rp_append_text(line, sizeof(line), ";sha256=");
+	rp_append_text(line, sizeof(line), sha);
+	rp_append_text(line, sizeof(line), ";bytes=");
+	rp_append_text(line, sizeof(line), bytes);
+	rp_append_text(line, sizeof(line), ";source=");
+	rp_append_text(line, sizeof(line), source);
+	return rp_append_file("rp_artifact", line) &&
+	       rp_append_file("rp_input", line);
+}
+
+static int append_artifact_derive_action(void)
+{
+	char input[64];
+	char output[64];
+	char operation[48];
+	char stage[48];
+	char sha[64];
+	char line[240];
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "input=", input, sizeof(input))) {
+		rp_copy_text(input, sizeof(input), "reads_R1.fastq");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "output=", output, sizeof(output))) {
+		rp_copy_text(output, sizeof(output), "clean_reads.fastq");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "operation=", operation, sizeof(operation))) {
+		rp_copy_text(operation, sizeof(operation), "trim");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "stage=", stage, sizeof(stage))) {
+		rp_copy_text(stage, sizeof(stage), "clean");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_derive", "sha256=", sha, sizeof(sha))) {
+		rp_copy_text(sha, sizeof(sha), "sha-host-derived");
+	}
+	rp_copy_text(line, sizeof(line), "host_artifact_derive=");
+	rp_append_text(line, sizeof(line), input);
+	rp_append_text(line, sizeof(line), ";output=");
+	rp_append_text(line, sizeof(line), output);
+	rp_append_text(line, sizeof(line), ";operation=");
+	rp_append_text(line, sizeof(line), operation);
+	rp_append_text(line, sizeof(line), ";stage=");
+	rp_append_text(line, sizeof(line), stage);
+	rp_append_text(line, sizeof(line), ";sha256=");
+	rp_append_text(line, sizeof(line), sha);
+	return rp_append_file("rp_artifact", line);
+}
+
+static int append_artifact_log_action(void)
+{
+	char log[64];
+	char stage[48];
+	char level[32];
+	char message[80];
+	char line[240];
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_log", "log=", log, sizeof(log))) {
+		rp_copy_text(log, sizeof(log), "clean.log");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_log", "stage=", stage, sizeof(stage))) {
+		rp_copy_text(stage, sizeof(stage), "clean");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_log", "level=", level, sizeof(level))) {
+		rp_copy_text(level, sizeof(level), "warn");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_log", "message=", message, sizeof(message))) {
+		rp_copy_text(message, sizeof(message), "adapter_trimmed");
+	}
+	rp_copy_text(line, sizeof(line), "host_artifact_log=");
+	rp_append_text(line, sizeof(line), log);
+	rp_append_text(line, sizeof(line), ";stage=");
+	rp_append_text(line, sizeof(line), stage);
+	rp_append_text(line, sizeof(line), ";level=");
+	rp_append_text(line, sizeof(line), level);
+	rp_append_text(line, sizeof(line), ";message=");
+	rp_append_text(line, sizeof(line), message);
+	return rp_append_file("rp_stage_log", line);
+}
+
+static int append_artifact_chart_action(void)
+{
+	char chart[64];
+	char chart_type[32];
+	char data_file[64];
+	char points[32];
+	char line[220];
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_chart", "chart=", chart, sizeof(chart))) {
+		rp_copy_text(chart, sizeof(chart), "qc-chart.json");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_chart", "chart_type=", chart_type, sizeof(chart_type))) {
+		rp_copy_text(chart_type, sizeof(chart_type), "line");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_chart", "data_file=", data_file, sizeof(data_file))) {
+		rp_copy_text(data_file, sizeof(data_file), "clean.metrics.json");
+	}
+	if (!rp_host_seed_copy_value_for_kind("kind=artifact_chart", "points=", points, sizeof(points))) {
+		rp_copy_text(points, sizeof(points), "12");
+	}
+	rp_copy_text(line, sizeof(line), "host_artifact_chart=");
+	rp_append_text(line, sizeof(line), chart);
+	rp_append_text(line, sizeof(line), ";type=");
+	rp_append_text(line, sizeof(line), chart_type);
+	rp_append_text(line, sizeof(line), ";data_file=");
+	rp_append_text(line, sizeof(line), data_file);
+	rp_append_text(line, sizeof(line), ";points=");
+	rp_append_text(line, sizeof(line), points);
+	return rp_append_file("rp_chart_data", line);
+}
+
 int main(void)
 {
 	int ok = 1;
@@ -311,6 +444,14 @@ int main(void)
 			   "package,1,ready\n"
 			   "status=ready\n")) {
 		return 1;
+	}
+	if (rp_host_seed_has_artifact_action()) {
+		if (!rp_append_file("rp_artifact", "host_artifact_actions=applied")) return 1;
+		if (rp_host_seed_has("kind=artifact_input") && !append_artifact_input_action()) return 1;
+		if (rp_host_seed_has("kind=artifact_derive") && !append_artifact_derive_action()) return 1;
+		if (rp_host_seed_has("kind=artifact_log") && !append_artifact_log_action()) return 1;
+		if (rp_host_seed_has("kind=artifact_chart") && !append_artifact_chart_action()) return 1;
+		if (!rp_append_file("rp_tool", "tool=artifact_ops.host_artifact_actions;target=rp_artifact;status=ok")) return 1;
 	}
 	if (rp_host_seed_count() > 0) {
 		if (rp_host_seed_has("kind=research_run")) {

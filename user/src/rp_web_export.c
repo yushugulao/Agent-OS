@@ -183,9 +183,9 @@ int main(void)
 
 	if (!rp_write_file("rp_web_routes",
 			   "service=host-web-ui\n"
-			   "routes=57\n"
+			   "routes=62\n"
 			   "get_routes=14\n"
-			   "post_routes=43\n"
+			   "post_routes=48\n"
 			   "route=/;payload=rp_api_home;status=ready\n"
 			   "route=/run/RUN-042;payload=rp_api_run;status=ready\n"
 			   "route=/research/{run_id};payload=rp_uresrun;status=ready\n"
@@ -207,6 +207,11 @@ int main(void)
 			   "action=/actions/host-workflow/retry-decision;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/host-workflow/artifact-manifest;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/host-workflow/report-export;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/artifact-input;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/artifact-derive;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/artifact-log;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/artifact-chart;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/artifact-package;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/workflow-portability/run;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/workflow-portability/import;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/workflow-portability/plan;method=POST;payload=rp_api_action;status=ready\n"
@@ -743,7 +748,7 @@ int main(void)
 	}
 	if (!rp_write_file("rp_api_action",
 			   "api=actions\n"
-			   "actions=43\n"
+			   "actions=48\n"
 			   "host_workflow_run=/actions/host-workflow/run\n"
 			   "host_workflow_export=/actions/host-workflow/export\n"
 			   "host_workflow_stage=/actions/host-workflow/stage-attempt\n"
@@ -751,6 +756,11 @@ int main(void)
 			   "host_workflow_retry=/actions/host-workflow/retry-decision\n"
 			   "host_workflow_artifact=/actions/host-workflow/artifact-manifest\n"
 			   "host_workflow_report=/actions/host-workflow/report-export\n"
+			   "artifact_input=/actions/research/artifact-input\n"
+			   "artifact_derive=/actions/research/artifact-derive\n"
+			   "artifact_log=/actions/research/artifact-log\n"
+			   "artifact_chart=/actions/research/artifact-chart\n"
+			   "artifact_package=/actions/research/artifact-package\n"
 			   "workflow_portability_run=/actions/workflow-portability/run\n"
 			   "workflow_portability_import=/actions/workflow-portability/import\n"
 			   "workflow_portability_plan=/actions/workflow-portability/plan\n"
@@ -799,6 +809,7 @@ int main(void)
 			   "project_space_actions=5\n"
 			   "research_search_actions=4\n"
 			   "llm_relay_actions=3\n"
+			   "artifact_actions=5\n"
 			   "plan_queue_actions=2\n"
 			   "action_item_actions=1\n"
 			   "workbench_advance=1\n"
@@ -1024,9 +1035,9 @@ int main(void)
 	}
 	if (!rp_write_file("rp_web_bundle",
 			   "bundle=host-web-ui\n"
-			   "routes=57\n"
+			   "routes=62\n"
 			   "get_routes=14\n"
-			   "post_routes=43\n"
+			   "post_routes=48\n"
 			   "api_payloads=14\n"
 			   "action_payloads=1\n"
 			   "action_state_records=12\n"
@@ -1064,7 +1075,7 @@ int main(void)
 			   "reader_contract_version=2\n"
 			   "reader_ready=1\n"
 			   "reader_views=14\n"
-			   "reader_actions=43\n"
+			   "reader_actions=48\n"
 			   "reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes\n"
 			   "reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_web_bundle\n"
 			   "reader_required_sections=routes,payloads,actions,live_update,downloads,compare\n"
@@ -1139,6 +1150,11 @@ int main(void)
 			if (host_action_seeded && rp_host_seed_copy_workflow_portability_value("target_runtime=", value, sizeof(value))) {
 				if (!rp_append_host_action_line("rp_actionio", "host_action_portability_target=", value)) return 1;
 			}
+		}
+		if ((host_action_seeded && rp_host_seed_has_artifact_action()) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=artifact_"))) {
+			if (!rp_append_file("rp_actionio", "host_action_artifacts=1")) return 1;
+			if (!rp_append_file("rp_actionio", "host_action_artifact_outputs=rp_artifact,rp_artifact_manifest,rp_stage_log,rp_chart_data,rp_package")) return 1;
 		}
 		if ((host_action_seeded && rp_host_seed_has_llm_relay_action()) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=llm_relay"))) {
@@ -1268,6 +1284,11 @@ int main(void)
 				if (!rp_append_host_action_line("rp_web_bundle", "host_action_portability_target=", value)) return 1;
 			}
 		}
+		if ((host_action_seeded && rp_host_seed_has_artifact_action()) ||
+		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=artifact_"))) {
+			if (!rp_append_file("rp_web_bundle", "host_action_artifacts=1")) return 1;
+			if (!rp_append_file("rp_web_bundle", "host_action_artifact_outputs=rp_artifact,rp_artifact_manifest,rp_stage_log,rp_chart_data,rp_package")) return 1;
+		}
 		if ((host_action_seeded && rp_host_seed_has_llm_relay_action()) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=llm_relay"))) {
 			if (!rp_append_file("rp_web_bundle", "host_action_llm_relay=rp_llm_req,rp_llmq,rp_llm_resp,rp_llm_packets,rp_llm_hostreq,rp_llm_fallback")) return 1;
@@ -1337,6 +1358,6 @@ int main(void)
 	if (!rp_append_status("actionio=ready")) return 1;
 	if (!rp_append_status("usable_research=ready")) return 1;
 	if (!rp_append_status("action_exports=ready")) return 1;
-	printf("rp_web_export: routes=57 api_payloads=14 actions=43 bundle=ready status=ready\n");
+	printf("rp_web_export: routes=62 api_payloads=14 actions=48 bundle=ready status=ready\n");
 	return 0;
 }
