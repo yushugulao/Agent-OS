@@ -1660,6 +1660,258 @@ def action_impact_panel(title: str, state: dict[str, dict[str, object]], actions
     )
 
 
+def action_delta_specs(path: str) -> list[tuple[str, str, str, str, str]]:
+    specs: list[tuple[str, str, str, str, str]] = []
+    if path.endswith("/research/run"):
+        return [
+            ("run_id", "run_id", "rp_report_text", "host_report_run_id", "host_report_run_id"),
+            ("title", "title", "rp_report_text", "host_report_title", "host_report_title"),
+            ("question", "question", "rp_report_text", "host_report_question", "host_report_question"),
+            ("provider", "provider", "rp_report_text", "host_report_provider", "host_report_provider"),
+            ("dataset_rows", "dataset_rows", "rp_report_text", "host_report_dataset_rows", "host_report_dataset_rows"),
+            ("csv_file", "csv_file", "rp_input", "host_action_csv_file", "host_action_csv_file"),
+            ("reference_file", "reference_file", "rp_input", "host_action_reference_file", "host_action_reference_file"),
+        ]
+    if path.endswith("/research/dataset"):
+        return [
+            ("dataset_title", "title", "rp_input", "host_action_dataset_title", "host_action_dataset_title"),
+            ("dataset_rows", "dataset_rows", "rp_input", "host_action_dataset_rows", "host_action_dataset_rows"),
+            ("dataset_columns", "columns", "rp_input", "host_action_dataset_columns", "host_action_dataset_columns"),
+        ]
+    if path.endswith("/research/library-source"):
+        return [("citation_key", "citation_key", "rp_input", "host_action_library_citation", "host_action_library_citation")]
+    if path.endswith("/research/template"):
+        return [("template_name", "name", "rp_input", "host_action_template_name", "host_action_template_name")]
+    if path.endswith("/research/inspect-workspace") or path.endswith("/research/import-workspace"):
+        return [
+            ("workspace_root", "root", "rp_input", "host_action_workspace_root", "host_action_workspace_root"),
+            ("workspace_manifest", "manifest", "rp_input", "host_action_workspace_manifest", "host_action_workspace_manifest"),
+        ]
+    if path.endswith("/research/literature-search"):
+        return [
+            ("literature_query", "query", "rp_lit", "host_action_literature_query", "host_action_literature_query"),
+            ("max_results", "max_results", "rp_lit", "host_action_literature_max_results", "host_action_literature_max_results"),
+        ]
+    if path.endswith("/research/evidence-review"):
+        return [("included", "included", "rp_lit", "host_action_evidence_included", "host_action_evidence_included")]
+    if path.endswith("/research/evidence-protocol"):
+        return [("protocol_title", "title", "rp_lit", "host_action_protocol_title", "host_action_protocol_title")]
+    if "/host-workflow/" in path:
+        specs.extend(
+            [
+                ("workflow_id", "workflow_id", "rp_stage_dag", "host_workflow_id", "host_workflow_id"),
+                ("run_id", "run_id", "rp_stage_state", "host_workflow_run_id", "host_workflow_run_id"),
+            ]
+        )
+        if path.endswith("/host-workflow/run"):
+            specs.extend(
+                [
+                    ("engine", "engine", "rp_stage_dag", "host_workflow_engine", "host_workflow_engine"),
+                    ("retry_stage", "retry_stage", "rp_stage_state", "host_workflow_retry_stage", "host_workflow_retry_stage"),
+                    ("cache_hit_stage", "cache_hit_stage", "rp_stage_state", "host_workflow_cache_hit_stage", "host_workflow_cache_hit_stage"),
+                    ("worker_slots", "worker_slots", "rp_stage_state", "host_workflow_worker_slots", "host_workflow_worker_slots"),
+                    ("queue_depth", "queue_depth", "rp_stage_state", "host_workflow_queue_depth", "host_workflow_queue_depth"),
+                ]
+            )
+        if path.endswith("/host-workflow/export"):
+            specs.extend(
+                [
+                    ("workflow_export", "bundle", "rp_runner", "host_action_workflow_export", "host_action_workflow_export"),
+                    ("workflow_export_format", "format", "rp_runner", "host_action_workflow_export_format", "host_action_workflow_export_format"),
+                ]
+            )
+        if path.endswith("/host-workflow/stage-attempt"):
+            specs.extend(
+                [
+                    ("stage", "stage", "rp_stage_state", "host_workflow_stage_action", "host_workflow_stage_action"),
+                    ("attempt", "attempt", "rp_stage_state", "host_workflow_stage_action", "attempt"),
+                    ("status", "status", "rp_stage_state", "host_workflow_stage_action", "status"),
+                ]
+            )
+        if path.endswith("/host-workflow/cache-decision"):
+            specs.extend(
+                [
+                    ("cache_key", "cache_key", "rp_cache_index", "host_workflow_cache_action", "key"),
+                    ("cache_result", "cache_result", "rp_cache_index", "host_workflow_cache_action", "result"),
+                ]
+            )
+        if path.endswith("/host-workflow/retry-decision"):
+            specs.extend(
+                [
+                    ("retry_stage", "stage", "rp_retry_plan", "host_workflow_retry_action", "host_workflow_retry_action"),
+                    ("retry_reason", "retry_reason", "rp_retry_plan", "host_workflow_retry_action", "reason"),
+                    ("decision", "decision", "rp_retry_plan", "host_workflow_retry_action", "decision"),
+                ]
+            )
+        if path.endswith("/host-workflow/artifact-manifest"):
+            specs.extend(
+                [
+                    ("artifact", "artifact", "rp_artifact_manifest", "host_workflow_artifact_action", "host_workflow_artifact_action"),
+                    ("sha256", "sha256", "rp_artifact_manifest", "host_workflow_artifact_action", "sha256"),
+                ]
+            )
+        if path.endswith("/host-workflow/report-export"):
+            specs.extend(
+                [
+                    ("report", "report", "rp_report_text", "host_workflow_report_action", "host_workflow_report_action"),
+                    ("sections", "sections", "rp_report_text", "host_workflow_report_action", "sections"),
+                ]
+            )
+        return specs
+    if path.endswith("/research/artifact-input"):
+        return [
+            ("artifact_input", "file", "rp_artifact_manifest", "host_artifact_manifest_input", "host_artifact_manifest_input"),
+            ("sha256", "sha256", "rp_artifact_manifest", "host_artifact_manifest_input", "sha256"),
+        ]
+    if path.endswith("/research/artifact-derive"):
+        return [
+            ("artifact_source", "input", "rp_artifact_manifest", "host_artifact_manifest_derive", "host_artifact_manifest_derive"),
+            ("artifact_output", "output", "rp_artifact_manifest", "host_artifact_manifest_derive", "output"),
+            ("operation", "operation", "rp_artifact_manifest", "host_artifact_manifest_derive", "operation"),
+        ]
+    if path.endswith("/research/artifact-log"):
+        return [
+            ("log", "log", "rp_stage_log", "host_artifact_log", "host_artifact_log"),
+            ("stage", "stage", "rp_stage_log", "host_artifact_log", "stage"),
+        ]
+    if path.endswith("/research/artifact-chart"):
+        return [
+            ("chart", "chart", "rp_chart_data", "host_artifact_chart", "host_artifact_chart"),
+            ("points", "points", "rp_chart_data", "host_artifact_chart", "points"),
+        ]
+    if path.endswith("/research/artifact-package"):
+        return [
+            ("artifact_package", "package", "rp_artifact_manifest", "host_artifact_manifest_package", "host_artifact_manifest_package"),
+            ("manifest", "manifest", "rp_artifact_manifest", "host_artifact_manifest_package", "manifest"),
+            ("files", "files", "rp_artifact_manifest", "host_artifact_manifest_package", "files"),
+        ]
+    if "/workflow-portability/" in path:
+        if path.endswith("/workflow-portability/package"):
+            return [
+                ("import_id", "import_id", "rp_wfio", "host_portability_package_action", "import"),
+                ("package", "package", "rp_wfio", "host_portability_package_action", "host_portability_package_action"),
+                ("export_format", "export_format", "rp_wfio", "host_portability_package_action", "format"),
+            ]
+        return [
+            ("import_id", "import_id", "rp_wfio", "host_portability_import", "host_portability_import"),
+            ("target_runtime", "target_runtime", "rp_wfio", "host_portability_target", "host_portability_target"),
+            ("compare_profile", "compare_profile", "rp_wfio", "host_portability_compare_profile", "host_portability_compare_profile"),
+            ("package", "package", "rp_wfio", "host_portability_package", "host_portability_package"),
+        ]
+    if path.endswith("/research/llm-relay-request"):
+        return [
+            ("request_id", "request_id", "rp_llm_packets", "host_llm_packet_request", "host_llm_packet_request"),
+            ("route", "route", "rp_llm_packets", "host_llm_packet_route", "host_llm_packet_route"),
+            ("provider", "provider", "rp_llm_req", "host_llm_provider", "host_llm_provider"),
+        ]
+    if path.endswith("/research/llm-relay-response"):
+        return [
+            ("request_id", "request_id", "rp_llm_packets", "host_llm_packet_request", "host_llm_packet_request"),
+            ("response_id", "response_id", "rp_llm_packets", "host_llm_packet_response", "host_llm_packet_response"),
+            ("summary", "summary", "rp_llm_resp", "host_llm_response_summary", "host_llm_response_summary"),
+        ]
+    if path.endswith("/research/llm-relay-fallback"):
+        return [("fallback_case", "case", "rp_llm_fallback", "host_llm_fallback_case", "host_llm_fallback_case")]
+    if path.endswith("/research/review"):
+        return [
+            ("reviewer", "reviewer", "rp_report_text", "host_report_reviewer", "host_report_reviewer"),
+            ("decision", "decision", "rp_report_text", "host_report_review_decision", "host_report_review_decision"),
+        ]
+    if path.endswith("/research/revision-task"):
+        return [("targets", "targets", "rp_report_text", "host_report_revision_targets", "host_report_revision_targets")]
+    if path.endswith("/research/run-revision-task"):
+        return [("task_id", "task_id", "rp_revision", "host_action_revision_task_id", "host_action_revision_task_id")]
+    if path.endswith("/research/export-bundle"):
+        return [("bundle", "bundle", "rp_report_text", "host_report_bundle", "host_report_bundle")]
+    if path.endswith("/agentcompare/run"):
+        return [("profile", "profile", "rp_report_text", "host_report_compare_profile", "host_report_compare_profile")]
+    if "/workbench" in path or path.endswith("/research/export-workbench"):
+        specs.append(("workbench", "workbench", "rp_report_text", "host_report_workbench", "host_report_workbench"))
+        specs.append(("workbench_id", "workbench_id", "rp_report_text", "host_report_workbench", "host_report_workbench"))
+        specs.append(("question", "question", "rp_report_text", "host_report_workbench_question", "host_report_workbench_question"))
+        specs.append(("task", "task", "rp_report_text", "host_report_workbench_task", "host_report_workbench_task"))
+        specs.append(("note_title", "title", "rp_report_text", "host_report_workbench_note_title", "host_report_workbench_note_title"))
+        specs.append(("manifest", "manifest", "rp_report_text", "host_report_workbench_manifest", "host_report_workbench_manifest"))
+        specs.append(("bundle", "bundle", "rp_report_text", "host_report_workbench_bundle", "host_report_workbench_bundle"))
+        return specs
+    return specs
+
+
+def state_key_value(state: dict[str, dict[str, object]], source_file: str, line_key: str, value_key: str) -> tuple[str, str]:
+    prefix = line_key + "="
+    for line in state_lines(state, source_file):
+        stripped = line.strip()
+        parsed = parse_kv_record(stripped)
+        if stripped.startswith(prefix):
+            if value_key in parsed:
+                return parsed[value_key], stripped
+            return stripped[len(prefix) :], stripped
+        if line_key in parsed:
+            if value_key in parsed:
+                return parsed[value_key], stripped
+            return parsed[line_key], stripped
+    return "", ""
+
+
+def action_delta_status(requested: str, observed: str) -> str:
+    if not requested:
+        return "not_requested"
+    if not observed:
+        return "missing"
+    if requested == observed or requested in observed:
+        return "matched"
+    return "different"
+
+
+def action_delta_rows(state: dict[str, dict[str, object]], actions: list[dict[str, object]], groups: set[str]) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for record in actions:
+        path = str(record.get("path", ""))
+        group = action_trace_group(path)
+        payload = record.get("payload", {})
+        if not group or group not in groups or not isinstance(payload, dict):
+            continue
+        for field, payload_key, source_file, line_key, value_key in action_delta_specs(path):
+            requested = str(payload.get(payload_key, ""))
+            if not requested:
+                continue
+            observed, source_line = state_key_value(state, source_file, line_key, value_key)
+            rows.append(
+                {
+                    "action_delta": str(record.get("sequence", "")),
+                    "group": group,
+                    "path": path,
+                    "field": field,
+                    "requested": requested,
+                    "observed": observed,
+                    "state_file": source_file,
+                    "source_key": value_key if value_key == line_key else line_key + "." + value_key,
+                    "source_line": source_line,
+                    "status": action_delta_status(requested, observed),
+                }
+            )
+    return rows
+
+
+def action_delta_panel(title: str, state: dict[str, dict[str, object]], actions: list[dict[str, object]], groups: set[str]) -> str:
+    return render_record_panel(
+        title,
+        [
+            ("Sequence", "action_delta"),
+            ("Group", "group"),
+            ("Path", "path"),
+            ("Field", "field"),
+            ("Requested", "requested"),
+            ("Observed", "observed"),
+            ("State File", "state_file"),
+            ("Source Key", "source_key"),
+            ("Status", "status"),
+        ],
+        action_delta_rows(state, actions, groups),
+        "No related host action delta rows",
+    )
+
+
 def default_batch_payload() -> str:
     actions = {
         "actions": [
@@ -1921,25 +2173,30 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
             sections.append(action_output_panel("Run Action Output Links", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
             sections.append(action_output_detail_panel("Run Action Output Details", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
             sections.append(action_impact_panel("Run Action Impact", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
+            sections.append(action_delta_panel("Run Action Delta", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
         if file_name == "compare.html":
             sections.append(action_trace_panel("Compare Action Trace", actions, {"compare", "portability", "workflow", "artifact"}))
             sections.append(action_output_panel("Compare Action Output Links", state, actions, {"compare", "portability", "workflow", "artifact"}))
             sections.append(action_output_detail_panel("Compare Action Output Details", state, actions, {"compare", "portability", "workflow", "artifact"}))
             sections.append(action_impact_panel("Compare Action Impact", state, actions, {"compare", "portability", "workflow", "artifact"}))
+            sections.append(action_delta_panel("Compare Action Delta", state, actions, {"compare", "portability", "workflow", "artifact"}))
         if file_name == "review.html":
             sections.append(action_trace_panel("Review Action Trace", actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
             sections.append(action_output_panel("Review Action Output Links", state, actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
             sections.append(action_output_detail_panel("Review Action Output Details", state, actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
             sections.append(action_impact_panel("Review Action Impact", state, actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
+            sections.append(action_delta_panel("Review Action Delta", state, actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
         if file_name == "artifacts.html":
             sections.append(action_output_panel("Artifact Action Output Links", state, actions, {"artifact", "workflow"}))
             sections.append(action_output_detail_panel("Artifact Action Output Details", state, actions, {"artifact", "workflow"}))
             sections.append(action_impact_panel("Artifact Action Impact", state, actions, {"artifact", "workflow"}))
+            sections.append(action_delta_panel("Artifact Action Delta", state, actions, {"artifact", "workflow"}))
         if file_name == "actions.html":
             sections.append(render_action_panel())
             sections.append(action_output_panel("Action Output Links", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
             sections.append(action_output_detail_panel("Action Output Details", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
             sections.append(action_impact_panel("Action Impact", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
+            sections.append(action_delta_panel("Action Delta", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
             sections.append(render_action_log(actions))
         sections.append(render_table(primary, state_lines(state, primary)))
         for extra in extras:
