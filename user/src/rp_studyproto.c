@@ -2,6 +2,99 @@
 #define RP_ENABLE_HOST_ACTION_SEED 1
 #include <research_platform_state.h>
 
+static void copy_study_value(const char *kind, const char *key, const char *fallback, char *out, int cap)
+{
+	if (!rp_host_seed_copy_value_for_kind(kind, key, out, cap)) {
+		rp_copy_text(out, cap, fallback);
+	}
+}
+
+static int append_study_host_actions(void)
+{
+	char value[96];
+	char line[768];
+
+	if (!rp_host_seed_has_study_protocol_action()) return 1;
+	if (!rp_append_file("rp_actionio", "host_action_study_protocol=1")) return 0;
+	if (!rp_append_file("rp_web_bundle", "host_action_study_protocol=rp_studyproto,rp_usablepack,rp_review_dashboard")) return 0;
+	rp_copy_text(line, sizeof(line), "host_action_study_protocol=applied;");
+	if (rp_host_seed_has("kind=study_protocol")) {
+		copy_study_value("kind=study_protocol", "protocol_id=", "usable-study-protocol:variant-calling-qc", value, sizeof(value));
+		rp_append_text(line, sizeof(line), "protocol=");
+		rp_append_text(line, sizeof(line), value);
+		rp_append_text(line, sizeof(line), ";");
+		copy_study_value("kind=study_protocol", "title=", "Variant calling QC", value, sizeof(value));
+		rp_append_text(line, sizeof(line), "title=");
+		rp_append_text(line, sizeof(line), value);
+		rp_append_text(line, sizeof(line), ";");
+	}
+	if (rp_host_seed_has("kind=study_protocol_run")) {
+		copy_study_value("kind=study_protocol_run", "run_id=", "usable-study-protocol-run:RUN-042", value, sizeof(value));
+		rp_append_text(line, sizeof(line), "protocol_run=");
+		rp_append_text(line, sizeof(line), value);
+		rp_append_text(line, sizeof(line), ";");
+	}
+	if (rp_host_seed_has("kind=study_protocol_compliance")) {
+		copy_study_value("kind=study_protocol_compliance", "decision=", "pass", value, sizeof(value));
+		rp_append_text(line, sizeof(line), "compliance=");
+		rp_append_text(line, sizeof(line), value);
+		rp_append_text(line, sizeof(line), ";");
+	}
+	if (rp_host_seed_has("kind=study_protocol_bundle")) {
+		copy_study_value("kind=study_protocol_bundle", "bundle=", "study-protocol-bundle.zip", value, sizeof(value));
+		rp_append_text(line, sizeof(line), "bundle=");
+		rp_append_text(line, sizeof(line), value);
+		rp_append_text(line, sizeof(line), ";");
+	}
+	if (rp_host_seed_has("kind=study_protocol_launch")) {
+		copy_study_value("kind=study_protocol_launch", "launch_id=", "study-protocol-launch:RUN-042", value, sizeof(value));
+		rp_append_text(line, sizeof(line), "launch=");
+		rp_append_text(line, sizeof(line), value);
+		rp_append_text(line, sizeof(line), ";");
+	}
+	if (rp_host_seed_has("kind=study_protocol_launch_rerun")) {
+		copy_study_value("kind=study_protocol_launch_rerun", "rerun_id=", "study-protocol-rerun:RUN-042", value, sizeof(value));
+		rp_append_text(line, sizeof(line), "rerun=");
+		rp_append_text(line, sizeof(line), value);
+		rp_append_text(line, sizeof(line), ";");
+	}
+	if (rp_host_seed_has("kind=study_protocol_launch_comparison")) {
+		copy_study_value("kind=study_protocol_launch_comparison", "changed_metrics=", "0", value, sizeof(value));
+		rp_append_text(line, sizeof(line), "comparison_changed_metrics=");
+		rp_append_text(line, sizeof(line), value);
+		rp_append_text(line, sizeof(line), ";");
+	}
+	if (rp_host_seed_has("kind=study_protocol_reproduction_package")) {
+		copy_study_value("kind=study_protocol_reproduction_package", "package_id=", "study-protocol-reproduction-package:RUN-042", value, sizeof(value));
+		rp_append_text(line, sizeof(line), "reproduction_package=");
+		rp_append_text(line, sizeof(line), value);
+		rp_append_text(line, sizeof(line), ";");
+	}
+	if (rp_host_seed_has("kind=study_protocol_reproduction_package_review")) {
+		copy_study_value("kind=study_protocol_reproduction_package_review", "decision=", "approved", value, sizeof(value));
+		rp_append_text(line, sizeof(line), "reproduction_review=");
+		rp_append_text(line, sizeof(line), value);
+		rp_append_text(line, sizeof(line), ";");
+	}
+	if (rp_host_seed_has("kind=study_protocol_reproduction_package_action_plan")) {
+		copy_study_value("kind=study_protocol_reproduction_package_action_plan", "steps=", "5", value, sizeof(value));
+		rp_append_text(line, sizeof(line), "action_plan_steps=");
+		rp_append_text(line, sizeof(line), value);
+		rp_append_text(line, sizeof(line), ";");
+	}
+	if (rp_host_seed_has("kind=study_protocol_reproduction_package_action_execute")) {
+		copy_study_value("kind=study_protocol_reproduction_package_action_execute", "result=", "passed", value, sizeof(value));
+		rp_append_text(line, sizeof(line), "action_execute_result=");
+		rp_append_text(line, sizeof(line), value);
+		rp_append_text(line, sizeof(line), ";");
+	}
+	rp_append_text(line, sizeof(line), "status=ready");
+	if (!rp_append_file("rp_studyproto", line)) return 0;
+	if (!rp_append_file("rp_usablepack", line)) return 0;
+	if (!rp_append_file("rp_review_dashboard", line)) return 0;
+	return 1;
+}
+
 int main(void)
 {
 	int ok = 1;
@@ -51,6 +144,7 @@ int main(void)
 	if (!rp_append_file("rp_web_bundle", "study_protocol_service=rp_studyproto;checks=20;launches=2;reproduction=ready;status=ready")) return 1;
 	if (!rp_append_file("rp_review_dashboard", "subsection=study_protocols;source=rp_studyproto;launches=2;reproduction=ready;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "study_protocol_service=checks:20;protocols:2;launches:2;runs:1;reproduction:1;action_plan:1;status=ready")) return 1;
+	if (!append_study_host_actions()) return 1;
 	if (!rp_append_file("rp_ack", "ack=studyproto;msg=study-protocol;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=study_protocol.launch")) return 1;
 	if (!rp_append_file("rp_tool", "tool=study_protocol.rerun")) return 1;

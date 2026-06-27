@@ -1,5 +1,103 @@
 #include <stdio.h>
+#define RP_ENABLE_HOST_ACTION_SEED 1
 #include <research_platform_state.h>
+
+static void copy_usable_value(const char *kind, const char *key, const char *fallback, char *out, int cap)
+{
+	if (!rp_host_seed_copy_value_for_kind(kind, key, out, cap)) {
+		rp_copy_text(out, cap, fallback);
+	}
+}
+
+static int append_usable_host_actions(void)
+{
+	char value[96];
+	char line[560];
+
+	if (rp_host_seed_has_dataset_action()) {
+		if (!rp_append_file("rp_actionio", "host_action_dataset_ops=1;kernel_context=observed")) return 0;
+		if (!rp_append_file("rp_web_bundle", "host_action_dataset_ops=rp_usableds,rp_data_preview,rp_data_quality,rp_runner;kernel_assisted=1")) return 0;
+		rp_copy_text(line, sizeof(line), "host_action_dataset_ops=applied;kernel_context=observed;");
+		if (rp_host_seed_has("kind=dataset_preview")) {
+			copy_usable_value("kind=dataset_preview", "dataset_id=", "usable-dataset:response-table", value, sizeof(value));
+			rp_append_text(line, sizeof(line), "preview_dataset=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";");
+			copy_usable_value("kind=dataset_preview", "rows=", "6", value, sizeof(value));
+			rp_append_text(line, sizeof(line), "preview_rows=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";");
+		}
+		if (rp_host_seed_has("kind=dataset_visualization")) {
+			copy_usable_value("kind=dataset_visualization", "chart=", "dataset-chart.svg", value, sizeof(value));
+			rp_append_text(line, sizeof(line), "visualization=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";");
+		}
+		if (rp_host_seed_has("kind=dataset_card")) {
+			copy_usable_value("kind=dataset_card", "readiness=", "ready", value, sizeof(value));
+			rp_append_text(line, sizeof(line), "card_readiness=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";");
+		}
+		if (rp_host_seed_has("kind=dataset_answer")) {
+			copy_usable_value("kind=dataset_answer", "question=", "Which group is stronger?", value, sizeof(value));
+			rp_append_text(line, sizeof(line), "answer_question=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";");
+		}
+		if (rp_host_seed_has("kind=dataset_run")) {
+			copy_usable_value("kind=dataset_run", "run_id=", "usable-run:dataset:1", value, sizeof(value));
+			rp_append_text(line, sizeof(line), "dataset_run=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";");
+		}
+		if (rp_host_seed_has("kind=dataset_run_comparison")) {
+			copy_usable_value("kind=dataset_run_comparison", "decision=", "stable", value, sizeof(value));
+			rp_append_text(line, sizeof(line), "run_comparison=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";");
+		}
+		if (rp_host_seed_has("kind=dataset_portfolio")) {
+			copy_usable_value("kind=dataset_portfolio", "datasets=", "3", value, sizeof(value));
+			rp_append_text(line, sizeof(line), "portfolio_datasets=");
+			rp_append_text(line, sizeof(line), value);
+			rp_append_text(line, sizeof(line), ";");
+		}
+		rp_append_text(line, sizeof(line), "status=ready");
+		if (!rp_append_file("rp_usableds", line)) return 0;
+		if (!rp_append_file("rp_data_preview", line)) return 0;
+		if (!rp_append_file("rp_data_quality", line)) return 0;
+	}
+	if (rp_host_seed_has("kind=source_portfolio")) {
+		if (!rp_append_file("rp_actionio", "host_action_source_portfolio=1;kernel_context=observed")) return 0;
+		rp_copy_text(line, sizeof(line), "host_action_source_portfolio=reviewed;kernel_context=observed;");
+		copy_usable_value("kind=source_portfolio", "sources=", "42", value, sizeof(value));
+		rp_append_text(line, sizeof(line), "sources=");
+		rp_append_text(line, sizeof(line), value);
+		rp_append_text(line, sizeof(line), ";");
+		copy_usable_value("kind=source_portfolio", "reviewed=", "8", value, sizeof(value));
+		rp_append_text(line, sizeof(line), "reviewed=");
+		rp_append_text(line, sizeof(line), value);
+		rp_append_text(line, sizeof(line), ";status=ready");
+		if (!rp_append_file("rp_usablelib", line)) return 0;
+	}
+	if (rp_host_seed_has("kind=sample_workbench")) {
+		if (!rp_append_file("rp_actionio", "host_action_sample_workbench=1;kernel_context=observed")) return 0;
+		rp_copy_text(line, sizeof(line), "host_action_sample_workbench=created;kernel_context=observed;");
+		copy_usable_value("kind=sample_workbench", "workbench_id=", "usable-workbench:sample", value, sizeof(value));
+		rp_append_text(line, sizeof(line), "workbench=");
+		rp_append_text(line, sizeof(line), value);
+		rp_append_text(line, sizeof(line), ";");
+		copy_usable_value("kind=sample_workbench", "question=", "What is ready for review?", value, sizeof(value));
+		rp_append_text(line, sizeof(line), "question=");
+		rp_append_text(line, sizeof(line), value);
+		rp_append_text(line, sizeof(line), ";status=ready");
+		if (!rp_append_file("rp_usable", line)) return 0;
+		if (!rp_append_file("rp_runner", line)) return 0;
+	}
+	return 1;
+}
 
 int main(void)
 {
@@ -108,6 +206,7 @@ int main(void)
 	if (!rp_append_file("rp_web_bundle", "usable_research_page=rp_usable;templates=3;datasets=3;library_sources=3;dag_stages=9;queues=2;kernel_assisted=1;status=ready")) return 1;
 	if (!rp_append_file("rp_review_dashboard", "subsection=usable_research;source=rp_usable;checks=100;handoff=ready;kernel_assisted=1;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "usable_research_checks=100;templates=3;datasets=3;library_sources=3;dag_stages=9;queues=2;handoffs=3;kernel_observed=1;status=ready")) return 1;
+	if (!append_usable_host_actions()) return 1;
 	if (!rp_append_file("rp_ack", "ack=usable_research;msg=workbench_entry;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=usable_research.create_workbench")) return 1;
 	if (!rp_append_file("rp_tool", "tool=usable_research.add_dataset")) return 1;

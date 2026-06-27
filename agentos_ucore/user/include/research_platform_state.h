@@ -19,7 +19,7 @@
 
 static RP_UNUSED char rp_state_buf[RP_STATE_BUFFER_SIZE];
 #ifdef RP_ENABLE_HOST_ACTION_SEED
-static RP_UNUSED char rp_host_seed_buf[8192];
+static RP_UNUSED char rp_host_seed_buf[32768];
 static RP_UNUSED int rp_host_seed_loaded;
 #endif
 extern int __argc;
@@ -373,17 +373,48 @@ static RP_UNUSED int rp_host_seed_has_research_input_action(void)
 	       rp_host_seed_has("kind=workspace_import_run");
 }
 
+static RP_UNUSED int rp_host_seed_has_dataset_action(void)
+{
+	return rp_host_seed_has("kind=dataset") ||
+	       rp_host_seed_has("kind=dataset_preview") ||
+	       rp_host_seed_has("kind=dataset_visualization") ||
+	       rp_host_seed_has("kind=dataset_card") ||
+	       rp_host_seed_has("kind=dataset_answer") ||
+	       rp_host_seed_has("kind=dataset_run") ||
+	       rp_host_seed_has("kind=dataset_run_comparison") ||
+	       rp_host_seed_has("kind=dataset_portfolio");
+}
+
+static RP_UNUSED int rp_host_seed_has_study_protocol_action(void)
+{
+	return rp_host_seed_has("kind=sample_workbench") ||
+	       rp_host_seed_has("kind=study_protocol") ||
+	       rp_host_seed_has("kind=study_protocol_run") ||
+	       rp_host_seed_has("kind=study_protocol_compliance") ||
+	       rp_host_seed_has("kind=study_protocol_bundle") ||
+	       rp_host_seed_has("kind=study_protocol_launch") ||
+	       rp_host_seed_has("kind=study_protocol_launch_rerun") ||
+	       rp_host_seed_has("kind=study_protocol_launch_comparison") ||
+	       rp_host_seed_has("kind=study_protocol_reproduction_package") ||
+	       rp_host_seed_has("kind=study_protocol_reproduction_package_review") ||
+	       rp_host_seed_has("kind=study_protocol_reproduction_package_action_plan") ||
+	       rp_host_seed_has("kind=study_protocol_reproduction_package_action_execute");
+}
+
 static RP_UNUSED int rp_host_seed_has_evidence_input_action(void)
 {
 	return rp_host_seed_has("kind=literature_search") ||
 	       rp_host_seed_has("kind=evidence_review") ||
-	       rp_host_seed_has("kind=evidence_protocol");
+	       rp_host_seed_has("kind=evidence_protocol") ||
+	       rp_host_seed_has("kind=source_portfolio");
 }
 
 static RP_UNUSED int rp_host_seed_has_research_data_action(void)
 {
 	return rp_host_seed_has_research_input_action() ||
-	       rp_host_seed_has_evidence_input_action();
+	       rp_host_seed_has_dataset_action() ||
+	       rp_host_seed_has_evidence_input_action() ||
+	       rp_host_seed_has_study_protocol_action();
 }
 
 static RP_UNUSED int rp_host_seed_has_platform_ops_action(void)
@@ -397,8 +428,10 @@ static RP_UNUSED int rp_host_seed_has_platform_ops_action(void)
 	       rp_host_seed_has("kind=project_space") ||
 	       rp_host_seed_has("kind=project_space_note") ||
 	       rp_host_seed_has("kind=project_space_action_item") ||
+	       rp_host_seed_has("kind=project_space_review") ||
 	       rp_host_seed_has("kind=project_space_answer") ||
 	       rp_host_seed_has("kind=project_space_repair_execute") ||
+	       rp_host_seed_has("kind=project_space_task_board_row") ||
 	       rp_host_seed_has("kind=project_handoff_audit") ||
 	       rp_host_seed_has("kind=project_release_gate") ||
 	       rp_host_seed_has("kind=project_snapshot") ||
@@ -434,8 +467,10 @@ static RP_UNUSED int rp_host_seed_copy_platform_ops_value(const char *key, char 
 		"kind=project_space",
 		"kind=project_space_note",
 		"kind=project_space_action_item",
+		"kind=project_space_review",
 		"kind=project_space_answer",
 		"kind=project_space_repair_execute",
+		"kind=project_space_task_board_row",
 		"kind=project_handoff_audit",
 		"kind=project_release_gate",
 		"kind=project_snapshot",

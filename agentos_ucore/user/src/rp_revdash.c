@@ -1,5 +1,4 @@
 #include <stdio.h>
-#define RP_STATE_BUFFER_SIZE 8192
 #include <research_platform_state.h>
 
 int main(void)

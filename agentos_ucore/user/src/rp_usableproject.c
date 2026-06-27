@@ -95,6 +95,24 @@ static int append_project_lifecycle_actions(void)
 	return 1;
 }
 
+static int append_study_protocol_package_action(void)
+{
+	char protocol[64];
+	char result[64];
+	char line[224];
+
+	if (!rp_host_seed_has_study_protocol_action()) return 1;
+	copy_action_value("kind=study_protocol", "protocol_id=", "usable-study-protocol:variant-calling-qc", protocol, sizeof(protocol));
+	copy_action_value("kind=study_protocol_reproduction_package_action_execute", "result=", "passed", result, sizeof(result));
+	rp_copy_text(line, sizeof(line), "host_action_study_protocol=applied;protocol=");
+	rp_append_text(line, sizeof(line), protocol);
+	rp_append_text(line, sizeof(line), ";action_execute_result=");
+	rp_append_text(line, sizeof(line), result);
+	rp_append_text(line, sizeof(line), ";kernel_context=recorded;status=ready");
+	if (!rp_append_file("rp_usablepack", line)) return 0;
+	return 1;
+}
+
 int main(void)
 {
 	int ok = 1;
@@ -179,6 +197,7 @@ int main(void)
 	if (!rp_append_file("rp_web_bundle", "usable_project_page=rp_usableproj;scaffolds=3;launches=2;bundles=2;doctor=pass;kernel_assisted=1;status=ready")) return 1;
 	if (!rp_append_file("rp_review_dashboard", "subsection=usable_project;source=rp_usableproj;checks=120;bundles=2;kernel_assisted=1;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "usable_project_checks=120;scaffold_templates=3;project_launches=2;project_bundles=2;doctor_checks=10;kernel_observed=1;status=ready")) return 1;
+	if (!append_study_protocol_package_action()) return 1;
 	if (!append_project_lifecycle_actions()) return 1;
 	if (!rp_append_file("rp_ack", "ack=usable_project;msg=lifecycle_ready;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=usable_project.required_configuration")) return 1;

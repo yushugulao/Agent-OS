@@ -1149,12 +1149,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "custom_runs=3");
 	ok = ok && rp_file_contains("rp_runner", "custom_agent_decisions=15");
 	ok = ok && rp_file_contains("rp_runner", "citation_plan_entries=3");
-	ok = ok && rp_file_contains("rp_web_routes", "routes=77");
+	ok = ok && rp_file_contains("rp_web_routes", "routes=140");
 	ok = ok && rp_file_contains("rp_web_routes", "get_routes=17");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research-studio");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research/workbench/{id}");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research/project/{id}/review");
-	ok = ok && rp_file_contains("rp_web_routes", "post_routes=60");
+	ok = ok && rp_file_contains("rp_web_routes", "post_routes=123");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/research/studio-launch");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/host-workflow/stage-attempt");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/host-workflow/report-export");
@@ -1205,10 +1205,14 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_pub", "result_review=rp_resrev");
 	ok = ok && rp_file_contains("rp_api_know", "semantic_index=rp_semindex");
 	ok = ok && rp_file_contains("rp_api_runtime", "runtime_env=rp_runenv");
-	ok = ok && rp_file_contains("rp_api_action", "actions=60");
+	ok = ok && rp_file_contains("rp_api_action", "actions=123");
 	ok = ok && rp_file_contains("rp_api_action", "project_scaffold=/actions/research/project-scaffold");
 	ok = ok && rp_file_contains("rp_api_action", "project_launch=/actions/research/project-launch");
 	ok = ok && rp_file_contains("rp_api_action", "project_action_execute=/actions/research/project-action-execute");
+	ok = ok && rp_file_contains("rp_api_action", "dataset_preview=/actions/research/dataset-preview");
+	ok = ok && rp_file_contains("rp_api_action", "dataset_run=/actions/research/dataset-run");
+	ok = ok && rp_file_contains("rp_api_action", "study_protocol_launch=/actions/research/study-protocol-launch");
+	ok = ok && rp_file_contains("rp_api_action", "study_protocol_reproduction_package_action_execute=/actions/research/study-protocol-reproduction-package-action-execute");
 	ok = ok && rp_file_contains("rp_api_action", "research_studio_launch=/actions/research/studio-launch");
 	ok = ok && rp_file_contains("rp_api_action", "host_workflow_stage=/actions/host-workflow/stage-attempt");
 	ok = ok && rp_file_contains("rp_api_action", "host_workflow_report=/actions/host-workflow/report-export");
@@ -1287,8 +1291,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "action_validation=passed");
 	ok = ok && rp_file_contains("rp_web_bundle", "side_effect_records=16");
 	ok = ok && rp_file_contains("rp_web_bundle", "reader_views=39");
-	ok = ok && rp_file_contains("rp_web_bundle", "reader_actions=60");
-	ok = ok && rp_file_contains("rp_web_bundle", "post_routes=60");
+	ok = ok && rp_file_contains("rp_web_bundle", "reader_actions=123");
+	ok = ok && rp_file_contains("rp_web_bundle", "post_routes=123");
 	ok = ok && rp_file_contains("rp_web_bundle", "reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle");
 	ok = ok && rp_file_contains("rp_studio", "studio=usable-research-studio");
 	ok = ok && rp_file_contains("rp_studio", "studio_session=usable-research-studio-session:W1:1");
@@ -1310,7 +1314,7 @@ int main(void)
 		ok = ok && rp_file_contains("rp_web_bundle", "host_action_platform_ops=rp_runner,rp_package,rp_api_action");
 		ok = ok && rp_file_contains("rp_api_action", "operations_actions=3");
 		ok = ok && rp_file_contains("rp_api_action", "quality_actions=3");
-		ok = ok && rp_file_contains("rp_api_action", "project_space_actions=5");
+		ok = ok && rp_file_contains("rp_api_action", "project_space_actions=7");
 		ok = ok && rp_file_contains("rp_api_action", "project_review_actions=8");
 		if (rp_host_seed_has("kind=project_release_gate")) {
 			ok = ok && rp_file_contains("rp_actionio", "host_action_project_review_outputs=rp_web_bundle");
@@ -1386,7 +1390,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_package", "review_pack_action=deliver_to_reviewer;source=rp_package;status=ready");
 	ok = ok && rp_file_contains("rp_package", "review_pack_action=resolve_project_items;source=rp_package;status=ready");
 	ok = ok && rp_file_contains("rp_runner", "workbench_next_task=delivery_manifest");
-	ok = ok && rp_file_contains("rp_api_action", "project_space_actions=5");
+	ok = ok && rp_file_contains("rp_api_action", "project_space_actions=7");
 	int llm_queue = rp_get_int_value("rp_llmq", "queued=");
 	int llm_packets = rp_get_int_value("rp_llm_packets", "packets=");
 	int llm_matched = rp_get_int_value("rp_llm_packets", "matched_responses=");

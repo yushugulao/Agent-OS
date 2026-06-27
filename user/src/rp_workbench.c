@@ -105,12 +105,18 @@ static int append_platform_ops_host_line(void)
 	if (rp_host_seed_has("kind=project_space_action_item")) {
 		rp_append_text(line, sizeof(workbench_ops_view), "host_action_project_action_item=created;");
 	}
+	if (rp_host_seed_has("kind=project_space_review")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_project_review=recorded;");
+	}
 	if (rp_host_seed_has("kind=project_space_answer")) {
 		rp_append_text(line, sizeof(workbench_ops_view), "host_action_project_answer=generated;");
 		append_workbench_summary_value(line, sizeof(workbench_ops_view), "kind=project_space_answer", "question=", "host_action_project_question=", "What is ready?");
 	}
 	if (rp_host_seed_has("kind=project_space_repair_execute")) {
 		rp_append_text(line, sizeof(workbench_ops_view), "host_action_project_repair=executed;");
+	}
+	if (rp_host_seed_has("kind=project_space_task_board_row")) {
+		rp_append_text(line, sizeof(workbench_ops_view), "host_action_project_task_board_row=updated;");
 	}
 	if (rp_host_seed_has("kind=research_search_save") ||
 	    rp_host_seed_has("kind=research_search_export") ||

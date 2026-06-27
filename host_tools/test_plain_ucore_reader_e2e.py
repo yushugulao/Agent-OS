@@ -78,8 +78,28 @@ def main() -> int:
                     },
                 },
                 {"path": "/actions/research/dataset", "payload": {"title": "D1", "dataset_rows": "6", "columns": "a,b,c", "tags": "h"}},
+                {"path": "/actions/research/dataset-preview", "payload": {"dataset_id": "usable-dataset:response-table", "rows": "7", "quality": "pass"}},
+                {"path": "/actions/research/dataset-visualization", "payload": {"dataset_id": "usable-dataset:response-table", "chart": "response-chart.svg", "x_field": "sample", "y_field": "value", "group_field": "group", "points": "7"}},
+                {"path": "/actions/research/dataset-card", "payload": {"dataset_id": "usable-dataset:response-table", "readiness": "ready", "warnings": "0"}},
+                {"path": "/actions/research/dataset-answer", "payload": {"dataset_id": "usable-dataset:response-table", "question": "Which group is stronger?", "answer": "treatment"}},
+                {"path": "/actions/research/dataset-run", "payload": {"dataset_id": "usable-dataset:response-table", "run_id": "usable-run:dataset:e2e", "provider_id": "template", "question": "Which group is stronger?", "artifacts": "5"}},
+                {"path": "/actions/research/dataset-run-comparison", "payload": {"dataset_id": "usable-dataset:response-table", "left_run": "usable-run:dataset:base", "right_run": "usable-run:dataset:e2e", "decision": "stable"}},
+                {"path": "/actions/research/dataset-portfolio", "payload": {"dataset_id": "usable-dataset:response-table", "filter": "ready", "datasets": "3", "ready": "3"}},
                 {"path": "/actions/research/library-source", "payload": {"citation_key": "c1", "tags": "h", "source_text": "@c"}},
+                {"path": "/actions/research/source-portfolio", "payload": {"source_id": "usable-source:library2026:1", "query": "agent provenance", "sources": "42", "reviewed": "8"}},
                 {"path": "/actions/research/template", "payload": {"name": "TP1", "question": "TQ", "provider_id": "template", "dataset_tags": "h", "library_tags": "h"}},
+                {"path": "/actions/research/sample-workbench", "payload": {"workbench_id": "usable-workbench:sample-e2e", "template_id": "usable-template:workspace-900", "dataset_id": "usable-dataset:response-table", "question": "What is ready for review?"}},
+                {"path": "/actions/research/study-protocol", "payload": {"protocol_id": "usable-study-protocol:e2e", "title": "E2E protocol", "question": "Which group is stronger?", "hypothesis": "treatment is stronger", "dataset_tags": "response", "source_tags": "agent"}},
+                {"path": "/actions/research/run-study-protocol", "payload": {"protocol_id": "usable-study-protocol:e2e", "run_id": "usable-study-protocol-run:e2e", "provider_id": "template"}},
+                {"path": "/actions/research/study-protocol-compliance", "payload": {"run_id": "usable-study-protocol-run:e2e", "decision": "pass", "findings": "0"}},
+                {"path": "/actions/research/study-protocol-bundle", "payload": {"run_id": "usable-study-protocol-run:e2e", "bundle": "study-protocol-e2e.zip", "files": "8"}},
+                {"path": "/actions/research/study-protocol-launch", "payload": {"launch_id": "study-protocol-launch:e2e", "protocol_id": "usable-study-protocol:e2e", "run_id": "usable-study-protocol-run:e2e", "provider_id": "template"}},
+                {"path": "/actions/research/study-protocol-launch-rerun", "payload": {"launch_id": "study-protocol-launch:e2e", "rerun_id": "study-protocol-rerun:e2e", "provider_id": "template"}},
+                {"path": "/actions/research/study-protocol-launch-comparison", "payload": {"launch_id": "study-protocol-launch:e2e", "left": "launch:e2e:base", "right": "launch:e2e:rerun", "changed_metrics": "0"}},
+                {"path": "/actions/research/study-protocol-reproduction-package", "payload": {"launch_id": "study-protocol-launch:e2e", "package_id": "study-protocol-reproduction-package:e2e", "files": "8", "notebooks": "2", "datasets": "2"}},
+                {"path": "/actions/research/study-protocol-reproduction-package-review", "payload": {"package_id": "study-protocol-reproduction-package:e2e", "decision": "approved", "reviewer": "Wang"}},
+                {"path": "/actions/research/study-protocol-reproduction-package-action-plan", "payload": {"package_id": "study-protocol-reproduction-package:e2e", "steps": "5", "owner": "recovery"}},
+                {"path": "/actions/research/study-protocol-reproduction-package-action-execute", "payload": {"package_id": "study-protocol-reproduction-package:e2e", "steps_done": "5", "result": "passed", "provider_id": "template"}},
                 {"path": "/actions/research/inspect-workspace", "payload": {"root": "ws", "max_files": "9", "tags": "workspace"}},
                 {"path": "/actions/research/import-workspace", "payload": {"root": "ws", "title": "IW", "question": "WQ", "max_files": "9", "manifest": "m.json"}},
                 {"path": "/actions/research/literature-search", "payload": {"query": "prov", "provider": "local", "max_results": "7"}},
@@ -132,8 +152,10 @@ def main() -> int:
                 {"path": "/actions/research/project-space", "payload": {"workbench_id": "W1", "project_id": "lab-gene-x", "query": "recovery"}},
                 {"path": "/actions/research/project-space-note", "payload": {"workbench_id": "W1", "kind": "decision", "title": "Project scope", "body": "Keep recovered evidence first."}},
                 {"path": "/actions/research/project-space-action-item", "payload": {"workbench_id": "W1", "title": "Project task", "instruction": "Prepare handoff", "priority": "high"}},
+                {"path": "/actions/research/project-space-review", "payload": {"workbench_id": "W1", "project_id": "lab-gene-x", "decision": "needs_revision", "reviewer": "Wang", "required_changes": "1"}},
                 {"path": "/actions/research/project-space-answer", "payload": {"workbench_id": "W1", "question": "What is ready?", "limit": "6"}},
                 {"path": "/actions/research/project-space-repair-execute", "payload": {"workbench_id": "W1", "repair_id": "repair1", "provider_id": "template", "max_steps": "4"}},
+                {"path": "/actions/research/project-space-task-board-row", "payload": {"workbench_id": "W1", "row_id": "project-row-1", "row_status": "done", "row_note": "Updated from reader"}},
                 {"path": "/actions/research/project-handoff-audit", "payload": {"project_id": "lab-gene-x", "scope": "full", "decision": "ready"}},
                 {"path": "/actions/research/project-release-gate", "payload": {"project_id": "lab-gene-x", "decision": "release", "checks": "6", "required_actions": "0", "suggested_actions": "2"}},
                 {"path": "/actions/research/project-snapshot", "payload": {"project_id": "lab-gene-x", "snapshot_id": "project-snapshot:lab-gene-x:1", "files": "11", "hash_records": "11", "changes": "0"}},
@@ -856,6 +878,9 @@ def main() -> int:
             assert any("study_protocol_launches=2" in line for line in rp_studyproto["lines"]), rp_studyproto
             assert any("study_protocol_reproduction_packages=1" in line for line in rp_studyproto["lines"]), rp_studyproto
             assert any("study-protocol-reproduction-package:RUN-042" in line for line in rp_studyproto["lines"]), rp_studyproto
+            assert any("host_action_study_protocol=applied" in line for line in rp_studyproto["lines"]), rp_studyproto
+            assert any("protocol=usable-study-protocol:e2e" in line for line in rp_studyproto["lines"]), rp_studyproto
+            assert any("action_execute_result=passed" in line for line in rp_studyproto["lines"]), rp_studyproto
             assert any("agentos_adaptation=file_metadata_index,context_protocol_evidence,event_reproduction_queue,batch_dataset_tool" in line for line in rp_studyproto["lines"]), rp_studyproto
             rp_opsboard = read_json(base + "/api/state/rp_opsboard")
             assert any("operations_board_checks=18" in line for line in rp_opsboard["lines"]), rp_opsboard
@@ -987,12 +1012,17 @@ def main() -> int:
             rp_usable = read_json(base + "/api/state/rp_usable")
             assert any("usable_research_checks=100" in line for line in rp_usable["lines"]), rp_usable
             assert any("entry=research-question-to-review-package" in line for line in rp_usable["lines"]), rp_usable
+            assert any("host_action_sample_workbench=created" in line for line in rp_usable["lines"]), rp_usable
             rp_usabletpl = read_json(base + "/api/state/rp_usabletpl")
             assert any("template=usable-template:workspace-900" in line for line in rp_usabletpl["lines"]), rp_usabletpl
             rp_usableds = read_json(base + "/api/state/rp_usableds")
             assert any("dataset=usable-dataset:penguins" in line for line in rp_usableds["lines"]), rp_usableds
+            assert any("host_action_dataset_ops=applied" in line for line in rp_usableds["lines"]), rp_usableds
+            assert any("preview_dataset=usable-dataset:response-table" in line for line in rp_usableds["lines"]), rp_usableds
+            assert any("dataset_run=usable-run:dataset:e2e" in line for line in rp_usableds["lines"]), rp_usableds
             rp_usablelib = read_json(base + "/api/state/rp_usablelib")
             assert any("source=usable-source:library2026:1" in line for line in rp_usablelib["lines"]), rp_usablelib
+            assert any("host_action_source_portfolio=reviewed" in line for line in rp_usablelib["lines"]), rp_usablelib
             rp_usabledag = read_json(base + "/api/state/rp_usabledag")
             assert any("stage=package;order=9" in line for line in rp_usabledag["lines"]), rp_usabledag
             rp_usableops = read_json(base + "/api/state/rp_usableops")
@@ -1014,6 +1044,7 @@ def main() -> int:
             rp_usablepack = read_json(base + "/api/state/rp_usablepack")
             assert any("usable-study-protocol-reproduction-package:RUN-042" in line for line in rp_usablepack["lines"]), rp_usablepack
             assert any("host_action_project_action_execute=reader-project" in line for line in rp_usablepack["lines"]), rp_usablepack
+            assert any("host_action_study_protocol=applied" in line for line in rp_usablepack["lines"]), rp_usablepack
             rp_campaign = read_json(base + "/api/state/rp_campaign")
             assert any("campaign_checks=108" in line for line in rp_campaign["lines"]), rp_campaign
             assert any("campaign=experiment-campaign:RUN-042:align-memory-grid" in line for line in rp_campaign["lines"]), rp_campaign
@@ -1240,7 +1271,7 @@ def main() -> int:
             assert any("host_action_workbench_handoff_scope=full" in line for line in rp_api_compare["lines"]), rp_api_compare
             assert any("host_action_workbench_bundle=wb.zip" in line for line in rp_api_compare["lines"]), rp_api_compare
             rp_api_action = read_json(base + "/api/state/rp_api_action")
-            assert any("actions=60" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("actions=123" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("host_workflow_stage=/actions/host-workflow/stage-attempt" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("host_workflow_report=/actions/host-workflow/report-export" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("artifact_input=/actions/research/artifact-input" in line for line in rp_api_action["lines"]), rp_api_action
@@ -1251,12 +1282,21 @@ def main() -> int:
             assert any("workflow_portability_package=/actions/workflow-portability/package" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("workbench_quality_gate=/actions/research/workbench-quality-gate" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("project_space=/actions/research/project-space" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("project_space_review=/actions/research/project-space-review" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("project_space_task_board_row=/actions/research/project-space-task-board-row" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("project_scaffold=/actions/research/project-scaffold" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("project_launch=/actions/research/project-launch" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("project_action_execute=/actions/research/project-action-execute" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("dataset_preview=/actions/research/dataset-preview" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("dataset_run=/actions/research/dataset-run" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("study_protocol_launch=/actions/research/study-protocol-launch" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("study_protocol_reproduction_package_action_execute=/actions/research/study-protocol-reproduction-package-action-execute" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("project_release_gate=/actions/research/project-release-gate" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("project_provenance_graph=/actions/research/project-provenance-graph" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("project_lifecycle_actions=3" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("dataset_actions=8" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("study_protocol_actions=11" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("project_space_actions=7" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("project_review_actions=8" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("research_search_export=/actions/research-search/export" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("llm_relay_request=/actions/research/llm-relay-request" in line for line in rp_api_action["lines"]), rp_api_action

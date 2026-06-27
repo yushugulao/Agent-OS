@@ -81,6 +81,20 @@ def action_kind(path: str) -> str:
         return "template"
     if path.endswith("/research/dataset"):
         return "dataset"
+    if path.endswith("/research/dataset-preview"):
+        return "dataset_preview"
+    if path.endswith("/research/dataset-visualization"):
+        return "dataset_visualization"
+    if path.endswith("/research/dataset-card"):
+        return "dataset_card"
+    if path.endswith("/research/dataset-answer"):
+        return "dataset_answer"
+    if path.endswith("/research/dataset-run"):
+        return "dataset_run"
+    if path.endswith("/research/dataset-run-comparison"):
+        return "dataset_run_comparison"
+    if path.endswith("/research/dataset-portfolio"):
+        return "dataset_portfolio"
     if path.endswith("/research/workbench"):
         return "workbench"
     if path.endswith("/research/workbench-advance"):
@@ -161,16 +175,46 @@ def action_kind(path: str) -> str:
         return "project_launch"
     if path.endswith("/research/project-action-execute"):
         return "project_action_execute"
+    if path.endswith("/research/sample-workbench"):
+        return "sample_workbench"
+    if path.endswith("/research/study-protocol"):
+        return "study_protocol"
+    if path.endswith("/research/run-study-protocol"):
+        return "study_protocol_run"
+    if path.endswith("/research/study-protocol-compliance"):
+        return "study_protocol_compliance"
+    if path.endswith("/research/study-protocol-bundle"):
+        return "study_protocol_bundle"
+    if path.endswith("/research/study-protocol-launch"):
+        return "study_protocol_launch"
+    if path.endswith("/research/study-protocol-launch-rerun"):
+        return "study_protocol_launch_rerun"
+    if path.endswith("/research/study-protocol-launch-comparison"):
+        return "study_protocol_launch_comparison"
+    if path.endswith("/research/study-protocol-reproduction-package"):
+        return "study_protocol_reproduction_package"
+    if path.endswith("/research/study-protocol-reproduction-package-review"):
+        return "study_protocol_reproduction_package_review"
+    if path.endswith("/research/study-protocol-reproduction-package-action-plan"):
+        return "study_protocol_reproduction_package_action_plan"
+    if path.endswith("/research/study-protocol-reproduction-package-action-execute"):
+        return "study_protocol_reproduction_package_action_execute"
+    if path.endswith("/research/source-portfolio"):
+        return "source_portfolio"
     if path.endswith("/research/project-space"):
         return "project_space"
     if path.endswith("/research/project-space-note"):
         return "project_space_note"
     if path.endswith("/research/project-space-action-item"):
         return "project_space_action_item"
+    if path.endswith("/research/project-space-review"):
+        return "project_space_review"
     if path.endswith("/research/project-space-answer"):
         return "project_space_answer"
     if path.endswith("/research/project-space-repair-execute"):
         return "project_space_repair_execute"
+    if path.endswith("/research/project-space-task-board-row"):
+        return "project_space_task_board_row"
     if path.endswith("/research/project-handoff-audit"):
         return "project_handoff_audit"
     if path.endswith("/research/project-release-gate"):
@@ -306,6 +350,20 @@ def action_plan_line(record: dict[str, object]) -> str:
         "project_action_execute",
     }:
         return f"plan={sequence};kind={kind};prepare=rp_usableproj;execute=rp_orch;collect=rp_usablelaunch;status=ready"
+    if kind in {
+        "dataset_preview",
+        "dataset_visualization",
+        "dataset_card",
+        "dataset_answer",
+        "dataset_run",
+        "dataset_run_comparison",
+        "dataset_portfolio",
+        "source_portfolio",
+        "sample_workbench",
+    }:
+        return f"plan={sequence};kind={kind};prepare=rp_usable;execute=rp_orch;collect=rp_usableds;status=ready"
+    if kind.startswith("study_protocol"):
+        return f"plan={sequence};kind={kind};prepare=rp_studyproto;execute=rp_orch;collect=rp_usablepack;status=ready"
     return f"plan={sequence};kind={kind};prepare=rp_host_action_queue;execute=rp_orch;collect=rp_web_bundle;status=ready"
 
 
@@ -432,6 +490,13 @@ def compact_seed_text(text: str) -> str:
         "studio_launch": {"title", "goal", "workbench_id", "workbench"},
         "research_run": {"run_id", "title", "question", "provider", "dataset_rows", "reference_entries", "workspace_files", "csv_file", "reference_file"},
         "dataset": {"title", "dataset_rows", "columns"},
+        "dataset_preview": {"dataset_id", "rows", "quality"},
+        "dataset_visualization": {"dataset_id", "chart", "x_field", "y_field", "group_field", "points"},
+        "dataset_card": {"dataset_id", "readiness", "warnings"},
+        "dataset_answer": {"dataset_id", "question", "answer"},
+        "dataset_run": {"dataset_id", "run_id", "provider_id", "question", "artifacts"},
+        "dataset_run_comparison": {"dataset_id", "left_run", "right_run", "decision"},
+        "dataset_portfolio": {"dataset_id", "filter", "datasets", "ready"},
         "library_source": {"citation_key", "tags"},
         "template": {"name", "question", "provider_id"},
         "workspace_inspect": {"root", "max_files"},
@@ -489,11 +554,26 @@ def compact_seed_text(text: str) -> str:
         "project_scaffold": {"template_id", "project_id", "title", "dataset_id", "library_source_id", "files", "workspace"},
         "project_launch": {"project_id", "scaffold_id", "workbench_id", "run_id", "provider_id", "question"},
         "project_action_execute": {"project_id", "action_id", "action_key", "provider_id", "max_steps", "result"},
+        "sample_workbench": {"workbench_id", "template_id", "dataset_id", "question"},
+        "study_protocol": {"protocol_id", "title", "question", "hypothesis", "dataset_tags", "source_tags"},
+        "study_protocol_run": {"protocol_id", "run_id", "provider_id"},
+        "study_protocol_compliance": {"run_id", "decision", "findings"},
+        "study_protocol_bundle": {"run_id", "bundle", "files"},
+        "study_protocol_launch": {"launch_id", "protocol_id", "run_id", "provider_id"},
+        "study_protocol_launch_rerun": {"launch_id", "rerun_id", "provider_id"},
+        "study_protocol_launch_comparison": {"launch_id", "left", "right", "changed_metrics"},
+        "study_protocol_reproduction_package": {"launch_id", "package_id", "files", "notebooks", "datasets"},
+        "study_protocol_reproduction_package_review": {"package_id", "decision", "reviewer"},
+        "study_protocol_reproduction_package_action_plan": {"package_id", "steps", "owner"},
+        "study_protocol_reproduction_package_action_execute": {"package_id", "steps_done", "result", "provider_id"},
+        "source_portfolio": {"source_id", "query", "sources", "reviewed"},
         "project_space": {"workbench_id", "project_id", "query"},
         "project_space_note": {"workbench_id", "kind", "title"},
         "project_space_action_item": {"workbench_id", "title", "status"},
+        "project_space_review": {"workbench_id", "project_id", "decision", "reviewer", "required_changes"},
         "project_space_answer": {"workbench_id", "question", "limit"},
         "project_space_repair_execute": {"workbench_id", "repair_id"},
+        "project_space_task_board_row": {"workbench_id", "row_id", "row_status", "row_note"},
         "project_handoff_audit": {"project_id", "scope", "decision"},
         "project_release_gate": {"project_id", "decision", "checks", "required_actions", "suggested_actions"},
         "project_snapshot": {"project_id", "snapshot_id", "files", "hash_records", "changes"},
