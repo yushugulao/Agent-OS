@@ -210,7 +210,7 @@ rp_orch: state_ok=1
 rp_orch: passed
 ```
 
-The `rp_api_catalog` state file is part of the same run. It records `host_api_routes=214`, `host_page_routes=15`, `api_group_count=14`, and `api_grouped_routes=214`, then maps representative Host API paths such as `/api/analysis-results`, `/api/experiment-scheduling`, `/api/workflow-runner`, `/api/usable-research-workbench-file-catalog`, and `/api/llm-proxy` to ordinary uCore state files. The route catalog also exposes Host page entries such as `/quickstart`, `/research-ops`, `/workbench-plan-queue`, and `/review-inbox`.
+The `rp_api_catalog` state file is part of the same run. It records `host_api_routes=214`, `host_page_routes=15`, `host_dynamic_page_prefixes=12`, `api_group_count=14`, and `api_grouped_routes=214`, then maps representative Host API paths such as `/api/analysis-results`, `/api/experiment-scheduling`, `/api/workflow-runner`, `/api/usable-research-workbench-file-catalog`, and `/api/llm-proxy` to ordinary uCore state files. The route catalog also exposes Host page entries such as `/quickstart`, `/research-ops`, `/workbench-plan-queue`, and `/review-inbox`, plus dynamic page prefixes such as `/runs/{run_id}`, `/workbench-files/{token}`, `/provenance/{id}`, and `/llm/{id}`.
 
 `rp_seed_orch` is exercised through the Host reader E2E path below. It uses the Host-action child-program set and reads the compact action seed from the ordinary `rp_host_action_seed` file inside the uCore image. The seeded image omits the standalone `rp_test_suite` executable to stay within the teaching file-system image capacity; `rp_compare_plain` publishes the current test count in `rp_agentcmp` before the final comparison checks.
 

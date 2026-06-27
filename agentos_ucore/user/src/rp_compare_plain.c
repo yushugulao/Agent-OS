@@ -1171,6 +1171,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_routes", "get_routes=29");
 	ok = ok && rp_file_contains("rp_web_routes", "host_page_routes=15");
 	ok = ok && rp_file_contains("rp_web_routes", "ucore_page_routes=15");
+	ok = ok && rp_file_contains("rp_web_routes", "host_dynamic_page_prefixes=12");
+	ok = ok && rp_file_contains("rp_web_routes", "ucore_dynamic_page_prefixes=12");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/quickstart");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research-ops");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/workbench-plan-queue");
@@ -1179,6 +1181,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research/workbench/{id}");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research/project/{id}/review");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/api-catalog");
+	ok = ok && rp_file_contains("rp_web_routes", "prefix=/runs/{run_id}");
+	ok = ok && rp_file_contains("rp_web_routes", "prefix=/workbench-files/{token}");
+	ok = ok && rp_file_contains("rp_web_routes", "prefix=/provenance/{id}");
+	ok = ok && rp_file_contains("rp_web_routes", "prefix=/llm/{id}");
 	ok = ok && rp_file_contains("rp_web_routes", "post_routes=123");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/research/studio-launch");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/host-workflow/stage-attempt");
@@ -1261,6 +1267,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_catalog", "host_api_routes=214");
 	ok = ok && rp_file_contains("rp_api_catalog", "host_action_routes=95");
 	ok = ok && rp_file_contains("rp_api_catalog", "host_page_routes=15");
+	ok = ok && rp_file_contains("rp_api_catalog", "host_dynamic_page_prefixes=12");
+	ok = ok && rp_file_contains("rp_api_catalog", "ucore_dynamic_page_prefixes=12");
 	ok = ok && rp_file_contains("rp_api_catalog", "api_group_count=14");
 	ok = ok && rp_file_contains("rp_api_catalog", "api_grouped_routes=214");
 	ok = ok && rp_file_contains("rp_api_catalog", "usable_research_api_routes=77");
