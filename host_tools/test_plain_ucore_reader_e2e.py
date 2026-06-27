@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=1036" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=138" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=1052" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=142" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -727,6 +727,16 @@ def main() -> int:
             assert any("review_dashboard=ready;sections=8;gates=6;plain_kernel=ordinary_files" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line and "backend_review=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("runbook_recovery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            rp_runbooks = read_json(base + "/api/state/rp_runbooks")
+            assert any("runbook_service_checks=16" in line for line in rp_runbooks["lines"]), rp_runbooks
+            assert any("runbook_templates=1" in line for line in rp_runbooks["lines"]), rp_runbooks
+            assert any("runbook_steps=7" in line for line in rp_runbooks["lines"]), rp_runbooks
+            assert any("incident_triages=1" in line for line in rp_runbooks["lines"]), rp_runbooks
+            assert any("runbook_executions=1" in line for line in rp_runbooks["lines"]), rp_runbooks
+            assert any("runbook_exports=1" in line for line in rp_runbooks["lines"]), rp_runbooks
+            assert any("worker_operation_records=6" in line for line in rp_runbooks["lines"]), rp_runbooks
+            assert any("agentos_adaptation=event_context,kernel_timeline,metadata_index,batch_recovery_tool" in line for line in rp_runbooks["lines"]), rp_runbooks
             rp_consistency = read_json(base + "/api/state/rp_consistency")
             assert any("checks=420" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("state_catalog_checks=12" in line for line in rp_consistency["lines"]), rp_consistency
@@ -1212,6 +1222,8 @@ def main() -> int:
             assert "fair_package" in services_html
             assert "query_answer" in services_html
             assert "worker_heartbeat" in services_html
+            assert "Runbook Steps" in services_html
+            assert "runbook-template:align-oom-recovery" in services_html
             delivery_html = read_text(base + "/delivery.html")
             assert "Delivery Package" in delivery_html
             assert "Delivery Files" in delivery_html

@@ -70,6 +70,7 @@ user/src/rp_delta.c
 user/src/rp_release.c
 user/src/rp_dossier.c
 user/src/rp_service_surface.c
+user/src/rp_startup_doctor.c
 user/src/rp_notebook_export.c
 user/src/rp_metrics.c
 user/src/rp_backend.c
@@ -77,6 +78,7 @@ user/src/rp_consistency.c
 user/src/rp_ui_export.c
 user/src/rp_web_export.c
 user/src/rp_review_dashboard.c
+user/src/rp_runbooks.c
 user/src/rp_test_suite.c
 user/src/rp_compare_plain.c
 ```
@@ -262,6 +264,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_dossier`
 - `rp_reviewops`
 - `rp_review_dashboard`
+- `rp_runbooks`
 - `rp_submit`
 - `rp_sreg`
 - `rp_ethics`
@@ -318,7 +321,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_review_pack`
 - `rp_agentcmp`
 
-The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 1036-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
+The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 1052-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
 
 Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_agentcmp` after all children exit, then prints `state_ok=1`.
 
@@ -361,7 +364,7 @@ rp_plain: passed
 Expected orchestrator output:
 
 ```text
-rp_orch: start programs=44
+rp_orch: start programs=45
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_state_catalog: keys=573 nonzero=70 zero=503 represented=573 checks=12 status=ready
 rp_object_store: records=8 status=ready
@@ -405,8 +408,9 @@ rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 lab_governance=26 pr
 rp_ui_export: pages=5 run=RUN-042 custom_runs=3 compare=ready status=ready
 rp_web_export: routes=74 api_payloads=14 actions=57 bundle=ready status=ready
 rp_review_dashboard: sections=8 gates=6 review_pack=host-materialized status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=44 state_files=172 acks=44 tools=138 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
-rp_orch: programs_ok=44 programs_total=44
+rp_runbooks: templates=1 steps=7 incidents=1 executions=1 exports=1 status=ready
+rp_compare_plain: plain_kernel=passed objects=500 programs=45 state_files=173 acks=45 tools=142 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
+rp_orch: programs_ok=45 programs_total=45
 rp_orch: state_ok=1
 rp_orch: passed
 ```
@@ -427,7 +431,7 @@ The two `diff` commands should print no output. The `grep` command confirms the 
 
 ## Host Reader
 
-The `host_tools/plain_ucore_reader.py` utility renders ordinary `rp_*` state files into host-viewable HTML pages and API JSON files. It consumes the `host_plain_ucore_v2` reader contract written by `rp_web_bundle`. The generated pages use a sidebar, page-level summary cards, research-output summaries, report source maps, artifact source maps, review source maps, delivery source maps, a delivery package page, a workflow runner page, a research workbench page, a research Studio page, a project page, a project delivery review page, a data pipeline page with ingest, snapshot, preview, quality, transform, collection, and manifest verification tables, workflow execution view tables, workflow control view tables, workflow evidence link tables, Agent detail summaries, Agent roster and decision-flow tables, evidence-package summaries, evidence detail summaries, review dashboard sections and gates, service operation records, claim/provenance/protocol tables, comparison summaries, compare metric summaries, operations report narrative tables, operations source-file tables, LLM Relay flow/request/response/quality tables, plain-kernel signal tables, state tables, Run/Workflow/Workbench/Studio/Project/Data/Compare/Review/Delivery/LLM Host action trace tables, action-output link and detail tables, action-impact tables, action-delta tables, host-action history, and a batch-action editor for running the same research flow through plain uCore.
+The `host_tools/plain_ucore_reader.py` utility renders ordinary `rp_*` state files into host-viewable HTML pages and API JSON files. It consumes the `host_plain_ucore_v2` reader contract written by `rp_web_bundle`. The generated pages use a sidebar, page-level summary cards, research-output summaries, report source maps, artifact source maps, review source maps, delivery source maps, a delivery package page, a workflow runner page, a research workbench page, a research Studio page, a project page, a project delivery review page, a data pipeline page with ingest, snapshot, preview, quality, transform, collection, and manifest verification tables, workflow execution view tables, workflow control view tables, workflow evidence link tables, Agent detail summaries, Agent roster and decision-flow tables, evidence-package summaries, evidence detail summaries, review dashboard sections and gates, service operation records, runbook service records, claim/provenance/protocol tables, comparison summaries, compare metric summaries, operations report narrative tables, operations source-file tables, LLM Relay flow/request/response/quality tables, plain-kernel signal tables, state tables, Run/Workflow/Workbench/Studio/Project/Data/Compare/Review/Delivery/LLM Host action trace tables, action-output link and detail tables, action-impact tables, action-delta tables, host-action history, and a batch-action editor for running the same research flow through plain uCore.
 
 ```bash
 python host_tools/plain_ucore_reader.py --state-dir path/to/rp-state --out-dir runtime/plain_ucore_reader

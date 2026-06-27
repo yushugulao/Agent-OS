@@ -29,7 +29,7 @@ PAGE_SPECS = [
     ("artifacts.html", "Artifacts", "rp_api_artifacts", ["rp_artifact", "rp_artifact_manifest", "rp_package"]),
     ("delivery.html", "Delivery", "rp_package", ["rp_nbexec", "rp_uresrun", "rp_artifact_manifest", "rp_review_pack"]),
     ("data.html", "Data", "rp_api_data", ["rp_input", "rp_ingest_files", "rp_dataset_snapshot", "rp_data_preview", "rp_data_quality", "rp_data_transform", "rp_dataset_collection"]),
-    ("services.html", "Services", "rp_api_bio", ["rp_api_labres", "rp_api_pub", "rp_api_know", "rp_api_runtime", "rp_bioop", "rp_labresop", "rp_pubop", "rp_knowop", "rp_runop"]),
+    ("services.html", "Services", "rp_api_bio", ["rp_api_labres", "rp_api_pub", "rp_api_know", "rp_api_runtime", "rp_bioop", "rp_labresop", "rp_pubop", "rp_knowop", "rp_runop", "rp_runbooks"]),
     ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets"]),
     ("actions.html", "Actions", "rp_api_action", ["rp_actionio", "rp_host_run_result", "rp_web_routes", "rp_web_bundle"]),
 ]
@@ -1144,6 +1144,7 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Publication Ops", metric_value(state, [("rp_pubop", "ops")]), "rp_pubop"),
         ("Knowledge Ops", metric_value(state, [("rp_knowop", "ops")]), "rp_knowop"),
         ("Runtime Ops", metric_value(state, [("rp_runop", "ops")]), "rp_runop"),
+        ("Runbook Steps", metric_value(state, [("rp_runbooks", "runbook_steps")]), "rp_runbooks"),
         ("Service Files", metric_value(state, [("rp_web_bundle", "research_service_files"), ("rp_api_compare", "bio_service_files")]), "rp_web_bundle"),
     ]
     review_items = [
