@@ -41,6 +41,7 @@ PAGE_SPECS = [
     ("experiment-campaigns.html", "Experiment Campaigns", "rp_campaign", ["rp_trials", "rp_camp_rank", "rp_resreview", "rp_agentcmp", "rp_review_dashboard"]),
     ("statistical-design.html", "Statistical Design", "rp_stdesign", ["rp_power", "rp_random", "rp_blind", "rp_streview", "rp_agentcmp", "rp_review_dashboard"]),
     ("model-registry.html", "Model Registry", "rp_modelreg", ["rp_modelver", "rp_modeleval", "rp_modeldep", "rp_modelserve", "rp_agentcmp", "rp_review_dashboard"]),
+    ("systematic-review.html", "Systematic Review", "rp_sysreview", ["rp_syssearch", "rp_sysscreen", "rp_sysextract", "rp_syssynth", "rp_sysprisma", "rp_agentcmp", "rp_review_dashboard"]),
     ("release-dossier.html", "Release Dossier", "rp_reldossier", ["rp_reldsec", "rp_relattest", "rp_relpack", "rp_agentcmp", "rp_review_dashboard"]),
     ("mature.html", "Mature Platforms", "rp_mature", ["rp_mature_refs", "rp_mature_map", "rp_mature_checks", "rp_agentcmp", "rp_review_dashboard"]),
     ("provenance.html", "Provenance", "rp_prov_view", ["rp_prov_edges", "rp_evidence_packet", "rp_timeline_view", "rp_agentcmp", "rp_review_dashboard"]),
@@ -1150,6 +1151,7 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Study Protocol Checks", metric_value(state, [("rp_agentcmp", "study_protocol_checks"), ("rp_studyproto", "study_protocol_checks")]), "rp_studyproto"),
         ("Integrity Checks", metric_value(state, [("rp_agentcmp", "integrity_plane_checks"), ("rp_integrity", "integrity_checks")]), "rp_integrity"),
         ("Publication Checks", metric_value(state, [("rp_agentcmp", "publication_checks"), ("rp_publication", "publication_checks")]), "rp_publication"),
+        ("Systematic Review Checks", metric_value(state, [("rp_agentcmp", "systematic_review_checks"), ("rp_sysreview", "systematic_review_checks")]), "rp_sysreview"),
         ("Mature Capability", metric_value(state, [("rp_agentcmp", "mature_capability_checks"), ("rp_mature", "capability_checks")]), "rp_mature"),
     ]
     llm_items = [
@@ -1243,6 +1245,16 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Decisions", metric_value(state, [("rp_publication", "decisions")]), "rp_publication"),
         ("Status", metric_value(state, [("rp_publication", "status")]), "rp_publication"),
     ]
+    systematic_review_items = [
+        ("Checks", metric_value(state, [("rp_sysreview", "systematic_review_checks"), ("rp_agentcmp", "systematic_review_checks")]), "rp_sysreview"),
+        ("Protocol", metric_value(state, [("rp_sysreview", "protocol")]), "rp_sysreview"),
+        ("Search Results", metric_value(state, [("rp_syssearch", "results")]), "rp_syssearch"),
+        ("Screened", metric_value(state, [("rp_sysscreen", "screening_decisions")]), "rp_sysscreen"),
+        ("Included", metric_value(state, [("rp_sysprisma", "included"), ("rp_sysscreen", "full_text_included")]), "rp_sysprisma"),
+        ("Extractions", metric_value(state, [("rp_sysextract", "extractions")]), "rp_sysextract"),
+        ("Risk of Bias", metric_value(state, [("rp_sysextract", "risk_of_bias")]), "rp_sysextract"),
+        ("PRISMA", metric_value(state, [("rp_sysprisma", "flow")]), "rp_sysprisma"),
+    ]
     mature_items = [
         ("Profiles", metric_value(state, [("rp_mature", "reference_platforms"), ("rp_mature_refs", "profiles")]), "rp_mature"),
         ("Mappings", metric_value(state, [("rp_mature", "capability_mappings"), ("rp_mature_map", "mappings")]), "rp_mature"),
@@ -1301,6 +1313,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Coherence Plane", coherence_items)
     if file_name == "publication.html":
         return render_summary_panel("Publication Workflow", publication_items)
+    if file_name == "systematic-review.html":
+        return render_summary_panel("Systematic Review", systematic_review_items)
     if file_name == "mature.html":
         return render_summary_panel("Mature Platform Mapping", mature_items)
     if file_name == "provenance.html":
@@ -1343,6 +1357,7 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Experiment Campaign Checks", metric_value(state, [("rp_agentcmp", "experiment_campaign_checks"), ("rp_campaign", "campaign_checks")]), "rp_campaign"),
         ("Statistical Design Checks", metric_value(state, [("rp_agentcmp", "statistical_design_checks"), ("rp_stdesign", "statistical_design_checks")]), "rp_stdesign"),
         ("Model Registry Checks", metric_value(state, [("rp_agentcmp", "model_registry_service_checks"), ("rp_modelreg", "model_registry_service_checks")]), "rp_modelreg"),
+        ("Systematic Review Checks", metric_value(state, [("rp_agentcmp", "systematic_review_checks"), ("rp_sysreview", "systematic_review_checks")]), "rp_sysreview"),
         ("Release Dossier Checks", metric_value(state, [("rp_agentcmp", "release_dossier_checks"), ("rp_reldossier", "release_dossier_checks")]), "rp_reldossier"),
         ("Mature Capability", metric_value(state, [("rp_agentcmp", "mature_capability_checks"), ("rp_mature", "capability_checks")]), "rp_mature"),
         ("Provenance View", metric_value(state, [("rp_agentcmp", "provenance_view_checks"), ("rp_prov_view", "provenance_view_checks")]), "rp_prov_view"),
@@ -3721,6 +3736,13 @@ def render_overview(
             ("Evaluation", metric_value(state, [("rp_modeleval", "status")]), "rp_modeleval"),
             ("Deployment", metric_value(state, [("rp_modeldep", "status")]), "rp_modeldep"),
             ("Serving", metric_value(state, [("rp_modelserve", "status")]), "rp_modelserve"),
+        ],
+        "systematic-review.html": [
+            ("Checks", metric_value(state, [("rp_sysreview", "systematic_review_checks")]), "rp_sysreview"),
+            ("Protocol", metric_value(state, [("rp_sysreview", "protocol")]), "rp_sysreview"),
+            ("Search Results", metric_value(state, [("rp_syssearch", "results")]), "rp_syssearch"),
+            ("Screening", metric_value(state, [("rp_sysscreen", "screening_decisions")]), "rp_sysscreen"),
+            ("Included", metric_value(state, [("rp_sysprisma", "included")]), "rp_sysprisma"),
         ],
         "mature.html": [
             ("Profiles", metric_value(state, [("rp_mature", "reference_platforms"), ("rp_mature_refs", "profiles")]), "rp_mature"),

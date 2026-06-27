@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=32
+reader_views=33
 reader_actions=57
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
@@ -89,6 +89,7 @@ real_task_page=rp_realtask;dataset=palmer-penguins;rows=344;answer_audit=pass;st
 experiment_campaigns_page=rp_campaign;campaigns=1;trials=4;best_trial=04;status=ready
 statistical_design_page=rp_stdesign;designs=1;power=underpowered;randomization=balanced;status=ready
 model_registry_page=rp_modelreg;models=1;versions=1;evaluations=1;deployments=1;status=ready
+systematic_review_page=rp_sysreview;protocols=1;screening=9;included=3;status=ready
 release_dossier_page=rp_reldossier;sections=7;decision=ready_for_review;status=ready
 mature_capability_page=rp_mature;profiles=6;mappings=6;checks=72;status=ready
 provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=ready
@@ -281,8 +282,8 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=2120\n"
-        "tool_events=268\n"
+        "test_cases=2224\n"
+        "tool_events=276\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=4;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
@@ -300,6 +301,7 @@ status=ready
         "experiment_campaign_checks=108;campaigns=1;trials=4;best_trial=04;result_review=accept_candidate;status=ready\n"
         "statistical_design_checks=120;designs=1;power=underpowered;randomization=balanced;blinding=ok;stat_result=approved_with_sample_size_note;status=ready\n"
         "model_registry_service_checks=96;models=1;versions=1;evaluations=1;deployments=1;serving_checks=1;agentos_replacements=4;status=ready\n"
+        "systematic_review_checks=104;protocols=1;searches=1;screening=9;extractions=3;bias=3;prisma=1;agentos_replacements=4;status=ready\n"
         "release_dossier_checks=112;sections=7;evidence_ids=18;decision=ready_for_review;status=ready\n"
         "mature_capability_checks=72;profiles=6;mappings=6;checks=72;platforms=Galaxy,AiiDA,DVC,MLflow,Nextflow,Snakemake;agentos_replacements=5;status=ready\n"
         "provenance_view_checks=64;timeline_views=4;subgraphs=3;packets=4;agentos_replacements=4;status=ready\n"
@@ -347,6 +349,58 @@ status=ready
         "retrieved=calculation-retrieved:run042-qc:results-json;path=results.json;kind=retrieved_output;checksum=results042;status=available\n"
         "retrieved=calculation-retrieved:run042-qc:provenance-json;path=provenance.json;kind=provenance_manifest;checksum=prov042;status=available\n"
         "output_snapshot=dataset-snapshot:calculation:run042-qc;rows=3;files=3;status=ready\n"
+        "status=ready\n"
+    ),
+    "rp_sysreview": (
+        "service=systematic-review\n"
+        "systematic_review_checks=104\n"
+        "protocol=systematic-review:agent-os-science\n"
+        "title=Agent-OS support for scientific Agent workflows\n"
+        "research_question=Which platform mechanisms improve reliability, provenance, and reproducibility in scientific Agent workflows?\n"
+        "population=Scientific computing and AI-for-science workflows\n"
+        "intervention=Agent runtime support and kernel-managed context\n"
+        "comparator=plain user-space workflow orchestration\n"
+        "outcome=reproducibility,provenance_quality,failure_recovery,report_traceability\n"
+        "owner=wang\n"
+        "status=registered\n"
+    ),
+    "rp_syssearch": (
+        "strategy=literature-search:agent-os-science:local\n"
+        "protocol=systematic-review:agent-os-science\n"
+        "source=local-literature-library\n"
+        "query=agent workflow provenance reproducibility kernel\n"
+        "results=9\n"
+        "status=ready\n"
+    ),
+    "rp_sysscreen": (
+        "screening_decisions=9\n"
+        "title_abstract_included=3\n"
+        "full_text_included=3\n"
+        "excluded=6\n"
+        "decision=paper:agent-kernel-context;stage=full_text;result=include;reason=kernel_context_support\n"
+        "status=ready\n"
+    ),
+    "rp_sysextract": (
+        "extractions=3\n"
+        "risk_of_bias=3\n"
+        "low=2\n"
+        "some_concerns=1\n"
+        "record=paper:agent-kernel-context;mechanism=context_path;evidence=systems_demo;outcome=traceability\n"
+        "status=complete\n"
+    ),
+    "rp_syssynth": (
+        "synthesis=evidence-synthesis:agent-os-science\n"
+        "included_papers=3\n"
+        "conclusion=kernel-managed context and accountable tool calls improve traceability\n"
+        "confidence=moderate\n"
+        "status=ready\n"
+    ),
+    "rp_sysprisma": (
+        "flow=prisma-flow:agent-os-science\n"
+        "identified=9\n"
+        "screened=9\n"
+        "excluded=6\n"
+        "included=3\n"
         "status=ready\n"
     ),
     "rp_calc_parse": (
@@ -1014,7 +1068,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 32, summary
+        assert summary["pages"] == 33, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -1033,6 +1087,7 @@ def main() -> int:
         assert (out_dir / "experiment-campaigns.html").exists()
         assert (out_dir / "statistical-design.html").exists()
         assert (out_dir / "model-registry.html").exists()
+        assert (out_dir / "systematic-review.html").exists()
         assert (out_dir / "release-dossier.html").exists()
         assert (out_dir / "mature.html").exists()
         assert (out_dir / "provenance.html").exists()
@@ -1269,6 +1324,13 @@ def main() -> int:
         assert "model-evaluation:agent-triage-template:v1:RUN-042" in model_registry_html
         assert "model-deployment:agent-triage-template:v1:template" in model_registry_html
         assert "offline provider ready" in model_registry_html
+        systematic_review_html = (out_dir / "systematic-review.html").read_text(encoding="utf-8")
+        assert "Systematic Review" in systematic_review_html
+        assert "systematic-review:agent-os-science" in systematic_review_html
+        assert "Screening" in systematic_review_html
+        assert "9" in systematic_review_html
+        assert "moderate" in systematic_review_html
+        assert "prisma-flow:agent-os-science" in systematic_review_html
         release_dossier_html = (out_dir / "release-dossier.html").read_text(encoding="utf-8")
         assert "Release Dossier" in release_dossier_html
         assert "release-dossier:RUN-042:final-review" in release_dossier_html

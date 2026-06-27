@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=2120" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=268" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=2224" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=276" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -740,6 +740,7 @@ def main() -> int:
             assert any("experiment_campaign_checks=108" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("statistical_design_checks=120" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("model_registry_service_checks=96" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("systematic_review_checks=104" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("release_dossier_checks=112" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("mature_capability_checks=72" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_view_checks=64" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -772,6 +773,22 @@ def main() -> int:
             rp_modelserve = read_json(base + "/api/state/rp_modelserve")
             assert any("latency_ms=12" in line for line in rp_modelserve["lines"]), rp_modelserve
             assert any("message=offline provider ready" in line for line in rp_modelserve["lines"]), rp_modelserve
+            rp_sysreview = read_json(base + "/api/state/rp_sysreview")
+            assert any("systematic_review_checks=104" in line for line in rp_sysreview["lines"]), rp_sysreview
+            assert any("protocol=systematic-review:agent-os-science" in line for line in rp_sysreview["lines"]), rp_sysreview
+            rp_syssearch = read_json(base + "/api/state/rp_syssearch")
+            assert any("results=9" in line for line in rp_syssearch["lines"]), rp_syssearch
+            rp_sysscreen = read_json(base + "/api/state/rp_sysscreen")
+            assert any("screening_decisions=9" in line for line in rp_sysscreen["lines"]), rp_sysscreen
+            assert any("full_text_included=3" in line for line in rp_sysscreen["lines"]), rp_sysscreen
+            rp_sysextract = read_json(base + "/api/state/rp_sysextract")
+            assert any("extractions=3" in line for line in rp_sysextract["lines"]), rp_sysextract
+            assert any("risk_of_bias=3" in line for line in rp_sysextract["lines"]), rp_sysextract
+            rp_syssynth = read_json(base + "/api/state/rp_syssynth")
+            assert any("confidence=moderate" in line for line in rp_syssynth["lines"]), rp_syssynth
+            rp_sysprisma = read_json(base + "/api/state/rp_sysprisma")
+            assert any("flow=prisma-flow:agent-os-science" in line for line in rp_sysprisma["lines"]), rp_sysprisma
+            assert any("included=3" in line for line in rp_sysprisma["lines"]), rp_sysprisma
             rp_reldossier = read_json(base + "/api/state/rp_reldossier")
             assert any("release_dossier_checks=112" in line for line in rp_reldossier["lines"]), rp_reldossier
             assert any("dossier=release-dossier:RUN-042:final-review" in line for line in rp_reldossier["lines"]), rp_reldossier
@@ -1491,6 +1508,13 @@ def main() -> int:
             assert "model-evaluation:agent-triage-template:v1:RUN-042" in model_registry_html
             assert "model-deployment:agent-triage-template:v1:template" in model_registry_html
             assert "offline provider ready" in model_registry_html
+            systematic_review_html = read_text(base + "/systematic-review.html")
+            assert "Systematic Review" in systematic_review_html
+            assert "systematic-review:agent-os-science" in systematic_review_html
+            assert "Screening" in systematic_review_html
+            assert "9" in systematic_review_html
+            assert "moderate" in systematic_review_html
+            assert "prisma-flow:agent-os-science" in systematic_review_html
             release_dossier_html = read_text(base + "/release-dossier.html")
             assert "Release Dossier" in release_dossier_html
             assert "release-dossier:RUN-042:final-review" in release_dossier_html

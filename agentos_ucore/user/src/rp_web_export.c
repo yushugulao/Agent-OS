@@ -1119,7 +1119,7 @@ int main(void)
 			   "reader_contract=host_plain_ucore_v2\n"
 			   "reader_contract_version=2\n"
 			   "reader_ready=1\n"
-			   "reader_views=32\n"
+			   "reader_views=33\n"
 			   "calculations_page=rp_calculation;jobs=1;retrieved=3;parser_results=1;status=ready\n"
 			   "real_task_page=rp_realtask;dataset=palmer-penguins;rows=344;answer_audit=pass;status=ready\n"
 			   "experiment_campaigns_page=rp_campaign;campaigns=1;trials=4;best_trial=04;status=ready\n"

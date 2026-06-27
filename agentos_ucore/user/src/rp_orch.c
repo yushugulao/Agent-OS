@@ -50,6 +50,7 @@ static const char *PROGRAMS[] = {
 	"rp_web_export",
 	"rp_revdash",
 	"rp_modelreg",
+	"rp_sysreview",
 	"rp_publication",
 	"rp_runbooks",
 	"rp_projectrel",
