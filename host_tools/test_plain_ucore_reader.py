@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=33
+reader_views=34
 reader_actions=57
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
@@ -90,6 +90,7 @@ experiment_campaigns_page=rp_campaign;campaigns=1;trials=4;best_trial=04;status=
 statistical_design_page=rp_stdesign;designs=1;power=underpowered;randomization=balanced;status=ready
 model_registry_page=rp_modelreg;models=1;versions=1;evaluations=1;deployments=1;status=ready
 systematic_review_page=rp_sysreview;protocols=1;screening=9;included=3;status=ready
+experiment_schedule_page=rp_expsched;schedules=1;tasks=3;bookings=4;conflicts=1;status=ready
 release_dossier_page=rp_reldossier;sections=7;decision=ready_for_review;status=ready
 mature_capability_page=rp_mature;profiles=6;mappings=6;checks=72;status=ready
 provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=ready
@@ -282,8 +283,8 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=2224\n"
-        "tool_events=276\n"
+        "test_cases=2312\n"
+        "tool_events=284\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=4;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
@@ -302,6 +303,7 @@ status=ready
         "statistical_design_checks=120;designs=1;power=underpowered;randomization=balanced;blinding=ok;stat_result=approved_with_sample_size_note;status=ready\n"
         "model_registry_service_checks=96;models=1;versions=1;evaluations=1;deployments=1;serving_checks=1;agentos_replacements=4;status=ready\n"
         "systematic_review_checks=104;protocols=1;searches=1;screening=9;extractions=3;bias=3;prisma=1;agentos_replacements=4;status=ready\n"
+        "experiment_scheduling_checks=88;schedules=1;tasks=3;bookings=4;conflicts=1;executions=2;charts=4;status=ready\n"
         "release_dossier_checks=112;sections=7;evidence_ids=18;decision=ready_for_review;status=ready\n"
         "mature_capability_checks=72;profiles=6;mappings=6;checks=72;platforms=Galaxy,AiiDA,DVC,MLflow,Nextflow,Snakemake;agentos_replacements=5;status=ready\n"
         "provenance_view_checks=64;timeline_views=4;subgraphs=3;packets=4;agentos_replacements=4;status=ready\n"
@@ -401,6 +403,44 @@ status=ready
         "screened=9\n"
         "excluded=6\n"
         "included=3\n"
+        "status=ready\n"
+    ),
+    "rp_expsched": (
+        "service=experiment-scheduling\n"
+        "experiment_scheduling_checks=88\n"
+        "schedules=1\n"
+        "schedule=schedule:RUN-042:lab-execution\n"
+        "project=lab-gene-x\n"
+        "run_id=RUN-042\n"
+        "title=RUN-042 controlled lab execution schedule\n"
+        "owner=lab-ops\n"
+        "status=approved\n"
+    ),
+    "rp_schedtask": (
+        "tasks=3\n"
+        "task=schedule-task:RUN-042:verify-resources;type=resource_check;target=sop-execution:RUN-042:library-prep;assignee=auditor;status=planned;evidence=eln-record:RUN-042:library-prep,sop-execution:RUN-042:library-prep\n"
+        "task=schedule-task:RUN-042:library-prep;type=lab_operation;target=lab-op:RUN-042:library-prep;assignee=lab-tech;dependency=schedule-task:RUN-042:verify-resources;status=planned;evidence=lab-op:RUN-042:library-prep,artifact:report.md\n"
+        "task=schedule-task:RUN-042:sop-review;type=sop_review;target=sop-deviation:RUN-042:library-prep:03;assignee=qa-lead;dependency=schedule-task:RUN-042:library-prep;status=planned;evidence=sop-deviation:RUN-042:library-prep:03,eln-check:RUN-042:library-prep:seed\n"
+        "status=ready\n"
+    ),
+    "rp_schedbook": (
+        "bookings=4\n"
+        "booking=schedule-booking:RUN-042:seq-library;schedule=schedule:RUN-042:lab-execution;resource=instrument:seq-01;task=schedule-task:RUN-042:library-prep;start=100;end=160;status=reserved\n"
+        "booking=schedule-booking:RUN-042:lab-tech;schedule=schedule:RUN-042:lab-execution;resource=person:lab-tech;task=schedule-task:RUN-042:library-prep;start=90;end=170;status=reserved\n"
+        "booking=schedule-booking:RUN-042:qa-reviewer;schedule=schedule:RUN-042:lab-execution;resource=person:qa-lead;task=schedule-task:RUN-042:sop-review;start=170;end=200;status=reserved\n"
+        "booking=schedule-booking:RUN-042:seq-overlap-demo;schedule=schedule:RUN-042:lab-execution;resource=instrument:seq-01;task=schedule-task:RUN-042:sop-review;start=130;end=150;status=conflict\n"
+        "conflicts=1\n"
+        "status=ready\n"
+    ),
+    "rp_schedconf": (
+        "conflicts=1\n"
+        "conflict=schedule-conflict:RUN-042:seq-01-overlap;schedule=schedule:RUN-042:lab-execution;booking=schedule-booking:RUN-042:seq-overlap-demo;resource=instrument:seq-01;severity=warning;status=detected;description=overlapping instrument request;resolution=reschedule_or_second_instrument\n"
+        "status=ready\n"
+    ),
+    "rp_schedexec": (
+        "execution_records=2\n"
+        "execution=schedule-exec:RUN-042:verify-resources;task=schedule-task:RUN-042:verify-resources;status=completed;evidence=rp_ressched,rp_labresop;notes=resources_ready\n"
+        "execution=schedule-exec:RUN-042:library-prep;task=schedule-task:RUN-042:library-prep;status=completed;evidence=rp_stage_log,rp_artifact;notes=operation_completed_after_retry\n"
         "status=ready\n"
     ),
     "rp_calc_parse": (
@@ -1068,7 +1108,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 33, summary
+        assert summary["pages"] == 34, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -1088,6 +1128,7 @@ def main() -> int:
         assert (out_dir / "statistical-design.html").exists()
         assert (out_dir / "model-registry.html").exists()
         assert (out_dir / "systematic-review.html").exists()
+        assert (out_dir / "experiment-schedule.html").exists()
         assert (out_dir / "release-dossier.html").exists()
         assert (out_dir / "mature.html").exists()
         assert (out_dir / "provenance.html").exists()
@@ -1331,6 +1372,13 @@ def main() -> int:
         assert "9" in systematic_review_html
         assert "moderate" in systematic_review_html
         assert "prisma-flow:agent-os-science" in systematic_review_html
+        experiment_schedule_html = (out_dir / "experiment-schedule.html").read_text(encoding="utf-8")
+        assert "Experiment Schedule" in experiment_schedule_html
+        assert "schedule:RUN-042:lab-execution" in experiment_schedule_html
+        assert "schedule-task:RUN-042:library-prep" in experiment_schedule_html
+        assert "schedule-booking:RUN-042:seq-library" in experiment_schedule_html
+        assert "schedule-conflict:RUN-042:seq-01-overlap" in experiment_schedule_html
+        assert "schedule-exec:RUN-042:library-prep" in experiment_schedule_html
         release_dossier_html = (out_dir / "release-dossier.html").read_text(encoding="utf-8")
         assert "Release Dossier" in release_dossier_html
         assert "release-dossier:RUN-042:final-review" in release_dossier_html

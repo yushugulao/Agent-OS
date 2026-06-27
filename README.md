@@ -89,6 +89,7 @@ user/src/rp_studyproto.c
 user/src/rp_stdesign.c
 user/src/rp_modelreg.c
 user/src/rp_sysreview.c
+user/src/rp_expsched.c
 user/src/rp_opsboard.c
 user/src/rp_reviewboard.c
 user/src/rp_controlplane.c
@@ -384,7 +385,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_review_pack`
 - `rp_agentcmp`
 
-The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 2224-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
+The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 2312-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
 
 Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_agentcmp` after all children exit, then prints `state_ok=1`.
 
@@ -427,7 +428,7 @@ rp_plain: passed
 Expected orchestrator output:
 
 ```text
-rp_orch: start programs=63
+rp_orch: start programs=64
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_state_catalog: keys=573 nonzero=70 zero=503 represented=573 checks=12 status=ready
 rp_object_store: records=8 status=ready
@@ -476,6 +477,7 @@ rp_web_export: routes=74 api_payloads=14 actions=57 bundle=ready status=ready
 rp_review_dashboard: sections=8 gates=6 review_pack=host-materialized status=ready
 rp_modelreg: models=1 versions=1 evaluations=1 deployments=1 serving=1 checks=96 status=ready
 rp_sysreview: protocols=1 searches=1 screening=9 included=3 extractions=3 prisma=1 checks=104 status=ready
+rp_expsched: schedules=1 tasks=3 bookings=4 conflicts=1 executions=2 checks=88 status=ready
 rp_publication: targets=2 submissions=2 reviews=2 responses=2 items=4 checks=48 status=ready
 rp_runbooks: templates=1 steps=7 incidents=1 executions=1 exports=1 status=ready
 rp_projectrel: checks=18 release=ready reproducibility=passed intake=accepted status=ready
@@ -490,8 +492,8 @@ rp_mature: profiles=6 mappings=6 checks=72 errors=0 status=ready
 rp_prov_view: timelines=4 subgraphs=3 packets=4 checks=64 errors=0 status=ready
 rp_prov_query: specs=3 templates=1 executions=3 comparisons=1 packets=1 checks=72 errors=0 status=ready
 rp_reldossier: sections=7 evidence=18 checks=112 decision=ready_for_review status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=63 state_files=227 acks=63 tools=276 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 model_registry=96 systematic_review=104 runbook_service=16 project_delivery=18 study_protocol=20 statistical_design=120 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 publication=48 calculation=84 real_task=96 campaign=108 release_dossier=112 mature=72 provenance=64 provenance_query=72 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
-rp_orch: programs_ok=63 programs_total=63
+rp_compare_plain: plain_kernel=passed objects=500 programs=64 state_files=232 acks=64 tools=284 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 model_registry=96 systematic_review=104 experiment_scheduling=88 runbook_service=16 project_delivery=18 study_protocol=20 statistical_design=120 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 publication=48 calculation=84 real_task=96 campaign=108 release_dossier=112 mature=72 provenance=64 provenance_query=72 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
+rp_orch: programs_ok=64 programs_total=64
 rp_orch: state_ok=1
 rp_orch: passed
 ```

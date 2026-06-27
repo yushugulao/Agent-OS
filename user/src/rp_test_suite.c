@@ -1509,7 +1509,7 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "reader_contract=host_plain_ucore_v2");
 	ok = ok && require_file_token("rp_web_bundle", "reader_contract_version=2");
 	ok = ok && require_file_token("rp_web_bundle", "reader_ready=1");
-	ok = ok && require_file_token("rp_web_bundle", "reader_views=33");
+	ok = ok && require_file_token("rp_web_bundle", "reader_views=34");
 	ok = ok && require_file_token("rp_web_bundle", "reader_actions=57");
 	ok = ok && require_file_token("rp_web_bundle", "reader_payload_files=rp_api_home");
 	ok = ok && require_file_token("rp_web_bundle", "reader_refresh_files=rp_web_routes");
@@ -1569,10 +1569,10 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "backend_review=1");
 	ok = ok && require_file_token("rp_agentcmp", "review_handoff_checks=13;review_sections=8;review_gates=6");
 	ok = ok && require_file_token("rp_agentcmp", "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1");
-	ok = ok && require_file_token("rp_agentcmp", "programs=63");
-	ok = ok && require_file_token("rp_agentcmp", "state_files=227");
+	ok = ok && require_file_token("rp_agentcmp", "programs=64");
+	ok = ok && require_file_token("rp_agentcmp", "state_files=232");
 	ok = ok && require_file_token("rp_agentcmp", "advanced_surface_objects=5");
-	ok = ok && require_file_token("rp_agentcmp", "test_cases=2224");
+	ok = ok && require_file_token("rp_agentcmp", "test_cases=2312");
 	ok = ok && require_file_token("rp_agentcmp", "state_catalog=keys:573");
 	ok = ok && require_file_token("rp_agentcmp", "startup_doctor=quickstart:ready");
 	ok = ok && require_file_token("rp_agentcmp", "represented:573");
@@ -1747,6 +1747,16 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "systematic_review_page=rp_sysreview;protocols=1;screening=9;included=3;status=ready");
 	ok = ok && require_file_token("rp_review_dashboard", "subsection=systematic_review;source=rp_sysreview;checks=104;included=3;prisma=ready;status=ready");
 	ok = ok && require_file_token("rp_agentcmp", "systematic_review_checks=104");
+	ok = ok && require_file_token("rp_expsched", "experiment_scheduling_checks=88");
+	ok = ok && require_file_token("rp_expsched", "schedule=schedule:RUN-042:lab-execution");
+	ok = ok && require_file_token("rp_schedtask", "task=schedule-task:RUN-042:library-prep");
+	ok = ok && require_file_token("rp_schedbook", "booking=schedule-booking:RUN-042:seq-library");
+	ok = ok && require_file_token("rp_schedconf", "conflict=schedule-conflict:RUN-042:seq-01-overlap");
+	ok = ok && require_file_token("rp_schedexec", "execution=schedule-exec:RUN-042:library-prep");
+	ok = ok && require_file_token("rp_package", "experiment_schedule=rp_expsched;schedule=schedule:RUN-042:lab-execution;tasks=3;bookings=4;conflicts=1;executions=2;status=ready");
+	ok = ok && require_file_token("rp_web_bundle", "experiment_schedule_page=rp_expsched;schedules=1;tasks=3;bookings=4;conflicts=1;status=ready");
+	ok = ok && require_file_token("rp_review_dashboard", "subsection=experiment_schedule;source=rp_expsched;checks=88;tasks=3;conflicts=1;executions=2;status=ready");
+	ok = ok && require_file_token("rp_agentcmp", "experiment_scheduling_checks=88");
 	ok = ok && require_file_token("rp_runop", "deployments:1");
 	ok = ok && require_file_token("rp_runop", "llm_proxy_audits:2");
 	ok = ok && require_file_token("rp_runop", "collab_threads:2");
@@ -2199,13 +2209,13 @@ int main(void)
 		ok = ok && require_file_token("rp_web_bundle", "host_action_llm_relay=");
 	}
 
-	ok = ok && require_count("ack", rp_count_lines("rp_ack"), 61);
-	ok = ok && require_count("tool", rp_count_lines("rp_tool"), 260);
+	ok = ok && require_count("ack", rp_count_lines("rp_ack"), 64);
+	ok = ok && require_count("tool", rp_count_lines("rp_tool"), 284);
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=2224\n"
+			   "tests=2312\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -2257,6 +2267,7 @@ int main(void)
 			   "study_protocol=passed\n"
 			   "statistical_design=passed\n"
 			   "model_registry=passed\n"
+			   "experiment_scheduling=passed\n"
 			   "operations_board=passed\n"
 			   "review_board=passed\n"
 			   "integrity_plane=passed\n"
@@ -2288,6 +2299,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=2224 catalog=passed state_catalog=passed startup_doctor=passed model_registry=passed systematic_review=passed runbook_service=passed project_delivery=passed study_protocol=passed statistical_design=passed operations_board=passed review_board=passed control_plane=passed integrity_plane=passed coherence_plane=passed publication_workflow=passed calculation=passed real_task=passed experiment_campaigns=passed release_dossier=passed mature_capabilities=passed provenance_view=passed provenance_query=passed data=passed services=passed products=passed assurance=passed research_ops=passed regulated=passed lab_governance=passed knowledge_index=passed llm_transcripts=passed workbench_delivery=passed portfolio_scale=passed execution_scale=passed operations_scale=passed project_revision_incident=passed reserved_research_surfaces=passed root_state_surface=passed agentos_reserved_surface=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed startup=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=2312 catalog=passed state_catalog=passed startup_doctor=passed model_registry=passed systematic_review=passed experiment_scheduling=passed runbook_service=passed project_delivery=passed study_protocol=passed statistical_design=passed operations_board=passed review_board=passed control_plane=passed integrity_plane=passed coherence_plane=passed publication_workflow=passed calculation=passed real_task=passed experiment_campaigns=passed release_dossier=passed mature_capabilities=passed provenance_view=passed provenance_query=passed data=passed services=passed products=passed assurance=passed research_ops=passed regulated=passed lab_governance=passed knowledge_index=passed llm_transcripts=passed workbench_delivery=passed portfolio_scale=passed execution_scale=passed operations_scale=passed project_revision_incident=passed reserved_research_surfaces=passed root_state_surface=passed agentos_reserved_surface=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed startup=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
 	return 0;
 }

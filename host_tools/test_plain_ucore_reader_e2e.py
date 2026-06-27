@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=2224" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=276" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=2312" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=284" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -741,6 +741,7 @@ def main() -> int:
             assert any("statistical_design_checks=120" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("model_registry_service_checks=96" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("systematic_review_checks=104" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("experiment_scheduling_checks=88" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("release_dossier_checks=112" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("mature_capability_checks=72" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_view_checks=64" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -776,6 +777,17 @@ def main() -> int:
             rp_sysreview = read_json(base + "/api/state/rp_sysreview")
             assert any("systematic_review_checks=104" in line for line in rp_sysreview["lines"]), rp_sysreview
             assert any("protocol=systematic-review:agent-os-science" in line for line in rp_sysreview["lines"]), rp_sysreview
+            rp_expsched = read_json(base + "/api/state/rp_expsched")
+            assert any("experiment_scheduling_checks=88" in line for line in rp_expsched["lines"]), rp_expsched
+            assert any("schedule=schedule:RUN-042:lab-execution" in line for line in rp_expsched["lines"]), rp_expsched
+            rp_schedtask = read_json(base + "/api/state/rp_schedtask")
+            assert any("task=schedule-task:RUN-042:library-prep" in line for line in rp_schedtask["lines"]), rp_schedtask
+            rp_schedbook = read_json(base + "/api/state/rp_schedbook")
+            assert any("booking=schedule-booking:RUN-042:seq-library" in line for line in rp_schedbook["lines"]), rp_schedbook
+            rp_schedconf = read_json(base + "/api/state/rp_schedconf")
+            assert any("conflict=schedule-conflict:RUN-042:seq-01-overlap" in line for line in rp_schedconf["lines"]), rp_schedconf
+            rp_schedexec = read_json(base + "/api/state/rp_schedexec")
+            assert any("execution=schedule-exec:RUN-042:library-prep" in line for line in rp_schedexec["lines"]), rp_schedexec
             rp_syssearch = read_json(base + "/api/state/rp_syssearch")
             assert any("results=9" in line for line in rp_syssearch["lines"]), rp_syssearch
             rp_sysscreen = read_json(base + "/api/state/rp_sysscreen")
@@ -1515,6 +1527,13 @@ def main() -> int:
             assert "9" in systematic_review_html
             assert "moderate" in systematic_review_html
             assert "prisma-flow:agent-os-science" in systematic_review_html
+            experiment_schedule_html = read_text(base + "/experiment-schedule.html")
+            assert "Experiment Schedule" in experiment_schedule_html
+            assert "schedule:RUN-042:lab-execution" in experiment_schedule_html
+            assert "schedule-task:RUN-042:library-prep" in experiment_schedule_html
+            assert "schedule-booking:RUN-042:seq-library" in experiment_schedule_html
+            assert "schedule-conflict:RUN-042:seq-01-overlap" in experiment_schedule_html
+            assert "schedule-exec:RUN-042:library-prep" in experiment_schedule_html
             release_dossier_html = read_text(base + "/release-dossier.html")
             assert "Release Dossier" in release_dossier_html
             assert "release-dossier:RUN-042:final-review" in release_dossier_html

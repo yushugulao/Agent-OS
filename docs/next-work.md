@@ -1,6 +1,6 @@
 # Next Work For Plain uCore Migration
 
-The current branch has a working native baseline for the research Agent platform on an unchanged uCore kernel. It runs 63 platform programs, writes 227 compact state files, emits 276 tool-event records, publishes 33 Host Reader views, and exposes a 2224-check user-space test suite through `rp_tests` and `rp_agentcmp`.
+The current branch has a working native baseline for the research Agent platform on an unchanged uCore kernel. It runs 64 platform programs, writes 232 compact state files, emits 284 tool-event records, publishes 34 Host Reader views, and exposes a 2312-check user-space test suite through `rp_tests` and `rp_agentcmp`.
 
 The platform already covers the RUN-042 scenario with concrete input files, generated artifacts, report text, logs, chart data, workflow DAG records, retry records, cache records, Agent messages, review records, delivery records, project review records, Host LLM Relay packets, calculation job records, Palmer Penguins real-task validation records, experiment campaign records, statistical design records, model registry records, systematic review records, release dossier records, mature-platform mapping records, provenance views, and provenance query records.
 
