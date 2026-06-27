@@ -139,6 +139,7 @@ status=ready
         "host_action_workbench_manuscript_format=markdown\n"
         "host_action_workbench_task_board=exported\n"
         "host_action_workbench_board_filter=open\n"
+        "workbench_delivery_scale=workbenches:5,templates:5,workspace_imports:5,workspace_inspections:5,answers:5,deliveries:6,studio_sessions:2,project_action_plans:15,project_deliveries:4,project_runbooks:15,project_evidence_audits:15,project_provenance_graphs:3,project_launches:3,project_release_gates:15,project_snapshots:15,status=ready\n"
         "backend_evidence_report=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;status=ready\n"
         "status=ready\n"
     ),
@@ -269,7 +270,7 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=886\n"
+        "test_cases=904\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=3;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
@@ -278,8 +279,9 @@ status=ready
         "portability_backend_checks=12;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=2;planned_cases=2;status=ready\n"
         "backend_runner_checks=12;runner_cases=4;runner_passed=2;runner_planned=2;plain_inputs=4;study_metrics=2;backend_runner_detail_checks=24;runner_detail_rows=4;backend_runner_report_checks=20;runner_report_rows=4;backend_report_links=2;status=ready\n"
         "lab_governance_ops_checks=26;approval_checks=2;protocol_governance_checks=4;sop_execution_checks=3;training_record_checks=4;status=ready\n"
-        "knowledge_index_checks=22;status=ready\n"
+        "knowledge_index_checks=22;llm_transcript_checks=3;workbench_delivery_checks=15;status=ready\n"
         "knowledge_index=search_documents:1385;provenance_nodes:406;provenance_links:544;events:6816;context_records:348;usable_artifacts:429;usable_runs:20;status=ready\n"
+        "llm_transcripts=90;llm_bridge_requests=30;llm_bridge_responses=30;workbenches=5;deliveries=6;studio_sessions=2;project_action_plans=15;project_runbooks=15;project_evidence_audits=15;project_provenance_graphs=3;status=ready\n"
     ),
     "rp_backend_exec": (
         "runner_case=plain-ucore;input=rp_wfio;artifact=rp_artifact_manifest;result=passed;reason=native_programs_ok;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=3\n"
@@ -303,7 +305,7 @@ status=ready
         "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;detail_checks=kernel;result=planned\n"
         "study_handoff=rp_backend_exec->rp_agentcmp;status=ready\n"
     ),
-    "rp_consistency": "checks=270\nruntime_assurance_checks=24\nsecret_reference_checks=6\nmodel_registry_checks=5\nllm_proxy_replay_audits=2\ncollaboration_threads=2\nobservability_alerts=5\nresearch_ops_checks=28\nsemantic_graph_checks=6\nprompt_ops_checks=5\nrunbook_checks=7\nworker_ops_checks=5\nexecution_control_checks=5\nregulated_research_checks=32\nannotation_checks=5\nassay_plate_checks=4\ncohort_monitoring_checks=3\ndata_access_checks=4\nresearch_card_checks=4\nresearch_object_checks=5\nsample_custody_checks=3\nstatistical_design_checks=2\nworkflow_template_checks=2\nlab_governance_ops_checks=26\napproval_checks=2\nethics_protocol_checks=1\nprotocol_governance_checks=4\nsop_execution_checks=3\ntraining_record_checks=4\ninstrument_maintenance_checks=3\ninventory_transaction_checks=3\nprocurement_order_checks=2\nresource_budget_checks=2\nrun_queue_checks=1\nnotification_checks=1\nresearch_product_checks=18\nproject_scaffold_files=8\ndataset_product_exports=9\nstudy_protocol_reproduction_checks=5\nproject_bundle_cache=ready\nartifact_provenance=3\nartifact_dossier_checks=4\nartifact_path_rebuild_files=6\nartifact_path_rebuild_steps=7\nknowledge_index_checks=22\nsearch_documents=1385\nprovenance_nodes=406\nprovenance_links=544\nevent_stream_records=6816\ncontext_records=348\nhost_workflow_artifacts=150\nusable_research_artifacts=429\nusable_research_runs=20\nusable_research_stages=168\nusable_research_messages=223\nusable_research_decisions=203\n",
+    "rp_consistency": "checks=288\nruntime_assurance_checks=24\nsecret_reference_checks=6\nmodel_registry_checks=5\nllm_proxy_replay_audits=2\ncollaboration_threads=2\nobservability_alerts=5\nresearch_ops_checks=28\nsemantic_graph_checks=6\nprompt_ops_checks=5\nrunbook_checks=7\nworker_ops_checks=5\nexecution_control_checks=5\nregulated_research_checks=32\nannotation_checks=5\nassay_plate_checks=4\ncohort_monitoring_checks=3\ndata_access_checks=4\nresearch_card_checks=4\nresearch_object_checks=5\nsample_custody_checks=3\nstatistical_design_checks=2\nworkflow_template_checks=2\nlab_governance_ops_checks=26\napproval_checks=2\nethics_protocol_checks=1\nprotocol_governance_checks=4\nsop_execution_checks=3\ntraining_record_checks=4\ninstrument_maintenance_checks=3\ninventory_transaction_checks=3\nprocurement_order_checks=2\nresource_budget_checks=2\nrun_queue_checks=1\nnotification_checks=1\nresearch_product_checks=18\nproject_scaffold_files=8\ndataset_product_exports=9\nstudy_protocol_reproduction_checks=5\nproject_bundle_cache=ready\nartifact_provenance=3\nartifact_dossier_checks=4\nartifact_path_rebuild_files=6\nartifact_path_rebuild_steps=7\nknowledge_index_checks=22\nllm_transcript_checks=3\nllm_bridge_transcripts=90\nllm_bridge_requests=30\nllm_bridge_responses=30\nworkbench_delivery_checks=15\nusable_research_workbenches=5\nusable_research_templates=5\nusable_research_workspace_imports=5\nusable_research_workspace_inspections=5\nusable_research_workbench_answers=5\nusable_research_deliveries=6\nusable_research_studio_sessions=2\nusable_research_project_action_plans=15\nusable_research_project_deliveries=4\nusable_research_project_runbooks=15\nusable_research_project_evidence_audits=15\nusable_research_project_provenance_graphs=3\nusable_research_project_launches=3\nusable_research_project_release_gates=15\nusable_research_project_snapshots=15\nsearch_documents=1385\nprovenance_nodes=406\nprovenance_links=544\nevent_stream_records=6816\ncontext_records=348\nhost_workflow_artifacts=150\nusable_research_artifacts=429\nusable_research_runs=20\nusable_research_stages=168\nusable_research_messages=223\nusable_research_decisions=203\n",
     "rp_artifact_manifest": (
         "record=1;kind=input;path=rp_input_fastq;status=ready\n"
         "record=3;kind=alignment;path=rp_artifact;section=rp_align_table;status=ready\n"
@@ -414,6 +416,7 @@ status=ready
     "rp_llm_resp": "host_relay_process=plain_ucore_llm_relay;mode=template;requests=1;responses=1;status=ready\nhost_relay_response=relay-q1;request=q1;summary=ready;citations=5;status=ok\n",
     "rp_llmeval": "host_relay_eval_batch=checked:6;passed:6;blocked:0;status=ready\nhost_relay_eval=q1;response=relay-q1;checks=6;passed=6;status=passed\n",
     "rp_llm_guard": "host_relay_guard_batch=checked:1;blocked:0;secret_values_written=0;status=ready\nhost_relay_guard=q1;prompt_hash=abc;secret_ref=host_env;secret_in_packet=0;status=passed\n",
+    "rp_llmlog": "transcripts=90\nbridge_requests=30\nbridge_responses=30\nstatus=ready\n",
     "rp_relay": "host_relay_replay_batch=requests:1;responses:1;matched:1;status=ready\nhost_relay_replay=q1;response=relay-q1;prompt_hash=abc;mode=template;status=passed\n",
     "rp_prompt": "host_relay_prompt_batch=routes:1;requests:1;status=ready\nhost_relay_prompt_route=q1;route=review_summary;budget=1024;prompt_hash=abc;status=tracked\n",
     "rp_llm_packets": "host_relay_packet=q1;response=relay-q1;prompt_hash=abc;secret_in_packet=0;status=ok\n",

@@ -34,6 +34,21 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "commands=6");
 	ok = ok && rp_file_contains("rp_runner", "events=8");
 	ok = ok && rp_file_contains("rp_runner", "files=9");
+	ok = ok && rp_file_contains("rp_runner", "workbench_delivery_scale=workbenches:5");
+	ok = ok && rp_file_contains("rp_runner", "templates:5");
+	ok = ok && rp_file_contains("rp_runner", "workspace_imports:5");
+	ok = ok && rp_file_contains("rp_runner", "workspace_inspections:5");
+	ok = ok && rp_file_contains("rp_runner", "answers:5");
+	ok = ok && rp_file_contains("rp_runner", "deliveries:6");
+	ok = ok && rp_file_contains("rp_runner", "studio_sessions:2");
+	ok = ok && rp_file_contains("rp_runner", "project_action_plans:15");
+	ok = ok && rp_file_contains("rp_runner", "project_deliveries:4");
+	ok = ok && rp_file_contains("rp_runner", "project_runbooks:15");
+	ok = ok && rp_file_contains("rp_runner", "project_evidence_audits:15");
+	ok = ok && rp_file_contains("rp_runner", "project_provenance_graphs:3");
+	ok = ok && rp_file_contains("rp_runner", "project_launches:3");
+	ok = ok && rp_file_contains("rp_runner", "project_release_gates:15");
+	ok = ok && rp_file_contains("rp_runner", "project_snapshots:15");
 	ok = ok && rp_file_contains("rp_input", "dynamic_submissions=4");
 	ok = ok && rp_file_contains("rp_input", "dynamic_validation=passed");
 	ok = ok && rp_file_contains("rp_runner", "dynamic_input_runs=4");
@@ -59,6 +74,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_llm_guard", "secrets_in_ucore=0");
 	ok = ok && rp_file_contains("rp_llm_hostreq", "template_mode=ready");
 	ok = ok && rp_file_contains("rp_llm_fallback", "fallback_cases=1");
+	ok = ok && rp_file_contains("rp_llmlog", "transcripts=90");
+	ok = ok && rp_file_contains("rp_llmlog", "bridge_requests=30");
+	ok = ok && rp_file_contains("rp_llmlog", "bridge_responses=30");
 	ok = ok && rp_file_contains("rp_agents", "agents=7");
 	ok = ok && rp_file_contains("rp_decisions", "decisions=8");
 	ok = ok && rp_file_contains("rp_handoff", "handoffs=6");
@@ -377,7 +395,7 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=270\n"
+			   "checks=288\n"
 			   "task_records=21\n"
 			   "ready_tasks=21\n"
 			   "high_tasks=4\n"
@@ -523,6 +541,26 @@ int main(void)
 			   "agentos_readiness_checks=7\n"
 			   "state_relation=passed\n"
 			   "knowledge_index_checks=22\n"
+			   "llm_transcript_checks=3\n"
+			   "llm_bridge_transcripts=90\n"
+			   "llm_bridge_requests=30\n"
+			   "llm_bridge_responses=30\n"
+			   "workbench_delivery_checks=15\n"
+			   "usable_research_workbenches=5\n"
+			   "usable_research_templates=5\n"
+			   "usable_research_workspace_imports=5\n"
+			   "usable_research_workspace_inspections=5\n"
+			   "usable_research_workbench_answers=5\n"
+			   "usable_research_deliveries=6\n"
+			   "usable_research_studio_sessions=2\n"
+			   "usable_research_project_action_plans=15\n"
+			   "usable_research_project_deliveries=4\n"
+			   "usable_research_project_runbooks=15\n"
+			   "usable_research_project_evidence_audits=15\n"
+			   "usable_research_project_provenance_graphs=3\n"
+			   "usable_research_project_launches=3\n"
+			   "usable_research_project_release_gates=15\n"
+			   "usable_research_project_snapshots=15\n"
 			   "search_documents=1385\n"
 			   "provenance_nodes=406\n"
 			   "provenance_links=544\n"
@@ -543,6 +581,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=270 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
+	printf("rp_consistency: checks=288 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
 	return 0;
 }

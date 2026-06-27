@@ -10,9 +10,9 @@
 #define RP_UNUSED __attribute__((unused))
 #ifndef RP_STATE_BUFFER_SIZE
 #ifdef RP_ENABLE_HOST_ACTION_SEED
-#define RP_STATE_BUFFER_SIZE 8192
+#define RP_STATE_BUFFER_SIZE 32768
 #else
-#define RP_STATE_BUFFER_SIZE 6144
+#define RP_STATE_BUFFER_SIZE 32768
 #endif
 #endif
 #define RP_HOST_SEED_ARG_MARK "__rp_seed_v1__"
