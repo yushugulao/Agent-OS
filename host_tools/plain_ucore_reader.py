@@ -20,16 +20,16 @@ PAGE_SPECS = [
     ("workflow.html", "Workflow", "rp_stage_state", ["rp_stage_dag", "rp_cache_index", "rp_retry_plan", "rp_run_events", "rp_worker", "rp_execobs"]),
     ("workbench.html", "Workbench", "rp_runner", ["rp_report_text", "rp_revision", "rp_package", "rp_review_pack", "rp_nbexec", "rp_uresrun"]),
     ("studio.html", "Studio", "rp_studio", ["rp_runner", "rp_package", "rp_review_pack", "rp_actionio", "rp_web_bundle"]),
-    ("project.html", "Project", "rp_package", ["rp_runner", "rp_review_pack", "rp_actionio", "rp_web_bundle", "rp_projectrel"]),
-    ("project-review.html", "Project Review", "rp_web_bundle", ["rp_package", "rp_review_pack", "rp_runner", "rp_actionio", "rp_projectrel"]),
+    ("project.html", "Project", "rp_package", ["rp_runner", "rp_review_pack", "rp_actionio", "rp_web_bundle", "rp_projectrel", "rp_studyproto"]),
+    ("project-review.html", "Project Review", "rp_web_bundle", ["rp_package", "rp_review_pack", "rp_runner", "rp_actionio", "rp_projectrel", "rp_studyproto"]),
     ("agents.html", "Agents", "rp_api_agents", ["rp_ui_agent", "rp_agents", "rp_decisions"]),
     ("evidence.html", "Evidence", "rp_api_evidence", ["rp_ui_evidence", "rp_evidence", "rp_package"]),
     ("review.html", "Review", "rp_review_dashboard", ["rp_review_pack", "rp_review2", "rp_revision", "rp_package", "rp_report_text"]),
-    ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency", "rp_backend", "rp_backend_exec", "rp_study"]),
+    ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency", "rp_backend", "rp_backend_exec", "rp_study", "rp_studyproto"]),
     ("artifacts.html", "Artifacts", "rp_api_artifacts", ["rp_artifact", "rp_artifact_manifest", "rp_package"]),
     ("delivery.html", "Delivery", "rp_package", ["rp_nbexec", "rp_uresrun", "rp_artifact_manifest", "rp_review_pack"]),
     ("data.html", "Data", "rp_api_data", ["rp_input", "rp_ingest_files", "rp_dataset_snapshot", "rp_data_preview", "rp_data_quality", "rp_data_transform", "rp_dataset_collection"]),
-    ("services.html", "Services", "rp_api_bio", ["rp_api_labres", "rp_api_pub", "rp_api_know", "rp_api_runtime", "rp_bioop", "rp_labresop", "rp_pubop", "rp_knowop", "rp_runop", "rp_runbooks"]),
+    ("services.html", "Services", "rp_api_bio", ["rp_api_labres", "rp_api_pub", "rp_api_know", "rp_api_runtime", "rp_bioop", "rp_labresop", "rp_pubop", "rp_knowop", "rp_runop", "rp_runbooks", "rp_studyproto"]),
     ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets"]),
     ("actions.html", "Actions", "rp_api_action", ["rp_actionio", "rp_host_run_result", "rp_web_routes", "rp_web_bundle"]),
 ]
@@ -1100,6 +1100,7 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Search", project_record.get("search") or metric_value(state, [("rp_package", "host_action_research_search"), ("rp_runner", "host_action_research_search")]), "rp_package"),
         ("Quality", metric_value(state, [("rp_package", "host_action_quality_gate"), ("rp_runner", "host_action_quality_gate")]), "rp_package"),
         ("Project Delivery", metric_value(state, [("rp_projectrel", "project_delivery_checks")]), "rp_projectrel"),
+        ("Study Protocols", metric_value(state, [("rp_studyproto", "study_protocol_checks")]), "rp_studyproto"),
     ]
     release_rows = state_records(state, "rp_web_bundle", "release_gate")
     release_record = release_rows[-1] if release_rows else {}
@@ -1118,6 +1119,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Delivery", delivery_record.get("decision") or metric_value(state, [("rp_projectrel", "project_delivery"), ("rp_web_bundle", "host_action_project_delivery")]), "rp_projectrel"),
         ("Package Intake", metric_value(state, [("rp_projectrel", "package_intake"), ("rp_web_bundle", "host_action_project_package_intake"), ("rp_web_bundle", "package_intake")]), "rp_projectrel"),
         ("Package Index", metric_value(state, [("rp_projectrel", "package_index"), ("rp_web_bundle", "package_index")]), "rp_projectrel"),
+        ("Study Launches", metric_value(state, [("rp_studyproto", "study_protocol_launches")]), "rp_studyproto"),
+        ("Reproduction Package", metric_value(state, [("rp_studyproto", "study_protocol_reproduction_packages")]), "rp_studyproto"),
     ]
     compare_items = [
         ("Payload Applied", metric_value(state, [("rp_api_compare", "host_action_payload_applied")]), "rp_api_compare"),
@@ -1129,6 +1132,7 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Portability Checks", metric_value(state, [("rp_agentcmp", "workflow_portability_checks")]), "rp_agentcmp"),
         ("Backend Checks", metric_value(state, [("rp_agentcmp", "portability_backend_checks")]), "rp_agentcmp"),
         ("Backend Runner", metric_value(state, [("rp_agentcmp", "backend_runner_checks")]), "rp_agentcmp"),
+        ("Study Protocol Checks", metric_value(state, [("rp_agentcmp", "study_protocol_checks"), ("rp_studyproto", "study_protocol_checks")]), "rp_studyproto"),
     ]
     llm_items = [
         ("Relay", metric_value(state, [("rp_llm_resp", "host_relay_process"), ("rp_relay", "mode")]), "rp_llm_resp"),
@@ -1146,6 +1150,7 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Knowledge Ops", metric_value(state, [("rp_knowop", "ops")]), "rp_knowop"),
         ("Runtime Ops", metric_value(state, [("rp_runop", "ops")]), "rp_runop"),
         ("Runbook Steps", metric_value(state, [("rp_runbooks", "runbook_steps")]), "rp_runbooks"),
+        ("Study Protocols", metric_value(state, [("rp_studyproto", "study_protocols")]), "rp_studyproto"),
         ("Service Files", metric_value(state, [("rp_web_bundle", "research_service_files"), ("rp_api_compare", "bio_service_files")]), "rp_web_bundle"),
     ]
     review_items = [

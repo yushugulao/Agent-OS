@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=1070" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=147" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=1090" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=152" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -729,6 +729,7 @@ def main() -> int:
             assert any("review_handoff_checks=13" in line and "backend_review=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runbook_recovery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("project_delivery_checks=18" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("study_protocol_checks=20" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_runbooks = read_json(base + "/api/state/rp_runbooks")
             assert any("runbook_service_checks=16" in line for line in rp_runbooks["lines"]), rp_runbooks
             assert any("runbook_templates=1" in line for line in rp_runbooks["lines"]), rp_runbooks
@@ -746,6 +747,13 @@ def main() -> int:
             assert any("project_provenance_graphs=1" in line for line in rp_projectrel["lines"]), rp_projectrel
             assert any("package_intakes=1" in line for line in rp_projectrel["lines"]), rp_projectrel
             assert any("agentos_adaptation=file_metadata_index,event_delivery,context_release_evidence,capability_guard" in line for line in rp_projectrel["lines"]), rp_projectrel
+            rp_studyproto = read_json(base + "/api/state/rp_studyproto")
+            assert any("study_protocol_checks=20" in line for line in rp_studyproto["lines"]), rp_studyproto
+            assert any("study_protocols=2" in line for line in rp_studyproto["lines"]), rp_studyproto
+            assert any("study_protocol_launches=2" in line for line in rp_studyproto["lines"]), rp_studyproto
+            assert any("study_protocol_reproduction_packages=1" in line for line in rp_studyproto["lines"]), rp_studyproto
+            assert any("study-protocol-reproduction-package:RUN-042" in line for line in rp_studyproto["lines"]), rp_studyproto
+            assert any("agentos_adaptation=file_metadata_index,context_protocol_evidence,event_reproduction_queue,batch_dataset_tool" in line for line in rp_studyproto["lines"]), rp_studyproto
             rp_consistency = read_json(base + "/api/state/rp_consistency")
             assert any("checks=420" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("state_catalog_checks=12" in line for line in rp_consistency["lines"]), rp_consistency
@@ -1152,6 +1160,9 @@ def main() -> int:
             assert "recovery evidence" in project_html
             assert "rp_projectrel" in project_html
             assert "project_delivery_checks" in project_html
+            assert "rp_studyproto" in project_html
+            assert "Study Protocols" in project_html
+            assert "study_protocol_checks" in project_html
             assert "/actions/research/project-space" in project_html
             assert "/actions/research-search/export" in project_html
             project_review_html = read_text(base + "/project-review.html")
@@ -1165,6 +1176,8 @@ def main() -> int:
             assert "project-reproducibility-audit:lab-gene-x" in project_review_html
             assert "package-intake:external-review" in project_review_html
             assert "Project Package Index" in project_review_html
+            assert "Study Launches" in project_review_html
+            assert "study-protocol-reproduction-package:RUN-042" in project_review_html
             assert "Project Review Action Trace" in project_review_html
             assert "Project Review Action Output Details" in project_review_html
             assert "release" in project_review_html
