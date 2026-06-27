@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=34
+reader_views=35
 reader_actions=57
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
@@ -91,6 +91,7 @@ statistical_design_page=rp_stdesign;designs=1;power=underpowered;randomization=b
 model_registry_page=rp_modelreg;models=1;versions=1;evaluations=1;deployments=1;status=ready
 systematic_review_page=rp_sysreview;protocols=1;screening=9;included=3;status=ready
 experiment_schedule_page=rp_expsched;schedules=1;tasks=3;bookings=4;conflicts=1;status=ready
+training_compliance_page=rp_traincomp;requirements=4;records=4;gaps=1;auth=3;status=ready
 release_dossier_page=rp_reldossier;sections=7;decision=ready_for_review;status=ready
 mature_capability_page=rp_mature;profiles=6;mappings=6;checks=72;status=ready
 provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=ready
@@ -283,8 +284,8 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=2312\n"
-        "tool_events=284\n"
+        "test_cases=2404\n"
+        "tool_events=292\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=4;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
@@ -304,6 +305,7 @@ status=ready
         "model_registry_service_checks=96;models=1;versions=1;evaluations=1;deployments=1;serving_checks=1;agentos_replacements=4;status=ready\n"
         "systematic_review_checks=104;protocols=1;searches=1;screening=9;extractions=3;bias=3;prisma=1;agentos_replacements=4;status=ready\n"
         "experiment_scheduling_checks=88;schedules=1;tasks=3;bookings=4;conflicts=1;executions=2;charts=4;status=ready\n"
+        "training_compliance_checks=92;requirements=4;training_records=4;competency=4;authorizations=3;gaps=1;open_gaps=0;charts=4;status=ready\n"
         "release_dossier_checks=112;sections=7;evidence_ids=18;decision=ready_for_review;status=ready\n"
         "mature_capability_checks=72;profiles=6;mappings=6;checks=72;platforms=Galaxy,AiiDA,DVC,MLflow,Nextflow,Snakemake;agentos_replacements=5;status=ready\n"
         "provenance_view_checks=64;timeline_views=4;subgraphs=3;packets=4;agentos_replacements=4;status=ready\n"
@@ -441,6 +443,61 @@ status=ready
         "execution_records=2\n"
         "execution=schedule-exec:RUN-042:verify-resources;task=schedule-task:RUN-042:verify-resources;status=completed;evidence=rp_ressched,rp_labresop;notes=resources_ready\n"
         "execution=schedule-exec:RUN-042:library-prep;task=schedule-task:RUN-042:library-prep;status=completed;evidence=rp_stage_log,rp_artifact;notes=operation_completed_after_retry\n"
+        "status=ready\n"
+    ),
+    "rp_traincomp": (
+        "service=training-compliance\n"
+        "training_compliance_checks=92\n"
+        "schedule=schedule:RUN-042:lab-execution\n"
+        "project=lab-gene-x\n"
+        "run_id=RUN-042\n"
+        "requirements=4\n"
+        "training_records=4\n"
+        "competency_assessments=4\n"
+        "role_authorizations=3\n"
+        "training_gaps=1\n"
+        "initial_open_gaps=1\n"
+        "open_gaps=0\n"
+        "resolved_gaps=1\n"
+        "active_authorizations=3\n"
+        "status=ready\n"
+    ),
+    "rp_trainreq": (
+        "requirements=4\n"
+        "requirement=training-req:sop-library-prep:lab-tech;role=lab-tech;topic=sop-library-prep;required_level=operator;source=schedule-task:RUN-042:library-prep;status=active\n"
+        "requirement=training-req:instrument-seq-01:lab-tech;role=lab-tech;topic=seq-01;required_level=operator;source=schedule-booking:RUN-042:seq-library;status=active\n"
+        "requirement=training-req:resource-check:auditor;role=auditor;topic=resource-check;required_level=reviewer;source=schedule-task:RUN-042:verify-resources;status=active\n"
+        "requirement=training-req:sop-deviation:qa-lead;role=qa-lead;topic=sop-deviation;required_level=approver;source=schedule-task:RUN-042:sop-review;status=active\n"
+        "status=ready\n"
+    ),
+    "rp_trainrec": (
+        "records=4\n"
+        "training=training:lab-tech:sop-library-prep;person=lab-tech;topic=sop-library-prep;level=operator;expires=210;status=valid;evidence=sop-cert:lab-tech:library-prep\n"
+        "training=training:lab-tech:seq-01;person=lab-tech;topic=seq-01;level=operator;expires=190;status=valid;evidence=instrument-cert:seq-01:lab-tech\n"
+        "training=training:auditor:resource-check;person=auditor;topic=resource-check;level=reviewer;expires=220;status=valid;evidence=resource-audit-cert:auditor\n"
+        "training=training:qa-lead:sop-deviation;person=qa-lead;topic=sop-deviation;level=approver;expires=240;status=valid;evidence=deviation-review-cert:qa-lead\n"
+        "status=ready\n"
+    ),
+    "rp_trainassess": (
+        "assessments=4\n"
+        "assessment=competency:lab-tech:sop-library-prep;person=lab-tech;topic=sop-library-prep;score=96;decision=pass;status=ready\n"
+        "assessment=competency:lab-tech:seq-01;person=lab-tech;topic=seq-01;score=94;decision=pass;status=ready\n"
+        "assessment=competency:auditor:resource-check;person=auditor;topic=resource-check;score=91;decision=pass;status=ready\n"
+        "assessment=competency:qa-lead:sop-deviation;person=qa-lead;topic=sop-deviation;score=93;decision=pass;status=ready\n"
+        "status=ready\n"
+    ),
+    "rp_trainauth": (
+        "active_authorizations=3\n"
+        "authorization=auth:lab-tech:lab-tech:lab-gene-x;person=lab-tech;role=lab-tech;project=lab-gene-x;requirements=2;decision=authorized;status=active\n"
+        "authorization=auth:auditor:auditor:lab-gene-x;person=auditor;role=auditor;project=lab-gene-x;requirements=1;decision=authorized;status=active\n"
+        "authorization=auth:qa-lead:qa-lead:lab-gene-x;person=qa-lead;role=qa-lead;project=lab-gene-x;requirements=1;decision=authorized;status=active\n"
+        "status=ready\n"
+    ),
+    "rp_traingap": (
+        "training_gaps=1\n"
+        "gap=training-gap:schedule:RUN-042:lab-execution:schedule-task:RUN-042:sop-review:role_authorization:role-authorization:qa-lead;schedule=schedule:RUN-042:lab-execution;task=schedule-task:RUN-042:sop-review;person=qa-lead;type=role_authorization;severity=blocking;initial_status=open;status=resolved;resolution=qa-lead training, competency, and authorization completed\n"
+        "open_gaps=0\n"
+        "resolved_gaps=1\n"
         "status=ready\n"
     ),
     "rp_calc_parse": (
@@ -1108,7 +1165,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 34, summary
+        assert summary["pages"] == 35, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -1121,6 +1178,7 @@ def main() -> int:
         assert (out_dir / "llm.html").exists()
         assert (out_dir / "integrity.html").exists()
         assert (out_dir / "coherence.html").exists()
+        assert (out_dir / "training-compliance.html").exists()
         assert (out_dir / "publication.html").exists()
         assert (out_dir / "calculations.html").exists()
         assert (out_dir / "real-task.html").exists()
@@ -1454,6 +1512,8 @@ def main() -> int:
         assert "Real Task Checks" in compare_html
         assert "experiment_campaign_checks" in compare_html
         assert "Experiment Campaign Checks" in compare_html
+        assert "training_compliance_checks" in compare_html
+        assert "Training Compliance Checks" in compare_html
         assert "statistical_design_checks" in compare_html
         assert "Statistical Design Checks" in compare_html
         assert "model_registry_service_checks" in compare_html
@@ -1485,6 +1545,15 @@ def main() -> int:
         assert "rp_backend_exec" in compare_html
         assert "rp_agentcmp" in compare_html
         assert "128" in compare_html
+        training_html = (out_dir / "training-compliance.html").read_text(encoding="utf-8")
+        assert "Training Compliance" in training_html
+        assert "training_compliance_checks" in training_html
+        assert "training-req:sop-deviation:qa-lead" in training_html
+        assert "training:qa-lead:sop-deviation" in training_html
+        assert "competency:qa-lead:sop-deviation" in training_html
+        assert "auth:qa-lead:qa-lead:lab-gene-x" in training_html
+        assert "training-gap:schedule:RUN-042:lab-execution" in training_html
+        assert "Resolved Gaps" in training_html
         agents_html = (out_dir / "agents.html").read_text(encoding="utf-8")
         assert "Agent Detail" in agents_html
         assert "Agent Roster" in agents_html

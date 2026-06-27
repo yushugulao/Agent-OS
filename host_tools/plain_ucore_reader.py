@@ -43,6 +43,7 @@ PAGE_SPECS = [
     ("model-registry.html", "Model Registry", "rp_modelreg", ["rp_modelver", "rp_modeleval", "rp_modeldep", "rp_modelserve", "rp_agentcmp", "rp_review_dashboard"]),
     ("systematic-review.html", "Systematic Review", "rp_sysreview", ["rp_syssearch", "rp_sysscreen", "rp_sysextract", "rp_syssynth", "rp_sysprisma", "rp_agentcmp", "rp_review_dashboard"]),
     ("experiment-schedule.html", "Experiment Schedule", "rp_expsched", ["rp_schedtask", "rp_schedbook", "rp_schedconf", "rp_schedexec", "rp_agentcmp", "rp_review_dashboard"]),
+    ("training-compliance.html", "Training Compliance", "rp_traincomp", ["rp_trainreq", "rp_trainrec", "rp_trainassess", "rp_trainauth", "rp_traingap", "rp_agentcmp", "rp_review_dashboard"]),
     ("release-dossier.html", "Release Dossier", "rp_reldossier", ["rp_reldsec", "rp_relattest", "rp_relpack", "rp_agentcmp", "rp_review_dashboard"]),
     ("mature.html", "Mature Platforms", "rp_mature", ["rp_mature_refs", "rp_mature_map", "rp_mature_checks", "rp_agentcmp", "rp_review_dashboard"]),
     ("provenance.html", "Provenance", "rp_prov_view", ["rp_prov_edges", "rp_evidence_packet", "rp_timeline_view", "rp_agentcmp", "rp_review_dashboard"]),
@@ -1154,6 +1155,7 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Publication Checks", metric_value(state, [("rp_agentcmp", "publication_checks"), ("rp_publication", "publication_checks")]), "rp_publication"),
         ("Systematic Review Checks", metric_value(state, [("rp_agentcmp", "systematic_review_checks"), ("rp_sysreview", "systematic_review_checks")]), "rp_sysreview"),
         ("Experiment Scheduling Checks", metric_value(state, [("rp_agentcmp", "experiment_scheduling_checks"), ("rp_expsched", "experiment_scheduling_checks")]), "rp_expsched"),
+        ("Training Compliance Checks", metric_value(state, [("rp_agentcmp", "training_compliance_checks"), ("rp_traincomp", "training_compliance_checks")]), "rp_traincomp"),
         ("Mature Capability", metric_value(state, [("rp_agentcmp", "mature_capability_checks"), ("rp_mature", "capability_checks")]), "rp_mature"),
     ]
     llm_items = [
@@ -1267,6 +1269,16 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Owner", metric_value(state, [("rp_expsched", "owner")]), "rp_expsched"),
         ("Status", metric_value(state, [("rp_expsched", "status")]), "rp_expsched"),
     ]
+    training_compliance_items = [
+        ("Checks", metric_value(state, [("rp_traincomp", "training_compliance_checks"), ("rp_agentcmp", "training_compliance_checks")]), "rp_traincomp"),
+        ("Requirements", metric_value(state, [("rp_traincomp", "requirements"), ("rp_trainreq", "requirements")]), "rp_trainreq"),
+        ("Training Records", metric_value(state, [("rp_traincomp", "training_records"), ("rp_trainrec", "records")]), "rp_trainrec"),
+        ("Competency", metric_value(state, [("rp_traincomp", "competency_assessments"), ("rp_trainassess", "assessments")]), "rp_trainassess"),
+        ("Authorizations", metric_value(state, [("rp_traincomp", "active_authorizations"), ("rp_trainauth", "active_authorizations")]), "rp_trainauth"),
+        ("Open Gaps", metric_value(state, [("rp_traincomp", "open_gaps"), ("rp_traingap", "open")]), "rp_traingap"),
+        ("Resolved Gaps", metric_value(state, [("rp_traincomp", "resolved_gaps"), ("rp_traingap", "resolved")]), "rp_traingap"),
+        ("Status", metric_value(state, [("rp_traincomp", "status")]), "rp_traincomp"),
+    ]
     mature_items = [
         ("Profiles", metric_value(state, [("rp_mature", "reference_platforms"), ("rp_mature_refs", "profiles")]), "rp_mature"),
         ("Mappings", metric_value(state, [("rp_mature", "capability_mappings"), ("rp_mature_map", "mappings")]), "rp_mature"),
@@ -1329,6 +1341,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Systematic Review", systematic_review_items)
     if file_name == "experiment-schedule.html":
         return render_summary_panel("Experiment Schedule", experiment_schedule_items)
+    if file_name == "training-compliance.html":
+        return render_summary_panel("Training Compliance", training_compliance_items)
     if file_name == "mature.html":
         return render_summary_panel("Mature Platform Mapping", mature_items)
     if file_name == "provenance.html":
@@ -1373,6 +1387,7 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Model Registry Checks", metric_value(state, [("rp_agentcmp", "model_registry_service_checks"), ("rp_modelreg", "model_registry_service_checks")]), "rp_modelreg"),
         ("Systematic Review Checks", metric_value(state, [("rp_agentcmp", "systematic_review_checks"), ("rp_sysreview", "systematic_review_checks")]), "rp_sysreview"),
         ("Experiment Scheduling Checks", metric_value(state, [("rp_agentcmp", "experiment_scheduling_checks"), ("rp_expsched", "experiment_scheduling_checks")]), "rp_expsched"),
+        ("Training Compliance Checks", metric_value(state, [("rp_agentcmp", "training_compliance_checks"), ("rp_traincomp", "training_compliance_checks")]), "rp_traincomp"),
         ("Release Dossier Checks", metric_value(state, [("rp_agentcmp", "release_dossier_checks"), ("rp_reldossier", "release_dossier_checks")]), "rp_reldossier"),
         ("Mature Capability", metric_value(state, [("rp_agentcmp", "mature_capability_checks"), ("rp_mature", "capability_checks")]), "rp_mature"),
         ("Provenance View", metric_value(state, [("rp_agentcmp", "provenance_view_checks"), ("rp_prov_view", "provenance_view_checks")]), "rp_prov_view"),
@@ -2517,6 +2532,7 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
             ("Coherence Plane", metric_value(state, [("rp_agentcmp", "coherence_plane_checks"), ("rp_coherence", "coherence_checks")])),
             ("Publication Workflow", metric_value(state, [("rp_agentcmp", "publication_checks"), ("rp_publication", "publication_checks")])),
             ("Experiment Schedule", metric_value(state, [("rp_agentcmp", "experiment_scheduling_checks"), ("rp_expsched", "experiment_scheduling_checks")])),
+            ("Training Compliance", metric_value(state, [("rp_agentcmp", "training_compliance_checks"), ("rp_traincomp", "training_compliance_checks")])),
             ("Reader Contract", metric_value(state, [("rp_agentcmp", "reader_contract")])),
         ]
         check_rows = [
@@ -3766,6 +3782,14 @@ def render_overview(
             ("Tasks", metric_value(state, [("rp_schedtask", "tasks")]), "rp_schedtask"),
             ("Bookings", metric_value(state, [("rp_schedbook", "bookings")]), "rp_schedbook"),
             ("Conflicts", metric_value(state, [("rp_schedconf", "conflicts")]), "rp_schedconf"),
+        ],
+        "training-compliance.html": [
+            ("Checks", metric_value(state, [("rp_traincomp", "training_compliance_checks")]), "rp_traincomp"),
+            ("Requirements", metric_value(state, [("rp_traincomp", "requirements"), ("rp_trainreq", "requirements")]), "rp_trainreq"),
+            ("Records", metric_value(state, [("rp_traincomp", "training_records"), ("rp_trainrec", "records")]), "rp_trainrec"),
+            ("Competency", metric_value(state, [("rp_traincomp", "competency_assessments"), ("rp_trainassess", "assessments")]), "rp_trainassess"),
+            ("Authorizations", metric_value(state, [("rp_traincomp", "active_authorizations"), ("rp_trainauth", "active_authorizations")]), "rp_trainauth"),
+            ("Open Gaps", metric_value(state, [("rp_traincomp", "open_gaps"), ("rp_traingap", "open")]), "rp_traingap"),
         ],
         "mature.html": [
             ("Profiles", metric_value(state, [("rp_mature", "reference_platforms"), ("rp_mature_refs", "profiles")]), "rp_mature"),

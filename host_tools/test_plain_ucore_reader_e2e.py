@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=2312" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=284" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=2404" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=292" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -742,6 +742,7 @@ def main() -> int:
             assert any("model_registry_service_checks=96" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("systematic_review_checks=104" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("experiment_scheduling_checks=88" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("training_compliance_checks=92" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("release_dossier_checks=112" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("mature_capability_checks=72" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_view_checks=64" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -788,6 +789,19 @@ def main() -> int:
             assert any("conflict=schedule-conflict:RUN-042:seq-01-overlap" in line for line in rp_schedconf["lines"]), rp_schedconf
             rp_schedexec = read_json(base + "/api/state/rp_schedexec")
             assert any("execution=schedule-exec:RUN-042:library-prep" in line for line in rp_schedexec["lines"]), rp_schedexec
+            rp_traincomp = read_json(base + "/api/state/rp_traincomp")
+            assert any("training_compliance_checks=92" in line for line in rp_traincomp["lines"]), rp_traincomp
+            assert any("open_gaps=0" in line for line in rp_traincomp["lines"]), rp_traincomp
+            rp_trainreq = read_json(base + "/api/state/rp_trainreq")
+            assert any("requirement=training-req:sop-deviation:qa-lead" in line for line in rp_trainreq["lines"]), rp_trainreq
+            rp_trainrec = read_json(base + "/api/state/rp_trainrec")
+            assert any("training=training:qa-lead:sop-deviation" in line for line in rp_trainrec["lines"]), rp_trainrec
+            rp_trainassess = read_json(base + "/api/state/rp_trainassess")
+            assert any("assessment=competency:qa-lead:sop-deviation" in line for line in rp_trainassess["lines"]), rp_trainassess
+            rp_trainauth = read_json(base + "/api/state/rp_trainauth")
+            assert any("authorization=auth:qa-lead:qa-lead:lab-gene-x" in line for line in rp_trainauth["lines"]), rp_trainauth
+            rp_traingap = read_json(base + "/api/state/rp_traingap")
+            assert any("status=resolved" in line for line in rp_traingap["lines"]), rp_traingap
             rp_syssearch = read_json(base + "/api/state/rp_syssearch")
             assert any("results=9" in line for line in rp_syssearch["lines"]), rp_syssearch
             rp_sysscreen = read_json(base + "/api/state/rp_sysscreen")
@@ -1534,6 +1548,13 @@ def main() -> int:
             assert "schedule-booking:RUN-042:seq-library" in experiment_schedule_html
             assert "schedule-conflict:RUN-042:seq-01-overlap" in experiment_schedule_html
             assert "schedule-exec:RUN-042:library-prep" in experiment_schedule_html
+            training_html = read_text(base + "/training-compliance.html")
+            assert "Training Compliance" in training_html
+            assert "training-req:sop-deviation:qa-lead" in training_html
+            assert "training:qa-lead:sop-deviation" in training_html
+            assert "competency:qa-lead:sop-deviation" in training_html
+            assert "auth:qa-lead:qa-lead:lab-gene-x" in training_html
+            assert "training-gap:schedule:RUN-042:lab-execution" in training_html
             release_dossier_html = read_text(base + "/release-dossier.html")
             assert "Release Dossier" in release_dossier_html
             assert "release-dossier:RUN-042:final-review" in release_dossier_html
