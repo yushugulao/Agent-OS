@@ -35,6 +35,7 @@ PAGE_SPECS = [
     ("control-plane.html", "Control Plane", "rp_control", ["rp_opsboard", "rp_review_dashboard", "rp_agentcmp", "rp_web_bundle"]),
     ("integrity.html", "Integrity", "rp_integrity", ["rp_review_dashboard", "rp_agentcmp", "rp_package", "rp_report_text", "rp_artifact_manifest"]),
     ("coherence.html", "Coherence", "rp_coherence", ["rp_review_dashboard", "rp_agentcmp", "rp_package", "rp_stage_state", "rp_backend_exec"]),
+    ("publication.html", "Publication", "rp_publication", ["rp_pubplan", "rp_peerresp", "rp_api_pub", "rp_pubop", "rp_review_dashboard", "rp_package"]),
     ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets"]),
     ("actions.html", "Actions", "rp_api_action", ["rp_actionio", "rp_host_run_result", "rp_web_routes", "rp_web_bundle"]),
 ]
@@ -1139,6 +1140,7 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Backend Runner", metric_value(state, [("rp_agentcmp", "backend_runner_checks")]), "rp_agentcmp"),
         ("Study Protocol Checks", metric_value(state, [("rp_agentcmp", "study_protocol_checks"), ("rp_studyproto", "study_protocol_checks")]), "rp_studyproto"),
         ("Integrity Checks", metric_value(state, [("rp_agentcmp", "integrity_plane_checks"), ("rp_integrity", "integrity_checks")]), "rp_integrity"),
+        ("Publication Checks", metric_value(state, [("rp_agentcmp", "publication_checks"), ("rp_publication", "publication_checks")]), "rp_publication"),
     ]
     llm_items = [
         ("Relay", metric_value(state, [("rp_llm_resp", "host_relay_process"), ("rp_relay", "mode")]), "rp_llm_resp"),
@@ -1221,6 +1223,16 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Errors", metric_value(state, [("rp_coherence", "errors")]), "rp_coherence"),
         ("Decision", metric_value(state, [("rp_coherence", "decision")]), "rp_coherence"),
     ]
+    publication_items = [
+        ("Checks", metric_value(state, [("rp_publication", "publication_checks")]), "rp_publication"),
+        ("Targets", metric_value(state, [("rp_publication", "targets")]), "rp_publication"),
+        ("Submissions", metric_value(state, [("rp_publication", "submissions")]), "rp_publication"),
+        ("Reviews", metric_value(state, [("rp_publication", "review_rounds")]), "rp_publication"),
+        ("Responses", metric_value(state, [("rp_publication", "response_packages")]), "rp_publication"),
+        ("Response Items", metric_value(state, [("rp_publication", "response_items"), ("rp_peerresp", "items")]), "rp_peerresp"),
+        ("Decisions", metric_value(state, [("rp_publication", "decisions")]), "rp_publication"),
+        ("Status", metric_value(state, [("rp_publication", "status")]), "rp_publication"),
+    ]
     if file_name == "run.html":
         return render_summary_panel("Research Output", report_items)
     if file_name in ("evidence.html", "artifacts.html"):
@@ -1257,6 +1269,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Integrity Plane", integrity_items)
     if file_name == "coherence.html":
         return render_summary_panel("Coherence Plane", coherence_items)
+    if file_name == "publication.html":
+        return render_summary_panel("Publication Workflow", publication_items)
     return ""
 
 
@@ -1289,6 +1303,7 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Backend Runner", metric_value(state, [("rp_agentcmp", "backend_runner_checks")]), "rp_agentcmp"),
         ("Integrity Checks", metric_value(state, [("rp_agentcmp", "integrity_plane_checks"), ("rp_integrity", "integrity_checks")]), "rp_integrity"),
         ("Coherence Checks", metric_value(state, [("rp_agentcmp", "coherence_plane_checks"), ("rp_coherence", "coherence_checks")]), "rp_coherence"),
+        ("Publication Checks", metric_value(state, [("rp_agentcmp", "publication_checks"), ("rp_publication", "publication_checks")]), "rp_publication"),
     ]
     integrity_detail_items = [
         ("Evidence Contracts", metric_value(state, [("rp_integrity", "evidence_contracts")]), "rp_integrity"),
@@ -1305,6 +1320,14 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Report Validation", metric_value(state, [("rp_coherence", "report_validation_checks")]), "rp_coherence"),
         ("Agent Coordination", metric_value(state, [("rp_coherence", "agent_coordination_checks")]), "rp_coherence"),
         ("Report", metric_value(state, [("rp_coherence", "coherence_report")]), "rp_coherence"),
+    ]
+    publication_detail_items = [
+        ("Checklist Items", metric_value(state, [("rp_pubplan", "checklist_items")]), "rp_pubplan"),
+        ("Addressed Items", metric_value(state, [("rp_peerresp", "addressed")]), "rp_peerresp"),
+        ("Open Items", metric_value(state, [("rp_peerresp", "needs_revision")]), "rp_peerresp"),
+        ("Response Letter", metric_value(state, [("rp_peerresp", "response_letter")]), "rp_peerresp"),
+        ("API", metric_value(state, [("rp_api_pub", "publication_workflow")]), "rp_api_pub"),
+        ("Operation", metric_value(state, [("rp_pubop", "op")]), "rp_pubop"),
     ]
     llm_items = [
         ("Requests", metric_value(state, [("rp_llm_resp", "requests"), ("rp_llmq", "queued")]), "rp_llm_resp"),
@@ -1338,6 +1361,8 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Integrity Detail", integrity_detail_items)
     if file_name == "coherence.html":
         return render_summary_panel("Coherence Detail", coherence_detail_items)
+    if file_name == "publication.html":
+        return render_summary_panel("Publication Detail", publication_detail_items)
     if file_name == "llm.html":
         return render_summary_panel("Relay State", llm_items)
     return ""
@@ -2037,6 +2062,54 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 state_records(state, "rp_coherence", "coherence_report"),
             ),
         ]
+    if file_name == "publication.html":
+        return [
+            render_record_panel(
+                "Journal Targets",
+                [("Target", "journal_target"), ("Name", "name"), ("Article", "article"), ("Requirements", "requirements"), ("Status", "status")],
+                state_records(state, "rp_publication", "journal_target"),
+            ),
+            render_record_panel(
+                "Submission Packages",
+                [("Submission", "submission"), ("Target", "target"), ("Package", "package"), ("Artifacts", "artifacts"), ("Status", "status")],
+                state_records(state, "rp_publication", "submission"),
+            ),
+            render_record_panel(
+                "Peer Review Rounds",
+                [("Round", "review_round"), ("Submission", "submission"), ("Reviewer", "reviewer"), ("Decision", "decision"), ("Status", "status")],
+                state_records(state, "rp_publication", "review_round"),
+            ),
+            render_record_panel(
+                "Revision Tasks",
+                [("Task", "revision_task"), ("Review", "review"), ("Section", "section"), ("Assignee", "assignee"), ("Status", "status")],
+                state_records(state, "rp_publication", "revision_task"),
+            ),
+            render_record_panel(
+                "Peer Review Response Packages",
+                [("Package", "response_package"), ("Review", "review"), ("Items", "items"), ("Addressed", "addressed"), ("Decision", "decision"), ("Status", "status")],
+                state_records(state, "rp_publication", "response_package"),
+            ),
+            render_record_panel(
+                "Response Items",
+                [("Item", "response_item"), ("Package", "package"), ("Point", "point"), ("Revision", "revision"), ("Status", "status")],
+                state_records(state, "rp_publication", "response_item"),
+            ),
+            render_record_panel(
+                "Publication Decisions",
+                [("Decision", "publication_decision"), ("Submission", "submission"), ("Result", "decision"), ("Approved By", "approved_by"), ("Status", "status")],
+                state_records(state, "rp_publication", "publication_decision"),
+            ),
+            render_record_panel(
+                "Journal Requirements",
+                [("Requirement", "journal_requirement"), ("Source", "source"), ("Status", "status")],
+                state_records(state, "rp_pubplan", "journal_requirement"),
+            ),
+            render_record_panel(
+                "Response Letter Items",
+                [("Item", "response_item"), ("Reply", "reply"), ("Status", "status")],
+                state_records(state, "rp_peerresp", "response_item"),
+            ),
+        ]
     if file_name == "data.html":
         return [
             render_record_panel(
@@ -2286,6 +2359,7 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
             ("Backend Evidence", metric_value(state, [("rp_agentcmp", "backend_runner_report_checks")])),
             ("Integrity Plane", metric_value(state, [("rp_agentcmp", "integrity_plane_checks"), ("rp_integrity", "integrity_checks")])),
             ("Coherence Plane", metric_value(state, [("rp_agentcmp", "coherence_plane_checks"), ("rp_coherence", "coherence_checks")])),
+            ("Publication Workflow", metric_value(state, [("rp_agentcmp", "publication_checks"), ("rp_publication", "publication_checks")])),
             ("Reader Contract", metric_value(state, [("rp_agentcmp", "reader_contract")])),
         ]
         check_rows = [
@@ -3465,6 +3539,7 @@ def render_overview(
             ("Backend Checks", metric_value(state, [("rp_agentcmp", "portability_backend_checks")]), "rp_agentcmp"),
             ("Backend Runner", metric_value(state, [("rp_agentcmp", "backend_runner_checks")]), "rp_agentcmp"),
             ("Coherence Plane", metric_value(state, [("rp_agentcmp", "coherence_plane_checks"), ("rp_coherence", "coherence_checks")]), "rp_coherence"),
+            ("Publication", metric_value(state, [("rp_agentcmp", "publication_checks"), ("rp_publication", "publication_checks")]), "rp_publication"),
             ("QEMU", metric_value(state, [("rp_host_run_result", "qemu_orch_passed")]), "rp_host_run_result"),
         ],
         "artifacts.html": [
@@ -3502,8 +3577,16 @@ def render_overview(
         "services.html": [
             ("Bio Ops", metric_value(state, [("rp_bioop", "ops")]), "rp_bioop"),
             ("Lab Ops", metric_value(state, [("rp_labresop", "ops")]), "rp_labresop"),
+            ("Publication Ops", metric_value(state, [("rp_pubop", "ops")]), "rp_pubop"),
             ("Knowledge Ops", metric_value(state, [("rp_knowop", "ops")]), "rp_knowop"),
             ("Runtime Ops", metric_value(state, [("rp_runop", "ops")]), "rp_runop"),
+        ],
+        "publication.html": [
+            ("Checks", metric_value(state, [("rp_publication", "publication_checks")]), "rp_publication"),
+            ("Submissions", metric_value(state, [("rp_publication", "submissions")]), "rp_publication"),
+            ("Reviews", metric_value(state, [("rp_publication", "review_rounds")]), "rp_publication"),
+            ("Responses", metric_value(state, [("rp_peerresp", "packages"), ("rp_publication", "response_packages")]), "rp_peerresp"),
+            ("Decisions", metric_value(state, [("rp_publication", "decisions")]), "rp_publication"),
         ],
         "review.html": [
             ("Sections", metric_value(state, [("rp_review_dashboard", "sections")]), "rp_review_dashboard"),

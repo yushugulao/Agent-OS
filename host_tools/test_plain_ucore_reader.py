@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=22
+reader_views=23
 reader_actions=57
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
@@ -83,6 +83,7 @@ provenance_graph=project-provenance-graph:lab-gene-x;project=lab-gene-x;nodes=9;
 project_delivery=project-delivery:lab-gene-x;project=lab-gene-x;decision=ready;bundle=project-bundle.zip;release_gate=release;handoff=ready;status=ready
 package_intake=package-intake:external-review;label=External review package;decision=accepted;files=5;sha256=checked;status=ready
 package_index=project-package-index;handoff=ready;release_gate=release;snapshot=stable;reproducibility=passed;provenance=ready;status=ready
+publication_page=rp_publication;peer_response=rp_peerresp;status=ready
 status=ready
 """,
     "rp_web_routes": "routes=74\nget_routes=17\npost_routes=57\nroute=/research-studio;payload=rp_studio;status=ready\nroute=/research/project/{id}/review;payload=rp_web_bundle;status=ready\naction=/actions/research/studio-launch;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-release-gate;method=POST;payload=rp_api_action;status=ready\nstatus=ready\n",
@@ -95,7 +96,7 @@ status=ready
     "rp_api_data": "api=data\ndataset_snapshots=2\npreviews=2\nquality_checks=7\ntransforms=2\ncollection_items=4\nhost_action_file_manifest=mf.json\nhost_action_file_verify=passed\nhost_action_file_verified=11\nhost_action_file_missing=0\nstatus=ready\n",
     "rp_api_bio": "api=bio\nsample_registry=rp_sreg\nstatus=ready\n",
     "rp_api_labres": "api=lab-resources\ninstrument_registry=rp_instr\nstatus=ready\n",
-    "rp_api_pub": "api=publication\nresult_review=rp_resrev\nstatus=ready\n",
+    "rp_api_pub": "api=publication\nresult_review=rp_resrev\npublication_workflow=rp_publication;targets=2;submissions=2;reviews=2;responses=2;status=ready\nstatus=ready\n",
     "rp_api_know": "api=knowledge\nsemantic_index=rp_semindex\nstatus=ready\n",
     "rp_api_runtime": "api=runtime\nruntime_env=rp_runenv\nstatus=ready\n",
     "rp_api_action": "api=actions\nreader_contract=rp_web_bundle\nactions=57\nresearch_studio_launch=/actions/research/studio-launch\nproject_release_gate=/actions/research/project-release-gate\nproject_review_actions=8\nstatus=ready\n",
@@ -113,7 +114,7 @@ status=ready
     ),
     "rp_bioop": "ops=7\nop=sample_lookup;records=8;status=ok\nop=access_decision;requests=3;status=ok\n",
     "rp_labresop": "ops=6\nop=schedule_assess;bookings=6;status=ok\nop=training_gate;requirements=4;status=ok\nlab_governance_ops=approvals:2,ethics_protocols:1,protocol_compliance_reports:2,protocol_amendments:2,sop_executions:3,training_records:4,instrument_maintenance:3,inventory_transactions:14,procurement_orders:2,resource_budgets:3,run_queue_items:4,notifications:3,status=ready\n",
-    "rp_pubop": "ops=6\nop=result_review;items=10;status=ok\nop=fair_package;checks=8;status=ok\n",
+    "rp_pubop": "ops=6\nop=result_review;items=10;status=ok\nop=fair_package;checks=8;status=ok\nop=publication_workflow;submissions=2;reviews=2;responses=2;decisions=2;status=ok\n",
     "rp_knowop": "ops=6\nop=query_answer;answers=4;status=ok\nop=llm_grounding;responses=3;status=ok\n",
     "rp_runop": "ops=7\nop=worker_heartbeat;workers=4;status=ok\nop=host_llm_request;packets=3;status=ok\nplatform_doctor=ready;checks=10;workspace=pass;template=pass;cloud_llm=optional;provider_health=offline:1,cloud:0,ready_cloud:0;downloads=markdown,json\nsource_portfolio=sources:42,citations:4,tags:2,portfolio:ready,status=ready\nresearch_portfolio_scale=sources:42,datasets:3,literature_searches:4,reviews:8,evidence_reviews:4,evidence_extractions:15,screening_decisions:15,exports:66,doctor_reports:10,project_handoff_audits:30,project_run_comparisons:15,project_reproducibility_audits:15,project_snapshot_comparisons:15,status=ready\nruntime_assurance=secret_refs:3,model_registry:2,deployments:1,llm_proxy_audits:2,collab_threads:2,obs_alerts:5,health:1,status=ready\nresearch_ops=semantic_entities:8,semantic_relations:6,prompt_templates:2,prompt_versions:2,prompt_evaluations:1,runbook_steps:7,worker_ops:6,execution_controls:8,status=ready\nregulated_research=annotation_schemas:1,annotation_tasks:3,assay_plates:1,plate_wells:6,cohort_records:2,data_access_requests:1,dataset_cards:1,model_cards:1,research_object_crates:1,research_object_entities:29,sample_custody_events:18,statistical_designs:1,workflow_templates:8,status=ready\n",
     "rp_ui_home": "page=home\nstatus=ready\n",
@@ -270,8 +271,8 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=1238\n"
-        "tool_events=187\n"
+        "test_cases=1298\n"
+        "tool_events=197\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=4;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
@@ -283,6 +284,7 @@ status=ready
         "control_plane_checks=30;approvals=4;notifications=4;queue_items=4;plugins=3;workspaces=1;permissions=5;agentos_replacements=4;status=ready\n"
         "integrity_plane_checks=36;evidence_contracts=8;reference_contracts=8;namespace_checks=5;status_checks=5;review_alignment_checks=4;report_source_checks=3;package_trace_checks=3;agentos_replacements=4;status=ready\n"
         "coherence_plane_checks=40;delivery_contracts=7;run_state_contracts=7;lifecycle_contracts=6;workflow_lint=5;tool_protocol=5;report_validation=5;agent_coordination=3;agentos_replacements=4;status=ready\n"
+        "publication_checks=48;targets=2;submissions=2;review_rounds=2;revision_tasks=3;response_packages=2;response_items=4;decisions=2;agentos_replacements=4;status=ready\n"
         "llm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready\n"
         "workflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready\n"
         "portability_backend_checks=12;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=2;planned_cases=2;status=ready\n"
@@ -391,6 +393,70 @@ status=ready
         "report_validation=llm_source;source=rp_report_text;target=rp_llm_resp;result=pass;status=ready\n"
         "agent_coordination=decision_trace;source=rp_decisions;target=rp_review_dashboard;result=pass;status=ready\n"
         "coherence_report=coherence-report:RUN-042;checks=40;errors=0;warnings=0;status=ready\n"
+        "status=ready\n"
+    ),
+    "rp_publication": (
+        "service=publication-workflow\n"
+        "run_id=RUN-042\n"
+        "targets=2\n"
+        "submissions=2\n"
+        "review_rounds=2\n"
+        "revision_tasks=3\n"
+        "response_packages=2\n"
+        "response_items=4\n"
+        "decisions=2\n"
+        "publication_checks=48\n"
+        "journal_target=journal-target:systems-biology-report;name=Journal_of_Reproducible_Systems_Biology;article=research_article;requirements=5;status=active\n"
+        "journal_target=journal-target:agentos-systems;name=AgentOS_Systems_Letters;article=systems_artifact;requirements=4;status=active\n"
+        "submission=submission:RUN-042:systems-biology-report;target=journal-target:systems-biology-report;package=delivery-package:RUN-042;manuscript=manuscript:RUN-042;artifacts=5;checklist=5;status=submitted\n"
+        "submission=submission:RUN-042:agentos-artifact;target=journal-target:agentos-systems;package=delivery-package:RUN-042;manuscript=manuscript:RUN-042;artifacts=6;checklist=4;status=accepted\n"
+        "review_round=peer-review:RUN-042:round-1;submission=submission:RUN-042:systems-biology-report;reviewer=reviewer-a;decision=minor_revision;points=3;evidence=4;status=response_ready\n"
+        "review_round=peer-review:RUN-042:round-2;submission=submission:RUN-042:agentos-artifact;reviewer=reviewer-b;decision=ready;points=1;evidence=3;status=response_ready\n"
+        "revision_task=revision:RUN-042:discussion-evidence;review=peer-review:RUN-042:round-1;section=discussion;assignee=reporter;evidence=3;status=done\n"
+        "revision_task=revision:RUN-042:methods-reproducibility;review=peer-review:RUN-042:round-1;section=methods;assignee=writer;evidence=4;status=done\n"
+        "revision_task=revision:RUN-042:artifact-appendix;review=peer-review:RUN-042:round-2;section=appendix;assignee=auditor;evidence=3;status=done\n"
+        "response_package=peer-review-response-package:RUN-042:round-1;review=peer-review:RUN-042:round-1;items=3;addressed=3;needs_revision=0;decision=ready;status=ready\n"
+        "response_package=peer-review-response-package:RUN-042:round-2;review=peer-review:RUN-042:round-2;items=1;addressed=1;needs_revision=0;decision=ready;status=ready\n"
+        "response_item=1;package=peer-review-response-package:RUN-042:round-1;point=alignment_evidence;revision=revision:RUN-042:discussion-evidence;evidence=rp_stage_state,rp_retry_plan,rp_artifact_manifest;status=addressed\n"
+        "response_item=2;package=peer-review-response-package:RUN-042:round-1;point=statistical_method;revision=revision:RUN-042:methods-reproducibility;evidence=rp_report_text,rp_chart_data,rp_evidence;status=addressed\n"
+        "response_item=3;package=peer-review-response-package:RUN-042:round-1;point=consent_handling;revision=revision:RUN-042:methods-reproducibility;evidence=rp_governance,rp_privacy,rp_compliance;status=addressed\n"
+        "response_item=4;package=peer-review-response-package:RUN-042:round-2;point=artifact_appendix;revision=revision:RUN-042:artifact-appendix;evidence=rp_package,rp_dossier,rp_integrity;status=addressed\n"
+        "publication_decision=publication-decision:RUN-042:accept-with-evidence;submission=submission:RUN-042:systems-biology-report;decision=accepted;approved_by=editorial-board;release_candidate=release:RUN-042:plain-ucore;status=ready\n"
+        "publication_decision=publication-decision:RUN-042:artifact-accept;submission=submission:RUN-042:agentos-artifact;decision=accepted;approved_by=systems-board;release_candidate=release:RUN-042:plain-ucore;status=ready\n"
+        "search_index=publication,peer_review,response,revision,submission;records=15;status=ready\n"
+        "provenance=rp_package->rp_publication->rp_peerresp->rp_dossier;status=ready\n"
+        "agentos_adaptation=kernel_submission_metadata,kernel_review_event_queue,kernel_response_context,kernel_release_gate;status=planned\n"
+        "decision=accepted\n"
+        "status=ready\n"
+    ),
+    "rp_pubplan": (
+        "publication_plan=RUN-042\n"
+        "targets=2\n"
+        "journal_targets=2\n"
+        "checklist_items=9\n"
+        "submission_material=rp_package,rp_dossier,rp_report_text,rp_artifact_manifest,rp_review_pack\n"
+        "journal_requirement=structured_abstract;source=rp_report_text;status=ready\n"
+        "journal_requirement=methods_reproducibility;source=rp_repro;status=ready\n"
+        "journal_requirement=ethics_statement;source=rp_governance;status=ready\n"
+        "journal_requirement=data_availability;source=rp_datarel;status=ready\n"
+        "journal_requirement=artifact_appendix;source=rp_dossier;status=ready\n"
+        "agentos_showcase=plain_userland_vs_kernel_assisted;status=planned\n"
+        "status=ready\n"
+    ),
+    "rp_peerresp": (
+        "peer_review_response=RUN-042\n"
+        "packages=2\n"
+        "responses=6\n"
+        "items=4\n"
+        "addressed=4\n"
+        "needs_revision=0\n"
+        "response_letter=peer-review-response:RUN-042;sections=4;evidence_links=13;status=ready\n"
+        "response_package=peer-review-response-package:RUN-042:round-1;decision=ready;items=3;status=ready\n"
+        "response_package=peer-review-response-package:RUN-042:round-2;decision=ready;items=1;status=ready\n"
+        "response_item=alignment_evidence;reply=updated_discussion;status=addressed\n"
+        "response_item=statistical_method;reply=methods_named;status=addressed\n"
+        "response_item=consent_handling;reply=governance_linked;status=addressed\n"
+        "response_item=artifact_appendix;reply=appendix_linked;status=addressed\n"
         "status=ready\n"
     ),
     "rp_artifact_manifest": (
@@ -522,7 +588,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 22, summary
+        assert summary["pages"] == 23, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -535,6 +601,7 @@ def main() -> int:
         assert (out_dir / "llm.html").exists()
         assert (out_dir / "integrity.html").exists()
         assert (out_dir / "coherence.html").exists()
+        assert (out_dir / "publication.html").exists()
         assert (out_dir / "api" / "rp_api_home.json").exists()
         index_html = (out_dir / "index.html").read_text(encoding="utf-8")
         assert "Plain uCore Research" in index_html
@@ -720,6 +787,17 @@ def main() -> int:
         assert "Report Validation" in coherence_html
         assert "Agent Coordination" in coherence_html
         assert "coherence-report:RUN-042" in coherence_html
+        publication_html = (out_dir / "publication.html").read_text(encoding="utf-8")
+        assert "Publication Workflow" in publication_html
+        assert "Publication Detail" in publication_html
+        assert "Journal Targets" in publication_html
+        assert "Submission Packages" in publication_html
+        assert "Peer Review Rounds" in publication_html
+        assert "Revision Tasks" in publication_html
+        assert "Peer Review Response Packages" in publication_html
+        assert "Publication Decisions" in publication_html
+        assert "peer-review-response-package:RUN-042:round-1" in publication_html
+        assert "publication-decision:RUN-042:accept-with-evidence" in publication_html
         project_review_html = (out_dir / "project-review.html").read_text(encoding="utf-8")
         assert "Project Delivery Review" in project_review_html
         assert "Project Release Gate" in project_review_html
@@ -754,6 +832,7 @@ def main() -> int:
         assert "integrity_plane_checks" in compare_html
         assert "Integrity Plane" in compare_html
         assert "coherence_plane_checks" in compare_html
+        assert "publication_checks" in compare_html
         assert "Coherence Plane" in compare_html
         assert "Backend Runner Cases" in compare_html
         assert "Backend Case Details" in compare_html

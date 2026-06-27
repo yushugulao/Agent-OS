@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=1238" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=187" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=1298" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=197" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -734,6 +734,7 @@ def main() -> int:
             assert any("control_plane_checks=30" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("integrity_plane_checks=36" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("coherence_plane_checks=40" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("publication_checks=48" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_runbooks = read_json(base + "/api/state/rp_runbooks")
             assert any("runbook_service_checks=16" in line for line in rp_runbooks["lines"]), rp_runbooks
             assert any("runbook_templates=1" in line for line in rp_runbooks["lines"]), rp_runbooks
@@ -825,6 +826,23 @@ def main() -> int:
             assert any("report_validation=backend_source" in line for line in rp_coherence["lines"]), rp_coherence
             assert any("agent_coordination=recovery_path" in line for line in rp_coherence["lines"]), rp_coherence
             assert any("coherence_report=coherence-report:RUN-042" in line for line in rp_coherence["lines"]), rp_coherence
+            rp_publication = read_json(base + "/api/state/rp_publication")
+            assert any("publication_checks=48" in line for line in rp_publication["lines"]), rp_publication
+            assert any("targets=2" in line for line in rp_publication["lines"]), rp_publication
+            assert any("submissions=2" in line for line in rp_publication["lines"]), rp_publication
+            assert any("review_rounds=2" in line for line in rp_publication["lines"]), rp_publication
+            assert any("response_packages=2" in line for line in rp_publication["lines"]), rp_publication
+            assert any("response_items=4" in line for line in rp_publication["lines"]), rp_publication
+            assert any("journal_target=journal-target:systems-biology-report" in line for line in rp_publication["lines"]), rp_publication
+            assert any("submission=submission:RUN-042:systems-biology-report" in line for line in rp_publication["lines"]), rp_publication
+            assert any("review_round=peer-review:RUN-042:round-1" in line for line in rp_publication["lines"]), rp_publication
+            assert any("revision_task=revision:RUN-042:methods-reproducibility" in line for line in rp_publication["lines"]), rp_publication
+            assert any("response_package=peer-review-response-package:RUN-042:round-1" in line for line in rp_publication["lines"]), rp_publication
+            assert any("publication_decision=publication-decision:RUN-042:accept-with-evidence" in line for line in rp_publication["lines"]), rp_publication
+            assert any("agentos_adaptation=kernel_submission_metadata,kernel_review_event_queue,kernel_response_context,kernel_release_gate" in line for line in rp_publication["lines"]), rp_publication
+            rp_peerresp = read_json(base + "/api/state/rp_peerresp")
+            assert any("addressed=4" in line for line in rp_peerresp["lines"]), rp_peerresp
+            assert any("needs_revision=0" in line for line in rp_peerresp["lines"]), rp_peerresp
             rp_consistency = read_json(base + "/api/state/rp_consistency")
             assert any("checks=420" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("state_catalog_checks=12" in line for line in rp_consistency["lines"]), rp_consistency
@@ -1304,6 +1322,17 @@ def main() -> int:
             assert "Report Validation" in coherence_html
             assert "Agent Coordination" in coherence_html
             assert "coherence-report:RUN-042" in coherence_html
+            publication_html = read_text(base + "/publication.html")
+            assert "Publication Workflow" in publication_html
+            assert "Publication Detail" in publication_html
+            assert "Journal Targets" in publication_html
+            assert "Submission Packages" in publication_html
+            assert "Peer Review Rounds" in publication_html
+            assert "Revision Tasks" in publication_html
+            assert "Peer Review Response Packages" in publication_html
+            assert "Publication Decisions" in publication_html
+            assert "peer-review-response-package:RUN-042:round-1" in publication_html
+            assert "publication-decision:RUN-042:accept-with-evidence" in publication_html
             project_review_html = read_text(base + "/project-review.html")
             assert "Project Delivery Review" in project_review_html
             assert "Project Release Gate" in project_review_html
@@ -1458,6 +1487,8 @@ def main() -> int:
             assert "Integrity Plane" in compare_html
             assert "coherence_plane_checks" in compare_html
             assert "Coherence Plane" in compare_html
+            assert "publication_checks" in compare_html
+            assert "Publication Workflow" in compare_html
             assert "Compare Action Trace" in compare_html
             assert "Compare Action Output Links" in compare_html
             assert "Compare Action Output Details" in compare_html

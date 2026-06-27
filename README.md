@@ -78,6 +78,7 @@ user/src/rp_consistency.c
 user/src/rp_ui_export.c
 user/src/rp_web_export.c
 user/src/rp_review_dashboard.c
+user/src/rp_publication.c
 user/src/rp_runbooks.c
 user/src/rp_projectrel.c
 user/src/rp_studyproto.c
@@ -339,7 +340,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_review_pack`
 - `rp_agentcmp`
 
-The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 1238-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
+The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 1298-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
 
 Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_agentcmp` after all children exit, then prints `state_ok=1`.
 
@@ -382,7 +383,7 @@ rp_plain: passed
 Expected orchestrator output:
 
 ```text
-rp_orch: start programs=52
+rp_orch: start programs=53
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_state_catalog: keys=573 nonzero=70 zero=503 represented=573 checks=12 status=ready
 rp_object_store: records=8 status=ready
@@ -426,6 +427,7 @@ rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 lab_governance=26 pr
 rp_ui_export: pages=5 run=RUN-042 custom_runs=3 compare=ready status=ready
 rp_web_export: routes=74 api_payloads=14 actions=57 bundle=ready status=ready
 rp_review_dashboard: sections=8 gates=6 review_pack=host-materialized status=ready
+rp_publication: targets=2 submissions=2 reviews=2 responses=2 items=4 checks=48 status=ready
 rp_runbooks: templates=1 steps=7 incidents=1 executions=1 exports=1 status=ready
 rp_projectrel: checks=18 release=ready reproducibility=passed intake=accepted status=ready
 rp_studyproto: checks=20 protocols=2 launches=2 reproduction=ready status=ready
@@ -434,8 +436,8 @@ rp_reviewboard: checks=24 requests=1 votes=4 signoffs=4 assignments=4 decision=a
 rp_controlplane: checks=30 approvals=4 notifications=4 queue=4 plugins=3 permissions=5 status=ready
 rp_integrityplane: checks=36 evidence=8 references=8 namespace=5 status_semantics=5 review_alignment=4 status=ready
 rp_coherenceplane: checks=40 delivery=7 run_state=7 lifecycle=6 workflow_lint=5 tool_protocol=5 report_validation=5 status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=52 state_files=180 acks=52 tools=187 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
-rp_orch: programs_ok=52 programs_total=52
+rp_compare_plain: plain_kernel=passed objects=500 programs=53 state_files=183 acks=53 tools=197 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 publication=48 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
+rp_orch: programs_ok=53 programs_total=53
 rp_orch: state_ok=1
 rp_orch: passed
 ```
