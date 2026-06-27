@@ -1,4 +1,4 @@
-.PHONY: clean build user run debug test agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run dual-clean .FORCE
+.PHONY: clean build user run debug test plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run dual-clean .FORCE
 all: build
 
 K = os
@@ -147,6 +147,16 @@ user:
 	make -C user CHAPTER=$(CHAPTER) BASE=$(BASE)
 
 test: user run
+
+plain-platform-build:
+	rm -f $(F)/fs.img $(F)/fs-copy.img
+	$(MAKE) user nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform
+	$(MAKE) build TOOLPREFIX=$(TOOLPREFIX) LOG=warn INIT_PROC=rp_orch CHAPTER=platform
+
+plain-platform-run:
+	rm -f $(F)/fs.img $(F)/fs-copy.img
+	$(MAKE) user nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform
+	$(MAKE) run TOOLPREFIX=$(TOOLPREFIX) LOG=error INIT_PROC=rp_orch CHAPTER=platform
 
 agentos-user:
 	$(MAKE) -C agentos_ucore user TOOLPREFIX=$(TOOLPREFIX) CHAPTER=agent

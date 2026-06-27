@@ -7,8 +7,7 @@ make -C user clean
 make clean
 make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_plain
 make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_plain LOG=warn INIT_PROC=rp_plain
-make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform
-make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=rp_orch
+make plain-platform-build TOOLPREFIX=riscv64-linux-gnu-
 make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded
 make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded LOG=warn INIT_PROC=rp_seed_orch
 ```
@@ -129,7 +128,7 @@ after the init program exits. The platform result is taken from the `passed` lin
 ## Run Role Orchestrator
 
 ```bash
-timeout 45s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=rp_orch
+timeout 45s make plain-platform-run TOOLPREFIX=riscv64-linux-gnu-
 ```
 
 Observed key output:

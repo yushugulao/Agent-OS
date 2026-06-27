@@ -19,8 +19,8 @@ See `docs/dual-targets.md` for the target layout and parity direction.
 Useful root commands:
 
 ```bash
-make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform
-make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=rp_orch
+make plain-platform-build TOOLPREFIX=riscv64-linux-gnu-
+make plain-platform-run TOOLPREFIX=riscv64-linux-gnu-
 make agentos-user TOOLPREFIX=riscv64-linux-gnu-
 make agentos-build TOOLPREFIX=riscv64-linux-gnu-
 make agentos-test TOOLPREFIX=riscv64-linux-gnu-
@@ -439,9 +439,8 @@ make clean
 make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_plain
 make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_plain LOG=warn INIT_PROC=rp_plain
 timeout 45s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_plain LOG=warn INIT_PROC=rp_plain
-make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform
-make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=rp_orch
-timeout 45s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=rp_orch
+make plain-platform-build TOOLPREFIX=riscv64-linux-gnu-
+timeout 45s make plain-platform-run TOOLPREFIX=riscv64-linux-gnu-
 make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded
 make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded LOG=warn INIT_PROC=rp_seed_orch
 timeout 90s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded LOG=warn INIT_PROC=rp_seed_orch
