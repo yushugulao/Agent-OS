@@ -2603,11 +2603,29 @@ static int agent_file_digest_cacheable(struct inode *ip)
 	       agent_file_generation > 0;
 }
 
+static uint64 agent_file_digest_generation(struct inode *ip)
+{
+	int slot;
+
+	if (ip == 0)
+		return agent_file_generation;
+	slot = ip->agent_meta_slot - 1;
+	if (slot >= 0 && slot < AGENT_FILE_META_MAX &&
+	    agent_files[slot].used &&
+	    agent_files[slot].dev == ip->dev &&
+	    agent_files[slot].inum == ip->inum &&
+	    agent_files[slot].fs_generation > 0)
+		return agent_files[slot].fs_generation;
+	return agent_file_generation;
+}
+
 static int agent_file_digest_cache_lookup(struct inode *ip,
 					  struct agent_result *res)
 {
 	struct agent_file_digest_cache_entry *e;
+	uint64 generation;
 
+	generation = agent_file_digest_generation(ip);
 	for (int i = 0; i < AGENT_FILE_DIGEST_CACHE_MAX; i++) {
 		e = &agent_file_digest_cache[i];
 		if (!e->valid)
@@ -2616,7 +2634,7 @@ static int agent_file_digest_cache_lookup(struct inode *ip,
 			continue;
 		if (e->size != ip->size)
 			continue;
-		if (e->fs_generation != agent_file_generation)
+		if (e->fs_generation != generation)
 			continue;
 		res->value0 = e->size;
 		res->value1 = e->bytes;
@@ -2647,7 +2665,7 @@ static void agent_file_digest_cache_store(struct inode *ip, uint64 bytes,
 	e->dev = ip->dev;
 	e->inum = ip->inum;
 	e->size = ip->size;
-	e->fs_generation = agent_file_generation;
+	e->fs_generation = agent_file_digest_generation(ip);
 	e->bytes = bytes;
 	e->hash = hash;
 	safestrcpy(e->preview, preview[0] ? preview : "empty_file",
