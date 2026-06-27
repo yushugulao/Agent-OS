@@ -221,6 +221,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_release` | release | dossier, compare | release decision from package, audit, privacy, and LLM packet state |
 | `rp_dossier` | dossier | compare | final review material summary |
 | `rp_reviewboard` | review operations, review dashboard, dossier, package, operations board | compare | formal review board request, votes, signoffs, assignments, workloads, and release decision |
+| `rp_control` | approval, notification, queue, plugin, workspace, and access services | compare, reader | platform control plane records for approvals, notifications, run queue, plugin calls, workspace access, saved views, API token references, and AgentOS replacement targets |
 | `rp_reviewops` | dossier | compare | review board, vote, risk, mitigation, and governance result |
 | `rp_submit` | dossier | compare | journal target, cover letter, data availability, and review response package |
 | `rp_sreg` | service surface | consistency, metrics, UI export, Web/API export, compare, orchestrator | sample registry with sample, aliquot, cohort, and custody counts |

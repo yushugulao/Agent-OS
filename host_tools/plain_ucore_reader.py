@@ -26,12 +26,13 @@ PAGE_SPECS = [
     ("agents.html", "Agents", "rp_api_agents", ["rp_ui_agent", "rp_agents", "rp_decisions"]),
     ("evidence.html", "Evidence", "rp_api_evidence", ["rp_ui_evidence", "rp_evidence", "rp_package"]),
     ("review.html", "Review", "rp_review_dashboard", ["rp_review_pack", "rp_review2", "rp_revision", "rp_package", "rp_report_text"]),
-    ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency", "rp_backend", "rp_backend_exec", "rp_study", "rp_studyproto", "rp_opsboard"]),
+    ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency", "rp_backend", "rp_backend_exec", "rp_study", "rp_studyproto", "rp_opsboard", "rp_control"]),
     ("artifacts.html", "Artifacts", "rp_api_artifacts", ["rp_artifact", "rp_artifact_manifest", "rp_package"]),
     ("delivery.html", "Delivery", "rp_package", ["rp_nbexec", "rp_uresrun", "rp_artifact_manifest", "rp_review_pack"]),
     ("data.html", "Data", "rp_api_data", ["rp_input", "rp_ingest_files", "rp_dataset_snapshot", "rp_data_preview", "rp_data_quality", "rp_data_transform", "rp_dataset_collection"]),
     ("services.html", "Services", "rp_api_bio", ["rp_api_labres", "rp_api_pub", "rp_api_know", "rp_api_runtime", "rp_bioop", "rp_labresop", "rp_pubop", "rp_knowop", "rp_runop", "rp_runbooks", "rp_studyproto", "rp_opsboard"]),
     ("review-board.html", "Review Board", "rp_reviewboard", ["rp_reviewops", "rp_review_dashboard", "rp_dossier", "rp_package", "rp_opsboard"]),
+    ("control-plane.html", "Control Plane", "rp_control", ["rp_opsboard", "rp_review_dashboard", "rp_agentcmp", "rp_web_bundle"]),
     ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets"]),
     ("actions.html", "Actions", "rp_api_action", ["rp_actionio", "rp_host_run_result", "rp_web_routes", "rp_web_bundle"]),
 ]
@@ -1187,6 +1188,16 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Workloads", metric_value(state, [("rp_reviewboard", "review_workloads")]), "rp_reviewboard"),
         ("Package", metric_value(state, [("rp_reviewboard", "review_package")]), "rp_reviewboard"),
     ]
+    control_plane_items = [
+        ("Approvals", metric_value(state, [("rp_control", "approvals")]), "rp_control"),
+        ("Notifications", metric_value(state, [("rp_control", "notifications")]), "rp_control"),
+        ("Queue Items", metric_value(state, [("rp_control", "run_queue_items")]), "rp_control"),
+        ("Plugin Runs", metric_value(state, [("rp_control", "plugin_runs")]), "rp_control"),
+        ("Workspaces", metric_value(state, [("rp_control", "workspaces")]), "rp_control"),
+        ("Users", metric_value(state, [("rp_control", "users")]), "rp_control"),
+        ("Permissions", metric_value(state, [("rp_control", "permissions")]), "rp_control"),
+        ("Control Actions", metric_value(state, [("rp_control", "control_actions")]), "rp_control"),
+    ]
     if file_name == "run.html":
         return render_summary_panel("Research Output", report_items)
     if file_name in ("evidence.html", "artifacts.html"):
@@ -1217,6 +1228,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Research Operations", operations_items)
     if file_name == "review-board.html":
         return render_summary_panel("Formal Review Board", review_board_items)
+    if file_name == "control-plane.html":
+        return render_summary_panel("Platform Control Plane", control_plane_items)
     return ""
 
 
@@ -1819,6 +1832,49 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 "Review Package",
                 [("Package", "review_package"), ("Files", "files"), ("Status", "status")],
                 state_records(state, "rp_reviewboard", "review_package"),
+            ),
+        ]
+    if file_name == "control-plane.html":
+        return [
+            render_record_panel(
+                "Approval Flow",
+                [("Approval", "approval"), ("Target", "target"), ("State", "state"), ("Actor", "actor"), ("Status", "status")],
+                state_records(state, "rp_control", "approval"),
+            ),
+            render_record_panel(
+                "Notification Delivery",
+                [("Subscription", "subscription"), ("Notification", "notification"), ("Target", "target"), ("Event", "event"), ("Delivered", "delivered"), ("Status", "status")],
+                state_records(state, "rp_control", "subscription") + state_records(state, "rp_control", "notification"),
+            ),
+            render_record_panel(
+                "Run Queue",
+                [("Queue", "queue"), ("Run", "run"), ("Priority", "priority"), ("State", "state"), ("Worker", "worker"), ("Status", "status")],
+                state_records(state, "rp_control", "queue"),
+            ),
+            render_record_panel(
+                "Plugin Tools",
+                [("Plugin", "plugin"), ("Plugin Run", "plugin_run"), ("Tool", "tool"), ("Result", "result"), ("Status", "status")],
+                state_records(state, "rp_control", "plugin") + state_records(state, "rp_control", "plugin_run"),
+            ),
+            render_record_panel(
+                "Workspace Access",
+                [("Workspace", "workspace"), ("User", "user"), ("Grant", "grant"), ("Role", "role"), ("Status", "status")],
+                state_records(state, "rp_control", "workspace") + state_records(state, "rp_control", "user") + state_records(state, "rp_control", "grant"),
+            ),
+            render_record_panel(
+                "Saved Views And API Token",
+                [("Saved View", "saved_view"), ("Kind", "kind"), ("Query", "query"), ("API Token", "api_token"), ("Owner", "owner"), ("Status", "status")],
+                state_records(state, "rp_control", "saved_view") + state_records(state, "rp_control", "api_token"),
+            ),
+            render_record_panel(
+                "Permission Checks",
+                [("Permission", "permission"), ("Result", "result"), ("Status", "status")],
+                state_records(state, "rp_control", "permission"),
+            ),
+            render_record_panel(
+                "Control Report",
+                [("Report", "control_report"), ("Approvals", "approvals"), ("Notifications", "notifications"), ("Queue Items", "queue_items"), ("Plugin Runs", "plugin_runs"), ("Status", "status")],
+                state_records(state, "rp_control", "control_report"),
             ),
         ]
     if file_name == "data.html":

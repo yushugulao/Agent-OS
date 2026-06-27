@@ -51,6 +51,7 @@ static const char *PROGRAMS[] = {
 	"rp_studyproto",
 	"rp_opsboard",
 	"rp_reviewboard",
+	"rp_controlplane",
 	"rp_compare_plain",
 };
 
