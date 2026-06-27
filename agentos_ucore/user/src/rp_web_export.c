@@ -557,7 +557,7 @@ int main(void)
 	if (!rp_write_file("rp_api_compare",
 			   "api=compare-metrics\n"
 			   "plain_kernel=passed\n"
-			   "agentos_kernel=observed\n"
+			   "agentos_kernel=mainflow_bound\n"
 			   "agentos_context_snapshot=1\n"
 			   "agentos_metadata_index=1\n"
 			   "agentos_batch_tool=1\n"
@@ -1796,7 +1796,7 @@ int main(void)
 			}
 		}
 		if (!file_contains_silent("rp_runner", "backend_evidence_report=rp_backend_exec")) {
-			if (!rp_append_file("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;status=ready")) return 1;
+			if (!rp_append_file("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;status=ready")) return 1;
 		}
 		if (!file_contains_silent("rp_report_text", "backend_evidence_report=rp_backend_exec")) {
 			if (!rp_append_file("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index;status=ready")) return 1;

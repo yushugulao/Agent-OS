@@ -196,7 +196,7 @@ int main(void)
 	if (!rp_write_file("rp_ui_compare",
 			   "page=compare-metrics\n"
 			   "plain_kernel=passed\n"
-			   "agentos_kernel=observed\n"
+			   "agentos_kernel=mainflow_bound\n"
 			   "agentos_context_snapshot=1\n"
 			   "agentos_metadata_index=1\n"
 			   "agentos_batch_tool=1\n"

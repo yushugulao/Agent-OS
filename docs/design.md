@@ -253,7 +253,7 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_publication` | publication workflow | test suite, compare, Host reader, orchestrator | journal targets, submissions, peer review rounds, revision tasks, response packages, response items, and publication decisions |
 | `rp_mature` | mature platform mapping | test suite, compare, Host reader, orchestrator | Galaxy, AiiDA, DVC, MLflow, Nextflow, and Snakemake capability profiles mapped onto local platform state and AgentOS target services |
 | `rp_mature_refs` | mature platform mapping | test suite, compare, Host reader | reference profile rows for the six mature research platforms |
-| `rp_mature_map` | mature platform mapping | test suite, compare, Host reader | capability mapping rows and planned AgentOS target mechanisms such as kernel context, metadata index, event queue, batch runner, and capability contract table |
+| `rp_mature_map` | mature platform mapping | test suite, compare, Host reader | capability mapping rows and AgentOS target mechanisms such as kernel context, metadata index, event queue, batch runner, and capability contract table |
 | `rp_mature_checks` | mature platform mapping | test suite, compare, Host reader | profile, state-store, surface, ratio, and AgentOS adaptation checks for the mature-platform mapping |
 | `rp_pubplan` | service surface | consistency, compare, orchestrator | publication target, figure, section, data availability, and code availability plan |
 | `rp_peerresp` | service surface | consistency, compare, orchestrator | peer-review response package summary |
@@ -271,9 +271,9 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_wpool` | service surface | consistency, compare, orchestrator | worker pool, worker, heartbeat, slot, and queue-depth summary |
 | `rp_runop` | service surface | consistency, test suite, orchestrator | runtime operation record |
 | `rp_agentcmp` | AgentCompare metrics | compare | plain-kernel comparison counters |
-| `rp_backend` | backend scenario | compare, orchestrator | same-workflow backend scenario case count and planned Agent-OS cases |
-| `rp_backend_exec` | backend scenario | compare, orchestrator | backend scenario execution result for executable and planned cases, including content checks, attempts, retry reasons, tick observations, source/requirement/observation/action/review rows, and plain-cost/AgentOS-replacement/risk rows |
-| `rp_study` | backend scenario | compare, orchestrator | same-workflow backend study summary with plain-uCore detail checks and planned Agent-OS kernel verification |
+| `rp_backend` | backend scenario | compare, orchestrator | same-workflow backend scenario case count and AgentOS kernel-backed cases |
+| `rp_backend_exec` | backend scenario | compare, orchestrator | backend scenario execution result for executable plain-uCore and AgentOS cases, including content checks, attempts, retry reasons, tick observations, source/requirement/observation/action/review rows, and plain-cost/AgentOS-replacement/risk rows |
+| `rp_study` | backend scenario | compare, orchestrator | same-workflow backend study summary with plain-uCore detail checks and AgentOS kernel verification |
 | `rp_consistency` | consistency checker | metrics, compare, orchestrator | derived checks across task records, LLM packets, relay protocol files, workflow invocation, completion hooks, backend cases, runner artifacts, dynamic input records, workbench handoff sections, workflow runner execution files, and service surface records |
 | `rp_ui_home` | UI export | compare, orchestrator | home page data for the host web service with navigation and primary cards |
 | `rp_ui_run` | UI export | compare, orchestrator | run-detail page data for RUN-042 with timeline rows, artifact preview entries, and revision-delta reference |

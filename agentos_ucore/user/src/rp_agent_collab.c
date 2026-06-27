@@ -1,9 +1,118 @@
+#include <agent.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 #include <research_platform_state.h>
+#include <unistd.h>
+
+static struct agent_event collab_event;
+static struct agent_op collab_op;
+static struct agent_result collab_result;
+
+static int quiet_file_contains(const char *path, const char *needle)
+{
+	char buf[512];
+	int n = rp_read_file(path, buf, sizeof(buf));
+
+	if (n < 0)
+		return 0;
+	return rp_text_contains(buf, needle);
+}
+
+static int collab_waiter(void)
+{
+	if (agent_watch(AGENT_EVENT_MESSAGE, "handoff=recovery-auditor") < 0)
+		return 1;
+	if (!rp_write_file("rp_agentos_collab_ready",
+			   "agent=sentinel\n"
+			   "watch=handoff=recovery-auditor\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	memset(&collab_event, 0, sizeof(collab_event));
+	if (agent_wait(&collab_event, 100) != AGENT_STATUS_OK ||
+	    collab_event.type != AGENT_EVENT_MESSAGE ||
+	    !rp_text_contains(collab_event.payload,
+			      "handoff=recovery-auditor")) {
+		return 1;
+	}
+	if (!rp_write_file("rp_agentos_collab_ack",
+			   "agent=sentinel\n"
+			   "event=handoff=recovery-auditor\n"
+			   "delivery=kernel_event_queue\n"
+			   "status=ready\n")) {
+		return 1;
+	}
+	return 0;
+}
+
+static int run_kernel_collaboration(void)
+{
+	struct agent_info info;
+	int pid;
+	int code = -1;
+
+	if (agent_info(&info) < 0 || !info.is_agent)
+		return 0;
+	if (info.agent_role != AGENT_ROLE_ORCHESTRATOR ||
+	    (info.capability_mask & AGENT_CAP_ORCHESTRATE) == 0) {
+		printf("rp_agent_collab: orchestrate_capability_missing\n");
+		return -1;
+	}
+
+	pid = agent_create_role(AGENT_ROLE_SENTINEL);
+	if (pid < 0)
+		return -1;
+	if (pid == 0)
+		exit(collab_waiter());
+
+	for (int i = 0; i < 2000; i++) {
+		if (quiet_file_contains("rp_agentos_collab_ready",
+					"status=ready"))
+			break;
+		sched_yield();
+	}
+	if (!quiet_file_contains("rp_agentos_collab_ready", "status=ready")) {
+		printf("rp_agent_collab: waiter_not_ready\n");
+		return -1;
+	}
+
+	memset(&collab_event, 0, sizeof(collab_event));
+	collab_event.type = AGENT_EVENT_MESSAGE;
+	collab_event.source_pid = getpid();
+	collab_event.target_pid = pid;
+	collab_event.corr_id = 2101;
+	strcpy(collab_event.payload,
+	       "handoff=recovery-auditor;run_id=RUN-042;source=orchestrator");
+	if (agent_wake(pid, &collab_event) < 0)
+		return -1;
+	if (waitpid(pid, &code) != pid || code != 0)
+		return -1;
+	if (!quiet_file_contains("rp_agentos_collab_ack", "status=ready"))
+		return -1;
+
+	memset(&collab_op, 0, sizeof(collab_op));
+	collab_op.version = AGENT_CALL_VERSION;
+	collab_op.tool_id = AGENT_TOOL_CAPABILITY_CHECK;
+	collab_op.request_id = 2102;
+	strcpy(collab_op.payload, "rerun_stage");
+	if (agent_run(&collab_op, &collab_result, 1, 0) != 1 ||
+	    collab_result.status != AGENT_STATUS_OK ||
+	    collab_result.value0 != 1) {
+		printf("rp_agent_collab: capability_check_failed status=%d\n",
+		       collab_result.status);
+		return -1;
+	}
+	return 1;
+}
 
 int main(void)
 {
 	int ok = 1;
+	int kernel_collab = run_kernel_collaboration();
+
+	if (kernel_collab < 0)
+		return 1;
 	ok = ok && rp_file_contains("rp_plan", "run=RUN-042");
 	ok = ok && rp_file_contains("rp_mail", "msg=21");
 	ok = ok && rp_file_contains("rp_stage_log", "first_attempt status=failed");
@@ -25,6 +134,8 @@ int main(void)
 			   "agent=auditor;role=audit;state=passed;msg=2\n"
 			   "agents=7\n"
 			   "messages=21\n"
+			   "agentos_interagent_event=kernel_queue\n"
+			   "agentos_role_launch=kernel_bound\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -51,6 +162,7 @@ int main(void)
 			   "handoff=recovery->writer;artifact=rp_artifact;status=done\n"
 			   "handoff=writer->auditor;artifact=rp_report_text;status=done\n"
 			   "handoffs=6\n"
+			   "agentos_handoff_event=kernel_delivered\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -74,6 +186,9 @@ int main(void)
 			   "agent_deliberation_items=5\n"
 			   "recovery_decision=rerun_align_only\n"
 			   "audit_decision=release_ready\n"
+			   "kernel_agent_launch=role_specific\n"
+			   "kernel_event_delivery=inter_agent\n"
+			   "kernel_capability_check=orchestrator_allow\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -83,6 +198,14 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=agent_collab.write_handoff")) return 1;
 	if (!rp_append_file("rp_tool", "tool=agent_collab.write_deliberation")) return 1;
 	if (!rp_append_file("rp_tool", "tool=agent_collab.write_run")) return 1;
+	if (kernel_collab &&
+	    !rp_append_file("rp_tool", "tool=agentos.inter_agent_event")) {
+		return 1;
+	}
+	if (kernel_collab &&
+	    !rp_append_file("rp_tool", "tool=agentos.capability_check")) {
+		return 1;
+	}
 	if (!rp_append_status("agents=ready")) return 1;
 	if (!rp_append_status("decisions=ready")) return 1;
 	if (!rp_append_status("handoff=ready")) return 1;
