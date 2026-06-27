@@ -406,7 +406,7 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=363\n"
+			   "checks=373\n"
 			   "task_records=21\n"
 			   "ready_tasks=21\n"
 			   "high_tasks=4\n"
@@ -589,6 +589,24 @@ int main(void)
                "usable_research_study_protocols=0\n"
                "usable_research_workbench_action_items=0\n"
                "usable_research_workbench_notes=0\n"
+               "root_state_surface_checks=10\n"
+               "root_projects=1\n"
+               "root_runs=1\n"
+               "root_reports=1\n"
+               "root_plans=1\n"
+               "root_search_records=1\n"
+               "root_site_exports=1\n"
+               "root_compare_profiles=1\n"
+               "root_audit_records=5\n"
+               "root_context_records=348\n"
+               "root_project_id=lab-gene-x\n"
+               "root_run_id=RUN-042\n"
+               "root_report_id=RUN-042-recovery-report\n"
+               "root_plan_id=PLAN-RUN-042-RECOVER-1\n"
+               "root_search_id=search:1\n"
+               "root_site_id=site:1\n"
+               "root_compare_profile=agentcompare-default\n"
+               "root_audit_spoof_denied=1\n"
 			   "study_protocol_reproduction_checks=5\n"
 			   "project_bundle_cache=ready\n"
 			   "research_search_saved=2\n"
@@ -665,6 +683,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=363 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
+	printf("rp_consistency: checks=373 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
 	return 0;
 }
