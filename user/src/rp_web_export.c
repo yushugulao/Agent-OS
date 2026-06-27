@@ -185,8 +185,8 @@ int main(void)
 
 	if (!rp_write_file("rp_web_routes",
 			   "service=host-web-ui\n"
-			   "routes=140\n"
-			   "get_routes=17\n"
+			   "routes=141\n"
+			   "get_routes=18\n"
 			   "post_routes=123\n"
 			   "route=/;payload=rp_api_home;status=ready\n"
 			   "route=/run/RUN-042;payload=rp_api_run;status=ready\n"
@@ -204,6 +204,7 @@ int main(void)
 			   "route=/publication;payload=rp_api_pub;status=ready\n"
 			   "route=/knowledge;payload=rp_api_know;status=ready\n"
 			   "route=/runtime;payload=rp_api_runtime;status=ready\n"
+			   "route=/api-catalog;payload=rp_api_catalog;status=ready\n"
 			   "action=/actions/host-workflow/run;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/host-workflow/export;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/host-workflow/stage-attempt;method=POST;payload=rp_api_action;status=ready\n"
@@ -987,6 +988,41 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (!rp_write_file("rp_api_catalog",
+			   "api=catalog\n"
+			   "host_api_routes=214\n"
+			   "host_action_routes=95\n"
+			   "ucore_get_routes=18\n"
+			   "ucore_post_routes=123\n"
+			   "reader_api_payloads=15\n"
+			   "reader_views=40\n"
+			   "usable_research_api_routes=77\n"
+			   "api_group=usable_research;routes=77;state=rp_usable,rp_usableproj,rp_studyproto,rp_usableds,rp_usablelib;status=ready\n"
+			   "api_group=workflow;routes=6;state=rp_stage_state,rp_wfio,rp_backend_exec;status=ready\n"
+			   "api_group=data;routes=6;state=rp_ingest_files,rp_dataset_snapshot,rp_data_preview,rp_data_quality,rp_dataset_collection;status=ready\n"
+			   "api_group=research;routes=6;state=rp_runner,rp_package,rp_review_pack,rp_knowledge;status=ready\n"
+			   "api_group=agentos;routes=3;state=rp_agentcmp,rp_consistency,rp_api_compare;status=ready\n"
+			   "api_group=execution;routes=3;state=rp_execobs,rp_worker,rp_runconf;status=ready\n"
+			   "api_group=llm;routes=3;state=rp_llm_req,rp_llm_resp,rp_llm_guard,rp_prompt;status=ready\n"
+			   "api_group=provenance;routes=3;state=rp_prov_view,rp_prov_query,rp_lineage;status=ready\n"
+			   "api_group=review;routes=3;state=rp_review_dashboard,rp_reviewboard,rp_review_pack;status=ready\n"
+			   "api_key=/api/usable-research-workbench-file-catalog;state=rp_runner,rp_package;status=ready\n"
+			   "api_key=/api/usable-research-workbench-action-queue;state=rp_opsboard,rp_runner;status=ready\n"
+			   "api_key=/api/usable-research-workbench-plan-queue;state=rp_opsboard,rp_runner;status=ready\n"
+			   "api_key=/api/usable-research-platform-doctor;state=rp_startup,rp_runop,rp_usableboot;status=ready\n"
+			   "api_key=/api/usable-research-study-protocol-reproduction-package-action-plan;state=rp_studyproto,rp_usablepack;status=ready\n"
+			   "api_key=/api/usable-research-study-protocol-reproduction-package-action-execution;state=rp_studyproto,rp_usablepack;status=ready\n"
+			   "api_key=/api/usable-research-project-action-plan;state=rp_projectrel,rp_usableproj;status=ready\n"
+			   "api_key=/api/usable-research-project-delivery;state=rp_projectrel,rp_package;status=ready\n"
+			   "api_key=/api/research-search;state=rp_knowledge,rp_lit;status=ready\n"
+			   "api_key=/api/llm-proxy;state=rp_prompt,rp_llm_guard;status=ready\n"
+			   "download_group=research_project;routes=6;state=rp_package,rp_projectrel;status=ready\n"
+			   "download_group=workbench;routes=8;state=rp_runner,rp_usableops;status=ready\n"
+			   "download_group=study_protocol;routes=5;state=rp_studyproto,rp_usablepack;status=ready\n"
+			   "reader_projection=host_api_catalog_to_plain_ucore_state_files\n"
+			   "status=ready\n")) {
+		return 1;
+	}
 	if (!rp_write_file("rp_actionio",
 			   "requests=8\n"
 			   "request=1;path=/actions/host-workflow/run;run_id=RUN-042;inject_failure=1;use_cache=1\n"
@@ -1206,10 +1242,10 @@ int main(void)
 	}
 	if (!rp_write_file("rp_web_bundle",
 			   "bundle=host-web-ui\n"
-			   "routes=140\n"
-			   "get_routes=17\n"
+			   "routes=141\n"
+			   "get_routes=18\n"
 			   "post_routes=123\n"
-			   "api_payloads=14\n"
+			   "api_payloads=15\n"
 			   "action_payloads=1\n"
 			   "action_state_records=12\n"
 			   "action_validation=passed\n"
@@ -1254,7 +1290,7 @@ int main(void)
 			   "reader_contract=host_plain_ucore_v2\n"
 			   "reader_contract_version=2\n"
 			   "reader_ready=1\n"
-			   "reader_views=39\n"
+			   "reader_views=40\n"
 			   "calculations_page=rp_calculation;jobs=1;retrieved=3;parser_results=1;status=ready\n"
 			   "real_task_page=rp_realtask;dataset=palmer-penguins;rows=344;answer_audit=pass;status=ready\n"
 			   "analysis_results_page=rp_analysisres;runs=2;tables=2;statistics=2;figures=2;status=ready\n"
@@ -1266,8 +1302,8 @@ int main(void)
 			   "model_registry_page=rp_modelreg;models=1;versions=1;evaluations=1;deployments=1;status=ready\n"
 			   "release_dossier_page=rp_reldossier;sections=7;decision=ready_for_review;status=ready\n"
 			   "reader_actions=123\n"
-			   "reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes\n"
-			   "reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle\n"
+			   "reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_api_catalog,rp_web_routes\n"
+			   "reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_api_catalog,rp_studio,rp_web_bundle\n"
 			   "reader_required_sections=routes,payloads,actions,live_update,downloads,compare\n"
 			   "reader_event_stream=rp_web_bundle\n"
 			   "reader_fallback=rp_site\n"
@@ -1703,6 +1739,6 @@ int main(void)
 	if (!rp_append_status("actionio=ready")) return 1;
 	if (!rp_append_status("usable_research=ready")) return 1;
 	if (!rp_append_status("action_exports=ready")) return 1;
-	printf("rp_web_export: routes=140 api_payloads=14 actions=123 bundle=ready status=ready\n");
+	printf("rp_web_export: routes=141 api_payloads=15 actions=123 bundle=ready status=ready\n");
 	return 0;
 }

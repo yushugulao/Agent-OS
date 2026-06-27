@@ -31,6 +31,7 @@ PAGE_SPECS = [
     ("delivery.html", "Delivery", "rp_package", ["rp_nbexec", "rp_uresrun", "rp_artifact_manifest", "rp_review_pack"]),
     ("data.html", "Data", "rp_api_data", ["rp_input", "rp_ingest_files", "rp_dataset_snapshot", "rp_data_preview", "rp_data_quality", "rp_data_transform", "rp_dataset_collection"]),
     ("services.html", "Services", "rp_api_bio", ["rp_api_labres", "rp_api_pub", "rp_api_know", "rp_api_runtime", "rp_bioop", "rp_labresop", "rp_pubop", "rp_knowop", "rp_runop", "rp_runbooks", "rp_studyproto", "rp_opsboard"]),
+    ("api-catalog.html", "API Catalog", "rp_api_catalog", ["rp_web_routes", "rp_api_action", "rp_web_bundle"]),
     ("review-board.html", "Review Board", "rp_reviewboard", ["rp_reviewops", "rp_review_dashboard", "rp_dossier", "rp_package", "rp_opsboard"]),
     ("control-plane.html", "Control Plane", "rp_control", ["rp_opsboard", "rp_review_dashboard", "rp_agentcmp", "rp_web_bundle"]),
     ("integrity.html", "Integrity", "rp_integrity", ["rp_review_dashboard", "rp_agentcmp", "rp_package", "rp_report_text", "rp_artifact_manifest"]),
@@ -1185,6 +1186,16 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Operations Checks", metric_value(state, [("rp_opsboard", "operations_board_checks")]), "rp_opsboard"),
         ("Service Files", metric_value(state, [("rp_web_bundle", "research_service_files"), ("rp_api_compare", "bio_service_files")]), "rp_web_bundle"),
     ]
+    api_catalog_items = [
+        ("Host API Routes", metric_value(state, [("rp_api_catalog", "host_api_routes")]), "rp_api_catalog"),
+        ("Host Actions", metric_value(state, [("rp_api_catalog", "host_action_routes"), ("rp_api_action", "actions")]), "rp_api_catalog"),
+        ("Reader Payloads", metric_value(state, [("rp_api_catalog", "reader_api_payloads"), ("rp_web_bundle", "api_payloads")]), "rp_api_catalog"),
+        ("Reader Views", metric_value(state, [("rp_api_catalog", "reader_views"), ("rp_web_bundle", "reader_views")]), "rp_api_catalog"),
+        ("Usable Research APIs", metric_value(state, [("rp_api_catalog", "usable_research_api_routes")]), "rp_api_catalog"),
+        ("Route State", metric_value(state, [("rp_web_routes", "routes")]), "rp_web_routes"),
+        ("POST Actions", metric_value(state, [("rp_web_routes", "post_routes")]), "rp_web_routes"),
+        ("Projection", metric_value(state, [("rp_api_catalog", "reader_projection")]), "rp_api_catalog"),
+    ]
     operations_items = [
         ("Provider", metric_value(state, [("rp_opsboard", "provider_health"), ("rp_startup", "provider_health")]), "rp_opsboard"),
         ("Pending Reviews", metric_value(state, [("rp_opsboard", "pending_reviews")]), "rp_opsboard"),
@@ -1373,6 +1384,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Relay Quality", llm_items)
     if file_name == "services.html":
         return render_summary_panel("Service Execution", service_items)
+    if file_name == "api-catalog.html":
+        return render_summary_panel("API Catalog", api_catalog_items)
     if file_name == "operations.html":
         return render_summary_panel("Research Operations", operations_items)
     if file_name == "review-board.html":

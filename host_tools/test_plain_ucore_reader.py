@@ -65,10 +65,10 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=39
+reader_views=40
 reader_actions=123
-reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
-reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
+reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_api_catalog,rp_web_routes
+reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_api_catalog,rp_studio,rp_web_bundle
 reader_required_sections=routes,payloads,actions,live_update,downloads,compare
 reader_event_stream=rp_web_bundle
 reader_fallback=rp_site
@@ -102,7 +102,7 @@ provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=ready
 provenance_queries_page=rp_prov_query;specs=3;executions=3;packets=1;status=ready
 status=ready
 """,
-    "rp_web_routes": "routes=140\nget_routes=17\npost_routes=123\nroute=/research-studio;payload=rp_studio;status=ready\nroute=/research/project/{id}/review;payload=rp_web_bundle;status=ready\naction=/actions/research/studio-launch;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/dataset-preview;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/study-protocol-launch;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-space-review;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-space-task-board-row;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-scaffold;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-launch;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-action-execute;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-release-gate;method=POST;payload=rp_api_action;status=ready\nstatus=ready\n",
+    "rp_web_routes": "routes=141\nget_routes=18\npost_routes=123\nroute=/research-studio;payload=rp_studio;status=ready\nroute=/research/project/{id}/review;payload=rp_web_bundle;status=ready\nroute=/api-catalog;payload=rp_api_catalog;status=ready\naction=/actions/research/studio-launch;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/dataset-preview;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/study-protocol-launch;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-space-review;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-space-task-board-row;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-scaffold;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-launch;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-action-execute;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-release-gate;method=POST;payload=rp_api_action;status=ready\nstatus=ready\n",
     "rp_api_home": "api=home\nreader_contract=rp_web_bundle\nstatus=ready\n",
     "rp_api_run": "api=run-detail\nreader_contract=rp_web_bundle\nreader_view=run-detail\nstatus=ready\n",
     "rp_api_agents": "api=agent-detail\nagents=7\nstatus=ready\n",
@@ -116,6 +116,7 @@ status=ready
     "rp_api_know": "api=knowledge\nsemantic_index=rp_semindex\nstatus=ready\n",
     "rp_api_runtime": "api=runtime\nruntime_env=rp_runenv\nstatus=ready\n",
     "rp_api_action": "api=actions\nreader_contract=rp_web_bundle\nactions=123\nresearch_studio_launch=/actions/research/studio-launch\ndataset_preview=/actions/research/dataset-preview\ndataset_run=/actions/research/dataset-run\nstudy_protocol_launch=/actions/research/study-protocol-launch\nstudy_protocol_reproduction_package_action_execute=/actions/research/study-protocol-reproduction-package-action-execute\nproject_space_review=/actions/research/project-space-review\nproject_space_task_board_row=/actions/research/project-space-task-board-row\nproject_scaffold=/actions/research/project-scaffold\nproject_launch=/actions/research/project-launch\nproject_action_execute=/actions/research/project-action-execute\nproject_release_gate=/actions/research/project-release-gate\nproject_lifecycle_actions=3\ndataset_actions=8\nstudy_protocol_actions=11\nproject_space_actions=7\nproject_review_actions=8\nstatus=ready\n",
+    "rp_api_catalog": "api=catalog\nhost_api_routes=214\nhost_action_routes=95\nreader_api_payloads=15\nreader_views=40\nusable_research_api_routes=77\napi_group=usable_research;routes=77;state=rp_usable,rp_usableproj,rp_studyproto;status=ready\napi_key=/api/usable-research-workbench-file-catalog;state=rp_runner,rp_package;status=ready\napi_key=/api/usable-research-study-protocol-reproduction-package-action-plan;state=rp_studyproto,rp_usablepack;status=ready\napi_key=/api/llm-proxy;state=rp_prompt,rp_llm_guard;status=ready\nreader_projection=host_api_catalog_to_plain_ucore_state_files\nstatus=ready\n",
     "rp_studio": (
         "studio=usable-research-studio\n"
         "sessions=1\n"
@@ -1333,7 +1334,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 39, summary
+        assert summary["pages"] == 40, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -1343,6 +1344,7 @@ def main() -> int:
         assert (out_dir / "review.html").exists()
         assert (out_dir / "delivery.html").exists()
         assert (out_dir / "data.html").exists()
+        assert (out_dir / "api-catalog.html").exists()
         assert (out_dir / "llm.html").exists()
         assert (out_dir / "integrity.html").exists()
         assert (out_dir / "coherence.html").exists()
@@ -1364,6 +1366,7 @@ def main() -> int:
         assert (out_dir / "provenance.html").exists()
         assert (out_dir / "provenance-queries.html").exists()
         assert (out_dir / "api" / "rp_api_home.json").exists()
+        assert (out_dir / "api" / "rp_api_catalog.json").exists()
         index_html = (out_dir / "index.html").read_text(encoding="utf-8")
         assert "Plain uCore Research" in index_html
         assert "State Files" in index_html
@@ -1458,6 +1461,12 @@ def main() -> int:
         assert "rp_artifact:rp_align_table" in data_html
         assert "mf.json" in data_html
         assert "host_file_verify" in data_html
+        api_catalog_html = (out_dir / "api-catalog.html").read_text(encoding="utf-8")
+        assert "API Catalog" in api_catalog_html
+        assert "Host API Routes" in api_catalog_html
+        assert "214" in api_catalog_html
+        assert "/api/usable-research-workbench-file-catalog" in api_catalog_html
+        assert "/api/llm-proxy" in api_catalog_html
         project_html = (out_dir / "project.html").read_text(encoding="utf-8")
         assert "Project Space" in project_html
         assert "Project Handoff" in project_html

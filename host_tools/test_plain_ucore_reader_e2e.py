@@ -1300,6 +1300,21 @@ def main() -> int:
             assert any("project_review_actions=8" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("research_search_export=/actions/research-search/export" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("llm_relay_request=/actions/research/llm-relay-request" in line for line in rp_api_action["lines"]), rp_api_action
+            rp_api_catalog = read_json(base + "/api/state/rp_api_catalog")
+            assert any("host_api_routes=214" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            assert any("usable_research_api_routes=77" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            assert any("api_group=usable_research;routes=77" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            assert any("api_key=/api/usable-research-workbench-file-catalog" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            assert any("api_key=/api/usable-research-study-protocol-reproduction-package-action-plan" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            assert any("api_key=/api/llm-proxy" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            api_catalog_html = read_text(base + "/api-catalog.html")
+            assert "API Catalog" in api_catalog_html
+            assert "Host API Routes" in api_catalog_html
+            assert "/api/usable-research-workbench-file-catalog" in api_catalog_html
+            rp_web_routes = read_json(base + "/api/state/rp_web_routes")
+            assert any("routes=141" in line for line in rp_web_routes["lines"]), rp_web_routes
+            assert any("get_routes=18" in line for line in rp_web_routes["lines"]), rp_web_routes
+            assert any("route=/api-catalog" in line for line in rp_web_routes["lines"]), rp_web_routes
             rp_llm_req = read_json(base + "/api/state/rp_llm_req")
             assert any("host_llm_request_id=llm-q1" in line for line in rp_llm_req["lines"]), rp_llm_req
             assert any("host_llm_provider=host-relay" in line for line in rp_llm_req["lines"]), rp_llm_req

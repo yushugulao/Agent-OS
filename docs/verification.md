@@ -181,7 +181,7 @@ rp_backend: cases=4 executable=2 exports=1 status=ready
 rp_consistency: checks=420 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 state_catalog=12 startup_doctor=14 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 backend=4 artifacts=7 agents=7 dynamic=4 status=ready
 rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 state_catalog=12 startup_doctor=14 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 delta_items=20 dynamic=4 status=ready
 rp_ui_export: pages=5 run=RUN-042 custom_runs=3 compare=ready status=ready
-rp_web_export: routes=140 api_payloads=14 actions=123 bundle=ready status=ready
+rp_web_export: routes=141 api_payloads=15 actions=123 bundle=ready status=ready
 rp_review_dashboard: sections=8 gates=6 review_pack=host-materialized status=ready
 rp_modelreg: models=1 versions=1 evaluations=1 deployments=1 serving=1 checks=96 status=ready
 rp_sysreview: protocols=1 searches=1 screening=9 included=3 extractions=3 prisma=1 checks=104 status=ready

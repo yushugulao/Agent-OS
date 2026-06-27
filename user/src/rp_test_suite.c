@@ -1298,10 +1298,11 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_compare", "coherence_checks=9");
 	ok = ok && require_file_token("rp_ui_compare", "relay_protocol_files=5");
 	ok = ok && require_file_token("rp_ui_compare", "notebook_exports=2");
-	ok = ok && require_file_token("rp_web_routes", "routes=140");
-	ok = ok && require_file_token("rp_web_routes", "get_routes=17");
+	ok = ok && require_file_token("rp_web_routes", "routes=141");
+	ok = ok && require_file_token("rp_web_routes", "get_routes=18");
 	ok = ok && require_file_token("rp_web_routes", "route=/research/workbench/{id}");
 	ok = ok && require_file_token("rp_web_routes", "route=/research/project/{id}/review");
+	ok = ok && require_file_token("rp_web_routes", "route=/api-catalog");
 	ok = ok && require_file_token("rp_web_routes", "post_routes=123");
 	ok = ok && require_file_token("rp_web_routes", "action=/actions/host-workflow/stage-attempt");
 	ok = ok && require_file_token("rp_web_routes", "action=/actions/host-workflow/report-export");
@@ -1438,6 +1439,13 @@ int main(void)
 	ok = ok && require_file_token("rp_api_action", "action_audit_log=rp_actionio");
 	ok = ok && require_file_token("rp_api_action", "download_manifest=rp_package");
 	ok = ok && require_file_token("rp_api_action", "export_bundle=rp_package");
+	ok = ok && require_file_token("rp_api_catalog", "host_api_routes=214");
+	ok = ok && require_file_token("rp_api_catalog", "host_action_routes=95");
+	ok = ok && require_file_token("rp_api_catalog", "usable_research_api_routes=77");
+	ok = ok && require_file_token("rp_api_catalog", "api_group=usable_research;routes=77");
+	ok = ok && require_file_token("rp_api_catalog", "api_key=/api/usable-research-workbench-file-catalog");
+	ok = ok && require_file_token("rp_api_catalog", "api_key=/api/usable-research-study-protocol-reproduction-package-action-plan");
+	ok = ok && require_file_token("rp_api_catalog", "api_key=/api/llm-proxy");
 	ok = ok && require_file_token("rp_api_know", "library_sources=rp_knowledge");
 	ok = ok && require_file_token("rp_actionio", "requests=8");
 	ok = ok && require_file_token("rp_actionio", "responses=8");
@@ -1496,7 +1504,7 @@ int main(void)
 	ok = ok && require_file_token("rp_uresrun", "Stage DAG");
 	ok = ok && require_file_token("rp_actionio", "Agent Decisions");
 	ok = ok && require_file_token("rp_actionio", "user_on_plain_ucore_real_artifacts");
-	ok = ok && require_file_token("rp_web_bundle", "api_payloads=14");
+	ok = ok && require_file_token("rp_web_bundle", "api_payloads=15");
 	ok = ok && require_file_token("rp_web_bundle", "evidence_package=rp_package");
 	ok = ok && require_file_token("rp_web_bundle", "downloadable_units=3");
 	ok = ok && require_file_token("rp_web_bundle", "notebook_export=rp_nbexec");
@@ -1517,9 +1525,10 @@ int main(void)
 	ok = ok && require_file_token("rp_web_bundle", "reader_contract=host_plain_ucore_v2");
 	ok = ok && require_file_token("rp_web_bundle", "reader_contract_version=2");
 	ok = ok && require_file_token("rp_web_bundle", "reader_ready=1");
-	ok = ok && require_file_token("rp_web_bundle", "reader_views=39");
+	ok = ok && require_file_token("rp_web_bundle", "reader_views=40");
 	ok = ok && require_file_token("rp_web_bundle", "reader_actions=123");
 	ok = ok && require_file_token("rp_web_bundle", "reader_payload_files=rp_api_home");
+	ok = ok && require_file_token("rp_web_bundle", "rp_api_catalog");
 	ok = ok && require_file_token("rp_web_bundle", "reader_refresh_files=rp_web_routes");
 	ok = ok && require_file_token("rp_web_bundle", "reader_required_sections=routes,payloads,actions,live_update,downloads,compare");
 	ok = ok && require_file_token("rp_web_bundle", "reader_event_stream=rp_web_bundle");
