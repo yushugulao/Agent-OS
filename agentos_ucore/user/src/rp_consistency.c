@@ -133,12 +133,25 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runop", "configuration_health=settings:ready");
 	ok = ok && rp_file_contains("rp_runop", "stores_secret_values=0");
 	ok = ok && rp_file_contains("rp_runop", "deepseek_provider=registered");
-	ok = ok && rp_file_contains("rp_runop", "platform_doctor=ready;checks=8");
+	ok = ok && rp_file_contains("rp_runop", "platform_doctor=ready;checks=10");
 	ok = ok && rp_file_contains("rp_runop", "cloud_llm=optional");
 	ok = ok && rp_file_contains("rp_runop", "project_scaffold=templates:3");
 	ok = ok && rp_file_contains("rp_runop", "dataset_product=previews:2");
 	ok = ok && rp_file_contains("rp_runop", "visualizations:2");
-	ok = ok && rp_file_contains("rp_runop", "source_portfolio=sources:2");
+	ok = ok && rp_file_contains("rp_runop", "source_portfolio=sources:42");
+	ok = ok && rp_file_contains("rp_runop", "research_portfolio_scale=sources:42");
+	ok = ok && rp_file_contains("rp_runop", "datasets:3");
+	ok = ok && rp_file_contains("rp_runop", "literature_searches:4");
+	ok = ok && rp_file_contains("rp_runop", "reviews:8");
+	ok = ok && rp_file_contains("rp_runop", "evidence_reviews:4");
+	ok = ok && rp_file_contains("rp_runop", "evidence_extractions:15");
+	ok = ok && rp_file_contains("rp_runop", "screening_decisions:15");
+	ok = ok && rp_file_contains("rp_runop", "exports:66");
+	ok = ok && rp_file_contains("rp_runop", "doctor_reports:10");
+	ok = ok && rp_file_contains("rp_runop", "project_handoff_audits:30");
+	ok = ok && rp_file_contains("rp_runop", "project_run_comparisons:15");
+	ok = ok && rp_file_contains("rp_runop", "project_reproducibility_audits:15");
+	ok = ok && rp_file_contains("rp_runop", "project_snapshot_comparisons:15");
 	ok = ok && rp_file_contains("rp_runop", "study_protocol_reproduction=packages:1");
 	ok = ok && rp_file_contains("rp_runop", "action_execution:ready");
 	ok = ok && rp_file_contains("rp_runop", "project_bundle_cache=latest:ready");
@@ -395,7 +408,7 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=288\n"
+			   "checks=304\n"
 			   "task_records=21\n"
 			   "ready_tasks=21\n"
 			   "high_tasks=4\n"
@@ -474,7 +487,7 @@ int main(void)
 			   "advanced_surface_objects=5\n"
 			   "startup_checks=8\n"
 			   "configuration_health=ready\n"
-			   "platform_doctor_checks=8\n"
+			   "platform_doctor_checks=10\n"
 			   "secret_values_written=0\n"
 			   "runtime_assurance_checks=24\n"
 			   "secret_reference_checks=6\n"
@@ -505,6 +518,20 @@ int main(void)
 			   "dataset_product_exports=9\n"
 			   "dataset_product_runs=2\n"
 			   "source_portfolio_exports=1\n"
+			   "research_portfolio_checks=16\n"
+			   "usable_research_sources=42\n"
+			   "usable_research_datasets=3\n"
+			   "usable_research_literature_searches=4\n"
+			   "usable_research_reviews=8\n"
+			   "usable_research_evidence_reviews=4\n"
+			   "usable_research_evidence_extractions=15\n"
+			   "usable_research_screening_decisions=15\n"
+			   "usable_research_exports=66\n"
+			   "usable_research_platform_doctor_reports=10\n"
+			   "usable_research_project_handoff_audits=30\n"
+			   "usable_research_project_run_comparisons=15\n"
+			   "usable_research_project_reproducibility_audits=15\n"
+			   "usable_research_project_snapshot_comparisons=15\n"
 			   "study_protocol_reproduction_checks=5\n"
 			   "project_bundle_cache=ready\n"
 			   "research_search_saved=2\n"
@@ -581,6 +608,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=288 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
+	printf("rp_consistency: checks=304 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
 	return 0;
 }

@@ -298,7 +298,7 @@ static int write_startup_health_surface(void)
 		return 0;
 	}
 	return rp_append_file("rp_runop",
-			      "platform_doctor=ready;checks=8;workspace=pass;template=pass;cloud_llm=optional;provider_health=offline:1,cloud:0,ready_cloud:0;downloads=markdown,json");
+			      "platform_doctor=ready;checks=10;workspace=pass;template=pass;cloud_llm=optional;provider_health=offline:1,cloud:0,ready_cloud:0;downloads=markdown,json");
 }
 
 static int write_research_product_surface(void)
@@ -312,7 +312,11 @@ static int write_research_product_surface(void)
 		return 0;
 	}
 	if (!rp_append_file("rp_runop",
-			    "source_portfolio=sources:2,citations:4,tags:2,portfolio:ready,status=ready")) {
+			    "source_portfolio=sources:42,citations:4,tags:2,portfolio:ready,status=ready")) {
+		return 0;
+	}
+	if (!rp_append_file("rp_runop",
+			    "research_portfolio_scale=sources:42,datasets:3,literature_searches:4,reviews:8,evidence_reviews:4,evidence_extractions:15,screening_decisions:15,exports:66,doctor_reports:10,project_handoff_audits:30,project_run_comparisons:15,project_reproducibility_audits:15,project_snapshot_comparisons:15,status=ready")) {
 		return 0;
 	}
 	if (!rp_append_file("rp_runop",

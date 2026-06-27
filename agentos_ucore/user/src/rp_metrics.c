@@ -114,10 +114,17 @@ int main(void)
 	if (!rp_file_contains("rp_runop", "agentos_advanced_surface_detail=tool:echo,tool:read_context")) return 1;
 	if (!rp_file_contains("rp_runop", "startup_health=quickstart:ready")) return 1;
 	if (!rp_file_contains("rp_runop", "configuration_health=settings:ready")) return 1;
-	if (!rp_file_contains("rp_runop", "platform_doctor=ready;checks=8")) return 1;
+	if (!rp_file_contains("rp_runop", "platform_doctor=ready;checks=10")) return 1;
 	if (!rp_file_contains("rp_runop", "project_scaffold=templates:3")) return 1;
 	if (!rp_file_contains("rp_runop", "dataset_product=previews:2")) return 1;
-	if (!rp_file_contains("rp_runop", "source_portfolio=sources:2")) return 1;
+	if (!rp_file_contains("rp_runop", "source_portfolio=sources:42")) return 1;
+	if (!rp_file_contains("rp_runop", "research_portfolio_scale=sources:42")) return 1;
+	if (!rp_file_contains("rp_runop", "datasets:3")) return 1;
+	if (!rp_file_contains("rp_runop", "doctor_reports:10")) return 1;
+	if (!rp_file_contains("rp_runop", "project_handoff_audits:30")) return 1;
+	if (!rp_file_contains("rp_runop", "project_run_comparisons:15")) return 1;
+	if (!rp_file_contains("rp_runop", "project_reproducibility_audits:15")) return 1;
+	if (!rp_file_contains("rp_runop", "project_snapshot_comparisons:15")) return 1;
 	if (!rp_file_contains("rp_runop", "study_protocol_reproduction=packages:1")) return 1;
 	if (!rp_file_contains("rp_runop", "project_bundle_cache=latest:ready")) return 1;
 	if (!rp_file_contains("rp_runop", "runtime_assurance=secret_refs:3")) return 1;
@@ -165,7 +172,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=288\n"
+			   "consistency_checks=304\n"
 			   "knowledge_index_checks=22\n"
 			   "llm_transcript_checks=3\n"
 			   "llm_bridge_transcripts=90\n"
@@ -267,7 +274,7 @@ int main(void)
 			   "advanced_surface_objects=5\n"
 			   "startup_checks=8\n"
 			   "configuration_health=ready\n"
-			   "platform_doctor_checks=8\n"
+			   "platform_doctor_checks=10\n"
 			   "secret_values_written=0\n"
 			   "runtime_assurance_checks=24\n"
 			   "secret_reference_checks=6\n"
@@ -298,6 +305,20 @@ int main(void)
 			   "dataset_product_exports=9\n"
 			   "dataset_product_runs=2\n"
 			   "source_portfolio_exports=1\n"
+			   "research_portfolio_checks=16\n"
+			   "usable_research_sources=42\n"
+			   "usable_research_datasets=3\n"
+			   "usable_research_literature_searches=4\n"
+			   "usable_research_reviews=8\n"
+			   "usable_research_evidence_reviews=4\n"
+			   "usable_research_evidence_extractions=15\n"
+			   "usable_research_screening_decisions=15\n"
+			   "usable_research_exports=66\n"
+			   "usable_research_platform_doctor_reports=10\n"
+			   "usable_research_project_handoff_audits=30\n"
+			   "usable_research_project_run_comparisons=15\n"
+			   "usable_research_project_reproducibility_audits=15\n"
+			   "usable_research_project_snapshot_comparisons=15\n"
 			   "study_protocol_reproduction_checks=5\n"
 			   "project_bundle_cache=ready\n"
 			   "research_search_saved=2\n"
@@ -376,7 +397,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=288\n"
+			   "consistency_checks=304\n"
 			   "knowledge_index_checks=22\n"
 			   "llm_transcript_checks=3\n"
 			   "llm_bridge_transcripts=90\n"
@@ -476,7 +497,7 @@ int main(void)
 			   "notebook_exports=2\n"
 			   "downloadable_units=4\n"
 			   "startup_checks=8\n"
-			   "platform_doctor_checks=8\n"
+			   "platform_doctor_checks=10\n"
 			   "secret_values_written=0\n"
 			   "runtime_assurance_checks=24\n"
 			   "secret_reference_checks=6\n"
@@ -507,6 +528,20 @@ int main(void)
 			   "dataset_product_exports=9\n"
 			   "dataset_product_runs=2\n"
 			   "source_portfolio_exports=1\n"
+			   "research_portfolio_checks=16\n"
+			   "usable_research_sources=42\n"
+			   "usable_research_datasets=3\n"
+			   "usable_research_literature_searches=4\n"
+			   "usable_research_reviews=8\n"
+			   "usable_research_evidence_reviews=4\n"
+			   "usable_research_evidence_extractions=15\n"
+			   "usable_research_screening_decisions=15\n"
+			   "usable_research_exports=66\n"
+			   "usable_research_platform_doctor_reports=10\n"
+			   "usable_research_project_handoff_audits=30\n"
+			   "usable_research_project_run_comparisons=15\n"
+			   "usable_research_project_reproducibility_audits=15\n"
+			   "usable_research_project_snapshot_comparisons=15\n"
 			   "study_protocol_reproduction_checks=5\n"
 			   "project_bundle_cache=ready\n"
 			   "claim_records=8\n"
@@ -594,6 +629,6 @@ int main(void)
 	if (!rp_append_status("telemetry=ready")) return 1;
 	if (!rp_append_status("agentcmp=ready")) return 1;
 	if (!rp_append_status("health=ready")) return 1;
-	printf("rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 delta_items=20 dynamic=4 status=ready\n");
+	printf("rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 delta_items=20 dynamic=4 status=ready\n");
 	return 0;
 }
