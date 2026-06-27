@@ -641,7 +641,7 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=958" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=979" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("tool_events=138" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -671,6 +671,7 @@ def main() -> int:
             assert any("operations_scale_checks=12" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("project_revision_incident_checks=12" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("project_revision_incident=revision_tasks:1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("reserved_research_surface_checks=21" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("incident:INC-RUN-042-ALIGN-OOM" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("knowledge_index=search_documents:1385" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_nodes:406" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -721,7 +722,7 @@ def main() -> int:
             assert any("review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line and "backend_review=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_consistency = read_json(base + "/api/state/rp_consistency")
-            assert any("checks=342" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("checks=363" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("runtime_assurance_checks=24" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("research_ops_checks=28" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("semantic_graph_checks=6" in line for line in rp_consistency["lines"]), rp_consistency
@@ -745,6 +746,10 @@ def main() -> int:
             assert any("usable_research_project_scaffolds=1" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("incidents=1" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("incident_reason=memory_limit" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("reserved_research_surface_checks=21" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("usable_research_dataset_answers=0" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("usable_research_study_protocols=0" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("usable_research_workbench_notes=0" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("usable_research_workbenches=5" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("usable_research_deliveries=6" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("usable_research_sources=42" in line for line in rp_consistency["lines"]), rp_consistency

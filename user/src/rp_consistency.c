@@ -406,7 +406,7 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=342\n"
+			   "checks=363\n"
 			   "task_records=21\n"
 			   "ready_tasks=21\n"
 			   "high_tasks=4\n"
@@ -567,6 +567,28 @@ int main(void)
                "revision_review_decision=needs_revision\n"
                "project_scaffold=deepseek-reliability-response-study\n"
                "project_scaffold_exports=json,markdown\n"
+               "reserved_research_surface_checks=21\n"
+               "usable_research_dataset_answers=0\n"
+               "usable_research_dataset_cards=0\n"
+               "usable_research_dataset_portfolios=0\n"
+               "usable_research_dataset_previews=0\n"
+               "usable_research_dataset_run_comparisons=0\n"
+               "usable_research_dataset_runs=0\n"
+               "usable_research_dataset_visualizations=0\n"
+               "usable_research_evidence_syntheses=0\n"
+               "usable_research_package_intakes=0\n"
+               "usable_research_prisma_flows=0\n"
+               "usable_research_project_action_executions=0\n"
+               "usable_research_project_reviews=0\n"
+               "usable_research_review_protocols=0\n"
+               "usable_research_source_portfolios=0\n"
+               "usable_research_study_protocol_bundles=0\n"
+               "usable_research_study_protocol_compliance_reports=0\n"
+               "usable_research_study_protocol_launches=0\n"
+               "usable_research_study_protocol_runs=0\n"
+               "usable_research_study_protocols=0\n"
+               "usable_research_workbench_action_items=0\n"
+               "usable_research_workbench_notes=0\n"
 			   "study_protocol_reproduction_checks=5\n"
 			   "project_bundle_cache=ready\n"
 			   "research_search_saved=2\n"
@@ -643,6 +665,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=342 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
+	printf("rp_consistency: checks=363 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
 	return 0;
 }
