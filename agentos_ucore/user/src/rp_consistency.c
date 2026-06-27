@@ -408,7 +408,7 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=330\n"
+			   "checks=342\n"
 			   "task_records=21\n"
 			   "ready_tasks=21\n"
 			   "high_tasks=4\n"
@@ -556,6 +556,19 @@ int main(void)
 			   "host_object_references=129\n"
 			   "host_agentcompare_reports=3\n"
 			   "host_agentcompare_results=15\n"
+               "project_revision_incident_checks=12\n"
+               "usable_research_revision_tasks=1\n"
+               "usable_research_project_scaffolds=1\n"
+               "incidents=1\n"
+               "incident_id=INC-RUN-042-ALIGN-OOM\n"
+               "incident_failed_stage=align\n"
+               "incident_reason=memory_limit\n"
+               "incident_status=closed\n"
+               "revision_task_status=completed\n"
+               "revision_task_owner=Wang\n"
+               "revision_review_decision=needs_revision\n"
+               "project_scaffold=deepseek-reliability-response-study\n"
+               "project_scaffold_exports=json,markdown\n"
 			   "study_protocol_reproduction_checks=5\n"
 			   "project_bundle_cache=ready\n"
 			   "research_search_saved=2\n"
@@ -632,6 +645,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=330 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
+	printf("rp_consistency: checks=342 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
 	return 0;
 }
