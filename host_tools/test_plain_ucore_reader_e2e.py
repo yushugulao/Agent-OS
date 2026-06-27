@@ -1304,8 +1304,10 @@ def main() -> int:
             assert any("host_api_routes=214" in line for line in rp_api_catalog["lines"]), rp_api_catalog
             assert any("host_page_routes=15" in line for line in rp_api_catalog["lines"]), rp_api_catalog
             assert any("host_dynamic_page_prefixes=12" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            assert any("host_download_routes=16" in line for line in rp_api_catalog["lines"]), rp_api_catalog
             assert any("ucore_get_routes=29" in line for line in rp_api_catalog["lines"]), rp_api_catalog
             assert any("ucore_dynamic_page_prefixes=12" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            assert any("ucore_download_routes=16" in line for line in rp_api_catalog["lines"]), rp_api_catalog
             assert any("api_group_count=14" in line for line in rp_api_catalog["lines"]), rp_api_catalog
             assert any("api_grouped_routes=214" in line for line in rp_api_catalog["lines"]), rp_api_catalog
             assert any("usable_research_api_routes=77" in line for line in rp_api_catalog["lines"]), rp_api_catalog
@@ -1325,8 +1327,10 @@ def main() -> int:
             assert "Host API Routes" in api_catalog_html
             assert "Host Pages" in api_catalog_html
             assert "Host Dynamic Pages" in api_catalog_html
+            assert "Host Downloads" in api_catalog_html
             assert "Reader GET Routes" in api_catalog_html
             assert "Reader Dynamic Prefixes" in api_catalog_html
+            assert "Reader Downloads" in api_catalog_html
             assert "Grouped Routes" in api_catalog_html
             assert "/api/analysis-results" in api_catalog_html
             assert "/api/usable-research-workbench-file-catalog" in api_catalog_html
@@ -1335,6 +1339,7 @@ def main() -> int:
             assert any("get_routes=29" in line for line in rp_web_routes["lines"]), rp_web_routes
             assert any("host_page_routes=15" in line for line in rp_web_routes["lines"]), rp_web_routes
             assert any("host_dynamic_page_prefixes=12" in line for line in rp_web_routes["lines"]), rp_web_routes
+            assert any("host_download_routes=16" in line for line in rp_web_routes["lines"]), rp_web_routes
             assert any("route=/quickstart" in line for line in rp_web_routes["lines"]), rp_web_routes
             assert any("route=/research-ops" in line for line in rp_web_routes["lines"]), rp_web_routes
             assert any("route=/workbench-plan-queue" in line for line in rp_web_routes["lines"]), rp_web_routes
@@ -1342,6 +1347,8 @@ def main() -> int:
             assert any("prefix=/runs/{run_id}" in line for line in rp_web_routes["lines"]), rp_web_routes
             assert any("prefix=/workbench-files/{token}" in line for line in rp_web_routes["lines"]), rp_web_routes
             assert any("prefix=/llm/{id}" in line for line in rp_web_routes["lines"]), rp_web_routes
+            assert any("download=/download/research-dataset-preview/{token}" in line for line in rp_web_routes["lines"]), rp_web_routes
+            assert any("download=/download/research-study-protocol-reproduction-package-action-execution/{token}" in line for line in rp_web_routes["lines"]), rp_web_routes
             rp_llm_req = read_json(base + "/api/state/rp_llm_req")
             assert any("host_llm_request_id=llm-q1" in line for line in rp_llm_req["lines"]), rp_llm_req
             assert any("host_llm_provider=host-relay" in line for line in rp_llm_req["lines"]), rp_llm_req

@@ -1173,6 +1173,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_routes", "ucore_page_routes=15");
 	ok = ok && rp_file_contains("rp_web_routes", "host_dynamic_page_prefixes=12");
 	ok = ok && rp_file_contains("rp_web_routes", "ucore_dynamic_page_prefixes=12");
+	ok = ok && rp_file_contains("rp_web_routes", "host_download_routes=16");
+	ok = ok && rp_file_contains("rp_web_routes", "ucore_download_routes=16");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/quickstart");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research-ops");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/workbench-plan-queue");
@@ -1185,6 +1187,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_routes", "prefix=/workbench-files/{token}");
 	ok = ok && rp_file_contains("rp_web_routes", "prefix=/provenance/{id}");
 	ok = ok && rp_file_contains("rp_web_routes", "prefix=/llm/{id}");
+	ok = ok && rp_file_contains("rp_web_routes", "download=/download/research-dataset-preview/{token}");
+	ok = ok && rp_file_contains("rp_web_routes", "download=/download/research-source-portfolio/{token}");
+	ok = ok && rp_file_contains("rp_web_routes", "download=/download/research-study-protocol-reproduction-package-action-execution/{token}");
 	ok = ok && rp_file_contains("rp_web_routes", "post_routes=123");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/research/studio-launch");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/host-workflow/stage-attempt");
@@ -1269,6 +1274,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_catalog", "host_page_routes=15");
 	ok = ok && rp_file_contains("rp_api_catalog", "host_dynamic_page_prefixes=12");
 	ok = ok && rp_file_contains("rp_api_catalog", "ucore_dynamic_page_prefixes=12");
+	ok = ok && rp_file_contains("rp_api_catalog", "host_download_routes=16");
+	ok = ok && rp_file_contains("rp_api_catalog", "ucore_download_routes=16");
+	ok = ok && rp_file_contains("rp_api_catalog", "download_group=dataset;routes=6");
 	ok = ok && rp_file_contains("rp_api_catalog", "api_group_count=14");
 	ok = ok && rp_file_contains("rp_api_catalog", "api_grouped_routes=214");
 	ok = ok && rp_file_contains("rp_api_catalog", "usable_research_api_routes=77");
