@@ -17,10 +17,8 @@ This target keeps the uCore kernel unchanged. The research Agent platform runs t
 Primary commands:
 
 ```bash
-make -C user clean
-make clean
-make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform
-make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INIT_PROC=rp_orch
+make plain-platform-build TOOLPREFIX=riscv64-linux-gnu-
+make plain-platform-run TOOLPREFIX=riscv64-linux-gnu-
 python host_tools/test_plain_ucore_reader_e2e.py
 ```
 
@@ -44,6 +42,7 @@ make agentos-build TOOLPREFIX=riscv64-linux-gnu-
 make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 make agentos-platform-build TOOLPREFIX=riscv64-linux-gnu-
 make agentos-platform-run TOOLPREFIX=riscv64-linux-gnu-
+make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
 ```
 
 Equivalent commands inside `agentos_ucore/`:
@@ -78,6 +77,21 @@ rp_agentos_orch: agent role=4 context=... latest=1
 rp_orch: programs_ok=69 programs_total=69
 rp_orch: passed
 rp_agentos_orch: kernel_agent=1 workflow=rp_orch status=ready
+rp_agentos_orch: passed
+```
+
+Current dual-target verification:
+
+```bash
+make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
+```
+
+Expected markers:
+
+```text
+rp_backend: cases=7 executable=7 userland_equivalent=ready exports=1 status=ready
+rp_orch: passed
+rp_backend: cases=7 executable=7 agentos=mainflow_bound exports=1 status=ready
 rp_agentos_orch: passed
 ```
 

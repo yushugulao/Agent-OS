@@ -26,6 +26,7 @@ make agentos-build TOOLPREFIX=riscv64-linux-gnu-
 make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 make agentos-platform-build TOOLPREFIX=riscv64-linux-gnu-
 make agentos-platform-run TOOLPREFIX=riscv64-linux-gnu-
+make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
 ```
 
 ## Current User Program

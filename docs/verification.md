@@ -10,6 +10,7 @@ make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_plain LOG=warn INIT_PR
 make plain-platform-build TOOLPREFIX=riscv64-linux-gnu-
 make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded
 make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded LOG=warn INIT_PROC=rp_seed_orch
+make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
 ```
 
 Result:
@@ -124,6 +125,21 @@ all app are over!
 ```
 
 after the init program exits. The platform result is taken from the `passed` line before that kernel termination path.
+
+## Run Both uCore Targets
+
+```bash
+make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
+```
+
+The command runs the plain root target first and the AgentOS-uCore target second. It writes temporary logs under `/tmp/agentos-dual-platform` unless `DUAL_LOG_DIR` is set. It checks these markers:
+
+```text
+rp_orch: passed
+rp_backend: cases=7 executable=7 userland_equivalent=ready exports=1 status=ready
+rp_agentos_orch: passed
+rp_backend: cases=7 executable=7 agentos=mainflow_bound exports=1 status=ready
+```
 
 ## Run Role Orchestrator
 
