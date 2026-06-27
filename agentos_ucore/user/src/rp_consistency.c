@@ -20,6 +20,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentos_timeline", "event_delivery=kernel_agent_queue");
 	ok = ok && rp_file_contains("rp_agentos_collab_ack", "delivery=kernel_event_queue");
 	ok = ok && rp_file_contains("rp_agentos_audit", "audit_source=kernel_ledger");
+	ok = ok && rp_file_contains("rp_agentos_workbench", "file_verify=kernel_metadata_index");
+	ok = ok && rp_file_contains("rp_agentos_package", "package_trace=kernel_provenance");
+	ok = ok && rp_file_contains("rp_agentos_real_task", "report_answer=kernel_context_record");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "context_trusted=kernel_shadow");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "metadata_query=used_index");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "agent_event_notify=kernel_queue");
@@ -27,6 +30,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "provenance_audit=kernel_ledger");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "permission_control=sentinel_rerun_denied");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "timeline_observe=kernel_snapshot");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "workbench_file_verify=kernel_metadata_index");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "package_provenance=kernel_ledger");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "real_task_context=kernel_shadow");
 	ok = ok && rp_file_contains("rp_query", "knowledge_index=search_documents:1685");
 	ok = ok && rp_file_contains("rp_query", "provenance_nodes:406");
 	ok = ok && rp_file_contains("rp_query", "provenance_links:544");
@@ -682,7 +688,7 @@ int main(void)
 			   "run_state_checks=9\n"
 			   "lifecycle_checks=10\n"
 			   "delivery_coherence=3\n"
-			   "agentos_readiness_checks=7\n"
+			   "agentos_readiness_checks=10\n"
 			   "knowledge_index_checks=22\n"
 			   "llm_transcript_checks=3\n"
 			   "llm_bridge_transcripts=99\n"

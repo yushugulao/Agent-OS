@@ -216,7 +216,7 @@ int main(void)
 			   "run_state_checks=9\n"
 			   "lifecycle_checks=10\n"
 			   "delivery_coherence=3\n"
-			   "agentos_readiness_checks=7\n"
+			   "agentos_readiness_checks=10\n"
 			   "relay_protocol_files=5\n"
 			   "workflow_runner_files=5\n"
 			   "workflow_portability_records=1\n"

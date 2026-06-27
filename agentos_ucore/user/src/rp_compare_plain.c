@@ -1006,7 +1006,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_completion", "actions=4");
 	ok = ok && rp_file_contains("rp_backend", "cases=7");
 	ok = ok && rp_file_contains("rp_backend", "agentos_mainflow_kernel=required");
-	ok = ok && rp_file_contains("rp_backend", "agentos_mainflow_facts=7");
+	ok = ok && rp_file_contains("rp_backend", "agentos_mainflow_facts=10");
 	ok = ok && rp_file_contains("rp_backend_exec", "passed_cases=7");
 	ok = ok && rp_file_contains("rp_study", "arms=2");
 	ok = ok && rp_file_contains("rp_consistency", "state_relation=passed");
@@ -1880,7 +1880,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_report=agentos-audit;plain_cost=append_only_logs;agentos_replace=kernel_ledger_provenance;risk=tampered_context;status=passed");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_report_rows=7");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_report_schema=plain_cost,agentos_replace,risk,status");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_observed=rp_stage_state,rp_retry_plan,rp_artifact_manifest,rp_llmeval,rp_agentos_kernel,rp_agentos_mainflow,rp_agentos_recovery,rp_agentos_query,rp_agentos_timeline,rp_agentos_audit");
+	ok = ok && rp_file_contains("rp_backend_exec", "runner_observed=rp_stage_state,rp_retry_plan,rp_artifact_manifest,rp_llmeval,rp_agentos_kernel,rp_agentos_mainflow,rp_agentos_recovery,rp_agentos_query,rp_agentos_timeline,rp_agentos_audit,rp_agentos_workbench,rp_agentos_package,rp_agentos_real_task");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail_fields=input_check,artifact_check,att,retry,ticks");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail_checks=28");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_verified_inputs=7");
@@ -1889,7 +1889,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_study", "workflow_portability=rp_wfio");
 	ok = ok && rp_file_contains("rp_study", "migration_status=baseline_and_agentos_observed");
 	ok = ok && rp_file_contains("rp_study", "study_metric=plain_ucore;file_scans=128;context_trusted=0;rebuild_steps=6;detail_checks=4;result=passed");
-	ok = ok && rp_file_contains("rp_study", "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;event_queue=1;recovery_tool=1;audit_ledger=1;permission_control=1;timeline_observe=1;mainflow_facts=7;detail_checks=kernel;result=passed");
+	ok = ok && rp_file_contains("rp_study", "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;event_queue=1;recovery_tool=1;audit_ledger=1;permission_control=1;timeline_observe=1;workbench_verify=1;package_trace=1;real_task_context=1;mainflow_facts=10;detail_checks=kernel;result=passed");
 	ok = ok && rp_file_contains("rp_study", "metrics=12");
 	ok = ok && rp_file_contains("rp_study", "study_handoff=rp_backend_exec->rp_agentcmp;status=ready");
 	ok = ok && rp_file_contains("rp_study", "agentos_kernel=mainflow_bound");
@@ -1907,8 +1907,14 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "provenance_audit=kernel_ledger");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "permission_control=sentinel_rerun_denied");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "timeline_observe=kernel_snapshot");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "workbench_file_verify=kernel_metadata_index");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "package_provenance=kernel_ledger");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "real_task_context=kernel_shadow");
+	ok = ok && rp_file_contains("rp_agentos_workbench", "file_verify=kernel_metadata_index");
+	ok = ok && rp_file_contains("rp_agentos_package", "package_trace=kernel_provenance");
+	ok = ok && rp_file_contains("rp_agentos_real_task", "report_answer=kernel_context_record");
 	ok = ok && rp_file_contains("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;status=ready");
-	ok = ok && rp_file_contains("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128,manual_retry_contract,file_polling,append_only_logs;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,capability_checked_rerun,kernel_event_queue,kernel_ledger_provenance;mainflow_facts=7;status=ready");
+	ok = ok && rp_file_contains("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128,manual_retry_contract,file_polling,append_only_logs;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,capability_checked_rerun,kernel_event_queue,kernel_ledger_provenance,workbench_file_verify,package_trace,real_task_context;mainflow_facts=10;status=ready");
 	ok = ok && rp_file_contains("rp_report_text", "report_source=workflow;state_file=rp_stage_state;source_key=host_workflow_run_id");
 	ok = ok && rp_file_contains("rp_report_text", "report_source=llm;state_file=rp_llm_resp;source_key=host_relay_response");
 	ok = ok && rp_file_contains("rp_report_text", "report_source=backend;state_file=rp_report_text;source_key=backend_evidence_report");
@@ -1957,8 +1963,8 @@ int main(void)
 	if (!rp_append_file("rp_agentcmp", "llm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "workflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "portability_backend_checks=18;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=7;planned_cases=0;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "backend_runner_checks=21;runner_cases=7;runner_passed=7;runner_planned=0;plain_inputs=7;study_metrics=2;backend_runner_detail_checks=42;runner_detail_rows=7;backend_runner_report_checks=35;runner_report_rows=7;backend_report_links=2;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "agentos_kernel=mainflow_bound;context_snapshot=1;metadata_index=1;batch_tool=1;event_queue=1;recovery_tool=1;audit_ledger=1;capability_check=1;advanced_surface_kernel=1;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "backend_runner_checks=21;runner_cases=7;runner_passed=7;runner_planned=0;plain_inputs=7;study_metrics=2;backend_runner_detail_checks=42;runner_detail_rows=7;backend_runner_report_checks=35;runner_report_rows=7;backend_report_links=2;mainflow_facts=10;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "agentos_kernel=mainflow_bound;context_snapshot=1;metadata_index=1;batch_tool=1;event_queue=1;recovery_tool=1;audit_ledger=1;capability_check=1;workbench_verify=1;package_trace=1;real_task_context=1;advanced_surface_kernel=1;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "research_governance_checks=18;protocol_compliance=1;protocol_amendments=1;sop_executions=1;risk_reviews=1;capa_verifications=2;decision_support=1;provenance_graph=1;status=ready")) return 1;
 	if (rp_host_seed_has("kind=research_run")) {
 		if (!rp_append_file("rp_agentcmp", "host_action_research_verified=1")) return 1;

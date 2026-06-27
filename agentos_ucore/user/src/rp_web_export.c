@@ -566,7 +566,7 @@ int main(void)
 			   "agentos_audit_ledger=1\n"
 			   "agentos_permission_control=1\n"
 			   "agentos_timeline_observe=1\n"
-			   "agentos_mainflow_facts=7\n"
+			   "agentos_mainflow_facts=10\n"
 			   "file_scans=128\n"
 			   "state_convention=1\n"
 			   "user_permission_only=1\n"
@@ -584,7 +584,7 @@ int main(void)
 			   "run_state_checks=9\n"
 			   "lifecycle_checks=10\n"
 			   "delivery_coherence=3\n"
-			   "agentos_readiness_checks=7\n"
+			   "agentos_readiness_checks=10\n"
 			   "relay_protocol_files=5\n"
 			   "status=ready\n")) {
 		return 1;
@@ -1375,7 +1375,7 @@ int main(void)
 			   "package_index=project-package-index;handoff=ready;release_gate=release;snapshot=stable;reproducibility=passed;provenance=ready;status=ready\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner;evidence_protocols=1;evidence_extractions=3\n"
 			   "workflow_portability=rp_wfio;adapter_specs=6;migration_steps=9;rehearsal_cases=4\n"
-			   "coherence_checks=9;namespace_checks=12;surface_checks=13;agentos_readiness_checks=7\n"
+			   "coherence_checks=9;namespace_checks=12;surface_checks=13;agentos_readiness_checks=10\n"
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
 			   "delivery_files=8;delivery_checks=3;evidence_bundle_entries=12\n"
 			   "prisma_flows=1\n"
@@ -1805,7 +1805,7 @@ int main(void)
 			if (!rp_append_file("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;status=ready")) return 1;
 		}
 		if (!file_contains_silent("rp_report_text", "backend_evidence_report=rp_backend_exec")) {
-			if (!rp_append_file("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index;mainflow_facts=7;status=ready")) return 1;
+			if (!rp_append_file("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,workbench_file_verify,package_trace,real_task_context;mainflow_facts=10;status=ready")) return 1;
 		}
 		if (!rp_append_status("host_reader_actions=ready")) return 1;
 		printf("rp_web_export: host_reader_actions=%d\n", host_actions);

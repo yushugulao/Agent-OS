@@ -1001,7 +1001,7 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "host_ui_events=10");
 	ok = ok && require_file_token("rp_backend", "cases=7");
 	ok = ok && require_file_token("rp_backend", "agentos_mainflow_kernel=required");
-	ok = ok && require_file_token("rp_backend", "agentos_mainflow_facts=7");
+	ok = ok && require_file_token("rp_backend", "agentos_mainflow_facts=10");
 	ok = ok && require_file_token("rp_backend", "workflow_portability=rp_wfio");
 	ok = ok && require_file_token("rp_backend", "execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare");
 	ok = ok && require_file_token("rp_backend", "compare_profile=compare-profile:RUN-042:migration");
@@ -1046,7 +1046,7 @@ int main(void)
 	ok = ok && require_file_token("rp_backend_exec", "runner_report=agentos-audit;plain_cost=append_only_logs;agentos_replace=kernel_ledger_provenance;risk=tampered_context;status=passed");
 	ok = ok && require_file_token("rp_backend_exec", "runner_report_rows=7");
 	ok = ok && require_file_token("rp_backend_exec", "runner_report_schema=plain_cost,agentos_replace,risk,status");
-	ok = ok && require_file_token("rp_backend_exec", "runner_observed=rp_stage_state,rp_retry_plan,rp_artifact_manifest,rp_llmeval,rp_agentos_kernel,rp_agentos_mainflow,rp_agentos_recovery,rp_agentos_query,rp_agentos_timeline,rp_agentos_audit");
+	ok = ok && require_file_token("rp_backend_exec", "runner_observed=rp_stage_state,rp_retry_plan,rp_artifact_manifest,rp_llmeval,rp_agentos_kernel,rp_agentos_mainflow,rp_agentos_recovery,rp_agentos_query,rp_agentos_timeline,rp_agentos_audit,rp_agentos_workbench,rp_agentos_package,rp_agentos_real_task");
 	ok = ok && require_file_token("rp_backend_exec", "runner_detail_fields=input_check,artifact_check,att,retry,ticks");
 	ok = ok && require_file_token("rp_backend_exec", "runner_detail_checks=28");
 	ok = ok && require_file_token("rp_backend_exec", "runner_verified_inputs=7");
@@ -1055,7 +1055,7 @@ int main(void)
 	ok = ok && require_file_token("rp_study", "workflow_portability=rp_wfio");
 	ok = ok && require_file_token("rp_study", "migration_status=baseline_and_agentos_observed");
 	ok = ok && require_file_token("rp_study", "study_metric=plain_ucore;file_scans=128;context_trusted=0;rebuild_steps=6;detail_checks=4;result=passed");
-	ok = ok && require_file_token("rp_study", "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;event_queue=1;recovery_tool=1;audit_ledger=1;permission_control=1;timeline_observe=1;mainflow_facts=7;detail_checks=kernel;result=passed");
+	ok = ok && require_file_token("rp_study", "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;event_queue=1;recovery_tool=1;audit_ledger=1;permission_control=1;timeline_observe=1;workbench_verify=1;package_trace=1;real_task_context=1;mainflow_facts=10;detail_checks=kernel;result=passed");
 	ok = ok && require_file_token("rp_study", "metrics=12");
 	ok = ok && require_file_token("rp_study", "study_handoff=rp_backend_exec->rp_agentcmp;status=ready");
 	ok = ok && require_file_token("rp_study", "agentos_kernel=mainflow_bound");
@@ -1073,8 +1073,14 @@ int main(void)
 	ok = ok && require_file_token("rp_agentos_mainflow", "provenance_audit=kernel_ledger");
 	ok = ok && require_file_token("rp_agentos_mainflow", "permission_control=sentinel_rerun_denied");
 	ok = ok && require_file_token("rp_agentos_mainflow", "timeline_observe=kernel_snapshot");
+	ok = ok && require_file_token("rp_agentos_mainflow", "workbench_file_verify=kernel_metadata_index");
+	ok = ok && require_file_token("rp_agentos_mainflow", "package_provenance=kernel_ledger");
+	ok = ok && require_file_token("rp_agentos_mainflow", "real_task_context=kernel_shadow");
+	ok = ok && require_file_token("rp_agentos_workbench", "file_verify=kernel_metadata_index");
+	ok = ok && require_file_token("rp_agentos_package", "package_trace=kernel_provenance");
+	ok = ok && require_file_token("rp_agentos_real_task", "report_answer=kernel_context_record");
 	ok = ok && require_file_token("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;status=ready");
-	ok = ok && require_file_token("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128,manual_retry_contract,file_polling,append_only_logs;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,capability_checked_rerun,kernel_event_queue,kernel_ledger_provenance;mainflow_facts=7;status=ready");
+	ok = ok && require_file_token("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128,manual_retry_contract,file_polling,append_only_logs;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,capability_checked_rerun,kernel_event_queue,kernel_ledger_provenance,workbench_file_verify,package_trace,real_task_context;mainflow_facts=10;status=ready");
 	ok = ok && require_file_token("rp_query", "knowledge_index=search_documents:1685");
 	ok = ok && require_file_token("rp_query", "provenance_nodes:406");
 	ok = ok && require_file_token("rp_query", "provenance_links:544");
@@ -1235,7 +1241,7 @@ int main(void)
 	ok = ok && require_file_token("rp_consistency", "run_state_checks=9");
 	ok = ok && require_file_token("rp_consistency", "lifecycle_checks=10");
 	ok = ok && require_file_token("rp_consistency", "delivery_coherence=3");
-	ok = ok && require_file_token("rp_consistency", "agentos_readiness_checks=7");
+	ok = ok && require_file_token("rp_consistency", "agentos_readiness_checks=10");
 	ok = ok && require_file_token("rp_telemetry", "metric_files=151");
 
 	ok = ok && require_file_token("rp_sreg", "samples=8");
@@ -1708,7 +1714,7 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "runner_cases=7");
 	ok = ok && require_file_token("rp_agentcmp", "runner_passed=7");
 	ok = ok && require_file_token("rp_agentcmp", "runner_planned=0");
-	ok = ok && require_file_token("rp_agentcmp", "agentos_kernel=mainflow_bound;context_snapshot=1;metadata_index=1;batch_tool=1;event_queue=1;recovery_tool=1;audit_ledger=1;capability_check=1;advanced_surface_kernel=1;status=ready");
+	ok = ok && require_file_token("rp_agentcmp", "agentos_kernel=mainflow_bound;context_snapshot=1;metadata_index=1;batch_tool=1;event_queue=1;recovery_tool=1;audit_ledger=1;capability_check=1;workbench_verify=1;package_trace=1;real_task_context=1;advanced_surface_kernel=1;status=ready");
 	ok = ok && require_file_token("rp_runop", "agentos_advanced_surface=kernel_bound");
 	ok = ok && require_file_token("rp_runop", "agentos_advanced_surface_detail=tool:echo,tool:read_context");
 	ok = ok && require_file_token("rp_agentcmp", "research_governance_checks=18");

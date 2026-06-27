@@ -141,7 +141,7 @@ rp_agentos_orch: passed
 rp_backend: cases=7 executable=7 agentos=mainflow_bound exports=1 status=ready
 ```
 
-In the AgentOS-uCore run, `rp_backend` also checks `rp_agentos_mainflow`. That file is written by the real RUN-042 platform stages and must contain trusted Context, indexed metadata query, Agent event notification, recovery tools, permission denial, timeline observation, and ledger/provenance observation.
+In the AgentOS-uCore run, `rp_backend` also checks `rp_agentos_mainflow`. That file is written by the real RUN-042 platform stages and must contain trusted Context, indexed metadata query, Agent event notification, recovery tools, permission denial, timeline observation, ledger/provenance observation, workbench file verification through kernel metadata, package provenance through the kernel ledger, and real-task report/audit Context.
 
 ## Run Role Orchestrator
 
