@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=27
+reader_views=28
 reader_actions=57
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
@@ -85,6 +85,7 @@ package_intake=package-intake:external-review;label=External review package;deci
 package_index=project-package-index;handoff=ready;release_gate=release;snapshot=stable;reproducibility=passed;provenance=ready;status=ready
 publication_page=rp_publication;peer_response=rp_peerresp;status=ready
 calculations_page=rp_calculation;jobs=1;retrieved=3;parser_results=1;status=ready
+real_task_page=rp_realtask;dataset=palmer-penguins;rows=344;answer_audit=pass;status=ready
 mature_capability_page=rp_mature;profiles=6;mappings=6;checks=72;status=ready
 provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=ready
 provenance_queries_page=rp_prov_query;specs=3;executions=3;packets=1;status=ready
@@ -275,8 +276,8 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=1588\n"
-        "tool_events=224\n"
+        "test_cases=1684\n"
+        "tool_events=232\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=4;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
@@ -290,6 +291,7 @@ status=ready
         "coherence_plane_checks=40;delivery_contracts=7;run_state_contracts=7;lifecycle_contracts=6;workflow_lint=5;tool_protocol=5;report_validation=5;agent_coordination=3;agentos_replacements=4;status=ready\n"
         "publication_checks=48;targets=2;submissions=2;review_rounds=2;revision_tasks=3;response_packages=2;response_items=4;decisions=2;agentos_replacements=4;status=ready\n"
         "calculation_checks=84;computers=1;codes=1;jobs=1;retrieved=3;parser_results=1;exports=1;agentos_replacements=4;status=ready\n"
+        "real_task_checks=96;dataset=palmer-penguins;rows=344;numeric_fields=5;answer_audit=pass;bundle=ready;status=ready\n"
         "mature_capability_checks=72;profiles=6;mappings=6;checks=72;platforms=Galaxy,AiiDA,DVC,MLflow,Nextflow,Snakemake;agentos_replacements=5;status=ready\n"
         "provenance_view_checks=64;timeline_views=4;subgraphs=3;packets=4;agentos_replacements=4;status=ready\n"
         "provenance_query_checks=72;specs=3;templates=1;executions=3;comparisons=1;exports=1;packets=1;agentos_replacements=4;status=ready\n"
@@ -352,6 +354,55 @@ status=ready
         "export=calculation-export:lab-gene-x:run042-qc;type=markdown;path=calculation-export-run042-qc.md;checksum=calcexport042;status=ready\n"
         "package=calculation-package:lab-gene-x:run042-qc;files=3;parser_results=1;exports=1;status=ready\n"
         "reader_page=calculations.html\n"
+        "status=ready\n"
+    ),
+    "rp_realtask": (
+        "service=real-task-validation\n"
+        "task=palmer-penguins-morphometrics\n"
+        "question=bill-and-body-size-patterns-by-species-and-sex\n"
+        "dataset=palmer-penguins\n"
+        "run_id=RUN-PENGUINS-001\n"
+        "real_task_checks=96\n"
+        "input_files=3\n"
+        "references=3\n"
+        "provider=deepseek\n"
+        "provider_secret_persisted=0\n"
+        "workbench_status=delivered\n"
+        "readiness=ready\n"
+        "answer_audit=pass\n"
+        "project_bundle=ready\n"
+        "status=ready\n"
+    ),
+    "rp_realdata": (
+        "dataset=palmer-penguins\n"
+        "rows=344\n"
+        "columns=8\n"
+        "numeric_fields=5\n"
+        "metric_group_summaries=5\n"
+        "metric_dimension_group_summaries=10\n"
+        "categorical_fields=island,sex\n"
+        "missing_sex_labels=present\n"
+        "source_files=penguins.csv,references.bib,notes.md\n"
+        "data_quality=accepted\n"
+        "status=ready\n"
+    ),
+    "rp_realreport": (
+        "report=palmer-penguins-report\n"
+        "llm_provider=deepseek\n"
+        "answer_source=report_md\n"
+        "raw_llm_packet=trace_only\n"
+        "claim_audit=pass\n"
+        "answer_audit=pass\n"
+        "limitations=missing_sex_labels,observational_data,causal_caution\n"
+        "citations=3\n"
+        "status=ready\n"
+    ),
+    "rp_realbundle": (
+        "bundle=palmer-penguins-project-bundle\n"
+        "duplicate_zip_entries=0\n"
+        "package_files=project_bundle,report,analysis,claim_audit,answer_audit\n"
+        "offline_review=ready\n"
+        "http_checks=4\n"
         "status=ready\n"
     ),
     "rp_mature": (
@@ -717,6 +768,7 @@ status=ready
         "decision=ready_for_reviewer;basis=required_files,human_review,llm_packet_guard,workflow_recovered\n"
         "decision=review_pack_ready;basis=delivery_manifest,operations_next,project_action_items,workbench_handoff\n"
         "subsection=integrity_plane;source=rp_integrity;checks=36;errors=0;result=passed;status=ready\n"
+        "subsection=real_task;source=rp_realtask;dataset=palmer-penguins;checks=96;outcome=passed;status=ready\n"
         "backend_review_evidence=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;review_pack=rp_review_pack;status=ready\n"
         "status=ready\n"
     ),
@@ -759,7 +811,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 27, summary
+        assert summary["pages"] == 28, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -774,6 +826,7 @@ def main() -> int:
         assert (out_dir / "coherence.html").exists()
         assert (out_dir / "publication.html").exists()
         assert (out_dir / "calculations.html").exists()
+        assert (out_dir / "real-task.html").exists()
         assert (out_dir / "mature.html").exists()
         assert (out_dir / "provenance.html").exists()
         assert (out_dir / "provenance-queries.html").exists()
@@ -980,6 +1033,14 @@ def main() -> int:
         assert "calculation-job:lab-gene-x:run042-qc" in calculations_html
         assert "calculation-parser-result:run042-qc" in calculations_html
         assert "calculation-export:lab-gene-x:run042-qc" in calculations_html
+        real_task_html = (out_dir / "real-task.html").read_text(encoding="utf-8")
+        assert "Real Task" in real_task_html
+        assert "palmer-penguins" in real_task_html
+        assert "rows" in real_task_html
+        assert "344" in real_task_html
+        assert "answer_source" in real_task_html
+        assert "report_md" in real_task_html
+        assert "duplicate_zip_entries" in real_task_html
         mature_html = (out_dir / "mature.html").read_text(encoding="utf-8")
         assert "Mature Platform Mapping" in mature_html
         assert "Mature Capability Detail" in mature_html
@@ -1044,6 +1105,8 @@ def main() -> int:
         assert "publication_checks" in compare_html
         assert "calculation_checks" in compare_html
         assert "Calculation Checks" in compare_html
+        assert "real_task_checks" in compare_html
+        assert "Real Task Checks" in compare_html
         assert "mature_capability_checks" in compare_html
         assert "Mature Capability" in compare_html
         assert "provenance_view_checks" in compare_html

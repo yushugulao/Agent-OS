@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=1588" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=224" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=1684" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=232" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -736,6 +736,7 @@ def main() -> int:
             assert any("coherence_plane_checks=40" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("publication_checks=48" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("calculation_checks=84" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("real_task_checks=96" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("mature_capability_checks=72" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_view_checks=64" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_query_checks=72" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -849,6 +850,20 @@ def main() -> int:
             assert any("computer=calculation-computer:local-agentos" in line for line in rp_calculation["lines"]), rp_calculation
             assert any("code=calculation-code:metadata-qc:v1" in line for line in rp_calculation["lines"]), rp_calculation
             assert any("job=calculation-job:lab-gene-x:run042-qc" in line for line in rp_calculation["lines"]), rp_calculation
+            rp_realtask = read_json(base + "/api/state/rp_realtask")
+            assert any("real_task_checks=96" in line for line in rp_realtask["lines"]), rp_realtask
+            assert any("task=palmer-penguins-morphometrics" in line for line in rp_realtask["lines"]), rp_realtask
+            assert any("answer_audit=pass" in line for line in rp_realtask["lines"]), rp_realtask
+            rp_realdata = read_json(base + "/api/state/rp_realdata")
+            assert any("rows=344" in line for line in rp_realdata["lines"]), rp_realdata
+            assert any("metric_group_summaries=5" in line for line in rp_realdata["lines"]), rp_realdata
+            assert any("metric_dimension_group_summaries=10" in line for line in rp_realdata["lines"]), rp_realdata
+            rp_realreport = read_json(base + "/api/state/rp_realreport")
+            assert any("answer_source=report_md" in line for line in rp_realreport["lines"]), rp_realreport
+            assert any("claim_audit=pass" in line for line in rp_realreport["lines"]), rp_realreport
+            rp_realbundle = read_json(base + "/api/state/rp_realbundle")
+            assert any("duplicate_zip_entries=0" in line for line in rp_realbundle["lines"]), rp_realbundle
+            assert any("offline_review=ready" in line for line in rp_realbundle["lines"]), rp_realbundle
             rp_calc_files = read_json(base + "/api/state/rp_calc_files")
             assert any("retrieved_files=3" in line for line in rp_calc_files["lines"]), rp_calc_files
             assert any("retrieved=calculation-retrieved:run042-qc:provenance-json" in line for line in rp_calc_files["lines"]), rp_calc_files
@@ -1392,6 +1407,14 @@ def main() -> int:
             assert "calculation-job:lab-gene-x:run042-qc" in calculations_html
             assert "calculation-parser-result:run042-qc" in calculations_html
             assert "calculation-export:lab-gene-x:run042-qc" in calculations_html
+            real_task_html = read_text(base + "/real-task.html")
+            assert "Real Task" in real_task_html
+            assert "palmer-penguins" in real_task_html
+            assert "rows" in real_task_html
+            assert "344" in real_task_html
+            assert "answer_source" in real_task_html
+            assert "report_md" in real_task_html
+            assert "duplicate_zip_entries" in real_task_html
             mature_html = read_text(base + "/mature.html")
             assert "Mature Platform Mapping" in mature_html
             assert "Mature Capability Detail" in mature_html
@@ -1577,6 +1600,8 @@ def main() -> int:
             assert "Publication Workflow" in compare_html
             assert "calculation_checks" in compare_html
             assert "Calculation Checks" in compare_html
+            assert "real_task_checks" in compare_html
+            assert "Real Task Checks" in compare_html
             assert "mature_capability_checks" in compare_html
             assert "Mature Capability" in compare_html
             assert "provenance_view_checks" in compare_html
