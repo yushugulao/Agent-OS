@@ -70,6 +70,7 @@ static const char *PROGRAMS[] = {
 	"rp_reldossier",
 	"rp_decsupport",
 	"rp_usable",
+	"rp_usableproject",
 	"rp_compare_plain",
 };
 

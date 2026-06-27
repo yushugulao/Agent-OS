@@ -1,8 +1,8 @@
 # Next Work For Plain uCore Migration
 
-The current branch has a working native baseline for the research Agent platform on an unchanged uCore kernel. It runs 68 platform programs, writes 256 compact state files, emits 318 tool-event records, publishes 38 Host Reader views, and exposes a 2680-check user-space test suite through `rp_tests` and `rp_agentcmp`.
+The current branch has a working native baseline for the research Agent platform on an unchanged uCore kernel. It runs 69 platform programs, writes 261 compact state files, emits 328 tool-event records, publishes 39 Host Reader views, and exposes a 2800-check user-space test suite through `rp_tests` and `rp_agentcmp`.
 
-The platform already covers the RUN-042 scenario with concrete input files, generated artifacts, report text, logs, chart data, workflow DAG records, retry records, cache records, Agent messages, review records, delivery records, project review records, Host LLM Relay packets, calculation job records, Palmer Penguins real-task validation records, analysis result records, decision-support records, usable research workbench records, experiment campaign records, statistical design records, model registry records, systematic review records, experiment scheduling records, training compliance records, release dossier records, mature-platform mapping records, provenance views, and provenance query records.
+The platform already covers the RUN-042 scenario with concrete input files, generated artifacts, report text, logs, chart data, workflow DAG records, retry records, cache records, Agent messages, review records, delivery records, project review records, Host LLM Relay packets, calculation job records, Palmer Penguins real-task validation records, analysis result records, decision-support records, usable research workbench records, usable project lifecycle records, experiment campaign records, statistical design records, model registry records, systematic review records, experiment scheduling records, training compliance records, release dossier records, mature-platform mapping records, provenance views, and provenance query records.
 
 ## Required Direction
 

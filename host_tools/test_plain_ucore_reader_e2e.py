@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=2680" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=318" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=2800" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=328" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -994,6 +994,17 @@ def main() -> int:
             assert any("stage=package;order=9" in line for line in rp_usabledag["lines"]), rp_usabledag
             rp_usableops = read_json(base + "/api/state/rp_usableops")
             assert any("handoff=usable-handoff:RUN-900:reviewer" in line for line in rp_usableops["lines"]), rp_usableops
+            rp_usableproj = read_json(base + "/api/state/rp_usableproj")
+            assert any("usable_project_checks=120" in line for line in rp_usableproj["lines"]), rp_usableproj
+            assert any("project_launches=2" in line for line in rp_usableproj["lines"]), rp_usableproj
+            rp_usableboot = read_json(base + "/api/state/rp_usableboot")
+            assert any("platform-doctor" in line or "platform_doctor" in line for line in rp_usableboot["lines"]), rp_usableboot
+            rp_usablescaf = read_json(base + "/api/state/rp_usablescaf")
+            assert any("scaffold-template:protocol-reproduction" in line for line in rp_usablescaf["lines"]), rp_usablescaf
+            rp_usablelaunch = read_json(base + "/api/state/rp_usablelaunch")
+            assert any("usable-project-launch:lab-gene-x:1" in line for line in rp_usablelaunch["lines"]), rp_usablelaunch
+            rp_usablepack = read_json(base + "/api/state/rp_usablepack")
+            assert any("usable-study-protocol-reproduction-package:RUN-042" in line for line in rp_usablepack["lines"]), rp_usablepack
             rp_campaign = read_json(base + "/api/state/rp_campaign")
             assert any("campaign_checks=108" in line for line in rp_campaign["lines"]), rp_campaign
             assert any("campaign=experiment-campaign:RUN-042:align-memory-grid" in line for line in rp_campaign["lines"]), rp_campaign
@@ -1591,6 +1602,14 @@ def main() -> int:
             assert "usable-dataset:penguins" in usable_research_html
             assert "usable-source:library2026:1" in usable_research_html
             assert "usable-handoff:RUN-900:reviewer" in usable_research_html
+            usable_project_html = read_text(base + "/usable-project.html")
+            assert "Usable Project Lifecycle" in usable_project_html
+            assert "Project Scaffold" in usable_project_html
+            assert "Project Launches And Operations" in usable_project_html
+            assert "Bundles And Package Actions" in usable_project_html
+            assert "scaffold-template:protocol-reproduction" in usable_project_html
+            assert "usable-project-launch:lab-gene-x:1" in usable_project_html
+            assert "usable-study-protocol-reproduction-package:RUN-042" in usable_project_html
             campaign_html = read_text(base + "/experiment-campaigns.html")
             assert "Experiment Campaigns" in campaign_html
             assert "align-memory-grid" in campaign_html

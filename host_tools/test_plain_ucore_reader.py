@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=38
+reader_views=39
 reader_actions=57
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
@@ -89,6 +89,7 @@ real_task_page=rp_realtask;dataset=palmer-penguins;rows=344;answer_audit=pass;st
 analysis_results_page=rp_analysisres;runs=2;tables=2;statistics=2;figures=2;status=ready
 decision_support_page=rp_decsupport;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;status=ready
 usable_research_page=rp_usable;templates=3;datasets=3;library_sources=3;dag_stages=9;queues=2;status=ready
+usable_project_page=rp_usableproj;scaffolds=3;launches=2;bundles=2;doctor=pass;status=ready
 experiment_campaigns_page=rp_campaign;campaigns=1;trials=4;best_trial=04;status=ready
 statistical_design_page=rp_stdesign;designs=1;power=underpowered;randomization=balanced;status=ready
 model_registry_page=rp_modelreg;models=1;versions=1;evaluations=1;deployments=1;status=ready
@@ -290,8 +291,8 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=2680\n"
-        "tool_events=318\n"
+        "test_cases=2800\n"
+        "tool_events=328\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=4;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
@@ -309,6 +310,7 @@ status=ready
         "analysis_results_checks=96;plans=1;runs=2;tables=2;statistics=2;figures=2;interpretations=2;charts=4;agentos_replacements=4;status=ready\n"
         "decision_support_checks=80;options=3;criteria=5;scores=15;review_packets=1;selected=agentos_ucore_hybrid;agentos_replacements=4;status=ready\n"
         "usable_research_checks=100;templates=3;datasets=3;library_sources=3;dag_stages=9;plan_queue=4;action_queue=5;handoffs=3;deliverables=8;status=ready\n"
+        "usable_project_checks=120;scaffold_templates=3;project_launches=2;project_bundles=2;doctor_checks=10;status=ready\n"
         "experiment_campaign_checks=108;campaigns=1;trials=4;best_trial=04;result_review=accept_candidate;status=ready\n"
         "statistical_design_checks=120;designs=1;power=underpowered;randomization=balanced;blinding=ok;stat_result=approved_with_sample_size_note;status=ready\n"
         "model_registry_service_checks=96;models=1;versions=1;evaluations=1;deployments=1;serving_checks=1;agentos_replacements=4;status=ready\n"
@@ -696,6 +698,39 @@ status=ready
         "operations=usable-research-workbench\n"
         "queue=workbench_action;rows=5;ready=2;needs_action=2;optional=1;status=ready\n"
         "handoff=usable-handoff:RUN-900:reviewer;files=8;required_missing=0;decision=ready;status=ready\n"
+    ),
+    "rp_usableproj": (
+        "service=usable-project-lifecycle\n"
+        "usable_project_checks=120\n"
+        "configuration=usable-research-config:offline-template\n"
+        "scaffold_templates=3\n"
+        "scaffold_files=8\n"
+        "project_launches=2\n"
+        "project_bundles=2\n"
+        "platform_doctor_checks=10\n"
+        "operations_digest_sections=6\n"
+        "status=ready\n"
+    ),
+    "rp_usableboot": (
+        "config=usable-research-config:offline-template;provider=template;cloud_key_required=0;status=ready\n"
+        "doctor=usable-platform-doctor:1;checks=10;passed=10;failed=0;warnings=0;status=ready\n"
+    ),
+    "rp_usablescaf": (
+        "templates=3\n"
+        "template=scaffold-template:protocol-reproduction;files=8;includes=protocol,launch,runs,comparison,review,actions,bundle,manifest;status=ready\n"
+        "scaffold=scaffold:lab-gene-x:starter;project=lab-gene-x;files=8;importable=1;status=ready\n"
+        "file=inputs/dataset.csv;kind=data;rows=4;status=ready\n"
+    ),
+    "rp_usablelaunch": (
+        "launches=2\n"
+        "launch=usable-project-launch:lab-gene-x:1;scaffold=scaffold:lab-gene-x:starter;workbench=usable-workbench:RUN-900;run=usable-run:RUN-900;status=ready\n"
+        "operation=operations_digest;sections=6;pending_reviews=1;active_actions=5;handoffs=3;status=ready\n"
+    ),
+    "rp_usablepack": (
+        "bundles=2\n"
+        "bundle=usable-project-bundle:lab-gene-x;project=lab-gene-x;files=14;manifest=project-package-index;download=ready;status=ready\n"
+        "bundle=usable-study-protocol-reproduction-package:RUN-042;files=8;notebooks=2;datasets=2;review=approved;status=ready\n"
+        "intake=usable-package-intake:external-review;files=5;sha256=checked;decision=accepted;status=ready\n"
     ),
     "rp_campaign": (
         "service=experiment-campaigns\n"
@@ -1298,7 +1333,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 38, summary
+        assert summary["pages"] == 39, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -1318,6 +1353,7 @@ def main() -> int:
         assert (out_dir / "analysis-results.html").exists()
         assert (out_dir / "decision-support.html").exists()
         assert (out_dir / "usable-research.html").exists()
+        assert (out_dir / "usable-project.html").exists()
         assert (out_dir / "experiment-campaigns.html").exists()
         assert (out_dir / "statistical-design.html").exists()
         assert (out_dir / "model-registry.html").exists()
@@ -1573,6 +1609,14 @@ def main() -> int:
         assert "usable-dataset:penguins" in usable_research_html
         assert "usable-source:library2026:1" in usable_research_html
         assert "usable-handoff:RUN-900:reviewer" in usable_research_html
+        usable_project_html = (out_dir / "usable-project.html").read_text(encoding="utf-8")
+        assert "Usable Project Lifecycle" in usable_project_html
+        assert "Project Scaffold" in usable_project_html
+        assert "Project Launches And Operations" in usable_project_html
+        assert "Bundles And Package Actions" in usable_project_html
+        assert "scaffold-template:protocol-reproduction" in usable_project_html
+        assert "usable-project-launch:lab-gene-x:1" in usable_project_html
+        assert "usable-study-protocol-reproduction-package:RUN-042" in usable_project_html
         campaign_html = (out_dir / "experiment-campaigns.html").read_text(encoding="utf-8")
         assert "Experiment Campaigns" in campaign_html
         assert "align-memory-grid" in campaign_html

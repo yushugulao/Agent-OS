@@ -41,6 +41,7 @@ PAGE_SPECS = [
     ("analysis-results.html", "Analysis Results", "rp_analysisres", ["rp_anplan", "rp_anrun", "rp_resulttbl", "rp_statres", "rp_anfig", "rp_interp", "rp_agentcmp", "rp_review_dashboard"]),
     ("decision-support.html", "Decision Support", "rp_decsupport", ["rp_decopt", "rp_deccrit", "rp_decscore", "rp_decpacket", "rp_agentcmp", "rp_review_dashboard"]),
     ("usable-research.html", "Usable Research", "rp_usable", ["rp_usabletpl", "rp_usableds", "rp_usablelib", "rp_usabledag", "rp_usableops", "rp_agentcmp", "rp_review_dashboard"]),
+    ("usable-project.html", "Usable Project", "rp_usableproj", ["rp_usableboot", "rp_usablescaf", "rp_usablelaunch", "rp_usablepack", "rp_agentcmp", "rp_review_dashboard"]),
     ("experiment-campaigns.html", "Experiment Campaigns", "rp_campaign", ["rp_trials", "rp_camp_rank", "rp_resreview", "rp_agentcmp", "rp_review_dashboard"]),
     ("statistical-design.html", "Statistical Design", "rp_stdesign", ["rp_power", "rp_random", "rp_blind", "rp_streview", "rp_agentcmp", "rp_review_dashboard"]),
     ("model-registry.html", "Model Registry", "rp_modelreg", ["rp_modelver", "rp_modeleval", "rp_modeldep", "rp_modelserve", "rp_agentcmp", "rp_review_dashboard"]),
@@ -1316,6 +1317,16 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Handoffs", metric_value(state, [("rp_usable", "handoff_packages"), ("rp_agentcmp", "handoffs")]), "rp_usableops"),
         ("Status", metric_value(state, [("rp_usable", "status")]), "rp_usable"),
     ]
+    usable_project_items = [
+        ("Checks", metric_value(state, [("rp_usableproj", "usable_project_checks"), ("rp_agentcmp", "usable_project_checks")]), "rp_usableproj"),
+        ("Scaffold Templates", metric_value(state, [("rp_usableproj", "scaffold_templates"), ("rp_agentcmp", "scaffold_templates")]), "rp_usablescaf"),
+        ("Scaffold Files", metric_value(state, [("rp_usableproj", "scaffold_files")]), "rp_usablescaf"),
+        ("Project Launches", metric_value(state, [("rp_usableproj", "project_launches"), ("rp_agentcmp", "project_launches")]), "rp_usablelaunch"),
+        ("Project Bundles", metric_value(state, [("rp_usableproj", "project_bundles"), ("rp_agentcmp", "project_bundles")]), "rp_usablepack"),
+        ("Doctor Checks", metric_value(state, [("rp_usableproj", "platform_doctor_checks"), ("rp_agentcmp", "doctor_checks")]), "rp_usableboot"),
+        ("Operations Sections", metric_value(state, [("rp_usableproj", "operations_digest_sections")]), "rp_usablelaunch"),
+        ("Status", metric_value(state, [("rp_usableproj", "status")]), "rp_usableproj"),
+    ]
     mature_items = [
         ("Profiles", metric_value(state, [("rp_mature", "reference_platforms"), ("rp_mature_refs", "profiles")]), "rp_mature"),
         ("Mappings", metric_value(state, [("rp_mature", "capability_mappings"), ("rp_mature_map", "mappings")]), "rp_mature"),
@@ -1386,6 +1397,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Decision Support", decision_support_items)
     if file_name == "usable-research.html":
         return render_summary_panel("Usable Research", usable_research_items)
+    if file_name == "usable-project.html":
+        return render_summary_panel("Usable Project Lifecycle", usable_project_items)
     if file_name == "mature.html":
         return render_summary_panel("Mature Platform Mapping", mature_items)
     if file_name == "provenance.html":
@@ -1492,6 +1505,17 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Reader Page", metric_value(state, [("rp_web_bundle", "usable_research_page")]), "rp_web_bundle"),
         ("Review Dashboard", metric_value(state, [("rp_review_dashboard", "subsection")]), "rp_review_dashboard"),
     ]
+    usable_project_detail_items = [
+        ("Configuration", metric_value(state, [("rp_usableproj", "configuration")]), "rp_usableproj"),
+        ("Next User Path", metric_value(state, [("rp_usableproj", "next_user_path")]), "rp_usableproj"),
+        ("Startup Guide", metric_value(state, [("rp_usableboot", "startup_guide")]), "rp_usableboot"),
+        ("Doctor", metric_value(state, [("rp_usableboot", "doctor")]), "rp_usableboot"),
+        ("Scaffold", metric_value(state, [("rp_usablescaf", "scaffold")]), "rp_usablescaf"),
+        ("Launch", metric_value(state, [("rp_usablelaunch", "launch")]), "rp_usablelaunch"),
+        ("Project Bundle", metric_value(state, [("rp_usablepack", "bundle")]), "rp_usablepack"),
+        ("Package Intake", metric_value(state, [("rp_usablepack", "intake")]), "rp_usablepack"),
+        ("Reader Page", metric_value(state, [("rp_web_bundle", "usable_project_page")]), "rp_web_bundle"),
+    ]
     mature_detail_items = [
         ("Profile Checks", metric_value(state, [("rp_mature", "profile_checks")]), "rp_mature"),
         ("Store Checks", metric_value(state, [("rp_mature", "store_checks")]), "rp_mature"),
@@ -1548,6 +1572,8 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Decision Support Detail", decision_support_detail_items)
     if file_name == "usable-research.html":
         return render_summary_panel("Usable Research Detail", usable_research_detail_items)
+    if file_name == "usable-project.html":
+        return render_summary_panel("Usable Project Detail", usable_project_detail_items)
     if file_name == "mature.html":
         return render_summary_panel("Mature Capability Detail", mature_detail_items)
     if file_name == "provenance.html":
@@ -2449,6 +2475,34 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 "Handoff Packages",
                 [("Handoff", "handoff"), ("Files", "files"), ("Missing", "required_missing"), ("Decision", "decision"), ("Status", "status")],
                 state_records(state, "rp_usableops", "handoff"),
+            ),
+        ]
+    if file_name == "usable-project.html":
+        return [
+            render_record_panel(
+                "Startup And Doctor",
+                [("Config", "config"), ("Provider", "provider"), ("Checks", "checks"), ("Passed", "passed"), ("Status", "status")],
+                state_records(state, "rp_usableboot", "config") + state_records(state, "rp_usableboot", "doctor"),
+            ),
+            render_record_panel(
+                "Project Scaffold",
+                [("Template", "template"), ("Files", "files"), ("Includes", "includes"), ("Project", "project"), ("Status", "status")],
+                state_records(state, "rp_usablescaf", "template") + state_records(state, "rp_usablescaf", "scaffold"),
+            ),
+            render_record_panel(
+                "Scaffold Files",
+                [("File", "file"), ("Kind", "kind"), ("Rows", "rows"), ("Entries", "entries"), ("Status", "status")],
+                state_records(state, "rp_usablescaf", "file"),
+            ),
+            render_record_panel(
+                "Project Launches And Operations",
+                [("Launch", "launch"), ("Operation", "operation"), ("Run", "run"), ("Sections", "sections"), ("Status", "status")],
+                state_records(state, "rp_usablelaunch", "launch") + state_records(state, "rp_usablelaunch", "operation"),
+            ),
+            render_record_panel(
+                "Bundles And Package Actions",
+                [("Bundle", "bundle"), ("Intake", "intake"), ("Action Plan", "action_plan"), ("Action Execution", "action_execution"), ("Status", "status")],
+                state_records(state, "rp_usablepack", "bundle") + state_records(state, "rp_usablepack", "intake") + state_records(state, "rp_usablepack", "action_plan") + state_records(state, "rp_usablepack", "action_execution"),
             ),
         ]
     if file_name == "data.html":
