@@ -38,6 +38,7 @@ PAGE_SPECS = [
     ("publication.html", "Publication", "rp_publication", ["rp_pubplan", "rp_peerresp", "rp_api_pub", "rp_pubop", "rp_review_dashboard", "rp_package"]),
     ("mature.html", "Mature Platforms", "rp_mature", ["rp_mature_refs", "rp_mature_map", "rp_mature_checks", "rp_agentcmp", "rp_review_dashboard"]),
     ("provenance.html", "Provenance", "rp_prov_view", ["rp_prov_edges", "rp_evidence_packet", "rp_timeline_view", "rp_agentcmp", "rp_review_dashboard"]),
+    ("provenance-queries.html", "Provenance Queries", "rp_prov_query", ["rp_prov_specs", "rp_prov_exec", "rp_prov_query_pkg", "rp_agentcmp", "rp_review_dashboard"]),
     ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets"]),
     ("actions.html", "Actions", "rp_api_action", ["rp_actionio", "rp_host_run_result", "rp_web_routes", "rp_web_bundle"]),
 ]
@@ -1333,6 +1334,7 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Publication Checks", metric_value(state, [("rp_agentcmp", "publication_checks"), ("rp_publication", "publication_checks")]), "rp_publication"),
         ("Mature Capability", metric_value(state, [("rp_agentcmp", "mature_capability_checks"), ("rp_mature", "capability_checks")]), "rp_mature"),
         ("Provenance View", metric_value(state, [("rp_agentcmp", "provenance_view_checks"), ("rp_prov_view", "provenance_view_checks")]), "rp_prov_view"),
+        ("Provenance Queries", metric_value(state, [("rp_agentcmp", "provenance_query_checks"), ("rp_prov_query", "provenance_query_checks")]), "rp_prov_query"),
     ]
     integrity_detail_items = [
         ("Evidence Contracts", metric_value(state, [("rp_integrity", "evidence_contracts")]), "rp_integrity"),

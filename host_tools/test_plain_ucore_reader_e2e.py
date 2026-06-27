@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=1432" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=210" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=1504" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=216" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -737,6 +737,7 @@ def main() -> int:
             assert any("publication_checks=48" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("mature_capability_checks=72" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_view_checks=64" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("provenance_query_checks=72" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_runbooks = read_json(base + "/api/state/rp_runbooks")
             assert any("runbook_service_checks=16" in line for line in rp_runbooks["lines"]), rp_runbooks
             assert any("runbook_templates=1" in line for line in rp_runbooks["lines"]), rp_runbooks
@@ -865,6 +866,18 @@ def main() -> int:
             assert any("packet=agentos-readiness;run=RUN-042" in line for line in rp_evidence_packet["lines"]), rp_evidence_packet
             rp_timeline_view = read_json(base + "/api/state/rp_timeline_view")
             assert any("view=agent_decision_flow;events=6;source=rp_agent_run;status=ready" in line for line in rp_timeline_view["lines"]), rp_timeline_view
+            rp_prov_query = read_json(base + "/api/state/rp_prov_query")
+            assert any("provenance_query_checks=72" in line for line in rp_prov_query["lines"]), rp_prov_query
+            assert any("specs=3" in line for line in rp_prov_query["lines"]), rp_prov_query
+            assert any("reader_page=provenance-queries.html" in line for line in rp_prov_query["lines"]), rp_prov_query
+            rp_prov_specs = read_json(base + "/api/state/rp_prov_specs")
+            assert any("template=provenance-query-template:calculation-root-neighborhood" in line for line in rp_prov_specs["lines"]), rp_prov_specs
+            assert any("spec=provenance-query:RUN-042:calculation-lineage" in line for line in rp_prov_specs["lines"]), rp_prov_specs
+            rp_prov_exec = read_json(base + "/api/state/rp_prov_exec")
+            assert any("execution=provenance-query-execution:calculation-lineage" in line for line in rp_prov_exec["lines"]), rp_prov_exec
+            rp_prov_query_pkg = read_json(base + "/api/state/rp_prov_query_pkg")
+            assert any("comparison=provenance-query-comparison:RUN-042:rendered-vs-direct" in line for line in rp_prov_query_pkg["lines"]), rp_prov_query_pkg
+            assert any("packet=provenance-query-packet:RUN-042:lineage-review" in line for line in rp_prov_query_pkg["lines"]), rp_prov_query_pkg
             rp_peerresp = read_json(base + "/api/state/rp_peerresp")
             assert any("addressed=4" in line for line in rp_peerresp["lines"]), rp_peerresp
             assert any("needs_revision=0" in line for line in rp_peerresp["lines"]), rp_peerresp
@@ -1379,6 +1392,12 @@ def main() -> int:
             assert "agent_decision_flow" in provenance_html
             assert "agent_to_trace" in provenance_html
             assert "kernel_timeline" in provenance_html
+            provenance_query_html = read_text(base + "/provenance-queries.html")
+            assert "Provenance Queries" in provenance_query_html
+            assert "provenance-query-template:calculation-root-neighborhood" in provenance_query_html
+            assert "provenance-query-execution:calculation-lineage" in provenance_query_html
+            assert "provenance-query-comparison:RUN-042:rendered-vs-direct" in provenance_query_html
+            assert "provenance-query-packet:RUN-042:lineage-review" in provenance_query_html
             project_review_html = read_text(base + "/project-review.html")
             assert "Project Delivery Review" in project_review_html
             assert "Project Release Gate" in project_review_html
@@ -1539,6 +1558,8 @@ def main() -> int:
             assert "Mature Capability" in compare_html
             assert "provenance_view_checks" in compare_html
             assert "Provenance View" in compare_html
+            assert "provenance_query_checks" in compare_html
+            assert "Provenance Queries" in compare_html
             assert "Compare Action Trace" in compare_html
             assert "Compare Action Output Links" in compare_html
             assert "Compare Action Output Details" in compare_html

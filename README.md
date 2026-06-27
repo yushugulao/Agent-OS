@@ -88,6 +88,8 @@ user/src/rp_controlplane.c
 user/src/rp_integrityplane.c
 user/src/rp_coherenceplane.c
 user/src/rp_mature.c
+user/src/rp_prov_view.c
+user/src/rp_prov_query.c
 user/src/rp_test_suite.c
 user/src/rp_compare_plain.c
 ```
@@ -103,7 +105,7 @@ user/src/rp_compare_plain.c
 - A plain user-space research run simulation with planning, literature, analysis, review, writing, repair, and audit roles.
 - Local catalog search for workflow, Agent, evidence, provenance, and LLM related platform objects.
 
-`rp_orch` runs 52 platform programs as separate uCore user processes:
+`rp_orch` runs 56 platform programs as separate uCore user processes:
 
 - catalog,
 - object store,
@@ -152,6 +154,9 @@ user/src/rp_compare_plain.c
 - platform control plane for approvals, notifications, run queue, plugins, workspace access, and saved views,
 - integrity plane for evidence traceability, reference integrity, namespace, status semantics, review alignment, report sources, and package trace checks,
 - coherence plane for delivery contracts, run-state contracts, lifecycle order, workflow lint, tool protocol checks, report validation, and Agent coordination checks,
+- mature platform mapping for Galaxy, AiiDA, DVC, MLflow, Nextflow, and Snakemake style capability surfaces,
+- provenance view export for timeline views, provenance edges, and evidence packets,
+- provenance query service for saved graph queries, templates, executions, comparisons, exports, and evidence packets,
 - file-backed human review and revision-task actions,
 - test suite,
 - plain-kernel comparison.
@@ -287,6 +292,10 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_integrity`
 - `rp_mature`
 - `rp_prov_view`
+- `rp_prov_query`
+- `rp_prov_specs`
+- `rp_prov_exec`
+- `rp_prov_query_pkg`
 - `rp_prov_edges`
 - `rp_evidence_packet`
 - `rp_timeline_view`
@@ -346,7 +355,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_review_pack`
 - `rp_agentcmp`
 
-The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 1432-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
+The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 1504-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
 
 Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_agentcmp` after all children exit, then prints `state_ok=1`.
 
@@ -389,7 +398,7 @@ rp_plain: passed
 Expected orchestrator output:
 
 ```text
-rp_orch: start programs=55
+rp_orch: start programs=56
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_state_catalog: keys=573 nonzero=70 zero=503 represented=573 checks=12 status=ready
 rp_object_store: records=8 status=ready
@@ -444,8 +453,9 @@ rp_integrityplane: checks=36 evidence=8 references=8 namespace=5 status_semantic
 rp_coherenceplane: checks=40 delivery=7 run_state=7 lifecycle=6 workflow_lint=5 tool_protocol=5 report_validation=5 status=ready
 rp_mature: profiles=6 mappings=6 checks=72 errors=0 status=ready
 rp_prov_view: timelines=4 subgraphs=3 packets=4 checks=64 errors=0 status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=55 state_files=191 acks=55 tools=210 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 publication=48 mature=72 provenance=64 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
-rp_orch: programs_ok=55 programs_total=55
+rp_prov_query: specs=3 templates=1 executions=3 comparisons=1 packets=1 checks=72 errors=0 status=ready
+rp_compare_plain: plain_kernel=passed objects=500 programs=56 state_files=195 acks=56 tools=216 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 publication=48 mature=72 provenance=64 provenance_query=72 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
+rp_orch: programs_ok=56 programs_total=56
 rp_orch: state_ok=1
 rp_orch: passed
 ```

@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=25
+reader_views=26
 reader_actions=57
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
@@ -86,6 +86,7 @@ package_index=project-package-index;handoff=ready;release_gate=release;snapshot=
 publication_page=rp_publication;peer_response=rp_peerresp;status=ready
 mature_capability_page=rp_mature;profiles=6;mappings=6;checks=72;status=ready
 provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=ready
+provenance_queries_page=rp_prov_query;specs=3;executions=3;packets=1;status=ready
 status=ready
 """,
     "rp_web_routes": "routes=74\nget_routes=17\npost_routes=57\nroute=/research-studio;payload=rp_studio;status=ready\nroute=/research/project/{id}/review;payload=rp_web_bundle;status=ready\naction=/actions/research/studio-launch;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-release-gate;method=POST;payload=rp_api_action;status=ready\nstatus=ready\n",
@@ -273,8 +274,8 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=1432\n"
-        "tool_events=210\n"
+        "test_cases=1504\n"
+        "tool_events=216\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=4;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
@@ -289,6 +290,7 @@ status=ready
         "publication_checks=48;targets=2;submissions=2;review_rounds=2;revision_tasks=3;response_packages=2;response_items=4;decisions=2;agentos_replacements=4;status=ready\n"
         "mature_capability_checks=72;profiles=6;mappings=6;checks=72;platforms=Galaxy,AiiDA,DVC,MLflow,Nextflow,Snakemake;agentos_replacements=5;status=ready\n"
         "provenance_view_checks=64;timeline_views=4;subgraphs=3;packets=4;agentos_replacements=4;status=ready\n"
+        "provenance_query_checks=72;specs=3;templates=1;executions=3;comparisons=1;exports=1;packets=1;agentos_replacements=4;status=ready\n"
         "llm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready\n"
         "workflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready\n"
         "portability_backend_checks=12;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=2;planned_cases=2;status=ready\n"
@@ -394,6 +396,38 @@ status=ready
         "view=run_timeline;events=9;source=rp_timeline;status=ready\n"
         "view=agent_decision_flow;events=6;source=rp_agent_run;status=ready\n"
         "timeline_event=dossier;tick=42;actor=orchestrator;artifact=rp_review_pack;status=ready\n"
+    ),
+    "rp_prov_query": (
+        "run_id=RUN-042\n"
+        "provenance_query_checks=72\n"
+        "specs=3\n"
+        "templates=1\n"
+        "executions=3\n"
+        "comparisons=1\n"
+        "exports=1\n"
+        "evidence_packets=1\n"
+        "projected_rows=14\n"
+        "reader_page=provenance-queries.html\n"
+        "agentos_mapping=timeline_query,provenance_snapshot,ledger_snapshot,context_detail\n"
+        "status=ready\n"
+    ),
+    "rp_prov_specs": (
+        "specs=3\n"
+        "template=provenance-query-template:calculation-root-neighborhood;owner=auditor;direction=both;depth=2;params=root_id,query_name;status=ready\n"
+        "spec=provenance-query:RUN-042:calculation-lineage;owner=auditor;root=calculation-job:lab-gene-x:run042-qc;direction=both;depth=2;status=ready\n"
+        "spec=provenance-query:RUN-042:template-rendered-lineage;owner=auditor;root=calculation-job:lab-gene-x:run042-qc;template=calculation-root-neighborhood;direction=both;depth=2;status=ready\n"
+    ),
+    "rp_prov_exec": (
+        "executions=3\n"
+        "execution=provenance-query-execution:calculation-lineage;query=provenance-query:RUN-042:calculation-lineage;nodes=8;links=7;rows=8;status=ok\n"
+        "execution=provenance-query-execution:template-rendered-lineage;query=provenance-query:RUN-042:template-rendered-lineage;nodes=8;links=7;rows=8;status=ok\n"
+        "row=calculation-job:lab-gene-x:run042-qc;node_type=calculation_job;title=RUN-042 QC calculation;status=finished\n"
+    ),
+    "rp_prov_query_pkg": (
+        "comparisons=1\n"
+        "comparison=provenance-query-comparison:RUN-042:rendered-vs-direct;base=provenance-query-execution:calculation-lineage;candidate=provenance-query-execution:template-rendered-lineage;added=0;removed=0;row_delta=0;status=ok\n"
+        "export=provenance-query-export:RUN-042:calculation-lineage;execution=provenance-query-execution:calculation-lineage;type=markdown;checksum=provquery042;status=ready\n"
+        "packet=provenance-query-packet:RUN-042:lineage-review;comparison=provenance-query-comparison:RUN-042:rendered-vs-direct;executions=2;nodes=8;links=7;checksum=packet042;status=ready\n"
     ),
     "rp_backend_exec": (
         "runner_case=plain-ucore;input=rp_wfio;artifact=rp_artifact_manifest;result=passed;reason=native_programs_ok;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=3\n"
@@ -680,7 +714,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 25, summary
+        assert summary["pages"] == 26, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -696,6 +730,7 @@ def main() -> int:
         assert (out_dir / "publication.html").exists()
         assert (out_dir / "mature.html").exists()
         assert (out_dir / "provenance.html").exists()
+        assert (out_dir / "provenance-queries.html").exists()
         assert (out_dir / "api" / "rp_api_home.json").exists()
         index_html = (out_dir / "index.html").read_text(encoding="utf-8")
         assert "Plain uCore Research" in index_html
@@ -913,6 +948,12 @@ def main() -> int:
         assert "agent_decision_flow" in provenance_html
         assert "agent_to_trace" in provenance_html
         assert "kernel_timeline" in provenance_html
+        provenance_query_html = (out_dir / "provenance-queries.html").read_text(encoding="utf-8")
+        assert "Provenance Queries" in provenance_query_html
+        assert "provenance-query-template:calculation-root-neighborhood" in provenance_query_html
+        assert "provenance-query-execution:calculation-lineage" in provenance_query_html
+        assert "provenance-query-comparison:RUN-042:rendered-vs-direct" in provenance_query_html
+        assert "provenance-query-packet:RUN-042:lineage-review" in provenance_query_html
         project_review_html = (out_dir / "project-review.html").read_text(encoding="utf-8")
         assert "Project Delivery Review" in project_review_html
         assert "Project Release Gate" in project_review_html
@@ -952,6 +993,8 @@ def main() -> int:
         assert "Mature Capability" in compare_html
         assert "provenance_view_checks" in compare_html
         assert "Provenance View" in compare_html
+        assert "provenance_query_checks" in compare_html
+        assert "Provenance Queries" in compare_html
         assert "Coherence Plane" in compare_html
         assert "Backend Runner Cases" in compare_html
         assert "Backend Case Details" in compare_html

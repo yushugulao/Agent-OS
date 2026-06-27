@@ -59,6 +59,7 @@ static const char *PROGRAMS[] = {
 	"rp_coherenceplane",
 	"rp_mature",
 	"rp_prov_view",
+	"rp_prov_query",
 	"rp_compare_plain",
 };
 
@@ -83,6 +84,7 @@ static int keeps_same_name_state(const char *program)
 		"rp_integrity",
 		"rp_mature",
 		"rp_prov_view",
+		"rp_prov_query",
 		"rp_coherence",
 		"rp_privacy",
 		"rp_query",
