@@ -1,5 +1,5 @@
 #include <stdio.h>
-#define RP_STATE_BUFFER_SIZE 32768
+#define RP_STATE_BUFFER_SIZE 8192
 #include <research_platform_state.h>
 
 int main(void)
@@ -48,6 +48,7 @@ int main(void)
 			   "subsection=risk_capa;source=rp_risk,rp_capa;risks=3;mitigations=3;reviews=1;capa_actions=2;verifications=2;status=ready\n"
 			   "subsection=decision_support;source=rp_risk;options=3;criteria=5;scores=15;selected=select_agentos_ucore_hybrid\n"
 			   "subsection=provenance_export;source=rp_provpath,rp_lineage;nodes=150;links=250;views=1;status=ready\n"
+			   "subsection=calculations;source=rp_calculation;jobs=1;retrieved=3;checks=84;outcome=passed;status=ready\n"
 			   "gate=required_files;status=pass;source=rp_package\n"
 			   "gate=human_review;status=pass;source=rp_review2\n"
 			   "gate=llm_packet_guard;status=pass;source=rp_llm_guard\n"

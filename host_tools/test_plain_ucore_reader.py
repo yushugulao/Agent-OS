@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=26
+reader_views=27
 reader_actions=57
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
@@ -84,6 +84,7 @@ project_delivery=project-delivery:lab-gene-x;project=lab-gene-x;decision=ready;b
 package_intake=package-intake:external-review;label=External review package;decision=accepted;files=5;sha256=checked;status=ready
 package_index=project-package-index;handoff=ready;release_gate=release;snapshot=stable;reproducibility=passed;provenance=ready;status=ready
 publication_page=rp_publication;peer_response=rp_peerresp;status=ready
+calculations_page=rp_calculation;jobs=1;retrieved=3;parser_results=1;status=ready
 mature_capability_page=rp_mature;profiles=6;mappings=6;checks=72;status=ready
 provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=ready
 provenance_queries_page=rp_prov_query;specs=3;executions=3;packets=1;status=ready
@@ -274,8 +275,8 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=1504\n"
-        "tool_events=216\n"
+        "test_cases=1588\n"
+        "tool_events=224\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=4;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
@@ -288,6 +289,7 @@ status=ready
         "integrity_plane_checks=36;evidence_contracts=8;reference_contracts=8;namespace_checks=5;status_checks=5;review_alignment_checks=4;report_source_checks=3;package_trace_checks=3;agentos_replacements=4;status=ready\n"
         "coherence_plane_checks=40;delivery_contracts=7;run_state_contracts=7;lifecycle_contracts=6;workflow_lint=5;tool_protocol=5;report_validation=5;agent_coordination=3;agentos_replacements=4;status=ready\n"
         "publication_checks=48;targets=2;submissions=2;review_rounds=2;revision_tasks=3;response_packages=2;response_items=4;decisions=2;agentos_replacements=4;status=ready\n"
+        "calculation_checks=84;computers=1;codes=1;jobs=1;retrieved=3;parser_results=1;exports=1;agentos_replacements=4;status=ready\n"
         "mature_capability_checks=72;profiles=6;mappings=6;checks=72;platforms=Galaxy,AiiDA,DVC,MLflow,Nextflow,Snakemake;agentos_replacements=5;status=ready\n"
         "provenance_view_checks=64;timeline_views=4;subgraphs=3;packets=4;agentos_replacements=4;status=ready\n"
         "provenance_query_checks=72;specs=3;templates=1;executions=3;comparisons=1;exports=1;packets=1;agentos_replacements=4;status=ready\n"
@@ -308,6 +310,49 @@ status=ready
         "host_operations_scale=audit_records:5;metrics:13;llm_providers:3;secret_references:3;executed_corr_ids:4;usable_projects:20;artifacts:128;messages:70;status=ready\n"
         "project_revision_incident=revision_tasks:1;project_scaffolds:1;incidents:1;incident:INC-RUN-042-ALIGN-OOM;failed_stage:align;reason:memory_limit;revision_status:completed;scaffold:deepseek-reliability-response-study;status=ready\n"
         "root_state_surface=projects:1;runs:1;reports:1;plans:1;search_records:1;site_exports:1;compare_profiles:1;audit:5;context:348;project:lab-gene-x;run:RUN-042;status=ready\n"
+    ),
+    "rp_calculation": (
+        "service=calculation\n"
+        "run_id=RUN-042\n"
+        "calculation_checks=84\n"
+        "computers=1\n"
+        "codes=1\n"
+        "jobs=1\n"
+        "submissions=1\n"
+        "retrieved_files=3\n"
+        "parser_results=1\n"
+        "exports=1\n"
+        "computer=calculation-computer:local-agentos;label=local-agentos-workdir;hostname=localhost;scheduler=direct;transport=local;status=active\n"
+        "code=calculation-code:metadata-qc:v1;computer=calculation-computer:local-agentos;entry=agent_platform.calculations:metadata_qc;parser=metadata-qc-parser;version=1.0;status=active\n"
+        "job=calculation-job:lab-gene-x:run042-qc;process_type=aiida.calculations:agent.metadata_qc;state=finished;exit_status=0;code=calculation-code:metadata-qc:v1;computer=calculation-computer:local-agentos\n"
+        "job_inputs=dataset-collection:lab-gene-x:run042-analysis,data-transform-run:lab-gene-x:run042-normalize\n"
+        "scheduler_record=calculation-submission:run042-qc;status=finished;attempts=1;command=metadata-qc\n"
+        "status=ready\n"
+    ),
+    "rp_calc_files": (
+        "job=calculation-job:lab-gene-x:run042-qc\n"
+        "retrieved_files=3\n"
+        "retrieved=calculation-retrieved:run042-qc:stdout-txt;path=stdout.txt;kind=retrieved_output;checksum=stdout042;status=available\n"
+        "retrieved=calculation-retrieved:run042-qc:results-json;path=results.json;kind=retrieved_output;checksum=results042;status=available\n"
+        "retrieved=calculation-retrieved:run042-qc:provenance-json;path=provenance.json;kind=provenance_manifest;checksum=prov042;status=available\n"
+        "output_snapshot=dataset-snapshot:calculation:run042-qc;rows=3;files=3;status=ready\n"
+        "status=ready\n"
+    ),
+    "rp_calc_parse": (
+        "job=calculation-job:lab-gene-x:run042-qc\n"
+        "parser_result=calculation-parser-result:run042-qc;parser=metadata-qc-parser;status=ok;output_snapshot=dataset-snapshot:calculation:run042-qc\n"
+        "metric=input_count;value=2;status=ready\n"
+        "metric=collection_items;value=4;status=ready\n"
+        "metric=ready_ratio;value=1.00;status=ready\n"
+        "warnings=0\n"
+        "status=ready\n"
+    ),
+    "rp_calc_export": (
+        "job=calculation-job:lab-gene-x:run042-qc\n"
+        "export=calculation-export:lab-gene-x:run042-qc;type=markdown;path=calculation-export-run042-qc.md;checksum=calcexport042;status=ready\n"
+        "package=calculation-package:lab-gene-x:run042-qc;files=3;parser_results=1;exports=1;status=ready\n"
+        "reader_page=calculations.html\n"
+        "status=ready\n"
     ),
     "rp_mature": (
         "service=mature-capability-map\n"
@@ -714,7 +759,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 26, summary
+        assert summary["pages"] == 27, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -728,6 +773,7 @@ def main() -> int:
         assert (out_dir / "integrity.html").exists()
         assert (out_dir / "coherence.html").exists()
         assert (out_dir / "publication.html").exists()
+        assert (out_dir / "calculations.html").exists()
         assert (out_dir / "mature.html").exists()
         assert (out_dir / "provenance.html").exists()
         assert (out_dir / "provenance-queries.html").exists()
@@ -927,6 +973,13 @@ def main() -> int:
         assert "Publication Decisions" in publication_html
         assert "peer-review-response-package:RUN-042:round-1" in publication_html
         assert "publication-decision:RUN-042:accept-with-evidence" in publication_html
+        calculations_html = (out_dir / "calculations.html").read_text(encoding="utf-8")
+        assert "Calculations" in calculations_html
+        assert "calculation-computer:local-agentos" in calculations_html
+        assert "calculation-code:metadata-qc:v1" in calculations_html
+        assert "calculation-job:lab-gene-x:run042-qc" in calculations_html
+        assert "calculation-parser-result:run042-qc" in calculations_html
+        assert "calculation-export:lab-gene-x:run042-qc" in calculations_html
         mature_html = (out_dir / "mature.html").read_text(encoding="utf-8")
         assert "Mature Platform Mapping" in mature_html
         assert "Mature Capability Detail" in mature_html
@@ -989,6 +1042,8 @@ def main() -> int:
         assert "Integrity Plane" in compare_html
         assert "coherence_plane_checks" in compare_html
         assert "publication_checks" in compare_html
+        assert "calculation_checks" in compare_html
+        assert "Calculation Checks" in compare_html
         assert "mature_capability_checks" in compare_html
         assert "Mature Capability" in compare_html
         assert "provenance_view_checks" in compare_html

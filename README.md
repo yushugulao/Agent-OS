@@ -66,6 +66,7 @@ user/src/rp_workflow_runner.c
 user/src/rp_workbench.c
 user/src/rp_agent_collab.c
 user/src/rp_package.c
+user/src/rp_calculation.c
 user/src/rp_delta.c
 user/src/rp_release.c
 user/src/rp_dossier.c
@@ -77,7 +78,7 @@ user/src/rp_backend.c
 user/src/rp_consistency.c
 user/src/rp_ui_export.c
 user/src/rp_web_export.c
-user/src/rp_review_dashboard.c
+user/src/rp_revdash.c
 user/src/rp_publication.c
 user/src/rp_runbooks.c
 user/src/rp_projectrel.c
@@ -105,7 +106,7 @@ user/src/rp_compare_plain.c
 - A plain user-space research run simulation with planning, literature, analysis, review, writing, repair, and audit roles.
 - Local catalog search for workflow, Agent, evidence, provenance, and LLM related platform objects.
 
-`rp_orch` runs 56 platform programs as separate uCore user processes:
+`rp_orch` runs 57 platform programs as separate uCore user processes:
 
 - catalog,
 - object store,
@@ -137,6 +138,7 @@ user/src/rp_compare_plain.c
 - research workbench task state,
 - Agent collaboration evidence,
 - package,
+- AiiDA-style calculation job records with computer, code, scheduler, retrieved files, parser result, export, and package linkage,
 - release delta review,
 - release decision,
 - final dossier,
@@ -274,6 +276,10 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_deliberation`
 - `rp_agent_run`
 - `rp_package`
+- `rp_calculation`
+- `rp_calc_files`
+- `rp_calc_parse`
+- `rp_calc_export`
 - `rp_diff`
 - `rp_delta`
 - `rp_datarel`
@@ -355,7 +361,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_review_pack`
 - `rp_agentcmp`
 
-The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 1504-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
+The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 1588-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
 
 Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_agentcmp` after all children exit, then prints `state_ok=1`.
 
@@ -398,7 +404,7 @@ rp_plain: passed
 Expected orchestrator output:
 
 ```text
-rp_orch: start programs=56
+rp_orch: start programs=57
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_state_catalog: keys=573 nonzero=70 zero=503 represented=573 checks=12 status=ready
 rp_object_store: records=8 status=ready
@@ -430,6 +436,7 @@ rp_workflow_runner: stages=5 events=8 retries=1 cache_hits=1 custom_runs=3 statu
 rp_workbench: tasks=9 workspace_files=4 runs=4 exports=7 workbenches=5 deliveries=6 project_ops=15 status=ready
 rp_agent_collab: agents=7 messages=21 decisions=8 handoffs=6 status=ready
 rp_package: artifacts=52 checks=75 fair=passed repro=ready status=ready
+rp_calculation: computers=1 codes=1 jobs=1 retrieved=3 parser=1 exports=1 checks=84 errors=0 status=ready
 rp_delta: items=20 reviews=1 decision=accepted status=ready
 rp_release: decision=release checks=17 status=ready
 rp_dossier: sections=36 review_board=accepted submit=ready status=ready
@@ -454,8 +461,8 @@ rp_coherenceplane: checks=40 delivery=7 run_state=7 lifecycle=6 workflow_lint=5 
 rp_mature: profiles=6 mappings=6 checks=72 errors=0 status=ready
 rp_prov_view: timelines=4 subgraphs=3 packets=4 checks=64 errors=0 status=ready
 rp_prov_query: specs=3 templates=1 executions=3 comparisons=1 packets=1 checks=72 errors=0 status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=56 state_files=195 acks=56 tools=216 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 publication=48 mature=72 provenance=64 provenance_query=72 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
-rp_orch: programs_ok=56 programs_total=56
+rp_compare_plain: plain_kernel=passed objects=500 programs=57 state_files=199 acks=57 tools=224 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 publication=48 calculation=84 mature=72 provenance=64 provenance_query=72 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
+rp_orch: programs_ok=57 programs_total=57
 rp_orch: state_ok=1
 rp_orch: passed
 ```
@@ -476,7 +483,7 @@ The two `diff` commands should print no output. The `grep` command confirms the 
 
 ## Host Reader
 
-The `host_tools/plain_ucore_reader.py` utility renders ordinary `rp_*` state files into host-viewable HTML pages and API JSON files. It consumes the `host_plain_ucore_v2` reader contract written by `rp_web_bundle`. The generated pages use a sidebar, page-level summary cards, research-output summaries, report source maps, artifact source maps, review source maps, delivery source maps, a delivery package page, a workflow runner page, a research workbench page, a research Studio page, a project page, a project delivery review page, a provenance page, a data pipeline page with ingest, snapshot, preview, quality, transform, collection, and manifest verification tables, workflow execution view tables, workflow control view tables, workflow evidence link tables, Agent detail summaries, Agent roster and decision-flow tables, evidence-package summaries, evidence detail summaries, review dashboard sections and gates, service operation records, runbook service records, claim/provenance/protocol tables, comparison summaries, compare metric summaries, operations report narrative tables, operations source-file tables, LLM Relay flow/request/response/quality tables, plain-kernel signal tables, state tables, Run/Workflow/Workbench/Studio/Project/Data/Compare/Review/Delivery/LLM Host action trace tables, action-output link and detail tables, action-impact tables, action-delta tables, host-action history, and a batch-action editor for running the same research flow through plain uCore.
+The `host_tools/plain_ucore_reader.py` utility renders ordinary `rp_*` state files into host-viewable HTML pages and API JSON files. It consumes the `host_plain_ucore_v2` reader contract written by `rp_web_bundle`. The generated pages use a sidebar, page-level summary cards, research-output summaries, report source maps, artifact source maps, review source maps, delivery source maps, a delivery package page, a workflow runner page, a research workbench page, a research Studio page, a project page, a project delivery review page, a provenance page, a provenance query page, a calculation page, a data pipeline page with ingest, snapshot, preview, quality, transform, collection, and manifest verification tables, workflow execution view tables, workflow control view tables, workflow evidence link tables, Agent detail summaries, Agent roster and decision-flow tables, evidence-package summaries, evidence detail summaries, review dashboard sections and gates, service operation records, runbook service records, claim/provenance/protocol tables, comparison summaries, compare metric summaries, operations report narrative tables, operations source-file tables, LLM Relay flow/request/response/quality tables, plain-kernel signal tables, state tables, Run/Workflow/Workbench/Studio/Project/Data/Compare/Review/Delivery/LLM Host action trace tables, action-output link and detail tables, action-impact tables, action-delta tables, host-action history, and a batch-action editor for running the same research flow through plain uCore.
 
 ```bash
 python host_tools/plain_ucore_reader.py --state-dir path/to/rp-state --out-dir runtime/plain_ucore_reader

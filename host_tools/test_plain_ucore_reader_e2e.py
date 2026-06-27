@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=1504" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=216" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=1588" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=224" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -735,6 +735,7 @@ def main() -> int:
             assert any("integrity_plane_checks=36" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("coherence_plane_checks=40" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("publication_checks=48" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("calculation_checks=84" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("mature_capability_checks=72" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_view_checks=64" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_query_checks=72" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -843,6 +844,19 @@ def main() -> int:
             assert any("response_package=peer-review-response-package:RUN-042:round-1" in line for line in rp_publication["lines"]), rp_publication
             assert any("publication_decision=publication-decision:RUN-042:accept-with-evidence" in line for line in rp_publication["lines"]), rp_publication
             assert any("agentos_adaptation=kernel_submission_metadata,kernel_review_event_queue,kernel_response_context,kernel_release_gate" in line for line in rp_publication["lines"]), rp_publication
+            rp_calculation = read_json(base + "/api/state/rp_calculation")
+            assert any("calculation_checks=84" in line for line in rp_calculation["lines"]), rp_calculation
+            assert any("computer=calculation-computer:local-agentos" in line for line in rp_calculation["lines"]), rp_calculation
+            assert any("code=calculation-code:metadata-qc:v1" in line for line in rp_calculation["lines"]), rp_calculation
+            assert any("job=calculation-job:lab-gene-x:run042-qc" in line for line in rp_calculation["lines"]), rp_calculation
+            rp_calc_files = read_json(base + "/api/state/rp_calc_files")
+            assert any("retrieved_files=3" in line for line in rp_calc_files["lines"]), rp_calc_files
+            assert any("retrieved=calculation-retrieved:run042-qc:provenance-json" in line for line in rp_calc_files["lines"]), rp_calc_files
+            rp_calc_parse = read_json(base + "/api/state/rp_calc_parse")
+            assert any("parser_result=calculation-parser-result:run042-qc" in line for line in rp_calc_parse["lines"]), rp_calc_parse
+            assert any("metric=ready_ratio;value=1.00" in line for line in rp_calc_parse["lines"]), rp_calc_parse
+            rp_calc_export = read_json(base + "/api/state/rp_calc_export")
+            assert any("export=calculation-export:lab-gene-x:run042-qc" in line for line in rp_calc_export["lines"]), rp_calc_export
             rp_mature = read_json(base + "/api/state/rp_mature")
             assert any("reference_platforms=6" in line for line in rp_mature["lines"]), rp_mature
             assert any("capability_mappings=6" in line for line in rp_mature["lines"]), rp_mature
@@ -1371,6 +1385,13 @@ def main() -> int:
             assert "Publication Decisions" in publication_html
             assert "peer-review-response-package:RUN-042:round-1" in publication_html
             assert "publication-decision:RUN-042:accept-with-evidence" in publication_html
+            calculations_html = read_text(base + "/calculations.html")
+            assert "Calculations" in calculations_html
+            assert "calculation-computer:local-agentos" in calculations_html
+            assert "calculation-code:metadata-qc:v1" in calculations_html
+            assert "calculation-job:lab-gene-x:run042-qc" in calculations_html
+            assert "calculation-parser-result:run042-qc" in calculations_html
+            assert "calculation-export:lab-gene-x:run042-qc" in calculations_html
             mature_html = read_text(base + "/mature.html")
             assert "Mature Platform Mapping" in mature_html
             assert "Mature Capability Detail" in mature_html
@@ -1554,6 +1575,8 @@ def main() -> int:
             assert "Coherence Plane" in compare_html
             assert "publication_checks" in compare_html
             assert "Publication Workflow" in compare_html
+            assert "calculation_checks" in compare_html
+            assert "Calculation Checks" in compare_html
             assert "mature_capability_checks" in compare_html
             assert "Mature Capability" in compare_html
             assert "provenance_view_checks" in compare_html

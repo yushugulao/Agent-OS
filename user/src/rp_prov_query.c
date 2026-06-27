@@ -10,6 +10,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_timeline_view", "views=4");
 	ok = ok && rp_file_contains("rp_mature", "mapping=aiida-process-graph");
 	ok = ok && rp_file_contains("rp_package", "provenance_graph=unified");
+	ok = ok && rp_file_contains("rp_calculation", "job=calculation-job:lab-gene-x:run042-qc");
+	ok = ok && rp_file_contains("rp_calc_parse", "parser_result=calculation-parser-result:run042-qc");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_prov_query",
