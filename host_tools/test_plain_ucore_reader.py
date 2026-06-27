@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=30
+reader_views=31
 reader_actions=57
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
@@ -87,6 +87,7 @@ publication_page=rp_publication;peer_response=rp_peerresp;status=ready
 calculations_page=rp_calculation;jobs=1;retrieved=3;parser_results=1;status=ready
 real_task_page=rp_realtask;dataset=palmer-penguins;rows=344;answer_audit=pass;status=ready
 experiment_campaigns_page=rp_campaign;campaigns=1;trials=4;best_trial=04;status=ready
+statistical_design_page=rp_stdesign;designs=1;power=underpowered;randomization=balanced;status=ready
 release_dossier_page=rp_reldossier;sections=7;decision=ready_for_review;status=ready
 mature_capability_page=rp_mature;profiles=6;mappings=6;checks=72;status=ready
 provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=ready
@@ -278,8 +279,8 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=1904\n"
-        "tool_events=252\n"
+        "test_cases=2024\n"
+        "tool_events=260\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=4;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
@@ -295,6 +296,7 @@ status=ready
         "calculation_checks=84;computers=1;codes=1;jobs=1;retrieved=3;parser_results=1;exports=1;agentos_replacements=4;status=ready\n"
         "real_task_checks=96;dataset=palmer-penguins;rows=344;numeric_fields=5;answer_audit=pass;bundle=ready;status=ready\n"
         "experiment_campaign_checks=108;campaigns=1;trials=4;best_trial=04;result_review=accept_candidate;status=ready\n"
+        "statistical_design_checks=120;designs=1;power=underpowered;randomization=balanced;blinding=ok;stat_result=approved_with_sample_size_note;status=ready\n"
         "release_dossier_checks=112;sections=7;evidence_ids=18;decision=ready_for_review;status=ready\n"
         "mature_capability_checks=72;profiles=6;mappings=6;checks=72;platforms=Galaxy,AiiDA,DVC,MLflow,Nextflow,Snakemake;agentos_replacements=5;status=ready\n"
         "provenance_view_checks=64;timeline_views=4;subgraphs=3;packets=4;agentos_replacements=4;status=ready\n"
@@ -445,6 +447,66 @@ status=ready
         "parameter_changes=memory_mb:+512,threads:+2\n"
         "artifact_changes=rp_trials,rp_camp_rank\n"
         "decision=accept_candidate\n"
+        "status=ready\n"
+    ),
+    "rp_stdesign": (
+        "service=statistical-design\n"
+        "statistical_design_checks=120\n"
+        "design=stat-design:lab-gene-x:run042-primary\n"
+        "project=lab-gene-x\n"
+        "run_id=RUN-042\n"
+        "study=study:lab-gene-x-treatment-response\n"
+        "hypothesis=hypothesis:RUN-042:align-memory\n"
+        "primary_endpoint=candidate_genes_mean\n"
+        "comparison=treatment_vs_control\n"
+        "effect_size=1.25\n"
+        "alpha=0.05\n"
+        "target_power=0.80\n"
+        "allocation_ratio=1.00\n"
+        "status=ready\n"
+    ),
+    "rp_power": (
+        "analysis=power-analysis:lab-gene-x:run042-primary\n"
+        "design=stat-design:lab-gene-x:run042-primary\n"
+        "method=two_sample_normal_approximation\n"
+        "required_per_group=11\n"
+        "required_total=22\n"
+        "actual_min_group_size=2\n"
+        "achieved_power=0.239\n"
+        "status=underpowered\n"
+    ),
+    "rp_random": (
+        "randomization=randomization:lab-gene-x:run042-primary\n"
+        "design=stat-design:lab-gene-x:run042-primary\n"
+        "arms=control,treatment\n"
+        "strata=batch\n"
+        "seed=RUN-042-deterministic\n"
+        "assignments=4\n"
+        "assignment=S-001:control\n"
+        "assignment=S-002:treatment\n"
+        "assignment=S-003:control\n"
+        "assignment=S-004:treatment\n"
+        "balance=arms:control:2,treatment:2\n"
+        "status=balanced\n"
+    ),
+    "rp_blind": (
+        "blinding=blinding-check:lab-gene-x:run042-primary\n"
+        "design=stat-design:lab-gene-x:run042-primary\n"
+        "blinded_roles=reporter,auditor,statistician\n"
+        "unblinded_roles=lab-operator\n"
+        "leaks=0\n"
+        "status=ok\n"
+    ),
+    "rp_streview": (
+        "review=stat-design-review:lab-gene-x:run042-primary\n"
+        "design=stat-design:lab-gene-x:run042-primary\n"
+        "reviewer=methodologist\n"
+        "stat_result=approved_with_sample_size_note\n"
+        "finding=current sample count is below planned power target\n"
+        "evidence_ids=5\n"
+        "export=stat-design-export:lab-gene-x:run042-primary\n"
+        "export_type=markdown\n"
+        "checksum=stdesign-md-042\n"
         "status=ready\n"
     ),
     "rp_reldossier": (
@@ -896,7 +958,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 30, summary
+        assert summary["pages"] == 31, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -913,6 +975,7 @@ def main() -> int:
         assert (out_dir / "calculations.html").exists()
         assert (out_dir / "real-task.html").exists()
         assert (out_dir / "experiment-campaigns.html").exists()
+        assert (out_dir / "statistical-design.html").exists()
         assert (out_dir / "release-dossier.html").exists()
         assert (out_dir / "mature.html").exists()
         assert (out_dir / "provenance.html").exists()
@@ -1135,6 +1198,13 @@ def main() -> int:
         assert "4" in campaign_html
         assert "select_trial_04" in campaign_html
         assert "accept_candidate" in campaign_html
+        statistical_design_html = (out_dir / "statistical-design.html").read_text(encoding="utf-8")
+        assert "Statistical Design" in statistical_design_html
+        assert "stat-design:lab-gene-x:run042-primary" in statistical_design_html
+        assert "required_per_group" in statistical_design_html
+        assert "underpowered" in statistical_design_html
+        assert "balanced" in statistical_design_html
+        assert "approved_with_sample_size_note" in statistical_design_html
         release_dossier_html = (out_dir / "release-dossier.html").read_text(encoding="utf-8")
         assert "Release Dossier" in release_dossier_html
         assert "release-dossier:RUN-042:final-review" in release_dossier_html
@@ -1210,6 +1280,8 @@ def main() -> int:
         assert "Real Task Checks" in compare_html
         assert "experiment_campaign_checks" in compare_html
         assert "Experiment Campaign Checks" in compare_html
+        assert "statistical_design_checks" in compare_html
+        assert "Statistical Design Checks" in compare_html
         assert "release_dossier_checks" in compare_html
         assert "Release Dossier Checks" in compare_html
         assert "mature_capability_checks" in compare_html

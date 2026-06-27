@@ -86,6 +86,7 @@ user/src/rp_publication.c
 user/src/rp_runbooks.c
 user/src/rp_projectrel.c
 user/src/rp_studyproto.c
+user/src/rp_stdesign.c
 user/src/rp_opsboard.c
 user/src/rp_reviewboard.c
 user/src/rp_controlplane.c
@@ -307,6 +308,11 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_runbooks`
 - `rp_projectrel`
 - `rp_studyproto`
+- `rp_stdesign`
+- `rp_power`
+- `rp_random`
+- `rp_blind`
+- `rp_streview`
 - `rp_opsboard`
 - `rp_reviewboard`
 - `rp_control`
@@ -376,7 +382,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_review_pack`
 - `rp_agentcmp`
 
-The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 1904-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
+The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 2024-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
 
 Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_agentcmp` after all children exit, then prints `state_ok=1`.
 
@@ -419,7 +425,7 @@ rp_plain: passed
 Expected orchestrator output:
 
 ```text
-rp_orch: start programs=60
+rp_orch: start programs=61
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_state_catalog: keys=573 nonzero=70 zero=503 represented=573 checks=12 status=ready
 rp_object_store: records=8 status=ready
@@ -454,7 +460,6 @@ rp_package: artifacts=52 checks=75 fair=passed repro=ready status=ready
 rp_calculation: computers=1 codes=1 jobs=1 retrieved=3 parser=1 exports=1 checks=84 errors=0 status=ready
 rp_realtask: dataset=palmer-penguins rows=344 numeric=5 checks=96 answer_audit=pass bundle=ready status=ready
 rp_campaign: campaigns=1 trials=4 best=04 checks=108 result_review=accept_candidate status=ready
-rp_reldossier: sections=7 evidence=18 checks=112 decision=ready_for_review status=ready
 rp_delta: items=20 reviews=1 decision=accepted status=ready
 rp_release: decision=release checks=17 status=ready
 rp_dossier: sections=36 review_board=accepted submit=ready status=ready
@@ -471,6 +476,7 @@ rp_publication: targets=2 submissions=2 reviews=2 responses=2 items=4 checks=48 
 rp_runbooks: templates=1 steps=7 incidents=1 executions=1 exports=1 status=ready
 rp_projectrel: checks=18 release=ready reproducibility=passed intake=accepted status=ready
 rp_studyproto: checks=20 protocols=2 launches=2 reproduction=ready status=ready
+rp_stdesign: designs=1 power=underpowered randomization=balanced blinding=ok checks=120 stat_result=approved_with_sample_size_note status=ready
 rp_opsboard: checks=18 pending=1 actions=4 plan_items=5 handoffs=3 status=ready
 rp_reviewboard: checks=24 requests=1 votes=4 signoffs=4 assignments=4 decision=approved status=ready
 rp_controlplane: checks=30 approvals=4 notifications=4 queue=4 plugins=3 permissions=5 status=ready
@@ -479,8 +485,9 @@ rp_coherenceplane: checks=40 delivery=7 run_state=7 lifecycle=6 workflow_lint=5 
 rp_mature: profiles=6 mappings=6 checks=72 errors=0 status=ready
 rp_prov_view: timelines=4 subgraphs=3 packets=4 checks=64 errors=0 status=ready
 rp_prov_query: specs=3 templates=1 executions=3 comparisons=1 packets=1 checks=72 errors=0 status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=60 state_files=211 acks=60 tools=252 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 publication=48 calculation=84 real_task=96 campaign=108 release_dossier=112 mature=72 provenance=64 provenance_query=72 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
-rp_orch: programs_ok=60 programs_total=60
+rp_reldossier: sections=7 evidence=18 checks=112 decision=ready_for_review status=ready
+rp_compare_plain: plain_kernel=passed objects=500 programs=61 state_files=216 acks=61 tools=260 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 statistical_design=120 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 publication=48 calculation=84 real_task=96 campaign=108 release_dossier=112 mature=72 provenance=64 provenance_query=72 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
+rp_orch: programs_ok=61 programs_total=61
 rp_orch: state_ok=1
 rp_orch: passed
 ```
@@ -539,6 +546,8 @@ The backend scenario now also writes compact case-runner evidence. It records fo
 The mature-platform mapping step records Galaxy, AiiDA, DVC, MLflow, Nextflow, and Snakemake capability profiles, maps them to current platform state files, and publishes a dedicated `mature.html` reader page plus `mature_capability_checks=72` in `rp_agentcmp`.
 
 The release dossier step collects the package, governance, publication, data release, experiment campaign, execution evidence, and AgentOS-readiness records into `rp_reldossier`, `rp_reldsec`, `rp_relattest`, and `rp_relpack`. It publishes `release-dossier.html`, adds `release_dossier_checks=112` to `rp_agentcmp`, and records the review-ready package handle `release-dossier-package:RUN-042`.
+
+The statistical design step writes `rp_stdesign`, `rp_power`, `rp_random`, `rp_blind`, and `rp_streview`. It records the RUN-042 primary design, power-analysis status, deterministic treatment/control allocation, blinding review, and reviewer decision, then publishes `statistical-design.html` and `statistical_design_checks=120` in `rp_agentcmp`.
 
 The provenance view step records timeline views, provenance edges, evidence packets, and the AgentOS replacement points for kernel timeline, kernel provenance edges, kernel ledger, and Context detail. It publishes `provenance.html` and `provenance_view_checks=64` in `rp_agentcmp`.
 

@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=1904" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=252" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=2024" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=260" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -738,10 +738,24 @@ def main() -> int:
             assert any("calculation_checks=84" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("real_task_checks=96" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("experiment_campaign_checks=108" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("statistical_design_checks=120" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("release_dossier_checks=112" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("mature_capability_checks=72" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_view_checks=64" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_query_checks=72" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            rp_stdesign = read_json(base + "/api/state/rp_stdesign")
+            assert any("statistical_design_checks=120" in line for line in rp_stdesign["lines"]), rp_stdesign
+            assert any("design=stat-design:lab-gene-x:run042-primary" in line for line in rp_stdesign["lines"]), rp_stdesign
+            rp_power = read_json(base + "/api/state/rp_power")
+            assert any("required_per_group=11" in line for line in rp_power["lines"]), rp_power
+            assert any("status=underpowered" in line for line in rp_power["lines"]), rp_power
+            rp_random = read_json(base + "/api/state/rp_random")
+            assert any("assignments=4" in line for line in rp_random["lines"]), rp_random
+            assert any("status=balanced" in line for line in rp_random["lines"]), rp_random
+            rp_blind = read_json(base + "/api/state/rp_blind")
+            assert any("status=ok" in line for line in rp_blind["lines"]), rp_blind
+            rp_streview = read_json(base + "/api/state/rp_streview")
+            assert any("stat_result=approved_with_sample_size_note" in line for line in rp_streview["lines"]), rp_streview
             rp_reldossier = read_json(base + "/api/state/rp_reldossier")
             assert any("release_dossier_checks=112" in line for line in rp_reldossier["lines"]), rp_reldossier
             assert any("dossier=release-dossier:RUN-042:final-review" in line for line in rp_reldossier["lines"]), rp_reldossier
@@ -1447,6 +1461,13 @@ def main() -> int:
             assert "trial_count" in campaign_html
             assert "select_trial_04" in campaign_html
             assert "accept_candidate" in campaign_html
+            statistical_design_html = read_text(base + "/statistical-design.html")
+            assert "Statistical Design" in statistical_design_html
+            assert "stat-design:lab-gene-x:run042-primary" in statistical_design_html
+            assert "required_per_group" in statistical_design_html
+            assert "underpowered" in statistical_design_html
+            assert "balanced" in statistical_design_html
+            assert "approved_with_sample_size_note" in statistical_design_html
             release_dossier_html = read_text(base + "/release-dossier.html")
             assert "Release Dossier" in release_dossier_html
             assert "release-dossier:RUN-042:final-review" in release_dossier_html
@@ -1642,6 +1663,8 @@ def main() -> int:
             assert "Real Task Checks" in compare_html
             assert "experiment_campaign_checks" in compare_html
             assert "Experiment Campaign Checks" in compare_html
+            assert "statistical_design_checks" in compare_html
+            assert "Statistical Design Checks" in compare_html
             assert "release_dossier_checks" in compare_html
             assert "Release Dossier Checks" in compare_html
             assert "mature_capability_checks" in compare_html
