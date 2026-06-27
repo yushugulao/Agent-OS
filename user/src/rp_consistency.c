@@ -406,7 +406,7 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=318\n"
+			   "checks=330\n"
 			   "task_records=21\n"
 			   "ready_tasks=21\n"
 			   "high_tasks=4\n"
@@ -541,6 +541,19 @@ int main(void)
 			   "agentcompare_profiles=3\n"
 			   "content_objects=145\n"
 			   "object_references=145\n"
+			   "operations_scale_checks=12\n"
+			   "host_audit_records=5\n"
+			   "host_metrics=13\n"
+			   "host_llm_providers=3\n"
+			   "host_secret_references=3\n"
+			   "host_executed_corr_ids=4\n"
+			   "usable_research_projects=20\n"
+			   "host_artifacts=128\n"
+			   "host_messages=70\n"
+			   "host_content_objects=129\n"
+			   "host_object_references=129\n"
+			   "host_agentcompare_reports=3\n"
+			   "host_agentcompare_results=15\n"
 			   "study_protocol_reproduction_checks=5\n"
 			   "project_bundle_cache=ready\n"
 			   "research_search_saved=2\n"
@@ -617,6 +630,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=318 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
+	printf("rp_consistency: checks=330 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
 	return 0;
 }
