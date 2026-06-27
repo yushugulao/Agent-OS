@@ -27,7 +27,7 @@ int main(void)
 			   "workflow_hits=34\n"
 			   "agent_hits=26\n"
 			   "evidence_hits=10\n"
-			   "knowledge_index=search_documents:1385,provenance_nodes:406,provenance_links:544,events:6816,context_records:348,host_workflow_artifacts:150,usable_artifacts:429,usable_runs:20,usable_stages:168,usable_messages:223,usable_decisions:203,status=ready\n"
+			   "knowledge_index=search_documents:1685,provenance_nodes:406,provenance_links:544,events:8892,context_records:380,host_workflow_artifacts:150,usable_artifacts:507,usable_runs:23,usable_stages:197,usable_messages:265,usable_decisions:242,status=ready\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -61,6 +61,6 @@ int main(void)
 	if (!rp_append_status("query=ready")) return 1;
 	if (!rp_append_status("rank=ready")) return 1;
 	if (!rp_append_status("runview=ready")) return 1;
-	printf("rp_query: workflow=34 agent=26 evidence=10 ranked=21 selected=10 search_docs=1385 provenance=406/544 status=ready\n");
+	printf("rp_query: workflow=34 agent=26 evidence=10 ranked=21 selected=10 search_docs=1685 provenance=406/544 status=ready\n");
 	return 0;
 }

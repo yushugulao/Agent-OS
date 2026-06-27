@@ -316,11 +316,11 @@ static int write_research_product_surface(void)
 		return 0;
 	}
 	if (!rp_append_file("rp_runop",
-			    "source_portfolio=sources:42,citations:4,tags:2,portfolio:ready,status=ready")) {
+			    "source_portfolio=sources:67,citations:4,tags:2,portfolio:ready,status=ready")) {
 		return 0;
 	}
 	if (!rp_append_file("rp_runop",
-			    "research_portfolio_scale=sources:42,datasets:3,literature_searches:4,reviews:8,evidence_reviews:4,evidence_extractions:15,screening_decisions:15,exports:66,doctor_reports:10,project_handoff_audits:30,project_run_comparisons:15,project_reproducibility_audits:15,project_snapshot_comparisons:15,status=ready")) {
+			    "research_portfolio_scale=sources:67,datasets:5,literature_searches:7,reviews:11,evidence_reviews:7,evidence_extractions:25,screening_decisions:25,exports:80,doctor_reports:12,project_handoff_audits:34,project_run_comparisons:17,project_reproducibility_audits:17,project_snapshot_comparisons:17,status=ready")) {
 		return 0;
 	}
 	if (!rp_append_file("rp_runop",

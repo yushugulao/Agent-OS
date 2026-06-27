@@ -97,9 +97,9 @@ int main(void)
 		return 1;
 	}
 	if (!rp_write_file("rp_llmlog",
-			   "transcripts=90\n"
-			   "bridge_requests=30\n"
-			   "bridge_responses=30\n"
+			   "transcripts=99\n"
+			   "bridge_requests=33\n"
+			   "bridge_responses=33\n"
 			   "request_packets=3\n"
 			   "response_packets=3\n"
 			   "matched_packets=3\n"
@@ -210,6 +210,6 @@ int main(void)
 	if (!rp_append_status("promptops=ready")) return 1;
 	if (!rp_append_status("llmtrace=ready")) return 1;
 	if (!rp_append_status("llmeval=ready")) return 1;
-	printf("rp_llm_bridge: requests=3 responses=3 transcripts=90 routes=4 eval=7 relay=ready status=ready\n");
+	printf("rp_llm_bridge: requests=3 responses=3 transcripts=99 routes=4 eval=7 relay=ready status=ready\n");
 	return 0;
 }

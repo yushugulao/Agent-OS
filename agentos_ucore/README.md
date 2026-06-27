@@ -318,7 +318,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=rp_agentos_orch CHAPT
 
 ```text
 rp_agentos_orch: agent role=4 context=... latest=1
-rp_state_catalog: keys=573 nonzero=70 zero=503 represented=573 checks=12 status=ready
+rp_state_catalog: keys=574 nonzero=71 zero=503 represented=574 checks=12 status=ready
 rp_startup_doctor: quickstart=ready doctor=ready checks=14 status=ready
 rp_orch: programs_ok=69 programs_total=69
 rp_orch: passed

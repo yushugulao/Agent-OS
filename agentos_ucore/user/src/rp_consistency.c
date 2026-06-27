@@ -13,21 +13,21 @@ int main(void)
 	int ok = 1;
 	ok = ok && rp_file_contains("rp_backend", "status=ready");
 	ok = ok && rp_file_contains("rp_backend_exec", "status=ready");
-	ok = ok && rp_file_contains("rp_query", "knowledge_index=search_documents:1385");
+	ok = ok && rp_file_contains("rp_query", "knowledge_index=search_documents:1685");
 	ok = ok && rp_file_contains("rp_query", "provenance_nodes:406");
 	ok = ok && rp_file_contains("rp_query", "provenance_links:544");
-	ok = ok && rp_file_contains("rp_query", "events:6816");
-	ok = ok && rp_file_contains("rp_query", "context_records:348");
+	ok = ok && rp_file_contains("rp_query", "events:8892");
+	ok = ok && rp_file_contains("rp_query", "context_records:380");
 	ok = ok && rp_file_contains("rp_query", "host_workflow_artifacts:150");
-	ok = ok && rp_file_contains("rp_query", "usable_artifacts:429");
-	ok = ok && rp_file_contains("rp_query", "usable_runs:20");
-	ok = ok && rp_file_contains("rp_query", "usable_stages:168");
-	ok = ok && rp_file_contains("rp_query", "usable_messages:223");
-	ok = ok && rp_file_contains("rp_query", "usable_decisions:203");
-	ok = ok && rp_file_contains("rp_state_catalog", "host_state_keys=573");
-	ok = ok && rp_file_contains("rp_state_catalog", "nonzero_state_categories=70");
+	ok = ok && rp_file_contains("rp_query", "usable_artifacts:507");
+	ok = ok && rp_file_contains("rp_query", "usable_runs:23");
+	ok = ok && rp_file_contains("rp_query", "usable_stages:197");
+	ok = ok && rp_file_contains("rp_query", "usable_messages:265");
+	ok = ok && rp_file_contains("rp_query", "usable_decisions:242");
+	ok = ok && rp_file_contains("rp_state_catalog", "host_state_keys=574");
+	ok = ok && rp_file_contains("rp_state_catalog", "nonzero_state_categories=71");
 	ok = ok && rp_file_contains("rp_state_catalog", "zero_state_categories=503");
-	ok = ok && rp_file_contains("rp_state_catalog", "represented_state_categories=573");
+	ok = ok && rp_file_contains("rp_state_catalog", "represented_state_categories=574");
 	ok = ok && rp_file_contains("rp_state_catalog", "state_catalog_checks=12");
 	ok = ok && rp_file_contains("rp_state_catalog", "coverage_model=nonzero_records_preserved");
 	ok = ok && rp_file_contains("rp_mail", "to=backend");
@@ -40,21 +40,21 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "commands=6");
 	ok = ok && rp_file_contains("rp_runner", "events=8");
 	ok = ok && rp_file_contains("rp_runner", "files=9");
-	ok = ok && rp_file_contains("rp_runner", "workbench_delivery_scale=workbenches:5");
-	ok = ok && rp_file_contains("rp_runner", "templates:5");
-	ok = ok && rp_file_contains("rp_runner", "workspace_imports:5");
-	ok = ok && rp_file_contains("rp_runner", "workspace_inspections:5");
-	ok = ok && rp_file_contains("rp_runner", "answers:5");
-	ok = ok && rp_file_contains("rp_runner", "deliveries:6");
+	ok = ok && rp_file_contains("rp_runner", "workbench_delivery_scale=workbenches:8");
+	ok = ok && rp_file_contains("rp_runner", "templates:8");
+	ok = ok && rp_file_contains("rp_runner", "workspace_imports:9");
+	ok = ok && rp_file_contains("rp_runner", "workspace_inspections:9");
+	ok = ok && rp_file_contains("rp_runner", "answers:11");
+	ok = ok && rp_file_contains("rp_runner", "deliveries:9");
 	ok = ok && rp_file_contains("rp_runner", "studio_sessions:2");
-	ok = ok && rp_file_contains("rp_runner", "project_action_plans:15");
+	ok = ok && rp_file_contains("rp_runner", "project_action_plans:17");
 	ok = ok && rp_file_contains("rp_runner", "project_deliveries:4");
-	ok = ok && rp_file_contains("rp_runner", "project_runbooks:15");
-	ok = ok && rp_file_contains("rp_runner", "project_evidence_audits:15");
-	ok = ok && rp_file_contains("rp_runner", "project_provenance_graphs:3");
+	ok = ok && rp_file_contains("rp_runner", "project_runbooks:17");
+	ok = ok && rp_file_contains("rp_runner", "project_evidence_audits:17");
+	ok = ok && rp_file_contains("rp_runner", "project_provenance_graphs:4");
 	ok = ok && rp_file_contains("rp_runner", "project_launches:3");
-	ok = ok && rp_file_contains("rp_runner", "project_release_gates:15");
-	ok = ok && rp_file_contains("rp_runner", "project_snapshots:15");
+	ok = ok && rp_file_contains("rp_runner", "project_release_gates:17");
+	ok = ok && rp_file_contains("rp_runner", "project_snapshots:17");
 	ok = ok && rp_file_contains("rp_input", "dynamic_submissions=4");
 	ok = ok && rp_file_contains("rp_input", "dynamic_validation=passed");
 	ok = ok && rp_file_contains("rp_runner", "dynamic_input_runs=4");
@@ -80,9 +80,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_llm_guard", "secrets_in_ucore=0");
 	ok = ok && rp_file_contains("rp_llm_hostreq", "template_mode=ready");
 	ok = ok && rp_file_contains("rp_llm_fallback", "fallback_cases=1");
-	ok = ok && rp_file_contains("rp_llmlog", "transcripts=90");
-	ok = ok && rp_file_contains("rp_llmlog", "bridge_requests=30");
-	ok = ok && rp_file_contains("rp_llmlog", "bridge_responses=30");
+	ok = ok && rp_file_contains("rp_llmlog", "transcripts=99");
+	ok = ok && rp_file_contains("rp_llmlog", "bridge_requests=33");
+	ok = ok && rp_file_contains("rp_llmlog", "bridge_responses=33");
 	ok = ok && rp_file_contains("rp_agents", "agents=7");
 	ok = ok && rp_file_contains("rp_decisions", "decisions=8");
 	ok = ok && rp_file_contains("rp_handoff", "handoffs=6");
@@ -158,20 +158,20 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runop", "project_scaffold=templates:3");
 	ok = ok && rp_file_contains("rp_runop", "dataset_product=previews:2");
 	ok = ok && rp_file_contains("rp_runop", "visualizations:2");
-	ok = ok && rp_file_contains("rp_runop", "source_portfolio=sources:42");
-	ok = ok && rp_file_contains("rp_runop", "research_portfolio_scale=sources:42");
-	ok = ok && rp_file_contains("rp_runop", "datasets:3");
-	ok = ok && rp_file_contains("rp_runop", "literature_searches:4");
-	ok = ok && rp_file_contains("rp_runop", "reviews:8");
-	ok = ok && rp_file_contains("rp_runop", "evidence_reviews:4");
-	ok = ok && rp_file_contains("rp_runop", "evidence_extractions:15");
-	ok = ok && rp_file_contains("rp_runop", "screening_decisions:15");
-	ok = ok && rp_file_contains("rp_runop", "exports:66");
-	ok = ok && rp_file_contains("rp_runop", "doctor_reports:10");
-	ok = ok && rp_file_contains("rp_runop", "project_handoff_audits:30");
-	ok = ok && rp_file_contains("rp_runop", "project_run_comparisons:15");
-	ok = ok && rp_file_contains("rp_runop", "project_reproducibility_audits:15");
-	ok = ok && rp_file_contains("rp_runop", "project_snapshot_comparisons:15");
+	ok = ok && rp_file_contains("rp_runop", "source_portfolio=sources:67");
+	ok = ok && rp_file_contains("rp_runop", "research_portfolio_scale=sources:67");
+	ok = ok && rp_file_contains("rp_runop", "datasets:5");
+	ok = ok && rp_file_contains("rp_runop", "literature_searches:7");
+	ok = ok && rp_file_contains("rp_runop", "reviews:11");
+	ok = ok && rp_file_contains("rp_runop", "evidence_reviews:7");
+	ok = ok && rp_file_contains("rp_runop", "evidence_extractions:25");
+	ok = ok && rp_file_contains("rp_runop", "screening_decisions:25");
+	ok = ok && rp_file_contains("rp_runop", "exports:80");
+	ok = ok && rp_file_contains("rp_runop", "doctor_reports:12");
+	ok = ok && rp_file_contains("rp_runop", "project_handoff_audits:34");
+	ok = ok && rp_file_contains("rp_runop", "project_run_comparisons:17");
+	ok = ok && rp_file_contains("rp_runop", "project_reproducibility_audits:17");
+	ok = ok && rp_file_contains("rp_runop", "project_snapshot_comparisons:17");
 	ok = ok && rp_file_contains("rp_runop", "study_protocol_reproduction=packages:1");
 	ok = ok && rp_file_contains("rp_runop", "action_execution:ready");
 	ok = ok && rp_file_contains("rp_runop", "project_bundle_cache=latest:ready");
@@ -431,7 +431,7 @@ int main(void)
 			   "checks=420\n"
 			   "state_catalog_checks=12\n"
 			   "startup_doctor_checks=14\n"
-			   "host_state_keys=573\n"
+			   "host_state_keys=574\n"
 			   "agentos_reserved_surface_checks=21\n"
 			   "agentos_reserved_surface=profiles:0,skills:0,tasks:0,deliberations:0,handoffs:0,coord:0,abi:0,adapter:0,readiness:0,tool_bindings:0\n"
 			   "state_relation=passed\n"
@@ -545,43 +545,43 @@ int main(void)
 			   "dataset_product_runs=2\n"
 			   "source_portfolio_exports=1\n"
 			   "research_portfolio_checks=16\n"
-			   "usable_research_sources=42\n"
-			   "usable_research_datasets=3\n"
-			   "usable_research_literature_searches=4\n"
-			   "usable_research_reviews=8\n"
-			   "usable_research_evidence_reviews=4\n"
-			   "usable_research_evidence_extractions=15\n"
-			   "usable_research_screening_decisions=15\n"
-			   "usable_research_exports=66\n"
-			   "usable_research_platform_doctor_reports=10\n"
-			   "usable_research_project_handoff_audits=30\n"
-			   "usable_research_project_run_comparisons=15\n"
-			   "usable_research_project_reproducibility_audits=15\n"
-			   "usable_research_project_snapshot_comparisons=15\n"
+			   "usable_research_sources=67\n"
+			   "usable_research_datasets=5\n"
+			   "usable_research_literature_searches=7\n"
+			   "usable_research_reviews=11\n"
+			   "usable_research_evidence_reviews=7\n"
+			   "usable_research_evidence_extractions=25\n"
+			   "usable_research_screening_decisions=25\n"
+			   "usable_research_exports=80\n"
+			   "usable_research_platform_doctor_reports=12\n"
+			   "usable_research_project_handoff_audits=34\n"
+			   "usable_research_project_run_comparisons=17\n"
+			   "usable_research_project_reproducibility_audits=17\n"
+			   "usable_research_project_snapshot_comparisons=17\n"
 			   "execution_scale_checks=14\n"
 			   "host_workflow_runs=10\n"
 			   "host_workflow_stage_runs=70\n"
 			   "host_workflow_cache=6\n"
 			   "host_agent_messages=70\n"
 			   "host_agent_decisions=70\n"
-			   "agentcompare_reports=3\n"
-			   "agentcompare_results=15\n"
-			   "agentcompare_profiles=3\n"
-			   "content_objects=145\n"
-			   "object_references=145\n"
+			   "agentcompare_reports=4\n"
+			   "agentcompare_results=20\n"
+			   "agentcompare_profiles=1\n"
+			   "content_objects=129\n"
+			   "object_references=129\n"
 			   "operations_scale_checks=12\n"
 			   "host_audit_records=5\n"
 			   "host_metrics=13\n"
 			   "host_llm_providers=3\n"
 			   "host_secret_references=3\n"
 			   "host_executed_corr_ids=4\n"
-			   "usable_research_projects=20\n"
+			   "usable_research_projects=23\n"
 			   "host_artifacts=128\n"
 			   "host_messages=70\n"
 			   "host_content_objects=129\n"
 			   "host_object_references=129\n"
-			   "host_agentcompare_reports=3\n"
-			   "host_agentcompare_results=15\n"
+			   "host_agentcompare_reports=4\n"
+			   "host_agentcompare_results=20\n"
                "project_revision_incident_checks=12\n"
                "usable_research_revision_tasks=1\n"
                "usable_research_project_scaffolds=1\n"
@@ -622,11 +622,11 @@ int main(void)
                "root_runs=1\n"
                "root_reports=1\n"
                "root_plans=1\n"
-               "root_search_records=1\n"
+               "root_search_records=2\n"
                "root_site_exports=1\n"
                "root_compare_profiles=1\n"
                "root_audit_records=5\n"
-               "root_context_records=348\n"
+               "root_context_records=380\n"
                "root_project_id=lab-gene-x\n"
                "root_run_id=RUN-042\n"
                "root_report_id=RUN-042-recovery-report\n"
@@ -671,36 +671,36 @@ int main(void)
 			   "agentos_readiness_checks=7\n"
 			   "knowledge_index_checks=22\n"
 			   "llm_transcript_checks=3\n"
-			   "llm_bridge_transcripts=90\n"
-			   "llm_bridge_requests=30\n"
-			   "llm_bridge_responses=30\n"
+			   "llm_bridge_transcripts=99\n"
+			   "llm_bridge_requests=33\n"
+			   "llm_bridge_responses=33\n"
 			   "workbench_delivery_checks=15\n"
-			   "usable_research_workbenches=5\n"
-			   "usable_research_templates=5\n"
-			   "usable_research_workspace_imports=5\n"
-			   "usable_research_workspace_inspections=5\n"
-			   "usable_research_workbench_answers=5\n"
-			   "usable_research_deliveries=6\n"
+			   "usable_research_workbenches=8\n"
+			   "usable_research_templates=8\n"
+			   "usable_research_workspace_imports=9\n"
+			   "usable_research_workspace_inspections=9\n"
+			   "usable_research_workbench_answers=11\n"
+			   "usable_research_deliveries=9\n"
 			   "usable_research_studio_sessions=2\n"
-			   "usable_research_project_action_plans=15\n"
+			   "usable_research_project_action_plans=17\n"
 			   "usable_research_project_deliveries=4\n"
-			   "usable_research_project_runbooks=15\n"
-			   "usable_research_project_evidence_audits=15\n"
-			   "usable_research_project_provenance_graphs=3\n"
+			   "usable_research_project_runbooks=17\n"
+			   "usable_research_project_evidence_audits=17\n"
+			   "usable_research_project_provenance_graphs=4\n"
 			   "usable_research_project_launches=3\n"
-			   "usable_research_project_release_gates=15\n"
-			   "usable_research_project_snapshots=15\n"
-			   "search_documents=1385\n"
+			   "usable_research_project_release_gates=17\n"
+			   "usable_research_project_snapshots=17\n"
+			   "search_documents=1685\n"
 			   "provenance_nodes=406\n"
 			   "provenance_links=544\n"
-			   "event_stream_records=6816\n"
-			   "context_records=348\n"
+			   "event_stream_records=8892\n"
+			   "context_records=380\n"
 			   "host_workflow_artifacts=150\n"
-			   "usable_research_artifacts=429\n"
-			   "usable_research_runs=20\n"
-			   "usable_research_stages=168\n"
-			   "usable_research_messages=223\n"
-			   "usable_research_decisions=203\n"
+			   "usable_research_artifacts=507\n"
+			   "usable_research_runs=23\n"
+			   "usable_research_stages=197\n"
+			   "usable_research_messages=265\n"
+			   "usable_research_decisions=242\n"
 			   "status=ready\n")) {
 		return 1;
 	}

@@ -6,10 +6,10 @@ int main(void)
 	if (!rp_file_contains("rp_objects", "objects=500")) return 1;
 	if (!rp_file_contains("rp_services", "workflow=34")) return 1;
 	if (!rp_write_file("rp_state_catalog",
-			   "host_state_keys=573\n"
-			   "nonzero_state_categories=70\n"
+			   "host_state_keys=574\n"
+			   "nonzero_state_categories=71\n"
 			   "zero_state_categories=503\n"
-			   "represented_state_categories=573\n"
+			   "represented_state_categories=574\n"
 			   "core_runtime_categories=projects,runs,reports,plans,stages,artifacts,events,context\n"
 			   "usable_research_categories=workbenches,runs,stages,messages,decisions,artifacts,datasets,sources,reviews,deliveries\n"
 			   "host_workflow_categories=workflow_runs,stage_runs,workflow_artifacts,cache,agent_messages,agent_decisions\n"
@@ -20,6 +20,6 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_status("state_catalog=ready")) return 1;
-	printf("rp_state_catalog: keys=573 nonzero=70 zero=503 represented=573 checks=12 status=ready\n");
+	printf("rp_state_catalog: keys=574 nonzero=71 zero=503 represented=574 checks=12 status=ready\n");
 	return 0;
 }

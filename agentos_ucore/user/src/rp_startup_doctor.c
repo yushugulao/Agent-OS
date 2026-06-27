@@ -5,7 +5,7 @@ int main(void)
 {
 	int ok = 1;
 	ok = ok && rp_file_contains("rp_objects", "objects=500");
-	ok = ok && rp_file_contains("rp_state_catalog", "host_state_keys=573");
+	ok = ok && rp_file_contains("rp_state_catalog", "host_state_keys=574");
 	ok = ok && rp_file_contains("rp_runop", "startup_health=quickstart:ready");
 	ok = ok && rp_file_contains("rp_runop", "configuration_health=settings:ready");
 	ok = ok && rp_file_contains("rp_runop", "platform_doctor=ready;checks=10");

@@ -168,7 +168,7 @@ int main(void)
 	if (!rp_append_file("rp_runner", "workbench_runbook=rp_workbench_runbook;commands=6")) return 1;
 	if (!rp_append_file("rp_runner", "workbench_timeline=rp_workbench_timeline;events=8")) return 1;
 	if (!rp_append_file("rp_runner", "workbench_file_manifest=rp_workbench_manifest;files=9;sha_records=9")) return 1;
-	if (!rp_append_file("rp_runner", "workbench_delivery_scale=workbenches:5,templates:5,workspace_imports:5,workspace_inspections:5,answers:5,deliveries:6,studio_sessions:2,project_action_plans:15,project_deliveries:4,project_runbooks:15,project_evidence_audits:15,project_provenance_graphs:3,project_launches:3,project_release_gates:15,project_snapshots:15,status=ready")) return 1;
+	if (!rp_append_file("rp_runner", "workbench_delivery_scale=workbenches:8,templates:8,workspace_imports:9,workspace_inspections:9,answers:11,deliveries:9,studio_sessions:2,project_action_plans:17,project_deliveries:4,project_runbooks:17,project_evidence_audits:17,project_provenance_graphs:4,project_launches:3,project_release_gates:17,project_snapshots:17,status=ready")) return 1;
 
 	if (!rp_append_file("rp_runner", "question_present=1;imported_inputs=1;literature_evidence=1;generated_artifacts=1;llm_trace=ready;human_review=needs_revision;delivery_manifest=waiting;next_action=build_delivery_manifest;status=ready")) return 1;
 	if (!rp_append_file("rp_runner", "answer_id=usable-workbench-answer:RUN-900:1;citation_count=5;citation=rp_input:workspace_import;citation=rp_runner:custom_analysis;citation=rp_knowledge:evidence_synthesis;citation=rp_llm_resp:response_join;citation=rp_package:delivery_manifest;missing_item=delivery_manifest_finalization;status=ready")) return 1;
@@ -498,6 +498,6 @@ int main(void)
 	if (!rp_append_status("workbench_runbook=ready")) return 1;
 	if (!rp_append_status("workbench_timeline=ready")) return 1;
 	if (!rp_append_status("workbench_manifest=ready")) return 1;
-	printf("rp_workbench: tasks=9 workspace_files=4 runs=4 exports=7 workbenches=5 deliveries=6 project_ops=15 status=ready\n");
+	printf("rp_workbench: tasks=9 workspace_files=4 runs=4 exports=7 workbenches=8 deliveries=9 project_ops=17 status=ready\n");
 	return 0;
 }

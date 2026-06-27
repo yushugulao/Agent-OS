@@ -354,14 +354,14 @@ def main() -> int:
             assert any("backend_evidence_report=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;status=ready" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_studio_session=usable-research-studio-session:W1" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_studio_title=Studio cytokine evidence" in line for line in rp_runner["lines"]), rp_runner
-            assert any("workbench_delivery_scale=workbenches:5" in line for line in rp_runner["lines"]), rp_runner
-            assert any("templates:5" in line for line in rp_runner["lines"]), rp_runner
-            assert any("workspace_imports:5" in line for line in rp_runner["lines"]), rp_runner
-            assert any("workspace_inspections:5" in line for line in rp_runner["lines"]), rp_runner
-            assert any("answers:5" in line for line in rp_runner["lines"]), rp_runner
-            assert any("deliveries:6" in line for line in rp_runner["lines"]), rp_runner
-            assert any("project_action_plans:15" in line for line in rp_runner["lines"]), rp_runner
-            assert any("project_runbooks:15" in line for line in rp_runner["lines"]), rp_runner
+            assert any("workbench_delivery_scale=workbenches:8" in line for line in rp_runner["lines"]), rp_runner
+            assert any("templates:8" in line for line in rp_runner["lines"]), rp_runner
+            assert any("workspace_imports:9" in line for line in rp_runner["lines"]), rp_runner
+            assert any("workspace_inspections:9" in line for line in rp_runner["lines"]), rp_runner
+            assert any("answers:11" in line for line in rp_runner["lines"]), rp_runner
+            assert any("deliveries:9" in line for line in rp_runner["lines"]), rp_runner
+            assert any("project_action_plans:17" in line for line in rp_runner["lines"]), rp_runner
+            assert any("project_runbooks:17" in line for line in rp_runner["lines"]), rp_runner
             rp_studio = read_json(base + "/api/state/rp_studio")
             assert any("host_action_studio_launch=accepted" in line for line in rp_studio["lines"]), rp_studio
             assert any("host_action_studio_title=Studio cytokine evidence" in line for line in rp_studio["lines"]), rp_studio
@@ -703,33 +703,33 @@ def main() -> int:
             assert any("root_state_surface=projects:1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("agentos_reserved_surface_checks=21" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("agentos_reserved_surface=profiles:0" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("state_catalog=keys:573" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("state_catalog=keys:574" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("startup_doctor=quickstart:ready" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("incident:INC-RUN-042-ALIGN-OOM" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("knowledge_index=search_documents:1385" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("knowledge_index=search_documents:1685" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_nodes:406" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("usable_artifacts:429" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("llm_transcripts=90" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("workbenches=5" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("deliveries=6" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("research_portfolio=sources:42" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("project_handoff_audits:30" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("agentcompare_execution_scale=reports:3" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("results:15" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("usable_artifacts:507" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("llm_transcripts=99" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("workbenches=8" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("deliveries=9" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("research_portfolio=sources:67" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("project_handoff_audits:34" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("agentcompare_execution_scale=reports:4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("results:20" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_runtime_scale=workflow_runs:10" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("stage_runs:70" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("content_graph_scale=content_objects:145" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("content_graph_scale=content_objects:129" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_operations_scale=audit_records:5" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("project_scaffolds:1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("reason:memory_limit" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("usable_projects:20" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("usable_projects:23" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_query = read_json(base + "/api/state/rp_query")
-            assert any("knowledge_index=search_documents:1385" in line for line in rp_query["lines"]), rp_query
+            assert any("knowledge_index=search_documents:1685" in line for line in rp_query["lines"]), rp_query
             assert any("provenance_nodes:406" in line for line in rp_query["lines"]), rp_query
             assert any("provenance_links:544" in line for line in rp_query["lines"]), rp_query
-            assert any("events:6816" in line for line in rp_query["lines"]), rp_query
-            assert any("context_records:348" in line for line in rp_query["lines"]), rp_query
-            assert any("usable_artifacts:429" in line for line in rp_query["lines"]), rp_query
+            assert any("events:8892" in line for line in rp_query["lines"]), rp_query
+            assert any("context_records:380" in line for line in rp_query["lines"]), rp_query
+            assert any("usable_artifacts:507" in line for line in rp_query["lines"]), rp_query
             rp_backend_exec = read_json(base + "/api/state/rp_backend_exec")
             assert any("runner_detail_checks=16" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_verified_inputs=4" in line for line in rp_backend_exec["lines"]), rp_backend_exec
@@ -1108,8 +1108,8 @@ def main() -> int:
             assert any("state_catalog_checks=12" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("startup_doctor_checks=14" in line for line in rp_consistency["lines"]), rp_consistency
             rp_state_catalog = read_json(base + "/api/state/rp_state_catalog")
-            assert any("host_state_keys=573" in line for line in rp_state_catalog["lines"]), rp_state_catalog
-            assert any("represented_state_categories=573" in line for line in rp_state_catalog["lines"]), rp_state_catalog
+            assert any("host_state_keys=574" in line for line in rp_state_catalog["lines"]), rp_state_catalog
+            assert any("represented_state_categories=574" in line for line in rp_state_catalog["lines"]), rp_state_catalog
             rp_startup = read_json(base + "/api/state/rp_startup")
             assert any("quickstart=ready" in line for line in rp_startup["lines"]), rp_startup
             assert any("doctor_checks=10" in line for line in rp_startup["lines"]), rp_startup
@@ -1125,9 +1125,9 @@ def main() -> int:
             assert any("lab_governance_ops_checks=26" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("knowledge_index_checks=22" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("llm_transcript_checks=3" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("llm_bridge_transcripts=90" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("llm_bridge_requests=30" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("llm_bridge_responses=30" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("llm_bridge_transcripts=99" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("llm_bridge_requests=33" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("llm_bridge_responses=33" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("workbench_delivery_checks=15" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("research_portfolio_checks=16" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("execution_scale_checks=14" in line for line in rp_consistency["lines"]), rp_consistency
@@ -1148,39 +1148,39 @@ def main() -> int:
             assert any("root_plans=1" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("root_compare_profiles=1" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("root_audit_records=5" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("root_context_records=348" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("root_context_records=380" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("root_project_id=lab-gene-x" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("root_plan_id=PLAN-RUN-042-RECOVER-1" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("agentos_reserved_surface_checks=21" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("agentos_reserved_surface=profiles:0" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("tool_bindings:0" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("usable_research_workbenches=5" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("usable_research_deliveries=6" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("usable_research_sources=42" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("usable_research_datasets=3" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("usable_research_platform_doctor_reports=10" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("usable_research_project_handoff_audits=30" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("usable_research_workbenches=8" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("usable_research_deliveries=9" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("usable_research_sources=67" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("usable_research_datasets=5" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("usable_research_platform_doctor_reports=12" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("usable_research_project_handoff_audits=34" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("host_workflow_runs=10" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("host_workflow_stage_runs=70" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("host_workflow_cache=6" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("host_agent_messages=70" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("agentcompare_reports=3" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("agentcompare_results=15" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("content_objects=145" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("agentcompare_reports=4" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("agentcompare_results=20" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("content_objects=129" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("host_audit_records=5" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("host_metrics=13" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("host_llm_providers=3" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("host_secret_references=3" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("host_executed_corr_ids=4" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("usable_research_projects=20" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("usable_research_projects=23" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("host_artifacts=128" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("usable_research_project_action_plans=15" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("usable_research_project_runbooks=15" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("search_documents=1385" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("usable_research_project_action_plans=17" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("usable_research_project_runbooks=17" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("search_documents=1685" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("provenance_nodes=406" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("provenance_links=544" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("event_stream_records=6816" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("context_records=348" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("event_stream_records=8892" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("context_records=380" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("approval_checks=2" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("protocol_governance_checks=4" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("sop_execution_checks=3" in line for line in rp_consistency["lines"]), rp_consistency
@@ -1204,9 +1204,9 @@ def main() -> int:
             assert any("project_bundle_cache=ready" in line for line in rp_consistency["lines"]), rp_consistency
             rp_runop = read_json(base + "/api/state/rp_runop")
             assert any("platform_doctor=ready;checks=10" in line for line in rp_runop["lines"]), rp_runop
-            assert any("source_portfolio=sources:42" in line for line in rp_runop["lines"]), rp_runop
-            assert any("research_portfolio_scale=sources:42" in line for line in rp_runop["lines"]), rp_runop
-            assert any("doctor_reports:10" in line for line in rp_runop["lines"]), rp_runop
+            assert any("source_portfolio=sources:67" in line for line in rp_runop["lines"]), rp_runop
+            assert any("research_portfolio_scale=sources:67" in line for line in rp_runop["lines"]), rp_runop
+            assert any("doctor_reports:12" in line for line in rp_runop["lines"]), rp_runop
             assert any("research_ops=semantic_entities:8" in line for line in rp_runop["lines"]), rp_runop
             assert any("prompt_templates:2" in line for line in rp_runop["lines"]), rp_runop
             assert any("runbook_steps:7" in line for line in rp_runop["lines"]), rp_runop
@@ -1367,9 +1367,9 @@ def main() -> int:
             assert any("host_relay_guard_batch=checked:4;blocked:0;secret_values_written=0;status=ready" in line for line in rp_llm_guard["lines"]), rp_llm_guard
             assert any("host_relay_guard=llm-q1" in line for line in rp_llm_guard["lines"]), rp_llm_guard
             rp_llmlog = read_json(base + "/api/state/rp_llmlog")
-            assert any("transcripts=90" in line for line in rp_llmlog["lines"]), rp_llmlog
-            assert any("bridge_requests=30" in line for line in rp_llmlog["lines"]), rp_llmlog
-            assert any("bridge_responses=30" in line for line in rp_llmlog["lines"]), rp_llmlog
+            assert any("transcripts=99" in line for line in rp_llmlog["lines"]), rp_llmlog
+            assert any("bridge_requests=33" in line for line in rp_llmlog["lines"]), rp_llmlog
+            assert any("bridge_responses=33" in line for line in rp_llmlog["lines"]), rp_llmlog
             rp_relay = read_json(base + "/api/state/rp_relay")
             assert any("host_relay_replay_batch=requests:4;responses:4;matched:4;status=ready" in line for line in rp_relay["lines"]), rp_relay
             assert any("host_relay_replay=llm-q1;response=relay-llm-q1" in line for line in rp_relay["lines"]), rp_relay

@@ -461,7 +461,7 @@ Expected orchestrator output:
 ```text
 rp_orch: start programs=69
 rp_catalog: objects=500 services=120 features=28 status=ready
-rp_state_catalog: keys=573 nonzero=70 zero=503 represented=573 checks=12 status=ready
+rp_state_catalog: keys=574 nonzero=71 zero=503 represented=574 checks=12 status=ready
 rp_object_store: records=8 status=ready
 rp_object_query: hits=8 ready_hits=7 status=ready
 rp_lineage: edges=7 status=ready
@@ -476,9 +476,9 @@ rp_governance: risks=3 capa=2 deviations=1 status=ready
 rp_writer: sections=8 citations=9 revisions=3 status=packaged
 rp_repair: failed_stage=align action=minimal_rerun attempts=2 status=recovered
 rp_auditor: provenance=verified release=ready package=ready status=passed
-rp_query: workflow=34 agent=26 evidence=10 ranked=21 selected=10 search_docs=1385 provenance=406/544 status=ready
+rp_query: workflow=34 agent=26 evidence=10 ranked=21 selected=10 search_docs=1685 provenance=406/544 status=ready
 rp_evidence: claims=8 links=5 claim_records=8 paths=3 status=ready
-rp_llm_bridge: requests=3 responses=3 transcripts=90 routes=4 eval=7 relay=ready status=ready
+rp_llm_bridge: requests=3 responses=3 transcripts=99 routes=4 eval=7 relay=ready status=ready
 rp_llm_relay: packets=3 routes=4 guard=ready fallback=1 status=ready
 rp_privacy: checked=13 packets=3 redactions=0 compliance=accepted status=ready
 rp_runconf: profiles=2 validations=2 drift=1 status=ready
@@ -488,7 +488,7 @@ rp_complete: hooks=4 events=1 actions=4 status=ready
 rp_artifact_ops: inputs=2 stages=5 retries=1 artifacts=4 custom_requests=3 status=ready
 rp_data_pipeline: files=2 snapshots=2 previews=2 quality=passed transforms=2 status=ready
 rp_workflow_runner: stages=5 events=8 retries=1 cache_hits=1 custom_runs=3 status=ready
-rp_workbench: tasks=9 workspace_files=4 runs=4 exports=7 workbenches=5 deliveries=6 project_ops=15 status=ready
+rp_workbench: tasks=9 workspace_files=4 runs=4 exports=7 workbenches=8 deliveries=9 project_ops=17 status=ready
 rp_agent_collab: agents=7 messages=21 decisions=8 handoffs=6 status=ready
 rp_package: artifacts=52 checks=75 fair=passed repro=ready status=ready
 rp_calculation: computers=1 codes=1 jobs=1 retrieved=3 parser=1 exports=1 checks=84 errors=0 status=ready
