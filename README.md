@@ -87,6 +87,7 @@ user/src/rp_reviewboard.c
 user/src/rp_controlplane.c
 user/src/rp_integrityplane.c
 user/src/rp_coherenceplane.c
+user/src/rp_mature.c
 user/src/rp_test_suite.c
 user/src/rp_compare_plain.c
 ```
@@ -284,6 +285,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_reviewboard`
 - `rp_control`
 - `rp_integrity`
+- `rp_mature`
 - `rp_submit`
 - `rp_sreg`
 - `rp_ethics`
@@ -340,7 +342,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_review_pack`
 - `rp_agentcmp`
 
-The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 1298-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
+The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 1368-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
 
 Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_agentcmp` after all children exit, then prints `state_ok=1`.
 
@@ -383,7 +385,7 @@ rp_plain: passed
 Expected orchestrator output:
 
 ```text
-rp_orch: start programs=53
+rp_orch: start programs=54
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_state_catalog: keys=573 nonzero=70 zero=503 represented=573 checks=12 status=ready
 rp_object_store: records=8 status=ready
@@ -436,8 +438,9 @@ rp_reviewboard: checks=24 requests=1 votes=4 signoffs=4 assignments=4 decision=a
 rp_controlplane: checks=30 approvals=4 notifications=4 queue=4 plugins=3 permissions=5 status=ready
 rp_integrityplane: checks=36 evidence=8 references=8 namespace=5 status_semantics=5 review_alignment=4 status=ready
 rp_coherenceplane: checks=40 delivery=7 run_state=7 lifecycle=6 workflow_lint=5 tool_protocol=5 report_validation=5 status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=53 state_files=183 acks=53 tools=197 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 publication=48 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
-rp_orch: programs_ok=53 programs_total=53
+rp_mature: profiles=6 mappings=6 checks=72 errors=0 status=ready
+rp_compare_plain: plain_kernel=passed objects=500 programs=54 state_files=187 acks=54 tools=205 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 publication=48 mature=72 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
+rp_orch: programs_ok=54 programs_total=54
 rp_orch: state_ok=1
 rp_orch: passed
 ```
@@ -492,6 +495,8 @@ It also verifies the workflow portability delivery path. It checks import count,
 The comparison step also checks that workflow portability and backend execution name the same execution plan, backend scenario, and compare profile. It verifies plain-uCore passed cases, planned AgentOS cases, and study records, then publishes `portability_backend_checks=12` in `rp_agentcmp`.
 
 The backend scenario now also writes compact case-runner evidence. It records four cases, the ordinary files checked by the plain-uCore cases, attempt counts, retry reasons, four source/requirement/observation/action/review rows, four cost/replacement/risk rows, the two planned AgentOS cases, and study metrics for plain file scans and future kernel-assisted execution. It also links the same backend evidence into `rp_runner`, `rp_report_text`, and the review handoff state, then publishes `backend_runner_checks=12`, `backend_runner_detail_checks=24`, `runner_detail_rows=4`, `backend_runner_report_checks=20`, `runner_report_rows=4`, and `backend_report_links=2` in `rp_agentcmp`. The Run page derives case narratives from `rp_backend_exec`, so a reviewer can see the plain-uCore cost and planned AgentOS replacement without switching to the comparison page.
+
+The mature-platform mapping step records Galaxy, AiiDA, DVC, MLflow, Nextflow, and Snakemake capability profiles, maps them to current platform state files, and publishes a dedicated `mature.html` reader page plus `mature_capability_checks=72` in `rp_agentcmp`.
 
 The Run and Workflow pages render `Workflow Execution View`, `Workflow Control View`, and `Workflow Evidence Links` from existing workflow state files. These tables join `rp_stage_state`, `rp_cache_index`, `rp_retry_plan`, `rp_run_events`, `rp_worker`, `rp_execobs`, `rp_artifact`, `rp_artifact_manifest`, `rp_stage_log`, `rp_report_text`, `rp_review_dashboard`, and `rp_package` into readable stage, worker, cache, retry, observer, artifact, report, review, and delivery rows, so the failed align-stage retry and the host-triggered workflow run can be reviewed without manually opening every state file.
 

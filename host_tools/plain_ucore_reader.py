@@ -36,6 +36,7 @@ PAGE_SPECS = [
     ("integrity.html", "Integrity", "rp_integrity", ["rp_review_dashboard", "rp_agentcmp", "rp_package", "rp_report_text", "rp_artifact_manifest"]),
     ("coherence.html", "Coherence", "rp_coherence", ["rp_review_dashboard", "rp_agentcmp", "rp_package", "rp_stage_state", "rp_backend_exec"]),
     ("publication.html", "Publication", "rp_publication", ["rp_pubplan", "rp_peerresp", "rp_api_pub", "rp_pubop", "rp_review_dashboard", "rp_package"]),
+    ("mature.html", "Mature Platforms", "rp_mature", ["rp_mature_refs", "rp_mature_map", "rp_mature_checks", "rp_agentcmp", "rp_review_dashboard"]),
     ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets"]),
     ("actions.html", "Actions", "rp_api_action", ["rp_actionio", "rp_host_run_result", "rp_web_routes", "rp_web_bundle"]),
 ]
@@ -1141,6 +1142,7 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Study Protocol Checks", metric_value(state, [("rp_agentcmp", "study_protocol_checks"), ("rp_studyproto", "study_protocol_checks")]), "rp_studyproto"),
         ("Integrity Checks", metric_value(state, [("rp_agentcmp", "integrity_plane_checks"), ("rp_integrity", "integrity_checks")]), "rp_integrity"),
         ("Publication Checks", metric_value(state, [("rp_agentcmp", "publication_checks"), ("rp_publication", "publication_checks")]), "rp_publication"),
+        ("Mature Capability", metric_value(state, [("rp_agentcmp", "mature_capability_checks"), ("rp_mature", "capability_checks")]), "rp_mature"),
     ]
     llm_items = [
         ("Relay", metric_value(state, [("rp_llm_resp", "host_relay_process"), ("rp_relay", "mode")]), "rp_llm_resp"),
@@ -1233,6 +1235,16 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Decisions", metric_value(state, [("rp_publication", "decisions")]), "rp_publication"),
         ("Status", metric_value(state, [("rp_publication", "status")]), "rp_publication"),
     ]
+    mature_items = [
+        ("Profiles", metric_value(state, [("rp_mature", "reference_platforms"), ("rp_mature_refs", "profiles")]), "rp_mature"),
+        ("Mappings", metric_value(state, [("rp_mature", "capability_mappings"), ("rp_mature_map", "mappings")]), "rp_mature"),
+        ("Checks", metric_value(state, [("rp_mature", "capability_checks"), ("rp_mature_checks", "checks")]), "rp_mature_checks"),
+        ("Errors", metric_value(state, [("rp_mature", "errors"), ("rp_mature_checks", "errors")]), "rp_mature_checks"),
+        ("Warnings", metric_value(state, [("rp_mature", "warnings"), ("rp_mature_checks", "warnings")]), "rp_mature_checks"),
+        ("Decision", metric_value(state, [("rp_mature", "decision")]), "rp_mature"),
+        ("AgentOS Targets", metric_value(state, [("rp_mature_map", "agentos_targets")]), "rp_mature_map"),
+        ("Status", metric_value(state, [("rp_mature", "status")]), "rp_mature"),
+    ]
     if file_name == "run.html":
         return render_summary_panel("Research Output", report_items)
     if file_name in ("evidence.html", "artifacts.html"):
@@ -1271,6 +1283,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Coherence Plane", coherence_items)
     if file_name == "publication.html":
         return render_summary_panel("Publication Workflow", publication_items)
+    if file_name == "mature.html":
+        return render_summary_panel("Mature Platform Mapping", mature_items)
     return ""
 
 
@@ -1304,6 +1318,7 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Integrity Checks", metric_value(state, [("rp_agentcmp", "integrity_plane_checks"), ("rp_integrity", "integrity_checks")]), "rp_integrity"),
         ("Coherence Checks", metric_value(state, [("rp_agentcmp", "coherence_plane_checks"), ("rp_coherence", "coherence_checks")]), "rp_coherence"),
         ("Publication Checks", metric_value(state, [("rp_agentcmp", "publication_checks"), ("rp_publication", "publication_checks")]), "rp_publication"),
+        ("Mature Capability", metric_value(state, [("rp_agentcmp", "mature_capability_checks"), ("rp_mature", "capability_checks")]), "rp_mature"),
     ]
     integrity_detail_items = [
         ("Evidence Contracts", metric_value(state, [("rp_integrity", "evidence_contracts")]), "rp_integrity"),
@@ -1328,6 +1343,14 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Response Letter", metric_value(state, [("rp_peerresp", "response_letter")]), "rp_peerresp"),
         ("API", metric_value(state, [("rp_api_pub", "publication_workflow")]), "rp_api_pub"),
         ("Operation", metric_value(state, [("rp_pubop", "op")]), "rp_pubop"),
+    ]
+    mature_detail_items = [
+        ("Profile Checks", metric_value(state, [("rp_mature", "profile_checks")]), "rp_mature"),
+        ("Store Checks", metric_value(state, [("rp_mature", "store_checks")]), "rp_mature"),
+        ("Surface Checks", metric_value(state, [("rp_mature", "surface_checks")]), "rp_mature"),
+        ("Ratio Checks", metric_value(state, [("rp_mature", "ratio_checks")]), "rp_mature"),
+        ("Coverage", metric_value(state, [("rp_mature", "coverage")]), "rp_mature"),
+        ("AgentOS Adaptation", metric_value(state, [("rp_mature", "agentos_adaptation")]), "rp_mature"),
     ]
     llm_items = [
         ("Requests", metric_value(state, [("rp_llm_resp", "requests"), ("rp_llmq", "queued")]), "rp_llm_resp"),
@@ -1363,6 +1386,8 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Coherence Detail", coherence_detail_items)
     if file_name == "publication.html":
         return render_summary_panel("Publication Detail", publication_detail_items)
+    if file_name == "mature.html":
+        return render_summary_panel("Mature Capability Detail", mature_detail_items)
     if file_name == "llm.html":
         return render_summary_panel("Relay State", llm_items)
     return ""
@@ -2108,6 +2133,29 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 "Response Letter Items",
                 [("Item", "response_item"), ("Reply", "reply"), ("Status", "status")],
                 state_records(state, "rp_peerresp", "response_item"),
+            ),
+        ]
+    if file_name == "mature.html":
+        return [
+            render_record_panel(
+                "Reference Platforms",
+                [("Profile", "profile"), ("Name", "name"), ("Concepts", "concepts"), ("Status", "status")],
+                state_records(state, "rp_mature_refs", "profile"),
+            ),
+            render_record_panel(
+                "Capability Mappings",
+                [("Mapping", "mapping"), ("Profile", "profile"), ("Concept", "concept"), ("Services", "services"), ("State", "state"), ("Status", "status")],
+                state_records(state, "rp_mature_map", "mapping"),
+            ),
+            render_record_panel(
+                "Mature Checks",
+                [("Check", "check"), ("Target", "target"), ("Result", "result"), ("Status", "status")],
+                state_records(state, "rp_mature_checks", "check"),
+            ),
+            render_record_panel(
+                "AgentOS Adaptation",
+                [("Adaptation", "agentos_adaptation"), ("Status", "status")],
+                state_records(state, "rp_mature", "agentos_adaptation"),
             ),
         ]
     if file_name == "data.html":
@@ -3540,6 +3588,7 @@ def render_overview(
             ("Backend Runner", metric_value(state, [("rp_agentcmp", "backend_runner_checks")]), "rp_agentcmp"),
             ("Coherence Plane", metric_value(state, [("rp_agentcmp", "coherence_plane_checks"), ("rp_coherence", "coherence_checks")]), "rp_coherence"),
             ("Publication", metric_value(state, [("rp_agentcmp", "publication_checks"), ("rp_publication", "publication_checks")]), "rp_publication"),
+            ("Mature Capability", metric_value(state, [("rp_agentcmp", "mature_capability_checks"), ("rp_mature", "capability_checks")]), "rp_mature"),
             ("QEMU", metric_value(state, [("rp_host_run_result", "qemu_orch_passed")]), "rp_host_run_result"),
         ],
         "artifacts.html": [
@@ -3587,6 +3636,12 @@ def render_overview(
             ("Reviews", metric_value(state, [("rp_publication", "review_rounds")]), "rp_publication"),
             ("Responses", metric_value(state, [("rp_peerresp", "packages"), ("rp_publication", "response_packages")]), "rp_peerresp"),
             ("Decisions", metric_value(state, [("rp_publication", "decisions")]), "rp_publication"),
+        ],
+        "mature.html": [
+            ("Profiles", metric_value(state, [("rp_mature", "reference_platforms"), ("rp_mature_refs", "profiles")]), "rp_mature"),
+            ("Mappings", metric_value(state, [("rp_mature", "capability_mappings"), ("rp_mature_map", "mappings")]), "rp_mature_map"),
+            ("Checks", metric_value(state, [("rp_mature", "capability_checks"), ("rp_mature_checks", "checks")]), "rp_mature_checks"),
+            ("Errors", metric_value(state, [("rp_mature", "errors"), ("rp_mature_checks", "errors")]), "rp_mature_checks"),
         ],
         "review.html": [
             ("Sections", metric_value(state, [("rp_review_dashboard", "sections")]), "rp_review_dashboard"),

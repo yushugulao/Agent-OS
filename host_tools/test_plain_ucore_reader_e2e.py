@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=1298" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=197" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=1368" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=205" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -735,6 +735,7 @@ def main() -> int:
             assert any("integrity_plane_checks=36" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("coherence_plane_checks=40" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("publication_checks=48" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("mature_capability_checks=72" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_runbooks = read_json(base + "/api/state/rp_runbooks")
             assert any("runbook_service_checks=16" in line for line in rp_runbooks["lines"]), rp_runbooks
             assert any("runbook_templates=1" in line for line in rp_runbooks["lines"]), rp_runbooks
@@ -840,6 +841,19 @@ def main() -> int:
             assert any("response_package=peer-review-response-package:RUN-042:round-1" in line for line in rp_publication["lines"]), rp_publication
             assert any("publication_decision=publication-decision:RUN-042:accept-with-evidence" in line for line in rp_publication["lines"]), rp_publication
             assert any("agentos_adaptation=kernel_submission_metadata,kernel_review_event_queue,kernel_response_context,kernel_release_gate" in line for line in rp_publication["lines"]), rp_publication
+            rp_mature = read_json(base + "/api/state/rp_mature")
+            assert any("reference_platforms=6" in line for line in rp_mature["lines"]), rp_mature
+            assert any("capability_mappings=6" in line for line in rp_mature["lines"]), rp_mature
+            assert any("capability_checks=72" in line for line in rp_mature["lines"]), rp_mature
+            assert any("reference_platform=galaxy;name=Galaxy" in line for line in rp_mature["lines"]), rp_mature
+            assert any("reference_platform=snakemake;name=Snakemake" in line for line in rp_mature["lines"]), rp_mature
+            rp_mature_map = read_json(base + "/api/state/rp_mature_map")
+            assert any("mapping=galaxy-workflow-history" in line for line in rp_mature_map["lines"]), rp_mature_map
+            assert any("mapping=snakemake-rule-dag" in line for line in rp_mature_map["lines"]), rp_mature_map
+            assert any("agentos_targets=kernel_context_path,kernel_metadata_index,kernel_event_queue,batch_tool_runner,capability_contract_table" in line for line in rp_mature_map["lines"]), rp_mature_map
+            rp_mature_checks = read_json(base + "/api/state/rp_mature_checks")
+            assert any("checks=72" in line for line in rp_mature_checks["lines"]), rp_mature_checks
+            assert any("check=surface.site;target=mature.html;result=pass;status=ready" in line for line in rp_mature_checks["lines"]), rp_mature_checks
             rp_peerresp = read_json(base + "/api/state/rp_peerresp")
             assert any("addressed=4" in line for line in rp_peerresp["lines"]), rp_peerresp
             assert any("needs_revision=0" in line for line in rp_peerresp["lines"]), rp_peerresp
@@ -1333,6 +1347,17 @@ def main() -> int:
             assert "Publication Decisions" in publication_html
             assert "peer-review-response-package:RUN-042:round-1" in publication_html
             assert "publication-decision:RUN-042:accept-with-evidence" in publication_html
+            mature_html = read_text(base + "/mature.html")
+            assert "Mature Platform Mapping" in mature_html
+            assert "Mature Capability Detail" in mature_html
+            assert "Reference Platforms" in mature_html
+            assert "Capability Mappings" in mature_html
+            assert "Mature Checks" in mature_html
+            assert "Galaxy" in mature_html
+            assert "AiiDA" in mature_html
+            assert "Snakemake" in mature_html
+            assert "kernel_context_path" in mature_html
+            assert "batch_tool_runner" in mature_html
             project_review_html = read_text(base + "/project-review.html")
             assert "Project Delivery Review" in project_review_html
             assert "Project Release Gate" in project_review_html
@@ -1489,6 +1514,8 @@ def main() -> int:
             assert "Coherence Plane" in compare_html
             assert "publication_checks" in compare_html
             assert "Publication Workflow" in compare_html
+            assert "mature_capability_checks" in compare_html
+            assert "Mature Capability" in compare_html
             assert "Compare Action Trace" in compare_html
             assert "Compare Action Output Links" in compare_html
             assert "Compare Action Output Details" in compare_html
