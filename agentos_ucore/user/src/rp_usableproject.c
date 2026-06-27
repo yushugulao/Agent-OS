@@ -1,5 +1,99 @@
 #include <stdio.h>
+#define RP_ENABLE_HOST_ACTION_SEED 1
 #include <research_platform_state.h>
+
+static void copy_action_value(const char *kind, const char *key, const char *fallback, char *out, int cap)
+{
+	if (!rp_host_seed_copy_value_for_kind(kind, key, out, cap)) {
+		rp_copy_text(out, cap, fallback);
+	}
+}
+
+static int append_project_lifecycle_actions(void)
+{
+	int has_scaffold = rp_host_seed_has("kind=project_scaffold");
+	int has_launch = rp_host_seed_has("kind=project_launch");
+	int has_execute = rp_host_seed_has("kind=project_action_execute");
+	char project[64];
+	char template_id[64];
+	char workspace[64];
+	char files[32];
+	char scaffold[64];
+	char workbench[64];
+	char run_id[64];
+	char provider[48];
+	char action_id[64];
+	char action_key[64];
+	char result[64];
+	char line[256];
+
+	if (!has_scaffold && !has_launch && !has_execute) return 1;
+	if (!rp_append_file("rp_actionio", "host_action_usable_project=1")) return 0;
+	if (!rp_append_file("rp_actionio", "host_action_usable_project_outputs=rp_usableproj,rp_usablescaf,rp_usablelaunch,rp_usablepack,kernel_context")) return 0;
+	if (!rp_append_file("rp_web_bundle", "host_action_usable_project=rp_usableproj,rp_usablescaf,rp_usablelaunch,rp_usablepack,kernel_context")) return 0;
+
+	if (has_scaffold) {
+		copy_action_value("kind=project_scaffold", "project_id=", "lab-gene-x", project, sizeof(project));
+		copy_action_value("kind=project_scaffold", "template_id=", "scaffold-template:starter", template_id, sizeof(template_id));
+		copy_action_value("kind=project_scaffold", "workspace=", "workspace/lab-gene-x", workspace, sizeof(workspace));
+		copy_action_value("kind=project_scaffold", "files=", "8", files, sizeof(files));
+		rp_copy_text(line, sizeof(line), "host_action_project_scaffold=");
+		rp_append_text(line, sizeof(line), project);
+		rp_append_text(line, sizeof(line), ";template=");
+		rp_append_text(line, sizeof(line), template_id);
+		rp_append_text(line, sizeof(line), ";workspace=");
+		rp_append_text(line, sizeof(line), workspace);
+		rp_append_text(line, sizeof(line), ";files=");
+		rp_append_text(line, sizeof(line), files);
+		rp_append_text(line, sizeof(line), ";kernel_metadata=indexed;status=ready");
+		if (!rp_append_file("rp_usableproj", line)) return 0;
+		if (!rp_append_file("rp_usablescaf", line)) return 0;
+		if (!rp_append_file("rp_web_bundle", line)) return 0;
+	}
+	if (has_launch) {
+		copy_action_value("kind=project_launch", "project_id=", "lab-gene-x", project, sizeof(project));
+		copy_action_value("kind=project_launch", "scaffold_id=", "scaffold:lab-gene-x:starter", scaffold, sizeof(scaffold));
+		copy_action_value("kind=project_launch", "workbench_id=", "usable-workbench:RUN-900", workbench, sizeof(workbench));
+		copy_action_value("kind=project_launch", "run_id=", "usable-run:RUN-900", run_id, sizeof(run_id));
+		copy_action_value("kind=project_launch", "provider_id=", "template", provider, sizeof(provider));
+		rp_copy_text(line, sizeof(line), "host_action_project_launch=");
+		rp_append_text(line, sizeof(line), project);
+		rp_append_text(line, sizeof(line), ";scaffold=");
+		rp_append_text(line, sizeof(line), scaffold);
+		rp_append_text(line, sizeof(line), ";workbench=");
+		rp_append_text(line, sizeof(line), workbench);
+		rp_append_text(line, sizeof(line), ";run=");
+		rp_append_text(line, sizeof(line), run_id);
+		rp_append_text(line, sizeof(line), ";provider=");
+		rp_append_text(line, sizeof(line), provider);
+		rp_append_text(line, sizeof(line), ";kernel_event=queued;kernel_context=recorded;status=ready");
+		if (!rp_append_file("rp_usableproj", line)) return 0;
+		if (!rp_append_file("rp_usablelaunch", line)) return 0;
+		if (!rp_append_file("rp_web_bundle", line)) return 0;
+	}
+	if (has_execute) {
+		copy_action_value("kind=project_action_execute", "project_id=", "lab-gene-x", project, sizeof(project));
+		copy_action_value("kind=project_action_execute", "action_id=", "usable-project-action:RUN-042:1", action_id, sizeof(action_id));
+		copy_action_value("kind=project_action_execute", "action_key=", "build_reproduction_package", action_key, sizeof(action_key));
+		copy_action_value("kind=project_action_execute", "provider_id=", "template", provider, sizeof(provider));
+		copy_action_value("kind=project_action_execute", "result=", "completed", result, sizeof(result));
+		rp_copy_text(line, sizeof(line), "host_action_project_action_execute=");
+		rp_append_text(line, sizeof(line), project);
+		rp_append_text(line, sizeof(line), ";action=");
+		rp_append_text(line, sizeof(line), action_id);
+		rp_append_text(line, sizeof(line), ";key=");
+		rp_append_text(line, sizeof(line), action_key);
+		rp_append_text(line, sizeof(line), ";provider=");
+		rp_append_text(line, sizeof(line), provider);
+		rp_append_text(line, sizeof(line), ";result=");
+		rp_append_text(line, sizeof(line), result);
+		rp_append_text(line, sizeof(line), ";kernel_context=recorded;status=ready");
+		if (!rp_append_file("rp_usableproj", line)) return 0;
+		if (!rp_append_file("rp_usablepack", line)) return 0;
+		if (!rp_append_file("rp_web_bundle", line)) return 0;
+	}
+	return 1;
+}
 
 int main(void)
 {
@@ -85,6 +179,7 @@ int main(void)
 	if (!rp_append_file("rp_web_bundle", "usable_project_page=rp_usableproj;scaffolds=3;launches=2;bundles=2;doctor=pass;kernel_assisted=1;status=ready")) return 1;
 	if (!rp_append_file("rp_review_dashboard", "subsection=usable_project;source=rp_usableproj;checks=120;bundles=2;kernel_assisted=1;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "usable_project_checks=120;scaffold_templates=3;project_launches=2;project_bundles=2;doctor_checks=10;kernel_observed=1;status=ready")) return 1;
+	if (!append_project_lifecycle_actions()) return 1;
 	if (!rp_append_file("rp_ack", "ack=usable_project;msg=lifecycle_ready;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=usable_project.required_configuration")) return 1;
 	if (!rp_append_file("rp_tool", "tool=usable_project.platform_doctor")) return 1;

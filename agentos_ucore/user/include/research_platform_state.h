@@ -391,6 +391,9 @@ static RP_UNUSED int rp_host_seed_has_platform_ops_action(void)
 	return rp_host_seed_has("kind=operations_report") ||
 	       rp_host_seed_has("kind=operations_advance_next") ||
 	       rp_host_seed_has("kind=operations_execute_next_plan") ||
+	       rp_host_seed_has("kind=project_scaffold") ||
+	       rp_host_seed_has("kind=project_launch") ||
+	       rp_host_seed_has("kind=project_action_execute") ||
 	       rp_host_seed_has("kind=project_space") ||
 	       rp_host_seed_has("kind=project_space_note") ||
 	       rp_host_seed_has("kind=project_space_action_item") ||
@@ -441,6 +444,9 @@ static RP_UNUSED int rp_host_seed_copy_platform_ops_value(const char *key, char 
 		"kind=project_provenance_graph",
 		"kind=project_delivery",
 		"kind=package_intake",
+		"kind=project_scaffold",
+		"kind=project_launch",
+		"kind=project_action_execute",
 		"kind=workbench_delivery_dashboard",
 		"kind=workbench_delivery_execute_next",
 		"kind=workbench_quality_gate",

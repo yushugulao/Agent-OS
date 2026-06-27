@@ -126,6 +126,9 @@ def main() -> int:
                 {"path": "/actions/research/workbench-plan-queue-row", "payload": {"workbench_id": "W1", "source_type": "readiness", "source_id": "literature_search", "status": "done"}},
                 {"path": "/actions/research/workbench-plan-queue-execute", "payload": {"workbench_id": "W1", "source_type": "readiness", "source_id": "literature_search", "provider_id": "template", "max_steps": "4"}},
                 {"path": "/actions/research/workbench-action-item", "payload": {"workbench_id": "W1", "title": "Review search hits", "instruction": "Check citations", "priority": "high", "status": "open"}},
+                {"path": "/actions/research/project-scaffold", "payload": {"template_id": "scaffold-template:dataset-review", "project_id": "reader-project", "title": "Reader project", "dataset_id": "dataset-reader", "library_source_id": "library-reader", "files": "9", "workspace": "workspace/reader-project"}},
+                {"path": "/actions/research/project-launch", "payload": {"project_id": "reader-project", "scaffold_id": "scaffold:reader-project:dataset-review", "workbench_id": "usable-workbench:reader-project", "run_id": "usable-run:reader-project", "provider_id": "template", "question": "Is the reader project ready?"}},
+                {"path": "/actions/research/project-action-execute", "payload": {"project_id": "reader-project", "action_id": "usable-project-action:reader-project:1", "action_key": "build_reproduction_package", "provider_id": "template", "max_steps": "5", "result": "completed"}},
                 {"path": "/actions/research/project-space", "payload": {"workbench_id": "W1", "project_id": "lab-gene-x", "query": "recovery"}},
                 {"path": "/actions/research/project-space-note", "payload": {"workbench_id": "W1", "kind": "decision", "title": "Project scope", "body": "Keep recovered evidence first."}},
                 {"path": "/actions/research/project-space-action-item", "payload": {"workbench_id": "W1", "title": "Project task", "instruction": "Prepare handoff", "priority": "high"}},
@@ -997,14 +1000,20 @@ def main() -> int:
             rp_usableproj = read_json(base + "/api/state/rp_usableproj")
             assert any("usable_project_checks=120" in line for line in rp_usableproj["lines"]), rp_usableproj
             assert any("project_launches=2" in line for line in rp_usableproj["lines"]), rp_usableproj
+            assert any("host_action_project_scaffold=reader-project;template=scaffold-template:dataset-review" in line for line in rp_usableproj["lines"]), rp_usableproj
+            assert any("host_action_project_launch=reader-project;scaffold=scaffold:reader-project:dataset-review" in line for line in rp_usableproj["lines"]), rp_usableproj
+            assert any("host_action_project_action_execute=reader-project;action=usable-project-action:reader-project:1" in line for line in rp_usableproj["lines"]), rp_usableproj
             rp_usableboot = read_json(base + "/api/state/rp_usableboot")
             assert any("platform-doctor" in line or "platform_doctor" in line for line in rp_usableboot["lines"]), rp_usableboot
             rp_usablescaf = read_json(base + "/api/state/rp_usablescaf")
             assert any("scaffold-template:protocol-reproduction" in line for line in rp_usablescaf["lines"]), rp_usablescaf
+            assert any("host_action_project_scaffold=reader-project" in line for line in rp_usablescaf["lines"]), rp_usablescaf
             rp_usablelaunch = read_json(base + "/api/state/rp_usablelaunch")
             assert any("usable-project-launch:lab-gene-x:1" in line for line in rp_usablelaunch["lines"]), rp_usablelaunch
+            assert any("host_action_project_launch=reader-project" in line for line in rp_usablelaunch["lines"]), rp_usablelaunch
             rp_usablepack = read_json(base + "/api/state/rp_usablepack")
             assert any("usable-study-protocol-reproduction-package:RUN-042" in line for line in rp_usablepack["lines"]), rp_usablepack
+            assert any("host_action_project_action_execute=reader-project" in line for line in rp_usablepack["lines"]), rp_usablepack
             rp_campaign = read_json(base + "/api/state/rp_campaign")
             assert any("campaign_checks=108" in line for line in rp_campaign["lines"]), rp_campaign
             assert any("campaign=experiment-campaign:RUN-042:align-memory-grid" in line for line in rp_campaign["lines"]), rp_campaign
@@ -1231,7 +1240,7 @@ def main() -> int:
             assert any("host_action_workbench_handoff_scope=full" in line for line in rp_api_compare["lines"]), rp_api_compare
             assert any("host_action_workbench_bundle=wb.zip" in line for line in rp_api_compare["lines"]), rp_api_compare
             rp_api_action = read_json(base + "/api/state/rp_api_action")
-            assert any("actions=57" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("actions=60" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("host_workflow_stage=/actions/host-workflow/stage-attempt" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("host_workflow_report=/actions/host-workflow/report-export" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("artifact_input=/actions/research/artifact-input" in line for line in rp_api_action["lines"]), rp_api_action
@@ -1242,8 +1251,12 @@ def main() -> int:
             assert any("workflow_portability_package=/actions/workflow-portability/package" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("workbench_quality_gate=/actions/research/workbench-quality-gate" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("project_space=/actions/research/project-space" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("project_scaffold=/actions/research/project-scaffold" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("project_launch=/actions/research/project-launch" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("project_action_execute=/actions/research/project-action-execute" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("project_release_gate=/actions/research/project-release-gate" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("project_provenance_graph=/actions/research/project-provenance-graph" in line for line in rp_api_action["lines"]), rp_api_action
+            assert any("project_lifecycle_actions=3" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("project_review_actions=8" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("research_search_export=/actions/research-search/export" in line for line in rp_api_action["lines"]), rp_api_action
             assert any("llm_relay_request=/actions/research/llm-relay-request" in line for line in rp_api_action["lines"]), rp_api_action

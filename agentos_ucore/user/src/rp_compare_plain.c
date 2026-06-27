@@ -1167,12 +1167,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "custom_runs=3");
 	ok = ok && rp_file_contains("rp_runner", "custom_agent_decisions=15");
 	ok = ok && rp_file_contains("rp_runner", "citation_plan_entries=3");
-	ok = ok && rp_file_contains("rp_web_routes", "routes=74");
+	ok = ok && rp_file_contains("rp_web_routes", "routes=77");
 	ok = ok && rp_file_contains("rp_web_routes", "get_routes=17");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research-studio");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research/workbench/{id}");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research/project/{id}/review");
-	ok = ok && rp_file_contains("rp_web_routes", "post_routes=57");
+	ok = ok && rp_file_contains("rp_web_routes", "post_routes=60");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/research/studio-launch");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/host-workflow/stage-attempt");
 	ok = ok && rp_file_contains("rp_web_routes", "action=/actions/host-workflow/report-export");
@@ -1227,7 +1227,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_pub", "result_review=rp_resrev");
 	ok = ok && rp_file_contains("rp_api_know", "semantic_index=rp_semindex");
 	ok = ok && rp_file_contains("rp_api_runtime", "runtime_env=rp_runenv");
-	ok = ok && rp_file_contains("rp_api_action", "actions=57");
+	ok = ok && rp_file_contains("rp_api_action", "actions=60");
+	ok = ok && rp_file_contains("rp_api_action", "project_scaffold=/actions/research/project-scaffold");
+	ok = ok && rp_file_contains("rp_api_action", "project_launch=/actions/research/project-launch");
+	ok = ok && rp_file_contains("rp_api_action", "project_action_execute=/actions/research/project-action-execute");
 	ok = ok && rp_file_contains("rp_api_action", "research_studio_launch=/actions/research/studio-launch");
 	ok = ok && rp_file_contains("rp_api_action", "host_workflow_stage=/actions/host-workflow/stage-attempt");
 	ok = ok && rp_file_contains("rp_api_action", "host_workflow_report=/actions/host-workflow/report-export");
@@ -1306,8 +1309,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "action_validation=passed");
 	ok = ok && rp_file_contains("rp_web_bundle", "side_effect_records=16");
 	ok = ok && rp_file_contains("rp_web_bundle", "reader_views=39");
-	ok = ok && rp_file_contains("rp_web_bundle", "reader_actions=57");
-	ok = ok && rp_file_contains("rp_web_bundle", "post_routes=57");
+	ok = ok && rp_file_contains("rp_web_bundle", "reader_actions=60");
+	ok = ok && rp_file_contains("rp_web_bundle", "post_routes=60");
 	ok = ok && rp_file_contains("rp_web_bundle", "reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle");
 	ok = ok && rp_file_contains("rp_studio", "studio=usable-research-studio");
 	ok = ok && rp_file_contains("rp_studio", "studio_session=usable-research-studio-session:W1:1");

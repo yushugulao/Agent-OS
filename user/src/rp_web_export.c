@@ -185,9 +185,9 @@ int main(void)
 
 	if (!rp_write_file("rp_web_routes",
 			   "service=host-web-ui\n"
-			   "routes=74\n"
+			   "routes=77\n"
 			   "get_routes=17\n"
-			   "post_routes=57\n"
+			   "post_routes=60\n"
 			   "route=/;payload=rp_api_home;status=ready\n"
 			   "route=/run/RUN-042;payload=rp_api_run;status=ready\n"
 			   "route=/research-studio;payload=rp_studio;status=ready\n"
@@ -241,6 +241,9 @@ int main(void)
 			   "action=/actions/research/workbench-plan-queue-row;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/research/workbench-plan-queue-execute;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/research/workbench-action-item;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/project-scaffold;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/project-launch;method=POST;payload=rp_api_action;status=ready\n"
+			   "action=/actions/research/project-action-execute;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/research/project-space;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/research/project-space-note;method=POST;payload=rp_api_action;status=ready\n"
 			   "action=/actions/research/project-space-action-item;method=POST;payload=rp_api_action;status=ready\n"
@@ -761,7 +764,7 @@ int main(void)
 	}
 	if (!rp_write_file("rp_api_action",
 			   "api=actions\n"
-			   "actions=57\n"
+			   "actions=60\n"
 			   "host_workflow_run=/actions/host-workflow/run\n"
 			   "host_workflow_export=/actions/host-workflow/export\n"
 			   "host_workflow_stage=/actions/host-workflow/stage-attempt\n"
@@ -802,6 +805,9 @@ int main(void)
 			   "workbench_plan_queue_row=/actions/research/workbench-plan-queue-row\n"
 			   "workbench_plan_queue_execute=/actions/research/workbench-plan-queue-execute\n"
 			   "workbench_action_item=/actions/research/workbench-action-item\n"
+			   "project_scaffold=/actions/research/project-scaffold\n"
+			   "project_launch=/actions/research/project-launch\n"
+			   "project_action_execute=/actions/research/project-action-execute\n"
 			   "project_space=/actions/research/project-space\n"
 			   "project_space_note=/actions/research/project-space-note\n"
 			   "project_space_action_item=/actions/research/project-space-action-item\n"
@@ -836,6 +842,7 @@ int main(void)
 			   "artifact_actions=5\n"
 			   "plan_queue_actions=2\n"
 			   "action_item_actions=1\n"
+			   "project_lifecycle_actions=3\n"
 			   "workbench_advance=1\n"
 			   "notebook_download=1\n"
 			   "bundle_download=1\n"
@@ -1069,9 +1076,9 @@ int main(void)
 	}
 	if (!rp_write_file("rp_web_bundle",
 			   "bundle=host-web-ui\n"
-			   "routes=74\n"
+			   "routes=77\n"
 			   "get_routes=17\n"
-			   "post_routes=57\n"
+			   "post_routes=60\n"
 			   "api_payloads=14\n"
 			   "action_payloads=1\n"
 			   "action_state_records=12\n"
@@ -1128,7 +1135,7 @@ int main(void)
 			   "statistical_design_page=rp_stdesign;designs=1;power=underpowered;randomization=balanced;status=ready\n"
 			   "model_registry_page=rp_modelreg;models=1;versions=1;evaluations=1;deployments=1;status=ready\n"
 			   "release_dossier_page=rp_reldossier;sections=7;decision=ready_for_review;status=ready\n"
-			   "reader_actions=57\n"
+			   "reader_actions=60\n"
 			   "reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes\n"
 			   "reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle\n"
 			   "reader_required_sections=routes,payloads,actions,live_update,downloads,compare\n"
@@ -1566,6 +1573,6 @@ int main(void)
 	if (!rp_append_status("actionio=ready")) return 1;
 	if (!rp_append_status("usable_research=ready")) return 1;
 	if (!rp_append_status("action_exports=ready")) return 1;
-	printf("rp_web_export: routes=74 api_payloads=14 actions=57 bundle=ready status=ready\n");
+	printf("rp_web_export: routes=77 api_payloads=14 actions=60 bundle=ready status=ready\n");
 	return 0;
 }

@@ -155,6 +155,12 @@ def action_kind(path: str) -> str:
         return "operations_advance_next"
     if path.endswith("/research/operations-execute-next-plan"):
         return "operations_execute_next_plan"
+    if path.endswith("/research/project-scaffold"):
+        return "project_scaffold"
+    if path.endswith("/research/project-launch"):
+        return "project_launch"
+    if path.endswith("/research/project-action-execute"):
+        return "project_action_execute"
     if path.endswith("/research/project-space"):
         return "project_space"
     if path.endswith("/research/project-space-note"):
@@ -294,6 +300,12 @@ def action_plan_line(record: dict[str, object]) -> str:
         "workflow_portability_package",
     }:
         return f"plan={sequence};kind={kind};prepare=rp_wfio;execute=rp_orch;collect=rp_compare_plain;status=ready"
+    if kind in {
+        "project_scaffold",
+        "project_launch",
+        "project_action_execute",
+    }:
+        return f"plan={sequence};kind={kind};prepare=rp_usableproj;execute=rp_orch;collect=rp_usablelaunch;status=ready"
     return f"plan={sequence};kind={kind};prepare=rp_host_action_queue;execute=rp_orch;collect=rp_web_bundle;status=ready"
 
 
@@ -474,6 +486,9 @@ def compact_seed_text(text: str) -> str:
         "operations_report": {"format"},
         "operations_advance_next": {"review_decision"},
         "operations_execute_next_plan": set(),
+        "project_scaffold": {"template_id", "project_id", "title", "dataset_id", "library_source_id", "files", "workspace"},
+        "project_launch": {"project_id", "scaffold_id", "workbench_id", "run_id", "provider_id", "question"},
+        "project_action_execute": {"project_id", "action_id", "action_key", "provider_id", "max_steps", "result"},
         "project_space": {"workbench_id", "project_id", "query"},
         "project_space_note": {"workbench_id", "kind", "title"},
         "project_space_action_item": {"workbench_id", "title", "status"},

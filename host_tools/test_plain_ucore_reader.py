@@ -66,7 +66,7 @@ reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
 reader_views=39
-reader_actions=57
+reader_actions=60
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
 reader_required_sections=routes,payloads,actions,live_update,downloads,compare
@@ -102,7 +102,7 @@ provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=ready
 provenance_queries_page=rp_prov_query;specs=3;executions=3;packets=1;status=ready
 status=ready
 """,
-    "rp_web_routes": "routes=74\nget_routes=17\npost_routes=57\nroute=/research-studio;payload=rp_studio;status=ready\nroute=/research/project/{id}/review;payload=rp_web_bundle;status=ready\naction=/actions/research/studio-launch;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-release-gate;method=POST;payload=rp_api_action;status=ready\nstatus=ready\n",
+    "rp_web_routes": "routes=77\nget_routes=17\npost_routes=60\nroute=/research-studio;payload=rp_studio;status=ready\nroute=/research/project/{id}/review;payload=rp_web_bundle;status=ready\naction=/actions/research/studio-launch;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-scaffold;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-launch;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-action-execute;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-release-gate;method=POST;payload=rp_api_action;status=ready\nstatus=ready\n",
     "rp_api_home": "api=home\nreader_contract=rp_web_bundle\nstatus=ready\n",
     "rp_api_run": "api=run-detail\nreader_contract=rp_web_bundle\nreader_view=run-detail\nstatus=ready\n",
     "rp_api_agents": "api=agent-detail\nagents=7\nstatus=ready\n",
@@ -115,7 +115,7 @@ status=ready
     "rp_api_pub": "api=publication\nresult_review=rp_resrev\npublication_workflow=rp_publication;targets=2;submissions=2;reviews=2;responses=2;status=ready\nstatus=ready\n",
     "rp_api_know": "api=knowledge\nsemantic_index=rp_semindex\nstatus=ready\n",
     "rp_api_runtime": "api=runtime\nruntime_env=rp_runenv\nstatus=ready\n",
-    "rp_api_action": "api=actions\nreader_contract=rp_web_bundle\nactions=57\nresearch_studio_launch=/actions/research/studio-launch\nproject_release_gate=/actions/research/project-release-gate\nproject_review_actions=8\nstatus=ready\n",
+    "rp_api_action": "api=actions\nreader_contract=rp_web_bundle\nactions=60\nresearch_studio_launch=/actions/research/studio-launch\nproject_scaffold=/actions/research/project-scaffold\nproject_launch=/actions/research/project-launch\nproject_action_execute=/actions/research/project-action-execute\nproject_release_gate=/actions/research/project-release-gate\nproject_lifecycle_actions=3\nproject_review_actions=8\nstatus=ready\n",
     "rp_studio": (
         "studio=usable-research-studio\n"
         "sessions=1\n"
