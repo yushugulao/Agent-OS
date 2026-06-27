@@ -1189,6 +1189,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
     api_catalog_items = [
         ("Host API Routes", metric_value(state, [("rp_api_catalog", "host_api_routes")]), "rp_api_catalog"),
         ("Host Actions", metric_value(state, [("rp_api_catalog", "host_action_routes"), ("rp_api_action", "actions")]), "rp_api_catalog"),
+        ("Host Pages", metric_value(state, [("rp_api_catalog", "host_page_routes"), ("rp_web_routes", "host_page_routes")]), "rp_api_catalog"),
+        ("Reader GET Routes", metric_value(state, [("rp_api_catalog", "ucore_get_routes"), ("rp_web_routes", "get_routes")]), "rp_api_catalog"),
         ("Grouped Routes", metric_value(state, [("rp_api_catalog", "api_grouped_routes")]), "rp_api_catalog"),
         ("API Groups", metric_value(state, [("rp_api_catalog", "api_group_count")]), "rp_api_catalog"),
         ("Reader Payloads", metric_value(state, [("rp_api_catalog", "reader_api_payloads"), ("rp_web_bundle", "api_payloads")]), "rp_api_catalog"),

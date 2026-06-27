@@ -1167,8 +1167,14 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "custom_runs=3");
 	ok = ok && rp_file_contains("rp_runner", "custom_agent_decisions=15");
 	ok = ok && rp_file_contains("rp_runner", "citation_plan_entries=3");
-	ok = ok && rp_file_contains("rp_web_routes", "routes=141");
-	ok = ok && rp_file_contains("rp_web_routes", "get_routes=18");
+	ok = ok && rp_file_contains("rp_web_routes", "routes=152");
+	ok = ok && rp_file_contains("rp_web_routes", "get_routes=29");
+	ok = ok && rp_file_contains("rp_web_routes", "host_page_routes=15");
+	ok = ok && rp_file_contains("rp_web_routes", "ucore_page_routes=15");
+	ok = ok && rp_file_contains("rp_web_routes", "route=/quickstart");
+	ok = ok && rp_file_contains("rp_web_routes", "route=/research-ops");
+	ok = ok && rp_file_contains("rp_web_routes", "route=/workbench-plan-queue");
+	ok = ok && rp_file_contains("rp_web_routes", "route=/review-inbox");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research-studio");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research/workbench/{id}");
 	ok = ok && rp_file_contains("rp_web_routes", "route=/research/project/{id}/review");
@@ -1254,6 +1260,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_action", "side_effect_records=16");
 	ok = ok && rp_file_contains("rp_api_catalog", "host_api_routes=214");
 	ok = ok && rp_file_contains("rp_api_catalog", "host_action_routes=95");
+	ok = ok && rp_file_contains("rp_api_catalog", "host_page_routes=15");
 	ok = ok && rp_file_contains("rp_api_catalog", "api_group_count=14");
 	ok = ok && rp_file_contains("rp_api_catalog", "api_grouped_routes=214");
 	ok = ok && rp_file_contains("rp_api_catalog", "usable_research_api_routes=77");

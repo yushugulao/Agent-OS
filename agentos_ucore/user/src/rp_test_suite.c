@@ -1305,8 +1305,14 @@ int main(void)
 	ok = ok && require_file_token("rp_ui_compare", "coherence_checks=9");
 	ok = ok && require_file_token("rp_ui_compare", "relay_protocol_files=5");
 	ok = ok && require_file_token("rp_ui_compare", "notebook_exports=2");
-	ok = ok && require_file_token("rp_web_routes", "routes=141");
-	ok = ok && require_file_token("rp_web_routes", "get_routes=18");
+	ok = ok && require_file_token("rp_web_routes", "routes=152");
+	ok = ok && require_file_token("rp_web_routes", "get_routes=29");
+	ok = ok && require_file_token("rp_web_routes", "host_page_routes=15");
+	ok = ok && require_file_token("rp_web_routes", "ucore_page_routes=15");
+	ok = ok && require_file_token("rp_web_routes", "route=/quickstart");
+	ok = ok && require_file_token("rp_web_routes", "route=/research-ops");
+	ok = ok && require_file_token("rp_web_routes", "route=/workbench-plan-queue");
+	ok = ok && require_file_token("rp_web_routes", "route=/review-inbox");
 	ok = ok && require_file_token("rp_web_routes", "route=/research/workbench/{id}");
 	ok = ok && require_file_token("rp_web_routes", "route=/research/project/{id}/review");
 	ok = ok && require_file_token("rp_web_routes", "route=/api-catalog");
@@ -1452,6 +1458,7 @@ int main(void)
 	ok = ok && require_file_token("rp_api_action", "export_bundle=rp_package");
 	ok = ok && require_file_token("rp_api_catalog", "host_api_routes=214");
 	ok = ok && require_file_token("rp_api_catalog", "host_action_routes=95");
+	ok = ok && require_file_token("rp_api_catalog", "host_page_routes=15");
 	ok = ok && require_file_token("rp_api_catalog", "api_group_count=14");
 	ok = ok && require_file_token("rp_api_catalog", "api_grouped_routes=214");
 	ok = ok && require_file_token("rp_api_catalog", "usable_research_api_routes=77");

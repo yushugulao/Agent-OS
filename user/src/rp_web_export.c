@@ -185,15 +185,28 @@ int main(void)
 
 	if (!rp_write_file("rp_web_routes",
 			   "service=host-web-ui\n"
-			   "routes=141\n"
-			   "get_routes=18\n"
+			   "routes=152\n"
+			   "get_routes=29\n"
 			   "post_routes=123\n"
+			   "host_page_routes=15\n"
+			   "ucore_page_routes=15\n"
 			   "route=/;payload=rp_api_home;status=ready\n"
 			   "route=/run/RUN-042;payload=rp_api_run;status=ready\n"
+			   "route=/quickstart;payload=rp_startup;status=ready\n"
+			   "route=/research;payload=rp_usable;status=ready\n"
 			   "route=/research-studio;payload=rp_studio;status=ready\n"
+			   "route=/research-compare;payload=rp_agentcmp;status=ready\n"
+			   "route=/research-ops;payload=rp_opsboard;status=ready\n"
+			   "route=/research-projects;payload=rp_usableproj;status=ready\n"
+			   "route=/research-search;payload=rp_knowledge;status=ready\n"
 			   "route=/research/{run_id};payload=rp_uresrun;status=ready\n"
 			   "route=/research/workbench/{id};payload=rp_runner;status=ready\n"
 			   "route=/research/project/{id}/review;payload=rp_web_bundle;status=ready\n"
+			   "route=/review-inbox;payload=rp_reviewboard;status=ready\n"
+			   "route=/settings;payload=rp_runenv;status=ready\n"
+			   "route=/workbench-delivery;payload=rp_package;status=ready\n"
+			   "route=/workbench-plan-queue;payload=rp_opsboard;status=ready\n"
+			   "route=/workbench-queue;payload=rp_runner;status=ready\n"
 			   "route=/agents;payload=rp_api_agents;status=ready\n"
 			   "route=/evidence;payload=rp_api_evidence;status=ready\n"
 			   "route=/compare;payload=rp_api_compare;status=ready\n"
@@ -992,7 +1005,8 @@ int main(void)
 			   "api=catalog\n"
 			   "host_api_routes=214\n"
 			   "host_action_routes=95\n"
-			   "ucore_get_routes=18\n"
+			   "host_page_routes=15\n"
+			   "ucore_get_routes=29\n"
 			   "ucore_post_routes=123\n"
 			   "reader_api_payloads=15\n"
 			   "reader_views=40\n"
@@ -1280,9 +1294,11 @@ int main(void)
 	}
 	if (!rp_write_file("rp_web_bundle",
 			   "bundle=host-web-ui\n"
-			   "routes=141\n"
-			   "get_routes=18\n"
+			   "routes=152\n"
+			   "get_routes=29\n"
 			   "post_routes=123\n"
+			   "host_page_routes=15\n"
+			   "ucore_page_routes=15\n"
 			   "api_payloads=15\n"
 			   "action_payloads=1\n"
 			   "action_state_records=12\n"
@@ -1777,6 +1793,6 @@ int main(void)
 	if (!rp_append_status("actionio=ready")) return 1;
 	if (!rp_append_status("usable_research=ready")) return 1;
 	if (!rp_append_status("action_exports=ready")) return 1;
-	printf("rp_web_export: routes=141 api_payloads=15 actions=123 bundle=ready status=ready\n");
+	printf("rp_web_export: routes=152 api_payloads=15 actions=123 bundle=ready status=ready\n");
 	return 0;
 }

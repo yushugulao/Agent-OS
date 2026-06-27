@@ -1302,6 +1302,8 @@ def main() -> int:
             assert any("llm_relay_request=/actions/research/llm-relay-request" in line for line in rp_api_action["lines"]), rp_api_action
             rp_api_catalog = read_json(base + "/api/state/rp_api_catalog")
             assert any("host_api_routes=214" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            assert any("host_page_routes=15" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            assert any("ucore_get_routes=29" in line for line in rp_api_catalog["lines"]), rp_api_catalog
             assert any("api_group_count=14" in line for line in rp_api_catalog["lines"]), rp_api_catalog
             assert any("api_grouped_routes=214" in line for line in rp_api_catalog["lines"]), rp_api_catalog
             assert any("usable_research_api_routes=77" in line for line in rp_api_catalog["lines"]), rp_api_catalog
@@ -1319,12 +1321,18 @@ def main() -> int:
             api_catalog_html = read_text(base + "/api-catalog.html")
             assert "API Catalog" in api_catalog_html
             assert "Host API Routes" in api_catalog_html
+            assert "Host Pages" in api_catalog_html
+            assert "Reader GET Routes" in api_catalog_html
             assert "Grouped Routes" in api_catalog_html
             assert "/api/analysis-results" in api_catalog_html
             assert "/api/usable-research-workbench-file-catalog" in api_catalog_html
             rp_web_routes = read_json(base + "/api/state/rp_web_routes")
-            assert any("routes=141" in line for line in rp_web_routes["lines"]), rp_web_routes
-            assert any("get_routes=18" in line for line in rp_web_routes["lines"]), rp_web_routes
+            assert any("routes=152" in line for line in rp_web_routes["lines"]), rp_web_routes
+            assert any("get_routes=29" in line for line in rp_web_routes["lines"]), rp_web_routes
+            assert any("host_page_routes=15" in line for line in rp_web_routes["lines"]), rp_web_routes
+            assert any("route=/quickstart" in line for line in rp_web_routes["lines"]), rp_web_routes
+            assert any("route=/research-ops" in line for line in rp_web_routes["lines"]), rp_web_routes
+            assert any("route=/workbench-plan-queue" in line for line in rp_web_routes["lines"]), rp_web_routes
             assert any("route=/api-catalog" in line for line in rp_web_routes["lines"]), rp_web_routes
             rp_llm_req = read_json(base + "/api/state/rp_llm_req")
             assert any("host_llm_request_id=llm-q1" in line for line in rp_llm_req["lines"]), rp_llm_req
