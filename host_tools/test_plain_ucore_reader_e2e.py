@@ -641,7 +641,7 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=920" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=934" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("tool_events=138" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -667,6 +667,7 @@ def main() -> int:
             assert any("llm_transcript_checks=3" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("workbench_delivery_checks=15" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("research_portfolio_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("execution_scale_checks=14" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("knowledge_index=search_documents:1385" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_nodes:406" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("usable_artifacts:429" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -675,6 +676,11 @@ def main() -> int:
             assert any("deliveries=6" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("research_portfolio=sources:42" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("project_handoff_audits:30" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("agentcompare_execution_scale=reports:3" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("results:15" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("host_runtime_scale=workflow_runs:10" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("stage_runs:70" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("content_graph_scale=content_objects:145" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_query = read_json(base + "/api/state/rp_query")
             assert any("knowledge_index=search_documents:1385" in line for line in rp_query["lines"]), rp_query
             assert any("provenance_nodes:406" in line for line in rp_query["lines"]), rp_query
@@ -707,7 +713,7 @@ def main() -> int:
             assert any("review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line and "backend_review=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_consistency = read_json(base + "/api/state/rp_consistency")
-            assert any("checks=304" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("checks=318" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("runtime_assurance_checks=24" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("research_ops_checks=28" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("semantic_graph_checks=6" in line for line in rp_consistency["lines"]), rp_consistency
@@ -724,12 +730,20 @@ def main() -> int:
             assert any("llm_bridge_responses=30" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("workbench_delivery_checks=15" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("research_portfolio_checks=16" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("execution_scale_checks=14" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("usable_research_workbenches=5" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("usable_research_deliveries=6" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("usable_research_sources=42" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("usable_research_datasets=3" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("usable_research_platform_doctor_reports=10" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("usable_research_project_handoff_audits=30" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("host_workflow_runs=10" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("host_workflow_stage_runs=70" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("host_workflow_cache=6" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("host_agent_messages=70" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("agentcompare_reports=3" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("agentcompare_results=15" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("content_objects=145" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("usable_research_project_action_plans=15" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("usable_research_project_runbooks=15" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("search_documents=1385" in line for line in rp_consistency["lines"]), rp_consistency

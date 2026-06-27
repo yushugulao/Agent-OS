@@ -170,7 +170,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=304\n"
+			   "consistency_checks=318\n"
 			   "knowledge_index_checks=22\n"
 			   "llm_transcript_checks=3\n"
 			   "llm_bridge_transcripts=90\n"
@@ -317,6 +317,17 @@ int main(void)
 			   "usable_research_project_run_comparisons=15\n"
 			   "usable_research_project_reproducibility_audits=15\n"
 			   "usable_research_project_snapshot_comparisons=15\n"
+			   "execution_scale_checks=14\n"
+			   "host_workflow_runs=10\n"
+			   "host_workflow_stage_runs=70\n"
+			   "host_workflow_cache=6\n"
+			   "host_agent_messages=70\n"
+			   "host_agent_decisions=70\n"
+			   "agentcompare_reports=3\n"
+			   "agentcompare_results=15\n"
+			   "agentcompare_profiles=3\n"
+			   "content_objects=145\n"
+			   "object_references=145\n"
 			   "study_protocol_reproduction_checks=5\n"
 			   "project_bundle_cache=ready\n"
 			   "research_search_saved=2\n"
@@ -395,7 +406,7 @@ int main(void)
 			   "workflow_invocations=1\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "consistency_checks=304\n"
+			   "consistency_checks=318\n"
 			   "knowledge_index_checks=22\n"
 			   "llm_transcript_checks=3\n"
 			   "llm_bridge_transcripts=90\n"
@@ -540,6 +551,17 @@ int main(void)
 			   "usable_research_project_run_comparisons=15\n"
 			   "usable_research_project_reproducibility_audits=15\n"
 			   "usable_research_project_snapshot_comparisons=15\n"
+			   "execution_scale_checks=14\n"
+			   "host_workflow_runs=10\n"
+			   "host_workflow_stage_runs=70\n"
+			   "host_workflow_cache=6\n"
+			   "host_agent_messages=70\n"
+			   "host_agent_decisions=70\n"
+			   "agentcompare_reports=3\n"
+			   "agentcompare_results=15\n"
+			   "agentcompare_profiles=3\n"
+			   "content_objects=145\n"
+			   "object_references=145\n"
 			   "study_protocol_reproduction_checks=5\n"
 			   "project_bundle_cache=ready\n"
 			   "claim_records=8\n"
@@ -627,6 +649,6 @@ int main(void)
 	if (!rp_append_status("telemetry=ready")) return 1;
 	if (!rp_append_status("agentcmp=ready")) return 1;
 	if (!rp_append_status("health=ready")) return 1;
-	printf("rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 delta_items=20 dynamic=4 status=ready\n");
+	printf("rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 delta_items=20 dynamic=4 status=ready\n");
 	return 0;
 }
