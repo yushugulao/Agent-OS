@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=37
+reader_views=38
 reader_actions=57
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
@@ -88,6 +88,7 @@ calculations_page=rp_calculation;jobs=1;retrieved=3;parser_results=1;status=read
 real_task_page=rp_realtask;dataset=palmer-penguins;rows=344;answer_audit=pass;status=ready
 analysis_results_page=rp_analysisres;runs=2;tables=2;statistics=2;figures=2;status=ready
 decision_support_page=rp_decsupport;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;status=ready
+usable_research_page=rp_usable;templates=3;datasets=3;library_sources=3;dag_stages=9;queues=2;status=ready
 experiment_campaigns_page=rp_campaign;campaigns=1;trials=4;best_trial=04;status=ready
 statistical_design_page=rp_stdesign;designs=1;power=underpowered;randomization=balanced;status=ready
 model_registry_page=rp_modelreg;models=1;versions=1;evaluations=1;deployments=1;status=ready
@@ -275,6 +276,7 @@ status=ready
         "model_registry=rp_modelreg;version=v1;evaluation=passed;deployment=ready;status=ready\n"
         "analysis_results=rp_analysisres;plans=1;runs=2;tables=2;statistics=2;figures=2;interpretations=2;status=ready\n"
         "decision_support=rp_decsupport;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;status=ready\n"
+        "usable_research=rp_usable;templates=3;datasets=3;library_sources=3;dag_stages=9;deliverables=8;status=ready\n"
     ),
     "rp_nbexec": "host_action_notebook_format=ipynb\nhost_action_notebook_workbench_docs=ready\nstatus=ready\n",
     "rp_uresrun": "host_action_workbench_outputs=rp_runner,rp_revision,rp_package\nhost_action_workbench_manifest=delivery-manifest.json\nhost_action_workbench_bundle=workbench-bundle.zip\nstatus=ready\n",
@@ -288,8 +290,8 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=2580\n"
-        "tool_events=308\n"
+        "test_cases=2680\n"
+        "tool_events=318\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=4;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
@@ -306,6 +308,7 @@ status=ready
         "real_task_checks=96;dataset=palmer-penguins;rows=344;numeric_fields=5;answer_audit=pass;bundle=ready;status=ready\n"
         "analysis_results_checks=96;plans=1;runs=2;tables=2;statistics=2;figures=2;interpretations=2;charts=4;agentos_replacements=4;status=ready\n"
         "decision_support_checks=80;options=3;criteria=5;scores=15;review_packets=1;selected=agentos_ucore_hybrid;agentos_replacements=4;status=ready\n"
+        "usable_research_checks=100;templates=3;datasets=3;library_sources=3;dag_stages=9;plan_queue=4;action_queue=5;handoffs=3;deliverables=8;status=ready\n"
         "experiment_campaign_checks=108;campaigns=1;trials=4;best_trial=04;result_review=accept_candidate;status=ready\n"
         "statistical_design_checks=120;designs=1;power=underpowered;randomization=balanced;blinding=ok;stat_result=approved_with_sample_size_note;status=ready\n"
         "model_registry_service_checks=96;models=1;versions=1;evaluations=1;deployments=1;serving_checks=1;agentos_replacements=4;status=ready\n"
@@ -656,6 +659,43 @@ status=ready
         "option_scores=userland_only:5.35,agentos_ucore_hybrid:8.15,full_kernel_llm_path:4.55\n"
         "evidence=rp_backend_exec,rp_study,rp_llm_packets,rp_package,rp_reldossier\n"
         "status=ready\n"
+    ),
+    "rp_usable": (
+        "service=usable-research\n"
+        "usable_research_checks=100\n"
+        "entry=research-question-to-review-package\n"
+        "project=usable-project:lab-gene-x-final-demo\n"
+        "run_id=usable-run:RUN-900\n"
+        "templates=3\n"
+        "datasets=3\n"
+        "library_sources=3\n"
+        "dag_stages=9\n"
+        "plan_queue_rows=4\n"
+        "action_queue_rows=5\n"
+        "handoff_packages=3\n"
+        "status=ready\n"
+    ),
+    "rp_usabletpl": (
+        "templates=3\n"
+        "template=usable-template:workspace-900;name=Reusable response comparison;question=Compare recovered workflow evidence and prepare a reviewer package.;tags=reusable,workflow,agent;status=ready\n"
+        "selected_template=usable-template:workspace-900\n"
+    ),
+    "rp_usableds": (
+        "datasets=3\n"
+        "dataset=usable-dataset:penguins;rows=344;columns=8;tags=real-task,morphometrics;quality=accepted;preview=ready;status=ready\n"
+    ),
+    "rp_usablelib": (
+        "library_sources=3\n"
+        "source=usable-source:library2026:1;title=Agent workflow provenance;kind=reference;tags=agent,provenance;status=ready\n"
+    ),
+    "rp_usabledag": (
+        "dag=usable-research-dag\n"
+        "stage=package;order=9;depends=review;artifact=rp_package;agent=orchestrator;status=ready\n"
+    ),
+    "rp_usableops": (
+        "operations=usable-research-workbench\n"
+        "queue=workbench_action;rows=5;ready=2;needs_action=2;optional=1;status=ready\n"
+        "handoff=usable-handoff:RUN-900:reviewer;files=8;required_missing=0;decision=ready;status=ready\n"
     ),
     "rp_campaign": (
         "service=experiment-campaigns\n"
@@ -1258,7 +1298,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 37, summary
+        assert summary["pages"] == 38, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -1277,6 +1317,7 @@ def main() -> int:
         assert (out_dir / "real-task.html").exists()
         assert (out_dir / "analysis-results.html").exists()
         assert (out_dir / "decision-support.html").exists()
+        assert (out_dir / "usable-research.html").exists()
         assert (out_dir / "experiment-campaigns.html").exists()
         assert (out_dir / "statistical-design.html").exists()
         assert (out_dir / "model-registry.html").exists()
@@ -1521,6 +1562,17 @@ def main() -> int:
         assert "Review Packet" in decision_support_html
         assert "agentos_ucore_hybrid" in decision_support_html
         assert "decision-review-packet:agentos-final-demo-backend" in decision_support_html
+        usable_research_html = (out_dir / "usable-research.html").read_text(encoding="utf-8")
+        assert "Usable Research" in usable_research_html
+        assert "Research Templates" in usable_research_html
+        assert "Reusable Datasets" in usable_research_html
+        assert "Library Sources" in usable_research_html
+        assert "Research DAG" in usable_research_html
+        assert "Workbench Queues" in usable_research_html
+        assert "usable-template:workspace-900" in usable_research_html
+        assert "usable-dataset:penguins" in usable_research_html
+        assert "usable-source:library2026:1" in usable_research_html
+        assert "usable-handoff:RUN-900:reviewer" in usable_research_html
         campaign_html = (out_dir / "experiment-campaigns.html").read_text(encoding="utf-8")
         assert "Experiment Campaigns" in campaign_html
         assert "align-memory-grid" in campaign_html

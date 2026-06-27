@@ -40,6 +40,7 @@ PAGE_SPECS = [
     ("real-task.html", "Real Task", "rp_realtask", ["rp_realdata", "rp_realreport", "rp_realbundle", "rp_agentcmp", "rp_review_dashboard"]),
     ("analysis-results.html", "Analysis Results", "rp_analysisres", ["rp_anplan", "rp_anrun", "rp_resulttbl", "rp_statres", "rp_anfig", "rp_interp", "rp_agentcmp", "rp_review_dashboard"]),
     ("decision-support.html", "Decision Support", "rp_decsupport", ["rp_decopt", "rp_deccrit", "rp_decscore", "rp_decpacket", "rp_agentcmp", "rp_review_dashboard"]),
+    ("usable-research.html", "Usable Research", "rp_usable", ["rp_usabletpl", "rp_usableds", "rp_usablelib", "rp_usabledag", "rp_usableops", "rp_agentcmp", "rp_review_dashboard"]),
     ("experiment-campaigns.html", "Experiment Campaigns", "rp_campaign", ["rp_trials", "rp_camp_rank", "rp_resreview", "rp_agentcmp", "rp_review_dashboard"]),
     ("statistical-design.html", "Statistical Design", "rp_stdesign", ["rp_power", "rp_random", "rp_blind", "rp_streview", "rp_agentcmp", "rp_review_dashboard"]),
     ("model-registry.html", "Model Registry", "rp_modelreg", ["rp_modelver", "rp_modeleval", "rp_modeldep", "rp_modelserve", "rp_agentcmp", "rp_review_dashboard"]),
@@ -1160,6 +1161,7 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Training Compliance Checks", metric_value(state, [("rp_agentcmp", "training_compliance_checks"), ("rp_traincomp", "training_compliance_checks")]), "rp_traincomp"),
         ("Analysis Results Checks", metric_value(state, [("rp_agentcmp", "analysis_results_checks"), ("rp_analysisres", "analysis_results_checks")]), "rp_analysisres"),
         ("Decision Support Checks", metric_value(state, [("rp_agentcmp", "decision_support_checks"), ("rp_decsupport", "decision_support_checks")]), "rp_decsupport"),
+        ("Usable Research Checks", metric_value(state, [("rp_agentcmp", "usable_research_checks"), ("rp_usable", "usable_research_checks")]), "rp_usable"),
         ("Mature Capability", metric_value(state, [("rp_agentcmp", "mature_capability_checks"), ("rp_mature", "capability_checks")]), "rp_mature"),
     ]
     llm_items = [
@@ -1303,6 +1305,17 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Hybrid Score", metric_value(state, [("rp_decsupport", "weighted_score_agentos_ucore_hybrid")]), "rp_decsupport"),
         ("Status", metric_value(state, [("rp_decsupport", "status")]), "rp_decsupport"),
     ]
+    usable_research_items = [
+        ("Checks", metric_value(state, [("rp_usable", "usable_research_checks"), ("rp_agentcmp", "usable_research_checks")]), "rp_usable"),
+        ("Templates", metric_value(state, [("rp_usable", "templates"), ("rp_usabletpl", "templates")]), "rp_usabletpl"),
+        ("Datasets", metric_value(state, [("rp_usable", "datasets"), ("rp_usableds", "datasets")]), "rp_usableds"),
+        ("Library Sources", metric_value(state, [("rp_usable", "library_sources"), ("rp_usablelib", "library_sources")]), "rp_usablelib"),
+        ("DAG Stages", metric_value(state, [("rp_usable", "dag_stages")]), "rp_usabledag"),
+        ("Plan Queue", metric_value(state, [("rp_usable", "plan_queue_rows"), ("rp_agentcmp", "plan_queue")]), "rp_usableops"),
+        ("Action Queue", metric_value(state, [("rp_usable", "action_queue_rows"), ("rp_agentcmp", "action_queue")]), "rp_usableops"),
+        ("Handoffs", metric_value(state, [("rp_usable", "handoff_packages"), ("rp_agentcmp", "handoffs")]), "rp_usableops"),
+        ("Status", metric_value(state, [("rp_usable", "status")]), "rp_usable"),
+    ]
     mature_items = [
         ("Profiles", metric_value(state, [("rp_mature", "reference_platforms"), ("rp_mature_refs", "profiles")]), "rp_mature"),
         ("Mappings", metric_value(state, [("rp_mature", "capability_mappings"), ("rp_mature_map", "mappings")]), "rp_mature"),
@@ -1371,6 +1384,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Analysis Results", analysis_results_items)
     if file_name == "decision-support.html":
         return render_summary_panel("Decision Support", decision_support_items)
+    if file_name == "usable-research.html":
+        return render_summary_panel("Usable Research", usable_research_items)
     if file_name == "mature.html":
         return render_summary_panel("Mature Platform Mapping", mature_items)
     if file_name == "provenance.html":
@@ -1412,6 +1427,7 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Real Task Checks", metric_value(state, [("rp_agentcmp", "real_task_checks"), ("rp_realtask", "real_task_checks")]), "rp_realtask"),
         ("Analysis Results Checks", metric_value(state, [("rp_agentcmp", "analysis_results_checks"), ("rp_analysisres", "analysis_results_checks")]), "rp_analysisres"),
         ("Decision Support Checks", metric_value(state, [("rp_agentcmp", "decision_support_checks"), ("rp_decsupport", "decision_support_checks")]), "rp_decsupport"),
+        ("Usable Research Checks", metric_value(state, [("rp_agentcmp", "usable_research_checks"), ("rp_usable", "usable_research_checks")]), "rp_usable"),
         ("Experiment Campaign Checks", metric_value(state, [("rp_agentcmp", "experiment_campaign_checks"), ("rp_campaign", "campaign_checks")]), "rp_campaign"),
         ("Statistical Design Checks", metric_value(state, [("rp_agentcmp", "statistical_design_checks"), ("rp_stdesign", "statistical_design_checks")]), "rp_stdesign"),
         ("Model Registry Checks", metric_value(state, [("rp_agentcmp", "model_registry_service_checks"), ("rp_modelreg", "model_registry_service_checks")]), "rp_modelreg"),
@@ -1465,6 +1481,16 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Evidence", metric_value(state, [("rp_decpacket", "evidence"), ("rp_decsupport", "evidence_sources")]), "rp_decpacket"),
         ("Review Dashboard", metric_value(state, [("rp_review_dashboard", "subsection")]), "rp_review_dashboard"),
         ("Package", metric_value(state, [("rp_package", "decision_support")]), "rp_package"),
+    ]
+    usable_research_detail_items = [
+        ("Entry", metric_value(state, [("rp_usable", "entry")]), "rp_usable"),
+        ("Project", metric_value(state, [("rp_usable", "project")]), "rp_usable"),
+        ("Run", metric_value(state, [("rp_usable", "run_id")]), "rp_usable"),
+        ("Selected Template", metric_value(state, [("rp_usabletpl", "selected_template")]), "rp_usabletpl"),
+        ("Next Action", metric_value(state, [("rp_usable", "next_action")]), "rp_usable"),
+        ("Package", metric_value(state, [("rp_package", "usable_research")]), "rp_package"),
+        ("Reader Page", metric_value(state, [("rp_web_bundle", "usable_research_page")]), "rp_web_bundle"),
+        ("Review Dashboard", metric_value(state, [("rp_review_dashboard", "subsection")]), "rp_review_dashboard"),
     ]
     mature_detail_items = [
         ("Profile Checks", metric_value(state, [("rp_mature", "profile_checks")]), "rp_mature"),
@@ -1520,6 +1546,8 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Analysis Result Detail", analysis_results_detail_items)
     if file_name == "decision-support.html":
         return render_summary_panel("Decision Support Detail", decision_support_detail_items)
+    if file_name == "usable-research.html":
+        return render_summary_panel("Usable Research Detail", usable_research_detail_items)
     if file_name == "mature.html":
         return render_summary_panel("Mature Capability Detail", mature_detail_items)
     if file_name == "provenance.html":
@@ -2388,6 +2416,39 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 "Review Packet",
                 [("Packet", "packet"), ("Decision", "decision"), ("Recommended", "recommended_option"), ("Evidence", "evidence"), ("Status", "status")],
                 state_records(state, "rp_decpacket", "packet"),
+            ),
+        ]
+    if file_name == "usable-research.html":
+        return [
+            render_record_panel(
+                "Research Templates",
+                [("Template", "template"), ("Name", "name"), ("Question", "question"), ("Tags", "tags"), ("Status", "status")],
+                state_records(state, "rp_usabletpl", "template"),
+            ),
+            render_record_panel(
+                "Reusable Datasets",
+                [("Dataset", "dataset"), ("Rows", "rows"), ("Columns", "columns"), ("Tags", "tags"), ("Quality", "quality"), ("Status", "status")],
+                state_records(state, "rp_usableds", "dataset"),
+            ),
+            render_record_panel(
+                "Library Sources",
+                [("Source", "source"), ("Title", "title"), ("Kind", "kind"), ("Tags", "tags"), ("Status", "status")],
+                state_records(state, "rp_usablelib", "source"),
+            ),
+            render_record_panel(
+                "Research DAG",
+                [("Stage", "stage"), ("Order", "order"), ("Depends", "depends"), ("Artifact", "artifact"), ("Agent", "agent"), ("Status", "status")],
+                state_records(state, "rp_usabledag", "stage"),
+            ),
+            render_record_panel(
+                "Workbench Queues",
+                [("Queue", "queue"), ("Rows", "rows"), ("Ready", "ready"), ("Needs Action", "needs_action"), ("Status", "status")],
+                state_records(state, "rp_usableops", "queue"),
+            ),
+            render_record_panel(
+                "Handoff Packages",
+                [("Handoff", "handoff"), ("Files", "files"), ("Missing", "required_missing"), ("Decision", "decision"), ("Status", "status")],
+                state_records(state, "rp_usableops", "handoff"),
             ),
         ]
     if file_name == "data.html":
@@ -3824,6 +3885,7 @@ def render_overview(
             ("Publication", metric_value(state, [("rp_agentcmp", "publication_checks"), ("rp_publication", "publication_checks")]), "rp_publication"),
             ("Analysis Results", metric_value(state, [("rp_agentcmp", "analysis_results_checks"), ("rp_analysisres", "analysis_results_checks")]), "rp_analysisres"),
             ("Decision Support", metric_value(state, [("rp_agentcmp", "decision_support_checks"), ("rp_decsupport", "decision_support_checks")]), "rp_decsupport"),
+            ("Usable Research", metric_value(state, [("rp_agentcmp", "usable_research_checks"), ("rp_usable", "usable_research_checks")]), "rp_usable"),
             ("Mature Capability", metric_value(state, [("rp_agentcmp", "mature_capability_checks"), ("rp_mature", "capability_checks")]), "rp_mature"),
             ("QEMU", metric_value(state, [("rp_host_run_result", "qemu_orch_passed")]), "rp_host_run_result"),
         ],
@@ -3858,6 +3920,13 @@ def render_overview(
             ("Reproducibility", metric_value(state, [("rp_web_bundle", "host_action_project_reproducibility"), ("rp_web_bundle", "reproducibility_audit")]), "rp_web_bundle"),
             ("Provenance", metric_value(state, [("rp_web_bundle", "host_action_project_provenance_graph"), ("rp_web_bundle", "provenance_graph")]), "rp_web_bundle"),
             ("Delivery", metric_value(state, [("rp_web_bundle", "host_action_project_delivery"), ("rp_web_bundle", "project_delivery")]), "rp_web_bundle"),
+        ],
+        "usable-research.html": [
+            ("Checks", metric_value(state, [("rp_usable", "usable_research_checks"), ("rp_agentcmp", "usable_research_checks")]), "rp_usable"),
+            ("Templates", metric_value(state, [("rp_usable", "templates"), ("rp_usabletpl", "templates")]), "rp_usabletpl"),
+            ("Datasets", metric_value(state, [("rp_usable", "datasets"), ("rp_usableds", "datasets")]), "rp_usableds"),
+            ("Library Sources", metric_value(state, [("rp_usable", "library_sources"), ("rp_usablelib", "library_sources")]), "rp_usablelib"),
+            ("DAG Stages", metric_value(state, [("rp_usable", "dag_stages")]), "rp_usabledag"),
         ],
         "services.html": [
             ("Bio Ops", metric_value(state, [("rp_bioop", "ops")]), "rp_bioop"),

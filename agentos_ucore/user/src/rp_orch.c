@@ -69,6 +69,7 @@ static const char *PROGRAMS[] = {
 	"rp_prov_query",
 	"rp_reldossier",
 	"rp_decsupport",
+	"rp_usable",
 	"rp_compare_plain",
 };
 

@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=2580" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=308" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=2680" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=318" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -658,6 +658,7 @@ def main() -> int:
             assert any("runner_detail_rows=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("backend_runner_report_checks=20" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("decision_support_checks=80" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("usable_research_checks=100" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_report_rows=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("backend_report_links=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_cases=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -980,6 +981,19 @@ def main() -> int:
             assert any("score=agentos_ucore_hybrid:agentos_value" in line for line in rp_decscore["lines"]), rp_decscore
             rp_decpacket = read_json(base + "/api/state/rp_decpacket")
             assert any("decision-review-packet:agentos-final-demo-backend" in line for line in rp_decpacket["lines"]), rp_decpacket
+            rp_usable = read_json(base + "/api/state/rp_usable")
+            assert any("usable_research_checks=100" in line for line in rp_usable["lines"]), rp_usable
+            assert any("entry=research-question-to-review-package" in line for line in rp_usable["lines"]), rp_usable
+            rp_usabletpl = read_json(base + "/api/state/rp_usabletpl")
+            assert any("template=usable-template:workspace-900" in line for line in rp_usabletpl["lines"]), rp_usabletpl
+            rp_usableds = read_json(base + "/api/state/rp_usableds")
+            assert any("dataset=usable-dataset:penguins" in line for line in rp_usableds["lines"]), rp_usableds
+            rp_usablelib = read_json(base + "/api/state/rp_usablelib")
+            assert any("source=usable-source:library2026:1" in line for line in rp_usablelib["lines"]), rp_usablelib
+            rp_usabledag = read_json(base + "/api/state/rp_usabledag")
+            assert any("stage=package;order=9" in line for line in rp_usabledag["lines"]), rp_usabledag
+            rp_usableops = read_json(base + "/api/state/rp_usableops")
+            assert any("handoff=usable-handoff:RUN-900:reviewer" in line for line in rp_usableops["lines"]), rp_usableops
             rp_campaign = read_json(base + "/api/state/rp_campaign")
             assert any("campaign_checks=108" in line for line in rp_campaign["lines"]), rp_campaign
             assert any("campaign=experiment-campaign:RUN-042:align-memory-grid" in line for line in rp_campaign["lines"]), rp_campaign
@@ -1566,6 +1580,17 @@ def main() -> int:
             assert "Review Packet" in decision_support_html
             assert "agentos_ucore_hybrid" in decision_support_html
             assert "decision-review-packet:agentos-final-demo-backend" in decision_support_html
+            usable_research_html = read_text(base + "/usable-research.html")
+            assert "Usable Research" in usable_research_html
+            assert "Research Templates" in usable_research_html
+            assert "Reusable Datasets" in usable_research_html
+            assert "Library Sources" in usable_research_html
+            assert "Research DAG" in usable_research_html
+            assert "Workbench Queues" in usable_research_html
+            assert "usable-template:workspace-900" in usable_research_html
+            assert "usable-dataset:penguins" in usable_research_html
+            assert "usable-source:library2026:1" in usable_research_html
+            assert "usable-handoff:RUN-900:reviewer" in usable_research_html
             campaign_html = read_text(base + "/experiment-campaigns.html")
             assert "Experiment Campaigns" in campaign_html
             assert "align-memory-grid" in campaign_html
