@@ -1302,14 +1302,25 @@ def main() -> int:
             assert any("llm_relay_request=/actions/research/llm-relay-request" in line for line in rp_api_action["lines"]), rp_api_action
             rp_api_catalog = read_json(base + "/api/state/rp_api_catalog")
             assert any("host_api_routes=214" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            assert any("api_group_count=14" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            assert any("api_grouped_routes=214" in line for line in rp_api_catalog["lines"]), rp_api_catalog
             assert any("usable_research_api_routes=77" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            assert any("domain_api_routes=50" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            assert any("workflow_api_routes=12" in line for line in rp_api_catalog["lines"]), rp_api_catalog
             assert any("api_group=usable_research;routes=77" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            assert any("api_group=domain;routes=50" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            assert any("api_group=lab_research;routes=15" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            assert any("api_key=/api/analysis-results" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            assert any("api_key=/api/experiment-scheduling" in line for line in rp_api_catalog["lines"]), rp_api_catalog
+            assert any("api_key=/api/workflow-runner" in line for line in rp_api_catalog["lines"]), rp_api_catalog
             assert any("api_key=/api/usable-research-workbench-file-catalog" in line for line in rp_api_catalog["lines"]), rp_api_catalog
             assert any("api_key=/api/usable-research-study-protocol-reproduction-package-action-plan" in line for line in rp_api_catalog["lines"]), rp_api_catalog
             assert any("api_key=/api/llm-proxy" in line for line in rp_api_catalog["lines"]), rp_api_catalog
             api_catalog_html = read_text(base + "/api-catalog.html")
             assert "API Catalog" in api_catalog_html
             assert "Host API Routes" in api_catalog_html
+            assert "Grouped Routes" in api_catalog_html
+            assert "/api/analysis-results" in api_catalog_html
             assert "/api/usable-research-workbench-file-catalog" in api_catalog_html
             rp_web_routes = read_json(base + "/api/state/rp_web_routes")
             assert any("routes=141" in line for line in rp_web_routes["lines"]), rp_web_routes

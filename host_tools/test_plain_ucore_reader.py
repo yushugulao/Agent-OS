@@ -116,7 +116,7 @@ status=ready
     "rp_api_know": "api=knowledge\nsemantic_index=rp_semindex\nstatus=ready\n",
     "rp_api_runtime": "api=runtime\nruntime_env=rp_runenv\nstatus=ready\n",
     "rp_api_action": "api=actions\nreader_contract=rp_web_bundle\nactions=123\nresearch_studio_launch=/actions/research/studio-launch\ndataset_preview=/actions/research/dataset-preview\ndataset_run=/actions/research/dataset-run\nstudy_protocol_launch=/actions/research/study-protocol-launch\nstudy_protocol_reproduction_package_action_execute=/actions/research/study-protocol-reproduction-package-action-execute\nproject_space_review=/actions/research/project-space-review\nproject_space_task_board_row=/actions/research/project-space-task-board-row\nproject_scaffold=/actions/research/project-scaffold\nproject_launch=/actions/research/project-launch\nproject_action_execute=/actions/research/project-action-execute\nproject_release_gate=/actions/research/project-release-gate\nproject_lifecycle_actions=3\ndataset_actions=8\nstudy_protocol_actions=11\nproject_space_actions=7\nproject_review_actions=8\nstatus=ready\n",
-    "rp_api_catalog": "api=catalog\nhost_api_routes=214\nhost_action_routes=95\nreader_api_payloads=15\nreader_views=40\nusable_research_api_routes=77\napi_group=usable_research;routes=77;state=rp_usable,rp_usableproj,rp_studyproto;status=ready\napi_key=/api/usable-research-workbench-file-catalog;state=rp_runner,rp_package;status=ready\napi_key=/api/usable-research-study-protocol-reproduction-package-action-plan;state=rp_studyproto,rp_usablepack;status=ready\napi_key=/api/llm-proxy;state=rp_prompt,rp_llm_guard;status=ready\nreader_projection=host_api_catalog_to_plain_ucore_state_files\nstatus=ready\n",
+    "rp_api_catalog": "api=catalog\nhost_api_routes=214\nhost_action_routes=95\nreader_api_payloads=15\nreader_views=40\napi_group_count=14\napi_grouped_routes=214\nusable_research_api_routes=77\ndomain_api_routes=50\nlab_research_api_routes=15\nworkflow_api_routes=12\ndata_api_routes=10\napi_group=usable_research;routes=77;state=rp_usable,rp_usableproj,rp_studyproto;status=ready\napi_group=domain;routes=50;state=rp_analysisres,rp_backend,rp_decsupport;status=ready\napi_group=lab_research;routes=15;state=rp_lab,rp_sysreview,rp_expsched;status=ready\napi_group=workflow;routes=12;state=rp_stage_state,rp_wfio,rp_backend_exec;status=ready\napi_key=/api/analysis-results;group=domain;state=rp_analysisres;status=ready\napi_key=/api/experiment-scheduling;group=lab_research;state=rp_expsched;status=ready\napi_key=/api/workflow-runner;group=workflow;state=rp_workflow_runner;status=ready\napi_key=/api/usable-research-workbench-file-catalog;state=rp_runner,rp_package;status=ready\napi_key=/api/usable-research-study-protocol-reproduction-package-action-plan;state=rp_studyproto,rp_usablepack;status=ready\napi_key=/api/llm-proxy;state=rp_prompt,rp_llm_guard;status=ready\nreader_projection=host_api_catalog_to_plain_ucore_state_files\nstatus=ready\n",
     "rp_studio": (
         "studio=usable-research-studio\n"
         "sessions=1\n"
@@ -1464,7 +1464,13 @@ def main() -> int:
         api_catalog_html = (out_dir / "api-catalog.html").read_text(encoding="utf-8")
         assert "API Catalog" in api_catalog_html
         assert "Host API Routes" in api_catalog_html
+        assert "Grouped Routes" in api_catalog_html
+        assert "API Groups" in api_catalog_html
         assert "214" in api_catalog_html
+        assert "50" in api_catalog_html
+        assert "/api/analysis-results" in api_catalog_html
+        assert "/api/experiment-scheduling" in api_catalog_html
+        assert "/api/workflow-runner" in api_catalog_html
         assert "/api/usable-research-workbench-file-catalog" in api_catalog_html
         assert "/api/llm-proxy" in api_catalog_html
         project_html = (out_dir / "project.html").read_text(encoding="utf-8")

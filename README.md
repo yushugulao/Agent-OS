@@ -416,6 +416,8 @@ The role programs also exchange state through ordinary root-file-system files:
 
 The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 2800-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
 
+`rp_api_catalog` records the Host platform read-side API surface as 214 routes grouped into 14 concrete areas: usable research, domain objects, lab research, research evidence, workflow, data, quality checks, operations, agents, review, LLM, provenance, execution, and AgentOS-specific views. Each group points to the ordinary `rp_*` state files that plain uCore and AgentOS-uCore use as their native representation.
+
 Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_agentcmp` after all children exit, then prints `state_ok=1`.
 
 The program prints:
