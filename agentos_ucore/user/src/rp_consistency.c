@@ -141,6 +141,20 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runop", "deepseek_provider=registered");
 	ok = ok && rp_file_contains("rp_runop", "platform_doctor=ready;checks=10");
 	ok = ok && rp_file_contains("rp_runop", "cloud_llm=optional");
+	ok = ok && rp_file_contains("rp_startup", "quickstart=ready");
+	ok = ok && rp_file_contains("rp_startup", "startup_checks=8");
+	ok = ok && rp_file_contains("rp_startup", "offline_runs_ready=1");
+	ok = ok && rp_file_contains("rp_startup", "cloud_llm_ready=0");
+	ok = ok && rp_file_contains("rp_startup", "provider_health=offline:1,cloud:0,ready_cloud:0");
+	ok = ok && rp_file_contains("rp_startup", "platform_doctor=ready");
+	ok = ok && rp_file_contains("rp_startup", "doctor_checks=10");
+	ok = ok && rp_file_contains("rp_startup", "doctor_downloads=markdown,json");
+	ok = ok && rp_file_contains("rp_startup", "workspace_writable=pass");
+	ok = ok && rp_file_contains("rp_startup", "state_load=pass");
+	ok = ok && rp_file_contains("rp_startup", "template_provider=pass");
+	ok = ok && rp_file_contains("rp_startup", "project_launch=sample_ready");
+	ok = ok && rp_file_contains("rp_startup", "recommended_commands=startup_guide");
+	ok = ok && rp_file_contains("rp_startup", "agentos_adapter_hint=plain_files_now");
 	ok = ok && rp_file_contains("rp_runop", "project_scaffold=templates:3");
 	ok = ok && rp_file_contains("rp_runop", "dataset_product=previews:2");
 	ok = ok && rp_file_contains("rp_runop", "visualizations:2");
@@ -414,8 +428,9 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=406\n"
+			   "checks=420\n"
 			   "state_catalog_checks=12\n"
+			   "startup_doctor_checks=14\n"
 			   "host_state_keys=573\n"
 			   "agentos_reserved_surface_checks=21\n"
 			   "agentos_reserved_surface=profiles:0,skills:0,tasks:0,deliberations:0,handoffs:0,coord:0,abi:0,adapter:0,readiness:0,tool_bindings:0\n"
@@ -695,6 +710,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=406 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 state_catalog=12 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
+	printf("rp_consistency: checks=420 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 state_catalog=12 startup_doctor=14 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
 	return 0;
 }

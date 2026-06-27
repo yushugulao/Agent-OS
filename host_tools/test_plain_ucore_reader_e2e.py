@@ -641,7 +641,7 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=1022" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=1036" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("tool_events=138" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -677,6 +677,7 @@ def main() -> int:
             assert any("agentos_reserved_surface_checks=21" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("agentos_reserved_surface=profiles:0" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("state_catalog=keys:573" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("startup_doctor=quickstart:ready" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("incident:INC-RUN-042-ALIGN-OOM" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("knowledge_index=search_documents:1385" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_nodes:406" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -727,11 +728,16 @@ def main() -> int:
             assert any("review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line and "backend_review=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_consistency = read_json(base + "/api/state/rp_consistency")
-            assert any("checks=406" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("checks=420" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("state_catalog_checks=12" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("startup_doctor_checks=14" in line for line in rp_consistency["lines"]), rp_consistency
             rp_state_catalog = read_json(base + "/api/state/rp_state_catalog")
             assert any("host_state_keys=573" in line for line in rp_state_catalog["lines"]), rp_state_catalog
             assert any("represented_state_categories=573" in line for line in rp_state_catalog["lines"]), rp_state_catalog
+            rp_startup = read_json(base + "/api/state/rp_startup")
+            assert any("quickstart=ready" in line for line in rp_startup["lines"]), rp_startup
+            assert any("doctor_checks=10" in line for line in rp_startup["lines"]), rp_startup
+            assert any("recommended_commands=startup_guide" in line for line in rp_startup["lines"]), rp_startup
             assert any("runtime_assurance_checks=24" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("research_ops_checks=28" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("semantic_graph_checks=6" in line for line in rp_consistency["lines"]), rp_consistency

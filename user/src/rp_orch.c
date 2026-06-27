@@ -38,6 +38,7 @@ static const char *PROGRAMS[] = {
 	"rp_release",
 	"rp_dossier",
 	"rp_service_surface",
+	"rp_startup_doctor",
 	"rp_notebook_export",
 	"rp_backend",
 	"rp_consistency",
