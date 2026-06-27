@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=2024" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=260" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=2120" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=268" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -739,6 +739,7 @@ def main() -> int:
             assert any("real_task_checks=96" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("experiment_campaign_checks=108" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("statistical_design_checks=120" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("model_registry_service_checks=96" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("release_dossier_checks=112" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("mature_capability_checks=72" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_view_checks=64" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -756,6 +757,21 @@ def main() -> int:
             assert any("status=ok" in line for line in rp_blind["lines"]), rp_blind
             rp_streview = read_json(base + "/api/state/rp_streview")
             assert any("stat_result=approved_with_sample_size_note" in line for line in rp_streview["lines"]), rp_streview
+            rp_modelreg = read_json(base + "/api/state/rp_modelreg")
+            assert any("model_registry_service_checks=96" in line for line in rp_modelreg["lines"]), rp_modelreg
+            assert any("model=registered-model:agent-triage-template" in line for line in rp_modelreg["lines"]), rp_modelreg
+            rp_modelver = read_json(base + "/api/state/rp_modelver")
+            assert any("version=model-version:agent-triage-template:v1" in line for line in rp_modelver["lines"]), rp_modelver
+            assert any("metric_artifact_count=52" in line for line in rp_modelver["lines"]), rp_modelver
+            rp_modeleval = read_json(base + "/api/state/rp_modeleval")
+            assert any("metric_evidence_coverage=1.000" in line for line in rp_modeleval["lines"]), rp_modeleval
+            assert any("status=passed" in line for line in rp_modeleval["lines"]), rp_modeleval
+            rp_modeldep = read_json(base + "/api/state/rp_modeldep")
+            assert any("check_secret_policy=not_required" in line for line in rp_modeldep["lines"]), rp_modeldep
+            assert any("status=ready" in line for line in rp_modeldep["lines"]), rp_modeldep
+            rp_modelserve = read_json(base + "/api/state/rp_modelserve")
+            assert any("latency_ms=12" in line for line in rp_modelserve["lines"]), rp_modelserve
+            assert any("message=offline provider ready" in line for line in rp_modelserve["lines"]), rp_modelserve
             rp_reldossier = read_json(base + "/api/state/rp_reldossier")
             assert any("release_dossier_checks=112" in line for line in rp_reldossier["lines"]), rp_reldossier
             assert any("dossier=release-dossier:RUN-042:final-review" in line for line in rp_reldossier["lines"]), rp_reldossier
@@ -1468,6 +1484,13 @@ def main() -> int:
             assert "underpowered" in statistical_design_html
             assert "balanced" in statistical_design_html
             assert "approved_with_sample_size_note" in statistical_design_html
+            model_registry_html = read_text(base + "/model-registry.html")
+            assert "Model Registry" in model_registry_html
+            assert "registered-model:agent-triage-template" in model_registry_html
+            assert "model-version:agent-triage-template:v1" in model_registry_html
+            assert "model-evaluation:agent-triage-template:v1:RUN-042" in model_registry_html
+            assert "model-deployment:agent-triage-template:v1:template" in model_registry_html
+            assert "offline provider ready" in model_registry_html
             release_dossier_html = read_text(base + "/release-dossier.html")
             assert "Release Dossier" in release_dossier_html
             assert "release-dossier:RUN-042:final-review" in release_dossier_html
@@ -1665,6 +1688,8 @@ def main() -> int:
             assert "Experiment Campaign Checks" in compare_html
             assert "statistical_design_checks" in compare_html
             assert "Statistical Design Checks" in compare_html
+            assert "model_registry_service_checks" in compare_html
+            assert "Model Registry Checks" in compare_html
             assert "release_dossier_checks" in compare_html
             assert "Release Dossier Checks" in compare_html
             assert "mature_capability_checks" in compare_html

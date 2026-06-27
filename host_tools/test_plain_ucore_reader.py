@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=31
+reader_views=32
 reader_actions=57
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
@@ -88,6 +88,7 @@ calculations_page=rp_calculation;jobs=1;retrieved=3;parser_results=1;status=read
 real_task_page=rp_realtask;dataset=palmer-penguins;rows=344;answer_audit=pass;status=ready
 experiment_campaigns_page=rp_campaign;campaigns=1;trials=4;best_trial=04;status=ready
 statistical_design_page=rp_stdesign;designs=1;power=underpowered;randomization=balanced;status=ready
+model_registry_page=rp_modelreg;models=1;versions=1;evaluations=1;deployments=1;status=ready
 release_dossier_page=rp_reldossier;sections=7;decision=ready_for_review;status=ready
 mature_capability_page=rp_mature;profiles=6;mappings=6;checks=72;status=ready
 provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=ready
@@ -266,6 +267,7 @@ status=ready
         "host_action_quality_repair_plan=ready\n"
         "host_action_quality_repair_execute=done\n"
         "evidence_bundle_entries=12\n"
+        "model_registry=rp_modelreg;version=v1;evaluation=passed;deployment=ready;status=ready\n"
     ),
     "rp_nbexec": "host_action_notebook_format=ipynb\nhost_action_notebook_workbench_docs=ready\nstatus=ready\n",
     "rp_uresrun": "host_action_workbench_outputs=rp_runner,rp_revision,rp_package\nhost_action_workbench_manifest=delivery-manifest.json\nhost_action_workbench_bundle=workbench-bundle.zip\nstatus=ready\n",
@@ -279,8 +281,8 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=2024\n"
-        "tool_events=260\n"
+        "test_cases=2120\n"
+        "tool_events=268\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=4;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
@@ -297,6 +299,7 @@ status=ready
         "real_task_checks=96;dataset=palmer-penguins;rows=344;numeric_fields=5;answer_audit=pass;bundle=ready;status=ready\n"
         "experiment_campaign_checks=108;campaigns=1;trials=4;best_trial=04;result_review=accept_candidate;status=ready\n"
         "statistical_design_checks=120;designs=1;power=underpowered;randomization=balanced;blinding=ok;stat_result=approved_with_sample_size_note;status=ready\n"
+        "model_registry_service_checks=96;models=1;versions=1;evaluations=1;deployments=1;serving_checks=1;agentos_replacements=4;status=ready\n"
         "release_dossier_checks=112;sections=7;evidence_ids=18;decision=ready_for_review;status=ready\n"
         "mature_capability_checks=72;profiles=6;mappings=6;checks=72;platforms=Galaxy,AiiDA,DVC,MLflow,Nextflow,Snakemake;agentos_replacements=5;status=ready\n"
         "provenance_view_checks=64;timeline_views=4;subgraphs=3;packets=4;agentos_replacements=4;status=ready\n"
@@ -508,6 +511,58 @@ status=ready
         "export_type=markdown\n"
         "checksum=stdesign-md-042\n"
         "status=ready\n"
+    ),
+    "rp_modelreg": (
+        "service=model-registry\n"
+        "model_registry_service_checks=96\n"
+        "registered_models=1\n"
+        "model=registered-model:agent-triage-template\n"
+        "name=agent-triage-template\n"
+        "model_type=template-agent\n"
+        "task=scientific workflow triage and report drafting\n"
+        "owner=wang\n"
+        "tags=agent,triage,research\n"
+        "status=ready\n"
+    ),
+    "rp_modelver": (
+        "version=model-version:agent-triage-template:v1\n"
+        "model=registered-model:agent-triage-template\n"
+        "source=rp_llm_packets\n"
+        "model_card=rp_modelcard\n"
+        "training_run=RUN-042\n"
+        "artifacts=rp_report_text,rp_package,rp_llm_packets\n"
+        "metric_artifact_count=52\n"
+        "metric_prompt_eval_score=0.875\n"
+        "status=staged\n"
+    ),
+    "rp_modeleval": (
+        "evaluation=model-evaluation:agent-triage-template:v1:RUN-042\n"
+        "version=model-version:agent-triage-template:v1\n"
+        "dataset=dataset-snapshot:RUN-042:quality\n"
+        "metric_evidence_coverage=1.000\n"
+        "metric_report_status_ok=1.000\n"
+        "metric_prompt_eval_score=0.875\n"
+        "outputs=report:run-042-recovery-report:v1\n"
+        "status=passed\n"
+    ),
+    "rp_modeldep": (
+        "deployment=model-deployment:agent-triage-template:v1:template\n"
+        "version=model-version:agent-triage-template:v1\n"
+        "target_environment=template\n"
+        "policy=offline_review_candidate\n"
+        "check_model_card=ok\n"
+        "check_evaluation=ok\n"
+        "check_provider=ok\n"
+        "check_secret_policy=not_required\n"
+        "status=ready\n"
+    ),
+    "rp_modelserve": (
+        "serving_check=model-serving-check:agent-triage-template:v1:template\n"
+        "deployment=model-deployment:agent-triage-template:v1:template\n"
+        "provider=template\n"
+        "latency_ms=12\n"
+        "message=offline provider ready\n"
+        "status=ok\n"
     ),
     "rp_reldossier": (
         "service=release-dossier\n"
@@ -915,6 +970,7 @@ status=ready
         "subsection=integrity_plane;source=rp_integrity;checks=36;errors=0;result=passed;status=ready\n"
         "subsection=real_task;source=rp_realtask;dataset=palmer-penguins;checks=96;outcome=passed;status=ready\n"
         "subsection=experiment_campaigns;source=rp_campaign;campaigns=1;trials=4;checks=108;outcome=passed;status=ready\n"
+        "subsection=model_registry;source=rp_modelreg;checks=96;evaluation=passed;deployment=ready;status=ready\n"
         "subsection=release_dossier;source=rp_reldossier;sections=7;checks=112;outcome=passed;status=ready\n"
         "backend_review_evidence=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;review_pack=rp_review_pack;status=ready\n"
         "status=ready\n"
@@ -958,7 +1014,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 31, summary
+        assert summary["pages"] == 32, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -976,6 +1032,7 @@ def main() -> int:
         assert (out_dir / "real-task.html").exists()
         assert (out_dir / "experiment-campaigns.html").exists()
         assert (out_dir / "statistical-design.html").exists()
+        assert (out_dir / "model-registry.html").exists()
         assert (out_dir / "release-dossier.html").exists()
         assert (out_dir / "mature.html").exists()
         assert (out_dir / "provenance.html").exists()
@@ -1205,6 +1262,13 @@ def main() -> int:
         assert "underpowered" in statistical_design_html
         assert "balanced" in statistical_design_html
         assert "approved_with_sample_size_note" in statistical_design_html
+        model_registry_html = (out_dir / "model-registry.html").read_text(encoding="utf-8")
+        assert "Model Registry" in model_registry_html
+        assert "registered-model:agent-triage-template" in model_registry_html
+        assert "model-version:agent-triage-template:v1" in model_registry_html
+        assert "model-evaluation:agent-triage-template:v1:RUN-042" in model_registry_html
+        assert "model-deployment:agent-triage-template:v1:template" in model_registry_html
+        assert "offline provider ready" in model_registry_html
         release_dossier_html = (out_dir / "release-dossier.html").read_text(encoding="utf-8")
         assert "Release Dossier" in release_dossier_html
         assert "release-dossier:RUN-042:final-review" in release_dossier_html
@@ -1282,6 +1346,8 @@ def main() -> int:
         assert "Experiment Campaign Checks" in compare_html
         assert "statistical_design_checks" in compare_html
         assert "Statistical Design Checks" in compare_html
+        assert "model_registry_service_checks" in compare_html
+        assert "Model Registry Checks" in compare_html
         assert "release_dossier_checks" in compare_html
         assert "Release Dossier Checks" in compare_html
         assert "mature_capability_checks" in compare_html
