@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=1108" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=157" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=1132" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=163" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -763,6 +763,16 @@ def main() -> int:
             assert any("ready_handoffs=3" in line for line in rp_opsboard["lines"]), rp_opsboard
             assert any("research-ops-report:RUN-042" in line for line in rp_opsboard["lines"]), rp_opsboard
             assert any("agentos_adaptation=event_queue,context_ops_trace,capability_action_guard,batch_plan_executor" in line for line in rp_opsboard["lines"]), rp_opsboard
+            assert any("handoff=review-board->operations;artifact=rp_reviewboard;status=ready" in line for line in rp_opsboard["lines"]), rp_opsboard
+            rp_reviewboard = read_json(base + "/api/state/rp_reviewboard")
+            assert any("review_board_checks=24" in line for line in rp_reviewboard["lines"]), rp_reviewboard
+            assert any("review_votes=4" in line for line in rp_reviewboard["lines"]), rp_reviewboard
+            assert any("review_signoffs=4" in line for line in rp_reviewboard["lines"]), rp_reviewboard
+            assert any("review_assignments=4" in line for line in rp_reviewboard["lines"]), rp_reviewboard
+            assert any("review_workloads=4" in line for line in rp_reviewboard["lines"]), rp_reviewboard
+            assert any("decision=approved" in line for line in rp_reviewboard["lines"]), rp_reviewboard
+            assert any("review_package=formal-review-board-package:RUN-042" in line for line in rp_reviewboard["lines"]), rp_reviewboard
+            assert any("agentos_adaptation=capability_review_roles,context_signoff_trace,event_review_queue,metadata_dossier_binding" in line for line in rp_reviewboard["lines"]), rp_reviewboard
             rp_consistency = read_json(base + "/api/state/rp_consistency")
             assert any("checks=420" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("state_catalog_checks=12" in line for line in rp_consistency["lines"]), rp_consistency
@@ -1185,6 +1195,21 @@ def main() -> int:
             assert "operations_board_checks" in operations_html
             assert "workbench-queue:RUN-042" in operations_html
             assert "research-ops-report:RUN-042" in operations_html
+            assert "review-board-&gt;operations" in operations_html
+            review_board_html = read_text(base + "/review-board.html")
+            assert "Formal Review Board" in review_board_html
+            assert "Board Requests" in review_board_html
+            assert "Votes" in review_board_html
+            assert "Signoffs" in review_board_html
+            assert "Board Decision" in review_board_html
+            assert "Assignments" in review_board_html
+            assert "Filters And Workloads" in review_board_html
+            assert "Review Package" in review_board_html
+            assert "rp_reviewboard" in review_board_html
+            assert "review-board:final-release" in review_board_html
+            assert "review-vote:RUN-042:systems" in review_board_html
+            assert "review-signoff:RUN-042:chair" in review_board_html
+            assert "formal-review-board-package:RUN-042" in review_board_html
             project_review_html = read_text(base + "/project-review.html")
             assert "Project Delivery Review" in project_review_html
             assert "Project Release Gate" in project_review_html
@@ -1364,6 +1389,7 @@ def main() -> int:
             assert "Backend Study Metrics" in compare_html
             assert "Detail Checks" in compare_html
             assert "operations_board_checks" in compare_html
+            assert "review_board_checks" in compare_html
             assert "agentos_ucore" in compare_html
             assert "Backend Scenario Handoff" in compare_html
             assert "rp_backend_exec" in compare_html

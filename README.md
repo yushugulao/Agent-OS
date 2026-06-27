@@ -82,6 +82,7 @@ user/src/rp_runbooks.c
 user/src/rp_projectrel.c
 user/src/rp_studyproto.c
 user/src/rp_opsboard.c
+user/src/rp_reviewboard.c
 user/src/rp_test_suite.c
 user/src/rp_compare_plain.c
 ```
@@ -97,7 +98,7 @@ user/src/rp_compare_plain.c
 - A plain user-space research run simulation with planning, literature, analysis, review, writing, repair, and audit roles.
 - Local catalog search for workflow, Agent, evidence, provenance, and LLM related platform objects.
 
-`rp_orch` runs 48 platform programs as separate uCore user processes:
+`rp_orch` runs 49 platform programs as separate uCore user processes:
 
 - catalog,
 - object store,
@@ -142,6 +143,7 @@ user/src/rp_compare_plain.c
 - review dashboard aggregation,
 - reviewer evidence package,
 - research operations board,
+- formal review board and review operations,
 - file-backed human review and revision-task actions,
 - test suite,
 - plain-kernel comparison.
@@ -272,6 +274,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_projectrel`
 - `rp_studyproto`
 - `rp_opsboard`
+- `rp_reviewboard`
 - `rp_submit`
 - `rp_sreg`
 - `rp_ethics`
@@ -328,7 +331,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_review_pack`
 - `rp_agentcmp`
 
-The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 1108-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
+The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 1132-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
 
 Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_agentcmp` after all children exit, then prints `state_ok=1`.
 
@@ -371,7 +374,7 @@ rp_plain: passed
 Expected orchestrator output:
 
 ```text
-rp_orch: start programs=48
+rp_orch: start programs=49
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_state_catalog: keys=573 nonzero=70 zero=503 represented=573 checks=12 status=ready
 rp_object_store: records=8 status=ready
@@ -419,8 +422,9 @@ rp_runbooks: templates=1 steps=7 incidents=1 executions=1 exports=1 status=ready
 rp_projectrel: checks=18 release=ready reproducibility=passed intake=accepted status=ready
 rp_studyproto: checks=20 protocols=2 launches=2 reproduction=ready status=ready
 rp_opsboard: checks=18 pending=1 actions=4 plan_items=5 handoffs=3 status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=48 state_files=176 acks=48 tools=157 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
-rp_orch: programs_ok=48 programs_total=48
+rp_reviewboard: checks=24 requests=1 votes=4 signoffs=4 assignments=4 decision=approved status=ready
+rp_compare_plain: plain_kernel=passed objects=500 programs=49 state_files=177 acks=49 tools=163 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 review_board=24 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
+rp_orch: programs_ok=49 programs_total=49
 rp_orch: state_ok=1
 rp_orch: passed
 ```

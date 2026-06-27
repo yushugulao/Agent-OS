@@ -31,6 +31,7 @@ PAGE_SPECS = [
     ("delivery.html", "Delivery", "rp_package", ["rp_nbexec", "rp_uresrun", "rp_artifact_manifest", "rp_review_pack"]),
     ("data.html", "Data", "rp_api_data", ["rp_input", "rp_ingest_files", "rp_dataset_snapshot", "rp_data_preview", "rp_data_quality", "rp_data_transform", "rp_dataset_collection"]),
     ("services.html", "Services", "rp_api_bio", ["rp_api_labres", "rp_api_pub", "rp_api_know", "rp_api_runtime", "rp_bioop", "rp_labresop", "rp_pubop", "rp_knowop", "rp_runop", "rp_runbooks", "rp_studyproto", "rp_opsboard"]),
+    ("review-board.html", "Review Board", "rp_reviewboard", ["rp_reviewops", "rp_review_dashboard", "rp_dossier", "rp_package", "rp_opsboard"]),
     ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets"]),
     ("actions.html", "Actions", "rp_api_action", ["rp_actionio", "rp_host_run_result", "rp_web_routes", "rp_web_bundle"]),
 ]
@@ -1176,6 +1177,16 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Handoff Checks", metric_value(state, [("rp_agentcmp", "review_handoff_checks")]), "rp_agentcmp"),
         ("Host Relay Quality", metric_value(state, [("rp_review_pack", "host_relay_quality"), ("rp_review_dashboard", "host_relay_quality")]), "rp_review_pack"),
     ]
+    review_board_items = [
+        ("Decision", metric_value(state, [("rp_reviewboard", "decision")]), "rp_reviewboard"),
+        ("Requests", metric_value(state, [("rp_reviewboard", "review_requests")]), "rp_reviewboard"),
+        ("Votes", metric_value(state, [("rp_reviewboard", "review_votes")]), "rp_reviewboard"),
+        ("Signoffs", metric_value(state, [("rp_reviewboard", "review_signoffs")]), "rp_reviewboard"),
+        ("Assignments", metric_value(state, [("rp_reviewboard", "review_assignments")]), "rp_reviewboard"),
+        ("Filters", metric_value(state, [("rp_reviewboard", "review_filters")]), "rp_reviewboard"),
+        ("Workloads", metric_value(state, [("rp_reviewboard", "review_workloads")]), "rp_reviewboard"),
+        ("Package", metric_value(state, [("rp_reviewboard", "review_package")]), "rp_reviewboard"),
+    ]
     if file_name == "run.html":
         return render_summary_panel("Research Output", report_items)
     if file_name in ("evidence.html", "artifacts.html"):
@@ -1204,6 +1215,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Service Execution", service_items)
     if file_name == "operations.html":
         return render_summary_panel("Research Operations", operations_items)
+    if file_name == "review-board.html":
+        return render_summary_panel("Formal Review Board", review_board_items)
     return ""
 
 
@@ -1768,6 +1781,44 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 "Operations Handoff",
                 [("Handoff", "handoff"), ("Artifact", "artifact"), ("Status", "status")],
                 state_records(state, "rp_opsboard", "handoff"),
+            ),
+        ]
+    if file_name == "review-board.html":
+        return [
+            render_record_panel(
+                "Board Requests",
+                [("Request", "request"), ("Target", "target"), ("Roles", "roles"), ("Status", "status")],
+                state_records(state, "rp_reviewboard", "request"),
+            ),
+            render_record_panel(
+                "Votes",
+                [("Vote", "vote"), ("Reviewer", "reviewer"), ("Role", "role"), ("Decision", "decision"), ("Status", "status")],
+                state_records(state, "rp_reviewboard", "vote"),
+            ),
+            render_record_panel(
+                "Signoffs",
+                [("Signoff", "signoff"), ("Signer", "signer"), ("Role", "role"), ("Decision", "decision"), ("Status", "status")],
+                state_records(state, "rp_reviewboard", "signoff"),
+            ),
+            render_record_panel(
+                "Board Decision",
+                [("Decision", "decision_record"), ("Approvals", "approvals"), ("Blockers", "blockers_open"), ("Status", "status")],
+                state_records(state, "rp_reviewboard", "decision_record"),
+            ),
+            render_record_panel(
+                "Assignments",
+                [("Assignment", "assignment"), ("Reviewer", "reviewer"), ("Role", "role"), ("Priority", "priority"), ("Status", "status")],
+                state_records(state, "rp_reviewboard", "assignment"),
+            ),
+            render_record_panel(
+                "Filters And Workloads",
+                [("Filter", "filter"), ("Workload", "workload"), ("Owner", "owner"), ("Open", "open"), ("Status", "status")],
+                state_records(state, "rp_reviewboard", "filter") + state_records(state, "rp_reviewboard", "workload"),
+            ),
+            render_record_panel(
+                "Review Package",
+                [("Package", "review_package"), ("Files", "files"), ("Status", "status")],
+                state_records(state, "rp_reviewboard", "review_package"),
             ),
         ]
     if file_name == "data.html":
