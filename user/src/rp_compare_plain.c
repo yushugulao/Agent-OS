@@ -955,7 +955,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_query", "knowledge_index=search_documents:1685");
 	ok = ok && rp_file_contains("rp_query", "provenance_nodes:406");
 	ok = ok && rp_file_contains("rp_query", "provenance_links:544");
-	ok = ok && rp_file_contains("rp_query", "events:8892");
+	ok = ok && rp_file_contains("rp_query", "events:8966");
 	ok = ok && rp_file_contains("rp_query", "context_records:380");
 	ok = ok && rp_file_contains("rp_llmlog", "transcripts=99");
 	ok = ok && rp_file_contains("rp_llmlog", "bridge_requests=33");
@@ -1829,7 +1829,7 @@ int main(void)
 	if (!rp_append_file("rp_agentcmp", "decision_support_checks=80;options=3;criteria=5;scores=15;review_packets=1;selected=agentos_ucore_hybrid;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "usable_research_checks=100;templates=3;datasets=3;library_sources=3;dag_stages=9;plan_queue=4;action_queue=5;handoffs=3;deliverables=8;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "usable_project_checks=120;scaffold_templates=3;project_launches=2;project_bundles=2;doctor_checks=10;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "knowledge_index=search_documents:1685;provenance_nodes:406;provenance_links:544;events:8892;context_records:380;usable_artifacts:507;usable_runs:23;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "knowledge_index=search_documents:1685;provenance_nodes:406;provenance_links:544;events:8966;context_records:380;usable_artifacts:507;usable_runs:23;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "llm_transcripts=99;llm_bridge_requests=33;llm_bridge_responses=33;workbenches=8;deliveries=9;studio_sessions=2;project_action_plans=17;project_runbooks=17;project_evidence_audits=17;project_provenance_graphs=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "research_portfolio=sources:67;datasets:5;literature_searches:7;reviews:11;evidence_reviews:7;evidence_extractions:25;screening_decisions:25;exports:80;doctor_reports:12;project_handoff_audits:34;project_run_comparisons:17;project_reproducibility_audits:17;project_snapshot_comparisons:17;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "agentcompare_execution_scale=reports:4;results:20;profiles:1;plain_runs:5;indexed_runs:5;real_artifact_runs:5;status=ready")) return 1;

@@ -727,7 +727,7 @@ def main() -> int:
             assert any("knowledge_index=search_documents:1685" in line for line in rp_query["lines"]), rp_query
             assert any("provenance_nodes:406" in line for line in rp_query["lines"]), rp_query
             assert any("provenance_links:544" in line for line in rp_query["lines"]), rp_query
-            assert any("events:8892" in line for line in rp_query["lines"]), rp_query
+            assert any("events:8966" in line for line in rp_query["lines"]), rp_query
             assert any("context_records:380" in line for line in rp_query["lines"]), rp_query
             assert any("usable_artifacts:507" in line for line in rp_query["lines"]), rp_query
             rp_backend_exec = read_json(base + "/api/state/rp_backend_exec")
@@ -1179,7 +1179,7 @@ def main() -> int:
             assert any("search_documents=1685" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("provenance_nodes=406" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("provenance_links=544" in line for line in rp_consistency["lines"]), rp_consistency
-            assert any("event_stream_records=8892" in line for line in rp_consistency["lines"]), rp_consistency
+            assert any("event_stream_records=8966" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("context_records=380" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("approval_checks=2" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("protocol_governance_checks=4" in line for line in rp_consistency["lines"]), rp_consistency

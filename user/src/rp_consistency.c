@@ -16,7 +16,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_query", "knowledge_index=search_documents:1685");
 	ok = ok && rp_file_contains("rp_query", "provenance_nodes:406");
 	ok = ok && rp_file_contains("rp_query", "provenance_links:544");
-	ok = ok && rp_file_contains("rp_query", "events:8892");
+	ok = ok && rp_file_contains("rp_query", "events:8966");
 	ok = ok && rp_file_contains("rp_query", "context_records:380");
 	ok = ok && rp_file_contains("rp_query", "host_workflow_artifacts:150");
 	ok = ok && rp_file_contains("rp_query", "usable_artifacts:507");
@@ -691,7 +691,7 @@ int main(void)
 			   "search_documents=1685\n"
 			   "provenance_nodes=406\n"
 			   "provenance_links=544\n"
-			   "event_stream_records=8892\n"
+			   "event_stream_records=8966\n"
 			   "context_records=380\n"
 			   "host_workflow_artifacts=150\n"
 			   "usable_research_artifacts=507\n"

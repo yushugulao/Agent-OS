@@ -1049,7 +1049,7 @@ int main(void)
 	ok = ok && require_file_token("rp_query", "knowledge_index=search_documents:1685");
 	ok = ok && require_file_token("rp_query", "provenance_nodes:406");
 	ok = ok && require_file_token("rp_query", "provenance_links:544");
-	ok = ok && require_file_token("rp_query", "events:8892");
+	ok = ok && require_file_token("rp_query", "events:8966");
 	ok = ok && require_file_token("rp_query", "context_records:380");
 	ok = ok && require_file_token("rp_query", "host_workflow_artifacts:150");
 	ok = ok && require_file_token("rp_query", "usable_artifacts:507");
@@ -1182,7 +1182,7 @@ int main(void)
 	ok = ok && require_file_token("rp_consistency", "search_documents=1685");
 	ok = ok && require_file_token("rp_consistency", "provenance_nodes=406");
 	ok = ok && require_file_token("rp_consistency", "provenance_links=544");
-	ok = ok && require_file_token("rp_consistency", "event_stream_records=8892");
+	ok = ok && require_file_token("rp_consistency", "event_stream_records=8966");
 	ok = ok && require_file_token("rp_consistency", "context_records=380");
 	ok = ok && require_file_token("rp_consistency", "coherence_checks=9");
 	ok = ok && require_file_token("rp_consistency", "workbench_records=10");
@@ -1633,7 +1633,7 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "knowledge_index=search_documents:1685");
 	ok = ok && require_file_token("rp_agentcmp", "provenance_nodes:406");
 	ok = ok && require_file_token("rp_agentcmp", "provenance_links:544");
-	ok = ok && require_file_token("rp_agentcmp", "events:8892");
+	ok = ok && require_file_token("rp_agentcmp", "events:8966");
 	ok = ok && require_file_token("rp_agentcmp", "context_records:380");
 	ok = ok && require_file_token("rp_agentcmp", "usable_artifacts:507");
 	ok = ok && require_file_token("rp_agentcmp", "usable_runs:23");

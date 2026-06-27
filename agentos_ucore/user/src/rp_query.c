@@ -27,7 +27,7 @@ int main(void)
 			   "workflow_hits=34\n"
 			   "agent_hits=26\n"
 			   "evidence_hits=10\n"
-			   "knowledge_index=search_documents:1685,provenance_nodes:406,provenance_links:544,events:8892,context_records:380,host_workflow_artifacts:150,usable_artifacts:507,usable_runs:23,usable_stages:197,usable_messages:265,usable_decisions:242,status=ready\n"
+			   "knowledge_index=search_documents:1685,provenance_nodes:406,provenance_links:544,events:8966,context_records:380,host_workflow_artifacts:150,usable_artifacts:507,usable_runs:23,usable_stages:197,usable_messages:265,usable_decisions:242,status=ready\n"
 			   "status=ready\n")) {
 		return 1;
 	}
