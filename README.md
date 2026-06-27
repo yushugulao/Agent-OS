@@ -1,214 +1,637 @@
-<!-- SPDX-License-Identifier: CC-BY-SA-4.0 -->
+# project61-agentOS-happylegend: plain uCore research platform branch
 
-# project61-agentOS-happylegend
+This branch is the plain-kernel baseline for the research Agent platform.
 
-## 项目信息
+The kernel source under `os/` and the boot/init helper under `scripts/` are restored from the upstream uCore 2025S source. The `nfs/` builder keeps the same disk format and uses a 4096-block image so the plain platform can hold its research state files. The research platform work in this branch is placed in ordinary user space.
 
-| 项目 | 内容 |
-| --- | --- |
-| 比赛 | 2026 年全国大学生计算机系统能力大赛-操作系统设计赛（全国）-OS 功能挑战赛道 |
-| 选题编号 | project61 |
-| 赛题名称 | 面向 AI 智能体的操作系统内核（Agent-OS） |
-| 队伍名称 | happy-legend |
-| 平台 Project ID | 39809 |
-| GitLab 仓库 | https://gitlab.eduxiji.net/T2026106149911107/project3136859-388870 |
+## Purpose
 
-## 项目简介
+The branch answers one specific question: how far the research Agent platform can run on an unchanged uCore kernel before the later Agent-OS enhanced kernel is used.
 
-本项目围绕 Agent-OS 赛题，探索让操作系统内核感知、管理和支持 AI Agent 的机制。项目目标是在教学操作系统内核中实现 Agent 进程、结构化内核交互、上下文路径管理等能力，并形成可在 QEMU 中运行和演示的系统。
+It is not the Agent-OS kernel-enhanced version. There are no Agent syscalls, Agent Context pages, kernel file metadata indexes, or kernel Agent event queues in `os/`.
 
-文档体系参考操作系统内核项目和软件架构文档惯例重构：README 负责快速运行，主设计文档解释架构和关键决策，API/ABI 文档说明用户态与内核接口，验证文档给出可复现证据。
+## Directory Rule
 
-## 基底来源
+This branch holds two comparable targets. The repository root keeps the plain uCore target: `os/`, `nfs/`, `scripts/`, `user/`, and `host_tools/` describe the research Agent platform running on ordinary uCore mechanisms. The Agent-OS enhanced uCore target is stored under `agentos_ucore/`, with its own kernel, user programs, tests, and documents. This keeps the plain-kernel comparison runnable while allowing the enhanced target to use new kernel services.
 
-本项目当前以 MIT PDOS 的 [xv6-riscv](https://github.com/mit-pdos/xv6-riscv) 作为教学操作系统基底。仓库中的 `kernel/`、`user/`、`mkfs/`、`Makefile` 等基础代码来自 xv6-riscv，后续将在此基础上实现 Agent-OS 相关能力。
+See `docs/dual-targets.md` for the target layout and parity direction.
 
-原始 xv6-riscv 说明和许可文件已保留：
-
-- [THIRD_PARTY/xv6-riscv-README](THIRD_PARTY/xv6-riscv-README)
-- [THIRD_PARTY/xv6-riscv-LICENSE](THIRD_PARTY/xv6-riscv-LICENSE)
-
-## 赛题对应关系
-
-| 赛题任务 | 项目目标 | 当前状态 |
-| --- | --- | --- |
-| 任务一：Agent 进程创建与地址空间设计 | 支持 Agent 进程概念和上下文空间 | 已完成增强实现 |
-| 任务二：Agent 与内核结构化交互 | 支持结构化工具调用和结果返回 | 已完成增强实现 |
-| 任务三：上下文路径管理 | 记录并查询 128 条短文本摘要历史 | 已完成增强实现 |
-| 任务四：Agent 子系统内核元数据表版本的文件查询扩展 | 支持按 fid、项目、运行、阶段、状态、类型、摘要查询文件元数据，支持插入、删除和扫描/索引对比 | 原型能力已完成；不声明为真实 xv6 inode 扩展 |
-| 任务五：Agent Loop 内核运行机制 | 支持 watch/unwatch、wait、heartbeat/heartbeat_stop、event delivery/timeout，文件状态和 mailbox 可唤醒 Agent | 原型能力已完成 |
-| 任务六：综合演示与创新 | 用夜间实验批量复测故障诊断与受控恢复场景串联任务一至五，并提供宿主机 LLM Gateway、replay 大屏和 live QEMU 串接 | 已完成可验证版本；演示视频/幻灯片待补 |
-
-## 构建与运行
-
-已验证开发环境：WSL2 Ubuntu 26.04。
-
-通用运行要求：Linux 环境，安装 RISC-V GCC/binutils、QEMU riscv64、make、git。使用 `make qemu` 构建和运行。
+Useful root commands:
 
 ```bash
-cd project61-agentOS-happylegend
-make qemu
+make plain-platform-build TOOLPREFIX=riscv64-linux-gnu-
+make plain-platform-run TOOLPREFIX=riscv64-linux-gnu-
+make agentos-user TOOLPREFIX=riscv64-linux-gnu-
+make agentos-build TOOLPREFIX=riscv64-linux-gnu-
+make agentos-test TOOLPREFIX=riscv64-linux-gnu-
+make agentos-platform-build TOOLPREFIX=riscv64-linux-gnu-
+make agentos-platform-run TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-进入 xv6 shell 后运行最终功能验收程序：
+## Current User Program
 
-```sh
-labdemo
-labbench
-agentfinal
-```
-
-`labdemo` 是当前任务四、任务五和综合场景主入口。普通父进程只引导创建 Orchestrator，Recovery、Investigator、Sentinel 由 Orchestrator 创建。Orchestrator 初始化元数据并注入 `RUN-042` 的 `align` 阶段失败，展示文件属性查询、事件唤醒、Agent 间消息、权限拒绝、幂等恢复和单个恢复报告工件元数据更新。同一 QEMU 会话中连续运行两次 `labdemo` 均应输出 `labdemo: passed`。
-
-`labbench` 是任务四、任务五性能和可靠性入口。它输出文件扫描查询 vs 属性索引查询、`fid` 查询、元数据插入/删除、selector 限定报告更新、轮询查询基线、event wait/wake 路径、scalar tool call vs batch `agent_run`、`context_query` vs `context_snapshot`、capability check、duplicate reject，以及角色自升权拒绝、`heartbeat_stop`、`unwatch`、依赖掩码驱动恢复、短事件 payload 回查、事件队列满、mailbox 满队列、文件状态满队列的测试结果。
-
-`agentfinal` 继续作为任务一至三高性能底座复测。预期输出包括 4 页 Agent Context、64 路批量工具调用、Context Snapshot、短文本历史记录、用户镜像篡改防护范围、128 条容量 FIFO 淘汰和直接 Context 一致性检查：
+The first native uCore entries are:
 
 ```text
-agentfinal: context size=16384 capacity=128
-agentfinal: batch first_seq=1 last_seq=64
-agentfinal: short_text_history=1 payload=final result=final
-agentfinal: snapshot count=64 latest=64
-agentfinal: direct_dirty_before_snapshot=1
-agentfinal: tamper_protected=1
-agentfinal: fifo oldest=65 latest=192 dropped=64
-agentfinal: direct_context_match=1
-agentfinal: passed
+user/src/rp_plain.c
+user/src/rp_orch.c
+user/src/rp_seed_orch.c
+user/src/rp_catalog.c
+user/src/rp_object_store.c
+user/src/rp_object_query.c
+user/src/rp_lineage.c
+user/src/rp_site_export.c
+user/src/rp_planner.c
+user/src/rp_portability.c
+user/src/rp_retriever.c
+user/src/rp_analyst.c
+user/src/rp_reviewer.c
+user/src/rp_lab.c
+user/src/rp_governance.c
+user/src/rp_writer.c
+user/src/rp_repair.c
+user/src/rp_auditor.c
+user/src/rp_query.c
+user/src/rp_evidence.c
+user/src/rp_llm_bridge.c
+user/src/rp_llm_relay.c
+user/src/rp_privacy.c
+user/src/rp_runconf.c
+user/src/rp_execobs.c
+user/src/rp_invoke.c
+user/src/rp_complete.c
+user/src/rp_artifact_ops.c
+user/src/rp_data_pipeline.c
+user/src/rp_workflow_runner.c
+user/src/rp_workbench.c
+user/src/rp_agent_collab.c
+user/src/rp_package.c
+user/src/rp_calculation.c
+user/src/rp_realtask.c
+user/src/rp_analysisres.c
+user/src/rp_decsupport.c
+user/src/rp_usable.c
+user/src/rp_usableproject.c
+user/src/rp_campaign.c
+user/src/rp_reldossier.c
+user/src/rp_delta.c
+user/src/rp_release.c
+user/src/rp_dossier.c
+user/src/rp_service_surface.c
+user/src/rp_startup_doctor.c
+user/src/rp_notebook_export.c
+user/src/rp_metrics.c
+user/src/rp_backend.c
+user/src/rp_consistency.c
+user/src/rp_ui_export.c
+user/src/rp_web_export.c
+user/src/rp_revdash.c
+user/src/rp_publication.c
+user/src/rp_runbooks.c
+user/src/rp_projectrel.c
+user/src/rp_studyproto.c
+user/src/rp_stdesign.c
+user/src/rp_modelreg.c
+user/src/rp_sysreview.c
+user/src/rp_expsched.c
+user/src/rp_traincomp.c
+user/src/rp_opsboard.c
+user/src/rp_reviewboard.c
+user/src/rp_controlplane.c
+user/src/rp_integrityplane.c
+user/src/rp_coherenceplane.c
+user/src/rp_mature.c
+user/src/rp_prov_view.c
+user/src/rp_prov_query.c
+user/src/rp_test_suite.c
+user/src/rp_compare_plain.c
 ```
 
-进入 xv6 shell 后运行最终性能验收程序：
+`rp_plain` is a normal uCore user process. It embeds the current pure user-space research platform catalog and validates:
 
-```sh
-agentbench
-```
+- 500 platform object counters.
+- 120 service names.
+- 28 feature groups.
+- 13 platform self-check groups.
+- 6 reference research platforms: Galaxy, AiiDA, DVC, MLflow, Nextflow, Snakemake.
+- 6 mature capability mappings with a target coverage ratio of at least 30%.
+- A plain user-space research run simulation with planning, literature, analysis, review, writing, repair, and audit roles.
+- Local catalog search for workflow, Agent, evidence, provenance, and LLM related platform objects.
 
-输出包括 scalar run、batch run、direct Context、context query 和 context snapshot 的吞吐对比。下列数值是一次样例输出，`ticks` 会随宿主机和 QEMU 状态波动：
+`rp_orch` runs 57 platform programs as separate uCore user processes:
+
+- catalog,
+- object store,
+- object query,
+- lineage,
+- site export,
+- planner,
+- workflow portability and migration planning,
+- retriever,
+- analyst,
+- reviewer,
+- lab evidence service,
+- risk and CAPA governance,
+- writer,
+- repair,
+- auditor,
+- query,
+- evidence,
+- LLM bridge,
+- file-backed Host LLM Relay protocol,
+- privacy review,
+- run configuration,
+- execution observer,
+- workflow invocation,
+- workflow completion,
+- real artifact operations,
+- data ingestion and dataset pipeline,
+- workflow runner execution evidence,
+- research workbench task state,
+- Agent collaboration evidence,
+- package,
+- AiiDA-style calculation job records with computer, code, scheduler, retrieved files, parser result, export, and package linkage,
+- release delta review,
+- release decision,
+- final dossier,
+- service surface export for bio, lab resources, publication, knowledge, and runtime records,
+- reproducible notebook export and download records,
+- backend scenario,
+- cross-file consistency check,
+- metrics service,
+- UI data export,
+- Host Web/API export contract,
+- review dashboard aggregation,
+- reviewer evidence package,
+- research operations board,
+- formal review board and review operations,
+- platform control plane for approvals, notifications, run queue, plugins, workspace access, and saved views,
+- integrity plane for evidence traceability, reference integrity, namespace, status semantics, review alignment, report sources, and package trace checks,
+- coherence plane for delivery contracts, run-state contracts, lifecycle order, workflow lint, tool protocol checks, report validation, and Agent coordination checks,
+- mature platform mapping for Galaxy, AiiDA, DVC, MLflow, Nextflow, and Snakemake style capability surfaces,
+- provenance view export for timeline views, provenance edges, and evidence packets,
+- provenance query service for saved graph queries, templates, executions, comparisons, exports, and evidence packets,
+- file-backed human review and revision-task actions,
+- test suite,
+- plain-kernel comparison.
+
+It uses ordinary `fork`, `exec`, and `waitpid`. This provides a plain-kernel baseline for the later Agent-OS multi-Agent version.
+
+`rp_seed_orch` is the Host-action run entry. It runs the seeded program set used by the Host reader path. The action runner keeps the full captured Host action text in the host run package, writes a compact `rp_host_action_seed` file into the uCore image, and each native user program reads that ordinary file through the unchanged uCore file system. The seeded image omits the standalone `rp_test_suite` executable to stay within the teaching file-system image capacity; `rp_compare_plain` publishes the current test count in `rp_agentcmp` before it performs the final comparison checks.
+
+The Host Reader Run and Compare pages consume `rp_backend_exec` and `rp_study` directly, so the visible pages show backend runner cases, their input files, generated artifacts, content checks, attempts, retry reasons, per-case source/requirement/observation/action/review rows, derived case narratives, plain-uCore cost, AgentOS replacement, risk rows, results, plain-uCore study metrics, AgentOS kernel-backed metrics, and the backend scenario handoff status instead of only showing aggregate counts.
+
+The role programs also exchange state through ordinary root-file-system files:
+
+- `rp_plan`
+- `rp_mail`
+- `rp_ack`
+- `rp_tool`, compact tool event names used for comparison and metrics
+- `rp_sched`
+- `rp_taskrec`
+- `rp_budget`
+- `rp_wfio`, including workflow import/export and portability records
+- `rp_policy`
+- `rp_retryq`
+- `rp_lit`
+- `rp_data`
+- `rp_datadic`
+- `rp_dataprof`
+- `rp_compute`
+- `rp_figrec`
+- `rp_fail`
+- `rp_samples`
+- `rp_quality`
+- `rp_review`
+- `rp_review2`
+- `rp_protocol`
+- `rp_soplog`
+- `rp_exper`
+- `rp_trialrec`
+- `rp_labops`
+- `rp_training`
+- `rp_risk`
+- `rp_capa`
+- `rp_report`
+- `rp_revision`
+- `rp_fix`
+- `rp_retrylog`
+- `rp_telemetry`
+- `rp_health`
+- `rp_audit`
+- `rp_status`
+- `rp_objects`
+- `rp_services`
+- `rp_object_records`
+- `rp_object_query`
+- `rp_lineage`
+- `rp_site`
+- `rp_query`
+- `rp_rank`
+- `rp_runview`
+- `rp_evidence`
+- `rp_claimrec`
+- `rp_provpath`
+- `rp_knowledge`
+- `rp_llm_req`
+- `rp_llmq`
+- `rp_llm_resp`
+- `rp_relay`
+- `rp_prompt`
+- `rp_llmlog`
+- `rp_llmeval`
+- `rp_llm_packets`
+- `rp_llm_routes`
+- `rp_llm_guard`
+- `rp_llm_hostreq`
+- `rp_llm_fallback`
+- `rp_privacy`
+- `rp_compliance`
+- `rp_params`
+- `rp_runconf`
+- `rp_configval`
+- `rp_configdrift`
+- `rp_execplan`
+- `rp_worker`
+- `rp_timeline`
+- `rp_execobs`
+- `rp_invocation`
+- `rp_steps`
+- `rp_attempts`
+- `rp_invoke_export`
+- `rp_hooks`
+- `rp_completion`
+- `rp_actions`
+- `rp_complete_export`
+- `rp_input`
+- `rp_input_fastq`
+- `rp_stage_dag`
+- `rp_stage_log`
+- `rp_artifact`
+- `rp_report_text`
+- `rp_chart_data`
+- `rp_ingest_files`
+- `rp_dataset_snapshot`
+- `rp_data_preview`
+- `rp_data_quality`
+- `rp_data_transform`
+- `rp_dataset_collection`
+- `rp_runner`
+- `rp_stage_state`
+- `rp_cache_index`
+- `rp_retry_plan`
+- `rp_run_events`
+- `rp_artifact_manifest`
+- `rp_agents`
+- `rp_decisions`
+- `rp_handoff`
+- `rp_deliberation`
+- `rp_agent_run`
+- `rp_package`
+- `rp_calculation`
+- `rp_calc_files`
+- `rp_calc_parse`
+- `rp_calc_export`
+- `rp_realtask`
+- `rp_realdata`
+- `rp_realreport`
+- `rp_realbundle`
+- `rp_analysisres`
+- `rp_anplan`
+- `rp_anrun`
+- `rp_resulttbl`
+- `rp_statres`
+- `rp_anfig`
+- `rp_interp`
+- `rp_decsupport`
+- `rp_decopt`
+- `rp_deccrit`
+- `rp_decscore`
+- `rp_decpacket`
+- `rp_usable`
+- `rp_usabletpl`
+- `rp_usableds`
+- `rp_usablelib`
+- `rp_usabledag`
+- `rp_usableops`
+- `rp_usableproj`
+- `rp_usableboot`
+- `rp_usablescaf`
+- `rp_usablelaunch`
+- `rp_usablepack`
+- `rp_campaign`
+- `rp_trials`
+- `rp_camp_rank`
+- `rp_resreview`
+- `rp_reldossier`
+- `rp_reldsec`
+- `rp_relattest`
+- `rp_relpack`
+- `rp_diff`
+- `rp_delta`
+- `rp_datarel`
+- `rp_dataver`
+- `rp_repro`
+- `rp_release`
+- `rp_dossier`
+- `rp_reviewops`
+- `rp_review_dashboard`
+- `rp_runbooks`
+- `rp_projectrel`
+- `rp_studyproto`
+- `rp_stdesign`
+- `rp_power`
+- `rp_random`
+- `rp_blind`
+- `rp_streview`
+- `rp_opsboard`
+- `rp_reviewboard`
+- `rp_control`
+- `rp_integrity`
+- `rp_mature`
+- `rp_prov_view`
+- `rp_prov_query`
+- `rp_prov_specs`
+- `rp_prov_exec`
+- `rp_prov_query_pkg`
+- `rp_prov_edges`
+- `rp_evidence_packet`
+- `rp_timeline_view`
+- `rp_submit`
+- `rp_sreg`
+- `rp_ethics`
+- `rp_access`
+- `rp_cohort`
+- `rp_bioop`
+- `rp_instr`
+- `rp_invent`
+- `rp_procure`
+- `rp_ressched`
+- `rp_labresop`
+- `rp_resrev`
+- `rp_pubplan`
+- `rp_peerresp`
+- `rp_fairpkg`
+- `rp_pubop`
+- `rp_litrev`
+- `rp_citegraph`
+- `rp_semindex`
+- `rp_kanswers`
+- `rp_knowop`
+- `rp_runenv`
+- `rp_nbexec`
+- `rp_eln`
+- `rp_wpool`
+- `rp_runop`
+- `rp_agentcmp`
+- `rp_backend`
+- `rp_backend_exec`
+- `rp_study`
+- `rp_consistency`
+- `rp_ui_home`
+- `rp_ui_run`
+- `rp_ui_agent`
+- `rp_ui_evidence`
+- `rp_ui_compare`
+- `rp_web_routes`
+- `rp_api_home`
+- `rp_api_run`
+- `rp_api_agents`
+- `rp_api_evidence`
+- `rp_api_compare`
+- `rp_api_artifacts`
+- `rp_api_data`
+- `rp_api_bio`
+- `rp_api_labres`
+- `rp_api_pub`
+- `rp_api_know`
+- `rp_api_runtime`
+- `rp_api_action`
+- `rp_api_catalog`
+- `rp_actionio`
+- `rp_uresrun`
+- `rp_web_bundle`
+- `rp_review_pack`
+- `rp_agentcmp`
+
+The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 2800-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
+
+`rp_api_catalog` records the Host platform read-side API surface as 214 routes grouped into 14 concrete areas: usable research, domain objects, lab research, research evidence, workflow, data, quality checks, operations, agents, review, LLM, provenance, execution, and AgentOS-specific views. Each group points to the ordinary `rp_*` state files that plain uCore and AgentOS-uCore use as their native representation.
+
+Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_agentcmp` after all children exit, then prints `state_ok=1`.
+
+The program prints:
 
 ```text
-agentbench: case ops ticks ops_per_tick speedup_x100
-agentbench: scalar_run ops=65536 ticks=20 ops_per_tick=3276 speedup_x100=100
-agentbench: batch_run ops=65536 ticks=3 ops_per_tick=21845 speedup_x100=666
-agentbench: direct_context ops=1000000 ticks=0 ops_per_tick=1000000 speedup_x100=30517
-agentbench: context_query ops=2048 ticks=0 ops_per_tick=2048 speedup_x100=62
-agentbench: context_snapshot ops=262144 ticks=3 ops_per_tick=87381 speedup_x100=4266
-agentbench: latest_sequence=131072 dropped=130944 capacity=128
-agentbench: passed
+rp_plain: passed
 ```
 
-完整复测还可以运行以下辅助测试。`agentexec` 可直接从 shell 运行，也可作为 Agent `exec("agentexec")` 的目标程序：
+when the built-in checks pass.
 
-```sh
-agentexec
-agentcall
-contexttest
-agentstress
-```
+## Build And Run
 
-进入 xv6 shell 后会看到 `$` 提示符。退出 QEMU：
-
-```text
-Ctrl-a x
-```
-
-如需清理构建产物：
+In WSL Ubuntu:
 
 ```bash
+cd /mnt/e/计算机操作系统能力竞赛/project61-agentOS-happylegend-uCore
+make -C user clean
 make clean
+make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_plain
+make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_plain LOG=warn INIT_PROC=rp_plain
+timeout 45s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_plain LOG=warn INIT_PROC=rp_plain
+make plain-platform-build TOOLPREFIX=riscv64-linux-gnu-
+timeout 45s make plain-platform-run TOOLPREFIX=riscv64-linux-gnu-
+make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded
+make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded LOG=warn INIT_PROC=rp_seed_orch
+timeout 90s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded LOG=warn INIT_PROC=rp_seed_orch
 ```
 
-宿主机 LLM Gateway 和 replay 大屏使用 Node + Vite。首次运行先安装依赖：
-
-```bash
-npm install
-```
-
-无 QEMU 回放验证：
-
-```bash
-npm run host:test
-npm run host:replay
-npm run host:dashboard:build
-```
-
-启动宿主机 replay 大屏：
-
-```bash
-npm run host:dev
-```
-
-默认页面地址为 `http://127.0.0.1:5173`，Gateway 地址为 `http://127.0.0.1:8787`。页面会读取 fixture replay，展示 4 个 Agent、事件时间线、`LLM_ANALYSIS`、恢复报告和 `BENCH` 指标。真实云端 LLM 可复制 `.env.example` 为 `.env` 后配置 OpenAI-compatible API；没有 key 或网络失败时自动使用 fallback。
-
-启动 live QEMU 大屏：
-
-```bash
-npm run host:live
-```
-
-Windows PowerShell 下该命令默认通过 WSL 执行 `make qemu`，自动在 xv6 shell 中运行 `labdemo` 和 `labbench`，实时解析串口中的 `agentos:event` 并推送到同一个大屏。若只想快速验证综合恢复主线，可运行：
-
-```powershell
-$env:HOST_LIVE_RUN_BENCH='0'
-npm run host:live
-```
-
-关键通过输出为：
+Expected key output:
 
 ```text
-host:live done status=done events=... final=RECOVERED llm=fallback
+rp_plain summary
+objects=500 object_total=102790 services=120 features=28 feature_units=299 checks=13 references=6 mappings=6
+catalog_ok=1 checks_ok=1 mature_ok=1 run_ok=1 search_ok=1
+rp_plain: passed
 ```
 
-当前交付材料包括：
+Expected orchestrator output:
 
-- 内核代码；
-- 用户态测试程序；
-- QEMU 运行和演示说明；
-- 测试记录与结果分析；
-- 任务一至五演示材料；
-- `labdemo` 综合演示入口；
-- `labbench` 性能演示入口；
-- 宿主机事件解析器；
-- OpenAI-compatible LLM Gateway 和 fallback；
-- Node + Vite replay/live 可视化大屏；
-- live QEMU 串口事件接入。
+```text
+rp_orch: start programs=69
+rp_catalog: objects=500 services=120 features=28 status=ready
+rp_state_catalog: keys=574 nonzero=71 zero=503 represented=574 checks=12 status=ready
+rp_object_store: records=8 status=ready
+rp_object_query: hits=8 ready_hits=7 status=ready
+rp_lineage: edges=7 status=ready
+rp_site_export: pages=42 status=ready
+rp_planner: workflow=lab-gene-x run=RUN-042 assignments=7 messages=21 schedule=ready status=planned
+rp_portability: imports=5 adapters=6 migration_steps=9 rehearsals=2 status=ready
+rp_retriever: literature=3 evidence_links=5 status=ready
+rp_analyst: datasets=4 profiles=4 statistics=6 figures=3 failure=tool_output_missing status=ready
+rp_reviewer: claims=8 protocol_checks=5 release_checks=4 rounds=2 status=accepted
+rp_lab: samples=4 quality_checks=7 protocol_checks=5 trials=4 trial_records=4 status=ready
+rp_governance: risks=3 capa=2 deviations=1 status=ready
+rp_writer: sections=8 citations=9 revisions=3 status=packaged
+rp_repair: failed_stage=align action=minimal_rerun attempts=2 status=recovered
+rp_auditor: provenance=verified release=ready package=ready status=passed
+rp_query: workflow=34 agent=26 evidence=10 ranked=21 selected=10 search_docs=1685 provenance=406/544 status=ready
+rp_evidence: claims=8 links=5 claim_records=8 paths=3 status=ready
+rp_llm_bridge: requests=3 responses=3 transcripts=99 routes=4 eval=7 relay=ready status=ready
+rp_llm_relay: packets=3 routes=4 guard=ready fallback=1 status=ready
+rp_privacy: checked=13 packets=3 redactions=0 compliance=accepted status=ready
+rp_runconf: profiles=2 validations=2 drift=1 status=ready
+rp_execobs: timeline=9 workers=4 controls=8 observer=ready status=ready
+rp_invoke: steps=10 attempts=12 outputs=6 status=recovered
+rp_complete: hooks=4 events=1 actions=4 status=ready
+rp_artifact_ops: inputs=2 stages=5 retries=1 artifacts=4 custom_requests=3 status=ready
+rp_data_pipeline: files=2 snapshots=2 previews=2 quality=passed transforms=2 status=ready
+rp_workflow_runner: stages=5 events=8 retries=1 cache_hits=1 custom_runs=3 status=ready
+rp_workbench: tasks=9 workspace_files=4 runs=4 exports=7 workbenches=8 deliveries=9 project_ops=17 status=ready
+rp_agent_collab: agents=7 messages=21 decisions=8 handoffs=6 status=ready
+rp_package: artifacts=52 checks=75 fair=passed repro=ready status=ready
+rp_calculation: computers=1 codes=1 jobs=1 retrieved=3 parser=1 exports=1 checks=84 errors=0 status=ready
+rp_realtask: dataset=palmer-penguins rows=344 numeric=5 checks=96 answer_audit=pass bundle=ready status=ready
+rp_analysisres: plans=1 runs=2 tables=2 statistics=2 figures=2 interpretations=2 checks=96 status=ready
+rp_campaign: campaigns=1 trials=4 best=04 checks=108 result_review=accept_candidate status=ready
+rp_delta: items=20 reviews=1 decision=accepted status=ready
+rp_release: decision=release checks=17 status=ready
+rp_dossier: sections=36 review_board=accepted submit=ready status=ready
+rp_service_surface: bio=ready lab_resources=ready publication=ready knowledge=ready runtime=ready status=ready
+rp_startup_doctor: quickstart=ready doctor=ready checks=14 status=ready
+rp_notebook_export: notebooks=2 cells=8 downloads=4 status=ready
+rp_backend: cases=7 executable=7 agentos=mainflow_bound exports=1 status=ready
+rp_consistency: checks=420 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 state_catalog=12 startup_doctor=14 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 backend=7 artifacts=7 agents=7 dynamic=4 status=ready
+rp_metrics: telemetry_spans=8 acks=35 tools=115 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 state_catalog=12 startup_doctor=14 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 delta_items=20 dynamic=4 status=ready
+rp_ui_export: pages=5 run=RUN-042 custom_runs=3 compare=ready status=ready
+rp_web_export: routes=152 api_payloads=15 actions=123 bundle=ready status=ready
+rp_review_dashboard: sections=8 gates=6 review_pack=host-materialized status=ready
+rp_modelreg: models=1 versions=1 evaluations=1 deployments=1 serving=1 checks=96 status=ready
+rp_sysreview: protocols=1 searches=1 screening=9 included=3 extractions=3 prisma=1 checks=104 status=ready
+rp_expsched: schedules=1 tasks=3 bookings=4 conflicts=1 executions=2 checks=88 status=ready
+rp_traincomp: requirements=4 records=4 competency=4 auth=3 gaps=1 open=0 checks=92 status=ready
+rp_publication: targets=2 submissions=2 reviews=2 responses=2 items=4 checks=48 status=ready
+rp_runbooks: templates=1 steps=7 incidents=1 executions=1 exports=1 status=ready
+rp_projectrel: checks=18 release=ready reproducibility=passed intake=accepted status=ready
+rp_studyproto: checks=20 protocols=2 launches=2 reproduction=ready status=ready
+rp_stdesign: designs=1 power=underpowered randomization=balanced blinding=ok checks=120 stat_result=approved_with_sample_size_note status=ready
+rp_opsboard: checks=18 pending=1 actions=4 plan_items=5 handoffs=3 status=ready
+rp_reviewboard: checks=24 requests=1 votes=4 signoffs=4 assignments=4 decision=approved status=ready
+rp_controlplane: checks=30 approvals=4 notifications=4 queue=4 plugins=3 permissions=5 status=ready
+rp_integrityplane: checks=36 evidence=8 references=8 namespace=5 status_semantics=5 review_alignment=4 status=ready
+rp_coherenceplane: checks=40 delivery=7 run_state=7 lifecycle=6 workflow_lint=5 tool_protocol=5 report_validation=5 status=ready
+rp_mature: profiles=6 mappings=6 checks=72 errors=0 status=ready
+rp_prov_view: timelines=4 subgraphs=3 packets=4 checks=64 errors=0 status=ready
+rp_prov_query: specs=3 templates=1 executions=3 comparisons=1 packets=1 checks=72 errors=0 status=ready
+rp_reldossier: sections=7 evidence=18 checks=112 decision=ready_for_review status=ready
+rp_decsupport: options=3 criteria=5 scores=15 selected=agentos_ucore_hybrid checks=80 status=ready
+rp_usable: templates=3 datasets=3 library=3 stages=9 queues=2 handoffs=3 checks=100 status=ready
+rp_usableproject: scaffolds=3 launches=2 bundles=2 doctor=10 checks=120 status=ready
+rp_compare_plain: plain_kernel=passed objects=500 programs=69 state_files=261 acks=69 tools=328 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 model_registry=96 systematic_review=104 experiment_scheduling=88 training_compliance=92 runbook_service=16 project_delivery=18 study_protocol=20 statistical_design=120 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 publication=48 calculation=84 real_task=96 analysis_results=96 decision_support=80 usable_research=100 usable_project=120 campaign=108 release_dossier=112 mature=72 provenance=64 provenance_query=72 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
+rp_orch: programs_ok=69 programs_total=69
+rp_orch: state_ok=1
+rp_orch: passed
+```
 
-仍需补充：
+The current upstream uCore kernel prints `all app are over!` after the init user program exits. In this branch that message means the plain user program finished and the kernel reached its existing no-more-apps path.
 
-- 进展汇报幻灯片；
-- 作品演示视频。
+## Kernel Source Check
 
-## 文档与演示
+Use these checks to verify that this branch keeps the kernel source unchanged:
 
-| 材料 | 位置 |
-| --- | --- |
-| 文档索引 | [docs/README.md](docs/README.md) |
-| 文档标准采用说明 | [docs/documentation-standard.md](docs/documentation-standard.md) |
-| 主设计文档 | [docs/design.md](docs/design.md) |
-| 赛题要求追踪表 | [docs/requirements-traceability.md](docs/requirements-traceability.md) |
-| API 与 ABI | [docs/api.md](docs/api.md) |
-| 验证与性能评估 | [docs/verification.md](docs/verification.md) |
-| 测试内容详细说明 | [docs/testing-details.md](docs/testing-details.md) |
-| 演示脚本 | [docs/demo-script.md](docs/demo-script.md) |
-| xv6 文件系统内说明 | [README](README) |
-| xv6-riscv 原始说明 | [THIRD_PARTY/xv6-riscv-README](THIRD_PARTY/xv6-riscv-README) |
-| 任务一细节附录 | [docs/task1-agent-process.md](docs/task1-agent-process.md) |
-| 任务二细节附录 | [docs/task2-agent-call.md](docs/task2-agent-call.md) |
-| 任务三细节附录 | [docs/task3-context-path.md](docs/task3-context-path.md) |
-| 任务四细节附录 | [docs/task4-file-query.md](docs/task4-file-query.md) |
-| 任务五细节附录 | [docs/task5-agent-loop.md](docs/task5-agent-loop.md) |
-| 任务六细节附录 | [docs/task6-llm-dashboard.md](docs/task6-llm-dashboard.md) |
-| 当前测试记录 | [docs/test-record.md](docs/test-record.md) |
-| 源代码许可 | [LICENSE](LICENSE) |
-| 文档与答辩材料许可 | [DOCUMENTATION_LICENSE.md](DOCUMENTATION_LICENSE.md) |
-| 第三方声明 | [NOTICE](NOTICE) |
-| 进展汇报幻灯片 | 待补充 |
-| 演示视频 | 待补充 |
+```bash
+diff -qr ../_upstream_ucore_2025S/os ./os
+diff -qr ../_upstream_ucore_2025S/scripts ./scripts
+grep 'FSSIZE 4096' nfs/fs.h
+```
 
-## 许可声明
+The two `diff` commands should print no output. The `grep` command confirms the platform image capacity used by the plain target.
 
-本仓库作为参赛作品提交的源代码采用 [Apache License 2.0](LICENSE) 许可，满足赛事对源代码开源协议的要求。
+## Host Reader
 
-xv6-riscv 基底代码和原始说明保留其上游版权与许可声明，详见 [THIRD_PARTY/xv6-riscv-LICENSE](THIRD_PARTY/xv6-riscv-LICENSE) 和 [THIRD_PARTY/xv6-riscv-README](THIRD_PARTY/xv6-riscv-README)。这些第三方声明是上游代码合规要求的一部分，不应删除。
+The `host_tools/plain_ucore_reader.py` utility renders ordinary `rp_*` state files into host-viewable HTML pages and API JSON files. It consumes the `host_plain_ucore_v2` reader contract written by `rp_web_bundle`. The generated pages use a sidebar, page-level summary cards, research-output summaries, report source maps, artifact source maps, review source maps, delivery source maps, a delivery package page, a workflow runner page, a research workbench page, a research Studio page, a project page, a project delivery review page, a provenance page, a provenance query page, a release dossier page, a decision-support page, a calculation page, a data pipeline page with ingest, snapshot, preview, quality, transform, collection, and manifest verification tables, workflow execution view tables, workflow control view tables, workflow evidence link tables, Agent detail summaries, Agent roster and decision-flow tables, evidence-package summaries, evidence detail summaries, review dashboard sections and gates, service operation records, runbook service records, claim/provenance/protocol tables, comparison summaries, compare metric summaries, operations report narrative tables, operations source-file tables, project lifecycle action tables, LLM Relay flow/request/response/quality tables, plain-kernel signal tables, state tables, Run/Workflow/Workbench/Studio/Project/Data/Compare/Review/Delivery/LLM Host action trace tables, action-output link and detail tables, action-impact tables, action-delta tables, host-action history, and a batch-action editor for running the same research flow through plain uCore.
 
-本队伍原创的技术文档、答辩材料、汇报幻灯片和演示视频采用 [Creative Commons Attribution-ShareAlike 4.0 International](https://creativecommons.org/licenses/by-sa/4.0/) 许可，详见 [DOCUMENTATION_LICENSE.md](DOCUMENTATION_LICENSE.md)。
+```bash
+python host_tools/plain_ucore_reader.py --state-dir path/to/rp-state --out-dir runtime/plain_ucore_reader
+python host_tools/plain_ucore_reader.py --state-dir path/to/rp-state --out-dir runtime/plain_ucore_reader --serve --port 8767
+python host_tools/plain_ucore_reader.py --state-dir path/to/rp-state --out-dir runtime/plain_ucore_reader --serve --port 8767 --auto-run-ucore --repo-dir . --run-root runtime/plain_ucore_auto_runs
+python host_tools/plain_ucore_reader.py --state-dir path/to/rp-state --out-dir runtime/plain_ucore_reader --serve --port 8767 --auto-run-ucore --auto-run-llm-relay --llm-relay-mode template --repo-dir . --run-root runtime/plain_ucore_auto_runs
+python host_tools/plain_ucore_fs_extract.py --image nfs/fs-copy.img --out-dir runtime/plain_ucore_extracted --repo-dir .
+python host_tools/plain_ucore_llm_relay.py --state-dir path/to/rp-state --out-dir runtime/plain_ucore_relay --mode template
+python host_tools/test_plain_ucore_fs_extract.py
+python host_tools/test_plain_ucore_reader.py
+python host_tools/test_plain_ucore_reader_e2e.py
+python host_tools/test_plain_ucore_llm_relay.py
+```
 
-如后续引用、复制或改编非本队伍来源的代码、文档或公开项目内容，将在对应源码位置、文档位置、设计文档和答辩材料中明确标注来源、用途、授权信息及本项目的增量贡献。对 xv6-riscv 的改动也会在设计文档和答辩材料中说明。
+With `--serve`, the reader exposes `/api/reader-summary`, `/api/contract`, `/api/state/{name}`, `/api/live`, static pages, `/actions/...` POST capture, and `/actions/batch` for a group of related research actions. Action requests are written to `host-actions.jsonl`; use `--write-state-actions` only when the host should also append an action inbox record beside the `rp_*` state files. With `--auto-run-ucore`, a single POST action or one `/actions/batch` request invokes the action runner, builds and runs `CHAPTER=platform_seeded` with `INIT_PROC=rp_seed_orch`, writes `rp_host_run_result`, extracts the generated state files, publishes the next state package back to the served state directory, and refreshes the generated pages. With `--auto-run-llm-relay`, the reader then runs `plain_ucore_llm_relay.py` over the refreshed `rp_llm*` files; template mode is offline and deterministic, while OpenAI-compatible mode reads endpoint, key, model, and timeout from host environment variables without writing secret values into uCore files. The end-to-end reader test starts the HTTP handler, sends a batch of one hundred eighteen actions covering research run, Studio launch, dataset registration, dataset preview, dataset visualization, dataset card, dataset answer, dataset run, dataset run comparison, dataset portfolio, library source registration, source portfolio, template registration, workspace inspection, workspace import, literature search, evidence review, evidence protocol, study-protocol creation/run/compliance/bundle/launch/rerun/comparison/reproduction-package/review/action-plan/action-execution, host workflow run/export/stage/cache/retry/artifact/report, artifact input/derive/log/chart/package operations, workflow portability run/import/plan/bind/rehearse/review/package, Host LLM Relay request, Host LLM Relay response, Host LLM Relay fallback, human review, revision task, revised run, workbench creation, workbench advance, workbench auto-advance, readiness, answer, answer audit, evidence search, task update, note, notes export, handoff package, brief, evidence dossier, evidence graph, citations, manuscript draft, manuscript audit, manuscript revision plan, manuscript revision task, task board, task-board row update, plan queue, delivery dashboard, quality gate and repair, operations report, operations advance, project scaffold, project launch, project action execution, project space, project review, project task-board row, project handoff audit, project release gate, project snapshot, snapshot comparison, reproducibility audit, provenance graph, project delivery, package intake, research search, runbook, timeline, file manifest, file verification, workbench completion, workbench export, notebook export, evidence bundle export, and AgentCompare. It then runs plain uCore once, extracts state from the file-system image, runs the host LLM relay in template mode, and verifies the refreshed API, summary cards, workflow runner records from `rp_stage_state`, `rp_cache_index`, `rp_retry_plan`, `rp_run_events`, `rp_worker`, and `rp_execobs`, Studio records from `rp_studio`, project lifecycle records from `rp_usableproj`, `rp_usablescaf`, `rp_usablelaunch`, and `rp_usablepack`, project delivery review records from `rp_web_bundle`, Agent details, Agent decision-flow tables, evidence details, delivery package records from `rp_package`, `rp_nbexec`, and `rp_uresrun`, service operation records from `rp_bioop`, `rp_labresop`, `rp_pubop`, `rp_knowop`, and `rp_runop`, claim/provenance/protocol tables, compare metrics, LLM relay quality tables, plain-kernel signal tables, action log, workflow portability records, relay response records, and HTML pages.
+
+The Run and Review pages also render report source maps that connect report sections to ordinary state files and source lines; these maps now prefer `report_source` records written by the plain uCore platform itself and resolve each `source_key` to the current evidence line in the named `rp_*` file. The Run, Workflow, Workbench, Project, Data, Compare, Review, Delivery, Artifacts, LLM, and Actions pages also render action-output link, detail, impact, and delta tables. These tables join `host-actions.jsonl` with the refreshed `rp_*` files, so a reader can see which Host action produced or changed `rp_input`, `rp_stage_state`, `rp_artifact_manifest`, `rp_llm_req`, `rp_review2`, `rp_package`, `rp_agentcmp`, and related files, including the matched state-file line that proves the visible result. The impact tables then point the action at report sections, artifact review paths, review gates, LLM packets, LLM quality rows, and package rows where those targets are available. The delta tables compare selected request fields with the observed uCore output fields and mark them as matched, missing, or different.
+
+The artifact page now renders manifest records, the artifact dossier, derived sections, provenance records, artifact review path rows, artifact source maps, dossier checks, archive files, stage logs, review/LLM signals, host artifact actions, and operations source-file links from ordinary `rp_*` files, so generated artifacts are visible as concrete input-output, report, review, and verification records instead of a single status line. `rp_artifact_manifest` writes `artifact_review_path` records for raw input to report, quality metrics to delivery package, and failed-stage recovery to reviewer package; the reader resolves references such as `rp_artifact:rp_align_table` and `rp_run_events:4` to actual state lines, and `rp_consistency` verifies the artifact path by checking the stage state, run event, retry plan, review gate, and LLM-quality source records.
+
+The final comparison step now verifies the review handoff path after all user-space state has been generated. It checks review dashboard sections, gates, decisions, handoffs, review-pack actions, delivery-to-operations/project/workbench bridge records, backend evidence handoff, and publishes `review_handoff_checks=13` in `rp_agentcmp`.
+
+The review page also renders a review source map. It resolves review dashboard sections, gates, handoffs, evidence-pack rows, backend evidence rows, bridge rows, and operations/workbench/project summaries to the current `rp_*` evidence lines, so a reviewer can inspect the concrete ordinary-file state behind the handoff without opening each file manually.
+
+The artifacts and review pages also render a delivery source map. It resolves package, notebook, and usable-run delivery references from `rp_package`, `rp_nbexec`, and `rp_uresrun` to current source lines, so package readiness can be checked against the files that actually produced the delivery records.
+
+The same final comparison step also verifies the LLM delivery path. It checks the ordinary-file queue, packets, matched responses, response file, quality record, packet guard, host-request manifest, package delivery entry, review dashboard LLM section, and workbench citation, then publishes `llm_delivery_checks=16` in `rp_agentcmp`.
+
+It also verifies the workflow portability delivery path. It checks import count, adapter count, migration steps, rehearsal cases, blocking items, package export fields, final migration decision, and Web bundle linkage, then publishes `workflow_portability_checks=14` in `rp_agentcmp`.
+
+The comparison step also checks that workflow portability and backend execution name the same execution plan, backend scenario, and compare profile. It verifies plain-uCore passed cases, AgentOS kernel-backed cases, and study records, then publishes `portability_backend_checks=18` in `rp_agentcmp`.
+
+The backend scenario now also writes compact case-runner evidence. It records seven cases: plain-uCore execution-plan checking, ordinary retry recovery, AgentOS Context Path, AgentOS file metadata query, AgentOS recovery tools, AgentOS event delivery, and AgentOS audit/provenance. The AgentOS cases are produced by the same RUN-042 workflow stages, not by a separate test program. They cover role-specific Agent launch, `rerun_stage` and `write_report`, indexed file metadata query, Context snapshot, inter-Agent event delivery, and kernel ledger/provenance reads. The backend links this evidence into `rp_runner`, `rp_report_text`, and the review handoff state, then publishes `backend_runner_checks=21`, `backend_runner_detail_checks=42`, `runner_detail_rows=7`, `backend_runner_report_checks=35`, `runner_report_rows=7`, and `backend_report_links=2` in `rp_agentcmp`. The Run page derives case narratives from `rp_backend_exec`, so a reviewer can see the plain-uCore cost and AgentOS replacement without switching to the comparison page.
+
+The mature-platform mapping step records Galaxy, AiiDA, DVC, MLflow, Nextflow, and Snakemake capability profiles, maps them to current platform state files, and publishes a dedicated `mature.html` reader page plus `mature_capability_checks=72` in `rp_agentcmp`.
+
+The release dossier step collects the package, governance, publication, data release, experiment campaign, execution evidence, and AgentOS-readiness records into `rp_reldossier`, `rp_reldsec`, `rp_relattest`, and `rp_relpack`. It publishes `release-dossier.html`, adds `release_dossier_checks=112` to `rp_agentcmp`, and records the review-ready package handle `release-dossier-package:RUN-042`.
+
+The decision-support step scores the final architecture choices from the same RUN-042 evidence. It writes `rp_decsupport`, `rp_decopt`, `rp_deccrit`, `rp_decscore`, and `rp_decpacket`, publishes `decision-support.html`, adds `decision_support_checks=80` to `rp_agentcmp`, and records `agentos_ucore_hybrid` as the selected final demonstration architecture.
+
+The usable-research step mirrors the host platform's current research workbench entry. It writes `rp_usable`, `rp_usabletpl`, `rp_usableds`, `rp_usablelib`, `rp_usabledag`, and `rp_usableops`, publishes `usable-research.html`, adds `usable_research_checks=100` to `rp_agentcmp`, and records templates, reusable datasets, library sources, a nine-stage research DAG, plan and action queues, handoff packages, and delivery exports.
+
+The usable-project step covers the host platform's project lifecycle entry points. It writes `rp_usableproj`, `rp_usableboot`, `rp_usablescaf`, `rp_usablelaunch`, and `rp_usablepack`, publishes `usable-project.html`, adds `usable_project_checks=120` to `rp_agentcmp`, and records configuration, startup guide, platform doctor, project scaffold templates, launched projects, project bundles, package intake, and reproduction package actions.
+
+The statistical design step writes `rp_stdesign`, `rp_power`, `rp_random`, `rp_blind`, and `rp_streview`. It records the RUN-042 primary design, power-analysis status, deterministic treatment/control allocation, blinding review, and reviewer decision, then publishes `statistical-design.html` and `statistical_design_checks=120` in `rp_agentcmp`.
+
+The provenance view step records timeline views, provenance edges, evidence packets, and the AgentOS replacement points for kernel timeline, kernel provenance edges, kernel ledger, and Context detail. It publishes `provenance.html` and `provenance_view_checks=64` in `rp_agentcmp`.
+
+The Run and Workflow pages render `Workflow Execution View`, `Workflow Control View`, and `Workflow Evidence Links` from existing workflow state files. These tables join `rp_stage_state`, `rp_cache_index`, `rp_retry_plan`, `rp_run_events`, `rp_worker`, `rp_execobs`, `rp_artifact`, `rp_artifact_manifest`, `rp_stage_log`, `rp_report_text`, `rp_review_dashboard`, and `rp_package` into readable stage, worker, cache, retry, observer, artifact, report, review, and delivery rows, so the failed align-stage retry and the host-triggered workflow run can be reviewed without manually opening every state file.
+
+The Workbench page renders `Research Workbench`, `Workbench Task State`, `Workbench Writing Outputs`, `Workbench File Package`, and `Workbench Review Board` from existing `rp_runner`, `rp_report_text`, `rp_revision`, `rp_package`, `rp_review_pack`, `rp_nbexec`, and `rp_uresrun` files. It exposes the workbench id, title, question, task state, answer audit, notes, manuscript export, citation/manuscript formats, task-board rows, manifest, verification counts, notebook export, handoff package, and bundle output in one page.
+
+The Studio page renders `Research Studio`, Studio sessions, material summaries, links, and Studio action traces from `rp_studio`, `rp_runner`, `rp_package`, `rp_actionio`, and `rp_web_bundle`. The host action `/actions/research/studio-launch` stores a compact seed inside uCore with title, goal, and workbench id, while the full host run package keeps the richer payload.
+
+The Data page renders `Data Pipeline`, `Ingested Input Files`, `Dataset Snapshots`, `Data Preview Records`, `Derived Data Preview`, `Data Quality State`, `Data Transform Records`, `Derived Data Products`, `Dataset Collection`, and `Data Manifest Verification` from existing `rp_api_data`, `rp_ingest_files`, `rp_dataset_snapshot`, `rp_data_preview`, `rp_data_quality`, `rp_data_transform`, and `rp_dataset_collection` files. It exposes the concrete input files, row counts, quality decisions, transform inputs/outputs, collection items, manifest name, hash-record count, verified count, missing count, and data-related Host actions without opening each state file manually.
+
+The Project page renders `Project Space`, `Project Handoff`, `Project Evidence Package`, `Project Package Records`, `Project Quality And Repair`, `Project Search And Notes`, and `Project Source Files` from existing `rp_runner`, `rp_package`, `rp_review_pack`, `rp_actionio`, and `rp_web_bundle` files. It exposes the project id, project-space status, note, action item, cited answer, repair action, research search status, quality gate, quality repair result, and source-file links for the project handoff.
+
+The Project Review page renders `Project Delivery Review`, release-gate records, project snapshots, snapshot comparison, reproducibility audit, provenance graph, delivery report, package intake, package index, and related action trace/detail/delta tables from `rp_web_bundle`, `rp_actionio`, `rp_package`, and `rp_review_pack`. It exposes project readiness as concrete ordinary-file records instead of relying on a separate host-only project checklist.
+
+The action runner turns captured host actions into ordinary uCore state files for the next run:
+
+```bash
+python host_tools/plain_ucore_action_runner.py --actions runtime/plain_ucore_reader/host-actions.jsonl --state-dir path/to/rp-state --run-dir runtime/plain_ucore_actions
+python host_tools/plain_ucore_action_runner.py --actions runtime/plain_ucore_reader/host-actions.jsonl --state-dir path/to/rp-state --run-dir runtime/plain_ucore_actions --run-ucore --repo-dir .
+python host_tools/test_plain_ucore_action_runner.py
+```
+
+The runner writes `state-next/rp_host_action_queue`, `state-next/rp_host_action_plan`, `state-next/rp_host_action_inbox`, `actions.json`, and `runner-summary.json`. With `--run-ucore`, it keeps the full inbox text in the host run package, writes a compact `kind` plus payload seed to `state-next/rp_host_action_seed`, pads `rp_*` image inputs to the teaching file-system block size, copies the compact seed file into `user/target/bin/` before building `nfs/fs.img`, builds the ordinary user programs, runs `rp_seed_orch`, writes `ucore-run.log`, extracts text `rp_*` state files from `nfs/fs-copy.img`, and records QEMU result markers in `state-next/rp_host_run_result`. The queue and plan files stay in the host run package because the teaching uCore file system keeps limited root-directory capacity. The compact seed file is small enough to fit in the image and avoids passing a large action batch through `exec` arguments. Seeded research, Studio, dataset, library, template, workspace, evidence, comparison, host-workflow, artifact operation, Host LLM Relay, human-review, revision, workbench, operations, project-space, project-review, research-search, notebook-export, and bundle-export actions are reflected in the ordinary state files used by the platform: `rp_input`, data pipeline files, `rp_studio`, `rp_runner`, `rp_review2`, `rp_revision`, `rp_package`, `rp_report_text`, `rp_artifact`, `rp_stage_log`, `rp_chart_data`, `rp_artifact_manifest`, `rp_nbexec`, `rp_uresrun`, `rp_actionio`, `rp_web_bundle`, `rp_agentcmp`, and `rp_llm_*` relay files. Research-run payload fields now change the input, data, report, API, and usable-run summaries: title, question, provider, dataset row count, reference count, workspace file count, CSV filename, and reference filename are carried into `rp_input`, data pipeline files, `rp_report_text`, `rp_api_home`, `rp_api_run`, and `rp_uresrun`. Studio launch payload fields update `rp_studio`, `rp_runner`, `rp_package`, `rp_actionio`, and `rp_web_bundle` with session title, goal, workbench id, links, and package-ready markers; the compact seed keeps only title, goal, and workbench id for the ordinary uCore run while the host package keeps the full request. Project review payload fields update `rp_web_bundle` and `rp_actionio` with release-gate decision, snapshot status, reproducibility decision, provenance graph export, delivery bundle, and package-intake label. Host workflow actions update `rp_stage_dag`, `rp_stage_state`, `rp_run_events`, `rp_artifact_manifest`, `rp_runner`, `rp_package`, `rp_actionio`, and `rp_web_bundle` with workflow id, run id, engine, stage count, DAG text, export format, export bundle, failed stage, retry stage, retry reason, cache policy, cache-hit stage, worker slots, queue depth, and observer event count. Host workflow stage/cache/retry/artifact/report actions additionally update `rp_stage_state`, `rp_run_events`, `rp_cache_index`, `rp_retry_plan`, `rp_artifact_manifest`, `rp_report_text`, package records, and action summaries with concrete attempt, cache key, retry decision, artifact hash, artifact size, report name, report format, and report section count. Artifact input/derive/log/chart/package actions update `rp_artifact`, `rp_stage_log`, `rp_chart_data`, `rp_artifact_manifest`, `rp_package`, `rp_actionio`, and `rp_web_bundle` with input filename, artifact kind, hash, byte count, source, derived output, operation, stage log, chart data, and package manifest fields. Host LLM Relay actions update `rp_llm_req`, `rp_llmq`, `rp_llm_resp`, `rp_llm_packets`, `rp_llm_hostreq`, `rp_llm_fallback`, `rp_api_runtime`, `rp_actionio`, and `rp_web_bundle` with request id, route, provider, response id, response summary, and fallback case. Writing-oriented workbench actions update `rp_revision`; handoff, manifest, brief, dossier, graph, citation, manuscript, task board, runbook, timeline, readiness, completion, and workbench export actions update `rp_package`; file-manifest and file-verify actions also update `rp_ingest_files`, `rp_data_quality`, `rp_dataset_collection`, `rp_artifact_manifest`, `rp_api_artifacts`, and `rp_api_data` with manifest file count, hash-record count, verified file count, and missing file count. The user programs read action-specific payload fields from the seed file, so `run_id`, workflow id, workflow engine, workflow DAG, workflow export bundle, workflow stage attempt, cache decision, retry decision, artifact record, artifact input, artifact output, artifact log, artifact chart, artifact package, report record, Studio title, Studio goal, workbench id, project id, release-gate decision, snapshot id, provenance graph filename, project delivery bundle, package-intake label, LLM request id, LLM route, LLM provider, LLM response id, LLM summary, LLM fallback case, reviewer, review decision, revision targets, revision task id, workbench title, literature query, workbench question, evidence-search query, workbench task/status, workbench note kind/title/body, notes filter, handoff scope, brief format, dossier format, graph format, citation format, manuscript format, audit scope, revision area, revision task/status, board filter, board-row id/status, runbook format, timeline format, file-manifest name, file counts, hash counts, verification counts, notebook format, bundle name, and comparison profile change the resulting state files instead of being reduced to a fixed action type. The same payload values are also propagated into `rp_report_text`, `rp_artifact_manifest`, `rp_nbexec`, `rp_uresrun`, `rp_api_compare`, `rp_api_runtime`, and the package download summary, so the final reader pages show changed report, evidence, notebook, run, Studio, project review, package, workflow, LLM relay, and comparison content.
+
+The host relay tool consumes the ordinary `rp_llmq`, `rp_llm_req`, and `rp_llm_packets` files and writes refreshed `rp_llm_resp`, `rp_llm_hostreq`, `rp_llm_packets`, `rp_llmlog`, `rp_actionio`, `rp_web_bundle`, and `rp_api_runtime` records. It also writes the selected relay response into `rp_report_text`, `rp_runner`, `rp_revision`, `rp_package`, `rp_api_run`, `rp_api_evidence`, `rp_agent_run`, and `rp_review_dashboard`, then materializes `rp_review_pack` for the host reader from the dashboard, delivery state, and backend case records. The evidence package links delivery manifest, operations report, project-space action items, workbench handoff, backend evidence, backend action/review rows, operations/workbench/project summaries, and the relevant Host action trace into one reviewer-facing handoff view. The LLM result is visible in the research report, workbench answer, writing state, delivery package, review dashboard, reviewer evidence package, and rendered API files. The same run now appends host-side quality records into `rp_llmeval`, packet guard records into `rp_llm_guard`, replay records into `rp_relay`, and route records into `rp_prompt`; `llm.html` renders those files as a request-to-response flow table plus request, response, quality, guard, replay, action trace, action output, action impact, and action delta tables. It writes prompt hashes and response summaries, not host secret values. This keeps the plain uCore branch compatible with template-mode demonstrations and with a host-managed cloud provider.
+
+The reader is a host-side viewer and action-capture service for plain uCore output. It does not modify `os/`, `nfs/`, or `scripts`, and it does not add Agent-OS kernel features.
+
+## Next Work
+
+The current native programs prove that the plain uCore kernel can boot and run a research-platform-shaped catalog process plus a multi-process workflow with ordinary file-backed object storage, task messages, role acknowledgements, tool logs, scheduling records, task records, workflow import/export description, workflow portability records for Snakemake, Galaxy, DVC, CWL, and Nextflow style workflows, adapter summaries, migration plans, rehearsal cases, resource budget, project policy, risk register, CAPA records, failure classification, retry records, query, task ranking, run view, run configuration, workflow invocation, completion actions, execution plan, worker health, execution timeline, observer evidence, concrete input files, three custom research requests and small CSV-style rows carried in `rp_input`, request-form, uploaded-material, reusable-source, local workspace-import, generated workspace-template, workspace-run sections, four dynamic submission records, file-backed validation state, and host UI feed hints inside `rp_input`, data ingestion records, dataset snapshots, data previews, quality results, transform records, dataset collections, stage DAG, stage logs, workflow runner execution state, stage command/output records, dependency checks, normalized FASTQ, alignment table, metrics JSON, gene-count CSV, and archive manifest sections inside `rp_artifact`, three derived custom run summaries and one queued dynamic API run in `rp_runner`, workbench readiness, cited-answer, handoff brief, continuation runbook, timeline, and file-manifest sections inside `rp_runner`, human review records, revision-task records, one revised run record, review thread records, review comment records, action item records, bibliography and citation-plan records, literature search, candidate screening, evidence extraction, registered evidence protocol, PRISMA-style flow record, evidence synthesis record, content-keyed cache records, retry plan with failure reason and rerun input/output fields, run events with retry decisions and report/evidence references, artifact manifest with support links, recovered artifacts, report text, chart data, Agent collaboration evidence, file-backed Host LLM Relay protocol with queue validation, route decisions, packet schema checks, guard checks, fallback decisions, matched request, packet, and response records, host UI data exports with navigation, timeline, artifact preview, Agent decision, evidence preview, dynamic-input queue references, live-update feed records, host reader contract records, comparison metric rows, static review site inventory with 42 routed pages, Host Web/API payload contract, file-backed POST action request and response records, twelve service action records with request validation, precondition checks, idempotency keys, side-effect records, and download-manifest state, package export indexes for report, evidence, provenance, reusable source selection, reviewer delivery, eight delivery file rows, three delivery checks, delivery manifest JSON/Markdown names, evidence bundle zip name, evidence bundle contents, raw artifacts, and review page sections, user-space test suite, object naming checks, surface reachability checks, status semantics checks, reference checks, evidence trace checks, run-state explanation checks, lifecycle-order checks, delivery consistency checks, AgentOS readiness checks, lineage, site export, data dictionary, data profile records, figure records, calculation replay, samples, quality, protocol, SOP, experiment, trial records, lab operations, personnel training, sample registry, ethics review, data access review, instrument registry, inventory, procurement, resource schedule, result review, publication plan, peer review response, FAIR package, literature review, citation graph, semantic index, knowledge answers, runtime environment locks, notebook replay, ELN record, worker pool, telemetry, health summary, evidence, claim records, provenance paths, knowledge, semantic summary, systematic review summary, multi-round review, report revision package, LLM packet queue, host relay request/response handoff, prompt routing, LLM audit log, LLM evaluation, privacy review, compliance record, release delta review, FAIR data release, data product summary, data product versioning, reproduction package, release, dossier, review governance, submission package, backend scenario evidence, cross-file consistency checks, AgentCompare metrics, and comparison services. Further migration work should move more behavior from embedded tables into active user-space services:
+
+- Persistent platform state files in the uCore root file system.
+- Expand the planner, retriever, analyst, reviewer, governance, writer, repair, auditor, object query, lineage, export, scheduling, task ranking, workflow import/export, resource budget, project policy, risk register, CAPA records, release delta review, run configuration, workflow invocation, workflow completion, execution observer, backend scenario, failure classification, retry handling, run views, data dictionary, data profile records, figure records, calculation replay, sample, quality, protocol, SOP, experiment, trial records, lab operations, telemetry, health summaries, evidence, claim records, provenance paths, knowledge, FAIR data release, data product versioning, reproduction, review governance, LLM packet queue, host relay description, prompt routing, LLM evaluation, privacy, compliance, release, dossier, submission, and AgentCompare programs beyond the current fixed records.
+- A richer user-space coordination protocol using only unchanged uCore syscalls.
+- More host relay provider adapters and stricter response scoring over the ordinary LLM request and response files.
+- More executable checks for workflow portability, workflow runner execution, Host Web/API payload export, file-backed action handling, release review, and AgentCompare comparison.
+
+The later Agent-OS enhanced kernel version should use the same object names, role names, and output contracts so both kernels can run the same demonstration scenario.

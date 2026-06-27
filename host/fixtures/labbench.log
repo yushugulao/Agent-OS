@@ -1,9 +1,0 @@
-$ labbench
-labbench: Agent-OS task4/task5 benchmark
-labbench: case ops ticks ops_per_tick speedup_x100
-labbench: file_scan_query ops=32768 ticks=36 ops_per_tick=910 speedup_x100=100
-agentos:event type=BENCH case=file_scan_query ops=32768 ticks=36 ops_per_tick=910 speedup_x100=100
-labbench: file_index_query ops=32768 ticks=22 ops_per_tick=1489 speedup_x100=163
-labbench: duplicate_reject attempts=2 executed=1 rejected=1 ticks=0
-agentos:event type=BENCH case=duplicate_reject attempts=2 executed=1 rejected=1 ticks=0
-labbench: passed
