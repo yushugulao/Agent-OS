@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=1792" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=242" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=1904" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=252" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -738,9 +738,22 @@ def main() -> int:
             assert any("calculation_checks=84" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("real_task_checks=96" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("experiment_campaign_checks=108" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("release_dossier_checks=112" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("mature_capability_checks=72" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_view_checks=64" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_query_checks=72" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            rp_reldossier = read_json(base + "/api/state/rp_reldossier")
+            assert any("release_dossier_checks=112" in line for line in rp_reldossier["lines"]), rp_reldossier
+            assert any("dossier=release-dossier:RUN-042:final-review" in line for line in rp_reldossier["lines"]), rp_reldossier
+            assert any("decision=ready_for_review" in line for line in rp_reldossier["lines"]), rp_reldossier
+            rp_reldsec = read_json(base + "/api/state/rp_reldsec")
+            assert any("section=experiment-campaign;status=ok" in line for line in rp_reldsec["lines"]), rp_reldsec
+            assert any("section=agentos-readiness;status=ok" in line for line in rp_reldsec["lines"]), rp_reldsec
+            rp_relattest = read_json(base + "/api/state/rp_relattest")
+            assert any("attestations=4" in line for line in rp_relattest["lines"]), rp_relattest
+            rp_relpack = read_json(base + "/api/state/rp_relpack")
+            assert any("package_files=2" in line for line in rp_relpack["lines"]), rp_relpack
+            assert any("download=release-dossier-package:RUN-042" in line for line in rp_relpack["lines"]), rp_relpack
             rp_runbooks = read_json(base + "/api/state/rp_runbooks")
             assert any("runbook_service_checks=16" in line for line in rp_runbooks["lines"]), rp_runbooks
             assert any("runbook_templates=1" in line for line in rp_runbooks["lines"]), rp_runbooks
@@ -1434,6 +1447,12 @@ def main() -> int:
             assert "trial_count" in campaign_html
             assert "select_trial_04" in campaign_html
             assert "accept_candidate" in campaign_html
+            release_dossier_html = read_text(base + "/release-dossier.html")
+            assert "Release Dossier" in release_dossier_html
+            assert "release-dossier:RUN-042:final-review" in release_dossier_html
+            assert "experiment-campaign" in release_dossier_html
+            assert "agentos-readiness" in release_dossier_html
+            assert "release-dossier-package:RUN-042" in release_dossier_html
             mature_html = read_text(base + "/mature.html")
             assert "Mature Platform Mapping" in mature_html
             assert "Mature Capability Detail" in mature_html
@@ -1623,6 +1642,8 @@ def main() -> int:
             assert "Real Task Checks" in compare_html
             assert "experiment_campaign_checks" in compare_html
             assert "Experiment Campaign Checks" in compare_html
+            assert "release_dossier_checks" in compare_html
+            assert "Release Dossier Checks" in compare_html
             assert "mature_capability_checks" in compare_html
             assert "Mature Capability" in compare_html
             assert "provenance_view_checks" in compare_html

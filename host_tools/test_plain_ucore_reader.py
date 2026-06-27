@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=29
+reader_views=30
 reader_actions=57
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
@@ -87,6 +87,7 @@ publication_page=rp_publication;peer_response=rp_peerresp;status=ready
 calculations_page=rp_calculation;jobs=1;retrieved=3;parser_results=1;status=ready
 real_task_page=rp_realtask;dataset=palmer-penguins;rows=344;answer_audit=pass;status=ready
 experiment_campaigns_page=rp_campaign;campaigns=1;trials=4;best_trial=04;status=ready
+release_dossier_page=rp_reldossier;sections=7;decision=ready_for_review;status=ready
 mature_capability_page=rp_mature;profiles=6;mappings=6;checks=72;status=ready
 provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=ready
 provenance_queries_page=rp_prov_query;specs=3;executions=3;packets=1;status=ready
@@ -277,8 +278,8 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=1792\n"
-        "tool_events=242\n"
+        "test_cases=1904\n"
+        "tool_events=252\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=4;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
@@ -294,6 +295,7 @@ status=ready
         "calculation_checks=84;computers=1;codes=1;jobs=1;retrieved=3;parser_results=1;exports=1;agentos_replacements=4;status=ready\n"
         "real_task_checks=96;dataset=palmer-penguins;rows=344;numeric_fields=5;answer_audit=pass;bundle=ready;status=ready\n"
         "experiment_campaign_checks=108;campaigns=1;trials=4;best_trial=04;result_review=accept_candidate;status=ready\n"
+        "release_dossier_checks=112;sections=7;evidence_ids=18;decision=ready_for_review;status=ready\n"
         "mature_capability_checks=72;profiles=6;mappings=6;checks=72;platforms=Galaxy,AiiDA,DVC,MLflow,Nextflow,Snakemake;agentos_replacements=5;status=ready\n"
         "provenance_view_checks=64;timeline_views=4;subgraphs=3;packets=4;agentos_replacements=4;status=ready\n"
         "provenance_query_checks=72;specs=3;templates=1;executions=3;comparisons=1;exports=1;packets=1;agentos_replacements=4;status=ready\n"
@@ -443,6 +445,47 @@ status=ready
         "parameter_changes=memory_mb:+512,threads:+2\n"
         "artifact_changes=rp_trials,rp_camp_rank\n"
         "decision=accept_candidate\n"
+        "status=ready\n"
+    ),
+    "rp_reldossier": (
+        "service=release-dossier\n"
+        "release_dossier_checks=112\n"
+        "dossier=release-dossier:RUN-042:final-review\n"
+        "run_id=RUN-042\n"
+        "candidate=release-candidate:RUN-042:final\n"
+        "research_package=rp_package\n"
+        "sections=7\n"
+        "evidence_ids=18\n"
+        "decision=ready_for_review\n"
+        "checksum=rel-dossier-042\n"
+        "status=ready\n"
+    ),
+    "rp_reldsec": (
+        "dossier=release-dossier:RUN-042:final-review\n"
+        "section=research-package;status=ok;summary=52_artifacts_75_checks;evidence=rp_package\n"
+        "section=governance;status=ok;summary=release_gate_and_review_board_passed;evidence=rp_projectrel,rp_reviewboard\n"
+        "section=publication;status=ok;summary=2_submissions_2_decisions;evidence=rp_publication\n"
+        "section=data-release;status=ok;summary=fair_validation_and_data_version_ready;evidence=rp_datarel,rp_dataver\n"
+        "section=experiment-campaign;status=ok;summary=1_campaign_4_trials_best_04;evidence=rp_campaign,rp_trials,rp_camp_rank,rp_resreview\n"
+        "section=execution-evidence;status=ok;summary=4_packets_and_provenance_ready;evidence=rp_execobs,rp_prov_view,rp_prov_query\n"
+        "section=agentos-readiness;status=ok;summary=backend_runner_reports_ready;evidence=rp_backend,rp_backend_exec,rp_study\n"
+        "status=ready\n"
+    ),
+    "rp_relattest": (
+        "dossier=release-dossier:RUN-042:final-review\n"
+        "attestations=4\n"
+        "attestation=review-board;status=accepted;source=rp_reviewboard\n"
+        "attestation=integrity-plane;status=passed;source=rp_integrity\n"
+        "attestation=coherence-plane;status=passed;source=rp_coherence\n"
+        "attestation=publication;status=accepted;source=rp_publication\n"
+        "status=ready\n"
+    ),
+    "rp_relpack": (
+        "dossier=release-dossier:RUN-042:final-review\n"
+        "package_files=2\n"
+        "file=release-dossier.json;kind=json;checksum=reljson042;status=ready\n"
+        "file=release-dossier.md;kind=markdown;checksum=relmd042;status=ready\n"
+        "download=release-dossier-package:RUN-042\n"
         "status=ready\n"
     ),
     "rp_mature": (
@@ -810,6 +853,7 @@ status=ready
         "subsection=integrity_plane;source=rp_integrity;checks=36;errors=0;result=passed;status=ready\n"
         "subsection=real_task;source=rp_realtask;dataset=palmer-penguins;checks=96;outcome=passed;status=ready\n"
         "subsection=experiment_campaigns;source=rp_campaign;campaigns=1;trials=4;checks=108;outcome=passed;status=ready\n"
+        "subsection=release_dossier;source=rp_reldossier;sections=7;checks=112;outcome=passed;status=ready\n"
         "backend_review_evidence=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;review_pack=rp_review_pack;status=ready\n"
         "status=ready\n"
     ),
@@ -852,7 +896,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 29, summary
+        assert summary["pages"] == 30, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -869,6 +913,7 @@ def main() -> int:
         assert (out_dir / "calculations.html").exists()
         assert (out_dir / "real-task.html").exists()
         assert (out_dir / "experiment-campaigns.html").exists()
+        assert (out_dir / "release-dossier.html").exists()
         assert (out_dir / "mature.html").exists()
         assert (out_dir / "provenance.html").exists()
         assert (out_dir / "provenance-queries.html").exists()
@@ -1090,6 +1135,13 @@ def main() -> int:
         assert "4" in campaign_html
         assert "select_trial_04" in campaign_html
         assert "accept_candidate" in campaign_html
+        release_dossier_html = (out_dir / "release-dossier.html").read_text(encoding="utf-8")
+        assert "Release Dossier" in release_dossier_html
+        assert "release-dossier:RUN-042:final-review" in release_dossier_html
+        assert "experiment-campaign" in release_dossier_html
+        assert "agentos-readiness" in release_dossier_html
+        assert "attestations" in release_dossier_html
+        assert "release-dossier-package:RUN-042" in release_dossier_html
         mature_html = (out_dir / "mature.html").read_text(encoding="utf-8")
         assert "Mature Platform Mapping" in mature_html
         assert "Mature Capability Detail" in mature_html
@@ -1158,6 +1210,8 @@ def main() -> int:
         assert "Real Task Checks" in compare_html
         assert "experiment_campaign_checks" in compare_html
         assert "Experiment Campaign Checks" in compare_html
+        assert "release_dossier_checks" in compare_html
+        assert "Release Dossier Checks" in compare_html
         assert "mature_capability_checks" in compare_html
         assert "Mature Capability" in compare_html
         assert "provenance_view_checks" in compare_html

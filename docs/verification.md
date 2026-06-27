@@ -126,7 +126,7 @@ timeout 45s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform LOG=warn INI
 Observed key output:
 
 ```text
-rp_orch: start programs=59
+rp_orch: start programs=60
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_state_catalog: keys=573 nonzero=70 zero=503 represented=573 checks=12 status=ready
 rp_object_store: records=8 status=ready
@@ -161,6 +161,7 @@ rp_package: artifacts=52 checks=75 fair=passed repro=ready status=ready
 rp_calculation: computers=1 codes=1 jobs=1 retrieved=3 parser=1 exports=1 checks=84 errors=0 status=ready
 rp_realtask: dataset=palmer-penguins rows=344 numeric=5 checks=96 answer_audit=pass bundle=ready status=ready
 rp_campaign: campaigns=1 trials=4 best=04 checks=108 result_review=accept_candidate status=ready
+rp_reldossier: sections=7 evidence=18 checks=112 decision=ready_for_review status=ready
 rp_delta: items=20 reviews=1 decision=accepted status=ready
 rp_release: decision=release checks=17 status=ready
 rp_dossier: sections=36 review_board=accepted submit=ready status=ready
@@ -185,8 +186,8 @@ rp_coherenceplane: checks=40 delivery=7 run_state=7 lifecycle=6 workflow_lint=5 
 rp_mature: profiles=6 mappings=6 checks=72 errors=0 status=ready
 rp_prov_view: timelines=4 subgraphs=3 packets=4 checks=64 errors=0 status=ready
 rp_prov_query: specs=3 templates=1 executions=3 comparisons=1 packets=1 checks=72 errors=0 status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=59 state_files=207 acks=59 tools=242 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 publication=48 calculation=84 real_task=96 campaign=108 mature=72 provenance=64 provenance_query=72 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
-rp_orch: programs_ok=59 programs_total=59
+rp_compare_plain: plain_kernel=passed objects=500 programs=60 state_files=211 acks=60 tools=252 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 publication=48 calculation=84 real_task=96 campaign=108 release_dossier=112 mature=72 provenance=64 provenance_query=72 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
+rp_orch: programs_ok=60 programs_total=60
 rp_orch: state_ok=1
 rp_orch: passed
 ```
@@ -244,11 +245,11 @@ This first native uCore version validates:
 - platform self-check status,
 - catalog search,
 - a complete research run simulation with one failed stage repaired in user space.
-- multi-process execution with fifty-seven ordinary uCore user programs.
+- multi-process execution with sixty ordinary uCore user programs.
 - ordinary file-backed state exchange across role programs.
 - active cross-file consistency checks across tasks, LLM packets, workflow invocation, completion hooks, backend cases, and runner artifacts.
 - host-side LLM relay execution over ordinary state files, with offline template responses, cloud-configuration detection, prompt hashes, response quality checks, packet guard records, replay records, and no secret values written back to uCore state.
-- user-space test suite with 1792 checks over catalog records, service records, Host Reader export files, workflow runner files, artifact files, delivery files, review files, LLM relay files, calculation job records, real task validation records, experiment campaign records, mature platform mappings, provenance views, provenance query records, Agent collaboration records, AgentCompare records, and cross-file consistency records.
+- user-space test suite with 1904 checks over catalog records, service records, Host Reader export files, workflow runner files, artifact files, delivery files, review files, LLM relay files, calculation job records, real task validation records, experiment campaign records, release dossier records, mature platform mappings, provenance views, provenance query records, Agent collaboration records, AgentCompare records, and cross-file consistency records.
 - object catalog, reusable object records, object query, lineage, site export, task messages, role acknowledgements, tool logs, scheduling records, task records, task ranking, workflow import/export description, resource budget, project policy, risk register, CAPA records, release delta review, run configuration, workflow invocation, workflow completion, execution plan, worker health, execution timeline, observer evidence, concrete input files, three custom research requests, nine small CSV-style rows, request-form, uploaded-material, reusable-source, workspace-import, generated workspace-template, workspace-run sections, four dynamic submission records, file-backed validation state, and host UI feed hints, three derived custom run summaries and one queued API run, human review records, revision-task records, one revised run record, review thread records, review comment records, action item records, bibliography and citation-plan records, literature search, candidate screening, evidence extraction, evidence protocol, PRISMA-style flow, evidence synthesis, input-file scan records, normalized FASTQ, alignment table, metrics JSON, gene-count CSV, archive manifest sections, artifact dossier links, and artifact provenance records inside `rp_artifact`, dataset snapshots, data previews, quality results, transform records, dataset collections, stage DAG, stage logs, workflow runner execution state, stage command/output records, dependency checks, dossier checks, content-keyed cache records, retry plan with failure reason and rerun input/output fields, run events with retry decisions and report/evidence references, artifact manifest with support links, recovered artifacts, report text, chart data, package export indexes for report, evidence, provenance, reusable source selection, reviewer delivery, eight delivery file rows, three delivery checks, delivery manifest JSON/Markdown names, evidence bundle zip name, evidence bundle contents, raw artifacts, and review page sections, UI navigation, timeline rows, artifact previews, Agent decision rows, evidence previews, dynamic-input queue references, live-update feed records, host reader contract records, comparison metric rows, Host Web/API route and payload files, file-backed action request and response files, failure classification, retry records, run views, data dictionary, data profile records, figure records, calculation replay, samples, quality, protocol, SOP, experiment, trial records, lab operations, training, sample registry, ethics review, data access review, cohort view, instrument registry, inventory, procurement, resource scheduling, result review, publication plan, peer review response, FAIR package, literature review, citation graph, semantic index, knowledge answers, runtime environment records, notebook replay records, ELN records, worker pool records, telemetry, health summaries, evidence, claim records, provenance paths, knowledge, multi-round review, report revision package, LLM packet queue, host relay request/response handoff, prompt routing, LLM audit log, LLM evaluation, privacy, compliance record, FAIR data release, data product versioning, reproduction package, package, release, dossier, review governance, submission package, backend scenario evidence, AgentCompare metrics, and plain-kernel comparison files.
 
 It does not use Agent-OS kernel features. That is intentional for this plain-kernel baseline.

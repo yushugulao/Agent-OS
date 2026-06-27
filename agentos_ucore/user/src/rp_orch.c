@@ -61,6 +61,7 @@ static const char *PROGRAMS[] = {
 	"rp_mature",
 	"rp_prov_view",
 	"rp_prov_query",
+	"rp_reldossier",
 	"rp_compare_plain",
 };
 
