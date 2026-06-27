@@ -50,6 +50,7 @@ int main(void)
 			   "subsection=provenance_export;source=rp_provpath,rp_lineage;nodes=150;links=250;views=1;status=ready\n"
 			   "subsection=calculations;source=rp_calculation;jobs=1;retrieved=3;checks=84;outcome=passed;status=ready\n"
 			   "subsection=real_task;source=rp_realtask;dataset=palmer-penguins;checks=96;outcome=passed;status=ready\n"
+			   "subsection=experiment_campaigns;source=rp_campaign;campaigns=1;trials=4;checks=108;outcome=passed;status=ready\n"
 			   "gate=required_files;status=pass;source=rp_package\n"
 			   "gate=human_review;status=pass;source=rp_review2\n"
 			   "gate=llm_packet_guard;status=pass;source=rp_llm_guard\n"

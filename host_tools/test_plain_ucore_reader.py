@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=28
+reader_views=29
 reader_actions=57
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
@@ -86,6 +86,7 @@ package_index=project-package-index;handoff=ready;release_gate=release;snapshot=
 publication_page=rp_publication;peer_response=rp_peerresp;status=ready
 calculations_page=rp_calculation;jobs=1;retrieved=3;parser_results=1;status=ready
 real_task_page=rp_realtask;dataset=palmer-penguins;rows=344;answer_audit=pass;status=ready
+experiment_campaigns_page=rp_campaign;campaigns=1;trials=4;best_trial=04;status=ready
 mature_capability_page=rp_mature;profiles=6;mappings=6;checks=72;status=ready
 provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=ready
 provenance_queries_page=rp_prov_query;specs=3;executions=3;packets=1;status=ready
@@ -276,8 +277,8 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=1684\n"
-        "tool_events=232\n"
+        "test_cases=1792\n"
+        "tool_events=242\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=4;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
@@ -292,6 +293,7 @@ status=ready
         "publication_checks=48;targets=2;submissions=2;review_rounds=2;revision_tasks=3;response_packages=2;response_items=4;decisions=2;agentos_replacements=4;status=ready\n"
         "calculation_checks=84;computers=1;codes=1;jobs=1;retrieved=3;parser_results=1;exports=1;agentos_replacements=4;status=ready\n"
         "real_task_checks=96;dataset=palmer-penguins;rows=344;numeric_fields=5;answer_audit=pass;bundle=ready;status=ready\n"
+        "experiment_campaign_checks=108;campaigns=1;trials=4;best_trial=04;result_review=accept_candidate;status=ready\n"
         "mature_capability_checks=72;profiles=6;mappings=6;checks=72;platforms=Galaxy,AiiDA,DVC,MLflow,Nextflow,Snakemake;agentos_replacements=5;status=ready\n"
         "provenance_view_checks=64;timeline_views=4;subgraphs=3;packets=4;agentos_replacements=4;status=ready\n"
         "provenance_query_checks=72;specs=3;templates=1;executions=3;comparisons=1;exports=1;packets=1;agentos_replacements=4;status=ready\n"
@@ -403,6 +405,44 @@ status=ready
         "package_files=project_bundle,report,analysis,claim_audit,answer_audit\n"
         "offline_review=ready\n"
         "http_checks=4\n"
+        "status=ready\n"
+    ),
+    "rp_campaign": (
+        "service=experiment-campaigns\n"
+        "run_id=RUN-042\n"
+        "campaign_checks=108\n"
+        "campaign=experiment-campaign:RUN-042:align-memory-grid\n"
+        "parameter_space=memory_mb:1024,1536;threads:2,4\n"
+        "trials=4\n"
+        "best_trial=experiment-trial:RUN-042:align-memory-grid:04\n"
+        "selection_metric=qc_pass_rate\n"
+        "result_review=accept_candidate\n"
+        "status=ready\n"
+    ),
+    "rp_trials": (
+        "trial_count=4\n"
+        "trial=experiment-trial:RUN-042:align-memory-grid:01;memory_mb=1024;threads=2;qc_pass_rate=94;runtime=38;status=complete\n"
+        "trial=experiment-trial:RUN-042:align-memory-grid:02;memory_mb=1024;threads=4;qc_pass_rate=95;runtime=34;status=complete\n"
+        "trial=experiment-trial:RUN-042:align-memory-grid:03;memory_mb=1536;threads=2;qc_pass_rate=96;runtime=37;status=complete\n"
+        "trial=experiment-trial:RUN-042:align-memory-grid:04;memory_mb=1536;threads=4;qc_pass_rate=97;runtime=31;status=selected\n"
+        "status=ready\n"
+    ),
+    "rp_camp_rank": (
+        "comparison=experiment-campaign-comparison:RUN-042:align-memory-grid\n"
+        "ranked_trials=4\n"
+        "best_trial=experiment-trial:RUN-042:align-memory-grid:04\n"
+        "metric_delta=3\n"
+        "decision=select_trial_04\n"
+        "status=ready\n"
+    ),
+    "rp_resreview": (
+        "review=experiment-result-review:RUN-042:baseline-vs-candidate\n"
+        "baseline=experiment-trial:RUN-042:align-memory-grid:01\n"
+        "candidate=experiment-trial:RUN-042:align-memory-grid:04\n"
+        "metric_deltas=qc_pass_rate:+3,runtime:-7\n"
+        "parameter_changes=memory_mb:+512,threads:+2\n"
+        "artifact_changes=rp_trials,rp_camp_rank\n"
+        "decision=accept_candidate\n"
         "status=ready\n"
     ),
     "rp_mature": (
@@ -769,6 +809,7 @@ status=ready
         "decision=review_pack_ready;basis=delivery_manifest,operations_next,project_action_items,workbench_handoff\n"
         "subsection=integrity_plane;source=rp_integrity;checks=36;errors=0;result=passed;status=ready\n"
         "subsection=real_task;source=rp_realtask;dataset=palmer-penguins;checks=96;outcome=passed;status=ready\n"
+        "subsection=experiment_campaigns;source=rp_campaign;campaigns=1;trials=4;checks=108;outcome=passed;status=ready\n"
         "backend_review_evidence=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;review_pack=rp_review_pack;status=ready\n"
         "status=ready\n"
     ),
@@ -811,7 +852,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 28, summary
+        assert summary["pages"] == 29, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -827,6 +868,7 @@ def main() -> int:
         assert (out_dir / "publication.html").exists()
         assert (out_dir / "calculations.html").exists()
         assert (out_dir / "real-task.html").exists()
+        assert (out_dir / "experiment-campaigns.html").exists()
         assert (out_dir / "mature.html").exists()
         assert (out_dir / "provenance.html").exists()
         assert (out_dir / "provenance-queries.html").exists()
@@ -1041,6 +1083,13 @@ def main() -> int:
         assert "answer_source" in real_task_html
         assert "report_md" in real_task_html
         assert "duplicate_zip_entries" in real_task_html
+        campaign_html = (out_dir / "experiment-campaigns.html").read_text(encoding="utf-8")
+        assert "Experiment Campaigns" in campaign_html
+        assert "align-memory-grid" in campaign_html
+        assert "trial_count" in campaign_html
+        assert "4" in campaign_html
+        assert "select_trial_04" in campaign_html
+        assert "accept_candidate" in campaign_html
         mature_html = (out_dir / "mature.html").read_text(encoding="utf-8")
         assert "Mature Platform Mapping" in mature_html
         assert "Mature Capability Detail" in mature_html
@@ -1107,6 +1156,8 @@ def main() -> int:
         assert "Calculation Checks" in compare_html
         assert "real_task_checks" in compare_html
         assert "Real Task Checks" in compare_html
+        assert "experiment_campaign_checks" in compare_html
+        assert "Experiment Campaign Checks" in compare_html
         assert "mature_capability_checks" in compare_html
         assert "Mature Capability" in compare_html
         assert "provenance_view_checks" in compare_html

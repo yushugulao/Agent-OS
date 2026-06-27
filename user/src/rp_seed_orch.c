@@ -38,6 +38,7 @@ static const char *PROGRAMS[] = {
 	"rp_package",
 	"rp_calculation",
 	"rp_realtask",
+	"rp_campaign",
 	"rp_delta",
 	"rp_release",
 	"rp_dossier",
@@ -70,6 +71,7 @@ static int keeps_same_name_state(const char *program)
 	static const char *KEEP[] = {
 		"rp_backend",
 		"rp_consistency",
+		"rp_campaign",
 		"rp_delta",
 		"rp_dossier",
 		"rp_evidence",
@@ -79,6 +81,7 @@ static int keeps_same_name_state(const char *program)
 		"rp_package",
 		"rp_calculation",
 		"rp_realtask",
+		"rp_campaign",
 		"rp_projectrel",
 		"rp_publication",
 		"rp_studyproto",

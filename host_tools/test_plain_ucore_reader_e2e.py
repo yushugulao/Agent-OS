@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=1684" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=232" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=1792" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=242" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -737,6 +737,7 @@ def main() -> int:
             assert any("publication_checks=48" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("calculation_checks=84" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("real_task_checks=96" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("experiment_campaign_checks=108" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("mature_capability_checks=72" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_view_checks=64" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("provenance_query_checks=72" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -864,6 +865,18 @@ def main() -> int:
             rp_realbundle = read_json(base + "/api/state/rp_realbundle")
             assert any("duplicate_zip_entries=0" in line for line in rp_realbundle["lines"]), rp_realbundle
             assert any("offline_review=ready" in line for line in rp_realbundle["lines"]), rp_realbundle
+            rp_campaign = read_json(base + "/api/state/rp_campaign")
+            assert any("campaign_checks=108" in line for line in rp_campaign["lines"]), rp_campaign
+            assert any("campaign=experiment-campaign:RUN-042:align-memory-grid" in line for line in rp_campaign["lines"]), rp_campaign
+            rp_trials = read_json(base + "/api/state/rp_trials")
+            assert any("trial_count=4" in line for line in rp_trials["lines"]), rp_trials
+            assert any("trial=experiment-trial:RUN-042:align-memory-grid:04" in line for line in rp_trials["lines"]), rp_trials
+            rp_camp_rank = read_json(base + "/api/state/rp_camp_rank")
+            assert any("decision=select_trial_04" in line for line in rp_camp_rank["lines"]), rp_camp_rank
+            assert any("metric_delta=3" in line for line in rp_camp_rank["lines"]), rp_camp_rank
+            rp_resreview = read_json(base + "/api/state/rp_resreview")
+            assert any("review=experiment-result-review:RUN-042:baseline-vs-candidate" in line for line in rp_resreview["lines"]), rp_resreview
+            assert any("decision=accept_candidate" in line for line in rp_resreview["lines"]), rp_resreview
             rp_calc_files = read_json(base + "/api/state/rp_calc_files")
             assert any("retrieved_files=3" in line for line in rp_calc_files["lines"]), rp_calc_files
             assert any("retrieved=calculation-retrieved:run042-qc:provenance-json" in line for line in rp_calc_files["lines"]), rp_calc_files
@@ -1415,6 +1428,12 @@ def main() -> int:
             assert "answer_source" in real_task_html
             assert "report_md" in real_task_html
             assert "duplicate_zip_entries" in real_task_html
+            campaign_html = read_text(base + "/experiment-campaigns.html")
+            assert "Experiment Campaigns" in campaign_html
+            assert "align-memory-grid" in campaign_html
+            assert "trial_count" in campaign_html
+            assert "select_trial_04" in campaign_html
+            assert "accept_candidate" in campaign_html
             mature_html = read_text(base + "/mature.html")
             assert "Mature Platform Mapping" in mature_html
             assert "Mature Capability Detail" in mature_html
@@ -1602,6 +1621,8 @@ def main() -> int:
             assert "Calculation Checks" in compare_html
             assert "real_task_checks" in compare_html
             assert "Real Task Checks" in compare_html
+            assert "experiment_campaign_checks" in compare_html
+            assert "Experiment Campaign Checks" in compare_html
             assert "mature_capability_checks" in compare_html
             assert "Mature Capability" in compare_html
             assert "provenance_view_checks" in compare_html
