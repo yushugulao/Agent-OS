@@ -20,8 +20,8 @@ PAGE_SPECS = [
     ("workflow.html", "Workflow", "rp_stage_state", ["rp_stage_dag", "rp_cache_index", "rp_retry_plan", "rp_run_events", "rp_worker", "rp_execobs"]),
     ("workbench.html", "Workbench", "rp_runner", ["rp_report_text", "rp_revision", "rp_package", "rp_review_pack", "rp_nbexec", "rp_uresrun"]),
     ("studio.html", "Studio", "rp_studio", ["rp_runner", "rp_package", "rp_review_pack", "rp_actionio", "rp_web_bundle"]),
-    ("project.html", "Project", "rp_package", ["rp_runner", "rp_review_pack", "rp_actionio", "rp_web_bundle"]),
-    ("project-review.html", "Project Review", "rp_web_bundle", ["rp_package", "rp_review_pack", "rp_runner", "rp_actionio"]),
+    ("project.html", "Project", "rp_package", ["rp_runner", "rp_review_pack", "rp_actionio", "rp_web_bundle", "rp_projectrel"]),
+    ("project-review.html", "Project Review", "rp_web_bundle", ["rp_package", "rp_review_pack", "rp_runner", "rp_actionio", "rp_projectrel"]),
     ("agents.html", "Agents", "rp_api_agents", ["rp_ui_agent", "rp_agents", "rp_decisions"]),
     ("evidence.html", "Evidence", "rp_api_evidence", ["rp_ui_evidence", "rp_evidence", "rp_package"]),
     ("review.html", "Review", "rp_review_dashboard", ["rp_review_pack", "rp_review2", "rp_revision", "rp_package", "rp_report_text"]),
@@ -1099,6 +1099,7 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Repair", project_record.get("repair") or metric_value(state, [("rp_package", "host_action_project_repair"), ("rp_runner", "host_action_project_repair")]), "rp_package"),
         ("Search", project_record.get("search") or metric_value(state, [("rp_package", "host_action_research_search"), ("rp_runner", "host_action_research_search")]), "rp_package"),
         ("Quality", metric_value(state, [("rp_package", "host_action_quality_gate"), ("rp_runner", "host_action_quality_gate")]), "rp_package"),
+        ("Project Delivery", metric_value(state, [("rp_projectrel", "project_delivery_checks")]), "rp_projectrel"),
     ]
     release_rows = state_records(state, "rp_web_bundle", "release_gate")
     release_record = release_rows[-1] if release_rows else {}
@@ -1110,13 +1111,13 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
     delivery_record = delivery_rows[-1] if delivery_rows else {}
     project_review_items = [
         ("Project", metric_value(state, [("rp_web_bundle", "project"), ("rp_package", "host_action_project_id"), ("rp_runner", "host_action_project_id")]), "rp_web_bundle"),
-        ("Release Gate", release_record.get("decision") or metric_value(state, [("rp_web_bundle", "host_action_project_release_gate")]), "rp_web_bundle"),
-        ("Snapshot", snapshot_record.get("status") or metric_value(state, [("rp_web_bundle", "host_action_project_snapshot")]), "rp_web_bundle"),
-        ("Reproducibility", reproducibility_record.get("decision") or metric_value(state, [("rp_web_bundle", "host_action_project_reproducibility")]), "rp_web_bundle"),
-        ("Provenance", metric_value(state, [("rp_web_bundle", "host_action_project_provenance_graph"), ("rp_web_bundle", "provenance_graph")]), "rp_web_bundle"),
-        ("Delivery", delivery_record.get("decision") or metric_value(state, [("rp_web_bundle", "host_action_project_delivery")]), "rp_web_bundle"),
-        ("Package Intake", metric_value(state, [("rp_web_bundle", "host_action_project_package_intake"), ("rp_web_bundle", "package_intake")]), "rp_web_bundle"),
-        ("Package Index", metric_value(state, [("rp_web_bundle", "package_index")]), "rp_web_bundle"),
+        ("Release Gate", release_record.get("decision") or metric_value(state, [("rp_projectrel", "release_gate"), ("rp_web_bundle", "host_action_project_release_gate")]), "rp_projectrel"),
+        ("Snapshot", snapshot_record.get("status") or metric_value(state, [("rp_projectrel", "project_snapshot"), ("rp_web_bundle", "host_action_project_snapshot")]), "rp_projectrel"),
+        ("Reproducibility", reproducibility_record.get("decision") or metric_value(state, [("rp_projectrel", "reproducibility_audit"), ("rp_web_bundle", "host_action_project_reproducibility")]), "rp_projectrel"),
+        ("Provenance", metric_value(state, [("rp_projectrel", "provenance_graph"), ("rp_web_bundle", "host_action_project_provenance_graph"), ("rp_web_bundle", "provenance_graph")]), "rp_projectrel"),
+        ("Delivery", delivery_record.get("decision") or metric_value(state, [("rp_projectrel", "project_delivery"), ("rp_web_bundle", "host_action_project_delivery")]), "rp_projectrel"),
+        ("Package Intake", metric_value(state, [("rp_projectrel", "package_intake"), ("rp_web_bundle", "host_action_project_package_intake"), ("rp_web_bundle", "package_intake")]), "rp_projectrel"),
+        ("Package Index", metric_value(state, [("rp_projectrel", "package_index"), ("rp_web_bundle", "package_index")]), "rp_projectrel"),
     ]
     compare_items = [
         ("Payload Applied", metric_value(state, [("rp_api_compare", "host_action_payload_applied")]), "rp_api_compare"),

@@ -47,6 +47,7 @@ static const char *PROGRAMS[] = {
 	"rp_web_export",
 	"rp_review_dashboard",
 	"rp_runbooks",
+	"rp_projectrel",
 	"rp_compare_plain",
 };
 

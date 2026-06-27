@@ -49,6 +49,7 @@ static const char *PROGRAMS[] = {
 	"rp_web_export",
 	"rp_review_dashboard",
 	"rp_runbooks",
+	"rp_projectrel",
 	"rp_compare_plain",
 };
 
@@ -64,6 +65,7 @@ static int keeps_same_name_state(const char *program)
 		"rp_lineage",
 		"rp_object_query",
 		"rp_package",
+		"rp_projectrel",
 		"rp_privacy",
 		"rp_query",
 		"rp_release",

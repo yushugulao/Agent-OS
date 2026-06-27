@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=1052" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=142" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=1070" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=147" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -728,6 +728,7 @@ def main() -> int:
             assert any("review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line and "backend_review=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runbook_recovery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("project_delivery_checks=18" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_runbooks = read_json(base + "/api/state/rp_runbooks")
             assert any("runbook_service_checks=16" in line for line in rp_runbooks["lines"]), rp_runbooks
             assert any("runbook_templates=1" in line for line in rp_runbooks["lines"]), rp_runbooks
@@ -737,6 +738,14 @@ def main() -> int:
             assert any("runbook_exports=1" in line for line in rp_runbooks["lines"]), rp_runbooks
             assert any("worker_operation_records=6" in line for line in rp_runbooks["lines"]), rp_runbooks
             assert any("agentos_adaptation=event_context,kernel_timeline,metadata_index,batch_recovery_tool" in line for line in rp_runbooks["lines"]), rp_runbooks
+            rp_projectrel = read_json(base + "/api/state/rp_projectrel")
+            assert any("project_delivery_checks=18" in line for line in rp_projectrel["lines"]), rp_projectrel
+            assert any("project_handoff_audits=1" in line for line in rp_projectrel["lines"]), rp_projectrel
+            assert any("project_release_gates=1" in line for line in rp_projectrel["lines"]), rp_projectrel
+            assert any("project_reproducibility_audits=1" in line for line in rp_projectrel["lines"]), rp_projectrel
+            assert any("project_provenance_graphs=1" in line for line in rp_projectrel["lines"]), rp_projectrel
+            assert any("package_intakes=1" in line for line in rp_projectrel["lines"]), rp_projectrel
+            assert any("agentos_adaptation=file_metadata_index,event_delivery,context_release_evidence,capability_guard" in line for line in rp_projectrel["lines"]), rp_projectrel
             rp_consistency = read_json(base + "/api/state/rp_consistency")
             assert any("checks=420" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("state_catalog_checks=12" in line for line in rp_consistency["lines"]), rp_consistency
@@ -1141,6 +1150,8 @@ def main() -> int:
             assert "host_action_quality_repair_execute" in project_html
             assert "host_action_search_query" in project_html
             assert "recovery evidence" in project_html
+            assert "rp_projectrel" in project_html
+            assert "project_delivery_checks" in project_html
             assert "/actions/research/project-space" in project_html
             assert "/actions/research-search/export" in project_html
             project_review_html = read_text(base + "/project-review.html")
@@ -1151,6 +1162,8 @@ def main() -> int:
             assert "Project Reproducibility Audit" in project_review_html
             assert "Project Provenance Graph" in project_review_html
             assert "Project Delivery Report" in project_review_html
+            assert "project-reproducibility-audit:lab-gene-x" in project_review_html
+            assert "package-intake:external-review" in project_review_html
             assert "Project Package Index" in project_review_html
             assert "Project Review Action Trace" in project_review_html
             assert "Project Review Action Output Details" in project_review_html
