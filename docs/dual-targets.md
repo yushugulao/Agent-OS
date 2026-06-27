@@ -68,12 +68,15 @@ The final branch state should let a reviewer run the same research scenario on b
 
 The plain target already provides the host-viewable research platform, Web/API reader, action runner, artifact records, workflow records, project review page, Host LLM Relay, and end-to-end QEMU test.
 
-The enhanced target now contains the Agent-OS kernel service layer, Agent verification programs, and the same native research platform programs used by the plain target. The entry `rp_agentos_orch` creates an orchestrator Agent, records kernel-service evidence through Agent Context, batched `agent_run`, `context_snapshot`, timeline/provenance observation, ledger summary, and file metadata initialization, then executes the full `rp_orch` workflow. During the service-surface stage, the enhanced target also starts a small sentinel Agent that runs an `echo + read_context` batch, reads a Context snapshot, and appends `agentos_advanced_surface=kernel_bound` to `rp_runop`. This proves that the advanced research-service surface is not only a file-backed user-space record; it is also tied to kernel Agent execution history in the enhanced target.
+The enhanced target now contains the Agent-OS kernel service layer, Agent verification programs, and the same native research platform programs used by the plain target. The entry `rp_agentos_orch` creates an orchestrator Agent and initializes `rp_agentos_mainflow`. The full `rp_orch` workflow then runs under role-specific Agent children. Main stages append kernel facts to `rp_agentos_mainflow`: trusted Context, indexed file metadata query, Agent event notification, recovery through `rerun_stage` and `write_report`, ledger/provenance observation, sentinel permission denial, and timeline observation. Backend, consistency, metrics, compare, and test-suite programs all consume those facts, so the enhanced target uses kernel services inside the same RUN-042 research flow rather than as a separate demonstration.
+
+During the service-surface stage, the enhanced target also starts a small sentinel Agent that runs an `echo + read_context` batch, reads a Context snapshot, and appends `agentos_advanced_surface=kernel_bound` to `rp_runop`. This connects advanced research-service records to kernel Agent execution history in the enhanced target.
 
 Current verified enhanced-target run:
 
 ```text
 rp_agentos_orch: agent role=4 context=... latest=1
+rp_backend: cases=7 executable=7 agentos=mainflow_bound exports=1 status=ready
 rp_orch: programs_ok=69 programs_total=69
 rp_orch: passed
 rp_agentos_orch: kernel_agent=1 workflow=rp_orch status=ready

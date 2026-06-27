@@ -79,17 +79,25 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentos_timeline", "event_delivery=kernel_agent_queue");
 	ok = ok && rp_file_contains("rp_agentos_collab_ack", "delivery=kernel_event_queue");
 	ok = ok && rp_file_contains("rp_agentos_audit", "audit_source=kernel_ledger");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "context_trusted=kernel_shadow");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "metadata_query=used_index");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "agent_event_notify=kernel_queue");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "failure_recovery=kernel_tool");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "provenance_audit=kernel_ledger");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "permission_control=sentinel_rerun_denied");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "timeline_observe=kernel_snapshot");
 	if (!ok) return 1;
 	if (!rp_write_file("rp_backend",
 			   "scenario=backend-scenario:RUN-042:agentcompare\n"
 			   "workflow_portability=rp_wfio;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;binding=workflow-migration-binding:RUN-042:plain-ucore\n"
-			   "runner=agentos-kernel-assisted;inputs=rp_wfio,rp_stage_state,rp_retry_plan,rp_artifact_manifest,rp_agentos_kernel,rp_agentos_recovery,rp_agentos_query,rp_agentos_timeline,rp_agentos_audit;outputs=rp_backend_exec,rp_study\n"
+			   "runner=agentos-kernel-assisted;inputs=rp_wfio,rp_stage_state,rp_retry_plan,rp_artifact_manifest,rp_agentos_kernel,rp_agentos_mainflow,rp_agentos_recovery,rp_agentos_query,rp_agentos_timeline,rp_agentos_audit;outputs=rp_backend_exec,rp_study\n"
 			   "cases=7\n"
 			   "executable=7\n"
 			   "planned=0\n"
 			   "plain_ucore=ready\n"
 			   "agentos_ucore=kernel_bound\n"
 			   "agentos_mainflow_kernel=required\n"
+			   "agentos_mainflow_facts=7\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -122,7 +130,7 @@ int main(void)
 			   "runner_report=agentos-audit;plain_cost=append_only_logs;agentos_replace=kernel_ledger_provenance;risk=tampered_context;status=passed\n"
 			   "runner_report_rows=7\n"
 			   "runner_report_schema=plain_cost,agentos_replace,risk,status\n"
-			   "runner_observed=rp_stage_state,rp_retry_plan,rp_artifact_manifest,rp_llmeval,rp_agentos_kernel,rp_agentos_recovery,rp_agentos_query,rp_agentos_timeline,rp_agentos_audit\n"
+			   "runner_observed=rp_stage_state,rp_retry_plan,rp_artifact_manifest,rp_llmeval,rp_agentos_kernel,rp_agentos_mainflow,rp_agentos_recovery,rp_agentos_query,rp_agentos_timeline,rp_agentos_audit\n"
 			   "runner_detail_fields=input_check,artifact_check,att,retry,ticks\n"
 			   "runner_detail_checks=28\n"
 			   "runner_verified_inputs=7\n"
@@ -139,7 +147,7 @@ int main(void)
 			   "study=same-workflow-backend-study\n"
 			   "workflow_portability=rp_wfio;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;migration_status=baseline_and_agentos_observed\n"
 			   "study_metric=plain_ucore;file_scans=128;context_trusted=0;rebuild_steps=6;detail_checks=4;result=passed\n"
-			   "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;event_queue=1;recovery_tool=1;audit_ledger=1;detail_checks=kernel;result=passed\n"
+			   "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;event_queue=1;recovery_tool=1;audit_ledger=1;permission_control=1;timeline_observe=1;mainflow_facts=7;detail_checks=kernel;result=passed\n"
 			   "study_handoff=rp_backend_exec->rp_agentcmp;status=ready\n"
 			   "arms=2\n"
 			   "metrics=12\n"
@@ -150,7 +158,7 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;status=ready")) return 1;
-	if (!rp_append_file("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128,manual_retry_contract,file_polling,append_only_logs;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,capability_checked_rerun,kernel_event_queue,kernel_ledger_provenance;status=ready")) return 1;
+	if (!rp_append_file("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128,manual_retry_contract,file_polling,append_only_logs;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,capability_checked_rerun,kernel_event_queue,kernel_ledger_provenance;mainflow_facts=7;status=ready")) return 1;
 	if (kernel_backend &&
 	    !rp_append_file("rp_tool", "tool=agentos.backend_context_check")) {
 		return 1;

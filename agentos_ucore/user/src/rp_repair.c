@@ -7,6 +7,8 @@ static struct agent_op repair_ops[2];
 static struct agent_result repair_results[2];
 static struct agent_context_header repair_header;
 static struct agent_context_record repair_records[4];
+static struct agent_file_query repair_query;
+static struct agent_file_query_result repair_query_result;
 
 static void make_recovery_op(struct agent_op *op, int tool_id,
 			     uint64 request_id, const char *payload)
@@ -47,6 +49,21 @@ static int run_kernel_recovery(void)
 		printf("rp_repair: context_snapshot_failed\n");
 		return -1;
 	}
+	memset(&repair_query, 0, sizeof(repair_query));
+	repair_query.flags = AGENT_FILE_QUERY_USE_INDEX;
+	repair_query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(repair_query.project, "lab-gene-x");
+	strcpy(repair_query.run_id, "RUN-042");
+	strcpy(repair_query.stage, "align");
+	strcpy(repair_query.status, "ok");
+	if (agent_file_query(&repair_query, &repair_query_result) < 1 ||
+	    repair_query_result.total_hits < 1 ||
+	    !repair_query_result.used_index) {
+		printf("rp_repair: repaired_metadata_query_failed hits=%d index=%d\n",
+		       repair_query_result.total_hits,
+		       repair_query_result.used_index);
+		return -1;
+	}
 	if (!rp_write_file("rp_agentos_recovery",
 			   "stage=align\n"
 			   "project=lab-gene-x\n"
@@ -56,6 +73,9 @@ static int run_kernel_recovery(void)
 			   "status=ready\n")) {
 		return -1;
 	}
+	if (!rp_append_file("rp_agentos_mainflow",
+			    "stage=recovery;failure_recovery=kernel_tool;kernel_rerun_stage=ok;kernel_write_report=ok;context_snapshot=trusted;metadata_after_repair=used_index;status=ready"))
+		return -1;
 	return 1;
 }
 

@@ -1006,6 +1006,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_completion", "actions=4");
 	ok = ok && rp_file_contains("rp_backend", "cases=7");
 	ok = ok && rp_file_contains("rp_backend", "agentos_mainflow_kernel=required");
+	ok = ok && rp_file_contains("rp_backend", "agentos_mainflow_facts=7");
 	ok = ok && rp_file_contains("rp_backend_exec", "passed_cases=7");
 	ok = ok && rp_file_contains("rp_study", "arms=2");
 	ok = ok && rp_file_contains("rp_consistency", "state_relation=passed");
@@ -1879,7 +1880,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_report=agentos-audit;plain_cost=append_only_logs;agentos_replace=kernel_ledger_provenance;risk=tampered_context;status=passed");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_report_rows=7");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_report_schema=plain_cost,agentos_replace,risk,status");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_observed=rp_stage_state,rp_retry_plan,rp_artifact_manifest,rp_llmeval,rp_agentos_kernel,rp_agentos_recovery,rp_agentos_query,rp_agentos_timeline,rp_agentos_audit");
+	ok = ok && rp_file_contains("rp_backend_exec", "runner_observed=rp_stage_state,rp_retry_plan,rp_artifact_manifest,rp_llmeval,rp_agentos_kernel,rp_agentos_mainflow,rp_agentos_recovery,rp_agentos_query,rp_agentos_timeline,rp_agentos_audit");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail_fields=input_check,artifact_check,att,retry,ticks");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail_checks=28");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_verified_inputs=7");
@@ -1888,7 +1889,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_study", "workflow_portability=rp_wfio");
 	ok = ok && rp_file_contains("rp_study", "migration_status=baseline_and_agentos_observed");
 	ok = ok && rp_file_contains("rp_study", "study_metric=plain_ucore;file_scans=128;context_trusted=0;rebuild_steps=6;detail_checks=4;result=passed");
-	ok = ok && rp_file_contains("rp_study", "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;event_queue=1;recovery_tool=1;audit_ledger=1;detail_checks=kernel;result=passed");
+	ok = ok && rp_file_contains("rp_study", "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;event_queue=1;recovery_tool=1;audit_ledger=1;permission_control=1;timeline_observe=1;mainflow_facts=7;detail_checks=kernel;result=passed");
 	ok = ok && rp_file_contains("rp_study", "metrics=12");
 	ok = ok && rp_file_contains("rp_study", "study_handoff=rp_backend_exec->rp_agentcmp;status=ready");
 	ok = ok && rp_file_contains("rp_study", "agentos_kernel=mainflow_bound");
@@ -1899,8 +1900,15 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentos_timeline", "timeline_snapshot=ready");
 	ok = ok && rp_file_contains("rp_agentos_collab_ack", "delivery=kernel_event_queue");
 	ok = ok && rp_file_contains("rp_agentos_audit", "audit_source=kernel_ledger");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "context_trusted=kernel_shadow");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "metadata_query=used_index");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "agent_event_notify=kernel_queue");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "failure_recovery=kernel_tool");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "provenance_audit=kernel_ledger");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "permission_control=sentinel_rerun_denied");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "timeline_observe=kernel_snapshot");
 	ok = ok && rp_file_contains("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;status=ready");
-	ok = ok && rp_file_contains("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128,manual_retry_contract,file_polling,append_only_logs;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,capability_checked_rerun,kernel_event_queue,kernel_ledger_provenance;status=ready");
+	ok = ok && rp_file_contains("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128,manual_retry_contract,file_polling,append_only_logs;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,capability_checked_rerun,kernel_event_queue,kernel_ledger_provenance;mainflow_facts=7;status=ready");
 	ok = ok && rp_file_contains("rp_report_text", "report_source=workflow;state_file=rp_stage_state;source_key=host_workflow_run_id");
 	ok = ok && rp_file_contains("rp_report_text", "report_source=llm;state_file=rp_llm_resp;source_key=host_relay_response");
 	ok = ok && rp_file_contains("rp_report_text", "report_source=backend;state_file=rp_report_text;source_key=backend_evidence_report");

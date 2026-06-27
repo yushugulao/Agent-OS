@@ -561,6 +561,12 @@ int main(void)
 			   "agentos_context_snapshot=1\n"
 			   "agentos_metadata_index=1\n"
 			   "agentos_batch_tool=1\n"
+			   "agentos_event_queue=1\n"
+			   "agentos_recovery_tool=1\n"
+			   "agentos_audit_ledger=1\n"
+			   "agentos_permission_control=1\n"
+			   "agentos_timeline_observe=1\n"
+			   "agentos_mainflow_facts=7\n"
 			   "file_scans=128\n"
 			   "state_convention=1\n"
 			   "user_permission_only=1\n"
@@ -1799,7 +1805,7 @@ int main(void)
 			if (!rp_append_file("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;status=ready")) return 1;
 		}
 		if (!file_contains_silent("rp_report_text", "backend_evidence_report=rp_backend_exec")) {
-			if (!rp_append_file("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index;status=ready")) return 1;
+			if (!rp_append_file("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index;mainflow_facts=7;status=ready")) return 1;
 		}
 		if (!rp_append_status("host_reader_actions=ready")) return 1;
 		printf("rp_web_export: host_reader_actions=%d\n", host_actions);

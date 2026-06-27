@@ -305,7 +305,9 @@ labdemo_ucore: parent passed
 
 ## 科研 Agent 平台入口
 
-`CHAPTER=platform_agentos` 会构建完整科研 Agent 平台程序，并额外加入 `rp_agentos_orch` 作为改造内核目标的主入口。该入口先创建 orchestrator Agent，记录 Agent Context、批量工具调用、Context 快照、timeline/provenance 观测、ledger 摘要和文件元数据服务的使用证据，再执行完整 `rp_orch` 工作流。科研平台的高级服务界面阶段还会创建一个 sentinel Agent，执行 `echo + read_context` 批量工具调用，读取 Context 快照，并在 `rp_runop` 中写入 `agentos_advanced_surface=kernel_bound`，用于证明高级平台能力已经接入内核 Agent 执行历史，而不是只停留在普通用户态文件记录。
+`CHAPTER=platform_agentos` 会构建完整科研 Agent 平台程序，并额外加入 `rp_agentos_orch` 作为改造内核目标的主入口。该入口创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，再执行完整 `rp_orch` 工作流。后续关键阶段会继续把真实内核调用结果追加到同一个主流程文件中：`rp_query` 写入文件 metadata 索引查询，`rp_repair` 写入 `rerun_stage + write_report` 恢复结果，`rp_execobs` 写入事件等待和 timeline 观察结果，`rp_agent_collab` 写入 Agent 间事件通知和 sentinel 越权恢复被拒绝的结果，`rp_auditor` 写入 ledger/provenance 结果。`rp_backend`、`rp_consistency`、`rp_metrics`、`rp_compare_plain` 和 `rp_test_suite` 都会检查这些事实，因此增强目标不是“普通平台旁边跑 Agent 测试”，而是同一科研流程在增强内核上运行时直接使用内核 Context、文件索引、事件队列、恢复工具、权限控制和审计记录。
+
+科研平台的高级服务界面阶段还会创建一个 sentinel Agent，执行 `echo + read_context` 批量工具调用，读取 Context 快照，并在 `rp_runop` 中写入 `agentos_advanced_surface=kernel_bound`，用于说明高级平台页面也能读取内核 Agent 执行历史。
 
 运行方式：
 
@@ -318,6 +320,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=rp_agentos_orch CHAPT
 
 ```text
 rp_agentos_orch: agent role=4 context=... latest=1
+rp_backend: cases=7 executable=7 agentos=mainflow_bound exports=1 status=ready
 rp_state_catalog: keys=574 nonzero=71 zero=503 represented=574 checks=12 status=ready
 rp_startup_doctor: quickstart=ready doctor=ready checks=14 status=ready
 rp_orch: programs_ok=69 programs_total=69

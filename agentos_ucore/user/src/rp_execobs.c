@@ -59,6 +59,9 @@ static int run_kernel_exec_observer(void)
 			   "status=ready\n")) {
 		return -1;
 	}
+	if (!rp_append_file("rp_agentos_mainflow",
+			    "stage=timeline;agent_event_notify=kernel_queue;timeline_observe=kernel_snapshot;wait=wakeup;heartbeat=observed;status=ready"))
+		return -1;
 	return 1;
 }
 

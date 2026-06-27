@@ -94,6 +94,13 @@ int main(void)
 	if (!rp_file_contains("rp_agentos_query", "metadata_source=kernel_file_index")) return 1;
 	if (!rp_file_contains("rp_agentos_timeline", "event_delivery=kernel_agent_queue")) return 1;
 	if (!rp_file_contains("rp_agentos_audit", "audit_source=kernel_ledger")) return 1;
+	if (!rp_file_contains("rp_agentos_mainflow", "context_trusted=kernel_shadow")) return 1;
+	if (!rp_file_contains("rp_agentos_mainflow", "metadata_query=used_index")) return 1;
+	if (!rp_file_contains("rp_agentos_mainflow", "agent_event_notify=kernel_queue")) return 1;
+	if (!rp_file_contains("rp_agentos_mainflow", "failure_recovery=kernel_tool")) return 1;
+	if (!rp_file_contains("rp_agentos_mainflow", "provenance_audit=kernel_ledger")) return 1;
+	if (!rp_file_contains("rp_agentos_mainflow", "permission_control=sentinel_rerun_denied")) return 1;
+	if (!rp_file_contains("rp_agentos_mainflow", "timeline_observe=kernel_snapshot")) return 1;
 	if (!rp_file_contains("rp_consistency", "state_relation=passed")) return 1;
 	if (!rp_file_contains("rp_consistency", "coherence_checks=9")) return 1;
 	if (!rp_file_contains("rp_sreg", "samples=8")) return 1;

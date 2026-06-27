@@ -20,6 +20,13 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentos_timeline", "event_delivery=kernel_agent_queue");
 	ok = ok && rp_file_contains("rp_agentos_collab_ack", "delivery=kernel_event_queue");
 	ok = ok && rp_file_contains("rp_agentos_audit", "audit_source=kernel_ledger");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "context_trusted=kernel_shadow");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "metadata_query=used_index");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "agent_event_notify=kernel_queue");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "failure_recovery=kernel_tool");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "provenance_audit=kernel_ledger");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "permission_control=sentinel_rerun_denied");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "timeline_observe=kernel_snapshot");
 	ok = ok && rp_file_contains("rp_query", "knowledge_index=search_documents:1685");
 	ok = ok && rp_file_contains("rp_query", "provenance_nodes:406");
 	ok = ok && rp_file_contains("rp_query", "provenance_links:544");

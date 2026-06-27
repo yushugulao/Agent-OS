@@ -53,6 +53,9 @@ static int run_kernel_audit(void)
 			   "status=ready\n")) {
 		return -1;
 	}
+	if (!rp_append_file("rp_agentos_mainflow",
+			    "stage=audit;provenance_audit=kernel_ledger;ledger_hash=observed;audit_records=observed;provenance_edges=observed;context_records=observed;status=ready"))
+		return -1;
 	return 1;
 }
 

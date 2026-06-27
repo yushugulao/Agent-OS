@@ -36,10 +36,21 @@ static int collab_waiter(void)
 			      "handoff=recovery-auditor")) {
 		return 1;
 	}
+	memset(&collab_op, 0, sizeof(collab_op));
+	collab_op.version = AGENT_CALL_VERSION;
+	collab_op.tool_id = AGENT_TOOL_RERUN_STAGE;
+	collab_op.request_id = 2100;
+	strcpy(collab_op.payload,
+	       "stage=align;project=lab-gene-x;run_id=RUN-042");
+	if (agent_run(&collab_op, &collab_result, 1, 0) != 1 ||
+	    collab_result.status != AGENT_STATUS_DENIED) {
+		return 1;
+	}
 	if (!rp_write_file("rp_agentos_collab_ack",
 			   "agent=sentinel\n"
 			   "event=handoff=recovery-auditor\n"
 			   "delivery=kernel_event_queue\n"
+			   "permission_control=sentinel_rerun_denied\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -103,6 +114,9 @@ static int run_kernel_collaboration(void)
 		       collab_result.status);
 		return -1;
 	}
+	if (!rp_append_file("rp_agentos_mainflow",
+			    "stage=collaboration;agent_event_notify=kernel_queue;delivery=kernel_event_queue;capability_control=kernel_role;permission_control=sentinel_rerun_denied;status=ready"))
+		return -1;
 	return 1;
 }
 
