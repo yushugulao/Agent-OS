@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=1090" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=152" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=1108" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=157" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -730,6 +730,7 @@ def main() -> int:
             assert any("runbook_recovery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("project_delivery_checks=18" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("study_protocol_checks=20" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("operations_board_checks=18" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_runbooks = read_json(base + "/api/state/rp_runbooks")
             assert any("runbook_service_checks=16" in line for line in rp_runbooks["lines"]), rp_runbooks
             assert any("runbook_templates=1" in line for line in rp_runbooks["lines"]), rp_runbooks
@@ -754,6 +755,14 @@ def main() -> int:
             assert any("study_protocol_reproduction_packages=1" in line for line in rp_studyproto["lines"]), rp_studyproto
             assert any("study-protocol-reproduction-package:RUN-042" in line for line in rp_studyproto["lines"]), rp_studyproto
             assert any("agentos_adaptation=file_metadata_index,context_protocol_evidence,event_reproduction_queue,batch_dataset_tool" in line for line in rp_studyproto["lines"]), rp_studyproto
+            rp_opsboard = read_json(base + "/api/state/rp_opsboard")
+            assert any("operations_board_checks=18" in line for line in rp_opsboard["lines"]), rp_opsboard
+            assert any("pending_reviews=1" in line for line in rp_opsboard["lines"]), rp_opsboard
+            assert any("active_workbench_actions=4" in line for line in rp_opsboard["lines"]), rp_opsboard
+            assert any("active_plan_items=5" in line for line in rp_opsboard["lines"]), rp_opsboard
+            assert any("ready_handoffs=3" in line for line in rp_opsboard["lines"]), rp_opsboard
+            assert any("research-ops-report:RUN-042" in line for line in rp_opsboard["lines"]), rp_opsboard
+            assert any("agentos_adaptation=event_queue,context_ops_trace,capability_action_guard,batch_plan_executor" in line for line in rp_opsboard["lines"]), rp_opsboard
             rp_consistency = read_json(base + "/api/state/rp_consistency")
             assert any("checks=420" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("state_catalog_checks=12" in line for line in rp_consistency["lines"]), rp_consistency
@@ -1165,6 +1174,17 @@ def main() -> int:
             assert "study_protocol_checks" in project_html
             assert "/actions/research/project-space" in project_html
             assert "/actions/research-search/export" in project_html
+            operations_html = read_text(base + "/operations.html")
+            assert "Research Operations" in operations_html
+            assert "Operations Queue" in operations_html
+            assert "Plan Queue" in operations_html
+            assert "Action Items" in operations_html
+            assert "Operation Results" in operations_html
+            assert "Operations Handoff" in operations_html
+            assert "rp_opsboard" in operations_html
+            assert "operations_board_checks" in operations_html
+            assert "workbench-queue:RUN-042" in operations_html
+            assert "research-ops-report:RUN-042" in operations_html
             project_review_html = read_text(base + "/project-review.html")
             assert "Project Delivery Review" in project_review_html
             assert "Project Release Gate" in project_review_html
@@ -1250,6 +1270,7 @@ def main() -> int:
             assert "worker_heartbeat" in services_html
             assert "Runbook Steps" in services_html
             assert "runbook-template:align-oom-recovery" in services_html
+            assert "Operations Checks" in services_html
             delivery_html = read_text(base + "/delivery.html")
             assert "Delivery Package" in delivery_html
             assert "Delivery Files" in delivery_html
@@ -1342,6 +1363,7 @@ def main() -> int:
             assert "kernel_required" in compare_html
             assert "Backend Study Metrics" in compare_html
             assert "Detail Checks" in compare_html
+            assert "operations_board_checks" in compare_html
             assert "agentos_ucore" in compare_html
             assert "Backend Scenario Handoff" in compare_html
             assert "rp_backend_exec" in compare_html

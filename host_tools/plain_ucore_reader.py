@@ -20,16 +20,17 @@ PAGE_SPECS = [
     ("workflow.html", "Workflow", "rp_stage_state", ["rp_stage_dag", "rp_cache_index", "rp_retry_plan", "rp_run_events", "rp_worker", "rp_execobs"]),
     ("workbench.html", "Workbench", "rp_runner", ["rp_report_text", "rp_revision", "rp_package", "rp_review_pack", "rp_nbexec", "rp_uresrun"]),
     ("studio.html", "Studio", "rp_studio", ["rp_runner", "rp_package", "rp_review_pack", "rp_actionio", "rp_web_bundle"]),
+    ("operations.html", "Operations", "rp_opsboard", ["rp_runner", "rp_package", "rp_review_dashboard", "rp_studyproto", "rp_runbooks", "rp_projectrel"]),
     ("project.html", "Project", "rp_package", ["rp_runner", "rp_review_pack", "rp_actionio", "rp_web_bundle", "rp_projectrel", "rp_studyproto"]),
     ("project-review.html", "Project Review", "rp_web_bundle", ["rp_package", "rp_review_pack", "rp_runner", "rp_actionio", "rp_projectrel", "rp_studyproto"]),
     ("agents.html", "Agents", "rp_api_agents", ["rp_ui_agent", "rp_agents", "rp_decisions"]),
     ("evidence.html", "Evidence", "rp_api_evidence", ["rp_ui_evidence", "rp_evidence", "rp_package"]),
     ("review.html", "Review", "rp_review_dashboard", ["rp_review_pack", "rp_review2", "rp_revision", "rp_package", "rp_report_text"]),
-    ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency", "rp_backend", "rp_backend_exec", "rp_study", "rp_studyproto"]),
+    ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency", "rp_backend", "rp_backend_exec", "rp_study", "rp_studyproto", "rp_opsboard"]),
     ("artifacts.html", "Artifacts", "rp_api_artifacts", ["rp_artifact", "rp_artifact_manifest", "rp_package"]),
     ("delivery.html", "Delivery", "rp_package", ["rp_nbexec", "rp_uresrun", "rp_artifact_manifest", "rp_review_pack"]),
     ("data.html", "Data", "rp_api_data", ["rp_input", "rp_ingest_files", "rp_dataset_snapshot", "rp_data_preview", "rp_data_quality", "rp_data_transform", "rp_dataset_collection"]),
-    ("services.html", "Services", "rp_api_bio", ["rp_api_labres", "rp_api_pub", "rp_api_know", "rp_api_runtime", "rp_bioop", "rp_labresop", "rp_pubop", "rp_knowop", "rp_runop", "rp_runbooks", "rp_studyproto"]),
+    ("services.html", "Services", "rp_api_bio", ["rp_api_labres", "rp_api_pub", "rp_api_know", "rp_api_runtime", "rp_bioop", "rp_labresop", "rp_pubop", "rp_knowop", "rp_runop", "rp_runbooks", "rp_studyproto", "rp_opsboard"]),
     ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets"]),
     ("actions.html", "Actions", "rp_api_action", ["rp_actionio", "rp_host_run_result", "rp_web_routes", "rp_web_bundle"]),
 ]
@@ -1151,7 +1152,18 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Runtime Ops", metric_value(state, [("rp_runop", "ops")]), "rp_runop"),
         ("Runbook Steps", metric_value(state, [("rp_runbooks", "runbook_steps")]), "rp_runbooks"),
         ("Study Protocols", metric_value(state, [("rp_studyproto", "study_protocols")]), "rp_studyproto"),
+        ("Operations Checks", metric_value(state, [("rp_opsboard", "operations_board_checks")]), "rp_opsboard"),
         ("Service Files", metric_value(state, [("rp_web_bundle", "research_service_files"), ("rp_api_compare", "bio_service_files")]), "rp_web_bundle"),
+    ]
+    operations_items = [
+        ("Provider", metric_value(state, [("rp_opsboard", "provider_health"), ("rp_startup", "provider_health")]), "rp_opsboard"),
+        ("Pending Reviews", metric_value(state, [("rp_opsboard", "pending_reviews")]), "rp_opsboard"),
+        ("Workbench Actions", metric_value(state, [("rp_opsboard", "active_workbench_actions")]), "rp_opsboard"),
+        ("Plan Items", metric_value(state, [("rp_opsboard", "active_plan_items")]), "rp_opsboard"),
+        ("Action Items", metric_value(state, [("rp_opsboard", "active_action_items")]), "rp_opsboard"),
+        ("Handoffs", metric_value(state, [("rp_opsboard", "ready_handoffs")]), "rp_opsboard"),
+        ("Latest Runs", metric_value(state, [("rp_opsboard", "latest_runs")]), "rp_opsboard"),
+        ("Exports", metric_value(state, [("rp_opsboard", "export_formats")]), "rp_opsboard"),
     ]
     review_items = [
         ("Run", metric_value(state, [("rp_review_dashboard", "run"), ("rp_report_text", "host_report_run_id")]), "rp_review_dashboard"),
@@ -1190,6 +1202,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Relay Quality", llm_items)
     if file_name == "services.html":
         return render_summary_panel("Service Execution", service_items)
+    if file_name == "operations.html":
+        return render_summary_panel("Research Operations", operations_items)
     return ""
 
 
@@ -1726,6 +1740,34 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 "Runtime Service Files",
                 [("Operation", "op"), ("Request", "request"), ("Result", "result"), ("Workers", "workers"), ("Status", "status")],
                 state_records(state, "rp_runop", "op"),
+            ),
+        ]
+    if file_name == "operations.html":
+        return [
+            render_record_panel(
+                "Operations Queue",
+                [("Queue", "queue"), ("Items", "items"), ("Next", "next"), ("Status", "status")],
+                state_records(state, "rp_opsboard", "queue"),
+            ),
+            render_record_panel(
+                "Plan Queue",
+                [("Plan", "plan_queue"), ("Items", "items"), ("Next", "next"), ("Status", "status")],
+                state_records(state, "rp_opsboard", "plan_queue"),
+            ),
+            render_record_panel(
+                "Action Items",
+                [("Action", "action_item"), ("Owner", "owner"), ("Priority", "priority"), ("Status", "status")],
+                state_records(state, "rp_opsboard", "action_item"),
+            ),
+            render_record_panel(
+                "Operation Results",
+                [("Advance", "advance_result"), ("Execute", "execute_result"), ("Selected", "selected"), ("Effect", "effect"), ("Status", "status")],
+                state_records(state, "rp_opsboard", "advance_result") + state_records(state, "rp_opsboard", "execute_result"),
+            ),
+            render_record_panel(
+                "Operations Handoff",
+                [("Handoff", "handoff"), ("Artifact", "artifact"), ("Status", "status")],
+                state_records(state, "rp_opsboard", "handoff"),
             ),
         ]
     if file_name == "data.html":

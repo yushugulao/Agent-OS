@@ -49,6 +49,7 @@ static const char *PROGRAMS[] = {
 	"rp_runbooks",
 	"rp_projectrel",
 	"rp_studyproto",
+	"rp_opsboard",
 	"rp_compare_plain",
 };
 

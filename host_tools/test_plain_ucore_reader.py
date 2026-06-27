@@ -270,14 +270,15 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=1090\n"
-        "tool_events=152\n"
+        "test_cases=1108\n"
+        "tool_events=157\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=3;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
         "runbook_recovery_checks=16;templates=1;steps=7;incident_triages=1;executions=1;exports=1;worker_records=6;agentos_replacements=4;status=ready\n"
         "project_delivery_checks=18;handoff_audits=1;project_runbooks=1;release_gates=1;snapshots=1;snapshot_comparisons=1;reproducibility_audits=1;provenance_graphs=1;package_intakes=1;package_indexes=1;agentos_replacements=4;status=ready\n"
         "study_protocol_checks=20;protocols=2;launches=2;runs=1;compliance_reports=1;bundles=1;reproduction_packages=1;reproduction_reviews=1;action_plans=1;action_executions=1;dataset_portfolios=1;source_portfolios=1;dataset_cards=1;visualizations=1;answers=1;agentos_replacements=4;status=ready\n"
+        "operations_board_checks=18;pending_reviews=1;reproduction_actions=1;workbench_actions=4;plan_items=5;action_items=4;handoffs=3;latest_runs=4;exports=2;agentos_replacements=4;status=ready\n"
         "llm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready\n"
         "workflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready\n"
         "portability_backend_checks=12;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=2;planned_cases=2;status=ready\n"
@@ -324,6 +325,7 @@ status=ready
     "rp_runbooks": "service=runbooks\nrun_id=RUN-042\nrunbook_service_checks=16\nrunbook_templates=1\nrunbook_steps=7\nincident_triages=1\nrunbook_executions=1\nrunbook_exports=1\nworker_operation_records=6\nexecution_observer=rp_execobs\nworker_health=rp_worker\ntimeline_ref=rp_timeline\ntemplate=runbook-template:align-oom-recovery;steps=7;owner=recovery;status=ready\nincident=INC-RUN-042-ALIGN-OOM;triage=incident-triage:RUN-042:manual;failed_stage=align;reason=memory_limit;affected_artifacts=rp_artifact_manifest;status=closed\nexecution=runbook-execution:RUN-042:manual;template=runbook-template:align-oom-recovery;completed_steps=7;retry_stage=align;result=recovered;status=passed\nexport=runbook-export:RUN-042:manual;format=markdown;package=rp_package;evidence=rp_review_dashboard;status=ready\nworker_handoff=worker-a->recovery;queue_action=resume_after_review;failure_classification=resource_limit;status=ready\nagentos_adaptation=event_context,kernel_timeline,metadata_index,batch_recovery_tool;status=planned\nstatus=ready\n",
     "rp_projectrel": "service=project-delivery-review\nproject=lab-gene-x\nrun_id=RUN-042\nproject_delivery_checks=18\nproject_handoff_audits=1\nproject_runbooks=1\nproject_release_gates=1\nproject_snapshots=1\nproject_snapshot_comparisons=1\nproject_reproducibility_audits=1\nproject_provenance_graphs=1\npackage_intakes=1\npackage_indexes=1\nhandoff_audit=project-handoff-audit:lab-gene-x;decision=ready;required_actions=0;suggested_actions=2;status=ready\nproject_runbook=project-runbook:lab-gene-x;steps=7;browser_links=8;cli_commands=9;status=ready\nrelease_gate=project-release-gate:lab-gene-x;decision=release;checks=6;required_actions=0;suggested_actions=2;status=ready\nproject_snapshot=project-snapshot:lab-gene-x:1;files=11;present=11;missing=0;hash_records=11;changes=0;status=ready\nsnapshot_comparison=project-snapshot-comparison:lab-gene-x:latest;left=project-snapshot:lab-gene-x:0;right=project-snapshot:lab-gene-x:1;changed_files=0;decision=stable;status=ready\nreproducibility_audit=project-reproducibility-audit:lab-gene-x;inputs=2;outputs=8;notebooks=2;claim_audits=1;decision=passed;status=ready\nprovenance_graph=project-provenance-graph:lab-gene-x;nodes=9;edges=12;dot=project-provenance.dot;status=ready\nproject_delivery=project-delivery:lab-gene-x;decision=ready;bundle=project-bundle.zip;release_gate=release;handoff=ready;status=ready\npackage_intake=package-intake:external-review;label=External review package;decision=accepted;files=5;sha256=checked;status=ready\npackage_index=project-package-index;handoff=ready;release_gate=release;snapshot=stable;reproducibility=passed;provenance=ready;status=ready\nsource_files=rp_package,rp_release,rp_dossier,rp_web_bundle,rp_review_dashboard,rp_runbooks\nagentos_adaptation=file_metadata_index,event_delivery,context_release_evidence,capability_guard;status=planned\nstatus=ready\n",
     "rp_studyproto": "service=study-protocols\nproject=lab-gene-x\nrun_id=RUN-042\nstudy_protocol_checks=20\nstudy_protocols=2\nstudy_protocol_launches=2\nstudy_protocol_runs=1\nstudy_protocol_compliance_reports=1\nstudy_protocol_bundles=1\nstudy_protocol_reproduction_packages=1\nreproduction_reviews=1\nreproduction_action_plans=1\nreproduction_action_executions=1\ndataset_portfolios=1\nsource_portfolios=1\ndataset_cards=1\ndataset_visualizations=1\ndataset_answers=1\nlaunch=study-protocol-launch:lab-gene-x:RUN-042;protocol=variant-calling-qc;criteria=6;agents=4;status=ready\nlaunch=study-protocol-launch:lab-gene-x:RUN-042-rerun;protocol=variant-calling-qc;criteria=6;agents=4;status=ready\nrerun=study-protocol-rerun:lab-gene-x:RUN-042;source=RUN-042;result=stable;status=passed\ncomparison=study-protocol-launch-comparison:RUN-042;left=launch:RUN-042;right=launch:RUN-042-rerun;changed_metrics=0;status=passed\nreproduction_package=study-protocol-reproduction-package:RUN-042;files=8;notebooks=2;datasets=2;status=ready\nreview=study-protocol-reproduction-review:RUN-042;decision=approved;required_actions=0;suggested_actions=2;status=ready\naction_plan=study-protocol-reproduction-action-plan:RUN-042;steps=5;owner=recovery;status=ready\naction_execution=study-protocol-reproduction-action-execution:RUN-042;steps_done=5;result=passed;status=ready\ndataset_portfolio=dataset-portfolio:lab-gene-x;datasets=2;cards=1;visualizations=1;answers=1;status=ready\nsource_portfolio=source-portfolio:lab-gene-x;sources=42;reviewed=8;exports=2;status=ready\nagentos_adaptation=file_metadata_index,context_protocol_evidence,event_reproduction_queue,batch_dataset_tool;status=planned\nstatus=ready\n",
+    "rp_opsboard": "service=research-operations\nproject=lab-gene-x\nrun_id=RUN-042\noperations_board_checks=18\nprovider_health=offline:1,cloud:0,ready_cloud:0\npending_reviews=1\nreproduction_package_actions=1\nactive_workbench_actions=4\nactive_plan_items=5\nactive_action_items=4\nready_handoffs=3\nlatest_runs=4\nlatest_delivery=ready\noperations_reports=1\nadvance_next_actions=1\nexecute_next_plan_items=1\nexport_formats=2\ndashboard_pages=1\noperation_summary=research-ops:RUN-042;pending_reviews=1;ready_handoffs=3;latest_runs=4;status=ready\nqueue=workbench-queue:RUN-042;items=4;next=delivery_manifest;status=ready\nplan_queue=workbench-plan-queue:RUN-042;items=5;next=build_delivery_manifest;status=ready\naction_item=project-action:RUN-042:review-pack;owner=reviewer;priority=high;status=ready\naction_item=project-action:RUN-042:delivery-manifest;owner=writer;priority=high;status=waiting\naction_item=project-action:RUN-042:protocol-reproduction;owner=recovery;priority=normal;status=ready\naction_item=project-action:RUN-042:release-check;owner=auditor;priority=normal;status=ready\nadvance_result=operations-advance-next:RUN-042;selected=delivery_manifest;effect=rp_package;status=ready\nexecute_result=operations-execute-plan:RUN-042;selected=build_delivery_manifest;effect=rp_runner;status=ready\nreport_export=research-ops-report:RUN-042;formats=markdown,json;source=rp_runner,rp_package,rp_review_dashboard;status=ready\nhandoff=ops->reviewer;artifact=rp_review_dashboard;status=ready\nhandoff=ops->recovery;artifact=rp_runbooks;status=ready\nhandoff=ops->auditor;artifact=rp_projectrel;status=ready\nsource_files=rp_startup,rp_runner,rp_package,rp_review_dashboard,rp_runbooks,rp_projectrel,rp_studyproto\nagentos_adaptation=event_queue,context_ops_trace,capability_action_guard,batch_plan_executor;status=planned\nstatus=ready\n",
     "rp_artifact_manifest": (
         "record=1;kind=input;path=rp_input_fastq;status=ready\n"
         "record=3;kind=alignment;path=rp_artifact;section=rp_align_table;status=ready\n"
@@ -450,7 +452,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 17, summary
+        assert summary["pages"] == 18, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -578,6 +580,17 @@ def main() -> int:
         assert "Study Protocols" in project_html
         assert "rp_studyproto" in project_html
         assert "study_protocol_checks" in project_html
+        operations_html = (out_dir / "operations.html").read_text(encoding="utf-8")
+        assert "Research Operations" in operations_html
+        assert "Operations Queue" in operations_html
+        assert "Plan Queue" in operations_html
+        assert "Action Items" in operations_html
+        assert "Operation Results" in operations_html
+        assert "Operations Handoff" in operations_html
+        assert "rp_opsboard" in operations_html
+        assert "operations_board_checks" in operations_html
+        assert "workbench-queue:RUN-042" in operations_html
+        assert "research-ops-report:RUN-042" in operations_html
         project_review_html = (out_dir / "project-review.html").read_text(encoding="utf-8")
         assert "Project Delivery Review" in project_review_html
         assert "Project Release Gate" in project_review_html
@@ -606,6 +619,7 @@ def main() -> int:
         assert "Backend Runner" in compare_html
         assert "Study Protocol Checks" in compare_html
         assert "study_protocol_checks" in compare_html
+        assert "operations_board_checks" in compare_html
         assert "Backend Runner Cases" in compare_html
         assert "Backend Case Details" in compare_html
         assert "Backend Evidence Report" in compare_html
@@ -690,6 +704,7 @@ def main() -> int:
         assert "query_answer" in services_html
         assert "worker_heartbeat" in services_html
         assert "Runbook Steps" in services_html
+        assert "Operations Checks" in services_html
         assert "runbook-template:align-oom-recovery" in services_html
         assert "Bio Service Files" in services_html
         delivery_html = (out_dir / "delivery.html").read_text(encoding="utf-8")
