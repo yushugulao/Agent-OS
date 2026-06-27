@@ -406,7 +406,10 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=373\n"
+			   "checks=394\n"
+			   "agentos_reserved_surface_checks=21\n"
+			   "agentos_reserved_surface=profiles:0,skills:0,tasks:0,deliberations:0,handoffs:0,coord:0,abi:0,adapter:0,readiness:0,tool_bindings:0\n"
+			   "state_relation=passed\n"
 			   "task_records=21\n"
 			   "ready_tasks=21\n"
 			   "high_tasks=4\n"
@@ -641,7 +644,6 @@ int main(void)
 			   "lifecycle_checks=10\n"
 			   "delivery_coherence=3\n"
 			   "agentos_readiness_checks=7\n"
-			   "state_relation=passed\n"
 			   "knowledge_index_checks=22\n"
 			   "llm_transcript_checks=3\n"
 			   "llm_bridge_transcripts=90\n"
@@ -683,6 +685,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=373 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
+	printf("rp_consistency: checks=394 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
 	return 0;
 }
