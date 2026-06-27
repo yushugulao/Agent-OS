@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=35
+reader_views=36
 reader_actions=57
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
@@ -86,6 +86,7 @@ package_index=project-package-index;handoff=ready;release_gate=release;snapshot=
 publication_page=rp_publication;peer_response=rp_peerresp;status=ready
 calculations_page=rp_calculation;jobs=1;retrieved=3;parser_results=1;status=ready
 real_task_page=rp_realtask;dataset=palmer-penguins;rows=344;answer_audit=pass;status=ready
+analysis_results_page=rp_analysisres;runs=2;tables=2;statistics=2;figures=2;status=ready
 experiment_campaigns_page=rp_campaign;campaigns=1;trials=4;best_trial=04;status=ready
 statistical_design_page=rp_stdesign;designs=1;power=underpowered;randomization=balanced;status=ready
 model_registry_page=rp_modelreg;models=1;versions=1;evaluations=1;deployments=1;status=ready
@@ -271,6 +272,7 @@ status=ready
         "host_action_quality_repair_execute=done\n"
         "evidence_bundle_entries=12\n"
         "model_registry=rp_modelreg;version=v1;evaluation=passed;deployment=ready;status=ready\n"
+        "analysis_results=rp_analysisres;plans=1;runs=2;tables=2;statistics=2;figures=2;interpretations=2;status=ready\n"
     ),
     "rp_nbexec": "host_action_notebook_format=ipynb\nhost_action_notebook_workbench_docs=ready\nstatus=ready\n",
     "rp_uresrun": "host_action_workbench_outputs=rp_runner,rp_revision,rp_package\nhost_action_workbench_manifest=delivery-manifest.json\nhost_action_workbench_bundle=workbench-bundle.zip\nstatus=ready\n",
@@ -284,8 +286,8 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=2404\n"
-        "tool_events=292\n"
+        "test_cases=2500\n"
+        "tool_events=300\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=4;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
@@ -300,6 +302,7 @@ status=ready
         "publication_checks=48;targets=2;submissions=2;review_rounds=2;revision_tasks=3;response_packages=2;response_items=4;decisions=2;agentos_replacements=4;status=ready\n"
         "calculation_checks=84;computers=1;codes=1;jobs=1;retrieved=3;parser_results=1;exports=1;agentos_replacements=4;status=ready\n"
         "real_task_checks=96;dataset=palmer-penguins;rows=344;numeric_fields=5;answer_audit=pass;bundle=ready;status=ready\n"
+        "analysis_results_checks=96;plans=1;runs=2;tables=2;statistics=2;figures=2;interpretations=2;charts=4;agentos_replacements=4;status=ready\n"
         "experiment_campaign_checks=108;campaigns=1;trials=4;best_trial=04;result_review=accept_candidate;status=ready\n"
         "statistical_design_checks=120;designs=1;power=underpowered;randomization=balanced;blinding=ok;stat_result=approved_with_sample_size_note;status=ready\n"
         "model_registry_service_checks=96;models=1;versions=1;evaluations=1;deployments=1;serving_checks=1;agentos_replacements=4;status=ready\n"
@@ -563,6 +566,55 @@ status=ready
         "package_files=project_bundle,report,analysis,claim_audit,answer_audit\n"
         "offline_review=ready\n"
         "http_checks=4\n"
+        "status=ready\n"
+    ),
+    "rp_analysisres": (
+        "service=analysis-results\n"
+        "analysis_results_checks=96\n"
+        "project=lab-gene-x\n"
+        "run_id=RUN-042\n"
+        "analysis_plans=1\n"
+        "analysis_runs=2\n"
+        "result_tables=2\n"
+        "statistical_results=2\n"
+        "figures=2\n"
+        "interpretations=2\n"
+        "manual_run=analysis-run:RUN-042:manual\n"
+        "status=ready\n"
+    ),
+    "rp_anplan": (
+        "plans=1\n"
+        "plan=analysis-plan:RUN-042:treatment-response;project=lab-gene-x;run_id=RUN-042;dataset=expression-qc;question=treatment-response;status=ready\n"
+        "status=ready\n"
+    ),
+    "rp_anrun": (
+        "runs=2\n"
+        "run=analysis-run:RUN-042:treatment-response;plan=analysis-plan:RUN-042:treatment-response;mode=workflow;input=rp_calculation;output=rp_resulttbl;status=complete\n"
+        "run=analysis-run:RUN-042:manual;plan=analysis-plan:RUN-042:treatment-response;mode=manual-qc;input=rp_resulttbl;output=rp_interp;status=complete\n"
+        "status=ready\n"
+    ),
+    "rp_resulttbl": (
+        "tables=2\n"
+        "table=result-table:RUN-042:gene-summary;run=analysis-run:RUN-042:treatment-response;rows=12;columns=6;export=gene-summary.csv;status=ready\n"
+        "table=result-table:manual;run=analysis-run:RUN-042:manual;rows=4;columns=5;export=manual-qc.csv;status=ready\n"
+        "status=ready\n"
+    ),
+    "rp_statres": (
+        "statistics=2\n"
+        "stat=stat-result:RUN-042:treatment-vs-control;run=analysis-run:RUN-042:treatment-response;method=welch-t-test;p_value=0.031;effect=moderate;status=ready\n"
+        "stat=stat-result:manual;run=analysis-run:RUN-042:manual;method=effect-size-check;p_value=na;effect=consistent;status=ready\n"
+        "status=ready\n"
+    ),
+    "rp_anfig": (
+        "figures=2\n"
+        "figure=figure:RUN-042:treatment-response;run=analysis-run:RUN-042:treatment-response;kind=bar-with-ci;path=figures/treatment-response.svg;status=ready\n"
+        "figure=figure:manual;run=analysis-run:RUN-042:manual;kind=qc-table-snapshot;path=figures/manual-qc.svg;status=ready\n"
+        "status=ready\n"
+    ),
+    "rp_interp": (
+        "interpretations=2\n"
+        "interpretation=interpretation:RUN-042:treatment-response;run=analysis-run:RUN-042:treatment-response;conclusion=treatment response has moderate support;reviewer=Analyst;status=ready\n"
+        "interpretation=interpretation:manual;run=analysis-run:RUN-042:manual;conclusion=Manual QC analysis is ready for review.;reviewer=Reviewer;status=ready\n"
         "status=ready\n"
     ),
     "rp_campaign": (
@@ -1120,6 +1172,7 @@ status=ready
         "decision=review_pack_ready;basis=delivery_manifest,operations_next,project_action_items,workbench_handoff\n"
         "subsection=integrity_plane;source=rp_integrity;checks=36;errors=0;result=passed;status=ready\n"
         "subsection=real_task;source=rp_realtask;dataset=palmer-penguins;checks=96;outcome=passed;status=ready\n"
+        "subsection=analysis_results;source=rp_analysisres;checks=96;runs=2;statistics=2;status=ready\n"
         "subsection=experiment_campaigns;source=rp_campaign;campaigns=1;trials=4;checks=108;outcome=passed;status=ready\n"
         "subsection=model_registry;source=rp_modelreg;checks=96;evaluation=passed;deployment=ready;status=ready\n"
         "subsection=release_dossier;source=rp_reldossier;sections=7;checks=112;outcome=passed;status=ready\n"
@@ -1165,7 +1218,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 35, summary
+        assert summary["pages"] == 36, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -1182,6 +1235,7 @@ def main() -> int:
         assert (out_dir / "publication.html").exists()
         assert (out_dir / "calculations.html").exists()
         assert (out_dir / "real-task.html").exists()
+        assert (out_dir / "analysis-results.html").exists()
         assert (out_dir / "experiment-campaigns.html").exists()
         assert (out_dir / "statistical-design.html").exists()
         assert (out_dir / "model-registry.html").exists()
@@ -1402,6 +1456,22 @@ def main() -> int:
         assert "answer_source" in real_task_html
         assert "report_md" in real_task_html
         assert "duplicate_zip_entries" in real_task_html
+        analysis_results_html = (out_dir / "analysis-results.html").read_text(encoding="utf-8")
+        assert "Analysis Results" in analysis_results_html
+        assert "Analysis Result Detail" in analysis_results_html
+        assert "Analysis Plans" in analysis_results_html
+        assert "Analysis Runs" in analysis_results_html
+        assert "Result Tables" in analysis_results_html
+        assert "Statistical Results" in analysis_results_html
+        assert "Analysis Figures" in analysis_results_html
+        assert "Interpretations" in analysis_results_html
+        assert "analysis-plan:RUN-042:treatment-response" in analysis_results_html
+        assert "analysis-run:RUN-042:manual" in analysis_results_html
+        assert "result-table:manual" in analysis_results_html
+        assert "stat-result:manual" in analysis_results_html
+        assert "figure:manual" in analysis_results_html
+        assert "interpretation:manual" in analysis_results_html
+        assert "Manual QC analysis is ready for review." in analysis_results_html
         campaign_html = (out_dir / "experiment-campaigns.html").read_text(encoding="utf-8")
         assert "Experiment Campaigns" in campaign_html
         assert "align-memory-grid" in campaign_html
@@ -1510,6 +1580,8 @@ def main() -> int:
         assert "Calculation Checks" in compare_html
         assert "real_task_checks" in compare_html
         assert "Real Task Checks" in compare_html
+        assert "analysis_results_checks" in compare_html
+        assert "Analysis Results Checks" in compare_html
         assert "experiment_campaign_checks" in compare_html
         assert "Experiment Campaign Checks" in compare_html
         assert "training_compliance_checks" in compare_html

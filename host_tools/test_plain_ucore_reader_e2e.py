@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=2404" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=292" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=2500" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=300" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -737,6 +737,7 @@ def main() -> int:
             assert any("publication_checks=48" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("calculation_checks=84" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("real_task_checks=96" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("analysis_results_checks=96" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("experiment_campaign_checks=108" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("statistical_design_checks=120" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("model_registry_service_checks=96" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -951,6 +952,22 @@ def main() -> int:
             rp_realbundle = read_json(base + "/api/state/rp_realbundle")
             assert any("duplicate_zip_entries=0" in line for line in rp_realbundle["lines"]), rp_realbundle
             assert any("offline_review=ready" in line for line in rp_realbundle["lines"]), rp_realbundle
+            rp_analysisres = read_json(base + "/api/state/rp_analysisres")
+            assert any("analysis_results_checks=96" in line for line in rp_analysisres["lines"]), rp_analysisres
+            assert any("analysis_runs=2" in line for line in rp_analysisres["lines"]), rp_analysisres
+            assert any("result_tables=2" in line for line in rp_analysisres["lines"]), rp_analysisres
+            rp_anplan = read_json(base + "/api/state/rp_anplan")
+            assert any("plan=analysis-plan:RUN-042:treatment-response" in line for line in rp_anplan["lines"]), rp_anplan
+            rp_anrun = read_json(base + "/api/state/rp_anrun")
+            assert any("run=analysis-run:RUN-042:manual" in line for line in rp_anrun["lines"]), rp_anrun
+            rp_resulttbl = read_json(base + "/api/state/rp_resulttbl")
+            assert any("table=result-table:manual" in line for line in rp_resulttbl["lines"]), rp_resulttbl
+            rp_statres = read_json(base + "/api/state/rp_statres")
+            assert any("stat=stat-result:manual" in line for line in rp_statres["lines"]), rp_statres
+            rp_anfig = read_json(base + "/api/state/rp_anfig")
+            assert any("figure=figure:manual" in line for line in rp_anfig["lines"]), rp_anfig
+            rp_interp = read_json(base + "/api/state/rp_interp")
+            assert any("interpretation=interpretation:manual" in line for line in rp_interp["lines"]), rp_interp
             rp_campaign = read_json(base + "/api/state/rp_campaign")
             assert any("campaign_checks=108" in line for line in rp_campaign["lines"]), rp_campaign
             assert any("campaign=experiment-campaign:RUN-042:align-memory-grid" in line for line in rp_campaign["lines"]), rp_campaign
@@ -1514,6 +1531,21 @@ def main() -> int:
             assert "answer_source" in real_task_html
             assert "report_md" in real_task_html
             assert "duplicate_zip_entries" in real_task_html
+            analysis_results_html = read_text(base + "/analysis-results.html")
+            assert "Analysis Results" in analysis_results_html
+            assert "Analysis Plans" in analysis_results_html
+            assert "Analysis Runs" in analysis_results_html
+            assert "Result Tables" in analysis_results_html
+            assert "Statistical Results" in analysis_results_html
+            assert "Analysis Figures" in analysis_results_html
+            assert "Interpretations" in analysis_results_html
+            assert "analysis-plan:RUN-042:treatment-response" in analysis_results_html
+            assert "analysis-run:RUN-042:manual" in analysis_results_html
+            assert "result-table:manual" in analysis_results_html
+            assert "stat-result:manual" in analysis_results_html
+            assert "figure:manual" in analysis_results_html
+            assert "interpretation:manual" in analysis_results_html
+            assert "Manual QC analysis is ready for review." in analysis_results_html
             campaign_html = read_text(base + "/experiment-campaigns.html")
             assert "Experiment Campaigns" in campaign_html
             assert "align-memory-grid" in campaign_html
@@ -1748,6 +1780,8 @@ def main() -> int:
             assert "Calculation Checks" in compare_html
             assert "real_task_checks" in compare_html
             assert "Real Task Checks" in compare_html
+            assert "analysis_results_checks" in compare_html
+            assert "Analysis Results Checks" in compare_html
             assert "experiment_campaign_checks" in compare_html
             assert "Experiment Campaign Checks" in compare_html
             assert "statistical_design_checks" in compare_html

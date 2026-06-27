@@ -1276,7 +1276,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "review_threads=2");
 	ok = ok && rp_file_contains("rp_web_bundle", "action_validation=passed");
 	ok = ok && rp_file_contains("rp_web_bundle", "side_effect_records=16");
-	ok = ok && rp_file_contains("rp_web_bundle", "reader_views=35");
+	ok = ok && rp_file_contains("rp_web_bundle", "reader_views=36");
 	ok = ok && rp_file_contains("rp_web_bundle", "reader_actions=57");
 	ok = ok && rp_file_contains("rp_web_bundle", "post_routes=57");
 	ok = ok && rp_file_contains("rp_web_bundle", "reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle");
@@ -1578,6 +1578,18 @@ int main(void)
 	ok = ok && rp_file_contains("rp_realbundle", "duplicate_zip_entries=0");
 	ok = ok && rp_file_contains("rp_web_bundle", "real_task_page=rp_realtask;dataset=palmer-penguins;rows=344;answer_audit=pass;status=ready");
 	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=real_task;source=rp_realtask;dataset=palmer-penguins;checks=96;outcome=passed;status=ready");
+	ok = ok && rp_file_contains("rp_analysisres", "analysis_results_checks=96");
+	ok = ok && rp_file_contains("rp_analysisres", "analysis_runs=2");
+	ok = ok && rp_file_contains("rp_anplan", "plan=analysis-plan:RUN-042:treatment-response");
+	ok = ok && rp_file_contains("rp_anrun", "run=analysis-run:RUN-042:manual");
+	ok = ok && rp_file_contains("rp_resulttbl", "table=result-table:manual");
+	ok = ok && rp_file_contains("rp_statres", "stat=stat-result:manual");
+	ok = ok && rp_file_contains("rp_anfig", "figure=figure:manual");
+	ok = ok && rp_file_contains("rp_interp", "interpretation=interpretation:manual");
+	ok = ok && rp_file_contains("rp_package", "analysis_results=rp_analysisres;plans=1;runs=2;tables=2;statistics=2;figures=2;interpretations=2;status=ready");
+	ok = ok && rp_file_contains("rp_web_bundle", "analysis_results_page=rp_analysisres;runs=2;tables=2;statistics=2;figures=2;status=ready");
+	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=analysis_results;source=rp_analysisres;checks=96;runs=2;statistics=2;status=ready");
+	ok = ok && rp_file_contains("rp_agentcmp", "analysis_results_checks=96");
 	ok = ok && rp_file_contains("rp_campaign", "campaign_checks=108");
 	ok = ok && rp_file_contains("rp_campaign", "campaign=experiment-campaign:RUN-042:align-memory-grid");
 	ok = ok && rp_file_contains("rp_trials", "trial_count=4");
@@ -1717,17 +1729,18 @@ int main(void)
 	if (!ok) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
-	if (ack_count < 65 || tool_count < 292) {
+	if (ack_count < 66 || tool_count < 300) {
 		printf("rp_compare_plain: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		return 1;
 	}
-	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=65;state_files=238;message_acks=65;tool_events=292;action_state_records=12;test_cases=2404;action_side_effect_records=16;service_page=1;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;runbook_service_checks=16;project_delivery_checks=18;study_protocol_checks=20;statistical_design_checks=120;model_registry_service_checks=96;systematic_review_checks=104;experiment_scheduling_checks=88;training_compliance_checks=92;operations_board_checks=18;review_board_checks=24;control_plane_checks=30;integrity_plane_checks=36;coherence_plane_checks=40;publication_checks=48;calculation_checks=84;real_task_checks=96;experiment_campaign_checks=108;release_dossier_checks=112;mature_capability_checks=72;provenance_view_checks=64;provenance_query_checks=72;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;advanced_surface_objects=5;startup_health_checks=8;startup_doctor_checks=14;research_product_checks=18;runtime_assurance_checks=24;research_ops_checks=28;regulated_research_checks=32;lab_governance_ops_checks=26;state_catalog_checks=12;knowledge_index_checks=22;llm_transcript_checks=3;workbench_delivery_checks=15;research_portfolio_checks=16;execution_scale_checks=14;operations_scale_checks=12;project_revision_incident_checks=12;reserved_research_surface_checks=21;root_state_surface_checks=10;agentos_reserved_surface_checks=21;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=66;state_files=245;message_acks=66;tool_events=300;action_state_records=12;test_cases=2500;action_side_effect_records=16;service_page=1;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;runbook_service_checks=16;project_delivery_checks=18;study_protocol_checks=20;statistical_design_checks=120;model_registry_service_checks=96;systematic_review_checks=104;experiment_scheduling_checks=88;training_compliance_checks=92;operations_board_checks=18;review_board_checks=24;control_plane_checks=30;integrity_plane_checks=36;coherence_plane_checks=40;publication_checks=48;calculation_checks=84;real_task_checks=96;analysis_results_checks=96;experiment_campaign_checks=108;release_dossier_checks=112;mature_capability_checks=72;provenance_view_checks=64;provenance_query_checks=72;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;advanced_surface_objects=5;startup_health_checks=8;startup_doctor_checks=14;research_product_checks=18;runtime_assurance_checks=24;research_ops_checks=28;regulated_research_checks=32;lab_governance_ops_checks=26;state_catalog_checks=12;knowledge_index_checks=22;llm_transcript_checks=3;workbench_delivery_checks=15;research_portfolio_checks=16;execution_scale_checks=14;operations_scale_checks=12;project_revision_incident_checks=12;reserved_research_surface_checks=21;root_state_surface_checks=10;agentos_reserved_surface_checks=21;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "state_catalog=keys:573;nonzero:70;zero:503;represented:573;checks:12;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "startup_doctor=quickstart:ready;doctor:ready;checks:14;commands:startup_guide,platform_doctor,project_launch,open_research_studio;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "model_registry_service_checks=96;models=1;versions=1;evaluations=1;deployments=1;serving_checks=1;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "systematic_review_checks=104;protocols=1;searches=1;screening=9;extractions=3;bias=3;prisma=1;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "experiment_scheduling_checks=88;schedules=1;tasks=3;bookings=4;conflicts=1;executions=2;charts=4;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "training_compliance_checks=92;requirements=4;training_records=4;competency=4;authorizations=3;gaps=1;open_gaps=0;charts=4;agentos_replacements=4;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "analysis_results_checks=96;plans=1;runs=2;tables=2;statistics=2;figures=2;interpretations=2;charts=4;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "knowledge_index=search_documents:1385;provenance_nodes:406;provenance_links:544;events:6816;context_records:348;usable_artifacts:429;usable_runs:20;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "llm_transcripts=90;llm_bridge_requests=30;llm_bridge_responses=30;workbenches=5;deliveries=6;studio_sessions=2;project_action_plans=15;project_runbooks=15;project_evidence_audits=15;project_provenance_graphs=3;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "research_portfolio=sources:42;datasets:3;literature_searches:4;reviews:8;evidence_reviews:4;evidence_extractions:15;screening_decisions:15;exports:66;doctor_reports:10;project_handoff_audits:30;project_run_comparisons:15;project_reproducibility_audits:15;project_snapshot_comparisons:15;status=ready")) return 1;
@@ -1799,6 +1812,6 @@ int main(void)
 	if (rp_host_seed_count() > 0) {
 		printf("rp_compare_plain: host_actions=%d verified\n", rp_host_seed_count());
 	}
-	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=65 state_files=238 acks=65 tools=292 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 model_registry=96 systematic_review=104 experiment_scheduling=88 training_compliance=92 runbook_service=16 project_delivery=18 study_protocol=20 statistical_design=120 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 publication=48 calculation=84 real_task=96 campaign=108 release_dossier=112 mature=72 provenance=64 provenance_query=72 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready\n");
+	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=66 state_files=245 acks=66 tools=300 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 model_registry=96 systematic_review=104 experiment_scheduling=88 training_compliance=92 runbook_service=16 project_delivery=18 study_protocol=20 statistical_design=120 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 publication=48 calculation=84 real_task=96 analysis_results=96 campaign=108 release_dossier=112 mature=72 provenance=64 provenance_query=72 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready\n");
 	return 0;
 }

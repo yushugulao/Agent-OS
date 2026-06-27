@@ -21,6 +21,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_api_run", "api=run-detail");
 	ok = ok && rp_file_contains("rp_api_evidence", "api=evidence-detail");
 	ok = ok && rp_file_contains("rp_web_bundle", "reader_contract=host_plain_ucore_v2");
+	ok = ok && rp_file_contains("rp_analysisres", "analysis_results_checks=96");
 	ok = ok && rp_file_contains("rp_runner", "backend_evidence_report=rp_backend_exec");
 	ok = ok && rp_file_contains("rp_report_text", "backend_evidence_report=rp_backend_exec");
 	ok = ok && rp_file_contains("rp_protocol", "protocol_compliance_reports=1");
@@ -50,6 +51,7 @@ int main(void)
 			   "subsection=provenance_export;source=rp_provpath,rp_lineage;nodes=150;links=250;views=1;status=ready\n"
 			   "subsection=calculations;source=rp_calculation;jobs=1;retrieved=3;checks=84;outcome=passed;status=ready\n"
 			   "subsection=real_task;source=rp_realtask;dataset=palmer-penguins;checks=96;outcome=passed;status=ready\n"
+			   "subsection=analysis_results;source=rp_analysisres;checks=96;runs=2;statistics=2;status=ready\n"
 			   "subsection=experiment_campaigns;source=rp_campaign;campaigns=1;trials=4;checks=108;outcome=passed;status=ready\n"
 			   "subsection=release_dossier;source=rp_reldossier;sections=7;checks=112;outcome=passed;status=ready\n"
 			   "gate=required_files;status=pass;source=rp_package\n"

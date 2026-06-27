@@ -138,6 +138,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_llm_resp", "matched_requests=3");
 	ok = ok && rp_file_contains("rp_agentcmp", "status=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "coherence_checks=9");
+	ok = ok && rp_file_contains("rp_analysisres", "analysis_results_checks=96");
 	ok = ok && rp_file_contains("rp_package", "package_manifest=ready");
 	ok = ok && rp_file_contains("rp_package", "downloadable_units=3");
 	ok = ok && rp_file_contains("rp_site", "pages=42");
@@ -1116,9 +1117,10 @@ int main(void)
 			   "reader_contract=host_plain_ucore_v2\n"
 			   "reader_contract_version=2\n"
 			   "reader_ready=1\n"
-			   "reader_views=35\n"
+			   "reader_views=36\n"
 			   "calculations_page=rp_calculation;jobs=1;retrieved=3;parser_results=1;status=ready\n"
 			   "real_task_page=rp_realtask;dataset=palmer-penguins;rows=344;answer_audit=pass;status=ready\n"
+			   "analysis_results_page=rp_analysisres;runs=2;tables=2;statistics=2;figures=2;status=ready\n"
 			   "experiment_campaigns_page=rp_campaign;campaigns=1;trials=4;best_trial=04;status=ready\n"
 			   "statistical_design_page=rp_stdesign;designs=1;power=underpowered;randomization=balanced;status=ready\n"
 			   "model_registry_page=rp_modelreg;models=1;versions=1;evaluations=1;deployments=1;status=ready\n"

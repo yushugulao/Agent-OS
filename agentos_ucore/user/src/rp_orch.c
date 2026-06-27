@@ -36,6 +36,7 @@ static const char *PROGRAMS[] = {
 	"rp_package",
 	"rp_calculation",
 	"rp_realtask",
+	"rp_analysisres",
 	"rp_campaign",
 	"rp_delta",
 	"rp_release",

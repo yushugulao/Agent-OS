@@ -75,7 +75,7 @@ Current verified enhanced-target run:
 
 ```text
 rp_agentos_orch: agent role=4 context=... latest=1
-rp_orch: programs_ok=65 programs_total=65
+rp_orch: programs_ok=66 programs_total=66
 rp_orch: passed
 rp_agentos_orch: kernel_agent=1 workflow=rp_orch status=ready
 rp_agentos_orch: passed
