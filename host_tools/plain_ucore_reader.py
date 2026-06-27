@@ -26,13 +26,14 @@ PAGE_SPECS = [
     ("agents.html", "Agents", "rp_api_agents", ["rp_ui_agent", "rp_agents", "rp_decisions"]),
     ("evidence.html", "Evidence", "rp_api_evidence", ["rp_ui_evidence", "rp_evidence", "rp_package"]),
     ("review.html", "Review", "rp_review_dashboard", ["rp_review_pack", "rp_review2", "rp_revision", "rp_package", "rp_report_text"]),
-    ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency", "rp_backend", "rp_backend_exec", "rp_study", "rp_studyproto", "rp_opsboard", "rp_control"]),
+    ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency", "rp_backend", "rp_backend_exec", "rp_study", "rp_studyproto", "rp_opsboard", "rp_control", "rp_integrity"]),
     ("artifacts.html", "Artifacts", "rp_api_artifacts", ["rp_artifact", "rp_artifact_manifest", "rp_package"]),
     ("delivery.html", "Delivery", "rp_package", ["rp_nbexec", "rp_uresrun", "rp_artifact_manifest", "rp_review_pack"]),
     ("data.html", "Data", "rp_api_data", ["rp_input", "rp_ingest_files", "rp_dataset_snapshot", "rp_data_preview", "rp_data_quality", "rp_data_transform", "rp_dataset_collection"]),
     ("services.html", "Services", "rp_api_bio", ["rp_api_labres", "rp_api_pub", "rp_api_know", "rp_api_runtime", "rp_bioop", "rp_labresop", "rp_pubop", "rp_knowop", "rp_runop", "rp_runbooks", "rp_studyproto", "rp_opsboard"]),
     ("review-board.html", "Review Board", "rp_reviewboard", ["rp_reviewops", "rp_review_dashboard", "rp_dossier", "rp_package", "rp_opsboard"]),
     ("control-plane.html", "Control Plane", "rp_control", ["rp_opsboard", "rp_review_dashboard", "rp_agentcmp", "rp_web_bundle"]),
+    ("integrity.html", "Integrity", "rp_integrity", ["rp_review_dashboard", "rp_agentcmp", "rp_package", "rp_report_text", "rp_artifact_manifest"]),
     ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets"]),
     ("actions.html", "Actions", "rp_api_action", ["rp_actionio", "rp_host_run_result", "rp_web_routes", "rp_web_bundle"]),
 ]
@@ -1136,6 +1137,7 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Backend Checks", metric_value(state, [("rp_agentcmp", "portability_backend_checks")]), "rp_agentcmp"),
         ("Backend Runner", metric_value(state, [("rp_agentcmp", "backend_runner_checks")]), "rp_agentcmp"),
         ("Study Protocol Checks", metric_value(state, [("rp_agentcmp", "study_protocol_checks"), ("rp_studyproto", "study_protocol_checks")]), "rp_studyproto"),
+        ("Integrity Checks", metric_value(state, [("rp_agentcmp", "integrity_plane_checks"), ("rp_integrity", "integrity_checks")]), "rp_integrity"),
     ]
     llm_items = [
         ("Relay", metric_value(state, [("rp_llm_resp", "host_relay_process"), ("rp_relay", "mode")]), "rp_llm_resp"),
@@ -1198,6 +1200,16 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Permissions", metric_value(state, [("rp_control", "permissions")]), "rp_control"),
         ("Control Actions", metric_value(state, [("rp_control", "control_actions")]), "rp_control"),
     ]
+    integrity_items = [
+        ("Checks", metric_value(state, [("rp_integrity", "integrity_checks")]), "rp_integrity"),
+        ("Evidence", metric_value(state, [("rp_integrity", "evidence_checks")]), "rp_integrity"),
+        ("References", metric_value(state, [("rp_integrity", "reference_checks")]), "rp_integrity"),
+        ("Namespace", metric_value(state, [("rp_integrity", "namespace_checks")]), "rp_integrity"),
+        ("Status Semantics", metric_value(state, [("rp_integrity", "status_checks")]), "rp_integrity"),
+        ("Review Alignment", metric_value(state, [("rp_integrity", "review_alignment_checks")]), "rp_integrity"),
+        ("Errors", metric_value(state, [("rp_integrity", "errors")]), "rp_integrity"),
+        ("Decision", metric_value(state, [("rp_integrity", "decision")]), "rp_integrity"),
+    ]
     if file_name == "run.html":
         return render_summary_panel("Research Output", report_items)
     if file_name in ("evidence.html", "artifacts.html"):
@@ -1230,6 +1242,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Formal Review Board", review_board_items)
     if file_name == "control-plane.html":
         return render_summary_panel("Platform Control Plane", control_plane_items)
+    if file_name == "integrity.html":
+        return render_summary_panel("Integrity Plane", integrity_items)
     return ""
 
 
@@ -1260,6 +1274,15 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Portability Checks", metric_value(state, [("rp_agentcmp", "workflow_portability_checks")]), "rp_agentcmp"),
         ("Backend Checks", metric_value(state, [("rp_agentcmp", "portability_backend_checks")]), "rp_agentcmp"),
         ("Backend Runner", metric_value(state, [("rp_agentcmp", "backend_runner_checks")]), "rp_agentcmp"),
+        ("Integrity Checks", metric_value(state, [("rp_agentcmp", "integrity_plane_checks"), ("rp_integrity", "integrity_checks")]), "rp_integrity"),
+    ]
+    integrity_detail_items = [
+        ("Evidence Contracts", metric_value(state, [("rp_integrity", "evidence_contracts")]), "rp_integrity"),
+        ("Reference Contracts", metric_value(state, [("rp_integrity", "reference_contracts")]), "rp_integrity"),
+        ("Report Source Checks", metric_value(state, [("rp_integrity", "report_source_checks")]), "rp_integrity"),
+        ("Package Trace Checks", metric_value(state, [("rp_integrity", "package_trace_checks")]), "rp_integrity"),
+        ("Warnings", metric_value(state, [("rp_integrity", "warnings")]), "rp_integrity"),
+        ("Report", metric_value(state, [("rp_integrity", "integrity_report")]), "rp_integrity"),
     ]
     llm_items = [
         ("Requests", metric_value(state, [("rp_llm_resp", "requests"), ("rp_llmq", "queued")]), "rp_llm_resp"),
@@ -1289,6 +1312,8 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Review State", review_items)
     if file_name == "compare.html":
         return render_summary_panel("Compare Metrics", compare_items)
+    if file_name == "integrity.html":
+        return render_summary_panel("Integrity Detail", integrity_detail_items)
     if file_name == "llm.html":
         return render_summary_panel("Relay State", llm_items)
     return ""
@@ -1877,6 +1902,59 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 state_records(state, "rp_control", "control_report"),
             ),
         ]
+    if file_name == "integrity.html":
+        return [
+            render_record_panel(
+                "Evidence Traceability",
+                [("Check", "evidence_check"), ("Source", "source"), ("Target", "target"), ("Result", "result"), ("Status", "status")],
+                state_records(state, "rp_integrity", "evidence_check"),
+            ),
+            render_record_panel(
+                "Evidence Contracts",
+                [("Contract", "evidence_contract"), ("Required", "required"), ("Status", "status")],
+                state_records(state, "rp_integrity", "evidence_contract"),
+            ),
+            render_record_panel(
+                "Reference Integrity",
+                [("Check", "reference_check"), ("Source", "source"), ("Target", "target"), ("Result", "result"), ("Status", "status")],
+                state_records(state, "rp_integrity", "reference_check"),
+            ),
+            render_record_panel(
+                "Reference Contracts",
+                [("Contract", "reference_contract"), ("Source", "source"), ("Target", "target"), ("Field", "field"), ("Status", "status")],
+                state_records(state, "rp_integrity", "reference_contract"),
+            ),
+            render_record_panel(
+                "Namespace Checks",
+                [("Check", "namespace_check"), ("Value", "value"), ("Scope", "scope"), ("Result", "result"), ("Status", "status")],
+                state_records(state, "rp_integrity", "namespace_check"),
+            ),
+            render_record_panel(
+                "Status Semantics",
+                [("Check", "status_check"), ("Source", "source"), ("Allowed", "allowed"), ("Result", "result")],
+                state_records(state, "rp_integrity", "status_check"),
+            ),
+            render_record_panel(
+                "Review Alignment",
+                [("Alignment", "review_alignment"), ("Source", "source"), ("Target", "target"), ("Decision", "decision"), ("Status", "status")],
+                state_records(state, "rp_integrity", "review_alignment"),
+            ),
+            render_record_panel(
+                "Report Sources",
+                [("Check", "report_source_check"), ("Source", "source"), ("Target", "target"), ("Source Key", "source_key"), ("Status", "status")],
+                state_records(state, "rp_integrity", "report_source_check"),
+            ),
+            render_record_panel(
+                "Package Trace",
+                [("Trace", "package_trace"), ("Source", "source"), ("Target", "target"), ("Result", "result"), ("Status", "status")],
+                state_records(state, "rp_integrity", "package_trace"),
+            ),
+            render_record_panel(
+                "Integrity Report",
+                [("Report", "integrity_report"), ("Checks", "checks"), ("Errors", "errors"), ("Warnings", "warnings"), ("Status", "status")],
+                state_records(state, "rp_integrity", "integrity_report"),
+            ),
+        ]
     if file_name == "data.html":
         return [
             render_record_panel(
@@ -2124,6 +2202,7 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
             ("Backend Checks", metric_value(state, [("rp_agentcmp", "portability_backend_checks")])),
             ("Backend Runner", metric_value(state, [("rp_agentcmp", "backend_runner_checks")])),
             ("Backend Evidence", metric_value(state, [("rp_agentcmp", "backend_runner_report_checks")])),
+            ("Integrity Plane", metric_value(state, [("rp_agentcmp", "integrity_plane_checks"), ("rp_integrity", "integrity_checks")])),
             ("Reader Contract", metric_value(state, [("rp_agentcmp", "reader_contract")])),
         ]
         check_rows = [
@@ -2133,6 +2212,8 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
             ("Status Semantics", metric_value(state, [("rp_api_compare", "status_semantics"), ("rp_ui_compare", "status_semantics")])),
             ("Reference Checks", metric_value(state, [("rp_api_compare", "reference_checks"), ("rp_ui_compare", "reference_checks")])),
             ("Evidence Trace Checks", metric_value(state, [("rp_api_compare", "evidence_trace_checks"), ("rp_ui_compare", "evidence_trace_checks")])),
+            ("Integrity Evidence", metric_value(state, [("rp_integrity", "evidence_checks")])),
+            ("Integrity References", metric_value(state, [("rp_integrity", "reference_checks")])),
         ]
         return [
             render_line_panel("Plain Kernel Signals", compare_rows),

@@ -1580,10 +1580,10 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "backend_review=1");
 	ok = ok && require_file_token("rp_agentcmp", "review_handoff_checks=13;review_sections=8;review_gates=6");
 	ok = ok && require_file_token("rp_agentcmp", "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1");
-	ok = ok && require_file_token("rp_agentcmp", "programs=50");
-	ok = ok && require_file_token("rp_agentcmp", "state_files=178");
+	ok = ok && require_file_token("rp_agentcmp", "programs=51");
+	ok = ok && require_file_token("rp_agentcmp", "state_files=179");
 	ok = ok && require_file_token("rp_agentcmp", "advanced_surface_objects=5");
-	ok = ok && require_file_token("rp_agentcmp", "test_cases=1162");
+	ok = ok && require_file_token("rp_agentcmp", "test_cases=1198");
 	ok = ok && require_file_token("rp_agentcmp", "state_catalog=keys:573");
 	ok = ok && require_file_token("rp_agentcmp", "startup_doctor=quickstart:ready");
 	ok = ok && require_file_token("rp_agentcmp", "represented:573");
@@ -1893,6 +1893,33 @@ int main(void)
 	ok = ok && require_file_token("rp_review_dashboard", "subsection=platform_control_plane;source=rp_control;approvals=4;notifications=4;plugins=3;status=ready");
 	ok = ok && require_file_token("rp_opsboard", "handoff=control-plane->operations;artifact=rp_control;status=ready");
 	ok = ok && require_file_token("rp_agentcmp", "control_plane_checks=30");
+	ok = ok && require_file_token("rp_integrity", "integrity_checks=36");
+	ok = ok && require_file_token("rp_integrity", "evidence_contracts=8");
+	ok = ok && require_file_token("rp_integrity", "evidence_checks=8");
+	ok = ok && require_file_token("rp_integrity", "reference_contracts=8");
+	ok = ok && require_file_token("rp_integrity", "reference_checks=8");
+	ok = ok && require_file_token("rp_integrity", "namespace_checks=5");
+	ok = ok && require_file_token("rp_integrity", "status_checks=5");
+	ok = ok && require_file_token("rp_integrity", "review_alignment_checks=4");
+	ok = ok && require_file_token("rp_integrity", "report_source_checks=3");
+	ok = ok && require_file_token("rp_integrity", "package_trace_checks=3");
+	ok = ok && require_file_token("rp_integrity", "errors=0");
+	ok = ok && require_file_token("rp_integrity", "warnings=0");
+	ok = ok && require_file_token("rp_integrity", "decision=passed");
+	ok = ok && require_file_token("rp_integrity", "evidence_check=report_source_workflow;source=rp_report_text;target=rp_stage_state;result=pass;status=ready");
+	ok = ok && require_file_token("rp_integrity", "evidence_check=backend_evidence;source=rp_backend_exec;target=rp_report_text;result=pass;status=ready");
+	ok = ok && require_file_token("rp_integrity", "reference_check=run_project;source=rp_runner;target=rp_input;result=pass;status=ready");
+	ok = ok && require_file_token("rp_integrity", "reference_check=source_citation;source=rp_knowledge;target=rp_evidence;result=pass;status=ready");
+	ok = ok && require_file_token("rp_integrity", "namespace_check=package_id;value=delivery-package:RUN-042;scope=package;result=pass;status=ready");
+	ok = ok && require_file_token("rp_integrity", "status_check=review;source=rp_review_dashboard;allowed=waiting,needs_revision,approved,ready;result=pass");
+	ok = ok && require_file_token("rp_integrity", "review_alignment=dashboard_to_package;source=rp_review_dashboard;target=rp_package;decision=aligned;status=ready");
+	ok = ok && require_file_token("rp_integrity", "report_source_check=backend;source=rp_report_text;target=rp_backend_exec;source_key=backend_evidence_report;status=ready");
+	ok = ok && require_file_token("rp_integrity", "package_trace=review;source=rp_package;target=rp_review_pack;result=pass;status=ready");
+	ok = ok && require_file_token("rp_integrity", "integrity_report=integrity-report:RUN-042;checks=36;errors=0;warnings=0;status=ready");
+	ok = ok && require_file_token("rp_integrity", "agentos_adaptation=kernel_context_attestation,kernel_metadata_reference_index,kernel_event_trace,kernel_namespace_registry;status=planned");
+	ok = ok && require_file_token("rp_review_dashboard", "subsection=integrity_plane;source=rp_integrity;checks=36;errors=0;result=passed;status=ready");
+	ok = ok && require_file_token("rp_opsboard", "handoff=integrity-plane->operations;artifact=rp_integrity;status=ready");
+	ok = ok && require_file_token("rp_agentcmp", "integrity_plane_checks=36");
 	ok = ok && require_file_token("rp_web_bundle", "custom_research_files=1");
 	ok = ok && require_file_token("rp_web_bundle", "custom_research_runs=3");
 	if (rp_host_seed_count() > 0 &&
@@ -1995,13 +2022,13 @@ int main(void)
 		ok = ok && require_file_token("rp_web_bundle", "host_action_llm_relay=");
 	}
 
-	ok = ok && require_count("ack", rp_count_lines("rp_ack"), 49);
-	ok = ok && require_count("tool", rp_count_lines("rp_tool"), 163);
+	ok = ok && require_count("ack", rp_count_lines("rp_ack"), 51);
+	ok = ok && require_count("tool", rp_count_lines("rp_tool"), 179);
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_tests",
 			   "suite=plain-ucore-research-platform\n"
-			   "tests=1162\n"
+			   "tests=1198\n"
 			   "catalog=passed\n"
 			   "data_pipeline=passed\n"
 			   "bio_services=passed\n"
@@ -2053,6 +2080,7 @@ int main(void)
 			   "study_protocol=passed\n"
 			   "operations_board=passed\n"
 			   "review_board=passed\n"
+			   "integrity_plane=passed\n"
                "reserved_research_surfaces=passed\n"
                "root_state_surface=passed\n"
                "agentos_reserved_surface=passed\n"
@@ -2073,6 +2101,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=test_suite.consistency;ok")) return 1;
 	if (!rp_append_file("rp_tool", "tool=test_suite.result;ok")) return 1;
 	if (!rp_append_status("tests=ready")) return 1;
-	printf("rp_test_suite: tests=1162 catalog=passed state_catalog=passed startup_doctor=passed runbook_service=passed project_delivery=passed study_protocol=passed operations_board=passed review_board=passed control_plane=passed data=passed services=passed products=passed assurance=passed research_ops=passed regulated=passed lab_governance=passed knowledge_index=passed llm_transcripts=passed workbench_delivery=passed portfolio_scale=passed execution_scale=passed operations_scale=passed project_revision_incident=passed reserved_research_surfaces=passed root_state_surface=passed agentos_reserved_surface=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed startup=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
+	printf("rp_test_suite: tests=1198 catalog=passed state_catalog=passed startup_doctor=passed runbook_service=passed project_delivery=passed study_protocol=passed operations_board=passed review_board=passed control_plane=passed integrity_plane=passed data=passed services=passed products=passed assurance=passed research_ops=passed regulated=passed lab_governance=passed knowledge_index=passed llm_transcripts=passed workbench_delivery=passed portfolio_scale=passed execution_scale=passed operations_scale=passed project_revision_incident=passed reserved_research_surfaces=passed root_state_surface=passed agentos_reserved_surface=passed actions=passed active_actions=passed custom=passed dynamic=passed workbench=passed notebook=passed portability=passed coherence=passed static_site=passed artifacts=passed workflow=passed collaboration=passed ui=passed web=passed llm=passed startup=passed review_dashboard=passed review_pack=passed compare=passed status=passed\n");
 	return 0;
 }

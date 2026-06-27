@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=1162" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=171" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=1198" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=179" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -732,6 +732,7 @@ def main() -> int:
             assert any("study_protocol_checks=20" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("operations_board_checks=18" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("control_plane_checks=30" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("integrity_plane_checks=36" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_runbooks = read_json(base + "/api/state/rp_runbooks")
             assert any("runbook_service_checks=16" in line for line in rp_runbooks["lines"]), rp_runbooks
             assert any("runbook_templates=1" in line for line in rp_runbooks["lines"]), rp_runbooks
@@ -766,6 +767,7 @@ def main() -> int:
             assert any("agentos_adaptation=event_queue,context_ops_trace,capability_action_guard,batch_plan_executor" in line for line in rp_opsboard["lines"]), rp_opsboard
             assert any("handoff=review-board->operations;artifact=rp_reviewboard;status=ready" in line for line in rp_opsboard["lines"]), rp_opsboard
             assert any("handoff=control-plane->operations;artifact=rp_control;status=ready" in line for line in rp_opsboard["lines"]), rp_opsboard
+            assert any("handoff=integrity-plane->operations;artifact=rp_integrity;status=ready" in line for line in rp_opsboard["lines"]), rp_opsboard
             rp_reviewboard = read_json(base + "/api/state/rp_reviewboard")
             assert any("review_board_checks=24" in line for line in rp_reviewboard["lines"]), rp_reviewboard
             assert any("review_votes=4" in line for line in rp_reviewboard["lines"]), rp_reviewboard
@@ -790,6 +792,19 @@ def main() -> int:
             assert any("plugin=plugin.tuning" in line for line in rp_control["lines"]), rp_control
             assert any("api_token=token:local-dashboard" in line for line in rp_control["lines"]), rp_control
             assert any("agentos_adaptation=kernel_capability_check,kernel_event_delivery,kernel_plugin_tool_table,kernel_run_queue" in line for line in rp_control["lines"]), rp_control
+            rp_integrity = read_json(base + "/api/state/rp_integrity")
+            assert any("integrity_checks=36" in line for line in rp_integrity["lines"]), rp_integrity
+            assert any("evidence_contracts=8" in line for line in rp_integrity["lines"]), rp_integrity
+            assert any("reference_contracts=8" in line for line in rp_integrity["lines"]), rp_integrity
+            assert any("namespace_checks=5" in line for line in rp_integrity["lines"]), rp_integrity
+            assert any("status_checks=5" in line for line in rp_integrity["lines"]), rp_integrity
+            assert any("review_alignment_checks=4" in line for line in rp_integrity["lines"]), rp_integrity
+            assert any("errors=0" in line for line in rp_integrity["lines"]), rp_integrity
+            assert any("decision=passed" in line for line in rp_integrity["lines"]), rp_integrity
+            assert any("evidence_check=backend_evidence" in line for line in rp_integrity["lines"]), rp_integrity
+            assert any("reference_check=stage_artifacts" in line for line in rp_integrity["lines"]), rp_integrity
+            assert any("review_alignment=board_to_dashboard" in line for line in rp_integrity["lines"]), rp_integrity
+            assert any("integrity_report=integrity-report:RUN-042" in line for line in rp_integrity["lines"]), rp_integrity
             rp_consistency = read_json(base + "/api/state/rp_consistency")
             assert any("checks=420" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("state_catalog_checks=12" in line for line in rp_consistency["lines"]), rp_consistency
@@ -1244,6 +1259,20 @@ def main() -> int:
             assert "queue:RUN-042:2" in control_plane_html
             assert "plugin.tuning" in control_plane_html
             assert "token:local-dashboard" in control_plane_html
+            integrity_html = read_text(base + "/integrity.html")
+            assert "Integrity Plane" in integrity_html
+            assert "Integrity Detail" in integrity_html
+            assert "Evidence Traceability" in integrity_html
+            assert "Reference Integrity" in integrity_html
+            assert "Namespace Checks" in integrity_html
+            assert "Status Semantics" in integrity_html
+            assert "Review Alignment" in integrity_html
+            assert "Report Sources" in integrity_html
+            assert "Package Trace" in integrity_html
+            assert "Integrity Report" in integrity_html
+            assert "backend_evidence" in integrity_html
+            assert "stage_artifacts" in integrity_html
+            assert "integrity-report:RUN-042" in integrity_html
             project_review_html = read_text(base + "/project-review.html")
             assert "Project Delivery Review" in project_review_html
             assert "Project Release Gate" in project_review_html
@@ -1394,6 +1423,8 @@ def main() -> int:
             assert "Compare Summary" in compare_html
             assert "Compare Metrics" in compare_html
             assert "control_plane_checks" in compare_html
+            assert "integrity_plane_checks" in compare_html
+            assert "Integrity Plane" in compare_html
             assert "Compare Action Trace" in compare_html
             assert "Compare Action Output Links" in compare_html
             assert "Compare Action Output Details" in compare_html

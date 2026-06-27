@@ -1450,6 +1450,25 @@ int main(void)
 	ok = ok && rp_file_contains("rp_control", "agentos_adaptation=kernel_capability_check,kernel_event_delivery,kernel_plugin_tool_table,kernel_run_queue;status=planned");
 	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=platform_control_plane;source=rp_control;approvals=4;notifications=4;plugins=3;status=ready");
 	ok = ok && rp_file_contains("rp_opsboard", "handoff=control-plane->operations;artifact=rp_control;status=ready");
+	ok = ok && rp_file_contains("rp_integrity", "integrity_checks=36");
+	ok = ok && rp_file_contains("rp_integrity", "evidence_contracts=8");
+	ok = ok && rp_file_contains("rp_integrity", "reference_contracts=8");
+	ok = ok && rp_file_contains("rp_integrity", "namespace_checks=5");
+	ok = ok && rp_file_contains("rp_integrity", "status_checks=5");
+	ok = ok && rp_file_contains("rp_integrity", "review_alignment_checks=4");
+	ok = ok && rp_file_contains("rp_integrity", "errors=0");
+	ok = ok && rp_file_contains("rp_integrity", "decision=passed");
+	ok = ok && rp_file_contains("rp_integrity", "evidence_check=backend_evidence;source=rp_backend_exec;target=rp_report_text;result=pass;status=ready");
+	ok = ok && rp_file_contains("rp_integrity", "reference_check=stage_artifacts;source=rp_stage_state;target=rp_artifact;result=pass;status=ready");
+	ok = ok && rp_file_contains("rp_integrity", "namespace_check=run_id;value=RUN-042;scope=project;result=pass;status=ready");
+	ok = ok && rp_file_contains("rp_integrity", "status_check=package;source=rp_package;allowed=draft,ready,approved,released;result=pass");
+	ok = ok && rp_file_contains("rp_integrity", "review_alignment=board_to_dashboard;source=rp_reviewboard;target=rp_review_dashboard;decision=aligned;status=ready");
+	ok = ok && rp_file_contains("rp_integrity", "report_source_check=workflow;source=rp_report_text;target=rp_stage_state;source_key=host_workflow_run_id;status=ready");
+	ok = ok && rp_file_contains("rp_integrity", "package_trace=delivery;source=rp_package;target=rp_web_bundle;result=pass;status=ready");
+	ok = ok && rp_file_contains("rp_integrity", "integrity_report=integrity-report:RUN-042;checks=36;errors=0;warnings=0;status=ready");
+	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=integrity_plane;source=rp_integrity;checks=36;errors=0;result=passed;status=ready");
+	ok = ok && rp_file_contains("rp_opsboard", "handoff=integrity-plane->operations;artifact=rp_integrity;status=ready");
+	ok = ok && rp_file_contains("rp_agentcmp", "integrity_plane_checks=36");
 	int portability_imports = rp_get_int_value("rp_wfio", "portability_imports=");
 	int portability_adapters = rp_get_int_value("rp_wfio", "adapter_specs=");
 	int portability_migration = rp_get_int_value("rp_wfio", "migration_steps=");
@@ -1534,11 +1553,11 @@ int main(void)
 	if (!ok) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
-	if (ack_count < 50 || tool_count < 171) {
+	if (ack_count < 51 || tool_count < 179) {
 		printf("rp_compare_plain: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		return 1;
 	}
-	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=50;state_files=178;message_acks=50;tool_events=171;action_state_records=12;test_cases=1162;action_side_effect_records=16;service_page=1;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;runbook_service_checks=16;project_delivery_checks=18;study_protocol_checks=20;operations_board_checks=18;review_board_checks=24;control_plane_checks=30;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;advanced_surface_objects=5;startup_health_checks=8;startup_doctor_checks=14;research_product_checks=18;runtime_assurance_checks=24;research_ops_checks=28;regulated_research_checks=32;lab_governance_ops_checks=26;state_catalog_checks=12;knowledge_index_checks=22;llm_transcript_checks=3;workbench_delivery_checks=15;research_portfolio_checks=16;execution_scale_checks=14;operations_scale_checks=12;project_revision_incident_checks=12;reserved_research_surface_checks=21;root_state_surface_checks=10;agentos_reserved_surface_checks=21;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=51;state_files=179;message_acks=51;tool_events=179;action_state_records=12;test_cases=1198;action_side_effect_records=16;service_page=1;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;runbook_service_checks=16;project_delivery_checks=18;study_protocol_checks=20;operations_board_checks=18;review_board_checks=24;control_plane_checks=30;integrity_plane_checks=36;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;advanced_surface_objects=5;startup_health_checks=8;startup_doctor_checks=14;research_product_checks=18;runtime_assurance_checks=24;research_ops_checks=28;regulated_research_checks=32;lab_governance_ops_checks=26;state_catalog_checks=12;knowledge_index_checks=22;llm_transcript_checks=3;workbench_delivery_checks=15;research_portfolio_checks=16;execution_scale_checks=14;operations_scale_checks=12;project_revision_incident_checks=12;reserved_research_surface_checks=21;root_state_surface_checks=10;agentos_reserved_surface_checks=21;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "state_catalog=keys:573;nonzero:70;zero:503;represented:573;checks:12;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "startup_doctor=quickstart:ready;doctor:ready;checks:14;commands:startup_guide,platform_doctor,project_launch,open_research_studio;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "knowledge_index=search_documents:1385;provenance_nodes:406;provenance_links:544;events:6816;context_records:348;usable_artifacts:429;usable_runs:20;status=ready")) return 1;
@@ -1558,6 +1577,7 @@ int main(void)
 	if (!rp_append_file("rp_agentcmp", "operations_board_checks=18;pending_reviews=1;reproduction_actions=1;workbench_actions=4;plan_items=5;action_items=4;handoffs=3;latest_runs=4;exports=2;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "review_board_checks=24;boards=1;requests=1;votes=4;signoffs=4;assignments=4;workloads=4;filters=2;decision=approved;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "control_plane_checks=30;approvals=4;notifications=4;queue_items=4;plugins=3;workspaces=1;permissions=5;agentos_replacements=4;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "integrity_plane_checks=36;evidence_contracts=8;reference_contracts=8;namespace_checks=5;status_checks=5;review_alignment_checks=4;report_source_checks=3;package_trace_checks=3;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "llm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "workflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "portability_backend_checks=12;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=4;planned_cases=0;status=ready")) return 1;
@@ -1606,6 +1626,6 @@ int main(void)
 	if (rp_host_seed_count() > 0) {
 		printf("rp_compare_plain: host_actions=%d verified\n", rp_host_seed_count());
 	}
-	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=50 state_files=178 acks=50 tools=171 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 review_board=24 control_plane=30 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready\n");
+	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=51 state_files=179 acks=51 tools=179 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready\n");
 	return 0;
 }
