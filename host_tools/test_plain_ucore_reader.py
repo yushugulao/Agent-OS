@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=21
+reader_views=22
 reader_actions=57
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
@@ -270,8 +270,8 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=1198\n"
-        "tool_events=179\n"
+        "test_cases=1238\n"
+        "tool_events=187\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=4;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
@@ -282,6 +282,7 @@ status=ready
         "review_board_checks=24;boards=1;requests=1;votes=4;signoffs=4;assignments=4;workloads=4;filters=2;decision=approved;agentos_replacements=4;status=ready\n"
         "control_plane_checks=30;approvals=4;notifications=4;queue_items=4;plugins=3;workspaces=1;permissions=5;agentos_replacements=4;status=ready\n"
         "integrity_plane_checks=36;evidence_contracts=8;reference_contracts=8;namespace_checks=5;status_checks=5;review_alignment_checks=4;report_source_checks=3;package_trace_checks=3;agentos_replacements=4;status=ready\n"
+        "coherence_plane_checks=40;delivery_contracts=7;run_state_contracts=7;lifecycle_contracts=6;workflow_lint=5;tool_protocol=5;report_validation=5;agent_coordination=3;agentos_replacements=4;status=ready\n"
         "llm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready\n"
         "workflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready\n"
         "portability_backend_checks=12;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=2;planned_cases=2;status=ready\n"
@@ -328,7 +329,7 @@ status=ready
     "rp_runbooks": "service=runbooks\nrun_id=RUN-042\nrunbook_service_checks=16\nrunbook_templates=1\nrunbook_steps=7\nincident_triages=1\nrunbook_executions=1\nrunbook_exports=1\nworker_operation_records=6\nexecution_observer=rp_execobs\nworker_health=rp_worker\ntimeline_ref=rp_timeline\ntemplate=runbook-template:align-oom-recovery;steps=7;owner=recovery;status=ready\nincident=INC-RUN-042-ALIGN-OOM;triage=incident-triage:RUN-042:manual;failed_stage=align;reason=memory_limit;affected_artifacts=rp_artifact_manifest;status=closed\nexecution=runbook-execution:RUN-042:manual;template=runbook-template:align-oom-recovery;completed_steps=7;retry_stage=align;result=recovered;status=passed\nexport=runbook-export:RUN-042:manual;format=markdown;package=rp_package;evidence=rp_review_dashboard;status=ready\nworker_handoff=worker-a->recovery;queue_action=resume_after_review;failure_classification=resource_limit;status=ready\nagentos_adaptation=event_context,kernel_timeline,metadata_index,batch_recovery_tool;status=planned\nstatus=ready\n",
     "rp_projectrel": "service=project-delivery-review\nproject=lab-gene-x\nrun_id=RUN-042\nproject_delivery_checks=18\nproject_handoff_audits=1\nproject_runbooks=1\nproject_release_gates=1\nproject_snapshots=1\nproject_snapshot_comparisons=1\nproject_reproducibility_audits=1\nproject_provenance_graphs=1\npackage_intakes=1\npackage_indexes=1\nhandoff_audit=project-handoff-audit:lab-gene-x;decision=ready;required_actions=0;suggested_actions=2;status=ready\nproject_runbook=project-runbook:lab-gene-x;steps=7;browser_links=8;cli_commands=9;status=ready\nrelease_gate=project-release-gate:lab-gene-x;decision=release;checks=6;required_actions=0;suggested_actions=2;status=ready\nproject_snapshot=project-snapshot:lab-gene-x:1;files=11;present=11;missing=0;hash_records=11;changes=0;status=ready\nsnapshot_comparison=project-snapshot-comparison:lab-gene-x:latest;left=project-snapshot:lab-gene-x:0;right=project-snapshot:lab-gene-x:1;changed_files=0;decision=stable;status=ready\nreproducibility_audit=project-reproducibility-audit:lab-gene-x;inputs=2;outputs=8;notebooks=2;claim_audits=1;decision=passed;status=ready\nprovenance_graph=project-provenance-graph:lab-gene-x;nodes=9;edges=12;dot=project-provenance.dot;status=ready\nproject_delivery=project-delivery:lab-gene-x;decision=ready;bundle=project-bundle.zip;release_gate=release;handoff=ready;status=ready\npackage_intake=package-intake:external-review;label=External review package;decision=accepted;files=5;sha256=checked;status=ready\npackage_index=project-package-index;handoff=ready;release_gate=release;snapshot=stable;reproducibility=passed;provenance=ready;status=ready\nsource_files=rp_package,rp_release,rp_dossier,rp_web_bundle,rp_review_dashboard,rp_runbooks\nagentos_adaptation=file_metadata_index,event_delivery,context_release_evidence,capability_guard;status=planned\nstatus=ready\n",
     "rp_studyproto": "service=study-protocols\nproject=lab-gene-x\nrun_id=RUN-042\nstudy_protocol_checks=20\nstudy_protocols=2\nstudy_protocol_launches=2\nstudy_protocol_runs=1\nstudy_protocol_compliance_reports=1\nstudy_protocol_bundles=1\nstudy_protocol_reproduction_packages=1\nreproduction_reviews=1\nreproduction_action_plans=1\nreproduction_action_executions=1\ndataset_portfolios=1\nsource_portfolios=1\ndataset_cards=1\ndataset_visualizations=1\ndataset_answers=1\nlaunch=study-protocol-launch:lab-gene-x:RUN-042;protocol=variant-calling-qc;criteria=6;agents=4;status=ready\nlaunch=study-protocol-launch:lab-gene-x:RUN-042-rerun;protocol=variant-calling-qc;criteria=6;agents=4;status=ready\nrerun=study-protocol-rerun:lab-gene-x:RUN-042;source=RUN-042;result=stable;status=passed\ncomparison=study-protocol-launch-comparison:RUN-042;left=launch:RUN-042;right=launch:RUN-042-rerun;changed_metrics=0;status=passed\nreproduction_package=study-protocol-reproduction-package:RUN-042;files=8;notebooks=2;datasets=2;status=ready\nreview=study-protocol-reproduction-review:RUN-042;decision=approved;required_actions=0;suggested_actions=2;status=ready\naction_plan=study-protocol-reproduction-action-plan:RUN-042;steps=5;owner=recovery;status=ready\naction_execution=study-protocol-reproduction-action-execution:RUN-042;steps_done=5;result=passed;status=ready\ndataset_portfolio=dataset-portfolio:lab-gene-x;datasets=2;cards=1;visualizations=1;answers=1;status=ready\nsource_portfolio=source-portfolio:lab-gene-x;sources=42;reviewed=8;exports=2;status=ready\nagentos_adaptation=file_metadata_index,context_protocol_evidence,event_reproduction_queue,batch_dataset_tool;status=planned\nstatus=ready\n",
-    "rp_opsboard": "service=research-operations\nproject=lab-gene-x\nrun_id=RUN-042\noperations_board_checks=18\nprovider_health=offline:1,cloud:0,ready_cloud:0\npending_reviews=1\nreproduction_package_actions=1\nactive_workbench_actions=4\nactive_plan_items=5\nactive_action_items=4\nready_handoffs=3\nlatest_runs=4\nlatest_delivery=ready\noperations_reports=1\nadvance_next_actions=1\nexecute_next_plan_items=1\nexport_formats=2\ndashboard_pages=1\noperation_summary=research-ops:RUN-042;pending_reviews=1;ready_handoffs=3;latest_runs=4;status=ready\nqueue=workbench-queue:RUN-042;items=4;next=delivery_manifest;status=ready\nplan_queue=workbench-plan-queue:RUN-042;items=5;next=build_delivery_manifest;status=ready\naction_item=project-action:RUN-042:review-pack;owner=reviewer;priority=high;status=ready\naction_item=project-action:RUN-042:delivery-manifest;owner=writer;priority=high;status=waiting\naction_item=project-action:RUN-042:protocol-reproduction;owner=recovery;priority=normal;status=ready\naction_item=project-action:RUN-042:release-check;owner=auditor;priority=normal;status=ready\nadvance_result=operations-advance-next:RUN-042;selected=delivery_manifest;effect=rp_package;status=ready\nexecute_result=operations-execute-plan:RUN-042;selected=build_delivery_manifest;effect=rp_runner;status=ready\nreport_export=research-ops-report:RUN-042;formats=markdown,json;source=rp_runner,rp_package,rp_review_dashboard;status=ready\nhandoff=ops->reviewer;artifact=rp_review_dashboard;status=ready\nhandoff=ops->recovery;artifact=rp_runbooks;status=ready\nhandoff=ops->auditor;artifact=rp_projectrel;status=ready\nhandoff=review-board->operations;artifact=rp_reviewboard;status=ready\nhandoff=control-plane->operations;artifact=rp_control;status=ready\nhandoff=integrity-plane->operations;artifact=rp_integrity;status=ready\nsource_files=rp_startup,rp_runner,rp_package,rp_review_dashboard,rp_runbooks,rp_projectrel,rp_studyproto\nagentos_adaptation=event_queue,context_ops_trace,capability_action_guard,batch_plan_executor;status=planned\nstatus=ready\n",
+    "rp_opsboard": "service=research-operations\nproject=lab-gene-x\nrun_id=RUN-042\noperations_board_checks=18\nprovider_health=offline:1,cloud:0,ready_cloud:0\npending_reviews=1\nreproduction_package_actions=1\nactive_workbench_actions=4\nactive_plan_items=5\nactive_action_items=4\nready_handoffs=3\nlatest_runs=4\nlatest_delivery=ready\noperations_reports=1\nadvance_next_actions=1\nexecute_next_plan_items=1\nexport_formats=2\ndashboard_pages=1\noperation_summary=research-ops:RUN-042;pending_reviews=1;ready_handoffs=3;latest_runs=4;status=ready\nqueue=workbench-queue:RUN-042;items=4;next=delivery_manifest;status=ready\nplan_queue=workbench-plan-queue:RUN-042;items=5;next=build_delivery_manifest;status=ready\naction_item=project-action:RUN-042:review-pack;owner=reviewer;priority=high;status=ready\naction_item=project-action:RUN-042:delivery-manifest;owner=writer;priority=high;status=waiting\naction_item=project-action:RUN-042:protocol-reproduction;owner=recovery;priority=normal;status=ready\naction_item=project-action:RUN-042:release-check;owner=auditor;priority=normal;status=ready\nadvance_result=operations-advance-next:RUN-042;selected=delivery_manifest;effect=rp_package;status=ready\nexecute_result=operations-execute-plan:RUN-042;selected=build_delivery_manifest;effect=rp_runner;status=ready\nreport_export=research-ops-report:RUN-042;formats=markdown,json;source=rp_runner,rp_package,rp_review_dashboard;status=ready\nhandoff=ops->reviewer;artifact=rp_review_dashboard;status=ready\nhandoff=ops->recovery;artifact=rp_runbooks;status=ready\nhandoff=ops->auditor;artifact=rp_projectrel;status=ready\nhandoff=review-board->operations;artifact=rp_reviewboard;status=ready\nhandoff=control-plane->operations;artifact=rp_control;status=ready\nhandoff=integrity-plane->operations;artifact=rp_integrity;status=ready\nhandoff=coherence-plane->operations;artifact=rp_coherence;status=ready\nsource_files=rp_startup,rp_runner,rp_package,rp_review_dashboard,rp_runbooks,rp_projectrel,rp_studyproto\nagentos_adaptation=event_queue,context_ops_trace,capability_action_guard,batch_plan_executor;status=planned\nstatus=ready\n",
     "rp_reviewboard": "service=formal-review-board\nproject=lab-gene-x\nrun_id=RUN-042\nreview_board_checks=24\nreview_boards=1\nreview_requests=1\nreview_votes=4\nreview_signoffs=4\nreview_blockers=0\nreview_decisions=1\nreview_assignments=4\nreview_filters=2\nreview_workloads=4\nreview_escalations=0\ndecision=approved\nboard=review-board:final-release;chair=wang;members=4;status=active\nrequest=review-request:RUN-042:release-dossier;target=release-dossier:RUN-042:final-review;roles=4;status=approved\nvote=review-vote:RUN-042:methods;reviewer=auditor;role=methods_reviewer;decision=approve;status=recorded\nvote=review-vote:RUN-042:data;reviewer=data-steward;role=data_reviewer;decision=approve;status=recorded\nvote=review-vote:RUN-042:systems;reviewer=systems-reviewer;role=systems_reviewer;decision=approve;status=recorded\nvote=review-vote:RUN-042:chair;reviewer=wang;role=release_chair;decision=approve;status=recorded\nsignoff=review-signoff:RUN-042:methods;signer=auditor;role=methods_reviewer;decision=signed;status=recorded\nsignoff=review-signoff:RUN-042:data;signer=data-steward;role=data_reviewer;decision=signed;status=recorded\nsignoff=review-signoff:RUN-042:systems;signer=systems-reviewer;role=systems_reviewer;decision=signed;status=recorded\nsignoff=review-signoff:RUN-042:chair;signer=wang;role=release_chair;decision=signed;status=recorded\ndecision_record=review-board-decision:RUN-042:release;approvals=4;rejections=0;blockers_open=0;missing_roles=0;missing_signoffs=0;status=approved\nassignment=review-assignment:RUN-042:methods;reviewer=auditor;role=methods_reviewer;priority=medium;status=done\nassignment=review-assignment:RUN-042:data;reviewer=data-steward;role=data_reviewer;priority=medium;status=done\nassignment=review-assignment:RUN-042:systems;reviewer=systems-reviewer;role=systems_reviewer;priority=medium;status=done\nassignment=review-assignment:RUN-042:chair;reviewer=wang;role=release_chair;priority=high;status=done\nfilter=review-filter:auditor-open;owner=auditor;results=0;status=ready\nfilter=review-filter:wang-overdue;owner=wang;results=0;status=ready\nworkload=review-workload:auditor;open=0;overdue=0;high=0;status=ready\nworkload=review-workload:data-steward;open=0;overdue=0;high=0;status=ready\nworkload=review-workload:systems-reviewer;open=0;overdue=0;high=0;status=ready\nworkload=review-workload:wang;open=0;overdue=0;high=0;status=ready\nreview_package=formal-review-board-package:RUN-042;files=rp_dossier,rp_review_dashboard,rp_package,rp_opsboard;status=ready\nagentos_adaptation=capability_review_roles,context_signoff_trace,event_review_queue,metadata_dossier_binding;status=planned\nstatus=ready\n",
     "rp_control": "service=platform-control-plane\nproject=lab-gene-x\nrun_id=RUN-042\ncontrol_plane_checks=30\napprovals=4\napproval_transitions=4\nsubscriptions=3\nnotifications=4\nrun_queue_items=4\nleases=2\nplugin_manifests=3\nplugin_runs=3\nworkspaces=1\nusers=3\naccess_grants=3\nsaved_views=2\napi_tokens=1\npermissions=5\ncontrol_actions=8\napproval=approval:release-dossier:1;target=release-dossier:RUN-042;state=draft;actor=writer;status=recorded\napproval=approval:release-dossier:2;target=release-dossier:RUN-042;state=submitted;actor=writer;status=recorded\napproval=approval:release-dossier:3;target=release-dossier:RUN-042;state=approved;actor=wang;status=recorded\napproval=approval:release-dossier:4;target=release-dossier:RUN-042;state=published;actor=wang;status=recorded\nsubscription=sub:review:wang:APPROVAL_STATE;target=wang;event=APPROVAL_STATE;status=active\nsubscription=sub:review:auditor:QUEUE_ITEM_FINISHED;target=auditor;event=QUEUE_ITEM_FINISHED;status=active\nsubscription=sub:ops:writer:*;target=writer;event=*;status=active\nnotification=notif:1;target=wang;event=APPROVAL_STATE;delivered=1;status=ready\nnotification=notif:2;target=auditor;event=QUEUE_ITEM_FINISHED;delivered=1;status=ready\nnotification=notif:3;target=writer;event=RUN_LEASED;delivered=1;status=ready\nnotification=notif:4;target=writer;event=PLUGIN_RUN;delivered=1;status=ready\nqueue=queue:RUN-042:1;run=RUN-042;priority=90;state=done;worker=orchestrator;status=ready\nqueue=queue:RUN-042:2;run=RUN-042-review;priority=80;state=leased;worker=reviewer;status=ready\nqueue=queue:RUN-042:3;run=RUN-042-package;priority=70;state=queued;worker=none;status=ready\nqueue=queue:RUN-042:4;run=RUN-042-audit;priority=60;state=done;worker=auditor;status=ready\nplugin=plugin.artifacts;name=Artifact Analytics;tools=artifact_count_by_status;enabled=1;status=ready\nplugin=plugin.failures;name=Failure Summaries;tools=stage_failure_summary;enabled=1;status=ready\nplugin=plugin.tuning;name=Parameter Tuning;tools=recommend_memory_limit;enabled=1;status=ready\nplugin_run=plugin-run:1;plugin=plugin.artifacts;tool=artifact_count_by_status;result=ok;status=ready\nplugin_run=plugin-run:2;plugin=plugin.failures;tool=stage_failure_summary;result=ok;status=ready\nplugin_run=plugin-run:3;plugin=plugin.tuning;tool=recommend_memory_limit;current=1024;recommended=1536;status=ready\nworkspace=ws:lab-gene-x;owner=wang;projects=1;status=ready\nuser=user:wang;roles=maintainer;status=ready\nuser=user:auditor;roles=auditor;status=ready\nuser=user:guest;roles=viewer;status=ready\ngrant=grant:wang:lab-gene-x:maintainer;subject=wang;object=lab-gene-x;role=maintainer;status=ready\ngrant=grant:auditor:lab-gene-x:auditor;subject=auditor;object=lab-gene-x;role=auditor;status=ready\ngrant=grant:guest:lab-gene-x:viewer;subject=guest;object=lab-gene-x;role=viewer;status=ready\nsaved_view=view:failed-artifacts;kind=artifacts;query=status=failed;owner=wang;status=ready\nsaved_view=view:planned-jobs;kind=jobs;query=status=planned;owner=wang;status=ready\napi_token=token:local-dashboard;owner=wang;scopes=read,dashboard;secret_material=not_written;status=ready\npermission=can:wang:approve;result=allow;status=ready\npermission=can:wang:admin;result=allow;status=ready\npermission=can:auditor:audit;result=allow;status=ready\npermission=can:guest:write;result=deny;status=ready\npermission=can:guest:approve;result=deny;status=ready\ncontrol_report=platform-control-report:RUN-042;approvals=4;notifications=4;queue_items=4;plugin_runs=3;status=ready\nagentos_adaptation=kernel_capability_check,kernel_event_delivery,kernel_plugin_tool_table,kernel_run_queue;status=planned\nstatus=ready\n",
     "rp_integrity": (
@@ -359,6 +360,37 @@ status=ready
         "package_trace=delivery;source=rp_package;target=rp_web_bundle;result=pass;status=ready\n"
         "integrity_report=integrity-report:RUN-042;checks=36;errors=0;warnings=0;status=ready\n"
         "agentos_adaptation=kernel_context_attestation,kernel_metadata_reference_index,kernel_event_trace,kernel_namespace_registry;status=planned\n"
+        "status=ready\n"
+    ),
+    "rp_coherence": (
+        "service=coherence-plane\n"
+        "project=lab-gene-x\n"
+        "run_id=RUN-042\n"
+        "coherence_checks=40\n"
+        "delivery_contracts=7\n"
+        "delivery_checks=7\n"
+        "run_state_contracts=7\n"
+        "run_state_checks=7\n"
+        "lifecycle_contracts=6\n"
+        "lifecycle_checks=6\n"
+        "workflow_lint_checks=5\n"
+        "tool_protocol_checks=5\n"
+        "report_validation_checks=5\n"
+        "agent_coordination_checks=3\n"
+        "errors=0\n"
+        "warnings=0\n"
+        "decision=passed\n"
+        "delivery_contract=research_package;primary=rp_package;related=rp_report_text,rp_artifact_manifest,rp_review_pack;status=ready\n"
+        "delivery_check=llm_delivery;source=rp_llm_resp;result=pass;status=ready\n"
+        "run_state_contract=stage_state;source=rp_stage_state;expected=done,recovered,cached,accepted,ready;status=ready\n"
+        "run_state_check=cache_reuse;source=rp_cache_index;result=pass;status=ready\n"
+        "lifecycle_contract=llm_relay;order=request>route>guard>response>quality;status=ready\n"
+        "lifecycle_check=backend_case;source=rp_backend_exec;result=pass;status=ready\n"
+        "workflow_lint=manifest_links;source=rp_artifact_manifest;expected=raw_to_report;result=pass;status=ready\n"
+        "tool_validation=llm_relay;tools=relay_guarded;source=rp_llm_guard;result=pass;status=ready\n"
+        "report_validation=llm_source;source=rp_report_text;target=rp_llm_resp;result=pass;status=ready\n"
+        "agent_coordination=decision_trace;source=rp_decisions;target=rp_review_dashboard;result=pass;status=ready\n"
+        "coherence_report=coherence-report:RUN-042;checks=40;errors=0;warnings=0;status=ready\n"
         "status=ready\n"
     ),
     "rp_artifact_manifest": (
@@ -490,7 +522,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 21, summary
+        assert summary["pages"] == 22, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -502,6 +534,7 @@ def main() -> int:
         assert (out_dir / "data.html").exists()
         assert (out_dir / "llm.html").exists()
         assert (out_dir / "integrity.html").exists()
+        assert (out_dir / "coherence.html").exists()
         assert (out_dir / "api" / "rp_api_home.json").exists()
         index_html = (out_dir / "index.html").read_text(encoding="utf-8")
         assert "Plain uCore Research" in index_html
@@ -676,6 +709,17 @@ def main() -> int:
         assert "backend_evidence" in integrity_html
         assert "stage_artifacts" in integrity_html
         assert "integrity-report:RUN-042" in integrity_html
+        coherence_html = (out_dir / "coherence.html").read_text(encoding="utf-8")
+        assert "Coherence Plane" in coherence_html
+        assert "Coherence Detail" in coherence_html
+        assert "Delivery Contracts" in coherence_html
+        assert "Run State Checks" in coherence_html
+        assert "Lifecycle Checks" in coherence_html
+        assert "Workflow Lint" in coherence_html
+        assert "Tool Protocol" in coherence_html
+        assert "Report Validation" in coherence_html
+        assert "Agent Coordination" in coherence_html
+        assert "coherence-report:RUN-042" in coherence_html
         project_review_html = (out_dir / "project-review.html").read_text(encoding="utf-8")
         assert "Project Delivery Review" in project_review_html
         assert "Project Release Gate" in project_review_html
@@ -709,6 +753,8 @@ def main() -> int:
         assert "control_plane_checks" in compare_html
         assert "integrity_plane_checks" in compare_html
         assert "Integrity Plane" in compare_html
+        assert "coherence_plane_checks" in compare_html
+        assert "Coherence Plane" in compare_html
         assert "Backend Runner Cases" in compare_html
         assert "Backend Case Details" in compare_html
         assert "Backend Evidence Report" in compare_html

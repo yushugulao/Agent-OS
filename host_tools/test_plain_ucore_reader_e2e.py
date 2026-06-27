@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=1198" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=179" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=1238" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=187" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -733,6 +733,7 @@ def main() -> int:
             assert any("operations_board_checks=18" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("control_plane_checks=30" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("integrity_plane_checks=36" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("coherence_plane_checks=40" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_runbooks = read_json(base + "/api/state/rp_runbooks")
             assert any("runbook_service_checks=16" in line for line in rp_runbooks["lines"]), rp_runbooks
             assert any("runbook_templates=1" in line for line in rp_runbooks["lines"]), rp_runbooks
@@ -768,6 +769,7 @@ def main() -> int:
             assert any("handoff=review-board->operations;artifact=rp_reviewboard;status=ready" in line for line in rp_opsboard["lines"]), rp_opsboard
             assert any("handoff=control-plane->operations;artifact=rp_control;status=ready" in line for line in rp_opsboard["lines"]), rp_opsboard
             assert any("handoff=integrity-plane->operations;artifact=rp_integrity;status=ready" in line for line in rp_opsboard["lines"]), rp_opsboard
+            assert any("handoff=coherence-plane->operations;artifact=rp_coherence;status=ready" in line for line in rp_opsboard["lines"]), rp_opsboard
             rp_reviewboard = read_json(base + "/api/state/rp_reviewboard")
             assert any("review_board_checks=24" in line for line in rp_reviewboard["lines"]), rp_reviewboard
             assert any("review_votes=4" in line for line in rp_reviewboard["lines"]), rp_reviewboard
@@ -805,6 +807,24 @@ def main() -> int:
             assert any("reference_check=stage_artifacts" in line for line in rp_integrity["lines"]), rp_integrity
             assert any("review_alignment=board_to_dashboard" in line for line in rp_integrity["lines"]), rp_integrity
             assert any("integrity_report=integrity-report:RUN-042" in line for line in rp_integrity["lines"]), rp_integrity
+            rp_coherence = read_json(base + "/api/state/rp_coherence")
+            assert any("coherence_checks=40" in line for line in rp_coherence["lines"]), rp_coherence
+            assert any("delivery_contracts=7" in line for line in rp_coherence["lines"]), rp_coherence
+            assert any("run_state_contracts=7" in line for line in rp_coherence["lines"]), rp_coherence
+            assert any("lifecycle_contracts=6" in line for line in rp_coherence["lines"]), rp_coherence
+            assert any("workflow_lint_checks=5" in line for line in rp_coherence["lines"]), rp_coherence
+            assert any("tool_protocol_checks=5" in line for line in rp_coherence["lines"]), rp_coherence
+            assert any("report_validation_checks=5" in line for line in rp_coherence["lines"]), rp_coherence
+            assert any("agent_coordination_checks=3" in line for line in rp_coherence["lines"]), rp_coherence
+            assert any("errors=0" in line for line in rp_coherence["lines"]), rp_coherence
+            assert any("decision=passed" in line for line in rp_coherence["lines"]), rp_coherence
+            assert any("delivery_check=research_package" in line for line in rp_coherence["lines"]), rp_coherence
+            assert any("run_state_check=stage_order" in line for line in rp_coherence["lines"]), rp_coherence
+            assert any("workflow_lint=retry_minimality" in line for line in rp_coherence["lines"]), rp_coherence
+            assert any("tool_validation=backend_runner" in line for line in rp_coherence["lines"]), rp_coherence
+            assert any("report_validation=backend_source" in line for line in rp_coherence["lines"]), rp_coherence
+            assert any("agent_coordination=recovery_path" in line for line in rp_coherence["lines"]), rp_coherence
+            assert any("coherence_report=coherence-report:RUN-042" in line for line in rp_coherence["lines"]), rp_coherence
             rp_consistency = read_json(base + "/api/state/rp_consistency")
             assert any("checks=420" in line for line in rp_consistency["lines"]), rp_consistency
             assert any("state_catalog_checks=12" in line for line in rp_consistency["lines"]), rp_consistency
@@ -1273,6 +1293,17 @@ def main() -> int:
             assert "backend_evidence" in integrity_html
             assert "stage_artifacts" in integrity_html
             assert "integrity-report:RUN-042" in integrity_html
+            coherence_html = read_text(base + "/coherence.html")
+            assert "Coherence Plane" in coherence_html
+            assert "Coherence Detail" in coherence_html
+            assert "Delivery Contracts" in coherence_html
+            assert "Run State Checks" in coherence_html
+            assert "Lifecycle Checks" in coherence_html
+            assert "Workflow Lint" in coherence_html
+            assert "Tool Protocol" in coherence_html
+            assert "Report Validation" in coherence_html
+            assert "Agent Coordination" in coherence_html
+            assert "coherence-report:RUN-042" in coherence_html
             project_review_html = read_text(base + "/project-review.html")
             assert "Project Delivery Review" in project_review_html
             assert "Project Release Gate" in project_review_html
@@ -1425,6 +1456,8 @@ def main() -> int:
             assert "control_plane_checks" in compare_html
             assert "integrity_plane_checks" in compare_html
             assert "Integrity Plane" in compare_html
+            assert "coherence_plane_checks" in compare_html
+            assert "Coherence Plane" in compare_html
             assert "Compare Action Trace" in compare_html
             assert "Compare Action Output Links" in compare_html
             assert "Compare Action Output Details" in compare_html

@@ -1231,7 +1231,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "review_threads=2");
 	ok = ok && rp_file_contains("rp_web_bundle", "action_validation=passed");
 	ok = ok && rp_file_contains("rp_web_bundle", "side_effect_records=16");
-	ok = ok && rp_file_contains("rp_web_bundle", "reader_views=21");
+	ok = ok && rp_file_contains("rp_web_bundle", "reader_views=22");
 	ok = ok && rp_file_contains("rp_web_bundle", "reader_actions=57");
 	ok = ok && rp_file_contains("rp_web_bundle", "post_routes=57");
 	ok = ok && rp_file_contains("rp_web_bundle", "reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle");
@@ -1459,6 +1459,27 @@ int main(void)
 	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=integrity_plane;source=rp_integrity;checks=36;errors=0;result=passed;status=ready");
 	ok = ok && rp_file_contains("rp_opsboard", "handoff=integrity-plane->operations;artifact=rp_integrity;status=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "integrity_plane_checks=36");
+	ok = ok && rp_file_contains("rp_coherence", "coherence_checks=40");
+	ok = ok && rp_file_contains("rp_coherence", "delivery_contracts=7");
+	ok = ok && rp_file_contains("rp_coherence", "run_state_contracts=7");
+	ok = ok && rp_file_contains("rp_coherence", "lifecycle_contracts=6");
+	ok = ok && rp_file_contains("rp_coherence", "workflow_lint_checks=5");
+	ok = ok && rp_file_contains("rp_coherence", "tool_protocol_checks=5");
+	ok = ok && rp_file_contains("rp_coherence", "report_validation_checks=5");
+	ok = ok && rp_file_contains("rp_coherence", "agent_coordination_checks=3");
+	ok = ok && rp_file_contains("rp_coherence", "errors=0");
+	ok = ok && rp_file_contains("rp_coherence", "decision=passed");
+	ok = ok && rp_file_contains("rp_coherence", "delivery_check=research_package;source=rp_package;result=pass;status=ready");
+	ok = ok && rp_file_contains("rp_coherence", "run_state_check=stage_order;source=rp_stage_state;result=pass;status=ready");
+	ok = ok && rp_file_contains("rp_coherence", "lifecycle_check=llm_relay;source=rp_llm_packets;result=pass;status=ready");
+	ok = ok && rp_file_contains("rp_coherence", "workflow_lint=retry_minimality;source=rp_retry_plan;expected=align_only;result=pass;status=ready");
+	ok = ok && rp_file_contains("rp_coherence", "tool_validation=backend_runner;tools=case_execution;source=rp_backend_exec;result=pass;status=ready");
+	ok = ok && rp_file_contains("rp_coherence", "report_validation=backend_source;source=rp_report_text;target=rp_backend_exec;result=pass;status=ready");
+	ok = ok && rp_file_contains("rp_coherence", "agent_coordination=recovery_path;source=rp_retry_plan;target=rp_runbooks;result=pass;status=ready");
+	ok = ok && rp_file_contains("rp_coherence", "coherence_report=coherence-report:RUN-042;checks=40;errors=0;warnings=0;status=ready");
+	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=coherence_plane;source=rp_coherence;checks=40;errors=0;result=passed;status=ready");
+	ok = ok && rp_file_contains("rp_opsboard", "handoff=coherence-plane->operations;artifact=rp_coherence;status=ready");
+	ok = ok && rp_file_contains("rp_agentcmp", "coherence_plane_checks=40");
 	int portability_imports = rp_get_int_value("rp_wfio", "portability_imports=");
 	int portability_adapters = rp_get_int_value("rp_wfio", "adapter_specs=");
 	int portability_migration = rp_get_int_value("rp_wfio", "migration_steps=");
@@ -1540,11 +1561,11 @@ int main(void)
 	if (!ok) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
-	if (ack_count < 51 || tool_count < 179) {
+	if (ack_count < 52 || tool_count < 187) {
 		printf("rp_compare_plain: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		return 1;
 	}
-	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=51;state_files=179;message_acks=51;tool_events=179;action_state_records=12;test_cases=1198;action_side_effect_records=16;service_page=1;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;runbook_service_checks=16;project_delivery_checks=18;study_protocol_checks=20;operations_board_checks=18;review_board_checks=24;control_plane_checks=30;integrity_plane_checks=36;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;advanced_surface_objects=5;startup_health_checks=8;startup_doctor_checks=14;research_product_checks=18;runtime_assurance_checks=24;research_ops_checks=28;regulated_research_checks=32;lab_governance_ops_checks=26;state_catalog_checks=12;knowledge_index_checks=22;llm_transcript_checks=3;workbench_delivery_checks=15;research_portfolio_checks=16;execution_scale_checks=14;operations_scale_checks=12;project_revision_incident_checks=12;reserved_research_surface_checks=21;root_state_surface_checks=10;agentos_reserved_surface_checks=21;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=52;state_files=180;message_acks=52;tool_events=187;action_state_records=12;test_cases=1238;action_side_effect_records=16;service_page=1;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;runbook_service_checks=16;project_delivery_checks=18;study_protocol_checks=20;operations_board_checks=18;review_board_checks=24;control_plane_checks=30;integrity_plane_checks=36;coherence_plane_checks=40;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;advanced_surface_objects=5;startup_health_checks=8;startup_doctor_checks=14;research_product_checks=18;runtime_assurance_checks=24;research_ops_checks=28;regulated_research_checks=32;lab_governance_ops_checks=26;state_catalog_checks=12;knowledge_index_checks=22;llm_transcript_checks=3;workbench_delivery_checks=15;research_portfolio_checks=16;execution_scale_checks=14;operations_scale_checks=12;project_revision_incident_checks=12;reserved_research_surface_checks=21;root_state_surface_checks=10;agentos_reserved_surface_checks=21;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "state_catalog=keys:573;nonzero:70;zero:503;represented:573;checks:12;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "startup_doctor=quickstart:ready;doctor:ready;checks:14;commands:startup_guide,platform_doctor,project_launch,open_research_studio;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "knowledge_index=search_documents:1385;provenance_nodes:406;provenance_links:544;events:6816;context_records:348;usable_artifacts:429;usable_runs:20;status=ready")) return 1;
@@ -1565,6 +1586,7 @@ int main(void)
 	if (!rp_append_file("rp_agentcmp", "review_board_checks=24;boards=1;requests=1;votes=4;signoffs=4;assignments=4;workloads=4;filters=2;decision=approved;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "control_plane_checks=30;approvals=4;notifications=4;queue_items=4;plugins=3;workspaces=1;permissions=5;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "integrity_plane_checks=36;evidence_contracts=8;reference_contracts=8;namespace_checks=5;status_checks=5;review_alignment_checks=4;report_source_checks=3;package_trace_checks=3;agentos_replacements=4;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "coherence_plane_checks=40;delivery_contracts=7;run_state_contracts=7;lifecycle_contracts=6;workflow_lint=5;tool_protocol=5;report_validation=5;agent_coordination=3;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "llm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "workflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "portability_backend_checks=12;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=2;planned_cases=2;status=ready")) return 1;
@@ -1612,6 +1634,6 @@ int main(void)
 	if (rp_host_seed_count() > 0) {
 		printf("rp_compare_plain: host_actions=%d verified\n", rp_host_seed_count());
 	}
-	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=51 state_files=179 acks=51 tools=179 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready\n");
+	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=52 state_files=180 acks=52 tools=187 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready\n");
 	return 0;
 }

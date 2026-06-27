@@ -53,6 +53,7 @@ static const char *PROGRAMS[] = {
 	"rp_reviewboard",
 	"rp_controlplane",
 	"rp_integrityplane",
+	"rp_coherenceplane",
 	"rp_compare_plain",
 };
 

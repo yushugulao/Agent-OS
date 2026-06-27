@@ -85,6 +85,7 @@ user/src/rp_opsboard.c
 user/src/rp_reviewboard.c
 user/src/rp_controlplane.c
 user/src/rp_integrityplane.c
+user/src/rp_coherenceplane.c
 user/src/rp_test_suite.c
 user/src/rp_compare_plain.c
 ```
@@ -100,7 +101,7 @@ user/src/rp_compare_plain.c
 - A plain user-space research run simulation with planning, literature, analysis, review, writing, repair, and audit roles.
 - Local catalog search for workflow, Agent, evidence, provenance, and LLM related platform objects.
 
-`rp_orch` runs 51 platform programs as separate uCore user processes:
+`rp_orch` runs 52 platform programs as separate uCore user processes:
 
 - catalog,
 - object store,
@@ -148,6 +149,7 @@ user/src/rp_compare_plain.c
 - formal review board and review operations,
 - platform control plane for approvals, notifications, run queue, plugins, workspace access, and saved views,
 - integrity plane for evidence traceability, reference integrity, namespace, status semantics, review alignment, report sources, and package trace checks,
+- coherence plane for delivery contracts, run-state contracts, lifecycle order, workflow lint, tool protocol checks, report validation, and Agent coordination checks,
 - file-backed human review and revision-task actions,
 - test suite,
 - plain-kernel comparison.
@@ -337,7 +339,7 @@ The role programs also exchange state through ordinary root-file-system files:
 - `rp_review_pack`
 - `rp_agentcmp`
 
-The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 1198-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
+The standalone `rp_test_suite` program writes `rp_tests` when it is run directly. The main orchestrated path keeps the current 1238-check count and comparison result in `rp_agentcmp` so the full seeded run stays inside the teaching file-system inode budget.
 
 Each program validates the files it depends on before writing its own artifact. The orchestrator reads `rp_status`, `rp_audit`, and `rp_agentcmp` after all children exit, then prints `state_ok=1`.
 
@@ -380,7 +382,7 @@ rp_plain: passed
 Expected orchestrator output:
 
 ```text
-rp_orch: start programs=51
+rp_orch: start programs=52
 rp_catalog: objects=500 services=120 features=28 status=ready
 rp_state_catalog: keys=573 nonzero=70 zero=503 represented=573 checks=12 status=ready
 rp_object_store: records=8 status=ready
@@ -431,8 +433,9 @@ rp_opsboard: checks=18 pending=1 actions=4 plan_items=5 handoffs=3 status=ready
 rp_reviewboard: checks=24 requests=1 votes=4 signoffs=4 assignments=4 decision=approved status=ready
 rp_controlplane: checks=30 approvals=4 notifications=4 queue=4 plugins=3 permissions=5 status=ready
 rp_integrityplane: checks=36 evidence=8 references=8 namespace=5 status_semantics=5 review_alignment=4 status=ready
-rp_compare_plain: plain_kernel=passed objects=500 programs=51 state_files=179 acks=51 tools=179 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
-rp_orch: programs_ok=51 programs_total=51
+rp_coherenceplane: checks=40 delivery=7 run_state=7 lifecycle=6 workflow_lint=5 tool_protocol=5 report_validation=5 status=ready
+rp_compare_plain: plain_kernel=passed objects=500 programs=52 state_files=180 acks=52 tools=187 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 runbook_service=16 project_delivery=18 study_protocol=20 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready
+rp_orch: programs_ok=52 programs_total=52
 rp_orch: state_ok=1
 rp_orch: passed
 ```
