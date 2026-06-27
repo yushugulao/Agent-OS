@@ -6,6 +6,7 @@
 
 static const char *PROGRAMS[] = {
 	"rp_catalog",
+	"rp_state_catalog",
 	"rp_object_store",
 	"rp_object_query",
 	"rp_lineage",
@@ -66,6 +67,7 @@ static int keeps_same_name_state(const char *program)
 		"rp_release",
 		"rp_review_dashboard",
 		"rp_runconf",
+		"rp_state_catalog",
 	};
 	int total = (int)(sizeof(KEEP) / sizeof(KEEP[0]));
 	for (int i = 0; i < total; i++) {

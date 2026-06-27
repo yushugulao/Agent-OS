@@ -4,6 +4,7 @@
 
 static const char *PROGRAMS[] = {
 	"rp_catalog",
+	"rp_state_catalog",
 	"rp_object_store",
 	"rp_object_query",
 	"rp_lineage",

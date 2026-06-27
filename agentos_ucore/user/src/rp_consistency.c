@@ -24,6 +24,12 @@ int main(void)
 	ok = ok && rp_file_contains("rp_query", "usable_stages:168");
 	ok = ok && rp_file_contains("rp_query", "usable_messages:223");
 	ok = ok && rp_file_contains("rp_query", "usable_decisions:203");
+	ok = ok && rp_file_contains("rp_state_catalog", "host_state_keys=573");
+	ok = ok && rp_file_contains("rp_state_catalog", "nonzero_state_categories=70");
+	ok = ok && rp_file_contains("rp_state_catalog", "zero_state_categories=503");
+	ok = ok && rp_file_contains("rp_state_catalog", "represented_state_categories=573");
+	ok = ok && rp_file_contains("rp_state_catalog", "state_catalog_checks=12");
+	ok = ok && rp_file_contains("rp_state_catalog", "coverage_model=nonzero_records_preserved");
 	ok = ok && rp_file_contains("rp_mail", "to=backend");
 	ok = ok && rp_file_contains("rp_runner", "status=ready");
 	ok = ok && rp_file_contains("rp_runner", "workbench_tasks=9");
@@ -408,7 +414,9 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=394\n"
+			   "checks=406\n"
+			   "state_catalog_checks=12\n"
+			   "host_state_keys=573\n"
 			   "agentos_reserved_surface_checks=21\n"
 			   "agentos_reserved_surface=profiles:0,skills:0,tasks:0,deliberations:0,handoffs:0,coord:0,abi:0,adapter:0,readiness:0,tool_bindings:0\n"
 			   "state_relation=passed\n"
@@ -687,6 +695,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=394 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
+	printf("rp_consistency: checks=406 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 state_catalog=12 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
 	return 0;
 }
