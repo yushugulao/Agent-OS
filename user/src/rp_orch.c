@@ -56,6 +56,7 @@ static const char *PROGRAMS[] = {
 	"rp_integrityplane",
 	"rp_coherenceplane",
 	"rp_mature",
+	"rp_prov_view",
 	"rp_compare_plain",
 };
 

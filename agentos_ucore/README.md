@@ -305,7 +305,7 @@ labdemo_ucore: parent passed
 
 ## 科研 Agent 平台入口
 
-`CHAPTER=platform_agentos` 会构建完整科研 Agent 平台程序，并额外加入 `rp_agentos_orch` 作为改造内核目标的主入口。该入口先创建 orchestrator Agent，记录 Agent Context、批量工具调用、Context 快照和文件元数据服务的使用证据，再执行完整 `rp_orch` 工作流。科研平台的高级服务界面阶段还会创建一个 sentinel Agent，执行 `echo + read_context` 批量工具调用，读取 Context 快照，并在 `rp_runop` 中写入 `agentos_advanced_surface=kernel_bound`，用于证明高级平台能力已经接入内核 Agent 执行历史，而不是只停留在普通用户态文件记录。
+`CHAPTER=platform_agentos` 会构建完整科研 Agent 平台程序，并额外加入 `rp_agentos_orch` 作为改造内核目标的主入口。该入口先创建 orchestrator Agent，记录 Agent Context、批量工具调用、Context 快照、timeline/provenance 观测、ledger 摘要和文件元数据服务的使用证据，再执行完整 `rp_orch` 工作流。科研平台的高级服务界面阶段还会创建一个 sentinel Agent，执行 `echo + read_context` 批量工具调用，读取 Context 快照，并在 `rp_runop` 中写入 `agentos_advanced_surface=kernel_bound`，用于证明高级平台能力已经接入内核 Agent 执行历史，而不是只停留在普通用户态文件记录。
 
 运行方式：
 
@@ -320,7 +320,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=rp_agentos_orch CHAPT
 rp_agentos_orch: agent role=4 context=... latest=1
 rp_state_catalog: keys=573 nonzero=70 zero=503 represented=573 checks=12 status=ready
 rp_startup_doctor: quickstart=ready doctor=ready checks=14 status=ready
-rp_orch: programs_ok=54 programs_total=54
+rp_orch: programs_ok=55 programs_total=55
 rp_orch: passed
 rp_agentos_orch: kernel_agent=1 workflow=rp_orch status=ready
 rp_agentos_orch: passed

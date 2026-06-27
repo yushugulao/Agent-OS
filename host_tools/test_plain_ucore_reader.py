@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=24
+reader_views=25
 reader_actions=57
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
@@ -85,6 +85,7 @@ package_intake=package-intake:external-review;label=External review package;deci
 package_index=project-package-index;handoff=ready;release_gate=release;snapshot=stable;reproducibility=passed;provenance=ready;status=ready
 publication_page=rp_publication;peer_response=rp_peerresp;status=ready
 mature_capability_page=rp_mature;profiles=6;mappings=6;checks=72;status=ready
+provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=ready
 status=ready
 """,
     "rp_web_routes": "routes=74\nget_routes=17\npost_routes=57\nroute=/research-studio;payload=rp_studio;status=ready\nroute=/research/project/{id}/review;payload=rp_web_bundle;status=ready\naction=/actions/research/studio-launch;method=POST;payload=rp_api_action;status=ready\naction=/actions/research/project-release-gate;method=POST;payload=rp_api_action;status=ready\nstatus=ready\n",
@@ -272,8 +273,8 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=1368\n"
-        "tool_events=205\n"
+        "test_cases=1432\n"
+        "tool_events=210\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=4;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
@@ -287,6 +288,7 @@ status=ready
         "coherence_plane_checks=40;delivery_contracts=7;run_state_contracts=7;lifecycle_contracts=6;workflow_lint=5;tool_protocol=5;report_validation=5;agent_coordination=3;agentos_replacements=4;status=ready\n"
         "publication_checks=48;targets=2;submissions=2;review_rounds=2;revision_tasks=3;response_packages=2;response_items=4;decisions=2;agentos_replacements=4;status=ready\n"
         "mature_capability_checks=72;profiles=6;mappings=6;checks=72;platforms=Galaxy,AiiDA,DVC,MLflow,Nextflow,Snakemake;agentos_replacements=5;status=ready\n"
+        "provenance_view_checks=64;timeline_views=4;subgraphs=3;packets=4;agentos_replacements=4;status=ready\n"
         "llm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready\n"
         "workflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready\n"
         "portability_backend_checks=12;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=2;planned_cases=2;status=ready\n"
@@ -362,6 +364,36 @@ status=ready
         "check=surface.site;target=mature.html;result=pass;status=ready\n"
         "check=agentos.batch_runner;target=batch_tool_runner;result=planned;status=ready\n"
         "status=ready\n"
+    ),
+    "rp_prov_view": (
+        "run_id=RUN-042\n"
+        "provenance_view_checks=64\n"
+        "timeline_views=4\n"
+        "timeline_events=9\n"
+        "subgraphs=3\n"
+        "subgraph_edges=12\n"
+        "evidence_packets=4\n"
+        "decision_packets=3\n"
+        "reader_page=provenance.html\n"
+        "agentos_mapping=kernel_timeline,kernel_provenance_edges,kernel_ledger,context_detail\n"
+        "status=ready\n"
+    ),
+    "rp_prov_edges": (
+        "edges=12\n"
+        "edge=1;source=rp_input;target=rp_stage_dag;kind=input_to_workflow;status=ready\n"
+        "edge=6;source=rp_artifact_manifest;target=rp_report_text;kind=evidence_to_report;status=ready\n"
+        "edge=12;source=rp_agent_run;target=rp_prov_view;kind=agent_to_trace;status=ready\n"
+    ),
+    "rp_evidence_packet": (
+        "packets=4\n"
+        "packet=workflow-recovery;run=RUN-042;sources=rp_stage_state,rp_retry_plan,rp_artifact_manifest;checks=16;status=ready\n"
+        "packet=agentos-readiness;run=RUN-042;sources=rp_mature,rp_agentcmp,rp_backend_exec;checks=16;status=ready\n"
+    ),
+    "rp_timeline_view": (
+        "views=4\n"
+        "view=run_timeline;events=9;source=rp_timeline;status=ready\n"
+        "view=agent_decision_flow;events=6;source=rp_agent_run;status=ready\n"
+        "timeline_event=dossier;tick=42;actor=orchestrator;artifact=rp_review_pack;status=ready\n"
     ),
     "rp_backend_exec": (
         "runner_case=plain-ucore;input=rp_wfio;artifact=rp_artifact_manifest;result=passed;reason=native_programs_ok;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=3\n"
@@ -648,7 +680,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 24, summary
+        assert summary["pages"] == 25, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -663,6 +695,7 @@ def main() -> int:
         assert (out_dir / "coherence.html").exists()
         assert (out_dir / "publication.html").exists()
         assert (out_dir / "mature.html").exists()
+        assert (out_dir / "provenance.html").exists()
         assert (out_dir / "api" / "rp_api_home.json").exists()
         index_html = (out_dir / "index.html").read_text(encoding="utf-8")
         assert "Plain uCore Research" in index_html
@@ -870,6 +903,16 @@ def main() -> int:
         assert "Snakemake" in mature_html
         assert "kernel_context_path" in mature_html
         assert "batch_tool_runner" in mature_html
+        provenance_html = (out_dir / "provenance.html").read_text(encoding="utf-8")
+        assert "Provenance Timeline" in provenance_html
+        assert "Provenance Detail" in provenance_html
+        assert "Timeline Views" in provenance_html
+        assert "Timeline Events" in provenance_html
+        assert "Provenance Edges" in provenance_html
+        assert "Evidence Packets" in provenance_html
+        assert "agent_decision_flow" in provenance_html
+        assert "agent_to_trace" in provenance_html
+        assert "kernel_timeline" in provenance_html
         project_review_html = (out_dir / "project-review.html").read_text(encoding="utf-8")
         assert "Project Delivery Review" in project_review_html
         assert "Project Release Gate" in project_review_html
@@ -907,6 +950,8 @@ def main() -> int:
         assert "publication_checks" in compare_html
         assert "mature_capability_checks" in compare_html
         assert "Mature Capability" in compare_html
+        assert "provenance_view_checks" in compare_html
+        assert "Provenance View" in compare_html
         assert "Coherence Plane" in compare_html
         assert "Backend Runner Cases" in compare_html
         assert "Backend Case Details" in compare_html

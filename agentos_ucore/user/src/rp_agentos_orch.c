@@ -24,6 +24,11 @@ static int run_research_orchestrator(void)
 	struct agent_result result;
 	struct agent_context_header header;
 	struct agent_context_record records[4];
+	struct agent_timeline_record timeline_records[4];
+	struct agent_provenance_edge provenance_edges[4];
+	struct agent_ledger_summary ledger;
+	int timeline_count;
+	int edge_count;
 
 	if (agent_info(&info) < 0 || !info.is_agent ||
 	    info.agent_role != AGENT_ROLE_ORCHESTRATOR) {
@@ -50,6 +55,14 @@ static int run_research_orchestrator(void)
 		       snapshot);
 		return 1;
 	}
+	timeline_count = agent_timeline_snapshot(timeline_records, 4);
+	edge_count = agent_provenance_snapshot(provenance_edges, 4);
+	if (timeline_count < 1 || edge_count < 0 ||
+	    agent_ledger_snapshot(&ledger) < 0) {
+		printf("rp_agentos_orch: provenance_snapshot_failed timeline=%d edges=%d\n",
+		       timeline_count, edge_count);
+		return 1;
+	}
 
 	if (!rp_write_file("rp_agentos_kernel",
 			   "target=agentos_ucore\n"
@@ -58,6 +71,10 @@ static int run_research_orchestrator(void)
 			   "agent_context=present\n"
 			   "agent_run=echo\n"
 			   "context_snapshot=present\n"
+			   "agent_timeline=observed\n"
+			   "agent_provenance=observed\n"
+			   "agent_ledger=observed\n"
+			   "provenance_kernel=observed\n"
 			   "file_meta_service=initialized\n"
 			   "research_platform=rp_orch\n"
 			   "status=ready\n")) {

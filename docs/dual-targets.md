@@ -69,13 +69,13 @@ The final branch state should let a reviewer run the same research scenario on b
 
 The plain target already provides the host-viewable research platform, Web/API reader, action runner, artifact records, workflow records, project review page, Host LLM Relay, and end-to-end QEMU test.
 
-The enhanced target now contains the Agent-OS kernel service layer, Agent verification programs, and the same native research platform programs used by the plain target. The entry `rp_agentos_orch` creates an orchestrator Agent, records kernel-service evidence through Agent Context, batched `agent_run`, `context_snapshot`, and file metadata initialization, then executes the full `rp_orch` workflow. During the service-surface stage, the enhanced target also starts a small sentinel Agent that runs an `echo + read_context` batch, reads a Context snapshot, and appends `agentos_advanced_surface=kernel_bound` to `rp_runop`. This proves that the advanced research-service surface is not only a file-backed user-space record; it is also tied to kernel Agent execution history in the enhanced target.
+The enhanced target now contains the Agent-OS kernel service layer, Agent verification programs, and the same native research platform programs used by the plain target. The entry `rp_agentos_orch` creates an orchestrator Agent, records kernel-service evidence through Agent Context, batched `agent_run`, `context_snapshot`, timeline/provenance observation, ledger summary, and file metadata initialization, then executes the full `rp_orch` workflow. During the service-surface stage, the enhanced target also starts a small sentinel Agent that runs an `echo + read_context` batch, reads a Context snapshot, and appends `agentos_advanced_surface=kernel_bound` to `rp_runop`. This proves that the advanced research-service surface is not only a file-backed user-space record; it is also tied to kernel Agent execution history in the enhanced target.
 
 Current verified enhanced-target run:
 
 ```text
 rp_agentos_orch: agent role=4 context=... latest=1
-rp_orch: programs_ok=54 programs_total=54
+rp_orch: programs_ok=55 programs_total=55
 rp_orch: passed
 rp_agentos_orch: kernel_agent=1 workflow=rp_orch status=ready
 rp_agentos_orch: passed

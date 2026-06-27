@@ -37,6 +37,7 @@ PAGE_SPECS = [
     ("coherence.html", "Coherence", "rp_coherence", ["rp_review_dashboard", "rp_agentcmp", "rp_package", "rp_stage_state", "rp_backend_exec"]),
     ("publication.html", "Publication", "rp_publication", ["rp_pubplan", "rp_peerresp", "rp_api_pub", "rp_pubop", "rp_review_dashboard", "rp_package"]),
     ("mature.html", "Mature Platforms", "rp_mature", ["rp_mature_refs", "rp_mature_map", "rp_mature_checks", "rp_agentcmp", "rp_review_dashboard"]),
+    ("provenance.html", "Provenance", "rp_prov_view", ["rp_prov_edges", "rp_evidence_packet", "rp_timeline_view", "rp_agentcmp", "rp_review_dashboard"]),
     ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets"]),
     ("actions.html", "Actions", "rp_api_action", ["rp_actionio", "rp_host_run_result", "rp_web_routes", "rp_web_bundle"]),
 ]
@@ -1245,6 +1246,16 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("AgentOS Targets", metric_value(state, [("rp_mature_map", "agentos_targets")]), "rp_mature_map"),
         ("Status", metric_value(state, [("rp_mature", "status")]), "rp_mature"),
     ]
+    provenance_items = [
+        ("Checks", metric_value(state, [("rp_prov_view", "provenance_view_checks"), ("rp_agentcmp", "provenance_view_checks")]), "rp_prov_view"),
+        ("Timeline Views", metric_value(state, [("rp_prov_view", "timeline_views"), ("rp_timeline_view", "views")]), "rp_timeline_view"),
+        ("Subgraphs", metric_value(state, [("rp_prov_view", "subgraphs")]), "rp_prov_view"),
+        ("Edges", metric_value(state, [("rp_prov_view", "subgraph_edges"), ("rp_prov_edges", "edges")]), "rp_prov_edges"),
+        ("Evidence Packets", metric_value(state, [("rp_prov_view", "evidence_packets"), ("rp_evidence_packet", "packets")]), "rp_evidence_packet"),
+        ("Decision Packets", metric_value(state, [("rp_prov_view", "decision_packets")]), "rp_prov_view"),
+        ("AgentOS Mapping", metric_value(state, [("rp_prov_view", "agentos_mapping")]), "rp_prov_view"),
+        ("Status", metric_value(state, [("rp_prov_view", "status")]), "rp_prov_view"),
+    ]
     if file_name == "run.html":
         return render_summary_panel("Research Output", report_items)
     if file_name in ("evidence.html", "artifacts.html"):
@@ -1285,6 +1296,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Publication Workflow", publication_items)
     if file_name == "mature.html":
         return render_summary_panel("Mature Platform Mapping", mature_items)
+    if file_name == "provenance.html":
+        return render_summary_panel("Provenance Timeline", provenance_items)
     return ""
 
 
@@ -1319,6 +1332,7 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Coherence Checks", metric_value(state, [("rp_agentcmp", "coherence_plane_checks"), ("rp_coherence", "coherence_checks")]), "rp_coherence"),
         ("Publication Checks", metric_value(state, [("rp_agentcmp", "publication_checks"), ("rp_publication", "publication_checks")]), "rp_publication"),
         ("Mature Capability", metric_value(state, [("rp_agentcmp", "mature_capability_checks"), ("rp_mature", "capability_checks")]), "rp_mature"),
+        ("Provenance View", metric_value(state, [("rp_agentcmp", "provenance_view_checks"), ("rp_prov_view", "provenance_view_checks")]), "rp_prov_view"),
     ]
     integrity_detail_items = [
         ("Evidence Contracts", metric_value(state, [("rp_integrity", "evidence_contracts")]), "rp_integrity"),
@@ -1351,6 +1365,14 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Ratio Checks", metric_value(state, [("rp_mature", "ratio_checks")]), "rp_mature"),
         ("Coverage", metric_value(state, [("rp_mature", "coverage")]), "rp_mature"),
         ("AgentOS Adaptation", metric_value(state, [("rp_mature", "agentos_adaptation")]), "rp_mature"),
+    ]
+    provenance_detail_items = [
+        ("Timeline Events", metric_value(state, [("rp_prov_view", "timeline_events"), ("rp_timeline", "events")]), "rp_timeline"),
+        ("Subgraph Edges", metric_value(state, [("rp_prov_view", "subgraph_edges"), ("rp_prov_edges", "edges")]), "rp_prov_edges"),
+        ("Evidence Packets", metric_value(state, [("rp_evidence_packet", "packets")]), "rp_evidence_packet"),
+        ("Reader Page", metric_value(state, [("rp_prov_view", "reader_page")]), "rp_prov_view"),
+        ("Kernel Timeline", metric_value(state, [("rp_prov_view", "agentos_kernel_timeline")]), "rp_prov_view"),
+        ("Kernel Provenance", metric_value(state, [("rp_prov_view", "agentos_kernel_provenance")]), "rp_prov_view"),
     ]
     llm_items = [
         ("Requests", metric_value(state, [("rp_llm_resp", "requests"), ("rp_llmq", "queued")]), "rp_llm_resp"),
@@ -1388,6 +1410,8 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Publication Detail", publication_detail_items)
     if file_name == "mature.html":
         return render_summary_panel("Mature Capability Detail", mature_detail_items)
+    if file_name == "provenance.html":
+        return render_summary_panel("Provenance Detail", provenance_detail_items)
     if file_name == "llm.html":
         return render_summary_panel("Relay State", llm_items)
     return ""
@@ -2156,6 +2180,46 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 "AgentOS Adaptation",
                 [("Adaptation", "agentos_adaptation"), ("Status", "status")],
                 state_records(state, "rp_mature", "agentos_adaptation"),
+            ),
+        ]
+    if file_name == "provenance.html":
+        return [
+            render_record_panel(
+                "Timeline Views",
+                [("View", "view"), ("Events", "events"), ("Source", "source"), ("Status", "status")],
+                state_records(state, "rp_timeline_view", "view"),
+            ),
+            render_record_panel(
+                "Timeline Events",
+                [("Event", "timeline_event"), ("Tick", "tick"), ("Actor", "actor"), ("Artifact", "artifact"), ("Status", "status")],
+                state_records(state, "rp_timeline_view", "timeline_event"),
+            ),
+            render_record_panel(
+                "Provenance Edges",
+                [("Edge", "edge"), ("Source", "source"), ("Target", "target"), ("Kind", "kind"), ("Stage", "stage"), ("Status", "status")],
+                state_records(state, "rp_prov_edges", "edge"),
+            ),
+            render_record_panel(
+                "Evidence Packets",
+                [("Packet", "packet"), ("Run", "run"), ("Sources", "sources"), ("Checks", "checks"), ("Status", "status")],
+                state_records(state, "rp_evidence_packet", "packet"),
+            ),
+            render_record_panel(
+                "Provenance Summary",
+                [("State File", "state_file"), ("Key", "key"), ("Value", "value")],
+                key_value_rows(
+                    state,
+                    ("rp_prov_view", "rp_agentcmp", "rp_review_dashboard"),
+                    (
+                        "provenance_view_checks=",
+                        "timeline_views=",
+                        "subgraphs=",
+                        "subgraph_edges=",
+                        "evidence_packets=",
+                        "agentos_mapping=",
+                        "agentos_kernel_timeline=",
+                    ),
+                ),
             ),
         ]
     if file_name == "data.html":

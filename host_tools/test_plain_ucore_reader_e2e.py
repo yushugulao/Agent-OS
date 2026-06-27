@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=1368" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=205" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=1432" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=210" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -736,6 +736,7 @@ def main() -> int:
             assert any("coherence_plane_checks=40" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("publication_checks=48" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("mature_capability_checks=72" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("provenance_view_checks=64" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             rp_runbooks = read_json(base + "/api/state/rp_runbooks")
             assert any("runbook_service_checks=16" in line for line in rp_runbooks["lines"]), rp_runbooks
             assert any("runbook_templates=1" in line for line in rp_runbooks["lines"]), rp_runbooks
@@ -854,6 +855,16 @@ def main() -> int:
             rp_mature_checks = read_json(base + "/api/state/rp_mature_checks")
             assert any("checks=72" in line for line in rp_mature_checks["lines"]), rp_mature_checks
             assert any("check=surface.site;target=mature.html;result=pass;status=ready" in line for line in rp_mature_checks["lines"]), rp_mature_checks
+            rp_prov_view = read_json(base + "/api/state/rp_prov_view")
+            assert any("provenance_view_checks=64" in line for line in rp_prov_view["lines"]), rp_prov_view
+            assert any("timeline_views=4" in line for line in rp_prov_view["lines"]), rp_prov_view
+            assert any("agentos_mapping=kernel_timeline,kernel_provenance_edges,kernel_ledger,context_detail" in line for line in rp_prov_view["lines"]), rp_prov_view
+            rp_prov_edges = read_json(base + "/api/state/rp_prov_edges")
+            assert any("edge=12;source=rp_agent_run;target=rp_prov_view;kind=agent_to_trace;status=ready" in line for line in rp_prov_edges["lines"]), rp_prov_edges
+            rp_evidence_packet = read_json(base + "/api/state/rp_evidence_packet")
+            assert any("packet=agentos-readiness;run=RUN-042" in line for line in rp_evidence_packet["lines"]), rp_evidence_packet
+            rp_timeline_view = read_json(base + "/api/state/rp_timeline_view")
+            assert any("view=agent_decision_flow;events=6;source=rp_agent_run;status=ready" in line for line in rp_timeline_view["lines"]), rp_timeline_view
             rp_peerresp = read_json(base + "/api/state/rp_peerresp")
             assert any("addressed=4" in line for line in rp_peerresp["lines"]), rp_peerresp
             assert any("needs_revision=0" in line for line in rp_peerresp["lines"]), rp_peerresp
@@ -1358,6 +1369,16 @@ def main() -> int:
             assert "Snakemake" in mature_html
             assert "kernel_context_path" in mature_html
             assert "batch_tool_runner" in mature_html
+            provenance_html = read_text(base + "/provenance.html")
+            assert "Provenance Timeline" in provenance_html
+            assert "Provenance Detail" in provenance_html
+            assert "Timeline Views" in provenance_html
+            assert "Timeline Events" in provenance_html
+            assert "Provenance Edges" in provenance_html
+            assert "Evidence Packets" in provenance_html
+            assert "agent_decision_flow" in provenance_html
+            assert "agent_to_trace" in provenance_html
+            assert "kernel_timeline" in provenance_html
             project_review_html = read_text(base + "/project-review.html")
             assert "Project Delivery Review" in project_review_html
             assert "Project Release Gate" in project_review_html
@@ -1516,6 +1537,8 @@ def main() -> int:
             assert "Publication Workflow" in compare_html
             assert "mature_capability_checks" in compare_html
             assert "Mature Capability" in compare_html
+            assert "provenance_view_checks" in compare_html
+            assert "Provenance View" in compare_html
             assert "Compare Action Trace" in compare_html
             assert "Compare Action Output Links" in compare_html
             assert "Compare Action Output Details" in compare_html
