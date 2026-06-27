@@ -641,8 +641,8 @@ def main() -> int:
             assert any("host_action_portability_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_portability_steps_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("host_action_artifacts_verified=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("test_cases=2500" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("tool_events=300" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("test_cases=2580" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("tool_events=308" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_handoff_checks=13" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack_bridges=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_delivery_checks=16" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -657,6 +657,7 @@ def main() -> int:
             assert any("backend_runner_detail_checks=24" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_detail_rows=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("backend_runner_report_checks=20" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("decision_support_checks=80" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_report_rows=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("backend_report_links=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("runner_cases=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -968,6 +969,17 @@ def main() -> int:
             assert any("figure=figure:manual" in line for line in rp_anfig["lines"]), rp_anfig
             rp_interp = read_json(base + "/api/state/rp_interp")
             assert any("interpretation=interpretation:manual" in line for line in rp_interp["lines"]), rp_interp
+            rp_decsupport = read_json(base + "/api/state/rp_decsupport")
+            assert any("decision_support_checks=80" in line for line in rp_decsupport["lines"]), rp_decsupport
+            assert any("recommended_option=agentos_ucore_hybrid" in line for line in rp_decsupport["lines"]), rp_decsupport
+            rp_decopt = read_json(base + "/api/state/rp_decopt")
+            assert any("option=agentos_ucore_hybrid" in line for line in rp_decopt["lines"]), rp_decopt
+            rp_deccrit = read_json(base + "/api/state/rp_deccrit")
+            assert any("criterion=agentos_value" in line for line in rp_deccrit["lines"]), rp_deccrit
+            rp_decscore = read_json(base + "/api/state/rp_decscore")
+            assert any("score=agentos_ucore_hybrid:agentos_value" in line for line in rp_decscore["lines"]), rp_decscore
+            rp_decpacket = read_json(base + "/api/state/rp_decpacket")
+            assert any("decision-review-packet:agentos-final-demo-backend" in line for line in rp_decpacket["lines"]), rp_decpacket
             rp_campaign = read_json(base + "/api/state/rp_campaign")
             assert any("campaign_checks=108" in line for line in rp_campaign["lines"]), rp_campaign
             assert any("campaign=experiment-campaign:RUN-042:align-memory-grid" in line for line in rp_campaign["lines"]), rp_campaign
@@ -1546,6 +1558,14 @@ def main() -> int:
             assert "figure:manual" in analysis_results_html
             assert "interpretation:manual" in analysis_results_html
             assert "Manual QC analysis is ready for review." in analysis_results_html
+            decision_support_html = read_text(base + "/decision-support.html")
+            assert "Decision Support" in decision_support_html
+            assert "Decision Options" in decision_support_html
+            assert "Decision Criteria" in decision_support_html
+            assert "Decision Scores" in decision_support_html
+            assert "Review Packet" in decision_support_html
+            assert "agentos_ucore_hybrid" in decision_support_html
+            assert "decision-review-packet:agentos-final-demo-backend" in decision_support_html
             campaign_html = read_text(base + "/experiment-campaigns.html")
             assert "Experiment Campaigns" in campaign_html
             assert "align-memory-grid" in campaign_html

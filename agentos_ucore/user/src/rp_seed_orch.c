@@ -70,6 +70,7 @@ static const char *PROGRAMS[] = {
 	"rp_prov_view",
 	"rp_prov_query",
 	"rp_reldossier",
+	"rp_decsupport",
 	"rp_compare_plain",
 };
 
@@ -94,6 +95,7 @@ static int keeps_same_name_state(const char *program)
 		"rp_realtask",
 		"rp_analysisres",
 		"rp_campaign",
+		"rp_decsupport",
 		"rp_projectrel",
 		"rp_publication",
 		"rp_reldossier",

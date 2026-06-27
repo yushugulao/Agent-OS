@@ -65,7 +65,7 @@ STATE_FILES = {
 reader_contract=host_plain_ucore_v2
 reader_contract_version=2
 reader_ready=1
-reader_views=36
+reader_views=37
 reader_actions=57
 reader_payload_files=rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_bio,rp_api_labres,rp_api_pub,rp_api_know,rp_api_runtime,rp_api_action,rp_web_routes
 reader_refresh_files=rp_web_routes,rp_api_home,rp_api_run,rp_api_agents,rp_api_evidence,rp_api_compare,rp_api_artifacts,rp_api_data,rp_api_action,rp_studio,rp_web_bundle
@@ -87,6 +87,7 @@ publication_page=rp_publication;peer_response=rp_peerresp;status=ready
 calculations_page=rp_calculation;jobs=1;retrieved=3;parser_results=1;status=ready
 real_task_page=rp_realtask;dataset=palmer-penguins;rows=344;answer_audit=pass;status=ready
 analysis_results_page=rp_analysisres;runs=2;tables=2;statistics=2;figures=2;status=ready
+decision_support_page=rp_decsupport;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;status=ready
 experiment_campaigns_page=rp_campaign;campaigns=1;trials=4;best_trial=04;status=ready
 statistical_design_page=rp_stdesign;designs=1;power=underpowered;randomization=balanced;status=ready
 model_registry_page=rp_modelreg;models=1;versions=1;evaluations=1;deployments=1;status=ready
@@ -273,6 +274,7 @@ status=ready
         "evidence_bundle_entries=12\n"
         "model_registry=rp_modelreg;version=v1;evaluation=passed;deployment=ready;status=ready\n"
         "analysis_results=rp_analysisres;plans=1;runs=2;tables=2;statistics=2;figures=2;interpretations=2;status=ready\n"
+        "decision_support=rp_decsupport;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;status=ready\n"
     ),
     "rp_nbexec": "host_action_notebook_format=ipynb\nhost_action_notebook_workbench_docs=ready\nstatus=ready\n",
     "rp_uresrun": "host_action_workbench_outputs=rp_runner,rp_revision,rp_package\nhost_action_workbench_manifest=delivery-manifest.json\nhost_action_workbench_bundle=workbench-bundle.zip\nstatus=ready\n",
@@ -286,8 +288,8 @@ status=ready
     ),
     "rp_agentcmp": (
         "plain_kernel=passed\n"
-        "test_cases=2500\n"
-        "tool_events=300\n"
+        "test_cases=2580\n"
+        "tool_events=308\n"
         "handoffs=6\n"
         "review_handoff_checks=13;review_sections=8;review_gates=6;review_decisions=4;review_handoffs=3;review_pack_actions=3;review_pack_bridges=4;backend_review=1;status=ready\n"
         "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1\n"
@@ -303,6 +305,7 @@ status=ready
         "calculation_checks=84;computers=1;codes=1;jobs=1;retrieved=3;parser_results=1;exports=1;agentos_replacements=4;status=ready\n"
         "real_task_checks=96;dataset=palmer-penguins;rows=344;numeric_fields=5;answer_audit=pass;bundle=ready;status=ready\n"
         "analysis_results_checks=96;plans=1;runs=2;tables=2;statistics=2;figures=2;interpretations=2;charts=4;agentos_replacements=4;status=ready\n"
+        "decision_support_checks=80;options=3;criteria=5;scores=15;review_packets=1;selected=agentos_ucore_hybrid;agentos_replacements=4;status=ready\n"
         "experiment_campaign_checks=108;campaigns=1;trials=4;best_trial=04;result_review=accept_candidate;status=ready\n"
         "statistical_design_checks=120;designs=1;power=underpowered;randomization=balanced;blinding=ok;stat_result=approved_with_sample_size_note;status=ready\n"
         "model_registry_service_checks=96;models=1;versions=1;evaluations=1;deployments=1;serving_checks=1;agentos_replacements=4;status=ready\n"
@@ -615,6 +618,43 @@ status=ready
         "interpretations=2\n"
         "interpretation=interpretation:RUN-042:treatment-response;run=analysis-run:RUN-042:treatment-response;conclusion=treatment response has moderate support;reviewer=Analyst;status=ready\n"
         "interpretation=interpretation:manual;run=analysis-run:RUN-042:manual;conclusion=Manual QC analysis is ready for review.;reviewer=Reviewer;status=ready\n"
+        "status=ready\n"
+    ),
+    "rp_decsupport": (
+        "service=decision-support\n"
+        "decision_support_checks=80\n"
+        "decision=decision:agentos-final-demo-backend\n"
+        "target=comparative-study:RUN-042:agentos-readiness\n"
+        "options=3\n"
+        "criteria=5\n"
+        "scores=15\n"
+        "review_packets=1\n"
+        "recommended_option=agentos_ucore_hybrid\n"
+        "weighted_score_agentos_ucore_hybrid=8.15\n"
+        "status=ready\n"
+    ),
+    "rp_decopt": (
+        "options=3\n"
+        "option=userland_only;benefit=replayable_baseline;cost=weak_os_argument;recommendation=baseline_arm;status=ready\n"
+        "option=agentos_ucore_hybrid;benefit=direct_os_value;cost=syscall_adapter;recommendation=final_target;status=ready\n"
+        "option=full_kernel_llm_path;benefit=max_kernel_ownership;cost=tls_dns_secret_risk;recommendation=reject_for_final_delivery;status=ready\n"
+    ),
+    "rp_deccrit": (
+        "criteria=5\n"
+        "criterion=agentos_value;weight=0.30;description=How directly the option proves OS-level Agent support.;status=ready\n"
+        "criterion=reproducibility;weight=0.25;description=Replay without unstable cloud or host state.;status=ready\n"
+    ),
+    "rp_decscore": (
+        "scores=15\n"
+        "score=agentos_ucore_hybrid:agentos_value;option=agentos_ucore_hybrid;criterion=agentos_value;value=9;rationale=Kernel services carry Agent state.;status=ready\n"
+        "score=userland_only:agentos_value;option=userland_only;criterion=agentos_value;value=2;rationale=Baseline only.;status=ready\n"
+    ),
+    "rp_decpacket": (
+        "packet=decision-review-packet:agentos-final-demo-backend\n"
+        "decision=decision:agentos-final-demo-backend\n"
+        "recommended_option=agentos_ucore_hybrid\n"
+        "option_scores=userland_only:5.35,agentos_ucore_hybrid:8.15,full_kernel_llm_path:4.55\n"
+        "evidence=rp_backend_exec,rp_study,rp_llm_packets,rp_package,rp_reldossier\n"
         "status=ready\n"
     ),
     "rp_campaign": (
@@ -1218,7 +1258,7 @@ def main() -> int:
 
         summary = plain_ucore_reader.render_site(state_dir, out_dir)
         assert summary["status"] == "ready", summary
-        assert summary["pages"] == 36, summary
+        assert summary["pages"] == 37, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -1236,6 +1276,7 @@ def main() -> int:
         assert (out_dir / "calculations.html").exists()
         assert (out_dir / "real-task.html").exists()
         assert (out_dir / "analysis-results.html").exists()
+        assert (out_dir / "decision-support.html").exists()
         assert (out_dir / "experiment-campaigns.html").exists()
         assert (out_dir / "statistical-design.html").exists()
         assert (out_dir / "model-registry.html").exists()
@@ -1472,6 +1513,14 @@ def main() -> int:
         assert "figure:manual" in analysis_results_html
         assert "interpretation:manual" in analysis_results_html
         assert "Manual QC analysis is ready for review." in analysis_results_html
+        decision_support_html = (out_dir / "decision-support.html").read_text(encoding="utf-8")
+        assert "Decision Support" in decision_support_html
+        assert "Decision Options" in decision_support_html
+        assert "Decision Criteria" in decision_support_html
+        assert "Decision Scores" in decision_support_html
+        assert "Review Packet" in decision_support_html
+        assert "agentos_ucore_hybrid" in decision_support_html
+        assert "decision-review-packet:agentos-final-demo-backend" in decision_support_html
         campaign_html = (out_dir / "experiment-campaigns.html").read_text(encoding="utf-8")
         assert "Experiment Campaigns" in campaign_html
         assert "align-memory-grid" in campaign_html

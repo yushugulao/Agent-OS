@@ -452,6 +452,7 @@ int main(void)
 			   "status=ready\n"
 			   "coherence_checks=9\n"
 			   "analysis_results_checks=96\n"
+			   "decision_support_checks=80\n"
 			   "scanned_records=128\n"
 			   "poll_rounds=18\n"
 			   "syscall_count=0\n"

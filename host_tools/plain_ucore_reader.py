@@ -39,6 +39,7 @@ PAGE_SPECS = [
     ("calculations.html", "Calculations", "rp_calculation", ["rp_calc_files", "rp_calc_parse", "rp_calc_export", "rp_agentcmp", "rp_review_dashboard"]),
     ("real-task.html", "Real Task", "rp_realtask", ["rp_realdata", "rp_realreport", "rp_realbundle", "rp_agentcmp", "rp_review_dashboard"]),
     ("analysis-results.html", "Analysis Results", "rp_analysisres", ["rp_anplan", "rp_anrun", "rp_resulttbl", "rp_statres", "rp_anfig", "rp_interp", "rp_agentcmp", "rp_review_dashboard"]),
+    ("decision-support.html", "Decision Support", "rp_decsupport", ["rp_decopt", "rp_deccrit", "rp_decscore", "rp_decpacket", "rp_agentcmp", "rp_review_dashboard"]),
     ("experiment-campaigns.html", "Experiment Campaigns", "rp_campaign", ["rp_trials", "rp_camp_rank", "rp_resreview", "rp_agentcmp", "rp_review_dashboard"]),
     ("statistical-design.html", "Statistical Design", "rp_stdesign", ["rp_power", "rp_random", "rp_blind", "rp_streview", "rp_agentcmp", "rp_review_dashboard"]),
     ("model-registry.html", "Model Registry", "rp_modelreg", ["rp_modelver", "rp_modeleval", "rp_modeldep", "rp_modelserve", "rp_agentcmp", "rp_review_dashboard"]),
@@ -1158,6 +1159,7 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Experiment Scheduling Checks", metric_value(state, [("rp_agentcmp", "experiment_scheduling_checks"), ("rp_expsched", "experiment_scheduling_checks")]), "rp_expsched"),
         ("Training Compliance Checks", metric_value(state, [("rp_agentcmp", "training_compliance_checks"), ("rp_traincomp", "training_compliance_checks")]), "rp_traincomp"),
         ("Analysis Results Checks", metric_value(state, [("rp_agentcmp", "analysis_results_checks"), ("rp_analysisres", "analysis_results_checks")]), "rp_analysisres"),
+        ("Decision Support Checks", metric_value(state, [("rp_agentcmp", "decision_support_checks"), ("rp_decsupport", "decision_support_checks")]), "rp_decsupport"),
         ("Mature Capability", metric_value(state, [("rp_agentcmp", "mature_capability_checks"), ("rp_mature", "capability_checks")]), "rp_mature"),
     ]
     llm_items = [
@@ -1291,6 +1293,16 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Interpretations", metric_value(state, [("rp_analysisres", "interpretations"), ("rp_interp", "interpretations")]), "rp_interp"),
         ("Status", metric_value(state, [("rp_analysisres", "status")]), "rp_analysisres"),
     ]
+    decision_support_items = [
+        ("Checks", metric_value(state, [("rp_decsupport", "decision_support_checks"), ("rp_agentcmp", "decision_support_checks")]), "rp_decsupport"),
+        ("Options", metric_value(state, [("rp_decsupport", "options"), ("rp_decopt", "options")]), "rp_decopt"),
+        ("Criteria", metric_value(state, [("rp_decsupport", "criteria"), ("rp_deccrit", "criteria")]), "rp_deccrit"),
+        ("Scores", metric_value(state, [("rp_decsupport", "scores"), ("rp_decscore", "scores")]), "rp_decscore"),
+        ("Packets", metric_value(state, [("rp_decsupport", "review_packets")]), "rp_decpacket"),
+        ("Selected", metric_value(state, [("rp_decsupport", "recommended_option"), ("rp_decpacket", "recommended_option")]), "rp_decsupport"),
+        ("Hybrid Score", metric_value(state, [("rp_decsupport", "weighted_score_agentos_ucore_hybrid")]), "rp_decsupport"),
+        ("Status", metric_value(state, [("rp_decsupport", "status")]), "rp_decsupport"),
+    ]
     mature_items = [
         ("Profiles", metric_value(state, [("rp_mature", "reference_platforms"), ("rp_mature_refs", "profiles")]), "rp_mature"),
         ("Mappings", metric_value(state, [("rp_mature", "capability_mappings"), ("rp_mature_map", "mappings")]), "rp_mature"),
@@ -1357,6 +1369,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Training Compliance", training_compliance_items)
     if file_name == "analysis-results.html":
         return render_summary_panel("Analysis Results", analysis_results_items)
+    if file_name == "decision-support.html":
+        return render_summary_panel("Decision Support", decision_support_items)
     if file_name == "mature.html":
         return render_summary_panel("Mature Platform Mapping", mature_items)
     if file_name == "provenance.html":
@@ -1397,6 +1411,7 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Calculation Checks", metric_value(state, [("rp_agentcmp", "calculation_checks"), ("rp_calculation", "calculation_checks")]), "rp_calculation"),
         ("Real Task Checks", metric_value(state, [("rp_agentcmp", "real_task_checks"), ("rp_realtask", "real_task_checks")]), "rp_realtask"),
         ("Analysis Results Checks", metric_value(state, [("rp_agentcmp", "analysis_results_checks"), ("rp_analysisres", "analysis_results_checks")]), "rp_analysisres"),
+        ("Decision Support Checks", metric_value(state, [("rp_agentcmp", "decision_support_checks"), ("rp_decsupport", "decision_support_checks")]), "rp_decsupport"),
         ("Experiment Campaign Checks", metric_value(state, [("rp_agentcmp", "experiment_campaign_checks"), ("rp_campaign", "campaign_checks")]), "rp_campaign"),
         ("Statistical Design Checks", metric_value(state, [("rp_agentcmp", "statistical_design_checks"), ("rp_stdesign", "statistical_design_checks")]), "rp_stdesign"),
         ("Model Registry Checks", metric_value(state, [("rp_agentcmp", "model_registry_service_checks"), ("rp_modelreg", "model_registry_service_checks")]), "rp_modelreg"),
@@ -1441,6 +1456,15 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Interpretation", metric_value(state, [("rp_interp", "interpretation")]), "rp_interp"),
         ("Review Dashboard", metric_value(state, [("rp_review_dashboard", "subsection")]), "rp_review_dashboard"),
         ("Package", metric_value(state, [("rp_package", "analysis_results")]), "rp_package"),
+    ]
+    decision_support_detail_items = [
+        ("Decision", metric_value(state, [("rp_decsupport", "decision"), ("rp_decpacket", "decision")]), "rp_decsupport"),
+        ("Target", metric_value(state, [("rp_decsupport", "target")]), "rp_decsupport"),
+        ("Recommended", metric_value(state, [("rp_decsupport", "recommended_option"), ("rp_decpacket", "recommended_option")]), "rp_decsupport"),
+        ("Option Scores", metric_value(state, [("rp_decpacket", "option_scores")]), "rp_decpacket"),
+        ("Evidence", metric_value(state, [("rp_decpacket", "evidence"), ("rp_decsupport", "evidence_sources")]), "rp_decpacket"),
+        ("Review Dashboard", metric_value(state, [("rp_review_dashboard", "subsection")]), "rp_review_dashboard"),
+        ("Package", metric_value(state, [("rp_package", "decision_support")]), "rp_package"),
     ]
     mature_detail_items = [
         ("Profile Checks", metric_value(state, [("rp_mature", "profile_checks")]), "rp_mature"),
@@ -1494,6 +1518,8 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         return render_summary_panel("Publication Detail", publication_detail_items)
     if file_name == "analysis-results.html":
         return render_summary_panel("Analysis Result Detail", analysis_results_detail_items)
+    if file_name == "decision-support.html":
+        return render_summary_panel("Decision Support Detail", decision_support_detail_items)
     if file_name == "mature.html":
         return render_summary_panel("Mature Capability Detail", mature_detail_items)
     if file_name == "provenance.html":
@@ -2339,6 +2365,29 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 "Interpretations",
                 [("Interpretation", "interpretation"), ("Run", "run"), ("Conclusion", "conclusion"), ("Reviewer", "reviewer"), ("Status", "status")],
                 state_records(state, "rp_interp", "interpretation"),
+            ),
+        ]
+    if file_name == "decision-support.html":
+        return [
+            render_record_panel(
+                "Decision Options",
+                [("Option", "option"), ("Benefit", "benefit"), ("Cost", "cost"), ("Recommendation", "recommendation"), ("Status", "status")],
+                state_records(state, "rp_decopt", "option"),
+            ),
+            render_record_panel(
+                "Decision Criteria",
+                [("Criterion", "criterion"), ("Weight", "weight"), ("Description", "description"), ("Status", "status")],
+                state_records(state, "rp_deccrit", "criterion"),
+            ),
+            render_record_panel(
+                "Decision Scores",
+                [("Score", "score"), ("Option", "option"), ("Criterion", "criterion"), ("Value", "value"), ("Rationale", "rationale")],
+                state_records(state, "rp_decscore", "score"),
+            ),
+            render_record_panel(
+                "Review Packet",
+                [("Packet", "packet"), ("Decision", "decision"), ("Recommended", "recommended_option"), ("Evidence", "evidence"), ("Status", "status")],
+                state_records(state, "rp_decpacket", "packet"),
             ),
         ]
     if file_name == "data.html":
@@ -3774,6 +3823,7 @@ def render_overview(
             ("Coherence Plane", metric_value(state, [("rp_agentcmp", "coherence_plane_checks"), ("rp_coherence", "coherence_checks")]), "rp_coherence"),
             ("Publication", metric_value(state, [("rp_agentcmp", "publication_checks"), ("rp_publication", "publication_checks")]), "rp_publication"),
             ("Analysis Results", metric_value(state, [("rp_agentcmp", "analysis_results_checks"), ("rp_analysisres", "analysis_results_checks")]), "rp_analysisres"),
+            ("Decision Support", metric_value(state, [("rp_agentcmp", "decision_support_checks"), ("rp_decsupport", "decision_support_checks")]), "rp_decsupport"),
             ("Mature Capability", metric_value(state, [("rp_agentcmp", "mature_capability_checks"), ("rp_mature", "capability_checks")]), "rp_mature"),
             ("QEMU", metric_value(state, [("rp_host_run_result", "qemu_orch_passed")]), "rp_host_run_result"),
         ],
@@ -3859,6 +3909,14 @@ def render_overview(
             ("Tables", metric_value(state, [("rp_analysisres", "result_tables"), ("rp_resulttbl", "tables")]), "rp_resulttbl"),
             ("Statistics", metric_value(state, [("rp_analysisres", "statistical_results"), ("rp_statres", "statistics")]), "rp_statres"),
             ("Figures", metric_value(state, [("rp_analysisres", "figures"), ("rp_anfig", "figures")]), "rp_anfig"),
+        ],
+        "decision-support.html": [
+            ("Checks", metric_value(state, [("rp_decsupport", "decision_support_checks")]), "rp_decsupport"),
+            ("Options", metric_value(state, [("rp_decsupport", "options"), ("rp_decopt", "options")]), "rp_decopt"),
+            ("Criteria", metric_value(state, [("rp_decsupport", "criteria"), ("rp_deccrit", "criteria")]), "rp_deccrit"),
+            ("Scores", metric_value(state, [("rp_decsupport", "scores"), ("rp_decscore", "scores")]), "rp_decscore"),
+            ("Selected", metric_value(state, [("rp_decsupport", "recommended_option")]), "rp_decsupport"),
+            ("Hybrid Score", metric_value(state, [("rp_decsupport", "weighted_score_agentos_ucore_hybrid")]), "rp_decsupport"),
         ],
         "mature.html": [
             ("Profiles", metric_value(state, [("rp_mature", "reference_platforms"), ("rp_mature_refs", "profiles")]), "rp_mature"),
