@@ -271,9 +271,9 @@ The orchestrator and role programs use ordinary files as their state protocol:
 | `rp_wpool` | service surface | consistency, compare, orchestrator | worker pool, worker, heartbeat, slot, and queue-depth summary |
 | `rp_runop` | service surface | consistency, test suite, orchestrator | runtime operation record |
 | `rp_agentcmp` | AgentCompare metrics | compare | plain-kernel comparison counters |
-| `rp_backend` | backend scenario | compare, orchestrator | same-workflow backend scenario case count and AgentOS kernel-backed cases |
-| `rp_backend_exec` | backend scenario | compare, orchestrator | backend scenario execution result for executable plain-uCore and AgentOS cases, including content checks, attempts, retry reasons, tick observations, source/requirement/observation/action/review rows, and plain-cost/AgentOS-replacement/risk rows |
-| `rp_study` | backend scenario | compare, orchestrator | same-workflow backend study summary with plain-uCore detail checks and AgentOS kernel verification |
+| `rp_backend` | backend scenario | compare, orchestrator | same-workflow backend scenario case count for plain user-space cases and AgentOS kernel-backed replacements |
+| `rp_backend_exec` | backend scenario | compare, orchestrator | backend scenario execution result for executable plain-uCore user-space cases and matching AgentOS replacement targets, including content checks, attempts, retry reasons, tick observations, source/requirement/observation/action/review rows, and plain-cost/AgentOS-replacement/risk rows |
+| `rp_study` | backend scenario | compare, orchestrator | same-workflow backend study summary with plain-uCore detail checks and AgentOS kernel target verification fields |
 | `rp_consistency` | consistency checker | metrics, compare, orchestrator | derived checks across task records, LLM packets, relay protocol files, workflow invocation, completion hooks, backend cases, runner artifacts, dynamic input records, workbench handoff sections, workflow runner execution files, and service surface records |
 | `rp_ui_home` | UI export | compare, orchestrator | home page data for the host web service with navigation and primary cards |
 | `rp_ui_run` | UI export | compare, orchestrator | run-detail page data for RUN-042 with timeline rows, artifact preview entries, and revision-delta reference |

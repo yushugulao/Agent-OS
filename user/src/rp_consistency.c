@@ -287,7 +287,7 @@ int main(void)
 	int passed_cases = rp_get_int_value("rp_backend_exec", "passed_cases=");
 	int planned_cases = rp_get_int_value("rp_backend_exec", "planned_cases=");
 	int study_arms = rp_get_int_value("rp_study", "arms=");
-	ok = ok && require_equal("backend_cases", backend_cases, 4);
+	ok = ok && require_equal("backend_cases", backend_cases, 7);
 	ok = ok && require_equal("backend_executable", backend_executable, passed_cases);
 	ok = ok && require_equal("backend_case_total", passed_cases + planned_cases, backend_cases);
 	ok = ok && require_equal("study_arms", study_arms, 2);
@@ -445,7 +445,7 @@ int main(void)
 			   "workflow_steps=10\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "backend_cases=4\n"
+			   "backend_cases=7\n"
 			   "runner_stages=5\n"
 			   "runner_retries=1\n"
 			   "runner_cache_hits=1\n"
@@ -708,6 +708,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=420 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 state_catalog=12 startup_doctor=14 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 backend=4 artifacts=7 agents=7 dynamic=4 status=ready\n");
+	printf("rp_consistency: checks=420 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 state_catalog=12 startup_doctor=14 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 backend=7 artifacts=7 agents=7 dynamic=4 status=ready\n");
 	return 0;
 }

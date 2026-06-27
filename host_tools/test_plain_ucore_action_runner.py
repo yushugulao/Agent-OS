@@ -681,7 +681,7 @@ def main() -> int:
         assert "normalized_steps=15" in queue
         assert "adapter_id=adapter:WF1:nextflow" in queue
         assert "migration_plan=workflow-migration-plan:WF1" in queue
-        assert "backend_cases=4" in queue
+        assert "backend_cases=7" in queue
         assert "rehearsal_id=workflow-rehearsal:WF1" in queue
         assert "readiness_decision=ready_for_agentos" in queue
         assert "export_format=zip" in queue
@@ -998,7 +998,7 @@ def main() -> int:
         assert "scenario_id=backend-scenario:WF1" in seed_file
         assert "normalized_steps=15" in seed_file
         assert "migration_plan=workflow-migration-plan:WF1" in seed_file
-        assert "backend_cases=4" in seed_file
+        assert "backend_cases=7" in seed_file
         assert "rehearsal_id=workflow-rehearsal:WF1" in seed_file
         assert "readiness_decision=ready_for_agentos" in seed_file
         assert "export_format=zip" in seed_file

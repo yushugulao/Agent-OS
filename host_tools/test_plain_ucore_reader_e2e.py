@@ -351,7 +351,7 @@ def main() -> int:
             assert any("host_action_workflow=WF1" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_workflow_export=wf.zip" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_workflow_export_format=json" in line for line in rp_runner["lines"]), rp_runner
-            assert any("backend_evidence_report=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;status=ready" in line for line in rp_runner["lines"]), rp_runner
+            assert any("backend_evidence_report=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;status=ready" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_studio_session=usable-research-studio-session:W1" in line for line in rp_runner["lines"]), rp_runner
             assert any("host_action_studio_title=Studio cytokine evidence" in line for line in rp_runner["lines"]), rp_runner
             assert any("workbench_delivery_scale=workbenches:8" in line for line in rp_runner["lines"]), rp_runner
@@ -412,7 +412,7 @@ def main() -> int:
             assert any("host_portability_steps=applied" in line for line in rp_wfio["lines"]), rp_wfio
             assert any("host_portability_import_action=workflow-import:WF1:nextflow;format=nextflow;source=main.wf1.nf" in line for line in rp_wfio["lines"]), rp_wfio
             assert any("host_portability_plan_action=workflow-migration-plan:WF1;target=agentos-ucore;steps=9;risks=4" in line for line in rp_wfio["lines"]), rp_wfio
-            assert any("host_portability_bind_action=workflow-migration-execution-plan:WF1:agentcompare;profile=compare-profile:WF1:migration;scenario=backend-scenario:WF1;backend_cases=4" in line for line in rp_wfio["lines"]), rp_wfio
+            assert any("host_portability_bind_action=workflow-migration-execution-plan:WF1:agentcompare;profile=compare-profile:WF1:migration;scenario=backend-scenario:WF1;backend_cases=7" in line for line in rp_wfio["lines"]), rp_wfio
             assert any("host_portability_rehearse_action=workflow-rehearsal:WF1;binding=workflow-migration-binding:WF1;status=passed;observed_ready=3;skipped=1" in line for line in rp_wfio["lines"]), rp_wfio
             assert any("host_portability_review_action=workflow-migration-readiness:WF1;decision=ready_for_agentos;blocking_items=0;work_items=6" in line for line in rp_wfio["lines"]), rp_wfio
             assert any("host_portability_package_action=wf-portability.zip;format=zip;import=workflow-import:WF1:nextflow;bundle=wf-portability.zip" in line for line in rp_wfio["lines"]), rp_wfio
@@ -674,21 +674,21 @@ def main() -> int:
             assert any("llm_review_links=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("workflow_portability_checks=14" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("portability_package=workflow-portability" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("portability_backend_checks=12" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("portability_backend_checks=18" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("backend_scenario=backend-scenario:RUN-042:agentcompare" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("passed_cases=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("planned_cases=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("backend_runner_checks=12" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("backend_runner_detail_checks=24" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("runner_detail_rows=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("backend_runner_report_checks=20" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("passed_cases=7" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("planned_cases=0" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("backend_runner_checks=21" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("backend_runner_detail_checks=42" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("runner_detail_rows=7" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("backend_runner_report_checks=35" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("decision_support_checks=80" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("usable_research_checks=100" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("runner_report_rows=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("runner_report_rows=7" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("backend_report_links=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("runner_cases=4" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("runner_passed=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
-            assert any("runner_planned=2" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("runner_cases=7" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("runner_passed=7" in line for line in rp_agentcmp["lines"]), rp_agentcmp
+            assert any("runner_planned=0" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("lab_governance_ops_checks=26" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("knowledge_index_checks=22" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("llm_transcript_checks=3" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -731,25 +731,25 @@ def main() -> int:
             assert any("context_records:380" in line for line in rp_query["lines"]), rp_query
             assert any("usable_artifacts:507" in line for line in rp_query["lines"]), rp_query
             rp_backend_exec = read_json(base + "/api/state/rp_backend_exec")
-            assert any("runner_detail_checks=16" in line for line in rp_backend_exec["lines"]), rp_backend_exec
-            assert any("runner_verified_inputs=4" in line for line in rp_backend_exec["lines"]), rp_backend_exec
-            assert any("runner_detail_rows=4" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_detail_checks=28" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_verified_inputs=7" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_detail_rows=7" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_detail_schema=src,req,obs,act,review" in line for line in rp_backend_exec["lines"]), rp_backend_exec
-            assert any("runner_report_rows=4" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_report_rows=7" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_report_schema=plain_cost,agentos_replace,risk,status" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_case=plain-ucore" in line and "input_check=pass" in line and "artifact_check=pass" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_case=retry-recovery" in line and "att=2" in line and "retry=tool_output_missing" in line for line in rp_backend_exec["lines"]), rp_backend_exec
-            assert any("runner_case=agentos-context" in line and "input_check=planned" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_case=user-context" in line and "input_check=pass" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_detail=plain-ucore" in line and "act=record" in line and "review=baseline" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_detail=retry-recovery" in line and "act=rerun_align" in line and "review=recovered" in line for line in rp_backend_exec["lines"]), rp_backend_exec
-            assert any("runner_detail=agentos-context" in line and "act=kernel_context" in line and "review=target" in line for line in rp_backend_exec["lines"]), rp_backend_exec
-            assert any("runner_detail=agentos-fsmeta" in line and "act=kernel_fsmeta" in line and "review=target" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_detail=user-context" in line and "act=rebuild_from_files" in line and "review=userland" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_detail=user-fsmeta" in line and "act=scan_manifest" in line and "review=userland" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_report=plain-ucore" in line and "plain_cost=file_scan_manifest" in line and "agentos_replace=batch_tool_context" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             assert any("runner_report=retry-recovery" in line and "risk=stale_retry" in line and "status=passed" in line for line in rp_backend_exec["lines"]), rp_backend_exec
-            assert any("runner_report=agentos-context" in line and "agentos_replace=kernel_context_path" in line for line in rp_backend_exec["lines"]), rp_backend_exec
-            assert any("runner_report=agentos-fsmeta" in line and "plain_cost=scan_records_128" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_report=user-context" in line and "agentos_replace=kernel_context_path" in line for line in rp_backend_exec["lines"]), rp_backend_exec
+            assert any("runner_report=user-fsmeta" in line and "plain_cost=scan_records_128" in line for line in rp_backend_exec["lines"]), rp_backend_exec
             rp_study = read_json(base + "/api/state/rp_study")
-            assert any("detail_checks=4" in line for line in rp_study["lines"]), rp_study
+            assert any("detail_checks=7" in line for line in rp_study["lines"]), rp_study
             assert any("detail_checks=kernel" in line for line in rp_study["lines"]), rp_study
             assert any("review_dashboard=ready;sections=8;gates=6;plain_kernel=ordinary_files" in line for line in rp_agentcmp["lines"]), rp_agentcmp
             assert any("review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1" in line for line in rp_agentcmp["lines"]), rp_agentcmp
@@ -1227,7 +1227,7 @@ def main() -> int:
             assert any("gate=llm_packet_guard;status=pass;source=rp_llm_guard" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
             assert any("decision=ready_for_reviewer" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
             assert any("decision=review_pack_ready;basis=delivery_manifest,operations_next,project_action_items,workbench_handoff" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
-            assert any("backend_review_evidence=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;review_pack=rp_review_pack;status=ready" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
+            assert any("backend_review_evidence=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;review_pack=rp_review_pack;status=ready" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
             assert any("pack_bridge=delivery_manifest,operations_report,project_space,workbench_handoff" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
             assert any("host_relay_quality=passed:24/24;blocked:0;source=rp_llmeval;status=ready" in line for line in rp_review_dashboard["lines"]), rp_review_dashboard
             rp_review_pack = read_json(base + "/api/state/rp_review_pack")
@@ -1239,9 +1239,9 @@ def main() -> int:
             assert any("action=open_operations_report;owner=orchestrator;artifact=rp_runner;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
             assert any("bridge=delivery_to_operations;delivery=rp_package;operations=rp_runner;project=rp_package;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
             assert any("host_relay_quality=passed:24/24;blocked:0;source=rp_llmeval;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
-            assert any("backend_evidence_review=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;source=rp_review_dashboard;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
+            assert any("backend_evidence_review=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;source=rp_review_dashboard;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
             assert any("backend_action_review=retry-recovery;action=rerun_align;review=recovered;plain_cost=retry_file_stage_file;agentos_replace=event_context;status=passed" in line for line in rp_review_pack["lines"]), rp_review_pack
-            assert any("backend_action_review=agentos-context;action=kernel_context;review=target;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;status=planned" in line for line in rp_review_pack["lines"]), rp_review_pack
+            assert any("backend_action_review=user-context;action=rebuild_from_files;review=userland;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;status=passed" in line for line in rp_review_pack["lines"]), rp_review_pack
             assert any("operations_handoff=rp_runner+rp_package;tasks=9;next=delivery_manifest;report=exported;plan=executed;quality=checked;repair=done;backend=rp_backend_exec;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
             assert any("workbench_handoff=rp_runner+rp_package;workbench=W1;task=hr;task_status=waiting;manifest=mf.json;verified=11;missing=0;bundle=wb.zip;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack
             assert any("project_handoff=rp_package;project=lab-gene-x;space=ready;note=recorded;action_item=created;answer=generated;repair=executed;search=ready;status=ready" in line for line in rp_review_pack["lines"]), rp_review_pack

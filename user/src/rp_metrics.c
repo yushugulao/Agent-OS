@@ -88,7 +88,7 @@ int main(void)
 	if (!rp_file_contains("rp_decisions", "decisions=8")) return 1;
 	if (!rp_file_contains("rp_handoff", "handoffs=6")) return 1;
 	if (!rp_file_contains("rp_agent_run", "agent_messages=21")) return 1;
-	if (!rp_file_contains("rp_backend", "cases=4")) return 1;
+	if (!rp_file_contains("rp_backend", "cases=7")) return 1;
 	if (!rp_file_contains("rp_consistency", "state_relation=passed")) return 1;
 	if (!rp_file_contains("rp_consistency", "coherence_checks=9")) return 1;
 	if (!rp_file_contains("rp_sreg", "samples=8")) return 1;
@@ -248,7 +248,7 @@ int main(void)
 			   "collaboration_decisions=8\n"
 			   "handoffs=6\n"
 			   "deliberation_items=5\n"
-			   "backend_cases=4\n"
+			   "backend_cases=7\n"
 			   "bio_service_files=5\n"
 			   "bio_samples=8\n"
 			   "bio_aliquots=12\n"
@@ -557,7 +557,7 @@ int main(void)
 			   "collaboration_decisions=8\n"
 			   "handoffs=6\n"
 			   "deliberation_items=5\n"
-			   "backend_cases=4\n"
+			   "backend_cases=7\n"
 			   "bio_service_files=5\n"
 			   "bio_samples=8\n"
 			   "bio_aliquots=12\n"

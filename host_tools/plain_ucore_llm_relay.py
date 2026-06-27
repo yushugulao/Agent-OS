@@ -496,7 +496,7 @@ def append_relay_state(out_dir: Path, requests: list[RelayRequest], responses: l
     )
     append_line(
         out_dir / "rp_review_pack",
-        "backend_evidence_review=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;source=rp_review_dashboard;status=ready",
+        "backend_evidence_review=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;source=rp_review_dashboard;status=ready",
     )
     for line in backend_action_review_lines(out_dir):
         append_line(out_dir / "rp_review_pack", line)

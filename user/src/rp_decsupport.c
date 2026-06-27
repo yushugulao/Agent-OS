@@ -4,8 +4,8 @@
 int main(void)
 {
 	int ok = 1;
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_report_rows=4");
-	ok = ok && rp_file_contains("rp_study", "migration_status=baseline_ready_agentos_planned");
+	ok = ok && rp_file_contains("rp_backend_exec", "runner_report_rows=7");
+	ok = ok && rp_file_contains("rp_study", "migration_status=plain_userland_equivalents_ready");
 	ok = ok && rp_file_contains("rp_llm_packets", "packets=3");
 	ok = ok && rp_file_contains("rp_package", "status=ready");
 	ok = ok && rp_file_contains("rp_reldossier", "decision=ready_for_review");

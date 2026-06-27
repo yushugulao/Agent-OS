@@ -1792,10 +1792,10 @@ int main(void)
 			}
 		}
 		if (!file_contains_silent("rp_runner", "backend_evidence_report=rp_backend_exec")) {
-			if (!rp_append_file("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;status=ready")) return 1;
+			if (!rp_append_file("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;status=ready")) return 1;
 		}
 		if (!file_contains_silent("rp_report_text", "backend_evidence_report=rp_backend_exec")) {
-			if (!rp_append_file("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index;status=ready")) return 1;
+			if (!rp_append_file("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128,manual_retry_contract,file_polling,append_only_logs;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,capability_checked_rerun,kernel_event_queue,kernel_ledger_provenance;status=ready")) return 1;
 		}
 		if (!rp_append_status("host_reader_actions=ready")) return 1;
 		printf("rp_web_export: host_reader_actions=%d\n", host_actions);
