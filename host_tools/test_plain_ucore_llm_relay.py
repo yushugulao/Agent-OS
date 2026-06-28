@@ -104,6 +104,9 @@ def write_state(path: Path) -> None:
 def main() -> int:
     previous_endpoint = os.environ.pop("AGENT_PLATFORM_LLM_ENDPOINT", None)
     previous_key = os.environ.pop("AGENT_PLATFORM_LLM_API_KEY", None)
+    previous_provider = os.environ.pop("AGENT_PLATFORM_LLM_PROVIDER", None)
+    previous_model = os.environ.pop("AGENT_PLATFORM_LLM_MODEL", None)
+    previous_key_file = os.environ.pop("AGENT_PLATFORM_LLM_API_KEY_FILE", None)
     try:
         with tempfile.TemporaryDirectory() as state_tmp, tempfile.TemporaryDirectory() as out_tmp:
             state_dir = Path(state_tmp)
@@ -177,13 +180,21 @@ def main() -> int:
             resp = (out_dir / "rp_llm_resp").read_text(encoding="utf-8")
             assert "status=config_missing" in resp
             hostreq = (out_dir / "rp_llm_hostreq").read_text(encoding="utf-8")
+            assert "provider=deepseek" in hostreq
             assert "key_present=0" in hostreq
+            assert "model=deepseek-v4-pro" in hostreq
             assert "secret_material=not_written" in hostreq
     finally:
         if previous_endpoint is not None:
             os.environ["AGENT_PLATFORM_LLM_ENDPOINT"] = previous_endpoint
         if previous_key is not None:
             os.environ["AGENT_PLATFORM_LLM_API_KEY"] = previous_key
+        if previous_provider is not None:
+            os.environ["AGENT_PLATFORM_LLM_PROVIDER"] = previous_provider
+        if previous_model is not None:
+            os.environ["AGENT_PLATFORM_LLM_MODEL"] = previous_model
+        if previous_key_file is not None:
+            os.environ["AGENT_PLATFORM_LLM_API_KEY_FILE"] = previous_key_file
     print("test_plain_ucore_llm_relay: passed")
     return 0
 

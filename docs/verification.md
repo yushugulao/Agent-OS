@@ -204,6 +204,45 @@ dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=
 
 这条命令的意义是：用同一批 seeded 请求分别运行未改动 uCore 目标和 AgentOS-uCore 目标，并检查两个目标是否实际跑完同一批科研平台程序、围绕同一 RUN-042 科研流程输出可比较结果。脚本会从两个文件系统镜像中提取 `rp_*` 状态文件，并执行状态文件对照：plain target 产出的状态文件必须全部能在 AgentOS target 中找到；plain target 已经标记为 `ready`、`passed` 或 `ok` 的记录，AgentOS target 必须保留相同记录标识和成功状态。AgentOS target 可以额外增加内核证据文件和内核观测字段，并且 `rp_agentos_mainflow` 必须按平台程序执行顺序写入 11 个内核参与阶段、覆盖 12 类内核事实。随后脚本会把两个目标的真实状态文件都交给 Host Reader 渲染，并把宿主机平台能力对齐摘要、宿主机测试主题对齐摘要、宿主机 Web/API/action 规模摘要和 seeded 请求运行结果传入 Compare 页面；同时脚本会单独输出宿主机 action kind 处理检查，确认宿主机 action 路由没有只停留在路由层。Host Reader 会检查 40 个页面是否都生成、页面标题是否匹配、基础页面结构是否完整、关键页面是否存在、每个 API JSON 是否能被解析且结构正确；当输入包含 AgentOS 状态文件时，还会检查 Compare 页面是否渲染出 AgentOS 主流程、内核输出文件和 Context、metadata、事件、ledger、真实任务、文件编辑租约等关键字段。最后比较渲染摘要，确认两个目标生成同一套页面，AgentOS target 的状态文件数量和 API JSON 数量不能少于 plain target，并直接输出 `agentos_extra_state_files` 与 `agentos_extra_api_json` 说明增强目标多出的内核证据规模。
 
+## 结果产物和图表
+
+`make dual-platform-run` 会把原始日志和提取状态保存在 `/tmp/agentos-dual-platform/`，并把面向阅读的汇总材料写入 `results/latest/`：
+
+```text
+results/latest/summary.csv
+results/latest/report.md
+results/latest/charts/dual-target-state-reader.svg
+results/latest/charts/launch-model.svg
+results/latest/charts/agentos-evidence.svg
+results/latest/charts/stage-timings.svg
+```
+
+`summary.csv` 适合复制到答辩材料或进一步处理；`report.md` 适合直接阅读；`charts/*.svg` 是从本次运行数据生成的图表。文档中保留一组示例图，数值来自一次完整运行样例，实际运行时以 `results/latest/` 下的新文件为准。
+
+![双目标状态与页面输出](assets/verification-charts/dual-target-state-reader.svg)
+
+这张图使用分组柱状图展示状态文件、HTML 页面和 API JSON 数量。plain target 和 AgentOS target 使用同一批 seeded 请求；AgentOS target 页面数量与 plain target 一致，同时多出内核 Agent 相关状态文件和 API JSON。这个结果比单独列日志更直观：增强目标没有缩小科研平台展示面，而是在同一展示面上增加内核事实。
+
+![科研流程启动方式组成](assets/verification-charts/launch-model.svg)
+
+这张图展示两个目标中平台程序的启动方式。plain target 的 70 条启动记录全部来自普通 `fork/exec/waitpid`；AgentOS target 保留普通进程路径，同时把 9 个关键 worker 接到 Agent 创建路径。它不是把普通平台替换成独立测试程序，而是在同一科研流程中使用内核 Agent 机制。
+
+![AgentOS 额外机制证据](assets/verification-charts/agentos-evidence.svg)
+
+这张图展示 AgentOS target 在同一科研流程中额外写出的内核事实，包括内核证据检查项、主流程内核阶段、主流程事实和预置请求数量。普通目标对应值为 0 或共同请求数，用来凸显差异来自增强内核而不是输入变化。
+
+![双目标运行阶段耗时](assets/verification-charts/stage-timings.svg)
+
+这张图展示双目标运行的大阶段耗时。它主要用于定位运行问题：如果完整验证长时间没有结束，应先看哪个阶段耗时异常，再打开对应日志。QEMU 内部还会记录 `qemu_elapsed_seconds`、`qemu_idle_notices`、`qemu_timed_out` 和最后输出片段；这些字段能区分“运行确实慢”“程序卡住”“QEMU 没有看到通过标记”和“已经出现错误文本”。
+
+报告生成由 `host_tools/summarize_dual_platform_results.py` 完成。该脚本只读取已有运行产物，不重新启动 QEMU，因此可以单独重跑：
+
+```bash
+python3 host_tools/summarize_dual_platform_results.py \
+  --work-dir /tmp/agentos-dual-platform \
+  --out-dir results/latest
+```
+
 快速结构检查不替代 QEMU 运行。它会用 `origin/main` 对照根目录 `os/` 和 `bootloader/`，并检查根目录内核没有混入 AgentOS syscall、Agent Context、内核文件 metadata、Agent 事件队列等符号，同时确认增强内核目标、科研平台入口、同名科研平台程序覆盖关系、源码同步关系、backend 成本项保留关系和测试脚本仍然存在。它还会检查 AgentOS 内核源码中没有 `RUN-042`、`lab-gene-x`、固定阶段 selector、固定失败原因等科研演示常量，保证科研平台仍是用户态负载，不是内核默认业务；旧演示工具 id 只允许出现在兼容性和权限测试里，平台主流程必须使用 `action_commit`、`artifact_update` 等通用工具。它还会检查 Makefile 和脚本入口关系：`make full-verify` 必须调用完整验证脚本，完整验证脚本必须串起结构检查、Host Reader 测试、action runner 测试、文件系统镜像提取测试、LLM relay 测试、seeded 双目标 QEMU 和 AgentOS 内核专项测试；`make dual-platform-run` 必须调用双平台脚本；plain target 必须以 `rp_orch` 启动，AgentOS target 必须以 `rp_agentos_orch` 启动。完整功能仍以 `make dual-platform-run` 和 AgentOS 专项测试为准。
 
 宿主机科研 Agent 平台能力对齐检查由 `host_tools/check_host_platform_alignment.py` 完成。它默认读取同级目录 `research-agent-platform-userland`，把其中的工作流、项目工作台、artifact、数据与实验室对象、LLM Relay、多 Agent 协作、provenance、治理、运行控制、评审发布、页面/API 和 AgentOS 对照等核心模块，映射到 root uCore 与 AgentOS-uCore 的 `rp_*` 程序和 Host Reader 展示入口。当前本机检查输出为：
@@ -356,4 +395,4 @@ Host Reader 不是内核功能的一部分；它的作用是把两个目标生�
 
 ## 暂停验证说明
 
-如果当前有其他编辑者正在修改 `agentos_ucore/`，可以先暂停构建和 QEMU 运行，只做静态文档和 Host Reader 对齐。提交前仍需要重新运行双目标构建、QEMU 路径和 Host Reader 检查。
+如果当前有其他编辑者正在修改 `agentos_ucore/`，可以先暂停构建和 QEMU 运行，只做静态文档和 Host Reader 对齐。交付前仍需要重新运行双目标构建、QEMU 路径和 Host Reader 检查。

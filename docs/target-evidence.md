@@ -41,6 +41,7 @@
 | plain target 展示纯用户态成本 | `rp_orch_timing` 和状态对照脚本 | `plain_timing_records=70`，`plain_agent_launches=0`，`plain_fork_launches=70` | plain target 所有平台程序都通过普通 `fork/exec/waitpid` 启动。 |
 | AgentOS target 主流程实际使用 Agent | `rp_orch_timing` 和状态对照脚本 | `agentos_timing_records=70`，`agentos_agent_launches=9`，`agentos_fork_launches=61` | AgentOS 将 9 个关键程序绑定到 Agent 创建路径，其余普通支持程序仍用普通进程启动。 |
 | Host Reader 能展示两个目标 | `host_tools/plain_ucore_reader.py`、`host_tools/check_reader_output.py`、`host_tools/compare_dual_platform_reader.py` | `plain_pages=40`，`agentos_pages=40` | 两个目标都能渲染同一套页面；AgentOS 额外提供 13 个状态文件和 13 个 API JSON。 |
+| 运行结果可形成图表材料 | `host_tools/summarize_dual_platform_results.py` | `results/latest/summary.csv`、`results/latest/report.md`、`results/latest/charts/*.svg` | 双目标运行结束后自动生成 CSV、Markdown 报告和 SVG 图表；`stage-timings.csv` 用于查看构建、QEMU、提取、Reader 渲染和对照阶段耗时。 |
 | 宿主机科研平台能力没有被明显缩小 | `host_tools/check_host_platform_alignment.py` | `host_modules=154`，`groups_ok=13`，`untracked_host_modules=0` | 宿主机平台模块被归入 13 个能力组，两个 uCore 目标都有对应状态文件或展示入口。 |
 | 宿主机测试主题有对应证据 | `host_tools/check_host_test_alignment.py` | `host_tests=142`，`themes_ok=7`，`unclassified_tests=0` | 宿主机测试主题在两个 uCore 目标的运行状态中都有对应证据项。 |
 | 宿主机 Web/API/action 规模被保留 | `host_tools/check_host_surface_alignment.py` | `api_routes=214`，`action_routes=95`，`download_refs=76` | uCore 目标不复制宿主机 Python 服务，但保留页面、API 摘要和 action 处理规模。 |
@@ -64,6 +65,14 @@ dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=
 - 两个目标实际运行同一批 seeded 请求，而不是只比较静态源码。
 - AgentOS target 没有丢失 plain target 的成功记录，并额外写出内核参与证据。
 - Host Reader 能把两个目标的状态文件渲染成同一套页面，AgentOS 页面额外显示内核能力相关 JSON。
+
+双目标脚本还会生成一组阅读材料：
+
+```text
+dual_platform_result_summary: rows=12 charts=4 report=results/latest/report.md status=ready
+```
+
+其中 `summary.csv` 保存可复用数值，`report.md` 保存文字摘要，`charts/*.svg` 展示双目标状态文件与页面输出、启动方式组成、AgentOS 内核证据和阶段耗时。运行过程如果迟迟没有结束，应先查看 `/tmp/agentos-dual-platform/stage-timings.csv` 和两个 `ucore-run.log` 中的 QEMU 无输出提示、最后输出片段、通过标记和超时字段。
 
 ## 完整验证入口
 

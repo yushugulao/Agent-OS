@@ -6,12 +6,40 @@ TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 DUAL_LOG_DIR="${DUAL_LOG_DIR:-/tmp/agentos-dual-platform}"
+RESULT_DIR="${RESULT_DIR:-${ROOT_DIR}/results/latest}"
 export TOOLPREFIX QEMU PYTHON_BIN
 
 mkdir -p "${DUAL_LOG_DIR}"
+stage_timings="${DUAL_LOG_DIR}/stage-timings.csv"
+printf "stage,start_epoch,end_epoch,duration_seconds,status\n" > "${stage_timings}"
+current_stage=""
+current_stage_start=0
+
+stage_begin() {
+	current_stage="$1"
+	current_stage_start="$(date +%s)"
+	echo "[dual-platform] stage start: ${current_stage}"
+}
+
+stage_finish() {
+	local status="$1"
+	local end
+	local duration
+
+	end="$(date +%s)"
+	duration=$((end - current_stage_start))
+	printf "%s,%s,%s,%s,%s\n" "${current_stage}" "${current_stage_start}" "${end}" "${duration}" "${status}" >> "${stage_timings}"
+	echo "[dual-platform] stage ${status}: ${current_stage} (${duration}s)"
+	current_stage=""
+	current_stage_start=0
+}
+
+trap 'code=$?; if [ -n "${current_stage:-}" ]; then stage_finish failed; fi; exit ${code}' ERR
 
 echo "[dual-platform] checking target structure"
+stage_begin "structure-check"
 bash "${ROOT_DIR}/scripts/verify-dual-target-structure.sh"
+stage_finish ready
 
 require_log() {
 	local logfile="$1"
@@ -60,10 +88,12 @@ seeded_work_dir="${DUAL_LOG_DIR}/seeded-action-state"
 seeded_summary="${DUAL_LOG_DIR}/seeded-action-state.json"
 
 echo "[dual-platform] running seeded dual-target research platform"
+stage_begin "seeded-dual-run"
 "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/check_seeded_action_state.py" \
 	--work-dir "${seeded_work_dir}" \
 	--timeout "${SEEDED_ACTION_TIMEOUT:-300}" \
 	--json-out "${seeded_summary}"
+stage_finish ready
 
 plain_log="${seeded_work_dir}/plain/ucore-run.log"
 agentos_log="${seeded_work_dir}/agentos/ucore-run.log"
@@ -71,6 +101,7 @@ plain_state_src="${seeded_work_dir}/plain/state-extracted"
 agentos_state_src="${seeded_work_dir}/agentos/state-extracted"
 
 echo "[dual-platform] plain uCore research platform log: ${plain_log}"
+stage_begin "qemu-log-marker-check"
 require_log "${plain_log}" "rp_orch: passed" "plain rp_orch passed marker"
 require_log "${plain_log}" "rp_orch: programs_ok=${expected_programs} programs_total=${expected_programs}" "plain complete program count"
 require_log "${plain_log}" "rp_compare_plain: plain_kernel=passed .*programs=${expected_programs} .*status=ready" "plain compare summary"
@@ -84,7 +115,9 @@ require_log "${agentos_log}" "rp_orch: programs_ok=${expected_programs} programs
 require_log "${agentos_log}" "rp_compare_plain: plain_kernel=passed .*programs=${expected_programs} .*status=ready" "AgentOS compare summary"
 require_log "${agentos_log}" "rp_backend: cases=8 executable=8 agentos=mainflow_bound" "AgentOS 8-case kernel-bound backend marker"
 reject_log "${agentos_log}" "child_failed|IllegalInstruction|unknown syscall|bad addr|rp_orch: failed|status=failed" "AgentOS platform failure marker"
+stage_finish ready
 
+stage_begin "state-extract-copy"
 rm -rf "${DUAL_LOG_DIR}/plain-state" "${DUAL_LOG_DIR}/agentos-state"
 cp -a "${plain_state_src}" "${DUAL_LOG_DIR}/plain-state"
 cp -a "${agentos_state_src}" "${DUAL_LOG_DIR}/agentos-state"
@@ -124,7 +157,9 @@ for file in rp_backend rp_agentcmp rp_orch_timing rp_agentos_kernel rp_agentos_m
 done
 echo "[dual-platform] plain extracted state files: ${plain_count}"
 echo "[dual-platform] AgentOS extracted state files: ${agentos_count}"
+stage_finish ready
 
+stage_begin "host-alignment"
 "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/check_host_platform_alignment.py" \
 	--plain-state-dir "${DUAL_LOG_DIR}/plain-state" \
 	--agentos-state-dir "${DUAL_LOG_DIR}/agentos-state" \
@@ -142,13 +177,17 @@ echo "[dual-platform] AgentOS extracted state files: ${agentos_count}"
 	--plain-state-dir "${DUAL_LOG_DIR}/plain-state" \
 	--agentos-state-dir "${DUAL_LOG_DIR}/agentos-state" \
 	--json-out "${DUAL_LOG_DIR}/host-surface-alignment.json"
+stage_finish ready
 
+stage_begin "state-compare"
 "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/compare_dual_platform_state.py" \
 	--plain-dir "${DUAL_LOG_DIR}/plain-state" \
 	--agentos-dir "${DUAL_LOG_DIR}/agentos-state" \
 	--min-common-files 240 \
 	--json-out "${DUAL_LOG_DIR}/state-compare-summary.json"
+stage_finish ready
 
+stage_begin "reader-render-check"
 rm -rf "${DUAL_LOG_DIR}/plain-reader" "${DUAL_LOG_DIR}/agentos-reader"
 "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/plain_ucore_reader.py" \
 	--state-dir "${DUAL_LOG_DIR}/plain-state" \
@@ -174,8 +213,17 @@ rm -rf "${DUAL_LOG_DIR}/plain-reader" "${DUAL_LOG_DIR}/agentos-reader"
 	--plain-summary "${DUAL_LOG_DIR}/plain-reader/reader-summary.json" \
 	--agentos-summary "${DUAL_LOG_DIR}/agentos-reader/reader-summary.json" \
 	--json-out "${DUAL_LOG_DIR}/reader-compare-summary.json"
+stage_finish ready
+
+stage_begin "result-report-chart"
+rm -rf "${RESULT_DIR}"
+"${PYTHON_BIN}" "${ROOT_DIR}/host_tools/summarize_dual_platform_results.py" \
+	--work-dir "${DUAL_LOG_DIR}" \
+	--out-dir "${RESULT_DIR}"
+stage_finish ready
 
 echo "[dual-platform] plain and AgentOS platforms both passed"
 echo "[dual-platform] research platform programs: ${expected_programs}"
 echo "[dual-platform] plain backend: userland_equivalent=ready"
 echo "[dual-platform] AgentOS backend: cases=8 agentos=mainflow_bound"
+echo "[dual-platform] result report: ${RESULT_DIR}/report.md"

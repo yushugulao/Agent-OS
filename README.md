@@ -17,7 +17,7 @@ nfs/         文件系统镜像构建
 scripts/     启动和辅助脚本
 user/        用户态科研 Agent 平台程序
 host_tools/  Host Reader、动作运行器、镜像提取器、LLM Relay
-docs/        双目标设计、验证和后续工作说明
+docs/        双目标设计、验证和维护说明
 ```
 
 增强目标位于：
@@ -68,6 +68,22 @@ make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
 ```
 
 该命令会先检查目录职责、平台程序覆盖、源码同步、backend 证据覆盖和文档措辞，再启动两个 QEMU 目标。源码同步用于确认未适配的科研平台程序保持一致、已接入内核能力的程序有明确记录；backend 证据覆盖用于确认 AgentOS 平台保留 plain 平台的用户态成本项，并在此基础上增加内核事实。两个目标运行结束后，脚本会从 `fs-copy.img` 提取 `rp_*` 状态文件，确认镜像里确实保留了页面查看器所需的运行证据。
+
+运行结束后会生成两类材料：
+
+- 原始运行材料：默认放在 `/tmp/agentos-dual-platform/`，包括两个 QEMU 日志、提取出的 `rp_*` 状态文件、Reader 渲染页面和阶段耗时 `stage-timings.csv`。
+- 汇总材料：默认放在 `results/latest/`，包括 `summary.csv`、`report.md` 和 `charts/*.svg`。该目录被 `.gitignore` 忽略，适合保留本机最新运行结果。
+
+如果运行长时间没有输出，优先查看 `/tmp/agentos-dual-platform/stage-timings.csv`、`seeded-action-state/plain/ucore-run.log` 和 `seeded-action-state/agentos/ucore-run.log`。日志中会记录 QEMU 无输出提示次数、最后输出片段、是否看到通过标记、是否超时，便于区分构建慢、QEMU 没启动、用户程序卡住和程序已经报错但日志未被及时看到。
+
+最短演示路径可以使用两条命令：
+
+```bash
+make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
+python3 host_tools/plain_ucore_reader.py --state-dir /tmp/agentos-dual-platform/agentos-state --out-dir /tmp/agentos-dual-platform/agentos-reader-live --serve --port 8767
+```
+
+第二条命令会启动本地页面服务，浏览器打开 `http://127.0.0.1:8767/` 即可查看 AgentOS 目标的运行详情、AgentOS Compare 页面、LLM Relay 页面、artifact、review、delivery 和 API JSON。
 
 完整验证入口：
 
@@ -228,6 +244,19 @@ real-task report/audit Context
 Host Reader 只读取和渲染状态文件，不修改 uCore 内核。
 双目标运行时，脚本还会把宿主机科研 Agent 平台的能力对齐摘要、测试主题对齐摘要和 Web/API/action 规模摘要交给 Host Reader；Compare 页面会把这些摘要和两个 uCore 目标的状态文件放在一起展示。
 
+Host LLM Relay 默认使用模板模式，不需要网络和 key。需要真实云端调用时，使用 OpenAI-compatible HTTP 接口；默认提供方是 DeepSeek，默认模型字段为 `deepseek-v4-pro`。示例：
+
+```bash
+AGENT_PLATFORM_LLM_PROVIDER=deepseek \
+AGENT_PLATFORM_LLM_API_KEY_FILE=/path/to/local/key-file \
+python3 host_tools/plain_ucore_llm_relay.py \
+  --state-dir /tmp/agentos-dual-platform/agentos-state \
+  --out-dir /tmp/agentos-dual-platform/agentos-state \
+  --mode cloud
+```
+
+密钥只由宿主机 Relay 读取，不写入 uCore 文件系统镜像、状态文件或仓库。克隆后的默认验证路径不访问云端。
+
 ## 与宿主机科研 Agent 平台的关系
 
 宿主机科研 Agent 平台仍在迭代。uCore 迁移目标不是逐行复制 Python 实现，而是在 uCore 环境中保留评委可见的科研 Agent 平台能力：
@@ -248,7 +277,7 @@ Host Reader 只读取和渲染状态文件，不修改 uCore 内核。
 - `docs/dual-targets.md`：双目标布局和一致性要求。
 - `docs/design.md`：双目标设计、内核机制、状态文件协议。
 - `docs/verification.md`：构建、运行、双目标检查和 Host Reader 验证。
-- `docs/next-work.md`：后续开发方向。
+- `docs/next-work.md`：维护规则和目标分离要求。
 - `agentos_ucore/docs/`：AgentOS-uCore 任务、接口、设计、测试和验收说明。
 
 典型运行输出应包含：

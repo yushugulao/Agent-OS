@@ -301,10 +301,21 @@ def template_response(request: RelayRequest) -> RelayResponse:
 
 
 def cloud_config() -> dict[str, str]:
+    provider = os.environ.get("AGENT_PLATFORM_LLM_PROVIDER", "deepseek")
+    default_endpoint = "https://api.deepseek.com/chat/completions" if provider == "deepseek" else ""
+    default_model = "deepseek-v4-pro" if provider == "deepseek" else "gpt-4.1-mini"
+    api_key = os.environ.get("AGENT_PLATFORM_LLM_API_KEY", "")
+    key_file = os.environ.get("AGENT_PLATFORM_LLM_API_KEY_FILE", "")
+    if not api_key and key_file:
+        try:
+            api_key = Path(key_file).read_text(encoding="utf-8").strip()
+        except OSError:
+            api_key = ""
     return {
-        "endpoint": os.environ.get("AGENT_PLATFORM_LLM_ENDPOINT", ""),
-        "api_key": os.environ.get("AGENT_PLATFORM_LLM_API_KEY", ""),
-        "model": os.environ.get("AGENT_PLATFORM_LLM_MODEL", "gpt-4.1-mini"),
+        "provider": provider,
+        "endpoint": os.environ.get("AGENT_PLATFORM_LLM_ENDPOINT", default_endpoint),
+        "api_key": api_key,
+        "model": os.environ.get("AGENT_PLATFORM_LLM_MODEL", default_model),
         "timeout": os.environ.get("AGENT_PLATFORM_LLM_TIMEOUT_SECONDS", "30"),
     }
 
@@ -385,7 +396,7 @@ def execute_request(request: RelayRequest, mode: str) -> RelayResponse:
     selected = mode
     if selected == "auto":
         config = cloud_config()
-        wants_cloud = request.provider in {"openai-compatible", "cloud"}
+        wants_cloud = request.provider in {"openai-compatible", "cloud", "deepseek", "deepseek-v4-pro"}
         selected = "openai-compatible" if wants_cloud and config["endpoint"] and config["api_key"] else "template"
     if selected in {"template", "mock"}:
         return template_response(request)
@@ -443,7 +454,7 @@ def append_relay_state(out_dir: Path, requests: list[RelayRequest], responses: l
     audit_blocked = sum(audit.blocked for audit in audits)
     audit_status = "ready" if audit_checked == audit_passed and audit_blocked == 0 else "partial"
     append_line(out_dir / "rp_llm_resp", f"host_relay_process=plain_ucore_llm_relay;mode={line_value(mode)};requests={len(requests)};responses={len(responses)};status={status}")
-    append_line(out_dir / "rp_llm_hostreq", f"host_relay_process=plain_ucore_llm_relay;endpoint_present={endpoint_present};key_present={key_present};model={line_value(config['model'])};secret_material=not_written;status={status}")
+    append_line(out_dir / "rp_llm_hostreq", f"host_relay_process=plain_ucore_llm_relay;provider={line_value(config['provider'])};endpoint_present={endpoint_present};key_present={key_present};model={line_value(config['model'])};secret_material=not_written;status={status}")
     append_line(out_dir / "rp_llm_packets", f"host_relay_packet_batch=requests:{len(requests)};responses:{len(responses)};status={status}")
     append_line(out_dir / "rp_llmlog", f"host_relay_run=requests:{len(requests)};mode={line_value(mode)};status={status}")
     append_line(out_dir / "rp_actionio", "host_llm_relay_process=plain_ucore_llm_relay;outputs=rp_llm_resp,rp_llm_hostreq,rp_llm_packets,rp_llmlog;status=ready")

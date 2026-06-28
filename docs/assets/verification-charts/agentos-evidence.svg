@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="560" viewBox="0 0 980 560">
+<style>
+text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
+.title{font-size:20px;font-weight:700}.subtitle{font-size:13px;fill:#52616f}
+.axis{font-size:12px;fill:#52616f}.label{font-size:12px}.value{font-size:12px;font-weight:700}
+</style>
+<rect width="980" height="560" fill="#ffffff"/>
+<text x="34" y="34" class="title">AgentOS 额外机制证据</text>
+<text x="34" y="58" class="subtitle">图中数值来自双目标对照脚本，体现增强目标在同一科研流程中额外记录的内核事实。</text>
+<text x="90" y="528" class="axis">数量</text>
+<line x1="90" y1="440.0" x2="946" y2="440.0" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="444.0" text-anchor="end" class="axis">0</text>
+<line x1="90" y1="369.6" x2="946" y2="369.6" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="373.6" text-anchor="end" class="axis">12</text>
+<line x1="90" y1="299.2" x2="946" y2="299.2" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="303.2" text-anchor="end" class="axis">24</text>
+<line x1="90" y1="228.8" x2="946" y2="228.8" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="232.8" text-anchor="end" class="axis">36</text>
+<line x1="90" y1="158.4" x2="946" y2="158.4" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="162.4" text-anchor="end" class="axis">48</text>
+<line x1="90" y1="88.0" x2="946" y2="88.0" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="92.0" text-anchor="end" class="axis">60</text>
+<rect x="140.8" y="440.0" width="52.0" height="0.0" fill="#4c78a8" rx="2"/>
+<text x="166.8" y="433.0" text-anchor="middle" class="value">0</text>
+<rect x="201.2" y="252.3" width="52.0" height="187.7" fill="#f58518" rx="2"/>
+<text x="227.2" y="245.3" text-anchor="middle" class="value">32</text>
+<text x="197.0" y="468" text-anchor="middle" class="label">内核证据</text>
+<rect x="354.8" y="440.0" width="52.0" height="0.0" fill="#4c78a8" rx="2"/>
+<text x="380.8" y="433.0" text-anchor="middle" class="value">0</text>
+<rect x="415.2" y="375.5" width="52.0" height="64.5" fill="#f58518" rx="2"/>
+<text x="441.2" y="368.5" text-anchor="middle" class="value">11</text>
+<text x="411.0" y="468" text-anchor="middle" class="label">主流程阶段</text>
+<rect x="568.8" y="440.0" width="52.0" height="0.0" fill="#4c78a8" rx="2"/>
+<text x="594.8" y="433.0" text-anchor="middle" class="value">0</text>
+<rect x="629.2" y="369.6" width="52.0" height="70.4" fill="#f58518" rx="2"/>
+<text x="655.2" y="362.6" text-anchor="middle" class="value">12</text>
+<text x="625.0" y="468" text-anchor="middle" class="label">主流程事实</text>
+<rect x="782.8" y="181.9" width="52.0" height="258.1" fill="#4c78a8" rx="2"/>
+<text x="808.8" y="174.9" text-anchor="middle" class="value">44</text>
+<rect x="843.2" y="181.9" width="52.0" height="258.1" fill="#f58518" rx="2"/>
+<text x="869.2" y="174.9" text-anchor="middle" class="value">44</text>
+<text x="839.0" y="468" text-anchor="middle" class="label">预置请求</text>
+<rect x="735" y="70" width="14" height="14" fill="#4c78a8"/>
+<text x="756" y="82" class="label">普通 uCore</text>
+<rect x="850" y="70" width="14" height="14" fill="#f58518"/>
+<text x="871" y="82" class="label">AgentOS-uCore</text>
+</svg>

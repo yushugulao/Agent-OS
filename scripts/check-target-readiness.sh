@@ -25,6 +25,7 @@ echo "[target-readiness] runtime comparison contracts"
 	"${PYTHON_BIN}" host_tools/test_plain_ucore_llm_relay.py
 	"${PYTHON_BIN}" host_tools/test_compare_dual_platform_state.py
 	"${PYTHON_BIN}" host_tools/test_compare_dual_platform_reader.py
+	"${PYTHON_BIN}" host_tools/test_summarize_dual_platform_results.py
 )
 
 echo "[target-readiness] reader contracts"

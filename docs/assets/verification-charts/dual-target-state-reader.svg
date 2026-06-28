@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="560" viewBox="0 0 980 560">
+<style>
+text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
+.title{font-size:20px;font-weight:700}.subtitle{font-size:13px;fill:#52616f}
+.axis{font-size:12px;fill:#52616f}.label{font-size:12px}.value{font-size:12px;font-weight:700}
+</style>
+<rect width="980" height="560" fill="#ffffff"/>
+<text x="34" y="34" class="title">双目标状态与页面输出</text>
+<text x="34" y="58" class="subtitle">普通 uCore 和 AgentOS-uCore 使用同一批请求；增强目标不能少于普通目标，并额外导出内核 Agent 证据。</text>
+<text x="90" y="528" class="axis">数量</text>
+<line x1="90" y1="440.0" x2="946" y2="440.0" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="444.0" text-anchor="end" class="axis">0</text>
+<line x1="90" y1="369.6" x2="946" y2="369.6" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="373.6" text-anchor="end" class="axis">68</text>
+<line x1="90" y1="299.2" x2="946" y2="299.2" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="303.2" text-anchor="end" class="axis">136</text>
+<line x1="90" y1="228.8" x2="946" y2="228.8" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="232.8" text-anchor="end" class="axis">204</text>
+<line x1="90" y1="158.4" x2="946" y2="158.4" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="162.4" text-anchor="end" class="axis">272</text>
+<line x1="90" y1="88.0" x2="946" y2="88.0" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="92.0" text-anchor="end" class="axis">340</text>
+<rect x="176.5" y="172.9" width="52.0" height="267.1" fill="#4c78a8" rx="2"/>
+<text x="202.5" y="165.9" text-anchor="middle" class="value">258</text>
+<rect x="236.8" y="159.4" width="52.0" height="280.6" fill="#f58518" rx="2"/>
+<text x="262.8" y="152.4" text-anchor="middle" class="value">271</text>
+<text x="232.7" y="468" text-anchor="middle" class="label">状态文件</text>
+<rect x="461.8" y="398.6" width="52.0" height="41.4" fill="#4c78a8" rx="2"/>
+<text x="487.8" y="391.6" text-anchor="middle" class="value">40</text>
+<rect x="522.2" y="398.6" width="52.0" height="41.4" fill="#f58518" rx="2"/>
+<text x="548.2" y="391.6" text-anchor="middle" class="value">40</text>
+<text x="518.0" y="468" text-anchor="middle" class="label">HTML页面</text>
+<rect x="747.2" y="163.6" width="52.0" height="276.4" fill="#4c78a8" rx="2"/>
+<text x="773.2" y="156.6" text-anchor="middle" class="value">267</text>
+<rect x="807.5" y="150.1" width="52.0" height="289.9" fill="#f58518" rx="2"/>
+<text x="833.5" y="143.1" text-anchor="middle" class="value">280</text>
+<text x="803.3" y="468" text-anchor="middle" class="label">API JSON</text>
+<rect x="735" y="70" width="14" height="14" fill="#4c78a8"/>
+<text x="756" y="82" class="label">普通 uCore</text>
+<rect x="850" y="70" width="14" height="14" fill="#f58518"/>
+<text x="871" y="82" class="label">AgentOS-uCore</text>
+</svg>
