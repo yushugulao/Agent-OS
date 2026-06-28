@@ -244,7 +244,7 @@ real-task report/audit Context
 Host Reader 只读取和渲染状态文件，不修改 uCore 内核。
 双目标运行时，脚本还会把宿主机科研 Agent 平台的能力对齐摘要、测试主题对齐摘要和 Web/API/action 规模摘要交给 Host Reader；Compare 页面会把这些摘要和两个 uCore 目标的状态文件放在一起展示。
 
-Host LLM Relay 默认使用模板模式，不需要网络和 key。需要真实云端调用时，使用 OpenAI-compatible HTTP 接口；默认提供方是 DeepSeek，默认模型字段为 `deepseek-v4-pro`。示例：
+Host LLM Relay 默认使用模板模式，不需要网络和密钥。需要真实云端调用时，使用 OpenAI-compatible HTTP 接口；默认提供方是 DeepSeek，默认模型字段为 `deepseek-v4-pro`。示例：
 
 ```bash
 AGENT_PLATFORM_LLM_PROVIDER=deepseek \
@@ -255,7 +255,7 @@ python3 host_tools/plain_ucore_llm_relay.py \
   --mode cloud
 ```
 
-密钥只由宿主机 Relay 读取，不写入 uCore 文件系统镜像、状态文件或仓库。克隆后的默认验证路径不访问云端。
+密钥只由宿主机 Relay 读取，不写入 uCore 文件系统镜像、状态文件或仓库。克隆后的默认验证路径不访问云端。`make target-readiness` 会运行 LLM Relay 模式契约测试：没有外部密钥时必须走模板响应；显式配置外部密钥文件时可以识别 DeepSeek 模型字段，但输出文件中仍不能出现密钥内容或密钥文件路径。
 
 ## 与宿主机科研 Agent 平台的关系
 

@@ -21,6 +21,7 @@ echo "[full-verify] Host Reader"
 	"${PYTHON_BIN}" host_tools/test_plain_ucore_action_runner.py
 	"${PYTHON_BIN}" host_tools/test_plain_ucore_fs_extract.py
 	"${PYTHON_BIN}" host_tools/test_plain_ucore_llm_relay.py
+	"${PYTHON_BIN}" host_tools/test_llm_relay_mode_contract.py
 	"${PYTHON_BIN}" host_tools/test_check_reader_output.py
 	"${PYTHON_BIN}" host_tools/test_compare_dual_platform_reader.py
 	"${PYTHON_BIN}" host_tools/test_compare_dual_platform_state.py
