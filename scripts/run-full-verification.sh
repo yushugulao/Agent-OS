@@ -18,6 +18,9 @@ echo "[full-verify] Host Reader"
 	"${PYTHON_BIN}" host_tools/test_check_seeded_action_state.py
 	"${PYTHON_BIN}" host_tools/test_check_host_surface_alignment.py
 	"${PYTHON_BIN}" host_tools/test_check_host_test_alignment.py
+	"${PYTHON_BIN}" host_tools/test_plain_ucore_action_runner.py
+	"${PYTHON_BIN}" host_tools/test_plain_ucore_fs_extract.py
+	"${PYTHON_BIN}" host_tools/test_plain_ucore_llm_relay.py
 	"${PYTHON_BIN}" host_tools/test_check_reader_output.py
 	"${PYTHON_BIN}" host_tools/test_compare_dual_platform_reader.py
 	"${PYTHON_BIN}" host_tools/test_compare_dual_platform_state.py

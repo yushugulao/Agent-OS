@@ -74,7 +74,7 @@ make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
 make full-verify TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-该命令会依次执行双目标结构检查、Host Reader 测试、双目标 QEMU 运行和 AgentOS 专项测试。默认使用 `python3`、`qemu-system-riscv64` 和 `240s` 单项超时时间；如需调整，可设置 `PYTHON_BIN=...`、`QEMU=...`、`CASE_TIMEOUT=...`。
+该命令会依次执行双目标结构检查、Host Reader 与宿主工具测试、双目标 QEMU 运行和 AgentOS 专项测试。宿主工具测试覆盖 action runner、文件系统镜像提取器和 LLM relay。默认使用 `python3`、`qemu-system-riscv64` 和 `240s` 单项超时时间；如需调整，可设置 `PYTHON_BIN=...`、`QEMU=...`、`CASE_TIMEOUT=...`。
 
 快速检查双目标目录职责：
 
