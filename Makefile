@@ -1,4 +1,4 @@
-.PHONY: clean build user run debug test plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run dual-platform-run full-verify dual-clean .FORCE
+.PHONY: clean build user run debug test plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run target-readiness dual-platform-run full-verify dual-clean .FORCE
 all: build
 
 K = os
@@ -12,6 +12,7 @@ LD = $(TOOLPREFIX)ld
 OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
 PY = python3
+PYTHON_BIN ?= $(PY)
 GDB = $(TOOLPREFIX)gdb
 CP = cp
 BUILDDIR = build
@@ -189,6 +190,9 @@ agentos-platform-run:
 
 dual-platform-run:
 	TOOLPREFIX=$(TOOLPREFIX) bash scripts/run-dual-platforms.sh
+
+target-readiness:
+	PYTHON_BIN=$(PYTHON_BIN) bash scripts/check-target-readiness.sh
 
 full-verify:
 	TOOLPREFIX=$(TOOLPREFIX) bash scripts/run-full-verification.sh

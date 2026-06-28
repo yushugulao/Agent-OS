@@ -73,7 +73,15 @@ dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=
 make full-verify TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-它会按顺序执行：
+快速目标检查由以下命令执行：
+
+```bash
+make target-readiness
+```
+
+它会检查目录职责、平台源码关系、Host 工具单测、状态文件对照单测和 Reader 单测。它不启动 QEMU，因此不能替代双目标运行和 AgentOS 专项测试。
+
+完整验证会按顺序执行：
 
 - 双目标结构检查；
 - Host 工具单元测试；

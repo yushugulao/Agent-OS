@@ -85,6 +85,14 @@ bash scripts/verify-dual-target-structure.sh
 
 默认会用 `origin/main` 对照根目录 `os/` 和 `bootloader/`。如果需要使用其他 plain 基准，可以设置 `UCORE_PLAIN_BASE_REF=...`。
 
+快速目标检查：
+
+```bash
+make target-readiness
+```
+
+该命令不启动 QEMU，主要用于在完整运行前检查目录职责、两个平台的源码和构建入口、Host 工具单测、状态文件对照单测和 Reader 单测。完整功能仍以 `make dual-platform-run`、`make agentos-test` 或 `make full-verify` 为准。
+
 Host Reader 相关检查：
 
 ```bash

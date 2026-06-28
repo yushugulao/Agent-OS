@@ -63,6 +63,14 @@ make full-verify TOOLPREFIX=riscv64-linux-gnu-
 
 如果需要指定工具，可以设置 `PYTHON_BIN=...`、`QEMU=...`、`CASE_TIMEOUT=...`。本机 WSL 环境下可直接使用默认 `python3`、`qemu-system-riscv64` 和 `240s` 单项超时时间。
 
+快速目标检查：
+
+```bash
+make target-readiness
+```
+
+这条命令会执行双目标结构检查和关键 Host 工具单测，不启动 QEMU。它适合在修改文档、脚本、Host Reader 或对照逻辑后快速确认目标关系没有被破坏。内核、用户程序、文件系统镜像或启动流程发生变化时，仍应运行 `make dual-platform-run` 和 AgentOS 专项测试。
+
 ## 普通目标验证：plain target
 
 运行目录程序：
