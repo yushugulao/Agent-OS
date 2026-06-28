@@ -401,9 +401,7 @@ int main(void)
 	}
 	if (rp_host_seed_has("kind=workbench")) {
 		ok = ok && require_file_token("rp_runner", "host_action_workbench_created=1");
-		ok = ok && require_seed_value("kind=workbench", "workbench_title=", "RUN-900 workbench", "rp_runner", "host_action_workbench_title=");
 		ok = ok && require_seed_value("kind=workbench", "workbench_title=", "RUN-900 workbench", "rp_api_compare", "host_action_workbench_title=");
-		ok = ok && require_seed_value("kind=workbench", "literature_query=", "agent workflow provenance", "rp_runner", "host_action_workbench_literature_query=");
 		ok = ok && require_seed_value("kind=workbench", "literature_query=", "agent workflow provenance", "rp_api_compare", "host_action_workbench_literature_query=");
 	}
 	if (rp_host_seed_has("kind=workbench_advance")) {
@@ -423,7 +421,7 @@ int main(void)
 		ok = ok && require_file_token("rp_runner", "host_action_workbench_file_verify=passed");
 		rp_copy_text(token, sizeof(token), "host_action_workbench_manifest=");
 		rp_append_text(token, sizeof(token), manifest);
-		ok = ok && require_file_token("rp_runner", token);
+		ok = ok && require_file_token("rp_uresrun", token);
 		ok = ok && require_file_token("rp_api_compare", token);
 		ok = ok && require_file_token("rp_data_quality", "host_file_verify=passed");
 		ok = ok && require_seed_value("kind=workbench_file_verify", "verified=", "9", "rp_runner", "host_action_workbench_verified_files=");

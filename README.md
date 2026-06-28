@@ -246,11 +246,11 @@ Host Reader 只读取和渲染状态文件，不修改 uCore 内核。
 ```text
 [dual-platform] checking target structure
 [dual-platform] running seeded dual-target research platform
-seeded_action_state: plain start chapter=platform_seeded init=rp_seed_orch action_count=8 log=/tmp/agentos-dual-platform/seeded-action-state/plain/ucore-run.log
+seeded_action_state: plain start chapter=platform_seeded init=rp_seed_orch action_count=44 log=/tmp/agentos-dual-platform/seeded-action-state/plain/ucore-run.log
 seeded_action_state: plain done passed=1 extracted_state_files=256 status=ready
-seeded_action_state: agentos start chapter=platform_agentos init=rp_agentos_orch action_count=8 log=/tmp/agentos-dual-platform/seeded-action-state/agentos/ucore-run.log
+seeded_action_state: agentos start chapter=platform_agentos init=rp_agentos_orch action_count=44 log=/tmp/agentos-dual-platform/seeded-action-state/agentos/ucore-run.log
 seeded_action_state: agentos done passed=1 extracted_state_files=268 status=ready
-seeded_action_state: action=/actions/research/rerun action_count=8 plain=ready agentos=ready status=ready
+seeded_action_state: action=/actions/research/rerun action_count=44 plain=ready agentos=ready status=ready
 [dual-platform] plain uCore research platform log: /tmp/agentos-dual-platform/seeded-action-state/plain/ucore-run.log
 rp_orch: passed
 rp_orch: programs_ok=69 programs_total=69
@@ -266,7 +266,7 @@ host_platform_alignment: host_modules=154 tracked_host_modules=154 plain_sources
 host_test_alignment: host_tests=142 themes_ok=7 themes_total=7 unclassified_tests=0 status=ready
 host_action_kind_alignment: action_routes=95 action_kinds=95 generic_routes=0 plain_missing=0 agentos_missing=0 status=ready
 host_surface_alignment: api_routes=214 action_routes=95 download_refs=76 runtime_state_checked=1 status=ready
-dual_platform_state_compare: plain_files=256 agentos_files=268 common_files=256 agentos_extra_files=12 checked_success_records=1220 preserved_plain_costs=7 status=ready
+dual_platform_state_compare: plain_files=256 agentos_files=268 common_files=256 agentos_extra_files=12 checked_success_records=1242 preserved_plain_costs=7 status=ready
 plain_ucore_reader: pages=40 api_json=264 state_files=257 status=ready
 plain_ucore_reader: pages=40 api_json=276 state_files=269 status=ready
 reader_output_check: pages=40 api_json=264 state_files=257 required_pages=6 spec_pages=40 status=ready

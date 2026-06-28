@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "${SCRIPT_DIR}/.."
+
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
 LOG="${LOG:-error}"
 CHAPTER="${CHAPTER:-agent}"

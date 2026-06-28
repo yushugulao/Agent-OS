@@ -11,7 +11,7 @@
 #define ROOTDEV 1 // device number of file system root disk
 #define MAXOPBLOCKS 10 // max # of blocks any FS op writes
 #define NBUF (MAXOPBLOCKS * 3) // size of disk block cache
-#define FSSIZE 4096 // size of file system in blocks
+#define FSSIZE 8192 // size of file system in blocks
 #define MAXPATH 128 // maximum file path name
 
 #define ROOTINO 1 // root i-number
