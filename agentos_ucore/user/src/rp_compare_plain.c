@@ -1909,7 +1909,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "agent_event_notify=kernel_queue");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "failure_recovery=generic_action");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "provenance_audit=kernel_ledger");
-	ok = ok && rp_file_contains("rp_agentos_mainflow", "permission_control=sentinel_rerun_denied");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "permission_control=sentinel_action_denied");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "timeline_observe=kernel_snapshot");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "workbench_file_verify=kernel_metadata_index");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "package_provenance=kernel_ledger");

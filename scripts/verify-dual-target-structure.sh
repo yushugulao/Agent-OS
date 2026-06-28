@@ -307,7 +307,7 @@ for marker in \
 	"agent_event_notify=kernel_queue" \
 	"failure_recovery=generic_action" \
 	"provenance_audit=kernel_ledger" \
-	"permission_control=sentinel_rerun_denied" \
+	"permission_control=sentinel_action_denied" \
 	"timeline_observe=kernel_snapshot" \
 	"edit_lease=kernel_exclusive"
 do
@@ -322,6 +322,13 @@ require_text "agentos_ucore/os" "AGENT_TOOL_LLM_REQUEST" "AgentOS LLM request to
 require_text "agentos_ucore/os" "agent_file_edit_begin" "AgentOS edit lease syscall is missing"
 require_text "agentos_ucore/user/Makefile" "agentllm_ucore" "AgentOS LLM test is not in the user build list"
 require_text "agentos_ucore/scripts/run-agent-tests.sh" "agentllm_ucore" "AgentOS LLM test is not in the test script"
+
+if grep -R -E -n 'AGENT_TOOL_(RERUN_STAGE|WRITE_REPORT)' \
+	"${ROOT_DIR}/agentos_ucore/user/src" 2>/dev/null |
+	grep -v 'agentsecurity_ucore.c' >"${TMP_FILE}"; then
+	fail "AgentOS platform code uses legacy demo tool ids outside security tests"
+fi
+: >"${TMP_FILE}"
 
 demo_kernel_pattern='lab-gene-x|RUN-042|nightly-regression|/lab/projects|INC-RUN|PLAN-RUN|MSG-RUN|minimal_rerun|memory_limit|recovery report|rerun completed|stage=(prepare|align|analyze|report|archive)|label=(prepare|align|analyze|report|archive)|source_stage=(prepare|align|analyze|report|archive)|next_stage=(prepare|align|analyze|report|archive)'
 reject_text "agentos_ucore/os" "${demo_kernel_pattern}" "AgentOS kernel contains research demo constants"
@@ -354,4 +361,5 @@ echo "[dual-target-check] platform source sync: identical=${plain_source_identic
 echo "[dual-target-check] backend evidence coverage: plain=${plain_backend_cases} agentos=${agentos_backend_cases} preserved_costs=${plain_cost_count}"
 echo "[dual-target-check] platform runners: present"
 echo "[dual-target-check] AgentOS kernel demo constants: absent"
+echo "[dual-target-check] AgentOS platform legacy tools: security tests only"
 echo "[dual-target-check] docs: wording scan passed"

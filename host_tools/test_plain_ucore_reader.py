@@ -1096,7 +1096,7 @@ status=ready
         "stage=query;metadata_query=used_index;tool=query_file;align_query=indexed;report_query=indexed;context_sequence=observed;status=ready\n"
         "stage=recovery;failure_recovery=generic_action;kernel_action_commit=ok;kernel_artifact_update=ok;context_snapshot=trusted;metadata_after_repair=used_index;status=ready\n"
         "stage=timeline;agent_event_notify=kernel_queue;timeline_observe=kernel_snapshot;wait=wakeup;heartbeat=observed;status=ready\n"
-        "stage=collaboration;agent_event_notify=kernel_queue;delivery=kernel_event_queue;capability_control=kernel_role;permission_control=sentinel_rerun_denied;status=ready\n"
+        "stage=collaboration;agent_event_notify=kernel_queue;delivery=kernel_event_queue;capability_control=kernel_role;permission_control=sentinel_action_denied;status=ready\n"
         "stage=audit;provenance_audit=kernel_ledger;ledger_hash=observed;audit_records=observed;provenance_edges=observed;context_records=observed;status=ready\n"
         "stage=workbench;workbench_file_verify=kernel_metadata_index;context_trusted=kernel_shadow;report_file=verified;status=ready\n"
         "stage=package;package_provenance=kernel_ledger;report_metadata=kernel_index;context_trusted=kernel_shadow;status=ready\n"
@@ -1141,7 +1141,7 @@ status=ready
         "agent=sentinel\n"
         "event=handoff=recovery-auditor\n"
         "delivery=kernel_event_queue\n"
-        "permission_control=sentinel_rerun_denied\n"
+        "permission_control=sentinel_action_denied\n"
         "status=ready\n"
     ),
     "rp_agentos_audit": (
@@ -1999,7 +1999,7 @@ def main() -> int:
         assert "AgentOS Edit Lease" in compare_html
         assert "kernel_metadata_index" in compare_html
         assert "kernel_event_queue" in compare_html
-        assert "sentinel_rerun_denied" in compare_html
+        assert "sentinel_action_denied" in compare_html
         assert "kernel_ledger" in compare_html
         assert "kernel_context_record" in compare_html
         assert "rp_agentos_conflict" in compare_html

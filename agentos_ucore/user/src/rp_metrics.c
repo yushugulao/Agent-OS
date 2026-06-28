@@ -103,7 +103,7 @@ int main(void)
 	if (!rp_file_contains("rp_agentos_mainflow", "agent_event_notify=kernel_queue")) return 1;
 	if (!rp_file_contains("rp_agentos_mainflow", "failure_recovery=generic_action")) return 1;
 	if (!rp_file_contains("rp_agentos_mainflow", "provenance_audit=kernel_ledger")) return 1;
-	if (!rp_file_contains("rp_agentos_mainflow", "permission_control=sentinel_rerun_denied")) return 1;
+	if (!rp_file_contains("rp_agentos_mainflow", "permission_control=sentinel_action_denied")) return 1;
 	if (!rp_file_contains("rp_agentos_mainflow", "timeline_observe=kernel_snapshot")) return 1;
 	if (!rp_file_contains("rp_agentos_mainflow", "workbench_file_verify=kernel_metadata_index")) return 1;
 	if (!rp_file_contains("rp_agentos_mainflow", "package_provenance=kernel_ledger")) return 1;
