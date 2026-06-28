@@ -7,6 +7,21 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+SUCCESS_MARKERS = (
+    "status=ready",
+    "status=ok",
+    "status=passed",
+    "state=ready",
+    "result=ok",
+    "result=passed",
+    "=passed",
+    "_ok=1",
+    "ok=1",
+    "passed=1",
+    "ready=1",
+    "state_ok=1",
+)
+
 
 @dataclass(frozen=True)
 class CapabilityGroup:
@@ -435,11 +450,14 @@ def runtime_candidates(group: CapabilityGroup, sources: tuple[str, ...]) -> tupl
     return tuple(source_to_state_name(source) for source in sources)
 
 
-def has_non_empty_state(state_dir: Path | None, state_name: str) -> bool:
+def has_successful_state(state_dir: Path | None, state_name: str) -> bool:
     if state_dir is None:
         return False
     path = state_dir / state_name
-    return path.is_file() and path.stat().st_size > 0
+    if not path.is_file() or path.stat().st_size <= 0:
+        return False
+    text = path.read_text(encoding="utf-8", errors="replace").lower()
+    return any(marker in text for marker in SUCCESS_MARKERS)
 
 
 def read_reader_text(root: Path) -> str:
@@ -498,12 +516,12 @@ def run_check(
         plain_runtime_hits = [
             name
             for name in plain_runtime_candidates
-            if name in plain_state_names and has_non_empty_state(plain_state_dir, name)
+            if name in plain_state_names and has_successful_state(plain_state_dir, name)
         ]
         agentos_runtime_hits = [
             name
             for name in agentos_runtime_candidates
-            if name in agentos_state_names and has_non_empty_state(agentos_state_dir, name)
+            if name in agentos_state_names and has_successful_state(agentos_state_dir, name)
         ]
 
         if missing_host:
@@ -515,9 +533,9 @@ def run_check(
         if missing_reader:
             failures.append(f"{group.name}: missing Reader/doc keywords: {', '.join(missing_reader)}")
         if check_runtime_state and not plain_runtime_hits:
-            failures.append(f"{group.name}: no plain runtime state file was produced")
+            failures.append(f"{group.name}: no successful plain runtime state file was produced")
         if check_runtime_state and not agentos_runtime_hits:
-            failures.append(f"{group.name}: no AgentOS runtime state file was produced")
+            failures.append(f"{group.name}: no successful AgentOS runtime state file was produced")
         group_failed = bool(
             missing_host
             or missing_plain

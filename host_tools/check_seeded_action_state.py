@@ -562,8 +562,6 @@ def seeded_route_coverage(root: Path, host_dir: Path | None = None) -> dict[str,
     host_kinds = sorted(set(action_kind(route) for route in host_routes))
     known_seeded_routes = sorted(seeded_path_set & host_route_set)
     unknown_seeded_routes = sorted(seeded_path_set - host_route_set)
-    if unknown_seeded_routes:
-        failures.append("seeded routes missing from host API: " + ",".join(unknown_seeded_routes[:12]))
 
     seeded_kind_set = set(seeded_kinds)
     covered_host_kinds = sorted(kind for kind in host_kinds if kind in seeded_kind_set)
@@ -575,7 +573,7 @@ def seeded_route_coverage(root: Path, host_dir: Path | None = None) -> dict[str,
         "host_action_kinds": len(host_kinds),
         "seeded_actions": len(seeded_paths),
         "seeded_known_routes": len(known_seeded_routes),
-        "seeded_unknown_routes": unknown_seeded_routes,
+        "seeded_extra_routes": unknown_seeded_routes,
         "seeded_kinds": len(seeded_kinds),
         "seeded_host_kinds": len(covered_host_kinds),
         "uncovered_host_kinds": uncovered_host_kinds,

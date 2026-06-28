@@ -1574,6 +1574,7 @@ def main() -> int:
                         "host_action_kinds": 95,
                         "seeded_known_routes": 44,
                         "seeded_host_kinds": 44,
+                        "seeded_extra_routes": ["host-workflow-stage"],
                         "uncovered_host_kinds": ["workbench_note", "research_export"],
                     },
                     "plain": {
@@ -2099,6 +2100,7 @@ def main() -> int:
         assert "seeded_action_coverage=host_routes" in seeded_lines
         assert "host_action_routes=95" in seeded_lines
         assert "seeded_known_routes=44" in seeded_lines
+        assert "seeded_extra_routes=1" in seeded_lines
         assert (out_dir / "api" / "host_platform_alignment_raw.json").exists()
         assert (out_dir / "api" / "host_test_alignment_raw.json").exists()
         assert (out_dir / "api" / "host_surface_alignment_raw.json").exists()

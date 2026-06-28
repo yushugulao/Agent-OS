@@ -79,7 +79,22 @@ class HostPlatformAlignmentTests(unittest.TestCase):
             summary = run_check(root, host, require_host=True, plain_state_dir=plain_state, agentos_state_dir=agentos_state)
 
             self.assertEqual(summary["status"], "failed")
-            self.assertTrue(any("no AgentOS runtime state file" in failure for failure in summary["failures"]))
+            self.assertTrue(any("no successful AgentOS runtime state file" in failure for failure in summary["failures"]))
+
+    def test_alignment_rejects_runtime_state_without_success_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "repo"
+            host = Path(tmp) / "host"
+            root.mkdir()
+            self._write_minimal_tree(root, host)
+            plain_state, agentos_state = self._write_state_dirs(root)
+            weak = runtime_candidates(CAPABILITY_GROUPS[0], CAPABILITY_GROUPS[0].plain_sources)[0]
+            (plain_state / weak).write_text("draft=present\n", encoding="utf-8")
+
+            summary = run_check(root, host, require_host=True, plain_state_dir=plain_state, agentos_state_dir=agentos_state)
+
+            self.assertEqual(summary["status"], "failed")
+            self.assertTrue(any("no successful plain runtime state file" in failure for failure in summary["failures"]))
 
     def test_alignment_reports_missing_agentos_source(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:

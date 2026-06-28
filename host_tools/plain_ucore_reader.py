@@ -321,6 +321,7 @@ def seeded_action_state_item(data: dict[str, object]) -> dict[str, object]:
                 ("host_action_kinds", coverage.get("host_action_kinds", "")),
                 ("seeded_known_routes", coverage.get("seeded_known_routes", "")),
                 ("seeded_host_kinds", coverage.get("seeded_host_kinds", "")),
+                ("seeded_extra_routes", len(coverage.get("seeded_extra_routes", [])) if isinstance(coverage.get("seeded_extra_routes", []), list) else ""),
                 ("uncovered_host_kinds", len(coverage.get("uncovered_host_kinds", [])) if isinstance(coverage.get("uncovered_host_kinds", []), list) else ""),
             ]
         ),

@@ -85,6 +85,20 @@ class SeededActionStateTests(unittest.TestCase):
             self.assertEqual(coverage["seeded_host_kinds"], 44)
             self.assertIn("workbench_note", coverage["uncovered_host_kinds"])
 
+    def test_seeded_route_coverage_allows_extra_runtime_samples(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            host_dir = root / "host"
+            api = host_dir / "agent_platform" / "api_server.py"
+            api.parent.mkdir(parents=True, exist_ok=True)
+            api.write_text('if path == "/actions/research/rerun":\n', encoding="utf-8")
+
+            coverage = checker.seeded_route_coverage(root, host_dir)
+
+            self.assertEqual(coverage["status"], "ready")
+            self.assertEqual(coverage["seeded_known_routes"], 1)
+            self.assertIn("/actions/research/dataset", coverage["seeded_extra_routes"])
+
     def test_validate_extracted_state_accepts_expected_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
