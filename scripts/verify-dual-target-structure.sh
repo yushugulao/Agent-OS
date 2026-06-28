@@ -214,6 +214,8 @@ require_text "scripts/run-dual-platforms.sh" "seeded-action-state.json" "dual pl
 require_text "host_tools/plain_ucore_reader.py" "seeded-action-state" "Host Reader does not accept seeded action state input"
 require_text "host_tools/plain_ucore_reader.py" "host_seeded_action" "Host Reader does not render seeded action state"
 require_text "host_tools/plain_ucore_action_runner.py" 'os.environ.get\("TOOLPREFIX"' "action runner does not read TOOLPREFIX from environment"
+require_text "host_tools/plain_ucore_action_runner.py" "run_observed_command" "action runner does not observe QEMU output directly"
+require_text "host_tools/plain_ucore_action_runner.py" "qemu_elapsed_seconds" "action runner does not write QEMU timing evidence"
 require_text "scripts/run-dual-platforms.sh" "cases=7 executable=7 userland_equivalent=ready" "plain backend marker is missing"
 require_text "scripts/run-dual-platforms.sh" "cases=8 executable=8 agentos=mainflow_bound" "AgentOS backend marker is missing"
 

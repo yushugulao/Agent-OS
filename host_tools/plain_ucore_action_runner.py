@@ -6,14 +6,20 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
+import re
 import shutil
+import signal
 import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Iterable
 
 from plain_ucore_fs_extract import extract_state_files
 
 UCORE_FS_BLOCK_SIZE = 1024
+DEFAULT_FAILURE_PATTERN = r"check failed|panic|unknown syscall|bad addr|IllegalInstruction|child_failed|status=failed"
 
 
 def read_jsonl(path: Path) -> list[dict[str, object]]:
@@ -479,6 +485,156 @@ def run_command(command: list[str], log_path: Path, timeout_seconds: int, append
     return result.returncode
 
 
+def parse_seconds(value: str | int | float) -> float:
+    text = str(value)
+    unit = text[-1:]
+    number = text[:-1] if unit.isalpha() else text
+    seconds = float(number)
+    if unit in ("s", "S") or not unit.isalpha():
+        return seconds
+    if unit in ("m", "M"):
+        return seconds * 60
+    if unit in ("h", "H"):
+        return seconds * 3600
+    raise ValueError(f"unsupported duration: {text}")
+
+
+def terminate_process(proc: subprocess.Popen[str]) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            proc.terminate()
+        else:
+            os.killpg(proc.pid, signal.SIGTERM)
+        proc.wait(timeout=2)
+    except Exception:
+        if proc.poll() is None:
+            if os.name == "nt":
+                proc.kill()
+            else:
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait(timeout=2)
+
+
+def run_observed_command(
+    command: list[str],
+    log_path: Path,
+    timeout_seconds: int,
+    append: bool = False,
+    pass_marker: str = "",
+    failure_pattern: str = DEFAULT_FAILURE_PATTERN,
+    idle_notice_seconds: int = 20,
+    marker_grace_seconds: int = 2,
+) -> dict[str, object]:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    mode = "a" if append else "w"
+    output_queue: queue.Queue[str | None] = queue.Queue()
+    popen_kwargs: dict[str, object] = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.STDOUT,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "bufsize": 1,
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["preexec_fn"] = os.setsid
+    proc = subprocess.Popen(command, **popen_kwargs)
+    assert proc.stdout is not None
+
+    def read_output() -> None:
+        try:
+            for line in proc.stdout:
+                output_queue.put(line)
+        finally:
+            output_queue.put(None)
+
+    reader = threading.Thread(target=read_output, daemon=True)
+    reader.start()
+
+    start = time.monotonic()
+    last_output = start
+    last_notice = start
+    marker_seen_at = 0.0
+    marker_seen = False
+    failure_seen = False
+    timed_out = False
+    idle_notices = 0
+    last_lines: list[str] = []
+    failure_re = re.compile(failure_pattern) if failure_pattern else None
+
+    with log_path.open(mode, encoding="utf-8", errors="replace") as handle:
+        while True:
+            now = time.monotonic()
+            if now - start > timeout_seconds:
+                timed_out = True
+                handle.write(f"\n[runner] exceeded {timeout_seconds}s\n")
+                break
+            if now - last_output >= idle_notice_seconds and now - last_notice >= idle_notice_seconds:
+                idle_notices += 1
+                notice = f"[runner] no output for {int(now - last_output)}s\n"
+                handle.write(notice)
+                handle.flush()
+                print(notice.rstrip())
+                last_notice = now
+            if marker_seen and marker_seen_at > 0 and now - marker_seen_at >= marker_grace_seconds:
+                if proc.poll() is None:
+                    handle.write(f"[runner] pass marker observed; stopping process after {marker_grace_seconds}s grace\n")
+                    handle.flush()
+                    break
+            try:
+                item = output_queue.get(timeout=0.2)
+            except queue.Empty:
+                if proc.poll() is not None:
+                    break
+                continue
+            if item is None:
+                if proc.poll() is not None:
+                    break
+                continue
+            last_output = time.monotonic()
+            handle.write(item)
+            handle.flush()
+            line = item.rstrip("\n")
+            last_lines.append(line)
+            if len(last_lines) > 80:
+                last_lines = last_lines[-80:]
+            if failure_re and failure_re.search(item):
+                failure_seen = True
+                handle.write("[runner] failure text detected\n")
+                break
+            if pass_marker and pass_marker in item and not marker_seen:
+                marker_seen = True
+                marker_seen_at = time.monotonic()
+                handle.write("[runner] pass marker observed\n")
+                handle.flush()
+
+        if proc.poll() is None:
+            terminate_process(proc)
+        reader.join(timeout=1)
+        if timed_out or failure_seen or (pass_marker and not marker_seen):
+            handle.write("[runner] last log lines:\n")
+            for line in last_lines[-40:]:
+                handle.write(line + "\n")
+
+    elapsed = time.monotonic() - start
+    returncode = proc.returncode
+    ok = not timed_out and not failure_seen and (not pass_marker or marker_seen)
+    if ok and returncode not in (0, None):
+        returncode = 0
+    return {
+        "returncode": 0 if ok else (returncode if returncode is not None else 1),
+        "marker_seen": marker_seen,
+        "failure_seen": failure_seen,
+        "timed_out": timed_out,
+        "idle_notices": idle_notices,
+        "elapsed_seconds": round(elapsed, 3),
+    }
+
+
 def make_wsl_command(command_text: str, wsl_distro: str) -> list[str]:
     if os.name == "nt":
         return ["wsl.exe", "-d", wsl_distro, "--", "bash", "-lc", command_text]
@@ -693,6 +849,9 @@ def write_run_result_state(next_state: Path, run_summary: dict[str, object], log
         f"embedded_action_records={run_summary.get('embedded_action_records', 0)}",
         f"extracted_state_files={run_summary.get('extracted_state_files', 0)}",
         f"log={line_value(run_summary.get('log', ''))}",
+        f"qemu_elapsed_seconds={run_summary.get('elapsed_seconds', 0)}",
+        f"qemu_idle_notices={run_summary.get('idle_notices', 0)}",
+        f"qemu_timed_out={1 if run_summary.get('timed_out') else 0}",
     ]
     host_reader_actions = find_log_value(log_text, "rp_web_export: host_reader_actions=")
     host_actions_verified = find_log_value(log_text, "rp_compare_plain: host_actions=")
@@ -758,11 +917,25 @@ def run_seeded_ucore(
         "rm -rf nfs/fs nfs/fs.img nfs/fs-copy.img && "
         "make nfs/fs.img >/dev/null && "
         f"make build {toolprefix} CHAPTER={chapter} LOG=warn INIT_PROC={init_proc} >/dev/null && "
-        f"timeout {timeout_seconds}s make run {toolprefix} CHAPTER={chapter} LOG=warn INIT_PROC={init_proc}"
+        f"make run {toolprefix} CHAPTER={chapter} LOG=warn INIT_PROC={init_proc}"
     )
-    code = run_command(make_wsl_command(run_command_text, wsl_distro), log_path, timeout_seconds + 30, append=True)
+    observed = run_observed_command(
+        make_wsl_command(run_command_text, wsl_distro),
+        log_path,
+        timeout_seconds + 30,
+        append=True,
+        pass_marker=pass_marker,
+        idle_notice_seconds=int(os.environ.get("SEEDED_ACTION_IDLE_NOTICE_SECONDS", "20")),
+    )
+    code = int(observed["returncode"])
     text = log_path.read_text(encoding="utf-8", errors="replace")
-    passed = pass_marker in text and "child_failed" not in text and "ialloc" not in text
+    passed = (
+        bool(observed["marker_seen"])
+        and not bool(observed["failure_seen"])
+        and not bool(observed["timed_out"])
+        and "child_failed" not in text
+        and "ialloc" not in text
+    )
     extract_summary: dict[str, object] = {"status": "skipped", "extracted_state_files": 0}
     image_path = repo_dir / "nfs" / "fs-copy.img"
     if image_path.exists():
@@ -776,6 +949,11 @@ def run_seeded_ucore(
     summary = {
         "commands": [clean_command, f"embedded_action_records={embedded_records}", run_command_text],
         "returncode": code,
+        "marker_seen": bool(observed["marker_seen"]),
+        "failure_seen": bool(observed["failure_seen"]),
+        "timed_out": bool(observed["timed_out"]),
+        "idle_notices": int(observed["idle_notices"]),
+        "elapsed_seconds": observed["elapsed_seconds"],
         "embedded_action_records": embedded_records,
         "extracted_state_files": extract_summary.get("extracted_state_files", 0),
         "extract_status": extract_summary.get("status", "unknown"),

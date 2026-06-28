@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -30,6 +31,39 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
+        observed_ok = runner.run_observed_command(
+            [
+                sys.executable,
+                "-c",
+                "print('boot'); print('rp_orch: passed')",
+            ],
+            root / "observed-ok.log",
+            timeout_seconds=5,
+            pass_marker="rp_orch: passed",
+            idle_notice_seconds=1,
+            marker_grace_seconds=0,
+        )
+        assert observed_ok["returncode"] == 0
+        assert observed_ok["marker_seen"] is True
+        assert observed_ok["failure_seen"] is False
+        assert "rp_orch: passed" in read(root / "observed-ok.log")
+
+        observed_fail = runner.run_observed_command(
+            [
+                sys.executable,
+                "-c",
+                "print('boot'); print('panic: synthetic failure')",
+            ],
+            root / "observed-fail.log",
+            timeout_seconds=5,
+            pass_marker="rp_orch: passed",
+            idle_notice_seconds=1,
+            marker_grace_seconds=0,
+        )
+        assert observed_fail["returncode"] != 0
+        assert observed_fail["failure_seen"] is True
+        assert "panic: synthetic failure" in read(root / "observed-fail.log")
+
         state_dir = root / "state"
         run_dir = root / "run"
         state_dir.mkdir()
