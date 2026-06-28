@@ -146,6 +146,8 @@ def main() -> int:
         assert str(result["runner_statistics_csv"]).endswith("runner-statistics.csv"), result
         assert str(result["runner_statistics"]).endswith("runner-statistics.html"), result
         assert str(result["load_profile_csv"]).endswith("load-profile.csv"), result
+        assert str(result["delivery_readiness_csv"]).endswith("delivery-readiness.csv"), result
+        assert str(result["delivery_readiness"]).endswith("delivery-readiness.html"), result
         assert str(result["test_suite_csv"]).endswith("test-suite.csv"), result
         assert str(result["test_suite"]).endswith("test-suite.html"), result
         assert str(result["chart_type_coverage_csv"]).endswith("chart-type-coverage.csv"), result
@@ -170,6 +172,8 @@ def main() -> int:
         assert "agentos-context" in report
         assert "runner-statistics.csv" in report
         assert "runner-statistics.html" in report
+        assert "delivery-readiness.csv" in report
+        assert "delivery-readiness.html" in report
         assert "test-suite.csv" in report
         assert "test-suite.html" in report
         assert "负载参数组" in report
@@ -197,6 +201,12 @@ def main() -> int:
         assert "最终演示主路径,make demo-reader" in suite_csv
         assert "日常快速检查,make target-readiness" in suite_csv
         assert "完整验证,make full-verify TOOLPREFIX=riscv64-linux-gnu-" in suite_csv
+        readiness_csv = (out_dir / "delivery-readiness.csv").read_text(encoding="utf-8")
+        assert "requirement,status,evidence,verification,note" in readiness_csv
+        assert "带数据的测试结果用图表展示,已覆盖" in readiness_csv
+        assert "DeepSeek v4 pro 优先且默认不访问云端,已覆盖" in readiness_csv
+        assert "录屏演示只需要少量命令,已覆盖" in readiness_csv
+        assert "同时展示功能完善和性能良好,已覆盖" in readiness_csv
         profile_csv = (out_dir / "load-profile.csv").read_text(encoding="utf-8")
         assert "load_dimension,source,plain_value,agentos_value,delta,note" in profile_csv
         assert "预置请求" in profile_csv
@@ -207,6 +217,8 @@ def main() -> int:
         assert "experiment-design.csv" in evidence_csv
         assert "test-suite.html" in evidence_csv
         assert "test-suite.csv" in evidence_csv
+        assert "delivery-readiness.html" in evidence_csv
+        assert "delivery-readiness.csv" in evidence_csv
         assert "charts/runtime-observation.svg" in evidence_csv
         assert "runner-sweep.csv" in evidence_csv
         assert "runner-statistics.csv" in evidence_csv
@@ -252,6 +264,8 @@ def main() -> int:
         assert "evidence-manifest.csv" in index_html
         assert "demo-checklist.html" in index_html
         assert "demo-checklist.csv" in index_html
+        assert "delivery-readiness.html" in index_html
+        assert "delivery-readiness.csv" in index_html
         assert "test-suite.html" in index_html
         assert "test-suite.csv" in index_html
         assert "experiment-design.html" in index_html
@@ -284,6 +298,8 @@ def main() -> int:
         assert "evidence-manifest.csv" in monitor_html
         assert "demo-checklist.html" in monitor_html
         assert "demo-checklist.csv" in monitor_html
+        assert "delivery-readiness.html" in monitor_html
+        assert "delivery-readiness.csv" in monitor_html
         assert "test-suite.html" in monitor_html
         assert "test-suite.csv" in monitor_html
         assert "experiment-design.html" in monitor_html
@@ -324,6 +340,8 @@ def main() -> int:
         assert "evidence-manifest.csv" in demo_html
         assert "demo-checklist.html" in demo_html
         assert "demo-checklist.csv" in demo_html
+        assert "delivery-readiness.html" in demo_html
+        assert "delivery-readiness.csv" in demo_html
         assert "test-suite.html" in demo_html
         assert "test-suite.csv" in demo_html
         assert "experiment-design.html" in demo_html
@@ -352,6 +370,11 @@ def main() -> int:
         assert "make demo-reader" in suite_html
         assert "make target-readiness" in suite_html
         assert "make full-verify TOOLPREFIX=riscv64-linux-gnu-" in suite_html
+        readiness_html = (out_dir / "delivery-readiness.html").read_text(encoding="utf-8")
+        assert "AgentOS 交付材料核对" in readiness_html
+        assert "图表文字不互相遮挡" in readiness_html
+        assert "test_chart_svg_layout_contract.py" in readiness_html
+        assert "DeepSeek v4 pro" in readiness_html
         checklist_html = (out_dir / "demo-checklist.html").read_text(encoding="utf-8")
         assert "AgentOS 演示检查表" in checklist_html
         assert "通过项：8 / 8" in checklist_html

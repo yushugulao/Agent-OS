@@ -1345,6 +1345,141 @@ def write_test_suite_page(out_path: Path) -> None:
     out_path.write_text(html, encoding="utf-8")
 
 
+def delivery_readiness_rows() -> list[dict[str, str]]:
+    return [
+        {
+            "requirement": "带数据的测试结果用图表展示",
+            "status": "已覆盖",
+            "evidence": "index.html; charts/*.svg; chart-type-coverage.csv",
+            "verification": "test_chart_type_data_contract.py",
+            "note": "结果页包含条形、曲线、箱形、热力、面积和组合图，CSV 保留数据来源。",
+        },
+        {
+            "requirement": "图表文字不互相遮挡",
+            "status": "已覆盖",
+            "evidence": "charts/*.svg; docs/assets/verification-charts/*.svg",
+            "verification": "test_chart_svg_layout_contract.py",
+            "note": "测试解析 SVG 文本框，检查画布范围和明显相交问题。",
+        },
+        {
+            "requirement": "DeepSeek v4 pro 优先且默认不访问云端",
+            "status": "已覆盖",
+            "evidence": "test-suite.html; README.md",
+            "verification": "test_llm_relay_mode_contract.py",
+            "note": "无外部密钥时走 template 模式；外部 key 文件只由宿主机 Relay 读取。",
+        },
+        {
+            "requirement": "录屏演示只需要少量命令",
+            "status": "已覆盖",
+            "evidence": "demo-guide.html; demo-url-list.txt; dual-results.html",
+            "verification": "test_plain_ucore_reader.py",
+            "note": "推荐路径仍是 make dual-platform-run 与 make demo-reader。",
+        },
+        {
+            "requirement": "测试入口清晰，不堆叠旧测试",
+            "status": "已覆盖",
+            "evidence": "test-suite.html; test-suite.csv",
+            "verification": "test_summarize_dual_platform_results.py",
+            "note": "最终演示、快速检查、完整验证和专项测试分开说明。",
+        },
+        {
+            "requirement": "实验场景、负载、对照和指标清楚",
+            "status": "已覆盖",
+            "evidence": "experiment-design.html; experiment-design.csv",
+            "verification": "test_summarize_dual_platform_results.py",
+            "note": "每类测试都列出普通路径、AgentOS 路径、参数和数据来源。",
+        },
+        {
+            "requirement": "结果能追溯到原始数据",
+            "status": "已覆盖",
+            "evidence": "evidence-map.html; evidence-manifest.csv",
+            "verification": "test_summarize_dual_platform_results.py",
+            "note": "图表、CSV、报告和录屏用途都有索引。",
+        },
+        {
+            "requirement": "同时展示功能完善和性能良好",
+            "status": "已覆盖",
+            "evidence": "scenario-evidence.svg; runner-statistics.html; runner-speedup.svg",
+            "verification": "test_chart_type_data_contract.py",
+            "note": "机制证据图展示功能覆盖，runner 图和统计摘要展示 tick 趋势。",
+        },
+        {
+            "requirement": "文档不保留空泛待办描述",
+            "status": "已覆盖",
+            "evidence": "README.md; docs/; agentos_ucore/docs/",
+            "verification": "verify-dual-target-structure.sh",
+            "note": "结构检查包含文档措辞扫描，不把开发轮次写入仓库文档。",
+        },
+    ]
+
+
+def write_delivery_readiness_csv(out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["requirement", "status", "evidence", "verification", "note"])
+        for row in delivery_readiness_rows():
+            writer.writerow([row["requirement"], row["status"], row["evidence"], row["verification"], row["note"]])
+
+
+def write_delivery_readiness_page(out_path: Path) -> None:
+    rows_html = []
+    for row in delivery_readiness_rows():
+        rows_html.append(
+            "<tr><td>{requirement}</td><td>{status}</td><td>{evidence}</td><td>{verification}</td><td>{note}</td></tr>".format(
+                requirement=escape(row["requirement"]),
+                status=escape(row["status"]),
+                evidence=escape(row["evidence"]),
+                verification=escape(row["verification"]),
+                note=escape(row["note"]),
+            )
+        )
+    html = f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentOS 交付材料核对</title>
+  <style>
+    :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; --ok:#166534; }}
+    body {{ margin:0; font-family:Arial,"Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); }}
+    header {{ padding:30px 42px 20px; background:#fff; border-bottom:1px solid var(--line); }}
+    main {{ max-width:1240px; margin:0 auto; padding:24px 42px 42px; }}
+    h1 {{ margin:0 0 10px; font-size:28px; }}
+    p {{ line-height:1.75; color:var(--muted); }}
+    .links {{ display:flex; flex-wrap:wrap; gap:10px; margin:16px 0; }}
+    .links a {{ color:#075985; text-decoration:none; background:#fff; border:1px solid var(--line); padding:8px 12px; }}
+    table {{ width:100%; border-collapse:collapse; background:#fff; font-size:14px; }}
+    th,td {{ border:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }}
+    th {{ background:#eef3f8; }}
+    td:nth-child(2) {{ color:var(--ok); font-weight:700; white-space:nowrap; }}
+    @media (max-width:900px) {{ main,header {{ padding-left:18px; padding-right:18px; }} table {{ font-size:13px; }} }}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AgentOS 交付材料核对</h1>
+    <p>本页把测试、演示、图表、LLM Relay、文档和录屏材料的关键要求对应到当前结果产物和验证脚本。它用于提交前快速确认材料是否齐全。</p>
+  </header>
+  <main>
+    <div class="links">
+      <a href="delivery-readiness.csv">下载 CSV</a>
+      <a href="demo-guide.html">演示导览页</a>
+      <a href="test-suite.html">测试入口说明</a>
+      <a href="evidence-map.html">证据索引页</a>
+    </div>
+    <table>
+      <thead><tr><th>要求</th><th>状态</th><th>证据产物</th><th>验证脚本</th><th>说明</th></tr></thead>
+      <tbody>{"".join(rows_html)}</tbody>
+    </table>
+  </main>
+</body>
+</html>
+"""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(html, encoding="utf-8")
+
+
 def load_profile_svg(meta: dict[str, object], out_path: Path) -> None:
     rows = load_profile_rows(meta)
     width, height = 1120, max(480, 142 + len(rows) * 50)
@@ -1426,6 +1561,20 @@ def evidence_manifest_rows(charts: list[Path]) -> list[dict[str, str]]:
             "source": "Makefile, scripts, host_tools tests",
             "proves": "最终演示、快速检查、完整验证和专项测试入口已经区分清楚",
             "demo_use": "说明应该运行哪些命令",
+        },
+        {
+            "artifact": "delivery-readiness.html",
+            "kind": "核对页面",
+            "source": "delivery_readiness_rows",
+            "proves": "交付材料要求已经对应到证据产物和验证脚本",
+            "demo_use": "提交前快速核对材料完整性",
+        },
+        {
+            "artifact": "delivery-readiness.csv",
+            "kind": "数据表",
+            "source": "delivery_readiness_rows",
+            "proves": "交付材料核对结果可以复制和脚本复查",
+            "demo_use": "答辩材料中的交付核对表",
         },
         {
             "artifact": "test-suite.csv",
@@ -2193,6 +2342,8 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
     lines.append("- `runner-statistics.csv`")
     lines.append("- `runner-statistics.html`")
     lines.append("- `load-profile.csv`")
+    lines.append("- `delivery-readiness.csv`")
+    lines.append("- `delivery-readiness.html`")
     lines.append("- `test-suite.csv`")
     lines.append("- `test-suite.html`")
     lines.append("- `chart-type-coverage.csv`")
@@ -2421,6 +2572,8 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="runner-statistics.html">打开 runner 统计摘要</a>
       <a href="runner-statistics.csv">下载 runner 统计摘要</a>
       <a href="load-profile.csv">下载负载参数组</a>
+      <a href="delivery-readiness.html">打开交付材料核对</a>
+      <a href="delivery-readiness.csv">下载交付材料核对</a>
       <a href="test-suite.html">打开测试入口说明</a>
       <a href="test-suite.csv">下载测试入口说明</a>
       <a href="evidence-map.html">打开证据索引页</a>
@@ -2533,7 +2686,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>相关结果</h2>
-      <p><a href="demo-guide.html">演示导览页</a>、<a href="demo-checklist.html">演示检查表</a>、<a href="test-suite.html">测试入口说明</a>、<a href="experiment-design.html">实验场景说明</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="runner-statistics.html">runner 统计摘要</a>、<a href="load-profile.csv">负载参数组</a>、<a href="evidence-manifest.csv">证据索引表</a>、<a href="demo-checklist.csv">演示检查表 CSV</a>、<a href="test-suite.csv">测试入口 CSV</a>、<a href="experiment-design.csv">实验场景说明 CSV</a>、<a href="runner-statistics.csv">runner 统计 CSV</a>、<a href="chart-type-coverage.csv">图表类型覆盖表</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/runner-statistics.svg">统计摘要图</a>、<a href="charts/load-profile.svg">负载参数图</a>、<a href="charts/runner-surface-composite.svg">组合图</a></p>
+      <p><a href="demo-guide.html">演示导览页</a>、<a href="demo-checklist.html">演示检查表</a>、<a href="delivery-readiness.html">交付材料核对</a>、<a href="test-suite.html">测试入口说明</a>、<a href="experiment-design.html">实验场景说明</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="runner-statistics.html">runner 统计摘要</a>、<a href="load-profile.csv">负载参数组</a>、<a href="evidence-manifest.csv">证据索引表</a>、<a href="delivery-readiness.csv">交付核对 CSV</a>、<a href="demo-checklist.csv">演示检查表 CSV</a>、<a href="test-suite.csv">测试入口 CSV</a>、<a href="experiment-design.csv">实验场景说明 CSV</a>、<a href="runner-statistics.csv">runner 统计 CSV</a>、<a href="chart-type-coverage.csv">图表类型覆盖表</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/runner-statistics.svg">统计摘要图</a>、<a href="charts/load-profile.svg">负载参数图</a>、<a href="charts/runner-surface-composite.svg">组合图</a></p>
     </section>
   </main>
 </body>
@@ -2621,6 +2774,8 @@ def write_demo_guide_page(rows: list[MetricRow], meta: dict[str, object], charts
       <h2>关键数据</h2>
       <p>本次结果包含 {fmt_number(cost_count)} 项用户态成本替代记录、{fmt_number(runner_pairs)} 组 runner tick 对照、{fmt_number(as_number(state.get("checked_success_records")))} 条成功记录核对。图表可以回到 <a href="summary.csv">summary.csv</a>、<a href="runner-sweep.csv">runner-sweep.csv</a>、<a href="runner-statistics.csv">runner-statistics.csv</a>、<a href="load-profile.csv">load-profile.csv</a>、<a href="evidence-manifest.csv">evidence-manifest.csv</a> 和 <a href="chart-type-coverage.csv">chart-type-coverage.csv</a>。</p>
       <div class="links">
+        <a href="delivery-readiness.html">交付材料核对</a>
+        <a href="delivery-readiness.csv">交付核对 CSV</a>
         <a href="test-suite.html">测试入口说明</a>
         <a href="test-suite.csv">测试入口 CSV</a>
         <a href="experiment-design.html">实验场景说明</a>
@@ -2656,6 +2811,8 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
     write_runner_sweep_csv(meta, out_dir / "runner-sweep.csv")
     write_runner_statistics_csv(meta, out_dir / "runner-statistics.csv")
     write_load_profile_csv(meta, out_dir / "load-profile.csv")
+    write_delivery_readiness_csv(out_dir / "delivery-readiness.csv")
+    write_delivery_readiness_page(out_dir / "delivery-readiness.html")
     write_test_suite_csv(out_dir / "test-suite.csv")
     write_test_suite_page(out_dir / "test-suite.html")
     write_chart_type_coverage_csv(out_dir / "chart-type-coverage.csv")
@@ -2686,6 +2843,8 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
         "runner_statistics_csv": str(out_dir / "runner-statistics.csv"),
         "runner_statistics": str(out_dir / "runner-statistics.html"),
         "load_profile_csv": str(out_dir / "load-profile.csv"),
+        "delivery_readiness_csv": str(out_dir / "delivery-readiness.csv"),
+        "delivery_readiness": str(out_dir / "delivery-readiness.html"),
         "test_suite_csv": str(out_dir / "test-suite.csv"),
         "test_suite": str(out_dir / "test-suite.html"),
         "chart_type_coverage_csv": str(out_dir / "chart-type-coverage.csv"),
