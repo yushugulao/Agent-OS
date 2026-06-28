@@ -919,6 +919,169 @@ def load_profile_svg(meta: dict[str, object], out_path: Path) -> None:
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def chart_evidence_description(chart_name: str) -> tuple[str, str]:
+    descriptions = {
+        "dual-target-state-reader.svg": ("summary.csv, reader-compare-summary.json", "两个目标的状态文件、页面和 API JSON 数量"),
+        "launch-model.svg": ("state-compare-summary.json", "科研流程中普通 fork/exec 与 Agent 创建路径的组成"),
+        "agentos-evidence.svg": ("state-compare-summary.json", "AgentOS 目标额外输出的内核机制事实"),
+        "stage-timings.svg": ("stage-timings.csv", "双目标运行各阶段耗时"),
+        "runtime-observation.svg": ("summary.csv, stage-timings.csv", "运行健康、状态产物、内核事实和 QEMU 诊断"),
+        "scenario-evidence.svg": ("state-compare-summary.json:scenario_evidence", "AgentOS 机制场景的证据命中情况"),
+        "cost-replacement.svg": ("state-compare-summary.json:cost_replacements", "普通用户态成本项与 AgentOS 替代机制的配对"),
+        "runner-ticks.svg": ("state-compare-summary.json:runner_tick_comparison", "同一 runner 场景下两条路径的 tick 对照"),
+        "runner-speedup.svg": ("runner-sweep.csv", "runner 场景的相对倍数和节省 tick"),
+        "load-profile.svg": ("load-profile.csv", "同一批运行中的负载参数组"),
+        "runner-cumulative-line.svg": ("runner-sweep.csv", "runner tick 的累计变化"),
+        "runner-tick-box.svg": ("runner-sweep.csv", "plain 与 AgentOS runner tick 分布"),
+        "runner-cost-heatmap.svg": ("runner-sweep.csv", "runner 场景与指标强弱"),
+        "stage-monitor-area.svg": ("stage-timings.csv", "阶段耗时的面积图展示"),
+        "runner-surface-composite.svg": ("runner-sweep.csv", "runner 场景、路径类型和 tick 的组合视图"),
+    }
+    return descriptions.get(chart_name, ("summary.csv", "双目标运行派生图表"))
+
+
+def evidence_manifest_rows(charts: list[Path]) -> list[dict[str, str]]:
+    rows = [
+        {
+            "artifact": "demo-guide.html",
+            "kind": "演示页面",
+            "source": "summary.json, charts/*.svg",
+            "proves": "两条命令和建议展示顺序已经整理为一个可打开页面",
+            "demo_use": "录屏时从这里开始",
+        },
+        {
+            "artifact": "monitor.html",
+            "kind": "观测页面",
+            "source": "summary.csv, stage-timings.csv, rp_host_run_result",
+            "proves": "本次运行是否健康、AgentOS 是否有额外内核事实",
+            "demo_use": "先确认运行可信度",
+        },
+        {
+            "artifact": "index.html",
+            "kind": "图表页面",
+            "source": "summary.csv, runner-sweep.csv, load-profile.csv",
+            "proves": "测试数据已生成图表并可集中查看",
+            "demo_use": "展示图表总览",
+        },
+        {
+            "artifact": "report.md",
+            "kind": "文字报告",
+            "source": "summary.csv, state-compare-summary.json, reader-compare-summary.json",
+            "proves": "关键结论、明细表和机制说明可文字复查",
+            "demo_use": "答辩材料和审阅材料",
+        },
+        {
+            "artifact": "summary.csv",
+            "kind": "数据表",
+            "source": "QEMU 状态文件、Reader 摘要、状态对照摘要",
+            "proves": "双目标状态、页面、API、QEMU 诊断等基础指标",
+            "demo_use": "复查图表基础数字",
+        },
+        {
+            "artifact": "runner-sweep.csv",
+            "kind": "数据表",
+            "source": "state-compare-summary.json:runner_tick_comparison",
+            "proves": "runner 场景、tick、节省 tick 和相对倍数",
+            "demo_use": "复查性能趋势图",
+        },
+        {
+            "artifact": "load-profile.csv",
+            "kind": "数据表",
+            "source": "state-compare-summary.json, reader-compare-summary.json, seeded-action-state.json",
+            "proves": "同一次运行覆盖的请求、状态文件、API、Agent 启动和机制场景规模",
+            "demo_use": "解释测试负载大小",
+        },
+        {
+            "artifact": "chart-type-coverage.csv",
+            "kind": "数据表",
+            "source": "summarize_dual_platform_results.py",
+            "proves": "参考图表类型均有当前项目产物对应",
+            "demo_use": "说明图表类型覆盖",
+        },
+        {
+            "artifact": "summary.json",
+            "kind": "机器摘要",
+            "source": "summarize_dual_platform_results.py",
+            "proves": "生成器返回的核心产物路径和状态",
+            "demo_use": "脚本复查入口",
+        },
+    ]
+    for chart in charts:
+        source, proves = chart_evidence_description(chart.name)
+        rows.append(
+            {
+                "artifact": f"charts/{chart.name}",
+                "kind": "SVG 图表",
+                "source": source,
+                "proves": proves,
+                "demo_use": "图表页和导览页展示",
+            }
+        )
+    return rows
+
+
+def write_evidence_manifest_csv(charts: list[Path], out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["artifact", "kind", "source", "proves", "demo_use"])
+        for row in evidence_manifest_rows(charts):
+            writer.writerow([row["artifact"], row["kind"], row["source"], row["proves"], row["demo_use"]])
+
+
+def write_evidence_map_page(charts: list[Path], out_path: Path) -> None:
+    rows_html = []
+    for row in evidence_manifest_rows(charts):
+        artifact = row["artifact"]
+        link = artifact if artifact.endswith((".html", ".md", ".csv", ".json", ".svg")) else ""
+        artifact_html = f'<a href="{escape(link)}">{escape(artifact)}</a>' if link else escape(artifact)
+        rows_html.append(
+            "<tr><td>{artifact}</td><td>{kind}</td><td>{source}</td><td>{proves}</td><td>{demo_use}</td></tr>".format(
+                artifact=artifact_html,
+                kind=escape(row["kind"]),
+                source=escape(row["source"]),
+                proves=escape(row["proves"]),
+                demo_use=escape(row["demo_use"]),
+            )
+        )
+    html = f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentOS 证据索引</title>
+  <style>
+    :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; }}
+    body {{ margin:0; font-family:Arial,"Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); }}
+    header {{ padding:30px 42px 20px; background:#fff; border-bottom:1px solid var(--line); }}
+    main {{ max-width:1180px; margin:0 auto; padding:24px 42px 42px; }}
+    h1 {{ margin:0 0 10px; font-size:28px; }}
+    p {{ line-height:1.75; color:var(--muted); }}
+    table {{ width:100%; border-collapse:collapse; background:#fff; }}
+    th,td {{ border:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }}
+    th {{ background:#eef3f8; }}
+    a {{ color:#075985; text-decoration:none; }}
+    @media (max-width:860px) {{ main,header {{ padding-left:18px; padding-right:18px; }} table {{ font-size:13px; }} }}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AgentOS 证据索引</h1>
+    <p>本页列出本次双目标结果目录中的主要产物、数据来源、证明内容和录屏用途。每个可打开的文件都保留为相对链接。</p>
+  </header>
+  <main>
+    <table>
+      <thead><tr><th>产物</th><th>类型</th><th>数据来源</th><th>证明内容</th><th>录屏用途</th></tr></thead>
+      <tbody>{"".join(rows_html)}</tbody>
+    </table>
+  </main>
+</body>
+</html>
+"""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(html, encoding="utf-8")
+
+
 def write_chart_type_coverage_csv(out_path: Path) -> None:
     rows = [
         ("条形/柱状对比", "dual-target-state-reader.svg;launch-model.svg;runner-ticks.svg;load-profile.svg", "状态文件、页面、API、启动方式、runner tick、负载参数组；Python 标准库 SVG 生成"),
@@ -1346,6 +1509,8 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
     lines.append("- `runner-sweep.csv`")
     lines.append("- `load-profile.csv`")
     lines.append("- `chart-type-coverage.csv`")
+    lines.append("- `evidence-manifest.csv`")
+    lines.append("- `evidence-map.html`")
     lines.extend(
         [
             "",
@@ -1562,6 +1727,8 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="summary.csv">下载 CSV 明细</a>
       <a href="runner-sweep.csv">下载 runner 成组数据</a>
       <a href="load-profile.csv">下载负载参数组</a>
+      <a href="evidence-map.html">打开证据索引页</a>
+      <a href="evidence-manifest.csv">下载证据索引表</a>
       <a href="chart-type-coverage.csv">下载图表类型覆盖表</a>
       <a href="charts/runtime-observation.svg">打开观测图</a>
       <a href="charts/scenario-evidence.svg">打开场景证据图</a>
@@ -1665,7 +1832,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>相关结果</h2>
-      <p><a href="demo-guide.html">演示导览页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="load-profile.csv">负载参数组</a>、<a href="chart-type-coverage.csv">图表类型覆盖表</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/load-profile.svg">负载参数图</a>、<a href="charts/runner-surface-composite.svg">组合图</a></p>
+      <p><a href="demo-guide.html">演示导览页</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="load-profile.csv">负载参数组</a>、<a href="evidence-manifest.csv">证据索引表</a>、<a href="chart-type-coverage.csv">图表类型覆盖表</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/load-profile.svg">负载参数图</a>、<a href="charts/runner-surface-composite.svg">组合图</a></p>
     </section>
   </main>
 </body>
@@ -1751,7 +1918,7 @@ def write_demo_guide_page(rows: list[MetricRow], meta: dict[str, object], charts
     </section>
     <section class="panel">
       <h2>关键数据</h2>
-      <p>本次结果包含 {fmt_number(cost_count)} 项用户态成本替代记录、{fmt_number(runner_pairs)} 组 runner tick 对照、{fmt_number(as_number(state.get("checked_success_records")))} 条成功记录核对。图表可以回到 <a href="summary.csv">summary.csv</a>、<a href="runner-sweep.csv">runner-sweep.csv</a>、<a href="load-profile.csv">load-profile.csv</a> 和 <a href="chart-type-coverage.csv">chart-type-coverage.csv</a>。</p>
+      <p>本次结果包含 {fmt_number(cost_count)} 项用户态成本替代记录、{fmt_number(runner_pairs)} 组 runner tick 对照、{fmt_number(as_number(state.get("checked_success_records")))} 条成功记录核对。图表可以回到 <a href="summary.csv">summary.csv</a>、<a href="runner-sweep.csv">runner-sweep.csv</a>、<a href="load-profile.csv">load-profile.csv</a>、<a href="evidence-manifest.csv">evidence-manifest.csv</a> 和 <a href="chart-type-coverage.csv">chart-type-coverage.csv</a>。</p>
       <div class="links">
         <a href="report.md">Markdown 报告</a>
         <a href="summary.json">JSON 摘要</a>
@@ -1781,6 +1948,8 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
     write_load_profile_csv(meta, out_dir / "load-profile.csv")
     write_chart_type_coverage_csv(out_dir / "chart-type-coverage.csv")
     charts = write_charts(rows, meta, out_dir / "charts")
+    write_evidence_manifest_csv(charts, out_dir / "evidence-manifest.csv")
+    write_evidence_map_page(charts, out_dir / "evidence-map.html")
     write_report(rows, meta, charts, out_dir / "report.md")
     write_index(rows, meta, charts, out_dir / "index.html")
     write_monitor_page(rows, meta, charts, out_dir / "monitor.html")
@@ -1799,6 +1968,8 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
         "runner_sweep_csv": str(out_dir / "runner-sweep.csv"),
         "load_profile_csv": str(out_dir / "load-profile.csv"),
         "chart_type_coverage_csv": str(out_dir / "chart-type-coverage.csv"),
+        "evidence_manifest_csv": str(out_dir / "evidence-manifest.csv"),
+        "evidence_map": str(out_dir / "evidence-map.html"),
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return summary

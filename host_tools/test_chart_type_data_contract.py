@@ -125,6 +125,10 @@ def main() -> int:
         assert len(profile_rows) >= 6, profile_rows
         assert any(row["load_dimension"] == "预置请求" and row["plain_value"] == row["agentos_value"] for row in profile_rows), profile_rows
         assert any(row["load_dimension"] == "Agent 启动" and row["agentos_value"] != "0" for row in profile_rows), profile_rows
+        evidence_rows = read_csv(out_dir / "evidence-manifest.csv")
+        assert len(evidence_rows) >= len(coverage_rows), evidence_rows
+        assert any(row["artifact"] == "runner-sweep.csv" and "runner" in row["proves"] for row in evidence_rows), evidence_rows
+        assert any(row["artifact"] == "charts/load-profile.svg" for row in evidence_rows), evidence_rows
 
         chart_expectations = {
             "runner-cumulative-line.svg": ("<polyline", "Runner 累计 Tick 曲线", "上下文"),
