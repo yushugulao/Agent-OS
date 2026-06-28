@@ -130,6 +130,7 @@ def main() -> int:
         assert summary["run_result_match"] == 1, summary
         assert summary["agentos_evidence_checks"] == 32, summary
         assert summary["agentos_mainflow_stages"] == len(compare.AGENTOS_MAINFLOW_STAGES), summary
+        assert summary["agentos_mainflow_facts"] == len(compare.AGENTOS_MAINFLOW_FACTS), summary
         assert summary["plain_timing_records"] == 70, summary
         assert summary["plain_agent_launches"] == 0, summary
         assert summary["plain_fork_launches"] == 70, summary

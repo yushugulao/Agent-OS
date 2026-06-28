@@ -59,6 +59,7 @@ AGENTOS_EVIDENCE_REQUIREMENTS = {
         "holder_write=checked",
     ),
 }
+AGENTOS_MAINFLOW_FACTS = AGENTOS_EVIDENCE_REQUIREMENTS["rp_agentos_mainflow"]
 AGENTOS_MAINFLOW_STAGES = (
     "entry",
     "entry_dependency",
@@ -273,6 +274,14 @@ def verify_agentos_mainflow_stages(agentos_dir: Path) -> int:
     return len(AGENTOS_MAINFLOW_STAGES)
 
 
+def verify_agentos_mainflow_facts(agentos_dir: Path) -> int:
+    text = require_file_text(agentos_dir, "rp_agentos_mainflow")
+    missing = [token for token in AGENTOS_MAINFLOW_FACTS if token not in text]
+    if missing:
+        raise ValueError("AgentOS mainflow is missing kernel fact records: " + ",".join(missing))
+    return len(AGENTOS_MAINFLOW_FACTS)
+
+
 def verify_orch_timing(
     state_dir: Path,
     label: str,
@@ -356,6 +365,7 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
     embedded_action_records = verify_run_result(plain_dir, agentos_dir)
     agentos_evidence_checks = verify_agentos_evidence(agentos_dir)
     agentos_mainflow_stages = verify_agentos_mainflow_stages(agentos_dir)
+    agentos_mainflow_facts = verify_agentos_mainflow_facts(agentos_dir)
     plain_timing_records, plain_agent_launches, plain_fork_launches = verify_orch_timing(
         plain_dir, "plain"
     )
@@ -381,6 +391,7 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
         "run_result_match": 1,
         "agentos_evidence_checks": agentos_evidence_checks,
         "agentos_mainflow_stages": agentos_mainflow_stages,
+        "agentos_mainflow_facts": agentos_mainflow_facts,
         "plain_timing_records": plain_timing_records,
         "plain_agent_launches": plain_agent_launches,
         "plain_fork_launches": plain_fork_launches,
@@ -403,7 +414,7 @@ def main() -> int:
     if args.json_out is not None:
         args.json_out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(
-        "dual_platform_state_compare: plain_files={plain_files} agentos_files={agentos_files} common_files={common_files} agentos_extra_files={agentos_extra_files} checked_success_records={checked_success_records} preserved_plain_costs={preserved_plain_costs} embedded_action_records={embedded_action_records} run_result_match={run_result_match} agentos_evidence_checks={agentos_evidence_checks} agentos_mainflow_stages={agentos_mainflow_stages} plain_timing_records={plain_timing_records} plain_agent_launches={plain_agent_launches} plain_fork_launches={plain_fork_launches} agentos_timing_records={agentos_timing_records} agentos_agent_launches={agentos_agent_launches} agentos_fork_launches={agentos_fork_launches} status={status}".format(
+        "dual_platform_state_compare: plain_files={plain_files} agentos_files={agentos_files} common_files={common_files} agentos_extra_files={agentos_extra_files} checked_success_records={checked_success_records} preserved_plain_costs={preserved_plain_costs} embedded_action_records={embedded_action_records} run_result_match={run_result_match} agentos_evidence_checks={agentos_evidence_checks} agentos_mainflow_stages={agentos_mainflow_stages} agentos_mainflow_facts={agentos_mainflow_facts} plain_timing_records={plain_timing_records} plain_agent_launches={plain_agent_launches} plain_fork_launches={plain_fork_launches} agentos_timing_records={agentos_timing_records} agentos_agent_launches={agentos_agent_launches} agentos_fork_launches={agentos_fork_launches} status={status}".format(
             **summary
         )
     )

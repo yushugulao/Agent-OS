@@ -37,7 +37,7 @@
 | 科研平台源码保持可比 | 源码同步检查 | `73 root rp sources mirrored`，`identical=30 adapted=43` | 未适配程序保持一致；适配程序集中在 AgentOS 能力接入、状态输出和证据记录。 |
 | 两个目标运行同一批 seeded 请求 | `host_tools/check_seeded_action_state.py` | `action_count=44`，`plain=ready`，`agentos=ready` | 44 个请求覆盖研究输入、artifact、Host workflow、LLM Relay、workbench、项目生命周期、研究协议、项目评审和 AgentCompare。 |
 | plain 已成功记录在 AgentOS 中保留 | `host_tools/compare_dual_platform_state.py` | `checked_success_records=1244`，`run_result_match=1` | plain target 的成功状态行在 AgentOS target 中保持同一记录标识和成功状态。 |
-| AgentOS 增加内核事实而不是替换普通平台 | 同一状态对照脚本 | `agentos_extra_files=13`，`agentos_evidence_checks=32`，`agentos_mainflow_stages=11` | AgentOS 额外输出可信 Context、metadata 查询、事件、权限、ledger/provenance、文件编辑租约、真实任务等证据。 |
+| AgentOS 增加内核事实而不是替换普通平台 | 同一状态对照脚本 | `agentos_extra_files=13`，`agentos_evidence_checks=32`，`agentos_mainflow_stages=11`，`agentos_mainflow_facts=12` | AgentOS 额外输出可信 Context、metadata 查询、事件、权限、ledger/provenance、文件编辑租约、真实任务等证据。 |
 | plain target 展示纯用户态成本 | `rp_orch_timing` 和状态对照脚本 | `plain_timing_records=70`，`plain_agent_launches=0`，`plain_fork_launches=70` | plain target 所有平台程序都通过普通 `fork/exec/waitpid` 启动。 |
 | AgentOS target 主流程实际使用 Agent | `rp_orch_timing` 和状态对照脚本 | `agentos_timing_records=70`，`agentos_agent_launches=9`，`agentos_fork_launches=61` | AgentOS 将 9 个关键程序绑定到 Agent 创建路径，其余普通支持程序仍用普通进程启动。 |
 | Host Reader 能展示两个目标 | `host_tools/plain_ucore_reader.py`、`host_tools/check_reader_output.py`、`host_tools/compare_dual_platform_reader.py` | `plain_pages=40`，`agentos_pages=40` | 两个目标都能渲染同一套页面；AgentOS 额外提供 13 个状态文件和 13 个 API JSON。 |
@@ -55,7 +55,7 @@
 
 ```text
 seeded_action_state: action=/actions/research/rerun action_count=44 host_routes=95 seeded_routes=21 seeded_kinds=21 plain=ready agentos=ready status=ready
-dual_platform_state_compare: plain_files=258 agentos_files=271 common_files=258 agentos_extra_files=13 checked_success_records=1244 preserved_plain_costs=7 embedded_action_records=44 run_result_match=1 agentos_evidence_checks=32 agentos_mainflow_stages=11 plain_timing_records=70 plain_agent_launches=0 plain_fork_launches=70 agentos_timing_records=70 agentos_agent_launches=9 agentos_fork_launches=61 status=ready
+dual_platform_state_compare: plain_files=258 agentos_files=271 common_files=258 agentos_extra_files=13 checked_success_records=1244 preserved_plain_costs=7 embedded_action_records=44 run_result_match=1 agentos_evidence_checks=32 agentos_mainflow_stages=11 agentos_mainflow_facts=12 plain_timing_records=70 plain_agent_launches=0 plain_fork_launches=70 agentos_timing_records=70 agentos_agent_launches=9 agentos_fork_launches=61 status=ready
 dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=260 agentos_state_files=273 agentos_extra_state_files=13 plain_api_json=267 agentos_api_json=280 agentos_extra_api_json=13 checked_pages=40 checked_api_json=267 status=ready
 ```
 

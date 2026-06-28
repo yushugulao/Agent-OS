@@ -186,7 +186,7 @@ AgentOS-uCore 目标保留同一科研流程，但把关键阶段接入内核服
 - timeline、ledger、provenance snapshot。
 - 权限拒绝、失败恢复、文件编辑租约、工作台文件校验、证据包追踪和真实任务 Context。
 
-增强目标入口为 `rp_agentos_orch`。它创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，再运行完整科研平台流程。主流程会向 `rp_agentos_mainflow` 追加十二项事实：
+增强目标入口为 `rp_agentos_orch`。它创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，再运行完整科研平台流程。主流程会向 `rp_agentos_mainflow` 追加 11 个内核参与阶段，并覆盖 12 类内核事实：
 
 ```text
 trusted Context
@@ -268,7 +268,7 @@ host_platform_alignment: host_modules=154 tracked_host_modules=154 plain_sources
 host_test_alignment: host_tests=142 themes_ok=7 themes_total=7 unclassified_tests=0 runtime_state_checked=1 status=ready
 host_action_kind_alignment: action_routes=95 action_kinds=95 generic_routes=0 plain_missing=0 agentos_missing=0 plain_handler_missing=0 agentos_handler_missing=0 status=ready
 host_surface_alignment: api_routes=214 action_routes=95 download_refs=76 runtime_state_checked=1 status=ready
-dual_platform_state_compare: plain_files=258 agentos_files=271 common_files=258 agentos_extra_files=13 checked_success_records=1244 preserved_plain_costs=7 embedded_action_records=44 run_result_match=1 agentos_evidence_checks=32 agentos_mainflow_stages=11 plain_timing_records=70 plain_agent_launches=0 plain_fork_launches=70 agentos_timing_records=70 agentos_agent_launches=9 agentos_fork_launches=61 status=ready
+dual_platform_state_compare: plain_files=258 agentos_files=271 common_files=258 agentos_extra_files=13 checked_success_records=1244 preserved_plain_costs=7 embedded_action_records=44 run_result_match=1 agentos_evidence_checks=32 agentos_mainflow_stages=11 agentos_mainflow_facts=12 plain_timing_records=70 plain_agent_launches=0 plain_fork_launches=70 agentos_timing_records=70 agentos_agent_launches=9 agentos_fork_launches=61 status=ready
 plain_ucore_reader: pages=40 api_json=267 state_files=260 status=ready
 plain_ucore_reader: pages=40 api_json=280 state_files=273 status=ready
 reader_output_check: pages=40 api_json=267 state_files=260 required_pages=6 spec_pages=40 agentos_compare_markers=0 status=ready
