@@ -2280,6 +2280,15 @@ def main() -> int:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         base = f"http://127.0.0.1:{server.server_address[1]}"
+        (out_dir / "dual-results" / "charts").mkdir(parents=True, exist_ok=True)
+        (out_dir / "dual-results" / "monitor.html").write_text(
+            "<!doctype html><html><body>AgentOS 运行观测面板</body></html>",
+            encoding="utf-8",
+        )
+        (out_dir / "dual-results" / "charts" / "runtime-observation.svg").write_text(
+            '<svg xmlns="http://www.w3.org/2000/svg"><text>运行观测图</text></svg>',
+            encoding="utf-8",
+        )
         try:
             with request.urlopen(base + "/api/contract", timeout=5) as response:
                 contract = json.loads(response.read().decode("utf-8"))
@@ -2402,6 +2411,15 @@ def main() -> int:
                 index_html = response.read().decode("utf-8")
             assert "Rendered from plain uCore state files" in index_html
             assert "Dual Target Overview" in index_html
+
+            with request.urlopen(base + "/dual-results/monitor.html", timeout=5) as response:
+                monitor_html = response.read().decode("utf-8")
+            assert "AgentOS 运行观测面板" in monitor_html
+            with request.urlopen(base + "/dual-results/charts/runtime-observation.svg", timeout=5) as response:
+                svg_type = response.headers.get("Content-Type", "")
+                svg_text = response.read().decode("utf-8")
+            assert "image/svg+xml" in svg_type
+            assert "运行观测图" in svg_text
         finally:
             server.shutdown()
             server.server_close()

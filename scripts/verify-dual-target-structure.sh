@@ -254,6 +254,10 @@ require_text "scripts/run-dual-platforms.sh" "cases=7 executable=7 userland_equi
 require_text "scripts/run-dual-platforms.sh" "cases=8 executable=8 agentos=mainflow_bound" "AgentOS backend marker is missing"
 require_text "scripts/serve-demo-reader.sh" "rp_agentos_mainflow" "demo reader script does not check AgentOS mainflow state"
 require_text "scripts/serve-demo-reader.sh" "serve" "demo reader script does not start the local Reader service"
+require_text "scripts/serve-demo-reader.sh" "dual-results/monitor.html" "demo reader script does not expose result monitor under the Reader service"
+require_text "scripts/serve-demo-reader.sh" "RESULT_DIR" "demo reader script does not accept a result directory"
+require_text "host_tools/plain_ucore_reader.py" "relative_to\\(out_dir.resolve\\(\\)\\)" "Host Reader does not guard nested static file paths"
+require_text "host_tools/test_plain_ucore_reader.py" "dual-results/monitor.html" "Host Reader test does not cover nested result monitor serving"
 
 plain_platform_tests="$(make_var_words "${ROOT_DIR}/user/Makefile" "PLATFORM_TESTS")"
 agentos_platform_tests="$(make_var_words "${ROOT_DIR}/agentos_ucore/user/Makefile" "PLATFORM_TESTS")"

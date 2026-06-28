@@ -258,7 +258,7 @@ make demo-reader
 
 这个入口会读取 `/tmp/agentos-dual-platform/agentos-state`，检查 `rp_agentos_mainflow` 是否存在，并启动 `http://127.0.0.1:8767/`。如果状态目录不存在，脚本会明确提示先运行 `make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-`；如果 AgentOS 主流程状态缺失，脚本会提示重新运行双目标验证。这样录屏时只需要两条命令：第一条生成运行结果，第二条打开可交互页面。
 
-`results/latest/monitor.html` 是另一个录屏友好的入口。它不展示完整科研平台页面，而是先给出运行结果、状态产物、内核证据、启动方式和 QEMU 健康状态，适合在视频开头快速说明本次测试数据是否可信。随后再打开 Reader 页面展示每个 Agent、每个 artifact、LLM Relay 和 AgentOS Compare 的细节。
+`results/latest/monitor.html` 是另一个录屏友好的入口。它不展示完整科研平台页面，而是先给出运行结果、状态产物、内核证据、启动方式和 QEMU 健康状态，适合在视频开头快速说明本次测试数据是否可信。`make demo-reader` 会把 `results/latest/` 复制到 Reader 输出目录下的 `dual-results/`，因此浏览器只需要访问同一个本地服务：`http://127.0.0.1:8767/dual-results.html` 用于进入双目标结果页，`http://127.0.0.1:8767/dual-results/monitor.html` 用于直接打开运行观测面板。随后再打开 Reader 首页展示每个 Agent、每个 artifact、LLM Relay 和 AgentOS Compare 的细节。
 
 快速结构检查不替代 QEMU 运行。它会用 `origin/main` 对照根目录 `os/` 和 `bootloader/`，并检查根目录内核没有混入 AgentOS syscall、Agent Context、内核文件 metadata、Agent 事件队列等符号，同时确认增强内核目标、科研平台入口、同名科研平台程序覆盖关系、源码同步关系、backend 成本项保留关系和测试脚本仍然存在。它还会检查 AgentOS 内核源码中没有 `RUN-042`、`lab-gene-x`、固定阶段 selector、固定失败原因等科研演示常量，保证科研平台仍是用户态负载，不是内核默认业务；旧演示工具 id 只允许出现在兼容性和权限测试里，平台主流程必须使用 `action_commit`、`artifact_update` 等通用工具。它还会检查 Makefile 和脚本入口关系：`make full-verify` 必须调用完整验证脚本，完整验证脚本必须串起结构检查、Host Reader 测试、action runner 测试、文件系统镜像提取测试、LLM relay 测试、seeded 双目标 QEMU 和 AgentOS 内核专项测试；`make dual-platform-run` 必须调用双平台脚本；plain target 必须以 `rp_orch` 启动，AgentOS target 必须以 `rp_agentos_orch` 启动。完整功能仍以 `make dual-platform-run` 和 AgentOS 专项测试为准。
 

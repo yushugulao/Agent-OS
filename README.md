@@ -83,7 +83,7 @@ make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
 make demo-reader
 ```
 
-第二条命令会启动本地页面服务，浏览器打开 `http://127.0.0.1:8767/` 即可查看 AgentOS 目标的运行详情、AgentOS Compare 页面、LLM Relay 页面、artifact、review、delivery 和 API JSON。需要先快速说明测试结果时，可以打开 `results/latest/monitor.html`，它会把运行阶段、QEMU 状态、AgentOS 额外证据和 Reader 输出放在同一个页面中。
+第二条命令会启动本地页面服务，浏览器打开 `http://127.0.0.1:8767/` 即可查看 AgentOS 目标的运行详情、AgentOS Compare 页面、LLM Relay 页面、artifact、review、delivery 和 API JSON。脚本还会把 `results/latest/` 下的双目标结果复制到同一个本地服务中，并打印 `http://127.0.0.1:8767/dual-results.html` 与 `http://127.0.0.1:8767/dual-results/monitor.html`。需要先快速说明测试结果时，直接打开运行观测面板即可。
 
 完整验证入口：
 

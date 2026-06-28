@@ -5009,17 +5009,30 @@ def make_service_handler(
                 return
 
             render_site(state_dir, out_dir)
-            rel = "index.html" if path in ("", "/") else path.lstrip("/")
-            if "/" in rel or "\\" in rel or ".." in rel:
+            rel = "index.html" if path in ("", "/") else unquote(path.lstrip("/"))
+            if "\\" in rel or any(part in ("", ".", "..") for part in Path(rel).parts):
                 self.send_json(404, {"error": "not_found"})
                 return
-            file_path = out_dir / rel
+            try:
+                file_path = (out_dir / rel).resolve()
+                file_path.relative_to(out_dir.resolve())
+            except ValueError:
+                self.send_json(404, {"error": "not_found"})
+                return
             if not file_path.exists() or not file_path.is_file():
                 self.send_json(404, {"error": "not_found"})
                 return
             content_type = "text/html; charset=utf-8" if file_path.suffix == ".html" else "application/octet-stream"
             if file_path.suffix == ".json":
                 content_type = "application/json; charset=utf-8"
+            elif file_path.suffix == ".svg":
+                content_type = "image/svg+xml; charset=utf-8"
+            elif file_path.suffix == ".csv":
+                content_type = "text/csv; charset=utf-8"
+            elif file_path.suffix == ".md":
+                content_type = "text/markdown; charset=utf-8"
+            elif file_path.suffix == ".txt":
+                content_type = "text/plain; charset=utf-8"
             self.send_text_file(file_path, content_type)
 
         def do_POST(self) -> None:
