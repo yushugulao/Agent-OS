@@ -1980,9 +1980,10 @@ int main(void)
 	ok = ok && require_file_token("rp_studyproto", "reproduction_action_plans=1");
 	ok = ok && require_file_token("rp_studyproto", "dataset_portfolios=1");
 	ok = ok && require_file_token("rp_studyproto", "source_portfolios=1");
-	ok = ok && require_file_token("rp_studyproto", "agentos_adaptation=file_metadata_index,context_protocol_evidence,event_reproduction_queue,batch_dataset_tool;status=planned");
+	ok = ok && require_file_token("rp_studyproto", "agentos_adaptation=file_metadata_index,context_protocol_evidence,event_reproduction_queue,batch_dataset_tool;evidence=rp_agentos_query,rp_agentos_mainflow,rp_agentos_timeline,rp_agentos_recovery;result=observed;status=ready");
 	ok = ok && require_file_token("rp_review_dashboard", "subsection=study_protocols;source=rp_studyproto;launches=2;reproduction=ready;status=ready");
 	ok = ok && require_file_token("rp_agentcmp", "study_protocol_checks=20");
+	ok = ok && require_file_token("rp_agentcmp", "study_protocol_kernel_binding=file_metadata_index,context_protocol_evidence,event_reproduction_queue,batch_dataset_tool;source=rp_studyproto;status=ready");
 	ok = ok && require_file_token("rp_stdesign", "statistical_design_checks=120");
 	ok = ok && require_file_token("rp_stdesign", "design=stat-design:lab-gene-x:run042-primary");
 	ok = ok && require_file_token("rp_stdesign", "agentos_context=observed");

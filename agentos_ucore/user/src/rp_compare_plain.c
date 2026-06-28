@@ -1517,9 +1517,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_studyproto", "reproduction_action_plans=1");
 	ok = ok && rp_file_contains("rp_studyproto", "dataset_portfolios=1");
 	ok = ok && rp_file_contains("rp_studyproto", "source_portfolios=1");
-	ok = ok && rp_file_contains("rp_studyproto", "agentos_adaptation=file_metadata_index,context_protocol_evidence,event_reproduction_queue,batch_dataset_tool;status=planned");
+	ok = ok && rp_file_contains("rp_studyproto", "agentos_adaptation=file_metadata_index,context_protocol_evidence,event_reproduction_queue,batch_dataset_tool;evidence=rp_agentos_query,rp_agentos_mainflow,rp_agentos_timeline,rp_agentos_recovery;result=observed;status=ready");
 	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=study_protocols;source=rp_studyproto;launches=2;reproduction=ready;status=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "study_protocol_service=checks:20");
+	ok = ok && rp_file_contains("rp_agentcmp", "study_protocol_kernel_binding=file_metadata_index,context_protocol_evidence,event_reproduction_queue,batch_dataset_tool;source=rp_studyproto;status=ready");
 	ok = ok && rp_file_contains("rp_stdesign", "statistical_design_checks=120");
 	ok = ok && rp_file_contains("rp_stdesign", "design=stat-design:lab-gene-x:run042-primary");
 	ok = ok && rp_file_contains("rp_stdesign", "agentos_context=observed");

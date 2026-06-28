@@ -108,6 +108,7 @@ rp_reviewboard.c
 rp_runbooks.c
 rp_service_surface.c
 rp_stdesign.c
+rp_studyproto.c
 rp_sysreview.c
 rp_test_suite.c
 rp_traincomp.c
