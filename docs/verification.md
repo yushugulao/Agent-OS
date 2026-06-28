@@ -186,12 +186,12 @@ host_platform_alignment: host_modules=154 tracked_host_modules=154 plain_sources
 host_test_alignment: host_tests=142 themes_ok=7 themes_total=7 unclassified_tests=0 runtime_state_checked=1 status=ready
 host_action_kind_alignment: action_routes=95 action_kinds=95 generic_routes=0 plain_missing=0 agentos_missing=0 plain_handler_missing=0 agentos_handler_missing=0 status=ready
 host_surface_alignment: api_routes=214 action_routes=95 download_refs=76 runtime_state_checked=1 status=ready
-dual_platform_state_compare: plain_files=257 agentos_files=269 common_files=257 agentos_extra_files=12 checked_success_records=1244 preserved_plain_costs=7 status=ready
-plain_ucore_reader: pages=40 api_json=265 state_files=258 status=ready
-plain_ucore_reader: pages=40 api_json=277 state_files=270 status=ready
-reader_output_check: pages=40 api_json=265 state_files=258 required_pages=6 spec_pages=40 status=ready
-reader_output_check: pages=40 api_json=277 state_files=270 required_pages=6 spec_pages=40 status=ready
-dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=258 agentos_state_files=270 plain_api_json=265 agentos_api_json=277 checked_pages=40 checked_api_json=265 status=ready
+dual_platform_state_compare: plain_files=257 agentos_files=269 common_files=257 agentos_extra_files=12 checked_success_records=1244 preserved_plain_costs=7 embedded_action_records=44 run_result_match=1 status=ready
+plain_ucore_reader: pages=40 api_json=266 state_files=259 status=ready
+plain_ucore_reader: pages=40 api_json=278 state_files=271 status=ready
+reader_output_check: pages=40 api_json=266 state_files=259 required_pages=6 spec_pages=40 status=ready
+reader_output_check: pages=40 api_json=278 state_files=271 required_pages=6 spec_pages=40 status=ready
+dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=259 agentos_state_files=271 plain_api_json=266 agentos_api_json=278 checked_pages=40 checked_api_json=266 status=ready
 ```
 
 这条命令的意义是：用同一批 seeded 请求分别运行未改动 uCore 目标和 AgentOS-uCore 目标，并检查两个目标是否实际跑完同一批科研平台程序、围绕同一 RUN-042 科研流程输出可比较结果。脚本会从两个文件系统镜像中提取 `rp_*` 状态文件，并执行状态文件对照：plain target 产出的状态文件必须全部能在 AgentOS target 中找到；plain target 已经标记为 `ready`、`passed` 或 `ok` 的记录，AgentOS target 必须保留相同记录标识和成功状态。AgentOS target 可以额外增加内核证据文件和内核观测字段。随后脚本会把两个目标的真实状态文件都交给 Host Reader 渲染，并把宿主机平台能力对齐摘要、宿主机测试主题对齐摘要、宿主机 Web/API/action 规模摘要和 seeded 请求运行结果传入 Compare 页面；同时脚本会单独输出宿主机 action kind 处理检查，确认宿主机 action 路由没有只停留在路由层。Host Reader 会检查 40 个页面是否都生成、页面标题是否匹配、基础页面结构是否完整、关键页面是否存在、每个 API JSON 是否能被解析且结构正确；最后比较渲染摘要，确认两个目标生成同一套页面，AgentOS target 的状态文件数量和 API JSON 数量不能少于 plain target。

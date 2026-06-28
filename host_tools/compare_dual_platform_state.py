@@ -35,6 +35,13 @@ def read_text(path: Path) -> str:
     return path.read_text(encoding="utf-8", errors="replace")
 
 
+def require_file_text(state_dir: Path, file_name: str) -> str:
+    path = state_dir / file_name
+    if not path.is_file():
+        raise ValueError(f"missing required state file: {path}")
+    return read_text(path)
+
+
 def parse_fields(line: str) -> dict[str, str]:
     fields: dict[str, str] = {}
     for part in line.split(";"):
@@ -46,6 +53,22 @@ def parse_fields(line: str) -> dict[str, str]:
             continue
         fields[key] = value.strip()
     return fields
+
+
+def parse_key_value_file(state_dir: Path, file_name: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw in require_file_text(state_dir, file_name).splitlines():
+        line = raw.strip()
+        if not line or "=" not in line:
+            continue
+        if ";" in line:
+            values.update(parse_fields(line))
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key:
+            values[key] = value.strip()
+    return values
 
 
 def line_anchor(fields: dict[str, str]) -> str:
@@ -134,6 +157,24 @@ def verify_backend_costs(plain_dir: Path, agentos_dir: Path) -> int:
     return len(plain_costs)
 
 
+def verify_run_result(plain_dir: Path, agentos_dir: Path) -> int:
+    plain = parse_key_value_file(plain_dir, "rp_host_run_result")
+    agentos = parse_key_value_file(agentos_dir, "rp_host_run_result")
+    for label, values in (("plain", plain), ("AgentOS", agentos)):
+        if values.get("status") != "ready":
+            raise ValueError(f"{label} host run result is not ready")
+        if values.get("passed") != "1":
+            raise ValueError(f"{label} host run did not pass")
+        if values.get("qemu_orch_passed") != "1":
+            raise ValueError(f"{label} host run result is missing qemu_orch_passed=1")
+    if plain.get("embedded_action_records") != agentos.get("embedded_action_records"):
+        raise ValueError("embedded action record count differs between plain and AgentOS")
+    try:
+        return int(plain.get("embedded_action_records", "0"))
+    except ValueError as exc:
+        raise ValueError("embedded action record count is not numeric") from exc
+
+
 def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> dict[str, object]:
     plain_summary = read_summary(plain_dir)
     agentos_summary = read_summary(agentos_dir)
@@ -170,6 +211,7 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
         raise ValueError("AgentOS state is missing plain success records: " + ", ".join(details))
 
     preserved_costs = verify_backend_costs(plain_dir, agentos_dir)
+    embedded_action_records = verify_run_result(plain_dir, agentos_dir)
     return {
         "plain_files": int(plain_summary.get("extracted_state_files", 0)),
         "agentos_files": int(agentos_summary.get("extracted_state_files", 0)),
@@ -177,6 +219,8 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
         "agentos_extra_files": len(agentos_files - plain_files),
         "checked_success_records": len(plain_good_lines),
         "preserved_plain_costs": preserved_costs,
+        "embedded_action_records": embedded_action_records,
+        "run_result_match": 1,
         "status": "ready",
     }
 
@@ -193,7 +237,7 @@ def main() -> int:
     if args.json_out is not None:
         args.json_out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(
-        "dual_platform_state_compare: plain_files={plain_files} agentos_files={agentos_files} common_files={common_files} agentos_extra_files={agentos_extra_files} checked_success_records={checked_success_records} preserved_plain_costs={preserved_plain_costs} status={status}".format(
+        "dual_platform_state_compare: plain_files={plain_files} agentos_files={agentos_files} common_files={common_files} agentos_extra_files={agentos_extra_files} checked_success_records={checked_success_records} preserved_plain_costs={preserved_plain_costs} embedded_action_records={embedded_action_records} run_result_match={run_result_match} status={status}".format(
             **summary
         )
     )

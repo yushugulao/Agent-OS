@@ -86,6 +86,17 @@ reject_log "${agentos_log}" "child_failed|IllegalInstruction|unknown syscall|bad
 rm -rf "${DUAL_LOG_DIR}/plain-state" "${DUAL_LOG_DIR}/agentos-state"
 cp -a "${plain_state_src}" "${DUAL_LOG_DIR}/plain-state"
 cp -a "${agentos_state_src}" "${DUAL_LOG_DIR}/agentos-state"
+for pair in "plain ${seeded_work_dir}/plain ${DUAL_LOG_DIR}/plain-state" "AgentOS ${seeded_work_dir}/agentos ${DUAL_LOG_DIR}/agentos-state"; do
+	set -- ${pair}
+	label="$1"
+	run_dir="$2"
+	target_dir="$3"
+	if [ ! -f "${run_dir}/state-next/rp_host_run_result" ]; then
+		echo "[dual-platform] ${label} run result is missing from action runner state" >&2
+		exit 1
+	fi
+	cp "${run_dir}/state-next/rp_host_run_result" "${target_dir}/rp_host_run_result"
+done
 
 plain_count="$("${PYTHON_BIN}" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["extracted_state_files"])' "${DUAL_LOG_DIR}/plain-state/extract-summary.json")"
 agentos_count="$("${PYTHON_BIN}" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["extracted_state_files"])' "${DUAL_LOG_DIR}/agentos-state/extract-summary.json")"
