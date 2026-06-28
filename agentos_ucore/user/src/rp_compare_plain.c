@@ -1610,9 +1610,11 @@ int main(void)
 	ok = ok && rp_file_contains("rp_integrity", "report_source_check=workflow;source=rp_report_text;target=rp_stage_state;source_key=host_workflow_run_id;status=ready");
 	ok = ok && rp_file_contains("rp_integrity", "package_trace=delivery;source=rp_package;target=rp_web_bundle;result=pass;status=ready");
 	ok = ok && rp_file_contains("rp_integrity", "integrity_report=integrity-report:RUN-042;checks=36;errors=0;warnings=0;status=ready");
+	ok = ok && rp_file_contains("rp_integrity", "agentos_adaptation=kernel_context_attestation,kernel_metadata_reference_index,kernel_event_trace,kernel_namespace_registry;evidence=rp_agentos_mainflow,rp_agentos_query,rp_agentos_timeline,rp_agentos_package;result=observed;status=ready");
 	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=integrity_plane;source=rp_integrity;checks=36;errors=0;result=passed;status=ready");
 	ok = ok && rp_file_contains("rp_opsboard", "handoff=integrity-plane->operations;artifact=rp_integrity;status=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "integrity_plane_checks=36");
+	ok = ok && rp_file_contains("rp_agentcmp", "integrity_kernel_binding=context_attestation,metadata_reference_index,event_trace,namespace_registry;source=rp_integrity;status=ready");
 	ok = ok && rp_file_contains("rp_coherence", "coherence_checks=40");
 	ok = ok && rp_file_contains("rp_coherence", "delivery_contracts=7");
 	ok = ok && rp_file_contains("rp_coherence", "run_state_contracts=7");
@@ -1631,9 +1633,11 @@ int main(void)
 	ok = ok && rp_file_contains("rp_coherence", "report_validation=backend_source;source=rp_report_text;target=rp_backend_exec;result=pass;status=ready");
 	ok = ok && rp_file_contains("rp_coherence", "agent_coordination=recovery_path;source=rp_retry_plan;target=rp_runbooks;result=pass;status=ready");
 	ok = ok && rp_file_contains("rp_coherence", "coherence_report=coherence-report:RUN-042;checks=40;errors=0;warnings=0;status=ready");
+	ok = ok && rp_file_contains("rp_coherence", "agentos_adaptation=kernel_run_state_views,kernel_tool_contract_table,kernel_delivery_metadata,kernel_agent_coordination_trace;evidence=rp_agentos_mainflow,rp_agentos_kernel,rp_agentos_package,rp_agentos_collab_ack;result=observed;status=ready");
 	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=coherence_plane;source=rp_coherence;checks=40;errors=0;result=passed;status=ready");
 	ok = ok && rp_file_contains("rp_opsboard", "handoff=coherence-plane->operations;artifact=rp_coherence;status=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "coherence_plane_checks=40");
+	ok = ok && rp_file_contains("rp_agentcmp", "coherence_kernel_binding=run_state_views,tool_contract_table,delivery_metadata,agent_coordination_trace;source=rp_coherence;status=ready");
 	ok = ok && rp_file_contains("rp_publication", "publication_checks=48");
 	ok = ok && rp_file_contains("rp_publication", "targets=2");
 	ok = ok && rp_file_contains("rp_publication", "submissions=2");
@@ -1647,8 +1651,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_publication", "response_package=peer-review-response-package:RUN-042:round-1");
 	ok = ok && rp_file_contains("rp_publication", "response_item=4;package=peer-review-response-package:RUN-042:round-2");
 	ok = ok && rp_file_contains("rp_publication", "publication_decision=publication-decision:RUN-042:accept-with-evidence");
+	ok = ok && rp_file_contains("rp_publication", "agentos_adaptation=kernel_submission_metadata,kernel_review_event_queue,kernel_response_context,kernel_release_gate;evidence=rp_agentos_package,rp_agentos_timeline,rp_agentos_mainflow,rp_agentos_roles;result=observed;status=ready");
 	ok = ok && rp_file_contains("rp_pubplan", "checklist_items=9");
 	ok = ok && rp_file_contains("rp_pubplan", "submission_material=rp_package,rp_dossier,rp_report_text,rp_artifact_manifest,rp_review_pack");
+	ok = ok && rp_file_contains("rp_pubplan", "agentos_showcase=plain_userland_vs_kernel_assisted;evidence=rp_agentos_package,rp_agentos_timeline,rp_agentos_mainflow,rp_agentos_roles;result=observed;status=ready");
 	ok = ok && rp_file_contains("rp_peerresp", "addressed=4");
 	ok = ok && rp_file_contains("rp_peerresp", "needs_revision=0");
 	ok = ok && rp_file_contains("rp_peerresp", "response_letter=peer-review-response:RUN-042");
@@ -1658,6 +1664,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_dossier", "publication_workflow=rp_publication;submission=accepted;peer_response=ready;status=ready");
 	ok = ok && rp_file_contains("rp_web_bundle", "publication_page=rp_publication;peer_response=rp_peerresp;status=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "publication_checks=48");
+	ok = ok && rp_file_contains("rp_agentcmp", "publication_kernel_binding=submission_metadata,review_event_queue,response_context,release_gate;source=rp_publication;status=ready");
 	ok = ok && rp_file_contains("rp_calculation", "calculation_checks=84");
 	ok = ok && rp_file_contains("rp_calculation", "job=calculation-job:lab-gene-x:run042-qc");
 	ok = ok && rp_file_contains("rp_calculation", "agentos_kernel_metadata=observed");

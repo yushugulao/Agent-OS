@@ -86,9 +86,11 @@ rp_campaign.c
 rp_compare_plain.c
 rp_consistency.c
 rp_controlplane.c
+rp_coherenceplane.c
 rp_decsupport.c
 rp_execobs.c
 rp_expsched.c
+rp_integrityplane.c
 rp_mature.c
 rp_metrics.c
 rp_modelreg.c
@@ -99,6 +101,7 @@ rp_portability.c
 rp_prov_query.c
 rp_prov_view.c
 rp_projectrel.c
+rp_publication.c
 rp_query.c
 rp_realtask.c
 rp_reldossier.c

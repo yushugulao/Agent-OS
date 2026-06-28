@@ -16,6 +16,10 @@ int main(void)
 	ok = ok && require_token("rp_report_text", "report_source=workflow");
 	ok = ok && require_token("rp_artifact_manifest", "artifact_review_path=raw_to_report");
 	ok = ok && require_token("rp_agentcmp", "control_plane_checks=30");
+	ok = ok && require_token("rp_agentos_mainflow", "context_trusted=kernel_shadow");
+	ok = ok && require_token("rp_agentos_query", "metadata_source=kernel_file_index");
+	ok = ok && require_token("rp_agentos_timeline", "event_delivery=kernel_agent_queue");
+	ok = ok && require_token("rp_agentos_package", "package_trace=kernel_provenance");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_integrity",
@@ -88,7 +92,7 @@ int main(void)
 			   "package_trace=evidence;source=rp_package;target=rp_evidence;result=pass;status=ready\n"
 			   "package_trace=review;source=rp_package;target=rp_review_pack;result=pass;status=ready\n"
 			   "integrity_report=integrity-report:RUN-042;checks=36;errors=0;warnings=0;status=ready\n"
-			   "agentos_adaptation=kernel_context_attestation,kernel_metadata_reference_index,kernel_event_trace,kernel_namespace_registry;status=planned\n"
+			   "agentos_adaptation=kernel_context_attestation,kernel_metadata_reference_index,kernel_event_trace,kernel_namespace_registry;evidence=rp_agentos_mainflow,rp_agentos_query,rp_agentos_timeline,rp_agentos_package;result=observed;status=ready\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -97,6 +101,7 @@ int main(void)
 	if (!rp_append_file("rp_review_dashboard", "subsection=integrity_plane;source=rp_integrity;checks=36;errors=0;result=passed;status=ready")) return 1;
 	if (!rp_append_file("rp_opsboard", "handoff=integrity-plane->operations;artifact=rp_integrity;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "integrity_plane_checks=36;evidence=8;references=8;namespace=5;status_semantics=5;review_alignment=4;agentos_replacements=4;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "integrity_kernel_binding=context_attestation,metadata_reference_index,event_trace,namespace_registry;source=rp_integrity;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=integrityplane;msg=integrity-plane;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=integrity.evidence_trace")) return 1;
 	if (!rp_append_file("rp_tool", "tool=integrity.reference_check")) return 1;
