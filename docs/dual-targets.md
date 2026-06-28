@@ -34,6 +34,8 @@ python host_tools/test_plain_ucore_reader_e2e.py
 
 这个目标在同一 RUN-042 科研流程上使用内核 Agent 服务，包括 Agent 角色和能力、Agent Context、批量工具调用、Context Path、文件 metadata 查询、事件等待和唤醒、heartbeat、timeline、ledger/provenance、文件编辑租约和调度证据。增强目标不能只是在平台旁边跑一组 Agent 测试，而要让主科研流程真正使用这些内核能力。
 
+科研流程的项目名、run id、阶段名称、失败原因和恢复策略由用户态程序写入。结构检查会扫描 `agentos_ucore/os/`，防止这些演示常量变成内核默认业务。
+
 常用命令：
 
 ```bash

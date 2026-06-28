@@ -323,7 +323,7 @@ require_text "agentos_ucore/os" "agent_file_edit_begin" "AgentOS edit lease sysc
 require_text "agentos_ucore/user/Makefile" "agentllm_ucore" "AgentOS LLM test is not in the user build list"
 require_text "agentos_ucore/scripts/run-agent-tests.sh" "agentllm_ucore" "AgentOS LLM test is not in the test script"
 
-demo_kernel_pattern='lab-gene-x|RUN-042|nightly-regression|/lab/projects|recovery report|rerun completed'
+demo_kernel_pattern='lab-gene-x|RUN-042|nightly-regression|/lab/projects|INC-RUN|PLAN-RUN|MSG-RUN|minimal_rerun|memory_limit|recovery report|rerun completed|stage=(prepare|align|analyze|report|archive)|label=(prepare|align|analyze|report|archive)|source_stage=(prepare|align|analyze|report|archive)|next_stage=(prepare|align|analyze|report|archive)'
 reject_text "agentos_ucore/os" "${demo_kernel_pattern}" "AgentOS kernel contains research demo constants"
 
 bad_matrix="矩""阵"
@@ -353,4 +353,5 @@ echo "[dual-target-check] platform app coverage: ${plain_platform_count} build-l
 echo "[dual-target-check] platform source sync: identical=${plain_source_identical_count} adapted=${agentos_adapted_count}"
 echo "[dual-target-check] backend evidence coverage: plain=${plain_backend_cases} agentos=${agentos_backend_cases} preserved_costs=${plain_cost_count}"
 echo "[dual-target-check] platform runners: present"
+echo "[dual-target-check] AgentOS kernel demo constants: absent"
 echo "[dual-target-check] docs: wording scan passed"
