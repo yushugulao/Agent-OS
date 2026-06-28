@@ -1709,6 +1709,7 @@ int main(void)
 		} else if (!rp_append_file("rp_web_bundle", "host_action_source=rp_host_action_inbox")) {
 			return 1;
 		}
+		if (!rp_append_file("rp_web_bundle", "host_action_state_files=rp_input,rp_runner,rp_review2,rp_revision,rp_package,rp_nbexec,rp_agentcmp")) return 1;
 		if (!rp_append_file("rp_web_bundle", "host_action_state_files=rp_input,rp_studio,rp_runner,rp_review2,rp_revision,rp_package,rp_nbexec,rp_agentcmp,rp_lit,rp_knowledge")) return 1;
 		if ((host_action_seeded && text_contains_silent(host_action_seed, "kind=studio_launch")) ||
 		    (!host_action_seeded && file_contains_silent("rp_host_action_inbox", "kind=studio_launch"))) {

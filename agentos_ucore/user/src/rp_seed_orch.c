@@ -74,6 +74,7 @@ static const char *PROGRAMS[] = {
 	"rp_usable",
 	"rp_usableproject",
 	"rp_compare_plain",
+	"rp_test_suite",
 };
 
 static int keeps_same_name_state(const char *program)

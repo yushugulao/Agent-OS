@@ -148,6 +148,7 @@ int main(void)
 	if (!rp_write_file("rp_usableboot",
 			   "config=usable-research-config:offline-template;provider=template;cloud_key_required=0;kernel_policy=capability_checked;status=ready\n"
 			   "startup_guide=usable-startup-guide:1;steps=7;first_run=research_project_launch;status=ready\n"
+			   "platform_doctor_checks=10\n"
 			   "doctor=usable-platform-doctor:1;checks=10;passed=10;failed=0;warnings=0;status=ready\n"
 			   "check=workspace_root;result=pass;detail=ordinary_file_workspace_available\n"
 			   "check=template_provider;result=pass;detail=no_cloud_key_required\n"

@@ -75,6 +75,7 @@ static const char *PROGRAMS[] = {
 	"rp_usable",
 	"rp_usableproject",
 	"rp_compare_plain",
+	"rp_test_suite",
 };
 
 static const char *role_name(int role)

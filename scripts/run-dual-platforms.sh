@@ -121,6 +121,8 @@ echo "[dual-platform] AgentOS extracted state files: ${agentos_count}"
 	--json-out "${DUAL_LOG_DIR}/host-action-kind-alignment.json"
 
 "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/check_host_test_alignment.py" \
+	--plain-state-dir "${DUAL_LOG_DIR}/plain-state" \
+	--agentos-state-dir "${DUAL_LOG_DIR}/agentos-state" \
 	--json-out "${DUAL_LOG_DIR}/host-test-alignment.json"
 
 "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/check_host_surface_alignment.py" \

@@ -246,7 +246,24 @@ def read_evidence(root: Path, relative: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def run_check(root: Path, host_dir: Path, require_host: bool) -> dict[str, object]:
+def read_runtime_evidence(state_dir: Path | None) -> str:
+    if state_dir is None:
+        return ""
+    if not state_dir.is_dir():
+        raise ValueError(f"state directory is missing: {state_dir}")
+    path = state_dir / "rp_tests"
+    if not path.exists():
+        return ""
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def run_check(
+    root: Path,
+    host_dir: Path,
+    require_host: bool,
+    plain_state_dir: Path | None = None,
+    agentos_state_dir: Path | None = None,
+) -> dict[str, object]:
     if not host_dir.exists():
         if require_host:
             raise SystemExit(f"host platform is missing: {host_dir}")
@@ -259,6 +276,11 @@ def run_check(root: Path, host_dir: Path, require_host: bool) -> dict[str, objec
     test_names = collect_test_names(host_dir)
     plain_evidence = read_evidence(root, "user/src/rp_test_suite.c")
     agentos_evidence = read_evidence(root, "agentos_ucore/user/src/rp_test_suite.c")
+    check_runtime_state = plain_state_dir is not None or agentos_state_dir is not None
+    if check_runtime_state and (plain_state_dir is None or agentos_state_dir is None):
+        raise ValueError("plain and AgentOS state directories must be supplied together")
+    plain_runtime_evidence = read_runtime_evidence(plain_state_dir)
+    agentos_runtime_evidence = read_runtime_evidence(agentos_state_dir)
     failures: list[str] = []
     theme_counts = {theme.name: 0 for theme in TEST_THEMES}
     unclassified: list[str] = []
@@ -280,12 +302,29 @@ def run_check(root: Path, host_dir: Path, require_host: bool) -> dict[str, objec
     for theme in TEST_THEMES:
         missing_plain = [token for token in theme.evidence_tokens if token not in plain_evidence]
         missing_agentos = [token for token in theme.evidence_tokens if token not in agentos_evidence]
+        missing_plain_runtime = [
+            token for token in theme.evidence_tokens if check_runtime_state and token not in plain_runtime_evidence
+        ]
+        missing_agentos_runtime = [
+            token for token in theme.evidence_tokens if check_runtime_state and token not in agentos_runtime_evidence
+        ]
         if theme_counts[theme.name] == 0:
             failures.append(f"{theme.name}: no host tests matched this theme")
         if missing_plain:
             failures.append(f"{theme.name}: missing plain evidence tokens: {', '.join(missing_plain)}")
         if missing_agentos:
             failures.append(f"{theme.name}: missing AgentOS evidence tokens: {', '.join(missing_agentos)}")
+        if missing_plain_runtime:
+            failures.append(f"{theme.name}: missing plain runtime evidence tokens: {', '.join(missing_plain_runtime)}")
+        if missing_agentos_runtime:
+            failures.append(f"{theme.name}: missing AgentOS runtime evidence tokens: {', '.join(missing_agentos_runtime)}")
+        failed = (
+            theme_counts[theme.name] == 0
+            or missing_plain
+            or missing_agentos
+            or missing_plain_runtime
+            or missing_agentos_runtime
+        )
         theme_results.append(
             {
                 "name": theme.name,
@@ -293,9 +332,9 @@ def run_check(root: Path, host_dir: Path, require_host: bool) -> dict[str, objec
                 "evidence_tokens": len(theme.evidence_tokens),
                 "missing_plain": missing_plain,
                 "missing_agentos": missing_agentos,
-                "status": "failed"
-                if theme_counts[theme.name] == 0 or missing_plain or missing_agentos
-                else "ok",
+                "missing_plain_runtime": missing_plain_runtime,
+                "missing_agentos_runtime": missing_agentos_runtime,
+                "status": "failed" if failed else "ok",
             }
         )
 
@@ -306,6 +345,7 @@ def run_check(root: Path, host_dir: Path, require_host: bool) -> dict[str, objec
         "themes_ok": sum(1 for item in theme_results if item["status"] == "ok"),
         "themes_total": len(theme_results),
         "unclassified_tests": len(unclassified),
+        "runtime_state_checked": check_runtime_state,
         "theme_results": theme_results,
         "failures": failures,
     }
@@ -314,13 +354,15 @@ def run_check(root: Path, host_dir: Path, require_host: bool) -> dict[str, objec
 def main() -> int:
     parser = argparse.ArgumentParser(description="Check host platform test themes against uCore platform evidence.")
     parser.add_argument("--host-dir", type=Path, default=None)
+    parser.add_argument("--plain-state-dir", type=Path, default=None)
+    parser.add_argument("--agentos-state-dir", type=Path, default=None)
     parser.add_argument("--json-out", type=Path, default=None)
     parser.add_argument("--require-host", action="store_true")
     args = parser.parse_args()
 
     root = repo_root()
     host_dir = args.host_dir or default_host_dir(root)
-    summary = run_check(root, host_dir, args.require_host)
+    summary = run_check(root, host_dir, args.require_host, args.plain_state_dir, args.agentos_state_dir)
 
     if args.json_out:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
@@ -336,6 +378,7 @@ def main() -> int:
         f"themes_ok={summary['themes_ok']} "
         f"themes_total={summary['themes_total']} "
         f"unclassified_tests={summary['unclassified_tests']} "
+        f"runtime_state_checked={int(bool(summary['runtime_state_checked']))} "
         f"status={summary['status']}"
     )
     if summary["status"] == "failed":

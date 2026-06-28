@@ -1667,7 +1667,7 @@ int main(void)
 	ok = ok && require_file_token("rp_agentcmp", "backend_review=1");
 	ok = ok && require_file_token("rp_agentcmp", "review_handoff_checks=13;review_sections=8;review_gates=6");
 	ok = ok && require_file_token("rp_agentcmp", "review_pack=ready;evidence_items=11;actions=5;plain_kernel=ordinary_files;backend_evidence=1");
-	ok = ok && require_file_token("rp_agentcmp", "programs=69");
+	ok = ok && require_file_token("rp_agentcmp", "programs=70");
 	ok = ok && require_file_token("rp_agentcmp", "state_files=261");
 	ok = ok && require_file_token("rp_agentcmp", "advanced_surface_objects=5");
 	ok = ok && require_file_token("rp_agentcmp", "test_cases=2800");
@@ -2462,6 +2462,7 @@ int main(void)
 			   "delivery_manifest=passed\n"
 			   "human_review_revision=passed\n"
 			   "review_thread_actions=passed\n"
+			   "llm=passed\n"
 			   "llm_relay=passed\n"
 			   "startup_health=passed\n"
 			   "research_products=passed\n"
@@ -2472,6 +2473,7 @@ int main(void)
 			   "knowledge_index=passed\n"
 			   "llm_transcripts=passed\n"
 			   "workbench_delivery=passed\n"
+			   "review_dashboard=passed\n"
 			   "portfolio_scale=passed\n"
 			   "execution_scale=passed\n"
 			   "operations_scale=passed\n"
