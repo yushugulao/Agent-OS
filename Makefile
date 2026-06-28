@@ -1,4 +1,4 @@
-.PHONY: clean build user run debug test plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run demo-reader target-readiness dual-platform-run full-verify dual-clean .FORCE
+.PHONY: clean build user run debug test doctor plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run demo-reader target-readiness dual-platform-run full-verify dual-clean .FORCE
 all: build
 
 K = os
@@ -148,6 +148,9 @@ user:
 	make -C user CHAPTER=$(CHAPTER) BASE=$(BASE)
 
 test: user run
+
+doctor:
+	bash scripts/check-dependencies.sh
 
 plain-platform-build:
 	rm -f baseline_ucore/$(F)/fs.img baseline_ucore/$(F)/fs-copy.img

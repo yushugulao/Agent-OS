@@ -4,21 +4,39 @@
 
 ## 构建命令
 
+换机器或刚 clone 仓库后，先检查依赖：
+
+```bash
+make doctor
+```
+
+Windows 上可以先在 PowerShell 运行：
+
+```powershell
+.\scripts\check-windows-prereqs.ps1
+```
+
+如果 Ubuntu/WSL 缺少工具链，可以运行：
+
+```bash
+bash scripts/install-ubuntu-deps.sh
+```
+
 plain target：
 
 ```bash
-make -C user clean
-make clean
-make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_plain
-make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_plain LOG=warn INIT_PROC=rp_plain
+make -C baseline_ucore/user clean
+make -C baseline_ucore clean
+make -C baseline_ucore user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_plain
+make -C baseline_ucore build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_plain LOG=warn INIT_PROC=rp_plain
 make plain-platform-build TOOLPREFIX=riscv64-linux-gnu-
 ```
 
 seeded plain target：
 
 ```bash
-make user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded
-make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded LOG=warn INIT_PROC=rp_seed_orch
+make -C baseline_ucore user nfs/fs.img TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded
+make -C baseline_ucore build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded LOG=warn INIT_PROC=rp_seed_orch
 ```
 
 AgentOS target：

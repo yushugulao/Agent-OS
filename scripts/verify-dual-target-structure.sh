@@ -150,9 +150,13 @@ require_path "host_tools/test_summarize_dual_platform_results.py" "dual platform
 require_path "host_tools/test_llm_relay_mode_contract.py" "LLM relay mode contract test is missing"
 require_path "host_tools/test_chart_svg_layout_contract.py" "chart SVG layout contract test is missing"
 require_path "scripts/check-target-readiness.sh" "target readiness checker is missing"
+require_path "scripts/check-dependencies.sh" "Linux dependency checker is missing"
+require_path "scripts/check-windows-prereqs.ps1" "Windows dependency checker is missing"
+require_path "scripts/install-ubuntu-deps.sh" "Ubuntu dependency installer is missing"
 require_path "scripts/run-dual-platforms.sh" "dual target runner is missing"
 require_path "scripts/run-full-verification.sh" "full verification runner is missing"
 require_path "scripts/serve-demo-reader.sh" "demo reader server script is missing"
+require_path "docs/windows-quickstart.md" "Windows quickstart document is missing"
 
 plain_kernel_pattern='SYS_agent_|AGENT_CONTEXT|AGENT_TOOL_|AGENT_CAP_|agent_create|agent_run|context_snapshot|agent_file_|agent_wait|agent_heartbeat|\.agentmeta'
 reject_text "baseline_ucore/os" "${plain_kernel_pattern}" "baseline kernel contains AgentOS-specific symbols"
@@ -165,12 +169,14 @@ require_text "Makefile" "^dual-platform-run:" "dual platform run target is missi
 require_text "Makefile" "^demo-reader:" "demo reader target is missing"
 require_text "Makefile" "^target-readiness:" "target readiness target is missing"
 require_text "Makefile" "^full-verify:" "full verification target is missing"
+require_text "Makefile" "^doctor:" "dependency doctor target is missing"
 require_text "Makefile" "INIT_PROC=rp_orch CHAPTER=platform" "plain platform run target does not launch rp_orch"
 require_text "Makefile" "INIT_PROC=rp_agentos_orch CHAPTER=platform_agentos" "AgentOS platform run target does not launch rp_agentos_orch"
 require_text "Makefile" "scripts/run-dual-platforms.sh" "Makefile dual platform target does not call the dual runner"
 require_text "Makefile" "scripts/serve-demo-reader.sh" "Makefile demo reader target does not call the reader server"
 require_text "Makefile" "scripts/check-target-readiness.sh" "Makefile target readiness target does not call the readiness checker"
 require_text "Makefile" "scripts/run-full-verification.sh" "Makefile full verification target does not call the full runner"
+require_text "Makefile" "scripts/check-dependencies.sh" "Makefile doctor target does not call dependency checker"
 require_text "Makefile" "^QEMU \\?= qemu-system-riscv64" "plain Makefile QEMU is not environment-overridable"
 require_text "Makefile" "^QEMU \\?= qemu-system-riscv64" "AgentOS Makefile QEMU is not environment-overridable"
 

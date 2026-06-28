@@ -41,8 +41,29 @@ Agent syscall、Agent Context、内核文件 metadata、Agent 事件队列、tim
 | 查看双目标对比设计 | `docs/dual-targets.md` |
 | 查看双目标验证方式 | `docs/verification.md` |
 | 查看当前目标完成证据 | `docs/target-evidence.md` |
+| Windows 克隆后的依赖检查和运行步骤 | `docs/windows-quickstart.md` |
 
 ## 常用命令
+
+Windows 用户 clone 仓库后，建议先在 PowerShell 运行：
+
+```powershell
+.\scripts\check-windows-prereqs.ps1
+```
+
+进入 WSL/Ubuntu 后，在仓库根目录运行：
+
+```bash
+make doctor
+```
+
+如果 Ubuntu 中缺少依赖，可以运行：
+
+```bash
+bash scripts/install-ubuntu-deps.sh
+```
+
+仓库不内置 QEMU、RISC-V GCC/binutils、WSL 发行版或云端模型密钥。这些内容体积大、依赖系统环境或涉及本机私密配置。仓库内置的是源码、脚本、文档、默认离线 LLM Relay、Host Reader 和依赖检查入口。
 
 构建和运行未改动 uCore 平台：
 
