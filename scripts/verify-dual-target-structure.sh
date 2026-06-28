@@ -151,6 +151,7 @@ require_path "host_tools/test_summarize_dual_platform_results.py" "dual platform
 require_path "scripts/check-target-readiness.sh" "target readiness checker is missing"
 require_path "scripts/run-dual-platforms.sh" "dual target runner is missing"
 require_path "scripts/run-full-verification.sh" "full verification runner is missing"
+require_path "scripts/serve-demo-reader.sh" "demo reader server script is missing"
 
 if ! git -C "${ROOT_DIR}" rev-parse --verify "${PLAIN_BASE_REF}^{commit}" >/dev/null 2>&1; then
 	fail "plain kernel base ref is not available: ${PLAIN_BASE_REF}"
@@ -168,11 +169,13 @@ reject_text "user/lib" "${plain_kernel_pattern}" "plain syscall wrappers contain
 require_text "Makefile" "^plain-platform-run:" "plain platform run target is missing"
 require_text "Makefile" "^agentos-platform-run:" "AgentOS platform run target is missing"
 require_text "Makefile" "^dual-platform-run:" "dual platform run target is missing"
+require_text "Makefile" "^demo-reader:" "demo reader target is missing"
 require_text "Makefile" "^target-readiness:" "target readiness target is missing"
 require_text "Makefile" "^full-verify:" "full verification target is missing"
 require_text "Makefile" "INIT_PROC=rp_orch CHAPTER=platform" "plain platform run target does not launch rp_orch"
 require_text "Makefile" "INIT_PROC=rp_agentos_orch CHAPTER=platform_agentos" "AgentOS platform run target does not launch rp_agentos_orch"
 require_text "Makefile" "scripts/run-dual-platforms.sh" "Makefile dual platform target does not call the dual runner"
+require_text "Makefile" "scripts/serve-demo-reader.sh" "Makefile demo reader target does not call the reader server"
 require_text "Makefile" "scripts/check-target-readiness.sh" "Makefile target readiness target does not call the readiness checker"
 require_text "Makefile" "scripts/run-full-verification.sh" "Makefile full verification target does not call the full runner"
 require_text "Makefile" "^QEMU \\?= qemu-system-riscv64" "plain Makefile QEMU is not environment-overridable"
@@ -244,6 +247,8 @@ require_text "host_tools/plain_ucore_action_runner.py" "qemu_elapsed_seconds" "a
 require_text "host_tools/compare_dual_platform_state.py" "verify_orch_timing" "dual platform comparison does not validate per-program timing evidence"
 require_text "scripts/run-dual-platforms.sh" "cases=7 executable=7 userland_equivalent=ready" "plain backend marker is missing"
 require_text "scripts/run-dual-platforms.sh" "cases=8 executable=8 agentos=mainflow_bound" "AgentOS backend marker is missing"
+require_text "scripts/serve-demo-reader.sh" "rp_agentos_mainflow" "demo reader script does not check AgentOS mainflow state"
+require_text "scripts/serve-demo-reader.sh" "serve" "demo reader script does not start the local Reader service"
 
 plain_platform_tests="$(make_var_words "${ROOT_DIR}/user/Makefile" "PLATFORM_TESTS")"
 agentos_platform_tests="$(make_var_words "${ROOT_DIR}/agentos_ucore/user/Makefile" "PLATFORM_TESTS")"

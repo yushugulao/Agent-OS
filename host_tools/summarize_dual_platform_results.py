@@ -229,6 +229,40 @@ def collect_rows(work_dir: Path) -> tuple[list[MetricRow], dict[str, object]]:
     return rows, meta
 
 
+def evaluation_items(meta: dict[str, object]) -> list[tuple[str, str]]:
+    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
+    reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
+    plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
+    agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
+    items: list[tuple[str, str]] = []
+
+    if state.get("status") == "ready" and as_number(state.get("run_result_match")) == 1:
+        items.append(("通过", "两个目标运行结果可对照，plain target 的成功记录已在 AgentOS target 中保留。"))
+    else:
+        items.append(("关注", "双目标状态对照没有给出 ready/match 结果，需要查看 state-compare-summary.json。"))
+    if as_number(state.get("agentos_extra_files")) > 0 and as_number(state.get("agentos_evidence_checks")) >= 20:
+        items.append(("通过", "AgentOS target 额外输出内核证据文件，并通过多项内核事实检查。"))
+    else:
+        items.append(("关注", "AgentOS 额外内核证据不足，需要检查 rp_agentos_* 状态文件。"))
+    if as_number(state.get("agentos_mainflow_stages")) >= 10:
+        items.append(("通过", "科研主流程中记录到足够多的 AgentOS 内核参与阶段。"))
+    else:
+        items.append(("关注", "AgentOS 主流程阶段数量偏少，需要检查 rp_agentos_mainflow。"))
+    if reader.get("status") == "ready" and as_number(reader.get("plain_pages")) == as_number(reader.get("agentos_pages")):
+        items.append(("通过", "Host Reader 为两个目标生成同一套页面，增强目标没有缩小展示面。"))
+    else:
+        items.append(("关注", "Host Reader 页面数量或状态异常，需要查看 reader-summary.json。"))
+    if as_number(plain_result.get("qemu_timed_out")) == 0 and as_number(agentos_result.get("qemu_timed_out")) == 0:
+        items.append(("通过", "两个 QEMU 目标均未报告超时。"))
+    else:
+        items.append(("关注", "至少一个 QEMU 目标报告超时，需要查看 ucore-run.log。"))
+    if as_number(agentos_result.get("qemu_idle_notices")) <= 1:
+        items.append(("通过", "AgentOS 目标没有出现明显的长时间无输出现象。"))
+    else:
+        items.append(("关注", "AgentOS 目标无输出提示次数偏高，需要查看最后输出片段。"))
+    return items
+
+
 def write_csv(rows: list[MetricRow], out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8", newline="") as handle:
@@ -490,6 +524,9 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
         lines.append(
             f"| {row.group} | {row.metric} | {fmt_number(row.plain)} | {fmt_number(row.agentos)} | {fmt_number(row.delta)} | {row.note} |"
         )
+    lines.extend(["", "## 自动判读", ""])
+    for status, text in evaluation_items(meta):
+        lines.append(f"- {status}：{text}")
     stage_rows = meta.get("stage_rows", [])
     if isinstance(stage_rows, list) and stage_rows:
         lines.extend(["", "## 阶段耗时", "", "| 阶段 | 秒数 | 状态 |", "| --- | ---: | --- |"])
@@ -501,6 +538,132 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
     lines.append("")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Path], out_path: Path) -> None:
+    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
+    reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
+    plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
+    agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
+    chart_cards = []
+    chart_titles = {
+        "dual-target-state-reader.svg": "双目标状态与页面输出",
+        "launch-model.svg": "科研流程启动方式组成",
+        "agentos-evidence.svg": "AgentOS 额外机制证据",
+        "stage-timings.svg": "双目标运行阶段耗时",
+    }
+    for chart in charts:
+        rel = chart.relative_to(out_path.parent).as_posix()
+        title = chart_titles.get(chart.name, chart.name)
+        chart_cards.append(
+            f'<section class="chart-card"><h2>{escape(title)}</h2><img src="{escape(rel)}" alt="{escape(title)}"></section>'
+        )
+    rows_html = []
+    for row in rows:
+        rows_html.append(
+            "<tr>"
+            f"<td>{escape(row.group)}</td>"
+            f"<td>{escape(row.metric)}</td>"
+            f"<td>{escape(fmt_number(row.plain))}</td>"
+            f"<td>{escape(fmt_number(row.agentos))}</td>"
+            f"<td>{escape(fmt_number(row.delta))}</td>"
+            f"<td>{escape(row.note)}</td>"
+            "</tr>"
+        )
+    stage_rows = meta.get("stage_rows", [])
+    stage_rows_html = []
+    if isinstance(stage_rows, list):
+        for row in stage_rows:
+            if isinstance(row, dict):
+                stage_rows_html.append(
+                    "<tr>"
+                    f"<td>{escape(stage_label(row.get('stage', '')))}</td>"
+                    f"<td>{escape(str(row.get('duration_seconds', '')))}</td>"
+                    f"<td>{escape(str(row.get('status', '')))}</td>"
+                    "</tr>"
+                )
+    eval_html = "".join(
+        f'<li><strong class="eval-{escape(status)}">{escape(status)}</strong>{escape(text)}</li>'
+        for status, text in evaluation_items(meta)
+    )
+    html = f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentOS 双目标测试结果</title>
+  <style>
+    :root {{ color-scheme: light; --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --plain:#4c78a8; --agent:#f58518; --bg:#f7f9fb; }}
+    * {{ box-sizing: border-box; }}
+    body {{ margin:0; font-family: Arial, "Microsoft YaHei", sans-serif; color:var(--ink); background:var(--bg); }}
+    header {{ padding:32px 40px 22px; background:#fff; border-bottom:1px solid var(--line); }}
+    h1 {{ margin:0 0 10px; font-size:28px; }}
+    p {{ line-height:1.7; }}
+    .summary {{ display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap:12px; margin-top:18px; }}
+    .metric {{ background:#fff; border:1px solid var(--line); padding:14px; }}
+    .metric strong {{ display:block; font-size:24px; margin-bottom:4px; }}
+    .metric span {{ color:var(--muted); font-size:13px; }}
+    main {{ padding:24px 40px 42px; max-width:1180px; margin:0 auto; }}
+    .links {{ display:flex; flex-wrap:wrap; gap:10px; margin:8px 0 22px; }}
+    .links a {{ color:#075985; text-decoration:none; background:#fff; border:1px solid var(--line); padding:8px 12px; }}
+    .eval {{ background:#fff; border:1px solid var(--line); padding:16px 20px; margin:0 0 18px; }}
+    .eval li {{ margin:8px 0; line-height:1.6; }}
+    .eval-通过 {{ color:#15803d; margin-right:8px; }}
+    .eval-关注 {{ color:#b45309; margin-right:8px; }}
+    .chart-grid {{ display:grid; grid-template-columns:1fr; gap:18px; }}
+    .chart-card {{ background:#fff; border:1px solid var(--line); padding:18px; }}
+    .chart-card h2 {{ margin:0 0 12px; font-size:20px; }}
+    .chart-card img {{ display:block; width:100%; height:auto; }}
+    table {{ width:100%; border-collapse:collapse; background:#fff; margin-top:22px; }}
+    th, td {{ border:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }}
+    th {{ background:#eef3f8; }}
+    td:nth-child(3), td:nth-child(4), td:nth-child(5) {{ text-align:right; white-space:nowrap; }}
+    @media (max-width: 860px) {{ .summary {{ grid-template-columns:1fr 1fr; }} main, header {{ padding-left:18px; padding-right:18px; }} }}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AgentOS 双目标测试结果</h1>
+    <p>本页由双目标运行结果自动生成。它把 QEMU 运行、状态文件对照、Host Reader 输出和阶段耗时整理成适合演示和复查的图表页面。</p>
+    <div class="summary">
+      <div class="metric"><strong>{fmt_number(as_number(state.get("plain_files")))}</strong><span>普通 uCore 状态文件</span></div>
+      <div class="metric"><strong>{fmt_number(as_number(state.get("agentos_files")))}</strong><span>AgentOS 状态文件</span></div>
+      <div class="metric"><strong>{fmt_number(as_number(reader.get("agentos_extra_api_json")))}</strong><span>AgentOS 额外 API JSON</span></div>
+      <div class="metric"><strong>{agentos_result.get("qemu_idle_notices", "0")}</strong><span>AgentOS QEMU 无输出提示</span></div>
+    </div>
+  </header>
+  <main>
+    <div class="links">
+      <a href="report.md">查看 Markdown 报告</a>
+      <a href="summary.csv">下载 CSV 明细</a>
+      <a href="charts/dual-target-state-reader.svg">打开状态图</a>
+      <a href="charts/stage-timings.svg">打开阶段耗时图</a>
+    </div>
+    <p>录屏演示建议先运行 <code>make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-</code>，再运行 <code>make demo-reader</code> 打开交互页面。本页用于快速展示测试数据图表，Reader 页面用于查看完整运行对象和 AgentOS 主流程细节。</p>
+    <section class="eval">
+      <h2>自动判读</h2>
+      <ul>{eval_html}</ul>
+    </section>
+    <div class="chart-grid">
+      {"".join(chart_cards)}
+    </div>
+    <h2>阶段耗时明细</h2>
+    <table>
+      <thead><tr><th>阶段</th><th>秒数</th><th>状态</th></tr></thead>
+      <tbody>{"".join(stage_rows_html) if stage_rows_html else '<tr><td colspan="3">本次结果没有记录阶段耗时。</td></tr>'}</tbody>
+    </table>
+    <p>阶段耗时用于定位运行问题。正常情况下，时间主要集中在预置请求双目标运行；如果其他阶段耗时异常，应优先查看对应脚本输出和日志文件。</p>
+    <table>
+      <thead><tr><th>分组</th><th>指标</th><th>普通 uCore</th><th>AgentOS-uCore</th><th>差值</th><th>说明</th></tr></thead>
+      <tbody>{"".join(rows_html)}</tbody>
+    </table>
+    <p>QEMU 运行诊断：普通目标耗时 {escape(str(plain_result.get("qemu_elapsed_seconds", "0")))} 秒，AgentOS 目标耗时 {escape(str(agentos_result.get("qemu_elapsed_seconds", "0")))} 秒。若结果异常，应先查看 <code>/tmp/agentos-dual-platform/stage-timings.csv</code> 和两个 <code>ucore-run.log</code>。</p>
+  </main>
+</body>
+</html>
+"""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(html, encoding="utf-8")
 
 
 def copy_docs_assets(charts: list[Path], docs_assets_dir: Path) -> None:
@@ -515,6 +678,7 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
     write_csv(rows, out_dir / "summary.csv")
     charts = write_charts(rows, meta, out_dir / "charts")
     write_report(rows, meta, charts, out_dir / "report.md")
+    write_index(rows, meta, charts, out_dir / "index.html")
     if docs_assets_dir is not None:
         copy_docs_assets(charts, docs_assets_dir)
     summary = {
@@ -522,6 +686,7 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
         "rows": len(rows),
         "charts": [str(path) for path in charts],
         "report": str(out_dir / "report.md"),
+        "index": str(out_dir / "index.html"),
         "csv": str(out_dir / "summary.csv"),
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -537,10 +702,11 @@ def main() -> int:
 
     summary = summarize(args.work_dir, args.out_dir, args.docs_assets_dir)
     print(
-        "dual_platform_result_summary: rows={rows} charts={charts} report={report} status={status}".format(
+        "dual_platform_result_summary: rows={rows} charts={charts} report={report} index={index} status={status}".format(
             rows=summary["rows"],
             charts=len(summary["charts"]),
             report=summary["report"],
+            index=summary["index"],
             status=summary["status"],
         )
     )
