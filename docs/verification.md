@@ -212,6 +212,7 @@ dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=
 results/latest/summary.csv
 results/latest/runner-sweep.csv
 results/latest/chart-type-coverage.csv
+results/latest/demo-guide.html
 results/latest/index.html
 results/latest/monitor.html
 results/latest/report.md
@@ -231,7 +232,7 @@ results/latest/charts/agentos-evidence.svg
 results/latest/charts/stage-timings.svg
 ```
 
-`monitor.html` 适合录屏时先展示本次运行是否健康；`index.html` 适合集中查看图表摘要；`summary.csv` 适合复制到答辩材料或进一步处理；`report.md` 适合直接阅读；`charts/*.svg` 是从本次运行数据生成的图表。文档中保留一组示例图，数值来自一次完整运行样例，实际运行时以 `results/latest/` 下的新文件为准。
+`demo-guide.html` 适合录屏时按顺序打开关键页面；`monitor.html` 适合先展示本次运行是否健康；`index.html` 适合集中查看图表摘要；`summary.csv` 适合复制到答辩材料或进一步处理；`report.md` 适合直接阅读；`charts/*.svg` 是从本次运行数据生成的图表。文档中保留一组示例图，数值来自一次完整运行样例，实际运行时以 `results/latest/` 下的新文件为准。
 
 图表由 `host_tools/summarize_dual_platform_results.py` 使用 Python 标准库直接生成 SVG，不依赖本机私有绘图软件。这样做的好处是，用户 clone 仓库后只要能运行 Python，就可以重新生成和验证这些图表。`chart-type-coverage.csv` 会列出当前结果页覆盖的图表类型：条形/柱状对比、曲线趋势、箱形图、热力图、监控面积图，以及曲面、投影、热力组合图；这些图都可以追溯到 `summary.csv`、`runner-sweep.csv`、`stage-timings.csv` 或状态对照 JSON。
 
@@ -309,7 +310,7 @@ make demo-reader
 
 这个入口会读取 `/tmp/agentos-dual-platform/agentos-state`，检查 `rp_agentos_mainflow` 是否存在，并启动 `http://127.0.0.1:8767/`。如果状态目录不存在，脚本会明确提示先运行 `make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-`；如果 AgentOS 主流程状态缺失，脚本会提示重新运行双目标验证。这样录屏时只需要两条命令：第一条生成运行结果，第二条打开可交互页面。
 
-`results/latest/monitor.html` 是另一个录屏友好的入口。它不展示完整科研平台页面，而是先给出运行结果、状态产物、内核证据、启动方式和 QEMU 健康状态，适合在视频开头快速说明本次测试数据是否可信。`make demo-reader` 会把 `results/latest/` 复制到 Reader 输出目录下的 `dual-results/`，因此浏览器只需要访问同一个本地服务：`http://127.0.0.1:8767/dual-results.html` 用于进入双目标结果页，`http://127.0.0.1:8767/dual-results/monitor.html` 用于直接打开运行观测面板。随后再打开 Reader 首页展示每个 Agent、每个 artifact、LLM Relay 和 AgentOS Compare 的细节。
+`results/latest/demo-guide.html` 是录屏导览入口，会把两条命令、建议展示顺序、观测面板、关键图表和 Host Reader 首页串在一起。`results/latest/monitor.html` 不展示完整科研平台页面，而是先给出运行结果、状态产物、内核证据、启动方式和 QEMU 健康状态，适合在视频开头快速说明本次测试数据是否可信。`make demo-reader` 会把 `results/latest/` 复制到 Reader 输出目录下的 `dual-results/`，因此浏览器只需要访问同一个本地服务：`http://127.0.0.1:8767/dual-results.html` 用于进入双目标结果页，`http://127.0.0.1:8767/dual-results/demo-guide.html` 用于进入演示导览页，`http://127.0.0.1:8767/dual-results/monitor.html` 用于直接打开运行观测面板。随后再打开 Reader 首页展示每个 Agent、每个 artifact、LLM Relay 和 AgentOS Compare 的细节。
 
 快速结构检查不替代 QEMU 运行。它会用 `origin/main` 对照根目录 `os/` 和 `bootloader/`，并检查根目录内核没有混入 AgentOS syscall、Agent Context、内核文件 metadata、Agent 事件队列等符号，同时确认增强内核目标、科研平台入口、同名科研平台程序覆盖关系、源码同步关系、backend 成本项保留关系和测试脚本仍然存在。它还会检查 AgentOS 内核源码中没有 `RUN-042`、`lab-gene-x`、固定阶段 selector、固定失败原因等科研演示常量，保证科研平台仍是用户态负载，不是内核默认业务；旧演示工具 id 只允许出现在兼容性和权限测试里，平台主流程必须使用 `action_commit`、`artifact_update` 等通用工具。它还会检查 Makefile 和脚本入口关系：`make full-verify` 必须调用完整验证脚本，完整验证脚本必须串起结构检查、Host Reader 测试、action runner 测试、文件系统镜像提取测试、LLM relay 测试、LLM Relay 模式契约测试、seeded 双目标 QEMU 和 AgentOS 内核专项测试；`make dual-platform-run` 必须调用双平台脚本；plain target 必须以 `rp_orch` 启动，AgentOS target 必须以 `rp_agentos_orch` 启动。完整功能仍以 `make dual-platform-run` 和 AgentOS 专项测试为准。
 

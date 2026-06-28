@@ -141,6 +141,7 @@ def main() -> int:
         result = summary.summarize(work_dir, out_dir)
         assert result["status"] == "ready", result
         assert str(result["monitor"]).endswith("monitor.html"), result
+        assert str(result["demo_guide"]).endswith("demo-guide.html"), result
         assert str(result["runner_sweep_csv"]).endswith("runner-sweep.csv"), result
         assert str(result["chart_type_coverage_csv"]).endswith("chart-type-coverage.csv"), result
         report = (out_dir / "report.md").read_text(encoding="utf-8")
@@ -171,6 +172,8 @@ def main() -> int:
         assert "三维曲面与投影组合" in coverage_csv
         index_html = (out_dir / "index.html").read_text(encoding="utf-8")
         assert "AgentOS 双目标测试结果" in index_html
+        assert "demo-guide.html" in index_html
+        assert "演示导览页" in index_html
         assert "charts/dual-target-state-reader.svg" in index_html
         assert "monitor.html" in index_html
         assert "charts/runtime-observation.svg" in index_html
@@ -193,6 +196,7 @@ def main() -> int:
         assert "AgentOS 运行观测面板" in monitor_html
         assert "一张图看本次运行" in monitor_html
         assert "make demo-reader" in monitor_html
+        assert "demo-guide.html" in monitor_html
         assert "charts/scenario-evidence.svg" in monitor_html
         assert "charts/cost-replacement.svg" in monitor_html
         assert "charts/runner-ticks.svg" in monitor_html
@@ -219,6 +223,14 @@ def main() -> int:
             svg = (out_dir / "charts" / name).read_text(encoding="utf-8")
             assert "<svg" in svg
             assert "<text" in svg
+        demo_html = (out_dir / "demo-guide.html").read_text(encoding="utf-8")
+        assert "AgentOS 演示导览" in demo_html
+        assert "make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-" in demo_html
+        assert "make demo-reader" in demo_html
+        assert "建议展示顺序" in demo_html
+        assert "Host Reader 首页" in demo_html
+        assert "runner-sweep.csv" in demo_html
+        assert "charts/scenario-evidence.svg" in demo_html
 
     print("test_summarize_dual_platform_results: passed")
     return 0

@@ -2285,6 +2285,10 @@ def main() -> int:
             "<!doctype html><html><body>AgentOS 运行观测面板</body></html>",
             encoding="utf-8",
         )
+        (out_dir / "dual-results" / "demo-guide.html").write_text(
+            "<!doctype html><html><body>AgentOS 演示导览</body></html>",
+            encoding="utf-8",
+        )
         (out_dir / "dual-results" / "charts" / "runtime-observation.svg").write_text(
             '<svg xmlns="http://www.w3.org/2000/svg"><text>运行观测图</text></svg>',
             encoding="utf-8",
@@ -2415,6 +2419,9 @@ def main() -> int:
             with request.urlopen(base + "/dual-results/monitor.html", timeout=5) as response:
                 monitor_html = response.read().decode("utf-8")
             assert "AgentOS 运行观测面板" in monitor_html
+            with request.urlopen(base + "/dual-results/demo-guide.html", timeout=5) as response:
+                demo_html = response.read().decode("utf-8")
+            assert "AgentOS 演示导览" in demo_html
             with request.urlopen(base + "/dual-results/charts/runtime-observation.svg", timeout=5) as response:
                 svg_type = response.headers.get("Content-Type", "")
                 svg_text = response.read().decode("utf-8")

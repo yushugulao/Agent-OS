@@ -43,6 +43,7 @@ if [ -f "${RESULT_DIR}/monitor.html" ]; then
   <p>这些页面来自 ${RESULT_DIR}，已复制到当前 Reader 服务目录。录屏时可以先打开运行观测面板，再返回 Reader 首页查看完整科研平台页面。</p>
   <p>
     <a href="dual-results/monitor.html">运行观测面板</a>
+    <a href="dual-results/demo-guide.html">演示导览页</a>
     <a href="dual-results/index.html">图表索引页</a>
     <a href="dual-results/report.md">Markdown 报告</a>
     <a href="dual-results/summary.csv">CSV 明细</a>
@@ -60,6 +61,7 @@ echo "[demo-reader] 页面地址：http://127.0.0.1:${PORT}/"
 if [ -f "${OUT_DIR}/dual-results.html" ]; then
 	echo "[demo-reader] 双目标结果入口：http://127.0.0.1:${PORT}/dual-results.html"
 	echo "[demo-reader] 运行观测面板：http://127.0.0.1:${PORT}/dual-results/monitor.html"
+	echo "[demo-reader] 演示导览页：http://127.0.0.1:${PORT}/dual-results/demo-guide.html"
 fi
 "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/plain_ucore_reader.py" \
 	--state-dir "${STATE_DIR}" \

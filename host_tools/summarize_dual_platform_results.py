@@ -1402,6 +1402,7 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
   </header>
   <main>
     <div class="links">
+      <a href="demo-guide.html">打开演示导览页</a>
       <a href="monitor.html">打开运行观测面板</a>
       <a href="report.md">查看 Markdown 报告</a>
       <a href="summary.csv">下载 CSV 明细</a>
@@ -1416,7 +1417,7 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="charts/dual-target-state-reader.svg">打开状态图</a>
       <a href="charts/stage-timings.svg">打开阶段耗时图</a>
     </div>
-    <p>录屏演示建议先运行 <code>make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-</code>，再运行 <code>make demo-reader</code> 打开交互页面。本页用于快速展示测试数据图表，Reader 页面用于查看完整运行对象和 AgentOS 主流程细节。</p>
+    <p>录屏演示建议先运行 <code>make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-</code>，再运行 <code>make demo-reader</code> 打开交互页面。需要按顺序展示时，先打开 <a href="demo-guide.html">演示导览页</a>；本页用于快速展示测试数据图表，Reader 页面用于查看完整运行对象和 AgentOS 主流程细节。</p>
     <section class="eval">
       <h2>自动判读</h2>
       <ul>{eval_html}</ul>
@@ -1508,7 +1509,99 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>相关结果</h2>
-      <p><a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="chart-type-coverage.csv">图表类型覆盖表</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/runner-surface-composite.svg">组合图</a></p>
+      <p><a href="demo-guide.html">演示导览页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="chart-type-coverage.csv">图表类型覆盖表</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/runner-surface-composite.svg">组合图</a></p>
+    </section>
+  </main>
+</body>
+</html>
+"""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(html, encoding="utf-8")
+
+
+def write_demo_guide_page(rows: list[MetricRow], meta: dict[str, object], charts: list[Path], out_path: Path) -> None:
+    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
+    reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
+    seeded = meta.get("seeded", {}) if isinstance(meta.get("seeded"), dict) else {}
+    scenario_count = len(state.get("scenario_evidence", [])) if isinstance(state.get("scenario_evidence"), list) else 0
+    cost_count = as_number(state.get("cost_replacement_count"))
+    runner_pairs = as_number(state.get("runner_tick_pairs"))
+    chart_links = {
+        chart.name: chart.relative_to(out_path.parent).as_posix()
+        for chart in charts
+    }
+    html = f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentOS 演示导览</title>
+  <style>
+    :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; --accent:#f58518; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; font-family:Arial,"Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); }}
+    header {{ padding:30px 42px 20px; background:#fff; border-bottom:1px solid var(--line); }}
+    main {{ max-width:1180px; margin:0 auto; padding:24px 42px 42px; }}
+    h1 {{ margin:0 0 10px; font-size:28px; }}
+    h2 {{ margin:0 0 12px; font-size:20px; }}
+    p, li {{ line-height:1.75; }}
+    code {{ background:#eef3f8; padding:2px 5px; }}
+    .grid {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin-top:16px; }}
+    .metric,.panel {{ background:var(--panel); border:1px solid var(--line); padding:16px; }}
+    .metric strong {{ display:block; font-size:23px; margin-bottom:6px; }}
+    .metric span {{ color:var(--muted); font-size:13px; }}
+    .panel {{ margin-top:18px; }}
+    .steps {{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }}
+    .step {{ background:#fff; border:1px solid var(--line); padding:14px; }}
+    .links a {{ display:inline-block; margin:6px 8px 6px 0; color:#075985; text-decoration:none; border:1px solid var(--line); padding:7px 10px; background:#fff; }}
+    table {{ width:100%; border-collapse:collapse; margin-top:10px; background:#fff; }}
+    th,td {{ border:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }}
+    th {{ background:#eef3f8; }}
+    @media (max-width:860px) {{ .grid,.steps {{ grid-template-columns:1fr; }} main,header {{ padding-left:18px; padding-right:18px; }} }}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AgentOS 演示导览</h1>
+    <p>这个页面把双目标运行结果、Host Reader 页面和关键图表串成一条录屏路线。它只读取本次运行产物，不重新执行 QEMU。</p>
+    <div class="grid">
+      <div class="metric"><strong>{fmt_number(as_number(seeded.get("action_count")))}</strong><span>预置请求</span></div>
+      <div class="metric"><strong>{fmt_number(as_number(state.get("agentos_evidence_checks")))}</strong><span>内核证据检查项</span></div>
+      <div class="metric"><strong>{fmt_number(scenario_count)}</strong><span>机制场景</span></div>
+      <div class="metric"><strong>{fmt_number(as_number(reader.get("agentos_extra_api_json")))}</strong><span>AgentOS 额外 API JSON</span></div>
+    </div>
+  </header>
+  <main>
+    <section class="panel">
+      <h2>录屏只需要两条命令</h2>
+      <div class="steps">
+        <div class="step"><strong>第一条：生成双目标结果</strong><p><code>make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-</code></p><p>它会运行普通 uCore 和 AgentOS-uCore，提取状态文件，生成 CSV、报告和图表。</p></div>
+        <div class="step"><strong>第二条：打开本地页面</strong><p><code>make demo-reader</code></p><p>它会启动 Host Reader，并把本页、观测面板和完整科研平台页面放在同一个本地服务里。</p></div>
+      </div>
+    </section>
+    <section class="panel">
+      <h2>建议展示顺序</h2>
+      <table>
+        <thead><tr><th>顺序</th><th>打开内容</th><th>要讲清楚的点</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td><a href="monitor.html">运行观测面板</a></td><td>先确认本次运行健康：QEMU 状态、状态文件数量、API 数量、AgentOS 额外证据都来自本次运行。</td></tr>
+          <tr><td>2</td><td><a href="index.html">图表索引页</a></td><td>展示所有数据图表：状态输出、启动方式、机制证据、用户态成本替代、tick 对照和组合图。</td></tr>
+          <tr><td>3</td><td><a href="charts/scenario-evidence.svg">机制证据图</a></td><td>说明 AgentOS 不是只多跑测试，而是在同一科研流程中使用 Context、文件 metadata、事件、audit、provenance 和权限机制。</td></tr>
+          <tr><td>4</td><td><a href="charts/cost-replacement.svg">成本替代图</a></td><td>说明普通用户态流程的扫描、轮询、状态约定和锁文件成本，如何被内核机制替代。</td></tr>
+          <tr><td>5</td><td><a href="charts/runner-speedup.svg">相对倍数图</a></td><td>说明同一 runner 场景下，AgentOS 路径如何减少 tick；必要时打开 <a href="runner-sweep.csv">runner-sweep.csv</a> 复查原始数据。</td></tr>
+          <tr><td>6</td><td><a href="../index.html">Host Reader 首页</a></td><td>进入完整科研平台页面，展示 run、Agent、证据、artifact、LLM Relay 和 AgentOS Compare。</td></tr>
+        </tbody>
+      </table>
+    </section>
+    <section class="panel">
+      <h2>关键数据</h2>
+      <p>本次结果包含 {fmt_number(cost_count)} 项用户态成本替代记录、{fmt_number(runner_pairs)} 组 runner tick 对照、{fmt_number(as_number(state.get("checked_success_records")))} 条成功记录核对。图表可以回到 <a href="summary.csv">summary.csv</a>、<a href="runner-sweep.csv">runner-sweep.csv</a> 和 <a href="chart-type-coverage.csv">chart-type-coverage.csv</a>。</p>
+      <div class="links">
+        <a href="report.md">Markdown 报告</a>
+        <a href="summary.json">JSON 摘要</a>
+        <a href="{escape(chart_links.get("runtime-observation.svg", "charts/runtime-observation.svg"))}">运行观测图</a>
+        <a href="{escape(chart_links.get("runner-surface-composite.svg", "charts/runner-surface-composite.svg"))}">组合图</a>
+      </div>
     </section>
   </main>
 </body>
@@ -1534,6 +1627,7 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
     write_report(rows, meta, charts, out_dir / "report.md")
     write_index(rows, meta, charts, out_dir / "index.html")
     write_monitor_page(rows, meta, charts, out_dir / "monitor.html")
+    write_demo_guide_page(rows, meta, charts, out_dir / "demo-guide.html")
     if docs_assets_dir is not None:
         copy_docs_assets(charts, docs_assets_dir)
     summary = {
@@ -1543,6 +1637,7 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
         "report": str(out_dir / "report.md"),
         "index": str(out_dir / "index.html"),
         "monitor": str(out_dir / "monitor.html"),
+        "demo_guide": str(out_dir / "demo-guide.html"),
         "csv": str(out_dir / "summary.csv"),
         "runner_sweep_csv": str(out_dir / "runner-sweep.csv"),
         "chart_type_coverage_csv": str(out_dir / "chart-type-coverage.csv"),
@@ -1560,12 +1655,13 @@ def main() -> int:
 
     summary = summarize(args.work_dir, args.out_dir, args.docs_assets_dir)
     print(
-        "dual_platform_result_summary: rows={rows} charts={charts} report={report} index={index} monitor={monitor} status={status}".format(
+        "dual_platform_result_summary: rows={rows} charts={charts} report={report} index={index} monitor={monitor} demo_guide={demo_guide} status={status}".format(
             rows=summary["rows"],
             charts=len(summary["charts"]),
             report=summary["report"],
             index=summary["index"],
             monitor=summary["monitor"],
+            demo_guide=summary["demo_guide"],
             status=summary["status"],
         )
     )
