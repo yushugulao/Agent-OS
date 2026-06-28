@@ -97,6 +97,7 @@ rp_package.c
 rp_portability.c
 rp_prov_query.c
 rp_prov_view.c
+rp_projectrel.c
 rp_query.c
 rp_realtask.c
 rp_reldossier.c

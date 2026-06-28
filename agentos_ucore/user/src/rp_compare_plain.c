@@ -1506,9 +1506,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_projectrel", "project_reproducibility_audits=1");
 	ok = ok && rp_file_contains("rp_projectrel", "project_provenance_graphs=1");
 	ok = ok && rp_file_contains("rp_projectrel", "package_intakes=1");
-	ok = ok && rp_file_contains("rp_projectrel", "agentos_adaptation=file_metadata_index,event_delivery,context_release_evidence,capability_guard;status=planned");
+	ok = ok && rp_file_contains("rp_projectrel", "agentos_adaptation=file_metadata_index,event_delivery,context_release_evidence,capability_guard;evidence=rp_agentos_query,rp_agentos_mainflow,rp_agentos_package;result=observed;status=ready");
 	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=project_delivery;source=rp_projectrel;release=ready;reproducibility=passed;status=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "project_delivery_service=checks:18");
+	ok = ok && rp_file_contains("rp_agentcmp", "project_delivery_kernel_binding=file_metadata_index,event_delivery,context_release_evidence,capability_guard;source=rp_projectrel;status=ready");
 	ok = ok && rp_file_contains("rp_studyproto", "study_protocol_checks=20");
 	ok = ok && rp_file_contains("rp_studyproto", "study_protocols=2");
 	ok = ok && rp_file_contains("rp_studyproto", "study_protocol_launches=2");
