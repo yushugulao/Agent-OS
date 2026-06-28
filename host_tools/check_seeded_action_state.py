@@ -7,6 +7,7 @@ import shutil
 from pathlib import Path
 from typing import Any
 
+from check_host_action_kind_alignment import collect_action_routes, default_host_dir
 from plain_ucore_action_runner import action_kind, prepare_action_state, run_seeded_ucore
 
 
@@ -536,6 +537,53 @@ def seeded_action_kinds() -> list[str]:
     return [action_kind(str(action["path"])) for action in seeded_actions()]
 
 
+def seeded_route_coverage(root: Path, host_dir: Path | None = None) -> dict[str, object]:
+    resolved_host_dir = host_dir or default_host_dir(root)
+    seeded_paths = [str(action["path"]) for action in seeded_actions()]
+    seeded_path_set = set(seeded_paths)
+    seeded_kinds = sorted(set(seeded_action_kinds()))
+    if not resolved_host_dir.exists():
+        return {
+            "status": "skipped",
+            "reason": "host_platform_not_found",
+            "host_dir": str(resolved_host_dir),
+            "seeded_actions": len(seeded_paths),
+            "seeded_kinds": len(seeded_kinds),
+        }
+
+    failures: list[str] = []
+    try:
+        host_routes = collect_action_routes(resolved_host_dir)
+    except FileNotFoundError as exc:
+        host_routes = []
+        failures.append(str(exc))
+
+    host_route_set = set(host_routes)
+    host_kinds = sorted(set(action_kind(route) for route in host_routes))
+    known_seeded_routes = sorted(seeded_path_set & host_route_set)
+    unknown_seeded_routes = sorted(seeded_path_set - host_route_set)
+    if unknown_seeded_routes:
+        failures.append("seeded routes missing from host API: " + ",".join(unknown_seeded_routes[:12]))
+
+    seeded_kind_set = set(seeded_kinds)
+    covered_host_kinds = sorted(kind for kind in host_kinds if kind in seeded_kind_set)
+    uncovered_host_kinds = sorted(kind for kind in host_kinds if kind not in seeded_kind_set)
+    return {
+        "status": "failed" if failures else "ready",
+        "host_dir": str(resolved_host_dir),
+        "host_action_routes": len(host_routes),
+        "host_action_kinds": len(host_kinds),
+        "seeded_actions": len(seeded_paths),
+        "seeded_known_routes": len(known_seeded_routes),
+        "seeded_unknown_routes": unknown_seeded_routes,
+        "seeded_kinds": len(seeded_kinds),
+        "seeded_host_kinds": len(covered_host_kinds),
+        "uncovered_host_kinds": uncovered_host_kinds,
+        "uncovered_host_kind_sample": uncovered_host_kinds[:16],
+        "failures": failures,
+    }
+
+
 def read_text(path: Path) -> str:
     if not path.exists():
         return ""
@@ -713,11 +761,15 @@ def run_check(root: Path, work_dir: Path, timeout: int, wsl_distro: str) -> dict
         pass_marker="rp_agentos_orch: passed",
     )
     failures = list(plain["failures"]) + list(agentos["failures"])
+    coverage = seeded_route_coverage(root)
+    if coverage.get("status") == "failed":
+        failures.extend(str(item) for item in coverage.get("failures", []))
     return {
         "status": "ready" if not failures else "failed",
         "action": "/actions/research/rerun",
         "action_count": len(seeded_actions()),
         "action_kinds": seeded_action_kinds(),
+        "coverage": coverage,
         "plain": plain,
         "agentos": agentos,
         "failures": failures,
@@ -741,10 +793,16 @@ def main() -> int:
     summary = run_check(root, args.work_dir, args.timeout, args.wsl_distro)
     if args.json_out:
         write_json(args.json_out, summary)
+    coverage = summary.get("coverage", {})
+    if not isinstance(coverage, dict):
+        coverage = {}
     print(
-        "seeded_action_state: action={action} action_count={action_count} plain={plain_status} agentos={agentos_status} status={status}".format(
+        "seeded_action_state: action={action} action_count={action_count} host_routes={host_routes} seeded_routes={seeded_routes} seeded_kinds={seeded_kinds} plain={plain_status} agentos={agentos_status} status={status}".format(
             action=summary["action"],
             action_count=summary["action_count"],
+            host_routes=coverage.get("host_action_routes", "skipped"),
+            seeded_routes=coverage.get("seeded_known_routes", "skipped"),
+            seeded_kinds=coverage.get("seeded_host_kinds", coverage.get("seeded_kinds", "skipped")),
             plain_status=summary["plain"]["status"],
             agentos_status=summary["agentos"]["status"],
             status=summary["status"],

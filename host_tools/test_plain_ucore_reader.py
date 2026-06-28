@@ -1568,6 +1568,14 @@ def main() -> int:
                         "workflow_portability_package",
                         "agentcompare",
                     ],
+                    "coverage": {
+                        "status": "ready",
+                        "host_action_routes": 95,
+                        "host_action_kinds": 95,
+                        "seeded_known_routes": 44,
+                        "seeded_host_kinds": 44,
+                        "uncovered_host_kinds": ["workbench_note", "research_export"],
+                    },
                     "plain": {
                         "status": "ready",
                         "prepare": {"actions": 44, "accepted": 44},
@@ -2086,6 +2094,11 @@ def main() -> int:
         assert (out_dir / "api" / "host_test_alignment.json").exists()
         assert (out_dir / "api" / "host_surface_alignment.json").exists()
         assert (out_dir / "api" / "host_seeded_action.json").exists()
+        seeded_api = json.loads((out_dir / "api" / "host_seeded_action.json").read_text(encoding="utf-8"))
+        seeded_lines = "\n".join(seeded_api["lines"])
+        assert "seeded_action_coverage=host_routes" in seeded_lines
+        assert "host_action_routes=95" in seeded_lines
+        assert "seeded_known_routes=44" in seeded_lines
         assert (out_dir / "api" / "host_platform_alignment_raw.json").exists()
         assert (out_dir / "api" / "host_test_alignment_raw.json").exists()
         assert (out_dir / "api" / "host_surface_alignment_raw.json").exists()

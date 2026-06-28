@@ -250,7 +250,7 @@ seeded_action_state: plain start chapter=platform_seeded init=rp_seed_orch actio
 seeded_action_state: plain done passed=1 extracted_state_files=256 status=ready
 seeded_action_state: agentos start chapter=platform_agentos init=rp_agentos_orch action_count=44 log=/tmp/agentos-dual-platform/seeded-action-state/agentos/ucore-run.log
 seeded_action_state: agentos done passed=1 extracted_state_files=268 status=ready
-seeded_action_state: action=/actions/research/rerun action_count=44 plain=ready agentos=ready status=ready
+seeded_action_state: action=/actions/research/rerun action_count=44 host_routes=95 seeded_routes=44 seeded_kinds=44 plain=ready agentos=ready status=ready
 [dual-platform] plain uCore research platform log: /tmp/agentos-dual-platform/seeded-action-state/plain/ucore-run.log
 rp_orch: passed
 rp_orch: programs_ok=69 programs_total=69

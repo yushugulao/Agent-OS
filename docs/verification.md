@@ -170,7 +170,7 @@ seeded_action_state: plain start chapter=platform_seeded init=rp_seed_orch actio
 seeded_action_state: plain done passed=1 extracted_state_files=256 status=ready
 seeded_action_state: agentos start chapter=platform_agentos init=rp_agentos_orch action_count=44 log=/tmp/agentos-dual-platform/seeded-action-state/agentos/ucore-run.log
 seeded_action_state: agentos done passed=1 extracted_state_files=268 status=ready
-seeded_action_state: action=/actions/research/rerun action_count=44 plain=ready agentos=ready status=ready
+seeded_action_state: action=/actions/research/rerun action_count=44 host_routes=95 seeded_routes=44 seeded_kinds=44 plain=ready agentos=ready status=ready
 [dual-platform] plain uCore research platform log: /tmp/agentos-dual-platform/seeded-action-state/plain/ucore-run.log
 rp_orch: passed
 rp_orch: programs_ok=69 programs_total=69
@@ -222,13 +222,13 @@ host_action_kind_alignment: action_routes=95 action_kinds=95 generic_routes=0 pl
 
 这项检查用于发现“路由数量已经跟上，但 uCore seed 路径没有真正处理某个 action”的问题。例如宿主机提供 `/actions/research/rerun` 时，两个 uCore 目标都应当能接收 `kind=research_rerun`，并在 `rp_input`、`rp_runner`、`rp_report_text` 或相关状态文件中留下可读结果。
 
-预置 action 状态检查由 `host_tools/check_seeded_action_state.py` 完成。它构造 44 个代表性宿主机请求，以 `/actions/research/rerun` 为主，同时覆盖研究输入、证据处理、artifact 输入与派生、Host workflow 主流程和阶段动作、LLM Relay 请求与返回、workbench 文件校验、数据集操作、项目生命周期、研究协议、项目评审、workflow 可移植性和 AgentCompare；随后分别运行 plain uCore 与 AgentOS-uCore 的预置入口，并从两个文件系统镜像中检查 `rp_input`、`rp_runner`、`rp_report_text`、`rp_artifact_manifest`、`rp_stage_dag`、`rp_llm_packets`、`rp_wfio`、`rp_usableproj`、`rp_studyproto` 等状态文件是否都写入同一组关键状态。`make dual-platform-run` 直接复用这次检查得到的镜像提取目录作为后续对照和 Reader 渲染输入，因此它也是双目标主运行路径。当前期望输出为：
+预置 action 状态检查由 `host_tools/check_seeded_action_state.py` 完成。它构造 44 个代表性宿主机请求，以 `/actions/research/rerun` 为主，同时覆盖研究输入、证据处理、artifact 输入与派生、Host workflow 主流程和阶段动作、LLM Relay 请求与返回、workbench 文件校验、数据集操作、项目生命周期、研究协议、项目评审、workflow 可移植性和 AgentCompare；随后分别运行 plain uCore 与 AgentOS-uCore 的预置入口，并从两个文件系统镜像中检查 `rp_input`、`rp_runner`、`rp_report_text`、`rp_artifact_manifest`、`rp_stage_dag`、`rp_llm_packets`、`rp_wfio`、`rp_usableproj`、`rp_studyproto` 等状态文件是否都写入同一组关键状态。该脚本还会读取宿主机 action 路由，报告 `host_routes`、`seeded_routes` 和 `seeded_kinds`：前者表示宿主机 action 路由总数，后两者表示已经进入 QEMU 实跑的代表性路由和 kind 数量。`make dual-platform-run` 直接复用这次检查得到的镜像提取目录作为后续对照和 Reader 渲染输入，因此它也是双目标主运行路径。当前期望输出为：
 
 ```text
-seeded_action_state: action=/actions/research/rerun action_count=44 plain=ready agentos=ready status=ready
+seeded_action_state: action=/actions/research/rerun action_count=44 host_routes=95 seeded_routes=44 seeded_kinds=44 plain=ready agentos=ready status=ready
 ```
 
-这项检查补充了 action kind 检查：action kind 检查回答“源码是否有对应处理”，预置 action 状态检查回答“代表性宿主机请求进入 QEMU 后是否真的产生可读结果”。当前批次以 rerun action 作为主线，因为它会同时影响输入、运行器、报告文本和 artifact manifest；其余请求用于覆盖数据、证据、artifact、workflow、LLM、workbench、项目生命周期、研究协议、项目评审和可移植性状态，避免只验证单一路径。
+这项检查补充了 action kind 检查：action kind 检查回答“源码是否有对应处理”，预置 action 状态检查回答“代表性宿主机请求进入 QEMU 后是否真的产生可读结果”。当前批次以 rerun action 作为主线，因为它会同时影响输入、运行器、报告文本和 artifact manifest；其余请求用于覆盖数据、证据、artifact、workflow、LLM、workbench、项目生命周期、研究协议、项目评审和可移植性状态，避免只验证单一路径。未进入 QEMU 实跑的宿主机 action 仍由 action kind 检查约束源码处理路径；如果某个新路由需要成为演示主证据，应加入预置请求，并补充对应状态文件断言。
 
 宿主机 Web/API/action 规模检查由 `host_tools/check_host_surface_alignment.py` 完成。它直接读取仓库外宿主机平台的 `agent_platform/api_server.py`，统计显式 API 路由、action 路由和下载引用数量，再检查 root uCore 与 AgentOS-uCore 的 `rp_web_export.c` 和双目标运行状态文件是否保留对应规模。当前本机检查输出为：
 

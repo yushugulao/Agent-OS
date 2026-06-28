@@ -65,6 +65,26 @@ class SeededActionStateTests(unittest.TestCase):
         self.assertIsInstance(portability, dict)
         self.assertEqual(portability["target_runtime"], "agentos-ucore")
 
+    def test_seeded_route_coverage_reports_host_relation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            host_dir = root / "host"
+            api = host_dir / "agent_platform" / "api_server.py"
+            api.parent.mkdir(parents=True, exist_ok=True)
+            api.write_text(
+                "\n".join(f'if path == "{action["path"]}":' for action in checker.seeded_actions())
+                + '\nif path == "/actions/research/workbench-note":\n',
+                encoding="utf-8",
+            )
+
+            coverage = checker.seeded_route_coverage(root, host_dir)
+
+            self.assertEqual(coverage["status"], "ready")
+            self.assertEqual(coverage["host_action_routes"], 45)
+            self.assertEqual(coverage["seeded_known_routes"], 44)
+            self.assertEqual(coverage["seeded_host_kinds"], 44)
+            self.assertIn("workbench_note", coverage["uncovered_host_kinds"])
+
     def test_validate_extracted_state_accepts_expected_files(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             run_dir = Path(tmp)
