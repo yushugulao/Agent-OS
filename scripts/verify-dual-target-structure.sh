@@ -101,6 +101,7 @@ rp_realtask.c
 rp_reldossier.c
 rp_repair.c
 rp_revdash.c
+rp_runbooks.c
 rp_service_surface.c
 rp_stdesign.c
 rp_sysreview.c

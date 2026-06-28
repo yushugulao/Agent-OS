@@ -1957,9 +1957,10 @@ int main(void)
 	ok = ok && require_file_token("rp_runbooks", "runbook_executions=1");
 	ok = ok && require_file_token("rp_runbooks", "runbook_exports=1");
 	ok = ok && require_file_token("rp_runbooks", "worker_operation_records=6");
-	ok = ok && require_file_token("rp_runbooks", "agentos_adaptation=event_context,kernel_timeline,metadata_index,batch_recovery_tool;status=planned");
+	ok = ok && require_file_token("rp_runbooks", "agentos_adaptation=event_context,kernel_timeline,metadata_index,batch_recovery_tool;evidence=rp_agentos_mainflow,rp_agentos_timeline,rp_agentos_query,rp_agentos_recovery;result=observed;status=ready");
 	ok = ok && require_file_token("rp_review_dashboard", "subsection=runbooks;source=rp_runbooks;steps=7;incident=closed;status=ready");
 	ok = ok && require_file_token("rp_agentcmp", "runbook_recovery_checks=16");
+	ok = ok && require_file_token("rp_agentcmp", "runbook_kernel_binding=event_context,kernel_timeline,metadata_index,batch_recovery_tool;source=rp_runbooks;status=ready");
 	ok = ok && require_file_token("rp_projectrel", "project_delivery_checks=18");
 	ok = ok && require_file_token("rp_projectrel", "project_handoff_audits=1");
 	ok = ok && require_file_token("rp_projectrel", "project_runbooks=1");
