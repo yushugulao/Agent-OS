@@ -129,6 +129,9 @@ def main() -> int:
         assert summary["embedded_action_records"] == 1, summary
         assert summary["run_result_match"] == 1, summary
         assert summary["agentos_evidence_checks"] == 32, summary
+        assert len(summary["scenario_evidence"]) == len(compare.SCENARIO_EVIDENCE_SPECS), summary
+        assert all(row["status"] == "ready" for row in summary["scenario_evidence"]), summary
+        assert any(row["scenario"] == "Context Path" and row["matched"] >= 3 for row in summary["scenario_evidence"]), summary
         assert summary["agentos_mainflow_stages"] == len(compare.AGENTOS_MAINFLOW_STAGES), summary
         assert summary["agentos_mainflow_facts"] == len(compare.AGENTOS_MAINFLOW_FACTS), summary
         assert summary["plain_timing_records"] == 70, summary

@@ -84,6 +84,18 @@ AGENTOS_REQUIRED_AGENT_PROGRAMS = {
     "rp_realtask",
     "rp_backend",
 }
+SCENARIO_EVIDENCE_SPECS = (
+    ("Context Path", "上下文可信记录", ("context_trusted=kernel_shadow", "context_snapshot=trusted", "report_answer=kernel_context_record")),
+    ("File Metadata", "文件对象查询", ("metadata_query=used_index", "metadata_source=kernel_file_index", "file_verify=kernel_metadata_index")),
+    ("Event Loop", "事件通知与等待", ("agent_event_notify=kernel_queue", "event_delivery=kernel_agent_queue", "delivery=kernel_event_queue")),
+    ("Recovery Action", "失败恢复动作", ("failure_recovery=generic_action", "kernel_tool=action_commit,artifact_update")),
+    ("Audit Ledger", "审计记录", ("provenance_audit=kernel_ledger", "audit_source=kernel_ledger")),
+    ("Provenance", "来源关系追踪", ("package_provenance=kernel_ledger", "package_trace=kernel_provenance")),
+    ("Permission", "权限控制", ("permission_control=sentinel_action_denied",)),
+    ("Timeline", "时间线观察", ("timeline_observe=kernel_snapshot", "timeline_snapshot=ready")),
+    ("Edit Lease", "文件编辑租约", ("edit_lease=kernel_exclusive", "holder_write=checked")),
+    ("Dependency", "依赖与预取提示", ("dependency_graph=kernel_records", "dependency_update=generic_record", "prefetch_hint=dependency_driven")),
+)
 
 
 @dataclass(frozen=True)
@@ -257,6 +269,34 @@ def verify_agentos_evidence(agentos_dir: Path) -> int:
     return checked
 
 
+def collect_scenario_evidence(agentos_dir: Path) -> list[dict[str, object]]:
+    texts: dict[str, str] = {}
+    for file_name in AGENTOS_EVIDENCE_REQUIREMENTS:
+        path = agentos_dir / file_name
+        if path.is_file():
+            texts[file_name] = read_text(path)
+
+    rows: list[dict[str, object]] = []
+    for scenario, label, tokens in SCENARIO_EVIDENCE_SPECS:
+        matched: list[dict[str, str]] = []
+        for token in tokens:
+            sources = [file_name for file_name, text in texts.items() if token in text]
+            for source in sources:
+                matched.append({"token": token, "source": source})
+        rows.append(
+            {
+                "scenario": scenario,
+                "label": label,
+                "expected": len(tokens),
+                "matched": len(matched),
+                "sources": sorted({item["source"] for item in matched}),
+                "tokens": matched,
+                "status": "ready" if len(matched) >= len(tokens) else "partial",
+            }
+        )
+    return rows
+
+
 def verify_agentos_mainflow_stages(agentos_dir: Path) -> int:
     text = require_file_text(agentos_dir, "rp_agentos_mainflow")
     found: list[str] = []
@@ -364,6 +404,7 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
     preserved_costs = verify_backend_costs(plain_dir, agentos_dir)
     embedded_action_records = verify_run_result(plain_dir, agentos_dir)
     agentos_evidence_checks = verify_agentos_evidence(agentos_dir)
+    scenario_evidence = collect_scenario_evidence(agentos_dir)
     agentos_mainflow_stages = verify_agentos_mainflow_stages(agentos_dir)
     agentos_mainflow_facts = verify_agentos_mainflow_facts(agentos_dir)
     plain_timing_records, plain_agent_launches, plain_fork_launches = verify_orch_timing(
@@ -390,6 +431,7 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
         "embedded_action_records": embedded_action_records,
         "run_result_match": 1,
         "agentos_evidence_checks": agentos_evidence_checks,
+        "scenario_evidence": scenario_evidence,
         "agentos_mainflow_stages": agentos_mainflow_stages,
         "agentos_mainflow_facts": agentos_mainflow_facts,
         "plain_timing_records": plain_timing_records,

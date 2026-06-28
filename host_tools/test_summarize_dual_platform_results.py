@@ -33,6 +33,24 @@ def main() -> int:
                 "agentos_mainflow_stages": 11,
                 "agentos_mainflow_facts": 12,
                 "run_result_match": 1,
+                "scenario_evidence": [
+                    {
+                        "scenario": "Context Path",
+                        "label": "上下文可信记录",
+                        "expected": 3,
+                        "matched": 3,
+                        "sources": ["rp_agentos_mainflow", "rp_agentos_recovery", "rp_agentos_real_task"],
+                        "status": "ready",
+                    },
+                    {
+                        "scenario": "File Metadata",
+                        "label": "文件对象查询",
+                        "expected": 3,
+                        "matched": 3,
+                        "sources": ["rp_agentos_mainflow", "rp_agentos_query", "rp_agentos_workbench"],
+                        "status": "ready",
+                    },
+                ],
                 "plain_timing_records": 70,
                 "plain_agent_launches": 0,
                 "plain_fork_launches": 70,
@@ -90,6 +108,8 @@ def main() -> int:
         assert "预置请求双目标运行" in report
         assert "自动判读" in report
         assert "两个目标运行结果可对照" in report
+        assert "多场景机制证据" in report
+        assert "上下文可信记录" in report
         csv_text = (out_dir / "summary.csv").read_text(encoding="utf-8")
         assert "提取到的 rp_* 状态文件" in csv_text
         assert "QEMU 无输出提示次数" in csv_text
@@ -98,6 +118,7 @@ def main() -> int:
         assert "charts/dual-target-state-reader.svg" in index_html
         assert "monitor.html" in index_html
         assert "charts/runtime-observation.svg" in index_html
+        assert "charts/scenario-evidence.svg" in index_html
         assert "make demo-reader" in index_html
         assert "阶段耗时明细" in index_html
         assert "预置请求双目标运行" in index_html
@@ -106,12 +127,14 @@ def main() -> int:
         assert "AgentOS 运行观测面板" in monitor_html
         assert "一张图看本次运行" in monitor_html
         assert "make demo-reader" in monitor_html
+        assert "charts/scenario-evidence.svg" in monitor_html
         for name in [
             "dual-target-state-reader.svg",
             "launch-model.svg",
             "agentos-evidence.svg",
             "stage-timings.svg",
             "runtime-observation.svg",
+            "scenario-evidence.svg",
         ]:
             svg = (out_dir / "charts" / name).read_text(encoding="utf-8")
             assert "<svg" in svg

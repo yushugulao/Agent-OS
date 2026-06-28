@@ -538,6 +538,47 @@ def runtime_observation_svg(rows: list[MetricRow], meta: dict[str, object], out_
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def scenario_evidence_svg(meta: dict[str, object], out_path: Path) -> None:
+    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
+    raw_rows = state.get("scenario_evidence", [])
+    rows = [row for row in raw_rows if isinstance(row, dict)] if isinstance(raw_rows, list) else []
+    if not rows:
+        rows = [{"label": "未记录场景证据", "expected": 1, "matched": 0, "status": "partial"}]
+
+    width, height = 1080, max(420, 118 + len(rows) * 44)
+    margin_left, margin_right, margin_top = 210, 120, 88
+    plot_w = width - margin_left - margin_right
+    max_value = max([1.0] + [as_number(row.get("expected")) for row in rows] + [as_number(row.get("matched")) for row in rows])
+    lines = svg_header(width, height)
+    lines.append('<text x="34" y="34" class="title">AgentOS 多场景机制证据</text>')
+    lines.append('<text x="34" y="58" class="subtitle">每一行对应一个 Agent 工作流场景；浅色条是应检查证据数，深色条是本次运行实际命中的证据数。</text>')
+    for tick in range(0, int(max_value) + 1):
+        if max_value <= 8 or tick % max(1, int(max_value // 5)) == 0:
+            x = margin_left + (tick / max_value) * plot_w
+            lines.append(f'<line x1="{x:.1f}" y1="{margin_top - 10}" x2="{x:.1f}" y2="{height - 42}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
+            lines.append(f'<text x="{x:.1f}" y="{height - 22}" text-anchor="middle" class="axis">{tick}</text>')
+    for index, row in enumerate(rows):
+        y = margin_top + index * 44
+        label = str(row.get("label") or row.get("scenario") or "")
+        expected = as_number(row.get("expected"))
+        matched = as_number(row.get("matched"))
+        expected_w = (expected / max_value) * plot_w if max_value else 0
+        matched_w = (matched / max_value) * plot_w if max_value else 0
+        color = PALETTE["agentos"] if str(row.get("status")) == "ready" else PALETTE["extra"]
+        lines.append(f'<text x="{margin_left - 14}" y="{y + 22}" text-anchor="end" class="label">{escape(label[:20])}</text>')
+        lines.append(f'<rect x="{margin_left}" y="{y + 4}" width="{expected_w:.1f}" height="28" fill="#eef3f8" stroke="{PALETTE["grid"]}" rx="2"/>')
+        lines.append(f'<rect x="{margin_left}" y="{y + 9}" width="{matched_w:.1f}" height="18" fill="{color}" rx="2"/>')
+        lines.append(f'<text x="{margin_left + max(expected_w, matched_w) + 10:.1f}" y="{y + 23}" class="value">{fmt_number(matched)}/{fmt_number(expected)}</text>')
+    legend_y = height - 22
+    lines.append(f'<rect x="{width - 360}" y="{legend_y - 12}" width="14" height="14" fill="#eef3f8" stroke="{PALETTE["grid"]}"/>')
+    lines.append(f'<text x="{width - 338}" y="{legend_y}" class="axis">应检查证据</text>')
+    lines.append(f'<rect x="{width - 230}" y="{legend_y - 12}" width="14" height="14" fill="{PALETTE["agentos"]}"/>')
+    lines.append(f'<text x="{width - 208}" y="{legend_y}" class="axis">已命中证据</text>')
+    lines.append("</svg>")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Path) -> list[Path]:
     by_metric = {row.metric: row for row in rows}
     charts_dir.mkdir(parents=True, exist_ok=True)
@@ -606,6 +647,10 @@ def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Pat
     runtime_observation_svg(rows, meta, observation_chart)
     paths.append(observation_chart)
 
+    scenario_chart = charts_dir / "scenario-evidence.svg"
+    scenario_evidence_svg(meta, scenario_chart)
+    paths.append(scenario_chart)
+
     return paths
 
 
@@ -649,6 +694,22 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
     lines.extend(["", "## 自动判读", ""])
     for status, text in evaluation_items(meta):
         lines.append(f"- {status}：{text}")
+    scenario_rows = state.get("scenario_evidence", []) if isinstance(state, dict) else []
+    if isinstance(scenario_rows, list) and scenario_rows:
+        lines.extend(["", "## 多场景机制证据", "", "| 场景 | 命中/应检查 | 来源状态文件 | 状态 |", "| --- | ---: | --- | --- |"])
+        for row in scenario_rows:
+            if isinstance(row, dict):
+                sources = row.get("sources", [])
+                source_text = ",".join(str(item) for item in sources) if isinstance(sources, list) else str(sources)
+                lines.append(
+                    "| {label} | {matched}/{expected} | {sources} | {status} |".format(
+                        label=row.get("label", row.get("scenario", "")),
+                        matched=fmt_number(as_number(row.get("matched"))),
+                        expected=fmt_number(as_number(row.get("expected"))),
+                        sources=source_text,
+                        status=row.get("status", ""),
+                    )
+                )
     stage_rows = meta.get("stage_rows", [])
     if isinstance(stage_rows, list) and stage_rows:
         lines.extend(["", "## 阶段耗时", "", "| 阶段 | 秒数 | 状态 |", "| --- | ---: | --- |"])
@@ -674,6 +735,7 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
         "agentos-evidence.svg": "AgentOS 额外机制证据",
         "stage-timings.svg": "双目标运行阶段耗时",
         "runtime-observation.svg": "双目标运行观测面板",
+        "scenario-evidence.svg": "AgentOS 多场景机制证据",
     }
     for chart in charts:
         rel = chart.relative_to(out_path.parent).as_posix()
@@ -761,6 +823,7 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="report.md">查看 Markdown 报告</a>
       <a href="summary.csv">下载 CSV 明细</a>
       <a href="charts/runtime-observation.svg">打开观测图</a>
+      <a href="charts/scenario-evidence.svg">打开场景证据图</a>
       <a href="charts/dual-target-state-reader.svg">打开状态图</a>
       <a href="charts/stage-timings.svg">打开阶段耗时图</a>
     </div>
@@ -856,7 +919,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>相关结果</h2>
-      <p><a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="charts/runtime-observation.svg">运行观测图</a></p>
+      <p><a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a></p>
     </section>
   </main>
 </body>

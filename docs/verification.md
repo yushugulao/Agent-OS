@@ -215,6 +215,7 @@ results/latest/monitor.html
 results/latest/report.md
 results/latest/charts/dual-target-state-reader.svg
 results/latest/charts/runtime-observation.svg
+results/latest/charts/scenario-evidence.svg
 results/latest/charts/launch-model.svg
 results/latest/charts/agentos-evidence.svg
 results/latest/charts/stage-timings.svg
@@ -229,6 +230,10 @@ results/latest/charts/stage-timings.svg
 ![双目标运行观测面板](assets/verification-charts/runtime-observation.svg)
 
 这张图把阶段执行、状态产物、内核证据、Agent 启动方式和 QEMU 健康状态放在同一个画面里。录屏时可以先用它说明本次双目标测试不是只看 `passed` 标记：测试脚本记录了每个阶段的耗时，核对了普通目标和增强目标的共有结果，也检查了增强目标额外输出的 Context、文件 metadata、事件、timeline、audit 和 provenance 证据。如果图中的超时、无输出提示或阶段状态异常，后续说明应回到对应日志，而不是继续引用本次数据。
+
+![AgentOS 多场景机制证据](assets/verification-charts/scenario-evidence.svg)
+
+这张图把 AgentOS 在同一科研负载中使用到的内核机制按场景分组，包括上下文可信记录、文件对象查询、事件通知、恢复动作、审计记录、来源关系追踪、权限控制、时间线观察、文件编辑租约、依赖与预取提示。每个场景都有应检查证据数和实际命中证据数，来源文件写入 `report.md` 的“多场景机制证据”表格。这样可以直接看出增强内核不是只在单个接口上通过测试，而是在完整科研流程里同时承担多类 Agent 工作。
 
 ![科研流程启动方式组成](assets/verification-charts/launch-model.svg)
 
