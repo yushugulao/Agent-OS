@@ -26,7 +26,7 @@ def write_summary(root: Path, pages: int, api_json_files: int, state_files: int,
     )
 
 
-def valid_html(title: str) -> str:
+def valid_html(title: str, extra: str = "") -> str:
     body = "\n".join(f"<p>line-{index}</p>" for index in range(120))
     return f"""<html>
 <body>
@@ -35,6 +35,7 @@ def valid_html(title: str) -> str:
     <main>
       <header><div><h1>{title}</h1><p>Rendered from plain uCore state files.</p></div></header>
       <section class="panel">{body}</section>
+      <section class="panel">{extra}</section>
     </main>
   </div>
 </body>
@@ -55,6 +56,23 @@ def write_reader(root: Path) -> None:
     write_summary(root, pages=len(check.EXPECTED_PAGE_TITLES), api_json_files=2, state_files=2)
 
 
+def add_agentos_api(root: Path) -> None:
+    api_dir = root / "api"
+    for api_name in sorted(check.AGENTOS_COMPARE_API):
+        name = api_name[:-5]
+        (api_dir / api_name).write_text(
+            json.dumps({"name": name, "values": {}, "lines": []}) + "\n",
+            encoding="utf-8",
+        )
+    total_api = 2 + len(check.AGENTOS_COMPARE_API)
+    total_state = 2 + len(check.AGENTOS_COMPARE_API)
+    write_summary(root, pages=len(check.EXPECTED_PAGE_TITLES), api_json_files=total_api, state_files=total_state)
+
+
+def agentos_compare_html() -> str:
+    return valid_html("Compare", "\n".join(check.AGENTOS_COMPARE_MARKERS))
+
+
 def expect_failure(root: Path, expected: str) -> None:
     try:
         check.check_reader_output(root)
@@ -72,6 +90,7 @@ def main() -> int:
         assert summary["pages"] == len(check.EXPECTED_PAGE_TITLES), summary
         assert summary["api_json"] == 2, summary
         assert summary["spec_pages"] == len(check.EXPECTED_PAGE_TITLES), summary
+        assert summary["agentos_compare_markers"] == 0, summary
 
         (root / "compare.html").write_text("<html>broken</html>\n", encoding="utf-8")
         expect_failure(root, "unexpectedly small")
@@ -107,6 +126,20 @@ def main() -> int:
         write_reader(root)
         write_summary(root, pages=len(check.EXPECTED_PAGE_TITLES), api_json_files=2, state_files=3)
         expect_failure(root, "API count is smaller")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_reader(root)
+        add_agentos_api(root)
+        expect_failure(root, "missing kernel evidence marker")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        write_reader(root)
+        add_agentos_api(root)
+        (root / "compare.html").write_text(agentos_compare_html(), encoding="utf-8")
+        summary = check.check_reader_output(root)
+        assert summary["agentos_compare_markers"] == len(check.AGENTOS_COMPARE_MARKERS), summary
 
     print("test_check_reader_output: passed")
     return 0

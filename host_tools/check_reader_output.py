@@ -31,6 +31,35 @@ HTML_MARKERS = (
 
 EXPECTED_PAGE_TITLES = {file_name: title for file_name, title, _primary, _extras in PAGE_SPECS}
 
+AGENTOS_COMPARE_API = {
+    "rp_agentos_mainflow.json",
+    "rp_agentos_query.json",
+    "rp_agentos_recovery.json",
+    "rp_agentos_timeline.json",
+    "rp_agentos_collab_ack.json",
+    "rp_agentos_audit.json",
+    "rp_agentos_workbench.json",
+    "rp_agentos_package.json",
+    "rp_agentos_real_task.json",
+    "rp_agentos_conflict.json",
+}
+
+AGENTOS_COMPARE_MARKERS = (
+    "AgentOS Main Flow Kernel Stages",
+    "AgentOS Kernel Output Files",
+    "rp_agentos_mainflow",
+    "rp_agentos_query",
+    "rp_agentos_recovery",
+    "rp_agentos_timeline",
+    "rp_agentos_collab_ack",
+    "kernel_shadow",
+    "kernel_metadata_index",
+    "kernel_event_queue",
+    "kernel_ledger",
+    "kernel_context_record",
+    "kernel_exclusive",
+)
+
 
 def read_summary(reader_dir: Path) -> dict[str, object]:
     summary_path = reader_dir / "reader-summary.json"
@@ -95,6 +124,20 @@ def validate_api(reader_dir: Path, expected_count: int) -> set[str]:
     return api_names
 
 
+def validate_agentos_compare(reader_dir: Path, api_names: set[str]) -> int:
+    present = AGENTOS_COMPARE_API & api_names
+    if not present:
+        return 0
+    missing_api = sorted(AGENTOS_COMPARE_API - api_names)
+    if missing_api:
+        raise ValueError("AgentOS reader API is missing kernel evidence files: " + ",".join(missing_api))
+    compare_html = (reader_dir / "compare.html").read_text(encoding="utf-8", errors="replace")
+    for marker in AGENTOS_COMPARE_MARKERS:
+        if marker not in compare_html:
+            raise ValueError(f"AgentOS Compare page is missing kernel evidence marker: {marker}")
+    return len(AGENTOS_COMPARE_MARKERS)
+
+
 def check_reader_output(reader_dir: Path) -> dict[str, object]:
     summary = read_summary(reader_dir)
     if summary.get("status") != "ready":
@@ -104,6 +147,7 @@ def check_reader_output(reader_dir: Path) -> dict[str, object]:
     expected_state = require_int(summary, "state_files")
     page_names = validate_html(reader_dir, expected_pages)
     api_names = validate_api(reader_dir, expected_api)
+    agentos_compare_markers = validate_agentos_compare(reader_dir, api_names)
     if expected_api < expected_state:
         raise ValueError(f"API count is smaller than state count in summary: state={expected_state} api={expected_api}")
     return {
@@ -112,6 +156,7 @@ def check_reader_output(reader_dir: Path) -> dict[str, object]:
         "state_files": expected_state,
         "required_pages": len(REQUIRED_PAGES),
         "spec_pages": len(EXPECTED_PAGE_TITLES),
+        "agentos_compare_markers": agentos_compare_markers,
         "status": "ready",
     }
 
@@ -126,7 +171,7 @@ def main() -> int:
     if args.json_out is not None:
         args.json_out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(
-        "reader_output_check: pages={pages} api_json={api_json} state_files={state_files} required_pages={required_pages} spec_pages={spec_pages} status={status}".format(
+        "reader_output_check: pages={pages} api_json={api_json} state_files={state_files} required_pages={required_pages} spec_pages={spec_pages} agentos_compare_markers={agentos_compare_markers} status={status}".format(
             **summary
         )
     )
