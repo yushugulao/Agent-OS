@@ -81,6 +81,7 @@ def write_timing(root: Path, launcher: str = "fork", hybrid_agentos: bool = Fals
 def agentos_file_list() -> list[str]:
     return [
         "rp_backend",
+        "rp_backend_exec",
         "rp_agentcmp",
         "rp_host_run_result",
         "rp_orch_timing",
@@ -106,12 +107,23 @@ def main() -> int:
         agentos.mkdir()
 
         write_state_file(plain, "rp_backend", "runner_report=file_scan;status=ready\n")
+        write_state_file(
+            plain,
+            "rp_backend_exec",
+            "runner_report=user-context;plain_cost=rebuild_steps_6;agentos_replace=none;risk=untrusted_context;status=passed\n",
+        )
         write_state_file(plain, "rp_agentcmp", "plain_kernel=passed;programs=69;status=ready\n")
         write_required_runtime_files(plain)
         write_timing(plain, "fork_seeded")
-        write_summary(plain, ["rp_backend", "rp_agentcmp", "rp_host_run_result", "rp_orch_timing"])
+        write_summary(plain, ["rp_backend", "rp_backend_exec", "rp_agentcmp", "rp_host_run_result", "rp_orch_timing"])
 
         write_state_file(agentos, "rp_backend", "runner_report=file_scan;status=ready;kernel=observed\n")
+        write_state_file(
+            agentos,
+            "rp_backend_exec",
+            "runner_report=agentos-context;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;risk=untrusted_context;status=passed\n"
+            "runner_report=agentos-edit;plain_cost=userland_lock_file;agentos_replace=kernel_edit_lease;risk=lost_update;status=passed\n",
+        )
         write_state_file(agentos, "rp_agentcmp", "plain_kernel=passed;programs=69;status=ready\n")
         write_required_runtime_files(agentos)
         write_timing(agentos, "fork", hybrid_agentos=True)
@@ -120,12 +132,21 @@ def main() -> int:
         write_summary(agentos, agentos_file_list())
 
         summary = compare.compare_state(plain, agentos, min_common_files=4)
-        assert summary["plain_files"] == 4, summary
-        assert summary["agentos_files"] == 16, summary
-        assert summary["common_files"] == 4, summary
+        assert summary["plain_files"] == 5, summary
+        assert summary["agentos_files"] == 17, summary
+        assert summary["common_files"] == 5, summary
         assert summary["agentos_extra_files"] == 12, summary
-        assert summary["checked_success_records"] == 3, summary
-        assert summary["preserved_plain_costs"] == 0, summary
+        assert summary["checked_success_records"] == 4, summary
+        assert summary["preserved_plain_costs"] == 1, summary
+        assert summary["cost_replacement_count"] == 2, summary
+        assert any(
+            row["plain_cost"] == "rebuild_steps_6" and row["preserved_from_plain"] == 1
+            for row in summary["cost_replacements"]
+        ), summary
+        assert any(
+            row["plain_cost"] == "userland_lock_file" and row["preserved_from_plain"] == 0
+            for row in summary["cost_replacements"]
+        ), summary
         assert summary["embedded_action_records"] == 1, summary
         assert summary["run_result_match"] == 1, summary
         assert summary["agentos_evidence_checks"] == 32, summary
@@ -142,7 +163,7 @@ def main() -> int:
         assert summary["agentos_fork_launches"] == 70 - len(compare.AGENTOS_REQUIRED_AGENT_PROGRAMS), summary
 
         (agentos / "rp_agentcmp").unlink()
-        write_summary(agentos, ["rp_backend", "rp_host_run_result", "rp_orch_timing", *compare.AGENTOS_EVIDENCE_REQUIREMENTS.keys()])
+        write_summary(agentos, ["rp_backend", "rp_backend_exec", "rp_host_run_result", "rp_orch_timing", *compare.AGENTOS_EVIDENCE_REQUIREMENTS.keys()])
         expect_failure(plain, agentos, "missing plain files")
 
         write_state_file(agentos, "rp_agentcmp", "plain_kernel=failed;programs=69;status=failed\n")

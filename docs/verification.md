@@ -216,6 +216,7 @@ results/latest/report.md
 results/latest/charts/dual-target-state-reader.svg
 results/latest/charts/runtime-observation.svg
 results/latest/charts/scenario-evidence.svg
+results/latest/charts/cost-replacement.svg
 results/latest/charts/launch-model.svg
 results/latest/charts/agentos-evidence.svg
 results/latest/charts/stage-timings.svg
@@ -234,6 +235,10 @@ results/latest/charts/stage-timings.svg
 ![AgentOS 多场景机制证据](assets/verification-charts/scenario-evidence.svg)
 
 这张图把 AgentOS 在同一科研负载中使用到的内核机制按场景分组，包括上下文可信记录、文件对象查询、事件通知、恢复动作、审计记录、来源关系追踪、权限控制、时间线观察、文件编辑租约、依赖与预取提示。每个场景都有应检查证据数和实际命中证据数，来源文件写入 `report.md` 的“多场景机制证据”表格。这样可以直接看出增强内核不是只在单个接口上通过测试，而是在完整科研流程里同时承担多类 Agent 工作。
+
+![用户态成本项与 AgentOS 替代机制](assets/verification-charts/cost-replacement.svg)
+
+这张图读取两个目标的 `rp_backend_exec` 记录。左侧列出普通用户态科研 Agent 平台为了完成同一流程需要承担的成本，例如重建上下文路径、扫描状态文件、使用约定字段表达权限、用锁文件避免并发写入、用轮询观察事件；右侧列出 AgentOS-uCore 在增强目标中实际使用的替代机制，例如内核 Context Path、文件 metadata 索引、capability 检查、事件队列、文件编辑租约、timeline、audit 和 provenance。读图时应逐行检查：同一行左侧说明普通目标的问题来源，右侧说明增强目标的内核机制，风险说明给出该项机制要解决的工程问题。
 
 ![科研流程启动方式组成](assets/verification-charts/launch-model.svg)
 

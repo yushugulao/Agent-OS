@@ -579,6 +579,40 @@ def scenario_evidence_svg(meta: dict[str, object], out_path: Path) -> None:
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def cost_replacement_svg(meta: dict[str, object], out_path: Path) -> None:
+    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
+    raw_rows = state.get("cost_replacements", [])
+    rows = [row for row in raw_rows if isinstance(row, dict)] if isinstance(raw_rows, list) else []
+    if not rows:
+        rows = [{"plain_cost": "未记录用户态成本项", "agentos_replace": "未记录替代机制", "risk": "unknown", "preserved_from_plain": 0}]
+    rows = rows[:10]
+
+    width, height = 1180, max(420, 112 + len(rows) * 48)
+    lines = svg_header(width, height)
+    lines.append('<text x="34" y="34" class="title">用户态成本项与 AgentOS 替代机制</text>')
+    lines.append('<text x="34" y="58" class="subtitle">每一行来自 rp_backend_exec 的 runner_report 记录，左侧是普通用户态流程需要承担的成本，右侧是增强目标使用的内核机制。</text>')
+    x_cost, x_arrow, x_replace, x_risk = 52, 438, 520, 920
+    lines.append(f'<text x="{x_cost}" y="88" class="value">普通用户态成本项</text>')
+    lines.append(f'<text x="{x_replace}" y="88" class="value">AgentOS 替代机制</text>')
+    lines.append(f'<text x="{x_risk}" y="88" class="value">对应风险</text>')
+    for index, row in enumerate(rows):
+        y = 112 + index * 48
+        preserved = as_number(row.get("preserved_from_plain")) == 1
+        color = PALETTE["agentos"] if preserved else PALETTE["extra"]
+        bg = "#ffffff" if index % 2 == 0 else "#f8fafc"
+        lines.append(f'<rect x="34" y="{y - 24}" width="{width - 68}" height="38" fill="{bg}" stroke="{PALETTE["grid"]}"/>')
+        lines.append(f'<circle cx="{x_cost - 18}" cy="{y - 5}" r="5" fill="{color}"/>')
+        lines.append(f'<text x="{x_cost}" y="{y}" class="label">{escape(str(row.get("plain_cost", ""))[:46])}</text>')
+        lines.append(f'<line x1="{x_arrow}" y1="{y - 5}" x2="{x_replace - 20}" y2="{y - 5}" stroke="{color}" stroke-width="2"/>')
+        lines.append(f'<polygon points="{x_replace - 20},{y - 10} {x_replace - 8},{y - 5} {x_replace - 20},{y}" fill="{color}"/>')
+        lines.append(f'<text x="{x_replace}" y="{y}" class="label">{escape(str(row.get("agentos_replace", ""))[:44])}</text>')
+        lines.append(f'<text x="{x_risk}" y="{y}" class="axis">{escape(str(row.get("risk", ""))[:32])}</text>')
+    lines.append(f'<text x="52" y="{height - 28}" class="subtitle">读图方法：同一行两端必须同时存在。左侧说明普通用户态 workflow 的状态约定、扫描、轮询或锁文件成本；右侧说明 AgentOS-uCore 在同一科研负载中使用的内核机制。</text>')
+    lines.append("</svg>")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Path) -> list[Path]:
     by_metric = {row.metric: row for row in rows}
     charts_dir.mkdir(parents=True, exist_ok=True)
@@ -651,6 +685,10 @@ def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Pat
     scenario_evidence_svg(meta, scenario_chart)
     paths.append(scenario_chart)
 
+    cost_chart = charts_dir / "cost-replacement.svg"
+    cost_replacement_svg(meta, cost_chart)
+    paths.append(cost_chart)
+
     return paths
 
 
@@ -710,6 +748,28 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
                         status=row.get("status", ""),
                     )
                 )
+    replacement_rows = state.get("cost_replacements", []) if isinstance(state, dict) else []
+    if isinstance(replacement_rows, list) and replacement_rows:
+        lines.extend(
+            [
+                "",
+                "## 用户态成本项与 AgentOS 替代机制",
+                "",
+                "| 用户态成本项 | AgentOS 替代机制 | 风险说明 | 普通目标中存在 |",
+                "| --- | --- | --- | ---: |",
+            ]
+        )
+        for row in replacement_rows:
+            if isinstance(row, dict):
+                preserved = "是" if as_number(row.get("preserved_from_plain")) == 1 else "否"
+                lines.append(
+                    "| {plain_cost} | {agentos_replace} | {risk} | {preserved} |".format(
+                        plain_cost=row.get("plain_cost", ""),
+                        agentos_replace=row.get("agentos_replace", ""),
+                        risk=row.get("risk", ""),
+                        preserved=preserved,
+                    )
+                )
     stage_rows = meta.get("stage_rows", [])
     if isinstance(stage_rows, list) and stage_rows:
         lines.extend(["", "## 阶段耗时", "", "| 阶段 | 秒数 | 状态 |", "| --- | ---: | --- |"])
@@ -736,6 +796,7 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
         "stage-timings.svg": "双目标运行阶段耗时",
         "runtime-observation.svg": "双目标运行观测面板",
         "scenario-evidence.svg": "AgentOS 多场景机制证据",
+        "cost-replacement.svg": "用户态成本项与 AgentOS 替代机制",
     }
     for chart in charts:
         rel = chart.relative_to(out_path.parent).as_posix()
@@ -824,6 +885,7 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="summary.csv">下载 CSV 明细</a>
       <a href="charts/runtime-observation.svg">打开观测图</a>
       <a href="charts/scenario-evidence.svg">打开场景证据图</a>
+      <a href="charts/cost-replacement.svg">打开成本替代图</a>
       <a href="charts/dual-target-state-reader.svg">打开状态图</a>
       <a href="charts/stage-timings.svg">打开阶段耗时图</a>
     </div>
@@ -919,7 +981,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>相关结果</h2>
-      <p><a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a></p>
+      <p><a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a></p>
     </section>
   </main>
 </body>

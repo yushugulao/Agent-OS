@@ -51,6 +51,25 @@ def main() -> int:
                         "status": "ready",
                     },
                 ],
+                "cost_replacements": [
+                    {
+                        "case": "agentos-context",
+                        "plain_cost": "rebuild_steps_6",
+                        "agentos_replace": "kernel_context_path",
+                        "risk": "untrusted_context",
+                        "preserved_from_plain": 1,
+                        "status": "passed",
+                    },
+                    {
+                        "case": "agentos-fsmeta",
+                        "plain_cost": "scan_records_128",
+                        "agentos_replace": "metadata_index",
+                        "risk": "scan_growth",
+                        "preserved_from_plain": 1,
+                        "status": "passed",
+                    },
+                ],
+                "cost_replacement_count": 2,
                 "plain_timing_records": 70,
                 "plain_agent_launches": 0,
                 "plain_fork_launches": 70,
@@ -110,6 +129,8 @@ def main() -> int:
         assert "两个目标运行结果可对照" in report
         assert "多场景机制证据" in report
         assert "上下文可信记录" in report
+        assert "用户态成本项与 AgentOS 替代机制" in report
+        assert "kernel_context_path" in report
         csv_text = (out_dir / "summary.csv").read_text(encoding="utf-8")
         assert "提取到的 rp_* 状态文件" in csv_text
         assert "QEMU 无输出提示次数" in csv_text
@@ -119,6 +140,7 @@ def main() -> int:
         assert "monitor.html" in index_html
         assert "charts/runtime-observation.svg" in index_html
         assert "charts/scenario-evidence.svg" in index_html
+        assert "charts/cost-replacement.svg" in index_html
         assert "make demo-reader" in index_html
         assert "阶段耗时明细" in index_html
         assert "预置请求双目标运行" in index_html
@@ -128,6 +150,7 @@ def main() -> int:
         assert "一张图看本次运行" in monitor_html
         assert "make demo-reader" in monitor_html
         assert "charts/scenario-evidence.svg" in monitor_html
+        assert "charts/cost-replacement.svg" in monitor_html
         for name in [
             "dual-target-state-reader.svg",
             "launch-model.svg",
@@ -135,6 +158,7 @@ def main() -> int:
             "stage-timings.svg",
             "runtime-observation.svg",
             "scenario-evidence.svg",
+            "cost-replacement.svg",
         ]:
             svg = (out_dir / "charts" / name).read_text(encoding="utf-8")
             assert "<svg" in svg

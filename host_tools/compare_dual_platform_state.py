@@ -231,6 +231,50 @@ def collect_plain_costs(state_dir: Path) -> set[str]:
     return costs
 
 
+def collect_backend_reports(state_dir: Path) -> list[dict[str, str]]:
+    path = state_dir / "rp_backend_exec"
+    if not path.is_file():
+        return []
+    reports: list[dict[str, str]] = []
+    for raw in read_text(path).splitlines():
+        fields = parse_fields(raw.strip())
+        if fields.get("runner_report") and fields.get("status", "").lower() in GOOD_STATUS:
+            reports.append(
+                {
+                    "case": fields.get("runner_report", ""),
+                    "plain_cost": fields.get("plain_cost", ""),
+                    "agentos_replace": fields.get("agentos_replace", ""),
+                    "risk": fields.get("risk", ""),
+                    "status": fields.get("status", ""),
+                }
+            )
+    return reports
+
+
+def collect_cost_replacements(plain_dir: Path, agentos_dir: Path) -> list[dict[str, object]]:
+    plain_reports = collect_backend_reports(plain_dir)
+    agentos_reports = collect_backend_reports(agentos_dir)
+    plain_by_cost = {row["plain_cost"]: row for row in plain_reports if row.get("plain_cost")}
+    rows: list[dict[str, object]] = []
+    for row in agentos_reports:
+        plain_cost = row.get("plain_cost", "")
+        if not plain_cost:
+            continue
+        plain_row = plain_by_cost.get(plain_cost, {})
+        rows.append(
+            {
+                "case": row.get("case", ""),
+                "plain_cost": plain_cost,
+                "agentos_replace": row.get("agentos_replace", ""),
+                "risk": row.get("risk", ""),
+                "plain_case": plain_row.get("case", ""),
+                "preserved_from_plain": 1 if plain_cost in plain_by_cost else 0,
+                "status": row.get("status", ""),
+            }
+        )
+    return rows
+
+
 def verify_backend_costs(plain_dir: Path, agentos_dir: Path) -> int:
     plain_costs = collect_plain_costs(plain_dir)
     agentos_costs = collect_plain_costs(agentos_dir)
@@ -402,6 +446,7 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
         raise ValueError("AgentOS state is missing plain success records: " + ", ".join(details))
 
     preserved_costs = verify_backend_costs(plain_dir, agentos_dir)
+    cost_replacements = collect_cost_replacements(plain_dir, agentos_dir)
     embedded_action_records = verify_run_result(plain_dir, agentos_dir)
     agentos_evidence_checks = verify_agentos_evidence(agentos_dir)
     scenario_evidence = collect_scenario_evidence(agentos_dir)
@@ -428,6 +473,8 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
         "agentos_extra_files": len(agentos_files - plain_files),
         "checked_success_records": len(plain_good_lines),
         "preserved_plain_costs": preserved_costs,
+        "cost_replacements": cost_replacements,
+        "cost_replacement_count": len(cost_replacements),
         "embedded_action_records": embedded_action_records,
         "run_result_match": 1,
         "agentos_evidence_checks": agentos_evidence_checks,
