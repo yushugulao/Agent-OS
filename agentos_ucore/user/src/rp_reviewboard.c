@@ -10,6 +10,11 @@ int main(void)
 	ok = ok && rp_file_contains("rp_review_dashboard", "decision=review_pack_ready");
 	ok = ok && rp_file_contains("rp_package", "latest_delivery_status=ready");
 	ok = ok && rp_file_contains("rp_opsboard", "ready_handoffs=3");
+	ok = ok && rp_file_contains("rp_agentos_roles", "stage_launch=agent_create_role");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "context_trusted=kernel_shadow");
+	ok = ok && rp_file_contains("rp_agentos_collab_ack", "delivery=kernel_event_queue");
+	ok = ok && rp_file_contains("rp_agentos_query", "metadata_source=kernel_file_index");
+	ok = ok && rp_file_contains("rp_agentos_package", "package_trace=kernel_provenance");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_reviewboard",
@@ -50,7 +55,7 @@ int main(void)
 			   "workload=review-workload:systems-reviewer;open=0;overdue=0;high=0;status=ready\n"
 			   "workload=review-workload:wang;open=0;overdue=0;high=0;status=ready\n"
 			   "review_package=formal-review-board-package:RUN-042;files=rp_dossier,rp_review_dashboard,rp_package,rp_opsboard;status=ready\n"
-			   "agentos_adaptation=capability_review_roles,context_signoff_trace,event_review_queue,metadata_dossier_binding;status=planned\n"
+			   "agentos_adaptation=capability_review_roles,context_signoff_trace,event_review_queue,metadata_dossier_binding;evidence=rp_agentos_roles,rp_agentos_mainflow,rp_agentos_collab_ack,rp_agentos_query,rp_agentos_package;result=observed;status=ready\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -59,6 +64,7 @@ int main(void)
 	if (!rp_append_file("rp_review_dashboard", "subsection=formal_review_board;source=rp_reviewboard;votes=4;signoffs=4;decision=approved;status=ready")) return 1;
 	if (!rp_append_file("rp_opsboard", "handoff=review-board->operations;artifact=rp_reviewboard;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "review_board_checks=24;boards=1;requests=1;votes=4;signoffs=4;assignments=4;workloads=4;filters=2;decision=approved;agentos_replacements=4;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "reviewboard_kernel_binding=capability_review_roles,context_signoff_trace,event_review_queue,metadata_dossier_binding;source=rp_reviewboard;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=reviewboard;msg=formal-review;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=review_board.open_request")) return 1;
 	if (!rp_append_file("rp_tool", "tool=review_board.cast_vote")) return 1;

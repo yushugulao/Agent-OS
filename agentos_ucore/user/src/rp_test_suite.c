@@ -2029,11 +2029,12 @@ int main(void)
 	ok = ok && require_file_token("rp_reviewboard", "filter=review-filter:auditor-open;owner=auditor");
 	ok = ok && require_file_token("rp_reviewboard", "workload=review-workload:systems-reviewer;open=0");
 	ok = ok && require_file_token("rp_reviewboard", "review_package=formal-review-board-package:RUN-042");
-	ok = ok && require_file_token("rp_reviewboard", "agentos_adaptation=capability_review_roles,context_signoff_trace,event_review_queue,metadata_dossier_binding;status=planned");
+	ok = ok && require_file_token("rp_reviewboard", "agentos_adaptation=capability_review_roles,context_signoff_trace,event_review_queue,metadata_dossier_binding;evidence=rp_agentos_roles,rp_agentos_mainflow,rp_agentos_collab_ack,rp_agentos_query,rp_agentos_package;result=observed;status=ready");
 	ok = ok && require_file_token("rp_reviewops", "formal_review_board=checks:24");
 	ok = ok && require_file_token("rp_review_dashboard", "subsection=formal_review_board;source=rp_reviewboard;votes=4;signoffs=4;decision=approved;status=ready");
 	ok = ok && require_file_token("rp_opsboard", "handoff=review-board->operations;artifact=rp_reviewboard;status=ready");
 	ok = ok && require_file_token("rp_agentcmp", "review_board_checks=24");
+	ok = ok && require_file_token("rp_agentcmp", "reviewboard_kernel_binding=capability_review_roles,context_signoff_trace,event_review_queue,metadata_dossier_binding;source=rp_reviewboard;status=ready");
 	ok = ok && require_file_token("rp_control", "control_plane_checks=30");
 	ok = ok && require_file_token("rp_control", "approvals=4");
 	ok = ok && require_file_token("rp_control", "approval_transitions=4");
