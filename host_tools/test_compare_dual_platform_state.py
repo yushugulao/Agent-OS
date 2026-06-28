@@ -58,13 +58,17 @@ def write_agentos_mainflow_stages(
     write_state_file(root, "rp_agentos_mainflow", text)
 
 
-def write_timing(root: Path, launcher: str = "fork") -> None:
+def write_timing(root: Path, launcher: str = "fork", hybrid_agentos: bool = False) -> None:
+    required = sorted(compare.AGENTOS_REQUIRED_AGENT_PROGRAMS)
+    support = [f"rp_case_{i}" for i in range(70 - len(required))]
+    programs = required + support
+
     write_state_file(
         root,
         "rp_orch_timing",
         "".join(
-            f"program=rp_case_{i};launcher={launcher};ok=1;code=0;elapsed_ms={i + 1}\n"
-            for i in range(70)
+            f"program={program};launcher={('agent_create_role' if hybrid_agentos and program in compare.AGENTOS_REQUIRED_AGENT_PROGRAMS else launcher)};ok=1;code=0;elapsed_ms={i + 1}\n"
+            for i, program in enumerate(programs)
         ),
     )
 
@@ -105,7 +109,7 @@ def main() -> int:
         write_state_file(agentos, "rp_backend", "runner_report=file_scan;status=ready;kernel=observed\n")
         write_state_file(agentos, "rp_agentcmp", "plain_kernel=passed;programs=69;status=ready\n")
         write_required_runtime_files(agentos)
-        write_timing(agentos, "agent_create_role")
+        write_timing(agentos, "fork", hybrid_agentos=True)
         write_agentos_evidence_files(agentos)
         write_agentos_mainflow_stages(agentos)
         write_summary(agentos, agentos_file_list())
@@ -119,10 +123,14 @@ def main() -> int:
         assert summary["preserved_plain_costs"] == 0, summary
         assert summary["embedded_action_records"] == 1, summary
         assert summary["run_result_match"] == 1, summary
-        assert summary["agentos_evidence_checks"] == 29, summary
+        assert summary["agentos_evidence_checks"] == 31, summary
         assert summary["agentos_mainflow_stages"] == len(compare.AGENTOS_MAINFLOW_STAGES), summary
         assert summary["plain_timing_records"] == 70, summary
+        assert summary["plain_agent_launches"] == 0, summary
+        assert summary["plain_fork_launches"] == 70, summary
         assert summary["agentos_timing_records"] == 70, summary
+        assert summary["agentos_agent_launches"] == len(compare.AGENTOS_REQUIRED_AGENT_PROGRAMS), summary
+        assert summary["agentos_fork_launches"] == 70 - len(compare.AGENTOS_REQUIRED_AGENT_PROGRAMS), summary
 
         (agentos / "rp_agentcmp").unlink()
         write_summary(agentos, ["rp_backend", "rp_host_run_result", "rp_orch_timing", *compare.AGENTOS_EVIDENCE_REQUIREMENTS.keys()])
@@ -151,6 +159,10 @@ def main() -> int:
 
         write_agentos_mainflow_stages(agentos, tuple(reversed(compare.AGENTOS_MAINFLOW_STAGES)))
         expect_failure(agentos=agentos, plain=plain, expected="out of order")
+
+        write_agentos_mainflow_stages(agentos)
+        write_timing(agentos, "fork", hybrid_agentos=False)
+        expect_failure(agentos=agentos, plain=plain, expected="missing required Agent launches")
 
     print("test_compare_dual_platform_state: passed")
     return 0

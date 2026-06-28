@@ -68,7 +68,7 @@ uCore 分支不是只做任务一至三的最小版本。当前交付以任务�
 | 任务一：Agent 进程创建与地址空间设计 | 支持 Agent 进程概念、进程元数据和 Agent Context 地址空间 | 已完成增强实现 |
 | 任务二：Agent 与内核结构化交互 | 支持结构化工具调用、工具表、结果返回和错误语义 | 已完成增强实现 |
 | 任务三：上下文路径管理 | 记录、查询、快照、回滚 Agent 多轮调用历史，维护 cause/span 因果字段，提供用户自管 cache 区，并能输出 Context、调度原因、当前 span 系统短记录、统一 timeline、内核侧过滤查询、游标增量查询、事件驱动等待、因果边导出和全局运行账本摘要 | 已完成增强实现 |
-| 任务四：面向 Agent 查询优化的文件系统扩展 | 支持文件元数据表、真实 inode 关联、私有 `.agentmeta` 持久化、属性查询、索引路径、查询计划解释、内容摘要、依赖查询、基于查询历史的预取提示、同一 span 的跨 Agent 预取提示查询和调度器空隙分批扫描根目录 | 已完成增强实现 |
+| 任务四：面向 Agent 查询优化的文件系统扩展 | 支持文件元数据表、真实 inode 关联、私有 `.agentmeta` 持久化、属性查询、索引路径、查询计划解释、内容摘要、依赖查询、基于查询历史的预取提示、同一 span 的跨 Agent 预取提示查询和按 tick 合并的根目录分批扫描 | 已完成增强实现 |
 | 任务五：Agent Loop 内核运行机制 | 支持 16 槽事件队列、watch/unwatch、真实睡眠 wait/timeout、wait cancel、heartbeat 唤醒、事件投递、事件因果继承、自适应 Agent 调度、受权调度配置、调度原因记录、当前 span 短记录、统一 timeline、timeline 过滤查询、timeline 游标增量读取、timeline 等待唤醒、timeline wait-and-read、因果边导出、全局审计短记录、过滤查询和审计 hash 链摘要 | 已完成增强实现 |
 | 任务六：综合演示与创新 | 用科研 Agent 平台作为主要负载，串联任务一至五，并展示 timeline、audit ledger、provenance、LLM template relay 和权限控制 | 已完成 `labdemo_ucore` 综合演示 |
 
@@ -185,7 +185,7 @@ shell 中启动的测试程序是 `usershell` 的直接普通子进程，内核�
 | --- | --- | --- |
 | `agentfinal_ucore` | 任务一至三功能验收，同时覆盖 `context_detail()`、Context record flags、运行轨迹、当前 span 短记录、统一 timeline、timeline 过滤查询、timeline 游标增量读取、timeline 等待唤醒、timeline wait-and-read、因果边导出、全局运行账本摘要、用户自管 cache、名称协议、文件索引、预取提示、span 预取提示查询和事件自唤醒 | `agentfinal_ucore: parent passed` |
 | `agentfs_ucore` | 任务四文件系统/inode 关联验收，覆盖真实文件绑定、内容摘要、通用依赖注册、字段清空、删除清理、`.agentmeta` 重新加载、scan/index 差异、query plan、generation-aware 查询缓存、预取提示和不存在 selector | `agentfs_ucore: parent passed` |
-| `agentscan_ucore` | 任务四自动扫描验收，覆盖调度器空隙分批扫描根目录、真实文件自动建元数据、索引查询和删除清理 | `agentscan_ucore: parent passed` |
+| `agentscan_ucore` | 任务四自动扫描验收，覆盖按 tick 合并的根目录分批扫描、真实文件自动建元数据、索引查询和删除清理 | `agentscan_ucore: parent passed` |
 | `agentloop_ucore` | 任务五 Agent Loop 验收，覆盖 FIFO 顺序、队列满丢弃、多 watch、unwatch、有限 timeout 睡眠、wait cancel、TIMER unwatch、heartbeat wake/stop | `agentloop_ucore: parent passed` |
 | `agentsched_ucore` | 任务五调度验收，覆盖角色权重、受权调度配置、事件优先、调度原因记录、调度次数、让出处理器次数和虚拟运行量公平性计数 | `agentsched_ucore: parent passed` |
 | `agentconflict_ucore` | 文件编辑冲突测试，覆盖普通进程不能申请编辑租约、两个 Agent 同时编辑同一文件时第二个 Agent 被拒绝、非持有者真实 `write/O_TRUNC/unlink` 被拒绝、提交版本检查和旧版本提交拒绝 | `agentconflict_ucore: parent passed` |

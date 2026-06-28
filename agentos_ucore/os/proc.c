@@ -14,6 +14,7 @@ struct thread *current_thread;
 struct thread idle;
 struct queue task_queue;
 static int scheduler_retained[QUEUE_SIZE];
+static int scheduler_agent_hint;
 
 int procid()
 {
@@ -113,6 +114,7 @@ static struct thread *fetch_best_task()
 {
 	int best = -1;
 	int retained_count = 0;
+	int saw_agent = 0;
 	int index;
 	struct thread *candidate;
 	struct thread *best_task;
@@ -124,6 +126,8 @@ static struct thread *fetch_best_task()
 		candidate = id_to_task(index);
 		if (candidate == NULL || candidate->state != RUNNABLE)
 			continue;
+		if (candidate->process && candidate->process->is_agent)
+			saw_agent = 1;
 		if (best < 0 ||
 		    agent_sched_better(candidate, id_to_task(best))) {
 			if (best >= 0 && retained_count < QUEUE_SIZE)
@@ -135,6 +139,8 @@ static struct thread *fetch_best_task()
 	}
 	for (int i = 0; i < retained_count; i++)
 		push_queue(&task_queue, scheduler_retained[i]);
+	if (!saw_agent)
+		scheduler_agent_hint = 0;
 	if (best < 0)
 		return 0;
 	best_task = id_to_task(best);
@@ -151,6 +157,8 @@ void add_task(struct thread *t)
 	int task_id = task_to_id(t);
 	int pid = t->process->pid;
 	agent_sched_on_enqueue(t);
+	if (t->process && t->process->is_agent)
+		scheduler_agent_hint = 1;
 	push_queue(&task_queue, task_id);
 	tracef("add index %d(pid=%d, tid=%d, addr=%p) to task queue", task_id,
 	       pid, t->tid, (uint64)t);
@@ -286,7 +294,7 @@ void scheduler()
 	struct thread *t;
 	for (;;) {
 		agent_background_maintain();
-		t = fetch_best_task();
+		t = scheduler_agent_hint ? fetch_best_task() : fetch_task();
 		if (t == NULL) {
 			int live = 0;
 			for (struct proc *p = pool; p < &pool[NPROC]; p++) {

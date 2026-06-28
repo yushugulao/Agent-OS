@@ -92,7 +92,7 @@ flowchart LR
 | 环形 Context Path | 固定容量 128 条短文本摘要记录，超长 FIFO 覆盖，记录 `oldest/latest/dropped/rollback` 元信息，并维护 prev/record hash 完整性链 |
 | 内核维护因果链 | Context record 和事件都带 `cause_sequence` / `span_id`，事件消费后目标 Agent 继承 span，后续工具调用继续同一链路 |
 | 批量 Snapshot | `context_snapshot()` 一次返回 header 和按时间顺序排列的可见路径 |
-| 文件对象查询引擎 | Agent 子系统维护 128 条文件对象元数据，主键使用 `dev + inum`，提供扫描路径、state/label/type 索引路径、查询计划解释、私有 `.agentmeta` 元数据文件、用户态注册的通用依赖记录、调度器空隙分批根目录扫描和同一 span 的预取提示查询；兼容字段名仍保留为 status/stage/kind |
+| 文件对象查询引擎 | Agent 子系统维护 128 条文件对象元数据，主键使用 `dev + inum`，提供扫描路径、state/label/type 索引路径、查询计划解释、私有 `.agentmeta` 元数据文件、用户态注册的通用依赖记录、按 tick 合并的根目录分批扫描和同一 span 的预取提示查询；兼容字段名仍保留为 status/stage/kind |
 | 文件编辑租约 | Agent 申请真实文件独占编辑租约，内核用 `dev + inum` 识别文件，在 `write`、`O_TRUNC`、`unlink` 真实路径上拒绝非持有者，提交时用版本号拒绝旧版本覆盖 |
 | Agent Loop | 每个 Agent 有 16 槽 FIFO 事件队列和最多 8 条 watch，等待文件状态、消息、heartbeat 和取消事件，有限 timeout 进入睡眠 |
 | Agent 感知调度 | 调度器按角色权重、orchestrator 配置的 priority/budget、事件队列、等待 deadline、heartbeat 到期、等待时长和虚拟运行量选择可运行任务，并记录最近 16 次调度原因 |
@@ -388,7 +388,7 @@ Agent-only syscall 对普通进程、非法参数、未知工具、历史节点�
 
 ### 8.6 并发和事件
 
-Agent Loop 使用进程字段保存 8 条 watch、16 槽 FIFO 事件队列、一次性 wait cancel 令牌、等待次数、超时次数和心跳信息。`agent_wait()` 优先处理取消令牌，再消费队列中的事件；没有事件时，有限 timeout 和无限等待都进入睡眠，由事件入队、deadline 到期、heartbeat 到期或取消令牌唤醒；`agent_wake()`、`agent_wait_cancel()`、文件状态变化和消息工具可以唤醒目标 Agent。时钟中断调用 `agent_tick()` 处理 timeout deadline 和 heartbeat 到期。TIMER 事件同样受 watch/filter 控制。`agent_sched_config()` 允许 orchestrator 调整目标 Agent 的 policy、weight、priority 和 budget；调度器持续维护完整的 dispatch、preemption、vruntime、last_reason 和 last_score 计数，对事件队列、deadline、heartbeat、priority 等关键调度原因即时写入 `agent_sched_record`，对普通调度按固定间隔采样写入，记录分数、原因 flags、事件数量、deadline、heartbeat、虚拟运行量和预算使用情况，便于解释某次调度是由事件、等待时间、角色权重、配置优先级还是其他因素触发，同时避免短周期 Agent 工作流被重复观测写入拖慢。全局审计 ring 会同步记录 Context、事件、调度和预取提示交接摘要，便于 orchestrator 在综合演示结束时查询系统级运行证据；过滤查询让 orchestrator 可以只取某个 span、某类事件、某个预取交接或某个目标 Agent 的相关记录。
+Agent Loop 使用进程字段保存 8 条 watch、16 槽 FIFO 事件队列、一次性 wait cancel 令牌、等待次数、超时次数和心跳信息。`agent_wait()` 优先处理取消令牌，再消费队列中的事件；没有事件时，有限 timeout 和无限等待都进入睡眠，由事件入队、deadline 到期、heartbeat 到期或取消令牌唤醒；`agent_wake()`、`agent_wait_cancel()`、文件状态变化和消息工具可以唤醒目标 Agent。时钟中断调用 `agent_tick()` 处理 timeout deadline 和 heartbeat 到期。TIMER 事件同样受 watch/filter 控制。`agent_sched_config()` 允许 orchestrator 调整目标 Agent 的 policy、weight、priority 和 budget；调度器保留普通 FIFO 取队路径，只有 Agent 进入可运行队列后才启用 Agent 感知选择，避免普通支持程序反复经过 Agent 评分。调度器持续维护完整的 dispatch、preemption、vruntime、last_reason 和 last_score 计数，对事件队列、deadline、heartbeat、priority 等关键调度原因即时写入 `agent_sched_record`，对普通调度按固定间隔采样写入，记录分数、原因 flags、事件数量、deadline、heartbeat、虚拟运行量和预算使用情况，便于解释某次调度是由事件、等待时间、角色权重、配置优先级还是其他因素触发，同时避免短周期 Agent 工作流被重复观测写入拖慢。全局审计 ring 会同步记录 Context、事件、调度和预取提示交接摘要，便于 orchestrator 在综合演示结束时查询系统级运行证据；过滤查询让 orchestrator 可以只取某个 span、某类事件、某个预取交接或某个目标 Agent 的相关记录。
 
 ### 8.7 角色与能力
 
@@ -426,7 +426,7 @@ Agent 的真实角色保存在内核 `struct proc.agent_role` 中，能力保存
 | 因果图接口 | `agent_provenance_snapshot()` 把可见 Context、审计和预取提示转换成因果边 | 让最终 Web UI 可以直接画出跨 Agent 触发关系，而不是在用户态猜测日志关系 | 当前是短摘要内存图，不是持久化 provenance 数据库 |
 | 工具查找 | ID 直接定位，legacy name 兼容 | 最终性能路径避免字符串扫描 | 工具 ID 需要保持稳定 |
 | 批量执行 | `agent_run()` 一次最多 64 个 op | 减少 syscall 次数，提高端到端吞吐 | 单个 op 错误通过 result 表达 |
-| 文件查询实现 | 采用 Agent 子系统元数据表、`dev + inum` 主键、私有 `.agentmeta` 元数据文件、查询计划解释、generation-aware 结果缓存和调度器空隙根目录扫描 | 关联真实 uCore 根目录文件，同时保留属性查询、索引优化、重复查询复用、重新加载、自动维护和索引选择可解释能力 | 当前只扫描 uCore 根目录，不做多级目录递归 |
+| 文件查询实现 | 采用 Agent 子系统元数据表、`dev + inum` 主键、私有 `.agentmeta` 元数据文件、查询计划解释、generation-aware 结果缓存和按 tick 合并的根目录扫描 | 关联真实 uCore 根目录文件，同时保留属性查询、索引优化、重复查询复用、重新加载、自动维护和索引选择可解释能力 | 当前只扫描 uCore 根目录，不做多级目录递归 |
 | 文件内容摘要 | `read_file_digest` 受 `CONTENT_READ` capability 控制，按 selector 读取真实文件短预览、最多 4096 字节内容和 FNV-1a 指纹；绑定 Agent metadata 的真实文件进入 8 槽内容版本感知 digest cache | 让 Agent 在 metadata 命中后取得轻量内容证据，重复读取同一文件证据时复用结果，并自动进入 Context/timeline | 不是全文搜索，不建立内容倒排索引；未绑定 Agent metadata 的普通文件不缓存 |
 | 文件编辑冲突处理 | 使用 `dev + inum` 独占编辑租约和版本提交检查，并接入真实 `write/O_TRUNC/unlink` 路径 | 防止两个 Agent 无序覆盖同一真实文件，也能向上层返回持有者和版本信息 | 不做内容自动合并；上层仍需决定重新生成、等待或恢复 |
 | 对象预取提示 | 文件查询命中后按用户态注册的对象标签依赖生成每 Agent 8 条 metadata 提示，并写入同一 span 的 32 条全局提示总线；message 入队时可由内核交接给接收者 | 把 Agent 历史查询路径转化为内核可见的下一步候选，并让同一因果链上的 Agent 直接查询跨 Agent 提示，贴合赛题“预测性预取”方向 | 当前只提示 metadata，提示本身不预读文件内容 |

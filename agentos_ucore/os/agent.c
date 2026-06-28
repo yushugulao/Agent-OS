@@ -230,6 +230,7 @@ static int agent_file_scan_active;
 static uint64 agent_file_scan_offset;
 static int agent_file_scan_seen[AGENT_FILE_META_MAX];
 static uint64 agent_file_scan_next_tick;
+static uint64 agent_file_scan_last_step_tick;
 static uint64 agent_file_scan_runs;
 static uint64 agent_file_scan_entries;
 static uint64 agent_file_scan_added;
@@ -295,6 +296,7 @@ void agentinit(void)
 	agent_file_scan_offset = 0;
 	memset(agent_file_scan_seen, 0, sizeof(agent_file_scan_seen));
 	agent_file_scan_next_tick = 0;
+	agent_file_scan_last_step_tick = 0;
 	agent_file_scan_runs = 0;
 	agent_file_scan_entries = 0;
 	agent_file_scan_added = 0;
@@ -2111,12 +2113,14 @@ void agent_background_maintain(void)
 	struct inode *ip;
 	struct dirent de;
 	char name[DIRSIZ + 1];
+	uint64 now;
 	uint64 off;
 	int steps = 0;
 	int changed = 0;
 
 	if (!agent_file_scan_enabled || agent_meta_store_busy)
 		return;
+	now = agent_ticks();
 	if (!agent_file_scan_active) {
 		if (!agent_file_scan_pending)
 			return;
@@ -2126,7 +2130,10 @@ void agent_background_maintain(void)
 		agent_file_scan_offset = 0;
 		memset(agent_file_scan_seen, 0, sizeof(agent_file_scan_seen));
 		agent_file_scan_runs++;
+	} else if (agent_file_scan_last_step_tick == now) {
+		return;
 	}
+	agent_file_scan_last_step_tick = now;
 	root = root_dir();
 	if (root == 0)
 		return;
@@ -6785,6 +6792,9 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 	if ((mask & AGENT_FILE_META_UPDATE_DEPENDENCY) ||
 	    (!mask && meta.dependency_mask))
 		agent_files[slot].dependency_mask = meta.dependency_mask;
+	agent_files[slot].flags &= ~AGENT_FILE_META_F_AUTOSCAN;
+	if (meta.flags & AGENT_FILE_META_F_AUTOSCAN)
+		agent_files[slot].flags |= AGENT_FILE_META_F_AUTOSCAN;
 	if (meta.flags & AGENT_FILE_META_F_PERSIST)
 		agent_files[slot].flags |= AGENT_FILE_META_F_PERSIST;
 	agent_files[slot].updated_tick = agent_ticks();

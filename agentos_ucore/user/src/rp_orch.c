@@ -112,6 +112,21 @@ static int role_for_program(const char *program)
 	return AGENT_ROLE_SENTINEL;
 }
 
+static int agent_child_for_program(const char *program)
+{
+	if (strcmp(program, "rp_query") == 0 ||
+	    strcmp(program, "rp_repair") == 0 ||
+	    strcmp(program, "rp_execobs") == 0 ||
+	    strcmp(program, "rp_agent_collab") == 0 ||
+	    strcmp(program, "rp_auditor") == 0 ||
+	    strcmp(program, "rp_workbench") == 0 ||
+	    strcmp(program, "rp_package") == 0 ||
+	    strcmp(program, "rp_realtask") == 0 ||
+	    strcmp(program, "rp_backend") == 0)
+		return 1;
+	return 0;
+}
+
 static int orchestrator_context(void)
 {
 	struct agent_info info;
@@ -163,7 +178,7 @@ static int run_child(const char *program)
 	int role = role_for_program(program);
 	int64 start = get_mtime();
 
-	if (orchestrator_context()) {
+	if (orchestrator_context() && agent_child_for_program(program)) {
 		pid = agent_create_role(role);
 		agent_child = 1;
 	} else {
@@ -213,7 +228,10 @@ int main(void)
 		if (!rp_write_file("rp_agentos_roles",
 				   "launcher=agentos-orchestrator\n"
 				   "stage_launch=agent_create_role\n"
+				   "support_launch=fork\n"
 				   "role_policy=program_specific\n"
+				   "launch_policy=kernel_bound_programs_agent_plain_support_fork\n"
+				   "agent_bound_programs=rp_query,rp_repair,rp_execobs,rp_agent_collab,rp_auditor,rp_workbench,rp_package,rp_realtask,rp_backend\n"
 				   "status=ready\n")) {
 			return 1;
 		}

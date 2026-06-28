@@ -22,7 +22,7 @@
 - 支持根据历史查询和对象标签依赖生成 metadata 预取提示；
 - 支持按当前 span 查询跨 Agent 汇总的 metadata 预取提示；
 - 文件状态变化可以触发 Agent 事件；
-- 调度器空隙会分批扫描 uCore 根目录，自动维护真实文件的元数据和索引；
+- 调度器空隙会按 tick 合并分批扫描 uCore 根目录，自动维护真实文件的元数据和索引；
 - 查询结果会写入 Context Path。
 
 当前实现聚焦 uCore 根目录短文件名，不把范围扩大成多级目录递归扫描或通用全文索引。
@@ -68,6 +68,7 @@
 3. 每条持久化元数据保存 `physical_name`、`dev`、`inum`、`size` 和 `fs_generation`。
 4. `fileopen(O_CREATE)`、写入、截断、删除会通知 Agent 子系统刷新或删除关联元数据。
 5. `agent_file_meta_set()` 支持 `AGENT_FILE_META_F_DELETE` 删除属性，支持 `AGENT_FILE_META_F_PERSIST` 写入 `.agentmeta`。
+6. 受权 Agent 显式写入 metadata 时会接管自动扫描槽位；除非显式带上 `AGENT_FILE_META_F_AUTOSCAN`，否则旧的自动扫描标志会被清除，后续扫描只刷新真实 inode 身份，不改写这些对象属性。
 
 `.agentmeta` 是 Agent 子系统内部后端文件。普通文件 syscall 直接 `open(".agentmeta")`、`open(O_CREATE)` 或 `unlink(".agentmeta")` 会返回 `-1`；Agent 子系统内部 helper 仍可读写它，用于持久化和重新加载元数据。
 
@@ -79,10 +80,10 @@
 
 1. `agent_file_meta_init()` 或 `file_meta_init` 工具启用扫描能力。
 2. timer tick 和文件创建、写入、截断、删除 hook 只标记 `file_scan_pending`，不在中断上下文做文件系统遍历。
-3. 调度器空隙调用 `agent_background_maintain()`，每次最多处理 16 个根目录项，避免一次扫描长时间占用内核。
+3. 调度器空隙调用 `agent_background_maintain()`，同一 tick 内最多推进一次扫描，每次最多处理 16 个根目录项，避免一次扫描长时间占用内核，也避免调度循环越频繁、扫描成本越高。
 4. 扫描会跳过 `.agentmeta`，只为真实根目录文件建立 `AGENT_FILE_META_F_AUTOSCAN | AGENT_FILE_META_F_PERSIST` 元数据。
 5. 自动元数据使用真实 `dev + inum + size` 作为身份，并填入 `project=root`、`workflow=background-scan`、`run_id=ROOT`、`stage=scan` 等默认属性。
-6. 完整扫描结束后，已经不存在的自动元数据会被清理；手动写入的实验元数据不会被扫描流程误删。
+6. 完整扫描结束后，已经不存在的自动元数据会被清理；手动写入的对象元数据不会被扫描流程误删。
 7. 元数据变化后重建 status、stage、kind 索引，并按需写回 `.agentmeta`。
 
 `agentscan_ucore` 专门验证这条路径：系统先发现镜像中已有的 `usershell`，再通过普通文件 syscall 创建 `autoscan_ok`，确认无需显式调用 `agent_file_meta_set()` 也能查询到该文件；删除该文件后，下一轮扫描会清理对应元数据。

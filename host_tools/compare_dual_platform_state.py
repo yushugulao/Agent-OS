@@ -34,7 +34,11 @@ AGENTOS_EVIDENCE_REQUIREMENTS = {
         "real_task_context=kernel_shadow",
         "edit_lease=kernel_exclusive",
     ),
-    "rp_agentos_roles": ("stage_launch=agent_create_role",),
+    "rp_agentos_roles": (
+        "stage_launch=agent_create_role",
+        "support_launch=fork",
+        "agent_bound_programs=rp_query,rp_repair,rp_execobs,rp_agent_collab,rp_auditor,rp_workbench,rp_package,rp_realtask,rp_backend",
+    ),
     "rp_agentos_query": ("metadata_source=kernel_file_index",),
     "rp_agentos_recovery": (
         "kernel_tool=action_commit,artifact_update",
@@ -67,6 +71,17 @@ AGENTOS_MAINFLOW_STAGES = (
     "real_task",
     "edit_conflict",
 )
+AGENTOS_REQUIRED_AGENT_PROGRAMS = {
+    "rp_query",
+    "rp_repair",
+    "rp_execobs",
+    "rp_agent_collab",
+    "rp_auditor",
+    "rp_workbench",
+    "rp_package",
+    "rp_realtask",
+    "rp_backend",
+}
 
 
 @dataclass(frozen=True)
@@ -257,13 +272,20 @@ def verify_agentos_mainflow_stages(agentos_dir: Path) -> int:
     return len(AGENTOS_MAINFLOW_STAGES)
 
 
-def verify_orch_timing(state_dir: Path, label: str, required_launcher: str | None = None) -> int:
+def verify_orch_timing(
+    state_dir: Path,
+    label: str,
+    required_agent_programs: set[str] | None = None,
+) -> tuple[int, int, int]:
     text = require_file_text(state_dir, "rp_orch_timing")
     program_count = 0
-    launcher_count = 0
+    agent_launcher_count = 0
+    fork_launcher_count = 0
+    agent_programs: set[str] = set()
     for raw in text.splitlines():
         fields = parse_fields(raw.strip())
-        if "program" not in fields:
+        program = fields.get("program", "")
+        if not program:
             continue
         program_count += 1
         if fields.get("ok") != "1":
@@ -271,15 +293,23 @@ def verify_orch_timing(state_dir: Path, label: str, required_launcher: str | Non
         elapsed = fields.get("elapsed_ms", "")
         if not elapsed.isdigit():
             raise ValueError(f"{label} timing record has nonnumeric elapsed_ms: {raw}")
-        if required_launcher and fields.get("launcher") == required_launcher:
-            launcher_count += 1
+        launcher = fields.get("launcher")
+        if launcher == "agent_create_role":
+            agent_launcher_count += 1
+            agent_programs.add(program)
+        elif launcher and launcher.startswith("fork"):
+            fork_launcher_count += 1
     if program_count < 60:
         raise ValueError(f"{label} timing records too few: {program_count}")
-    if required_launcher and launcher_count < program_count:
-        raise ValueError(
-            f"{label} timing records are not all launched by {required_launcher}: {launcher_count}/{program_count}"
-        )
-    return program_count
+    if required_agent_programs:
+        missing = sorted(required_agent_programs - agent_programs)
+        if missing:
+            raise ValueError(
+                f"{label} timing records are missing required Agent launches: {','.join(missing)}"
+            )
+        if fork_launcher_count == 0:
+            raise ValueError(f"{label} timing records do not show ordinary fork support programs")
+    return program_count, agent_launcher_count, fork_launcher_count
 
 
 def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> dict[str, object]:
@@ -321,9 +351,17 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
     embedded_action_records = verify_run_result(plain_dir, agentos_dir)
     agentos_evidence_checks = verify_agentos_evidence(agentos_dir)
     agentos_mainflow_stages = verify_agentos_mainflow_stages(agentos_dir)
-    plain_timing_records = verify_orch_timing(plain_dir, "plain")
-    agentos_timing_records = verify_orch_timing(
-        agentos_dir, "AgentOS", required_launcher="agent_create_role"
+    plain_timing_records, plain_agent_launches, plain_fork_launches = verify_orch_timing(
+        plain_dir, "plain"
+    )
+    (
+        agentos_timing_records,
+        agentos_agent_launches,
+        agentos_fork_launches,
+    ) = verify_orch_timing(
+        agentos_dir,
+        "AgentOS",
+        required_agent_programs=AGENTOS_REQUIRED_AGENT_PROGRAMS,
     )
     if agentos_timing_records < plain_timing_records:
         raise ValueError("AgentOS timing record count is less than plain uCore")
@@ -339,7 +377,11 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
         "agentos_evidence_checks": agentos_evidence_checks,
         "agentos_mainflow_stages": agentos_mainflow_stages,
         "plain_timing_records": plain_timing_records,
+        "plain_agent_launches": plain_agent_launches,
+        "plain_fork_launches": plain_fork_launches,
         "agentos_timing_records": agentos_timing_records,
+        "agentos_agent_launches": agentos_agent_launches,
+        "agentos_fork_launches": agentos_fork_launches,
         "status": "ready",
     }
 
@@ -356,7 +398,7 @@ def main() -> int:
     if args.json_out is not None:
         args.json_out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(
-        "dual_platform_state_compare: plain_files={plain_files} agentos_files={agentos_files} common_files={common_files} agentos_extra_files={agentos_extra_files} checked_success_records={checked_success_records} preserved_plain_costs={preserved_plain_costs} embedded_action_records={embedded_action_records} run_result_match={run_result_match} agentos_evidence_checks={agentos_evidence_checks} agentos_mainflow_stages={agentos_mainflow_stages} plain_timing_records={plain_timing_records} agentos_timing_records={agentos_timing_records} status={status}".format(
+        "dual_platform_state_compare: plain_files={plain_files} agentos_files={agentos_files} common_files={common_files} agentos_extra_files={agentos_extra_files} checked_success_records={checked_success_records} preserved_plain_costs={preserved_plain_costs} embedded_action_records={embedded_action_records} run_result_match={run_result_match} agentos_evidence_checks={agentos_evidence_checks} agentos_mainflow_stages={agentos_mainflow_stages} plain_timing_records={plain_timing_records} plain_agent_launches={plain_agent_launches} plain_fork_launches={plain_fork_launches} agentos_timing_records={agentos_timing_records} agentos_agent_launches={agentos_agent_launches} agentos_fork_launches={agentos_fork_launches} status={status}".format(
             **summary
         )
     )

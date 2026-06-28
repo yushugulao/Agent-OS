@@ -200,7 +200,7 @@ int agent_heartbeat_stop(void);
 
 ## 感知调度：Agent
 
-uCore 原有调度器从可运行队列中取任务。当前分支把取队逻辑改为 `fetch_best_task()`：它会临时取出一批可运行任务，用 `agent_sched_better()` 比较任务优先级，选出最适合运行的任务后把其余任务放回队列。
+uCore 原有调度器从可运行队列中取任务。当前分支保留普通 FIFO 取队路径，并增加一个 Agent 任务提示位：当可运行队列中没有 Agent 时，调度器继续使用原有 `fetch_task()`；当 Agent 进入可运行队列后，调度器改用 `fetch_best_task()`，临时取出一批可运行任务，用 `agent_sched_better()` 比较任务优先级，选出最适合运行的任务后把其余任务放回队列。若本次扫描发现队列中已经没有 Agent，提示位会被清除，后续普通进程负载回到原 FIFO 路径。
 
 Agent 任务的评分因素包括：
 
@@ -216,7 +216,7 @@ Agent 任务的评分因素包括：
 | 虚拟运行量 | 已经运行较多的 Agent 被扣分，提升公平性 |
 | 运行预算 | 单个 Agent 超过默认预算后被扣分 |
 
-普通进程仍可运行。Agent 调度不是把普通进程完全压制，而是在存在多个可运行 Agent 时优先处理更紧急、更有权限或已经等待较久的 Agent。
+普通进程仍可运行。Agent 调度不是把普通进程完全压制，而是在存在可运行 Agent 时优先处理更紧急、更有权限或已经等待较久的 Agent；普通支持程序没有 Agent 身份时，不需要反复经过 Agent 评分路径。
 
 `struct agent_info` 暴露调度观测字段：`sched_weight`、`sched_priority`、`sched_budget`、`sched_dispatch_count`、`sched_event_dispatch_count`、`sched_deadline_dispatch_count`、`sched_vruntime`、`sched_ready_tick`、`sched_last_dispatch_tick`、`sched_preemptions` 和 `sched_budget_used`。`agentsched_ucore` 用这些字段验证角色权重、受权调度配置、事件优先和公平性计数。
 
