@@ -493,8 +493,8 @@ def run_check(
         }
 
     host_modules = collect_host_modules(host_dir)
-    plain_sources = collect_source_names(root, "user/src")
-    agentos_sources = collect_source_names(root, "agentos_ucore/user/src")
+    plain_sources = collect_source_names(root, "baseline_ucore/user/src")
+    agentos_sources = collect_source_names(root, "user/src")
     plain_state_names = collect_state_names(plain_state_dir) if plain_state_dir else set()
     agentos_state_names = collect_state_names(agentos_state_dir) if agentos_state_dir else set()
     check_runtime_state = plain_state_dir is not None or agentos_state_dir is not None

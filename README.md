@@ -1,43 +1,43 @@
 # 双目标 uCore 科研 Agent 平台：project61-agentOS-happylegend
 
-本分支同时维护两套可比较的科研 Agent 平台实现：
+本仓库同时维护两套可比较的科研 Agent 平台实现：
 
-- 根目录目标：未改动 uCore 内核。科研 Agent 平台全部运行在普通用户态进程和普通文件之上。
-- `agentos_ucore/` 目标：增强版 AgentOS-uCore 内核。科研 Agent 平台保持同一 RUN-042 场景和输出契约，但关键阶段使用内核 Agent 服务。
+- 根目录目标：增强版 AgentOS-uCore 内核。科研 Agent 平台保持同一 RUN-042 场景和输出契约，但关键阶段使用内核 Agent 服务。
+- `baseline_ucore/` 目标：未改动 uCore 内核。科研 Agent 平台全部运行在普通用户态进程和普通文件之上。
 
 这样设计的目的，是让评委能直接看到同一科研 Agent 工作流在两种系统支持程度下的差异：用户态实现能完成什么，内核支持又在哪些环节减少扫描、减少约定、强化恢复、增强可信记录。
 
 ## 目录布局
 
-根目录是 plain uCore 目标：
+根目录是 AgentOS-uCore 目标，点开仓库即可看到增强内核、用户态程序和演示脚本：
 
 ```text
-os/          未改动 uCore 内核
+os/          AgentOS-uCore 增强内核
 nfs/         文件系统镜像构建
 scripts/     启动和辅助脚本
-user/        用户态科研 Agent 平台程序
+user/        AgentOS 测试程序和科研平台程序
 host_tools/  Host Reader、动作运行器、镜像提取器、LLM Relay
 docs/        双目标设计、验证和维护说明
 ```
 
-增强目标位于：
+普通 uCore 对照目标位于：
 
 ```text
-agentos_ucore/os/       AgentOS-uCore 内核
-agentos_ucore/user/     AgentOS 测试程序和科研平台程序
-agentos_ucore/docs/     AgentOS 任务、接口、设计和验证文档
-agentos_ucore/scripts/  AgentOS 测试脚本
+baseline_ucore/os/       未改动 uCore 内核
+baseline_ucore/user/     普通用户态科研 Agent 平台程序
+baseline_ucore/nfs/      普通目标文件系统镜像构建
+baseline_ucore/scripts/  普通目标启动辅助脚本
 ```
 
-根目录 `os/` 必须保持未改动 uCore 对照目标；Agent syscall、Agent Context、内核文件 metadata、Agent 事件队列等增强能力只应出现在 `agentos_ucore/`。
+Agent syscall、Agent Context、内核文件 metadata、Agent 事件队列、timeline、audit、provenance 等增强能力放在根目录目标中。`baseline_ucore/` 不包含这些增强符号，用来提供可比较的普通 uCore 运行结果。
 
 ## 文档入口
 
 | 阅读目标 | 文档 |
 | --- | --- |
-| 快速了解增强内核项目 | `agentos_ucore/README.md` |
-| 查看增强内核架构图和关键设计 | `agentos_ucore/docs/design.md` |
-| 查看增强内核测试场景和输出证据 | `agentos_ucore/docs/verification.md` |
+| 快速了解增强内核项目 | `README.md` |
+| 查看增强内核架构图和关键设计 | `docs/agentos/design.md` |
+| 查看增强内核测试场景和输出证据 | `docs/agentos/verification.md` |
 | 查看双目标对比设计 | `docs/dual-targets.md` |
 | 查看双目标验证方式 | `docs/verification.md` |
 | 查看当前目标完成证据 | `docs/target-evidence.md` |
@@ -99,7 +99,7 @@ make full-verify TOOLPREFIX=riscv64-linux-gnu-
 bash scripts/verify-dual-target-structure.sh
 ```
 
-默认会用 `origin/main` 对照根目录 `os/` 和 `bootloader/`。如果需要使用其他 plain 基准，可以设置 `UCORE_PLAIN_BASE_REF=...`。
+该脚本会确认根目录具备 AgentOS 增强能力，确认 `baseline_ucore/` 不包含 AgentOS syscall、Agent Context、内核文件 metadata、Agent 事件队列等增强符号，并检查两个目标的科研平台源码、运行入口和结果汇总工具是否保持可比较。
 
 快速目标检查：
 
@@ -278,7 +278,7 @@ python3 host_tools/plain_ucore_llm_relay.py \
 - `docs/design.md`：双目标设计、内核机制、状态文件协议。
 - `docs/verification.md`：构建、运行、双目标检查和 Host Reader 验证。
 - `docs/next-work.md`：维护规则和目标分离要求。
-- `agentos_ucore/docs/`：AgentOS-uCore 任务、接口、设计、测试和验收说明。
+- `docs/agentos/`：AgentOS-uCore 任务、接口、设计、测试和验收说明。
 
 典型运行输出应包含：
 
@@ -316,10 +316,9 @@ dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=
 快速结构检查应包含：
 
 ```text
-[dual-target-check] plain kernel: clean
-[dual-target-check] plain kernel base: origin/main
+[dual-target-check] baseline kernel: clean
 [dual-target-check] AgentOS kernel: present
-[dual-target-check] platform source coverage: 73 root rp sources mirrored
+[dual-target-check] platform source coverage: 73 baseline rp sources mirrored
 [dual-target-check] platform app coverage: 71 build-list apps mirrored
 [dual-target-check] platform source sync: identical=30 adapted=43
 [dual-target-check] backend evidence coverage: plain=7 agentos=8 preserved_costs=7

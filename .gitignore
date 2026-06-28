@@ -6,6 +6,10 @@ target
 user/build
 user/target
 user/asm
+baseline_ucore/build
+baseline_ucore/user/build
+baseline_ucore/user/target
+baseline_ucore/user/asm
 link_app.S
 initproc.S
 kernel_app.ld
@@ -15,4 +19,6 @@ kernel_app.ld
 *.sym
 nfs/*.img
 nfs/fs
+baseline_ucore/nfs/*.img
+baseline_ucore/nfs/fs
 results/latest/

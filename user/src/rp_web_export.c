@@ -557,7 +557,16 @@ int main(void)
 	if (!rp_write_file("rp_api_compare",
 			   "api=compare-metrics\n"
 			   "plain_kernel=passed\n"
-			   "agentos_kernel=pending\n"
+			   "agentos_kernel=mainflow_bound\n"
+			   "agentos_context_snapshot=1\n"
+			   "agentos_metadata_index=1\n"
+			   "agentos_batch_tool=1\n"
+			   "agentos_event_queue=1\n"
+			   "agentos_recovery_tool=1\n"
+			   "agentos_audit_ledger=1\n"
+			   "agentos_permission_control=1\n"
+			   "agentos_timeline_observe=1\n"
+			   "agentos_mainflow_facts=12\n"
 			   "file_scans=128\n"
 			   "state_convention=1\n"
 			   "user_permission_only=1\n"
@@ -575,7 +584,7 @@ int main(void)
 			   "run_state_checks=9\n"
 			   "lifecycle_checks=10\n"
 			   "delivery_coherence=3\n"
-			   "agentos_readiness_checks=7\n"
+			   "agentos_readiness_checks=10\n"
 			   "relay_protocol_files=5\n"
 			   "status=ready\n")) {
 		return 1;
@@ -1046,6 +1055,7 @@ int main(void)
 			   "ucore_post_routes=123\n"
 			   "reader_api_payloads=15\n"
 			   "reader_views=40\n"
+			   "kernel_assisted=1\n"
 			   "api_group_count=14\n"
 			   "api_grouped_routes=214\n"
 			   "usable_research_api_routes=77\n"
@@ -1072,14 +1082,14 @@ int main(void)
 			   "api_group=operations;routes=6;state=rp_runop,rp_metrics,rp_governance,rp_privacy;status=ready\n"
 			   "api_group=agents;routes=5;state=rp_agent_collab,rp_agentcmp,rp_agents;status=ready\n"
 			   "api_group=review;routes=5;state=rp_review_dashboard,rp_reviewboard,rp_review_pack;status=ready\n"
-			   "api_group=agentos;routes=3;state=rp_agentcmp,rp_consistency,rp_api_compare;status=ready\n"
+			   "api_group=agentos;routes=3;state=rp_agentcmp,rp_consistency,rp_agentos_kernel;status=ready\n"
 			   "api_group=execution;routes=3;state=rp_execobs,rp_worker,rp_runconf;status=ready\n"
 			   "api_group=llm;routes=4;state=rp_llm_req,rp_llm_resp,rp_llm_guard,rp_prompt;status=ready\n"
 			   "api_group=provenance;routes=3;state=rp_prov_view,rp_prov_query,rp_lineage;status=ready\n"
 			   "api_key=/api/accounting;group=operations;state=rp_metrics,rp_runop;status=ready\n"
 			   "api_key=/api/agent-coordination;group=agents;state=rp_agent_collab;status=ready\n"
 			   "api_key=/api/agentcompare;group=agents;state=rp_agentcmp;status=ready\n"
-			   "api_key=/api/agentos-abi;group=agentos;state=rp_api_compare;status=ready\n"
+			   "api_key=/api/agentos-abi;group=agentos;state=rp_agentos_kernel;status=ready\n"
 			   "api_key=/api/analysis-results;group=domain;state=rp_analysisres;status=ready\n"
 			   "api_key=/api/backend-scenarios;group=domain;state=rp_backend;status=ready\n"
 			   "api_key=/api/data-quality;group=data;state=rp_data_quality;status=ready\n"
@@ -1109,7 +1119,7 @@ int main(void)
 			   "download_group=study_protocol;routes=5;state=rp_studyproto,rp_usablepack;status=ready\n"
 			   "download_group=dataset;routes=6;state=rp_usableds;status=ready\n"
 			   "download_group=source_portfolio;routes=1;state=rp_usablelib;status=ready\n"
-			   "reader_projection=host_api_catalog_to_plain_ucore_state_files\n"
+			   "reader_projection=host_api_catalog_to_agentos_ucore_state_files\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -1365,7 +1375,7 @@ int main(void)
 			   "package_index=project-package-index;handoff=ready;release_gate=release;snapshot=stable;reproducibility=passed;provenance=ready;status=ready\n"
 			   "library_sources=rp_knowledge;bibliography=rp_runner;citation_plan=rp_runner;evidence_protocols=1;evidence_extractions=3\n"
 			   "workflow_portability=rp_wfio;adapter_specs=6;migration_steps=9;rehearsal_cases=4\n"
-			   "coherence_checks=9;namespace_checks=12;surface_checks=13;agentos_readiness_checks=7\n"
+			   "coherence_checks=9;namespace_checks=12;surface_checks=13;agentos_readiness_checks=10\n"
 			   "delivery_manifest=rp_package;review_page=rp_package;export_bundle=rp_package\n"
 			   "delivery_files=8;delivery_checks=3;evidence_bundle_entries=12\n"
 			   "prisma_flows=1\n"
@@ -1391,8 +1401,8 @@ int main(void)
 			   "real_task_page=rp_realtask;dataset=palmer-penguins;rows=344;answer_audit=pass;status=ready\n"
 			   "analysis_results_page=rp_analysisres;runs=2;tables=2;statistics=2;figures=2;status=ready\n"
 			   "decision_support_page=rp_decsupport;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;status=ready\n"
-			   "usable_research_page=rp_usable;templates=3;datasets=3;library_sources=3;dag_stages=9;queues=2;status=ready\n"
-			   "usable_project_page=rp_usableproj;scaffolds=3;launches=2;bundles=2;doctor=pass;status=ready\n"
+			   "usable_research_page=rp_usable;templates=3;datasets=3;library_sources=3;dag_stages=9;queues=2;kernel_assisted=1;status=ready\n"
+			   "usable_project_page=rp_usableproj;scaffolds=3;launches=2;bundles=2;doctor=pass;kernel_assisted=1;status=ready\n"
 			   "experiment_campaigns_page=rp_campaign;campaigns=1;trials=4;best_trial=04;status=ready\n"
 			   "statistical_design_page=rp_stdesign;designs=1;power=underpowered;randomization=balanced;status=ready\n"
 			   "model_registry_page=rp_modelreg;models=1;versions=1;evaluations=1;deployments=1;status=ready\n"
@@ -1793,10 +1803,10 @@ int main(void)
 			}
 		}
 		if (!file_contains_silent("rp_runner", "backend_evidence_report=rp_backend_exec")) {
-			if (!rp_append_file("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;status=ready")) return 1;
+			if (!rp_append_file("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=8;agentos_replacements=8;risks=8;status=ready")) return 1;
 		}
 		if (!file_contains_silent("rp_report_text", "backend_evidence_report=rp_backend_exec")) {
-			if (!rp_append_file("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128,manual_retry_contract,file_polling,append_only_logs;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,capability_checked_action,kernel_event_queue,kernel_ledger_provenance;status=ready")) return 1;
+			if (!rp_append_file("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128,userland_lock_file;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,kernel_edit_lease,workbench_file_verify,package_trace,real_task_context;dependency_graph=kernel_records;mainflow_facts=12;status=ready")) return 1;
 		}
 		if (!rp_append_status("host_reader_actions=ready")) return 1;
 		printf("rp_web_export: host_reader_actions=%d\n", host_actions);

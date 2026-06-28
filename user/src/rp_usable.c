@@ -12,12 +12,12 @@ static void copy_usable_value(const char *kind, const char *key, const char *fal
 static int append_usable_host_actions(void)
 {
 	char value[96];
-	char line[512];
+	char line[560];
 
 	if (rp_host_seed_has_dataset_action()) {
-		if (!rp_append_file("rp_actionio", "host_action_dataset_ops=1")) return 0;
-		if (!rp_append_file("rp_web_bundle", "host_action_dataset_ops=rp_usableds,rp_data_preview,rp_data_quality,rp_runner")) return 0;
-		rp_copy_text(line, sizeof(line), "host_action_dataset_ops=applied;");
+		if (!rp_append_file("rp_actionio", "host_action_dataset_ops=1;kernel_context=observed")) return 0;
+		if (!rp_append_file("rp_web_bundle", "host_action_dataset_ops=rp_usableds,rp_data_preview,rp_data_quality,rp_runner;kernel_assisted=1")) return 0;
+		rp_copy_text(line, sizeof(line), "host_action_dataset_ops=applied;kernel_context=observed;");
 		if (rp_host_seed_has("kind=dataset_preview")) {
 			copy_usable_value("kind=dataset_preview", "dataset_id=", "usable-dataset:response-table", value, sizeof(value));
 			rp_append_text(line, sizeof(line), "preview_dataset=");
@@ -70,8 +70,8 @@ static int append_usable_host_actions(void)
 		if (!rp_append_file("rp_data_quality", line)) return 0;
 	}
 	if (rp_host_seed_has("kind=source_portfolio")) {
-		if (!rp_append_file("rp_actionio", "host_action_source_portfolio=1")) return 0;
-		rp_copy_text(line, sizeof(line), "host_action_source_portfolio=reviewed;");
+		if (!rp_append_file("rp_actionio", "host_action_source_portfolio=1;kernel_context=observed")) return 0;
+		rp_copy_text(line, sizeof(line), "host_action_source_portfolio=reviewed;kernel_context=observed;");
 		copy_usable_value("kind=source_portfolio", "sources=", "42", value, sizeof(value));
 		rp_append_text(line, sizeof(line), "sources=");
 		rp_append_text(line, sizeof(line), value);
@@ -83,8 +83,8 @@ static int append_usable_host_actions(void)
 		if (!rp_append_file("rp_usablelib", line)) return 0;
 	}
 	if (rp_host_seed_has("kind=sample_workbench")) {
-		if (!rp_append_file("rp_actionio", "host_action_sample_workbench=1")) return 0;
-		rp_copy_text(line, sizeof(line), "host_action_sample_workbench=created;");
+		if (!rp_append_file("rp_actionio", "host_action_sample_workbench=1;kernel_context=observed")) return 0;
+		rp_copy_text(line, sizeof(line), "host_action_sample_workbench=created;kernel_context=observed;");
 		copy_usable_value("kind=sample_workbench", "workbench_id=", "usable-workbench:sample", value, sizeof(value));
 		rp_append_text(line, sizeof(line), "workbench=");
 		rp_append_text(line, sizeof(line), value);
@@ -108,6 +108,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_realtask", "answer_audit=pass");
 	ok = ok && rp_file_contains("rp_analysisres", "analysis_results_checks=96");
 	ok = ok && rp_file_contains("rp_decsupport", "recommended_option=agentos_ucore_hybrid");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "context_snapshot=present");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "file_meta_service=initialized");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_usable",
@@ -130,6 +132,10 @@ int main(void)
 			   "readiness=ready_with_notes\n"
 			   "next_action=delivery_manifest\n"
 			   "host_parity=tracked\n"
+			   "agentos_context=observed\n"
+			   "agentos_file_metadata=observed\n"
+			   "agentos_event_audit=observed\n"
+			   "kernel_assisted=1\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -178,6 +184,7 @@ int main(void)
 			   "cache_hits=1\n"
 			   "retry_items=1\n"
 			   "llm_provider=template\n"
+			   "agentos_snapshot=rp_agentos_kernel\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -191,13 +198,14 @@ int main(void)
 			   "export=workbench-runbook;format=markdown;commands=6;status=ready\n"
 			   "export=workbench-timeline;format=html;events=8;status=ready\n"
 			   "export=file-manifest;files=9;sha_records=9;verified=9;missing=0;status=ready\n"
+			   "kernel_event_queue=observed\n"
 			   "status=ready\n")) {
 		return 1;
 	}
-	if (!rp_append_file("rp_package", "usable_research=rp_usable;templates=3;datasets=3;library_sources=3;dag_stages=9;deliverables=8;status=ready")) return 1;
-	if (!rp_append_file("rp_web_bundle", "usable_research_page=rp_usable;templates=3;datasets=3;library_sources=3;dag_stages=9;queues=2;status=ready")) return 1;
-	if (!rp_append_file("rp_review_dashboard", "subsection=usable_research;source=rp_usable;checks=100;handoff=ready;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "usable_research_checks=100;templates=3;datasets=3;library_sources=3;dag_stages=9;queues=2;handoffs=3;status=ready")) return 1;
+	if (!rp_append_file("rp_package", "usable_research=rp_usable;templates=3;datasets=3;library_sources=3;dag_stages=9;deliverables=8;kernel_assisted=1;status=ready")) return 1;
+	if (!rp_append_file("rp_web_bundle", "usable_research_page=rp_usable;templates=3;datasets=3;library_sources=3;dag_stages=9;queues=2;kernel_assisted=1;status=ready")) return 1;
+	if (!rp_append_file("rp_review_dashboard", "subsection=usable_research;source=rp_usable;checks=100;handoff=ready;kernel_assisted=1;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "usable_research_checks=100;templates=3;datasets=3;library_sources=3;dag_stages=9;queues=2;handoffs=3;kernel_observed=1;status=ready")) return 1;
 	if (!append_usable_host_actions()) return 1;
 	if (!rp_append_file("rp_ack", "ack=usable_research;msg=workbench_entry;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=usable_research.create_workbench")) return 1;

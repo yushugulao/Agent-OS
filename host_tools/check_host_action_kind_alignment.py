@@ -91,8 +91,8 @@ def run_check(root: Path, host_dir: Path, require_host: bool) -> dict[str, objec
     kinds = sorted(set(route_kinds.values()))
     generic_routes = [route for route, kind in route_kinds.items() if kind == "generic"]
 
-    plain_sources = kind_source_map(read_user_source_files(root, "user/src"), kinds)
-    agentos_sources = kind_source_map(read_user_source_files(root, "agentos_ucore/user/src"), kinds)
+    plain_sources = kind_source_map(read_user_source_files(root, "baseline_ucore/user/src"), kinds)
+    agentos_sources = kind_source_map(read_user_source_files(root, "user/src"), kinds)
     plain_missing = missing_kinds(plain_sources)
     agentos_missing = missing_kinds(agentos_sources)
     plain_handler_missing = missing_runtime_handlers(plain_sources)

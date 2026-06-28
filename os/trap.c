@@ -1,4 +1,5 @@
 #include "trap.h"
+#include "agent.h"
 #include "defs.h"
 #include "loader.h"
 #include "plic.h"
@@ -43,6 +44,7 @@ void devintr(uint64 cause)
 	switch (cause) {
 	case SupervisorTimer:
 		set_next_timer();
+		agent_tick();
 		// if form user, allow yield
 		if ((r_sstatus() & SSTATUS_SPP) == 0) {
 			yield();

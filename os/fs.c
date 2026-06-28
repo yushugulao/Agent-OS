@@ -3,7 +3,7 @@
 //   + Log: crash recovery for multi-step updates.
 //   + Files: inode allocator, reading, writing, metadata.
 //   + Directories: inode with special contents (list of other inodes!)
-//   + Names: paths like /usr/rtm/xv6/fs.c for convenient naming.
+//   + Names: paths like /usr/rtm/kernel/fs.c for convenient naming.
 //
 // This file contains the low-level file system manipulation
 // routines.  The (higher-level) system call implementations
@@ -135,6 +135,9 @@ void iupdate(struct inode *ip)
 	bp = bread(ip->dev, IBLOCK(ip->inum, sb));
 	dip = (struct dinode *)bp->data + ip->inum % IPB;
 	dip->type = ip->type;
+	dip->agent_meta_slot = ip->agent_meta_slot;
+	dip->agent_meta_flags = ip->agent_meta_flags;
+	dip->agent_meta_version = ip->agent_meta_version;
 	dip->size = ip->size;
 	// LAB4: you may need to update link count here
 	memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
@@ -188,6 +191,9 @@ void ivalid(struct inode *ip)
 		bp = bread(ip->dev, IBLOCK(ip->inum, sb));
 		dip = (struct dinode *)bp->data + ip->inum % IPB;
 		ip->type = dip->type;
+		ip->agent_meta_slot = dip->agent_meta_slot;
+		ip->agent_meta_flags = dip->agent_meta_flags;
+		ip->agent_meta_version = dip->agent_meta_version;
 		ip->size = dip->size;
 		// LAB4: You may need to get lint count here
 		memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
@@ -428,7 +434,31 @@ int dirlink(struct inode *dp, char *name, uint inum)
 	return 0;
 }
 
-// LAB4: You may want to add dirunlink here
+int dirunlink(struct inode *dp, char *name, uint *inum)
+{
+	uint off;
+	struct dirent de;
+
+	if (dp->type != T_DIR)
+		panic("dirunlink not DIR");
+
+	for (off = 0; off < dp->size; off += sizeof(de)) {
+		if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+			panic("dirunlink read");
+		if (de.inum == 0)
+			continue;
+		if (strncmp(name, de.name, DIRSIZ) == 0) {
+			if (inum)
+				*inum = de.inum;
+			memset(&de, 0, sizeof(de));
+			if (writei(dp, 0, (uint64)&de, off, sizeof(de)) !=
+			    sizeof(de))
+				panic("dirunlink write");
+			return 0;
+		}
+	}
+	return -1;
+}
 
 //Return the inode of the root directory
 struct inode *root_dir()

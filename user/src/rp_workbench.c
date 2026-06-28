@@ -1,3 +1,4 @@
+#include <agent.h>
 #include <stdio.h>
 #define RP_ENABLE_HOST_ACTION_SEED 1
 #include <research_platform_state.h>
@@ -9,6 +10,74 @@ static char workbench_row[192];
 static char workbench_docs[1024];
 static char workbench_fast[2600];
 static char workbench_ops_view[1800];
+static struct agent_info workbench_agent_info;
+static struct agent_op workbench_kernel_op;
+static struct agent_result workbench_kernel_result;
+static struct agent_context_header workbench_context_header;
+static struct agent_context_record workbench_context_records[4];
+static struct agent_file_query workbench_kernel_query;
+static struct agent_file_query_result workbench_kernel_query_result;
+
+static int run_kernel_workbench_stage(void)
+{
+	if (agent_info(&workbench_agent_info) < 0 || !workbench_agent_info.is_agent)
+		return 0;
+	if ((workbench_agent_info.capability_mask & AGENT_CAP_META_READ) == 0) {
+		printf("rp_workbench: metadata_capability_missing\n");
+		return -1;
+	}
+
+	memset(&workbench_kernel_op, 0, sizeof(workbench_kernel_op));
+	workbench_kernel_op.version = AGENT_CALL_VERSION;
+	workbench_kernel_op.tool_id = AGENT_TOOL_ECHO;
+	workbench_kernel_op.request_id = 4601;
+	strcpy(workbench_kernel_op.payload, "workbench-file-verify");
+	if (agent_run(&workbench_kernel_op, &workbench_kernel_result, 1, 0) != 1 ||
+	    workbench_kernel_result.status != AGENT_STATUS_OK) {
+		printf("rp_workbench: kernel_context_record_failed status=%d\n",
+		       workbench_kernel_result.status);
+		return -1;
+	}
+	if (context_snapshot(&workbench_context_header,
+			     workbench_context_records, 4) < 1 ||
+	    workbench_context_header.latest_sequence <
+		    workbench_kernel_result.sequence) {
+		printf("rp_workbench: context_snapshot_failed\n");
+		return -1;
+	}
+
+	memset(&workbench_kernel_query, 0, sizeof(workbench_kernel_query));
+	workbench_kernel_query.flags = AGENT_FILE_QUERY_USE_INDEX;
+	workbench_kernel_query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(workbench_kernel_query.project, "lab-gene-x");
+	strcpy(workbench_kernel_query.run_id, "RUN-042");
+	strcpy(workbench_kernel_query.stage, "report");
+	strcpy(workbench_kernel_query.status, "ok");
+	if (agent_file_query(&workbench_kernel_query,
+			     &workbench_kernel_query_result) < 1 ||
+	    workbench_kernel_query_result.returned < 1 ||
+	    !workbench_kernel_query_result.used_index) {
+		printf("rp_workbench: report_file_verify_failed hits=%d index=%d\n",
+		       workbench_kernel_query_result.returned,
+		       workbench_kernel_query_result.used_index);
+		return -1;
+	}
+
+	if (!rp_write_file("rp_agentos_workbench",
+			   "workbench=usable-workbench:RUN-900:agentos\n"
+			   "file_verify=kernel_metadata_index\n"
+			   "manifest=rp_workbench_manifest\n"
+			   "report_file=RUN-042-report\n"
+			   "context_snapshot=trusted\n"
+			   "candidate_source=kernel_index\n"
+			   "status=ready\n")) {
+		return -1;
+	}
+	if (!rp_append_file("rp_agentos_mainflow",
+			    "stage=workbench;workbench_file_verify=kernel_metadata_index;context_trusted=kernel_shadow;report_file=verified;status=ready"))
+		return -1;
+	return 1;
+}
 
 static void append_workbench_summary_value(char *line, int cap, const char *kind, const char *key, const char *prefix, const char *fallback)
 {
@@ -145,6 +214,8 @@ static int append_platform_ops_host_line(void)
 int main(void)
 {
 	int ok = 1;
+	int kernel_workbench;
+
 	ok = ok && rp_file_contains("rp_input", "request_form=form_fields=8");
 	ok = ok && rp_file_contains("rp_input", "upload_files=uploads=2");
 	ok = ok && rp_file_contains("rp_input", "workspace_import=workspace:RUN-900:folder");
@@ -158,6 +229,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runner", "revision_run=usable-run:RUN-900-rev1");
 	ok = ok && rp_file_contains("rp_runner", "citation_plan_entries=3");
 	if (!ok) return 1;
+
+	kernel_workbench = run_kernel_workbench_stage();
+	if (kernel_workbench < 0)
+		return 1;
 
 	if (!append_fast_workbench_host_line()) return 1;
 	if (!append_seeded_workbench_task_record()) return 1;
@@ -179,6 +254,9 @@ int main(void)
 	if (!rp_append_file("rp_runner", "workbench_runbook=rp_workbench_runbook;commands=6")) return 1;
 	if (!rp_append_file("rp_runner", "workbench_timeline=rp_workbench_timeline;events=8")) return 1;
 	if (!rp_append_file("rp_runner", "workbench_file_manifest=rp_workbench_manifest;files=9;sha_records=9")) return 1;
+	if (kernel_workbench &&
+	    !rp_append_file("rp_runner", "agentos_workbench_file_verify=kernel_metadata_index;context_snapshot=trusted;status=ready"))
+		return 1;
 	if (!rp_append_file("rp_runner", "workbench_delivery_scale=workbenches:8,templates:8,workspace_imports:9,workspace_inspections:9,answers:11,deliveries:9,studio_sessions:2,project_action_plans:17,project_deliveries:4,project_runbooks:17,project_evidence_audits:17,project_provenance_graphs:4,project_launches:3,project_release_gates:17,project_snapshots:17,status=ready")) return 1;
 
 	if (!rp_append_file("rp_runner", "question_present=1;imported_inputs=1;literature_evidence=1;generated_artifacts=1;llm_trace=ready;human_review=needs_revision;delivery_manifest=waiting;next_action=build_delivery_manifest;status=ready")) return 1;
@@ -498,6 +576,9 @@ int main(void)
 	}
 
 	if (!rp_append_file("rp_ack", "ack=workbench;msg=research_board;status=ready")) return 1;
+	if (kernel_workbench &&
+	    !rp_append_file("rp_tool", "tool=agentos.workbench_file_verify"))
+		return 1;
 	if (!rp_append_status("workbench=ready")) return 1;
 	if (!rp_append_status("workbench_tasks=ready")) return 1;
 	if (!rp_append_status("workspace_inspection=ready")) return 1;

@@ -15,7 +15,7 @@ int main()
 	// invalid address
 	assert_eq(-1, trace_read((uint8 *)0xfffffffful));
 	assert_eq(-1, trace_write((uint8 *)0xfffffffful, 0));
-	
+
 	// kernel address
 	assert_eq(-1, trace_read((uint8 *)0x80200000ul));
 	assert_eq(-1, trace_write((uint8 *)0x80200000ul, 0));

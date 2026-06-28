@@ -8,6 +8,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_status", "relay=ready");
 	ok = ok && rp_file_contains("rp_privacy", "decision=accepted");
 	ok = ok && rp_file_contains("rp_package", "artifacts=52");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "agent_provenance=observed");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_modelreg",
@@ -20,6 +21,9 @@ int main(void)
 			   "task=scientific workflow triage and report drafting\n"
 			   "owner=wang\n"
 			   "tags=agent,triage,research\n"
+			   "agentos_context=observed\n"
+			   "agentos_metadata=observed\n"
+			   "agentos_provenance=observed\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -33,6 +37,7 @@ int main(void)
 			   "artifact_ids=rp_report_text,rp_package,rp_llm_packets\n"
 			   "metric_artifact_count=52\n"
 			   "metric_prompt_eval_score=0.875\n"
+			   "agentos_version_trace=kernel_context_path\n"
 			   "status=staged\n")) {
 		return 1;
 	}
@@ -45,6 +50,7 @@ int main(void)
 			   "metric_report_status_ok=1.000\n"
 			   "metric_prompt_eval_score=0.875\n"
 			   "outputs=report:run-042-recovery-report:v1\n"
+			   "agentos_evaluation_event=observed\n"
 			   "status=passed\n")) {
 		return 1;
 	}
@@ -57,6 +63,7 @@ int main(void)
 			   "check_evaluation=ok\n"
 			   "check_provider=ok\n"
 			   "check_secret_policy=not_required\n"
+			   "agentos_capability_check=deployment_policy\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -66,13 +73,14 @@ int main(void)
 			   "provider=template\n"
 			   "latency_ms=12\n"
 			   "message=offline provider ready\n"
+			   "agentos_serving_watch=observed\n"
 			   "status=ok\n")) {
 		return 1;
 	}
 	if (!rp_append_file("rp_package", "model_registry=rp_modelreg;version=v1;evaluation=passed;deployment=ready;status=ready")) return 1;
 	if (!rp_append_file("rp_web_bundle", "model_registry_page=rp_modelreg;models=1;versions=1;evaluations=1;deployments=1;status=ready")) return 1;
 	if (!rp_append_file("rp_review_dashboard", "subsection=model_registry;source=rp_modelreg;checks=96;evaluation=passed;deployment=ready;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "model_registry_service_checks=96;models=1;versions=1;evaluations=1;deployments=1;serving_checks=1;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "model_registry_service_checks=96;models=1;versions=1;evaluations=1;deployments=1;serving_checks=1;kernel_metadata=observed;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=model_registry;msg=model;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=model_registry.register_model")) return 1;
 	if (!rp_append_file("rp_tool", "tool=model_registry.create_version")) return 1;

@@ -274,8 +274,8 @@ def run_check(
         }
 
     test_names = collect_test_names(host_dir)
-    plain_evidence = read_evidence(root, "user/src/rp_test_suite.c")
-    agentos_evidence = read_evidence(root, "agentos_ucore/user/src/rp_test_suite.c")
+    plain_evidence = read_evidence(root, "baseline_ucore/user/src/rp_test_suite.c")
+    agentos_evidence = read_evidence(root, "user/src/rp_test_suite.c")
     check_runtime_state = plain_state_dir is not None or agentos_state_dir is not None
     if check_runtime_state and (plain_state_dir is None or agentos_state_dir is None):
         raise ValueError("plain and AgentOS state directories must be supplied together")

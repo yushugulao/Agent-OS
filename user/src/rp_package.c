@@ -1,10 +1,89 @@
+#include <agent.h>
 #include <stdio.h>
 #define RP_ENABLE_HOST_ACTION_SEED 1
 #include <research_platform_state.h>
 
+static struct agent_info package_agent_info;
+static struct agent_op package_kernel_op;
+static struct agent_result package_kernel_result;
+static struct agent_context_header package_context_header;
+static struct agent_context_record package_context_records[4];
+static struct agent_ledger_summary package_ledger;
+static struct agent_provenance_edge package_edges[4];
+static struct agent_file_query package_kernel_query;
+static struct agent_file_query_result package_kernel_query_result;
+
+static int run_kernel_package_stage(void)
+{
+	if (agent_info(&package_agent_info) < 0 || !package_agent_info.is_agent)
+		return 0;
+	if ((package_agent_info.capability_mask & AGENT_CAP_AUDIT_WRITE) == 0 ||
+	    (package_agent_info.capability_mask & AGENT_CAP_META_READ) == 0) {
+		printf("rp_package: kernel_capability_missing\n");
+		return -1;
+	}
+
+	memset(&package_kernel_op, 0, sizeof(package_kernel_op));
+	package_kernel_op.version = AGENT_CALL_VERSION;
+	package_kernel_op.tool_id = AGENT_TOOL_ECHO;
+	package_kernel_op.request_id = 4701;
+	strcpy(package_kernel_op.payload, "package-provenance");
+	if (agent_run(&package_kernel_op, &package_kernel_result, 1, 0) != 1 ||
+	    package_kernel_result.status != AGENT_STATUS_OK) {
+		printf("rp_package: package_context_failed status=%d\n",
+		       package_kernel_result.status);
+		return -1;
+	}
+	if (context_snapshot(&package_context_header,
+			     package_context_records, 4) < 1 ||
+	    package_context_header.latest_sequence <
+		    package_kernel_result.sequence) {
+		printf("rp_package: package_context_snapshot_failed\n");
+		return -1;
+	}
+	if (agent_ledger_snapshot(&package_ledger) < 0 ||
+	    package_ledger.total_records == 0 ||
+	    agent_provenance_snapshot(package_edges, 4) < 0) {
+		printf("rp_package: package_ledger_failed\n");
+		return -1;
+	}
+	memset(&package_kernel_query, 0, sizeof(package_kernel_query));
+	package_kernel_query.flags = AGENT_FILE_QUERY_USE_INDEX;
+	package_kernel_query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(package_kernel_query.project, "lab-gene-x");
+	strcpy(package_kernel_query.run_id, "RUN-042");
+	strcpy(package_kernel_query.stage, "report");
+	strcpy(package_kernel_query.status, "ok");
+	if (agent_file_query(&package_kernel_query,
+			     &package_kernel_query_result) < 1 ||
+	    package_kernel_query_result.returned < 1 ||
+	    !package_kernel_query_result.used_index) {
+		printf("rp_package: report_package_query_failed hits=%d index=%d\n",
+		       package_kernel_query_result.returned,
+		       package_kernel_query_result.used_index);
+		return -1;
+	}
+
+	if (!rp_write_file("rp_agentos_package",
+			   "package=research-evidence-package\n"
+			   "package_trace=kernel_provenance\n"
+			   "ledger=kernel_ledger\n"
+			   "context_snapshot=trusted\n"
+			   "report_metadata=kernel_index\n"
+			   "status=ready\n")) {
+		return -1;
+	}
+	if (!rp_append_file("rp_agentos_mainflow",
+			    "stage=package;package_provenance=kernel_ledger;report_metadata=kernel_index;context_trusted=kernel_shadow;status=ready"))
+		return -1;
+	return 1;
+}
+
 int main(void)
 {
 	int ok = 1;
+	int kernel_package;
+
 	ok = ok && rp_file_contains("rp_report", "status=packaged");
 	ok = ok && rp_file_contains("rp_revision", "final_status=ready");
 	ok = ok && rp_file_contains("rp_evidence", "status=ready");
@@ -96,6 +175,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_audit", "release=ready");
 	ok = ok && rp_file_contains("rp_mail", "to=package");
 	if (!ok) return 1;
+	kernel_package = run_kernel_package_stage();
+	if (kernel_package < 0)
+		return 1;
 	if (!rp_write_file("rp_package",
 			   "package=research-evidence-package\n"
 			   "artifacts=52\n"
@@ -211,6 +293,9 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	if (kernel_package &&
+	    !rp_append_file("rp_package", "agentos_package_provenance=kernel_ledger;report_metadata=kernel_index;context_snapshot=trusted;status=ready"))
+		return 1;
 	if (rp_host_seed_has_artifact_action()) {
 		if (!rp_append_file("rp_package", "host_action_artifacts=ready")) return 1;
 		if (!rp_append_file("rp_package", "host_action_artifact_outputs=rp_artifact,rp_artifact_manifest,rp_stage_log,rp_chart_data,rp_package")) return 1;
@@ -361,6 +446,9 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=package.attach_agent_collab")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_human_review")) return 1;
 	if (!rp_append_file("rp_tool", "tool=package.attach_revision_task")) return 1;
+	if (kernel_package &&
+	    !rp_append_file("rp_tool", "tool=agentos.package_provenance"))
+		return 1;
 	if (rp_host_seed_has("kind=bundle_export") ||
 	    rp_host_seed_has("kind=research_export") ||
 	    rp_host_seed_has("kind=delivery")) {

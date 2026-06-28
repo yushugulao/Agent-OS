@@ -32,7 +32,7 @@ def write_fixture(
 
     api_count = source_api if source_api is not None else len(api_routes)
     action_count = source_actions if source_actions is not None else len(action_routes)
-    for relative in ("user/src/rp_web_export.c", "agentos_ucore/user/src/rp_web_export.c"):
+    for relative in ("baseline_ucore/user/src/rp_web_export.c", "user/src/rp_web_export.c"):
         path = root / relative
         path.parent.mkdir(parents=True)
         path.write_text(

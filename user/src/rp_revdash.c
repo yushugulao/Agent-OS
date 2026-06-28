@@ -65,7 +65,7 @@ int main(void)
 			   "decision=ready_for_reviewer;basis=required_files,human_review,llm_packet_guard,workflow_recovered\n"
 			   "decision=plain_kernel_limit;basis=file_state_scan,host_reader_refresh,user_space_contract\n"
 			   "decision=review_pack_ready;basis=delivery_manifest,operations_next,project_action_items,workbench_handoff\n"
-			   "backend_review_evidence=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;review_pack=rp_review_pack;status=ready\n"
+			   "backend_review_evidence=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;review_pack=rp_review_pack;status=ready\n"
 			   "pack_source=rp_package,rp_runner,rp_review_pack\n"
 			   "pack_bridge=delivery_manifest,operations_report,project_space,workbench_handoff\n"
 			   "host_page=review.html\n"

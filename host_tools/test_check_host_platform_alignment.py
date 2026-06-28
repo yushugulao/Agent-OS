@@ -15,14 +15,14 @@ class HostPlatformAlignmentTests(unittest.TestCase):
             for module in group.host_modules:
                 (host / "agent_platform" / module).write_text("# fixture\n", encoding="utf-8")
 
+        (root / "baseline_ucore" / "user" / "src").mkdir(parents=True)
         (root / "user" / "src").mkdir(parents=True)
-        (root / "agentos_ucore" / "user" / "src").mkdir(parents=True)
         plain_sources = {source for group in CAPABILITY_GROUPS for source in group.plain_sources}
         agentos_sources = {source for group in CAPABILITY_GROUPS for source in group.agentos_sources}
         for source in plain_sources:
-            (root / "user" / "src" / source).write_text("int main(void) { return 0; }\n", encoding="utf-8")
+            (root / "baseline_ucore" / "user" / "src" / source).write_text("int main(void) { return 0; }\n", encoding="utf-8")
         for source in agentos_sources:
-            (root / "agentos_ucore" / "user" / "src" / source).write_text("int main(void) { return 0; }\n", encoding="utf-8")
+            (root / "user" / "src" / source).write_text("int main(void) { return 0; }\n", encoding="utf-8")
 
         (root / "host_tools").mkdir()
         reader_keywords = sorted({keyword for group in CAPABILITY_GROUPS for keyword in group.reader_keywords})
@@ -103,7 +103,7 @@ class HostPlatformAlignmentTests(unittest.TestCase):
             root.mkdir()
             self._write_minimal_tree(root, host)
             missing = CAPABILITY_GROUPS[-1].agentos_sources[-1]
-            (root / "agentos_ucore" / "user" / "src" / missing).unlink()
+            (root / "user" / "src" / missing).unlink()
 
             summary = run_check(root, host, require_host=True)
 

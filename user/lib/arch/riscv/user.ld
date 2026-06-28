@@ -3,22 +3,22 @@ ENTRY(_start)
 
 SECTIONS {
 
-    .text : { 
+    .text : {
         *(.text.entry)
         *(.text .text.*)
     }
 
-    .bss : { 
+    .bss : {
         *(.bss .bss.*)
         *(.sbss .sbss.*)
     }
 
-    .data : { 
+    .data : {
         *(.data .data.*)
         *(.rodata .rodata.*)
         *(.srodata .srodata.*)
         *(.sdata .sdata.*)
     }
-    
+
     /DISCARD/ : { *(.eh_*) }
 }

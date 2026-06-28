@@ -1,42 +1,53 @@
-# 用户程序目录说明：uCore
+# 用户程序目录说明：AgentOS-uCore
 
-本目录保留 uCore 教学内核的用户态测试和本项目 plain target 的科研 Agent 平台程序。根目录 plain target 不修改 `os/` 内核，科研平台通过这里的普通用户程序运行。
+本目录包含 AgentOS-uCore 目标的用户态程序。它保留 uCore 教学测试的构建方式，同时加入 AgentOS 专项测试、综合演示程序和科研 Agent 平台程序。
 
 ## 基础用法
 
-生成指定章节用户程序：
+生成指定章节或目标的用户程序：
 
 ```shell
-make CHAPTER=5 BASE=1
+make CHAPTER=agent
+make CHAPTER=platform_agentos
 ```
 
-`CHAPTER` 表示要构建的章节程序，可选值包括：
+`CHAPTER` 常用取值：
 
-```text
-1, 2, 3, 3_2, 3t, 4, 4_3, 5, 6, 7
-```
+- `agent`：构建 AgentOS 专项测试程序，例如 `agentfinal_ucore`、`agentfs_ucore`、`agentloop_ucore`、`agentbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`。
+- `platform_agentos`：构建接入增强内核服务的科研 Agent 平台程序，例如 `rp_agentos_orch` 和完整 `rp_*` 平台程序集。
+- uCore 原有章节值仍可用于基础教学测试。
 
-通常不需要手动设置 `CHAPTER`，uCore 构建系统会根据分支或上层 Makefile 指定默认值。本项目运行科研 Agent 平台时，常用 `CHAPTER=platform_plain` 或 `CHAPTER=platform_seeded`。
+`BASE` 参数含义与 uCore 原始用户程序目录一致：
 
-`BASE` 表示是否只生成基础测试：
-
-- `BASE=1`：只生成未改动 uCore 即可处理的基础测试，名称通常带有 `chxb_` 前缀。
-- `BASE=0`：生成该章节的全部测试程序。
-- 默认值为 `0`。
+- `BASE=1`：只生成基础测试。
+- `BASE=0`：生成完整测试集合。
 
 ## 输出目录
 
 - `target/bin`：生成的 `.bin` 文件。
-- `target/elf`：生成的 `.elf` 文件，扩展实验可能使用。
+- `target/elf`：生成的 `.elf` 文件。
 - `asm`：用户程序反汇编输出。
 
 ## 本项目相关入口
 
-plain target 的科研 Agent 平台程序位于 `user/src/`，常见入口包括：
+AgentOS 专项验证入口：
 
-- `rp_plain`
-- `rp_orch`
-- `rp_seed_orch`
-- `rp_compare_plain`
+```text
+agentfinal_ucore
+agentfs_ucore
+agentscan_ucore
+agentloop_ucore
+agentsched_ucore
+agentbench_ucore
+labbench_ucore
+labdemo_ucore
+agentsecurity_ucore
+```
 
-这些程序通过普通文件写出 `rp_*` 状态记录，由 Host Reader 渲染为网页和 API JSON。
+科研 Agent 平台增强入口：
+
+```text
+rp_agentos_orch
+```
+
+`rp_agentos_orch` 会创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，再运行与 plain target 可比较的 RUN-042 科研流程，并把关键内核证据写入 `rp_agentos_*` 状态文件。

@@ -48,7 +48,7 @@ echo "[full-verify] dual platforms"
 
 echo "[full-verify] AgentOS kernel tests"
 (
-	cd "${ROOT_DIR}/agentos_ucore"
+	cd "${ROOT_DIR}"
 	TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" CASE_TIMEOUT="${CASE_TIMEOUT}" bash scripts/run-agent-tests.sh
 )
 

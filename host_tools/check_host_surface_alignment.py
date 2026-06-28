@@ -142,8 +142,8 @@ def run_check(
     expected_actions = len(action_routes)  # type: ignore[arg-type]
     failures: list[str] = []
 
-    plain_source = read_text(root, "user/src/rp_web_export.c")
-    agentos_source = read_text(root, "agentos_ucore/user/src/rp_web_export.c")
+    plain_source = read_text(root, "baseline_ucore/user/src/rp_web_export.c")
+    agentos_source = read_text(root, "user/src/rp_web_export.c")
     plain_counts = check_source_counts("plain source", plain_source, expected_api, expected_actions, failures)
     agentos_counts = check_source_counts("AgentOS source", agentos_source, expected_api, expected_actions, failures)
 

@@ -740,7 +740,7 @@ def run_target(
 def run_check(root: Path, work_dir: Path, timeout: int, wsl_distro: str) -> dict[str, object]:
     plain = run_target(
         "plain",
-        root,
+        root / "baseline_ucore",
         work_dir,
         timeout,
         wsl_distro,
@@ -750,7 +750,7 @@ def run_check(root: Path, work_dir: Path, timeout: int, wsl_distro: str) -> dict
     )
     agentos = run_target(
         "agentos",
-        root / "agentos_ucore",
+        root,
         work_dir,
         timeout,
         wsl_distro,

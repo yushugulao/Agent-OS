@@ -22,7 +22,7 @@ def write_fixture(
         source_lines.append('            return 303, {"Location": "/"}, ""')
     (host / "agent_platform" / "api_server.py").write_text("\n".join(source_lines), encoding="utf-8")
 
-    for relative, kinds in (("user/src", plain_kinds), ("agentos_ucore/user/src", agentos_kinds)):
+    for relative, kinds in (("baseline_ucore/user/src", plain_kinds), ("user/src", agentos_kinds)):
         source_dir = root / relative
         source_dir.mkdir(parents=True)
         source_dir.joinpath("rp_actions.c").write_text(
@@ -62,7 +62,7 @@ class HostActionKindAlignmentTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             host = write_fixture(root)
-            plain_dir = root / "user/src"
+            plain_dir = root / "baseline_ucore/user/src"
             plain_dir.joinpath("rp_actions.c").write_text('if (rp_host_seed_has("kind=research_run")) return 0;', encoding="utf-8")
             plain_dir.joinpath("rp_compare_plain.c").write_text('if (rp_host_seed_has("kind=research_rerun")) return 0;', encoding="utf-8")
 

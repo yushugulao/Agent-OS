@@ -1,4 +1,5 @@
 #include "syscall.h"
+#include <agent.h>
 #include <stddef.h>
 #include <unistd.h>
 #include <stdio.h>
@@ -262,4 +263,220 @@ int trace_write(uint8 *addr, uint8 data)
 int count_syscall(int id)
 {
 	return trace(TRACE_SYSCALL, id, 0);
+}
+
+int agent_create(void)
+{
+	return syscall(SYS_agent_create);
+}
+
+int agent_create_role(int role)
+{
+	return syscall(SYS_agent_create_role, role);
+}
+
+int agent_info(struct agent_info *info)
+{
+	return syscall(SYS_agent_info, info);
+}
+
+int agent_sched_snapshot(struct agent_sched_record *records, int max)
+{
+	return syscall(SYS_agent_sched_snapshot, records, max);
+}
+
+int agent_sched_config(struct agent_sched_config *config)
+{
+	return syscall(SYS_agent_sched_config, config);
+}
+
+int agent_trace_snapshot(struct agent_trace_record *records, int max)
+{
+	return syscall(SYS_agent_trace_snapshot, records, max);
+}
+
+int agent_audit_snapshot(struct agent_audit_record *records, int max)
+{
+	return syscall(SYS_agent_audit_snapshot, records, max);
+}
+
+int agent_audit_query(struct agent_audit_filter *filter,
+		      struct agent_audit_record *records, int max)
+{
+	return syscall(SYS_agent_audit_query, filter, records, max);
+}
+
+int agent_span_trace_snapshot(struct agent_audit_record *records, int max)
+{
+	return syscall(SYS_agent_span_trace_snapshot, records, max);
+}
+
+int agent_timeline_snapshot(struct agent_timeline_record *records, int max)
+{
+	return syscall(SYS_agent_timeline_snapshot, records, max);
+}
+
+int agent_timeline_query(struct agent_timeline_filter *filter,
+			 struct agent_timeline_record *records, int max)
+{
+	return syscall(SYS_agent_timeline_query, filter, records, max);
+}
+
+int agent_timeline_wait(struct agent_timeline_filter *filter, int timeout_ticks)
+{
+	return syscall(SYS_agent_timeline_wait, filter, timeout_ticks);
+}
+
+int agent_timeline_read(struct agent_timeline_filter *filter,
+			struct agent_timeline_record *records, int max,
+			int timeout_ticks)
+{
+	return syscall(SYS_agent_timeline_read, filter, records, max,
+		       timeout_ticks);
+}
+
+int agent_provenance_snapshot(struct agent_provenance_edge *edges, int max)
+{
+	return syscall(SYS_agent_provenance_snapshot, edges, max);
+}
+
+int agent_ledger_snapshot(struct agent_ledger_summary *summary)
+{
+	return syscall(SYS_agent_ledger_snapshot, summary);
+}
+
+int agent_file_prefetch_snapshot(struct agent_file_prefetch_hint *hints,
+				 int max)
+{
+	return syscall(SYS_agent_file_prefetch_snapshot, hints, max);
+}
+
+int agent_file_prefetch_span_snapshot(struct agent_file_prefetch_hint *hints,
+				      int max)
+{
+	return syscall(SYS_agent_file_prefetch_span_snapshot, hints, max);
+}
+
+int agent_run(struct agent_op *ops, struct agent_result *results, int count,
+	      uint64 flags)
+{
+	return syscall(SYS_agent_run, ops, results, count, flags);
+}
+
+int agent_call(struct agent_request *req, struct agent_response *resp)
+{
+	return syscall(SYS_agent_call, req, resp);
+}
+
+int agent_tool_list(struct agent_tool_desc *out, int max)
+{
+	return syscall(SYS_agent_tool_list, out, max);
+}
+
+int context_push(struct agent_context_record *record)
+{
+	return syscall(SYS_context_push, record);
+}
+
+int context_query(uint64 start_sequence, struct agent_context_record *out,
+		  int max)
+{
+	return syscall(SYS_context_query, start_sequence, out, max);
+}
+
+int context_snapshot(struct agent_context_header *header,
+		     struct agent_context_record *records, int max)
+{
+	return syscall(SYS_context_snapshot, header, records, max);
+}
+
+int context_detail(uint64 sequence, struct agent_context_detail *detail)
+{
+	return syscall(SYS_context_detail, sequence, detail);
+}
+
+int context_rollback(uint64 sequence)
+{
+	return syscall(SYS_context_rollback, sequence);
+}
+
+int context_clear(void)
+{
+	return syscall(SYS_context_clear);
+}
+
+int agent_watch(int event_type, const char *filter)
+{
+	return syscall(SYS_agent_watch, event_type, filter);
+}
+
+int agent_unwatch(int event_type, const char *filter)
+{
+	return syscall(SYS_agent_unwatch, event_type, filter);
+}
+
+int agent_wait(struct agent_event *event, int timeout_ticks)
+{
+	return syscall(SYS_agent_wait, event, timeout_ticks);
+}
+
+int agent_wait_cancel(int pid, const char *reason)
+{
+	return syscall(SYS_agent_wait_cancel, pid, reason);
+}
+
+int agent_heartbeat(int interval_ticks)
+{
+	return syscall(SYS_agent_heartbeat, interval_ticks);
+}
+
+int agent_heartbeat_stop(void)
+{
+	return agent_heartbeat(0);
+}
+
+int agent_wake(int pid, struct agent_event *event)
+{
+	return syscall(SYS_agent_wake, pid, event);
+}
+
+int agent_file_meta_init(void)
+{
+	return syscall(SYS_agent_file_meta_init);
+}
+
+int agent_file_meta_set(struct agent_file_meta *meta)
+{
+	return syscall(SYS_agent_file_meta_set, meta);
+}
+
+int agent_file_query(struct agent_file_query *query,
+		     struct agent_file_query_result *result)
+{
+	return syscall(SYS_agent_file_query, query, result);
+}
+
+int agent_file_edit_begin(const char *path, uint64 flags, int ttl_ticks,
+			  struct agent_file_edit_state *state)
+{
+	return syscall(SYS_agent_file_edit_begin, path, flags, ttl_ticks,
+		       state);
+}
+
+int agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
+			   struct agent_file_edit_state *state)
+{
+	return syscall(SYS_agent_file_edit_commit, lease_id, expected_version,
+		       state);
+}
+
+int agent_file_edit_abort(uint64 lease_id)
+{
+	return syscall(SYS_agent_file_edit_abort, lease_id);
+}
+
+int agent_file_edit_state(const char *path,
+			  struct agent_file_edit_state *state)
+{
+	return syscall(SYS_agent_file_edit_state, path, state);
 }

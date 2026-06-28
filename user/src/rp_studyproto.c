@@ -105,6 +105,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_projectrel", "project_delivery_checks=18");
 	ok = ok && rp_file_contains("rp_package", "provenance_graph=unified");
 	ok = ok && rp_file_contains("rp_web_bundle", "project_delivery_service=rp_projectrel");
+	ok = ok && rp_file_contains("rp_agentos_query", "metadata_source=kernel_file_index");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "context_trusted=kernel_shadow");
+	ok = ok && rp_file_contains("rp_agentos_timeline", "event_delivery=kernel_agent_queue");
+	ok = ok && rp_file_contains("rp_agentos_recovery", "kernel_tool=action_commit,artifact_update");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_studyproto",
@@ -136,7 +140,7 @@ int main(void)
 			   "action_execution=study-protocol-reproduction-action-execution:RUN-042;steps_done=5;result=passed;status=ready\n"
 			   "dataset_portfolio=dataset-portfolio:lab-gene-x;datasets=2;cards=1;visualizations=1;answers=1;status=ready\n"
 			   "source_portfolio=source-portfolio:lab-gene-x;sources=42;reviewed=8;exports=2;status=ready\n"
-			   "agentos_adaptation=file_metadata_index,context_protocol_evidence,event_reproduction_queue,batch_dataset_tool;status=planned\n"
+			   "agentos_adaptation=file_metadata_index,context_protocol_evidence,event_reproduction_queue,batch_dataset_tool;evidence=rp_agentos_query,rp_agentos_mainflow,rp_agentos_timeline,rp_agentos_recovery;result=observed;status=ready\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -144,6 +148,7 @@ int main(void)
 	if (!rp_append_file("rp_web_bundle", "study_protocol_service=rp_studyproto;checks=20;launches=2;reproduction=ready;status=ready")) return 1;
 	if (!rp_append_file("rp_review_dashboard", "subsection=study_protocols;source=rp_studyproto;launches=2;reproduction=ready;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "study_protocol_service=checks:20;protocols:2;launches:2;runs:1;reproduction:1;action_plan:1;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "study_protocol_kernel_binding=file_metadata_index,context_protocol_evidence,event_reproduction_queue,batch_dataset_tool;source=rp_studyproto;status=ready")) return 1;
 	if (!append_study_host_actions()) return 1;
 	if (!rp_append_file("rp_ack", "ack=studyproto;msg=study-protocol;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=study_protocol.launch")) return 1;

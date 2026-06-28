@@ -152,10 +152,9 @@ bash scripts/verify-dual-target-structure.sh
 期望关键标记：
 
 ```text
-[dual-target-check] plain kernel: clean
-[dual-target-check] plain kernel base: origin/main
+[dual-target-check] baseline kernel: clean
 [dual-target-check] AgentOS kernel: present
-[dual-target-check] platform source coverage: 73 root rp sources mirrored
+[dual-target-check] platform source coverage: 73 baseline rp sources mirrored
 [dual-target-check] platform app coverage: 71 build-list apps mirrored
 [dual-target-check] platform source sync: identical=30 adapted=43
 [dual-target-check] backend evidence coverage: plain=7 agentos=8 preserved_costs=7
@@ -331,11 +330,11 @@ make demo-reader
 
 `results/latest/demo-guide.html` 是录屏导览入口，会把两条命令、建议展示顺序、观测面板、关键图表和 Host Reader 首页串在一起。`results/latest/monitor.html` 不展示完整科研平台页面，而是先给出运行结果、状态产物、内核证据、启动方式和 QEMU 健康状态，适合在视频开头快速说明本次测试数据是否可信。`make demo-reader` 会把 `results/latest/` 复制到 Reader 输出目录下的 `dual-results/`，并生成 `demo-url-list.txt` 与 `dual-results.html` 录屏 URL 清单。浏览器只需要访问同一个本地服务：`http://127.0.0.1:8767/dual-results.html` 用于进入录屏 URL 清单，`http://127.0.0.1:8767/dual-results/demo-guide.html` 用于进入演示导览页，`http://127.0.0.1:8767/dual-results/monitor.html` 用于直接打开运行观测面板，`http://127.0.0.1:8767/demo-url-list.txt` 用于查看纯文本 URL。随后再打开 Reader 首页展示每个 Agent、每个 artifact、LLM Relay 和 AgentOS Compare 的细节。
 
-快速结构检查不替代 QEMU 运行。它会用 `origin/main` 对照根目录 `os/` 和 `bootloader/`，并检查根目录内核没有混入 AgentOS syscall、Agent Context、内核文件 metadata、Agent 事件队列等符号，同时确认增强内核目标、科研平台入口、同名科研平台程序覆盖关系、源码同步关系、backend 成本项保留关系和测试脚本仍然存在。它还会检查 AgentOS 内核源码中没有 `RUN-042`、`lab-gene-x`、固定阶段 selector、固定失败原因等科研演示常量，保证科研平台仍是用户态负载，不是内核默认业务；旧演示工具 id 只允许出现在兼容性和权限测试里，平台主流程必须使用 `action_commit`、`artifact_update` 等通用工具。它还会检查 Makefile 和脚本入口关系：`make full-verify` 必须调用完整验证脚本，完整验证脚本必须串起结构检查、Host Reader 测试、action runner 测试、文件系统镜像提取测试、LLM relay 测试、LLM Relay 模式契约测试、seeded 双目标 QEMU 和 AgentOS 内核专项测试；`make dual-platform-run` 必须调用双平台脚本；plain target 必须以 `rp_orch` 启动，AgentOS target 必须以 `rp_agentos_orch` 启动。完整功能仍以 `make dual-platform-run` 和 AgentOS 专项测试为准。
+快速结构检查不替代 QEMU 运行。它会检查 `baseline_ucore/` 不包含 AgentOS syscall、Agent Context、内核文件 metadata、Agent 事件队列等增强符号，同时确认根目录 AgentOS 内核、科研平台入口、同名科研平台程序覆盖关系、源码同步关系、backend 成本项保留关系和测试脚本仍然存在。它还会检查 AgentOS 内核源码中没有 `RUN-042`、`lab-gene-x`、固定阶段 selector、固定失败原因等科研演示常量，保证科研平台仍是用户态负载，不是内核默认业务；旧演示工具 id 只允许出现在兼容性和权限测试里，平台主流程必须使用 `action_commit`、`artifact_update` 等通用工具。它还会检查 Makefile 和脚本入口关系：`make full-verify` 必须调用完整验证脚本，完整验证脚本必须串起结构检查、Host Reader 测试、action runner 测试、文件系统镜像提取测试、LLM relay 测试、LLM Relay 模式契约测试、seeded 双目标 QEMU 和 AgentOS 内核专项测试；`make dual-platform-run` 必须调用双平台脚本；plain target 必须以 `rp_orch` 启动，AgentOS target 必须以 `rp_agentos_orch` 启动。完整功能仍以 `make dual-platform-run` 和 AgentOS 专项测试为准。
 
 LLM Relay 模式契约测试由 `host_tools/test_llm_relay_mode_contract.py` 完成。它构造一个临时外部密钥文件，验证 Relay 能识别 DeepSeek 默认模型字段，同时确认默认 `auto` 模式在没有外部密钥时使用模板响应；显式模板模式即使存在外部密钥，也不会把密钥内容或密钥文件路径写入任何 `rp_*` 状态文件。这个测试用于保证公开仓库克隆后能离线验证，也保证本机配置云端模型时不会把敏感材料带入 uCore 镜像或文档产物。
 
-宿主机科研 Agent 平台能力对齐检查由 `host_tools/check_host_platform_alignment.py` 完成。它默认读取同级目录 `research-agent-platform-userland`，把其中的工作流、项目工作台、artifact、数据与实验室对象、LLM Relay、多 Agent 协作、provenance、治理、运行控制、评审发布、页面/API 和 AgentOS 对照等核心模块，映射到 root uCore 与 AgentOS-uCore 的 `rp_*` 程序和 Host Reader 展示入口。当前本机检查输出为：
+宿主机科研 Agent 平台能力对齐检查由 `host_tools/check_host_platform_alignment.py` 完成。它默认读取同级目录 `research-agent-platform-userland`，把其中的工作流、项目工作台、artifact、数据与实验室对象、LLM Relay、多 Agent 协作、provenance、治理、运行控制、评审发布、页面/API 和 AgentOS 对照等核心模块，映射到 `baseline_ucore/` 普通目标与根目录 AgentOS-uCore 的 `rp_*` 程序和 Host Reader 展示入口。当前本机检查输出为：
 
 ```text
 host_platform_alignment: host_modules=154 tracked_host_modules=154 plain_sources=73 agentos_sources=74 runtime_state_checked=1 groups_ok=13 groups_total=13 untracked_host_modules=0 status=ready
@@ -369,7 +368,7 @@ seeded_action_state: action=/actions/research/rerun action_count=44 host_routes=
 
 这项检查补充了 action kind 检查：action kind 检查回答“源码是否有对应处理”，预置 action 状态检查回答“代表性宿主机请求进入 QEMU 后是否真的产生可读结果”。当前批次以 rerun action 作为主线，因为它会同时影响输入、运行器、报告文本和 artifact manifest；其余请求用于覆盖数据、证据、artifact、workflow、LLM、workbench、项目生命周期、研究协议、项目评审和可移植性状态，避免只验证单一路径。未进入 QEMU 实跑的宿主机 action 仍由 action kind 检查约束源码处理路径；如果某个新路由需要成为演示主证据，应加入预置请求，并补充对应状态文件断言。
 
-宿主机 Web/API/action 规模检查由 `host_tools/check_host_surface_alignment.py` 完成。它直接读取仓库外宿主机平台的 `agent_platform/api_server.py`，统计显式 API 路由、action 路由和下载引用数量，再检查 root uCore 与 AgentOS-uCore 的 `rp_web_export.c` 和双目标运行状态文件是否保留对应规模。当前本机检查输出为：
+宿主机 Web/API/action 规模检查由 `host_tools/check_host_surface_alignment.py` 完成。它直接读取仓库外宿主机平台的 `agent_platform/api_server.py`，统计显式 API 路由、action 路由和下载引用数量，再检查 `baseline_ucore/` 普通目标与根目录 AgentOS-uCore 的 `rp_web_export.c` 和双目标运行状态文件是否保留对应规模。当前本机检查输出为：
 
 ```text
 host_surface_alignment: api_routes=214 action_routes=95 download_refs=76 runtime_state_checked=1 status=ready
@@ -382,7 +381,6 @@ host_surface_alignment: api_routes=214 action_routes=95 download_refs=76 runtime
 增强目标的内核机制还需要单独运行专项脚本：
 
 ```bash
-cd agentos_ucore
 TOOLPREFIX=riscv64-linux-gnu- QEMU=qemu-system-riscv64 CASE_TIMEOUT=240s bash scripts/run-agent-tests.sh
 ```
 
@@ -433,7 +431,7 @@ Host Reader 不是内核功能的一部分；它的作用是把两个目标生�
 
 1. 启动、trap、中断、syscall、上下文切换。
 
-   代码位置：`os/entry.S`、`os/proc.c`、`os/trap.c`、`os/syscall.c`、`os/timer.c`，以及 `agentos_ucore/os/` 下对应文件。
+   代码位置：`baseline_ucore/os/entry.S`、`baseline_ucore/os/proc.c`、`baseline_ucore/os/trap.c`、`baseline_ucore/os/syscall.c`、`baseline_ucore/os/timer.c`，以及根目录 `os/` 下对应增强实现。
 
    相关处理：QEMU 进入 RISC-V 内核后，`INIT_PROC` 成为用户态入口。用户态通过 `a7` 和 `a0..a5` 发起 syscall，trapframe 保存用户寄存器，`scheduler()`、`sched()`、`yield()` 完成上下文切换。`rp_plain`、`rp_orch`、`rp_seed_orch`、`rp_agentos_orch` 都通过这一路径运行。
 
@@ -445,7 +443,7 @@ Host Reader 不是内核功能的一部分；它的作用是把两个目标生�
 
 3. 虚拟内存、地址空间、地址翻译、页表、缺页处理、权限检查。
 
-   代码位置：`os/vm.c`、`os/proc.c`、`os/loader.c`、`os/trap.c`、`agentos_ucore/os/agent.c`。
+   代码位置：`baseline_ucore/os/vm.c`、`baseline_ucore/os/proc.c`、`baseline_ucore/os/loader.c`、`baseline_ucore/os/trap.c`、`os/agent.c`。
 
    相关处理：syscall 访问用户地址时使用 `copyin()`、`copyout()`、`copyinstr()`；`uvmcopy()` 服务 `fork()`；`exec()` 替换地址空间。增强目标中，Agent Context 的可信历史由内核 shadow 状态维护，用户可见镜像不能伪造可信记录。
 
@@ -457,13 +455,13 @@ Host Reader 不是内核功能的一部分；它的作用是把两个目标生�
 
 5. Linux/RISC-V syscall ABI、参数、返回值、错误处理。
 
-   代码位置：`os/syscall_ids.h`、`os/syscall.c`、用户态 syscall wrapper、`agentos_ucore/os/syscall_ids.h`。
+   代码位置：`baseline_ucore/os/syscall_ids.h`、`baseline_ucore/os/syscall.c`、根目录 `os/syscall_ids.h`、`os/syscall.c` 和用户态 syscall wrapper。
 
    相关处理：syscall id、参数寄存器、返回寄存器、用户指针复制、错误返回共同决定 syscall ABI。增强目标的工具调用在产生副作用前校验 tool id/name、参数类型、payload、输出缓冲区和权限，错误请求不能污染 Context、metadata、mailbox 或 ledger。
 
 6. 并发同步、资源管理、死锁处理、竞态处理、用户态/内核态隔离。
 
-   代码位置：`os/sync.c`、`os/sync.h`、`os/proc.c`、`os/file.c`、`os/fs.c`、`agentos_ucore/os/agent.c`、`agentos_ucore/os/agent.h`。
+   代码位置：`baseline_ucore/os/sync.c`、`baseline_ucore/os/sync.h`、`baseline_ucore/os/proc.c`、`baseline_ucore/os/file.c`、`baseline_ucore/os/fs.c`、`os/agent.c`、`os/agent.h`。
 
    相关处理：进程、线程、文件、inode、pipe、buffer、mutex、semaphore、condvar 都有各自的生命周期和同步规则。plain target 暴露用户态约定的局限；AgentOS target 将 role/capability、Context、事件队列、wait/wake、heartbeat、metadata、edit lease、timeline、ledger 放入内核状态，由内核根据真实状态判断。
 
@@ -485,4 +483,4 @@ Host Reader 不是内核功能的一部分；它的作用是把两个目标生�
 
 ## 暂停验证说明
 
-如果当前有其他编辑者正在修改 `agentos_ucore/`，可以先暂停构建和 QEMU 运行，只做静态文档和 Host Reader 对齐。交付前仍需要重新运行双目标构建、QEMU 路径和 Host Reader 检查。
+如果当前有其他编辑者正在修改根目录 AgentOS 源码，可以先暂停构建和 QEMU 运行，只做静态文档和 Host Reader 对齐。交付前仍需要重新运行双目标构建、QEMU 路径和 Host Reader 检查。

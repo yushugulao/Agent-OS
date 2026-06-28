@@ -82,7 +82,7 @@ platform_program_count() {
 	echo "${count}"
 }
 
-expected_programs="$(platform_program_count "${ROOT_DIR}/user/Makefile")"
+expected_programs="$(platform_program_count "${ROOT_DIR}/baseline_ucore/user/Makefile")"
 
 seeded_work_dir="${DUAL_LOG_DIR}/seeded-action-state"
 seeded_summary="${DUAL_LOG_DIR}/seeded-action-state.json"

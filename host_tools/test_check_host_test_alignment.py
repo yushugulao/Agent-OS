@@ -17,8 +17,8 @@ def write_fixture(root: Path, tests: list[str], plain_extra: str = "", agentos_e
         body.append("")
     (host / "tests" / "test_platform.py").write_text("\n".join(body), encoding="utf-8")
 
-    plain_dir = root / "user" / "src"
-    agentos_dir = root / "agentos_ucore" / "user" / "src"
+    plain_dir = root / "baseline_ucore" / "user" / "src"
+    agentos_dir = root / "user" / "src"
     plain_dir.mkdir(parents=True)
     agentos_dir.mkdir(parents=True)
     tokens = "\n".join(token for theme in checker.TEST_THEMES for token in theme.evidence_tokens)
@@ -103,8 +103,8 @@ class HostTestAlignmentTests(unittest.TestCase):
                     "test_provenance_query_builder_api_search_site_package_and_provenance",
                 ],
             )
-            evidence = (root / "agentos_ucore" / "user" / "src" / "rp_test_suite.c").read_text(encoding="utf-8")
-            (root / "agentos_ucore" / "user" / "src" / "rp_test_suite.c").write_text(
+            evidence = (root / "user" / "src" / "rp_test_suite.c").read_text(encoding="utf-8")
+            (root / "user" / "src" / "rp_test_suite.c").write_text(
                 evidence.replace("agent_compare=passed", ""),
                 encoding="utf-8",
             )
@@ -139,8 +139,8 @@ class HostTestAlignmentTests(unittest.TestCase):
     def test_missing_host_can_skip(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
+            (root / "baseline_ucore" / "user" / "src").mkdir(parents=True)
             (root / "user" / "src").mkdir(parents=True)
-            (root / "agentos_ucore" / "user" / "src").mkdir(parents=True)
 
             result = checker.run_check(root, root / "missing-host", False)
 

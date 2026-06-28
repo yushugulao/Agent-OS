@@ -1,9 +1,11 @@
-#include <stdio.h>
 #include <research_platform_state.h>
+#include <stdio.h>
+#include <string.h>
 
 int main(void)
 {
 	int ok = 1;
+
 	ok = ok && rp_file_contains("rp_timeline", "events=9");
 	ok = ok && rp_file_contains("rp_execobs", "execution_packets=4");
 	ok = ok && rp_file_contains("rp_artifact_manifest", "manifest_records=4");
@@ -11,6 +13,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_package", "provenance_graph=unified");
 	ok = ok && rp_file_contains("rp_agent_run", "agent_messages=21");
 	ok = ok && rp_file_contains("rp_mature", "capability_checks=72");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "agent_timeline=observed");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "agent_provenance=observed");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "agent_ledger=observed");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "provenance_kernel=observed");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_prov_view",
@@ -24,6 +30,9 @@ int main(void)
 			   "decision_packets=3\n"
 			   "reader_page=provenance.html\n"
 			   "agentos_mapping=kernel_timeline,kernel_provenance_edges,kernel_ledger,context_detail\n"
+			   "agentos_kernel_timeline=observed\n"
+			   "agentos_kernel_provenance=observed\n"
+			   "agentos_kernel_ledger=observed\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -70,7 +79,7 @@ int main(void)
 	if (!rp_append_file("rp_web_bundle", "provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=ready")) return 1;
 	if (!rp_append_file("rp_review_dashboard", "subsection=provenance_view;source=rp_prov_view;timeline=4;packets=4;checks=64;outcome=passed;status=ready")) return 1;
 	if (!rp_append_file("rp_package", "provenance_view_report=rp_prov_view;edges=12;packets=4;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "provenance_view_checks=64;timeline_views=4;subgraphs=3;packets=4;agentos_replacements=4;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "provenance_view_checks=64;timeline_views=4;subgraphs=3;packets=4;agentos_replacements=4;kernel_timeline=observed;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=provenance_view;msg=prov;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=provenance_view.build_timeline")) return 1;
 	if (!rp_append_file("rp_tool", "tool=provenance_view.link_edges")) return 1;

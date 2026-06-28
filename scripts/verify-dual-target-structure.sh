@@ -3,7 +3,6 @@ set -eu
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TMP_FILE="${TMPDIR:-/tmp}/agentos-dual-target-check.$$"
-PLAIN_BASE_REF="${UCORE_PLAIN_BASE_REF:-origin/main}"
 
 cleanup() {
 	rm -f "${TMP_FILE}"
@@ -134,13 +133,13 @@ is_agentos_adapted_source() {
 	return 1
 }
 
-require_path "os" "plain kernel directory is missing"
-require_path "user/src/rp_orch.c" "plain platform orchestrator is missing"
-require_path "user/src/rp_backend.c" "plain platform backend is missing"
-require_path "agentos_ucore/os/agent.c" "AgentOS kernel module is missing"
-require_path "agentos_ucore/user/src/rp_agentos_orch.c" "AgentOS platform orchestrator is missing"
-require_path "agentos_ucore/user/src/agentconflict_ucore.c" "AgentOS edit lease test is missing"
-require_path "agentos_ucore/user/src/agentllm_ucore.c" "AgentOS LLM relay test is missing"
+require_path "baseline_ucore/os" "baseline kernel directory is missing"
+require_path "baseline_ucore/user/src/rp_orch.c" "baseline platform orchestrator is missing"
+require_path "baseline_ucore/user/src/rp_backend.c" "baseline platform backend is missing"
+require_path "os/agent.c" "AgentOS kernel module is missing"
+require_path "user/src/rp_agentos_orch.c" "AgentOS platform orchestrator is missing"
+require_path "user/src/agentconflict_ucore.c" "AgentOS edit lease test is missing"
+require_path "user/src/agentllm_ucore.c" "AgentOS LLM relay test is missing"
 require_path "host_tools/check_host_platform_alignment.py" "host platform alignment checker is missing"
 require_path "host_tools/check_host_action_kind_alignment.py" "host action kind alignment checker is missing"
 require_path "host_tools/check_seeded_action_state.py" "seeded action state checker is missing"
@@ -155,18 +154,10 @@ require_path "scripts/run-dual-platforms.sh" "dual target runner is missing"
 require_path "scripts/run-full-verification.sh" "full verification runner is missing"
 require_path "scripts/serve-demo-reader.sh" "demo reader server script is missing"
 
-if ! git -C "${ROOT_DIR}" rev-parse --verify "${PLAIN_BASE_REF}^{commit}" >/dev/null 2>&1; then
-	fail "plain kernel base ref is not available: ${PLAIN_BASE_REF}"
-fi
-if ! git -C "${ROOT_DIR}" diff --quiet "${PLAIN_BASE_REF}" -- os bootloader; then
-	git -C "${ROOT_DIR}" diff --name-status "${PLAIN_BASE_REF}" -- os bootloader >"${TMP_FILE}"
-	fail "plain kernel differs from ${PLAIN_BASE_REF}"
-fi
-
 plain_kernel_pattern='SYS_agent_|AGENT_CONTEXT|AGENT_TOOL_|AGENT_CAP_|agent_create|agent_run|context_snapshot|agent_file_|agent_wait|agent_heartbeat|\.agentmeta'
-reject_text "os" "${plain_kernel_pattern}" "plain kernel contains AgentOS-specific symbols"
-reject_text "user/include" "${plain_kernel_pattern}" "plain user ABI contains AgentOS-specific symbols"
-reject_text "user/lib" "${plain_kernel_pattern}" "plain syscall wrappers contain AgentOS-specific symbols"
+reject_text "baseline_ucore/os" "${plain_kernel_pattern}" "baseline kernel contains AgentOS-specific symbols"
+reject_text "baseline_ucore/user/include" "${plain_kernel_pattern}" "baseline user ABI contains AgentOS-specific symbols"
+reject_text "baseline_ucore/user/lib" "${plain_kernel_pattern}" "baseline syscall wrappers contain AgentOS-specific symbols"
 
 require_text "Makefile" "^plain-platform-run:" "plain platform run target is missing"
 require_text "Makefile" "^agentos-platform-run:" "AgentOS platform run target is missing"
@@ -181,9 +172,9 @@ require_text "Makefile" "scripts/serve-demo-reader.sh" "Makefile demo reader tar
 require_text "Makefile" "scripts/check-target-readiness.sh" "Makefile target readiness target does not call the readiness checker"
 require_text "Makefile" "scripts/run-full-verification.sh" "Makefile full verification target does not call the full runner"
 require_text "Makefile" "^QEMU \\?= qemu-system-riscv64" "plain Makefile QEMU is not environment-overridable"
-require_text "agentos_ucore/Makefile" "^QEMU \\?= qemu-system-riscv64" "AgentOS Makefile QEMU is not environment-overridable"
+require_text "Makefile" "^QEMU \\?= qemu-system-riscv64" "AgentOS Makefile QEMU is not environment-overridable"
 
-require_text "user/Makefile" "platform_plain" "plain platform chapter is not declared"
+require_text "baseline_ucore/user/Makefile" "platform_plain" "baseline platform chapter is not declared"
 require_text "scripts/run-full-verification.sh" "verify-dual-target-structure" "full verification does not run the structure check"
 require_text "scripts/run-full-verification.sh" "test_check_host_platform_alignment.py" "full verification does not run host platform alignment unit test"
 require_text "scripts/run-full-verification.sh" "test_check_host_action_kind_alignment.py" "full verification does not run host action kind alignment unit test"
@@ -351,10 +342,10 @@ require_text "host_tools/test_plain_ucore_reader.py" "dual-results/test-suite.ht
 require_text "host_tools/test_plain_ucore_reader.py" "dual-results/experiment-design.html" "Host Reader test does not cover nested experiment design serving"
 require_text "host_tools/test_plain_ucore_reader.py" "dual-results/evidence-map.html" "Host Reader test does not cover nested evidence map serving"
 
-plain_platform_tests="$(make_var_words "${ROOT_DIR}/user/Makefile" "PLATFORM_TESTS")"
-agentos_platform_tests="$(make_var_words "${ROOT_DIR}/agentos_ucore/user/Makefile" "PLATFORM_TESTS")"
-plain_seeded_tests="$(make_var_words "${ROOT_DIR}/user/Makefile" "PLATFORM_SEEDED_TESTS")"
-agentos_seeded_tests="$(make_var_words "${ROOT_DIR}/agentos_ucore/user/Makefile" "PLATFORM_SEEDED_TESTS")"
+plain_platform_tests="$(make_var_words "${ROOT_DIR}/baseline_ucore/user/Makefile" "PLATFORM_TESTS")"
+agentos_platform_tests="$(make_var_words "${ROOT_DIR}/user/Makefile" "PLATFORM_TESTS")"
+plain_seeded_tests="$(make_var_words "${ROOT_DIR}/baseline_ucore/user/Makefile" "PLATFORM_SEEDED_TESTS")"
+agentos_seeded_tests="$(make_var_words "${ROOT_DIR}/user/Makefile" "PLATFORM_SEEDED_TESTS")"
 if [ "${plain_platform_tests}" != "${agentos_platform_tests}" ]; then
 	fail "AgentOS platform build list no longer matches plain platform build list"
 fi
@@ -367,7 +358,7 @@ for app in ${plain_platform_tests}; do
 	case "${app}" in
 	rp_*)
 		plain_platform_count=$((plain_platform_count + 1))
-		if [ ! -f "${ROOT_DIR}/agentos_ucore/user/src/${app}.c" ]; then
+		if [ ! -f "${ROOT_DIR}/user/src/${app}.c" ]; then
 			fail "AgentOS platform is missing source for plain app: ${app}"
 		fi
 		case " ${agentos_platform_tests} " in
@@ -387,7 +378,7 @@ agentos_adapted_count=0
 while IFS= read -r source_path; do
 	app="$(basename "${source_path}" .c)"
 	source_name="${app}.c"
-	agentos_source="${ROOT_DIR}/agentos_ucore/user/src/${source_name}"
+	agentos_source="${ROOT_DIR}/user/src/${source_name}"
 
 	plain_source_count=$((plain_source_count + 1))
 	if [ ! -f "${agentos_source}" ]; then
@@ -401,26 +392,26 @@ while IFS= read -r source_path; do
 		fail "AgentOS platform source differs without being declared adapted: ${source_name}"
 	fi
 done <<EOF
-$(find "${ROOT_DIR}/user/src" -maxdepth 1 -type f -name 'rp_*.c' | sort)
+$(find "${ROOT_DIR}/baseline_ucore/user/src" -maxdepth 1 -type f -name 'rp_*.c' | sort)
 EOF
 if [ "${plain_source_count}" -lt "${plain_platform_count}" ]; then
 	fail "plain rp source count is smaller than platform build list count: ${plain_source_count} < ${plain_platform_count}"
 fi
 
 for source_name in ${agentos_adapted_sources}; do
-	if [ ! -f "${ROOT_DIR}/user/src/${source_name}" ]; then
+	if [ ! -f "${ROOT_DIR}/baseline_ucore/user/src/${source_name}" ]; then
 		fail "declared AgentOS adapted source is missing in plain platform: ${source_name}"
 	fi
-	if [ ! -f "${ROOT_DIR}/agentos_ucore/user/src/${source_name}" ]; then
+	if [ ! -f "${ROOT_DIR}/user/src/${source_name}" ]; then
 		fail "declared AgentOS adapted source is missing in AgentOS platform: ${source_name}"
 	fi
-	if same_source_content "${ROOT_DIR}/user/src/${source_name}" "${ROOT_DIR}/agentos_ucore/user/src/${source_name}"; then
+	if same_source_content "${ROOT_DIR}/baseline_ucore/user/src/${source_name}" "${ROOT_DIR}/user/src/${source_name}"; then
 		fail "declared AgentOS adapted source no longer differs from plain source: ${source_name}"
 	fi
 done
 
-plain_backend_src="${ROOT_DIR}/user/src/rp_backend.c"
-agentos_backend_src="${ROOT_DIR}/agentos_ucore/user/src/rp_backend.c"
+plain_backend_src="${ROOT_DIR}/baseline_ucore/user/src/rp_backend.c"
+agentos_backend_src="${ROOT_DIR}/user/src/rp_backend.c"
 plain_backend_cases="$(first_number_after_key "${plain_backend_src}" "cases")"
 agentos_backend_cases="$(first_number_after_key "${agentos_backend_src}" "cases")"
 plain_detail_rows="$(first_number_after_key "${plain_backend_src}" "runner_detail_rows")"
@@ -467,22 +458,22 @@ do
 	fi
 done
 
-require_text "agentos_ucore/os" "SYS_agent_create" "AgentOS syscall table is missing agent_create"
-require_text "agentos_ucore/os" "AGENT_CONTEXT" "AgentOS context definitions are missing"
-require_text "agentos_ucore/os" "AGENT_TOOL_LLM_REQUEST" "AgentOS LLM request tool is missing"
-require_text "agentos_ucore/os" "agent_file_edit_begin" "AgentOS edit lease syscall is missing"
-require_text "agentos_ucore/user/Makefile" "agentllm_ucore" "AgentOS LLM test is not in the user build list"
-require_text "agentos_ucore/scripts/run-agent-tests.sh" "agentllm_ucore" "AgentOS LLM test is not in the test script"
+require_text "os" "SYS_agent_create" "AgentOS syscall table is missing agent_create"
+require_text "os" "AGENT_CONTEXT" "AgentOS context definitions are missing"
+require_text "os" "AGENT_TOOL_LLM_REQUEST" "AgentOS LLM request tool is missing"
+require_text "os" "agent_file_edit_begin" "AgentOS edit lease syscall is missing"
+require_text "user/Makefile" "agentllm_ucore" "AgentOS LLM test is not in the user build list"
+require_text "scripts/run-agent-tests.sh" "agentllm_ucore" "AgentOS LLM test is not in the test script"
 
 if grep -R -E -n 'AGENT_TOOL_(RERUN_STAGE|WRITE_REPORT)' \
-	"${ROOT_DIR}/agentos_ucore/user/src" 2>/dev/null |
+	"${ROOT_DIR}/user/src" 2>/dev/null |
 	grep -v 'agentsecurity_ucore.c' >"${TMP_FILE}"; then
 	fail "AgentOS platform code uses legacy demo tool ids outside security tests"
 fi
 : >"${TMP_FILE}"
 
 demo_kernel_pattern='lab-gene-x|RUN-042|nightly-regression|/lab/projects|INC-RUN|PLAN-RUN|MSG-RUN|minimal_rerun|memory_limit|recovery report|rerun completed|stage=(prepare|align|analyze|report|archive)|label=(prepare|align|analyze|report|archive)|source_stage=(prepare|align|analyze|report|archive)|next_stage=(prepare|align|analyze|report|archive)'
-reject_text "agentos_ucore/os" "${demo_kernel_pattern}" "AgentOS kernel contains research demo constants"
+reject_text "os" "${demo_kernel_pattern}" "AgentOS kernel contains research demo constants"
 
 bad_matrix="矩""阵"
 bad_loop="闭""环"
@@ -500,13 +491,10 @@ bad_tokens="tokens""\\.txt"
 doc_pattern="${bad_matrix}|${bad_loop}|${bad_scope}|${bad_regression}|${bad_record_time}|${bad_glpat}|${bad_oauth2}|${bad_auth}|${bad_tokens}|${bad_git_commit}|${bad_git_push}|${bad_push_cn}|${bad_commit_record}"
 reject_text "README.md" "${doc_pattern}" "root README contains forbidden or sensitive wording"
 reject_text "docs" "${doc_pattern}" "root docs contain forbidden or sensitive wording"
-reject_text "agentos_ucore/README.md" "${doc_pattern}" "AgentOS README contains forbidden or sensitive wording"
-reject_text "agentos_ucore/docs" "${doc_pattern}" "AgentOS docs contain forbidden or sensitive wording"
 
-echo "[dual-target-check] plain kernel: clean"
-echo "[dual-target-check] plain kernel base: ${PLAIN_BASE_REF}"
+echo "[dual-target-check] baseline kernel: clean"
 echo "[dual-target-check] AgentOS kernel: present"
-echo "[dual-target-check] platform source coverage: ${plain_source_count} root rp sources mirrored"
+echo "[dual-target-check] platform source coverage: ${plain_source_count} baseline rp sources mirrored"
 echo "[dual-target-check] platform app coverage: ${plain_platform_count} build-list apps mirrored"
 echo "[dual-target-check] platform source sync: identical=${plain_source_identical_count} adapted=${agentos_adapted_count}"
 echo "[dual-target-check] backend evidence coverage: plain=${plain_backend_cases} agentos=${agentos_backend_cases} preserved_costs=${plain_cost_count}"

@@ -1406,7 +1406,7 @@ def delivery_readiness_rows() -> list[dict[str, str]]:
         {
             "requirement": "文档不保留空泛待办描述",
             "status": "已覆盖",
-            "evidence": "README.md; docs/; agentos_ucore/docs/",
+            "evidence": "README.md; docs/; docs/agentos/",
             "verification": "verify-dual-target-structure.sh",
             "note": "结构检查包含文档措辞扫描，不把开发轮次写入仓库文档。",
         },

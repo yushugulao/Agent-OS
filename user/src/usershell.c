@@ -16,7 +16,7 @@ char *argv[MAX_ARG_NUM];
 
 int top = 0;
 
-void line_append(char c)
+void push(char c)
 {
 	line[top++] = c;
 }
@@ -75,7 +75,7 @@ int main()
 		case CR:
 			printf("\n");
 			if (!is_empty()) {
-				line_append('\0');
+				push('\0');
 				parse_argv();
 				int pid = fork();
 				if (pid == 0) {
@@ -112,7 +112,7 @@ int main()
 		default:
 			putchar(c);
 			fflush(stdout);
-			line_append(c);
+			push(c);
 			break;
 		}
 	}

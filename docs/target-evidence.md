@@ -6,16 +6,15 @@
 
 当前分支同时保留两套可比较目标：
 
-- 根目录 plain uCore 目标保持未改动内核，科研 Agent 平台运行在普通用户态进程和普通文件之上。
-- `agentos_ucore/` 目标使用增强版 AgentOS-uCore 内核，运行同一批 seeded 科研请求，并额外生成内核 Agent 参与证据。
+- 根目录目标使用增强版 AgentOS-uCore 内核，运行同一批 seeded 科研请求，并额外生成内核 Agent 参与证据。
+- `baseline_ucore/` plain uCore 目标保持未改动内核，科研 Agent 平台运行在普通用户态进程和普通文件之上。
 
 最近一次结构检查显示：
 
 ```text
-[dual-target-check] plain kernel: clean
-[dual-target-check] plain kernel base: origin/main
+[dual-target-check] baseline kernel: clean
 [dual-target-check] AgentOS kernel: present
-[dual-target-check] platform source coverage: 73 root rp sources mirrored
+[dual-target-check] platform source coverage: 73 baseline rp sources mirrored
 [dual-target-check] platform app coverage: 71 build-list apps mirrored
 [dual-target-check] platform source sync: identical=30 adapted=43
 [dual-target-check] backend evidence coverage: plain=7 agentos=8 preserved_costs=7
@@ -25,16 +24,16 @@
 [dual-target-check] docs: wording scan passed
 ```
 
-这组输出说明根目录内核仍以 `origin/main` 为基准，AgentOS 只存在于 `agentos_ucore/`，科研平台程序在两个目标中都有对应源码和构建入口。
+这组输出说明 `baseline_ucore/` 保持普通 uCore 对照职责，根目录提供 AgentOS 主作品，科研平台程序在两个目标中都有对应源码和构建入口。
 
 ## 目标要求和证据
 
 | 要求 | 证据来源 | 当前结果 | 说明 |
 | --- | --- | --- | --- |
-| 根目录保持未改动 uCore 内核 | `scripts/verify-dual-target-structure.sh` 对照 `origin/main` 检查 `os/` 和 `bootloader/` | `plain kernel: clean` | 根目录目标没有加入 Agent syscall、Agent Context、内核 metadata 或 Agent 事件队列。 |
-| 增强内核只放在 `agentos_ucore/` | 同一结构检查脚本 | `AgentOS kernel: present` | AgentOS 内核模块、用户态 ABI、专项测试和科研平台增强程序都位于 `agentos_ucore/`。 |
+| `baseline_ucore/` 保持普通 uCore 内核职责 | `scripts/verify-dual-target-structure.sh` 检查 `baseline_ucore/os/`、`baseline_ucore/user/include/` 和 `baseline_ucore/user/lib/` | `baseline kernel: clean` | 普通目标没有加入 Agent syscall、Agent Context、内核 metadata 或 Agent 事件队列。 |
+| 根目录提供 AgentOS 主作品 | 同一结构检查脚本 | `AgentOS kernel: present` | AgentOS 内核模块、用户态 ABI、专项测试和科研平台增强程序都位于根目录。 |
 | plain 与 AgentOS 平台程序规模一致 | `PLATFORM_TESTS`、`PLATFORM_SEEDED_TESTS` 构建列表检查 | `platform app coverage: 71 build-list apps mirrored` | 两个目标使用同一批平台程序入口，AgentOS 只对需要接入内核服务的程序做适配。 |
-| 科研平台源码保持可比 | 源码同步检查 | `73 root rp sources mirrored`，`identical=30 adapted=43` | 未适配程序保持一致；适配程序集中在 AgentOS 能力接入、状态输出和证据记录。 |
+| 科研平台源码保持可比 | 源码同步检查 | `73 baseline rp sources mirrored`，`identical=30 adapted=43` | 未适配程序保持一致；适配程序集中在 AgentOS 能力接入、状态输出和证据记录。 |
 | 两个目标运行同一批 seeded 请求 | `host_tools/check_seeded_action_state.py` | `action_count=44`，`plain=ready`，`agentos=ready` | 44 个请求覆盖研究输入、artifact、Host workflow、LLM Relay、workbench、项目生命周期、研究协议、项目评审和 AgentCompare。 |
 | plain 已成功记录在 AgentOS 中保留 | `host_tools/compare_dual_platform_state.py` | `checked_success_records=1244`，`run_result_match=1` | plain target 的成功状态行在 AgentOS target 中保持同一记录标识和成功状态。 |
 | AgentOS 增加内核事实而不是替换普通平台 | 同一状态对照脚本 | `agentos_extra_files=13`，`agentos_evidence_checks=32`，`agentos_mainflow_stages=11`，`agentos_mainflow_facts=12` | AgentOS 额外输出可信 Context、metadata 查询、事件、权限、ledger/provenance、文件编辑租约、真实任务等证据。 |
@@ -48,7 +47,7 @@
 | action 路由不是只写在文档里 | `host_tools/check_host_action_kind_alignment.py` | `plain_handler_missing=0`，`agentos_handler_missing=0` | 每个宿主机 action kind 在 plain target 和 AgentOS target 中都有真实运行程序处理。 |
 | AgentOS 内核不硬编码科研业务 | `scripts/verify-dual-target-structure.sh` | `AgentOS kernel demo constants: absent` | `RUN-042`、`lab-gene-x`、固定 stage selector 和固定失败原因不出现在内核业务路径中。 |
 | 旧演示工具不主导平台主流程 | 同一结构检查脚本 | `AgentOS platform legacy tools: security tests only` | `rerun_stage`、`write_report` 等旧工具只保留在兼容性和权限测试里，主流程使用通用 action、artifact、metadata、event、audit 能力。 |
-| AgentOS 专项测试覆盖内核机制 | `agentos_ucore/scripts/run-agent-tests.sh` | `agentfinal_ucore`、`agentfs_ucore`、`agentloop_ucore`、`agentbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore` 等入口 | 专项脚本覆盖 Agent 进程、Context、工具调用、文件 metadata、事件等待、heartbeat、权限、LLM relay、timeline、audit 和 provenance。 |
+| AgentOS 专项测试覆盖内核机制 | `scripts/run-agent-tests.sh` | `agentfinal_ucore`、`agentfs_ucore`、`agentloop_ucore`、`agentbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore` 等入口 | 专项脚本覆盖 Agent 进程、Context、工具调用、文件 metadata、事件等待、heartbeat、权限、LLM relay、timeline、audit 和 provenance。 |
 
 ## QEMU 输出中的关键数字
 

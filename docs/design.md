@@ -6,8 +6,8 @@
 
 当前分支包含两个目标：
 
-- 根目录 plain uCore 目标：`os/` 保持未改动 uCore 内核，科研 Agent 平台运行在普通用户态进程和普通文件之上。
-- `agentos_ucore/` 增强目标：保留同一 RUN-042 科研流程和状态文件契约，但把关键阶段接入 AgentOS 内核服务。
+- 根目录 AgentOS-uCore 目标：`os/` 是增强内核，科研 Agent 平台在关键阶段使用内核 Agent 服务。
+- `baseline_ucore/` plain uCore 目标：保留未改动 uCore 内核，科研 Agent 平台运行在普通用户态进程和普通文件之上。
 
 这种结构用于回答两个问题：
 
@@ -16,26 +16,26 @@
 
 ## 目录和目标分离
 
-plain uCore 目标位于仓库根目录：
+AgentOS-uCore 目标位于仓库根目录：
 
 ```text
-os/          未改动 uCore 内核
+os/          增强内核
 nfs/         文件系统镜像构建
 scripts/     启动和辅助脚本
-user/        用户态科研 Agent 平台
+user/        AgentOS 测试程序和科研平台程序
 host_tools/  Host Reader、动作运行器、文件系统提取器、LLM Relay
 ```
 
-AgentOS-uCore 目标位于：
+plain uCore 对照目标位于：
 
 ```text
-agentos_ucore/os/       增强内核
-agentos_ucore/user/     AgentOS 测试程序和科研平台程序
-agentos_ucore/docs/     AgentOS 专项文档
-agentos_ucore/scripts/  AgentOS 测试脚本
+baseline_ucore/os/       未改动 uCore 内核
+baseline_ucore/user/     普通用户态科研 Agent 平台
+baseline_ucore/nfs/      文件系统镜像构建
+baseline_ucore/scripts/  启动辅助脚本
 ```
 
-根目录 `os/` 不加入 Agent syscall、Agent Context、内核 metadata 服务或 Agent 事件队列。增强能力只放入 `agentos_ucore/`，这样两个目标才能构成有效对照。
+`baseline_ucore/` 不加入 Agent syscall、Agent Context、内核 metadata 服务或 Agent 事件队列。增强能力放在根目录目标中，这样点开仓库即可看到主要作品，同时仍保留普通 uCore 对照目标。
 
 ## 运行形态
 

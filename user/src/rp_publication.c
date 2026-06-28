@@ -18,6 +18,10 @@ int main(void)
 	ok = ok && require_token("rp_release", "decision=release");
 	ok = ok && require_token("rp_api_pub", "api=publication");
 	ok = ok && require_token("rp_pubop", "ops=6");
+	ok = ok && require_token("rp_agentos_package", "report_metadata=kernel_index");
+	ok = ok && require_token("rp_agentos_timeline", "event_delivery=kernel_agent_queue");
+	ok = ok && require_token("rp_agentos_mainflow", "context_trusted=kernel_shadow");
+	ok = ok && require_token("rp_agentos_roles", "stage_launch=agent_create_role");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_publication",
@@ -50,7 +54,7 @@ int main(void)
 			   "publication_decision=publication-decision:RUN-042:artifact-accept;submission=submission:RUN-042:agentos-artifact;decision=accepted;approved_by=systems-board;release_candidate=release:RUN-042:plain-ucore;status=ready\n"
 			   "search_index=publication,peer_review,response,revision,submission;records=15;status=ready\n"
 			   "provenance=rp_package->rp_publication->rp_peerresp->rp_dossier;status=ready\n"
-			   "agentos_adaptation=kernel_submission_metadata,kernel_review_event_queue,kernel_response_context,kernel_release_gate;status=planned\n"
+			   "agentos_adaptation=kernel_submission_metadata,kernel_review_event_queue,kernel_response_context,kernel_release_gate;evidence=rp_agentos_package,rp_agentos_timeline,rp_agentos_mainflow,rp_agentos_roles;result=observed;status=ready\n"
 			   "decision=accepted\n"
 			   "status=ready\n")) {
 		return 1;
@@ -66,7 +70,7 @@ int main(void)
 			   "journal_requirement=ethics_statement;source=rp_governance;status=ready\n"
 			   "journal_requirement=data_availability;source=rp_datarel;status=ready\n"
 			   "journal_requirement=artifact_appendix;source=rp_dossier;status=ready\n"
-			   "agentos_showcase=plain_userland_vs_kernel_assisted;status=planned\n"
+			   "agentos_showcase=plain_userland_vs_kernel_assisted;evidence=rp_agentos_package,rp_agentos_timeline,rp_agentos_mainflow,rp_agentos_roles;result=observed;status=ready\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -95,6 +99,7 @@ int main(void)
 	if (!rp_append_file("rp_dossier", "publication_workflow=rp_publication;submission=accepted;peer_response=ready;status=ready")) return 1;
 	if (!rp_append_file("rp_web_bundle", "publication_page=rp_publication;peer_response=rp_peerresp;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "publication_checks=48;targets=2;submissions=2;reviews=2;responses=2;response_items=4;agentos_replacements=4;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "publication_kernel_binding=submission_metadata,review_event_queue,response_context,release_gate;source=rp_publication;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=publication;msg=publication-workflow;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=publication.create_target")) return 1;
 	if (!rp_append_file("rp_tool", "tool=publication.create_submission")) return 1;

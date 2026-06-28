@@ -24,7 +24,8 @@ def read_text(url: str, timeout: int = 10) -> str:
 
 
 def main() -> int:
-    repo_dir = Path(__file__).resolve().parents[1]
+    repo_root = Path(__file__).resolve().parents[1]
+    repo_dir = repo_root / "baseline_ucore"
     with tempfile.TemporaryDirectory(prefix="plain-ucore-reader-e2e-") as tmp:
         root = Path(tmp)
         state_dir = root / "state"

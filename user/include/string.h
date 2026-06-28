@@ -9,6 +9,7 @@ int atoi(const char *);
 void *memset(void *dest, int c, size_t n);
 void *memcpy(void *dest, const void *src, size_t n);
 int strcmp(const char *l, const char *r);
+char *strcpy(char *d, const char *s);
 size_t strlen(const char *);
 size_t strnlen(const char *s, size_t n);
 char *stpncpy(char *restrict d, const char *restrict s, size_t n);
