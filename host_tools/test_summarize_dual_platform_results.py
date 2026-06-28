@@ -70,6 +70,27 @@ def main() -> int:
                     },
                 ],
                 "cost_replacement_count": 2,
+                "runner_tick_comparison": [
+                    {
+                        "label": "上下文路径",
+                        "plain_case": "user-context",
+                        "agentos_case": "agentos-context",
+                        "plain_ticks": 6,
+                        "agentos_ticks": 1,
+                        "saved_ticks": 5,
+                        "speedup_x100": 600,
+                    },
+                    {
+                        "label": "文件对象查询",
+                        "plain_case": "user-fsmeta",
+                        "agentos_case": "agentos-fsmeta",
+                        "plain_ticks": 7,
+                        "agentos_ticks": 1,
+                        "saved_ticks": 6,
+                        "speedup_x100": 700,
+                    },
+                ],
+                "runner_tick_pairs": 2,
                 "plain_timing_records": 70,
                 "plain_agent_launches": 0,
                 "plain_fork_launches": 70,
@@ -131,6 +152,8 @@ def main() -> int:
         assert "上下文可信记录" in report
         assert "用户态成本项与 AgentOS 替代机制" in report
         assert "kernel_context_path" in report
+        assert "Runner Tick 对照" in report
+        assert "agentos-context" in report
         csv_text = (out_dir / "summary.csv").read_text(encoding="utf-8")
         assert "提取到的 rp_* 状态文件" in csv_text
         assert "QEMU 无输出提示次数" in csv_text
@@ -141,6 +164,7 @@ def main() -> int:
         assert "charts/runtime-observation.svg" in index_html
         assert "charts/scenario-evidence.svg" in index_html
         assert "charts/cost-replacement.svg" in index_html
+        assert "charts/runner-ticks.svg" in index_html
         assert "make demo-reader" in index_html
         assert "阶段耗时明细" in index_html
         assert "预置请求双目标运行" in index_html
@@ -151,6 +175,7 @@ def main() -> int:
         assert "make demo-reader" in monitor_html
         assert "charts/scenario-evidence.svg" in monitor_html
         assert "charts/cost-replacement.svg" in monitor_html
+        assert "charts/runner-ticks.svg" in monitor_html
         for name in [
             "dual-target-state-reader.svg",
             "launch-model.svg",
@@ -159,6 +184,7 @@ def main() -> int:
             "runtime-observation.svg",
             "scenario-evidence.svg",
             "cost-replacement.svg",
+            "runner-ticks.svg",
         ]:
             svg = (out_dir / "charts" / name).read_text(encoding="utf-8")
             assert "<svg" in svg

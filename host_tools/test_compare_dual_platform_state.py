@@ -110,6 +110,8 @@ def main() -> int:
         write_state_file(
             plain,
             "rp_backend_exec",
+            "runner_case=user-context;input=rp_query;artifact=rp_provpath;result=passed;reason=user_space_context_log;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=6\n"
+            "runner_case=user-fsmeta;input=rp_artifact_manifest;artifact=rp_query;result=passed;reason=file_manifest_scan;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=7\n"
             "runner_report=user-context;plain_cost=rebuild_steps_6;agentos_replace=none;risk=untrusted_context;status=passed\n",
         )
         write_state_file(plain, "rp_agentcmp", "plain_kernel=passed;programs=69;status=ready\n")
@@ -121,6 +123,8 @@ def main() -> int:
         write_state_file(
             agentos,
             "rp_backend_exec",
+            "runner_case=agentos-context;input=rp_agentos_kernel;artifact=agent_context;result=passed;reason=kernel_context;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=1\n"
+            "runner_case=agentos-fsmeta;input=rp_agentos_kernel;artifact=agent_file_meta;result=passed;reason=kernel_metadata;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=1\n"
             "runner_report=agentos-context;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;risk=untrusted_context;status=passed\n"
             "runner_report=agentos-edit;plain_cost=userland_lock_file;agentos_replace=kernel_edit_lease;risk=lost_update;status=passed\n",
         )
@@ -146,6 +150,20 @@ def main() -> int:
         assert any(
             row["plain_cost"] == "userland_lock_file" and row["preserved_from_plain"] == 0
             for row in summary["cost_replacements"]
+        ), summary
+        assert summary["runner_tick_pairs"] == 2, summary
+        assert any(
+            row["label"] == "上下文路径"
+            and row["plain_ticks"] == 6
+            and row["agentos_ticks"] == 1
+            and row["saved_ticks"] == 5
+            for row in summary["runner_tick_comparison"]
+        ), summary
+        assert any(
+            row["label"] == "文件对象查询"
+            and row["plain_ticks"] == 7
+            and row["agentos_ticks"] == 1
+            for row in summary["runner_tick_comparison"]
         ), summary
         assert summary["embedded_action_records"] == 1, summary
         assert summary["run_result_match"] == 1, summary

@@ -217,6 +217,7 @@ results/latest/charts/dual-target-state-reader.svg
 results/latest/charts/runtime-observation.svg
 results/latest/charts/scenario-evidence.svg
 results/latest/charts/cost-replacement.svg
+results/latest/charts/runner-ticks.svg
 results/latest/charts/launch-model.svg
 results/latest/charts/agentos-evidence.svg
 results/latest/charts/stage-timings.svg
@@ -239,6 +240,10 @@ results/latest/charts/stage-timings.svg
 ![用户态成本项与 AgentOS 替代机制](assets/verification-charts/cost-replacement.svg)
 
 这张图读取两个目标的 `rp_backend_exec` 记录。左侧列出普通用户态科研 Agent 平台为了完成同一流程需要承担的成本，例如重建上下文路径、扫描状态文件、使用约定字段表达权限、用锁文件避免并发写入、用轮询观察事件；右侧列出 AgentOS-uCore 在增强目标中实际使用的替代机制，例如内核 Context Path、文件 metadata 索引、capability 检查、事件队列、文件编辑租约、timeline、audit 和 provenance。读图时应逐行检查：同一行左侧说明普通目标的问题来源，右侧说明增强目标的内核机制，风险说明给出该项机制要解决的工程问题。
+
+![Runner Tick 对照](assets/verification-charts/runner-ticks.svg)
+
+这张图继续读取 `rp_backend_exec`，但关注 `runner_case` 中的 `ticks` 字段。普通目标的用户态路径会记录上下文重建、manifest 扫描、文件事件交接、追加日志等动作；增强目标的对应路径会记录 Context snapshot、metadata index、event queue、ledger snapshot 等内核辅助动作。图中蓝色条和橙色条使用同一 QEMU、同一输入、同一科研流程下的相对 tick，不用于说明物理机绝对性能；它用于回答一个更具体的问题：同一类 runner 动作换成 AgentOS 机制后，流程步骤和观测 tick 是否下降。
 
 ![科研流程启动方式组成](assets/verification-charts/launch-model.svg)
 

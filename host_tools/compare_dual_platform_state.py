@@ -96,6 +96,15 @@ SCENARIO_EVIDENCE_SPECS = (
     ("Edit Lease", "文件编辑租约", ("edit_lease=kernel_exclusive", "holder_write=checked")),
     ("Dependency", "依赖与预取提示", ("dependency_graph=kernel_records", "dependency_update=generic_record", "prefetch_hint=dependency_driven")),
 )
+RUNNER_TICK_PAIRS = (
+    ("基础执行计划", "plain-ucore", "plain-ucore"),
+    ("失败重试记录", "retry-recovery", "retry-recovery"),
+    ("上下文路径", "user-context", "agentos-context"),
+    ("文件对象查询", "user-fsmeta", "agentos-fsmeta"),
+    ("恢复动作", "user-recovery", "agentos-recovery"),
+    ("事件交接", "user-event", "agentos-event"),
+    ("审计记录", "user-audit", "agentos-audit"),
+)
 
 
 @dataclass(frozen=True)
@@ -275,6 +284,56 @@ def collect_cost_replacements(plain_dir: Path, agentos_dir: Path) -> list[dict[s
     return rows
 
 
+def collect_runner_cases(state_dir: Path) -> dict[str, dict[str, str]]:
+    path = state_dir / "rp_backend_exec"
+    if not path.is_file():
+        return {}
+    rows: dict[str, dict[str, str]] = {}
+    for raw in read_text(path).splitlines():
+        fields = parse_fields(raw.strip())
+        case = fields.get("runner_case", "")
+        if not case or fields.get("result", "").lower() not in GOOD_STATUS:
+            continue
+        rows[case] = fields
+    return rows
+
+
+def int_field(fields: dict[str, str], key: str) -> int:
+    try:
+        return int(fields.get(key, "0"))
+    except ValueError:
+        return 0
+
+
+def collect_runner_tick_comparison(plain_dir: Path, agentos_dir: Path) -> list[dict[str, object]]:
+    plain_cases = collect_runner_cases(plain_dir)
+    agentos_cases = collect_runner_cases(agentos_dir)
+    rows: list[dict[str, object]] = []
+    for label, plain_case, agentos_case in RUNNER_TICK_PAIRS:
+        plain = plain_cases.get(plain_case)
+        agentos = agentos_cases.get(agentos_case)
+        if plain is None or agentos is None:
+            continue
+        plain_ticks = int_field(plain, "ticks")
+        agentos_ticks = int_field(agentos, "ticks")
+        saved = plain_ticks - agentos_ticks
+        speedup_x100 = int(round((plain_ticks * 100) / agentos_ticks)) if agentos_ticks > 0 else 0
+        rows.append(
+            {
+                "label": label,
+                "plain_case": plain_case,
+                "agentos_case": agentos_case,
+                "plain_ticks": plain_ticks,
+                "agentos_ticks": agentos_ticks,
+                "saved_ticks": saved,
+                "speedup_x100": speedup_x100,
+                "plain_reason": plain.get("reason", ""),
+                "agentos_reason": agentos.get("reason", ""),
+            }
+        )
+    return rows
+
+
 def verify_backend_costs(plain_dir: Path, agentos_dir: Path) -> int:
     plain_costs = collect_plain_costs(plain_dir)
     agentos_costs = collect_plain_costs(agentos_dir)
@@ -447,6 +506,7 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
 
     preserved_costs = verify_backend_costs(plain_dir, agentos_dir)
     cost_replacements = collect_cost_replacements(plain_dir, agentos_dir)
+    runner_tick_comparison = collect_runner_tick_comparison(plain_dir, agentos_dir)
     embedded_action_records = verify_run_result(plain_dir, agentos_dir)
     agentos_evidence_checks = verify_agentos_evidence(agentos_dir)
     scenario_evidence = collect_scenario_evidence(agentos_dir)
@@ -475,6 +535,8 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
         "preserved_plain_costs": preserved_costs,
         "cost_replacements": cost_replacements,
         "cost_replacement_count": len(cost_replacements),
+        "runner_tick_comparison": runner_tick_comparison,
+        "runner_tick_pairs": len(runner_tick_comparison),
         "embedded_action_records": embedded_action_records,
         "run_result_match": 1,
         "agentos_evidence_checks": agentos_evidence_checks,

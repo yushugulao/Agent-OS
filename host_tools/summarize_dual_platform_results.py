@@ -613,6 +613,51 @@ def cost_replacement_svg(meta: dict[str, object], out_path: Path) -> None:
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def runner_tick_svg(meta: dict[str, object], out_path: Path) -> None:
+    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
+    raw_rows = state.get("runner_tick_comparison", [])
+    rows = [row for row in raw_rows if isinstance(row, dict)] if isinstance(raw_rows, list) else []
+    if not rows:
+        rows = [{"label": "未记录 runner tick", "plain_ticks": 0, "agentos_ticks": 0, "saved_ticks": 0}]
+
+    width, height = 1080, max(460, 160 + len(rows) * 54)
+    margin_left, margin_right, margin_top = 190, 130, 92
+    plot_w = width - margin_left - margin_right
+    max_value = max([1.0] + [as_number(row.get("plain_ticks")) for row in rows] + [as_number(row.get("agentos_ticks")) for row in rows])
+    lines = svg_header(width, height)
+    lines.append('<text x="34" y="34" class="title">Runner Tick 对照</text>')
+    lines.append('<text x="34" y="58" class="subtitle">同一科研负载中的 runner case 成对比较：蓝色为普通用户态路径，橙色为 AgentOS 内核辅助路径。</text>')
+    tick_step = max(1, int(math.ceil(max_value / 5)))
+    tick = 0
+    while tick <= max_value:
+        x = margin_left + (tick / max_value) * plot_w if max_value else margin_left
+        lines.append(f'<line x1="{x:.1f}" y1="{margin_top - 12}" x2="{x:.1f}" y2="{height - 48}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
+        lines.append(f'<text x="{x:.1f}" y="{height - 26}" text-anchor="middle" class="axis">{tick}</text>')
+        tick += tick_step
+    for index, row in enumerate(rows):
+        y = margin_top + index * 54
+        label = str(row.get("label", ""))[:18]
+        plain_ticks = as_number(row.get("plain_ticks"))
+        agentos_ticks = as_number(row.get("agentos_ticks"))
+        plain_w = (plain_ticks / max_value) * plot_w if max_value else 0
+        agentos_w = (agentos_ticks / max_value) * plot_w if max_value else 0
+        saved = as_number(row.get("saved_ticks"))
+        lines.append(f'<text x="{margin_left - 14}" y="{y + 24}" text-anchor="end" class="label">{escape(label)}</text>')
+        lines.append(f'<rect x="{margin_left}" y="{y + 3}" width="{plain_w:.1f}" height="18" fill="{PALETTE["plain"]}" rx="2"/>')
+        lines.append(f'<rect x="{margin_left}" y="{y + 27}" width="{agentos_w:.1f}" height="18" fill="{PALETTE["agentos"]}" rx="2"/>')
+        lines.append(f'<text x="{margin_left + plain_w + 8:.1f}" y="{y + 17}" class="axis">{fmt_number(plain_ticks)}</text>')
+        lines.append(f'<text x="{margin_left + agentos_w + 8:.1f}" y="{y + 41}" class="axis">{fmt_number(agentos_ticks)}</text>')
+        lines.append(f'<text x="{width - 118}" y="{y + 31}" class="value">省 {fmt_number(saved)}</text>')
+    legend_y = height - 26
+    lines.append(f'<rect x="{width - 360}" y="{legend_y - 12}" width="14" height="14" fill="{PALETTE["plain"]}"/>')
+    lines.append(f'<text x="{width - 338}" y="{legend_y}" class="axis">普通用户态路径</text>')
+    lines.append(f'<rect x="{width - 220}" y="{legend_y - 12}" width="14" height="14" fill="{PALETTE["agentos"]}"/>')
+    lines.append(f'<text x="{width - 198}" y="{legend_y}" class="axis">AgentOS 路径</text>')
+    lines.append("</svg>")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Path) -> list[Path]:
     by_metric = {row.metric: row for row in rows}
     charts_dir.mkdir(parents=True, exist_ok=True)
@@ -688,6 +733,10 @@ def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Pat
     cost_chart = charts_dir / "cost-replacement.svg"
     cost_replacement_svg(meta, cost_chart)
     paths.append(cost_chart)
+
+    runner_tick_chart = charts_dir / "runner-ticks.svg"
+    runner_tick_svg(meta, runner_tick_chart)
+    paths.append(runner_tick_chart)
 
     return paths
 
@@ -770,6 +819,29 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
                         preserved=preserved,
                     )
                 )
+    runner_rows = state.get("runner_tick_comparison", []) if isinstance(state, dict) else []
+    if isinstance(runner_rows, list) and runner_rows:
+        lines.extend(
+            [
+                "",
+                "## Runner Tick 对照",
+                "",
+                "| 场景 | 普通用户态 case | AgentOS case | 普通 tick | AgentOS tick | 节省 tick |",
+                "| --- | --- | --- | ---: | ---: | ---: |",
+            ]
+        )
+        for row in runner_rows:
+            if isinstance(row, dict):
+                lines.append(
+                    "| {label} | {plain_case} | {agentos_case} | {plain_ticks} | {agentos_ticks} | {saved_ticks} |".format(
+                        label=row.get("label", ""),
+                        plain_case=row.get("plain_case", ""),
+                        agentos_case=row.get("agentos_case", ""),
+                        plain_ticks=fmt_number(as_number(row.get("plain_ticks"))),
+                        agentos_ticks=fmt_number(as_number(row.get("agentos_ticks"))),
+                        saved_ticks=fmt_number(as_number(row.get("saved_ticks"))),
+                    )
+                )
     stage_rows = meta.get("stage_rows", [])
     if isinstance(stage_rows, list) and stage_rows:
         lines.extend(["", "## 阶段耗时", "", "| 阶段 | 秒数 | 状态 |", "| --- | ---: | --- |"])
@@ -797,6 +869,7 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
         "runtime-observation.svg": "双目标运行观测面板",
         "scenario-evidence.svg": "AgentOS 多场景机制证据",
         "cost-replacement.svg": "用户态成本项与 AgentOS 替代机制",
+        "runner-ticks.svg": "Runner Tick 对照",
     }
     for chart in charts:
         rel = chart.relative_to(out_path.parent).as_posix()
@@ -886,6 +959,7 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="charts/runtime-observation.svg">打开观测图</a>
       <a href="charts/scenario-evidence.svg">打开场景证据图</a>
       <a href="charts/cost-replacement.svg">打开成本替代图</a>
+      <a href="charts/runner-ticks.svg">打开 tick 对照图</a>
       <a href="charts/dual-target-state-reader.svg">打开状态图</a>
       <a href="charts/stage-timings.svg">打开阶段耗时图</a>
     </div>
@@ -981,7 +1055,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>相关结果</h2>
-      <p><a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a></p>
+      <p><a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a></p>
     </section>
   </main>
 </body>
