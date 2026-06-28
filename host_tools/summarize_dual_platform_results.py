@@ -293,6 +293,32 @@ def svg_header(width: int, height: int) -> list[str]:
     ]
 
 
+def append_wrapped_text(
+    lines: list[str],
+    x: float,
+    y: float,
+    text: str,
+    css_class: str = "subtitle",
+    max_chars: int = 64,
+    line_height: int = 22,
+    anchor: str | None = None,
+) -> None:
+    chunks: list[str] = []
+    current = ""
+    for char in text:
+        current += char
+        if len(current) >= max_chars and char in "，；。,. ":
+            chunks.append(current.strip())
+            current = ""
+    if current:
+        chunks.append(current.strip())
+    if not chunks:
+        chunks = [text]
+    anchor_attr = f' text-anchor="{anchor}"' if anchor else ""
+    for index, chunk in enumerate(chunks):
+        lines.append(f'<text x="{x:g}" y="{y + index * line_height:g}" class="{css_class}"{anchor_attr}>{escape(chunk)}</text>')
+
+
 def wrap_label(text: str, limit: int = 12) -> list[str]:
     if len(text) <= limit:
         return [text]
@@ -318,14 +344,14 @@ def grouped_bar_svg(
     y_label: str = "数量",
 ) -> None:
     width, height = 980, 560
-    margin_left, margin_right, margin_top, margin_bottom = 90, 34, 88, 120
+    margin_left, margin_right, margin_top, margin_bottom = 90, 34, 108, 120
     plot_w = width - margin_left - margin_right
     plot_h = height - margin_top - margin_bottom
     max_value = max([1.0] + plain_values + agentos_values)
     max_axis = math.ceil(max_value * 1.18 / 10.0) * 10.0
     lines = svg_header(width, height)
     lines.append(f'<text x="34" y="34" class="title">{escape(title)}</text>')
-    lines.append(f'<text x="34" y="58" class="subtitle">{escape(subtitle)}</text>')
+    append_wrapped_text(lines, 34, 58, subtitle, max_chars=54)
     lines.append(f'<text x="{margin_left}" y="{height - 32}" class="axis">{escape(y_label)}</text>')
 
     for tick in range(0, 6):
@@ -532,7 +558,13 @@ def runtime_observation_svg(rows: list[MetricRow], meta: dict[str, object], out_
         ],
         PALETTE["extra"],
     )
-    lines.append('<text x="42" y="558" class="subtitle">读图方法：先确认运行结果和 QEMU 健康，再看 AgentOS 相比普通 uCore 多出的状态、API、Agent 启动与内核事实。若任一项异常，应回到 stage-timings.csv 和 ucore-run.log 定位。</text>')
+    append_wrapped_text(
+        lines,
+        42,
+        552,
+        "读图方法：先确认运行结果和 QEMU 健康，再看 AgentOS 多出的状态、API、Agent 启动与内核事实；异常时回到 stage-timings.csv 和 ucore-run.log。",
+        max_chars=58,
+    )
     lines.append("</svg>")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -587,10 +619,16 @@ def cost_replacement_svg(meta: dict[str, object], out_path: Path) -> None:
         rows = [{"plain_cost": "未记录用户态成本项", "agentos_replace": "未记录替代机制", "risk": "unknown", "preserved_from_plain": 0}]
     rows = rows[:10]
 
-    width, height = 1180, max(420, 112 + len(rows) * 48)
+    width, height = 1180, max(452, 136 + len(rows) * 48)
     lines = svg_header(width, height)
     lines.append('<text x="34" y="34" class="title">用户态成本项与 AgentOS 替代机制</text>')
-    lines.append('<text x="34" y="58" class="subtitle">每一行来自 rp_backend_exec 的 runner_report 记录，左侧是普通用户态流程需要承担的成本，右侧是增强目标使用的内核机制。</text>')
+    append_wrapped_text(
+        lines,
+        34,
+        58,
+        "每行来自 runner_report：左侧是用户态成本，右侧是 AgentOS 内核替代机制。",
+        max_chars=90,
+    )
     x_cost, x_arrow, x_replace, x_risk = 52, 438, 520, 920
     lines.append(f'<text x="{x_cost}" y="88" class="value">普通用户态成本项</text>')
     lines.append(f'<text x="{x_replace}" y="88" class="value">AgentOS 替代机制</text>')
@@ -607,7 +645,13 @@ def cost_replacement_svg(meta: dict[str, object], out_path: Path) -> None:
         lines.append(f'<polygon points="{x_replace - 20},{y - 10} {x_replace - 8},{y - 5} {x_replace - 20},{y}" fill="{color}"/>')
         lines.append(f'<text x="{x_replace}" y="{y}" class="label">{escape(str(row.get("agentos_replace", ""))[:44])}</text>')
         lines.append(f'<text x="{x_risk}" y="{y}" class="axis">{escape(str(row.get("risk", ""))[:32])}</text>')
-    lines.append(f'<text x="52" y="{height - 28}" class="subtitle">读图方法：同一行两端必须同时存在。左侧说明普通用户态 workflow 的状态约定、扫描、轮询或锁文件成本；右侧说明 AgentOS-uCore 在同一科研负载中使用的内核机制。</text>')
+    append_wrapped_text(
+        lines,
+        52,
+        height - 46,
+        "读图方法：同一行两端必须同时存在；左侧说明普通用户态成本，右侧说明同一负载下的内核机制替代。",
+        max_chars=62,
+    )
     lines.append("</svg>")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -706,13 +750,19 @@ def runner_speedup_svg(meta: dict[str, object], out_path: Path) -> None:
     max_speed = max([1.0] + [as_number(row.get("speedup_x100")) / 100.0 for row in rows])
     lines = svg_header(width, height)
     lines.append('<text x="34" y="34" class="title">Runner 成组场景相对倍数</text>')
-    lines.append('<text x="34" y="58" class="subtitle">每个点来自 runner-sweep.csv。横向条表示 AgentOS 路径相对普通用户态路径的 tick 倍数，右侧标出节省 tick。</text>')
+    append_wrapped_text(
+        lines,
+        34,
+        58,
+        "横向条来自 runner-sweep.csv，展示 AgentOS 相对普通路径的 tick 倍数和节省量。",
+        max_chars=58,
+    )
     tick_step = max(1, int(math.ceil(max_speed / 5)))
     tick = 0
     while tick <= max_speed:
         x = margin_left + (tick / max_speed) * plot_w if max_speed else margin_left
-        lines.append(f'<line x1="{x:.1f}" y1="{margin_top - 12}" x2="{x:.1f}" y2="{height - 52}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
-        lines.append(f'<text x="{x:.1f}" y="{height - 30}" text-anchor="middle" class="axis">{tick}x</text>')
+        lines.append(f'<line x1="{x:.1f}" y1="{margin_top - 12}" x2="{x:.1f}" y2="{height - 78}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
+        lines.append(f'<text x="{x:.1f}" y="{height - 58}" text-anchor="middle" class="axis">{tick}x</text>')
         tick += tick_step
     for index, row in enumerate(rows):
         y = margin_top + index * 44
@@ -730,7 +780,7 @@ def runner_speedup_svg(meta: dict[str, object], out_path: Path) -> None:
         lines.append(f'<rect x="{margin_left}" y="{y + 4}" width="{bar_w:.1f}" height="24" fill="{color}" rx="2"/>')
         lines.append(f'<text x="{value_x:.1f}" y="{y + 21}" class="value"{value_anchor}>{fmt_number(speedup)}x</text>')
         lines.append(f'<text x="{width - 130}" y="{y + 21}" class="axis">省 {fmt_number(saved)} tick</text>')
-    lines.append(f'<text x="52" y="{height - 18}" class="subtitle">读图方法：1x 表示两条路径 tick 相同；超过 1x 表示 AgentOS 路径在同一场景下用更少 tick 完成。该图用于同环境相对观测。</text>')
+    lines.append(f'<text x="52" y="{height - 18}" class="subtitle">读图方法：1x 表示两条路径 tick 相同；超过 1x 表示 AgentOS 用更少 tick 完成。</text>')
     lines.append("</svg>")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -843,8 +893,15 @@ def runner_tick_box_svg(meta: dict[str, object], out_path: Path) -> None:
             f'<line x1="{x_pos(q2):.1f}" y1="{y - 18}" x2="{x_pos(q2):.1f}" y2="{y + 18}" stroke="{color}" stroke-width="3"/>',
             f'<line x1="{x_pos(q0):.1f}" y1="{y - 12}" x2="{x_pos(q0):.1f}" y2="{y + 12}" stroke="{color}" stroke-width="3"/>',
             f'<line x1="{x_pos(q4):.1f}" y1="{y - 12}" x2="{x_pos(q4):.1f}" y2="{y + 12}" stroke="{color}" stroke-width="3"/>',
-            f'<text x="{x_pos(q4) + 8:.1f}" y="{y + 5}" class="axis">min {fmt_number(q0)} / mid {fmt_number(q2)} / max {fmt_number(q4)}</text>',
         ]
+        stat_x = x_pos(q4) + 8
+        stat_anchor = ""
+        if stat_x > width - 170:
+            stat_x = width - 8
+            stat_anchor = ' text-anchor="end"'
+        box.append(
+            f'<text x="{stat_x:.1f}" y="{y + 5}" class="axis"{stat_anchor}>min {fmt_number(q0)} / mid {fmt_number(q2)} / max {fmt_number(q4)}</text>'
+        )
         return box
 
     lines = svg_header(width, height)
@@ -932,7 +989,7 @@ def stage_monitor_area_svg(meta: dict[str, object], out_path: Path) -> None:
     for index, row in enumerate(rows):
         x, y = points[index]
         lines.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="{PALETTE["agentos"]}"/>')
-        lines.append(f'<text x="{x:.1f}" y="{height - 42}" text-anchor="middle" class="axis">{escape(stage_label(row.get("stage", ""))[:8])}</text>')
+        lines.append(f'<text x="{x:.1f}" y="{height - 42}" text-anchor="middle" class="axis">{escape(stage_label(row.get("stage", ""))[:6])}</text>')
     lines.append("</svg>")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
@@ -1026,7 +1083,7 @@ def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Pat
     state_chart = charts_dir / "dual-target-state-reader.svg"
     grouped_bar_svg(
         "双目标状态与页面输出",
-        "普通 uCore 和 AgentOS-uCore 使用同一批请求；增强目标不能少于普通目标，并额外导出内核 Agent 证据。",
+        "同一批请求分别进入普通 uCore 和 AgentOS-uCore；增强目标保持页面规模，并额外导出内核 Agent 证据。",
         ["状态文件", "HTML页面", "API JSON"],
         [
             by_metric["提取到的 rp_* 状态文件"].plain or 0,

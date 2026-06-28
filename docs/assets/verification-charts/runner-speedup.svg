@@ -6,15 +6,15 @@ text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
 </style>
 <rect width="1120" height="498" fill="#ffffff"/>
 <text x="34" y="34" class="title">Runner 成组场景相对倍数</text>
-<text x="34" y="58" class="subtitle">每个点来自 runner-sweep.csv。横向条表示 AgentOS 路径相对普通用户态路径的 tick 倍数，右侧标出节省 tick。</text>
-<line x1="210.0" y1="80" x2="210.0" y2="446" stroke="#d8dee6" stroke-width="1"/>
-<text x="210.0" y="468" text-anchor="middle" class="axis">0x</text>
-<line x1="424.3" y1="80" x2="424.3" y2="446" stroke="#d8dee6" stroke-width="1"/>
-<text x="424.3" y="468" text-anchor="middle" class="axis">2x</text>
-<line x1="638.6" y1="80" x2="638.6" y2="446" stroke="#d8dee6" stroke-width="1"/>
-<text x="638.6" y="468" text-anchor="middle" class="axis">4x</text>
-<line x1="852.9" y1="80" x2="852.9" y2="446" stroke="#d8dee6" stroke-width="1"/>
-<text x="852.9" y="468" text-anchor="middle" class="axis">6x</text>
+<text x="34" y="58" class="subtitle">横向条来自 runner-sweep.csv，展示 AgentOS 相对普通路径的 tick 倍数和节省量。</text>
+<line x1="210.0" y1="80" x2="210.0" y2="420" stroke="#d8dee6" stroke-width="1"/>
+<text x="210.0" y="440" text-anchor="middle" class="axis">0x</text>
+<line x1="424.3" y1="80" x2="424.3" y2="420" stroke="#d8dee6" stroke-width="1"/>
+<text x="424.3" y="440" text-anchor="middle" class="axis">2x</text>
+<line x1="638.6" y1="80" x2="638.6" y2="420" stroke="#d8dee6" stroke-width="1"/>
+<text x="638.6" y="440" text-anchor="middle" class="axis">4x</text>
+<line x1="852.9" y1="80" x2="852.9" y2="420" stroke="#d8dee6" stroke-width="1"/>
+<text x="852.9" y="440" text-anchor="middle" class="axis">6x</text>
 <text x="196" y="114" text-anchor="end" class="label">基础执行计划</text>
 <rect x="210" y="96" width="107.1" height="24" fill="#6f7f8f" rx="2"/>
 <text x="325.1" y="113" class="value">1x</text>
@@ -43,5 +43,5 @@ text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
 <rect x="210" y="360" width="642.9" height="24" fill="#f58518" rx="2"/>
 <text x="842.9" y="377" class="value" text-anchor="end">6x</text>
 <text x="990" y="377" class="axis">省 5 tick</text>
-<text x="52" y="480" class="subtitle">读图方法：1x 表示两条路径 tick 相同；超过 1x 表示 AgentOS 路径在同一场景下用更少 tick 完成。该图用于同环境相对观测。</text>
+<text x="52" y="480" class="subtitle">读图方法：1x 表示两条路径 tick 相同；超过 1x 表示 AgentOS 用更少 tick 完成。</text>
 </svg>

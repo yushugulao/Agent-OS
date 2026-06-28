@@ -9,30 +9,26 @@ text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
 <text x="34" y="58" class="subtitle">把运行阶段、产物数量、AgentOS 内核证据和 QEMU 健康状态放在同一张图中，便于录屏时快速说明本次测试是否可信。</text>
 <rect x="42" y="92" width="1036" height="76" fill="#f8fafc" stroke="#d8dee6"/>
 <text x="58" y="117" class="label">运行阶段</text>
-<rect x="162.0" y="108" width="135.7" height="22" fill="#54a24b" rx="2"/>
-<text x="229.8" y="124" text-anchor="middle" class="label" fill="#fff">ready</text>
-<text x="229.8" y="146" text-anchor="middle" class="axis">结构检查</text>
-<text x="229.8" y="164" text-anchor="middle" class="axis">1s</text>
-<rect x="309.7" y="108" width="135.7" height="22" fill="#54a24b" rx="2"/>
-<text x="377.5" y="124" text-anchor="middle" class="label" fill="#fff">ready</text>
-<text x="377.5" y="146" text-anchor="middle" class="axis">预置请求双目标运</text>
-<text x="377.5" y="164" text-anchor="middle" class="axis">16s</text>
-<rect x="457.3" y="108" width="135.7" height="22" fill="#54a24b" rx="2"/>
-<text x="525.2" y="124" text-anchor="middle" class="label" fill="#fff">ready</text>
-<text x="525.2" y="146" text-anchor="middle" class="axis">QEMU日志标记</text>
-<text x="525.2" y="164" text-anchor="middle" class="axis">1s</text>
-<rect x="605.0" y="108" width="135.7" height="22" fill="#54a24b" rx="2"/>
-<text x="672.8" y="124" text-anchor="middle" class="label" fill="#fff">ready</text>
-<text x="672.8" y="146" text-anchor="middle" class="axis">状态文件提取整理</text>
-<text x="672.8" y="164" text-anchor="middle" class="axis">1s</text>
-<rect x="752.7" y="108" width="135.7" height="22" fill="#54a24b" rx="2"/>
-<text x="820.5" y="124" text-anchor="middle" class="label" fill="#fff">ready</text>
-<text x="820.5" y="146" text-anchor="middle" class="axis">Reader页面</text>
-<text x="820.5" y="164" text-anchor="middle" class="axis">2s</text>
-<rect x="900.3" y="108" width="135.7" height="22" fill="#54a24b" rx="2"/>
-<text x="968.2" y="124" text-anchor="middle" class="label" fill="#fff">ready</text>
-<text x="968.2" y="146" text-anchor="middle" class="axis">结果报告与图表生</text>
-<text x="968.2" y="164" text-anchor="middle" class="axis">1s</text>
+<rect x="162.0" y="108" width="165.2" height="22" fill="#54a24b" rx="2"/>
+<text x="244.6" y="124" text-anchor="middle" class="label" fill="#fff">ready</text>
+<text x="244.6" y="146" text-anchor="middle" class="axis">结构检查</text>
+<text x="244.6" y="164" text-anchor="middle" class="axis">1s</text>
+<rect x="339.2" y="108" width="165.2" height="22" fill="#54a24b" rx="2"/>
+<text x="421.8" y="124" text-anchor="middle" class="label" fill="#fff">ready</text>
+<text x="421.8" y="146" text-anchor="middle" class="axis">预置请求双目标运</text>
+<text x="421.8" y="164" text-anchor="middle" class="axis">16s</text>
+<rect x="516.4" y="108" width="165.2" height="22" fill="#54a24b" rx="2"/>
+<text x="599.0" y="124" text-anchor="middle" class="label" fill="#fff">ready</text>
+<text x="599.0" y="146" text-anchor="middle" class="axis">状态文件结果对照</text>
+<text x="599.0" y="164" text-anchor="middle" class="axis">3s</text>
+<rect x="693.6" y="108" width="165.2" height="22" fill="#54a24b" rx="2"/>
+<text x="776.2" y="124" text-anchor="middle" class="label" fill="#fff">ready</text>
+<text x="776.2" y="146" text-anchor="middle" class="axis">Reader页面</text>
+<text x="776.2" y="164" text-anchor="middle" class="axis">3s</text>
+<rect x="870.8" y="108" width="165.2" height="22" fill="#54a24b" rx="2"/>
+<text x="953.4" y="124" text-anchor="middle" class="label" fill="#fff">ready</text>
+<text x="953.4" y="146" text-anchor="middle" class="axis">结果报告与图表生</text>
+<text x="953.4" y="164" text-anchor="middle" class="axis">1s</text>
 <rect x="42" y="202" width="330" height="128" fill="#ffffff" stroke="#d8dee6"/>
 <rect x="42" y="202" width="6" height="128" fill="#54a24b"/>
 <text x="60" y="230" class="value">运行结果</text>
@@ -81,7 +77,7 @@ text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
 <text x="413" y="458" class="axis">普通无输出提示</text>
 <text x="647" y="458" text-anchor="end" class="value">0</text>
 <text x="413" y="478" class="axis">增强无输出提示</text>
-<text x="647" y="478" text-anchor="end" class="value">1</text>
+<text x="647" y="478" text-anchor="end" class="value">0</text>
 <rect x="748" y="366" width="330" height="128" fill="#ffffff" stroke="#d8dee6"/>
 <rect x="748" y="366" width="6" height="128" fill="#e45756"/>
 <text x="766" y="394" class="value">录屏读图顺序</text>
@@ -93,5 +89,6 @@ text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
 <text x="1000" y="458" text-anchor="end" class="value">打开Reader页面</text>
 <text x="766" y="478" class="axis">第四步</text>
 <text x="1000" y="478" text-anchor="end" class="value">查看日志定位异常</text>
-<text x="42" y="558" class="subtitle">读图方法：先确认运行结果和 QEMU 健康，再看 AgentOS 相比普通 uCore 多出的状态、API、Agent 启动与内核事实。若任一项异常，应回到 stage-timings.csv 和 ucore-run.log 定位。</text>
+<text x="42" y="552" class="subtitle">读图方法：先确认运行结果和 QEMU 健康，再看 AgentOS 多出的状态、API、Agent 启动与内核事实；异常时回到</text>
+<text x="42" y="574" class="subtitle">stage-timings.csv 和 ucore-run.log。</text>
 </svg>

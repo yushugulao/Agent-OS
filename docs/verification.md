@@ -235,7 +235,7 @@ results/latest/charts/stage-timings.svg
 
 图表由 `host_tools/summarize_dual_platform_results.py` 使用 Python 标准库直接生成 SVG，不依赖本机私有绘图软件。这样做的好处是，用户 clone 仓库后只要能运行 Python，就可以重新生成和验证这些图表。`chart-type-coverage.csv` 会列出当前结果页覆盖的图表类型：条形/柱状对比、曲线趋势、箱形图、热力图、监控面积图，以及曲面、投影、热力组合图；这些图都可以追溯到 `summary.csv`、`runner-sweep.csv`、`stage-timings.csv` 或状态对照 JSON。
 
-`host_tools/test_chart_type_data_contract.py` 专门检查这件事：它用一组 runner 和 stage 样例数据生成完整结果目录，再确认 `chart-type-coverage.csv` 不存在空缺项、每个声明的 SVG 都真实生成、`runner-sweep.csv` 中的数值能解释相对倍数图，组合图也包含曲面、投影和热力三个视角。
+`host_tools/test_chart_type_data_contract.py` 专门检查这件事：它用一组 runner 和 stage 样例数据生成完整结果目录，再确认 `chart-type-coverage.csv` 不存在空缺项、每个声明的 SVG 都真实生成、`runner-sweep.csv` 中的数值能解释相对倍数图，组合图也包含曲面、投影和热力三个视角。`host_tools/test_chart_svg_layout_contract.py` 会继续解析生成后的 SVG 和文档内提交的示例 SVG，检查文字是否留在画布内，并检查明显的文字框相交问题，避免图表在录屏和文档阅读时出现文字压住文字的情况。
 
 ![双目标状态与页面输出](assets/verification-charts/dual-target-state-reader.svg)
 

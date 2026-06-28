@@ -21,7 +21,7 @@ text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
 <line x1="674.9" y1="132" x2="674.9" y2="168" stroke="#4c78a8" stroke-width="3"/>
 <line x1="383.4" y1="138" x2="383.4" y2="162" stroke="#4c78a8" stroke-width="3"/>
 <line x1="772.0" y1="138" x2="772.0" y2="162" stroke="#4c78a8" stroke-width="3"/>
-<text x="780.0" y="155" class="axis">min 3 / mid 6 / max 7</text>
+<text x="852.0" y="155" class="axis" text-anchor="end">min 3 / mid 6 / max 7</text>
 <text x="74" y="256" text-anchor="end" class="label">AgentOS</text>
 <line x1="189.1" y1="250" x2="577.7" y2="250" stroke="#f58518" stroke-width="3"/>
 <rect x="189.1" y="232" width="97.1" height="36" fill="#ffffff" stroke="#f58518" stroke-width="3"/>

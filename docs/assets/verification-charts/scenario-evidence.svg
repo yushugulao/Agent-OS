@@ -27,26 +27,26 @@ text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
 <rect x="210" y="180" width="750.0" height="28" fill="#eef3f8" stroke="#d8dee6" rx="2"/>
 <rect x="210" y="185" width="750.0" height="18" fill="#f58518" rx="2"/>
 <text x="970.0" y="199" class="value">3/3</text>
-<text x="196" y="242" text-anchor="end" class="label">失败恢复动作</text>
-<rect x="210" y="224" width="500.0" height="28" fill="#eef3f8" stroke="#d8dee6" rx="2"/>
-<rect x="210" y="229" width="500.0" height="18" fill="#f58518" rx="2"/>
-<text x="720.0" y="243" class="value">2/2</text>
+<text x="196" y="242" text-anchor="end" class="label">恢复动作</text>
+<rect x="210" y="224" width="750.0" height="28" fill="#eef3f8" stroke="#d8dee6" rx="2"/>
+<rect x="210" y="229" width="750.0" height="18" fill="#f58518" rx="2"/>
+<text x="970.0" y="243" class="value">3/3</text>
 <text x="196" y="286" text-anchor="end" class="label">审计记录</text>
-<rect x="210" y="268" width="500.0" height="28" fill="#eef3f8" stroke="#d8dee6" rx="2"/>
-<rect x="210" y="273" width="500.0" height="18" fill="#f58518" rx="2"/>
-<text x="720.0" y="287" class="value">2/2</text>
+<rect x="210" y="268" width="750.0" height="28" fill="#eef3f8" stroke="#d8dee6" rx="2"/>
+<rect x="210" y="273" width="750.0" height="18" fill="#f58518" rx="2"/>
+<text x="970.0" y="287" class="value">3/3</text>
 <text x="196" y="330" text-anchor="end" class="label">来源关系追踪</text>
-<rect x="210" y="312" width="500.0" height="28" fill="#eef3f8" stroke="#d8dee6" rx="2"/>
-<rect x="210" y="317" width="500.0" height="18" fill="#f58518" rx="2"/>
-<text x="720.0" y="331" class="value">2/2</text>
+<rect x="210" y="312" width="750.0" height="28" fill="#eef3f8" stroke="#d8dee6" rx="2"/>
+<rect x="210" y="317" width="750.0" height="18" fill="#f58518" rx="2"/>
+<text x="970.0" y="331" class="value">3/3</text>
 <text x="196" y="374" text-anchor="end" class="label">权限控制</text>
-<rect x="210" y="356" width="250.0" height="28" fill="#eef3f8" stroke="#d8dee6" rx="2"/>
-<rect x="210" y="361" width="250.0" height="18" fill="#f58518" rx="2"/>
-<text x="470.0" y="375" class="value">1/1</text>
+<rect x="210" y="356" width="750.0" height="28" fill="#eef3f8" stroke="#d8dee6" rx="2"/>
+<rect x="210" y="361" width="750.0" height="18" fill="#f58518" rx="2"/>
+<text x="970.0" y="375" class="value">3/3</text>
 <text x="196" y="418" text-anchor="end" class="label">时间线观察</text>
-<rect x="210" y="400" width="500.0" height="28" fill="#eef3f8" stroke="#d8dee6" rx="2"/>
-<rect x="210" y="405" width="500.0" height="18" fill="#f58518" rx="2"/>
-<text x="720.0" y="419" class="value">2/2</text>
+<rect x="210" y="400" width="750.0" height="28" fill="#eef3f8" stroke="#d8dee6" rx="2"/>
+<rect x="210" y="405" width="750.0" height="18" fill="#f58518" rx="2"/>
+<text x="970.0" y="419" class="value">3/3</text>
 <text x="196" y="462" text-anchor="end" class="label">文件编辑租约</text>
 <rect x="210" y="444" width="500.0" height="28" fill="#eef3f8" stroke="#d8dee6" rx="2"/>
 <rect x="210" y="449" width="500.0" height="18" fill="#f58518" rx="2"/>

@@ -26,6 +26,7 @@ echo "[full-verify] Host Reader"
 	"${PYTHON_BIN}" host_tools/test_compare_dual_platform_reader.py
 	"${PYTHON_BIN}" host_tools/test_compare_dual_platform_state.py
 	"${PYTHON_BIN}" host_tools/test_summarize_dual_platform_results.py
+	"${PYTHON_BIN}" host_tools/test_chart_svg_layout_contract.py
 	"${PYTHON_BIN}" host_tools/test_plain_ucore_reader.py
 	"${PYTHON_BIN}" host_tools/test_plain_ucore_reader_e2e.py
 )
