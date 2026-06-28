@@ -121,12 +121,17 @@ def main() -> int:
         assert len(sweep_rows) == 4, sweep_rows
         assert any(row["scene"] == "上下文路径" and row["speedup_x"] == "6" for row in sweep_rows), sweep_rows
         assert any(float(row["speedup_x"]) > 1 for row in sweep_rows), sweep_rows
+        profile_rows = read_csv(out_dir / "load-profile.csv")
+        assert len(profile_rows) >= 6, profile_rows
+        assert any(row["load_dimension"] == "预置请求" and row["plain_value"] == row["agentos_value"] for row in profile_rows), profile_rows
+        assert any(row["load_dimension"] == "Agent 启动" and row["agentos_value"] != "0" for row in profile_rows), profile_rows
 
         chart_expectations = {
             "runner-cumulative-line.svg": ("<polyline", "Runner 累计 Tick 曲线", "上下文"),
             "runner-tick-box.svg": ("Runner Tick 分布箱形图", "min", "mid"),
             "runner-cost-heatmap.svg": ("Runner 成本热力图", "普通 tick", "节省 tick"),
             "stage-monitor-area.svg": ("<polygon", "双目标运行阶段监控面积图", "预置请求"),
+            "load-profile.svg": ("双目标负载参数组", "预置请求", "AgentOS-uCore"),
             "runner-surface-composite.svg": ("等距曲面", "二维投影", "热力图"),
         }
         for chart_name, tokens in chart_expectations.items():

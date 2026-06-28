@@ -739,6 +739,95 @@ def write_runner_sweep_csv(meta: dict[str, object], out_path: Path) -> None:
             )
 
 
+def load_profile_rows(meta: dict[str, object]) -> list[dict[str, object]]:
+    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
+    reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
+    seeded = meta.get("seeded", {}) if isinstance(meta.get("seeded"), dict) else {}
+    scenario_rows = state.get("scenario_evidence", []) if isinstance(state, dict) else []
+    scenario_count = len(scenario_rows) if isinstance(scenario_rows, list) else 0
+    embedded_actions = as_number(state.get("embedded_action_records") or seeded.get("action_count"))
+    cost_count = as_number(state.get("cost_replacement_count"))
+    if cost_count <= 0:
+        raw_costs = state.get("cost_replacements", [])
+        cost_count = float(len(raw_costs)) if isinstance(raw_costs, list) else 0.0
+    runner_pairs = as_number(state.get("runner_tick_pairs"))
+    if runner_pairs <= 0:
+        raw_runner = state.get("runner_tick_comparison", [])
+        runner_pairs = float(len(raw_runner)) if isinstance(raw_runner, list) else 0.0
+    rows = [
+        {
+            "load_dimension": "预置请求",
+            "source": "seeded-action-state.json / state-compare-summary.json",
+            "plain_value": embedded_actions,
+            "agentos_value": embedded_actions,
+            "note": "同一批 action 请求进入两个目标。",
+        },
+        {
+            "load_dimension": "状态文件",
+            "source": "state-compare-summary.json",
+            "plain_value": as_number(state.get("plain_files")),
+            "agentos_value": as_number(state.get("agentos_files")),
+            "note": "两个目标提取出的 rp_* 状态文件数量。",
+        },
+        {
+            "load_dimension": "API JSON",
+            "source": "reader-compare-summary.json",
+            "plain_value": as_number(reader.get("plain_api_json")),
+            "agentos_value": as_number(reader.get("agentos_api_json")),
+            "note": "Host Reader 渲染出的 API JSON 数量。",
+        },
+        {
+            "load_dimension": "Agent 启动",
+            "source": "state-compare-summary.json",
+            "plain_value": as_number(state.get("plain_agent_launches")),
+            "agentos_value": as_number(state.get("agentos_agent_launches")),
+            "note": "同一科研流程中走 Agent 创建路径的 worker 数量。",
+        },
+        {
+            "load_dimension": "机制场景",
+            "source": "scenario_evidence",
+            "plain_value": 0.0,
+            "agentos_value": float(scenario_count),
+            "note": "AgentOS 额外机制场景数量。",
+        },
+        {
+            "load_dimension": "成本替代",
+            "source": "cost_replacements",
+            "plain_value": as_number(state.get("preserved_plain_costs")),
+            "agentos_value": cost_count,
+            "note": "普通用户态成本项与 AgentOS 替代机制的配对数量。",
+        },
+        {
+            "load_dimension": "runner 对照组",
+            "source": "runner_tick_comparison",
+            "plain_value": runner_pairs,
+            "agentos_value": runner_pairs,
+            "note": "同一 runner 场景下的 plain/AgentOS tick 对照组数。",
+        },
+    ]
+    return rows
+
+
+def write_load_profile_csv(meta: dict[str, object], out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["load_dimension", "source", "plain_value", "agentos_value", "delta", "note"])
+        for row in load_profile_rows(meta):
+            plain = as_number(row.get("plain_value"))
+            agentos = as_number(row.get("agentos_value"))
+            writer.writerow(
+                [
+                    row.get("load_dimension", ""),
+                    row.get("source", ""),
+                    fmt_number(plain),
+                    fmt_number(agentos),
+                    fmt_number(agentos - plain),
+                    row.get("note", ""),
+                ]
+            )
+
+
 def runner_speedup_svg(meta: dict[str, object], out_path: Path) -> None:
     rows = runner_tick_rows(meta)
     if not rows:
@@ -786,9 +875,53 @@ def runner_speedup_svg(meta: dict[str, object], out_path: Path) -> None:
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def load_profile_svg(meta: dict[str, object], out_path: Path) -> None:
+    rows = load_profile_rows(meta)
+    width, height = 1120, max(480, 142 + len(rows) * 50)
+    margin_left, margin_right, margin_top = 190, 120, 92
+    plot_w = width - margin_left - margin_right
+    max_value = max([1.0] + [as_number(row.get("plain_value")) for row in rows] + [as_number(row.get("agentos_value")) for row in rows])
+    lines = svg_header(width, height)
+    lines.append('<text x="34" y="34" class="title">双目标负载参数组</text>')
+    append_wrapped_text(
+        lines,
+        34,
+        58,
+        "把同一次运行中的请求、状态文件、API、Agent 启动、机制场景和 runner 对照组成组展示。",
+        max_chars=62,
+    )
+    tick_step = max(1, int(math.ceil(max_value / 5)))
+    tick = 0
+    while tick <= max_value:
+        x = margin_left + (tick / max_value) * plot_w if max_value else margin_left
+        lines.append(f'<line x1="{x:.1f}" y1="{margin_top - 12}" x2="{x:.1f}" y2="{height - 82}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
+        lines.append(f'<text x="{x:.1f}" y="{height - 60}" text-anchor="middle" class="axis">{fmt_number(float(tick))}</text>')
+        tick += tick_step
+    for index, row in enumerate(rows):
+        y = margin_top + index * 50
+        label = str(row.get("load_dimension", ""))
+        plain = as_number(row.get("plain_value"))
+        agentos = as_number(row.get("agentos_value"))
+        plain_w = (plain / max_value) * plot_w if max_value else 0
+        agentos_w = (agentos / max_value) * plot_w if max_value else 0
+        lines.append(f'<text x="{margin_left - 14}" y="{y + 24}" text-anchor="end" class="label">{escape(label)}</text>')
+        lines.append(f'<rect x="{margin_left}" y="{y + 3}" width="{plain_w:.1f}" height="18" fill="{PALETTE["plain"]}" rx="2"/>')
+        lines.append(f'<rect x="{margin_left}" y="{y + 27}" width="{agentos_w:.1f}" height="18" fill="{PALETTE["agentos"]}" rx="2"/>')
+        lines.append(f'<text x="{margin_left + plain_w + 8:.1f}" y="{y + 17}" class="axis">{fmt_number(plain)}</text>')
+        lines.append(f'<text x="{margin_left + agentos_w + 8:.1f}" y="{y + 41}" class="axis">{fmt_number(agentos)}</text>')
+    legend_y = height - 26
+    lines.append(f'<rect x="{width - 342}" y="{legend_y - 12}" width="14" height="14" fill="{PALETTE["plain"]}"/>')
+    lines.append(f'<text x="{width - 320}" y="{legend_y}" class="axis">普通 uCore</text>')
+    lines.append(f'<rect x="{width - 210}" y="{legend_y - 12}" width="14" height="14" fill="{PALETTE["agentos"]}"/>')
+    lines.append(f'<text x="{width - 188}" y="{legend_y}" class="axis">AgentOS-uCore</text>')
+    lines.append("</svg>")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def write_chart_type_coverage_csv(out_path: Path) -> None:
     rows = [
-        ("条形/柱状对比", "dual-target-state-reader.svg;launch-model.svg;runner-ticks.svg", "状态文件、页面、API、启动方式、runner tick；Python 标准库 SVG 生成"),
+        ("条形/柱状对比", "dual-target-state-reader.svg;launch-model.svg;runner-ticks.svg;load-profile.svg", "状态文件、页面、API、启动方式、runner tick、负载参数组；Python 标准库 SVG 生成"),
         ("曲线趋势", "runner-cumulative-line.svg", "runner tick 累计成本；Python 标准库 SVG 生成"),
         ("箱形图", "runner-tick-box.svg", "plain/AgentOS runner tick 分布；Python 标准库 SVG 生成"),
         ("热力图", "runner-cost-heatmap.svg", "runner 场景与指标强弱；Python 标准库 SVG 生成"),
@@ -1159,6 +1292,10 @@ def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Pat
     runner_speedup_svg(meta, runner_speedup_chart)
     paths.append(runner_speedup_chart)
 
+    load_profile_chart = charts_dir / "load-profile.svg"
+    load_profile_svg(meta, load_profile_chart)
+    paths.append(load_profile_chart)
+
     runner_line_chart = charts_dir / "runner-cumulative-line.svg"
     runner_cumulative_line_svg(meta, runner_line_chart)
     paths.append(runner_line_chart)
@@ -1207,6 +1344,7 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
     for chart in charts:
         lines.append(f"- `{chart.relative_to(out_path.parent.parent).as_posix()}`")
     lines.append("- `runner-sweep.csv`")
+    lines.append("- `load-profile.csv`")
     lines.append("- `chart-type-coverage.csv`")
     lines.extend(
         [
@@ -1285,6 +1423,21 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
                         saved_ticks=fmt_number(as_number(row.get("saved_ticks"))),
                     )
                 )
+    profile_rows = load_profile_rows(meta)
+    if profile_rows:
+        lines.extend(["", "## 负载参数组", "", "| 参数 | 普通 uCore | AgentOS-uCore | 差值 | 来源 |", "| --- | ---: | ---: | ---: | --- |"])
+        for row in profile_rows:
+            plain = as_number(row.get("plain_value"))
+            agentos = as_number(row.get("agentos_value"))
+            lines.append(
+                "| {label} | {plain} | {agentos} | {delta} | {source} |".format(
+                    label=row.get("load_dimension", ""),
+                    plain=fmt_number(plain),
+                    agentos=fmt_number(agentos),
+                    delta=fmt_number(agentos - plain),
+                    source=row.get("source", ""),
+                )
+            )
     stage_rows = meta.get("stage_rows", [])
     if isinstance(stage_rows, list) and stage_rows:
         lines.extend(["", "## 阶段耗时", "", "| 阶段 | 秒数 | 状态 |", "| --- | ---: | --- |"])
@@ -1314,6 +1467,7 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
         "cost-replacement.svg": "用户态成本项与 AgentOS 替代机制",
         "runner-ticks.svg": "Runner Tick 对照",
         "runner-speedup.svg": "Runner 成组场景相对倍数",
+        "load-profile.svg": "双目标负载参数组",
         "runner-cumulative-line.svg": "Runner 累计 Tick 曲线",
         "runner-tick-box.svg": "Runner Tick 分布箱形图",
         "runner-cost-heatmap.svg": "Runner 成本热力图",
@@ -1407,12 +1561,14 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="report.md">查看 Markdown 报告</a>
       <a href="summary.csv">下载 CSV 明细</a>
       <a href="runner-sweep.csv">下载 runner 成组数据</a>
+      <a href="load-profile.csv">下载负载参数组</a>
       <a href="chart-type-coverage.csv">下载图表类型覆盖表</a>
       <a href="charts/runtime-observation.svg">打开观测图</a>
       <a href="charts/scenario-evidence.svg">打开场景证据图</a>
       <a href="charts/cost-replacement.svg">打开成本替代图</a>
       <a href="charts/runner-ticks.svg">打开 tick 对照图</a>
       <a href="charts/runner-speedup.svg">打开相对倍数图</a>
+      <a href="charts/load-profile.svg">打开负载参数图</a>
       <a href="charts/runner-surface-composite.svg">打开组合图</a>
       <a href="charts/dual-target-state-reader.svg">打开状态图</a>
       <a href="charts/stage-timings.svg">打开阶段耗时图</a>
@@ -1509,7 +1665,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>相关结果</h2>
-      <p><a href="demo-guide.html">演示导览页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="chart-type-coverage.csv">图表类型覆盖表</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/runner-surface-composite.svg">组合图</a></p>
+      <p><a href="demo-guide.html">演示导览页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="load-profile.csv">负载参数组</a>、<a href="chart-type-coverage.csv">图表类型覆盖表</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/load-profile.svg">负载参数图</a>、<a href="charts/runner-surface-composite.svg">组合图</a></p>
     </section>
   </main>
 </body>
@@ -1595,7 +1751,7 @@ def write_demo_guide_page(rows: list[MetricRow], meta: dict[str, object], charts
     </section>
     <section class="panel">
       <h2>关键数据</h2>
-      <p>本次结果包含 {fmt_number(cost_count)} 项用户态成本替代记录、{fmt_number(runner_pairs)} 组 runner tick 对照、{fmt_number(as_number(state.get("checked_success_records")))} 条成功记录核对。图表可以回到 <a href="summary.csv">summary.csv</a>、<a href="runner-sweep.csv">runner-sweep.csv</a> 和 <a href="chart-type-coverage.csv">chart-type-coverage.csv</a>。</p>
+      <p>本次结果包含 {fmt_number(cost_count)} 项用户态成本替代记录、{fmt_number(runner_pairs)} 组 runner tick 对照、{fmt_number(as_number(state.get("checked_success_records")))} 条成功记录核对。图表可以回到 <a href="summary.csv">summary.csv</a>、<a href="runner-sweep.csv">runner-sweep.csv</a>、<a href="load-profile.csv">load-profile.csv</a> 和 <a href="chart-type-coverage.csv">chart-type-coverage.csv</a>。</p>
       <div class="links">
         <a href="report.md">Markdown 报告</a>
         <a href="summary.json">JSON 摘要</a>
@@ -1622,6 +1778,7 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
     out_dir.mkdir(parents=True, exist_ok=True)
     write_csv(rows, out_dir / "summary.csv")
     write_runner_sweep_csv(meta, out_dir / "runner-sweep.csv")
+    write_load_profile_csv(meta, out_dir / "load-profile.csv")
     write_chart_type_coverage_csv(out_dir / "chart-type-coverage.csv")
     charts = write_charts(rows, meta, out_dir / "charts")
     write_report(rows, meta, charts, out_dir / "report.md")
@@ -1640,6 +1797,7 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
         "demo_guide": str(out_dir / "demo-guide.html"),
         "csv": str(out_dir / "summary.csv"),
         "runner_sweep_csv": str(out_dir / "runner-sweep.csv"),
+        "load_profile_csv": str(out_dir / "load-profile.csv"),
         "chart_type_coverage_csv": str(out_dir / "chart-type-coverage.csv"),
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")

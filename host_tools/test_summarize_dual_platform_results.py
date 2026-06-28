@@ -143,6 +143,7 @@ def main() -> int:
         assert str(result["monitor"]).endswith("monitor.html"), result
         assert str(result["demo_guide"]).endswith("demo-guide.html"), result
         assert str(result["runner_sweep_csv"]).endswith("runner-sweep.csv"), result
+        assert str(result["load_profile_csv"]).endswith("load-profile.csv"), result
         assert str(result["chart_type_coverage_csv"]).endswith("chart-type-coverage.csv"), result
         report = (out_dir / "report.md").read_text(encoding="utf-8")
         assert "普通 uCore 提取状态文件 258 个" in report
@@ -157,12 +158,18 @@ def main() -> int:
         assert "kernel_context_path" in report
         assert "Runner Tick 对照" in report
         assert "agentos-context" in report
+        assert "负载参数组" in report
+        assert "预置请求" in report
         csv_text = (out_dir / "summary.csv").read_text(encoding="utf-8")
         assert "提取到的 rp_* 状态文件" in csv_text
         assert "QEMU 无输出提示次数" in csv_text
         sweep_csv = (out_dir / "runner-sweep.csv").read_text(encoding="utf-8")
         assert "scene,plain_case,agentos_case,plain_ticks,agentos_ticks,saved_ticks,speedup_x" in sweep_csv
         assert "上下文路径,user-context,agentos-context,6,1,5,6" in sweep_csv
+        profile_csv = (out_dir / "load-profile.csv").read_text(encoding="utf-8")
+        assert "load_dimension,source,plain_value,agentos_value,delta,note" in profile_csv
+        assert "预置请求" in profile_csv
+        assert "Agent 启动" in profile_csv
         coverage_csv = (out_dir / "chart-type-coverage.csv").read_text(encoding="utf-8")
         assert "条形/柱状对比" in coverage_csv
         assert "曲线趋势" in coverage_csv
@@ -182,6 +189,8 @@ def main() -> int:
         assert "charts/runner-ticks.svg" in index_html
         assert "charts/runner-speedup.svg" in index_html
         assert "runner-sweep.csv" in index_html
+        assert "load-profile.csv" in index_html
+        assert "charts/load-profile.svg" in index_html
         assert "chart-type-coverage.csv" in index_html
         assert "charts/runner-cumulative-line.svg" in index_html
         assert "charts/runner-tick-box.svg" in index_html
@@ -202,6 +211,8 @@ def main() -> int:
         assert "charts/runner-ticks.svg" in monitor_html
         assert "charts/runner-speedup.svg" in monitor_html
         assert "runner-sweep.csv" in monitor_html
+        assert "load-profile.csv" in monitor_html
+        assert "charts/load-profile.svg" in monitor_html
         assert "chart-type-coverage.csv" in monitor_html
         assert "charts/runner-surface-composite.svg" in monitor_html
         for name in [
@@ -214,6 +225,7 @@ def main() -> int:
             "cost-replacement.svg",
             "runner-ticks.svg",
             "runner-speedup.svg",
+            "load-profile.svg",
             "runner-cumulative-line.svg",
             "runner-tick-box.svg",
             "runner-cost-heatmap.svg",
@@ -230,6 +242,7 @@ def main() -> int:
         assert "建议展示顺序" in demo_html
         assert "Host Reader 首页" in demo_html
         assert "runner-sweep.csv" in demo_html
+        assert "load-profile.csv" in demo_html
         assert "charts/scenario-evidence.svg" in demo_html
 
     print("test_summarize_dual_platform_results: passed")

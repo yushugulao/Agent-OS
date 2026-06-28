@@ -211,6 +211,7 @@ dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=
 ```text
 results/latest/summary.csv
 results/latest/runner-sweep.csv
+results/latest/load-profile.csv
 results/latest/chart-type-coverage.csv
 results/latest/demo-guide.html
 results/latest/index.html
@@ -222,6 +223,7 @@ results/latest/charts/scenario-evidence.svg
 results/latest/charts/cost-replacement.svg
 results/latest/charts/runner-ticks.svg
 results/latest/charts/runner-speedup.svg
+results/latest/charts/load-profile.svg
 results/latest/charts/runner-cumulative-line.svg
 results/latest/charts/runner-tick-box.svg
 results/latest/charts/runner-cost-heatmap.svg
@@ -232,9 +234,9 @@ results/latest/charts/agentos-evidence.svg
 results/latest/charts/stage-timings.svg
 ```
 
-`demo-guide.html` 适合录屏时按顺序打开关键页面；`monitor.html` 适合先展示本次运行是否健康；`index.html` 适合集中查看图表摘要；`summary.csv` 适合复制到答辩材料或进一步处理；`report.md` 适合直接阅读；`charts/*.svg` 是从本次运行数据生成的图表。文档中保留一组示例图，数值来自一次完整运行样例，实际运行时以 `results/latest/` 下的新文件为准。
+`demo-guide.html` 适合录屏时按顺序打开关键页面；`monitor.html` 适合先展示本次运行是否健康；`index.html` 适合集中查看图表摘要；`summary.csv`、`runner-sweep.csv` 和 `load-profile.csv` 适合复制到答辩材料或进一步处理；`report.md` 适合直接阅读；`charts/*.svg` 是从本次运行数据生成的图表。文档中保留一组示例图，数值来自一次完整运行样例，实际运行时以 `results/latest/` 下的新文件为准。
 
-图表由 `host_tools/summarize_dual_platform_results.py` 使用 Python 标准库直接生成 SVG，不依赖本机私有绘图软件。这样做的好处是，用户 clone 仓库后只要能运行 Python，就可以重新生成和验证这些图表。`chart-type-coverage.csv` 会列出当前结果页覆盖的图表类型：条形/柱状对比、曲线趋势、箱形图、热力图、监控面积图，以及曲面、投影、热力组合图；这些图都可以追溯到 `summary.csv`、`runner-sweep.csv`、`stage-timings.csv` 或状态对照 JSON。
+图表由 `host_tools/summarize_dual_platform_results.py` 使用 Python 标准库直接生成 SVG，不依赖本机私有绘图软件。这样做的好处是，用户 clone 仓库后只要能运行 Python，就可以重新生成和验证这些图表。`chart-type-coverage.csv` 会列出当前结果页覆盖的图表类型：条形/柱状对比、曲线趋势、箱形图、热力图、监控面积图，以及曲面、投影、热力组合图；这些图都可以追溯到 `summary.csv`、`runner-sweep.csv`、`load-profile.csv`、`stage-timings.csv` 或状态对照 JSON。
 
 `host_tools/test_chart_type_data_contract.py` 专门检查这件事：它用一组 runner 和 stage 样例数据生成完整结果目录，再确认 `chart-type-coverage.csv` 不存在空缺项、每个声明的 SVG 都真实生成、`runner-sweep.csv` 中的数值能解释相对倍数图，组合图也包含曲面、投影和热力三个视角。`host_tools/test_chart_svg_layout_contract.py` 会继续解析生成后的 SVG 和文档内提交的示例 SVG，检查文字是否留在画布内，并检查明显的文字框相交问题，避免图表在录屏和文档阅读时出现文字压住文字的情况。
 
@@ -261,6 +263,10 @@ results/latest/charts/stage-timings.svg
 ![Runner 成组场景相对倍数](assets/verification-charts/runner-speedup.svg)
 
 这张图由 `runner-sweep.csv` 生成。CSV 保留每个场景的 plain case、AgentOS case、两边 tick、节省 tick 和相对倍数；SVG 把这些成组场景按条形图展示。它对应参考项目中“参数成组变化后再解释曲线”的测试写法：即使当前 uCore/QEMU 不适合宣称物理机吞吐，仍可以在同一输入下比较上下文、文件查询、事件交接、恢复动作和审计记录的相对运行成本。录屏时可以先展示 `runner-ticks.svg` 说明每组数字，再打开 `runner-sweep.csv` 说明图表可以回到原始表格。
+
+![双目标负载参数组](assets/verification-charts/load-profile.svg)
+
+这张图由 `load-profile.csv` 生成，把同一次双目标运行中的负载参数集中展示，包括预置请求、状态文件、API JSON、Agent 启动、机制场景、成本替代和 runner 对照组。它不把一次 QEMU 运行包装成多次压力实验，而是把“本次测试到底覆盖了多大规模的对象”讲清楚，方便评审把后续图表放回同一批输入和状态产物中理解。
 
 ![Runner 累计 Tick 曲线](assets/verification-charts/runner-cumulative-line.svg)
 
