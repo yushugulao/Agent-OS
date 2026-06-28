@@ -143,6 +143,8 @@ def main() -> int:
         assert str(result["monitor"]).endswith("monitor.html"), result
         assert str(result["demo_guide"]).endswith("demo-guide.html"), result
         assert str(result["runner_sweep_csv"]).endswith("runner-sweep.csv"), result
+        assert str(result["runner_statistics_csv"]).endswith("runner-statistics.csv"), result
+        assert str(result["runner_statistics"]).endswith("runner-statistics.html"), result
         assert str(result["load_profile_csv"]).endswith("load-profile.csv"), result
         assert str(result["chart_type_coverage_csv"]).endswith("chart-type-coverage.csv"), result
         assert str(result["experiment_design_csv"]).endswith("experiment-design.csv"), result
@@ -164,6 +166,8 @@ def main() -> int:
         assert "kernel_context_path" in report
         assert "Runner Tick 对照" in report
         assert "agentos-context" in report
+        assert "runner-statistics.csv" in report
+        assert "runner-statistics.html" in report
         assert "负载参数组" in report
         assert "预置请求" in report
         assert "evidence-manifest.csv" in report
@@ -178,6 +182,11 @@ def main() -> int:
         sweep_csv = (out_dir / "runner-sweep.csv").read_text(encoding="utf-8")
         assert "scene,plain_case,agentos_case,plain_ticks,agentos_ticks,saved_ticks,speedup_x" in sweep_csv
         assert "上下文路径,user-context,agentos-context,6,1,5,6" in sweep_csv
+        stats_csv = (out_dir / "runner-statistics.csv").read_text(encoding="utf-8")
+        assert "metric,count,min,avg,max,unit,source,reading" in stats_csv
+        assert "普通路径 tick,2,6,6.5,7,tick" in stats_csv
+        assert "AgentOS 路径 tick,2,1,1,1,tick" in stats_csv
+        assert "相对倍数,2,6,6.5,7,x" in stats_csv
         profile_csv = (out_dir / "load-profile.csv").read_text(encoding="utf-8")
         assert "load_dimension,source,plain_value,agentos_value,delta,note" in profile_csv
         assert "预置请求" in profile_csv
@@ -188,6 +197,8 @@ def main() -> int:
         assert "experiment-design.csv" in evidence_csv
         assert "charts/runtime-observation.svg" in evidence_csv
         assert "runner-sweep.csv" in evidence_csv
+        assert "runner-statistics.csv" in evidence_csv
+        assert "runner-statistics.html" in evidence_csv
         assert "load-profile.csv" in evidence_csv
         experiment_csv = (out_dir / "experiment-design.csv").read_text(encoding="utf-8")
         assert "scenario,workload,plain_path,agentos_path,parameter,metric,source,artifact" in experiment_csv
@@ -219,7 +230,10 @@ def main() -> int:
         assert "charts/cost-replacement.svg" in index_html
         assert "charts/runner-ticks.svg" in index_html
         assert "charts/runner-speedup.svg" in index_html
+        assert "charts/runner-statistics.svg" in index_html
         assert "runner-sweep.csv" in index_html
+        assert "runner-statistics.html" in index_html
+        assert "runner-statistics.csv" in index_html
         assert "load-profile.csv" in index_html
         assert "charts/load-profile.svg" in index_html
         assert "evidence-map.html" in index_html
@@ -248,6 +262,8 @@ def main() -> int:
         assert "charts/runner-ticks.svg" in monitor_html
         assert "charts/runner-speedup.svg" in monitor_html
         assert "runner-sweep.csv" in monitor_html
+        assert "runner-statistics.html" in monitor_html
+        assert "runner-statistics.csv" in monitor_html
         assert "load-profile.csv" in monitor_html
         assert "charts/load-profile.svg" in monitor_html
         assert "evidence-map.html" in monitor_html
@@ -268,6 +284,7 @@ def main() -> int:
             "cost-replacement.svg",
             "runner-ticks.svg",
             "runner-speedup.svg",
+            "runner-statistics.svg",
             "load-profile.svg",
             "runner-cumulative-line.svg",
             "runner-tick-box.svg",
@@ -285,6 +302,8 @@ def main() -> int:
         assert "建议展示顺序" in demo_html
         assert "Host Reader 首页" in demo_html
         assert "runner-sweep.csv" in demo_html
+        assert "runner-statistics.html" in demo_html
+        assert "runner-statistics.csv" in demo_html
         assert "load-profile.csv" in demo_html
         assert "evidence-manifest.csv" in demo_html
         assert "demo-checklist.html" in demo_html
@@ -303,6 +322,12 @@ def main() -> int:
         assert "charts/runtime-observation.svg" in evidence_html
         assert "summary.csv" in evidence_html
         assert "runner-sweep.csv" in evidence_html
+        assert "runner-statistics.csv" in evidence_html
+        assert "runner-statistics.html" in evidence_html
+        stats_html = (out_dir / "runner-statistics.html").read_text(encoding="utf-8")
+        assert "AgentOS Runner 统计摘要" in stats_html
+        assert "count、min、avg、max" in stats_html
+        assert "charts/runner-statistics.svg" in stats_html
         checklist_html = (out_dir / "demo-checklist.html").read_text(encoding="utf-8")
         assert "AgentOS 演示检查表" in checklist_html
         assert "通过项：8 / 8" in checklist_html

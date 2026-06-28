@@ -211,6 +211,7 @@ dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=
 ```text
 results/latest/summary.csv
 results/latest/runner-sweep.csv
+results/latest/runner-statistics.csv
 results/latest/load-profile.csv
 results/latest/evidence-manifest.csv
 results/latest/demo-checklist.csv
@@ -219,6 +220,7 @@ results/latest/chart-type-coverage.csv
 results/latest/demo-guide.html
 results/latest/demo-checklist.html
 results/latest/experiment-design.html
+results/latest/runner-statistics.html
 results/latest/evidence-map.html
 results/latest/index.html
 results/latest/monitor.html
@@ -229,6 +231,7 @@ results/latest/charts/scenario-evidence.svg
 results/latest/charts/cost-replacement.svg
 results/latest/charts/runner-ticks.svg
 results/latest/charts/runner-speedup.svg
+results/latest/charts/runner-statistics.svg
 results/latest/charts/load-profile.svg
 results/latest/charts/runner-cumulative-line.svg
 results/latest/charts/runner-tick-box.svg
@@ -240,9 +243,9 @@ results/latest/charts/agentos-evidence.svg
 results/latest/charts/stage-timings.svg
 ```
 
-`demo-guide.html` 适合录屏时按顺序打开关键页面；`demo-checklist.html` 适合录屏前确认本次结果是否具备展示条件；`experiment-design.html` 适合解释每个测试场景的负载、对照路径、参数、指标和数据来源；`evidence-map.html` 适合按产物查看数据来源和证明内容；`monitor.html` 适合先展示本次运行是否健康；`index.html` 适合集中查看图表摘要；`summary.csv`、`runner-sweep.csv`、`load-profile.csv`、`evidence-manifest.csv`、`demo-checklist.csv` 和 `experiment-design.csv` 适合复制到答辩材料或进一步处理；`report.md` 适合直接阅读；`charts/*.svg` 是从本次运行数据生成的图表。文档中保留一组示例图，数值来自一次完整运行样例，实际运行时以 `results/latest/` 下的新文件为准。
+`demo-guide.html` 适合录屏时按顺序打开关键页面；`demo-checklist.html` 适合录屏前确认本次结果是否具备展示条件；`experiment-design.html` 适合解释每个测试场景的负载、对照路径、参数、指标和数据来源；`runner-statistics.html` 适合先看 runner 成组数据的 count/min/avg/max，再进入单个场景图；`evidence-map.html` 适合按产物查看数据来源和证明内容；`monitor.html` 适合先展示本次运行是否健康；`index.html` 适合集中查看图表摘要；`summary.csv`、`runner-sweep.csv`、`runner-statistics.csv`、`load-profile.csv`、`evidence-manifest.csv`、`demo-checklist.csv` 和 `experiment-design.csv` 适合复制到答辩材料或进一步处理；`report.md` 适合直接阅读；`charts/*.svg` 是从本次运行数据生成的图表。文档中保留一组示例图，数值来自一次完整运行样例，实际运行时以 `results/latest/` 下的新文件为准。
 
-图表由 `host_tools/summarize_dual_platform_results.py` 使用 Python 标准库直接生成 SVG，不依赖本机私有绘图软件。这样做的好处是，用户 clone 仓库后只要能运行 Python，就可以重新生成和验证这些图表。`chart-type-coverage.csv` 会列出当前结果页覆盖的图表类型：条形/柱状对比、曲线趋势、箱形图、热力图、监控面积图，以及曲面、投影、热力组合图；这些图都可以追溯到 `summary.csv`、`runner-sweep.csv`、`load-profile.csv`、`stage-timings.csv` 或状态对照 JSON。`evidence-manifest.csv` 则把主要产物、数据来源、证明内容和录屏用途放在一张表里，方便从图表返回原始结果。`demo-checklist.csv` 记录双目标结果、Reader 页面与 API、QEMU 运行状态、核心图表、证据索引、演示入口、原始运行状态和 AgentOS 主流程证据是否可用于展示；对应的 `demo-checklist.html` 可以在录屏前直接打开。`experiment-design.csv` 列出科研主流程双目标对照、Reader 页面与 API 对照、AgentOS 机制场景覆盖、用户态成本替代、runner tick 成组对照、运行阶段耗时观测和负载参数组；对应的 `experiment-design.html` 适合在解释测试设计时打开。
+图表由 `host_tools/summarize_dual_platform_results.py` 使用 Python 标准库直接生成 SVG，不依赖本机私有绘图软件。这样做的好处是，用户 clone 仓库后只要能运行 Python，就可以重新生成和验证这些图表。`chart-type-coverage.csv` 会列出当前结果页覆盖的图表类型：条形/柱状对比、曲线趋势、箱形图、热力图、监控面积图，以及曲面、投影、热力组合图；这些图都可以追溯到 `summary.csv`、`runner-sweep.csv`、`runner-statistics.csv`、`load-profile.csv`、`stage-timings.csv` 或状态对照 JSON。`evidence-manifest.csv` 则把主要产物、数据来源、证明内容和录屏用途放在一张表里，方便从图表返回原始结果。`demo-checklist.csv` 记录双目标结果、Reader 页面与 API、QEMU 运行状态、核心图表、证据索引、演示入口、原始运行状态和 AgentOS 主流程证据是否可用于展示；对应的 `demo-checklist.html` 可以在录屏前直接打开。`experiment-design.csv` 列出科研主流程双目标对照、Reader 页面与 API 对照、AgentOS 机制场景覆盖、用户态成本替代、runner tick 成组对照、运行阶段耗时观测和负载参数组；对应的 `experiment-design.html` 适合在解释测试设计时打开。`runner-statistics.csv` 从 runner 成组数据计算 count、min、avg、max；对应的 `runner-statistics.html` 和 `charts/runner-statistics.svg` 适合说明整体 tick 趋势。
 
 `host_tools/test_chart_type_data_contract.py` 专门检查这件事：它用一组 runner 和 stage 样例数据生成完整结果目录，再确认 `chart-type-coverage.csv` 不存在空缺项、每个声明的 SVG 都真实生成、`runner-sweep.csv` 中的数值能解释相对倍数图，组合图也包含曲面、投影和热力三个视角。`host_tools/test_chart_svg_layout_contract.py` 会继续解析生成后的 SVG 和文档内提交的示例 SVG，检查文字是否留在画布内，并检查明显的文字框相交问题，避免图表在录屏和文档阅读时出现文字压住文字的情况。
 

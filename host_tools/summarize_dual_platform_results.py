@@ -1047,6 +1047,175 @@ def runner_speedup_svg(meta: dict[str, object], out_path: Path) -> None:
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def value_stats(values: list[float]) -> tuple[int, float, float, float]:
+    if not values:
+        return (0, 0.0, 0.0, 0.0)
+    return (len(values), min(values), sum(values) / len(values), max(values))
+
+
+def runner_statistics_rows(meta: dict[str, object]) -> list[dict[str, object]]:
+    rows = runner_tick_rows(meta)
+    values = {
+        "普通路径 tick": [as_number(row.get("plain_ticks")) for row in rows],
+        "AgentOS 路径 tick": [as_number(row.get("agentos_ticks")) for row in rows],
+        "节省 tick": [as_number(row.get("saved_ticks")) for row in rows],
+        "相对倍数": [as_number(row.get("speedup_x100")) / 100.0 for row in rows],
+    }
+    units = {
+        "普通路径 tick": "tick",
+        "AgentOS 路径 tick": "tick",
+        "节省 tick": "tick",
+        "相对倍数": "x",
+    }
+    reading = {
+        "普通路径 tick": "普通用户态路径完成同一 runner 场景的 tick 分布。",
+        "AgentOS 路径 tick": "AgentOS 路径完成同一 runner 场景的 tick 分布。",
+        "节省 tick": "普通路径 tick 减去 AgentOS 路径 tick。",
+        "相对倍数": "普通路径 tick 除以 AgentOS 路径 tick；大于 1 表示 AgentOS 使用更少 tick。",
+    }
+    result: list[dict[str, object]] = []
+    for metric, metric_values in values.items():
+        count, min_value, avg_value, max_value = value_stats(metric_values)
+        result.append(
+            {
+                "metric": metric,
+                "count": count,
+                "min": min_value,
+                "avg": avg_value,
+                "max": max_value,
+                "unit": units[metric],
+                "source": "runner-sweep.csv",
+                "reading": reading[metric],
+            }
+        )
+    return result
+
+
+def write_runner_statistics_csv(meta: dict[str, object], out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["metric", "count", "min", "avg", "max", "unit", "source", "reading"])
+        for row in runner_statistics_rows(meta):
+            writer.writerow(
+                [
+                    row["metric"],
+                    row["count"],
+                    fmt_number(as_number(row["min"])),
+                    fmt_number(as_number(row["avg"])),
+                    fmt_number(as_number(row["max"])),
+                    row["unit"],
+                    row["source"],
+                    row["reading"],
+                ]
+            )
+
+
+def write_runner_statistics_page(meta: dict[str, object], out_path: Path) -> None:
+    rows_html = []
+    for row in runner_statistics_rows(meta):
+        rows_html.append(
+            "<tr><td>{metric}</td><td>{count}</td><td>{min_value}</td><td>{avg_value}</td><td>{max_value}</td><td>{unit}</td><td>{reading}</td></tr>".format(
+                metric=escape(str(row["metric"])),
+                count=escape(str(row["count"])),
+                min_value=escape(fmt_number(as_number(row["min"]))),
+                avg_value=escape(fmt_number(as_number(row["avg"]))),
+                max_value=escape(fmt_number(as_number(row["max"]))),
+                unit=escape(str(row["unit"])),
+                reading=escape(str(row["reading"])),
+            )
+        )
+    html = f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentOS Runner 统计摘要</title>
+  <style>
+    :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; }}
+    body {{ margin:0; font-family:Arial,"Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); }}
+    header {{ padding:30px 42px 20px; background:#fff; border-bottom:1px solid var(--line); }}
+    main {{ max-width:1120px; margin:0 auto; padding:24px 42px 42px; }}
+    h1 {{ margin:0 0 10px; font-size:28px; }}
+    p {{ line-height:1.75; color:var(--muted); }}
+    .links {{ display:flex; flex-wrap:wrap; gap:10px; margin:16px 0; }}
+    .links a {{ color:#075985; text-decoration:none; background:#fff; border:1px solid var(--line); padding:8px 12px; }}
+    table {{ width:100%; border-collapse:collapse; background:#fff; }}
+    th,td {{ border:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }}
+    th {{ background:#eef3f8; }}
+    td:nth-child(2),td:nth-child(3),td:nth-child(4),td:nth-child(5) {{ text-align:right; white-space:nowrap; }}
+    img {{ max-width:100%; height:auto; display:block; background:#fff; border:1px solid var(--line); margin:18px 0; }}
+    a {{ color:#075985; text-decoration:none; }}
+    @media (max-width:860px) {{ main,header {{ padding-left:18px; padding-right:18px; }} table {{ font-size:13px; }} }}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AgentOS Runner 统计摘要</h1>
+    <p>本页从 runner-sweep.csv 计算 count、min、avg、max，帮助用户在查看单个 runner 场景之前，先判断整体 tick 趋势是否稳定。</p>
+  </header>
+  <main>
+    <div class="links">
+      <a href="runner-statistics.csv">下载 CSV</a>
+      <a href="runner-sweep.csv">查看 runner 明细</a>
+      <a href="charts/runner-statistics.svg">打开统计图</a>
+      <a href="index.html">图表索引页</a>
+    </div>
+    <img src="charts/runner-statistics.svg" alt="Runner 统计摘要图">
+    <table>
+      <thead><tr><th>指标</th><th>count</th><th>min</th><th>avg</th><th>max</th><th>单位</th><th>读法</th></tr></thead>
+      <tbody>{"".join(rows_html)}</tbody>
+    </table>
+  </main>
+</body>
+</html>
+"""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(html, encoding="utf-8")
+
+
+def runner_statistics_svg(meta: dict[str, object], out_path: Path) -> None:
+    rows = runner_statistics_rows(meta)
+    width, height = 1120, 430
+    margin_left, margin_right, margin_top = 190, 130, 105
+    row_h = 64
+    plot_w = width - margin_left - margin_right
+    lines = svg_header(width, height)
+    lines.append('<text x="34" y="34" class="title">Runner 统计摘要</text>')
+    append_wrapped_text(
+        lines,
+        34,
+        58,
+        "每一行使用自己的最大值归一化，展示 min、avg、max 的相对位置；精确值见 runner-statistics.csv。",
+        max_chars=62,
+    )
+    colors = [PALETTE["shared"], PALETTE["agentos"], PALETTE["extra"]]
+    labels = ["min", "avg", "max"]
+    for index, row in enumerate(rows):
+        y = margin_top + index * row_h
+        values = [as_number(row["min"]), as_number(row["avg"]), as_number(row["max"])]
+        max_value = max([1.0] + values)
+        lines.append(f'<text x="{margin_left - 14}" y="{y + 28}" text-anchor="end" class="label">{escape(str(row["metric"]))}</text>')
+        for item_index, value in enumerate(values):
+            bar_w = (value / max_value) * plot_w
+            bar_y = y + item_index * 17
+            lines.append(f'<rect x="{margin_left}" y="{bar_y}" width="{bar_w:.1f}" height="12" fill="{colors[item_index]}" rx="2"/>')
+            value_x = margin_left + bar_w + 8
+            value_anchor = ""
+            if value_x > width - 150:
+                value_x = margin_left + max(36, bar_w - 8)
+                value_anchor = ' text-anchor="end"'
+            lines.append(f'<text x="{value_x:.1f}" y="{bar_y + 11}" class="axis"{value_anchor}>{labels[item_index]} {fmt_number(value)}{escape(str(row["unit"]))}</text>')
+    legend_y = height - 30
+    for index, label in enumerate(labels):
+        x = width - 330 + index * 96
+        lines.append(f'<rect x="{x}" y="{legend_y - 12}" width="13" height="13" fill="{colors[index]}"/>')
+        lines.append(f'<text x="{x + 20}" y="{legend_y}" class="axis">{label}</text>')
+    lines.append("</svg>")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def load_profile_svg(meta: dict[str, object], out_path: Path) -> None:
     rows = load_profile_rows(meta)
     width, height = 1120, max(480, 142 + len(rows) * 50)
@@ -1102,6 +1271,7 @@ def chart_evidence_description(chart_name: str) -> tuple[str, str]:
         "cost-replacement.svg": ("state-compare-summary.json:cost_replacements", "普通用户态成本项与 AgentOS 替代机制的配对"),
         "runner-ticks.svg": ("state-compare-summary.json:runner_tick_comparison", "同一 runner 场景下两条路径的 tick 对照"),
         "runner-speedup.svg": ("runner-sweep.csv", "runner 场景的相对倍数和节省 tick"),
+        "runner-statistics.svg": ("runner-statistics.csv", "runner 场景 count/min/avg/max 统计"),
         "load-profile.svg": ("load-profile.csv", "同一批运行中的负载参数组"),
         "runner-cumulative-line.svg": ("runner-sweep.csv", "runner tick 的累计变化"),
         "runner-tick-box.svg": ("runner-sweep.csv", "plain 与 AgentOS runner tick 分布"),
@@ -1169,6 +1339,20 @@ def evidence_manifest_rows(charts: list[Path]) -> list[dict[str, str]]:
             "source": "state-compare-summary.json:runner_tick_comparison",
             "proves": "runner 场景、tick、节省 tick 和相对倍数",
             "demo_use": "复查性能趋势图",
+        },
+        {
+            "artifact": "runner-statistics.csv",
+            "kind": "数据表",
+            "source": "runner-sweep.csv",
+            "proves": "runner 成组数据的 count/min/avg/max 统计",
+            "demo_use": "解释整体 tick 趋势",
+        },
+        {
+            "artifact": "runner-statistics.html",
+            "kind": "说明页面",
+            "source": "runner-statistics.csv, charts/runner-statistics.svg",
+            "proves": "runner 统计摘要可以直接打开查看",
+            "demo_use": "录屏时解释统计口径",
         },
         {
             "artifact": "load-profile.csv",
@@ -1436,7 +1620,7 @@ def write_demo_checklist_page(meta: dict[str, object], charts: list[Path], work_
 
 def write_chart_type_coverage_csv(out_path: Path) -> None:
     rows = [
-        ("条形/柱状对比", "dual-target-state-reader.svg;launch-model.svg;runner-ticks.svg;load-profile.svg", "状态文件、页面、API、启动方式、runner tick、负载参数组；Python 标准库 SVG 生成"),
+        ("条形/柱状对比", "dual-target-state-reader.svg;launch-model.svg;runner-ticks.svg;runner-statistics.svg;load-profile.svg", "状态文件、页面、API、启动方式、runner tick、runner 统计、负载参数组；Python 标准库 SVG 生成"),
         ("曲线趋势", "runner-cumulative-line.svg", "runner tick 累计成本；Python 标准库 SVG 生成"),
         ("箱形图", "runner-tick-box.svg", "plain/AgentOS runner tick 分布；Python 标准库 SVG 生成"),
         ("热力图", "runner-cost-heatmap.svg", "runner 场景与指标强弱；Python 标准库 SVG 生成"),
@@ -1807,6 +1991,10 @@ def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Pat
     runner_speedup_svg(meta, runner_speedup_chart)
     paths.append(runner_speedup_chart)
 
+    runner_stats_chart = charts_dir / "runner-statistics.svg"
+    runner_statistics_svg(meta, runner_stats_chart)
+    paths.append(runner_stats_chart)
+
     load_profile_chart = charts_dir / "load-profile.svg"
     load_profile_svg(meta, load_profile_chart)
     paths.append(load_profile_chart)
@@ -1859,6 +2047,8 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
     for chart in charts:
         lines.append(f"- `{chart.relative_to(out_path.parent.parent).as_posix()}`")
     lines.append("- `runner-sweep.csv`")
+    lines.append("- `runner-statistics.csv`")
+    lines.append("- `runner-statistics.html`")
     lines.append("- `load-profile.csv`")
     lines.append("- `chart-type-coverage.csv`")
     lines.append("- `evidence-manifest.csv`")
@@ -1988,6 +2178,7 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
         "cost-replacement.svg": "用户态成本项与 AgentOS 替代机制",
         "runner-ticks.svg": "Runner Tick 对照",
         "runner-speedup.svg": "Runner 成组场景相对倍数",
+        "runner-statistics.svg": "Runner 统计摘要",
         "load-profile.svg": "双目标负载参数组",
         "runner-cumulative-line.svg": "Runner 累计 Tick 曲线",
         "runner-tick-box.svg": "Runner Tick 分布箱形图",
@@ -2082,6 +2273,8 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="report.md">查看 Markdown 报告</a>
       <a href="summary.csv">下载 CSV 明细</a>
       <a href="runner-sweep.csv">下载 runner 成组数据</a>
+      <a href="runner-statistics.html">打开 runner 统计摘要</a>
+      <a href="runner-statistics.csv">下载 runner 统计摘要</a>
       <a href="load-profile.csv">下载负载参数组</a>
       <a href="evidence-map.html">打开证据索引页</a>
       <a href="evidence-manifest.csv">下载证据索引表</a>
@@ -2095,6 +2288,7 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="charts/cost-replacement.svg">打开成本替代图</a>
       <a href="charts/runner-ticks.svg">打开 tick 对照图</a>
       <a href="charts/runner-speedup.svg">打开相对倍数图</a>
+      <a href="charts/runner-statistics.svg">打开统计摘要图</a>
       <a href="charts/load-profile.svg">打开负载参数图</a>
       <a href="charts/runner-surface-composite.svg">打开组合图</a>
       <a href="charts/dual-target-state-reader.svg">打开状态图</a>
@@ -2192,7 +2386,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>相关结果</h2>
-      <p><a href="demo-guide.html">演示导览页</a>、<a href="demo-checklist.html">演示检查表</a>、<a href="experiment-design.html">实验场景说明</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="load-profile.csv">负载参数组</a>、<a href="evidence-manifest.csv">证据索引表</a>、<a href="demo-checklist.csv">演示检查表 CSV</a>、<a href="experiment-design.csv">实验场景说明 CSV</a>、<a href="chart-type-coverage.csv">图表类型覆盖表</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/load-profile.svg">负载参数图</a>、<a href="charts/runner-surface-composite.svg">组合图</a></p>
+      <p><a href="demo-guide.html">演示导览页</a>、<a href="demo-checklist.html">演示检查表</a>、<a href="experiment-design.html">实验场景说明</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="runner-statistics.html">runner 统计摘要</a>、<a href="load-profile.csv">负载参数组</a>、<a href="evidence-manifest.csv">证据索引表</a>、<a href="demo-checklist.csv">演示检查表 CSV</a>、<a href="experiment-design.csv">实验场景说明 CSV</a>、<a href="runner-statistics.csv">runner 统计 CSV</a>、<a href="chart-type-coverage.csv">图表类型覆盖表</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/runner-statistics.svg">统计摘要图</a>、<a href="charts/load-profile.svg">负载参数图</a>、<a href="charts/runner-surface-composite.svg">组合图</a></p>
     </section>
   </main>
 </body>
@@ -2278,10 +2472,12 @@ def write_demo_guide_page(rows: list[MetricRow], meta: dict[str, object], charts
     </section>
     <section class="panel">
       <h2>关键数据</h2>
-      <p>本次结果包含 {fmt_number(cost_count)} 项用户态成本替代记录、{fmt_number(runner_pairs)} 组 runner tick 对照、{fmt_number(as_number(state.get("checked_success_records")))} 条成功记录核对。图表可以回到 <a href="summary.csv">summary.csv</a>、<a href="runner-sweep.csv">runner-sweep.csv</a>、<a href="load-profile.csv">load-profile.csv</a>、<a href="evidence-manifest.csv">evidence-manifest.csv</a> 和 <a href="chart-type-coverage.csv">chart-type-coverage.csv</a>。</p>
+      <p>本次结果包含 {fmt_number(cost_count)} 项用户态成本替代记录、{fmt_number(runner_pairs)} 组 runner tick 对照、{fmt_number(as_number(state.get("checked_success_records")))} 条成功记录核对。图表可以回到 <a href="summary.csv">summary.csv</a>、<a href="runner-sweep.csv">runner-sweep.csv</a>、<a href="runner-statistics.csv">runner-statistics.csv</a>、<a href="load-profile.csv">load-profile.csv</a>、<a href="evidence-manifest.csv">evidence-manifest.csv</a> 和 <a href="chart-type-coverage.csv">chart-type-coverage.csv</a>。</p>
       <div class="links">
         <a href="experiment-design.html">实验场景说明</a>
         <a href="experiment-design.csv">实验说明 CSV</a>
+        <a href="runner-statistics.html">runner 统计摘要</a>
+        <a href="runner-statistics.csv">runner 统计 CSV</a>
         <a href="demo-checklist.html">演示检查表</a>
         <a href="demo-checklist.csv">检查表 CSV</a>
         <a href="report.md">Markdown 报告</a>
@@ -2309,11 +2505,13 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
     out_dir.mkdir(parents=True, exist_ok=True)
     write_csv(rows, out_dir / "summary.csv")
     write_runner_sweep_csv(meta, out_dir / "runner-sweep.csv")
+    write_runner_statistics_csv(meta, out_dir / "runner-statistics.csv")
     write_load_profile_csv(meta, out_dir / "load-profile.csv")
     write_chart_type_coverage_csv(out_dir / "chart-type-coverage.csv")
     write_experiment_design_csv(meta, out_dir / "experiment-design.csv")
     write_experiment_design_page(meta, out_dir / "experiment-design.html")
     charts = write_charts(rows, meta, out_dir / "charts")
+    write_runner_statistics_page(meta, out_dir / "runner-statistics.html")
     write_evidence_manifest_csv(charts, out_dir / "evidence-manifest.csv")
     write_evidence_map_page(charts, out_dir / "evidence-map.html")
     write_demo_checklist_csv(meta, charts, work_dir, out_dir / "demo-checklist.csv")
@@ -2334,6 +2532,8 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
         "demo_guide": str(out_dir / "demo-guide.html"),
         "csv": str(out_dir / "summary.csv"),
         "runner_sweep_csv": str(out_dir / "runner-sweep.csv"),
+        "runner_statistics_csv": str(out_dir / "runner-statistics.csv"),
+        "runner_statistics": str(out_dir / "runner-statistics.html"),
         "load_profile_csv": str(out_dir / "load-profile.csv"),
         "chart_type_coverage_csv": str(out_dir / "chart-type-coverage.csv"),
         "experiment_design_csv": str(out_dir / "experiment-design.csv"),
