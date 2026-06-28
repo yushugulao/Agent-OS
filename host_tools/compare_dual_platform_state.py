@@ -37,6 +37,7 @@ AGENTOS_EVIDENCE_REQUIREMENTS = {
     "rp_agentos_roles": (
         "stage_launch=agent_create_role",
         "support_launch=fork",
+        "support_role=plain_process",
         "agent_bound_programs=rp_query,rp_repair,rp_execobs,rp_agent_collab,rp_auditor,rp_workbench,rp_package,rp_realtask,rp_backend",
     ),
     "rp_agentos_query": ("metadata_source=kernel_file_index",),
@@ -298,6 +299,10 @@ def verify_orch_timing(
             agent_launcher_count += 1
             agent_programs.add(program)
         elif launcher and launcher.startswith("fork"):
+            if required_agent_programs and fields.get("role") != "plain":
+                raise ValueError(
+                    f"{label} fork support program is not recorded as plain process: {raw}"
+                )
             fork_launcher_count += 1
     if program_count < 60:
         raise ValueError(f"{label} timing records too few: {program_count}")

@@ -93,6 +93,11 @@ static const char *role_name(int role)
 	}
 }
 
+static const char *launch_role_name(int role, int agent_child)
+{
+	return agent_child ? role_name(role) : "plain";
+}
+
 static int role_for_program(const char *program)
 {
 	if (strcmp(program, "rp_repair") == 0)
@@ -142,7 +147,7 @@ static void record_stage_role(const char *program, int role, int agent_child)
 	rp_copy_text(line, sizeof(line), "program=");
 	rp_append_text(line, sizeof(line), program);
 	rp_append_text(line, sizeof(line), ";role=");
-	rp_append_text(line, sizeof(line), role_name(role));
+	rp_append_text(line, sizeof(line), launch_role_name(role, agent_child));
 	rp_append_text(line, sizeof(line), ";launcher=");
 	rp_append_text(line, sizeof(line),
 		       agent_child ? "agent_create_role" : "fork");
@@ -158,7 +163,7 @@ static void record_timing(const char *program, int role, int agent_child,
 	rp_copy_text(line, sizeof(line), "program=");
 	rp_append_text(line, sizeof(line), program);
 	rp_append_text(line, sizeof(line), ";role=");
-	rp_append_text(line, sizeof(line), role_name(role));
+	rp_append_text(line, sizeof(line), launch_role_name(role, agent_child));
 	rp_append_text(line, sizeof(line), ";launcher=");
 	rp_append_text(line, sizeof(line),
 		       agent_child ? "agent_create_role" : "fork");
@@ -171,14 +176,14 @@ static void record_timing(const char *program, int role, int agent_child,
 	rp_append_file("rp_orch_timing", line);
 }
 
-static int run_child(const char *program)
+static int run_child(const char *program, int in_orchestrator)
 {
 	int pid;
 	int agent_child = 0;
 	int role = role_for_program(program);
 	int64 start = get_mtime();
 
-	if (orchestrator_context() && agent_child_for_program(program)) {
+	if (in_orchestrator && agent_child_for_program(program)) {
 		pid = agent_create_role(role);
 		agent_child = 1;
 	} else {
@@ -224,11 +229,13 @@ int main(void)
 {
 	int total = (int)(sizeof(PROGRAMS) / sizeof(PROGRAMS[0]));
 	int ok = 0;
-	if (orchestrator_context()) {
+	int in_orchestrator = orchestrator_context();
+	if (in_orchestrator) {
 		if (!rp_write_file("rp_agentos_roles",
 				   "launcher=agentos-orchestrator\n"
 				   "stage_launch=agent_create_role\n"
 				   "support_launch=fork\n"
+				   "support_role=plain_process\n"
 				   "role_policy=program_specific\n"
 				   "launch_policy=kernel_bound_programs_agent_plain_support_fork\n"
 				   "agent_bound_programs=rp_query,rp_repair,rp_execobs,rp_agent_collab,rp_auditor,rp_workbench,rp_package,rp_realtask,rp_backend\n"
@@ -242,7 +249,7 @@ int main(void)
 	}
 	printf("rp_orch: start programs=%d\n", total);
 	for (int i = 0; i < total; i++) {
-		ok += run_child(PROGRAMS[i]);
+		ok += run_child(PROGRAMS[i], in_orchestrator);
 	}
 	printf("rp_orch: programs_ok=%d programs_total=%d\n", ok, total);
 	if (ok != total) {

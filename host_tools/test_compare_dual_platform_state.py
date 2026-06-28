@@ -62,14 +62,19 @@ def write_timing(root: Path, launcher: str = "fork", hybrid_agentos: bool = Fals
     required = sorted(compare.AGENTOS_REQUIRED_AGENT_PROGRAMS)
     support = [f"rp_case_{i}" for i in range(70 - len(required))]
     programs = required + support
+    lines = []
+    for i, program in enumerate(programs):
+        is_agent = hybrid_agentos and program in compare.AGENTOS_REQUIRED_AGENT_PROGRAMS
+        record_launcher = "agent_create_role" if is_agent else launcher
+        record_role = "orchestrator" if is_agent else "plain"
+        lines.append(
+            f"program={program};role={record_role};launcher={record_launcher};ok=1;code=0;elapsed_ms={i + 1}\n"
+        )
 
     write_state_file(
         root,
         "rp_orch_timing",
-        "".join(
-            f"program={program};launcher={('agent_create_role' if hybrid_agentos and program in compare.AGENTOS_REQUIRED_AGENT_PROGRAMS else launcher)};ok=1;code=0;elapsed_ms={i + 1}\n"
-            for i, program in enumerate(programs)
-        ),
+        "".join(lines),
     )
 
 
@@ -123,7 +128,7 @@ def main() -> int:
         assert summary["preserved_plain_costs"] == 0, summary
         assert summary["embedded_action_records"] == 1, summary
         assert summary["run_result_match"] == 1, summary
-        assert summary["agentos_evidence_checks"] == 31, summary
+        assert summary["agentos_evidence_checks"] == 32, summary
         assert summary["agentos_mainflow_stages"] == len(compare.AGENTOS_MAINFLOW_STAGES), summary
         assert summary["plain_timing_records"] == 70, summary
         assert summary["plain_agent_launches"] == 0, summary
@@ -163,6 +168,12 @@ def main() -> int:
         write_agentos_mainflow_stages(agentos)
         write_timing(agentos, "fork", hybrid_agentos=False)
         expect_failure(agentos=agentos, plain=plain, expected="missing required Agent launches")
+
+        write_timing(agentos, "fork", hybrid_agentos=True)
+        bad = (agentos / "rp_orch_timing").read_text(encoding="utf-8")
+        bad = bad.replace("role=plain;launcher=fork", "role=sentinel;launcher=fork", 1)
+        write_state_file(agentos, "rp_orch_timing", bad)
+        expect_failure(agentos=agentos, plain=plain, expected="fork support program is not recorded as plain process")
 
     print("test_compare_dual_platform_state: passed")
     return 0
