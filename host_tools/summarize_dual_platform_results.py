@@ -828,6 +828,178 @@ def write_load_profile_csv(meta: dict[str, object], out_path: Path) -> None:
             )
 
 
+def experiment_design_rows(meta: dict[str, object]) -> list[dict[str, str]]:
+    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
+    reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
+    stage_rows = meta.get("stage_rows", []) if isinstance(meta.get("stage_rows"), list) else []
+    runner_pairs = as_number(state.get("runner_tick_pairs"))
+    if runner_pairs <= 0:
+        raw_runner = state.get("runner_tick_comparison", [])
+        runner_pairs = float(len(raw_runner)) if isinstance(raw_runner, list) else 0.0
+    scenario_rows = state.get("scenario_evidence", [])
+    scenario_count = len(scenario_rows) if isinstance(scenario_rows, list) else 0
+    cost_rows = state.get("cost_replacements", [])
+    cost_count = as_number(state.get("cost_replacement_count"))
+    if cost_count <= 0:
+        cost_count = float(len(cost_rows)) if isinstance(cost_rows, list) else 0.0
+
+    return [
+        {
+            "scenario": "科研主流程双目标对照",
+            "workload": f"同一批 {fmt_number(as_number(state.get('embedded_action_records')))} 个预置 action 请求进入两个 QEMU 目标。",
+            "plain_path": "普通 uCore 上的用户态科研平台流程。",
+            "agentos_path": "AgentOS-uCore 上的 Agent 化科研平台流程，并额外输出内核机制事实。",
+            "parameter": "请求批次、RUN、输入状态文件保持一致。",
+            "metric": f"成功记录核对 {fmt_number(as_number(state.get('checked_success_records')))} 条；AgentOS 额外状态文件 {fmt_number(as_number(state.get('agentos_extra_files')))} 个。",
+            "source": "state-compare-summary.json, summary.csv",
+            "artifact": "report.md",
+        },
+        {
+            "scenario": "Reader 页面与 API 对照",
+            "workload": "提取两个目标的 rp_* 状态文件后交给 Host Reader 渲染页面和 API JSON。",
+            "plain_path": "普通目标状态文件生成 Reader 页面。",
+            "agentos_path": "增强目标状态文件生成同一套页面，并增加 AgentOS 证据 API。",
+            "parameter": f"plain_pages={fmt_number(as_number(reader.get('plain_pages')))}; agentos_pages={fmt_number(as_number(reader.get('agentos_pages')))}",
+            "metric": f"AgentOS 额外 API JSON {fmt_number(as_number(reader.get('agentos_extra_api_json')))} 个。",
+            "source": "reader-compare-summary.json, summary.csv",
+            "artifact": "monitor.html",
+        },
+        {
+            "scenario": "AgentOS 机制场景覆盖",
+            "workload": "同一科研流程中检查 Context、文件对象、事件、audit、provenance、权限、timeline 等机制证据。",
+            "plain_path": "普通目标保留用户态状态和成本记录。",
+            "agentos_path": "增强目标必须在主流程状态中写出内核机制参与事实。",
+            "parameter": f"机制场景 {fmt_number(float(scenario_count))} 类。",
+            "metric": f"内核证据检查项 {fmt_number(as_number(state.get('agentos_evidence_checks')))} 项。",
+            "source": "state-compare-summary.json:scenario_evidence",
+            "artifact": "charts/scenario-evidence.svg",
+        },
+        {
+            "scenario": "用户态成本替代",
+            "workload": "把普通平台中扫描、轮询、约定字段、锁文件、路径重建等成本项与 AgentOS 机制逐项配对。",
+            "plain_path": "普通目标记录用户态成本项。",
+            "agentos_path": "增强目标记录 Context Path、metadata 索引、事件队列、capability、timeline、audit 等替代机制。",
+            "parameter": f"成本替代项 {fmt_number(cost_count)} 项。",
+            "metric": f"普通目标保留成本项 {fmt_number(as_number(state.get('preserved_plain_costs')))} 项。",
+            "source": "state-compare-summary.json:cost_replacements",
+            "artifact": "charts/cost-replacement.svg",
+        },
+        {
+            "scenario": "Runner tick 成组对照",
+            "workload": "对关键 runner 场景分别记录普通路径和 AgentOS 路径的 tick。",
+            "plain_path": "用户态路径完成相同 runner 场景。",
+            "agentos_path": "AgentOS 路径使用内核 Context、索引、事件和审计能力完成对应场景。",
+            "parameter": f"runner 对照组 {fmt_number(runner_pairs)} 组。",
+            "metric": "plain_ticks、agentos_ticks、saved_ticks、speedup_x。",
+            "source": "runner-sweep.csv",
+            "artifact": "charts/runner-speedup.svg",
+        },
+        {
+            "scenario": "运行阶段耗时观测",
+            "workload": "记录结构检查、双目标运行、Reader 渲染、结果图表生成等阶段耗时。",
+            "plain_path": "普通目标 QEMU 运行与状态提取。",
+            "agentos_path": "增强目标 QEMU 运行、状态提取和额外 AgentOS 证据整理。",
+            "parameter": f"阶段记录 {fmt_number(float(len(stage_rows)))} 条。",
+            "metric": "duration_seconds、status、QEMU 无输出提示次数。",
+            "source": "stage-timings.csv, rp_host_run_result",
+            "artifact": "charts/stage-monitor-area.svg",
+        },
+        {
+            "scenario": "负载参数组",
+            "workload": "把请求、状态文件、API、Agent 启动、机制场景、成本替代和 runner 对照组放在同一组结果中观察。",
+            "plain_path": "普通目标提供基线规模。",
+            "agentos_path": "增强目标保持基线规模，同时增加 AgentOS 机制事实。",
+            "parameter": "load-profile.csv 中每一行都是一个参数项。",
+            "metric": "plain_value、agentos_value、delta。",
+            "source": "load-profile.csv",
+            "artifact": "charts/load-profile.svg",
+        },
+    ]
+
+
+def write_experiment_design_csv(meta: dict[str, object], out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["scenario", "workload", "plain_path", "agentos_path", "parameter", "metric", "source", "artifact"])
+        for row in experiment_design_rows(meta):
+            writer.writerow(
+                [
+                    row["scenario"],
+                    row["workload"],
+                    row["plain_path"],
+                    row["agentos_path"],
+                    row["parameter"],
+                    row["metric"],
+                    row["source"],
+                    row["artifact"],
+                ]
+            )
+
+
+def write_experiment_design_page(meta: dict[str, object], out_path: Path) -> None:
+    rows_html = []
+    for row in experiment_design_rows(meta):
+        artifact = row["artifact"]
+        artifact_html = f'<a href="{escape(artifact)}">{escape(artifact)}</a>'
+        rows_html.append(
+            "<tr><td>{scenario}</td><td>{workload}</td><td>{plain_path}</td><td>{agentos_path}</td><td>{parameter}</td><td>{metric}</td><td>{source}</td><td>{artifact}</td></tr>".format(
+                scenario=escape(row["scenario"]),
+                workload=escape(row["workload"]),
+                plain_path=escape(row["plain_path"]),
+                agentos_path=escape(row["agentos_path"]),
+                parameter=escape(row["parameter"]),
+                metric=escape(row["metric"]),
+                source=escape(row["source"]),
+                artifact=artifact_html,
+            )
+        )
+    html = f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentOS 实验场景说明</title>
+  <style>
+    :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; }}
+    body {{ margin:0; font-family:Arial,"Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); }}
+    header {{ padding:30px 42px 20px; background:#fff; border-bottom:1px solid var(--line); }}
+    main {{ max-width:1240px; margin:0 auto; padding:24px 42px 42px; }}
+    h1 {{ margin:0 0 10px; font-size:28px; }}
+    p {{ line-height:1.75; color:var(--muted); }}
+    .links {{ display:flex; flex-wrap:wrap; gap:10px; margin:16px 0; }}
+    .links a {{ color:#075985; text-decoration:none; background:#fff; border:1px solid var(--line); padding:8px 12px; }}
+    table {{ width:100%; border-collapse:collapse; background:#fff; font-size:14px; }}
+    th,td {{ border:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }}
+    th {{ background:#eef3f8; }}
+    a {{ color:#075985; text-decoration:none; }}
+    @media (max-width:900px) {{ main,header {{ padding-left:18px; padding-right:18px; }} table {{ font-size:13px; }} }}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AgentOS 实验场景说明</h1>
+    <p>本页说明本次双目标测试中每类场景的负载、对照路径、参数、指标和数据来源。它用于解释图表数字从何而来，以及为什么这些测试能支撑 AgentOS 主流程展示。</p>
+  </header>
+  <main>
+    <div class="links">
+      <a href="experiment-design.csv">下载 CSV</a>
+      <a href="demo-guide.html">演示导览页</a>
+      <a href="demo-checklist.html">演示检查表</a>
+      <a href="index.html">图表索引页</a>
+    </div>
+    <table>
+      <thead><tr><th>场景</th><th>负载设计</th><th>普通目标路径</th><th>AgentOS 目标路径</th><th>参数</th><th>指标</th><th>数据来源</th><th>关联产物</th></tr></thead>
+      <tbody>{"".join(rows_html)}</tbody>
+    </table>
+  </main>
+</body>
+</html>
+"""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(html, encoding="utf-8")
+
+
 def runner_speedup_svg(meta: dict[str, object], out_path: Path) -> None:
     rows = runner_tick_rows(meta)
     if not rows:
@@ -948,6 +1120,20 @@ def evidence_manifest_rows(charts: list[Path]) -> list[dict[str, str]]:
             "source": "summary.json, charts/*.svg",
             "proves": "两条命令和建议展示顺序已经整理为一个可打开页面",
             "demo_use": "录屏时从这里开始",
+        },
+        {
+            "artifact": "experiment-design.html",
+            "kind": "说明页面",
+            "source": "state-compare-summary.json, reader-compare-summary.json, runner-sweep.csv, stage-timings.csv",
+            "proves": "每类测试场景都有负载、对照路径、参数、指标和数据来源",
+            "demo_use": "解释测试为什么这样设计",
+        },
+        {
+            "artifact": "experiment-design.csv",
+            "kind": "数据表",
+            "source": "experiment_design_rows",
+            "proves": "实验场景说明可以被脚本复查和复制",
+            "demo_use": "答辩材料中的测试设计表",
         },
         {
             "artifact": "monitor.html",
@@ -1679,6 +1865,8 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
     lines.append("- `evidence-map.html`")
     lines.append("- `demo-checklist.csv`")
     lines.append("- `demo-checklist.html`")
+    lines.append("- `experiment-design.csv`")
+    lines.append("- `experiment-design.html`")
     lines.extend(
         [
             "",
@@ -1899,6 +2087,8 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="evidence-manifest.csv">下载证据索引表</a>
       <a href="demo-checklist.html">打开演示检查表</a>
       <a href="demo-checklist.csv">下载演示检查表</a>
+      <a href="experiment-design.html">打开实验场景说明</a>
+      <a href="experiment-design.csv">下载实验场景说明</a>
       <a href="chart-type-coverage.csv">下载图表类型覆盖表</a>
       <a href="charts/runtime-observation.svg">打开观测图</a>
       <a href="charts/scenario-evidence.svg">打开场景证据图</a>
@@ -2002,7 +2192,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>相关结果</h2>
-      <p><a href="demo-guide.html">演示导览页</a>、<a href="demo-checklist.html">演示检查表</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="load-profile.csv">负载参数组</a>、<a href="evidence-manifest.csv">证据索引表</a>、<a href="demo-checklist.csv">演示检查表 CSV</a>、<a href="chart-type-coverage.csv">图表类型覆盖表</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/load-profile.svg">负载参数图</a>、<a href="charts/runner-surface-composite.svg">组合图</a></p>
+      <p><a href="demo-guide.html">演示导览页</a>、<a href="demo-checklist.html">演示检查表</a>、<a href="experiment-design.html">实验场景说明</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="load-profile.csv">负载参数组</a>、<a href="evidence-manifest.csv">证据索引表</a>、<a href="demo-checklist.csv">演示检查表 CSV</a>、<a href="experiment-design.csv">实验场景说明 CSV</a>、<a href="chart-type-coverage.csv">图表类型覆盖表</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/load-profile.svg">负载参数图</a>、<a href="charts/runner-surface-composite.svg">组合图</a></p>
     </section>
   </main>
 </body>
@@ -2090,6 +2280,8 @@ def write_demo_guide_page(rows: list[MetricRow], meta: dict[str, object], charts
       <h2>关键数据</h2>
       <p>本次结果包含 {fmt_number(cost_count)} 项用户态成本替代记录、{fmt_number(runner_pairs)} 组 runner tick 对照、{fmt_number(as_number(state.get("checked_success_records")))} 条成功记录核对。图表可以回到 <a href="summary.csv">summary.csv</a>、<a href="runner-sweep.csv">runner-sweep.csv</a>、<a href="load-profile.csv">load-profile.csv</a>、<a href="evidence-manifest.csv">evidence-manifest.csv</a> 和 <a href="chart-type-coverage.csv">chart-type-coverage.csv</a>。</p>
       <div class="links">
+        <a href="experiment-design.html">实验场景说明</a>
+        <a href="experiment-design.csv">实验说明 CSV</a>
         <a href="demo-checklist.html">演示检查表</a>
         <a href="demo-checklist.csv">检查表 CSV</a>
         <a href="report.md">Markdown 报告</a>
@@ -2119,6 +2311,8 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
     write_runner_sweep_csv(meta, out_dir / "runner-sweep.csv")
     write_load_profile_csv(meta, out_dir / "load-profile.csv")
     write_chart_type_coverage_csv(out_dir / "chart-type-coverage.csv")
+    write_experiment_design_csv(meta, out_dir / "experiment-design.csv")
+    write_experiment_design_page(meta, out_dir / "experiment-design.html")
     charts = write_charts(rows, meta, out_dir / "charts")
     write_evidence_manifest_csv(charts, out_dir / "evidence-manifest.csv")
     write_evidence_map_page(charts, out_dir / "evidence-map.html")
@@ -2142,6 +2336,8 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
         "runner_sweep_csv": str(out_dir / "runner-sweep.csv"),
         "load_profile_csv": str(out_dir / "load-profile.csv"),
         "chart_type_coverage_csv": str(out_dir / "chart-type-coverage.csv"),
+        "experiment_design_csv": str(out_dir / "experiment-design.csv"),
+        "experiment_design": str(out_dir / "experiment-design.html"),
         "evidence_manifest_csv": str(out_dir / "evidence-manifest.csv"),
         "evidence_map": str(out_dir / "evidence-map.html"),
         "demo_checklist_csv": str(out_dir / "demo-checklist.csv"),

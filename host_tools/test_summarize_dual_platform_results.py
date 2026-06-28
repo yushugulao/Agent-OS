@@ -145,6 +145,8 @@ def main() -> int:
         assert str(result["runner_sweep_csv"]).endswith("runner-sweep.csv"), result
         assert str(result["load_profile_csv"]).endswith("load-profile.csv"), result
         assert str(result["chart_type_coverage_csv"]).endswith("chart-type-coverage.csv"), result
+        assert str(result["experiment_design_csv"]).endswith("experiment-design.csv"), result
+        assert str(result["experiment_design"]).endswith("experiment-design.html"), result
         assert str(result["evidence_manifest_csv"]).endswith("evidence-manifest.csv"), result
         assert str(result["evidence_map"]).endswith("evidence-map.html"), result
         assert str(result["demo_checklist_csv"]).endswith("demo-checklist.csv"), result
@@ -168,6 +170,8 @@ def main() -> int:
         assert "evidence-map.html" in report
         assert "demo-checklist.csv" in report
         assert "demo-checklist.html" in report
+        assert "experiment-design.csv" in report
+        assert "experiment-design.html" in report
         csv_text = (out_dir / "summary.csv").read_text(encoding="utf-8")
         assert "提取到的 rp_* 状态文件" in csv_text
         assert "QEMU 无输出提示次数" in csv_text
@@ -180,9 +184,17 @@ def main() -> int:
         assert "Agent 启动" in profile_csv
         evidence_csv = (out_dir / "evidence-manifest.csv").read_text(encoding="utf-8")
         assert "artifact,kind,source,proves,demo_use" in evidence_csv
+        assert "experiment-design.html" in evidence_csv
+        assert "experiment-design.csv" in evidence_csv
         assert "charts/runtime-observation.svg" in evidence_csv
         assert "runner-sweep.csv" in evidence_csv
         assert "load-profile.csv" in evidence_csv
+        experiment_csv = (out_dir / "experiment-design.csv").read_text(encoding="utf-8")
+        assert "scenario,workload,plain_path,agentos_path,parameter,metric,source,artifact" in experiment_csv
+        assert "科研主流程双目标对照" in experiment_csv
+        assert "Reader 页面与 API 对照" in experiment_csv
+        assert "Runner tick 成组对照" in experiment_csv
+        assert "运行阶段耗时观测" in experiment_csv
         checklist_csv = (out_dir / "demo-checklist.csv").read_text(encoding="utf-8")
         assert "item,status,evidence,action" in checklist_csv
         assert "双目标结果,通过" in checklist_csv
@@ -214,6 +226,8 @@ def main() -> int:
         assert "evidence-manifest.csv" in index_html
         assert "demo-checklist.html" in index_html
         assert "demo-checklist.csv" in index_html
+        assert "experiment-design.html" in index_html
+        assert "experiment-design.csv" in index_html
         assert "chart-type-coverage.csv" in index_html
         assert "charts/runner-cumulative-line.svg" in index_html
         assert "charts/runner-tick-box.svg" in index_html
@@ -240,6 +254,8 @@ def main() -> int:
         assert "evidence-manifest.csv" in monitor_html
         assert "demo-checklist.html" in monitor_html
         assert "demo-checklist.csv" in monitor_html
+        assert "experiment-design.html" in monitor_html
+        assert "experiment-design.csv" in monitor_html
         assert "chart-type-coverage.csv" in monitor_html
         assert "charts/runner-surface-composite.svg" in monitor_html
         for name in [
@@ -273,7 +289,15 @@ def main() -> int:
         assert "evidence-manifest.csv" in demo_html
         assert "demo-checklist.html" in demo_html
         assert "demo-checklist.csv" in demo_html
+        assert "experiment-design.html" in demo_html
+        assert "experiment-design.csv" in demo_html
         assert "charts/scenario-evidence.svg" in demo_html
+        experiment_html = (out_dir / "experiment-design.html").read_text(encoding="utf-8")
+        assert "AgentOS 实验场景说明" in experiment_html
+        assert "负载设计" in experiment_html
+        assert "普通目标路径" in experiment_html
+        assert "AgentOS 目标路径" in experiment_html
+        assert "charts/runner-speedup.svg" in experiment_html
         evidence_html = (out_dir / "evidence-map.html").read_text(encoding="utf-8")
         assert "AgentOS 证据索引" in evidence_html
         assert "charts/runtime-observation.svg" in evidence_html
