@@ -61,11 +61,13 @@ def compare_reader(plain_summary_path: Path, agentos_summary_path: Path) -> dict
     agentos_state_files = as_int(agentos, "state_files")
     if agentos_state_files < plain_state_files:
         raise ValueError(f"AgentOS reader has fewer state files: {agentos_state_files} < {plain_state_files}")
+    agentos_extra_state_files = agentos_state_files - plain_state_files
 
     plain_api_json = as_int(plain, "api_json_files")
     agentos_api_json = as_int(agentos, "api_json_files")
     if agentos_api_json < plain_api_json:
         raise ValueError(f"AgentOS reader has fewer API JSON files: {agentos_api_json} < {plain_api_json}")
+    agentos_extra_api_json = agentos_api_json - plain_api_json
 
     plain_pages_set = html_files(plain_root)
     agentos_pages_set = html_files(agentos_root)
@@ -90,8 +92,10 @@ def compare_reader(plain_summary_path: Path, agentos_summary_path: Path) -> dict
         "agentos_pages": agentos_pages,
         "plain_state_files": plain_state_files,
         "agentos_state_files": agentos_state_files,
+        "agentos_extra_state_files": agentos_extra_state_files,
         "plain_api_json": plain_api_json,
         "agentos_api_json": agentos_api_json,
+        "agentos_extra_api_json": agentos_extra_api_json,
         "checked_pages": len(plain_pages_set),
         "checked_api_json": len(plain_api_set),
         "status": "ready",
@@ -109,7 +113,7 @@ def main() -> int:
     if args.json_out is not None:
         args.json_out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(
-        "dual_platform_reader_compare: plain_pages={plain_pages} agentos_pages={agentos_pages} plain_state_files={plain_state_files} agentos_state_files={agentos_state_files} plain_api_json={plain_api_json} agentos_api_json={agentos_api_json} checked_pages={checked_pages} checked_api_json={checked_api_json} status={status}".format(
+        "dual_platform_reader_compare: plain_pages={plain_pages} agentos_pages={agentos_pages} plain_state_files={plain_state_files} agentos_state_files={agentos_state_files} agentos_extra_state_files={agentos_extra_state_files} plain_api_json={plain_api_json} agentos_api_json={agentos_api_json} agentos_extra_api_json={agentos_extra_api_json} checked_pages={checked_pages} checked_api_json={checked_api_json} status={status}".format(
             **summary
         )
     )

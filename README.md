@@ -248,9 +248,9 @@ Host Reader 只读取和渲染状态文件，不修改 uCore 内核。
 [dual-platform] checking target structure
 [dual-platform] running seeded dual-target research platform
 seeded_action_state: plain start chapter=platform_seeded init=rp_seed_orch action_count=44 log=/tmp/agentos-dual-platform/seeded-action-state/plain/ucore-run.log
-seeded_action_state: plain done passed=1 extracted_state_files=257 status=ready
+seeded_action_state: plain done passed=1 extracted_state_files=258 status=ready
 seeded_action_state: agentos start chapter=platform_agentos init=rp_agentos_orch action_count=44 log=/tmp/agentos-dual-platform/seeded-action-state/agentos/ucore-run.log
-seeded_action_state: agentos done passed=1 extracted_state_files=270 status=ready
+seeded_action_state: agentos done passed=1 extracted_state_files=271 status=ready
 seeded_action_state: action=/actions/research/rerun action_count=44 host_routes=95 seeded_routes=21 seeded_kinds=21 plain=ready agentos=ready status=ready
 [dual-platform] plain uCore research platform log: /tmp/agentos-dual-platform/seeded-action-state/plain/ucore-run.log
 rp_orch: passed
@@ -261,18 +261,18 @@ rp_agentos_orch: passed
 rp_agentos_orch: kernel_agent=1 workflow=rp_orch status=ready
 rp_orch: programs_ok=70 programs_total=70
 rp_backend: cases=8 executable=8 agentos=mainflow_bound exports=1 status=ready
-[dual-platform] plain extracted state files: 257
-[dual-platform] AgentOS extracted state files: 270
+[dual-platform] plain extracted state files: 258
+[dual-platform] AgentOS extracted state files: 271
 host_platform_alignment: host_modules=154 tracked_host_modules=154 plain_sources=73 agentos_sources=74 runtime_state_checked=1 groups_ok=13 groups_total=13 untracked_host_modules=0 status=ready
 host_test_alignment: host_tests=142 themes_ok=7 themes_total=7 unclassified_tests=0 runtime_state_checked=1 status=ready
 host_action_kind_alignment: action_routes=95 action_kinds=95 generic_routes=0 plain_missing=0 agentos_missing=0 plain_handler_missing=0 agentos_handler_missing=0 status=ready
 host_surface_alignment: api_routes=214 action_routes=95 download_refs=76 runtime_state_checked=1 status=ready
-dual_platform_state_compare: plain_files=257 agentos_files=270 common_files=257 agentos_extra_files=13 checked_success_records=1244 preserved_plain_costs=7 embedded_action_records=44 run_result_match=1 agentos_evidence_checks=29 agentos_mainflow_stages=11 status=ready
-plain_ucore_reader: pages=40 api_json=266 state_files=259 status=ready
-plain_ucore_reader: pages=40 api_json=279 state_files=272 status=ready
-reader_output_check: pages=40 api_json=266 state_files=259 required_pages=6 spec_pages=40 agentos_compare_markers=0 status=ready
-reader_output_check: pages=40 api_json=279 state_files=272 required_pages=6 spec_pages=40 agentos_compare_markers=13 status=ready
-dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=259 agentos_state_files=272 plain_api_json=266 agentos_api_json=279 checked_pages=40 checked_api_json=266 status=ready
+dual_platform_state_compare: plain_files=258 agentos_files=271 common_files=258 agentos_extra_files=13 checked_success_records=1244 preserved_plain_costs=7 embedded_action_records=44 run_result_match=1 agentos_evidence_checks=32 agentos_mainflow_stages=11 plain_timing_records=70 plain_agent_launches=0 plain_fork_launches=70 agentos_timing_records=70 agentos_agent_launches=9 agentos_fork_launches=61 status=ready
+plain_ucore_reader: pages=40 api_json=267 state_files=260 status=ready
+plain_ucore_reader: pages=40 api_json=280 state_files=273 status=ready
+reader_output_check: pages=40 api_json=267 state_files=260 required_pages=6 spec_pages=40 agentos_compare_markers=0 status=ready
+reader_output_check: pages=40 api_json=280 state_files=273 required_pages=6 spec_pages=40 agentos_compare_markers=13 status=ready
+dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=260 agentos_state_files=273 agentos_extra_state_files=13 plain_api_json=267 agentos_api_json=280 agentos_extra_api_json=13 checked_pages=40 checked_api_json=267 status=ready
 ```
 
 快速结构检查应包含：

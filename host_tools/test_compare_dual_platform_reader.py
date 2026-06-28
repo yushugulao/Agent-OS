@@ -61,6 +61,8 @@ def main() -> int:
         summary = compare.compare_reader(plain, agentos)
         assert summary["plain_pages"] == 41, summary
         assert summary["agentos_state_files"] == 268, summary
+        assert summary["agentos_extra_state_files"] == 12, summary
+        assert summary["agentos_extra_api_json"] == 12, summary
         assert summary["checked_pages"] == 2, summary
         assert summary["checked_api_json"] == 2, summary
 
