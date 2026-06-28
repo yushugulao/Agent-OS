@@ -82,6 +82,7 @@ def main() -> int:
 
         result = summary.summarize(work_dir, out_dir)
         assert result["status"] == "ready", result
+        assert str(result["monitor"]).endswith("monitor.html"), result
         report = (out_dir / "report.md").read_text(encoding="utf-8")
         assert "普通 uCore 提取状态文件 258 个" in report
         assert "AgentOS-uCore 提取 271 个" in report
@@ -95,15 +96,22 @@ def main() -> int:
         index_html = (out_dir / "index.html").read_text(encoding="utf-8")
         assert "AgentOS 双目标测试结果" in index_html
         assert "charts/dual-target-state-reader.svg" in index_html
+        assert "monitor.html" in index_html
+        assert "charts/runtime-observation.svg" in index_html
         assert "make demo-reader" in index_html
         assert "阶段耗时明细" in index_html
         assert "预置请求双目标运行" in index_html
         assert "自动判读" in index_html
+        monitor_html = (out_dir / "monitor.html").read_text(encoding="utf-8")
+        assert "AgentOS 运行观测面板" in monitor_html
+        assert "一张图看本次运行" in monitor_html
+        assert "make demo-reader" in monitor_html
         for name in [
             "dual-target-state-reader.svg",
             "launch-model.svg",
             "agentos-evidence.svg",
             "stage-timings.svg",
+            "runtime-observation.svg",
         ]:
             svg = (out_dir / "charts" / name).read_text(encoding="utf-8")
             assert "<svg" in svg

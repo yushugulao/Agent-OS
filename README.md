@@ -72,7 +72,7 @@ make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
 运行结束后会生成两类材料：
 
 - 原始运行材料：默认放在 `/tmp/agentos-dual-platform/`，包括两个 QEMU 日志、提取出的 `rp_*` 状态文件、Reader 渲染页面和阶段耗时 `stage-timings.csv`。
-- 汇总材料：默认放在 `results/latest/`，包括 `index.html`、`summary.csv`、`report.md` 和 `charts/*.svg`。该目录被 `.gitignore` 忽略，适合保留本机最新运行结果。
+- 汇总材料：默认放在 `results/latest/`，包括 `index.html`、`monitor.html`、`summary.csv`、`report.md` 和 `charts/*.svg`。该目录被 `.gitignore` 忽略，适合保留本机最新运行结果。
 
 如果运行长时间没有输出，优先查看 `/tmp/agentos-dual-platform/stage-timings.csv`、`seeded-action-state/plain/ucore-run.log` 和 `seeded-action-state/agentos/ucore-run.log`。日志中会记录 QEMU 无输出提示次数、最后输出片段、是否看到通过标记、是否超时，便于区分构建慢、QEMU 没启动、用户程序卡住和程序已经报错但日志未被及时看到。
 
@@ -83,7 +83,7 @@ make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
 make demo-reader
 ```
 
-第二条命令会启动本地页面服务，浏览器打开 `http://127.0.0.1:8767/` 即可查看 AgentOS 目标的运行详情、AgentOS Compare 页面、LLM Relay 页面、artifact、review、delivery 和 API JSON。
+第二条命令会启动本地页面服务，浏览器打开 `http://127.0.0.1:8767/` 即可查看 AgentOS 目标的运行详情、AgentOS Compare 页面、LLM Relay 页面、artifact、review、delivery 和 API JSON。需要先快速说明测试结果时，可以打开 `results/latest/monitor.html`，它会把运行阶段、QEMU 状态、AgentOS 额外证据和 Reader 输出放在同一个页面中。
 
 完整验证入口：
 

@@ -211,18 +211,24 @@ dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=
 ```text
 results/latest/summary.csv
 results/latest/index.html
+results/latest/monitor.html
 results/latest/report.md
 results/latest/charts/dual-target-state-reader.svg
+results/latest/charts/runtime-observation.svg
 results/latest/charts/launch-model.svg
 results/latest/charts/agentos-evidence.svg
 results/latest/charts/stage-timings.svg
 ```
 
-`index.html` 适合录屏时快速展示图表摘要；`summary.csv` 适合复制到答辩材料或进一步处理；`report.md` 适合直接阅读；`charts/*.svg` 是从本次运行数据生成的图表。文档中保留一组示例图，数值来自一次完整运行样例，实际运行时以 `results/latest/` 下的新文件为准。
+`monitor.html` 适合录屏时先展示本次运行是否健康；`index.html` 适合集中查看图表摘要；`summary.csv` 适合复制到答辩材料或进一步处理；`report.md` 适合直接阅读；`charts/*.svg` 是从本次运行数据生成的图表。文档中保留一组示例图，数值来自一次完整运行样例，实际运行时以 `results/latest/` 下的新文件为准。
 
 ![双目标状态与页面输出](assets/verification-charts/dual-target-state-reader.svg)
 
 这张图使用分组柱状图展示状态文件、HTML 页面和 API JSON 数量。plain target 和 AgentOS target 使用同一批 seeded 请求；AgentOS target 页面数量与 plain target 一致，同时多出内核 Agent 相关状态文件和 API JSON。这个结果比单独列日志更直观：增强目标没有缩小科研平台展示面，而是在同一展示面上增加内核事实。
+
+![双目标运行观测面板](assets/verification-charts/runtime-observation.svg)
+
+这张图把阶段执行、状态产物、内核证据、Agent 启动方式和 QEMU 健康状态放在同一个画面里。录屏时可以先用它说明本次双目标测试不是只看 `passed` 标记：测试脚本记录了每个阶段的耗时，核对了普通目标和增强目标的共有结果，也检查了增强目标额外输出的 Context、文件 metadata、事件、timeline、audit 和 provenance 证据。如果图中的超时、无输出提示或阶段状态异常，后续说明应回到对应日志，而不是继续引用本次数据。
 
 ![科研流程启动方式组成](assets/verification-charts/launch-model.svg)
 
@@ -251,6 +257,8 @@ make demo-reader
 ```
 
 这个入口会读取 `/tmp/agentos-dual-platform/agentos-state`，检查 `rp_agentos_mainflow` 是否存在，并启动 `http://127.0.0.1:8767/`。如果状态目录不存在，脚本会明确提示先运行 `make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-`；如果 AgentOS 主流程状态缺失，脚本会提示重新运行双目标验证。这样录屏时只需要两条命令：第一条生成运行结果，第二条打开可交互页面。
+
+`results/latest/monitor.html` 是另一个录屏友好的入口。它不展示完整科研平台页面，而是先给出运行结果、状态产物、内核证据、启动方式和 QEMU 健康状态，适合在视频开头快速说明本次测试数据是否可信。随后再打开 Reader 页面展示每个 Agent、每个 artifact、LLM Relay 和 AgentOS Compare 的细节。
 
 快速结构检查不替代 QEMU 运行。它会用 `origin/main` 对照根目录 `os/` 和 `bootloader/`，并检查根目录内核没有混入 AgentOS syscall、Agent Context、内核文件 metadata、Agent 事件队列等符号，同时确认增强内核目标、科研平台入口、同名科研平台程序覆盖关系、源码同步关系、backend 成本项保留关系和测试脚本仍然存在。它还会检查 AgentOS 内核源码中没有 `RUN-042`、`lab-gene-x`、固定阶段 selector、固定失败原因等科研演示常量，保证科研平台仍是用户态负载，不是内核默认业务；旧演示工具 id 只允许出现在兼容性和权限测试里，平台主流程必须使用 `action_commit`、`artifact_update` 等通用工具。它还会检查 Makefile 和脚本入口关系：`make full-verify` 必须调用完整验证脚本，完整验证脚本必须串起结构检查、Host Reader 测试、action runner 测试、文件系统镜像提取测试、LLM relay 测试、seeded 双目标 QEMU 和 AgentOS 内核专项测试；`make dual-platform-run` 必须调用双平台脚本；plain target 必须以 `rp_orch` 启动，AgentOS target 必须以 `rp_agentos_orch` 启动。完整功能仍以 `make dual-platform-run` 和 AgentOS 专项测试为准。
 

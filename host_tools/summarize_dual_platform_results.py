@@ -420,6 +420,124 @@ def stage_timing_svg(stage_rows: list[dict[str, str]], out_path: Path) -> None:
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def runtime_observation_svg(rows: list[MetricRow], meta: dict[str, object], out_path: Path) -> None:
+    by_metric = {row.metric: row for row in rows}
+    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
+    reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
+    plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
+    agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
+    stage_rows = meta.get("stage_rows", [])
+    stages = [row for row in stage_rows if isinstance(row, dict) and row.get("stage")] if isinstance(stage_rows, list) else []
+    if not stages:
+        stages = [{"stage": "未记录阶段耗时", "duration_seconds": "0", "status": "unknown"}]
+    stages = stages[:8]
+
+    width, height = 1120, 650
+    lines = svg_header(width, height)
+    lines.append('<text x="34" y="34" class="title">双目标运行观测面板</text>')
+    lines.append('<text x="34" y="58" class="subtitle">把运行阶段、产物数量、AgentOS 内核证据和 QEMU 健康状态放在同一张图中，便于录屏时快速说明本次测试是否可信。</text>')
+
+    stage_x, stage_y, stage_w, stage_h = 42, 92, 1036, 76
+    lines.append(f'<rect x="{stage_x}" y="{stage_y}" width="{stage_w}" height="{stage_h}" fill="#f8fafc" stroke="{PALETTE["grid"]}"/>')
+    lines.append(f'<text x="{stage_x + 16}" y="{stage_y + 25}" class="label">运行阶段</text>')
+    seg_w = (stage_w - 150) / max(1, len(stages))
+    x0 = stage_x + 120
+    for index, row in enumerate(stages):
+        x = x0 + index * seg_w
+        status = str(row.get("status", ""))
+        color = PALETTE["shared"] if status == "ready" else PALETTE["extra"]
+        label = stage_label(row.get("stage", ""))
+        duration = fmt_number(as_number(row.get("duration_seconds")))
+        lines.append(f'<rect x="{x:.1f}" y="{stage_y + 16}" width="{max(24, seg_w - 12):.1f}" height="22" fill="{color}" rx="2"/>')
+        lines.append(f'<text x="{x + max(24, seg_w - 12) / 2:.1f}" y="{stage_y + 32}" text-anchor="middle" class="label" fill="#fff">{escape(status or "unknown")}</text>')
+        short_label = label[:8] if len(label) > 8 else label
+        lines.append(f'<text x="{x + max(24, seg_w - 12) / 2:.1f}" y="{stage_y + 54}" text-anchor="middle" class="axis">{escape(short_label)}</text>')
+        lines.append(f'<text x="{x + max(24, seg_w - 12) / 2:.1f}" y="{stage_y + 72}" text-anchor="middle" class="axis">{escape(duration)}s</text>')
+
+    def card(x: int, y: int, title: str, items: list[tuple[str, str]], accent: str) -> None:
+        lines.append(f'<rect x="{x}" y="{y}" width="330" height="128" fill="#ffffff" stroke="{PALETTE["grid"]}"/>')
+        lines.append(f'<rect x="{x}" y="{y}" width="6" height="128" fill="{accent}"/>')
+        lines.append(f'<text x="{x + 18}" y="{y + 28}" class="value">{escape(title)}</text>')
+        for index, (label, value) in enumerate(items[:4]):
+            yy = y + 52 + index * 20
+            lines.append(f'<text x="{x + 18}" y="{yy}" class="axis">{escape(label)}</text>')
+            lines.append(f'<text x="{x + 252}" y="{yy}" text-anchor="end" class="value">{escape(value)}</text>')
+
+    card(
+        42,
+        202,
+        "运行结果",
+        [
+            ("结果可对照", "是" if as_number(state.get("run_result_match")) == 1 else "否"),
+            ("成功记录核对", fmt_number(as_number(state.get("checked_success_records")))),
+            ("预置请求", fmt_number(as_number(state.get("embedded_action_records")))),
+        ],
+        PALETTE["shared"],
+    )
+    card(
+        395,
+        202,
+        "状态与页面",
+        [
+            ("普通状态文件", fmt_number(as_number(state.get("plain_files")))),
+            ("AgentOS状态文件", fmt_number(as_number(state.get("agentos_files")))),
+            ("Reader页面", fmt_number(as_number(reader.get("agentos_pages")))),
+            ("额外API JSON", fmt_number(as_number(reader.get("agentos_extra_api_json")))),
+        ],
+        PALETTE["plain"],
+    )
+    card(
+        748,
+        202,
+        "内核证据",
+        [
+            ("检查项", fmt_number(as_number(by_metric["内核证据检查项"].agentos))),
+            ("主流程阶段", fmt_number(as_number(by_metric["主流程内核阶段事实"].agentos))),
+            ("主流程事实", fmt_number(as_number(state.get("agentos_mainflow_facts")))),
+        ],
+        PALETTE["agentos"],
+    )
+    card(
+        42,
+        366,
+        "启动方式",
+        [
+            ("普通目标Agent启动", fmt_number(as_number(by_metric["Agent 启动记录"].plain))),
+            ("增强目标Agent启动", fmt_number(as_number(by_metric["Agent 启动记录"].agentos))),
+            ("增强目标普通fork", fmt_number(as_number(by_metric["普通 fork 启动记录"].agentos))),
+        ],
+        PALETTE["agentos"],
+    )
+    card(
+        395,
+        366,
+        "QEMU健康",
+        [
+            ("普通目标超时", str(plain_result.get("qemu_timed_out", "0"))),
+            ("增强目标超时", str(agentos_result.get("qemu_timed_out", "0"))),
+            ("普通无输出提示", str(plain_result.get("qemu_idle_notices", "0"))),
+            ("增强无输出提示", str(agentos_result.get("qemu_idle_notices", "0"))),
+        ],
+        PALETTE["neutral"],
+    )
+    card(
+        748,
+        366,
+        "录屏读图顺序",
+        [
+            ("第一步", "看运行结果"),
+            ("第二步", "看内核证据"),
+            ("第三步", "打开Reader页面"),
+            ("第四步", "查看日志定位异常"),
+        ],
+        PALETTE["extra"],
+    )
+    lines.append('<text x="42" y="558" class="subtitle">读图方法：先确认运行结果和 QEMU 健康，再看 AgentOS 相比普通 uCore 多出的状态、API、Agent 启动与内核事实。若任一项异常，应回到 stage-timings.csv 和 ucore-run.log 定位。</text>')
+    lines.append("</svg>")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Path) -> list[Path]:
     by_metric = {row.metric: row for row in rows}
     charts_dir.mkdir(parents=True, exist_ok=True)
@@ -483,6 +601,10 @@ def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Pat
     timing_chart = charts_dir / "stage-timings.svg"
     stage_timing_svg(meta.get("stage_rows", []), timing_chart)  # type: ignore[arg-type]
     paths.append(timing_chart)
+
+    observation_chart = charts_dir / "runtime-observation.svg"
+    runtime_observation_svg(rows, meta, observation_chart)
+    paths.append(observation_chart)
 
     return paths
 
@@ -551,6 +673,7 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
         "launch-model.svg": "科研流程启动方式组成",
         "agentos-evidence.svg": "AgentOS 额外机制证据",
         "stage-timings.svg": "双目标运行阶段耗时",
+        "runtime-observation.svg": "双目标运行观测面板",
     }
     for chart in charts:
         rel = chart.relative_to(out_path.parent).as_posix()
@@ -634,8 +757,10 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
   </header>
   <main>
     <div class="links">
+      <a href="monitor.html">打开运行观测面板</a>
       <a href="report.md">查看 Markdown 报告</a>
       <a href="summary.csv">下载 CSV 明细</a>
+      <a href="charts/runtime-observation.svg">打开观测图</a>
       <a href="charts/dual-target-state-reader.svg">打开状态图</a>
       <a href="charts/stage-timings.svg">打开阶段耗时图</a>
     </div>
@@ -666,6 +791,81 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
     out_path.write_text(html, encoding="utf-8")
 
 
+def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: list[Path], out_path: Path) -> None:
+    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
+    reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
+    plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
+    agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
+    observation = next((chart for chart in charts if chart.name == "runtime-observation.svg"), None)
+    observation_rel = observation.relative_to(out_path.parent).as_posix() if observation is not None else ""
+    eval_rows = "".join(
+        f"<tr><td>{escape(status)}</td><td>{escape(text)}</td></tr>" for status, text in evaluation_items(meta)
+    )
+    html = f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentOS 运行观测面板</title>
+  <style>
+    :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; --accent:#f58518; }}
+    * {{ box-sizing:border-box; }}
+    body {{ margin:0; font-family:Arial,"Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); }}
+    header {{ padding:30px 42px 20px; background:#fff; border-bottom:1px solid var(--line); }}
+    h1 {{ margin:0 0 10px; font-size:28px; }}
+    p {{ line-height:1.7; }}
+    main {{ max-width:1180px; margin:0 auto; padding:24px 42px 42px; }}
+    .grid {{ display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }}
+    .card {{ background:var(--panel); border:1px solid var(--line); padding:14px; min-height:92px; }}
+    .card strong {{ display:block; font-size:23px; margin-bottom:6px; }}
+    .card span {{ color:var(--muted); font-size:13px; }}
+    .panel {{ background:#fff; border:1px solid var(--line); padding:18px; margin-top:18px; }}
+    .panel img {{ display:block; width:100%; height:auto; }}
+    table {{ width:100%; border-collapse:collapse; background:#fff; margin-top:12px; }}
+    th,td {{ border:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }}
+    th {{ background:#eef3f8; }}
+    a {{ color:#075985; text-decoration:none; }}
+    code {{ background:#eef3f8; padding:2px 5px; }}
+    @media (max-width:860px) {{ .grid {{ grid-template-columns:1fr 1fr; }} main,header {{ padding-left:18px; padding-right:18px; }} }}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AgentOS 运行观测面板</h1>
+    <p>这个页面面向演示和复查：它不替代完整 Reader，而是先把本次双目标运行是否健康、增强目标是否真的产生内核证据、页面/API 是否保留完整展示面讲清楚。</p>
+  </header>
+  <main>
+    <div class="grid">
+      <div class="card"><strong>{fmt_number(as_number(state.get("checked_success_records")))}</strong><span>成功记录核对数</span></div>
+      <div class="card"><strong>{fmt_number(as_number(state.get("agentos_extra_files")))}</strong><span>AgentOS 额外状态文件</span></div>
+      <div class="card"><strong>{fmt_number(as_number(state.get("agentos_evidence_checks")))}</strong><span>内核证据检查项</span></div>
+      <div class="card"><strong>{fmt_number(as_number(reader.get("agentos_extra_api_json")))}</strong><span>AgentOS 额外 API JSON</span></div>
+    </div>
+    <section class="panel">
+      <h2>一张图看本次运行</h2>
+      <img src="{escape(observation_rel)}" alt="双目标运行观测面板">
+    </section>
+    <section class="panel">
+      <h2>录屏建议</h2>
+      <p>先运行 <code>make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-</code> 生成结果，再运行 <code>make demo-reader</code> 打开完整交互页面。录屏中可以先展示本页的运行观测图，再切到 Reader 的 AgentOS Compare、LLM Relay、运行详情和证据页面。</p>
+      <p>如果双目标运行异常，本页会优先提示状态文件、QEMU 超时、无输出提示和阶段耗时。普通目标耗时 {escape(str(plain_result.get("qemu_elapsed_seconds", "0")))} 秒，AgentOS 目标耗时 {escape(str(agentos_result.get("qemu_elapsed_seconds", "0")))} 秒。</p>
+    </section>
+    <section class="panel">
+      <h2>自动判读</h2>
+      <table><thead><tr><th>状态</th><th>说明</th></tr></thead><tbody>{eval_rows}</tbody></table>
+    </section>
+    <section class="panel">
+      <h2>相关结果</h2>
+      <p><a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="charts/runtime-observation.svg">运行观测图</a></p>
+    </section>
+  </main>
+</body>
+</html>
+"""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(html, encoding="utf-8")
+
+
 def copy_docs_assets(charts: list[Path], docs_assets_dir: Path) -> None:
     docs_assets_dir.mkdir(parents=True, exist_ok=True)
     for chart in charts:
@@ -679,6 +879,7 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
     charts = write_charts(rows, meta, out_dir / "charts")
     write_report(rows, meta, charts, out_dir / "report.md")
     write_index(rows, meta, charts, out_dir / "index.html")
+    write_monitor_page(rows, meta, charts, out_dir / "monitor.html")
     if docs_assets_dir is not None:
         copy_docs_assets(charts, docs_assets_dir)
     summary = {
@@ -687,6 +888,7 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
         "charts": [str(path) for path in charts],
         "report": str(out_dir / "report.md"),
         "index": str(out_dir / "index.html"),
+        "monitor": str(out_dir / "monitor.html"),
         "csv": str(out_dir / "summary.csv"),
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -702,11 +904,12 @@ def main() -> int:
 
     summary = summarize(args.work_dir, args.out_dir, args.docs_assets_dir)
     print(
-        "dual_platform_result_summary: rows={rows} charts={charts} report={report} index={index} status={status}".format(
+        "dual_platform_result_summary: rows={rows} charts={charts} report={report} index={index} monitor={monitor} status={status}".format(
             rows=summary["rows"],
             charts=len(summary["charts"]),
             report=summary["report"],
             index=summary["index"],
+            monitor=summary["monitor"],
             status=summary["status"],
         )
     )
