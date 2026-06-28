@@ -23,7 +23,7 @@ static int collab_waiter(void)
 {
 	if (agent_watch(AGENT_EVENT_MESSAGE, "handoff=recovery-auditor") < 0)
 		return 1;
-	if (!rp_write_file("rp_agentos_collab_ready",
+	if (!rp_write_file("rp_ac_ready",
 			   "agent=sentinel\n"
 			   "watch=handoff=recovery-auditor\n"
 			   "status=ready\n")) {
@@ -78,12 +78,12 @@ static int run_kernel_collaboration(void)
 		exit(collab_waiter());
 
 	for (int i = 0; i < 2000; i++) {
-		if (quiet_file_contains("rp_agentos_collab_ready",
+		if (quiet_file_contains("rp_ac_ready",
 					"status=ready"))
 			break;
 		sched_yield();
 	}
-	if (!quiet_file_contains("rp_agentos_collab_ready", "status=ready")) {
+	if (!quiet_file_contains("rp_ac_ready", "status=ready")) {
 		printf("rp_agent_collab: waiter_not_ready\n");
 		return -1;
 	}

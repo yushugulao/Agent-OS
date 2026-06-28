@@ -13,6 +13,47 @@ GOOD_STATUS = {"ready", "passed", "ok"}
 ADAPTED_ANCHORS = {
     ("rp_agentcmp", "backend_runner_checks"),
 }
+AGENTOS_EVIDENCE_REQUIREMENTS = {
+    "rp_agentos_kernel": (
+        "mode=kernel_agent_orchestrated",
+        "context_snapshot=present",
+        "dependency_update=generic_record",
+        "prefetch_hint=dependency_driven",
+    ),
+    "rp_agentos_mainflow": (
+        "context_trusted=kernel_shadow",
+        "dependency_graph=kernel_records",
+        "metadata_query=used_index",
+        "agent_event_notify=kernel_queue",
+        "failure_recovery=generic_action",
+        "provenance_audit=kernel_ledger",
+        "permission_control=sentinel_action_denied",
+        "timeline_observe=kernel_snapshot",
+        "workbench_file_verify=kernel_metadata_index",
+        "package_provenance=kernel_ledger",
+        "real_task_context=kernel_shadow",
+        "edit_lease=kernel_exclusive",
+    ),
+    "rp_agentos_roles": ("stage_launch=agent_create_role",),
+    "rp_agentos_query": ("metadata_source=kernel_file_index",),
+    "rp_agentos_recovery": (
+        "kernel_tool=action_commit,artifact_update",
+        "context_snapshot=trusted",
+    ),
+    "rp_agentos_timeline": (
+        "event_delivery=kernel_agent_queue",
+        "timeline_snapshot=ready",
+    ),
+    "rp_agentos_collab_ack": ("delivery=kernel_event_queue",),
+    "rp_agentos_audit": ("audit_source=kernel_ledger",),
+    "rp_agentos_workbench": ("file_verify=kernel_metadata_index",),
+    "rp_agentos_package": ("package_trace=kernel_provenance",),
+    "rp_agentos_real_task": ("report_answer=kernel_context_record",),
+    "rp_agentos_conflict": (
+        "edit_lease=kernel_exclusive",
+        "holder_write=checked",
+    ),
+}
 
 
 @dataclass(frozen=True)
@@ -175,6 +216,17 @@ def verify_run_result(plain_dir: Path, agentos_dir: Path) -> int:
         raise ValueError("embedded action record count is not numeric") from exc
 
 
+def verify_agentos_evidence(agentos_dir: Path) -> int:
+    checked = 0
+    for file_name, tokens in AGENTOS_EVIDENCE_REQUIREMENTS.items():
+        text = require_file_text(agentos_dir, file_name)
+        for token in tokens:
+            if token not in text:
+                raise ValueError(f"AgentOS evidence file {file_name} missing token: {token}")
+            checked += 1
+    return checked
+
+
 def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> dict[str, object]:
     plain_summary = read_summary(plain_dir)
     agentos_summary = read_summary(agentos_dir)
@@ -212,6 +264,7 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
 
     preserved_costs = verify_backend_costs(plain_dir, agentos_dir)
     embedded_action_records = verify_run_result(plain_dir, agentos_dir)
+    agentos_evidence_checks = verify_agentos_evidence(agentos_dir)
     return {
         "plain_files": int(plain_summary.get("extracted_state_files", 0)),
         "agentos_files": int(agentos_summary.get("extracted_state_files", 0)),
@@ -221,6 +274,7 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
         "preserved_plain_costs": preserved_costs,
         "embedded_action_records": embedded_action_records,
         "run_result_match": 1,
+        "agentos_evidence_checks": agentos_evidence_checks,
         "status": "ready",
     }
 
@@ -237,7 +291,7 @@ def main() -> int:
     if args.json_out is not None:
         args.json_out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(
-        "dual_platform_state_compare: plain_files={plain_files} agentos_files={agentos_files} common_files={common_files} agentos_extra_files={agentos_extra_files} checked_success_records={checked_success_records} preserved_plain_costs={preserved_plain_costs} embedded_action_records={embedded_action_records} run_result_match={run_result_match} status={status}".format(
+        "dual_platform_state_compare: plain_files={plain_files} agentos_files={agentos_files} common_files={common_files} agentos_extra_files={agentos_extra_files} checked_success_records={checked_success_records} preserved_plain_costs={preserved_plain_costs} embedded_action_records={embedded_action_records} run_result_match={run_result_match} agentos_evidence_checks={agentos_evidence_checks} status={status}".format(
             **summary
         )
     )

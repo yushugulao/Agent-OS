@@ -41,6 +41,12 @@ def write_required_runtime_files(root: Path, action_records: int = 1, passed: in
     )
 
 
+def write_agentos_evidence_files(root: Path, omit_token: str = "") -> None:
+    for file_name, tokens in compare.AGENTOS_EVIDENCE_REQUIREMENTS.items():
+        kept = [token for token in tokens if token != omit_token]
+        write_state_file(root, file_name, "\n".join(kept) + "\nstatus=ready\n")
+
+
 def expect_failure(plain: Path, agentos: Path, expected: str) -> None:
     try:
         compare.compare_state(plain, agentos, min_common_files=1)
@@ -67,38 +73,53 @@ def main() -> int:
         write_state_file(agentos, "rp_agentcmp", "plain_kernel=passed;programs=69;status=ready\n")
         write_state_file(agentos, "rp_agentos_mainflow", "stage=context;status=ready\n")
         write_required_runtime_files(agentos)
+        write_agentos_evidence_files(agentos)
         write_summary(
             agentos,
-            ["rp_backend", "rp_agentcmp", "rp_agentos_mainflow", "rp_host_run_result"],
+            [
+                "rp_backend",
+                "rp_agentcmp",
+                "rp_host_run_result",
+                *compare.AGENTOS_EVIDENCE_REQUIREMENTS.keys(),
+            ],
         )
 
         summary = compare.compare_state(plain, agentos, min_common_files=3)
         assert summary["plain_files"] == 3, summary
-        assert summary["agentos_files"] == 4, summary
+        assert summary["agentos_files"] == 15, summary
         assert summary["common_files"] == 3, summary
-        assert summary["agentos_extra_files"] == 1, summary
+        assert summary["agentos_extra_files"] == 12, summary
         assert summary["checked_success_records"] == 3, summary
         assert summary["preserved_plain_costs"] == 0, summary
         assert summary["embedded_action_records"] == 1, summary
         assert summary["run_result_match"] == 1, summary
+        assert summary["agentos_evidence_checks"] == 29, summary
 
         (agentos / "rp_agentcmp").unlink()
-        write_summary(agentos, ["rp_backend", "rp_agentos_mainflow", "rp_host_run_result"])
+        write_summary(agentos, ["rp_backend", "rp_host_run_result", *compare.AGENTOS_EVIDENCE_REQUIREMENTS.keys()])
         expect_failure(plain, agentos, "missing plain files")
 
         write_state_file(agentos, "rp_agentcmp", "plain_kernel=failed;programs=69;status=failed\n")
         write_summary(
             agentos,
-            ["rp_backend", "rp_agentcmp", "rp_agentos_mainflow", "rp_host_run_result"],
+            ["rp_backend", "rp_agentcmp", "rp_host_run_result", *compare.AGENTOS_EVIDENCE_REQUIREMENTS.keys()],
         )
         expect_failure(plain, agentos, "missing plain success records")
 
         write_state_file(agentos, "rp_agentcmp", "plain_kernel=passed;programs=69;status=ready\n")
+        write_summary(
+            agentos,
+            ["rp_backend", "rp_agentcmp", "rp_host_run_result", *compare.AGENTOS_EVIDENCE_REQUIREMENTS.keys()],
+        )
         write_required_runtime_files(agentos, action_records=2)
         expect_failure(plain, agentos, "embedded action record count differs")
 
         write_required_runtime_files(agentos, passed=0)
         expect_failure(plain, agentos, "host run did not pass")
+
+        write_required_runtime_files(agentos)
+        write_agentos_evidence_files(agentos, omit_token="metadata_query=used_index")
+        expect_failure(agentos=agentos, plain=plain, expected="missing token")
 
     print("test_compare_dual_platform_state: passed")
     return 0

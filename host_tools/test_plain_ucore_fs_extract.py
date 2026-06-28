@@ -49,6 +49,7 @@ def main() -> int:
         put_dirent(dir_block, 0, 2, "rp_input")
         put_dirent(dir_block, 1, 3, "rp_artifact_ma")
         put_dirent(dir_block, 2, 4, "rp_orch")
+        put_dirent(dir_block, 3, 5, "rp_agentos_col")
         image[20 * fsx.BSIZE : 21 * fsx.BSIZE] = dir_block
         put_inode(image, 1, 1, fsx.BSIZE, [20])
 
@@ -64,17 +65,25 @@ def main() -> int:
         image[23 * fsx.BSIZE : 23 * fsx.BSIZE + len(binary_text)] = binary_text
         put_inode(image, 4, fsx.T_FILE, len(binary_text), [23])
 
+        ack_text = b"delivery=kernel_event_queue\nstatus=ready\n"
+        image[24 * fsx.BSIZE : 24 * fsx.BSIZE + len(ack_text)] = ack_text
+        put_inode(image, 5, fsx.T_FILE, len(ack_text), [24])
+
         image_path = root / "fs-copy.img"
         out_dir = root / "state"
         repo_dir = root / "repo"
         repo_dir.mkdir()
-        (repo_dir / "README.md").write_text("rp_artifact_manifest\n", encoding="utf-8")
+        (repo_dir / "README.md").write_text(
+            "rp_artifact_manifest\nrp_agentos_collab_ack\n",
+            encoding="utf-8",
+        )
         image_path.write_bytes(image)
 
         summary = fsx.extract_state_files(image_path, out_dir, repo_dir)
-        assert summary["extracted_state_files"] == 2, summary
+        assert summary["extracted_state_files"] == 3, summary
         assert (out_dir / "rp_input").read_text(encoding="utf-8") == input_text.decode("utf-8")
         assert (out_dir / "rp_artifact_manifest").read_text(encoding="utf-8") == manifest_text.decode("utf-8")
+        assert (out_dir / "rp_agentos_collab_ack").read_text(encoding="utf-8") == ack_text.decode("utf-8")
         assert not (out_dir / "rp_orch").exists()
         assert (out_dir / "extract-summary.json").exists()
 
