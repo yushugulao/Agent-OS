@@ -54,6 +54,19 @@ AGENTOS_EVIDENCE_REQUIREMENTS = {
         "holder_write=checked",
     ),
 }
+AGENTOS_MAINFLOW_STAGES = (
+    "entry",
+    "entry_dependency",
+    "recovery",
+    "audit",
+    "query",
+    "timeline",
+    "workbench",
+    "collaboration",
+    "package",
+    "real_task",
+    "edit_conflict",
+)
 
 
 @dataclass(frozen=True)
@@ -227,6 +240,23 @@ def verify_agentos_evidence(agentos_dir: Path) -> int:
     return checked
 
 
+def verify_agentos_mainflow_stages(agentos_dir: Path) -> int:
+    text = require_file_text(agentos_dir, "rp_agentos_mainflow")
+    found: list[str] = []
+    for raw in text.splitlines():
+        fields = parse_fields(raw.strip())
+        stage = fields.get("stage")
+        if stage and fields.get("status", "").lower() in GOOD_STATUS:
+            found.append(stage)
+    missing = [stage for stage in AGENTOS_MAINFLOW_STAGES if stage not in found]
+    if missing:
+        raise ValueError("AgentOS mainflow is missing kernel stage records: " + ",".join(missing))
+    positions = [found.index(stage) for stage in AGENTOS_MAINFLOW_STAGES]
+    if positions != sorted(positions):
+        raise ValueError("AgentOS mainflow kernel stage records are out of order")
+    return len(AGENTOS_MAINFLOW_STAGES)
+
+
 def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> dict[str, object]:
     plain_summary = read_summary(plain_dir)
     agentos_summary = read_summary(agentos_dir)
@@ -265,6 +295,7 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
     preserved_costs = verify_backend_costs(plain_dir, agentos_dir)
     embedded_action_records = verify_run_result(plain_dir, agentos_dir)
     agentos_evidence_checks = verify_agentos_evidence(agentos_dir)
+    agentos_mainflow_stages = verify_agentos_mainflow_stages(agentos_dir)
     return {
         "plain_files": int(plain_summary.get("extracted_state_files", 0)),
         "agentos_files": int(agentos_summary.get("extracted_state_files", 0)),
@@ -275,6 +306,7 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
         "embedded_action_records": embedded_action_records,
         "run_result_match": 1,
         "agentos_evidence_checks": agentos_evidence_checks,
+        "agentos_mainflow_stages": agentos_mainflow_stages,
         "status": "ready",
     }
 
@@ -291,7 +323,7 @@ def main() -> int:
     if args.json_out is not None:
         args.json_out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(
-        "dual_platform_state_compare: plain_files={plain_files} agentos_files={agentos_files} common_files={common_files} agentos_extra_files={agentos_extra_files} checked_success_records={checked_success_records} preserved_plain_costs={preserved_plain_costs} embedded_action_records={embedded_action_records} run_result_match={run_result_match} agentos_evidence_checks={agentos_evidence_checks} status={status}".format(
+        "dual_platform_state_compare: plain_files={plain_files} agentos_files={agentos_files} common_files={common_files} agentos_extra_files={agentos_extra_files} checked_success_records={checked_success_records} preserved_plain_costs={preserved_plain_costs} embedded_action_records={embedded_action_records} run_result_match={run_result_match} agentos_evidence_checks={agentos_evidence_checks} agentos_mainflow_stages={agentos_mainflow_stages} status={status}".format(
             **summary
         )
     )
