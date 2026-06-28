@@ -85,6 +85,7 @@ rp_calculation.c
 rp_campaign.c
 rp_compare_plain.c
 rp_consistency.c
+rp_controlplane.c
 rp_decsupport.c
 rp_execobs.c
 rp_expsched.c

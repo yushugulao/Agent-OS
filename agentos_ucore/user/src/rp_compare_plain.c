@@ -1586,9 +1586,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_control", "api_token=token:local-dashboard;owner=wang;scopes=read,dashboard;secret_material=not_written;status=ready");
 	ok = ok && rp_file_contains("rp_control", "permission=can:guest:approve;result=deny;status=ready");
 	ok = ok && rp_file_contains("rp_control", "control_report=platform-control-report:RUN-042;approvals=4;notifications=4;queue_items=4;plugin_runs=3;status=ready");
-	ok = ok && rp_file_contains("rp_control", "agentos_adaptation=kernel_capability_check,kernel_event_delivery,kernel_plugin_tool_table,kernel_run_queue;status=planned");
+	ok = ok && rp_file_contains("rp_control", "agentos_adaptation=kernel_capability_check,kernel_event_delivery,kernel_plugin_tool_table,kernel_run_queue;evidence=rp_agentos_mainflow,rp_agentos_roles,rp_agentos_timeline,rp_agentos_kernel;result=observed;status=ready");
 	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=platform_control_plane;source=rp_control;approvals=4;notifications=4;plugins=3;status=ready");
 	ok = ok && rp_file_contains("rp_opsboard", "handoff=control-plane->operations;artifact=rp_control;status=ready");
+	ok = ok && rp_file_contains("rp_agentcmp", "control_plane_kernel_binding=capability_check,event_delivery,tool_table,agent_run_queue;source=rp_control;status=ready");
 	ok = ok && rp_file_contains("rp_integrity", "integrity_checks=36");
 	ok = ok && rp_file_contains("rp_integrity", "evidence_contracts=8");
 	ok = ok && rp_file_contains("rp_integrity", "reference_contracts=8");
