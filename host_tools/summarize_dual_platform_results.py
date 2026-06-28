@@ -1082,6 +1082,172 @@ def write_evidence_map_page(charts: list[Path], out_path: Path) -> None:
     out_path.write_text(html, encoding="utf-8")
 
 
+def demo_checklist_rows(meta: dict[str, object], charts: list[Path], work_dir: Path) -> list[dict[str, str]]:
+    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
+    reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
+    plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
+    agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
+    chart_names = {chart.name for chart in charts}
+    required_charts = {
+        "dual-target-state-reader.svg",
+        "runtime-observation.svg",
+        "scenario-evidence.svg",
+        "cost-replacement.svg",
+        "runner-speedup.svg",
+        "load-profile.svg",
+        "runner-surface-composite.svg",
+    }
+
+    def row(item: str, status: bool, evidence: str, action: str) -> dict[str, str]:
+        return {
+            "item": item,
+            "status": "通过" if status else "关注",
+            "evidence": evidence,
+            "action": action,
+        }
+
+    return [
+        row(
+            "双目标结果",
+            state.get("status") == "ready" and as_number(state.get("run_result_match")) == 1,
+            f"state_status={state.get('status', '')}; run_result_match={fmt_number(as_number(state.get('run_result_match')))}",
+            "先确认两个目标使用同一批输入，且普通目标成功记录在 AgentOS 目标中保留。",
+        ),
+        row(
+            "Reader 页面与 API",
+            reader.get("status") == "ready"
+            and as_number(reader.get("plain_pages")) == as_number(reader.get("agentos_pages"))
+            and as_number(reader.get("agentos_api_json")) >= as_number(reader.get("plain_api_json")),
+            "plain_pages={}; agentos_pages={}; plain_api={}; agentos_api={}".format(
+                fmt_number(as_number(reader.get("plain_pages"))),
+                fmt_number(as_number(reader.get("agentos_pages"))),
+                fmt_number(as_number(reader.get("plain_api_json"))),
+                fmt_number(as_number(reader.get("agentos_api_json"))),
+            ),
+            "打开 Reader 页面时先看两个目标页面数量是否一致，再看 AgentOS 额外 API 证据。",
+        ),
+        row(
+            "QEMU 运行状态",
+            as_number(plain_result.get("qemu_timed_out")) == 0
+            and as_number(agentos_result.get("qemu_timed_out")) == 0
+            and as_number(agentos_result.get("qemu_idle_notices")) <= 1,
+            "plain_timeout={}; agentos_timeout={}; agentos_idle_notices={}".format(
+                fmt_number(as_number(plain_result.get("qemu_timed_out"))),
+                fmt_number(as_number(agentos_result.get("qemu_timed_out"))),
+                fmt_number(as_number(agentos_result.get("qemu_idle_notices"))),
+            ),
+            "如果这里需要关注，先查看两个 ucore-run.log 和 stage-timings.csv。",
+        ),
+        row(
+            "核心图表",
+            required_charts.issubset(chart_names),
+            f"required={len(required_charts)}; generated={len(required_charts & chart_names)}; total_charts={len(chart_names)}",
+            "录屏时至少展示运行观测、场景证据、成本替代、相对倍数、负载参数和组合图。",
+        ),
+        row(
+            "证据索引",
+            True,
+            "evidence-map.html; evidence-manifest.csv",
+            "从证据索引页返回每个图表和 CSV 的数据来源。",
+        ),
+        row(
+            "演示入口",
+            True,
+            "demo-guide.html; monitor.html; index.html",
+            "录屏建议先打开演示导览页，再进入观测面板和图表页。",
+        ),
+        row(
+            "原始运行状态",
+            (work_dir / "plain-state" / "rp_host_run_result").is_file()
+            and (work_dir / "agentos-state" / "rp_host_run_result").is_file()
+            and (work_dir / "stage-timings.csv").is_file(),
+            "plain-state/rp_host_run_result; agentos-state/rp_host_run_result; stage-timings.csv",
+            "出现争议时直接回到原始状态文件和阶段耗时表。",
+        ),
+        row(
+            "AgentOS 主流程证据",
+            as_number(state.get("agentos_evidence_checks")) >= 20 and as_number(state.get("agentos_mainflow_stages")) >= 10,
+            "agentos_evidence_checks={}; agentos_mainflow_stages={}".format(
+                fmt_number(as_number(state.get("agentos_evidence_checks"))),
+                fmt_number(as_number(state.get("agentos_mainflow_stages"))),
+            ),
+            "展示科研流程不是旁路测试，而是在主流程中使用 AgentOS 机制。",
+        ),
+    ]
+
+
+def write_demo_checklist_csv(meta: dict[str, object], charts: list[Path], work_dir: Path, out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["item", "status", "evidence", "action"])
+        for row in demo_checklist_rows(meta, charts, work_dir):
+            writer.writerow([row["item"], row["status"], row["evidence"], row["action"]])
+
+
+def write_demo_checklist_page(meta: dict[str, object], charts: list[Path], work_dir: Path, out_path: Path) -> None:
+    rows = demo_checklist_rows(meta, charts, work_dir)
+    ready_count = sum(1 for row in rows if row["status"] == "通过")
+    row_html = []
+    for row in rows:
+        class_name = "ok" if row["status"] == "通过" else "warn"
+        row_html.append(
+            "<tr class=\"{class_name}\"><td>{item}</td><td>{status}</td><td>{evidence}</td><td>{action}</td></tr>".format(
+                class_name=class_name,
+                item=escape(row["item"]),
+                status=escape(row["status"]),
+                evidence=escape(row["evidence"]),
+                action=escape(row["action"]),
+            )
+        )
+    html = f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentOS 演示检查表</title>
+  <style>
+    :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; --ok:#166534; --warn:#9a3412; }}
+    body {{ margin:0; font-family:Arial,"Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); }}
+    header {{ padding:30px 42px 20px; background:#fff; border-bottom:1px solid var(--line); }}
+    main {{ max-width:1180px; margin:0 auto; padding:24px 42px 42px; }}
+    h1 {{ margin:0 0 10px; font-size:28px; }}
+    p {{ line-height:1.75; color:var(--muted); }}
+    .summary {{ display:flex; gap:12px; flex-wrap:wrap; margin:18px 0; }}
+    .pill {{ border:1px solid var(--line); background:#fff; padding:10px 14px; }}
+    table {{ width:100%; border-collapse:collapse; background:#fff; }}
+    th,td {{ border:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }}
+    th {{ background:#eef3f8; }}
+    tr.ok td:nth-child(2) {{ color:var(--ok); font-weight:700; }}
+    tr.warn td:nth-child(2) {{ color:var(--warn); font-weight:700; }}
+    a {{ color:#075985; text-decoration:none; }}
+    @media (max-width:860px) {{ main,header {{ padding-left:18px; padding-right:18px; }} table {{ font-size:13px; }} }}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AgentOS 演示检查表</h1>
+    <p>本页用于录屏前确认本次双目标结果是否具备可展示材料。它只读取本次运行生成的数据，不替代原始日志和测试脚本。</p>
+  </header>
+  <main>
+    <div class="summary">
+      <div class="pill">通过项：{ready_count} / {len(rows)}</div>
+      <div class="pill"><a href="demo-guide.html">演示导览页</a></div>
+      <div class="pill"><a href="evidence-map.html">证据索引页</a></div>
+      <div class="pill"><a href="demo-checklist.csv">下载 CSV</a></div>
+    </div>
+    <table>
+      <thead><tr><th>检查项</th><th>状态</th><th>证据</th><th>演示动作</th></tr></thead>
+      <tbody>{"".join(row_html)}</tbody>
+    </table>
+  </main>
+</body>
+</html>
+"""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(html, encoding="utf-8")
+
+
 def write_chart_type_coverage_csv(out_path: Path) -> None:
     rows = [
         ("条形/柱状对比", "dual-target-state-reader.svg;launch-model.svg;runner-ticks.svg;load-profile.svg", "状态文件、页面、API、启动方式、runner tick、负载参数组；Python 标准库 SVG 生成"),
@@ -1511,6 +1677,8 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
     lines.append("- `chart-type-coverage.csv`")
     lines.append("- `evidence-manifest.csv`")
     lines.append("- `evidence-map.html`")
+    lines.append("- `demo-checklist.csv`")
+    lines.append("- `demo-checklist.html`")
     lines.extend(
         [
             "",
@@ -1729,6 +1897,8 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="load-profile.csv">下载负载参数组</a>
       <a href="evidence-map.html">打开证据索引页</a>
       <a href="evidence-manifest.csv">下载证据索引表</a>
+      <a href="demo-checklist.html">打开演示检查表</a>
+      <a href="demo-checklist.csv">下载演示检查表</a>
       <a href="chart-type-coverage.csv">下载图表类型覆盖表</a>
       <a href="charts/runtime-observation.svg">打开观测图</a>
       <a href="charts/scenario-evidence.svg">打开场景证据图</a>
@@ -1832,7 +2002,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>相关结果</h2>
-      <p><a href="demo-guide.html">演示导览页</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="load-profile.csv">负载参数组</a>、<a href="evidence-manifest.csv">证据索引表</a>、<a href="chart-type-coverage.csv">图表类型覆盖表</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/load-profile.svg">负载参数图</a>、<a href="charts/runner-surface-composite.svg">组合图</a></p>
+      <p><a href="demo-guide.html">演示导览页</a>、<a href="demo-checklist.html">演示检查表</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="load-profile.csv">负载参数组</a>、<a href="evidence-manifest.csv">证据索引表</a>、<a href="demo-checklist.csv">演示检查表 CSV</a>、<a href="chart-type-coverage.csv">图表类型覆盖表</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/load-profile.svg">负载参数图</a>、<a href="charts/runner-surface-composite.svg">组合图</a></p>
     </section>
   </main>
 </body>
@@ -1920,6 +2090,8 @@ def write_demo_guide_page(rows: list[MetricRow], meta: dict[str, object], charts
       <h2>关键数据</h2>
       <p>本次结果包含 {fmt_number(cost_count)} 项用户态成本替代记录、{fmt_number(runner_pairs)} 组 runner tick 对照、{fmt_number(as_number(state.get("checked_success_records")))} 条成功记录核对。图表可以回到 <a href="summary.csv">summary.csv</a>、<a href="runner-sweep.csv">runner-sweep.csv</a>、<a href="load-profile.csv">load-profile.csv</a>、<a href="evidence-manifest.csv">evidence-manifest.csv</a> 和 <a href="chart-type-coverage.csv">chart-type-coverage.csv</a>。</p>
       <div class="links">
+        <a href="demo-checklist.html">演示检查表</a>
+        <a href="demo-checklist.csv">检查表 CSV</a>
         <a href="report.md">Markdown 报告</a>
         <a href="summary.json">JSON 摘要</a>
         <a href="{escape(chart_links.get("runtime-observation.svg", "charts/runtime-observation.svg"))}">运行观测图</a>
@@ -1950,6 +2122,8 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
     charts = write_charts(rows, meta, out_dir / "charts")
     write_evidence_manifest_csv(charts, out_dir / "evidence-manifest.csv")
     write_evidence_map_page(charts, out_dir / "evidence-map.html")
+    write_demo_checklist_csv(meta, charts, work_dir, out_dir / "demo-checklist.csv")
+    write_demo_checklist_page(meta, charts, work_dir, out_dir / "demo-checklist.html")
     write_report(rows, meta, charts, out_dir / "report.md")
     write_index(rows, meta, charts, out_dir / "index.html")
     write_monitor_page(rows, meta, charts, out_dir / "monitor.html")
@@ -1970,6 +2144,8 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
         "chart_type_coverage_csv": str(out_dir / "chart-type-coverage.csv"),
         "evidence_manifest_csv": str(out_dir / "evidence-manifest.csv"),
         "evidence_map": str(out_dir / "evidence-map.html"),
+        "demo_checklist_csv": str(out_dir / "demo-checklist.csv"),
+        "demo_checklist": str(out_dir / "demo-checklist.html"),
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return summary
