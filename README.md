@@ -40,6 +40,7 @@ agentos_ucore/scripts/  AgentOS 测试脚本
 | 查看增强内核测试场景和输出证据 | `agentos_ucore/docs/verification.md` |
 | 查看双目标对比设计 | `docs/dual-targets.md` |
 | 查看双目标验证方式 | `docs/verification.md` |
+| 查看当前目标完成证据 | `docs/target-evidence.md` |
 
 ## 常用命令
 
@@ -283,7 +284,7 @@ dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=
 [dual-target-check] AgentOS kernel: present
 [dual-target-check] platform source coverage: 73 root rp sources mirrored
 [dual-target-check] platform app coverage: 71 build-list apps mirrored
-[dual-target-check] platform source sync: identical=39 adapted=34
+[dual-target-check] platform source sync: identical=30 adapted=43
 [dual-target-check] backend evidence coverage: plain=7 agentos=8 preserved_costs=7
 [dual-target-check] platform runners: present
 [dual-target-check] docs: wording scan passed
