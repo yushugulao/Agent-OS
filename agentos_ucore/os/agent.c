@@ -35,6 +35,7 @@ static uint64 agent_span_prefetch_count;
 static struct agent_file_prefetch_hint
 	agent_span_prefetch_hints[AGENT_FILE_PREFETCH_SPAN_MAX];
 static uint64 agent_observe_epoch = 1;
+static int agent_timeline_waiting_agents;
 
 struct agent_file_query_cache_entry {
 	int valid;
@@ -269,6 +270,7 @@ void agentinit(void)
 	agent_span_prefetch_head = 0;
 	agent_span_prefetch_count = 0;
 	agent_observe_epoch = 1;
+	agent_timeline_waiting_agents = 0;
 	memset(agent_span_prefetch_hints, 0,
 	       sizeof(agent_span_prefetch_hints));
 	memset(agent_file_query_cache, 0, sizeof(agent_file_query_cache));
@@ -454,8 +456,23 @@ static void agent_free_shadow(uint64 *kva)
 	}
 }
 
+static void agent_timeline_waiting_set(struct proc *p, int waiting)
+{
+	if (p == 0)
+		return;
+	waiting = waiting ? 1 : 0;
+	if (p->agent_timeline_waiting == waiting)
+		return;
+	if (waiting)
+		agent_timeline_waiting_agents++;
+	else if (agent_timeline_waiting_agents > 0)
+		agent_timeline_waiting_agents--;
+	p->agent_timeline_waiting = waiting;
+}
+
 void agent_clear_metadata(struct proc *p)
 {
+	agent_timeline_waiting_set(p, 0);
 	for (int i = 0; i < AGENT_CONTEXT_PAGES; i++) {
 		p->agent_ctx_kva[i] = 0;
 		p->agent_shadow_kva[i] = 0;
@@ -544,7 +561,6 @@ void agent_clear_metadata(struct proc *p)
 	p->agent_timeline_wait_sleep_count = 0;
 	p->agent_timeline_wait_wakeup_count = 0;
 	p->agent_timeline_wait_timeout_count = 0;
-	p->agent_timeline_waiting = 0;
 	p->agent_timeline_wait_deadline_valid = 0;
 	p->agent_timeline_wait_deadline = 0;
 	memset(&p->agent_timeline_wait_filter, 0,
@@ -792,6 +808,27 @@ void agent_sched_on_yield(struct thread *t)
 	p->agent_sched_preemptions++;
 }
 
+static int agent_sched_should_trace(struct proc *p,
+				    struct agent_sched_record *record)
+{
+	uint64 important;
+
+	if (p == 0 || record == 0)
+		return 0;
+	if (record->dispatch_count <= 4)
+		return 1;
+	important = AGENT_SCHED_REASON_EVENT_QUEUE |
+		    AGENT_SCHED_REASON_DEADLINE_NEAR |
+		    AGENT_SCHED_REASON_DEADLINE_NOW |
+		    AGENT_SCHED_REASON_HEARTBEAT_DUE |
+		    AGENT_SCHED_REASON_PRIORITY;
+	if ((record->reason_flags & important) != 0)
+		return 1;
+	if ((record->dispatch_count & 0xf) == 0)
+		return 1;
+	return 0;
+}
+
 void agent_sched_on_dispatch(struct thread *t)
 {
 	struct proc *p;
@@ -802,6 +839,7 @@ void agent_sched_on_dispatch(struct thread *t)
 	struct agent_timeline_record timeline;
 	uint64 trace_slot;
 	long score;
+	int trace;
 
 	if (t == 0 || t->process == 0)
 		return;
@@ -829,14 +867,18 @@ void agent_sched_on_dispatch(struct thread *t)
 	p->agent_sched_last_score = score > 0 ? (uint64)score : 0;
 	p->agent_sched_last_reason = record.reason_flags;
 	record.score = p->agent_sched_last_score;
-	trace_slot = p->agent_sched_trace_head % AGENT_SCHED_TRACE_CAP;
-	memmove(&p->agent_sched_records[trace_slot], &record, sizeof(record));
-	p->agent_sched_trace_head =
-		(p->agent_sched_trace_head + 1) % AGENT_SCHED_TRACE_CAP;
-	p->agent_sched_trace_count++;
-	agent_timeline_from_sched(&record, &timeline);
-	agent_observe_record(&timeline);
-	agent_audit_sched(p, &record);
+	trace = agent_sched_should_trace(p, &record);
+	if (trace) {
+		trace_slot = p->agent_sched_trace_head % AGENT_SCHED_TRACE_CAP;
+		memmove(&p->agent_sched_records[trace_slot], &record,
+			sizeof(record));
+		p->agent_sched_trace_head =
+			(p->agent_sched_trace_head + 1) % AGENT_SCHED_TRACE_CAP;
+		p->agent_sched_trace_count++;
+		agent_timeline_from_sched(&record, &timeline);
+		agent_observe_record(&timeline);
+		agent_audit_sched(p, &record);
+	}
 }
 
 static long agent_sched_score_at(struct thread *t, uint64 now,
@@ -1269,7 +1311,7 @@ int agent_make_role(struct proc *p, int role)
 	p->agent_timeline_wait_sleep_count = 0;
 	p->agent_timeline_wait_wakeup_count = 0;
 	p->agent_timeline_wait_timeout_count = 0;
-	p->agent_timeline_waiting = 0;
+	agent_timeline_waiting_set(p, 0);
 	p->agent_timeline_wait_deadline_valid = 0;
 	p->agent_timeline_wait_deadline = 0;
 	memset(&p->agent_timeline_wait_filter, 0,
@@ -5552,6 +5594,8 @@ static void agent_observe_record(struct agent_timeline_record *record)
 	if (record == 0)
 		return;
 	agent_observe_epoch++;
+	if (agent_timeline_waiting_agents <= 0)
+		return;
 	for (struct proc *p = pool; p < &pool[NPROC]; p++) {
 		if (p->state == P_UNUSED || !p->is_agent ||
 		    !p->agent_timeline_waiting)
@@ -5775,7 +5819,7 @@ static int agent_timeline_wait_for_match(struct proc *p, struct thread *t,
 		if (matched < 0)
 			return matched;
 		if (matched > 0) {
-			p->agent_timeline_waiting = 0;
+			agent_timeline_waiting_set(p, 0);
 			p->agent_timeline_wait_deadline_valid = 0;
 			memset(&p->agent_timeline_wait_filter, 0,
 			       sizeof(p->agent_timeline_wait_filter));
@@ -5786,7 +5830,7 @@ static int agent_timeline_wait_for_match(struct proc *p, struct thread *t,
 		now = agent_ticks();
 		if (timeout_ticks >= 0 &&
 		    now - start >= (uint64)timeout_ticks) {
-			p->agent_timeline_waiting = 0;
+			agent_timeline_waiting_set(p, 0);
 			p->agent_timeline_wait_deadline_valid = 0;
 			memset(&p->agent_timeline_wait_filter, 0,
 			       sizeof(p->agent_timeline_wait_filter));
@@ -5795,7 +5839,7 @@ static int agent_timeline_wait_for_match(struct proc *p, struct thread *t,
 			return AGENT_STATUS_TIMEOUT;
 		}
 		p->loop_state = AGENT_LOOP_WAITING;
-		p->agent_timeline_waiting = 1;
+		agent_timeline_waiting_set(p, 1);
 		memmove(&p->agent_timeline_wait_filter, filter,
 			sizeof(p->agent_timeline_wait_filter));
 		p->agent_observe_epoch = agent_observe_epoch;

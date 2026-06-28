@@ -388,7 +388,7 @@ Agent-only syscall 对普通进程、非法参数、未知工具、历史节点�
 
 ### 8.6 并发和事件
 
-Agent Loop 使用进程字段保存 8 条 watch、16 槽 FIFO 事件队列、一次性 wait cancel 令牌、等待次数、超时次数和心跳信息。`agent_wait()` 优先处理取消令牌，再消费队列中的事件；没有事件时，有限 timeout 和无限等待都进入睡眠，由事件入队、deadline 到期、heartbeat 到期或取消令牌唤醒；`agent_wake()`、`agent_wait_cancel()`、文件状态变化和消息工具可以唤醒目标 Agent。时钟中断调用 `agent_tick()` 处理 timeout deadline 和 heartbeat 到期。TIMER 事件同样受 watch/filter 控制。`agent_sched_config()` 允许 orchestrator 调整目标 Agent 的 policy、weight、priority 和 budget；调度器在每次调度 Agent 时写入 `agent_sched_record`，记录分数、原因 flags、事件数量、deadline、heartbeat、虚拟运行量和预算使用情况，便于解释某次调度是由事件、等待时间、角色权重、配置优先级还是其他因素触发。全局审计 ring 会同步记录 Context、事件、调度和预取提示交接摘要，便于 orchestrator 在综合演示结束时查询系统级运行证据；过滤查询让 orchestrator 可以只取某个 span、某类事件、某个预取交接或某个目标 Agent 的相关记录。
+Agent Loop 使用进程字段保存 8 条 watch、16 槽 FIFO 事件队列、一次性 wait cancel 令牌、等待次数、超时次数和心跳信息。`agent_wait()` 优先处理取消令牌，再消费队列中的事件；没有事件时，有限 timeout 和无限等待都进入睡眠，由事件入队、deadline 到期、heartbeat 到期或取消令牌唤醒；`agent_wake()`、`agent_wait_cancel()`、文件状态变化和消息工具可以唤醒目标 Agent。时钟中断调用 `agent_tick()` 处理 timeout deadline 和 heartbeat 到期。TIMER 事件同样受 watch/filter 控制。`agent_sched_config()` 允许 orchestrator 调整目标 Agent 的 policy、weight、priority 和 budget；调度器持续维护完整的 dispatch、preemption、vruntime、last_reason 和 last_score 计数，对事件队列、deadline、heartbeat、priority 等关键调度原因即时写入 `agent_sched_record`，对普通调度按固定间隔采样写入，记录分数、原因 flags、事件数量、deadline、heartbeat、虚拟运行量和预算使用情况，便于解释某次调度是由事件、等待时间、角色权重、配置优先级还是其他因素触发，同时避免短周期 Agent 工作流被重复观测写入拖慢。全局审计 ring 会同步记录 Context、事件、调度和预取提示交接摘要，便于 orchestrator 在综合演示结束时查询系统级运行证据；过滤查询让 orchestrator 可以只取某个 span、某类事件、某个预取交接或某个目标 Agent 的相关记录。
 
 ### 8.7 角色与能力
 
