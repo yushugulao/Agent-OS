@@ -1,12 +1,12 @@
-# Agent-OS API 与 ABI
+# 接口与 ABI：Agent-OS
 
 本文档描述用户态程序与 Agent-OS 内核扩展之间的稳定接口约定。结构体和常量定义以内核态 `os/agent.h` 和用户态 `user/include/agent.h` 为准。
 
 ## 系统调用
 
-### Agent-OS syscall
+### 系统调用：Agent-OS
 
-Agent-OS 在 uCore syscall 编号空间中使用 500 至 534：
+Agent-OS 在 uCore syscall 编号空间中使用 500 至 538：
 
 | syscall | 编号 | 用户态原型 | 说明 |
 | --- | ---: | --- | --- |
@@ -24,7 +24,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 534：
 | `agent_wait` | 511 | `int agent_wait(struct agent_event *, int)` | 等待事件或 timeout，成功消费事件后写入 Context Path |
 | `agent_heartbeat` | 512 | `int agent_heartbeat(int)` | 设置心跳间隔并更新最后心跳 tick |
 | `agent_wake` | 513 | `int agent_wake(int, struct agent_event *)` | 向目标 Agent 投递结构化事件 |
-| `agent_file_meta_init` | 514 | `int agent_file_meta_init(void)` | 初始化任务四演示文件元数据表 |
+| `agent_file_meta_init` | 514 | `int agent_file_meta_init(void)` | 重新加载文件对象元数据、重建索引并启用扫描 |
 | `agent_file_meta_set` | 515 | `int agent_file_meta_set(struct agent_file_meta *)` | 插入或合并更新文件元数据，状态变化可触发事件 |
 | `agent_file_query` | 516 | `int agent_file_query(struct agent_file_query *, struct agent_file_query_result *)` | Agent 文件属性查询，成功后写入 Context Path |
 | `agent_create_role` | 517 | `int agent_create_role(int role)` | 按真实内核角色创建 Agent 子进程 |
@@ -45,10 +45,14 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 534：
 | `agent_timeline_wait` | 532 | `int agent_timeline_wait(struct agent_timeline_filter *, int)` | 等待当前可见 timeline 出现匹配记录或 timeout |
 | `agent_timeline_read` | 533 | `int agent_timeline_read(struct agent_timeline_filter *, struct agent_timeline_record *, int, int)` | 等待匹配 timeline 记录并在同一次 syscall 中复制记录 |
 | `agent_ledger_snapshot` | 534 | `int agent_ledger_snapshot(struct agent_ledger_summary *)` | orchestrator 读取全局运行账本摘要和链尾 hash |
+| `agent_file_edit_begin` | 535 | `int agent_file_edit_begin(const char *, uint64, int, struct agent_file_edit_state *)` | 为真实文件申请独占编辑租约 |
+| `agent_file_edit_commit` | 536 | `int agent_file_edit_commit(uint64, uint64, struct agent_file_edit_state *)` | 按租约和期望版本提交编辑 |
+| `agent_file_edit_abort` | 537 | `int agent_file_edit_abort(uint64)` | 放弃当前进程持有的编辑租约 |
+| `agent_file_edit_state` | 538 | `int agent_file_edit_state(const char *, struct agent_file_edit_state *)` | 查询真实文件当前编辑租约和版本状态 |
 
-`agent_run` 和 `context_snapshot` 是最终成品性能主路径。`agent_file_prefetch_snapshot` 用于读取当前 Agent 自己可见的 metadata 预取提示，`agent_file_prefetch_span_snapshot` 用于读取同一 span 下跨 Agent 汇总的 metadata 预取提示。`agent_trace_snapshot` 是单个 Agent 的演示和调试主路径，用于把工具调用历史与调度原因放进同一组短记录中。`agent_span_trace_snapshot` 读取当前 Agent 所在 span 的系统级短记录，使参与协作的 Agent 能解释本轮协作中的 Context、事件和预取交接来源。`agent_timeline_snapshot` 是统一导出入口，把当前 Agent 可见的 Context、调度、审计和预取提示转换成同一种 record，便于最终科研平台页面直接读取。`agent_timeline_query` 在同一组可见记录上执行 source、tick、span、pid、kind、tool、event、status、flags 和 after-cursor 过滤，减少最终页面重复拉取和用户态筛选，也支持页面拿上一条记录作为游标继续读取后续记录。`agent_timeline_wait` 复用同一 filter，在没有匹配记录时让 Agent 睡眠；新记录写入时内核把新记录规范化为 `agent_timeline_record`，并直接用等待者保存的完整 filter 判断是否唤醒。`agent_timeline_read` 在同一套规则上把等待和复制合并为一次 syscall，减少页面或 Agent worker 的 wait 后再 query 成本。`agent_provenance_snapshot` 导出同一可见范围内的因果边，用于最终页面绘制“哪个 Context、事件或预取提示触发了后续动作”。`agent_audit_snapshot` 和 `agent_audit_query` 是 orchestrator 的系统级观测入口，用于读取和过滤最近 512 条全局短记录。`agent_ledger_snapshot` 在同一组全局短记录上返回可见范围、总量、已淘汰数、分类计数和账本 hash，便于页面用一个摘要判断本轮运行事实是否仍处在同一条内核维护的记录链上。`agent_call` 是赛题“工具名称 + 参数键值列表”结构化协议的正式入口，也兼容已有演示程序。
+`agent_run` 和 `context_snapshot` 是最终成品性能主路径。`agent_file_prefetch_snapshot` 用于读取当前 Agent 自己可见的 metadata 预取提示，`agent_file_prefetch_span_snapshot` 用于读取同一 span 下跨 Agent 汇总的 metadata 预取提示。`agent_trace_snapshot` 是单个 Agent 的演示和调试主路径，用于把工具调用历史与调度原因放进同一组短记录中。`agent_span_trace_snapshot` 读取当前 Agent 所在 span 的系统级短记录，使参与协作的 Agent 能解释本轮协作中的 Context、事件和预取交接来源。`agent_timeline_snapshot` 是统一导出入口，把当前 Agent 可见的 Context、调度、审计和预取提示转换成同一种 record，便于最终科研平台页面直接读取。`agent_timeline_query` 在同一组可见记录上执行 source、tick、span、pid、kind、tool、event、status、flags 和 after-cursor 过滤，减少最终页面重复拉取和用户态筛选，也支持页面拿上一条记录作为游标继续读取后续记录。`agent_timeline_wait` 复用同一 filter，在没有匹配记录时让 Agent 睡眠；新记录写入时内核把新记录规范化为 `agent_timeline_record`，并直接用等待者保存的完整 filter 判断是否唤醒。`agent_timeline_read` 在同一套规则上把等待和复制合并为一次 syscall，减少页面或 Agent worker 的 wait 后再 query 成本。`agent_file_edit_begin`、`agent_file_edit_commit`、`agent_file_edit_abort` 和 `agent_file_edit_state` 是真实文件编辑冲突控制接口；内核用真实 `dev + inum` 识别文件，并在 `write`、`O_TRUNC`、`unlink` 路径上检查租约持有者。`agent_provenance_snapshot` 导出同一可见范围内的因果边，用于最终页面绘制“哪个 Context、事件或预取提示触发了后续动作”。`agent_audit_snapshot` 和 `agent_audit_query` 是 orchestrator 的系统级观测入口，用于读取和过滤最近 512 条全局短记录。`agent_ledger_snapshot` 在同一组全局短记录上返回可见范围、总量、已淘汰数、分类计数和账本 hash，便于页面用一个摘要判断本轮运行事实是否仍处在同一条内核维护的记录链上。`agent_call` 是赛题“工具名称 + 参数键值列表”结构化协议的正式入口，也兼容已有演示程序。
 
-### uCore 基础兼容 syscall
+### 基础兼容系统调用：uCore
 
 | syscall | 编号 | 用户态原型 | 说明 |
 | --- | ---: | --- | --- |
@@ -62,7 +66,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 534：
 
 `trace` 的 `TRACE_READ` / `TRACE_WRITE` 只做 1 字节用户地址读写检查。`TRACE_SYSCALL` 返回对应 syscall ID 的累计进入次数，查询 `SYS_trace` 时本次 `trace` 调用也计入。当前只承诺 Agent Context 特殊页不可执行；普通用户程序其他页仍按当前 uCore 装载方式映射，不宣称全局 W^X。
 
-## Agent Context ABI
+## 上下文 ABI：Agent Context
 
 | 项目 | 值 |
 | --- | --- |
@@ -90,7 +94,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 534：
 
 用户自管 cache 区位于 Context 尾部，不进入 shadow 权威历史，也不会被 `context_snapshot()` 刷新覆盖。它只用于 Agent 自己保存策略缓存或临时状态，不能作为内核可信历史。若需要可信历史，应使用 `context_snapshot()` 刷新并读取 shadow 权威数据。若需要完整请求和完整响应，应使用 `context_detail(sequence, out)`，不要把 16 字节短摘要 record 当作完整日志。
 
-## Agent 信息结构
+## 信息结构：Agent
 
 `struct agent_info` 用于 `agent_info()`，关键字段如下：
 
@@ -121,7 +125,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 534：
 | `event_queue_count` / `event_count` / `event_dropped` | 当前队列长度、累计事件数和丢弃计数 |
 | `watch_count` | 当前有效 watch 条件数 |
 | `wait_count` / `wait_sleep_count` / `wait_wakeup_count` / `wait_cancel_count` / `timeout_count` | 等待、进入等待路径、被唤醒、等待取消和超时统计 |
-| `wait_loop_count` | `agent_wait()` 的检查循环次数，用于证明有限 timeout 不反复轮询 |
+| `wait_loop_count` | `agent_wait()` 的检查循环次数，用于检查有限 timeout 是否避免反复轮询 |
 | `timeline_wait_count` / `timeline_wait_sleep_count` / `timeline_wait_wakeup_count` / `timeline_wait_timeout_count` | timeline 等待、睡眠、被观测事件唤醒和等待超时统计 |
 | `last_heartbeat_tick` | 最近心跳 tick |
 | `current_tick` | `agent_info()` 返回时的内核 Agent tick，供 timeline 等待建立未来记录过滤条件 |
@@ -157,10 +161,12 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 534：
 | --- | --- |
 | `AGENT_ROLE_SENTINEL` | `META_READ`、`PROCESS_READ`、`MESSAGE_SEND`、`WATCH`、`AUDIT_WRITE` |
 | `AGENT_ROLE_INVESTIGATOR` | `META_READ`、`CONTENT_READ`、`MESSAGE_SEND`、`WATCH`、`AUDIT_WRITE` |
-| `AGENT_ROLE_RECOVERY` | `META_READ`、`CONTENT_READ`、`MESSAGE_SEND`、`WATCH`、`RECOVER_STAGE`、`REPORT_WRITE`、`AUDIT_WRITE` |
-| `AGENT_ROLE_ORCHESTRATOR` | 全部能力，包括 `META_WRITE` 和 `ORCHESTRATE` |
+| `AGENT_ROLE_RECOVERY` | `META_READ`、`CONTENT_READ`、`MESSAGE_SEND`、`WATCH`、`ACTION_WRITE`、`ARTIFACT_WRITE`、`AUDIT_WRITE` |
+| `AGENT_ROLE_ORCHESTRATOR` | 全部能力，包括 `META_WRITE`、`ORCHESTRATE` 和 `LLM_RELAY` |
 
-敏感授权只使用内核 `struct proc` 中的 `agent_role` 和 `agent_capability_mask`。`agent_op.arg0` 中传入的 role 只保留为 legacy/demo 参数，不参与 `capability_check`、`rerun_stage`、`write_report` 等敏感工具授权。
+敏感授权只使用内核 `struct proc` 中的 `agent_role` 和 `agent_capability_mask`。`agent_op.arg0` 中传入的 role 只保留为 legacy/demo 参数，不参与 `capability_check`、`action_commit`、`artifact_update`、`llm_response` 等敏感工具授权。`rerun_stage` 和 `write_report` 仍可调用，但它们只是面向旧演示的兼容别名；运行记录、事件 action 和重复请求判断都归入 `action_commit` 或 `artifact_update`。
+
+`RECOVER_STAGE` 和 `REPORT_WRITE` 在头文件中保留为旧程序兼容别名，分别等价于 `ACTION_WRITE` 和 `ARTIFACT_WRITE`。新代码和文档应优先使用通用能力名。
 
 Agent-only 直接 syscall 的权限要求：
 
@@ -171,6 +177,10 @@ Agent-only 直接 syscall 的权限要求：
 | `agent_file_meta_init` | 返回 `-1` | `META_WRITE` |
 | `agent_file_meta_set` | 返回 `-1` | `META_WRITE` |
 | `agent_file_query` | 返回 `-1` | `META_READ` |
+| `agent_file_edit_begin` | 返回 `-1` | `CONTENT_READ`、`ARTIFACT_WRITE`、`META_WRITE` 或 `ORCHESTRATE` 之一 |
+| `agent_file_edit_commit` | 返回 `-1` | 租约持有者；orchestrator 可释放卡住的租约 |
+| `agent_file_edit_abort` | 返回 `-1` | 租约持有者；orchestrator 可释放卡住的租约 |
+| `agent_file_edit_state` | 返回 `-1` | Agent 身份 |
 | `agent_file_prefetch_snapshot` | 返回 `-1` | `META_READ` |
 | `agent_file_prefetch_span_snapshot` | 返回 `-1` | `META_READ` |
 | `agent_span_trace_snapshot` | 返回 `-1` | `AUDIT_WRITE` |
@@ -240,8 +250,10 @@ Agent-only 直接 syscall 的权限要求：
 | `AGENT_STATUS_NO_SPACE` | -6 | Context 空间、事件队列或布局不可用 |
 | `AGENT_STATUS_TIMEOUT` | -7 | `agent_wait()` 等待超时 |
 | `AGENT_STATUS_DENIED` | -8 | capability 或角色权限拒绝 |
-| `AGENT_STATUS_DUPLICATE` | -9 | 重复恢复动作被识别 |
+| `AGENT_STATUS_DUPLICATE` | -9 | 重复幂等动作被识别 |
 | `AGENT_STATUS_CANCELLED` | -10 | `agent_wait()` 被受权 Agent 取消 |
+| `AGENT_STATUS_CONFLICT` | -11 | 文件编辑租约已被其他 Agent 持有 |
+| `AGENT_STATUS_STALE` | -12 | 提交时给出的期望版本已经不是当前租约基准版本 |
 
 ## 内核工具表
 
@@ -256,17 +268,22 @@ Agent-only 直接 syscall 的权限要求：
 | 7 | `query_file` | `path:string` 或 `key=value` 属性过滤串 | 兼容路径查询；属性查询返回 hits、scanned、used_index、query plan、truncated 和首个命中文件 |
 | 8 | `send_message` | `target_pid:uint64,message:string` | 向目标 Agent 发送短消息 |
 | 9 | `read_message` | `none` | 读取当前 Agent 消息 |
-| 10 | `file_meta_init` | `none` | 初始化任务四演示文件元数据表 |
-| 11 | `read_file_summary` | `selector:string` | 按物理名、逻辑路径或 stage 返回摘要 |
-| 12 | `dependency_query` | `stage:string` | 返回某阶段影响范围 |
+| 10 | `file_meta_init` | `none` | 重新加载 `.agentmeta`、重建索引并启用根目录扫描；后端为空时安装空元数据表 |
+| 11 | `read_file_summary` | `selector:string` | 按物理名、逻辑路径或对象 label 返回摘要 |
+| 12 | `dependency_query` | `label:string` 或 `label/namespace/run_id` selector | 返回用户态注册的对象依赖影响范围，结果中的 `value2` 是依赖记录代数 |
 | 13 | `capability_check` | `legacy_role:uint64,action:string` | 按当前进程真实 capability 检查动作；返回真实 role 和 capability mask |
-| 14 | `rerun_stage` | `legacy_role:uint64,stage:string` | 只有具备 `RECOVER_STAGE` 的 Agent 可执行幂等恢复动作 |
-| 15 | `write_report` | `legacy_role:uint64,payload:string` | 只有具备 `REPORT_WRITE` 的 Agent 可写恢复报告工件状态；支持 `stage=report;run_id=...;project=...` selector |
+| 14 | `rerun_stage` | `legacy_role:uint64,stage:string` | demo compatibility；内部调用通用 `action_commit` 状态更新路径 |
+| 15 | `write_report` | `legacy_role:uint64,payload:string` | demo compatibility；内部调用通用 `artifact_update` 状态更新路径 |
 | 16 | `agent_watch` | `event_type:uint64,filter:string` | 注册 Agent Loop watch |
 | 17 | `agent_wait` | `timeout:uint64` | syscall-only 可发现项；`agent_run()` 调用返回 `AGENT_STATUS_BAD_PARAM` |
 | 18 | `agent_heartbeat` | `interval:uint64` | 设置心跳间隔；`interval=0` 停止心跳 |
 | 19 | `context_push` | `record` | 手动 Context 节点使用的内部工具 ID |
 | 20 | `read_file_digest` | `selector:string` | 读取真实文件的短预览、参与计算字节数和 FNV-1a 内容指纹 |
+| 21 | `action_commit` | `selector:string` | 按通用对象 selector 幂等提交 Agent 动作，可根据依赖标签刷新后续对象 |
+| 22 | `artifact_update` | `selector:string` | 按通用对象 selector 更新工件、报告、记忆或结果对象状态 |
+| 23 | `llm_request` | `target_pid:uint64,prompt_summary:string` | 记录 LLM 请求摘要，可把请求事件投递给用户态 LLM Relay |
+| 24 | `llm_response` | `target_pid:uint64,response_summary:string` | 由具备 `LLM_RELAY` 的 Agent 投递 LLM 结果事件，唤醒请求方 |
+| 25 | `dependency_update` | `selector:string` | 由具备元数据写权限的 Agent 注册或更新通用对象依赖 |
 
 工具描述中 `flags` 表示调用方式：
 
@@ -277,7 +294,7 @@ Agent-only 直接 syscall 的权限要求：
 
 ## 任务四文件查询 ABI
 
-`struct agent_file_meta` 表示一条实验工件元数据，字段包括：
+`struct agent_file_meta` 表示一条 Agent 文件对象元数据。字段名保留早期科研 demo 兼容形式，但语义按通用对象模型使用：`project` 可作为 namespace，`logical_path` 可作为 object_id，`stage` 可作为 label，`kind` 可作为 type，`status` 可作为 state。字段包括：
 
 - `physical_name`
 - `logical_path`
@@ -297,7 +314,11 @@ Agent-only 直接 syscall 的权限要求：
 - `fs_generation`
 - `update_mask`
 
-文件元数据主键优先使用真实文件的 `dev + inum`。`physical_name` 必须能解析为 uCore 根目录中的真实短文件名，复杂逻辑路径保存在 `logical_path` 等 Agent 属性字段中。根目录私有文件 `.agentmeta` 保存固定格式元数据表，`agent_file_meta_init()` 会强制重新加载它；文件不存在、格式错误或没有有效记录时才安装默认演示数据。普通文件 syscall 不能直接 `open/create/unlink` `.agentmeta`，Agent 子系统内部 helper 负责读写该后端文件。
+文件元数据主键优先使用真实文件的 `dev + inum`。`physical_name` 必须能解析为 uCore 根目录中的真实短文件名，复杂逻辑路径保存在 `logical_path` 等 Agent 属性字段中。根目录私有文件 `.agentmeta` 保存固定格式元数据表，`agent_file_meta_init()` 会强制重新加载它；文件不存在、格式错误或没有有效记录时安装空元数据表。普通文件 syscall 不能直接 `open/create/unlink` `.agentmeta`，Agent 子系统内部 helper 负责读写该后端文件。
+
+字符串 selector 支持两组字段名：兼容字段 `project/run_id/stage/kind/status`，以及通用字段 `namespace/object_id/label/type/state`。内核按这些字段执行同一套查询、状态更新、依赖查询和预取提示生成。科研平台中的 RUN-042 数据由用户态 orchestrator 写入；内核不会预置项目名、run id 或固定阶段顺序。
+
+对象依赖关系不再由内核固定解释某几个阶段名称。用户态可以通过 `dependency_update` 显式注册 `source/target/namespace/run_id/relation/summary` 形式的通用依赖记录，也可以继续通过 `agent_file_meta_set()` 写入对象 label 和 `dependency_mask` 作为紧凑兼容输入。每条记录包含源对象 label、目标对象 label、关系、namespace、run_id 和摘要；`dependency_query` 可用 `label=...;namespace=...;run_id=...` 缩小查询范围，文件查询后的预取提示和 provenance 也优先读取这些通用记录。旧的 `dependency_mask` 仍保留为兼容格式。
 
 `update_mask` 用于精确更新字段，也允许清空字段。例如只清空 status 时传入 `AGENT_FILE_META_UPDATE_STATUS` 并让 `status` 为空字符串。
 
@@ -334,7 +355,7 @@ Agent-only 直接 syscall 的权限要求：
 | `plan_reason` | 查询计划原因 flags，例如强制扫描、status 索引、stage 索引、kind 索引、查询缓存命中或没有可用索引键 |
 | `fs_generation` | 查询时文件元数据服务的全局更新代数 |
 
-每条 hit 还返回 `dev`、`inum`、`size` 和 `fs_generation`，用于证明查询结果来自真实文件绑定和当前元数据版本。
+每条 hit 还返回 `dev`、`inum`、`size` 和 `fs_generation`，用于说明查询结果来自真实文件绑定和当前元数据版本。
 
 查询计划常量：
 
@@ -347,11 +368,48 @@ Agent-only 直接 syscall 的权限要求：
 
 `plan_reason` 使用位标记说明为什么选择该计划：`FORCED_SCAN` 表示调用者强制扫描；`INDEX_OFF` 表示未请求索引；`STATUS_INDEX`、`STAGE_INDEX`、`KIND_INDEX` 表示对应索引参与计划；`NO_INDEX_KEY` 表示请求了索引但查询条件没有 status、stage 或 kind；`CACHE_HIT` 表示本次非强制扫描命中查询直接复用了同一 `fs_generation` 下的结果缓存。空结果和自动扫描进行中的查询不进入缓存。
 
+### 文件编辑租约 ABI
+
+文件编辑租约用于处理两个 Agent 同时希望修改同一真实文件的情况。内核用真实 `dev + inum` 识别文件，不依赖用户态传入的逻辑路径。普通进程不能申请租约；Agent 需要具备内容读取、工件写入、元数据写入或编排能力之一。租约存在时，真实 `write`、`O_TRUNC` 和 `unlink` 路径会检查当前进程是否是租约持有者；不是持有者时直接失败。
+
+调用方式如下：
+
+| 接口 | 语义 |
+| --- | --- |
+| `agent_file_edit_begin(path, flags, ttl_ticks, state)` | 为根目录真实文件申请独占编辑租约；成功返回 0，文件不存在返回 `AGENT_STATUS_NOT_FOUND`，已有持有者返回 `AGENT_STATUS_CONFLICT` |
+| `agent_file_edit_commit(lease_id, expected_version, state)` | 提交租约；`expected_version` 必须等于 begin 返回的 `base_version`，否则返回 `AGENT_STATUS_STALE` |
+| `agent_file_edit_abort(lease_id)` | 释放当前进程持有的租约；如果已经写入过文件，内核仍会推进文件版本 |
+| `agent_file_edit_state(path, state)` | 查询某个真实文件当前是否有租约和当前版本 |
+
+`flags` 当前支持：
+
+| flag | 含义 |
+| --- | --- |
+| `AGENT_FILE_EDIT_F_BREAK_EXPIRED` | 保留标志；过期租约当前会在新操作到来时自动释放 |
+| `AGENT_FILE_EDIT_F_ORCHESTRATOR_BREAK` | orchestrator 可主动释放已有租约并重新申请，用于演示控制面处理卡住的编辑者 |
+
+`struct agent_file_edit_state` 返回：
+
+| 字段 | 含义 |
+| --- | --- |
+| `active` | 是否存在有效租约 |
+| `owner_pid` / `owner_agent_id` / `owner_role` | 当前持有者信息 |
+| `dirty` | 持有者是否已经写入、截断或删除文件 |
+| `lease_id` | 提交或放弃时使用的租约编号 |
+| `dev` / `inum` | 真实文件身份 |
+| `base_version` | begin 时看到的版本 |
+| `current_version` | 当前版本；提交成功后若发生写入会加 1 |
+| `deadline_tick` | 租约自动释放 tick |
+| `conflict_count` | 本租约被其他进程拒绝的次数 |
+| `path` | begin/state 调用时使用的短文件名 |
+
+该机制采用“立即拒绝 + 有限租约”的方式处理资源访问冲突：没有等待队列，因此不会形成循环等待；持有者异常退出或长时间不提交时，后续操作会释放过期租约。它不是文件内容合并器，不会自动把两个 Agent 的修改合成一份新内容；它负责阻止无序覆盖，并用版本检查告诉调用者必须重新读取、重新生成或走恢复流程。
+
 ### 文件内容摘要工具
 
 `read_file_digest(selector:string)` 是任务四的内容级工具。它要求调用者具备 `AGENT_CAP_CONTENT_READ`，普通 metadata 查询能力不足以读取文件内容。`selector` 可以是物理文件名、逻辑路径、stage，也可以是 `project=...;run_id=...;stage=...;status=...` 这类属性过滤串；属性过滤命中多条时读取第一条命中文件。`.agentmeta` 私有后端文件不会通过该工具暴露。
 
-绑定 Agent metadata 的真实文件会进入 8 槽 digest cache。缓存 key 是真实文件 `dev + inum + size + fs_generation`，缓存 value 是文件大小、参与计算字节数、FNV-1a 指纹和短预览。文件写入、截断、删除或 metadata 更新后，`fs_generation` 变化，旧 digest cache 条目自然失效。未绑定 Agent metadata 的普通文件不缓存，避免内核无法感知同尺寸改写时返回过期摘要。缓存命中和未命中计数通过 `agent_info.file_digest_cache_hits`、`agent_info.file_digest_cache_misses` 暴露。
+绑定 Agent metadata 的真实文件会进入 8 槽 digest cache。缓存 key 是真实文件 `dev + inum + size + content_generation`，缓存 value 是文件大小、参与计算字节数、FNV-1a 指纹和短预览。文件创建、写入、截断或删除后，内容版本变化，旧 digest cache 条目自然失效；单纯 metadata 更新不会让同一文件内容摘要缓存失效。未绑定 Agent metadata 的普通文件不缓存，避免内核无法感知同尺寸改写时返回过期摘要。缓存命中和未命中计数通过 `agent_info.file_digest_cache_hits`、`agent_info.file_digest_cache_misses` 暴露。
 
 返回值使用 `struct agent_result`：
 
@@ -366,7 +424,7 @@ Agent-only 直接 syscall 的权限要求：
 
 ### 文件预取提示 ABI
 
-文件查询成功写入 Context 后，内核会根据命中的 source 文件、同一 project/workflow/run 的阶段依赖和当前索引信息，生成 metadata 预取提示。提示首先保存在当前 Agent 的 PCB 中，容量为 `AGENT_FILE_PREFETCH_MAX_HINTS = 8`。同时，带有 span 的提示会写入全局 span 预取提示总线，容量为 `AGENT_FILE_PREFETCH_SPAN_MAX = 32`。它只提示“后续可能需要哪些文件 metadata”，预取提示本身不读取文件内容，也不替代 `agent_file_query()`；需要内容级证据时使用 `read_file_digest` 工具读取短预览和内容指纹。
+文件查询成功写入 Context 后，内核会根据命中的 source 文件、同一 namespace/workflow/run 的对象标签依赖和当前索引信息，生成 metadata 预取提示。提示首先保存在当前 Agent 的 PCB 中，容量为 `AGENT_FILE_PREFETCH_MAX_HINTS = 8`。同时，带有 span 的提示会写入全局 span 预取提示总线，容量为 `AGENT_FILE_PREFETCH_SPAN_MAX = 32`。它只提示“后续可能需要哪些文件 metadata”，预取提示本身不读取文件内容，也不替代 `agent_file_query()`；需要内容级证据时使用 `read_file_digest` 工具读取短预览和内容指纹。
 
 当 Agent 通过 message 事件唤醒另一个 Agent 时，内核会把发送者当前可见的 metadata 预取提示复制到接收者的预取提示 ring，并给复制后的提示增加 `AGENT_FILE_PREFETCH_REASON_HANDOFF`。这样接收者可以直接调用 `agent_file_prefetch_snapshot()` 得到上游 Agent 的下一步候选，不需要从消息文本中解析策略字段。复制后的提示也会写入 span 预取提示总线，保留 source pid、target pid 和 span id，便于同一因果链上的 Agent 用统一接口查询本轮协作中的候选工件。
 
@@ -398,7 +456,7 @@ Agent-only 直接 syscall 的权限要求：
 
 | flag | 含义 |
 | --- | --- |
-| `AGENT_FILE_PREFETCH_REASON_DEPENDENCY` | 由阶段依赖关系产生 |
+| `AGENT_FILE_PREFETCH_REASON_DEPENDENCY` | 由对象标签依赖关系产生 |
 | `AGENT_FILE_PREFETCH_REASON_SAME_RUN` | source 和 target 属于同一 project/workflow/run |
 | `AGENT_FILE_PREFETCH_REASON_PENDING` | target 当前状态为 pending |
 | `AGENT_FILE_PREFETCH_REASON_STAGE_INDEX` | target 可通过 stage 索引定位 |
@@ -614,7 +672,7 @@ Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。队列满时返回 `AGENT_
 | `status` | 等待结果状态 |
 | `event_id` | 内核分配的事件 ID |
 | `tick` | 投递 tick |
-| `corr_id` | 可选相关 ID，用于恢复动作、消息或测试 |
+| `corr_id` | 可选相关 ID，用于动作、消息、LLM 请求或测试 |
 | `cause_sequence` | 触发该事件的前序 Context sequence；跨 Agent 消息时结合 source pid 和 span 解释 |
 | `span_id` | 事件所属因果链 ID，目标 Agent 消费事件后会继承该 span |
 | `payload` | 64 字节短文本事件摘要 |
@@ -629,7 +687,7 @@ Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。队列满时返回 `AGENT_
 | `AGENT_EVENT_JOB_DONE` | 作业完成 |
 | `AGENT_EVENT_POLICY_DENIED` | 策略拒绝 |
 | `AGENT_EVENT_CONTEXT_LIMIT` | Context 限制事件 |
-| `AGENT_EVENT_LLM_DONE` | LLM Gateway 返回解释或摘要；当前作为最终成品预留事件 |
+| `AGENT_EVENT_LLM_DONE` | 用户态 LLM Relay 返回解释或摘要；内核只负责事件、Context、timeline 和审计记录 |
 | `AGENT_EVENT_DASHBOARD_EXPORT` | 可视化导出完成；当前作为最终成品预留事件 |
 | `AGENT_EVENT_CANCELLED` | `agent_wait_cancel()` 产生的等待取消事件 |
 
@@ -637,7 +695,7 @@ Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。队列满时返回 `AGENT_
 
 `agent_wait_cancel(pid, reason)` 是 Agent-only 控制接口。调用者必须具备 `MESSAGE_SEND` 或 `ORCHESTRATE`。内核给目标 Agent 写入一次性取消令牌并唤醒目标；如果目标已经在 `agent_wait()` 中睡眠，会立即返回 `AGENT_STATUS_CANCELLED`；如果取消令牌先到达，目标下一次 `agent_wait()` 会立即返回。返回的事件类型为 `AGENT_EVENT_CANCELLED`，payload 保存短 reason，cause/span 继承调用者当前 Context 状态。普通进程调用返回 `-1`，目标不存在返回 `AGENT_STATUS_NOT_FOUND`，目标已有未消费取消令牌时返回 `AGENT_STATUS_DUPLICATE`。
 
-## Context Path 接口
+## 上下文路径接口：Context Path
 
 | 接口 | 行为 |
 | --- | --- |
@@ -659,9 +717,9 @@ Context v6 增加轻量因果链字段和完整性链字段：
 | `prev_hash` | 追加本条记录前的 Context 链尾 hash；第一条记录为 0 |
 | `record_hash` | 由 prev_hash、sequence、cause/span、工具 ID、状态、数值槽和短文本摘要计算得到的记录 hash |
 
-`struct agent_context_header.latest_record_hash` 暴露当前 Context 链尾 hash。`context_rollback(sequence)` 会把链尾 hash 回滚到目标记录的 `record_hash`，`context_clear()` 会把链尾 hash 清零。这个字段用于证明当前可见路径的顺序关系由内核维护，不依赖用户态日志拼接。
+`struct agent_context_header.latest_record_hash` 暴露当前 Context 链尾 hash。`context_rollback(sequence)` 会把链尾 hash 回滚到目标记录的 `record_hash`，`context_clear()` 会把链尾 hash 清零。这个字段用于表达当前可见路径的顺序关系由内核维护，不依赖用户态日志拼接。
 
-内核写入自动工具记录时，会使用当前 Agent 的 `current_cause_sequence` 和 `current_span_id`；写入完成后，当前 cause 更新为新记录的 sequence。`context_push(record)` 可以显式给出 cause/span，用于把手动记录接入同一链路。跨 Agent 消息或文件事件会携带 source Agent 的 cause/span，目标 Agent 在 `agent_wait()` 消费事件后继承该 span，后续工具调用继续写入同一链路。该机制用于内核内可信审计和演示追踪，不等同于持久化密码学证明。
+内核写入自动工具记录时，会使用当前 Agent 的 `current_cause_sequence` 和 `current_span_id`；写入完成后，当前 cause 更新为新记录的 sequence。`context_push(record)` 可以显式给出 cause/span，用于把手动记录接入同一链路。跨 Agent 消息或文件事件会携带 source Agent 的 cause/span，目标 Agent 在 `agent_wait()` 消费事件后继承该 span，后续工具调用继续写入同一链路。该机制用于内核内可信审计和演示追踪，不等同于持久化密码学保证。
 
 Context record flags：
 

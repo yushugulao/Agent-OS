@@ -313,6 +313,8 @@ def action_plan_line(record: dict[str, object]) -> str:
     sequence = line_value(record.get("sequence", ""))
     if kind == "research_run":
         return f"plan={sequence};kind=research_run;prepare=rp_input;execute=rp_orch;collect=rp_web_bundle;status=ready"
+    if kind == "research_rerun":
+        return f"plan={sequence};kind=research_rerun;prepare=rp_input;execute=rp_orch;collect=rp_runner;status=ready"
     if kind == "studio_launch":
         return f"plan={sequence};kind=studio_launch;prepare=rp_input;execute=rp_orch;collect=rp_studio;status=ready"
     if kind == "agentcompare":
@@ -489,6 +491,7 @@ def compact_seed_text(text: str) -> str:
     keep_by_kind = {
         "studio_launch": {"title", "goal", "workbench_id", "workbench"},
         "research_run": {"run_id", "title", "question", "provider", "dataset_rows", "reference_entries", "workspace_files", "csv_file", "reference_file"},
+        "research_rerun": {"run_id", "parent_run", "source_run", "provider", "question", "dataset_rows", "reference_entries", "workspace_files"},
         "dataset": {"title", "dataset_rows", "columns"},
         "dataset_preview": {"dataset_id", "rows", "quality"},
         "dataset_visualization": {"dataset_id", "chart", "x_field", "y_field", "group_field", "points"},
@@ -702,7 +705,15 @@ def publish_next_state(next_state: Path, state_dir: Path) -> None:
             shutil.copy2(item, state_dir / item.name)
 
 
-def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_distro: str) -> dict[str, object]:
+def run_seeded_ucore(
+    repo_dir: Path,
+    run_dir: Path,
+    timeout_seconds: int,
+    wsl_distro: str,
+    chapter: str = "platform_seeded",
+    init_proc: str = "rp_seed_orch",
+    pass_marker: str = "rp_orch: passed",
+) -> dict[str, object]:
     repo_dir = repo_dir.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     log_path = run_dir / "ucore-run.log"
@@ -731,18 +742,18 @@ def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_dis
     seed_file_bash = bash_path(seed_file)
     run_command_text = (
         f"cd {shell_quote(repo_bash)} && "
-        "make user TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded >/dev/null"
+        f"make user TOOLPREFIX=riscv64-linux-gnu- CHAPTER={chapter} >/dev/null"
         " && "
         f"cp {shell_quote(seed_file_bash)} user/target/bin/rp_host_action_seed"
         " && "
         "rm -rf nfs/fs nfs/fs.img nfs/fs-copy.img && "
         "make nfs/fs.img >/dev/null && "
-        "make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded LOG=warn INIT_PROC=rp_seed_orch >/dev/null && "
-        f"timeout {timeout_seconds}s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded LOG=warn INIT_PROC=rp_seed_orch"
+        f"make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER={chapter} LOG=warn INIT_PROC={init_proc} >/dev/null && "
+        f"timeout {timeout_seconds}s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER={chapter} LOG=warn INIT_PROC={init_proc}"
     )
     code = run_command(make_wsl_command(run_command_text, wsl_distro), log_path, timeout_seconds + 30, append=True)
     text = log_path.read_text(encoding="utf-8", errors="replace")
-    passed = "rp_orch: passed" in text and "child_failed" not in text and "ialloc" not in text
+    passed = pass_marker in text and "child_failed" not in text and "ialloc" not in text
     extract_summary: dict[str, object] = {"status": "skipped", "extracted_state_files": 0}
     image_path = repo_dir / "nfs" / "fs-copy.img"
     if image_path.exists():
@@ -766,6 +777,10 @@ def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_dis
     write_run_result_state(next_state, summary, text)
     write_json(run_dir / "ucore-run-summary.json", summary)
     return summary
+
+
+def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_distro: str) -> dict[str, object]:
+    return run_seeded_ucore(repo_dir, run_dir, timeout_seconds, wsl_distro)
 
 
 def append_records(existing: Iterable[dict[str, object]], extra: Iterable[dict[str, object]]) -> list[dict[str, object]]:

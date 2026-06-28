@@ -412,7 +412,7 @@ def main() -> int:
             assert any("host_portability_steps=applied" in line for line in rp_wfio["lines"]), rp_wfio
             assert any("host_portability_import_action=workflow-import:WF1:nextflow;format=nextflow;source=main.wf1.nf" in line for line in rp_wfio["lines"]), rp_wfio
             assert any("host_portability_plan_action=workflow-migration-plan:WF1;target=agentos-ucore;steps=9;risks=4" in line for line in rp_wfio["lines"]), rp_wfio
-            assert any("host_portability_bind_action=workflow-migration-execution-plan:WF1:agentcompare;profile=compare-profile:WF1:migration;scenario=backend-scenario:WF1;backend_cases=7" in line for line in rp_wfio["lines"]), rp_wfio
+            assert any("host_portability_bind_action=workflow-migration-execution-plan:WF1:agentcompare;profile=compare-profile:WF1:migration;scenario=backend-scenario:WF1;backend_cases=4" in line for line in rp_wfio["lines"]), rp_wfio
             assert any("host_portability_rehearse_action=workflow-rehearsal:WF1;binding=workflow-migration-binding:WF1;status=passed;observed_ready=3;skipped=1" in line for line in rp_wfio["lines"]), rp_wfio
             assert any("host_portability_review_action=workflow-migration-readiness:WF1;decision=ready_for_agentos;blocking_items=0;work_items=6" in line for line in rp_wfio["lines"]), rp_wfio
             assert any("host_portability_package_action=wf-portability.zip;format=zip;import=workflow-import:WF1:nextflow;bundle=wf-portability.zip" in line for line in rp_wfio["lines"]), rp_wfio
@@ -1467,6 +1467,11 @@ def main() -> int:
             assert "Operations Report Narrative" in run_html
             assert "Operations Source Files" in run_html
             assert "operations_report" in run_html
+
+            index_html = read_text(base + "/index.html")
+            assert "Dual Target Overview" in index_html
+            assert "AgentOS Flow" in index_html
+            assert "Visible Comparison" in index_html
             assert "host_action_operations_report" in run_html
             assert "workbench_delivery" in run_html
             assert "project_followup" in run_html
@@ -1491,7 +1496,7 @@ def main() -> int:
             assert "/actions/research/llm-relay-request" in run_html
             assert "batch_tool_context" in run_html
             assert "execution_plan:pass:record:baseline" in run_html
-            assert "context_path:planned:kernel_context:target" in run_html
+            assert "context_path:pass:rebuild_from_files:userland" in run_html
             assert "risks" in run_html
             workflow_html = read_text(base + "/workflow.html")
             assert "Workflow Runner" in workflow_html
@@ -1981,14 +1986,23 @@ def main() -> int:
             assert "Backend Runner Cases" in compare_html
             assert "Backend Case Details" in compare_html
             assert "Backend Evidence Report" in compare_html
+            assert "AgentOS Main Flow Kernel Stages" in compare_html
+            assert "AgentOS Kernel Output Files" in compare_html
+            assert "AgentOS Flow Stages" in compare_html
+            assert "AgentOS Metadata" in compare_html
+            assert "AgentOS Recovery" in compare_html
+            assert "AgentOS Events" in compare_html
+            assert "AgentOS Audit" in compare_html
+            assert "AgentOS Real Task" in compare_html
+            assert "AgentOS Edit Lease" in compare_html
             assert "retry-recovery" in compare_html
             assert "rerun_align" in compare_html
-            assert "kernel_fsmeta" in compare_html
+            assert "metadata_index" in compare_html
             assert "scan_records_128" in compare_html
             assert "kernel_context_path" in compare_html
             assert "Input Check" in compare_html
             assert "tool_output_missing" in compare_html
-            assert "kernel_required" in compare_html
+            assert "detail_checks=kernel" in compare_html
             assert "Backend Study Metrics" in compare_html
             assert "Detail Checks" in compare_html
             assert "operations_board_checks" in compare_html

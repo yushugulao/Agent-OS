@@ -87,7 +87,7 @@ Agent Context 使用固定高地址用户虚拟区：
 这种设计的效果：
 
 1. Agent 可以直接读取 Context 镜像，减少 syscall。
-2. 内核仍掌握权威历史，防止用户态伪造 Context Path。
+2. 内核仍保存权威历史，防止用户态伪造 Context Path。
 3. 固定地址简化用户态 ABI。
 4. 6 页容量足以容纳 header、latest result、128 条摘要记录、完整性链字段，并在尾部保留用户自管 cache。
 
@@ -131,7 +131,7 @@ Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 
 7. 子进程执行后续工具调用和 Context 测试。
 8. 父进程等待子进程退出并检查状态。
 
-`labdemo_ucore` 进一步证明多个 Agent 可以并存。普通 init 只创建 orchestrator，orchestrator 再创建：
+`labdemo_ucore` 进一步覆盖多个 Agent 并存的运行方式。普通 init 只创建 orchestrator，orchestrator 再创建：
 
 - recovery；
 - investigator；

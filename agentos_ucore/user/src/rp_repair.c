@@ -33,10 +33,10 @@ static int run_kernel_recovery(void)
 		return -1;
 	}
 
-	make_recovery_op(&repair_ops[0], AGENT_TOOL_RERUN_STAGE, 4201,
-			 "stage=align;project=lab-gene-x;run_id=RUN-042");
-	make_recovery_op(&repair_ops[1], AGENT_TOOL_WRITE_REPORT, 4202,
-			 "stage=report;project=lab-gene-x;run_id=RUN-042");
+	make_recovery_op(&repair_ops[0], AGENT_TOOL_ACTION_COMMIT, 4201,
+			 "label=align;namespace=lab-gene-x;run_id=RUN-042");
+	make_recovery_op(&repair_ops[1], AGENT_TOOL_ARTIFACT_UPDATE, 4202,
+			 "label=report;namespace=lab-gene-x;run_id=RUN-042");
 	if (agent_run(repair_ops, repair_results, 2, 0) != 2 ||
 	    repair_results[0].status != AGENT_STATUS_OK ||
 	    repair_results[1].status != AGENT_STATUS_OK) {
@@ -64,17 +64,34 @@ static int run_kernel_recovery(void)
 		       repair_query_result.used_index);
 		return -1;
 	}
+	memset(&repair_query, 0, sizeof(repair_query));
+	repair_query.flags = AGENT_FILE_QUERY_USE_INDEX;
+	repair_query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(repair_query.project, "lab-gene-x");
+	strcpy(repair_query.run_id, "RUN-042");
+	strcpy(repair_query.stage, "report");
+	strcpy(repair_query.kind, "report");
+	strcpy(repair_query.status, "ok");
+	if (agent_file_query(&repair_query, &repair_query_result) < 1 ||
+	    repair_query_result.total_hits < 1 ||
+	    !repair_query_result.used_index) {
+		printf("rp_repair: report_metadata_query_failed hits=%d index=%d\n",
+		       repair_query_result.total_hits,
+		       repair_query_result.used_index);
+		return -1;
+	}
 	if (!rp_write_file("rp_agentos_recovery",
 			   "stage=align\n"
 			   "project=lab-gene-x\n"
 			   "run_id=RUN-042\n"
-			   "kernel_tool=rerun_stage,write_report\n"
+			   "kernel_tool=action_commit,artifact_update\n"
 			   "context_snapshot=trusted\n"
+			   "report_metadata=used_index\n"
 			   "status=ready\n")) {
 		return -1;
 	}
 	if (!rp_append_file("rp_agentos_mainflow",
-			    "stage=recovery;failure_recovery=kernel_tool;kernel_rerun_stage=ok;kernel_write_report=ok;context_snapshot=trusted;metadata_after_repair=used_index;status=ready"))
+			    "stage=recovery;failure_recovery=generic_action;kernel_action_commit=ok;kernel_artifact_update=ok;context_snapshot=trusted;metadata_after_repair=used_index;status=ready"))
 		return -1;
 	return 1;
 }
@@ -94,8 +111,8 @@ int main(void)
 			   "action=minimal_rerun\n"
 			   "result=align.bam\n"
 			   "agentos_recovery=kernel_tool\n"
-			   "kernel_rerun_stage=ok\n"
-			   "kernel_write_report=ok\n"
+			   "kernel_action_commit=ok\n"
+			   "kernel_artifact_update=ok\n"
 			   "status=recovered\n")) {
 		return 1;
 	}
@@ -105,17 +122,17 @@ int main(void)
 			   "attempts=2\n"
 			   "backoff_ticks=1\n"
 			   "kernel_recovery_context=trusted\n"
-			   "kernel_recovery_result=rerun_stage_ok\n"
+			   "kernel_recovery_result=action_commit_ok\n"
 			   "final_result=recovered\n"
 			   "status=ready\n")) {
 		return 1;
 	}
 	if (kernel_recovery &&
-	    !rp_append_file("rp_tool", "tool=agentos.rerun_stage")) {
+	    !rp_append_file("rp_tool", "tool=agentos.action_commit")) {
 		return 1;
 	}
 	if (kernel_recovery &&
-	    !rp_append_file("rp_tool", "tool=agentos.write_report")) {
+	    !rp_append_file("rp_tool", "tool=agentos.artifact_update")) {
 		return 1;
 	}
 	if (!rp_append_file("rp_ack", "ack=repair;msg=6;status=recovered")) return 1;

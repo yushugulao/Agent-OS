@@ -43,14 +43,15 @@ static uint64 expected_caps(int role)
 	if (role == AGENT_ROLE_RECOVERY)
 		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
 		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
-		       AGENT_CAP_RECOVER_STAGE | AGENT_CAP_REPORT_WRITE |
+		       AGENT_CAP_ACTION_WRITE | AGENT_CAP_ARTIFACT_WRITE |
 		       AGENT_CAP_AUDIT_WRITE;
 	if (role == AGENT_ROLE_ORCHESTRATOR)
 		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
 		       AGENT_CAP_PROCESS_READ | AGENT_CAP_MESSAGE_SEND |
-		       AGENT_CAP_WATCH | AGENT_CAP_RECOVER_STAGE |
-		       AGENT_CAP_REPORT_WRITE | AGENT_CAP_AUDIT_WRITE |
-		       AGENT_CAP_META_WRITE | AGENT_CAP_ORCHESTRATE;
+		       AGENT_CAP_WATCH | AGENT_CAP_ACTION_WRITE |
+		       AGENT_CAP_ARTIFACT_WRITE | AGENT_CAP_AUDIT_WRITE |
+		       AGENT_CAP_META_WRITE | AGENT_CAP_ORCHESTRATE |
+		       AGENT_CAP_LLM_RELAY;
 	return 0;
 }
 
@@ -79,8 +80,9 @@ static void set_align_failed(const char *run_id, int fid, const char *physical)
 	strcpy(meta.kind, "log");
 	strcpy(meta.status, "failed");
 	strcpy(meta.summary, "security test failure");
-	meta.dependency_mask = AGENT_DEP_ALIGN | AGENT_DEP_ANALYZE |
-			       AGENT_DEP_REPORT | AGENT_DEP_ARCHIVE;
+	meta.dependency_mask = agent_dependency_label_bit("analyze") |
+			       agent_dependency_label_bit("report") |
+			       agent_dependency_label_bit("archive");
 	check(agent_file_meta_set(&meta) == 0, "set failed meta");
 }
 
@@ -247,9 +249,22 @@ static void run_sentinel(void)
 
 	check_role(AGENT_ROLE_SENTINEL, "sentinel");
 	make_op(&op, AGENT_TOOL_CAPABILITY_CHECK, 8101,
-		AGENT_ROLE_RECOVERY, "rerun_stage");
+		AGENT_ROLE_RECOVERY, "action_commit");
 	run_one(&op, &res, AGENT_STATUS_DENIED, "sentinel spoof cap");
 	check(res.value1 == AGENT_ROLE_SENTINEL, "real sentinel role");
+	make_op(&op, AGENT_TOOL_ACTION_COMMIT, 8105, AGENT_ROLE_RECOVERY,
+		"label=align;run_id=RUN-999;namespace=lab-gene-x");
+	run_one(&op, &res, AGENT_STATUS_DENIED, "sentinel generic action");
+	make_op(&op, AGENT_TOOL_ARTIFACT_UPDATE, 8106, AGENT_ROLE_RECOVERY,
+		"label=report;run_id=RUN-999;namespace=lab-gene-x");
+	run_one(&op, &res, AGENT_STATUS_DENIED, "sentinel generic artifact");
+	make_op(&op, AGENT_TOOL_LLM_RESPONSE, 8107, getppid(),
+		"template response");
+	run_one(&op, &res, AGENT_STATUS_DENIED, "sentinel llm relay");
+	make_op(&op, AGENT_TOOL_DEPENDENCY_UPDATE, 8108, 0,
+		"source=align;target=review");
+	run_one(&op, &res, AGENT_STATUS_DENIED,
+		"sentinel dependency update denied");
 	make_op(&op, AGENT_TOOL_RERUN_STAGE, 8102, AGENT_ROLE_RECOVERY,
 		"align");
 	run_one(&op, &res, AGENT_STATUS_DENIED, "sentinel spoof rerun");
@@ -287,25 +302,31 @@ static void run_recovery(void)
 	struct agent_result res;
 
 	check_role(AGENT_ROLE_RECOVERY, "recovery");
-	make_op(&op, AGENT_TOOL_RERUN_STAGE, 9101, AGENT_ROLE_SENTINEL,
-		"stage=align;run_id=RUN-999;project=lab-gene-x");
-	run_one(&op, &res, AGENT_STATUS_OK, "recovery rerun");
-	make_op(&op, AGENT_TOOL_RERUN_STAGE, 9101, AGENT_ROLE_SENTINEL,
-		"stage=align;run_id=RUN-999;project=lab-gene-x");
+	make_op(&op, AGENT_TOOL_ACTION_COMMIT, 9101, AGENT_ROLE_SENTINEL,
+		"label=align;run_id=RUN-999;namespace=lab-gene-x");
+	run_one(&op, &res, AGENT_STATUS_OK, "recovery action");
+	make_op(&op, AGENT_TOOL_ACTION_COMMIT, 9101, AGENT_ROLE_SENTINEL,
+		"label=align;run_id=RUN-999;namespace=lab-gene-x");
 	run_one(&op, &res, AGENT_STATUS_DUPLICATE, "recovery duplicate");
-	make_op(&op, AGENT_TOOL_RERUN_STAGE, 9101, AGENT_ROLE_SENTINEL,
-		"stage=align;run_id=RUN-998;project=lab-gene-x");
+	make_op(&op, AGENT_TOOL_ACTION_COMMIT, 9101, AGENT_ROLE_SENTINEL,
+		"label=align;run_id=RUN-998;namespace=lab-gene-x");
 	run_one(&op, &res, AGENT_STATUS_OK, "same request other run");
-	make_op(&op, AGENT_TOOL_RERUN_STAGE, 9103, AGENT_ROLE_SENTINEL,
-		"stage=align;run_id=RUN-NOPE;project=lab-gene-x");
-	run_one(&op, &res, AGENT_STATUS_NOT_FOUND, "missing rerun target");
-	make_op(&op, AGENT_TOOL_WRITE_REPORT, 9102, AGENT_ROLE_SENTINEL,
+	make_op(&op, AGENT_TOOL_ACTION_COMMIT, 9103, AGENT_ROLE_SENTINEL,
+		"label=align;run_id=RUN-NOPE;namespace=lab-gene-x");
+	run_one(&op, &res, AGENT_STATUS_NOT_FOUND, "missing action target");
+	make_op(&op, AGENT_TOOL_ARTIFACT_UPDATE, 9102, AGENT_ROLE_SENTINEL,
+		"label=report;run_id=RUN-999;namespace=lab-gene-x");
+	run_one(&op, &res, AGENT_STATUS_OK, "recovery artifact");
+	make_op(&op, AGENT_TOOL_ARTIFACT_UPDATE, 9104, AGENT_ROLE_SENTINEL,
+		"label=report;run_id=RUN-NOPE;namespace=lab-gene-x");
+	run_one(&op, &res, AGENT_STATUS_NOT_FOUND, "missing artifact target");
+	make_op(&op, AGENT_TOOL_RERUN_STAGE, 9105, AGENT_ROLE_SENTINEL,
+		"stage=align;run_id=RUN-998;project=lab-gene-x");
+	run_one(&op, &res, AGENT_STATUS_OK, "legacy rerun alias");
+	make_op(&op, AGENT_TOOL_WRITE_REPORT, 9106, AGENT_ROLE_SENTINEL,
 		"stage=report;run_id=RUN-999;project=lab-gene-x");
-	run_one(&op, &res, AGENT_STATUS_OK, "recovery write report");
-	make_op(&op, AGENT_TOOL_WRITE_REPORT, 9104, AGENT_ROLE_SENTINEL,
-		"stage=report;run_id=RUN-NOPE;project=lab-gene-x");
-	run_one(&op, &res, AGENT_STATUS_NOT_FOUND, "missing report target");
-	printf("agentsecurity_ucore: recovery rerun_ok=1 duplicate=1\n");
+	run_one(&op, &res, AGENT_STATUS_OK, "legacy report alias");
+	printf("agentsecurity_ucore: recovery action_ok=1 duplicate=1\n");
 	exit(0);
 }
 
@@ -346,8 +367,8 @@ static void run_orchestrator(void)
 	check_align_status("RUN-042", "failed");
 	check_report_status("RUN-999", "ok");
 	check_report_status("RUN-042", "failed");
-	printf("agentsecurity_ucore: scoped_rerun=1\n");
-	printf("agentsecurity_ucore: scoped_report=1\n");
+	printf("agentsecurity_ucore: scoped_action=1\n");
+	printf("agentsecurity_ucore: scoped_artifact=1\n");
 	printf("agentsecurity_ucore: passed\n");
 	exit(0);
 }

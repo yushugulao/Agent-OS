@@ -6,7 +6,7 @@
 
 | 状态 | 含义 |
 | --- | --- |
-| 已验证 | 已有实现和用户态测试输出证明 |
+| 已验证 | 已有实现和用户态测试输出支持 |
 | 部分实现 | 有基础能力，但未覆盖赛题完整语义 |
 | 未实现 | 尚无可验收实现 |
 | 文档待补 | 功能存在，但说明材料仍需补强 |
@@ -18,7 +18,7 @@
 | G-1 | 在教学操作系统内核中实现 Agent-OS 功能模块 | 已验证 | `os/agent.c`、`os/agent.h`、`os/proc.c` | `agentfinal_ucore`、`agentbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore` |
 | G-2 | 系统可在 QEMU 上运行 | 已验证 | `Makefile`、`nfs/fs.img` | `scripts/run-agent-tests.sh` |
 | G-3 | 提供内核代码 | 已验证 | `os/` | Git 仓库源码 |
-| G-4 | 提供用户态测试程序 | 已验证 | `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore` | [verification.md](verification.md) |
+| G-4 | 提供用户态测试程序 | 已验证 | `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentconflict_ucore`、`agentllm_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore` | [verification.md](verification.md) |
 | G-5 | 提供综合演示场景 | 已验证 | `user/src/labdemo_ucore.c` | `labdemo_ucore: passed` |
 | G-6 | 提供设计文档和运行说明 | 已验证 | [../README.md](../README.md)、[design.md](design.md)、[demo-script.md](demo-script.md) | 本文档、[verification.md](verification.md) |
 | G-7 | 保留代表性的 uCore 基础 syscall 兼容性 | 已验证 | `SYS_trace`、`SYS_mailread`、`SYS_mailwrite` | `ch3_trace` 输出 `Test trace OK!`；`agentsecurity_ucore: mail_basic=1` |
@@ -38,16 +38,17 @@
 
 | ID | 赛题要求 | 状态 | 实现位置 | 验证证据 |
 | --- | --- | --- | --- | --- |
-| T2-1 | 用户态 Agent 测试程序能成功调用至少 3 个内核工具 | 已验证 | `agent_tools[]` 20 个工具、`agent_run()` | `agentfinal_ucore` 批量调用 echo；`labdemo_ucore` 调用 query_file、read_file_summary、read_file_digest、dependency、capability、rerun、write_report、send_message；`agentfs_ucore` 调用 read_file_digest |
+| T2-1 | 用户态 Agent 测试程序能成功调用至少 3 个内核工具 | 已验证 | `agent_tools[]` 25 个工具、`agent_run()` | `agentfinal_ucore` 批量调用 echo，并验证 `action_commit`、`artifact_update`、`llm_request`、`llm_response`；`agentllm_ucore` 验证请求 Agent 和 Relay Agent 之间的 LLM 事件流；`labdemo_ucore` 调用 query_file、read_file_summary、read_file_digest、dependency、capability、action、artifact、send_message；`agentfs_ucore` 调用 read_file_digest 和 dependency_update |
 | T2-2 | 每个工具请求和响应均为结构化格式 | 已验证 | `struct agent_op`、`struct agent_result`、`struct agent_tool_desc` | `agentfinal_ucore`、`agentbench_ucore` |
 | T2-3 | 提供工具列表及参数说明 | 已验证 | `agent_tool_list()`、`agent_tools[]`、tool flags | [api.md](api.md) 工具表 |
 | T2-4 | 工具调用结果可写入 Agent Context | 已验证 | `agent_append_context()` 写 shadow 权威页并同步用户镜像 | `agentfinal_ucore` 读取 latest 和 snapshot |
 | T2-5 | 错误路径有明确返回 | 已验证 | `AGENT_STATUS_*`、工具执行状态码、真实 role/capability 授权、legacy 工具 ID/名称一致性检查 | `labdemo_ucore` 验证 denied 和 duplicate；`agentsecurity_ucore` 验证伪造 role 被拒绝和 `legacy_tool_mismatch=1` |
 | T2-6 | 工具解析性能优化 | 扩展增强 | `agent_run()` 批量执行、ID 分发 | `agentbench_ucore` |
-| T2-7 | 敏感工具授权不信任用户态自报 role | 扩展增强 | `capability_check`、`rerun_stage`、`write_report` 均读取当前 PCB capability | `agentsecurity_ucore: sentinel spoof_denied=1` |
+| T2-7 | 敏感工具授权不信任用户态自报 role | 扩展增强 | `capability_check`、`action_commit`、`artifact_update`、`dependency_update`、`llm_response` 均读取当前 PCB capability；`rerun_stage`、`write_report` 作为兼容别名也走同一授权、事件记录和重复请求判断路径 | `agentsecurity_ucore: sentinel spoof_denied=1` |
 | T2-8 | legacy `tool_id` 和 `tool_name` 不一致时拒绝执行 | 扩展增强 | `sys_agent_call()` 先校验 ID 对应工具名，错误时返回 `AGENT_STATUS_BAD_REQUEST` 和 `tool_mismatch` | `agentsecurity_ucore: legacy_tool_mismatch=1` |
 | T2-9 | legacy 参数键/类型错误被拒绝，syscall-only 工具不能走 batch | 扩展增强 | legacy 参数校验、`AGENT_TOOL_F_SYSCALL_ONLY` | `agentsecurity_ucore: legacy_param_validation=1 syscall_only=1` |
-| T2-10 | 工具名称 + 参数键值列表协议可作为正式入口 | 已验证 | `agent_call()` 支持 name-only 请求和 key/type 校验 | `agentfinal_ucore: legacy_name_protocol=1` |
+| T2-10 | 工具名称 + 参数键值列表协议可作为正式入口 | 已验证 | `agent_call()` 支持 name-only 请求和 key/type 校验，覆盖基础工具、文件摘要工具和依赖注册/查询工具 | `agentfinal_ucore: legacy_name_protocol=1` |
+| T2-11 | LLM 请求和响应能作为结构化工具调用进入内核记录 | 已验证 | `AGENT_TOOL_LLM_REQUEST`、`AGENT_TOOL_LLM_RESPONSE`、`AGENT_EVENT_LLM_DONE`、`AGENT_CAP_LLM_RELAY` | `agentllm_ucore: template_relay=1`、`agentfinal_ucore: llm_template_relay=1` |
 
 ## 任务三：上下文路径管理
 
@@ -78,22 +79,23 @@
 | T4-3 | 有扫描路径和索引路径 | 已验证 | `agent_file_query()`、status/stage/kind 索引桶 | `agentfs_ucore: bulk_index scan=118 index=6 hits=1`、`agentfs_ucore: scan_index_consistent=1`、`agentbench_ucore: file_scan_query/file_index_query` |
 | T4-4 | 查询结果包含命中、截断、扫描数、是否使用索引、查询计划、候选数和 tick | 已验证 | `struct agent_file_query_result` | `agentfs_ucore: query_plan ...`、`agentfs_ucore: truncated_query total=100 returned=3 truncated=1`、`agentbench_ucore: file_query_plan ...` |
 | T4-5 | 查询计划能解释索引选择原因 | 扩展增强 | `plan`、`plan_reason`、`index_bucket`、`candidate_records` | `agentfs_ucore: query_plan scan_plan=0 index_plan=1 reason=4 bucket=15 candidates=6` |
-| T4-6 | 支持依赖关系查询，服务最小恢复 | 已验证 | `AGENT_TOOL_DEPENDENCY_QUERY`、dependency mask | `labdemo_ucore: affected stages=align+analyze+report+archive` |
+| T4-6 | 支持对象依赖关系注册和查询，服务预取提示和用户态恢复策略 | 已验证 | `AGENT_TOOL_DEPENDENCY_UPDATE`、`AGENT_TOOL_DEPENDENCY_QUERY`、内部依赖记录、依赖位图兼容输入、`label/namespace/run_id` 选择条件 | `agentfs_ucore: dependency_update=1`、`agentfs_ucore: scoped_dependency=1`、`labdemo_ucore: affected labels=align+analyze+report+archive` |
 | T4-7 | 查询写入 Context Path，可用于报告回放 | 已验证 | 文件查询和工具调用均追加 Context | `labdemo_ucore`、`context_snapshot` |
 | T4-8 | 文件元数据写入只能由具备权限的 Agent 执行 | 扩展增强 | `agent_file_meta_init()`、`agent_file_meta_set()` 要求 Agent 且具备 `AGENT_CAP_META_WRITE` | `agentsecurity_ucore: plain_process_denied=1`、`sentinel meta write denied` |
 | T4-9 | 索引初始化前查询安全 | 扩展增强 | `agentinit()` 初始化 status/stage/kind 索引桶为 `-1` | `agentsecurity_ucore: preinit_index_query=1` |
-| T4-10 | 多 run 恢复和报告写入只修改目标 run | 扩展增强 | `rerun_stage` 和 `write_report` 支持 `stage=...;run_id=...;project=...` selector | `agentsecurity_ucore: scoped_rerun=1`、`agentsecurity_ucore: scoped_report=1` |
-| T4-11 | 文件元数据绑定真实 uCore 根目录 inode | 已验证 | `agent_fs_note_create/write/truncate/delete()`、`dev + inum` 主键 | `agentfs_ucore: default_inode`、`agentfs_ucore: custom_inode` |
+| T4-10 | 多 run 动作提交和工件更新只修改目标 run | 扩展增强 | `action_commit` 和 `artifact_update` 支持 `label=...;run_id=...;namespace=...` selector；旧 `rerun_stage` 和 `write_report` 为兼容别名 | `agentsecurity_ucore: scoped_action=1`、`agentsecurity_ucore: scoped_artifact=1` |
+| T4-11 | 文件元数据绑定真实 uCore 根目录 inode | 已验证 | `agent_fs_note_create/write/truncate/delete()`、`dev + inum` 主键 | `agentfs_ucore: demo_inode`、`agentfs_ucore: custom_inode` |
 | T4-12 | 元数据可写入并重新加载 | 已验证 | 私有 `.agentmeta` 固定格式元数据文件 | `agentfs_ucore: .agentmeta_reload=1` |
 | T4-13 | 普通文件 syscall 不能直接访问 Agent 元数据后端 | 已验证 | `fileopen()` / `fileunlink()` 对 `.agentmeta` 返回 `-1` | `agentsecurity_ucore: .agentmeta_protected=1` |
 | T4-14 | 对真实磁盘目录做自动扫描并维护索引 | 部分实现 | `agent_background_maintain()`、`agent_file_request_scan()`、调度器空隙分批扫描 uCore 根目录 | `agentscan_ucore: background_scan usershell=1`、`agentscan_ucore: auto_file_create=1`、`agentscan_ucore: auto_file_delete=1`；当前不做多级目录递归 |
-| T4-15 | 基于历史查询和阶段依赖生成预取提示 | 扩展增强 | `agent_file_prefetch_snapshot()`、`agent_file_prefetch_span_snapshot()`、`struct agent_file_prefetch_hint`、每 Agent 8 条提示 ring、同一 span 32 条全局提示、message 事件提示交接 | `agentfinal_ucore: prefetch_hints=1`、`agentfinal_ucore: span_prefetch=1`、`agentfs_ucore: prefetch_hints=1`、`agentbench_ucore: prefetch_records ...`、`labdemo_ucore: sentinel prefetch_hint ...`、`labdemo_ucore: investigator handoff_prefetch ...`、`labdemo_ucore: investigator span_prefetch ...`、`agentos:event type=PREFETCH_USED ...` |
+| T4-15 | 基于历史查询和对象标签依赖生成预取提示 | 扩展增强 | `agent_file_prefetch_snapshot()`、`agent_file_prefetch_span_snapshot()`、`struct agent_file_prefetch_hint`、每 Agent 8 条提示 ring、同一 span 32 条全局提示、message 事件提示交接 | `agentfinal_ucore: prefetch_hints=1`、`agentfinal_ucore: span_prefetch=1`、`agentfs_ucore: prefetch_hints=1`、`agentbench_ucore: prefetch_records ...`、`labdemo_ucore: sentinel prefetch_hint ...`、`labdemo_ucore: investigator handoff_prefetch ...`、`labdemo_ucore: investigator span_prefetch ...`、`agentos:event type=PREFETCH_USED ...` |
 | T4-16 | 预取提示交接可由 orchestrator 审计和过滤 | 扩展增强 | `AGENT_AUDIT_KIND_PREFETCH`、`agent_audit_snapshot()`、`agent_audit_query()` | `labdemo_ucore: global_audit=1 ... prefetch=1`、`labdemo_ucore: audit_query=1 ... prefetch=...` |
 | T4-17 | 同一 span 的预取提示可跨 Agent 查询 | 扩展增强 | 全局 span 预取提示总线、`AGENT_FILE_PREFETCH_REASON_SPAN_BUS`、source pid/target pid 字段 | `agentfinal_ucore: span_prefetch=1`、`labdemo_ucore: investigator span_prefetch stage=analyze ...` |
 | T4-18 | Agent 可读取真实文件的轻量内容证据 | 扩展增强 | `AGENT_TOOL_READ_FILE_DIGEST`、`read_file_digest` 工具、真实 inode `readi()`、FNV-1a 内容指纹、短预览、`CONTENT_READ` capability 授权 | `agentfs_ucore: content_digest=1 size=7 bytes=7 ...`、`agentbench_ucore: file_digest ...`、`agentsecurity_ucore` sentinel 拒绝 |
 | T4-19 | 重复文件属性查询可复用同一元数据代数下的结果 | 扩展增强 | 8 槽 generation-aware 文件查询结果缓存、`AGENT_FILE_QUERY_REASON_CACHE_HIT`、`fs_generation` 失效判断 | `agentfs_ucore: query_cache=1 ...`、`agentfs_ucore: clear_status=1 cache_invalidated=1`、`agentbench_ucore: file_query_cache hit=1 ...` |
-| T4-20 | 重复读取同一真实文件内容证据可复用缓存并在文件变化后失效 | 扩展增强 | 8 槽 digest cache、`dev/inum/size/fs_generation` key、`agent_info.file_digest_cache_hits/misses` | `agentfs_ucore: digest_cache=1 ...`、`agentfs_ucore: digest_cache_invalidated=1 ...`、`agentbench_ucore: file_digest_cache hits=63 misses=1` |
+| T4-20 | 重复读取同一真实文件内容证据可复用缓存并在文件变化后失效 | 扩展增强 | 8 槽 digest cache、`dev/inum/size/content_generation` key、`agent_info.file_digest_cache_hits/misses` | `agentfs_ucore: digest_cache=1 ...`、`agentfs_ucore: digest_cache_invalidated=1 ...`、`agentbench_ucore: file_digest_cache hits=63 misses=1` |
 | T4-21 | 文件内容证据可进入统一观测流 | 扩展增强 | `read_file_digest` 工具调用自动追加 Context，`agent_timeline_query()` 按 `tool_id=AGENT_TOOL_READ_FILE_DIGEST` 过滤，timeline value/text 保留 size、bytes、hash 和 preview | `agentfs_ucore: digest_timeline=1 tool=20 preview=agentfs2`、`labdemo_ucore: timeline_query prefetch=3 cursor=... digest=1` |
+| T4-22 | 两个 Agent 同时编辑同一真实文件时，内核能阻止无序覆盖 | 扩展增强 | `agent_file_edit_begin/commit/abort/state`、真实 `write/O_TRUNC/unlink` 路径调用租约检查、版本提交检查 | `agentconflict_ucore: conflict_denied=1 direct_write_denied=1`、`agentconflict_ucore: stale_commit=1 versioned_commit=1` |
 
 ## 任务五：Agent Loop 内核运行机制
 
@@ -123,13 +125,13 @@
 
 | ID | 赛题方向 | 当前状态 | 说明 |
 | --- | --- | --- | --- |
-| T6-1 | 综合演示程序 | 已验证 | `labdemo_ucore` 串联任务一至五，输出 `agentos:event`，读取真实 align 日志内容摘要，并查询、过滤全局审计短记录和统一 timeline |
+| T6-1 | 综合演示程序 | 已验证 | `labdemo_ucore` 以科研 Agent 平台为演示负载，串联任务一至五，输出 `agentos:event`，读取真实 align 日志内容摘要，并查询、过滤全局审计短记录和统一 timeline |
 | T6-2 | 性能和计时演示程序 | 已验证 | `agentbench_ucore` 输出批量工具、Context、文件查询性能，以及轮询/事件等待计时观测；`labbench_ucore` 作为演示规划入口包装运行 |
-| T6-3 | 权限限制演示程序 | 已验证 | `agentsecurity_ucore` 输出普通进程拒绝、usershell 等价启动路径、初始化前索引查询、legacy mismatch、sentinel 伪造拒绝、recovery 幂等恢复和定向恢复 |
-| T6-4 | 云端 LLM Gateway | 未实现 | 当前保留结构化事件、模板 `LLM_CALL` / `LLM_RESULT`、referenced sequence、plan 和 corr_id 字段，尚未接真实云端 LLM |
+| T6-3 | 权限限制演示程序 | 已验证 | `agentsecurity_ucore` 输出普通进程拒绝、usershell 等价启动路径、初始化前索引查询、legacy mismatch、sentinel 伪造拒绝、recovery 幂等 action/artifact 更新和定向更新 |
+| T6-4 | LLM-friendly template relay | 已验证 | 内核提供 `llm_request` / `llm_response` 工具、`AGENT_EVENT_LLM_DONE`、`LLM_RELAY` capability、Context/timeline/audit 记录；真实云端调用放在用户态或宿主机 relay | `agentllm_ucore: template_relay=1`、`agentfinal_ucore: llm_template_relay=1` |
 | T6-5 | 可视化大屏 | 未实现 | 当前已输出 `agentos:event`，大屏解析器尚未实现 |
-| T6-6 | 查询历史驱动的预测性预取 | 部分实现 | 当前实现文件 metadata 预取提示，覆盖同一 run 的阶段依赖；综合演示中 message 入队时内核把 sentinel 的提示交接给 investigator 使用，并写入同一 span 的全局提示总线；尚未做文件内容预加载或通用预测器 | `agentfs_ucore: prefetch_hints=1`、`agentbench_ucore: file_prefetch_snapshot ...`、`agentfinal_ucore: span_prefetch=1`、`labdemo_ucore: sentinel prefetch_hint ...`、`labdemo_ucore: investigator handoff_prefetch ...`、`labdemo_ucore: investigator span_prefetch ...`、`agentos:event type=PREFETCH_USED ...` |
+| T6-6 | 查询历史驱动的预测性预取 | 部分实现 | 当前实现文件 metadata 预取提示，覆盖同一 run 的对象标签依赖；综合演示中 message 入队时内核把 sentinel 的提示交接给 investigator 使用，并写入同一 span 的全局提示总线；尚未做文件内容预加载或通用预测器 | `agentfs_ucore: prefetch_hints=1`、`agentbench_ucore: file_prefetch_snapshot ...`、`agentfinal_ucore: span_prefetch=1`、`labdemo_ucore: sentinel prefetch_hint ...`、`labdemo_ucore: investigator handoff_prefetch ...`、`labdemo_ucore: investigator span_prefetch ...`、`agentos:event type=PREFETCH_USED ...` |
 
 ## 追踪结论
 
-任务一至三已有增强实现和测试证据，并且在 Context 容量、批量工具调用、Context shadow 可信历史、cause/span 因果链、用户自管 cache、detail 查询、snapshot 查询、运行轨迹查询、当前 span 短记录查询、统一 timeline 导出、timeline 内核侧过滤、timeline 游标增量读取、wait-and-read 和性能测试方面高于最小要求。任务四已经实现真实 inode 关联、私有 `.agentmeta` 元数据文件、属性查询、索引查询、根目录自动扫描、内容摘要工具和基于查询历史的 metadata 预取提示；综合演示中 message 入队时内核会把 sentinel 的提示交接给 investigator，investigator 既能从本地提示 ring 读取上游提示，也能从同一 span 的全局提示总线确认 source/target pid，还能从当前 span 短记录中看到 Context、事件和预取交接来源，再按提示补读 analyze 摘要，orchestrator 可从全局审计中过滤该交接证据，并可通过统一 timeline 一次读取 Context、事件、调度和预取交接摘要，也可用 timeline query 精确读取 prefetch handoff 记录或按上一条记录继续读取。任务五已经实现 16 槽 FIFO 事件队列、事件因果继承、watch/unwatch、有限 timeout 睡眠等待、wait cancel、heartbeat wake/stop、Agent 感知调度、受权调度配置、最近调度原因查询、当前 span 短记录、统一 timeline、timeline 过滤查询、timeline 游标增量读取和 wait-and-read、全局审计短记录和过滤查询。当前主要短板在多级目录递归扫描、复杂策略语言、云端 LLM Gateway、可视化大屏、演示视频和答辩材料。
+任务一至三已有增强实现和测试证据，并且在 Context 容量、批量工具调用、Context shadow 可信历史、cause/span 因果链、用户自管 cache、detail 查询、snapshot 查询、运行轨迹查询、当前 span 短记录查询、统一 timeline 导出、timeline 内核侧过滤、timeline 游标增量读取、wait-and-read 和性能测试方面高于最小要求。任务四已经实现真实 inode 关联、私有 `.agentmeta` 元数据文件、属性查询、索引查询、根目录自动扫描、内容摘要工具、文件编辑租约和基于查询历史的 metadata 预取提示；综合演示中 message 入队时内核会把 sentinel 的提示交接给 investigator，investigator 既能从本地提示 ring 读取上游提示，也能从同一 span 的全局提示总线确认 source/target pid，还能从当前 span 短记录中看到 Context、事件和预取交接来源，再按提示补读 analyze 摘要，orchestrator 可从全局审计中过滤该交接证据，并可通过统一 timeline 一次读取 Context、事件、调度和预取交接摘要，也可用 timeline query 精确读取 prefetch handoff 记录或按上一条记录继续读取。任务五已经实现 16 槽 FIFO 事件队列、事件因果继承、watch/unwatch、有限 timeout 睡眠等待、wait cancel、heartbeat wake/stop、Agent 感知调度、受权调度配置、最近调度原因查询、当前 span 短记录、统一 timeline、timeline 过滤查询、timeline 游标增量读取和 wait-and-read、全局审计短记录和过滤查询。当前主要短板在多级目录递归扫描、复杂策略语言、云端 LLM Gateway、可视化大屏、演示视频和答辩材料。

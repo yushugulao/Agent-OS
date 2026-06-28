@@ -8,7 +8,7 @@
 
 uCore 分支实现的是“128 条固定容量短文本摘要路径 + 最近 128 条完整详情 + 用户自管 cache + cause/span 因果字段 + prev/record hash 完整性链”。摘要 record 用于快速展示和高频查询，`context_detail(sequence, out)` 用于查看内核 PCB 中保存的完整 `agent_op`、`agent_result` 和记录 flags。用户自管 cache 位于 Context 尾部，用于 Agent 自己保存临时策略状态，不进入内核可信历史。
 
-## Context 布局
+## 上下文布局：Context
 
 Agent Context 共 6 页：
 
@@ -70,7 +70,7 @@ Agent Context 共 6 页：
 | `op` | 完整 `struct agent_op` |
 | `result` | 完整 `struct agent_result` |
 
-## shadow 权威历史
+## 权威历史：shadow
 
 Context 使用双份数据：
 
@@ -89,7 +89,7 @@ Context 使用双份数据：
 4. snapshot 同步 user mirror，使直接读也恢复为原始内容；
 5. 用户态向 `user_cache_offset` 写入 `cache-ok`；
 6. 再次调用 `context_snapshot()`；
-7. cache 内容仍然保留，证明 snapshot 只刷新内核管理区，不覆盖用户自管 cache。
+7. cache 内容仍然保留，表示 snapshot 只刷新内核管理区，不覆盖用户自管 cache。
 
 对应输出：
 
@@ -198,7 +198,7 @@ labdemo_ucore: audit_query=1 kind=... span=... event=2 prefetch=... start=...
 
 span 同时用于文件预取提示。文件查询产生的 metadata 预取提示会进入当前 Agent 本地 ring；如果提示带有非零 span，内核还会写入全局 span 提示总线。目标 Agent 消费 message 事件并继承 span 后，可以调用 `agent_file_prefetch_span_snapshot()` 查询这条因果链中的提示，看到 source pid、target pid 和目标工件。这让跨 Agent 协作不需要只依赖消息文本或串口日志来拼接上游提示来源。
 
-## FIFO 淘汰
+## 环形淘汰：FIFO
 
 当前容量固定为 128 条。超过容量时，系统覆盖最旧记录，并增加 `dropped_records`。
 

@@ -99,11 +99,11 @@ static int role_for_program(const char *program)
 	if (strcmp(program, "rp_agent_collab") == 0 ||
 	    strcmp(program, "rp_auditor") == 0 ||
 	    strcmp(program, "rp_package") == 0 ||
-	    strcmp(program, "rp_realtask") == 0)
+	    strcmp(program, "rp_realtask") == 0 ||
+	    strcmp(program, "rp_backend") == 0)
 		return AGENT_ROLE_ORCHESTRATOR;
 	if (strcmp(program, "rp_query") == 0 ||
 	    strcmp(program, "rp_execobs") == 0 ||
-	    strcmp(program, "rp_backend") == 0 ||
 	    strcmp(program, "rp_consistency") == 0 ||
 	    strcmp(program, "rp_metrics") == 0 ||
 	    strcmp(program, "rp_compare_plain") == 0)

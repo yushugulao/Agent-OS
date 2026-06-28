@@ -263,6 +263,24 @@ int main(void)
 			}
 			if (!rp_append_host_action_line("rp_artifact_manifest", "host_manifest_run_id=", seed_run)) return 1;
 		}
+		if (rp_host_seed_has("kind=research_rerun")) {
+			char rerun_id[48];
+			char parent_run[48];
+			char line[160];
+			if (!rp_host_seed_copy_value_for_kind("kind=research_rerun", "run_id=", rerun_id, sizeof(rerun_id))) {
+				rp_copy_text(rerun_id, sizeof(rerun_id), "RUN-905-rerun");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=research_rerun", "parent_run=", parent_run, sizeof(parent_run)) &&
+			    !rp_host_seed_copy_value_for_kind("kind=research_rerun", "source_run=", parent_run, sizeof(parent_run))) {
+				rp_copy_text(parent_run, sizeof(parent_run), "RUN-900");
+			}
+			rp_copy_text(line, sizeof(line), "host_manifest_rerun=");
+			rp_append_text(line, sizeof(line), rerun_id);
+			rp_append_text(line, sizeof(line), ";parent=");
+			rp_append_text(line, sizeof(line), parent_run);
+			rp_append_text(line, sizeof(line), ";status=ready");
+			if (!rp_append_file("rp_artifact_manifest", line)) return 1;
+		}
 		if (rp_host_seed_has("kind=revision_task")) {
 			char targets[80];
 			if (!rp_host_seed_copy_value_for_kind("kind=revision_task", "targets=", targets, sizeof(targets))) {
@@ -654,6 +672,28 @@ int main(void)
 		if (!rp_append_file("rp_runner", "host_action_stages=5")) return 1;
 		if (!rp_append_file("rp_runner", "host_action_artifacts=6")) return 1;
 		if (!rp_append_file("rp_runner", "host_action_report=host action research task completed from seeded inbox")) return 1;
+		if (!rp_append_file("rp_runner", "host_action_status=completed")) return 1;
+	}
+	if (rp_host_seed_has("kind=research_rerun")) {
+		char rerun_id[48];
+		char parent_run[48];
+		char line[160];
+		if (!rp_host_seed_copy_value_for_kind("kind=research_rerun", "run_id=", rerun_id, sizeof(rerun_id))) {
+			rp_copy_text(rerun_id, sizeof(rerun_id), "RUN-905-rerun");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=research_rerun", "parent_run=", parent_run, sizeof(parent_run)) &&
+		    !rp_host_seed_copy_value_for_kind("kind=research_rerun", "source_run=", parent_run, sizeof(parent_run))) {
+			rp_copy_text(parent_run, sizeof(parent_run), "RUN-900");
+		}
+		rp_copy_text(line, sizeof(line), "host_action_rerun=usable-run:");
+		rp_append_text(line, sizeof(line), rerun_id);
+		rp_append_text(line, sizeof(line), ";parent=");
+		rp_append_text(line, sizeof(line), parent_run);
+		rp_append_text(line, sizeof(line), ";status=completed");
+		if (!rp_append_file("rp_runner", line)) return 1;
+		if (!rp_append_file("rp_runner", "host_action_kind=research_rerun")) return 1;
+		if (!rp_append_file("rp_runner", "host_action_stages=5")) return 1;
+		if (!rp_append_file("rp_runner", "host_action_artifacts=6")) return 1;
 		if (!rp_append_file("rp_runner", "host_action_status=completed")) return 1;
 	}
 	if (rp_host_seed_has("kind=agentcompare")) {

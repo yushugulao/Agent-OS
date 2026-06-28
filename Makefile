@@ -1,4 +1,4 @@
-.PHONY: clean build user run debug test plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run dual-platform-run dual-clean .FORCE
+.PHONY: clean build user run debug test plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run dual-platform-run full-verify dual-clean .FORCE
 all: build
 
 K = os
@@ -150,11 +150,13 @@ test: user run
 
 plain-platform-build:
 	rm -f $(F)/fs.img $(F)/fs-copy.img
+	$(MAKE) -C user clean
 	$(MAKE) user nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform
 	$(MAKE) build TOOLPREFIX=$(TOOLPREFIX) LOG=warn INIT_PROC=rp_orch CHAPTER=platform
 
 plain-platform-run:
 	rm -f $(F)/fs.img $(F)/fs-copy.img
+	$(MAKE) -C user clean
 	$(MAKE) user nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform
 	$(MAKE) run TOOLPREFIX=$(TOOLPREFIX) LOG=error INIT_PROC=rp_orch CHAPTER=platform
 
@@ -175,16 +177,21 @@ agentos-platform-user:
 
 agentos-platform-build:
 	rm -f agentos_ucore/nfs/fs.img agentos_ucore/nfs/fs-copy.img
+	$(MAKE) -C agentos_ucore/user clean
 	$(MAKE) -C agentos_ucore user nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform_agentos
 	$(MAKE) -C agentos_ucore build TOOLPREFIX=$(TOOLPREFIX) LOG=warn INIT_PROC=rp_agentos_orch
 
 agentos-platform-run:
 	rm -f agentos_ucore/nfs/fs.img agentos_ucore/nfs/fs-copy.img
+	$(MAKE) -C agentos_ucore/user clean
 	$(MAKE) -C agentos_ucore user nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform_agentos
 	$(MAKE) -C agentos_ucore run TOOLPREFIX=$(TOOLPREFIX) LOG=error INIT_PROC=rp_agentos_orch CHAPTER=platform_agentos
 
 dual-platform-run:
 	TOOLPREFIX=$(TOOLPREFIX) bash scripts/run-dual-platforms.sh
+
+full-verify:
+	TOOLPREFIX=$(TOOLPREFIX) bash scripts/run-full-verification.sh
 
 agentos-clean:
 	$(MAKE) -C agentos_ucore clean

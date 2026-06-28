@@ -455,3 +455,28 @@ int agent_file_query(struct agent_file_query *query,
 {
 	return syscall(SYS_agent_file_query, query, result);
 }
+
+int agent_file_edit_begin(const char *path, uint64 flags, int ttl_ticks,
+			  struct agent_file_edit_state *state)
+{
+	return syscall(SYS_agent_file_edit_begin, path, flags, ttl_ticks,
+		       state);
+}
+
+int agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
+			   struct agent_file_edit_state *state)
+{
+	return syscall(SYS_agent_file_edit_commit, lease_id, expected_version,
+		       state);
+}
+
+int agent_file_edit_abort(uint64 lease_id)
+{
+	return syscall(SYS_agent_file_edit_abort, lease_id);
+}
+
+int agent_file_edit_state(const char *path,
+			  struct agent_file_edit_state *state)
+{
+	return syscall(SYS_agent_file_edit_state, path, state);
+}

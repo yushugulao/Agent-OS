@@ -1,29 +1,53 @@
-# uCore-Tutorial-Tests
+# 用户程序目录说明：AgentOS-uCore
 
-User testcases for [uCore-Tutorial-Code-2025S](https://github.com/learningos/uCore-Tutorial-Code-2025S).
+本目录包含 AgentOS-uCore 目标的用户态程序。它保留 uCore 教学测试的构建方式，同时加入 AgentOS 专项测试、综合演示程序和科研 Agent 平台程序。
 
-### Usage
+## 基础用法
+
+生成指定章节或目标的用户程序：
 
 ```shell
-make CHAPTER=5 BASE=1
+make CHAPTER=agent
+make CHAPTER=platform_agentos
 ```
 
-CHAPTER:
-* Optional values: 1,2,3,3_2,3t,4,4_3,5,6,7.
-* Note that uCore will set the default value of `CHAPTER` according the name of branch. So usually you need not to care about this parameter.
+`CHAPTER` 常用取值：
 
-BASE:
-* Optional values: 0,1
-* Default value: 0
-* `BASE=1` will generate basic testcases starting which can be handled by the uCore without any modification. Basic testcases have prefixed names: 'chxb_'.
-* `BASE=0` will generate all the testcases.
+- `agent`：构建 AgentOS 专项测试程序，例如 `agentfinal_ucore`、`agentfs_ucore`、`agentloop_ucore`、`agentbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`。
+- `platform_agentos`：构建接入增强内核服务的科研 Agent 平台程序，例如 `rp_agentos_orch` 和完整 `rp_*` 平台程序集。
+- uCore 原有章节值仍可用于基础教学测试。
 
-### Output
+`BASE` 参数含义与 uCore 原始用户程序目录一致：
 
-* target/bin : all `.bin` file
-* target/elf : all `.elf` file (Used for extended lab)
-* asm : the assembly of testcases.
+- `BASE=1`：只生成基础测试。
+- `BASE=0`：生成完整测试集合。
 
-### Dev Log
+## 输出目录
 
-* v1.0: basic version.
+- `target/bin`：生成的 `.bin` 文件。
+- `target/elf`：生成的 `.elf` 文件。
+- `asm`：用户程序反汇编输出。
+
+## 本项目相关入口
+
+AgentOS 专项验证入口：
+
+```text
+agentfinal_ucore
+agentfs_ucore
+agentscan_ucore
+agentloop_ucore
+agentsched_ucore
+agentbench_ucore
+labbench_ucore
+labdemo_ucore
+agentsecurity_ucore
+```
+
+科研 Agent 平台增强入口：
+
+```text
+rp_agentos_orch
+```
+
+`rp_agentos_orch` 会创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，再运行与 plain target 可比较的 RUN-042 科研流程，并把关键内核证据写入 `rp_agentos_*` 状态文件。

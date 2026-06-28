@@ -1,0 +1,204 @@
+#!/usr/bin/env python3
+"""Compare extracted research-platform state from plain uCore and AgentOS-uCore."""
+
+from __future__ import annotations
+
+import argparse
+import json
+from dataclasses import dataclass
+from pathlib import Path
+
+
+GOOD_STATUS = {"ready", "passed", "ok"}
+ADAPTED_ANCHORS = {
+    ("rp_agentcmp", "backend_runner_checks"),
+}
+
+
+@dataclass(frozen=True)
+class StateLine:
+    file_name: str
+    line_no: int
+    anchor: str
+    status: str
+    text: str
+
+
+def read_summary(state_dir: Path) -> dict[str, object]:
+    summary_path = state_dir / "extract-summary.json"
+    if not summary_path.is_file():
+        raise ValueError(f"missing extract summary: {summary_path}")
+    return json.loads(summary_path.read_text(encoding="utf-8"))
+
+
+def read_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8", errors="replace")
+
+
+def parse_fields(line: str) -> dict[str, str]:
+    fields: dict[str, str] = {}
+    for part in line.split(";"):
+        if "=" not in part:
+            continue
+        key, value = part.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        fields[key] = value.strip()
+    return fields
+
+
+def line_anchor(fields: dict[str, str]) -> str:
+    if not fields:
+        return ""
+    first_key = next(iter(fields))
+    if first_key == "status":
+        return "status"
+    return f"{first_key}={fields[first_key]}"
+
+
+def collect_good_status_lines(state_dir: Path, files: set[str]) -> list[StateLine]:
+    result: list[StateLine] = []
+    for file_name in sorted(files):
+        path = state_dir / file_name
+        if file_name == "extract-summary.json" or not path.is_file():
+            continue
+        for index, raw in enumerate(read_text(path).splitlines(), start=1):
+            line = raw.strip()
+            if not line:
+                continue
+            fields = parse_fields(line)
+            status = fields.get("status", "").lower()
+            if status not in GOOD_STATUS:
+                continue
+            anchor = line_anchor(fields)
+            if not anchor:
+                continue
+            result.append(StateLine(file_name, index, anchor, status, line))
+    return result
+
+
+def collect_agentos_status_index(state_dir: Path, files: set[str]) -> dict[tuple[str, str], set[str]]:
+    index: dict[tuple[str, str], set[str]] = {}
+    for file_name in sorted(files):
+        path = state_dir / file_name
+        if file_name == "extract-summary.json" or not path.is_file():
+            continue
+        for raw in read_text(path).splitlines():
+            fields = parse_fields(raw.strip())
+            status = fields.get("status", "").lower()
+            if status not in GOOD_STATUS:
+                continue
+            anchor = line_anchor(fields)
+            if not anchor:
+                continue
+            index.setdefault((file_name, anchor), set()).add(status)
+    return index
+
+
+def first_key(anchor: str) -> str:
+    return anchor.split("=", 1)[0]
+
+
+def has_good_record_with_key(state_dir: Path, file_name: str, key: str) -> bool:
+    path = state_dir / file_name
+    if not path.is_file():
+        return False
+    for raw in read_text(path).splitlines():
+        fields = parse_fields(raw.strip())
+        if fields.get("status", "").lower() in GOOD_STATUS and first_key(line_anchor(fields)) == key:
+            return True
+    return False
+
+
+def collect_plain_costs(state_dir: Path) -> set[str]:
+    path = state_dir / "rp_backend_exec"
+    if not path.is_file():
+        return set()
+    costs: set[str] = set()
+    for raw in read_text(path).splitlines():
+        fields = parse_fields(raw.strip())
+        if fields.get("runner_report") and fields.get("status", "").lower() in GOOD_STATUS:
+            cost = fields.get("plain_cost", "")
+            if cost:
+                costs.add(cost)
+    return costs
+
+
+def verify_backend_costs(plain_dir: Path, agentos_dir: Path) -> int:
+    plain_costs = collect_plain_costs(plain_dir)
+    agentos_costs = collect_plain_costs(agentos_dir)
+    missing = sorted(plain_costs - agentos_costs)
+    if missing:
+        raise ValueError("AgentOS backend report is missing plain_cost items: " + ", ".join(missing))
+    return len(plain_costs)
+
+
+def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> dict[str, object]:
+    plain_summary = read_summary(plain_dir)
+    agentos_summary = read_summary(agentos_dir)
+    plain_files = set(plain_summary.get("files", []))
+    agentos_files = set(agentos_summary.get("files", []))
+    missing_files = sorted(plain_files - agentos_files)
+    common_files = plain_files & agentos_files
+    if missing_files:
+        raise ValueError("AgentOS state is missing plain files: " + ", ".join(missing_files[:20]))
+    if len(common_files) < min_common_files:
+        raise ValueError(f"common state files too few: {len(common_files)} < {min_common_files}")
+    if int(agentos_summary.get("extracted_state_files", 0)) < int(plain_summary.get("extracted_state_files", 0)):
+        raise ValueError("AgentOS extracted fewer state files than plain uCore")
+
+    plain_good_lines = collect_good_status_lines(plain_dir, plain_files)
+    agentos_index = collect_agentos_status_index(agentos_dir, agentos_files)
+    missing_status: list[StateLine] = []
+    for line in plain_good_lines:
+        if line.file_name == "rp_backend_exec":
+            continue
+        key = first_key(line.anchor)
+        if (line.file_name, key) in ADAPTED_ANCHORS:
+            if not has_good_record_with_key(agentos_dir, line.file_name, key):
+                missing_status.append(line)
+            continue
+        statuses = agentos_index.get((line.file_name, line.anchor), set())
+        if line.status not in statuses and not statuses:
+            missing_status.append(line)
+    if missing_status:
+        details = [
+            f"{line.file_name}:{line.line_no}:{line.anchor}:status={line.status}"
+            for line in missing_status[:20]
+        ]
+        raise ValueError("AgentOS state is missing plain success records: " + ", ".join(details))
+
+    preserved_costs = verify_backend_costs(plain_dir, agentos_dir)
+    return {
+        "plain_files": int(plain_summary.get("extracted_state_files", 0)),
+        "agentos_files": int(agentos_summary.get("extracted_state_files", 0)),
+        "common_files": len(common_files),
+        "agentos_extra_files": len(agentos_files - plain_files),
+        "checked_success_records": len(plain_good_lines),
+        "preserved_plain_costs": preserved_costs,
+        "status": "ready",
+    }
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Compare plain and AgentOS research-platform state files.")
+    parser.add_argument("--plain-dir", type=Path, required=True)
+    parser.add_argument("--agentos-dir", type=Path, required=True)
+    parser.add_argument("--min-common-files", type=int, default=240)
+    parser.add_argument("--json-out", type=Path, default=None)
+    args = parser.parse_args()
+
+    summary = compare_state(args.plain_dir, args.agentos_dir, args.min_common_files)
+    if args.json_out is not None:
+        args.json_out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    print(
+        "dual_platform_state_compare: plain_files={plain_files} agentos_files={agentos_files} common_files={common_files} agentos_extra_files={agentos_extra_files} checked_success_records={checked_success_records} preserved_plain_costs={preserved_plain_costs} status={status}".format(
+            **summary
+        )
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

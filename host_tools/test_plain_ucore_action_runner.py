@@ -50,6 +50,10 @@ def main() -> int:
             loaded,
             [
                 {
+                    "path": "/actions/research/rerun",
+                    "payload": {"run_id": "RUN-999-rerun", "parent_run": "RUN-999", "provider": "template", "question": "Repeat the host run with saved inputs"},
+                },
+                {
                     "path": "/actions/research/dataset",
                     "payload": {"title": "Host reusable response table", "dataset_rows": "6", "columns": "sample,group,value"},
                 },
@@ -412,7 +416,7 @@ def main() -> int:
             ],
         )
         summary = runner.prepare_action_state(loaded, state_dir, run_dir)
-        expected_actions = 92
+        expected_actions = 93
 
         assert summary["actions"] == expected_actions
         assert summary["accepted"] == expected_actions
@@ -517,6 +521,8 @@ def main() -> int:
 
         queue = read(next_state / "rp_host_action_queue")
         assert "kind=research_run" in queue
+        assert "kind=research_rerun" in queue
+        assert "parent_run=RUN-999" in queue
         assert "kind=dataset" in queue
         assert "kind=studio_launch" in queue
         assert "kind=library_source" in queue
@@ -681,7 +687,7 @@ def main() -> int:
         assert "normalized_steps=15" in queue
         assert "adapter_id=adapter:WF1:nextflow" in queue
         assert "migration_plan=workflow-migration-plan:WF1" in queue
-        assert "backend_cases=7" in queue
+        assert "backend_cases=4" in queue
         assert "rehearsal_id=workflow-rehearsal:WF1" in queue
         assert "readiness_decision=ready_for_agentos" in queue
         assert "export_format=zip" in queue
@@ -692,6 +698,7 @@ def main() -> int:
         assert "collect=rp_web_bundle" in plan
         assert "collect=rp_compare_plain" in plan
         assert "kind=dataset" in plan
+        assert "kind=research_rerun" in plan
         assert "kind=studio_launch" in plan
         assert "kind=library_source" in plan
         assert "kind=template" in plan
@@ -756,6 +763,7 @@ def main() -> int:
 
         inbox = read(next_state / "rp_host_action_inbox")
         assert "/actions/research/run" in inbox
+        assert "/actions/research/rerun" in inbox
         assert "/actions/research/dataset" in inbox
         assert "/actions/research/studio-launch" in inbox
         assert "/actions/research/library-source" in inbox
@@ -821,6 +829,7 @@ def main() -> int:
         assert (run_dir / "actions.json").exists()
         assert (run_dir / "runner-summary.json").exists()
 
+        assert runner.action_kind("/actions/research/rerun") == "research_rerun"
         assert runner.action_kind("/actions/research/run-revision") == "revision_run"
         assert runner.action_kind("/actions/research/dataset") == "dataset"
         assert runner.action_kind("/actions/research/studio-launch") == "studio_launch"
@@ -917,6 +926,8 @@ def main() -> int:
         assert records == expected_actions
         assert "#define RP_HOST_ACTION_SEED" in header
         assert "kind=research_run" in seed_file
+        assert "kind=research_rerun" in seed_file
+        assert "parent_run=RUN-999" in seed_file
         assert "kind=dataset" in seed_file
         assert "kind=studio_launch" in seed_file
         assert "title=Studio cytokine evidence" in seed_file
@@ -998,7 +1009,7 @@ def main() -> int:
         assert "scenario_id=backend-scenario:WF1" in seed_file
         assert "normalized_steps=15" in seed_file
         assert "migration_plan=workflow-migration-plan:WF1" in seed_file
-        assert "backend_cases=7" in seed_file
+        assert "backend_cases=4" in seed_file
         assert "rehearsal_id=workflow-rehearsal:WF1" in seed_file
         assert "readiness_decision=ready_for_agentos" in seed_file
         assert "export_format=zip" in seed_file

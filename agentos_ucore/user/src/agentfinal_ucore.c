@@ -36,6 +36,53 @@ static void check(int ok, const char *msg)
 	}
 }
 
+static int text_contains(const char *text, const char *needle)
+{
+	int n = strlen(needle);
+
+	if (n == 0)
+		return 1;
+	for (int i = 0; text[i]; i++)
+		if (strncmp(text + i, needle, n) == 0)
+			return 1;
+	return 0;
+}
+
+static void set_demo_meta(int fid, const char *physical, const char *stage,
+			  const char *kind, const char *status,
+			  const char *summary, uint64 deps)
+{
+	struct agent_file_meta meta;
+
+	memset(&meta, 0, sizeof(meta));
+	meta.fid = fid;
+	strcpy(meta.physical_name, physical);
+	strcpy(meta.logical_path, physical);
+	strcpy(meta.project, "lab-gene-x");
+	strcpy(meta.workflow, "nightly-regression");
+	strcpy(meta.run_id, "RUN-042");
+	strcpy(meta.stage, stage);
+	strcpy(meta.kind, kind);
+	strcpy(meta.status, status);
+	strcpy(meta.summary, summary);
+	meta.dependency_mask = deps;
+	meta.flags = AGENT_FILE_META_F_PERSIST;
+	check(agent_file_meta_set(&meta) == 0, "demo meta set");
+}
+
+static void seed_demo_metadata(void)
+{
+	set_demo_meta(1, "r42align", "align", "artifact", "ok",
+		      "align output is ready before injected failure",
+		      agent_dependency_label_bit("analyze") |
+			      agent_dependency_label_bit("report"));
+	set_demo_meta(2, "r42anlz", "analyze", "status", "pending",
+		      "analysis waits for align",
+		      agent_dependency_label_bit("report"));
+	set_demo_meta(3, "r42report", "report", "report", "pending",
+		      "report waits for analyze", 0);
+}
+
 static int timeline_after_cursor(struct agent_timeline_record *record,
 				 uint64 tick, int source, uint64 sequence)
 {
@@ -112,7 +159,88 @@ static void check_legacy_name_protocol(void)
 	check(agent_call(req, resp) == 0, "legacy name digest");
 	check(resp->status == AGENT_STATUS_OK, "legacy digest status");
 	check(resp->value0 >= resp->value1, "legacy digest size");
+
+	memset(req, 0, sizeof(*req));
+	memset(resp, 0, sizeof(*resp));
+	req->version = AGENT_CALL_VERSION;
+	req->request_id = 7105;
+	strcpy(req->tool_name, "dependency_update");
+	strcpy(req->payload_key, "selector");
+	req->payload_type = AGENT_PARAM_STRING;
+	strcpy(req->payload,
+	       "source=report;target=align;namespace=lab-gene-x;run_id=RUN-042");
+	check(agent_call(req, resp) == 0, "legacy dependency update");
+	check(resp->status == AGENT_STATUS_OK, "legacy dependency status");
+	check(strcmp(resp->result, "dependency_updated") == 0,
+	      "legacy dependency text");
+
+	memset(req, 0, sizeof(*req));
+	memset(resp, 0, sizeof(*resp));
+	req->version = AGENT_CALL_VERSION;
+	req->request_id = 7106;
+	strcpy(req->tool_name, "dependency_query");
+	strcpy(req->payload_key, "label");
+	req->payload_type = AGENT_PARAM_STRING;
+	strcpy(req->payload,
+	       "label=report;namespace=lab-gene-x;run_id=RUN-042");
+	check(agent_call(req, resp) == 0, "legacy dependency query");
+	check(resp->status == AGENT_STATUS_OK, "legacy dependency query status");
+	check(text_contains(resp->result, "align"),
+	      "legacy dependency query result");
 	printf("agentfinal_ucore: legacy_name_protocol=1\n");
+}
+
+static void make_generic_op(struct agent_op *op, int tool_id, uint64 id,
+			    uint64 arg0, const char *payload)
+{
+	memset(op, 0, sizeof(*op));
+	op->version = AGENT_CALL_VERSION;
+	op->tool_id = tool_id;
+	op->request_id = id;
+	op->arg0 = arg0;
+	if (payload)
+		strcpy(op->payload, payload);
+}
+
+static void check_generic_action_and_llm(void)
+{
+	static struct agent_op op;
+	static struct agent_result res;
+	static struct agent_event event;
+
+	make_generic_op(&op, AGENT_TOOL_ACTION_COMMIT, 7201, 0,
+			"label=align;run_id=RUN-042;namespace=lab-gene-x");
+	check(agent_run(&op, &res, 1, 0) == 1, "generic action run");
+	check(res.status == AGENT_STATUS_OK, "generic action status");
+	check(strcmp(res.result, "action_committed") == 0,
+	      "generic action text");
+
+	make_generic_op(&op, AGENT_TOOL_ARTIFACT_UPDATE, 7202, 0,
+			"label=report;run_id=RUN-042;namespace=lab-gene-x");
+	check(agent_run(&op, &res, 1, 0) == 1, "generic artifact run");
+	check(res.status == AGENT_STATUS_OK, "generic artifact status");
+	check(strcmp(res.result, "artifact_updated") == 0,
+	      "generic artifact text");
+	printf("agentfinal_ucore: generic_action_abi=1\n");
+
+	check(agent_watch(AGENT_EVENT_LLM_DONE, "template") == 0,
+	      "watch llm done");
+	make_generic_op(&op, AGENT_TOOL_LLM_REQUEST, 7203, 0,
+			"template prompt summary");
+	check(agent_run(&op, &res, 1, 0) == 1, "llm request run");
+	check(res.status == AGENT_STATUS_OK, "llm request status");
+	check(strcmp(res.result, "llm_request") == 0, "llm request text");
+	make_generic_op(&op, AGENT_TOOL_LLM_RESPONSE, 7204, getpid(),
+			"template response summary");
+	check(agent_run(&op, &res, 1, 0) == 1, "llm response run");
+	check(res.status == AGENT_STATUS_OK, "llm response status");
+	check(res.value2 == 1, "llm response delivered");
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, 20) == AGENT_STATUS_OK, "wait llm response");
+	check(event.type == AGENT_EVENT_LLM_DONE, "llm event type");
+	check(strcmp(event.payload, "template response summary") == 0,
+	      "llm event payload");
+	printf("agentfinal_ucore: llm_template_relay=1\n");
 }
 
 static void check_runtime_trace(void)
@@ -207,7 +335,7 @@ static void check_unified_timeline(void)
 	n = agent_timeline_snapshot(timeline_records,
 				    AGENT_TIMELINE_MAX_RECORDS);
 	check(n > 0, "timeline records");
-	check(n <= total, "timeline count");
+	check(n <= AGENT_TIMELINE_MAX_RECORDS, "timeline count");
 	for (int i = 0; i < n; i++) {
 		check(timeline_records[i].tick >= last_tick,
 		      "timeline order");
@@ -670,6 +798,7 @@ static void run_agent_child(void)
 	       (int)header->dropped_records);
 
 	check(agent_file_meta_init() == 0, "meta init");
+	seed_demo_metadata();
 	memset(q, 0, sizeof(*q));
 	q->flags = AGENT_FILE_QUERY_USE_INDEX;
 	q->max_hits = AGENT_FILE_QUERY_MAX_HITS;
@@ -711,6 +840,7 @@ static void run_agent_child(void)
 	      "span prefetch target pid");
 	printf("agentfinal_ucore: span_prefetch=1 count=%d first_stage=%s\n",
 	       n, final_prefetch_hints[0].hit.stage);
+	check_generic_action_and_llm();
 	check_legacy_name_protocol();
 
 	check(agent_watch(AGENT_EVENT_MESSAGE, "self") == 0, "watch");

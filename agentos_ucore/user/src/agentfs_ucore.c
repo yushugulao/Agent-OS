@@ -51,7 +51,7 @@ static void set_meta(const char *physical, const char *status, uint64 mask)
 	if (status)
 		strcpy(fs_meta.status, status);
 	strcpy(fs_meta.summary, "fs metadata test file");
-	fs_meta.dependency_mask = AGENT_DEP_PREPARE;
+	fs_meta.dependency_mask = agent_dependency_label_bit("ready");
 	fs_meta.flags = AGENT_FILE_META_F_PERSIST;
 	fs_meta.update_mask = mask;
 	check(agent_file_meta_set(&fs_meta) == 0, "meta set");
@@ -80,6 +80,74 @@ static void make_file(const char *name)
 	check(write(fd, body, strlen(body)) == (ssize_t)strlen(body),
 	      "write file");
 	check(close(fd) == 0, "close file");
+}
+
+static void set_demo_meta(int fid, const char *physical, const char *stage,
+			  const char *kind, const char *status,
+			  const char *summary, uint64 deps)
+{
+	make_file(physical);
+	memset(&fs_meta, 0, sizeof(fs_meta));
+	fs_meta.fid = fid;
+	strcpy(fs_meta.physical_name, physical);
+	strcpy(fs_meta.logical_path, physical);
+	strcpy(fs_meta.project, "lab-gene-x");
+	strcpy(fs_meta.workflow, "nightly-regression");
+	strcpy(fs_meta.run_id, "RUN-042");
+	strcpy(fs_meta.stage, stage);
+	strcpy(fs_meta.kind, kind);
+	strcpy(fs_meta.status, status);
+	strcpy(fs_meta.summary, summary);
+	fs_meta.dependency_mask = deps;
+	fs_meta.flags = AGENT_FILE_META_F_PERSIST;
+	check(agent_file_meta_set(&fs_meta) == 0, "demo meta set");
+}
+
+static void seed_demo_metadata(void)
+{
+	set_demo_meta(1, "r42align", "align", "artifact", "ok",
+		      "align output is ready before injected failure",
+		      agent_dependency_label_bit("analyze") |
+			      agent_dependency_label_bit("report"));
+	set_demo_meta(2, "r42anlz", "analyze", "status", "pending",
+		      "analysis waits for align",
+		      agent_dependency_label_bit("report"));
+	set_demo_meta(3, "r42report", "report", "report", "pending",
+		      "report waits for analyze", 0);
+}
+
+static void set_scoped_meta(const char *run_id, int fid,
+			    const char *physical, const char *label,
+			    uint64 deps)
+{
+	make_file(physical);
+	memset(&fs_meta, 0, sizeof(fs_meta));
+	fs_meta.fid = fid;
+	strcpy(fs_meta.physical_name, physical);
+	strcpy(fs_meta.logical_path, physical);
+	strcpy(fs_meta.project, "lab-gene-x");
+	strcpy(fs_meta.workflow, "nightly-regression");
+	strcpy(fs_meta.run_id, run_id);
+	strcpy(fs_meta.stage, label);
+	strcpy(fs_meta.kind, "artifact");
+	strcpy(fs_meta.status, "pending");
+	strcpy(fs_meta.summary, "scoped dependency fixture");
+	fs_meta.dependency_mask = deps;
+	fs_meta.flags = AGENT_FILE_META_F_PERSIST;
+	check(agent_file_meta_set(&fs_meta) == 0, "scoped meta set");
+}
+
+static void seed_scoped_dependency_metadata(void)
+{
+	set_scoped_meta("RUN-ALT", 11, "altalign", "align",
+			agent_dependency_label_bit("archive"));
+	set_scoped_meta("RUN-ALT", 12, "altarch", "archive", 0);
+}
+
+static void seed_user_dependency_metadata(void)
+{
+	set_scoped_meta("RUN-GEN", 21, "genalign", "align", 0);
+	set_scoped_meta("RUN-GEN", 22, "genreview", "review", 0);
 }
 
 static void write_file_body(const char *name, const char *body)
@@ -174,7 +242,7 @@ static void set_bulk_meta(int i)
 	strcpy(fs_meta.kind, "artifact");
 	strcpy(fs_meta.status, status);
 	strcpy(fs_meta.summary, "bulk metadata file");
-	fs_meta.dependency_mask = AGENT_DEP_PREPARE;
+	fs_meta.dependency_mask = agent_dependency_label_bit("ready");
 	check(agent_file_meta_set(&fs_meta) == 0, "bulk meta set");
 }
 
@@ -263,6 +331,8 @@ static void check_prefetch_hints(void)
 		      "prefetch plan");
 		check(fs_hints[i].candidate_records > 0,
 		      "prefetch candidates");
+		check(strcmp(fs_hints[i].hit.stage, "archive") != 0,
+		      "prefetch scoped run");
 		if (strcmp(fs_hints[i].hit.stage, "analyze") == 0 ||
 		    strcmp(fs_hints[i].hit.stage, "report") == 0)
 			found = 1;
@@ -272,16 +342,100 @@ static void check_prefetch_hints(void)
 	       n, fs_hints[0].hit.stage, (int)fs_hints[0].source_sequence);
 }
 
+static int text_contains(const char *text, const char *needle)
+{
+	int n = strlen(needle);
+
+	if (n == 0)
+		return 1;
+	for (int i = 0; text[i]; i++) {
+		if (strncmp(text + i, needle, n) == 0)
+			return 1;
+	}
+	return 0;
+}
+
+static void check_scoped_dependency_query(void)
+{
+	char run042[AGENT_FAST_RESULT_SIZE];
+
+	memset(&fs_op, 0, sizeof(fs_op));
+	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.tool_id = AGENT_TOOL_DEPENDENCY_QUERY;
+	fs_op.request_id = 78001;
+	strcpy(fs_op.payload, "label=align;namespace=lab-gene-x;run_id=RUN-042");
+	check(agent_run(&fs_op, &fs_res, 1, 0) == 1,
+	      "dependency run042 run");
+	check(fs_res.status == AGENT_STATUS_OK, "dependency run042 status");
+	check(text_contains(fs_res.result, "align"), "run042 has align");
+	check(text_contains(fs_res.result, "analyze"), "run042 has analyze");
+	check(text_contains(fs_res.result, "report"), "run042 has report");
+	check(!text_contains(fs_res.result, "archive"), "run042 no archive");
+	strcpy(run042, fs_res.result);
+
+	memset(&fs_op, 0, sizeof(fs_op));
+	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.tool_id = AGENT_TOOL_DEPENDENCY_QUERY;
+	fs_op.request_id = 78002;
+	strcpy(fs_op.payload, "label=align;namespace=lab-gene-x;run_id=RUN-ALT");
+	check(agent_run(&fs_op, &fs_res, 1, 0) == 1,
+	      "dependency runalt run");
+	check(fs_res.status == AGENT_STATUS_OK, "dependency runalt status");
+	check(text_contains(fs_res.result, "align"), "runalt has align");
+	check(text_contains(fs_res.result, "archive"), "runalt has archive");
+	check(!text_contains(fs_res.result, "analyze"), "runalt no analyze");
+	check(!text_contains(fs_res.result, "report"), "runalt no report");
+	printf("agentfs_ucore: scoped_dependency=1 run042=%s runalt=%s\n",
+	       run042, fs_res.result);
+}
+
+static void check_user_dependency_update(void)
+{
+	memset(&fs_op, 0, sizeof(fs_op));
+	memset(&fs_res, 0, sizeof(fs_res));
+	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.tool_id = AGENT_TOOL_DEPENDENCY_UPDATE;
+	fs_op.request_id = 78003;
+	strcpy(fs_op.payload,
+	       "source=align;target=review;namespace=lab-gene-x;run_id=RUN-GEN");
+	check(agent_run(&fs_op, &fs_res, 1, 0) == 1,
+	      "dependency update run");
+	check(fs_res.status == AGENT_STATUS_OK, "dependency update status");
+	check(strcmp(fs_res.result, "dependency_updated") == 0,
+	      "dependency update result");
+
+	memset(&fs_op, 0, sizeof(fs_op));
+	memset(&fs_res, 0, sizeof(fs_res));
+	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.tool_id = AGENT_TOOL_DEPENDENCY_QUERY;
+	fs_op.request_id = 78004;
+	strcpy(fs_op.payload,
+	       "label=align;namespace=lab-gene-x;run_id=RUN-GEN");
+	check(agent_run(&fs_op, &fs_res, 1, 0) == 1,
+	      "dependency update query run");
+	check(fs_res.status == AGENT_STATUS_OK,
+	      "dependency update query status");
+	check(text_contains(fs_res.result, "align"), "dependency has source");
+	check(text_contains(fs_res.result, "review"), "dependency has target");
+	printf("agentfs_ucore: dependency_update=1 result=%s generation=%d\n",
+	       fs_res.result, (int)fs_res.value2);
+}
+
 static void run_agent(void)
 {
 	const char *name = "fsissue4";
 
 	check(agent_file_meta_init() == 0, "meta init");
+	seed_demo_metadata();
+	seed_scoped_dependency_metadata();
+	seed_user_dependency_metadata();
+	check_scoped_dependency_query();
+	check_user_dependency_update();
 	check(query_stage("lab-gene-x", "RUN-042", "align", 0, &fs_result) >= 1,
 	      "default query");
 	check(fs_result.hits[0].dev != 0 && fs_result.hits[0].inum != 0,
 	      "default inode binding");
-	printf("agentfs_ucore: default_inode dev=%d inum=%d scanned=%d\n",
+	printf("agentfs_ucore: demo_inode dev=%d inum=%d scanned=%d\n",
 	       (int)fs_result.hits[0].dev, (int)fs_result.hits[0].inum,
 	       fs_result.scanned_records);
 	check_prefetch_hints();
@@ -366,11 +520,11 @@ static void run_agent(void)
 
 	memset(&fs_op, 0, sizeof(fs_op));
 	fs_op.version = AGENT_CALL_VERSION;
-	fs_op.tool_id = AGENT_TOOL_RERUN_STAGE;
+	fs_op.tool_id = AGENT_TOOL_ACTION_COMMIT;
 	fs_op.request_id = 99001;
-	strcpy(fs_op.payload, "stage=align;run_id=RUN-NOPE;project=issue4");
-	check(agent_run(&fs_op, &fs_res, 1, 0) == 1, "rerun missing");
-	check(fs_res.status == AGENT_STATUS_NOT_FOUND, "rerun missing status");
+	strcpy(fs_op.payload, "label=align;run_id=RUN-NOPE;namespace=issue4");
+	check(agent_run(&fs_op, &fs_res, 1, 0) == 1, "action missing");
+	check(fs_res.status == AGENT_STATUS_NOT_FOUND, "action missing status");
 	printf("agentfs_ucore: missing_selector_not_found=1\n");
 
 	printf("agentfs_ucore: passed\n");

@@ -1,6 +1,6 @@
 # 文档索引
 
-本目录是项目文档阅读入口。文档结构参考操作系统和软件架构领域常见做法：README 负责快速运行，设计文档负责解释架构和关键决策，API/ABI 文档负责说明用户态与内核的接口分工，验证文档负责给出可复现证据。
+本目录是项目文档阅读入口。文档结构采用竞赛展示文档常见写法：README 负责基本信息、项目简介、完成情况和快速运行；设计文档负责架构图、模块职责和关键决策；API/ABI 文档负责说明用户态与内核的接口分工；验证文档负责用测试场景、输出标记和性能观测说明项目是否可复现。
 
 ## 推荐阅读顺序
 
@@ -11,7 +11,7 @@
 | 3 | [design.md](design.md) | 主设计文档：架构、模块、运行视图、决策、风险 |
 | 4 | [requirements-traceability.md](requirements-traceability.md) | 赛题要求到实现位置、测试证据和文档材料的对应表 |
 | 5 | [api.md](api.md) | 系统调用、Agent ABI、工具协议和错误语义 |
-| 6 | [verification.md](verification.md) | 验证计划、测试覆盖表、性能数据摘要 |
+| 6 | [verification.md](verification.md) | 验证计划、测试场景、测试覆盖表、性能数据摘要 |
 | 7 | [testing-details.md](testing-details.md) | `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore` 和 `agentsecurity_ucore` 的逐项测试说明 |
 | 8 | [demo-script.md](demo-script.md) | 现场讲解或视频演示脚本 |
 
@@ -25,6 +25,9 @@
 | [task4-file-query.md](task4-file-query.md) | 任务四文件属性查询、真实 inode 关联、私有 `.agentmeta` 元数据文件、根目录自动扫描、索引、查询计划、内容摘要、依赖查询、本地预取提示和 span 预取提示设计细节 |
 | [task5-agent-loop.md](task5-agent-loop.md) | 任务五 watch/unwatch、FIFO 事件队列、wait/timeout 睡眠、事件因果继承、heartbeat、Agent 感知调度、受权调度配置、调度原因记录、运行轨迹、当前 span 短记录、全局审计短记录、过滤查询、统一 timeline、timeline 过滤查询、timeline 等待、wait-and-read、游标增量读取和 provenance edge 设计细节 |
 | [test-record.md](test-record.md) | 测试记录和关键输出 |
+| [assets/agentos_arch.svg](assets/agentos_arch.svg) | 用户态/内核态总架构图 |
+| [assets/agentos_telemetry_pipeline.svg](assets/agentos_telemetry_pipeline.svg) | 内核记录到平台页面的数据路径图 |
+| [assets/agentos_test_evidence.svg](assets/agentos_test_evidence.svg) | 测试证据组织图 |
 | [../LICENSE](../LICENSE) | 源代码 GPL-3.0 |
 | [../DOCUMENTATION_LICENSE.md](../DOCUMENTATION_LICENSE.md) | 文档与答辩材料 CC BY-SA 4.0 |
 | [../NOTICE](../NOTICE) | 第三方来源和许可声明 |

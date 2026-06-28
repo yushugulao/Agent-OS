@@ -127,6 +127,16 @@ static int append_fast_workbench_host_line(void)
 	return rp_append_file("rp_runner", line);
 }
 
+static int append_seeded_workbench_task_record(void)
+{
+	if (!rp_host_seed_has("kind=workbench_task")) return 1;
+	char *line = workbench_core;
+	rp_copy_text(line, sizeof(workbench_core), "host_action_workbench_task_record=ready;");
+	append_workbench_summary_value(line, sizeof(workbench_core), "kind=workbench_task", "task=", "host_action_workbench_task=", "human_review");
+	append_workbench_summary_value(line, sizeof(workbench_core), "kind=workbench_task", "status=", "host_action_workbench_task_status=", "waiting");
+	return rp_append_file("rp_runner", line);
+}
+
 static int append_platform_ops_host_line(void)
 {
 	if (!rp_host_seed_has_platform_ops_action()) return 1;
@@ -225,6 +235,7 @@ int main(void)
 		return 1;
 
 	if (!append_fast_workbench_host_line()) return 1;
+	if (!append_seeded_workbench_task_record()) return 1;
 	if (!append_platform_ops_host_line()) return 1;
 
 	if (!rp_append_file("rp_runner", "workbench=usable-workbench:RUN-900:plain-ucore")) return 1;

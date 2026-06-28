@@ -344,3 +344,7 @@
 #define SYS_agent_timeline_wait 532
 #define SYS_agent_timeline_read 533
 #define SYS_agent_ledger_snapshot 534
+#define SYS_agent_file_edit_begin 535
+#define SYS_agent_file_edit_commit 536
+#define SYS_agent_file_edit_abort 537
+#define SYS_agent_file_edit_state 538

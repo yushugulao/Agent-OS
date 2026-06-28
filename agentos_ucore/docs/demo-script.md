@@ -24,11 +24,11 @@ agentsecurity_ucore
 
 | 程序 | 作用 |
 | --- | --- |
-| `agentfinal_ucore` | 证明任务一至三核心功能正确，同时检查文件索引和事件自唤醒 |
-| `agentfs_ucore` | 证明任务四已经绑定真实 inode、支持私有 `.agentmeta` 重新加载和索引查询 |
-| `agentscan_ucore` | 证明任务四可以自动扫描根目录、为真实文件建立元数据并维护索引 |
-| `agentloop_ucore` | 证明任务五的 FIFO 事件队列、unwatch、有限 timeout 睡眠、wait cancel、TIMER unwatch 和 heartbeat stop |
-| `agentsched_ucore` | 证明任务五的调度器已感知 Agent 角色、受权配置、事件状态、调度原因和公平性计数 |
+| `agentfinal_ucore` | 覆盖任务一至三核心功能，同时检查文件索引和事件自唤醒 |
+| `agentfs_ucore` | 检查任务四的真实 inode 绑定、私有 `.agentmeta` 重新加载和索引查询 |
+| `agentscan_ucore` | 检查任务四的根目录自动扫描、真实文件元数据建立和索引维护 |
+| `agentloop_ucore` | 检查任务五的 FIFO 事件队列、unwatch、有限 timeout 睡眠、wait cancel、TIMER unwatch 和 heartbeat stop |
+| `agentsched_ucore` | 检查任务五的 Agent 感知调度、受权配置、事件状态、调度原因和公平性计数 |
 | `agentbench_ucore` | 给出批量调用、Context 直接读、snapshot、文件索引候选记录数的性能证据，并验证 timeout/heartbeat、busy polling 与 wait/wake 计时 |
 | `labbench_ucore` | 初步演示规划中的性能入口，当前包装运行 `agentbench_ucore`，后续可升级为 `labbench --full` |
 | `labdemo_ucore` | 展示一个由 orchestrator 控制的多 Agent 实验恢复场景 |
@@ -132,7 +132,7 @@ agentfinal_ucore: prefetch_hints=1 count=3 first_stage=analyze
 agentfinal_ucore: span_prefetch=1 count=... first_stage=...
 ```
 
-说明文件元数据查询已经走索引路径，并且内核根据本次 align 查询和阶段依赖给出了后续可能关注的工件提示；同一 span 的全局提示总线也能查到对应提示。
+说明文件元数据查询已经走索引路径，并且内核根据本次 align 查询和对象标签依赖给出了后续可能关注的工件提示；同一 span 的全局提示总线也能查到对应提示。
 
 ```text
 agentfinal_ucore: event_wait=1 payload=self wake
@@ -148,7 +148,7 @@ agentfinal_ucore: timeline_query=1 audit=213 recent=281 cursor=177
 agentfinal_ucore: run_ledger=1 records=... hash=... context=... event=... sched=... prefetch=...
 ```
 
-说明内核能把当前 Agent 的 Context 摘要、调度原因和事件等待记录合并成运行轨迹，也能按当前 span 返回本轮协作的系统级短记录，并能对统一 timeline 做内核侧过滤和游标增量读取。Run Ledger 摘要还可以用一个小结构确认全局短记录的 sequence 范围、分类计数和链尾 hash。评审时可以强调：纯用户态系统通常只能从日志拼接这些信息，而这里由内核直接返回结构化短记录。
+说明内核能把当前 Agent 的 Context 摘要、调度原因和事件等待记录合并成运行轨迹，也能按当前 span 返回本轮协作的系统级短记录，并能对统一 timeline 做内核侧过滤和游标增量读取。Run Ledger 摘要还可以用一个小结构确认全局短记录的 sequence 范围、分类计数和链尾 hash。纯用户态系统通常只能从日志拼接这些信息，而这里由内核直接返回结构化短记录。
 
 ```text
 agentfinal_ucore: unified_timeline=1 records=... context=1 sched=1 audit=1 prefetch=1
@@ -176,11 +176,11 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfs_ucore CHAPTER
 
 | 输出项 | 讲解重点 |
 | --- | --- |
-| `default_inode` | 默认演示元数据已经绑定真实根目录文件的 `dev/inum` |
+| `demo_inode` | 用户态演示元数据已经绑定真实根目录文件的 `dev/inum` |
 | `custom_inode` | 用户态创建的新文件也能绑定 Agent 元数据 |
 | `bulk_index` | 接近 128 条记录时，索引路径检查的候选记录少于扫描路径 |
 | `query_plan` | 内核说明本次索引路径按 status 选择 bucket，并检查了多少候选记录 |
-| `prefetch_hints` | 内核根据历史查询和阶段依赖给出后续 metadata 提示 |
+| `prefetch_hints` | 内核根据历史查询和对象标签依赖给出后续 metadata 提示 |
 | `.agentmeta_reload` | 再次初始化时从私有 `.agentmeta` 重新加载自定义元数据 |
 | `clear_status` | 属性清空能够生效 |
 | `delete_clears_metadata` | 删除真实文件会同步清理 Agent 元数据 |
@@ -351,7 +351,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER
 10. investigator 从自己的预取提示 snapshot 中读取带 `HANDOFF` 原因位的 analyze 提示，并从当前 span 的全局提示总线确认 source/target pid。
 11. investigator 查询当前 span 的系统级短记录，确认 Context、事件和预取交接摘要已经进入内核记录。
 12. investigator 输出模板 LLM 解释事件和恢复计划事件，预留最终 LLM Gateway 和 Planner/Auditor 拆分入口。
-13. investigator 输出 Context Snapshot，证明决策过程可审计。
+13. investigator 输出 Context Snapshot，展示决策过程中的可审计记录。
 14. investigator 唤醒 recovery。
 15. recovery 通过权限检查并执行恢复。
 16. recovery 重复执行同一恢复动作，内核识别为 duplicate。
@@ -369,7 +369,7 @@ agentos:event type=INCIDENT_CREATED tick=... id=INC-RUN-042-ALIGN-OOM project=la
 labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042;project=lab-gene-x
 agentos:event type=TOOL_CALL tick=... role=sentinel tool=query_file project=lab-gene-x run_id=RUN-042 status=failed hits=1 used_index=1
 agentos:event type=PREFETCH_HINT tick=... role=sentinel project=lab-gene-x run_id=RUN-042 source_stage=align next_stage=analyze source_seq=4 candidates=1 reason=15
-agentos:event type=AUDIT tick=... role=sentinel action=rerun_stage result=DENIED reason=capability corr_id=RUN-042-align-rerun-1
+agentos:event type=AUDIT tick=... role=sentinel action=action_commit result=DENIED reason=capability corr_id=RUN-042-align-rerun-1
 labdemo_ucore: investigator handoff_prefetch stage=analyze source_seq=4 reason=31
 labdemo_ucore: investigator span_prefetch stage=analyze count=... source_pid=... target_pid=...
 labdemo_ucore: investigator span_trace records=... context=1 event=1 prefetch=1
@@ -380,9 +380,9 @@ agentos:event type=TOOL_CALL tick=... role=investigator tool=read_file_digest st
 agentos:event type=LLM_CALL tick=... mode=template task=explain_root_cause llm_request_id=LLM-RUN-042-RCA-1 refs=3,4,5,6 status=OK
 agentos:event type=PLAN_CREATED tick=... role=investigator plan=PLAN-RUN-042-RECOVER-1 actions=align,analyze,report skip=prepare prefetch=analyze refs=3,4,5,6
 agentos:event type=CONTEXT_SNAPSHOT tick=... role=investigator records=6 latest=6
-agentos:event type=ACTION tick=... role=recovery stage=align status=OK corr_id=RUN-042-align-rerun-1 plan=PLAN-RUN-042-RECOVER-1
-agentos:event type=AUDIT tick=... role=recovery action=rerun_align result=DUPLICATE corr_id=RUN-042-align-rerun-1 plan=PLAN-RUN-042-RECOVER-1
-agentos:event type=REPORT tick=... role=recovery file=RUN-042-recovery.md status=OK corr_id=RUN-042-report-write-1 plan=PLAN-RUN-042-RECOVER-1
+agentos:event type=ACTION tick=... role=recovery label=align status=OK corr_id=RUN-042-align-rerun-1 plan=PLAN-RUN-042-RECOVER-1
+agentos:event type=AUDIT tick=... role=recovery action=commit_align result=DUPLICATE corr_id=RUN-042-align-rerun-1 plan=PLAN-RUN-042-RECOVER-1
+agentos:event type=ARTIFACT tick=... role=recovery file=RUN-042-recovery.md status=OK corr_id=RUN-042-report-write-1 plan=PLAN-RUN-042-RECOVER-1
 agentos:event type=FINAL tick=... status=RECOVERED plan=PLAN-RUN-042-RECOVER-1
 labdemo_ucore: global_audit=1 records=... agents=3 context=1 event=1 sched=1 prefetch=1
 labdemo_ucore: audit_query=1 kind=... span=... event=2 prefetch=... start=...
@@ -400,21 +400,21 @@ labdemo_ucore: parent passed
 | `WATCH_REGISTERED` | Agent Loop 注册成功 |
 | `INCIDENT_CREATED` | 文件状态变化触发事件 |
 | `TOOL_CALL ... query_file` | Agent 使用文件元数据索引查询失败工件 |
-| `PREFETCH_HINT` | 内核根据历史查询和阶段依赖提示后续可能需要的 metadata |
+| `PREFETCH_HINT` | 内核根据历史查询和对象标签依赖提示后续可能需要的 metadata |
 | `handoff_prefetch` | message 入队时内核把发送者的提示复制到接收者，接收者从自己的 snapshot 读取 |
 | `span_prefetch` | 接收者按当前 span 查询全局提示总线，看到提示来源和接收者 |
 | `PREFETCH_USED` | investigator 把提示转化为实际摘要读取动作 |
 | `LLM_CALL` | 当前使用模板模式预留最终 LLM Gateway 输入输出契约 |
-| `PLAN_CREATED` | 恢复计划使用稳定 plan id，并把 align、analyze、report 放入恢复动作序列 |
+| `PLAN_CREATED` | 恢复计划使用稳定 plan id，并把 align、analyze、report 放入用户态动作序列 |
 | `DENIED` | 内核权限检查生效，sentinel 不能直接恢复 |
 | `MESSAGE` | Agent 间通过内核事件通信 |
 | `CONTEXT_SNAPSHOT` | investigator 的判断过程进入 Context Path |
-| `ACTION ... corr_id=...` | recovery 执行带幂等 ID 的恢复动作 |
-| `DUPLICATE` | 幂等表拒绝重复恢复 |
-| `REPORT` | recovery 写入恢复报告状态，后续可接 LLM 报告润色 |
+| `ACTION ... corr_id=...` | recovery 执行带幂等 ID 的通用动作 |
+| `DUPLICATE` | 幂等表拒绝重复动作 |
+| `ARTIFACT` | recovery 更新报告工件状态，后续可接 LLM 报告润色 |
 | `FINAL status=RECOVERED` | 场景完成 |
-| `global_audit=1` | orchestrator 能读取内核全局短记录，证明多 Agent 的 Context、事件、调度和预取交接摘要被统一保存 |
-| `audit_query=1` | orchestrator 能按条件过滤全局短记录，证明审计数据不是只能靠串口日志人工检索 |
+| `global_audit=1` | orchestrator 能读取内核全局短记录，表示多 Agent 的 Context、事件、调度和预取交接摘要被统一保存 |
+| `audit_query=1` | orchestrator 能按条件过滤全局短记录，表示审计数据不需要只靠串口日志人工检索 |
 | `run_ledger=1` | orchestrator 能读取全局短记录摘要、分类计数和链尾 hash |
 | `unified_timeline` | orchestrator 能用同一种 record 读取 Context、事件、调度、预取交接和内容证据摘要，适合接最终演示页面 |
 | `timeline_query` | orchestrator 能按 source、kind、source pid、target pid、tool id 和 flags 精确读取 prefetch handoff 与 digest 证据，也能按上一条已读记录继续读取 timeline |
@@ -423,7 +423,7 @@ labdemo_ucore: parent passed
 
 ## 10. 结尾总结
 
-本项目在 uCore 上实现了 Agent 进程、工具调用、Context Path、文件元数据索引和 Agent Loop。最终场景证明这些功能可以组合成一个完整的内核级 Agent 协作系统，并由 orchestrator 读取和过滤全局短记录说明多 Agent 协作过程，而不是只停留在分散 syscall 的层面。
+本项目在 uCore 上实现了 Agent 进程、工具调用、Context Path、文件元数据索引和 Agent Loop。最终场景把这些功能组合成一个完整的内核级 Agent 协作系统，并由 orchestrator 读取和过滤全局短记录说明多 Agent 协作过程，而不是只停留在分散 syscall 的层面。
 
 补充安全验证可运行：
 
@@ -431,6 +431,6 @@ labdemo_ucore: parent passed
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent
 ```
 
-该程序证明普通进程 mail 最小路径可用；普通进程不能直接投递事件、取消 Agent 等待或修改 Agent 文件元数据；usershell 等价路径可以创建 orchestrator；初始化前索引查询不会卡住；legacy 工具 ID/名称不一致会失败；sentinel 也不能通过伪造 `AGENT_ROLE_RECOVERY` 获得恢复权限；recovery 只会恢复和写入 selector 指定的 run。
+该程序覆盖普通进程 mail 最小路径；普通进程不能直接投递事件、取消 Agent 等待或修改 Agent 文件元数据；usershell 等价路径可以创建 orchestrator；初始化前索引查询不会卡住；legacy 工具 ID/名称不一致会失败；sentinel 也不能通过伪造 `AGENT_ROLE_RECOVERY` 获得动作权限；recovery 只会更新 selector 指定的 run。
 
 当前版本已经具备任务一至三的增强实现，完成任务四的真实 inode 关联文件元数据服务、索引查询和根目录自动扫描，完成任务五的有界事件队列、等待/唤醒/取消机制、Agent 感知调度、受权调度配置、调度原因记录、当前 span 短记录、统一 timeline、timeline 过滤查询、timeline 游标增量读取、全局审计短记录和过滤查询，并提供任务六综合演示。后续可以继续增强多级目录递归扫描、云端 LLM Gateway 和可视化大屏。

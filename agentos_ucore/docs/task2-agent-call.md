@@ -56,7 +56,7 @@
 
 ## 内核工具
 
-当前实现 20 个工具，任务二基础工具和任务四、五扩展工具共用同一套工具表：
+当前实现 25 个工具，任务二基础工具和任务四、五扩展工具共用同一套工具表：
 
 | 工具 | `tool_id` | 输入 | 输出 |
 | --- | ---: | --- | --- |
@@ -69,17 +69,22 @@
 | `query_file` | 7 | 路径或属性条件串 | 返回文件查询结果 |
 | `send_message` | 8 | `target_pid`、message | 向目标 Agent 发送短消息 |
 | `read_message` | 9 | 无 | 读取当前 Agent 消息 |
-| `file_meta_init` | 10 | 无 | 初始化任务四文件元数据表 |
+| `file_meta_init` | 10 | 无 | 重新加载任务四文件对象元数据表 |
 | `read_file_summary` | 11 | selector | 返回文件摘要 |
-| `dependency_query` | 12 | stage | 返回阶段影响范围 |
+| `dependency_query` | 12 | label | 返回对象标签影响范围 |
 | `capability_check` | 13 | legacy role、action | 按当前进程真实 capability 检查动作，并返回真实 role/capability |
-| `rerun_stage` | 14 | legacy role、stage | 只有具备 `RECOVER_STAGE` 的 Agent 可执行受控恢复动作 |
-| `write_report` | 15 | legacy role、payload | 只有具备 `REPORT_WRITE` 的 Agent 可写报告状态；支持 `stage=report;run_id=...;project=...` selector |
+| `rerun_stage` | 14 | legacy role、stage | demo compatibility；内部调用通用动作提交路径，记录和重复请求判断归入 `action_commit` |
+| `write_report` | 15 | legacy role、payload | demo compatibility；内部调用通用工件更新路径，记录和重复请求判断归入 `artifact_update` |
 | `agent_watch` | 16 | event_type、filter | 注册事件 watch |
 | `agent_wait` | 17 | timeout | syscall-only 工具表可发现项；`agent_run()` 调用返回 `AGENT_STATUS_BAD_PARAM` |
 | `agent_heartbeat` | 18 | interval | 设置或停止心跳，`interval=0` 表示停止 |
 | `context_push` | 19 | record | 手动 Context 节点使用的内部工具 ID |
 | `read_file_digest` | 20 | selector | 读取真实文件短预览和 FNV-1a 内容指纹；绑定 metadata 的真实文件可复用 digest cache |
+| `action_commit` | 21 | selector | 按通用对象 selector 幂等提交 Agent 动作 |
+| `artifact_update` | 22 | selector | 按通用对象 selector 更新工件、报告、记忆或结果对象状态 |
+| `llm_request` | 23 | target_pid、prompt_summary | 记录 LLM 请求摘要，可投递给用户态 LLM Relay |
+| `llm_response` | 24 | target_pid、response_summary | 由具备 `LLM_RELAY` 的 Agent 投递 LLM 结果事件 |
+| `dependency_update` | 25 | selector | 注册或更新通用对象依赖关系 |
 
 ## 错误处理
 
@@ -94,12 +99,12 @@
 | `AGENT_STATUS_NOT_FOUND` | 查询文件或目标 Agent 不存在 |
 | `AGENT_STATUS_NO_SPACE` | Agent Context、事件槽或同步路径不可用 |
 | `AGENT_STATUS_DENIED` | 权限检查拒绝 |
-| `AGENT_STATUS_DUPLICATE` | 重复恢复动作被识别 |
+| `AGENT_STATUS_DUPLICATE` | 重复幂等动作被识别 |
 | `AGENT_STATUS_CANCELLED` | Agent 等待被受权 Agent 取消 |
 
-最终功能验收程序 `agentfinal_ucore` 会覆盖批量工具调用、sequence 连续性、Context 写入、Context Snapshot，并用 name-only `agent_call()` 验证 `echo`、`query_file`、`pid_info` 三个工具。`labdemo_ucore` 覆盖 denied 和 duplicate 两类业务错误。`agentsecurity_ucore` 专门覆盖用户态伪造 role 仍被内核真实 capability 拒绝的负向路径，并覆盖 `agent_call()` 中 `tool_id` 和 `tool_name` 不一致时返回 `AGENT_STATUS_BAD_REQUEST` / `tool_mismatch`。
+最终功能验收程序 `agentfinal_ucore` 会覆盖批量工具调用、sequence 连续性、Context 写入、Context Snapshot、通用 `action_commit/artifact_update` 和基础 template LLM 调用，并用 name-only `agent_call()` 验证 `echo`、`query_file`、`pid_info`、`read_file_digest`、`dependency_update` 和 `dependency_query`。`agentllm_ucore` 专门覆盖请求 Agent 与 Relay Agent 之间的 LLM 请求、模板响应、事件唤醒、Context 和 timeline 记录。`labdemo_ucore` 覆盖 denied 和 duplicate 两类业务错误。`agentsecurity_ucore` 专门覆盖用户态伪造 role 仍被内核真实 capability 拒绝的负向路径，并覆盖 `agent_call()` 中 `tool_id` 和 `tool_name` 不一致时返回 `AGENT_STATUS_BAD_REQUEST` / `tool_mismatch`。
 
-## Agent Context 写入
+## 上下文写入：Agent Context
 
 每次 Agent 调用结束后，内核会把最新 `struct agent_result` 写入 Agent Context，同时追加一条 `struct agent_context_record` 到 Context Path 环形记录区。legacy `struct agent_response` 只作为 `agent_call()` 的返回结构，不直接写入 Context latest 区。
 
@@ -120,8 +125,8 @@
 任务四文件查询和任务五 Agent Loop 都复用任务二工具调用机制：
 
 - 文件属性查询可以作为 `AGENT_TOOL_QUERY_FILE` 执行；
-- 文件摘要和依赖查询作为工具执行；
-- 权限检查和恢复动作作为工具执行；
+- 文件摘要和对象标签依赖查询作为工具执行；
+- 权限检查、通用动作提交、通用工件更新和 LLM 请求/响应作为工具执行；
 - watch、heartbeat 和 `context_push` 可以通过工具表发现；
 - `agent_wait` 只允许通过 `agent_wait()` syscall 执行，避免在批量热路径中阻塞整个 batch；
 - wait/wake 使用独立 syscall，因为 wait 可能阻塞，不适合作为 batch 热路径。
@@ -134,8 +139,18 @@
 agentfinal_ucore: batch first_seq=1 last_seq=64
 agentfinal_ucore: short_text_history=1 payload=ucore-final result=ucore-final
 agentfinal_ucore: causal_context=1 first_cause=0 next_cause=1 span=1 edges=63
+agentfinal_ucore: generic_action_abi=1
+agentfinal_ucore: llm_template_relay=1
 agentfinal_ucore: legacy_name_protocol=1
 agentfinal_ucore: passed
+```
+
+`agentllm_ucore`：
+
+```text
+agentllm_ucore: requester_done=1
+agentllm_ucore: template_relay=1
+agentllm_ucore: passed
 ```
 
 `agentbench_ucore`：
@@ -149,14 +164,14 @@ agentbench_ucore: batch_agent_run ops=256 ticks=7 ops_per_tick=36 speedup_x100=2
 `labdemo_ucore`：
 
 ```text
-agentos:event type=AUDIT role=sentinel action=rerun_stage result=DENIED
-agentos:event type=AUDIT role=recovery action=rerun_align result=DUPLICATE
+agentos:event type=AUDIT role=sentinel action=action_commit result=DENIED
+agentos:event type=AUDIT role=recovery action=commit_align result=DUPLICATE
 ```
 
 `agentsecurity_ucore`：
 
 ```text
 agentsecurity_ucore: sentinel spoof_denied=1
-agentsecurity_ucore: recovery rerun_ok=1 duplicate=1
+agentsecurity_ucore: recovery action_ok=1 duplicate=1
 agentsecurity_ucore: legacy_tool_mismatch=1
 ```

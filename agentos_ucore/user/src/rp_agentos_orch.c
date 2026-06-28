@@ -17,6 +17,51 @@ static void make_echo(struct agent_op *op, uint64 request_id,
 	strcpy(op->payload, payload);
 }
 
+static int seed_meta(int fid, const char *physical, const char *label,
+		     const char *type, const char *state,
+		     const char *summary, uint64 deps)
+{
+	struct agent_file_meta meta;
+
+	memset(&meta, 0, sizeof(meta));
+	meta.fid = fid;
+	strcpy(meta.physical_name, physical);
+	strcpy(meta.logical_path, physical);
+	strcpy(meta.project, "lab-gene-x");
+	strcpy(meta.workflow, "nightly-regression");
+	strcpy(meta.run_id, "RUN-042");
+	strcpy(meta.stage, label);
+	strcpy(meta.kind, type);
+	strcpy(meta.status, state);
+	strcpy(meta.summary, summary);
+	meta.dependency_mask = deps;
+	meta.flags = AGENT_FILE_META_F_PERSIST;
+	return agent_file_meta_set(&meta);
+}
+
+static int seed_research_metadata(void)
+{
+	if (seed_meta(1, "r42align", "align", "artifact", "ok",
+		      "align output is ready",
+		      agent_dependency_label_bit("analyze") |
+			      agent_dependency_label_bit("report") |
+			      agent_dependency_label_bit("archive")) < 0)
+		return -1;
+	if (seed_meta(2, "r42anlz", "analyze", "status", "ok",
+		      "analysis completed from align",
+		      agent_dependency_label_bit("report") |
+			      agent_dependency_label_bit("archive")) < 0)
+		return -1;
+	if (seed_meta(3, "r42report", "report", "report", "ok",
+		      "report artifact ready",
+		      agent_dependency_label_bit("archive")) < 0)
+		return -1;
+	if (seed_meta(4, "r42archive", "archive", "artifact", "pending",
+		      "archive waits for report", 0) < 0)
+		return -1;
+	return 0;
+}
+
 static int run_research_orchestrator(void)
 {
 	struct agent_info info;
@@ -38,6 +83,10 @@ static int run_research_orchestrator(void)
 
 	if (agent_file_meta_init() < 0) {
 		printf("rp_agentos_orch: file_meta_init_failed\n");
+		return 1;
+	}
+	if (seed_research_metadata() < 0) {
+		printf("rp_agentos_orch: seed_metadata_failed\n");
 		return 1;
 	}
 

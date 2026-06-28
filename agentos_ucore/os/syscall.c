@@ -689,6 +689,19 @@ void syscall()
 	case SYS_agent_file_query:
 		ret = sys_agent_file_query(args[0], args[1]);
 		break;
+	case SYS_agent_file_edit_begin:
+		ret = sys_agent_file_edit_begin(args[0], args[1], args[2],
+						args[3]);
+		break;
+	case SYS_agent_file_edit_commit:
+		ret = sys_agent_file_edit_commit(args[0], args[1], args[2]);
+		break;
+	case SYS_agent_file_edit_abort:
+		ret = sys_agent_file_edit_abort(args[0]);
+		break;
+	case SYS_agent_file_edit_state:
+		ret = sys_agent_file_edit_state(args[0], args[1]);
+		break;
 	// LAB5: (2) you may need to add case SYS_enable_deadlock_detect here
 	default:
 		ret = -1;

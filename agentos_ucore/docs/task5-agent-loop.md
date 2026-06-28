@@ -26,7 +26,7 @@
 
 当前已经提供 orchestrator 受权配置接口，可调整目标 Agent 的 policy、weight、priority 和 budget；尚未实现复杂策略语言或宿主机策略文件下发。
 
-## Loop 状态
+## 循环状态：Loop
 
 `struct agent_info` 中的 `loop_state` 表示 Agent 当前状态：
 
@@ -57,7 +57,7 @@
 
 事件结构 `struct agent_event` 包含 type、source_pid、target_pid、status、event_id、tick、corr_id、cause_sequence、span_id 和 payload。`cause_sequence` 指向触发事件的前序 Context sequence，`span_id` 表示事件所属因果链。
 
-## Watch
+## 观察项：Watch
 
 接口：
 
@@ -81,7 +81,7 @@ int agent_unwatch(int event_type, const char *filter);
 agentos:event type=WATCH_REGISTERED tick=... role=sentinel event=FILE_STATUS filter=status=failed
 ```
 
-## Wait
+## 等待：Wait
 
 接口：
 
@@ -112,7 +112,7 @@ agentbench_ucore: busy_poll_vs_wait busy_ops=128 busy_ticks=11 wait_ops=8 wait_t
 
 这里的 `speedup_x100=100` 是单项自身的计时基线。`busy_poll_vs_wait` 用于展示两个路径的观测数据，不设置固定 tick 阈值。
 
-## Wake
+## 唤醒：Wake
 
 接口：
 
@@ -143,7 +143,7 @@ agentfinal_ucore: run_ledger=1 records=... hash=... context=... event=... sched=
 agentos:event type=MESSAGE from=sentinel to=investigator status=OK
 ```
 
-## Wait Cancel
+## 取消等待：Wait Cancel
 
 接口：
 
@@ -178,7 +178,7 @@ int agent_wait_cancel(int pid, const char *reason);
 agentloop_ucore: wait_cancel=1
 ```
 
-## Heartbeat
+## 心跳：Heartbeat
 
 接口：
 
@@ -198,7 +198,7 @@ int agent_heartbeat_stop(void);
 
 当前 `agentbench_ucore` 会调用 `agent_heartbeat()`，随后用 `agent_info()` 检查 `heartbeat_interval` 和 `last_heartbeat_tick`。`agentloop_ucore` 进一步验证 heartbeat 可以唤醒等待中的 Agent、删除 TIMER watch 后不再消费 TIMER 事件、停止后不会继续产生 heartbeat 事件。
 
-## Agent 感知调度
+## 感知调度：Agent
 
 uCore 原有调度器从可运行队列中取任务。当前分支把取队逻辑改为 `fetch_best_task()`：它会临时取出一批可运行任务，用 `agent_sched_better()` 比较任务优先级，选出最适合运行的任务后把其余任务放回队列。
 
@@ -322,7 +322,7 @@ labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042;p
 
 message 入队时，内核还会把发送者当前可见的 metadata 预取提示复制到接收者的提示 ring。提示包含同一 span 时，还会写入全局 span 预取提示总线。接收者消费消息后继承 span，可以通过 `agent_file_prefetch_snapshot()` 查看交接到自己名下的提示，也可以通过 `agent_file_prefetch_span_snapshot()` 查看同一因果链中的提示来源和接收者。
 
-## Context Path 记录
+## 上下文路径记录：Context Path
 
 Agent Loop 行为会写入 Context Path：
 
@@ -339,7 +339,7 @@ Context v6 还会把事件和后续工具调用连起来，并继续维护 Conte
 
 1. 事件入队时，内核写入 `cause_sequence` 和 `span_id`。
 2. `agent_wait()` 成功消费事件后，当前 Agent 继承事件 span。
-3. 后续 `query_file`、`send_message`、`rerun_stage` 等工具调用会继续使用这个 span。
+3. 后续 `query_file`、`send_message`、`action_commit` 等工具调用会继续使用这个 span。
 4. 每次追加 Context 记录时，内核同时写入 prev_hash 和 record_hash，header 暴露最新链尾 hash。
 
 因此跨 Agent 协作可以从 Context 和事件结构中追踪：sentinel 收到文件状态事件后查询文件，随后发送消息；investigator 消费消息后继续分析；recovery 消费消息后执行恢复。`agentloop_ucore` 会检查投递和消费的事件都带有非零 cause/span，并输出：

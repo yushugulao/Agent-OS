@@ -15,7 +15,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_backend_exec", "status=ready");
 	ok = ok && rp_file_contains("rp_backend", "agentos_mainflow_kernel=required");
 	ok = ok && rp_file_contains("rp_agentos_roles", "stage_launch=agent_create_role");
-	ok = ok && rp_file_contains("rp_agentos_recovery", "kernel_tool=rerun_stage,write_report");
+	ok = ok && rp_file_contains("rp_agentos_recovery", "kernel_tool=action_commit,artifact_update");
 	ok = ok && rp_file_contains("rp_agentos_query", "metadata_source=kernel_file_index");
 	ok = ok && rp_file_contains("rp_agentos_timeline", "event_delivery=kernel_agent_queue");
 	ok = ok && rp_file_contains("rp_agentos_collab_ack", "delivery=kernel_event_queue");
@@ -26,7 +26,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "context_trusted=kernel_shadow");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "metadata_query=used_index");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "agent_event_notify=kernel_queue");
-	ok = ok && rp_file_contains("rp_agentos_mainflow", "failure_recovery=kernel_tool");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "failure_recovery=generic_action");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "provenance_audit=kernel_ledger");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "permission_control=sentinel_rerun_denied");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "timeline_observe=kernel_snapshot");
@@ -309,7 +309,7 @@ int main(void)
 	int passed_cases = rp_get_int_value("rp_backend_exec", "passed_cases=");
 	int planned_cases = rp_get_int_value("rp_backend_exec", "planned_cases=");
 	int study_arms = rp_get_int_value("rp_study", "arms=");
-	ok = ok && require_equal("backend_cases", backend_cases, 7);
+	ok = ok && require_equal("backend_cases", backend_cases, 8);
 	ok = ok && require_equal("backend_executable", backend_executable, passed_cases);
 	ok = ok && require_equal("backend_case_total", passed_cases + planned_cases, backend_cases);
 	ok = ok && require_equal("study_arms", study_arms, 2);
@@ -467,7 +467,7 @@ int main(void)
 			   "workflow_steps=10\n"
 			   "workflow_attempts=12\n"
 			   "completion_actions=4\n"
-			   "backend_cases=7\n"
+			   "backend_cases=8\n"
 			   "runner_stages=5\n"
 			   "runner_retries=1\n"
 			   "runner_cache_hits=1\n"
@@ -730,6 +730,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=420 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 state_catalog=12 startup_doctor=14 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 backend=7 artifacts=7 agents=7 dynamic=4 status=ready\n");
+	printf("rp_consistency: checks=420 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 state_catalog=12 startup_doctor=14 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 backend=8 artifacts=7 agents=7 dynamic=4 status=ready\n");
 	return 0;
 }

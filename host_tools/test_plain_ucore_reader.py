@@ -158,7 +158,7 @@ status=ready
         "host_action_workbench_task_board=exported\n"
         "host_action_workbench_board_filter=open\n"
         "workbench_delivery_scale=workbenches:8,templates:8,workspace_imports:9,workspace_inspections:9,answers:11,deliveries:9,studio_sessions:2,project_action_plans:17,project_deliveries:4,project_runbooks:17,project_evidence_audits:17,project_provenance_graphs:4,project_launches:3,project_release_gates:17,project_snapshots:17,status=ready\n"
-        "backend_evidence_report=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;status=ready\n"
+        "backend_evidence_report=rp_backend_exec;plain_costs=8;agentos_replacements=8;risks=8;status=ready\n"
         "status=ready\n"
     ),
     "rp_report_text": (
@@ -171,7 +171,7 @@ status=ready
         "report_source=artifacts;state_file=rp_artifact_manifest;source_key=artifact_review_path;linked_sources=rp_artifact,rp_stage_log,rp_chart_data;status=ready\n"
         "report_source=llm;state_file=rp_llm_resp;source_key=host_relay_response;linked_sources=rp_llm_req,rp_llm_packets,rp_llmeval,rp_llm_guard;status=ready\n"
         "report_source=review;state_file=rp_review_dashboard;source_key=section,gate,decision;linked_sources=rp_review_pack,rp_review2,rp_revision;status=ready\n"
-        "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index;status=ready\n"
+        "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128,userland_lock_file;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,kernel_edit_lease;mainflow_facts=11;status=ready\n"
         "status=ready\n"
     ),
     "rp_stage_state": (
@@ -324,8 +324,8 @@ status=ready
         "provenance_query_checks=72;specs=3;templates=1;executions=3;comparisons=1;exports=1;packets=1;agentos_replacements=4;status=ready\n"
         "llm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready\n"
         "workflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready\n"
-        "portability_backend_checks=18;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=7;planned_cases=0;status=ready\n"
-        "backend_runner_checks=21;runner_cases=7;runner_passed=7;runner_planned=0;plain_inputs=7;study_metrics=2;backend_runner_detail_checks=42;runner_detail_rows=7;backend_runner_report_checks=35;runner_report_rows=7;backend_report_links=2;status=ready\n"
+        "portability_backend_checks=18;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=8;planned_cases=0;status=ready\n"
+        "backend_runner_checks=24;runner_cases=8;runner_passed=8;runner_planned=0;plain_inputs=8;study_metrics=2;backend_runner_detail_checks=48;runner_detail_rows=8;backend_runner_report_checks=40;runner_report_rows=8;backend_report_links=2;mainflow_facts=11;status=ready\n"
         "lab_governance_ops_checks=26;approval_checks=2;protocol_governance_checks=4;sop_execution_checks=3;training_record_checks=4;status=ready\n"
         "knowledge_index_checks=22;llm_transcript_checks=3;workbench_delivery_checks=15;research_portfolio_checks=16;execution_scale_checks=14;operations_scale_checks=12;project_revision_incident_checks=12;reserved_research_surface_checks=21;root_state_surface_checks=10;agentos_reserved_surface_checks=21;state_catalog_checks=12;startup_doctor_checks=14;status=ready\n"
         "state_catalog=keys:574;nonzero:71;zero:503;represented:574;checks:12;status=ready\n"
@@ -1056,24 +1056,124 @@ status=ready
         "runner_detail=retry-recovery;src=rp_retry_plan+rp_stage_state;req=retry_stage+stage;obs=pass;act=rerun_align;review=recovered\n"
         "runner_detail=user-context;src=rp_query+rp_provpath;req=context_path;obs=pass;act=rebuild_from_files;review=userland\n"
         "runner_detail=user-fsmeta;src=rp_artifact_manifest;req=metadata_index;obs=pass;act=scan_manifest;review=userland\n"
-        "runner_detail=user-recovery;src=rp_retrylog+rp_fix;req=rerun_stage+write_report;obs=pass;act=repair_files;review=userland\n"
+        "runner_detail=user-recovery;src=rp_retrylog+rp_fix;req=action_commit+artifact_update;obs=pass;act=repair_files;review=userland\n"
         "runner_detail=user-event;src=rp_worker+rp_timeline;req=event_wait_wake;obs=pass;act=file_event_records;review=userland\n"
         "runner_detail=user-audit;src=rp_audit+rp_provpath;req=audit+provenance;obs=pass;act=append_logs;review=userland\n"
-        "runner_detail_rows=7\nrunner_detail_schema=src,req,obs,act,review\n"
+        "runner_detail=user-edit;src=rp_agentos_conflict;req=file_edit_lease;obs=pass;act=kernel_edit_lease;review=agentos\n"
+        "runner_detail_rows=8\nrunner_detail_schema=src,req,obs,act,review\n"
         "runner_report=plain-ucore;plain_cost=file_scan_manifest;agentos_replace=batch_tool_context;risk=manual_state;status=passed\n"
         "runner_report=retry-recovery;plain_cost=retry_file_stage_file;agentos_replace=event_context;risk=stale_retry;status=passed\n"
         "runner_report=user-context;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;risk=untrusted_context;status=passed\n"
         "runner_report=user-fsmeta;plain_cost=scan_records_128;agentos_replace=metadata_index;risk=scan_growth;status=passed\n"
-        "runner_report=user-recovery;plain_cost=manual_retry_contract;agentos_replace=capability_checked_rerun;risk=wrong_stage_update;status=passed\n"
+        "runner_report=user-recovery;plain_cost=manual_retry_contract;agentos_replace=capability_checked_action;risk=wrong_object_update;status=passed\n"
         "runner_report=user-event;plain_cost=file_polling;agentos_replace=kernel_event_queue;risk=lost_handoff;status=passed\n"
         "runner_report=user-audit;plain_cost=append_only_logs;agentos_replace=kernel_ledger_provenance;risk=tampered_context;status=passed\n"
-        "runner_report_rows=7\nrunner_report_schema=plain_cost,agentos_replace,risk,status\n"
-        "runner_cases=7\nrunner_detail_fields=input_check,artifact_check,att,retry,ticks\nrunner_detail_checks=28\nrunner_verified_inputs=7\nrunner_passed=7\nrunner_planned=0\n"
+        "runner_report=user-edit;plain_cost=userland_lock_file;agentos_replace=kernel_edit_lease;risk=lost_update;status=passed\n"
+        "runner_report_rows=8\nrunner_report_schema=plain_cost,agentos_replace,risk,status\n"
+        "runner_cases=8\nrunner_detail_fields=input_check,artifact_check,att,retry,ticks\nrunner_detail_checks=32\nrunner_verified_inputs=8\nrunner_passed=8\nrunner_planned=0\n"
     ),
     "rp_study": (
         "study_metric=plain_ucore;file_scans=128;context_trusted=0;rebuild_steps=6;detail_checks=7;result=passed\n"
-        "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;event_queue=1;recovery_tool=1;audit_ledger=1;detail_checks=kernel;result=kernel_target\n"
+        "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;event_queue=1;recovery_tool=1;audit_ledger=1;edit_lease=1;mainflow_facts=11;detail_checks=kernel;result=kernel_target\n"
         "study_handoff=rp_backend_exec->rp_agentcmp;status=ready\n"
+    ),
+    "rp_agentos_kernel": (
+        "target=agentos_ucore\n"
+        "mode=kernel_agent_orchestrated\n"
+        "kernel_agent=orchestrator\n"
+        "context_snapshot=present\n"
+        "agent_timeline=observed\n"
+        "agent_provenance=observed\n"
+        "agent_ledger=observed\n"
+        "file_meta_service=initialized\n"
+        "research_platform=rp_orch\n"
+        "status=ready\n"
+    ),
+    "rp_agentos_mainflow": (
+        "flow=RUN-042\n"
+        "entry=rp_agentos_orch\n"
+        "stage=entry;context_trusted=kernel_shadow;timeline_records=observed;provenance_edges=observed;ledger_hash=observed;status=ready\n"
+        "stage=query;metadata_query=used_index;tool=query_file;align_query=indexed;report_query=indexed;context_sequence=observed;status=ready\n"
+        "stage=recovery;failure_recovery=generic_action;kernel_action_commit=ok;kernel_artifact_update=ok;context_snapshot=trusted;metadata_after_repair=used_index;status=ready\n"
+        "stage=timeline;agent_event_notify=kernel_queue;timeline_observe=kernel_snapshot;wait=wakeup;heartbeat=observed;status=ready\n"
+        "stage=collaboration;agent_event_notify=kernel_queue;delivery=kernel_event_queue;capability_control=kernel_role;permission_control=sentinel_rerun_denied;status=ready\n"
+        "stage=audit;provenance_audit=kernel_ledger;ledger_hash=observed;audit_records=observed;provenance_edges=observed;context_records=observed;status=ready\n"
+        "stage=workbench;workbench_file_verify=kernel_metadata_index;context_trusted=kernel_shadow;report_file=verified;status=ready\n"
+        "stage=package;package_provenance=kernel_ledger;report_metadata=kernel_index;context_trusted=kernel_shadow;status=ready\n"
+        "stage=real_task;real_task_context=kernel_shadow;answer_audit=kernel_audit_seen;report_metadata=kernel_index;status=ready\n"
+        "stage=edit_conflict;edit_lease=kernel_exclusive;holder_write=checked;version_commit=checked;resource_identity=dev_inum;status=ready\n"
+    ),
+    "rp_agentos_conflict": (
+        "run_id=RUN-042\n"
+        "edit_target=r42edrep\n"
+        "edit_lease=kernel_exclusive\n"
+        "resource_identity=dev_inum\n"
+        "holder_write=checked\n"
+        "version_commit=checked\n"
+        "stale_write_policy=reject\n"
+        "status=ready\n"
+    ),
+    "rp_agentos_query": (
+        "query=RUN-042-align-report\n"
+        "metadata_source=kernel_file_index\n"
+        "align_query=indexed\n"
+        "report_query=indexed\n"
+        "tool=query_file\n"
+        "capability=meta_read\n"
+        "status=ready\n"
+    ),
+    "rp_agentos_recovery": (
+        "stage=align\n"
+        "run_id=RUN-042\n"
+        "kernel_tool=action_commit,artifact_update\n"
+        "context_snapshot=trusted\n"
+        "status=ready\n"
+    ),
+    "rp_agentos_timeline": (
+        "run_id=RUN-042\n"
+        "event_delivery=kernel_agent_queue\n"
+        "wait=wakeup\n"
+        "heartbeat=observed\n"
+        "timeline_snapshot=ready\n"
+        "status=ready\n"
+    ),
+    "rp_agentos_collab_ack": (
+        "agent=sentinel\n"
+        "event=handoff=recovery-auditor\n"
+        "delivery=kernel_event_queue\n"
+        "permission_control=sentinel_rerun_denied\n"
+        "status=ready\n"
+    ),
+    "rp_agentos_audit": (
+        "audit_source=kernel_ledger\n"
+        "context_source=kernel_shadow\n"
+        "provenance_source=kernel_edges\n"
+        "record_hash=observed\n"
+        "status=ready\n"
+    ),
+    "rp_agentos_workbench": (
+        "workbench=usable-workbench:RUN-900:agentos\n"
+        "file_verify=kernel_metadata_index\n"
+        "report_file=RUN-042-report\n"
+        "context_snapshot=trusted\n"
+        "candidate_source=kernel_index\n"
+        "status=ready\n"
+    ),
+    "rp_agentos_package": (
+        "package=research-evidence-package\n"
+        "package_trace=kernel_provenance\n"
+        "ledger=kernel_ledger\n"
+        "context_snapshot=trusted\n"
+        "report_metadata=kernel_index\n"
+        "status=ready\n"
+    ),
+    "rp_agentos_real_task": (
+        "task=palmer-penguins-morphometrics\n"
+        "report_answer=kernel_context_record\n"
+        "answer_audit=kernel_audit_seen\n"
+        "report_metadata=kernel_index\n"
+        "context_snapshot=trusted\n"
+        "status=ready\n"
     ),
     "rp_consistency": "checks=420\nstate_catalog_checks=12\nstartup_doctor_checks=14\nhost_state_keys=574\nagentos_reserved_surface_checks=21\nagentos_reserved_surface=profiles:0,skills:0,tasks:0,deliberations:0,handoffs:0,coord:0,abi:0,adapter:0,readiness:0,tool_bindings:0\nstate_relation=passed\nruntime_assurance_checks=24\nsecret_reference_checks=6\nmodel_registry_checks=5\nllm_proxy_replay_audits=2\ncollaboration_threads=2\nobservability_alerts=5\nresearch_ops_checks=28\nsemantic_graph_checks=6\nprompt_ops_checks=5\nrunbook_checks=7\nworker_ops_checks=5\nexecution_control_checks=5\nregulated_research_checks=32\nannotation_checks=5\nassay_plate_checks=4\ncohort_monitoring_checks=3\ndata_access_checks=4\nresearch_card_checks=4\nresearch_object_checks=5\nsample_custody_checks=3\nstatistical_design_checks=2\nworkflow_template_checks=2\nlab_governance_ops_checks=26\napproval_checks=2\nethics_protocol_checks=1\nprotocol_governance_checks=4\nsop_execution_checks=3\ntraining_record_checks=4\ninstrument_maintenance_checks=3\ninventory_transaction_checks=3\nprocurement_order_checks=2\nresource_budget_checks=2\nrun_queue_checks=1\nnotification_checks=1\nresearch_product_checks=18\nproject_scaffold_files=8\ndataset_product_exports=9\nsource_portfolio_exports=1\nresearch_portfolio_checks=16\nusable_research_sources=67\nusable_research_datasets=5\nusable_research_literature_searches=7\nusable_research_reviews=11\nusable_research_evidence_reviews=7\nusable_research_evidence_extractions=25\nusable_research_screening_decisions=25\nusable_research_exports=80\nusable_research_platform_doctor_reports=12\nusable_research_project_handoff_audits=34\nusable_research_project_run_comparisons=17\nusable_research_project_reproducibility_audits=17\nusable_research_project_snapshot_comparisons=17\nexecution_scale_checks=14\nhost_workflow_runs=10\nhost_workflow_stage_runs=70\nhost_workflow_cache=6\nhost_agent_messages=70\nhost_agent_decisions=70\nagentcompare_reports=4\nagentcompare_results=20\nagentcompare_profiles=1\ncontent_objects=129\nobject_references=129\noperations_scale_checks=12\nhost_audit_records=5\nhost_metrics=13\nhost_llm_providers=3\nhost_secret_references=3\nhost_executed_corr_ids=4\nusable_research_projects=23\nhost_artifacts=128\nhost_messages=70\nhost_content_objects=129\nhost_object_references=129\nhost_agentcompare_reports=4\nhost_agentcompare_results=20\nproject_revision_incident_checks=12\nusable_research_revision_tasks=1\nusable_research_project_scaffolds=1\nincidents=1\nincident_id=INC-RUN-042-ALIGN-OOM\nincident_failed_stage=align\nincident_reason=memory_limit\nincident_status=closed\nrevision_task_status=completed\nrevision_task_owner=Wang\nrevision_review_decision=needs_revision\nproject_scaffold=deepseek-reliability-response-study\nproject_scaffold_exports=json,markdown\nreserved_research_surface_checks=21\nusable_research_dataset_answers=0\nusable_research_dataset_cards=0\nusable_research_dataset_portfolios=0\nusable_research_dataset_previews=0\nusable_research_dataset_run_comparisons=0\nusable_research_dataset_runs=0\nusable_research_dataset_visualizations=0\nusable_research_evidence_syntheses=0\nusable_research_package_intakes=0\nusable_research_prisma_flows=0\nusable_research_project_action_executions=0\nusable_research_project_reviews=0\nusable_research_review_protocols=0\nusable_research_source_portfolios=0\nusable_research_study_protocol_bundles=0\nusable_research_study_protocol_compliance_reports=0\nusable_research_study_protocol_launches=0\nusable_research_study_protocol_runs=0\nusable_research_study_protocols=0\nusable_research_workbench_action_items=0\nusable_research_workbench_notes=0\nroot_state_surface_checks=10\nroot_projects=1\nroot_runs=1\nroot_reports=1\nroot_plans=1\nroot_search_records=2\nroot_site_exports=1\nroot_compare_profiles=1\nroot_audit_records=5\nroot_context_records=380\nroot_project_id=lab-gene-x\nroot_run_id=RUN-042\nroot_report_id=RUN-042-recovery-report\nroot_plan_id=PLAN-RUN-042-RECOVER-1\nroot_search_id=search:1\nroot_site_id=site:1\nroot_compare_profile=agentcompare-default\nroot_audit_spoof_denied=1\nstudy_protocol_reproduction_checks=5\nproject_bundle_cache=ready\nartifact_provenance=3\nartifact_dossier_checks=4\nartifact_path_rebuild_files=6\nartifact_path_rebuild_steps=7\nknowledge_index_checks=22\nllm_transcript_checks=3\nllm_bridge_transcripts=99\nllm_bridge_requests=33\nllm_bridge_responses=33\nworkbench_delivery_checks=15\nusable_research_workbenches=8\nusable_research_templates=8\nusable_research_workspace_imports=9\nusable_research_workspace_inspections=9\nusable_research_workbench_answers=11\nusable_research_deliveries=9\nusable_research_studio_sessions=2\nusable_research_project_action_plans=17\nusable_research_project_deliveries=4\nusable_research_project_runbooks=17\nusable_research_project_evidence_audits=17\nusable_research_project_provenance_graphs=4\nusable_research_project_launches=3\nusable_research_project_release_gates=17\nusable_research_project_snapshots=17\nsearch_documents=1685\nprovenance_nodes=406\nprovenance_links=544\nevent_stream_records=8966\ncontext_records=380\nhost_workflow_artifacts=150\nusable_research_artifacts=507\nusable_research_runs=23\nusable_research_stages=197\nusable_research_messages=265\nusable_research_decisions=242\n",
     "rp_state_catalog": "host_state_keys=574\nnonzero_state_categories=71\nzero_state_categories=503\nrepresented_state_categories=574\nstate_catalog_checks=12\ncoverage_model=nonzero_records_preserved;zero_records_reserved;plain_user_space_files;agentos_kernel_target\nstatus=ready\n",
@@ -1341,9 +1441,120 @@ def main() -> int:
         for name, text in STATE_FILES.items():
             (state_dir / name).write_text(text, encoding="utf-8")
 
-        summary = plain_ucore_reader.render_site(state_dir, out_dir)
+        platform_alignment = out_dir / "host-platform-alignment.json"
+        test_alignment = out_dir / "host-test-alignment.json"
+        surface_alignment = out_dir / "host-surface-alignment.json"
+        seeded_action_state = out_dir / "seeded-action-state.json"
+        platform_alignment.write_text(
+            json.dumps(
+                {
+                    "status": "ready",
+                    "host_modules": 154,
+                    "tracked_host_modules": 154,
+                    "untracked_host_modules": 0,
+                    "plain_sources": 73,
+                    "agentos_sources": 74,
+                    "runtime_state_checked": True,
+                    "groups_ok": 13,
+                    "groups_total": 13,
+                    "groups": [
+                        {
+                            "name": "workflow_runner",
+                            "status": "ok",
+                            "host_modules": 10,
+                            "plain_sources": 4,
+                            "agentos_sources": 4,
+                            "reader_keywords": 3,
+                            "plain_runtime_hits": ["rp_stage_state"],
+                            "agentos_runtime_hits": ["rp_stage_state"],
+                        }
+                    ],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        test_alignment.write_text(
+            json.dumps(
+                {
+                    "status": "ready",
+                    "host_tests": 142,
+                    "themes_ok": 7,
+                    "themes_total": 7,
+                    "unclassified_tests": 0,
+                    "theme_results": [
+                        {
+                            "name": "workflow_runtime",
+                            "status": "ok",
+                            "host_tests": 18,
+                            "evidence_tokens": 5,
+                            "missing_plain": [],
+                            "missing_agentos": [],
+                        }
+                    ],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        surface_alignment.write_text(
+            json.dumps(
+                {
+                    "status": "ready",
+                    "host_api_routes": 214,
+                    "host_action_routes": 95,
+                    "host_download_refs": 76,
+                    "runtime_state_checked": True,
+                    "plain_source": {"host_api_routes": 214, "host_action_routes": 95, "reader_actions": 123},
+                    "agentos_source": {"host_api_routes": 214, "host_action_routes": 95, "reader_actions": 123},
+                    "plain_runtime": {"host_api_routes": 214, "host_action_routes": 95, "reader_actions": 123},
+                    "agentos_runtime": {"host_api_routes": 214, "host_action_routes": 95, "reader_actions": 123},
+                    "api_prefixes": ["/api", "/api/usable-research"],
+                    "action_prefixes": ["/actions", "/actions/research"],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        seeded_action_state.write_text(
+            json.dumps(
+                {
+                    "status": "ready",
+                    "action": "/actions/research/rerun",
+                    "action_count": 8,
+                    "action_kinds": [
+                        "research_rerun",
+                        "artifact_derive",
+                        "host_workflow",
+                        "llm_relay_request",
+                        "workbench",
+                        "workbench_task",
+                        "project_release_gate",
+                        "workflow_portability",
+                    ],
+                    "plain": {
+                        "status": "ready",
+                        "prepare": {"actions": 8, "accepted": 8},
+                        "run": {"status": "ready", "passed": True, "embedded_action_records": 8, "extracted_state_files": 256},
+                        "failures": [],
+                    },
+                    "agentos": {
+                        "status": "ready",
+                        "prepare": {"actions": 8, "accepted": 8},
+                        "run": {"status": "ready", "passed": True, "embedded_action_records": 8, "extracted_state_files": 268},
+                        "failures": [],
+                    },
+                    "failures": [],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        summary = plain_ucore_reader.render_site(state_dir, out_dir, platform_alignment, test_alignment, surface_alignment, seeded_action_state)
         assert summary["status"] == "ready", summary
         assert summary["pages"] == 40, summary
+        assert summary["api_json_files"] == len(STATE_FILES) + 7, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -1378,6 +1589,9 @@ def main() -> int:
         assert (out_dir / "api" / "rp_api_catalog.json").exists()
         index_html = (out_dir / "index.html").read_text(encoding="utf-8")
         assert "Plain uCore Research" in index_html
+        assert "Dual Target Overview" in index_html
+        assert "AgentOS Flow" in index_html
+        assert "Visible Comparison" in index_html
         assert "State Files" in index_html
         assert "Dynamic Inputs" in index_html
         run_html = (out_dir / "run.html").read_text(encoding="utf-8")
@@ -1427,7 +1641,7 @@ def main() -> int:
         assert "Run Action Delta" in run_html
         assert "batch_tool_context" in run_html
         assert "execution_plan:pass:record:baseline" in run_html
-        assert "context_path:planned:kernel_context:target" in run_html
+        assert "context_path:pass:rebuild_from_files:userland" in run_html
         assert "risks" in run_html
         workflow_html = (out_dir / "workflow.html").read_text(encoding="utf-8")
         assert "Workflow Runner" in workflow_html
@@ -1774,17 +1988,39 @@ def main() -> int:
         assert "provenance_query_checks" in compare_html
         assert "Provenance Queries" in compare_html
         assert "Coherence Plane" in compare_html
+        assert "AgentOS Main Flow Kernel Stages" in compare_html
+        assert "AgentOS Kernel Output Files" in compare_html
+        assert "AgentOS Flow Stages" in compare_html
+        assert "AgentOS Metadata" in compare_html
+        assert "AgentOS Recovery" in compare_html
+        assert "AgentOS Events" in compare_html
+        assert "AgentOS Audit" in compare_html
+        assert "AgentOS Real Task" in compare_html
+        assert "AgentOS Edit Lease" in compare_html
+        assert "kernel_metadata_index" in compare_html
+        assert "kernel_event_queue" in compare_html
+        assert "sentinel_rerun_denied" in compare_html
+        assert "kernel_ledger" in compare_html
+        assert "kernel_context_record" in compare_html
+        assert "rp_agentos_conflict" in compare_html
+        assert "kernel_exclusive" in compare_html
+        assert "holder_write" in compare_html
+        assert "version_commit" in compare_html
+        assert "resource_identity=dev_inum" in compare_html
+        assert "stale_write_policy" in compare_html
+        assert "rp_agentos_mainflow" in compare_html
+        assert "rp_agentos_workbench" in compare_html
         assert "Backend Runner Cases" in compare_html
         assert "Backend Case Details" in compare_html
         assert "Backend Evidence Report" in compare_html
         assert "retry-recovery" in compare_html
         assert "rerun_align" in compare_html
-        assert "kernel_fsmeta" in compare_html
+        assert "metadata_index" in compare_html
         assert "scan_records_128" in compare_html
         assert "kernel_context_path" in compare_html
         assert "Input Check" in compare_html
         assert "tool_output_missing" in compare_html
-        assert "kernel_required" in compare_html
+        assert "detail_checks=kernel" in compare_html
         assert "Backend Study Metrics" in compare_html
         assert "Detail Checks" in compare_html
         assert "plain_ucore" in compare_html
@@ -1792,6 +2028,31 @@ def main() -> int:
         assert "rp_backend_exec" in compare_html
         assert "rp_agentcmp" in compare_html
         assert "128" in compare_html
+        assert "Host Platform Alignment Summary" in compare_html
+        assert "Host Platform Capability Groups" in compare_html
+        assert "Host Platform Test Summary" in compare_html
+        assert "Host Platform Test Themes" in compare_html
+        assert "宿主机 Web/API/action 概览" in compare_html
+        assert "宿主机路由前缀" in compare_html
+        assert "宿主机 action 运行实测" in compare_html
+        assert "预置 action 双目标结果" in compare_html
+        assert "/actions/research/rerun" in compare_html
+        assert "action 类型" in compare_html
+        assert "artifact_derive" in compare_html
+        assert "workflow_portability" in compare_html
+        assert "抽取状态文件数" in compare_html
+        assert "workflow_runner" in compare_html
+        assert "workflow_runtime" in compare_html
+        assert "宿主机 API 路由数" in compare_html
+        assert "214" in compare_html
+        assert "/actions/research" in compare_html
+        assert (out_dir / "api" / "host_platform_alignment.json").exists()
+        assert (out_dir / "api" / "host_test_alignment.json").exists()
+        assert (out_dir / "api" / "host_surface_alignment.json").exists()
+        assert (out_dir / "api" / "host_seeded_action.json").exists()
+        assert (out_dir / "api" / "host_platform_alignment_raw.json").exists()
+        assert (out_dir / "api" / "host_test_alignment_raw.json").exists()
+        assert (out_dir / "api" / "host_surface_alignment_raw.json").exists()
         training_html = (out_dir / "training-compliance.html").read_text(encoding="utf-8")
         assert "Training Compliance" in training_html
         assert "training_compliance_checks" in training_html
@@ -2089,6 +2350,7 @@ def main() -> int:
             with request.urlopen(base + "/index.html", timeout=5) as response:
                 index_html = response.read().decode("utf-8")
             assert "Rendered from plain uCore state files" in index_html
+            assert "Dual Target Overview" in index_html
         finally:
             server.shutdown()
             server.server_close()

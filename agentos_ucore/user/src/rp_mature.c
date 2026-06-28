@@ -131,7 +131,7 @@ int main(void)
 	ok = ok && require_token("rp_stage_state", "stages=5");
 	ok = ok && require_token("rp_artifact_manifest", "manifest_records=4");
 	ok = ok && require_token("rp_lineage", "edges=7");
-	ok = ok && require_token("rp_backend_exec", "runner_cases=7");
+	ok = ok && require_token("rp_backend_exec", "runner_cases=8");
 	ok = ok && require_token("rp_data_quality", "passed=7");
 	ok = ok && require_token("rp_dataset_collection", "items=4");
 	ok = ok && require_token("rp_publication", "publication_checks=48");

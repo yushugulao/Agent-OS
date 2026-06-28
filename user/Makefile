@@ -106,7 +106,7 @@ SELECTED_APPS = $(foreach t,$(CH_TESTS),$(filter $(t)%,$(APPS)))
 
 $(GENERATED_HEADERS):
 	@mkdir -p $(@D)
-	@printf '%s\n' '#ifndef __RP_HOST_ACTION_SEED_H__' '#define __RP_HOST_ACTION_SEED_H__' '#define RP_HOST_ACTION_SEED ""' '#endif' > $@
+	@printf '%s\n' '#ifndef __RP_HOST_ACTION_SEED_H__' '#define __RP_HOST_ACTION_SEED_H__' '#define RP_HOST_ACTION_SEED ""' '#define RP_HOST_ACTION_BOOTSTRAP_SEED ""' '#endif' > $@
 
 $(obj_dir)/%.o: %.c $(GENERATED_HEADERS)
 	@mkdir -p $(@D)

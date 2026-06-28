@@ -124,6 +124,11 @@ int fileopen(char *path, uint64 omode)
 	}
 	if (ip->type != T_FILE)
 		panic("unsupported file inode type\n");
+	if ((omode & O_TRUNC) && ip->type == T_FILE &&
+	    !agent_edit_truncate_allowed(ip)) {
+		iput(ip);
+		return -1;
+	}
 	if ((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0) {
 		//Assign a system-level table entry to a newly created or opened file
 		//and then create a file descriptor that points to it
@@ -141,6 +146,7 @@ int fileopen(char *path, uint64 omode)
 	if ((omode & O_TRUNC) && ip->type == T_FILE) {
 		itrunc(ip);
 		agent_fs_note_truncate(ip);
+		agent_edit_note_truncate(ip);
 	}
 	return fd;
 }
@@ -166,6 +172,11 @@ int fileunlink(char *path)
 		iput(dp);
 		return -1;
 	}
+	if (!agent_edit_unlink_allowed(ip)) {
+		iput(ip);
+		iput(dp);
+		return -1;
+	}
 	agent_fs_note_delete(ip);
 	itrunc(ip);
 	ip->type = 0;
@@ -179,6 +190,7 @@ int fileunlink(char *path)
 		return -1;
 	}
 	ip->valid = 0;
+	agent_edit_note_delete(ip);
 	iput(ip);
 	iput(dp);
 	return 0;
@@ -189,9 +201,12 @@ uint64 inodewrite(struct file *f, uint64 va, uint64 len)
 {
 	int r;
 	ivalid(f->ip);
+	if (!agent_edit_write_allowed(f->ip))
+		return (uint64)-1;
 	if ((r = writei(f->ip, 1, va, f->off, len)) > 0) {
 		f->off += r;
 		agent_fs_note_write(f->ip);
+		agent_edit_note_write(f->ip);
 	}
 	return r;
 }

@@ -24,7 +24,28 @@
 | 证据和结论分离 | `test-record.md` 存放输出记录，`verification.md` 给出验证结论和覆盖范围 |
 | 详细度分层 | 主设计文档解释总体方案，任务文档作为细节附录，避免 README 过长 |
 
-## uCore 分支文档口径
+## 当前展示模板
+
+参考优秀竞赛项目的公开文档组织方式后，本项目采用以下展示模板：
+
+| 章节 | 写法要求 | 本项目落点 |
+| --- | --- | --- |
+| 基本信息 | 用表格列出赛题、队伍、仓库、验证路径 | `README.md` |
+| 项目简介 | 先解释问题，再用 3 到 5 条目标说明系统做什么 | `README.md`、`design.md` |
+| 完成情况 | 用任务表说明完成状态，再用能力分组表说明实现内容 | `README.md`、`requirements-traceability.md` |
+| 方案设计 | 先放总架构图，再展开模块职责和关键路径 | `design.md` |
+| 项目测试 | 按测试场景组织：背景/方法、输出标记、结论、性能观测 | `verification.md`、`testing-details.md`、`test-record.md` |
+| 文件索引 | 把代码、文档、测试、脚本分组列出 | `README.md`、`docs/README.md` |
+
+图示风格遵循以下规则：
+
+- 白底，少量稳定色块区分用户态、内核态、宿主机工具和私有状态；
+- 用粗虚线标出用户态/内核态分层；
+- 用箭头表示真实调用路径、数据路径或测试证据流；
+- 图中的模块名称必须能在源码目录或测试程序中找到对应项；
+- 性能材料优先给曲线、表格或候选记录数差异，不只给一段日志。
+
+## 分支文档口径：uCore
 
 uCore 分支文档按当前代码事实编写：
 
@@ -33,7 +54,7 @@ uCore 分支文档按当前代码事实编写：
 - 内核 ABI 以 `os/agent.h` 为准。
 - 最终测试入口是 `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore` 和 `agentsecurity_ucore`。
 - Agent 交付以 `CHAPTER=agent` 为验收主路径；`ch3_trace` 作为代表性 uCore 基础 syscall 抽测材料。
-- 任务四当前是绑定真实 inode 的内核文件元数据表、私有 `.agentmeta` 元数据文件、重新加载、根目录自动扫描、索引查询、generation-aware 查询结果缓存、查询计划解释、短内容摘要、generation-aware digest cache、本地 metadata 预取提示和同一 span 的 metadata 预取提示查询服务；不扩大表述为多级目录递归扫描、全文内容索引或完整文件内容预加载。
+- 任务四当前是绑定真实 inode 的内核文件元数据表、私有 `.agentmeta` 元数据文件、重新加载、根目录自动扫描、索引查询、generation-aware 查询结果缓存、查询计划解释、短内容摘要、内容版本感知 digest cache、本地 metadata 预取提示和同一 span 的 metadata 预取提示查询服务；不扩大表述为多级目录递归扫描、全文内容索引或完整文件内容预加载。
 - 任务五当前是可验证的 watch/unwatch、FIFO 事件队列、wait/wake、wait cancel、有限 timeout 睡眠、heartbeat event delivery、自适应 Agent 调度、受权调度配置、最近调度原因记录、运行轨迹查询、当前 span 短记录、全局审计短记录、过滤查询、统一 timeline 导出、timeline 过滤查询、timeline 等待、timeline wait-and-read、timeline 游标增量读取和 provenance edge 导出；不扩大表述为完整多核平台调度器或复杂策略语言系统。
 - 性能数据是样例输出，复跑时 tick 数值会波动；文件查询性能重点看候选记录数差异、query plan、查询缓存命中和多轮 tick 观测。
 - event wait/wake 输出是计时观测，不表述为调度器性能结论。

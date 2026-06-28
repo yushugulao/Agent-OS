@@ -34,7 +34,12 @@
 #define AGENT_TOOL_AGENT_HEARTBEAT   18
 #define AGENT_TOOL_CONTEXT_PUSH      19
 #define AGENT_TOOL_READ_FILE_DIGEST  20
-#define AGENT_TOOL_COUNT             20
+#define AGENT_TOOL_ACTION_COMMIT     21
+#define AGENT_TOOL_ARTIFACT_UPDATE   22
+#define AGENT_TOOL_LLM_REQUEST       23
+#define AGENT_TOOL_LLM_RESPONSE      24
+#define AGENT_TOOL_DEPENDENCY_UPDATE 25
+#define AGENT_TOOL_COUNT             25
 
 #define AGENT_TOOL_F_CALLABLE     1
 #define AGENT_TOOL_F_SYSCALL_ONLY 2
@@ -50,6 +55,8 @@
 #define AGENT_STATUS_DENIED      -8
 #define AGENT_STATUS_DUPLICATE   -9
 #define AGENT_STATUS_CANCELLED  -10
+#define AGENT_STATUS_CONFLICT   -11
+#define AGENT_STATUS_STALE      -12
 
 #define AGENT_PARAM_NONE   0
 #define AGENT_PARAM_UINT64 1
@@ -212,6 +219,11 @@
 #define AGENT_FILE_QUERY_USE_INDEX 1
 #define AGENT_FILE_QUERY_SCAN      2
 
+#define AGENT_FILE_EDIT_F_BREAK_EXPIRED      (1ULL << 0)
+#define AGENT_FILE_EDIT_F_ORCHESTRATOR_BREAK (1ULL << 1)
+#define AGENT_FILE_EDIT_DEFAULT_TTL          200
+#define AGENT_FILE_EDIT_MAX_TTL              2000
+
 #define AGENT_FILE_QUERY_PLAN_SCAN         0
 #define AGENT_FILE_QUERY_PLAN_STATUS_INDEX 1
 #define AGENT_FILE_QUERY_PLAN_STAGE_INDEX  2
@@ -236,6 +248,8 @@
 #define AGENT_FILE_PREFETCH_REASON_HANDOFF     (1ULL << 4)
 #define AGENT_FILE_PREFETCH_REASON_SPAN_BUS    (1ULL << 5)
 #define AGENT_FILE_PREFETCH_SPAN_MAX 32
+
+#define AGENT_DEPENDENCY_F_USER (1ULL << 0)
 
 #define AGENT_PROVENANCE_NODE_CONTEXT  1
 #define AGENT_PROVENANCE_NODE_AUDIT    2
@@ -273,17 +287,17 @@
 #define AGENT_CAP_PROCESS_READ  (1ULL << 2)
 #define AGENT_CAP_MESSAGE_SEND  (1ULL << 3)
 #define AGENT_CAP_WATCH         (1ULL << 4)
-#define AGENT_CAP_RECOVER_STAGE (1ULL << 5)
-#define AGENT_CAP_REPORT_WRITE  (1ULL << 6)
+#define AGENT_CAP_ACTION_WRITE  (1ULL << 5)
+#define AGENT_CAP_ARTIFACT_WRITE (1ULL << 6)
 #define AGENT_CAP_AUDIT_WRITE   (1ULL << 7)
 #define AGENT_CAP_META_WRITE    (1ULL << 8)
 #define AGENT_CAP_ORCHESTRATE   (1ULL << 9)
+#define AGENT_CAP_LLM_RELAY     (1ULL << 10)
+#define AGENT_CAP_RECOVER_STAGE AGENT_CAP_ACTION_WRITE
+#define AGENT_CAP_REPORT_WRITE  AGENT_CAP_ARTIFACT_WRITE
+#define AGENT_CAP_DEPENDENCY_UPDATE AGENT_CAP_META_WRITE
 
-#define AGENT_DEP_PREPARE (1ULL << 0)
-#define AGENT_DEP_ALIGN   (1ULL << 1)
-#define AGENT_DEP_ANALYZE (1ULL << 2)
-#define AGENT_DEP_REPORT  (1ULL << 3)
-#define AGENT_DEP_ARCHIVE (1ULL << 4)
+#define AGENT_DEP_SLOT(n) (1ULL << ((n) & 63))
 
 struct agent_info {
 	int is_agent;
@@ -720,6 +734,22 @@ struct agent_file_query_result {
 	struct agent_file_hit hits[AGENT_FILE_QUERY_MAX_HITS];
 };
 
+struct agent_file_edit_state {
+	int active;
+	int owner_pid;
+	int owner_agent_id;
+	int owner_role;
+	int dirty;
+	uint64 lease_id;
+	uint64 dev;
+	uint64 inum;
+	uint64 base_version;
+	uint64 current_version;
+	uint64 deadline_tick;
+	uint64 conflict_count;
+	char path[AGENT_FILE_LOGICAL_SIZE];
+};
+
 struct proc;
 struct inode;
 struct thread;
@@ -739,6 +769,12 @@ void agent_fs_note_create(struct inode *ip, char *path);
 void agent_fs_note_write(struct inode *ip);
 void agent_fs_note_truncate(struct inode *ip);
 void agent_fs_note_delete(struct inode *ip);
+int agent_edit_write_allowed(struct inode *ip);
+int agent_edit_truncate_allowed(struct inode *ip);
+int agent_edit_unlink_allowed(struct inode *ip);
+void agent_edit_note_write(struct inode *ip);
+void agent_edit_note_truncate(struct inode *ip);
+void agent_edit_note_delete(struct inode *ip);
 int agent_file_is_meta_store_name(char *path);
 void agent_sched_on_enqueue(struct thread *t);
 void agent_sched_on_dispatch(struct thread *t);
@@ -779,6 +815,12 @@ int sys_agent_wake(int pid, uint64 eventaddr);
 int sys_agent_file_meta_init(void);
 int sys_agent_file_meta_set(uint64 metaaddr);
 int sys_agent_file_query(uint64 queryaddr, uint64 resultaddr);
+int sys_agent_file_edit_begin(uint64 pathaddr, uint64 flags, int ttl_ticks,
+			      uint64 stateaddr);
+int sys_agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
+			       uint64 stateaddr);
+int sys_agent_file_edit_abort(uint64 lease_id);
+int sys_agent_file_edit_state(uint64 pathaddr, uint64 stateaddr);
 int sys_agent_file_prefetch_snapshot(uint64 hintsaddr, int max);
 int sys_agent_file_prefetch_span_snapshot(uint64 hintsaddr, int max);
 

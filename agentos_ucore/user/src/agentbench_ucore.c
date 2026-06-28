@@ -38,6 +38,41 @@ static void check(int ok, const char *msg)
 	}
 }
 
+static void set_demo_meta(int fid, const char *physical, const char *stage,
+			  const char *kind, const char *status,
+			  const char *summary, uint64 deps)
+{
+	struct agent_file_meta meta;
+
+	memset(&meta, 0, sizeof(meta));
+	meta.fid = fid;
+	strcpy(meta.physical_name, physical);
+	strcpy(meta.logical_path, physical);
+	strcpy(meta.project, "lab-gene-x");
+	strcpy(meta.workflow, "nightly-regression");
+	strcpy(meta.run_id, "RUN-042");
+	strcpy(meta.stage, stage);
+	strcpy(meta.kind, kind);
+	strcpy(meta.status, status);
+	strcpy(meta.summary, summary);
+	meta.dependency_mask = deps;
+	meta.flags = AGENT_FILE_META_F_PERSIST;
+	check(agent_file_meta_set(&meta) == 0, "demo meta set");
+}
+
+static void seed_demo_metadata(void)
+{
+	set_demo_meta(1, "r42align", "align", "artifact", "ok",
+		      "align output is ready before injected failure",
+		      agent_dependency_label_bit("analyze") |
+			      agent_dependency_label_bit("report"));
+	set_demo_meta(2, "r42anlz", "analyze", "status", "pending",
+		      "analysis waits for align",
+		      agent_dependency_label_bit("report"));
+	set_demo_meta(3, "r42report", "report", "report", "pending",
+		      "report waits for analyze", 0);
+}
+
 static int timeline_after_cursor(struct agent_timeline_record *record,
 				 uint64 tick, int source, uint64 sequence)
 {
@@ -126,7 +161,7 @@ static void seed_file_bench_metadata(void)
 		strcpy(bench_meta.kind, "artifact");
 		strcpy(bench_meta.status, status);
 		strcpy(bench_meta.summary, "benchmark metadata");
-		bench_meta.dependency_mask = AGENT_DEP_PREPARE;
+		bench_meta.dependency_mask = agent_dependency_label_bit("ready");
 		check(agent_file_meta_set(&bench_meta) == 0, "bench meta set");
 	}
 }
@@ -154,7 +189,7 @@ static void seed_digest_file(void)
 	strcpy(bench_meta.kind, "artifact");
 	strcpy(bench_meta.status, "ok");
 	strcpy(bench_meta.summary, "digest benchmark file");
-	bench_meta.dependency_mask = AGENT_DEP_PREPARE;
+	bench_meta.dependency_mask = agent_dependency_label_bit("ready");
 	check(agent_file_meta_set(&bench_meta) == 0, "digest meta set");
 }
 
@@ -587,6 +622,7 @@ static void run_agent_bench(void)
 	      "orchestrate cap");
 	check(context_clear() == 0, "clear");
 	check(agent_file_meta_init() == 0, "meta init");
+	seed_demo_metadata();
 	seed_prefetch_history();
 	seed_file_bench_metadata();
 	seed_digest_file();

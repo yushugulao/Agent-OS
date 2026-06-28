@@ -32,7 +32,12 @@
 #define AGENT_TOOL_AGENT_HEARTBEAT   18
 #define AGENT_TOOL_CONTEXT_PUSH      19
 #define AGENT_TOOL_READ_FILE_DIGEST  20
-#define AGENT_TOOL_COUNT             20
+#define AGENT_TOOL_ACTION_COMMIT     21
+#define AGENT_TOOL_ARTIFACT_UPDATE   22
+#define AGENT_TOOL_LLM_REQUEST       23
+#define AGENT_TOOL_LLM_RESPONSE      24
+#define AGENT_TOOL_DEPENDENCY_UPDATE 25
+#define AGENT_TOOL_COUNT             25
 
 #define AGENT_TOOL_F_CALLABLE     1
 #define AGENT_TOOL_F_SYSCALL_ONLY 2
@@ -48,6 +53,8 @@
 #define AGENT_STATUS_DENIED      -8
 #define AGENT_STATUS_DUPLICATE   -9
 #define AGENT_STATUS_CANCELLED  -10
+#define AGENT_STATUS_CONFLICT   -11
+#define AGENT_STATUS_STALE      -12
 
 #define AGENT_PARAM_NONE   0
 #define AGENT_PARAM_UINT64 1
@@ -210,6 +217,11 @@
 #define AGENT_FILE_QUERY_USE_INDEX 1
 #define AGENT_FILE_QUERY_SCAN      2
 
+#define AGENT_FILE_EDIT_F_BREAK_EXPIRED      (1ULL << 0)
+#define AGENT_FILE_EDIT_F_ORCHESTRATOR_BREAK (1ULL << 1)
+#define AGENT_FILE_EDIT_DEFAULT_TTL          200
+#define AGENT_FILE_EDIT_MAX_TTL              2000
+
 #define AGENT_FILE_QUERY_PLAN_SCAN         0
 #define AGENT_FILE_QUERY_PLAN_STATUS_INDEX 1
 #define AGENT_FILE_QUERY_PLAN_STAGE_INDEX  2
@@ -234,6 +246,8 @@
 #define AGENT_FILE_PREFETCH_REASON_HANDOFF     (1ULL << 4)
 #define AGENT_FILE_PREFETCH_REASON_SPAN_BUS    (1ULL << 5)
 #define AGENT_FILE_PREFETCH_SPAN_MAX 32
+
+#define AGENT_DEPENDENCY_F_USER (1ULL << 0)
 
 #define AGENT_PROVENANCE_NODE_CONTEXT  1
 #define AGENT_PROVENANCE_NODE_AUDIT    2
@@ -269,17 +283,33 @@
 #define AGENT_CAP_PROCESS_READ  (1ULL << 2)
 #define AGENT_CAP_MESSAGE_SEND  (1ULL << 3)
 #define AGENT_CAP_WATCH         (1ULL << 4)
-#define AGENT_CAP_RECOVER_STAGE (1ULL << 5)
-#define AGENT_CAP_REPORT_WRITE  (1ULL << 6)
+#define AGENT_CAP_ACTION_WRITE  (1ULL << 5)
+#define AGENT_CAP_ARTIFACT_WRITE (1ULL << 6)
 #define AGENT_CAP_AUDIT_WRITE   (1ULL << 7)
 #define AGENT_CAP_META_WRITE    (1ULL << 8)
 #define AGENT_CAP_ORCHESTRATE   (1ULL << 9)
+#define AGENT_CAP_LLM_RELAY     (1ULL << 10)
+#define AGENT_CAP_RECOVER_STAGE AGENT_CAP_ACTION_WRITE
+#define AGENT_CAP_REPORT_WRITE  AGENT_CAP_ARTIFACT_WRITE
+#define AGENT_CAP_DEPENDENCY_UPDATE AGENT_CAP_META_WRITE
 
-#define AGENT_DEP_PREPARE (1ULL << 0)
-#define AGENT_DEP_ALIGN   (1ULL << 1)
-#define AGENT_DEP_ANALYZE (1ULL << 2)
-#define AGENT_DEP_REPORT  (1ULL << 3)
-#define AGENT_DEP_ARCHIVE (1ULL << 4)
+#define AGENT_DEP_SLOT(n) (1ULL << ((n) & 63))
+
+static inline uint64
+agent_dependency_label_bit(const char *label)
+{
+	uint64 hash = 1469598103934665603ULL;
+	int bit;
+
+	if (!label || !label[0])
+		return 0;
+	for (int i = 0; label[i] && i < AGENT_FILE_FIELD_SIZE; i++) {
+		hash ^= (unsigned char)label[i];
+		hash *= 1099511628211ULL;
+	}
+	bit = hash % 60;
+	return AGENT_DEP_SLOT(bit);
+}
 
 struct agent_info {
 	int is_agent;
@@ -716,6 +746,22 @@ struct agent_file_query_result {
 	struct agent_file_hit hits[AGENT_FILE_QUERY_MAX_HITS];
 };
 
+struct agent_file_edit_state {
+	int active;
+	int owner_pid;
+	int owner_agent_id;
+	int owner_role;
+	int dirty;
+	uint64 lease_id;
+	uint64 dev;
+	uint64 inum;
+	uint64 base_version;
+	uint64 current_version;
+	uint64 deadline_tick;
+	uint64 conflict_count;
+	char path[AGENT_FILE_LOGICAL_SIZE];
+};
+
 int agent_create(void);
 int agent_create_role(int role);
 int agent_info(struct agent_info *info);
@@ -754,6 +800,13 @@ int agent_wake(int pid, struct agent_event *event);
 int agent_file_meta_init(void);
 int agent_file_meta_set(struct agent_file_meta *meta);
 int agent_file_query(struct agent_file_query *query, struct agent_file_query_result *result);
+int agent_file_edit_begin(const char *path, uint64 flags, int ttl_ticks,
+			  struct agent_file_edit_state *state);
+int agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
+			   struct agent_file_edit_state *state);
+int agent_file_edit_abort(uint64 lease_id);
+int agent_file_edit_state(const char *path,
+			  struct agent_file_edit_state *state);
 int agent_file_prefetch_snapshot(struct agent_file_prefetch_hint *hints,
 				 int max);
 int agent_file_prefetch_span_snapshot(struct agent_file_prefetch_hint *hints,

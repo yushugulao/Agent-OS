@@ -4,7 +4,7 @@
 int main(void)
 {
 	int ok = 1;
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_report_rows=7");
+	ok = ok && rp_file_contains("rp_backend_exec", "runner_report_rows=8");
 	ok = ok && rp_file_contains("rp_study", "migration_status=baseline_and_agentos_observed");
 	ok = ok && rp_file_contains("rp_llm_packets", "packets=3");
 	ok = ok && rp_file_contains("rp_package", "status=ready");

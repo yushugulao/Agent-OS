@@ -283,6 +283,31 @@ int main(void)
 		}
 		if (!rp_append_host_action_line("rp_input", "host_action_reference_file=", value)) return 1;
 	}
+	if (rp_host_seed_has("kind=research_rerun")) {
+		char rerun_id[48];
+		char parent_run[48];
+		char value[96];
+		if (!rp_host_seed_copy_value_for_kind("kind=research_rerun", "run_id=", rerun_id, sizeof(rerun_id))) {
+			rp_copy_text(rerun_id, sizeof(rerun_id), "RUN-905-rerun");
+		}
+		if (!rp_host_seed_copy_value_for_kind("kind=research_rerun", "parent_run=", parent_run, sizeof(parent_run)) &&
+		    !rp_host_seed_copy_value_for_kind("kind=research_rerun", "source_run=", parent_run, sizeof(parent_run))) {
+			rp_copy_text(parent_run, sizeof(parent_run), "RUN-900");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_rerun_id=", rerun_id)) return 1;
+		if (!rp_append_host_action_line("rp_input", "host_action_research_rerun=usable-run:", rerun_id)) return 1;
+		if (!rp_append_host_action_line("rp_input", "host_action_rerun_parent=", parent_run)) return 1;
+		if (!rp_append_file("rp_input", "host_action_source=rp_host_action_seed")) return 1;
+		if (!rp_append_file("rp_input", "host_action_state=accepted")) return 1;
+		if (!rp_append_file("rp_input", "host_action_validation=passed")) return 1;
+		if (!rp_host_seed_copy_value_for_kind("kind=research_rerun", "provider=", value, sizeof(value))) {
+			rp_copy_text(value, sizeof(value), "template");
+		}
+		if (!rp_append_host_action_line("rp_input", "host_action_rerun_provider=", value)) return 1;
+		if (rp_host_seed_copy_value_for_kind("kind=research_rerun", "question=", value, sizeof(value))) {
+			if (!rp_append_host_action_line("rp_input", "host_action_rerun_question=", value)) return 1;
+		}
+	}
 	if (rp_host_seed_has("kind=dataset")) {
 		char value[96];
 		if (!rp_append_file("rp_input", "host_action_dataset=registered")) return 1;
@@ -486,6 +511,25 @@ int main(void)
 				rp_copy_text(value, sizeof(value), "4");
 			}
 			if (!rp_append_host_action_line("rp_report_text", "host_report_dataset_rows=", value)) return 1;
+		}
+		if (rp_host_seed_has("kind=research_rerun")) {
+			char rerun_id[48];
+			char parent_run[48];
+			char value[96];
+			if (!rp_host_seed_copy_value_for_kind("kind=research_rerun", "run_id=", rerun_id, sizeof(rerun_id))) {
+				rp_copy_text(rerun_id, sizeof(rerun_id), "RUN-905-rerun");
+			}
+			if (!rp_host_seed_copy_value_for_kind("kind=research_rerun", "parent_run=", parent_run, sizeof(parent_run)) &&
+			    !rp_host_seed_copy_value_for_kind("kind=research_rerun", "source_run=", parent_run, sizeof(parent_run))) {
+				rp_copy_text(parent_run, sizeof(parent_run), "RUN-900");
+			}
+			if (!rp_append_host_action_line("rp_report_text", "host_report_rerun_id=", rerun_id)) return 1;
+			if (!rp_append_host_action_line("rp_report_text", "host_report_rerun_parent=", parent_run)) return 1;
+			if (!rp_host_seed_copy_value_for_kind("kind=research_rerun", "provider=", value, sizeof(value))) {
+				rp_copy_text(value, sizeof(value), "template");
+			}
+			if (!rp_append_host_action_line("rp_report_text", "host_report_rerun_provider=", value)) return 1;
+			if (!rp_append_file("rp_report_text", "host_report_rerun_status=completed")) return 1;
 		}
 		if (rp_host_seed_has("kind=human_review")) {
 			char reviewer[48];

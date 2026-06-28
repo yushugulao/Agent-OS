@@ -50,11 +50,19 @@ static RP_UNUSED int rp_read_file(const char *path, char *buf, int cap)
 	if (cap <= 0) return -1;
 	int fd = open(path, O_RDONLY);
 	if (fd < 0) return -1;
-	int n = read(fd, buf, cap - 1);
+	int total = 0;
+	while (total + 1 < cap) {
+		int n = read(fd, buf + total, cap - 1 - total);
+		if (n < 0) {
+			close(fd);
+			return -1;
+		}
+		if (n == 0) break;
+		total += n;
+	}
 	close(fd);
-	if (n < 0) return -1;
-	buf[n] = 0;
-	return n;
+	buf[total] = 0;
+	return total;
 }
 
 static RP_UNUSED int rp_file_contains(const char *path, const char *needle)
@@ -153,6 +161,15 @@ static RP_UNUSED __attribute__((noinline)) const char *rp_host_seed_text(void)
 			if (n < 0) {
 				rp_host_seed_buf[0] = 0;
 			}
+		}
+		const char *bootstrap = RP_HOST_ACTION_BOOTSTRAP_SEED;
+		if (bootstrap[0] != 0) {
+			int i = 0;
+			while (bootstrap[i] && i + 1 < (int)sizeof(rp_host_seed_buf)) {
+				rp_host_seed_buf[i] = bootstrap[i];
+				i++;
+			}
+			rp_host_seed_buf[i] = 0;
 		}
 		if (rp_host_seed_buf[0] == 0) {
 			const char *fallback = RP_HOST_ACTION_SEED;

@@ -1789,7 +1789,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail=retry-recovery;src=rp_retry_plan+rp_stage_state;req=retry_stage+stage;obs=pass;act=rerun_align;review=recovered");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail=user-context;src=rp_query+rp_provpath;req=context_path;obs=pass;act=rebuild_from_files;review=userland");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail=user-fsmeta;src=rp_artifact_manifest;req=metadata_index;obs=pass;act=scan_manifest;review=userland");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail=user-recovery;src=rp_retrylog+rp_fix;req=rerun_stage+write_report;obs=pass;act=repair_files;review=userland");
+	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail=user-recovery;src=rp_retrylog+rp_fix;req=action_commit+artifact_update;obs=pass;act=repair_files;review=userland");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail=user-event;src=rp_worker+rp_timeline;req=event_wait_wake;obs=pass;act=file_event_records;review=userland");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail=user-audit;src=rp_audit+rp_provpath;req=audit+provenance;obs=pass;act=append_logs;review=userland");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail_rows=7");
@@ -1798,7 +1798,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_report=retry-recovery;plain_cost=retry_file_stage_file;agentos_replace=event_context;risk=stale_retry;status=passed");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_report=user-context;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;risk=untrusted_context;status=passed");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_report=user-fsmeta;plain_cost=scan_records_128;agentos_replace=metadata_index;risk=scan_growth;status=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_report=user-recovery;plain_cost=manual_retry_contract;agentos_replace=capability_checked_rerun;risk=wrong_stage_update;status=passed");
+	ok = ok && rp_file_contains("rp_backend_exec", "runner_report=user-recovery;plain_cost=manual_retry_contract;agentos_replace=capability_checked_action;risk=wrong_object_update;status=passed");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_report=user-event;plain_cost=file_polling;agentos_replace=kernel_event_queue;risk=lost_handoff;status=passed");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_report=user-audit;plain_cost=append_only_logs;agentos_replace=kernel_ledger_provenance;risk=tampered_context;status=passed");
 	ok = ok && rp_file_contains("rp_backend_exec", "runner_report_rows=7");
@@ -1816,7 +1816,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_study", "metrics=12");
 	ok = ok && rp_file_contains("rp_study", "study_handoff=rp_backend_exec->rp_agentcmp;status=ready");
 	ok = ok && rp_file_contains("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;status=ready");
-	ok = ok && rp_file_contains("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128,manual_retry_contract,file_polling,append_only_logs;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,capability_checked_rerun,kernel_event_queue,kernel_ledger_provenance;status=ready");
+	ok = ok && rp_file_contains("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128,manual_retry_contract,file_polling,append_only_logs;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,capability_checked_action,kernel_event_queue,kernel_ledger_provenance;status=ready");
 	ok = ok && rp_file_contains("rp_report_text", "report_source=workflow;state_file=rp_stage_state;source_key=host_workflow_run_id");
 	ok = ok && rp_file_contains("rp_report_text", "report_source=llm;state_file=rp_llm_resp;source_key=host_relay_response");
 	ok = ok && rp_file_contains("rp_report_text", "report_source=backend;state_file=rp_report_text;source_key=backend_evidence_report");

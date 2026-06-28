@@ -12,6 +12,9 @@ extern struct proc pool[NPROC];
 #define AGENT_ACTION_HISTORY_MAX 32
 #define AGENT_FILE_QUERY_CACHE_MAX 8
 #define AGENT_FILE_DIGEST_CACHE_MAX 8
+#define AGENT_FILE_EDIT_MAX 32
+#define AGENT_FILE_VERSION_MAX 512
+#define AGENT_DEPENDENCY_MAX 64
 #define AGENT_META_STORE_NAME ".agentmeta"
 #define AGENT_META_STORE_MAGIC 0x41474d4554413034ULL
 #define AGENT_INODE_META_VERSION 1
@@ -49,7 +52,7 @@ struct agent_file_digest_cache_entry {
 	uint64 dev;
 	uint64 inum;
 	uint64 size;
-	uint64 fs_generation;
+	uint64 content_generation;
 	uint64 bytes;
 	uint64 hash;
 	char preview[AGENT_FAST_RESULT_SIZE];
@@ -70,6 +73,7 @@ static void agent_audit_event(int kind, struct proc *actor,
 			      struct agent_event *event);
 static void agent_audit_sched(struct proc *p,
 			      struct agent_sched_record *record);
+static void agent_text_append(char *dst, int n, char *src);
 static void agent_timeline_from_context(struct proc *p,
 					struct agent_context_record *record,
 					struct agent_timeline_record *timeline);
@@ -102,18 +106,18 @@ static struct agent_tool_desc agent_tools[] = {
 	{ AGENT_TOOL_READ_MESSAGE, AGENT_TOOL_F_CALLABLE, "read_message", "none",
 	  "read current Agent mailbox" },
 	{ AGENT_TOOL_FILE_META_INIT, AGENT_TOOL_F_CALLABLE, "file_meta_init", "none",
-	  "install demo file metadata and rebuild indexes" },
+	  "reload file object metadata and rebuild indexes" },
 	{ AGENT_TOOL_READ_FILE_SUMMARY, AGENT_TOOL_F_CALLABLE, "read_file_summary", "selector:string",
 	  "read one indexed file summary" },
-	{ AGENT_TOOL_DEPENDENCY_QUERY, AGENT_TOOL_F_CALLABLE, "dependency_query", "stage:string",
-	  "return affected workflow stages" },
+	{ AGENT_TOOL_DEPENDENCY_QUERY, AGENT_TOOL_F_CALLABLE, "dependency_query", "label:string",
+	  "return registered dependent object labels" },
 	{ AGENT_TOOL_CAPABILITY_CHECK, AGENT_TOOL_F_CALLABLE,
 	  "capability_check",
 	  "role:uint64,action:string", "check role capability" },
 	{ AGENT_TOOL_RERUN_STAGE, AGENT_TOOL_F_CALLABLE, "rerun_stage", "role:uint64,stage:string",
-	  "perform an idempotent recovery rerun" },
+	  "legacy action alias for a scoped state update" },
 	{ AGENT_TOOL_WRITE_REPORT, AGENT_TOOL_F_CALLABLE, "write_report", "role:uint64,payload:string",
-	  "write the recovery report artifact" },
+	  "legacy artifact alias for a scoped state update" },
 	{ AGENT_TOOL_AGENT_WATCH, AGENT_TOOL_F_CALLABLE,
 	  "agent_watch",
 	  "event_type:uint64,filter:string", "register an Agent Loop watch" },
@@ -126,6 +130,21 @@ static struct agent_tool_desc agent_tools[] = {
 	{ AGENT_TOOL_READ_FILE_DIGEST, AGENT_TOOL_F_CALLABLE,
 	  "read_file_digest", "selector:string",
 	  "read a real file preview and content digest" },
+	{ AGENT_TOOL_ACTION_COMMIT, AGENT_TOOL_F_CALLABLE,
+	  "action_commit", "selector:string",
+	  "commit a generic Agent action against object metadata" },
+	{ AGENT_TOOL_ARTIFACT_UPDATE, AGENT_TOOL_F_CALLABLE,
+	  "artifact_update", "selector:string",
+	  "update a generic Agent artifact state" },
+	{ AGENT_TOOL_LLM_REQUEST, AGENT_TOOL_F_CALLABLE,
+	  "llm_request", "target_pid:uint64,prompt_summary:string",
+	  "record and route a structured LLM request" },
+	{ AGENT_TOOL_LLM_RESPONSE, AGENT_TOOL_F_CALLABLE,
+	  "llm_response", "target_pid:uint64,response_summary:string",
+	  "return a structured LLM relay response" },
+	{ AGENT_TOOL_DEPENDENCY_UPDATE, AGENT_TOOL_F_CALLABLE,
+	  "dependency_update", "selector:string",
+	  "register or update a generic object dependency" },
 };
 
 static struct agent_file_meta agent_files[AGENT_FILE_META_MAX];
@@ -150,13 +169,60 @@ struct agent_meta_store {
 	struct agent_file_meta records[AGENT_FILE_META_MAX];
 };
 
+struct agent_file_version_entry {
+	int used;
+	uint64 dev;
+	uint64 inum;
+	uint64 version;
+};
+
+struct agent_file_content_version_entry {
+	int used;
+	uint64 dev;
+	uint64 inum;
+	uint64 version;
+};
+
+struct agent_file_edit_entry {
+	int active;
+	int dirty;
+	int owner_pid;
+	int owner_agent_id;
+	int owner_role;
+	uint64 lease_id;
+	uint64 dev;
+	uint64 inum;
+	uint64 base_version;
+	uint64 deadline_tick;
+	uint64 conflict_count;
+	char path[AGENT_FILE_LOGICAL_SIZE];
+};
+
+struct agent_dependency_entry {
+	int used;
+	uint64 flags;
+	char namespace[AGENT_FILE_PROJECT_SIZE];
+	char run_id[AGENT_FILE_FIELD_SIZE];
+	char source[AGENT_FILE_FIELD_SIZE];
+	char target[AGENT_FILE_FIELD_SIZE];
+	char relation[AGENT_FILE_FIELD_SIZE];
+	char summary[AGENT_FILE_SUMMARY_SIZE];
+};
+
 static struct agent_action_history_entry
 	agent_action_history[AGENT_ACTION_HISTORY_MAX];
 static struct agent_meta_store agent_meta_store_buf;
+static struct agent_file_version_entry
+	agent_file_versions[AGENT_FILE_VERSION_MAX];
+static struct agent_file_content_version_entry
+	agent_file_content_versions[AGENT_FILE_VERSION_MAX];
+static struct agent_file_edit_entry agent_file_edits[AGENT_FILE_EDIT_MAX];
+static struct agent_dependency_entry agent_dependencies[AGENT_DEPENDENCY_MAX];
 static int agent_action_history_count;
 static int agent_file_loaded;
 static int agent_meta_store_busy;
 static uint64 agent_file_generation;
+static uint64 agent_file_content_generation;
 static int agent_file_scan_enabled;
 static int agent_file_scan_pending;
 static int agent_file_scan_active;
@@ -168,6 +234,9 @@ static uint64 agent_file_scan_entries;
 static uint64 agent_file_scan_added;
 static uint64 agent_file_scan_updated;
 static uint64 agent_file_scan_removed;
+static uint64 agent_dependency_generation;
+static volatile int agent_file_edit_guard;
+static uint64 agent_file_edit_next_lease;
 
 static void agent_file_reset_indexes(void);
 static void agent_file_rebuild_indexes(void);
@@ -175,7 +244,10 @@ static int agent_file_bind_slot(int slot);
 static int agent_file_persist(void);
 static int agent_query_from_payload(struct agent_file_query *q, char *payload);
 static void agent_file_enable_scan(void);
-static int agent_dependency_for_stage(char *stage, uint64 *mask);
+static void agent_dependency_rebuild_records(void);
+static int agent_dependency_for_label(char *label, char *namespace,
+				      char *run_id, uint64 *mask);
+static uint64 agent_label_bit(char *label);
 
 struct agent_proc_snapshot {
 	int used;
@@ -207,9 +279,14 @@ void agentinit(void)
 	agent_file_digest_cache_misses = 0;
 	agent_action_history_count = 0;
 	memset(agent_action_history, 0, sizeof(agent_action_history));
+	memset(agent_file_versions, 0, sizeof(agent_file_versions));
+	memset(agent_file_content_versions, 0,
+	       sizeof(agent_file_content_versions));
+	memset(agent_file_edits, 0, sizeof(agent_file_edits));
 	agent_file_loaded = 0;
 	agent_meta_store_busy = 0;
 	agent_file_generation = 0;
+	agent_file_content_generation = 0;
 	agent_file_scan_enabled = 0;
 	agent_file_scan_pending = 0;
 	agent_file_scan_active = 0;
@@ -221,7 +298,11 @@ void agentinit(void)
 	agent_file_scan_added = 0;
 	agent_file_scan_updated = 0;
 	agent_file_scan_removed = 0;
+	agent_dependency_generation = 0;
+	agent_file_edit_guard = 0;
+	agent_file_edit_next_lease = 1;
 	memset(agent_files, 0, sizeof(agent_files));
+	memset(agent_dependencies, 0, sizeof(agent_dependencies));
 	agent_file_reset_indexes();
 }
 
@@ -479,9 +560,10 @@ static uint64 agent_all_capabilities(void)
 {
 	return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
 	       AGENT_CAP_PROCESS_READ | AGENT_CAP_MESSAGE_SEND |
-	       AGENT_CAP_WATCH | AGENT_CAP_RECOVER_STAGE |
-	       AGENT_CAP_REPORT_WRITE | AGENT_CAP_AUDIT_WRITE |
-	       AGENT_CAP_META_WRITE | AGENT_CAP_ORCHESTRATE;
+	       AGENT_CAP_WATCH | AGENT_CAP_ACTION_WRITE |
+	       AGENT_CAP_ARTIFACT_WRITE | AGENT_CAP_AUDIT_WRITE |
+	       AGENT_CAP_META_WRITE | AGENT_CAP_ORCHESTRATE |
+	       AGENT_CAP_LLM_RELAY;
 }
 
 static uint64 agent_role_capability_mask(int role)
@@ -498,7 +580,7 @@ static uint64 agent_role_capability_mask(int role)
 	case AGENT_ROLE_RECOVERY:
 		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
 		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
-		       AGENT_CAP_RECOVER_STAGE | AGENT_CAP_REPORT_WRITE |
+		       AGENT_CAP_ACTION_WRITE | AGENT_CAP_ARTIFACT_WRITE |
 		       AGENT_CAP_AUDIT_WRITE;
 	case AGENT_ROLE_ORCHESTRATOR:
 		return agent_all_capabilities();
@@ -632,10 +714,19 @@ static void agent_audit_prefetch_handoff(struct proc *source,
 
 static uint64 agent_cap_for_action(char *action)
 {
-	if (strncmp(action, "rerun_stage", AGENT_OP_PAYLOAD_SIZE) == 0)
-		return AGENT_CAP_RECOVER_STAGE;
-	if (strncmp(action, "write_report", AGENT_OP_PAYLOAD_SIZE) == 0)
-		return AGENT_CAP_REPORT_WRITE;
+	if (strncmp(action, "action_commit", AGENT_OP_PAYLOAD_SIZE) == 0 ||
+	    strncmp(action, "state_update", AGENT_OP_PAYLOAD_SIZE) == 0 ||
+	    strncmp(action, "rerun_stage", AGENT_OP_PAYLOAD_SIZE) == 0)
+		return AGENT_CAP_ACTION_WRITE;
+	if (strncmp(action, "artifact_update", AGENT_OP_PAYLOAD_SIZE) == 0 ||
+	    strncmp(action, "record_result", AGENT_OP_PAYLOAD_SIZE) == 0 ||
+	    strncmp(action, "write_report", AGENT_OP_PAYLOAD_SIZE) == 0)
+		return AGENT_CAP_ARTIFACT_WRITE;
+	if (strncmp(action, "llm_response", AGENT_OP_PAYLOAD_SIZE) == 0 ||
+	    strncmp(action, "llm_relay", AGENT_OP_PAYLOAD_SIZE) == 0)
+		return AGENT_CAP_LLM_RELAY;
+	if (strncmp(action, "llm_request", AGENT_OP_PAYLOAD_SIZE) == 0)
+		return AGENT_CAP_MESSAGE_SEND;
 	if (strncmp(action, "query", AGENT_OP_PAYLOAD_SIZE) == 0 ||
 	    strncmp(action, "query_file", AGENT_OP_PAYLOAD_SIZE) == 0 ||
 	    strncmp(action, "read_meta", AGENT_OP_PAYLOAD_SIZE) == 0)
@@ -649,7 +740,8 @@ static uint64 agent_cap_for_action(char *action)
 	if (strncmp(action, "watch", AGENT_OP_PAYLOAD_SIZE) == 0)
 		return AGENT_CAP_WATCH;
 	if (strncmp(action, "meta_write", AGENT_OP_PAYLOAD_SIZE) == 0 ||
-	    strncmp(action, "file_meta_write", AGENT_OP_PAYLOAD_SIZE) == 0)
+	    strncmp(action, "file_meta_write", AGENT_OP_PAYLOAD_SIZE) == 0 ||
+	    strncmp(action, "dependency_update", AGENT_OP_PAYLOAD_SIZE) == 0)
 		return AGENT_CAP_META_WRITE;
 	if (strncmp(action, "orchestrate", AGENT_OP_PAYLOAD_SIZE) == 0)
 		return AGENT_CAP_ORCHESTRATE;
@@ -1424,6 +1516,235 @@ int agent_file_is_meta_store_name(char *path)
 	return path && strncmp(path, AGENT_META_STORE_NAME, DIRSIZ) == 0;
 }
 
+static void agent_edit_lock(void)
+{
+	while (__sync_lock_test_and_set(&agent_file_edit_guard, 1) != 0)
+		;
+	__sync_synchronize();
+}
+
+static void agent_edit_unlock(void)
+{
+	__sync_synchronize();
+	__sync_lock_release(&agent_file_edit_guard);
+}
+
+static int agent_file_content_version_slot(uint64 dev, uint64 inum,
+					   int create)
+{
+	int free_slot = -1;
+
+	for (int i = 0; i < AGENT_FILE_VERSION_MAX; i++) {
+		if (agent_file_content_versions[i].used &&
+		    agent_file_content_versions[i].dev == dev &&
+		    agent_file_content_versions[i].inum == inum)
+			return i;
+		if (!agent_file_content_versions[i].used && free_slot < 0)
+			free_slot = i;
+	}
+	if (!create || free_slot < 0)
+		return -1;
+	memset(&agent_file_content_versions[free_slot], 0,
+	       sizeof(agent_file_content_versions[free_slot]));
+	agent_file_content_versions[free_slot].used = 1;
+	agent_file_content_versions[free_slot].dev = dev;
+	agent_file_content_versions[free_slot].inum = inum;
+	return free_slot;
+}
+
+static int agent_file_content_version(struct inode *ip, uint64 *version,
+				      int create)
+{
+	int slot;
+
+	if (ip == 0 || version == 0)
+		return -1;
+	slot = agent_file_content_version_slot(ip->dev, ip->inum, create);
+	if (slot < 0)
+		return -1;
+	*version = agent_file_content_versions[slot].version;
+	return 0;
+}
+
+static void agent_file_content_bump(struct inode *ip)
+{
+	int slot;
+
+	if (ip == 0)
+		return;
+	slot = agent_file_content_version_slot(ip->dev, ip->inum, 1);
+	if (slot < 0)
+		return;
+	agent_file_content_generation++;
+	if (agent_file_content_generation == 0)
+		agent_file_content_generation = 1;
+	agent_file_content_versions[slot].version =
+		agent_file_content_generation;
+}
+
+static int agent_edit_version_slot_locked(uint64 dev, uint64 inum,
+					  int create)
+{
+	int free_slot = -1;
+
+	for (int i = 0; i < AGENT_FILE_VERSION_MAX; i++) {
+		if (agent_file_versions[i].used &&
+		    agent_file_versions[i].dev == dev &&
+		    agent_file_versions[i].inum == inum)
+			return i;
+		if (!agent_file_versions[i].used && free_slot < 0)
+			free_slot = i;
+	}
+	if (!create || free_slot < 0)
+		return -1;
+	memset(&agent_file_versions[free_slot], 0,
+	       sizeof(agent_file_versions[free_slot]));
+	agent_file_versions[free_slot].used = 1;
+	agent_file_versions[free_slot].dev = dev;
+	agent_file_versions[free_slot].inum = inum;
+	return free_slot;
+}
+
+static uint64 agent_edit_version_locked(uint64 dev, uint64 inum, int create,
+					int *ok)
+{
+	int slot = agent_edit_version_slot_locked(dev, inum, create);
+
+	if (slot < 0) {
+		if (ok)
+			*ok = 0;
+		return 0;
+	}
+	if (ok)
+		*ok = 1;
+	return agent_file_versions[slot].version;
+}
+
+static int agent_edit_set_version_locked(uint64 dev, uint64 inum,
+					 uint64 version)
+{
+	int slot = agent_edit_version_slot_locked(dev, inum, 1);
+
+	if (slot < 0)
+		return -1;
+	agent_file_versions[slot].version = version;
+	return 0;
+}
+
+static void agent_edit_bump_version_locked(uint64 dev, uint64 inum)
+{
+	int ok;
+	uint64 version = agent_edit_version_locked(dev, inum, 1, &ok);
+
+	if (ok)
+		agent_edit_set_version_locked(dev, inum, version + 1);
+}
+
+static struct agent_file_edit_entry *
+agent_edit_find_locked(uint64 dev, uint64 inum)
+{
+	for (int i = 0; i < AGENT_FILE_EDIT_MAX; i++)
+		if (agent_file_edits[i].active &&
+		    agent_file_edits[i].dev == dev &&
+		    agent_file_edits[i].inum == inum)
+			return &agent_file_edits[i];
+	return 0;
+}
+
+static struct agent_file_edit_entry *agent_edit_find_lease_locked(uint64 lease)
+{
+	for (int i = 0; i < AGENT_FILE_EDIT_MAX; i++)
+		if (agent_file_edits[i].active &&
+		    agent_file_edits[i].lease_id == lease)
+			return &agent_file_edits[i];
+	return 0;
+}
+
+static struct agent_file_edit_entry *agent_edit_free_locked(void)
+{
+	for (int i = 0; i < AGENT_FILE_EDIT_MAX; i++)
+		if (!agent_file_edits[i].active)
+			return &agent_file_edits[i];
+	return 0;
+}
+
+static int agent_edit_expired(struct agent_file_edit_entry *e, uint64 now)
+{
+	return e->active && e->deadline_tick != 0 && now >= e->deadline_tick;
+}
+
+static void agent_edit_release_locked(struct agent_file_edit_entry *e,
+				      int publish_dirty)
+{
+	if (e == 0 || !e->active)
+		return;
+	if (publish_dirty && e->dirty)
+		agent_edit_set_version_locked(e->dev, e->inum,
+					      e->base_version + 1);
+	memset(e, 0, sizeof(*e));
+}
+
+static void agent_edit_cleanup_expired_locked(uint64 now)
+{
+	for (int i = 0; i < AGENT_FILE_EDIT_MAX; i++)
+		if (agent_edit_expired(&agent_file_edits[i], now))
+			agent_edit_release_locked(&agent_file_edits[i], 1);
+}
+
+static int agent_edit_owner(struct agent_file_edit_entry *e, struct proc *p)
+{
+	return e && p && p->is_agent && e->owner_pid == p->pid &&
+	       e->owner_agent_id == p->agent_id;
+}
+
+static int agent_edit_can_manage(struct proc *p)
+{
+	return agent_has_any_cap(p, AGENT_CAP_CONTENT_READ |
+				    AGENT_CAP_ARTIFACT_WRITE |
+				    AGENT_CAP_META_WRITE |
+				    AGENT_CAP_ORCHESTRATE);
+}
+
+static void agent_edit_fill_state_locked(struct agent_file_edit_state *state,
+					 struct agent_file_edit_entry *e,
+					 uint64 dev, uint64 inum, char *path)
+{
+	int ok;
+
+	memset(state, 0, sizeof(*state));
+	state->dev = dev;
+	state->inum = inum;
+	state->current_version =
+		agent_edit_version_locked(dev, inum, 0, &ok);
+	if (path)
+		safestrcpy(state->path, path, sizeof(state->path));
+	if (e == 0 || !e->active)
+		return;
+	state->active = 1;
+	state->owner_pid = e->owner_pid;
+	state->owner_agent_id = e->owner_agent_id;
+	state->owner_role = e->owner_role;
+	state->dirty = e->dirty;
+	state->lease_id = e->lease_id;
+	state->base_version = e->base_version;
+	state->deadline_tick = e->deadline_tick;
+	state->conflict_count = e->conflict_count;
+	if (e->path[0])
+		safestrcpy(state->path, e->path, sizeof(state->path));
+}
+
+static void agent_edit_audit(struct proc *p, int status, char *text,
+			     struct agent_file_edit_state *state)
+{
+	if (p == 0 || !p->is_agent || state == 0)
+		return;
+	agent_audit_emit(AGENT_AUDIT_KIND_CONTEXT, agent_ticks(), p, p->pid,
+			 p->pid, 0, AGENT_TOOL_QUERY_FILE, status, 0,
+			 p->agent_current_span_id, state->lease_id,
+			 state->current_version, state->owner_pid,
+			 state->dev, text);
+}
+
 static void agent_file_normalize_physical(int slot, struct agent_file_meta *m)
 {
 	char generated[DIRSIZ];
@@ -1602,8 +1923,8 @@ static int agent_file_alloc_slot(void)
 
 static void agent_file_infer_kind(char *name, char *out, int n)
 {
-	if (agent_contains(name, "report"))
-		safestrcpy(out, "report", n);
+	if (agent_contains(name, "md") || agent_contains(name, "txt"))
+		safestrcpy(out, "document", n);
 	else if (agent_contains(name, "log") || agent_contains(name, "err"))
 		safestrcpy(out, "log", n);
 	else if (agent_contains(name, "status") || agent_contains(name, "ok"))
@@ -1820,6 +2141,7 @@ void agent_fs_note_create(struct inode *ip, char *path)
 	if (agent_meta_store_busy || ip == 0 || path == 0 ||
 	    agent_file_is_meta_store_name(path))
 		return;
+	agent_file_content_bump(ip);
 	agent_file_load();
 	ivalid(ip);
 	if (ip->type != T_FILE || ip->agent_meta_slot > 0)
@@ -1881,11 +2203,13 @@ static void agent_fs_update_inode_meta(struct inode *ip, char *summary)
 
 void agent_fs_note_write(struct inode *ip)
 {
+	agent_file_content_bump(ip);
 	agent_fs_update_inode_meta(ip, "file content updated");
 }
 
 void agent_fs_note_truncate(struct inode *ip)
 {
+	agent_file_content_bump(ip);
 	agent_fs_update_inode_meta(ip, "file truncated");
 }
 
@@ -1895,6 +2219,7 @@ void agent_fs_note_delete(struct inode *ip)
 
 	if (agent_meta_store_busy || ip == 0)
 		return;
+	agent_file_content_bump(ip);
 	ivalid(ip);
 	slot = ip->agent_meta_slot - 1;
 	if (slot < 0 || slot >= AGENT_FILE_META_MAX)
@@ -1908,6 +2233,89 @@ void agent_fs_note_delete(struct inode *ip)
 	agent_file_rebuild_indexes();
 	agent_file_persist();
 	agent_file_request_scan();
+}
+
+static int agent_edit_modify_allowed(struct inode *ip, char *action)
+{
+	struct proc *p = curr_proc();
+	struct agent_file_edit_entry *edit;
+	struct agent_file_edit_state state;
+	uint64 now;
+	int allowed = 1;
+
+	if (ip == 0)
+		return 0;
+	agent_edit_lock();
+	now = agent_ticks();
+	agent_edit_cleanup_expired_locked(now);
+	edit = agent_edit_find_locked(ip->dev, ip->inum);
+	if (edit && !agent_edit_owner(edit, p)) {
+		edit->conflict_count++;
+		agent_edit_fill_state_locked(&state, edit, ip->dev, ip->inum,
+					     0);
+		allowed = 0;
+	}
+	agent_edit_unlock();
+	if (!allowed)
+		agent_edit_audit(p, AGENT_STATUS_CONFLICT, action, &state);
+	return allowed;
+}
+
+int agent_edit_write_allowed(struct inode *ip)
+{
+	return agent_edit_modify_allowed(ip, "edit_write_conflict");
+}
+
+int agent_edit_truncate_allowed(struct inode *ip)
+{
+	return agent_edit_modify_allowed(ip, "edit_trunc_conflict");
+}
+
+int agent_edit_unlink_allowed(struct inode *ip)
+{
+	return agent_edit_modify_allowed(ip, "edit_unlink_conflict");
+}
+
+static void agent_edit_note_modify(struct inode *ip)
+{
+	struct proc *p = curr_proc();
+	struct agent_file_edit_entry *edit;
+
+	if (ip == 0)
+		return;
+	agent_edit_lock();
+	agent_edit_cleanup_expired_locked(agent_ticks());
+	edit = agent_edit_find_locked(ip->dev, ip->inum);
+	if (edit && agent_edit_owner(edit, p))
+		edit->dirty = 1;
+	else if (edit == 0)
+		agent_edit_bump_version_locked(ip->dev, ip->inum);
+	agent_edit_unlock();
+}
+
+void agent_edit_note_write(struct inode *ip)
+{
+	agent_edit_note_modify(ip);
+}
+
+void agent_edit_note_truncate(struct inode *ip)
+{
+	agent_edit_note_modify(ip);
+}
+
+void agent_edit_note_delete(struct inode *ip)
+{
+	struct agent_file_edit_entry *edit;
+
+	if (ip == 0)
+		return;
+	agent_edit_lock();
+	edit = agent_edit_find_locked(ip->dev, ip->inum);
+	if (edit)
+		agent_edit_release_locked(edit, 1);
+	else
+		agent_edit_bump_version_locked(ip->dev, ip->inum);
+	agent_edit_unlock();
 }
 
 static void agent_file_reset_indexes(void)
@@ -1948,86 +2356,13 @@ static void agent_file_rebuild_indexes(void)
 			agent_file_kind_head[b] = i;
 		}
 	}
+	agent_dependency_rebuild_records();
 }
 
-static void agent_file_fill_meta(struct agent_file_meta *m, int fid,
-				 char *physical, char *logical, char *project,
-				 char *workflow, char *run_id, char *stage,
-				 char *kind, char *status, char *summary,
-				 uint64 dependency_mask)
-{
-	memset(m, 0, sizeof(*m));
-	m->used = 1;
-	m->fid = fid;
-	safestrcpy(m->physical_name, physical, sizeof(m->physical_name));
-	safestrcpy(m->logical_path, logical, sizeof(m->logical_path));
-	safestrcpy(m->project, project, sizeof(m->project));
-	safestrcpy(m->workflow, workflow, sizeof(m->workflow));
-	safestrcpy(m->run_id, run_id, sizeof(m->run_id));
-	safestrcpy(m->stage, stage, sizeof(m->stage));
-	safestrcpy(m->kind, kind, sizeof(m->kind));
-	safestrcpy(m->status, status, sizeof(m->status));
-	safestrcpy(m->summary, summary, sizeof(m->summary));
-	m->dependency_mask = dependency_mask;
-	m->updated_tick = agent_ticks();
-	m->flags = AGENT_FILE_META_F_PERSIST;
-}
-
-static void agent_file_install_default(void)
+static void agent_file_install_empty_store(void)
 {
 	memset(agent_files, 0, sizeof(agent_files));
 	agent_file_loaded = 1;
-	agent_file_fill_meta(&agent_files[0], 1, "r42prep",
-			     "/lab/projects/lab-gene-x/runs/RUN-042/prepare.ok",
-			     "lab-gene-x", "nightly-regression", "RUN-042",
-			     "prepare", "status", "ok",
-			     "prepare output is reusable", AGENT_DEP_PREPARE);
-	agent_file_fill_meta(&agent_files[1], 2, "r42align",
-			     "/lab/projects/lab-gene-x/runs/RUN-042/align.sam",
-			     "lab-gene-x", "nightly-regression", "RUN-042",
-			     "align", "artifact", "ok",
-			     "align output is ready before injected failure",
-			     AGENT_DEP_ALIGN | AGENT_DEP_ANALYZE |
-				     AGENT_DEP_REPORT | AGENT_DEP_ARCHIVE);
-	agent_file_fill_meta(&agent_files[2], 3, "r42alerr",
-			     "/lab/projects/lab-gene-x/runs/RUN-042/align.err",
-			     "lab-gene-x", "nightly-regression", "RUN-042",
-			     "align", "log", "ok",
-			     "no failure recorded yet",
-			     AGENT_DEP_ALIGN | AGENT_DEP_ANALYZE |
-				     AGENT_DEP_REPORT | AGENT_DEP_ARCHIVE);
-	agent_file_fill_meta(&agent_files[3], 4,
-			     "r42anlz",
-			     "/lab/projects/lab-gene-x/runs/RUN-042/analyze.skipped",
-			     "lab-gene-x", "nightly-regression", "RUN-042",
-			     "analyze", "status", "pending",
-			     "analysis waits for align",
-			     AGENT_DEP_ANALYZE | AGENT_DEP_REPORT |
-				     AGENT_DEP_ARCHIVE);
-	agent_file_fill_meta(&agent_files[4], 5,
-			     "r42report",
-			     "/lab/projects/lab-gene-x/runs/RUN-042/report.incomplete",
-			     "lab-gene-x", "nightly-regression", "RUN-042",
-			     "report", "report", "pending",
-			     "report waits for analyze",
-			     AGENT_DEP_REPORT | AGENT_DEP_ARCHIVE);
-	agent_file_fill_meta(&agent_files[5], 6, "r42deps",
-			     "/lab/projects/lab-gene-x/runs/RUN-042/deps.txt",
-			     "lab-gene-x", "nightly-regression", "RUN-042",
-			     "workflow", "deps", "ok",
-			     "prepare->align->analyze->report->archive",
-			     AGENT_DEP_PREPARE | AGENT_DEP_ALIGN |
-				     AGENT_DEP_ANALYZE | AGENT_DEP_REPORT |
-				     AGENT_DEP_ARCHIVE);
-	agent_file_fill_meta(&agent_files[6], 7,
-			     "r42recrep",
-			     "/lab/projects/lab-gene-x/reports/RUN-042-recovery.md",
-			     "lab-gene-x", "nightly-regression", "RUN-042",
-			     "report", "report", "pending",
-			     "recovery report not written yet",
-			     AGENT_DEP_REPORT | AGENT_DEP_ARCHIVE);
-	for (int i = 0; i < 7; i++)
-		agent_file_bind_slot(i);
 	agent_file_rebuild_indexes();
 	agent_file_persist();
 	agent_file_enable_scan();
@@ -2252,19 +2587,227 @@ static int agent_file_query_internal(struct agent_file_query *q,
 	return r->returned;
 }
 
-static uint64 agent_stage_bit(char *stage)
+static uint64 agent_label_bit(char *label)
 {
-	if (strncmp(stage, "prepare", AGENT_FILE_FIELD_SIZE) == 0)
-		return AGENT_DEP_PREPARE;
-	if (strncmp(stage, "align", AGENT_FILE_FIELD_SIZE) == 0)
-		return AGENT_DEP_ALIGN;
-	if (strncmp(stage, "analyze", AGENT_FILE_FIELD_SIZE) == 0)
-		return AGENT_DEP_ANALYZE;
-	if (strncmp(stage, "report", AGENT_FILE_FIELD_SIZE) == 0)
-		return AGENT_DEP_REPORT;
-	if (strncmp(stage, "archive", AGENT_FILE_FIELD_SIZE) == 0)
-		return AGENT_DEP_ARCHIVE;
+	uint64 hash = 1469598103934665603ULL;
+	int bit;
+
+	if (label == 0 || label[0] == 0)
+		return 0;
+	for (int i = 0; label[i] && i < AGENT_FILE_FIELD_SIZE; i++) {
+		hash ^= (unsigned char)label[i];
+		hash *= 1099511628211ULL;
+	}
+	bit = hash % 60;
+	return 1ULL << bit;
+}
+
+static int agent_dependency_same_scope(struct agent_file_meta *source,
+				       struct agent_file_meta *target)
+{
+	if (source == 0 || target == 0)
+		return 0;
+	if (source->project[0] && target->project[0] &&
+	    strncmp(source->project, target->project,
+		    sizeof(source->project)) != 0)
+		return 0;
+	if (source->run_id[0] && target->run_id[0] &&
+	    strncmp(source->run_id, target->run_id,
+		    sizeof(source->run_id)) != 0)
+		return 0;
+	return 1;
+}
+
+static void agent_dependency_record_set(struct agent_dependency_entry *dep,
+					struct agent_file_meta *source,
+					struct agent_file_meta *target)
+{
+	memset(dep, 0, sizeof(*dep));
+	dep->used = 1;
+	dep->flags = 0;
+	safestrcpy(dep->namespace, source->project, sizeof(dep->namespace));
+	safestrcpy(dep->run_id, source->run_id, sizeof(dep->run_id));
+	safestrcpy(dep->source, source->stage, sizeof(dep->source));
+	safestrcpy(dep->target, target->stage, sizeof(dep->target));
+	safestrcpy(dep->relation, "depends_on", sizeof(dep->relation));
+	safestrcpy(dep->summary, target->summary, sizeof(dep->summary));
+}
+
+static int agent_dependency_record_exists(struct agent_file_meta *source,
+					  struct agent_file_meta *target)
+{
+	for (int i = 0; i < AGENT_DEPENDENCY_MAX; i++) {
+		if (!agent_dependencies[i].used)
+			continue;
+		if (strncmp(agent_dependencies[i].namespace, source->project,
+			    sizeof(source->project)) == 0 &&
+		    strncmp(agent_dependencies[i].run_id, source->run_id,
+			    sizeof(source->run_id)) == 0 &&
+		    strncmp(agent_dependencies[i].source, source->stage,
+			    sizeof(source->stage)) == 0 &&
+		    strncmp(agent_dependencies[i].target, target->stage,
+			    sizeof(target->stage)) == 0)
+			return 1;
+	}
 	return 0;
+}
+
+static int agent_key_is(char *key, char *want)
+{
+	return strncmp(key, want, AGENT_FILE_FIELD_SIZE) == 0;
+}
+
+static int agent_dependency_update_from_payload(char *payload,
+						struct agent_result *res)
+{
+	struct agent_dependency_entry dep;
+	char key[AGENT_FILE_FIELD_SIZE];
+	char val[AGENT_FILE_SUMMARY_SIZE];
+	int free_slot = -1;
+	int slot = -1;
+	int i = 0;
+	int k;
+	int v;
+
+	memset(&dep, 0, sizeof(dep));
+	dep.used = 1;
+	dep.flags = AGENT_DEPENDENCY_F_USER;
+	safestrcpy(dep.relation, "depends_on", sizeof(dep.relation));
+
+	while (payload[i]) {
+		while (payload[i] == ' ' || payload[i] == ';' ||
+		       payload[i] == ',')
+			i++;
+		if (!payload[i])
+			break;
+		k = 0;
+		memset(key, 0, sizeof(key));
+		while (payload[i] && payload[i] != '=' &&
+		       payload[i] != ':' && payload[i] != ';' &&
+		       payload[i] != ',' && k < (int)sizeof(key) - 1)
+			key[k++] = payload[i++];
+		if (payload[i] != '=' && payload[i] != ':')
+			return AGENT_STATUS_BAD_PARAM;
+		i++;
+		v = 0;
+		memset(val, 0, sizeof(val));
+		while (payload[i] && payload[i] != ';' &&
+		       payload[i] != ',' && v < (int)sizeof(val) - 1)
+			val[v++] = payload[i++];
+		if (agent_key_is(key, "source") || agent_key_is(key, "from") ||
+		    agent_key_is(key, "label"))
+			safestrcpy(dep.source, val, sizeof(dep.source));
+		else if (agent_key_is(key, "target") || agent_key_is(key, "to"))
+			safestrcpy(dep.target, val, sizeof(dep.target));
+		else if (agent_key_is(key, "namespace") ||
+			 agent_key_is(key, "project"))
+			safestrcpy(dep.namespace, val, sizeof(dep.namespace));
+		else if (agent_key_is(key, "run_id") || agent_key_is(key, "run"))
+			safestrcpy(dep.run_id, val, sizeof(dep.run_id));
+		else if (agent_key_is(key, "relation"))
+			safestrcpy(dep.relation, val, sizeof(dep.relation));
+		else if (agent_key_is(key, "summary"))
+			safestrcpy(dep.summary, val, sizeof(dep.summary));
+		else
+			return AGENT_STATUS_BAD_PARAM;
+	}
+
+	if (!dep.source[0] || !dep.target[0])
+		return AGENT_STATUS_BAD_PARAM;
+	if (!dep.summary[0])
+		safestrcpy(dep.summary, dep.target, sizeof(dep.summary));
+
+	for (int d = 0; d < AGENT_DEPENDENCY_MAX; d++) {
+		if (!agent_dependencies[d].used) {
+			if (free_slot < 0)
+				free_slot = d;
+			continue;
+		}
+		if (strncmp(agent_dependencies[d].namespace, dep.namespace,
+			    sizeof(dep.namespace)) == 0 &&
+		    strncmp(agent_dependencies[d].run_id, dep.run_id,
+			    sizeof(dep.run_id)) == 0 &&
+		    strncmp(agent_dependencies[d].source, dep.source,
+			    sizeof(dep.source)) == 0 &&
+		    strncmp(agent_dependencies[d].target, dep.target,
+			    sizeof(dep.target)) == 0) {
+			slot = d;
+			break;
+		}
+	}
+	if (slot < 0)
+		slot = free_slot;
+	if (slot < 0)
+		return AGENT_STATUS_NO_SPACE;
+
+	memmove(&agent_dependencies[slot], &dep, sizeof(dep));
+	agent_dependency_generation++;
+	res->value0 = agent_dependency_generation;
+	res->value1 = agent_label_bit(dep.source);
+	res->value2 = agent_label_bit(dep.target);
+	agent_result_text(res, "dependency_updated");
+	return AGENT_STATUS_OK;
+}
+
+static void agent_dependency_rebuild_records(void)
+{
+	uint64 bit;
+	int out = 0;
+
+	for (int i = 0; i < AGENT_DEPENDENCY_MAX; i++) {
+		struct agent_dependency_entry keep;
+
+		if (agent_dependencies[i].used &&
+		    (agent_dependencies[i].flags & AGENT_DEPENDENCY_F_USER)) {
+			memmove(&keep, &agent_dependencies[i], sizeof(keep));
+			if (i != out) {
+				memmove(&agent_dependencies[out], &keep,
+					sizeof(keep));
+				memset(&agent_dependencies[i], 0,
+				       sizeof(agent_dependencies[i]));
+			}
+			out++;
+		} else {
+			memset(&agent_dependencies[i], 0,
+			       sizeof(agent_dependencies[i]));
+		}
+	}
+	for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
+		if (!agent_files[i].used || agent_files[i].stage[0] == 0 ||
+		    agent_files[i].dependency_mask == 0)
+			continue;
+		for (int j = 0; j < AGENT_FILE_META_MAX; j++) {
+			if (i == j || !agent_files[j].used ||
+			    agent_files[j].stage[0] == 0)
+				continue;
+			if (!agent_dependency_same_scope(&agent_files[i],
+							 &agent_files[j]))
+				continue;
+			bit = agent_label_bit(agent_files[j].stage);
+			if ((agent_files[i].dependency_mask & bit) == 0)
+				continue;
+			if (agent_dependency_record_exists(&agent_files[i],
+							   &agent_files[j]))
+				continue;
+			if (out >= AGENT_DEPENDENCY_MAX)
+				break;
+			agent_dependency_record_set(&agent_dependencies[out++],
+						    &agent_files[i],
+						    &agent_files[j]);
+		}
+	}
+	agent_dependency_generation++;
+}
+
+static int agent_mask_count(uint64 mask)
+{
+	int count = 0;
+
+	while (mask) {
+		count += mask & 1;
+		mask >>= 1;
+	}
+	return count;
 }
 
 static int agent_file_find_fid(int fid)
@@ -2431,10 +2974,10 @@ static void agent_file_prefetch_update(struct proc *p,
 	struct agent_file_meta *source;
 	struct agent_file_meta *target;
 	uint64 deps;
-	uint64 source_bit;
 	uint64 target_bit;
 	uint64 reason;
 	int source_slot;
+	int emitted;
 
 	if (!p || !p->is_agent || !r || r->returned <= 0)
 		return;
@@ -2443,17 +2986,68 @@ static void agent_file_prefetch_update(struct proc *p,
 		if (source_slot < 0)
 			continue;
 		source = &agent_files[source_slot];
-		deps = source->dependency_mask;
-		if (deps == 0 && agent_dependency_for_stage(source->stage,
-							    &deps) < 0)
+		emitted = 0;
+		for (int d = 0; d < AGENT_DEPENDENCY_MAX; d++) {
+			if (!agent_dependencies[d].used)
+				continue;
+			if (strncmp(agent_dependencies[d].source, source->stage,
+				    sizeof(agent_dependencies[d].source)) != 0)
+				continue;
+			if (agent_dependencies[d].namespace[0] &&
+			    strncmp(agent_dependencies[d].namespace,
+				    source->project,
+				    sizeof(agent_dependencies[d].namespace)) != 0)
+				continue;
+			if (agent_dependencies[d].run_id[0] &&
+			    strncmp(agent_dependencies[d].run_id,
+				    source->run_id,
+				    sizeof(agent_dependencies[d].run_id)) != 0)
+				continue;
+			for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
+				if (!agent_files[i].used || i == source_slot)
+					continue;
+				target = &agent_files[i];
+				if (strncmp(target->stage,
+					    agent_dependencies[d].target,
+					    sizeof(target->stage)) != 0)
+					continue;
+				if (agent_dependencies[d].namespace[0] &&
+				    strncmp(target->project,
+					    agent_dependencies[d].namespace,
+					    sizeof(target->project)) != 0)
+					continue;
+				if (agent_dependencies[d].run_id[0] &&
+				    strncmp(target->run_id,
+					    agent_dependencies[d].run_id,
+					    sizeof(target->run_id)) != 0)
+					continue;
+				if (source->workflow[0] &&
+				    strncmp(target->workflow, source->workflow,
+					    sizeof(target->workflow)) != 0)
+					continue;
+				reason = AGENT_FILE_PREFETCH_REASON_DEPENDENCY |
+					 AGENT_FILE_PREFETCH_REASON_SAME_RUN;
+				if ((q->flags & AGENT_FILE_QUERY_USE_INDEX) ||
+				    r->used_index)
+					reason |=
+						AGENT_FILE_PREFETCH_REASON_STAGE_INDEX;
+				agent_file_prefetch_store(
+					p, source, target, source_sequence,
+					reason, p->pid, p->agent_current_span_id);
+				emitted = 1;
+			}
+		}
+		if (emitted)
 			continue;
-		source_bit = agent_stage_bit(source->stage);
+		deps = source->dependency_mask;
+		if (deps == 0)
+			continue;
 		for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
 			if (!agent_files[i].used || i == source_slot)
 				continue;
 			target = &agent_files[i];
-			target_bit = agent_stage_bit(target->stage);
-			if (target_bit == 0 || target_bit == source_bit)
+			target_bit = agent_label_bit(target->stage);
+			if (target_bit == 0)
 				continue;
 			if ((deps & target_bit) == 0)
 				continue;
@@ -2596,36 +3190,33 @@ static void agent_file_digest_preview(char *preview, int *pos, char c)
 
 static int agent_file_digest_cacheable(struct inode *ip)
 {
+	uint64 version;
+
 	if (ip == 0)
 		return 0;
 	return ip->agent_meta_slot > 0 &&
 	       ip->agent_meta_version == AGENT_INODE_META_VERSION &&
-	       agent_file_generation > 0;
+	       agent_file_content_version(ip, &version, 1) == 0;
 }
 
-static uint64 agent_file_digest_generation(struct inode *ip)
+static uint64 agent_file_digest_content_generation(struct inode *ip)
 {
-	int slot;
+	uint64 version;
 
 	if (ip == 0)
-		return agent_file_generation;
-	slot = ip->agent_meta_slot - 1;
-	if (slot >= 0 && slot < AGENT_FILE_META_MAX &&
-	    agent_files[slot].used &&
-	    agent_files[slot].dev == ip->dev &&
-	    agent_files[slot].inum == ip->inum &&
-	    agent_files[slot].fs_generation > 0)
-		return agent_files[slot].fs_generation;
-	return agent_file_generation;
+		return 0;
+	if (agent_file_content_version(ip, &version, 1) < 0)
+		return (uint64)-1;
+	return version;
 }
 
 static int agent_file_digest_cache_lookup(struct inode *ip,
 					  struct agent_result *res)
 {
 	struct agent_file_digest_cache_entry *e;
-	uint64 generation;
+	uint64 content_generation;
 
-	generation = agent_file_digest_generation(ip);
+	content_generation = agent_file_digest_content_generation(ip);
 	for (int i = 0; i < AGENT_FILE_DIGEST_CACHE_MAX; i++) {
 		e = &agent_file_digest_cache[i];
 		if (!e->valid)
@@ -2634,7 +3225,7 @@ static int agent_file_digest_cache_lookup(struct inode *ip,
 			continue;
 		if (e->size != ip->size)
 			continue;
-		if (e->fs_generation != generation)
+		if (e->content_generation != content_generation)
 			continue;
 		res->value0 = e->size;
 		res->value1 = e->bytes;
@@ -2665,7 +3256,7 @@ static void agent_file_digest_cache_store(struct inode *ip, uint64 bytes,
 	e->dev = ip->dev;
 	e->inum = ip->inum;
 	e->size = ip->size;
-	e->fs_generation = agent_file_digest_generation(ip);
+	e->content_generation = agent_file_digest_content_generation(ip);
 	e->bytes = bytes;
 	e->hash = hash;
 	safestrcpy(e->preview, preview[0] ? preview : "empty_file",
@@ -2750,30 +3341,55 @@ static void agent_file_digest_read(char *selector, struct agent_result *res)
 	agent_result_text(res, preview[0] ? preview : "empty_file");
 }
 
-static int agent_dependency_for_stage(char *stage, uint64 *mask)
+static int agent_dependency_for_label(char *label, char *namespace,
+				      char *run_id, uint64 *mask)
 {
-	if (strncmp(stage, "prepare", AGENT_FILE_FIELD_SIZE) == 0) {
-		*mask = AGENT_DEP_PREPARE | AGENT_DEP_ALIGN |
-			AGENT_DEP_ANALYZE | AGENT_DEP_REPORT |
-			AGENT_DEP_ARCHIVE;
+	uint64 found = 0;
+
+	for (int i = 0; i < AGENT_DEPENDENCY_MAX; i++) {
+		if (!agent_dependencies[i].used)
+			continue;
+		if (strncmp(agent_dependencies[i].source, label,
+			    sizeof(agent_dependencies[i].source)) != 0)
+			continue;
+		if (namespace && namespace[0] &&
+		    strncmp(agent_dependencies[i].namespace, namespace,
+			    sizeof(agent_dependencies[i].namespace)) != 0)
+			continue;
+		if (run_id && run_id[0] &&
+		    strncmp(agent_dependencies[i].run_id, run_id,
+			    sizeof(agent_dependencies[i].run_id)) != 0)
+			continue;
+		if (agent_dependencies[i].target[0]) {
+			found |= agent_label_bit(agent_dependencies[i].source);
+			found |= agent_label_bit(agent_dependencies[i].target);
+		}
+	}
+	if (found) {
+		*mask = found;
 		return 0;
 	}
-	if (strncmp(stage, "align", AGENT_FILE_FIELD_SIZE) == 0) {
-		*mask = AGENT_DEP_ALIGN | AGENT_DEP_ANALYZE |
-			AGENT_DEP_REPORT | AGENT_DEP_ARCHIVE;
-		return 0;
+	for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
+		if (!agent_files[i].used || agent_files[i].dependency_mask == 0)
+			continue;
+		if (namespace && namespace[0] &&
+		    strncmp(agent_files[i].project, namespace,
+			    sizeof(agent_files[i].project)) != 0)
+			continue;
+		if (run_id && run_id[0] &&
+		    strncmp(agent_files[i].run_id, run_id,
+			    sizeof(agent_files[i].run_id)) != 0)
+			continue;
+		if (strncmp(agent_files[i].stage, label,
+			    sizeof(agent_files[i].stage)) == 0 ||
+		    strncmp(agent_files[i].physical_name, label,
+			    sizeof(agent_files[i].physical_name)) == 0 ||
+		    strncmp(agent_files[i].logical_path, label,
+			    sizeof(agent_files[i].logical_path)) == 0)
+			found |= agent_files[i].dependency_mask;
 	}
-	if (strncmp(stage, "analyze", AGENT_FILE_FIELD_SIZE) == 0) {
-		*mask = AGENT_DEP_ANALYZE | AGENT_DEP_REPORT |
-			AGENT_DEP_ARCHIVE;
-		return 0;
-	}
-	if (strncmp(stage, "report", AGENT_FILE_FIELD_SIZE) == 0) {
-		*mask = AGENT_DEP_REPORT | AGENT_DEP_ARCHIVE;
-		return 0;
-	}
-	if (strncmp(stage, "archive", AGENT_FILE_FIELD_SIZE) == 0) {
-		*mask = AGENT_DEP_ARCHIVE;
+	if (found) {
+		*mask = found;
 		return 0;
 	}
 	return -1;
@@ -2781,18 +3397,27 @@ static int agent_dependency_for_stage(char *stage, uint64 *mask)
 
 static void agent_stage_text(uint64 mask, char *out, int n)
 {
-	if (mask == (AGENT_DEP_ALIGN | AGENT_DEP_ANALYZE | AGENT_DEP_REPORT |
-		     AGENT_DEP_ARCHIVE))
-		safestrcpy(out, "align+analyze+report+archive", n);
-	else if (mask == (AGENT_DEP_ANALYZE | AGENT_DEP_REPORT |
-			  AGENT_DEP_ARCHIVE))
-		safestrcpy(out, "analyze+report+archive", n);
-	else if (mask == (AGENT_DEP_REPORT | AGENT_DEP_ARCHIVE))
-		safestrcpy(out, "report+archive", n);
-	else if (mask == AGENT_DEP_ARCHIVE)
-		safestrcpy(out, "archive", n);
-	else
-		safestrcpy(out, "prepare+align+analyze+report+archive", n);
+	int first = 1;
+	uint64 bit;
+	uint64 emitted = 0;
+
+	memset(out, 0, n);
+	for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
+		if (!agent_files[i].used || agent_files[i].stage[0] == 0)
+			continue;
+		bit = agent_label_bit(agent_files[i].stage);
+		if ((mask & bit) == 0)
+			continue;
+		if ((emitted & bit) != 0)
+			continue;
+		emitted |= bit;
+		if (!first)
+			agent_text_append(out, n, "+");
+		agent_text_append(out, n, agent_files[i].stage);
+		first = 0;
+	}
+	if (!out[0])
+		safestrcpy(out, "none", n);
 }
 
 static int agent_action_seen(int tool_id, char *project, char *run_id,
@@ -3155,11 +3780,6 @@ static int agent_file_update_status_select(char *stage, char *project,
 	return updated;
 }
 
-static void agent_file_update_status(char *stage, char *status, char *summary)
-{
-	agent_file_update_status_select(stage, "", "", status, summary);
-}
-
 static int agent_query_from_payload(struct agent_file_query *q, char *payload)
 {
 	char key[AGENT_FILE_FIELD_SIZE];
@@ -3194,21 +3814,27 @@ static int agent_query_from_payload(struct agent_file_query *q, char *payload)
 		    strncmp(key, "physical", sizeof(key)) == 0)
 			safestrcpy(q->physical_name, val,
 				   sizeof(q->physical_name));
-		else if (strncmp(key, "logical", sizeof(key)) == 0)
+		else if (strncmp(key, "logical", sizeof(key)) == 0 ||
+			 strncmp(key, "object", sizeof(key)) == 0 ||
+			 strncmp(key, "object_id", sizeof(key)) == 0)
 			safestrcpy(q->logical_path, val,
 				   sizeof(q->logical_path));
-		else if (strncmp(key, "project", sizeof(key)) == 0)
+		else if (strncmp(key, "project", sizeof(key)) == 0 ||
+			 strncmp(key, "namespace", sizeof(key)) == 0)
 			safestrcpy(q->project, val, sizeof(q->project));
 		else if (strncmp(key, "workflow", sizeof(key)) == 0)
 			safestrcpy(q->workflow, val, sizeof(q->workflow));
 		else if (strncmp(key, "run", sizeof(key)) == 0 ||
 			 strncmp(key, "run_id", sizeof(key)) == 0)
 			safestrcpy(q->run_id, val, sizeof(q->run_id));
-		else if (strncmp(key, "stage", sizeof(key)) == 0)
+		else if (strncmp(key, "stage", sizeof(key)) == 0 ||
+			 strncmp(key, "label", sizeof(key)) == 0)
 			safestrcpy(q->stage, val, sizeof(q->stage));
-		else if (strncmp(key, "kind", sizeof(key)) == 0)
+		else if (strncmp(key, "kind", sizeof(key)) == 0 ||
+			 strncmp(key, "type", sizeof(key)) == 0)
 			safestrcpy(q->kind, val, sizeof(q->kind));
-		else if (strncmp(key, "status", sizeof(key)) == 0)
+		else if (strncmp(key, "status", sizeof(key)) == 0 ||
+			 strncmp(key, "state", sizeof(key)) == 0)
 			safestrcpy(q->status, val, sizeof(q->status));
 		else if (strncmp(key, "summary", sizeof(key)) == 0)
 			safestrcpy(q->summary_contains, val,
@@ -3217,6 +3843,111 @@ static int agent_query_from_payload(struct agent_file_query *q, char *payload)
 			return -1;
 	}
 	return 0;
+}
+
+static void agent_object_state_update(struct proc *p, struct agent_op *op,
+				      struct agent_result *res,
+				      char *ok_text, char *event_action,
+				      char *summary, int propagate_deps,
+				      int require_selector,
+				      int history_tool_id)
+{
+	uint64 deps = 0;
+	uint64 target_bit;
+	int action_tool_id;
+	int updated;
+	int delivered;
+	char event_payload[AGENT_EVENT_PAYLOAD_SIZE];
+	char selector_label[AGENT_FILE_FIELD_SIZE];
+	char selector_project[AGENT_FILE_PROJECT_SIZE];
+	char selector_run_id[AGENT_FILE_FIELD_SIZE];
+
+	action_tool_id = history_tool_id ? history_tool_id : op->tool_id;
+	if (require_selector && !agent_contains(op->payload, "=") &&
+	    !agent_contains(op->payload, ":")) {
+		res->status = AGENT_STATUS_BAD_PARAM;
+		agent_result_text(res, "selector_required");
+		return;
+	}
+	if (agent_parse_selector(op->payload, selector_label,
+				 sizeof(selector_label), selector_project,
+				 sizeof(selector_project), selector_run_id,
+				 sizeof(selector_run_id)) < 0) {
+		res->status = AGENT_STATUS_BAD_PARAM;
+		agent_result_text(res, "bad_selector");
+		return;
+	}
+	if (!selector_label[0]) {
+		res->status = AGENT_STATUS_BAD_PARAM;
+		agent_result_text(res, "label_required");
+		return;
+	}
+	if (propagate_deps &&
+	    agent_dependency_for_label(selector_label, selector_project,
+				       selector_run_id, &deps) < 0)
+		deps = 0;
+	if (agent_action_seen(action_tool_id, selector_project, selector_run_id,
+			      selector_label, op->request_id)) {
+		res->status = AGENT_STATUS_DUPLICATE;
+		agent_result_text(res, "duplicate");
+		return;
+	}
+	updated = agent_file_update_status_select(
+		selector_label, selector_project, selector_run_id, "ok",
+		summary);
+	if (updated == 0) {
+		res->status = AGENT_STATUS_NOT_FOUND;
+		agent_result_text(res, "target_not_found");
+		return;
+	}
+	if (propagate_deps) {
+		for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
+			if (!agent_files[i].used)
+				continue;
+			target_bit = agent_label_bit(agent_files[i].stage);
+			if ((deps & target_bit) == 0)
+				continue;
+			if (selector_project[0] &&
+			    strncmp(agent_files[i].project, selector_project,
+				    sizeof(agent_files[i].project)) != 0)
+				continue;
+			if (selector_run_id[0] &&
+			    strncmp(agent_files[i].run_id, selector_run_id,
+				    sizeof(agent_files[i].run_id)) != 0)
+				continue;
+			agent_file_update_status_select(agent_files[i].stage,
+							selector_project,
+							selector_run_id, "ok",
+							"dependency refreshed");
+		}
+	}
+	agent_action_remember(action_tool_id, selector_project, selector_run_id,
+			      selector_label, op->request_id);
+	res->value0 = deps;
+	res->value1 = op->request_id;
+	agent_result_text(res, ok_text);
+	memset(event_payload, 0, sizeof(event_payload));
+	agent_text_append(event_payload, sizeof(event_payload),
+			  "state=ok;label=");
+	agent_text_append(event_payload, sizeof(event_payload), selector_label);
+	if (selector_run_id[0]) {
+		agent_text_append(event_payload, sizeof(event_payload),
+				  ";run_id=");
+		agent_text_append(event_payload, sizeof(event_payload),
+				  selector_run_id);
+	}
+	if (event_action && event_action[0]) {
+		agent_text_append(event_payload, sizeof(event_payload),
+				  ";action=");
+		agent_text_append(event_payload, sizeof(event_payload),
+				  event_action);
+	}
+	delivered = agent_deliver_watchers(p->pid, AGENT_EVENT_JOB_DONE,
+					   op->request_id,
+					   p->agent_call_count + 1,
+					   p->agent_current_span_id,
+					   event_payload);
+	res->value2 = delivered;
 }
 
 static void agent_execute_op(struct proc *p, struct agent_op *op,
@@ -3229,11 +3960,9 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 	uint64 deps;
 	int found;
 	int delivered;
-	int updated;
-	char event_payload[AGENT_EVENT_PAYLOAD_SIZE];
-	char selector_stage[AGENT_FILE_FIELD_SIZE];
-	char selector_project[AGENT_FILE_PROJECT_SIZE];
-	char selector_run_id[AGENT_FILE_FIELD_SIZE];
+	char dependency_label[AGENT_FILE_FIELD_SIZE];
+	char dependency_project[AGENT_FILE_PROJECT_SIZE];
+	char dependency_run_id[AGENT_FILE_FIELD_SIZE];
 
 	if (op->version != AGENT_CALL_VERSION) {
 		res->status = AGENT_STATUS_BAD_REQUEST;
@@ -3409,8 +4138,8 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 		agent_file_loaded = 0;
 		res->value0 = agent_file_load();
 		if (res->value0 == 0) {
-			agent_file_install_default();
-			res->value0 = 7;
+			agent_file_install_empty_store();
+			res->value0 = 0;
 		}
 		agent_file_enable_scan();
 		agent_result_text(res, "file_meta_init");
@@ -3446,18 +4175,54 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 			agent_result_text(res, "denied");
 			break;
 		}
-		if (agent_dependency_for_stage(op->payload, &deps) < 0) {
+		memset(dependency_label, 0, sizeof(dependency_label));
+		memset(dependency_project, 0, sizeof(dependency_project));
+		memset(dependency_run_id, 0, sizeof(dependency_run_id));
+		if (agent_contains(op->payload, "=") ||
+		    agent_contains(op->payload, ":")) {
+			if (agent_parse_selector(op->payload, dependency_label,
+						 sizeof(dependency_label),
+						 dependency_project,
+						 sizeof(dependency_project),
+						 dependency_run_id,
+						 sizeof(dependency_run_id)) < 0) {
+				res->status = AGENT_STATUS_BAD_PARAM;
+				agent_result_text(res, "bad_selector");
+				break;
+			}
+		} else {
+			safestrcpy(dependency_label, op->payload,
+				   sizeof(dependency_label));
+		}
+		if (agent_dependency_for_label(dependency_label,
+					       dependency_project,
+					       dependency_run_id, &deps) < 0) {
 			res->status = AGENT_STATUS_NOT_FOUND;
-			agent_result_text(res, "stage_not_found");
+			agent_result_text(res, "dependency_not_found");
 			break;
 		}
 		res->value0 = deps;
-		res->value1 = (deps & AGENT_DEP_PREPARE ? 1 : 0) +
-			      (deps & AGENT_DEP_ALIGN ? 1 : 0) +
-			      (deps & AGENT_DEP_ANALYZE ? 1 : 0) +
-			      (deps & AGENT_DEP_REPORT ? 1 : 0) +
-			      (deps & AGENT_DEP_ARCHIVE ? 1 : 0);
+		res->value1 = agent_mask_count(deps);
+		res->value2 = agent_dependency_generation;
 		agent_stage_text(deps, res->result, sizeof(res->result));
+		break;
+	case AGENT_TOOL_DEPENDENCY_UPDATE:
+		if (!agent_has_cap(p, AGENT_CAP_DEPENDENCY_UPDATE)) {
+			res->status = AGENT_STATUS_DENIED;
+			agent_result_text(res, "denied");
+			break;
+		}
+		if (agent_text_empty(op->payload)) {
+			res->status = AGENT_STATUS_BAD_PARAM;
+			agent_result_text(res, "selector_required");
+			break;
+		}
+		res->status = agent_dependency_update_from_payload(op->payload,
+								   res);
+		if (res->status == AGENT_STATUS_BAD_PARAM)
+			agent_result_text(res, "bad_selector");
+		else if (res->status == AGENT_STATUS_NO_SPACE)
+			agent_result_text(res, "dependency_full");
 		break;
 	case AGENT_TOOL_CAPABILITY_CHECK:
 		res->value1 = p->agent_role;
@@ -3472,139 +4237,107 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 		}
 		break;
 	case AGENT_TOOL_RERUN_STAGE:
-		if (!agent_has_cap(p, AGENT_CAP_RECOVER_STAGE)) {
+		if (!agent_has_cap(p, AGENT_CAP_ACTION_WRITE)) {
 			res->status = AGENT_STATUS_DENIED;
 			agent_result_text(res, "denied");
 			agent_deliver_watchers(p->pid, AGENT_EVENT_POLICY_DENIED,
 					       op->request_id,
 					       p->agent_call_count + 1,
 					       p->agent_current_span_id,
-					       "action=rerun_stage");
+					       "action=action_commit;compat=rerun_stage");
 			break;
 		}
-		if (agent_parse_selector(op->payload, selector_stage,
-					 sizeof(selector_stage),
-					 selector_project,
-					 sizeof(selector_project),
-					 selector_run_id,
-					 sizeof(selector_run_id)) < 0) {
-			res->status = AGENT_STATUS_BAD_PARAM;
-			agent_result_text(res, "bad_selector");
-			break;
-		}
-		if (agent_dependency_for_stage(selector_stage, &deps) < 0) {
-			res->status = AGENT_STATUS_NOT_FOUND;
-			agent_result_text(res, "stage_not_found");
-			break;
-		}
-		if (agent_action_seen(op->tool_id, selector_project,
-				      selector_run_id, selector_stage,
-				      op->request_id)) {
-			res->status = AGENT_STATUS_DUPLICATE;
-			agent_result_text(res, "duplicate");
-			break;
-		}
-		updated = agent_file_update_status_select(
-			selector_stage, selector_project, selector_run_id, "ok",
-			"rerun completed");
-		if (updated == 0) {
-			res->status = AGENT_STATUS_NOT_FOUND;
-			agent_result_text(res, "target_not_found");
-			break;
-		}
-		if (strncmp(selector_stage, "align", sizeof(selector_stage)) == 0) {
-			agent_file_update_status_select("analyze",
-							selector_project,
-							selector_run_id, "ok",
-							"rerun after align");
-			agent_file_update_status_select("report",
-							selector_project,
-							selector_run_id, "ok",
-				"report regenerated");
-		}
-		agent_action_remember(op->tool_id, selector_project,
-				      selector_run_id, selector_stage,
-				      op->request_id);
-		res->value0 = deps;
-		res->value1 = op->request_id;
-		agent_result_text(res, "rerun_ok");
-		memset(event_payload, 0, sizeof(event_payload));
-		agent_text_append(event_payload, sizeof(event_payload),
-				  "status=ok;stage=");
-		agent_text_append(event_payload, sizeof(event_payload),
-				  selector_stage);
-		if (selector_run_id[0]) {
-			agent_text_append(event_payload, sizeof(event_payload),
-					  ";run_id=");
-			agent_text_append(event_payload, sizeof(event_payload),
-					  selector_run_id);
-		}
-		agent_text_append(event_payload, sizeof(event_payload),
-				  ";action=rerun");
-		delivered = agent_deliver_watchers(p->pid, AGENT_EVENT_JOB_DONE,
-						   op->request_id,
-						   p->agent_call_count + 1,
-						   p->agent_current_span_id,
-						   event_payload);
-		res->value2 = delivered;
+		agent_object_state_update(p, op, res, "action_committed",
+					  "action_commit", "action completed",
+					  1, 0, AGENT_TOOL_ACTION_COMMIT);
 		break;
 	case AGENT_TOOL_WRITE_REPORT:
-		if (!agent_has_cap(p, AGENT_CAP_REPORT_WRITE)) {
+		if (!agent_has_cap(p, AGENT_CAP_ARTIFACT_WRITE)) {
 			res->status = AGENT_STATUS_DENIED;
 			agent_result_text(res, "denied");
 			break;
 		}
-		memset(selector_stage, 0, sizeof(selector_stage));
-		memset(selector_project, 0, sizeof(selector_project));
-		memset(selector_run_id, 0, sizeof(selector_run_id));
-		if (agent_contains(op->payload, "=") ||
-		    agent_contains(op->payload, ":")) {
-			if (agent_parse_selector(op->payload, selector_stage,
-						 sizeof(selector_stage),
-						 selector_project,
-						 sizeof(selector_project),
-						 selector_run_id,
-						 sizeof(selector_run_id)) < 0) {
-				res->status = AGENT_STATUS_BAD_PARAM;
-				agent_result_text(res, "bad_selector");
-				break;
-			}
-			if (!selector_stage[0])
-				safestrcpy(selector_stage, "report",
-					   sizeof(selector_stage));
-			if (agent_action_seen(op->tool_id, selector_project,
-					      selector_run_id, selector_stage,
-					      op->request_id)) {
-				res->status = AGENT_STATUS_DUPLICATE;
-				agent_result_text(res, "duplicate");
-				break;
-			}
-			updated = agent_file_update_status_select(
-				selector_stage, selector_project, selector_run_id,
-				"ok", "recovery report written");
-			if (updated == 0) {
-				res->status = AGENT_STATUS_NOT_FOUND;
-				agent_result_text(res, "target_not_found");
-				break;
-			}
-		} else {
-			safestrcpy(selector_stage, "report",
-				   sizeof(selector_stage));
-			if (agent_action_seen(op->tool_id, selector_project,
-					      selector_run_id, selector_stage,
-					      op->request_id)) {
-				res->status = AGENT_STATUS_DUPLICATE;
-				agent_result_text(res, "duplicate");
-				break;
-			}
-			agent_file_update_status("report", "ok",
-						 "recovery report written");
+		agent_object_state_update(p, op, res, "artifact_updated",
+					  "artifact_update",
+					  "artifact updated", 0, 1,
+					  AGENT_TOOL_ARTIFACT_UPDATE);
+		break;
+	case AGENT_TOOL_ACTION_COMMIT:
+		if (!agent_has_cap(p, AGENT_CAP_ACTION_WRITE)) {
+			res->status = AGENT_STATUS_DENIED;
+			agent_result_text(res, "denied");
+			break;
 		}
-		agent_action_remember(op->tool_id, selector_project,
-				      selector_run_id, selector_stage,
-				      op->request_id);
+		agent_object_state_update(p, op, res, "action_committed",
+					  "action_commit",
+					  "action completed", 1, 1, 0);
+		break;
+	case AGENT_TOOL_ARTIFACT_UPDATE:
+		if (!agent_has_cap(p, AGENT_CAP_ARTIFACT_WRITE)) {
+			res->status = AGENT_STATUS_DENIED;
+			agent_result_text(res, "denied");
+			break;
+		}
+		agent_object_state_update(p, op, res, "artifact_updated",
+					  "artifact_update",
+					  "artifact updated", 0, 1, 0);
+		break;
+	case AGENT_TOOL_LLM_REQUEST:
+		if (!agent_has_cap(p, AGENT_CAP_MESSAGE_SEND)) {
+			res->status = AGENT_STATUS_DENIED;
+			agent_result_text(res, "denied");
+			break;
+		}
+		if (agent_text_empty(op->payload)) {
+			res->status = AGENT_STATUS_BAD_PARAM;
+			agent_result_text(res, "prompt_required");
+			break;
+		}
+		delivered = 0;
+		if (op->arg0) {
+			delivered = agent_deliver_pid((int)op->arg0, p, p->pid,
+						      AGENT_EVENT_MESSAGE,
+						      op->request_id,
+						      p->agent_call_count + 1,
+						      p->agent_current_span_id,
+						      op->payload);
+			if (delivered < 0) {
+				res->status = AGENT_STATUS_NO_SPACE;
+				agent_result_text(res, "event_queue_full");
+				break;
+			}
+		}
 		res->value0 = op->request_id;
-		agent_result_text(res, "report_written");
+		res->value1 = op->arg0;
+		res->value2 = delivered;
+		agent_result_text(res, "llm_request");
+		break;
+	case AGENT_TOOL_LLM_RESPONSE:
+		if (!agent_has_cap(p, AGENT_CAP_LLM_RELAY)) {
+			res->status = AGENT_STATUS_DENIED;
+			agent_result_text(res, "denied");
+			break;
+		}
+		if (op->arg0 == 0 || agent_text_empty(op->payload)) {
+			res->status = AGENT_STATUS_BAD_PARAM;
+			agent_result_text(res, "response_required");
+			break;
+		}
+		delivered = agent_deliver_pid((int)op->arg0, p, p->pid,
+					      AGENT_EVENT_LLM_DONE,
+					      op->request_id,
+					      p->agent_call_count + 1,
+					      p->agent_current_span_id,
+					      op->payload);
+		if (delivered < 0) {
+			res->status = AGENT_STATUS_NO_SPACE;
+			agent_result_text(res, "event_queue_full");
+			break;
+		}
+		res->value0 = op->request_id;
+		res->value1 = op->arg0;
+		res->value2 = delivered;
+		agent_result_text(res, "llm_response");
 		break;
 	case AGENT_TOOL_AGENT_WATCH:
 		if (!agent_has_cap(p, AGENT_CAP_WATCH)) {
@@ -3781,12 +4514,33 @@ static int agent_validate_legacy_request(struct agent_request *req,
 	case AGENT_TOOL_READ_FILE_DIGEST:
 		return agent_req_string_payload(req, "selector", err, err_n);
 	case AGENT_TOOL_DEPENDENCY_QUERY:
-		return agent_req_string_payload(req, "stage", err, err_n);
+		return agent_req_string_payload(req, "label", err, err_n);
 	case AGENT_TOOL_CAPABILITY_CHECK:
 		if (agent_req_uint_arg(req->arg0_key, req->arg0_type, "role",
 				       err, err_n) < 0)
 			return -1;
 		return agent_req_string_payload(req, "action", err, err_n);
+	case AGENT_TOOL_ACTION_COMMIT:
+	case AGENT_TOOL_ARTIFACT_UPDATE:
+		if (agent_req_has_arg0(req) &&
+		    agent_req_uint_arg(req->arg0_key, req->arg0_type, "role",
+				       err, err_n) < 0)
+			return -1;
+		return agent_req_string_payload(req, "selector", err, err_n);
+	case AGENT_TOOL_LLM_REQUEST:
+		if (agent_req_uint_arg(req->arg0_key, req->arg0_type,
+				       "target_pid", err, err_n) < 0)
+			return -1;
+		return agent_req_string_payload(req, "prompt_summary", err,
+						err_n);
+	case AGENT_TOOL_LLM_RESPONSE:
+		if (agent_req_uint_arg(req->arg0_key, req->arg0_type,
+				       "target_pid", err, err_n) < 0)
+			return -1;
+		return agent_req_string_payload(req, "response_summary", err,
+						err_n);
+	case AGENT_TOOL_DEPENDENCY_UPDATE:
+		return agent_req_string_payload(req, "selector", err, err_n);
 	case AGENT_TOOL_RERUN_STAGE:
 		if (agent_req_has_arg0(req) &&
 		    agent_req_uint_arg(req->arg0_key, req->arg0_type, "role",
@@ -5600,6 +6354,270 @@ int sys_agent_wake(int pid, uint64 eventaddr)
 	return 0;
 }
 
+static int agent_file_edit_lookup_path(struct proc *p, uint64 pathaddr,
+				       char *path, struct inode **out)
+{
+	struct inode *ip;
+
+	if (copyinstr(p->pagetable, path, pathaddr, MAXPATH) < 0)
+		return -1;
+	path[MAXPATH - 1] = 0;
+	if (path[0] == 0 || agent_file_is_meta_store_name(path))
+		return AGENT_STATUS_BAD_PARAM;
+	ip = namei(path);
+	if (ip == 0)
+		return AGENT_STATUS_NOT_FOUND;
+	ivalid(ip);
+	if (ip->type != T_FILE) {
+		iput(ip);
+		return AGENT_STATUS_BAD_PARAM;
+	}
+	*out = ip;
+	return 0;
+}
+
+static int agent_file_edit_copy_state(struct proc *p, uint64 stateaddr,
+				      struct agent_file_edit_state *state)
+{
+	if (stateaddr == 0)
+		return 0;
+	if (!agent_user_range_mapped(p, stateaddr, sizeof(*state)))
+		return -1;
+	return copyout(p->pagetable, stateaddr, (char *)state,
+		       sizeof(*state));
+}
+
+int sys_agent_file_edit_begin(uint64 pathaddr, uint64 flags, int ttl_ticks,
+			      uint64 stateaddr)
+{
+	struct proc *p = curr_proc();
+	struct inode *ip;
+	struct agent_file_edit_entry *edit;
+	struct agent_file_edit_entry *slot;
+	struct agent_file_edit_state state;
+	char path[MAXPATH];
+	uint64 now;
+	uint64 version;
+	int ok;
+	int rc;
+	int ttl;
+
+	if (!p->is_agent)
+		return -1;
+	if (!agent_edit_can_manage(p))
+		return AGENT_STATUS_DENIED;
+	if (stateaddr && !agent_user_range_mapped(p, stateaddr, sizeof(state)))
+		return -1;
+	rc = agent_file_edit_lookup_path(p, pathaddr, path, &ip);
+	if (rc < 0)
+		return rc;
+
+	now = agent_ticks();
+	ttl = ttl_ticks <= 0 ? AGENT_FILE_EDIT_DEFAULT_TTL : ttl_ticks;
+	if (ttl > AGENT_FILE_EDIT_MAX_TTL)
+		ttl = AGENT_FILE_EDIT_MAX_TTL;
+
+	agent_edit_lock();
+	agent_edit_cleanup_expired_locked(now);
+	version = agent_edit_version_locked(ip->dev, ip->inum, 1, &ok);
+	if (!ok) {
+		agent_edit_unlock();
+		iput(ip);
+		return AGENT_STATUS_NO_SPACE;
+	}
+	edit = agent_edit_find_locked(ip->dev, ip->inum);
+	if (edit) {
+		if ((flags & AGENT_FILE_EDIT_F_ORCHESTRATOR_BREAK) &&
+		    agent_has_cap(p, AGENT_CAP_ORCHESTRATE)) {
+			agent_edit_release_locked(edit, 1);
+			version = agent_edit_version_locked(ip->dev, ip->inum,
+							   1, &ok);
+			if (!ok) {
+				agent_edit_unlock();
+				iput(ip);
+				return AGENT_STATUS_NO_SPACE;
+			}
+		} else {
+			edit->conflict_count++;
+			agent_edit_fill_state_locked(&state, edit, ip->dev,
+						     ip->inum, path);
+			agent_edit_unlock();
+			iput(ip);
+			agent_edit_audit(p, AGENT_STATUS_CONFLICT,
+					 "edit_begin_conflict", &state);
+			if (agent_file_edit_copy_state(p, stateaddr, &state) <
+			    0)
+				return -1;
+			return AGENT_STATUS_CONFLICT;
+		}
+	}
+	slot = agent_edit_free_locked();
+	if (slot == 0) {
+		agent_edit_unlock();
+		iput(ip);
+		return AGENT_STATUS_NO_SPACE;
+	}
+	memset(slot, 0, sizeof(*slot));
+	slot->active = 1;
+	slot->owner_pid = p->pid;
+	slot->owner_agent_id = p->agent_id;
+	slot->owner_role = p->agent_role;
+	slot->lease_id = agent_file_edit_next_lease++;
+	if (agent_file_edit_next_lease == 0)
+		agent_file_edit_next_lease = 1;
+	slot->dev = ip->dev;
+	slot->inum = ip->inum;
+	slot->base_version = version;
+	slot->deadline_tick = now + ttl;
+	safestrcpy(slot->path, path, sizeof(slot->path));
+	agent_edit_fill_state_locked(&state, slot, ip->dev, ip->inum, path);
+	agent_edit_unlock();
+	iput(ip);
+	agent_edit_audit(p, AGENT_STATUS_OK, "edit_begin", &state);
+	return agent_file_edit_copy_state(p, stateaddr, &state);
+}
+
+int sys_agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
+			       uint64 stateaddr)
+{
+	struct proc *p = curr_proc();
+	struct agent_file_edit_entry *edit;
+	struct agent_file_edit_state state;
+	char path[AGENT_FILE_LOGICAL_SIZE];
+	uint64 dev;
+	uint64 inum;
+	uint64 base;
+	uint64 now;
+	uint64 current;
+	uint64 new_version;
+	int ok;
+	int dirty;
+	int rc;
+
+	if (!p->is_agent)
+		return -1;
+	if (stateaddr && !agent_user_range_mapped(p, stateaddr, sizeof(state)))
+		return -1;
+	now = agent_ticks();
+	agent_edit_lock();
+	agent_edit_cleanup_expired_locked(now);
+	edit = agent_edit_find_lease_locked(lease_id);
+	if (edit == 0) {
+		agent_edit_unlock();
+		return AGENT_STATUS_NOT_FOUND;
+	}
+	if (!agent_edit_owner(edit, p) &&
+	    !agent_has_cap(p, AGENT_CAP_ORCHESTRATE)) {
+		agent_edit_fill_state_locked(&state, edit, edit->dev,
+					     edit->inum, edit->path);
+		agent_edit_unlock();
+		agent_edit_audit(p, AGENT_STATUS_DENIED,
+				 "edit_commit_denied", &state);
+		if (agent_file_edit_copy_state(p, stateaddr, &state) < 0)
+			return -1;
+		return AGENT_STATUS_DENIED;
+	}
+	current = agent_edit_version_locked(edit->dev, edit->inum, 0, &ok);
+	if (!ok || current != edit->base_version ||
+	    expected_version != edit->base_version) {
+		agent_edit_fill_state_locked(&state, edit, edit->dev,
+					     edit->inum, edit->path);
+		agent_edit_unlock();
+		agent_edit_audit(p, AGENT_STATUS_STALE,
+				 "edit_commit_stale", &state);
+		if (agent_file_edit_copy_state(p, stateaddr, &state) < 0)
+			return -1;
+		return AGENT_STATUS_STALE;
+	}
+	dev = edit->dev;
+	inum = edit->inum;
+	base = edit->base_version;
+	dirty = edit->dirty;
+	safestrcpy(path, edit->path, sizeof(path));
+	new_version = dirty ? base + 1 : base;
+	rc = agent_edit_set_version_locked(dev, inum, new_version);
+	memset(edit, 0, sizeof(*edit));
+	memset(&state, 0, sizeof(state));
+	state.active = 0;
+	state.lease_id = lease_id;
+	state.dev = dev;
+	state.inum = inum;
+	state.base_version = base;
+	state.current_version = new_version;
+	state.dirty = dirty;
+	safestrcpy(state.path, path, sizeof(state.path));
+	agent_edit_unlock();
+	if (rc < 0)
+		return AGENT_STATUS_NO_SPACE;
+	agent_edit_audit(p, AGENT_STATUS_OK, "edit_commit", &state);
+	return agent_file_edit_copy_state(p, stateaddr, &state);
+}
+
+int sys_agent_file_edit_abort(uint64 lease_id)
+{
+	struct proc *p = curr_proc();
+	struct agent_file_edit_entry *edit;
+	struct agent_file_edit_state state;
+
+	if (!p->is_agent)
+		return -1;
+	agent_edit_lock();
+	agent_edit_cleanup_expired_locked(agent_ticks());
+	edit = agent_edit_find_lease_locked(lease_id);
+	if (edit == 0) {
+		agent_edit_unlock();
+		return AGENT_STATUS_NOT_FOUND;
+	}
+	if (!agent_edit_owner(edit, p) &&
+	    !agent_has_cap(p, AGENT_CAP_ORCHESTRATE)) {
+		agent_edit_fill_state_locked(&state, edit, edit->dev,
+					     edit->inum, edit->path);
+		agent_edit_unlock();
+		agent_edit_audit(p, AGENT_STATUS_DENIED,
+				 "edit_abort_denied", &state);
+		return AGENT_STATUS_DENIED;
+	}
+	agent_edit_fill_state_locked(&state, edit, edit->dev, edit->inum,
+				     edit->path);
+	agent_edit_release_locked(edit, 1);
+	agent_edit_unlock();
+	agent_edit_audit(p, AGENT_STATUS_OK, "edit_abort", &state);
+	return 0;
+}
+
+int sys_agent_file_edit_state(uint64 pathaddr, uint64 stateaddr)
+{
+	struct proc *p = curr_proc();
+	struct inode *ip;
+	struct agent_file_edit_entry *edit;
+	struct agent_file_edit_state state;
+	char path[MAXPATH];
+	int ok;
+	int rc;
+
+	if (!p->is_agent)
+		return -1;
+	if (stateaddr == 0 ||
+	    !agent_user_range_mapped(p, stateaddr, sizeof(state)))
+		return -1;
+	rc = agent_file_edit_lookup_path(p, pathaddr, path, &ip);
+	if (rc < 0)
+		return rc;
+	agent_edit_lock();
+	agent_edit_cleanup_expired_locked(agent_ticks());
+	agent_edit_version_locked(ip->dev, ip->inum, 1, &ok);
+	if (!ok) {
+		agent_edit_unlock();
+		iput(ip);
+		return AGENT_STATUS_NO_SPACE;
+	}
+	edit = agent_edit_find_locked(ip->dev, ip->inum);
+	agent_edit_fill_state_locked(&state, edit, ip->dev, ip->inum, path);
+	agent_edit_unlock();
+	iput(ip);
+	return agent_file_edit_copy_state(p, stateaddr, &state);
+}
+
 int sys_agent_file_meta_init(void)
 {
 	struct proc *p = curr_proc();
@@ -5612,7 +6630,7 @@ int sys_agent_file_meta_init(void)
 	memset(agent_action_history, 0, sizeof(agent_action_history));
 	agent_file_loaded = 0;
 	if (agent_file_load() <= 0)
-		agent_file_install_default();
+		agent_file_install_empty_store();
 	agent_file_enable_scan();
 	return 0;
 }

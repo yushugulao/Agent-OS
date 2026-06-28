@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="680" viewBox="0 0 1120 680">
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="8" refX="11" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L12,4 L0,8 Z" fill="#1f2937"/>
+    </marker>
+    <style>
+      .title { font: 700 28px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #111827; }
+      .label { font: 700 21px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #111827; }
+      .small { font: 17px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #111827; }
+      .tiny { font: 14px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #374151; }
+      .box { stroke: #111827; stroke-width: 2.1; rx: 8; ry: 8; }
+      .arrow { stroke: #111827; stroke-width: 2.8; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect width="1120" height="680" fill="#ffffff"/>
+  <text x="45" y="48" class="title">AgentOS-uCore 测试证据组织方式</text>
+  <rect x="55" y="95" width="210" height="92" fill="#ffe08a" class="box"/>
+  <text x="110" y="132" class="label">构建检查</text>
+  <text x="86" y="162" class="tiny">用户程序 / 镜像 / 内核</text>
+  <rect x="330" y="75" width="230" height="132" fill="#b8d8a4" class="box"/>
+  <text x="380" y="112" class="label">功能检查</text>
+  <text x="356" y="142" class="tiny">最终验收、文件、事件</text>
+  <text x="356" y="166" class="tiny">调度、大模型、安全</text>
+  <text x="356" y="190" class="tiny">文件编辑租约测试</text>
+  <rect x="635" y="75" width="230" height="132" fill="#b7d1e8" class="box"/>
+  <text x="685" y="112" class="label">场景检查</text>
+  <text x="665" y="142" class="tiny">综合演示 RUN-042</text>
+  <text x="665" y="166" class="tiny">多 Agent 恢复</text>
+  <text x="665" y="190" class="tiny">结构化事件流</text>
+  <rect x="910" y="95" width="165" height="92" fill="#f5c29f" class="box"/>
+  <text x="952" y="132" class="label">结果</text>
+  <text x="930" y="162" class="tiny">父进程通过</text>
+  <path d="M265 141 L330 141" class="arrow"/>
+  <path d="M560 141 L635 141" class="arrow"/>
+  <path d="M865 141 L910 141" class="arrow"/>
+  <rect x="80" y="285" width="960" height="280" fill="#f8fafc" class="box"/>
+  <text x="110" y="326" class="label">从测试输出提取到文档的证据</text>
+  <rect x="120" y="360" width="180" height="115" fill="#ffffff" class="box"/>
+  <text x="150" y="394" class="small">功能条目</text>
+  <text x="143" y="424" class="tiny">任务到测试的对应</text>
+  <text x="143" y="448" class="tiny">系统调用和文件链接</text>
+  <rect x="340" y="360" width="180" height="115" fill="#ffffff" class="box"/>
+  <text x="372" y="394" class="small">日志标记</text>
+  <text x="362" y="424" class="tiny">通过标记</text>
+  <text x="362" y="448" class="tiny">键=值片段</text>
+  <rect x="560" y="360" width="180" height="115" fill="#ffffff" class="box"/>
+  <text x="590" y="394" class="small">指标行</text>
+  <text x="582" y="424" class="tiny">操作数、时钟、记录数</text>
+  <text x="582" y="448" class="tiny">扫描 / 索引对比</text>
+  <rect x="780" y="360" width="180" height="115" fill="#ffffff" class="box"/>
+  <text x="812" y="394" class="small">场景叙事</text>
+  <text x="805" y="424" class="tiny">故障、计划、恢复</text>
+  <text x="805" y="448" class="tiny">审计和因果关系</text>
+  <path d="M210 475 L210 525 L430 525" class="arrow"/>
+  <path d="M430 475 L430 525" class="arrow"/>
+  <path d="M650 475 L650 525 L430 525" class="arrow"/>
+  <path d="M870 475 L870 525 L430 525" class="arrow"/>
+  <text x="280" y="612" class="label">首页摘要 + 设计细节 + 验证表格 + 测试记录样例</text>
+</svg>
