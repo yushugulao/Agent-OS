@@ -264,7 +264,7 @@ rp_backend: cases=8 executable=8 agentos=mainflow_bound exports=1 status=ready
 [dual-platform] AgentOS extracted state files: 268
 host_platform_alignment: host_modules=154 tracked_host_modules=154 plain_sources=73 agentos_sources=74 runtime_state_checked=1 groups_ok=13 groups_total=13 untracked_host_modules=0 status=ready
 host_test_alignment: host_tests=142 themes_ok=7 themes_total=7 unclassified_tests=0 status=ready
-host_action_kind_alignment: action_routes=95 action_kinds=95 generic_routes=0 plain_missing=0 agentos_missing=0 status=ready
+host_action_kind_alignment: action_routes=95 action_kinds=95 generic_routes=0 plain_missing=0 agentos_missing=0 plain_handler_missing=0 agentos_handler_missing=0 status=ready
 host_surface_alignment: api_routes=214 action_routes=95 download_refs=76 runtime_state_checked=1 status=ready
 dual_platform_state_compare: plain_files=256 agentos_files=268 common_files=256 agentos_extra_files=12 checked_success_records=1242 preserved_plain_costs=7 status=ready
 plain_ucore_reader: pages=40 api_json=264 state_files=257 status=ready

@@ -10,6 +10,8 @@ from pathlib import Path
 
 from plain_ucore_action_runner import action_kind
 
+EVIDENCE_ONLY_FILES = {"rp_compare_plain.c", "rp_test_suite.c"}
+
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
@@ -30,22 +32,48 @@ def collect_action_routes(host_dir: Path) -> list[str]:
     return sorted(set(re.findall(r'path == "(/actions/[^"]+)"', text)))
 
 
-def read_user_sources(root: Path, relative_dir: str) -> str:
+def read_user_source_files(root: Path, relative_dir: str) -> dict[str, str]:
     source_dir = root / relative_dir
     if not source_dir.exists():
         raise FileNotFoundError(f"user source directory is missing: {relative_dir}")
-    chunks: list[str] = []
-    for path in sorted(source_dir.glob("*.c")):
-        chunks.append(path.read_text(encoding="utf-8", errors="replace"))
-    return "\n".join(chunks)
+    return {path.name: path.read_text(encoding="utf-8", errors="replace") for path in sorted(source_dir.glob("*.c"))}
 
 
-def missing_kinds(source_text: str, kinds: list[str]) -> list[str]:
-    missing: list[str] = []
+def kind_source_map(source_files: dict[str, str], kinds: list[str]) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
     for kind in kinds:
-        if f"kind={kind}" not in source_text:
+        token = f"kind={kind}"
+        result[kind] = [name for name, text in source_files.items() if token in text]
+    return result
+
+
+def missing_kinds(sources_by_kind: dict[str, list[str]]) -> list[str]:
+    missing: list[str] = []
+    for kind, files in sources_by_kind.items():
+        if not files:
             missing.append(kind)
     return missing
+
+
+def missing_runtime_handlers(sources_by_kind: dict[str, list[str]]) -> list[str]:
+    missing: list[str] = []
+    for kind, files in sources_by_kind.items():
+        if not any(name not in EVIDENCE_ONLY_FILES for name in files):
+            missing.append(kind)
+    return missing
+
+
+def handler_files(sources_by_kind: dict[str, list[str]]) -> list[str]:
+    files: set[str] = set()
+    for names in sources_by_kind.values():
+        for name in names:
+            if name not in EVIDENCE_ONLY_FILES:
+                files.add(name)
+    return sorted(files)
+
+
+def kind_source_sample(sources_by_kind: dict[str, list[str]]) -> dict[str, list[str]]:
+    return {kind: sources_by_kind[kind] for kind in sorted(sources_by_kind)[:16]}
 
 
 def run_check(root: Path, host_dir: Path, require_host: bool) -> dict[str, object]:
@@ -63,10 +91,12 @@ def run_check(root: Path, host_dir: Path, require_host: bool) -> dict[str, objec
     kinds = sorted(set(route_kinds.values()))
     generic_routes = [route for route, kind in route_kinds.items() if kind == "generic"]
 
-    plain_sources = read_user_sources(root, "user/src")
-    agentos_sources = read_user_sources(root, "agentos_ucore/user/src")
-    plain_missing = missing_kinds(plain_sources, kinds)
-    agentos_missing = missing_kinds(agentos_sources, kinds)
+    plain_sources = kind_source_map(read_user_source_files(root, "user/src"), kinds)
+    agentos_sources = kind_source_map(read_user_source_files(root, "agentos_ucore/user/src"), kinds)
+    plain_missing = missing_kinds(plain_sources)
+    agentos_missing = missing_kinds(agentos_sources)
+    plain_handler_missing = missing_runtime_handlers(plain_sources)
+    agentos_handler_missing = missing_runtime_handlers(agentos_sources)
 
     failures: list[str] = []
     if generic_routes:
@@ -75,6 +105,10 @@ def run_check(root: Path, host_dir: Path, require_host: bool) -> dict[str, objec
         failures.append("plain missing action kinds: " + ",".join(plain_missing[:24]))
     if agentos_missing:
         failures.append("AgentOS missing action kinds: " + ",".join(agentos_missing[:24]))
+    if plain_handler_missing:
+        failures.append("plain missing runtime handlers: " + ",".join(plain_handler_missing[:24]))
+    if agentos_handler_missing:
+        failures.append("AgentOS missing runtime handlers: " + ",".join(agentos_handler_missing[:24]))
 
     return {
         "status": "failed" if failures else "ready",
@@ -84,6 +118,12 @@ def run_check(root: Path, host_dir: Path, require_host: bool) -> dict[str, objec
         "generic_routes": generic_routes,
         "plain_missing_kinds": plain_missing,
         "agentos_missing_kinds": agentos_missing,
+        "plain_missing_runtime_handlers": plain_handler_missing,
+        "agentos_missing_runtime_handlers": agentos_handler_missing,
+        "plain_handler_files": handler_files(plain_sources),
+        "agentos_handler_files": handler_files(agentos_sources),
+        "plain_kind_source_sample": kind_source_sample(plain_sources),
+        "agentos_kind_source_sample": kind_source_sample(agentos_sources),
         "kind_sample": kinds[:16],
         "failures": failures,
     }
@@ -115,6 +155,8 @@ def main() -> int:
         f"generic_routes={len(summary['generic_routes'])} "
         f"plain_missing={len(summary['plain_missing_kinds'])} "
         f"agentos_missing={len(summary['agentos_missing_kinds'])} "
+        f"plain_handler_missing={len(summary['plain_missing_runtime_handlers'])} "
+        f"agentos_handler_missing={len(summary['agentos_missing_runtime_handlers'])} "
         f"status={summary['status']}"
     )
     if summary["status"] == "failed":
