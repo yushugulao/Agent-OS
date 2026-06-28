@@ -106,7 +106,7 @@ else
 BOOTLOADER	:= default
 endif
 
-QEMU = qemu-system-riscv64
+QEMU ?= qemu-system-riscv64
 QEMUOPTS = \
 	-nographic \
 	-machine virt \

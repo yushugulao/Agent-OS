@@ -441,6 +441,14 @@ def shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
+def make_var_arg(name: str, value: str) -> str:
+    return f"{name}={shell_quote(value)}"
+
+
+def toolprefix_arg() -> str:
+    return make_var_arg("TOOLPREFIX", os.environ.get("TOOLPREFIX", "riscv64-linux-gnu-"))
+
+
 def bash_path(path: Path, base: Path | None = None) -> str:
     resolved = path.resolve()
     if base is not None:
@@ -740,16 +748,17 @@ def run_seeded_ucore(
     pad_state_files_for_ucore_fs(next_state)
     seed_file = next_state / "rp_host_action_seed"
     seed_file_bash = bash_path(seed_file)
+    toolprefix = toolprefix_arg()
     run_command_text = (
         f"cd {shell_quote(repo_bash)} && "
-        f"make user TOOLPREFIX=riscv64-linux-gnu- CHAPTER={chapter} >/dev/null"
+        f"make user {toolprefix} CHAPTER={chapter} >/dev/null"
         " && "
         f"cp {shell_quote(seed_file_bash)} user/target/bin/rp_host_action_seed"
         " && "
         "rm -rf nfs/fs nfs/fs.img nfs/fs-copy.img && "
         "make nfs/fs.img >/dev/null && "
-        f"make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER={chapter} LOG=warn INIT_PROC={init_proc} >/dev/null && "
-        f"timeout {timeout_seconds}s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER={chapter} LOG=warn INIT_PROC={init_proc}"
+        f"make build {toolprefix} CHAPTER={chapter} LOG=warn INIT_PROC={init_proc} >/dev/null && "
+        f"timeout {timeout_seconds}s make run {toolprefix} CHAPTER={chapter} LOG=warn INIT_PROC={init_proc}"
     )
     code = run_command(make_wsl_command(run_command_text, wsl_distro), log_path, timeout_seconds + 30, append=True)
     text = log_path.read_text(encoding="utf-8", errors="replace")

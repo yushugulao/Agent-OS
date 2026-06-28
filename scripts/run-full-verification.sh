@@ -40,7 +40,7 @@ echo "[full-verify] host platform alignment"
 echo "[full-verify] dual platforms"
 (
 	cd "${ROOT_DIR}"
-	TOOLPREFIX="${TOOLPREFIX}" bash scripts/run-dual-platforms.sh
+	TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" bash scripts/run-dual-platforms.sh
 )
 
 echo "[full-verify] AgentOS kernel tests"

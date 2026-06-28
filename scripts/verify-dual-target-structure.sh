@@ -170,6 +170,8 @@ require_text "Makefile" "INIT_PROC=rp_orch CHAPTER=platform" "plain platform run
 require_text "Makefile" "INIT_PROC=rp_agentos_orch CHAPTER=platform_agentos" "AgentOS platform run target does not launch rp_agentos_orch"
 require_text "Makefile" "scripts/run-dual-platforms.sh" "Makefile dual platform target does not call the dual runner"
 require_text "Makefile" "scripts/run-full-verification.sh" "Makefile full verification target does not call the full runner"
+require_text "Makefile" "^QEMU \\?= qemu-system-riscv64" "plain Makefile QEMU is not environment-overridable"
+require_text "agentos_ucore/Makefile" "^QEMU \\?= qemu-system-riscv64" "AgentOS Makefile QEMU is not environment-overridable"
 
 require_text "user/Makefile" "platform_plain" "plain platform chapter is not declared"
 require_text "scripts/run-full-verification.sh" "verify-dual-target-structure" "full verification does not run the structure check"
@@ -191,9 +193,11 @@ require_text "scripts/run-full-verification.sh" "test_compare_dual_platform_stat
 require_text "scripts/run-full-verification.sh" "test_plain_ucore_reader.py" "full verification does not run Host Reader unit test"
 require_text "scripts/run-full-verification.sh" "test_plain_ucore_reader_e2e.py" "full verification does not run Host Reader e2e test"
 require_text "scripts/run-full-verification.sh" "run-dual-platforms.sh" "full verification does not run dual platform QEMU"
+require_text "scripts/run-full-verification.sh" "QEMU=.*run-dual-platforms.sh" "full verification does not pass QEMU to dual platform runner"
 require_text "scripts/run-full-verification.sh" "run-agent-tests.sh" "full verification does not run AgentOS kernel tests"
 
 require_text "scripts/run-dual-platforms.sh" "verify-dual-target-structure" "dual platform runner does not run the structure check"
+require_text "scripts/run-dual-platforms.sh" "export TOOLPREFIX QEMU PYTHON_BIN" "dual platform runner does not export tool variables"
 require_text "scripts/run-dual-platforms.sh" "seeded dual-target research platform" "dual platform runner does not run the seeded dual-target platform path"
 require_text "scripts/run-dual-platforms.sh" "compare_dual_platform_state.py" "dual platform runner does not compare extracted state files"
 require_text "scripts/run-dual-platforms.sh" "check_host_platform_alignment.py" "dual platform runner does not check host platform capability runtime output"
@@ -209,6 +213,7 @@ require_text "scripts/run-dual-platforms.sh" "compare_dual_platform_reader.py" "
 require_text "scripts/run-dual-platforms.sh" "seeded-action-state.json" "dual platform runner does not pass seeded action state to Host Reader"
 require_text "host_tools/plain_ucore_reader.py" "seeded-action-state" "Host Reader does not accept seeded action state input"
 require_text "host_tools/plain_ucore_reader.py" "host_seeded_action" "Host Reader does not render seeded action state"
+require_text "host_tools/plain_ucore_action_runner.py" 'os.environ.get\("TOOLPREFIX"' "action runner does not read TOOLPREFIX from environment"
 require_text "scripts/run-dual-platforms.sh" "cases=7 executable=7 userland_equivalent=ready" "plain backend marker is missing"
 require_text "scripts/run-dual-platforms.sh" "cases=8 executable=8 agentos=mainflow_bound" "AgentOS backend marker is missing"
 

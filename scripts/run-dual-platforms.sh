@@ -3,8 +3,10 @@ set -eu
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
+QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 DUAL_LOG_DIR="${DUAL_LOG_DIR:-/tmp/agentos-dual-platform}"
+export TOOLPREFIX QEMU PYTHON_BIN
 
 mkdir -p "${DUAL_LOG_DIR}"
 

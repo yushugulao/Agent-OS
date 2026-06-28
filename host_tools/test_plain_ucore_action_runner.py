@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 from pathlib import Path
 
@@ -15,6 +16,18 @@ def read(path: Path) -> str:
 
 
 def main() -> int:
+    original_toolprefix = os.environ.get("TOOLPREFIX")
+    try:
+        os.environ.pop("TOOLPREFIX", None)
+        assert runner.toolprefix_arg() == "TOOLPREFIX='riscv64-linux-gnu-'"
+        os.environ["TOOLPREFIX"] = "custom-riscv64-"
+        assert runner.toolprefix_arg() == "TOOLPREFIX='custom-riscv64-'"
+    finally:
+        if original_toolprefix is None:
+            os.environ.pop("TOOLPREFIX", None)
+        else:
+            os.environ["TOOLPREFIX"] = original_toolprefix
+
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
         state_dir = root / "state"
