@@ -110,13 +110,13 @@ if [ "${agentos_count}" -lt 240 ]; then
 	echo "[dual-platform] AgentOS extracted too few state files: ${agentos_count} < 240" >&2
 	exit 1
 fi
-for file in rp_backend rp_agentcmp rp_web_bundle rp_api_compare rp_package rp_review_dashboard; do
+for file in rp_backend rp_agentcmp rp_orch_timing rp_web_bundle rp_api_compare rp_package rp_review_dashboard; do
 	if [ ! -f "${DUAL_LOG_DIR}/plain-state/${file}" ]; then
 		echo "[dual-platform] plain extracted state is missing ${file}" >&2
 		exit 1
 	fi
 done
-for file in rp_backend rp_agentcmp rp_agentos_kernel rp_agentos_mainflow rp_agentos_conflict rp_web_bundle rp_api_compare; do
+for file in rp_backend rp_agentcmp rp_orch_timing rp_agentos_kernel rp_agentos_mainflow rp_agentos_conflict rp_web_bundle rp_api_compare; do
 	if [ ! -f "${DUAL_LOG_DIR}/agentos-state/${file}" ]; then
 		echo "[dual-platform] AgentOS extracted state is missing ${file}" >&2
 		exit 1

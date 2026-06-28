@@ -3,6 +3,7 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <string.h>
+#include <research_platform_state.h>
 
 static const char *PROGRAMS[] = {
 	"rp_catalog",
@@ -139,8 +140,26 @@ static void release_self_image(void)
 	}
 }
 
+static void record_timing(const char *program, int ok, int code,
+			  unsigned long long elapsed_ms)
+{
+	char line[192];
+
+	rp_copy_text(line, sizeof(line), "program=");
+	rp_append_text(line, sizeof(line), program);
+	rp_append_text(line, sizeof(line), ";launcher=fork_seeded");
+	rp_append_text(line, sizeof(line), ";ok=");
+	rp_append_text(line, sizeof(line), ok ? "1" : "0");
+	rp_append_text(line, sizeof(line), ";code=");
+	rp_append_uint_text(line, sizeof(line), code < 0 ? 9999 : (unsigned int)code);
+	rp_append_text(line, sizeof(line), ";elapsed_ms=");
+	rp_append_uint_text(line, sizeof(line), elapsed_ms);
+	rp_append_file("rp_orch_timing", line);
+}
+
 static int run_child(const char *program)
 {
+	int64 start = get_mtime();
 	int pid = fork();
 	if (pid == 0) {
 		char *argv[] = {(char *)program, 0};
@@ -150,16 +169,26 @@ static int run_child(const char *program)
 		}
 		exit(1);
 	}
+	if (pid < 0) {
+		printf("rp_orch: fork_failed program=%s\n", program);
+		record_timing(program, 0, -1, 0);
+		return 0;
+	}
 	int code = -1;
 	int got = waitpid(pid, &code);
+	int64 end = get_mtime();
+	unsigned long long elapsed = end >= start ? (unsigned long long)(end - start) : 0;
 	if (got != pid) {
 		printf("rp_orch: wait_failed program=%s\n", program);
+		record_timing(program, 0, code, elapsed);
 		return 0;
 	}
 	if (code != 0) {
 		printf("rp_orch: child_failed program=%s code=%d\n", program, code);
+		record_timing(program, 0, code, elapsed);
 		return 0;
 	}
+	record_timing(program, 1, code, elapsed);
 	if (keeps_same_name_state(program)) {
 		return 1;
 	}
@@ -175,6 +204,10 @@ int main(void)
 	release_self_image();
 	int total = (int)(sizeof(PROGRAMS) / sizeof(PROGRAMS[0]));
 	int ok = 0;
+	if (!rp_write_file("rp_orch_timing",
+			   "orchestrator=rp_seed_orch\nlauncher=fork_seeded\n")) {
+		return 1;
+	}
 	printf("rp_orch: start programs=%d\n", total);
 	for (int i = 0; i < total; i++) {
 		ok += run_child(PROGRAMS[i]);

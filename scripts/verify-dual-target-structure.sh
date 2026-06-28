@@ -200,6 +200,7 @@ require_text "scripts/run-dual-platforms.sh" "verify-dual-target-structure" "dua
 require_text "scripts/run-dual-platforms.sh" "export TOOLPREFIX QEMU PYTHON_BIN" "dual platform runner does not export tool variables"
 require_text "scripts/run-dual-platforms.sh" "seeded dual-target research platform" "dual platform runner does not run the seeded dual-target platform path"
 require_text "scripts/run-dual-platforms.sh" "compare_dual_platform_state.py" "dual platform runner does not compare extracted state files"
+require_text "scripts/run-dual-platforms.sh" "rp_orch_timing" "dual platform runner does not require orchestrator timing state"
 require_text "scripts/run-dual-platforms.sh" "check_host_platform_alignment.py" "dual platform runner does not check host platform capability runtime output"
 require_text "scripts/run-dual-platforms.sh" "check_host_action_kind_alignment.py" "dual platform runner does not check host action kind handling"
 require_text "scripts/run-dual-platforms.sh" "check_seeded_action_state.py" "dual platform runner does not check seeded action runtime state"
@@ -216,6 +217,7 @@ require_text "host_tools/plain_ucore_reader.py" "host_seeded_action" "Host Reade
 require_text "host_tools/plain_ucore_action_runner.py" 'os.environ.get\("TOOLPREFIX"' "action runner does not read TOOLPREFIX from environment"
 require_text "host_tools/plain_ucore_action_runner.py" "run_observed_command" "action runner does not observe QEMU output directly"
 require_text "host_tools/plain_ucore_action_runner.py" "qemu_elapsed_seconds" "action runner does not write QEMU timing evidence"
+require_text "host_tools/compare_dual_platform_state.py" "verify_orch_timing" "dual platform comparison does not validate per-program timing evidence"
 require_text "scripts/run-dual-platforms.sh" "cases=7 executable=7 userland_equivalent=ready" "plain backend marker is missing"
 require_text "scripts/run-dual-platforms.sh" "cases=8 executable=8 agentos=mainflow_bound" "AgentOS backend marker is missing"
 

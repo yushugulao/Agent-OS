@@ -257,6 +257,31 @@ def verify_agentos_mainflow_stages(agentos_dir: Path) -> int:
     return len(AGENTOS_MAINFLOW_STAGES)
 
 
+def verify_orch_timing(state_dir: Path, label: str, required_launcher: str | None = None) -> int:
+    text = require_file_text(state_dir, "rp_orch_timing")
+    program_count = 0
+    launcher_count = 0
+    for raw in text.splitlines():
+        fields = parse_fields(raw.strip())
+        if "program" not in fields:
+            continue
+        program_count += 1
+        if fields.get("ok") != "1":
+            raise ValueError(f"{label} timing record is not ok: {raw}")
+        elapsed = fields.get("elapsed_ms", "")
+        if not elapsed.isdigit():
+            raise ValueError(f"{label} timing record has nonnumeric elapsed_ms: {raw}")
+        if required_launcher and fields.get("launcher") == required_launcher:
+            launcher_count += 1
+    if program_count < 60:
+        raise ValueError(f"{label} timing records too few: {program_count}")
+    if required_launcher and launcher_count < program_count:
+        raise ValueError(
+            f"{label} timing records are not all launched by {required_launcher}: {launcher_count}/{program_count}"
+        )
+    return program_count
+
+
 def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> dict[str, object]:
     plain_summary = read_summary(plain_dir)
     agentos_summary = read_summary(agentos_dir)
@@ -296,6 +321,12 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
     embedded_action_records = verify_run_result(plain_dir, agentos_dir)
     agentos_evidence_checks = verify_agentos_evidence(agentos_dir)
     agentos_mainflow_stages = verify_agentos_mainflow_stages(agentos_dir)
+    plain_timing_records = verify_orch_timing(plain_dir, "plain")
+    agentos_timing_records = verify_orch_timing(
+        agentos_dir, "AgentOS", required_launcher="agent_create_role"
+    )
+    if agentos_timing_records < plain_timing_records:
+        raise ValueError("AgentOS timing record count is less than plain uCore")
     return {
         "plain_files": int(plain_summary.get("extracted_state_files", 0)),
         "agentos_files": int(agentos_summary.get("extracted_state_files", 0)),
@@ -307,6 +338,8 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
         "run_result_match": 1,
         "agentos_evidence_checks": agentos_evidence_checks,
         "agentos_mainflow_stages": agentos_mainflow_stages,
+        "plain_timing_records": plain_timing_records,
+        "agentos_timing_records": agentos_timing_records,
         "status": "ready",
     }
 
@@ -323,7 +356,7 @@ def main() -> int:
     if args.json_out is not None:
         args.json_out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(
-        "dual_platform_state_compare: plain_files={plain_files} agentos_files={agentos_files} common_files={common_files} agentos_extra_files={agentos_extra_files} checked_success_records={checked_success_records} preserved_plain_costs={preserved_plain_costs} embedded_action_records={embedded_action_records} run_result_match={run_result_match} agentos_evidence_checks={agentos_evidence_checks} agentos_mainflow_stages={agentos_mainflow_stages} status={status}".format(
+        "dual_platform_state_compare: plain_files={plain_files} agentos_files={agentos_files} common_files={common_files} agentos_extra_files={agentos_extra_files} checked_success_records={checked_success_records} preserved_plain_costs={preserved_plain_costs} embedded_action_records={embedded_action_records} run_result_match={run_result_match} agentos_evidence_checks={agentos_evidence_checks} agentos_mainflow_stages={agentos_mainflow_stages} plain_timing_records={plain_timing_records} agentos_timing_records={agentos_timing_records} status={status}".format(
             **summary
         )
     )

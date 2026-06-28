@@ -135,11 +135,33 @@ static void record_stage_role(const char *program, int role, int agent_child)
 	rp_append_file("rp_agentos_roles", line);
 }
 
+static void record_timing(const char *program, int role, int agent_child,
+			  int ok, int code, unsigned long long elapsed_ms)
+{
+	char line[224];
+
+	rp_copy_text(line, sizeof(line), "program=");
+	rp_append_text(line, sizeof(line), program);
+	rp_append_text(line, sizeof(line), ";role=");
+	rp_append_text(line, sizeof(line), role_name(role));
+	rp_append_text(line, sizeof(line), ";launcher=");
+	rp_append_text(line, sizeof(line),
+		       agent_child ? "agent_create_role" : "fork");
+	rp_append_text(line, sizeof(line), ";ok=");
+	rp_append_text(line, sizeof(line), ok ? "1" : "0");
+	rp_append_text(line, sizeof(line), ";code=");
+	rp_append_uint_text(line, sizeof(line), code < 0 ? 9999 : (unsigned int)code);
+	rp_append_text(line, sizeof(line), ";elapsed_ms=");
+	rp_append_uint_text(line, sizeof(line), elapsed_ms);
+	rp_append_file("rp_orch_timing", line);
+}
+
 static int run_child(const char *program)
 {
 	int pid;
 	int agent_child = 0;
 	int role = role_for_program(program);
+	int64 start = get_mtime();
 
 	if (orchestrator_context()) {
 		pid = agent_create_role(role);
@@ -161,19 +183,25 @@ static int run_child(const char *program)
 	if (pid < 0) {
 		printf("rp_orch: create_failed program=%s role=%s\n",
 		       program, role_name(role));
+		record_timing(program, role, agent_child, 0, -1, 0);
 		return 0;
 	}
 	record_stage_role(program, role, agent_child);
 	int code = -1;
 	int got = waitpid(pid, &code);
+	int64 end = get_mtime();
+	unsigned long long elapsed = end >= start ? (unsigned long long)(end - start) : 0;
 	if (got != pid) {
 		printf("rp_orch: wait_failed program=%s\n", program);
+		record_timing(program, role, agent_child, 0, code, elapsed);
 		return 0;
 	}
 	if (code != 0) {
 		printf("rp_orch: child_failed program=%s code=%d\n", program, code);
+		record_timing(program, role, agent_child, 0, code, elapsed);
 		return 0;
 	}
+	record_timing(program, role, agent_child, 1, code, elapsed);
 	return 1;
 }
 
@@ -189,6 +217,10 @@ int main(void)
 				   "status=ready\n")) {
 			return 1;
 		}
+	}
+	if (!rp_write_file("rp_orch_timing",
+			   "orchestrator=rp_orch\nlauncher=agent_create_role\n")) {
+		return 1;
 	}
 	printf("rp_orch: start programs=%d\n", total);
 	for (int i = 0; i < total; i++) {

@@ -659,6 +659,27 @@ static RP_UNUSED void rp_append_text(char *dst, int cap, const char *src)
 	dst[used + i] = 0;
 }
 
+static RP_UNUSED void rp_append_uint_text(char *dst, int cap, unsigned long long value)
+{
+	char digits[32];
+	int count = 0;
+	if (cap <= 0) return;
+	if (value == 0) {
+		rp_append_text(dst, cap, "0");
+		return;
+	}
+	while (value > 0 && count < (int)sizeof(digits)) {
+		digits[count++] = (char)('0' + (value % 10));
+		value /= 10;
+	}
+	while (count > 0) {
+		char one[2];
+		one[0] = digits[--count];
+		one[1] = 0;
+		rp_append_text(dst, cap, one);
+	}
+}
+
 static RP_UNUSED int rp_parse_decimal(const char *s)
 {
 	int value = 0;
