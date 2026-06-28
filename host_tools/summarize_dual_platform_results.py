@@ -1216,6 +1216,135 @@ def runner_statistics_svg(meta: dict[str, object], out_path: Path) -> None:
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def test_suite_rows() -> list[dict[str, str]]:
+    return [
+        {
+            "level": "最终演示主路径",
+            "command": "make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-",
+            "qemu": "是",
+            "purpose": "运行 plain uCore 与 AgentOS-uCore 两个目标，生成状态文件、CSV、HTML 和 SVG 图表。",
+            "when_to_use": "录屏和答辩前必须运行。",
+            "main_output": "results/latest/",
+        },
+        {
+            "level": "最终演示主路径",
+            "command": "make demo-reader",
+            "qemu": "否",
+            "purpose": "启动本地 Reader，把科研平台页面、双目标结果页和演示导览页放在一个浏览器服务里。",
+            "when_to_use": "双目标结果生成后立即运行。",
+            "main_output": "http://127.0.0.1:8767/",
+        },
+        {
+            "level": "日常快速检查",
+            "command": "make target-readiness",
+            "qemu": "否",
+            "purpose": "检查目录职责、双目标结构、Host 工具契约、Reader 输出和图表生成逻辑。",
+            "when_to_use": "修改文档、Host 工具、结果页或脚本后运行。",
+            "main_output": "终端通过标记",
+        },
+        {
+            "level": "完整验证",
+            "command": "make full-verify TOOLPREFIX=riscv64-linux-gnu-",
+            "qemu": "是",
+            "purpose": "串联结构检查、Host 工具检查、双目标 QEMU、Reader 渲染和 AgentOS 内核专项测试。",
+            "when_to_use": "最终审查前运行。",
+            "main_output": "终端输出和 results/latest/",
+        },
+        {
+            "level": "AgentOS 内核专项",
+            "command": "TOOLPREFIX=riscv64-linux-gnu- QEMU=qemu-system-riscv64 CASE_TIMEOUT=240s bash scripts/run-agent-tests.sh",
+            "qemu": "是",
+            "purpose": "在 AgentOS-uCore 目标中运行 Agent Context、文件对象、事件队列、权限、LLM relay 等专项程序。",
+            "when_to_use": "内核、用户程序或 syscall ABI 改动后运行。",
+            "main_output": "AgentOS 专项测试通过标记",
+        },
+        {
+            "level": "LLM 模式契约",
+            "command": "bash -lc 'python3 host_tools/test_llm_relay_mode_contract.py'",
+            "qemu": "否",
+            "purpose": "验证无密钥 default 模式和外部 DeepSeek key 文件模式，不把密钥写入仓库或结果文件。",
+            "when_to_use": "修改 LLM Relay、环境变量或密钥读取逻辑后运行。",
+            "main_output": "test_llm_relay_mode_contract: passed",
+        },
+        {
+            "level": "图表可读性检查",
+            "command": "bash -lc 'python3 host_tools/test_chart_svg_layout_contract.py'",
+            "qemu": "否",
+            "purpose": "解析生成后的 SVG 和文档示例图，检查文字是否在画布内以及是否明显互相压住。",
+            "when_to_use": "修改图表生成逻辑或文档示例图后运行。",
+            "main_output": "test_chart_svg_layout_contract: passed",
+        },
+    ]
+
+
+def write_test_suite_csv(out_path: Path) -> None:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["level", "command", "qemu", "purpose", "when_to_use", "main_output"])
+        for row in test_suite_rows():
+            writer.writerow([row["level"], row["command"], row["qemu"], row["purpose"], row["when_to_use"], row["main_output"]])
+
+
+def write_test_suite_page(out_path: Path) -> None:
+    rows_html = []
+    for row in test_suite_rows():
+        rows_html.append(
+            "<tr><td>{level}</td><td><code>{command}</code></td><td>{qemu}</td><td>{purpose}</td><td>{when_to_use}</td><td>{main_output}</td></tr>".format(
+                level=escape(row["level"]),
+                command=escape(row["command"]),
+                qemu=escape(row["qemu"]),
+                purpose=escape(row["purpose"]),
+                when_to_use=escape(row["when_to_use"]),
+                main_output=escape(row["main_output"]),
+            )
+        )
+    html = f"""<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AgentOS 测试入口说明</title>
+  <style>
+    :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; }}
+    body {{ margin:0; font-family:Arial,"Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); }}
+    header {{ padding:30px 42px 20px; background:#fff; border-bottom:1px solid var(--line); }}
+    main {{ max-width:1240px; margin:0 auto; padding:24px 42px 42px; }}
+    h1 {{ margin:0 0 10px; font-size:28px; }}
+    p {{ line-height:1.75; color:var(--muted); }}
+    .links {{ display:flex; flex-wrap:wrap; gap:10px; margin:16px 0; }}
+    .links a {{ color:#075985; text-decoration:none; background:#fff; border:1px solid var(--line); padding:8px 12px; }}
+    table {{ width:100%; border-collapse:collapse; background:#fff; font-size:14px; }}
+    th,td {{ border:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }}
+    th {{ background:#eef3f8; }}
+    code {{ white-space:normal; overflow-wrap:anywhere; }}
+    @media (max-width:900px) {{ main,header {{ padding-left:18px; padding-right:18px; }} table {{ font-size:13px; }} }}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>AgentOS 测试入口说明</h1>
+    <p>本页把最终演示、快速检查、完整验证和专项测试分开说明。录屏时优先使用前两条命令；深入审查时再运行完整验证和专项测试。</p>
+  </header>
+  <main>
+    <div class="links">
+      <a href="test-suite.csv">下载 CSV</a>
+      <a href="demo-guide.html">演示导览页</a>
+      <a href="demo-checklist.html">演示检查表</a>
+      <a href="experiment-design.html">实验场景说明</a>
+    </div>
+    <table>
+      <thead><tr><th>用途层级</th><th>命令</th><th>启动 QEMU</th><th>检查内容</th><th>使用时机</th><th>主要输出</th></tr></thead>
+      <tbody>{"".join(rows_html)}</tbody>
+    </table>
+  </main>
+</body>
+</html>
+"""
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(html, encoding="utf-8")
+
+
 def load_profile_svg(meta: dict[str, object], out_path: Path) -> None:
     rows = load_profile_rows(meta)
     width, height = 1120, max(480, 142 + len(rows) * 50)
@@ -1290,6 +1419,20 @@ def evidence_manifest_rows(charts: list[Path]) -> list[dict[str, str]]:
             "source": "summary.json, charts/*.svg",
             "proves": "两条命令和建议展示顺序已经整理为一个可打开页面",
             "demo_use": "录屏时从这里开始",
+        },
+        {
+            "artifact": "test-suite.html",
+            "kind": "说明页面",
+            "source": "Makefile, scripts, host_tools tests",
+            "proves": "最终演示、快速检查、完整验证和专项测试入口已经区分清楚",
+            "demo_use": "说明应该运行哪些命令",
+        },
+        {
+            "artifact": "test-suite.csv",
+            "kind": "数据表",
+            "source": "test_suite_rows",
+            "proves": "测试入口说明可以被脚本复查和复制",
+            "demo_use": "答辩材料中的测试入口表",
         },
         {
             "artifact": "experiment-design.html",
@@ -2050,6 +2193,8 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
     lines.append("- `runner-statistics.csv`")
     lines.append("- `runner-statistics.html`")
     lines.append("- `load-profile.csv`")
+    lines.append("- `test-suite.csv`")
+    lines.append("- `test-suite.html`")
     lines.append("- `chart-type-coverage.csv`")
     lines.append("- `evidence-manifest.csv`")
     lines.append("- `evidence-map.html`")
@@ -2276,6 +2421,8 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="runner-statistics.html">打开 runner 统计摘要</a>
       <a href="runner-statistics.csv">下载 runner 统计摘要</a>
       <a href="load-profile.csv">下载负载参数组</a>
+      <a href="test-suite.html">打开测试入口说明</a>
+      <a href="test-suite.csv">下载测试入口说明</a>
       <a href="evidence-map.html">打开证据索引页</a>
       <a href="evidence-manifest.csv">下载证据索引表</a>
       <a href="demo-checklist.html">打开演示检查表</a>
@@ -2386,7 +2533,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>相关结果</h2>
-      <p><a href="demo-guide.html">演示导览页</a>、<a href="demo-checklist.html">演示检查表</a>、<a href="experiment-design.html">实验场景说明</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="runner-statistics.html">runner 统计摘要</a>、<a href="load-profile.csv">负载参数组</a>、<a href="evidence-manifest.csv">证据索引表</a>、<a href="demo-checklist.csv">演示检查表 CSV</a>、<a href="experiment-design.csv">实验场景说明 CSV</a>、<a href="runner-statistics.csv">runner 统计 CSV</a>、<a href="chart-type-coverage.csv">图表类型覆盖表</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/runner-statistics.svg">统计摘要图</a>、<a href="charts/load-profile.svg">负载参数图</a>、<a href="charts/runner-surface-composite.svg">组合图</a></p>
+      <p><a href="demo-guide.html">演示导览页</a>、<a href="demo-checklist.html">演示检查表</a>、<a href="test-suite.html">测试入口说明</a>、<a href="experiment-design.html">实验场景说明</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="runner-statistics.html">runner 统计摘要</a>、<a href="load-profile.csv">负载参数组</a>、<a href="evidence-manifest.csv">证据索引表</a>、<a href="demo-checklist.csv">演示检查表 CSV</a>、<a href="test-suite.csv">测试入口 CSV</a>、<a href="experiment-design.csv">实验场景说明 CSV</a>、<a href="runner-statistics.csv">runner 统计 CSV</a>、<a href="chart-type-coverage.csv">图表类型覆盖表</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/runner-statistics.svg">统计摘要图</a>、<a href="charts/load-profile.svg">负载参数图</a>、<a href="charts/runner-surface-composite.svg">组合图</a></p>
     </section>
   </main>
 </body>
@@ -2474,6 +2621,8 @@ def write_demo_guide_page(rows: list[MetricRow], meta: dict[str, object], charts
       <h2>关键数据</h2>
       <p>本次结果包含 {fmt_number(cost_count)} 项用户态成本替代记录、{fmt_number(runner_pairs)} 组 runner tick 对照、{fmt_number(as_number(state.get("checked_success_records")))} 条成功记录核对。图表可以回到 <a href="summary.csv">summary.csv</a>、<a href="runner-sweep.csv">runner-sweep.csv</a>、<a href="runner-statistics.csv">runner-statistics.csv</a>、<a href="load-profile.csv">load-profile.csv</a>、<a href="evidence-manifest.csv">evidence-manifest.csv</a> 和 <a href="chart-type-coverage.csv">chart-type-coverage.csv</a>。</p>
       <div class="links">
+        <a href="test-suite.html">测试入口说明</a>
+        <a href="test-suite.csv">测试入口 CSV</a>
         <a href="experiment-design.html">实验场景说明</a>
         <a href="experiment-design.csv">实验说明 CSV</a>
         <a href="runner-statistics.html">runner 统计摘要</a>
@@ -2507,6 +2656,8 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
     write_runner_sweep_csv(meta, out_dir / "runner-sweep.csv")
     write_runner_statistics_csv(meta, out_dir / "runner-statistics.csv")
     write_load_profile_csv(meta, out_dir / "load-profile.csv")
+    write_test_suite_csv(out_dir / "test-suite.csv")
+    write_test_suite_page(out_dir / "test-suite.html")
     write_chart_type_coverage_csv(out_dir / "chart-type-coverage.csv")
     write_experiment_design_csv(meta, out_dir / "experiment-design.csv")
     write_experiment_design_page(meta, out_dir / "experiment-design.html")
@@ -2535,6 +2686,8 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
         "runner_statistics_csv": str(out_dir / "runner-statistics.csv"),
         "runner_statistics": str(out_dir / "runner-statistics.html"),
         "load_profile_csv": str(out_dir / "load-profile.csv"),
+        "test_suite_csv": str(out_dir / "test-suite.csv"),
+        "test_suite": str(out_dir / "test-suite.html"),
         "chart_type_coverage_csv": str(out_dir / "chart-type-coverage.csv"),
         "experiment_design_csv": str(out_dir / "experiment-design.csv"),
         "experiment_design": str(out_dir / "experiment-design.html"),

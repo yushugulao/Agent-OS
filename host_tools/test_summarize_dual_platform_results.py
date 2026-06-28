@@ -146,6 +146,8 @@ def main() -> int:
         assert str(result["runner_statistics_csv"]).endswith("runner-statistics.csv"), result
         assert str(result["runner_statistics"]).endswith("runner-statistics.html"), result
         assert str(result["load_profile_csv"]).endswith("load-profile.csv"), result
+        assert str(result["test_suite_csv"]).endswith("test-suite.csv"), result
+        assert str(result["test_suite"]).endswith("test-suite.html"), result
         assert str(result["chart_type_coverage_csv"]).endswith("chart-type-coverage.csv"), result
         assert str(result["experiment_design_csv"]).endswith("experiment-design.csv"), result
         assert str(result["experiment_design"]).endswith("experiment-design.html"), result
@@ -168,6 +170,8 @@ def main() -> int:
         assert "agentos-context" in report
         assert "runner-statistics.csv" in report
         assert "runner-statistics.html" in report
+        assert "test-suite.csv" in report
+        assert "test-suite.html" in report
         assert "负载参数组" in report
         assert "预置请求" in report
         assert "evidence-manifest.csv" in report
@@ -187,6 +191,12 @@ def main() -> int:
         assert "普通路径 tick,2,6,6.5,7,tick" in stats_csv
         assert "AgentOS 路径 tick,2,1,1,1,tick" in stats_csv
         assert "相对倍数,2,6,6.5,7,x" in stats_csv
+        suite_csv = (out_dir / "test-suite.csv").read_text(encoding="utf-8")
+        assert "level,command,qemu,purpose,when_to_use,main_output" in suite_csv
+        assert "最终演示主路径,make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-" in suite_csv
+        assert "最终演示主路径,make demo-reader" in suite_csv
+        assert "日常快速检查,make target-readiness" in suite_csv
+        assert "完整验证,make full-verify TOOLPREFIX=riscv64-linux-gnu-" in suite_csv
         profile_csv = (out_dir / "load-profile.csv").read_text(encoding="utf-8")
         assert "load_dimension,source,plain_value,agentos_value,delta,note" in profile_csv
         assert "预置请求" in profile_csv
@@ -195,6 +205,8 @@ def main() -> int:
         assert "artifact,kind,source,proves,demo_use" in evidence_csv
         assert "experiment-design.html" in evidence_csv
         assert "experiment-design.csv" in evidence_csv
+        assert "test-suite.html" in evidence_csv
+        assert "test-suite.csv" in evidence_csv
         assert "charts/runtime-observation.svg" in evidence_csv
         assert "runner-sweep.csv" in evidence_csv
         assert "runner-statistics.csv" in evidence_csv
@@ -240,6 +252,8 @@ def main() -> int:
         assert "evidence-manifest.csv" in index_html
         assert "demo-checklist.html" in index_html
         assert "demo-checklist.csv" in index_html
+        assert "test-suite.html" in index_html
+        assert "test-suite.csv" in index_html
         assert "experiment-design.html" in index_html
         assert "experiment-design.csv" in index_html
         assert "chart-type-coverage.csv" in index_html
@@ -270,6 +284,8 @@ def main() -> int:
         assert "evidence-manifest.csv" in monitor_html
         assert "demo-checklist.html" in monitor_html
         assert "demo-checklist.csv" in monitor_html
+        assert "test-suite.html" in monitor_html
+        assert "test-suite.csv" in monitor_html
         assert "experiment-design.html" in monitor_html
         assert "experiment-design.csv" in monitor_html
         assert "chart-type-coverage.csv" in monitor_html
@@ -308,6 +324,8 @@ def main() -> int:
         assert "evidence-manifest.csv" in demo_html
         assert "demo-checklist.html" in demo_html
         assert "demo-checklist.csv" in demo_html
+        assert "test-suite.html" in demo_html
+        assert "test-suite.csv" in demo_html
         assert "experiment-design.html" in demo_html
         assert "experiment-design.csv" in demo_html
         assert "charts/scenario-evidence.svg" in demo_html
@@ -328,6 +346,12 @@ def main() -> int:
         assert "AgentOS Runner 统计摘要" in stats_html
         assert "count、min、avg、max" in stats_html
         assert "charts/runner-statistics.svg" in stats_html
+        suite_html = (out_dir / "test-suite.html").read_text(encoding="utf-8")
+        assert "AgentOS 测试入口说明" in suite_html
+        assert "make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-" in suite_html
+        assert "make demo-reader" in suite_html
+        assert "make target-readiness" in suite_html
+        assert "make full-verify TOOLPREFIX=riscv64-linux-gnu-" in suite_html
         checklist_html = (out_dir / "demo-checklist.html").read_text(encoding="utf-8")
         assert "AgentOS 演示检查表" in checklist_html
         assert "通过项：8 / 8" in checklist_html
