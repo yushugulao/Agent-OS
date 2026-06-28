@@ -211,6 +211,7 @@ dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=
 ```text
 results/latest/summary.csv
 results/latest/runner-sweep.csv
+results/latest/chart-type-coverage.csv
 results/latest/index.html
 results/latest/monitor.html
 results/latest/report.md
@@ -220,12 +221,19 @@ results/latest/charts/scenario-evidence.svg
 results/latest/charts/cost-replacement.svg
 results/latest/charts/runner-ticks.svg
 results/latest/charts/runner-speedup.svg
+results/latest/charts/runner-cumulative-line.svg
+results/latest/charts/runner-tick-box.svg
+results/latest/charts/runner-cost-heatmap.svg
+results/latest/charts/stage-monitor-area.svg
+results/latest/charts/runner-surface-composite.svg
 results/latest/charts/launch-model.svg
 results/latest/charts/agentos-evidence.svg
 results/latest/charts/stage-timings.svg
 ```
 
 `monitor.html` 适合录屏时先展示本次运行是否健康；`index.html` 适合集中查看图表摘要；`summary.csv` 适合复制到答辩材料或进一步处理；`report.md` 适合直接阅读；`charts/*.svg` 是从本次运行数据生成的图表。文档中保留一组示例图，数值来自一次完整运行样例，实际运行时以 `results/latest/` 下的新文件为准。
+
+图表由 `host_tools/summarize_dual_platform_results.py` 使用 Python 标准库直接生成 SVG，不依赖本机私有绘图软件。这样做的好处是，用户 clone 仓库后只要能运行 Python，就可以重新生成和验证这些图表。`chart-type-coverage.csv` 会列出当前结果页覆盖的图表类型：条形/柱状对比、曲线趋势、箱形图、热力图、监控面积图，以及曲面、投影、热力组合图；这些图都可以追溯到 `summary.csv`、`runner-sweep.csv`、`stage-timings.csv` 或状态对照 JSON。
 
 ![双目标状态与页面输出](assets/verification-charts/dual-target-state-reader.svg)
 
@@ -250,6 +258,26 @@ results/latest/charts/stage-timings.svg
 ![Runner 成组场景相对倍数](assets/verification-charts/runner-speedup.svg)
 
 这张图由 `runner-sweep.csv` 生成。CSV 保留每个场景的 plain case、AgentOS case、两边 tick、节省 tick 和相对倍数；SVG 把这些成组场景按条形图展示。它对应参考项目中“参数成组变化后再解释曲线”的测试写法：即使当前 uCore/QEMU 不适合宣称物理机吞吐，仍可以在同一输入下比较上下文、文件查询、事件交接、恢复动作和审计记录的相对运行成本。录屏时可以先展示 `runner-ticks.svg` 说明每组数字，再打开 `runner-sweep.csv` 说明图表可以回到原始表格。
+
+![Runner 累计 Tick 曲线](assets/verification-charts/runner-cumulative-line.svg)
+
+这张曲线图按 runner 场景顺序累计 tick。普通用户态路径的累计曲线和 AgentOS 路径的累计曲线如果持续分离，说明差异不是单个接口偶然造成的，而是在上下文、文件查询、事件、恢复和审计等多个环节逐步积累。它对应参考项目中用曲线解释运行过程的写法。
+
+![Runner Tick 分布箱形图](assets/verification-charts/runner-tick-box.svg)
+
+这张箱形图展示 plain 与 AgentOS runner tick 的分布。箱体表示 P25 到 P75，中线表示中位数，横线两端表示最小值和最大值。相比单个均值，它更适合说明增强目标是否同时降低了中位成本和高成本场景。
+
+![Runner 成本热力图](assets/verification-charts/runner-cost-heatmap.svg)
+
+这张热力图把场景和指标放在同一张表里，颜色越深表示数值越高。读图时可以快速定位普通路径中最重的步骤，以及 AgentOS 在哪些步骤中节省最多 tick。它对应参考项目中用热力图展示不同参数组合强弱的方式。
+
+![双目标运行阶段监控面积图](assets/verification-charts/stage-monitor-area.svg)
+
+这张面积图使用 `stage-timings.csv`，按阶段展示耗时强弱。它用于录屏时解释本次运行的主要时间花在何处；如果某个阶段异常抬高，应回到该阶段日志，而不是只看最终 `passed` 标记。
+
+![Runner 曲面 / 投影 / 热力组合图](assets/verification-charts/runner-surface-composite.svg)
+
+这张组合图包含三个视角：上部是等距曲面视图，中部是二维投影曲线，下部是热力图。三者使用同一组 `runner-sweep.csv` 数据，分别强调峰值形态、趋势变化和局部强弱。它借鉴参考项目中“三维曲面 + 二维投影 + 热力图”合并展示延迟数据的方式，但数据对象换成 AgentOS runner 场景、路径类型和 tick。
 
 ![科研流程启动方式组成](assets/verification-charts/launch-model.svg)
 

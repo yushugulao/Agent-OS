@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="420" viewBox="0 0 1080 420">
+<style>
+text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
+.title{font-size:20px;font-weight:700}.subtitle{font-size:13px;fill:#52616f}
+.axis{font-size:12px;fill:#52616f}.label{font-size:12px}.value{font-size:12px;font-weight:700}
+</style>
+<rect width="1080" height="420" fill="#ffffff"/>
+<text x="34" y="34" class="title">双目标运行阶段监控面积图</text>
+<text x="34" y="58" class="subtitle">按阶段展示耗时强弱，适合录屏时快速定位主要耗时是否集中在 QEMU 双目标运行阶段。</text>
+<line x1="84" y1="340.0" x2="1036" y2="340.0" stroke="#d8dee6" stroke-width="1"/>
+<text x="74" y="344.0" text-anchor="end" class="axis">0s</text>
+<line x1="84" y1="273.5" x2="1036" y2="273.5" stroke="#d8dee6" stroke-width="1"/>
+<text x="74" y="277.5" text-anchor="end" class="axis">4s</text>
+<line x1="84" y1="207.0" x2="1036" y2="207.0" stroke="#d8dee6" stroke-width="1"/>
+<text x="74" y="211.0" text-anchor="end" class="axis">8s</text>
+<line x1="84" y1="140.5" x2="1036" y2="140.5" stroke="#d8dee6" stroke-width="1"/>
+<text x="74" y="144.5" text-anchor="end" class="axis">12s</text>
+<line x1="84" y1="74.0" x2="1036" y2="74.0" stroke="#d8dee6" stroke-width="1"/>
+<text x="74" y="78.0" text-anchor="end" class="axis">16s</text>
+<polygon points="84.0,340.0 84.0,323.4 322.0,74.0 560.0,306.8 798.0,306.8 1036.0,323.4 1036.0,340.0" fill="#fce8d4" stroke="#f58518" stroke-width="2"/>
+<polyline points="84.0,323.4 322.0,74.0 560.0,306.8 798.0,306.8 1036.0,323.4" fill="none" stroke="#f58518" stroke-width="3"/>
+<circle cx="84.0" cy="323.4" r="4" fill="#f58518"/>
+<text x="84.0" y="378" text-anchor="middle" class="axis">结构检查</text>
+<circle cx="322.0" cy="74.0" r="4" fill="#f58518"/>
+<text x="322.0" y="378" text-anchor="middle" class="axis">预置请求双目标运</text>
+<circle cx="560.0" cy="306.8" r="4" fill="#f58518"/>
+<text x="560.0" y="378" text-anchor="middle" class="axis">状态文件结果对照</text>
+<circle cx="798.0" cy="306.8" r="4" fill="#f58518"/>
+<text x="798.0" y="378" text-anchor="middle" class="axis">Reader页面</text>
+<circle cx="1036.0" cy="323.4" r="4" fill="#f58518"/>
+<text x="1036.0" y="378" text-anchor="middle" class="axis">结果报告与图表生</text>
+</svg>

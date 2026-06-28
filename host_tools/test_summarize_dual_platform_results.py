@@ -142,6 +142,7 @@ def main() -> int:
         assert result["status"] == "ready", result
         assert str(result["monitor"]).endswith("monitor.html"), result
         assert str(result["runner_sweep_csv"]).endswith("runner-sweep.csv"), result
+        assert str(result["chart_type_coverage_csv"]).endswith("chart-type-coverage.csv"), result
         report = (out_dir / "report.md").read_text(encoding="utf-8")
         assert "普通 uCore 提取状态文件 258 个" in report
         assert "AgentOS-uCore 提取 271 个" in report
@@ -161,6 +162,13 @@ def main() -> int:
         sweep_csv = (out_dir / "runner-sweep.csv").read_text(encoding="utf-8")
         assert "scene,plain_case,agentos_case,plain_ticks,agentos_ticks,saved_ticks,speedup_x" in sweep_csv
         assert "上下文路径,user-context,agentos-context,6,1,5,6" in sweep_csv
+        coverage_csv = (out_dir / "chart-type-coverage.csv").read_text(encoding="utf-8")
+        assert "条形/柱状对比" in coverage_csv
+        assert "曲线趋势" in coverage_csv
+        assert "箱形图" in coverage_csv
+        assert "热力图" in coverage_csv
+        assert "监控面积图" in coverage_csv
+        assert "三维曲面与投影组合" in coverage_csv
         index_html = (out_dir / "index.html").read_text(encoding="utf-8")
         assert "AgentOS 双目标测试结果" in index_html
         assert "charts/dual-target-state-reader.svg" in index_html
@@ -171,6 +179,12 @@ def main() -> int:
         assert "charts/runner-ticks.svg" in index_html
         assert "charts/runner-speedup.svg" in index_html
         assert "runner-sweep.csv" in index_html
+        assert "chart-type-coverage.csv" in index_html
+        assert "charts/runner-cumulative-line.svg" in index_html
+        assert "charts/runner-tick-box.svg" in index_html
+        assert "charts/runner-cost-heatmap.svg" in index_html
+        assert "charts/stage-monitor-area.svg" in index_html
+        assert "charts/runner-surface-composite.svg" in index_html
         assert "make demo-reader" in index_html
         assert "阶段耗时明细" in index_html
         assert "预置请求双目标运行" in index_html
@@ -184,6 +198,8 @@ def main() -> int:
         assert "charts/runner-ticks.svg" in monitor_html
         assert "charts/runner-speedup.svg" in monitor_html
         assert "runner-sweep.csv" in monitor_html
+        assert "chart-type-coverage.csv" in monitor_html
+        assert "charts/runner-surface-composite.svg" in monitor_html
         for name in [
             "dual-target-state-reader.svg",
             "launch-model.svg",
@@ -194,6 +210,11 @@ def main() -> int:
             "cost-replacement.svg",
             "runner-ticks.svg",
             "runner-speedup.svg",
+            "runner-cumulative-line.svg",
+            "runner-tick-box.svg",
+            "runner-cost-heatmap.svg",
+            "stage-monitor-area.svg",
+            "runner-surface-composite.svg",
         ]:
             svg = (out_dir / "charts" / name).read_text(encoding="utf-8")
             assert "<svg" in svg

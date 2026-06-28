@@ -736,6 +736,288 @@ def runner_speedup_svg(meta: dict[str, object], out_path: Path) -> None:
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def write_chart_type_coverage_csv(out_path: Path) -> None:
+    rows = [
+        ("条形/柱状对比", "dual-target-state-reader.svg;launch-model.svg;runner-ticks.svg", "状态文件、页面、API、启动方式、runner tick；Python 标准库 SVG 生成"),
+        ("曲线趋势", "runner-cumulative-line.svg", "runner tick 累计成本；Python 标准库 SVG 生成"),
+        ("箱形图", "runner-tick-box.svg", "plain/AgentOS runner tick 分布；Python 标准库 SVG 生成"),
+        ("热力图", "runner-cost-heatmap.svg", "runner 场景与指标强弱；Python 标准库 SVG 生成"),
+        ("监控面积图", "stage-monitor-area.svg", "双目标运行阶段耗时；Python 标准库 SVG 生成"),
+        ("三维曲面与投影组合", "runner-surface-composite.svg", "runner 场景、路径类型和 tick 数值；Python 标准库 SVG 生成"),
+    ]
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["reference_chart_type", "agentos_artifacts", "data_source"])
+        writer.writerows(rows)
+
+
+def runner_cumulative_line_svg(meta: dict[str, object], out_path: Path) -> None:
+    rows = runner_tick_rows(meta)
+    if not rows:
+        rows = [{"label": "未记录", "plain_ticks": 0, "agentos_ticks": 0, "saved_ticks": 0}]
+    width, height = 1080, 440
+    left, right, top, bottom = 88, 54, 76, 78
+    plot_w, plot_h = width - left - right, height - top - bottom
+    plain_sum = 0.0
+    agentos_sum = 0.0
+    plain_points: list[tuple[float, float]] = []
+    agentos_points: list[tuple[float, float]] = []
+    labels: list[str] = []
+    for index, row in enumerate(rows):
+        plain_sum += as_number(row.get("plain_ticks"))
+        agentos_sum += as_number(row.get("agentos_ticks"))
+        x = left + (index / max(1, len(rows) - 1)) * plot_w
+        plain_points.append((x, plain_sum))
+        agentos_points.append((x, agentos_sum))
+        labels.append(str(row.get("label", ""))[:8])
+    max_value = max([1.0] + [point[1] for point in plain_points + agentos_points])
+
+    def y_pos(value: float) -> float:
+        return top + plot_h - (value / max_value) * plot_h
+
+    lines = svg_header(width, height)
+    lines.append('<text x="34" y="34" class="title">Runner 累计 Tick 曲线</text>')
+    lines.append('<text x="34" y="58" class="subtitle">按场景顺序累计 runner tick。曲线分离越明显，说明增强目标在完整流程中积累的执行成本越低。</text>')
+    for tick in range(0, int(max_value) + 1, max(1, int(math.ceil(max_value / 5)))):
+        y = y_pos(tick)
+        lines.append(f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
+        lines.append(f'<text x="{left - 10}" y="{y + 4:.1f}" text-anchor="end" class="axis">{tick}</text>')
+    for index, label in enumerate(labels):
+        x = left + (index / max(1, len(labels) - 1)) * plot_w
+        lines.append(f'<text x="{x:.1f}" y="{height - 42}" text-anchor="middle" class="axis">{escape(label)}</text>')
+    for points, color, name, y_legend in (
+        (plain_points, PALETTE["plain"], "普通用户态累计 tick", height - 22),
+        (agentos_points, PALETTE["agentos"], "AgentOS 累计 tick", height - 22),
+    ):
+        path = " ".join(f'{x:.1f},{y_pos(value):.1f}' for x, value in points)
+        lines.append(f'<polyline points="{path}" fill="none" stroke="{color}" stroke-width="3"/>')
+        for x, value in points:
+            lines.append(f'<circle cx="{x:.1f}" cy="{y_pos(value):.1f}" r="4" fill="{color}"/>')
+    lines.append(f'<rect x="{width - 350}" y="{height - 30}" width="14" height="14" fill="{PALETTE["plain"]}"/>')
+    lines.append(f'<text x="{width - 328}" y="{height - 18}" class="axis">普通用户态累计 tick</text>')
+    lines.append(f'<rect x="{width - 180}" y="{height - 30}" width="14" height="14" fill="{PALETTE["agentos"]}"/>')
+    lines.append(f'<text x="{width - 158}" y="{height - 18}" class="axis">AgentOS 累计 tick</text>')
+    lines.append("</svg>")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def percentile(values: list[float], ratio: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    pos = (len(ordered) - 1) * ratio
+    low = int(math.floor(pos))
+    high = int(math.ceil(pos))
+    if low == high:
+        return ordered[low]
+    return ordered[low] + (ordered[high] - ordered[low]) * (pos - low)
+
+
+def runner_tick_box_svg(meta: dict[str, object], out_path: Path) -> None:
+    rows = runner_tick_rows(meta)
+    plain = [as_number(row.get("plain_ticks")) for row in rows]
+    agentos = [as_number(row.get("agentos_ticks")) for row in rows]
+    if not plain:
+        plain = [0.0]
+    if not agentos:
+        agentos = [0.0]
+    width, height = 860, 420
+    left, top, plot_w, plot_h = 92, 76, 680, 250
+    max_value = max([1.0] + plain + agentos)
+
+    def x_pos(value: float) -> float:
+        return left + (value / max_value) * plot_w
+
+    def draw_box(y: int, values: list[float], color: str, label: str) -> list[str]:
+        q0 = min(values)
+        q1 = percentile(values, 0.25)
+        q2 = percentile(values, 0.5)
+        q3 = percentile(values, 0.75)
+        q4 = max(values)
+        box = [
+            f'<text x="{left - 18}" y="{y + 6}" text-anchor="end" class="label">{escape(label)}</text>',
+            f'<line x1="{x_pos(q0):.1f}" y1="{y}" x2="{x_pos(q4):.1f}" y2="{y}" stroke="{color}" stroke-width="3"/>',
+            f'<rect x="{x_pos(q1):.1f}" y="{y - 18}" width="{max(2, x_pos(q3) - x_pos(q1)):.1f}" height="36" fill="#ffffff" stroke="{color}" stroke-width="3"/>',
+            f'<line x1="{x_pos(q2):.1f}" y1="{y - 18}" x2="{x_pos(q2):.1f}" y2="{y + 18}" stroke="{color}" stroke-width="3"/>',
+            f'<line x1="{x_pos(q0):.1f}" y1="{y - 12}" x2="{x_pos(q0):.1f}" y2="{y + 12}" stroke="{color}" stroke-width="3"/>',
+            f'<line x1="{x_pos(q4):.1f}" y1="{y - 12}" x2="{x_pos(q4):.1f}" y2="{y + 12}" stroke="{color}" stroke-width="3"/>',
+            f'<text x="{x_pos(q4) + 8:.1f}" y="{y + 5}" class="axis">min {fmt_number(q0)} / mid {fmt_number(q2)} / max {fmt_number(q4)}</text>',
+        ]
+        return box
+
+    lines = svg_header(width, height)
+    lines.append('<text x="34" y="34" class="title">Runner Tick 分布箱形图</text>')
+    lines.append('<text x="34" y="58" class="subtitle">箱体展示 P25-P75，中线为中位数，横线两端为最小和最大 tick。</text>')
+    for tick in range(0, int(max_value) + 1, max(1, int(math.ceil(max_value / 5)))):
+        x = x_pos(tick)
+        lines.append(f'<line x1="{x:.1f}" y1="{top - 14}" x2="{x:.1f}" y2="{top + plot_h}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
+        lines.append(f'<text x="{x:.1f}" y="{top + plot_h + 24}" text-anchor="middle" class="axis">{tick}</text>')
+    lines.extend(draw_box(150, plain, PALETTE["plain"], "普通路径"))
+    lines.extend(draw_box(250, agentos, PALETTE["agentos"], "AgentOS"))
+    lines.append("</svg>")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def runner_cost_heatmap_svg(meta: dict[str, object], out_path: Path) -> None:
+    rows = runner_tick_rows(meta)
+    if not rows:
+        rows = [{"label": "未记录", "plain_ticks": 0, "agentos_ticks": 0, "saved_ticks": 0, "speedup_x100": 0}]
+    metrics = [
+        ("plain_ticks", "普通 tick"),
+        ("agentos_ticks", "AgentOS tick"),
+        ("saved_ticks", "节省 tick"),
+        ("speedup_x100", "相对倍数x100"),
+    ]
+    width, height = 1080, max(420, 128 + len(rows) * 38)
+    left, top, cell_w, cell_h = 190, 94, 150, 30
+    values = [as_number(row.get(key)) for row in rows for key, _ in metrics]
+    max_value = max([1.0] + values)
+
+    def color(value: float) -> str:
+        t = max(0.0, min(1.0, value / max_value))
+        r = int(238 + (245 - 238) * t)
+        g = int(243 - (243 - 133) * t)
+        b = int(248 - (248 - 24) * t)
+        return f"#{r:02x}{g:02x}{b:02x}"
+
+    lines = svg_header(width, height)
+    lines.append('<text x="34" y="34" class="title">Runner 成本热力图</text>')
+    lines.append('<text x="34" y="58" class="subtitle">颜色越深表示数值越高。该图用于快速定位哪些场景成本最高、哪些场景收益最明显。</text>')
+    for col, (_, label) in enumerate(metrics):
+        x = left + col * cell_w
+        lines.append(f'<text x="{x + cell_w / 2:.1f}" y="{top - 16}" text-anchor="middle" class="value">{escape(label)}</text>')
+    for row_index, row in enumerate(rows):
+        y = top + row_index * cell_h
+        lines.append(f'<text x="{left - 12}" y="{y + 20}" text-anchor="end" class="label">{escape(str(row.get("label", ""))[:18])}</text>')
+        for col, (key, _) in enumerate(metrics):
+            value = as_number(row.get(key))
+            if key == "speedup_x100":
+                value = value / 100.0
+            x = left + col * cell_w
+            lines.append(f'<rect x="{x}" y="{y}" width="{cell_w - 4}" height="{cell_h - 4}" fill="{color(value)}" stroke="{PALETTE["grid"]}"/>')
+            lines.append(f'<text x="{x + cell_w / 2:.1f}" y="{y + 19}" text-anchor="middle" class="axis">{fmt_number(value)}</text>')
+    lines.append("</svg>")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def stage_monitor_area_svg(meta: dict[str, object], out_path: Path) -> None:
+    raw_rows = meta.get("stage_rows", [])
+    rows = [row for row in raw_rows if isinstance(row, dict)] if isinstance(raw_rows, list) else []
+    if not rows:
+        rows = [{"stage": "未记录", "duration_seconds": "0", "status": "unknown"}]
+    durations = [as_number(row.get("duration_seconds")) for row in rows]
+    width, height = 1080, 420
+    left, right, top, bottom = 84, 44, 74, 80
+    plot_w, plot_h = width - left - right, height - top - bottom
+    max_value = max([1.0] + durations)
+    points: list[tuple[float, float]] = []
+    for index, duration in enumerate(durations):
+        x = left + (index / max(1, len(durations) - 1)) * plot_w
+        y = top + plot_h - (duration / max_value) * plot_h
+        points.append((x, y))
+    area_points = [(left, top + plot_h), *points, (left + plot_w, top + plot_h)]
+    lines = svg_header(width, height)
+    lines.append('<text x="34" y="34" class="title">双目标运行阶段监控面积图</text>')
+    lines.append('<text x="34" y="58" class="subtitle">按阶段展示耗时强弱，适合录屏时快速定位主要耗时是否集中在 QEMU 双目标运行阶段。</text>')
+    for tick in range(0, int(max_value) + 1, max(1, int(math.ceil(max_value / 5)))):
+        y = top + plot_h - (tick / max_value) * plot_h
+        lines.append(f'<line x1="{left}" y1="{y:.1f}" x2="{left + plot_w}" y2="{y:.1f}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
+        lines.append(f'<text x="{left - 10}" y="{y + 4:.1f}" text-anchor="end" class="axis">{tick}s</text>')
+    lines.append(f'<polygon points="{" ".join(f"{x:.1f},{y:.1f}" for x, y in area_points)}" fill="#fce8d4" stroke="{PALETTE["agentos"]}" stroke-width="2"/>')
+    lines.append(f'<polyline points="{" ".join(f"{x:.1f},{y:.1f}" for x, y in points)}" fill="none" stroke="{PALETTE["agentos"]}" stroke-width="3"/>')
+    for index, row in enumerate(rows):
+        x, y = points[index]
+        lines.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="{PALETTE["agentos"]}"/>')
+        lines.append(f'<text x="{x:.1f}" y="{height - 42}" text-anchor="middle" class="axis">{escape(stage_label(row.get("stage", ""))[:8])}</text>')
+    lines.append("</svg>")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def runner_surface_composite_svg(meta: dict[str, object], out_path: Path) -> None:
+    rows = runner_tick_rows(meta)
+    if not rows:
+        rows = [{"label": "未记录", "plain_ticks": 0, "agentos_ticks": 0, "saved_ticks": 0}]
+    rows = rows[:8]
+    series = [
+        ("plain_ticks", "普通路径", PALETTE["plain"]),
+        ("agentos_ticks", "AgentOS", PALETTE["agentos"]),
+        ("saved_ticks", "节省", PALETTE["shared"]),
+    ]
+    values = [[as_number(row.get(key)) for key, _, _ in series] for row in rows]
+    max_value = max([1.0] + [value for line in values for value in line])
+    width, height = 1180, 760
+    lines = svg_header(width, height)
+    lines.append('<text x="34" y="34" class="title">Runner 曲面 / 投影 / 热力组合图</text>')
+    lines.append('<text x="34" y="58" class="subtitle">上部用等距网格模拟三维曲面，中部给出二维投影，下部给出热力图。三者使用同一组 runner-sweep 数据。</text>')
+
+    def iso_point(ix: int, iy: int, value: float) -> tuple[float, float]:
+        base_x, base_y = 168, 268
+        return (
+            base_x + ix * 92 + iy * 48,
+            base_y + iy * 32 - ix * 10 - (value / max_value) * 116,
+        )
+
+    for ix, row_values in enumerate(values):
+        for iy, value in enumerate(row_values):
+            x, y = iso_point(ix, iy, value)
+            shade = "#f58518" if iy == 1 else ("#4c78a8" if iy == 0 else "#54a24b")
+            lines.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="{shade}"/>')
+            lines.append(f'<text x="{x + 6:.1f}" y="{y - 5:.1f}" class="axis">{fmt_number(value)}</text>')
+    for ix in range(len(values)):
+        for iy in range(len(series) - 1):
+            x1, y1 = iso_point(ix, iy, values[ix][iy])
+            x2, y2 = iso_point(ix, iy + 1, values[ix][iy + 1])
+            lines.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
+    for ix in range(len(values) - 1):
+        for iy in range(len(series)):
+            x1, y1 = iso_point(ix, iy, values[ix][iy])
+            x2, y2 = iso_point(ix + 1, iy, values[ix + 1][iy])
+            lines.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
+    lines.append('<text x="58" y="92" class="value">一、等距曲面视图</text>')
+
+    projection_top, projection_left, projection_w, projection_h = 360, 88, 980, 150
+    lines.append('<text x="58" y="342" class="value">二、二维投影曲线</text>')
+    for tick in range(0, int(max_value) + 1, max(1, int(math.ceil(max_value / 4)))):
+        y = projection_top + projection_h - (tick / max_value) * projection_h
+        lines.append(f'<line x1="{projection_left}" y1="{y:.1f}" x2="{projection_left + projection_w}" y2="{y:.1f}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
+        lines.append(f'<text x="{projection_left - 10}" y="{y + 4:.1f}" text-anchor="end" class="axis">{tick}</text>')
+    for iy, (key, label, color) in enumerate(series):
+        points = []
+        for ix, row in enumerate(rows):
+            x = projection_left + (ix / max(1, len(rows) - 1)) * projection_w
+            y = projection_top + projection_h - (as_number(row.get(key)) / max_value) * projection_h
+            points.append((x, y))
+        lines.append(f'<polyline points="{" ".join(f"{x:.1f},{y:.1f}" for x, y in points)}" fill="none" stroke="{color}" stroke-width="3"/>')
+        lines.append(f'<rect x="{projection_left + 720 + iy * 82}" y="{projection_top - 30}" width="12" height="12" fill="{color}"/>')
+        lines.append(f'<text x="{projection_left + 738 + iy * 82}" y="{projection_top - 19}" class="axis">{escape(label)}</text>')
+    for ix, row in enumerate(rows):
+        x = projection_left + (ix / max(1, len(rows) - 1)) * projection_w
+        lines.append(f'<text x="{x:.1f}" y="{projection_top + projection_h + 24}" text-anchor="middle" class="axis">{escape(str(row.get("label", ""))[:7])}</text>')
+
+    heat_top, heat_left, cell_w, cell_h = 590, 190, 120, 28
+    lines.append('<text x="58" y="568" class="value">三、热力图</text>')
+    for iy, (_, label, _) in enumerate(series):
+        lines.append(f'<text x="{heat_left - 12}" y="{heat_top + iy * cell_h + 19}" text-anchor="end" class="label">{escape(label)}</text>')
+    for ix, row in enumerate(rows):
+        lines.append(f'<text x="{heat_left + ix * cell_w + cell_w / 2:.1f}" y="{heat_top - 12}" text-anchor="middle" class="axis">{escape(str(row.get("label", ""))[:6])}</text>')
+    for ix, row_values in enumerate(values):
+        for iy, value in enumerate(row_values):
+            t = max(0.0, min(1.0, value / max_value))
+            fill = f"#{int(238 + 7 * t):02x}{int(243 - 110 * t):02x}{int(248 - 220 * t):02x}"
+            x = heat_left + ix * cell_w
+            y = heat_top + iy * cell_h
+            lines.append(f'<rect x="{x}" y="{y}" width="{cell_w - 4}" height="{cell_h - 4}" fill="{fill}" stroke="{PALETTE["grid"]}"/>')
+            lines.append(f'<text x="{x + cell_w / 2:.1f}" y="{y + 18}" text-anchor="middle" class="axis">{fmt_number(value)}</text>')
+    lines.append("</svg>")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Path) -> list[Path]:
     by_metric = {row.metric: row for row in rows}
     charts_dir.mkdir(parents=True, exist_ok=True)
@@ -820,6 +1102,26 @@ def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Pat
     runner_speedup_svg(meta, runner_speedup_chart)
     paths.append(runner_speedup_chart)
 
+    runner_line_chart = charts_dir / "runner-cumulative-line.svg"
+    runner_cumulative_line_svg(meta, runner_line_chart)
+    paths.append(runner_line_chart)
+
+    runner_box_chart = charts_dir / "runner-tick-box.svg"
+    runner_tick_box_svg(meta, runner_box_chart)
+    paths.append(runner_box_chart)
+
+    runner_heatmap_chart = charts_dir / "runner-cost-heatmap.svg"
+    runner_cost_heatmap_svg(meta, runner_heatmap_chart)
+    paths.append(runner_heatmap_chart)
+
+    stage_area_chart = charts_dir / "stage-monitor-area.svg"
+    stage_monitor_area_svg(meta, stage_area_chart)
+    paths.append(stage_area_chart)
+
+    surface_chart = charts_dir / "runner-surface-composite.svg"
+    runner_surface_composite_svg(meta, surface_chart)
+    paths.append(surface_chart)
+
     return paths
 
 
@@ -848,6 +1150,7 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
     for chart in charts:
         lines.append(f"- `{chart.relative_to(out_path.parent.parent).as_posix()}`")
     lines.append("- `runner-sweep.csv`")
+    lines.append("- `chart-type-coverage.csv`")
     lines.extend(
         [
             "",
@@ -954,6 +1257,11 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
         "cost-replacement.svg": "用户态成本项与 AgentOS 替代机制",
         "runner-ticks.svg": "Runner Tick 对照",
         "runner-speedup.svg": "Runner 成组场景相对倍数",
+        "runner-cumulative-line.svg": "Runner 累计 Tick 曲线",
+        "runner-tick-box.svg": "Runner Tick 分布箱形图",
+        "runner-cost-heatmap.svg": "Runner 成本热力图",
+        "stage-monitor-area.svg": "双目标运行阶段监控面积图",
+        "runner-surface-composite.svg": "Runner 曲面 / 投影 / 热力组合图",
     }
     for chart in charts:
         rel = chart.relative_to(out_path.parent).as_posix()
@@ -1041,11 +1349,13 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="report.md">查看 Markdown 报告</a>
       <a href="summary.csv">下载 CSV 明细</a>
       <a href="runner-sweep.csv">下载 runner 成组数据</a>
+      <a href="chart-type-coverage.csv">下载图表类型覆盖表</a>
       <a href="charts/runtime-observation.svg">打开观测图</a>
       <a href="charts/scenario-evidence.svg">打开场景证据图</a>
       <a href="charts/cost-replacement.svg">打开成本替代图</a>
       <a href="charts/runner-ticks.svg">打开 tick 对照图</a>
       <a href="charts/runner-speedup.svg">打开相对倍数图</a>
+      <a href="charts/runner-surface-composite.svg">打开组合图</a>
       <a href="charts/dual-target-state-reader.svg">打开状态图</a>
       <a href="charts/stage-timings.svg">打开阶段耗时图</a>
     </div>
@@ -1141,7 +1451,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>相关结果</h2>
-      <p><a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a></p>
+      <p><a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="chart-type-coverage.csv">图表类型覆盖表</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/runner-surface-composite.svg">组合图</a></p>
     </section>
   </main>
 </body>
@@ -1162,6 +1472,7 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
     out_dir.mkdir(parents=True, exist_ok=True)
     write_csv(rows, out_dir / "summary.csv")
     write_runner_sweep_csv(meta, out_dir / "runner-sweep.csv")
+    write_chart_type_coverage_csv(out_dir / "chart-type-coverage.csv")
     charts = write_charts(rows, meta, out_dir / "charts")
     write_report(rows, meta, charts, out_dir / "report.md")
     write_index(rows, meta, charts, out_dir / "index.html")
@@ -1177,6 +1488,7 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
         "monitor": str(out_dir / "monitor.html"),
         "csv": str(out_dir / "summary.csv"),
         "runner_sweep_csv": str(out_dir / "runner-sweep.csv"),
+        "chart_type_coverage_csv": str(out_dir / "chart-type-coverage.csv"),
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return summary
