@@ -658,6 +658,84 @@ def runner_tick_svg(meta: dict[str, object], out_path: Path) -> None:
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
+def runner_tick_rows(meta: dict[str, object]) -> list[dict[str, object]]:
+    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
+    raw_rows = state.get("runner_tick_comparison", [])
+    return [row for row in raw_rows if isinstance(row, dict)] if isinstance(raw_rows, list) else []
+
+
+def write_runner_sweep_csv(meta: dict[str, object], out_path: Path) -> None:
+    rows = runner_tick_rows(meta)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(
+            [
+                "scene",
+                "plain_case",
+                "agentos_case",
+                "plain_ticks",
+                "agentos_ticks",
+                "saved_ticks",
+                "speedup_x",
+            ]
+        )
+        for row in rows:
+            speedup = as_number(row.get("speedup_x100")) / 100.0
+            writer.writerow(
+                [
+                    row.get("label", ""),
+                    row.get("plain_case", ""),
+                    row.get("agentos_case", ""),
+                    fmt_number(as_number(row.get("plain_ticks"))),
+                    fmt_number(as_number(row.get("agentos_ticks"))),
+                    fmt_number(as_number(row.get("saved_ticks"))),
+                    fmt_number(speedup),
+                ]
+            )
+
+
+def runner_speedup_svg(meta: dict[str, object], out_path: Path) -> None:
+    rows = runner_tick_rows(meta)
+    if not rows:
+        rows = [{"label": "未记录", "plain_ticks": 0, "agentos_ticks": 0, "saved_ticks": 0, "speedup_x100": 0}]
+    rows = rows[:10]
+    width, height = 1120, max(460, 190 + len(rows) * 44)
+    margin_left, margin_right, margin_top = 210, 160, 92
+    plot_w = width - margin_left - margin_right
+    max_speed = max([1.0] + [as_number(row.get("speedup_x100")) / 100.0 for row in rows])
+    lines = svg_header(width, height)
+    lines.append('<text x="34" y="34" class="title">Runner 成组场景相对倍数</text>')
+    lines.append('<text x="34" y="58" class="subtitle">每个点来自 runner-sweep.csv。横向条表示 AgentOS 路径相对普通用户态路径的 tick 倍数，右侧标出节省 tick。</text>')
+    tick_step = max(1, int(math.ceil(max_speed / 5)))
+    tick = 0
+    while tick <= max_speed:
+        x = margin_left + (tick / max_speed) * plot_w if max_speed else margin_left
+        lines.append(f'<line x1="{x:.1f}" y1="{margin_top - 12}" x2="{x:.1f}" y2="{height - 52}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
+        lines.append(f'<text x="{x:.1f}" y="{height - 30}" text-anchor="middle" class="axis">{tick}x</text>')
+        tick += tick_step
+    for index, row in enumerate(rows):
+        y = margin_top + index * 44
+        label = str(row.get("label", ""))[:18]
+        speedup = as_number(row.get("speedup_x100")) / 100.0
+        saved = as_number(row.get("saved_ticks"))
+        bar_w = (speedup / max_speed) * plot_w if max_speed else 0
+        color = PALETTE["agentos"] if saved > 0 else PALETTE["neutral"]
+        value_x = margin_left + bar_w + 8
+        value_anchor = ""
+        if value_x > width - 260:
+            value_x = margin_left + max(40, bar_w - 10)
+            value_anchor = ' text-anchor="end"'
+        lines.append(f'<text x="{margin_left - 14}" y="{y + 22}" text-anchor="end" class="label">{escape(label)}</text>')
+        lines.append(f'<rect x="{margin_left}" y="{y + 4}" width="{bar_w:.1f}" height="24" fill="{color}" rx="2"/>')
+        lines.append(f'<text x="{value_x:.1f}" y="{y + 21}" class="value"{value_anchor}>{fmt_number(speedup)}x</text>')
+        lines.append(f'<text x="{width - 130}" y="{y + 21}" class="axis">省 {fmt_number(saved)} tick</text>')
+    lines.append(f'<text x="52" y="{height - 18}" class="subtitle">读图方法：1x 表示两条路径 tick 相同；超过 1x 表示 AgentOS 路径在同一场景下用更少 tick 完成。该图用于同环境相对观测。</text>')
+    lines.append("</svg>")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Path) -> list[Path]:
     by_metric = {row.metric: row for row in rows}
     charts_dir.mkdir(parents=True, exist_ok=True)
@@ -738,6 +816,10 @@ def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Pat
     runner_tick_svg(meta, runner_tick_chart)
     paths.append(runner_tick_chart)
 
+    runner_speedup_chart = charts_dir / "runner-speedup.svg"
+    runner_speedup_svg(meta, runner_speedup_chart)
+    paths.append(runner_speedup_chart)
+
     return paths
 
 
@@ -765,6 +847,7 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
     ]
     for chart in charts:
         lines.append(f"- `{chart.relative_to(out_path.parent.parent).as_posix()}`")
+    lines.append("- `runner-sweep.csv`")
     lines.extend(
         [
             "",
@@ -870,6 +953,7 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
         "scenario-evidence.svg": "AgentOS 多场景机制证据",
         "cost-replacement.svg": "用户态成本项与 AgentOS 替代机制",
         "runner-ticks.svg": "Runner Tick 对照",
+        "runner-speedup.svg": "Runner 成组场景相对倍数",
     }
     for chart in charts:
         rel = chart.relative_to(out_path.parent).as_posix()
@@ -956,10 +1040,12 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="monitor.html">打开运行观测面板</a>
       <a href="report.md">查看 Markdown 报告</a>
       <a href="summary.csv">下载 CSV 明细</a>
+      <a href="runner-sweep.csv">下载 runner 成组数据</a>
       <a href="charts/runtime-observation.svg">打开观测图</a>
       <a href="charts/scenario-evidence.svg">打开场景证据图</a>
       <a href="charts/cost-replacement.svg">打开成本替代图</a>
       <a href="charts/runner-ticks.svg">打开 tick 对照图</a>
+      <a href="charts/runner-speedup.svg">打开相对倍数图</a>
       <a href="charts/dual-target-state-reader.svg">打开状态图</a>
       <a href="charts/stage-timings.svg">打开阶段耗时图</a>
     </div>
@@ -1055,7 +1141,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>相关结果</h2>
-      <p><a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a></p>
+      <p><a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a></p>
     </section>
   </main>
 </body>
@@ -1075,6 +1161,7 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
     rows, meta = collect_rows(work_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     write_csv(rows, out_dir / "summary.csv")
+    write_runner_sweep_csv(meta, out_dir / "runner-sweep.csv")
     charts = write_charts(rows, meta, out_dir / "charts")
     write_report(rows, meta, charts, out_dir / "report.md")
     write_index(rows, meta, charts, out_dir / "index.html")
@@ -1089,6 +1176,7 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
         "index": str(out_dir / "index.html"),
         "monitor": str(out_dir / "monitor.html"),
         "csv": str(out_dir / "summary.csv"),
+        "runner_sweep_csv": str(out_dir / "runner-sweep.csv"),
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return summary

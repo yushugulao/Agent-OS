@@ -210,6 +210,7 @@ dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=
 
 ```text
 results/latest/summary.csv
+results/latest/runner-sweep.csv
 results/latest/index.html
 results/latest/monitor.html
 results/latest/report.md
@@ -218,6 +219,7 @@ results/latest/charts/runtime-observation.svg
 results/latest/charts/scenario-evidence.svg
 results/latest/charts/cost-replacement.svg
 results/latest/charts/runner-ticks.svg
+results/latest/charts/runner-speedup.svg
 results/latest/charts/launch-model.svg
 results/latest/charts/agentos-evidence.svg
 results/latest/charts/stage-timings.svg
@@ -244,6 +246,10 @@ results/latest/charts/stage-timings.svg
 ![Runner Tick 对照](assets/verification-charts/runner-ticks.svg)
 
 这张图继续读取 `rp_backend_exec`，但关注 `runner_case` 中的 `ticks` 字段。普通目标的用户态路径会记录上下文重建、manifest 扫描、文件事件交接、追加日志等动作；增强目标的对应路径会记录 Context snapshot、metadata index、event queue、ledger snapshot 等内核辅助动作。图中蓝色条和橙色条使用同一 QEMU、同一输入、同一科研流程下的相对 tick，不用于说明物理机绝对性能；它用于回答一个更具体的问题：同一类 runner 动作换成 AgentOS 机制后，流程步骤和观测 tick 是否下降。
+
+![Runner 成组场景相对倍数](assets/verification-charts/runner-speedup.svg)
+
+这张图由 `runner-sweep.csv` 生成。CSV 保留每个场景的 plain case、AgentOS case、两边 tick、节省 tick 和相对倍数；SVG 把这些成组场景按条形图展示。它对应参考项目中“参数成组变化后再解释曲线”的测试写法：即使当前 uCore/QEMU 不适合宣称物理机吞吐，仍可以在同一输入下比较上下文、文件查询、事件交接、恢复动作和审计记录的相对运行成本。录屏时可以先展示 `runner-ticks.svg` 说明每组数字，再打开 `runner-sweep.csv` 说明图表可以回到原始表格。
 
 ![科研流程启动方式组成](assets/verification-charts/launch-model.svg)
 
