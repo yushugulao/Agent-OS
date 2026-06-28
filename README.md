@@ -185,10 +185,11 @@ AgentOS-uCore 目标保留同一科研流程，但把关键阶段接入内核服
 - timeline、ledger、provenance snapshot。
 - 权限拒绝、失败恢复、文件编辑租约、工作台文件校验、证据包追踪和真实任务 Context。
 
-增强目标入口为 `rp_agentos_orch`。它创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，再运行完整科研平台流程。主流程会向 `rp_agentos_mainflow` 追加十一项事实：
+增强目标入口为 `rp_agentos_orch`。它创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，再运行完整科研平台流程。主流程会向 `rp_agentos_mainflow` 追加十二项事实：
 
 ```text
 trusted Context
+generic dependency graph + dependency-driven prefetch
 metadata indexed query
 Agent event notification
 action_commit + artifact_update recovery

@@ -566,7 +566,7 @@ int main(void)
 			   "agentos_audit_ledger=1\n"
 			   "agentos_permission_control=1\n"
 			   "agentos_timeline_observe=1\n"
-			   "agentos_mainflow_facts=11\n"
+			   "agentos_mainflow_facts=12\n"
 			   "file_scans=128\n"
 			   "state_convention=1\n"
 			   "user_permission_only=1\n"
@@ -1806,7 +1806,7 @@ int main(void)
 			if (!rp_append_file("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=8;agentos_replacements=8;risks=8;status=ready")) return 1;
 		}
 		if (!file_contains_silent("rp_report_text", "backend_evidence_report=rp_backend_exec")) {
-			if (!rp_append_file("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128,userland_lock_file;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,kernel_edit_lease,workbench_file_verify,package_trace,real_task_context;mainflow_facts=11;status=ready")) return 1;
+			if (!rp_append_file("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128,userland_lock_file;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,kernel_edit_lease,workbench_file_verify,package_trace,real_task_context;dependency_graph=kernel_records;mainflow_facts=12;status=ready")) return 1;
 		}
 		if (!rp_append_status("host_reader_actions=ready")) return 1;
 		printf("rp_web_export: host_reader_actions=%d\n", host_actions);

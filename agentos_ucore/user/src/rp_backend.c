@@ -168,6 +168,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentos_kernel", "status=ready");
 	ok = ok && rp_file_contains("rp_agentos_kernel", "context_snapshot=present");
 	ok = ok && rp_file_contains("rp_agentos_kernel", "file_meta_service=initialized");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "dependency_update=generic_record");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "prefetch_hint=dependency_driven");
 	ok = ok && rp_file_contains("rp_agentos_roles", "stage_launch=agent_create_role");
 	ok = ok && rp_file_contains("rp_agentos_recovery", "kernel_tool=action_commit,artifact_update");
 	ok = ok && rp_file_contains("rp_agentos_query", "metadata_source=kernel_file_index");
@@ -178,7 +180,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentos_package", "package_trace=kernel_provenance");
 	ok = ok && rp_file_contains("rp_agentos_real_task", "report_answer=kernel_context_record");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "context_trusted=kernel_shadow");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "dependency_graph=kernel_records");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "metadata_query=used_index");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "prefetch_hint=dependency_driven");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "agent_event_notify=kernel_queue");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "failure_recovery=generic_action");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "provenance_audit=kernel_ledger");
@@ -200,7 +204,7 @@ int main(void)
 			   "plain_ucore=ready\n"
 			   "agentos_ucore=kernel_bound\n"
 			   "agentos_mainflow_kernel=required\n"
-			   "agentos_mainflow_facts=11\n"
+			   "agentos_mainflow_facts=12\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -253,10 +257,10 @@ int main(void)
 			   "study=same-workflow-backend-study\n"
 			   "workflow_portability=rp_wfio;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;migration_status=baseline_and_agentos_observed\n"
 			   "study_metric=plain_ucore;file_scans=128;context_trusted=0;rebuild_steps=6;detail_checks=4;result=passed\n"
-			   "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;event_queue=1;recovery_tool=1;audit_ledger=1;permission_control=1;timeline_observe=1;workbench_verify=1;package_trace=1;real_task_context=1;edit_lease=1;mainflow_facts=11;detail_checks=kernel;result=passed\n"
+			   "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;dependency_graph=1;metadata_index=1;event_queue=1;recovery_tool=1;audit_ledger=1;permission_control=1;timeline_observe=1;workbench_verify=1;package_trace=1;real_task_context=1;edit_lease=1;mainflow_facts=12;detail_checks=kernel;result=passed\n"
 			   "study_handoff=rp_backend_exec->rp_agentcmp;status=ready\n"
 			   "arms=2\n"
-			   "metrics=12\n"
+			   "metrics=13\n"
 			   "plain_kernel=recorded\n"
 			   "agentos_kernel=mainflow_bound\n"
 			   "conclusion=kernel_services_reduce_scan_polling_manual_rebuild\n"
@@ -264,7 +268,7 @@ int main(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_runner", "backend_evidence_report=rp_backend_exec;plain_costs=8;agentos_replacements=8;risks=8;status=ready")) return 1;
-	if (!rp_append_file("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128,manual_retry_contract,file_polling,append_only_logs,userland_lock_file;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,capability_checked_action,kernel_event_queue,kernel_ledger_provenance,kernel_edit_lease,workbench_file_verify,package_trace,real_task_context;mainflow_facts=11;status=ready")) return 1;
+	if (!rp_append_file("rp_report_text", "backend_evidence_report=rp_backend_exec;plain_costs=file_scan_manifest,retry_file_stage_file,rebuild_steps_6,scan_records_128,manual_retry_contract,file_polling,append_only_logs,userland_lock_file;agentos_replacements=batch_tool_context,event_context,kernel_context_path,metadata_index,capability_checked_action,kernel_event_queue,kernel_ledger_provenance,kernel_edit_lease,workbench_file_verify,package_trace,real_task_context;dependency_graph=kernel_records;mainflow_facts=12;status=ready")) return 1;
 	if (kernel_backend &&
 	    !rp_append_file("rp_tool", "tool=agentos.backend_context_check")) {
 		return 1;

@@ -109,7 +109,7 @@ Host 侧负责浏览器页面、动作提交、可选云端 LLM Relay 和文件�
 | Workbench/Project | `rp_workbench`、`rp_usable`、`rp_usableproj`、`rp_projectrel` | 表示工作台、项目空间、交付和项目评审 |
 | Review/Delivery | `rp_review_dashboard`、`rp_review_pack`、`rp_package`、`rp_nbexec` | 表示评审材料、交付包、notebook 和证据包 |
 | Compare | `rp_backend`、`rp_backend_exec`、`rp_study`、`rp_agentcmp` | 表示 plain 成本、AgentOS 替代路径和比较结果 |
-| AgentOS 证据 | `rp_agentos_mainflow`、`rp_agentos_query`、`rp_agentos_recovery`、`rp_agentos_timeline`、`rp_agentos_audit`、`rp_agentos_conflict` | 表示增强内核主流程事实和专项输出 |
+| AgentOS 证据 | `rp_agentos_mainflow`、`rp_agentos_query`、`rp_agentos_recovery`、`rp_agentos_timeline`、`rp_agentos_audit`、`rp_agentos_conflict` | 表示增强内核主流程事实和专项输出，包括 Context、通用依赖图、metadata 查询、事件、恢复、审计、provenance 和文件编辑租约 |
 
 ## 页面查看器：Host Reader
 

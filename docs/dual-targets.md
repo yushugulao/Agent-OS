@@ -76,7 +76,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=rp_agentos_orch CHAPT
 
 未改动 uCore 目标已经包含可由 Host Reader 查看的一整套科研平台状态：Web/API 页面数据、动作运行器、artifact 记录、工作流记录、项目评审页、Host LLM Relay、AgentCompare 和端到端 QEMU 路径。
 
-AgentOS-uCore 目标已经把增强内核服务接入同一科研流程。入口 `rp_agentos_orch` 创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，随后运行完整 `rp_orch` 流程。主阶段会向 `rp_agentos_mainflow` 追加十一项内核事实：可信 Context、metadata 索引查询、Agent 事件通知、通用动作提交与工件状态更新、ledger/provenance 观察、sentinel 越权恢复被拒绝、timeline 观察、文件编辑租约、workbench 文件校验、证据包 provenance、真实任务报告与答案审计。
+AgentOS-uCore 目标已经把增强内核服务接入同一科研流程。入口 `rp_agentos_orch` 创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，随后运行完整 `rp_orch` 流程。主阶段会向 `rp_agentos_mainflow` 追加十二项内核事实：可信 Context、通用依赖图与依赖驱动预取、metadata 索引查询、Agent 事件通知、通用动作提交与工件状态更新、ledger/provenance 观察、sentinel 越权恢复被拒绝、timeline 观察、文件编辑租约、workbench 文件校验、证据包 provenance、真实任务报告与答案审计。
 
 Host Reader 的 Compare 页面会直接渲染 `rp_agentos_mainflow` 和相关 `rp_agentos_*` 文件。评委无需手动翻状态文件，就能在同一浏览器页面上看到 plain target 的用户态成本与 AgentOS target 的内核替代路径。
 
