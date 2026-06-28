@@ -93,6 +93,7 @@ rp_mature.c
 rp_metrics.c
 rp_modelreg.c
 rp_orch.c
+rp_opsboard.c
 rp_package.c
 rp_portability.c
 rp_prov_query.c

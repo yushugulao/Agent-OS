@@ -12,6 +12,11 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runbooks", "runbook_service_checks=16");
 	ok = ok && rp_file_contains("rp_projectrel", "project_delivery_checks=18");
 	ok = ok && rp_file_contains("rp_studyproto", "study_protocol_checks=20");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "context_trusted=kernel_shadow");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "agent_event_notify=kernel_queue");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "permission_control=sentinel_action_denied");
+	ok = ok && rp_file_contains("rp_agentos_timeline", "event_delivery=kernel_agent_queue");
+	ok = ok && rp_file_contains("rp_agentos_recovery", "kernel_tool=action_commit,artifact_update");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_opsboard",
@@ -47,7 +52,7 @@ int main(void)
 			   "handoff=ops->recovery;artifact=rp_runbooks;status=ready\n"
 			   "handoff=ops->auditor;artifact=rp_projectrel;status=ready\n"
 			   "source_files=rp_startup,rp_runner,rp_package,rp_review_dashboard,rp_runbooks,rp_projectrel,rp_studyproto\n"
-			   "agentos_adaptation=event_queue,context_ops_trace,capability_action_guard,batch_plan_executor;status=planned\n"
+			   "agentos_adaptation=event_queue,context_ops_trace,capability_action_guard,batch_plan_executor;evidence=rp_agentos_mainflow,rp_agentos_timeline,rp_agentos_recovery;result=observed;status=ready\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -55,6 +60,7 @@ int main(void)
 	if (!rp_append_file("rp_web_bundle", "research_operations_service=rp_opsboard;checks=18;active_actions=4;handoffs=3;status=ready")) return 1;
 	if (!rp_append_file("rp_review_dashboard", "subsection=research_operations;source=rp_opsboard;pending_reviews=1;handoffs=3;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "research_operations_service=checks:18;pending_reviews:1;active_actions:4;plan_items:5;handoffs:3;exports:2;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "opsboard_kernel_binding=event_queue,context_ops_trace,capability_action_guard,batch_plan_executor;source=rp_opsboard;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=opsboard;msg=research-operations;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=research_ops.summarize")) return 1;
 	if (!rp_append_file("rp_tool", "tool=research_ops.advance_next")) return 1;

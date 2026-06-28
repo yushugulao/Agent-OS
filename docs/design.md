@@ -47,7 +47,7 @@ plain target 的运行由五部分组成：
 4. `rp_orch`，通过普通 `fork`、`exec`、`waitpid` 运行多角色科研平台程序。
 5. `rp_seed_orch`，在 Host action runner 放入紧凑 `rp_host_action_seed` 后运行 seeded 程序集。
 
-AgentOS target 使用 `rp_agentos_orch` 作为入口。它创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，再运行与 plain target 可比较的科研流程。关键阶段会把内核事实写入 `rp_agentos_mainflow` 和相关 `rp_agentos_*` 文件。runbook 服务会读取事件通知、timeline、metadata 查询和恢复工具的内核状态后再生成事故处理记录；项目交付审查会读取文件 metadata、事件、Context 和 provenance 状态后再生成交付审查记录；控制面会读取 capability、事件投递、Agent 角色启动和工具调用账本后再生成控制面记录；成熟平台映射程序 `rp_mature` 在 AgentOS target 中会先读取这些真实状态文件，再把 Context Path、metadata 索引、事件队列、批量工具运行、capability 检查和证据投影标记为 observed。
+AgentOS target 使用 `rp_agentos_orch` 作为入口。它创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，再运行与 plain target 可比较的科研流程。关键阶段会把内核事实写入 `rp_agentos_mainflow` 和相关 `rp_agentos_*` 文件。runbook 服务会读取事件通知、timeline、metadata 查询和恢复工具的内核状态后再生成事故处理记录；项目交付审查会读取文件 metadata、事件、Context 和 provenance 状态后再生成交付审查记录；控制面会读取 capability、事件投递、Agent 角色启动和工具调用账本后再生成控制面记录；运营面板会读取事件队列、Context 记录、capability 拒绝和通用恢复动作后再生成执行队列和交接记录；成熟平台映射程序 `rp_mature` 在 AgentOS target 中会先读取这些真实状态文件，再把 Context Path、metadata 索引、事件队列、批量工具运行、capability 检查和证据投影标记为 observed。
 
 ## 操作系统内核机制
 

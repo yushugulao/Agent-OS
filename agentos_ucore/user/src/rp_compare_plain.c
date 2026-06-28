@@ -1545,9 +1545,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_opsboard", "active_plan_items=5");
 	ok = ok && rp_file_contains("rp_opsboard", "ready_handoffs=3");
 	ok = ok && rp_file_contains("rp_opsboard", "report_export=research-ops-report:RUN-042");
-	ok = ok && rp_file_contains("rp_opsboard", "agentos_adaptation=event_queue,context_ops_trace,capability_action_guard,batch_plan_executor;status=planned");
+	ok = ok && rp_file_contains("rp_opsboard", "agentos_adaptation=event_queue,context_ops_trace,capability_action_guard,batch_plan_executor;evidence=rp_agentos_mainflow,rp_agentos_timeline,rp_agentos_recovery;result=observed;status=ready");
 	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=research_operations;source=rp_opsboard;pending_reviews=1;handoffs=3;status=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "research_operations_service=checks:18");
+	ok = ok && rp_file_contains("rp_agentcmp", "opsboard_kernel_binding=event_queue,context_ops_trace,capability_action_guard,batch_plan_executor;source=rp_opsboard;status=ready");
 	ok = ok && rp_file_contains("rp_reviewboard", "review_board_checks=24");
 	ok = ok && rp_file_contains("rp_reviewboard", "review_votes=4");
 	ok = ok && rp_file_contains("rp_reviewboard", "review_signoffs=4");
