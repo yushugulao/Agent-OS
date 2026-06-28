@@ -2284,7 +2284,7 @@ int main(void)
 	ok = ok && require_file_token("rp_mature_map", "agentos_targets=kernel_context_path,kernel_metadata_index,kernel_event_queue,batch_tool_runner,capability_contract_table");
 	ok = ok && require_file_token("rp_mature_checks", "checks=72");
 	ok = ok && require_file_token("rp_mature_checks", "check=surface.site;target=mature.html;result=pass;status=ready");
-	ok = ok && require_file_token("rp_mature_checks", "check=agentos.batch_runner;target=batch_tool_runner;result=planned;status=ready");
+	ok = ok && require_file_token("rp_mature_checks", "check=agentos.batch_runner;target=batch_tool_runner;result=observed;status=ready");
 	ok = ok && require_file_token("rp_web_bundle", "mature_capability_page=rp_mature;profiles=6;mappings=6;checks=72;status=ready");
 	ok = ok && require_file_token("rp_review_dashboard", "subsection=mature_capabilities;source=rp_mature;profiles=6;mappings=6;checks=72;outcome=passed;status=ready");
 	ok = ok && require_file_token("rp_agentcmp", "mature_capability_checks=72");

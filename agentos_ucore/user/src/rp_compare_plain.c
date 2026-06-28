@@ -1778,7 +1778,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_mature_map", "agentos_targets=kernel_context_path,kernel_metadata_index,kernel_event_queue,batch_tool_runner,capability_contract_table");
 	ok = ok && rp_file_contains("rp_mature_checks", "checks=72");
 	ok = ok && rp_file_contains("rp_mature_checks", "check=surface.site;target=mature.html;result=pass;status=ready");
-	ok = ok && rp_file_contains("rp_mature_checks", "check=agentos.batch_runner;target=batch_tool_runner;result=planned;status=ready");
+	ok = ok && rp_file_contains("rp_mature_checks", "check=agentos.batch_runner;target=batch_tool_runner;result=observed;status=ready");
 	ok = ok && rp_file_contains("rp_web_bundle", "mature_capability_page=rp_mature;profiles=6;mappings=6;checks=72;status=ready");
 	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=mature_capabilities;source=rp_mature;profiles=6;mappings=6;checks=72;outcome=passed;status=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "mature_capability_checks=72");
@@ -1961,7 +1961,7 @@ int main(void)
 	if (!rp_append_file("rp_agentcmp", "integrity_plane_checks=36;evidence_contracts=8;reference_contracts=8;namespace_checks=5;status_checks=5;review_alignment_checks=4;report_source_checks=3;package_trace_checks=3;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "coherence_plane_checks=40;delivery_contracts=7;run_state_contracts=7;lifecycle_contracts=6;workflow_lint=5;tool_protocol=5;report_validation=5;agent_coordination=3;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "publication_checks=48;targets=2;submissions=2;review_rounds=2;revision_tasks=3;response_packages=2;response_items=4;decisions=2;agentos_replacements=4;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "mature_capability_checks=72;profiles=6;mappings=6;checks=72;platforms=Galaxy,AiiDA,DVC,MLflow,Nextflow,Snakemake;agentos_replacements=5;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "mature_capability_checks=72;profiles=6;mappings=6;checks=72;platforms=Galaxy,AiiDA,DVC,MLflow,Nextflow,Snakemake;agentos_replacements=6;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "provenance_view_checks=64;timeline_views=4;subgraphs=3;packets=4;agentos_replacements=4;kernel_timeline=observed;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "provenance_query_checks=72;specs=3;templates=1;executions=3;comparisons=1;exports=1;packets=1;agentos_replacements=4;kernel_timeline=observed;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "llm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready")) return 1;
