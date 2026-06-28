@@ -22,32 +22,101 @@ if [ ! -f "${STATE_DIR}/rp_agentos_mainflow" ]; then
 fi
 
 mkdir -p "${OUT_DIR}"
-rm -rf "${OUT_DIR}/dual-results" "${OUT_DIR}/dual-results.html"
+rm -rf "${OUT_DIR}/dual-results" "${OUT_DIR}/dual-results.html" "${OUT_DIR}/demo-url-list.txt"
 if [ -f "${RESULT_DIR}/monitor.html" ]; then
 	mkdir -p "${OUT_DIR}/dual-results"
 	cp -R "${RESULT_DIR}/." "${OUT_DIR}/dual-results/"
+	cat >"${OUT_DIR}/demo-url-list.txt" <<EOF
+AgentOS 录屏 URL 清单
+
+1. Reader 首页
+   http://127.0.0.1:${PORT}/
+2. 双目标结果入口
+   http://127.0.0.1:${PORT}/dual-results.html
+3. 演示导览页
+   http://127.0.0.1:${PORT}/dual-results/demo-guide.html
+4. 演示检查表
+   http://127.0.0.1:${PORT}/dual-results/demo-checklist.html
+5. 测试入口说明
+   http://127.0.0.1:${PORT}/dual-results/test-suite.html
+6. 实验场景说明
+   http://127.0.0.1:${PORT}/dual-results/experiment-design.html
+7. 运行观测面板
+   http://127.0.0.1:${PORT}/dual-results/monitor.html
+8. 图表索引页
+   http://127.0.0.1:${PORT}/dual-results/index.html
+9. 证据索引页
+   http://127.0.0.1:${PORT}/dual-results/evidence-map.html
+10. Runner 统计摘要
+   http://127.0.0.1:${PORT}/dual-results/runner-statistics.html
+11. AgentOS Compare
+   http://127.0.0.1:${PORT}/compare.html
+12. LLM Relay
+   http://127.0.0.1:${PORT}/llm.html
+13. Run Detail
+   http://127.0.0.1:${PORT}/run.html
+14. Evidence
+   http://127.0.0.1:${PORT}/evidence.html
+15. Artifacts
+   http://127.0.0.1:${PORT}/artifacts.html
+EOF
 	cat >"${OUT_DIR}/dual-results.html" <<EOF
 <!doctype html>
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AgentOS 双目标结果入口</title>
+  <title>AgentOS 录屏 URL 清单</title>
   <style>
-    body { font-family: Arial, "Microsoft YaHei", sans-serif; margin: 32px; color: #1f2937; line-height: 1.7; }
-    a { display: inline-block; margin: 8px 12px 8px 0; color: #075985; text-decoration: none; border: 1px solid #d8dee6; padding: 8px 12px; }
+    body { font-family: Arial, "Microsoft YaHei", sans-serif; margin: 0; color: #1f2937; background: #f7f9fb; line-height: 1.7; }
+    header { background: #fff; border-bottom: 1px solid #d8dee6; padding: 30px 42px 20px; }
+    main { max-width: 1120px; margin: 0 auto; padding: 24px 42px 42px; }
+    h1 { margin: 0 0 10px; font-size: 28px; }
+    h2 { margin-top: 26px; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+    a { display: block; color: #075985; text-decoration: none; border: 1px solid #d8dee6; background: #fff; padding: 10px 12px; }
+    .primary a { border-color: #94a3b8; }
+    .hint { color: #52616f; }
+    @media (max-width: 760px) { .grid { grid-template-columns: 1fr; } main, header { padding-left: 18px; padding-right: 18px; } }
   </style>
 </head>
 <body>
-  <h1>AgentOS 双目标结果入口</h1>
-  <p>这些页面来自 ${RESULT_DIR}，已复制到当前 Reader 服务目录。录屏时可以先打开运行观测面板，再返回 Reader 首页查看完整科研平台页面。</p>
-  <p>
-    <a href="dual-results/monitor.html">运行观测面板</a>
-    <a href="dual-results/demo-guide.html">演示导览页</a>
-    <a href="dual-results/index.html">图表索引页</a>
-    <a href="dual-results/report.md">Markdown 报告</a>
-    <a href="dual-results/summary.csv">CSV 明细</a>
-  </p>
+  <header>
+    <h1>AgentOS 录屏 URL 清单</h1>
+    <p class="hint">这些页面来自 ${RESULT_DIR}，已复制到当前 Reader 服务目录。录屏时建议先打开演示导览页，再进入完整科研平台页面。</p>
+  </header>
+  <main>
+    <h2>推荐展示顺序</h2>
+    <div class="grid primary">
+      <a href="dual-results/demo-guide.html">1. 演示导览页</a>
+      <a href="dual-results/demo-checklist.html">2. 演示检查表</a>
+      <a href="dual-results/test-suite.html">3. 测试入口说明</a>
+      <a href="dual-results/experiment-design.html">4. 实验场景说明</a>
+      <a href="dual-results/monitor.html">5. 运行观测面板</a>
+      <a href="dual-results/index.html">6. 图表索引页</a>
+      <a href="dual-results/evidence-map.html">7. 证据索引页</a>
+      <a href="dual-results/runner-statistics.html">8. Runner 统计摘要</a>
+      <a href="compare.html">9. AgentOS Compare</a>
+      <a href="llm.html">10. LLM Relay</a>
+    </div>
+    <h2>科研平台页面</h2>
+    <div class="grid">
+      <a href="index.html">Reader 首页</a>
+      <a href="run.html">Run Detail</a>
+      <a href="evidence.html">Evidence</a>
+      <a href="artifacts.html">Artifacts</a>
+      <a href="delivery.html">Delivery</a>
+      <a href="provenance.html">Provenance</a>
+    </div>
+    <h2>可下载结果</h2>
+    <div class="grid">
+      <a href="dual-results/report.md">Markdown 报告</a>
+      <a href="dual-results/summary.csv">CSV 明细</a>
+      <a href="dual-results/runner-sweep.csv">Runner 成组数据</a>
+      <a href="dual-results/runner-statistics.csv">Runner 统计摘要 CSV</a>
+      <a href="demo-url-list.txt">纯文本 URL 清单</a>
+    </div>
+  </main>
 </body>
 </html>
 EOF
@@ -60,8 +129,14 @@ echo "[demo-reader] 输出目录：${OUT_DIR}"
 echo "[demo-reader] 页面地址：http://127.0.0.1:${PORT}/"
 if [ -f "${OUT_DIR}/dual-results.html" ]; then
 	echo "[demo-reader] 双目标结果入口：http://127.0.0.1:${PORT}/dual-results.html"
-	echo "[demo-reader] 运行观测面板：http://127.0.0.1:${PORT}/dual-results/monitor.html"
 	echo "[demo-reader] 演示导览页：http://127.0.0.1:${PORT}/dual-results/demo-guide.html"
+	echo "[demo-reader] 演示检查表：http://127.0.0.1:${PORT}/dual-results/demo-checklist.html"
+	echo "[demo-reader] 测试入口说明：http://127.0.0.1:${PORT}/dual-results/test-suite.html"
+	echo "[demo-reader] 实验场景说明：http://127.0.0.1:${PORT}/dual-results/experiment-design.html"
+	echo "[demo-reader] 运行观测面板：http://127.0.0.1:${PORT}/dual-results/monitor.html"
+	echo "[demo-reader] 图表索引页：http://127.0.0.1:${PORT}/dual-results/index.html"
+	echo "[demo-reader] 证据索引页：http://127.0.0.1:${PORT}/dual-results/evidence-map.html"
+	echo "[demo-reader] 纯文本URL清单：http://127.0.0.1:${PORT}/demo-url-list.txt"
 fi
 "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/plain_ucore_reader.py" \
 	--state-dir "${STATE_DIR}" \

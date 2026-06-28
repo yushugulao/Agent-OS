@@ -2289,6 +2289,30 @@ def main() -> int:
             "<!doctype html><html><body>AgentOS 演示导览</body></html>",
             encoding="utf-8",
         )
+        (out_dir / "dual-results" / "demo-checklist.html").write_text(
+            "<!doctype html><html><body>AgentOS 演示检查表</body></html>",
+            encoding="utf-8",
+        )
+        (out_dir / "dual-results" / "test-suite.html").write_text(
+            "<!doctype html><html><body>AgentOS 测试入口说明</body></html>",
+            encoding="utf-8",
+        )
+        (out_dir / "dual-results" / "experiment-design.html").write_text(
+            "<!doctype html><html><body>AgentOS 实验场景说明</body></html>",
+            encoding="utf-8",
+        )
+        (out_dir / "dual-results" / "evidence-map.html").write_text(
+            "<!doctype html><html><body>AgentOS 证据索引</body></html>",
+            encoding="utf-8",
+        )
+        (out_dir / "dual-results.html").write_text(
+            "<!doctype html><html><body>AgentOS 录屏 URL 清单<a href=\"dual-results/test-suite.html\">测试入口说明</a></body></html>",
+            encoding="utf-8",
+        )
+        (out_dir / "demo-url-list.txt").write_text(
+            "AgentOS 录屏 URL 清单\nhttp://127.0.0.1:8767/dual-results/test-suite.html\n",
+            encoding="utf-8",
+        )
         (out_dir / "dual-results" / "charts" / "runtime-observation.svg").write_text(
             '<svg xmlns="http://www.w3.org/2000/svg"><text>运行观测图</text></svg>',
             encoding="utf-8",
@@ -2422,6 +2446,22 @@ def main() -> int:
             with request.urlopen(base + "/dual-results/demo-guide.html", timeout=5) as response:
                 demo_html = response.read().decode("utf-8")
             assert "AgentOS 演示导览" in demo_html
+            with request.urlopen(base + "/dual-results.html", timeout=5) as response:
+                result_entry = response.read().decode("utf-8")
+            assert "AgentOS 录屏 URL 清单" in result_entry
+            assert "dual-results/test-suite.html" in result_entry
+            with request.urlopen(base + "/demo-url-list.txt", timeout=5) as response:
+                url_text = response.read().decode("utf-8")
+            assert "AgentOS 录屏 URL 清单" in url_text
+            with request.urlopen(base + "/dual-results/test-suite.html", timeout=5) as response:
+                suite_html = response.read().decode("utf-8")
+            assert "AgentOS 测试入口说明" in suite_html
+            with request.urlopen(base + "/dual-results/experiment-design.html", timeout=5) as response:
+                design_html = response.read().decode("utf-8")
+            assert "AgentOS 实验场景说明" in design_html
+            with request.urlopen(base + "/dual-results/evidence-map.html", timeout=5) as response:
+                evidence_html = response.read().decode("utf-8")
+            assert "AgentOS 证据索引" in evidence_html
             with request.urlopen(base + "/dual-results/charts/runtime-observation.svg", timeout=5) as response:
                 svg_type = response.headers.get("Content-Type", "")
                 svg_text = response.read().decode("utf-8")
