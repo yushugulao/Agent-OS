@@ -40,6 +40,7 @@ void rinode(uint inum, struct dinode *ip);
 void rsect(uint sec, void *buf);
 uint ialloc(ushort type);
 void iappend(uint inum, void *p, int n);
+void require_free_block(const char *context);
 
 // convert to intel byte order
 ushort xshort(ushort x)
@@ -196,6 +197,16 @@ void rsect(uint sec, void *buf)
 	}
 }
 
+void require_free_block(const char *context)
+{
+	if (freeblock >= FSSIZE) {
+		fprintf(stderr,
+			"mkfs: out of data blocks while writing %s: freeblock=%u FSSIZE=%d\n",
+			context, freeblock, FSSIZE);
+		exit(1);
+	}
+}
+
 uint ialloc(ushort type)
 {
 	uint inum = freeinode++;
@@ -213,7 +224,7 @@ void balloc(int used)
 {
 	uchar buf[BSIZE];
 	int i;
-	assert(used < BSIZE * 8);
+	assert(used <= BSIZE * 8);
 	bzero(buf, BSIZE);
 	for (i = 0; i < used; i++) {
 		buf[i / 8] = buf[i / 8] | (0x1 << (i % 8));
@@ -239,15 +250,18 @@ void iappend(uint inum, void *xp, int n)
 		assert(fbn < MAXFILE);
 		if (fbn < NDIRECT) {
 			if (xint(din.addrs[fbn]) == 0) {
+				require_free_block("direct file data");
 				din.addrs[fbn] = xint(freeblock++);
 			}
 			x = xint(din.addrs[fbn]);
 		} else {
 			if (xint(din.addrs[NDIRECT]) == 0) {
+				require_free_block("indirect block table");
 				din.addrs[NDIRECT] = xint(freeblock++);
 			}
 			rsect(xint(din.addrs[NDIRECT]), (char *)indirect);
 			if (indirect[fbn - NDIRECT] == 0) {
+				require_free_block("indirect file data");
 				indirect[fbn - NDIRECT] = xint(freeblock++);
 				wsect(xint(din.addrs[NDIRECT]),
 				      (char *)indirect);
