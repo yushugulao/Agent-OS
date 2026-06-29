@@ -1,19 +1,20 @@
 # 文档索引
 
-本目录是项目文档阅读入口。文档结构采用竞赛展示文档常见写法：README 负责基本信息、项目简介、完成情况和快速运行；设计文档负责架构图、模块职责和关键决策；API/ABI 文档负责说明用户态与内核的接口分工；验证文档负责用测试场景、输出标记和性能观测说明项目是否可复现。
+本目录是项目文档阅读入口。README 负责基本信息、项目简介、完成情况和快速运行；设计文档负责架构图、模块职责和关键决策；API/ABI 文档负责说明用户态与内核的接口分工；验证文档负责用测试场景、输出标记和性能观测说明项目是否可复现。
+
+如果是第一次阅读，建议先从仓库根目录 README 理解科研 Agent 平台、普通 uCore 对照目标和 AgentOS-uCore 增强目标之间的关系，再进入本目录查看内核机制细节。
 
 ## 推荐阅读顺序
 
 | 顺序 | 文档 | 用途 |
 | ---: | --- | --- |
-| 1 | [../README.md](../README.md) | 项目概览、构建运行、当前完成状态 |
-| 2 | [documentation-standard.md](documentation-standard.md) | 本项目采用的文档标准和重构原则 |
-| 3 | [design.md](design.md) | 主设计文档：架构、模块、运行视图、决策、风险 |
-| 4 | [requirements-traceability.md](requirements-traceability.md) | 赛题要求到实现位置、测试证据和文档材料的对应表 |
-| 5 | [api.md](api.md) | 系统调用、Agent ABI、工具协议和错误语义 |
-| 6 | [verification.md](verification.md) | 验证计划、测试场景、测试覆盖表、性能数据摘要 |
-| 7 | [testing-details.md](testing-details.md) | `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore` 和 `agentsecurity_ucore` 的逐项测试说明 |
-| 8 | [demo-script.md](demo-script.md) | 现场讲解或视频演示脚本 |
+| 1 | [../../README.md](../../README.md) | 项目概览、构建运行、当前完成状态 |
+| 2 | [design.md](design.md) | 主设计文档：架构、模块、运行视图、关键决策、当前范围和取舍 |
+| 3 | [requirements-traceability.md](requirements-traceability.md) | 赛题要求到实现位置、测试证据和文档材料的对应表 |
+| 4 | [api.md](api.md) | 系统调用、Agent ABI、工具协议和错误语义 |
+| 5 | [verification.md](verification.md) | 验证计划、测试场景、测试覆盖表、性能数据摘要 |
+| 6 | [testing-details.md](testing-details.md) | `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore` 和 `agentsecurity_ucore` 的逐项测试说明 |
+| 7 | [scenario-script.md](scenario-script.md) | 综合场景运行脚本 |
 
 ## 详细附录
 
@@ -28,14 +29,14 @@
 | [assets/agentos_arch.svg](assets/agentos_arch.svg) | 用户态/内核态总架构图 |
 | [assets/agentos_telemetry_pipeline.svg](assets/agentos_telemetry_pipeline.svg) | 内核记录到平台页面的数据路径图 |
 | [assets/agentos_test_evidence.svg](assets/agentos_test_evidence.svg) | 测试证据组织图 |
-| [../LICENSE](../LICENSE) | 源代码 GPL-3.0 |
-| [../DOCUMENTATION_LICENSE.md](../DOCUMENTATION_LICENSE.md) | 文档与答辩材料 CC BY-SA 4.0 |
-| [../NOTICE](../NOTICE) | 第三方来源和许可声明 |
+| [../../LICENSE](../../LICENSE) | 源代码 GPL-3.0 |
+| [../../DOCUMENTATION_LICENSE.md](../../DOCUMENTATION_LICENSE.md) | 文档与结果材料 CC BY-SA 4.0 |
+| [../../NOTICE](../../NOTICE) | 第三方来源和许可声明 |
 
 ## 文档维护约定
 
 - 主设计事实以 [design.md](design.md) 为准，分任务文档只展开实现细节。
 - 用户态/内核态接口分工和结构体布局以 [api.md](api.md) 为准。
 - 赛题完成度判断以 [requirements-traceability.md](requirements-traceability.md) 和 [verification.md](verification.md) 共同为准。
-- 新增功能必须同步更新对应设计说明、API/ABI、验证记录和演示脚本。
+- 新增功能需要同步更新对应设计说明、API/ABI、验证记录和示例脚本。
 - `test-record.md` 保留测试输出摘要，不替代验证结论。

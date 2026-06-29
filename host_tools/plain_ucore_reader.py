@@ -53,7 +53,7 @@ PAGE_SPECS = [
     ("mature.html", "Mature Platforms", "rp_mature", ["rp_mature_refs", "rp_mature_map", "rp_mature_checks", "rp_agentcmp", "rp_review_dashboard"]),
     ("provenance.html", "Provenance", "rp_prov_view", ["rp_prov_edges", "rp_evidence_packet", "rp_timeline_view", "rp_agentcmp", "rp_review_dashboard"]),
     ("provenance-queries.html", "Provenance Queries", "rp_prov_query", ["rp_prov_specs", "rp_prov_exec", "rp_prov_query_pkg", "rp_agentcmp", "rp_review_dashboard"]),
-    ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets"]),
+    ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets", "rp_llm_conclusions"]),
     ("actions.html", "Actions", "rp_api_action", ["rp_actionio", "rp_host_run_result", "rp_web_routes", "rp_web_bundle"]),
 ]
 
@@ -1468,13 +1468,13 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Host Pages", metric_value(state, [("rp_api_catalog", "host_page_routes"), ("rp_web_routes", "host_page_routes")]), "rp_api_catalog"),
         ("Host Dynamic Pages", metric_value(state, [("rp_api_catalog", "host_dynamic_page_prefixes"), ("rp_web_routes", "host_dynamic_page_prefixes")]), "rp_api_catalog"),
         ("Host Downloads", metric_value(state, [("rp_api_catalog", "host_download_routes"), ("rp_web_routes", "host_download_routes")]), "rp_api_catalog"),
-        ("Reader GET Routes", metric_value(state, [("rp_api_catalog", "ucore_get_routes"), ("rp_web_routes", "get_routes")]), "rp_api_catalog"),
-        ("Reader Dynamic Prefixes", metric_value(state, [("rp_api_catalog", "ucore_dynamic_page_prefixes"), ("rp_web_routes", "ucore_dynamic_page_prefixes")]), "rp_api_catalog"),
-        ("Reader Downloads", metric_value(state, [("rp_api_catalog", "ucore_download_routes"), ("rp_web_routes", "ucore_download_routes")]), "rp_api_catalog"),
+        ("阅读器 GET 路由", metric_value(state, [("rp_api_catalog", "ucore_get_routes"), ("rp_web_routes", "get_routes")]), "rp_api_catalog"),
+        ("阅读器动态前缀", metric_value(state, [("rp_api_catalog", "ucore_dynamic_page_prefixes"), ("rp_web_routes", "ucore_dynamic_page_prefixes")]), "rp_api_catalog"),
+        ("阅读器下载入口", metric_value(state, [("rp_api_catalog", "ucore_download_routes"), ("rp_web_routes", "ucore_download_routes")]), "rp_api_catalog"),
         ("Grouped Routes", metric_value(state, [("rp_api_catalog", "api_grouped_routes")]), "rp_api_catalog"),
         ("API Groups", metric_value(state, [("rp_api_catalog", "api_group_count")]), "rp_api_catalog"),
-        ("Reader Payloads", metric_value(state, [("rp_api_catalog", "reader_api_payloads"), ("rp_web_bundle", "api_payloads")]), "rp_api_catalog"),
-        ("Reader Views", metric_value(state, [("rp_api_catalog", "reader_views"), ("rp_web_bundle", "reader_views")]), "rp_api_catalog"),
+        ("阅读器数据载荷", metric_value(state, [("rp_api_catalog", "reader_api_payloads"), ("rp_web_bundle", "api_payloads")]), "rp_api_catalog"),
+        ("阅读器页面", metric_value(state, [("rp_api_catalog", "reader_views"), ("rp_web_bundle", "reader_views")]), "rp_api_catalog"),
         ("Usable Research APIs", metric_value(state, [("rp_api_catalog", "usable_research_api_routes")]), "rp_api_catalog"),
         ("Domain APIs", metric_value(state, [("rp_api_catalog", "domain_api_routes")]), "rp_api_catalog"),
         ("Lab Research APIs", metric_value(state, [("rp_api_catalog", "lab_research_api_routes")]), "rp_api_catalog"),
@@ -1834,7 +1834,7 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Selected Template", metric_value(state, [("rp_usabletpl", "selected_template")]), "rp_usabletpl"),
         ("Next Action", metric_value(state, [("rp_usable", "next_action")]), "rp_usable"),
         ("Package", metric_value(state, [("rp_package", "usable_research")]), "rp_package"),
-        ("Reader Page", metric_value(state, [("rp_web_bundle", "usable_research_page")]), "rp_web_bundle"),
+        ("阅读器页面", metric_value(state, [("rp_web_bundle", "usable_research_page")]), "rp_web_bundle"),
         ("Review Dashboard", metric_value(state, [("rp_review_dashboard", "subsection")]), "rp_review_dashboard"),
     ]
     usable_project_detail_items = [
@@ -1846,7 +1846,7 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Launch", metric_value(state, [("rp_usablelaunch", "launch")]), "rp_usablelaunch"),
         ("Project Bundle", metric_value(state, [("rp_usablepack", "bundle")]), "rp_usablepack"),
         ("Package Intake", metric_value(state, [("rp_usablepack", "intake")]), "rp_usablepack"),
-        ("Reader Page", metric_value(state, [("rp_web_bundle", "usable_project_page")]), "rp_web_bundle"),
+        ("阅读器页面", metric_value(state, [("rp_web_bundle", "usable_project_page")]), "rp_web_bundle"),
     ]
     mature_detail_items = [
         ("Profile Checks", metric_value(state, [("rp_mature", "profile_checks")]), "rp_mature"),
@@ -1860,7 +1860,7 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Timeline Events", metric_value(state, [("rp_prov_view", "timeline_events"), ("rp_timeline", "events")]), "rp_timeline"),
         ("Subgraph Edges", metric_value(state, [("rp_prov_view", "subgraph_edges"), ("rp_prov_edges", "edges")]), "rp_prov_edges"),
         ("Evidence Packets", metric_value(state, [("rp_evidence_packet", "packets")]), "rp_evidence_packet"),
-        ("Reader Page", metric_value(state, [("rp_prov_view", "reader_page")]), "rp_prov_view"),
+        ("阅读器页面", metric_value(state, [("rp_prov_view", "reader_page")]), "rp_prov_view"),
         ("Kernel Timeline", metric_value(state, [("rp_prov_view", "agentos_kernel_timeline")]), "rp_prov_view"),
         ("Kernel Provenance", metric_value(state, [("rp_prov_view", "agentos_kernel_provenance")]), "rp_prov_view"),
     ]
@@ -3089,7 +3089,7 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
             ("Publication Workflow", metric_value(state, [("rp_agentcmp", "publication_checks"), ("rp_publication", "publication_checks")])),
             ("Experiment Schedule", metric_value(state, [("rp_agentcmp", "experiment_scheduling_checks"), ("rp_expsched", "experiment_scheduling_checks")])),
             ("Training Compliance", metric_value(state, [("rp_agentcmp", "training_compliance_checks"), ("rp_traincomp", "training_compliance_checks")])),
-            ("Reader Contract", metric_value(state, [("rp_agentcmp", "reader_contract")])),
+            ("阅读器契约", metric_value(state, [("rp_agentcmp", "reader_contract")])),
         ]
         check_rows = [
             ("Coherence Checks", metric_value(state, [("rp_api_compare", "coherence_checks"), ("rp_ui_compare", "coherence_checks")])),
@@ -3159,7 +3159,7 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                             ("Host Modules", "host_modules"),
                             ("Plain Sources", "plain_sources"),
                             ("AgentOS Sources", "agentos_sources"),
-                            ("Reader Keywords", "reader_keywords"),
+                            ("阅读器关键词", "reader_keywords"),
                             ("Plain Runtime", "plain_runtime_hits"),
                             ("AgentOS Runtime", "agentos_runtime_hits"),
                         ],
@@ -4326,7 +4326,7 @@ def default_batch_payload() -> str:
             {"path": "/actions/research/workbench-handoff-package", "payload": {"workbench": "usable-workbench:RUN-WEB", "handoff_scope": "full"}},
             {"path": "/actions/research/workbench-complete", "payload": {"workbench": "usable-workbench:RUN-WEB", "review_decision": "approved"}},
             {"path": "/actions/research/export-workbench", "payload": {"workbench": "usable-workbench:RUN-WEB", "bundle": "workbench-bundle.zip"}},
-            {"path": "/actions/research/project-scaffold", "payload": {"template_id": "scaffold-template:dataset-review", "project_id": "reader-project", "title": "Reader project", "dataset_id": "dataset-reader", "library_source_id": "library-reader", "files": "9", "workspace": "workspace/reader-project"}},
+            {"path": "/actions/research/project-scaffold", "payload": {"template_id": "scaffold-template:dataset-review", "project_id": "reader-project", "title": "阅读器项目", "dataset_id": "dataset-reader", "library_source_id": "library-reader", "files": "9", "workspace": "workspace/reader-project"}},
             {"path": "/actions/research/project-launch", "payload": {"project_id": "reader-project", "scaffold_id": "scaffold:reader-project:dataset-review", "workbench_id": "usable-workbench:reader-project", "run_id": "usable-run:reader-project", "provider_id": "template", "question": "Is the reader project ready?"}},
             {"path": "/actions/research/project-action-execute", "payload": {"project_id": "reader-project", "action_id": "usable-project-action:reader-project:1", "action_key": "build_reproduction_package", "provider_id": "template", "max_steps": "5", "result": "completed"}},
             {"path": "/actions/research/project-handoff-audit", "payload": {"project_id": "lab-gene-x", "scope": "full", "decision": "ready"}},

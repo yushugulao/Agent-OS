@@ -110,11 +110,11 @@ def main() -> int:
         write_fixture(work_dir)
         summary.summarize(work_dir, out_dir)
         charts = sorted((out_dir / "charts").glob("*.svg"))
-        assert len(charts) >= 10, charts
+        assert len(charts) >= 11, charts
         for chart in charts:
             validate_chart(chart)
     doc_charts = sorted((repo_root / "docs" / "assets" / "verification-charts").glob("*.svg"))
-    assert len(doc_charts) >= 10, doc_charts
+    assert len(doc_charts) >= 11, doc_charts
     for chart in doc_charts:
         validate_chart(chart)
     print("test_chart_svg_layout_contract: passed")

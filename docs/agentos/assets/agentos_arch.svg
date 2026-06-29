@@ -26,7 +26,7 @@
   <rect x="300" y="82" width="650" height="160" fill="#b8d8a4" class="box"/>
   <text x="326" y="126" class="label">用户态 Agent 程序</text>
   <text x="326" y="160" class="small">编排 / 哨兵 / 分析 / 恢复 / 中继</text>
-  <text x="326" y="194" class="tiny">综合演示、最终验收、性能观测、科研平台编排</text>
+  <text x="326" y="194" class="tiny">综合示例、最终验收、性能观测、科研平台编排</text>
   <rect x="985" y="105" width="220" height="120" fill="#b7d1e8" class="box"/>
   <text x="1025" y="148" class="label">宿主机工具</text>
   <text x="1016" y="178" class="small">页面读取 / 大模型中继</text>

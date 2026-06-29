@@ -125,7 +125,7 @@ struct inode *ialloc(uint dev, short type)
 }
 
 // Copy a modified in-memory inode to disk.
-// Must be called after every change to an ip->xxx field
+// Must be called after every change to an on-disk inode field
 // that lives on disk.
 void iupdate(struct inode *ip)
 {

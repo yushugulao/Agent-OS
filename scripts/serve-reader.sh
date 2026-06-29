@@ -8,35 +8,36 @@ STATE_DIR="${STATE_DIR:-${DUAL_LOG_DIR}/agentos-state}"
 OUT_DIR="${OUT_DIR:-${DUAL_LOG_DIR}/agentos-reader-live}"
 RESULT_DIR="${RESULT_DIR:-${ROOT_DIR}/results/latest}"
 PORT="${PORT:-8767}"
+LLM_RELAY_MODE="${LLM_RELAY_MODE:-cloud}"
 
 if [ ! -d "${STATE_DIR}" ]; then
-	echo "[demo-reader] 找不到状态目录：${STATE_DIR}" >&2
-	echo "[demo-reader] 请先运行：make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-" >&2
+	echo "[reader] 找不到状态目录：${STATE_DIR}" >&2
+	echo "[reader] 请先运行：make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-" >&2
 	exit 1
 fi
 
 if [ ! -f "${STATE_DIR}/rp_agentos_mainflow" ]; then
-	echo "[demo-reader] AgentOS 状态不完整，缺少：${STATE_DIR}/rp_agentos_mainflow" >&2
-	echo "[demo-reader] 请重新运行：make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-" >&2
+	echo "[reader] AgentOS 状态不完整，缺少：${STATE_DIR}/rp_agentos_mainflow" >&2
+	echo "[reader] 请重新运行：make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-" >&2
 	exit 1
 fi
 
 mkdir -p "${OUT_DIR}"
-rm -rf "${OUT_DIR}/dual-results" "${OUT_DIR}/dual-results.html" "${OUT_DIR}/demo-url-list.txt"
+rm -rf "${OUT_DIR}/dual-results" "${OUT_DIR}/dual-results.html" "${OUT_DIR}/reader-url-list.txt"
 if [ -f "${RESULT_DIR}/monitor.html" ]; then
 	mkdir -p "${OUT_DIR}/dual-results"
 	cp -R "${RESULT_DIR}/." "${OUT_DIR}/dual-results/"
-	cat >"${OUT_DIR}/demo-url-list.txt" <<EOF
-AgentOS 录屏 URL 清单
+	cat >"${OUT_DIR}/reader-url-list.txt" <<EOF
+AgentOS 运行 URL 清单
 
-1. Reader 首页
+1. 本地结果首页
    http://127.0.0.1:${PORT}/
 2. 双目标结果入口
    http://127.0.0.1:${PORT}/dual-results.html
-3. 演示导览页
-   http://127.0.0.1:${PORT}/dual-results/demo-guide.html
-4. 演示检查表
-   http://127.0.0.1:${PORT}/dual-results/demo-checklist.html
+3. 运行导览页
+   http://127.0.0.1:${PORT}/dual-results/reader-guide.html
+4. 结果核验表
+   http://127.0.0.1:${PORT}/dual-results/reader-checklist.html
 5. 测试入口说明
    http://127.0.0.1:${PORT}/dual-results/test-suite.html
 6. 实验场景说明
@@ -47,8 +48,8 @@ AgentOS 录屏 URL 清单
    http://127.0.0.1:${PORT}/dual-results/index.html
 9. 证据索引页
    http://127.0.0.1:${PORT}/dual-results/evidence-map.html
-10. Runner 统计摘要
-   http://127.0.0.1:${PORT}/dual-results/runner-statistics.html
+10. 四组实验统计 CSV
+   http://127.0.0.1:${PORT}/dual-results/experiments/experiment-stats.csv
 11. AgentOS Compare
    http://127.0.0.1:${PORT}/compare.html
 12. LLM Relay
@@ -66,7 +67,7 @@ EOF
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AgentOS 录屏 URL 清单</title>
+  <title>AgentOS 运行 URL 清单</title>
   <style>
     body { font-family: Arial, "Microsoft YaHei", sans-serif; margin: 0; color: #1f2937; background: #f7f9fb; line-height: 1.7; }
     header { background: #fff; border-bottom: 1px solid #d8dee6; padding: 30px 42px 20px; }
@@ -82,26 +83,26 @@ EOF
 </head>
 <body>
   <header>
-    <h1>AgentOS 录屏 URL 清单</h1>
-    <p class="hint">这些页面来自 ${RESULT_DIR}，已复制到当前 Reader 服务目录。录屏时建议先打开演示导览页，再进入完整科研平台页面。</p>
+    <h1>AgentOS 运行 URL 清单</h1>
+    <p class="hint">这些页面来自 ${RESULT_DIR}，已复制到当前 本地结果服务目录。建议先打开运行导览页，再进入完整科研平台页面。</p>
   </header>
   <main>
-    <h2>推荐展示顺序</h2>
+    <h2>建议查看顺序</h2>
     <div class="grid primary">
-      <a href="dual-results/demo-guide.html">1. 演示导览页</a>
-      <a href="dual-results/demo-checklist.html">2. 演示检查表</a>
+      <a href="dual-results/reader-guide.html">1. 运行导览页</a>
+      <a href="dual-results/reader-checklist.html">2. 结果核验表</a>
       <a href="dual-results/test-suite.html">3. 测试入口说明</a>
       <a href="dual-results/experiment-design.html">4. 实验场景说明</a>
       <a href="dual-results/monitor.html">5. 运行观测面板</a>
       <a href="dual-results/index.html">6. 图表索引页</a>
       <a href="dual-results/evidence-map.html">7. 证据索引页</a>
-      <a href="dual-results/runner-statistics.html">8. Runner 统计摘要</a>
+      <a href="dual-results/experiments/experiment-stats.csv">8. 四组实验统计 CSV</a>
       <a href="compare.html">9. AgentOS Compare</a>
       <a href="llm.html">10. LLM Relay</a>
     </div>
     <h2>科研平台页面</h2>
     <div class="grid">
-      <a href="index.html">Reader 首页</a>
+      <a href="index.html">本地结果首页</a>
       <a href="run.html">Run Detail</a>
       <a href="evidence.html">Evidence</a>
       <a href="artifacts.html">Artifacts</a>
@@ -113,30 +114,32 @@ EOF
       <a href="dual-results/report.md">Markdown 报告</a>
       <a href="dual-results/summary.csv">CSV 明细</a>
       <a href="dual-results/runner-sweep.csv">Runner 成组数据</a>
-      <a href="dual-results/runner-statistics.csv">Runner 统计摘要 CSV</a>
-      <a href="demo-url-list.txt">纯文本 URL 清单</a>
+      <a href="dual-results/experiments/experiment-stats.csv">四组实验统计 CSV</a>
+      <a href="dual-results/experiments/mechanism-notes.csv">机制说明 CSV</a>
+      <a href="reader-url-list.txt">纯文本 URL 清单</a>
     </div>
   </main>
 </body>
 </html>
 EOF
 else
-	echo "[demo-reader] 未找到双目标结果页：${RESULT_DIR}/monitor.html" >&2
-	echo "[demo-reader] Reader 仍会启动；如需观测面板，请先运行：make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-" >&2
+	echo "[reader] 未找到双目标结果页：${RESULT_DIR}/monitor.html" >&2
+	echo "[reader] 本地结果服务仍会启动；如需观测面板，请先运行：make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-" >&2
 fi
-echo "[demo-reader] 状态目录：${STATE_DIR}"
-echo "[demo-reader] 输出目录：${OUT_DIR}"
-echo "[demo-reader] 页面地址：http://127.0.0.1:${PORT}/"
+echo "[reader] 状态目录：${STATE_DIR}"
+echo "[reader] 输出目录：${OUT_DIR}"
+echo "[reader] 页面地址：http://127.0.0.1:${PORT}/"
+echo "[reader] Host LLM Relay 自动模式：${LLM_RELAY_MODE}"
 if [ -f "${OUT_DIR}/dual-results.html" ]; then
-	echo "[demo-reader] 双目标结果入口：http://127.0.0.1:${PORT}/dual-results.html"
-	echo "[demo-reader] 演示导览页：http://127.0.0.1:${PORT}/dual-results/demo-guide.html"
-	echo "[demo-reader] 演示检查表：http://127.0.0.1:${PORT}/dual-results/demo-checklist.html"
-	echo "[demo-reader] 测试入口说明：http://127.0.0.1:${PORT}/dual-results/test-suite.html"
-	echo "[demo-reader] 实验场景说明：http://127.0.0.1:${PORT}/dual-results/experiment-design.html"
-	echo "[demo-reader] 运行观测面板：http://127.0.0.1:${PORT}/dual-results/monitor.html"
-	echo "[demo-reader] 图表索引页：http://127.0.0.1:${PORT}/dual-results/index.html"
-	echo "[demo-reader] 证据索引页：http://127.0.0.1:${PORT}/dual-results/evidence-map.html"
-	echo "[demo-reader] 纯文本URL清单：http://127.0.0.1:${PORT}/demo-url-list.txt"
+	echo "[reader] 双目标结果入口：http://127.0.0.1:${PORT}/dual-results.html"
+	echo "[reader] 运行导览页：http://127.0.0.1:${PORT}/dual-results/reader-guide.html"
+	echo "[reader] 结果核验表：http://127.0.0.1:${PORT}/dual-results/reader-checklist.html"
+	echo "[reader] 测试入口说明：http://127.0.0.1:${PORT}/dual-results/test-suite.html"
+	echo "[reader] 实验场景说明：http://127.0.0.1:${PORT}/dual-results/experiment-design.html"
+	echo "[reader] 运行观测面板：http://127.0.0.1:${PORT}/dual-results/monitor.html"
+	echo "[reader] 图表索引页：http://127.0.0.1:${PORT}/dual-results/index.html"
+	echo "[reader] 证据索引页：http://127.0.0.1:${PORT}/dual-results/evidence-map.html"
+	echo "[reader] 纯文本 URL 清单：http://127.0.0.1:${PORT}/reader-url-list.txt"
 fi
 "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/plain_ucore_reader.py" \
 	--state-dir "${STATE_DIR}" \
@@ -146,4 +149,6 @@ fi
 	--host-surface-alignment "${DUAL_LOG_DIR}/host-surface-alignment.json" \
 	--seeded-action-state "${DUAL_LOG_DIR}/seeded-action-state.json" \
 	--serve \
+	--auto-run-llm-relay \
+	--llm-relay-mode "${LLM_RELAY_MODE}" \
 	--port "${PORT}"

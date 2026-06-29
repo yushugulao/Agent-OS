@@ -39,4 +39,4 @@ plain target 的科研 Agent 平台程序位于 `user/src/`，常见入口包括
 - `rp_seed_orch`
 - `rp_compare_plain`
 
-这些程序通过普通文件写出 `rp_*` 状态记录，由 Host Reader 渲染为网页和 API JSON。
+这些程序通过普通文件写出 `rp_*` 状态记录，由本地结果阅读器渲染为网页和 API JSON。

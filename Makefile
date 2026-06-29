@@ -1,4 +1,4 @@
-.PHONY: clean build user run debug test doctor plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run demo-reader target-readiness dual-platform-run full-verify dual-clean .FORCE
+.PHONY: clean build user run debug test doctor plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run reader target-readiness dual-platform-run full-verify dual-clean .FORCE
 all: build
 
 K = os
@@ -195,8 +195,8 @@ agentos-platform-run:
 dual-platform-run:
 	TOOLPREFIX=$(TOOLPREFIX) bash scripts/run-dual-platforms.sh
 
-demo-reader:
-	PYTHON_BIN=$(PYTHON_BIN) bash scripts/serve-demo-reader.sh
+reader:
+	PYTHON_BIN=$(PYTHON_BIN) bash scripts/serve-reader.sh
 
 target-readiness:
 	PYTHON_BIN=$(PYTHON_BIN) bash scripts/check-target-readiness.sh

@@ -2,7 +2,7 @@
 
 本文是 [design.md](design.md) 的任务二细节附录，重点展开结构化工具调用、工具表、错误语义和 Agent Context 写入路径。系统总体接口分工和 ABI 汇总见 [api.md](api.md)。
 
-任务二的目标是在 Agent 进程机制基础上，提供 Agent 进程与内核之间的结构化工具调用接口。uCore 分支的最终热路径使用 `agent_op` / `agent_result` 和 `agent_run()` 批量 ABI，一次 syscall 最多执行 64 个工具 op；`agent_request` / `agent_response` 作为赛题“工具名称 + 参数键值列表”的正式名称协议入口。
+任务二的目标是在 Agent 进程机制基础上，提供 Agent 进程与内核之间的结构化工具调用接口。AgentOS-uCore 当前热路径使用 `agent_op` / `agent_result` 和 `agent_run()` 批量 ABI，一次 syscall 最多执行 64 个工具 op；`agent_request` / `agent_response` 作为赛题“工具名称 + 参数键值列表”的正式名称协议入口。
 
 ## 接口
 
@@ -73,8 +73,8 @@
 | `read_file_summary` | 11 | selector | 返回文件摘要 |
 | `dependency_query` | 12 | label | 返回对象标签影响范围 |
 | `capability_check` | 13 | legacy role、action | 按当前进程真实 capability 检查动作，并返回真实 role/capability |
-| `rerun_stage` | 14 | legacy role、stage | demo compatibility；内部调用通用动作提交路径，记录和重复请求判断归入 `action_commit` |
-| `write_report` | 15 | legacy role、payload | demo compatibility；内部调用通用工件更新路径，记录和重复请求判断归入 `artifact_update` |
+| `rerun_stage` | 14 | legacy role、stage | 旧示例兼容；内部调用通用动作提交路径，记录和重复请求判断归入 `action_commit` |
+| `write_report` | 15 | legacy role、payload | 旧示例兼容；内部调用通用工件更新路径，记录和重复请求判断归入 `artifact_update` |
 | `agent_watch` | 16 | event_type、filter | 注册事件 watch |
 | `agent_wait` | 17 | timeout | syscall-only 工具表可发现项；`agent_run()` 调用返回 `AGENT_STATUS_BAD_PARAM` |
 | `agent_heartbeat` | 18 | interval | 设置或停止心跳，`interval=0` 表示停止 |
@@ -133,45 +133,12 @@
 
 ## 验证证据
 
-`agentfinal_ucore`：
+原始串口输出统一保存在 [test-record.md](test-record.md)，逐项测试步骤见 [testing-details.md](testing-details.md)。本任务文档只保留任务二相关检查点：
 
-```text
-agentfinal_ucore: batch first_seq=1 last_seq=64
-agentfinal_ucore: short_text_history=1 payload=ucore-final result=ucore-final
-agentfinal_ucore: causal_context=1 first_cause=0 next_cause=1 span=1 edges=63
-agentfinal_ucore: generic_action_abi=1
-agentfinal_ucore: llm_template_relay=1
-agentfinal_ucore: legacy_name_protocol=1
-agentfinal_ucore: passed
-```
-
-`agentllm_ucore`：
-
-```text
-agentllm_ucore: requester_done=1
-agentllm_ucore: template_relay=1
-agentllm_ucore: passed
-```
-
-`agentbench_ucore`：
-
-```text
-agentbench_ucore: repeated_ticks scalar_min=14 scalar_avg=16 scalar_max=19 batch_min=5 batch_avg=7 batch_max=8
-agentbench_ucore: scalar_agent_run ops=256 ticks=16 ops_per_tick=16 speedup_x100=100
-agentbench_ucore: batch_agent_run ops=256 ticks=7 ops_per_tick=36 speedup_x100=228
-```
-
-`labdemo_ucore`：
-
-```text
-agentos:event type=AUDIT role=sentinel action=action_commit result=DENIED
-agentos:event type=AUDIT role=recovery action=commit_align result=DUPLICATE
-```
-
-`agentsecurity_ucore`：
-
-```text
-agentsecurity_ucore: sentinel spoof_denied=1
-agentsecurity_ucore: recovery action_ok=1 duplicate=1
-agentsecurity_ucore: legacy_tool_mismatch=1
-```
+| 程序 | 检查点 |
+| --- | --- |
+| `agentfinal_ucore` | 批量工具调用 sequence 连续；短 payload/result 写入 Context；通用 action ABI、LLM 模板 relay 和按名称调用协议均可用。 |
+| `agentllm_ucore` | requester/relay/response 路径可跑通，LLM 请求以结构化工具调用进入 Context、timeline 和 audit。 |
+| `agentbench_ucore` | scalar 与 batch 两条路径均输出多轮 tick 统计，batch 路径体现减少 syscall 次数后的吞吐优势。 |
+| `labdemo_ucore` | 通用 action、事件和 audit 能在科研示例负载中组合使用，权限拒绝和重复请求都有结构化记录。 |
+| `agentsecurity_ucore` | 用户态伪造 role 不生效；旧工具名/ID 不一致会失败；错误参数键或类型按结构化错误返回。 |

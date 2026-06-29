@@ -22,3 +22,15 @@ nfs/fs
 baseline_ucore/nfs/*.img
 baseline_ucore/nfs/fs
 results/latest/
+docs/report/
+__pycache__/
+*.pyc
+docs/assets/*gfuse-style*.png
+docs/assets/*gfuse-style*.pptx
+*.aux
+*.log
+*.out
+*.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz

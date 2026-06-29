@@ -1,12 +1,12 @@
 # 任务四：面向 Agent 查询优化的文件系统扩展
 
-本文是 [design.md](design.md) 的任务四细节附录，重点说明 uCore 分支当前实现的文件元数据表、真实 inode 关联、私有 `.agentmeta` 元数据文件、属性查询、索引路径、内容摘要工具、通用依赖注册/查询和查询历史驱动的预取提示。
+本文是 [design.md](design.md) 的任务四细节附录，重点说明 AgentOS-uCore 当前实现的文件元数据表、真实 inode 关联、私有 `.agentmeta` 元数据文件、属性查询、索引路径、内容摘要工具、通用依赖注册/查询和查询历史驱动的预取提示。
 
 ## 目标
 
-任务四希望操作系统为 Agent 提供更适合智能体使用的文件查询能力，使 Agent 不只按路径打开文件，还能按 namespace、object_id、label、state、type、summary 等属性查询文件对象。科研工件是当前演示负载使用的一类文件对象，不是内核唯一支持的对象模型。
+任务四希望操作系统为 Agent 提供更适合智能体使用的文件查询能力，使 Agent 不只按路径打开文件，还能按 namespace、object_id、label、state、type、summary 等属性查询文件对象。科研工件是当前示例负载使用的一类文件对象，不是内核唯一支持的对象模型。
 
-当前 uCore 分支实现的是内核级文件元数据服务：
+AgentOS-uCore 当前实现的是内核级文件元数据服务：
 
 - 支持最多 128 条文件元数据；
 - 以真实文件的 `dev + inum` 作为主要身份；
@@ -35,13 +35,13 @@
 | --- | --- |
 | `used` | 该槽位是否有效 |
 | `fid` | 文件元数据 ID |
-| `physical_name` | 物理文件名或内核演示名 |
+| `physical_name` | 物理文件名或内核示例名 |
 | `logical_path` | Agent 可理解的逻辑路径 |
-| `project` | namespace；科研 demo 中用作项目名 |
+| `project` | namespace；科研示例中用作项目名 |
 | `workflow` | 工作流名 |
 | `run_id` | 实验运行 ID |
-| `stage` | 对象 label；科研 demo 中用作阶段名 |
-| `kind` | 对象 type；科研 demo 中用作工件类型 |
+| `stage` | 对象 label；科研示例中用作阶段名 |
+| `kind` | 对象 type；科研示例中用作工件类型 |
 | `status` | 对象 state，如 ok、failed |
 | `summary` | 文件摘要 |
 | `dependency_mask` | 对象标签依赖位图 |
@@ -61,10 +61,10 @@
 
 ## 文件节点关联和私有元数据文件
 
-任务四不是只保存一张脱离文件系统的演示表。当前实现会把 Agent 元数据绑定到真实 uCore 根目录文件：
+任务四不是只保存一张脱离文件系统的示例表。当前实现会把 Agent 元数据绑定到真实 uCore 根目录文件：
 
 1. `agent_file_meta_init()` 会先强制重新加载 `.agentmeta` 私有元数据文件。
-2. 如果 `.agentmeta` 不存在、格式错误或没有有效记录，内核安装空元数据表，由用户态 demo 再写入需要的对象记录。
+2. 如果 `.agentmeta` 不存在、格式错误或没有有效记录，内核安装空元数据表，由用户态示例再写入需要的对象记录。
 3. 每条持久化元数据保存 `physical_name`、`dev`、`inum`、`size` 和 `fs_generation`。
 4. `fileopen(O_CREATE)`、写入、截断、删除会通知 Agent 子系统刷新或删除关联元数据。
 5. `agent_file_meta_set()` 支持 `AGENT_FILE_META_F_DELETE` 删除属性，支持 `AGENT_FILE_META_F_PERSIST` 写入 `.agentmeta`。
@@ -90,11 +90,11 @@
 
 ## 用户态初始化数据
 
-`agent_file_meta_init()` 只负责重新加载 `.agentmeta`、重建索引和启用扫描。如果 `.agentmeta` 不存在、格式错误或没有有效记录，内核安装空元数据表。科研 demo 需要的 RUN-042、lab-gene-x 和对象依赖由用户态 orchestrator 调用 `agent_file_meta_set()` 写入。
+`agent_file_meta_init()` 只负责重新加载 `.agentmeta`、重建索引和启用扫描。如果 `.agentmeta` 不存在、格式错误或没有有效记录，内核安装空元数据表。科研示例需要的设定的模拟流程、示例项目名和对象依赖由用户态 orchestrator 调用 `agent_file_meta_set()` 写入。该模拟流程包含数据准备、比对处理、结果分析、报告生成和归档交付。
 
-`labdemo_ucore` 中由 orchestrator Agent 写入科研平台演示数据，再把 `RUN-042` 的 align 对象状态改为 failed，从而触发 sentinel Agent。普通进程不能直接初始化或修改这张全局元数据表。
+`labdemo_ucore` 中由 orchestrator Agent 写入科研平台示例数据，再把设定的模拟流程中的比对处理对象状态改为 failed，从而触发 sentinel Agent。普通进程不能直接初始化或修改这张全局元数据表。
 
-`agentsecurity_ucore` 还会在初始化前先执行一次 indexed query，确认未初始化索引不会卡住；随后同时构造 `RUN-042` 和 `RUN-999` 两个 failed run，用于验证通用 action/artifact 更新只修改 selector 指定的目标 run。
+`agentsecurity_ucore` 还会在初始化前先执行一次 indexed query，确认未初始化索引不会卡住；随后同时构造设定的模拟流程和另一个模拟流程两个 failed run，用于验证通用 action/artifact 更新只修改 selector 指定的目标 run。
 
 `agentfs_ucore` 会创建额外真实文件，绑定自定义元数据，并验证重新调用 `agent_file_meta_init()` 时自定义数据来自 `.agentmeta` 重新加载，而不是被空表覆盖。它还会验证字段清空、文件删除清理、selector 未命中、scan/index 返回语义一致、结果超过 `max_hits` 时设置 `truncated`，并生成接近 128 条真实文件元数据，让扫描路径和索引路径的 `scanned_records` 差异明显。重复执行同一个非强制扫描查询时，它会验证 `CACHE_HIT` 原因位；随后更新文件状态，确认旧代数缓存不会继续返回过期结果。
 
@@ -166,7 +166,7 @@ metadata 查询说明“哪个文件符合条件”，内容摘要工具说明�
 
 ## 查询历史驱动的预取提示
 
-文件查询命中后，内核会把本次查询视为 Agent 当前探索路径的一部分，并根据源文件的对象标签依赖推导后续可能需要关注的文件 metadata。例如科研 demo 查询 `RUN-042` 的 `align` label 后，如果用户态注册的依赖关系显示 align 会影响 analyze、report 和 archive，内核会在同一 namespace/workflow/run 中查找这些后续对象的元数据，并生成预取提示。
+文件查询命中后，内核会把本次查询视为 Agent 当前探索路径的一部分，并根据源文件的对象标签依赖推导后续可能需要关注的文件 metadata。例如科研示例查询设定的模拟流程中的比对处理 label 后，如果用户态注册的依赖关系显示比对处理会影响结果分析、报告生成和归档交付，内核会在同一 namespace/workflow/run 中查找这些后续对象的元数据，并生成预取提示。
 
 预取提示的生成条件：
 
@@ -189,7 +189,7 @@ int agent_file_prefetch_span_snapshot(struct agent_file_prefetch_hint *hints, in
 `agent_file_prefetch_snapshot()` 查询当前 Agent 自己可见的提示。`agent_file_prefetch_span_snapshot()` 查询当前 Agent 的 `current_span_id` 对应的全局提示，只返回同一 span 下的记录；当前 Agent 尚未进入 span 时返回 0。两者在 `max=0` 时只返回当前提示数量；`max>0` 会按产生顺序复制提示。普通进程调用返回 `-1`；没有 `META_READ` 能力的 Agent 返回 `AGENT_STATUS_DENIED`。
 
 这项能力不是完整文件内容预加载。它的作用是把“Agent 查到一个阶段后，后续大概率会继续查哪些相关工件”提前交给内核表达，减少下一轮 Agent 继续做宽泛扫描或重新拼接依赖关系的成本。Agent 之间通过 message 事件协作时，内核可以把发送者当前可见的提示复制给接收者，让接收者直接从自己的 snapshot 中读取上游提示，而不需要从消息文本中解析策略字段。
-同一 span 的提示总线进一步减少了跨 Agent 协作时的状态拼接成本：接收者不仅能读取自己 PCB 中被交接来的提示，还能用 span 查询看到“这条因果链中是谁产生了提示、提示交给了谁、目标工件是什么”。这为后续宿主机科研 Agent 对比演示提供了更直观的内核级协作证据。
+同一 span 的提示总线进一步减少了跨 Agent 协作时的状态拼接成本：接收者不仅能读取自己 PCB 中被交接来的提示，还能用 span 查询看到“这条因果链中是谁产生了提示、提示交给了谁、目标工件是什么”。这为后续宿主机科研 Agent 对比示例提供了更直观的内核级协作证据。
 
 ## 工具接口
 
@@ -212,22 +212,22 @@ int agent_file_prefetch_span_snapshot(struct agent_file_prefetch_hint *hints, in
 `AGENT_TOOL_QUERY_FILE` 支持属性条件串，例如：
 
 ```text
-project=lab-gene-x;run_id=RUN-042;status=failed
+project=<示例项目>;run_id=<设定的模拟流程>;status=failed
 ```
 
 通用动作工具 `AGENT_TOOL_ACTION_COMMIT` 支持同样的 selector 风格，例如：
 
 ```text
-label=align;run_id=RUN-999;namespace=lab-gene-x
+label=align;run_id=<另一个模拟流程>;namespace=<示例项目>
 ```
 
 通用工件更新工具 `AGENT_TOOL_ARTIFACT_UPDATE` 也支持 selector 风格，例如：
 
 ```text
-label=report;run_id=RUN-999;namespace=lab-gene-x
+label=report;run_id=<另一个模拟流程>;namespace=<示例项目>
 ```
 
-内核会同时匹配 label、run_id 和 namespace。这样动作提交和工件更新不会因为同一个 label 上存在多个 run 而误修改其他文件元数据。`AGENT_TOOL_RERUN_STAGE` 和 `AGENT_TOOL_WRITE_REPORT` 仍保留为旧 demo 兼容工具，但它们内部调用同一套通用状态更新路径，并把事件 action 与重复请求判断归入 `action_commit` 或 `artifact_update`。
+内核会同时匹配 label、run_id 和 namespace。这样动作提交和工件更新不会因为同一个 label 上存在多个 run 而误修改其他文件元数据。`AGENT_TOOL_RERUN_STAGE` 和 `AGENT_TOOL_WRITE_REPORT` 仍保留为旧示例兼容工具，但它们内部调用同一套通用状态更新路径，并把事件 action 与重复请求判断归入 `action_commit` 或 `artifact_update`。
 
 `query_file` 对空查询、未知 key 和坏格式片段返回 `AGENT_STATUS_BAD_PARAM`，不会静默忽略错误条件。
 
@@ -272,7 +272,7 @@ label=report;run_id=RUN-999;namespace=lab-gene-x
 | `relation` | 当前为通用 `depends_on` |
 | `summary` | 目标对象摘要 |
 
-`dependency_query("label=align;namespace=lab-gene-x;run_id=RUN-042")` 返回：
+`dependency_query("label=align;namespace=<示例项目>;run_id=<设定的模拟流程>")` 返回：
 
 ```text
 align+analyze+report+archive
@@ -284,20 +284,7 @@ align+analyze+report+archive
 
 `agentbench_ucore` 对比扫描路径和索引路径。tick 数值只作为观测，重点看 `scan_records` 与 `index_records` 的候选记录数差异：
 
-```text
-agentbench_ucore: file_query_records scan_records=118 index_records=6
-agentbench_ucore: file_query_plan scan_plan=0 index_plan=1 index_reason=68 index_candidates=6
-agentbench_ucore: file_query_cache hit=1 reason=68
-agentbench_ucore: file_digest bytes=37888 ticks=10 preview=agentbench-digest-content-block-0001 agentbench-digest-content-
-agentbench_ucore: file_digest_cache hits=63 misses=1
-agentbench_ucore: prefetch_records total=192 first_stage=analyze
-agentbench_ucore: file_scan_query ops=64 ticks=13 ops_per_tick=4 speedup_x100=100
-agentbench_ucore: file_index_query ops=64 ticks=7 ops_per_tick=9 speedup_x100=185
-agentbench_ucore: file_digest_read ops=37888 ticks=10 ops_per_tick=3788 speedup_x100=100
-agentbench_ucore: file_prefetch_snapshot ops=192 ticks=1 ops_per_tick=192 speedup_x100=300
-```
-
-这表示当前系统同时具备：
+原始输出见 [test-record.md](test-record.md)。这些观测用于确认当前系统同时具备：
 
 - 可观测扫描路径；
 - 可观测索引路径；
@@ -309,19 +296,7 @@ agentbench_ucore: file_prefetch_snapshot ops=192 ticks=1 ops_per_tick=192 speedu
 
 ## 综合场景中的证据
 
-`labdemo_ucore` 中的文件查询证据：
-
-```text
-agentos:event type=TOOL_CALL role=sentinel tool=query_file hits=1 used_index=1 seq=4
-labdemo_ucore: sentinel prefetch_hint stage=analyze source_seq=4 plan=2 candidates=1
-agentos:event type=PREFETCH_USED tick=... role=investigator stage=analyze summary=analysis waits for align seq=...
-labdemo_ucore: investigator reason=align output is ready before injected failure
-labdemo_ucore: investigator digest bytes=27 preview=align memory_limit evidence seq=4
-labdemo_ucore: affected labels=align+analyze+report+archive
-labdemo_ucore: final report_query hits=2 used_index=1 scanned=7
-```
-
-这些输出说明：
+`labdemo_ucore` 中的文件查询证据说明：
 
 - sentinel 能按属性查询失败文件；
 - sentinel 能读取查询历史驱动的预取提示；
@@ -329,45 +304,9 @@ labdemo_ucore: final report_query hits=2 used_index=1 scanned=7
 - recovery 后能查询报告文件；
 - 查询路径使用索引。
 
-`agentsecurity_ucore` 中的文件查询和恢复范围证据：
+`agentsecurity_ucore` 说明索引初始化前查询安全，且 recovery 只更新 selector 指定的 run。`agentfs_ucore` 说明真实文件关联、预取提示、自定义 inode、内容摘要、digest cache、`.agentmeta` reload、查询缓存、scan/index 一致性、截断查询、字段清空、删除清理和 selector 未命中都可验证。`agentscan_ucore` 说明根目录后台扫描、普通文件创建后的自动元数据和文件删除后的清理都可运行。
 
-```text
-agentsecurity_ucore: preinit_index_query=1
-agentsecurity_ucore: scoped_action=1
-agentsecurity_ucore: scoped_artifact=1
-```
-
-这些输出说明索引初始化前查询安全，且 recovery 只更新 selector 指定的 run。
-
-`agentfs_ucore` 中的真实文件关联证据：
-
-```text
-agentfs_ucore: demo_inode dev=1 inum=14 scanned=2
-agentfs_ucore: prefetch_hints=1 count=3 first_stage=analyze source_seq=1
-agentfs_ucore: custom_inode dev=1 inum=20 size=7
-agentfs_ucore: content_digest=1 size=7 bytes=7 hash=... preview=agentfs
-agentfs_ucore: digest_cache=1 hits=1 misses=1
-agentfs_ucore: digest_cache_invalidated=1 misses=1
-agentfs_ucore: digest_timeline=1 tool=20 preview=agentfs2
-agentfs_ucore: .agentmeta_reload=1
-agentfs_ucore: query_cache=1 reason=68
-agentfs_ucore: bulk_index scan=118 index=6 hits=1
-agentfs_ucore: scan_index_consistent=1
-agentfs_ucore: truncated_query total=100 returned=3 truncated=1
-agentfs_ucore: clear_status=1 cache_invalidated=1
-agentfs_ucore: delete_clears_metadata=1
-agentfs_ucore: missing_selector_not_found=1
-agentfs_ucore: passed
-```
-
-`agentscan_ucore` 中的自动扫描证据：
-
-```text
-agentscan_ucore: background_scan usershell=1 runs=1 entries=64 added=10
-agentscan_ucore: auto_file_create=1 size=14 generation=19
-agentscan_ucore: auto_file_delete=1
-agentscan_ucore: passed
-```
+原始输出统一见 [test-record.md](test-record.md)，测试步骤见 [testing-details.md](testing-details.md)。
 
 ## 当前限制
 
@@ -380,16 +319,3 @@ agentscan_ucore: passed
 | 查询规模 | 当前最多 128 条元数据，最多返回 8 条 hit |
 | 内容摘要 | 当前读取最多 4096 字节计算指纹，返回短预览，不做全文索引 |
 | 预取提示 | 当前只生成 metadata 提示，提示本身不预读文件内容，不保存到磁盘 |
-
-## 后续增强
-
-后续可以把任务四推进为完整文件系统能力：
-
-- 多级目录递归扫描；
-- 更丰富的文件分类规则；
-- 把更多 Agent 元数据直接纳入 inode 或目录项；
-- 支持索引增量持久化；
-- 支持更复杂查询条件；
-- 支持按时间、大小、版本、生产者 Agent 查询；
-- 将预取提示扩展为可配置策略，并与宿主机科研 Agent 平台的运行计划对齐；
-- 将文件查询结果直接喂给 LLM Gateway。

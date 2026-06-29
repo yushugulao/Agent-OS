@@ -372,7 +372,7 @@ int sys_mutex_create(int blocking)
 		errorf("fail to create mutex: out of resource");
 		return -1;
 	}
-	// LAB5: (4-1) You may want to maintain some variables for detect here
+	// Keep the teaching mutex ABI; AgentOS does not extend deadlock detection here.
 	int mutex_id = m - curr_proc()->mutex_pool;
 	debugf("create mutex %d", mutex_id);
 	return mutex_id;
@@ -384,8 +384,7 @@ int sys_mutex_lock(int mutex_id)
 		errorf("Unexpected mutex id %d", mutex_id);
 		return -1;
 	}
-	// LAB5: (4-1) You may want to maintain some variables for detect
-	//       or call your detect algorithm here
+	// Mutex locking keeps the original uCore behavior.
 	mutex_lock(&curr_proc()->mutex_pool[mutex_id]);
 	return 0;
 }
@@ -396,7 +395,7 @@ int sys_mutex_unlock(int mutex_id)
 		errorf("Unexpected mutex id %d", mutex_id);
 		return -1;
 	}
-	// LAB5: (4-1) You may want to maintain some variables for detect here
+	// Mutex unlocking keeps the original uCore behavior.
 	mutex_unlock(&curr_proc()->mutex_pool[mutex_id]);
 	return 0;
 }
@@ -408,7 +407,7 @@ int sys_semaphore_create(int res_count)
 		errorf("fail to create semaphore: out of resource");
 		return -1;
 	}
-	// LAB5: (4-2) You may want to maintain some variables for detect here
+	// Keep the teaching semaphore ABI; AgentOS does not extend deadlock detection here.
 	int sem_id = s - curr_proc()->semaphore_pool;
 	debugf("create semaphore %d", sem_id);
 	return sem_id;
@@ -421,7 +420,7 @@ int sys_semaphore_up(int semaphore_id)
 		errorf("Unexpected semaphore id %d", semaphore_id);
 		return -1;
 	}
-	// LAB5: (4-2) You may want to maintain some variables for detect here
+	// Semaphore up keeps the original uCore behavior.
 	semaphore_up(&curr_proc()->semaphore_pool[semaphore_id]);
 	return 0;
 }
@@ -433,8 +432,7 @@ int sys_semaphore_down(int semaphore_id)
 		errorf("Unexpected semaphore id %d", semaphore_id);
 		return -1;
 	}
-	// LAB5: (4-2) You may want to maintain some variables for detect
-	//       or call your detect algorithm here
+	// Semaphore down keeps the original uCore behavior.
 	semaphore_down(&curr_proc()->semaphore_pool[semaphore_id]);
 	return 0;
 }

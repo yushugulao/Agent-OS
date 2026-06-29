@@ -6,7 +6,7 @@
 
 任务一的目标是在 uCore 中加入 Agent 进程机制，使内核能够区分普通进程和 Agent 进程，并为 Agent 进程提供独立的 Agent Context 用户虚拟地址区。
 
-当前 uCore 分支不是只做“能创建一个特殊进程”的最小实现，而是在任务一基础上加入：
+AgentOS-uCore 当前实现不是只做“能创建一个特殊进程”的最小实现，而是在任务一基础上加入：
 
 - Agent PCB 元数据；
 - 6 页 Agent Context；
@@ -98,7 +98,7 @@ Agent Context 使用固定高地址用户虚拟区：
 ```mermaid
 sequenceDiagram
     participant P as 普通父进程
-    participant S as sys_agent_create / sys_agent_create_role
+    participant S as Agent 创建系统调用
     participant K as proc.c
     participant A as agent_make
     participant C as Agent Context
@@ -118,7 +118,7 @@ sequenceDiagram
 
 Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 Agent 元数据。当前最终测试均会创建 Agent 子进程并等待其退出，用于覆盖正常释放路径。
 
-## 演示路径
+## 示例路径
 
 `agentfinal_ucore` 中的任务一验证路径：
 
@@ -157,19 +157,13 @@ Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 
 | --- | --- |
 | Agent 创建参数 | `agent_create()` 保持最低权限 sentinel 兼容入口；复杂配额和自定义能力仍未开放给用户态 |
 | Agent exec 场景 | 当前最终测试不把 exec 作为主验收入口 |
-| 长期资源统计 | 当前统计足够支撑测试和演示，未做完整平台级资源审计 |
+| 长期资源统计 | 当前统计足够支撑测试和示例，未做完整平台级资源审计 |
 
 ## 验证证据
 
-```text
-agentfinal_ucore: context size=24576 capacity=128
-agentfinal_ucore: passed
-agentfinal_ucore: parent passed
-```
+原始输出统一见 [test-record.md](test-record.md)，测试步骤见 [testing-details.md](testing-details.md)。任务一重点检查以下内容：
 
-```text
-labdemo_ucore: created role=orchestrator pid=2 context=0x0000003ffffea000
-labdemo_ucore: created role=recovery pid=3 context=0x0000003ffffea000
-labdemo_ucore: created role=investigator pid=4 context=0x0000003ffffea000
-labdemo_ucore: created role=sentinel pid=5 context=0x0000003ffffea000
-```
+| 程序 | 检查项 |
+| --- | --- |
+| `agentfinal_ucore` | Context 大小、Context 容量、父子进程退出状态、普通进程隔离和 Agent Context 映射可用。 |
+| `labdemo_ucore` | orchestrator、recovery、investigator、sentinel 多个 Agent 能同时创建；它们使用相同虚拟 Context 地址，但对应不同物理页和角色能力。 |

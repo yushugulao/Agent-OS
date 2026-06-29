@@ -6,7 +6,7 @@ text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
 </style>
 <rect width="1120" height="650" fill="#ffffff"/>
 <text x="34" y="34" class="title">双目标运行观测面板</text>
-<text x="34" y="58" class="subtitle">把运行阶段、产物数量、AgentOS 内核证据和 QEMU 健康状态放在同一张图中，便于录屏时快速说明本次测试是否可信。</text>
+<text x="34" y="58" class="subtitle">把运行阶段、产物数量、AgentOS 内核证据和 QEMU 健康状态放在同一张图中，便于快速说明本次测试是否可信。</text>
 <rect x="42" y="92" width="1036" height="76" fill="#f8fafc" stroke="#d8dee6"/>
 <text x="58" y="117" class="label">运行阶段</text>
 <rect x="162.0" y="108" width="165.2" height="22" fill="#54a24b" rx="2"/>
@@ -35,16 +35,16 @@ text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
 <text x="60" y="254" class="axis">结果可对照</text>
 <text x="294" y="254" text-anchor="end" class="value">是</text>
 <text x="60" y="274" class="axis">成功记录核对</text>
-<text x="294" y="274" text-anchor="end" class="value">1244</text>
+<text x="294" y="274" text-anchor="end" class="value">300</text>
 <text x="60" y="294" class="axis">预置请求</text>
 <text x="294" y="294" text-anchor="end" class="value">44</text>
 <rect x="395" y="202" width="330" height="128" fill="#ffffff" stroke="#d8dee6"/>
 <rect x="395" y="202" width="6" height="128" fill="#4c78a8"/>
 <text x="413" y="230" class="value">状态与页面</text>
 <text x="413" y="254" class="axis">普通状态文件</text>
-<text x="647" y="254" text-anchor="end" class="value">258</text>
+<text x="647" y="254" text-anchor="end" class="value">64</text>
 <text x="413" y="274" class="axis">AgentOS状态文件</text>
-<text x="647" y="274" text-anchor="end" class="value">271</text>
+<text x="647" y="274" text-anchor="end" class="value">78</text>
 <text x="413" y="294" class="axis">Reader页面</text>
 <text x="647" y="294" text-anchor="end" class="value">40</text>
 <text x="413" y="314" class="axis">额外API JSON</text>
@@ -80,7 +80,7 @@ text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
 <text x="647" y="478" text-anchor="end" class="value">0</text>
 <rect x="748" y="366" width="330" height="128" fill="#ffffff" stroke="#d8dee6"/>
 <rect x="748" y="366" width="6" height="128" fill="#e45756"/>
-<text x="766" y="394" class="value">录屏读图顺序</text>
+<text x="766" y="394" class="value">读图顺序</text>
 <text x="766" y="418" class="axis">第一步</text>
 <text x="1000" y="418" text-anchor="end" class="value">看运行结果</text>
 <text x="766" y="438" class="axis">第二步</text>

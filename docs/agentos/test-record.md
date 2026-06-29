@@ -41,11 +41,11 @@ bash scripts/run-agent-tests.sh
 | 状态事实 | `key=value`，例如 `used_index=1`、`stale_commit=1`、`tamper_protected=1` | 提取成完成情况和功能结论 |
 | 计时观测 | `ops ticks ops_per_tick speedup_x100`、`scan_records`、`index_records` | 提取成性能表和对比说明 |
 
-这种提取方式避免只展示大段 QEMU 日志。下面每个样例都保留最能证明功能的输出行，并在结论中说明这些输出对应的内核能力。
+这种提取方式避免只呈现大段 QEMU 日志。下面每个样例都保留最能说明功能的输出行，并在结论中说明这些输出对应的内核能力。
 
 ## 结论摘要
 
-| 测试程序 | 关键输出 | 证明内容 |
+| 测试程序 | 关键输出 | 对应内容 |
 | --- | --- | --- |
 | `agentfinal_ucore` | `batch first_seq=1 last_seq=64`、`tamper_protected=1`、`run_ledger=1` | Agent 创建、批量工具调用、Context 可信历史和全局运行账本可用 |
 | `agentfs_ucore` | `.agentmeta_reload=1`、`bulk_index scan=118 index=6`、`digest_cache_invalidated=1` | 真实文件元数据、索引查询和内容摘要缓存可用 |
@@ -55,7 +55,7 @@ bash scripts/run-agent-tests.sh
 | `agentconflict_ucore` | `conflict_denied=1`、`direct_write_denied=1`、`stale_commit=1` | 文件编辑冲突由内核真实文件路径阻止 |
 | `agentllm_ucore` | `relay_timeline=1`、`requester_done=1` | LLM Relay 事件、唤醒和 timeline 摘要可用 |
 | `agentbench_ucore` | `batch_agent_run`、`file_index_query`、`timeline_query_prefetch` | 性能主路径和文件索引/Timeline 查询可观测 |
-| `labdemo_ucore` | `type=INCIDENT_CREATED`、`prefetch_handoff=analyze`、`provenance_graph edges=...` | RUN-042 多 Agent 恢复场景可复现 |
+| `labdemo_ucore` | `type=INCIDENT_CREATED`、`prefetch_handoff=analyze`、`provenance_graph edges=...` | 设定的模拟流程 多 Agent 恢复场景可复现 |
 | `agentsecurity_ucore` | `plain_process_denied=1`、`sentinel spoof_denied=1`、`scoped_report=1` | 权限限制和多 run 定向写入可验证 |
 
 ## 样例输出：agentfinal_ucore
@@ -96,7 +96,7 @@ agentfinal_ucore: parent passed
 agentfs_ucore: Agent FS metadata test
 agentfs_ucore: demo_inode dev=1 inum=14 scanned=2
 agentfs_ucore: prefetch_hints=1 count=3 first_stage=analyze source_seq=1
-agentfs_ucore: scoped_dependency=1 run042=align+analyze+report runalt=align+archive
+agentfs_ucore: scoped_dependency=1 设定的模拟流程=align+analyze+report runalt=align+archive
 agentfs_ucore: custom_inode dev=1 inum=20 size=7
 agentfs_ucore: content_digest=1 size=7 bytes=7 hash=52642947 preview=agentfs
 agentfs_ucore: digest_cache=1 hits=1 misses=1
@@ -239,7 +239,7 @@ labbench_ucore: parent passed
 labdemo_ucore: Agent-OS laboratory recovery demo
 labdemo_ucore: created role=orchestrator pid=2 context=0x0000003ffffe9000
 agentos:event type=AGENT_CREATED tick=... role=orchestrator pid=2 context=0x0000003ffffe9000
-agentos:event type=RUN_OBJECT tick=... project=lab-gene-x workflow=nightly-regression run_id=RUN-042 desired_state=RECOVERED policy=minimal_rerun
+agentos:event type=RUN_OBJECT tick=... project=lab-gene-x workflow=nightly-regression run_id=设定的模拟流程 desired_state=RECOVERED policy=minimal_rerun
 labdemo_ucore: created role=investigator pid=4 context=0x0000003ffffe9000
 agentos:event type=AGENT_CREATED tick=... role=investigator pid=4 context=0x0000003ffffe9000
 labdemo_ucore: created role=sentinel pid=5 context=0x0000003ffffe9000
@@ -247,32 +247,32 @@ agentos:event type=AGENT_CREATED tick=... role=sentinel pid=5 context=0x0000003f
 agentos:event type=WATCH_REGISTERED tick=... role=sentinel event=FILE_STATUS filter=status=failed
 labdemo_ucore: created role=recovery pid=3 context=0x0000003ffffe9000
 agentos:event type=AGENT_CREATED tick=... role=recovery pid=3 context=0x0000003ffffe9000
-agentos:event type=INCIDENT_CREATED tick=... id=INC-RUN-042-ALIGN-OOM project=lab-gene-x workflow=nightly-regression run_id=RUN-042 stage=align reason=memory_limit
-labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042;project=lab-gene-x
-agentos:event type=TOOL_CALL tick=... role=sentinel tool=query_file project=lab-gene-x run_id=RUN-042 status=failed hits=1 used_index=1 seq=4
+agentos:event type=INCIDENT_CREATED tick=... id=INC-设定的模拟流程-ALIGN-OOM project=lab-gene-x workflow=nightly-regression run_id=设定的模拟流程 stage=align reason=memory_limit
+labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=设定的模拟流程;project=lab-gene-x
+agentos:event type=TOOL_CALL tick=... role=sentinel tool=query_file project=lab-gene-x run_id=设定的模拟流程 status=failed hits=1 used_index=1 seq=4
 labdemo_ucore: sentinel prefetch_hint stage=analyze source_seq=4 plan=2 candidates=1
-agentos:event type=PREFETCH_HINT tick=... role=sentinel project=lab-gene-x run_id=RUN-042 source_stage=align next_stage=analyze source_seq=4 candidates=1 reason=15
-agentos:event type=AUDIT tick=... role=sentinel action=action_commit result=DENIED reason=capability corr_id=RUN-042-align-rerun-1 seq=5
+agentos:event type=PREFETCH_HINT tick=... role=sentinel project=lab-gene-x run_id=设定的模拟流程 source_stage=align next_stage=analyze source_seq=4 candidates=1 reason=15
+agentos:event type=AUDIT tick=... role=sentinel action=action_commit result=DENIED reason=capability corr_id=设定的模拟流程-align-rerun-1 seq=5
 labdemo_ucore: investigator handoff_prefetch stage=analyze source_seq=4 reason=31
 labdemo_ucore: investigator span_prefetch stage=analyze count=... source_pid=... target_pid=...
 labdemo_ucore: investigator span_trace records=... context=1 event=1 prefetch=1
-agentos:event type=MESSAGE tick=... from=sentinel to=investigator status=OK corr_id=MSG-RUN-042-S-I prefetch_handoff=analyze seq=6
+agentos:event type=MESSAGE tick=... from=sentinel to=investigator status=OK corr_id=MSG-设定的模拟流程-S-I prefetch_handoff=analyze seq=6
 labdemo_ucore: investigator reason=align output is ready before injected failure
 labdemo_ucore: investigator digest bytes=27 preview=align memory_limit evidence seq=4
 agentos:event type=TOOL_CALL tick=... role=investigator tool=read_file_digest stage=align status=OK bytes=27 seq=4
 labdemo_ucore: affected labels=align+analyze+report+archive
 labdemo_ucore: investigator prefetch_summary stage=analyze result=analysis waits for align
 agentos:event type=PREFETCH_USED tick=... role=investigator stage=analyze summary=analysis waits for align seq=6
-agentos:event type=LLM_CALL tick=... mode=template task=explain_root_cause llm_request_id=LLM-RUN-042-RCA-1 project=lab-gene-x run_id=RUN-042 refs=3,4,5,6 status=OK
-agentos:event type=LLM_RESULT tick=... mode=template llm_request_id=LLM-RUN-042-RCA-1 llm_status=OK llm_explanation=memory_limit referenced_sequences=3,4,5,6 confidence=medium
-agentos:event type=PLAN_CREATED tick=... role=investigator plan=PLAN-RUN-042-RECOVER-1 project=lab-gene-x run_id=RUN-042 actions=align,analyze,report skip=prepare prefetch=analyze refs=3,4,5,6
+agentos:event type=LLM_CALL tick=... mode=template task=explain_root_cause llm_request_id=LLM-设定的模拟流程-RCA-1 project=lab-gene-x run_id=设定的模拟流程 refs=3,4,5,6 status=OK
+agentos:event type=LLM_RESULT tick=... mode=template llm_request_id=LLM-设定的模拟流程-RCA-1 llm_status=OK llm_explanation=memory_limit referenced_sequences=3,4,5,6 confidence=medium
+agentos:event type=PLAN_CREATED tick=... role=investigator plan=PLAN-设定的模拟流程-RECOVER-1 project=lab-gene-x run_id=设定的模拟流程 actions=align,analyze,report skip=prepare prefetch=analyze refs=3,4,5,6
 agentos:event type=CONTEXT_SNAPSHOT tick=... role=investigator records=6 latest=6
-agentos:event type=MESSAGE tick=... from=investigator to=recovery status=OK corr_id=MSG-RUN-042-I-R plan=PLAN-RUN-042-RECOVER-1 seq=7
-agentos:event type=ACTION tick=... role=recovery label=align status=OK corr_id=RUN-042-align-rerun-1 plan=PLAN-RUN-042-RECOVER-1 seq=4 duplicate=0
-agentos:event type=AUDIT tick=... role=recovery action=commit_align result=DUPLICATE corr_id=RUN-042-align-rerun-1 plan=PLAN-RUN-042-RECOVER-1 seq=5
-agentos:event type=ARTIFACT tick=... role=recovery project=lab-gene-x run_id=RUN-042 file=RUN-042-recovery.md status=OK corr_id=RUN-042-report-write-1 plan=PLAN-RUN-042-RECOVER-1 seq=6 llm_enhanced=0
+agentos:event type=MESSAGE tick=... from=investigator to=recovery status=OK corr_id=MSG-设定的模拟流程-I-R plan=PLAN-设定的模拟流程-RECOVER-1 seq=7
+agentos:event type=ACTION tick=... role=recovery label=align status=OK corr_id=设定的模拟流程-align-rerun-1 plan=PLAN-设定的模拟流程-RECOVER-1 seq=4 duplicate=0
+agentos:event type=AUDIT tick=... role=recovery action=commit_align result=DUPLICATE corr_id=设定的模拟流程-align-rerun-1 plan=PLAN-设定的模拟流程-RECOVER-1 seq=5
+agentos:event type=ARTIFACT tick=... role=recovery project=lab-gene-x run_id=设定的模拟流程 file=设定的模拟流程-recovery.md status=OK corr_id=设定的模拟流程-report-write-1 plan=PLAN-设定的模拟流程-RECOVER-1 seq=6 llm_enhanced=0
 labdemo_ucore: final report_query hits=2 used_index=1 scanned=7
-agentos:event type=FINAL tick=... project=lab-gene-x run_id=RUN-042 status=RECOVERED plan=PLAN-RUN-042-RECOVER-1
+agentos:event type=FINAL tick=... project=lab-gene-x run_id=设定的模拟流程 status=RECOVERED plan=PLAN-设定的模拟流程-RECOVER-1
 labdemo_ucore: global_audit=1 records=... agents=3 context=1 event=1 sched=1 prefetch=1
 labdemo_ucore: audit_query=1 kind=... span=... event=2 prefetch=... start=...
 labdemo_ucore: unified_timeline records=... context=1 event=1 sched=1 prefetch=1 digest=1
@@ -282,7 +282,7 @@ labdemo_ucore: passed
 labdemo_ucore: parent passed
 ```
 
-结论：多 Agent 场景通过，能够展示监控、诊断、恢复和审计过程；sentinel 能读取文件查询产生的预取提示，message 入队时内核把该提示交接给 investigator，investigator 能把带 `HANDOFF` 原因位的提示转化为 analyze 摘要读取，并能读取真实 align 日志的 digest 内容证据；LLM 和计划事件引用 summary、digest、dependency、prefetch 四条 sequence；orchestrator 能从全局审计短记录中看到 sentinel、investigator、recovery 的 Context、事件、调度和预取交接摘要，并能按 kind、span、目标事件、预取 source/target 和起始 sequence 过滤查询，也能通过统一 timeline 精确拉取 prefetch handoff、digest 内容证据或按上一条已读记录继续读取；provenance graph 进一步确认 sentinel 到 investigator 的 message、prefetch 触发关系和 investigator 的 digest 证据边。
+结论：多 Agent 场景通过，能够呈现监控、诊断、恢复和审计过程；sentinel 能读取文件查询产生的预取提示，message 入队时内核把该提示交接给 investigator，investigator 能把带 `HANDOFF` 原因位的提示转化为 analyze 摘要读取，并能读取真实 align 日志的 digest 内容证据；LLM 和计划事件引用 summary、digest、dependency、prefetch 四条 sequence；orchestrator 能从全局审计短记录中看到 sentinel、investigator、recovery 的 Context、事件、调度和预取交接摘要，并能按 kind、span、目标事件、预取 source/target 和起始 sequence 过滤查询，也能通过统一 timeline 精确拉取 prefetch handoff、digest 内容证据或按上一条已读记录继续读取；provenance graph 进一步确认 sentinel 到 investigator 的 message、prefetch 触发关系和 investigator 的 digest 证据边。
 
 ## 样例输出：agentsecurity_ucore
 

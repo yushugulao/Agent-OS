@@ -40,7 +40,7 @@
   <rect x="265" y="770" width="230" height="34" class="tag"/>
   <text x="320" y="794" class="small">渲染证据</text>
   <rect x="130" y="830" width="500" height="92" class="box"/>
-  <text x="282" y="866" class="label">演示网页</text>
+  <text x="282" y="866" class="label">示例网页</text>
   <text x="210" y="896" class="tiny">运行详情、Agent 详情、证据详情、对比指标</text>
   <text x="60" y="950" class="tiny">内核不调用云服务；它只向用户态和宿主机工具提供可信记录。</text>
 </svg>

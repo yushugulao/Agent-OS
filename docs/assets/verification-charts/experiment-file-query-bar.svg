@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="560" viewBox="0 0 980 560">
+<style>
+text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
+.title{font-size:20px;font-weight:700}.subtitle{font-size:13px;fill:#52616f}
+.axis{font-size:12px;fill:#52616f}.label{font-size:12px}.value{font-size:12px;font-weight:700}
+</style>
+<rect width="980" height="560" fill="#ffffff"/>
+<text x="34" y="34" class="title">文件数变化下的扫描数与 metadata 候选数</text>
+<text x="34" y="58" class="subtitle">同一文件规模进入两条路径：普通路径逐个扫描文件，AgentOS 路径先使用内核 metadata 候选集。</text>
+<text x="90" y="528" class="axis">触达记录数</text>
+<line x1="90" y1="440.0" x2="946" y2="440.0" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="444.0" text-anchor="end" class="axis">0</text>
+<line x1="90" y1="373.6" x2="946" y2="373.6" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="377.6" text-anchor="end" class="axis">242</text>
+<line x1="90" y1="307.2" x2="946" y2="307.2" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="311.2" text-anchor="end" class="axis">484</text>
+<line x1="90" y1="240.8" x2="946" y2="240.8" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="244.8" text-anchor="end" class="axis">726</text>
+<line x1="90" y1="174.4" x2="946" y2="174.4" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="178.4" text-anchor="end" class="axis">968</text>
+<line x1="90" y1="108.0" x2="946" y2="108.0" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="112.0" text-anchor="end" class="axis">1210</text>
+<rect x="140.8" y="431.2" width="52.0" height="8.8" fill="#4c78a8" rx="2"/>
+<text x="166.8" y="424.2" text-anchor="middle" class="value">32</text>
+<rect x="201.2" y="438.4" width="52.0" height="1.6" fill="#f58518" rx="2"/>
+<text x="227.2" y="431.4" text-anchor="middle" class="value">6</text>
+<text x="197.0" y="468" text-anchor="middle" class="label">32</text>
+<rect x="354.8" y="404.9" width="52.0" height="35.1" fill="#4c78a8" rx="2"/>
+<text x="380.8" y="397.9" text-anchor="middle" class="value">128</text>
+<rect x="415.2" y="437.8" width="52.0" height="2.2" fill="#f58518" rx="2"/>
+<text x="441.2" y="430.8" text-anchor="middle" class="value">8</text>
+<text x="411.0" y="468" text-anchor="middle" class="label">128</text>
+<rect x="568.8" y="299.5" width="52.0" height="140.5" fill="#4c78a8" rx="2"/>
+<text x="594.8" y="292.5" text-anchor="middle" class="value">512</text>
+<rect x="629.2" y="437.3" width="52.0" height="2.7" fill="#f58518" rx="2"/>
+<text x="655.2" y="430.3" text-anchor="middle" class="value">10</text>
+<text x="625.0" y="468" text-anchor="middle" class="label">512</text>
+<rect x="782.8" y="159.0" width="52.0" height="281.0" fill="#4c78a8" rx="2"/>
+<text x="808.8" y="152.0" text-anchor="middle" class="value">1024</text>
+<rect x="843.2" y="437.0" width="52.0" height="3.0" fill="#f58518" rx="2"/>
+<text x="869.2" y="430.0" text-anchor="middle" class="value">11</text>
+<text x="839.0" y="468" text-anchor="middle" class="label">1024</text>
+<rect x="735" y="70" width="14" height="14" fill="#4c78a8"/>
+<text x="756" y="82" class="label">普通 uCore</text>
+<rect x="850" y="70" width="14" height="14" fill="#f58518"/>
+<text x="871" y="82" class="label">AgentOS-uCore</text>
+</svg>

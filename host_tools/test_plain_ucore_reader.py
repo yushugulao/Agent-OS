@@ -1735,9 +1735,9 @@ def main() -> int:
         assert "Host Pages" in api_catalog_html
         assert "Host Dynamic Pages" in api_catalog_html
         assert "Host Downloads" in api_catalog_html
-        assert "Reader GET Routes" in api_catalog_html
-        assert "Reader Dynamic Prefixes" in api_catalog_html
-        assert "Reader Downloads" in api_catalog_html
+        assert "阅读器 GET 路由" in api_catalog_html
+        assert "阅读器动态前缀" in api_catalog_html
+        assert "阅读器下载入口" in api_catalog_html
         assert "Grouped Routes" in api_catalog_html
         assert "API Groups" in api_catalog_html
         assert "214" in api_catalog_html
@@ -2285,12 +2285,12 @@ def main() -> int:
             "<!doctype html><html><body>AgentOS 运行观测面板</body></html>",
             encoding="utf-8",
         )
-        (out_dir / "dual-results" / "demo-guide.html").write_text(
-            "<!doctype html><html><body>AgentOS 演示导览</body></html>",
+        (out_dir / "dual-results" / "reader-guide.html").write_text(
+            "<!doctype html><html><body>AgentOS 运行导览</body></html>",
             encoding="utf-8",
         )
-        (out_dir / "dual-results" / "demo-checklist.html").write_text(
-            "<!doctype html><html><body>AgentOS 演示检查表</body></html>",
+        (out_dir / "dual-results" / "reader-checklist.html").write_text(
+            "<!doctype html><html><body>AgentOS 结果核验表</body></html>",
             encoding="utf-8",
         )
         (out_dir / "dual-results" / "test-suite.html").write_text(
@@ -2306,11 +2306,11 @@ def main() -> int:
             encoding="utf-8",
         )
         (out_dir / "dual-results.html").write_text(
-            "<!doctype html><html><body>AgentOS 录屏 URL 清单<a href=\"dual-results/test-suite.html\">测试入口说明</a></body></html>",
+            "<!doctype html><html><body>AgentOS 运行 URL 清单<a href=\"dual-results/test-suite.html\">测试入口说明</a></body></html>",
             encoding="utf-8",
         )
-        (out_dir / "demo-url-list.txt").write_text(
-            "AgentOS 录屏 URL 清单\nhttp://127.0.0.1:8767/dual-results/test-suite.html\n",
+        (out_dir / "reader-url-list.txt").write_text(
+            "AgentOS 运行 URL 清单\nhttp://127.0.0.1:8767/dual-results/test-suite.html\n",
             encoding="utf-8",
         )
         (out_dir / "dual-results" / "charts" / "runtime-observation.svg").write_text(
@@ -2443,16 +2443,16 @@ def main() -> int:
             with request.urlopen(base + "/dual-results/monitor.html", timeout=5) as response:
                 monitor_html = response.read().decode("utf-8")
             assert "AgentOS 运行观测面板" in monitor_html
-            with request.urlopen(base + "/dual-results/demo-guide.html", timeout=5) as response:
+            with request.urlopen(base + "/dual-results/reader-guide.html", timeout=5) as response:
                 demo_html = response.read().decode("utf-8")
-            assert "AgentOS 演示导览" in demo_html
+            assert "AgentOS 运行导览" in demo_html
             with request.urlopen(base + "/dual-results.html", timeout=5) as response:
                 result_entry = response.read().decode("utf-8")
-            assert "AgentOS 录屏 URL 清单" in result_entry
+            assert "AgentOS 运行 URL 清单" in result_entry
             assert "dual-results/test-suite.html" in result_entry
-            with request.urlopen(base + "/demo-url-list.txt", timeout=5) as response:
+            with request.urlopen(base + "/reader-url-list.txt", timeout=5) as response:
                 url_text = response.read().decode("utf-8")
-            assert "AgentOS 录屏 URL 清单" in url_text
+            assert "AgentOS 运行 URL 清单" in url_text
             with request.urlopen(base + "/dual-results/test-suite.html", timeout=5) as response:
                 suite_html = response.read().decode("utf-8")
             assert "AgentOS 测试入口说明" in suite_html

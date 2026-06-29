@@ -24,7 +24,7 @@
   <text x="356" y="190" class="tiny">文件编辑租约测试</text>
   <rect x="635" y="75" width="230" height="132" fill="#b7d1e8" class="box"/>
   <text x="685" y="112" class="label">场景检查</text>
-  <text x="665" y="142" class="tiny">综合演示 RUN-042</text>
+  <text x="665" y="142" class="tiny">综合示例：设定的模拟流程</text>
   <text x="665" y="166" class="tiny">多 Agent 恢复</text>
   <text x="665" y="190" class="tiny">结构化事件流</text>
   <rect x="910" y="95" width="165" height="92" fill="#f5c29f" class="box"/>

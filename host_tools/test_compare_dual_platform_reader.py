@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit checks for Host Reader summary comparison."""
+"""Unit checks for 本地结果阅读器 summary comparison."""
 
 from __future__ import annotations
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Unit checks for rendered Host Reader output validation."""
+"""Unit checks for rendered 本地结果阅读器 output validation."""
 
 from __future__ import annotations
 

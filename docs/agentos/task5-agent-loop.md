@@ -1,12 +1,12 @@
 # 任务五：Agent Loop 内核运行机制
 
-本文是 [design.md](design.md) 的任务五细节附录，重点说明 uCore 分支当前实现的 watch、wait、wake、wait cancel、heartbeat、事件投递、Agent 感知调度、全局审计机制和 Run Ledger 摘要。
+本文是 [design.md](design.md) 的任务五细节附录，重点说明 AgentOS-uCore 当前实现的 watch、wait、wake、wait cancel、heartbeat、事件投递、Agent 感知调度、全局审计机制和 Run Ledger 摘要。
 
 ## 目标
 
 任务五希望操作系统支持 Agent 长期运行机制，使 Agent 不只是主动调用工具，还能等待内核事件、被文件状态变化唤醒、按心跳维护状态，并参与多 Agent 协作。
 
-当前 uCore 分支实现的是可验证的 Agent Loop 内核机制：
+AgentOS-uCore 当前实现的是可验证的 Agent Loop 内核机制：
 
 - Agent 最多可注册 8 条 watch；
 - Agent 可删除指定 watch，或一次清空全部 watch；
@@ -34,7 +34,7 @@
 | --- | --- |
 | `AGENT_LOOP_NONE` | 普通进程或未初始化 |
 | `AGENT_LOOP_IDLE` | Agent 已创建但未等待 |
-| `AGENT_LOOP_RUNNING` | Agent 正在执行工具或演示逻辑 |
+| `AGENT_LOOP_RUNNING` | Agent 正在执行工具或示例逻辑 |
 | `AGENT_LOOP_WAITING` | Agent 正在等待事件 |
 
 `agent_watch()` 会让 Agent 进入可监听状态，`agent_wait()` 会让 Agent 等待匹配事件。
@@ -75,11 +75,7 @@ int agent_unwatch(int event_type, const char *filter);
 5. 相同 `event_type + filter` 的 watch 会被替换。
 6. `agent_unwatch(AGENT_EVENT_NONE, "")` 会清空当前 Agent 的全部 watch。
 
-`labdemo_ucore` 中 sentinel 注册：
-
-```text
-agentos:event type=WATCH_REGISTERED tick=... role=sentinel event=FILE_STATUS filter=status=failed
-```
+`labdemo_ucore` 中 sentinel 会注册文件状态 watch。对应检查项为 `WATCH_REGISTERED`，原始输出见 [test-record.md](test-record.md)。
 
 ## 等待：Wait
 
@@ -101,16 +97,9 @@ int agent_wait(struct agent_event *event, int timeout_ticks);
 
 当前有限 timeout 也会进入 `SLEEPING` 状态，由事件入队、heartbeat 到期或 deadline 到期唤醒，不通过反复 `yield()` 消耗 CPU。`agent_info.wait_loop_count` 用于观察等待检查次数，`agentloop_ucore` 会验证有限 timeout 的循环次数保持在很小范围。
 
-`agentbench_ucore` 先验证无事件等待会返回 timeout，并检查 `timeout_count` 增加；随后输出 busy polling 查询和 wait/wake 的计时观测，便于用户看到轮询路径与事件路径的成本都可测：
+`agentbench_ucore` 先验证无事件等待会返回 timeout，并检查 `timeout_count` 增加；随后输出 busy polling 查询和 wait/wake 的计时观测，便于用户看到轮询路径与事件路径的成本都可测。具体 tick 样例统一保存在 [test-record.md](test-record.md)。
 
-```text
-agentbench_ucore: timeout_heartbeat=1
-agentbench_ucore: busy_poll_query ops=128 ticks=11 ops_per_tick=11 speedup_x100=100
-agentbench_ucore: event_wait_wake ops=8 ticks=6 ops_per_tick=1 speedup_x100=100
-agentbench_ucore: busy_poll_vs_wait busy_ops=128 busy_ticks=11 wait_ops=8 wait_ticks=6
-```
-
-这里的 `speedup_x100=100` 是单项自身的计时基线。`busy_poll_vs_wait` 用于展示两个路径的观测数据，不设置固定 tick 阈值。
+这里的 `speedup_x100=100` 是单项自身的计时基线。`busy_poll_vs_wait` 用于呈现两个路径的观测数据，不设置固定 tick 阈值。
 
 ## 唤醒：Wake
 
@@ -130,18 +119,7 @@ int agent_wake(int pid, struct agent_event *event);
 
 队列满时返回 `AGENT_STATUS_NO_SPACE`，不会覆盖旧事件。`send_message` 工具在目标队列满时也返回 `AGENT_STATUS_NO_SPACE`，并避免留下不可感知的消息副作用。
 
-`agentfinal_ucore` 用自唤醒验证最小路径：
-
-```text
-agentfinal_ucore: event_wait=1 payload=self wake
-agentfinal_ucore: run_ledger=1 records=... hash=... context=... event=... sched=... prefetch=...
-```
-
-`labdemo_ucore` 用跨 Agent 唤醒验证场景路径：
-
-```text
-agentos:event type=MESSAGE from=sentinel to=investigator status=OK
-```
+`agentfinal_ucore` 用自唤醒验证最小路径，检查事件能够入队、等待能够返回，并且相关记录进入 Run Ledger。`labdemo_ucore` 用跨 Agent 消息验证场景路径，检查 sentinel 到 investigator 的消息事件能够被内核投递和消费。原始输出统一见 [test-record.md](test-record.md)。
 
 ## 取消等待：Wait Cancel
 
@@ -200,9 +178,9 @@ int agent_heartbeat_stop(void);
 
 ## 感知调度：Agent
 
-uCore 原有调度器从可运行队列中取任务。当前分支保留普通 FIFO 取队路径，并增加一个 Agent 任务提示位：当可运行队列中没有 Agent 时，调度器继续使用原有 `fetch_task()`；当 Agent 进入可运行队列后，调度器改用 `fetch_best_task()`，临时取出一批可运行任务，用 `agent_sched_better()` 比较任务优先级，选出最适合运行的任务后把其余任务放回队列。若本次扫描发现队列中已经没有 Agent，提示位会被清除，后续普通进程负载回到原 FIFO 路径。
+uCore 原有调度器从可运行队列中取任务。AgentOS-uCore 当前实现保留普通 FIFO 取队路径，并增加一个 Agent 任务提示位：当可运行队列中没有 Agent 时，调度器继续使用原有 `fetch_task()`；当 Agent 进入可运行队列后，调度器改用 `fetch_best_task()`，短时取出一批可运行任务，用 `agent_sched_better()` 比较任务优先级，选出最适合运行的任务后把其余任务放回队列。若本次扫描发现队列中已经没有 Agent，提示位会被清除，后续普通进程负载回到原 FIFO 路径。
 
-Agent 任务的评分因素包括：
+Agent 任务的调度分值因素包括：
 
 | 因素 | 作用 |
 | --- | --- |
@@ -216,7 +194,7 @@ Agent 任务的评分因素包括：
 | 虚拟运行量 | 已经运行较多的 Agent 被扣分，提升公平性 |
 | 运行预算 | 单个 Agent 超过默认预算后被扣分 |
 
-普通进程仍可运行。Agent 调度不是把普通进程完全压制，而是在存在可运行 Agent 时优先处理更紧急、更有权限或已经等待较久的 Agent；普通支持程序没有 Agent 身份时，不需要反复经过 Agent 评分路径。
+普通进程仍可运行。Agent 调度不是把普通进程完全压制，而是在存在可运行 Agent 时优先处理更紧急、更有权限或已经等待较久的 Agent；普通支持程序没有 Agent 身份时，不需要反复经过 Agent 调度分值计算路径。
 
 `struct agent_info` 暴露调度观测字段：`sched_weight`、`sched_priority`、`sched_budget`、`sched_dispatch_count`、`sched_event_dispatch_count`、`sched_deadline_dispatch_count`、`sched_vruntime`、`sched_ready_tick`、`sched_last_dispatch_tick`、`sched_preemptions` 和 `sched_budget_used`。`agentsched_ucore` 用这些字段验证角色权重、受权调度配置、事件优先和公平性计数。
 
@@ -263,8 +241,8 @@ int agent_ledger_snapshot(struct agent_ledger_summary *summary);
 | `AGENT_SCHED_REASON_HEARTBEAT_DUE` | heartbeat 到期 |
 | `AGENT_SCHED_REASON_BUDGET_USED` | 当前调度预算已用满 |
 | `AGENT_SCHED_REASON_VRUNTIME` | 虚拟运行量产生扣分 |
-| `AGENT_SCHED_REASON_READY_AGE` | 进入可运行队列后的等待时间参与评分 |
-| `AGENT_SCHED_REASON_PRIORITY` | 配置的 priority 参与评分 |
+| `AGENT_SCHED_REASON_READY_AGE` | 进入可运行队列后的等待时间参与调度分值计算 |
+| `AGENT_SCHED_REASON_PRIORITY` | 配置的 priority 参与调度分值计算 |
 
 `agentsched_ucore` 在自唤醒消息尚未消费时让出处理器，随后检查最近调度记录必须包含 `AGENT_SCHED_REASON_EVENT_QUEUE` 和 `AGENT_SCHED_REASON_ROLE_WEIGHT`，并输出：
 
@@ -276,19 +254,11 @@ agentsched_ucore: reason_trace=1 records=... reason=... score=...
 
 `agent_span_trace_snapshot()` 是参与 Agent 的当前 span 观测接口。它读取同一组全局短记录，只返回当前 Agent 的 `current_span_id` 对应记录；普通进程返回 `-1`，缺少 `AUDIT_WRITE` 的 Agent 返回 `AGENT_STATUS_DENIED`。`labdemo_ucore` 中 investigator 消费 sentinel 消息后调用该接口，检查当前 span 中已经有 Context、事件和预取交接记录。
 
-`agent_timeline_snapshot()` 是统一导出接口。它把当前 Agent 可见的 Context 摘要、调度原因、审计短记录和本地预取提示转换为 `agent_timeline_record`，并按 tick 输出。普通 Agent 只能看到自身数据和当前 span 的系统短记录；orchestrator 可以看到全局审计记录。Context 审计记录保留工具结果数值槽，内容摘要工具的 size、bytes、hash 和短 preview 可以进入统一 timeline。`agent_timeline_query()` 在同一可见集合上按 source、起始 tick、span、kind、pid、tool、event、status、flags 和 after-cursor 过滤，用于最终页面只读取某个 Agent、某个事件类型、某次预取交接、某个工具产生的内容证据，或按上一条已读记录继续读取后续片段。`agent_timeline_wait()` 使用同一套 filter；没有匹配记录时 Agent 睡眠，直到 Context、审计、调度或预取提示写入后被唤醒，返回正数后再用同一 filter 查询。`agent_timeline_read()` 使用同一套 filter，但会在同一次 syscall 中完成等待和记录复制。等待中的 filter 会保存在 PCB 中，内核把每次新写入转换为统一 timeline record，并直接按完整 filter 判断是否唤醒，避免只等待 Context 的 Agent 被纯 Audit 记录增加 timeline wake 计数，也避免只等待 MESSAGE 的 Agent 被 TIMER 记录唤醒。`agentfinal_ucore` 会检查输出中同时存在 Context、调度、审计和预取提示来源，检查 source/tick/cursor 过滤，并验证 timeline wait 的 timeout、source 不匹配不唤醒、event 不匹配不唤醒、heartbeat TIMER audit 唤醒和 wait-and-read 记录复制；`labdemo_ucore` 会检查多 Agent 场景下的统一 timeline 同时包含 Context、事件、调度、预取交接和 digest 内容证据，并用 query 精确读取 prefetch handoff、digest 证据和 cursor 后续片段。
+`agent_timeline_snapshot()` 是统一导出接口。它把当前 Agent 可见的 Context 摘要、调度原因、审计短记录和本地预取提示转换为 `agent_timeline_record`，并按 tick 输出。普通 Agent 只能看到自身数据和当前 span 的系统短记录；orchestrator 可以看到全局审计记录。Context 审计记录保留工具结果数值槽，内容摘要工具的 size、bytes、hash 和短 preview 可以进入统一 timeline。`agent_timeline_query()` 在同一可见集合上按 source、起始 tick、span、kind、pid、tool、event、status、flags 和 after-cursor 过滤，用于只读取某个 Agent、某个事件类型、某次预取交接、某个工具产生的内容证据，或按上一条已读记录继续读取后续片段。`agent_timeline_wait()` 使用同一套 filter；没有匹配记录时 Agent 睡眠，直到 Context、审计、调度或预取提示写入后被唤醒，返回正数后再用同一 filter 查询。`agent_timeline_read()` 使用同一套 filter，但会在同一次 syscall 中完成等待和记录复制。等待中的 filter 会保存在 PCB 中，内核把每次新写入转换为统一 timeline record，并直接按完整 filter 判断是否唤醒，避免只等待 Context 的 Agent 被纯 Audit 记录增加 timeline wake 计数，也避免只等待 MESSAGE 的 Agent 被 TIMER 记录唤醒。`agentfinal_ucore` 会检查输出中同时存在 Context、调度、审计和预取提示来源，检查 source/tick/cursor 过滤，并验证 timeline wait 的 timeout、source 不匹配不唤醒、event 不匹配不唤醒、heartbeat TIMER audit 唤醒和 wait-and-read 记录复制；`labdemo_ucore` 会检查多 Agent 场景下的统一 timeline 同时包含 Context、事件、调度、预取交接和 digest 内容证据，并用 query 精确读取 prefetch handoff、digest 证据和 cursor 后续片段。原始输出见 [test-record.md](test-record.md)。
 
-```text
-agentfinal_ucore: timeline_wait=1 timeout=-7 source_gate=1 event_gate=1 wake=1 query=1 read=1 sleeps=1 wakeups=1
-```
+`agent_provenance_snapshot()` 是因果图接口。它使用与 timeline 相同的权限视图，但输出的是 Context、Audit 和 Prefetch 节点之间的因果边。`labdemo_ucore` 用它验证 sentinel 到 investigator 的 message 边、prefetch handoff 边和 investigator 读取真实内容摘要的 digest 边。
 
-`agent_provenance_snapshot()` 是最终页面的因果图接口。它使用与 timeline 相同的权限视图，但输出的是 Context、Audit 和 Prefetch 节点之间的因果边。`labdemo_ucore` 用它验证 sentinel 到 investigator 的 message 边、prefetch handoff 边和 investigator 读取真实内容摘要的 digest 边：
-
-```text
-labdemo_ucore: provenance_graph edges=... message=1 prefetch=1 digest=1
-```
-
-`agent_audit_snapshot()` 是面向 orchestrator 的系统级观测接口。内核把 Context 追加、事件入队、事件消费、Agent 调度 dispatch 和预取提示交接写入固定 512 条全局 ring。每条记录包含 `prev_hash` 和 `record_hash`，形成内核维护的运行事实链。普通进程调用返回 `-1`，非 orchestrator Agent 调用返回 `AGENT_STATUS_DENIED`。`agent_audit_query()` 使用 `struct agent_audit_filter` 的 flags 过滤同一组短记录，可按 kind、span、pid/source/target、role、tool、event、status 和起始 sequence 查询。`agent_ledger_snapshot()` 返回这组全局短记录的 sequence 范围、记录总量、已淘汰数、分类计数、观测 epoch 和链尾 hash，适合最终页面先读取摘要，再按需读取明细。`labdemo_ucore` 在 sentinel、investigator、recovery 退出后调用这些接口，确认三个业务 Agent 都出现在全局短记录中，并且记录中同时包含 Context、事件、调度和预取交接摘要。
+`agent_audit_snapshot()` 是面向 orchestrator 的系统级观测接口。内核把 Context 追加、事件入队、事件消费、Agent 调度 dispatch 和预取提示交接写入固定 512 条全局 ring。每条记录包含 `prev_hash` 和 `record_hash`，形成内核维护的运行事实链。普通进程调用返回 `-1`，非 orchestrator Agent 调用返回 `AGENT_STATUS_DENIED`。`agent_audit_query()` 使用 `struct agent_audit_filter` 的 flags 过滤同一组短记录，可按 kind、span、pid/source/target、role、tool、event、status 和起始 sequence 查询。`agent_ledger_snapshot()` 返回这组全局短记录的 sequence 范围、记录总量、已淘汰数、分类计数、观测 epoch 和链尾 hash，适合状态页面先读取摘要，再按需读取明细。`labdemo_ucore` 在 sentinel、investigator、recovery 退出后调用这些接口，确认三个业务 Agent 都出现在全局短记录中，并且记录中同时包含 Context、事件、调度和预取交接摘要。
 
 ## 文件状态事件
 
@@ -300,14 +270,7 @@ labdemo_ucore: provenance_graph edges=... message=1 prefetch=1 digest=1
 4. 把事件投递给目标 Agent；
 5. 目标 Agent 从 `agent_wait()` 返回。
 
-`labdemo_ucore` 中：
-
-```text
-agentos:event type=INCIDENT_CREATED tick=... id=INC-RUN-042-ALIGN-OOM project=lab-gene-x workflow=nightly-regression run_id=RUN-042 stage=align reason=memory_limit
-labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042;project=lab-gene-x
-```
-
-说明文件状态变化成功唤醒 sentinel。
+`labdemo_ucore` 会在用户态写入科研示例数据后触发文件状态变化，sentinel 通过 watch 收到事件。原始输出见 [test-record.md](test-record.md)。
 
 ## 消息事件
 
@@ -333,7 +296,7 @@ Agent Loop 行为会写入 Context Path：
 - message 工具调用；
 - query 和 recovery 工具调用。
 
-这使得演示不仅能看到最终结果，也能回放 Agent 做出判断的过程。
+这使得示例不仅能看到最终结果，也能回放 Agent 做出判断的过程。
 
 Context v6 还会把事件和后续工具调用连起来，并继续维护 Context 完整性链：
 
@@ -342,27 +305,7 @@ Context v6 还会把事件和后续工具调用连起来，并继续维护 Conte
 3. 后续 `query_file`、`send_message`、`action_commit` 等工具调用会继续使用这个 span。
 4. 每次追加 Context 记录时，内核同时写入 prev_hash 和 record_hash，header 暴露最新链尾 hash。
 
-因此跨 Agent 协作可以从 Context 和事件结构中追踪：sentinel 收到文件状态事件后查询文件，随后发送消息；investigator 消费消息后继续分析；recovery 消费消息后执行恢复。`agentloop_ucore` 会检查投递和消费的事件都带有非零 cause/span，并输出：
-
-```text
-agentloop_ucore: event_causality=1
-```
-
-`labdemo_ucore` 中 investigator 输出：
-
-```text
-agentos:event type=CONTEXT_SNAPSHOT tick=... role=investigator records=6 latest=...
-labdemo_ucore: investigator span_trace records=... context=1 event=1 prefetch=1
-```
-
-说明 investigator 的推理和工具调用历史可以通过 snapshot 查看，也可以在当前 span 中看到上游事件和预取交接摘要。
-
-综合演示结束前，orchestrator 还会查询全局审计短记录：
-
-```text
-labdemo_ucore: global_audit=1 records=... agents=3 context=1 event=1 sched=1 prefetch=1
-labdemo_ucore: audit_query=1 kind=... span=... event=2 prefetch=... start=...
-```
+因此跨 Agent 协作可以从 Context 和事件结构中追踪：sentinel 收到文件状态事件后查询文件，随后发送消息；investigator 消费消息后继续分析；recovery 消费消息后执行恢复。`agentloop_ucore` 会检查投递和消费的事件都带有非零 cause/span。`labdemo_ucore` 还会检查 investigator 能通过 snapshot 查看推理和工具调用历史，也能在当前 span 中看到上游事件和预取交接摘要。综合示例结束前，orchestrator 会查询全局审计短记录，确认三个业务 Agent、Context、事件、调度和预取交接都进入同一组系统级记录。原始输出统一见 [test-record.md](test-record.md)。
 
 这说明多 Agent 场景不只保留单个 Agent 自己的 Context，还能在内核中形成一组可查询、可过滤并带摘要 hash 的系统级短记录，用于说明“哪个 Agent 收到事件、哪个 Agent 进行了工具调用、调度器何时运行了相关 Agent”。
 
@@ -373,80 +316,17 @@ labdemo_ucore: audit_query=1 kind=... span=... event=2 prefetch=... start=...
 | 调度策略 | 当前支持 orchestrator 配置 weight、priority 和 budget，尚未实现复杂策略语言 |
 | 事件容量 | 当前每 Agent 固定 16 槽 FIFO，队列满时拒绝新事件 |
 | 取消范围 | 当前支持取消正在等待或下一次等待的 Agent；尚未实现通用任务取消 |
-| 多核复杂场景 | 当前按 uCore 当前运行环境和测试路径验证，后续可扩展更强锁设计 |
+| 多核复杂场景 | 当前按 uCore 当前运行环境和测试路径验证锁保护和队列状态 |
 | LLM 驱动 | 当前由用户测试程序驱动，不接真实 LLM |
 
 ## 验证证据
 
-`agentfinal_ucore`：
+原始输出统一保存在 [test-record.md](test-record.md)，逐项测试步骤见 [testing-details.md](testing-details.md)。任务五重点检查以下内容：
 
-```text
-agentfinal_ucore: event_wait=1 payload=self wake
-```
-
-`agentbench_ucore`：
-
-```text
-agentbench_ucore: timeout_heartbeat=1
-agentbench_ucore: event_wait_wake ops=8 ticks=6 ops_per_tick=1 speedup_x100=100
-```
-
-`agentloop_ucore`：
-
-```text
-agentloop_ucore: fifo=1
-agentloop_ucore: event_causality=1
-agentloop_ucore: overflow_dropped=1
-agentloop_ucore: unwatch=1
-agentloop_ucore: timeout_sleep_no_poll=1
-agentloop_ucore: timer_unwatch=1
-agentloop_ucore: heartbeat_wake_stop=1
-agentloop_ucore: wait_cancel=1
-agentloop_ucore: passed
-```
-
-`agentsched_ucore`：
-
-```text
-agentsched_ucore: role_weights sentinel=70 investigator=90 recovery=120 orchestrator=110
-agentsched_ucore: configurable_policy=1 weight=150 priority=20 budget=3
-agentsched_ucore: event_priority=1 dispatch=6 event_dispatch=1
-agentsched_ucore: reason_trace=1 records=6 reason=131 score=1655
-agentsched_ucore: fairness=1 dispatch=18 preemptions=13 vruntime=162
-agentsched_ucore: passed
-```
-
-`labdemo_ucore`：
-
-```text
-agentos:event type=WATCH_REGISTERED tick=... role=sentinel event=FILE_STATUS filter=status=failed
-labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042;project=lab-gene-x
-agentos:event type=PREFETCH_HINT tick=... role=sentinel project=lab-gene-x run_id=RUN-042 source_stage=align next_stage=analyze source_seq=4 candidates=1 reason=15
-labdemo_ucore: investigator handoff_prefetch stage=analyze source_seq=4 reason=31
-labdemo_ucore: investigator span_prefetch stage=analyze count=... source_pid=... target_pid=...
-labdemo_ucore: investigator span_trace records=... context=1 event=1 prefetch=1
-agentos:event type=MESSAGE tick=... from=sentinel to=investigator status=OK corr_id=MSG-RUN-042-S-I prefetch_handoff=analyze seq=...
-agentos:event type=PREFETCH_USED tick=... role=investigator stage=analyze summary=analysis waits for align seq=...
-labdemo_ucore: investigator digest bytes=27 preview=align memory_limit evidence seq=...
-agentos:event type=TOOL_CALL tick=... role=investigator tool=read_file_digest stage=align status=OK bytes=27 seq=...
-agentos:event type=LLM_CALL tick=... mode=template task=explain_root_cause llm_request_id=LLM-RUN-042-RCA-1 project=lab-gene-x run_id=RUN-042 refs=...,...,...,... status=OK
-agentos:event type=LLM_RESULT tick=... mode=template llm_request_id=LLM-RUN-042-RCA-1 llm_status=OK llm_explanation=memory_limit referenced_sequences=...,...,...,... confidence=medium
-agentos:event type=PLAN_CREATED tick=... role=investigator plan=PLAN-RUN-042-RECOVER-1 project=lab-gene-x run_id=RUN-042 actions=align,analyze,report skip=prepare prefetch=analyze refs=...,...,...,...
-agentos:event type=FINAL tick=... project=lab-gene-x run_id=RUN-042 status=RECOVERED plan=PLAN-RUN-042-RECOVER-1
-labdemo_ucore: global_audit=1 records=... agents=3 context=1 event=1 sched=1 prefetch=1
-labdemo_ucore: audit_query=1 kind=... span=... event=2 prefetch=... start=...
-labdemo_ucore: unified_timeline records=... context=1 event=1 sched=1 prefetch=1 digest=1
-labdemo_ucore: timeline_query prefetch=3 cursor=... digest=1
-labdemo_ucore: provenance_graph edges=... message=1 prefetch=1 digest=1
-labdemo_ucore: passed
-```
-
-## 后续增强
-
-后续可以把任务五推进为更完整的 Agent Loop：
-
-- 更细的事件排序规则；
-- 长期任务队列；
-- 复杂策略语言和宿主机策略文件下发；
-- 更细粒度的角色/capability 策略；
-- 与 LLM Gateway 联动，让 LLM 决定下一步工具调用。
+| 程序 | 检查项 |
+| --- | --- |
+| `agentfinal_ucore` | 自唤醒事件可被 watch/wait 消费，相关 Context、事件、调度和预取统计进入 Run Ledger。 |
+| `agentbench_ucore` | timeout 会更新 heartbeat/timeout 统计；busy polling 与 wait/wake 都有可复查的 tick 观测。 |
+| `agentloop_ucore` | FIFO 顺序、cause/span、队列满拒绝、unwatch、睡眠 timeout、TIMER unwatch、heartbeat stop 和 wait cancel 均可用。 |
+| `agentsched_ucore` | 角色权重、orchestrator 调度配置、事件优先、原因记录和公平性计数均写入调度记录。 |
+| `labdemo_ucore` | 文件状态事件唤醒 sentinel，message 触发 investigator，预取提示随 span 交接，digest、LLM 调用、恢复计划、全局审计、timeline 和 provenance 都进入同一条示例链路。 |

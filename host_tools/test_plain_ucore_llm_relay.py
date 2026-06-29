@@ -184,6 +184,50 @@ def main() -> int:
             assert "key_present=0" in hostreq
             assert "model=deepseek-v4-pro" in hostreq
             assert "secret_material=not_written" in hostreq
+
+        original_call = relay.call_openai_compatible
+        try:
+            def fake_cloud_call(request: relay.RelayRequest, config: dict[str, str], mode_label: str = "cloud") -> relay.RelayResponse:
+                return relay.RelayResponse(
+                    request_id=request.request_id,
+                    response_id=f"relay-{request.request_id}",
+                    mode=mode_label,
+                    provider="deepseek",
+                    status="ok",
+                    summary=f"cloud_{request.route}_summary",
+                    citations="6",
+                )
+
+            relay.call_openai_compatible = fake_cloud_call  # type: ignore[assignment]
+            with tempfile.TemporaryDirectory() as state_tmp, tempfile.TemporaryDirectory() as out_tmp:
+                state_dir = Path(state_tmp)
+                out_dir = Path(out_tmp)
+                write_state(state_dir)
+                summary = relay.run_relay(state_dir, out_dir, mode="cloud")
+                assert summary["status"] == "ready", summary
+                assert summary["requests"] == 10, summary
+                conclusions = (out_dir / "rp_llm_conclusions").read_text(encoding="utf-8")
+                assert "llm_conclusion=review_summary" in conclusions
+                assert "llm_conclusion=method_check" in conclusions
+                assert "llm_conclusion=recovery_note" in conclusions
+                assert "llm_conclusion=writer_summary" in conclusions
+                assert "llm_conclusion=project_review_opinion" in conclusions
+                assert "llm_conclusion=final_report_summary" in conclusions
+                assert "mode=cloud" in conclusions
+                review = (out_dir / "rp_review2").read_text(encoding="utf-8")
+                assert "llm_review_summary=cloud_review_summary_summary" in review
+                reviewdash = (out_dir / "rp_review_dashboard").read_text(encoding="utf-8")
+                assert "llm_method_check=cloud_method_check_summary" in reviewdash
+                retry = (out_dir / "rp_retry_plan").read_text(encoding="utf-8")
+                assert "llm_recovery_note=cloud_recovery_note_summary" in retry
+                revision = (out_dir / "rp_revision").read_text(encoding="utf-8")
+                assert "llm_writer_summary=cloud_writer_summary_summary" in revision
+                project = (out_dir / "rp_projectrel").read_text(encoding="utf-8")
+                assert "llm_project_review_opinion=cloud_project_review_opinion_summary" in project
+                report = (out_dir / "rp_report_text").read_text(encoding="utf-8")
+                assert "llm_final_report_summary=cloud_final_report_summary_summary" in report
+        finally:
+            relay.call_openai_compatible = original_call  # type: ignore[assignment]
     finally:
         if previous_endpoint is not None:
             os.environ["AGENT_PLATFORM_LLM_ENDPOINT"] = previous_endpoint

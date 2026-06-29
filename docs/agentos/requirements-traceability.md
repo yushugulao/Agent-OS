@@ -8,8 +8,6 @@
 | --- | --- |
 | 已验证 | 已有实现和用户态测试输出支持 |
 | 部分实现 | 有基础能力，但未覆盖赛题完整语义 |
-| 未实现 | 尚无可验收实现 |
-| 文档待补 | 功能存在，但说明材料仍需补强 |
 
 ## 总体交付要求
 
@@ -19,8 +17,8 @@
 | G-2 | 系统可在 QEMU 上运行 | 已验证 | `Makefile`、`nfs/fs.img` | `scripts/run-agent-tests.sh` |
 | G-3 | 提供内核代码 | 已验证 | `os/` | Git 仓库源码 |
 | G-4 | 提供用户态测试程序 | 已验证 | `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentconflict_ucore`、`agentllm_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore` | [verification.md](verification.md) |
-| G-5 | 提供综合演示场景 | 已验证 | `user/src/labdemo_ucore.c` | `labdemo_ucore: passed` |
-| G-6 | 提供设计文档和运行说明 | 已验证 | [../README.md](../README.md)、[design.md](design.md)、[demo-script.md](demo-script.md) | 本文档、[verification.md](verification.md) |
+| G-5 | 提供综合示例场景 | 已验证 | `user/src/labdemo_ucore.c` | `labdemo_ucore: passed` |
+| G-6 | 提供设计文档和运行说明 | 已验证 | [../../README.md](../../README.md)、[design.md](design.md)、[scenario-script.md](scenario-script.md) | 本文档、[verification.md](verification.md) |
 | G-7 | 保留代表性的 uCore 基础 syscall 兼容性 | 已验证 | `SYS_trace`、`SYS_mailread`、`SYS_mailwrite` | `ch3_trace` 输出 `Test trace OK!`；`agentsecurity_ucore: mail_basic=1` |
 
 ## 任务一：Agent 进程创建与地址空间设计
@@ -117,21 +115,21 @@
 | T5-14 | 多 Agent 场景中的 Context、事件、调度和预取交接摘要可由 orchestrator 查询 | 扩展增强 | `agent_audit_snapshot()`、`struct agent_audit_record`、全局 512 条审计 ring；同一 span 的预取提示可由参与 Agent 直接查询 | `labdemo_ucore: global_audit=1 records=... agents=3 context=1 event=1 sched=1 prefetch=1`、`labdemo_ucore: investigator span_prefetch ...` |
 | T5-15 | 多 Agent 全局短记录可按条件过滤 | 扩展增强 | `agent_audit_query()`、`struct agent_audit_filter`、filter flags | `labdemo_ucore: audit_query=1 kind=... span=... event=2 prefetch=... start=...` |
 | T5-16 | 非 orchestrator 参与者可读取当前 span 的协作短记录 | 扩展增强 | `agent_span_trace_snapshot()` 只读取当前 `current_span_id` 对应记录，普通进程返回 `-1` | `labdemo_ucore: investigator span_trace records=... context=1 event=1 prefetch=1`、`agentsecurity_ucore` 普通进程拒绝 |
-| T5-17 | 最终页面可读取、过滤并增量刷新统一运行时间线 | 扩展增强 | `agent_timeline_snapshot()` 把 Context、调度、可见审计和预取提示规范化为同一结构，`agent_timeline_query()` 在可见集合上过滤，并支持 `tick/source/sequence` 游标；Context 审计记录保留工具结果数值槽，可承载内容摘要证据 | `labdemo_ucore: unified_timeline records=... context=1 event=1 sched=1 prefetch=1 digest=1`、`labdemo_ucore: timeline_query prefetch=3 cursor=... digest=1`、`agentsecurity_ucore` 普通进程拒绝 |
-| T5-18 | 最终页面可读取当前可见因果关系 | 扩展增强 | `agent_provenance_snapshot()` 把 Context、审计和预取提示转换成 source/target 因果边，并沿用当前 Agent 可见范围；内容摘要工具调用也能作为可见因果边导出 | `agentfinal_ucore: provenance_graph=1 edges=126 context=1 audit=1`、`labdemo_ucore: provenance_graph edges=... message=1 prefetch=1 digest=1`、`agentsecurity_ucore` 普通进程拒绝 |
-| T5-19 | 最终页面或 Agent worker 可等待新 timeline 记录 | 扩展增强 | `agent_timeline_wait()` 复用 timeline filter，在无匹配记录时睡眠，由 observe epoch、timeout 或新记录唤醒；等待 filter 保存在 PCB 中，写入新记录时按完整 filter 判断 source、event、status、tool、span、pid 和 flags 是否匹配；`agent_timeline_read()` 可在同一次 syscall 中等待并复制记录 | `agentfinal_ucore: timeline_wait=1 timeout=-7 source_gate=1 event_gate=1 wake=1 query=1 read=1 sleeps=1 wakeups=1`、`agentbench_ucore: timeline_wait_ready ...`、`agentsecurity_ucore` 普通进程拒绝 |
+| T5-17 | 状态页面可读取、过滤并增量刷新统一运行时间线 | 扩展增强 | `agent_timeline_snapshot()` 把 Context、调度、可见审计和预取提示规范化为同一结构，`agent_timeline_query()` 在可见集合上过滤，并支持 `tick/source/sequence` 游标；Context 审计记录保留工具结果数值槽，可承载内容摘要证据 | `labdemo_ucore: unified_timeline records=... context=1 event=1 sched=1 prefetch=1 digest=1`、`labdemo_ucore: timeline_query prefetch=3 cursor=... digest=1`、`agentsecurity_ucore` 普通进程拒绝 |
+| T5-18 | 状态页面可读取当前可见因果关系 | 扩展增强 | `agent_provenance_snapshot()` 把 Context、审计和预取提示转换成 source/target 因果边，并沿用当前 Agent 可见范围；内容摘要工具调用也能作为可见因果边导出 | `agentfinal_ucore: provenance_graph=1 edges=126 context=1 audit=1`、`labdemo_ucore: provenance_graph edges=... message=1 prefetch=1 digest=1`、`agentsecurity_ucore` 普通进程拒绝 |
+| T5-19 | 状态页面或 Agent worker 可等待新 timeline 记录 | 扩展增强 | `agent_timeline_wait()` 复用 timeline filter，在无匹配记录时睡眠，由 observe epoch、timeout 或新记录唤醒；等待 filter 保存在 PCB 中，写入新记录时按完整 filter 判断 source、event、status、tool、span、pid 和 flags 是否匹配；`agent_timeline_read()` 可在同一次 syscall 中等待并复制记录 | `agentfinal_ucore: timeline_wait=1 timeout=-7 source_gate=1 event_gate=1 wake=1 query=1 read=1 sleeps=1 wakeups=1`、`agentbench_ucore: timeline_wait_ready ...`、`agentsecurity_ucore` 普通进程拒绝 |
 
-## 任务六：综合演示与创新
+## 任务六：综合示例与创新
 
 | ID | 赛题方向 | 当前状态 | 说明 |
 | --- | --- | --- | --- |
-| T6-1 | 综合演示程序 | 已验证 | `labdemo_ucore` 以科研 Agent 平台为演示负载，串联任务一至五，输出 `agentos:event`，读取真实 align 日志内容摘要，并查询、过滤全局审计短记录和统一 timeline |
-| T6-2 | 性能和计时演示程序 | 已验证 | `agentbench_ucore` 输出批量工具、Context、文件查询性能，以及轮询/事件等待计时观测；`labbench_ucore` 作为演示规划入口包装运行 |
-| T6-3 | 权限限制演示程序 | 已验证 | `agentsecurity_ucore` 输出普通进程拒绝、usershell 等价启动路径、初始化前索引查询、legacy mismatch、sentinel 伪造拒绝、recovery 幂等 action/artifact 更新和定向更新 |
+| T6-1 | 综合示例程序 | 已验证 | `labdemo_ucore` 以科研 Agent 平台为示例负载，串联任务一至五，输出 `agentos:event`，读取真实 align 日志内容摘要，并查询、过滤全局审计短记录和统一 timeline |
+| T6-2 | 性能和计时示例程序 | 已验证 | `agentbench_ucore` 输出批量工具、Context、文件查询性能，以及轮询/事件等待计时观测；`labbench_ucore` 作为示例规划入口包装运行 |
+| T6-3 | 权限限制示例程序 | 已验证 | `agentsecurity_ucore` 输出普通进程拒绝、usershell 等价启动路径、初始化前索引查询、legacy mismatch、sentinel 伪造拒绝、recovery 幂等 action/artifact 更新和定向更新 |
 | T6-4 | LLM-friendly template relay | 已验证 | 内核提供 `llm_request` / `llm_response` 工具、`AGENT_EVENT_LLM_DONE`、`LLM_RELAY` capability、Context/timeline/audit 记录；真实云端调用放在用户态或宿主机 relay | `agentllm_ucore: template_relay=1`、`agentfinal_ucore: llm_template_relay=1` |
-| T6-5 | 可视化大屏 | 未实现 | 当前已输出 `agentos:event`，大屏解析器尚未实现 |
-| T6-6 | 查询历史驱动的预测性预取 | 部分实现 | 当前实现文件 metadata 预取提示，覆盖同一 run 的对象标签依赖；综合演示中 message 入队时内核把 sentinel 的提示交接给 investigator 使用，并写入同一 span 的全局提示总线；尚未做文件内容预加载或通用预测器 | `agentfs_ucore: prefetch_hints=1`、`agentbench_ucore: file_prefetch_snapshot ...`、`agentfinal_ucore: span_prefetch=1`、`labdemo_ucore: sentinel prefetch_hint ...`、`labdemo_ucore: investigator handoff_prefetch ...`、`labdemo_ucore: investigator span_prefetch ...`、`agentos:event type=PREFETCH_USED ...` |
+| T6-5 | 页面查看与图表查看 | 已验证 | `make reader` 启动本地页面服务；`results/latest/monitor.html`、`reader-guide.html`、`index.html`、`charts/*.svg` 呈现双目标运行、测试入口、实验图表和 AgentOS 证据 | `host_tools/plain_ucore_reader.py`、`host_tools/summarize_dual_platform_results.py`、`host_tools/test_plain_ucore_reader.py`、`host_tools/test_summarize_dual_platform_results.py` |
+| T6-6 | 查询历史驱动的预测性预取 | 部分实现 | 当前实现文件 metadata 预取提示，覆盖同一 run 的对象标签依赖；综合示例中 message 入队时内核把 sentinel 的提示交接给 investigator 使用，并写入同一 span 的全局提示总线；尚未做文件内容预加载或通用预测器 | `agentfs_ucore: prefetch_hints=1`、`agentbench_ucore: file_prefetch_snapshot ...`、`agentfinal_ucore: span_prefetch=1`、`labdemo_ucore: sentinel prefetch_hint ...`、`labdemo_ucore: investigator handoff_prefetch ...`、`labdemo_ucore: investigator span_prefetch ...`、`agentos:event type=PREFETCH_USED ...` |
 
 ## 追踪结论
 
-任务一至三已有增强实现和测试证据，并且在 Context 容量、批量工具调用、Context shadow 可信历史、cause/span 因果链、用户自管 cache、detail 查询、snapshot 查询、运行轨迹查询、当前 span 短记录查询、统一 timeline 导出、timeline 内核侧过滤、timeline 游标增量读取、wait-and-read 和性能测试方面高于最小要求。任务四已经实现真实 inode 关联、私有 `.agentmeta` 元数据文件、属性查询、索引查询、根目录自动扫描、内容摘要工具、文件编辑租约和基于查询历史的 metadata 预取提示；综合演示中 message 入队时内核会把 sentinel 的提示交接给 investigator，investigator 既能从本地提示 ring 读取上游提示，也能从同一 span 的全局提示总线确认 source/target pid，还能从当前 span 短记录中看到 Context、事件和预取交接来源，再按提示补读 analyze 摘要，orchestrator 可从全局审计中过滤该交接证据，并可通过统一 timeline 一次读取 Context、事件、调度和预取交接摘要，也可用 timeline query 精确读取 prefetch handoff 记录或按上一条记录继续读取。任务五已经实现 16 槽 FIFO 事件队列、事件因果继承、watch/unwatch、有限 timeout 睡眠等待、wait cancel、heartbeat wake/stop、Agent 感知调度、受权调度配置、最近调度原因查询、当前 span 短记录、统一 timeline、timeline 过滤查询、timeline 游标增量读取和 wait-and-read、全局审计短记录和过滤查询。当前主要短板在多级目录递归扫描、复杂策略语言、云端 LLM Gateway、可视化大屏、演示视频和答辩材料。
+任务一至三已有增强实现和测试证据，并且在 Context 容量、批量工具调用、Context shadow 可信历史、cause/span 因果链、用户自管 cache、detail 查询、snapshot 查询、运行轨迹查询、当前 span 短记录查询、统一 timeline 导出、timeline 内核侧过滤、timeline 游标增量读取、wait-and-read 和性能测试方面高于最小要求。任务四已经实现真实 inode 关联、私有 `.agentmeta` 元数据文件、属性查询、索引查询、根目录自动扫描、内容摘要工具、文件编辑租约和基于查询历史的 metadata 预取提示；综合示例中 message 入队时内核会把 sentinel 的提示交接给 investigator，investigator 既能从本地提示 ring 读取上游提示，也能从同一 span 的全局提示总线确认 source/target pid，还能从当前 span 短记录中看到 Context、事件和预取交接来源，再按提示补读 analyze 摘要，orchestrator 可从全局审计中过滤该交接证据，并可通过统一 timeline 一次读取 Context、事件、调度和预取交接摘要，也可用 timeline query 精确读取 prefetch handoff 记录或按上一条记录继续读取。任务五已经实现 16 槽 FIFO 事件队列、事件因果继承、watch/unwatch、有限 timeout 睡眠等待、wait cancel、heartbeat wake/stop、Agent 感知调度、受权调度配置、最近调度原因查询、当前 span 短记录、统一 timeline、timeline 过滤查询、timeline 游标增量读取和 wait-and-read、全局审计短记录和过滤查询。结果材料已经包含本地页面服务、运行观测页、图表索引页和运行导览页。当前交付范围不包含多级目录递归扫描、复杂策略语言和内核直连云端 LLM Gateway。

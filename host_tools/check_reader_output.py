@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate rendered Host Reader files."""
+"""Validate rendered 本地结果阅读器 files."""
 
 from __future__ import annotations
 
@@ -162,7 +162,7 @@ def check_reader_output(reader_dir: Path) -> dict[str, object]:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Validate Host Reader rendered HTML and API JSON.")
+    parser = argparse.ArgumentParser(description="Validate 本地结果阅读器 rendered HTML and API JSON.")
     parser.add_argument("--reader-dir", type=Path, required=True)
     parser.add_argument("--json-out", type=Path, default=None)
     args = parser.parse_args()

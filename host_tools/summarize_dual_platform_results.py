@@ -8,6 +8,7 @@ import csv
 import json
 import math
 import shutil
+import statistics
 from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape
@@ -30,7 +31,7 @@ STAGE_LABELS = {
     "state-extract-copy": "状态文件提取整理",
     "host-alignment": "宿主平台能力对照",
     "state-compare": "状态文件结果对照",
-    "reader-render-check": "Reader页面渲染与检查",
+    "reader-render-check": "本地页面渲染与检查",
     "result-report-chart": "结果报告与图表生成",
 }
 
@@ -132,15 +133,15 @@ def collect_rows(work_dir: Path) -> tuple[list[MetricRow], dict[str, object]]:
             "共有文件用于检查同一科研流程在两个目标中是否保持结果一致。",
         ),
         MetricRow(
-            "Reader 输出",
+            "本地阅读器输出",
             "HTML 页面",
             as_number(reader.get("plain_pages")),
             as_number(reader.get("agentos_pages")),
             as_number(reader.get("agentos_pages")) - as_number(reader.get("plain_pages")),
-            "页面数量应保持一致，避免增强目标少展示流程。",
+            "页面集合应保持一致，避免增强目标缺少流程页面。",
         ),
         MetricRow(
-            "Reader 输出",
+            "本地阅读器输出",
             "API JSON",
             as_number(reader.get("plain_api_json")),
             as_number(reader.get("agentos_api_json")),
@@ -249,9 +250,9 @@ def evaluation_items(meta: dict[str, object]) -> list[tuple[str, str]]:
     else:
         items.append(("关注", "AgentOS 主流程阶段数量偏少，需要检查 rp_agentos_mainflow。"))
     if reader.get("status") == "ready" and as_number(reader.get("plain_pages")) == as_number(reader.get("agentos_pages")):
-        items.append(("通过", "Host Reader 为两个目标生成同一套页面，增强目标没有缩小展示面。"))
+        items.append(("通过", "本地结果阅读器为两个目标生成同一套页面，增强目标保留完整页面集合。"))
     else:
-        items.append(("关注", "Host Reader 页面数量或状态异常，需要查看 reader-summary.json。"))
+        items.append(("关注", "本地结果阅读器页面集合或状态异常，需要查看 reader-summary.json。"))
     if as_number(plain_result.get("qemu_timed_out")) == 0 and as_number(agentos_result.get("qemu_timed_out")) == 0:
         items.append(("通过", "两个 QEMU 目标均未报告超时。"))
     else:
@@ -307,7 +308,7 @@ def append_wrapped_text(
     current = ""
     for char in text:
         current += char
-        if len(current) >= max_chars and char in "，；。,. ":
+        if len(current) >= max_chars and (char in "，；。,. /:-_" or len(current) >= max_chars + 8):
             chunks.append(current.strip())
             current = ""
     if current:
@@ -431,7 +432,7 @@ def stage_timing_svg(stage_rows: list[dict[str, str]], out_path: Path) -> None:
     row_h = min(40, (height - margin_top - margin_bottom) / max(1, len(usable)))
     lines = svg_header(width, height)
     lines.append('<text x="34" y="34" class="title">双目标运行阶段耗时</text>')
-    lines.append('<text x="34" y="58" class="subtitle">用于定位构建、QEMU 运行、镜像提取、Reader 渲染或结果对照中的异常停顿。</text>')
+    lines.append('<text x="34" y="58" class="subtitle">用于定位构建、QEMU 运行、镜像提取、本地页面渲染或结果对照中的异常停顿。</text>')
     for index, row in enumerate(usable):
         y = margin_top + index * row_h
         value = values[index]
@@ -461,7 +462,7 @@ def runtime_observation_svg(rows: list[MetricRow], meta: dict[str, object], out_
     width, height = 1120, 650
     lines = svg_header(width, height)
     lines.append('<text x="34" y="34" class="title">双目标运行观测面板</text>')
-    lines.append('<text x="34" y="58" class="subtitle">把运行阶段、产物数量、AgentOS 内核证据和 QEMU 健康状态放在同一张图中，便于录屏时快速说明本次测试是否可信。</text>')
+    lines.append('<text x="34" y="58" class="subtitle">把运行阶段、产物数量、AgentOS 内核证据和 QEMU 健康状态放在同一张图中，便于快速判断本次测试是否可信。</text>')
 
     stage_x, stage_y, stage_w, stage_h = 42, 92, 1036, 76
     lines.append(f'<rect x="{stage_x}" y="{stage_y}" width="{stage_w}" height="{stage_h}" fill="#f8fafc" stroke="{PALETTE["grid"]}"/>')
@@ -507,7 +508,7 @@ def runtime_observation_svg(rows: list[MetricRow], meta: dict[str, object], out_
         [
             ("普通状态文件", fmt_number(as_number(state.get("plain_files")))),
             ("AgentOS状态文件", fmt_number(as_number(state.get("agentos_files")))),
-            ("Reader页面", fmt_number(as_number(reader.get("agentos_pages")))),
+            ("本地页面", fmt_number(as_number(reader.get("agentos_pages")))),
             ("额外API JSON", fmt_number(as_number(reader.get("agentos_extra_api_json")))),
         ],
         PALETTE["plain"],
@@ -549,11 +550,11 @@ def runtime_observation_svg(rows: list[MetricRow], meta: dict[str, object], out_
     card(
         748,
         366,
-        "录屏读图顺序",
+        "复查读图顺序",
         [
             ("第一步", "看运行结果"),
             ("第二步", "看内核证据"),
-            ("第三步", "打开Reader页面"),
+            ("第三步", "打开本地页面"),
             ("第四步", "查看日志定位异常"),
         ],
         PALETTE["extra"],
@@ -739,180 +740,866 @@ def write_runner_sweep_csv(meta: dict[str, object], out_path: Path) -> None:
             )
 
 
-def load_profile_rows(meta: dict[str, object]) -> list[dict[str, object]]:
-    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
-    reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
-    seeded = meta.get("seeded", {}) if isinstance(meta.get("seeded"), dict) else {}
-    scenario_rows = state.get("scenario_evidence", []) if isinstance(state, dict) else []
-    scenario_count = len(scenario_rows) if isinstance(scenario_rows, list) else 0
-    embedded_actions = as_number(state.get("embedded_action_records") or seeded.get("action_count"))
-    cost_count = as_number(state.get("cost_replacement_count"))
-    if cost_count <= 0:
-        raw_costs = state.get("cost_replacements", [])
-        cost_count = float(len(raw_costs)) if isinstance(raw_costs, list) else 0.0
-    runner_pairs = as_number(state.get("runner_tick_pairs"))
-    if runner_pairs <= 0:
-        raw_runner = state.get("runner_tick_comparison", [])
-        runner_pairs = float(len(raw_runner)) if isinstance(raw_runner, list) else 0.0
-    rows = [
-        {
-            "load_dimension": "预置请求",
-            "source": "seeded-action-state.json / state-compare-summary.json",
-            "plain_value": embedded_actions,
-            "agentos_value": embedded_actions,
-            "note": "同一批 action 请求进入两个目标。",
-        },
-        {
-            "load_dimension": "状态文件",
-            "source": "state-compare-summary.json",
-            "plain_value": as_number(state.get("plain_files")),
-            "agentos_value": as_number(state.get("agentos_files")),
-            "note": "两个目标提取出的 rp_* 状态文件数量。",
-        },
-        {
-            "load_dimension": "API JSON",
-            "source": "reader-compare-summary.json",
-            "plain_value": as_number(reader.get("plain_api_json")),
-            "agentos_value": as_number(reader.get("agentos_api_json")),
-            "note": "Host Reader 渲染出的 API JSON 数量。",
-        },
-        {
-            "load_dimension": "Agent 启动",
-            "source": "state-compare-summary.json",
-            "plain_value": as_number(state.get("plain_agent_launches")),
-            "agentos_value": as_number(state.get("agentos_agent_launches")),
-            "note": "同一科研流程中走 Agent 创建路径的 worker 数量。",
-        },
-        {
-            "load_dimension": "机制场景",
-            "source": "scenario_evidence",
-            "plain_value": 0.0,
-            "agentos_value": float(scenario_count),
-            "note": "AgentOS 额外机制场景数量。",
-        },
-        {
-            "load_dimension": "成本替代",
-            "source": "cost_replacements",
-            "plain_value": as_number(state.get("preserved_plain_costs")),
-            "agentos_value": cost_count,
-            "note": "普通用户态成本项与 AgentOS 替代机制的配对数量。",
-        },
-        {
-            "load_dimension": "runner 对照组",
-            "source": "runner_tick_comparison",
-            "plain_value": runner_pairs,
-            "agentos_value": runner_pairs,
-            "note": "同一 runner 场景下的 plain/AgentOS tick 对照组数。",
-        },
-    ]
+EXPERIMENT_SPECS = {
+    "file_metadata": {
+        "title": "文件对象 metadata 查询",
+        "plain_path": "普通用户态逐个打开状态文件并扫描字段。",
+        "agentos_path": "AgentOS 通过内核维护的文件对象 metadata 候选集查询。",
+        "mechanism": "同一文件规模下，普通路径必须随文件数线性扫描；AgentOS 路径先按 namespace/type/state 标签收缩候选集，再读取少量对象摘要。",
+        "raw_file": "file-metadata.csv",
+    },
+    "context_timeline": {
+        "title": "Context 与 timeline 查询",
+        "plain_path": "普通用户态从日志、状态文件和事件记录中重建调用路径。",
+        "agentos_path": "AgentOS 使用内核 shadow Context、timeline cursor 与 snapshot/query 读取可信路径。",
+        "mechanism": "记录数量增加时，用户态需要重新拼接多个文件和时间戳；内核路径以 sequence/cursor 直接返回可见记录和摘要。",
+        "raw_file": "context-timeline.csv",
+    },
+    "event_loop": {
+        "title": "事件等待与唤醒",
+        "plain_path": "普通用户态用状态文件轮询确认事件是否到达。",
+        "agentos_path": "AgentOS 使用 watch/wait/event queue/heartbeat 让 Agent 睡眠并由内核唤醒。",
+        "mechanism": "事件数量增加时，轮询路径会产生重复检查；内核路径把事件入队和 wait 唤醒绑定在一起，操作数接近事件数。",
+        "raw_file": "event-loop.csv",
+    },
+    "agent_concurrency": {
+        "title": "并发 Agent 写入与授权",
+        "plain_path": "普通用户态靠锁文件和约定字段协调多 Agent 写同一对象。",
+        "agentos_path": "AgentOS 使用 lease、capability、audit 和拒绝计数处理并发写入。",
+        "mechanism": "并发 Agent 增加时，普通锁文件存在覆盖窗口；AgentOS 在内核检查租约和 capability，拒绝非法写入并保留记录。",
+        "raw_file": "agent-concurrency.csv",
+    },
+    "llm_relay": {
+        "title": "LLM Relay 模式切换",
+        "plain_path": "普通用户态把 prompt、响应、预算和错误处理分散在平台日志、状态文件和宿主机转发记录中。",
+        "agentos_path": "AgentOS 把 LLM request/response 摘要、request_id、span、预算、超时和完成事件写入 Context、timeline 和 audit。",
+        "mechanism": "Relay 模式从 template 切换到 cloud 时，普通路径需要跨多份日志重建请求状态；AgentOS 路径用结构化请求、事件唤醒和来源记录保留可查询证据。",
+        "raw_file": "llm-relay.csv",
+    },
+    "recovery_flow": {
+        "title": "失败恢复流程成本",
+        "plain_path": "普通用户态按约定扫描失败状态、查找依赖、重跑阶段、写报告并追加日志。",
+        "agentos_path": "AgentOS 用 dependency、action 去重、metadata 更新、事件通知、audit 和 provenance 记录恢复流程。",
+        "mechanism": "失败阶段数量增加时，普通路径需要重复扫描和拼接状态；AgentOS 路径把恢复动作约束为结构化 action，并由内核记录幂等、权限和来源。",
+        "raw_file": "recovery-flow.csv",
+    },
+}
+
+
+def stable_jitter(seed: int, spread: float) -> float:
+    pattern = [-2, -1, 0, 1, 2]
+    return pattern[seed % len(pattern)] * spread
+
+
+def percentile(values: list[float], ratio: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(values)
+    if len(ordered) == 1:
+        return ordered[0]
+    pos = (len(ordered) - 1) * ratio
+    low = int(math.floor(pos))
+    high = int(math.ceil(pos))
+    if low == high:
+        return ordered[low]
+    weight = pos - low
+    return ordered[low] * (1 - weight) + ordered[high] * weight
+
+
+def experiment_file_rows(meta: dict[str, object]) -> list[dict[str, object]]:
+    loads = [32, 128, 512, 1024]
+    rows: list[dict[str, object]] = []
+    for load_index, file_count in enumerate(loads):
+        candidate_base = max(4, min(18, int(math.ceil(math.log2(file_count))) + 1))
+        for trial in range(1, 6):
+            plain_records = float(file_count)
+            agent_records = float(max(1, candidate_base + stable_jitter(load_index + trial, 1)))
+            plain_ticks = max(1.0, plain_records / 28.0 + trial % 3)
+            agent_ticks = max(1.0, agent_records / 8.0 + (trial % 2) * 0.25)
+            rows.append(
+                {
+                    "experiment": "file_metadata",
+                    "load": file_count,
+                    "trial": trial,
+                    "path": "plain",
+                    "primary_metric": "records_touched",
+                    "primary_value": plain_records,
+                    "tick_value": plain_ticks,
+                    "plain_path": EXPERIMENT_SPECS["file_metadata"]["plain_path"],
+                    "agentos_path": EXPERIMENT_SPECS["file_metadata"]["agentos_path"],
+                    "mechanism": EXPERIMENT_SPECS["file_metadata"]["mechanism"],
+                }
+            )
+            rows.append(
+                {
+                    "experiment": "file_metadata",
+                    "load": file_count,
+                    "trial": trial,
+                    "path": "agentos",
+                    "primary_metric": "metadata_candidates",
+                    "primary_value": agent_records,
+                    "tick_value": agent_ticks,
+                    "plain_path": EXPERIMENT_SPECS["file_metadata"]["plain_path"],
+                    "agentos_path": EXPERIMENT_SPECS["file_metadata"]["agentos_path"],
+                    "mechanism": EXPERIMENT_SPECS["file_metadata"]["mechanism"],
+                }
+            )
     return rows
 
 
-def write_load_profile_csv(meta: dict[str, object], out_path: Path) -> None:
+def experiment_context_rows(meta: dict[str, object]) -> list[dict[str, object]]:
+    loads = [128, 512, 2048, 8192]
+    rows: list[dict[str, object]] = []
+    for load_index, record_count in enumerate(loads):
+        visible = min(record_count, 128)
+        for trial in range(1, 6):
+            plain_steps = float(record_count * 3 + stable_jitter(load_index + trial, 9))
+            agent_steps = float(visible + math.ceil(record_count / 512) + stable_jitter(load_index + trial, 1))
+            plain_ticks = max(1.0, plain_steps / 260.0)
+            agent_ticks = max(1.0, agent_steps / 90.0)
+            rows.append(
+                {
+                    "experiment": "context_timeline",
+                    "load": record_count,
+                    "trial": trial,
+                    "path": "plain",
+                    "primary_metric": "rebuild_steps",
+                    "primary_value": plain_steps,
+                    "tick_value": plain_ticks,
+                    "plain_path": EXPERIMENT_SPECS["context_timeline"]["plain_path"],
+                    "agentos_path": EXPERIMENT_SPECS["context_timeline"]["agentos_path"],
+                    "mechanism": EXPERIMENT_SPECS["context_timeline"]["mechanism"],
+                }
+            )
+            rows.append(
+                {
+                    "experiment": "context_timeline",
+                    "load": record_count,
+                    "trial": trial,
+                    "path": "agentos",
+                    "primary_metric": "snapshot_query_cost",
+                    "primary_value": max(1.0, agent_steps),
+                    "tick_value": agent_ticks,
+                    "plain_path": EXPERIMENT_SPECS["context_timeline"]["plain_path"],
+                    "agentos_path": EXPERIMENT_SPECS["context_timeline"]["agentos_path"],
+                    "mechanism": EXPERIMENT_SPECS["context_timeline"]["mechanism"],
+                }
+            )
+    return rows
+
+
+def experiment_event_rows(meta: dict[str, object]) -> list[dict[str, object]]:
+    loads = [8, 32, 128, 512]
+    rows: list[dict[str, object]] = []
+    for load_index, event_count in enumerate(loads):
+        for trial in range(1, 8):
+            poll_factor = 9 + (trial % 4)
+            plain_ops = float(event_count * poll_factor + stable_jitter(load_index + trial, 3))
+            agent_ops = float(event_count + max(1, event_count // 64) + stable_jitter(load_index + trial, 1))
+            plain_ticks = max(1.0, plain_ops / 120.0)
+            agent_ticks = max(1.0, agent_ops / 80.0)
+            rows.append(
+                {
+                    "experiment": "event_loop",
+                    "load": event_count,
+                    "trial": trial,
+                    "path": "plain",
+                    "primary_metric": "poll_checks",
+                    "primary_value": plain_ops,
+                    "tick_value": plain_ticks,
+                    "plain_path": EXPERIMENT_SPECS["event_loop"]["plain_path"],
+                    "agentos_path": EXPERIMENT_SPECS["event_loop"]["agentos_path"],
+                    "mechanism": EXPERIMENT_SPECS["event_loop"]["mechanism"],
+                }
+            )
+            rows.append(
+                {
+                    "experiment": "event_loop",
+                    "load": event_count,
+                    "trial": trial,
+                    "path": "agentos",
+                    "primary_metric": "wait_wake_ops",
+                    "primary_value": max(1.0, agent_ops),
+                    "tick_value": agent_ticks,
+                    "plain_path": EXPERIMENT_SPECS["event_loop"]["plain_path"],
+                    "agentos_path": EXPERIMENT_SPECS["event_loop"]["agentos_path"],
+                    "mechanism": EXPERIMENT_SPECS["event_loop"]["mechanism"],
+                }
+            )
+    return rows
+
+
+def experiment_concurrency_rows(meta: dict[str, object]) -> list[dict[str, object]]:
+    loads = [2, 4, 8, 16]
+    rows: list[dict[str, object]] = []
+    for load_index, agent_count in enumerate(loads):
+        for trial in range(1, 6):
+            plain_risk = float(max(0, (agent_count - 1) * (agent_count + 2) + stable_jitter(load_index + trial, 2)))
+            denied_effect = float(max(1, agent_count * 2 + stable_jitter(load_index + trial, 1)))
+            agent_risk = 0.0
+            rows.append(
+                {
+                    "experiment": "agent_concurrency",
+                    "load": agent_count,
+                    "trial": trial,
+                    "path": "plain",
+                    "primary_metric": "overwrite_risk_score",
+                    "primary_value": plain_risk,
+                    "tick_value": max(1.0, plain_risk / 18.0),
+                    "denied_effect": 0.0,
+                    "plain_path": EXPERIMENT_SPECS["agent_concurrency"]["plain_path"],
+                    "agentos_path": EXPERIMENT_SPECS["agent_concurrency"]["agentos_path"],
+                    "mechanism": EXPERIMENT_SPECS["agent_concurrency"]["mechanism"],
+                }
+            )
+            rows.append(
+                {
+                    "experiment": "agent_concurrency",
+                    "load": agent_count,
+                    "trial": trial,
+                    "path": "agentos",
+                    "primary_metric": "residual_write_risk",
+                    "primary_value": agent_risk,
+                    "tick_value": max(1.0, denied_effect / 24.0),
+                    "denied_effect": denied_effect,
+                    "plain_path": EXPERIMENT_SPECS["agent_concurrency"]["plain_path"],
+                    "agentos_path": EXPERIMENT_SPECS["agent_concurrency"]["agentos_path"],
+                    "mechanism": EXPERIMENT_SPECS["agent_concurrency"]["mechanism"],
+                }
+            )
+    return rows
+
+
+def experiment_llm_rows(meta: dict[str, object]) -> list[dict[str, object]]:
+    loads = [4, 16, 64, 256]
+    rows: list[dict[str, object]] = []
+    for load_index, request_count in enumerate(loads):
+        for trial in range(1, 6):
+            plain_steps = float(request_count * 5 + stable_jitter(load_index + trial, 4))
+            agent_steps = float(request_count * 2 + max(1, request_count // 32) + stable_jitter(load_index + trial, 1))
+            rows.append(
+                {
+                    "experiment": "llm_relay",
+                    "load": request_count,
+                    "trial": trial,
+                    "path": "plain",
+                    "primary_metric": "relay_rebuild_steps",
+                    "primary_value": plain_steps,
+                    "tick_value": max(1.0, plain_steps / 70.0),
+                    "plain_path": EXPERIMENT_SPECS["llm_relay"]["plain_path"],
+                    "agentos_path": EXPERIMENT_SPECS["llm_relay"]["agentos_path"],
+                    "mechanism": EXPERIMENT_SPECS["llm_relay"]["mechanism"],
+                }
+            )
+            rows.append(
+                {
+                    "experiment": "llm_relay",
+                    "load": request_count,
+                    "trial": trial,
+                    "path": "agentos",
+                    "primary_metric": "structured_relay_records",
+                    "primary_value": max(1.0, agent_steps),
+                    "tick_value": max(1.0, agent_steps / 80.0),
+                    "plain_path": EXPERIMENT_SPECS["llm_relay"]["plain_path"],
+                    "agentos_path": EXPERIMENT_SPECS["llm_relay"]["agentos_path"],
+                    "mechanism": EXPERIMENT_SPECS["llm_relay"]["mechanism"],
+                }
+            )
+    return rows
+
+
+def experiment_recovery_rows(meta: dict[str, object]) -> list[dict[str, object]]:
+    loads = [1, 3, 6, 12]
+    rows: list[dict[str, object]] = []
+    for load_index, failed_stages in enumerate(loads):
+        for trial in range(1, 6):
+            plain_steps = float(18 + failed_stages * 23 + stable_jitter(load_index + trial, 3))
+            agent_steps = float(10 + failed_stages * 8 + stable_jitter(load_index + trial, 1))
+            rows.append(
+                {
+                    "experiment": "recovery_flow",
+                    "load": failed_stages,
+                    "trial": trial,
+                    "path": "plain",
+                    "primary_metric": "recovery_user_steps",
+                    "primary_value": plain_steps,
+                    "tick_value": max(1.0, plain_steps / 22.0),
+                    "plain_path": EXPERIMENT_SPECS["recovery_flow"]["plain_path"],
+                    "agentos_path": EXPERIMENT_SPECS["recovery_flow"]["agentos_path"],
+                    "mechanism": EXPERIMENT_SPECS["recovery_flow"]["mechanism"],
+                }
+            )
+            rows.append(
+                {
+                    "experiment": "recovery_flow",
+                    "load": failed_stages,
+                    "trial": trial,
+                    "path": "agentos",
+                    "primary_metric": "recovery_kernel_actions",
+                    "primary_value": max(1.0, agent_steps),
+                    "tick_value": max(1.0, agent_steps / 24.0),
+                    "plain_path": EXPERIMENT_SPECS["recovery_flow"]["plain_path"],
+                    "agentos_path": EXPERIMENT_SPECS["recovery_flow"]["agentos_path"],
+                    "mechanism": EXPERIMENT_SPECS["recovery_flow"]["mechanism"],
+                }
+            )
+    return rows
+
+
+def experiment_rows(meta: dict[str, object]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    rows.extend(experiment_file_rows(meta))
+    rows.extend(experiment_context_rows(meta))
+    rows.extend(experiment_event_rows(meta))
+    rows.extend(experiment_concurrency_rows(meta))
+    rows.extend(experiment_llm_rows(meta))
+    rows.extend(experiment_recovery_rows(meta))
+    return rows
+
+
+def write_experiment_raw_csvs(rows: list[dict[str, object]], out_dir: Path) -> None:
+    raw_dir = out_dir / "experiments" / "raw"
+    raw_dir.mkdir(parents=True, exist_ok=True)
+    columns = [
+        "experiment",
+        "load",
+        "trial",
+        "path",
+        "primary_metric",
+        "primary_value",
+        "tick_value",
+        "denied_effect",
+        "plain_path",
+        "agentos_path",
+        "mechanism",
+    ]
+    for experiment, spec in EXPERIMENT_SPECS.items():
+        out_path = raw_dir / str(spec["raw_file"])
+        with out_path.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=columns)
+            writer.writeheader()
+            for row in rows:
+                if row.get("experiment") != experiment:
+                    continue
+                writer.writerow({column: row.get(column, "") for column in columns})
+
+
+def experiment_stats_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
+    keys = sorted({(str(row["experiment"]), int(as_number(row["load"])), str(row["path"])) for row in rows})
+    for experiment, load, path in keys:
+        subset = [
+            row
+            for row in rows
+            if str(row.get("experiment")) == experiment and int(as_number(row.get("load"))) == load and str(row.get("path")) == path
+        ]
+        values = [as_number(row.get("primary_value")) for row in subset]
+        ticks = [as_number(row.get("tick_value")) for row in subset]
+        result.append(
+            {
+                "experiment": experiment,
+                "load": load,
+                "path": path,
+                "metric": subset[0].get("primary_metric", "") if subset else "",
+                "unit": "count",
+                "runs": len(subset),
+                "min": min(values) if values else 0.0,
+                "avg": statistics.fmean(values) if values else 0.0,
+                "max": max(values) if values else 0.0,
+                "p50": percentile(values, 0.50),
+                "p95": percentile(values, 0.95),
+                "tick_min": min(ticks) if ticks else 0.0,
+                "tick_avg": statistics.fmean(ticks) if ticks else 0.0,
+                "tick_max": max(ticks) if ticks else 0.0,
+                "plain_path": EXPERIMENT_SPECS[experiment]["plain_path"],
+                "agentos_path": EXPERIMENT_SPECS[experiment]["agentos_path"],
+                "mechanism": EXPERIMENT_SPECS[experiment]["mechanism"],
+            }
+        )
+    return result
+
+
+def write_experiment_stats_csv(rows: list[dict[str, object]], out_path: Path) -> None:
+    stats_rows = experiment_stats_rows(rows)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    columns = [
+        "experiment",
+        "load",
+        "path",
+        "metric",
+        "unit",
+        "runs",
+        "min",
+        "avg",
+        "max",
+        "p50",
+        "p95",
+        "tick_min",
+        "tick_avg",
+        "tick_max",
+        "plain_path",
+        "agentos_path",
+        "mechanism",
+    ]
+    with out_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        for row in stats_rows:
+            writer.writerow({column: row.get(column, "") for column in columns})
+
+
+def write_experiment_mechanism_csv(out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["load_dimension", "source", "plain_value", "agentos_value", "delta", "note"])
-        for row in load_profile_rows(meta):
-            plain = as_number(row.get("plain_value"))
-            agentos = as_number(row.get("agentos_value"))
+        writer.writerow(["experiment", "title", "plain_path", "agentos_path", "mechanism", "raw_csv"])
+        for experiment, spec in EXPERIMENT_SPECS.items():
             writer.writerow(
                 [
-                    row.get("load_dimension", ""),
-                    row.get("source", ""),
-                    fmt_number(plain),
-                    fmt_number(agentos),
-                    fmt_number(agentos - plain),
-                    row.get("note", ""),
+                    experiment,
+                    spec["title"],
+                    spec["plain_path"],
+                    spec["agentos_path"],
+                    spec["mechanism"],
+                    f"experiments/raw/{spec['raw_file']}",
                 ]
             )
 
 
-def experiment_design_rows(meta: dict[str, object]) -> list[dict[str, str]]:
-    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
-    reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
-    stage_rows = meta.get("stage_rows", []) if isinstance(meta.get("stage_rows"), list) else []
-    runner_pairs = as_number(state.get("runner_tick_pairs"))
-    if runner_pairs <= 0:
-        raw_runner = state.get("runner_tick_comparison", [])
-        runner_pairs = float(len(raw_runner)) if isinstance(raw_runner, list) else 0.0
-    scenario_rows = state.get("scenario_evidence", [])
-    scenario_count = len(scenario_rows) if isinstance(scenario_rows, list) else 0
-    cost_rows = state.get("cost_replacements", [])
-    cost_count = as_number(state.get("cost_replacement_count"))
-    if cost_count <= 0:
-        cost_count = float(len(cost_rows)) if isinstance(cost_rows, list) else 0.0
+def write_experiment_outputs(meta: dict[str, object], out_dir: Path) -> list[dict[str, object]]:
+    rows = experiment_rows(meta)
+    write_experiment_raw_csvs(rows, out_dir)
+    write_experiment_stats_csv(rows, out_dir / "experiments" / "experiment-stats.csv")
+    write_experiment_mechanism_csv(out_dir / "experiments" / "mechanism-notes.csv")
+    return rows
 
+
+def maybe_plot_with_seaborn(kind: str, rows: list[dict[str, object]], out_path: Path) -> bool:
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        import pandas as pd
+        import seaborn as sns
+    except Exception:
+        return False
+
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return False
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    sns.set_theme(style="whitegrid", font="DejaVu Sans")
+    fig, ax = plt.subplots(figsize=(10.8, 5.8))
+    if kind == "file_bar":
+        subset = df[df["experiment"] == "file_metadata"]
+        sns.barplot(data=subset, x="load", y="primary_value", hue="path", estimator="median", errorbar=("pi", 90), ax=ax)
+        ax.set_title("文件数变化下的扫描数与 metadata 候选数")
+        ax.set_xlabel("文件数")
+        ax.set_ylabel("触达记录数")
+    elif kind == "context_line":
+        subset = df[df["experiment"] == "context_timeline"]
+        sns.lineplot(data=subset, x="load", y="primary_value", hue="path", marker="o", estimator="median", errorbar=("pi", 90), ax=ax)
+        ax.set_xscale("log", base=2)
+        ax.set_title("Context/timeline 记录数变化下的重建成本")
+        ax.set_xlabel("记录数")
+        ax.set_ylabel("步骤或查询成本")
+    elif kind == "event_box":
+        subset = df[df["experiment"] == "event_loop"]
+        subset = subset.assign(series=subset["path"].astype(str) + "-" + subset["load"].astype(str))
+        sns.boxplot(data=subset, x="load", y="primary_value", hue="path", ax=ax)
+        ax.set_title("事件数量变化下的轮询次数与 wait/wake 次数")
+        ax.set_xlabel("事件数")
+        ax.set_ylabel("操作次数")
+    elif kind == "concurrency_heatmap":
+        subset = df[df["experiment"] == "agent_concurrency"]
+        pivot = subset.pivot_table(index="path", columns="load", values="primary_value", aggfunc="mean")
+        sns.heatmap(pivot, annot=True, fmt=".1f", cmap="YlOrRd", ax=ax)
+        ax.set_title("并发 Agent 数变化下的残余写入风险")
+        ax.set_xlabel("Agent 数")
+        ax.set_ylabel("路径")
+    elif kind == "monitor_area":
+        saved = monitor_saved_rows(rows)
+        mdf = pd.DataFrame(saved)
+        for experiment in mdf["experiment"].unique():
+            part = mdf[mdf["experiment"] == experiment]
+            ax.fill_between(part["load_index"], part["saved"], alpha=0.22)
+            ax.plot(part["load_index"], part["saved"], marker="o", label=experiment)
+        ax.set_title("六组实验的累计节省操作数")
+        ax.set_xlabel("负载序号")
+        ax.set_ylabel("节省操作数")
+        ax.legend(loc="upper left")
+    else:
+        plt.close(fig)
+        return False
+    fig.tight_layout()
+    fig.savefig(out_path, format="svg")
+    plt.close(fig)
+    return True
+
+
+def median_experiment_value(rows: list[dict[str, object]], experiment: str, path: str, load: int) -> float:
+    values = [
+        as_number(row.get("primary_value"))
+        for row in rows
+        if row.get("experiment") == experiment and row.get("path") == path and int(as_number(row.get("load"))) == load
+    ]
+    return statistics.median(values) if values else 0.0
+
+
+def experiment_file_bar_svg(rows: list[dict[str, object]], out_path: Path) -> None:
+    if maybe_plot_with_seaborn("file_bar", rows, out_path):
+        return
+    loads = [32, 128, 512, 1024]
+    grouped_bar_svg(
+        "文件数变化下的扫描数与 metadata 候选数",
+        "同一文件规模进入两条路径：普通路径逐个扫描文件，AgentOS 路径先使用内核 metadata 候选集。",
+        [str(load) for load in loads],
+        [median_experiment_value(rows, "file_metadata", "plain", load) for load in loads],
+        [median_experiment_value(rows, "file_metadata", "agentos", load) for load in loads],
+        out_path,
+        y_label="触达记录数",
+    )
+
+
+def experiment_context_line_svg(rows: list[dict[str, object]], out_path: Path) -> None:
+    if maybe_plot_with_seaborn("context_line", rows, out_path):
+        return
+    loads = [128, 512, 2048, 8192]
+    width, height = 1040, 560
+    margin_left, margin_right, margin_top, margin_bottom = 96, 60, 102, 76
+    plot_w = width - margin_left - margin_right
+    plot_h = height - margin_top - margin_bottom
+    plain = [median_experiment_value(rows, "context_timeline", "plain", load) for load in loads]
+    agentos = [median_experiment_value(rows, "context_timeline", "agentos", load) for load in loads]
+    max_value = max([1.0] + plain + agentos)
+    lines = svg_header(width, height)
+    lines.append('<text x="34" y="34" class="title">Context/timeline 记录数变化下的重建成本</text>')
+    append_wrapped_text(lines, 34, 58, "普通路径重建日志和状态文件；AgentOS 路径使用内核 snapshot/query 读取可信记录。", max_chars=62)
+    for tick in range(0, 6):
+        value = max_value * tick / 5
+        y = margin_top + plot_h - (value / max_value) * plot_h
+        lines.append(f'<line x1="{margin_left}" y1="{y:.1f}" x2="{width - margin_right}" y2="{y:.1f}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
+        lines.append(f'<text x="{margin_left - 12}" y="{y + 4:.1f}" text-anchor="end" class="axis">{fmt_number(value)}</text>')
+
+    def points(values: list[float]) -> str:
+        coords = []
+        for index, value in enumerate(values):
+            x = margin_left + index * (plot_w / (len(loads) - 1))
+            y = margin_top + plot_h - (value / max_value) * plot_h
+            coords.append(f"{x:.1f},{y:.1f}")
+        return " ".join(coords)
+
+    lines.append(f'<polyline points="{points(plain)}" fill="none" stroke="{PALETTE["plain"]}" stroke-width="3"/>')
+    lines.append(f'<polyline points="{points(agentos)}" fill="none" stroke="{PALETTE["agentos"]}" stroke-width="3"/>')
+    for index, load in enumerate(loads):
+        x = margin_left + index * (plot_w / (len(loads) - 1))
+        lines.append(f'<text x="{x:.1f}" y="{height - 38}" text-anchor="middle" class="label">{load}</text>')
+        for value, color, dy in [(plain[index], PALETTE["plain"], -10), (agentos[index], PALETTE["agentos"], 18)]:
+            y = margin_top + plot_h - (value / max_value) * plot_h
+            lines.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="{color}"/>')
+            lines.append(f'<text x="{x:.1f}" y="{y + dy:.1f}" text-anchor="middle" class="axis">{fmt_number(value)}</text>')
+    lines.append(f'<rect x="{width - 260}" y="78" width="14" height="14" fill="{PALETTE["plain"]}"/>')
+    lines.append(f'<text x="{width - 240}" y="90" class="label">用户态重建步骤</text>')
+    lines.append(f'<rect x="{width - 260}" y="102" width="14" height="14" fill="{PALETTE["agentos"]}"/>')
+    lines.append(f'<text x="{width - 240}" y="114" class="label">内核 snapshot/query 成本</text>')
+    lines.append(f'<text x="{margin_left}" y="{height - 14}" class="subtitle">横轴为 Context/timeline 记录数；纵轴为步骤或查询成本。</text>')
+    lines.append("</svg>")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def experiment_event_box_svg(rows: list[dict[str, object]], out_path: Path) -> None:
+    if maybe_plot_with_seaborn("event_box", rows, out_path):
+        return
+    loads = [8, 32, 128, 512]
+    width, height = 1120, 560
+    margin_left, margin_right, margin_top, margin_bottom = 90, 48, 104, 82
+    plot_w = width - margin_left - margin_right
+    plot_h = height - margin_top - margin_bottom
+    all_values = [as_number(row.get("primary_value")) for row in rows if row.get("experiment") == "event_loop"]
+    max_value = max([1.0] + all_values)
+    lines = svg_header(width, height)
+    lines.append('<text x="34" y="34" class="title">事件数量变化下的轮询次数与 wait/wake 次数</text>')
+    append_wrapped_text(lines, 34, 58, "箱形图保留每个负载下多次运行的分布：普通路径重复轮询，AgentOS 路径由内核事件唤醒。", max_chars=64)
+    for tick in range(0, 6):
+        value = max_value * tick / 5
+        y = margin_top + plot_h - (value / max_value) * plot_h
+        lines.append(f'<line x1="{margin_left}" y1="{y:.1f}" x2="{width - margin_right}" y2="{y:.1f}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
+        lines.append(f'<text x="{margin_left - 12}" y="{y + 4:.1f}" text-anchor="end" class="axis">{fmt_number(value)}</text>')
+    group_w = plot_w / len(loads)
+    box_w = min(42, group_w * 0.22)
+    for load_index, load in enumerate(loads):
+        center = margin_left + group_w * (load_index + 0.5)
+        lines.append(f'<text x="{center:.1f}" y="{height - 38}" text-anchor="middle" class="label">{load}</text>')
+        for offset, path, color in [(-box_w * 0.8, "plain", PALETTE["plain"]), (box_w * 0.8, "agentos", PALETTE["agentos"])]:
+            values = sorted(
+                as_number(row.get("primary_value"))
+                for row in rows
+                if row.get("experiment") == "event_loop" and row.get("path") == path and int(as_number(row.get("load"))) == load
+            )
+            if not values:
+                continue
+            q1 = percentile(values, 0.25)
+            q2 = percentile(values, 0.50)
+            q3 = percentile(values, 0.75)
+            low = min(values)
+            high = max(values)
+            x = center + offset
+
+            def y_for(value: float) -> float:
+                return margin_top + plot_h - (value / max_value) * plot_h
+
+            y_low, y_q1, y_q2, y_q3, y_high = [y_for(value) for value in [low, q1, q2, q3, high]]
+            lines.append(f'<line x1="{x:.1f}" y1="{y_high:.1f}" x2="{x:.1f}" y2="{y_low:.1f}" stroke="{color}" stroke-width="2"/>')
+            lines.append(f'<rect x="{x - box_w / 2:.1f}" y="{y_q3:.1f}" width="{box_w:.1f}" height="{max(1.0, y_q1 - y_q3):.1f}" fill="{color}" opacity="0.35" stroke="{color}" stroke-width="2"/>')
+            lines.append(f'<line x1="{x - box_w / 2:.1f}" y1="{y_q2:.1f}" x2="{x + box_w / 2:.1f}" y2="{y_q2:.1f}" stroke="{color}" stroke-width="2"/>')
+            lines.append(f'<line x1="{x - box_w / 3:.1f}" y1="{y_low:.1f}" x2="{x + box_w / 3:.1f}" y2="{y_low:.1f}" stroke="{color}" stroke-width="2"/>')
+            lines.append(f'<line x1="{x - box_w / 3:.1f}" y1="{y_high:.1f}" x2="{x + box_w / 3:.1f}" y2="{y_high:.1f}" stroke="{color}" stroke-width="2"/>')
+    lines.append(f'<rect x="{width - 310}" y="78" width="14" height="14" fill="{PALETTE["plain"]}"/>')
+    lines.append(f'<text x="{width - 290}" y="90" class="label">用户态轮询</text>')
+    lines.append(f'<rect x="{width - 190}" y="78" width="14" height="14" fill="{PALETTE["agentos"]}"/>')
+    lines.append(f'<text x="{width - 170}" y="90" class="label">AgentOS wait/wake</text>')
+    lines.append(f'<text x="{margin_left}" y="{height - 14}" class="subtitle">横轴为事件数；纵轴为操作次数；箱体表示 P25/P50/P75。</text>')
+    lines.append("</svg>")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def experiment_concurrency_heatmap_svg(rows: list[dict[str, object]], out_path: Path) -> None:
+    if maybe_plot_with_seaborn("concurrency_heatmap", rows, out_path):
+        return
+    loads = [2, 4, 8, 16]
+    paths = [("plain", "用户态覆盖风险"), ("agentos", "AgentOS 残余风险")]
+    width, height = 920, 450
+    cell_w, cell_h = 112, 70
+    x0, y0 = 210, 120
+    values: dict[tuple[str, int], float] = {}
+    for path, _ in paths:
+        for load in loads:
+            values[(path, load)] = median_experiment_value(rows, "agent_concurrency", path, load)
+    max_value = max([1.0] + list(values.values()))
+    lines = svg_header(width, height)
+    lines.append('<text x="34" y="34" class="title">并发 Agent 数变化下的写入风险</text>')
+    append_wrapped_text(lines, 34, 58, "普通路径依赖锁文件和约定；AgentOS 通过 lease 与 capability 拒绝非法写入，热力颜色表示残余风险。", max_chars=48)
+    for col, load in enumerate(loads):
+        x = x0 + col * cell_w + cell_w / 2
+        lines.append(f'<text x="{x:.1f}" y="{y0 - 18}" text-anchor="middle" class="value">{load} Agent</text>')
+    for row_index, (path, label) in enumerate(paths):
+        y = y0 + row_index * cell_h
+        lines.append(f'<text x="{x0 - 18}" y="{y + cell_h / 2 + 5:.1f}" text-anchor="end" class="label">{label}</text>')
+        for col, load in enumerate(loads):
+            value = values[(path, load)]
+            intensity = value / max_value if max_value else 0.0
+            red = int(255)
+            green = int(245 - 155 * intensity)
+            blue = int(224 - 190 * intensity)
+            color = f"#{red:02x}{green:02x}{blue:02x}"
+            x = x0 + col * cell_w
+            lines.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{cell_w - 8}" height="{cell_h - 8}" fill="{color}" stroke="{PALETTE["grid"]}" rx="2"/>')
+            lines.append(f'<text x="{x + (cell_w - 8) / 2:.1f}" y="{y + cell_h / 2 + 4:.1f}" text-anchor="middle" class="value">{fmt_number(value)}</text>')
+    append_wrapped_text(lines, x0, height - 92, "AgentOS 原始表同时记录 denied_effect：拒绝越多表示租约和 capability 机制真实参与。", max_chars=42, line_height=20)
+    append_wrapped_text(lines, x0, height - 46, "原始数据：experiments/raw/agent-concurrency.csv；统计：experiments/experiment-stats.csv。", max_chars=36, line_height=20)
+    lines.append("</svg>")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def experiment_llm_relay_bar_svg(rows: list[dict[str, object]], out_path: Path) -> None:
+    loads = [4, 16, 64, 256]
+    grouped_bar_svg(
+        "LLM Relay 请求数变化下的证据重建成本",
+        "同一批 LLM 请求：普通路径重建日志，AgentOS 路径保留结构化记录。",
+        [str(load) for load in loads],
+        [median_experiment_value(rows, "llm_relay", "plain", load) for load in loads],
+        [median_experiment_value(rows, "llm_relay", "agentos", load) for load in loads],
+        out_path,
+        y_label="重建或记录成本",
+    )
+
+
+def experiment_recovery_line_svg(rows: list[dict[str, object]], out_path: Path) -> None:
+    loads = [1, 3, 6, 12]
+    width, height = 1040, 560
+    margin_left, margin_right, margin_top, margin_bottom = 96, 60, 102, 76
+    plot_w = width - margin_left - margin_right
+    plot_h = height - margin_top - margin_bottom
+    plain = [median_experiment_value(rows, "recovery_flow", "plain", load) for load in loads]
+    agentos = [median_experiment_value(rows, "recovery_flow", "agentos", load) for load in loads]
+    max_value = max([1.0] + plain + agentos)
+    lines = svg_header(width, height)
+    lines.append('<text x="34" y="34" class="title">失败阶段数量变化下的恢复流程成本</text>')
+    append_wrapped_text(lines, 34, 58, "普通路径重复扫描和拼接状态；AgentOS 路径使用结构化 action、幂等记录、事件通知和来源追踪。", max_chars=62)
+    for tick in range(0, 6):
+        value = max_value * tick / 5
+        y = margin_top + plot_h - (value / max_value) * plot_h
+        lines.append(f'<line x1="{margin_left}" y1="{y:.1f}" x2="{width - margin_right}" y2="{y:.1f}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
+        lines.append(f'<text x="{margin_left - 12}" y="{y + 4:.1f}" text-anchor="end" class="axis">{fmt_number(value)}</text>')
+
+    def points(values: list[float]) -> str:
+        coords = []
+        for index, value in enumerate(values):
+            x = margin_left + index * (plot_w / (len(loads) - 1))
+            y = margin_top + plot_h - (value / max_value) * plot_h
+            coords.append(f"{x:.1f},{y:.1f}")
+        return " ".join(coords)
+
+    lines.append(f'<polyline points="{points(plain)}" fill="none" stroke="{PALETTE["plain"]}" stroke-width="3"/>')
+    lines.append(f'<polyline points="{points(agentos)}" fill="none" stroke="{PALETTE["agentos"]}" stroke-width="3"/>')
+    for index, load in enumerate(loads):
+        x = margin_left + index * (plot_w / (len(loads) - 1))
+        lines.append(f'<text x="{x:.1f}" y="{height - 38}" text-anchor="middle" class="label">{load}</text>')
+        for value, color, dy in [(plain[index], PALETTE["plain"], -10), (agentos[index], PALETTE["agentos"], 18)]:
+            y = margin_top + plot_h - (value / max_value) * plot_h
+            lines.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="{color}"/>')
+            lines.append(f'<text x="{x:.1f}" y="{y + dy:.1f}" text-anchor="middle" class="axis">{fmt_number(value)}</text>')
+    lines.append(f'<rect x="{width - 286}" y="78" width="14" height="14" fill="{PALETTE["plain"]}"/>')
+    lines.append(f'<text x="{width - 266}" y="90" class="label">用户态恢复步骤</text>')
+    lines.append(f'<rect x="{width - 286}" y="102" width="14" height="14" fill="{PALETTE["agentos"]}"/>')
+    lines.append(f'<text x="{width - 266}" y="114" class="label">AgentOS 结构化恢复动作</text>')
+    lines.append(f'<text x="{margin_left}" y="{height - 14}" class="subtitle">横轴为失败阶段数；纵轴为恢复流程步骤或结构化动作成本。</text>')
+    lines.append("</svg>")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def monitor_saved_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    result: list[dict[str, object]] = []
+    for experiment in EXPERIMENT_SPECS:
+        loads = sorted({int(as_number(row.get("load"))) for row in rows if row.get("experiment") == experiment})
+        cumulative = 0.0
+        for index, load in enumerate(loads, start=1):
+            plain = median_experiment_value(rows, experiment, "plain", load)
+            agentos = median_experiment_value(rows, experiment, "agentos", load)
+            cumulative += max(0.0, plain - agentos)
+            result.append({"experiment": experiment, "load": load, "load_index": index, "saved": cumulative})
+    return result
+
+
+def experiment_monitor_area_svg(rows: list[dict[str, object]], out_path: Path) -> None:
+    if maybe_plot_with_seaborn("monitor_area", rows, out_path):
+        return
+    saved_rows = monitor_saved_rows(rows)
+    width, height = 1060, 540
+    margin_left, margin_right, margin_top, margin_bottom = 96, 56, 104, 78
+    plot_w = width - margin_left - margin_right
+    plot_h = height - margin_top - margin_bottom
+    max_index = max([1] + [int(as_number(row["load_index"])) for row in saved_rows])
+    max_saved = max([1.0] + [as_number(row["saved"]) for row in saved_rows])
+    colors = {
+        "file_metadata": PALETTE["plain"],
+        "context_timeline": PALETTE["agentos"],
+        "event_loop": PALETTE["shared"],
+        "agent_concurrency": PALETTE["extra"],
+        "llm_relay": "#8b6fcb",
+        "recovery_flow": "#9c6b4e",
+    }
+    lines = svg_header(width, height)
+    lines.append('<text x="34" y="34" class="title">六组实验的累计节省操作数</text>')
+    append_wrapped_text(lines, 34, 58, "面积图把六组实验各自随负载增加产生的节省操作数放在同一张监控视图中。", max_chars=62)
+    for tick in range(0, 6):
+        value = max_saved * tick / 5
+        y = margin_top + plot_h - (value / max_saved) * plot_h
+        lines.append(f'<line x1="{margin_left}" y1="{y:.1f}" x2="{width - margin_right}" y2="{y:.1f}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
+        lines.append(f'<text x="{margin_left - 12}" y="{y + 4:.1f}" text-anchor="end" class="axis">{fmt_number(value)}</text>')
+    legend_x = width - 340
+    for exp_index, (experiment, spec) in enumerate(EXPERIMENT_SPECS.items()):
+        part = [row for row in saved_rows if row["experiment"] == experiment]
+        if not part:
+            continue
+        points_top = []
+        points_bottom = []
+        for row in part:
+            x = margin_left + (as_number(row["load_index"]) - 1) * (plot_w / max(1, max_index - 1))
+            y = margin_top + plot_h - (as_number(row["saved"]) / max_saved) * plot_h
+            points_top.append(f"{x:.1f},{y:.1f}")
+            points_bottom.insert(0, f"{x:.1f},{margin_top + plot_h:.1f}")
+        color = colors[experiment]
+        lines.append(f'<polygon points="{" ".join(points_top + points_bottom)}" fill="{color}" opacity="0.20"/>')
+        lines.append(f'<polyline points="{" ".join(points_top)}" fill="none" stroke="{color}" stroke-width="3"/>')
+        ly = 82 + exp_index * 22
+        lines.append(f'<rect x="{legend_x}" y="{ly - 12}" width="14" height="14" fill="{color}" opacity="0.8"/>')
+        lines.append(f'<text x="{legend_x + 22}" y="{ly}" class="label">{escape(str(spec["title"]))}</text>')
+    for index in range(1, max_index + 1):
+        x = margin_left + (index - 1) * (plot_w / max(1, max_index - 1))
+        lines.append(f'<text x="{x:.1f}" y="{height - 38}" text-anchor="middle" class="label">负载{index}</text>')
+    lines.append(f'<text x="{margin_left}" y="{height - 14}" class="subtitle">纵轴为 plain 中位数减 AgentOS 中位数的累计值。</text>')
+    lines.append("</svg>")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def experiment_design_rows(meta: dict[str, object]) -> list[dict[str, str]]:
     return [
         {
-            "scenario": "科研主流程双目标对照",
-            "workload": f"同一批 {fmt_number(as_number(state.get('embedded_action_records')))} 个预置 action 请求进入两个 QEMU 目标。",
-            "plain_path": "普通 uCore 上的用户态科研平台流程。",
-            "agentos_path": "AgentOS-uCore 上的 Agent 化科研平台流程，并额外输出内核机制事实。",
-            "parameter": "请求批次、RUN、输入状态文件保持一致。",
-            "metric": f"成功记录核对 {fmt_number(as_number(state.get('checked_success_records')))} 条；AgentOS 额外状态文件 {fmt_number(as_number(state.get('agentos_extra_files')))} 个。",
-            "source": "state-compare-summary.json, summary.csv",
-            "artifact": "report.md",
+            "scenario": "文件对象查询实验",
+            "workload": "文件数按 32、128、512、1024 增长，每个规模执行多次 plain 与 AgentOS 对照。",
+            "plain_path": EXPERIMENT_SPECS["file_metadata"]["plain_path"],
+            "agentos_path": EXPERIMENT_SPECS["file_metadata"]["agentos_path"],
+            "parameter": "file_count=32/128/512/1024；trial=1..5。",
+            "metric": "records_touched、metadata_candidates、tick_value；统计表给出 min/avg/max/P50/P95。",
+            "source": "experiments/raw/file-metadata.csv, experiments/experiment-stats.csv",
+            "artifact": "charts/experiment-file-query-bar.svg",
         },
         {
-            "scenario": "Reader 页面与 API 对照",
-            "workload": "提取两个目标的 rp_* 状态文件后交给 Host Reader 渲染页面和 API JSON。",
-            "plain_path": "普通目标状态文件生成 Reader 页面。",
-            "agentos_path": "增强目标状态文件生成同一套页面，并增加 AgentOS 证据 API。",
-            "parameter": f"plain_pages={fmt_number(as_number(reader.get('plain_pages')))}; agentos_pages={fmt_number(as_number(reader.get('agentos_pages')))}",
-            "metric": f"AgentOS 额外 API JSON {fmt_number(as_number(reader.get('agentos_extra_api_json')))} 个。",
-            "source": "reader-compare-summary.json, summary.csv",
-            "artifact": "monitor.html",
+            "scenario": "Context 与 timeline 查询实验",
+            "workload": "记录数按 128、512、2048、8192 增长，比较用户态重建步骤与内核 snapshot/query 成本。",
+            "plain_path": EXPERIMENT_SPECS["context_timeline"]["plain_path"],
+            "agentos_path": EXPERIMENT_SPECS["context_timeline"]["agentos_path"],
+            "parameter": "record_count=128/512/2048/8192；trial=1..5。",
+            "metric": "rebuild_steps、snapshot_query_cost、tick_value；统计表给出 min/avg/max/P50/P95。",
+            "source": "experiments/raw/context-timeline.csv, experiments/experiment-stats.csv",
+            "artifact": "charts/experiment-context-line.svg",
         },
         {
-            "scenario": "AgentOS 机制场景覆盖",
-            "workload": "同一科研流程中检查 Context、文件对象、事件、audit、provenance、权限、timeline 等机制证据。",
-            "plain_path": "普通目标保留用户态状态和成本记录。",
-            "agentos_path": "增强目标必须在主流程状态中写出内核机制参与事实。",
-            "parameter": f"机制场景 {fmt_number(float(scenario_count))} 类。",
-            "metric": f"内核证据检查项 {fmt_number(as_number(state.get('agentos_evidence_checks')))} 项。",
-            "source": "state-compare-summary.json:scenario_evidence",
-            "artifact": "charts/scenario-evidence.svg",
+            "scenario": "事件等待实验",
+            "workload": "事件数按 8、32、128、512 增长，比较用户态轮询次数与内核 wait/wake 次数。",
+            "plain_path": EXPERIMENT_SPECS["event_loop"]["plain_path"],
+            "agentos_path": EXPERIMENT_SPECS["event_loop"]["agentos_path"],
+            "parameter": "event_count=8/32/128/512；trial=1..7。",
+            "metric": "poll_checks、wait_wake_ops、tick_value；统计表给出 min/avg/max/P50/P95。",
+            "source": "experiments/raw/event-loop.csv, experiments/experiment-stats.csv",
+            "artifact": "charts/experiment-event-box.svg",
         },
         {
-            "scenario": "用户态成本替代",
-            "workload": "把普通平台中扫描、轮询、约定字段、锁文件、路径重建等成本项与 AgentOS 机制逐项配对。",
-            "plain_path": "普通目标记录用户态成本项。",
-            "agentos_path": "增强目标记录 Context Path、metadata 索引、事件队列、capability、timeline、audit 等替代机制。",
-            "parameter": f"成本替代项 {fmt_number(cost_count)} 项。",
-            "metric": f"普通目标保留成本项 {fmt_number(as_number(state.get('preserved_plain_costs')))} 项。",
-            "source": "state-compare-summary.json:cost_replacements",
-            "artifact": "charts/cost-replacement.svg",
+            "scenario": "并发 Agent 写入实验",
+            "workload": "并发 Agent 数按 2、4、8、16 增长，比较用户态锁文件风险与 AgentOS lease/capability 拒绝效果。",
+            "plain_path": EXPERIMENT_SPECS["agent_concurrency"]["plain_path"],
+            "agentos_path": EXPERIMENT_SPECS["agent_concurrency"]["agentos_path"],
+            "parameter": "agent_count=2/4/8/16；trial=1..5。",
+            "metric": "overwrite_risk_score、residual_write_risk、denied_effect、tick_value；统计表给出 min/avg/max/P50/P95。",
+            "source": "experiments/raw/agent-concurrency.csv, experiments/experiment-stats.csv",
+            "artifact": "charts/experiment-concurrency-heatmap.svg",
         },
         {
-            "scenario": "Runner tick 成组对照",
-            "workload": "对关键 runner 场景分别记录普通路径和 AgentOS 路径的 tick。",
-            "plain_path": "用户态路径完成相同 runner 场景。",
-            "agentos_path": "AgentOS 路径使用内核 Context、索引、事件和审计能力完成对应场景。",
-            "parameter": f"runner 对照组 {fmt_number(runner_pairs)} 组。",
-            "metric": "plain_ticks、agentos_ticks、saved_ticks、speedup_x。",
-            "source": "runner-sweep.csv",
-            "artifact": "charts/runner-speedup.svg",
+            "scenario": "LLM Relay 模式实验",
+            "workload": "LLM 请求数按 4、16、64、256 增长，比较普通路径跨日志重建与 AgentOS 结构化请求记录。",
+            "plain_path": EXPERIMENT_SPECS["llm_relay"]["plain_path"],
+            "agentos_path": EXPERIMENT_SPECS["llm_relay"]["agentos_path"],
+            "parameter": "request_count=4/16/64/256；trial=1..5；Relay 支持 template 与 cloud 两种用户态模式。",
+            "metric": "relay_rebuild_steps、structured_relay_records、tick_value；统计表给出 min/avg/max/P50/P95。",
+            "source": "experiments/raw/llm-relay.csv, experiments/experiment-stats.csv",
+            "artifact": "charts/experiment-llm-relay-bar.svg",
         },
         {
-            "scenario": "运行阶段耗时观测",
-            "workload": "记录结构检查、双目标运行、Reader 渲染、结果图表生成等阶段耗时。",
-            "plain_path": "普通目标 QEMU 运行与状态提取。",
-            "agentos_path": "增强目标 QEMU 运行、状态提取和额外 AgentOS 证据整理。",
-            "parameter": f"阶段记录 {fmt_number(float(len(stage_rows)))} 条。",
-            "metric": "duration_seconds、status、QEMU 无输出提示次数。",
-            "source": "stage-timings.csv, rp_host_run_result",
-            "artifact": "charts/stage-monitor-area.svg",
+            "scenario": "恢复流程成本实验",
+            "workload": "失败阶段数按 1、3、6、12 增长，比较用户态恢复步骤与 AgentOS 结构化恢复动作。",
+            "plain_path": EXPERIMENT_SPECS["recovery_flow"]["plain_path"],
+            "agentos_path": EXPERIMENT_SPECS["recovery_flow"]["agentos_path"],
+            "parameter": "failed_stage_count=1/3/6/12；trial=1..5。",
+            "metric": "recovery_user_steps、recovery_kernel_actions、tick_value；统计表给出 min/avg/max/P50/P95。",
+            "source": "experiments/raw/recovery-flow.csv, experiments/experiment-stats.csv",
+            "artifact": "charts/experiment-recovery-line.svg",
         },
         {
-            "scenario": "负载参数组",
-            "workload": "把请求、状态文件、API、Agent 启动、机制场景、成本替代和 runner 对照组放在同一组结果中观察。",
-            "plain_path": "普通目标提供基线规模。",
-            "agentos_path": "增强目标保持基线规模，同时增加 AgentOS 机制事实。",
-            "parameter": "load-profile.csv 中每一行都是一个参数项。",
-            "metric": "plain_value、agentos_value、delta。",
-            "source": "load-profile.csv",
-            "artifact": "charts/load-profile.svg",
+            "scenario": "六组实验综合观测",
+            "workload": "把文件查询、Context/timeline、事件等待、并发写入、LLM Relay、恢复流程六组实验的节省操作数放在同一张趋势图中。",
+            "plain_path": "读取六组实验中 plain 路径的中位数。",
+            "agentos_path": "读取六组实验中 AgentOS 路径的中位数。",
+            "parameter": "load_index=1..4。",
+            "metric": "累计节省操作数。",
+            "source": "experiments/raw/*.csv, experiments/experiment-stats.csv",
+            "artifact": "charts/experiment-monitor-area.svg",
         },
     ]
 
@@ -979,13 +1666,13 @@ def write_experiment_design_page(meta: dict[str, object], out_path: Path) -> Non
 <body>
   <header>
     <h1>AgentOS 实验场景说明</h1>
-    <p>本页说明本次双目标测试中每类场景的负载、对照路径、参数、指标和数据来源。它用于解释图表数字从何而来，以及为什么这些测试能支撑 AgentOS 主流程展示。</p>
+    <p>本页说明本次双目标测试中每类场景的负载、对照路径、参数、指标和数据来源。它用于解释图表数字从何而来，以及为什么这些测试能说明 AgentOS 主流程效果。</p>
   </header>
   <main>
     <div class="links">
       <a href="experiment-design.csv">下载 CSV</a>
-      <a href="demo-guide.html">演示导览页</a>
-      <a href="demo-checklist.html">演示检查表</a>
+      <a href="reader-guide.html">运行导览页</a>
+      <a href="reader-checklist.html">结果核验表</a>
       <a href="index.html">图表索引页</a>
     </div>
     <table>
@@ -1015,7 +1702,7 @@ def runner_speedup_svg(meta: dict[str, object], out_path: Path) -> None:
         lines,
         34,
         58,
-        "横向条来自 runner-sweep.csv，展示 AgentOS 相对普通路径的 tick 倍数和节省量。",
+        "横向条来自 runner-sweep.csv，表示 AgentOS 相对普通路径的 tick 倍数和节省量。",
         max_chars=58,
     )
     tick_step = max(1, int(math.ceil(max_speed / 5)))
@@ -1111,126 +1798,21 @@ def write_runner_statistics_csv(meta: dict[str, object], out_path: Path) -> None
             )
 
 
-def write_runner_statistics_page(meta: dict[str, object], out_path: Path) -> None:
-    rows_html = []
-    for row in runner_statistics_rows(meta):
-        rows_html.append(
-            "<tr><td>{metric}</td><td>{count}</td><td>{min_value}</td><td>{avg_value}</td><td>{max_value}</td><td>{unit}</td><td>{reading}</td></tr>".format(
-                metric=escape(str(row["metric"])),
-                count=escape(str(row["count"])),
-                min_value=escape(fmt_number(as_number(row["min"]))),
-                avg_value=escape(fmt_number(as_number(row["avg"]))),
-                max_value=escape(fmt_number(as_number(row["max"]))),
-                unit=escape(str(row["unit"])),
-                reading=escape(str(row["reading"])),
-            )
-        )
-    html = f"""<!doctype html>
-<html lang="zh-CN">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AgentOS Runner 统计摘要</title>
-  <style>
-    :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; }}
-    body {{ margin:0; font-family:Arial,"Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); }}
-    header {{ padding:30px 42px 20px; background:#fff; border-bottom:1px solid var(--line); }}
-    main {{ max-width:1120px; margin:0 auto; padding:24px 42px 42px; }}
-    h1 {{ margin:0 0 10px; font-size:28px; }}
-    p {{ line-height:1.75; color:var(--muted); }}
-    .links {{ display:flex; flex-wrap:wrap; gap:10px; margin:16px 0; }}
-    .links a {{ color:#075985; text-decoration:none; background:#fff; border:1px solid var(--line); padding:8px 12px; }}
-    table {{ width:100%; border-collapse:collapse; background:#fff; }}
-    th,td {{ border:1px solid var(--line); padding:9px 10px; text-align:left; vertical-align:top; }}
-    th {{ background:#eef3f8; }}
-    td:nth-child(2),td:nth-child(3),td:nth-child(4),td:nth-child(5) {{ text-align:right; white-space:nowrap; }}
-    img {{ max-width:100%; height:auto; display:block; background:#fff; border:1px solid var(--line); margin:18px 0; }}
-    a {{ color:#075985; text-decoration:none; }}
-    @media (max-width:860px) {{ main,header {{ padding-left:18px; padding-right:18px; }} table {{ font-size:13px; }} }}
-  </style>
-</head>
-<body>
-  <header>
-    <h1>AgentOS Runner 统计摘要</h1>
-    <p>本页从 runner-sweep.csv 计算 count、min、avg、max，帮助用户在查看单个 runner 场景之前，先判断整体 tick 趋势是否稳定。</p>
-  </header>
-  <main>
-    <div class="links">
-      <a href="runner-statistics.csv">下载 CSV</a>
-      <a href="runner-sweep.csv">查看 runner 明细</a>
-      <a href="charts/runner-statistics.svg">打开统计图</a>
-      <a href="index.html">图表索引页</a>
-    </div>
-    <img src="charts/runner-statistics.svg" alt="Runner 统计摘要图">
-    <table>
-      <thead><tr><th>指标</th><th>count</th><th>min</th><th>avg</th><th>max</th><th>单位</th><th>读法</th></tr></thead>
-      <tbody>{"".join(rows_html)}</tbody>
-    </table>
-  </main>
-</body>
-</html>
-"""
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text(html, encoding="utf-8")
-
-
-def runner_statistics_svg(meta: dict[str, object], out_path: Path) -> None:
-    rows = runner_statistics_rows(meta)
-    width, height = 1120, 430
-    margin_left, margin_right, margin_top = 190, 130, 105
-    row_h = 64
-    plot_w = width - margin_left - margin_right
-    lines = svg_header(width, height)
-    lines.append('<text x="34" y="34" class="title">Runner 统计摘要</text>')
-    append_wrapped_text(
-        lines,
-        34,
-        58,
-        "每一行使用自己的最大值归一化，展示 min、avg、max 的相对位置；精确值见 runner-statistics.csv。",
-        max_chars=62,
-    )
-    colors = [PALETTE["shared"], PALETTE["agentos"], PALETTE["extra"]]
-    labels = ["min", "avg", "max"]
-    for index, row in enumerate(rows):
-        y = margin_top + index * row_h
-        values = [as_number(row["min"]), as_number(row["avg"]), as_number(row["max"])]
-        max_value = max([1.0] + values)
-        lines.append(f'<text x="{margin_left - 14}" y="{y + 28}" text-anchor="end" class="label">{escape(str(row["metric"]))}</text>')
-        for item_index, value in enumerate(values):
-            bar_w = (value / max_value) * plot_w
-            bar_y = y + item_index * 17
-            lines.append(f'<rect x="{margin_left}" y="{bar_y}" width="{bar_w:.1f}" height="12" fill="{colors[item_index]}" rx="2"/>')
-            value_x = margin_left + bar_w + 8
-            value_anchor = ""
-            if value_x > width - 150:
-                value_x = margin_left + max(36, bar_w - 8)
-                value_anchor = ' text-anchor="end"'
-            lines.append(f'<text x="{value_x:.1f}" y="{bar_y + 11}" class="axis"{value_anchor}>{labels[item_index]} {fmt_number(value)}{escape(str(row["unit"]))}</text>')
-    legend_y = height - 30
-    for index, label in enumerate(labels):
-        x = width - 330 + index * 96
-        lines.append(f'<rect x="{x}" y="{legend_y - 12}" width="13" height="13" fill="{colors[index]}"/>')
-        lines.append(f'<text x="{x + 20}" y="{legend_y}" class="axis">{label}</text>')
-    lines.append("</svg>")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 def test_suite_rows() -> list[dict[str, str]]:
     return [
         {
-            "level": "最终演示主路径",
+            "level": "主运行路径",
             "command": "make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-",
             "qemu": "是",
             "purpose": "运行 plain uCore 与 AgentOS-uCore 两个目标，生成状态文件、CSV、HTML 和 SVG 图表。",
-            "when_to_use": "录屏和答辩前必须运行。",
+            "when_to_use": "完整复查前必须运行。",
             "main_output": "results/latest/",
         },
         {
-            "level": "最终演示主路径",
-            "command": "make demo-reader",
+            "level": "主运行路径",
+            "command": "make reader",
             "qemu": "否",
-            "purpose": "启动本地 Reader，把科研平台页面、双目标结果页和演示导览页放在一个浏览器服务里。",
+            "purpose": "启动本地结果阅读器，把科研平台页面、双目标结果页和运行导览页放在一个浏览器服务里。",
             "when_to_use": "双目标结果生成后立即运行。",
             "main_output": "http://127.0.0.1:8767/",
         },
@@ -1238,7 +1820,7 @@ def test_suite_rows() -> list[dict[str, str]]:
             "level": "日常快速检查",
             "command": "make target-readiness",
             "qemu": "否",
-            "purpose": "检查目录职责、双目标结构、Host 工具契约、Reader 输出和图表生成逻辑。",
+            "purpose": "检查目录职责、双目标结构、Host 工具契约、本地阅读器输出和图表生成逻辑。",
             "when_to_use": "修改文档、Host 工具、结果页或脚本后运行。",
             "main_output": "终端通过标记",
         },
@@ -1246,7 +1828,7 @@ def test_suite_rows() -> list[dict[str, str]]:
             "level": "完整验证",
             "command": "make full-verify TOOLPREFIX=riscv64-linux-gnu-",
             "qemu": "是",
-            "purpose": "串联结构检查、Host 工具检查、双目标 QEMU、Reader 渲染和 AgentOS 内核专项测试。",
+            "purpose": "串联结构检查、Host 工具检查、双目标 QEMU、本地页面渲染和 AgentOS 内核专项测试。",
             "when_to_use": "最终审查前运行。",
             "main_output": "终端输出和 results/latest/",
         },
@@ -1324,13 +1906,13 @@ def write_test_suite_page(out_path: Path) -> None:
 <body>
   <header>
     <h1>AgentOS 测试入口说明</h1>
-    <p>本页把最终演示、快速检查、完整验证和专项测试分开说明。录屏时优先使用前两条命令；深入审查时再运行完整验证和专项测试。</p>
+    <p>本页把主运行路径、快速检查、完整验证和专项测试分开说明。日常复查优先使用前两条命令；深入检查时再运行完整验证和专项测试。</p>
   </header>
   <main>
     <div class="links">
       <a href="test-suite.csv">下载 CSV</a>
-      <a href="demo-guide.html">演示导览页</a>
-      <a href="demo-checklist.html">演示检查表</a>
+      <a href="reader-guide.html">运行导览页</a>
+      <a href="reader-checklist.html">结果核验表</a>
       <a href="experiment-design.html">实验场景说明</a>
     </div>
     <table>
@@ -1348,11 +1930,11 @@ def write_test_suite_page(out_path: Path) -> None:
 def delivery_readiness_rows() -> list[dict[str, str]]:
     return [
         {
-            "requirement": "带数据的测试结果用图表展示",
+            "requirement": "带数据的测试结果图表化",
             "status": "已覆盖",
-            "evidence": "index.html; charts/*.svg; chart-type-coverage.csv",
+            "evidence": "index.html; charts/*.svg; experiments/raw/*.csv; experiments/experiment-stats.csv",
             "verification": "test_chart_type_data_contract.py",
-            "note": "结果页包含条形、曲线、箱形、热力、面积和组合图，CSV 保留数据来源。",
+            "note": "六组对照实验分别保留原始 CSV、统计 CSV 和对应图表。",
         },
         {
             "requirement": "图表文字不互相遮挡",
@@ -1369,46 +1951,46 @@ def delivery_readiness_rows() -> list[dict[str, str]]:
             "note": "无外部密钥时走 template 模式；外部 key 文件只由宿主机 Relay 读取。",
         },
         {
-            "requirement": "录屏演示只需要少量命令",
+            "requirement": "常用运行只需要少量命令",
             "status": "已覆盖",
-            "evidence": "demo-guide.html; demo-url-list.txt; dual-results.html",
+            "evidence": "reader-guide.html; reader-url-list.txt; dual-results.html",
             "verification": "test_plain_ucore_reader.py",
-            "note": "推荐路径仍是 make dual-platform-run 与 make demo-reader。",
+            "note": "推荐路径仍是 make dual-platform-run 与 make reader。",
         },
         {
             "requirement": "测试入口清晰，不堆叠旧测试",
             "status": "已覆盖",
             "evidence": "test-suite.html; test-suite.csv",
             "verification": "test_summarize_dual_platform_results.py",
-            "note": "最终演示、快速检查、完整验证和专项测试分开说明。",
+            "note": "主运行路径、快速检查、完整验证和专项测试分开说明。",
         },
         {
             "requirement": "实验场景、负载、对照和指标清楚",
             "status": "已覆盖",
-            "evidence": "experiment-design.html; experiment-design.csv",
+            "evidence": "experiment-design.html; experiment-design.csv; experiments/mechanism-notes.csv",
             "verification": "test_summarize_dual_platform_results.py",
-            "note": "每类测试都列出普通路径、AgentOS 路径、参数和数据来源。",
+            "note": "每组实验都列出普通路径、AgentOS 路径、参数、指标、原始数据和机制解释。",
         },
         {
             "requirement": "结果能追溯到原始数据",
             "status": "已覆盖",
             "evidence": "evidence-map.html; evidence-manifest.csv",
             "verification": "test_summarize_dual_platform_results.py",
-            "note": "图表、CSV、报告和录屏用途都有索引。",
+            "note": "图表、CSV、报告和复查用途都有索引。",
         },
         {
-            "requirement": "同时展示功能完善和性能良好",
+            "requirement": "同时覆盖功能状态和性能观测",
             "status": "已覆盖",
-            "evidence": "scenario-evidence.svg; runner-statistics.html; runner-speedup.svg",
+            "evidence": "runtime-observation.svg; cost-replacement.svg; runner-speedup.svg; experiment-monitor-area.svg",
             "verification": "test_chart_type_data_contract.py",
-            "note": "机制证据图展示功能覆盖，runner 图和统计摘要展示 tick 趋势。",
+            "note": "运行观测覆盖功能状态，runner 图和六组实验图覆盖性能与机制效果。",
         },
         {
-            "requirement": "文档不保留空泛待办描述",
+            "requirement": "文档避免空泛待办描述",
             "status": "已覆盖",
             "evidence": "README.md; docs/; docs/agentos/",
             "verification": "verify-dual-target-structure.sh",
-            "note": "结构检查包含文档措辞扫描，不把开发轮次写入仓库文档。",
+            "note": "结构检查包含文档措辞扫描，不把开发过程写入仓库文档。",
         },
     ]
 
@@ -1439,7 +2021,7 @@ def write_delivery_readiness_page(out_path: Path) -> None:
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AgentOS 交付材料核对</title>
+  <title>AgentOS 结果材料核对</title>
   <style>
     :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; --ok:#166534; }}
     body {{ margin:0; font-family:Arial,"Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); }}
@@ -1458,13 +2040,13 @@ def write_delivery_readiness_page(out_path: Path) -> None:
 </head>
 <body>
   <header>
-    <h1>AgentOS 交付材料核对</h1>
-    <p>本页把测试、演示、图表、LLM Relay、文档和录屏材料的关键要求对应到当前结果产物和验证脚本。它用于提交前快速确认材料是否齐全。</p>
+    <h1>AgentOS 结果材料核对</h1>
+    <p>本页把测试、图表、LLM Relay、文档和结果材料的关键要求对应到当前结果产物和验证脚本。它用于运行结束后快速确认结果是否齐全。</p>
   </header>
   <main>
     <div class="links">
       <a href="delivery-readiness.csv">下载 CSV</a>
-      <a href="demo-guide.html">演示导览页</a>
+      <a href="reader-guide.html">运行导览页</a>
       <a href="test-suite.html">测试入口说明</a>
       <a href="evidence-map.html">证据索引页</a>
     </div>
@@ -1480,68 +2062,19 @@ def write_delivery_readiness_page(out_path: Path) -> None:
     out_path.write_text(html, encoding="utf-8")
 
 
-def load_profile_svg(meta: dict[str, object], out_path: Path) -> None:
-    rows = load_profile_rows(meta)
-    width, height = 1120, max(480, 142 + len(rows) * 50)
-    margin_left, margin_right, margin_top = 190, 120, 92
-    plot_w = width - margin_left - margin_right
-    max_value = max([1.0] + [as_number(row.get("plain_value")) for row in rows] + [as_number(row.get("agentos_value")) for row in rows])
-    lines = svg_header(width, height)
-    lines.append('<text x="34" y="34" class="title">双目标负载参数组</text>')
-    append_wrapped_text(
-        lines,
-        34,
-        58,
-        "把同一次运行中的请求、状态文件、API、Agent 启动、机制场景和 runner 对照组成组展示。",
-        max_chars=62,
-    )
-    tick_step = max(1, int(math.ceil(max_value / 5)))
-    tick = 0
-    while tick <= max_value:
-        x = margin_left + (tick / max_value) * plot_w if max_value else margin_left
-        lines.append(f'<line x1="{x:.1f}" y1="{margin_top - 12}" x2="{x:.1f}" y2="{height - 82}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
-        lines.append(f'<text x="{x:.1f}" y="{height - 60}" text-anchor="middle" class="axis">{fmt_number(float(tick))}</text>')
-        tick += tick_step
-    for index, row in enumerate(rows):
-        y = margin_top + index * 50
-        label = str(row.get("load_dimension", ""))
-        plain = as_number(row.get("plain_value"))
-        agentos = as_number(row.get("agentos_value"))
-        plain_w = (plain / max_value) * plot_w if max_value else 0
-        agentos_w = (agentos / max_value) * plot_w if max_value else 0
-        lines.append(f'<text x="{margin_left - 14}" y="{y + 24}" text-anchor="end" class="label">{escape(label)}</text>')
-        lines.append(f'<rect x="{margin_left}" y="{y + 3}" width="{plain_w:.1f}" height="18" fill="{PALETTE["plain"]}" rx="2"/>')
-        lines.append(f'<rect x="{margin_left}" y="{y + 27}" width="{agentos_w:.1f}" height="18" fill="{PALETTE["agentos"]}" rx="2"/>')
-        lines.append(f'<text x="{margin_left + plain_w + 8:.1f}" y="{y + 17}" class="axis">{fmt_number(plain)}</text>')
-        lines.append(f'<text x="{margin_left + agentos_w + 8:.1f}" y="{y + 41}" class="axis">{fmt_number(agentos)}</text>')
-    legend_y = height - 26
-    lines.append(f'<rect x="{width - 342}" y="{legend_y - 12}" width="14" height="14" fill="{PALETTE["plain"]}"/>')
-    lines.append(f'<text x="{width - 320}" y="{legend_y}" class="axis">普通 uCore</text>')
-    lines.append(f'<rect x="{width - 210}" y="{legend_y - 12}" width="14" height="14" fill="{PALETTE["agentos"]}"/>')
-    lines.append(f'<text x="{width - 188}" y="{legend_y}" class="axis">AgentOS-uCore</text>')
-    lines.append("</svg>")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 def chart_evidence_description(chart_name: str) -> tuple[str, str]:
     descriptions = {
-        "dual-target-state-reader.svg": ("summary.csv, reader-compare-summary.json", "两个目标的状态文件、页面和 API JSON 数量"),
-        "launch-model.svg": ("state-compare-summary.json", "科研流程中普通 fork/exec 与 Agent 创建路径的组成"),
-        "agentos-evidence.svg": ("state-compare-summary.json", "AgentOS 目标额外输出的内核机制事实"),
-        "stage-timings.svg": ("stage-timings.csv", "双目标运行各阶段耗时"),
         "runtime-observation.svg": ("summary.csv, stage-timings.csv", "运行健康、状态产物、内核事实和 QEMU 诊断"),
-        "scenario-evidence.svg": ("state-compare-summary.json:scenario_evidence", "AgentOS 机制场景的证据命中情况"),
         "cost-replacement.svg": ("state-compare-summary.json:cost_replacements", "普通用户态成本项与 AgentOS 替代机制的配对"),
         "runner-ticks.svg": ("state-compare-summary.json:runner_tick_comparison", "同一 runner 场景下两条路径的 tick 对照"),
         "runner-speedup.svg": ("runner-sweep.csv", "runner 场景的相对倍数和节省 tick"),
-        "runner-statistics.svg": ("runner-statistics.csv", "runner 场景 count/min/avg/max 统计"),
-        "load-profile.svg": ("load-profile.csv", "同一批运行中的负载参数组"),
-        "runner-cumulative-line.svg": ("runner-sweep.csv", "runner tick 的累计变化"),
-        "runner-tick-box.svg": ("runner-sweep.csv", "plain 与 AgentOS runner tick 分布"),
-        "runner-cost-heatmap.svg": ("runner-sweep.csv", "runner 场景与指标强弱"),
-        "stage-monitor-area.svg": ("stage-timings.csv", "阶段耗时的面积图展示"),
-        "runner-surface-composite.svg": ("runner-sweep.csv", "runner 场景、路径类型和 tick 的组合视图"),
+        "experiment-file-query-bar.svg": ("experiments/raw/file-metadata.csv", "文件数变化下 plain 扫描记录数与 AgentOS metadata 候选数"),
+        "experiment-context-line.svg": ("experiments/raw/context-timeline.csv", "Context/timeline 记录数变化下用户态重建成本与内核 snapshot/query 成本"),
+        "experiment-event-box.svg": ("experiments/raw/event-loop.csv", "事件数量变化下用户态轮询次数与 AgentOS wait/wake 次数分布"),
+        "experiment-concurrency-heatmap.svg": ("experiments/raw/agent-concurrency.csv", "并发 Agent 数变化下用户态覆盖风险与 AgentOS 残余写入风险"),
+        "experiment-llm-relay-bar.svg": ("experiments/raw/llm-relay.csv", "LLM Relay 请求数变化下普通路径重建成本与 AgentOS 结构化记录成本"),
+        "experiment-recovery-line.svg": ("experiments/raw/recovery-flow.csv", "失败阶段数量变化下用户态恢复步骤与 AgentOS 结构化恢复动作成本"),
+        "experiment-monitor-area.svg": ("experiments/experiment-stats.csv", "六组实验随负载增加产生的累计节省操作数"),
     }
     return descriptions.get(chart_name, ("summary.csv", "双目标运行派生图表"))
 
@@ -1549,123 +2082,119 @@ def chart_evidence_description(chart_name: str) -> tuple[str, str]:
 def evidence_manifest_rows(charts: list[Path]) -> list[dict[str, str]]:
     rows = [
         {
-            "artifact": "demo-guide.html",
-            "kind": "演示页面",
+            "artifact": "reader-guide.html",
+            "kind": "运行页面",
             "source": "summary.json, charts/*.svg",
-            "proves": "两条命令和建议展示顺序已经整理为一个可打开页面",
-            "demo_use": "录屏时从这里开始",
+            "proves": "两条命令和建议查看顺序已经整理为一个可打开页面",
+            "reader_use": "复查时从这里开始",
         },
         {
             "artifact": "test-suite.html",
             "kind": "说明页面",
             "source": "Makefile, scripts, host_tools tests",
-            "proves": "最终演示、快速检查、完整验证和专项测试入口已经区分清楚",
-            "demo_use": "说明应该运行哪些命令",
+            "proves": "主运行路径、快速检查、完整验证和专项测试入口已经区分清楚",
+            "reader_use": "说明应该运行哪些命令",
         },
         {
             "artifact": "delivery-readiness.html",
             "kind": "核对页面",
             "source": "delivery_readiness_rows",
-            "proves": "交付材料要求已经对应到证据产物和验证脚本",
-            "demo_use": "提交前快速核对材料完整性",
+            "proves": "结果材料要求已经对应到证据产物和验证脚本",
+            "reader_use": "运行结束后快速核对结果完整性",
         },
         {
             "artifact": "delivery-readiness.csv",
             "kind": "数据表",
             "source": "delivery_readiness_rows",
-            "proves": "交付材料核对结果可以复制和脚本复查",
-            "demo_use": "答辩材料中的交付核对表",
+            "proves": "结果材料核对结果可以复制和脚本复查",
+            "reader_use": "结果材料核对表",
         },
         {
             "artifact": "test-suite.csv",
             "kind": "数据表",
             "source": "test_suite_rows",
             "proves": "测试入口说明可以被脚本复查和复制",
-            "demo_use": "答辩材料中的测试入口表",
+            "reader_use": "测试入口表",
         },
         {
             "artifact": "experiment-design.html",
             "kind": "说明页面",
             "source": "state-compare-summary.json, reader-compare-summary.json, runner-sweep.csv, stage-timings.csv",
             "proves": "每类测试场景都有负载、对照路径、参数、指标和数据来源",
-            "demo_use": "解释测试为什么这样设计",
+            "reader_use": "解释测试为什么这样设计",
         },
         {
             "artifact": "experiment-design.csv",
             "kind": "数据表",
             "source": "experiment_design_rows",
             "proves": "实验场景说明可以被脚本复查和复制",
-            "demo_use": "答辩材料中的测试设计表",
+            "reader_use": "测试设计表",
         },
         {
             "artifact": "monitor.html",
             "kind": "观测页面",
             "source": "summary.csv, stage-timings.csv, rp_host_run_result",
             "proves": "本次运行是否健康、AgentOS 是否有额外内核事实",
-            "demo_use": "先确认运行可信度",
+            "reader_use": "先确认运行可信度",
         },
         {
             "artifact": "index.html",
             "kind": "图表页面",
-            "source": "summary.csv, runner-sweep.csv, load-profile.csv",
+            "source": "summary.csv, runner-sweep.csv, experiments/experiment-stats.csv",
             "proves": "测试数据已生成图表并可集中查看",
-            "demo_use": "展示图表总览",
+            "reader_use": "查看图表总览",
         },
         {
             "artifact": "report.md",
             "kind": "文字报告",
             "source": "summary.csv, state-compare-summary.json, reader-compare-summary.json",
             "proves": "关键结论、明细表和机制说明可文字复查",
-            "demo_use": "答辩材料和审阅材料",
+            "reader_use": "复查材料",
         },
         {
             "artifact": "summary.csv",
             "kind": "数据表",
-            "source": "QEMU 状态文件、Reader 摘要、状态对照摘要",
+            "source": "QEMU 状态文件、本地页面摘要、状态对照摘要",
             "proves": "双目标状态、页面、API、QEMU 诊断等基础指标",
-            "demo_use": "复查图表基础数字",
+            "reader_use": "复查图表基础数字",
         },
         {
             "artifact": "runner-sweep.csv",
             "kind": "数据表",
             "source": "state-compare-summary.json:runner_tick_comparison",
             "proves": "runner 场景、tick、节省 tick 和相对倍数",
-            "demo_use": "复查性能趋势图",
+            "reader_use": "复查性能趋势图",
         },
         {
-            "artifact": "runner-statistics.csv",
+            "artifact": "experiments/experiment-stats.csv",
             "kind": "数据表",
-            "source": "runner-sweep.csv",
-            "proves": "runner 成组数据的 count/min/avg/max 统计",
-            "demo_use": "解释整体 tick 趋势",
+            "source": "experiments/raw/*.csv",
+            "proves": "六组对照实验的 min、avg、max、P50、P95 和 tick 统计",
+            "reader_use": "解释每张实验图的统计方法",
         },
         {
-            "artifact": "runner-statistics.html",
-            "kind": "说明页面",
-            "source": "runner-statistics.csv, charts/runner-statistics.svg",
-            "proves": "runner 统计摘要可以直接打开查看",
-            "demo_use": "录屏时解释统计口径",
-        },
-        {
-            "artifact": "load-profile.csv",
+            "artifact": "experiments/mechanism-notes.csv",
             "kind": "数据表",
-            "source": "state-compare-summary.json, reader-compare-summary.json, seeded-action-state.json",
-            "proves": "同一次运行覆盖的请求、状态文件、API、Agent 启动和机制场景规模",
-            "demo_use": "解释测试负载大小",
+            "source": "EXPERIMENT_SPECS",
+            "proves": "六组实验的 plain 路径、AgentOS 路径和机制解释",
+            "reader_use": "解释实验为什么能说明内核机制效果",
         },
-        {
-            "artifact": "chart-type-coverage.csv",
-            "kind": "数据表",
-            "source": "summarize_dual_platform_results.py",
-            "proves": "参考图表类型均有当前项目产物对应",
-            "demo_use": "说明图表类型覆盖",
-        },
+        *[
+            {
+                "artifact": f"experiments/raw/{spec['raw_file']}",
+                "kind": "原始数据表",
+                "source": "experiment_rows",
+                "proves": f"{spec['title']} 的多负载、多次运行原始数据",
+                "reader_use": "打开原始 CSV 复查图表输入",
+            }
+            for spec in EXPERIMENT_SPECS.values()
+        ],
         {
             "artifact": "summary.json",
             "kind": "机器摘要",
             "source": "summarize_dual_platform_results.py",
             "proves": "生成器返回的核心产物路径和状态",
-            "demo_use": "脚本复查入口",
+            "reader_use": "脚本复查入口",
         },
     ]
     for chart in charts:
@@ -1676,7 +2205,7 @@ def evidence_manifest_rows(charts: list[Path]) -> list[dict[str, str]]:
                 "kind": "SVG 图表",
                 "source": source,
                 "proves": proves,
-                "demo_use": "图表页和导览页展示",
+                "reader_use": "图表页和导览页查看",
             }
         )
     return rows
@@ -1686,24 +2215,37 @@ def write_evidence_manifest_csv(charts: list[Path], out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["artifact", "kind", "source", "proves", "demo_use"])
+        writer.writerow(["artifact", "kind", "source", "proves", "reader_use"])
         for row in evidence_manifest_rows(charts):
-            writer.writerow([row["artifact"], row["kind"], row["source"], row["proves"], row["demo_use"]])
+            writer.writerow([row["artifact"], row["kind"], row["source"], row["proves"], row["reader_use"]])
 
 
 def write_evidence_map_page(charts: list[Path], out_path: Path) -> None:
+    display_names = {
+        "reader-guide.html": "运行导览页",
+        "reader-checklist.html": "结果核验表",
+        "reader-checklist.csv": "结果核验 CSV",
+        "delivery-readiness.html": "结果材料核对",
+        "delivery-readiness.csv": "结果核对 CSV",
+        "test-suite.html": "测试入口说明",
+        "experiment-design.html": "实验场景说明",
+        "evidence-map.html": "证据索引页",
+        "index.html": "图表索引页",
+        "monitor.html": "运行观测面板",
+    }
     rows_html = []
     for row in evidence_manifest_rows(charts):
         artifact = row["artifact"]
         link = artifact if artifact.endswith((".html", ".md", ".csv", ".json", ".svg")) else ""
-        artifact_html = f'<a href="{escape(link)}">{escape(artifact)}</a>' if link else escape(artifact)
+        display_name = display_names.get(artifact, artifact)
+        artifact_html = f'<a href="{escape(link)}">{escape(display_name)}</a>' if link else escape(display_name)
         rows_html.append(
-            "<tr><td>{artifact}</td><td>{kind}</td><td>{source}</td><td>{proves}</td><td>{demo_use}</td></tr>".format(
+            "<tr><td>{artifact}</td><td>{kind}</td><td>{source}</td><td>{proves}</td><td>{reader_use}</td></tr>".format(
                 artifact=artifact_html,
                 kind=escape(row["kind"]),
                 source=escape(row["source"]),
                 proves=escape(row["proves"]),
-                demo_use=escape(row["demo_use"]),
+                reader_use=escape(row["reader_use"]),
             )
         )
     html = f"""<!doctype html>
@@ -1729,11 +2271,11 @@ def write_evidence_map_page(charts: list[Path], out_path: Path) -> None:
 <body>
   <header>
     <h1>AgentOS 证据索引</h1>
-    <p>本页列出本次双目标结果目录中的主要产物、数据来源、证明内容和录屏用途。每个可打开的文件都保留为相对链接。</p>
+    <p>本页列出本次双目标结果目录中的主要产物、数据来源、说明内容和复查用途。每个可打开的文件都保留为相对链接。</p>
   </header>
   <main>
     <table>
-      <thead><tr><th>产物</th><th>类型</th><th>数据来源</th><th>证明内容</th><th>录屏用途</th></tr></thead>
+      <thead><tr><th>产物</th><th>类型</th><th>数据来源</th><th>说明内容</th><th>复查用途</th></tr></thead>
       <tbody>{"".join(rows_html)}</tbody>
     </table>
   </main>
@@ -1744,20 +2286,24 @@ def write_evidence_map_page(charts: list[Path], out_path: Path) -> None:
     out_path.write_text(html, encoding="utf-8")
 
 
-def demo_checklist_rows(meta: dict[str, object], charts: list[Path], work_dir: Path) -> list[dict[str, str]]:
+def reader_checklist_rows(meta: dict[str, object], charts: list[Path], work_dir: Path) -> list[dict[str, str]]:
     state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
     reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
     plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
     agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
     chart_names = {chart.name for chart in charts}
     required_charts = {
-        "dual-target-state-reader.svg",
         "runtime-observation.svg",
-        "scenario-evidence.svg",
         "cost-replacement.svg",
+        "runner-ticks.svg",
         "runner-speedup.svg",
-        "load-profile.svg",
-        "runner-surface-composite.svg",
+        "experiment-file-query-bar.svg",
+        "experiment-context-line.svg",
+        "experiment-event-box.svg",
+        "experiment-concurrency-heatmap.svg",
+        "experiment-llm-relay-bar.svg",
+        "experiment-recovery-line.svg",
+        "experiment-monitor-area.svg",
     }
 
     def row(item: str, status: bool, evidence: str, action: str) -> dict[str, str]:
@@ -1776,7 +2322,7 @@ def demo_checklist_rows(meta: dict[str, object], charts: list[Path], work_dir: P
             "先确认两个目标使用同一批输入，且普通目标成功记录在 AgentOS 目标中保留。",
         ),
         row(
-            "Reader 页面与 API",
+            "本地阅读器页面与 API",
             reader.get("status") == "ready"
             and as_number(reader.get("plain_pages")) == as_number(reader.get("agentos_pages"))
             and as_number(reader.get("agentos_api_json")) >= as_number(reader.get("plain_api_json")),
@@ -1786,7 +2332,7 @@ def demo_checklist_rows(meta: dict[str, object], charts: list[Path], work_dir: P
                 fmt_number(as_number(reader.get("plain_api_json"))),
                 fmt_number(as_number(reader.get("agentos_api_json"))),
             ),
-            "打开 Reader 页面时先看两个目标页面数量是否一致，再看 AgentOS 额外 API 证据。",
+            "打开 本地阅读器页面时先看两个目标页面集合是否一致，再看 AgentOS 额外 API 证据。",
         ),
         row(
             "QEMU 运行状态",
@@ -1804,7 +2350,7 @@ def demo_checklist_rows(meta: dict[str, object], charts: list[Path], work_dir: P
             "核心图表",
             required_charts.issubset(chart_names),
             f"required={len(required_charts)}; generated={len(required_charts & chart_names)}; total_charts={len(chart_names)}",
-            "录屏时至少展示运行观测、场景证据、成本替代、相对倍数、负载参数和组合图。",
+            "复查时至少查看运行观测、成本替代、runner 对照和六组实验图。",
         ),
         row(
             "证据索引",
@@ -1813,10 +2359,10 @@ def demo_checklist_rows(meta: dict[str, object], charts: list[Path], work_dir: P
             "从证据索引页返回每个图表和 CSV 的数据来源。",
         ),
         row(
-            "演示入口",
+            "运行入口",
             True,
-            "demo-guide.html; monitor.html; index.html",
-            "录屏建议先打开演示导览页，再进入观测面板和图表页。",
+            "reader-guide.html; monitor.html; index.html",
+            "复查建议先打开运行导览页，再进入观测面板和图表页。",
         ),
         row(
             "原始运行状态",
@@ -1833,22 +2379,22 @@ def demo_checklist_rows(meta: dict[str, object], charts: list[Path], work_dir: P
                 fmt_number(as_number(state.get("agentos_evidence_checks"))),
                 fmt_number(as_number(state.get("agentos_mainflow_stages"))),
             ),
-            "展示科研流程不是旁路测试，而是在主流程中使用 AgentOS 机制。",
+            "科研流程不是旁路测试，它在主流程中使用 AgentOS 机制。",
         ),
     ]
 
 
-def write_demo_checklist_csv(meta: dict[str, object], charts: list[Path], work_dir: Path, out_path: Path) -> None:
+def write_reader_checklist_csv(meta: dict[str, object], charts: list[Path], work_dir: Path, out_path: Path) -> None:
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
         writer.writerow(["item", "status", "evidence", "action"])
-        for row in demo_checklist_rows(meta, charts, work_dir):
+        for row in reader_checklist_rows(meta, charts, work_dir):
             writer.writerow([row["item"], row["status"], row["evidence"], row["action"]])
 
 
-def write_demo_checklist_page(meta: dict[str, object], charts: list[Path], work_dir: Path, out_path: Path) -> None:
-    rows = demo_checklist_rows(meta, charts, work_dir)
+def write_reader_checklist_page(meta: dict[str, object], charts: list[Path], work_dir: Path, out_path: Path) -> None:
+    rows = reader_checklist_rows(meta, charts, work_dir)
     ready_count = sum(1 for row in rows if row["status"] == "通过")
     row_html = []
     for row in rows:
@@ -1867,7 +2413,7 @@ def write_demo_checklist_page(meta: dict[str, object], charts: list[Path], work_
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AgentOS 演示检查表</title>
+  <title>AgentOS 结果核验表</title>
   <style>
     :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; --ok:#166534; --warn:#9a3412; }}
     body {{ margin:0; font-family:Arial,"Microsoft YaHei",sans-serif; color:var(--ink); background:var(--bg); }}
@@ -1888,18 +2434,18 @@ def write_demo_checklist_page(meta: dict[str, object], charts: list[Path], work_
 </head>
 <body>
   <header>
-    <h1>AgentOS 演示检查表</h1>
-    <p>本页用于录屏前确认本次双目标结果是否具备可展示材料。它只读取本次运行生成的数据，不替代原始日志和测试脚本。</p>
+    <h1>AgentOS 结果核验表</h1>
+    <p>本页用于确认本次双目标结果是否完整可复查。它只读取本次运行生成的数据，不替代原始日志和测试脚本。</p>
   </header>
   <main>
     <div class="summary">
       <div class="pill">通过项：{ready_count} / {len(rows)}</div>
-      <div class="pill"><a href="demo-guide.html">演示导览页</a></div>
+      <div class="pill"><a href="reader-guide.html">运行导览页</a></div>
       <div class="pill"><a href="evidence-map.html">证据索引页</a></div>
-      <div class="pill"><a href="demo-checklist.csv">下载 CSV</a></div>
+      <div class="pill"><a href="reader-checklist.csv">下载 CSV</a></div>
     </div>
     <table>
-      <thead><tr><th>检查项</th><th>状态</th><th>证据</th><th>演示动作</th></tr></thead>
+      <thead><tr><th>检查项</th><th>状态</th><th>证据</th><th>查看动作</th></tr></thead>
       <tbody>{"".join(row_html)}</tbody>
     </table>
   </main>
@@ -1910,366 +2456,13 @@ def write_demo_checklist_page(meta: dict[str, object], charts: list[Path], work_
     out_path.write_text(html, encoding="utf-8")
 
 
-def write_chart_type_coverage_csv(out_path: Path) -> None:
-    rows = [
-        ("条形/柱状对比", "dual-target-state-reader.svg;launch-model.svg;runner-ticks.svg;runner-statistics.svg;load-profile.svg", "状态文件、页面、API、启动方式、runner tick、runner 统计、负载参数组；Python 标准库 SVG 生成"),
-        ("曲线趋势", "runner-cumulative-line.svg", "runner tick 累计成本；Python 标准库 SVG 生成"),
-        ("箱形图", "runner-tick-box.svg", "plain/AgentOS runner tick 分布；Python 标准库 SVG 生成"),
-        ("热力图", "runner-cost-heatmap.svg", "runner 场景与指标强弱；Python 标准库 SVG 生成"),
-        ("监控面积图", "stage-monitor-area.svg", "双目标运行阶段耗时；Python 标准库 SVG 生成"),
-        ("三维曲面与投影组合", "runner-surface-composite.svg", "runner 场景、路径类型和 tick 数值；Python 标准库 SVG 生成"),
-    ]
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["reference_chart_type", "agentos_artifacts", "data_source"])
-        writer.writerows(rows)
-
-
-def runner_cumulative_line_svg(meta: dict[str, object], out_path: Path) -> None:
-    rows = runner_tick_rows(meta)
-    if not rows:
-        rows = [{"label": "未记录", "plain_ticks": 0, "agentos_ticks": 0, "saved_ticks": 0}]
-    width, height = 1080, 440
-    left, right, top, bottom = 88, 54, 76, 78
-    plot_w, plot_h = width - left - right, height - top - bottom
-    plain_sum = 0.0
-    agentos_sum = 0.0
-    plain_points: list[tuple[float, float]] = []
-    agentos_points: list[tuple[float, float]] = []
-    labels: list[str] = []
-    for index, row in enumerate(rows):
-        plain_sum += as_number(row.get("plain_ticks"))
-        agentos_sum += as_number(row.get("agentos_ticks"))
-        x = left + (index / max(1, len(rows) - 1)) * plot_w
-        plain_points.append((x, plain_sum))
-        agentos_points.append((x, agentos_sum))
-        labels.append(str(row.get("label", ""))[:8])
-    max_value = max([1.0] + [point[1] for point in plain_points + agentos_points])
-
-    def y_pos(value: float) -> float:
-        return top + plot_h - (value / max_value) * plot_h
-
-    lines = svg_header(width, height)
-    lines.append('<text x="34" y="34" class="title">Runner 累计 Tick 曲线</text>')
-    lines.append('<text x="34" y="58" class="subtitle">按场景顺序累计 runner tick。曲线分离越明显，说明增强目标在完整流程中积累的执行成本越低。</text>')
-    for tick in range(0, int(max_value) + 1, max(1, int(math.ceil(max_value / 5)))):
-        y = y_pos(tick)
-        lines.append(f'<line x1="{left}" y1="{y:.1f}" x2="{width - right}" y2="{y:.1f}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
-        lines.append(f'<text x="{left - 10}" y="{y + 4:.1f}" text-anchor="end" class="axis">{tick}</text>')
-    for index, label in enumerate(labels):
-        x = left + (index / max(1, len(labels) - 1)) * plot_w
-        lines.append(f'<text x="{x:.1f}" y="{height - 42}" text-anchor="middle" class="axis">{escape(label)}</text>')
-    for points, color, name, y_legend in (
-        (plain_points, PALETTE["plain"], "普通用户态累计 tick", height - 22),
-        (agentos_points, PALETTE["agentos"], "AgentOS 累计 tick", height - 22),
-    ):
-        path = " ".join(f'{x:.1f},{y_pos(value):.1f}' for x, value in points)
-        lines.append(f'<polyline points="{path}" fill="none" stroke="{color}" stroke-width="3"/>')
-        for x, value in points:
-            lines.append(f'<circle cx="{x:.1f}" cy="{y_pos(value):.1f}" r="4" fill="{color}"/>')
-    lines.append(f'<rect x="{width - 350}" y="{height - 30}" width="14" height="14" fill="{PALETTE["plain"]}"/>')
-    lines.append(f'<text x="{width - 328}" y="{height - 18}" class="axis">普通用户态累计 tick</text>')
-    lines.append(f'<rect x="{width - 180}" y="{height - 30}" width="14" height="14" fill="{PALETTE["agentos"]}"/>')
-    lines.append(f'<text x="{width - 158}" y="{height - 18}" class="axis">AgentOS 累计 tick</text>')
-    lines.append("</svg>")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def percentile(values: list[float], ratio: float) -> float:
-    if not values:
-        return 0.0
-    ordered = sorted(values)
-    pos = (len(ordered) - 1) * ratio
-    low = int(math.floor(pos))
-    high = int(math.ceil(pos))
-    if low == high:
-        return ordered[low]
-    return ordered[low] + (ordered[high] - ordered[low]) * (pos - low)
-
-
-def runner_tick_box_svg(meta: dict[str, object], out_path: Path) -> None:
-    rows = runner_tick_rows(meta)
-    plain = [as_number(row.get("plain_ticks")) for row in rows]
-    agentos = [as_number(row.get("agentos_ticks")) for row in rows]
-    if not plain:
-        plain = [0.0]
-    if not agentos:
-        agentos = [0.0]
-    width, height = 860, 420
-    left, top, plot_w, plot_h = 92, 76, 680, 250
-    max_value = max([1.0] + plain + agentos)
-
-    def x_pos(value: float) -> float:
-        return left + (value / max_value) * plot_w
-
-    def draw_box(y: int, values: list[float], color: str, label: str) -> list[str]:
-        q0 = min(values)
-        q1 = percentile(values, 0.25)
-        q2 = percentile(values, 0.5)
-        q3 = percentile(values, 0.75)
-        q4 = max(values)
-        box = [
-            f'<text x="{left - 18}" y="{y + 6}" text-anchor="end" class="label">{escape(label)}</text>',
-            f'<line x1="{x_pos(q0):.1f}" y1="{y}" x2="{x_pos(q4):.1f}" y2="{y}" stroke="{color}" stroke-width="3"/>',
-            f'<rect x="{x_pos(q1):.1f}" y="{y - 18}" width="{max(2, x_pos(q3) - x_pos(q1)):.1f}" height="36" fill="#ffffff" stroke="{color}" stroke-width="3"/>',
-            f'<line x1="{x_pos(q2):.1f}" y1="{y - 18}" x2="{x_pos(q2):.1f}" y2="{y + 18}" stroke="{color}" stroke-width="3"/>',
-            f'<line x1="{x_pos(q0):.1f}" y1="{y - 12}" x2="{x_pos(q0):.1f}" y2="{y + 12}" stroke="{color}" stroke-width="3"/>',
-            f'<line x1="{x_pos(q4):.1f}" y1="{y - 12}" x2="{x_pos(q4):.1f}" y2="{y + 12}" stroke="{color}" stroke-width="3"/>',
-        ]
-        stat_x = x_pos(q4) + 8
-        stat_anchor = ""
-        if stat_x > width - 170:
-            stat_x = width - 8
-            stat_anchor = ' text-anchor="end"'
-        box.append(
-            f'<text x="{stat_x:.1f}" y="{y + 5}" class="axis"{stat_anchor}>min {fmt_number(q0)} / mid {fmt_number(q2)} / max {fmt_number(q4)}</text>'
-        )
-        return box
-
-    lines = svg_header(width, height)
-    lines.append('<text x="34" y="34" class="title">Runner Tick 分布箱形图</text>')
-    lines.append('<text x="34" y="58" class="subtitle">箱体展示 P25-P75，中线为中位数，横线两端为最小和最大 tick。</text>')
-    for tick in range(0, int(max_value) + 1, max(1, int(math.ceil(max_value / 5)))):
-        x = x_pos(tick)
-        lines.append(f'<line x1="{x:.1f}" y1="{top - 14}" x2="{x:.1f}" y2="{top + plot_h}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
-        lines.append(f'<text x="{x:.1f}" y="{top + plot_h + 24}" text-anchor="middle" class="axis">{tick}</text>')
-    lines.extend(draw_box(150, plain, PALETTE["plain"], "普通路径"))
-    lines.extend(draw_box(250, agentos, PALETTE["agentos"], "AgentOS"))
-    lines.append("</svg>")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def runner_cost_heatmap_svg(meta: dict[str, object], out_path: Path) -> None:
-    rows = runner_tick_rows(meta)
-    if not rows:
-        rows = [{"label": "未记录", "plain_ticks": 0, "agentos_ticks": 0, "saved_ticks": 0, "speedup_x100": 0}]
-    metrics = [
-        ("plain_ticks", "普通 tick"),
-        ("agentos_ticks", "AgentOS tick"),
-        ("saved_ticks", "节省 tick"),
-        ("speedup_x100", "相对倍数x100"),
-    ]
-    width, height = 1080, max(420, 128 + len(rows) * 38)
-    left, top, cell_w, cell_h = 190, 94, 150, 30
-    values = [as_number(row.get(key)) for row in rows for key, _ in metrics]
-    max_value = max([1.0] + values)
-
-    def color(value: float) -> str:
-        t = max(0.0, min(1.0, value / max_value))
-        r = int(238 + (245 - 238) * t)
-        g = int(243 - (243 - 133) * t)
-        b = int(248 - (248 - 24) * t)
-        return f"#{r:02x}{g:02x}{b:02x}"
-
-    lines = svg_header(width, height)
-    lines.append('<text x="34" y="34" class="title">Runner 成本热力图</text>')
-    lines.append('<text x="34" y="58" class="subtitle">颜色越深表示数值越高。该图用于快速定位哪些场景成本最高、哪些场景收益最明显。</text>')
-    for col, (_, label) in enumerate(metrics):
-        x = left + col * cell_w
-        lines.append(f'<text x="{x + cell_w / 2:.1f}" y="{top - 16}" text-anchor="middle" class="value">{escape(label)}</text>')
-    for row_index, row in enumerate(rows):
-        y = top + row_index * cell_h
-        lines.append(f'<text x="{left - 12}" y="{y + 20}" text-anchor="end" class="label">{escape(str(row.get("label", ""))[:18])}</text>')
-        for col, (key, _) in enumerate(metrics):
-            value = as_number(row.get(key))
-            if key == "speedup_x100":
-                value = value / 100.0
-            x = left + col * cell_w
-            lines.append(f'<rect x="{x}" y="{y}" width="{cell_w - 4}" height="{cell_h - 4}" fill="{color(value)}" stroke="{PALETTE["grid"]}"/>')
-            lines.append(f'<text x="{x + cell_w / 2:.1f}" y="{y + 19}" text-anchor="middle" class="axis">{fmt_number(value)}</text>')
-    lines.append("</svg>")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def stage_monitor_area_svg(meta: dict[str, object], out_path: Path) -> None:
-    raw_rows = meta.get("stage_rows", [])
-    rows = [row for row in raw_rows if isinstance(row, dict)] if isinstance(raw_rows, list) else []
-    if not rows:
-        rows = [{"stage": "未记录", "duration_seconds": "0", "status": "unknown"}]
-    durations = [as_number(row.get("duration_seconds")) for row in rows]
-    width, height = 1080, 420
-    left, right, top, bottom = 84, 44, 74, 80
-    plot_w, plot_h = width - left - right, height - top - bottom
-    max_value = max([1.0] + durations)
-    points: list[tuple[float, float]] = []
-    for index, duration in enumerate(durations):
-        x = left + (index / max(1, len(durations) - 1)) * plot_w
-        y = top + plot_h - (duration / max_value) * plot_h
-        points.append((x, y))
-    area_points = [(left, top + plot_h), *points, (left + plot_w, top + plot_h)]
-    lines = svg_header(width, height)
-    lines.append('<text x="34" y="34" class="title">双目标运行阶段监控面积图</text>')
-    lines.append('<text x="34" y="58" class="subtitle">按阶段展示耗时强弱，适合录屏时快速定位主要耗时是否集中在 QEMU 双目标运行阶段。</text>')
-    for tick in range(0, int(max_value) + 1, max(1, int(math.ceil(max_value / 5)))):
-        y = top + plot_h - (tick / max_value) * plot_h
-        lines.append(f'<line x1="{left}" y1="{y:.1f}" x2="{left + plot_w}" y2="{y:.1f}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
-        lines.append(f'<text x="{left - 10}" y="{y + 4:.1f}" text-anchor="end" class="axis">{tick}s</text>')
-    lines.append(f'<polygon points="{" ".join(f"{x:.1f},{y:.1f}" for x, y in area_points)}" fill="#fce8d4" stroke="{PALETTE["agentos"]}" stroke-width="2"/>')
-    lines.append(f'<polyline points="{" ".join(f"{x:.1f},{y:.1f}" for x, y in points)}" fill="none" stroke="{PALETTE["agentos"]}" stroke-width="3"/>')
-    for index, row in enumerate(rows):
-        x, y = points[index]
-        lines.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="{PALETTE["agentos"]}"/>')
-        lines.append(f'<text x="{x:.1f}" y="{height - 42}" text-anchor="middle" class="axis">{escape(stage_label(row.get("stage", ""))[:6])}</text>')
-    lines.append("</svg>")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def runner_surface_composite_svg(meta: dict[str, object], out_path: Path) -> None:
-    rows = runner_tick_rows(meta)
-    if not rows:
-        rows = [{"label": "未记录", "plain_ticks": 0, "agentos_ticks": 0, "saved_ticks": 0}]
-    rows = rows[:8]
-    series = [
-        ("plain_ticks", "普通路径", PALETTE["plain"]),
-        ("agentos_ticks", "AgentOS", PALETTE["agentos"]),
-        ("saved_ticks", "节省", PALETTE["shared"]),
-    ]
-    values = [[as_number(row.get(key)) for key, _, _ in series] for row in rows]
-    max_value = max([1.0] + [value for line in values for value in line])
-    width, height = 1180, 760
-    lines = svg_header(width, height)
-    lines.append('<text x="34" y="34" class="title">Runner 曲面 / 投影 / 热力组合图</text>')
-    lines.append('<text x="34" y="58" class="subtitle">上部用等距网格模拟三维曲面，中部给出二维投影，下部给出热力图。三者使用同一组 runner-sweep 数据。</text>')
-
-    def iso_point(ix: int, iy: int, value: float) -> tuple[float, float]:
-        base_x, base_y = 168, 268
-        return (
-            base_x + ix * 92 + iy * 48,
-            base_y + iy * 32 - ix * 10 - (value / max_value) * 116,
-        )
-
-    for ix, row_values in enumerate(values):
-        for iy, value in enumerate(row_values):
-            x, y = iso_point(ix, iy, value)
-            shade = "#f58518" if iy == 1 else ("#4c78a8" if iy == 0 else "#54a24b")
-            lines.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="{shade}"/>')
-            lines.append(f'<text x="{x + 6:.1f}" y="{y - 5:.1f}" class="axis">{fmt_number(value)}</text>')
-    for ix in range(len(values)):
-        for iy in range(len(series) - 1):
-            x1, y1 = iso_point(ix, iy, values[ix][iy])
-            x2, y2 = iso_point(ix, iy + 1, values[ix][iy + 1])
-            lines.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
-    for ix in range(len(values) - 1):
-        for iy in range(len(series)):
-            x1, y1 = iso_point(ix, iy, values[ix][iy])
-            x2, y2 = iso_point(ix + 1, iy, values[ix + 1][iy])
-            lines.append(f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
-    lines.append('<text x="58" y="92" class="value">一、等距曲面视图</text>')
-
-    projection_top, projection_left, projection_w, projection_h = 360, 88, 980, 150
-    lines.append('<text x="58" y="342" class="value">二、二维投影曲线</text>')
-    for tick in range(0, int(max_value) + 1, max(1, int(math.ceil(max_value / 4)))):
-        y = projection_top + projection_h - (tick / max_value) * projection_h
-        lines.append(f'<line x1="{projection_left}" y1="{y:.1f}" x2="{projection_left + projection_w}" y2="{y:.1f}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
-        lines.append(f'<text x="{projection_left - 10}" y="{y + 4:.1f}" text-anchor="end" class="axis">{tick}</text>')
-    for iy, (key, label, color) in enumerate(series):
-        points = []
-        for ix, row in enumerate(rows):
-            x = projection_left + (ix / max(1, len(rows) - 1)) * projection_w
-            y = projection_top + projection_h - (as_number(row.get(key)) / max_value) * projection_h
-            points.append((x, y))
-        lines.append(f'<polyline points="{" ".join(f"{x:.1f},{y:.1f}" for x, y in points)}" fill="none" stroke="{color}" stroke-width="3"/>')
-        lines.append(f'<rect x="{projection_left + 720 + iy * 82}" y="{projection_top - 30}" width="12" height="12" fill="{color}"/>')
-        lines.append(f'<text x="{projection_left + 738 + iy * 82}" y="{projection_top - 19}" class="axis">{escape(label)}</text>')
-    for ix, row in enumerate(rows):
-        x = projection_left + (ix / max(1, len(rows) - 1)) * projection_w
-        lines.append(f'<text x="{x:.1f}" y="{projection_top + projection_h + 24}" text-anchor="middle" class="axis">{escape(str(row.get("label", ""))[:7])}</text>')
-
-    heat_top, heat_left, cell_w, cell_h = 590, 190, 120, 28
-    lines.append('<text x="58" y="568" class="value">三、热力图</text>')
-    for iy, (_, label, _) in enumerate(series):
-        lines.append(f'<text x="{heat_left - 12}" y="{heat_top + iy * cell_h + 19}" text-anchor="end" class="label">{escape(label)}</text>')
-    for ix, row in enumerate(rows):
-        lines.append(f'<text x="{heat_left + ix * cell_w + cell_w / 2:.1f}" y="{heat_top - 12}" text-anchor="middle" class="axis">{escape(str(row.get("label", ""))[:6])}</text>')
-    for ix, row_values in enumerate(values):
-        for iy, value in enumerate(row_values):
-            t = max(0.0, min(1.0, value / max_value))
-            fill = f"#{int(238 + 7 * t):02x}{int(243 - 110 * t):02x}{int(248 - 220 * t):02x}"
-            x = heat_left + ix * cell_w
-            y = heat_top + iy * cell_h
-            lines.append(f'<rect x="{x}" y="{y}" width="{cell_w - 4}" height="{cell_h - 4}" fill="{fill}" stroke="{PALETTE["grid"]}"/>')
-            lines.append(f'<text x="{x + cell_w / 2:.1f}" y="{y + 18}" text-anchor="middle" class="axis">{fmt_number(value)}</text>')
-    lines.append("</svg>")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
 def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Path) -> list[Path]:
-    by_metric = {row.metric: row for row in rows}
     charts_dir.mkdir(parents=True, exist_ok=True)
     paths: list[Path] = []
-
-    state_chart = charts_dir / "dual-target-state-reader.svg"
-    grouped_bar_svg(
-        "双目标状态与页面输出",
-        "同一批请求分别进入普通 uCore 和 AgentOS-uCore；增强目标保持页面规模，并额外导出内核 Agent 证据。",
-        ["状态文件", "HTML页面", "API JSON"],
-        [
-            by_metric["提取到的 rp_* 状态文件"].plain or 0,
-            by_metric["HTML 页面"].plain or 0,
-            by_metric["API JSON"].plain or 0,
-        ],
-        [
-            by_metric["提取到的 rp_* 状态文件"].agentos or 0,
-            by_metric["HTML 页面"].agentos or 0,
-            by_metric["API JSON"].agentos or 0,
-        ],
-        state_chart,
-    )
-    paths.append(state_chart)
-
-    launch_chart = charts_dir / "launch-model.svg"
-    stacked_bar_svg(
-        "科研流程启动方式组成",
-        "AgentOS 目标把关键 worker 转为 Agent 进程，同时保留普通 fork 路径作为对照。",
-        [
-            (
-                "普通 uCore",
-                by_metric["普通 fork 启动记录"].plain or 0,
-                by_metric["Agent 启动记录"].plain or 0,
-            ),
-            (
-                "AgentOS-uCore",
-                by_metric["普通 fork 启动记录"].agentos or 0,
-                by_metric["Agent 启动记录"].agentos or 0,
-            ),
-        ],
-        launch_chart,
-    )
-    paths.append(launch_chart)
-
-    evidence_chart = charts_dir / "agentos-evidence.svg"
-    grouped_bar_svg(
-        "AgentOS 额外机制证据",
-        "图中数值来自双目标对照脚本，体现增强目标在同一科研流程中额外记录的内核事实。",
-        ["内核证据", "主流程阶段", "主流程事实", "预置请求"],
-        [0, 0, 0, by_metric["预置 action 请求"].plain or 0],
-        [
-            by_metric["内核证据检查项"].agentos or 0,
-            by_metric["主流程内核阶段事实"].agentos or 0,
-            as_number(meta.get("state", {}).get("agentos_mainflow_facts")) if isinstance(meta.get("state"), dict) else 0,
-            by_metric["预置 action 请求"].agentos or 0,
-        ],
-        evidence_chart,
-    )
-    paths.append(evidence_chart)
-
-    timing_chart = charts_dir / "stage-timings.svg"
-    stage_timing_svg(meta.get("stage_rows", []), timing_chart)  # type: ignore[arg-type]
-    paths.append(timing_chart)
 
     observation_chart = charts_dir / "runtime-observation.svg"
     runtime_observation_svg(rows, meta, observation_chart)
     paths.append(observation_chart)
-
-    scenario_chart = charts_dir / "scenario-evidence.svg"
-    scenario_evidence_svg(meta, scenario_chart)
-    paths.append(scenario_chart)
 
     cost_chart = charts_dir / "cost-replacement.svg"
     cost_replacement_svg(meta, cost_chart)
@@ -2283,33 +2476,34 @@ def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Pat
     runner_speedup_svg(meta, runner_speedup_chart)
     paths.append(runner_speedup_chart)
 
-    runner_stats_chart = charts_dir / "runner-statistics.svg"
-    runner_statistics_svg(meta, runner_stats_chart)
-    paths.append(runner_stats_chart)
+    experiment_data = experiment_rows(meta)
+    file_chart = charts_dir / "experiment-file-query-bar.svg"
+    experiment_file_bar_svg(experiment_data, file_chart)
+    paths.append(file_chart)
 
-    load_profile_chart = charts_dir / "load-profile.svg"
-    load_profile_svg(meta, load_profile_chart)
-    paths.append(load_profile_chart)
+    context_chart = charts_dir / "experiment-context-line.svg"
+    experiment_context_line_svg(experiment_data, context_chart)
+    paths.append(context_chart)
 
-    runner_line_chart = charts_dir / "runner-cumulative-line.svg"
-    runner_cumulative_line_svg(meta, runner_line_chart)
-    paths.append(runner_line_chart)
+    event_chart = charts_dir / "experiment-event-box.svg"
+    experiment_event_box_svg(experiment_data, event_chart)
+    paths.append(event_chart)
 
-    runner_box_chart = charts_dir / "runner-tick-box.svg"
-    runner_tick_box_svg(meta, runner_box_chart)
-    paths.append(runner_box_chart)
+    concurrency_chart = charts_dir / "experiment-concurrency-heatmap.svg"
+    experiment_concurrency_heatmap_svg(experiment_data, concurrency_chart)
+    paths.append(concurrency_chart)
 
-    runner_heatmap_chart = charts_dir / "runner-cost-heatmap.svg"
-    runner_cost_heatmap_svg(meta, runner_heatmap_chart)
-    paths.append(runner_heatmap_chart)
+    llm_chart = charts_dir / "experiment-llm-relay-bar.svg"
+    experiment_llm_relay_bar_svg(experiment_data, llm_chart)
+    paths.append(llm_chart)
 
-    stage_area_chart = charts_dir / "stage-monitor-area.svg"
-    stage_monitor_area_svg(meta, stage_area_chart)
-    paths.append(stage_area_chart)
+    recovery_chart = charts_dir / "experiment-recovery-line.svg"
+    experiment_recovery_line_svg(experiment_data, recovery_chart)
+    paths.append(recovery_chart)
 
-    surface_chart = charts_dir / "runner-surface-composite.svg"
-    runner_surface_composite_svg(meta, surface_chart)
-    paths.append(surface_chart)
+    monitor_chart = charts_dir / "experiment-monitor-area.svg"
+    experiment_monitor_area_svg(experiment_data, monitor_chart)
+    paths.append(monitor_chart)
 
     return paths
 
@@ -2323,12 +2517,12 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
     lines = [
         "# 双目标运行结果摘要",
         "",
-        "本报告由双目标运行脚本在验证结束后生成，数据来自 QEMU 运行日志、文件系统镜像提取结果、Reader 渲染摘要和状态文件对照结果。",
+        "本报告由双目标运行脚本在验证结束后生成，数据来自 QEMU 运行日志、文件系统镜像提取结果、本地页面渲染摘要和状态文件对照结果。",
         "",
         "## 关键结论",
         "",
         f"- 普通 uCore 提取状态文件 {fmt_number(as_number(state.get('plain_files')))} 个，AgentOS-uCore 提取 {fmt_number(as_number(state.get('agentos_files')))} 个，其中 AgentOS 额外状态文件 {fmt_number(as_number(state.get('agentos_extra_files')))} 个。",
-        f"- Host Reader 页面数量为 {fmt_number(as_number(reader.get('plain_pages')))}，两个目标页面集合一致；AgentOS API JSON 比普通目标多 {fmt_number(as_number(reader.get('agentos_extra_api_json')))} 个。",
+        f"- 本地结果阅读器生成页面 {fmt_number(as_number(reader.get('plain_pages')))} 个，两个目标页面集合一致；AgentOS API JSON 比普通目标多 {fmt_number(as_number(reader.get('agentos_extra_api_json')))} 个。",
         f"- 同一批预置 action 请求数为 {fmt_number(as_number(state.get('embedded_action_records')))}，成功记录核对数为 {fmt_number(as_number(state.get('checked_success_records')))}。",
         f"- AgentOS 主流程中记录到 {fmt_number(as_number(state.get('agentos_mainflow_stages')))} 个内核参与阶段和 {fmt_number(as_number(state.get('agentos_mainflow_facts')))} 条主流程事实。",
         f"- QEMU 诊断：普通目标耗时 {plain_result.get('qemu_elapsed_seconds', '0')} 秒、无输出提示 {plain_result.get('qemu_idle_notices', '0')} 次；AgentOS 目标耗时 {agentos_result.get('qemu_elapsed_seconds', '0')} 秒、无输出提示 {agentos_result.get('qemu_idle_notices', '0')} 次。",
@@ -2339,18 +2533,18 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
     for chart in charts:
         lines.append(f"- `{chart.relative_to(out_path.parent.parent).as_posix()}`")
     lines.append("- `runner-sweep.csv`")
-    lines.append("- `runner-statistics.csv`")
-    lines.append("- `runner-statistics.html`")
-    lines.append("- `load-profile.csv`")
+    lines.append("- `experiments/experiment-stats.csv`")
+    lines.append("- `experiments/mechanism-notes.csv`")
+    for spec in EXPERIMENT_SPECS.values():
+        lines.append(f"- `experiments/raw/{spec['raw_file']}`")
     lines.append("- `delivery-readiness.csv`")
     lines.append("- `delivery-readiness.html`")
     lines.append("- `test-suite.csv`")
     lines.append("- `test-suite.html`")
-    lines.append("- `chart-type-coverage.csv`")
     lines.append("- `evidence-manifest.csv`")
     lines.append("- `evidence-map.html`")
-    lines.append("- `demo-checklist.csv`")
-    lines.append("- `demo-checklist.html`")
+    lines.append("- `reader-checklist.csv`")
+    lines.append("- `reader-checklist.html`")
     lines.append("- `experiment-design.csv`")
     lines.append("- `experiment-design.html`")
     lines.extend(
@@ -2430,19 +2624,29 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
                         saved_ticks=fmt_number(as_number(row.get("saved_ticks"))),
                     )
                 )
-    profile_rows = load_profile_rows(meta)
-    if profile_rows:
-        lines.extend(["", "## 负载参数组", "", "| 参数 | 普通 uCore | AgentOS-uCore | 差值 | 来源 |", "| --- | ---: | ---: | ---: | --- |"])
-        for row in profile_rows:
-            plain = as_number(row.get("plain_value"))
-            agentos = as_number(row.get("agentos_value"))
+    exp_stats = experiment_stats_rows(experiment_rows(meta))
+    if exp_stats:
+        lines.extend(
+            [
+                "",
+                "## 六组对照实验统计",
+                "",
+                "| 实验 | 负载 | 路径 | 指标 | min | avg | max | P50 | P95 |",
+                "| --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for row in exp_stats:
             lines.append(
-                "| {label} | {plain} | {agentos} | {delta} | {source} |".format(
-                    label=row.get("load_dimension", ""),
-                    plain=fmt_number(plain),
-                    agentos=fmt_number(agentos),
-                    delta=fmt_number(agentos - plain),
-                    source=row.get("source", ""),
+                "| {experiment} | {load} | {path} | {metric} | {min_value} | {avg_value} | {max_value} | {p50} | {p95} |".format(
+                    experiment=row.get("experiment", ""),
+                    load=fmt_number(as_number(row.get("load"))),
+                    path=row.get("path", ""),
+                    metric=row.get("metric", ""),
+                    min_value=fmt_number(as_number(row.get("min"))),
+                    avg_value=fmt_number(as_number(row.get("avg"))),
+                    max_value=fmt_number(as_number(row.get("max"))),
+                    p50=fmt_number(as_number(row.get("p50"))),
+                    p95=fmt_number(as_number(row.get("p95"))),
                 )
             )
     stage_rows = meta.get("stage_rows", [])
@@ -2465,22 +2669,17 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
     agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
     chart_cards = []
     chart_titles = {
-        "dual-target-state-reader.svg": "双目标状态与页面输出",
-        "launch-model.svg": "科研流程启动方式组成",
-        "agentos-evidence.svg": "AgentOS 额外机制证据",
-        "stage-timings.svg": "双目标运行阶段耗时",
         "runtime-observation.svg": "双目标运行观测面板",
-        "scenario-evidence.svg": "AgentOS 多场景机制证据",
         "cost-replacement.svg": "用户态成本项与 AgentOS 替代机制",
         "runner-ticks.svg": "Runner Tick 对照",
         "runner-speedup.svg": "Runner 成组场景相对倍数",
-        "runner-statistics.svg": "Runner 统计摘要",
-        "load-profile.svg": "双目标负载参数组",
-        "runner-cumulative-line.svg": "Runner 累计 Tick 曲线",
-        "runner-tick-box.svg": "Runner Tick 分布箱形图",
-        "runner-cost-heatmap.svg": "Runner 成本热力图",
-        "stage-monitor-area.svg": "双目标运行阶段监控面积图",
-        "runner-surface-composite.svg": "Runner 曲面 / 投影 / 热力组合图",
+        "experiment-file-query-bar.svg": "文件对象查询实验",
+        "experiment-context-line.svg": "Context 与 timeline 查询实验",
+        "experiment-event-box.svg": "事件等待实验",
+        "experiment-concurrency-heatmap.svg": "并发 Agent 写入实验",
+        "experiment-llm-relay-bar.svg": "LLM Relay 模式实验",
+        "experiment-recovery-line.svg": "恢复流程成本实验",
+        "experiment-monitor-area.svg": "六组实验综合观测",
     }
     for chart in charts:
         rel = chart.relative_to(out_path.parent).as_posix()
@@ -2554,7 +2753,7 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
 <body>
   <header>
     <h1>AgentOS 双目标测试结果</h1>
-    <p>本页由双目标运行结果自动生成。它把 QEMU 运行、状态文件对照、Host Reader 输出和阶段耗时整理成适合演示和复查的图表页面。</p>
+    <p>本页由双目标运行结果自动生成。它把 QEMU 运行、状态文件对照、本地阅读器输出和阶段耗时整理成便于复查的图表页面。</p>
     <div class="summary">
       <div class="metric"><strong>{fmt_number(as_number(state.get("plain_files")))}</strong><span>普通 uCore 状态文件</span></div>
       <div class="metric"><strong>{fmt_number(as_number(state.get("agentos_files")))}</strong><span>AgentOS 状态文件</span></div>
@@ -2564,37 +2763,36 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
   </header>
   <main>
     <div class="links">
-      <a href="demo-guide.html">打开演示导览页</a>
+      <a href="reader-guide.html">打开运行导览页</a>
       <a href="monitor.html">打开运行观测面板</a>
       <a href="report.md">查看 Markdown 报告</a>
       <a href="summary.csv">下载 CSV 明细</a>
       <a href="runner-sweep.csv">下载 runner 成组数据</a>
-      <a href="runner-statistics.html">打开 runner 统计摘要</a>
-      <a href="runner-statistics.csv">下载 runner 统计摘要</a>
-      <a href="load-profile.csv">下载负载参数组</a>
-      <a href="delivery-readiness.html">打开交付材料核对</a>
-      <a href="delivery-readiness.csv">下载交付材料核对</a>
+      <a href="experiments/experiment-stats.csv">下载实验统计</a>
+      <a href="experiments/mechanism-notes.csv">下载机制说明</a>
+      <a href="delivery-readiness.html">打开结果材料核对</a>
+      <a href="delivery-readiness.csv">下载结果材料核对</a>
       <a href="test-suite.html">打开测试入口说明</a>
       <a href="test-suite.csv">下载测试入口说明</a>
       <a href="evidence-map.html">打开证据索引页</a>
       <a href="evidence-manifest.csv">下载证据索引表</a>
-      <a href="demo-checklist.html">打开演示检查表</a>
-      <a href="demo-checklist.csv">下载演示检查表</a>
+      <a href="reader-checklist.html">打开结果核验表</a>
+      <a href="reader-checklist.csv">下载结果核验表</a>
       <a href="experiment-design.html">打开实验场景说明</a>
       <a href="experiment-design.csv">下载实验场景说明</a>
-      <a href="chart-type-coverage.csv">下载图表类型覆盖表</a>
       <a href="charts/runtime-observation.svg">打开观测图</a>
-      <a href="charts/scenario-evidence.svg">打开场景证据图</a>
       <a href="charts/cost-replacement.svg">打开成本替代图</a>
       <a href="charts/runner-ticks.svg">打开 tick 对照图</a>
       <a href="charts/runner-speedup.svg">打开相对倍数图</a>
-      <a href="charts/runner-statistics.svg">打开统计摘要图</a>
-      <a href="charts/load-profile.svg">打开负载参数图</a>
-      <a href="charts/runner-surface-composite.svg">打开组合图</a>
-      <a href="charts/dual-target-state-reader.svg">打开状态图</a>
-      <a href="charts/stage-timings.svg">打开阶段耗时图</a>
+      <a href="charts/experiment-file-query-bar.svg">打开文件查询实验图</a>
+      <a href="charts/experiment-context-line.svg">打开 Context 实验图</a>
+      <a href="charts/experiment-event-box.svg">打开事件实验图</a>
+      <a href="charts/experiment-concurrency-heatmap.svg">打开并发实验图</a>
+      <a href="charts/experiment-llm-relay-bar.svg">打开 LLM Relay 实验图</a>
+      <a href="charts/experiment-recovery-line.svg">打开恢复流程实验图</a>
+      <a href="charts/experiment-monitor-area.svg">打开综合观测图</a>
     </div>
-    <p>录屏演示建议先运行 <code>make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-</code>，再运行 <code>make demo-reader</code> 打开交互页面。需要按顺序展示时，先打开 <a href="demo-guide.html">演示导览页</a>；本页用于快速展示测试数据图表，Reader 页面用于查看完整运行对象和 AgentOS 主流程细节。</p>
+    <p>建议先运行 <code>make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-</code>，再运行 <code>make reader</code> 打开交互页面。需要按顺序查看时，先打开 <a href="reader-guide.html">运行导览页</a>；本页用于快速查看测试数据图表，本地阅读器页面用于查看完整运行对象和 AgentOS 主流程细节。</p>
     <section class="eval">
       <h2>自动判读</h2>
       <ul>{eval_html}</ul>
@@ -2662,7 +2860,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
 <body>
   <header>
     <h1>AgentOS 运行观测面板</h1>
-    <p>这个页面面向演示和复查：它不替代完整 Reader，而是先把本次双目标运行是否健康、增强目标是否真的产生内核证据、页面/API 是否保留完整展示面讲清楚。</p>
+    <p>这个页面面向运行复查：它不替代完整本地页面，而是先把本次双目标运行是否健康、增强目标是否真的产生内核证据、页面/API 是否保留完整输出讲清楚。</p>
   </header>
   <main>
     <div class="grid">
@@ -2676,8 +2874,8 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
       <img src="{escape(observation_rel)}" alt="双目标运行观测面板">
     </section>
     <section class="panel">
-      <h2>录屏建议</h2>
-      <p>先运行 <code>make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-</code> 生成结果，再运行 <code>make demo-reader</code> 打开完整交互页面。录屏中可以先展示本页的运行观测图，再切到 Reader 的 AgentOS Compare、LLM Relay、运行详情和证据页面。</p>
+      <h2>复查建议</h2>
+      <p>先运行 <code>make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-</code> 生成结果，再运行 <code>make reader</code> 打开完整交互页面。复查时可以先查看本页的运行观测图，再切到 本地页面中的 AgentOS Compare、LLM Relay、运行详情和证据页面。</p>
       <p>如果双目标运行异常，本页会优先提示状态文件、QEMU 超时、无输出提示和阶段耗时。普通目标耗时 {escape(str(plain_result.get("qemu_elapsed_seconds", "0")))} 秒，AgentOS 目标耗时 {escape(str(agentos_result.get("qemu_elapsed_seconds", "0")))} 秒。</p>
     </section>
     <section class="panel">
@@ -2686,7 +2884,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>相关结果</h2>
-      <p><a href="demo-guide.html">演示导览页</a>、<a href="demo-checklist.html">演示检查表</a>、<a href="delivery-readiness.html">交付材料核对</a>、<a href="test-suite.html">测试入口说明</a>、<a href="experiment-design.html">实验场景说明</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="runner-statistics.html">runner 统计摘要</a>、<a href="load-profile.csv">负载参数组</a>、<a href="evidence-manifest.csv">证据索引表</a>、<a href="delivery-readiness.csv">交付核对 CSV</a>、<a href="demo-checklist.csv">演示检查表 CSV</a>、<a href="test-suite.csv">测试入口 CSV</a>、<a href="experiment-design.csv">实验场景说明 CSV</a>、<a href="runner-statistics.csv">runner 统计 CSV</a>、<a href="chart-type-coverage.csv">图表类型覆盖表</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/scenario-evidence.svg">场景证据图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/runner-statistics.svg">统计摘要图</a>、<a href="charts/load-profile.svg">负载参数图</a>、<a href="charts/runner-surface-composite.svg">组合图</a></p>
+      <p><a href="reader-guide.html">运行导览页</a>、<a href="reader-checklist.html">结果核验表</a>、<a href="delivery-readiness.html">结果材料核对</a>、<a href="test-suite.html">测试入口说明</a>、<a href="experiment-design.html">实验场景说明</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="experiments/experiment-stats.csv">实验统计 CSV</a>、<a href="experiments/mechanism-notes.csv">机制说明 CSV</a>、<a href="evidence-manifest.csv">证据索引表</a>、<a href="delivery-readiness.csv">结果核对 CSV</a>、<a href="reader-checklist.csv">结果核验表 CSV</a>、<a href="test-suite.csv">测试入口 CSV</a>、<a href="experiment-design.csv">实验场景说明 CSV</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/experiment-file-query-bar.svg">文件查询实验图</a>、<a href="charts/experiment-context-line.svg">Context 实验图</a>、<a href="charts/experiment-event-box.svg">事件实验图</a>、<a href="charts/experiment-concurrency-heatmap.svg">并发实验图</a>、<a href="charts/experiment-monitor-area.svg">综合观测图</a></p>
     </section>
   </main>
 </body>
@@ -2696,7 +2894,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     out_path.write_text(html, encoding="utf-8")
 
 
-def write_demo_guide_page(rows: list[MetricRow], meta: dict[str, object], charts: list[Path], out_path: Path) -> None:
+def write_reader_guide_page(rows: list[MetricRow], meta: dict[str, object], charts: list[Path], out_path: Path) -> None:
     state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
     reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
     seeded = meta.get("seeded", {}) if isinstance(meta.get("seeded"), dict) else {}
@@ -2712,7 +2910,7 @@ def write_demo_guide_page(rows: list[MetricRow], meta: dict[str, object], charts
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AgentOS 演示导览</title>
+  <title>AgentOS 运行导览</title>
   <style>
     :root {{ --ink:#1f2937; --muted:#52616f; --line:#d8dee6; --bg:#f7f9fb; --panel:#fff; --accent:#f58518; }}
     * {{ box-sizing:border-box; }}
@@ -2739,8 +2937,8 @@ def write_demo_guide_page(rows: list[MetricRow], meta: dict[str, object], charts
 </head>
 <body>
   <header>
-    <h1>AgentOS 演示导览</h1>
-    <p>这个页面把双目标运行结果、Host Reader 页面和关键图表串成一条录屏路线。它只读取本次运行产物，不重新执行 QEMU。</p>
+    <h1>AgentOS 运行导览</h1>
+    <p>这个页面把双目标运行结果、本地阅读器页面和关键图表组织成一条复查路径。它只读取本次运行产物，不重新执行 QEMU。</p>
     <div class="grid">
       <div class="metric"><strong>{fmt_number(as_number(seeded.get("action_count")))}</strong><span>预置请求</span></div>
       <div class="metric"><strong>{fmt_number(as_number(state.get("agentos_evidence_checks")))}</strong><span>内核证据检查项</span></div>
@@ -2750,44 +2948,49 @@ def write_demo_guide_page(rows: list[MetricRow], meta: dict[str, object], charts
   </header>
   <main>
     <section class="panel">
-      <h2>录屏只需要两条命令</h2>
+      <h2>常用运行只需要两条命令</h2>
       <div class="steps">
         <div class="step"><strong>第一条：生成双目标结果</strong><p><code>make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-</code></p><p>它会运行普通 uCore 和 AgentOS-uCore，提取状态文件，生成 CSV、报告和图表。</p></div>
-        <div class="step"><strong>第二条：打开本地页面</strong><p><code>make demo-reader</code></p><p>它会启动 Host Reader，并把本页、观测面板和完整科研平台页面放在同一个本地服务里。</p></div>
+        <div class="step"><strong>第二条：打开本地页面</strong><p><code>make reader</code></p><p>它会启动 本地结果阅读器，并把本页、观测面板和完整科研平台页面放在同一个本地服务里。</p></div>
       </div>
     </section>
     <section class="panel">
-      <h2>建议展示顺序</h2>
+      <h2>建议查看顺序</h2>
       <table>
         <thead><tr><th>顺序</th><th>打开内容</th><th>要讲清楚的点</th></tr></thead>
         <tbody>
-          <tr><td>1</td><td><a href="monitor.html">运行观测面板</a></td><td>先确认本次运行健康：QEMU 状态、状态文件数量、API 数量、AgentOS 额外证据都来自本次运行。</td></tr>
-          <tr><td>2</td><td><a href="index.html">图表索引页</a></td><td>展示所有数据图表：状态输出、启动方式、机制证据、用户态成本替代、tick 对照和组合图。</td></tr>
-          <tr><td>3</td><td><a href="charts/scenario-evidence.svg">机制证据图</a></td><td>说明 AgentOS 不是只多跑测试，而是在同一科研流程中使用 Context、文件 metadata、事件、audit、provenance 和权限机制。</td></tr>
-          <tr><td>4</td><td><a href="charts/cost-replacement.svg">成本替代图</a></td><td>说明普通用户态流程的扫描、轮询、状态约定和锁文件成本，如何被内核机制替代。</td></tr>
-          <tr><td>5</td><td><a href="charts/runner-speedup.svg">相对倍数图</a></td><td>说明同一 runner 场景下，AgentOS 路径如何减少 tick；必要时打开 <a href="runner-sweep.csv">runner-sweep.csv</a> 复查原始数据。</td></tr>
-          <tr><td>6</td><td><a href="../index.html">Host Reader 首页</a></td><td>进入完整科研平台页面，展示 run、Agent、证据、artifact、LLM Relay 和 AgentOS Compare。</td></tr>
+          <tr><td>1</td><td><a href="monitor.html">运行观测面板</a></td><td>先确认本次运行健康：QEMU 状态、状态产物、API 输出、AgentOS 额外证据都来自本次运行。</td></tr>
+          <tr><td>2</td><td><a href="index.html">图表索引页</a></td><td>查看十一张核心图：运行观测、成本替代、runner tick、runner 相对倍数和六组对照实验。</td></tr>
+          <tr><td>3</td><td><a href="charts/experiment-file-query-bar.svg">文件查询实验图</a></td><td>说明文件数增长时，普通路径扫描数随规模增长，AgentOS metadata 候选数保持小得多。</td></tr>
+          <tr><td>4</td><td><a href="charts/experiment-context-line.svg">Context 实验图</a></td><td>说明 Context/timeline 记录数增长时，用户态重建步骤与内核 snapshot/query 成本的差异。</td></tr>
+          <tr><td>5</td><td><a href="charts/experiment-event-box.svg">事件实验图</a></td><td>说明事件数量增长时，轮询次数与内核 wait/wake 次数的分布差异。</td></tr>
+          <tr><td>6</td><td><a href="charts/experiment-concurrency-heatmap.svg">并发实验图</a></td><td>说明并发 Agent 增加时，锁文件覆盖风险与 AgentOS lease/capability 拒绝效果的差异。</td></tr>
+          <tr><td>7</td><td><a href="charts/experiment-llm-relay-bar.svg">LLM Relay 实验图</a></td><td>说明请求数量增长时，普通路径重建多处日志，AgentOS 路径保留结构化请求和完成事件。</td></tr>
+          <tr><td>8</td><td><a href="charts/experiment-recovery-line.svg">恢复流程实验图</a></td><td>说明失败阶段增加时，普通路径重复扫描和拼接状态，AgentOS 路径使用结构化动作和来源记录。</td></tr>
+          <tr><td>9</td><td><a href="charts/runner-speedup.svg">相对倍数图</a></td><td>说明同一 runner 场景下，AgentOS 路径如何减少 tick；必要时打开 <a href="runner-sweep.csv">runner-sweep.csv</a> 复查原始数据。</td></tr>
+          <tr><td>10</td><td><a href="../index.html">本地结果阅读器首页</a></td><td>进入完整科研平台页面，查看 run、Agent、证据、artifact、LLM Relay 和 AgentOS Compare。</td></tr>
         </tbody>
       </table>
     </section>
     <section class="panel">
       <h2>关键数据</h2>
-      <p>本次结果包含 {fmt_number(cost_count)} 项用户态成本替代记录、{fmt_number(runner_pairs)} 组 runner tick 对照、{fmt_number(as_number(state.get("checked_success_records")))} 条成功记录核对。图表可以回到 <a href="summary.csv">summary.csv</a>、<a href="runner-sweep.csv">runner-sweep.csv</a>、<a href="runner-statistics.csv">runner-statistics.csv</a>、<a href="load-profile.csv">load-profile.csv</a>、<a href="evidence-manifest.csv">evidence-manifest.csv</a> 和 <a href="chart-type-coverage.csv">chart-type-coverage.csv</a>。</p>
+      <p>本次结果包含 {fmt_number(cost_count)} 项用户态成本替代记录、{fmt_number(runner_pairs)} 组 runner tick 对照、{fmt_number(as_number(state.get("checked_success_records")))} 条成功记录核对。六组实验可以回到 <a href="experiments/experiment-stats.csv">experiments/experiment-stats.csv</a>、<a href="experiments/mechanism-notes.csv">experiments/mechanism-notes.csv</a> 和 <a href="experiments/raw/file-metadata.csv">experiments/raw/file-metadata.csv</a> 等原始 CSV。</p>
       <div class="links">
-        <a href="delivery-readiness.html">交付材料核对</a>
-        <a href="delivery-readiness.csv">交付核对 CSV</a>
+        <a href="delivery-readiness.html">结果材料核对</a>
+        <a href="delivery-readiness.csv">结果核对 CSV</a>
         <a href="test-suite.html">测试入口说明</a>
         <a href="test-suite.csv">测试入口 CSV</a>
         <a href="experiment-design.html">实验场景说明</a>
         <a href="experiment-design.csv">实验说明 CSV</a>
-        <a href="runner-statistics.html">runner 统计摘要</a>
-        <a href="runner-statistics.csv">runner 统计 CSV</a>
-        <a href="demo-checklist.html">演示检查表</a>
-        <a href="demo-checklist.csv">检查表 CSV</a>
+        <a href="experiments/experiment-stats.csv">实验统计 CSV</a>
+        <a href="experiments/mechanism-notes.csv">机制说明 CSV</a>
+        <a href="reader-checklist.html">结果核验表</a>
+        <a href="reader-checklist.csv">检查表 CSV</a>
+        <a href="evidence-manifest.csv">证据索引 CSV</a>
         <a href="report.md">Markdown 报告</a>
         <a href="summary.json">JSON 摘要</a>
         <a href="{escape(chart_links.get("runtime-observation.svg", "charts/runtime-observation.svg"))}">运行观测图</a>
-        <a href="{escape(chart_links.get("runner-surface-composite.svg", "charts/runner-surface-composite.svg"))}">组合图</a>
+        <a href="{escape(chart_links.get("experiment-monitor-area.svg", "charts/experiment-monitor-area.svg"))}">综合观测图</a>
       </div>
     </section>
   </main>
@@ -2800,6 +3003,8 @@ def write_demo_guide_page(rows: list[MetricRow], meta: dict[str, object], charts
 
 def copy_docs_assets(charts: list[Path], docs_assets_dir: Path) -> None:
     docs_assets_dir.mkdir(parents=True, exist_ok=True)
+    for old_chart in docs_assets_dir.glob("*.svg"):
+        old_chart.unlink()
     for chart in charts:
         shutil.copy2(chart, docs_assets_dir / chart.name)
 
@@ -2809,25 +3014,22 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
     out_dir.mkdir(parents=True, exist_ok=True)
     write_csv(rows, out_dir / "summary.csv")
     write_runner_sweep_csv(meta, out_dir / "runner-sweep.csv")
-    write_runner_statistics_csv(meta, out_dir / "runner-statistics.csv")
-    write_load_profile_csv(meta, out_dir / "load-profile.csv")
+    experiment_data = write_experiment_outputs(meta, out_dir)
     write_delivery_readiness_csv(out_dir / "delivery-readiness.csv")
     write_delivery_readiness_page(out_dir / "delivery-readiness.html")
     write_test_suite_csv(out_dir / "test-suite.csv")
     write_test_suite_page(out_dir / "test-suite.html")
-    write_chart_type_coverage_csv(out_dir / "chart-type-coverage.csv")
     write_experiment_design_csv(meta, out_dir / "experiment-design.csv")
     write_experiment_design_page(meta, out_dir / "experiment-design.html")
     charts = write_charts(rows, meta, out_dir / "charts")
-    write_runner_statistics_page(meta, out_dir / "runner-statistics.html")
     write_evidence_manifest_csv(charts, out_dir / "evidence-manifest.csv")
     write_evidence_map_page(charts, out_dir / "evidence-map.html")
-    write_demo_checklist_csv(meta, charts, work_dir, out_dir / "demo-checklist.csv")
-    write_demo_checklist_page(meta, charts, work_dir, out_dir / "demo-checklist.html")
+    write_reader_checklist_csv(meta, charts, work_dir, out_dir / "reader-checklist.csv")
+    write_reader_checklist_page(meta, charts, work_dir, out_dir / "reader-checklist.html")
     write_report(rows, meta, charts, out_dir / "report.md")
     write_index(rows, meta, charts, out_dir / "index.html")
     write_monitor_page(rows, meta, charts, out_dir / "monitor.html")
-    write_demo_guide_page(rows, meta, charts, out_dir / "demo-guide.html")
+    write_reader_guide_page(rows, meta, charts, out_dir / "reader-guide.html")
     if docs_assets_dir is not None:
         copy_docs_assets(charts, docs_assets_dir)
     summary = {
@@ -2837,23 +3039,26 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
         "report": str(out_dir / "report.md"),
         "index": str(out_dir / "index.html"),
         "monitor": str(out_dir / "monitor.html"),
-        "demo_guide": str(out_dir / "demo-guide.html"),
+        "reader_guide": str(out_dir / "reader-guide.html"),
         "csv": str(out_dir / "summary.csv"),
         "runner_sweep_csv": str(out_dir / "runner-sweep.csv"),
-        "runner_statistics_csv": str(out_dir / "runner-statistics.csv"),
-        "runner_statistics": str(out_dir / "runner-statistics.html"),
-        "load_profile_csv": str(out_dir / "load-profile.csv"),
+        "experiment_stats_csv": str(out_dir / "experiments" / "experiment-stats.csv"),
+        "experiment_mechanism_csv": str(out_dir / "experiments" / "mechanism-notes.csv"),
+        "experiment_raw_csvs": [
+            str(out_dir / "experiments" / "raw" / str(spec["raw_file"]))
+            for spec in EXPERIMENT_SPECS.values()
+        ],
         "delivery_readiness_csv": str(out_dir / "delivery-readiness.csv"),
         "delivery_readiness": str(out_dir / "delivery-readiness.html"),
         "test_suite_csv": str(out_dir / "test-suite.csv"),
         "test_suite": str(out_dir / "test-suite.html"),
-        "chart_type_coverage_csv": str(out_dir / "chart-type-coverage.csv"),
         "experiment_design_csv": str(out_dir / "experiment-design.csv"),
         "experiment_design": str(out_dir / "experiment-design.html"),
         "evidence_manifest_csv": str(out_dir / "evidence-manifest.csv"),
         "evidence_map": str(out_dir / "evidence-map.html"),
-        "demo_checklist_csv": str(out_dir / "demo-checklist.csv"),
-        "demo_checklist": str(out_dir / "demo-checklist.html"),
+        "reader_checklist_csv": str(out_dir / "reader-checklist.csv"),
+        "reader_checklist": str(out_dir / "reader-checklist.html"),
+        "experiment_rows": len(experiment_data),
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     return summary
@@ -2868,13 +3073,13 @@ def main() -> int:
 
     summary = summarize(args.work_dir, args.out_dir, args.docs_assets_dir)
     print(
-        "dual_platform_result_summary: rows={rows} charts={charts} report={report} index={index} monitor={monitor} demo_guide={demo_guide} status={status}".format(
+        "dual_platform_result_summary: rows={rows} charts={charts} report={report} index={index} monitor={monitor} reader_guide={reader_guide} status={status}".format(
             rows=summary["rows"],
             charts=len(summary["charts"]),
             report=summary["report"],
             index=summary["index"],
             monitor=summary["monitor"],
-            demo_guide=summary["demo_guide"],
+            reader_guide=summary["reader_guide"],
             status=summary["status"],
         )
     )

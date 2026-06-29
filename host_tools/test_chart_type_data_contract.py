@@ -102,52 +102,68 @@ def main() -> int:
         write_fixture(work_dir)
         result = summary.summarize(work_dir, out_dir)
 
-        coverage_rows = read_csv(out_dir / "chart-type-coverage.csv")
-        assert len(coverage_rows) >= 6, coverage_rows
-        assert all(row["agentos_artifacts"] != "待补充" for row in coverage_rows), coverage_rows
-        assert all("Python 标准库 SVG 生成" in row["data_source"] for row in coverage_rows), coverage_rows
-
-        for row in coverage_rows:
-            for artifact in row["agentos_artifacts"].split(";"):
-                artifact = artifact.strip()
-                if not artifact.endswith(".svg"):
-                    continue
-                path = out_dir / "charts" / artifact
-                assert path.is_file(), artifact
-                text = path.read_text(encoding="utf-8")
-                assert "<svg" in text and "<text" in text, artifact
-
         sweep_rows = read_csv(out_dir / "runner-sweep.csv")
         assert len(sweep_rows) == 4, sweep_rows
         assert any(row["scene"] == "上下文路径" and row["speedup_x"] == "6" for row in sweep_rows), sweep_rows
         assert any(float(row["speedup_x"]) > 1 for row in sweep_rows), sweep_rows
-        stats_rows = read_csv(out_dir / "runner-statistics.csv")
-        assert any(row["metric"] == "普通路径 tick" and row["count"] == "4" for row in stats_rows), stats_rows
-        assert any(row["metric"] == "相对倍数" and float(row["avg"]) > 1 for row in stats_rows), stats_rows
-        profile_rows = read_csv(out_dir / "load-profile.csv")
-        assert len(profile_rows) >= 6, profile_rows
-        assert any(row["load_dimension"] == "预置请求" and row["plain_value"] == row["agentos_value"] for row in profile_rows), profile_rows
-        assert any(row["load_dimension"] == "Agent 启动" and row["agentos_value"] != "0" for row in profile_rows), profile_rows
+
+        raw_files = {
+            "file_metadata": out_dir / "experiments" / "raw" / "file-metadata.csv",
+            "context_timeline": out_dir / "experiments" / "raw" / "context-timeline.csv",
+            "event_loop": out_dir / "experiments" / "raw" / "event-loop.csv",
+            "agent_concurrency": out_dir / "experiments" / "raw" / "agent-concurrency.csv",
+            "llm_relay": out_dir / "experiments" / "raw" / "llm-relay.csv",
+            "recovery_flow": out_dir / "experiments" / "raw" / "recovery-flow.csv",
+        }
+        for experiment, path in raw_files.items():
+            rows = read_csv(path)
+            assert rows, experiment
+            assert all(row["experiment"] == experiment for row in rows), experiment
+            assert any(row["path"] == "plain" for row in rows), experiment
+            assert any(row["path"] == "agentos" for row in rows), experiment
+            assert all(row["plain_path"] and row["agentos_path"] and row["mechanism"] for row in rows), experiment
+
+        stats_rows = read_csv(out_dir / "experiments" / "experiment-stats.csv")
+        assert len(stats_rows) == 48, stats_rows
+        for experiment in raw_files:
+            assert any(row["experiment"] == experiment and row["path"] == "plain" for row in stats_rows), experiment
+            assert any(row["experiment"] == experiment and row["path"] == "agentos" for row in stats_rows), experiment
+        assert any(row["experiment"] == "file_metadata" and row["load"] == "1024" and float(row["avg"]) >= 1024 for row in stats_rows), stats_rows
+        assert any(row["experiment"] == "file_metadata" and row["load"] == "1024" and row["path"] == "agentos" and float(row["avg"]) < 20 for row in stats_rows), stats_rows
+        assert any(row["experiment"] == "context_timeline" and row["load"] == "8192" and row["path"] == "plain" and float(row["p95"]) > 20000 for row in stats_rows), stats_rows
+        assert any(row["experiment"] == "agent_concurrency" and row["path"] == "agentos" and row["metric"] == "residual_write_risk" for row in stats_rows), stats_rows
+        assert any(row["experiment"] == "llm_relay" and row["load"] == "256" and row["path"] == "agentos" and row["metric"] == "structured_relay_records" for row in stats_rows), stats_rows
+        assert any(row["experiment"] == "recovery_flow" and row["load"] == "12" and row["path"] == "plain" and float(row["p50"]) > 250 for row in stats_rows), stats_rows
+
+        mechanism_rows = read_csv(out_dir / "experiments" / "mechanism-notes.csv")
+        assert len(mechanism_rows) == 6, mechanism_rows
+        assert all("raw/" in row["raw_csv"] for row in mechanism_rows), mechanism_rows
+
         evidence_rows = read_csv(out_dir / "evidence-manifest.csv")
-        assert len(evidence_rows) >= len(coverage_rows), evidence_rows
         assert any(row["artifact"] == "runner-sweep.csv" and "runner" in row["proves"] for row in evidence_rows), evidence_rows
-        assert any(row["artifact"] == "charts/load-profile.svg" for row in evidence_rows), evidence_rows
+        assert any(row["artifact"] == "experiments/experiment-stats.csv" for row in evidence_rows), evidence_rows
+        assert any(row["artifact"] == "charts/experiment-file-query-bar.svg" for row in evidence_rows), evidence_rows
 
         chart_expectations = {
-            "runner-cumulative-line.svg": ("<polyline", "Runner 累计 Tick 曲线", "上下文"),
-            "runner-tick-box.svg": ("Runner Tick 分布箱形图", "min", "mid"),
-            "runner-cost-heatmap.svg": ("Runner 成本热力图", "普通 tick", "节省 tick"),
-            "stage-monitor-area.svg": ("<polygon", "双目标运行阶段监控面积图", "预置请求"),
-            "runner-statistics.svg": ("Runner 统计摘要", "min", "avg"),
-            "load-profile.svg": ("双目标负载参数组", "预置请求", "AgentOS-uCore"),
-            "runner-surface-composite.svg": ("等距曲面", "二维投影", "热力图"),
+            "experiment-file-query-bar.svg": ("文件数变化", "1024", "触达记录数"),
+            "experiment-context-line.svg": ("Context/timeline", "<polyline", "8192"),
+            "experiment-event-box.svg": ("事件数量变化", "箱体", "512"),
+            "experiment-concurrency-heatmap.svg": ("并发 Agent", "残余风险", "16 Agent"),
+            "experiment-llm-relay-bar.svg": ("LLM Relay", "256", "重建或记录成本"),
+            "experiment-recovery-line.svg": ("失败阶段数量", "<polyline", "12"),
+            "experiment-monitor-area.svg": ("累计节省操作数", "<polygon", "文件对象"),
+            "runtime-observation.svg": ("双目标运行观测", "AgentOS"),
+            "cost-replacement.svg": ("用户态成本项", "AgentOS 替代机制"),
+            "runner-ticks.svg": ("Runner Tick 对照", "普通用户态路径", "AgentOS 路径"),
+            "runner-speedup.svg": ("Runner 成组场景相对倍数", "tick", "x"),
         }
         for chart_name, tokens in chart_expectations.items():
             text = (out_dir / "charts" / chart_name).read_text(encoding="utf-8")
             for token in tokens:
                 assert token in text, f"{chart_name} missing {token}"
 
-        assert str(result["chart_type_coverage_csv"]).endswith("chart-type-coverage.csv"), result
+        assert len(result["charts"]) == len(chart_expectations), result
+        assert Path(str(result["experiment_stats_csv"])).as_posix().endswith("experiments/experiment-stats.csv"), result
 
     print("test_chart_type_data_contract: passed")
     return 0

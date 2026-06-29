@@ -325,7 +325,7 @@ int fork()
 	// Copy file table to new proc
 	for (i = 0; i < FD_BUFFER_SIZE; i++) {
 		if (p->files[i] != NULL) {
-			// TODO: f->type == STDIO ?
+			// Preserve the shared file entry reference across fork.
 			p->files[i]->ref++;
 			np->files[i] = p->files[i];
 		}

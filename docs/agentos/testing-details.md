@@ -1,6 +1,6 @@
 # 测试内容详细说明
 
-本文档解释当前 uCore 分支最终测试程序的内部步骤、覆盖范围和预期输出。测试入口和运行命令见 [verification.md](verification.md)。
+本文档解释AgentOS-uCore 测试程序的内部步骤、覆盖范围和预期输出。测试入口和运行命令见 [verification.md](verification.md)。
 
 ## 1. `agentfinal_ucore`
 
@@ -43,7 +43,7 @@
    - latest 为 193；
    - dropped 为 65。
 22. 子进程调用 `agent_file_meta_init()` 初始化文件元数据。
-23. 子进程按 `project=lab-gene-x`、`run_id=RUN-042`、`stage=align` 查询文件。
+23. 子进程按示例项目、设定的模拟流程和比对处理环节查询文件。
 24. 子进程检查查询命中，且 `used_index == 1`。
 25. 子进程调用 `agent_file_prefetch_snapshot()`，检查本次文件查询产生了对象标签依赖预取提示。
 26. 子进程调用 `agent_file_prefetch_span_snapshot()`，检查同一 span 的全局提示中包含当前 Agent 产生的提示，并带有 `SPAN_BUS` 原因位、source pid 和 target pid。
@@ -61,34 +61,9 @@
 38. 子进程输出 `agentfinal_ucore: passed` 并退出。
 39. 父进程等待子进程退出，检查退出状态为 0，输出 `agentfinal_ucore: parent passed`。
 
-### 1.2 关键输出
+### 1.2 输出阅读方式
 
-```text
-agentfinal_ucore: context size=24576 capacity=128
-agentfinal_ucore: batch first_seq=1 last_seq=64
-agentfinal_ucore: short_text_history=1 payload=ucore-final result=ucore-final
-agentfinal_ucore: context_detail=1 sequence=8
-agentfinal_ucore: tamper_protected=1
-agentfinal_ucore: causal_context=1 first_cause=0 next_cause=1 span=1 edges=63
-agentfinal_ucore: context_integrity=1 first_hash=... latest_hash=...
-agentfinal_ucore: user_cache_preserved=1 offset=21504 size=3072
-agentfinal_ucore: record_flags system=1 manual=1 truncated=0
-agentfinal_ucore: legacy_name_protocol=1
-agentfinal_ucore: fifo oldest=66 latest=193 dropped=65
-agentfinal_ucore: file_query hits=2 scanned=2 used_index=1
-agentfinal_ucore: prefetch_hints=1 count=3 first_stage=analyze
-agentfinal_ucore: span_prefetch=1 count=... first_stage=...
-agentfinal_ucore: event_wait=1 payload=self wake
-agentfinal_ucore: runtime_trace=1 records=... context=1 sched=1 wait=1
-agentfinal_ucore: span_trace=1 records=... context=1 event=1
-agentfinal_ucore: unified_timeline=1 records=... context=1 sched=1 audit=1 prefetch=1
-agentfinal_ucore: timeline_query=1 audit=213 recent=281 cursor=177
-agentfinal_ucore: timeline_wait=1 timeout=-7 source_gate=1 event_gate=1 wake=1 query=1 read=1 sleeps=1 wakeups=1
-agentfinal_ucore: provenance_graph=1 edges=126 context=1 audit=1
-agentfinal_ucore: run_ledger=1 records=... hash=... context=... event=... sched=... prefetch=...
-agentfinal_ucore: passed
-agentfinal_ucore: parent passed
-```
+本测试的串口输出主要分为三类：Context 与工具调用检查、文件查询与事件检查、timeline/provenance/ledger 检查。阅读时关注 `context size`、`batch first_seq/last_seq`、`tamper_protected`、`fifo`、`file_query`、`event_wait`、`timeline_query`、`provenance_graph`、`run_ledger` 和最终通过标记即可。完整样例输出见 [test-record.md](test-record.md)。
 
 ### 1.3 覆盖结论
 
@@ -129,7 +104,7 @@ agentfinal_ucore: parent passed
 
 1. 父进程创建 orchestrator Agent 子进程。
 2. 子进程调用 `agent_file_meta_init()`，加载 `.agentmeta` 或创建空元数据表。
-3. 子进程由用户态写入 RUN-042 演示元数据，并查询该文件对象，检查返回项包含真实 `dev`、`inum` 和 `size`。
+3. 子进程由用户态写入设定的模拟流程示例元数据，并查询该文件对象，检查返回项包含真实 `dev`、`inum` 和 `size`。
 4. 子进程创建自定义真实文件，写入内容。
 5. 子进程用 `agent_file_meta_set()` 将自定义逻辑属性绑定到该真实文件。
 6. 子进程查询自定义文件，检查 `dev + inum` 和文件大小与真实文件一致。
@@ -142,37 +117,16 @@ agentfinal_ucore: parent passed
 13. 子进程写入接近 128 条真实文件元数据，制造足够的数据量。
 14. 子进程分别运行扫描查询和索引查询，检查索引路径的 `scanned_records` 明显更少。
 15. 子进程检查查询计划：扫描路径必须返回 `AGENT_FILE_QUERY_PLAN_SCAN`，索引路径必须返回 `AGENT_FILE_QUERY_PLAN_STATUS_INDEX`，并带有 status 索引原因、索引桶和候选记录数。
-16. 子进程调用 `dependency_query`，分别带入 `RUN-042` 和 `RUN-ALT`，检查同名 label 的依赖结果按 run_id 分开。
+16. 子进程调用 `dependency_query`，分别带入设定的模拟流程和备用模拟流程，检查同名 label 的依赖结果按 run_id 分开。
 17. 子进程调用 `dependency_update` 注册一条 `source -> target` 通用对象依赖，再用 `dependency_query` 验证该依赖可见。
 18. 子进程读取预取提示，检查提示由对象标签依赖产生、使用 label 索引计划，并指向当前 run 内的 analyze/report 等后续 label。
 19. 子进程清空某条记录的 status，确认属性更新生效，并确认旧 generation 查询缓存没有返回过期命中。
 20. 子进程删除绑定文件，确认关联元数据随文件删除被清理。
 21. 子进程调用 `action_commit` 指向不存在的 selector，确认返回 `AGENT_STATUS_NOT_FOUND`。
 
-### 2.2 关键输出
+### 2.2 输出阅读方式
 
-```text
-agentfs_ucore: demo_inode dev=1 inum=14 scanned=2
-agentfs_ucore: prefetch_hints=1 count=3 first_stage=analyze source_seq=1
-agentfs_ucore: scoped_dependency=1 run042=align+analyze+report runalt=align+archive
-agentfs_ucore: dependency_update=1 result=align+review generation=...
-agentfs_ucore: custom_inode dev=1 inum=20 size=7
-agentfs_ucore: content_digest=1 size=7 bytes=7 hash=52642947 preview=agentfs
-agentfs_ucore: digest_cache=1 hits=1 misses=1
-agentfs_ucore: digest_cache_invalidated=1 misses=1
-agentfs_ucore: digest_timeline=1 tool=20 preview=agentfs2
-agentfs_ucore: .agentmeta_reload=1
-agentfs_ucore: query_cache=1 reason=68
-agentfs_ucore: bulk_index scan=118 index=6 hits=1
-agentfs_ucore: query_plan scan_plan=0 index_plan=1 reason=4 bucket=15 candidates=6
-agentfs_ucore: scan_index_consistent=1
-agentfs_ucore: truncated_query total=100 returned=3 truncated=1
-agentfs_ucore: clear_status=1 cache_invalidated=1
-agentfs_ucore: delete_clears_metadata=1
-agentfs_ucore: missing_selector_not_found=1
-agentfs_ucore: passed
-agentfs_ucore: parent passed
-```
+本测试的输出重点是 inode 绑定、私有 `.agentmeta` 重新加载、内容摘要、查询缓存、scan/index 候选差异、依赖注册和 selector 未命中。阅读时关注 `demo_inode`、`custom_inode`、`content_digest`、`digest_cache_invalidated`、`.agentmeta_reload`、`bulk_index`、`query_plan`、`dependency_update`、`delete_clears_metadata` 和最终通过标记。完整样例输出见 [test-record.md](test-record.md)。
 
 ### 2.3 覆盖结论
 
@@ -207,15 +161,9 @@ agentfs_ucore: parent passed
 8. 子进程删除 `autoscan_ok`。
 9. 子进程等待扫描清理元数据，再次查询确认该文件已经不可见。
 
-### 3.2 关键输出
+### 3.2 输出阅读方式
 
-```text
-agentscan_ucore: background_scan usershell=1 runs=1 entries=64 added=10
-agentscan_ucore: auto_file_create=1 size=14 generation=19
-agentscan_ucore: auto_file_delete=1
-agentscan_ucore: passed
-agentscan_ucore: parent passed
-```
+本测试只需要确认三类事实：根目录已有文件可被后台扫描发现，新建普通文件可自动进入 Agent metadata，删除真实文件后自动 metadata 会被清理。完整样例输出见 [test-record.md](test-record.md)。
 
 ### 3.3 覆盖结论
 
@@ -245,20 +193,9 @@ agentscan_ucore: parent passed
 10. 子进程调用 `agent_heartbeat_stop()`，确认停止后不再产生 heartbeat 事件。
 11. 子进程创建 sentinel 等待者，调用 `agent_wait_cancel()` 设置一次性取消令牌，确认等待者返回 `AGENT_STATUS_CANCELLED`，事件类型为 `AGENT_EVENT_CANCELLED`，并带有 reason、cause/span 和 Context 记录。
 
-### 4.2 关键输出
+### 4.2 输出阅读方式
 
-```text
-agentloop_ucore: fifo=1
-agentloop_ucore: event_causality=1
-agentloop_ucore: overflow_dropped=1
-agentloop_ucore: unwatch=1
-agentloop_ucore: timeout_sleep_no_poll=1
-agentloop_ucore: timer_unwatch=1
-agentloop_ucore: heartbeat_wake_stop=1
-agentloop_ucore: wait_cancel=1
-agentloop_ucore: passed
-agentloop_ucore: parent passed
-```
+本测试输出围绕事件顺序、事件因果、队列满处理、watch 删除、有限 timeout 睡眠、TIMER watch、heartbeat stop 和 wait cancel 展开。完整样例输出见 [test-record.md](test-record.md)。
 
 ### 4.3 覆盖结论
 
@@ -291,17 +228,9 @@ agentloop_ucore: parent passed
 9. 子进程调用 `agent_sched_snapshot()`，确认最近一条调度记录包含 `AGENT_SCHED_REASON_EVENT_QUEUE` 和 `AGENT_SCHED_REASON_ROLE_WEIGHT`。
 10. 子进程多次让出处理器，确认调度次数、让出处理器次数、虚拟运行量和调度原因记录数量增加。
 
-### 5.2 关键输出
+### 5.2 输出阅读方式
 
-```text
-agentsched_ucore: role_weights sentinel=70 investigator=90 recovery=120 orchestrator=110
-agentsched_ucore: configurable_policy=1 weight=150 priority=20 budget=3
-agentsched_ucore: event_priority=1 dispatch=6 event_dispatch=1
-agentsched_ucore: reason_trace=1 records=6 reason=131 score=1655
-agentsched_ucore: fairness=1 dispatch=18 preemptions=13 vruntime=162
-agentsched_ucore: passed
-agentsched_ucore: parent passed
-```
+本测试的输出重点是角色默认权重、受权调度配置、事件相关调度、调度原因记录和公平性计数。完整样例输出见 [test-record.md](test-record.md)。
 
 ### 5.3 覆盖结论
 
@@ -342,17 +271,9 @@ agentsched_ucore: parent passed
 18. Agent C 放弃该租约，重新申请、写入并用正确 `base_version` 提交，检查版本推进。
 19. 所有子进程退出后，父进程输出 `agentconflict_ucore: parent passed`。
 
-### 6.2 关键输出
+### 6.2 输出阅读方式
 
-```text
-agentconflict_ucore: Agent file edit conflict test
-agentconflict_ucore: plain_process_denied=1
-agentconflict_ucore: conflict_denied=1 direct_write_denied=1 owner=2 conflicts=4
-agentconflict_ucore: owner_commit=1 version=3
-agentconflict_ucore: stale_commit=1 versioned_commit=1 base=3 current=4
-agentconflict_ucore: passed
-agentconflict_ucore: parent passed
-```
+本测试的输出重点是普通进程不能申请租约、第二个 Agent 申请同一文件被拒绝、非持有者直接写真实文件失败、持有者提交成功、旧版本提交被拒绝。完整样例输出见 [test-record.md](test-record.md)。
 
 ### 6.3 覆盖结论
 
@@ -384,16 +305,9 @@ agentconflict_ucore: parent passed
 10. Relay 调用 `agent_timeline_snapshot()` 和 `agent_ledger_snapshot()`，确认响应动作进入统一观测记录和账本摘要。
 11. 两个 Agent 正常退出，父进程输出 `agentllm_ucore: parent passed`。
 
-### 7.2 关键输出
+### 7.2 输出阅读方式
 
-```text
-agentllm_ucore: Agent LLM relay test
-agentllm_ucore: relay_timeline=1
-agentllm_ucore: requester_done=1
-agentllm_ucore: template_relay=1
-agentllm_ucore: passed
-agentllm_ucore: parent passed
-```
+本测试的输出重点是 Relay 记录进入 timeline、请求方收到 LLM 完成事件、模板 Relay 路径可运行。完整样例输出见 [test-record.md](test-record.md)。
 
 ### 7.3 覆盖结论
 
@@ -444,44 +358,9 @@ benchmark 主进程通过 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)` 创建 or
 | `ops_per_tick` | 每 tick 完成的操作数 |
 | `speedup_x100` | 相对基线放大 100 倍后的速度比 |
 
-### 8.3 当前样例输出
+### 8.3 输出阅读方式
 
-```text
-agentbench_ucore: timeout_heartbeat=1
-agentbench_ucore: repeated_ticks scalar_min=17 scalar_avg=17 scalar_max=18 batch_min=4 batch_avg=5 batch_max=6
-agentbench_ucore: file_query_records scan_records=118 index_records=6
-agentbench_ucore: file_query_plan scan_plan=0 index_plan=1 index_reason=68 index_candidates=6
-agentbench_ucore: file_query_cache hit=1 reason=68
-agentbench_ucore: file_digest bytes=37888 ticks=11 preview=agentbench-digest-content-block-0001 agentbench-digest-content-
-agentbench_ucore: file_digest_cache hits=63 misses=1
-agentbench_ucore: prefetch_records total=192 first_stage=analyze
-agentbench_ucore: timeline_records snapshot=8192 query=48 cursor=6568
-agentbench_ucore: provenance_records snapshot=2048
-agentbench_ucore: timeline_wait_ready records=659 ticks=1
-agentbench_ucore: timeline_read_ready records=8192 ticks=651
-agentbench_ucore: case ops ticks ops_per_tick speedup_x100
-agentbench_ucore: scalar_agent_run ops=256 ticks=17 ops_per_tick=15 speedup_x100=100
-agentbench_ucore: batch_agent_run ops=256 ticks=5 ops_per_tick=51 speedup_x100=340
-agentbench_ucore: direct_context ops=5000 ticks=1 ops_per_tick=5000 speedup_x100=33203
-agentbench_ucore: context_query ops=16 ticks=1 ops_per_tick=16 speedup_x100=100
-agentbench_ucore: context_snapshot ops=2048 ticks=5 ops_per_tick=409 speedup_x100=2560
-agentbench_ucore: file_scan_query ops=64 ticks=18 ops_per_tick=3 speedup_x100=100
-agentbench_ucore: file_index_query ops=64 ticks=7 ops_per_tick=9 speedup_x100=257
-agentbench_ucore: file_digest_read ops=37888 ticks=11 ops_per_tick=3444 speedup_x100=100
-agentbench_ucore: file_prefetch_snapshot ops=192 ticks=2 ops_per_tick=96 speedup_x100=300
-agentbench_ucore: timeline_snapshot ops=8192 ticks=695 ops_per_tick=11 speedup_x100=51200
-agentbench_ucore: timeline_query_prefetch ops=48 ticks=1 ops_per_tick=48 speedup_x100=407
-agentbench_ucore: timeline_query_cursor ops=6568 ticks=712 ops_per_tick=9 speedup_x100=78
-agentbench_ucore: provenance_snapshot ops=2048 ticks=7 ops_per_tick=292 speedup_x100=12800
-agentbench_ucore: timeline_wait_ready ops=659 ticks=1 ops_per_tick=659 speedup_x100=100
-agentbench_ucore: timeline_read_ready ops=8192 ticks=651 ops_per_tick=12 speedup_x100=100
-agentbench_ucore: busy_poll_query ops=128 ticks=10 ops_per_tick=12 speedup_x100=100
-agentbench_ucore: event_wait_wake ops=8 ticks=5 ops_per_tick=1 speedup_x100=100
-agentbench_ucore: busy_poll_vs_wait busy_ops=128 busy_ticks=10 wait_ops=8 wait_ticks=5
-agentbench_ucore: passed
-agentbench_ucore: parent passed
-labbench_ucore: parent passed
-```
+本测试会输出多组 `ops/ticks/ops_per_tick/speedup_x100`，并额外输出 scan/index 候选记录数、查询计划、digest cache、prefetch 记录数、timeline 记录数和 busy-poll/wait 计时观测。完整样例输出见 [test-record.md](test-record.md)，图表化结果见双目标运行生成的 `results/latest/charts/`。
 
 ### 8.4 性能解释
 
@@ -491,19 +370,19 @@ labbench_ucore: parent passed
 | `direct_context` vs syscall 查询 | 用户态镜像适合高频读最新状态 |
 | `context_snapshot` vs `context_query` | 批量历史查询减少多次 syscall 和多次遍历 |
 | `file_index_query` vs `file_scan_query` | 文件元数据索引减少候选记录检查，`file_query_records` 输出候选记录数差异，`file_query_plan` 输出索引选择原因，`file_query_cache` 输出重复查询缓存命中 |
-| `file_digest_read` | 受权 Agent 可读取真实文件短预览和内容指纹，性能表按处理字节数展示，`file_digest_cache` 展示重复读取时的缓存命中 |
+| `file_digest_read` | 受权 Agent 可读取真实文件短预览和内容指纹，性能表按处理字节数呈现，`file_digest_cache` 呈现重复读取时的缓存命中 |
 | `file_prefetch_snapshot` | 文件查询之后可直接读取内核给出的后续 metadata 提示，避免下一轮重新从宽条件查询开始 |
 | `provenance_snapshot` | 页面可直接获取因果边，减少从 timeline 文本和短记录中二次推断触发关系 |
 | `timeline_wait_ready` | 当前已有记录时 wait 不睡眠，直接返回可读数量；真正睡眠唤醒由 `agentfinal_ucore` 断言 |
 | `timeline_read_ready` | 当前已有记录时 read 不睡眠，直接复制可见 timeline 记录 |
 | `timeout_heartbeat` | Agent Loop 的超时和心跳字段有直接断言，不只依赖场景日志 |
-| `busy_poll_query` / `event_wait_wake` | Agent Loop 不只是功能演示，也能输出轮询路径和等待唤醒路径的计时观测 |
+| `busy_poll_query` / `event_wait_wake` | Agent Loop 不只是功能示例，也能输出轮询路径和等待唤醒路径的计时观测 |
 
 tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、候选记录数和设计解释看相对趋势。
 
 ## 9. `labdemo_ucore`
 
-`labdemo_ucore` 是面向答辩的最终场景测试。它把底层能力串成一个可解释的多 Agent 工作流。
+`labdemo_ucore` 是面向综合场景的最终场景测试。它把底层能力串成一个可解释的多 Agent 工作流。
 
 ### 9.1 场景设定
 
@@ -547,7 +426,7 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 20. investigator 查询 dependency，得到影响 label。
 21. investigator 检查提示包含 `HANDOFF` 和 `DEPENDENCY` 原因位，并按提示读取 analyze 摘要，确认提示已经转化为实际工具调用。
 22. investigator 输出模板 `LLM_CALL` / `LLM_RESULT` 事件和 `PLAN_CREATED` 事件，引用 summary、digest、dependency 和 prefetch 四条 sequence。
-23. investigator 调用 `context_snapshot()` 展示自身审计历史。
+23. investigator 调用 `context_snapshot()` 呈现自身审计历史。
 24. investigator 通过消息唤醒 recovery。
 25. recovery 通过 capability 检查。
 26. recovery 执行 `action_commit align`。
@@ -563,43 +442,9 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 36. orchestrator 输出 `labdemo_ucore: passed`。
 37. 普通 init 等待 orchestrator 退出，输出 `labdemo_ucore: parent passed`。
 
-### 9.3 关键输出
+### 9.3 输出阅读方式
 
-```text
-agentos:event type=RUN_OBJECT tick=... project=lab-gene-x workflow=nightly-regression run_id=RUN-042 desired_state=RECOVERED policy=minimal_rerun
-agentos:event type=WATCH_REGISTERED tick=... role=sentinel event=FILE_STATUS filter=status=failed
-agentos:event type=INCIDENT_CREATED tick=... id=INC-RUN-042-ALIGN-OOM project=lab-gene-x workflow=nightly-regression run_id=RUN-042 stage=align reason=memory_limit
-labdemo_ucore: sentinel event payload=status=failed;stage=align;run_id=RUN-042;project=lab-gene-x
-agentos:event type=TOOL_CALL tick=... role=sentinel tool=query_file project=lab-gene-x run_id=RUN-042 status=failed hits=1 used_index=1 seq=...
-agentos:event type=AUDIT tick=... role=sentinel action=action_commit result=DENIED reason=capability corr_id=RUN-042-align-rerun-1 seq=...
-labdemo_ucore: sentinel prefetch_hint stage=analyze source_seq=4 plan=2 candidates=1
-agentos:event type=PREFETCH_HINT tick=... role=sentinel project=lab-gene-x run_id=RUN-042 source_stage=align next_stage=analyze source_seq=4 candidates=1 reason=15
-labdemo_ucore: investigator handoff_prefetch stage=analyze source_seq=4 reason=31
-labdemo_ucore: investigator span_prefetch stage=analyze count=... source_pid=... target_pid=...
-labdemo_ucore: investigator span_trace records=... context=1 event=1 prefetch=1
-agentos:event type=MESSAGE tick=... from=sentinel to=investigator status=OK corr_id=MSG-RUN-042-S-I prefetch_handoff=analyze seq=...
-labdemo_ucore: investigator reason=align output is ready before injected failure
-labdemo_ucore: investigator digest bytes=27 preview=align memory_limit evidence seq=...
-agentos:event type=TOOL_CALL tick=... role=investigator tool=read_file_digest stage=align status=OK bytes=27 seq=...
-labdemo_ucore: affected labels=align+analyze+report+archive
-labdemo_ucore: investigator prefetch_summary stage=analyze result=analysis waits for align
-agentos:event type=PREFETCH_USED tick=... role=investigator stage=analyze summary=analysis waits for align seq=...
-agentos:event type=LLM_CALL tick=... mode=template task=explain_root_cause llm_request_id=LLM-RUN-042-RCA-1 project=lab-gene-x run_id=RUN-042 refs=...,...,...,... status=OK
-agentos:event type=LLM_RESULT tick=... mode=template llm_request_id=LLM-RUN-042-RCA-1 llm_status=OK llm_explanation=memory_limit referenced_sequences=...,...,...,... confidence=medium
-agentos:event type=PLAN_CREATED tick=... role=investigator plan=PLAN-RUN-042-RECOVER-1 project=lab-gene-x run_id=RUN-042 actions=align,analyze,report skip=prepare prefetch=analyze refs=...,...,...,...
-agentos:event type=CONTEXT_SNAPSHOT tick=... role=investigator records=6 latest=...
-agentos:event type=MESSAGE tick=... from=investigator to=recovery status=OK corr_id=MSG-RUN-042-I-R plan=PLAN-RUN-042-RECOVER-1 seq=...
-agentos:event type=ACTION tick=... role=recovery label=align status=OK corr_id=RUN-042-align-rerun-1 plan=PLAN-RUN-042-RECOVER-1 seq=... duplicate=0
-agentos:event type=AUDIT tick=... role=recovery action=commit_align result=DUPLICATE corr_id=RUN-042-align-rerun-1 plan=PLAN-RUN-042-RECOVER-1 seq=...
-agentos:event type=ARTIFACT tick=... role=recovery project=lab-gene-x run_id=RUN-042 file=RUN-042-recovery.md status=OK corr_id=RUN-042-report-write-1 plan=PLAN-RUN-042-RECOVER-1 seq=... llm_enhanced=0
-agentos:event type=FINAL tick=... project=lab-gene-x run_id=RUN-042 status=RECOVERED plan=PLAN-RUN-042-RECOVER-1
-labdemo_ucore: global_audit=1 records=... agents=3 context=1 event=1 sched=1 prefetch=1
-labdemo_ucore: audit_query=1 kind=... span=... event=2 prefetch=... start=...
-labdemo_ucore: unified_timeline records=... context=1 event=1 sched=1 prefetch=1 digest=1
-labdemo_ucore: timeline_query prefetch=3 cursor=... digest=1
-labdemo_ucore: provenance_graph edges=... message=1 prefetch=1 digest=1
-labdemo_ucore: passed
-```
+综合场景输出按事件链阅读：运行对象建立、监听注册、故障事件、文件查询、权限拒绝、预取提示、Agent 间消息、内容摘要读取、模板 LLM 请求、恢复计划、恢复动作、幂等拒绝、工件更新、最终 recovered 状态、全局审计、统一 timeline 和 provenance。完整样例输出见 [test-record.md](test-record.md)。
 
 ### 9.4 覆盖结论
 
@@ -625,7 +470,7 @@ labdemo_ucore: passed
 
 ## 10. `agentsecurity_ucore`
 
-`agentsecurity_ucore` 是权限限制负向测试，专门覆盖审阅中指出的“普通进程能直接改全局元数据、伪造事件或取消等待”“用户态自报 role 可绕过权限”的问题，并检查普通进程不能读取全局、当前 span、统一 timeline 或 timeline query/read 短记录，sentinel 不能读取或过滤全局审计短记录。
+`agentsecurity_ucore` 是权限限制负向测试，专门覆盖检查中指出的“普通进程能直接改全局元数据、伪造事件或取消等待”“用户态自报 role 可绕过权限”的问题，并检查普通进程不能读取全局、当前 span、统一 timeline 或 timeline query/read 短记录，sentinel 不能读取或过滤全局审计短记录。
 
 ### 10.1 测试流程
 
@@ -641,7 +486,7 @@ labdemo_ucore: passed
 10. orchestrator 在未初始化元数据前执行带索引查询，预期返回 0 条命中且不会阻塞。
 11. orchestrator 初始化文件元数据。
 12. orchestrator 使用 legacy `agent_call()` 传入不一致的 `tool_id` 和 `tool_name`，预期返回 `AGENT_STATUS_BAD_REQUEST` 和 `tool_mismatch`。
-13. orchestrator 分别把 `RUN-042` 和 `RUN-999` 的 align、report 阶段置为 failed。
+13. orchestrator 分别把设定的模拟流程和另一个模拟流程的比对处理、报告生成环节置为 failed。
 14. orchestrator 创建 sentinel Agent。
 15. sentinel 检查真实 role/capability mask。
 16. sentinel 把 `agent_op.arg0` 伪造成 `AGENT_ROLE_RECOVERY` 后调用 `capability_check("action_commit")`，预期仍返回 `AGENT_STATUS_DENIED`。
@@ -651,36 +496,18 @@ labdemo_ucore: passed
 20. sentinel 调用 `read_file_digest` 读取真实文件内容证据，预期返回 `AGENT_STATUS_DENIED`，说明 metadata read 不等于 content read。
 21. sentinel 调用 `agent_audit_snapshot()` 和 `agent_audit_query()`，预期返回 `AGENT_STATUS_DENIED`。
 22. sentinel 直接调用 `agent_file_meta_set()`，预期返回 `AGENT_STATUS_DENIED`。
-23. sentinel 查询 `RUN-042` 和 `RUN-999` 状态仍为 failed，说明拒绝路径没有改变文件状态。
+23. sentinel 查询设定的模拟流程和另一个模拟流程状态仍为 failed，说明拒绝路径没有改变文件状态。
 24. orchestrator 创建 recovery Agent。
 25. recovery 检查真实 role/capability mask。
-26. recovery 调用 `action_commit`，payload 使用 `label=align;run_id=RUN-999;namespace=lab-gene-x` 定向选择目标 run；即使 `agent_op.arg0` 填成 sentinel，也按真实 recovery role 成功。
+26. recovery 调用 `action_commit`，payload 使用 label、run_id 和 namespace 定向选择另一个模拟流程；即使 `agent_op.arg0` 填成 sentinel，也按真实 recovery role 成功。
 27. recovery 使用同一 corr_id 再次调用同一 selector，预期返回 `AGENT_STATUS_DUPLICATE`。
-28. recovery 调用 `artifact_update`，payload 使用 `label=report;run_id=RUN-999;namespace=lab-gene-x`，只写入目标 report。
-29. orchestrator 查询 `RUN-999` 的 align 和 report 变为 ok，`RUN-042` 仍为 failed，说明动作和工件更新没有跨 run 修改。
+28. recovery 调用 `artifact_update`，payload 使用 label、run_id 和 namespace，只写入另一个模拟流程的目标报告。
+29. orchestrator 查询另一个模拟流程的比对处理和报告生成环节变为 ok，设定的模拟流程仍为 failed，说明动作和工件更新没有跨 run 修改。
 30. 测试输出 `agentsecurity_ucore: passed` 和 `agentsecurity_ucore: parent passed`。
 
-### 10.2 关键输出
+### 10.2 输出阅读方式
 
-```text
-agentsecurity_ucore: mail_basic=1
-agentsecurity_ucore: plain_process_denied=1
-agentsecurity_ucore: .agentmeta_protected=1
-agentsecurity_ucore: role=orchestrator_child capability_checked=1
-agentsecurity_ucore: plain_child_orchestrator=1
-agentsecurity_ucore: role=orchestrator capability_checked=1
-agentsecurity_ucore: preinit_index_query=1
-agentsecurity_ucore: legacy_tool_mismatch=1
-agentsecurity_ucore: legacy_param_validation=1 syscall_only=1
-agentsecurity_ucore: role=sentinel capability_checked=1
-agentsecurity_ucore: sentinel spoof_denied=1
-agentsecurity_ucore: role=recovery capability_checked=1
-agentsecurity_ucore: recovery action_ok=1 duplicate=1
-agentsecurity_ucore: scoped_action=1
-agentsecurity_ucore: scoped_artifact=1
-agentsecurity_ucore: passed
-agentsecurity_ucore: parent passed
-```
+本测试输出围绕普通进程拒绝、`.agentmeta` 保护、真实 role/capability、初始化前索引查询安全、legacy 参数校验、sentinel 伪造失败、recovery 定向动作和多 run 工件更新展开。完整样例输出见 [test-record.md](test-record.md)。
 
 ### 10.3 覆盖结论
 
@@ -699,7 +526,7 @@ agentsecurity_ucore: parent passed
 | 文件状态拒绝路径无副作用 | sentinel 伪造 rerun 后 align 仍为 failed |
 | recovery 权限来自真实 PCB 字段 | recovery 即使传入 sentinel role，也能按真实权限恢复 |
 | 重复动作被识别 | 相同 corr_id 第二次 action 返回 duplicate |
-| 多 run 动作和工件更新不会误伤 | 只更新 selector 指定的 `RUN-999`，`RUN-042` 保持 failed |
+| 多 run 动作和工件更新不会误伤 | 只更新 selector 指定的另一个模拟流程，设定的模拟流程保持 failed |
 
 ## 11. 运行方式和复现建议
 
@@ -709,20 +536,6 @@ agentsecurity_ucore: parent passed
 bash scripts/run-agent-tests.sh
 ```
 
-如果需要单独复现某一项：
-
-```bash
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfinal_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfs_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentscan_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentloop_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsched_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentconflict_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentllm_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labbench_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER=agent
-make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent
-```
+如果需要单独复现某一项，运行命令见 [scenario-script.md](scenario-script.md)；完整验证入口见 [verification.md](verification.md)。
 
 不要在同一工作树中并行启动多个 QEMU 测试，因为 `nfs/fs-copy.img` 会被多个进程同时访问，可能造成镜像锁冲突。

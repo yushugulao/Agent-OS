@@ -10,7 +10,7 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 echo "[full-verify] target structure"
 bash "${ROOT_DIR}/scripts/verify-dual-target-structure.sh"
 
-echo "[full-verify] Host Reader"
+echo "[full-verify] 本地结果阅读器"
 (
 	cd "${ROOT_DIR}"
 	"${PYTHON_BIN}" host_tools/test_check_host_platform_alignment.py

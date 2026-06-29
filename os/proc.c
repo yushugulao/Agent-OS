@@ -423,7 +423,7 @@ static int fork_common(int make_agent, int agent_role)
 	// Copy file table to new proc
 	for (i = 0; i < FD_BUFFER_SIZE; i++) {
 		if (p->files[i] != NULL) {
-			// TODO: f->type == STDIO ?
+			// uCore teaching runtime shares the file object reference.
 			p->files[i]->ref++;
 			np->files[i] = p->files[i];
 		}

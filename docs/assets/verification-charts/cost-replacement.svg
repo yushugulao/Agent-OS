@@ -1,10 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="472" viewBox="0 0 1180 472">
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="452" viewBox="0 0 1180 452">
 <style>
 text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
 .title{font-size:20px;font-weight:700}.subtitle{font-size:13px;fill:#52616f}
 .axis{font-size:12px;fill:#52616f}.label{font-size:12px}.value{font-size:12px;font-weight:700}
 </style>
-<rect width="1180" height="472" fill="#ffffff"/>
+<rect width="1180" height="452" fill="#ffffff"/>
 <text x="34" y="34" class="title">用户态成本项与 AgentOS 替代机制</text>
 <text x="34" y="58" class="subtitle">每行来自 runner_report：左侧是用户态成本，右侧是 AgentOS 内核替代机制。</text>
 <text x="52" y="88" class="value">普通用户态成本项</text>
@@ -12,52 +12,17 @@ text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
 <text x="920" y="88" class="value">对应风险</text>
 <rect x="34" y="88" width="1112" height="38" fill="#ffffff" stroke="#d8dee6"/>
 <circle cx="34" cy="107" r="5" fill="#f58518"/>
-<text x="52" y="112" class="label">file_scan_manifest</text>
+<text x="52" y="112" class="label">rebuild_steps_6</text>
 <line x1="438" y1="107" x2="500" y2="107" stroke="#f58518" stroke-width="2"/>
 <polygon points="500,102 512,107 500,112" fill="#f58518"/>
-<text x="520" y="112" class="label">batch_tool_context</text>
-<text x="920" y="112" class="axis">manual_state</text>
+<text x="520" y="112" class="label">kernel_context_path</text>
+<text x="920" y="112" class="axis">untrusted_context</text>
 <rect x="34" y="136" width="1112" height="38" fill="#f8fafc" stroke="#d8dee6"/>
 <circle cx="34" cy="155" r="5" fill="#f58518"/>
-<text x="52" y="160" class="label">retry_file_stage_file</text>
+<text x="52" y="160" class="label">file_polling</text>
 <line x1="438" y1="155" x2="500" y2="155" stroke="#f58518" stroke-width="2"/>
 <polygon points="500,150 512,155 500,160" fill="#f58518"/>
-<text x="520" y="160" class="label">event_context</text>
-<text x="920" y="160" class="axis">stale_retry</text>
-<rect x="34" y="184" width="1112" height="38" fill="#ffffff" stroke="#d8dee6"/>
-<circle cx="34" cy="203" r="5" fill="#f58518"/>
-<text x="52" y="208" class="label">rebuild_steps_6</text>
-<line x1="438" y1="203" x2="500" y2="203" stroke="#f58518" stroke-width="2"/>
-<polygon points="500,198 512,203 500,208" fill="#f58518"/>
-<text x="520" y="208" class="label">kernel_context_path</text>
-<text x="920" y="208" class="axis">untrusted_context</text>
-<rect x="34" y="232" width="1112" height="38" fill="#f8fafc" stroke="#d8dee6"/>
-<circle cx="34" cy="251" r="5" fill="#f58518"/>
-<text x="52" y="256" class="label">scan_records_128</text>
-<line x1="438" y1="251" x2="500" y2="251" stroke="#f58518" stroke-width="2"/>
-<polygon points="500,246 512,251 500,256" fill="#f58518"/>
-<text x="520" y="256" class="label">metadata_index</text>
-<text x="920" y="256" class="axis">scan_growth</text>
-<rect x="34" y="280" width="1112" height="38" fill="#ffffff" stroke="#d8dee6"/>
-<circle cx="34" cy="299" r="5" fill="#f58518"/>
-<text x="52" y="304" class="label">file_polling</text>
-<line x1="438" y1="299" x2="500" y2="299" stroke="#f58518" stroke-width="2"/>
-<polygon points="500,294 512,299 500,304" fill="#f58518"/>
-<text x="520" y="304" class="label">kernel_event_queue</text>
-<text x="920" y="304" class="axis">lost_handoff</text>
-<rect x="34" y="328" width="1112" height="38" fill="#f8fafc" stroke="#d8dee6"/>
-<circle cx="34" cy="347" r="5" fill="#f58518"/>
-<text x="52" y="352" class="label">role_field_convention</text>
-<line x1="438" y1="347" x2="500" y2="347" stroke="#f58518" stroke-width="2"/>
-<polygon points="500,342 512,347 500,352" fill="#f58518"/>
-<text x="520" y="352" class="label">capability_check</text>
-<text x="920" y="352" class="axis">forged_role</text>
-<rect x="34" y="376" width="1112" height="38" fill="#ffffff" stroke="#d8dee6"/>
-<circle cx="34" cy="395" r="5" fill="#f58518"/>
-<text x="52" y="400" class="label">lock_file_convention</text>
-<line x1="438" y1="395" x2="500" y2="395" stroke="#f58518" stroke-width="2"/>
-<polygon points="500,390 512,395 500,400" fill="#f58518"/>
-<text x="520" y="400" class="label">kernel_edit_lease</text>
-<text x="920" y="400" class="axis">overwrite_conflict</text>
-<text x="52" y="426" class="subtitle">读图方法：同一行两端必须同时存在；左侧说明普通用户态成本，右侧说明同一负载下的内核机制替代。</text>
+<text x="520" y="160" class="label">kernel_event_queue</text>
+<text x="920" y="160" class="axis">lost_handoff</text>
+<text x="52" y="406" class="subtitle">读图方法：同一行两端必须同时存在；左侧说明普通用户态成本，右侧说明同一负载下的内核机制替代。</text>
 </svg>

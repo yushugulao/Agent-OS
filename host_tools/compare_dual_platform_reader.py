@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare Host Reader render summaries for plain uCore and AgentOS-uCore."""
+"""Compare 本地结果阅读器 render summaries for plain uCore and AgentOS-uCore."""
 
 from __future__ import annotations
 
@@ -103,7 +103,7 @@ def compare_reader(plain_summary_path: Path, agentos_summary_path: Path) -> dict
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Compare Host Reader summaries for both uCore targets.")
+    parser = argparse.ArgumentParser(description="Compare 本地结果阅读器 summaries for both uCore targets.")
     parser.add_argument("--plain-summary", type=Path, required=True)
     parser.add_argument("--agentos-summary", type=Path, required=True)
     parser.add_argument("--json-out", type=Path, default=None)

@@ -50,4 +50,4 @@ agentsecurity_ucore
 rp_agentos_orch
 ```
 
-`rp_agentos_orch` 会创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，再运行与 plain target 可比较的 RUN-042 科研流程，并把关键内核证据写入 `rp_agentos_*` 状态文件。
+`rp_agentos_orch` 会创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，再运行与 plain target 可比较的设定的模拟流程，并把关键内核证据写入 `rp_agentos_*` 状态文件。该流程包含数据准备、比对处理、结果分析、报告生成和归档交付。
