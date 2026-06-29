@@ -8,6 +8,11 @@ int main(void)
 	ok = ok && rp_file_contains("rp_opsboard", "status=ready");
 	ok = ok && rp_file_contains("rp_package", "latest_delivery_status=ready");
 	ok = ok && rp_file_contains("rp_web_bundle", "status=ready");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "permission_control=sentinel_action_denied");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "agent_event_notify=kernel_queue");
+	ok = ok && rp_file_contains("rp_agentos_roles", "stage_launch=agent_create_role");
+	ok = ok && rp_file_contains("rp_agentos_timeline", "timeline_snapshot=ready");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "agent_run=echo");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_control",
@@ -67,7 +72,7 @@ int main(void)
 			   "permission=can:guest:write;result=deny;status=ready\n"
 			   "permission=can:guest:approve;result=deny;status=ready\n"
 			   "control_report=platform-control-report:RUN-042;approvals=4;notifications=4;queue_items=4;plugin_runs=3;status=ready\n"
-			   "agentos_adaptation=kernel_capability_check,kernel_event_delivery,kernel_plugin_tool_table,kernel_run_queue;status=planned\n"
+			   "agentos_adaptation=kernel_capability_check,kernel_event_delivery,kernel_plugin_tool_table,kernel_run_queue;evidence=rp_agentos_mainflow,rp_agentos_roles,rp_agentos_timeline,rp_agentos_kernel;result=observed;status=ready\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -76,6 +81,7 @@ int main(void)
 	if (!rp_append_file("rp_review_dashboard", "subsection=platform_control_plane;source=rp_control;approvals=4;notifications=4;plugins=3;status=ready")) return 1;
 	if (!rp_append_file("rp_opsboard", "handoff=control-plane->operations;artifact=rp_control;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "control_plane_checks=30;approvals=4;notifications=4;queue_items=4;plugins=3;workspaces=1;permissions=5;agentos_replacements=4;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "control_plane_kernel_binding=capability_check,event_delivery,tool_table,agent_run_queue;source=rp_control;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=controlplane;msg=platform-control;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=approval.submit")) return 1;
 	if (!rp_append_file("rp_tool", "tool=approval.approve")) return 1;

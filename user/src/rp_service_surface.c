@@ -1,4 +1,8 @@
+#include <agent.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 #define RP_ENABLE_HOST_ACTION_SEED 1
 #include <research_platform_state.h>
 
@@ -360,6 +364,68 @@ static int write_advanced_surface(void)
 	return 1;
 }
 
+static void make_agentos_surface_op(struct agent_op *op, int tool_id,
+				    uint64 request_id, const char *payload)
+{
+	memset(op, 0, sizeof(*op));
+	op->version = AGENT_CALL_VERSION;
+	op->tool_id = tool_id;
+	op->request_id = request_id;
+	op->arg0 = request_id;
+	op->arg1 = request_id + 1;
+	if (payload) strcpy(op->payload, payload);
+}
+
+static int write_agentos_surface_binding_child(void)
+{
+	struct agent_info info;
+	struct agent_op ops[2];
+	struct agent_result results[2];
+	struct agent_context_header header;
+	struct agent_context_record records[4];
+	int snapshot;
+
+	if (agent_info(&info) < 0 || !info.is_agent) {
+		return 1;
+	}
+	make_agentos_surface_op(&ops[0], AGENT_TOOL_ECHO, 9101,
+				"advanced-surface");
+	make_agentos_surface_op(&ops[1], AGENT_TOOL_READ_CONTEXT, 9102, "");
+	if (agent_run(ops, results, 2, 0) != 2 ||
+	    results[0].status != AGENT_STATUS_OK ||
+	    results[1].status != AGENT_STATUS_OK) {
+		return 1;
+	}
+	snapshot = context_snapshot(&header, records, 4);
+	if (snapshot < 2 || header.latest_sequence < results[1].sequence) {
+		return 1;
+	}
+	if (!rp_append_file("rp_runop",
+			    "agentos_advanced_surface=kernel_bound;agent_role=sentinel;batch_ops=2;context_snapshot=present;context_authority=shadow;status=ready")) {
+		return 1;
+	}
+	if (!rp_append_file("rp_runop",
+			    "agentos_advanced_surface_detail=tool:echo,tool:read_context;direct_context=mirror;snapshot_records=2;status=ready")) {
+		return 1;
+	}
+	return 0;
+}
+
+static int write_agentos_surface_binding(void)
+{
+	int pid = agent_create();
+	int code = -1;
+	int got;
+
+	if (pid < 0) return 0;
+	if (pid == 0) {
+		exit(write_agentos_surface_binding_child());
+	}
+	got = waitpid(pid, &code);
+	if (got != pid || code != 0) return 0;
+	return 1;
+}
+
 int main(void)
 {
 	int ok = 1;
@@ -388,6 +454,7 @@ int main(void)
 	if (!write_startup_health_surface()) return 1;
 	if (!write_research_product_surface()) return 1;
 	if (!write_advanced_surface()) return 1;
+	if (!write_agentos_surface_binding()) return 1;
 
 	if (!rp_append_file("rp_ack", "ack=bio_services;msg=bio;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=lab_resources;msg=res;status=ready")) return 1;

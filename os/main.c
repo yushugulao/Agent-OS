@@ -1,4 +1,5 @@
 #include "console.h"
+#include "agent.h"
 #include "defs.h"
 #include "loader.h"
 #include "plic.h"
@@ -18,6 +19,7 @@ void main()
 	clean_bss();
 	printf("hello world!\n");
 	proc_init();
+	agentinit();
 	kinit();
 	kvm_init();
 	trap_init();

@@ -3,8 +3,8 @@
 #include <unistd.h>
 
 /// 正确输出：（无报错信息）
-/// current time_msec = xxx
-/// time_msec = xxx after sleeping 100 ticks, delta = xxx ms!
+/// current time_msec = 具体数值
+/// time_msec = 具体数值 after sleeping 100 ticks, delta = 具体数值 ms!
 /// Test sleep1 passed!
 
 /// 注意不要单纯以 passed! 作为判断，还要注意时间间隔是否真的在 100

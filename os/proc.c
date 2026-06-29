@@ -13,6 +13,8 @@ extern char boot_stack_top[];
 struct thread *current_thread;
 struct thread idle;
 struct queue task_queue;
+static int scheduler_retained[QUEUE_SIZE];
+static int scheduler_agent_hint;
 
 int procid()
 {
@@ -108,10 +110,55 @@ struct thread *fetch_task()
 	return t;
 }
 
+static struct thread *fetch_best_task()
+{
+	int best = -1;
+	int retained_count = 0;
+	int saw_agent = 0;
+	int index;
+	struct thread *candidate;
+	struct thread *best_task;
+
+	for (;;) {
+		index = pop_queue(&task_queue);
+		if (index < 0)
+			break;
+		candidate = id_to_task(index);
+		if (candidate == NULL || candidate->state != RUNNABLE)
+			continue;
+		if (candidate->process && candidate->process->is_agent)
+			saw_agent = 1;
+		if (best < 0 ||
+		    agent_sched_better(candidate, id_to_task(best))) {
+			if (best >= 0 && retained_count < QUEUE_SIZE)
+				scheduler_retained[retained_count++] = best;
+			best = index;
+		} else if (retained_count < QUEUE_SIZE) {
+			scheduler_retained[retained_count++] = index;
+		}
+	}
+	for (int i = 0; i < retained_count; i++)
+		push_queue(&task_queue, scheduler_retained[i]);
+	if (!saw_agent)
+		scheduler_agent_hint = 0;
+	if (best < 0)
+		return 0;
+	best_task = id_to_task(best);
+	if (best_task) {
+		tracef("fetch best index %d(pid=%d, tid=%d, addr=%p)", best,
+		       best_task->process->pid, best_task->tid,
+		       (uint64)best_task);
+	}
+	return best_task;
+}
+
 void add_task(struct thread *t)
 {
 	int task_id = task_to_id(t);
 	int pid = t->process->pid;
+	agent_sched_on_enqueue(t);
+	if (t->process && t->process->is_agent)
+		scheduler_agent_hint = 1;
 	push_queue(&task_queue, task_id);
 	tracef("add index %d(pid=%d, tid=%d, addr=%p) to task queue", task_id,
 	       pid, t->tid, (uint64)t);
@@ -142,8 +189,26 @@ found:
 	p->next_mutex_id = 0;
 	p->next_semaphore_id = 0;
 	p->next_condvar_id = 0;
-	// LAB5: (1) you may initialize your new proc variables here
+	memset(p->syscall_count, 0, sizeof(p->syscall_count));
+	memset(p->mail_payload, 0, sizeof(p->mail_payload));
+	memset(p->mail_len, 0, sizeof(p->mail_len));
+	memset(p->mail_from, 0, sizeof(p->mail_from));
+	p->mail_head = 0;
+	p->mail_tail = 0;
+	p->mail_count = 0;
+	agent_clear_metadata(p);
 	return p;
+}
+
+static void wake_proc_threads(struct proc *p)
+{
+	for (int i = 0; i < NTHREAD; i++) {
+		struct thread *t = &p->threads[i];
+		if (t->state == SLEEPING) {
+			t->state = RUNNABLE;
+			add_task(t);
+		}
+	}
 }
 
 inline uint64 get_thread_trapframe_va(int tid)
@@ -228,9 +293,34 @@ void scheduler()
 {
 	struct thread *t;
 	for (;;) {
-		t = fetch_task();
+		agent_background_maintain();
+		t = scheduler_agent_hint ? fetch_best_task() : fetch_task();
 		if (t == NULL) {
-			panic("all app are over!\n");
+			int live = 0;
+			for (struct proc *p = pool; p < &pool[NPROC]; p++) {
+				if (p->state != P_USED)
+					continue;
+				for (int i = 0; i < NTHREAD; i++) {
+					if (p->threads[i].state == SLEEPING ||
+					    p->threads[i].state == RUNNABLE ||
+					    p->threads[i].state == RUNNING) {
+						live = 1;
+						break;
+					}
+				}
+				if (live)
+					break;
+			}
+			if (live) {
+				set_kerneltrap();
+				intr_on();
+				asm volatile("wfi");
+				continue;
+			}
+			infof("all app are over!");
+			shutdown();
+			for (;;)
+				;
 		}
 		// throw out freed threads
 		if (t->state != RUNNABLE) {
@@ -238,6 +328,7 @@ void scheduler()
 			continue;
 		}
 		tracef("swtich to proc %d, thread %d", t->process->pid, t->tid);
+		agent_sched_on_dispatch(t);
 		t->state = RUNNING;
 		current_thread = t;
 		swtch(&idle.context, &t->context);
@@ -262,6 +353,7 @@ void sched()
 // Give up the CPU for one scheduling round.
 void yield()
 {
+	agent_sched_on_yield(current_thread);
 	current_thread->state = RUNNABLE;
 	add_task(current_thread);
 	sched();
@@ -294,20 +386,25 @@ void freeproc(struct proc *p)
 		}
 		t->state = T_UNUSED;
 	}
+	if (p->is_agent)
+		agent_free_proc_context(p);
+	else
+		agent_clear_metadata(p);
 	if (p->pagetable)
 		freepagetable(p->pagetable, p->max_page);
 	p->pagetable = 0;
 	p->max_page = 0;
 	p->ustack_base = 0;
-	for (int i = 0; i > FD_BUFFER_SIZE; i++) {
+	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
 		if (p->files[i] != NULL) {
 			fileclose(p->files[i]);
+			p->files[i] = NULL;
 		}
 	}
 	p->state = P_UNUSED;
 }
 
-int fork()
+static int fork_common(int make_agent, int agent_role)
 {
 	struct proc *np;
 	struct proc *p = curr_proc();
@@ -318,23 +415,35 @@ int fork()
 	}
 	// Copy user memory from parent to child.
 	if (uvmcopy(p->pagetable, np->pagetable, p->max_page) < 0) {
-		panic("uvmcopy\n");
+		freeproc(np);
+		return -1;
 	}
 	np->max_page = p->max_page;
 	np->ustack_base = p->ustack_base;
 	// Copy file table to new proc
 	for (i = 0; i < FD_BUFFER_SIZE; i++) {
 		if (p->files[i] != NULL) {
-			// TODO: f->type == STDIO ?
+			// uCore teaching runtime shares the file object reference.
 			p->files[i]->ref++;
 			np->files[i] = p->files[i];
 		}
 	}
+	memset(np->syscall_count, 0, sizeof(np->syscall_count));
+	memset(np->mail_payload, 0, sizeof(np->mail_payload));
+	memset(np->mail_len, 0, sizeof(np->mail_len));
+	memset(np->mail_from, 0, sizeof(np->mail_from));
+	np->mail_head = 0;
+	np->mail_tail = 0;
+	np->mail_count = 0;
 
 	np->parent = p;
 	// currently only copy main thread
 	struct thread *nt = &np->threads[allocthread(np, 0, 0)],
 		      *t = &p->threads[0];
+	if (make_agent && agent_make_role(np, agent_role) < 0) {
+		freeproc(np);
+		return -1;
+	}
 	// copy saved user registers.
 	*(nt->trapframe) = *(t->trapframe);
 	// Cause fork to return 0 in the child.
@@ -342,6 +451,21 @@ int fork()
 	nt->state = RUNNABLE;
 	add_task(nt);
 	return np->pid;
+}
+
+int fork()
+{
+	return fork_common(0, AGENT_ROLE_SENTINEL);
+}
+
+int agent_create_proc()
+{
+	return fork_common(1, AGENT_ROLE_SENTINEL);
+}
+
+int agent_create_role_proc(int role)
+{
+	return fork_common(1, role);
 }
 
 int push_argv(struct proc *p, char **argv)
@@ -431,8 +555,7 @@ int wait(int pid, int *code)
 		if (!havekids) {
 			return -1;
 		}
-		t->state = RUNNABLE;
-		add_task(t);
+		t->state = SLEEPING;
 		sched();
 	}
 }
@@ -454,6 +577,7 @@ void exit(int code)
 		if (p->parent != NULL) {
 			// Parent should `wait`
 			p->state = ZOMBIE;
+			wake_proc_threads(p->parent);
 		}
 		// Set the `parent` of all children to NULL
 		struct proc *np;

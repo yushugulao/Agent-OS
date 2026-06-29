@@ -8,6 +8,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_studyproto", "study_protocol_checks=20");
 	ok = ok && rp_file_contains("rp_evidence", "claims=8");
 	ok = ok && rp_file_contains("rp_package", "artifacts=52");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "agent_provenance=observed");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_stdesign",
@@ -24,6 +25,9 @@ int main(void)
 			   "alpha=0.05\n"
 			   "target_power=0.80\n"
 			   "allocation_ratio=1.00\n"
+			   "agentos_context=observed\n"
+			   "agentos_metadata=observed\n"
+			   "agentos_provenance=observed\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -35,6 +39,7 @@ int main(void)
 			   "required_total=22\n"
 			   "actual_min_group_size=2\n"
 			   "achieved_power=0.239\n"
+			   "agentos_context_record=power_analysis\n"
 			   "status=underpowered\n")) {
 		return 1;
 	}
@@ -50,6 +55,7 @@ int main(void)
 			   "assignment=S-003:control\n"
 			   "assignment=S-004:treatment\n"
 			   "balance=arms:control:2,treatment:2\n"
+			   "agentos_file_metadata=randomization_plan\n"
 			   "status=balanced\n")) {
 		return 1;
 	}
@@ -59,6 +65,7 @@ int main(void)
 			   "blinded_roles=reporter,auditor,statistician\n"
 			   "unblinded_roles=lab-operator\n"
 			   "leaks=0\n"
+			   "agentos_capability_check=blinding_roles\n"
 			   "status=ok\n")) {
 		return 1;
 	}
@@ -72,13 +79,14 @@ int main(void)
 			   "export=stat-design-export:lab-gene-x:run042-primary\n"
 			   "export_type=markdown\n"
 			   "checksum=stdesign-md-042\n"
+			   "agentos_review_trace=kernel_context_path\n"
 			   "status=ready\n")) {
 		return 1;
 	}
 	if (!rp_append_file("rp_package", "statistical_design=rp_stdesign;stat_result=approved_with_sample_size_note;status=ready")) return 1;
 	if (!rp_append_file("rp_web_bundle", "statistical_design_page=rp_stdesign;designs=1;power=underpowered;randomization=balanced;status=ready")) return 1;
 	if (!rp_append_file("rp_review_dashboard", "subsection=statistical_design;source=rp_stdesign;checks=120;stat_result=approved_with_sample_size_note;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "statistical_design_checks=120;designs=1;power=underpowered;randomization=balanced;blinding=ok;stat_result=approved_with_sample_size_note;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "statistical_design_checks=120;designs=1;power=underpowered;randomization=balanced;blinding=ok;stat_result=approved_with_sample_size_note;kernel_metadata=observed;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=statistical_design;msg=design;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=stat_design.create")) return 1;
 	if (!rp_append_file("rp_tool", "tool=stat_design.analyze_power")) return 1;

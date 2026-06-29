@@ -13,6 +13,11 @@ int main(void)
 	ok = ok && rp_file_contains("rp_runop", "worker_ops:6");
 	ok = ok && rp_file_contains("rp_package", "delivery_files=8");
 	ok = ok && rp_file_contains("rp_review_dashboard", "backend_review_evidence=rp_backend_exec");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "agent_event_notify=kernel_queue");
+	ok = ok && rp_file_contains("rp_agentos_mainflow", "failure_recovery=generic_action");
+	ok = ok && rp_file_contains("rp_agentos_timeline", "event_delivery=kernel_agent_queue");
+	ok = ok && rp_file_contains("rp_agentos_query", "metadata_source=kernel_file_index");
+	ok = ok && rp_file_contains("rp_agentos_recovery", "kernel_tool=action_commit,artifact_update");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_runbooks",
@@ -40,7 +45,7 @@ int main(void)
 			   "execution=runbook-execution:RUN-042:manual;template=runbook-template:align-oom-recovery;completed_steps=7;retry_stage=align;result=recovered;status=passed\n"
 			   "export=runbook-export:RUN-042:manual;format=markdown;package=rp_package;evidence=rp_review_dashboard;status=ready\n"
 			   "worker_handoff=worker-a->recovery;queue_action=resume_after_review;failure_classification=resource_limit;status=ready\n"
-			   "agentos_adaptation=event_context,kernel_timeline,metadata_index,batch_recovery_tool;status=planned\n"
+			   "agentos_adaptation=event_context,kernel_timeline,metadata_index,batch_recovery_tool;evidence=rp_agentos_mainflow,rp_agentos_timeline,rp_agentos_query,rp_agentos_recovery;result=observed;status=ready\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -48,6 +53,7 @@ int main(void)
 	if (!rp_append_file("rp_runop", "runbook_service=templates:1,steps:7,incident_triages:1,executions:1,exports:1,worker_records:6,status=ready")) return 1;
 	if (!rp_append_file("rp_review_dashboard", "subsection=runbooks;source=rp_runbooks;steps=7;incident=closed;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "runbook_service=checks:16;templates:1;steps:7;incident_triages:1;executions:1;exports:1;worker_records:6;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "runbook_kernel_binding=event_context,kernel_timeline,metadata_index,batch_recovery_tool;source=rp_runbooks;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=runbooks;msg=incident;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=runbooks.triage_incident")) return 1;
 	if (!rp_append_file("rp_tool", "tool=runbooks.execute_recovery")) return 1;

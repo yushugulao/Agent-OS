@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="460" viewBox="0 0 1120 460">
+<style>
+text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
+.title{font-size:20px;font-weight:700}.subtitle{font-size:13px;fill:#52616f}
+.axis{font-size:12px;fill:#52616f}.label{font-size:12px}.value{font-size:12px;font-weight:700}
+</style>
+<rect width="1120" height="460" fill="#ffffff"/>
+<text x="34" y="34" class="title">Runner 成组场景相对倍数</text>
+<text x="34" y="58" class="subtitle">横向条来自 runner-sweep.csv，呈现 AgentOS 相对普通路径的 tick 倍数和节省量。</text>
+<line x1="210.0" y1="80" x2="210.0" y2="382" stroke="#d8dee6" stroke-width="1"/>
+<text x="210.0" y="402" text-anchor="middle" class="axis">0x</text>
+<line x1="424.3" y1="80" x2="424.3" y2="382" stroke="#d8dee6" stroke-width="1"/>
+<text x="424.3" y="402" text-anchor="middle" class="axis">2x</text>
+<line x1="638.6" y1="80" x2="638.6" y2="382" stroke="#d8dee6" stroke-width="1"/>
+<text x="638.6" y="402" text-anchor="middle" class="axis">4x</text>
+<line x1="852.9" y1="80" x2="852.9" y2="382" stroke="#d8dee6" stroke-width="1"/>
+<text x="852.9" y="402" text-anchor="middle" class="axis">6x</text>
+<text x="196" y="114" text-anchor="end" class="label">基础执行计划</text>
+<rect x="210" y="96" width="107.1" height="24" fill="#6f7f8f" rx="2"/>
+<text x="325.1" y="113" class="value">1x</text>
+<text x="990" y="113" class="axis">省 0 tick</text>
+<text x="196" y="158" text-anchor="end" class="label">上下文路径</text>
+<rect x="210" y="140" width="642.9" height="24" fill="#f58518" rx="2"/>
+<text x="842.9" y="157" class="value" text-anchor="end">6x</text>
+<text x="990" y="157" class="axis">省 5 tick</text>
+<text x="196" y="202" text-anchor="end" class="label">文件对象查询</text>
+<rect x="210" y="184" width="750.0" height="24" fill="#f58518" rx="2"/>
+<text x="950.0" y="201" class="value" text-anchor="end">7x</text>
+<text x="990" y="201" class="axis">省 6 tick</text>
+<text x="196" y="246" text-anchor="end" class="label">事件交接</text>
+<rect x="210" y="228" width="642.9" height="24" fill="#f58518" rx="2"/>
+<text x="842.9" y="245" class="value" text-anchor="end">6x</text>
+<text x="990" y="245" class="axis">省 5 tick</text>
+<text x="52" y="442" class="subtitle">读图方法：1x 表示两条路径 tick 相同；超过 1x 表示 AgentOS 用更少 tick 完成。</text>
+</svg>

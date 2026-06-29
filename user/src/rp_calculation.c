@@ -8,6 +8,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_data_transform", "transform=normalize_fastq");
 	ok = ok && rp_file_contains("rp_dataset_collection", "collection=lab-gene-x-run042-analysis");
 	ok = ok && rp_file_contains("rp_package", "artifacts=52");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "file_meta_service=initialized");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "agent_provenance=observed");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_calculation",
@@ -27,6 +29,9 @@ int main(void)
 			   "job=calculation-job:lab-gene-x:run042-qc;process_type=aiida.calculations:agent.metadata_qc;state=finished;exit_status=0;code=calculation-code:metadata-qc:v1;computer=calculation-computer:local-agentos\n"
 			   "job_inputs=dataset-collection:lab-gene-x:run042-analysis,data-transform-run:lab-gene-x:run042-normalize\n"
 			   "scheduler_record=calculation-submission:run042-qc;status=finished;attempts=1;command=metadata-qc\n"
+			   "agentos_kernel_metadata=observed\n"
+			   "agentos_context=observed\n"
+			   "agentos_provenance=observed\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -37,6 +42,7 @@ int main(void)
 			   "retrieved=calculation-retrieved:run042-qc:results-json;path=results.json;kind=retrieved_output;checksum=results042;status=available\n"
 			   "retrieved=calculation-retrieved:run042-qc:provenance-json;path=provenance.json;kind=provenance_manifest;checksum=prov042;status=available\n"
 			   "output_snapshot=dataset-snapshot:calculation:run042-qc;rows=3;files=3;status=ready\n"
+			   "agentos_file_metadata=calculation_outputs\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -47,6 +53,7 @@ int main(void)
 			   "metric=collection_items;value=4;status=ready\n"
 			   "metric=ready_ratio;value=1.00;status=ready\n"
 			   "warnings=0\n"
+			   "agentos_context_record=parser_summary\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -55,6 +62,7 @@ int main(void)
 			   "export=calculation-export:lab-gene-x:run042-qc;type=markdown;path=calculation-export-run042-qc.md;checksum=calcexport042;status=ready\n"
 			   "package=calculation-package:lab-gene-x:run042-qc;files=3;parser_results=1;exports=1;status=ready\n"
 			   "reader_page=calculations.html\n"
+			   "agentos_package_trace=kernel_provenance\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -62,7 +70,7 @@ int main(void)
 	if (!rp_append_file("rp_package", "calculation_package=rp_calculation;job=calculation-job:lab-gene-x:run042-qc;retrieved=3;parser=ok;status=ready")) return 1;
 	if (!rp_append_file("rp_web_bundle", "calculations_page=rp_calculation;jobs=1;retrieved=3;parser_results=1;status=ready")) return 1;
 	if (!rp_append_file("rp_review_dashboard", "subsection=calculations;source=rp_calculation;jobs=1;retrieved=3;checks=84;outcome=passed;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "calculation_checks=84;computers=1;codes=1;jobs=1;retrieved=3;parser_results=1;exports=1;agentos_replacements=4;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "calculation_checks=84;computers=1;codes=1;jobs=1;retrieved=3;parser_results=1;exports=1;agentos_replacements=4;kernel_metadata=observed;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=calculation;msg=calc;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=calculation.register_computer")) return 1;
 	if (!rp_append_file("rp_tool", "tool=calculation.register_code")) return 1;

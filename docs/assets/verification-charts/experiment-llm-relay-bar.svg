@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="980" height="560" viewBox="0 0 980 560">
+<style>
+text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
+.title{font-size:20px;font-weight:700}.subtitle{font-size:13px;fill:#52616f}
+.axis{font-size:12px;fill:#52616f}.label{font-size:12px}.value{font-size:12px;font-weight:700}
+</style>
+<rect width="980" height="560" fill="#ffffff"/>
+<text x="34" y="34" class="title">LLM Relay 请求数变化下的证据重建成本</text>
+<text x="34" y="58" class="subtitle">同一批 LLM 请求：普通路径重建日志，AgentOS 路径保留结构化记录。</text>
+<text x="90" y="528" class="axis">重建或记录成本</text>
+<line x1="90" y1="440.0" x2="946" y2="440.0" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="444.0" text-anchor="end" class="axis">0</text>
+<line x1="90" y1="373.6" x2="946" y2="373.6" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="377.6" text-anchor="end" class="axis">304</text>
+<line x1="90" y1="307.2" x2="946" y2="307.2" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="311.2" text-anchor="end" class="axis">608</text>
+<line x1="90" y1="240.8" x2="946" y2="240.8" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="244.8" text-anchor="end" class="axis">912</text>
+<line x1="90" y1="174.4" x2="946" y2="174.4" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="178.4" text-anchor="end" class="axis">1216</text>
+<line x1="90" y1="108.0" x2="946" y2="108.0" stroke="#d8dee6" stroke-width="1"/>
+<text x="78" y="112.0" text-anchor="end" class="axis">1520</text>
+<rect x="140.8" y="435.6" width="52.0" height="4.4" fill="#4c78a8" rx="2"/>
+<text x="166.8" y="428.6" text-anchor="middle" class="value">20</text>
+<rect x="201.2" y="438.0" width="52.0" height="2.0" fill="#f58518" rx="2"/>
+<text x="227.2" y="431.0" text-anchor="middle" class="value">9</text>
+<text x="197.0" y="468" text-anchor="middle" class="label">4</text>
+<rect x="354.8" y="422.5" width="52.0" height="17.5" fill="#4c78a8" rx="2"/>
+<text x="380.8" y="415.5" text-anchor="middle" class="value">80</text>
+<rect x="415.2" y="432.8" width="52.0" height="7.2" fill="#f58518" rx="2"/>
+<text x="441.2" y="425.8" text-anchor="middle" class="value">33</text>
+<text x="411.0" y="468" text-anchor="middle" class="label">16</text>
+<rect x="568.8" y="370.1" width="52.0" height="69.9" fill="#4c78a8" rx="2"/>
+<text x="594.8" y="363.1" text-anchor="middle" class="value">320</text>
+<rect x="629.2" y="411.6" width="52.0" height="28.4" fill="#f58518" rx="2"/>
+<text x="655.2" y="404.6" text-anchor="middle" class="value">130</text>
+<text x="625.0" y="468" text-anchor="middle" class="label">64</text>
+<rect x="782.8" y="160.4" width="52.0" height="279.6" fill="#4c78a8" rx="2"/>
+<text x="808.8" y="153.4" text-anchor="middle" class="value">1280</text>
+<rect x="843.2" y="326.4" width="52.0" height="113.6" fill="#f58518" rx="2"/>
+<text x="869.2" y="319.4" text-anchor="middle" class="value">520</text>
+<text x="839.0" y="468" text-anchor="middle" class="label">256</text>
+<rect x="735" y="70" width="14" height="14" fill="#4c78a8"/>
+<text x="756" y="82" class="label">普通 uCore</text>
+<rect x="850" y="70" width="14" height="14" fill="#f58518"/>
+<text x="871" y="82" class="label">AgentOS-uCore</text>
+</svg>

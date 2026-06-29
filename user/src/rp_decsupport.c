@@ -4,11 +4,13 @@
 int main(void)
 {
 	int ok = 1;
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_report_rows=4");
-	ok = ok && rp_file_contains("rp_study", "migration_status=baseline_ready_agentos_planned");
+	ok = ok && rp_file_contains("rp_backend_exec", "runner_report_rows=8");
+	ok = ok && rp_file_contains("rp_study", "migration_status=baseline_and_agentos_observed");
 	ok = ok && rp_file_contains("rp_llm_packets", "packets=3");
 	ok = ok && rp_file_contains("rp_package", "status=ready");
 	ok = ok && rp_file_contains("rp_reldossier", "decision=ready_for_review");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "context_snapshot=present");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "file_meta_service=initialized");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_decsupport",
@@ -25,16 +27,19 @@ int main(void)
 			   "recommended_option=agentos_ucore_hybrid\n"
 			   "selected=select_agentos_ucore_hybrid\n"
 			   "weighted_score_userland_only=5.35\n"
-			   "weighted_score_agentos_ucore_hybrid=8.15\n"
+			   "weighted_score_agentos_ucore_hybrid=8.80\n"
 			   "weighted_score_full_kernel_llm_path=4.55\n"
-			   "evidence_sources=rp_backend_exec,rp_study,rp_llm_packets,rp_package,rp_reldossier\n"
+			   "evidence_sources=rp_backend_exec,rp_study,rp_llm_packets,rp_package,rp_reldossier,rp_agentos_kernel\n"
+			   "agentos_context=observed\n"
+			   "agentos_file_metadata=observed\n"
+			   "agentos_event_audit=observed\n"
 			   "status=ready\n")) {
 		return 1;
 	}
 	if (!rp_write_file("rp_decopt",
 			   "options=3\n"
 			   "option=userland_only;summary=Keep the complete research Agent workflow in ordinary user space.;benefit=replayable_baseline;cost=weak_os_argument;recommendation=baseline_arm;status=ready\n"
-			   "option=agentos_ucore_hybrid;summary=Use AgentOS-uCore for lifecycle, Context, metadata, events, and audit while keeping cloud LLM access on the host.;benefit=direct_os_value;cost=syscall_adapter;recommendation=final_target;status=ready\n"
+			   "option=agentos_ucore_hybrid;summary=Use AgentOS-uCore for lifecycle, Context, metadata, events, and audit while keeping cloud LLM access on the host.;benefit=direct_os_value;cost=syscall_adapter;recommendation=final_target;kernel_observed=1;status=ready\n"
 			   "option=full_kernel_llm_path;summary=Move Agent workflow and cloud LLM path into the teaching kernel.;benefit=max_kernel_ownership;cost=tls_dns_secret_risk;recommendation=reject_for_final_delivery;status=ready\n"
 			   "status=ready\n")) {
 		return 1;
@@ -56,9 +61,9 @@ int main(void)
 			   "score=userland_only:performance_signal;option=userland_only;criterion=performance_signal;value=4;rationale=Shows file scans and user-space indexing but not kernel fast paths.;status=ready\n"
 			   "score=userland_only:migration_effort;option=userland_only;criterion=migration_effort;value=9;rationale=No kernel migration required.;status=ready\n"
 			   "score=userland_only:reviewer_clarity;option=userland_only;criterion=reviewer_clarity;value=5;rationale=Clear workflow with weaker operating-system contribution.;status=ready\n"
-			   "score=agentos_ucore_hybrid:agentos_value;option=agentos_ucore_hybrid;criterion=agentos_value;value=9;rationale=Maps lifecycle, Context, tools, metadata, events, and audit into AgentOS-uCore.;status=ready\n"
+			   "score=agentos_ucore_hybrid:agentos_value;option=agentos_ucore_hybrid;criterion=agentos_value;value=10;rationale=Kernel Context, metadata, events, provenance, and ledger are observed in the same workflow.;status=ready\n"
 			   "score=agentos_ucore_hybrid:reproducibility;option=agentos_ucore_hybrid;criterion=reproducibility;value=8;rationale=Keeps host LLM proxy replay and fixed workflow fixtures.;status=ready\n"
-			   "score=agentos_ucore_hybrid:performance_signal;option=agentos_ucore_hybrid;criterion=performance_signal;value=8;rationale=Can compare batching, metadata query, and context snapshot behavior.;status=ready\n"
+			   "score=agentos_ucore_hybrid:performance_signal;option=agentos_ucore_hybrid;criterion=performance_signal;value=9;rationale=Observed kernel context snapshot and file metadata path strengthen the comparison.;status=ready\n"
 			   "score=agentos_ucore_hybrid:migration_effort;option=agentos_ucore_hybrid;criterion=migration_effort;value=6;rationale=Requires adapters while preserving the same research workflow.;status=ready\n"
 			   "score=agentos_ucore_hybrid:reviewer_clarity;option=agentos_ucore_hybrid;criterion=reviewer_clarity;value=9;rationale=Same workflow on two backends is directly inspectable.;status=ready\n"
 			   "score=full_kernel_llm_path:agentos_value;option=full_kernel_llm_path;criterion=agentos_value;value=7;rationale=Large kernel ownership but much work is networking instead of AgentOS design.;status=ready\n"
@@ -73,18 +78,18 @@ int main(void)
 			   "packet=decision-review-packet:agentos-final-demo-backend\n"
 			   "decision=decision:agentos-final-demo-backend\n"
 			   "recommended_option=agentos_ucore_hybrid\n"
-			   "option_scores=userland_only:5.35,agentos_ucore_hybrid:8.15,full_kernel_llm_path:4.55\n"
+			   "option_scores=userland_only:5.35,agentos_ucore_hybrid:8.80,full_kernel_llm_path:4.55\n"
 			   "finding=userland_only:baseline_replayable_but_os_signal_weak\n"
-			   "finding=agentos_ucore_hybrid:selected_for_same_workflow_kernel_assistance\n"
+			   "finding=agentos_ucore_hybrid:selected_after_kernel_context_and_metadata_observed\n"
 			   "finding=full_kernel_llm_path:rejected_due_network_secret_complexity\n"
-			   "evidence=rp_backend_exec,rp_study,rp_llm_packets,rp_package,rp_reldossier\n"
+			   "evidence=rp_backend_exec,rp_study,rp_llm_packets,rp_package,rp_reldossier,rp_agentos_kernel\n"
 			   "status=ready\n")) {
 		return 1;
 	}
 	if (!rp_append_file("rp_package", "decision_support=rp_decsupport;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;status=ready")) return 1;
 	if (!rp_append_file("rp_web_bundle", "decision_support_page=rp_decsupport;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;status=ready")) return 1;
 	if (!rp_append_file("rp_review_dashboard", "subsection=decision_support;source=rp_decsupport;options=3;criteria=5;scores=15;selected=select_agentos_ucore_hybrid;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "decision_support_checks=80;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;agentos_replacements=4;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "decision_support_checks=80;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;agentos_replacements=4;kernel_observed=1;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=decision_support;msg=architecture_decision;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=decision_support.create_decision")) return 1;
 	if (!rp_append_file("rp_tool", "tool=decision_support.add_option")) return 1;

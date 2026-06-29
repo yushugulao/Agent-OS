@@ -13,7 +13,7 @@ const char *TESTS[] = {
 	"ch6b_filetest\0",      "ch6b_exec\0",        "ch7b_pipetest\0",
 	"ch8b_mpsc_sem\0",
 	"ch8b_mut_phi_din.c",   "ch8b_mut_race\0",    "ch8b_sync_sem\0",
-	"ch8b_test_condvar\0",  "ch8b_threads_arg\0", "ch8b_threads\0",      
+	"ch8b_test_condvar\0",  "ch8b_threads_arg\0", "ch8b_threads\0",
 	"ch8b_spin_mut_race\0", "ch8b_mut_phi_din\0",
 };
 

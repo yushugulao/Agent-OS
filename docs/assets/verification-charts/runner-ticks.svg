@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="460" viewBox="0 0 1080 460">
+<style>
+text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
+.title{font-size:20px;font-weight:700}.subtitle{font-size:13px;fill:#52616f}
+.axis{font-size:12px;fill:#52616f}.label{font-size:12px}.value{font-size:12px;font-weight:700}
+</style>
+<rect width="1080" height="460" fill="#ffffff"/>
+<text x="34" y="34" class="title">Runner Tick 对照</text>
+<text x="34" y="58" class="subtitle">同一科研负载中的 runner case 成对比较：蓝色为普通用户态路径，橙色为 AgentOS 内核辅助路径。</text>
+<line x1="190.0" y1="80" x2="190.0" y2="412" stroke="#d8dee6" stroke-width="1"/>
+<text x="190.0" y="434" text-anchor="middle" class="axis">0</text>
+<line x1="407.1" y1="80" x2="407.1" y2="412" stroke="#d8dee6" stroke-width="1"/>
+<text x="407.1" y="434" text-anchor="middle" class="axis">2</text>
+<line x1="624.3" y1="80" x2="624.3" y2="412" stroke="#d8dee6" stroke-width="1"/>
+<text x="624.3" y="434" text-anchor="middle" class="axis">4</text>
+<line x1="841.4" y1="80" x2="841.4" y2="412" stroke="#d8dee6" stroke-width="1"/>
+<text x="841.4" y="434" text-anchor="middle" class="axis">6</text>
+<text x="176" y="116" text-anchor="end" class="label">基础执行计划</text>
+<rect x="190" y="95" width="325.7" height="18" fill="#4c78a8" rx="2"/>
+<rect x="190" y="119" width="325.7" height="18" fill="#f58518" rx="2"/>
+<text x="523.7" y="109" class="axis">3</text>
+<text x="523.7" y="133" class="axis">3</text>
+<text x="962" y="123" class="value">省 0</text>
+<text x="176" y="170" text-anchor="end" class="label">上下文路径</text>
+<rect x="190" y="149" width="651.4" height="18" fill="#4c78a8" rx="2"/>
+<rect x="190" y="173" width="108.6" height="18" fill="#f58518" rx="2"/>
+<text x="849.4" y="163" class="axis">6</text>
+<text x="306.6" y="187" class="axis">1</text>
+<text x="962" y="177" class="value">省 5</text>
+<text x="176" y="224" text-anchor="end" class="label">文件对象查询</text>
+<rect x="190" y="203" width="760.0" height="18" fill="#4c78a8" rx="2"/>
+<rect x="190" y="227" width="108.6" height="18" fill="#f58518" rx="2"/>
+<text x="958.0" y="217" class="axis">7</text>
+<text x="306.6" y="241" class="axis">1</text>
+<text x="962" y="231" class="value">省 6</text>
+<text x="176" y="278" text-anchor="end" class="label">事件交接</text>
+<rect x="190" y="257" width="651.4" height="18" fill="#4c78a8" rx="2"/>
+<rect x="190" y="281" width="108.6" height="18" fill="#f58518" rx="2"/>
+<text x="849.4" y="271" class="axis">6</text>
+<text x="306.6" y="295" class="axis">1</text>
+<text x="962" y="285" class="value">省 5</text>
+<rect x="720" y="422" width="14" height="14" fill="#4c78a8"/>
+<text x="742" y="434" class="axis">普通用户态路径</text>
+<rect x="860" y="422" width="14" height="14" fill="#f58518"/>
+<text x="882" y="434" class="axis">AgentOS 路径</text>
+</svg>

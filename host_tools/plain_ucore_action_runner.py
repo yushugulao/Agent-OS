@@ -6,14 +6,20 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
+import re
 import shutil
+import signal
 import subprocess
+import threading
+import time
 from pathlib import Path
 from typing import Iterable
 
 from plain_ucore_fs_extract import extract_state_files
 
 UCORE_FS_BLOCK_SIZE = 1024
+DEFAULT_FAILURE_PATTERN = r"check failed|panic|unknown syscall|bad addr|IllegalInstruction|child_failed|status=failed"
 
 
 def read_jsonl(path: Path) -> list[dict[str, object]]:
@@ -313,6 +319,8 @@ def action_plan_line(record: dict[str, object]) -> str:
     sequence = line_value(record.get("sequence", ""))
     if kind == "research_run":
         return f"plan={sequence};kind=research_run;prepare=rp_input;execute=rp_orch;collect=rp_web_bundle;status=ready"
+    if kind == "research_rerun":
+        return f"plan={sequence};kind=research_rerun;prepare=rp_input;execute=rp_orch;collect=rp_runner;status=ready"
     if kind == "studio_launch":
         return f"plan={sequence};kind=studio_launch;prepare=rp_input;execute=rp_orch;collect=rp_studio;status=ready"
     if kind == "agentcompare":
@@ -439,6 +447,14 @@ def shell_quote(value: str) -> str:
     return "'" + value.replace("'", "'\"'\"'") + "'"
 
 
+def make_var_arg(name: str, value: str) -> str:
+    return f"{name}={shell_quote(value)}"
+
+
+def toolprefix_arg() -> str:
+    return make_var_arg("TOOLPREFIX", os.environ.get("TOOLPREFIX", "riscv64-linux-gnu-"))
+
+
 def bash_path(path: Path, base: Path | None = None) -> str:
     resolved = path.resolve()
     if base is not None:
@@ -469,6 +485,156 @@ def run_command(command: list[str], log_path: Path, timeout_seconds: int, append
     return result.returncode
 
 
+def parse_seconds(value: str | int | float) -> float:
+    text = str(value)
+    unit = text[-1:]
+    number = text[:-1] if unit.isalpha() else text
+    seconds = float(number)
+    if unit in ("s", "S") or not unit.isalpha():
+        return seconds
+    if unit in ("m", "M"):
+        return seconds * 60
+    if unit in ("h", "H"):
+        return seconds * 3600
+    raise ValueError(f"unsupported duration: {text}")
+
+
+def terminate_process(proc: subprocess.Popen[str]) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        if os.name == "nt":
+            proc.terminate()
+        else:
+            os.killpg(proc.pid, signal.SIGTERM)
+        proc.wait(timeout=2)
+    except Exception:
+        if proc.poll() is None:
+            if os.name == "nt":
+                proc.kill()
+            else:
+                os.killpg(proc.pid, signal.SIGKILL)
+            proc.wait(timeout=2)
+
+
+def run_observed_command(
+    command: list[str],
+    log_path: Path,
+    timeout_seconds: int,
+    append: bool = False,
+    pass_marker: str = "",
+    failure_pattern: str = DEFAULT_FAILURE_PATTERN,
+    idle_notice_seconds: int = 20,
+    marker_grace_seconds: int = 2,
+) -> dict[str, object]:
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    mode = "a" if append else "w"
+    output_queue: queue.Queue[str | None] = queue.Queue()
+    popen_kwargs: dict[str, object] = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.STDOUT,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+        "bufsize": 1,
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["preexec_fn"] = os.setsid
+    proc = subprocess.Popen(command, **popen_kwargs)
+    assert proc.stdout is not None
+
+    def read_output() -> None:
+        try:
+            for line in proc.stdout:
+                output_queue.put(line)
+        finally:
+            output_queue.put(None)
+
+    reader = threading.Thread(target=read_output, daemon=True)
+    reader.start()
+
+    start = time.monotonic()
+    last_output = start
+    last_notice = start
+    marker_seen_at = 0.0
+    marker_seen = False
+    failure_seen = False
+    timed_out = False
+    idle_notices = 0
+    last_lines: list[str] = []
+    failure_re = re.compile(failure_pattern) if failure_pattern else None
+
+    with log_path.open(mode, encoding="utf-8", errors="replace") as handle:
+        while True:
+            now = time.monotonic()
+            if now - start > timeout_seconds:
+                timed_out = True
+                handle.write(f"\n[runner] exceeded {timeout_seconds}s\n")
+                break
+            if now - last_output >= idle_notice_seconds and now - last_notice >= idle_notice_seconds:
+                idle_notices += 1
+                notice = f"[runner] no output for {int(now - last_output)}s\n"
+                handle.write(notice)
+                handle.flush()
+                print(notice.rstrip())
+                last_notice = now
+            if marker_seen and marker_seen_at > 0 and now - marker_seen_at >= marker_grace_seconds:
+                if proc.poll() is None:
+                    handle.write(f"[runner] pass marker observed; stopping process after {marker_grace_seconds}s grace\n")
+                    handle.flush()
+                    break
+            try:
+                item = output_queue.get(timeout=0.2)
+            except queue.Empty:
+                if proc.poll() is not None:
+                    break
+                continue
+            if item is None:
+                if proc.poll() is not None:
+                    break
+                continue
+            last_output = time.monotonic()
+            handle.write(item)
+            handle.flush()
+            line = item.rstrip("\n")
+            last_lines.append(line)
+            if len(last_lines) > 80:
+                last_lines = last_lines[-80:]
+            if failure_re and failure_re.search(item):
+                failure_seen = True
+                handle.write("[runner] failure text detected\n")
+                break
+            if pass_marker and pass_marker in item and not marker_seen:
+                marker_seen = True
+                marker_seen_at = time.monotonic()
+                handle.write("[runner] pass marker observed\n")
+                handle.flush()
+
+        if proc.poll() is None:
+            terminate_process(proc)
+        reader.join(timeout=1)
+        if timed_out or failure_seen or (pass_marker and not marker_seen):
+            handle.write("[runner] last log lines:\n")
+            for line in last_lines[-40:]:
+                handle.write(line + "\n")
+
+    elapsed = time.monotonic() - start
+    returncode = proc.returncode
+    ok = not timed_out and not failure_seen and (not pass_marker or marker_seen)
+    if ok and returncode not in (0, None):
+        returncode = 0
+    return {
+        "returncode": 0 if ok else (returncode if returncode is not None else 1),
+        "marker_seen": marker_seen,
+        "failure_seen": failure_seen,
+        "timed_out": timed_out,
+        "idle_notices": idle_notices,
+        "elapsed_seconds": round(elapsed, 3),
+    }
+
+
 def make_wsl_command(command_text: str, wsl_distro: str) -> list[str]:
     if os.name == "nt":
         return ["wsl.exe", "-d", wsl_distro, "--", "bash", "-lc", command_text]
@@ -489,6 +655,7 @@ def compact_seed_text(text: str) -> str:
     keep_by_kind = {
         "studio_launch": {"title", "goal", "workbench_id", "workbench"},
         "research_run": {"run_id", "title", "question", "provider", "dataset_rows", "reference_entries", "workspace_files", "csv_file", "reference_file"},
+        "research_rerun": {"run_id", "parent_run", "source_run", "provider", "question", "dataset_rows", "reference_entries", "workspace_files"},
         "dataset": {"title", "dataset_rows", "columns"},
         "dataset_preview": {"dataset_id", "rows", "quality"},
         "dataset_visualization": {"dataset_id", "chart", "x_field", "y_field", "group_field", "points"},
@@ -682,6 +849,9 @@ def write_run_result_state(next_state: Path, run_summary: dict[str, object], log
         f"embedded_action_records={run_summary.get('embedded_action_records', 0)}",
         f"extracted_state_files={run_summary.get('extracted_state_files', 0)}",
         f"log={line_value(run_summary.get('log', ''))}",
+        f"qemu_elapsed_seconds={run_summary.get('elapsed_seconds', 0)}",
+        f"qemu_idle_notices={run_summary.get('idle_notices', 0)}",
+        f"qemu_timed_out={1 if run_summary.get('timed_out') else 0}",
     ]
     host_reader_actions = find_log_value(log_text, "rp_web_export: host_reader_actions=")
     host_actions_verified = find_log_value(log_text, "rp_compare_plain: host_actions=")
@@ -702,7 +872,15 @@ def publish_next_state(next_state: Path, state_dir: Path) -> None:
             shutil.copy2(item, state_dir / item.name)
 
 
-def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_distro: str) -> dict[str, object]:
+def run_seeded_ucore(
+    repo_dir: Path,
+    run_dir: Path,
+    timeout_seconds: int,
+    wsl_distro: str,
+    chapter: str = "platform_seeded",
+    init_proc: str = "rp_seed_orch",
+    pass_marker: str = "rp_orch: passed",
+) -> dict[str, object]:
     repo_dir = repo_dir.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
     log_path = run_dir / "ucore-run.log"
@@ -729,20 +907,35 @@ def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_dis
     pad_state_files_for_ucore_fs(next_state)
     seed_file = next_state / "rp_host_action_seed"
     seed_file_bash = bash_path(seed_file)
+    toolprefix = toolprefix_arg()
     run_command_text = (
         f"cd {shell_quote(repo_bash)} && "
-        "make user TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded >/dev/null"
+        f"make user {toolprefix} CHAPTER={chapter} >/dev/null"
         " && "
         f"cp {shell_quote(seed_file_bash)} user/target/bin/rp_host_action_seed"
         " && "
         "rm -rf nfs/fs nfs/fs.img nfs/fs-copy.img && "
         "make nfs/fs.img >/dev/null && "
-        "make build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded LOG=warn INIT_PROC=rp_seed_orch >/dev/null && "
-        f"timeout {timeout_seconds}s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seeded LOG=warn INIT_PROC=rp_seed_orch"
+        f"make build {toolprefix} CHAPTER={chapter} LOG=warn INIT_PROC={init_proc} >/dev/null && "
+        f"make run {toolprefix} CHAPTER={chapter} LOG=warn INIT_PROC={init_proc}"
     )
-    code = run_command(make_wsl_command(run_command_text, wsl_distro), log_path, timeout_seconds + 30, append=True)
+    observed = run_observed_command(
+        make_wsl_command(run_command_text, wsl_distro),
+        log_path,
+        timeout_seconds + 30,
+        append=True,
+        pass_marker=pass_marker,
+        idle_notice_seconds=int(os.environ.get("SEEDED_ACTION_IDLE_NOTICE_SECONDS", "20")),
+    )
+    code = int(observed["returncode"])
     text = log_path.read_text(encoding="utf-8", errors="replace")
-    passed = "rp_orch: passed" in text and "child_failed" not in text and "ialloc" not in text
+    passed = (
+        bool(observed["marker_seen"])
+        and not bool(observed["failure_seen"])
+        and not bool(observed["timed_out"])
+        and "child_failed" not in text
+        and "ialloc" not in text
+    )
     extract_summary: dict[str, object] = {"status": "skipped", "extracted_state_files": 0}
     image_path = repo_dir / "nfs" / "fs-copy.img"
     if image_path.exists():
@@ -756,6 +949,11 @@ def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_dis
     summary = {
         "commands": [clean_command, f"embedded_action_records={embedded_records}", run_command_text],
         "returncode": code,
+        "marker_seen": bool(observed["marker_seen"]),
+        "failure_seen": bool(observed["failure_seen"]),
+        "timed_out": bool(observed["timed_out"]),
+        "idle_notices": int(observed["idle_notices"]),
+        "elapsed_seconds": observed["elapsed_seconds"],
         "embedded_action_records": embedded_records,
         "extracted_state_files": extract_summary.get("extracted_state_files", 0),
         "extract_status": extract_summary.get("status", "unknown"),
@@ -766,6 +964,10 @@ def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_dis
     write_run_result_state(next_state, summary, text)
     write_json(run_dir / "ucore-run-summary.json", summary)
     return summary
+
+
+def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_distro: str) -> dict[str, object]:
+    return run_seeded_ucore(repo_dir, run_dir, timeout_seconds, wsl_distro)
 
 
 def append_records(existing: Iterable[dict[str, object]], extra: Iterable[dict[str, object]]) -> list[dict[str, object]]:

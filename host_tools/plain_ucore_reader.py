@@ -26,7 +26,7 @@ PAGE_SPECS = [
     ("agents.html", "Agents", "rp_api_agents", ["rp_ui_agent", "rp_agents", "rp_decisions"]),
     ("evidence.html", "Evidence", "rp_api_evidence", ["rp_ui_evidence", "rp_evidence", "rp_package"]),
     ("review.html", "Review", "rp_review_dashboard", ["rp_review_pack", "rp_review2", "rp_revision", "rp_package", "rp_report_text"]),
-    ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency", "rp_backend", "rp_backend_exec", "rp_study", "rp_studyproto", "rp_opsboard", "rp_control", "rp_integrity", "rp_coherence"]),
+    ("compare.html", "Compare", "rp_api_compare", ["rp_ui_compare", "rp_agentcmp", "rp_consistency", "rp_backend", "rp_backend_exec", "rp_study", "rp_studyproto", "rp_opsboard", "rp_control", "rp_integrity", "rp_coherence", "host_seeded_action", "rp_agentos_kernel", "rp_agentos_mainflow", "rp_agentos_query", "rp_agentos_recovery", "rp_agentos_timeline", "rp_agentos_collab_ack", "rp_agentos_audit", "rp_agentos_workbench", "rp_agentos_package", "rp_agentos_real_task", "rp_agentos_conflict"]),
     ("artifacts.html", "Artifacts", "rp_api_artifacts", ["rp_artifact", "rp_artifact_manifest", "rp_package"]),
     ("delivery.html", "Delivery", "rp_package", ["rp_nbexec", "rp_uresrun", "rp_artifact_manifest", "rp_review_pack"]),
     ("data.html", "Data", "rp_api_data", ["rp_input", "rp_ingest_files", "rp_dataset_snapshot", "rp_data_preview", "rp_data_quality", "rp_data_transform", "rp_dataset_collection"]),
@@ -53,7 +53,7 @@ PAGE_SPECS = [
     ("mature.html", "Mature Platforms", "rp_mature", ["rp_mature_refs", "rp_mature_map", "rp_mature_checks", "rp_agentcmp", "rp_review_dashboard"]),
     ("provenance.html", "Provenance", "rp_prov_view", ["rp_prov_edges", "rp_evidence_packet", "rp_timeline_view", "rp_agentcmp", "rp_review_dashboard"]),
     ("provenance-queries.html", "Provenance Queries", "rp_prov_query", ["rp_prov_specs", "rp_prov_exec", "rp_prov_query_pkg", "rp_agentcmp", "rp_review_dashboard"]),
-    ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets"]),
+    ("llm.html", "LLM Relay", "rp_llm_resp", ["rp_llm_req", "rp_llmeval", "rp_llm_guard", "rp_relay", "rp_prompt", "rp_llm_packets", "rp_llm_conclusions"]),
     ("actions.html", "Actions", "rp_api_action", ["rp_actionio", "rp_host_run_result", "rp_web_routes", "rp_web_bundle"]),
 ]
 
@@ -155,6 +155,185 @@ def read_json_file(path: Path) -> dict[str, object]:
     except json.JSONDecodeError:
         return {}
     return {}
+
+
+def load_optional_json(path: Path | None) -> dict[str, object]:
+    if path is None:
+        return {}
+    return read_json_file(path)
+
+
+def write_optional_api(api_dir: Path, name: str, data: dict[str, object]) -> int:
+    if not data:
+        return 0
+    write_json(api_dir / f"{name}.json", {"name": name, "values": data, "lines": []})
+    return 1
+
+
+def safe_field(value: object) -> str:
+    return str(value).replace(";", ",").replace("\n", " ")
+
+
+def alignment_state_item(kind: str, data: dict[str, object]) -> dict[str, object]:
+    lines: list[str] = []
+    if kind == "platform":
+        fields = [
+            ("host_platform_alignment", "summary"),
+            ("status", data.get("status", "")),
+            ("host_modules", data.get("host_modules", "")),
+            ("tracked_host_modules", data.get("tracked_host_modules", "")),
+            ("plain_sources", data.get("plain_sources", "")),
+            ("agentos_sources", data.get("agentos_sources", "")),
+            ("runtime_state_checked", int(bool(data.get("runtime_state_checked", False)))),
+            ("groups_ok", data.get("groups_ok", "")),
+            ("groups_total", data.get("groups_total", "")),
+            ("untracked_host_modules", data.get("untracked_host_modules", "")),
+        ]
+        lines.append(";".join(f"{key}={safe_field(value)}" for key, value in fields))
+        groups = data.get("groups", [])
+        if isinstance(groups, list):
+            for item in groups:
+                if not isinstance(item, dict):
+                    continue
+                group_fields = [
+                    ("capability_group", item.get("name", "")),
+                    ("status", item.get("status", "")),
+                    ("host_modules", item.get("host_modules", "")),
+                    ("plain_sources", item.get("plain_sources", "")),
+                    ("agentos_sources", item.get("agentos_sources", "")),
+                    ("reader_keywords", item.get("reader_keywords", "")),
+                    ("plain_runtime_hits", ",".join(str(v) for v in item.get("plain_runtime_hits", []) if v)),
+                    ("agentos_runtime_hits", ",".join(str(v) for v in item.get("agentos_runtime_hits", []) if v)),
+                ]
+                lines.append(";".join(f"{key}={safe_field(value)}" for key, value in group_fields))
+    elif kind == "tests":
+        fields = [
+            ("host_test_alignment", "summary"),
+            ("status", data.get("status", "")),
+            ("host_tests", data.get("host_tests", "")),
+            ("themes_ok", data.get("themes_ok", "")),
+            ("themes_total", data.get("themes_total", "")),
+            ("unclassified_tests", data.get("unclassified_tests", "")),
+        ]
+        lines.append(";".join(f"{key}={safe_field(value)}" for key, value in fields))
+        themes = data.get("theme_results", [])
+        if isinstance(themes, list):
+            for item in themes:
+                if not isinstance(item, dict):
+                    continue
+                theme_fields = [
+                    ("test_theme", item.get("name", "")),
+                    ("status", item.get("status", "")),
+                    ("host_tests", item.get("host_tests", "")),
+                    ("evidence_tokens", item.get("evidence_tokens", "")),
+                    ("missing_plain", ",".join(str(v) for v in item.get("missing_plain", []) if v)),
+                    ("missing_agentos", ",".join(str(v) for v in item.get("missing_agentos", []) if v)),
+                ]
+                lines.append(";".join(f"{key}={safe_field(value)}" for key, value in theme_fields))
+    elif kind == "surface":
+        fields = [
+            ("host_surface_alignment", "summary"),
+            ("status", data.get("status", "")),
+            ("host_api_routes", data.get("host_api_routes", "")),
+            ("host_action_routes", data.get("host_action_routes", "")),
+            ("host_download_refs", data.get("host_download_refs", "")),
+            ("runtime_state_checked", int(bool(data.get("runtime_state_checked", False)))),
+        ]
+        for label, key in (("plain_source", "plain_source"), ("agentos_source", "agentos_source"), ("plain_runtime", "plain_runtime"), ("agentos_runtime", "agentos_runtime")):
+            item = data.get(key, {})
+            if not isinstance(item, dict):
+                continue
+            fields.extend(
+                [
+                    (f"{label}_api_routes", item.get("host_api_routes", "")),
+                    (f"{label}_action_routes", item.get("host_action_routes", "")),
+                    (f"{label}_reader_actions", item.get("reader_actions", "")),
+                ]
+            )
+        lines.append(";".join(f"{key}={safe_field(value)}" for key, value in fields))
+        for route_key, line_key in (("api_prefixes", "api_prefix"), ("action_prefixes", "action_prefix")):
+            values = data.get(route_key, [])
+            if isinstance(values, list):
+                for value in values:
+                    lines.append(f"{line_key}={safe_field(value)};status=tracked")
+    text = "\n".join(lines) + ("\n" if lines else "")
+    return {
+        "text": text,
+        "values": parse_state_text(text),
+        "lines": [line for line in text.splitlines() if line.strip()],
+    }
+
+
+def seeded_action_state_item(data: dict[str, object]) -> dict[str, object]:
+    def target_fields(name: str) -> list[tuple[str, object]]:
+        target = data.get(name, {})
+        if not isinstance(target, dict):
+            target = {}
+        prepare = target.get("prepare", {})
+        if not isinstance(prepare, dict):
+            prepare = {}
+        run = target.get("run", {})
+        if not isinstance(run, dict):
+            run = {}
+        failures = target.get("failures", [])
+        failure_count = len(failures) if isinstance(failures, list) else 0
+        return [
+            ("seeded_action_target", name),
+            ("status", target.get("status", "")),
+            ("prepare_actions", prepare.get("actions", "")),
+            ("prepare_accepted", prepare.get("accepted", "")),
+            ("run_status", run.get("status", "")),
+            ("run_passed", int(bool(run.get("passed", False)))),
+            ("embedded_action_records", run.get("embedded_action_records", "")),
+            ("extracted_state_files", run.get("extracted_state_files", "")),
+            ("failures", failure_count),
+        ]
+
+    plain = data.get("plain", {})
+    agentos = data.get("agentos", {})
+    plain_status = plain.get("status", "") if isinstance(plain, dict) else ""
+    agentos_status = agentos.get("status", "") if isinstance(agentos, dict) else ""
+    coverage = data.get("coverage", {})
+    if not isinstance(coverage, dict):
+        coverage = {}
+    action_kinds = data.get("action_kinds", "")
+    if isinstance(action_kinds, list):
+        action_kinds = ",".join(str(item) for item in action_kinds)
+    lines = [
+        ";".join(
+            f"{key}={safe_field(value)}"
+            for key, value in [
+                ("host_seeded_action", "summary"),
+                ("status", data.get("status", "")),
+                ("action", data.get("action", "")),
+                ("action_count", data.get("action_count", "")),
+                ("action_kinds", action_kinds),
+                ("plain_status", plain_status),
+                ("agentos_status", agentos_status),
+            ]
+        ),
+        ";".join(
+            f"{key}={safe_field(value)}"
+            for key, value in [
+                ("seeded_action_coverage", "host_routes"),
+                ("status", coverage.get("status", "")),
+                ("host_action_routes", coverage.get("host_action_routes", "")),
+                ("host_action_kinds", coverage.get("host_action_kinds", "")),
+                ("seeded_known_routes", coverage.get("seeded_known_routes", "")),
+                ("seeded_host_kinds", coverage.get("seeded_host_kinds", "")),
+                ("seeded_extra_routes", len(coverage.get("seeded_extra_routes", [])) if isinstance(coverage.get("seeded_extra_routes", []), list) else ""),
+                ("uncovered_host_kinds", len(coverage.get("uncovered_host_kinds", [])) if isinstance(coverage.get("uncovered_host_kinds", []), list) else ""),
+            ]
+        ),
+        ";".join(f"{key}={safe_field(value)}" for key, value in target_fields("plain")),
+        ";".join(f"{key}={safe_field(value)}" for key, value in target_fields("agentos")),
+    ]
+    text = "\n".join(lines) + "\n"
+    return {
+        "text": text,
+        "values": parse_state_text(text),
+        "lines": [line for line in text.splitlines() if line.strip()],
+    }
 
 
 def read_jsonl_file(path: Path) -> list[dict[str, object]]:
@@ -283,6 +462,88 @@ def backend_case_narratives(state: dict[str, dict[str, object]]) -> list[dict[st
                 "plain_cost": report.get("plain_cost", ""),
                 "agentos_replace": report.get("agentos_replace", ""),
                 "next": report.get("status", ""),
+            }
+        )
+    return rows
+
+
+def agentos_kernel_outputs(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
+    specs = [
+        (
+            "entry",
+            "rp_agentos_kernel",
+            ("context_snapshot", "agent_timeline", "agent_provenance", "agent_ledger", "file_meta_service"),
+            ("kernel_agent", "research_platform"),
+        ),
+        (
+            "query",
+            "rp_agentos_query",
+            ("metadata_source", "align_query", "report_query", "tool"),
+            ("capability", "query"),
+        ),
+        (
+            "recovery",
+            "rp_agentos_recovery",
+            ("kernel_tool", "context_snapshot"),
+            ("stage", "run_id"),
+        ),
+        (
+            "timeline",
+            "rp_agentos_timeline",
+            ("event_delivery", "wait", "heartbeat", "timeline_snapshot"),
+            ("run_id",),
+        ),
+        (
+            "collaboration",
+            "rp_agentos_collab_ack",
+            ("delivery", "permission_control"),
+            ("agent", "event"),
+        ),
+        (
+            "audit",
+            "rp_agentos_audit",
+            ("audit_source", "context_source", "provenance_source", "record_hash"),
+            (),
+        ),
+        (
+            "workbench",
+            "rp_agentos_workbench",
+            ("file_verify", "context_snapshot", "candidate_source"),
+            ("workbench", "report_file"),
+        ),
+        (
+            "package",
+            "rp_agentos_package",
+            ("package_trace", "ledger", "context_snapshot", "report_metadata"),
+            ("package",),
+        ),
+        (
+            "real_task",
+            "rp_agentos_real_task",
+            ("report_answer", "answer_audit", "report_metadata", "context_snapshot"),
+            ("task",),
+        ),
+        (
+            "edit_conflict",
+            "rp_agentos_conflict",
+            ("edit_lease", "holder_write", "version_commit", "stale_write_policy"),
+            ("edit_target", "resource_identity"),
+        ),
+    ]
+    rows: list[dict[str, str]] = []
+    for stage, name, service_keys, detail_keys in specs:
+        values = state_values(state, name)
+        if not values:
+            continue
+        services = [values.get(key, "") for key in service_keys if values.get(key, "")]
+        details = [f"{key}={values[key]}" for key in detail_keys if values.get(key, "")]
+        rows.append(
+            {
+                "kernel_stage": stage,
+                "state_file": name,
+                "kernel_services": ",".join(services),
+                "details": ";".join(details),
+                "status": values.get("status", ""),
             }
         )
     return rows
@@ -1045,6 +1306,14 @@ def render_line_panel(title: str, rows: list[tuple[str, str]], empty_text: str =
 
 
 def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> str:
+    home_items = [
+        ("Plain Target", "root unchanged uCore", "rp_api_home"),
+        ("Plain Workflow", metric_value(state, [("rp_backend", "plain_cases"), ("rp_agentcmp", "backend_runner_checks")]), "rp_backend"),
+        ("AgentOS Target", metric_value(state, [("rp_agentos_kernel", "mode"), ("rp_backend", "agentos")]), "rp_agentos_kernel"),
+        ("AgentOS Flow", "{} stages".format(len(state_records(state, "rp_agentos_mainflow", "stage"))), "rp_agentos_mainflow"),
+        ("Shared Run", metric_value(state, [("rp_agentos_timeline", "run_id"), ("rp_report_text", "host_report_run_id"), ("rp_input", "host_action_run_id")]), "rp_report_text"),
+        ("Visible Comparison", "compare.html", "rp_api_compare"),
+    ]
     report_items = [
         ("Run", metric_value(state, [("rp_report_text", "host_report_run_id"), ("rp_input", "host_action_run_id")]), "rp_report_text"),
         ("Reviewer", metric_value(state, [("rp_report_text", "host_report_reviewer"), ("rp_review2", "host_action_reviewer")]), "rp_review2"),
@@ -1165,6 +1434,13 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Decision Support Checks", metric_value(state, [("rp_agentcmp", "decision_support_checks"), ("rp_decsupport", "decision_support_checks")]), "rp_decsupport"),
         ("Usable Research Checks", metric_value(state, [("rp_agentcmp", "usable_research_checks"), ("rp_usable", "usable_research_checks")]), "rp_usable"),
         ("Mature Capability", metric_value(state, [("rp_agentcmp", "mature_capability_checks"), ("rp_mature", "capability_checks")]), "rp_mature"),
+        ("AgentOS Flow Stages", len(state_records(state, "rp_agentos_mainflow", "stage")), "rp_agentos_mainflow"),
+        ("AgentOS Metadata", metric_value(state, [("rp_agentos_query", "metadata_source"), ("rp_agentos_mainflow", "metadata_query")]), "rp_agentos_query"),
+        ("AgentOS Recovery", metric_value(state, [("rp_agentos_recovery", "kernel_tool"), ("rp_agentos_mainflow", "failure_recovery")]), "rp_agentos_recovery"),
+        ("AgentOS Events", metric_value(state, [("rp_agentos_timeline", "event_delivery"), ("rp_agentos_collab_ack", "delivery")]), "rp_agentos_timeline"),
+        ("AgentOS Audit", metric_value(state, [("rp_agentos_audit", "audit_source"), ("rp_agentos_package", "ledger")]), "rp_agentos_audit"),
+        ("AgentOS Real Task", metric_value(state, [("rp_agentos_real_task", "report_answer"), ("rp_agentos_mainflow", "real_task_context")]), "rp_agentos_real_task"),
+        ("AgentOS Edit Lease", metric_value(state, [("rp_agentos_conflict", "edit_lease"), ("rp_agentos_mainflow", "edit_lease")]), "rp_agentos_conflict"),
     ]
     llm_items = [
         ("Relay", metric_value(state, [("rp_llm_resp", "host_relay_process"), ("rp_relay", "mode")]), "rp_llm_resp"),
@@ -1192,13 +1468,13 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Host Pages", metric_value(state, [("rp_api_catalog", "host_page_routes"), ("rp_web_routes", "host_page_routes")]), "rp_api_catalog"),
         ("Host Dynamic Pages", metric_value(state, [("rp_api_catalog", "host_dynamic_page_prefixes"), ("rp_web_routes", "host_dynamic_page_prefixes")]), "rp_api_catalog"),
         ("Host Downloads", metric_value(state, [("rp_api_catalog", "host_download_routes"), ("rp_web_routes", "host_download_routes")]), "rp_api_catalog"),
-        ("Reader GET Routes", metric_value(state, [("rp_api_catalog", "ucore_get_routes"), ("rp_web_routes", "get_routes")]), "rp_api_catalog"),
-        ("Reader Dynamic Prefixes", metric_value(state, [("rp_api_catalog", "ucore_dynamic_page_prefixes"), ("rp_web_routes", "ucore_dynamic_page_prefixes")]), "rp_api_catalog"),
-        ("Reader Downloads", metric_value(state, [("rp_api_catalog", "ucore_download_routes"), ("rp_web_routes", "ucore_download_routes")]), "rp_api_catalog"),
+        ("阅读器 GET 路由", metric_value(state, [("rp_api_catalog", "ucore_get_routes"), ("rp_web_routes", "get_routes")]), "rp_api_catalog"),
+        ("阅读器动态前缀", metric_value(state, [("rp_api_catalog", "ucore_dynamic_page_prefixes"), ("rp_web_routes", "ucore_dynamic_page_prefixes")]), "rp_api_catalog"),
+        ("阅读器下载入口", metric_value(state, [("rp_api_catalog", "ucore_download_routes"), ("rp_web_routes", "ucore_download_routes")]), "rp_api_catalog"),
         ("Grouped Routes", metric_value(state, [("rp_api_catalog", "api_grouped_routes")]), "rp_api_catalog"),
         ("API Groups", metric_value(state, [("rp_api_catalog", "api_group_count")]), "rp_api_catalog"),
-        ("Reader Payloads", metric_value(state, [("rp_api_catalog", "reader_api_payloads"), ("rp_web_bundle", "api_payloads")]), "rp_api_catalog"),
-        ("Reader Views", metric_value(state, [("rp_api_catalog", "reader_views"), ("rp_web_bundle", "reader_views")]), "rp_api_catalog"),
+        ("阅读器数据载荷", metric_value(state, [("rp_api_catalog", "reader_api_payloads"), ("rp_web_bundle", "api_payloads")]), "rp_api_catalog"),
+        ("阅读器页面", metric_value(state, [("rp_api_catalog", "reader_views"), ("rp_web_bundle", "reader_views")]), "rp_api_catalog"),
         ("Usable Research APIs", metric_value(state, [("rp_api_catalog", "usable_research_api_routes")]), "rp_api_catalog"),
         ("Domain APIs", metric_value(state, [("rp_api_catalog", "domain_api_routes")]), "rp_api_catalog"),
         ("Lab Research APIs", metric_value(state, [("rp_api_catalog", "lab_research_api_routes")]), "rp_api_catalog"),
@@ -1370,6 +1646,8 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("AgentOS Mapping", metric_value(state, [("rp_prov_view", "agentos_mapping")]), "rp_prov_view"),
         ("Status", metric_value(state, [("rp_prov_view", "status")]), "rp_prov_view"),
     ]
+    if file_name == "index.html":
+        return render_summary_panel("Dual Target Overview", home_items)
     if file_name == "run.html":
         return render_summary_panel("Research Output", report_items)
     if file_name in ("evidence.html", "artifacts.html"):
@@ -1477,6 +1755,35 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Provenance View", metric_value(state, [("rp_agentcmp", "provenance_view_checks"), ("rp_prov_view", "provenance_view_checks")]), "rp_prov_view"),
         ("Provenance Queries", metric_value(state, [("rp_agentcmp", "provenance_query_checks"), ("rp_prov_query", "provenance_query_checks")]), "rp_prov_query"),
     ]
+    if "host_platform_alignment" in state:
+        compare_items.extend(
+            [
+                ("Host Modules", metric_value(state, [("host_platform_alignment", "host_modules")]), "host_platform_alignment"),
+                ("Capability Groups", "{}/{}".format(metric_value(state, [("host_platform_alignment", "groups_ok")]), metric_value(state, [("host_platform_alignment", "groups_total")])), "host_platform_alignment"),
+            ]
+        )
+    if "host_test_alignment" in state:
+        compare_items.extend(
+            [
+                ("Host Test Methods", metric_value(state, [("host_test_alignment", "host_tests")]), "host_test_alignment"),
+                ("Test Themes", "{}/{}".format(metric_value(state, [("host_test_alignment", "themes_ok")]), metric_value(state, [("host_test_alignment", "themes_total")])), "host_test_alignment"),
+            ]
+        )
+    if "host_surface_alignment" in state:
+        compare_items.extend(
+            [
+                ("宿主机 API 路由数", metric_value(state, [("host_surface_alignment", "host_api_routes")]), "host_surface_alignment"),
+                ("宿主机 action 路由数", metric_value(state, [("host_surface_alignment", "host_action_routes")]), "host_surface_alignment"),
+            ]
+        )
+    if "host_seeded_action" in state:
+        compare_items.extend(
+            [
+                ("宿主机 action 实测", metric_value(state, [("host_seeded_action", "action")]), "host_seeded_action"),
+                ("预置 action 数量", metric_value(state, [("host_seeded_action", "action_count")]), "host_seeded_action"),
+                ("预置 action 状态", metric_value(state, [("host_seeded_action", "status")]), "host_seeded_action"),
+            ]
+        )
     integrity_detail_items = [
         ("Evidence Contracts", metric_value(state, [("rp_integrity", "evidence_contracts")]), "rp_integrity"),
         ("Reference Contracts", metric_value(state, [("rp_integrity", "reference_contracts")]), "rp_integrity"),
@@ -1527,7 +1834,7 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Selected Template", metric_value(state, [("rp_usabletpl", "selected_template")]), "rp_usabletpl"),
         ("Next Action", metric_value(state, [("rp_usable", "next_action")]), "rp_usable"),
         ("Package", metric_value(state, [("rp_package", "usable_research")]), "rp_package"),
-        ("Reader Page", metric_value(state, [("rp_web_bundle", "usable_research_page")]), "rp_web_bundle"),
+        ("阅读器页面", metric_value(state, [("rp_web_bundle", "usable_research_page")]), "rp_web_bundle"),
         ("Review Dashboard", metric_value(state, [("rp_review_dashboard", "subsection")]), "rp_review_dashboard"),
     ]
     usable_project_detail_items = [
@@ -1539,7 +1846,7 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Launch", metric_value(state, [("rp_usablelaunch", "launch")]), "rp_usablelaunch"),
         ("Project Bundle", metric_value(state, [("rp_usablepack", "bundle")]), "rp_usablepack"),
         ("Package Intake", metric_value(state, [("rp_usablepack", "intake")]), "rp_usablepack"),
-        ("Reader Page", metric_value(state, [("rp_web_bundle", "usable_project_page")]), "rp_web_bundle"),
+        ("阅读器页面", metric_value(state, [("rp_web_bundle", "usable_project_page")]), "rp_web_bundle"),
     ]
     mature_detail_items = [
         ("Profile Checks", metric_value(state, [("rp_mature", "profile_checks")]), "rp_mature"),
@@ -1553,7 +1860,7 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Timeline Events", metric_value(state, [("rp_prov_view", "timeline_events"), ("rp_timeline", "events")]), "rp_timeline"),
         ("Subgraph Edges", metric_value(state, [("rp_prov_view", "subgraph_edges"), ("rp_prov_edges", "edges")]), "rp_prov_edges"),
         ("Evidence Packets", metric_value(state, [("rp_evidence_packet", "packets")]), "rp_evidence_packet"),
-        ("Reader Page", metric_value(state, [("rp_prov_view", "reader_page")]), "rp_prov_view"),
+        ("阅读器页面", metric_value(state, [("rp_prov_view", "reader_page")]), "rp_prov_view"),
         ("Kernel Timeline", metric_value(state, [("rp_prov_view", "agentos_kernel_timeline")]), "rp_prov_view"),
         ("Kernel Provenance", metric_value(state, [("rp_prov_view", "agentos_kernel_provenance")]), "rp_prov_view"),
     ]
@@ -2782,7 +3089,7 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
             ("Publication Workflow", metric_value(state, [("rp_agentcmp", "publication_checks"), ("rp_publication", "publication_checks")])),
             ("Experiment Schedule", metric_value(state, [("rp_agentcmp", "experiment_scheduling_checks"), ("rp_expsched", "experiment_scheduling_checks")])),
             ("Training Compliance", metric_value(state, [("rp_agentcmp", "training_compliance_checks"), ("rp_traincomp", "training_compliance_checks")])),
-            ("Reader Contract", metric_value(state, [("rp_agentcmp", "reader_contract")])),
+            ("阅读器契约", metric_value(state, [("rp_agentcmp", "reader_contract")])),
         ]
         check_rows = [
             ("Coherence Checks", metric_value(state, [("rp_api_compare", "coherence_checks"), ("rp_ui_compare", "coherence_checks")])),
@@ -2797,9 +3104,151 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
             ("Coherence Run State", metric_value(state, [("rp_coherence", "run_state_checks")])),
             ("Coherence Lifecycle", metric_value(state, [("rp_coherence", "lifecycle_checks")])),
         ]
-        return [
+        host_alignment_rows = [
+            ("Host Modules", metric_value(state, [("host_platform_alignment", "host_modules")])),
+            ("Tracked Modules", metric_value(state, [("host_platform_alignment", "tracked_host_modules")])),
+            ("Plain Sources", metric_value(state, [("host_platform_alignment", "plain_sources")])),
+            ("AgentOS Sources", metric_value(state, [("host_platform_alignment", "agentos_sources")])),
+            ("Runtime State Checked", metric_value(state, [("host_platform_alignment", "runtime_state_checked")])),
+            ("Capability Groups", "{}/{}".format(metric_value(state, [("host_platform_alignment", "groups_ok")]), metric_value(state, [("host_platform_alignment", "groups_total")]))),
+            ("Untracked Host Modules", metric_value(state, [("host_platform_alignment", "untracked_host_modules")])),
+            ("Status", metric_value(state, [("host_platform_alignment", "status")])),
+        ]
+        host_test_rows = [
+            ("Host Test Methods", metric_value(state, [("host_test_alignment", "host_tests")])),
+            ("Test Themes", "{}/{}".format(metric_value(state, [("host_test_alignment", "themes_ok")]), metric_value(state, [("host_test_alignment", "themes_total")]))),
+            ("Unclassified Tests", metric_value(state, [("host_test_alignment", "unclassified_tests")])),
+            ("Status", metric_value(state, [("host_test_alignment", "status")])),
+        ]
+        host_surface_rows = [
+            ("宿主机 API 路由数", metric_value(state, [("host_surface_alignment", "host_api_routes")])),
+            ("宿主机 action 路由数", metric_value(state, [("host_surface_alignment", "host_action_routes")])),
+            ("宿主机下载引用数", metric_value(state, [("host_surface_alignment", "host_download_refs")])),
+            ("运行状态检查", metric_value(state, [("host_surface_alignment", "runtime_state_checked")])),
+            ("plain 源码 API 路由数", metric_value(state, [("host_surface_alignment", "plain_source_api_routes")])),
+            ("AgentOS 源码 API 路由数", metric_value(state, [("host_surface_alignment", "agentos_source_api_routes")])),
+            ("plain 运行 API 路由数", metric_value(state, [("host_surface_alignment", "plain_runtime_api_routes")])),
+            ("AgentOS 运行 API 路由数", metric_value(state, [("host_surface_alignment", "agentos_runtime_api_routes")])),
+            ("plain 源码 action 路由数", metric_value(state, [("host_surface_alignment", "plain_source_action_routes")])),
+            ("AgentOS 源码 action 路由数", metric_value(state, [("host_surface_alignment", "agentos_source_action_routes")])),
+            ("plain 运行 action 路由数", metric_value(state, [("host_surface_alignment", "plain_runtime_action_routes")])),
+            ("AgentOS 运行 action 路由数", metric_value(state, [("host_surface_alignment", "agentos_runtime_action_routes")])),
+            ("状态", metric_value(state, [("host_surface_alignment", "status")])),
+        ]
+        host_seeded_rows = [
+            ("action", metric_value(state, [("host_seeded_action", "action")])),
+            ("action 数量", metric_value(state, [("host_seeded_action", "action_count")])),
+            ("action 类型", metric_value(state, [("host_seeded_action", "action_kinds")])),
+            ("plain 状态", metric_value(state, [("host_seeded_action", "plain_status")])),
+            ("AgentOS 状态", metric_value(state, [("host_seeded_action", "agentos_status")])),
+            ("整体状态", metric_value(state, [("host_seeded_action", "status")])),
+        ]
+        sections = [
             render_line_panel("Plain Kernel Signals", compare_rows),
             render_line_panel("Consistency Signals", check_rows),
+        ]
+        if "host_platform_alignment" in state:
+            sections.extend(
+                [
+                    render_line_panel("Host Platform Alignment Summary", host_alignment_rows),
+                    render_record_panel(
+                        "Host Platform Capability Groups",
+                        [
+                            ("Group", "capability_group"),
+                            ("Status", "status"),
+                            ("Host Modules", "host_modules"),
+                            ("Plain Sources", "plain_sources"),
+                            ("AgentOS Sources", "agentos_sources"),
+                            ("阅读器关键词", "reader_keywords"),
+                            ("Plain Runtime", "plain_runtime_hits"),
+                            ("AgentOS Runtime", "agentos_runtime_hits"),
+                        ],
+                        state_records(state, "host_platform_alignment", "capability_group"),
+                    ),
+                ]
+            )
+        if "host_test_alignment" in state:
+            sections.extend(
+                [
+                    render_line_panel("Host Platform Test Summary", host_test_rows),
+                    render_record_panel(
+                        "Host Platform Test Themes",
+                        [
+                            ("Theme", "test_theme"),
+                            ("Status", "status"),
+                            ("Host Tests", "host_tests"),
+                            ("Evidence Tokens", "evidence_tokens"),
+                            ("Missing Plain", "missing_plain"),
+                            ("Missing AgentOS", "missing_agentos"),
+                        ],
+                        state_records(state, "host_test_alignment", "test_theme"),
+                    ),
+                ]
+            )
+        if "host_surface_alignment" in state:
+            sections.extend(
+                [
+                    render_line_panel("宿主机 Web/API/action 概览", host_surface_rows),
+                    render_record_panel(
+                        "宿主机路由前缀",
+                        [("API 前缀", "api_prefix"), ("action 前缀", "action_prefix"), ("状态", "status")],
+                        state_records(state, "host_surface_alignment", "api_prefix")
+                        + state_records(state, "host_surface_alignment", "action_prefix"),
+                    ),
+                ]
+            )
+        if "host_seeded_action" in state:
+            sections.extend(
+                [
+                    render_line_panel("宿主机 action 运行实测", host_seeded_rows),
+                    render_record_panel(
+                        "预置 action 双目标结果",
+                        [
+                            ("目标", "seeded_action_target"),
+                            ("状态", "status"),
+                            ("准备动作数", "prepare_actions"),
+                            ("接收动作数", "prepare_accepted"),
+                            ("运行状态", "run_status"),
+                            ("运行通过", "run_passed"),
+                            ("嵌入记录数", "embedded_action_records"),
+                            ("抽取状态文件数", "extracted_state_files"),
+                            ("失败项", "failures"),
+                        ],
+                        state_records(state, "host_seeded_action", "seeded_action_target"),
+                    ),
+                ]
+            )
+        sections.extend(
+            [
+            render_record_panel(
+                "AgentOS Main Flow Kernel Stages",
+                [
+                    ("Stage", "stage"),
+                    ("Context", "context_trusted"),
+                    ("Metadata Query", "metadata_query"),
+                    ("Event Notify", "agent_event_notify"),
+                    ("Recovery", "failure_recovery"),
+                    ("Audit", "provenance_audit"),
+                    ("Permission", "permission_control"),
+                    ("Timeline", "timeline_observe"),
+                    ("Workbench Verify", "workbench_file_verify"),
+                    ("Package Provenance", "package_provenance"),
+                    ("Real Task Context", "real_task_context"),
+                    ("Status", "status"),
+                ],
+                state_records(state, "rp_agentos_mainflow", "stage"),
+            ),
+            render_record_panel(
+                "AgentOS Kernel Output Files",
+                [
+                    ("Kernel Stage", "kernel_stage"),
+                    ("State File", "state_file"),
+                    ("Kernel Services", "kernel_services"),
+                    ("Details", "details"),
+                    ("Status", "status"),
+                ],
+                agentos_kernel_outputs(state),
+            ),
             render_record_panel(
                 "Backend Runner Cases",
                 [
@@ -2858,7 +3307,9 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 [("Handoff", "study_handoff"), ("Status", "status")],
                 state_records(state, "rp_study", "study_handoff"),
             ),
-        ]
+            ]
+        )
+        return sections
     if file_name == "artifacts.html":
         host_action_rows = []
         for name, prefixes in (
@@ -3875,7 +4326,7 @@ def default_batch_payload() -> str:
             {"path": "/actions/research/workbench-handoff-package", "payload": {"workbench": "usable-workbench:RUN-WEB", "handoff_scope": "full"}},
             {"path": "/actions/research/workbench-complete", "payload": {"workbench": "usable-workbench:RUN-WEB", "review_decision": "approved"}},
             {"path": "/actions/research/export-workbench", "payload": {"workbench": "usable-workbench:RUN-WEB", "bundle": "workbench-bundle.zip"}},
-            {"path": "/actions/research/project-scaffold", "payload": {"template_id": "scaffold-template:dataset-review", "project_id": "reader-project", "title": "Reader project", "dataset_id": "dataset-reader", "library_source_id": "library-reader", "files": "9", "workspace": "workspace/reader-project"}},
+            {"path": "/actions/research/project-scaffold", "payload": {"template_id": "scaffold-template:dataset-review", "project_id": "reader-project", "title": "阅读器项目", "dataset_id": "dataset-reader", "library_source_id": "library-reader", "files": "9", "workspace": "workspace/reader-project"}},
             {"path": "/actions/research/project-launch", "payload": {"project_id": "reader-project", "scaffold_id": "scaffold:reader-project:dataset-review", "workbench_id": "usable-workbench:reader-project", "run_id": "usable-run:reader-project", "provider_id": "template", "question": "Is the reader project ready?"}},
             {"path": "/actions/research/project-action-execute", "payload": {"project_id": "reader-project", "action_id": "usable-project-action:reader-project:1", "action_key": "build_reproduction_package", "provider_id": "template", "max_steps": "5", "result": "completed"}},
             {"path": "/actions/research/project-handoff-audit", "payload": {"project_id": "lab-gene-x", "scope": "full", "decision": "ready"}},
@@ -4202,18 +4653,45 @@ def page_html(title: str, nav: str, sections: list[str]) -> str:
 """.format(title=html.escape(title), nav=nav, sections="\n".join(sections))
 
 
-def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
+def render_site(
+    state_dir: Path,
+    out_dir: Path,
+    host_platform_alignment_path: Path | None = None,
+    host_test_alignment_path: Path | None = None,
+    host_surface_alignment_path: Path | None = None,
+    seeded_action_state_path: Path | None = None,
+) -> dict[str, object]:
     state = load_state(state_dir)
+    host_platform_alignment = load_optional_json(host_platform_alignment_path)
+    host_test_alignment = load_optional_json(host_test_alignment_path)
+    host_surface_alignment = load_optional_json(host_surface_alignment_path)
+    seeded_action_state = load_optional_json(seeded_action_state_path)
+    render_state = dict(state)
+    if host_platform_alignment:
+        render_state["host_platform_alignment"] = alignment_state_item("platform", host_platform_alignment)
+    if host_test_alignment:
+        render_state["host_test_alignment"] = alignment_state_item("tests", host_test_alignment)
+    if host_surface_alignment:
+        render_state["host_surface_alignment"] = alignment_state_item("surface", host_surface_alignment)
+    if seeded_action_state:
+        render_state["host_seeded_action"] = seeded_action_state_item(seeded_action_state)
     contract = reader_contract(state)
     problems = validate_contract(contract)
     out_dir.mkdir(parents=True, exist_ok=True)
     api_dir = out_dir / "api"
+    api_dir.mkdir(parents=True, exist_ok=True)
+    for old_api in api_dir.glob("*.json"):
+        old_api.unlink()
     action_log = out_dir / "host-actions.jsonl"
     actions = read_jsonl_file(action_log)
     last_run = read_json_file(out_dir / "last-run.json")
 
-    for name, item in state.items():
+    for name, item in render_state.items():
         write_json(api_dir / f"{name}.json", {"name": name, "values": item["values"], "lines": item["lines"]})
+    extra_api_files = 0
+    extra_api_files += write_optional_api(api_dir, "host_platform_alignment_raw", host_platform_alignment)
+    extra_api_files += write_optional_api(api_dir, "host_test_alignment_raw", host_test_alignment)
+    extra_api_files += write_optional_api(api_dir, "host_surface_alignment_raw", host_surface_alignment)
 
     for file_name, title, primary, extras in PAGE_SPECS:
         nav = "<nav>{}</nav>".format(
@@ -4226,20 +4704,20 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
                 for file, nav_title, _, _ in PAGE_SPECS
             )
         )
-        sections = [render_overview(file_name, state, contract, len(actions), last_run)]
-        summary_panel = render_page_summary(file_name, state)
+        sections = [render_overview(file_name, render_state, contract, len(actions), last_run)]
+        summary_panel = render_page_summary(file_name, render_state)
         if summary_panel:
             sections.append(summary_panel)
-        detail_panel = render_detail_panel(file_name, state)
+        detail_panel = render_detail_panel(file_name, render_state)
         if detail_panel:
             sections.append(detail_panel)
-        sections.extend(render_grouped_details(file_name, state))
+        sections.extend(render_grouped_details(file_name, render_state))
         if file_name == "run.html":
             sections.append(action_trace_panel("Run Action Trace", actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
-            sections.append(action_output_panel("Run Action Output Links", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
-            sections.append(action_output_detail_panel("Run Action Output Details", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
-            sections.append(action_impact_panel("Run Action Impact", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
-            sections.append(action_delta_panel("Run Action Delta", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
+            sections.append(action_output_panel("Run Action Output Links", render_state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
+            sections.append(action_output_detail_panel("Run Action Output Details", render_state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
+            sections.append(action_impact_panel("Run Action Impact", render_state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
+            sections.append(action_delta_panel("Run Action Delta", render_state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
         if file_name == "workflow.html":
             sections.append(action_trace_panel("Workflow Action Trace", actions, {"workflow", "artifact"}))
             sections.append(action_output_panel("Workflow Action Output Links", state, actions, {"workflow", "artifact"}))
@@ -4321,7 +4799,8 @@ def render_site(state_dir: Path, out_dir: Path) -> dict[str, object]:
         "state_dir": str(state_dir),
         "state_files": len(state),
         "pages": len(PAGE_SPECS),
-        "api_json_files": len(state),
+        "api_json_files": len(render_state) + extra_api_files,
+        "alignment_api_files": extra_api_files + len(render_state) - len(state),
         "action_count": len(actions),
         "last_run_status": last_run.get("status", ""),
         "contract": contract,
@@ -4530,17 +5009,30 @@ def make_service_handler(
                 return
 
             render_site(state_dir, out_dir)
-            rel = "index.html" if path in ("", "/") else path.lstrip("/")
-            if "/" in rel or "\\" in rel or ".." in rel:
+            rel = "index.html" if path in ("", "/") else unquote(path.lstrip("/"))
+            if "\\" in rel or any(part in ("", ".", "..") for part in Path(rel).parts):
                 self.send_json(404, {"error": "not_found"})
                 return
-            file_path = out_dir / rel
+            try:
+                file_path = (out_dir / rel).resolve()
+                file_path.relative_to(out_dir.resolve())
+            except ValueError:
+                self.send_json(404, {"error": "not_found"})
+                return
             if not file_path.exists() or not file_path.is_file():
                 self.send_json(404, {"error": "not_found"})
                 return
             content_type = "text/html; charset=utf-8" if file_path.suffix == ".html" else "application/octet-stream"
             if file_path.suffix == ".json":
                 content_type = "application/json; charset=utf-8"
+            elif file_path.suffix == ".svg":
+                content_type = "image/svg+xml; charset=utf-8"
+            elif file_path.suffix == ".csv":
+                content_type = "text/csv; charset=utf-8"
+            elif file_path.suffix == ".md":
+                content_type = "text/markdown; charset=utf-8"
+            elif file_path.suffix == ".txt":
+                content_type = "text/plain; charset=utf-8"
             self.send_text_file(file_path, content_type)
 
         def do_POST(self) -> None:
@@ -4637,9 +5129,20 @@ def main() -> int:
     parser.add_argument("--run-root", type=Path, default=Path("runtime/plain_ucore_auto_runs"), help="Directory for automatic action packages and QEMU logs.")
     parser.add_argument("--timeout", type=int, default=80, help="QEMU run timeout in seconds for --auto-run-ucore.")
     parser.add_argument("--wsl-distro", default="Ubuntu", help="WSL distribution name on Windows.")
+    parser.add_argument("--host-platform-alignment", type=Path, default=None, help="Optional host platform capability alignment JSON.")
+    parser.add_argument("--host-test-alignment", type=Path, default=None, help="Optional host platform test theme alignment JSON.")
+    parser.add_argument("--host-surface-alignment", type=Path, default=None, help="Optional host Web/API/action surface alignment JSON.")
+    parser.add_argument("--seeded-action-state", type=Path, default=None, help="Optional seeded action runtime state JSON.")
     args = parser.parse_args()
 
-    summary = render_site(args.state_dir, args.out_dir)
+    summary = render_site(
+        args.state_dir,
+        args.out_dir,
+        args.host_platform_alignment,
+        args.host_test_alignment,
+        args.host_surface_alignment,
+        args.seeded_action_state,
+    )
     print(
         "plain_ucore_reader: pages={pages} api_json={api_json_files} state_files={state_files} status={status}".format(
             **summary

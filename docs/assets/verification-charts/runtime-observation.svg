@@ -1,0 +1,94 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="650" viewBox="0 0 1120 650">
+<style>
+text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
+.title{font-size:20px;font-weight:700}.subtitle{font-size:13px;fill:#52616f}
+.axis{font-size:12px;fill:#52616f}.label{font-size:12px}.value{font-size:12px;font-weight:700}
+</style>
+<rect width="1120" height="650" fill="#ffffff"/>
+<text x="34" y="34" class="title">双目标运行观测面板</text>
+<text x="34" y="58" class="subtitle">把运行阶段、产物数量、AgentOS 内核证据和 QEMU 健康状态放在同一张图中，便于快速说明本次测试是否可信。</text>
+<rect x="42" y="92" width="1036" height="76" fill="#f8fafc" stroke="#d8dee6"/>
+<text x="58" y="117" class="label">运行阶段</text>
+<rect x="162.0" y="108" width="165.2" height="22" fill="#54a24b" rx="2"/>
+<text x="244.6" y="124" text-anchor="middle" class="label" fill="#fff">ready</text>
+<text x="244.6" y="146" text-anchor="middle" class="axis">结构检查</text>
+<text x="244.6" y="164" text-anchor="middle" class="axis">1s</text>
+<rect x="339.2" y="108" width="165.2" height="22" fill="#54a24b" rx="2"/>
+<text x="421.8" y="124" text-anchor="middle" class="label" fill="#fff">ready</text>
+<text x="421.8" y="146" text-anchor="middle" class="axis">预置请求双目标运</text>
+<text x="421.8" y="164" text-anchor="middle" class="axis">16s</text>
+<rect x="516.4" y="108" width="165.2" height="22" fill="#54a24b" rx="2"/>
+<text x="599.0" y="124" text-anchor="middle" class="label" fill="#fff">ready</text>
+<text x="599.0" y="146" text-anchor="middle" class="axis">状态文件结果对照</text>
+<text x="599.0" y="164" text-anchor="middle" class="axis">3s</text>
+<rect x="693.6" y="108" width="165.2" height="22" fill="#54a24b" rx="2"/>
+<text x="776.2" y="124" text-anchor="middle" class="label" fill="#fff">ready</text>
+<text x="776.2" y="146" text-anchor="middle" class="axis">Reader页面</text>
+<text x="776.2" y="164" text-anchor="middle" class="axis">3s</text>
+<rect x="870.8" y="108" width="165.2" height="22" fill="#54a24b" rx="2"/>
+<text x="953.4" y="124" text-anchor="middle" class="label" fill="#fff">ready</text>
+<text x="953.4" y="146" text-anchor="middle" class="axis">结果报告与图表生</text>
+<text x="953.4" y="164" text-anchor="middle" class="axis">1s</text>
+<rect x="42" y="202" width="330" height="128" fill="#ffffff" stroke="#d8dee6"/>
+<rect x="42" y="202" width="6" height="128" fill="#54a24b"/>
+<text x="60" y="230" class="value">运行结果</text>
+<text x="60" y="254" class="axis">结果可对照</text>
+<text x="294" y="254" text-anchor="end" class="value">是</text>
+<text x="60" y="274" class="axis">成功记录核对</text>
+<text x="294" y="274" text-anchor="end" class="value">300</text>
+<text x="60" y="294" class="axis">预置请求</text>
+<text x="294" y="294" text-anchor="end" class="value">44</text>
+<rect x="395" y="202" width="330" height="128" fill="#ffffff" stroke="#d8dee6"/>
+<rect x="395" y="202" width="6" height="128" fill="#4c78a8"/>
+<text x="413" y="230" class="value">状态与页面</text>
+<text x="413" y="254" class="axis">普通状态文件</text>
+<text x="647" y="254" text-anchor="end" class="value">64</text>
+<text x="413" y="274" class="axis">AgentOS状态文件</text>
+<text x="647" y="274" text-anchor="end" class="value">78</text>
+<text x="413" y="294" class="axis">Reader页面</text>
+<text x="647" y="294" text-anchor="end" class="value">40</text>
+<text x="413" y="314" class="axis">额外API JSON</text>
+<text x="647" y="314" text-anchor="end" class="value">13</text>
+<rect x="748" y="202" width="330" height="128" fill="#ffffff" stroke="#d8dee6"/>
+<rect x="748" y="202" width="6" height="128" fill="#f58518"/>
+<text x="766" y="230" class="value">内核证据</text>
+<text x="766" y="254" class="axis">检查项</text>
+<text x="1000" y="254" text-anchor="end" class="value">32</text>
+<text x="766" y="274" class="axis">主流程阶段</text>
+<text x="1000" y="274" text-anchor="end" class="value">11</text>
+<text x="766" y="294" class="axis">主流程事实</text>
+<text x="1000" y="294" text-anchor="end" class="value">12</text>
+<rect x="42" y="366" width="330" height="128" fill="#ffffff" stroke="#d8dee6"/>
+<rect x="42" y="366" width="6" height="128" fill="#f58518"/>
+<text x="60" y="394" class="value">启动方式</text>
+<text x="60" y="418" class="axis">普通目标Agent启动</text>
+<text x="294" y="418" text-anchor="end" class="value">0</text>
+<text x="60" y="438" class="axis">增强目标Agent启动</text>
+<text x="294" y="438" text-anchor="end" class="value">9</text>
+<text x="60" y="458" class="axis">增强目标普通fork</text>
+<text x="294" y="458" text-anchor="end" class="value">61</text>
+<rect x="395" y="366" width="330" height="128" fill="#ffffff" stroke="#d8dee6"/>
+<rect x="395" y="366" width="6" height="128" fill="#6f7f8f"/>
+<text x="413" y="394" class="value">QEMU健康</text>
+<text x="413" y="418" class="axis">普通目标超时</text>
+<text x="647" y="418" text-anchor="end" class="value">0</text>
+<text x="413" y="438" class="axis">增强目标超时</text>
+<text x="647" y="438" text-anchor="end" class="value">0</text>
+<text x="413" y="458" class="axis">普通无输出提示</text>
+<text x="647" y="458" text-anchor="end" class="value">0</text>
+<text x="413" y="478" class="axis">增强无输出提示</text>
+<text x="647" y="478" text-anchor="end" class="value">0</text>
+<rect x="748" y="366" width="330" height="128" fill="#ffffff" stroke="#d8dee6"/>
+<rect x="748" y="366" width="6" height="128" fill="#e45756"/>
+<text x="766" y="394" class="value">读图顺序</text>
+<text x="766" y="418" class="axis">第一步</text>
+<text x="1000" y="418" text-anchor="end" class="value">看运行结果</text>
+<text x="766" y="438" class="axis">第二步</text>
+<text x="1000" y="438" text-anchor="end" class="value">看内核证据</text>
+<text x="766" y="458" class="axis">第三步</text>
+<text x="1000" y="458" text-anchor="end" class="value">打开Reader页面</text>
+<text x="766" y="478" class="axis">第四步</text>
+<text x="1000" y="478" text-anchor="end" class="value">查看日志定位异常</text>
+<text x="42" y="552" class="subtitle">读图方法：先确认运行结果和 QEMU 健康，再看 AgentOS 多出的状态、API、Agent 启动与内核事实；异常时回到</text>
+<text x="42" y="574" class="subtitle">stage-timings.csv 和 ucore-run.log。</text>
+</svg>

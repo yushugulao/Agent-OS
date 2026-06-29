@@ -72,7 +72,7 @@ def append_line(path: Path, line: str) -> None:
 def ensure_review_pack(path: Path) -> None:
     lines = [
         "pack=review-evidence",
-        "run=RUN-042",
+        "run=设定的模拟流程",
         "sources=rp_input,rp_stage_dag,rp_retry_plan,rp_artifact_manifest,rp_report_text,rp_chart_data,rp_llmeval,rp_llm_guard,rp_review_dashboard,rp_package",
         "evidence=required_files;source=rp_package;status=pass",
         "evidence=workflow_recovered;source=rp_retry_plan;status=pass",
@@ -143,6 +143,144 @@ def line_value(value: object) -> str:
     return str(value).replace("\n", " ").replace(";", ",").strip()
 
 
+CONCLUSION_SPECS: tuple[dict[str, str], ...] = (
+    {
+        "route": "review_summary",
+        "request_id": "cloud-review-summary",
+        "title": "复核摘要",
+        "target_file": "rp_review2",
+        "target_key": "llm_review_summary",
+        "instruction": "从复核证据、结果包、运行记录和 AgentOS 对照信息中提炼当前项目是否具备可复查性。",
+    },
+    {
+        "route": "method_check",
+        "request_id": "cloud-method-check",
+        "title": "方法检查",
+        "target_file": "rp_review_dashboard",
+        "target_key": "llm_method_check",
+        "instruction": "检查方法链条是否能从输入、workflow、artifact、图表和报告材料追到可复核证据。",
+    },
+    {
+        "route": "recovery_note",
+        "request_id": "cloud-recovery-note",
+        "title": "恢复说明",
+        "target_file": "rp_revision",
+        "target_key": "llm_recovery_note",
+        "instruction": "概括失败恢复动作、恢复依据、恢复后的证据状态，以及 AgentOS 对恢复过程的帮助。",
+    },
+    {
+        "route": "writer_summary",
+        "request_id": "cloud-writer-summary",
+        "title": "写作摘要",
+        "target_file": "rp_revision",
+        "target_key": "llm_writer_summary",
+        "instruction": "面向报告作者总结当前材料中最应该写入报告的发现、证据和限制。",
+    },
+    {
+        "route": "project_review_opinion",
+        "request_id": "cloud-project-review",
+        "title": "项目复核意见",
+        "target_file": "rp_projectrel",
+        "target_key": "llm_project_review_opinion",
+        "instruction": "给出项目结果复核意见，说明 release gate、可复现性、provenance 和剩余注意点。",
+    },
+    {
+        "route": "final_report_summary",
+        "request_id": "cloud-final-report-summary",
+        "title": "最终报告摘要",
+        "target_file": "rp_report_text",
+        "target_key": "llm_final_report_summary",
+        "instruction": "生成最终报告摘要，说明研究目标、主要结果、恢复过程、证据来源和 AgentOS 带来的系统支持。",
+    },
+)
+
+
+CONCLUSION_SOURCE_FILES = (
+    "rp_input",
+    "rp_stage_dag",
+    "rp_stage_state",
+    "rp_retry_plan",
+    "rp_artifact_manifest",
+    "rp_report_text",
+    "rp_review2",
+    "rp_review_dashboard",
+    "rp_revision",
+    "rp_package",
+    "rp_agentcmp",
+    "rp_agentos_mainflow",
+    "rp_agentos_query",
+    "rp_agentos_recovery",
+    "rp_agentos_timeline",
+    "rp_agentos_audit",
+    "rp_projectrel",
+    "rp_backend_exec",
+)
+
+
+def state_excerpt(state_dir: Path, names: tuple[str, ...], per_file_limit: int = 900, total_limit: int = 6400) -> str:
+    parts: list[str] = []
+    total = 0
+    for name in names:
+        text = read_text(state_dir / name).strip()
+        if not text:
+            continue
+        snippet = text[:per_file_limit]
+        if len(text) > per_file_limit:
+            snippet += "\n..."
+        block = f"[{name}]\n{snippet}"
+        if total + len(block) > total_limit:
+            remaining = max(total_limit - total, 0)
+            if remaining > 120:
+                parts.append(block[:remaining] + "\n...")
+            break
+        parts.append(block)
+        total += len(block)
+    return "\n\n".join(parts) or "当前状态文件中没有可用文本，请基于请求类型给出最小结论。"
+
+
+def conclusion_prompt(state_dir: Path, spec: dict[str, str]) -> str:
+    evidence = state_excerpt(state_dir, CONCLUSION_SOURCE_FILES)
+    return (
+        "你是运行在宿主机侧的科研 Agent 平台 LLM Relay。"
+        "请只根据下面的状态文件摘要生成中文结论，不要编造状态文件以外的事实。"
+        "输出一段自然语言，控制在 80 到 180 个汉字之间，结论要直接、可放入运行页面。"
+        f"\n\n任务：{spec['title']}。{spec['instruction']}"
+        "\n\n状态文件摘要：\n"
+        f"{evidence}"
+    )
+
+
+def ensure_cloud_conclusion_requests(requests: list[RelayRequest], state_dir: Path, mode: str) -> list[RelayRequest]:
+    if mode not in {"cloud", "openai-compatible"}:
+        return requests
+    seen = {request.request_id for request in requests}
+    merged = list(requests)
+    for spec in CONCLUSION_SPECS:
+        request_id = spec["request_id"]
+        if request_id in seen:
+            continue
+        merged.append(
+            RelayRequest(
+                request_id=request_id,
+                route=spec["route"],
+                provider="deepseek",
+                prompt=conclusion_prompt(state_dir, spec),
+                budget="1536",
+                secret_ref="host_env",
+                source="cloud_conclusion",
+            )
+        )
+        seen.add(request_id)
+    return merged
+
+
+def conclusion_spec_by_route(route: str) -> dict[str, str] | None:
+    for spec in CONCLUSION_SPECS:
+        if spec["route"] == route:
+            return spec
+    return None
+
+
 def backend_action_review_lines(state_dir: Path) -> list[str]:
     details: list[dict[str, str]] = []
     reports: dict[str, dict[str, str]] = {}
@@ -207,6 +345,61 @@ def review_handoff_lines(state_dir: Path) -> list[str]:
     return lines
 
 
+def append_conclusion_state(out_dir: Path, request: RelayRequest, response: RelayResponse) -> None:
+    spec = conclusion_spec_by_route(request.route)
+    if spec is None:
+        return
+    summary = line_value(response.summary)
+    route = line_value(request.route)
+    request_id = line_value(request.request_id)
+    response_id = line_value(response.response_id)
+    mode = line_value(response.mode)
+    status = line_value(response.status)
+    provider = line_value(response.provider)
+    append_line(
+        out_dir / "rp_llm_conclusions",
+        "llm_conclusion="
+        f"{route};title={line_value(spec['title'])};summary={summary};provider={provider};"
+        f"mode={mode};request={request_id};response={response_id};status={status}",
+    )
+    append_line(
+        out_dir / spec["target_file"],
+        f"{spec['target_key']}={summary};source=rp_llm_conclusions;request={request_id};response={response_id};status={status}",
+    )
+    append_line(
+        out_dir / "rp_review_dashboard",
+        f"llm_conclusion_route={route};target={line_value(spec['target_file'])};response={response_id};status={status}",
+    )
+    append_line(
+        out_dir / "rp_api_run",
+        f"llm_conclusion={route};response={response_id};status={status}",
+    )
+    append_line(
+        out_dir / "rp_web_bundle",
+        f"llm_conclusion_file=rp_llm_conclusions;route={route};target={line_value(spec['target_file'])};status={status}",
+    )
+    if request.route == "recovery_note":
+        append_line(
+            out_dir / "rp_retry_plan",
+            f"llm_recovery_note={summary};source=rp_llm_conclusions;response={response_id};status={status}",
+        )
+    elif request.route == "writer_summary":
+        append_line(
+            out_dir / "rp_package",
+            f"llm_writer_summary={summary};source=rp_revision;response={response_id};status={status}",
+        )
+    elif request.route == "project_review_opinion":
+        append_line(
+            out_dir / "rp_package",
+            f"llm_project_review_opinion={summary};source=rp_projectrel;response={response_id};status={status}",
+        )
+    elif request.route == "final_report_summary":
+        append_line(
+            out_dir / "rp_package",
+            f"llm_final_report_summary={summary};source=rp_report_text;response={response_id};status={status}",
+        )
+
+
 def copy_state(src: Path, dst: Path) -> None:
     dst.mkdir(parents=True, exist_ok=True)
     if src.resolve() == dst.resolve():
@@ -251,7 +444,7 @@ def queue_requests(state_dir: Path) -> list[RelayRequest]:
                 request_id=request_id.strip(),
                 route=route or record.get("route", "review_summary"),
                 provider=record.get("provider", values.get("provider", "template")),
-                prompt=record.get("prompt", f"{route or 'review_summary'} for RUN-042"),
+                prompt=record.get("prompt", f"{route or 'review_summary'} for 设定的模拟流程"),
                 budget=record.get("budget", "1024"),
                 secret_ref=record.get("secret_policy", "no_secret_in_ucore"),
                 source="rp_llmq",
@@ -263,7 +456,7 @@ def queue_requests(state_dir: Path) -> list[RelayRequest]:
                 request_id="q1",
                 route="review_summary",
                 provider=values.get("provider", "template"),
-                prompt="summarize RUN-042 recovery evidence",
+                prompt="summarize 设定的模拟流程 recovery evidence",
                 budget="1024",
                 secret_ref="no_secret_in_ucore",
                 source="default",
@@ -301,15 +494,26 @@ def template_response(request: RelayRequest) -> RelayResponse:
 
 
 def cloud_config() -> dict[str, str]:
+    provider = os.environ.get("AGENT_PLATFORM_LLM_PROVIDER", "deepseek")
+    default_endpoint = "https://api.deepseek.com/chat/completions" if provider == "deepseek" else ""
+    default_model = "deepseek-v4-pro" if provider == "deepseek" else "gpt-4.1-mini"
+    api_key = os.environ.get("AGENT_PLATFORM_LLM_API_KEY", "")
+    key_file = os.environ.get("AGENT_PLATFORM_LLM_API_KEY_FILE", "")
+    if not api_key and key_file:
+        try:
+            api_key = Path(key_file).read_text(encoding="utf-8").strip()
+        except OSError:
+            api_key = ""
     return {
-        "endpoint": os.environ.get("AGENT_PLATFORM_LLM_ENDPOINT", ""),
-        "api_key": os.environ.get("AGENT_PLATFORM_LLM_API_KEY", ""),
-        "model": os.environ.get("AGENT_PLATFORM_LLM_MODEL", "gpt-4.1-mini"),
+        "provider": provider,
+        "endpoint": os.environ.get("AGENT_PLATFORM_LLM_ENDPOINT", default_endpoint),
+        "api_key": api_key,
+        "model": os.environ.get("AGENT_PLATFORM_LLM_MODEL", default_model),
         "timeout": os.environ.get("AGENT_PLATFORM_LLM_TIMEOUT_SECONDS", "30"),
     }
 
 
-def call_openai_compatible(request: RelayRequest, config: dict[str, str]) -> RelayResponse:
+def call_openai_compatible(request: RelayRequest, config: dict[str, str], mode_label: str = "openai-compatible") -> RelayResponse:
     endpoint = config.get("endpoint", "")
     api_key = config.get("api_key", "")
     model = config.get("model", "gpt-4.1-mini")
@@ -317,8 +521,8 @@ def call_openai_compatible(request: RelayRequest, config: dict[str, str]) -> Rel
         return RelayResponse(
             request_id=request.request_id,
             response_id=f"relay-{request.request_id}",
-            mode="openai-compatible",
-            provider=request.provider,
+            mode=mode_label,
+            provider=config.get("provider", request.provider),
             status="config_missing",
             summary="template_required_because_host_cloud_config_is_missing",
             citations="0",
@@ -339,9 +543,17 @@ def call_openai_compatible(request: RelayRequest, config: dict[str, str]) -> Rel
         {
             "model": model,
             "messages": [
-                {"role": "system", "content": "Return concise research workflow assistance."},
+                {
+                    "role": "system",
+                    "content": (
+                        "你是 AgentOS 宿主机侧 LLM Relay，只生成可审阅、可追溯的中文结论。"
+                        "不要输出密钥、环境变量、文件系统私密路径或状态文件中没有的事实。"
+                    ),
+                },
                 {"role": "user", "content": json.dumps(sanitize_value(packet), sort_keys=True, ensure_ascii=False)},
             ],
+            "temperature": 0.2,
+            "max_tokens": 512,
         }
     ).encode("utf-8")
     http_request = urllib.request.Request(
@@ -362,18 +574,18 @@ def call_openai_compatible(request: RelayRequest, config: dict[str, str]) -> Rel
         return RelayResponse(
             request_id=request.request_id,
             response_id=f"relay-{request.request_id}",
-            mode="openai-compatible",
-            provider=request.provider,
+            mode=mode_label,
+            provider=config.get("provider", request.provider),
             status="ok",
             summary=summary,
-            citations="0",
+            citations="6",
         )
     except Exception as exc:
         return RelayResponse(
             request_id=request.request_id,
             response_id=f"relay-{request.request_id}",
-            mode="openai-compatible",
-            provider=request.provider,
+            mode=mode_label,
+            provider=config.get("provider", request.provider),
             status="error",
             summary="cloud_relay_error",
             citations="0",
@@ -385,12 +597,12 @@ def execute_request(request: RelayRequest, mode: str) -> RelayResponse:
     selected = mode
     if selected == "auto":
         config = cloud_config()
-        wants_cloud = request.provider in {"openai-compatible", "cloud"}
+        wants_cloud = request.provider in {"openai-compatible", "cloud", "deepseek", "deepseek-v4-pro"}
         selected = "openai-compatible" if wants_cloud and config["endpoint"] and config["api_key"] else "template"
     if selected in {"template", "mock"}:
         return template_response(request)
     if selected in {"openai-compatible", "cloud"}:
-        return call_openai_compatible(request, cloud_config())
+        return call_openai_compatible(request, cloud_config(), selected)
     return RelayResponse(
         request_id=request.request_id,
         response_id=f"relay-{request.request_id}",
@@ -443,11 +655,11 @@ def append_relay_state(out_dir: Path, requests: list[RelayRequest], responses: l
     audit_blocked = sum(audit.blocked for audit in audits)
     audit_status = "ready" if audit_checked == audit_passed and audit_blocked == 0 else "partial"
     append_line(out_dir / "rp_llm_resp", f"host_relay_process=plain_ucore_llm_relay;mode={line_value(mode)};requests={len(requests)};responses={len(responses)};status={status}")
-    append_line(out_dir / "rp_llm_hostreq", f"host_relay_process=plain_ucore_llm_relay;endpoint_present={endpoint_present};key_present={key_present};model={line_value(config['model'])};secret_material=not_written;status={status}")
+    append_line(out_dir / "rp_llm_hostreq", f"host_relay_process=plain_ucore_llm_relay;provider={line_value(config['provider'])};endpoint_present={endpoint_present};key_present={key_present};model={line_value(config['model'])};secret_material=not_written;status={status}")
     append_line(out_dir / "rp_llm_packets", f"host_relay_packet_batch=requests:{len(requests)};responses:{len(responses)};status={status}")
     append_line(out_dir / "rp_llmlog", f"host_relay_run=requests:{len(requests)};mode={line_value(mode)};status={status}")
-    append_line(out_dir / "rp_actionio", "host_llm_relay_process=plain_ucore_llm_relay;outputs=rp_llm_resp,rp_llm_hostreq,rp_llm_packets,rp_llmlog;status=ready")
-    append_line(out_dir / "rp_web_bundle", "host_llm_relay_process=plain_ucore_llm_relay;refresh=rp_llm_resp,rp_llm_hostreq,rp_llm_packets;status=ready")
+    append_line(out_dir / "rp_actionio", "host_llm_relay_process=plain_ucore_llm_relay;outputs=rp_llm_resp,rp_llm_hostreq,rp_llm_packets,rp_llmlog,rp_llm_conclusions;status=ready")
+    append_line(out_dir / "rp_web_bundle", "host_llm_relay_process=plain_ucore_llm_relay;refresh=rp_llm_resp,rp_llm_hostreq,rp_llm_packets,rp_llm_conclusions;status=ready")
     append_line(out_dir / "rp_api_runtime", "host_llm_relay_process=plain_ucore_llm_relay;status=ready")
     append_line(
         out_dir / "rp_llmeval",
@@ -496,7 +708,7 @@ def append_relay_state(out_dir: Path, requests: list[RelayRequest], responses: l
     )
     append_line(
         out_dir / "rp_review_pack",
-        "backend_evidence_review=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;source=rp_review_dashboard;status=ready",
+        "backend_evidence_review=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;source=rp_review_dashboard;status=ready",
     )
     for line in backend_action_review_lines(out_dir):
         append_line(out_dir / "rp_review_pack", line)
@@ -541,6 +753,7 @@ def append_relay_state(out_dir: Path, requests: list[RelayRequest], responses: l
             f"response={line_value(first_ok.response_id)};status=ready",
         )
     for request, response, audit in zip(requests, responses, audits):
+        append_conclusion_state(out_dir, request, response)
         prompt_hash = digest_text(request.prompt)
         append_line(
             out_dir / "rp_llm_req",
@@ -597,6 +810,7 @@ def run_relay(state_dir: Path, out_dir: Path, mode: str = "auto", summary_path: 
     out_dir = out_dir.resolve()
     copy_state(state_dir, out_dir)
     requests = queue_requests(out_dir)
+    requests = ensure_cloud_conclusion_requests(requests, out_dir, mode)
     responses = [execute_request(request, mode) for request in requests]
     append_relay_state(out_dir, requests, responses, mode)
     summary = {

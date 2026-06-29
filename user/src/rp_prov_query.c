@@ -12,6 +12,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_package", "provenance_graph=unified");
 	ok = ok && rp_file_contains("rp_calculation", "job=calculation-job:lab-gene-x:run042-qc");
 	ok = ok && rp_file_contains("rp_calc_parse", "parser_result=calculation-parser-result:run042-qc");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "agent_timeline=observed");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "agent_provenance=observed");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "agent_ledger=observed");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_prov_query",
@@ -27,6 +30,9 @@ int main(void)
 			   "reader_page=provenance-queries.html\n"
 			   "package=provenance-query-execution:calculation-lineage\n"
 			   "agentos_mapping=timeline_query,provenance_snapshot,ledger_snapshot,context_detail\n"
+			   "agentos_kernel_timeline=observed\n"
+			   "agentos_kernel_provenance=observed\n"
+			   "agentos_kernel_ledger=observed\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -59,7 +65,7 @@ int main(void)
 	if (!rp_append_file("rp_web_bundle", "provenance_queries_page=rp_prov_query;specs=3;executions=3;packets=1;status=ready")) return 1;
 	if (!rp_append_file("rp_review_dashboard", "subsection=provenance_queries;source=rp_prov_query;queries=3;executions=3;checks=72;outcome=passed;status=ready")) return 1;
 	if (!rp_append_file("rp_package", "provenance_query_package=rp_prov_query;specs=3;executions=3;packets=1;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "provenance_query_checks=72;specs=3;templates=1;executions=3;comparisons=1;exports=1;packets=1;agentos_replacements=4;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "provenance_query_checks=72;specs=3;templates=1;executions=3;comparisons=1;exports=1;packets=1;agentos_replacements=4;kernel_timeline=observed;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=provenance_query;msg=provq;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=provenance_query.seed")) return 1;
 	if (!rp_append_file("rp_tool", "tool=provenance_query.instantiate_template")) return 1;

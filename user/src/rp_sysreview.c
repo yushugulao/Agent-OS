@@ -8,6 +8,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_knowledge", "evidence_protocol=");
 	ok = ok && rp_file_contains("rp_package", "evidence_bundle_contains_extra=");
 	ok = ok && rp_file_contains("rp_modelreg", "status=ready");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "agent_provenance=observed");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_sysreview",
@@ -21,6 +22,9 @@ int main(void)
 			   "comparator=plain user-space workflow orchestration\n"
 			   "outcome=reproducibility,provenance_quality,failure_recovery,report_traceability\n"
 			   "owner=wang\n"
+			   "agentos_context=observed\n"
+			   "agentos_metadata=observed\n"
+			   "agentos_provenance=observed\n"
 			   "status=registered\n")) {
 		return 1;
 	}
@@ -31,6 +35,7 @@ int main(void)
 			   "query=agent workflow provenance reproducibility kernel\n"
 			   "filters=year_min:2023,must_have_any:agent|workflow|provenance|kernel|reproducibility\n"
 			   "results=9\n"
+			   "agentos_query_trace=kernel_context_path\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -43,6 +48,7 @@ int main(void)
 			   "decision=paper:agent-provenance-runtime;stage=full_text;result=include;reason=traceable_tool_calls\n"
 			   "decision=paper:workflow-recovery-agent;stage=full_text;result=include;reason=failure_recovery\n"
 			   "decision=paper:generic-chatbot-ui;stage=title_abstract;result=exclude;reason=no_system_interaction\n"
+			   "agentos_screening_event=observed\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -55,6 +61,7 @@ int main(void)
 			   "record=paper:agent-kernel-context;mechanism=context_path;evidence=systems_demo;outcome=traceability\n"
 			   "record=paper:agent-provenance-runtime;mechanism=tool_call_log;evidence=case_study;outcome=provenance_quality\n"
 			   "record=paper:workflow-recovery-agent;mechanism=retry_policy;evidence=benchmark;outcome=failure_recovery\n"
+			   "agentos_extraction_metadata=observed\n"
 			   "status=complete\n")) {
 		return 1;
 	}
@@ -64,6 +71,7 @@ int main(void)
 			   "conclusion=kernel-managed context and accountable tool calls improve traceability\n"
 			   "confidence=moderate\n"
 			   "limitations=local_library,small_sample,abstract_metadata\n"
+			   "agentos_synthesis_context=observed\n"
 			   "status=ready\n")) {
 		return 1;
 	}
@@ -75,13 +83,14 @@ int main(void)
 			   "included=3\n"
 			   "reason_not_agent_workflow=4\n"
 			   "reason_no_abstract=2\n"
+			   "agentos_prisma_event=observed\n"
 			   "status=ready\n")) {
 		return 1;
 	}
 	if (!rp_append_file("rp_package", "systematic_review=rp_sysreview;protocol=systematic-review:agent-os-science;included=3;prisma=ready;status=ready")) return 1;
 	if (!rp_append_file("rp_web_bundle", "systematic_review_page=rp_sysreview;protocols=1;screening=9;included=3;status=ready")) return 1;
 	if (!rp_append_file("rp_review_dashboard", "subsection=systematic_review;source=rp_sysreview;checks=104;included=3;prisma=ready;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "systematic_review_checks=104;protocols=1;searches=1;screening=9;extractions=3;bias=3;prisma=1;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "systematic_review_checks=104;protocols=1;searches=1;screening=9;extractions=3;bias=3;prisma=1;agentos_replacements=4;kernel_metadata=observed;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=systematic_review;msg=review;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=systematic_review.create_protocol")) return 1;
 	if (!rp_append_file("rp_tool", "tool=systematic_review.run_search")) return 1;

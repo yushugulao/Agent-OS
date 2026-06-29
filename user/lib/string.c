@@ -59,6 +59,14 @@ int strcmp(const char *l, const char *r)
 	return *(unsigned char *)l - *(unsigned char *)r;
 }
 
+char *strcpy(char *d, const char *s)
+{
+	char *r = d;
+	while ((*d++ = *s++) != 0)
+		;
+	return r;
+}
+
 int strncmp(const char *_l, const char *_r, size_t n)
 {
 	const unsigned char *l = (void *)_l, *r = (void *)_r;

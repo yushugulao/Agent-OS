@@ -1,0 +1,51 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="540" viewBox="0 0 1060 540">
+<style>
+text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
+.title{font-size:20px;font-weight:700}.subtitle{font-size:13px;fill:#52616f}
+.axis{font-size:12px;fill:#52616f}.label{font-size:12px}.value{font-size:12px;font-weight:700}
+</style>
+<rect width="1060" height="540" fill="#ffffff"/>
+<text x="34" y="34" class="title">六组实验的累计节省操作数</text>
+<text x="34" y="58" class="subtitle">面积图把六组实验各自随负载增加产生的节省操作数放在同一张监控视图中。</text>
+<line x1="96" y1="462.0" x2="1004" y2="462.0" stroke="#d8dee6" stroke-width="1"/>
+<text x="84" y="466.0" text-anchor="end" class="axis">0</text>
+<line x1="96" y1="390.4" x2="1004" y2="390.4" stroke="#d8dee6" stroke-width="1"/>
+<text x="84" y="394.4" text-anchor="end" class="axis">6421.2</text>
+<line x1="96" y1="318.8" x2="1004" y2="318.8" stroke="#d8dee6" stroke-width="1"/>
+<text x="84" y="322.8" text-anchor="end" class="axis">12842.4</text>
+<line x1="96" y1="247.2" x2="1004" y2="247.2" stroke="#d8dee6" stroke-width="1"/>
+<text x="84" y="251.2" text-anchor="end" class="axis">19263.6</text>
+<line x1="96" y1="175.6" x2="1004" y2="175.6" stroke="#d8dee6" stroke-width="1"/>
+<text x="84" y="179.6" text-anchor="end" class="axis">25684.8</text>
+<line x1="96" y1="104.0" x2="1004" y2="104.0" stroke="#d8dee6" stroke-width="1"/>
+<text x="84" y="108.0" text-anchor="end" class="axis">32106</text>
+<polygon points="96.0,461.7 398.7,460.4 701.3,454.8 1004.0,443.5 1004.0,462.0 701.3,462.0 398.7,462.0 96.0,462.0" fill="#4c78a8" opacity="0.20"/>
+<polyline points="96.0,461.7 398.7,460.4 701.3,454.8 1004.0,443.5" fill="none" stroke="#4c78a8" stroke-width="3"/>
+<rect x="720" y="70" width="14" height="14" fill="#4c78a8" opacity="0.8"/>
+<text x="742" y="82" class="label">文件对象 metadata 查询</text>
+<polygon points="96.0,459.2 398.7,443.5 701.3,376.4 1004.0,104.0 1004.0,462.0 701.3,462.0 398.7,462.0 96.0,462.0" fill="#f58518" opacity="0.20"/>
+<polyline points="96.0,459.2 398.7,443.5 701.3,376.4 1004.0,104.0" fill="none" stroke="#f58518" stroke-width="3"/>
+<rect x="720" y="92" width="14" height="14" fill="#f58518" opacity="0.8"/>
+<text x="742" y="104" class="label">Context 与 timeline 查询</text>
+<polygon points="96.0,461.2 398.7,457.6 701.3,443.3 1004.0,386.4 1004.0,462.0 701.3,462.0 398.7,462.0 96.0,462.0" fill="#54a24b" opacity="0.20"/>
+<polyline points="96.0,461.2 398.7,457.6 701.3,443.3 1004.0,386.4" fill="none" stroke="#54a24b" stroke-width="3"/>
+<rect x="720" y="114" width="14" height="14" fill="#54a24b" opacity="0.8"/>
+<text x="742" y="126" class="label">事件等待与唤醒</text>
+<polygon points="96.0,462.0 398.7,461.8 701.3,461.0 1004.0,458.0 1004.0,462.0 701.3,462.0 398.7,462.0 96.0,462.0" fill="#e45756" opacity="0.20"/>
+<polyline points="96.0,462.0 398.7,461.8 701.3,461.0 1004.0,458.0" fill="none" stroke="#e45756" stroke-width="3"/>
+<rect x="720" y="136" width="14" height="14" fill="#e45756" opacity="0.8"/>
+<text x="742" y="148" class="label">并发 Agent 写入与授权</text>
+<polygon points="96.0,461.9 398.7,461.4 701.3,459.2 1004.0,450.8 1004.0,462.0 701.3,462.0 398.7,462.0 96.0,462.0" fill="#8b6fcb" opacity="0.20"/>
+<polyline points="96.0,461.9 398.7,461.4 701.3,459.2 1004.0,450.8" fill="none" stroke="#8b6fcb" stroke-width="3"/>
+<rect x="720" y="158" width="14" height="14" fill="#8b6fcb" opacity="0.8"/>
+<text x="742" y="170" class="label">LLM Relay 模式切换</text>
+<polygon points="96.0,461.7 398.7,461.2 701.3,460.1 1004.0,458.0 1004.0,462.0 701.3,462.0 398.7,462.0 96.0,462.0" fill="#9c6b4e" opacity="0.20"/>
+<polyline points="96.0,461.7 398.7,461.2 701.3,460.1 1004.0,458.0" fill="none" stroke="#9c6b4e" stroke-width="3"/>
+<rect x="720" y="180" width="14" height="14" fill="#9c6b4e" opacity="0.8"/>
+<text x="742" y="192" class="label">失败恢复流程成本</text>
+<text x="96.0" y="502" text-anchor="middle" class="label">负载1</text>
+<text x="398.7" y="502" text-anchor="middle" class="label">负载2</text>
+<text x="701.3" y="502" text-anchor="middle" class="label">负载3</text>
+<text x="1004.0" y="502" text-anchor="middle" class="label">负载4</text>
+<text x="96" y="526" class="subtitle">纵轴为 plain 中位数减 AgentOS 中位数的累计值。</text>
+</svg>

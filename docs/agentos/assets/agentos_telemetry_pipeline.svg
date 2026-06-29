@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="760" height="980" viewBox="0 0 760 980">
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="8" refX="11" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L12,4 L0,8 Z" fill="#1f2937"/>
+    </marker>
+    <style>
+      .title { font: 700 28px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #111827; }
+      .label { font: 700 22px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #111827; }
+      .small { font: 18px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #111827; }
+      .tiny { font: 15px "Microsoft YaHei", "Noto Sans CJK SC", Arial, sans-serif; fill: #374151; }
+      .box { fill: #ffffff; stroke: #111827; stroke-width: 2.2; rx: 8; ry: 8; }
+      .tag { fill: #e5e7eb; stroke: none; rx: 4; ry: 4; }
+      .arrow { stroke: #111827; stroke-width: 3; fill: none; marker-end: url(#arrow); }
+    </style>
+  </defs>
+  <rect width="760" height="980" fill="#ffffff"/>
+  <text x="55" y="52" class="title">内核到平台的证据数据路径</text>
+  <rect x="190" y="90" width="380" height="82" class="box"/>
+  <text x="285" y="124" class="label">内核运行事实</text>
+  <text x="220" y="153" class="tiny">工具调用、文件查询、事件、调度、大模型中继</text>
+  <line x1="380" y1="172" x2="380" y2="222" class="arrow"/>
+  <rect x="255" y="205" width="250" height="34" class="tag"/>
+  <text x="306" y="229" class="small">规范化记录</text>
+  <rect x="160" y="260" width="440" height="92" class="box"/>
+  <text x="245" y="296" class="label">上下文与审计环</text>
+  <text x="190" y="326" class="tiny">影子上下文、链路记录、账本哈希、因果边</text>
+  <line x1="380" y1="352" x2="380" y2="412" class="arrow"/>
+  <rect x="248" y="390" width="264" height="34" class="tag"/>
+  <text x="295" y="414" class="small">快照 / 查询 / 等待</text>
+  <rect x="130" y="450" width="500" height="92" class="box"/>
+  <text x="260" y="486" class="label">用户态 Agent 程序</text>
+  <text x="168" y="516" class="tiny">编排者读取时间线，分析者读取提示，恢复者写入报告</text>
+  <line x1="380" y1="542" x2="380" y2="602" class="arrow"/>
+  <rect x="260" y="580" width="240" height="34" class="tag"/>
+  <text x="300" y="604" class="small">输出键值日志</text>
+  <rect x="160" y="640" width="440" height="92" class="box"/>
+  <text x="285" y="676" class="label">宿主机读取器</text>
+  <text x="195" y="706" class="tiny">解析状态文件、事件行、报告和性能观测行</text>
+  <line x1="380" y1="732" x2="380" y2="792" class="arrow"/>
+  <rect x="265" y="770" width="230" height="34" class="tag"/>
+  <text x="320" y="794" class="small">渲染证据</text>
+  <rect x="130" y="830" width="500" height="92" class="box"/>
+  <text x="282" y="866" class="label">示例网页</text>
+  <text x="210" y="896" class="tiny">运行详情、Agent 详情、证据详情、对比指标</text>
+  <text x="60" y="950" class="tiny">内核不调用云服务；它只向用户态和宿主机工具提供可信记录。</text>
+</svg>

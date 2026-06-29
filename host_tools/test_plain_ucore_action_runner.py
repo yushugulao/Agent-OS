@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import tempfile
 from pathlib import Path
 
@@ -15,8 +17,53 @@ def read(path: Path) -> str:
 
 
 def main() -> int:
+    original_toolprefix = os.environ.get("TOOLPREFIX")
+    try:
+        os.environ.pop("TOOLPREFIX", None)
+        assert runner.toolprefix_arg() == "TOOLPREFIX='riscv64-linux-gnu-'"
+        os.environ["TOOLPREFIX"] = "custom-riscv64-"
+        assert runner.toolprefix_arg() == "TOOLPREFIX='custom-riscv64-'"
+    finally:
+        if original_toolprefix is None:
+            os.environ.pop("TOOLPREFIX", None)
+        else:
+            os.environ["TOOLPREFIX"] = original_toolprefix
+
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
+        observed_ok = runner.run_observed_command(
+            [
+                sys.executable,
+                "-c",
+                "print('boot'); print('rp_orch: passed')",
+            ],
+            root / "observed-ok.log",
+            timeout_seconds=5,
+            pass_marker="rp_orch: passed",
+            idle_notice_seconds=1,
+            marker_grace_seconds=0,
+        )
+        assert observed_ok["returncode"] == 0
+        assert observed_ok["marker_seen"] is True
+        assert observed_ok["failure_seen"] is False
+        assert "rp_orch: passed" in read(root / "observed-ok.log")
+
+        observed_fail = runner.run_observed_command(
+            [
+                sys.executable,
+                "-c",
+                "print('boot'); print('panic: synthetic failure')",
+            ],
+            root / "observed-fail.log",
+            timeout_seconds=5,
+            pass_marker="rp_orch: passed",
+            idle_notice_seconds=1,
+            marker_grace_seconds=0,
+        )
+        assert observed_fail["returncode"] != 0
+        assert observed_fail["failure_seen"] is True
+        assert "panic: synthetic failure" in read(root / "observed-fail.log")
+
         state_dir = root / "state"
         run_dir = root / "run"
         state_dir.mkdir()
@@ -49,6 +96,10 @@ def main() -> int:
         loaded = runner.append_records(
             loaded,
             [
+                {
+                    "path": "/actions/research/rerun",
+                    "payload": {"run_id": "RUN-999-rerun", "parent_run": "RUN-999", "provider": "template", "question": "Repeat the host run with saved inputs"},
+                },
                 {
                     "path": "/actions/research/dataset",
                     "payload": {"title": "Host reusable response table", "dataset_rows": "6", "columns": "sample,group,value"},
@@ -412,7 +463,7 @@ def main() -> int:
             ],
         )
         summary = runner.prepare_action_state(loaded, state_dir, run_dir)
-        expected_actions = 92
+        expected_actions = 93
 
         assert summary["actions"] == expected_actions
         assert summary["accepted"] == expected_actions
@@ -517,6 +568,8 @@ def main() -> int:
 
         queue = read(next_state / "rp_host_action_queue")
         assert "kind=research_run" in queue
+        assert "kind=research_rerun" in queue
+        assert "parent_run=RUN-999" in queue
         assert "kind=dataset" in queue
         assert "kind=studio_launch" in queue
         assert "kind=library_source" in queue
@@ -692,6 +745,7 @@ def main() -> int:
         assert "collect=rp_web_bundle" in plan
         assert "collect=rp_compare_plain" in plan
         assert "kind=dataset" in plan
+        assert "kind=research_rerun" in plan
         assert "kind=studio_launch" in plan
         assert "kind=library_source" in plan
         assert "kind=template" in plan
@@ -756,6 +810,7 @@ def main() -> int:
 
         inbox = read(next_state / "rp_host_action_inbox")
         assert "/actions/research/run" in inbox
+        assert "/actions/research/rerun" in inbox
         assert "/actions/research/dataset" in inbox
         assert "/actions/research/studio-launch" in inbox
         assert "/actions/research/library-source" in inbox
@@ -821,6 +876,7 @@ def main() -> int:
         assert (run_dir / "actions.json").exists()
         assert (run_dir / "runner-summary.json").exists()
 
+        assert runner.action_kind("/actions/research/rerun") == "research_rerun"
         assert runner.action_kind("/actions/research/run-revision") == "revision_run"
         assert runner.action_kind("/actions/research/dataset") == "dataset"
         assert runner.action_kind("/actions/research/studio-launch") == "studio_launch"
@@ -917,6 +973,8 @@ def main() -> int:
         assert records == expected_actions
         assert "#define RP_HOST_ACTION_SEED" in header
         assert "kind=research_run" in seed_file
+        assert "kind=research_rerun" in seed_file
+        assert "parent_run=RUN-999" in seed_file
         assert "kind=dataset" in seed_file
         assert "kind=studio_launch" in seed_file
         assert "title=Studio cytokine evidence" in seed_file

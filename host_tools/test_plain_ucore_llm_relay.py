@@ -87,10 +87,10 @@ STATE = {
     "rp_backend_exec": (
         "runner_detail=plain-ucore;src=rp_wfio;req=execution_plan;obs=pass;act=record;review=baseline\n"
         "runner_detail=retry-recovery;src=rp_retry_plan+rp_stage_state;req=retry_stage+stage;obs=pass;act=rerun_align;review=recovered\n"
-        "runner_detail=agentos-context;src=rp_wfio;req=context_path;obs=planned;act=kernel_context;review=target\n"
+        "runner_detail=user-context;src=rp_query+rp_provpath;req=context_path;obs=pass;act=rebuild_from_files;review=userland\n"
         "runner_report=plain-ucore;plain_cost=file_scan_manifest;agentos_replace=batch_tool_context;risk=manual_state;status=passed\n"
         "runner_report=retry-recovery;plain_cost=retry_file_stage_file;agentos_replace=event_context;risk=stale_retry;status=passed\n"
-        "runner_report=agentos-context;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;risk=untrusted_context;status=planned\n"
+        "runner_report=user-context;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;risk=untrusted_context;status=passed\n"
     ),
 }
 
@@ -104,6 +104,9 @@ def write_state(path: Path) -> None:
 def main() -> int:
     previous_endpoint = os.environ.pop("AGENT_PLATFORM_LLM_ENDPOINT", None)
     previous_key = os.environ.pop("AGENT_PLATFORM_LLM_API_KEY", None)
+    previous_provider = os.environ.pop("AGENT_PLATFORM_LLM_PROVIDER", None)
+    previous_model = os.environ.pop("AGENT_PLATFORM_LLM_MODEL", None)
+    previous_key_file = os.environ.pop("AGENT_PLATFORM_LLM_API_KEY_FILE", None)
     try:
         with tempfile.TemporaryDirectory() as state_tmp, tempfile.TemporaryDirectory() as out_tmp:
             state_dir = Path(state_tmp)
@@ -158,9 +161,9 @@ def main() -> int:
             assert "bridge=delivery_to_operations;delivery=rp_package;operations=rp_runner;project=rp_package;status=ready" in reviewpack
             assert "host_relay_quality=passed:24/24;blocked:0;source=rp_llmeval;status=ready" in reviewpack
             assert "host_relay_pack_input=rp_report_text,rp_llm_resp,rp_llmeval,rp_llm_guard,rp_review_dashboard,rp_package;status=ready" in reviewpack
-            assert "backend_evidence_review=rp_backend_exec;plain_costs=4;agentos_replacements=4;risks=4;source=rp_review_dashboard;status=ready" in reviewpack
+            assert "backend_evidence_review=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;source=rp_review_dashboard;status=ready" in reviewpack
             assert "backend_action_review=retry-recovery;action=rerun_align;review=recovered;plain_cost=retry_file_stage_file;agentos_replace=event_context;status=passed" in reviewpack
-            assert "backend_action_review=agentos-context;action=kernel_context;review=target;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;status=planned" in reviewpack
+            assert "backend_action_review=user-context;action=rebuild_from_files;review=userland;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;status=passed" in reviewpack
             assert "operations_handoff=rp_runner+rp_package;tasks=9;next=delivery_manifest;report=exported;plan=executed;quality=checked;repair=done;backend=rp_backend_exec;status=ready" in reviewpack
             assert "workbench_handoff=rp_runner+rp_package;workbench=W1;task=human_review;task_status=waiting;manifest=mf.json;verified=11;missing=0;bundle=wb.zip;status=ready" in reviewpack
             assert "project_handoff=rp_package;project=lab-gene-x;space=ready;note=recorded;action_item=created;answer=generated;repair=executed;search=ready;status=ready" in reviewpack
@@ -177,13 +180,65 @@ def main() -> int:
             resp = (out_dir / "rp_llm_resp").read_text(encoding="utf-8")
             assert "status=config_missing" in resp
             hostreq = (out_dir / "rp_llm_hostreq").read_text(encoding="utf-8")
+            assert "provider=deepseek" in hostreq
             assert "key_present=0" in hostreq
+            assert "model=deepseek-v4-pro" in hostreq
             assert "secret_material=not_written" in hostreq
+
+        original_call = relay.call_openai_compatible
+        try:
+            def fake_cloud_call(request: relay.RelayRequest, config: dict[str, str], mode_label: str = "cloud") -> relay.RelayResponse:
+                return relay.RelayResponse(
+                    request_id=request.request_id,
+                    response_id=f"relay-{request.request_id}",
+                    mode=mode_label,
+                    provider="deepseek",
+                    status="ok",
+                    summary=f"cloud_{request.route}_summary",
+                    citations="6",
+                )
+
+            relay.call_openai_compatible = fake_cloud_call  # type: ignore[assignment]
+            with tempfile.TemporaryDirectory() as state_tmp, tempfile.TemporaryDirectory() as out_tmp:
+                state_dir = Path(state_tmp)
+                out_dir = Path(out_tmp)
+                write_state(state_dir)
+                summary = relay.run_relay(state_dir, out_dir, mode="cloud")
+                assert summary["status"] == "ready", summary
+                assert summary["requests"] == 10, summary
+                conclusions = (out_dir / "rp_llm_conclusions").read_text(encoding="utf-8")
+                assert "llm_conclusion=review_summary" in conclusions
+                assert "llm_conclusion=method_check" in conclusions
+                assert "llm_conclusion=recovery_note" in conclusions
+                assert "llm_conclusion=writer_summary" in conclusions
+                assert "llm_conclusion=project_review_opinion" in conclusions
+                assert "llm_conclusion=final_report_summary" in conclusions
+                assert "mode=cloud" in conclusions
+                review = (out_dir / "rp_review2").read_text(encoding="utf-8")
+                assert "llm_review_summary=cloud_review_summary_summary" in review
+                reviewdash = (out_dir / "rp_review_dashboard").read_text(encoding="utf-8")
+                assert "llm_method_check=cloud_method_check_summary" in reviewdash
+                retry = (out_dir / "rp_retry_plan").read_text(encoding="utf-8")
+                assert "llm_recovery_note=cloud_recovery_note_summary" in retry
+                revision = (out_dir / "rp_revision").read_text(encoding="utf-8")
+                assert "llm_writer_summary=cloud_writer_summary_summary" in revision
+                project = (out_dir / "rp_projectrel").read_text(encoding="utf-8")
+                assert "llm_project_review_opinion=cloud_project_review_opinion_summary" in project
+                report = (out_dir / "rp_report_text").read_text(encoding="utf-8")
+                assert "llm_final_report_summary=cloud_final_report_summary_summary" in report
+        finally:
+            relay.call_openai_compatible = original_call  # type: ignore[assignment]
     finally:
         if previous_endpoint is not None:
             os.environ["AGENT_PLATFORM_LLM_ENDPOINT"] = previous_endpoint
         if previous_key is not None:
             os.environ["AGENT_PLATFORM_LLM_API_KEY"] = previous_key
+        if previous_provider is not None:
+            os.environ["AGENT_PLATFORM_LLM_PROVIDER"] = previous_provider
+        if previous_model is not None:
+            os.environ["AGENT_PLATFORM_LLM_MODEL"] = previous_model
+        if previous_key_file is not None:
+            os.environ["AGENT_PLATFORM_LLM_API_KEY_FILE"] = previous_key_file
     print("test_plain_ucore_llm_relay: passed")
     return 0
 

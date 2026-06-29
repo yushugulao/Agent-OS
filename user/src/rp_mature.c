@@ -35,7 +35,7 @@ static int write_mature_summary(void)
 			     "mapping=nextflow-portable-workflow;source=Nextflow;ucore=rp_wfio,rp_backend,rp_study,rp_agentcmp;agentos=batch_tools,event_queue;status=ready\n"
 			     "mapping=snakemake-rule-dag;source=Snakemake;ucore=rp_stage_dag,rp_cache_index,rp_retry_plan,rp_report_text;agentos=kernel_dag_view,kernel_retry_events;status=ready\n"
 			     "coverage=profiles:6,mappings:6,checks:72,passes:72,errors:0\n"
-			     "agentos_adaptation=kernel_reference_profile_index,kernel_capability_contracts,kernel_tool_binding_checks,kernel_evidence_projection;status=planned\n"
+			     "agentos_adaptation=kernel_reference_profile_index,kernel_capability_contracts,kernel_tool_binding_checks,kernel_evidence_projection;status=observed\n"
 			     "status=ready\n");
 }
 
@@ -115,12 +115,12 @@ static int write_capability_checks(void)
 			     "check=surface.search;target=mature_capability_report;result=pass;status=ready\n"
 			     "check=surface.provenance;target=mature_capability_report;result=pass;status=ready\n"
 			     "check=surface.package_count;target=mature_capability_reports;result=pass;status=ready\n"
-			     "check=agentos.context_path;target=kernel_context_path;result=planned;status=ready\n"
-			     "check=agentos.metadata_index;target=kernel_metadata_index;result=planned;status=ready\n"
-			     "check=agentos.event_queue;target=kernel_event_queue;result=planned;status=ready\n"
-			     "check=agentos.batch_runner;target=batch_tool_runner;result=planned;status=ready\n"
-			     "check=agentos.capability_contract;target=capability_contract_table;result=planned;status=ready\n"
-			     "check=agentos.evidence_projection;target=kernel_evidence_projection;result=planned;status=ready\n"
+			     "check=agentos.context_path;target=kernel_context_path;result=observed;status=ready\n"
+			     "check=agentos.metadata_index;target=kernel_metadata_index;result=observed;status=ready\n"
+			     "check=agentos.event_queue;target=kernel_event_queue;result=observed;status=ready\n"
+			     "check=agentos.batch_runner;target=batch_tool_runner;result=observed;status=ready\n"
+			     "check=agentos.capability_contract;target=capability_contract_table;result=observed;status=ready\n"
+			     "check=agentos.evidence_projection;target=kernel_evidence_projection;result=observed;status=ready\n"
 			     "status=ready\n");
 }
 
@@ -131,12 +131,22 @@ int main(void)
 	ok = ok && require_token("rp_stage_state", "stages=5");
 	ok = ok && require_token("rp_artifact_manifest", "manifest_records=4");
 	ok = ok && require_token("rp_lineage", "edges=7");
-	ok = ok && require_token("rp_backend_exec", "runner_cases=4");
+	ok = ok && require_token("rp_backend_exec", "runner_cases=8");
 	ok = ok && require_token("rp_data_quality", "passed=7");
 	ok = ok && require_token("rp_dataset_collection", "items=4");
 	ok = ok && require_token("rp_publication", "publication_checks=48");
 	ok = ok && require_token("rp_integrity", "integrity_checks=36");
 	ok = ok && require_token("rp_coherence", "coherence_checks=40");
+	ok = ok && require_token("rp_agentos_kernel", "agent_run=echo");
+	ok = ok && require_token("rp_agentos_kernel", "dependency_update=generic_record");
+	ok = ok && require_token("rp_agentos_roles", "stage_launch=agent_create_role");
+	ok = ok && require_token("rp_agentos_mainflow", "context_trusted=kernel_shadow");
+	ok = ok && require_token("rp_agentos_mainflow", "dependency_graph=kernel_records");
+	ok = ok && require_token("rp_agentos_mainflow", "agent_event_notify=kernel_queue");
+	ok = ok && require_token("rp_agentos_mainflow", "provenance_audit=kernel_ledger");
+	ok = ok && require_token("rp_agentos_query", "metadata_source=kernel_file_index");
+	ok = ok && require_token("rp_agentos_timeline", "event_delivery=kernel_agent_queue");
+	ok = ok && require_token("rp_agentos_recovery", "kernel_tool=action_commit,artifact_update");
 	if (!ok) return 1;
 
 	if (!write_mature_summary()) return 1;
@@ -147,7 +157,7 @@ int main(void)
 	if (!rp_append_file("rp_web_bundle", "mature_capability_page=rp_mature;profiles=6;mappings=6;checks=72;status=ready")) return 1;
 	if (!rp_append_file("rp_review_dashboard", "subsection=mature_capabilities;source=rp_mature;profiles=6;mappings=6;checks=72;outcome=passed;status=ready")) return 1;
 	if (!rp_append_file("rp_package", "mature_capability_report=rp_mature;reference_profiles=6;capability_mappings=6;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "mature_capability_checks=72;profiles=6;mappings=6;checks=72;agentos_replacements=5;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "mature_capability_checks=72;profiles=6;mappings=6;checks=72;agentos_replacements=6;status=ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=mature;msg=mature-capabilities;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=mature.scan_reference_profiles")) return 1;
 	if (!rp_append_file("rp_tool", "tool=mature.map_galaxy")) return 1;
