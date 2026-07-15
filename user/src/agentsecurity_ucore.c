@@ -241,6 +241,53 @@ static void check_plain_child_orchestrator_allowed(void)
 	printf("agentsecurity_ucore: plain_child_orchestrator=1\n");
 }
 
+static void check_wake_event_authorization(void)
+{
+	struct agent_event event;
+	struct agent_event received;
+
+	check(agent_watch(AGENT_EVENT_LLM_DONE, "forged-llm") == 0,
+	      "watch forged llm event");
+	memset(&event, 0, sizeof(event));
+	event.type = AGENT_EVENT_LLM_DONE;
+	event.corr_id = 8201;
+	strcpy(event.payload, "forged-llm");
+	check(agent_wake(getpid(), &event) == AGENT_STATUS_DENIED,
+	      "direct llm event denied");
+	memset(&received, 0, sizeof(received));
+	check(agent_wait(&received, 0) == AGENT_STATUS_TIMEOUT,
+	      "denied llm event not queued");
+	check(agent_unwatch(AGENT_EVENT_LLM_DONE, "forged-llm") == 1,
+	      "unwatch forged llm event");
+
+	event.type = AGENT_EVENT_NONE;
+	check(agent_wake(getpid(), &event) == AGENT_STATUS_BAD_PARAM,
+	      "empty event type rejected");
+	event.type = AGENT_EVENT_MAX + 1;
+	check(agent_wake(getpid(), &event) == AGENT_STATUS_BAD_PARAM,
+	      "invalid event type rejected");
+
+	check(agent_watch(AGENT_EVENT_MESSAGE, "authorized-message") == 0,
+	      "watch authorized message");
+	memset(&event, 0, sizeof(event));
+	event.type = AGENT_EVENT_MESSAGE;
+	event.corr_id = 8202;
+	strcpy(event.payload, "authorized-message");
+	check(agent_wake(getpid(), &event) == AGENT_STATUS_OK,
+	      "authorized message delivered");
+	memset(&received, 0, sizeof(received));
+	check(agent_wait(&received, 0) == AGENT_STATUS_OK,
+	      "authorized message received");
+	check(received.type == AGENT_EVENT_MESSAGE,
+	      "authorized message type");
+	check(received.corr_id == 8202, "authorized message correlation");
+	check(strcmp(received.payload, "authorized-message") == 0,
+	      "authorized message payload");
+	check(agent_unwatch(AGENT_EVENT_MESSAGE, "authorized-message") == 1,
+	      "unwatch authorized message");
+	printf("agentsecurity_ucore: wake_event_authorization=1\n");
+}
+
 static void run_sentinel(void)
 {
 	struct agent_op op;
@@ -248,6 +295,7 @@ static void run_sentinel(void)
 	struct agent_file_meta meta;
 
 	check_role(AGENT_ROLE_SENTINEL, "sentinel");
+	check_wake_event_authorization();
 	make_op(&op, AGENT_TOOL_CAPABILITY_CHECK, 8101,
 		AGENT_ROLE_RECOVERY, "action_commit");
 	run_one(&op, &res, AGENT_STATUS_DENIED, "sentinel spoof cap");

@@ -106,7 +106,7 @@
 | T5-5 | 心跳字段可设置、可按 TIMER watch 投递事件、可停止 | 已验证 | `agent_heartbeat()`、`agent_heartbeat_stop()`、TIMER watch/unwatch | `agentbench_ucore: timeout_heartbeat=1`、`agentloop_ucore: timer_unwatch=1`、`agentloop_ucore: heartbeat_wake_stop=1` |
 | T5-6 | busy polling 和 event wait/wake 可计时观测并稳定完成 | 已验证 | `agentbench_ucore` | `agentbench_ucore: busy_poll_query`、`agentbench_ucore: event_wait_wake`、`agentbench_ucore: busy_poll_vs_wait`；不设置固定 tick 阈值 |
 | T5-7 | 事件处理写入 Context Path | 已验证 | `agent_wait()` 成功消费事件后追加 Context，并继承事件 cause/span | `agentloop_ucore: event_causality=1`、`labdemo_ucore` 和 [task5-agent-loop.md](task5-agent-loop.md) |
-| T5-8 | 普通进程不能直接伪造事件或取消等待 | 扩展增强 | `agent_wake()` 和 `agent_wait_cancel()` 要求 Agent 且具备 `MESSAGE_SEND` 或 `ORCHESTRATE` | `agentsecurity_ucore` 普通进程调用 `agent_wake()` 和 `agent_wait_cancel()` 返回 `-1` |
+| T5-8 | 普通进程或低权限 Agent 不能伪造系统事件或越权取消等待 | 扩展增强 | `agent_wake()` 和 `agent_wait_cancel()` 要求 Agent 且具备 `MESSAGE_SEND` 或 `ORCHESTRATE`；`agent_wake()` 只接受 `AGENT_EVENT_MESSAGE`，系统事件由专用路径产生 | `agentsecurity_ucore` 验证普通进程调用返回 `-1`，sentinel 伪造 `LLM_DONE` 返回 `AGENT_STATUS_DENIED`，非法类型返回 `AGENT_STATUS_BAD_PARAM` |
 | T5-9 | 事件队列满时拒绝新事件且不覆盖旧事件 | 扩展增强 | `AGENT_EVENT_QUEUE_CAP=16`、FIFO queue | `agentloop_ucore: overflow_dropped=1` |
 | T5-10 | 调度器感知 Agent 角色、事件状态和受权配置 | 扩展增强 | `fetch_best_task()`、`agent_sched_better()`、role weight、priority、budget、event/deadline/heartbeat/vruntime scoring、`agent_sched_config()` | `agentsched_ucore: role_weights ...`、`agentsched_ucore: configurable_policy=1`、`agentsched_ucore: event_priority=1`、`agentsched_ucore: fairness=1` |
 | T5-11 | 受权 Agent 可取消目标 Agent 的等待 | 扩展增强 | `agent_wait_cancel()` 写一次性取消令牌，目标 `agent_wait()` 返回 `AGENT_STATUS_CANCELLED` 并追加 Context | `agentloop_ucore: wait_cancel=1` |
@@ -125,7 +125,7 @@
 | --- | --- | --- | --- |
 | T6-1 | 综合示例程序 | 已验证 | `labdemo_ucore` 以科研 Agent 平台为示例负载，串联任务一至五，输出 `agentos:event`，读取真实 align 日志内容摘要，并查询、过滤全局审计短记录和统一 timeline |
 | T6-2 | 性能和计时示例程序 | 已验证 | `agentbench_ucore` 输出批量工具、Context、文件查询性能，以及轮询/事件等待计时观测；`labbench_ucore` 作为示例规划入口包装运行 |
-| T6-3 | 权限限制示例程序 | 已验证 | `agentsecurity_ucore` 输出普通进程拒绝、usershell 等价启动路径、初始化前索引查询、legacy mismatch、sentinel 伪造拒绝、recovery 幂等 action/artifact 更新和定向更新 |
+| T6-3 | 权限限制示例程序 | 已验证 | `agentsecurity_ucore` 输出普通进程拒绝、usershell 等价启动路径、初始化前索引查询、legacy mismatch、sentinel 角色伪造和系统事件伪造拒绝、recovery 幂等 action/artifact 更新和定向更新 |
 | T6-4 | LLM-friendly template relay | 已验证 | 内核提供 `llm_request` / `llm_response` 工具、`AGENT_EVENT_LLM_DONE`、`LLM_RELAY` capability、Context/timeline/audit 记录；真实云端调用放在用户态或宿主机 relay | `agentllm_ucore: template_relay=1`、`agentfinal_ucore: llm_template_relay=1` |
 | T6-5 | 页面查看与图表查看 | 已验证 | `make reader` 启动本地页面服务；`results/latest/monitor.html`、`reader-guide.html`、`index.html`、`charts/*.svg` 呈现双目标运行、测试入口、实验图表和 AgentOS 证据 | `host_tools/plain_ucore_reader.py`、`host_tools/summarize_dual_platform_results.py`、`host_tools/test_plain_ucore_reader.py`、`host_tools/test_summarize_dual_platform_results.py` |
 | T6-6 | 查询历史驱动的预测性预取 | 部分实现 | 当前实现文件 metadata 预取提示，覆盖同一 run 的对象标签依赖；综合示例中 message 入队时内核把 sentinel 的提示交接给 investigator 使用，并写入同一 span 的全局提示总线；尚未做文件内容预加载或通用预测器 | `agentfs_ucore: prefetch_hints=1`、`agentbench_ucore: file_prefetch_snapshot ...`、`agentfinal_ucore: span_prefetch=1`、`labdemo_ucore: sentinel prefetch_hint ...`、`labdemo_ucore: investigator handoff_prefetch ...`、`labdemo_ucore: investigator span_prefetch ...`、`agentos:event type=PREFETCH_USED ...` |

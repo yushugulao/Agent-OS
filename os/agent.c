@@ -6393,6 +6393,10 @@ int sys_agent_wake(int pid, uint64 eventaddr)
 		return AGENT_STATUS_BAD_PARAM;
 	if (copyin(p->pagetable, (char *)&event, eventaddr, sizeof(event)) < 0)
 		return -1;
+	if (event.type <= AGENT_EVENT_NONE || event.type > AGENT_EVENT_MAX)
+		return AGENT_STATUS_BAD_PARAM;
+	if (event.type != AGENT_EVENT_MESSAGE)
+		return AGENT_STATUS_DENIED;
 	event.payload[sizeof(event.payload) - 1] = 0;
 	safestrcpy(payload, event.payload, sizeof(payload));
 	delivered = agent_deliver_pid(pid, p, p->pid, event.type, event.corr_id,

@@ -23,7 +23,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 538：
 | `agent_watch` | 510 | `int agent_watch(int, const char *)` | 注册 Agent Loop 事件类型和短文本过滤器 |
 | `agent_wait` | 511 | `int agent_wait(struct agent_event *, int)` | 等待事件或 timeout，成功消费事件后写入 Context Path |
 | `agent_heartbeat` | 512 | `int agent_heartbeat(int)` | 设置心跳间隔并更新最后心跳 tick |
-| `agent_wake` | 513 | `int agent_wake(int, struct agent_event *)` | 向目标 Agent 投递结构化事件 |
+| `agent_wake` | 513 | `int agent_wake(int, struct agent_event *)` | 向目标 Agent 投递 `AGENT_EVENT_MESSAGE` 消息事件 |
 | `agent_file_meta_init` | 514 | `int agent_file_meta_init(void)` | 重新加载文件对象元数据、重建索引并启用扫描 |
 | `agent_file_meta_set` | 515 | `int agent_file_meta_set(struct agent_file_meta *)` | 插入或合并更新文件元数据，状态变化可触发事件 |
 | `agent_file_query` | 516 | `int agent_file_query(struct agent_file_query *, struct agent_file_query_result *)` | Agent 文件属性查询，成功后写入 Context Path |
@@ -193,6 +193,8 @@ Agent-only 直接 syscall 的权限要求：
 | `agent_audit_query` | 返回 `-1` | `ORCHESTRATE` |
 | `agent_ledger_snapshot` | 返回 `-1` | `ORCHESTRATE` |
 | `agent_sched_config` | 返回 `-1` | `ORCHESTRATE` |
+
+`agent_wake()` 是消息投递接口，只接受 `AGENT_EVENT_MESSAGE`。`AGENT_EVENT_NONE` 或超出 `AGENT_EVENT_MAX` 的类型返回 `AGENT_STATUS_BAD_PARAM`；`FILE_STATUS`、`TIMER`、`POLICY_DENIED`、`LLM_DONE` 等由内核或专用工具产生的事件返回 `AGENT_STATUS_DENIED`。例如 `LLM_DONE` 只能由具备 `LLM_RELAY` capability 的 `llm_response` 工具路径投递，不能通过 `agent_wake()` 伪造。
 
 ## 高性能请求结构
 

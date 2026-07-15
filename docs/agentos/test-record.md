@@ -56,7 +56,7 @@ bash scripts/run-agent-tests.sh
 | `agentllm_ucore` | `relay_timeline=1`、`requester_done=1` | LLM Relay 事件、唤醒和 timeline 摘要可用 |
 | `agentbench_ucore` | `batch_agent_run`、`file_index_query`、`timeline_query_prefetch` | 性能主路径和文件索引/Timeline 查询可观测 |
 | `labdemo_ucore` | `type=INCIDENT_CREATED`、`prefetch_handoff=analyze`、`provenance_graph edges=...` | 设定的模拟流程 多 Agent 恢复场景可复现 |
-| `agentsecurity_ucore` | `plain_process_denied=1`、`sentinel spoof_denied=1`、`scoped_report=1` | 权限限制和多 run 定向写入可验证 |
+| `agentsecurity_ucore` | `plain_process_denied=1`、`wake_event_authorization=1`、`sentinel spoof_denied=1` | 系统事件防伪、权限限制和多 run 定向写入可验证 |
 
 ## 样例输出：agentfinal_ucore
 
@@ -298,6 +298,7 @@ agentsecurity_ucore: preinit_index_query=1
 agentsecurity_ucore: legacy_tool_mismatch=1
 agentsecurity_ucore: legacy_param_validation=1 syscall_only=1
 agentsecurity_ucore: role=sentinel capability_checked=1
+agentsecurity_ucore: wake_event_authorization=1
 agentsecurity_ucore: sentinel spoof_denied=1
 agentsecurity_ucore: role=recovery capability_checked=1
 agentsecurity_ucore: recovery action_ok=1 duplicate=1
@@ -307,7 +308,7 @@ agentsecurity_ucore: passed
 agentsecurity_ucore: parent passed
 ```
 
-结论：普通进程 mail 最小路径可用；普通进程不能直接投递事件、取消 Agent 等待、修改 Agent 文件元数据、访问私有 `.agentmeta`、读取全局审计、读取当前 span 短记录、读取统一 timeline、查询 timeline、过滤全局审计或配置调度；pid 1 的普通直接子进程可创建 orchestrator，保证 usershell 手动测试路径可用；初始化前索引查询不会阻塞；legacy `tool_id` 和 `tool_name` 不一致会失败；legacy 参数 key/type 错误会返回 `BAD_PARAM`；syscall-only 工具不能通过 batch 执行；sentinel 不能通过用户态传入 recovery role 伪造动作权限，也不能注册对象依赖、读取或过滤全局审计、配置调度；recovery 的动作能力来自内核真实 role/capability，重复 corr_id 被识别为 duplicate，且定向动作和工件更新不会误修改其他 run。
+结论：普通进程 mail 最小路径可用；普通进程不能直接投递事件、取消 Agent 等待、修改 Agent 文件元数据、访问私有 `.agentmeta`、读取全局审计、读取当前 span 短记录、读取统一 timeline、查询 timeline、过滤全局审计或配置调度；pid 1 的普通直接子进程可创建 orchestrator，保证 usershell 手动测试路径可用；初始化前索引查询不会阻塞；legacy `tool_id` 和 `tool_name` 不一致会失败；legacy 参数 key/type 错误会返回 `BAD_PARAM`；syscall-only 工具不能通过 batch 执行；sentinel 通过 `agent_wake()` 伪造 `LLM_DONE` 会被拒绝且事件不入队，非法事件类型返回 `BAD_PARAM`，合法消息仍可投递；sentinel 不能通过用户态传入 recovery role 伪造动作权限，也不能注册对象依赖、读取或过滤全局审计、配置调度；recovery 的动作能力来自内核真实 role/capability，重复 corr_id 被识别为 duplicate，且定向动作和工件更新不会误修改其他 run。
 
 ## 基础兼容抽测：ch3_trace
 
