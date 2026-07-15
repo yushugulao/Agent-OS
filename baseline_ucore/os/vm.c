@@ -70,35 +70,79 @@ pte_t *walk(pagetable_t pagetable, uint64 va, int alloc)
 	return &pagetable[PX(0, va)];
 }
 
-// Look up a virtual address, return the physical address,
-// or 0 if not mapped.
-// Can only be used to look up user pages.
-uint64 walkaddr(pagetable_t pagetable, uint64 va)
+static pte_t *walk_user_leaf(pagetable_t pagetable, uint64 va, int perm)
 {
 	pte_t *pte;
-	uint64 pa;
+	uint64 flags;
 
-	if (va >= MAXVA)
+	if (pagetable == 0 || va >= MAXVA ||
+	    (perm & ~(PTE_R | PTE_W | PTE_X)) != 0)
 		return 0;
-
 	pte = walk(pagetable, va, 0);
 	if (pte == 0)
 		return 0;
-	if ((*pte & PTE_V) == 0)
+	flags = PTE_FLAGS(*pte);
+	if ((flags & (PTE_V | PTE_U)) != (PTE_V | PTE_U))
 		return 0;
-	if ((*pte & PTE_U) == 0)
+	if ((flags & (PTE_R | PTE_W | PTE_X)) == 0)
 		return 0;
-	pa = PTE2PA(*pte);
-	return pa;
+	if ((flags & PTE_W) != 0 && (flags & PTE_R) == 0)
+		return 0;
+	if ((flags & perm) != (uint64)perm)
+		return 0;
+	return pte;
 }
 
-// Look up a virtual address, return the physical address,
-uint64 useraddr(pagetable_t pagetable, uint64 va)
+// Look up a user leaf and return its page-aligned physical address.
+uint64 walkaddr(pagetable_t pagetable, uint64 va)
 {
-	uint64 page = walkaddr(pagetable, va);
-	if (page == 0)
+	pte_t *pte = walk_user_leaf(pagetable, va, 0);
+
+	return pte == 0 ? 0 : PTE2PA(*pte);
+}
+
+// Validate every page touched by a user range before accessing it.
+int user_range_check(pagetable_t pagetable, uint64 addr, uint64 len, int perm)
+{
+	uint64 page, last;
+
+	if (len == 0)
 		return 0;
-	return page | (va & 0xFFFULL);
+	if (addr >= MAXVA || len > MAXVA - addr)
+		return -1;
+	if ((perm & ~(PTE_R | PTE_W | PTE_X)) != 0)
+		return -1;
+
+	page = PGROUNDDOWN(addr);
+	last = PGROUNDDOWN(addr + len - 1);
+	for (;;) {
+		if (walk_user_leaf(pagetable, page, perm) == 0)
+			return -1;
+		if (page == last)
+			break;
+		page += PGSIZE;
+	}
+	return 0;
+}
+
+// Compute base + index * size without wrapping out of user address space.
+int checked_user_offset(uint64 base, uint64 index, uint64 size, uint64 *addr)
+{
+	uint64 offset, result;
+	uint64 max = ~(uint64)0;
+
+	if (addr == 0 || base >= MAXVA)
+		return -1;
+	if (size != 0 && index > max / size)
+		return -1;
+	offset = index * size;
+	if (offset > max - base)
+		return -1;
+	result = base + offset;
+	if (result >= MAXVA)
+		return -1;
+	*addr = result;
+	return 0;
 }
 
 // Add a mapping to the kernel page table.
@@ -141,13 +185,31 @@ int mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 
 int uvmmap(pagetable_t pagetable, uint64 va, uint64 npages, int perm)
 {
-	for (int i = 0; i < npages; ++i) {
-		if (mappages(pagetable, va + i * 0x1000, 0x1000,
-			     (uint64)kalloc(), perm)) {
-			return -1;
+	uint64 mapped;
+	char *mem;
+
+	if (npages == 0)
+		return 0;
+	if (pagetable == 0 || (va % PGSIZE) != 0 || va >= MAXVA ||
+	    npages > (MAXVA - va) / PGSIZE)
+		return -1;
+
+	for (mapped = 0; mapped < npages; ++mapped) {
+		mem = kalloc();
+		if (mem == 0)
+			goto fail;
+		if (mappages(pagetable, va + mapped * PGSIZE, PGSIZE,
+			     (uint64)mem, perm) < 0) {
+			kfree(mem);
+			goto fail;
 		}
 	}
 	return 0;
+
+fail:
+	if (mapped != 0)
+		uvmunmap(pagetable, va, mapped, 1);
+	return -1;
 }
 
 // Remove npages of mappings starting from va. va must be
@@ -189,7 +251,8 @@ pagetable_t uvmcreate()
 	memset(pagetable, 0, PGSIZE);
 	if (mappages(pagetable, TRAMPOLINE, PAGE_SIZE, (uint64)trampoline,
 		     PTE_R | PTE_X) < 0) {
-		panic("mappages fail");
+		uvmfree(pagetable, 0);
+		return 0;
 	}
 	return pagetable;
 }
@@ -263,12 +326,17 @@ err:
 int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
 	uint64 n, va0, pa0;
+	pte_t *pte;
+
+	if (user_range_check(pagetable, dstva, len, PTE_W) < 0)
+		return -1;
 
 	while (len > 0) {
 		va0 = PGROUNDDOWN(dstva);
-		pa0 = walkaddr(pagetable, va0);
-		if (pa0 == 0)
+		pte = walk_user_leaf(pagetable, va0, PTE_W);
+		if (pte == 0)
 			return -1;
+		pa0 = PTE2PA(*pte);
 		n = PGSIZE - (dstva - va0);
 		if (n > len)
 			n = len;
@@ -287,12 +355,17 @@ int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 int copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 {
 	uint64 n, va0, pa0;
+	pte_t *pte;
+
+	if (user_range_check(pagetable, srcva, len, PTE_R) < 0)
+		return -1;
 
 	while (len > 0) {
 		va0 = PGROUNDDOWN(srcva);
-		pa0 = walkaddr(pagetable, va0);
-		if (pa0 == 0)
+		pte = walk_user_leaf(pagetable, va0, PTE_R);
+		if (pte == 0)
 			return -1;
+		pa0 = PTE2PA(*pte);
 		n = PGSIZE - (srcva - va0);
 		if (n > len)
 			n = len;
@@ -305,20 +378,31 @@ int copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len)
 	return 0;
 }
 
+int fetch_user_u64(pagetable_t pagetable, uint64 addr, uint64 *value)
+{
+	if (value == 0)
+		return -1;
+	return copyin(pagetable, (char *)value, addr, sizeof(*value));
+}
+
 // Copy a null-terminated string from user to kernel.
 // Copy bytes to dst from virtual address srcva in a given page table,
-// until a '\0', or max.
-// Return 0 on success, -1 on error.
+// until a '\0', within max bytes (including the terminator).
+// Return the length excluding '\0' on success, -1 on error or truncation.
 int copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 {
 	uint64 n, va0, pa0;
-	int got_null = 0, len = 0;
+	uint64 len = 0;
+	pte_t *pte;
 
-	while (got_null == 0 && max > 0) {
+	if (max == 0 || srcva >= MAXVA)
+		return -1;
+	while (max > 0) {
 		va0 = PGROUNDDOWN(srcva);
-		pa0 = walkaddr(pagetable, va0);
-		if (pa0 == 0)
+		pte = walk_user_leaf(pagetable, va0, PTE_R);
+		if (pte == 0)
 			return -1;
+		pa0 = PTE2PA(*pte);
 		n = PGSIZE - (srcva - va0);
 		if (n > max)
 			n = max;
@@ -327,11 +411,9 @@ int copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 		while (n > 0) {
 			if (*p == '\0') {
 				*dst = '\0';
-				got_null = 1;
-				break;
-			} else {
-				*dst = *p;
+				return (int)len;
 			}
+			*dst = *p;
 			--n;
 			--max;
 			p++;
@@ -341,7 +423,7 @@ int copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max)
 
 		srcva = va0 + PGSIZE;
 	}
-	return len;
+	return -1;
 }
 
 // Copy to either a user address, or kernel address,

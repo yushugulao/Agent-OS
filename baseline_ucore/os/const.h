@@ -27,5 +27,6 @@
 #define MAX_STR_LEN (300)
 #define IDLE_PID (0)
 #define MAX_ARG_NUM (32) // max exec arguments
+#define MAX_RW_COUNT (0x7fffffffULL)
 
 #endif // CONST_H

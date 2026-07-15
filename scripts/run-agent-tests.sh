@@ -164,5 +164,6 @@ run_case agentbench_ucore "agentbench_ucore: parent passed"
 run_case labbench_ucore "labbench_ucore: parent passed"
 run_case labdemo_ucore "labdemo_ucore: parent passed"
 run_case agentsecurity_ucore "agentsecurity_ucore: parent passed"
+run_case usersafety_ucore "usersafety_ucore: parent passed"
 
 echo "[agent-tests] all Agent-OS uCore checks passed"

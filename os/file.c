@@ -11,6 +11,8 @@ struct file filepool[FILEPOOLSIZE];
 struct file *stdio_init(int fd)
 {
 	struct file *f = filealloc();
+	if (f == 0)
+		return 0;
 	f->type = FD_STDIO;
 	f->ref = 1;
 	f->readable = (fd == STDIN || fd == STDERR);
@@ -27,6 +29,9 @@ void fileclose(struct file *f)
 		return;
 	}
 	switch (f->type) {
+	case FD_NONE:
+		// A reserved file slot may be released before it is initialized.
+		break;
 	case FD_STDIO:
 		// Do nothing
 		break;
@@ -43,8 +48,19 @@ void fileclose(struct file *f)
 	f->off = 0;
 	f->readable = 0;
 	f->writable = 0;
+	f->pipe = 0;
+	f->ip = 0;
 	f->ref = 0;
 	f->type = FD_NONE;
+}
+
+// Pin an open-file entry across operations that may yield.
+struct file *filedup(struct file *f)
+{
+	if (f == 0 || f->ref < 1)
+		return 0;
+	f->ref++;
+	return f;
 }
 
 //Add a new system-level table entry for the open file table
@@ -52,8 +68,15 @@ struct file *filealloc()
 {
 	for (int i = 0; i < FILEPOOLSIZE; ++i) {
 		if (filepool[i].ref == 0) {
-			filepool[i].ref = 1;
-			return &filepool[i];
+			struct file *f = &filepool[i];
+			f->type = FD_NONE;
+			f->ref = 1;
+			f->readable = 0;
+			f->writable = 0;
+			f->pipe = 0;
+			f->ip = 0;
+			f->off = 0;
+			return f;
 		}
 	}
 	return 0;
@@ -122,8 +145,10 @@ int fileopen(char *path, uint64 omode)
 		}
 		ivalid(ip);
 	}
-	if (ip->type != T_FILE)
-		panic("unsupported file inode type\n");
+	if (ip->type != T_FILE) {
+		iput(ip);
+		return -1;
+	}
 	if ((omode & O_TRUNC) && ip->type == T_FILE &&
 	    !agent_edit_truncate_allowed(ip)) {
 		iput(ip);

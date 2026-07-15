@@ -15,6 +15,7 @@
 #define MAILBOX_PAYLOAD_SIZE (256)
 
 struct file;
+struct user_image;
 
 // Saved registers for kernel context switches.
 struct context {
@@ -184,11 +185,16 @@ struct thread *id_to_task(int);
 int task_to_id(struct thread *);
 struct thread *pop_task();
 struct proc *allocproc();
+void freeproc(struct proc *);
 int allocthread(struct proc *p, uint64 entry, int alloc_user_res);
 uint64 get_thread_trapframe_va(int tid);
+struct trapframe *proc_trapframe(struct proc *, int);
 int fdalloc(struct file *);
 int init_stdio(struct proc *);
 int push_argv(struct proc *, char **);
+int push_argv_image(pagetable_t, uint64, struct trapframe *, char **);
+void proc_install_user_image(struct proc *, struct user_image *,
+			     struct trapframe *, int);
 // swtch.S
 void swtch(struct context *, struct context *);
 

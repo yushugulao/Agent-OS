@@ -2,6 +2,7 @@
 #define AGENT_H
 
 #include "const.h"
+#include "riscv.h"
 #include "types.h"
 
 #define AGENT_CALL_VERSION 1
@@ -757,6 +758,8 @@ struct thread;
 void agentinit(void);
 void agent_clear_metadata(struct proc *p);
 int agent_map_context(struct proc *p);
+int agent_alias_exec_context(struct proc *p, pagetable_t pagetable);
+void agent_unmap_exec_context(struct proc *p, pagetable_t pagetable);
 void agent_free_proc_context(struct proc *p);
 int agent_make(struct proc *p);
 int agent_make_role(struct proc *p, int role);

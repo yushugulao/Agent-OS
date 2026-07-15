@@ -1013,6 +1013,39 @@ void agent_free_proc_context(struct proc *p)
 	agent_clear_metadata(p);
 }
 
+int agent_alias_exec_context(struct proc *p, pagetable_t pagetable)
+{
+	int mapped = 0;
+
+	if (p == 0 || pagetable == 0)
+		return -1;
+	if (!p->is_agent)
+		return 0;
+	if (p->agent_ctx_base == 0 ||
+	    p->agent_ctx_base > MAXVA - AGENT_CONTEXT_SIZE)
+		return -1;
+	for (int i = 0; i < AGENT_CONTEXT_PAGES; i++) {
+		if (p->agent_ctx_kva[i] == 0 ||
+		    mappages(pagetable, p->agent_ctx_base + i * PAGE_SIZE,
+			     PAGE_SIZE, p->agent_ctx_kva[i],
+			     PTE_U | PTE_R | PTE_W) < 0)
+			goto fail;
+		mapped++;
+	}
+	return 0;
+
+fail:
+	if (mapped != 0)
+		uvmunmap(pagetable, p->agent_ctx_base, mapped, 0);
+	return -1;
+}
+
+void agent_unmap_exec_context(struct proc *p, pagetable_t pagetable)
+{
+	if (p != 0 && pagetable != 0 && p->is_agent && p->agent_ctx_base != 0)
+		uvmunmap(pagetable, p->agent_ctx_base, AGENT_CONTEXT_PAGES, 0);
+}
+
 static char *agent_context_array_ptr(uint64 *kva, uint64 offset, uint64 len)
 {
 	uint64 page;
@@ -4446,21 +4479,6 @@ static int agent_execute_one(struct proc *p, struct agent_op *op,
 	return agent_append_context(p, op, res, tick);
 }
 
-static int agent_user_range_mapped(struct proc *p, uint64 addr, uint64 len)
-{
-	uint64 end;
-
-	if (len == 0)
-		return 1;
-	end = addr + len;
-	if (end < addr)
-		return 0;
-	for (uint64 a = PGROUNDDOWN(addr); a < end; a += PAGE_SIZE)
-		if (walkaddr(p->pagetable, a) == 0)
-			return 0;
-	return 1;
-}
-
 static int agent_req_has_arg0(struct agent_request *req)
 {
 	return req->arg0_key[0] || req->arg0_type != AGENT_PARAM_NONE;
@@ -5911,7 +5929,8 @@ int sys_agent_timeline_read(uint64 filteraddr, uint64 recordsaddr, int max,
 	if (max > 0 && recordsaddr == 0)
 		return AGENT_STATUS_BAD_PARAM;
 	bytes = (uint64)max * sizeof(struct agent_timeline_record);
-	if (max > 0 && !agent_user_range_mapped(p, recordsaddr, bytes))
+	if (max > 0 &&
+	    user_range_check(p->pagetable, recordsaddr, bytes, PTE_W) < 0)
 		return -1;
 	rc = agent_timeline_copy_filter(p, filteraddr, &filter);
 	if (rc < 0)
@@ -5937,14 +5956,12 @@ int sys_agent_run(uint64 opsaddr, uint64 resultsaddr, int count, uint64 flags)
 		return -1;
 	if (count == 0)
 		return 0;
-	for (int i = 0; i < count; i++)
-		if (copyin(p->pagetable, (char *)&op,
-			   opsaddr + i * sizeof(struct agent_op),
-			   sizeof(op)) < 0)
-			return -1;
-	if (!agent_user_range_mapped(
-		    p, resultsaddr,
-		    (uint64)count * sizeof(struct agent_result)))
+	if (user_range_check(p->pagetable, opsaddr,
+			     (uint64)count * sizeof(struct agent_op), PTE_R) < 0)
+		return -1;
+	if (user_range_check(p->pagetable, resultsaddr,
+			     (uint64)count * sizeof(struct agent_result),
+			     PTE_W) < 0)
 		return -1;
 	tick = agent_ticks();
 	p->loop_state = AGENT_LOOP_RUNNING;
@@ -6244,7 +6261,8 @@ int sys_agent_wait(uint64 eventaddr, int timeout_ticks)
 
 	if (!p->is_agent)
 		return -1;
-	if (eventaddr && !agent_user_range_mapped(p, eventaddr, sizeof(event)))
+	if (eventaddr &&
+	    user_range_check(p->pagetable, eventaddr, sizeof(event), PTE_W) < 0)
 		return -1;
 	memset(&event, 0, sizeof(event));
 	p->agent_wait_count++;
@@ -6432,7 +6450,7 @@ static int agent_file_edit_copy_state(struct proc *p, uint64 stateaddr,
 {
 	if (stateaddr == 0)
 		return 0;
-	if (!agent_user_range_mapped(p, stateaddr, sizeof(*state)))
+	if (user_range_check(p->pagetable, stateaddr, sizeof(*state), PTE_W) < 0)
 		return -1;
 	return copyout(p->pagetable, stateaddr, (char *)state,
 		       sizeof(*state));
@@ -6457,7 +6475,8 @@ int sys_agent_file_edit_begin(uint64 pathaddr, uint64 flags, int ttl_ticks,
 		return -1;
 	if (!agent_edit_can_manage(p))
 		return AGENT_STATUS_DENIED;
-	if (stateaddr && !agent_user_range_mapped(p, stateaddr, sizeof(state)))
+	if (stateaddr &&
+	    user_range_check(p->pagetable, stateaddr, sizeof(state), PTE_W) < 0)
 		return -1;
 	rc = agent_file_edit_lookup_path(p, pathaddr, path, &ip);
 	if (rc < 0)
@@ -6547,7 +6566,8 @@ int sys_agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
 
 	if (!p->is_agent)
 		return -1;
-	if (stateaddr && !agent_user_range_mapped(p, stateaddr, sizeof(state)))
+	if (stateaddr &&
+	    user_range_check(p->pagetable, stateaddr, sizeof(state), PTE_W) < 0)
 		return -1;
 	now = agent_ticks();
 	agent_edit_lock();
@@ -6649,7 +6669,7 @@ int sys_agent_file_edit_state(uint64 pathaddr, uint64 stateaddr)
 	if (!p->is_agent)
 		return -1;
 	if (stateaddr == 0 ||
-	    !agent_user_range_mapped(p, stateaddr, sizeof(state)))
+	    user_range_check(p->pagetable, stateaddr, sizeof(state), PTE_W) < 0)
 		return -1;
 	rc = agent_file_edit_lookup_path(p, pathaddr, path, &ip);
 	if (rc < 0)
@@ -6839,7 +6859,7 @@ int sys_agent_file_query(uint64 queryaddr, uint64 resultaddr)
 	query.kind[sizeof(query.kind) - 1] = 0;
 	query.status[sizeof(query.status) - 1] = 0;
 	query.summary_contains[sizeof(query.summary_contains) - 1] = 0;
-	if (!agent_user_range_mapped(p, resultaddr, sizeof(result)))
+	if (user_range_check(p->pagetable, resultaddr, sizeof(result), PTE_W) < 0)
 		return -1;
 	if (!agent_file_query_has_filter(&query))
 		return AGENT_STATUS_BAD_PARAM;
@@ -6958,7 +6978,7 @@ int sys_agent_call(uint64 reqaddr, uint64 respaddr)
 
 	if (copyin(p->pagetable, (char *)&req, reqaddr, sizeof(req)) < 0)
 		return -1;
-	if (!agent_user_range_mapped(p, respaddr, sizeof(resp)))
+	if (user_range_check(p->pagetable, respaddr, sizeof(resp), PTE_W) < 0)
 		return -1;
 	memset(&resp, 0, sizeof(resp));
 	resp.version = AGENT_CALL_VERSION;

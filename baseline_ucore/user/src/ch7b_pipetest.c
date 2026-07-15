@@ -9,10 +9,10 @@ const char STR[] = "hello pipe!";
 int main()
 {
 	// create pipe
-	uint64 pipe_fd[2];
+	int pipe_fd[2];
 	int ret = pipe((void *)&pipe_fd);
 	assert_eq(ret, 0);
-	printf("[parent] read end = %p, write end = %p\n", pipe_fd[0],
+	printf("[parent] read end = %d, write end = %d\n", pipe_fd[0],
 	       pipe_fd[1]);
 	int pid = fork();
 	if (pid == 0) {

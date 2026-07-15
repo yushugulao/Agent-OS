@@ -30,7 +30,7 @@ struct mutex *mutex_create(int blocking);
 void mutex_lock(struct mutex *);
 void mutex_unlock(struct mutex *);
 struct semaphore *semaphore_create(int count);
-void semaphore_up(struct semaphore *);
+int semaphore_up(struct semaphore *);
 void semaphore_down(struct semaphore *);
 struct condvar *condvar_create();
 void cond_signal(struct condvar *);

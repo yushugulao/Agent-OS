@@ -6,12 +6,24 @@
 #include "proc.h"
 #include "types.h"
 
+struct user_image {
+	pagetable_t pagetable;
+	uint64 max_page;
+	uint64 ustack_base;
+	uint64 entry;
+	uint64 shared_base;
+	uint64 shared_pages;
+};
+
 int load_init_app();
-int bin_loader(struct inode *, struct proc *);
+int user_image_build(struct inode *, uint64, struct user_image *);
+void user_image_discard(struct user_image *);
 
 #define BASE_ADDRESS (0x1000)
 #define USTACK_SIZE (PAGE_SIZE)
 #define KSTACK_SIZE (PAGE_SIZE)
 #define TRAP_PAGE_SIZE (PAGE_SIZE)
+
+#define USER_IMAGE_LIMIT (AGENT_CONTEXT_BASE)
 
 #endif // LOADER_H

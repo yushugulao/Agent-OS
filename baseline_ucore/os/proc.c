@@ -138,6 +138,10 @@ found:
 	p->parent = NULL;
 	p->exit_code = 0;
 	p->pagetable = uvmcreate();
+	if (p->pagetable == 0) {
+		p->state = P_UNUSED;
+		return 0;
+	}
 	memset((void *)p->files, 0, sizeof(struct file *) * FD_BUFFER_SIZE);
 	p->next_mutex_id = 0;
 	p->next_semaphore_id = 0;
@@ -151,6 +155,13 @@ inline uint64 get_thread_trapframe_va(int tid)
 	return TRAPFRAME - tid * TRAP_PAGE_SIZE;
 }
 
+struct trapframe *proc_trapframe(struct proc *p, int tid)
+{
+	if (p < pool || p >= &pool[NPROC] || tid < 0 || tid >= NTHREAD)
+		return 0;
+	return (struct trapframe *)trapframe[p - pool][tid];
+}
+
 inline uint64 get_thread_ustack_base_va(struct thread *t)
 {
 	return t->process->ustack_base + t->tid * USTACK_SIZE;
@@ -160,6 +171,7 @@ int allocthread(struct proc *p, uint64 entry, int alloc_user_res)
 {
 	int tid;
 	struct thread *t;
+	uint64 old_max_page = p->max_page;
 	for (tid = 0; tid < NTHREAD; ++tid) {
 		t = &p->threads[tid];
 		if (t->state == T_UNUSED) {
@@ -182,18 +194,26 @@ found:
 	if (alloc_user_res != 0) {
 		if (uvmmap(p->pagetable, t->ustack, USTACK_SIZE / PAGE_SIZE,
 			   PTE_U | PTE_R | PTE_W) < 0) {
-			panic("map ustack fail");
+			t->state = T_UNUSED;
+			t->tid = -1;
+			return -1;
 		}
 		p->max_page =
 			MAX(p->max_page,
 			    PGROUNDUP(t->ustack + USTACK_SIZE - 1) / PAGE_SIZE);
 	}
 	// trap frame
-	t->trapframe = (struct trapframe *)trapframe[p - pool][tid];
+	t->trapframe = proc_trapframe(p, tid);
 	memset((void *)t->trapframe, 0, TRAP_PAGE_SIZE);
 	if (mappages(p->pagetable, get_thread_trapframe_va(tid), TRAP_PAGE_SIZE,
 		     (uint64)t->trapframe, PTE_R | PTE_W) < 0) {
-		panic("map trapframe fail");
+		if (alloc_user_res != 0)
+			uvmunmap(p->pagetable, t->ustack,
+				 USTACK_SIZE / PAGE_SIZE, 1);
+		p->max_page = old_max_page;
+		t->state = T_UNUSED;
+		t->tid = -1;
+		return -1;
 	}
 	t->trapframe->sp = t->ustack + USTACK_SIZE;
 	t->trapframe->epc = entry;
@@ -204,19 +224,29 @@ found:
 	// we do not add thread to scheduler immediately
 	debugf("allocthread p: %d, o: %d, t: %d, e: %p, sp: %p, spp: %p",
 	       p->pid, (p - pool), t->tid, entry, t->ustack,
-	       useraddr(p->pagetable, t->ustack));
+	       walkaddr(p->pagetable, t->ustack));
 	return tid;
 }
 
 int init_stdio(struct proc *p)
 {
 	for (int i = 0; i < 3; i++) {
-		if (p->files[i] != NULL) {
-			return -1;
-		}
+		if (p->files[i] != NULL)
+			goto fail;
 		p->files[i] = stdio_init(i);
+		if (p->files[i] == 0)
+			goto fail;
 	}
 	return 0;
+
+fail:
+	for (int i = 0; i < 3; i++) {
+		if (p->files[i] != 0) {
+			fileclose(p->files[i]);
+			p->files[i] = 0;
+		}
+	}
+	return -1;
 }
 
 // Scheduler never returns.  It loops, doing:
@@ -275,6 +305,47 @@ void freepagetable(pagetable_t pagetable, uint64 max_page)
 	uvmfree(pagetable, max_page);
 }
 
+void proc_install_user_image(struct proc *p, struct user_image *image,
+			     struct trapframe *staged, int running)
+{
+	pagetable_t old_pagetable = p->pagetable;
+	uint64 old_max_page = p->max_page;
+	struct thread *main_thread;
+
+	p->pagetable = image->pagetable;
+	p->max_page = image->max_page;
+	p->ustack_base = image->ustack_base;
+	image->pagetable = 0;
+
+	for (int tid = 0; tid < NTHREAD; tid++) {
+		p->threads[tid].state = T_UNUSED;
+		p->threads[tid].tid = -1;
+	}
+	main_thread = &p->threads[0];
+	main_thread->tid = 0;
+	main_thread->state = running ? RUNNING : T_USED;
+	main_thread->process = p;
+	main_thread->exit_code = 0;
+	main_thread->kstack = (uint64)kstack[p - pool][0];
+	main_thread->ustack = p->ustack_base;
+	main_thread->trapframe = proc_trapframe(p, 0);
+	memmove(main_thread->trapframe, staged, sizeof(*staged));
+	if (!running) {
+		memset(&main_thread->context, 0, sizeof(main_thread->context));
+		main_thread->context.ra = (uint64)usertrapret;
+		main_thread->context.sp = main_thread->kstack + KSTACK_SIZE;
+	}
+
+	if (old_pagetable != 0) {
+		for (int tid = 0; tid < NTHREAD; tid++)
+			uvmunmap(old_pagetable, get_thread_trapframe_va(tid), 1,
+				 0);
+		uvmunmap(old_pagetable, TRAMPOLINE, 1, 0);
+		uvmfree(old_pagetable, old_max_page);
+	}
+	memset(image, 0, sizeof(*image));
+}
+
 void freethread(struct thread *t)
 {
 	pagetable_t pt = t->process->pagetable;
@@ -299,9 +370,10 @@ void freeproc(struct proc *p)
 	p->pagetable = 0;
 	p->max_page = 0;
 	p->ustack_base = 0;
-	for (int i = 0; i > FD_BUFFER_SIZE; i++) {
+	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
 		if (p->files[i] != NULL) {
 			fileclose(p->files[i]);
+			p->files[i] = NULL;
 		}
 	}
 	p->state = P_UNUSED;
@@ -314,11 +386,12 @@ int fork()
 	int i;
 	// Allocate process.
 	if ((np = allocproc()) == 0) {
-		panic("allocproc\n");
+		return -1;
 	}
 	// Copy user memory from parent to child.
 	if (uvmcopy(p->pagetable, np->pagetable, p->max_page) < 0) {
-		panic("uvmcopy\n");
+		freeproc(np);
+		return -1;
 	}
 	np->max_page = p->max_page;
 	np->ustack_base = p->ustack_base;
@@ -333,8 +406,12 @@ int fork()
 
 	np->parent = p;
 	// currently only copy main thread
-	struct thread *nt = &np->threads[allocthread(np, 0, 0)],
-		      *t = &p->threads[0];
+	int tid = allocthread(np, 0, 0);
+	if (tid < 0) {
+		freeproc(np);
+		return -1;
+	}
+	struct thread *nt = &np->threads[tid], *t = &p->threads[0];
 	// copy saved user registers.
 	*(nt->trapframe) = *(t->trapframe);
 	// Cause fork to return 0 in the child.
@@ -344,63 +421,106 @@ int fork()
 	return np->pid;
 }
 
-int push_argv(struct proc *p, char **argv)
+int push_argv_image(pagetable_t pagetable, uint64 stack_base,
+		    struct trapframe *staged, char **argv)
 {
-	uint64 argc, ustack[MAX_ARG_NUM + 1];
-	// only push to main thread
-	struct thread *t = &p->threads[0];
-	uint64 sp = t->ustack + USTACK_SIZE, spb = t->ustack;
-	debugf("[push] sp: %p, spb: %p", sp, spb);
+	uint64 argc, argp[MAX_ARG_NUM + 1];
+	uint64 sp;
+	uint64 layout_sp;
+
+	if (pagetable == 0 || staged == 0 || argv == 0 ||
+	    stack_base > MAXVA - USTACK_SIZE)
+		return -1;
+	sp = stack_base + USTACK_SIZE;
+	layout_sp = sp;
+	// Validate the complete layout before modifying the new user stack.
+	for (argc = 0; argv[argc]; argc++) {
+		uint64 n;
+
+		if (argc >= MAX_ARG_NUM)
+			return -1;
+		n = strlen(argv[argc]) + 1;
+		if (n > layout_sp - stack_base)
+			return -1;
+		layout_sp -= n;
+		layout_sp -= layout_sp % 16;
+	}
+	uint64 pointer_bytes = (argc + 1) * sizeof(uint64);
+	if (pointer_bytes > layout_sp - stack_base)
+		return -1;
 	// Push argument strings, prepare rest of stack in ustack.
 	for (argc = 0; argv[argc]; argc++) {
-		if (argc >= MAX_ARG_NUM)
-			panic("too many args!");
-		sp -= strlen(argv[argc]) + 1;
+		uint64 n = strlen(argv[argc]) + 1;
+
+		sp -= n;
 		sp -= sp % 16; // riscv sp must be 16-byte aligned
-		if (sp < spb) {
-			panic("uset stack overflow!");
+		if (copyout(pagetable, sp, argv[argc], n) < 0) {
+			return -1;
 		}
-		if (copyout(p->pagetable, sp, argv[argc],
-			    strlen(argv[argc]) + 1) < 0) {
-			panic("copy argv failed!");
-		}
-		ustack[argc] = sp;
+		argp[argc] = sp;
 	}
-	ustack[argc] = 0;
+	argp[argc] = 0;
 	// push the array of argv[] pointers.
 	sp -= (argc + 1) * sizeof(uint64);
 	sp -= sp % 16;
-	if (sp < spb) {
-		panic("uset stack overflow!");
-	}
-	if (copyout(p->pagetable, sp, (char *)ustack,
+	if (copyout(pagetable, sp, (char *)argp,
 		    (argc + 1) * sizeof(uint64)) < 0) {
-		panic("copy argc failed!");
+		return -1;
 	}
-	t->trapframe->a1 = sp;
-	t->trapframe->sp = sp;
-	// clear files ?
+	staged->a1 = sp;
+	staged->sp = sp;
 	return argc; // this ends up in a0, the first argument to main(argc, argv)
+}
+
+int push_argv(struct proc *p, char **argv)
+{
+	struct thread *t = &p->threads[0];
+
+	return push_argv_image(p->pagetable, t->ustack, t->trapframe, argv);
+}
+
+static int exec_thread_ready(struct proc *p)
+{
+	if (curr_thread() != &p->threads[0] || curr_thread()->state != RUNNING)
+		return 0;
+	for (int tid = 1; tid < NTHREAD; tid++) {
+		if (p->threads[tid].state != T_UNUSED &&
+		    p->threads[tid].state != EXITED)
+			return 0;
+	}
+	return 1;
 }
 
 int exec(char *path, char **argv)
 {
-	infof("exec : %s\n", path);
 	struct inode *ip;
 	struct proc *p = curr_proc();
+	struct user_image image;
+	struct trapframe staged;
+	int argc;
+
+	if (!exec_thread_ready(p))
+		return -1;
+	infof("exec : %s\n", path);
 	if ((ip = namei(path)) == 0) {
 		errorf("invalid file name %s\n", path);
 		return -1;
 	}
-	// free current main thread's ustack and trapframe
-	struct thread *t = curr_thread();
-	freethread(t);
-	t->state = T_UNUSED;
-	uvmunmap(p->pagetable, 0, p->max_page, 1);
-	bin_loader(ip, p);
+	if (user_image_build(ip, (uint64)proc_trapframe(p, 0), &image) < 0) {
+		iput(ip);
+		return -1;
+	}
 	iput(ip);
-	t->state = RUNNING;
-	return push_argv(p, argv);
+	memset(&staged, 0, sizeof(staged));
+	staged.epc = image.entry;
+	argc = push_argv_image(image.pagetable, image.ustack_base, &staged,
+			       argv);
+	if (argc < 0) {
+		user_image_discard(&image);
+		return -1;
+	}
+	proc_install_user_image(p, &image, &staged, 1);
+	return argc;
 }
 
 int wait(int pid, int *code)

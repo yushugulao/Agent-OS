@@ -16,88 +16,115 @@ enum trace_request {
 	TRACE_SYSCALL,
 };
 
-static int user_can_write(pagetable_t pagetable, uint64 va)
-{
-	pte_t *pte;
-
-	if (va >= MAXVA)
-		return 0;
-	pte = walk(pagetable, va, 0);
-	if (pte == 0)
-		return 0;
-	return (*pte & PTE_V) && (*pte & PTE_U) && (*pte & PTE_W);
-}
-
 uint64 console_write(uint64 va, uint64 len)
 {
 	struct proc *p = curr_proc();
-	char str[MAX_STR_LEN];
-	int size = copyinstr(p->pagetable, str, va, MIN(len, MAX_STR_LEN));
-	tracef("write size = %d", size);
-	for (int i = 0; i < size; ++i) {
-		console_putchar(str[i]);
+	char buf[MAX_STR_LEN];
+	uint64 written = 0;
+
+	while (written < len) {
+		uint64 n = MIN(len - written, sizeof(buf));
+		if (copyin(p->pagetable, buf, va + written, n) < 0)
+			return written ? written : (uint64)-1;
+		for (uint64 i = 0; i < n; ++i)
+			console_putchar(buf[i]);
+		written += n;
 	}
-	return len;
+	return written;
 }
 
 uint64 console_read(uint64 va, uint64 len)
 {
 	struct proc *p = curr_proc();
-	char str[MAX_STR_LEN];
-	tracef("read size = %d", len);
-	for (int i = 0; i < len; ++i) {
-		int c;
-		do {
-			c = consgetc();
-		} while (c < 0);
-		str[i] = c;
+	char buf[MAX_STR_LEN];
+	uint64 n = MIN(len, sizeof(buf));
+	uint64 got = 0;
+
+	while (got < n) {
+		int c = consgetc();
+		if (c < 0) {
+			if (got != 0)
+				break;
+			yield();
+			continue;
+		}
+		buf[got++] = c;
 	}
-	copyout(p->pagetable, va, str, len);
-	return len;
+	if (copyout(p->pagetable, va, buf, got) < 0)
+		return (uint64)-1;
+	return got;
 }
 
 uint64 sys_write(int fd, uint64 va, uint64 len)
 {
+	uint64 result;
+	struct file *f;
+	struct proc *p;
+
 	if (fd < 0 || fd >= FD_BUFFER_SIZE)
 		return -1;
-	struct proc *p = curr_proc();
-	struct file *f = p->files[fd];
+	p = curr_proc();
+	f = filedup(p->files[fd]);
 	if (f == NULL) {
 		errorf("invalid fd %d\n", fd);
 		return -1;
 	}
+	if (!f->writable || len > MAX_RW_COUNT ||
+	    user_range_check(p->pagetable, va, len, PTE_R) < 0) {
+		fileclose(f);
+		return -1;
+	}
 	switch (f->type) {
 	case FD_STDIO:
-		return console_write(va, len);
+		result = console_write(va, len);
+		break;
 	case FD_PIPE:
-		return pipewrite(f->pipe, va, len);
+		result = pipewrite(f->pipe, va, len);
+		break;
 	case FD_INODE:
-		return inodewrite(f, va, len);
+		result = inodewrite(f, va, len);
+		break;
 	default:
 		panic("unknown file type %d\n", f->type);
 	}
+	fileclose(f);
+	return result;
 }
 
 uint64 sys_read(int fd, uint64 va, uint64 len)
 {
+	uint64 result;
+	struct file *f;
+	struct proc *p;
+
 	if (fd < 0 || fd >= FD_BUFFER_SIZE)
 		return -1;
-	struct proc *p = curr_proc();
-	struct file *f = p->files[fd];
+	p = curr_proc();
+	f = filedup(p->files[fd]);
 	if (f == NULL) {
 		errorf("invalid fd %d\n", fd);
 		return -1;
 	}
+	if (!f->readable || len > MAX_RW_COUNT ||
+	    user_range_check(p->pagetable, va, len, PTE_W) < 0) {
+		fileclose(f);
+		return -1;
+	}
 	switch (f->type) {
 	case FD_STDIO:
-		return console_read(va, len);
+		result = console_read(va, len);
+		break;
 	case FD_PIPE:
-		return piperead(f->pipe, va, len);
+		result = piperead(f->pipe, va, len);
+		break;
 	case FD_INODE:
-		return inoderead(f, va, len);
+		result = inoderead(f, va, len);
+		break;
 	default:
 		panic("unknown file type %d\n", f->type);
 	}
+	fileclose(f);
+	return result;
 }
 
 __attribute__((noreturn)) void sys_exit(int code)
@@ -119,8 +146,7 @@ uint64 sys_gettimeofday(uint64 val, int _tz)
 	TimeVal t;
 	t.sec = cycle / CPU_FREQ;
 	t.usec = (cycle % CPU_FREQ) * 1000000 / CPU_FREQ;
-	copyout(p->pagetable, val, (char *)&t, sizeof(TimeVal));
-	return 0;
+	return copyout(p->pagetable, val, (char *)&t, sizeof(TimeVal));
 }
 
 uint64 sys_getpid()
@@ -145,8 +171,6 @@ int sys_trace(int req, uint64 id, uint8 data)
 			return -1;
 		return value;
 	case TRACE_WRITE:
-		if (!user_can_write(p->pagetable, id))
-			return -1;
 		value = data;
 		if (copyout(p->pagetable, id, (char *)&value, sizeof(value)) < 0)
 			return -1;
@@ -216,64 +240,111 @@ uint64 sys_clone()
 	return fork();
 }
 
-static inline uint64 fetchaddr(pagetable_t pagetable, uint64 va)
+static int copy_exec_args(pagetable_t pagetable, uint64 uargv, char **argv,
+			  char *storage)
 {
-	uint64 *addr = (uint64 *)useraddr(pagetable, va);
-	return *addr;
+	uint64 storage_used = 0;
+	uint64 stack_left = USTACK_SIZE;
+
+	if (uargv == 0) {
+		argv[0] = 0;
+		return 0;
+	}
+	for (uint64 i = 0; i <= MAX_ARG_NUM; i++) {
+		uint64 slot;
+		uint64 user_arg;
+
+		if (checked_user_offset(uargv, i, sizeof(uint64), &slot) < 0 ||
+		    fetch_user_u64(pagetable, slot, &user_arg) < 0)
+			return -1;
+		if (user_arg == 0) {
+			uint64 pointers = (i + 1) * sizeof(uint64);
+			if (pointers > stack_left)
+				return -1;
+			argv[i] = 0;
+			return i;
+		}
+		if (i == MAX_ARG_NUM || storage_used >= USTACK_SIZE)
+			return -1;
+
+		int len = copyinstr(pagetable, storage + storage_used, user_arg,
+				    USTACK_SIZE - storage_used);
+		if (len < 0 || (uint64)len + 1 > stack_left)
+			return -1;
+		argv[i] = storage + storage_used;
+		storage_used += len + 1;
+		stack_left -= len + 1;
+		stack_left -= stack_left % 16;
+	}
+	return -1;
 }
 
 uint64 sys_exec(uint64 path, uint64 uargv)
 {
 	struct proc *p = curr_proc();
 	char name[MAX_STR_LEN];
-	copyinstr(p->pagetable, name, path, MAX_STR_LEN);
-	uint64 arg;
-	static char strpool[MAX_ARG_NUM][MAX_STR_LEN];
-	char *argv[MAX_ARG_NUM];
-	int i;
-	for (i = 0; uargv && (arg = fetchaddr(p->pagetable, uargv));
-	     uargv += sizeof(char *), i++) {
-		copyinstr(p->pagetable, (char *)strpool[i], arg, MAX_STR_LEN);
-		argv[i] = (char *)strpool[i];
+	char *argv[MAX_ARG_NUM + 1];
+	char *storage;
+	int rc;
+
+	if (copyinstr(p->pagetable, name, path, sizeof(name)) < 0)
+		return -1;
+	storage = kalloc();
+	if (storage == 0)
+		return -1;
+	if (copy_exec_args(p->pagetable, uargv, argv, storage) < 0) {
+		kfree(storage);
+		return -1;
 	}
-	argv[i] = NULL;
-	return exec(name, (char **)argv);
+	rc = exec(name, argv);
+	kfree(storage);
+	return rc;
 }
 
 uint64 sys_wait(int pid, uint64 va)
 {
 	struct proc *p = curr_proc();
-	int *code = (int *)useraddr(p->pagetable, va);
-	return wait(pid, code);
+	int code;
+	int child;
+
+	if (va &&
+	    user_range_check(p->pagetable, va, sizeof(code), PTE_W) < 0)
+		return -1;
+	child = wait(pid, &code);
+	if (child < 0 || va == 0)
+		return child;
+	if (copyout(p->pagetable, va, (char *)&code, sizeof(code)) < 0)
+		return -1;
+	return child;
 }
 
 uint64 sys_pipe(uint64 fdarray)
 {
 	struct proc *p = curr_proc();
-	int fd0 = -1, fd1 = -1;
-	struct file *f0, *f1;
+	int fds[2] = { -1, -1 };
+	struct file *f0 = 0, *f1 = 0;
+
+	if (user_range_check(p->pagetable, fdarray, sizeof(fds), PTE_W) < 0)
+		return -1;
 	f0 = filealloc();
 	f1 = filealloc();
 	if (f0 == 0 || f1 == 0)
 		goto err0;
 	if (pipealloc(f0, f1) < 0)
 		goto err0;
-	fd0 = fdalloc(f0);
-	fd1 = fdalloc(f1);
-	if (fd0 < 0 || fd1 < 0)
+	fds[0] = fdalloc(f0);
+	fds[1] = fdalloc(f1);
+	if (fds[0] < 0 || fds[1] < 0)
 		goto err1;
-	if (copyout(p->pagetable, fdarray, (char *)&fd0, sizeof(fd0)) < 0 ||
-	    copyout(p->pagetable, fdarray + sizeof(int), (char *)&fd1,
-		    sizeof(fd1)) < 0) {
+	if (copyout(p->pagetable, fdarray, (char *)fds, sizeof(fds)) < 0)
 		goto err1;
-	}
 	return 0;
 
 err1:
-	if (fd0 >= 0)
-		p->files[fd0] = 0;
-	if (fd1 >= 0)
-		p->files[fd1] = 0;
+	if (fds[0] >= 0)
+		p->files[fds[0]] = 0;
+	if (fds[1] >= 0)
+		p->files[fds[1]] = 0;
 err0:
 	if (f0)
 		fileclose(f0);
@@ -285,8 +356,10 @@ err0:
 uint64 sys_openat(uint64 va, uint64 omode, uint64 _flags)
 {
 	struct proc *p = curr_proc();
-	char path[200];
-	copyinstr(p->pagetable, path, va, 200);
+	char path[MAXPATH];
+
+	if (copyinstr(p->pagetable, path, va, sizeof(path)) < 0)
+		return -1;
 	return fileopen(path, omode);
 }
 
@@ -320,6 +393,8 @@ uint64 sys_close(int fd)
 int sys_thread_create(uint64 entry, uint64 arg)
 {
 	struct proc *p = curr_proc();
+	if (user_range_check(p->pagetable, entry, 1, PTE_X) < 0)
+		return -1;
 	int tid = allocthread(p, entry, 1);
 	if (tid < 0) {
 		errorf("fail to create thread");
@@ -402,6 +477,8 @@ int sys_mutex_unlock(int mutex_id)
 
 int sys_semaphore_create(int res_count)
 {
+	if (res_count < 0)
+		return -1;
 	struct semaphore *s = semaphore_create(res_count);
 	if (s == NULL) {
 		errorf("fail to create semaphore: out of resource");
@@ -421,8 +498,7 @@ int sys_semaphore_up(int semaphore_id)
 		return -1;
 	}
 	// Semaphore up keeps the original uCore behavior.
-	semaphore_up(&curr_proc()->semaphore_pool[semaphore_id]);
-	return 0;
+	return semaphore_up(&curr_proc()->semaphore_pool[semaphore_id]);
 }
 
 int sys_semaphore_down(int semaphore_id)

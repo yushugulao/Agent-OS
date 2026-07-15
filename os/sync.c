@@ -70,7 +70,7 @@ void mutex_unlock(struct mutex *m)
 struct semaphore *semaphore_create(int count)
 {
 	struct proc *p = curr_proc();
-	if (p->next_semaphore_id >= LOCK_POOL_SIZE) {
+	if (count < 0 || p->next_semaphore_id >= LOCK_POOL_SIZE) {
 		return NULL;
 	}
 	struct semaphore *s = &p->semaphore_pool[p->next_semaphore_id];
@@ -80,20 +80,24 @@ struct semaphore *semaphore_create(int count)
 	return s;
 }
 
-void semaphore_up(struct semaphore *s)
+int semaphore_up(struct semaphore *s)
 {
+	if (s->count == 0x7fffffff)
+		return -1;
 	s->count++;
 	if (s->count <= 0) {
 		// count <= 0 after up means wait queue not empty
 		struct thread *t = id_to_task(pop_queue(&s->wait_queue));
 		if (t == NULL) {
-			panic("count <= 0 after up but wait queue is empty?");
+			s->count--;
+			return -1;
 		}
 		t->state = RUNNABLE;
 		add_task(t);
 		debugf("semaphore up and notify another task");
 	}
 	debugf("semaphore up from %d to %d", s->count - 1, s->count);
+	return 0;
 }
 
 void semaphore_down(struct semaphore *s)

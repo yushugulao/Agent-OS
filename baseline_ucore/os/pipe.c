@@ -39,61 +39,58 @@ void pipeclose(struct pipe *pi, int writable)
 	}
 }
 
-int pipewrite(struct pipe *pi, uint64 addr, int n)
+int pipewrite(struct pipe *pi, uint64 addr, uint64 n)
 {
-	int w = 0;
-	uint64 size;
+	uint64 w = 0, size, user_addr;
 	struct proc *p = curr_proc();
-	if (n <= 0) {
-		panic("invalid read num");
-	}
+
+	if (n == 0)
+		return 0;
 	while (w < n) {
-		if (pi->readopen == 0) {
-			return -1;
-		}
+		if (pi->readopen == 0)
+			return w == 0 ? -1 : (int)w;
 		if (pi->nwrite == pi->nread + PIPESIZE) { // DOC: pipewrite-full
 			yield();
 		} else {
 			size = MIN(MIN(n - w,
 				       pi->nread + PIPESIZE - pi->nwrite),
 				   PIPESIZE - (pi->nwrite % PIPESIZE));
-			if (copyin(p->pagetable,
-				   &pi->data[pi->nwrite % PIPESIZE], addr + w,
-				   size) < 0) {
-				panic("copyin");
-			}
+			if (checked_user_offset(addr, w, 1, &user_addr) < 0 ||
+			    copyin(p->pagetable,
+				   &pi->data[pi->nwrite % PIPESIZE], user_addr,
+				   size) < 0)
+				return w == 0 ? -1 : (int)w;
 			pi->nwrite += size;
 			w += size;
 		}
 	}
-	return w;
+	return (int)w;
 }
 
-int piperead(struct pipe *pi, uint64 addr, int n)
+int piperead(struct pipe *pi, uint64 addr, uint64 n)
 {
-	int r = 0;
-	uint64 size = -1;
+	uint64 r = 0, size, user_addr;
 	struct proc *p = curr_proc();
-	if (n <= 0) {
-		panic("invalid read num");
-	}
+
+	if (n == 0)
+		return 0;
 	while (pi->nread == pi->nwrite) {
 		if (pi->writeopen)
 			yield();
 		else
 			return -1;
 	}
-	while (r < n && size != 0) { // DOC: piperead-copy
+	while (r < n) { // DOC: piperead-copy
 		if (pi->nread == pi->nwrite)
 			break;
 		size = MIN(MIN(n - r, pi->nwrite - pi->nread),
 			   PIPESIZE - (pi->nread % PIPESIZE));
-		if (copyout(p->pagetable, addr + r,
-			    &pi->data[pi->nread % PIPESIZE], size) < 0) {
-			panic("copyout");
-		}
+		if (checked_user_offset(addr, r, 1, &user_addr) < 0 ||
+		    copyout(p->pagetable, user_addr,
+			    &pi->data[pi->nread % PIPESIZE], size) < 0)
+			return r == 0 ? -1 : (int)r;
 		pi->nread += size;
 		r += size;
 	}
-	return r;
+	return (int)r;
 }

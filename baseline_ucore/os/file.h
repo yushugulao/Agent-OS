@@ -52,9 +52,10 @@ extern struct file filepool[FILEPOOLSIZE];
 
 int pipealloc(struct file *, struct file *);
 void pipeclose(struct pipe *, int);
-int piperead(struct pipe *, uint64, int);
-int pipewrite(struct pipe *, uint64, int);
+int piperead(struct pipe *, uint64, uint64);
+int pipewrite(struct pipe *, uint64, uint64);
 void fileclose(struct file *);
+struct file *filedup(struct file *);
 struct file *filealloc();
 int fileopen(char *, uint64);
 uint64 inodewrite(struct file *, uint64, uint64);
