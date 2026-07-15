@@ -279,6 +279,18 @@ uint64 sys_openat(uint64 va, uint64 omode, uint64 _flags)
 	return fileopen(path, omode);
 }
 
+uint64 sys_unlinkat(int dirfd, uint64 va, uint64 flags)
+{
+	struct proc *p = curr_proc();
+	char path[MAXPATH];
+
+	if (dirfd != -100 || flags != 0)
+		return -1;
+	if (copyinstr(p->pagetable, path, va, sizeof(path)) < 0)
+		return -1;
+	return fileunlink(path);
+}
+
 uint64 sys_close(int fd)
 {
 	if (fd < 0 || fd >= FD_BUFFER_SIZE)
@@ -475,6 +487,9 @@ void syscall()
 		break;
 	case SYS_openat:
 		ret = sys_openat(args[0], args[1], args[2]);
+		break;
+	case SYS_unlinkat:
+		ret = sys_unlinkat(args[0], args[1], args[2]);
 		break;
 	case SYS_close:
 		ret = sys_close(args[0]);

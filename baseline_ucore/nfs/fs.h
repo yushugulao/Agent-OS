@@ -6,12 +6,16 @@
 // Both the kernel and user programs use this header file.
 
 #define NFILE 100 // open files per system
+#ifndef NINODE
 #define NINODE 512 // maximum number of file-system i-nodes in the image
+#endif
 #define NDEV 10 // maximum major device number
 #define ROOTDEV 1 // device number of file system root disk
 #define MAXOPBLOCKS 10 // max # of blocks any FS op writes
 #define NBUF (MAXOPBLOCKS * 3) // size of disk block cache
+#ifndef FSSIZE
 #define FSSIZE 8192 // size of file system in blocks
+#endif
 #define MAXPATH 128 // maximum file path name
 
 #define ROOTINO 1 // root i-number

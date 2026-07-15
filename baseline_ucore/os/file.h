@@ -14,6 +14,7 @@ struct inode {
 	uint inum; // Inode number
 	int ref; // Reference count
 	int valid; // inode has been read from disk?
+	int removed; // directory entry is gone; reclaim after the last reference
 	short type; // copy of disk inode
 	uint size;
 	uint addrs[NDIRECT + 1];
@@ -58,6 +59,7 @@ void fileclose(struct file *);
 struct file *filedup(struct file *);
 struct file *filealloc();
 int fileopen(char *, uint64);
+int fileunlink(char *);
 uint64 inodewrite(struct file *, uint64, uint64);
 uint64 inoderead(struct file *, uint64, uint64);
 struct file *stdio_init(int);

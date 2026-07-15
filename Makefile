@@ -1,4 +1,4 @@
-.PHONY: clean build user run debug test doctor plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run reader target-readiness dual-platform-run full-verify dual-clean .FORCE
+.PHONY: clean build user run debug test doctor plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test reader target-readiness dual-platform-run full-verify dual-clean .FORCE
 all: build
 
 K = os
@@ -41,6 +41,10 @@ CFLAGS += -mcmodel=medany
 CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
 CFLAGS += -I$K
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
+
+ifneq ($(FS_ICACHE_SIZE),)
+CFLAGS += -DFS_ICACHE_SIZE=$(FS_ICACHE_SIZE)
+endif
 
 LOG ?= error
 
@@ -176,6 +180,9 @@ agentos-build:
 agentos-test:
 	rm -f $(F)/fs.img $(F)/fs-copy.img
 	TOOLPREFIX=$(TOOLPREFIX) bash scripts/run-agent-tests.sh
+
+fs-enospc-test:
+	TOOLPREFIX=$(TOOLPREFIX) bash scripts/run-fs-enospc-tests.sh
 
 agentos-platform-user:
 	$(MAKE) user TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform_agentos

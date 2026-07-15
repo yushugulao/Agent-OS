@@ -14,6 +14,7 @@ struct inode {
 	uint inum; // Inode number
 	int ref; // Reference count
 	int valid; // inode has been read from disk?
+	int removed; // directory entry is gone; reclaim after the last reference
 	short type; // copy of disk inode
 	short agent_meta_slot;
 	short agent_meta_flags;

@@ -1837,31 +1837,18 @@ static void agent_file_normalize_physical(int slot, struct agent_file_meta *m)
 
 static struct inode *agent_fs_lookup_or_create(char *name, int create)
 {
-	struct inode *dp;
 	struct inode *ip;
 
-	dp = root_dir();
-	ivalid(dp);
-	if ((ip = dirlookup(dp, name, 0)) != 0) {
-		iput(dp);
+	if ((ip = namei(name)) != 0) {
 		ivalid(ip);
 		if (ip->type == T_FILE)
 			return ip;
 		iput(ip);
 		return 0;
 	}
-	if (!create) {
-		iput(dp);
+	if (!create)
 		return 0;
-	}
-	if ((ip = ialloc(dp->dev, T_FILE)) == 0)
-		panic("agent_fs_lookup_or_create: ialloc");
-	ivalid(ip);
-	iupdate(ip);
-	if (dirlink(dp, name, ip->inum) < 0)
-		panic("agent_fs_lookup_or_create: dirlink");
-	iput(dp);
-	return ip;
+	return fs_create(name, T_FILE, 0);
 }
 
 static int agent_file_load(void)
@@ -1882,7 +1869,7 @@ static int agent_file_load(void)
 	if (ip) {
 		memset(store, 0, sizeof(*store));
 		n = readi(ip, 0, (uint64)store, 0, sizeof(*store));
-		if (n >= (int)(3 * sizeof(uint64)) &&
+		if (n == (int)sizeof(*store) &&
 		    store->magic == AGENT_META_STORE_MAGIC &&
 		    store->version == AGENT_INODE_META_VERSION) {
 			memmove(agent_files, store->records,
@@ -1914,7 +1901,6 @@ static int agent_file_persist(void)
 		agent_meta_store_busy = 0;
 		return -1;
 	}
-	itrunc(ip);
 	memset(store, 0, sizeof(*store));
 	store->magic = AGENT_META_STORE_MAGIC;
 	store->version = AGENT_INODE_META_VERSION;

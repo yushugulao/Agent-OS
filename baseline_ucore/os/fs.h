@@ -7,6 +7,9 @@
 
 #define NFILE 100 // open files per system
 #define NINODE 50 // maximum number of active i-nodes
+#ifndef FS_ICACHE_SIZE
+#define FS_ICACHE_SIZE NINODE
+#endif
 #define NDEV 10 // maximum major device number
 #define ROOTDEV 1 // device number of file system root disk
 #define MAXOPBLOCKS 10 // max # of blocks any FS op writes
@@ -77,8 +80,11 @@ struct inode;
 
 void fsinit();
 int dirlink(struct inode *, char *, uint);
+int dirunlink(struct inode *, char *, uint *);
 struct inode *dirlookup(struct inode *, char *, uint *);
+struct inode *fs_create(char *, short, int *);
 struct inode *ialloc(uint, short);
+void iabort(struct inode *);
 struct inode *idup(struct inode *);
 void iinit();
 void ivalid(struct inode *);
