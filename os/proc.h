@@ -179,6 +179,8 @@ struct proc *curr_proc();
 struct thread *curr_thread(void);
 void exit(int);
 void proc_init();
+void proc_mapstacks(pagetable_t);
+void kernel_stack_check(struct thread *);
 void scheduler() __attribute__((noreturn));
 void sched();
 void yield();

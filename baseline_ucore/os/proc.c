@@ -6,7 +6,6 @@
 #include "queue.h"
 
 struct proc pool[NPROC];
-__attribute__((aligned(16))) char kstack[NPROC][NTHREAD][KSTACK_SIZE];
 __attribute__((aligned(4096))) char trapframe[NPROC][NTHREAD][TRAP_PAGE_SIZE];
 
 extern char boot_stack_top[];
@@ -15,6 +14,124 @@ struct thread idle;
 struct queue task_queue;
 #define TASK_QUEUE_SIZE (NPROC * NTHREAD)
 static int process_queue_data[TASK_QUEUE_SIZE];
+
+#define KSTACK_POISON 0xa5
+#define KSTACK_CANARY 0x6b737461636b4f53ULL
+
+_Static_assert(KSTACK_SIZE >= 2 * PGSIZE,
+	       "kernel stacks need room for calls and interrupt frames");
+_Static_assert(KSTACK_SIZE % PGSIZE == 0,
+	       "kernel stack size must be page aligned");
+_Static_assert(KSTACK_GUARD_SIZE >= PGSIZE,
+	       "kernel stack guard must cover at least one page");
+_Static_assert(KSTACK_GUARD_SIZE % PGSIZE == 0,
+	       "kernel stack guard size must be page aligned");
+_Static_assert((uint64)NPROC * NTHREAD * KSTACK_SLOT_SIZE < TRAMPOLINE,
+	       "kernel stack virtual region must not wrap");
+
+static uint64 kernel_stack_slot(int proc_index, int tid)
+{
+	return (uint64)proc_index * NTHREAD + tid;
+}
+
+static uint64 kernel_stack_guard(uint64 slot)
+{
+	return TRAMPOLINE - (slot + 1) * KSTACK_SLOT_SIZE;
+}
+
+static uint64 kernel_stack_base(int proc_index, int tid)
+{
+	return kernel_stack_guard(kernel_stack_slot(proc_index, tid)) +
+	       KSTACK_GUARD_SIZE;
+}
+
+static uint64 kernel_stack_canary(uint64 slot)
+{
+	return KSTACK_CANARY ^ (slot * 0x9e3779b97f4a7c15ULL);
+}
+
+static void kernel_stack_reset_slot(struct proc *p, int tid)
+{
+	uint64 slot = kernel_stack_slot(p - pool, tid);
+	uint64 *low = (uint64 *)kernel_stack_base(p - pool, tid);
+	uint64 canary = kernel_stack_canary(slot);
+
+	memset((void *)low, KSTACK_POISON, KSTACK_SIZE);
+	low[0] = canary;
+	low[1] = ~canary;
+}
+
+void proc_mapstacks(pagetable_t kpgtbl)
+{
+	for (int proc_index = 0; proc_index < NPROC; proc_index++) {
+		for (int tid = 0; tid < NTHREAD; tid++) {
+			uint64 slot = kernel_stack_slot(proc_index, tid);
+			uint64 guard = kernel_stack_guard(slot);
+			uint64 stack = guard + KSTACK_GUARD_SIZE;
+			uint64 *low = 0;
+
+			for (uint64 off = 0; off < KSTACK_SIZE; off += PGSIZE) {
+				char *mem = kalloc();
+
+				if (mem == 0)
+					panic("kernel stack allocation");
+				memset(mem, KSTACK_POISON, PGSIZE);
+				if (off == 0)
+					low = (uint64 *)mem;
+				kvmmap(kpgtbl, stack + off, (uint64)mem, PGSIZE,
+				       PTE_R | PTE_W);
+			}
+			low[0] = kernel_stack_canary(slot);
+			low[1] = ~low[0];
+			for (uint64 off = 0; off < KSTACK_GUARD_SIZE;
+			     off += PGSIZE) {
+				pte_t *guard_pte = walk(kpgtbl, guard + off, 0);
+
+				if (guard_pte != 0 && (*guard_pte & PTE_V))
+					panic("kernel stack guard mapped");
+			}
+		}
+	}
+}
+
+void kernel_stack_check(struct thread *t)
+{
+	struct proc *p;
+	uint64 pool_start = (uint64)&pool[0];
+	uint64 pool_end = (uint64)&pool[NPROC];
+	uint64 thread_address;
+	uint64 thread_start;
+	uint64 thread_end;
+	int proc_index;
+	int tid;
+	uint64 slot;
+	uint64 expected_base;
+	uint64 canary;
+	uint64 *low;
+
+	if (t == 0 || t == &idle)
+		return;
+	thread_address = (uint64)t;
+	if (thread_address < pool_start || thread_address >= pool_end)
+		panic("invalid kernel stack owner");
+	proc_index = (thread_address - pool_start) / sizeof(struct proc);
+	p = &pool[proc_index];
+	thread_start = (uint64)&p->threads[0];
+	thread_end = (uint64)&p->threads[NTHREAD];
+	if (thread_address < thread_start || thread_address >= thread_end ||
+	    (thread_address - thread_start) % sizeof(struct thread) != 0 ||
+	    (uint64)t->process != (uint64)p)
+		panic("invalid kernel stack owner");
+	tid = (thread_address - thread_start) / sizeof(struct thread);
+	slot = kernel_stack_slot(proc_index, tid);
+	expected_base = kernel_stack_base(proc_index, tid);
+	if (t->kstack != expected_base)
+		panic("invalid kernel stack address");
+	low = (uint64 *)expected_base;
+	canary = kernel_stack_canary(slot);
+	if (low[0] != canary || low[1] != ~canary)
+		panic("kernel stack overflow");
+}
 
 int procid()
 {
@@ -193,6 +310,7 @@ found:
 		p->state = P_UNUSED;
 		return 0;
 	}
+	kernel_stack_reset_slot(p, 0);
 	memset((void *)p->files, 0, sizeof(struct file *) * FD_BUFFER_SIZE);
 	p->next_mutex_id = 0;
 	p->next_semaphore_id = 0;
@@ -241,9 +359,8 @@ found:
 	t->wait_reason = WAIT_REASON_NONE;
 	t->on_run_queue = 0;
 	// kernel stack
-	t->kstack = (uint64)kstack[p - pool][tid];
-	// don't clear kstack now for exec()
-	// memset((void *)t->kstack, 0, KSTACK_SIZE);
+	t->kstack = kernel_stack_base(p - pool, tid);
+	kernel_stack_reset_slot(p, tid);
 	// user stack
 	t->ustack = get_thread_ustack_base_va(t);
 	if (alloc_user_res != 0) {
@@ -323,9 +440,11 @@ void scheduler()
 			continue;
 		}
 		tracef("swtich to proc %d, thread %d", t->process->pid, t->tid);
+		kernel_stack_check(t);
 		t->state = RUNNING;
 		current_thread = t;
 		swtch(&idle.context, &t->context);
+		kernel_stack_check(t);
 	}
 }
 
@@ -341,6 +460,7 @@ void sched()
 	struct thread *t = curr_thread();
 	if (t->state == RUNNING)
 		panic("sched running");
+	kernel_stack_check(t);
 	swtch(&t->context, &idle.context);
 }
 
@@ -386,7 +506,7 @@ void proc_install_user_image(struct proc *p, struct user_image *image,
 	main_thread->state = running ? RUNNING : T_USED;
 	main_thread->process = p;
 	main_thread->exit_code = 0;
-	main_thread->kstack = (uint64)kstack[p - pool][0];
+	main_thread->kstack = kernel_stack_base(p - pool, 0);
 	main_thread->ustack = p->ustack_base;
 	main_thread->trapframe = proc_trapframe(p, 0);
 	memmove(main_thread->trapframe, staged, sizeof(*staged));

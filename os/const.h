@@ -3,6 +3,14 @@
 
 #define PAGE_SIZE (0x1000)
 
+#ifndef KSTACK_SIZE
+#define KSTACK_SIZE (4 * PAGE_SIZE)
+#endif
+#ifndef KSTACK_GUARD_SIZE
+#define KSTACK_GUARD_SIZE PAGE_SIZE
+#endif
+#define KSTACK_SLOT_SIZE (KSTACK_GUARD_SIZE + KSTACK_SIZE)
+
 // memory layout
 
 // the kernel expects there to be RAM

@@ -13,6 +13,8 @@ pagetable_t kvmmake()
 {
 	pagetable_t kpgtbl;
 	kpgtbl = (pagetable_t)kalloc();
+	if (kpgtbl == 0)
+		panic("kernel page table allocation");
 	memset(kpgtbl, 0, PGSIZE);
 	// virtio mmio disk interface
 	kvmmap(kpgtbl, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
@@ -24,6 +26,8 @@ pagetable_t kvmmake()
 	// map kernel data and the physical RAM we'll make use of.
 	kvmmap(kpgtbl, (uint64)e_text, (uint64)e_text, PHYSTOP - (uint64)e_text,
 	       PTE_R | PTE_W);
+	// Each kernel stack has its own virtual mapping and an unmapped guard page.
+	proc_mapstacks(kpgtbl);
 	kvmmap(kpgtbl, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
 	return kpgtbl;
 }

@@ -1,4 +1,5 @@
-.PHONY: clean build user run debug test .FORCE
+.PHONY: clean build user run debug test kernel-stack-check .FORCE
+.DELETE_ON_ERROR:
 all: build
 
 K = os
@@ -41,6 +42,28 @@ CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
 CFLAGS += -I$K
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 
+KSTACK_SIZE_BYTES ?= 16384
+KSTACK_GUARD_SIZE_BYTES ?= 4096
+KSTACK_FRAME_BUDGET ?= $(KSTACK_GUARD_SIZE_BYTES)
+KSTACK_SAFETY_MARGIN ?= 4096
+KERNELVEC_FRAME_SIZE_BYTES ?= 256
+# swtch changes stacks; usertrapret's indirect jump is the stackless trampoline.
+KSTACK_STACK_BOUNDARIES ?= swtch
+KSTACK_INDIRECT_CALLERS ?= usertrapret
+# printf can enter panic once; Sv39 freewalk visits at most three page-table levels.
+KSTACK_RECURSION_BOUNDS ?= printf=2 freewalk=3
+KSTACK_POLICY_ARGS = \
+	$(foreach fn,$(KSTACK_STACK_BOUNDARIES),--stack-boundary $(fn)) \
+	$(foreach fn,$(KSTACK_INDIRECT_CALLERS),--allow-indirect-from $(fn)) \
+	$(foreach bound,$(KSTACK_RECURSION_BOUNDS),--recursion-bound $(bound))
+override KSTACK_REQUIRED_CFLAGS = -DKSTACK_SIZE=$(KSTACK_SIZE_BYTES)
+override KSTACK_REQUIRED_CFLAGS += -DKSTACK_GUARD_SIZE=$(KSTACK_GUARD_SIZE_BYTES)
+override KSTACK_REQUIRED_CFLAGS += -DKERNELVEC_FRAME_SIZE=$(KERNELVEC_FRAME_SIZE_BYTES)
+override KSTACK_REQUIRED_CFLAGS += -fcallgraph-info=su
+override KSTACK_REQUIRED_CFLAGS += -Wframe-larger-than=$(KSTACK_FRAME_BUDGET)
+override KSTACK_REQUIRED_CFLAGS += -Wstack-usage=$(KSTACK_FRAME_BUDGET) -Wvla -Walloca
+override KSTACK_REQUIRED_CFLAGS += $(shell $(CC) -fstack-clash-protection -E -x c /dev/null >/dev/null 2>&1 && echo -fstack-clash-protection)
+
 ifneq ($(FS_ICACHE_SIZE),)
 CFLAGS += -DFS_ICACHE_SIZE=$(FS_ICACHE_SIZE)
 endif
@@ -67,6 +90,24 @@ ifneq ($(shell $(CC) -dumpspecs 2>/dev/null | grep -e '[^f]nopie'),)
 CFLAGS += -fno-pie -nopie
 endif
 
+override CFLAGS += $(KSTACK_REQUIRED_CFLAGS)
+
+KSTACK_BUILD_CONFIG = $(BUILDDIR)/.kernel-stack-config
+$(KSTACK_BUILD_CONFIG): .FORCE
+	@mkdir -p $(@D)
+	@printf '%s\n' \
+		'CC=$(CC)' \
+		'CFLAGS=$(CFLAGS)' \
+		'KSTACK_SIZE_BYTES=$(KSTACK_SIZE_BYTES)' \
+		'KSTACK_GUARD_SIZE_BYTES=$(KSTACK_GUARD_SIZE_BYTES)' \
+		'KSTACK_FRAME_BUDGET=$(KSTACK_FRAME_BUDGET)' \
+		'KSTACK_SAFETY_MARGIN=$(KSTACK_SAFETY_MARGIN)' \
+		'KERNELVEC_FRAME_SIZE_BYTES=$(KERNELVEC_FRAME_SIZE_BYTES)' \
+		'KSTACK_STACK_BOUNDARIES=$(KSTACK_STACK_BOUNDARIES)' \
+		'KSTACK_INDIRECT_CALLERS=$(KSTACK_INDIRECT_CALLERS)' \
+		'KSTACK_RECURSION_BOUNDS=$(KSTACK_RECURSION_BOUNDS)' > $@.tmp
+	@if ! test -r $@ || ! cmp -s $@.tmp $@; then mv $@.tmp $@; else rm $@.tmp; fi
+
 # empty target
 .FORCE:
 
@@ -78,6 +119,7 @@ $(AS_OBJS): $(BUILDDIR)/$K/%.o : $K/%.S
 
 $(C_OBJS): $(BUILDDIR)/$K/%.o : $K/%.c  $(BUILDDIR)/$K/%.d
 	@mkdir -p $(@D)
+	@rm -f $(patsubst %.o,%.ci,$@)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(HEADER_DEP): $(BUILDDIR)/$K/%.d : $K/%.c
@@ -86,15 +128,30 @@ $(HEADER_DEP): $(BUILDDIR)/$K/%.d : $K/%.c
         sed 's,\($*\)\.o[ :]*,\1.o $@ : ,g' < $@.$$$$ > $@; \
         rm -f $@.$$$$
 
+$(C_OBJS) $(AS_OBJS): $(KSTACK_BUILD_CONFIG)
+-include $(HEADER_DEP)
+
 INIT_PROC ?= usershell
 
 build: build/kernel
 
-build/kernel: $(OBJS) os/kernel.ld
+build/kernel: $(OBJS) os/kernel.ld ../scripts/check-kernel-stack-usage.py $(KSTACK_BUILD_CONFIG) Makefile
+	$(PY) ../scripts/check-kernel-stack-usage.py \
+		--callgraph-dir $(BUILDDIR)/$(K) --source-dir $(K) \
+		--stack-size $(KSTACK_SIZE_BYTES) --guard-size $(KSTACK_GUARD_SIZE_BYTES) \
+		--safety-margin $(KSTACK_SAFETY_MARGIN) \
+		--interrupt-entry $(KERNELVEC_FRAME_SIZE_BYTES) $(KSTACK_POLICY_ARGS)
 	$(LD) $(LDFLAGS) -T os/kernel.ld -o $(BUILDDIR)/kernel $(OBJS)
 	$(OBJDUMP) -S $(BUILDDIR)/kernel > $(BUILDDIR)/kernel.asm
 	$(OBJDUMP) -t $(BUILDDIR)/kernel | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(BUILDDIR)/kernel.sym
 	@echo 'Build kernel done'
+
+kernel-stack-check: build/kernel
+	@$(PY) ../scripts/check-kernel-stack-usage.py \
+		--callgraph-dir $(BUILDDIR)/$(K) --source-dir $(K) \
+		--stack-size $(KSTACK_SIZE_BYTES) --guard-size $(KSTACK_GUARD_SIZE_BYTES) \
+		--safety-margin $(KSTACK_SAFETY_MARGIN) \
+		--interrupt-entry $(KERNELVEC_FRAME_SIZE_BYTES) $(KSTACK_POLICY_ARGS)
 
 clean:
 	make -C $(U) clean

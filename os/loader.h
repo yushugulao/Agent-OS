@@ -21,7 +21,6 @@ void user_image_discard(struct user_image *);
 
 #define BASE_ADDRESS (0x1000)
 #define USTACK_SIZE (PAGE_SIZE)
-#define KSTACK_SIZE (PAGE_SIZE)
 #define TRAP_PAGE_SIZE (PAGE_SIZE)
 
 #define USER_IMAGE_LIMIT (AGENT_CONTEXT_BASE)

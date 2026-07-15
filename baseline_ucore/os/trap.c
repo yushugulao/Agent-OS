@@ -115,6 +115,7 @@ void usertrap()
 //
 void usertrapret()
 {
+	kernel_stack_check(curr_thread());
 	set_usertrap();
 	struct trapframe *trapframe = curr_thread()->trapframe;
 	trapframe->kernel_satp = r_satp(); // kernel page table

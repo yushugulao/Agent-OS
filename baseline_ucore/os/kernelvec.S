@@ -2,14 +2,20 @@
         # interrupts and exceptions while in supervisor
         # mode come here.
         #
-        # push all registers, call kerneltrap(), restore, return.
-        #
+	# push all registers, call kerneltrap(), restore, return.
+	#
+#if KERNELVEC_FRAME_SIZE < 256 || KERNELVEC_FRAME_SIZE > 2047
+#error "KERNELVEC_FRAME_SIZE cannot hold the saved registers"
+#endif
+#if KERNELVEC_FRAME_SIZE % 16 != 0
+#error "KERNELVEC_FRAME_SIZE must preserve stack alignment"
+#endif
 .globl kerneltrap
 .globl kernelvec
 .align 4
 kernelvec:
         // make room to save registers.
-        addi sp, sp, -256
+        addi sp, sp, -KERNELVEC_FRAME_SIZE
         // save the registers.
         sd ra, 0(sp)
         sd sp, 8(sp)
@@ -80,7 +86,7 @@ kernelret:
         ld t5, 232(sp)
         ld t6, 240(sp)
 
-        addi sp, sp, 256
+        addi sp, sp, KERNELVEC_FRAME_SIZE
 
         // return to whatever we were doing in the kernel.
         sret
