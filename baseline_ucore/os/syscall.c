@@ -365,8 +365,7 @@ int sys_mutex_lock(int mutex_id)
 	}
 	// LAB5: (4-1) You may want to maintain some variables for detect
 	//       or call your detect algorithm here
-	mutex_lock(&curr_proc()->mutex_pool[mutex_id]);
-	return 0;
+	return mutex_lock(&curr_proc()->mutex_pool[mutex_id]);
 }
 
 int sys_mutex_unlock(int mutex_id)
@@ -376,8 +375,7 @@ int sys_mutex_unlock(int mutex_id)
 		return -1;
 	}
 	// LAB5: (4-1) You may want to maintain some variables for detect here
-	mutex_unlock(&curr_proc()->mutex_pool[mutex_id]);
-	return 0;
+	return mutex_unlock(&curr_proc()->mutex_pool[mutex_id]);
 }
 
 int sys_semaphore_create(int res_count)
@@ -415,8 +413,7 @@ int sys_semaphore_down(int semaphore_id)
 	}
 	// LAB5: (4-2) You may want to maintain some variables for detect
 	//       or call your detect algorithm here
-	semaphore_down(&curr_proc()->semaphore_pool[semaphore_id]);
-	return 0;
+	return semaphore_down(&curr_proc()->semaphore_pool[semaphore_id]);
 }
 
 int sys_condvar_create()
@@ -451,9 +448,8 @@ int sys_condvar_wait(int cond_id, int mutex_id)
 		errorf("Unexpected mutex id %d", mutex_id);
 		return -1;
 	}
-	cond_wait(&curr_proc()->condvar_pool[cond_id],
-		  &curr_proc()->mutex_pool[mutex_id]);
-	return 0;
+	return cond_wait(&curr_proc()->condvar_pool[cond_id],
+			 &curr_proc()->mutex_pool[mutex_id]);
 }
 
 // LAB5: (2) you may need to define function enable_deadlock_detect here

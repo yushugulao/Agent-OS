@@ -8,11 +8,16 @@
 #define EXEC_ARG_LIMIT 32
 #define NON_NUL_PATH_SIZE 320
 #define TEST_PAGE_SIZE 4096
+#define WAIT_WAKE_ROUNDS 32
 
 static char non_nul_path[NON_NUL_PATH_SIZE];
 static char *too_many_argv[EXEC_ARG_LIMIT + 2];
 static int initial_pid;
 static int concurrent_pipe[2];
+static int wait_mutex;
+static volatile int wait_worker_started;
+static volatile int wait_worker_release;
+static volatile int wait_worker_spurious;
 
 static void check(int condition, const char *message)
 {
@@ -117,6 +122,56 @@ static void test_thread_boundaries(void)
 	      "close pipe during active read");
 	check(waittid(tid) == 0, "active pipe read keeps file reference");
 	check_live("thread boundaries");
+}
+
+static void blocked_mutex_wait(void *arg)
+{
+	(void)arg;
+	wait_worker_started = 1;
+	for (;;) {
+		if (mutex_lock(wait_mutex) < 0)
+			exit(2);
+		if (wait_worker_release) {
+			mutex_unlock(wait_mutex);
+			exit(0);
+		}
+		wait_worker_spurious++;
+	}
+}
+
+static void test_directed_wakeup(void)
+{
+	int tid;
+	int pid;
+	int status;
+
+	wait_mutex = mutex_blocking_create();
+	check(wait_mutex >= 0 && mutex_lock(wait_mutex) == 0,
+	      "hold directed wake mutex");
+	wait_worker_started = 0;
+	wait_worker_release = 0;
+	wait_worker_spurious = 0;
+	tid = thread_create(blocked_mutex_wait, NULL);
+	check(tid > 0, "create directed wake worker");
+	while (!wait_worker_started)
+		sched_yield();
+	sched_yield();
+
+	for (int i = 0; i < WAIT_WAKE_ROUNDS; i++) {
+		status = -1;
+		pid = fork();
+		check(pid >= 0, "fork directed wake child");
+		if (pid == 0)
+			exit(0);
+		check(waitpid(pid, &status) == pid && status == 0,
+		      "wait directed wake child");
+		sched_yield();
+	}
+	check(wait_worker_spurious == 0, "mutex waiter woke for child exit");
+	wait_worker_release = 1;
+	check(mutex_unlock(wait_mutex) == 0, "release directed wake mutex");
+	check(waittid(tid) == 0, "join directed wake worker");
+	check_live("directed wakeup");
 }
 
 static void test_exec_transaction(void)
@@ -299,6 +354,7 @@ int main(int argc, char **argv)
 	test_string_bounds();
 	test_exec_argv_bounds();
 	test_thread_boundaries();
+	test_directed_wakeup();
 	test_pipe_buffers();
 	test_wait_copyout();
 	test_time_copyout();

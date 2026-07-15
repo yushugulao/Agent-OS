@@ -1,33 +1,70 @@
 #include "queue.h"
-#include "defs.h"
-
-int process_queue_data[QUEUE_SIZE];
+#include "riscv.h"
 
 void init_queue(struct queue *q, int size, int *data)
 {
+	int enabled = intr_save();
+
 	q->size = size;
 	q->data = data;
 	q->front = q->tail = 0;
-	q->empty = 1;
+	q->count = 0;
+	intr_restore(enabled);
 }
 
-void push_queue(struct queue *q, int value)
+int push_queue(struct queue *q, int value)
 {
-	if (!q->empty && q->front == q->tail) {
-		panic("queue shouldn't be overflow");
+	int enabled = intr_save();
+
+	if (q == 0 || q->data == 0 || q->size <= 0 || q->count >= q->size) {
+		intr_restore(enabled);
+		return -1;
 	}
-	q->empty = 0;
 	q->data[q->tail] = value;
 	q->tail = (q->tail + 1) % q->size;
+	q->count++;
+	intr_restore(enabled);
+	return 0;
 }
 
 int pop_queue(struct queue *q)
 {
-	if (q->empty)
+	int enabled = intr_save();
+
+	if (q == 0 || q->count == 0) {
+		intr_restore(enabled);
 		return -1;
+	}
 	int value = q->data[q->front];
 	q->front = (q->front + 1) % q->size;
-	if (q->front == q->tail)
-		q->empty = 1;
+	q->count--;
+	intr_restore(enabled);
 	return value;
+}
+
+int remove_queue_value(struct queue *q, int value)
+{
+	int kept;
+	int original;
+	int removed = 0;
+	int enabled = intr_save();
+
+	if (q == 0) {
+		intr_restore(enabled);
+		return 0;
+	}
+	original = q->count;
+	for (int i = 0; i < original; i++) {
+		kept = pop_queue(q);
+		if (kept == value) {
+			removed++;
+			continue;
+		}
+		if (push_queue(q, kept) < 0) {
+			intr_restore(enabled);
+			return -1;
+		}
+	}
+	intr_restore(enabled);
+	return removed;
 }

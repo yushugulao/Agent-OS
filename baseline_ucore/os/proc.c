@@ -13,6 +13,8 @@ extern char boot_stack_top[];
 struct thread *current_thread;
 struct thread idle;
 struct queue task_queue;
+#define TASK_QUEUE_SIZE (NPROC * NTHREAD)
+static int process_queue_data[TASK_QUEUE_SIZE];
 
 int procid()
 {
@@ -48,6 +50,10 @@ void proc_init()
 		for (int tid = 0; tid < NTHREAD; ++tid) {
 			struct thread *t = &p->threads[tid];
 			t->state = T_UNUSED;
+			t->wait_channel = 0;
+			t->wait_next = 0;
+			t->wait_reason = WAIT_REASON_NONE;
+			t->on_run_queue = 0;
 		}
 	}
 	idle.kstack = (uint64)boot_stack_top;
@@ -55,7 +61,11 @@ void proc_init()
 	// for procid() and threadid()
 	idle.process = pool;
 	idle.tid = -1;
-	init_queue(&task_queue, QUEUE_SIZE, process_queue_data);
+	idle.wait_channel = 0;
+	idle.wait_next = 0;
+	idle.wait_reason = WAIT_REASON_NONE;
+	idle.on_run_queue = 0;
+	init_queue(&task_queue, TASK_QUEUE_SIZE, process_queue_data);
 }
 
 int allocpid()
@@ -76,7 +86,7 @@ int alloctid(const struct proc *process)
 // get task by unique task id
 struct thread *id_to_task(int index)
 {
-	if (index < 0) {
+	if (index < 0 || index >= NPROC * NTHREAD) {
 		return NULL;
 	}
 	int pool_id = index / NTHREAD;
@@ -95,14 +105,18 @@ int task_to_id(struct thread *t)
 
 struct thread *fetch_task()
 {
+	int enabled = intr_save();
 	int index = pop_queue(&task_queue);
 	struct thread *t = id_to_task(index);
 	if (t == NULL) {
+		intr_restore(enabled);
 		debugf("No task to fetch\n");
 		return t;
 	}
+	t->on_run_queue = 0;
 	int tid = t->tid;
 	int pid = t->process->pid;
+	intr_restore(enabled);
 	tracef("fetch index %d(pid=%d, tid=%d, addr=%p) from task queue", index,
 	       pid, tid, (uint64)t);
 	return t;
@@ -110,11 +124,47 @@ struct thread *fetch_task()
 
 void add_task(struct thread *t)
 {
+	int enabled = intr_save();
+
+	if (t == 0 || t->process == 0 || t->process < pool ||
+	    t->process >= &pool[NPROC] ||
+	    t->tid < 0 || t->tid >= NTHREAD || t->state != RUNNABLE ||
+	    t->on_run_queue) {
+		intr_restore(enabled);
+		return;
+	}
 	int task_id = task_to_id(t);
 	int pid = t->process->pid;
-	push_queue(&task_queue, task_id);
+	if (push_queue(&task_queue, task_id) < 0)
+		panic("task queue invariant");
+	t->on_run_queue = 1;
+	intr_restore(enabled);
 	tracef("add index %d(pid=%d, tid=%d, addr=%p) to task queue", task_id,
 	       pid, t->tid, (uint64)t);
+}
+
+static void remove_task(struct thread *t)
+{
+	int enabled = intr_save();
+
+	if (t == 0 || t->process == 0 || t->process < pool ||
+	    t->process >= &pool[NPROC] ||
+	    t->tid < 0 || t->tid >= NTHREAD) {
+		intr_restore(enabled);
+		return;
+	}
+	remove_queue_value(&task_queue, task_to_id(t));
+	t->on_run_queue = 0;
+	intr_restore(enabled);
+}
+
+static void detach_task(struct thread *t)
+{
+	int enabled = intr_save();
+
+	wait_queue_cancel(t);
+	remove_task(t);
+	intr_restore(enabled);
 }
 
 // Look in the process table for an UNUSED proc.
@@ -134,6 +184,7 @@ found:
 	// init proc
 	p->pid = allocpid();
 	p->state = P_USED;
+	wait_queue_init(&p->child_waiters, WAIT_REASON_CHILD);
 	p->max_page = 0;
 	p->parent = NULL;
 	p->exit_code = 0;
@@ -185,6 +236,10 @@ found:
 	t->state = T_USED;
 	t->process = p;
 	t->exit_code = 0;
+	t->wait_channel = 0;
+	t->wait_next = 0;
+	t->wait_reason = WAIT_REASON_NONE;
+	t->on_run_queue = 0;
 	// kernel stack
 	t->kstack = (uint64)kstack[p - pool][tid];
 	// don't clear kstack now for exec()
@@ -318,8 +373,13 @@ void proc_install_user_image(struct proc *p, struct user_image *image,
 	image->pagetable = 0;
 
 	for (int tid = 0; tid < NTHREAD; tid++) {
+		detach_task(&p->threads[tid]);
 		p->threads[tid].state = T_UNUSED;
 		p->threads[tid].tid = -1;
+		p->threads[tid].wait_channel = 0;
+		p->threads[tid].wait_next = 0;
+		p->threads[tid].wait_reason = WAIT_REASON_NONE;
+		p->threads[tid].on_run_queue = 0;
 	}
 	main_thread = &p->threads[0];
 	main_thread->tid = 0;
@@ -349,6 +409,7 @@ void proc_install_user_image(struct proc *p, struct user_image *image,
 void freethread(struct thread *t)
 {
 	pagetable_t pt = t->process->pagetable;
+	detach_task(t);
 	// fill with junk
 	memset((void *)t->trapframe, 6, TRAP_PAGE_SIZE);
 	memset(&t->context, 6, sizeof(t->context));
@@ -360,11 +421,18 @@ void freeproc(struct proc *p)
 {
 	for (int tid = 0; tid < NTHREAD; ++tid) {
 		struct thread *t = &p->threads[tid];
+		detach_task(t);
 		if (t->state != T_UNUSED && t->state != EXITED) {
 			freethread(t);
 		}
 		t->state = T_UNUSED;
+		t->tid = -1;
+		t->wait_channel = 0;
+		t->wait_next = 0;
+		t->wait_reason = WAIT_REASON_NONE;
+		t->on_run_queue = 0;
 	}
+	wait_queue_init(&p->child_waiters, WAIT_REASON_CHILD);
 	if (p->pagetable)
 		freepagetable(p->pagetable, p->max_page);
 	p->pagetable = 0;
@@ -528,7 +596,6 @@ int wait(int pid, int *code)
 	struct proc *np;
 	int havekids;
 	struct proc *p = curr_proc();
-	struct thread *t = curr_thread();
 
 	for (;;) {
 		// Scan through table looking for exited children.
@@ -551,9 +618,8 @@ int wait(int pid, int *code)
 		if (!havekids) {
 			return -1;
 		}
-		t->state = RUNNABLE;
-		add_task(t);
-		sched();
+		if (wait_queue_sleep(&p->child_waiters) < 0)
+			return -1;
 	}
 }
 
@@ -574,6 +640,7 @@ void exit(int code)
 		if (p->parent != NULL) {
 			// Parent should `wait`
 			p->state = ZOMBIE;
+			wait_queue_wake_all(&p->parent->child_waiters);
 		}
 		// Set the `parent` of all children to NULL
 		struct proc *np;

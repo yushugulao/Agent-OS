@@ -47,6 +47,10 @@ struct thread {
 	struct trapframe *trapframe; // data page for trampoline.S
 	struct context context; // swtch() here to run process
 	uint64 exit_code;
+	struct wait_queue *wait_channel;
+	struct thread *wait_next;
+	enum wait_reason wait_reason;
+	int on_run_queue;
 };
 
 enum procstate { P_UNUSED, P_USED, ZOMBIE };
@@ -63,6 +67,9 @@ struct proc {
 	//File descriptor table, using to record the files opened by the process
 	struct file *files[FD_BUFFER_SIZE];
 	struct thread threads[NTHREAD];
+	struct wait_queue child_waiters;
+	struct wait_queue agent_event_waiters;
+	struct wait_queue agent_timeline_waiters;
 	// Use dummy increasing id as index index of lock pool because we don't have destroy method yet
 	uint next_mutex_id, next_semaphore_id, next_condvar_id;
 	struct mutex mutex_pool[LOCK_POOL_SIZE];

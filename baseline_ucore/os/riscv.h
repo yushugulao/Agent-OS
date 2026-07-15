@@ -56,7 +56,7 @@ static inline uint64 r_sstatus()
 
 static inline void w_sstatus(uint64 x)
 {
-	asm volatile("csrw sstatus, %0" : : "r"(x));
+	asm volatile("csrw sstatus, %0" : : "r"(x) : "memory");
 }
 
 // Supervisor Interrupt Pending
@@ -249,6 +249,21 @@ static inline int intr_get()
 {
 	uint64 x = r_sstatus();
 	return (x & SSTATUS_SIE) != 0;
+}
+
+static inline int intr_save()
+{
+	int enabled = intr_get();
+	intr_off();
+	return enabled;
+}
+
+static inline void intr_restore(int enabled)
+{
+	if (enabled)
+		intr_on();
+	else
+		intr_off();
 }
 
 static inline uint64 r_sp()

@@ -12,59 +12,48 @@ struct mutex *mutex_create(int blocking)
 	p->next_mutex_id++;
 	m->blocking = blocking;
 	m->locked = 0;
-	if (blocking) {
-		// blocking mutex need wait queue but spinning mutex not
-		init_queue(&m->wait_queue, WAIT_QUEUE_MAX_LENGTH,
-			   m->_wait_queue_data);
-	}
+	wait_queue_init(&m->waiters, WAIT_REASON_MUTEX);
 	return m;
 }
 
-void mutex_lock(struct mutex *m)
+int mutex_lock(struct mutex *m)
 {
 	if (!m->locked) {
 		m->locked = 1;
 		debugf("lock a free mutex");
-		return;
+		return 0;
 	}
 	if (!m->blocking) {
-		// spin mutex will just poll
 		debugf("try to lock spin mutex");
-		while (m->locked) {
+		while (m->locked)
 			yield();
-		}
+		m->locked = 1;
 		debugf("lock spin mutex after some trials");
-		return;
+		return 0;
 	}
-	// blocking mutex will wait in the queue
-	struct thread *t = curr_thread();
-	push_queue(&m->wait_queue, task_to_id(t));
-	// don't forget to change thread state to SLEEPING
-	t->state = SLEEPING;
 	debugf("block to wait for mutex");
-	sched();
+	if (wait_queue_sleep(&m->waiters) < 0)
+		return -1;
 	debugf("blocking mutex passed to me");
-	// here lock is released (with locked = 1) and passed to me, so just do nothing
+	return 0;
 }
 
-void mutex_unlock(struct mutex *m)
+int mutex_unlock(struct mutex *m)
 {
+	if (!m->locked)
+		return -1;
 	if (m->blocking) {
-		struct thread *t = id_to_task(pop_queue(&m->wait_queue));
-		if (t == NULL) {
-			// Without waiting thread, just release the lock
+		if (!wait_queue_wake_one(&m->waiters)) {
 			m->locked = 0;
 			debugf("blocking mutex released");
 		} else {
-			// Or we should give lock to next thread
-			t->state = RUNNABLE;
-			add_task(t);
-			debugf("blocking mutex passed to thread %d", t->tid);
+			debugf("blocking mutex passed to waiter");
 		}
 	} else {
 		m->locked = 0;
 		debugf("spin mutex unlocked");
 	}
+	return 0;
 }
 
 struct semaphore *semaphore_create(int count)
@@ -76,7 +65,7 @@ struct semaphore *semaphore_create(int count)
 	struct semaphore *s = &p->semaphore_pool[p->next_semaphore_id];
 	p->next_semaphore_id++;
 	s->count = count;
-	init_queue(&s->wait_queue, WAIT_QUEUE_MAX_LENGTH, s->_wait_queue_data);
+	wait_queue_init(&s->waiters, WAIT_REASON_SEMAPHORE);
 	return s;
 }
 
@@ -86,33 +75,29 @@ int semaphore_up(struct semaphore *s)
 		return -1;
 	s->count++;
 	if (s->count <= 0) {
-		// count <= 0 after up means wait queue not empty
-		struct thread *t = id_to_task(pop_queue(&s->wait_queue));
-		if (t == NULL) {
+		if (!wait_queue_wake_one(&s->waiters)) {
 			s->count--;
 			return -1;
 		}
-		t->state = RUNNABLE;
-		add_task(t);
 		debugf("semaphore up and notify another task");
 	}
 	debugf("semaphore up from %d to %d", s->count - 1, s->count);
 	return 0;
 }
 
-void semaphore_down(struct semaphore *s)
+int semaphore_down(struct semaphore *s)
 {
 	s->count--;
 	if (s->count < 0) {
-		// s->count < 0 means need to wait (state=SLEEPING)
-		struct thread *t = curr_thread();
-		push_queue(&s->wait_queue, task_to_id(t));
-		t->state = SLEEPING;
 		debugf("semaphore down to %d and wait...", s->count);
-		sched();
+		if (wait_queue_sleep(&s->waiters) < 0) {
+			s->count++;
+			return -1;
+		}
 		debugf("semaphore up to %d and wake up", s->count);
 	}
 	debugf("finish semaphore_down with count = %d", s->count);
+	return 0;
 }
 
 struct condvar *condvar_create()
@@ -123,32 +108,28 @@ struct condvar *condvar_create()
 	}
 	struct condvar *c = &p->condvar_pool[p->next_condvar_id];
 	p->next_condvar_id++;
-	init_queue(&c->wait_queue, WAIT_QUEUE_MAX_LENGTH, c->_wait_queue_data);
+	wait_queue_init(&c->waiters, WAIT_REASON_CONDVAR);
 	return c;
 }
 
 void cond_signal(struct condvar *cond)
 {
-	struct thread *t = id_to_task(pop_queue(&cond->wait_queue));
-	if (t) {
-		t->state = RUNNABLE;
-		add_task(t);
-		debugf("signal wake up thread %d", t->tid);
+	if (wait_queue_wake_one(&cond->waiters)) {
+		debugf("signal woke a condition waiter");
 	} else {
 		debugf("dummpy signal");
 	}
 }
 
-void cond_wait(struct condvar *cond, struct mutex *m)
+int cond_wait(struct condvar *cond, struct mutex *m)
 {
-	// conditional variable will unlock the mutex first and lock it again on return
-	mutex_unlock(m);
-	struct thread *t = curr_thread();
-	// now just wait for cond
-	push_queue(&cond->wait_queue, task_to_id(t));
-	t->state = SLEEPING;
+	if (mutex_unlock(m) < 0)
+		return -1;
 	debugf("wait for cond");
-	sched();
+	if (wait_queue_sleep(&cond->waiters) < 0) {
+		mutex_lock(m);
+		return -1;
+	}
 	debugf("wake up from cond");
-	mutex_lock(m);
+	return mutex_lock(m);
 }

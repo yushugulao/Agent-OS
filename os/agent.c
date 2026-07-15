@@ -3542,20 +3542,15 @@ static void agent_action_remember(int tool_id, char *project, char *run_id,
 	safestrcpy(e->stage, stage, sizeof(e->stage));
 }
 
-static void agent_wake_threads_raw(struct proc *p)
+static void agent_wake_event_waiters(struct proc *p)
 {
-	for (int i = 0; i < NTHREAD; i++) {
-		if (p->threads[i].state == SLEEPING) {
-			p->threads[i].state = RUNNABLE;
-			add_task(&p->threads[i]);
-		}
-	}
+	wait_queue_wake_all(&p->agent_event_waiters);
+	p->agent_wait_wakeup_count++;
 }
 
-static void agent_wake_threads(struct proc *p)
+static void agent_wake_timeline_waiters(struct proc *p)
 {
-	agent_wake_threads_raw(p);
-	p->agent_wait_wakeup_count++;
+	wait_queue_wake_all(&p->agent_timeline_waiters);
 }
 
 static int agent_filter_matches(struct proc *target, int type, char *payload)
@@ -3669,7 +3664,7 @@ static int agent_queue_event(struct proc *target, int source_pid, int type,
 	target->agent_event_count_queued++;
 	target->agent_event_count++;
 	agent_audit_event(AGENT_AUDIT_KIND_EVENT_ENQUEUE, target, event);
-	agent_wake_threads(target);
+	agent_wake_event_waiters(target);
 	return 1;
 }
 
@@ -5632,7 +5627,7 @@ static void agent_observe_record(struct agent_timeline_record *record)
 			continue;
 		p->agent_observe_epoch = agent_observe_epoch;
 		p->agent_timeline_wait_wakeup_count++;
-		agent_wake_threads_raw(p);
+		agent_wake_timeline_waiters(p);
 	}
 }
 
@@ -5829,7 +5824,7 @@ int sys_agent_timeline_query(uint64 filteraddr, uint64 recordsaddr, int max)
 	return agent_timeline_export(p, &filter, recordsaddr, max);
 }
 
-static int agent_timeline_wait_for_match(struct proc *p, struct thread *t,
+static int agent_timeline_wait_for_match(struct proc *p,
 					 struct agent_timeline_filter *filter,
 					 int timeout_ticks)
 {
@@ -5876,8 +5871,12 @@ static int agent_timeline_wait_for_match(struct proc *p, struct thread *t,
 			p->agent_timeline_wait_deadline = 0;
 		}
 		p->agent_timeline_wait_sleep_count++;
-		t->state = SLEEPING;
-		sched();
+		if (wait_queue_sleep(&p->agent_timeline_waiters) < 0) {
+			agent_timeline_waiting_set(p, 0);
+			p->agent_timeline_wait_deadline_valid = 0;
+			p->loop_state = AGENT_LOOP_IDLE;
+			return -1;
+		}
 	}
 }
 
@@ -5907,8 +5906,7 @@ int sys_agent_timeline_wait(uint64 filteraddr, int timeout_ticks)
 	rc = agent_timeline_copy_filter(p, filteraddr, &filter);
 	if (rc < 0)
 		return rc;
-	return agent_timeline_wait_for_match(p, curr_thread(), &filter,
-					     timeout_ticks);
+	return agent_timeline_wait_for_match(p, &filter, timeout_ticks);
 }
 
 int sys_agent_timeline_read(uint64 filteraddr, uint64 recordsaddr, int max,
@@ -5935,8 +5933,7 @@ int sys_agent_timeline_read(uint64 filteraddr, uint64 recordsaddr, int max,
 	rc = agent_timeline_copy_filter(p, filteraddr, &filter);
 	if (rc < 0)
 		return rc;
-	matched = agent_timeline_wait_for_match(p, curr_thread(), &filter,
-						timeout_ticks);
+	matched = agent_timeline_wait_for_match(p, &filter, timeout_ticks);
 	if (matched <= 0 || max == 0)
 		return matched;
 	return agent_timeline_export(p, &filter, recordsaddr, max);
@@ -6253,7 +6250,6 @@ int sys_agent_unwatch(int event_type, uint64 filteraddr)
 int sys_agent_wait(uint64 eventaddr, int timeout_ticks)
 {
 	struct proc *p = curr_proc();
-	struct thread *t = curr_thread();
 	struct agent_event event;
 	uint64 start = agent_ticks();
 	uint64 now;
@@ -6311,8 +6307,11 @@ int sys_agent_wait(uint64 eventaddr, int timeout_ticks)
 			p->agent_wait_deadline = 0;
 		}
 		p->agent_wait_sleep_count++;
-		t->state = SLEEPING;
-		sched();
+		if (wait_queue_sleep(&p->agent_event_waiters) < 0) {
+			p->agent_wait_deadline_valid = 0;
+			status = -1;
+			break;
+		}
 	}
 	if (eventaddr &&
 	    copyout(p->pagetable, eventaddr, (char *)&event,
@@ -6373,7 +6372,7 @@ int sys_agent_wait_cancel(int pid, uint64 reasonaddr)
 			   sizeof(target->agent_wait_cancel_reason));
 		target->agent_wait_cancel_count++;
 		target->agent_wait_deadline_valid = 0;
-		agent_wake_threads(target);
+		agent_wake_event_waiters(target);
 		return 0;
 	}
 	return AGENT_STATUS_NOT_FOUND;
@@ -7055,12 +7054,12 @@ void agent_tick(void)
 		if (p->agent_wait_deadline_valid &&
 		    now >= p->agent_wait_deadline) {
 			p->agent_wait_deadline_valid = 0;
-			agent_wake_threads(p);
+			agent_wake_event_waiters(p);
 		}
 		if (p->agent_timeline_wait_deadline_valid &&
 		    now >= p->agent_timeline_wait_deadline) {
 			p->agent_timeline_wait_deadline_valid = 0;
-			agent_wake_threads_raw(p);
+			agent_wake_timeline_waiters(p);
 		}
 		if (p->heartbeat_interval > 0 &&
 		    now - p->agent_last_heartbeat_tick >=
