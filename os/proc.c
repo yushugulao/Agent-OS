@@ -17,6 +17,7 @@ static int process_queue_data[TASK_QUEUE_SIZE];
 static int scheduler_retained[TASK_QUEUE_SIZE];
 static int scheduler_agent_hint;
 static uint64 scheduler_agent_burst;
+static uint64 scheduler_score_burst;
 
 #define KSTACK_POISON 0xa5
 #define KSTACK_CANARY 0x6b737461636b4f53ULL
@@ -188,6 +189,7 @@ void proc_init()
 	init_queue(&task_queue, TASK_QUEUE_SIZE, process_queue_data);
 	scheduler_agent_hint = 0;
 	scheduler_agent_burst = 0;
+	scheduler_score_burst = 0;
 }
 
 int allocpid()
@@ -249,8 +251,10 @@ static struct thread *fetch_best_task()
 	int enabled = intr_save();
 	int best_agent = -1;
 	int first_normal = -1;
+	int first_runnable = -1;
 	int candidate_count = 0;
 	int selected;
+	int forced_fifo = 0;
 	int index;
 	struct thread *candidate;
 	struct thread *best_task;
@@ -265,6 +269,8 @@ static struct thread *fetch_best_task()
 		if (candidate == NULL || candidate->state != RUNNABLE)
 			continue;
 		scheduler_retained[candidate_count++] = index;
+		if (first_runnable < 0)
+			first_runnable = index;
 		if (candidate->process && candidate->process->is_agent) {
 			if (best_agent < 0 ||
 			    agent_sched_better(candidate,
@@ -274,15 +280,20 @@ static struct thread *fetch_best_task()
 			first_normal = index;
 		}
 	}
-	// Agent scores prioritize urgent work but cannot override bounded progress.
+	// Agent scores prioritize urgent work, but a bounded FIFO escape prevents
+	// any score combination from starving another runnable thread forever.
 	if (best_agent < 0) {
 		scheduler_agent_hint = 0;
 		selected = first_normal;
+	} else if (first_normal >= 0 &&
+		   scheduler_agent_burst >= AGENT_SCHED_MAX_AGENT_BURST) {
+		selected = first_normal;
+	} else if (scheduler_score_burst >=
+		   AGENT_SCHED_MAX_AGENT_BURST) {
+		selected = first_runnable;
+		forced_fifo = 1;
 	} else if (first_normal < 0) {
 		selected = best_agent;
-	} else if (scheduler_agent_burst >=
-		   AGENT_SCHED_MAX_AGENT_BURST) {
-		selected = first_normal;
 	} else if (agent_sched_better(id_to_task(best_agent),
 				      id_to_task(first_normal))) {
 		selected = best_agent;
@@ -302,10 +313,15 @@ static struct thread *fetch_best_task()
 	}
 	if (selected < 0) {
 		scheduler_agent_burst = 0;
+		scheduler_score_burst = 0;
 		intr_restore(enabled);
 		return 0;
 	}
 	best_task = id_to_task(selected);
+	if (forced_fifo || best_task == 0 || candidate_count <= 1)
+		scheduler_score_burst = 0;
+	else
+		scheduler_score_burst++;
 	if (best_task && best_task->process && best_task->process->is_agent &&
 	    first_normal >= 0)
 		scheduler_agent_burst++;
@@ -659,20 +675,47 @@ void freethread(struct thread *t)
 	uvmunmap(pt, get_thread_ustack_base_va(t), USTACK_SIZE / PAGE_SIZE, 1);
 }
 
-void freeproc(struct proc *p)
+static void proc_reset_thread_slot(struct thread *t)
 {
+	t->state = T_UNUSED;
+	t->tid = -1;
+	t->wait_channel = 0;
+	t->wait_next = 0;
+	t->wait_reason = WAIT_REASON_NONE;
+	t->on_run_queue = 0;
+}
+
+static struct thread *proc_current_teardown_thread(struct proc *p)
+{
+	struct thread *t = current_thread;
+
+	if (t == NULL || t == &idle || t->process != p || t->tid < 0 ||
+	    t->tid >= NTHREAD || t != &p->threads[t->tid])
+		return NULL;
+	return t;
+}
+
+// Release resources owned by a process without changing who must reap it.
+// Keep the exiting thread schedulable until every potentially blocking
+// release is complete; failed allocations have no current teardown thread.
+static void proc_release_resources(struct proc *p)
+{
+	struct thread *teardown = proc_current_teardown_thread(p);
+
 	for (int tid = 0; tid < NTHREAD; ++tid) {
 		struct thread *t = &p->threads[tid];
 		detach_task(t);
 		if (t->state != T_UNUSED && t->state != EXITED) {
 			freethread(t);
 		}
-		t->state = T_UNUSED;
-		t->tid = -1;
-		t->wait_channel = 0;
-		t->wait_next = 0;
-		t->wait_reason = WAIT_REASON_NONE;
-		t->on_run_queue = 0;
+		if (t != teardown)
+			proc_reset_thread_slot(t);
+	}
+	if (teardown != NULL) {
+		// Teardown is a schedulable kernel phase. Yield once before the
+		// potentially long release so ownership changes cannot depend on a
+		// particular resource backend blocking.
+		yield();
 	}
 	wait_queue_init(&p->child_waiters, WAIT_REASON_CHILD);
 	wait_queue_init(&p->agent_event_waiters, WAIT_REASON_EVENT);
@@ -692,7 +735,47 @@ void freeproc(struct proc *p)
 			p->files[i] = NULL;
 		}
 	}
+	if (teardown != NULL)
+		proc_reset_thread_slot(teardown);
+}
+
+// parent == NULL means the kernel owns the final reap.
+static void proc_reset_slot(struct proc *p)
+{
+	p->parent = NULL;
+	p->exit_code = 0;
 	p->state = P_UNUSED;
+}
+
+// ZOMBIE resources were already released by exit(); reaping only returns the
+// process-table slot. Kernel stacks are reset when the slot is allocated again.
+static int proc_reap(struct proc *p)
+{
+	if (p == NULL || p->state != ZOMBIE)
+		return -1;
+	proc_reset_slot(p);
+	return 0;
+}
+
+// Transfer every child of an exiting process to the kernel reaper. Live
+// children will be reaped on exit; zombies can be reclaimed immediately.
+static void proc_orphan_children(struct proc *parent)
+{
+	struct proc *child;
+
+	for (child = pool; child < &pool[NPROC]; child++) {
+		if (child->parent != parent)
+			continue;
+		child->parent = NULL;
+		if (child->state == ZOMBIE)
+			proc_reap(child);
+	}
+}
+
+void freeproc(struct proc *p)
+{
+	proc_release_resources(p);
+	proc_reset_slot(p);
 }
 
 static int fork_common(int make_agent, int agent_role)
@@ -888,11 +971,10 @@ int wait(int pid, int *code)
 				havekids = 1;
 				if (np->state == ZOMBIE) {
 					// Found one.
-					np->state = P_UNUSED;
 					pid = np->pid;
 					*code = np->exit_code;
-					memset((void *)np->threads[0].kstack, 9,
-					       KSTACK_SIZE);
+					if (proc_reap(np) < 0)
+						return -1;
 					return pid;
 				}
 			}
@@ -916,21 +998,21 @@ void exit(int code)
 	debugf("thread exit with %d", code);
 	freethread(t);
 	if (tid == 0) {
+		struct proc *parent;
+
 		p->exit_code = code;
-		freeproc(p);
+		proc_orphan_children(p);
+		proc_release_resources(p);
+		p->state = ZOMBIE;
+		// Resource release can yield. Sample ownership only after it finishes,
+		// because the parent may have exited and orphaned us in the meantime.
+		parent = p->parent;
 		debugf("proc exit");
-		if (p->parent != NULL) {
+		if (parent != NULL) {
 			// Parent should `wait`
-			p->state = ZOMBIE;
-			wait_queue_wake_all(&p->parent->child_waiters);
-		}
-		// Set the `parent` of all children to NULL
-		struct proc *np;
-		for (np = pool; np < &pool[NPROC]; np++) {
-			if (np->parent == p) {
-				np->parent = NULL;
-			}
-		}
+			wait_queue_wake_all(&parent->child_waiters);
+		} else
+			proc_reap(p);
 	}
 	sched();
 }

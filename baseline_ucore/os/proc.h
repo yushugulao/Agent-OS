@@ -58,7 +58,7 @@ struct proc {
 	pagetable_t pagetable; // User page table
 	uint64 max_page;
 	uint64 ustack_base; // Virtual address of user stack base
-	struct proc *parent; // Parent process
+	struct proc *parent; // Parent process; NULL means kernel-reaped
 	uint64 exit_code;
 	//File descriptor table, using to record the files opened by the process
 	struct file *files[FD_BUFFER_SIZE];
