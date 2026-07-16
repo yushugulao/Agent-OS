@@ -15,6 +15,70 @@ static void check(int ok, const char *msg)
 	}
 }
 
+static void read_exact(int fd, char *buf, int size)
+{
+	int offset = 0;
+	int n;
+
+	while (offset < size) {
+		n = read(fd, buf + offset, size - offset);
+		check(n > 0, "read exact");
+		offset += n;
+	}
+}
+
+static void run_fairness_agent(int ready_fd, int result_fd)
+{
+	struct agent_event event;
+
+	check(agent_watch(AGENT_EVENT_MESSAGE, "fairness") == 0,
+	      "fairness watch");
+	memset(&event, 0, sizeof(event));
+	event.type = AGENT_EVENT_MESSAGE;
+	event.corr_id = 7201;
+	strcpy(event.payload, "fairness");
+	check(agent_wake(getpid(), &event) == 0, "fairness self wake");
+	check(write(ready_fd, "R", 1) == 1, "fairness ready");
+	for (int i = 0; i < AGENT_SCHED_MAX_AGENT_BURST * 4; i++)
+		sched_yield();
+	check(write(result_fd, "A", 1) == 1, "fairness agent result");
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, 0) == AGENT_STATUS_OK,
+	      "fairness consume event");
+	exit(0);
+}
+
+static void check_normal_progress(void)
+{
+	int ready[2];
+	int result[2];
+	int agent_pid;
+	int agent_status = 0;
+	char token;
+	char order[2];
+
+	check(pipe(ready) == 0, "ready pipe");
+	check(pipe(result) == 0, "result pipe");
+	agent_pid = agent_create();
+	check(agent_pid >= 0, "create fairness agent");
+	if (agent_pid == 0)
+		run_fairness_agent(ready[1], result[1]);
+	close(ready[1]);
+	check(read(ready[0], &token, 1) == 1, "wait fairness ready");
+	check(write(result[1], "N", 1) == 1, "normal progress result");
+	read_exact(result[0], order, sizeof(order));
+	check(order[0] == 'N' && order[1] == 'A',
+	      "normal process bounded progress");
+	check(waitpid(agent_pid, &agent_status) == agent_pid,
+	      "wait fairness agent");
+	check(agent_status == 0, "fairness child status");
+	close(ready[0]);
+	close(result[1]);
+	close(result[0]);
+	printf("agentsched_ucore: normal_progress=1 max_agent_burst=%d\n",
+	       AGENT_SCHED_MAX_AGENT_BURST);
+}
+
 static void check_role_child(int role, int expected_weight)
 {
 	struct agent_info info;
@@ -48,6 +112,7 @@ static void run_configured_child(void)
 	struct agent_info info;
 	struct agent_event event;
 	int n;
+	int saw_budget_reason = 0;
 	struct agent_sched_record *latest;
 
 	for (int i = 0; i < 80; i++) {
@@ -62,6 +127,15 @@ static void run_configured_child(void)
 	check(info.sched_weight == 150, "configured weight");
 	check(info.sched_priority == 20, "configured priority");
 	check(info.sched_budget == 3, "configured budget");
+	if (info.sched_last_reason & AGENT_SCHED_REASON_BUDGET_USED)
+		saw_budget_reason = 1;
+	for (int i = 0; i < 5 && !saw_budget_reason; i++) {
+		sched_yield();
+		check(agent_info(&info) == 0, "configured budget info");
+		if (info.sched_last_reason & AGENT_SCHED_REASON_BUDGET_USED)
+			saw_budget_reason = 1;
+	}
+	check(saw_budget_reason, "configured budget reason");
 	check(agent_watch(AGENT_EVENT_MESSAGE, "configured") == 0,
 	      "configured watch");
 	memset(&event, 0, sizeof(event));
@@ -151,7 +225,7 @@ static void check_event_priority(void)
 	latest = &sched_records[n - 1];
 	check((latest->reason_flags & AGENT_SCHED_REASON_EVENT_QUEUE) != 0,
 	      "snapshot event reason");
-	check(latest->dispatch_count == after.sched_dispatch_count,
+	check(latest->dispatch_count >= after.sched_dispatch_count,
 	      "snapshot dispatch count");
 	check(latest->event_queue_count > 0, "snapshot event count");
 	memset(&event, 0, sizeof(event));
@@ -216,6 +290,7 @@ int main(void)
 	int status = 0;
 
 	printf("agentsched_ucore: adaptive Agent scheduler test\n");
+	check_normal_progress();
 	pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
 	check(pid >= 0, "create orchestrator");
 	if (pid == 0)

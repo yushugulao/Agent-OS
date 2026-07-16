@@ -16,6 +16,7 @@ struct queue task_queue;
 static int process_queue_data[TASK_QUEUE_SIZE];
 static int scheduler_retained[TASK_QUEUE_SIZE];
 static int scheduler_agent_hint;
+static uint64 scheduler_agent_burst;
 
 #define KSTACK_POISON 0xa5
 #define KSTACK_CANARY 0x6b737461636b4f53ULL
@@ -185,6 +186,8 @@ void proc_init()
 	idle.wait_reason = WAIT_REASON_NONE;
 	idle.on_run_queue = 0;
 	init_queue(&task_queue, TASK_QUEUE_SIZE, process_queue_data);
+	scheduler_agent_hint = 0;
+	scheduler_agent_burst = 0;
 }
 
 int allocpid()
@@ -244,9 +247,10 @@ struct thread *fetch_task()
 static struct thread *fetch_best_task()
 {
 	int enabled = intr_save();
-	int best = -1;
-	int retained_count = 0;
-	int saw_agent = 0;
+	int best_agent = -1;
+	int first_normal = -1;
+	int candidate_count = 0;
+	int selected;
 	int index;
 	struct thread *candidate;
 	struct thread *best_task;
@@ -260,18 +264,34 @@ static struct thread *fetch_best_task()
 			candidate->on_run_queue = 0;
 		if (candidate == NULL || candidate->state != RUNNABLE)
 			continue;
-		if (candidate->process && candidate->process->is_agent)
-			saw_agent = 1;
-		if (best < 0 ||
-		    agent_sched_better(candidate, id_to_task(best))) {
-			if (best >= 0 && retained_count < TASK_QUEUE_SIZE)
-				scheduler_retained[retained_count++] = best;
-			best = index;
-		} else if (retained_count < TASK_QUEUE_SIZE) {
-			scheduler_retained[retained_count++] = index;
+		scheduler_retained[candidate_count++] = index;
+		if (candidate->process && candidate->process->is_agent) {
+			if (best_agent < 0 ||
+			    agent_sched_better(candidate,
+					       id_to_task(best_agent)))
+				best_agent = index;
+		} else if (first_normal < 0) {
+			first_normal = index;
 		}
 	}
-	for (int i = 0; i < retained_count; i++) {
+	// Agent scores prioritize urgent work but cannot override bounded progress.
+	if (best_agent < 0) {
+		scheduler_agent_hint = 0;
+		selected = first_normal;
+	} else if (first_normal < 0) {
+		selected = best_agent;
+	} else if (scheduler_agent_burst >=
+		   AGENT_SCHED_MAX_AGENT_BURST) {
+		selected = first_normal;
+	} else if (agent_sched_better(id_to_task(best_agent),
+				      id_to_task(first_normal))) {
+		selected = best_agent;
+	} else {
+		selected = first_normal;
+	}
+	for (int i = 0; i < candidate_count; i++) {
+		if (scheduler_retained[i] == selected)
+			continue;
 		candidate = id_to_task(scheduler_retained[i]);
 		if (candidate == 0 || candidate->state != RUNNABLE ||
 		    candidate->on_run_queue)
@@ -280,15 +300,19 @@ static struct thread *fetch_best_task()
 			panic("task queue invariant");
 		candidate->on_run_queue = 1;
 	}
-	if (!saw_agent)
-		scheduler_agent_hint = 0;
-	if (best < 0) {
+	if (selected < 0) {
+		scheduler_agent_burst = 0;
 		intr_restore(enabled);
 		return 0;
 	}
-	best_task = id_to_task(best);
+	best_task = id_to_task(selected);
+	if (best_task && best_task->process && best_task->process->is_agent &&
+	    first_normal >= 0)
+		scheduler_agent_burst++;
+	else
+		scheduler_agent_burst = 0;
 	if (best_task) {
-		tracef("fetch best index %d(pid=%d, tid=%d, addr=%p)", best,
+		tracef("fetch best index %d(pid=%d, tid=%d, addr=%p)", selected,
 		       best_task->process->pid, best_task->tid,
 		       (uint64)best_task);
 	}

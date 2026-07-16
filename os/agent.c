@@ -823,6 +823,7 @@ static int agent_sched_should_trace(struct proc *p,
 		    AGENT_SCHED_REASON_DEADLINE_NEAR |
 		    AGENT_SCHED_REASON_DEADLINE_NOW |
 		    AGENT_SCHED_REASON_HEARTBEAT_DUE |
+		    AGENT_SCHED_REASON_BUDGET_USED |
 		    AGENT_SCHED_REASON_PRIORITY;
 	if ((record->reason_flags & important) != 0)
 		return 1;
@@ -861,10 +862,10 @@ void agent_sched_on_dispatch(struct thread *t)
 		p->agent_sched_deadline_dispatch_count++;
 	p->agent_sched_last_dispatch_tick = now;
 	p->agent_sched_vruntime += cost;
-	p->agent_sched_budget_used++;
 	if (p->agent_sched_budget &&
 	    p->agent_sched_budget_used >= p->agent_sched_budget)
 		p->agent_sched_budget_used = 0;
+	p->agent_sched_budget_used++;
 	record.dispatch_count = p->agent_sched_dispatch_count;
 	p->agent_sched_last_score = score > 0 ? (uint64)score : 0;
 	p->agent_sched_last_reason = record.reason_flags;
@@ -4797,7 +4798,7 @@ int sys_agent_sched_config(uint64 configaddr)
 		if (config.update_mask & AGENT_SCHED_CONFIG_BUDGET) {
 			target->agent_sched_budget = config.budget;
 			if (target->agent_sched_budget_used >= config.budget)
-				target->agent_sched_budget_used = 0;
+				target->agent_sched_budget_used = config.budget;
 		}
 		target->agent_sched_ready_tick = agent_ticks();
 		return 0;

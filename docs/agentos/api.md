@@ -467,7 +467,7 @@ Agent-only 直接 syscall 的权限要求：
 
 Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。队列满时返回 `AGENT_STATUS_NO_SPACE`，不会覆盖旧事件。每个 Agent 最多注册 8 条 watch。相同 `event_type + filter` 会替换原 watch，`agent_unwatch()` 可删除匹配 watch 或清空全部 watch。有限 timeout 的 `agent_wait()` 会进入睡眠，由事件入队、heartbeat 到期、deadline 到期或 wait cancel 令牌唤醒；`agent_info.wait_loop_count` 用于观察该路径没有反复轮询。
 
-当可运行队列中存在 Agent 时，调度器会读取 Agent 状态选择可运行任务；纯普通进程负载仍走原 FIFO 取队路径。当前策略为内核自适应策略，并允许 orchestrator 配置目标 Agent 的 weight、priority 和 budget：角色权重、配置优先级、事件队列、等待状态、timeout deadline、heartbeat 到期、等待时长、虚拟运行量和预算使用量都会影响分数。`agentsched_ucore` 通过 `agent_info`、`agent_sched_config()` 和 `agent_sched_snapshot()` 验证角色权重、受权调度配置、事件优先、调度原因记录和公平性计数。
+当可运行队列中存在 Agent 时，调度器会读取 Agent 状态选择可运行任务；纯普通进程负载仍走原 FIFO 取队路径。当前策略为内核自适应策略，并允许 orchestrator 配置目标 Agent 的 weight、priority 和 budget：角色权重、配置优先级、事件队列、等待状态、timeout deadline、heartbeat 到期、等待时长、虚拟运行量和预算使用量都会影响分数。分数只决定 Agent 工作的软优先级；运行队列另有不可配置的类级公平边界。当 Agent 与普通任务同时可运行时，连续调度 Agent 达到 `AGENT_SCHED_MAX_AGENT_BURST` 次后必须从 FIFO 队首选择一个普通任务，普通任务运行后重新开始 Agent burst。该边界不受 Agent 数量、角色、事件积压或调度配置影响。`agentsched_ucore` 通过 `agent_info`、`agent_sched_config()` 和 `agent_sched_snapshot()` 验证角色权重、受权调度配置、事件优先、调度原因记录、公平性计数和普通进程的有界进展。
 
 `agent_sched_snapshot(records, max)` 返回当前 Agent 最近最多 16 次被调度时的原因记录。`max=0` 时不复制记录，只返回当前可见记录数。普通进程调用返回 `-1`。
 
