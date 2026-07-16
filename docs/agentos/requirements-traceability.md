@@ -26,10 +26,10 @@
 | ID | 赛题要求 | 状态 | 实现位置 | 验证证据 |
 | --- | --- | --- | --- | --- |
 | T1-1 | Agent 进程能成功创建 | 已验证 | `agent_create()`、`agent_create_role()`、`agent_create_role_proc()`、`agent_make_role()` | `agentfinal_ucore` 创建 orchestrator Agent 子进程；`labdemo_ucore` 创建三类角色 Agent |
-| T1-2 | PCB 扩展字段正确初始化 | 已验证 | `struct proc` Agent 字段、`agent_role`、`agent_capability_mask`、cause/span 当前状态、`agent_clear_metadata()`、`agent_make_role()` | `agent_info()`、`agentfinal_ucore`、`agentsecurity_ucore` |
+| T1-2 | PCB 扩展字段正确初始化 | 已验证 | `struct proc` Agent 字段、`agent_role`、`agent_capability_mask`、`agent_role_grant_mask`、cause/span 当前状态、`agent_clear_metadata()`、`agent_make_role()` | `agent_info()` 验证公开身份和能力；`agentsecurity_ucore` 通过 bootstrap 创建成功、低权限委派拒绝和 Agent 槽复用清理验证内核私有 grant |
 | T1-3 | Agent Context 区在用户地址空间中正确分配 | 已验证 | `agent_map_context()`、`AGENT_CONTEXT_BASE` | `agentfinal_ucore: context size=24576 capacity=128` |
 | T1-4 | Agent 进程可直接读取 Context 镜像 | 已验证 | Agent Context 用户镜像页和内核 shadow 权威页 | `agentfinal_ucore` 读取 header/latest |
-| T1-5 | 普通进程和 Agent 进程可共存，互不影响 | 已验证 | 普通父进程创建并等待 Agent 子进程；普通进程不安装 Agent metadata/context，且不能直接调用敏感 Agent syscall；pid 1 的普通直接子进程可创建 orchestrator，支持 usershell 手动测试路径 | `agentfinal_ucore`、`labdemo_ucore`、`agentsecurity_ucore: plain_child_orchestrator=1` |
+| T1-5 | 普通进程和 Agent 进程可共存，互不影响 | 已验证 | loader 建立可信启动 grant；普通 fork/exec 不继承；普通进程不安装 Agent metadata/context，且不能创建 Agent 或调用敏感 Agent syscall；orchestrator 显式委派角色 | `agentfinal_ucore`、`labdemo_ucore`、`agentsecurity_ucore: plain_child_role_creation_denied=1` |
 | T1-6 | Agent 退出后资源能释放 | 已验证 | `agent_free_proc_context()`、`freeproc()` | 三个最终测试均正常退出 |
 
 ## 任务二：Agent 与内核结构化交互
@@ -125,7 +125,7 @@
 | --- | --- | --- | --- |
 | T6-1 | 综合示例程序 | 已验证 | `labdemo_ucore` 以科研 Agent 平台为示例负载，串联任务一至五，输出 `agentos:event`，读取真实 align 日志内容摘要，并查询、过滤全局审计短记录和统一 timeline |
 | T6-2 | 性能和计时示例程序 | 已验证 | `agentbench_ucore` 输出批量工具、Context、文件查询性能，以及轮询/事件等待计时观测；`labbench_ucore` 作为示例规划入口包装运行 |
-| T6-3 | 权限限制示例程序 | 已验证 | `agentsecurity_ucore` 输出普通进程拒绝、usershell 等价启动路径、初始化前索引查询、legacy mismatch、sentinel 角色伪造和系统事件伪造拒绝、recovery 幂等 action/artifact 更新和定向更新 |
+| T6-3 | 权限限制示例程序 | 已验证 | `agentsecurity_ucore` 输出普通进程拒绝、usershell 等价 `fork/exec` 创建拒绝、进程槽复用清理、初始化前索引查询、legacy mismatch、sentinel 角色伪造和系统事件伪造拒绝、recovery 幂等 action/artifact 更新和定向更新 |
 | T6-4 | LLM-friendly template relay | 已验证 | 内核提供 `llm_request` / `llm_response` 工具、`AGENT_EVENT_LLM_DONE`、`LLM_RELAY` capability、Context/timeline/audit 记录；真实云端调用放在用户态或宿主机 relay | `agentllm_ucore: template_relay=1`、`agentfinal_ucore: llm_template_relay=1` |
 | T6-5 | 页面查看与图表查看 | 已验证 | `make reader` 启动本地页面服务；`results/latest/monitor.html`、`reader-guide.html`、`index.html`、`charts/*.svg` 呈现双目标运行、测试入口、实验图表和 AgentOS 证据 | `host_tools/plain_ucore_reader.py`、`host_tools/summarize_dual_platform_results.py`、`host_tools/test_plain_ucore_reader.py`、`host_tools/test_summarize_dual_platform_results.py` |
 | T6-6 | 查询历史驱动的预测性预取 | 部分实现 | 当前实现文件 metadata 预取提示，覆盖同一 run 的对象标签依赖；综合示例中 message 入队时内核把 sentinel 的提示交接给 investigator 使用，并写入同一 span 的全局提示总线；尚未做文件内容预加载或通用预测器 | `agentfs_ucore: prefetch_hints=1`、`agentbench_ucore: file_prefetch_snapshot ...`、`agentfinal_ucore: span_prefetch=1`、`labdemo_ucore: sentinel prefetch_hint ...`、`labdemo_ucore: investigator handoff_prefetch ...`、`labdemo_ucore: investigator span_prefetch ...`、`agentos:event type=PREFETCH_USED ...` |

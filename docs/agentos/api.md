@@ -145,15 +145,15 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 538：
 
 ## 角色与 capability
 
-`agent_create()` 保留兼容语义，默认创建最低权限 `AGENT_ROLE_SENTINEL`。`agent_create_role(role)` 用于创建指定角色 Agent：
+`agent_create()` 是创建 `AGENT_ROLE_SENTINEL` 的兼容入口，`agent_create_role(role)` 用于创建指定角色 Agent。两者进入同一个内核授权检查，只有内核私有的 `role_grant_mask` 包含目标角色时才会分配进程和 Context。创建授权不通过 `agent_info()` 暴露，避免把安全凭证并入未版本化的查询 ABI：
 
 | 调用者 | 允许行为 |
 | --- | --- |
-| pid 1 的普通 init | 只允许创建 `AGENT_ROLE_ORCHESTRATOR`，用于启动示例控制面 |
-| pid 1 的直接普通子进程 | 只允许创建 `AGENT_ROLE_ORCHESTRATOR`，用于支持 `usershell` 手动运行测试程序 |
-| 具备 `AGENT_CAP_ORCHESTRATE` 的 Agent | 允许创建任意合法角色 |
-| 其他普通进程 | 返回 `-1`，不创建 Agent |
-| 不具备 orchestrate 能力的 Agent | 返回 `AGENT_STATUS_DENIED` |
+| 内核装载的可信 init | 获得 bootstrap role grant，可建立根 orchestrator |
+| orchestrator Agent | 按角色策略获得全部 role grant，可显式委派合法角色 |
+| 普通 `fork` 子进程及其 `exec` 映像 | 不继承 bootstrap 或 Agent 的 role grant |
+| sentinel、investigator、recovery | role grant 为空，不能继续创建 Agent |
+| 未获目标 role grant 的调用者 | 返回 `AGENT_STATUS_DENIED`，且不分配进程、内存或文件资源 |
 
 当前角色能力如下：
 
@@ -164,7 +164,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 538：
 | `AGENT_ROLE_RECOVERY` | `META_READ`、`CONTENT_READ`、`MESSAGE_SEND`、`WATCH`、`ACTION_WRITE`、`ARTIFACT_WRITE`、`AUDIT_WRITE` |
 | `AGENT_ROLE_ORCHESTRATOR` | 全部能力，包括 `META_WRITE`、`ORCHESTRATE` 和 `LLM_RELAY` |
 
-敏感授权只使用内核 `struct proc` 中的 `agent_role` 和 `agent_capability_mask`。`agent_op.arg0` 中传入的 role 只保留为 旧兼容参数，不参与 `capability_check`、`action_commit`、`artifact_update`、`llm_response` 等敏感工具授权。`rerun_stage` 和 `write_report` 仍可调用，但它们只是面向旧示例的兼容别名；运行记录、事件 action 和重复请求判断都归入 `action_commit` 或 `artifact_update`。
+Agent 创建授权与业务操作授权彼此独立。前者只使用内核 `struct proc.agent_role_grant_mask`；后者使用 `agent_role` 和 `agent_capability_mask`。bootstrap grant 由 loader 在初始映像安装完成后赋予，不根据 PID、父 PID 或程序名推断；普通 fork 不复制 grant，普通 bootstrap 进程成功 exec 后也会撤销 grant。`agent_op.arg0` 中传入的 role 只保留为旧兼容参数，不参与 `capability_check`、`action_commit`、`artifact_update`、`llm_response` 等敏感工具授权。`rerun_stage` 和 `write_report` 仍可调用，但它们只是面向旧示例的兼容别名；运行记录、事件 action 和重复请求判断都归入 `action_commit` 或 `artifact_update`。
 
 `RECOVER_STAGE` 和 `REPORT_WRITE` 在头文件中保留为旧程序兼容别名，分别等价于 `ACTION_WRITE` 和 `ARTIFACT_WRITE`。新代码和文档应优先使用通用能力名。
 
@@ -469,7 +469,7 @@ Agent-only 直接 syscall 的权限要求：
 
 Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。队列满时返回 `AGENT_STATUS_NO_SPACE`，不会覆盖旧事件。每个 Agent 最多注册 8 条 watch。相同 `event_type + filter` 会替换原 watch，`agent_unwatch()` 可删除匹配 watch 或清空全部 watch。有限 timeout 的 `agent_wait()` 会进入睡眠，由事件入队、heartbeat 到期、deadline 到期或 wait cancel 令牌唤醒；`agent_info.wait_loop_count` 用于观察该路径没有反复轮询。
 
-当可运行队列中存在 Agent 时，调度器会读取 Agent 状态选择可运行任务；纯普通进程负载仍走原 FIFO 取队路径。当前策略为内核自适应策略，并允许 orchestrator 配置目标 Agent 的 weight、priority 和 budget：角色权重、配置优先级、事件队列、等待状态、timeout deadline、heartbeat 到期、等待时长、虚拟运行量和预算使用量都会影响分数。分数只决定 Agent 工作的软优先级；运行队列另有不可配置的类级公平边界。当 Agent 与普通任务同时可运行时，连续调度 Agent 达到 `AGENT_SCHED_MAX_AGENT_BURST` 次后必须从 FIFO 队首选择一个普通任务，普通任务运行后重新开始 Agent burst。该边界不受 Agent 数量、角色、事件积压或调度配置影响。`agentsched_ucore` 通过 `agent_info`、`agent_sched_config()` 和 `agent_sched_snapshot()` 验证角色权重、受权调度配置、事件优先、调度原因记录、公平性计数和普通进程的有界进展。
+当可运行队列中存在 Agent 时，调度器会读取 Agent 状态选择可运行任务；纯普通进程负载仍走原 FIFO 取队路径。当前策略为内核自适应策略，并允许 orchestrator 配置目标 Agent 的 weight、priority 和 budget：角色权重、配置优先级、事件队列、等待状态、timeout deadline、heartbeat 到期、等待时长、虚拟运行量和预算使用量都会影响分数。分数只决定 Agent 工作的软优先级；运行队列另有不可配置的类级公平界限。当 Agent 与普通任务同时可运行时，连续调度 Agent 达到 `AGENT_SCHED_MAX_AGENT_BURST` 次后必须从 FIFO 队首选择一个普通任务，普通任务运行后重新开始 Agent burst。该界限不受 Agent 数量、角色、事件积压或调度配置影响。`agentsched_ucore` 通过 `agent_info`、`agent_sched_config()` 和 `agent_sched_snapshot()` 验证角色权重、受权调度配置、事件优先、调度原因记录、公平性计数和普通进程的有界进展。
 
 `agent_sched_snapshot(records, max)` 返回当前 Agent 最近最多 16 次被调度时的原因记录。`max=0` 时不复制记录，只返回当前可见记录数。普通进程调用返回 `-1`。
 

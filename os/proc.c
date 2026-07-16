@@ -627,6 +627,7 @@ void proc_install_user_image(struct proc *p, struct user_image *image,
 	p->pagetable = image->pagetable;
 	p->max_page = image->max_page;
 	p->ustack_base = image->ustack_base;
+	agent_authority_on_exec(p);
 	image->pagetable = 0;
 
 	for (int tid = 0; tid < NTHREAD; tid++) {
@@ -838,11 +839,15 @@ int fork()
 
 int agent_create_proc()
 {
-	return fork_common(1, AGENT_ROLE_SENTINEL);
+	return agent_create_role_proc(AGENT_ROLE_SENTINEL);
 }
 
 int agent_create_role_proc(int role)
 {
+	int status = agent_authority_check(curr_proc(), role);
+
+	if (status != AGENT_STATUS_OK)
+		return status;
 	return fork_common(1, role);
 }
 

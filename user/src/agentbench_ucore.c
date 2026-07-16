@@ -737,10 +737,17 @@ static void run_agent_bench(void)
 
 int main(void)
 {
+	struct agent_info info;
 	int pid;
 	int status = 0;
 
 	printf("agentbench_ucore: Agent-OS on uCore benchmark\n");
+	check(agent_info(&info) == 0, "query bench launcher");
+	if (info.is_agent) {
+		check(info.agent_role == AGENT_ROLE_ORCHESTRATOR,
+		      "bench launcher is orchestrator");
+		run_agent_bench();
+	}
 	pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
 	check(pid >= 0, "create bench agent");
 	if (pid == 0)

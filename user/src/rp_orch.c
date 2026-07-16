@@ -127,6 +127,7 @@ static int agent_child_for_program(const char *program)
 	    strcmp(program, "rp_workbench") == 0 ||
 	    strcmp(program, "rp_package") == 0 ||
 	    strcmp(program, "rp_realtask") == 0 ||
+	    strcmp(program, "rp_service_surface") == 0 ||
 	    strcmp(program, "rp_backend") == 0)
 		return 1;
 	return 0;
@@ -238,7 +239,7 @@ int main(void)
 				   "support_role=plain_process\n"
 				   "role_policy=program_specific\n"
 				   "launch_policy=kernel_bound_programs_agent_plain_support_fork\n"
-				   "agent_bound_programs=rp_query,rp_repair,rp_execobs,rp_agent_collab,rp_auditor,rp_workbench,rp_package,rp_realtask,rp_backend\n"
+				   "agent_bound_programs=rp_query,rp_repair,rp_execobs,rp_agent_collab,rp_auditor,rp_workbench,rp_package,rp_realtask,rp_service_surface,rp_backend\n"
 				   "status=ready\n")) {
 			return 1;
 		}

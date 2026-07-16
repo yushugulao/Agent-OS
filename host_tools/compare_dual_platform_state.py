@@ -38,7 +38,7 @@ AGENTOS_EVIDENCE_REQUIREMENTS = {
         "stage_launch=agent_create_role",
         "support_launch=fork",
         "support_role=plain_process",
-        "agent_bound_programs=rp_query,rp_repair,rp_execobs,rp_agent_collab,rp_auditor,rp_workbench,rp_package,rp_realtask,rp_backend",
+        "agent_bound_programs=rp_query,rp_repair,rp_execobs,rp_agent_collab,rp_auditor,rp_workbench,rp_package,rp_realtask,rp_service_surface,rp_backend",
     ),
     "rp_agentos_query": ("metadata_source=kernel_file_index",),
     "rp_agentos_recovery": (
@@ -73,17 +73,19 @@ AGENTOS_MAINFLOW_STAGES = (
     "real_task",
     "edit_conflict",
 )
-AGENTOS_REQUIRED_AGENT_PROGRAMS = {
-    "rp_query",
-    "rp_repair",
-    "rp_execobs",
-    "rp_agent_collab",
-    "rp_auditor",
-    "rp_workbench",
-    "rp_package",
-    "rp_realtask",
-    "rp_backend",
+AGENTOS_REQUIRED_AGENT_ROLES = {
+    "rp_query": "investigator",
+    "rp_repair": "recovery",
+    "rp_execobs": "investigator",
+    "rp_agent_collab": "orchestrator",
+    "rp_auditor": "orchestrator",
+    "rp_workbench": "sentinel",
+    "rp_package": "orchestrator",
+    "rp_realtask": "orchestrator",
+    "rp_service_surface": "sentinel",
+    "rp_backend": "orchestrator",
 }
+AGENTOS_REQUIRED_AGENT_PROGRAMS = set(AGENTOS_REQUIRED_AGENT_ROLES)
 SCENARIO_EVIDENCE_SPECS = (
     ("Context Path", "上下文可信记录", ("context_trusted=kernel_shadow", "context_snapshot=trusted", "report_answer=kernel_context_record")),
     ("File Metadata", "文件对象查询", ("metadata_query=used_index", "metadata_source=kernel_file_index", "file_verify=kernel_metadata_index")),
@@ -428,7 +430,7 @@ def verify_agentos_mainflow_facts(agentos_dir: Path) -> int:
 def verify_orch_timing(
     state_dir: Path,
     label: str,
-    required_agent_programs: set[str] | None = None,
+    required_agent_roles: dict[str, str] | None = None,
 ) -> tuple[int, int, int]:
     text = require_file_text(state_dir, "rp_orch_timing")
     program_count = 0
@@ -450,16 +452,26 @@ def verify_orch_timing(
         if launcher == "agent_create_role":
             agent_launcher_count += 1
             agent_programs.add(program)
+            if required_agent_roles and program not in required_agent_roles:
+                raise ValueError(
+                    f"{label} has unmapped Agent program: program={program} record={raw}"
+                )
+            expected_role = required_agent_roles.get(program) if required_agent_roles else None
+            if expected_role and fields.get("role") != expected_role:
+                raise ValueError(
+                    f"{label} Agent program has wrong role: "
+                    f"program={program} expected={expected_role} record={raw}"
+                )
         elif launcher and launcher.startswith("fork"):
-            if required_agent_programs and fields.get("role") != "plain":
+            if required_agent_roles and fields.get("role") != "plain":
                 raise ValueError(
                     f"{label} fork support program is not recorded as plain process: {raw}"
                 )
             fork_launcher_count += 1
     if program_count < 60:
         raise ValueError(f"{label} timing records too few: {program_count}")
-    if required_agent_programs:
-        missing = sorted(required_agent_programs - agent_programs)
+    if required_agent_roles:
+        missing = sorted(set(required_agent_roles) - agent_programs)
         if missing:
             raise ValueError(
                 f"{label} timing records are missing required Agent launches: {','.join(missing)}"
@@ -522,7 +534,7 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
     ) = verify_orch_timing(
         agentos_dir,
         "AgentOS",
-        required_agent_programs=AGENTOS_REQUIRED_AGENT_PROGRAMS,
+        required_agent_roles=AGENTOS_REQUIRED_AGENT_ROLES,
     )
     if agentos_timing_records < plain_timing_records:
         raise ValueError("AgentOS timing record count is less than plain uCore")

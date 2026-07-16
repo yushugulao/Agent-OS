@@ -134,6 +134,7 @@ struct proc {
 	char agent_wait_cancel_reason[AGENT_EVENT_PAYLOAD_SIZE];
 	uint64 agent_last_heartbeat_tick;
 	uint64 agent_capability_mask;
+	uint64 agent_role_grant_mask;
 	uint64 agent_detail_count;
 	uint64 agent_detail_head;
 	struct agent_context_detail agent_details[AGENT_CONTEXT_MAX_RECORDS];

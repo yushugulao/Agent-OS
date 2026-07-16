@@ -66,7 +66,9 @@ def write_timing(root: Path, launcher: str = "fork", hybrid_agentos: bool = Fals
     for i, program in enumerate(programs):
         is_agent = hybrid_agentos and program in compare.AGENTOS_REQUIRED_AGENT_PROGRAMS
         record_launcher = "agent_create_role" if is_agent else launcher
-        record_role = "orchestrator" if is_agent else "plain"
+        record_role = (
+            compare.AGENTOS_REQUIRED_AGENT_ROLES[program] if is_agent else "plain"
+        )
         lines.append(
             f"program={program};role={record_role};launcher={record_launcher};ok=1;code=0;elapsed_ms={i + 1}\n"
         )
@@ -211,6 +213,26 @@ def main() -> int:
         write_agentos_mainflow_stages(agentos)
         write_timing(agentos, "fork", hybrid_agentos=False)
         expect_failure(agentos=agentos, plain=plain, expected="missing required Agent launches")
+
+        write_timing(agentos, "fork", hybrid_agentos=True)
+        bad = (agentos / "rp_orch_timing").read_text(encoding="utf-8")
+        bad = bad.replace(
+            "program=rp_service_surface;role=sentinel",
+            "program=rp_service_surface;role=orchestrator",
+            1,
+        )
+        write_state_file(agentos, "rp_orch_timing", bad)
+        expect_failure(agentos=agentos, plain=plain, expected="wrong role")
+
+        write_timing(agentos, "fork", hybrid_agentos=True)
+        bad = (agentos / "rp_orch_timing").read_text(encoding="utf-8")
+        bad = bad.replace(
+            "program=rp_case_0;role=plain;launcher=fork",
+            "program=rp_case_0;role=sentinel;launcher=agent_create_role",
+            1,
+        )
+        write_state_file(agentos, "rp_orch_timing", bad)
+        expect_failure(agentos=agentos, plain=plain, expected="unmapped Agent program")
 
         write_timing(agentos, "fork", hybrid_agentos=True)
         bad = (agentos / "rp_orch_timing").read_text(encoding="utf-8")

@@ -1,4 +1,5 @@
 #include "loader.h"
+#include "agent.h"
 #include "defs.h"
 #include "file.h"
 #include "trap.h"
@@ -116,6 +117,7 @@ int load_init_app()
 		return -1;
 	}
 	proc_install_user_image(p, &image, &staged, 0);
+	agent_authority_bootstrap(p);
 	struct thread *t = &p->threads[0];
 	t->trapframe->a0 = argc;
 	t->state = RUNNABLE;

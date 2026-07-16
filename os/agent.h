@@ -284,6 +284,13 @@
 #define AGENT_ROLE_RECOVERY      3
 #define AGENT_ROLE_ORCHESTRATOR  4
 
+#define AGENT_ROLE_GRANT_BIT(role) (1ULL << ((role) - 1))
+#define AGENT_ROLE_GRANT_ALL \
+	(AGENT_ROLE_GRANT_BIT(AGENT_ROLE_SENTINEL) | \
+	 AGENT_ROLE_GRANT_BIT(AGENT_ROLE_INVESTIGATOR) | \
+	 AGENT_ROLE_GRANT_BIT(AGENT_ROLE_RECOVERY) | \
+	 AGENT_ROLE_GRANT_BIT(AGENT_ROLE_ORCHESTRATOR))
+
 #define AGENT_CAP_META_READ     (1ULL << 0)
 #define AGENT_CAP_CONTENT_READ  (1ULL << 1)
 #define AGENT_CAP_PROCESS_READ  (1ULL << 2)
@@ -758,6 +765,9 @@ struct thread;
 
 void agentinit(void);
 void agent_clear_metadata(struct proc *p);
+void agent_authority_bootstrap(struct proc *p);
+void agent_authority_on_exec(struct proc *p);
+int agent_authority_check(struct proc *p, int role);
 int agent_map_context(struct proc *p);
 int agent_alias_exec_context(struct proc *p, pagetable_t pagetable);
 void agent_unmap_exec_context(struct proc *p, pagetable_t pagetable);

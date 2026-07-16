@@ -288,27 +288,36 @@ labdemo_ucore: parent passed
 
 ```text
 agentsecurity_ucore: Agent permission test
+agentsecurity_ucore: bootstrap_plain_identity=1
 agentsecurity_ucore: mail_basic=1
 agentsecurity_ucore: plain_process_denied=1
 agentsecurity_ucore: .agentmeta_protected=1
-agentsecurity_ucore: role=orchestrator_child capability_checked=1
-agentsecurity_ucore: plain_child_orchestrator=1
+agentsecurity_ucore: untrusted_exec_role_creation_denied=1
+agentsecurity_ucore: plain_child_role_creation_denied=1
+agentsecurity_ucore: bootstrap_orchestrator_create=1
 agentsecurity_ucore: role=orchestrator capability_checked=1
+agentsecurity_ucore: orchestrator_plain_fork_denied=1
 agentsecurity_ucore: preinit_index_query=1
 agentsecurity_ucore: legacy_tool_mismatch=1
 agentsecurity_ucore: legacy_param_validation=1 syscall_only=1
 agentsecurity_ucore: role=sentinel capability_checked=1
+agentsecurity_ucore: role=sentinel delegation_denied=1
 agentsecurity_ucore: wake_event_authorization=1
 agentsecurity_ucore: sentinel spoof_denied=1
+agentsecurity_ucore: role=investigator capability_checked=1
+agentsecurity_ucore: role=investigator delegation_denied=1
 agentsecurity_ucore: role=recovery capability_checked=1
+agentsecurity_ucore: role=recovery delegation_denied=1
 agentsecurity_ucore: recovery action_ok=1 duplicate=1
 agentsecurity_ucore: scoped_action=1
 agentsecurity_ucore: scoped_artifact=1
 agentsecurity_ucore: passed
+agentsecurity_ucore: reaped_agent_slot_cleared=1
+agentsecurity_ucore: bootstrap_exec_grant_revoked=1
 agentsecurity_ucore: parent passed
 ```
 
-结论：普通进程 mail 最小路径可用；普通进程不能直接投递事件、取消 Agent 等待、修改 Agent 文件元数据、访问私有 `.agentmeta`、读取全局审计、读取当前 span 短记录、读取统一 timeline、查询 timeline、过滤全局审计或配置调度；pid 1 的普通直接子进程可创建 orchestrator，保证 usershell 手动测试路径可用；初始化前索引查询不会阻塞；legacy `tool_id` 和 `tool_name` 不一致会失败；legacy 参数 key/type 错误会返回 `BAD_PARAM`；syscall-only 工具不能通过 batch 执行；sentinel 通过 `agent_wake()` 伪造 `LLM_DONE` 会被拒绝且事件不入队，非法事件类型返回 `BAD_PARAM`，合法消息仍可投递；sentinel 不能通过用户态传入 recovery role 伪造动作权限，也不能注册对象依赖、读取或过滤全局审计、配置调度；recovery 的动作能力来自内核真实 role/capability，重复 corr_id 被识别为 duplicate，且定向动作和工件更新不会误修改其他 run。
+结论：内核加载的可信初始进程是唯一 bootstrap 创建授权根；授权留在内核 PCB 中并与业务 capability 分离，不扩展未版本化的 `agent_info` ABI。普通 `fork`、普通子进程 `exec`、orchestrator 的普通 `fork` 以及可信根自身 `exec` 均不会传播或保留创建权，已回收 Agent 进程槽再次用于普通进程时也不残留身份、能力或 Context；只有 orchestrator 能委派角色，sentinel、investigator 和 recovery 无法继续创建任何 Agent。普通进程原有 mail 路径仍可用，既有能力隔离、legacy 参数校验、sentinel 防伪造以及 recovery 定向幂等更新均通过。
 
 ## 基础兼容抽测：ch3_trace
 

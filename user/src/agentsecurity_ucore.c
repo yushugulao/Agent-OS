@@ -40,6 +40,10 @@ static uint64 expected_caps(int role)
 		return AGENT_CAP_META_READ | AGENT_CAP_PROCESS_READ |
 		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
 		       AGENT_CAP_AUDIT_WRITE;
+	if (role == AGENT_ROLE_INVESTIGATOR)
+		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
+		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
+		       AGENT_CAP_AUDIT_WRITE;
 	if (role == AGENT_ROLE_RECOVERY)
 		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
 		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
@@ -64,6 +68,46 @@ static void check_role(int role, const char *name)
 	check(info.agent_role == role, name);
 	check(info.capability_mask == expected_caps(role), "capability mask");
 	printf("agentsecurity_ucore: role=%s capability_checked=1\n", name);
+}
+
+static void check_plain_identity(void)
+{
+	struct agent_info info;
+
+	check(agent_info(&info) == 0, "plain identity info");
+	check(info.is_agent == 0, "plain is not agent");
+	check(info.agent_id == 0, "plain agent id cleared");
+	check(info.agent_role == 0, "plain role cleared");
+	check(info.agent_type == AGENT_TYPE_NONE, "plain type cleared");
+	check(info.capability_mask == 0, "plain capability cleared");
+	check(info.context_base == 0 && info.context_size == 0,
+	      "plain context cleared");
+}
+
+static void check_creation_authority_denied(void)
+{
+	check(agent_create() == AGENT_STATUS_DENIED, "default create denied");
+	for (int role = AGENT_ROLE_SENTINEL;
+	     role <= AGENT_ROLE_ORCHESTRATOR; role++)
+		check(agent_create_role(role) == AGENT_STATUS_DENIED,
+		      "role create denied");
+	check(agent_create_role(0) == AGENT_STATUS_BAD_PARAM,
+	      "invalid low role denied");
+	check(agent_create_role(AGENT_ROLE_ORCHESTRATOR + 1) ==
+		      AGENT_STATUS_BAD_PARAM,
+	      "invalid high role denied");
+}
+
+static void check_delegation_denied(const char *name)
+{
+	check_creation_authority_denied();
+	printf("agentsecurity_ucore: role=%s delegation_denied=1\n", name);
+}
+
+static void check_bootstrap_identity(void)
+{
+	check_plain_identity();
+	printf("agentsecurity_ucore: bootstrap_plain_identity=1\n");
 }
 
 static void set_align_failed(const char *run_id, int fid, const char *physical)
@@ -212,33 +256,59 @@ static void check_legacy_param_validation(void)
 	printf("agentsecurity_ucore: legacy_param_validation=1 syscall_only=1\n");
 }
 
-static void run_min_orchestrator(void)
+static void check_plain_child_creation_denied(void)
 {
-	check_role(AGENT_ROLE_ORCHESTRATOR, "orchestrator_child");
-	exit(0);
-}
-
-static void check_plain_child_orchestrator_allowed(void)
-{
-	int wrapper_pid;
-	int agent_pid;
+	int child_pid;
 	int status = 0;
 
-	wrapper_pid = fork();
-	check(wrapper_pid >= 0, "fork wrapper");
-	if (wrapper_pid == 0) {
-		agent_pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
-		check(agent_pid >= 0, "plain child create orchestrator");
-		if (agent_pid == 0)
-			run_min_orchestrator();
-		check(waitpid(agent_pid, &status) == agent_pid,
-		      "wait child orchestrator");
-		check(status == 0, "child orchestrator status");
+	child_pid = fork();
+	check(child_pid >= 0, "fork untrusted child");
+	if (child_pid == 0) {
+		char *argv[] = { "agentsecurity_ucore", "--untrusted-probe", 0 };
+
+		check_plain_identity();
+		check_creation_authority_denied();
+		if (exec("agentsecurity_ucore", argv) < 0)
+			exit(1);
+		exit(1);
+	}
+	check(waitpid(child_pid, &status) == child_pid, "wait untrusted child");
+	check(status == 0, "untrusted child status");
+	printf("agentsecurity_ucore: plain_child_role_creation_denied=1\n");
+}
+
+static void check_orchestrator_plain_fork_denied(void)
+{
+	int pid;
+	int status = 0;
+
+	pid = fork();
+	check(pid >= 0, "fork orchestrator plain child");
+	if (pid == 0) {
+		check_plain_identity();
+		check_creation_authority_denied();
 		exit(0);
 	}
-	check(waitpid(wrapper_pid, &status) == wrapper_pid, "wait wrapper");
-	check(status == 0, "wrapper status");
-	printf("agentsecurity_ucore: plain_child_orchestrator=1\n");
+	check(waitpid(pid, &status) == pid, "wait orchestrator plain child");
+	check(status == 0, "orchestrator plain child status");
+	printf("agentsecurity_ucore: orchestrator_plain_fork_denied=1\n");
+}
+
+static void check_reaped_agent_slot_cleared(void)
+{
+	int pid;
+	int status = 0;
+
+	pid = fork();
+	check(pid >= 0, "fork after agent reap");
+	if (pid == 0) {
+		check_plain_identity();
+		check_creation_authority_denied();
+		exit(0);
+	}
+	check(waitpid(pid, &status) == pid, "wait post-reap child");
+	check(status == 0, "post-reap child status");
+	printf("agentsecurity_ucore: reaped_agent_slot_cleared=1\n");
 }
 
 static void check_wake_event_authorization(void)
@@ -295,6 +365,7 @@ static void run_sentinel(void)
 	struct agent_file_meta meta;
 
 	check_role(AGENT_ROLE_SENTINEL, "sentinel");
+	check_delegation_denied("sentinel");
 	check_wake_event_authorization();
 	make_op(&op, AGENT_TOOL_CAPABILITY_CHECK, 8101,
 		AGENT_ROLE_RECOVERY, "action_commit");
@@ -350,6 +421,7 @@ static void run_recovery(void)
 	struct agent_result res;
 
 	check_role(AGENT_ROLE_RECOVERY, "recovery");
+	check_delegation_denied("recovery");
 	make_op(&op, AGENT_TOOL_ACTION_COMMIT, 9101, AGENT_ROLE_SENTINEL,
 		"label=align;run_id=RUN-999;namespace=lab-gene-x");
 	run_one(&op, &res, AGENT_STATUS_OK, "recovery action");
@@ -378,12 +450,20 @@ static void run_recovery(void)
 	exit(0);
 }
 
+static void run_investigator(void)
+{
+	check_role(AGENT_ROLE_INVESTIGATOR, "investigator");
+	check_delegation_denied("investigator");
+	exit(0);
+}
+
 static void run_orchestrator(void)
 {
 	int pid;
 	int status = 0;
 
 	check_role(AGENT_ROLE_ORCHESTRATOR, "orchestrator");
+	check_orchestrator_plain_fork_denied();
 	check_preinit_index_query();
 	check(agent_file_meta_init() == 0, "meta init");
 	check_legacy_tool_mismatch();
@@ -399,6 +479,12 @@ static void run_orchestrator(void)
 		run_sentinel();
 	check(waitpid(pid, &status) == pid, "wait sentinel");
 	check(status == 0, "sentinel status");
+	pid = agent_create_role(AGENT_ROLE_INVESTIGATOR);
+	check(pid >= 0, "create investigator");
+	if (pid == 0)
+		run_investigator();
+	check(waitpid(pid, &status) == pid, "wait investigator");
+	check(status == 0, "investigator status");
 	check_align_status("RUN-042", "failed");
 	check_align_status("RUN-999", "failed");
 	check_align_status("RUN-998", "failed");
@@ -476,21 +562,42 @@ static void check_plain_mail(void)
 	printf("agentsecurity_ucore: mail_basic=1\n");
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
 	int pid;
 	int status = 0;
+	char *exec_probe_argv[] = {
+		"agentsecurity_ucore", "--bootstrap-exec-probe", 0
+	};
+
+	if (argc > 1 && strcmp(argv[1], "--untrusted-probe") == 0) {
+		check_plain_identity();
+		check_creation_authority_denied();
+		printf("agentsecurity_ucore: untrusted_exec_role_creation_denied=1\n");
+		return 0;
+	}
+	if (argc > 1 && strcmp(argv[1], "--bootstrap-exec-probe") == 0) {
+		check_plain_identity();
+		check_creation_authority_denied();
+		printf("agentsecurity_ucore: bootstrap_exec_grant_revoked=1\n");
+		printf("agentsecurity_ucore: parent passed\n");
+		return 0;
+	}
 
 	printf("agentsecurity_ucore: Agent permission test\n");
+	check_bootstrap_identity();
 	check_plain_mail();
 	check_plain_process_denied();
-	check_plain_child_orchestrator_allowed();
+	check_plain_child_creation_denied();
 	pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
 	check(pid >= 0, "create orchestrator");
 	if (pid == 0)
 		run_orchestrator();
+	printf("agentsecurity_ucore: bootstrap_orchestrator_create=1\n");
 	check(waitpid(pid, &status) == pid, "wait orchestrator");
 	check(status == 0, "orchestrator status");
-	printf("agentsecurity_ucore: parent passed\n");
-	return 0;
+	check_reaped_agent_slot_cleared();
+	if (exec("agentsecurity_ucore", exec_probe_argv) < 0)
+		check(0, "bootstrap exec probe");
+	return 1;
 }

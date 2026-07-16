@@ -530,6 +530,7 @@ void agent_clear_metadata(struct proc *p)
 	       sizeof(p->agent_wait_cancel_reason));
 	p->agent_last_heartbeat_tick = 0;
 	p->agent_capability_mask = 0;
+	p->agent_role_grant_mask = 0;
 	p->agent_detail_count = 0;
 	p->agent_detail_head = 0;
 	memset(p->agent_details, 0, sizeof(p->agent_details));
@@ -569,58 +570,80 @@ void agent_clear_metadata(struct proc *p)
 	       sizeof(p->agent_timeline_wait_filter));
 }
 
+#define AGENT_CAP_ALL \
+	(AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ | \
+	 AGENT_CAP_PROCESS_READ | AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH | \
+	 AGENT_CAP_ACTION_WRITE | AGENT_CAP_ARTIFACT_WRITE | \
+	 AGENT_CAP_AUDIT_WRITE | AGENT_CAP_META_WRITE | \
+	 AGENT_CAP_ORCHESTRATE | AGENT_CAP_LLM_RELAY)
+
+struct agent_role_policy {
+	int role;
+	uint64 capability_mask;
+	uint64 role_grant_mask;
+	int sched_weight;
+};
+
+static const struct agent_role_policy agent_role_policies[] = {
+	{ AGENT_ROLE_SENTINEL,
+	  AGENT_CAP_META_READ | AGENT_CAP_PROCESS_READ |
+		  AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
+		  AGENT_CAP_AUDIT_WRITE,
+	  0, 70 },
+	{ AGENT_ROLE_INVESTIGATOR,
+	  AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
+		  AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
+		  AGENT_CAP_AUDIT_WRITE,
+	  0, 90 },
+	{ AGENT_ROLE_RECOVERY,
+	  AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
+		  AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
+		  AGENT_CAP_ACTION_WRITE | AGENT_CAP_ARTIFACT_WRITE |
+		  AGENT_CAP_AUDIT_WRITE,
+	  0, 120 },
+	{ AGENT_ROLE_ORCHESTRATOR, AGENT_CAP_ALL, AGENT_ROLE_GRANT_ALL, 110 },
+};
+
+static const struct agent_role_policy *agent_role_policy_find(int role)
+{
+	for (int i = 0; i < (int)NELEM(agent_role_policies); i++)
+		if (agent_role_policies[i].role == role)
+			return &agent_role_policies[i];
+	return 0;
+}
+
 static int agent_role_valid(int role)
 {
-	return role >= AGENT_ROLE_SENTINEL && role <= AGENT_ROLE_ORCHESTRATOR;
-}
-
-static uint64 agent_all_capabilities(void)
-{
-	return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
-	       AGENT_CAP_PROCESS_READ | AGENT_CAP_MESSAGE_SEND |
-	       AGENT_CAP_WATCH | AGENT_CAP_ACTION_WRITE |
-	       AGENT_CAP_ARTIFACT_WRITE | AGENT_CAP_AUDIT_WRITE |
-	       AGENT_CAP_META_WRITE | AGENT_CAP_ORCHESTRATE |
-	       AGENT_CAP_LLM_RELAY;
-}
-
-static uint64 agent_role_capability_mask(int role)
-{
-	switch (role) {
-	case AGENT_ROLE_SENTINEL:
-		return AGENT_CAP_META_READ | AGENT_CAP_PROCESS_READ |
-		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
-		       AGENT_CAP_AUDIT_WRITE;
-	case AGENT_ROLE_INVESTIGATOR:
-		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
-		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
-		       AGENT_CAP_AUDIT_WRITE;
-	case AGENT_ROLE_RECOVERY:
-		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
-		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
-		       AGENT_CAP_ACTION_WRITE | AGENT_CAP_ARTIFACT_WRITE |
-		       AGENT_CAP_AUDIT_WRITE;
-	case AGENT_ROLE_ORCHESTRATOR:
-		return agent_all_capabilities();
-	default:
-		return 0;
-	}
+	return agent_role_policy_find(role) != 0;
 }
 
 static int agent_role_sched_weight(int role)
 {
-	switch (role) {
-	case AGENT_ROLE_RECOVERY:
-		return 120;
-	case AGENT_ROLE_ORCHESTRATOR:
-		return 110;
-	case AGENT_ROLE_INVESTIGATOR:
-		return 90;
-	case AGENT_ROLE_SENTINEL:
-		return 70;
-	default:
-		return 50;
-	}
+	const struct agent_role_policy *policy = agent_role_policy_find(role);
+
+	return policy ? policy->sched_weight : 50;
+}
+
+void agent_authority_bootstrap(struct proc *p)
+{
+	if (p != 0)
+		p->agent_role_grant_mask = AGENT_ROLE_GRANT_ALL;
+}
+
+void agent_authority_on_exec(struct proc *p)
+{
+	if (p != 0 && !p->is_agent)
+		p->agent_role_grant_mask = 0;
+}
+
+int agent_authority_check(struct proc *p, int role)
+{
+	if (!agent_role_valid(role))
+		return AGENT_STATUS_BAD_PARAM;
+	if (p == 0 ||
+	    (p->agent_role_grant_mask & AGENT_ROLE_GRANT_BIT(role)) == 0)
+		return AGENT_STATUS_DENIED;
+	return AGENT_STATUS_OK;
 }
 
 static int agent_has_cap(struct proc *p, uint64 cap)
@@ -771,13 +794,6 @@ static int agent_action_allowed(struct proc *p, char *action)
 	uint64 cap = agent_cap_for_action(action);
 
 	return cap != 0 && agent_has_cap(p, cap);
-}
-
-static int agent_plain_can_create_orchestrator(struct proc *p)
-{
-	if (p->pid == 1)
-		return 1;
-	return p->parent && p->parent->pid == 1 && !p->parent->is_agent;
 }
 
 void agent_sched_on_enqueue(struct thread *t)
@@ -1308,7 +1324,9 @@ bad:
 
 int agent_make_role(struct proc *p, int role)
 {
-	if (!agent_role_valid(role))
+	const struct agent_role_policy *policy = agent_role_policy_find(role);
+
+	if (policy == 0)
 		return -1;
 	if (p->max_page * PAGE_SIZE > AGENT_CONTEXT_BASE)
 		return -1;
@@ -1323,10 +1341,11 @@ int agent_make_role(struct proc *p, int role)
 	p->heartbeat_interval = 0;
 	p->resource_quota = AGENT_CONTEXT_MAX_RECORDS;
 	p->loop_state = AGENT_LOOP_IDLE;
-	p->agent_capability_mask = agent_role_capability_mask(role);
+	p->agent_capability_mask = policy->capability_mask;
+	p->agent_role_grant_mask = policy->role_grant_mask;
 	p->agent_last_heartbeat_tick = agent_ticks();
 	p->agent_sched_policy = AGENT_SCHED_POLICY_ADAPTIVE;
-	p->agent_sched_weight = agent_role_sched_weight(role);
+	p->agent_sched_weight = policy->sched_weight;
 	p->agent_sched_priority = 0;
 	p->agent_sched_ready_tick = agent_ticks();
 	p->agent_sched_last_dispatch_tick = 0;
@@ -4641,17 +4660,6 @@ int sys_agent_create(void)
 
 int sys_agent_create_role(int role)
 {
-	struct proc *p = curr_proc();
-
-	if (!agent_role_valid(role))
-		return AGENT_STATUS_BAD_PARAM;
-	if (p->is_agent) {
-		if (!agent_has_cap(p, AGENT_CAP_ORCHESTRATE))
-			return AGENT_STATUS_DENIED;
-	} else if (role != AGENT_ROLE_ORCHESTRATOR ||
-		   !agent_plain_can_create_orchestrator(p)) {
-		return -1;
-	}
 	return agent_create_role_proc(role);
 }
 

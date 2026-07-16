@@ -385,7 +385,11 @@ static int write_agentos_surface_binding_child(void)
 	struct agent_context_record records[4];
 	int snapshot;
 
-	if (agent_info(&info) < 0 || !info.is_agent) {
+	if (agent_info(&info) < 0 || !info.is_agent ||
+	    info.agent_role != AGENT_ROLE_SENTINEL) {
+		return 1;
+	}
+	if (agent_create() != AGENT_STATUS_DENIED) {
 		return 1;
 	}
 	make_agentos_surface_op(&ops[0], AGENT_TOOL_ECHO, 9101,
@@ -413,17 +417,11 @@ static int write_agentos_surface_binding_child(void)
 
 static int write_agentos_surface_binding(void)
 {
-	int pid = agent_create();
-	int code = -1;
-	int got;
+	struct agent_info info;
 
-	if (pid < 0) return 0;
-	if (pid == 0) {
-		exit(write_agentos_surface_binding_child());
-	}
-	got = waitpid(pid, &code);
-	if (got != pid || code != 0) return 0;
-	return 1;
+	if (agent_info(&info) < 0 || !info.is_agent)
+		return 1;
+	return write_agentos_surface_binding_child() == 0;
 }
 
 int main(void)

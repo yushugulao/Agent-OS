@@ -21,8 +21,8 @@ AgentOS-uCore 当前实现不是只做“能创建一个特殊进程”的最小
 
 | 系统调用 | 作用 |
 | --- | --- |
-| `agent_create()` | 创建最低权限 sentinel Agent 子进程，保留兼容入口 |
-| `agent_create_role(int role)` | 创建指定角色 Agent 子进程；pid 1 普通 init 和 pid 1 的直接普通子进程只能创建 orchestrator，具备 orchestrate 能力的 Agent 可创建其他角色 |
+| `agent_create()` | 在当前 role grant 允许时创建 sentinel Agent 子进程，保留兼容入口 |
+| `agent_create_role(int role)` | 在当前 role grant 允许时创建指定角色 Agent 子进程；与兼容入口共用授权机制 |
 | `agent_info(struct agent_info *)` | 查询当前进程的 Agent 状态、Agent ID、Agent Context、配额、Loop 状态和路径元信息 |
 
 当前任务一能力由 `agentfinal_ucore`、`labdemo_ucore` 和 `agentsecurity_ucore` 共同验证，覆盖 Agent 创建、Context 映射、多个 Agent 并存、角色能力绑定和退出路径。
@@ -37,6 +37,7 @@ AgentOS-uCore 当前实现不是只做“能创建一个特殊进程”的最小
 | `agent_type` | Agent 类型，普通进程为 `AGENT_TYPE_NONE`，Agent 进程为 `AGENT_TYPE_AGENT` |
 | `agent_id` | Agent 进程 ID，启动周期内递增分配 |
 | `agent_role` | 当前 Agent 的真实内核角色 |
+| `agent_role_grant_mask` | 内核持有的角色创建授权；bootstrap 和 orchestrator 按策略获得，普通进程及低权限 Agent 为 0 |
 | `agent_ctx_base` | Agent Context 用户虚拟地址起点 |
 | `agent_ctx_size` | Agent Context 大小 |
 | `heartbeat_interval` | Agent 心跳周期，`agent_heartbeat()` 可设置 |
@@ -97,13 +98,14 @@ Agent Context 使用固定高地址用户虚拟区：
 
 ```mermaid
 sequenceDiagram
-    participant P as 普通父进程
+    participant P as 已获 role grant 的父进程
     participant S as Agent 创建系统调用
     participant K as proc.c
     participant A as agent_make
     participant C as Agent Context
     P->>S: agent_create() / agent_create_role(role)
     S->>K: agent_create_proc() / agent_create_role_proc(role)
+    K->>K: 校验 role_grant_mask
     K->>K: 复制基础进程状态
     K->>A: 标记子进程为 Agent 并绑定 role/capability
     A->>C: 分配 shadow 页和镜像页
@@ -112,7 +114,7 @@ sequenceDiagram
     K-->>P: 返回子进程 pid
 ```
 
-子进程从 `agent_create()` 或 `agent_create_role()` 返回 0 后继续执行用户代码，并可以立即调用 `agent_info()`、`agent_run()`、`context_snapshot()` 等 Agent syscall。
+子进程从 `agent_create()` 或 `agent_create_role()` 返回 0 后继续执行用户代码，并可以立即调用 `agent_info()`、`agent_run()`、`context_snapshot()` 等 Agent syscall。可信启动根由 loader 显式授予 bootstrap grant；普通 fork 不继承，普通 exec 会撤销，Agent 子进程只获得其角色策略定义的可委派集合。
 
 ## 释放流程
 
@@ -122,7 +124,7 @@ Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 
 
 `agentfinal_ucore` 中的任务一验证路径：
 
-1. 普通父进程调用 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)`。
+1. 内核装载的可信父进程使用 bootstrap grant 调用 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)`。
 2. 子进程调用 `agent_info()`。
 3. 子进程确认 `is_agent == 1`。
 4. 子进程确认 `agent_role == AGENT_ROLE_ORCHESTRATOR`，且 capability mask 包含 `META_WRITE` 和 `ORCHESTRATE`。
@@ -131,7 +133,7 @@ Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 
 7. 子进程执行后续工具调用和 Context 测试。
 8. 父进程等待子进程退出并检查状态。
 
-`labdemo_ucore` 进一步覆盖多个 Agent 并存的运行方式。普通 init 只创建 orchestrator，orchestrator 再创建：
+`labdemo_ucore` 进一步覆盖多个 Agent 并存的运行方式。可信 init 只创建 orchestrator，orchestrator 再显式委派：
 
 - recovery；
 - investigator；

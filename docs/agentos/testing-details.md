@@ -69,7 +69,7 @@
 
 | 覆盖点 | 检查方式 |
 | --- | --- |
-| Agent 创建 | pid 1 父进程创建 orchestrator Agent 子进程 |
+| Agent 创建 | 内核加载的可信初始进程凭创建授权生成 orchestrator Agent 子进程 |
 | Agent PCB 字段 | `agent_info()` 返回 Agent 状态、真实 role、capability 和 Context 信息 |
 | Agent Context 映射 | 直接读取 header 和 latest result |
 | 批量工具调用 | 一次 `agent_run()` 执行 64 个 echo op |
@@ -404,7 +404,7 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 
 ### 9.2 流程
 
-1. 普通 init 调用 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)` 创建 orchestrator。
+1. 内核加载的可信 init 调用 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)` 创建 orchestrator。
 2. orchestrator 调用 `agent_file_meta_init()` 重新加载文件对象元数据并启用扫描。
 3. orchestrator 创建 recovery、investigator、sentinel 三个角色 Agent。
 4. 三个角色 Agent 分别输出自己的 role、pid 和 Context 地址。
@@ -440,7 +440,7 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 34. orchestrator 调用 `agent_timeline_query()`，按 audit source、prefetch kind、source pid、target pid 和 handoff flags 精确读取 sentinel 到 investigator 的预取交接记录，按 tool id 精确读取 digest 内容证据，并用 after-cursor 检查同一 timeline 可按上一条记录继续读取。
 35. orchestrator 调用 `agent_provenance_snapshot()`，确认 message、prefetch 和 digest 内容证据都进入因果图。
 36. orchestrator 输出 `labdemo_ucore: passed`。
-37. 普通 init 等待 orchestrator 退出，输出 `labdemo_ucore: parent passed`。
+37. 可信 init 等待 orchestrator 退出，输出 `labdemo_ucore: parent passed`。
 
 ### 9.3 输出阅读方式
 
@@ -451,7 +451,7 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 | 覆盖点 | 检查方式 |
 | --- | --- |
 | 多 Agent 并存 | 同时创建 sentinel、investigator、recovery |
-| 控制面权限 | 普通 init 只启动 orchestrator；元数据初始化、失败注入和角色 Agent 创建都由 orchestrator 完成 |
+| 控制面权限 | 可信 init 只启动 orchestrator；元数据初始化、失败注入和角色 Agent 创建都由 orchestrator 完成 |
 | 文件状态事件 | orchestrator 注入 failed 状态后唤醒 sentinel |
 | 文件属性查询 | sentinel 查询失败工件 |
 | 依赖查询 | investigator 查询 align 的影响范围 |
@@ -474,43 +474,25 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 
 ### 10.1 测试流程
 
-1. 普通 init 验证 `mailread()` 无消息返回 0，`mailwrite()` 写入自己成功，随后 `mailread()` 能读回相同内容。
-2. 普通 init 调用 `agent_wake()`，预期返回 `-1`。
-3. 普通 init 调用 `agent_file_meta_init()`，预期返回 `-1`。
-4. 普通 init 调用 `agent_file_meta_set()`，预期返回 `-1`。
-5. 普通 init 调用 `agent_audit_snapshot()`、`agent_audit_query()`、`agent_span_trace_snapshot()`、`agent_timeline_snapshot()`、`agent_timeline_query()` 和 `agent_timeline_wait()`，预期返回 `-1`。
-6. 普通 init 直接 `open(".agentmeta")`、`open(".agentmeta", O_CREATE)`、`unlink(".agentmeta")`，预期均返回 `-1`。
-7. 普通 init 创建一个普通子进程，子进程作为 usershell 等价路径创建 orchestrator Agent。
-8. orchestrator 子 Agent 通过 `agent_info()` 检查真实 role 和 capability mask。
-9. 普通 init 创建主 orchestrator Agent。
-10. orchestrator 在未初始化元数据前执行带索引查询，预期返回 0 条命中且不会阻塞。
-11. orchestrator 初始化文件元数据。
-12. orchestrator 使用 legacy `agent_call()` 传入不一致的 `tool_id` 和 `tool_name`，预期返回 `AGENT_STATUS_BAD_REQUEST` 和 `tool_mismatch`。
-13. orchestrator 分别把设定的模拟流程和另一个模拟流程的比对处理、报告生成环节置为 failed。
-14. orchestrator 创建 sentinel Agent。
-15. sentinel 检查真实 role/capability mask。
-16. sentinel 注册 `LLM_DONE` watch 后直接用 `agent_wake()` 伪造该事件，预期返回 `AGENT_STATUS_DENIED`，随后非阻塞 wait 仍为 timeout，证明事件未入队。
-17. sentinel 用 `agent_wake()` 投递 `AGENT_EVENT_NONE` 和超出 `AGENT_EVENT_MAX` 的类型，预期均返回 `AGENT_STATUS_BAD_PARAM`。
-18. sentinel 用同一接口投递 `AGENT_EVENT_MESSAGE`，预期成功收到消息，证明授权收紧没有破坏合法消息路径。
-19. sentinel 把 `agent_op.arg0` 伪造成 `AGENT_ROLE_RECOVERY` 后调用 `capability_check("action_commit")`，预期仍返回 `AGENT_STATUS_DENIED`。
-20. sentinel 继续伪造 recovery 调用 `action_commit align`，预期返回 `AGENT_STATUS_DENIED`。
-21. sentinel 继续伪造 recovery 调用 `artifact_update report`，预期返回 `AGENT_STATUS_DENIED`。
-22. sentinel 调用 `dependency_update` 注册对象依赖，预期返回 `AGENT_STATUS_DENIED`。
-23. sentinel 调用 `read_file_digest` 读取真实文件内容证据，预期返回 `AGENT_STATUS_DENIED`，说明 metadata read 不等于 content read。
-24. sentinel 调用 `agent_audit_snapshot()` 和 `agent_audit_query()`，预期返回 `AGENT_STATUS_DENIED`。
-25. sentinel 直接调用 `agent_file_meta_set()`，预期返回 `AGENT_STATUS_DENIED`。
-26. sentinel 查询设定的模拟流程和另一个模拟流程状态仍为 failed，说明拒绝路径没有改变文件状态。
-27. orchestrator 创建 recovery Agent。
-28. recovery 检查真实 role/capability mask。
-29. recovery 调用 `action_commit`，payload 使用 label、run_id 和 namespace 定向选择另一个模拟流程；即使 `agent_op.arg0` 填成 sentinel，也按真实 recovery role 成功。
-30. recovery 使用同一 corr_id 再次调用同一 selector，预期返回 `AGENT_STATUS_DUPLICATE`。
-31. recovery 调用 `artifact_update`，payload 使用 label、run_id 和 namespace，只写入另一个模拟流程的目标报告。
-32. orchestrator 查询另一个模拟流程的比对处理和报告生成环节变为 ok，设定的模拟流程仍为 failed，说明动作和工件更新没有跨 run 修改。
-33. 测试输出 `agentsecurity_ucore: passed` 和 `agentsecurity_ucore: parent passed`。
+1. 内核加载的可信初始进程检查自身保持普通进程身份且业务 capability 为零；随后成功创建 orchestrator，证明内核私有 bootstrap 授权生效。
+2. 可信初始进程验证普通 mail 路径可用，并验证事件、文件元数据、全局审计、timeline 和私有 `.agentmeta` 均受既有能力隔离保护。
+3. 可信初始进程普通 `fork()` 后，子进程检查两种 Agent 创建接口和全部合法角色都返回 `AGENT_STATUS_DENIED`。
+4. 该普通子进程再执行 `exec()`，重复验证创建授权仍为零，证明授权不会经普通派生链传播。
+5. 可信初始进程创建 orchestrator；orchestrator 通过 `agent_info()` 检查真实 role 和 capability mask，并通过成功委派各角色验证创建权。
+6. orchestrator 普通 `fork()` 后，子进程验证 Agent 身份、role、capability 和 Context 均已清零，且没有创建授权。
+7. orchestrator 在未初始化元数据前执行带索引查询，预期返回 0 条命中且不会阻塞，随后初始化文件元数据。
+8. orchestrator 使用 legacy `agent_call()` 验证工具名、工具 ID、参数键和参数类型校验。
+9. orchestrator 分别把设定的模拟流程和另两个模拟流程的比对处理、报告生成环节置为 failed。
+10. orchestrator 创建 sentinel 和 investigator；两个低权限 Agent 均检查真实 role/capability，并验证两种创建接口和全部角色委派均返回 `AGENT_STATUS_DENIED`。
+11. sentinel 验证系统事件伪造、用户态 role 伪造、依赖更新、内容读取、全局审计、调度配置和元数据写入均被拒绝，且合法消息仍可投递。
+12. orchestrator 创建 recovery；recovery 检查真实 role/capability，通过创建拒绝验证没有委派授权，并验证重复 corr_id、定向动作及工件更新行为。
+13. orchestrator 确认拒绝路径和定向更新没有跨 run 修改，输出 `agentsecurity_ucore: passed`。
+14. 可信初始进程等待 orchestrator 后再次派生普通子进程，验证复用已回收 Agent 槽时身份、能力和创建权均已清零。
+15. 可信初始进程执行自身 `exec()`，验证 bootstrap 创建授权被撤销，输出 `agentsecurity_ucore: parent passed`。
 
 ### 10.2 输出阅读方式
 
-本测试输出围绕普通进程拒绝、`.agentmeta` 保护、真实 role/capability、初始化前索引查询安全、legacy 参数校验、sentinel 角色与系统事件伪造失败、recovery 定向动作和多 run 工件更新展开。完整样例输出见 [test-record.md](test-record.md)。
+本测试输出围绕可信根授权、`fork/exec` 不继承创建权、低权限角色不可继续委派、`.agentmeta` 保护、真实 role/capability、初始化前索引查询安全、legacy 参数校验、sentinel 角色与系统事件伪造失败、recovery 定向动作和多 run 工件更新展开。完整样例输出见 [test-record.md](test-record.md)。
 
 ### 10.3 覆盖结论
 
@@ -522,7 +504,11 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 | 普通进程不能直接修改文件元数据 | `agent_file_meta_init()`、`agent_file_meta_set()` 返回 `-1` |
 | 普通进程不能直接访问 `.agentmeta` | `open`、`open(O_CREATE)`、`unlink` 均返回 `-1` |
 | 普通进程 mail 基础路径可用 | `mailwrite()` 写入，`mailread()` 读回同一内容 |
-| usershell 手动运行路径可用 | pid 1 的普通直接子进程可创建 orchestrator |
+| Agent 创建权有明确可信根 | 仅内核加载的初始进程获得 bootstrap 角色授权；普通 `fork` 子进程不继承 |
+| 普通派生链不可铸造 Agent | 普通子进程在 `exec` 前后调用两种创建接口均被拒绝 |
+| 角色委派不能向低权限 Agent 扩散 | orchestrator 可显式创建角色；sentinel、investigator 和 recovery 调用所有创建形式均被拒绝 |
+| Agent 进程槽复用不残留权限 | orchestrator 回收后派生普通子进程，身份、capability、Context 和创建权均为普通进程状态 |
+| bootstrap 授权按映像生命周期撤销 | 可信初始进程执行普通 `exec` 后，所有 Agent 创建请求均被拒绝 |
 | 初始化前索引查询安全 | 未调用 `agent_file_meta_init()` 前，索引查询返回 0 条命中且不阻塞 |
 | legacy 工具名和工具 ID 不一致会失败 | `agent_call()` 返回 `AGENT_STATUS_BAD_REQUEST` 和 `tool_mismatch` |
 | legacy 参数键和类型校验 | 错误参数返回 `AGENT_STATUS_BAD_PARAM`，syscall-only 工具不能走 batch |

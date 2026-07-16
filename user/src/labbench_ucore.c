@@ -1,3 +1,4 @@
+#include <agent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -17,8 +18,8 @@ int main(void)
 	int status = 0;
 
 	printf("labbench_ucore: Agent-OS laboratory benchmark entry\n");
-	pid = fork();
-	check(pid >= 0, "fork agentbench");
+	pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
+	check(pid >= 0, "create agentbench orchestrator");
 	if (pid == 0) {
 		exec("agentbench_ucore", argv);
 		printf("labbench_ucore: exec failed\n");

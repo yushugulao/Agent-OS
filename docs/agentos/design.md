@@ -392,11 +392,11 @@ Agent Loop 使用进程字段保存 8 条 watch、16 槽 FIFO 事件队列、一
 
 ### 8.7 角色与能力
 
-Agent 的真实角色保存在内核 `struct proc.agent_role` 中，能力保存在 `agent_capability_mask` 中。`agent_create()` 默认只创建最低权限 sentinel；pid 1 的普通 init 以及 pid 1 的直接普通子进程只能通过 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)` 创建 orchestrator；具备 `AGENT_CAP_ORCHESTRATE` 的 Agent 才能创建 recovery、investigator、sentinel 等其他角色。
+Agent 的真实角色保存在内核 `struct proc.agent_role` 中，业务能力保存在 `agent_capability_mask` 中，创建授权单独保存在 `agent_role_grant_mask` 中。内核 loader 在初始映像安装完成后为可信 init 建立 bootstrap grant；普通 `fork` 不复制 grant，普通进程成功 `exec` 时撤销残留 grant。orchestrator 的角色策略允许显式委派合法角色，sentinel、investigator 和 recovery 的 grant 为空。`agent_create()` 和 `agent_create_role()` 都进入同一授权入口，授权失败时不会开始进程或 Context 分配。该机制不读取 PID、父 PID 或用户态自报角色。
 
 敏感授权不读取用户态传入的 role。`capability_check`、`action_commit`、`artifact_update`、`llm_response`、文件元数据写入和事件投递都按当前进程真实 capability 判断。`agent_wake()` 还只允许投递 `AGENT_EVENT_MESSAGE`，`LLM_DONE`、文件状态、定时器等系统事件必须走对应专用路径。因此 sentinel 即使把 `agent_op.arg0` 填成 recovery，或直接构造系统事件类型，也不能获得动作提交、工件更新或 LLM Relay 能力。`rerun_stage` 和 `write_report` 保留为旧示例兼容名称，内部仍走通用授权、状态更新、事件记录和重复请求判断路径。
 
-`labdemo_ucore` 中普通 init 只启动 orchestrator Agent；文件元数据初始化、失败注入、对象依赖注册和子 Agent 创建都由 orchestrator 发起。`agentsecurity_ucore` 专门覆盖普通进程直接调用 `agent_wake()`、`agent_file_meta_init()`、`agent_file_meta_set()` 失败，pid 1 直接子进程启动 orchestrator，初始化前索引查询，legacy tool mismatch，sentinel 伪造 recovery 被拒绝，以及多 run 定向动作更新。
+`labdemo_ucore` 中可信 init 只启动 orchestrator Agent；文件元数据初始化、失败注入、对象依赖注册和子 Agent 创建都由 orchestrator 发起。`agentsecurity_ucore` 专门覆盖普通进程直接调用敏感接口失败、普通 `fork/exec` 子进程不能继承 role grant、低权限 Agent 不能继续委派、bootstrap grant 在普通 exec 后撤销、初始化前索引查询、legacy tool mismatch、sentinel 伪造 recovery 被拒绝，以及多 run 定向动作更新。
 
 ### 8.8 性能
 
