@@ -1,6 +1,7 @@
 #include "loader.h"
 #include "agent.h"
 #include "defs.h"
+#include "exec_policy.h"
 #include "file.h"
 #include "trap.h"
 
@@ -25,13 +26,21 @@ int user_image_build(struct inode *ip, uint64 trapframe_pa,
 	char *page;
 	uint64 length;
 	uint64 va_end;
+	int perm;
 
 	if (ip == 0 || image == 0 || trapframe_pa == 0)
 		return -1;
 	memset(image, 0, sizeof(*image));
 	ivalid(ip);
-	if (ip->type != T_FILE)
+	if (!exec_policy_inode_layout_valid(ip))
 		return -1;
+	image->exec_dev = ip->dev;
+	image->exec_inum = ip->inum;
+	image->exec_flags = ip->exec_flags;
+	image->exec_generation = ip->exec_generation;
+	image->exec_role_mask = ip->exec_role_mask;
+	image->exec_layout_version = ip->exec_layout_version;
+	image->exec_rw_offset = ip->exec_rw_offset;
 	length = ip->size;
 	if (length == 0 || length > MAXVA - BASE_ADDRESS)
 		return -1;
@@ -58,8 +67,10 @@ int user_image_build(struct inode *ip, uint64 trapframe_pa,
 			kfree(page);
 			goto fail;
 		}
+		perm = PTE_U | PTE_R;
+		perm |= off < image->exec_rw_offset ? PTE_X : PTE_W;
 		if (mappages(image->pagetable, va, PAGE_SIZE, (uint64)page,
-			     PTE_U | PTE_R | PTE_W | PTE_X) < 0) {
+			     perm) < 0) {
 			kfree(page);
 			goto fail;
 		}
@@ -117,7 +128,8 @@ int load_init_app()
 		return -1;
 	}
 	proc_install_user_image(p, &image, &staged, 0);
-	agent_authority_bootstrap(p);
+	if (exec_policy_process_bootstrap(p))
+		agent_authority_bootstrap(p);
 	struct thread *t = &p->threads[0];
 	t->trapframe->a0 = argc;
 	t->state = RUNNABLE;

@@ -13,6 +13,13 @@ struct user_image {
 	uint64 entry;
 	uint64 shared_base;
 	uint64 shared_pages;
+	uint exec_dev;
+	uint exec_inum;
+	uint exec_flags;
+	uint exec_generation;
+	uint exec_role_mask;
+	uint exec_layout_version;
+	uint exec_rw_offset;
 };
 
 int load_init_app();

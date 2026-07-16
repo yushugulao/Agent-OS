@@ -12,6 +12,7 @@
 #include "fs.h"
 #include "bio.h"
 #include "defs.h"
+#include "exec_policy.h"
 #include "file.h"
 #include "proc.h"
 #include "riscv.h"
@@ -143,6 +144,11 @@ void iupdate(struct inode *ip)
 	dip->agent_meta_flags = ip->agent_meta_flags;
 	dip->agent_meta_version = ip->agent_meta_version;
 	dip->size = ip->size;
+	dip->exec_flags = ip->exec_flags;
+	dip->exec_generation = ip->exec_generation;
+	dip->exec_role_mask = ip->exec_role_mask;
+	dip->exec_layout_version = ip->exec_layout_version;
+	dip->exec_rw_offset = ip->exec_rw_offset;
 	// LAB4: you may need to update link count here
 	memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
 	bwrite(bp);
@@ -200,6 +206,11 @@ void ivalid(struct inode *ip)
 		ip->agent_meta_flags = dip->agent_meta_flags;
 		ip->agent_meta_version = dip->agent_meta_version;
 		ip->size = dip->size;
+		ip->exec_flags = dip->exec_flags;
+		ip->exec_generation = dip->exec_generation;
+		ip->exec_role_mask = dip->exec_role_mask;
+		ip->exec_layout_version = dip->exec_layout_version;
+		ip->exec_rw_offset = dip->exec_rw_offset;
 		// LAB4: You may need to get lint count here
 		memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
 		brelse(bp);
@@ -217,11 +228,20 @@ void ivalid(struct inode *ip)
 void iput(struct inode *ip)
 {
 	if (ip->ref == 1 && ip->valid && ip->removed) {
-		itrunc(ip);
+		if (itrunc(ip) < 0) {
+			ip->removed = 0;
+			ip->ref--;
+			return;
+		}
 		ip->type = 0;
 		ip->agent_meta_slot = 0;
 		ip->agent_meta_flags = 0;
 		ip->agent_meta_version = 0;
+		ip->exec_flags = 0;
+		ip->exec_generation = 0;
+		ip->exec_role_mask = 0;
+		ip->exec_layout_version = 0;
+		ip->exec_rw_offset = 0;
 		iupdate(ip);
 		ip->valid = 0;
 		ip->removed = 0;
@@ -330,11 +350,14 @@ static void bmap_discard(struct inode *ip, uint bn)
 }
 
 // Truncate inode (discard contents).
-void itrunc(struct inode *ip)
+int itrunc(struct inode *ip)
 {
 	int i, j;
 	struct buf *bp;
 	uint *a;
+
+	if (!exec_policy_inode_mutable(ip))
+		return -1;
 
 	for (i = 0; i < NDIRECT; i++) {
 		if (ip->addrs[i]) {
@@ -357,6 +380,7 @@ void itrunc(struct inode *ip)
 
 	ip->size = 0;
 	iupdate(ip);
+	return 0;
 }
 
 // Read data from inode.
@@ -408,6 +432,8 @@ int writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
 	int allocated;
 	int failed = 0;
 
+	if (n != 0 && !exec_policy_inode_mutable(ip))
+		return -1;
 	if (off > ip->size || off + n < off)
 		return -1;
 	if (off + n > MAXFILE * BSIZE)
@@ -535,6 +561,7 @@ int dirunlink(struct inode *dp, char *name, uint *inum)
 {
 	uint off;
 	struct dirent de;
+	struct inode *target;
 
 	if (dp == 0 || dp->type != T_DIR)
 		return -1;
@@ -545,6 +572,15 @@ int dirunlink(struct inode *dp, char *name, uint *inum)
 		if (de.inum == 0)
 			continue;
 		if (strncmp(name, de.name, DIRSIZ) == 0) {
+			target = iget(dp->dev, de.inum);
+			if (target == 0)
+				return -1;
+			ivalid(target);
+			if (!exec_policy_inode_mutable(target)) {
+				iput(target);
+				return -1;
+			}
+			iput(target);
 			if (inum)
 				*inum = de.inum;
 			memset(&de, 0, sizeof(de));

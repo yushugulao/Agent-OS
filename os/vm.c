@@ -88,6 +88,8 @@ static pte_t *walk_user_leaf(pagetable_t pagetable, uint64 va, int perm)
 	flags = PTE_FLAGS(*pte);
 	if ((flags & (PTE_V | PTE_U)) != (PTE_V | PTE_U))
 		return 0;
+	if ((flags & (PTE_W | PTE_X)) == (PTE_W | PTE_X))
+		return 0;
 	if ((flags & (PTE_R | PTE_W | PTE_X)) == 0)
 		return 0;
 	if ((flags & PTE_W) != 0 && (flags & PTE_R) == 0)
@@ -167,6 +169,8 @@ int mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm)
 	uint64 a, last;
 	pte_t *pte;
 
+	if ((perm & (PTE_W | PTE_X)) == (PTE_W | PTE_X))
+		return -1;
 	a = PGROUNDDOWN(va);
 	last = PGROUNDDOWN(va + size - 1);
 	for (;;) {

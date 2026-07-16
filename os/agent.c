@@ -1,5 +1,6 @@
 #include "agent.h"
 #include "defs.h"
+#include "exec_policy.h"
 #include "file.h"
 #include "fs.h"
 #include "loader.h"
@@ -626,8 +627,19 @@ static int agent_role_sched_weight(int role)
 
 void agent_authority_bootstrap(struct proc *p)
 {
-	if (p != 0)
-		p->agent_role_grant_mask = AGENT_ROLE_GRANT_ALL;
+	uint64 grants = 0;
+
+	if (p == 0)
+		return;
+	if (exec_policy_process_bootstrap(p))
+		for (uint i = 0;
+		     i < sizeof(agent_role_policies) /
+				 sizeof(agent_role_policies[0]); i++)
+			if (exec_policy_process_allows_role(
+				    p, agent_role_policies[i].role))
+				grants |= AGENT_ROLE_GRANT_BIT(
+					agent_role_policies[i].role);
+	p->agent_role_grant_mask = grants;
 }
 
 void agent_authority_on_exec(struct proc *p)
@@ -641,6 +653,11 @@ int agent_authority_check(struct proc *p, int role)
 	if (!agent_role_valid(role))
 		return AGENT_STATUS_BAD_PARAM;
 	if (p == 0 ||
+	    (p->is_agent ?
+	     (!exec_policy_process_allows_role(p, p->agent_role) ||
+	      !exec_policy_process_allows_role(p, role)) :
+	     (!exec_policy_process_bootstrap(p) ||
+	      !exec_policy_process_allows_role(p, role))) ||
 	    (p->agent_role_grant_mask & AGENT_ROLE_GRANT_BIT(role)) == 0)
 		return AGENT_STATUS_DENIED;
 	return AGENT_STATUS_OK;
@@ -648,12 +665,16 @@ int agent_authority_check(struct proc *p, int role)
 
 static int agent_has_cap(struct proc *p, uint64 cap)
 {
-	return p->is_agent && (p->agent_capability_mask & cap) == cap;
+	return p != 0 && p->is_agent &&
+	       exec_policy_process_allows_role(p, p->agent_role) &&
+	       (p->agent_capability_mask & cap) == cap;
 }
 
 static int agent_has_any_cap(struct proc *p, uint64 caps)
 {
-	return p->is_agent && (p->agent_capability_mask & caps) != 0;
+	return p != 0 && p->is_agent &&
+	       exec_policy_process_allows_role(p, p->agent_role) &&
+	       (p->agent_capability_mask & caps) != 0;
 }
 
 static void agent_audit_emit(int kind, uint64 tick, struct proc *actor,
@@ -1326,7 +1347,7 @@ int agent_make_role(struct proc *p, int role)
 {
 	const struct agent_role_policy *policy = agent_role_policy_find(role);
 
-	if (policy == 0)
+	if (policy == 0 || !exec_policy_process_allows_role(p, role))
 		return -1;
 	if (p->max_page * PAGE_SIZE > AGENT_CONTEXT_BASE)
 		return -1;

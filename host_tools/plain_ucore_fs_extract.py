@@ -11,12 +11,17 @@ from pathlib import Path
 
 
 BSIZE = 1024
-FSMAGIC = 0x10203040
+FSMAGIC_LEGACY = 0x10203040
+FSMAGIC_EXEC_POLICY = 0x10203041
 ROOTINO = 1
 NDIRECT = 12
 NINDIRECT = BSIZE // 4
-DINODE_SIZE = 64
-IPB = BSIZE // DINODE_SIZE
+DINODE_SIZE_LEGACY = 64
+DINODE_SIZE_EXEC_POLICY = 128
+DINODE_SIZE_BY_MAGIC = {
+    FSMAGIC_LEGACY: DINODE_SIZE_LEGACY,
+    FSMAGIC_EXEC_POLICY: DINODE_SIZE_EXEC_POLICY,
+}
 DIRSIZ = 14
 T_FILE = 2
 
@@ -29,6 +34,11 @@ class Superblock:
     ninodes: int
     inodestart: int
     bmapstart: int
+    dinode_size: int
+
+    @property
+    def ipb(self) -> int:
+        return BSIZE // self.dinode_size
 
 
 @dataclass
@@ -48,16 +58,19 @@ def u32(data: bytes, offset: int) -> int:
 
 def read_superblock(image: bytes) -> Superblock:
     offset = BSIZE
+    magic = u32(image, offset)
+    dinode_size = DINODE_SIZE_BY_MAGIC.get(magic)
+    if dinode_size is None:
+        raise ValueError(f"bad fs magic: 0x{magic:08x}")
     sb = Superblock(
-        magic=u32(image, offset),
+        magic=magic,
         size=u32(image, offset + 4),
         nblocks=u32(image, offset + 8),
         ninodes=u32(image, offset + 12),
         inodestart=u32(image, offset + 16),
         bmapstart=u32(image, offset + 20),
+        dinode_size=dinode_size,
     )
-    if sb.magic != FSMAGIC:
-        raise ValueError(f"bad fs magic: 0x{sb.magic:08x}")
     return sb
 
 
@@ -67,8 +80,8 @@ def block(image: bytes, blockno: int) -> bytes:
 
 
 def read_inode(image: bytes, sb: Superblock, inum: int) -> Dinode:
-    offset = (inum // IPB + sb.inodestart) * BSIZE + (inum % IPB) * DINODE_SIZE
-    raw = image[offset : offset + DINODE_SIZE]
+    offset = (inum // sb.ipb + sb.inodestart) * BSIZE + (inum % sb.ipb) * sb.dinode_size
+    raw = image[offset : offset + sb.dinode_size]
     addrs = [u32(raw, 12 + i * 4) for i in range(NDIRECT + 1)]
     return Dinode(type=u16(raw, 0), size=u32(raw, 8), addrs=addrs)
 

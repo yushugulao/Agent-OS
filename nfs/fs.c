@@ -1,11 +1,16 @@
 #include <assert.h>
+#include <elf.h>
 #include <fcntl.h>
+#include <limits.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include <unistd.h>
 
 #include "fs.h"
+#include "../user/include/exec_policy_manifest.h"
 
 #ifndef static_assert
 #define static_assert(a, b)                                                    \
@@ -17,6 +22,8 @@
 #endif
 
 #define NINODES NINODE
+#define USER_IMAGE_BASE 0x1000ULL
+#define USER_PAGE_SIZE  4096ULL
 
 // Disk layout:
 // [ boot block | sb block | inode blocks | free bit map | data blocks ]
@@ -32,6 +39,35 @@ char zeroes[BSIZE];
 uint freeinode = 1;
 uint freeblock;
 
+struct exec_policy_entry {
+	const char *source;
+	const char *image;
+	uint flags;
+	uint role_mask;
+	int launch_role;
+};
+
+struct exec_layout {
+	uint version;
+	uint rw_offset;
+};
+
+struct host_image {
+	unsigned char *data;
+	size_t size;
+	struct exec_layout layout;
+};
+
+#define EXEC_POLICY_ROW(source, image, flags, role_mask, launch_role) \
+	{ source, image, flags, role_mask, launch_role },
+static const struct exec_policy_entry exec_policy[] = {
+	EXEC_POLICY_ENTRIES(EXEC_POLICY_ROW)
+};
+#undef EXEC_POLICY_ROW
+
+static char installed_names[NINODE][DIRSIZ];
+static int installed_name_count;
+
 char *basename(char *);
 void balloc(int);
 void wsect(uint, void *);
@@ -41,6 +77,11 @@ void rsect(uint sec, void *buf);
 uint ialloc(ushort type);
 void iappend(uint inum, void *p, int n);
 void require_free_block(const char *context);
+void install_file(uint rootino, const char *host_path, const char *image,
+		  uint flags, uint role_mask,
+		  const struct host_image *host_image);
+struct host_image read_host_image(const char *host_path);
+void validate_exec_policy(void);
 
 // convert to intel byte order
 ushort xshort(ushort x)
@@ -65,17 +106,25 @@ uint xint(uint x)
 
 int main(int argc, char *argv[])
 {
-	int i, cc, fd;
-	uint rootino, inum, off;
-	struct dirent de;
+	int i;
+	uint rootino, off;
 	char buf[BSIZE];
 	struct dinode din;
 	static_assert(sizeof(int) == 4, "Integers must be 4 bytes!");
+	static_assert(sizeof(struct dinode) == 128,
+		      "dinode format must stay fixed");
+	static_assert(EXEC_MANIFEST_F_TRUSTED == EXEC_FLAG_TRUSTED,
+		      "manifest trusted flag mismatch");
+	static_assert(EXEC_MANIFEST_F_IMMUTABLE == EXEC_FLAG_IMMUTABLE,
+		      "manifest immutable flag mismatch");
+	static_assert(EXEC_MANIFEST_F_BOOTSTRAP == EXEC_FLAG_BOOTSTRAP,
+		      "manifest bootstrap flag mismatch");
 	if (argc < 2) {
 		fprintf(stderr, "Usage: mkfs fs.img files...\n");
 		exit(1);
 	}
 	assert((BSIZE % sizeof(struct dinode)) == 0);
+	validate_exec_policy();
 	fsfd = open(argv[1], O_RDWR | O_CREAT | O_TRUNC, 0666);
 	if (fsfd < 0) {
 		perror(argv[1]);
@@ -109,24 +158,36 @@ int main(int argc, char *argv[])
 
 	for (i = 2; i < argc; i++) {
 		char *shortname = basename(argv[i]);
-		assert(index(shortname, '/') == 0);
+		const struct exec_policy_entry *primary = 0;
+		struct host_image host_image = read_host_image(argv[i]);
 
-		if ((fd = open(argv[i], 0)) < 0) {
-			perror(argv[i]);
-			exit(1);
+		for (uint p = 0; p < sizeof(exec_policy) / sizeof(exec_policy[0]);
+		     p++) {
+			if (strcmp(exec_policy[p].source, shortname) != 0 ||
+			    strcmp(exec_policy[p].image, shortname) != 0)
+				continue;
+			if (primary != 0) {
+				fprintf(stderr,
+					"mkfs: duplicate primary exec policy for %s\n",
+					shortname);
+				exit(1);
+			}
+			primary = &exec_policy[p];
 		}
+		install_file(rootino, argv[i], shortname,
+			     primary ? primary->flags : 0,
+			     primary ? primary->role_mask : 0, &host_image);
 
-		inum = ialloc(T_FILE);
-
-		bzero(&de, sizeof(de));
-		de.inum = xshort(inum);
-		strncpy(de.name, shortname, DIRSIZ);
-		iappend(rootino, &de, sizeof(de));
-
-		while ((cc = read(fd, buf, sizeof(buf))) > 0)
-			iappend(inum, buf, cc);
-
-		close(fd);
+		for (uint p = 0; p < sizeof(exec_policy) / sizeof(exec_policy[0]);
+		     p++) {
+			if (strcmp(exec_policy[p].source, shortname) != 0 ||
+			    strcmp(exec_policy[p].image, shortname) == 0)
+				continue;
+			install_file(rootino, argv[i], exec_policy[p].image,
+				     exec_policy[p].flags,
+				     exec_policy[p].role_mask, &host_image);
+		}
+		free(host_image.data);
 	}
 
 	// fix size of root inode dir
@@ -138,6 +199,266 @@ int main(int argc, char *argv[])
 
 	balloc(freeblock);
 	return 0;
+}
+
+static int valid_policy_name(const char *name)
+{
+	return name != 0 && name[0] != 0 && index(name, '/') == 0;
+}
+
+void validate_exec_policy(void)
+{
+	for (uint i = 0; i < sizeof(exec_policy) / sizeof(exec_policy[0]); i++) {
+		const struct exec_policy_entry *p = &exec_policy[i];
+		uint required = EXEC_FLAG_TRUSTED | EXEC_FLAG_IMMUTABLE;
+
+		if (!valid_policy_name(p->source) || !valid_policy_name(p->image) ||
+		    (p->flags & ~EXEC_FLAG_KNOWN) != 0 ||
+		    (p->flags & required) != required ||
+		    (p->role_mask & ~EXEC_MANIFEST_ROLE_ALL) != 0 ||
+		    ((p->flags & EXEC_FLAG_BOOTSTRAP) != 0 &&
+		     p->role_mask == 0)) {
+			fprintf(stderr, "mkfs: invalid exec policy row %s -> %s\n",
+				p->source, p->image);
+			exit(1);
+		}
+		if (p->launch_role != 0 &&
+		    (p->launch_role < 1 || p->launch_role >= 32 ||
+		     (p->role_mask & EXEC_ROLE_BIT(p->launch_role)) == 0 ||
+		     strcmp(p->source, p->image) == 0 ||
+		     strlen(p->image) > DIRSIZ)) {
+			fprintf(stderr, "mkfs: invalid launch policy for %s\n",
+				p->source);
+			exit(1);
+		}
+		for (uint j = i + 1;
+		     j < sizeof(exec_policy) / sizeof(exec_policy[0]); j++) {
+			if (strcmp(p->source, exec_policy[j].source) == 0 &&
+			    strncmp(p->image, exec_policy[j].image, DIRSIZ) == 0) {
+				fprintf(stderr,
+					"mkfs: duplicate exec policy image %.14s\n",
+					p->image);
+				exit(1);
+			}
+		}
+	}
+}
+
+static void exec_layout_error(const char *path, const char *reason)
+{
+	fprintf(stderr, "mkfs: invalid executable layout %s: %s\n", path,
+		reason);
+	exit(1);
+}
+
+static unsigned char *read_host_file(const char *path, size_t *size)
+{
+	struct stat st;
+	unsigned char *data;
+	size_t done = 0;
+	int fd;
+
+	if (size == 0 || (fd = open(path, O_RDONLY)) < 0) {
+		perror(path);
+		exit(1);
+	}
+	if (fstat(fd, &st) < 0 || !S_ISREG(st.st_mode) || st.st_size <= 0 ||
+	    (uint64_t)st.st_size > (uint64_t)SIZE_MAX) {
+		fprintf(stderr, "mkfs: invalid host file %s\n", path);
+		exit(1);
+	}
+	*size = (size_t)st.st_size;
+	data = malloc(*size);
+	if (data == 0) {
+		fprintf(stderr, "mkfs: out of host memory reading %s\n", path);
+		exit(1);
+	}
+	while (done < *size) {
+		ssize_t n = read(fd, data + done, *size - done);
+
+		if (n <= 0) {
+			perror(path);
+			exit(1);
+		}
+		done += (size_t)n;
+	}
+	close(fd);
+	return data;
+}
+
+struct host_image read_host_image(const char *host_path)
+{
+	char elf_path[PATH_MAX];
+	const char *component;
+	const char *name;
+	unsigned char *binary;
+	unsigned char *elf;
+	size_t binary_size;
+	size_t elf_size;
+	Elf64_Ehdr eh;
+	Elf64_Phdr rx = { 0 };
+	Elf64_Phdr rw = { 0 };
+	uint64_t rx_end;
+	uint64_t rw_end;
+	uint64_t rw_offset;
+	int have_rx = 0;
+	int have_rw = 0;
+	int path_len;
+	struct host_image image = { 0 };
+
+	component = strstr(host_path, "/bin/");
+	name = component ? component + strlen("/bin/") : 0;
+	if (component == 0 || name[0] == 0 || strchr(name, '/') != 0)
+		exec_layout_error(host_path, "expected paired bin/ and elf/ paths");
+	path_len = snprintf(elf_path, sizeof(elf_path), "%.*s/elf/%s",
+			    (int)(component - host_path), host_path, name);
+	if (path_len < 0 || (size_t)path_len >= sizeof(elf_path))
+		exec_layout_error(host_path, "paired ELF path is too long");
+	image.data = read_host_file(host_path, &image.size);
+	if (access(elf_path, R_OK) < 0)
+		return image;
+
+	binary = image.data;
+	binary_size = image.size;
+	elf = read_host_file(elf_path, &elf_size);
+	if (elf_size < sizeof(eh))
+		exec_layout_error(elf_path, "truncated ELF header");
+	memcpy(&eh, elf, sizeof(eh));
+	if (memcmp(eh.e_ident, ELFMAG, SELFMAG) != 0 ||
+	    eh.e_ident[EI_CLASS] != ELFCLASS64 ||
+	    eh.e_ident[EI_DATA] != ELFDATA2LSB ||
+	    eh.e_ident[EI_VERSION] != EV_CURRENT || eh.e_type != ET_EXEC ||
+	    eh.e_machine != EM_RISCV || eh.e_version != EV_CURRENT ||
+	    eh.e_entry != USER_IMAGE_BASE ||
+	    eh.e_phentsize != sizeof(Elf64_Phdr) || eh.e_phnum == 0 ||
+	    eh.e_phnum > 32 || eh.e_phoff > elf_size ||
+	    (uint64_t)eh.e_phnum * sizeof(Elf64_Phdr) >
+		elf_size - eh.e_phoff)
+		exec_layout_error(elf_path, "unsupported ELF header");
+
+	for (uint i = 0; i < eh.e_phnum; i++) {
+		Elf64_Phdr ph;
+		uint64_t end;
+
+		memcpy(&ph, elf + eh.e_phoff + i * sizeof(ph), sizeof(ph));
+		if (ph.p_type != PT_LOAD)
+			continue;
+		if (ph.p_filesz == 0 || ph.p_filesz != ph.p_memsz ||
+		    ph.p_vaddr != ph.p_paddr || ph.p_align != USER_PAGE_SIZE ||
+		    ph.p_offset > elf_size || ph.p_filesz > elf_size - ph.p_offset ||
+		    ph.p_vaddr > UINT64_MAX - ph.p_memsz)
+			exec_layout_error(elf_path, "invalid load segment");
+		end = ph.p_vaddr + ph.p_memsz;
+		if (end <= ph.p_vaddr)
+			exec_layout_error(elf_path, "empty load segment");
+		if (ph.p_flags == (PF_R | PF_X) && !have_rx) {
+			rx = ph;
+			have_rx = 1;
+		} else if (ph.p_flags == (PF_R | PF_W) && !have_rw) {
+			rw = ph;
+			have_rw = 1;
+		} else {
+			exec_layout_error(elf_path,
+					  "expected exactly one RX and one RW segment");
+		}
+	}
+	if (!have_rx || !have_rw || rx.p_vaddr != USER_IMAGE_BASE ||
+	    eh.e_entry < rx.p_vaddr || eh.e_entry >= rx.p_vaddr + rx.p_memsz)
+		exec_layout_error(elf_path, "missing executable or data segment");
+	rx_end = rx.p_vaddr + rx.p_memsz;
+	if (rx_end > UINT64_MAX - (USER_PAGE_SIZE - 1) ||
+	    rw.p_vaddr !=
+		((rx_end + USER_PAGE_SIZE - 1) & ~(USER_PAGE_SIZE - 1)))
+		exec_layout_error(elf_path, "RW segment is not page-separated");
+	rw_end = rw.p_vaddr + rw.p_memsz;
+	rw_offset = rw.p_vaddr - USER_IMAGE_BASE;
+	if (rw.p_vaddr < USER_IMAGE_BASE || rw_end < USER_IMAGE_BASE ||
+	    rw_end - USER_IMAGE_BASE != binary_size ||
+	    rw_offset == 0 || rw_offset > UINT_MAX ||
+	    rx.p_filesz > rw_offset || rw_offset > binary_size)
+		exec_layout_error(elf_path, "flat binary does not match ELF layout");
+	if (memcmp(binary, elf + rx.p_offset, (size_t)rx.p_filesz) != 0 ||
+	    memcmp(binary + rw_offset, elf + rw.p_offset,
+		   (size_t)rw.p_filesz) != 0)
+		exec_layout_error(elf_path, "flat binary contents differ from ELF");
+	for (uint64_t off = rx.p_filesz; off < rw_offset; off++)
+		if (binary[off] != 0)
+			exec_layout_error(elf_path,
+					  "nonzero data crosses the W^X boundary");
+
+	free(elf);
+	image.layout.version = EXEC_LAYOUT_VERSION;
+	image.layout.rw_offset = (uint)rw_offset;
+	return image;
+}
+
+static void reserve_image_name(const char *name)
+{
+	if (!valid_policy_name(name)) {
+		fprintf(stderr, "mkfs: invalid image name\n");
+		exit(1);
+	}
+	for (int i = 0; i < installed_name_count; i++) {
+		if (strncmp(installed_names[i], name, DIRSIZ) == 0) {
+			fprintf(stderr, "mkfs: duplicate on-disk name %.14s\n", name);
+			exit(1);
+		}
+	}
+	if (installed_name_count >= NINODE) {
+		fprintf(stderr, "mkfs: too many directory entries\n");
+		exit(1);
+	}
+	bzero(installed_names[installed_name_count], DIRSIZ);
+	strncpy(installed_names[installed_name_count], name, DIRSIZ);
+	installed_name_count++;
+}
+
+void install_file(uint rootino, const char *host_path, const char *image,
+		  uint flags, uint role_mask,
+		  const struct host_image *host_image)
+{
+	uint inum;
+	struct dirent de;
+	struct dinode din;
+	const struct exec_layout *layout;
+
+	if (host_image == 0 || host_image->data == 0 ||
+	    host_image->size == 0 ||
+	    host_image->size > (size_t)MAXFILE * BSIZE) {
+		fprintf(stderr, "mkfs: invalid host image snapshot for %s\n",
+			host_path);
+		exit(1);
+	}
+	layout = &host_image->layout;
+	if ((layout->version != 0 &&
+	     (layout->version != EXEC_LAYOUT_VERSION ||
+	      layout->rw_offset == 0)) ||
+	    (flags != 0 && layout->version != EXEC_LAYOUT_VERSION)) {
+		fprintf(stderr, "mkfs: invalid executable layout for %s\n",
+			host_path);
+		exit(1);
+	}
+	reserve_image_name(image);
+	inum = ialloc(T_FILE);
+	bzero(&de, sizeof(de));
+	de.inum = xshort(inum);
+	strncpy(de.name, image, DIRSIZ);
+	iappend(rootino, &de, sizeof(de));
+	for (size_t off = 0; off < host_image->size;) {
+		size_t remaining = host_image->size - off;
+		int chunk = (int)(remaining < BSIZE ? remaining : BSIZE);
+
+		iappend(inum, host_image->data + off, chunk);
+		off += (size_t)chunk;
+	}
+
+	rinode(inum, &din);
+	din.exec_flags = xint(flags);
+	din.exec_generation = xint(flags ? EXEC_MANIFEST_VERSION : 0);
+	din.exec_role_mask = xint(role_mask);
+	din.exec_layout_version = xint(layout->version);
+	din.exec_rw_offset = xint(layout->rw_offset);
+	winode(inum, &din);
 }
 
 char *basename(char *path)
@@ -209,9 +530,14 @@ void require_free_block(const char *context)
 
 uint ialloc(ushort type)
 {
-	uint inum = freeinode++;
+	uint inum;
 	struct dinode din;
 
+	if (freeinode >= NINODES) {
+		fprintf(stderr, "mkfs: out of inodes\n");
+		exit(1);
+	}
+	inum = freeinode++;
 	bzero(&din, sizeof(din));
 	din.type = xshort(type);
 	din.size = xint(0);

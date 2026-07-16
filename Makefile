@@ -177,7 +177,7 @@ QEMUOPTS = \
 	-drive file=$(F)/fs-copy.img,if=none,format=raw,id=x0 \
     -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 
-$(F)/fs.img:
+$(F)/fs.img: .FORCE
 	make -C $(F)
 
 $(F)/fs-copy.img: $(F)/fs.img
@@ -208,7 +208,9 @@ CHAPTER ?= $(shell git rev-parse --abbrev-ref HEAD | grep -oP 'ch\K[0-9]' || ech
 user:
 	make -C user CHAPTER=$(CHAPTER) BASE=$(BASE)
 
-test: user run
+test:
+	$(MAKE) user CHAPTER=$(CHAPTER) BASE=$(BASE)
+	$(MAKE) run CHAPTER=$(CHAPTER) BASE=$(BASE)
 
 doctor:
 	bash scripts/check-dependencies.sh
@@ -216,13 +218,15 @@ doctor:
 plain-platform-build:
 	rm -f baseline_ucore/$(F)/fs.img baseline_ucore/$(F)/fs-copy.img
 	$(MAKE) -C baseline_ucore/user clean
-	$(MAKE) -C baseline_ucore user nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform
+	$(MAKE) -C baseline_ucore user TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform
+	$(MAKE) -C baseline_ucore nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform
 	$(MAKE) -C baseline_ucore build TOOLPREFIX=$(TOOLPREFIX) LOG=warn INIT_PROC=rp_orch CHAPTER=platform
 
 plain-platform-run:
 	rm -f baseline_ucore/$(F)/fs.img baseline_ucore/$(F)/fs-copy.img
 	$(MAKE) -C baseline_ucore/user clean
-	$(MAKE) -C baseline_ucore user nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform
+	$(MAKE) -C baseline_ucore user TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform
+	$(MAKE) -C baseline_ucore nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform
 	$(MAKE) -C baseline_ucore run TOOLPREFIX=$(TOOLPREFIX) LOG=error INIT_PROC=rp_orch CHAPTER=platform
 
 agentos-user:
@@ -231,7 +235,8 @@ agentos-user:
 agentos-build:
 	rm -f $(F)/fs.img $(F)/fs-copy.img
 	$(MAKE) -C user clean
-	$(MAKE) user nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=agent
+	$(MAKE) user TOOLPREFIX=$(TOOLPREFIX) CHAPTER=agent
+	$(MAKE) nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=agent
 	$(MAKE) build TOOLPREFIX=$(TOOLPREFIX) LOG=warn INIT_PROC=agentfinal_ucore
 
 agentos-test:
@@ -250,13 +255,15 @@ agentos-platform-user:
 agentos-platform-build:
 	rm -f $(F)/fs.img $(F)/fs-copy.img
 	$(MAKE) -C user clean
-	$(MAKE) user nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform_agentos
+	$(MAKE) user TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform_agentos
+	$(MAKE) nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform_agentos
 	$(MAKE) build TOOLPREFIX=$(TOOLPREFIX) LOG=warn INIT_PROC=rp_agentos_orch
 
 agentos-platform-run:
 	rm -f $(F)/fs.img $(F)/fs-copy.img
 	$(MAKE) -C user clean
-	$(MAKE) user nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform_agentos
+	$(MAKE) user TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform_agentos
+	$(MAKE) nfs/fs.img TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform_agentos
 	$(MAKE) run TOOLPREFIX=$(TOOLPREFIX) LOG=error INIT_PROC=rp_agentos_orch CHAPTER=platform_agentos
 
 dual-platform-run:

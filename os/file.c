@@ -1,5 +1,6 @@
 #include "file.h"
 #include "defs.h"
+#include "exec_policy.h"
 #include "fcntl.h"
 #include "fs.h"
 #include "proc.h"
@@ -125,6 +126,11 @@ int fileopen(char *path, uint64 omode)
 		iput(ip);
 		return -1;
 	}
+	if ((omode & (O_WRONLY | O_RDWR | O_TRUNC)) &&
+	    !exec_policy_inode_mutable(ip)) {
+		iput(ip);
+		return -1;
+	}
 	if ((omode & O_TRUNC) && ip->type == T_FILE &&
 	    !agent_edit_truncate_allowed(ip)) {
 		iput(ip);
@@ -145,7 +151,11 @@ int fileopen(char *path, uint64 omode)
 	f->readable = !(omode & O_WRONLY);
 	f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
 	if ((omode & O_TRUNC) && ip->type == T_FILE) {
-		itrunc(ip);
+		if (itrunc(ip) < 0) {
+			curr_proc()->files[fd] = 0;
+			fileclose(f);
+			return -1;
+		}
 		agent_fs_note_truncate(ip);
 		agent_edit_note_truncate(ip);
 	}
@@ -175,6 +185,11 @@ int fileunlink(char *path)
 		iput(dp);
 		return -1;
 	}
+	if (!exec_policy_inode_mutable(ip)) {
+		iput(ip);
+		iput(dp);
+		return -1;
+	}
 	if (!agent_edit_unlink_allowed(ip)) {
 		iput(ip);
 		iput(dp);
@@ -199,6 +214,8 @@ uint64 inodewrite(struct file *f, uint64 va, uint64 len)
 	int r;
 	ivalid(f->ip);
 	if (f->ip->type != T_FILE)
+		return (uint64)-1;
+	if (!exec_policy_inode_mutable(f->ip))
 		return (uint64)-1;
 	if (!agent_edit_write_allowed(f->ip))
 		return (uint64)-1;

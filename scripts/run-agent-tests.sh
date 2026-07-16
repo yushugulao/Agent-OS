@@ -150,7 +150,8 @@ PY
 
 make -C user clean
 make clean
-make user nfs/fs.img TOOLPREFIX="${TOOLPREFIX}" CHAPTER="${CHAPTER}"
+make user TOOLPREFIX="${TOOLPREFIX}" CHAPTER="${CHAPTER}"
+make nfs/fs.img TOOLPREFIX="${TOOLPREFIX}" CHAPTER="${CHAPTER}"
 make build TOOLPREFIX="${TOOLPREFIX}" LOG=warn INIT_PROC=agentfinal_ucore
 
 run_case agentfinal_ucore "agentfinal_ucore: parent passed"
@@ -164,6 +165,7 @@ run_case agentbench_ucore "agentbench_ucore: parent passed"
 run_case labbench_ucore "labbench_ucore: parent passed"
 run_case labdemo_ucore "labdemo_ucore: parent passed"
 run_case agentsecurity_ucore "agentsecurity_ucore: parent passed"
+run_case agenttrust_ucore "agenttrust_ucore: parent passed"
 run_case usersafety_ucore "usersafety_ucore: parent passed"
 
 echo "[agent-tests] all Agent-OS uCore checks passed"

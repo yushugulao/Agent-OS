@@ -64,6 +64,13 @@ struct proc {
 	uint64 ustack_base; // Virtual address of user stack base
 	struct proc *parent; // Parent process; NULL means kernel-reaped
 	uint64 exit_code;
+	uint exec_dev;
+	uint exec_inum;
+	uint exec_flags;
+	uint exec_generation;
+	uint exec_role_mask;
+	uint exec_layout_version;
+	uint exec_rw_offset;
 	//File descriptor table, using to record the files opened by the process
 	struct file *files[FD_BUFFER_SIZE];
 	struct thread threads[NTHREAD];

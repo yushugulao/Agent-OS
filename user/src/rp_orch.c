@@ -1,4 +1,5 @@
 #include <agent.h>
+#include <exec_policy_manifest.h>
 #include <research_platform_state.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,6 +79,28 @@ static const char *PROGRAMS[] = {
 	"rp_test_suite",
 };
 
+struct trusted_launch_policy {
+	const char *program;
+	const char *image;
+	int role;
+};
+
+#define TRUSTED_LAUNCH_ROW(source, image, flags, role_mask, launch_role) \
+	{ source, image, launch_role },
+static const struct trusted_launch_policy TRUSTED_LAUNCHES[] = {
+	EXEC_POLICY_ENTRIES(TRUSTED_LAUNCH_ROW)
+};
+#undef TRUSTED_LAUNCH_ROW
+
+_Static_assert(EXEC_MANIFEST_ROLE_SENTINEL == AGENT_ROLE_SENTINEL,
+	       "exec policy sentinel role mismatch");
+_Static_assert(EXEC_MANIFEST_ROLE_INVESTIGATOR == AGENT_ROLE_INVESTIGATOR,
+	       "exec policy investigator role mismatch");
+_Static_assert(EXEC_MANIFEST_ROLE_RECOVERY == AGENT_ROLE_RECOVERY,
+	       "exec policy recovery role mismatch");
+_Static_assert(EXEC_MANIFEST_ROLE_ORCHESTRATOR == AGENT_ROLE_ORCHESTRATOR,
+	       "exec policy orchestrator role mismatch");
+
 static const char *role_name(int role)
 {
 	switch (role) {
@@ -98,38 +121,16 @@ static const char *launch_role_name(int role, int agent_child)
 	return agent_child ? role_name(role) : "plain";
 }
 
-static int role_for_program(const char *program)
+static const struct trusted_launch_policy *trusted_launch_for_program(
+	const char *program)
 {
-	if (strcmp(program, "rp_repair") == 0)
-		return AGENT_ROLE_RECOVERY;
-	if (strcmp(program, "rp_agent_collab") == 0 ||
-	    strcmp(program, "rp_auditor") == 0 ||
-	    strcmp(program, "rp_package") == 0 ||
-	    strcmp(program, "rp_realtask") == 0 ||
-	    strcmp(program, "rp_backend") == 0)
-		return AGENT_ROLE_ORCHESTRATOR;
-	if (strcmp(program, "rp_query") == 0 ||
-	    strcmp(program, "rp_execobs") == 0 ||
-	    strcmp(program, "rp_consistency") == 0 ||
-	    strcmp(program, "rp_metrics") == 0 ||
-	    strcmp(program, "rp_compare_plain") == 0)
-		return AGENT_ROLE_INVESTIGATOR;
-	return AGENT_ROLE_SENTINEL;
-}
+	int total = (int)(sizeof(TRUSTED_LAUNCHES) /
+			  sizeof(TRUSTED_LAUNCHES[0]));
 
-static int agent_child_for_program(const char *program)
-{
-	if (strcmp(program, "rp_query") == 0 ||
-	    strcmp(program, "rp_repair") == 0 ||
-	    strcmp(program, "rp_execobs") == 0 ||
-	    strcmp(program, "rp_agent_collab") == 0 ||
-	    strcmp(program, "rp_auditor") == 0 ||
-	    strcmp(program, "rp_workbench") == 0 ||
-	    strcmp(program, "rp_package") == 0 ||
-	    strcmp(program, "rp_realtask") == 0 ||
-	    strcmp(program, "rp_service_surface") == 0 ||
-	    strcmp(program, "rp_backend") == 0)
-		return 1;
+	for (int i = 0; i < total; i++)
+		if (TRUSTED_LAUNCHES[i].role != 0 &&
+		    strcmp(program, TRUSTED_LAUNCHES[i].program) == 0)
+			return &TRUSTED_LAUNCHES[i];
 	return 0;
 }
 
@@ -180,13 +181,15 @@ static void record_timing(const char *program, int role, int agent_child,
 static int run_child(const char *program, int in_orchestrator)
 {
 	int pid;
-	int agent_child = 0;
-	int role = role_for_program(program);
+	const struct trusted_launch_policy *policy =
+		trusted_launch_for_program(program);
+	int agent_child = in_orchestrator && policy != 0;
+	int role = policy ? policy->role : AGENT_ROLE_SENTINEL;
+	const char *image = agent_child ? policy->image : program;
 	int64 start = get_mtime();
 
-	if (in_orchestrator && agent_child_for_program(program)) {
+	if (agent_child) {
 		pid = agent_create_role(role);
-		agent_child = 1;
 	} else {
 		pid = fork();
 	}
@@ -195,7 +198,7 @@ static int run_child(const char *program, int in_orchestrator)
 			(char *)program,
 			0,
 		};
-		if (exec(program, argv) < 0) {
+		if (exec(image, argv) < 0) {
 			printf("rp_orch: exec_failed program=%s\n", program);
 			exit(1);
 		}

@@ -21,6 +21,11 @@ struct inode {
 	short agent_meta_version;
 	uint size;
 	uint addrs[NDIRECT + 1];
+	uint exec_flags;
+	uint exec_generation;
+	uint exec_role_mask;
+	uint exec_layout_version;
+	uint exec_rw_offset;
 	// LAB4: You may need to add link count here
 };
 

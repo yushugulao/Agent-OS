@@ -34,7 +34,7 @@ struct superblock {
 	uint bmapstart; // Block number of first free map block
 };
 
-#define FSMAGIC 0x10203040
+#define FSMAGIC 0x10203041
 
 #define NDIRECT 12
 #define NINDIRECT (BSIZE / sizeof(uint))
@@ -44,6 +44,14 @@ struct superblock {
 #define T_DIR 1 // Directory
 #define T_FILE 2 // File
 
+#define EXEC_FLAG_TRUSTED   0x1U
+#define EXEC_FLAG_IMMUTABLE 0x2U
+#define EXEC_FLAG_BOOTSTRAP 0x4U
+#define EXEC_FLAG_KNOWN \
+	(EXEC_FLAG_TRUSTED | EXEC_FLAG_IMMUTABLE | EXEC_FLAG_BOOTSTRAP)
+#define EXEC_ROLE_BIT(role) (1U << (role))
+#define EXEC_LAYOUT_VERSION 1U
+
 // On-disk inode structure
 struct dinode {
 	short type; // File type
@@ -52,7 +60,16 @@ struct dinode {
 	short agent_meta_version;
 	uint size; // Size of file (bytes)
 	uint addrs[NDIRECT + 1]; // Data block addresses
+	uint exec_flags;
+	uint exec_generation;
+	uint exec_role_mask;
+	uint exec_layout_version;
+	uint exec_rw_offset;
+	uint exec_reserved[11];
 };
+
+_Static_assert(sizeof(struct dinode) == 128,
+	       "on-disk inode format must remain 128 bytes");
 
 // Inodes per block.
 #define IPB (BSIZE / sizeof(struct dinode))
@@ -95,6 +112,6 @@ struct inode *namei(char *);
 struct inode *root_dir();
 int readi(struct inode *, int, uint64, uint, uint);
 int writei(struct inode *, int, uint64, uint, uint);
-void itrunc(struct inode *);
+int itrunc(struct inode *);
 int dirls(struct inode *);
 #endif //!__FS_H__

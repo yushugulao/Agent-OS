@@ -1,5 +1,6 @@
 #include "proc.h"
 #include "defs.h"
+#include "exec_policy.h"
 #include "loader.h"
 #include "trap.h"
 #include "vm.h"
@@ -407,6 +408,13 @@ found:
 	p->max_page = 0;
 	p->parent = NULL;
 	p->exit_code = 0;
+	p->exec_dev = 0;
+	p->exec_inum = 0;
+	p->exec_flags = 0;
+	p->exec_generation = 0;
+	p->exec_role_mask = 0;
+	p->exec_layout_version = 0;
+	p->exec_rw_offset = 0;
 	p->pagetable = uvmcreate();
 	if (p->pagetable == 0) {
 		p->state = P_UNUSED;
@@ -627,6 +635,13 @@ void proc_install_user_image(struct proc *p, struct user_image *image,
 	p->pagetable = image->pagetable;
 	p->max_page = image->max_page;
 	p->ustack_base = image->ustack_base;
+	p->exec_dev = image->exec_dev;
+	p->exec_inum = image->exec_inum;
+	p->exec_flags = image->exec_flags;
+	p->exec_generation = image->exec_generation;
+	p->exec_role_mask = image->exec_role_mask;
+	p->exec_layout_version = image->exec_layout_version;
+	p->exec_rw_offset = image->exec_rw_offset;
 	agent_authority_on_exec(p);
 	image->pagetable = 0;
 
@@ -730,6 +745,13 @@ static void proc_release_resources(struct proc *p)
 	p->pagetable = 0;
 	p->max_page = 0;
 	p->ustack_base = 0;
+	p->exec_dev = 0;
+	p->exec_inum = 0;
+	p->exec_flags = 0;
+	p->exec_generation = 0;
+	p->exec_role_mask = 0;
+	p->exec_layout_version = 0;
+	p->exec_rw_offset = 0;
 	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
 		if (p->files[i] != NULL) {
 			fileclose(p->files[i]);
@@ -795,6 +817,13 @@ static int fork_common(int make_agent, int agent_role)
 	}
 	np->max_page = p->max_page;
 	np->ustack_base = p->ustack_base;
+	np->exec_dev = p->exec_dev;
+	np->exec_inum = p->exec_inum;
+	np->exec_flags = p->exec_flags;
+	np->exec_generation = p->exec_generation;
+	np->exec_role_mask = p->exec_role_mask;
+	np->exec_layout_version = p->exec_layout_version;
+	np->exec_rw_offset = p->exec_rw_offset;
 	// Copy file table to new proc
 	for (i = 0; i < FD_BUFFER_SIZE; i++) {
 		if (p->files[i] != NULL) {
@@ -934,6 +963,11 @@ int exec(char *path, char **argv)
 	infof("exec : %s\n", path);
 	if ((ip = namei(path)) == 0) {
 		errorf("invalid file name %s\n", path);
+		return -1;
+	}
+	if (p->is_agent &&
+	    !exec_policy_inode_allows_role(ip, p->agent_role)) {
+		iput(ip);
 		return -1;
 	}
 	if (user_image_build(ip, (uint64)proc_trapframe(p, 0), &image) < 0) {
