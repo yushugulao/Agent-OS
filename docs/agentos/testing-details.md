@@ -470,7 +470,7 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 
 ## 10. `agentsecurity_ucore`
 
-`agentsecurity_ucore` 是权限限制负向测试，专门覆盖检查中指出的“普通进程能直接改全局元数据、伪造事件或取消等待”“用户态自报 role 可绕过权限”的问题，并检查普通进程不能读取全局、当前 span、统一 timeline 或 timeline query/read 短记录，sentinel 不能读取或过滤全局审计短记录。
+`agentsecurity_ucore` 是权限限制负向测试，专门覆盖检查中指出的“普通进程能直接改全局元数据、伪造事件或取消等待”“低权限 Agent 能把 `agent_wake()` 事件类型伪装成系统事件”“用户态自报 role 可绕过权限”等问题，并检查普通进程不能读取全局、当前 span、统一 timeline 或 timeline query/read 短记录，sentinel 不能读取或过滤全局审计短记录。
 
 ### 10.1 测试流程
 
@@ -489,31 +489,35 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 13. orchestrator 分别把设定的模拟流程和另一个模拟流程的比对处理、报告生成环节置为 failed。
 14. orchestrator 创建 sentinel Agent。
 15. sentinel 检查真实 role/capability mask。
-16. sentinel 把 `agent_op.arg0` 伪造成 `AGENT_ROLE_RECOVERY` 后调用 `capability_check("action_commit")`，预期仍返回 `AGENT_STATUS_DENIED`。
-17. sentinel 继续伪造 recovery 调用 `action_commit align`，预期返回 `AGENT_STATUS_DENIED`。
-18. sentinel 继续伪造 recovery 调用 `artifact_update report`，预期返回 `AGENT_STATUS_DENIED`。
-19. sentinel 调用 `dependency_update` 注册对象依赖，预期返回 `AGENT_STATUS_DENIED`。
-20. sentinel 调用 `read_file_digest` 读取真实文件内容证据，预期返回 `AGENT_STATUS_DENIED`，说明 metadata read 不等于 content read。
-21. sentinel 调用 `agent_audit_snapshot()` 和 `agent_audit_query()`，预期返回 `AGENT_STATUS_DENIED`。
-22. sentinel 直接调用 `agent_file_meta_set()`，预期返回 `AGENT_STATUS_DENIED`。
-23. sentinel 查询设定的模拟流程和另一个模拟流程状态仍为 failed，说明拒绝路径没有改变文件状态。
-24. orchestrator 创建 recovery Agent。
-25. recovery 检查真实 role/capability mask。
-26. recovery 调用 `action_commit`，payload 使用 label、run_id 和 namespace 定向选择另一个模拟流程；即使 `agent_op.arg0` 填成 sentinel，也按真实 recovery role 成功。
-27. recovery 使用同一 corr_id 再次调用同一 selector，预期返回 `AGENT_STATUS_DUPLICATE`。
-28. recovery 调用 `artifact_update`，payload 使用 label、run_id 和 namespace，只写入另一个模拟流程的目标报告。
-29. orchestrator 查询另一个模拟流程的比对处理和报告生成环节变为 ok，设定的模拟流程仍为 failed，说明动作和工件更新没有跨 run 修改。
-30. 测试输出 `agentsecurity_ucore: passed` 和 `agentsecurity_ucore: parent passed`。
+16. sentinel 注册 `LLM_DONE` watch 后直接用 `agent_wake()` 伪造该事件，预期返回 `AGENT_STATUS_DENIED`，随后非阻塞 wait 仍为 timeout，证明事件未入队。
+17. sentinel 用 `agent_wake()` 投递 `AGENT_EVENT_NONE` 和超出 `AGENT_EVENT_MAX` 的类型，预期均返回 `AGENT_STATUS_BAD_PARAM`。
+18. sentinel 用同一接口投递 `AGENT_EVENT_MESSAGE`，预期成功收到消息，证明授权收紧没有破坏合法消息路径。
+19. sentinel 把 `agent_op.arg0` 伪造成 `AGENT_ROLE_RECOVERY` 后调用 `capability_check("action_commit")`，预期仍返回 `AGENT_STATUS_DENIED`。
+20. sentinel 继续伪造 recovery 调用 `action_commit align`，预期返回 `AGENT_STATUS_DENIED`。
+21. sentinel 继续伪造 recovery 调用 `artifact_update report`，预期返回 `AGENT_STATUS_DENIED`。
+22. sentinel 调用 `dependency_update` 注册对象依赖，预期返回 `AGENT_STATUS_DENIED`。
+23. sentinel 调用 `read_file_digest` 读取真实文件内容证据，预期返回 `AGENT_STATUS_DENIED`，说明 metadata read 不等于 content read。
+24. sentinel 调用 `agent_audit_snapshot()` 和 `agent_audit_query()`，预期返回 `AGENT_STATUS_DENIED`。
+25. sentinel 直接调用 `agent_file_meta_set()`，预期返回 `AGENT_STATUS_DENIED`。
+26. sentinel 查询设定的模拟流程和另一个模拟流程状态仍为 failed，说明拒绝路径没有改变文件状态。
+27. orchestrator 创建 recovery Agent。
+28. recovery 检查真实 role/capability mask。
+29. recovery 调用 `action_commit`，payload 使用 label、run_id 和 namespace 定向选择另一个模拟流程；即使 `agent_op.arg0` 填成 sentinel，也按真实 recovery role 成功。
+30. recovery 使用同一 corr_id 再次调用同一 selector，预期返回 `AGENT_STATUS_DUPLICATE`。
+31. recovery 调用 `artifact_update`，payload 使用 label、run_id 和 namespace，只写入另一个模拟流程的目标报告。
+32. orchestrator 查询另一个模拟流程的比对处理和报告生成环节变为 ok，设定的模拟流程仍为 failed，说明动作和工件更新没有跨 run 修改。
+33. 测试输出 `agentsecurity_ucore: passed` 和 `agentsecurity_ucore: parent passed`。
 
 ### 10.2 输出阅读方式
 
-本测试输出围绕普通进程拒绝、`.agentmeta` 保护、真实 role/capability、初始化前索引查询安全、legacy 参数校验、sentinel 伪造失败、recovery 定向动作和多 run 工件更新展开。完整样例输出见 [test-record.md](test-record.md)。
+本测试输出围绕普通进程拒绝、`.agentmeta` 保护、真实 role/capability、初始化前索引查询安全、legacy 参数校验、sentinel 角色与系统事件伪造失败、recovery 定向动作和多 run 工件更新展开。完整样例输出见 [test-record.md](test-record.md)。
 
 ### 10.3 覆盖结论
 
 | 覆盖点 | 检查方式 |
 | --- | --- |
 | 普通进程不能直接投递事件、取消等待或配置调度 | `agent_wake()`、`agent_wait_cancel()`、`agent_sched_config()` 返回 `-1` |
+| Agent 不能用消息接口伪造系统事件 | sentinel 直接投递 `LLM_DONE` 返回 `AGENT_STATUS_DENIED` 且不入队；非法类型返回 `AGENT_STATUS_BAD_PARAM`；合法 `MESSAGE` 仍可收发 |
 | 全局审计读取、过滤、调度配置和依赖注册权限 | 普通进程调用返回 `-1`，sentinel 调用返回 `AGENT_STATUS_DENIED` |
 | 普通进程不能直接修改文件元数据 | `agent_file_meta_init()`、`agent_file_meta_set()` 返回 `-1` |
 | 普通进程不能直接访问 `.agentmeta` | `open`、`open(O_CREATE)`、`unlink` 均返回 `-1` |

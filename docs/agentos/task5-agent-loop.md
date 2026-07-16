@@ -111,13 +111,13 @@ int agent_wake(int pid, struct agent_event *event);
 
 语义：
 
-1. 查找目标 pid。
-2. 检查目标是否为 Agent。
-3. 检查目标 watch 是否匹配事件类型和 payload。
-4. 写入目标 FIFO 事件队列。
-5. 唤醒目标进程。
+1. 校验调用者是具备 `MESSAGE_SEND` 或 `ORCHESTRATE` 的 Agent。
+2. 只接受 `AGENT_EVENT_MESSAGE`；拒绝用户态伪造内核或专用工具事件。
+3. 查找目标 pid 并检查目标是否为 Agent。
+4. 检查目标 watch 是否匹配消息类型和 payload。
+5. 写入目标 FIFO 事件队列并唤醒目标进程。
 
-队列满时返回 `AGENT_STATUS_NO_SPACE`，不会覆盖旧事件。`send_message` 工具在目标队列满时也返回 `AGENT_STATUS_NO_SPACE`，并避免留下不可感知的消息副作用。
+非法/空事件类型返回 `AGENT_STATUS_BAD_PARAM`；`LLM_DONE`、`FILE_STATUS`、`TIMER` 等保留事件返回 `AGENT_STATUS_DENIED`，必须由各自的内核或专用工具路径产生。队列满时返回 `AGENT_STATUS_NO_SPACE`，不会覆盖旧事件。`send_message` 工具在目标队列满时也返回 `AGENT_STATUS_NO_SPACE`，并避免留下不可感知的消息副作用。
 
 `agentfinal_ucore` 用自唤醒验证最小路径，检查事件能够入队、等待能够返回，并且相关记录进入 Run Ledger。`labdemo_ucore` 用跨 Agent 消息验证场景路径，检查 sentinel 到 investigator 的消息事件能够被内核投递和消费。原始输出统一见 [test-record.md](test-record.md)。
 
@@ -274,7 +274,7 @@ agentsched_ucore: reason_trace=1 records=... reason=... score=...
 
 ## 消息事件
 
-`AGENT_TOOL_SEND_MESSAGE` 和 `agent_wake()` 都可以向目标 Agent 发送消息事件。消息事件用于多 Agent 协作。`agent_wake()` 是 Agent-only syscall，调用者必须具备 `AGENT_CAP_MESSAGE_SEND` 或 `AGENT_CAP_ORCHESTRATE`；普通进程直接调用会返回 `-1`。
+`AGENT_TOOL_SEND_MESSAGE` 和 `agent_wake()` 都可以向目标 Agent 发送消息事件。消息事件用于多 Agent 协作。`agent_wake()` 是 Agent-only syscall，调用者必须具备 `AGENT_CAP_MESSAGE_SEND` 或 `AGENT_CAP_ORCHESTRATE`；普通进程直接调用会返回 `-1`。即使调用者是 Agent，也不能通过该接口把用户提供的类型伪装成 `LLM_DONE` 等系统事件。
 
 `labdemo_ucore` 中两段消息：
 
