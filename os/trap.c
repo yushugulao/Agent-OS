@@ -117,6 +117,8 @@ void usertrap()
 //
 void usertrapret()
 {
+	if (proc_thread_exit_requested())
+		exit(curr_proc()->exit_code);
 	kernel_stack_check(curr_thread());
 	set_usertrap();
 	struct trapframe *trapframe = curr_thread()->trapframe;

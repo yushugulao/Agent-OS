@@ -7,9 +7,20 @@
 #define PARENT_FIRST_ROUNDS 160
 #define ORPHAN_RESOURCE_ROUNDS 136
 #define ORPHAN_WAIT_ROUNDS  4096
+#define BLOCKED_SYSCALL_ROUNDS 384
+#define BLOCKED_READERS 6
+#define BLOCKED_SETTLE_ROUNDS 32
 #define RELEASE_BLOCK_SIZE  1024
 
 static char release_block[RELEASE_BLOCK_SIZE];
+static int blocked_pipes[BLOCKED_READERS][2];
+static int blocked_ready;
+static int exit_wait_ready;
+static int exit_wait_sem;
+static int exit_wait_mutex;
+static int exit_wait_cond;
+static int exit_wait_cond_mutex;
+static volatile int exit_wait_unexpected;
 
 static void check(int condition, const char *message)
 {
@@ -152,6 +163,116 @@ static void orphan_resource_round(void)
 	check(close(done_pipe[0]) == 0, "close release completion pipe");
 }
 
+static void blocked_reader(void *arg)
+{
+	int *pipe_fds = arg;
+	char byte;
+
+	if (semaphore_up(blocked_ready) < 0)
+		exit(40);
+	exit(read(pipe_fds[0], &byte, 1) == -1 ? 0 : 40);
+}
+
+// Every reader owns a temporary file reference while blocked in read(). The
+// main thread exits without joining them, so the kernel must cancel and unwind
+// those syscalls before releasing process-wide descriptors and memory.
+static void blocked_syscall_round(void)
+{
+	int helper = fork();
+
+	check(helper >= 0, "fork blocked-syscall helper");
+	if (helper == 0) {
+		blocked_ready = semaphore_create(0);
+		if (blocked_ready < 0)
+			exit(41);
+		for (int i = 0; i < BLOCKED_READERS; i++) {
+			if (pipe(blocked_pipes[i]) < 0)
+				exit(42);
+			if (thread_create(blocked_reader, blocked_pipes[i]) < 0)
+				exit(43);
+		}
+		for (int i = 0; i < BLOCKED_READERS; i++)
+			if (semaphore_down(blocked_ready) < 0)
+				exit(44);
+		for (int i = 0; i < BLOCKED_SETTLE_ROUNDS; i++)
+			sched_yield();
+		exit(0);
+	}
+	wait_success(helper, "blocked-syscall helper created");
+}
+
+static void resource_probe(void)
+{
+	int probe[2];
+
+	check(pipe(probe) == 0, "create final resource probe");
+	check(close(probe[0]) == 0, "close resource probe reader");
+	check(close(probe[1]) == 0, "close resource probe writer");
+}
+
+static void semaphore_waiter(void *arg)
+{
+	(void)arg;
+	if (semaphore_up(exit_wait_ready) < 0)
+		exit(50);
+	semaphore_down(exit_wait_sem);
+	exit_wait_unexpected = 1;
+	exit(0);
+}
+
+static void mutex_waiter(void *arg)
+{
+	(void)arg;
+	if (semaphore_up(exit_wait_ready) < 0)
+		exit(51);
+	mutex_lock(exit_wait_mutex);
+	exit_wait_unexpected = 1;
+	exit(0);
+}
+
+static void condvar_waiter(void *arg)
+{
+	(void)arg;
+	if (mutex_lock(exit_wait_cond_mutex) < 0 ||
+	    semaphore_up(exit_wait_ready) < 0)
+		exit(52);
+	condvar_wait(exit_wait_cond, exit_wait_cond_mutex);
+	exit_wait_unexpected = 1;
+	exit(0);
+}
+
+static void wait_queue_exit_probe(void)
+{
+	int helper = fork();
+
+	check(helper >= 0, "fork wait-queue helper");
+	if (helper == 0) {
+		exit_wait_ready = semaphore_create(0);
+		exit_wait_sem = semaphore_create(0);
+		exit_wait_mutex = mutex_blocking_create();
+		exit_wait_cond = condvar_create();
+		exit_wait_cond_mutex = mutex_blocking_create();
+		exit_wait_unexpected = 0;
+		if (exit_wait_ready < 0 || exit_wait_sem < 0 ||
+		    exit_wait_mutex < 0 || exit_wait_cond < 0 ||
+		    exit_wait_cond_mutex < 0 || mutex_lock(exit_wait_mutex) < 0)
+			exit(53);
+		if (thread_create(semaphore_waiter, 0) < 0 ||
+		    thread_create(mutex_waiter, 0) < 0 ||
+		    thread_create(condvar_waiter, 0) < 0)
+			exit(54);
+		for (int i = 0; i < 3; i++)
+			if (semaphore_down(exit_wait_ready) < 0)
+				exit(55);
+		for (int i = 0; i < BLOCKED_SETTLE_ROUNDS; i++)
+			sched_yield();
+		if (exit_wait_unexpected)
+			exit(56);
+		exit(0);
+	}
+	wait_success(helper, "wait-queue helper created");
+}
+
 static void direct_wait_probe(void)
 {
 	int child = fork();
@@ -175,6 +296,13 @@ int main(void)
 		orphan_resource_round();
 	printf("procreap_ucore: orphan-resource=%d\n",
 	       ORPHAN_RESOURCE_ROUNDS);
+	for (int i = 0; i < BLOCKED_SYSCALL_ROUNDS; i++)
+		blocked_syscall_round();
+	printf("procreap_ucore: blocked-syscall=%d\n",
+	       BLOCKED_SYSCALL_ROUNDS);
+	wait_queue_exit_probe();
+	printf("procreap_ucore: wait-queue cancellation passed\n");
+	resource_probe();
 	direct_wait_probe();
 	printf("procreap_ucore: parent passed\n");
 	return 0;

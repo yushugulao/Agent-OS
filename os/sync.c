@@ -18,6 +18,8 @@ struct mutex *mutex_create(int blocking)
 
 int mutex_lock(struct mutex *m)
 {
+	if (proc_thread_exit_requested())
+		return -1;
 	if (!m->locked) {
 		m->locked = 1;
 		debugf("lock a free mutex");
@@ -25,8 +27,11 @@ int mutex_lock(struct mutex *m)
 	}
 	if (!m->blocking) {
 		debugf("try to lock spin mutex");
-		while (m->locked)
+		while (m->locked) {
+			if (proc_thread_exit_requested())
+				return -1;
 			yield();
+		}
 		m->locked = 1;
 		debugf("lock spin mutex after some trials");
 		return 0;
@@ -87,6 +92,8 @@ int semaphore_up(struct semaphore *s)
 
 int semaphore_down(struct semaphore *s)
 {
+	if (proc_thread_exit_requested())
+		return -1;
 	s->count--;
 	if (s->count < 0) {
 		debugf("semaphore down to %d and wait...", s->count);
@@ -123,11 +130,17 @@ void cond_signal(struct condvar *cond)
 
 int cond_wait(struct condvar *cond, struct mutex *m)
 {
+	int wait_result;
+
+	if (proc_thread_exit_requested())
+		return -1;
 	if (mutex_unlock(m) < 0)
 		return -1;
 	debugf("wait for cond");
-	if (wait_queue_sleep(&cond->waiters) < 0) {
-		mutex_lock(m);
+	wait_result = wait_queue_sleep(&cond->waiters);
+	if (wait_result < 0) {
+		if (wait_result != WAIT_QUEUE_INTERRUPTED)
+			mutex_lock(m);
 		return -1;
 	}
 	debugf("wake up from cond");

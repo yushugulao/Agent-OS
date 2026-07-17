@@ -15,12 +15,18 @@ int wait_queue_sleep(struct wait_queue *q)
 {
 	struct thread *t = curr_thread();
 	int enabled = intr_save();
+	int interrupted;
 
 	if (q == 0 || q->reason == WAIT_REASON_NONE || t == 0 ||
 	    t->state != RUNNING || t->wait_channel != 0 || t->on_run_queue) {
 		intr_restore(enabled);
-		return -1;
+		return WAIT_QUEUE_ERROR;
 	}
+	if (proc_thread_exit_requested()) {
+		intr_restore(enabled);
+		return WAIT_QUEUE_INTERRUPTED;
+	}
+	t->wait_interrupted = 0;
 	t->wait_channel = q;
 	t->wait_reason = q->reason;
 	t->wait_next = 0;
@@ -31,8 +37,10 @@ int wait_queue_sleep(struct wait_queue *q)
 	q->tail = t;
 	t->state = SLEEPING;
 	sched();
+	interrupted = t->wait_interrupted || proc_thread_exit_requested();
+	t->wait_interrupted = 0;
 	intr_restore(enabled);
-	return 0;
+	return interrupted ? WAIT_QUEUE_INTERRUPTED : WAIT_QUEUE_OK;
 }
 
 int wait_queue_wake_one(struct wait_queue *q)
@@ -100,5 +108,22 @@ void wait_queue_cancel(struct thread *t)
 	t->wait_channel = 0;
 	t->wait_next = 0;
 	t->wait_reason = WAIT_REASON_NONE;
+	t->wait_interrupted = 0;
 	intr_restore(enabled);
+}
+
+int wait_queue_interrupt(struct thread *t)
+{
+	int enabled = intr_save();
+
+	if (t == 0 || t->state != SLEEPING || t->wait_channel == 0) {
+		intr_restore(enabled);
+		return 0;
+	}
+	wait_queue_cancel(t);
+	t->wait_interrupted = 1;
+	t->state = RUNNABLE;
+	add_task(t);
+	intr_restore(enabled);
+	return 1;
 }

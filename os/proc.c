@@ -22,6 +22,9 @@ static int scheduler_agent_hint;
 static uint64 scheduler_agent_burst;
 static uint64 scheduler_score_burst;
 
+static int proc_reap(struct proc *p);
+static void proc_reset_thread_slot(struct thread *t);
+
 #define KSTACK_POISON 0xa5
 #define KSTACK_CANARY 0x6b737461636b4f53ULL
 
@@ -165,6 +168,16 @@ struct thread *curr_thread()
 	return current_thread;
 }
 
+int proc_thread_exit_requested(void)
+{
+	struct thread *t = curr_thread();
+	struct proc *p;
+
+	if (t == 0 || t == &idle || (p = t->process) == 0)
+		return 0;
+	return p->exit_requested && t->tid != p->exit_owner_tid;
+}
+
 // initialize the proc table at boot time.
 void proc_init()
 {
@@ -177,6 +190,7 @@ void proc_init()
 			t->wait_channel = 0;
 			t->wait_next = 0;
 			t->wait_reason = WAIT_REASON_NONE;
+			t->wait_interrupted = 0;
 			t->on_run_queue = 0;
 		}
 	}
@@ -188,6 +202,7 @@ void proc_init()
 	idle.wait_channel = 0;
 	idle.wait_next = 0;
 	idle.wait_reason = WAIT_REASON_NONE;
+	idle.wait_interrupted = 0;
 	idle.on_run_queue = 0;
 	init_queue(&task_queue, TASK_QUEUE_SIZE, process_queue_data);
 	scheduler_agent_hint = 0;
@@ -405,11 +420,15 @@ found:
 	p->pid = allocpid();
 	p->state = P_USED;
 	wait_queue_init(&p->child_waiters, WAIT_REASON_CHILD);
+	wait_queue_init(&p->thread_exit_waiters, WAIT_REASON_THREAD_EXIT);
 	wait_queue_init(&p->agent_event_waiters, WAIT_REASON_EVENT);
 	wait_queue_init(&p->agent_timeline_waiters, WAIT_REASON_TIMELINE);
 	p->max_page = 0;
 	p->parent = NULL;
 	p->exit_code = 0;
+	p->exit_requested = 0;
+	p->exit_owner_tid = -1;
+	p->exit_finalizing = 0;
 	p->exec_dev = 0;
 	p->exec_inum = 0;
 	p->exec_flags = 0;
@@ -460,7 +479,11 @@ int allocthread(struct proc *p, uint64 entry, int alloc_user_res)
 {
 	int tid;
 	struct thread *t;
-	uint64 old_max_page = p->max_page;
+	uint64 old_max_page;
+
+	if (p == 0 || p->exit_requested)
+		return -1;
+	old_max_page = p->max_page;
 	for (tid = 0; tid < NTHREAD; ++tid) {
 		t = &p->threads[tid];
 		if (t->state == T_UNUSED) {
@@ -477,6 +500,7 @@ found:
 	t->wait_channel = 0;
 	t->wait_next = 0;
 	t->wait_reason = WAIT_REASON_NONE;
+	t->wait_interrupted = 0;
 	t->on_run_queue = 0;
 	// kernel stack
 	t->kstack = kernel_stack_base(p - pool, tid);
@@ -541,6 +565,28 @@ fail:
 	return -1;
 }
 
+static void scheduler_finish_dying_thread(struct thread *t)
+{
+	struct proc *p;
+	struct proc *parent;
+	int tid;
+
+	if (t == 0 || t->state != T_DYING || (p = t->process) == 0)
+		return;
+	tid = t->tid;
+	t->state = EXITED;
+	if (tid != p->exit_owner_tid || !p->exit_finalizing) {
+		wait_queue_wake_all(&p->thread_exit_waiters);
+		return;
+	}
+	p->state = ZOMBIE;
+	parent = p->parent;
+	if (parent != 0)
+		wait_queue_wake_all(&parent->child_waiters);
+	else
+		proc_reap(p);
+}
+
 // Scheduler never returns.  It loops, doing:
 //  - choose a process to run.
 //  - swtch to start running that process.
@@ -592,6 +638,7 @@ void scheduler()
 		current_thread = t;
 		swtch(&idle.context, &t->context);
 		kernel_stack_check(t);
+		scheduler_finish_dying_thread(t);
 	}
 }
 
@@ -656,6 +703,7 @@ void proc_install_user_image(struct proc *p, struct user_image *image,
 		p->threads[tid].wait_channel = 0;
 		p->threads[tid].wait_next = 0;
 		p->threads[tid].wait_reason = WAIT_REASON_NONE;
+		p->threads[tid].wait_interrupted = 0;
 		p->threads[tid].on_run_queue = 0;
 	}
 	main_thread = &p->threads[0];
@@ -702,6 +750,7 @@ static void proc_reset_thread_slot(struct thread *t)
 	t->wait_channel = 0;
 	t->wait_next = 0;
 	t->wait_reason = WAIT_REASON_NONE;
+	t->wait_interrupted = 0;
 	t->on_run_queue = 0;
 }
 
@@ -715,35 +764,49 @@ static struct thread *proc_current_teardown_thread(struct proc *p)
 	return t;
 }
 
-// Release resources owned by a process without changing who must reap it.
-// Keep the exiting thread schedulable until every potentially blocking
-// release is complete; failed allocations have no current teardown thread.
-static void proc_release_resources(struct proc *p)
+// Release a quiescent process. Published threads must unwind and stop first;
+// T_USED slots are safe because they have never entered their kernel stack.
+static int proc_release_resources(struct proc *p)
 {
 	struct thread *teardown = proc_current_teardown_thread(p);
+	struct file *files[FD_BUFFER_SIZE];
 
 	for (int tid = 0; tid < NTHREAD; ++tid) {
 		struct thread *t = &p->threads[tid];
+
+		if (t == teardown)
+			continue;
+		if (t->state != T_UNUSED && t->state != T_USED &&
+		    t->state != EXITED)
+			return -1;
+	}
+	for (int tid = 0; tid < NTHREAD; ++tid) {
+		struct thread *t = &p->threads[tid];
+
+		if (t == teardown)
+			continue;
 		detach_task(t);
-		if (t->state != T_UNUSED && t->state != EXITED) {
+		if (t->state == T_USED)
 			freethread(t);
-		}
-		if (t != teardown)
-			proc_reset_thread_slot(t);
+		proc_reset_thread_slot(t);
 	}
-	if (teardown != NULL) {
-		// Teardown is a schedulable kernel phase. Yield once before the
-		// potentially long release so ownership changes cannot depend on a
-		// particular resource backend blocking.
-		yield();
+	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
+		files[i] = p->files[i];
+		p->files[i] = 0;
 	}
-	wait_queue_init(&p->child_waiters, WAIT_REASON_CHILD);
-	wait_queue_init(&p->agent_event_waiters, WAIT_REASON_EVENT);
-	wait_queue_init(&p->agent_timeline_waiters, WAIT_REASON_TIMELINE);
+	for (int i = 0; i < FD_BUFFER_SIZE; i++)
+		if (files[i] != 0 && !fd_is_reserved(files[i]))
+			fileclose(files[i]);
 	if (p->is_agent)
 		agent_free_proc_context(p);
 	else
 		agent_clear_metadata(p);
+	if (teardown != 0)
+		freethread(teardown);
+	wait_queue_init(&p->child_waiters, WAIT_REASON_CHILD);
+	wait_queue_init(&p->thread_exit_waiters, WAIT_REASON_THREAD_EXIT);
+	wait_queue_init(&p->agent_event_waiters, WAIT_REASON_EVENT);
+	wait_queue_init(&p->agent_timeline_waiters, WAIT_REASON_TIMELINE);
 	if (p->pagetable)
 		freepagetable(p->pagetable, p->max_page);
 	p->pagetable = 0;
@@ -757,15 +820,7 @@ static void proc_release_resources(struct proc *p)
 	p->exec_layout_version = 0;
 	p->exec_rw_offset = 0;
 	vfs_proc_reset(p);
-	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
-		if (p->files[i] != NULL) {
-			if (!fd_is_reserved(p->files[i]))
-				fileclose(p->files[i]);
-			p->files[i] = NULL;
-		}
-	}
-	if (teardown != NULL)
-		proc_reset_thread_slot(teardown);
+	return 0;
 }
 
 // parent == NULL means the kernel owns the final reap.
@@ -773,6 +828,9 @@ static void proc_reset_slot(struct proc *p)
 {
 	p->parent = NULL;
 	p->exit_code = 0;
+	p->exit_requested = 0;
+	p->exit_owner_tid = -1;
+	p->exit_finalizing = 0;
 	p->state = P_UNUSED;
 }
 
@@ -782,6 +840,8 @@ static int proc_reap(struct proc *p)
 {
 	if (p == NULL || p->state != ZOMBIE)
 		return -1;
+	for (int tid = 0; tid < NTHREAD; tid++)
+		proc_reset_thread_slot(&p->threads[tid]);
 	proc_reset_slot(p);
 	return 0;
 }
@@ -803,7 +863,8 @@ static void proc_orphan_children(struct proc *parent)
 
 void freeproc(struct proc *p)
 {
-	proc_release_resources(p);
+	if (proc_release_resources(p) < 0)
+		panic("active process release");
 	proc_reset_slot(p);
 }
 
@@ -813,6 +874,8 @@ static int fork_common(int make_agent, int agent_role,
 	struct proc *np;
 	struct proc *p = curr_proc();
 	int i;
+	if (p->exit_requested)
+		return -1;
 	// Allocate process.
 	if ((np = allocproc()) == 0) {
 		return -1;
@@ -974,7 +1037,8 @@ int push_argv(struct proc *p, char **argv)
 
 static int exec_thread_ready(struct proc *p)
 {
-	if (curr_thread() != &p->threads[0] || curr_thread()->state != RUNNING)
+	if (p->exit_requested || curr_thread() != &p->threads[0] ||
+	    curr_thread()->state != RUNNING)
 		return 0;
 	for (int tid = 1; tid < NTHREAD; tid++) {
 		if (p->threads[tid].state != T_UNUSED &&
@@ -1110,34 +1174,74 @@ int wait(int pid, int *code)
 	}
 }
 
-// Exit the current process.
+static int proc_siblings_quiescent(struct proc *p, struct thread *owner)
+{
+	for (int tid = 0; tid < NTHREAD; tid++) {
+		struct thread *t = &p->threads[tid];
+
+		if (t == owner || t->state == T_UNUSED || t->state == EXITED)
+			continue;
+		return 0;
+	}
+	return 1;
+}
+
+static void proc_interrupt_siblings(struct proc *p, struct thread *owner)
+{
+	for (int tid = 0; tid < NTHREAD; tid++) {
+		struct thread *t = &p->threads[tid];
+
+		if (t == owner)
+			continue;
+		if (t->state == SLEEPING)
+			wait_queue_interrupt(t);
+		else if (t->state == T_USED) {
+			t->state = RUNNABLE;
+			add_task(t);
+		}
+	}
+}
+
+static __attribute__((noreturn)) void thread_exit_current(int code)
+{
+	struct thread *t = curr_thread();
+
+	t->exit_code = code;
+	freethread(t);
+	t->state = T_DYING;
+	sched();
+	panic("dead thread resumed");
+}
+
+// The main thread coordinates process exit. Siblings are interrupted only at
+// blocking points and must unwind their own kernel stacks before shared state
+// is released.
 void exit(int code)
 {
 	struct proc *p = curr_proc();
 	struct thread *t = curr_thread();
-	t->exit_code = code;
-	t->state = EXITED;
-	int tid = t->tid;
-	debugf("thread exit with %d", code);
-	freethread(t);
-	if (tid == 0) {
-		struct proc *parent;
 
-		p->exit_code = code;
-		proc_orphan_children(p);
-		proc_release_resources(p);
-		p->state = ZOMBIE;
-		// Resource release can yield. Sample ownership only after it finishes,
-		// because the parent may have exited and orphaned us in the meantime.
-		parent = p->parent;
-		debugf("proc exit");
-		if (parent != NULL) {
-			// Parent should `wait`
-			wait_queue_wake_all(&parent->child_waiters);
-		} else
-			proc_reap(p);
+	debugf("thread exit with %d", code);
+	if (t->tid != 0)
+		thread_exit_current(code);
+	p->exit_code = code;
+	p->exit_requested = 1;
+	p->exit_owner_tid = t->tid;
+	for (;;) {
+		proc_interrupt_siblings(p, t);
+		if (proc_siblings_quiescent(p, t))
+			break;
+		if (wait_queue_sleep(&p->thread_exit_waiters) < 0)
+			yield();
 	}
+	proc_orphan_children(p);
+	if (proc_release_resources(p) < 0)
+		panic("active process exit");
+	p->exit_finalizing = 1;
+	t->exit_code = code;
+	t->state = T_DYING;
 	sched();
+	panic("exited process resumed");
 }
 
 int fdalloc(struct file *f)

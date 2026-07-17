@@ -33,7 +33,15 @@ struct context {
 	uint64 s11;
 };
 
-enum threadstate { T_UNUSED, T_USED, SLEEPING, RUNNABLE, RUNNING, EXITED };
+enum threadstate {
+	T_UNUSED,
+	T_USED,
+	SLEEPING,
+	RUNNABLE,
+	RUNNING,
+	T_DYING,
+	EXITED
+};
 struct thread {
 	enum threadstate state; // Thread state
 	int tid; // Thread ID
@@ -46,6 +54,7 @@ struct thread {
 	struct wait_queue *wait_channel;
 	struct thread *wait_next;
 	enum wait_reason wait_reason;
+	int wait_interrupted;
 	int on_run_queue;
 };
 
@@ -60,10 +69,14 @@ struct proc {
 	uint64 ustack_base; // Virtual address of user stack base
 	struct proc *parent; // Parent process; NULL means kernel-reaped
 	uint64 exit_code;
+	int exit_requested;
+	int exit_owner_tid;
+	int exit_finalizing;
 	//File descriptor table, using to record the files opened by the process
 	struct file *files[FD_BUFFER_SIZE];
 	struct thread threads[NTHREAD];
 	struct wait_queue child_waiters;
+	struct wait_queue thread_exit_waiters;
 	// Use dummy increasing id as index index of lock pool because we don't have destroy method yet
 	uint next_mutex_id, next_semaphore_id, next_condvar_id;
 	struct mutex mutex_pool[LOCK_POOL_SIZE];
@@ -77,6 +90,7 @@ struct proc {
 int cpuid();
 struct proc *curr_proc();
 struct thread *curr_thread(void);
+int proc_thread_exit_requested(void);
 void exit(int);
 void proc_init();
 void proc_mapstacks(pagetable_t);

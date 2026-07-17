@@ -45,6 +45,8 @@ uint64 console_read(uint64 va, uint64 len)
 		if (c < 0) {
 			if (got != 0)
 				break;
+			if (proc_thread_exit_requested())
+				return (uint64)-1;
 			yield();
 			continue;
 		}
@@ -385,14 +387,16 @@ uint64 sys_close(int fd)
 		errorf("invalid fd %d", fd);
 		return -1;
 	}
-	fileclose(f);
 	p->files[fd] = 0;
+	fileclose(f);
 	return 0;
 }
 
 int sys_thread_create(uint64 entry, uint64 arg)
 {
 	struct proc *p = curr_proc();
+	if (p->exit_requested)
+		return -1;
 	if (user_range_check(p->pagetable, entry, 1, PTE_X) < 0)
 		return -1;
 	int tid = allocthread(p, entry, 1);
@@ -553,6 +557,8 @@ void syscall()
 	int id = trapframe->a7, ret;
 	uint64 args[6] = { trapframe->a0, trapframe->a1, trapframe->a2,
 			   trapframe->a3, trapframe->a4, trapframe->a5 };
+	if (proc_thread_exit_requested())
+		exit(curr_proc()->exit_code);
 	if (id >= 0 && id < SYSCALL_COUNT_MAX)
 		curr_proc()->syscall_count[id]++;
 	if (id != SYS_write && id != SYS_read && id != SYS_sched_yield) {
@@ -777,6 +783,8 @@ void syscall()
 		ret = -1;
 		errorf("unknown syscall %d", id);
 	}
+	if (proc_thread_exit_requested())
+		exit(curr_proc()->exit_code);
 	curr_thread()->trapframe->a0 = ret;
 	if (id != SYS_write && id != SYS_read && id != SYS_sched_yield) {
 		debugf("syscall %d ret %d", id, ret);

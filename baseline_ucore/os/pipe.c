@@ -47,6 +47,8 @@ int pipewrite(struct pipe *pi, uint64 addr, uint64 n)
 	if (n == 0)
 		return 0;
 	while (w < n) {
+		if (proc_thread_exit_requested())
+			return w == 0 ? -1 : (int)w;
 		if (pi->readopen == 0)
 			return w == 0 ? -1 : (int)w;
 		if (pi->nwrite == pi->nread + PIPESIZE) { // DOC: pipewrite-full
@@ -75,11 +77,15 @@ int piperead(struct pipe *pi, uint64 addr, uint64 n)
 	if (n == 0)
 		return 0;
 	while (pi->nread == pi->nwrite) {
+		if (proc_thread_exit_requested())
+			return -1;
 		if (pi->writeopen)
 			yield();
 		else
 			return -1;
 	}
+	if (proc_thread_exit_requested())
+		return -1;
 	while (r < n) { // DOC: piperead-copy
 		if (pi->nread == pi->nwrite)
 			break;
