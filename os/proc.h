@@ -13,9 +13,21 @@
 #define SYSCALL_COUNT_MAX (600)
 #define MAILBOX_SLOT_COUNT (16)
 #define MAILBOX_PAYLOAD_SIZE (256)
+#define CHILD_RECORD_CAP (NPROC)
 
 struct file;
+struct proc;
 struct user_image;
+
+enum childstate { CHILD_FREE, CHILD_LIVE, CHILD_EXITED };
+
+struct child_record {
+	enum childstate state;
+	int pid;
+	int exit_code;
+	struct proc *child;
+	uint64 exit_sequence;
+};
 
 // Saved registers for kernel context switches.
 struct context {
@@ -62,7 +74,7 @@ struct thread {
 	int on_run_queue;
 };
 
-enum procstate { P_UNUSED, P_USED, ZOMBIE };
+enum procstate { P_UNUSED, P_USED };
 
 // Per-process state
 struct proc {
@@ -71,11 +83,14 @@ struct proc {
 	pagetable_t pagetable; // User page table
 	uint64 max_page;
 	uint64 ustack_base; // Virtual address of user stack base
-	struct proc *parent; // Parent process; NULL means kernel-reaped
+	struct proc *parent; // Parent process; NULL means kernel-owned
+	int parent_record_index;
 	uint64 exit_code;
 	int exit_requested;
 	int exit_owner_tid;
 	int exit_finalizing;
+	struct child_record child_records[CHILD_RECORD_CAP];
+	uint64 child_exit_sequence;
 	uint exec_dev;
 	uint exec_inum;
 	uint exec_flags;

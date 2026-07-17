@@ -11,6 +11,8 @@
 #define BLOCKED_READERS 6
 #define BLOCKED_SETTLE_ROUNDS 32
 #define RELEASE_BLOCK_SIZE  1024
+#define DELAYED_WAIT_CHILDREN 8
+#define CHILD_RECORD_PRESSURE_ROUNDS 256
 
 static char release_block[RELEASE_BLOCK_SIZE];
 static int blocked_pipes[BLOCKED_READERS][2];
@@ -283,6 +285,100 @@ static void direct_wait_probe(void)
 	wait_success(child, "final probe created");
 }
 
+// Exit credentials must survive proc-slot reuse and support out-of-order
+// waitpid without keeping the dead processes resident in the global table.
+static void delayed_wait_probe(void)
+{
+	int children[DELAYED_WAIT_CHILDREN];
+	int status = -1;
+	int child;
+
+	for (int i = 0; i < DELAYED_WAIT_CHILDREN; i++) {
+		children[i] = fork();
+		check(children[i] >= 0, "fork delayed-wait child");
+		if (children[i] == 0)
+			exit(70 + i);
+		// The child was queued before this yield, so its proc slot can be
+		// recycled before the next child is allocated.
+		sched_yield();
+	}
+	child = wait(&status);
+	check(child == children[0], "wait oldest delayed child");
+	check(status == 70, "oldest delayed child exit status");
+	for (int i = DELAYED_WAIT_CHILDREN - 1; i > 0; i--) {
+		status = -1;
+		check(waitpid(children[i], &status) == children[i],
+		      "wait delayed child by pid");
+		check(status == 70 + i, "delayed child exit status");
+	}
+	check(waitpid(children[0], &status) == -1,
+	      "consume delayed status once");
+	check(wait(&status) == -1, "all delayed statuses consumed");
+}
+
+// A child-status quota may stop the offending parent, but its retained wait
+// results must never consume executable slots needed by an unrelated process.
+static void unreaped_parent_pressure(void)
+{
+	int ready_pipe[2];
+	int release_pipe[2];
+	int holder;
+	int probe;
+	int status = -1;
+	char token = 0;
+
+	check(pipe(ready_pipe) == 0, "create pressure ready pipe");
+	check(pipe(release_pipe) == 0, "create pressure release pipe");
+	holder = fork();
+	check(holder >= 0, "fork unreaped pressure parent");
+	if (holder == 0) {
+		int denied = 0;
+
+		close(ready_pipe[0]);
+		close(release_pipe[1]);
+		for (int i = 0; i < CHILD_RECORD_PRESSURE_ROUNDS; i++) {
+			int child = fork();
+
+			if (child == 0)
+				exit(i & 0x3f);
+			if (child < 0)
+				denied++;
+			else
+				sched_yield();
+		}
+		if (denied == 0)
+			exit(80);
+		token = 'R';
+		if (write(ready_pipe[1], &token, 1) != 1)
+			exit(81);
+		close(ready_pipe[1]);
+		if (read(release_pipe[0], &token, 1) != 1 || token != 'X')
+			exit(82);
+		close(release_pipe[0]);
+		exit(0);
+	}
+	close(ready_pipe[1]);
+	close(release_pipe[0]);
+	check(read(ready_pipe[0], &token, 1) == 1 && token == 'R',
+	      "unreaped parent reached private quota");
+	close(ready_pipe[0]);
+	probe = fork();
+	check(probe >= 0, "unrelated fork survives unreaped pressure");
+	if (probe == 0) {
+		close(release_pipe[1]);
+		exit(91);
+	}
+	check(waitpid(probe, &status) == probe && status == 91,
+	      "wait unrelated pressure probe");
+	token = 'X';
+	check(write(release_pipe[1], &token, 1) == 1,
+	      "release unreaped pressure parent");
+	close(release_pipe[1]);
+	status = -1;
+	check(waitpid(holder, &status) == holder && status == 0,
+	      "reap pressure parent");
+}
+
 int main(void)
 {
 	printf("procreap_ucore: process lifecycle verification\n");
@@ -303,6 +399,11 @@ int main(void)
 	wait_queue_exit_probe();
 	printf("procreap_ucore: wait-queue cancellation passed\n");
 	resource_probe();
+	delayed_wait_probe();
+	printf("procreap_ucore: detached-wait=%d\n",
+	       DELAYED_WAIT_CHILDREN);
+	unreaped_parent_pressure();
+	printf("procreap_ucore: unreaped-parent-isolated=1\n");
 	direct_wait_probe();
 	printf("procreap_ucore: parent passed\n");
 	return 0;

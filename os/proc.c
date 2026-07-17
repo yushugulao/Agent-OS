@@ -22,8 +22,8 @@ static int scheduler_agent_hint;
 static uint64 scheduler_agent_burst;
 static uint64 scheduler_score_burst;
 
-static int proc_reap(struct proc *p);
 static void proc_reset_thread_slot(struct thread *t);
+static void proc_recycle(struct proc *p);
 
 #define KSTACK_POISON 0xa5
 #define KSTACK_CANARY 0x6b737461636b4f53ULL
@@ -178,12 +178,210 @@ int proc_thread_exit_requested(void)
 	return p->exit_requested && t->tid != p->exit_owner_tid;
 }
 
+static void child_record_clear(struct child_record *record)
+{
+	record->state = CHILD_FREE;
+	record->pid = 0;
+	record->exit_code = 0;
+	record->child = 0;
+	record->exit_sequence = 0;
+}
+
+static void child_records_reset(struct proc *p)
+{
+	for (int i = 0; i < CHILD_RECORD_CAP; i++)
+		child_record_clear(&p->child_records[i]);
+	p->child_exit_sequence = 0;
+}
+
+static int proc_child_has_capacity(struct proc *parent)
+{
+	int enabled = intr_save();
+	int available = 0;
+
+	for (int i = 0; i < CHILD_RECORD_CAP; i++) {
+		if (parent->child_records[i].state == CHILD_FREE) {
+			available = 1;
+			break;
+		}
+	}
+	intr_restore(enabled);
+	return available;
+}
+
+// Call with interrupts disabled. The pointer check prevents a recycled proc
+// slot from ever being mistaken for the original child.
+static int proc_child_find_live(struct proc *parent, struct proc *child,
+				int hint)
+{
+	if (hint >= 0 && hint < CHILD_RECORD_CAP) {
+		struct child_record *record = &parent->child_records[hint];
+
+		if (record->state == CHILD_LIVE && record->child == child &&
+		    record->pid == child->pid)
+			return hint;
+	}
+	for (int i = 0; i < CHILD_RECORD_CAP; i++) {
+		struct child_record *record = &parent->child_records[i];
+
+		if (record->state == CHILD_LIVE && record->child == child &&
+		    record->pid == child->pid)
+			return i;
+	}
+	return -1;
+}
+
+// Bind child ownership only after fork has completed every fallible step.
+// The per-parent table is both the wait contract and a private child quota.
+static int proc_child_bind(struct proc *parent, struct proc *child)
+{
+	int enabled = intr_save();
+	int slot = -1;
+
+	if (parent == 0 || child == 0 || parent->state != P_USED ||
+	    child->state != P_USED || child->parent != 0)
+		goto out;
+	for (int i = 0; i < CHILD_RECORD_CAP; i++) {
+		struct child_record *record = &parent->child_records[i];
+
+		if (record->state != CHILD_FREE)
+			continue;
+		record->pid = child->pid;
+		record->exit_code = 0;
+		record->child = child;
+		record->exit_sequence = 0;
+		child->parent = parent;
+		child->parent_record_index = i;
+		record->state = CHILD_LIVE;
+		slot = i;
+		break;
+	}
+out:
+	intr_restore(enabled);
+	return slot;
+}
+
+// Publish the wait result before recycling the executable proc slot.
+static int proc_child_publish_exit(struct proc *child)
+{
+	struct proc *parent;
+	struct child_record *record;
+	int enabled = intr_save();
+	int slot;
+	int published = 0;
+
+	if (child == 0 || (parent = child->parent) == 0)
+		goto out;
+	slot = proc_child_find_live(parent, child,
+				    child->parent_record_index);
+	if (slot < 0)
+		goto detach;
+	record = &parent->child_records[slot];
+	record->exit_code = (int)child->exit_code;
+	record->child = 0;
+	record->exit_sequence = ++parent->child_exit_sequence;
+	record->state = CHILD_EXITED;
+	published = 1;
+detach:
+	child->parent = 0;
+	child->parent_record_index = -1;
+	if (published)
+		wait_queue_wake_all(&parent->child_waiters);
+out:
+	intr_restore(enabled);
+	return published;
+}
+
+// Roll back an unpublished child relationship without leaving a LIVE record
+// pointing at a proc slot that is about to be recycled.
+static void proc_child_unbind(struct proc *child)
+{
+	struct proc *parent;
+	int enabled = intr_save();
+	int slot;
+
+	if (child == 0 || (parent = child->parent) == 0)
+		goto out;
+	slot = proc_child_find_live(parent, child,
+				    child->parent_record_index);
+	if (slot >= 0)
+		child_record_clear(&parent->child_records[slot]);
+	child->parent = 0;
+	child->parent_record_index = -1;
+	wait_queue_wake_all(&parent->child_waiters);
+out:
+	intr_restore(enabled);
+}
+
+// Return 1 with a result, 0 while a matching child is live, or -1 if the
+// caller has no matching child. Call with interrupts disabled.
+static int proc_child_wait_result(struct proc *parent, int pid,
+				  int *child_pid, int *exit_code)
+{
+	int selected = -1;
+	uint64 oldest = ~0ULL;
+
+	for (int i = 0; i < CHILD_RECORD_CAP; i++) {
+		struct child_record *record = &parent->child_records[i];
+
+		if (record->state != CHILD_EXITED ||
+		    (pid > 0 && record->pid != pid))
+			continue;
+		if (pid > 0 || record->exit_sequence < oldest) {
+			selected = i;
+			oldest = record->exit_sequence;
+			if (pid > 0)
+				break;
+		}
+	}
+	if (selected >= 0) {
+		struct child_record *record = &parent->child_records[selected];
+
+		*child_pid = record->pid;
+		*exit_code = record->exit_code;
+		child_record_clear(record);
+		return 1;
+	}
+	for (int i = 0; i < CHILD_RECORD_CAP; i++) {
+		struct child_record *record = &parent->child_records[i];
+
+		if (record->state == CHILD_LIVE &&
+		    (pid <= 0 || record->pid == pid))
+			return 0;
+	}
+	return -1;
+}
+
+// A parent's completion table owns every child relationship. Dropping the
+// table on parent exit atomically transfers live children to the kernel.
+static void proc_orphan_children(struct proc *parent)
+{
+	int enabled = intr_save();
+
+	for (int i = 0; i < CHILD_RECORD_CAP; i++) {
+		struct child_record *record = &parent->child_records[i];
+		struct proc *child = record->child;
+
+		if (record->state == CHILD_LIVE && child != 0 &&
+		    child->parent == parent && child->parent_record_index == i) {
+			child->parent = 0;
+			child->parent_record_index = -1;
+		}
+		child_record_clear(record);
+	}
+	parent->child_exit_sequence = 0;
+	intr_restore(enabled);
+}
+
 // initialize the proc table at boot time.
 void proc_init()
 {
 	struct proc *p;
 	for (p = pool; p < &pool[NPROC]; p++) {
 		p->state = P_UNUSED;
+		p->parent = 0;
+		p->parent_record_index = -1;
+		child_records_reset(p);
 		for (int tid = 0; tid < NTHREAD; ++tid) {
 			struct thread *t = &p->threads[tid];
 			t->state = T_UNUSED;
@@ -425,10 +623,12 @@ found:
 	wait_queue_init(&p->agent_timeline_waiters, WAIT_REASON_TIMELINE);
 	p->max_page = 0;
 	p->parent = NULL;
+	p->parent_record_index = -1;
 	p->exit_code = 0;
 	p->exit_requested = 0;
 	p->exit_owner_tid = -1;
 	p->exit_finalizing = 0;
+	child_records_reset(p);
 	p->exec_dev = 0;
 	p->exec_inum = 0;
 	p->exec_flags = 0;
@@ -568,7 +768,6 @@ fail:
 static void scheduler_finish_dying_thread(struct thread *t)
 {
 	struct proc *p;
-	struct proc *parent;
 	int tid;
 
 	if (t == 0 || t->state != T_DYING || (p = t->process) == 0)
@@ -579,12 +778,8 @@ static void scheduler_finish_dying_thread(struct thread *t)
 		wait_queue_wake_all(&p->thread_exit_waiters);
 		return;
 	}
-	p->state = ZOMBIE;
-	parent = p->parent;
-	if (parent != 0)
-		wait_queue_wake_all(&parent->child_waiters);
-	else
-		proc_reap(p);
+	proc_child_publish_exit(p);
+	proc_recycle(p);
 }
 
 // Scheduler never returns.  It loops, doing:
@@ -823,49 +1018,37 @@ static int proc_release_resources(struct proc *p)
 	return 0;
 }
 
-// parent == NULL means the kernel owns the final reap.
 static void proc_reset_slot(struct proc *p)
 {
 	p->parent = NULL;
+	p->parent_record_index = -1;
+	p->pid = 0;
 	p->exit_code = 0;
 	p->exit_requested = 0;
 	p->exit_owner_tid = -1;
 	p->exit_finalizing = 0;
+	child_records_reset(p);
 	p->state = P_UNUSED;
 }
 
-// ZOMBIE resources were already released by exit(); reaping only returns the
-// process-table slot. Kernel stacks are reset when the slot is allocated again.
-static int proc_reap(struct proc *p)
+// Exit credentials live in the parent's child table, so an execution slot can
+// be recycled as soon as all kernel stacks and resources have quiesced.
+static void proc_recycle(struct proc *p)
 {
-	if (p == NULL || p->state != ZOMBIE)
-		return -1;
+	if (p == 0)
+		return;
 	for (int tid = 0; tid < NTHREAD; tid++)
 		proc_reset_thread_slot(&p->threads[tid]);
 	proc_reset_slot(p);
-	return 0;
-}
-
-// Transfer every child of an exiting process to the kernel reaper. Live
-// children will be reaped on exit; zombies can be reclaimed immediately.
-static void proc_orphan_children(struct proc *parent)
-{
-	struct proc *child;
-
-	for (child = pool; child < &pool[NPROC]; child++) {
-		if (child->parent != parent)
-			continue;
-		child->parent = NULL;
-		if (child->state == ZOMBIE)
-			proc_reap(child);
-	}
 }
 
 void freeproc(struct proc *p)
 {
+	proc_child_unbind(p);
+	proc_orphan_children(p);
 	if (proc_release_resources(p) < 0)
 		panic("active process release");
-	proc_reset_slot(p);
+	proc_recycle(p);
 }
 
 static int fork_common(int make_agent, int agent_role,
@@ -874,7 +1057,7 @@ static int fork_common(int make_agent, int agent_role,
 	struct proc *np;
 	struct proc *p = curr_proc();
 	int i;
-	if (p->exit_requested)
+	if (p->exit_requested || !proc_child_has_capacity(p))
 		return -1;
 	// Allocate process.
 	if ((np = allocproc()) == 0) {
@@ -917,7 +1100,6 @@ static int fork_common(int make_agent, int agent_role,
 	np->mail_tail = 0;
 	np->mail_count = 0;
 
-	np->parent = p;
 	// currently only copy main thread
 	int tid = allocthread(np, 0, 0);
 	if (tid < 0) {
@@ -926,6 +1108,10 @@ static int fork_common(int make_agent, int agent_role,
 	}
 	struct thread *nt = &np->threads[tid], *t = &p->threads[0];
 	if (make_agent && agent_make_role(np, agent_role) < 0) {
+		freeproc(np);
+		return -1;
+	}
+	if (proc_child_bind(p, np) < 0) {
 		freeproc(np);
 		return -1;
 	}
@@ -1145,31 +1331,28 @@ int exec(char *path, char **argv)
 
 int wait(int pid, int *code)
 {
-	struct proc *np;
-	int havekids;
 	struct proc *p = curr_proc();
+	int child_pid;
+	int child_status;
+	int state;
 
 	for (;;) {
-		// Scan through table looking for exited children.
-		havekids = 0;
-		for (np = pool; np < &pool[NPROC]; np++) {
-			if (np->state != P_UNUSED && np->parent == p &&
-			    (pid <= 0 || np->pid == pid)) {
-				havekids = 1;
-				if (np->state == ZOMBIE) {
-					// Found one.
-					pid = np->pid;
-					*code = np->exit_code;
-					if (proc_reap(np) < 0)
-						return -1;
-					return pid;
-				}
-			}
+		int enabled = intr_save();
+
+		state = proc_child_wait_result(p, pid, &child_pid,
+					       &child_status);
+		if (state > 0) {
+			*code = child_status;
+			intr_restore(enabled);
+			return child_pid;
 		}
-		if (!havekids) {
+		if (state < 0) {
+			intr_restore(enabled);
 			return -1;
 		}
-		if (wait_queue_sleep(&p->child_waiters) < 0)
+		state = wait_queue_sleep(&p->child_waiters);
+		intr_restore(enabled);
+		if (state < 0)
 			return -1;
 	}
 }

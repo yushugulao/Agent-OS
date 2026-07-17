@@ -5,6 +5,7 @@
 #include <unistd.h>
 
 #define LOW_SCORE_YIELDS 512
+#define UNREAPED_PRESSURE_ROUNDS 256
 
 static void check(int condition, const char *message)
 {
@@ -45,6 +46,74 @@ static void run_normal_runner(int ready_fd, int stop_fd)
 	      "receive normal stop");
 	check(close(stop_fd) == 0, "close normal stop reader");
 	exit(0);
+}
+
+static void run_unreaped_holder(int ready_fd, int release_fd)
+{
+	char token = 0;
+	int denied = 0;
+
+	for (int i = 0; i < UNREAPED_PRESSURE_ROUNDS; i++) {
+		int child = fork();
+
+		if (child == 0)
+			exit(i & 0x3f);
+		if (child < 0)
+			denied++;
+		else
+			sched_yield();
+	}
+	if (denied == 0)
+		exit(10);
+	token = 'R';
+	if (write(ready_fd, &token, 1) != 1)
+		exit(11);
+	close(ready_fd);
+	if (read(release_fd, &token, 1) != 1 || token != 'X')
+		exit(12);
+	close(release_fd);
+	exit(0);
+}
+
+static void check_agent_creation_under_unreaped_pressure(void)
+{
+	int ready_pipe[2];
+	int release_pipe[2];
+	int holder;
+	int agent;
+	int status = -1;
+	char token = 0;
+
+	check(pipe(ready_pipe) == 0, "create Agent pressure ready pipe");
+	check(pipe(release_pipe) == 0,
+	      "create Agent pressure release pipe");
+	holder = fork();
+	check(holder >= 0, "create ordinary unreaped holder");
+	if (holder == 0) {
+		close(ready_pipe[0]);
+		close(release_pipe[1]);
+		run_unreaped_holder(ready_pipe[1], release_pipe[0]);
+	}
+	close(ready_pipe[1]);
+	close(release_pipe[0]);
+	check(read(ready_pipe[0], &token, 1) == 1 && token == 'R',
+	      "ordinary holder reached child quota");
+	close(ready_pipe[0]);
+	agent = agent_create();
+	check(agent >= 0, "Agent creation survives ordinary child pressure");
+	if (agent == 0) {
+		close(release_pipe[1]);
+		exit(37);
+	}
+	check(waitpid(agent, &status) == agent && status == 37,
+	      "wait Agent pressure probe");
+	token = 'X';
+	check(write(release_pipe[1], &token, 1) == 1,
+	      "release ordinary unreaped holder");
+	close(release_pipe[1]);
+	status = -1;
+	check(waitpid(holder, &status) == holder && status == 0,
+	      "reap ordinary unreaped holder");
 }
 
 static void check_high_score_agent_boundary(void)
@@ -137,6 +206,8 @@ static void check_normal_score_boundary(void)
 int main(void)
 {
 	printf("procreap_agent_ucore: bounded teardown scheduling\n");
+	check_agent_creation_under_unreaped_pressure();
+	printf("procreap_agent_ucore: child-pressure-isolated=1\n");
 	check_high_score_agent_boundary();
 	check_normal_score_boundary();
 	printf("procreap_agent_ucore: adversarial-agent=1\n");
