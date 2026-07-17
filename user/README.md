@@ -13,7 +13,7 @@ make CHAPTER=platform_agentos
 
 `CHAPTER` 常用取值：
 
-- `agent`：构建 AgentOS 专项测试程序，例如 `agentfinal_ucore`、`agentfs_ucore`、`agentloop_ucore`、`agentbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`。
+- `agent`：构建 AgentOS 功能、安全和稳健性专项测试，包括下方列出的 14 个程序。
 - `platform_agentos`：构建接入增强内核服务的科研 Agent 平台程序，例如 `rp_agentos_orch` 和完整 `rp_*` 平台程序集。
 - uCore 原有章节值仍可用于基础教学测试。
 
@@ -38,10 +38,15 @@ agentfs_ucore
 agentscan_ucore
 agentloop_ucore
 agentsched_ucore
+agentconflict_ucore
+agentllm_ucore
 agentbench_ucore
 labbench_ucore
 labdemo_ucore
 agentsecurity_ucore
+agenttrust_ucore
+agentvfs_ucore
+usersafety_ucore
 ```
 
 科研 Agent 平台增强入口：

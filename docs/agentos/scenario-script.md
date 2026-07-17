@@ -6,7 +6,7 @@
 
 本项目在 uCore 内核上实现 Agent-OS，把 Agent 进程身份、结构化工具调用、上下文历史、文件元数据索引和 Agent 事件运行机制放入内核支持层。
 
-当前示例分为九部分：
+完整专项脚本依次运行十四个程序：
 
 ```bash
 agentfinal_ucore
@@ -14,10 +14,15 @@ agentfs_ucore
 agentscan_ucore
 agentloop_ucore
 agentsched_ucore
+agentconflict_ucore
+agentllm_ucore
 agentbench_ucore
 labbench_ucore
 labdemo_ucore
 agentsecurity_ucore
+agenttrust_ucore
+agentvfs_ucore
+usersafety_ucore
 ```
 
 各程序分工：
@@ -29,10 +34,15 @@ agentsecurity_ucore
 | `agentscan_ucore` | 检查任务四的根目录自动扫描、真实文件元数据建立和索引维护 |
 | `agentloop_ucore` | 检查任务五的 FIFO 事件队列、unwatch、有限 timeout 睡眠、wait cancel、TIMER unwatch 和 heartbeat stop |
 | `agentsched_ucore` | 检查任务五的 Agent 感知调度、受权配置、事件状态、调度原因和公平性计数 |
+| `agentconflict_ucore` | 检查真实文件编辑租约、版本提交和非持有者写入拒绝 |
+| `agentllm_ucore` | 检查结构化 LLM 请求、Relay 响应、完成事件和 timeline 记录 |
 | `agentbench_ucore` | 给出批量调用、Context 直接读、snapshot、文件索引候选记录数的性能证据，并验证 timeout/heartbeat、busy polling 与 wait/wake 计时 |
 | `labbench_ucore` | 综合场景中的性能入口，当前包装运行 `agentbench_ucore` |
 | `labdemo_ucore` | 呈现一个由 orchestrator 控制的多 Agent 实验恢复场景 |
 | `agentsecurity_ucore` | 呈现普通进程和低权限 Agent 无法越权，并验证普通 mail 与多 run 精确恢复 |
+| `agenttrust_ucore` | 检查代码 RX、数据 RW+NX、可信映像不可变及 Agent 角色与可执行 inode 绑定 |
+| `agentvfs_ucore` | 检查 public/workflow 文件隔离、非 Agent worker 能力衰减及继承 fd 重鉴权 |
+| `usersafety_ucore` | 检查用户指针范围、exec 参数、pipe/file 失败回滚和定向等待队列 |
 
 ## 2. 环境和运行方式
 
@@ -57,10 +67,15 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfs_ucore CHAPTER
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentscan_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentloop_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsched_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentconflict_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentllm_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labbench_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER=agent
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agenttrust_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentvfs_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=usersafety_ucore CHAPTER=agent
 ```
 
 ## 3. 正确性示例
@@ -99,7 +114,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfs_ucore CHAPTER
 
 | 输出项 | 讲解重点 |
 | --- | --- |
-| `demo_inode` | 用户态示例元数据已经绑定真实根目录文件的 `dev/inum` |
+| `demo_inode` | 用户态示例元数据已经绑定真实根目录文件的 `dev/inum/incarnation`，inode 号复用不会继承旧状态 |
 | `custom_inode` | 用户态创建的新文件也能绑定 Agent 元数据 |
 | `bulk_index` | 接近 128 条记录时，索引路径检查的候选记录少于扫描路径 |
 | `query_plan` | 内核说明本次索引路径按 status 选择 bucket，并检查了多少候选记录 |
@@ -165,6 +180,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsched_ucore CHAP
 | 输出项 | 讲解重点 |
 | --- | --- |
 | `role_weights` | 不同 Agent 角色有不同内核调度权重 |
+| `normal_progress` | 连续 Agent dispatch 达到不可配置的 burst 上限后必须运行普通任务，普通进程获得有界进展 |
 | `configurable_policy` | orchestrator 可受权调整目标 Agent 的 weight、priority 和 budget |
 | `event_priority` | 有待处理事件的 Agent 被调度器识别并记录 |
 | `reason_trace` | `agent_sched_snapshot()` 能读出最近调度原因，输出包含事件队列、角色权重和调度分数 |
@@ -235,7 +251,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER
 
 ### 9.2 讲解流程
 
-1. 内核加载的可信 init 只创建 orchestrator。
+1. 内核首次加载清单中带 bootstrap 标志且允许 orchestrator 的可信 init；启动 grant 只在这次初始装载建立。
 2. orchestrator 初始化文件元数据并创建三个业务 Agent。
 3. sentinel 监听 `status=failed`。
 4. orchestrator 注入 align 阶段失败。
@@ -289,8 +305,17 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER
 
 ```bash
 make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsecurity_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agenttrust_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentvfs_ucore CHAPTER=agent
+make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=usersafety_ucore CHAPTER=agent
 ```
 
-该程序覆盖普通进程 mail 最小路径；普通进程不能直接投递事件、取消 Agent 等待或修改 Agent 文件元数据；usershell 等价的普通 `fork/exec` 路径不能创建任何 Agent；低权限 Agent 不能继续委派，普通 exec 会撤销 bootstrap grant；初始化前索引查询不会卡住；legacy 工具 ID/名称不一致会失败；sentinel 也不能通过伪造 `AGENT_ROLE_RECOVERY` 获得动作权限；recovery 只会更新 selector 指定的 run。
+`agentsecurity_ucore` 覆盖普通进程 mail 最小路径；普通进程不能直接投递事件、取消 Agent 等待或修改 Agent 文件元数据；usershell 等价的普通 `fork/exec` 路径不能创建任何 Agent；低权限 Agent 不能继续委派。普通 exec 会撤销 bootstrap grant，之后执行同名或清单中的 bootstrap 映像也不会恢复启动授权。初始化前索引查询不会卡住；legacy 工具 ID/名称不一致会失败；sentinel 不能通过伪造 `AGENT_ROLE_RECOVERY` 获得动作权限；recovery 只会更新 selector 指定的 run。
 
-当前版本已经具备任务一至三的增强实现，完成任务四的真实 inode 关联文件元数据服务、索引查询和根目录自动扫描，完成任务五的有界事件队列、等待/唤醒/取消机制、Agent 感知调度、受权调度配置、调度原因记录、当前 span 短记录、统一 timeline、timeline 过滤查询、timeline 游标增量读取、全局审计短记录和过滤查询，并提供任务六综合示例。多级目录递归扫描、云端访问和页面大屏属于用户态或宿主机工具的扩展范围，不写入当前内核职责。
+`agenttrust_ucore` 检查构建期清单写入 inode 的可信策略：程序代码页为 RX，数据页为 RW+NX，可信映像拒绝写入、截断和删除；只有允许当前 Agent 角色的可信 inode 可以 exec，复制相同程序字节得到的普通文件不会继承信任。
+
+`agentvfs_ucore` 检查普通文件路径不能绕过 Agent capability：public 进程无法读取、修改或删除 workflow 工件，workflow Agent 也不能把 public 文件冒充受保护工件；orchestrator 可通过 syscall 539 `agent_worker_create()` 创建非 Agent worker，但请求能力同时受父凭据和目标映像 profile 限制，错误 exec、普通 fork 与继承 fd 都不能扩权。
+
+`usersafety_ucore` 检查坏指针、跨页和整数溢出范围不会破坏内核状态，失败的 wait copyout 不会提前回收子进程，pipe/file 分配失败会回滚，并且不相关的子进程退出不会错误唤醒 mutex 等待者。
+
+当前版本已经具备任务一至三的增强实现，完成任务四基于 `dev + inum + incarnation` 的真实文件元数据服务、public/workflow VFS 隔离、索引查询和根目录自动扫描，完成任务五的有界事件队列、等待/唤醒/取消机制、Agent 感知调度、普通进程强制公平上限、受权调度配置、调度原因记录、当前 span 短记录、统一 timeline、timeline 过滤查询、timeline 游标增量读取、全局审计短记录和过滤查询，并提供任务六综合示例。多级目录递归扫描、云端访问和页面大屏属于用户态或宿主机工具的扩展范围，不写入当前内核职责。

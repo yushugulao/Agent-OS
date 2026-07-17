@@ -1,6 +1,6 @@
 # 任务四：面向 Agent 查询优化的文件系统扩展
 
-本文是 [design.md](design.md) 的任务四细节附录，重点说明 AgentOS-uCore 当前实现的文件元数据表、真实 inode 关联、私有 `.agentmeta` 元数据文件、属性查询、索引路径、内容摘要工具、通用依赖注册/查询和查询历史驱动的预取提示。
+本文是 [design.md](design.md) 的任务四细节附录，重点说明 AgentOS-uCore 当前实现的文件元数据表、带 incarnation 的真实 inode 关联、VFS public/workflow 安全域、私有 `.agentmeta` 元数据文件、属性查询、索引路径、内容摘要工具、通用依赖注册/查询和查询历史驱动的预取提示。
 
 ## 目标
 
@@ -9,9 +9,10 @@
 AgentOS-uCore 当前实现的是内核级文件元数据服务：
 
 - 支持最多 128 条文件元数据；
-- 以真实文件的 `dev + inum` 作为主要身份；
+- 以真实文件的 `dev + inum + incarnation` 作为主要身份，避免 inode 号复用后继承旧状态；
 - 要求 `physical_name` 能解析到 uCore 根目录中的真实文件名；
 - 使用根目录私有 `.agentmeta` 元数据文件保存固定格式元数据表；
+- 在普通 `open/read/write/truncate/unlink` 路径执行 public/workflow/kernel-private 数据访问策略，防止绕过 Agent 工具 capability；
 - 支持扫描查询；
 - 支持 state/label/type 索引查询，ABI 字段兼容保留为 status/stage/kind；
 - 支持同一文件元数据代数下的查询结果缓存；
@@ -49,6 +50,7 @@ AgentOS-uCore 当前实现的是内核级文件元数据服务：
 | `flags` | 删除、持久化等元数据操作标志 |
 | `dev` | 真实文件设备号 |
 | `inum` | 真实文件 inode 号 |
+| `incarnation` | inode 槽当前生命代数；同一 inum 删除后复用时会变化 |
 | `size` | 真实文件大小 |
 | `fs_generation` | 文件系统侧更新代数 |
 | `update_mask` | 本次更新哪些字段 |
@@ -65,14 +67,31 @@ AgentOS-uCore 当前实现的是内核级文件元数据服务：
 
 1. `agent_file_meta_init()` 会先强制重新加载 `.agentmeta` 私有元数据文件。
 2. 如果 `.agentmeta` 不存在、格式错误或没有有效记录，内核安装空元数据表，由用户态示例再写入需要的对象记录。
-3. 每条持久化元数据保存 `physical_name`、`dev`、`inum`、`size` 和 `fs_generation`。
+3. 每条持久化元数据保存 `physical_name`、`dev`、`inum`、`incarnation`、`size` 和 `fs_generation`。
 4. `fileopen(O_CREATE)`、写入、截断、删除会通知 Agent 子系统刷新或删除关联元数据。
 5. `agent_file_meta_set()` 支持 `AGENT_FILE_META_F_DELETE` 删除属性，支持 `AGENT_FILE_META_F_PERSIST` 写入 `.agentmeta`。
 6. 受权 Agent 显式写入 metadata 时会接管自动扫描槽位；除非显式带上 `AGENT_FILE_META_F_AUTOSCAN`，否则旧的自动扫描标志会被清除，后续扫描只刷新真实 inode 身份，不改写这些对象属性。
 
-`.agentmeta` 是 Agent 子系统内部后端文件。普通文件 syscall 直接 `open(".agentmeta")`、`open(O_CREATE)` 或 `unlink(".agentmeta")` 会返回 `-1`；Agent 子系统内部 helper 仍可读写它，用于持久化和重新加载元数据。
+`.agentmeta` 是标记为 `KERNEL_PRIVATE` 的 Agent 子系统内部后端文件。普通文件 syscall 直接读取、创建、修改或删除它都会返回 `-1`；Agent 子系统内部 helper 使用内核凭据读写，用于持久化和重新加载元数据。
 
-这套实现让查询结果中的文件身份可以追溯到真实 inode，同时保留 Agent 需要的 namespace、workflow、run、label、type、state 等高层属性。为了兼容已有用户态测试，结构体字段名仍使用 project/stage/kind/status；字符串 selector 同时接受 `namespace/object_id/label/type/state` 等通用字段名。
+这套实现让查询结果中的文件身份可以追溯到某一代真实 inode，同时保留 Agent 需要的 namespace、workflow、run、label、type、state 等高层属性。完整身份始终是 `dev + inum + incarnation`；删除文件后即使设备号和 inode 号被复用，新 incarnation 也会使旧 metadata、digest cache、版本和租约失效。为了兼容已有用户态测试，结构体字段名仍使用 project/stage/kind/status；字符串 selector 同时接受 `namespace/object_id/label/type/state` 等通用字段名。
+
+## VFS 安全域与普通文件路径
+
+Agent 工具 capability 只约束 `agent_file_query()`、`read_file_digest` 等 Agent 接口还不够；普通进程仍可能尝试用 `open/read/write/unlink` 直接访问工作流文件。因此每个 inode 都保存经过校验的 VFS label，每个进程都保存独立于 Agent 业务角色的 `filesystem_domain` 和 `filesystem_capability_mask`，普通文件路径按当前进程凭据逐次鉴权：
+
+| inode 策略 | 规则 |
+| --- | --- |
+| `PUBLIC` | 数据操作只由 public 域普通进程访问，保留普通 uCore 文件命名空间 |
+| `WORKFLOW` | 数据操作只由 workflow 域访问；读取要求 `CONTENT_READ`，创建、写入、截断和删除要求 `ARTIFACT_WRITE` |
+| `KERNEL_PRIVATE` | 只允许内核凭据访问，用于 `.agentmeta` 等私有状态 |
+| `ROOT` | 两个域都可查找、读取和执行目录入口；workflow 域修改根目录要求 `ARTIFACT_WRITE` |
+
+文件的安全策略在创建时确定，后写入 Agent metadata 不会把攻击者预先创建的 public inode 重新标成 workflow 工件。可执行映像还带有 VFS profile，它是能力上限而不是权限来源。Agent 创建时，角色业务能力会继续衰减其 VFS effective capability；orchestrator 若需要启动非 Agent 文件 worker，必须调用 `agent_worker_create()`，显式请求 `CONTENT_READ` 或 `ARTIFACT_WRITE`，且请求不能超过父进程能力和目标映像 profile。
+
+`exec` 不等同于读取文件内容。当前实现可以在调用者所在域没有匹配项时查找另一域的布局有效映像；普通进程直接执行 workflow 映像后仍是 public 域且没有文件能力。Agent 只有执行允许当前角色的可信映像才能保留身份；非 Agent worker 只有通过精确 pending 委派才能安装 workflow 凭据。
+
+`agent_worker_create()` 的 pending 委派绑定到目标可执行 inode 的 `dev + inum + incarnation`。worker 映像只要求 immutable、domain-safe、有效 W^X 布局和非空 VFS profile，不要求 Agent `TRUSTED` role-image 标志。子进程只有执行创建时绑定的同一映像才取得 workflow 凭据；执行其他映像会清除委派。普通 `fork()` 不复制 workflow effective capability。文件描述符虽然按 uCore 进程语义复制，但每次 `read/write` 都会用当前进程凭据重新检查 inode，因此没有权限的子进程不能利用父进程预先打开的 fd 绕过策略。
 
 ## 根目录自动扫描
 
@@ -82,7 +101,7 @@ AgentOS-uCore 当前实现的是内核级文件元数据服务：
 2. timer tick 和文件创建、写入、截断、删除 hook 只标记 `file_scan_pending`，不在中断上下文做文件系统遍历。
 3. 调度器空隙调用 `agent_background_maintain()`，同一 tick 内最多推进一次扫描，每次最多处理 16 个根目录项，避免一次扫描长时间占用内核，也避免调度循环越频繁、扫描成本越高。
 4. 扫描会跳过 `.agentmeta`，只为真实根目录文件建立 `AGENT_FILE_META_F_AUTOSCAN | AGENT_FILE_META_F_PERSIST` 元数据。
-5. 自动元数据使用真实 `dev + inum + size` 作为身份，并填入 `project=root`、`workflow=background-scan`、`run_id=ROOT`、`stage=scan` 等默认属性。
+5. 自动元数据使用真实 `dev + inum + incarnation + size` 作为身份，并填入 `project=root`、`workflow=background-scan`、`run_id=ROOT`、`stage=scan` 等默认属性。
 6. 完整扫描结束后，已经不存在的自动元数据会被清理；手动写入的对象元数据不会被扫描流程误删。
 7. 元数据变化后重建 status、stage、kind 索引，并按需写回 `.agentmeta`。
 
@@ -157,10 +176,11 @@ metadata 查询说明“哪个文件符合条件”，内容摘要工具说明�
 
 - `dev`
 - `inum`
+- `incarnation`
 - `size`
 - `content_generation`
 
-缓存 value 保存文件大小、参与计算字节数、FNV-1a 指纹和短预览。重复读取同一个绑定了 Agent metadata 的真实文件时，第二次可以直接复用缓存结果。文件创建、写入、截断或删除会更新内容版本，旧缓存条目会被跳过；单纯 metadata 更新不会让同一文件内容摘要缓存失效。
+缓存 value 保存文件大小、参与计算字节数、FNV-1a 指纹和短预览。重复读取同一个绑定了 Agent metadata 的真实文件时，第二次可以直接复用缓存结果。文件创建、写入、截断或删除会改变 incarnation 或内容版本，旧缓存条目会被跳过；单纯 metadata 更新不会让同一文件内容摘要缓存失效。
 
 未绑定 Agent metadata 的普通文件不会进入 digest cache。这样做是为了避免普通文件同尺寸改写时，Agent 子系统缺少可靠内容版本信号而返回过期内容证据。缓存计数通过 `agent_info.file_digest_cache_hits` 和 `agent_info.file_digest_cache_misses` 暴露，供测试和性能材料直接引用。
 
@@ -306,6 +326,8 @@ align+analyze+report+archive
 
 `agentsecurity_ucore` 说明索引初始化前查询安全，且 recovery 只更新 selector 指定的 run。`agentfs_ucore` 说明真实文件关联、预取提示、自定义 inode、内容摘要、digest cache、`.agentmeta` reload、查询缓存、scan/index 一致性、截断查询、字段清空、删除清理和 selector 未命中都可验证。`agentscan_ucore` 说明根目录后台扫描、普通文件创建后的自动元数据和文件删除后的清理都可运行。
 
+`agentvfs_ucore` 进一步验证 public/workflow 路径隔离、普通进程不能读写或删除 workflow 工件、读写 worker 的映像 profile 上限、错误映像不能取得 pending 委派、普通 fork 不继承文件能力、继承 fd 会重新鉴权，以及 public 命名空间仍可由普通进程使用。
+
 原始输出统一见 [test-record.md](test-record.md)，测试步骤见 [testing-details.md](testing-details.md)。
 
 ## 当前限制
@@ -319,3 +341,4 @@ align+analyze+report+archive
 | 查询规模 | 当前最多 128 条元数据，最多返回 8 条 hit |
 | 内容摘要 | 当前读取最多 4096 字节计算指纹，返回短预览，不做全文索引 |
 | 预取提示 | 当前只生成 metadata 提示，提示本身不预读文件内容，不保存到磁盘 |
+| 文件安全域 | 当前实现 public 和单一 workflow 域，以及 kernel-private/root 策略；尚未提供任意数量的用户命名域或动态策略语言 |

@@ -4,15 +4,16 @@
 
 ## 验证组织方式
 
-AgentOS-uCore 的验证分三层：
+AgentOS-uCore 的验证分四层：
 
 | 层次 | 入口 | 作用 |
 | --- | --- | --- |
-| 构建检查 | `make agentos-user`、`make agentos-build` | 确认内核、用户态 ABI 和文件系统镜像能从当前源码构建。 |
-| 专项测试 | `make agentos-test` 或 `bash scripts/run-agent-tests.sh` | 在 QEMU 中逐项运行 AgentOS 测试程序。 |
-| 双目标验证 | `make dual-platform-run`、`make full-verify` | 运行普通 uCore 与 AgentOS-uCore 的同一科研平台负载，并生成对照结果。 |
+| 构建检查 | `make agentos-user`、`make agentos-build`、`make kernel-stack-check` | 确认内核、用户态 ABI 和文件系统镜像能从当前源码构建；每次生成 `build/kernel` 前都会自动执行内核栈预算检查。 |
+| AgentOS 专项测试 | `make agentos-test` 或 `bash scripts/run-agent-tests.sh` | 在 QEMU 中逐项运行 Agent 功能、权限和用户输入检查。 |
+| 资源安全复测 | `make fs-enospc-test`、`make proc-reap-test` | 在增强目标和普通 uCore 对照目标上验证文件系统耗尽、进程回收及活进程配额。 |
+| 双目标与聚合验证 | `make dual-platform-run`、`make full-verify` | 运行双目标科研平台负载，并串联宿主机、AgentOS 和进程回收检查。 |
 
-专项测试只关注根目录 AgentOS-uCore 目标。双目标验证同时使用根目录目标和 `baseline_ucore/` 普通目标，详情见 [../verification.md](../verification.md)。
+`agentos-test` 只关注根目录 AgentOS-uCore 目标；`fs-enospc-test` 和 `proc-reap-test` 同时覆盖根目录增强目标与 `baseline_ucore/` 普通目标。双目标验证详情见 [../verification.md](../verification.md)。
 
 ## 验证环境
 
@@ -78,19 +79,46 @@ bash scripts/run-agent-tests.sh
 | `labbench_ucore` | 综合场景中的性能入口，包装运行 `agentbench_ucore`。 | `labbench_ucore: parent passed` |
 | `labdemo_ucore` | 多 Agent 科研恢复场景、文件查询、预取交接、消息唤醒、权限拒绝、恢复动作、audit、timeline、provenance。 | `labdemo_ucore: parent passed` |
 | `agentsecurity_ucore` | 普通进程拒绝、低权限 Agent 伪造拒绝、`.agentmeta` 保护、scoped action/artifact、全局审计权限、基础 mail/trace。 | `agentsecurity_ucore: parent passed` |
+| `agenttrust_ucore` | 可执行映像 W^X、密封映像不可变、bootstrap 授权范围、Agent 角色与可信映像绑定。 | `agenttrust_ucore: parent passed` |
+| `agentvfs_ucore` | 工作流文件能力、公共/工作流命名空间隔离、继承描述符重新鉴权、精确能力委派和失败事务原子性。 | `agentvfs_ucore: parent passed` |
+| `usersafety_ucore` | syscall 指针、字符串、`exec` 参数、线程入口、等待队列、管道、文件和信号量输入范围。 | `usersafety_ucore: parent passed` |
 
 原始输出不在本文档重复展开，统一保存在 [test-record.md](test-record.md)。每个测试的流程和断言解释见 [testing-details.md](testing-details.md)。
+
+## 资源安全与内核栈入口
+
+文件系统耗尽复测使用极小 SFS 镜像分别触发 inode、inode cache 和数据块耗尽，要求分配失败被返回给调用者、内核继续运行且释放后资源可复用：
+
+```bash
+make fs-enospc-test TOOLPREFIX=riscv64-linux-gnu-
+```
+
+进程回收复测覆盖子进程先退出、父进程先退出、阻塞 syscall 撤销、有父僵尸隔离、资源域配额、系统保留槽及配额归还：
+
+```bash
+make proc-reap-test TOOLPREFIX=riscv64-linux-gnu-
+```
+
+内核栈使用检查由根目录和 `baseline_ucore/` 的 `build/kernel` 规则自动执行，在链接前根据编译器 callgraph 与栈帧数据核算用户陷入、嵌套中断和安全余量。也可单独执行：
+
+```bash
+make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
+make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
+```
+
+`make full-verify` 当前会串联 `run-agent-tests.sh` 和 `run-proc-reap-tests.sh`，但不会串联 `run-fs-enospc-tests.sh`；发布前必须额外执行 `make fs-enospc-test`。聚合流程中的内核构建仍会自动执行内核栈检查。
 
 ## 覆盖关系
 
 | 赛题任务 | 对应测试 |
 | --- | --- |
-| 任务一：Agent 进程与地址空间 | `agentfinal_ucore`、`agentsecurity_ucore` |
+| 任务一：Agent 进程与地址空间 | `agentfinal_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`usersafety_ucore` |
 | 任务二：结构化工具调用 | `agentfinal_ucore`、`agentbench_ucore`、`agentsecurity_ucore` |
 | 任务三：Context Path | `agentfinal_ucore`、`agentscan_ucore`、`labdemo_ucore` |
-| 任务四：文件属性查询 | `agentfs_ucore`、`agentscan_ucore`、`agentbench_ucore`、`agentconflict_ucore` |
+| 任务四：文件属性查询 | `agentfs_ucore`、`agentscan_ucore`、`agentbench_ucore`、`agentconflict_ucore`、`agentvfs_ucore` |
 | 任务五：Agent Loop | `agentloop_ucore`、`agentsched_ucore`、`agentbench_ucore`、`labdemo_ucore` |
 | 任务六：综合场景 | `labdemo_ucore`、`labbench_ucore`、`make dual-platform-run` |
+| 安全与稳健性复测 | `agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`、`make fs-enospc-test`、`make proc-reap-test`、`make kernel-stack-check` |
 
 ## 性能数据说明
 
@@ -150,6 +178,10 @@ results/latest/
 | 某个专项测试失败 | [testing-details.md](testing-details.md) 中对应测试流程 |
 | 双目标状态不一致 | [../verification.md](../verification.md) 的双目标验证章节 |
 | 页面或图表缺失 | `host_tools/test_*.py` 和 `results/latest/` |
+
+## 当前验证状态
+
+本文不把当前 `make full-verify` 记录为全绿。最近一次聚合入口在 `host_tools/test_plain_ucore_reader_e2e.py` 的 API Catalog 页面断言处中止：生成页面缺少预期文本 `Reader GET Routes`。该宿主机 Reader E2E 失败发生在后续 QEMU 阶段之前，因此不能用这次运行推断后续专项均已执行；各专项结果应以对应脚本的独立输出和通过标记为准。
 
 ## 当前范围说明
 

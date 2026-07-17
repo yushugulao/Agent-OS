@@ -503,7 +503,7 @@ doc_pattern="${bad_matrix}|${bad_loop}|${bad_scope}|${bad_regression}|${bad_reco
 reject_text "README.md" "${doc_pattern}" "root README contains forbidden or sensitive wording"
 reject_text "docs" "${doc_pattern}" "root docs contain forbidden or sensitive wording"
 
-echo "[dual-target-check] baseline kernel: clean"
+echo "[dual-target-check] baseline AgentOS surface: absent"
 echo "[dual-target-check] AgentOS kernel: present"
 echo "[dual-target-check] platform source coverage: ${plain_source_count} baseline rp sources mirrored"
 echo "[dual-target-check] platform app coverage: ${plain_platform_count} build-list apps mirrored"

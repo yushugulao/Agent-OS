@@ -21,7 +21,7 @@ make build TOOLPREFIX=riscv64-linux-gnu- LOG=warn INIT_PROC=agentfinal_ucore
 
 结果：通过。
 
-## 完整脚本
+## AgentOS 专项脚本
 
 执行：
 
@@ -29,7 +29,7 @@ make build TOOLPREFIX=riscv64-linux-gnu- LOG=warn INIT_PROC=agentfinal_ucore
 bash scripts/run-agent-tests.sh
 ```
 
-结果：通过。脚本依次运行 `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentconflict_ucore`、`agentllm_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`，均找到对应 `parent passed` 标记，且日志中没有 `check failed`、`panic` 或 `unknown syscall`。
+独立专项记录：脚本依次运行 `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentconflict_ucore`、`agentllm_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`。专项运行要求每个程序在超时前输出 `parent passed`，且日志中不存在 `check failed`、`panic`、`unknown syscall`、`bad addr`、`IllegalInstruction` 或 `child_failed`。该记录不等于 `make full-verify` 全绿，聚合入口的已知状态见文末。
 
 ## 输出提取方式
 
@@ -57,6 +57,12 @@ bash scripts/run-agent-tests.sh
 | `agentbench_ucore` | `batch_agent_run`、`file_index_query`、`timeline_query_prefetch` | 性能主路径和文件索引/Timeline 查询可观测 |
 | `labdemo_ucore` | `type=INCIDENT_CREATED`、`prefetch_handoff=analyze`、`provenance_graph edges=...` | 设定的模拟流程 多 Agent 恢复场景可复现 |
 | `agentsecurity_ucore` | `plain_process_denied=1`、`wake_event_authorization=1`、`sentinel spoof_denied=1` | 系统事件防伪、权限限制和多 run 定向写入可验证 |
+| `agenttrust_ucore` | `wx_image=1`、`immutable_image=1`、`role_image_binding=1` | W^X、可信映像不可变和 Agent 角色映像绑定可验证 |
+| `agentvfs_ucore` | `inherited_fd_revalidated=1`、`protected_paths=1` | 普通 VFS 路径不能绕过文件能力，继承描述符会按当前凭据重新鉴权 |
+| `usersafety_ucore` | `live after pointer bounds`、`live after directed wakeup`、`parent passed` | syscall 输入检查、定向唤醒和失败事务回滚可验证 |
+| `fsenospc_ucore` | `inode exhaustion survived`、`block exhaustion survived` | inode、inode cache 与数据块耗尽返回失败而非触发内核 panic |
+| `procreap_ucore` / `procreap_agent_ucore` | `live-domain-limit=1`、`reserved-agent-slot=1` | 进程回收、资源域配额与系统保留槽可验证 |
+| 内核栈预算 | `kernel stack budget`、`kernel stack user path` | 构建期 callgraph/栈帧预算检查随内核构建执行 |
 
 ## 样例输出：agentfinal_ucore
 
@@ -116,7 +122,7 @@ agentfs_ucore: passed
 agentfs_ucore: parent passed
 ```
 
-结论：文件元数据可绑定真实根目录文件 inode，查询结果包含 `dev`、`inum`、`size`；用户态写入的 align 元数据查询后会产生后续 label metadata 预取提示；用户态也可通过 `dependency_update` 显式注册通用对象依赖，再用 `dependency_query` 读取；自定义 metadata 可从私有 `.agentmeta` 重新加载；真实文件内容摘要可以被缓存，改写文件后旧 digest 缓存不会返回过期内容；内容摘要工具调用会进入统一 timeline，页面可按 `tool_id=20` 读取 size、bytes、hash 和 preview；接近 128 条记录时 scan/index 的 `scanned_records` 差异可见；query plan 能说明索引路径按 status 索引选择 bucket 15 并检查 6 条候选记录；重复查询会命中同一 `fs_generation` 下的结果缓存，属性更新后旧缓存不会返回过期结果；属性清空、文件删除同步和不存在 selector 返回 `NOT_FOUND` 均通过。
+结论：文件元数据可绑定真实根目录文件；查询结果携带 `dev`、`inum`、`incarnation`、`size`，其中安全绑定、缓存与编辑版本以 `dev + inum + incarnation` 区分 inode 的不同生命周期，样例日志输出可见的 inode 和大小字段。用户态写入的 align 元数据查询后会产生后续 label metadata 预取提示；用户态也可通过 `dependency_update` 显式注册通用对象依赖，再用 `dependency_query` 读取；自定义 metadata 可从私有 `.agentmeta` 重新加载；真实文件内容摘要可以被缓存，改写文件后旧 digest 缓存不会返回过期内容；内容摘要工具调用会进入统一 timeline，页面可按 `tool_id=20` 读取 size、bytes、hash 和 preview；接近 128 条记录时 scan/index 的 `scanned_records` 差异可见；query plan 能说明索引路径按 status 索引选择 bucket 15 并检查 6 条候选记录；重复查询会命中同一 `fs_generation` 下的结果缓存，属性更新后旧缓存不会返回过期结果；属性清空、文件删除同步和不存在 selector 返回 `NOT_FOUND` 均通过。
 
 ## 样例输出：agentscan_ucore
 
@@ -153,7 +159,8 @@ agentloop_ucore: parent passed
 
 ```text
 agentsched_ucore: adaptive Agent scheduler test
-agentsched_ucore: role_weights sentinel=70 investigator=90 recovery=120 orchestrator=110
+agentsched_ucore: normal_progress=1 max_agent_burst=8
+agentsched_ucore: role_weights sentinel=70 investigator=90 recovery=120 artifact=100 orchestrator=110
 agentsched_ucore: configurable_policy=1 weight=150 priority=20 budget=3
 agentsched_ucore: event_priority=1 dispatch=6 event_dispatch=1
 agentsched_ucore: reason_trace=1 records=6 reason=131 score=1655
@@ -162,7 +169,7 @@ agentsched_ucore: passed
 agentsched_ucore: parent passed
 ```
 
-结论：不同 Agent 角色拥有不同调度权重；orchestrator 可配置目标 Agent 的 weight、priority 和 budget，非授权调用会被拒绝；有待消费事件的 Agent 会被调度器记录为事件相关调度；最近调度记录可通过 `agent_sched_snapshot()` 查询，并包含事件队列、角色权重、配置优先级、分数、事件数量等原因字段；反复让出处理器后，调度次数、让出处理器次数和虚拟运行量计数均会增长。
+结论：不同 Agent 角色拥有不同调度权重；连续 Agent 调度达到 8 次硬上限后普通任务获得进展。orchestrator 可配置目标 Agent 的 weight、priority 和 budget，非授权调用会被拒绝；有待消费事件的 Agent 会被调度器记录为事件相关调度；最近调度记录可通过 `agent_sched_snapshot()` 查询，并包含事件队列、角色权重、配置优先级、分数、事件数量等原因字段；反复让出处理器后，调度次数、让出处理器次数和虚拟运行量计数均会增长。
 
 ## 样例输出：agentconflict_ucore
 
@@ -319,6 +326,126 @@ agentsecurity_ucore: parent passed
 
 结论：内核加载的可信初始进程是唯一 bootstrap 创建授权根；授权留在内核 PCB 中并与业务 capability 分离，不扩展未版本化的 `agent_info` ABI。普通 `fork`、普通子进程 `exec`、orchestrator 的普通 `fork` 以及可信根自身 `exec` 均不会传播或保留创建权，已回收 Agent 进程槽再次用于普通进程时也不残留身份、能力或 Context；只有 orchestrator 能委派角色，sentinel、investigator 和 recovery 无法继续创建任何 Agent。普通进程原有 mail 路径仍可用，既有能力隔离、legacy 参数校验、sentinel 防伪造以及 recovery 定向幂等更新均通过。
 
+## 样例输出：agenttrust_ucore
+
+```text
+agenttrust_ucore: executable trust test
+agenttrust_ucore: wx_image=1
+agenttrust_ucore: immutable_image=1
+agenttrust_ucore: bootstrap_role_boundary=1
+agenttrust_ucore: trusted_agent_exec=1
+agenttrust_ucore: role_image_binding=1
+agenttrust_ucore: parent passed
+```
+
+结论：数据页不可执行、代码页不可写；策略清单标记的可信映像不能被写入、截断、覆盖创建或删除。bootstrap 授权不能任意创建其他角色，orchestrator 角色只在执行与其绑定的可信映像时保留；错误角色映像和普通复制出的未可信映像不能继承该身份。该机制的可信根是构建期策略清单与密封 inode 元数据，不应表述为密码学签名或运行时哈希认证。
+
+## 样例输出：agentvfs_ucore
+
+```text
+agentvfs_ucore: filesystem capability test
+agentvfs_probe: sealed_exec_no_elevation=1
+agentvfs_probe: cross_image_attenuated=1
+agentvfs_probe: failed_open_atomic=1
+agentvfs_probe: wrong_first_exec_attenuated=1
+agentvfs_ucore: inherited_fd_revalidated=1
+agentvfs_ucore: protected_paths=1
+agentvfs_ucore: parent passed
+```
+
+结论：公共文件与工作流受保护文件可以同名存在且互不覆盖；普通进程和无文件能力的 Agent 不能借 `open/read/write/unlink` 绕过授权，investigator 只有读权限。普通 `fork()` 会降权，继承的已打开描述符也会在使用时按当前凭据重新鉴权。普通进程可以执行布局有效的 worker 映像，但不会因此提权；orchestrator 的 worker 委派受 immutable/domain-safe 映像属性、VFS profile 能力上限和精确 inode 绑定共同约束。失败的创建/截断意图在文件系统发生变更前返回。文件安全身份以 `dev + inum + incarnation` 区分 inode 生命周期。
+
+## 样例输出：usersafety_ucore
+
+```text
+usersafety_ucore: syscall boundary verification
+usersafety_ucore: live after pointer bounds
+usersafety_ucore: live after string bounds
+usersafety_ucore: live after exec argv bounds
+usersafety_ucore: live after thread boundaries
+usersafety_ucore: live after directed wakeup
+usersafety_ucore: live after pipe buffers
+usersafety_ucore: live after wait copyout
+usersafety_ucore: live after time copyout
+usersafety_ucore: live after fd directions
+usersafety_ucore: live after file rollback
+usersafety_ucore: live after semaphore inputs
+usersafety_ucore: live after failed exec transaction
+usersafety_ucore: exec child passed
+usersafety_ucore: live after successful exec transaction
+usersafety_ucore: parent passed
+```
+
+结论：非法指针、跨页缓冲区、未终止字符串、过量 `exec` 参数和非法线程入口均沿统一用户地址校验路径失败；定向唤醒不会被无关子进程退出干扰。管道临时引用、`wait`/时间 copyout、文件描述符方向、fd 槽不足时打开既有文件或创建 pipe 的引用回滚，以及信号量计数范围均有负向覆盖；失败的 `exec` 不破坏旧地址空间，成功 `exec` 完成事务切换。
+
+## 专项输出：文件系统 ENOSPC
+
+执行：
+
+```bash
+make fs-enospc-test TOOLPREFIX=riscv64-linux-gnu-
+```
+
+两类目标均需出现以下程序标记，脚本最后再输出双目标标记：
+
+```text
+fsenospc_ucore: inode exhaustion survived
+fsenospc_ucore: inode cache exhaustion survived
+fsenospc_ucore: block exhaustion survived
+fsenospc_ucore: parent passed
+[fs-enospc] both targets passed
+```
+
+结论：磁盘 inode、内存 inode cache 和数据块耗尽均通过正常错误返回或短写报告，未转化为全内核 panic；释放资源后可以重新分配。此测试单独覆盖 AgentOS-uCore 与 `baseline_ucore/`，但当前没有被 `make full-verify` 串联。
+
+## 专项输出：进程回收与配额
+
+执行：
+
+```bash
+make proc-reap-test TOOLPREFIX=riscv64-linux-gnu-
+```
+
+关键输出：
+
+```text
+procreap_ucore: process lifecycle verification
+procreap_ucore: wait-queue cancellation passed
+procreap_ucore: unreaped-parent-isolated=1
+procreap_ucore: live-domain-limit=1
+procreap_ucore: lineage-bypass-denied=1
+procreap_ucore: live-quota-returned=1
+procreap_ucore: peer-domain-isolated=1
+procreap_ucore: parent passed
+procreap_agent_ucore: bounded teardown scheduling
+procreap_agent_ucore: child-pressure-isolated=1
+procreap_agent_ucore: reserved-agent-slot=1
+procreap_agent_ucore: adversarial-agent=1
+procreap_agent_ucore: parent passed
+[proc-reap] both targets passed
+```
+
+结论：普通生命周期测试在增强目标和对照目标运行，adversarial Agent 测试在增强目标运行。覆盖阻塞 syscall 撤销、等待队列定向取消、拒绝 `wait()` 的父进程隔离、活进程资源域配额、谱系绕过拒绝、配额归还、同级域隔离、Agent 系统保留槽和高压退出调度。`make full-verify` 会调用该脚本，但只有聚合流程实际执行到该阶段才能据此记为通过。
+
+## 专项输出：内核栈预算
+
+独立命令：
+
+```bash
+make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
+make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
+```
+
+成功输出包含三类记录：
+
+```text
+kernel stack budget: user=... interrupt=... margin=... required=... limit=...
+kernel stack user path: ...
+kernel stack interrupt path: kernelvec -> ...
+```
+
+结论：该检查不是只在上述独立命令运行。根目录和 `baseline_ucore/` 的 `build/kernel` 都会在链接前执行同一脚本；预算超限、未建模递归/间接调用或超大单帧会直接使构建失败。运行时不可映射 guard page 与 canary 提供第二层防护。
+
 ## 基础兼容抽测：ch3_trace
 
 执行：
@@ -347,3 +474,9 @@ Test trace OK!
 - 仓库内容未包含敏感凭据字符串；
 - 仓库内容没有旧版内核关键字；
 - 仓库内容没有旧版目录或旧测试入口残留。
+
+## 当前聚合验证状态
+
+当前不记录 `make full-verify` 全绿。最近一次运行在宿主机 Reader E2E 阶段中止：`host_tools/test_plain_ucore_reader_e2e.py` 断言 API Catalog 页面应包含 `Reader GET Routes`，而实际页面缺少该文本。由于脚本使用 `set -eu`，该失败发生后不会继续运行双目标 QEMU、AgentOS 专项和进程回收阶段。
+
+因此，上述安全专项应按各自独立脚本和通过标记记录；`fs-enospc-test` 还必须始终单独执行，因为 `run-full-verification.sh` 当前没有调用它。后续修复 Reader 页面或测试契约后，应重新运行完整入口，再更新本节状态。

@@ -14,6 +14,9 @@ AgentOS-uCore 当前实现不是只做“能创建一个特殊进程”的最小
 - user mirror 高速读取镜像；
 - cause/span 因果链状态；
 - 用户自管 Context cache；
+- 构建期可信映像清单、角色与可执行 inode 绑定；
+- 代码 RX、数据/栈/Context RW+NX 的用户映像布局；
+- 面向非 Agent workflow worker 的最小文件能力委派；
 - Agent 退出释放；
 - 与后续任务二至五共用的状态字段。
 
@@ -23,9 +26,10 @@ AgentOS-uCore 当前实现不是只做“能创建一个特殊进程”的最小
 | --- | --- |
 | `agent_create()` | 在当前 role grant 允许时创建 sentinel Agent 子进程，保留兼容入口 |
 | `agent_create_role(int role)` | 在当前 role grant 允许时创建指定角色 Agent 子进程；与兼容入口共用授权机制 |
+| `agent_worker_create(const char *image, uint64 capabilities)` | 由 orchestrator 创建绑定到指定 immutable、domain-safe 映像的非 Agent workflow worker；只委派受映像 profile 限制的文件能力 |
 | `agent_info(struct agent_info *)` | 查询当前进程的 Agent 状态、Agent ID、Agent Context、配额、Loop 状态和路径元信息 |
 
-当前任务一能力由 `agentfinal_ucore`、`labdemo_ucore` 和 `agentsecurity_ucore` 共同验证，覆盖 Agent 创建、Context 映射、多个 Agent 并存、角色能力绑定和退出路径。
+当前任务一能力由 `agentfinal_ucore`、`labdemo_ucore`、`agentsecurity_ucore`、`agenttrust_ucore` 和 `agentvfs_ucore` 共同验证，覆盖 Agent 创建、Context 映射、多个 Agent 并存、角色能力绑定、可信 exec、非 Agent worker 和退出路径。
 
 ## 进程元数据
 
@@ -66,8 +70,10 @@ AgentOS-uCore 当前实现不是只做“能创建一个特殊进程”的最小
 | `last_heartbeat_tick` | 最近心跳 tick |
 | `current_tick` | `agent_info()` 返回时的内核 Agent tick，供 timeline 等待建立未来记录过滤条件 |
 | `capability_mask` | 当前 Agent 能力位，由内核按 `agent_role` 分配 |
+| `filesystem_domain` | 当前进程所在的 VFS 安全域；普通进程位于 public 域，受权 Agent/worker 位于 workflow 域 |
+| `filesystem_capability_mask` | 当前映像实际生效的 `CONTENT_READ` / `ARTIFACT_WRITE` 文件能力；它与 Agent 业务 capability 分开管理 |
 
-普通进程的 `is_agent` 为 0，`agent_id` 为 0，且不会安装 Agent metadata 或 Agent Context 特殊映射。普通进程调用 Agent-only syscall 时会返回错误。
+普通进程的 `is_agent` 为 0，`agent_id` 为 0，且不会安装 Agent metadata 或 Agent Context 特殊映射。普通进程调用 Agent-only syscall 时会返回错误。受权 workflow worker 也保持 `is_agent == 0`，只通过独立的文件系统域和 capability 执行普通 `open/read/write` 操作，不能调用 Agent-only 接口。
 
 ## 地址空间设计
 
@@ -81,7 +87,7 @@ Agent Context 使用固定高地址用户虚拟区：
 | 权限 | 用户态镜像可读写，不可执行 |
 | 记录容量 | 128 条 |
 
-这个权限说明只针对 Agent Context 特殊页。普通用户程序页仍由 uCore flat binary loader 按基底方式映射，当前不声明完整用户程序 W^X。
+用户程序仍使用 flat binary 内容，但 mkfs 会从配套 ELF 提取只读可执行段与可写段的页对齐分界点，并把布局版本和 `exec_rw_offset` 写入 inode。AgentOS loader 校验该布局后把代码页映射为 RX，把数据、bss 和用户栈映射为 RW+NX；Agent Context 镜像页同样是 RW+NX。布局缺失、分界点非法或同时要求写和执行的映像不会被装载。
 
 该区域位于 trapframe 下方，只有 Agent 进程在创建时安装 Agent Context 特殊映射。内核在 `struct proc` 中保存 6 个用户镜像页地址和 6 个 shadow 权威页地址，写 header、latest result 和 Context Path record 时先写内核 shadow 页，再同步到用户镜像页。
 
@@ -114,7 +120,13 @@ sequenceDiagram
     K-->>P: 返回子进程 pid
 ```
 
-子进程从 `agent_create()` 或 `agent_create_role()` 返回 0 后继续执行用户代码，并可以立即调用 `agent_info()`、`agent_run()`、`context_snapshot()` 等 Agent syscall。可信启动根由 loader 显式授予 bootstrap grant；普通 fork 不继承，普通 exec 会撤销，Agent 子进程只获得其角色策略定义的可委派集合。
+子进程从 `agent_create()` 或 `agent_create_role()` 返回 0 后继续执行用户代码，并可以立即调用 `agent_info()`、`agent_run()`、`context_snapshot()` 等 Agent syscall。可信启动根不是按 PID 或文件名识别：`user/include/exec_policy_manifest.h` 集中登记安装映像、可信/不可变/启动标志、允许角色和 VFS profile，mkfs 把策略写入 inode，loader 只在首次装载带 bootstrap 标志的可信映像时授予清单允许的 grant。普通 fork 不继承 grant；普通进程 exec 会撤销 grant，而且之后执行清单中的 bootstrap 映像也不会重新获得启动授权。Agent exec 还必须执行允许当前角色的可信 inode。
+
+### 受控 workflow worker
+
+`agent_worker_create(image, capabilities)` 与 Agent 创建接口共享进程返回约定，但不会设置 Agent 身份、角色或 Context。它只允许具备 `ORCHESTRATE` 的 Agent 调用，能力只能从 `CONTENT_READ` 和 `ARTIFACT_WRITE` 中选择，并同时受父进程业务能力、父进程 VFS effective capability 和目标映像 profile 上限约束。
+
+worker 映像不使用 Agent 的 `TRUSTED` role-image 身份。mkfs 为布局有效的程序生成 immutable、domain-safe worker 别名和 VFS profile；权限来自 orchestrator 通过 `agent_worker_create()` 建立的精确委派。委派在创建时绑定到目标 inode 的 `dev + inum + incarnation`，子进程随后必须成功 `exec()` 完全相同的 worker 映像才能安装 workflow 凭据。执行其他映像会清除 pending 委派。普通 fork 不继承 workflow 凭据；即使文件描述符由父进程复制给子进程，后续 `read/write` 仍按当前进程凭据重新鉴权，不能把已打开的 fd 当作能力票据。
 
 ## 释放流程
 
@@ -124,14 +136,15 @@ Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 
 
 `agentfinal_ucore` 中的任务一验证路径：
 
-1. 内核装载的可信父进程使用 bootstrap grant 调用 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)`。
-2. 子进程调用 `agent_info()`。
-3. 子进程确认 `is_agent == 1`。
-4. 子进程确认 `agent_role == AGENT_ROLE_ORCHESTRATOR`，且 capability mask 包含 `META_WRITE` 和 `ORCHESTRATE`。
-5. 子进程确认 Context base 和 size 与 ABI 常量一致。
-6. 子进程直接读取 Agent Context header。
-7. 子进程执行后续工具调用和 Context 测试。
-8. 父进程等待子进程退出并检查状态。
+1. 内核首次装载清单中带 bootstrap 标志且允许 orchestrator 的可信父映像，按 inode 策略建立启动 grant。
+2. 可信父进程使用 bootstrap grant 调用 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)`。
+3. 子进程调用 `agent_info()`。
+4. 子进程确认 `is_agent == 1`。
+5. 子进程确认 `agent_role == AGENT_ROLE_ORCHESTRATOR`，且 capability mask 包含 `META_WRITE` 和 `ORCHESTRATE`。
+6. 子进程确认 Context base 和 size 与 ABI 常量一致。
+7. 子进程直接读取 Agent Context header。
+8. 子进程执行后续工具调用和 Context 测试。
+9. 父进程等待子进程退出并检查状态。
 
 `labdemo_ucore` 进一步覆盖多个 Agent 并存的运行方式。可信 init 只创建 orchestrator，orchestrator 再显式委派：
 
@@ -140,6 +153,8 @@ Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 
 - sentinel。
 
 三个 Agent 都输出自己的 role、pid 和 Context 地址。Context 地址是同一个用户虚拟地址，但每个 Agent 对应不同物理页。
+
+角色策略还定义了 `AGENT_ROLE_ARTIFACT`，它具备 metadata/content 读取、消息、watch、artifact 写入和审计写入能力，但没有恢复动作或角色委派权限。科研平台可让它承担报告、工作台和打包等工件处理，而不必把这些程序提升为 orchestrator。
 
 ## 当前扩展
 
@@ -151,14 +166,17 @@ Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 
 - cause/span 因果链元信息；
 - 事件统计和心跳字段；
 - capability mask；
+- Artifact 角色与独立 VFS effective capability；
+- 清单驱动的可信映像和角色绑定；
+- 非 Agent workflow worker 委派；
 - 与任务四、五、六共享的 Agent 状态。
 
 ## 已知限制
 
 | 限制项 | 说明 |
 | --- | --- |
-| Agent 创建参数 | `agent_create()` 保持最低权限 sentinel 兼容入口；复杂配额和自定义能力仍未开放给用户态 |
-| Agent exec 场景 | 当前最终测试不把 exec 作为主验收入口 |
+| Agent 创建参数 | `agent_create()` 保持最低权限 sentinel 兼容入口；Agent 角色能力仍由内核策略定义，不允许用户态任意组合。非 Agent worker 只能在映像 profile 上限内请求两类文件能力 |
+| Agent exec 场景 | Agent 只能执行清单允许其当前角色的可信映像；`agenttrust_ucore` 覆盖正确角色映像成功、错误角色和普通复制映像失败 |
 | 长期资源统计 | 当前统计足够支撑测试和示例，未做完整平台级资源审计 |
 
 ## 验证证据
@@ -169,3 +187,5 @@ Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 
 | --- | --- |
 | `agentfinal_ucore` | Context 大小、Context 容量、父子进程退出状态、普通进程隔离和 Agent Context 映射可用。 |
 | `labdemo_ucore` | orchestrator、recovery、investigator、sentinel 多个 Agent 能同时创建；它们使用相同虚拟 Context 地址，但对应不同物理页和角色能力。 |
+| `agenttrust_ucore` | 代码 RX、数据 RW+NX，可信映像不可改写，Agent exec 的角色与可信 inode 绑定，普通复制映像不能继承信任。 |
+| `agentvfs_ucore` | 非 Agent worker 只取得显式委派且不超过映像 profile 的文件能力，普通 fork/exec 和继承 fd 不能扩权。 |

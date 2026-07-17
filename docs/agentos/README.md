@@ -12,14 +12,16 @@
 | 2 | [design.md](design.md) | 主设计文档：架构、模块、运行视图、关键决策、当前范围和取舍 |
 | 3 | [requirements-traceability.md](requirements-traceability.md) | 赛题要求到实现位置、测试证据和文档材料的对应表 |
 | 4 | [api.md](api.md) | 系统调用、Agent ABI、工具协议和错误语义 |
-| 5 | [verification.md](verification.md) | 验证计划、测试场景、测试覆盖表、性能数据摘要 |
-| 6 | [testing-details.md](testing-details.md) | `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore` 和 `agentsecurity_ucore` 的逐项测试说明 |
-| 7 | [scenario-script.md](scenario-script.md) | 综合场景运行脚本 |
+| 5 | [security-hardening.md](security-hardening.md) | 安全威胁、可信执行、文件安全域、生命周期和资源韧性设计 |
+| 6 | [verification.md](verification.md) | 验证计划、测试场景、测试覆盖表、性能数据摘要 |
+| 7 | [testing-details.md](testing-details.md) | Agent 功能、可信映像、VFS、安全约束、资源耗尽和进程生命周期测试的逐项说明 |
+| 8 | [scenario-script.md](scenario-script.md) | 综合场景运行脚本 |
 
 ## 详细附录
 
 | 文档 | 定位 |
 | --- | --- |
+| [security-hardening.md](security-hardening.md) | 全部安全修复的威胁模型、机制总表、双目标分工、可信程序注册和安全专项测试入口 |
 | [task1-agent-process.md](task1-agent-process.md) | 任务一 Agent 进程与地址空间设计细节 |
 | [task2-agent-call.md](task2-agent-call.md) | 任务二结构化工具调用设计细节 |
 | [task3-context-path.md](task3-context-path.md) | 任务三 Context Path、运行轨迹、cause/span 因果字段、用户自管 cache、统一 timeline 导出、timeline 过滤查询、timeline 等待、wait-and-read、游标增量读取和 provenance edge 设计细节 |
@@ -37,6 +39,7 @@
 
 - 主设计事实以 [design.md](design.md) 为准，分任务文档只展开实现细节。
 - 用户态/内核态接口分工和结构体布局以 [api.md](api.md) 为准。
+- 通用安全修复与 AgentOS 专属安全机制的分工以 [security-hardening.md](security-hardening.md) 为准。
 - 赛题完成度判断以 [requirements-traceability.md](requirements-traceability.md) 和 [verification.md](verification.md) 共同为准。
 - 新增功能需要同步更新对应设计说明、API/ABI、验证记录和示例脚本。
 - `test-record.md` 保留测试输出摘要，不替代验证结论。

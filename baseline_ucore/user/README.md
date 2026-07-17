@@ -1,6 +1,6 @@
 # 用户程序目录说明：uCore
 
-本目录保留 uCore 教学内核的用户态测试和本项目 plain target 的科研 Agent 平台程序。根目录 plain target 不修改 `os/` 内核，科研平台通过这里的普通用户程序运行。
+本目录保留 uCore 教学内核的用户态测试和本项目 plain target 的科研 Agent 平台程序。该目标与主目标共享 syscall、同步、文件系统和进程生命周期等通用安全加固，但不包含 AgentOS syscall、Context、capability 或事件服务；科研平台通过这里的普通用户程序运行。
 
 ## 基础用法
 
@@ -20,7 +20,7 @@ make CHAPTER=5 BASE=1
 
 `BASE` 表示是否只生成基础测试：
 
-- `BASE=1`：只生成未改动 uCore 即可处理的基础测试，名称通常带有 `chxb_` 前缀。
+- `BASE=1`：只生成基础 uCore ABI 可处理的教学测试，名称通常带有 `chxb_` 前缀。
 - `BASE=0`：生成该章节的全部测试程序。
 - 默认值为 `0`。
 

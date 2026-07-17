@@ -63,8 +63,11 @@ make full-verify TOOLPREFIX=riscv64-linux-gnu-
 - 宿主机科研 Agent 平台测试主题对齐检查；
 - 宿主机 Web/API/action 规模检查；
 - 状态渲染与 API JSON 检查；
-- 未改动 uCore 平台和 AgentOS-uCore 平台的 QEMU 运行；
-- AgentOS 内核专项测试。
+- 共享基础安全加固、不含 AgentOS 扩展的 uCore 对照平台和 AgentOS-uCore 平台的 QEMU 运行；
+- AgentOS 内核专项测试；
+- 主目标、Agent 对抗场景和 baseline 的进程生命周期复测。
+
+文件系统 ENOSPC 和显式内核栈预算检查保留独立入口，分别运行 `make fs-enospc-test` 和 `make kernel-stack-check`；每次内核构建也会自动执行栈预算分析。
 
 期望最后看到：
 
@@ -163,7 +166,7 @@ bash scripts/verify-dual-target-structure.sh
 期望关键标记：
 
 ```text
-[dual-target-check] baseline kernel: clean
+[dual-target-check] baseline AgentOS surface: absent
 [dual-target-check] AgentOS kernel: present
 [dual-target-check] platform source coverage: 73 baseline rp sources mirrored
 [dual-target-check] platform app coverage: 71 build-list apps mirrored
@@ -172,6 +175,8 @@ bash scripts/verify-dual-target-structure.sh
 [dual-target-check] platform runners: present
 [dual-target-check] docs: wording scan passed
 ```
+
+这里的 `baseline AgentOS surface: absent` 只表示结构检查没有在 baseline 中发现 Agent syscall、Agent Context、Agent 文件 metadata 或 Agent 事件服务，不表示 `baseline_ucore/` 与上游 uCore 源码逐字相同。baseline 与主目标共享 syscall、同步、文件系统和进程生命周期等通用安全加固。
 
 运行：
 
@@ -212,7 +217,7 @@ reader_output_check: pages=40 api_json=280 state_files=273 required_pages=6 spec
 dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=260 agentos_state_files=273 agentos_extra_state_files=13 plain_api_json=267 agentos_api_json=280 agentos_extra_api_json=13 checked_pages=40 checked_api_json=267 status=ready
 ```
 
-这条命令的意义是：用同一批 seeded 请求分别运行未改动 uCore 目标和 AgentOS-uCore 目标，并检查两个目标是否实际跑完同一批科研平台程序、围绕同一设定的模拟流程输出可比较结果。该流程包含数据准备、比对处理、结果分析、报告生成和归档交付；脚本会从两个文件系统镜像中提取 `rp_*` 状态文件，并执行状态文件对照：plain target 产出的状态文件必须全部能在 AgentOS target 中找到；plain target 已经标记为 `ready`、`passed` 或 `ok` 的记录，AgentOS target 必须保留相同记录标识和成功状态。AgentOS target 可以额外增加内核证据文件和内核观测字段，并且 `rp_agentos_mainflow` 必须按平台程序执行顺序写入 11 个内核参与阶段、覆盖 12 类内核事实。随后脚本会把两个目标的真实状态文件交给状态渲染工具，检查 HTML 和 API JSON 能否从同一批 `rp_*` 文件生成，并确认 AgentOS 目标多出的 Context、metadata、事件、ledger、真实任务和文件编辑租约字段可被读取。最后比较渲染摘要，确认两个目标生成同一套结果入口，AgentOS target 的状态产物和 API JSON 不少于 plain target，并直接输出 `agentos_extra_state_files` 与 `agentos_extra_api_json` 说明增强目标多出的内核证据规模。
+这条命令的意义是：用同一批 seeded 请求分别运行共享安全基底的 uCore 对照目标和 AgentOS-uCore 目标，并检查两个目标是否实际跑完同一批科研平台程序、围绕同一设定的模拟流程输出可比较结果。该流程包含数据准备、比对处理、结果分析、报告生成和归档交付；脚本会从两个文件系统镜像中提取 `rp_*` 状态文件，并执行状态文件对照：plain target 产出的状态文件必须全部能在 AgentOS target 中找到；plain target 已经标记为 `ready`、`passed` 或 `ok` 的记录，AgentOS target 必须保留相同记录标识和成功状态。AgentOS target 可以额外增加内核证据文件和内核观测字段，并且 `rp_agentos_mainflow` 必须按平台程序执行顺序写入 11 个内核参与阶段、覆盖 12 类内核事实。随后脚本会把两个目标的真实状态文件交给状态渲染工具，检查 HTML 和 API JSON 能否从同一批 `rp_*` 文件生成，并确认 AgentOS 目标多出的 Context、metadata、事件、ledger、真实任务和文件编辑租约字段可被读取。最后比较渲染摘要，确认两个目标生成同一套结果入口，AgentOS target 的状态产物和 API JSON 不少于 plain target，并直接输出 `agentos_extra_state_files` 与 `agentos_extra_api_json` 说明增强目标多出的内核证据规模。两侧共有的通用安全加固不是本组对照的 AgentOS 增量。
 
 ## 结果产物和图表
 
@@ -411,6 +416,27 @@ python host_tools/test_plain_ucore_reader_e2e.py
 - API JSON 可以解析，关键字段和状态文件保持一致；
 - 状态渲染工具只读取 QEMU 产物，不替代内核专项测试。
 
+## 安全与资源专项复测
+
+安全修复按机制约束分别验证，不能只用结构扫描或科研平台页面代替：
+
+```bash
+# Agent 权限、可信映像、VFS 域、调度公平和 syscall 用户输入防护
+bash scripts/run-agent-tests.sh
+
+# 主目标、Agent 对抗场景和 baseline 的退出、等待、回收与进程域配额
+make proc-reap-test TOOLPREFIX=riscv64-linux-gnu-
+
+# 两个目标的 inode、inode cache 和 block 耗尽恢复
+make fs-enospc-test TOOLPREFIX=riscv64-linux-gnu-
+
+# 16 KiB 内核栈、4 KiB guard 和构建期调用图预算
+make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
+make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
+```
+
+`run-agent-tests.sh` 中的 `agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore` 和 `usersafety_ucore` 分别覆盖事件与角色授权、可信映像和 W^X、普通 VFS 绕过及坏用户指针。`run-proc-reap-tests.sh` 覆盖定向取消、阻塞 syscall 临时引用释放、孤儿回收、child record、长存活 fork bomb 和 Agent 保留槽。`make full-verify` 已串联 Agent 与进程生命周期测试，但没有串联 ENOSPC 专项；内核栈预算在每次 kernel build 时自动执行，也可用以上命令单独复现。完整机制和失败语义见 [agentos/security-hardening.md](agentos/security-hardening.md)。
+
 ## 内核机制说明
 
 功能呈现应和内核实现对应起来。以下七项按赛题要求整理，便于检查设计是否落在真实内核路径上。
@@ -431,13 +457,13 @@ python host_tools/test_plain_ucore_reader_e2e.py
 
    代码位置：`baseline_ucore/os/vm.c`、`baseline_ucore/os/proc.c`、`baseline_ucore/os/loader.c`、`baseline_ucore/os/trap.c`、`os/agent.c`。
 
-   相关处理：syscall 访问用户地址时使用 `copyin()`、`copyout()`、`copyinstr()`；`uvmcopy()` 服务 `fork()`；`exec()` 替换地址空间。增强目标中，Agent Context 的可信历史由内核 shadow 状态维护，用户可见镜像不能伪造可信记录。
+   相关处理：syscall 访问用户地址时使用 `copyin()`、`copyout()`、`copyinstr()`；`uvmcopy()` 服务 `fork()`；`exec()` 替换地址空间。增强目标按可信映像布局建立 RX 代码页、RW+NX 数据页；Agent Context 的可信历史由内核 shadow 状态维护，用户可见镜像不能伪造可信记录。
 
 4. 文件系统、目录、文件描述符、pipe、设备文件和文件抽象。
 
    代码位置：`os/fs.c`、`os/file.c`、`os/pipe.c`、`os/console.c`、`os/virtio_disk.c`。
 
-   相关处理：plain target 的科研状态都通过普通文件保存，覆盖 inode、目录项、file table、fd、read/write/close、pipe、console、virtio block 和文件系统镜像。增强目标把 metadata 绑定到真实 `dev/inum`，并通过 `.agentmeta`、digest cache 和 edit lease 连接 Agent 记录与真实文件活动。
+   相关处理：plain target 的科研状态都通过普通文件保存，覆盖 inode、目录项、file table、fd、read/write/close、pipe、console、virtio block 和文件系统镜像。增强目标把 metadata 绑定到真实 `dev/inum/incarnation`，并通过 `.agentmeta`、digest cache、VFS 安全域和 edit lease 连接 Agent 记录与真实文件活动。
 
 5. Linux/RISC-V syscall ABI、参数、返回值、错误处理。
 
@@ -461,7 +487,7 @@ python host_tools/test_plain_ucore_reader_e2e.py
 
 最终材料至少应呈现：
 
-- `baseline_ucore/` 保持未改动 uCore 对照目标职责。
+- `baseline_ucore/` 保持共享通用安全加固、不含 AgentOS 专属服务的对照目标职责。
 - 根目录 `os/`、`user/` 和 `scripts/` 提供 AgentOS-uCore 增强目标。
 - plain target 能运行完整科研 Agent 平台并输出可读状态文件。
 - AgentOS target 能运行等价科研流程，并让关键阶段依赖内核 Agent 服务。

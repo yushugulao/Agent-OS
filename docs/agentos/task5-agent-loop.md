@@ -19,6 +19,7 @@ AgentOS-uCore 当前实现的是可验证的 Agent Loop 内核机制：
 - Agent 可通过 `agent_heartbeat_stop()` 停止 heartbeat；
 - 等待、唤醒和事件消费会写入 Context Path，并继承 cause/span 因果字段；
 - 调度器按 Agent 角色、orchestrator 配置的调度参数、事件队列、deadline、heartbeat 到期、等待时长和虚拟运行量选择可运行任务，并记录最近 16 次调度原因；
+- 调度分值只表达软优先级；连续选择 Agent 或连续按分值选择达到 `AGENT_SCHED_MAX_AGENT_BURST=8` 后，调度器强制回到普通任务或 FIFO 队首，任何角色、事件积压和 orchestrator 配置都不能越过该上限；
 - 参与 Agent 可按当前 span 查询 Context、事件、调度和预取交接短记录；
 - 内核维护最近 512 条全局审计短记录，orchestrator 可查询并过滤多 Agent 的 Context、事件、调度和预取交接摘要；
 - 全局审计短记录维护 prev/record hash 链，orchestrator 可读取 Run Ledger 摘要；
@@ -46,12 +47,12 @@ AgentOS-uCore 当前实现的是可验证的 Agent Loop 内核机制：
 | 类型 | 含义 | 触发来源 |
 | --- | --- | --- |
 | `AGENT_EVENT_FILE_STATUS` | 文件状态变化 | `agent_file_meta_set()` |
-| `AGENT_EVENT_MESSAGE` | Agent 消息 | `agent_wake()` 或消息工具 |
+| `AGENT_EVENT_MESSAGE` | Agent 消息 | 用户态 `agent_wake()` 或消息工具 |
 | `AGENT_EVENT_TIMER` | 定时或心跳 | `agent_tick()` |
 | `AGENT_EVENT_JOB_DONE` | 作业完成 | 预留 |
 | `AGENT_EVENT_POLICY_DENIED` | 策略拒绝 | 预留或工具结果 |
 | `AGENT_EVENT_CONTEXT_LIMIT` | Context 限制事件 | 预留 |
-| `AGENT_EVENT_LLM_DONE` | LLM Gateway 返回解释或摘要 | 当前预留 |
+| `AGENT_EVENT_LLM_DONE` | LLM Relay 返回解释或摘要 | 受权 `llm_response` 工具路径 |
 | `AGENT_EVENT_DASHBOARD_EXPORT` | 可视化导出完成 | 当前预留 |
 | `AGENT_EVENT_CANCELLED` | 等待取消 | `agent_wait_cancel()` |
 
@@ -101,6 +102,12 @@ int agent_wait(struct agent_event *event, int timeout_ticks);
 
 这里的 `speedup_x100=100` 是单项自身的计时基线。`busy_poll_vs_wait` 用于呈现两个路径的观测数据，不设置固定 tick 阈值。
 
+### 定向等待队列
+
+Agent event、timeline、子进程退出和线程退出分别拥有独立 `struct wait_queue`；mutex、semaphore 和 condvar 也各自持有等待队列。线程睡眠时记录所属队列和等待原因，`wait_queue_wake_one()`、`wait_queue_wake_all()` 只操作对应队列，不再通过全局扫描唤醒无关线程。进程协作退出时，`wait_queue_interrupt()` 会先从原队列摘除目标线程再使其返回错误，避免留下悬挂节点或破坏其他同步对象的队列。
+
+这项机制同时保证 Agent Loop 的两个性质：事件入队只唤醒等待该 Agent event 的线程；timeline 新记录只在保存的完整 filter 匹配时唤醒 timeline waiter。`usersafety_ucore` 用互斥量和无关进程压力验证定向唤醒，`procreap_ucore` 验证阻塞线程退出时的队列取消，`agentfinal_ucore` 验证 source/event filter 不匹配时不会发生 timeline 唤醒。
+
 ## 唤醒：Wake
 
 接口：
@@ -112,12 +119,12 @@ int agent_wake(int pid, struct agent_event *event);
 语义：
 
 1. 校验调用者是具备 `MESSAGE_SEND` 或 `ORCHESTRATE` 的 Agent。
-2. 只接受 `AGENT_EVENT_MESSAGE`；拒绝用户态伪造内核或专用工具事件。
+2. 用户态接口唯一接受 `AGENT_EVENT_MESSAGE`；即使调用者是 orchestrator，也不能提交 FILE_STATUS、TIMER、LLM_DONE 等系统事件。
 3. 查找目标 pid 并检查目标是否为 Agent。
 4. 检查目标 watch 是否匹配消息类型和 payload。
 5. 写入目标 FIFO 事件队列并唤醒目标进程。
 
-非法/空事件类型返回 `AGENT_STATUS_BAD_PARAM`；`LLM_DONE`、`FILE_STATUS`、`TIMER` 等保留事件返回 `AGENT_STATUS_DENIED`，必须由各自的内核或专用工具路径产生。队列满时返回 `AGENT_STATUS_NO_SPACE`，不会覆盖旧事件。`send_message` 工具在目标队列满时也返回 `AGENT_STATUS_NO_SPACE`，并避免留下不可感知的消息副作用。
+这里的授权能力只决定调用者能否发送消息，不扩大可提交的事件类型。非法/空事件类型返回 `AGENT_STATUS_BAD_PARAM`；`LLM_DONE`、`FILE_STATUS`、`TIMER` 等保留事件返回 `AGENT_STATUS_DENIED`，必须由各自的内核或受权专用工具路径产生。队列满时返回 `AGENT_STATUS_NO_SPACE`，不会覆盖旧事件。`send_message` 工具在目标队列满时也返回 `AGENT_STATUS_NO_SPACE`，并避免留下不可感知的消息副作用。`agentsecurity_ucore: wake_event_authorization=1` 覆盖普通进程拒绝、系统事件拒绝、非法类型拒绝和合法 MESSAGE 成功四类路径。
 
 `agentfinal_ucore` 用自唤醒验证最小路径，检查事件能够入队、等待能够返回，并且相关记录进入 Run Ledger。`labdemo_ucore` 用跨 Agent 消息验证场景路径，检查 sentinel 到 investigator 的消息事件能够被内核投递和消费。原始输出统一见 [test-record.md](test-record.md)。
 
@@ -194,9 +201,16 @@ Agent 任务的调度分值因素包括：
 | 虚拟运行量 | 已经运行较多的 Agent 被扣分，提升公平性 |
 | 运行预算 | 单个 Agent 超过默认预算后被扣分 |
 
-普通进程仍可运行。Agent 调度不是把普通进程完全压制，而是在存在可运行 Agent 时优先处理更紧急、更有权限或已经等待较久的 Agent；普通支持程序没有 Agent 身份时，不需要反复经过 Agent 调度分值计算路径。
+上述因素全部属于软评分，只能决定强制上限以内的候选优先级，不能授权 Agent 无限连续运行。`fetch_best_task()` 在选择前维护两条不可配置的公平上限：
 
-`struct agent_info` 暴露调度观测字段：`sched_weight`、`sched_priority`、`sched_budget`、`sched_dispatch_count`、`sched_event_dispatch_count`、`sched_deadline_dispatch_count`、`sched_vruntime`、`sched_ready_tick`、`sched_last_dispatch_tick`、`sched_preemptions` 和 `sched_budget_used`。`agentsched_ucore` 用这些字段验证角色权重、受权调度配置、事件优先和公平性计数。
+1. 当队列中同时存在普通任务时，连续选择 Agent 达到 `AGENT_SCHED_MAX_AGENT_BURST=8` 次后，本次必须选择扫描到的首个普通任务；普通任务运行后重新计算 Agent burst。
+2. 无论被选任务是否为 Agent，连续 8 次按分值绕过 FIFO 后，本次必须选择 FIFO 队首；完成这次 FIFO escape 后重新计算 score burst。
+
+两条检查位于角色权重、priority、budget、事件、deadline、heartbeat、ready age 和 vruntime 的比较之外。`agent_sched_config()` 只能修改软评分参数，不能修改常量 8，也不能清除或绕过 burst 计数。因此即使高权限 Agent 持续制造消息、堆积事件并把 weight/priority 配到最大，普通可运行进程仍会在最多 8 次连续 Agent dispatch 后获得一次运行机会；Agent 之间也不能利用高分永久绕过 FIFO 队首。
+
+普通支持程序没有 Agent 身份时，不需要反复经过 Agent 调度分值计算路径。只有队列出现可运行 Agent 时才启用增强选择；没有 Agent 时仍直接使用原 FIFO 路径。
+
+`struct agent_info` 暴露调度观测字段：`sched_weight`、`sched_priority`、`sched_budget`、`sched_dispatch_count`、`sched_event_dispatch_count`、`sched_deadline_dispatch_count`、`sched_vruntime`、`sched_ready_tick`、`sched_last_dispatch_tick`、`sched_preemptions` 和 `sched_budget_used`。`agentsched_ucore` 用这些字段验证角色权重、受权调度配置、事件优先和公平性计数，并让一个具有未消费消息的 Agent 连续让出 CPU，确认普通进程先写出结果，输出 `normal_progress=1 max_agent_burst=8`。`procreap_agent_ucore` 还在高分 Agent 持续可运行时验证退出回收线程仍能得到有界调度。
 
 调度原因记录接口：
 
@@ -274,7 +288,7 @@ agentsched_ucore: reason_trace=1 records=... reason=... score=...
 
 ## 消息事件
 
-`AGENT_TOOL_SEND_MESSAGE` 和 `agent_wake()` 都可以向目标 Agent 发送消息事件。消息事件用于多 Agent 协作。`agent_wake()` 是 Agent-only syscall，调用者必须具备 `AGENT_CAP_MESSAGE_SEND` 或 `AGENT_CAP_ORCHESTRATE`；普通进程直接调用会返回 `-1`。即使调用者是 Agent，也不能通过该接口把用户提供的类型伪装成 `LLM_DONE` 等系统事件。
+`AGENT_TOOL_SEND_MESSAGE` 和 `agent_wake()` 都可以向目标 Agent 发送 MESSAGE 事件。消息事件用于多 Agent 协作。`agent_wake()` 是 Agent-only syscall，调用者必须具备 `AGENT_CAP_MESSAGE_SEND` 或 `AGENT_CAP_ORCHESTRATE`；普通进程直接调用会返回 `-1`。MESSAGE 是该用户态 syscall 唯一允许的事件类型：即使调用者是 Agent 或 orchestrator，也不能通过它把用户提供的类型伪装成 `FILE_STATUS`、`TIMER`、`LLM_DONE` 等系统事件。
 
 `labdemo_ucore` 中两段消息：
 
@@ -313,7 +327,7 @@ Context v6 还会把事件和后续工具调用连起来，并继续维护 Conte
 
 | 限制项 | 说明 |
 | --- | --- |
-| 调度策略 | 当前支持 orchestrator 配置 weight、priority 和 budget，尚未实现复杂策略语言 |
+| 调度策略 | 当前支持 orchestrator 配置 weight、priority 和 budget，尚未实现复杂策略语言；这些参数都是软策略，固定为 8 的强制 Agent/FIFO 公平上限不可配置 |
 | 事件容量 | 当前每 Agent 固定 16 槽 FIFO，队列满时拒绝新事件 |
 | 取消范围 | 当前支持取消正在等待或下一次等待的 Agent；尚未实现通用任务取消 |
 | 多核复杂场景 | 当前按 uCore 当前运行环境和测试路径验证锁保护和队列状态 |
@@ -328,5 +342,8 @@ Context v6 还会把事件和后续工具调用连起来，并继续维护 Conte
 | `agentfinal_ucore` | 自唤醒事件可被 watch/wait 消费，相关 Context、事件、调度和预取统计进入 Run Ledger。 |
 | `agentbench_ucore` | timeout 会更新 heartbeat/timeout 统计；busy polling 与 wait/wake 都有可复查的 tick 观测。 |
 | `agentloop_ucore` | FIFO 顺序、cause/span、队列满拒绝、unwatch、睡眠 timeout、TIMER unwatch、heartbeat stop 和 wait cancel 均可用。 |
-| `agentsched_ucore` | 角色权重、orchestrator 调度配置、事件优先、原因记录和公平性计数均写入调度记录。 |
+| `agentsched_ucore` | 角色权重、orchestrator 调度配置、事件优先、原因记录和公平性计数均写入调度记录；普通进程在持续可运行高分 Agent 下先取得进展，并输出 `normal_progress=1 max_agent_burst=8`。 |
+| `agentsecurity_ucore` | 用户态 `agent_wake()` 只允许 MESSAGE；普通进程、保留系统事件和非法类型均被拒绝，合法消息仍可投递。 |
+| `usersafety_ucore` | 无关睡眠者不会被同步对象的定向唤醒破坏，syscall 返回后内核继续存活。 |
+| `procreap_ucore` / `procreap_agent_ucore` | 阻塞线程退出会从等待队列安全取消；高分 Agent 持续可运行时，退出清理和普通任务仍得到有界调度。 |
 | `labdemo_ucore` | 文件状态事件唤醒 sentinel，message 触发 investigator，预取提示随 span 交接，digest、LLM 调用、恢复计划、全局审计、timeline 和 provenance 都进入同一条示例链路。 |

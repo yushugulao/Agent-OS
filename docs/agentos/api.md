@@ -6,7 +6,7 @@
 
 ### 系统调用：Agent-OS
 
-Agent-OS 在 uCore syscall 编号空间中使用 500 至 538：
+Agent-OS 在 uCore syscall 编号空间中使用 500 至 539：
 
 | syscall | 编号 | 用户态原型 | 说明 |
 | --- | ---: | --- | --- |
@@ -49,8 +49,9 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 538：
 | `agent_file_edit_commit` | 536 | `int agent_file_edit_commit(uint64, uint64, struct agent_file_edit_state *)` | 按租约和期望版本提交编辑 |
 | `agent_file_edit_abort` | 537 | `int agent_file_edit_abort(uint64)` | 放弃当前进程持有的编辑租约 |
 | `agent_file_edit_state` | 538 | `int agent_file_edit_state(const char *, struct agent_file_edit_state *)` | 查询真实文件当前编辑租约和版本状态 |
+| `agent_worker_create` | 539 | `int agent_worker_create(const char *, uint64)` | 创建等待执行指定 immutable、domain-safe worker 映像的非 Agent workflow worker，并按映像安全配置衰减文件系统能力 |
 
-`agent_run` 和 `context_snapshot` 是性能主路径。`agent_file_prefetch_snapshot` 用于读取当前 Agent 自己可见的 metadata 预取提示，`agent_file_prefetch_span_snapshot` 用于读取同一 span 下跨 Agent 汇总的 metadata 预取提示。`agent_trace_snapshot` 是单个 Agent 的运行查看和排查主路径，用于把工具调用历史与调度原因放进同一组短记录中。`agent_span_trace_snapshot` 读取当前 Agent 所在 span 的系统级短记录，使参与协作的 Agent 能解释本轮协作中的 Context、事件和预取交接来源。`agent_timeline_snapshot` 是统一导出入口，把当前 Agent 可见的 Context、调度、审计和预取提示转换成同一种 record，便于科研平台页面直接读取。`agent_timeline_query` 在同一组可见记录上执行 source、tick、span、pid、kind、tool、event、status、flags 和 after-cursor 过滤，减少页面重复拉取和用户态筛选，也支持页面拿上一条记录作为游标继续读取后续记录。`agent_timeline_wait` 复用同一 filter，在没有匹配记录时让 Agent 睡眠；新记录写入时内核把新记录规范化为 `agent_timeline_record`，并直接用等待者保存的完整 filter 判断是否唤醒。`agent_timeline_read` 在同一套规则上把等待和复制合并为一次 syscall，减少页面或 Agent worker 的 wait 后再 query 成本。`agent_file_edit_begin`、`agent_file_edit_commit`、`agent_file_edit_abort` 和 `agent_file_edit_state` 是真实文件编辑冲突控制接口；内核用真实 `dev + inum` 识别文件，并在 `write`、`O_TRUNC`、`unlink` 路径上检查租约持有者。`agent_provenance_snapshot` 导出同一可见范围内的因果边，用于页面绘制“哪个 Context、事件或预取提示触发了后续动作”。`agent_audit_snapshot` 和 `agent_audit_query` 是 orchestrator 的系统级观测入口，用于读取和过滤最近 512 条全局短记录。`agent_ledger_snapshot` 在同一组全局短记录上返回可见范围、总量、已淘汰数、分类计数和账本 hash，便于页面用一个摘要判断本轮运行事实是否仍处在同一条内核维护的记录链上。`agent_call` 是赛题“工具名称 + 参数键值列表”结构化协议的正式入口，也兼容已有示例程序。
+`agent_run` 和 `context_snapshot` 是性能主路径。`agent_file_prefetch_snapshot` 用于读取当前 Agent 自己可见的 metadata 预取提示，`agent_file_prefetch_span_snapshot` 用于读取同一 span 下跨 Agent 汇总的 metadata 预取提示。`agent_trace_snapshot` 是单个 Agent 的运行查看和排查主路径，用于把工具调用历史与调度原因放进同一组短记录中。`agent_span_trace_snapshot` 读取当前 Agent 所在 span 的系统级短记录，使参与协作的 Agent 能解释本轮协作中的 Context、事件和预取交接来源。`agent_timeline_snapshot` 是统一导出入口，把当前 Agent 可见的 Context、调度、审计和预取提示转换成同一种 record，便于科研平台页面直接读取。`agent_timeline_query` 在同一组可见记录上执行 source、tick、span、pid、kind、tool、event、status、flags 和 after-cursor 过滤，减少页面重复拉取和用户态筛选，也支持页面拿上一条记录作为游标继续读取后续记录。`agent_timeline_wait` 复用同一 filter，在没有匹配记录时让 Agent 睡眠；新记录写入时内核把新记录规范化为 `agent_timeline_record`，并直接用等待者保存的完整 filter 判断是否唤醒。`agent_timeline_read` 在同一套规则上把等待和复制合并为一次 syscall，减少页面或 Agent worker 的 wait 后再 query 成本。`agent_file_edit_begin`、`agent_file_edit_commit`、`agent_file_edit_abort` 和 `agent_file_edit_state` 是真实文件编辑冲突控制接口；内核用真实 `dev + inum + incarnation` 识别文件，并在 `write`、`O_TRUNC`、`unlink` 路径上检查租约持有者。`agent_worker_create` 不创建 Agent 身份或 Agent Context，而是让 orchestrator 显式建立一个最小权限 workflow worker；子进程随后必须执行创建时绑定的 immutable、domain-safe worker 映像才能取得受限文件系统能力。`agent_provenance_snapshot` 导出同一可见范围内的因果边，用于页面绘制“哪个 Context、事件或预取提示触发了后续动作”。`agent_audit_snapshot` 和 `agent_audit_query` 是 orchestrator 的系统级观测入口，用于读取和过滤最近 512 条全局短记录。`agent_ledger_snapshot` 在同一组全局短记录上返回可见范围、总量、已淘汰数、分类计数和账本 hash，便于页面用一个摘要判断本轮运行事实是否仍处在同一条内核维护的记录链上。`agent_call` 是赛题“工具名称 + 参数键值列表”结构化协议的正式入口，也兼容已有示例程序。
 
 ### 基础兼容系统调用：uCore
 
@@ -64,7 +65,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 538：
 
 `mailread` / `mailwrite` 使用每进程 16 槽普通消息队列，每条最多 256 字节。`mailread` 无消息时返回 0，成功时返回读取字节数；`mailwrite` 成功时返回写入字节数。目标不存在、长度非法、队列满或用户指针错误返回 `-1`。
 
-`trace` 的 `TRACE_READ` / `TRACE_WRITE` 只做 1 字节用户地址读写检查。`TRACE_SYSCALL` 返回对应 syscall ID 的累计进入次数，查询 `SYS_trace` 时本次 `trace` 调用也计入。当前只承诺 Agent Context 特殊页不可执行；普通用户程序其他页仍按当前 uCore 装载方式映射，不宣称全局 W^X。
+`trace` 的 `TRACE_READ` / `TRACE_WRITE` 只做 1 字节用户地址读写检查。`TRACE_SYSCALL` 返回对应 syscall ID 的累计进入次数，查询 `SYS_trace` 时本次 `trace` 调用也计入。AgentOS-uCore 的镜像构建器从配套 ELF 提取只读可执行段与可写段的页对齐分界点，loader 校验该布局后把代码页映射为 RX，把数据、bss、用户栈和 Agent Context 映射为 RW+NX；用户页不会同时拥有写和执行权限。
 
 ## 上下文 ABI：Agent Context
 
@@ -78,7 +79,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 538：
 | Context 版本 | `AGENT_CONTEXT_VERSION = 6` |
 | 权限 | Agent Context 用户镜像页可读写、不可执行；内核 shadow 副本不可被用户态访问 |
 
-说明：上述权限只描述 Agent Context 特殊页。AgentOS-uCore 当前仍使用 flat binary loader，普通用户程序正文、数据和 bss 所在页沿用基底 loader 的 RWX 映射；本项目没有把普通用户程序装载流程重构为完整 W^X。
+说明：用户程序仍以 flat binary 内容装入，但镜像中的 `exec_layout_version` 和 `exec_rw_offset` 来自配套 ELF 并由 loader 重新校验。分界点之前的程序页为 RX，之后的数据和 bss 页为 RW+NX；Agent Context、用户栈同样为 RW+NX。布局缺失、超出有效范围或要求 W+X 的映像不会被装载。
 
 布局：
 
@@ -130,6 +131,8 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 538：
 | `last_heartbeat_tick` | 最近心跳 tick |
 | `current_tick` | `agent_info()` 返回时的内核 Agent tick，供 timeline 等待建立未来记录过滤条件 |
 | `capability_mask` | 当前 Agent 能力位 |
+| `filesystem_domain` | 当前进程的文件系统安全域；public 进程为 0，受权 Agent/worker 位于 workflow 域 |
+| `filesystem_capability_mask` | 当前映像实际生效的文件能力，只包含经父进程授权且不超过映像安全配置上限的 `CONTENT_READ` / `ARTIFACT_WRITE` |
 | `file_scan_runs` / `file_scan_entries` | 根目录自动扫描轮数和检查过的目录项数量 |
 | `file_scan_added` / `file_scan_updated` / `file_scan_removed` | 自动扫描新增、更新和清理的元数据计数 |
 | `file_scan_generation` / `file_scan_pending` | 文件元数据代数和是否存在待处理扫描请求 |
@@ -149,10 +152,10 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 538：
 
 | 调用者 | 允许行为 |
 | --- | --- |
-| 内核装载的可信 init | 获得 bootstrap role grant，可建立根 orchestrator |
+| 内核装载且清单标记为 bootstrap 的可信 init | 按清单允许的角色获得 bootstrap role grant，可建立根 orchestrator |
 | orchestrator Agent | 按角色策略获得全部 role grant，可显式委派合法角色 |
-| 普通 `fork` 子进程及其 `exec` 映像 | 不继承 bootstrap 或 Agent 的 role grant |
-| sentinel、investigator、recovery | role grant 为空，不能继续创建 Agent |
+| 普通 `fork` 子进程及其后续 `exec` 映像 | 不继承 bootstrap 或 Agent 的 role grant；普通 `exec` 即使执行清单中的 bootstrap 映像也不会重新获得启动授权 |
+| sentinel、investigator、recovery、artifact | role grant 为空，不能继续创建 Agent |
 | 未获目标 role grant 的调用者 | 返回 `AGENT_STATUS_DENIED`，且不分配进程、内存或文件资源 |
 
 当前角色能力如下：
@@ -162,9 +165,31 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 538：
 | `AGENT_ROLE_SENTINEL` | `META_READ`、`PROCESS_READ`、`MESSAGE_SEND`、`WATCH`、`AUDIT_WRITE` |
 | `AGENT_ROLE_INVESTIGATOR` | `META_READ`、`CONTENT_READ`、`MESSAGE_SEND`、`WATCH`、`AUDIT_WRITE` |
 | `AGENT_ROLE_RECOVERY` | `META_READ`、`CONTENT_READ`、`MESSAGE_SEND`、`WATCH`、`ACTION_WRITE`、`ARTIFACT_WRITE`、`AUDIT_WRITE` |
+| `AGENT_ROLE_ARTIFACT` | `META_READ`、`CONTENT_READ`、`MESSAGE_SEND`、`WATCH`、`ARTIFACT_WRITE`、`AUDIT_WRITE` |
 | `AGENT_ROLE_ORCHESTRATOR` | 全部能力，包括 `META_WRITE`、`ORCHESTRATE` 和 `LLM_RELAY` |
 
-Agent 创建授权与业务操作授权彼此独立。前者只使用内核 `struct proc.agent_role_grant_mask`；后者使用 `agent_role` 和 `agent_capability_mask`。bootstrap grant 由 loader 在初始映像安装完成后赋予，不根据 PID、父 PID 或程序名推断；普通 fork 不复制 grant，普通 bootstrap 进程成功 exec 后也会撤销 grant。`agent_op.arg0` 中传入的 role 只保留为旧兼容参数，不参与 `capability_check`、`action_commit`、`artifact_update`、`llm_response` 等敏感工具授权。`rerun_stage` 和 `write_report` 仍可调用，但它们只是面向旧示例的兼容别名；运行记录、事件 action 和重复请求判断都归入 `action_commit` 或 `artifact_update`。
+Agent 创建授权与业务操作授权彼此独立。前者只使用内核 `struct proc.agent_role_grant_mask`；后者使用 `agent_role` 和 `agent_capability_mask`。构建期可信清单集中定义源程序、安装映像名、不可变/启动标志、允许角色和文件系统安全配置；mkfs 把策略写入 inode，loader 按 inode 策略和映像布局建立进程凭据。bootstrap grant 只在内核初次装载带 `BOOTSTRAP` 标志的可信映像时产生，不根据 PID、父 PID 或用户态字符串推断；普通 fork 不复制 grant，普通进程成功 exec 会清空 grant，也不会因为执行同名或带 bootstrap 标志的映像而恢复。Agent 执行新映像时还必须满足该可信 inode 的角色掩码。`agent_op.arg0` 中传入的 role 只保留为旧兼容参数，不参与 `capability_check`、`action_commit`、`artifact_update`、`llm_response` 等敏感工具授权。`rerun_stage` 和 `write_report` 仍可调用，但它们只是面向旧示例的兼容别名；运行记录、事件 action 和重复请求判断都归入 `action_commit` 或 `artifact_update`。
+
+### 可信 Agent 映像、workflow worker 与文件系统凭据
+
+`user/include/exec_policy_manifest.h` 中的 `EXEC_POLICY_ENTRIES` 是 Agent 可执行信任策略的集中注册表。镜像构建器和用户态 launcher 使用同一份条目，避免安装名、允许角色和安全配置漂移。要新增可保留 Agent 角色的映像，需要在清单中声明安装映像、可信/不可变/域安全标志、允许角色掩码和 VFS profile；仅复制相同字节到普通文件不会复制 inode 信任属性。可信 Agent 映像拒绝普通 `write`、`O_TRUNC`、覆盖创建和 `unlink`。
+
+非 Agent worker 使用另一条受控链路：mkfs 为具有有效 W^X 布局的程序生成确定性的短别名，设置 `IMMUTABLE | DOMAIN_SAFE` 和 workflow VFS profile，但不要求 `TRUSTED` 或 Agent role mask。`agent_worker_create()` 的精确 inode 委派才是 worker 获得文件能力的权限来源。
+
+Agent 业务 capability 与 VFS effective capability 是两套独立凭据。前者控制 Agent syscall 和工具，后者控制普通文件数据操作。VFS 当前使用以下策略：
+
+| inode 策略 | 访问规则 |
+| --- | --- |
+| `PUBLIC` | 数据操作由 public 域普通进程访问；workflow 域不会借 Agent 身份绕回 public 文件 |
+| `WORKFLOW` | 数据操作只允许 workflow 域访问；读取要求 `CONTENT_READ`，创建、写入、截断和删除要求 `ARTIFACT_WRITE` |
+| `KERNEL_PRIVATE` | 只允许内核凭据访问，例如 `.agentmeta` 后端 |
+| `ROOT` | 两个域都可查找、读取和执行目录入口；修改要求 public 域或 workflow 域的 `ARTIFACT_WRITE` |
+
+普通 `fork()` 不继承 workflow effective capability。已经继承的文件描述符也不是授权票据：每次 `read`、`write` 等操作都会用当前进程凭据重新检查 inode，因此失去权限的子进程不能通过父进程预先打开的 fd 绕过策略。
+
+`exec` 是命名空间隔离中的显式例外。内核可在调用者所在域未命中后查找另一域的布局有效映像，但仅执行该映像不会安装 workflow 凭据：普通进程仍保持 public/无能力状态。只有 `agent_worker_create()` 预先绑定的精确委派可以为非 Agent worker 安装能力；已有 Agent 则还要通过可信 role-image 校验才能保留身份和能力。
+
+`agent_worker_create(image, requested_caps)` 只允许具备 `ORCHESTRATE` 的 Agent 调用。`requested_caps` 必须非零，只能包含 `CONTENT_READ` / `ARTIFACT_WRITE`，同时必须是调用者业务能力、调用者 VFS 能力和目标映像 profile 上限的子集。成功时返回与 `fork()` 相同的父子返回值，但子进程仍是非 Agent、没有 Agent Context；授权先以 pending 状态绑定到目标 inode 的 `dev + inum + incarnation`，子进程只有随后成功 `exec()` 完全相同的 immutable、domain-safe worker 映像才取得 workflow 凭据。执行其他映像会清除 pending 授权。
 
 `RECOVER_STAGE` 和 `REPORT_WRITE` 在头文件中保留为旧程序兼容别名，分别等价于 `ACTION_WRITE` 和 `ARTIFACT_WRITE`。新代码和文档应优先使用通用能力名。
 
@@ -193,6 +218,7 @@ Agent-only 直接 syscall 的权限要求：
 | `agent_audit_query` | 返回 `-1` | `ORCHESTRATE` |
 | `agent_ledger_snapshot` | 返回 `-1` | `ORCHESTRATE` |
 | `agent_sched_config` | 返回 `-1` | `ORCHESTRATE` |
+| `agent_worker_create` | 无 `ORCHESTRATE` 返回 `AGENT_STATUS_DENIED`；非法能力返回 `AGENT_STATUS_BAD_PARAM`；用户地址、映像查找、VFS 鉴权或进程分配失败返回 `-1` | `ORCHESTRATE`；并受请求能力、父凭据和目标映像 profile 的共同上限约束 |
 
 `agent_wake()` 是消息投递接口，只接受 `AGENT_EVENT_MESSAGE`。`AGENT_EVENT_NONE` 或超出 `AGENT_EVENT_MAX` 的类型返回 `AGENT_STATUS_BAD_PARAM`；`FILE_STATUS`、`TIMER`、`POLICY_DENIED`、`LLM_DONE` 等由内核或专用工具产生的事件返回 `AGENT_STATUS_DENIED`。例如 `LLM_DONE` 只能由具备 `LLM_RELAY` capability 的 `llm_response` 工具路径投递，不能通过 `agent_wake()` 伪造。
 
@@ -312,11 +338,12 @@ Agent-only 直接 syscall 的权限要求：
 - `flags`
 - `dev`
 - `inum`
+- `incarnation`
 - `size`
 - `fs_generation`
 - `update_mask`
 
-文件元数据主键优先使用真实文件的 `dev + inum`。`physical_name` 必须能解析为 uCore 根目录中的真实短文件名，复杂逻辑路径保存在 `logical_path` 等 Agent 属性字段中。根目录私有文件 `.agentmeta` 保存固定格式元数据表，`agent_file_meta_init()` 会强制重新加载它；文件不存在、格式错误或没有有效记录时安装空元数据表。普通文件 syscall 不能直接 `open/create/unlink` `.agentmeta`，Agent 子系统内部 helper 负责读写该后端文件。
+文件元数据主键优先使用真实文件的 `dev + inum + incarnation`。`incarnation` 在 inode 槽重新分配时递增，使删除后复用同一 inode 号的新文件不会继承旧 metadata、租约或摘要缓存。`physical_name` 必须能解析为 uCore 根目录中的真实短文件名，复杂逻辑路径保存在 `logical_path` 等 Agent 属性字段中。根目录私有文件 `.agentmeta` 保存固定格式元数据表，`agent_file_meta_init()` 会强制重新加载它；文件不存在、格式错误或没有有效记录时安装空元数据表。`.agentmeta` 标记为 `KERNEL_PRIVATE`，普通文件 syscall 不能直接读取、创建、修改或删除，Agent 子系统内部 helper 使用内核凭据负责持久化和重新加载。
 
 字符串 selector 支持两组字段名：兼容字段 `project/run_id/stage/kind/status`，以及通用字段 `namespace/object_id/label/type/state`。内核按这些字段执行同一套查询、状态更新、依赖查询和预取提示生成。科研平台中的设定的模拟流程数据由用户态 orchestrator 写入；内核不会预置项目名、run id 或固定阶段顺序。该流程的用户态环节包括数据准备、比对处理、结果分析、报告生成和归档交付。
 
@@ -328,7 +355,7 @@ Agent-only 直接 syscall 的权限要求：
 
 | flag | 含义 |
 | --- | --- |
-| `AGENT_FILE_META_F_DELETE` | 按 path/fid/dev+inum 删除元数据 |
+| `AGENT_FILE_META_F_DELETE` | 按 path/fid 或 `dev + inum + incarnation` 删除元数据 |
 | `AGENT_FILE_META_F_PERSIST` | 更新后写入 `.agentmeta` |
 | `AGENT_FILE_META_F_AUTOSCAN` | 由根目录自动扫描维护的元数据 |
 
@@ -357,7 +384,7 @@ Agent-only 直接 syscall 的权限要求：
 | `plan_reason` | 查询计划原因 flags，例如强制扫描、status 索引、stage 索引、kind 索引、查询缓存命中或没有可用索引键 |
 | `fs_generation` | 查询时文件元数据服务的全局更新代数 |
 
-每条 hit 还返回 `dev`、`inum`、`size` 和 `fs_generation`，用于说明查询结果来自真实文件绑定和当前元数据版本。
+每条 hit 还返回 `dev`、`inum`、`incarnation`、`size` 和 `fs_generation`，用于说明查询结果来自同一代真实文件绑定和当前元数据版本。
 
 查询计划常量：
 
@@ -372,7 +399,7 @@ Agent-only 直接 syscall 的权限要求：
 
 ### 文件编辑租约 ABI
 
-文件编辑租约用于处理两个 Agent 同时希望修改同一真实文件的情况。内核用真实 `dev + inum` 识别文件，不依赖用户态传入的逻辑路径。普通进程不能申请租约；Agent 需要具备内容读取、工件写入、元数据写入或编排能力之一。租约存在时，真实 `write`、`O_TRUNC` 和 `unlink` 路径会检查当前进程是否是租约持有者；不是持有者时直接失败。
+文件编辑租约用于处理两个 Agent 同时希望修改同一真实文件的情况。内核用真实 `dev + inum + incarnation` 识别文件，不依赖用户态传入的逻辑路径。普通进程不能申请租约；Agent 需要具备内容读取、工件写入、元数据写入或编排能力之一，同时普通 VFS 路径仍要求当前 workflow 凭据具备相应文件能力。租约存在时，真实 `write`、`O_TRUNC` 和 `unlink` 路径会先按当前凭据重新鉴权，再检查当前进程是否是租约持有者；不是持有者时直接失败。
 
 调用方式如下：
 
@@ -398,7 +425,7 @@ Agent-only 直接 syscall 的权限要求：
 | `owner_pid` / `owner_agent_id` / `owner_role` | 当前持有者信息 |
 | `dirty` | 持有者是否已经写入、截断或删除文件 |
 | `lease_id` | 提交或放弃时使用的租约编号 |
-| `dev` / `inum` | 真实文件身份 |
+| `dev` / `inum` / `incarnation` | 真实文件身份；incarnation 防止 inode 号复用后把旧租约关联到新文件 |
 | `base_version` | begin 时看到的版本 |
 | `current_version` | 当前版本；提交成功后若发生写入会加 1 |
 | `deadline_tick` | 租约自动释放 tick |
@@ -411,7 +438,7 @@ Agent-only 直接 syscall 的权限要求：
 
 `read_file_digest(selector:string)` 是任务四的内容级工具。它要求调用者具备 `AGENT_CAP_CONTENT_READ`，普通 metadata 查询能力不足以读取文件内容。`selector` 可以是物理文件名、逻辑路径、stage，也可以是 `project=...;run_id=...;stage=...;status=...` 这类属性过滤串；属性过滤命中多条时读取第一条命中文件。`.agentmeta` 私有后端文件不会通过该工具暴露。
 
-绑定 Agent metadata 的真实文件会进入 8 槽 digest cache。缓存 key 是真实文件 `dev + inum + size + content_generation`，缓存 value 是文件大小、参与计算字节数、FNV-1a 指纹和短预览。文件创建、写入、截断或删除后，内容版本变化，旧 digest cache 条目自然失效；单纯 metadata 更新不会让同一文件内容摘要缓存失效。未绑定 Agent metadata 的普通文件不缓存，避免内核无法感知同尺寸改写时返回过期摘要。缓存命中和未命中计数通过 `agent_info.file_digest_cache_hits`、`agent_info.file_digest_cache_misses` 暴露。
+绑定 Agent metadata 的真实文件会进入 8 槽 digest cache。缓存 key 是真实文件 `dev + inum + incarnation + size + content_generation`，缓存 value 是文件大小、参与计算字节数、FNV-1a 指纹和短预览。文件创建、写入、截断或删除后，incarnation 或内容版本变化，旧 digest cache 条目自然失效；单纯 metadata 更新不会让同一文件内容摘要缓存失效。未绑定 Agent metadata 的普通文件不缓存，避免内核无法感知同尺寸改写时返回过期摘要。缓存命中和未命中计数通过 `agent_info.file_digest_cache_hits`、`agent_info.file_digest_cache_misses` 暴露。
 
 返回值使用 `struct agent_result`：
 
@@ -422,7 +449,7 @@ Agent-only 直接 syscall 的权限要求：
 | `value2` | FNV-1a 64 位内容指纹 |
 | `result` | 文件开头的短预览，非可打印字符会被替换为 `.` |
 
-该工具不是全文搜索接口，也不建立内容倒排索引。它的用途是让 Agent 在拿到 metadata 命中后，能用受权工具取得轻量内容证据，例如报告页面呈现 preview、复核脚本校验 artifact 是否真的存在、或者对照未改动 uCore 中用户态读取文件的成本。
+该工具不是全文搜索接口，也不建立内容倒排索引。它的用途是让 Agent 在拿到 metadata 命中后，能用受权工具取得轻量内容证据，例如报告页面呈现 preview、复核脚本校验 artifact 是否真的存在、或者对照不含 AgentOS 专属服务的 plain uCore 目标中用户态读取文件的成本。
 
 ### 文件预取提示 ABI
 

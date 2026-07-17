@@ -10,7 +10,7 @@
 | 基础系统 | uCore RISC-V 教学操作系统 |
 | 项目定位 | 在教学操作系统中实现面向 AI Agent / LLM 工作流的通用内核机制 |
 | 主目标 | 根目录 AgentOS-uCore 增强内核 |
-| 对照目标 | `baseline_ucore/` 保留未改动 uCore 内核，运行同一科研 Agent 平台负载 |
+| 对照目标 | `baseline_ucore/` 是共享基础安全加固、不含 AgentOS 扩展的 uCore 对照组，运行同一科研 Agent 平台负载 |
 | 主运行方式 | WSL2 Ubuntu / Linux + RISC-V 工具链 + QEMU |
 | 源代码许可 | GPL-3.0，见 [LICENSE](LICENSE) |
 | 文档许可 | CC-BY-SA-4.0，见 [DOCUMENTATION_LICENSE.md](DOCUMENTATION_LICENSE.md) |
@@ -45,7 +45,7 @@ AI Agent 平台已经能够在用户态完成任务编排、工具调用、文�
 本仓库同时维护两个可比较目标：
 
 - 根目录目标：AgentOS-uCore 增强内核。科研 Agent 平台保持同一输入场景和输出契约，关键阶段使用内核 Agent 服务。
-- `baseline_ucore/` 目标：未改动 uCore 内核。科研 Agent 平台全部运行在普通用户态进程和普通文件之上。
+- `baseline_ucore/` 目标：共享 syscall、文件系统和进程生命周期等通用安全加固，但不包含 AgentOS 服务。科研 Agent 平台全部运行在普通用户态进程和普通文件之上。
 
 也就是说，科研 Agent 平台先作为普通用户态应用存在，再分别放到两个目标里运行。读者看到的是同一套流程在“普通 uCore”和“AgentOS-uCore”两种系统条件下的表现。
 
@@ -76,7 +76,7 @@ AI Agent 平台已经能够在用户态完成任务编排、工具调用、文�
 
 工程化进展如下：
 
-- [x] 建立未改动 uCore 与 AgentOS-uCore 的双目标目录结构。
+- [x] 建立共享安全基底的 uCore 对照组与 AgentOS-uCore 双目标目录结构。
 - [x] 将 AgentOS 内核能力接入科研 Agent 平台主流程。
 - [x] 实现 AgentOS 专项测试、双目标 QEMU 运行、状态文件对照和状态查看工具。
 - [x] 提供默认离线 LLM Relay，并支持本机配置 cloud Relay。
@@ -179,13 +179,13 @@ flowchart LR
 
 #### 4.2.4 文件对象 metadata、摘要和租约
 
-本模块面向 Agent 的文件对象理解。普通文件系统以路径、目录项、inode 和文件描述符为核心；Agent 工作流更关心“这个文件属于哪个任务、当前状态是什么、是否是报告、是否已经失败、摘要是什么、哪个 Agent 正在编辑”。AgentOS-uCore 为文件对象附加 namespace、object id、type、state、owner、version、tags、labels、digest 和 summary，并把 metadata 绑定到真实 `dev + inum`。
+本模块面向 Agent 的文件对象理解。普通文件系统以路径、目录项、inode 和文件描述符为核心；Agent 工作流更关心“这个文件属于哪个任务、当前状态是什么、是否是报告、是否已经失败、摘要是什么、哪个 Agent 正在编辑”。AgentOS-uCore 为文件对象附加 namespace、object id、type、state、owner、version、tags、labels、digest 和 summary，并把 metadata 绑定到真实 `dev + inum + incarnation`。`incarnation` 在 inode 槽复用时变化，避免旧 metadata、摘要缓存或租约错误命中新文件。
 
 metadata 持久化使用私有 `.agentmeta` 后端，普通文件系统调用不能直接打开、创建、截断或删除该后端文件。查询时，内核可以按 state、label、type 等字段走索引路径，也可以执行扫描路径；查询结果会返回候选数量、扫描数量、命中数量、查询计划和原因。文件内容摘要由受权 Agent 读取，重复读取同一版本可以命中 digest cache。编辑文件时，Agent 可以申请租约，内核在真实写入、截断和删除路径检查持有者和版本，降低并发覆盖风险。
 
 | 设计点 | 实现方式 | 测试入口 |
 | --- | --- | --- |
-| 真实文件绑定 | metadata 记录 `dev + inum` | `agentfs_ucore` |
+| 真实文件绑定 | metadata 记录 `dev + inum + incarnation` | `agentfs_ucore`、`agentvfs_ucore` |
 | 私有后端 | `.agentmeta` 只允许 Agent 子系统内部访问 | `agentsecurity_ucore` |
 | 索引查询 | state、label、type 候选集 | `agentbench_ucore`、双目标实验 |
 | 内容摘要 | 读取短预览、长度和 hash | `agentfinal_ucore`、`labdemo_ucore` |
@@ -212,6 +212,12 @@ Agent 调用 wait 后，如果没有匹配事件，有限 timeout 和无限等�
 本模块把 LLM 调用纳入 AgentOS 的通用记录路径。内核不保存 API key，也不直接实现 HTTP/TLS；云端模型访问由用户态或宿主机 Relay 完成。内核负责处理 LLM 请求编号、请求 Agent、span、超时、预算、prompt 摘要、response 摘要、Relay capability、完成事件和审计记录。默认测试使用模板 Relay，配置本机密钥后可以切换 cloud Relay。
 
 科研 Agent 平台是主要示例负载。平台中的设定的模拟流程、项目名、阶段名、报告内容、恢复策略和提示词都位于用户态程序、输入文件或宿主机工具中。内核只提供通用 action、artifact、metadata、event、timeline、audit 和 provenance 机制。模拟流程的五个环节分别是数据准备、比对处理、结果分析、报告生成和归档交付；这些环节只是用户态负载中的标签，内核按通用 metadata、依赖、事件和动作记录处理。这样同一套 AgentOS 能力可以继续服务代码 Agent、运维 Agent、数据流水线 Agent、游戏 NPC Agent 和写作 Agent 等不同场景。
+
+#### 4.2.7 安全加固与资源韧性
+
+AgentOS-uCore 将普通用户可触发的坏地址、同步取消、文件系统耗尽、进程退出、僵尸积压和 fork bomb 统一视为可恢复的资源与生命周期问题。syscall 在产生副作用前复制并校验用户输入；mutex、semaphore、condvar、进程和 Agent 等睡眠对象使用私有等待队列；文件系统分配失败向上传播错误；多线程退出先取消阻塞 syscall，再释放共享资源；退出状态与执行槽分离；活进程按不可变资源域计费并为内核受控工作保留槽位。内核栈还同时使用 guard 和构建期预算检查。
+
+Agent 专属安全链由构建期可信映像清单、loader 映像绑定、bootstrap/role grant、capability 和 VFS 文件安全域组成。公共 `agent_wake()` 只能发送普通消息，系统事件由专用内核路径产生；调度器允许 orchestrator 配置软策略，但以不可配置的 Agent burst 上限保证普通任务有界进展。完整威胁模型、实现位置、自定义 Agent 注册步骤和专项测试入口见 [安全加固与资源韧性设计](docs/agentos/security-hardening.md)。
 
 ### 4.3 模块组合后的运行路径
 
@@ -254,7 +260,7 @@ bash scripts/install-ubuntu-deps.sh
 
 ### 5.2 普通 uCore 目标
 
-普通目标是对照组。它先证明科研 Agent 平台在未改动 uCore 上也能完整跑起来，随后再和增强目标比较哪些工作由用户态约定完成，哪些工作可以交给 AgentOS 内核机制。
+普通目标是实验对照组，不属于 AgentOS 系统本体。它与主目标共享不依赖 AgentOS 的 syscall、同步、文件系统和进程生命周期安全加固，但不提供 Agent syscall、Agent Context、Agent 文件 metadata 或 Agent 事件队列。它用于比较哪些工作由普通用户态约定完成，哪些工作可以交给 AgentOS 内核机制。
 
 ```bash
 make plain-platform-build TOOLPREFIX=riscv64-linux-gnu-
@@ -337,14 +343,15 @@ make target-readiness
 
 ### 6.1 测试组织方式
 
-测试分为四类，先由小规模专项测试确认每个内核机制可用，再由双目标运行把这些机制放进完整科研 Agent 流程。
+测试分为五类，先由小规模专项测试确认每个内核机制可用，再由双目标运行把这些机制放进完整科研 Agent 流程。
 
 | 类型 | 入口 | 作用 |
 | --- | --- | --- |
 | AgentOS 专项测试 | `scripts/run-agent-tests.sh`、`make agentos-test` | 逐项检查 Agent 进程、工具调用、Context、文件查询、事件循环、调度、LLM、权限和冲突控制。 |
+| 安全与资源专项 | `make fs-enospc-test`、`make proc-reap-test`、`make kernel-stack-check` | 检查可恢复资源耗尽、退出回收、进程资源域、系统保留槽和内核栈预算。 |
 | 双目标运行测试 | `make dual-platform-run` | 让同一科研 Agent 请求分别进入普通 uCore 和 AgentOS-uCore，生成可比较状态文件。 |
 | 宿主机工具测试 | `host_tools/test_*.py` | 检查镜像提取、状态对照、页面渲染、图表契约和 LLM Relay 模式。 |
-| 完整验证 | `make full-verify` | 串联结构检查、Host 工具测试、双目标运行和 AgentOS 专项测试。 |
+| 完整验证 | `make full-verify` | 串联结构检查、Host 工具测试、双目标运行、AgentOS 专项测试和进程生命周期测试；ENOSPC 与栈预算保留独立入口。 |
 
 AgentOS 专项测试程序如下：
 
@@ -354,18 +361,22 @@ AgentOS 专项测试程序如下：
 | `agentfs_ucore` | 真实 inode 绑定、`.agentmeta`、索引查询、查询缓存、内容摘要、预取提示、删除清理。 | `agentfs_ucore: parent passed` |
 | `agentscan_ucore` | 根目录自动扫描、真实文件自动写入 metadata、文件创建和删除后的索引维护。 | `agentscan_ucore: parent passed` |
 | `agentloop_ucore` | FIFO 事件队列、watch/unwatch、睡眠等待、timeout、heartbeat、wait cancel。 | `agentloop_ucore: parent passed` |
-| `agentsched_ucore` | 角色权重、受权调度配置、事件优先、调度原因和虚拟运行量。 | `agentsched_ucore: parent passed` |
+| `agentsched_ucore` | 角色权重、受权软调度配置、事件优先、强制 burst 公平上限和普通进程进展。 | `agentsched_ucore: parent passed` |
 | `agentconflict_ucore` | 文件编辑租约、非持有者写入拒绝、版本提交检查。 | `agentconflict_ucore: parent passed` |
 | `agentllm_ucore` | LLM 请求、Relay Agent 模板响应、完成事件、Context 和 timeline 记录。 | `agentllm_ucore: parent passed` |
 | `agentbench_ucore` | 批量工具调用、Context 快照、文件查询 scan/index、查询缓存、预取提示、事件计时。 | `agentbench_ucore: parent passed` |
+| `labbench_ucore` | 综合性能入口，受权创建 orchestrator 并执行 `agentbench_ucore`。 | `labbench_ucore: parent passed` |
 | `labdemo_ucore` | 多 Agent 科研恢复场景、文件查询、预取交接、消息唤醒、恢复动作、audit 和 provenance。 | `labdemo_ucore: parent passed` |
 | `agentsecurity_ucore` | 普通进程拒绝、低权限 Agent 伪造拒绝、私有 metadata 后端保护、scoped action/artifact。 | `agentsecurity_ucore: parent passed` |
+| `agenttrust_ucore` | 可信映像、不可变代码、bootstrap 授权范围和 role-image 绑定。 | `agenttrust_ucore: parent passed` |
+| `agentvfs_ucore` | public/workflow 文件安全域、能力读写、继承 fd 重新校验和普通命名空间兼容。 | `agentvfs_ucore: parent passed` |
+| `usersafety_ucore` | syscall 坏地址、超长参数和对象私有等待队列。 | `usersafety_ucore: parent passed` |
 
 ### 6.2 双目标对照负载
 
 专项测试先证明内核模块单独可用，双目标实验则把这些模块放回科研平台主流程中观察。下面六组实验使用同一批模拟流程对象，只改变文件数、记录数、事件数、并发数或请求数。
 
-双目标测试使用同一批科研 Agent 请求，分别进入未改动 uCore 目标和 AgentOS-uCore 目标。普通目标依靠用户态文件、状态约定和轮询完成流程；增强目标在关键阶段调用 AgentOS 内核服务。六组对照实验如下：
+双目标测试使用同一批科研 Agent 请求，分别进入共享安全基底的 uCore 对照目标和 AgentOS-uCore 目标。普通目标依靠用户态文件、状态约定和轮询完成流程；增强目标在关键阶段调用 AgentOS 内核服务。两侧共有的安全加固不计作 AgentOS 性能收益，六组对照实验只比较 AgentOS 专属机制：
 
 | 实验 | plain 路径 | AgentOS 路径 | 主要指标 |
 | --- | --- | --- | --- |
@@ -501,6 +512,14 @@ make full-verify TOOLPREFIX=riscv64-linux-gnu-
 make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
+运行文件系统耗尽、进程生命周期和内核栈安全专项验证：
+
+```bash
+make fs-enospc-test TOOLPREFIX=riscv64-linux-gnu-
+make proc-reap-test TOOLPREFIX=riscv64-linux-gnu-
+make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
+```
+
 重新生成汇总材料：
 
 ```bash
@@ -524,11 +543,12 @@ README 只保留项目全貌和主要运行方式。需要查看实现细节、�
 | 双目标设计和状态文件关系 | [docs/dual-targets.md](docs/dual-targets.md) |
 | 双目标构建、运行和结果检查 | [docs/verification.md](docs/verification.md) |
 | AgentOS-uCore 架构和机制 | [docs/agentos/design.md](docs/agentos/design.md) |
+| 安全加固、可信执行、文件安全域和资源配额 | [docs/agentos/security-hardening.md](docs/agentos/security-hardening.md) |
 | AgentOS-uCore 系统调用和 ABI | [docs/agentos/api.md](docs/agentos/api.md) |
 | 任务要求到实现和测试的对应关系 | [docs/agentos/requirements-traceability.md](docs/agentos/requirements-traceability.md) |
 | AgentOS 专项测试详情 | [docs/agentos/testing-details.md](docs/agentos/testing-details.md) |
 | Windows 克隆后的依赖检查 | [docs/windows-quickstart.md](docs/windows-quickstart.md) |
-| 设计开发报告 | [AgentOS-uCore开发者文档.pdf](AgentOS-uCore开发者文档.pdf) |
+| 历史设计开发报告（安全机制以当前 Markdown 文档为准，PDF 待重新生成） | [AgentOS-uCore开发者文档.pdf](AgentOS-uCore开发者文档.pdf) |
 
 ## 八、文件索引
 
@@ -539,7 +559,7 @@ README 只保留项目全貌和主要运行方式。需要查看实现细节、�
 ├── os/                     AgentOS-uCore 增强内核
 ├── nfs/                    根目录目标文件系统镜像构建
 ├── user/                   AgentOS 专项测试和科研平台增强程序
-├── baseline_ucore/          未改动 uCore 对照目标
+├── baseline_ucore/          共享通用安全加固、不含 AgentOS 扩展的对照目标
 ├── host_tools/              镜像提取、状态对照、页面渲染、LLM Relay 和图表工具
 ├── scripts/                 依赖检查、双目标运行、完整验证和页面服务脚本
 ├── docs/                    双目标说明、AgentOS 设计、验证文档和报告

@@ -98,16 +98,16 @@
 
 ## 2. `agentfs_ucore`
 
-`agentfs_ucore` 是任务四文件系统能力测试，重点检查 Agent 文件元数据是否绑定真实根目录文件 inode，并写入和重新加载私有 `.agentmeta` 元数据文件。
+`agentfs_ucore` 是任务四文件系统能力测试，重点检查 Agent 文件元数据是否绑定真实根目录文件对象，并写入和重新加载私有 `.agentmeta` 元数据文件。内核用 `dev + inum + incarnation` 标识一次 inode 生命周期，避免 inode 号复用后把旧权限、版本或元数据错误绑定到新文件。
 
 ### 2.1 测试流程
 
 1. 父进程创建 orchestrator Agent 子进程。
 2. 子进程调用 `agent_file_meta_init()`，加载 `.agentmeta` 或创建空元数据表。
-3. 子进程由用户态写入设定的模拟流程示例元数据，并查询该文件对象，检查返回项包含真实 `dev`、`inum` 和 `size`。
+3. 子进程由用户态写入设定的模拟流程示例元数据，并查询该文件对象。返回项携带 `dev`、`inum`、`incarnation` 和 `size`；测试输出并断言可见的 inode 与大小字段。
 4. 子进程创建自定义真实文件，写入内容。
 5. 子进程用 `agent_file_meta_set()` 将自定义逻辑属性绑定到该真实文件。
-6. 子进程查询自定义文件，检查 `dev + inum` 和文件大小与真实文件一致。
+6. 子进程查询自定义文件，检查返回的 inode 与文件大小和真实文件一致；内核中的绑定、缓存和编辑版本均以 `dev + inum + incarnation` 为身份键。
 7. 子进程调用 `read_file_digest`，分别用物理文件名和属性 selector 定位同一文件，检查 size、bytes、hash 和 preview。
 8. 子进程通过 `agent_info()` 读取 digest cache 计数，确认第二次读取同一真实文件时命中缓存。
 9. 子进程改写同一真实文件内容，再次读取 digest，确认 hash/preview 更新且 digest cache 出现新的 miss。
@@ -132,7 +132,7 @@
 
 | 覆盖点 | 检查方式 |
 | --- | --- |
-| 真实 inode 绑定 | 查询结果返回 `dev`、`inum`、`size` |
+| 文件生命周期身份 | 查询结果携带 `dev`、`inum`、`incarnation`、`size`；安全绑定和版本状态以 `dev + inum + incarnation` 为键，测试断言并输出真实 inode 与大小 |
 | `.agentmeta` 可写入和重新加载 | 自定义元数据重新初始化后仍存在 |
 | 内容摘要缓存 | 两次读取同一真实文件输出 `digest_cache=1`，改写后输出 `digest_cache_invalidated=1` |
 | 内容证据进入 timeline | 输出 `digest_timeline=1`，表示可按工具 id 查询 digest Context 记录 |
@@ -518,14 +518,95 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 | 重复动作被识别 | 相同 corr_id 第二次 action 返回 duplicate |
 | 多 run 动作和工件更新不会误伤 | 只更新 selector 指定的另一个模拟流程，设定的模拟流程保持 failed |
 
-## 11. 运行方式和复现建议
+## 11. `agenttrust_ucore`
 
-推荐用脚本运行完整测试：
+`agenttrust_ucore` 验证 Agent 角色不能只依赖用户态自报名称，而必须绑定构建期执行策略清单中的可信映像身份。这里的可信根是内核使用的策略清单和密封 inode 元数据，不等同于密码学签名或运行时文件哈希。
+
+### 11.1 测试流程
+
+1. 验证数据页不可执行、代码页不可写，同时普通数据仍可写，检查用户映像 W^X。
+2. 对可信 orchestrator 映像尝试写打开、读写打开、截断、覆盖创建和删除，均应失败；重新读取的内容保持不变。
+3. bootstrap 进程尝试直接创建非授权 sentinel 角色，必须被拒绝。
+4. 创建 orchestrator 后执行与该角色绑定的可信映像，执行成功且角色仍为 orchestrator。
+5. 分别执行绑定到错误角色的密封映像和普通复制出的未可信映像，均不能以原 orchestrator 身份运行。
+
+### 11.2 通过标记与覆盖结论
+
+关注 `wx_image=1`、`immutable_image=1`、`bootstrap_role_boundary=1`、`trusted_agent_exec=1`、`role_image_binding=1` 和 `parent passed`。这些标记共同覆盖页权限、密封映像不可变、bootstrap 授权范围，以及角色到可信执行映像的精确绑定。
+
+## 12. `agentvfs_ucore`
+
+`agentvfs_ucore` 验证普通 `open/read/write/unlink` 路径与 Agent 文件能力使用同一套内核授权机制，防止绕过 `CONTENT_READ`、`ARTIFACT_WRITE` 等能力。受保护文件的身份和委派状态以 `dev + inum + incarnation` 为基础，而不是只相信路径字符串。
+
+### 12.1 测试流程
+
+1. 先后以“公共文件先创建”和“工作流文件先创建”两种顺序制造同名对象，验证公共命名空间与工作流命名空间互不覆盖。
+2. sentinel 对受保护文件的读、写、截断和删除均被拒绝；investigator 只能读取，不能写入、截断、删除或取得编辑租约。
+3. 普通 `fork()` 子进程失去 Agent 身份和文件能力；即使继承了父进程已打开的文件描述符，后续读写仍会按当前进程凭据重新鉴权并被拒绝。
+4. orchestrator 只能向 mkfs 生成的 immutable、domain-safe worker 映像委派精确能力。空能力、未知位、超过映像 profile 上限、错误映像和跨映像执行都被拒绝或降权；普通进程直接执行该映像不会获得 workflow 权限。
+5. 写能力不足时，带创建/截断意图的 `open()` 在改变文件系统之前失败，验证失败事务没有留下半创建或半截断状态。
+6. 普通进程不能访问 `.agentmeta`；元数据查询只定位工作流命名空间中的对象，不会误绑定同名公共文件。
+
+### 12.2 通过标记与覆盖结论
+
+关注辅助程序输出的 `failed_open_atomic=1`、`cross_image_attenuated=1`、`wrong_first_exec_attenuated=1`、`sealed_exec_no_elevation=1`，以及主程序的 `inherited_fd_revalidated=1`、`protected_paths=1` 和 `parent passed`。测试同时覆盖打开时授权、描述符使用时重新鉴权、映像绑定委派和命名空间隔离。
+
+## 13. `usersafety_ucore`
+
+`usersafety_ucore` 是 syscall 用户输入与事务复测，目标是让错误输入稳定返回失败，而不是访问无效范围、破坏内核状态或错误提交部分结果。
+
+### 13.1 测试流程
+
+1. 对指针加法溢出、跨页缓冲区、只读/不可访问用户地址和未终止字符串执行负向调用。
+2. 检查 `exec` 参数数量超限和不可访问的 argv 指针，并拒绝非法线程入口；失败的 `exec` 保留原地址空间，成功的 `exec` 完成事务切换。
+3. 检查无关子进程退出不会错误唤醒互斥等待者，唤醒只作用于目标等待队列。
+4. 在并发关闭描述符时检查阻塞管道 syscall 持有的临时引用；检查失败读写不会错误推进管道状态。
+5. 检查 `wait` 和时间 syscall 的 copyout 失败不提交状态，错误的 `wait` 输出地址不会提前回收子进程。
+6. 检查文件描述符方向、fd 槽不足时打开既有文件和创建 pipe 的引用回滚，以及信号量负值、非法 ID 和计数溢出。
+
+### 13.2 通过标记与覆盖结论
+
+测试为每组输出 `live after ...`，包括 `pointer bounds`、`string bounds`、`exec argv bounds`、`thread boundaries`、`directed wakeup`、`pipe buffers`、`wait copyout`、`time copyout`、`fd directions`、`file rollback`、`semaphore inputs`、`failed exec transaction` 和 `successful exec transaction`。最终标记为 `usersafety_ucore: parent passed`。
+
+## 14. 文件系统 ENOSPC 复测
+
+入口为 `make fs-enospc-test` 或 `bash scripts/run-fs-enospc-tests.sh`。脚本构建极小文件系统镜像，在 AgentOS-uCore 与 `baseline_ucore/` 上分别运行 `fsenospc_ucore`，依次耗尽磁盘 inode、内存 inode cache 和数据块。
+
+测试要求完整失败返回 `-1`、部分写入返回短写长度、内核不 panic，并在释放资源后再次分配成功。单目标通过标记包括 `inode exhaustion survived`、`inode cache exhaustion survived`、`block exhaustion survived` 和 `parent passed`，脚本最终输出 `[fs-enospc] both targets passed`。
+
+该入口没有被 `make full-verify` 串联，完整验收时必须单独执行。
+
+## 15. 进程回收与配额复测
+
+入口为 `make proc-reap-test` 或 `bash scripts/run-proc-reap-tests.sh`。脚本在增强目标运行普通生命周期测试与 adversarial Agent 测试，并在 `baseline_ucore/` 运行普通生命周期测试。
+
+`procreap_ucore` 覆盖子进程先退出、父进程先退出、孤儿资源回收、阻塞 syscall 撤销、等待队列取消、无人 `wait()` 的父进程隔离、资源域活进程上限、谱系绕过拒绝、配额归还和同级资源域隔离。`procreap_agent_ucore` 进一步覆盖高压退出调度、普通域压力隔离、Agent 系统保留槽和恶意 Agent 行为。最终标记分别为两个程序的 `parent passed` 和脚本的 `[proc-reap] both targets passed`。
+
+`make full-verify` 会串联本项，但如果此前的宿主机检查失败，流程会在到达该阶段前中止。
+
+## 16. 内核栈预算检查
+
+根目录与 `baseline_ucore/` 的每个 `build/kernel` 规则都会在链接前调用 `scripts/check-kernel-stack-usage.py`，因此栈检查随内核构建自动执行，而不只是一个可选测试。脚本读取编译器 callgraph 和函数栈帧数据，计算用户陷入路径、内核中断路径、入口帧与安全余量的总预算；超出配置栈大小、出现未建模递归/间接调用或单帧越过 guard 上限都会阻止构建。
+
+独立复查命令为：
+
+```bash
+make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
+make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
+```
+
+成功时输出 `kernel stack budget`、`kernel stack user path` 和 `kernel stack interrupt path`；失败时输出 `kernel stack check failed` 并返回非零状态。运行时的每进程内核栈还使用不可映射 guard page 和 canary 检查，构建期预算与运行时防护共同覆盖栈溢出。
+
+## 17. 运行方式和复现建议
+
+推荐用脚本运行 AgentOS 专项测试：
 
 ```bash
 bash scripts/run-agent-tests.sh
 ```
 
-如果需要单独复现某一项，运行命令见 [scenario-script.md](scenario-script.md)；完整验证入口见 [verification.md](verification.md)。
+该脚本包含 `agenttrust_ucore`、`agentvfs_ucore` 和 `usersafety_ucore`，但不包含 ENOSPC 与进程回收脚本。资源安全入口和聚合验证的实际串联关系见 [verification.md](verification.md)。如果需要单独复现其他场景，运行命令见 [scenario-script.md](scenario-script.md)。
+
+当前不能把 `make full-verify` 记为完整通过：最近一次运行在 `host_tools/test_plain_ucore_reader_e2e.py` 的 `Reader GET Routes` 页面断言处中止，尚未进入后续 QEMU 阶段。该 Reader E2E 问题应与上述内核专项结果分开记录。
 
 不要在同一工作树中并行启动多个 QEMU 测试，因为 `nfs/fs-copy.img` 会被多个进程同时访问，可能造成镜像锁冲突。

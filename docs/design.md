@@ -9,11 +9,11 @@
 当前项目包含两个目标：
 
 - 根目录 AgentOS-uCore 目标：`os/` 是增强内核，科研 Agent 平台在关键阶段使用内核 Agent 服务。
-- `baseline_ucore/` plain uCore 目标：保留未改动 uCore 内核，科研 Agent 平台运行在普通用户态进程和普通文件之上。
+- `baseline_ucore/` plain uCore 目标：共享不依赖 AgentOS 的基础安全加固，但不提供 AgentOS 专属服务；科研 Agent 平台运行在普通用户态进程和普通文件之上。
 
 这种结构用于回答两个问题：
 
-1. 不改内核时，一个复杂科研 Agent 平台可以依靠普通用户态机制完成到什么程度。
+1. 不使用 AgentOS 专属内核机制时，一个复杂科研 Agent 平台可以依靠普通用户态机制完成到什么程度。
 2. 加入通用 Agent 内核服务后，同一流程在哪些地方变得更可信、更直接、更容易恢复和审计。
 
 ## 目录和目标分离
@@ -33,7 +33,7 @@ host_tools/  状态查看工具、动作运行器、文件系统提取器、LLM 
 plain uCore 对照目标位于：
 
 ```text
-baseline_ucore/os/       未改动 uCore 内核
+baseline_ucore/os/       共享基础安全加固、不含 AgentOS 扩展的对照内核
 baseline_ucore/user/     普通用户态科研 Agent 平台
 baseline_ucore/nfs/      文件系统镜像构建
 baseline_ucore/scripts/  启动辅助脚本
@@ -47,7 +47,7 @@ baseline_ucore/scripts/  启动辅助脚本
 
 plain target 的运行由五部分组成：
 
-1. uCore 原始内核。
+1. 不含 AgentOS 服务、但共享通用安全加固的 uCore 基础内核。
 2. 恢复后的 uCore 用户库和程序构建流程。
 3. `rp_plain`，用于呈现平台目录、能力组、成熟平台映射和基础自检。
 4. `rp_orch`，通过普通 `fork`、`exec`、`waitpid` 运行多角色科研平台程序。
@@ -71,11 +71,11 @@ AgentOS target 使用 `rp_agentos_orch` 作为入口。它创建 orchestrator Ag
 
 3. 虚拟内存、地址空间、地址翻译、页表、缺页处理、权限检查。
 
-   `os/vm.c` 提供 `uvmcreate()`、`mappages()`、`uvmcopy()`、`uvmunmap()`、`copyin()`、`copyout()`、`copyinstr()` 等能力；`os/loader.c` 负责用户程序加载；系统调用必须通过 copy 系列函数访问用户地址。AgentOS target 在此基础上加入固定 Agent Context 映射、内核 shadow 权威页、用户可读镜像页和 user-owned cache 区。可信历史由内核维护，用户直接写镜像不能伪造可信 Context。
+   `os/vm.c` 提供 `uvmcreate()`、`mappages()`、`uvmcopy()`、`uvmunmap()`、`copyin()`、`copyout()`、`copyinstr()` 等能力；`os/loader.c` 负责用户程序加载；系统调用必须通过 copy 系列函数访问用户地址。增强目标的可信映像按构建期布局把代码页映射为 RX、数据页映射为 RW+NX，并加入固定 Agent Context 映射、内核 shadow 权威页、用户可读镜像页和 user-owned cache 区。可信历史由内核维护，用户直接写镜像不能伪造可信 Context。
 
 4. 文件系统、目录、文件描述符、pipe、设备文件和文件抽象。
 
-   plain target 通过普通文件保存科研平台状态，实际覆盖 inode 分配、目录查找、文件描述符分配、读写、关闭、pipe、console 和 virtio block 设备路径。相关源码包括 `os/fs.c`、`os/file.c`、`os/pipe.c`、`os/console.c`、`os/virtio_disk.c`。AgentOS target 把文件 metadata 绑定到真实 `dev/inum`，使用 `.agentmeta` 作为内核私有后端，并在创建、写入、截断、删除时维护 metadata、digest cache 和编辑租约。
+   plain target 通过普通文件保存科研平台状态，实际覆盖 inode 分配、目录查找、文件描述符分配、读写、关闭、pipe、console 和 virtio block 设备路径。相关源码包括 `os/fs.c`、`os/file.c`、`os/pipe.c`、`os/console.c`、`os/virtio_disk.c`。AgentOS target 把文件 metadata 绑定到真实 `dev/inum/incarnation`，使用 `.agentmeta` 作为内核私有后端，并在创建、写入、截断、删除和 inode 槽复用时维护 metadata、digest cache 和编辑租约。
 
 5. Linux syscall 功能、ABI 兼容、参数传递、返回值、错误码和极端输入。
 
@@ -101,7 +101,7 @@ Host 侧负责浏览器页面、动作提交、可选云端 LLM Relay 和文件�
 - `host_tools/plain_ucore_fs_extract.py` 从 `nfs/fs-copy.img` 提取 `rp_*` 文件。
 - `host_tools/plain_ucore_reader.py` 渲染 HTML 页面和 API JSON。
 
-这种分工让 plain target 不需要修改内核，也能承载较复杂的平台表面；同时让 AgentOS target 可以复用同一状态文件协议进行对照。
+这种分工让 plain target 不需要 AgentOS 专属内核服务，也能承载较复杂的平台表面；同时让 AgentOS target 可以复用同一状态文件协议进行对照。两侧共享的基础安全加固和只存在于增强目标的 AgentOS 安全机制见 [agentos/security-hardening.md](agentos/security-hardening.md)。
 
 ## 核心状态文件
 

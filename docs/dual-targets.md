@@ -1,6 +1,6 @@
 # 双目标 uCore 科研 Agent 平台说明
 
-当前项目同时保留两个可比较目标：同一套科研 Agent 流程分别运行在未改动 uCore 和 AgentOS-uCore 上，直接呈现内核支持带来的差异。
+当前项目同时保留两个可比较目标：同一套科研 Agent 流程分别运行在共享基础安全加固、不含 AgentOS 扩展的 uCore 对照目标和 AgentOS-uCore 上，直接呈现 AgentOS 专属内核支持带来的差异。
 
 这里的“科研 Agent 流程”指项目内置的用户态示例负载。它模拟一次科研处理任务，包含数据准备、比对处理、结果分析、报告生成和归档交付五个环节，并由多个角色程序协作完成查询、分析、恢复、写作和审计。
 
@@ -18,18 +18,18 @@
 
 科研流程的项目名、run id、阶段名称、失败原因和恢复策略由用户态程序写入。结构检查会扫描根目录 `os/`，防止这些示例常量变成内核默认业务。
 
-## 目标 B：未改动 uCore
+## 目标 B：共享安全基底的 uCore 对照组
 
 理解增强目标之后，再看 `baseline_ucore/` 会更清楚：它保留同一个科研平台负载，但去掉 AgentOS 内核服务，用普通 uCore 能力完成同样的流程。
 
-未改动 uCore 对照目标位于 `baseline_ucore/`：
+不含 AgentOS 扩展的 uCore 对照目标位于 `baseline_ucore/`：
 
 - 内核：`baseline_ucore/os/`
 - 文件系统镜像构建：`baseline_ucore/nfs/`
 - 启动和辅助脚本：`baseline_ucore/scripts/`
 - 用户态科研 Agent 平台：`baseline_ucore/user/`
 
-这个目标保持 uCore 教学内核不加入 Agent syscall、不加入 Agent Context、不加入内核文件 metadata 服务。科研 Agent 平台通过普通用户进程、普通文件、`fork/exec/wait`、`open/read/write/close` 等机制运行。它用于回答一个问题：只停留在用户态时，一个复杂科研 Agent 平台能做到什么，哪些地方会依赖约定、扫描和文件重建。
+这个目标与主目标共享 syscall 用户输入防护、定向等待、可恢复文件系统耗尽、内核栈保护、进程退出回收和资源域配额等通用安全机制，但不加入 Agent syscall、Agent Context、Agent 文件 metadata、Agent capability 或 Agent 事件队列。科研 Agent 平台通过普通用户进程、普通文件、`fork/exec/wait`、`open/read/write/close` 等机制运行。它用于回答一个问题：不使用 AgentOS 专属服务时，一个复杂科研 Agent 平台能做到什么，哪些地方会依赖约定、扫描和文件重建。
 
 构建、运行和状态查看命令统一放在 [verification.md](verification.md) 中维护。
 
@@ -39,7 +39,7 @@
 
 两个目标应使用同一科研场景、同一核心对象名、同一角色名和相近的输出字段。输出内容包括：
 
-- 未改动 uCore 通过用户态文件和 Host 侧运行器完成科研平台流程。
+- uCore 对照目标通过用户态文件和 Host 侧运行器完成科研平台流程。
 - AgentOS-uCore 运行等价科研流程，但把可信 Context、metadata 查询、事件通知、失败恢复、权限控制、timeline 和 provenance 交给内核服务。
 - 两个目标都输出可比较的 run 记录、artifact 记录、项目复核记录、交付记录、LLM Relay 记录、Agent 协作记录和 AgentCompare 记录。
 - 双目标脚本会提取两个镜像中的 `rp_*` 状态文件，并自动对照状态文件集合和成功记录。plain target 已经完成的记录，AgentOS target 必须保留；AgentOS target 额外增加的内核证据单独计入。
@@ -64,7 +64,7 @@
 
 前面说明了两个目标应该如何对齐；本节说明当前仓库已经做到的程度。
 
-未改动 uCore 目标已经包含可由状态查看工具读取的一整套科研平台状态：Web/API 数据、动作运行器、artifact 记录、工作流记录、项目复核状态、Host LLM Relay、AgentCompare 和端到端 QEMU 路径。
+uCore 对照目标已经包含可由状态查看工具读取的一整套科研平台状态：Web/API 数据、动作运行器、artifact 记录、工作流记录、项目复核状态、Host LLM Relay、AgentCompare 和端到端 QEMU 路径。
 
 AgentOS-uCore 目标已经把增强内核服务接入同一科研流程。入口 `rp_agentos_orch` 创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，随后运行完整 `rp_orch` 流程。主阶段会向 `rp_agentos_mainflow` 追加 11 个内核参与阶段，并覆盖 12 类内核事实：可信 Context、通用依赖图与依赖驱动预取、metadata 索引查询、Agent 事件通知、通用动作提交与工件状态更新、ledger/provenance 观察、sentinel 越权恢复被拒绝、timeline 观察、文件编辑租约、workbench 文件校验、证据包 provenance、真实任务报告与答案审计。
 
@@ -74,4 +74,4 @@ AgentOS-uCore 目标已经把增强内核服务接入同一科研流程。入口
 
 根目录是 AgentOS-uCore 主目标。增强内核能力放在根目录 `os/`、`user/` 和 `scripts/` 中，进入仓库后即可查看主要实现。
 
-`baseline_ucore/` 只做普通 uCore 对照。两个目标共享概念时，应在本文档或目标专属设计文档中说明，但不能让 plain target 依赖 AgentOS 内核服务。
+`baseline_ucore/` 只做无 AgentOS 服务的 uCore 对照。通用安全修复可以在两个目标中保持一致，但不能让 plain target 依赖 AgentOS syscall、Context、capability、文件 metadata 或事件服务。安全基底和 AgentOS 增量的完整分工见 [agentos/security-hardening.md](agentos/security-hardening.md)。
