@@ -276,7 +276,8 @@ static void run_orchestrator(void)
 	spawn_role_and_check(AGENT_ROLE_SENTINEL, 70);
 	spawn_role_and_check(AGENT_ROLE_INVESTIGATOR, 90);
 	spawn_role_and_check(AGENT_ROLE_RECOVERY, 120);
-	printf("agentsched_ucore: role_weights sentinel=70 investigator=90 recovery=120 orchestrator=110\n");
+	spawn_role_and_check(AGENT_ROLE_ARTIFACT, 100);
+	printf("agentsched_ucore: role_weights sentinel=70 investigator=90 recovery=120 artifact=100 orchestrator=110\n");
 	check_configurable_policy();
 	check_event_priority();
 	check_fairness_counters();

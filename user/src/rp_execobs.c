@@ -15,8 +15,11 @@ static int run_kernel_exec_observer(void)
 
 	if (agent_info(&before) < 0 || !before.is_agent)
 		return 0;
-	if ((before.capability_mask & AGENT_CAP_WATCH) == 0 ||
-	    (before.capability_mask & AGENT_CAP_MESSAGE_SEND) == 0) {
+	if ((before.capability_mask &
+	     (AGENT_CAP_WATCH | AGENT_CAP_MESSAGE_SEND |
+	      AGENT_CAP_CONTENT_READ | AGENT_CAP_ARTIFACT_WRITE)) !=
+	    (AGENT_CAP_WATCH | AGENT_CAP_MESSAGE_SEND |
+	     AGENT_CAP_CONTENT_READ | AGENT_CAP_ARTIFACT_WRITE)) {
 		printf("rp_execobs: event_capability_missing\n");
 		return -1;
 	}

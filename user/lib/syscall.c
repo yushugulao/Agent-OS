@@ -275,6 +275,11 @@ int agent_create_role(int role)
 	return syscall(SYS_agent_create_role, role);
 }
 
+int agent_worker_create(const char *image, uint64 capabilities)
+{
+	return syscall(SYS_agent_worker_create, image, capabilities);
+}
+
 int agent_info(struct agent_info *info)
 {
 	return syscall(SYS_agent_info, info);

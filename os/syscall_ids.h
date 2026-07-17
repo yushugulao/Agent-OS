@@ -348,3 +348,4 @@
 #define SYS_agent_file_edit_commit 536
 #define SYS_agent_file_edit_abort 537
 #define SYS_agent_file_edit_state 538
+#define SYS_agent_worker_create 539

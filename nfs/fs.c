@@ -28,7 +28,7 @@
 // Disk layout:
 // [ boot block | sb block | inode blocks | free bit map | data blocks ]
 
-int nbitmap = FSSIZE / (BSIZE * 8) + 1;
+int nbitmap = (FSSIZE + BSIZE * 8 - 1) / (BSIZE * 8);
 int ninodeblocks = NINODES / IPB + 1;
 int nmeta; // Number of meta blocks (boot, sb, nlog, inode, bitmap)
 int nblocks; // Number of data blocks
@@ -45,6 +45,7 @@ struct exec_policy_entry {
 	uint flags;
 	uint role_mask;
 	int launch_role;
+	uint vfs_profile;
 };
 
 struct exec_layout {
@@ -58,8 +59,8 @@ struct host_image {
 	struct exec_layout layout;
 };
 
-#define EXEC_POLICY_ROW(source, image, flags, role_mask, launch_role) \
-	{ source, image, flags, role_mask, launch_role },
+#define EXEC_POLICY_ROW(source, image, flags, role_mask, launch_role, profile) \
+	{ source, image, flags, role_mask, launch_role, profile },
 static const struct exec_policy_entry exec_policy[] = {
 	EXEC_POLICY_ENTRIES(EXEC_POLICY_ROW)
 };
@@ -78,10 +79,17 @@ uint ialloc(ushort type);
 void iappend(uint inum, void *p, int n);
 void require_free_block(const char *context);
 void install_file(uint rootino, const char *host_path, const char *image,
-		  uint flags, uint role_mask,
+		  uint flags, uint role_mask, uint vfs_profile,
 		  const struct host_image *host_image);
 struct host_image read_host_image(const char *host_path);
 void validate_exec_policy(void);
+void label_inode(uint inum, uint flags, uint domain, uint policy,
+		 uint exec_profile);
+static int vfs_exec_profile_valid(uint profile);
+uint vfs_label_checksum(uint inum, uint magic, uint version, uint flags,
+			uint domain, uint policy, uint exec_profile,
+			uint generation, uint incarnation, uint reserved0,
+			uint reserved1);
 
 // convert to intel byte order
 ushort xshort(ushort x)
@@ -119,6 +127,19 @@ int main(int argc, char *argv[])
 		      "manifest immutable flag mismatch");
 	static_assert(EXEC_MANIFEST_F_BOOTSTRAP == EXEC_FLAG_BOOTSTRAP,
 		      "manifest bootstrap flag mismatch");
+	static_assert(EXEC_MANIFEST_F_DOMAIN_SAFE == EXEC_FLAG_DOMAIN_SAFE,
+		      "manifest domain-safe flag mismatch");
+	static_assert(EXEC_MANIFEST_VFS_PROFILE_NONE == VFS_EXEC_PROFILE_NONE,
+		      "manifest empty VFS profile mismatch");
+	static_assert(EXEC_MANIFEST_VFS_PROFILE_WORKFLOW ==
+			      VFS_EXEC_PROFILE_WORKFLOW,
+		      "manifest workflow VFS profile mismatch");
+	static_assert(EXEC_MANIFEST_VFS_PROFILE_CONTENT_READ ==
+			      VFS_EXEC_PROFILE_CONTENT_READ,
+		      "manifest read-only VFS profile mismatch");
+	static_assert(EXEC_MANIFEST_VFS_PROFILE_ARTIFACT_WRITE ==
+			      VFS_EXEC_PROFILE_ARTIFACT_WRITE,
+		      "manifest write-only VFS profile mismatch");
 	if (argc < 2) {
 		fprintf(stderr, "Usage: mkfs fs.img files...\n");
 		exit(1);
@@ -155,6 +176,8 @@ int main(int argc, char *argv[])
 	wsect(1, buf);
 
 	rootino = ialloc(T_DIR);
+	label_inode(rootino, VFS_LABEL_F_ROOT, VFS_DOMAIN_PUBLIC,
+		    VFS_POLICY_ROOT, VFS_EXEC_PROFILE_NONE);
 
 	for (i = 2; i < argc; i++) {
 		char *shortname = basename(argv[i]);
@@ -176,7 +199,10 @@ int main(int argc, char *argv[])
 		}
 		install_file(rootino, argv[i], shortname,
 			     primary ? primary->flags : 0,
-			     primary ? primary->role_mask : 0, &host_image);
+			     primary ? primary->role_mask : 0,
+			     primary ? primary->vfs_profile :
+				       VFS_EXEC_PROFILE_NONE,
+			     &host_image);
 
 		for (uint p = 0; p < sizeof(exec_policy) / sizeof(exec_policy[0]);
 		     p++) {
@@ -185,7 +211,18 @@ int main(int argc, char *argv[])
 				continue;
 			install_file(rootino, argv[i], exec_policy[p].image,
 				     exec_policy[p].flags,
-				     exec_policy[p].role_mask, &host_image);
+				     exec_policy[p].role_mask,
+				     exec_policy[p].vfs_profile, &host_image);
+		}
+		if (host_image.layout.version == EXEC_LAYOUT_VERSION) {
+			char worker_image[11];
+
+			exec_manifest_worker_image(shortname, worker_image);
+			install_file(rootino, argv[i], worker_image,
+				     EXEC_FLAG_IMMUTABLE |
+					     EXEC_FLAG_DOMAIN_SAFE,
+				     0, VFS_EXEC_PROFILE_WORKFLOW,
+				     &host_image);
 		}
 		free(host_image.data);
 	}
@@ -210,12 +247,16 @@ void validate_exec_policy(void)
 {
 	for (uint i = 0; i < sizeof(exec_policy) / sizeof(exec_policy[0]); i++) {
 		const struct exec_policy_entry *p = &exec_policy[i];
-		uint required = EXEC_FLAG_TRUSTED | EXEC_FLAG_IMMUTABLE;
+		uint required = EXEC_FLAG_TRUSTED | EXEC_FLAG_IMMUTABLE |
+				EXEC_FLAG_DOMAIN_SAFE;
 
 		if (!valid_policy_name(p->source) || !valid_policy_name(p->image) ||
 		    (p->flags & ~EXEC_FLAG_KNOWN) != 0 ||
 		    (p->flags & required) != required ||
 		    (p->role_mask & ~EXEC_MANIFEST_ROLE_ALL) != 0 ||
+		    !vfs_exec_profile_valid(p->vfs_profile) ||
+		    ((p->flags & EXEC_FLAG_BOOTSTRAP) != 0 &&
+		     p->vfs_profile == VFS_EXEC_PROFILE_NONE) ||
 		    ((p->flags & EXEC_FLAG_BOOTSTRAP) != 0 &&
 		     p->role_mask == 0)) {
 			fprintf(stderr, "mkfs: invalid exec policy row %s -> %s\n",
@@ -414,10 +455,13 @@ static void reserve_image_name(const char *name)
 }
 
 void install_file(uint rootino, const char *host_path, const char *image,
-		  uint flags, uint role_mask,
+		  uint flags, uint role_mask, uint vfs_profile,
 		  const struct host_image *host_image)
 {
 	uint inum;
+	uint vfs_domain;
+	uint vfs_flags;
+	uint vfs_policy;
 	struct dirent de;
 	struct dinode din;
 	const struct exec_layout *layout;
@@ -430,10 +474,20 @@ void install_file(uint rootino, const char *host_path, const char *image,
 		exit(1);
 	}
 	layout = &host_image->layout;
+	vfs_flags = flags == 0 && vfs_profile == VFS_EXEC_PROFILE_NONE ?
+		VFS_LABEL_F_PUBLIC : VFS_LABEL_F_PROTECTED;
+	vfs_domain = flags == 0 && vfs_profile == VFS_EXEC_PROFILE_NONE ?
+		VFS_DOMAIN_PUBLIC : VFS_DOMAIN_WORKFLOW;
+	vfs_policy = flags == 0 && vfs_profile == VFS_EXEC_PROFILE_NONE ?
+		VFS_POLICY_PUBLIC : VFS_POLICY_WORKFLOW;
 	if ((layout->version != 0 &&
 	     (layout->version != EXEC_LAYOUT_VERSION ||
 	      layout->rw_offset == 0)) ||
-	    (flags != 0 && layout->version != EXEC_LAYOUT_VERSION)) {
+	    (flags != 0 && layout->version != EXEC_LAYOUT_VERSION) ||
+	    !vfs_exec_profile_valid(vfs_profile) ||
+	    (vfs_profile != VFS_EXEC_PROFILE_NONE &&
+	     ((flags & (EXEC_FLAG_IMMUTABLE | EXEC_FLAG_DOMAIN_SAFE)) !=
+	      (EXEC_FLAG_IMMUTABLE | EXEC_FLAG_DOMAIN_SAFE)))) {
 		fprintf(stderr, "mkfs: invalid executable layout for %s\n",
 			host_path);
 		exit(1);
@@ -458,6 +512,65 @@ void install_file(uint rootino, const char *host_path, const char *image,
 	din.exec_role_mask = xint(role_mask);
 	din.exec_layout_version = xint(layout->version);
 	din.exec_rw_offset = xint(layout->rw_offset);
+	din.vfs_magic = xint(VFS_LABEL_MAGIC);
+	din.vfs_version = xint(VFS_LABEL_VERSION);
+	din.vfs_flags = xint(vfs_flags);
+	din.vfs_domain = xint(vfs_domain);
+	din.vfs_policy = xint(vfs_policy);
+	din.vfs_exec_profile = xint(vfs_profile);
+	din.vfs_policy_generation = xint(VFS_POLICY_GENERATION);
+	din.vfs_incarnation = xint(1);
+	din.vfs_checksum = xint(vfs_label_checksum(
+		inum, VFS_LABEL_MAGIC, VFS_LABEL_VERSION,
+		vfs_flags, vfs_domain, vfs_policy, vfs_profile,
+		VFS_POLICY_GENERATION, 1, 0, 0));
+	winode(inum, &din);
+}
+
+static int vfs_exec_profile_valid(uint profile)
+{
+	return profile == VFS_EXEC_PROFILE_NONE ||
+	       profile == VFS_EXEC_PROFILE_WORKFLOW ||
+	       profile == VFS_EXEC_PROFILE_CONTENT_READ ||
+	       profile == VFS_EXEC_PROFILE_ARTIFACT_WRITE;
+}
+
+uint vfs_label_checksum(uint inum, uint magic, uint version, uint flags,
+			uint domain, uint policy, uint exec_profile,
+			uint generation, uint incarnation, uint reserved0,
+			uint reserved1)
+{
+	uint hash = 2166136261U ^ inum;
+	uint words[] = { magic, version, flags, domain, policy, exec_profile,
+			 generation, incarnation, reserved0, reserved1 };
+
+	for (uint i = 0; i < sizeof(words) / sizeof(words[0]); i++) {
+		hash ^= words[i];
+		hash *= 16777619U;
+		hash ^= words[i] >> 16;
+	}
+	return hash ? hash : 1U;
+}
+
+void label_inode(uint inum, uint flags, uint domain, uint policy,
+		 uint exec_profile)
+{
+	struct dinode din;
+
+	rinode(inum, &din);
+	din.vfs_magic = xint(VFS_LABEL_MAGIC);
+	din.vfs_version = xint(VFS_LABEL_VERSION);
+	din.vfs_flags = xint(flags);
+	din.vfs_domain = xint(domain);
+	din.vfs_policy = xint(policy);
+	din.vfs_exec_profile = xint(exec_profile);
+	din.vfs_policy_generation = xint(VFS_POLICY_GENERATION);
+	din.vfs_incarnation = xint(1);
+	din.vfs_reserved0 = 0;
+	din.vfs_reserved1 = 0;
+	din.vfs_checksum = xint(vfs_label_checksum(
+		inum, VFS_LABEL_MAGIC, VFS_LABEL_VERSION, flags, domain,
+		policy, exec_profile, VFS_POLICY_GENERATION, 1, 0, 0));
 	winode(inum, &din);
 }
 
@@ -549,13 +662,22 @@ uint ialloc(ushort type)
 void balloc(int used)
 {
 	uchar buf[BSIZE];
-	int i;
-	assert(used <= BSIZE * 8);
-	bzero(buf, BSIZE);
-	for (i = 0; i < used; i++) {
-		buf[i / 8] = buf[i / 8] | (0x1 << (i % 8));
+	int block;
+
+	assert(used <= FSSIZE);
+	for (block = 0; block < nbitmap; block++) {
+		int base = block * BPB;
+		int limit = used - base;
+
+		if (limit < 0)
+			limit = 0;
+		if (limit > BPB)
+			limit = BPB;
+		bzero(buf, BSIZE);
+		for (int i = 0; i < limit; i++)
+			buf[i / 8] |= 0x1 << (i % 8);
+		wsect(xint(sb.bmapstart) + block, buf);
 	}
-	wsect(sb.bmapstart, buf);
 }
 
 #define min(a, b) ((a) < (b) ? (a) : (b))

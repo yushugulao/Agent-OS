@@ -13,6 +13,7 @@ from pathlib import Path
 BSIZE = 1024
 FSMAGIC_LEGACY = 0x10203040
 FSMAGIC_EXEC_POLICY = 0x10203041
+FSMAGIC_VFS_POLICY = 0x10203042
 ROOTINO = 1
 NDIRECT = 12
 NINDIRECT = BSIZE // 4
@@ -21,9 +22,35 @@ DINODE_SIZE_EXEC_POLICY = 128
 DINODE_SIZE_BY_MAGIC = {
     FSMAGIC_LEGACY: DINODE_SIZE_LEGACY,
     FSMAGIC_EXEC_POLICY: DINODE_SIZE_EXEC_POLICY,
+    FSMAGIC_VFS_POLICY: DINODE_SIZE_EXEC_POLICY,
 }
 DIRSIZ = 14
 T_FILE = 2
+
+EXEC_MANIFEST_VERSION = 2
+EXEC_FLAG_IMMUTABLE = 0x2
+EXEC_FLAG_DOMAIN_SAFE = 0x8
+
+VFS_LABEL_MAGIC = 0x56465331
+VFS_LABEL_VERSION = 1
+VFS_LABEL_F_PUBLIC = 0x1
+VFS_LABEL_F_PROTECTED = 0x2
+VFS_LABEL_F_KERNEL_PRIVATE = 0x4
+VFS_LABEL_F_ROOT = 0x8
+VFS_LABEL_F_FREE = 0x10
+VFS_LABEL_F_KNOWN = 0x1F
+VFS_DOMAIN_PUBLIC = 0
+VFS_DOMAIN_WORKFLOW = 1
+VFS_POLICY_PUBLIC = 1
+VFS_POLICY_WORKFLOW = 2
+VFS_POLICY_KERNEL_PRIVATE = 3
+VFS_POLICY_ROOT = 4
+VFS_POLICY_FREE = 5
+VFS_POLICY_GENERATION = 1
+VFS_EXEC_PROFILE_NONE = 0
+VFS_EXEC_PROFILE_WORKFLOW = 1
+VFS_EXEC_PROFILE_CONTENT_READ = 2
+VFS_EXEC_PROFILE_ARTIFACT_WRITE = 3
 
 
 @dataclass
@@ -46,6 +73,7 @@ class Dinode:
     type: int
     size: int
     addrs: list[int]
+    vfs_policy: int | None = None
 
 
 def u16(data: bytes, offset: int) -> int:
@@ -54,6 +82,96 @@ def u16(data: bytes, offset: int) -> int:
 
 def u32(data: bytes, offset: int) -> int:
     return int.from_bytes(data[offset : offset + 4], "little")
+
+
+def vfs_label_checksum(inum: int, words: list[int]) -> int:
+    value = (2166136261 ^ inum) & 0xFFFFFFFF
+    for word in words:
+        value ^= word
+        value = (value * 16777619) & 0xFFFFFFFF
+        value ^= word >> 16
+        value &= 0xFFFFFFFF
+    return value or 1
+
+
+def validate_vfs_label(raw: bytes, inum: int, file_type: int) -> int:
+    exec_flags = u32(raw, 64)
+    exec_generation = u32(raw, 68)
+    words = [u32(raw, 84 + index * 4) for index in range(10)]
+    checksum = u32(raw, 124)
+    (
+        magic,
+        version,
+        flags,
+        domain,
+        policy,
+        exec_profile,
+        generation,
+        incarnation,
+        reserved0,
+        reserved1,
+    ) = words
+
+    if (
+        magic != VFS_LABEL_MAGIC
+        or version != VFS_LABEL_VERSION
+        or generation != VFS_POLICY_GENERATION
+        or incarnation == 0
+        or reserved0 != 0
+        or reserved1 != 0
+        or flags & ~VFS_LABEL_F_KNOWN
+        or checksum != vfs_label_checksum(inum, words)
+        or exec_profile
+        not in (
+            VFS_EXEC_PROFILE_NONE,
+            VFS_EXEC_PROFILE_WORKFLOW,
+            VFS_EXEC_PROFILE_CONTENT_READ,
+            VFS_EXEC_PROFILE_ARTIFACT_WRITE,
+        )
+    ):
+        raise ValueError(f"invalid VFS label on inode {inum}")
+    if exec_profile != VFS_EXEC_PROFILE_NONE and (
+        file_type != T_FILE
+        or exec_flags & (EXEC_FLAG_IMMUTABLE | EXEC_FLAG_DOMAIN_SAFE)
+        != EXEC_FLAG_IMMUTABLE | EXEC_FLAG_DOMAIN_SAFE
+        or exec_generation != EXEC_MANIFEST_VERSION
+    ):
+        raise ValueError(f"invalid VFS executable profile on inode {inum}")
+
+    valid_shape = False
+    if policy == VFS_POLICY_PUBLIC:
+        valid_shape = (
+            flags == VFS_LABEL_F_PUBLIC
+            and domain == VFS_DOMAIN_PUBLIC
+            and exec_profile == VFS_EXEC_PROFILE_NONE
+        )
+    elif policy == VFS_POLICY_WORKFLOW:
+        valid_shape = (
+            flags == VFS_LABEL_F_PROTECTED and domain == VFS_DOMAIN_WORKFLOW
+        )
+    elif policy == VFS_POLICY_KERNEL_PRIVATE:
+        valid_shape = (
+            flags == VFS_LABEL_F_KERNEL_PRIVATE
+            and domain == VFS_DOMAIN_PUBLIC
+            and exec_profile == VFS_EXEC_PROFILE_NONE
+        )
+    elif policy == VFS_POLICY_ROOT:
+        valid_shape = (
+            flags == VFS_LABEL_F_ROOT
+            and domain == VFS_DOMAIN_PUBLIC
+            and file_type == 1
+            and exec_profile == VFS_EXEC_PROFILE_NONE
+        )
+    elif policy == VFS_POLICY_FREE:
+        valid_shape = (
+            flags == VFS_LABEL_F_FREE
+            and domain == VFS_DOMAIN_PUBLIC
+            and file_type == 0
+            and exec_profile == VFS_EXEC_PROFILE_NONE
+        )
+    if not valid_shape:
+        raise ValueError(f"invalid VFS policy shape on inode {inum}")
+    return policy
 
 
 def read_superblock(image: bytes) -> Superblock:
@@ -82,8 +200,17 @@ def block(image: bytes, blockno: int) -> bytes:
 def read_inode(image: bytes, sb: Superblock, inum: int) -> Dinode:
     offset = (inum // sb.ipb + sb.inodestart) * BSIZE + (inum % sb.ipb) * sb.dinode_size
     raw = image[offset : offset + sb.dinode_size]
+    file_type = u16(raw, 0)
+    vfs_policy = None
+    if sb.magic == FSMAGIC_VFS_POLICY:
+        vfs_policy = validate_vfs_label(raw, inum, file_type)
     addrs = [u32(raw, 12 + i * 4) for i in range(NDIRECT + 1)]
-    return Dinode(type=u16(raw, 0), size=u32(raw, 8), addrs=addrs)
+    return Dinode(
+        type=file_type,
+        size=u32(raw, 8),
+        addrs=addrs,
+        vfs_policy=vfs_policy,
+    )
 
 
 def read_file(image: bytes, inode: Dinode) -> bytes:
@@ -175,6 +302,7 @@ def extract_state_files(image_path: Path, out_dir: Path, repo_dir: Path | None =
     name_map = discover_name_map(repo_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     extracted: list[str] = []
+    workflow_short_names: set[str] = set()
     scanned = 0
     skipped_binary = 0
     for inum, short_name in root_entries(image, sb):
@@ -184,6 +312,17 @@ def extract_state_files(image_path: Path, out_dir: Path, repo_dir: Path | None =
         inode = read_inode(image, sb, inum)
         if inode.type != T_FILE:
             continue
+        if (
+            sb.magic == FSMAGIC_VFS_POLICY
+            and inode.vfs_policy != VFS_POLICY_WORKFLOW
+        ):
+            continue
+        if sb.magic == FSMAGIC_VFS_POLICY:
+            if short_name in workflow_short_names:
+                raise ValueError(
+                    f"duplicate workflow directory entry {short_name}"
+                )
+            workflow_short_names.add(short_name)
         data = read_file(image, inode)
         if not looks_like_state_text(data):
             skipped_binary += 1

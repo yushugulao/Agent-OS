@@ -278,6 +278,7 @@
 #define AGENT_ROLE_INVESTIGATOR  2
 #define AGENT_ROLE_RECOVERY      3
 #define AGENT_ROLE_ORCHESTRATOR  4
+#define AGENT_ROLE_ARTIFACT      5
 
 #define AGENT_CAP_META_READ     (1ULL << 0)
 #define AGENT_CAP_CONTENT_READ  (1ULL << 1)
@@ -377,6 +378,8 @@ struct agent_info {
 	uint64 timeline_wait_sleep_count;
 	uint64 timeline_wait_wakeup_count;
 	uint64 timeline_wait_timeout_count;
+	uint64 filesystem_domain;
+	uint64 filesystem_capability_mask;
 };
 
 struct agent_sched_record {
@@ -680,6 +683,7 @@ struct agent_file_meta {
 	uint64 flags;
 	uint64 dev;
 	uint64 inum;
+	uint64 incarnation;
 	uint64 size;
 	uint64 fs_generation;
 	uint64 update_mask;
@@ -696,6 +700,7 @@ struct agent_file_hit {
 	uint64 dependency_mask;
 	uint64 dev;
 	uint64 inum;
+	uint64 incarnation;
 	uint64 size;
 	uint64 fs_generation;
 };
@@ -756,6 +761,7 @@ struct agent_file_edit_state {
 	uint64 lease_id;
 	uint64 dev;
 	uint64 inum;
+	uint64 incarnation;
 	uint64 base_version;
 	uint64 current_version;
 	uint64 deadline_tick;
@@ -765,6 +771,7 @@ struct agent_file_edit_state {
 
 int agent_create(void);
 int agent_create_role(int role);
+int agent_worker_create(const char *image, uint64 capabilities);
 int agent_info(struct agent_info *info);
 int agent_sched_snapshot(struct agent_sched_record *records, int max);
 int agent_sched_config(struct agent_sched_config *config);

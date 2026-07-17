@@ -381,7 +381,7 @@ uint64 sys_close(int fd)
 		return -1;
 	struct proc *p = curr_proc();
 	struct file *f = p->files[fd];
-	if (f == NULL) {
+	if (f == NULL || fd_is_reserved(f)) {
 		errorf("invalid fd %d", fd);
 		return -1;
 	}
@@ -768,6 +768,9 @@ void syscall()
 		break;
 	case SYS_agent_file_edit_state:
 		ret = sys_agent_file_edit_state(args[0], args[1]);
+		break;
+	case SYS_agent_worker_create:
+		ret = sys_agent_worker_create(args[0], args[1]);
 		break;
 	// LAB5: (2) you may need to add case SYS_enable_deadlock_detect here
 	default:

@@ -4,8 +4,20 @@
 #include "exec_policy.h"
 #include "file.h"
 #include "trap.h"
+#include "vfs_security.h"
 
 extern char INIT_PROC[];
+
+static struct inode *init_image_lookup(char *path)
+{
+	struct inode *ip;
+	int status;
+
+	ip = namei_policy_status(path, VFS_POLICY_WORKFLOW, &status);
+	if (status == FS_LOOKUP_FOUND || status == FS_LOOKUP_ERROR)
+		return ip;
+	return namei_policy_status(path, VFS_POLICY_PUBLIC, &status);
+}
 
 void user_image_discard(struct user_image *image)
 {
@@ -27,13 +39,17 @@ int user_image_build(struct inode *ip, uint64 trapframe_pa,
 	uint64 length;
 	uint64 va_end;
 	int perm;
+	struct vfs_cred kernel_cred;
 
 	if (ip == 0 || image == 0 || trapframe_pa == 0)
 		return -1;
 	memset(image, 0, sizeof(*image));
 	ivalid(ip);
-	if (!exec_policy_inode_layout_valid(ip))
+	if (!vfs_inode_label_valid(ip) ||
+	    !exec_policy_inode_layout_valid(ip) ||
+	    !vfs_exec_profile_valid(ip->vfs_exec_profile))
 		return -1;
+	vfs_cred_kernel(&kernel_cred);
 	image->exec_dev = ip->dev;
 	image->exec_inum = ip->inum;
 	image->exec_flags = ip->exec_flags;
@@ -41,6 +57,8 @@ int user_image_build(struct inode *ip, uint64 trapframe_pa,
 	image->exec_role_mask = ip->exec_role_mask;
 	image->exec_layout_version = ip->exec_layout_version;
 	image->exec_rw_offset = ip->exec_rw_offset;
+	image->vfs_exec_profile = ip->vfs_exec_profile;
+	image->vfs_exec_incarnation = ip->vfs_incarnation;
 	length = ip->size;
 	if (length == 0 || length > MAXVA - BASE_ADDRESS)
 		return -1;
@@ -63,7 +81,8 @@ int user_image_build(struct inode *ip, uint64 trapframe_pa,
 		if (page == 0)
 			goto fail;
 		memset(page, 0, PAGE_SIZE);
-		if (readi(ip, 0, (uint64)page, off, want) != (int)want) {
+		if (readi(ip, &kernel_cred, 0, (uint64)page, off, want) !=
+		    (int)want) {
 			kfree(page);
 			goto fail;
 		}
@@ -104,7 +123,7 @@ int load_init_app()
 
 	if (p == 0)
 		return -1;
-	if ((ip = namei(INIT_PROC)) == 0) {
+	if ((ip = init_image_lookup(INIT_PROC)) == 0) {
 		errorf("invalid init proc name\n");
 		freeproc(p);
 		return -1;

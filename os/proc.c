@@ -5,9 +5,11 @@
 #include "trap.h"
 #include "vm.h"
 #include "queue.h"
+#include "vfs_security.h"
 
 struct proc pool[NPROC];
 __attribute__((aligned(4096))) char trapframe[NPROC][NTHREAD][TRAP_PAGE_SIZE];
+static struct file fd_reservation;
 
 extern char boot_stack_top[];
 struct thread *current_thread;
@@ -415,6 +417,7 @@ found:
 	p->exec_role_mask = 0;
 	p->exec_layout_version = 0;
 	p->exec_rw_offset = 0;
+	vfs_proc_reset(p);
 	p->pagetable = uvmcreate();
 	if (p->pagetable == 0) {
 		p->state = P_UNUSED;
@@ -632,6 +635,7 @@ void proc_install_user_image(struct proc *p, struct user_image *image,
 	uint64 old_max_page = p->max_page;
 	struct thread *main_thread;
 
+	vfs_proc_install_image(p, image, running);
 	p->pagetable = image->pagetable;
 	p->max_page = image->max_page;
 	p->ustack_base = image->ustack_base;
@@ -752,9 +756,11 @@ static void proc_release_resources(struct proc *p)
 	p->exec_role_mask = 0;
 	p->exec_layout_version = 0;
 	p->exec_rw_offset = 0;
+	vfs_proc_reset(p);
 	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
 		if (p->files[i] != NULL) {
-			fileclose(p->files[i]);
+			if (!fd_is_reserved(p->files[i]))
+				fileclose(p->files[i]);
 			p->files[i] = NULL;
 		}
 	}
@@ -801,7 +807,8 @@ void freeproc(struct proc *p)
 	proc_reset_slot(p);
 }
 
-static int fork_common(int make_agent, int agent_role)
+static int fork_common(int make_agent, int agent_role,
+		       struct inode *delegated_image, uint64 delegated_caps)
 {
 	struct proc *np;
 	struct proc *p = curr_proc();
@@ -824,9 +831,16 @@ static int fork_common(int make_agent, int agent_role)
 	np->exec_role_mask = p->exec_role_mask;
 	np->exec_layout_version = p->exec_layout_version;
 	np->exec_rw_offset = p->exec_rw_offset;
+	vfs_proc_fork(p, np, make_agent);
+	if (delegated_image != 0 &&
+	    vfs_proc_delegate_exec(p, np, delegated_image, delegated_caps) < 0) {
+		freeproc(np);
+		return -1;
+	}
 	// Copy file table to new proc
 	for (i = 0; i < FD_BUFFER_SIZE; i++) {
-		if (p->files[i] != NULL) {
+		if (p->files[i] != NULL &&
+		    !fd_is_reserved(p->files[i])) {
 			// uCore teaching runtime shares the file object reference.
 			p->files[i]->ref++;
 			np->files[i] = p->files[i];
@@ -863,7 +877,7 @@ static int fork_common(int make_agent, int agent_role)
 
 int fork()
 {
-	return fork_common(0, AGENT_ROLE_SENTINEL);
+	return fork_common(0, AGENT_ROLE_SENTINEL, 0, 0);
 }
 
 int agent_create_proc()
@@ -877,7 +891,27 @@ int agent_create_role_proc(int role)
 
 	if (status != AGENT_STATUS_OK)
 		return status;
-	return fork_common(1, role);
+	return fork_common(1, role, 0, 0);
+}
+
+int agent_worker_create_proc(char *path, uint64 requested_caps)
+{
+	struct inode *ip;
+	struct proc *p = curr_proc();
+	struct vfs_cred cred;
+	int pid;
+
+	if (path == 0 ||
+	    (ip = namei_policy(path, VFS_POLICY_WORKFLOW)) == 0)
+		return -1;
+	vfs_cred_from_proc(p, &cred);
+	if (!vfs_inode_authorize(ip, &cred, VFS_OP_EXEC)) {
+		iput(ip);
+		return -1;
+	}
+	pid = fork_common(0, AGENT_ROLE_SENTINEL, ip, requested_caps);
+	iput(ip);
+	return pid;
 }
 
 int push_argv_image(pagetable_t pagetable, uint64 stack_base,
@@ -950,24 +984,74 @@ static int exec_thread_ready(struct proc *p)
 	return 1;
 }
 
+static int proc_exec_inode_usable(struct proc *p, struct inode *ip,
+				  const struct vfs_cred *cred)
+{
+	if (ip == 0)
+		return 0;
+	ivalid(ip);
+	if (!vfs_inode_authorize(ip, cred, VFS_OP_EXEC) ||
+	    !exec_policy_inode_layout_valid(ip))
+		return 0;
+	return !p->is_agent ||
+	       exec_policy_inode_allows_role(ip, p->agent_role);
+}
+
+static struct inode *proc_exec_lookup(struct proc *p, char *path,
+				      const struct vfs_cred *cred)
+{
+	struct inode *ip;
+	uint policies[2];
+	int lookup_status;
+
+	if (p->vfs_pending_exec_inum != 0) {
+		ip = namei_policy_status(path, VFS_POLICY_WORKFLOW,
+					 &lookup_status);
+		if (lookup_status != FS_LOOKUP_FOUND)
+			return 0;
+		if (!proc_exec_inode_usable(p, ip, cred)) {
+			if (ip)
+				iput(ip);
+			return 0;
+		}
+		if (ip->dev != p->vfs_pending_exec_dev ||
+		    ip->inum != p->vfs_pending_exec_inum ||
+		    ip->vfs_incarnation !=
+			    p->vfs_pending_exec_incarnation)
+			vfs_proc_reset(p);
+		return ip;
+	}
+	policies[0] = vfs_cred_lookup_policy(cred);
+	policies[1] = policies[0] == VFS_POLICY_WORKFLOW ?
+			      VFS_POLICY_PUBLIC : VFS_POLICY_WORKFLOW;
+	for (int i = 0; i < 2; i++) {
+		ip = namei_policy_status(path, policies[i], &lookup_status);
+		if (lookup_status == FS_LOOKUP_ERROR)
+			return 0;
+		if (proc_exec_inode_usable(p, ip, cred))
+			return ip;
+		if (ip)
+			iput(ip);
+	}
+	return 0;
+}
+
 int exec(char *path, char **argv)
 {
 	struct inode *ip;
 	struct proc *p = curr_proc();
 	struct user_image image;
 	struct trapframe staged;
+	struct vfs_cred cred;
 	int argc;
 
 	if (!exec_thread_ready(p))
 		return -1;
 	infof("exec : %s\n", path);
-	if ((ip = namei(path)) == 0) {
+	vfs_cred_from_proc(p, &cred);
+	ip = proc_exec_lookup(p, path, &cred);
+	if (ip == 0) {
 		errorf("invalid file name %s\n", path);
-		return -1;
-	}
-	if (p->is_agent &&
-	    !exec_policy_inode_allows_role(ip, p->agent_role)) {
-		iput(ip);
 		return -1;
 	}
 	if (user_image_build(ip, (uint64)proc_trapframe(p, 0), &image) < 0) {
@@ -1068,4 +1152,42 @@ int fdalloc(struct file *f)
 		}
 	}
 	return -1;
+}
+
+int fd_is_reserved(struct file *f)
+{
+	return f == &fd_reservation;
+}
+
+int fdreserve()
+{
+	struct proc *p = curr_proc();
+
+	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
+		if (p->files[i] == 0) {
+			p->files[i] = &fd_reservation;
+			return i;
+		}
+	}
+	return -1;
+}
+
+int fdinstall(int fd, struct file *f)
+{
+	struct proc *p = curr_proc();
+
+	if (fd < 0 || fd >= FD_BUFFER_SIZE || f == 0 ||
+	    p->files[fd] != &fd_reservation)
+		return -1;
+	p->files[fd] = f;
+	return 0;
+}
+
+void fdrelease(int fd)
+{
+	struct proc *p = curr_proc();
+
+	if (fd >= 0 && fd < FD_BUFFER_SIZE &&
+	    p->files[fd] == &fd_reservation)
+		p->files[fd] = 0;
 }

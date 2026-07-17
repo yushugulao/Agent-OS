@@ -20,6 +20,8 @@ struct user_image {
 	uint exec_role_mask;
 	uint exec_layout_version;
 	uint exec_rw_offset;
+	uint vfs_exec_profile;
+	uint vfs_exec_incarnation;
 };
 
 int load_init_app();

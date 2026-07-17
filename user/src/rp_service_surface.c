@@ -386,7 +386,10 @@ static int write_agentos_surface_binding_child(void)
 	int snapshot;
 
 	if (agent_info(&info) < 0 || !info.is_agent ||
-	    info.agent_role != AGENT_ROLE_SENTINEL) {
+	    info.agent_role != AGENT_ROLE_ARTIFACT ||
+	    (info.capability_mask &
+	     (AGENT_CAP_CONTENT_READ | AGENT_CAP_ARTIFACT_WRITE)) !=
+	    (AGENT_CAP_CONTENT_READ | AGENT_CAP_ARTIFACT_WRITE)) {
 		return 1;
 	}
 	if (agent_create() != AGENT_STATUS_DENIED) {
@@ -405,7 +408,7 @@ static int write_agentos_surface_binding_child(void)
 		return 1;
 	}
 	if (!rp_append_file("rp_runop",
-			    "agentos_advanced_surface=kernel_bound;agent_role=sentinel;batch_ops=2;context_snapshot=present;context_authority=shadow;status=ready")) {
+			    "agentos_advanced_surface=kernel_bound;agent_role=artifact;batch_ops=2;context_snapshot=present;context_authority=shadow;status=ready")) {
 		return 1;
 	}
 	if (!rp_append_file("rp_runop",

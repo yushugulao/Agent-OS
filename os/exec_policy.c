@@ -17,7 +17,8 @@ static int exec_policy_valid(uint dev, uint inum, uint flags,
 			     uint generation, uint role_mask,
 			     uint layout_version, uint rw_offset)
 {
-	uint required = EXEC_FLAG_TRUSTED | EXEC_FLAG_IMMUTABLE;
+	uint required = EXEC_FLAG_TRUSTED | EXEC_FLAG_IMMUTABLE |
+			EXEC_FLAG_DOMAIN_SAFE;
 
 	return exec_layout_valid(dev, inum, layout_version, rw_offset) &&
 	       generation == EXEC_MANIFEST_VERSION &&
@@ -45,6 +46,8 @@ _Static_assert(EXEC_MANIFEST_F_IMMUTABLE == EXEC_FLAG_IMMUTABLE,
 	       "manifest immutable flag mismatch");
 _Static_assert(EXEC_MANIFEST_F_BOOTSTRAP == EXEC_FLAG_BOOTSTRAP,
 	       "manifest bootstrap flag mismatch");
+_Static_assert(EXEC_MANIFEST_F_DOMAIN_SAFE == EXEC_FLAG_DOMAIN_SAFE,
+	       "manifest domain-safe flag mismatch");
 
 int exec_policy_inode_mutable(struct inode *ip)
 {

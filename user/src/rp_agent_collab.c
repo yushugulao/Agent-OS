@@ -9,26 +9,20 @@ static struct agent_event collab_event;
 static struct agent_op collab_op;
 static struct agent_result collab_result;
 
-static int quiet_file_contains(const char *path, const char *needle)
+static int collab_waiter(int parent_pid)
 {
-	char buf[512];
-	int n = rp_read_file(path, buf, sizeof(buf));
+	struct agent_event event;
 
-	if (n < 0)
-		return 0;
-	return rp_text_contains(buf, needle);
-}
-
-static int collab_waiter(void)
-{
 	if (agent_watch(AGENT_EVENT_MESSAGE, "handoff=recovery-auditor") < 0)
 		return 1;
-	if (!rp_write_file("rp_ac_ready",
-			   "agent=sentinel\n"
-			   "watch=handoff=recovery-auditor\n"
-			   "status=ready\n")) {
+	memset(&event, 0, sizeof(event));
+	event.type = AGENT_EVENT_MESSAGE;
+	event.source_pid = getpid();
+	event.target_pid = parent_pid;
+	event.corr_id = 2100;
+	strcpy(event.payload, "collab=ready;agent=sentinel");
+	if (agent_wake(parent_pid, &event) < 0)
 		return 1;
-	}
 	memset(&collab_event, 0, sizeof(collab_event));
 	if (agent_wait(&collab_event, 100) != AGENT_STATUS_OK ||
 	    collab_event.type != AGENT_EVENT_MESSAGE ||
@@ -46,14 +40,15 @@ static int collab_waiter(void)
 	    collab_result.status != AGENT_STATUS_DENIED) {
 		return 1;
 	}
-	if (!rp_write_file("rp_agentos_collab_ack",
-			   "agent=sentinel\n"
-			   "event=handoff=recovery-auditor\n"
-			   "delivery=kernel_event_queue\n"
-			   "permission_control=sentinel_action_denied\n"
-			   "status=ready\n")) {
+	memset(&event, 0, sizeof(event));
+	event.type = AGENT_EVENT_MESSAGE;
+	event.source_pid = getpid();
+	event.target_pid = parent_pid;
+	event.corr_id = 2102;
+	strcpy(event.payload,
+	       "collab=ack;handoff=recovery-auditor;status=ready");
+	if (agent_wake(parent_pid, &event) < 0)
 		return 1;
-	}
 	return 0;
 }
 
@@ -70,23 +65,28 @@ static int run_kernel_collaboration(void)
 		printf("rp_agent_collab: orchestrate_capability_missing\n");
 		return -1;
 	}
+	if (agent_watch(AGENT_EVENT_MESSAGE, "collab=") < 0)
+		return -1;
 
 	pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	if (pid < 0)
 		return -1;
 	if (pid == 0)
-		exit(collab_waiter());
+		exit(collab_waiter(getppid()));
 
-	for (int i = 0; i < 2000; i++) {
-		if (quiet_file_contains("rp_ac_ready",
-					"status=ready"))
-			break;
-		sched_yield();
-	}
-	if (!quiet_file_contains("rp_ac_ready", "status=ready")) {
+	memset(&collab_event, 0, sizeof(collab_event));
+	if (agent_wait(&collab_event, 100) != AGENT_STATUS_OK ||
+	    collab_event.source_pid != pid ||
+	    !rp_text_contains(collab_event.payload, "collab=ready")) {
 		printf("rp_agent_collab: waiter_not_ready\n");
 		return -1;
 	}
+	if (!rp_write_file("rp_ac_ready",
+			   "agent=sentinel\n"
+			   "watch=handoff=recovery-auditor\n"
+			   "delivery=kernel_event_queue\n"
+			   "status=ready\n"))
+		return -1;
 
 	memset(&collab_event, 0, sizeof(collab_event));
 	collab_event.type = AGENT_EVENT_MESSAGE;
@@ -97,9 +97,19 @@ static int run_kernel_collaboration(void)
 	       "handoff=recovery-auditor;run_id=RUN-042;source=orchestrator");
 	if (agent_wake(pid, &collab_event) < 0)
 		return -1;
+	memset(&collab_event, 0, sizeof(collab_event));
+	if (agent_wait(&collab_event, 100) != AGENT_STATUS_OK ||
+	    collab_event.source_pid != pid ||
+	    !rp_text_contains(collab_event.payload, "collab=ack"))
+		return -1;
 	if (waitpid(pid, &code) != pid || code != 0)
 		return -1;
-	if (!quiet_file_contains("rp_agentos_collab_ack", "status=ready"))
+	if (!rp_write_file("rp_agentos_collab_ack",
+			   "agent=sentinel\n"
+			   "event=handoff=recovery-auditor\n"
+			   "delivery=kernel_event_queue\n"
+			   "permission_control=sentinel_action_denied\n"
+			   "status=ready\n"))
 		return -1;
 
 	memset(&collab_op, 0, sizeof(collab_op));

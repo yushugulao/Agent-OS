@@ -283,13 +283,15 @@
 #define AGENT_ROLE_INVESTIGATOR  2
 #define AGENT_ROLE_RECOVERY      3
 #define AGENT_ROLE_ORCHESTRATOR  4
+#define AGENT_ROLE_ARTIFACT      5
 
 #define AGENT_ROLE_GRANT_BIT(role) (1ULL << ((role) - 1))
 #define AGENT_ROLE_GRANT_ALL \
 	(AGENT_ROLE_GRANT_BIT(AGENT_ROLE_SENTINEL) | \
 	 AGENT_ROLE_GRANT_BIT(AGENT_ROLE_INVESTIGATOR) | \
 	 AGENT_ROLE_GRANT_BIT(AGENT_ROLE_RECOVERY) | \
-	 AGENT_ROLE_GRANT_BIT(AGENT_ROLE_ORCHESTRATOR))
+	 AGENT_ROLE_GRANT_BIT(AGENT_ROLE_ORCHESTRATOR) | \
+	 AGENT_ROLE_GRANT_BIT(AGENT_ROLE_ARTIFACT))
 
 #define AGENT_CAP_META_READ     (1ULL << 0)
 #define AGENT_CAP_CONTENT_READ  (1ULL << 1)
@@ -373,6 +375,8 @@ struct agent_info {
 	uint64 timeline_wait_sleep_count;
 	uint64 timeline_wait_wakeup_count;
 	uint64 timeline_wait_timeout_count;
+	uint64 filesystem_domain;
+	uint64 filesystem_capability_mask;
 };
 
 struct agent_sched_record {
@@ -676,6 +680,7 @@ struct agent_file_meta {
 	uint64 flags;
 	uint64 dev;
 	uint64 inum;
+	uint64 incarnation;
 	uint64 size;
 	uint64 fs_generation;
 	uint64 update_mask;
@@ -692,6 +697,7 @@ struct agent_file_hit {
 	uint64 dependency_mask;
 	uint64 dev;
 	uint64 inum;
+	uint64 incarnation;
 	uint64 size;
 	uint64 fs_generation;
 };
@@ -752,6 +758,7 @@ struct agent_file_edit_state {
 	uint64 lease_id;
 	uint64 dev;
 	uint64 inum;
+	uint64 incarnation;
 	uint64 base_version;
 	uint64 current_version;
 	uint64 deadline_tick;
@@ -835,6 +842,7 @@ int sys_agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
 			       uint64 stateaddr);
 int sys_agent_file_edit_abort(uint64 lease_id);
 int sys_agent_file_edit_state(uint64 pathaddr, uint64 stateaddr);
+int sys_agent_worker_create(uint64 pathaddr, uint64 requested_caps);
 int sys_agent_file_prefetch_snapshot(uint64 hintsaddr, int max);
 int sys_agent_file_prefetch_span_snapshot(uint64 hintsaddr, int max);
 

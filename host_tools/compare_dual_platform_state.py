@@ -74,15 +74,15 @@ AGENTOS_MAINFLOW_STAGES = (
     "edit_conflict",
 )
 AGENTOS_REQUIRED_AGENT_ROLES = {
-    "rp_query": "investigator",
+    "rp_query": "artifact",
     "rp_repair": "recovery",
-    "rp_execobs": "investigator",
+    "rp_execobs": "artifact",
     "rp_agent_collab": "orchestrator",
     "rp_auditor": "orchestrator",
-    "rp_workbench": "sentinel",
+    "rp_workbench": "artifact",
     "rp_package": "orchestrator",
     "rp_realtask": "orchestrator",
-    "rp_service_surface": "sentinel",
+    "rp_service_surface": "artifact",
     "rp_backend": "orchestrator",
 }
 AGENTOS_REQUIRED_AGENT_PROGRAMS = set(AGENTOS_REQUIRED_AGENT_ROLES)

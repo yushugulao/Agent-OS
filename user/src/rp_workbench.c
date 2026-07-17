@@ -22,8 +22,12 @@ static int run_kernel_workbench_stage(void)
 {
 	if (agent_info(&workbench_agent_info) < 0 || !workbench_agent_info.is_agent)
 		return 0;
-	if ((workbench_agent_info.capability_mask & AGENT_CAP_META_READ) == 0) {
-		printf("rp_workbench: metadata_capability_missing\n");
+	if ((workbench_agent_info.capability_mask &
+	     (AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
+	      AGENT_CAP_ARTIFACT_WRITE)) !=
+	    (AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
+	     AGENT_CAP_ARTIFACT_WRITE)) {
+		printf("rp_workbench: filesystem_capability_missing\n");
 		return -1;
 	}
 

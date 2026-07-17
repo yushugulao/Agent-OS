@@ -16,8 +16,12 @@ static int run_kernel_query(void)
 
 	if (agent_info(&info) < 0 || !info.is_agent)
 		return 0;
-	if ((info.capability_mask & AGENT_CAP_META_READ) == 0) {
-		printf("rp_query: metadata_capability_missing\n");
+	if ((info.capability_mask &
+	     (AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
+	      AGENT_CAP_ARTIFACT_WRITE)) !=
+	    (AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
+	     AGENT_CAP_ARTIFACT_WRITE)) {
+		printf("rp_query: filesystem_capability_missing\n");
 		return -1;
 	}
 

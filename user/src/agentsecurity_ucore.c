@@ -49,6 +49,10 @@ static uint64 expected_caps(int role)
 		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
 		       AGENT_CAP_ACTION_WRITE | AGENT_CAP_ARTIFACT_WRITE |
 		       AGENT_CAP_AUDIT_WRITE;
+	if (role == AGENT_ROLE_ARTIFACT)
+		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
+		       AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH |
+		       AGENT_CAP_ARTIFACT_WRITE | AGENT_CAP_AUDIT_WRITE;
 	if (role == AGENT_ROLE_ORCHESTRATOR)
 		return AGENT_CAP_META_READ | AGENT_CAP_CONTENT_READ |
 		       AGENT_CAP_PROCESS_READ | AGENT_CAP_MESSAGE_SEND |
@@ -67,6 +71,10 @@ static void check_role(int role, const char *name)
 	check(info.is_agent == 1, "is agent");
 	check(info.agent_role == role, name);
 	check(info.capability_mask == expected_caps(role), "capability mask");
+	check(info.filesystem_capability_mask ==
+		      (expected_caps(role) &
+		       (AGENT_CAP_CONTENT_READ | AGENT_CAP_ARTIFACT_WRITE)),
+	      "filesystem capability mask");
 	printf("agentsecurity_ucore: role=%s capability_checked=1\n", name);
 }
 
@@ -88,12 +96,12 @@ static void check_creation_authority_denied(void)
 {
 	check(agent_create() == AGENT_STATUS_DENIED, "default create denied");
 	for (int role = AGENT_ROLE_SENTINEL;
-	     role <= AGENT_ROLE_ORCHESTRATOR; role++)
+	     role <= AGENT_ROLE_ARTIFACT; role++)
 		check(agent_create_role(role) == AGENT_STATUS_DENIED,
 		      "role create denied");
 	check(agent_create_role(0) == AGENT_STATUS_BAD_PARAM,
 	      "invalid low role denied");
-	check(agent_create_role(AGENT_ROLE_ORCHESTRATOR + 1) ==
+	check(agent_create_role(AGENT_ROLE_ARTIFACT + 1) ==
 		      AGENT_STATUS_BAD_PARAM,
 	      "invalid high role denied");
 }
@@ -457,6 +465,20 @@ static void run_investigator(void)
 	exit(0);
 }
 
+static void run_artifact(void)
+{
+	struct agent_op op;
+	struct agent_result res;
+
+	check_role(AGENT_ROLE_ARTIFACT, "artifact");
+	check_delegation_denied("artifact");
+	make_op(&op, AGENT_TOOL_ACTION_COMMIT, 9201, AGENT_ROLE_SENTINEL,
+		"label=align;run_id=RUN-999;namespace=lab-gene-x");
+	run_one(&op, &res, AGENT_STATUS_DENIED, "artifact action denied");
+	printf("agentsecurity_ucore: artifact_action_denied=1\n");
+	exit(0);
+}
+
 static void run_orchestrator(void)
 {
 	int pid;
@@ -485,6 +507,12 @@ static void run_orchestrator(void)
 		run_investigator();
 	check(waitpid(pid, &status) == pid, "wait investigator");
 	check(status == 0, "investigator status");
+	pid = agent_create_role(AGENT_ROLE_ARTIFACT);
+	check(pid >= 0, "create artifact");
+	if (pid == 0)
+		run_artifact();
+	check(waitpid(pid, &status) == pid, "wait artifact");
+	check(status == 0, "artifact status");
 	check_align_status("RUN-042", "failed");
 	check_align_status("RUN-999", "failed");
 	check_align_status("RUN-998", "failed");

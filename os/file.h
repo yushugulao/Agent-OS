@@ -26,6 +26,17 @@ struct inode {
 	uint exec_role_mask;
 	uint exec_layout_version;
 	uint exec_rw_offset;
+	uint vfs_magic;
+	uint vfs_version;
+	uint vfs_flags;
+	uint vfs_domain;
+	uint vfs_policy;
+	uint vfs_exec_profile;
+	uint vfs_policy_generation;
+	uint vfs_incarnation;
+	uint vfs_reserved0;
+	uint vfs_reserved1;
+	uint vfs_checksum;
 	// LAB4: You may need to add link count here
 };
 

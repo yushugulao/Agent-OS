@@ -217,7 +217,7 @@ def main() -> int:
         write_timing(agentos, "fork", hybrid_agentos=True)
         bad = (agentos / "rp_orch_timing").read_text(encoding="utf-8")
         bad = bad.replace(
-            "program=rp_service_surface;role=sentinel",
+            "program=rp_service_surface;role=artifact",
             "program=rp_service_surface;role=orchestrator",
             1,
         )

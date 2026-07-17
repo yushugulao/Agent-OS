@@ -1,0 +1,55 @@
+#ifndef VFS_SECURITY_H
+#define VFS_SECURITY_H
+
+#include "types.h"
+
+struct inode;
+struct proc;
+struct user_image;
+
+struct vfs_cred {
+	uint domain;
+	uint64 capabilities;
+	int kernel;
+};
+
+enum vfs_operation {
+	VFS_OP_LOOKUP = 1,
+	VFS_OP_READ,
+	VFS_OP_CREATE,
+	VFS_OP_WRITE,
+	VFS_OP_TRUNCATE,
+	VFS_OP_DELETE,
+	VFS_OP_EXEC,
+};
+
+#define VFS_CAP_CONTENT_READ   (1ULL << 1)
+#define VFS_CAP_ARTIFACT_WRITE (1ULL << 6)
+#define VFS_CAP_WORKFLOW \
+	(VFS_CAP_CONTENT_READ | VFS_CAP_ARTIFACT_WRITE)
+
+void vfs_cred_kernel(struct vfs_cred *);
+void vfs_cred_from_proc(const struct proc *, struct vfs_cred *);
+uint vfs_cred_lookup_policy(const struct vfs_cred *);
+void vfs_proc_reset(struct proc *);
+void vfs_proc_fork(const struct proc *, struct proc *, int);
+void vfs_proc_limit_capabilities(struct proc *, uint64);
+int vfs_proc_delegate_exec(const struct proc *, struct proc *, struct inode *,
+			   uint64);
+void vfs_proc_install_image(struct proc *, const struct user_image *, int);
+
+int vfs_exec_profile_valid(uint);
+uint64 vfs_exec_profile_capabilities(uint);
+int vfs_inode_label_valid(struct inode *);
+int vfs_inode_authorize(struct inode *, const struct vfs_cred *,
+			 enum vfs_operation);
+uint vfs_default_create_policy(const struct vfs_cred *);
+int vfs_create_request_authorize(const struct vfs_cred *, uint, int, int,
+				 int);
+int vfs_inode_init_label(struct inode *, const struct vfs_cred *, uint);
+int vfs_inode_create_matches(struct inode *, const struct vfs_cred *, uint);
+void vfs_inode_mark_free(struct inode *);
+uint vfs_label_checksum(uint, uint, uint, uint, uint, uint, uint, uint, uint,
+			uint, uint);
+
+#endif

@@ -14,7 +14,7 @@
 #define MAXOPBLOCKS 10 // max # of blocks any FS op writes
 #define NBUF (MAXOPBLOCKS * 3) // size of disk block cache
 #ifndef FSSIZE
-#define FSSIZE 8192 // size of file system in blocks
+#define FSSIZE 16384 // size of file system in blocks
 #endif
 #define MAXPATH 128 // maximum file path name
 
@@ -35,7 +35,7 @@ struct superblock {
 	uint bmapstart; // Block number of first free map block
 };
 
-#define FSMAGIC 0x10203041
+#define FSMAGIC 0x10203042
 
 #define NDIRECT 12
 #define NINDIRECT (BSIZE / sizeof(uint))
@@ -48,10 +48,35 @@ struct superblock {
 #define EXEC_FLAG_TRUSTED   0x1U
 #define EXEC_FLAG_IMMUTABLE 0x2U
 #define EXEC_FLAG_BOOTSTRAP 0x4U
+#define EXEC_FLAG_DOMAIN_SAFE 0x8U
 #define EXEC_FLAG_KNOWN \
-	(EXEC_FLAG_TRUSTED | EXEC_FLAG_IMMUTABLE | EXEC_FLAG_BOOTSTRAP)
+	(EXEC_FLAG_TRUSTED | EXEC_FLAG_IMMUTABLE | EXEC_FLAG_BOOTSTRAP | \
+	 EXEC_FLAG_DOMAIN_SAFE)
 #define EXEC_ROLE_BIT(role) (1U << (role))
 #define EXEC_LAYOUT_VERSION 1U
+
+#define VFS_LABEL_MAGIC 0x56465331U
+#define VFS_LABEL_VERSION 1U
+#define VFS_LABEL_F_PUBLIC         0x1U
+#define VFS_LABEL_F_PROTECTED      0x2U
+#define VFS_LABEL_F_KERNEL_PRIVATE 0x4U
+#define VFS_LABEL_F_ROOT           0x8U
+#define VFS_LABEL_F_FREE           0x10U
+#define VFS_LABEL_F_KNOWN \
+	(VFS_LABEL_F_PUBLIC | VFS_LABEL_F_PROTECTED | \
+	 VFS_LABEL_F_KERNEL_PRIVATE | VFS_LABEL_F_ROOT | VFS_LABEL_F_FREE)
+#define VFS_DOMAIN_PUBLIC 0U
+#define VFS_DOMAIN_WORKFLOW 1U
+#define VFS_POLICY_PUBLIC 1U
+#define VFS_POLICY_WORKFLOW 2U
+#define VFS_POLICY_KERNEL_PRIVATE 3U
+#define VFS_POLICY_ROOT 4U
+#define VFS_POLICY_FREE 5U
+#define VFS_POLICY_GENERATION 1U
+#define VFS_EXEC_PROFILE_NONE 0U
+#define VFS_EXEC_PROFILE_WORKFLOW 1U
+#define VFS_EXEC_PROFILE_CONTENT_READ 2U
+#define VFS_EXEC_PROFILE_ARTIFACT_WRITE 3U
 
 // LAB4: Keep it the same as dinode in os/fs.h after you change it
 // On-disk inode structure
@@ -67,7 +92,17 @@ struct dinode {
 	uint exec_role_mask;
 	uint exec_layout_version;
 	uint exec_rw_offset;
-	uint exec_reserved[11];
+	uint vfs_magic;
+	uint vfs_version;
+	uint vfs_flags;
+	uint vfs_domain;
+	uint vfs_policy;
+	uint vfs_exec_profile;
+	uint vfs_policy_generation;
+	uint vfs_incarnation;
+	uint vfs_reserved0;
+	uint vfs_reserved1;
+	uint vfs_checksum;
 };
 
 _Static_assert(sizeof(struct dinode) == 128,

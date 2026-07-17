@@ -17,6 +17,7 @@
 #include "proc.h"
 #include "riscv.h"
 #include "types.h"
+#include "vfs_security.h"
 // there should be one superblock per disk device, but we run with
 // only one device
 struct superblock sb;
@@ -105,6 +106,7 @@ static struct inode *iget(uint dev, uint inum);
 struct inode *ialloc(uint dev, short type)
 {
 	int inum;
+	uint incarnation;
 	struct buf *bp;
 	struct dinode *dip;
 	struct inode *ip;
@@ -118,8 +120,24 @@ struct inode *ialloc(uint dev, short type)
 				brelse(bp);
 				return 0;
 			}
+			incarnation = dip->vfs_incarnation + 1;
+			if (incarnation == 0)
+				incarnation = 1;
 			memset(dip, 0, sizeof(*dip));
 			dip->type = type;
+			dip->vfs_magic = VFS_LABEL_MAGIC;
+			dip->vfs_version = VFS_LABEL_VERSION;
+			dip->vfs_flags = VFS_LABEL_F_FREE;
+			dip->vfs_policy = VFS_POLICY_FREE;
+			dip->vfs_policy_generation = VFS_POLICY_GENERATION;
+			dip->vfs_incarnation = incarnation;
+			dip->vfs_checksum = vfs_label_checksum(
+				inum, dip->vfs_magic, dip->vfs_version,
+				dip->vfs_flags, dip->vfs_domain,
+				dip->vfs_policy, dip->vfs_exec_profile,
+				dip->vfs_policy_generation,
+				dip->vfs_incarnation, dip->vfs_reserved0,
+				dip->vfs_reserved1);
 			bwrite(bp);
 			brelse(bp);
 			return ip;
@@ -149,6 +167,17 @@ void iupdate(struct inode *ip)
 	dip->exec_role_mask = ip->exec_role_mask;
 	dip->exec_layout_version = ip->exec_layout_version;
 	dip->exec_rw_offset = ip->exec_rw_offset;
+	dip->vfs_magic = ip->vfs_magic;
+	dip->vfs_version = ip->vfs_version;
+	dip->vfs_flags = ip->vfs_flags;
+	dip->vfs_domain = ip->vfs_domain;
+	dip->vfs_policy = ip->vfs_policy;
+	dip->vfs_exec_profile = ip->vfs_exec_profile;
+	dip->vfs_policy_generation = ip->vfs_policy_generation;
+	dip->vfs_incarnation = ip->vfs_incarnation;
+	dip->vfs_reserved0 = ip->vfs_reserved0;
+	dip->vfs_reserved1 = ip->vfs_reserved1;
+	dip->vfs_checksum = ip->vfs_checksum;
 	// LAB4: you may need to update link count here
 	memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
 	bwrite(bp);
@@ -185,6 +214,13 @@ static struct inode *iget(uint dev, uint inum)
 	return ip;
 }
 
+struct inode *inode_get(uint dev, uint inum)
+{
+	if (inum == 0 || inum >= sb.ninodes)
+		return 0;
+	return iget(dev, inum);
+}
+
 // Increment reference count for ip.
 // Returns ip to enable ip = idup(ip1) idiom.
 struct inode *idup(struct inode *ip)
@@ -211,6 +247,17 @@ void ivalid(struct inode *ip)
 		ip->exec_role_mask = dip->exec_role_mask;
 		ip->exec_layout_version = dip->exec_layout_version;
 		ip->exec_rw_offset = dip->exec_rw_offset;
+		ip->vfs_magic = dip->vfs_magic;
+		ip->vfs_version = dip->vfs_version;
+		ip->vfs_flags = dip->vfs_flags;
+		ip->vfs_domain = dip->vfs_domain;
+		ip->vfs_policy = dip->vfs_policy;
+		ip->vfs_exec_profile = dip->vfs_exec_profile;
+		ip->vfs_policy_generation = dip->vfs_policy_generation;
+		ip->vfs_incarnation = dip->vfs_incarnation;
+		ip->vfs_reserved0 = dip->vfs_reserved0;
+		ip->vfs_reserved1 = dip->vfs_reserved1;
+		ip->vfs_checksum = dip->vfs_checksum;
 		// LAB4: You may need to get lint count here
 		memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
 		brelse(bp);
@@ -228,7 +275,10 @@ void ivalid(struct inode *ip)
 void iput(struct inode *ip)
 {
 	if (ip->ref == 1 && ip->valid && ip->removed) {
-		if (itrunc(ip) < 0) {
+		struct vfs_cred kernel_cred;
+
+		vfs_cred_kernel(&kernel_cred);
+		if (itrunc(ip, &kernel_cred) < 0) {
 			ip->removed = 0;
 			ip->ref--;
 			return;
@@ -242,6 +292,7 @@ void iput(struct inode *ip)
 		ip->exec_role_mask = 0;
 		ip->exec_layout_version = 0;
 		ip->exec_rw_offset = 0;
+		vfs_inode_mark_free(ip);
 		iupdate(ip);
 		ip->valid = 0;
 		ip->removed = 0;
@@ -350,13 +401,14 @@ static void bmap_discard(struct inode *ip, uint bn)
 }
 
 // Truncate inode (discard contents).
-int itrunc(struct inode *ip)
+int itrunc(struct inode *ip, const struct vfs_cred *cred)
 {
 	int i, j;
 	struct buf *bp;
 	uint *a;
 
-	if (!exec_policy_inode_mutable(ip))
+	if (!vfs_inode_authorize(ip, cred, VFS_OP_TRUNCATE) ||
+	    !exec_policy_inode_mutable(ip))
 		return -1;
 
 	for (i = 0; i < NDIRECT; i++) {
@@ -386,12 +438,15 @@ int itrunc(struct inode *ip)
 // Read data from inode.
 // If user_dst==1, then dst is a user virtual address;
 // otherwise, dst is a kernel address.
-int readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
+int readi(struct inode *ip, const struct vfs_cred *cred, int user_dst,
+	  uint64 dst, uint off, uint n)
 {
 	uint tot, m, addr;
 	struct buf *bp;
 	int failed = 0;
 
+	if (!vfs_inode_authorize(ip, cred, VFS_OP_READ))
+		return -1;
 	if (off > ip->size || off + n < off)
 		return 0;
 	if (off + n > ip->size)
@@ -425,13 +480,16 @@ int readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
 // Returns the number of bytes successfully written.
 // If the return value is less than the requested n,
 // there was an error of some kind.
-int writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
+int writei(struct inode *ip, const struct vfs_cred *cred, int user_src,
+	   uint64 src, uint off, uint n)
 {
 	uint tot, m, addr, bn;
 	struct buf *bp;
 	int allocated;
 	int failed = 0;
 
+	if (!vfs_inode_authorize(ip, cred, VFS_OP_WRITE))
+		return -1;
 	if (n != 0 && !exec_policy_inode_mutable(ip))
 		return -1;
 	if (off > ip->size || off + n < off)
@@ -480,47 +538,101 @@ int writei(struct inode *ip, int user_src, uint64 src, uint off, uint n)
 
 // Look for a directory entry in a directory.
 // If found, set *poff to byte offset of entry.
-struct inode *dirlookup(struct inode *dp, char *name, uint *poff)
+struct inode *dirlookup(struct inode *dp, char *name, uint *poff,
+			uint policy, int *status)
 {
-	uint off, inum;
+	uint off, found_off = 0;
 	struct dirent de;
+	struct inode *found = 0;
+	struct inode *target;
+	struct vfs_cred kernel_cred;
 
-	if (dp == 0 || dp->type != T_DIR)
+	if (status)
+		*status = FS_LOOKUP_ERROR;
+	if (dp == 0 || dp->type != T_DIR || policy == 0)
 		return 0;
+	vfs_cred_kernel(&kernel_cred);
 
 	for (off = 0; off < dp->size; off += sizeof(de)) {
-		if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+		if (readi(dp, &kernel_cred, 0, (uint64)&de, off,
+			  sizeof(de)) != sizeof(de)) {
+			if (found)
+				iput(found);
 			return 0;
+		}
 		if (de.inum == 0)
 			continue;
 		if (strncmp(name, de.name, DIRSIZ) == 0) {
-			// entry matches path element
-			if (poff)
-				*poff = off;
-			inum = de.inum;
-			return iget(dp->dev, inum);
+			target = inode_get(dp->dev, de.inum);
+			if (target == 0) {
+				if (found)
+					iput(found);
+				return 0;
+			}
+			ivalid(target);
+			if (!vfs_inode_label_valid(target)) {
+				iput(target);
+				if (found)
+					iput(found);
+				return 0;
+			}
+			if (policy != 0 && target->vfs_policy != policy) {
+				iput(target);
+				continue;
+			}
+			if (found) {
+				iput(target);
+				iput(found);
+				return 0;
+			}
+			found = target;
+			found_off = off;
 		}
 	}
-
-	return 0;
+	if (found) {
+		if (poff)
+			*poff = found_off;
+		if (status)
+			*status = FS_LOOKUP_FOUND;
+	} else if (status) {
+		*status = FS_LOOKUP_ABSENT;
+	}
+	return found;
 }
 
 //Show the filenames of all files in the directory
-int dirls(struct inode *dp)
+int dirls(struct inode *dp, const struct vfs_cred *cred)
 {
 	uint64 off, count;
 	struct dirent de;
+	struct inode *target;
 	char name[DIRSIZ + 1];
 
 	if (dp == 0 || dp->type != T_DIR)
 		return -1;
+	if (!vfs_inode_authorize(dp, cred, VFS_OP_READ))
+		return -1;
 
 	count = 0;
 	for (off = 0; off < dp->size; off += sizeof(de)) {
-		if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+		if (readi(dp, cred, 0, (uint64)&de, off, sizeof(de)) !=
+		    sizeof(de))
 			return -1;
 		if (de.inum == 0)
 			continue;
+		target = inode_get(dp->dev, de.inum);
+		if (target == 0)
+			return -1;
+		ivalid(target);
+		if (!vfs_inode_label_valid(target)) {
+			iput(target);
+			return -1;
+		}
+		if (!vfs_inode_authorize(target, cred, VFS_OP_LOOKUP)) {
+			iput(target);
+			continue;
+		}
+		iput(target);
 		memmove(name, de.name, DIRSIZ);
 		name[DIRSIZ] = 0;
 		printf("%s\n", name);
@@ -530,67 +642,91 @@ int dirls(struct inode *dp)
 }
 
 // Write a new directory entry (name, inum) into the directory dp.
-int dirlink(struct inode *dp, char *name, uint inum)
+int dirlink(struct inode *dp, char *name, uint inum,
+	    const struct vfs_cred *cred)
 {
 	int off;
 	struct dirent de;
 	struct inode *ip;
+	struct inode *target;
+	struct vfs_cred kernel_cred;
+	uint target_policy;
+	int lookup_status;
 	if (dp == 0 || dp->type != T_DIR)
 		return -1;
+	if (!vfs_inode_authorize(dp, cred, VFS_OP_CREATE))
+		return -1;
+	target = inode_get(dp->dev, inum);
+	if (target == 0 || !vfs_inode_label_valid(target)) {
+		if (target)
+			iput(target);
+		return -1;
+	}
+	target_policy = target->vfs_policy;
+	iput(target);
+	vfs_cred_kernel(&kernel_cred);
 	// Check that name is not present.
-	if ((ip = dirlookup(dp, name, 0)) != 0) {
+	ip = dirlookup(dp, name, 0, target_policy, &lookup_status);
+	if (ip != 0) {
 		iput(ip);
 		return -1;
 	}
+	if (lookup_status != FS_LOOKUP_ABSENT)
+		return -1;
 
 	// Look for an empty dirent.
 	for (off = 0; off < dp->size; off += sizeof(de)) {
-		if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+		if (readi(dp, &kernel_cred, 0, (uint64)&de, off,
+			  sizeof(de)) != sizeof(de))
 			return -1;
 		if (de.inum == 0)
 			break;
 	}
 	strncpy(de.name, name, DIRSIZ);
 	de.inum = inum;
-	if (writei(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
+	if (writei(dp, &kernel_cred, 0, (uint64)&de, off,
+		   sizeof(de)) != sizeof(de))
 		return -1;
 	return 0;
 }
 
-int dirunlink(struct inode *dp, char *name, uint *inum)
+int dirunlink(struct inode *dp, char *name, uint offset, uint expected_inum,
+	      uint expected_incarnation, const struct vfs_cred *cred,
+	      uint policy)
 {
-	uint off;
 	struct dirent de;
 	struct inode *target;
+	struct vfs_cred kernel_cred;
 
 	if (dp == 0 || dp->type != T_DIR)
 		return -1;
-
-	for (off = 0; off < dp->size; off += sizeof(de)) {
-		if (readi(dp, 0, (uint64)&de, off, sizeof(de)) != sizeof(de))
-			return -1;
-		if (de.inum == 0)
-			continue;
-		if (strncmp(name, de.name, DIRSIZ) == 0) {
-			target = iget(dp->dev, de.inum);
-			if (target == 0)
-				return -1;
-			ivalid(target);
-			if (!exec_policy_inode_mutable(target)) {
-				iput(target);
-				return -1;
-			}
-			iput(target);
-			if (inum)
-				*inum = de.inum;
-			memset(&de, 0, sizeof(de));
-			if (writei(dp, 0, (uint64)&de, off, sizeof(de)) !=
-			    sizeof(de))
-				return -1;
-			return 0;
-		}
+	if (!vfs_inode_authorize(dp, cred, VFS_OP_DELETE))
+		return -1;
+	if (offset >= dp->size || offset % sizeof(de) != 0)
+		return -1;
+	vfs_cred_kernel(&kernel_cred);
+	if (readi(dp, &kernel_cred, 0, (uint64)&de, offset,
+		  sizeof(de)) != sizeof(de) || de.inum != expected_inum ||
+	    strncmp(name, de.name, DIRSIZ) != 0)
+		return -1;
+	target = inode_get(dp->dev, de.inum);
+	if (target == 0)
+		return -1;
+	ivalid(target);
+	if (!vfs_inode_label_valid(target) ||
+	    target->vfs_policy != policy ||
+	    target->vfs_incarnation != expected_incarnation ||
+	    !vfs_inode_authorize(target, cred, VFS_OP_DELETE) ||
+	    !exec_policy_inode_mutable(target)) {
+		iput(target);
+		return -1;
 	}
-	return -1;
+	iput(target);
+	memset(&de, 0, sizeof(de));
+	if (writei(dp, &kernel_cred, 0, (uint64)&de, offset,
+		   sizeof(de)) != sizeof(de))
+		return -1;
+	return 0;
 }
 
 //Return the inode of the root directory
@@ -607,22 +743,34 @@ struct inode *root_dir()
 	return r;
 }
 
-struct inode *fs_create(char *path, short type, int *created)
+struct inode *fs_create(char *path, short type, int *created,
+			const struct vfs_cred *cred, uint policy)
 {
 	struct inode *dp;
 	struct inode *ip;
+	int lookup_status;
 
 	if (created)
 		*created = 0;
 	dp = root_dir();
 	if (dp == 0)
 		return 0;
-	if ((ip = dirlookup(dp, path, 0)) != 0) {
+	if (!vfs_inode_authorize(dp, cred, VFS_OP_CREATE)) {
+		iput(dp);
+		return 0;
+	}
+	ip = dirlookup(dp, path, 0, policy, &lookup_status);
+	if (ip != 0) {
 		iput(dp);
 		ivalid(ip);
-		if (type == T_FILE && ip->type == T_FILE)
+		if (type == T_FILE && ip->type == T_FILE &&
+		    vfs_inode_create_matches(ip, cred, policy))
 			return ip;
 		iput(ip);
+		return 0;
+	}
+	if (lookup_status != FS_LOOKUP_ABSENT) {
+		iput(dp);
 		return 0;
 	}
 	ip = ialloc(dp->dev, type);
@@ -631,7 +779,13 @@ struct inode *fs_create(char *path, short type, int *created)
 		return 0;
 	}
 	ivalid(ip);
-	if (ip->type != type || dirlink(dp, path, ip->inum) < 0) {
+	if (ip->type != type || vfs_inode_init_label(ip, cred, policy) < 0) {
+		iabort(ip);
+		iput(dp);
+		return 0;
+	}
+	iupdate(ip);
+	if (dirlink(dp, path, ip->inum, cred) < 0) {
 		iabort(ip);
 		iput(dp);
 		return 0;
@@ -642,8 +796,8 @@ struct inode *fs_create(char *path, short type, int *created)
 	return ip;
 }
 
-//Find the corresponding inode according to the path
-struct inode *namei(char *path)
+// Find the corresponding inode in one security namespace.
+struct inode *namei_policy_status(char *path, uint policy, int *status)
 {
 	int skip = 0;
 	struct inode *ip;
@@ -652,10 +806,17 @@ struct inode *namei(char *path)
 	// if (path[0] == '/') {
 	//     skip = 1;
 	// }
+	if (status)
+		*status = FS_LOOKUP_ERROR;
 	struct inode *dp = root_dir();
 	if (dp == 0)
 		return 0;
-	ip = dirlookup(dp, path + skip, 0);
+	ip = dirlookup(dp, path + skip, 0, policy, status);
 	iput(dp);
 	return ip;
+}
+
+struct inode *namei_policy(char *path, uint policy)
+{
+	return namei_policy_status(path, policy, 0);
 }
