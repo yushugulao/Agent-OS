@@ -1,6 +1,6 @@
 # 安全加固与资源韧性设计
 
-本文记录 AgentOS-uCore 在系统调用输入防护、同步、文件系统、调度、可信执行、文件访问和进程生命周期上的安全加固。目标不是为已知测试增加特判，而是建立可复用的内核机制，使普通进程或低权限 Agent 的错误和恶意输入不能停止内核、伪造权限或永久占住全局进程执行槽。进程槽按资源域隔离；已覆盖路径上的文件、inode 和临时内存分配失败通过可恢复错误与完整回滚保持系统继续运行。
+本文记录 AgentOS-uCore 在系统调用输入防护、同步、文件系统、调度、可信执行、文件访问和进程生命周期上的安全加固。目标不是为已知测试增加特判，而是建立可复用的内核机制，使普通进程或低权限 Agent 的错误和恶意输入不能停止内核、伪造权限或耗尽全局资源。进程槽、文件系统块和 inode 均受资源域上限约束；已覆盖路径上的资源不足通过可恢复错误与完整回滚保持系统继续运行。
 
 ## 1. 与赛题要求的关系
 
@@ -41,6 +41,7 @@
 | `93d89ae` | 进程退出遗弃阻塞 syscall 中其他线程的临时资源 | 退出逐线程定向取消等待并等待同进程线程退出阻塞路径，再销毁共享地址空间、文件和同步对象 | `procreap_ucore` |
 | `6362075` | 有父僵尸长期占用执行槽 | 将父进程可见的退出状态保存为独立 child record，执行槽可先释放，父进程仍可取得 `wait()` 结果 | `procreap_ucore` |
 | `807b1e4` | 长存活 fork bomb 耗尽统一进程池 | 后代绑定不可变进程资源域，普通域有累计 live 配额，bootstrap/Agent worker 使用受控保留槽 | `procreap_ucore`、`procreap_agent_ucore` |
+| 当前变更 | PUBLIC 进程持久耗尽块和 inode，使工作流与内核元数据进入 ENOSPC | 稳定存储域 cookie、逐块 owner map、inode owner、域配额及 PUBLIC/WORKFLOW/SYSTEM 分级保留水位共同约束分配 | `fsquota_ucore` 两组配额/保留场景，`fsenospc_ucore` 双目标复测 |
 
 ## 4. 用户输入与内核对象检查
 
@@ -72,6 +73,16 @@
 非管理员的普通 fork 后代继承不可变的 `resource_domain_id`，一个域的 live 进程数最多为 `PROC_RESOURCE_DOMAIN_LIMIT`。受控的资源域管理员创建普通直接子进程时会建立新域，而 Agent 和 worker admission 可建立受控保留域。普通进程合计只能使用 `PROC_ORDINARY_SLOTS`；`PROC_RESERVED_SLOTS` 由内核受控的 boot、Agent 和 worker admission 路径使用。创建新隔离域或消耗保留槽需要内核持有的 domain admin 状态，用户态不能通过参数自行获得。
 
 这套机制同时满足三个目标：单个长存活 fork bomb 有上限；父进程退出或后代重新挂接不能重置配额；普通域达到上限后，受权 Agent 和 worker admission 仍有独立保留槽。
+
+### 5.4 文件系统存储域与分级保留量
+
+进程表中的 `resource_domain_id` 是可复用槽位，不能直接作为持久磁盘身份。内核因此为每个新进程资源域分配单调递增的 `storage_domain_id` cookie：同域 fork 后代继承 cookie，新域取得新 cookie，`exec` 不改变 cookie。文件系统启动时扫描已分配 inode 和块 owner map，取持久 cookie 最大值作为新 cookie 下界；达到 32 位上界时拒绝创建新域，不回绕到旧身份。
+
+新磁盘格式在 bitmap 后增加逐块 owner map，并在 inode 中保存创建域 cookie 和格式版本。数据块、间接索引块和目录扩容块按实际分配主体写入 owner；`truncate`、`unlink`、失败写回滚和 inode 回收再按持久 owner 精确退款。授权凭据与分配凭据是两个对象：例如根目录更新仍以 kernel cred 完成目录授权，但块配额使用发起创建操作的原始主体，普通进程不能借内核代办路径消耗系统保留量。
+
+分配水位分为三层：PUBLIC 必须同时留下 workflow 和 system 保留量；具有受控 workflow 写能力的主体可以使用 workflow 保留量，但必须留下 system 保留量；只有内核维护路径和受信任系统域可以使用最后的 system 保留量。PUBLIC 和 WORKFLOW 的块、inode 还分别累计到不可变进程资源域上限。同域最后一个进程退出后，内存域计数可以释放，因为该 cookie 不再授予任何新进程；遗留对象仍占 bitmap/inode，继续压低全局空闲量，因此退出、重启或换父进程都不能越过保留水位。
+
+挂载时会校验 `inode -> bitmap -> owner map -> data` 的完整布局，并从 bitmap、inode 和 owner map 重建空闲计数及 cookie 下界。已分配块缺少 owner、已分配 inode owner/version 无效或新旧格式混用会拒绝启动。当前教学文件系统没有日志，因此这里只保证分配器写入顺序和可识别的不一致状态，不宣称突然掉电时具备完整事务原子性。
 
 ## 6. 可信 Agent 权限链
 
@@ -122,7 +133,7 @@ inode 标签带布局版本和一致性校验值。该校验用于发现格式�
 
 Agent 评分仍可使用角色权重、priority、budget、事件、deadline、heartbeat 和虚拟运行量表达策略，但调度器额外维护不可配置的类级公平上限：连续选择 Agent 达到 `AGENT_SCHED_MAX_AGENT_BURST` 后，只要普通任务可运行，就必须选择普通 FIFO 任务。评分策略无法覆盖这条上限。
 
-文件系统对 inode、inode cache 和数据块耗尽返回失败，回滚未提交状态并准确报告短写；专项压力用例还会在释放对象后验证后续分配可以成功。全局文件池分配失败也沿错误路径向上传播，但当前只验证了进程 fd 槽不足时的引用清理，尚缺耗尽整个 `FILEPOOLSIZE` 的独立压力用例。每线程内核栈使用 16 KiB 栈槽和 4 KiB 未映射 guard，并在低端保留 canary；构建时由 `make kernel-stack-check` 拒绝超过预算或无法确定上界的调用链。
+文件系统对 inode、inode cache 和数据块耗尽返回失败，回滚未提交状态并准确报告短写；存储域配额和分级水位进一步保证 PUBLIC 压力不能触及 workflow/system 保留量。专项压力用例验证同域计数跨子进程退出仍有效、释放后可复用，以及 PUBLIC 触及全局水位后 workflow 文件与内核 `.agentmeta` 仍可持久写入。全局文件池分配失败也沿错误路径向上传播，但当前只验证了进程 fd 槽不足时的引用清理，尚缺耗尽整个 `FILEPOOLSIZE` 的独立压力用例。每线程内核栈使用 16 KiB 栈槽和 4 KiB 未映射 guard，并在低端保留 canary；构建时由 `make kernel-stack-check` 拒绝超过预算或无法确定上界的调用链。
 
 ## 9. 验证入口
 
@@ -130,7 +141,7 @@ Agent 评分仍可使用角色权重、priority、budget、事件、deadline、h
 # Agent 权限、可信映像、VFS 域、调度和 syscall 输入防护
 bash scripts/run-agent-tests.sh
 
-# 两个目标的 inode、inode cache 和 block 耗尽恢复
+# 双目标 ENOSPC 复测，以及 AgentOS 存储域配额和系统保留量
 make fs-enospc-test TOOLPREFIX=riscv64-linux-gnu-
 
 # 两个目标的退出、僵尸、阻塞 syscall 和资源域；主目标另测 Agent 保留槽
@@ -141,7 +152,7 @@ make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-`scripts/run-agent-tests.sh` 当前包含 `agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore` 和 `usersafety_ucore`。`scripts/run-proc-reap-tests.sh` 分别运行主目标普通生命周期测试、主目标 Agent 对抗测试和 baseline 通用生命周期测试。`scripts/run-fs-enospc-tests.sh` 在缩小的文件系统镜像上分别运行两个目标。
+`scripts/run-agent-tests.sh` 当前包含 `agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore` 和 `usersafety_ucore`。`scripts/run-proc-reap-tests.sh` 分别运行主目标普通生命周期测试、主目标 Agent 对抗测试和 baseline 通用生命周期测试。`scripts/run-fs-enospc-tests.sh` 先在缩小镜像上运行两个目标的真实 ENOSPC 复测，再以低域配额和高域配额两种配置运行 AgentOS `fsquota_ucore`，分别隔离验证域上限与分级保留水位。
 
 这些专项入口检查的是机制约束。`make dual-platform-run` 继续验证科研平台功能等价和 AgentOS 专属证据，`make full-verify` 串联宿主机、双目标、Agent 和进程生命周期检查；ENOSPC 与内核栈预算仍保留为可单独复现的专项入口。
 

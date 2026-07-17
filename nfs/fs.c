@@ -26,10 +26,11 @@
 #define USER_PAGE_SIZE  4096ULL
 
 // Disk layout:
-// [ boot block | sb block | inode blocks | free bit map | data blocks ]
+// [ boot | super | inode blocks | bitmap | owner map | data blocks ]
 
 int nbitmap = (FSSIZE + BSIZE * 8 - 1) / (BSIZE * 8);
-int ninodeblocks = NINODES / IPB + 1;
+int nqmap = (FSSIZE + QPB - 1) / QPB;
+int ninodeblocks = (NINODES + IPB - 1) / IPB;
 int nmeta; // Number of meta blocks (boot, sb, nlog, inode, bitmap)
 int nblocks; // Number of data blocks
 
@@ -152,7 +153,7 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 	// 1 fs block = 1 disk sector
-	nmeta = 2 + ninodeblocks + nbitmap;
+	nmeta = 2 + ninodeblocks + nbitmap + nqmap;
 	nblocks = FSSIZE - nmeta;
 
 	sb.magic = FSMAGIC;
@@ -161,10 +162,12 @@ int main(int argc, char *argv[])
 	sb.ninodes = xint(NINODES);
 	sb.inodestart = xint(2);
 	sb.bmapstart = xint(2 + ninodeblocks);
+	sb.qmapstart = xint(2 + ninodeblocks + nbitmap);
+	sb.datastart = xint(nmeta);
 
-	printf("nmeta %d (boot, super, inode blocks %u, bitmap blocks %u) blocks %d "
-	       "total %d\n",
-	       nmeta, ninodeblocks, nbitmap, nblocks, FSSIZE);
+	printf("nmeta %d (boot, super, inode %u, bitmap %u, owner %u) "
+	       "blocks %d total %d\n",
+	       nmeta, ninodeblocks, nbitmap, nqmap, nblocks, FSSIZE);
 
 	freeblock = nmeta; // the first free block that we can allocate
 
@@ -523,7 +526,8 @@ void install_file(uint rootino, const char *host_path, const char *image,
 	din.vfs_checksum = xint(vfs_label_checksum(
 		inum, VFS_LABEL_MAGIC, VFS_LABEL_VERSION,
 		vfs_flags, vfs_domain, vfs_policy, vfs_profile,
-		VFS_POLICY_GENERATION, 1, 0, 0));
+		VFS_POLICY_GENERATION, 1, FS_OWNER_SYSTEM,
+		FS_OWNER_VERSION));
 	winode(inum, &din);
 }
 
@@ -537,12 +541,13 @@ static int vfs_exec_profile_valid(uint profile)
 
 uint vfs_label_checksum(uint inum, uint magic, uint version, uint flags,
 			uint domain, uint policy, uint exec_profile,
-			uint generation, uint incarnation, uint reserved0,
-			uint reserved1)
+			uint generation, uint incarnation, uint fs_owner_domain,
+			uint fs_owner_version)
 {
 	uint hash = 2166136261U ^ inum;
 	uint words[] = { magic, version, flags, domain, policy, exec_profile,
-			 generation, incarnation, reserved0, reserved1 };
+			 generation, incarnation, fs_owner_domain,
+			 fs_owner_version };
 
 	for (uint i = 0; i < sizeof(words) / sizeof(words[0]); i++) {
 		hash ^= words[i];
@@ -566,11 +571,12 @@ void label_inode(uint inum, uint flags, uint domain, uint policy,
 	din.vfs_exec_profile = xint(exec_profile);
 	din.vfs_policy_generation = xint(VFS_POLICY_GENERATION);
 	din.vfs_incarnation = xint(1);
-	din.vfs_reserved0 = 0;
-	din.vfs_reserved1 = 0;
+	din.fs_owner_domain = xint(FS_OWNER_SYSTEM);
+	din.fs_owner_version = xint(FS_OWNER_VERSION);
 	din.vfs_checksum = xint(vfs_label_checksum(
 		inum, VFS_LABEL_MAGIC, VFS_LABEL_VERSION, flags, domain,
-		policy, exec_profile, VFS_POLICY_GENERATION, 1, 0, 0));
+		policy, exec_profile, VFS_POLICY_GENERATION, 1,
+		FS_OWNER_SYSTEM, FS_OWNER_VERSION));
 	winode(inum, &din);
 }
 
@@ -654,6 +660,8 @@ uint ialloc(ushort type)
 	bzero(&din, sizeof(din));
 	din.type = xshort(type);
 	din.size = xint(0);
+	din.fs_owner_domain = xint(FS_OWNER_SYSTEM);
+	din.fs_owner_version = xint(FS_OWNER_VERSION);
 	// LAB4: You may want to init link count here
 	winode(inum, &din);
 	return inum;
@@ -677,6 +685,15 @@ void balloc(int used)
 		for (int i = 0; i < limit; i++)
 			buf[i / 8] |= 0x1 << (i % 8);
 		wsect(xint(sb.bmapstart) + block, buf);
+	}
+	for (block = 0; block < nqmap; block++) {
+		uint base = (uint)block * QPB;
+
+		bzero(buf, BSIZE);
+		for (uint i = 0; i < QPB && base + i < FSSIZE; i++)
+			if (base + i >= nmeta && base + i < used)
+				((uint *)buf)[i] = xint(FS_OWNER_SYSTEM);
+		wsect(xint(sb.qmapstart) + block, buf);
 	}
 }
 

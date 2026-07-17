@@ -215,7 +215,7 @@ Agent 调用 wait 后，如果没有匹配事件，有限 timeout 和无限等�
 
 #### 4.2.7 安全加固与资源韧性
 
-AgentOS-uCore 将普通用户可触发的坏地址、同步取消、文件系统耗尽、进程退出、僵尸积压和 fork bomb 统一视为可恢复的资源与生命周期问题。syscall 在产生副作用前复制并校验用户输入；mutex、semaphore、condvar、进程和 Agent 等睡眠对象使用私有等待队列；文件系统分配失败向上传播错误；多线程退出先取消阻塞 syscall，再释放共享资源；退出状态与执行槽分离；活进程按不可变资源域计费并为内核受控工作保留槽位。内核栈还同时使用 guard 和构建期预算检查。
+AgentOS-uCore 将普通用户可触发的坏地址、同步取消、文件系统耗尽、进程退出、僵尸积压和 fork bomb 统一视为可恢复的资源与生命周期问题。syscall 在产生副作用前复制并校验用户输入；mutex、semaphore、condvar、进程和 Agent 等睡眠对象使用私有等待队列；文件系统以持久 owner map、存储域配额和 PUBLIC/WORKFLOW/SYSTEM 分级水位保护块与 inode，分配失败向上传播错误；多线程退出先取消阻塞 syscall，再释放共享资源；退出状态与执行槽分离；活进程按不可变资源域计费并为内核受控工作保留槽位。内核栈还同时使用 guard 和构建期预算检查。
 
 Agent 专属安全链由构建期可信映像清单、loader 映像绑定、bootstrap/role grant、capability 和 VFS 文件安全域组成。公共 `agent_wake()` 只能发送普通消息，系统事件由专用内核路径产生；调度器允许 orchestrator 配置软策略，但以不可配置的 Agent burst 上限保证普通任务有界进展。完整威胁模型、实现位置、自定义 Agent 注册步骤和专项测试入口见 [安全加固与资源韧性设计](docs/agentos/security-hardening.md)。
 

@@ -22,6 +22,20 @@
 // only one device
 struct superblock sb;
 
+struct fs_storage_state {
+	uint free_blocks;
+	uint free_inodes;
+	uint block_domain_limit;
+	uint inode_domain_limit;
+	uint workflow_block_reserve;
+	uint system_block_reserve;
+	uint workflow_inode_reserve;
+	uint system_inode_reserve;
+	int ready;
+};
+
+static struct fs_storage_state fs_storage;
+
 // Read the super block.
 static void readsb(int dev, struct superblock *sb)
 {
@@ -31,14 +45,236 @@ static void readsb(int dev, struct superblock *sb)
 	brelse(bp);
 }
 
+static uint fs_div_round_up(uint value, uint divisor)
+{
+	return value / divisor + (value % divisor != 0);
+}
+
+static uint fs_reserve_value(uint configured, uint total, uint divisor)
+{
+	uint value = configured;
+
+	if (value == 0 && total != 0)
+		value = fs_div_round_up(total, divisor);
+	if (value > total)
+		value = total;
+	return value;
+}
+
+static int fs_layout_valid(void)
+{
+	uint inode_blocks;
+	uint bitmap_blocks;
+	uint owner_blocks;
+
+	if (sb.magic != FSMAGIC || sb.size < 2 || sb.size > FSSIZE ||
+	    sb.ninodes <= ROOTINO ||
+	    sb.ninodes > NINODE)
+		return 0;
+	inode_blocks = fs_div_round_up(sb.ninodes, IPB);
+	bitmap_blocks = fs_div_round_up(sb.size, BPB);
+	owner_blocks = fs_div_round_up(sb.size, QPB);
+	return sb.inodestart == 2 &&
+	       sb.bmapstart == sb.inodestart + inode_blocks &&
+	       sb.qmapstart == sb.bmapstart + bitmap_blocks &&
+	       sb.datastart == sb.qmapstart + owner_blocks &&
+	       sb.datastart < sb.size &&
+	       sb.nblocks == sb.size - sb.datastart;
+}
+
+static uint fs_qmap_read(int dev, uint block)
+{
+	struct buf *bp;
+	uint owner;
+
+	bp = bread(dev, QBLOCK(block, sb));
+	owner = ((uint *)bp->data)[block % QPB];
+	brelse(bp);
+	return owner;
+}
+
+static void fs_qmap_write(int dev, uint block, uint owner)
+{
+	struct buf *bp;
+
+	bp = bread(dev, QBLOCK(block, sb));
+	((uint *)bp->data)[block % QPB] = owner;
+	bwrite(bp);
+	brelse(bp);
+}
+
+static void fs_storage_rebuild(int dev)
+{
+	uint max_owner = FS_OWNER_SYSTEM;
+	uint total_inodes = sb.ninodes - 1;
+	struct buf *bitmap = 0;
+	uint bitmap_block = ~0U;
+
+	memset(&fs_storage, 0, sizeof(fs_storage));
+	for (uint block = sb.datastart; block < sb.size; block++) {
+		uint current = BBLOCK(block, sb);
+		uint bit = block % BPB;
+		uint owner;
+
+		if (current != bitmap_block) {
+			if (bitmap)
+				brelse(bitmap);
+			bitmap = bread(dev, current);
+			bitmap_block = current;
+		}
+		if ((bitmap->data[bit / 8] & (1 << (bit % 8))) == 0) {
+			fs_storage.free_blocks++;
+			continue;
+		}
+		owner = fs_qmap_read(dev, block);
+		if (owner < FS_OWNER_SYSTEM)
+			panic("allocated block has no storage owner");
+		if (owner > max_owner)
+			max_owner = owner;
+	}
+	if (bitmap)
+		brelse(bitmap);
+
+	for (uint inum = 1; inum < sb.ninodes; inum++) {
+		struct buf *bp = bread(dev, IBLOCK(inum, sb));
+		struct dinode *dip = (struct dinode *)bp->data + inum % IPB;
+
+		if (dip->type == 0) {
+			if (dip->fs_owner_domain != FS_OWNER_NONE ||
+			    dip->fs_owner_version != 0)
+				panic("free inode has storage owner");
+			fs_storage.free_inodes++;
+		} else {
+			if (dip->fs_owner_domain < FS_OWNER_SYSTEM ||
+			    dip->fs_owner_version != FS_OWNER_VERSION)
+				panic("allocated inode has invalid storage owner");
+			if (dip->fs_owner_domain > max_owner)
+				max_owner = dip->fs_owner_domain;
+		}
+		brelse(bp);
+	}
+
+	fs_storage.system_block_reserve = fs_reserve_value(
+		FS_SYSTEM_BLOCK_RESERVE, sb.nblocks, 32);
+	fs_storage.workflow_block_reserve = fs_reserve_value(
+		FS_WORKFLOW_BLOCK_RESERVE,
+		sb.nblocks - fs_storage.system_block_reserve, 16);
+	fs_storage.system_inode_reserve = fs_reserve_value(
+		FS_SYSTEM_INODE_RESERVE, total_inodes, 32);
+	fs_storage.workflow_inode_reserve = fs_reserve_value(
+		FS_WORKFLOW_INODE_RESERVE,
+		total_inodes - fs_storage.system_inode_reserve, 16);
+
+	uint public_blocks = sb.nblocks - fs_storage.system_block_reserve -
+			     fs_storage.workflow_block_reserve;
+	uint public_inodes = total_inodes - fs_storage.system_inode_reserve -
+			     fs_storage.workflow_inode_reserve;
+	fs_storage.block_domain_limit = FS_DOMAIN_BLOCK_LIMIT ?
+		FS_DOMAIN_BLOCK_LIMIT : fs_div_round_up(public_blocks, 4);
+	fs_storage.inode_domain_limit = FS_DOMAIN_INODE_LIMIT ?
+		FS_DOMAIN_INODE_LIMIT : fs_div_round_up(public_inodes, 4);
+	if (fs_storage.block_domain_limit == 0)
+		fs_storage.block_domain_limit = 1;
+	if (fs_storage.inode_domain_limit == 0)
+		fs_storage.inode_domain_limit = 1;
+	proc_storage_set_cookie_floor(max_owner == ~0U ? FS_OWNER_NONE :
+				      max_owner + 1);
+	fs_storage.ready = 1;
+}
+
+static int fs_storage_charge_from_vfs(const struct vfs_cred *cred,
+				      struct fs_storage_charge *charge)
+{
+	struct proc *p;
+
+	if (charge == 0 || cred == 0)
+		return -1;
+	if (cred->kernel) {
+		charge->owner = FS_OWNER_SYSTEM;
+		charge->level = FS_CHARGE_SYSTEM;
+		return 0;
+	}
+	p = curr_proc();
+	if (p == 0 || p->state != P_USED ||
+	    p->storage_domain_id < FS_OWNER_FIRST_DYNAMIC)
+		return -1;
+	if (cred->domain == VFS_DOMAIN_WORKFLOW) {
+		charge->owner = p->storage_domain_id;
+		charge->level = FS_CHARGE_WORKFLOW;
+	} else if (p->resource_slot_reserved && p->resource_domain_admin) {
+		charge->owner = FS_OWNER_SYSTEM;
+		charge->level = FS_CHARGE_SYSTEM;
+	} else {
+		charge->owner = p->storage_domain_id;
+		charge->level = FS_CHARGE_PUBLIC;
+	}
+	return 0;
+}
+
+static int fs_storage_reserve(const struct fs_storage_charge *charge,
+			      int inode)
+{
+	uint *free_count;
+	uint reserve;
+	uint limit;
+	int enabled;
+
+	if (!fs_storage.ready || charge == 0 ||
+	    charge->level > FS_CHARGE_SYSTEM ||
+	    charge->owner < FS_OWNER_SYSTEM)
+		return -1;
+	free_count = inode ? &fs_storage.free_inodes : &fs_storage.free_blocks;
+	limit = inode ? fs_storage.inode_domain_limit :
+			fs_storage.block_domain_limit;
+	reserve = inode ? fs_storage.system_inode_reserve :
+			  fs_storage.system_block_reserve;
+	if (charge->level == FS_CHARGE_PUBLIC)
+		reserve += inode ? fs_storage.workflow_inode_reserve :
+				   fs_storage.workflow_block_reserve;
+	else if (charge->level == FS_CHARGE_SYSTEM)
+		reserve = 0;
+
+	enabled = intr_save();
+	if (*free_count <= reserve) {
+		intr_restore(enabled);
+		return -1;
+	}
+	if (charge->owner != FS_OWNER_SYSTEM &&
+	    proc_storage_reserve(charge->owner, inode, limit) < 0) {
+		intr_restore(enabled);
+		return -1;
+	}
+	(*free_count)--;
+	intr_restore(enabled);
+	return 0;
+}
+
+static void fs_storage_release(uint owner, int inode)
+{
+	uint *free_count = inode ? &fs_storage.free_inodes :
+					  &fs_storage.free_blocks;
+	uint total = inode ? sb.ninodes - 1 : sb.nblocks;
+	int enabled;
+
+	if (!fs_storage.ready || owner < FS_OWNER_SYSTEM)
+		panic("storage release invariant");
+	enabled = intr_save();
+	if (*free_count >= total)
+		panic("storage free count invariant");
+	(*free_count)++;
+	proc_storage_release(owner, inode);
+	intr_restore(enabled);
+}
+
 // Init fs
 void fsinit()
 {
 	int dev = ROOTDEV;
 	readsb(dev, &sb);
-	if (sb.magic != FSMAGIC) {
+	if (!fs_layout_valid()) {
 		panic("invalid file system");
 	}
+	fs_storage_rebuild(dev);
 }
 
 // Zero a block.
@@ -54,17 +290,23 @@ static void bzero(int dev, int bno)
 // Blocks.
 
 // Allocate a zeroed disk block.
-static uint balloc(uint dev)
+static uint balloc(uint dev, const struct fs_storage_charge *charge)
 {
 	int b, bi, m;
 	struct buf *bp;
 
+	if (fs_storage_reserve(charge, 0) < 0)
+		return 0;
 	bp = 0;
-	for (b = 0; b < sb.size; b += BPB) {
+	for (b = sb.datastart - sb.datastart % BPB;
+	     b < sb.size; b += BPB) {
 		bp = bread(dev, BBLOCK(b, sb));
 		for (bi = 0; bi < BPB && b + bi < sb.size; bi++) {
+			if (b + bi < sb.datastart)
+				continue;
 			m = 1 << (bi % 8);
 			if ((bp->data[bi / 8] & m) == 0) { // Is block free?
+				fs_qmap_write(dev, b + bi, charge->owner);
 				bp->data[bi / 8] |= m; // Mark block in use.
 				bwrite(bp);
 				brelse(bp);
@@ -74,6 +316,7 @@ static uint balloc(uint dev)
 		}
 		brelse(bp);
 	}
+	fs_storage_release(charge->owner, 0);
 	return 0;
 }
 
@@ -82,6 +325,10 @@ static void bfree(int dev, uint b)
 {
 	struct buf *bp;
 	int bi, m;
+	uint owner;
+
+	if (b < sb.datastart || b >= sb.size)
+		panic("freeing non-data block");
 
 	bp = bread(dev, BBLOCK(b, sb));
 	bi = b % BPB;
@@ -91,6 +338,11 @@ static void bfree(int dev, uint b)
 	bp->data[bi / 8] &= ~m;
 	bwrite(bp);
 	brelse(bp);
+	owner = fs_qmap_read(dev, b);
+	if (owner < FS_OWNER_SYSTEM)
+		panic("freeing unowned block");
+	fs_qmap_write(dev, b, FS_OWNER_NONE);
+	fs_storage_release(owner, 0);
 }
 
 //The inode table in memory
@@ -103,7 +355,8 @@ static struct inode *iget(uint dev, uint inum);
 // Allocate an inode on device dev.
 // Mark it as allocated by  giving it type `type`.
 // Returns an allocated and referenced inode.
-struct inode *ialloc(uint dev, short type)
+struct inode *ialloc(uint dev, short type,
+		     const struct fs_storage_charge *charge)
 {
 	int inum;
 	uint incarnation;
@@ -111,6 +364,8 @@ struct inode *ialloc(uint dev, short type)
 	struct dinode *dip;
 	struct inode *ip;
 
+	if (charge == 0 || fs_storage_reserve(charge, 1) < 0)
+		return 0;
 	for (inum = 1; inum < sb.ninodes; inum++) {
 		bp = bread(dev, IBLOCK(inum, sb));
 		dip = (struct dinode *)bp->data + inum % IPB;
@@ -118,6 +373,7 @@ struct inode *ialloc(uint dev, short type)
 			ip = iget(dev, inum);
 			if (ip == 0) {
 				brelse(bp);
+				fs_storage_release(charge->owner, 1);
 				return 0;
 			}
 			incarnation = dip->vfs_incarnation + 1;
@@ -131,19 +387,22 @@ struct inode *ialloc(uint dev, short type)
 			dip->vfs_policy = VFS_POLICY_FREE;
 			dip->vfs_policy_generation = VFS_POLICY_GENERATION;
 			dip->vfs_incarnation = incarnation;
+			dip->fs_owner_domain = charge->owner;
+			dip->fs_owner_version = FS_OWNER_VERSION;
 			dip->vfs_checksum = vfs_label_checksum(
 				inum, dip->vfs_magic, dip->vfs_version,
 				dip->vfs_flags, dip->vfs_domain,
 				dip->vfs_policy, dip->vfs_exec_profile,
 				dip->vfs_policy_generation,
-				dip->vfs_incarnation, dip->vfs_reserved0,
-				dip->vfs_reserved1);
+				dip->vfs_incarnation, dip->fs_owner_domain,
+				dip->fs_owner_version);
 			bwrite(bp);
 			brelse(bp);
 			return ip;
 		}
 		brelse(bp);
 	}
+	fs_storage_release(charge->owner, 1);
 	return 0;
 }
 
@@ -175,8 +434,8 @@ void iupdate(struct inode *ip)
 	dip->vfs_exec_profile = ip->vfs_exec_profile;
 	dip->vfs_policy_generation = ip->vfs_policy_generation;
 	dip->vfs_incarnation = ip->vfs_incarnation;
-	dip->vfs_reserved0 = ip->vfs_reserved0;
-	dip->vfs_reserved1 = ip->vfs_reserved1;
+	dip->fs_owner_domain = ip->fs_owner_domain;
+	dip->fs_owner_version = ip->fs_owner_version;
 	dip->vfs_checksum = ip->vfs_checksum;
 	// LAB4: you may need to update link count here
 	memmove(dip->addrs, ip->addrs, sizeof(ip->addrs));
@@ -255,8 +514,8 @@ void ivalid(struct inode *ip)
 		ip->vfs_exec_profile = dip->vfs_exec_profile;
 		ip->vfs_policy_generation = dip->vfs_policy_generation;
 		ip->vfs_incarnation = dip->vfs_incarnation;
-		ip->vfs_reserved0 = dip->vfs_reserved0;
-		ip->vfs_reserved1 = dip->vfs_reserved1;
+		ip->fs_owner_domain = dip->fs_owner_domain;
+		ip->fs_owner_version = dip->fs_owner_version;
 		ip->vfs_checksum = dip->vfs_checksum;
 		// LAB4: You may need to get lint count here
 		memmove(ip->addrs, dip->addrs, sizeof(ip->addrs));
@@ -276,6 +535,7 @@ void iput(struct inode *ip)
 {
 	if (ip->ref == 1 && ip->valid && ip->removed) {
 		struct vfs_cred kernel_cred;
+		uint storage_owner = ip->fs_owner_domain;
 
 		vfs_cred_kernel(&kernel_cred);
 		if (itrunc(ip, &kernel_cred) < 0) {
@@ -294,6 +554,7 @@ void iput(struct inode *ip)
 		ip->exec_rw_offset = 0;
 		vfs_inode_mark_free(ip);
 		iupdate(ip);
+		fs_storage_release(storage_owner, 1);
 		ip->valid = 0;
 		ip->removed = 0;
 	}
@@ -317,7 +578,8 @@ void iabort(struct inode *ip)
 
 // Return the disk block address of the nth block in inode ip.
 // When alloc is zero, a missing mapping is reported without changing the file.
-static uint bmap(struct inode *ip, uint bn, int alloc)
+static uint bmap(struct inode *ip, uint bn, int alloc,
+		 const struct fs_storage_charge *charge)
 {
 	uint addr, *a;
 	struct buf *bp;
@@ -325,7 +587,7 @@ static uint bmap(struct inode *ip, uint bn, int alloc)
 
 	if (bn < NDIRECT) {
 		if ((addr = ip->addrs[bn]) == 0 && alloc)
-			ip->addrs[bn] = addr = balloc(ip->dev);
+			ip->addrs[bn] = addr = balloc(ip->dev, charge);
 		return addr;
 	}
 	bn -= NDIRECT;
@@ -334,7 +596,7 @@ static uint bmap(struct inode *ip, uint bn, int alloc)
 		if ((addr = ip->addrs[NDIRECT]) == 0) {
 			if (!alloc)
 				return 0;
-			ip->addrs[NDIRECT] = addr = balloc(ip->dev);
+			ip->addrs[NDIRECT] = addr = balloc(ip->dev, charge);
 			if (addr == 0)
 				return 0;
 			indirect_allocated = 1;
@@ -342,7 +604,7 @@ static uint bmap(struct inode *ip, uint bn, int alloc)
 		bp = bread(ip->dev, addr);
 		a = (uint *)bp->data;
 		if ((addr = a[bn]) == 0 && alloc) {
-			a[bn] = addr = balloc(ip->dev);
+			a[bn] = addr = balloc(ip->dev, charge);
 			if (addr != 0)
 				bwrite(bp);
 		}
@@ -453,7 +715,7 @@ int readi(struct inode *ip, const struct vfs_cred *cred, int user_dst,
 		n = ip->size - off;
 
 	for (tot = 0; tot < n; tot += m, off += m, dst += m) {
-		addr = bmap(ip, off / BSIZE, 0);
+		addr = bmap(ip, off / BSIZE, 0, 0);
 		if (addr == 0) {
 			failed = 1;
 			break;
@@ -480,8 +742,9 @@ int readi(struct inode *ip, const struct vfs_cred *cred, int user_dst,
 // Returns the number of bytes successfully written.
 // If the return value is less than the requested n,
 // there was an error of some kind.
-int writei(struct inode *ip, const struct vfs_cred *cred, int user_src,
-	   uint64 src, uint off, uint n)
+static int writei_charged(struct inode *ip, const struct vfs_cred *cred,
+			  const struct fs_storage_charge *charge,
+			  int user_src, uint64 src, uint off, uint n)
 {
 	uint tot, m, addr, bn;
 	struct buf *bp;
@@ -499,10 +762,10 @@ int writei(struct inode *ip, const struct vfs_cred *cred, int user_src,
 
 	for (tot = 0; tot < n; tot += m, off += m, src += m) {
 		bn = off / BSIZE;
-		addr = bmap(ip, bn, 0);
+		addr = bmap(ip, bn, 0, 0);
 		allocated = 0;
 		if (addr == 0) {
-			addr = bmap(ip, bn, 1);
+			addr = bmap(ip, bn, 1, charge);
 			if (addr == 0) {
 				failed = 1;
 				break;
@@ -534,6 +797,16 @@ int writei(struct inode *ip, const struct vfs_cred *cred, int user_src,
 	if (failed && tot == 0)
 		return -1;
 	return tot;
+}
+
+int writei(struct inode *ip, const struct vfs_cred *cred, int user_src,
+	   uint64 src, uint off, uint n)
+{
+	struct fs_storage_charge charge;
+
+	if (fs_storage_charge_from_vfs(cred, &charge) < 0)
+		return -1;
+	return writei_charged(ip, cred, &charge, user_src, src, off, n);
 }
 
 // Look for a directory entry in a directory.
@@ -650,11 +923,14 @@ int dirlink(struct inode *dp, char *name, uint inum,
 	struct inode *ip;
 	struct inode *target;
 	struct vfs_cred kernel_cred;
+	struct fs_storage_charge charge;
 	uint target_policy;
 	int lookup_status;
 	if (dp == 0 || dp->type != T_DIR)
 		return -1;
 	if (!vfs_inode_authorize(dp, cred, VFS_OP_CREATE))
+		return -1;
+	if (fs_storage_charge_from_vfs(cred, &charge) < 0)
 		return -1;
 	target = inode_get(dp->dev, inum);
 	if (target == 0 || !vfs_inode_label_valid(target)) {
@@ -684,8 +960,8 @@ int dirlink(struct inode *dp, char *name, uint inum,
 	}
 	strncpy(de.name, name, DIRSIZ);
 	de.inum = inum;
-	if (writei(dp, &kernel_cred, 0, (uint64)&de, off,
-		   sizeof(de)) != sizeof(de))
+	if (writei_charged(dp, &kernel_cred, &charge, 0, (uint64)&de,
+			   off, sizeof(de)) != sizeof(de))
 		return -1;
 	return 0;
 }
@@ -697,10 +973,13 @@ int dirunlink(struct inode *dp, char *name, uint offset, uint expected_inum,
 	struct dirent de;
 	struct inode *target;
 	struct vfs_cred kernel_cred;
+	struct fs_storage_charge charge;
 
 	if (dp == 0 || dp->type != T_DIR)
 		return -1;
 	if (!vfs_inode_authorize(dp, cred, VFS_OP_DELETE))
+		return -1;
+	if (fs_storage_charge_from_vfs(cred, &charge) < 0)
 		return -1;
 	if (offset >= dp->size || offset % sizeof(de) != 0)
 		return -1;
@@ -723,8 +1002,8 @@ int dirunlink(struct inode *dp, char *name, uint offset, uint expected_inum,
 	}
 	iput(target);
 	memset(&de, 0, sizeof(de));
-	if (writei(dp, &kernel_cred, 0, (uint64)&de, offset,
-		   sizeof(de)) != sizeof(de))
+	if (writei_charged(dp, &kernel_cred, &charge, 0, (uint64)&de,
+			   offset, sizeof(de)) != sizeof(de))
 		return -1;
 	return 0;
 }
@@ -748,6 +1027,7 @@ struct inode *fs_create(char *path, short type, int *created,
 {
 	struct inode *dp;
 	struct inode *ip;
+	struct fs_storage_charge charge;
 	int lookup_status;
 
 	if (created)
@@ -773,7 +1053,11 @@ struct inode *fs_create(char *path, short type, int *created,
 		iput(dp);
 		return 0;
 	}
-	ip = ialloc(dp->dev, type);
+	if (fs_storage_charge_from_vfs(cred, &charge) < 0) {
+		iput(dp);
+		return 0;
+	}
+	ip = ialloc(dp->dev, type, &charge);
 	if (ip == 0) {
 		iput(dp);
 		return 0;

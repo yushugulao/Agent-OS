@@ -14,12 +14,13 @@ _Static_assert(EXEC_MANIFEST_VFS_ARTIFACT_WRITE == VFS_CAP_ARTIFACT_WRITE,
 
 uint vfs_label_checksum(uint inum, uint magic, uint version, uint flags,
 			uint domain, uint policy, uint exec_profile,
-			uint generation, uint incarnation, uint reserved0,
-			uint reserved1)
+			uint generation, uint incarnation, uint fs_owner_domain,
+			uint fs_owner_version)
 {
 	uint hash = 2166136261U ^ inum;
 	uint words[] = { magic, version, flags, domain, policy, exec_profile,
-			 generation, incarnation, reserved0, reserved1 };
+			 generation, incarnation, fs_owner_domain,
+			 fs_owner_version };
 
 	for (uint i = 0; i < sizeof(words) / sizeof(words[0]); i++) {
 		hash ^= words[i];
@@ -35,8 +36,8 @@ static uint vfs_inode_checksum(struct inode *ip)
 				  ip->vfs_flags, ip->vfs_domain,
 				  ip->vfs_policy, ip->vfs_exec_profile,
 				  ip->vfs_policy_generation,
-				  ip->vfs_incarnation, ip->vfs_reserved0,
-				  ip->vfs_reserved1);
+				  ip->vfs_incarnation, ip->fs_owner_domain,
+				  ip->fs_owner_version);
 }
 
 void vfs_cred_kernel(struct vfs_cred *cred)
@@ -277,11 +278,18 @@ static int vfs_label_shape_valid(struct inode *ip)
 	if (ip->vfs_magic != VFS_LABEL_MAGIC ||
 	    ip->vfs_version != VFS_LABEL_VERSION ||
 	    ip->vfs_policy_generation != VFS_POLICY_GENERATION ||
-	    ip->vfs_incarnation == 0 || ip->vfs_reserved0 != 0 ||
-	    ip->vfs_reserved1 != 0 ||
+	    ip->vfs_incarnation == 0 ||
 	    (ip->vfs_flags & ~VFS_LABEL_F_KNOWN) != 0 ||
 	    ip->vfs_checksum != vfs_inode_checksum(ip))
 		return 0;
+	if (ip->vfs_policy == VFS_POLICY_FREE) {
+		if (ip->fs_owner_domain != FS_OWNER_NONE ||
+		    ip->fs_owner_version != 0)
+			return 0;
+	} else if (ip->fs_owner_domain < FS_OWNER_SYSTEM ||
+		   ip->fs_owner_version != FS_OWNER_VERSION) {
+		return 0;
+	}
 	if (!vfs_exec_profile_valid(ip->vfs_exec_profile))
 		return 0;
 	if (ip->vfs_exec_profile != VFS_EXEC_PROFILE_NONE &&
@@ -423,14 +431,14 @@ int vfs_inode_init_label(struct inode *ip, const struct vfs_cred *cred,
 			 uint policy)
 {
 	if (ip == 0 || !vfs_policy_subject_allowed(cred, policy) ||
-	    ip->vfs_incarnation == 0)
+	    ip->vfs_incarnation == 0 ||
+	    ip->fs_owner_domain < FS_OWNER_SYSTEM ||
+	    ip->fs_owner_version != FS_OWNER_VERSION)
 		return -1;
 	ip->vfs_magic = VFS_LABEL_MAGIC;
 	ip->vfs_version = VFS_LABEL_VERSION;
 	ip->vfs_policy_generation = VFS_POLICY_GENERATION;
 	ip->vfs_exec_profile = VFS_EXEC_PROFILE_NONE;
-	ip->vfs_reserved0 = 0;
-	ip->vfs_reserved1 = 0;
 	if (policy == VFS_POLICY_PUBLIC) {
 		ip->vfs_flags = VFS_LABEL_F_PUBLIC;
 		ip->vfs_domain = VFS_DOMAIN_PUBLIC;
@@ -466,7 +474,7 @@ void vfs_inode_mark_free(struct inode *ip)
 	ip->vfs_policy = VFS_POLICY_FREE;
 	ip->vfs_exec_profile = VFS_EXEC_PROFILE_NONE;
 	ip->vfs_policy_generation = VFS_POLICY_GENERATION;
-	ip->vfs_reserved0 = 0;
-	ip->vfs_reserved1 = 0;
+	ip->fs_owner_domain = FS_OWNER_NONE;
+	ip->fs_owner_version = 0;
 	ip->vfs_checksum = vfs_inode_checksum(ip);
 }

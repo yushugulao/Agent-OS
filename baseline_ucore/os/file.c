@@ -103,8 +103,9 @@ int fileopen(char *path, uint64 omode)
 	int fd;
 	struct file *f;
 	struct inode *ip;
+	uint owner = proc_storage_cookie(curr_proc());
 	if (omode & O_CREATE) {
-		ip = fs_create(path, T_FILE, 0);
+		ip = fs_create(path, T_FILE, 0, owner);
 		if (ip == 0) {
 			return -1;
 		}
@@ -142,6 +143,7 @@ int fileunlink(char *path)
 {
 	struct inode *dp;
 	struct inode *ip;
+	uint owner = proc_storage_cookie(curr_proc());
 
 	dp = root_dir();
 	if (dp == 0)
@@ -151,7 +153,7 @@ int fileunlink(char *path)
 		return -1;
 	}
 	ivalid(ip);
-	if (ip->type != T_FILE || dirunlink(dp, path, 0) < 0) {
+	if (ip->type != T_FILE || dirunlink(dp, path, 0, owner) < 0) {
 		iput(ip);
 		iput(dp);
 		return -1;
@@ -169,7 +171,8 @@ uint64 inodewrite(struct file *f, uint64 va, uint64 len)
 	ivalid(f->ip);
 	if (f->ip->type != T_FILE)
 		return (uint64)-1;
-	if ((r = writei(f->ip, 1, va, f->off, len)) > 0)
+	if ((r = writei(f->ip, 1, va, f->off, len,
+		       proc_storage_cookie(curr_proc()))) > 0)
 		f->off += r;
 	return r;
 }

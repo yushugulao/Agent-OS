@@ -14,16 +14,23 @@ BSIZE = 1024
 FSMAGIC_LEGACY = 0x10203040
 FSMAGIC_EXEC_POLICY = 0x10203041
 FSMAGIC_VFS_POLICY = 0x10203042
+FSMAGIC_BASELINE_QUOTA = 0x10203043
+FSMAGIC_AGENT_QUOTA = 0x10203044
 ROOTINO = 1
 NDIRECT = 12
 NINDIRECT = BSIZE // 4
+QPB = BSIZE // 4
 DINODE_SIZE_LEGACY = 64
 DINODE_SIZE_EXEC_POLICY = 128
 DINODE_SIZE_BY_MAGIC = {
     FSMAGIC_LEGACY: DINODE_SIZE_LEGACY,
     FSMAGIC_EXEC_POLICY: DINODE_SIZE_EXEC_POLICY,
     FSMAGIC_VFS_POLICY: DINODE_SIZE_EXEC_POLICY,
+    FSMAGIC_BASELINE_QUOTA: DINODE_SIZE_LEGACY,
+    FSMAGIC_AGENT_QUOTA: DINODE_SIZE_EXEC_POLICY,
 }
+QUOTA_MAGICS = {FSMAGIC_BASELINE_QUOTA, FSMAGIC_AGENT_QUOTA}
+VFS_POLICY_MAGICS = {FSMAGIC_VFS_POLICY, FSMAGIC_AGENT_QUOTA}
 DIRSIZ = 14
 T_FILE = 2
 
@@ -33,6 +40,7 @@ EXEC_FLAG_DOMAIN_SAFE = 0x8
 
 VFS_LABEL_MAGIC = 0x56465331
 VFS_LABEL_VERSION = 1
+VFS_LABEL_VERSION_QUOTA = 2
 VFS_LABEL_F_PUBLIC = 0x1
 VFS_LABEL_F_PROTECTED = 0x2
 VFS_LABEL_F_KERNEL_PRIVATE = 0x4
@@ -51,6 +59,7 @@ VFS_EXEC_PROFILE_NONE = 0
 VFS_EXEC_PROFILE_WORKFLOW = 1
 VFS_EXEC_PROFILE_CONTENT_READ = 2
 VFS_EXEC_PROFILE_ARTIFACT_WRITE = 3
+FS_OWNER_VERSION = 1
 
 
 @dataclass
@@ -62,6 +71,8 @@ class Superblock:
     inodestart: int
     bmapstart: int
     dinode_size: int
+    qmapstart: int | None = None
+    datastart: int | None = None
 
     @property
     def ipb(self) -> int:
@@ -74,6 +85,8 @@ class Dinode:
     size: int
     addrs: list[int]
     vfs_policy: int | None = None
+    fs_owner_domain: int | None = None
+    fs_owner_version: int | None = None
 
 
 def u16(data: bytes, offset: int) -> int:
@@ -94,7 +107,18 @@ def vfs_label_checksum(inum: int, words: list[int]) -> int:
     return value or 1
 
 
-def validate_vfs_label(raw: bytes, inum: int, file_type: int) -> int:
+def fs_owner_valid(file_type: int, owner_domain: int, owner_version: int) -> bool:
+    if file_type == 0:
+        return owner_domain == 0 and owner_version == 0
+    return owner_domain >= 1 and owner_version == FS_OWNER_VERSION
+
+
+def validate_vfs_label(
+    raw: bytes,
+    inum: int,
+    file_type: int,
+    fs_magic: int = FSMAGIC_VFS_POLICY,
+) -> int:
     exec_flags = u32(raw, 64)
     exec_generation = u32(raw, 68)
     words = [u32(raw, 84 + index * 4) for index in range(10)]
@@ -108,17 +132,25 @@ def validate_vfs_label(raw: bytes, inum: int, file_type: int) -> int:
         exec_profile,
         generation,
         incarnation,
-        reserved0,
-        reserved1,
+        fs_owner_domain,
+        fs_owner_version,
     ) = words
+
+    quota_format = fs_magic == FSMAGIC_AGENT_QUOTA
+    expected_version = (
+        VFS_LABEL_VERSION_QUOTA if quota_format else VFS_LABEL_VERSION
+    )
+    owner_valid = fs_owner_valid(
+        file_type, fs_owner_domain, fs_owner_version
+    )
 
     if (
         magic != VFS_LABEL_MAGIC
-        or version != VFS_LABEL_VERSION
+        or version != expected_version
         or generation != VFS_POLICY_GENERATION
         or incarnation == 0
-        or reserved0 != 0
-        or reserved1 != 0
+        or (quota_format and not owner_valid)
+        or (not quota_format and (fs_owner_domain != 0 or fs_owner_version != 0))
         or flags & ~VFS_LABEL_F_KNOWN
         or checksum != vfs_label_checksum(inum, words)
         or exec_profile
@@ -175,20 +207,50 @@ def validate_vfs_label(raw: bytes, inum: int, file_type: int) -> int:
 
 
 def read_superblock(image: bytes) -> Superblock:
+    if len(image) < 2 * BSIZE:
+        raise ValueError("filesystem image is too small")
     offset = BSIZE
     magic = u32(image, offset)
     dinode_size = DINODE_SIZE_BY_MAGIC.get(magic)
     if dinode_size is None:
         raise ValueError(f"bad fs magic: 0x{magic:08x}")
+    size = u32(image, offset + 4)
+    nblocks = u32(image, offset + 8)
+    ninodes = u32(image, offset + 12)
+    inodestart = u32(image, offset + 16)
+    bmapstart = u32(image, offset + 20)
+    qmapstart = u32(image, offset + 24) if magic in QUOTA_MAGICS else None
+    datastart = u32(image, offset + 28) if magic in QUOTA_MAGICS else None
     sb = Superblock(
         magic=magic,
-        size=u32(image, offset + 4),
-        nblocks=u32(image, offset + 8),
-        ninodes=u32(image, offset + 12),
-        inodestart=u32(image, offset + 16),
-        bmapstart=u32(image, offset + 20),
+        size=size,
+        nblocks=nblocks,
+        ninodes=ninodes,
+        inodestart=inodestart,
+        bmapstart=bmapstart,
         dinode_size=dinode_size,
+        qmapstart=qmapstart,
+        datastart=datastart,
     )
+    if size < 1 or len(image) < size * BSIZE:
+        raise ValueError("filesystem image is shorter than its superblock size")
+    if ninodes <= ROOTINO or inodestart < 2:
+        raise ValueError("invalid inode table geometry")
+    if magic in QUOTA_MAGICS:
+        assert qmapstart is not None and datastart is not None
+        inode_blocks = (ninodes + sb.ipb - 1) // sb.ipb
+        bitmap_blocks = (size + BSIZE * 8 - 1) // (BSIZE * 8)
+        owner_blocks = (size + QPB - 1) // QPB
+        inode_end = inodestart + inode_blocks
+        if not (
+            inodestart == 2
+            and bmapstart == inode_end
+            and qmapstart == bmapstart + bitmap_blocks
+            and datastart == qmapstart + owner_blocks
+            and datastart < size
+            and nblocks == size - datastart
+        ):
+            raise ValueError("invalid quota filesystem geometry")
     return sb
 
 
@@ -202,14 +264,28 @@ def read_inode(image: bytes, sb: Superblock, inum: int) -> Dinode:
     raw = image[offset : offset + sb.dinode_size]
     file_type = u16(raw, 0)
     vfs_policy = None
-    if sb.magic == FSMAGIC_VFS_POLICY:
-        vfs_policy = validate_vfs_label(raw, inum, file_type)
+    fs_owner_domain = None
+    fs_owner_version = None
+    if sb.magic == FSMAGIC_BASELINE_QUOTA:
+        fs_owner_version = u16(raw, 2)
+        fs_owner_domain = u32(raw, 4)
+        if not fs_owner_valid(
+            file_type, fs_owner_domain, fs_owner_version
+        ):
+            raise ValueError(f"invalid filesystem owner on inode {inum}")
+    if sb.magic in VFS_POLICY_MAGICS:
+        vfs_policy = validate_vfs_label(raw, inum, file_type, sb.magic)
+        if sb.magic == FSMAGIC_AGENT_QUOTA:
+            fs_owner_domain = u32(raw, 116)
+            fs_owner_version = u32(raw, 120)
     addrs = [u32(raw, 12 + i * 4) for i in range(NDIRECT + 1)]
     return Dinode(
         type=file_type,
         size=u32(raw, 8),
         addrs=addrs,
         vfs_policy=vfs_policy,
+        fs_owner_domain=fs_owner_domain,
+        fs_owner_version=fs_owner_version,
     )
 
 
@@ -313,11 +389,11 @@ def extract_state_files(image_path: Path, out_dir: Path, repo_dir: Path | None =
         if inode.type != T_FILE:
             continue
         if (
-            sb.magic == FSMAGIC_VFS_POLICY
+            sb.magic in VFS_POLICY_MAGICS
             and inode.vfs_policy != VFS_POLICY_WORKFLOW
         ):
             continue
-        if sb.magic == FSMAGIC_VFS_POLICY:
+        if sb.magic in VFS_POLICY_MAGICS:
             if short_name in workflow_short_names:
                 raise ValueError(
                     f"duplicate workflow directory entry {short_name}"

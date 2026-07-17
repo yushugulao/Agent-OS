@@ -34,8 +34,8 @@ struct inode {
 	uint vfs_exec_profile;
 	uint vfs_policy_generation;
 	uint vfs_incarnation;
-	uint vfs_reserved0;
-	uint vfs_reserved1;
+	uint fs_owner_domain;
+	uint fs_owner_version;
 	uint vfs_checksum;
 	// LAB4: You may need to add link count here
 };

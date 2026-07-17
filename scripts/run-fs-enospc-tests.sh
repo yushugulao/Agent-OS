@@ -8,8 +8,16 @@ TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 FS_BLOCKS="${FS_ENOSPC_BLOCKS:-192}"
-FS_INODES="${FS_ENOSPC_INODES:-16}"
+FS_INODES="${FS_ENOSPC_INODES:-24}"
 FS_CACHE_INODES="${FS_ENOSPC_CACHE_INODES:-8}"
+FS_QUOTA_DOMAIN_BLOCKS="${FS_QUOTA_DOMAIN_BLOCKS:-384}"
+FS_QUOTA_DOMAIN_INODES="${FS_QUOTA_DOMAIN_INODES:-64}"
+FS_QUOTA_RESERVE_BLOCKS="${FS_QUOTA_RESERVE_BLOCKS:-256}"
+FS_QUOTA_RESERVE_INODES="${FS_QUOTA_RESERVE_INODES:-32}"
+FS_QUOTA_WORKFLOW_BLOCK_RESERVE="${FS_QUOTA_WORKFLOW_BLOCK_RESERVE:-64}"
+FS_QUOTA_SYSTEM_BLOCK_RESERVE="${FS_QUOTA_SYSTEM_BLOCK_RESERVE:-64}"
+FS_QUOTA_WORKFLOW_INODE_RESERVE="${FS_QUOTA_WORKFLOW_INODE_RESERVE:-4}"
+FS_QUOTA_SYSTEM_INODE_RESERVE="${FS_QUOTA_SYSTEM_INODE_RESERVE:-4}"
 TMPDIR_FS="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR_FS}"' EXIT
 
@@ -29,20 +37,27 @@ build_user() {
 build_image() {
 	local tree="$1"
 	local tag="$2"
+	local blocks="$3"
+	local inodes="$4"
+	local binary="$5"
+	local user_tag="${6:-${tag}}"
 	local prefix="${tree:+${tree}/}"
 
-	cc -DNINODE="${FS_INODES}" -DFSSIZE="${FS_BLOCKS}" \
+	cc -DNINODE="${inodes}" -DFSSIZE="${blocks}" \
 		"${prefix}nfs/fs.c" -o "${TMPDIR_FS}/${tag}-mkfs"
 	"${TMPDIR_FS}/${tag}-mkfs" "${TMPDIR_FS}/${tag}.img" \
-		"${TMPDIR_FS}/${tag}-user-target/bin/fsenospc_ucore"
+		"${TMPDIR_FS}/${user_tag}-user-target/bin/${binary}"
 }
 
 run_case() {
 	local tag="$1"
 	local kernel="$2"
 	local image="$3"
+	local marker="$4"
+	local profile="$5"
 
-	"${PYTHON_BIN}" - "${tag}" "${kernel}" "${image}" "${QEMU}" <<'PY'
+	"${PYTHON_BIN}" - "${tag}" "${kernel}" "${image}" "${QEMU}" \
+		"${marker}" "${profile}" <<'PY'
 import os
 import re
 import select
@@ -51,8 +66,7 @@ import subprocess
 import sys
 import time
 
-tag, kernel, image, qemu = sys.argv[1:5]
-marker = "fsenospc_ucore: parent passed"
+tag, kernel, image, qemu, marker, profile = sys.argv[1:7]
 failure = re.compile(
     r"check failed|panic|unknown syscall|bad addr|IllegalInstruction",
     re.IGNORECASE,
@@ -107,9 +121,45 @@ failed_before_marker = (
     failure_match is not None
     and (marker_at < 0 or failure_match.start() < marker_at)
 )
+profile_error = None
+if profile in ("domain", "reserve"):
+    required = [
+        "fsquota_ucore: public_domain_limited=1",
+        "fsquota_ucore: post_exit_accounting=1",
+        "fsquota_ucore: workflow_reserve=1",
+        "fsquota_ucore: kernel_metadata_reserve=1",
+        "fsquota_ucore: pressure_cleanup=1",
+    ]
+    if profile == "domain":
+        required.append("fsquota_ucore: quota_reuse=1")
+    positions = [output.find(text) for text in required]
+    if marker_at < 0 or any(pos < 0 or pos >= marker_at for pos in positions):
+        profile_error = "missing quota marker"
+    elif positions != sorted(positions):
+        profile_error = "quota markers are out of order"
+    pressure = re.search(
+        r"fsquota_ucore: public_domain_limited=1 blocks=(\d+) inodes=(\d+)",
+        output,
+    )
+    if pressure is None:
+        profile_error = "missing quota pressure counts"
+    else:
+        blocks, inodes = (int(value) for value in pressure.groups())
+        if profile == "domain" and not (2 <= blocks <= 16 and 4 <= inodes <= 8):
+            profile_error = (
+                f"domain boundary mismatch: blocks={blocks} inodes={inodes}"
+            )
+        if profile == "reserve" and not (blocks > 32 and inodes > 12):
+            profile_error = (
+                f"reserve boundary mismatch: blocks={blocks} inodes={inodes}"
+            )
+elif profile != "generic":
+    profile_error = f"unknown validation profile: {profile}"
 if timed_out:
     print(f"[fs-enospc] {tag} timed out", file=sys.stderr)
-if timed_out or marker_at < 0 or failed_before_marker:
+if timed_out or marker_at < 0 or failed_before_marker or profile_error:
+    if profile_error:
+        print(f"[fs-enospc] {tag} {profile_error}", file=sys.stderr)
     print(f"[fs-enospc] {tag} failed", file=sys.stderr)
     for line in lines[-40:]:
         print(line, file=sys.stderr)
@@ -119,19 +169,51 @@ PY
 }
 
 build_user "" agent
-build_image "" agent
+build_image "" agent "${FS_BLOCKS}" "${FS_INODES}" fsenospc_ucore
 make -B build TOOLPREFIX="${TOOLPREFIX}" LOG=error \
-	INIT_PROC=fsenospc_ucore FS_ICACHE_SIZE="${FS_CACHE_INODES}"
+	INIT_PROC=fsenospc_ucore FS_ICACHE_SIZE="${FS_CACHE_INODES}" \
+	FS_DOMAIN_BLOCK_LIMIT=512 FS_DOMAIN_INODE_LIMIT=64 \
+	FS_WORKFLOW_BLOCK_RESERVE=1 FS_SYSTEM_BLOCK_RESERVE=1 \
+	FS_WORKFLOW_INODE_RESERVE=1 FS_SYSTEM_INODE_RESERVE=1
 cp build/kernel "${TMPDIR_FS}/agent-kernel"
 
+build_image "" quota-domain "${FS_QUOTA_DOMAIN_BLOCKS}" \
+	"${FS_QUOTA_DOMAIN_INODES}" fsquota_ucore agent
+make -B build TOOLPREFIX="${TOOLPREFIX}" LOG=error \
+	INIT_PROC=fsquota_ucore \
+	FS_DOMAIN_BLOCK_LIMIT=16 FS_DOMAIN_INODE_LIMIT=8 \
+	FS_WORKFLOW_BLOCK_RESERVE="${FS_QUOTA_WORKFLOW_BLOCK_RESERVE}" \
+	FS_SYSTEM_BLOCK_RESERVE="${FS_QUOTA_SYSTEM_BLOCK_RESERVE}" \
+	FS_WORKFLOW_INODE_RESERVE="${FS_QUOTA_WORKFLOW_INODE_RESERVE}" \
+	FS_SYSTEM_INODE_RESERVE="${FS_QUOTA_SYSTEM_INODE_RESERVE}"
+cp build/kernel "${TMPDIR_FS}/quota-domain-kernel"
+
+build_image "" quota-reserve "${FS_QUOTA_RESERVE_BLOCKS}" \
+	"${FS_QUOTA_RESERVE_INODES}" fsquota_ucore agent
+make -B build TOOLPREFIX="${TOOLPREFIX}" LOG=error \
+	INIT_PROC=fsquota_ucore \
+	FS_DOMAIN_BLOCK_LIMIT=512 FS_DOMAIN_INODE_LIMIT=128 \
+	FS_WORKFLOW_BLOCK_RESERVE="${FS_QUOTA_WORKFLOW_BLOCK_RESERVE}" \
+	FS_SYSTEM_BLOCK_RESERVE="${FS_QUOTA_SYSTEM_BLOCK_RESERVE}" \
+	FS_WORKFLOW_INODE_RESERVE="${FS_QUOTA_WORKFLOW_INODE_RESERVE}" \
+	FS_SYSTEM_INODE_RESERVE="${FS_QUOTA_SYSTEM_INODE_RESERVE}"
+cp build/kernel "${TMPDIR_FS}/quota-reserve-kernel"
+
 build_user baseline_ucore baseline
-build_image baseline_ucore baseline
+build_image baseline_ucore baseline "${FS_BLOCKS}" "${FS_INODES}" \
+	fsenospc_ucore
 make -C baseline_ucore -B build \
 	TOOLPREFIX="${TOOLPREFIX}" LOG=error INIT_PROC=fsenospc_ucore \
 	FS_ICACHE_SIZE="${FS_CACHE_INODES}"
 cp baseline_ucore/build/kernel "${TMPDIR_FS}/baseline-kernel"
 
-run_case agent "${TMPDIR_FS}/agent-kernel" "${TMPDIR_FS}/agent.img"
-run_case baseline "${TMPDIR_FS}/baseline-kernel" "${TMPDIR_FS}/baseline.img"
+run_case agent "${TMPDIR_FS}/agent-kernel" "${TMPDIR_FS}/agent.img" \
+	"fsenospc_ucore: parent passed" generic
+run_case baseline "${TMPDIR_FS}/baseline-kernel" \
+	"${TMPDIR_FS}/baseline.img" "fsenospc_ucore: parent passed" generic
+run_case quota-domain "${TMPDIR_FS}/quota-domain-kernel" \
+	"${TMPDIR_FS}/quota-domain.img" "fsquota_ucore: parent passed" domain
+run_case quota-reserve "${TMPDIR_FS}/quota-reserve-kernel" \
+	"${TMPDIR_FS}/quota-reserve.img" "fsquota_ucore: parent passed" reserve
 
-echo "[fs-enospc] both targets passed"
+echo "[fs-enospc] generic targets and Agent quota cases passed"

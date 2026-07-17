@@ -16,6 +16,8 @@ struct inode {
 	int valid; // inode has been read from disk?
 	int removed; // directory entry is gone; reclaim after the last reference
 	short type; // copy of disk inode
+	ushort fs_owner_version;
+	uint fs_owner_domain;
 	uint size;
 	uint addrs[NDIRECT + 1];
 	// LAB4: You may need to add link count here

@@ -32,9 +32,11 @@ struct superblock {
 	uint ninodes; // Number of inodes.
 	uint inodestart; // Block number of first inode block
 	uint bmapstart; // Block number of first free map block
+	uint qmapstart; // Block number of first block-owner map block
+	uint datastart; // Block number of first data block
 };
 
-#define FSMAGIC 0x10203040
+#define FSMAGIC 0x10203043
 
 #define NDIRECT 12
 #define NINDIRECT (BSIZE / sizeof(uint))
@@ -47,13 +49,19 @@ struct superblock {
 // On-disk inode structure
 struct dinode {
 	short type; // File type
-	short pad[3];
-	// LAB4: you can reduce size of pad array and add link count below,
-	//       or you can just regard a pad as link count.
-	//       But keep in mind that you'd better keep sizeof(dinode) unchanged
+	ushort fs_owner_version;
+	uint fs_owner_domain;
 	uint size; // Size of file (bytes)
 	uint addrs[NDIRECT + 1]; // Data block addresses
 };
+
+#define FS_OWNER_VERSION 1U
+#define FS_OWNER_FREE    0U
+#define FS_OWNER_SYSTEM  1U
+#define FS_OWNER_DYNAMIC_MIN 2U
+
+_Static_assert(sizeof(struct dinode) == 64,
+	       "on-disk inode format must remain 64 bytes");
 
 // Inodes per block.
 #define IPB (BSIZE / sizeof(struct dinode))
@@ -67,6 +75,12 @@ struct dinode {
 // Block of free map containing bit for block b
 #define BBLOCK(b, sb) ((b) / BPB + sb.bmapstart)
 
+// Block owners per owner-map block.
+#define QPB (BSIZE / sizeof(uint))
+
+// Block of owner map containing the owner for block b.
+#define QBLOCK(b, sb) ((b) / QPB + sb.qmapstart)
+
 // Directory is a file containing a sequence of dirent structures.
 #define DIRSIZ 14
 
@@ -79,11 +93,11 @@ struct dirent {
 struct inode;
 
 void fsinit();
-int dirlink(struct inode *, char *, uint);
-int dirunlink(struct inode *, char *, uint *);
+int dirlink(struct inode *, char *, uint, uint);
+int dirunlink(struct inode *, char *, uint *, uint);
 struct inode *dirlookup(struct inode *, char *, uint *);
-struct inode *fs_create(char *, short, int *);
-struct inode *ialloc(uint, short);
+struct inode *fs_create(char *, short, int *, uint);
+struct inode *ialloc(uint, short, uint);
 void iabort(struct inode *);
 struct inode *idup(struct inode *);
 void iinit();
@@ -95,7 +109,7 @@ void iupdate(struct inode *);
 struct inode *namei(char *);
 struct inode *root_dir();
 int readi(struct inode *, int, uint64, uint, uint);
-int writei(struct inode *, int, uint64, uint, uint);
+int writei(struct inode *, int, uint64, uint, uint, uint);
 void itrunc(struct inode *);
 int dirls(struct inode *);
 #endif //!__FS_H__

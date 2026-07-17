@@ -90,6 +90,7 @@ struct proc {
 	struct proc *parent; // Parent process; NULL means kernel-owned
 	int parent_record_index;
 	int resource_domain_id;
+	uint storage_domain_id;
 	int resource_slot_reserved;
 	int resource_domain_admin;
 	uint64 exit_code;
@@ -236,6 +237,9 @@ void exit(int);
 void proc_init();
 void proc_mapstacks(pagetable_t);
 void kernel_stack_check(struct thread *);
+void proc_storage_set_cookie_floor(uint);
+int proc_storage_reserve(uint, int, uint);
+void proc_storage_release(uint, int);
 void scheduler() __attribute__((noreturn));
 void sched();
 void yield();

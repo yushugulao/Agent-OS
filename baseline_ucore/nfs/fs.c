@@ -19,11 +19,12 @@
 #define NINODES NINODE
 
 // Disk layout:
-// [ boot block | sb block | inode blocks | free bit map | data blocks ]
+// [ boot | super | inode blocks | free bitmap | owner map | data blocks ]
 
-int nbitmap = FSSIZE / (BSIZE * 8) + 1;
-int ninodeblocks = NINODES / IPB + 1;
-int nmeta; // Number of meta blocks (boot, sb, nlog, inode, bitmap)
+int nbitmap = (FSSIZE + BPB - 1) / BPB;
+int nqmap = (FSSIZE + QPB - 1) / QPB;
+int ninodeblocks = (NINODES + IPB - 1) / IPB;
+int nmeta; // Number of metadata blocks.
 int nblocks; // Number of data blocks
 
 int fsfd;
@@ -34,6 +35,7 @@ uint freeblock;
 
 char *basename(char *);
 void balloc(int);
+void qalloc(int);
 void wsect(uint, void *);
 void winode(uint, struct dinode *);
 void rinode(uint inum, struct dinode *ip);
@@ -82,8 +84,12 @@ int main(int argc, char *argv[])
 		exit(1);
 	}
 	// 1 fs block = 1 disk sector
-	nmeta = 2 + ninodeblocks + nbitmap;
+	nmeta = 2 + ninodeblocks + nbitmap + nqmap;
 	nblocks = FSSIZE - nmeta;
+	if (nblocks <= 0) {
+		fprintf(stderr, "mkfs: metadata does not fit file system\n");
+		exit(1);
+	}
 
 	sb.magic = FSMAGIC;
 	sb.size = xint(FSSIZE);
@@ -91,10 +97,12 @@ int main(int argc, char *argv[])
 	sb.ninodes = xint(NINODES);
 	sb.inodestart = xint(2);
 	sb.bmapstart = xint(2 + ninodeblocks);
+	sb.qmapstart = xint(2 + ninodeblocks + nbitmap);
+	sb.datastart = xint(nmeta);
 
-	printf("nmeta %d (boot, super, inode blocks %u, bitmap blocks %u) blocks %d "
-	       "total %d\n",
-	       nmeta, ninodeblocks, nbitmap, nblocks, FSSIZE);
+	printf("nmeta %d (boot, super, inode blocks %u, bitmap blocks %u, "
+	       "owner blocks %u) blocks %d total %d\n",
+	       nmeta, ninodeblocks, nbitmap, nqmap, nblocks, FSSIZE);
 
 	freeblock = nmeta; // the first free block that we can allocate
 
@@ -136,6 +144,7 @@ int main(int argc, char *argv[])
 	din.size = xint(off);
 	winode(rootino, &din);
 
+	qalloc(freeblock);
 	balloc(freeblock);
 	return 0;
 }
@@ -209,11 +218,18 @@ void require_free_block(const char *context)
 
 uint ialloc(ushort type)
 {
-	uint inum = freeinode++;
+	uint inum;
 	struct dinode din;
 
+	if (freeinode >= NINODES) {
+		fprintf(stderr, "mkfs: out of inodes\n");
+		exit(1);
+	}
+	inum = freeinode++;
 	bzero(&din, sizeof(din));
 	din.type = xshort(type);
+	din.fs_owner_version = xshort(FS_OWNER_VERSION);
+	din.fs_owner_domain = xint(FS_OWNER_SYSTEM);
 	din.size = xint(0);
 	// LAB4: You may want to init link count here
 	winode(inum, &din);
@@ -223,13 +239,42 @@ uint ialloc(ushort type)
 void balloc(int used)
 {
 	uchar buf[BSIZE];
-	int i;
-	assert(used <= BSIZE * 8);
-	bzero(buf, BSIZE);
-	for (i = 0; i < used; i++) {
-		buf[i / 8] = buf[i / 8] | (0x1 << (i % 8));
+	int block;
+
+	assert(used <= FSSIZE);
+	for (block = 0; block < nbitmap; block++) {
+		int base = block * BPB;
+		int limit = used - base;
+
+		if (limit < 0)
+			limit = 0;
+		if (limit > BPB)
+			limit = BPB;
+		bzero(buf, BSIZE);
+		for (int i = 0; i < limit; i++)
+			buf[i / 8] |= 0x1 << (i % 8);
+		wsect(xint(sb.bmapstart) + block, buf);
 	}
-	wsect(sb.bmapstart, buf);
+}
+
+void qalloc(int used)
+{
+	uint owners[QPB];
+
+	assert(used <= FSSIZE);
+	for (int block = 0; block < nqmap; block++) {
+		int base = block * QPB;
+		int limit = used - base;
+
+		if (limit < 0)
+			limit = 0;
+		if (limit > (int)QPB)
+			limit = (int)QPB;
+		bzero(owners, sizeof(owners));
+		for (int i = 0; i < limit; i++)
+			owners[i] = xint(FS_OWNER_SYSTEM);
+		wsect(xint(sb.qmapstart) + block, owners);
+	}
 }
 
 #define min(a, b) ((a) < (b) ? (a) : (b))

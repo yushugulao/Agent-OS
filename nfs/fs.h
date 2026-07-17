@@ -33,9 +33,14 @@ struct superblock {
 	uint ninodes; // Number of inodes.
 	uint inodestart; // Block number of first inode block
 	uint bmapstart; // Block number of first free map block
+	uint qmapstart; // Block number of first storage-owner map block
+	uint datastart; // Block number of first allocatable data block
 };
 
-#define FSMAGIC 0x10203042
+_Static_assert(sizeof(struct superblock) == 32,
+	       "on-disk superblock format must remain 32 bytes");
+
+#define FSMAGIC 0x10203044
 
 #define NDIRECT 12
 #define NINDIRECT (BSIZE / sizeof(uint))
@@ -56,7 +61,7 @@ struct superblock {
 #define EXEC_LAYOUT_VERSION 1U
 
 #define VFS_LABEL_MAGIC 0x56465331U
-#define VFS_LABEL_VERSION 1U
+#define VFS_LABEL_VERSION 2U
 #define VFS_LABEL_F_PUBLIC         0x1U
 #define VFS_LABEL_F_PROTECTED      0x2U
 #define VFS_LABEL_F_KERNEL_PRIVATE 0x4U
@@ -77,6 +82,11 @@ struct superblock {
 #define VFS_EXEC_PROFILE_WORKFLOW 1U
 #define VFS_EXEC_PROFILE_CONTENT_READ 2U
 #define VFS_EXEC_PROFILE_ARTIFACT_WRITE 3U
+
+#define FS_OWNER_VERSION 1U
+#define FS_OWNER_NONE 0U
+#define FS_OWNER_SYSTEM 1U
+#define FS_OWNER_FIRST_DYNAMIC 2U
 
 // LAB4: Keep it the same as dinode in os/fs.h after you change it
 // On-disk inode structure
@@ -100,8 +110,8 @@ struct dinode {
 	uint vfs_exec_profile;
 	uint vfs_policy_generation;
 	uint vfs_incarnation;
-	uint vfs_reserved0;
-	uint vfs_reserved1;
+	uint fs_owner_domain;
+	uint fs_owner_version;
 	uint vfs_checksum;
 };
 
@@ -119,6 +129,9 @@ _Static_assert(sizeof(struct dinode) == 128,
 
 // Block of free map containing bit for block b
 #define BBLOCK(b, sb) ((b) / BPB + sb.bmapstart)
+
+#define QPB (BSIZE / sizeof(uint))
+#define QBLOCK(b, sb) ((b) / QPB + sb.qmapstart)
 
 // Directory is a file containing a sequence of dirent structures.
 #define DIRSIZ 14

@@ -32,12 +32,17 @@ enum proc_admission {
 struct proc_resource_domain {
 	int used;
 	int live;
+	uint storage_domain_id;
+	uint storage_blocks;
+	uint storage_inodes;
 };
 
 static struct proc_resource_domain
 	proc_resource_domains[PROC_RESOURCE_DOMAIN_CAP];
 static int proc_resource_ordinary_live;
 static int proc_resource_reserved_live;
+static uint proc_storage_next_cookie;
+static int proc_storage_cookie_exhausted;
 
 static void proc_reset_thread_slot(struct thread *t);
 static void proc_recycle(struct proc *p);
@@ -204,6 +209,9 @@ static void proc_resource_domain_clear(struct proc_resource_domain *domain)
 {
 	domain->used = 0;
 	domain->live = 0;
+	domain->storage_domain_id = FS_OWNER_NONE;
+	domain->storage_blocks = 0;
+	domain->storage_inodes = 0;
 }
 
 static void proc_resource_init(void)
@@ -212,6 +220,95 @@ static void proc_resource_init(void)
 		proc_resource_domain_clear(&proc_resource_domains[i]);
 	proc_resource_ordinary_live = 0;
 	proc_resource_reserved_live = 0;
+	proc_storage_next_cookie = FS_OWNER_FIRST_DYNAMIC;
+	proc_storage_cookie_exhausted = 0;
+}
+
+// The file system raises this floor after scanning persistent owner records.
+// Cookies never wrap or get reused, so a dead domain can safely remain on disk.
+void proc_storage_set_cookie_floor(uint floor)
+{
+	int enabled = intr_save();
+
+	if (floor == FS_OWNER_NONE) {
+		proc_storage_cookie_exhausted = 1;
+	} else {
+		if (floor < FS_OWNER_FIRST_DYNAMIC)
+			floor = FS_OWNER_FIRST_DYNAMIC;
+		if (!proc_storage_cookie_exhausted &&
+		    floor > proc_storage_next_cookie)
+			proc_storage_next_cookie = floor;
+	}
+	intr_restore(enabled);
+}
+
+static uint proc_storage_alloc_cookie(void)
+{
+	uint cookie;
+
+	if (proc_storage_cookie_exhausted ||
+	    proc_storage_next_cookie < FS_OWNER_FIRST_DYNAMIC)
+		return FS_OWNER_NONE;
+	cookie = proc_storage_next_cookie++;
+	if (proc_storage_next_cookie == FS_OWNER_NONE)
+		proc_storage_cookie_exhausted = 1;
+	return cookie;
+}
+
+// Charge only a live immutable process resource domain. Persistent objects
+// keep their cookie after the last process exits; global watermarks still
+// account for those objects, while no future domain can inherit their quota.
+int proc_storage_reserve(uint owner, int inode, uint limit)
+{
+	int enabled;
+	int result = -1;
+
+	if (owner == FS_OWNER_SYSTEM)
+		return 0;
+	if (owner < FS_OWNER_FIRST_DYNAMIC || limit == 0)
+		return -1;
+	enabled = intr_save();
+	for (int i = 0; i < PROC_RESOURCE_DOMAIN_CAP; i++) {
+		struct proc_resource_domain *domain = &proc_resource_domains[i];
+		uint *used;
+
+		if (!domain->used || domain->live <= 0 ||
+		    domain->storage_domain_id != owner)
+			continue;
+		used = inode ? &domain->storage_inodes : &domain->storage_blocks;
+		if (*used < limit) {
+			(*used)++;
+			result = 0;
+		}
+		break;
+	}
+	intr_restore(enabled);
+	return result;
+}
+
+void proc_storage_release(uint owner, int inode)
+{
+	int enabled;
+
+	if (owner == FS_OWNER_SYSTEM)
+		return;
+	if (owner < FS_OWNER_FIRST_DYNAMIC)
+		panic("storage owner invariant");
+	enabled = intr_save();
+	for (int i = 0; i < PROC_RESOURCE_DOMAIN_CAP; i++) {
+		struct proc_resource_domain *domain = &proc_resource_domains[i];
+		uint *used;
+
+		if (!domain->used || domain->live <= 0 ||
+		    domain->storage_domain_id != owner)
+			continue;
+		used = inode ? &domain->storage_inodes : &domain->storage_blocks;
+		if (*used == 0)
+			panic("storage quota invariant");
+		(*used)--;
+		break;
+	}
+	intr_restore(enabled);
 }
 
 // Reserve a proc slot and charge its immutable resource domain atomically.
@@ -225,6 +322,7 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 	int domain_id = -1;
 	int new_domain = 0;
 	int reserved = admission != PROC_ADMIT_NORMAL;
+	uint storage_cookie = FS_OWNER_NONE;
 
 	if (admission < PROC_ADMIT_BOOT || admission > PROC_ADMIT_WORKER)
 		goto out;
@@ -238,7 +336,8 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 		    parent->resource_domain_id >= PROC_RESOURCE_DOMAIN_CAP)
 			goto out;
 		domain = &proc_resource_domains[parent->resource_domain_id];
-		if (!domain->used || domain->live <= 0)
+		if (!domain->used || domain->live <= 0 ||
+		    parent->storage_domain_id != domain->storage_domain_id)
 			goto out;
 		if (admission == PROC_ADMIT_NORMAL) {
 			if (parent->resource_domain_admin)
@@ -267,6 +366,9 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 		}
 		if (domain_id < 0)
 			goto out;
+		storage_cookie = proc_storage_alloc_cookie();
+		if (storage_cookie == FS_OWNER_NONE)
+			goto out;
 	} else if (proc_resource_domains[domain_id].live >=
 		   PROC_RESOURCE_DOMAIN_LIMIT) {
 		goto out;
@@ -282,6 +384,9 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 		domain = &proc_resource_domains[domain_id];
 		domain->used = 1;
 		domain->live = 0;
+		domain->storage_domain_id = storage_cookie;
+		domain->storage_blocks = 0;
+		domain->storage_inodes = 0;
 	}
 	domain = &proc_resource_domains[domain_id];
 	domain->live++;
@@ -290,6 +395,7 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 	else
 		proc_resource_ordinary_live++;
 	p->resource_domain_id = domain_id;
+	p->storage_domain_id = domain->storage_domain_id;
 	p->resource_slot_reserved = reserved;
 	p->resource_domain_admin = admission == PROC_ADMIT_BOOT;
 	p->state = P_USED;
@@ -305,7 +411,9 @@ static void proc_resource_grant_admin(struct proc *p)
 	if (p == 0 || p->state != P_USED || !p->resource_slot_reserved ||
 	    p->resource_domain_id < 0 ||
 	    p->resource_domain_id >= PROC_RESOURCE_DOMAIN_CAP ||
-	    !proc_resource_domains[p->resource_domain_id].used)
+	    !proc_resource_domains[p->resource_domain_id].used ||
+	    p->storage_domain_id !=
+		    proc_resource_domains[p->resource_domain_id].storage_domain_id)
 		panic("process resource admin invariant");
 	p->resource_domain_admin = 1;
 	intr_restore(enabled);
@@ -332,7 +440,8 @@ static void proc_resource_release(struct proc *p)
 	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP)
 		panic("process resource domain invariant");
 	domain = &proc_resource_domains[domain_id];
-	if (!domain->used || domain->live <= 0)
+	if (!domain->used || domain->live <= 0 ||
+	    p->storage_domain_id != domain->storage_domain_id)
 		panic("process resource count invariant");
 	if (p->resource_slot_reserved) {
 		if (proc_resource_reserved_live <= 0)
@@ -347,6 +456,7 @@ static void proc_resource_release(struct proc *p)
 	if (domain->live == 0)
 		proc_resource_domain_clear(domain);
 	p->resource_domain_id = -1;
+	p->storage_domain_id = FS_OWNER_NONE;
 	p->resource_slot_reserved = 0;
 	p->resource_domain_admin = 0;
 out:
@@ -558,6 +668,7 @@ void proc_init()
 		p->parent = 0;
 		p->parent_record_index = -1;
 		p->resource_domain_id = -1;
+		p->storage_domain_id = FS_OWNER_NONE;
 		p->resource_slot_reserved = 0;
 		p->resource_domain_admin = 0;
 		child_records_reset(p);
