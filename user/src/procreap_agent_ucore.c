@@ -6,6 +6,7 @@
 
 #define LOW_SCORE_YIELDS 512
 #define UNREAPED_PRESSURE_ROUNDS 256
+#define LIVE_GLOBAL_PRESSURE_ROUNDS 256
 
 static void check(int condition, const char *message)
 {
@@ -116,6 +117,61 @@ static void check_agent_creation_under_unreaped_pressure(void)
 	      "reap ordinary unreaped holder");
 }
 
+// Direct children of the trusted bootstrap process receive independent user
+// domains. Holding them all alive reaches the ordinary global boundary; the
+// Agent allocation must still make progress through the reserved class.
+static void check_agent_reserve_under_live_pressure(void)
+{
+	int release_pipe[2];
+	int created = 0;
+	int denied = 0;
+	int agent;
+	int status = -1;
+	int reaped = 0;
+	char token = 0;
+
+	check(pipe(release_pipe) == 0,
+	      "create live global pressure pipe");
+	for (int i = 0; i < LIVE_GLOBAL_PRESSURE_ROUNDS; i++) {
+		int child = fork();
+
+		if (child == 0) {
+			close(release_pipe[1]);
+			if (read(release_pipe[0], &token, 1) != -1)
+				exit(20);
+			close(release_pipe[0]);
+			exit(0);
+		}
+		if (child < 0) {
+			denied = 1;
+			break;
+		}
+		created++;
+		sched_yield();
+	}
+	check(denied && created > 0,
+	      "ordinary live allocation reaches global limit");
+	close(release_pipe[0]);
+	agent = agent_create();
+	check(agent >= 0, "reserved Agent survives live global pressure");
+	if (agent == 0) {
+		close(release_pipe[1]);
+		exit(37);
+	}
+	check(waitpid(agent, &status) == agent && status == 37,
+	      "wait reserved Agent pressure probe");
+	close(release_pipe[1]);
+	for (;;) {
+		int child = wait(&status);
+
+		if (child < 0)
+			break;
+		check(status == 0, "ordinary pressure child status");
+		reaped++;
+	}
+	check(reaped == created, "reap all ordinary pressure children");
+}
+
 static void check_high_score_agent_boundary(void)
 {
 	int ready_pipe[2];
@@ -208,6 +264,8 @@ int main(void)
 	printf("procreap_agent_ucore: bounded teardown scheduling\n");
 	check_agent_creation_under_unreaped_pressure();
 	printf("procreap_agent_ucore: child-pressure-isolated=1\n");
+	check_agent_reserve_under_live_pressure();
+	printf("procreap_agent_ucore: reserved-agent-slot=1\n");
 	check_high_score_agent_boundary();
 	check_normal_score_boundary();
 	printf("procreap_agent_ucore: adversarial-agent=1\n");

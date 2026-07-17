@@ -15,6 +15,23 @@ struct queue task_queue;
 #define TASK_QUEUE_SIZE (NPROC * NTHREAD)
 static int process_queue_data[TASK_QUEUE_SIZE];
 
+enum proc_admission {
+	PROC_ADMIT_BOOT,
+	PROC_ADMIT_NORMAL,
+	PROC_ADMIT_AGENT,
+	PROC_ADMIT_WORKER,
+};
+
+struct proc_resource_domain {
+	int used;
+	int live;
+};
+
+static struct proc_resource_domain
+	proc_resource_domains[PROC_RESOURCE_DOMAIN_CAP];
+static int proc_resource_ordinary_live;
+static int proc_resource_reserved_live;
+
 static void proc_reset_thread_slot(struct thread *t);
 static void proc_recycle(struct proc *p);
 
@@ -31,6 +48,11 @@ _Static_assert(KSTACK_GUARD_SIZE % PGSIZE == 0,
 	       "kernel stack guard size must be page aligned");
 _Static_assert((uint64)NPROC * NTHREAD * KSTACK_SLOT_SIZE < TRAMPOLINE,
 	       "kernel stack virtual region must not wrap");
+_Static_assert(PROC_RESERVED_SLOTS > 0 && PROC_RESERVED_SLOTS < NPROC,
+	       "process reserve must leave both resource classes usable");
+_Static_assert(PROC_RESOURCE_DOMAIN_LIMIT > 0 &&
+	       PROC_RESOURCE_DOMAIN_LIMIT <= PROC_ORDINARY_SLOTS,
+	       "resource domain limit must fit the ordinary process pool");
 
 static uint64 kernel_stack_slot(int proc_index, int tid)
 {
@@ -169,6 +191,146 @@ int proc_thread_exit_requested(void)
 	if (t == 0 || t == &idle || (p = t->process) == 0)
 		return 0;
 	return p->exit_requested && t->tid != p->exit_owner_tid;
+}
+
+static void proc_resource_domain_clear(struct proc_resource_domain *domain)
+{
+	domain->used = 0;
+	domain->live = 0;
+}
+
+static void proc_resource_init(void)
+{
+	for (int i = 0; i < PROC_RESOURCE_DOMAIN_CAP; i++)
+		proc_resource_domain_clear(&proc_resource_domains[i]);
+	proc_resource_ordinary_live = 0;
+	proc_resource_reserved_live = 0;
+}
+
+// Reserve a proc slot and charge its immutable resource domain atomically.
+// Only a kernel-signed domain admin may create a new domain or use reserve.
+static struct proc *proc_resource_reserve(struct proc *parent,
+					 enum proc_admission admission)
+{
+	struct proc_resource_domain *domain;
+	struct proc *p = 0;
+	int enabled = intr_save();
+	int domain_id = -1;
+	int new_domain = 0;
+	int reserved = admission != PROC_ADMIT_NORMAL;
+
+	if (admission < PROC_ADMIT_BOOT || admission > PROC_ADMIT_WORKER)
+		goto out;
+	if (admission == PROC_ADMIT_BOOT) {
+		if (parent != 0)
+			goto out;
+		new_domain = 1;
+	} else {
+		if (parent == 0 || parent->state != P_USED ||
+		    parent->resource_domain_id < 0 ||
+		    parent->resource_domain_id >= PROC_RESOURCE_DOMAIN_CAP)
+			goto out;
+		domain = &proc_resource_domains[parent->resource_domain_id];
+		if (!domain->used || domain->live <= 0)
+			goto out;
+		if (admission == PROC_ADMIT_NORMAL) {
+			if (parent->resource_domain_admin)
+				new_domain = 1;
+			else
+				domain_id = parent->resource_domain_id;
+		} else {
+			if (!parent->resource_slot_reserved ||
+			    !parent->resource_domain_admin)
+				goto out;
+			new_domain = 1;
+		}
+	}
+	if (reserved) {
+		if (proc_resource_reserved_live >= PROC_RESERVED_SLOTS)
+			goto out;
+	} else if (proc_resource_ordinary_live >= PROC_ORDINARY_SLOTS) {
+		goto out;
+	}
+	if (new_domain) {
+		for (int i = 0; i < PROC_RESOURCE_DOMAIN_CAP; i++) {
+			if (!proc_resource_domains[i].used) {
+				domain_id = i;
+				break;
+			}
+		}
+		if (domain_id < 0)
+			goto out;
+	} else if (proc_resource_domains[domain_id].live >=
+		   PROC_RESOURCE_DOMAIN_LIMIT) {
+		goto out;
+	}
+	for (p = pool; p < &pool[NPROC]; p++)
+		if (p->state == P_UNUSED)
+			break;
+	if (p == &pool[NPROC]) {
+		p = 0;
+		goto out;
+	}
+	if (new_domain) {
+		domain = &proc_resource_domains[domain_id];
+		domain->used = 1;
+		domain->live = 0;
+	}
+	domain = &proc_resource_domains[domain_id];
+	domain->live++;
+	if (reserved)
+		proc_resource_reserved_live++;
+	else
+		proc_resource_ordinary_live++;
+	p->resource_domain_id = domain_id;
+	p->resource_slot_reserved = reserved;
+	p->resource_domain_admin = admission == PROC_ADMIT_BOOT;
+	p->state = P_USED;
+out:
+	intr_restore(enabled);
+	return p;
+}
+
+static void proc_resource_drop_admin(struct proc *p)
+{
+	int enabled = intr_save();
+
+	if (p != 0)
+		p->resource_domain_admin = 0;
+	intr_restore(enabled);
+}
+
+static void proc_resource_release(struct proc *p)
+{
+	struct proc_resource_domain *domain;
+	int enabled = intr_save();
+	int domain_id;
+
+	if (p == 0)
+		goto out;
+	domain_id = p->resource_domain_id;
+	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP)
+		panic("process resource domain invariant");
+	domain = &proc_resource_domains[domain_id];
+	if (!domain->used || domain->live <= 0)
+		panic("process resource count invariant");
+	if (p->resource_slot_reserved) {
+		if (proc_resource_reserved_live <= 0)
+			panic("process reserve count invariant");
+		proc_resource_reserved_live--;
+	} else {
+		if (proc_resource_ordinary_live <= 0)
+			panic("process ordinary count invariant");
+		proc_resource_ordinary_live--;
+	}
+	domain->live--;
+	if (domain->live == 0)
+		proc_resource_domain_clear(domain);
+	p->resource_domain_id = -1;
+	p->resource_slot_reserved = 0;
+	p->resource_domain_admin = 0;
+out:
+	intr_restore(enabled);
 }
 
 static void child_record_clear(struct child_record *record)
@@ -370,10 +532,14 @@ static void proc_orphan_children(struct proc *parent)
 void proc_init()
 {
 	struct proc *p;
+	proc_resource_init();
 	for (p = pool; p < &pool[NPROC]; p++) {
 		p->state = P_UNUSED;
 		p->parent = 0;
 		p->parent_record_index = -1;
+		p->resource_domain_id = -1;
+		p->resource_slot_reserved = 0;
+		p->resource_domain_admin = 0;
 		child_records_reset(p);
 		for (int tid = 0; tid < NTHREAD; ++tid) {
 			struct thread *t = &p->threads[tid];
@@ -497,23 +663,15 @@ static void detach_task(struct thread *t)
 	intr_restore(enabled);
 }
 
-// Look in the process table for an UNUSED proc.
-// If found, initialize state required to run in the kernel.
-// If there are no free procs, or a memory allocation fails, return 0.
-struct proc *allocproc()
+static struct proc *allocproc_admit(struct proc *parent,
+				    enum proc_admission admission)
 {
-	struct proc *p;
-	for (p = pool; p < &pool[NPROC]; p++) {
-		if (p->state == P_UNUSED) {
-			goto found;
-		}
-	}
-	return 0;
+	struct proc *p = proc_resource_reserve(parent, admission);
 
-found:
+	if (p == 0)
+		return 0;
 	// init proc
 	p->pid = allocpid();
-	p->state = P_USED;
 	wait_queue_init(&p->child_waiters, WAIT_REASON_CHILD);
 	wait_queue_init(&p->thread_exit_waiters, WAIT_REASON_THREAD_EXIT);
 	p->max_page = 0;
@@ -526,6 +684,7 @@ found:
 	child_records_reset(p);
 	p->pagetable = uvmcreate();
 	if (p->pagetable == 0) {
+		proc_resource_release(p);
 		p->state = P_UNUSED;
 		return 0;
 	}
@@ -536,6 +695,12 @@ found:
 	p->next_condvar_id = 0;
 	// LAB5: (1) you may initialize your new proc variables here
 	return p;
+}
+
+// Kernel bootstrap allocation is the root of all signed resource domains.
+struct proc *allocproc()
+{
+	return allocproc_admit(0, PROC_ADMIT_BOOT);
 }
 
 inline uint64 get_thread_trapframe_va(int tid)
@@ -758,6 +923,8 @@ void proc_install_user_image(struct proc *p, struct user_image *image,
 	p->pagetable = image->pagetable;
 	p->max_page = image->max_page;
 	p->ustack_base = image->ustack_base;
+	if (running)
+		proc_resource_drop_admin(p);
 	image->pagetable = 0;
 
 	for (int tid = 0; tid < NTHREAD; tid++) {
@@ -874,6 +1041,7 @@ static int proc_release_resources(struct proc *p)
 
 static void proc_reset_slot(struct proc *p)
 {
+	proc_resource_release(p);
 	p->parent = NULL;
 	p->parent_record_index = -1;
 	p->pid = 0;
@@ -913,7 +1081,7 @@ int fork()
 	if (p->exit_requested || !proc_child_has_capacity(p))
 		return -1;
 	// Allocate process.
-	if ((np = allocproc()) == 0) {
+	if ((np = allocproc_admit(p, PROC_ADMIT_NORMAL)) == 0) {
 		return -1;
 	}
 	// Copy user memory from parent to child.

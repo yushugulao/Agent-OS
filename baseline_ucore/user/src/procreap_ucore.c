@@ -13,6 +13,7 @@
 #define RELEASE_BLOCK_SIZE  1024
 #define DELAYED_WAIT_CHILDREN 8
 #define CHILD_RECORD_PRESSURE_ROUNDS 256
+#define LIVE_DOMAIN_PRESSURE_ROUNDS 256
 
 static char release_block[RELEASE_BLOCK_SIZE];
 static int blocked_pipes[BLOCKED_READERS][2];
@@ -377,6 +378,112 @@ static void unreaped_parent_pressure(void)
 	      "reap pressure parent");
 }
 
+// The holder and every descendant stay in one immutable resource domain.
+// Keeping all leaves alive proves that another generation cannot escape the
+// domain quota, while the bootstrap process can still start an isolated job.
+static void live_domain_pressure(void)
+{
+	int ready_pipe[2];
+	int release_pipe[2];
+	int holder;
+	int probe;
+	int status = -1;
+	char token = 0;
+
+	check(pipe(ready_pipe) == 0, "create live-domain ready pipe");
+	check(pipe(release_pipe) == 0, "create live-domain release pipe");
+	holder = fork();
+	check(holder >= 0, "fork live-domain holder");
+	if (holder == 0) {
+		int expander;
+
+		close(ready_pipe[0]);
+		close(release_pipe[1]);
+		expander = fork();
+		if (expander < 0)
+			exit(83);
+		if (expander == 0) {
+			int denied = 0;
+			int reaped = 0;
+
+			for (int i = 0; i < LIVE_DOMAIN_PRESSURE_ROUNDS; i++) {
+				int child = fork();
+
+				if (child == 0) {
+					close(ready_pipe[1]);
+					if (read(release_pipe[0], &token, 1) != -1)
+						exit(84);
+					close(release_pipe[0]);
+					exit(0);
+				}
+				if (child < 0) {
+					denied = 1;
+					break;
+				}
+				sched_yield();
+			}
+			if (!denied)
+				exit(85);
+			token = 'D';
+			if (write(ready_pipe[1], &token, 1) != 1)
+				exit(86);
+			close(ready_pipe[1]);
+			if (read(release_pipe[0], &token, 1) != -1)
+				exit(87);
+			close(release_pipe[0]);
+			for (;;) {
+				int child = wait(&status);
+
+				if (child < 0)
+					break;
+				if (status != 0)
+					exit(88);
+				reaped++;
+			}
+			if (reaped == 0)
+				exit(89);
+			{
+				int replacement = fork();
+
+				if (replacement < 0)
+					exit(90);
+				if (replacement == 0)
+					exit(73);
+				status = -1;
+				if (waitpid(replacement, &status) != replacement ||
+				    status != 73)
+					exit(92);
+			}
+			exit(0);
+		}
+		close(ready_pipe[1]);
+		if (read(release_pipe[0], &token, 1) != -1)
+			exit(93);
+		close(release_pipe[0]);
+		status = -1;
+		if (waitpid(expander, &status) != expander || status != 0)
+			exit(94);
+		exit(0);
+	}
+	close(ready_pipe[1]);
+	close(release_pipe[0]);
+	check(read(ready_pipe[0], &token, 1) == 1 && token == 'D',
+	      "descendant reaches live-domain quota");
+	close(ready_pipe[0]);
+	probe = fork();
+	check(probe >= 0, "peer domain survives live pressure");
+	if (probe == 0) {
+		close(release_pipe[1]);
+		exit(91);
+	}
+	check(waitpid(probe, &status) == probe && status == 91,
+	      "wait live-domain peer probe");
+	close(release_pipe[1]);
+	status = -1;
+	check(waitpid(holder, &status) == holder && status == 0,
+	      "reap live-domain holder");
+}
+
 int main(void)
 {
 	printf("procreap_ucore: process lifecycle verification\n");
@@ -402,6 +509,11 @@ int main(void)
 	       DELAYED_WAIT_CHILDREN);
 	unreaped_parent_pressure();
 	printf("procreap_ucore: unreaped-parent-isolated=1\n");
+	live_domain_pressure();
+	printf("procreap_ucore: live-domain-limit=1\n");
+	printf("procreap_ucore: lineage-bypass-denied=1\n");
+	printf("procreap_ucore: live-quota-returned=1\n");
+	printf("procreap_ucore: peer-domain-isolated=1\n");
 	direct_wait_probe();
 	printf("procreap_ucore: parent passed\n");
 	return 0;

@@ -14,6 +14,10 @@
 #define MAILBOX_SLOT_COUNT (16)
 #define MAILBOX_PAYLOAD_SIZE (256)
 #define CHILD_RECORD_CAP (NPROC)
+#define PROC_RESOURCE_DOMAIN_CAP (NPROC)
+#define PROC_RESOURCE_DOMAIN_LIMIT (NPROC / 2)
+#define PROC_RESERVED_SLOTS (NPROC / 8)
+#define PROC_ORDINARY_SLOTS (NPROC - PROC_RESERVED_SLOTS)
 
 struct file;
 struct proc;
@@ -85,6 +89,9 @@ struct proc {
 	uint64 ustack_base; // Virtual address of user stack base
 	struct proc *parent; // Parent process; NULL means kernel-owned
 	int parent_record_index;
+	int resource_domain_id;
+	int resource_slot_reserved;
+	int resource_domain_admin;
 	uint64 exit_code;
 	int exit_requested;
 	int exit_owner_tid;
