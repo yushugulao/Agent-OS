@@ -570,9 +570,11 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 
 ## 14. 文件系统 ENOSPC 复测
 
-入口为 `make fs-enospc-test` 或 `bash scripts/run-fs-enospc-tests.sh`。脚本构建极小文件系统镜像，在 AgentOS-uCore 与 `baseline_ucore/` 上分别运行 `fsenospc_ucore`，依次耗尽磁盘 inode、内存 inode cache 和数据块。
+入口为 `make fs-enospc-test` 或 `bash scripts/run-fs-enospc-tests.sh`。脚本先构建极小文件系统镜像，在 AgentOS-uCore 与 `baseline_ucore/` 上分别运行 `fsenospc_ucore`，依次耗尽磁盘 inode、内存 inode cache 和数据块；随后只在 AgentOS-uCore 上以“低域上限”和“全局保留水位”两种配置运行 `fsquota_ucore`。
 
-测试要求完整失败返回 `-1`、部分写入返回短写长度、内核不 panic，并在释放资源后再次分配成功。单目标通过标记包括 `inode exhaustion survived`、`inode cache exhaustion survived`、`block exhaustion survived` 和 `parent passed`，脚本最终输出 `[fs-enospc] both targets passed`。
+测试要求完整失败返回 `-1`、部分写入返回短写长度、内核不 panic，并在释放资源后再次分配成功。通用目标的程序标记包括 `inode exhaustion survived`、`inode cache exhaustion survived`、`block exhaustion survived` 和 `parent passed`；所有通用与 Agent 配额场景通过后，脚本输出 `[fs-enospc] generic targets and Agent quota cases passed`。
+
+`fsquota_ucore` 的 PUBLIC 子进程先循环 640 次创建文件、在描述符仍打开时删除目录项、继续写入，再关闭最后引用。循环次数严格超过旧全局版本表的 512 槽容量，既覆盖“unlink 不是最终生命期”的语义，也迫使每个 incarnation 走最终 inode/sidecar 回收。随后测试继续施加块和 inode 压力，并由 workflow orchestrator 创建工件、提交编辑版本、连续读取两次内容摘要以确认 digest cache 命中。关键标记为 `public_version_churn=1 cycles=640`、`workflow_version_reserve=1` 和 `content_version_reserve=1`；它们与既有 `workflow_reserve=1`、`kernel_metadata_reserve=1` 一起证明 PUBLIC 域不能耗尽工作流的存储或版本状态。
 
 该入口没有被 `make full-verify` 串联，完整验收时必须单独执行。
 

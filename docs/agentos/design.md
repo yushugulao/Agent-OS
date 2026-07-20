@@ -339,7 +339,7 @@ sequenceDiagram
     K-->>A1: committed state
 ```
 
-文件编辑租约的资源身份是真实 `dev + inum + incarnation`。用户态传入的短文件名只用于找到 inode 和输出可读状态，不能伪造另一个资源身份；inode 槽复用后 incarnation 改变，旧 metadata、缓存和租约不会命中新文件。内核维护两张小表：版本表保存每个已触达文件的版本，租约表保存当前持有者、租约编号、基准版本、deadline、dirty 标志和冲突次数。真实文件修改入口在 `os/file.c`，因此即使另一个 Agent 绕过 `agent_file_edit_begin()` 直接 `open` 后 `write`，只要目标文件存在租约，内核仍会拒绝非持有者写入。
+文件编辑租约的资源身份是真实 `dev + inum + incarnation`。用户态传入的短文件名只用于找到 inode 和输出可读状态，不能伪造另一个资源身份；inode 槽复用后 incarnation 改变，旧 metadata、缓存和租约不会命中新文件。编辑版本和内容版本合并在按磁盘 `inum` 直接索引的 sidecar 中，每个存活 inode 只能使用自己的槽；租约表保存当前持有者、租约编号、基准版本、deadline、dirty 标志和冲突次数。最终 inode 回收会在身份字段清除前统一移除 sidecar、租约和 digest cache，因此短命 PUBLIC 文件不能永久占用版本状态，版本容量也自然服从 inode 资源域配额和系统保留量。真实文件修改入口在 `os/file.c`，因此即使另一个 Agent 绕过 `agent_file_edit_begin()` 直接 `open` 后 `write`，只要目标文件存在租约，内核仍会拒绝非持有者写入。
 
 该机制采用无等待的独占租约：已有持有者时新申请立即返回 `AGENT_STATUS_CONFLICT`，调用者可以读取 owner pid、owner role、base/current version 和 conflict count，然后选择等待事件、重新读取文件、转交 orchestrator 或走恢复流程。租约有有限 TTL；持有者异常退出或长时间不提交时，下一次相关操作会释放过期租约。如果租约持有者写过文件，释放时也会推进版本，避免后续调用者仍基于旧版本继续提交。
 
@@ -438,7 +438,7 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 | VFS 文件域 | public/workflow 命名空间与逐操作 capability 校验 | 普通 `open/read/write/unlink` 和继承 fd 不能绕过 Agent 文件能力 | 不提供跨域隐式回退 |
 | 退出与等待 | 对象私有等待队列、逐线程定向取消、child record 与执行槽分离 | 阻塞 syscall 临时引用沿正常路径释放，恶意父进程不能用僵尸占住执行槽 | child record 使用固定容量 |
 | 进程资源域 | 普通后代继承不可变域并受 64 个 live 槽限制，系统保留 16 槽 | 限制长存活 fork bomb，同时给受控 boot、Agent 和 worker admission 留出容量 | live 计数仅覆盖进程槽，退出结果另存 child record |
-| 文件系统资源域 | 新域取得不复用的存储 cookie；inode 保存创建 owner，逐块 map 保存实际分配 owner；PUBLIC/WORKFLOW/SYSTEM 使用分级水位 | 限制单域块/inode占用，并确保 PUBLIC 压力后 Agent 工作流和内核 metadata 仍可写入 | 当前教学文件系统无 journal，掉电原子性不在保证范围 |
+| 文件系统资源域 | 新域取得不复用的存储 cookie；inode 保存创建 owner，逐块 map 保存实际分配 owner；PUBLIC/WORKFLOW/SYSTEM 使用分级水位；Agent 版本 sidecar 按 inode 槽归属并在最终回收时清理 | 限制单域块/inode及其临时版本状态占用，并确保 PUBLIC 压力后 Agent 工作流和内核 metadata 仍可写入 | 当前教学文件系统无 journal，掉电原子性不在保证范围 |
 | Context 地址 | 固定高地址 `AGENT_CONTEXT_BASE`，当前 6 页 | 便于用户态直接定位，并给 Context Path 完整性链和用户自管 cache 留出容量 | 每个 Agent 固定占用 6 页 |
 | 工具协议 | 主热路径为 `agent_op` / `agent_result`，名称协议作为正式结构化入口保留 | 比字符串键名协议更紧凑，适合批量执行；名称协议便于示例和兼容赛题描述 | 工具 ID 需要保持稳定 |
 | Context Path 容量 | 固定 128 条环形记录，每条包含 16 字节 payload/result 短文本摘要和 prev/record hash，并在内核 PCB 中保存最近 128 条完整请求/响应详情 | 可检查 FIFO 淘汰、相邻记录顺序和可审计详情；Context 尾部留给用户自管 cache | 当前不做跨重启持久化 |
@@ -496,7 +496,7 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 | 普通 VFS 路径和继承 fd 不能绕过文件能力 | `agentvfs_ucore: inherited_fd_revalidated=1 protected_paths=1` |
 | syscall 坏地址和超长输入可恢复 | `usersafety_ucore: parent passed` |
 | inode、inode cache 和 block 耗尽不触发 panic | `make fs-enospc-test`，两个目标均出现 `fsenospc_ucore: parent passed` |
-| PUBLIC 存储域不能吃掉 Agent/内核保留量 | 同一入口的 `fsquota_ucore` 两组场景出现 `public_domain_limited=1`、`post_exit_accounting=1`、`workflow_reserve=1`、`kernel_metadata_reserve=1`，低域配额场景另有 `quota_reuse=1` |
+| PUBLIC 存储域不能吃掉 Agent/内核保留量或版本状态 | 同一入口的 `fsquota_ucore` 两组场景先完成 `public_version_churn=1 cycles=640`，随后出现 `public_domain_limited=1`、`post_exit_accounting=1`、`workflow_reserve=1`、`workflow_version_reserve=1`、`content_version_reserve=1`、`kernel_metadata_reserve=1`，低域配额场景另有 `quota_reuse=1` |
 | 阻塞退出、孤儿/僵尸和 fork bomb 受生命周期与资源域约束 | `make proc-reap-test`，覆盖 `detached-wait`、`unreaped-parent-isolated`、`live-domain-limit` 和 `reserved-agent-slot` |
 | 内核栈有 guard 和构建期预算 | 每次内核 build 的栈分析；可单独运行 `make kernel-stack-check` |
 | 代表性 uCore 基础 syscall | `ch3_trace`、`agentsecurity_ucore: mail_basic=1` |

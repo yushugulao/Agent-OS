@@ -386,17 +386,25 @@ usersafety_ucore: parent passed
 make fs-enospc-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-两类目标均需出现以下程序标记，脚本最后再输出双目标标记：
+两类通用目标均需出现前三组程序标记；AgentOS 配额场景还需出现版本生命周期、工作流保留和清理标记：
 
 ```text
 fsenospc_ucore: inode exhaustion survived
 fsenospc_ucore: inode cache exhaustion survived
 fsenospc_ucore: block exhaustion survived
 fsenospc_ucore: parent passed
-[fs-enospc] both targets passed
+fsquota_ucore: public_version_churn=1 cycles=640
+fsquota_ucore: public_domain_limited=1 blocks=15 inodes=8
+fsquota_ucore: post_exit_accounting=1
+fsquota_ucore: workflow_reserve=1
+fsquota_ucore: workflow_version_reserve=1
+fsquota_ucore: content_version_reserve=1
+fsquota_ucore: kernel_metadata_reserve=1
+fsquota_ucore: pressure_cleanup=1
+[fs-enospc] generic targets and Agent quota cases passed
 ```
 
-结论：磁盘 inode、内存 inode cache 和数据块耗尽均通过正常错误返回或短写报告，未转化为全内核 panic；释放资源后可以重新分配。此测试单独覆盖 AgentOS-uCore 与 `baseline_ucore/`，但当前没有被 `make full-verify` 串联。
+结论：磁盘 inode、内存 inode cache 和数据块耗尽均通过正常错误返回或短写报告，未转化为全内核 panic；释放资源后可以重新分配。PUBLIC 域完成超过旧版本表容量的 640 次短命 inode 循环后，workflow 仍能取得编辑版本并命中内容摘要缓存，说明版本 sidecar 随最终 inode 生命周期回收，且不能跨 inode 槽侵占 Agent 保留资源。此测试单独覆盖 AgentOS-uCore 与 `baseline_ucore/` 的通用 ENOSPC，并额外覆盖 AgentOS 资源域，但当前没有被 `make full-verify` 串联。
 
 ## 专项输出：进程回收与配额
 

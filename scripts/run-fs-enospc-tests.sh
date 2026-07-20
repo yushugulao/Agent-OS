@@ -124,9 +124,12 @@ failed_before_marker = (
 profile_error = None
 if profile in ("domain", "reserve"):
     required = [
+        "fsquota_ucore: public_version_churn=1",
         "fsquota_ucore: public_domain_limited=1",
         "fsquota_ucore: post_exit_accounting=1",
         "fsquota_ucore: workflow_reserve=1",
+        "fsquota_ucore: workflow_version_reserve=1",
+        "fsquota_ucore: content_version_reserve=1",
         "fsquota_ucore: kernel_metadata_reserve=1",
         "fsquota_ucore: pressure_cleanup=1",
     ]
@@ -153,6 +156,11 @@ if profile in ("domain", "reserve"):
             profile_error = (
                 f"reserve boundary mismatch: blocks={blocks} inodes={inodes}"
             )
+    churn = re.search(
+        r"fsquota_ucore: public_version_churn=1 cycles=(\d+)", output
+    )
+    if churn is None or int(churn.group(1)) <= 512:
+        profile_error = "version churn did not cross the former table capacity"
 elif profile != "generic":
     profile_error = f"unknown validation profile: {profile}"
 if timed_out:

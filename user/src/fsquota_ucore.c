@@ -8,20 +8,30 @@
 #define BLOCK_SIZE 1024
 #define BLOCK_PROBE_LIMIT 256
 #define INODE_PROBE_LIMIT 64
+#define VERSION_CHURN_CYCLES 640
 
 #define BLOCK_ONE_FILE "qone"
 #define BLOCK_GROW_FILE "qgrow"
 #define BLOCK_FILL_FILE "qblk"
 #define EXTRA_FILE "qextra"
 #define WORKFLOW_FILE "qwork"
+#define VERSION_CHURN_FILE "qver"
 
 struct pressure_report {
 	int blocks;
 	int inodes;
+	int version_churn;
 };
 
 static char block_buf[BLOCK_SIZE * 2];
 static char read_buf[BLOCK_SIZE * 2];
+static struct agent_info bootstrap_info;
+static struct agent_info public_attacker_info;
+static struct agent_info version_info_before;
+static struct agent_info version_info_after;
+static struct agent_file_edit_state version_state;
+static struct agent_op version_op;
+static struct agent_result version_result;
 
 static void check(int condition, const char *message)
 {
@@ -60,6 +70,30 @@ static int create_empty(const char *path)
 		return -1;
 	check(close(fd) == 0, "close empty file");
 	return 0;
+}
+
+static int churn_public_inode_versions(void)
+{
+	char byte = 'v';
+	int fd;
+
+	check(agent_info(&public_attacker_info) == 0,
+	      "read public attacker credentials");
+	check(public_attacker_info.filesystem_domain == 0 &&
+	      (public_attacker_info.filesystem_capability_mask &
+	       (AGENT_CAP_CONTENT_READ | AGENT_CAP_ARTIFACT_WRITE)) == 0,
+	      "attacker stays in public filesystem domain");
+	for (int i = 0; i < VERSION_CHURN_CYCLES; i++) {
+		fd = open(VERSION_CHURN_FILE,
+			  O_CREATE | O_WRONLY | O_TRUNC);
+		check(fd >= 0, "create version churn inode");
+		check(unlink(VERSION_CHURN_FILE) == 0,
+		      "unlink open version churn inode");
+		check(write(fd, &byte, 1) == 1,
+		      "write unlinked version churn inode");
+		check(close(fd) == 0, "reclaim version churn inode");
+	}
+	return VERSION_CHURN_CYCLES;
 }
 
 static void producer_fill(int report_fd)
@@ -150,7 +184,9 @@ static void run_public_attacker(int ready_fd, int control_fd)
 	int producer;
 	int status = -1;
 	int fd;
+	int version_churn;
 
+	version_churn = churn_public_inode_versions();
 	check(pipe(producer_pipe) == 0, "create producer report pipe");
 	producer = fork();
 	check(producer >= 0, "create pressure producer");
@@ -166,6 +202,7 @@ static void run_public_attacker(int ready_fd, int control_fd)
 	check(close(producer_pipe[0]) == 0, "close producer report reader");
 	check(waitpid(producer, &status) == producer && status == 0,
 	      "reap pressure producer");
+	report.version_churn = version_churn;
 
 	fd = open(BLOCK_GROW_FILE, O_WRONLY);
 	check(fd >= 0, "open post-exit growth fixture");
@@ -205,6 +242,48 @@ static void run_public_attacker(int ready_fd, int control_fd)
 	exit(0);
 }
 
+static void verify_workflow_versions(void)
+{
+	uint64 base;
+	int fd;
+
+	memset(&version_state, 0, sizeof(version_state));
+	check(agent_file_edit_begin(WORKFLOW_FILE, 0, 100, &version_state) == 0,
+	      "begin workflow edit after public churn");
+	base = version_state.base_version;
+	fd = open(WORKFLOW_FILE, O_WRONLY);
+	check(fd >= 0, "open workflow edit target");
+	check(write(fd, "z", 1) == 1, "write workflow edit target");
+	check(close(fd) == 0, "close workflow edit target");
+	check(agent_file_edit_commit(version_state.lease_id, base,
+				     &version_state) == 0,
+	      "commit workflow edit after public churn");
+	check(version_state.current_version == base + 1,
+	      "workflow edit version advances");
+	printf("fsquota_ucore: workflow_version_reserve=1\n");
+
+	check(agent_info(&version_info_before) == 0,
+	      "read digest counters before");
+	for (int i = 0; i < 2; i++) {
+		memset(&version_op, 0, sizeof(version_op));
+		memset(&version_result, 0, sizeof(version_result));
+		version_op.version = AGENT_CALL_VERSION;
+		version_op.tool_id = AGENT_TOOL_READ_FILE_DIGEST;
+		version_op.request_id = 9000 + i;
+		strcpy(version_op.payload, WORKFLOW_FILE);
+		check(agent_run(&version_op, &version_result, 1, 0) == 1,
+		      "read workflow digest after public churn");
+		check(version_result.status == AGENT_STATUS_OK,
+		      "workflow digest status");
+	}
+	check(agent_info(&version_info_after) == 0,
+	      "read digest counters after");
+	check(version_info_after.file_digest_cache_hits >
+		      version_info_before.file_digest_cache_hits,
+	      "content version cache survives public churn");
+	printf("fsquota_ucore: content_version_reserve=1\n");
+}
+
 static void verify_workflow_metadata(void)
 {
 	struct agent_file_query query;
@@ -216,6 +295,7 @@ static void verify_workflow_metadata(void)
 	check(agent >= 0, "create metadata orchestrator");
 	if (agent == 0) {
 		check(agent_file_meta_init() == 0, "reload persistent metadata");
+		verify_workflow_versions();
 		memset(&query, 0, sizeof(query));
 		memset(&result, 0, sizeof(result));
 		query.flags = AGENT_FILE_QUERY_USE_INDEX;
@@ -255,7 +335,6 @@ static void verify_workflow_storage(void)
 int main(void)
 {
 	struct pressure_report report;
-	struct agent_info info;
 	int ready_pipe[2];
 	int control_pipe[2];
 	char token = 0;
@@ -264,9 +343,9 @@ int main(void)
 	int status = -1;
 
 	memset(block_buf, 0x71, sizeof(block_buf));
-	check(agent_info(&info) == 0, "read bootstrap credentials");
-	check(info.filesystem_domain != 0 &&
-	      (info.filesystem_capability_mask &
+	check(agent_info(&bootstrap_info) == 0, "read bootstrap credentials");
+	check(bootstrap_info.filesystem_domain != 0 &&
+	      (bootstrap_info.filesystem_capability_mask &
 	       (AGENT_CAP_CONTENT_READ | AGENT_CAP_ARTIFACT_WRITE)) ==
 		      (AGENT_CAP_CONTENT_READ | AGENT_CAP_ARTIFACT_WRITE),
 	      "trusted workflow bootstrap");
@@ -286,6 +365,10 @@ int main(void)
 	check(report.blocks > 1 && report.blocks < BLOCK_PROBE_LIMIT &&
 	      report.inodes > 3 && report.inodes < INODE_PROBE_LIMIT + 3,
 	      "validate pressure report");
+	check(report.version_churn == VERSION_CHURN_CYCLES,
+	      "validate public version churn report");
+	printf("fsquota_ucore: public_version_churn=1 cycles=%d\n",
+	       report.version_churn);
 	printf("fsquota_ucore: public_domain_limited=1 blocks=%d inodes=%d\n",
 	       report.blocks, report.inodes);
 	printf("fsquota_ucore: post_exit_accounting=1\n");

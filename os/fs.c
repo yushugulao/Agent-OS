@@ -543,6 +543,7 @@ void iput(struct inode *ip)
 			ip->ref--;
 			return;
 		}
+		agent_file_version_reclaim(ip);
 		ip->type = 0;
 		ip->agent_meta_slot = 0;
 		ip->agent_meta_flags = 0;

@@ -15,13 +15,16 @@ extern struct proc pool[NPROC];
 #define AGENT_FILE_QUERY_CACHE_MAX 8
 #define AGENT_FILE_DIGEST_CACHE_MAX 8
 #define AGENT_FILE_EDIT_MAX 32
-#define AGENT_FILE_VERSION_MAX 512
+#define AGENT_FILE_VERSION_MAX NINODE
 #define AGENT_DEPENDENCY_MAX 64
 #define AGENT_META_STORE_NAME ".agentmeta"
 #define AGENT_META_STORE_MAGIC 0x41474d4554413035ULL
 #define AGENT_INODE_META_VERSION 2
 #define AGENT_FS_SCAN_INTERVAL 20
 #define AGENT_FS_SCAN_STEP 16
+
+_Static_assert(AGENT_FILE_VERSION_MAX == NINODE,
+	       "inode version sidecar must cover every filesystem inode");
 
 static int nextagentid = 1;
 static uint64 next_event_id = 1;
@@ -178,15 +181,10 @@ struct agent_file_version_entry {
 	uint64 dev;
 	uint64 inum;
 	uint64 incarnation;
-	uint64 version;
-};
-
-struct agent_file_content_version_entry {
-	int used;
-	uint64 dev;
-	uint64 inum;
-	uint64 incarnation;
-	uint64 version;
+	uint storage_owner;
+	uint vfs_policy;
+	uint64 edit_version;
+	uint64 content_version;
 };
 
 struct agent_file_edit_entry {
@@ -221,8 +219,6 @@ static struct agent_action_history_entry
 static struct agent_meta_store agent_meta_store_buf;
 static struct agent_file_version_entry
 	agent_file_versions[AGENT_FILE_VERSION_MAX];
-static struct agent_file_content_version_entry
-	agent_file_content_versions[AGENT_FILE_VERSION_MAX];
 static struct agent_file_edit_entry agent_file_edits[AGENT_FILE_EDIT_MAX];
 static struct agent_dependency_entry agent_dependencies[AGENT_DEPENDENCY_MAX];
 static int agent_action_history_count;
@@ -289,8 +285,6 @@ void agentinit(void)
 	agent_action_history_count = 0;
 	memset(agent_action_history, 0, sizeof(agent_action_history));
 	memset(agent_file_versions, 0, sizeof(agent_file_versions));
-	memset(agent_file_content_versions, 0,
-	       sizeof(agent_file_content_versions));
 	memset(agent_file_edits, 0, sizeof(agent_file_edits));
 	agent_file_loaded = 0;
 	agent_meta_store_busy = 0;
@@ -1647,106 +1641,175 @@ int agent_file_is_meta_store_name(char *path)
 	return path && strncmp(path, AGENT_META_STORE_NAME, DIRSIZ) == 0;
 }
 
-static void agent_edit_lock(void)
+static int agent_edit_lock(void)
 {
+	int enabled = intr_save();
+
 	while (__sync_lock_test_and_set(&agent_file_edit_guard, 1) != 0)
 		;
 	__sync_synchronize();
+	return enabled;
 }
 
-static void agent_edit_unlock(void)
+static void agent_edit_unlock(int enabled)
 {
 	__sync_synchronize();
 	__sync_lock_release(&agent_file_edit_guard);
+	intr_restore(enabled);
 }
 
-static int agent_file_content_version_slot(uint64 dev, uint64 inum,
-					   uint64 incarnation, int create)
+static int agent_file_version_index(uint64 dev, uint64 inum)
 {
-	int free_slot = -1;
-
-	for (int i = 0; i < AGENT_FILE_VERSION_MAX; i++) {
-		if (agent_file_content_versions[i].used &&
-		    agent_file_content_versions[i].dev == dev &&
-		    agent_file_content_versions[i].inum == inum &&
-		    agent_file_content_versions[i].incarnation == incarnation)
-			return i;
-		if (!agent_file_content_versions[i].used && free_slot < 0)
-			free_slot = i;
-	}
-	if (!create || free_slot < 0)
+	if (dev != ROOTDEV || inum == 0 || inum >= AGENT_FILE_VERSION_MAX)
 		return -1;
-	memset(&agent_file_content_versions[free_slot], 0,
-	       sizeof(agent_file_content_versions[free_slot]));
-	agent_file_content_versions[free_slot].used = 1;
-	agent_file_content_versions[free_slot].dev = dev;
-	agent_file_content_versions[free_slot].inum = inum;
-	agent_file_content_versions[free_slot].incarnation = incarnation;
-	return free_slot;
+	return inum;
 }
 
-static int agent_file_content_version(struct inode *ip, uint64 *version,
-				      int create)
+static int agent_file_version_matches_identity(
+	struct agent_file_version_entry *entry, uint64 dev, uint64 inum,
+	uint64 incarnation)
+{
+	return entry->used && entry->dev == dev && entry->inum == inum &&
+	       entry->incarnation == incarnation;
+}
+
+static int agent_file_version_matches_inode(
+	struct agent_file_version_entry *entry, struct inode *ip)
+{
+	return agent_file_version_matches_identity(
+		       entry, ip->dev, ip->inum, ip->vfs_incarnation) &&
+	       entry->storage_owner == ip->fs_owner_domain &&
+	       entry->vfs_policy == ip->vfs_policy;
+}
+
+static void agent_file_version_clear_locked(int slot)
+{
+	struct agent_file_version_entry *entry;
+	uint64 dev;
+	uint64 inum;
+	uint64 incarnation;
+
+	if (slot < 0 || slot >= AGENT_FILE_VERSION_MAX)
+		return;
+	entry = &agent_file_versions[slot];
+	if (!entry->used)
+		return;
+	dev = entry->dev;
+	inum = entry->inum;
+	incarnation = entry->incarnation;
+	memset(entry, 0, sizeof(*entry));
+	for (int i = 0; i < AGENT_FILE_EDIT_MAX; i++)
+		if (agent_file_edits[i].active && agent_file_edits[i].dev == dev &&
+		    agent_file_edits[i].inum == inum &&
+		    agent_file_edits[i].incarnation == incarnation)
+			memset(&agent_file_edits[i], 0,
+			       sizeof(agent_file_edits[i]));
+	for (int i = 0; i < AGENT_FILE_DIGEST_CACHE_MAX; i++)
+		if (agent_file_digest_cache[i].valid &&
+		    agent_file_digest_cache[i].dev == dev &&
+		    agent_file_digest_cache[i].inum == inum &&
+		    agent_file_digest_cache[i].incarnation == incarnation)
+			memset(&agent_file_digest_cache[i], 0,
+			       sizeof(agent_file_digest_cache[i]));
+}
+
+static int agent_file_version_slot_locked(struct inode *ip, int create)
+{
+	struct agent_file_version_entry *entry;
+	int slot;
+
+	if (ip == 0 || !ip->valid || ip->type != T_FILE ||
+	    ip->vfs_incarnation == 0 || ip->vfs_policy == VFS_POLICY_FREE ||
+	    ip->fs_owner_domain < FS_OWNER_SYSTEM ||
+	    ip->fs_owner_version != FS_OWNER_VERSION)
+		return -1;
+	slot = agent_file_version_index(ip->dev, ip->inum);
+	if (slot < 0)
+		return -1;
+	entry = &agent_file_versions[slot];
+	if (agent_file_version_matches_inode(entry, ip))
+		return slot;
+	if (!create)
+		return -1;
+
+	// An inode number owns its sidecar slot. A new incarnation retires every
+	// transient state associated with the previous inode lifetime.
+	agent_file_version_clear_locked(slot);
+	memset(entry, 0, sizeof(*entry));
+	entry->used = 1;
+	entry->dev = ip->dev;
+	entry->inum = ip->inum;
+	entry->incarnation = ip->vfs_incarnation;
+	entry->storage_owner = ip->fs_owner_domain;
+	entry->vfs_policy = ip->vfs_policy;
+	return slot;
+}
+
+static int agent_file_version_identity_slot_locked(uint64 dev, uint64 inum,
+						    uint64 incarnation)
+{
+	int slot = agent_file_version_index(dev, inum);
+
+	if (slot < 0 || !agent_file_version_matches_identity(
+				 &agent_file_versions[slot], dev, inum, incarnation))
+		return -1;
+	return slot;
+}
+
+static int agent_file_content_version_locked(struct inode *ip,
+					     uint64 *version, int create)
 {
 	int slot;
 
-	if (ip == 0 || version == 0)
+	if (version == 0)
 		return -1;
-	slot = agent_file_content_version_slot(ip->dev, ip->inum,
-				       ip->vfs_incarnation, create);
+	slot = agent_file_version_slot_locked(ip, create);
 	if (slot < 0)
 		return -1;
-	*version = agent_file_content_versions[slot].version;
+	*version = agent_file_versions[slot].content_version;
 	return 0;
 }
 
 static void agent_file_content_bump(struct inode *ip)
 {
 	int slot;
+	int enabled;
+
+	enabled = agent_edit_lock();
+	slot = agent_file_version_slot_locked(ip, 1);
+	if (slot >= 0) {
+		agent_file_content_generation++;
+		if (agent_file_content_generation == 0)
+			agent_file_content_generation = 1;
+		agent_file_versions[slot].content_version =
+			agent_file_content_generation;
+	}
+	agent_edit_unlock(enabled);
+}
+
+void agent_file_version_reclaim(struct inode *ip)
+{
+	int slot;
+	int enabled;
 
 	if (ip == 0)
 		return;
-	slot = agent_file_content_version_slot(ip->dev, ip->inum,
-				       ip->vfs_incarnation, 1);
+	slot = agent_file_version_index(ip->dev, ip->inum);
 	if (slot < 0)
 		return;
-	agent_file_content_generation++;
-	if (agent_file_content_generation == 0)
-		agent_file_content_generation = 1;
-	agent_file_content_versions[slot].version =
-		agent_file_content_generation;
-}
-
-static int agent_edit_version_slot_locked(uint64 dev, uint64 inum,
-					  uint64 incarnation, int create)
-{
-	int free_slot = -1;
-
-	for (int i = 0; i < AGENT_FILE_VERSION_MAX; i++) {
-		if (agent_file_versions[i].used &&
-		    agent_file_versions[i].dev == dev &&
-		    agent_file_versions[i].inum == inum &&
-		    agent_file_versions[i].incarnation == incarnation)
-			return i;
-		if (!agent_file_versions[i].used && free_slot < 0)
-			free_slot = i;
-	}
-	if (!create || free_slot < 0)
-		return -1;
-	memset(&agent_file_versions[free_slot], 0,
-	       sizeof(agent_file_versions[free_slot]));
-	agent_file_versions[free_slot].used = 1;
-	agent_file_versions[free_slot].dev = dev;
-	agent_file_versions[free_slot].inum = inum;
-	agent_file_versions[free_slot].incarnation = incarnation;
-	return free_slot;
+	enabled = agent_edit_lock();
+	if (agent_file_version_matches_identity(
+		    &agent_file_versions[slot], ip->dev, ip->inum,
+		    ip->vfs_incarnation))
+		agent_file_version_clear_locked(slot);
+	agent_edit_unlock(enabled);
 }
 
 static uint64 agent_edit_version_locked(uint64 dev, uint64 inum,
-					uint64 incarnation, int create, int *ok)
+					uint64 incarnation, int *ok)
 {
-	int slot = agent_edit_version_slot_locked(dev, inum, incarnation,
-					  create);
+	int slot = agent_file_version_identity_slot_locked(dev, inum,
+							  incarnation);
 
 	if (slot < 0) {
 		if (ok)
@@ -1755,29 +1818,42 @@ static uint64 agent_edit_version_locked(uint64 dev, uint64 inum,
 	}
 	if (ok)
 		*ok = 1;
-	return agent_file_versions[slot].version;
+	return agent_file_versions[slot].edit_version;
+}
+
+static uint64 agent_edit_version_inode_locked(struct inode *ip, int create,
+					      int *ok)
+{
+	int slot = agent_file_version_slot_locked(ip, create);
+
+	if (slot < 0) {
+		if (ok)
+			*ok = 0;
+		return 0;
+	}
+	if (ok)
+		*ok = 1;
+	return agent_file_versions[slot].edit_version;
 }
 
 static int agent_edit_set_version_locked(uint64 dev, uint64 inum,
 					 uint64 incarnation, uint64 version)
 {
-	int slot = agent_edit_version_slot_locked(dev, inum, incarnation, 1);
+	int slot = agent_file_version_identity_slot_locked(dev, inum,
+							  incarnation);
 
 	if (slot < 0)
 		return -1;
-	agent_file_versions[slot].version = version;
+	agent_file_versions[slot].edit_version = version;
 	return 0;
 }
 
-static void agent_edit_bump_version_locked(uint64 dev, uint64 inum,
-					   uint64 incarnation)
+static void agent_edit_bump_version_locked(struct inode *ip)
 {
-	int ok;
-	uint64 version = agent_edit_version_locked(dev, inum, incarnation, 1,
-					   &ok);
+	int slot = agent_file_version_slot_locked(ip, 1);
 
-	if (ok)
-		agent_edit_set_version_locked(dev, inum, incarnation, version + 1);
+	if (slot >= 0)
+		agent_file_versions[slot].edit_version++;
 }
 
 static struct agent_file_edit_entry *
@@ -1856,7 +1932,7 @@ static void agent_edit_fill_state_locked(struct agent_file_edit_state *state,
 	state->inum = inum;
 	state->incarnation = incarnation;
 	state->current_version =
-		agent_edit_version_locked(dev, inum, incarnation, 0, &ok);
+		agent_edit_version_locked(dev, inum, incarnation, &ok);
 	if (path)
 		safestrcpy(state->path, path, sizeof(state->path));
 	if (e == 0 || !e->active)
@@ -2414,10 +2490,11 @@ static int agent_edit_modify_allowed(struct inode *ip, char *action)
 	struct agent_file_edit_state state;
 	uint64 now;
 	int allowed = 1;
+	int enabled;
 
 	if (ip == 0)
 		return 0;
-	agent_edit_lock();
+	enabled = agent_edit_lock();
 	now = agent_ticks();
 	agent_edit_cleanup_expired_locked(now);
 	edit = agent_edit_find_locked(ip->dev, ip->inum,
@@ -2428,7 +2505,7 @@ static int agent_edit_modify_allowed(struct inode *ip, char *action)
 					     ip->vfs_incarnation, 0);
 		allowed = 0;
 	}
-	agent_edit_unlock();
+	agent_edit_unlock(enabled);
 	if (!allowed)
 		agent_edit_audit(p, AGENT_STATUS_CONFLICT, action, &state);
 	return allowed;
@@ -2453,19 +2530,19 @@ static void agent_edit_note_modify(struct inode *ip)
 {
 	struct proc *p = curr_proc();
 	struct agent_file_edit_entry *edit;
+	int enabled;
 
 	if (ip == 0)
 		return;
-	agent_edit_lock();
+	enabled = agent_edit_lock();
 	agent_edit_cleanup_expired_locked(agent_ticks());
 	edit = agent_edit_find_locked(ip->dev, ip->inum,
 				      ip->vfs_incarnation);
 	if (edit && agent_edit_owner(edit, p))
 		edit->dirty = 1;
 	else if (edit == 0)
-		agent_edit_bump_version_locked(ip->dev, ip->inum,
-					       ip->vfs_incarnation);
-	agent_edit_unlock();
+		agent_edit_bump_version_locked(ip);
+	agent_edit_unlock(enabled);
 }
 
 void agent_edit_note_write(struct inode *ip)
@@ -2481,18 +2558,18 @@ void agent_edit_note_truncate(struct inode *ip)
 void agent_edit_note_delete(struct inode *ip)
 {
 	struct agent_file_edit_entry *edit;
+	int enabled;
 
 	if (ip == 0)
 		return;
-	agent_edit_lock();
+	enabled = agent_edit_lock();
 	edit = agent_edit_find_locked(ip->dev, ip->inum,
 				      ip->vfs_incarnation);
 	if (edit)
 		agent_edit_release_locked(edit, 1);
 	else
-		agent_edit_bump_version_locked(ip->dev, ip->inum,
-					       ip->vfs_incarnation);
-	agent_edit_unlock();
+		agent_edit_bump_version_locked(ip);
+	agent_edit_unlock(enabled);
 }
 
 static void agent_file_reset_indexes(void)
@@ -3368,33 +3445,24 @@ static void agent_file_digest_preview(char *preview, int *pos, char c)
 
 static int agent_file_digest_cacheable(struct inode *ip)
 {
-	uint64 version;
-
-	if (ip == 0)
-		return 0;
-	return ip->agent_meta_slot > 0 &&
-	       ip->agent_meta_version == AGENT_INODE_META_VERSION &&
-	       agent_file_content_version(ip, &version, 1) == 0;
-}
-
-static uint64 agent_file_digest_content_generation(struct inode *ip)
-{
-	uint64 version;
-
-	if (ip == 0)
-		return 0;
-	if (agent_file_content_version(ip, &version, 1) < 0)
-		return (uint64)-1;
-	return version;
+	return ip != 0 && ip->agent_meta_slot > 0 &&
+	       ip->agent_meta_version == AGENT_INODE_META_VERSION;
 }
 
 static int agent_file_digest_cache_lookup(struct inode *ip,
-					  struct agent_result *res)
+					  struct agent_result *res,
+					  uint64 *content_generation)
 {
 	struct agent_file_digest_cache_entry *e;
-	uint64 content_generation;
+	int found = 0;
+	int enabled;
 
-	content_generation = agent_file_digest_content_generation(ip);
+	enabled = agent_edit_lock();
+	if (agent_file_content_version_locked(ip, content_generation, 1) < 0) {
+		agent_file_digest_cache_misses++;
+		agent_edit_unlock(enabled);
+		return 0;
+	}
 	for (int i = 0; i < AGENT_FILE_DIGEST_CACHE_MAX; i++) {
 		e = &agent_file_digest_cache[i];
 		if (!e->valid)
@@ -3404,7 +3472,7 @@ static int agent_file_digest_cache_lookup(struct inode *ip,
 			continue;
 		if (e->size != ip->size)
 			continue;
-		if (e->content_generation != content_generation)
+		if (e->content_generation != *content_generation)
 			continue;
 		res->value0 = e->size;
 		res->value1 = e->bytes;
@@ -3412,19 +3480,34 @@ static int agent_file_digest_cache_lookup(struct inode *ip,
 		agent_result_text(res, e->preview[0] ? e->preview :
 						"empty_file");
 		agent_file_digest_cache_hits++;
-		return 1;
+		found = 1;
+		break;
 	}
-	agent_file_digest_cache_misses++;
-	return 0;
+	if (!found)
+		agent_file_digest_cache_misses++;
+	agent_edit_unlock(enabled);
+	return found;
 }
 
-static void agent_file_digest_cache_store(struct inode *ip, uint64 bytes,
+static void agent_file_digest_cache_store(struct inode *ip,
+					  uint64 expected_generation,
+					  uint64 expected_size, uint64 bytes,
 					  uint64 hash, char *preview)
 {
 	struct agent_file_digest_cache_entry *e;
+	uint64 content_generation;
+	int enabled;
 
-	if (!agent_file_digest_cacheable(ip))
+	if (ip == 0 || ip->agent_meta_slot <= 0 ||
+	    ip->agent_meta_version != AGENT_INODE_META_VERSION)
 		return;
+	enabled = agent_edit_lock();
+	if (agent_file_content_version_locked(ip, &content_generation, 0) < 0 ||
+	    content_generation != expected_generation ||
+	    ip->size != expected_size) {
+		agent_edit_unlock(enabled);
+		return;
+	}
 	e = &agent_file_digest_cache[agent_file_digest_cache_head %
 				     AGENT_FILE_DIGEST_CACHE_MAX];
 	agent_file_digest_cache_head =
@@ -3435,12 +3518,13 @@ static void agent_file_digest_cache_store(struct inode *ip, uint64 bytes,
 	e->dev = ip->dev;
 	e->inum = ip->inum;
 	e->incarnation = ip->vfs_incarnation;
-	e->size = ip->size;
-	e->content_generation = agent_file_digest_content_generation(ip);
+	e->size = expected_size;
+	e->content_generation = content_generation;
 	e->bytes = bytes;
 	e->hash = hash;
 	safestrcpy(e->preview, preview[0] ? preview : "empty_file",
 		   sizeof(e->preview));
+	agent_edit_unlock(enabled);
 }
 
 static void agent_file_digest_read(char *selector, struct agent_result *res)
@@ -3450,6 +3534,8 @@ static void agent_file_digest_read(char *selector, struct agent_result *res)
 	char buf[AGENT_FILE_DIGEST_CHUNK];
 	struct inode *ip;
 	uint64 hash = 1469598103934665603ULL;
+	uint64 content_generation = 0;
+	uint64 digest_size;
 	uint64 limit;
 	uint64 total = 0;
 	uint off = 0;
@@ -3492,13 +3578,15 @@ static void agent_file_digest_read(char *selector, struct agent_result *res)
 		return;
 	}
 	cacheable = agent_file_digest_cacheable(ip);
-	if (cacheable && agent_file_digest_cache_lookup(ip, res)) {
+	if (cacheable && agent_file_digest_cache_lookup(
+			 ip, res, &content_generation)) {
 		iput(ip);
 		return;
 	}
 	memset(preview, 0, sizeof(preview));
-	limit = ip->size < AGENT_FILE_DIGEST_MAX_BYTES ?
-			ip->size :
+	digest_size = ip->size;
+	limit = digest_size < AGENT_FILE_DIGEST_MAX_BYTES ?
+			digest_size :
 			AGENT_FILE_DIGEST_MAX_BYTES;
 	while (total < limit) {
 		uint want = MIN((uint)(limit - total),
@@ -3520,11 +3608,13 @@ static void agent_file_digest_read(char *selector, struct agent_result *res)
 		total += got;
 		off += got;
 	}
-	res->value0 = ip->size;
+	res->value0 = digest_size;
 	res->value1 = total;
 	res->value2 = hash;
 	if (cacheable)
-		agent_file_digest_cache_store(ip, total, hash, preview);
+		agent_file_digest_cache_store(ip, content_generation,
+					      digest_size, total, hash,
+					      preview);
 	iput(ip);
 	agent_result_text(res, preview[0] ? preview : "empty_file");
 }
@@ -6595,6 +6685,7 @@ int sys_agent_file_edit_begin(uint64 pathaddr, uint64 flags, int ttl_ticks,
 	int ok;
 	int rc;
 	int ttl;
+	int enabled;
 
 	if (!p->is_agent)
 		return -1;
@@ -6612,12 +6703,11 @@ int sys_agent_file_edit_begin(uint64 pathaddr, uint64 flags, int ttl_ticks,
 	if (ttl > AGENT_FILE_EDIT_MAX_TTL)
 		ttl = AGENT_FILE_EDIT_MAX_TTL;
 
-	agent_edit_lock();
+	enabled = agent_edit_lock();
 	agent_edit_cleanup_expired_locked(now);
-	version = agent_edit_version_locked(ip->dev, ip->inum,
-				    ip->vfs_incarnation, 1, &ok);
+	version = agent_edit_version_inode_locked(ip, 1, &ok);
 	if (!ok) {
-		agent_edit_unlock();
+		agent_edit_unlock(enabled);
 		iput(ip);
 		return AGENT_STATUS_NO_SPACE;
 	}
@@ -6628,9 +6718,9 @@ int sys_agent_file_edit_begin(uint64 pathaddr, uint64 flags, int ttl_ticks,
 		    agent_has_cap(p, AGENT_CAP_ORCHESTRATE)) {
 			agent_edit_release_locked(edit, 1);
 			version = agent_edit_version_locked(
-				ip->dev, ip->inum, ip->vfs_incarnation, 1, &ok);
+				ip->dev, ip->inum, ip->vfs_incarnation, &ok);
 			if (!ok) {
-				agent_edit_unlock();
+				agent_edit_unlock(enabled);
 				iput(ip);
 				return AGENT_STATUS_NO_SPACE;
 			}
@@ -6639,7 +6729,7 @@ int sys_agent_file_edit_begin(uint64 pathaddr, uint64 flags, int ttl_ticks,
 			agent_edit_fill_state_locked(
 				&state, edit, ip->dev, ip->inum,
 				ip->vfs_incarnation, path);
-			agent_edit_unlock();
+			agent_edit_unlock(enabled);
 			iput(ip);
 			agent_edit_audit(p, AGENT_STATUS_CONFLICT,
 					 "edit_begin_conflict", &state);
@@ -6651,7 +6741,7 @@ int sys_agent_file_edit_begin(uint64 pathaddr, uint64 flags, int ttl_ticks,
 	}
 	slot = agent_edit_free_locked();
 	if (slot == 0) {
-		agent_edit_unlock();
+		agent_edit_unlock(enabled);
 		iput(ip);
 		return AGENT_STATUS_NO_SPACE;
 	}
@@ -6671,7 +6761,7 @@ int sys_agent_file_edit_begin(uint64 pathaddr, uint64 flags, int ttl_ticks,
 	safestrcpy(slot->path, path, sizeof(slot->path));
 	agent_edit_fill_state_locked(&state, slot, ip->dev, ip->inum,
 				     ip->vfs_incarnation, path);
-	agent_edit_unlock();
+	agent_edit_unlock(enabled);
 	iput(ip);
 	agent_edit_audit(p, AGENT_STATUS_OK, "edit_begin", &state);
 	return agent_file_edit_copy_state(p, stateaddr, &state);
@@ -6694,6 +6784,7 @@ int sys_agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
 	int ok;
 	int dirty;
 	int rc;
+	int enabled;
 
 	if (!p->is_agent)
 		return -1;
@@ -6701,11 +6792,11 @@ int sys_agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
 	    user_range_check(p->pagetable, stateaddr, sizeof(state), PTE_W) < 0)
 		return -1;
 	now = agent_ticks();
-	agent_edit_lock();
+	enabled = agent_edit_lock();
 	agent_edit_cleanup_expired_locked(now);
 	edit = agent_edit_find_lease_locked(lease_id);
 	if (edit == 0) {
-		agent_edit_unlock();
+		agent_edit_unlock(enabled);
 		return AGENT_STATUS_NOT_FOUND;
 	}
 	if (!agent_edit_owner(edit, p) &&
@@ -6713,7 +6804,7 @@ int sys_agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
 		agent_edit_fill_state_locked(&state, edit, edit->dev,
 					     edit->inum, edit->incarnation,
 					     edit->path);
-		agent_edit_unlock();
+		agent_edit_unlock(enabled);
 		agent_edit_audit(p, AGENT_STATUS_DENIED,
 				 "edit_commit_denied", &state);
 		if (agent_file_edit_copy_state(p, stateaddr, &state) < 0)
@@ -6721,13 +6812,13 @@ int sys_agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
 		return AGENT_STATUS_DENIED;
 	}
 	current = agent_edit_version_locked(edit->dev, edit->inum,
-				    edit->incarnation, 0, &ok);
+				    edit->incarnation, &ok);
 	if (!ok || current != edit->base_version ||
 	    expected_version != edit->base_version) {
 		agent_edit_fill_state_locked(&state, edit, edit->dev,
 					     edit->inum, edit->incarnation,
 					     edit->path);
-		agent_edit_unlock();
+		agent_edit_unlock(enabled);
 		agent_edit_audit(p, AGENT_STATUS_STALE,
 				 "edit_commit_stale", &state);
 		if (agent_file_edit_copy_state(p, stateaddr, &state) < 0)
@@ -6753,7 +6844,7 @@ int sys_agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
 	state.current_version = new_version;
 	state.dirty = dirty;
 	safestrcpy(state.path, path, sizeof(state.path));
-	agent_edit_unlock();
+	agent_edit_unlock(enabled);
 	if (rc < 0)
 		return AGENT_STATUS_NO_SPACE;
 	agent_edit_audit(p, AGENT_STATUS_OK, "edit_commit", &state);
@@ -6765,14 +6856,15 @@ int sys_agent_file_edit_abort(uint64 lease_id)
 	struct proc *p = curr_proc();
 	struct agent_file_edit_entry *edit;
 	struct agent_file_edit_state state;
+	int enabled;
 
 	if (!p->is_agent)
 		return -1;
-	agent_edit_lock();
+	enabled = agent_edit_lock();
 	agent_edit_cleanup_expired_locked(agent_ticks());
 	edit = agent_edit_find_lease_locked(lease_id);
 	if (edit == 0) {
-		agent_edit_unlock();
+		agent_edit_unlock(enabled);
 		return AGENT_STATUS_NOT_FOUND;
 	}
 	if (!agent_edit_owner(edit, p) &&
@@ -6780,7 +6872,7 @@ int sys_agent_file_edit_abort(uint64 lease_id)
 		agent_edit_fill_state_locked(&state, edit, edit->dev,
 					     edit->inum, edit->incarnation,
 					     edit->path);
-		agent_edit_unlock();
+		agent_edit_unlock(enabled);
 		agent_edit_audit(p, AGENT_STATUS_DENIED,
 				 "edit_abort_denied", &state);
 		return AGENT_STATUS_DENIED;
@@ -6788,7 +6880,7 @@ int sys_agent_file_edit_abort(uint64 lease_id)
 	agent_edit_fill_state_locked(&state, edit, edit->dev, edit->inum,
 				     edit->incarnation, edit->path);
 	agent_edit_release_locked(edit, 1);
-	agent_edit_unlock();
+	agent_edit_unlock(enabled);
 	agent_edit_audit(p, AGENT_STATUS_OK, "edit_abort", &state);
 	return 0;
 }
@@ -6802,6 +6894,7 @@ int sys_agent_file_edit_state(uint64 pathaddr, uint64 stateaddr)
 	char path[MAXPATH];
 	int ok;
 	int rc;
+	int enabled;
 
 	if (!p->is_agent)
 		return -1;
@@ -6811,12 +6904,11 @@ int sys_agent_file_edit_state(uint64 pathaddr, uint64 stateaddr)
 	rc = agent_file_edit_lookup_path(p, pathaddr, path, &ip, VFS_OP_LOOKUP);
 	if (rc < 0)
 		return rc;
-	agent_edit_lock();
+	enabled = agent_edit_lock();
 	agent_edit_cleanup_expired_locked(agent_ticks());
-	agent_edit_version_locked(ip->dev, ip->inum, ip->vfs_incarnation, 1,
-				  &ok);
+	agent_edit_version_inode_locked(ip, 1, &ok);
 	if (!ok) {
-		agent_edit_unlock();
+		agent_edit_unlock(enabled);
 		iput(ip);
 		return AGENT_STATUS_NO_SPACE;
 	}
@@ -6824,7 +6916,7 @@ int sys_agent_file_edit_state(uint64 pathaddr, uint64 stateaddr)
 				      ip->vfs_incarnation);
 	agent_edit_fill_state_locked(&state, edit, ip->dev, ip->inum,
 				     ip->vfs_incarnation, path);
-	agent_edit_unlock();
+	agent_edit_unlock(enabled);
 	iput(ip);
 	return agent_file_edit_copy_state(p, stateaddr, &state);
 }

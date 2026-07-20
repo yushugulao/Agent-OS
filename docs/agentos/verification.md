@@ -87,7 +87,7 @@ bash scripts/run-agent-tests.sh
 
 ## 资源安全与内核栈入口
 
-文件系统耗尽复测使用极小 SFS 镜像分别触发 inode、inode cache 和数据块耗尽，要求分配失败被返回给调用者、内核继续运行且释放后资源可复用：
+文件系统耗尽复测使用极小 SFS 镜像分别触发 inode、inode cache 和数据块耗尽，要求分配失败被返回给调用者、内核继续运行且释放后资源可复用；AgentOS 配额场景还执行 640 次 PUBLIC 短命 inode 循环，验证版本 sidecar 最终回收后 workflow 编辑版本与内容摘要缓存仍可用：
 
 ```bash
 make fs-enospc-test TOOLPREFIX=riscv64-linux-gnu-

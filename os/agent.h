@@ -790,6 +790,7 @@ void agent_fs_note_create(struct inode *ip, char *path);
 void agent_fs_note_write(struct inode *ip);
 void agent_fs_note_truncate(struct inode *ip);
 void agent_fs_note_delete(struct inode *ip);
+void agent_file_version_reclaim(struct inode *ip);
 int agent_edit_write_allowed(struct inode *ip);
 int agent_edit_truncate_allowed(struct inode *ip);
 int agent_edit_unlink_allowed(struct inode *ip);
