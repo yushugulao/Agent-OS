@@ -140,6 +140,8 @@ struct proc {
 	int agent_type;
 	int agent_id;
 	int agent_role;
+	uint64 agent_control_id;
+	uint64 agent_controller_id;
 	uint64 agent_ctx_base;
 	uint64 agent_ctx_size;
 	uint64 agent_call_count;

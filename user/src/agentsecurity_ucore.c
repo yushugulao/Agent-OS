@@ -59,7 +59,7 @@ static uint64 expected_caps(int role)
 		       AGENT_CAP_WATCH | AGENT_CAP_ACTION_WRITE |
 		       AGENT_CAP_ARTIFACT_WRITE | AGENT_CAP_AUDIT_WRITE |
 		       AGENT_CAP_META_WRITE | AGENT_CAP_ORCHESTRATE |
-		       AGENT_CAP_LLM_RELAY;
+		       AGENT_CAP_LLM_RELAY | AGENT_CAP_WAIT_CANCEL;
 	return 0;
 }
 
@@ -71,6 +71,15 @@ static void check_role(int role, const char *name)
 	check(info.is_agent == 1, "is agent");
 	check(info.agent_role == role, name);
 	check(info.capability_mask == expected_caps(role), "capability mask");
+	if (role == AGENT_ROLE_ORCHESTRATOR)
+		check((info.capability_mask & AGENT_CAP_WAIT_CANCEL) != 0,
+		      "orchestrator wait cancel capability");
+	else {
+		check((info.capability_mask & AGENT_CAP_MESSAGE_SEND) != 0,
+		      "low role message capability");
+		check((info.capability_mask & AGENT_CAP_WAIT_CANCEL) == 0,
+		      "low role lacks wait cancel capability");
+	}
 	check(info.filesystem_capability_mask ==
 		      (expected_caps(role) &
 		       (AGENT_CAP_CONTENT_READ | AGENT_CAP_ARTIFACT_WRITE)),
@@ -109,7 +118,11 @@ static void check_creation_authority_denied(void)
 static void check_delegation_denied(const char *name)
 {
 	check_creation_authority_denied();
+	check(agent_wait_cancel(getppid(), "low-role-cancel") ==
+		      AGENT_STATUS_DENIED,
+	      "low role wait cancel denied");
 	printf("agentsecurity_ucore: role=%s delegation_denied=1\n", name);
+	printf("agentsecurity_ucore: role=%s wait_cancel_denied=1\n", name);
 }
 
 static void check_bootstrap_identity(void)
@@ -479,6 +492,115 @@ static void run_artifact(void)
 	exit(0);
 }
 
+static void run_orphan_cancel_victim(int ready_fd)
+{
+	struct agent_event event;
+	struct agent_event ack;
+	char ready = 'R';
+
+	check_role(AGENT_ROLE_SENTINEL, "cancel-victim");
+	check(agent_watch(AGENT_EVENT_MESSAGE, "release=controller") == 0,
+	      "watch controller release");
+	check(write(ready_fd, &ready, 1) == 1, "report cancel victim ready");
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, -1) == AGENT_STATUS_OK,
+	      "orphan victim receives message");
+	check(event.type == AGENT_EVENT_MESSAGE, "orphan victim message type");
+	check(strcmp(event.payload, "release=controller") == 0,
+	      "orphan victim release payload");
+	memset(&ack, 0, sizeof(ack));
+	ack.type = AGENT_EVENT_MESSAGE;
+	ack.corr_id = event.event_id;
+	strcpy(ack.payload, "controller-replaced");
+	check(agent_wake(event.source_pid, &ack) == AGENT_STATUS_OK,
+	      "orphan victim acknowledgement");
+	exit(0);
+}
+
+static void run_retired_cancel_controller(int report_fd)
+{
+	int ready_pipe[2];
+	int victim_pid;
+	char ready = 0;
+
+	check_role(AGENT_ROLE_ORCHESTRATOR, "retired-controller");
+	check(pipe(ready_pipe) == 0, "create cancel victim ready pipe");
+	victim_pid = agent_create_role(AGENT_ROLE_SENTINEL);
+	check(victim_pid >= 0, "create orphan cancel victim");
+	if (victim_pid == 0)
+		run_orphan_cancel_victim(ready_pipe[1]);
+	check(read(ready_pipe[0], &ready, 1) == 1 && ready == 'R',
+	      "wait cancel victim ready");
+	check(write(report_fd, &victim_pid, sizeof(victim_pid)) ==
+		      (int)sizeof(victim_pid),
+	      "report orphan cancel victim");
+	exit(0);
+}
+
+static void run_replacement_cancel_controller(int victim_pid)
+{
+	struct agent_event event;
+	struct agent_event ack;
+
+	check_role(AGENT_ROLE_ORCHESTRATOR, "replacement-controller");
+	check(agent_wait_cancel(victim_pid, "stale-controller") ==
+		      AGENT_STATUS_DENIED,
+	      "replacement controller cannot cancel orphan");
+	check(agent_watch(AGENT_EVENT_MESSAGE, "controller-replaced") == 0,
+	      "watch orphan acknowledgement");
+	memset(&event, 0, sizeof(event));
+	event.type = AGENT_EVENT_MESSAGE;
+	event.corr_id = 8301;
+	strcpy(event.payload, "release=controller");
+	check(agent_wake(victim_pid, &event) == AGENT_STATUS_OK,
+	      "replacement controller message delivery");
+	memset(&ack, 0, sizeof(ack));
+	check(agent_wait(&ack, 50) == AGENT_STATUS_OK,
+	      "replacement controller acknowledgement");
+	check(ack.type == AGENT_EVENT_MESSAGE,
+	      "replacement controller acknowledgement type");
+	check(ack.source_pid == victim_pid,
+	      "replacement controller acknowledgement source");
+	check(strcmp(ack.payload, "controller-replaced") == 0,
+	      "replacement controller acknowledgement payload");
+	printf("agentsecurity_ucore: wait_cancel_scope=1\n");
+	printf("agentsecurity_ucore: message_send_preserved=1\n");
+	exit(0);
+}
+
+static void check_wait_cancel_controller_lifecycle(void)
+{
+	int report_pipe[2];
+	int controller_pid;
+	int replacement_pid;
+	int victim_pid = -1;
+	int status = 0;
+
+	check(pipe(report_pipe) == 0, "create cancel controller report pipe");
+	controller_pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
+	check(controller_pid >= 0, "create retired cancel controller");
+	if (controller_pid == 0)
+		run_retired_cancel_controller(report_pipe[1]);
+	check(read(report_pipe[0], &victim_pid, sizeof(victim_pid)) ==
+		      (int)sizeof(victim_pid),
+	      "read orphan cancel victim");
+	check(victim_pid > 0, "orphan cancel victim pid");
+	check(waitpid(controller_pid, &status) == controller_pid,
+	      "wait retired cancel controller");
+	check(status == 0, "retired cancel controller status");
+	close(report_pipe[0]);
+	close(report_pipe[1]);
+	replacement_pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
+	check(replacement_pid >= 0, "create replacement cancel controller");
+	if (replacement_pid == 0)
+		run_replacement_cancel_controller(victim_pid);
+	check(waitpid(replacement_pid, &status) == replacement_pid,
+	      "wait replacement cancel controller");
+	check(status == 0, "replacement cancel controller status");
+	sleep(2);
+	printf("agentsecurity_ucore: wait_cancel_controller_lifecycle=1\n");
+}
+
 static void run_orchestrator(void)
 {
 	int pid;
@@ -529,6 +651,7 @@ static void run_orchestrator(void)
 	check_align_status("RUN-042", "failed");
 	check_report_status("RUN-999", "ok");
 	check_report_status("RUN-042", "failed");
+	printf("agentsecurity_ucore: wait_cancel_capability_split=1\n");
 	printf("agentsecurity_ucore: scoped_action=1\n");
 	printf("agentsecurity_ucore: scoped_artifact=1\n");
 	printf("agentsecurity_ucore: passed\n");
@@ -617,6 +740,7 @@ int main(int argc, char **argv)
 	check_plain_mail();
 	check_plain_process_denied();
 	check_plain_child_creation_denied();
+	check_wait_cancel_controller_lifecycle();
 	pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
 	check(pid >= 0, "create orchestrator");
 	if (pid == 0)

@@ -401,13 +401,13 @@ Agent-only syscall 对普通进程、非法参数、未知工具、历史节点�
 
 ### 8.6 并发和事件
 
-Agent Loop 使用进程字段保存 8 条 watch、16 槽 FIFO 事件队列、一次性 wait cancel 令牌、等待次数、超时次数和心跳信息。`agent_wait()` 优先处理取消令牌，再消费队列中的事件；没有事件时，有限 timeout 和无限等待都进入对象私有等待队列，由事件入队、deadline 到期、heartbeat 到期或定向取消唤醒。公共 `agent_wake()` 只能投递 `AGENT_EVENT_MESSAGE`，文件、定时器和 LLM 完成事件只能由对应内核路径产生。`agent_sched_config()` 允许 orchestrator 调整目标 Agent 的 policy、weight、priority 和 budget；这些都是软策略，连续选择 Agent 或连续按分值选择达到 `AGENT_SCHED_MAX_AGENT_BURST = 8` 后，只要对应普通/FIFO 候选存在，调度器就强制选择该候选。调度器持续维护完整的 dispatch、preemption、vruntime、last_reason 和 last_score 计数，对关键调度原因即时记录，对普通调度按固定间隔采样。全局审计 ring 同步记录 Context、事件、调度和预取提示交接摘要，便于 orchestrator 查询系统级运行证据。
+Agent Loop 使用进程字段保存 8 条 watch、16 槽 FIFO 事件队列、一次性 wait cancel 令牌、等待次数、超时次数和心跳信息。`agent_wait()` 优先处理取消令牌，再消费队列中的事件；没有事件时，有限 timeout 和无限等待都进入对象私有等待队列，由事件入队、deadline 到期、heartbeat 到期或定向取消唤醒。公共 `agent_wake()` 只能投递 `AGENT_EVENT_MESSAGE`，文件、定时器和 LLM 完成事件只能由对应内核路径产生。取消是独立控制操作：`WAIT_CANCEL` capability 决定主体能否发起，内核在 Agent 创建时签发的 64 位 control id 和直接 controller 绑定决定主体能控制哪个对象；授权不读取 role、PID、父指针或 PCB 地址。`agent_sched_config()` 允许 orchestrator 调整目标 Agent 的 policy、weight、priority 和 budget；这些都是软策略，连续选择 Agent 或连续按分值选择达到 `AGENT_SCHED_MAX_AGENT_BURST = 8` 后，只要对应普通/FIFO 候选存在，调度器就强制选择该候选。调度器持续维护完整的 dispatch、preemption、vruntime、last_reason 和 last_score 计数，对关键调度原因即时记录，对普通调度按固定间隔采样。全局审计 ring 同步记录 Context、事件、调度和预取提示交接摘要，便于 orchestrator 查询系统级运行证据。
 
 ### 8.7 角色与能力
 
 Agent 的真实角色保存在内核 `struct proc.agent_role` 中，业务能力保存在 `agent_capability_mask` 中，创建授权单独保存在 `agent_role_grant_mask` 中。内核 loader 在初始映像安装完成后为可信 init 建立 bootstrap grant；普通 `fork` 不复制 grant，普通进程成功 `exec` 时撤销残留 grant。orchestrator 的角色策略允许显式委派合法角色，sentinel、investigator、recovery 和 artifact 的 grant 为空。`agent_create()` 和 `agent_create_role()` 都进入同一授权入口，授权失败时不会开始进程或 Context 分配。该机制不读取 PID、父 PID 或用户态自报角色。
 
-敏感授权不读取用户态传入的 role。`capability_check`、`action_commit`、`artifact_update`、`llm_response`、文件元数据写入和事件投递都按当前进程真实 capability 判断。`agent_wake()` 还只允许投递 `AGENT_EVENT_MESSAGE`，`LLM_DONE`、文件状态、定时器等系统事件必须走对应专用路径。因此 sentinel 即使把 `agent_op.arg0` 填成 recovery，或直接构造系统事件类型，也不能获得动作提交、工件更新或 LLM Relay 能力。`rerun_stage` 和 `write_report` 保留为旧示例兼容名称，内部仍走通用授权、状态更新、事件记录和重复请求判断路径。
+敏感授权不读取用户态传入的 role。`capability_check`、`action_commit`、`artifact_update`、`llm_response`、文件元数据写入和事件投递都按当前进程真实 capability 判断。`agent_wake()` 还只允许投递 `AGENT_EVENT_MESSAGE`，`LLM_DONE`、文件状态、定时器等系统事件必须走对应专用路径；`agent_wait_cancel()` 则要求独立 `WAIT_CANCEL` capability 和直接控制关系。因此 sentinel 即使把 `agent_op.arg0` 填成 recovery、直接构造系统事件类型，或用已知 PID 指向 orchestrator，也不能获得动作提交、工件更新、LLM Relay 或等待取消能力。`rerun_stage` 和 `write_report` 保留为旧示例兼容名称，内部仍走通用授权、状态更新、事件记录和重复请求判断路径。
 
 `labdemo_ucore` 中可信 init 只启动 orchestrator Agent；文件元数据初始化、失败注入、对象依赖注册和子 Agent 创建都由 orchestrator 发起。`agentsecurity_ucore` 专门覆盖普通进程直接调用敏感接口失败、普通 `fork/exec` 子进程不能继承 role grant、低权限 Agent 不能继续委派、bootstrap grant 在普通 exec 后撤销、初始化前索引查询、legacy tool mismatch、sentinel 伪造 recovery 被拒绝，以及多 run 定向动作更新。
 

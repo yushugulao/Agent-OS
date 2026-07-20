@@ -119,6 +119,14 @@ Agent 权限由以下链路共同决定：
 
 清单中的源名只在构建镜像和选择别名时使用；运行时权限来自已经写入 inode 并由 loader 校验的安全元数据，而不是对进程名做白名单判断。把相同程序字节复制到普通文件只会得到新的 public inode，不会复制可信、不可变或角色许可属性。
 
+### 6.2 等待取消控制关系
+
+`MESSAGE_SEND` 是 Agent 间数据面能力，不能作为停止另一个 Agent 等待的控制凭据。内核为等待取消定义独立的 `AGENT_CAP_WAIT_CANCEL`；角色策略当前只把该能力授予 orchestrator，但 syscall 只检查 capability，不对角色名称做特判。
+
+能力只回答“能否执行取消操作”，对象关系继续回答“能取消谁”。每个 Agent 创建时取得一个内核私有、单调且不回绕复用的 64 位 `agent_control_id`，目标同时记录直接创建者的 `agent_controller_id`。取消仅在两者匹配时允许，因此低权限子 Agent 不能向上取消 orchestrator，具备取消能力的兄弟或后来接管同一 PCB 槽的进程也不能横向取得旧控制权。普通 fork 不复制这些字段，Agent exec 保留原控制关系，退出回收会清零字段；创建者退出后旧 controller id 失效，未来若需要接管必须新增显式授权转移，而不能从 reparent、PID 或资源域自动推断。
+
+目标查找、控制关系检查、重复令牌检查、令牌写入和等待队列唤醒在同一个关中断临界区内完成。用户字符串复制在临界区外完成；正在退出的目标按不存在处理。这既避免半写令牌和检查后复用，也不在临界区内执行可能睡眠的用户内存访问。
+
 ## 7. 文件安全域
 
 VFS 把对象分为 public 域和 workflow 域。进程凭据由可执行映像 profile、Agent role capability 和受控 exec 委派共同得到。文件资源以 `dev + inum + incarnation` 标识，inode 号被回收再用时不会继承旧对象的 metadata、租约或缓存。`open/read/write/truncate/unlink` 等数据路径按实际 inode 标签和当前进程凭据检查，不只在 Agent 工具入口检查，因此普通文件 syscall 和继承来的文件描述符不能绕过能力模型。

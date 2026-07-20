@@ -139,13 +139,13 @@ int agent_wait_cancel(int pid, const char *reason);
 语义：
 
 1. 当前进程必须是 Agent。
-2. 调用者必须具备 `AGENT_CAP_MESSAGE_SEND` 或 `AGENT_CAP_ORCHESTRATE`。
-3. 内核查找目标 pid，目标必须是 Agent。
-4. 内核在目标 PCB 中写入一次性取消令牌，保存 source pid、event id、reason、cause sequence 和 span。
-5. 如果目标已经睡眠在 `agent_wait()` 中，内核立即唤醒目标。
-6. 如果取消先到达，目标下一次调用 `agent_wait()` 会立即返回。
-7. 目标 `agent_wait()` 返回 `AGENT_STATUS_CANCELLED`，输出事件类型为 `AGENT_EVENT_CANCELLED`。
-8. 取消事件也会追加到目标 Context Path，result 文本为 `cancelled`。
+2. 调用者必须具备独立的 `AGENT_CAP_WAIT_CANCEL`；`MESSAGE_SEND` 只允许发送普通消息，不再隐含控制权。
+3. 内核查找目标 pid，目标必须是仍存活的 Agent，并且创建时绑定的 controller id 必须等于调用者的 control id。
+4. control id 是内核私有、单调且不复用的 64 位对象身份，不使用 role、PID、父指针或 PCB 槽地址推断授权。
+5. 内核在目标 PCB 中写入一次性取消令牌，保存 source pid、event id、reason、cause sequence 和 span。
+6. 如果目标已经睡眠在 `agent_wait()` 中，内核立即唤醒目标。
+7. 如果取消先到达，目标下一次调用 `agent_wait()` 会立即返回。
+8. 目标 `agent_wait()` 返回 `AGENT_STATUS_CANCELLED`，输出事件类型为 `AGENT_EVENT_CANCELLED`，并把取消事件追加到 Context Path。
 
 返回语义：
 
@@ -153,14 +153,18 @@ int agent_wait_cancel(int pid, const char *reason);
 | --- | --- |
 | 普通进程调用 | `-1` |
 | Agent 缺少能力 | `AGENT_STATUS_DENIED` |
+| 目标不由调用者直接控制 | `AGENT_STATUS_DENIED` |
 | 目标不存在或目标不是 Agent | `AGENT_STATUS_NOT_FOUND` |
 | 目标已有未消费取消令牌 | `AGENT_STATUS_DUPLICATE` |
 | 写入取消令牌成功 | 0 |
 
-取消令牌不进入普通事件队列，也不受 watch/filter 限制。这样它不会被满队列阻挡，也不会被业务 filter 误拦截。`agentloop_ucore` 创建一个 sentinel 等待者，由 orchestrator 调用 `agent_wait_cancel()`，验证取消事件、reason、cause/span、`wait_cancel_count` 和 Context 追加均正确：
+取消令牌不进入普通事件队列，也不受 watch/filter 限制，因此授权边界必须独立于消息能力。`agentloop_ucore` 验证 orchestrator 能取消自己直接创建的 sentinel；`agentsecurity_ucore` 验证所有低权限角色虽保留 `MESSAGE_SEND` 却没有取消能力，并验证旧 controller 退出、PCB 槽被新 orchestrator 复用后，新进程仍不能取消遗留目标，而普通 MESSAGE 仍可交付：
 
 ```text
 agentloop_ucore: wait_cancel=1
+agentsecurity_ucore: wait_cancel_capability_split=1
+agentsecurity_ucore: wait_cancel_scope=1
+agentsecurity_ucore: message_send_preserved=1
 ```
 
 ## 心跳：Heartbeat

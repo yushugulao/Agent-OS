@@ -163,7 +163,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentloop_ucore CHAPT
 | `timeout_sleep_no_poll=1` | 有限 timeout 等待进入睡眠，不通过循环消耗 CPU |
 | `timer_unwatch=1` | TIMER watch 删除后，heartbeat 不再投递可消费 TIMER 事件 |
 | `heartbeat_wake_stop=1` | heartbeat 能唤醒 Agent，停止后不再投递 |
-| `wait_cancel=1` | 受权 Agent 能取消目标 Agent 的等待，目标返回取消事件 |
+| `wait_cancel=1` | 具备独立取消能力的 controller 能取消自己直接创建的 Agent，目标返回取消事件 |
 
 看到 `agentloop_ucore: passed` 和 `agentloop_ucore: parent passed` 即可进入下一项。
 

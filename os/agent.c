@@ -27,6 +27,7 @@ _Static_assert(AGENT_FILE_VERSION_MAX == NINODE,
 	       "inode version sidecar must cover every filesystem inode");
 
 static int nextagentid = 1;
+static uint64 next_agent_control_id = 1;
 static uint64 next_event_id = 1;
 static uint64 agent_audit_next_sequence = 1;
 static uint64 agent_audit_head;
@@ -262,6 +263,7 @@ struct agent_proc_snapshot {
 void agentinit(void)
 {
 	nextagentid = 1;
+	next_agent_control_id = 1;
 	next_event_id = 1;
 	agent_audit_next_sequence = 1;
 	agent_audit_head = 0;
@@ -318,6 +320,19 @@ static uint64 agent_ticks(void)
 static int agent_alloc_id(void)
 {
 	return nextagentid++;
+}
+
+static uint64 agent_alloc_control_id(void)
+{
+	uint64 id = next_agent_control_id;
+
+	if (id == 0)
+		return 0;
+	if (id == ~0ULL)
+		next_agent_control_id = 0;
+	else
+		next_agent_control_id = id + 1;
+	return id;
 }
 
 static int agent_text_empty(char *s)
@@ -483,6 +498,8 @@ void agent_clear_metadata(struct proc *p)
 	p->agent_type = AGENT_TYPE_NONE;
 	p->agent_id = 0;
 	p->agent_role = 0;
+	p->agent_control_id = 0;
+	p->agent_controller_id = 0;
 	p->agent_ctx_base = 0;
 	p->agent_ctx_size = 0;
 	p->agent_call_count = 0;
@@ -575,7 +592,8 @@ void agent_clear_metadata(struct proc *p)
 	 AGENT_CAP_PROCESS_READ | AGENT_CAP_MESSAGE_SEND | AGENT_CAP_WATCH | \
 	 AGENT_CAP_ACTION_WRITE | AGENT_CAP_ARTIFACT_WRITE | \
 	 AGENT_CAP_AUDIT_WRITE | AGENT_CAP_META_WRITE | \
-	 AGENT_CAP_ORCHESTRATE | AGENT_CAP_LLM_RELAY)
+	 AGENT_CAP_ORCHESTRATE | AGENT_CAP_LLM_RELAY | \
+	 AGENT_CAP_WAIT_CANCEL)
 
 struct agent_role_policy {
 	int role;
@@ -679,6 +697,14 @@ static int agent_has_any_cap(struct proc *p, uint64 caps)
 	return p != 0 && p->is_agent &&
 	       exec_policy_process_allows_role(p, p->agent_role) &&
 	       (p->agent_capability_mask & caps) != 0;
+}
+
+static int agent_controls_target(struct proc *controller,
+				 struct proc *target)
+{
+	return controller != 0 && target != 0 && target->is_agent &&
+	       controller->agent_control_id != 0 &&
+	       target->agent_controller_id == controller->agent_control_id;
 }
 
 static void agent_audit_emit(int kind, uint64 tick, struct proc *actor,
@@ -1350,10 +1376,21 @@ bad:
 int agent_make_role(struct proc *p, int role)
 {
 	const struct agent_role_policy *policy = agent_role_policy_find(role);
+	struct proc *controller = curr_proc();
+	uint64 control_id;
+	uint64 controller_id = 0;
 
 	if (policy == 0 || !exec_policy_process_allows_role(p, role))
 		return -1;
+	if (controller != 0 && controller->is_agent) {
+		if (controller->agent_control_id == 0)
+			return -1;
+		controller_id = controller->agent_control_id;
+	}
 	if (p->max_page * PAGE_SIZE > AGENT_CONTEXT_BASE)
+		return -1;
+	control_id = agent_alloc_control_id();
+	if (control_id == 0)
 		return -1;
 	if (agent_map_context(p) < 0)
 		return -1;
@@ -1361,6 +1398,8 @@ int agent_make_role(struct proc *p, int role)
 	p->agent_type = AGENT_TYPE_AGENT;
 	p->agent_id = agent_alloc_id();
 	p->agent_role = role;
+	p->agent_control_id = control_id;
+	p->agent_controller_id = controller_id;
 	p->agent_ctx_base = AGENT_CONTEXT_BASE;
 	p->agent_ctx_size = AGENT_CONTEXT_SIZE;
 	p->heartbeat_interval = 0;
@@ -6545,10 +6584,12 @@ int sys_agent_wait_cancel(int pid, uint64 reasonaddr)
 	struct proc *target;
 	char reason[AGENT_EVENT_PAYLOAD_SIZE];
 	uint64 event_id;
+	int enabled;
+	int status = AGENT_STATUS_NOT_FOUND;
 
 	if (!p->is_agent)
 		return -1;
-	if (!agent_has_any_cap(p, AGENT_CAP_MESSAGE_SEND | AGENT_CAP_ORCHESTRATE))
+	if (!agent_has_cap(p, AGENT_CAP_WAIT_CANCEL))
 		return AGENT_STATUS_DENIED;
 	memset(reason, 0, sizeof(reason));
 	if (reasonaddr != 0 &&
@@ -6556,13 +6597,23 @@ int sys_agent_wait_cancel(int pid, uint64 reasonaddr)
 		return -1;
 	if (reason[0] == 0)
 		safestrcpy(reason, "cancel", sizeof(reason));
+	enabled = intr_save();
 	for (target = pool; target < &pool[NPROC]; target++) {
 		if (target->state == P_UNUSED || target->pid != pid)
 			continue;
-		if (!target->is_agent)
-			return AGENT_STATUS_NOT_FOUND;
-		if (target->agent_wait_cancel_pending)
-			return AGENT_STATUS_DUPLICATE;
+		if (!target->is_agent || target->exit_requested ||
+		    target->exit_finalizing) {
+			status = AGENT_STATUS_NOT_FOUND;
+			break;
+		}
+		if (!agent_controls_target(p, target)) {
+			status = AGENT_STATUS_DENIED;
+			break;
+		}
+		if (target->agent_wait_cancel_pending) {
+			status = AGENT_STATUS_DUPLICATE;
+			break;
+		}
 		event_id = next_event_id++;
 		target->agent_wait_cancel_pending = 1;
 		target->agent_wait_cancel_source_pid = p->pid;
@@ -6577,9 +6628,11 @@ int sys_agent_wait_cancel(int pid, uint64 reasonaddr)
 		target->agent_wait_cancel_count++;
 		target->agent_wait_deadline_valid = 0;
 		agent_wake_event_waiters(target);
-		return 0;
+		status = AGENT_STATUS_OK;
+		break;
 	}
-	return AGENT_STATUS_NOT_FOUND;
+	intr_restore(enabled);
+	return status;
 }
 
 int sys_agent_heartbeat(int interval_ticks)

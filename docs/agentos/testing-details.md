@@ -191,7 +191,7 @@
 8. 子进程注册 TIMER watch，启动 heartbeat，确认 heartbeat 事件可唤醒等待。
 9. 子进程删除 TIMER watch 后再次启动 heartbeat，确认不会消费 TIMER 事件。
 10. 子进程调用 `agent_heartbeat_stop()`，确认停止后不再产生 heartbeat 事件。
-11. 子进程创建 sentinel 等待者，调用 `agent_wait_cancel()` 设置一次性取消令牌，确认等待者返回 `AGENT_STATUS_CANCELLED`，事件类型为 `AGENT_EVENT_CANCELLED`，并带有 reason、cause/span 和 Context 记录。
+11. 子进程以带 `WAIT_CANCEL` 的 orchestrator 身份创建 sentinel 等待者，作为其直接 controller 调用 `agent_wait_cancel()`，确认等待者返回 `AGENT_STATUS_CANCELLED`，事件类型为 `AGENT_EVENT_CANCELLED`，并带有 reason、cause/span 和 Context 记录。
 
 ### 4.2 输出阅读方式
 
@@ -470,7 +470,7 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 
 ## 10. `agentsecurity_ucore`
 
-`agentsecurity_ucore` 是权限限制负向测试，专门覆盖检查中指出的“普通进程能直接改全局元数据、伪造事件或取消等待”“低权限 Agent 能把 `agent_wake()` 事件类型伪装成系统事件”“用户态自报 role 可绕过权限”等问题，并检查普通进程不能读取全局、当前 span、统一 timeline 或 timeline query/read 短记录，sentinel 不能读取或过滤全局审计短记录。
+`agentsecurity_ucore` 是权限限制负向测试，专门覆盖检查中指出的“普通进程能直接改全局元数据、伪造事件或取消等待”“低权限 Agent 能把消息能力扩大为全局等待取消权”“低权限 Agent 能把 `agent_wake()` 事件类型伪装成系统事件”“用户态自报 role 可绕过权限”等问题，并检查普通进程不能读取全局、当前 span、统一 timeline 或 timeline query/read 短记录，sentinel 不能读取或过滤全局审计短记录。
 
 ### 10.1 测试流程
 
@@ -478,17 +478,18 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 2. 可信初始进程验证普通 mail 路径可用，并验证事件、文件元数据、全局审计、timeline 和私有 `.agentmeta` 均受既有能力隔离保护。
 3. 可信初始进程普通 `fork()` 后，子进程检查两种 Agent 创建接口和全部合法角色都返回 `AGENT_STATUS_DENIED`。
 4. 该普通子进程再执行 `exec()`，重复验证创建授权仍为零，证明授权不会经普通派生链传播。
-5. 可信初始进程创建 orchestrator；orchestrator 通过 `agent_info()` 检查真实 role 和 capability mask，并通过成功委派各角色验证创建权。
-6. orchestrator 普通 `fork()` 后，子进程验证 Agent 身份、role、capability 和 Context 均已清零，且没有创建授权。
-7. orchestrator 在未初始化元数据前执行带索引查询，预期返回 0 条命中且不会阻塞，随后初始化文件元数据。
-8. orchestrator 使用 legacy `agent_call()` 验证工具名、工具 ID、参数键和参数类型校验。
-9. orchestrator 分别把设定的模拟流程和另两个模拟流程的比对处理、报告生成环节置为 failed。
-10. orchestrator 创建 sentinel 和 investigator；两个低权限 Agent 均检查真实 role/capability，并验证两种创建接口和全部角色委派均返回 `AGENT_STATUS_DENIED`。
-11. sentinel 验证系统事件伪造、用户态 role 伪造、依赖更新、内容读取、全局审计、调度配置和元数据写入均被拒绝，且合法消息仍可投递。
-12. orchestrator 创建 recovery；recovery 检查真实 role/capability，通过创建拒绝验证没有委派授权，并验证重复 corr_id、定向动作及工件更新行为。
-13. orchestrator 确认拒绝路径和定向更新没有跨 run 修改，输出 `agentsecurity_ucore: passed`。
-14. 可信初始进程等待 orchestrator 后再次派生普通子进程，验证复用已回收 Agent 槽时身份、能力和创建权均已清零。
-15. 可信初始进程执行自身 `exec()`，验证 bootstrap 创建授权被撤销，输出 `agentsecurity_ucore: parent passed`。
+5. 可信初始进程创建 controller A；A 创建并等待一个 sentinel 就绪后退出，使 sentinel 成为孤儿。随后创建 controller B 复用 A 的 PCB 槽，验证 B 虽有 `WAIT_CANCEL` 仍不能取消该 sentinel，但可以用 `MESSAGE_SEND` 与其完成消息握手。
+6. 可信初始进程创建正常 orchestrator；orchestrator 通过 `agent_info()` 检查真实 role 和 capability mask，并通过成功委派各角色验证创建权。
+7. orchestrator 普通 `fork()` 后，子进程验证 Agent 身份、role、capability 和 Context 均已清零，且没有创建授权。
+8. orchestrator 在未初始化元数据前执行带索引查询，预期返回 0 条命中且不会阻塞，随后初始化文件元数据。
+9. orchestrator 使用 legacy `agent_call()` 验证工具名、工具 ID、参数键和参数类型校验。
+10. orchestrator 分别把设定的模拟流程和另两个模拟流程的比对处理、报告生成环节置为 failed。
+11. orchestrator 创建 sentinel、investigator 和 artifact；低权限 Agent 均检查真实 role/capability，验证保留 `MESSAGE_SEND`、缺少 `WAIT_CANCEL`，并确认创建接口、全部角色委派及对父 orchestrator 的取消均返回 `AGENT_STATUS_DENIED`。
+12. sentinel 验证系统事件伪造、用户态 role 伪造、依赖更新、内容读取、全局审计、调度配置和元数据写入均被拒绝，且合法消息仍可投递。
+13. orchestrator 创建 recovery；recovery 检查真实 role/capability，通过创建和等待取消拒绝验证没有委派或控制授权，并验证重复 corr_id、定向动作及工件更新行为。
+14. orchestrator 确认拒绝路径和定向更新没有跨 run 修改，输出 `agentsecurity_ucore: passed`。
+15. 可信初始进程等待 orchestrator 后再次派生普通子进程，验证复用已回收 Agent 槽时身份、能力和创建权均已清零。
+16. 可信初始进程执行自身 `exec()`，验证 bootstrap 创建授权被撤销，输出 `agentsecurity_ucore: parent passed`。
 
 ### 10.2 输出阅读方式
 
@@ -499,6 +500,8 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 | 覆盖点 | 检查方式 |
 | --- | --- |
 | 普通进程不能直接投递事件、取消等待或配置调度 | `agent_wake()`、`agent_wait_cancel()`、`agent_sched_config()` 返回 `-1` |
+| 消息能力不隐含等待控制权 | sentinel、investigator、artifact 和 recovery 均保留 `MESSAGE_SEND`，但缺少 `WAIT_CANCEL`，取消父 orchestrator 返回 `AGENT_STATUS_DENIED` |
+| 等待取消绑定不可复用的控制对象 | controller A 退出后 controller B 复用其 PCB 槽；B 取消 A 的遗留子 Agent 被拒绝，普通 MESSAGE/ACK 仍成功 |
 | Agent 不能用消息接口伪造系统事件 | sentinel 直接投递 `LLM_DONE` 返回 `AGENT_STATUS_DENIED` 且不入队；非法类型返回 `AGENT_STATUS_BAD_PARAM`；合法 `MESSAGE` 仍可收发 |
 | 全局审计读取、过滤、调度配置和依赖注册权限 | 普通进程调用返回 `-1`，sentinel 调用返回 `AGENT_STATUS_DENIED` |
 | 普通进程不能直接修改文件元数据 | `agent_file_meta_init()`、`agent_file_meta_set()` 返回 `-1` |

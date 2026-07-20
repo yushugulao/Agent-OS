@@ -56,6 +56,8 @@ static void run_cancel_waiter(void)
 	check(event.span_id != 0, "cancel span");
 	check(agent_info(&after) == 0, "cancel waiter info after");
 	check(after.wait_count == before.wait_count + 1, "cancel wait count");
+	check(after.wait_sleep_count > before.wait_sleep_count,
+	      "cancel woke sleeping waiter");
 	check(after.wait_cancel_count >= 1, "cancel count");
 	check(after.context_path_latest > before.context_path_latest,
 	      "cancel context");
@@ -136,6 +138,7 @@ static void run_agent(void)
 	check(pid >= 0, "create cancel waiter");
 	if (pid == 0)
 		run_cancel_waiter();
+	sleep(2);
 	check(agent_wait_cancel(pid, "cancel=operator") == 0,
 	      "cancel waiter");
 	check(waitpid(pid, &status) == pid, "wait cancel waiter");

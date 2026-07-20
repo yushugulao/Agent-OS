@@ -166,7 +166,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 539：
 | `AGENT_ROLE_INVESTIGATOR` | `META_READ`、`CONTENT_READ`、`MESSAGE_SEND`、`WATCH`、`AUDIT_WRITE` |
 | `AGENT_ROLE_RECOVERY` | `META_READ`、`CONTENT_READ`、`MESSAGE_SEND`、`WATCH`、`ACTION_WRITE`、`ARTIFACT_WRITE`、`AUDIT_WRITE` |
 | `AGENT_ROLE_ARTIFACT` | `META_READ`、`CONTENT_READ`、`MESSAGE_SEND`、`WATCH`、`ARTIFACT_WRITE`、`AUDIT_WRITE` |
-| `AGENT_ROLE_ORCHESTRATOR` | 全部能力，包括 `META_WRITE`、`ORCHESTRATE` 和 `LLM_RELAY` |
+| `AGENT_ROLE_ORCHESTRATOR` | 全部能力，包括 `META_WRITE`、`ORCHESTRATE`、`LLM_RELAY` 和 `WAIT_CANCEL` |
 
 Agent 创建授权与业务操作授权彼此独立。前者只使用内核 `struct proc.agent_role_grant_mask`；后者使用 `agent_role` 和 `agent_capability_mask`。构建期可信清单集中定义源程序、安装映像名、不可变/启动标志、允许角色和文件系统安全配置；mkfs 把策略写入 inode，loader 按 inode 策略和映像布局建立进程凭据。bootstrap grant 只在内核初次装载带 `BOOTSTRAP` 标志的可信映像时产生，不根据 PID、父 PID 或用户态字符串推断；普通 fork 不复制 grant，普通进程成功 exec 会清空 grant，也不会因为执行同名或带 bootstrap 标志的映像而恢复。Agent 执行新映像时还必须满足该可信 inode 的角色掩码。`agent_op.arg0` 中传入的 role 只保留为旧兼容参数，不参与 `capability_check`、`action_commit`、`artifact_update`、`llm_response` 等敏感工具授权。`rerun_stage` 和 `write_report` 仍可调用，但它们只是面向旧示例的兼容别名；运行记录、事件 action 和重复请求判断都归入 `action_commit` 或 `artifact_update`。
 
@@ -198,7 +198,7 @@ Agent-only 直接 syscall 的权限要求：
 | syscall | 普通进程 | Agent capability 要求 |
 | --- | --- | --- |
 | `agent_wake` | 返回 `-1` | `MESSAGE_SEND` 或 `ORCHESTRATE` |
-| `agent_wait_cancel` | 返回 `-1` | `MESSAGE_SEND` 或 `ORCHESTRATE` |
+| `agent_wait_cancel` | 返回 `-1` | `WAIT_CANCEL`，且目标由调用者直接创建并受其控制 |
 | `agent_file_meta_init` | 返回 `-1` | `META_WRITE` |
 | `agent_file_meta_set` | 返回 `-1` | `META_WRITE` |
 | `agent_file_query` | 返回 `-1` | `META_READ` |
@@ -722,7 +722,7 @@ Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。队列满时返回 `AGENT_
 
 `agent_heartbeat_stop()` 是用户态便利 wrapper，内部调用 `agent_heartbeat(0)`。heartbeat 到期产生 `AGENT_EVENT_TIMER` 时仍需匹配 TIMER watch；删除 TIMER watch 后，heartbeat 不会投递可消费 TIMER 事件。
 
-`agent_wait_cancel(pid, reason)` 是 Agent-only 控制接口。调用者必须具备 `MESSAGE_SEND` 或 `ORCHESTRATE`。内核给目标 Agent 写入一次性取消令牌并唤醒目标；如果目标已经在 `agent_wait()` 中睡眠，会立即返回 `AGENT_STATUS_CANCELLED`；如果取消令牌先到达，目标下一次 `agent_wait()` 会立即返回。返回的事件类型为 `AGENT_EVENT_CANCELLED`，payload 保存短 reason，cause/span 继承调用者当前 Context 状态。普通进程调用返回 `-1`，目标不存在返回 `AGENT_STATUS_NOT_FOUND`，目标已有未消费取消令牌时返回 `AGENT_STATUS_DUPLICATE`。
+`agent_wait_cancel(pid, reason)` 是 Agent-only 控制接口。消息数据面与等待控制面彼此独立：调用者必须具备 `AGENT_CAP_WAIT_CANCEL`，并且目标 Agent 必须由调用者直接创建。创建时内核为每个 Agent 签发不向用户态暴露的 64 位 control id，并把创建者的 control id 绑定为目标 controller；授权不读取 role、PID、父指针或可复用 PCB 地址，controller 退出后旧 id 也不会转授给复用该槽的新进程。内核给合法目标写入一次性取消令牌并唤醒目标；如果目标已经在 `agent_wait()` 中睡眠，会立即返回 `AGENT_STATUS_CANCELLED`；如果取消令牌先到达，目标下一次 `agent_wait()` 会立即返回。返回事件的 payload 保存短 reason，cause/span 继承调用者当前 Context 状态。普通进程调用返回 `-1`，能力不足或目标不受调用者控制返回 `AGENT_STATUS_DENIED`，目标不存在或正在退出返回 `AGENT_STATUS_NOT_FOUND`，目标已有未消费取消令牌时返回 `AGENT_STATUS_DUPLICATE`。
 
 ## 上下文路径接口：Context Path
 
