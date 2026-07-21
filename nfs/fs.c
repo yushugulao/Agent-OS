@@ -132,14 +132,16 @@ static void validate_storage_guarantees(void)
 		free_inodes, FS_WORKFLOW_INODE_MIN_PER_SCOPE);
 	uint checksum = fs_policy_contract_checksum(
 		FS_STORAGE_POLICY_VERSION, FS_WORKFLOW_SCOPE_SLOTS,
+		FS_PUBLIC_PRINCIPAL_ID,
 		workflow_blocks, workflow_inodes, system_blocks, system_inodes);
 
 	if (workflow_blocks < FS_WORKFLOW_BLOCK_MIN_PER_SCOPE ||
 	    workflow_inodes < FS_WORKFLOW_INODE_MIN_PER_SCOPE ||
 	    !fs_policy_contract_geometry_valid(
-		nblocks, total_inodes, FS_STORAGE_POLICY_VERSION,
-		FS_WORKFLOW_SCOPE_SLOTS, workflow_blocks, workflow_inodes,
-		system_blocks, system_inodes, checksum) ||
+			nblocks, total_inodes, FS_STORAGE_POLICY_VERSION,
+			FS_WORKFLOW_SCOPE_SLOTS, FS_PUBLIC_PRINCIPAL_ID,
+			workflow_blocks, workflow_inodes,
+			system_blocks, system_inodes, checksum) ||
 	    !fs_policy_contract_initially_funded(
 		free_blocks, free_inodes, workflow_blocks, workflow_inodes,
 		system_blocks, system_inodes)) {
@@ -159,6 +161,7 @@ static void validate_storage_guarantees(void)
 	sb.workflow_inode_guarantee = xint(workflow_inodes);
 	sb.system_block_reserve = xint(system_blocks);
 	sb.system_inode_reserve = xint(system_inodes);
+	sb.public_principal_id = xint(FS_PUBLIC_PRINCIPAL_ID);
 	sb.storage_policy_checksum = xint(checksum);
 	printf("storage guarantees: free blocks %u workflow/scope %u "
 	       "system %u; free inodes %u workflow/scope %u system %u\n",

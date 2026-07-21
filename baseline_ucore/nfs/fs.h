@@ -35,9 +35,13 @@ struct superblock {
 	uint bmapstart; // Block number of first free map block
 	uint qmapstart; // Block number of first block-owner map block
 	uint datastart; // Block number of first data block
+	uint public_principal; // Stable owner for all ordinary processes
 };
 
-#define FSMAGIC 0x10203043
+#define FSMAGIC 0x10203046
+
+_Static_assert(sizeof(struct superblock) == 36,
+	       "on-disk superblock format must remain 36 bytes");
 
 #define NDIRECT 12
 #define NINDIRECT (BSIZE / sizeof(uint))
@@ -57,10 +61,13 @@ struct dinode {
 	uint addrs[NDIRECT + 1]; // Data block addresses
 };
 
-#define FS_OWNER_VERSION 1U
+#define FS_OWNER_VERSION 2U
 #define FS_OWNER_FREE    0U
 #define FS_OWNER_SYSTEM  1U
-#define FS_OWNER_DYNAMIC_MIN 2U
+#define FS_OWNER_PUBLIC  2U
+
+_Static_assert(FS_OWNER_PUBLIC != FS_OWNER_SYSTEM,
+	       "PUBLIC and SYSTEM storage principals must be distinct");
 
 _Static_assert(sizeof(struct dinode) == 64,
 	       "on-disk inode format must remain 64 bytes");

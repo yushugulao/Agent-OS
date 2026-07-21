@@ -10,7 +10,7 @@ AgentOS-uCore 的验证分四层：
 | --- | --- | --- |
 | 构建检查 | `make agentos-user`、`make agentos-build`、`make kernel-stack-check` | 确认内核、用户态 ABI 和文件系统镜像能从当前源码构建；每次生成 `build/kernel` 前都会自动执行内核栈预算检查。 |
 | AgentOS 专项测试 | `make agentos-test` 或 `bash scripts/run-agent-tests.sh` | 在 QEMU 中逐项运行 Agent 功能、权限和用户输入检查。 |
-| 资源安全复测 | `make fs-enospc-test`、`make proc-reap-test`、`make syscall-fairness-test` | 在增强目标和普通 uCore 对照目标上验证文件系统耗尽、进程回收、活进程配额及 syscall 内核工作预算。 |
+| 资源安全复测 | `make fs-enospc-test`、`make proc-reap-test`、`make syscall-fairness-test` | 在增强目标和普通 uCore 对照目标上验证文件系统耗尽、持久 PUBLIC 配额跨域退出/重启、进程回收、活进程配额及 syscall 内核工作预算。 |
 | 双目标与聚合验证 | `make dual-platform-run`、`make full-verify` | 运行双目标科研平台负载，并串联宿主机、AgentOS 和进程回收检查。 |
 
 `agentos-test` 只关注根目录 AgentOS-uCore 目标；`fs-enospc-test`、`proc-reap-test` 和 `syscall-fairness-test` 同时覆盖根目录增强目标与 `baseline_ucore/` 普通目标。双目标验证详情见 [../verification.md](../verification.md)。
@@ -88,13 +88,13 @@ bash scripts/run-agent-tests.sh
 
 原始输出不在本文档重复展开，统一保存在 [test-record.md](test-record.md)。每个测试的流程和断言解释见 [testing-details.md](testing-details.md)。
 
-本次 scope 回归核对的固定机制参数如下：PUBLIC=0、SYSTEM=1、动态 workflow>=2，最多4个 active/retiring scope；进程普通槽96、受控保留槽32、每 scope 保留8；metadata/dependency/action/edit/span-prefetch 每 scope 分别112/16/8/8/8。审计物理512、每 scope128，low/high各64，low principal上限16、high active principal上限8；high 满时只能自滚或回收 inactive principal，active principal 互不淘汰。存储策略按完成镜像空闲量核算并把 G/S 持久化到 superblock，每 scope 硬下限320 inode/512 block，SYSTEM 硬下限8 inode/512 block；当前平台镜像实际核算为每 scope342/1195、SYSTEM 64/512，构建日志必须与内核使用同一版本化契约。
+本次 scope 回归核对的固定机制参数如下：PUBLIC=0、SYSTEM=1、动态 workflow>=3，数值 2 保留为安装级 PUBLIC 存储 principal，最多 4 个 active/retiring scope；进程普通槽 96、受控保留槽 32、每 scope 保留 8；metadata/dependency/action/edit/span-prefetch 每 scope 分别 112/16/8/8/8。审计物理 512、每 scope 128，low/high 各 64，low principal 上限 16、high active principal 上限 8；high 满时只能自滚或回收 inactive principal，active principal 互不淘汰。存储策略按完成镜像空闲量核算并把 PUBLIC principal/G/S 持久化到 superblock，挂载从 qmap/dinode 重建 PUBLIC 用量；每 scope 硬下限 320 inode/512 block，SYSTEM 硬下限 8 inode/512 block。当前平台镜像实际核算为每 scope 342/1195、SYSTEM 64/512，构建日志必须与内核使用同一版本化契约。
 
 账本验证不得假设当前可见窗口 sequence 连续：系统 sequence 跨 scope 单调，low/high/principal 分区独立滚动。测试仅对无 gap 的相邻记录核验直接 `prev_hash`，并用 `dropped_records=total_records-visible_records` 解释窗口外记录。非活跃 principal 的旧 high 证据是可观测但有界的历史窗口。
 
 ## 资源安全与内核栈入口
 
-文件系统耗尽复测使用极小 SFS 镜像分别触发 inode、inode cache 和数据块耗尽，要求分配失败被返回给调用者、内核继续运行且释放后资源可复用；AgentOS 配额场景还执行 640 次 PUBLIC 短命 inode 循环，验证版本 sidecar 最终回收后 workflow 编辑版本与内容摘要缓存仍可用：
+文件系统耗尽复测使用极小 SFS 镜像分别触发 inode、inode cache 和数据块耗尽，要求分配失败被返回给调用者、内核继续运行且释放后资源可复用；AgentOS 配额场景还执行 640 次 PUBLIC 短命 inode 循环，验证版本 sidecar 最终回收后 workflow 编辑版本与内容摘要缓存仍可用。两个目标随后各在同一磁盘镜像上连续启动三次 `fspquota_ucore`，先在打开文件 unlink 后强制断电并验证挂载物理回收，再验证 PUBLIC 用量跨完整进程域退出与重挂载保持、删除后才退款：
 
 ```bash
 make fs-enospc-test TOOLPREFIX=riscv64-linux-gnu-
@@ -196,7 +196,7 @@ results/latest/
 
 ## 当前验证状态
 
-本文仍不把当前 `make full-verify` 记录为全绿。各项独立专项不能与聚合入口状态混为一谈：2026-07-21 的 `scripts/run-agent-tests.sh` 15/15、ENOSPC、进程回收和基础 syscall 公平性双目标复测均通过，当时内核栈预算为增强目标 `14144/16384`、baseline `8144/16384`。7 月 22 日最终审查补丁已完成双目标语法、脚本语法和 diff 检查，但受限执行身份没有可用 WSL 发行版，尚待标准 Linux 环境重跑 RISC-V/QEMU 与栈预算。详细命令、关键输出和覆盖边界见 [test-record.md](test-record.md)。
+本文仍不把当前 `make full-verify` 记录为全绿。各项独立专项不能与聚合入口状态混为一谈：2026-07-22 的 `scripts/run-agent-tests.sh` 15/15 已通过；稳定 PUBLIC principal、挂载孤儿清扫与账本重建、以及三启动 `fspquota_ucore` 也已在 AgentOS 与 baseline 的同一 raw 镜像 crash/seed/verify 三轮中动态通过。当前构建期内核栈预算为增强目标 `14432/16384`、baseline `8336/16384`；进程回收与基础 syscall 公平性沿用此前双目标通过记录，last-syscall 终审契约仍按其独立状态复测。详细命令、关键输出和覆盖边界见 [test-record.md](test-record.md)。
 
 ## 当前范围说明
 

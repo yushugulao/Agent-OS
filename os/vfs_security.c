@@ -321,6 +321,7 @@ void vfs_cred_kernel(struct vfs_cred *cred)
 	if (cred == 0)
 		return;
 	cred->scope_id = VFS_SCOPE_NONE;
+	cred->storage_principal_id = FS_OWNER_SYSTEM;
 	cred->capabilities = ~0ULL;
 	cred->kernel = 1;
 }
@@ -330,11 +331,14 @@ static int vfs_cred_valid(const struct vfs_cred *cred)
 	if (cred == 0)
 		return 0;
 	if (cred->kernel)
-		return cred->scope_id == VFS_SCOPE_NONE;
+		return cred->scope_id == VFS_SCOPE_NONE &&
+		       cred->storage_principal_id == FS_OWNER_SYSTEM;
 	if (cred->scope_id == VFS_SCOPE_NONE)
-		return cred->capabilities == 0;
+		return cred->capabilities == 0 &&
+		       cred->storage_principal_id == FS_OWNER_PUBLIC;
 	return cred->scope_id >= VFS_SCOPE_FIRST_DYNAMIC &&
 	       cred->scope_id < FS_OWNER_SCOPE_FLAG &&
+	       cred->storage_principal_id == cred->scope_id &&
 	       (cred->capabilities & ~VFS_CAP_WORKFLOW) == 0 &&
 	       vfs_scope_active(cred->scope_id);
 }
@@ -344,6 +348,13 @@ void vfs_cred_from_proc(const struct proc *p, struct vfs_cred *cred)
 	if (cred == 0)
 		return;
 	cred->scope_id = p ? p->vfs_scope_id : VFS_SCOPE_NONE;
+	// A provisional boot/workflow principal is not an effective credential.
+	// Until the trusted image install activates its scope, the process has only
+	// PUBLIC filesystem authority.  This also lets delegated workers resolve
+	// their sealed image without exposing the pending workflow principal.
+	cred->storage_principal_id = p == 0 ? FS_OWNER_NONE :
+		p->vfs_scope_id >= VFS_SCOPE_FIRST_DYNAMIC ?
+		p->storage_principal_id : FS_OWNER_PUBLIC;
 	cred->capabilities = p ? p->vfs_effective_caps : 0;
 	cred->kernel = 0;
 }
@@ -389,6 +400,15 @@ void vfs_proc_reset(struct proc *p)
 		vfs_scope_reclaim_complete(pending_scope_id);
 }
 
+// Once an image is installed without a workflow credential, storage charging
+// must follow the stable PUBLIC tenant rather than a provisional workflow ID.
+void vfs_proc_drop_to_public(struct proc *p)
+{
+	vfs_proc_reset(p);
+	if (p != 0)
+		p->storage_principal_id = FS_OWNER_PUBLIC;
+}
+
 int vfs_proc_spawn_scope(const struct proc *parent, struct proc *child,
 			 enum vfs_spawn_scope_mode mode)
 {
@@ -398,14 +418,14 @@ int vfs_proc_spawn_scope(const struct proc *parent, struct proc *child,
 	if (mode == VFS_SPAWN_SCOPE_DROP)
 		return 0;
 	if (parent == 0 || parent->vfs_scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
-	    parent->vfs_scope_id != parent->storage_domain_id)
+	    parent->vfs_scope_id != parent->storage_principal_id)
 		return -1;
 	if (mode == VFS_SPAWN_SCOPE_FRESH) {
-		if (child->storage_domain_id < VFS_SCOPE_FIRST_DYNAMIC)
+		if (child->storage_principal_id < VFS_SCOPE_FIRST_DYNAMIC)
 			return -1;
-		child->vfs_scope_id = child->storage_domain_id;
+		child->vfs_scope_id = child->storage_principal_id;
 	} else if (mode == VFS_SPAWN_SCOPE_INHERIT) {
-		if (child->storage_domain_id != parent->storage_domain_id)
+		if (child->storage_principal_id != parent->storage_principal_id)
 			return -1;
 		child->vfs_scope_id = parent->vfs_scope_id;
 	} else {
@@ -475,8 +495,8 @@ int vfs_proc_delegate_exec(const struct proc *parent, struct proc *child,
 
 	if (parent == 0 || child == 0 || image == 0 ||
 	    parent->vfs_scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
-	    parent->vfs_scope_id != parent->storage_domain_id ||
-	    child->storage_domain_id != parent->storage_domain_id ||
+	    parent->vfs_scope_id != parent->storage_principal_id ||
+	    child->storage_principal_id != parent->storage_principal_id ||
 	    !vfs_inode_label_valid(image) ||
 	    image->vfs_policy != VFS_POLICY_WORKFLOW ||
 	    image->vfs_scope_id != VFS_SCOPE_SYSTEM ||
@@ -532,7 +552,7 @@ void vfs_proc_install_image(struct proc *p, const struct user_image *image,
 	uint64 ceiling;
 
 	if (p == 0 || image == 0) {
-		vfs_proc_reset(p);
+		vfs_proc_drop_to_public(p);
 		return;
 	}
 	ceiling = vfs_exec_profile_capabilities(image->vfs_exec_profile);
@@ -542,20 +562,20 @@ void vfs_proc_install_image(struct proc *p, const struct user_image *image,
 
 		if (!vfs_image_domain_safe(image) ||
 		    (image->exec_flags & required) != required) {
-			vfs_proc_reset(p);
+			vfs_proc_drop_to_public(p);
 			return;
 		}
-		if (p->storage_domain_id < VFS_SCOPE_FIRST_DYNAMIC) {
-			vfs_proc_reset(p);
+		if (p->storage_principal_id < VFS_SCOPE_FIRST_DYNAMIC) {
+			vfs_proc_drop_to_public(p);
 			return;
 		}
-		p->vfs_scope_id = p->storage_domain_id;
+		p->vfs_scope_id = p->storage_principal_id;
 		if (vfs_scope_acquire(p->vfs_scope_id) < 0) {
-			vfs_proc_reset(p);
+			vfs_proc_drop_to_public(p);
 			return;
 		}
 		if (vfs_scope_preserve_on_retire(p->vfs_scope_id) < 0) {
-			vfs_proc_reset(p);
+			vfs_proc_drop_to_public(p);
 			return;
 		}
 		p->vfs_effective_caps = ceiling;
@@ -574,9 +594,9 @@ void vfs_proc_install_image(struct proc *p, const struct user_image *image,
 
 		if (!matches || !vfs_image_domain_safe(image) ||
 		    pending_scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
-		    pending_scope_id != p->storage_domain_id ||
+		    pending_scope_id != p->storage_principal_id ||
 		    p->vfs_scope_id != VFS_SCOPE_NONE || effective_caps == 0) {
-			vfs_proc_reset(p);
+			vfs_proc_drop_to_public(p);
 			return;
 		}
 		p->vfs_scope_id = pending_scope_id;
@@ -592,13 +612,13 @@ void vfs_proc_install_image(struct proc *p, const struct user_image *image,
 	}
 	if (p->is_agent) {
 		if (!vfs_agent_image_allowed(p, image)) {
-			vfs_proc_reset(p);
+			vfs_proc_drop_to_public(p);
 			return;
 		}
 		p->vfs_effective_caps = p->vfs_inheritable_caps & ceiling;
 		p->vfs_inheritable_caps &= ceiling;
 		if (p->vfs_effective_caps == 0) {
-			vfs_proc_reset(p);
+			vfs_proc_drop_to_public(p);
 			return;
 		}
 		vfs_proc_bind_image(p, image);
@@ -606,13 +626,13 @@ void vfs_proc_install_image(struct proc *p, const struct user_image *image,
 	}
 	if (p->vfs_scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
 	    !vfs_image_domain_safe(image) || !vfs_proc_image_bound(p, image)) {
-		vfs_proc_reset(p);
+		vfs_proc_drop_to_public(p);
 		return;
 	}
 	p->vfs_effective_caps = p->vfs_inheritable_caps & ceiling;
 	p->vfs_inheritable_caps &= ceiling;
 	if (p->vfs_effective_caps == 0)
-		vfs_proc_reset(p);
+		vfs_proc_drop_to_public(p);
 }
 
 static int vfs_label_shape_valid(struct inode *ip)
@@ -648,7 +668,7 @@ static int vfs_label_shape_valid(struct inode *ip)
 	case VFS_POLICY_PUBLIC:
 		return flag == VFS_LABEL_F_PUBLIC &&
 		       ip->vfs_scope_id == VFS_SCOPE_NONE &&
-		       !FS_OWNER_IS_SCOPE(ip->fs_owner_domain) &&
+		       FS_OWNER_IS_PUBLIC_OBJECT(ip->fs_owner_domain) &&
 		       ip->vfs_exec_profile == VFS_EXEC_PROFILE_NONE;
 	case VFS_POLICY_WORKFLOW:
 		if (flag != VFS_LABEL_F_PROTECTED ||
@@ -812,7 +832,7 @@ int vfs_inode_init_label(struct inode *ip, const struct vfs_cred *cred,
 	     (cred->scope_id >= FS_OWNER_SCOPE_FLAG ||
 	      ip->fs_owner_domain != FS_OWNER_SCOPE(cred->scope_id))) ||
 	    (policy == VFS_POLICY_PUBLIC &&
-	     FS_OWNER_IS_SCOPE(ip->fs_owner_domain)) ||
+	     !FS_OWNER_IS_PUBLIC_OBJECT(ip->fs_owner_domain)) ||
 	    (policy == VFS_POLICY_KERNEL_PRIVATE &&
 	     ip->fs_owner_domain != FS_OWNER_SYSTEM))
 		return -1;

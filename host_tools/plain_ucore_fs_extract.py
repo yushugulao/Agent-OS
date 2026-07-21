@@ -18,8 +18,12 @@ FSMAGIC_VFS_POLICY = 0x10203042
 FSMAGIC_BASELINE_QUOTA = 0x10203043
 FSMAGIC_AGENT_QUOTA = 0x10203044
 FSMAGIC_SCOPED_WORKFLOW = 0x10203045
-FS_STORAGE_POLICY_VERSION = 1
+FSMAGIC_BASELINE_PRINCIPAL = 0x10203046
+FSMAGIC_AGENT_PRINCIPAL = 0x10203047
+FS_STORAGE_POLICY_VERSION_LEGACY = 1
+FS_STORAGE_POLICY_VERSION = 2
 FS_WORKFLOW_SCOPE_SLOTS = 4
+FS_PUBLIC_PRINCIPAL_ID = 2
 ROOTINO = 1
 NDIRECT = 12
 NINDIRECT = BSIZE // 4
@@ -33,16 +37,29 @@ DINODE_SIZE_BY_MAGIC = {
     FSMAGIC_BASELINE_QUOTA: DINODE_SIZE_LEGACY,
     FSMAGIC_AGENT_QUOTA: DINODE_SIZE_EXEC_POLICY,
     FSMAGIC_SCOPED_WORKFLOW: DINODE_SIZE_EXEC_POLICY,
+    FSMAGIC_BASELINE_PRINCIPAL: DINODE_SIZE_LEGACY,
+    FSMAGIC_AGENT_PRINCIPAL: DINODE_SIZE_EXEC_POLICY,
 }
-QUOTA_MAGICS = {
+BASELINE_QUOTA_MAGICS = {
     FSMAGIC_BASELINE_QUOTA,
+    FSMAGIC_BASELINE_PRINCIPAL,
+}
+AGENT_QUOTA_MAGICS = {
     FSMAGIC_AGENT_QUOTA,
     FSMAGIC_SCOPED_WORKFLOW,
+    FSMAGIC_AGENT_PRINCIPAL,
+}
+SCOPED_MAGICS = {
+    FSMAGIC_SCOPED_WORKFLOW,
+    FSMAGIC_AGENT_PRINCIPAL,
+}
+QUOTA_MAGICS = {
+    *BASELINE_QUOTA_MAGICS,
+    *AGENT_QUOTA_MAGICS,
 }
 VFS_POLICY_MAGICS = {
     FSMAGIC_VFS_POLICY,
-    FSMAGIC_AGENT_QUOTA,
-    FSMAGIC_SCOPED_WORKFLOW,
+    *AGENT_QUOTA_MAGICS,
 }
 DIRSIZ = 14
 T_FILE = 2
@@ -67,10 +84,11 @@ VFS_LABEL_F_KNOWN = 0x1F
 # Magics through 0x10203044 stored a two-value domain in this word.
 VFS_DOMAIN_PUBLIC = 0
 VFS_DOMAIN_WORKFLOW = 1
-# Magic 0x10203045 stores a namespace scope identifier in the same word.
+# Scoped formats store a namespace scope identifier in the same word.
 VFS_SCOPE_NONE = 0
 VFS_SCOPE_SYSTEM = 1
-VFS_SCOPE_FIRST_DYNAMIC = 2
+VFS_SCOPE_FIRST_DYNAMIC_LEGACY = 2
+VFS_SCOPE_FIRST_DYNAMIC = 3
 VFS_POLICY_PUBLIC = 1
 VFS_POLICY_WORKFLOW = 2
 VFS_POLICY_KERNEL_PRIVATE = 3
@@ -83,12 +101,17 @@ VFS_EXEC_PROFILE_WORKFLOW = 1
 VFS_EXEC_PROFILE_CONTENT_READ = 2
 VFS_EXEC_PROFILE_ARTIFACT_WRITE = 3
 FS_OWNER_VERSION_LEGACY = 1
-FS_OWNER_VERSION = 2
+FS_OWNER_VERSION_SCOPED_LEGACY = 2
+FS_OWNER_VERSION = 3
 FS_OWNER_NONE = 0
 FS_OWNER_SYSTEM = 1
-FS_OWNER_FIRST_DYNAMIC = 2
+FS_OWNER_PUBLIC = FS_PUBLIC_PRINCIPAL_ID
 FS_OWNER_SCOPE_FLAG = 0x80000000
 FS_OWNER_ID_MASK = FS_OWNER_SCOPE_FLAG - 1
+
+
+def fs_owner_is_public_object(owner_domain: int) -> bool:
+    return owner_domain in {FS_OWNER_SYSTEM, FS_OWNER_PUBLIC}
 
 
 @dataclass
@@ -108,6 +131,7 @@ class Superblock:
     workflow_inode_guarantee: int | None = None
     system_block_reserve: int | None = None
     system_inode_reserve: int | None = None
+    public_principal_id: int | None = None
     storage_policy_checksum: int | None = None
 
     @property
@@ -131,6 +155,29 @@ def u16(data: bytes, offset: int) -> int:
 
 
 def storage_policy_checksum(
+    version: int,
+    scope_slots: int,
+    public_principal: int,
+    workflow_blocks: int,
+    workflow_inodes: int,
+    system_blocks: int,
+    system_inodes: int,
+) -> int:
+    value = 2166136261
+    for item in (
+        version,
+        scope_slots,
+        public_principal,
+        workflow_blocks,
+        workflow_inodes,
+        system_blocks,
+        system_inodes,
+    ):
+        value = ((value ^ item) * 16777619) & 0xFFFFFFFF
+    return value
+
+
+def legacy_storage_policy_checksum(
     version: int,
     scope_slots: int,
     workflow_blocks: int,
@@ -178,6 +225,7 @@ def fs_owner_valid(
     owner_domain: int,
     owner_version: int,
     expected_version: int = FS_OWNER_VERSION,
+    first_dynamic: int = VFS_SCOPE_FIRST_DYNAMIC,
 ) -> bool:
     if file_type == 0:
         return owner_domain == FS_OWNER_NONE and owner_version == 0
@@ -185,7 +233,7 @@ def fs_owner_valid(
         return False
     if fs_owner_is_scope(owner_domain):
         scope_id = fs_owner_scope_id(owner_domain)
-        return FS_OWNER_FIRST_DYNAMIC <= scope_id < FS_OWNER_SCOPE_FLAG
+        return first_dynamic <= scope_id < FS_OWNER_SCOPE_FLAG
     return owner_domain < FS_OWNER_SCOPE_FLAG
 
 
@@ -212,15 +260,17 @@ def validate_vfs_label(
         fs_owner_version,
     ) = words
 
-    quota_format = fs_magic in {
-        FSMAGIC_AGENT_QUOTA,
-        FSMAGIC_SCOPED_WORKFLOW,
-    }
-    scoped_format = fs_magic == FSMAGIC_SCOPED_WORKFLOW
+    quota_format = fs_magic in AGENT_QUOTA_MAGICS
+    scoped_format = fs_magic in SCOPED_MAGICS
+    current_format = fs_magic == FSMAGIC_AGENT_PRINCIPAL
     if scoped_format:
         expected_version = VFS_LABEL_VERSION
         expected_generation = VFS_POLICY_GENERATION
-        expected_owner_version = FS_OWNER_VERSION
+        expected_owner_version = (
+            FS_OWNER_VERSION
+            if current_format
+            else FS_OWNER_VERSION_SCOPED_LEGACY
+        )
     elif quota_format:
         expected_version = VFS_LABEL_VERSION_QUOTA
         expected_generation = VFS_POLICY_GENERATION_LEGACY
@@ -234,6 +284,11 @@ def validate_vfs_label(
         fs_owner_domain,
         fs_owner_version,
         expected_owner_version,
+        (
+            VFS_SCOPE_FIRST_DYNAMIC
+            if current_format
+            else VFS_SCOPE_FIRST_DYNAMIC_LEGACY
+        ),
     )
 
     if (
@@ -270,7 +325,11 @@ def validate_vfs_label(
             valid_shape = (
                 flags == VFS_LABEL_F_PUBLIC
                 and domain == VFS_SCOPE_NONE
-                and not fs_owner_is_scope(fs_owner_domain)
+                and (
+                    fs_owner_is_public_object(fs_owner_domain)
+                    if current_format
+                    else not fs_owner_is_scope(fs_owner_domain)
+                )
                 and exec_profile == VFS_EXEC_PROFILE_NONE
             )
         elif policy == VFS_POLICY_WORKFLOW:
@@ -288,7 +347,12 @@ def validate_vfs_label(
                 )
             elif (
                 flags == VFS_LABEL_F_PROTECTED
-                and VFS_SCOPE_FIRST_DYNAMIC <= domain < FS_OWNER_SCOPE_FLAG
+                and (
+                    VFS_SCOPE_FIRST_DYNAMIC
+                    if current_format
+                    else VFS_SCOPE_FIRST_DYNAMIC_LEGACY
+                )
+                <= domain < FS_OWNER_SCOPE_FLAG
             ):
                 valid_shape = (
                     fs_owner_is_scope(fs_owner_domain)
@@ -370,14 +434,29 @@ def read_superblock(image: bytes) -> Superblock:
     bmapstart = u32(image, offset + 20)
     qmapstart = u32(image, offset + 24) if magic in QUOTA_MAGICS else None
     datastart = u32(image, offset + 28) if magic in QUOTA_MAGICS else None
-    scoped_format = magic == FSMAGIC_SCOPED_WORKFLOW
+    scoped_format = magic in SCOPED_MAGICS
+    current_agent_format = magic == FSMAGIC_AGENT_PRINCIPAL
+    current_baseline_format = magic == FSMAGIC_BASELINE_PRINCIPAL
     storage_policy_version = u32(image, offset + 32) if scoped_format else None
     storage_scope_slots = u32(image, offset + 36) if scoped_format else None
     workflow_block_guarantee = u32(image, offset + 40) if scoped_format else None
     workflow_inode_guarantee = u32(image, offset + 44) if scoped_format else None
     system_block_reserve = u32(image, offset + 48) if scoped_format else None
     system_inode_reserve = u32(image, offset + 52) if scoped_format else None
-    policy_checksum = u32(image, offset + 56) if scoped_format else None
+    public_principal_id = (
+        u32(image, offset + 56)
+        if current_agent_format
+        else u32(image, offset + 32)
+        if current_baseline_format
+        else None
+    )
+    policy_checksum = (
+        u32(image, offset + 60)
+        if current_agent_format
+        else u32(image, offset + 56)
+        if scoped_format
+        else None
+    )
     sb = Superblock(
         magic=magic,
         size=size,
@@ -394,6 +473,7 @@ def read_superblock(image: bytes) -> Superblock:
         workflow_inode_guarantee=workflow_inode_guarantee,
         system_block_reserve=system_block_reserve,
         system_inode_reserve=system_inode_reserve,
+        public_principal_id=public_principal_id,
         storage_policy_checksum=policy_checksum,
     )
     if size < 1 or len(image) < size * BSIZE:
@@ -424,17 +504,39 @@ def read_superblock(image: bytes) -> Superblock:
         assert system_inode_reserve is not None
         assert policy_checksum is not None
         total_inodes = ninodes - 1
-        expected_checksum = storage_policy_checksum(
-            storage_policy_version,
-            storage_scope_slots,
-            workflow_block_guarantee,
-            workflow_inode_guarantee,
-            system_block_reserve,
-            system_inode_reserve,
-        )
+        if current_agent_format:
+            assert public_principal_id is not None
+            expected_checksum = storage_policy_checksum(
+                storage_policy_version,
+                storage_scope_slots,
+                public_principal_id,
+                workflow_block_guarantee,
+                workflow_inode_guarantee,
+                system_block_reserve,
+                system_inode_reserve,
+            )
+        else:
+            expected_checksum = legacy_storage_policy_checksum(
+                storage_policy_version,
+                storage_scope_slots,
+                workflow_block_guarantee,
+                workflow_inode_guarantee,
+                system_block_reserve,
+                system_inode_reserve,
+            )
         valid_contract = (
-            storage_policy_version == FS_STORAGE_POLICY_VERSION
+            storage_policy_version
+            == (
+                FS_STORAGE_POLICY_VERSION
+                if current_agent_format
+                else FS_STORAGE_POLICY_VERSION_LEGACY
+            )
             and storage_scope_slots == FS_WORKFLOW_SCOPE_SLOTS
+            and (
+                public_principal_id == FS_PUBLIC_PRINCIPAL_ID
+                if current_agent_format
+                else True
+            )
             and workflow_block_guarantee > 0
             and workflow_inode_guarantee > 0
             and system_block_reserve > 0
@@ -449,6 +551,11 @@ def read_superblock(image: bytes) -> Superblock:
         )
         if not valid_contract:
             raise ValueError("invalid scoped storage policy contract")
+    if (
+        current_baseline_format
+        and public_principal_id != FS_PUBLIC_PRINCIPAL_ID
+    ):
+        raise ValueError("invalid baseline storage principal contract")
     return sb
 
 
@@ -465,20 +572,31 @@ def read_inode(image: bytes, sb: Superblock, inum: int) -> Dinode:
     vfs_scope_id = None
     fs_owner_domain = None
     fs_owner_version = None
-    if sb.magic == FSMAGIC_BASELINE_QUOTA:
+    if sb.magic in BASELINE_QUOTA_MAGICS:
         fs_owner_version = u16(raw, 2)
         fs_owner_domain = u32(raw, 4)
-        if not fs_owner_valid(
-            file_type,
-            fs_owner_domain,
-            fs_owner_version,
-            FS_OWNER_VERSION_LEGACY,
-        ):
+        if sb.magic == FSMAGIC_BASELINE_PRINCIPAL:
+            owner_valid = (
+                (file_type == 0 and fs_owner_domain == FS_OWNER_NONE
+                 and fs_owner_version == 0)
+                or (file_type != 0
+                    and fs_owner_domain in {FS_OWNER_SYSTEM, FS_OWNER_PUBLIC}
+                    and fs_owner_version == FS_OWNER_VERSION_SCOPED_LEGACY)
+            )
+        else:
+            owner_valid = fs_owner_valid(
+                file_type,
+                fs_owner_domain,
+                fs_owner_version,
+                FS_OWNER_VERSION_LEGACY,
+                VFS_SCOPE_FIRST_DYNAMIC_LEGACY,
+            )
+        if not owner_valid:
             raise ValueError(f"invalid filesystem owner on inode {inum}")
     if sb.magic in VFS_POLICY_MAGICS:
         vfs_policy = validate_vfs_label(raw, inum, file_type, sb.magic)
         vfs_scope_id = u32(raw, 96)
-        if sb.magic in {FSMAGIC_AGENT_QUOTA, FSMAGIC_SCOPED_WORKFLOW}:
+        if sb.magic in AGENT_QUOTA_MAGICS:
             fs_owner_domain = u32(raw, 116)
             fs_owner_version = u32(raw, 120)
     addrs = [u32(raw, 12 + i * 4) for i in range(NDIRECT + 1)]
@@ -643,7 +761,7 @@ def extract_state_files(
         if sb.magic in VFS_POLICY_MAGICS:
             entry_scope_id = (
                 inode.vfs_scope_id
-                if sb.magic == FSMAGIC_SCOPED_WORKFLOW
+                if sb.magic in SCOPED_MAGICS
                 and inode.vfs_scope_id is not None
                 else VFS_SCOPE_SYSTEM
             )
@@ -663,7 +781,7 @@ def extract_state_files(
         validate_state_name(short_name)
         full_name = validate_state_name(name_map.get(short_name, short_name))
         state_entries.append((entry_scope_id, full_name, data))
-    scoped_format = sb.magic == FSMAGIC_SCOPED_WORKFLOW
+    scoped_format = sb.magic in SCOPED_MAGICS
     available_scope_ids = sorted(
         {entry_scope for entry_scope, _, _ in state_entries}
     ) if scoped_format else []
@@ -677,7 +795,12 @@ def extract_state_files(
                 )
             selected_scope_id = available_scope_ids[0]
         elif scope_id is not None:
-            if scope_id < VFS_SCOPE_FIRST_DYNAMIC:
+            first_dynamic = (
+                VFS_SCOPE_FIRST_DYNAMIC
+                if sb.magic == FSMAGIC_AGENT_PRINCIPAL
+                else VFS_SCOPE_FIRST_DYNAMIC_LEGACY
+            )
+            if scope_id < first_dynamic:
                 raise ValueError(f"invalid workflow scope: {scope_id}")
             if scope_id not in available_scope_ids:
                 raise ValueError(

@@ -7,7 +7,9 @@
 #define FS_WORKFLOW_SCOPE_SLOTS 4U
 #define FS_WORKFLOW_MAX_FREE_NUMERATOR 3U
 #define FS_WORKFLOW_MAX_FREE_DENOMINATOR 4U
-#define FS_STORAGE_POLICY_VERSION 1U
+#define FS_PUBLIC_PRINCIPAL_ID 2U
+#define FS_WORKFLOW_SCOPE_FIRST_ID (FS_PUBLIC_PRINCIPAL_ID + 1U)
+#define FS_STORAGE_POLICY_VERSION 2U
 
 #ifndef FS_STORAGE_TINY_TEST_PROFILE
 #define FS_STORAGE_TINY_TEST_PROFILE 0
@@ -109,13 +111,15 @@ fs_policy_workflow_guarantee(unsigned int configured, unsigned int total,
 
 static inline unsigned int
 fs_policy_contract_checksum(unsigned int version, unsigned int scope_slots,
+			    unsigned int public_principal,
 			    unsigned int workflow_blocks,
 			    unsigned int workflow_inodes,
 			    unsigned int system_blocks,
 			    unsigned int system_inodes)
 {
 	unsigned int values[] = {
-		version, scope_slots, workflow_blocks, workflow_inodes,
+		version, scope_slots, public_principal, workflow_blocks,
+		workflow_inodes,
 		system_blocks, system_inodes,
 	};
 	unsigned int hash = 2166136261U;
@@ -132,6 +136,7 @@ fs_policy_contract_geometry_valid(unsigned int total_blocks,
 				  unsigned int total_inodes,
 				  unsigned int version,
 				  unsigned int scope_slots,
+				  unsigned int public_principal,
 				  unsigned int workflow_blocks,
 				  unsigned int workflow_inodes,
 				  unsigned int system_blocks,
@@ -140,6 +145,7 @@ fs_policy_contract_geometry_valid(unsigned int total_blocks,
 {
 	if (version != FS_STORAGE_POLICY_VERSION ||
 	    scope_slots != FS_WORKFLOW_SCOPE_SLOTS ||
+	    public_principal != FS_PUBLIC_PRINCIPAL_ID ||
 	    workflow_blocks < FS_WORKFLOW_BLOCK_MIN_PER_SCOPE ||
 	    workflow_inodes < FS_WORKFLOW_INODE_MIN_PER_SCOPE ||
 	    system_blocks < FS_SYSTEM_BLOCK_MIN_RESERVE ||
@@ -151,7 +157,8 @@ fs_policy_contract_geometry_valid(unsigned int total_blocks,
 	    system_inodes > total_inodes - workflow_inodes * scope_slots)
 		return 0;
 	return checksum == fs_policy_contract_checksum(
-		version, scope_slots, workflow_blocks, workflow_inodes,
+		version, scope_slots, public_principal, workflow_blocks,
+		workflow_inodes,
 		system_blocks, system_inodes);
 }
 

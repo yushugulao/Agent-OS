@@ -15,9 +15,9 @@
 #define PROC_RESERVED_SLOTS (NPROC / 8)
 #define PROC_ORDINARY_SLOTS (NPROC - PROC_RESERVED_SLOTS)
 
-#define PROC_STORAGE_COOKIE_FREE   0U
-#define PROC_STORAGE_COOKIE_SYSTEM 1U
-#define PROC_STORAGE_COOKIE_MIN    2U
+#define PROC_STORAGE_PRINCIPAL_NONE   0U
+#define PROC_STORAGE_PRINCIPAL_SYSTEM 1U
+#define PROC_STORAGE_PRINCIPAL_PUBLIC 2U
 
 struct file;
 struct proc;
@@ -100,7 +100,7 @@ struct proc {
 	int resource_domain_id;
 	int resource_slot_reserved;
 	int resource_domain_admin;
-	uint storage_cookie;
+	uint storage_principal_id;
 	uint64 exit_code;
 	int exit_requested;
 	int exit_owner_tid;
@@ -130,11 +130,7 @@ struct thread *curr_thread(void);
 int proc_thread_exit_requested(void);
 int proc_vm_snapshot_begin(struct proc *);
 void proc_vm_snapshot_end(struct proc *);
-uint proc_storage_cookie(const struct proc *);
-void proc_storage_set_cookie_floor(uint);
-void proc_storage_set_limits(uint, uint);
-int proc_storage_reserve(uint, uint, uint);
-void proc_storage_release(uint, uint, uint);
+uint proc_storage_principal(const struct proc *);
 void exit(int);
 void proc_init();
 void proc_mapstacks(pagetable_t);

@@ -118,7 +118,7 @@ int fileopen(char *path, uint64 omode)
 	int fd = -1;
 	struct file *f = 0;
 	struct inode *ip = 0;
-	uint owner = proc_storage_cookie(curr_proc());
+	uint owner = proc_storage_principal(curr_proc());
 
 	// Reserve the process-local descriptor before any operation that may
 	// reschedule. The sentinel is neither usable nor inherited by fork().
@@ -139,8 +139,9 @@ int fileopen(char *path, uint64 omode)
 	}
 	if (ip->type != T_FILE)
 		goto fail;
-	if ((omode & O_TRUNC) && ip->type == T_FILE)
-		itrunc(ip);
+	if ((omode & O_TRUNC) && ip->type == T_FILE &&
+	    itrunc(ip, owner) < 0)
+		goto fail;
 	// only support FD_INODE
 	f->type = FD_INODE;
 	f->off = 0;
@@ -163,7 +164,7 @@ int fileunlink(char *path)
 {
 	struct inode *dp;
 	struct inode *ip;
-	uint owner = proc_storage_cookie(curr_proc());
+	uint owner = proc_storage_principal(curr_proc());
 
 	dp = root_dir();
 	if (dp == 0)
@@ -209,7 +210,7 @@ uint64 inodewrite(struct file *f, uint64 va, uint64 len)
 		if (checked_user_offset(va, done, 1, &user_addr) < 0)
 			return done != 0 ? done : (uint64)-1;
 		r = writei(f->ip, 1, user_addr, off, chunk,
-			   proc_storage_cookie(curr_proc()));
+			   proc_storage_principal(curr_proc()));
 		if (r < 0)
 			return done != 0 ? done : (uint64)-1;
 		if (r == 0)

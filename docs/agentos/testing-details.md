@@ -592,11 +592,15 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 
 ## 14. 文件系统 ENOSPC 复测
 
-入口为 `make fs-enospc-test` 或 `bash scripts/run-fs-enospc-tests.sh`。脚本先编译运行共享容量策略单测，核对当前平台精确 G/S、superblock 契约 checksum、SYSTEM 信用耗尽后的重启条件和运行期不足拒绝；随后构造无法覆盖 `S+4G` 的镜像，要求 mkfs 以明确诊断拒绝。之后脚本构建极小文件系统镜像，在 AgentOS-uCore 与 `baseline_ucore/` 上分别运行 `fsenospc_ucore`，依次耗尽磁盘 inode、内存 inode cache 和数据块；最后只在 AgentOS-uCore 上以“低域上限”和“全局保留水位”两种配置运行 `fsquota_ucore`。
+入口为 `make fs-enospc-test` 或 `bash scripts/run-fs-enospc-tests.sh`。脚本先编译运行共享容量策略单测，核对当前平台精确 G/S、superblock 契约 checksum、稳定 PUBLIC principal、SYSTEM 信用耗尽后的重启条件和运行期不足拒绝；随后构造无法覆盖 `S+4G` 的镜像，要求 mkfs 以明确诊断拒绝。baseline mkfs 还分别构造空根目录和恰好 64 个目录项的块对齐根目录，直接核对 dinode size 与映射块一致，防止挂载清扫把构建期目录空洞放大为启动 panic。之后脚本构建极小文件系统镜像，在 AgentOS-uCore 与 `baseline_ucore/` 上分别运行 `fsenospc_ucore`，依次耗尽磁盘 inode、内存 inode cache 和数据块；AgentOS-uCore 还以“低主体上限”和“全局保留水位”两种配置运行 `fsquota_ucore`。最后，两个目标都运行 `fspquota_ucore` 的 crash/seed/verify 三启动持久主体回归。
 
-测试要求完整失败返回 `-1`、部分写入返回短写长度、内核不 panic，并在释放资源后再次分配成功。通用目标的程序标记包括 `inode exhaustion survived`、`inode cache exhaustion survived`、`block exhaustion survived` 和 `parent passed`；所有通用与 Agent 配额场景通过后，脚本输出 `[fs-enospc] generic targets and Agent quota cases passed`。
+测试要求完整失败返回 `-1`、部分写入返回短写长度、内核不 panic，并在释放资源后再次分配成功。通用目标的程序标记包括 `inode exhaustion survived`、`inode cache exhaustion survived`、`block exhaustion survived` 和 `parent passed`；所有通用、持久主体与 Agent 配额场景通过后，脚本输出 `[fs-enospc] generic, persistent principal, and Agent quota cases passed`。
 
 `fsquota_ucore` 的 PUBLIC 子进程先循环 640 次创建文件、在描述符仍打开时删除目录项、继续写入，再关闭最后引用。循环次数严格超过旧全局版本表的 512 槽容量，既覆盖“unlink 不是最终生命期”的语义，也迫使每个 incarnation 走最终 inode/sidecar 回收。随后测试继续施加块和 inode 压力，并由 workflow orchestrator 创建工件、提交编辑版本、连续读取两次内容摘要以确认 digest cache 命中。关键标记为 `public_version_churn=1 cycles=640`、`workflow_version_reserve=1` 和 `content_version_reserve=1`；它们与既有 `workflow_reserve=1`、`kernel_metadata_reserve=1` 一起证明 PUBLIC 域不能耗尽工作流的存储或版本状态。这里的 QEMU 用例证明分配水位和回收行为；四个 scope 的数值容量契约由共享策略单测、mkfs 负例、版本化 superblock 校验和 admission 检查共同证明，不把单个 `scope_storage_quota` 标记夸大为全盘块压力证明。
+
+`fspquota_ucore` 专门区分“短命进程资源域”和“持久存储主体”。第一次启动先持久化 phase 文件，再创建 1 block PUBLIC 文件、删除目录项但保持描述符打开；输出 `crash_orphan_ready=1` 后 runner 直接终止 QEMU。第二次挂载必须在计费前回收该不可达 inode/block，否则后续精确上限断言无法完成。为避免“只忽略计费但不释放物理状态”的假通过，runner 还保存 mkfs 基线并在 seed 后直接解析 raw image，要求 bitmap 分配与非 FREE qmap owner 都只比基线增加 4 个数据块，dinode 只增加 7 个。镜像还带入一个 SYSTEM 赞助、可变 PUBLIC 的 13 数据块文件；PUBLIC 子进程首次覆盖它时，内核必须把 inode、12 个直接块、间接索引块和第 13 个数据块整体接管，共计 14 block/1 inode。子进程再创建其余对象，恰好占满 18 block/8 inode 上限后完整退出；init 只在回收该域后输出 `sponsored_object_charged=1 blocks=14` 和 `durable_fixture=1 blocks=18 inodes=8 owner_exited=1`，runner 再次关闭 QEMU但保留镜像。第三次以同一 kernel/镜像启动时，新 PUBLIC 域先读取旧内容，再验证额外 block 与 inode 都被拒绝；通过 `O_TRUNC` 释放一个 block、通过 `unlink` 释放一个 inode并分别复用，之后再次增长仍被拒绝。该域退出后，另一个新域仍被旧文件计费；最终清理持久 fixture 后才能重新分配。顺序标记为 `crash_orphan_ready=1`、`reboot_charge_persisted=1`、`deletion_reuse=1`、`relaunch_charge_persisted=1 launches=2`、`cleanup_reuse=1` 和 `parent passed`。AgentOS 与 baseline 使用相同用户程序和三阶段 runner，因此这个回归不依赖 Agent 角色或某个 PID 特判。
+
+该测试对应的磁盘契约将 PUBLIC principal 写入 superblock，并提升策略/owner 格式版本。挂载时从 qmap 和 dinode 分别重建 block/inode 用量；缺少该字段的旧镜像会因版本或布局不匹配被明确拒绝，而不是以空账本继续运行。
 
 该入口没有被 `make full-verify` 串联，完整验收时必须单独执行。
 
@@ -642,14 +646,14 @@ bash scripts/run-agent-tests.sh
 测试流程：
 
 1. 可信 bootstrap factory 对命令/回复 pipe 的指定端点调用 syscall 542，再分别创建 scope A/B；未委派 pipe 和普通 fd 不跨边界，一次性票据在边界尝试后消失。
-2. 两个根 Agent 的 `filesystem_domain` 都不小于2且彼此不同；同 scope `agent_create_role()` 子 Agent 继承 scope，scope 内 orchestrator 不能再调用 workflow factory。
+2. 两个根 Agent 的 `filesystem_domain` 都不小于 3 且彼此不同；数值 2 保留为稳定 PUBLIC 存储 principal。同 scope `agent_create_role()` 子 Agent 继承 scope，scope 内 orchestrator 不能再调用 workflow factory。
 3. A/B 创建同名文件和相同 metadata/fid，各自只能查询、打开和读取自己的对象。
 4. B 创建不带 `PERSIST` 的内存态 metadata，A 强制重载自己的 bank 记录后，B 的记录仍可查询，证明 `file_meta_init` 不能跨 scope 清表。
 5. target consent、route grant 和 MESSAGE 投递跨 scope 均拒绝；同 scope stable route 仍可协作。
 6. A 在同一 scope 内同时启动三个 Orchestrator；inactive bank 完整写入且 VFS 对象释放后，owner 在不释放事务 token 的前提下协作让出一次 CPU，使其他 writer 可达等待队列。三者各自持续创建并提交 `PERSIST` metadata，并通过每进程 `metadata_txn_wait_count` 要求至少两个 writer 实际睡眠等待事务门。结束后强制从双 bank 重载，再按 run 查询必须完整得到三组记录。事务释放采用专属队列广播，所有 waiter 都在锁内重新检查 owner，不依赖单个线程继续传递唤醒。
 7. 相同 action selector 在两个 scope 各自拥有幂等历史；audit/event/query 只返回本 scope，公开 PID/span 不扩大范围。
 8. A 的编辑 lease/version 不能由 B 查询、提交或终止。
-9. 同 scope 多进程共享存储计费并受同一 domain limit；其他 admitted/future scope 的数值保证另由共享 policy 单测、mkfs 初始 `S+4G` 契约、挂载 `4G` 复核和原子 admission 检查覆盖。
+9. 同 scope 多进程共享 workflow 存储计费并受同一 scope limit；从该 workflow 明确降级出的普通子进程改用安装级 PUBLIC principal，不能继续借用短命进程资源域作为磁盘身份。其他 admitted/future scope 的数值保证另由共享 policy 单测、mkfs 初始 `S+4G` 契约、挂载 `4G` 复核和原子 admission 检查覆盖。
 10. 同时占用4个 workflow admission 后第5个创建失败；释放一个后可创建替代 scope。最后成员退出触发 retirement，回收 metadata/action/lease/audit/prefetch/IPC 等表后槽可复用。
 
 预期回归标记包括：

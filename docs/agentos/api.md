@@ -135,7 +135,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 542：
 | `last_heartbeat_tick` | 最近心跳 tick |
 | `current_tick` | `agent_info()` 返回时的内核 Agent tick，供 timeline 等待建立未来记录过滤条件 |
 | `capability_mask` | 当前 Agent 能力位 |
-| `filesystem_domain` | 当前进程的可信 VFS scope ID：public 为 0、system 为 1、动态 workflow 为不小于 2 的内核签发值 |
+| `filesystem_domain` | 当前进程的可信 VFS scope ID：public 为 0、system 为 1、动态 workflow 为不小于 3 的内核签发值；2 保留为 PUBLIC 存储 principal，不是 VFS scope |
 | `filesystem_capability_mask` | 当前映像实际生效的文件能力，只包含经父进程授权且不超过映像安全配置上限的 `CONTENT_READ` / `ARTIFACT_WRITE` |
 | `file_scan_runs` / `file_scan_entries` | 根目录自动扫描轮数和检查过的目录项数量 |
 | `file_scan_added` / `file_scan_updated` / `file_scan_removed` | 自动扫描新增、更新和清理的元数据计数 |
@@ -158,7 +158,9 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 542：
 | ---: | --- |
 | 0 (`VFS_SCOPE_NONE`) | PUBLIC；没有 workflow 对象权限 |
 | 1 (`VFS_SCOPE_SYSTEM`) | SYSTEM；构建镜像中的可信、只读共享对象，不能由普通 Agent 创建或改写 |
-| >= 2 (`VFS_SCOPE_FIRST_DYNAMIC`) | 内核为一次独立 workflow admission 签发的动态 scope；当前最多同时接纳 4 个 |
+| >= 3 (`VFS_SCOPE_FIRST_DYNAMIC`) | 内核为一次独立 workflow admission 签发的动态 scope；当前最多同时接纳 4 个 |
+
+数值 2 不属于 `filesystem_domain` 的可用 scope。它是磁盘容量契约中的安装级匿名 PUBLIC principal：当前系统没有 uid/tenant ABI，所以所有普通进程都用该稳定主体累计持久块和 inode，不随进程资源域退出或系统重启变化。对象授权仍由上表 scope 和 capability 决定，存储计费使用 VFS 凭据中独立的 `storage_principal_id`，不能相互替代。
 
 业务 capability 只回答“允许做哪类操作”，scope/owner 继续回答“允许操作哪个对象”。有效授权必须同时满足：调用进程属于仍 active 的内核签发 scope、capability 包含所需位、对象 scope 与主体 scope 精确相等；显式标为只读共享的 SYSTEM 对象只在对应读取路径上作为例外。Agent metadata、dependency、action history、编辑租约、版本状态、audit、span prefetch、IPC route 和 wait cancel 均使用该组合，不再把同一角色或同一 capability 解释为跨 workflow 权限。
 
@@ -169,7 +171,7 @@ int agent_workflow_create(int role);
 int agent_scope_delegate_fd(int fd);
 ```
 
-`agent_workflow_create(role)` 仅允许“非 Agent、具有内核 resource-domain admin 状态、当前执行可信 bootstrap 映像”的 factory 调用。它先执行正常 role grant 检查，再原子申请新的进程/存储资源域和动态 workflow scope，并创建该 scope 的根 Agent。已在某个 scope 内的 orchestrator 即使具备 `ORCHESTRATE`，也只能用 `agent_create_role()` 在本 scope 内创建角色，不能用角色 grant 铸造新安全域。最多 4 个 active/retiring workflow scope；没有可接纳槽时创建失败且不留下半初始化 scope。
+`agent_workflow_create(role)` 仅允许“非 Agent、具有内核 resource-domain admin 状态、当前执行可信 bootstrap 映像”的 factory 调用。它先执行正常 role grant 检查，再原子申请新的进程资源域和动态 workflow scope，并创建该 scope 的根 Agent；该 scope 同时是 workflow 的存储计费主体，但与进程资源域槽独立。已在某个 scope 内的 orchestrator 即使具备 `ORCHESTRATE`，也只能用 `agent_create_role()` 在本 scope 内创建角色，不能用角色 grant 铸造新安全域。最多 4 个 active/retiring workflow scope；没有可接纳槽时创建失败且不留下半初始化 scope。
 
 同 scope 的 `agent_create_role()` 和 `agent_worker_create()` 继承该 scope。普通 `fork()` 跨出 workflow 边界并丢弃 Agent/VFS 权限，不能把 capability 或 scope 带给普通后代。边界创建默认只继承 stdio；普通文件和未委派 pipe 均不跨 scope。
 
@@ -181,7 +183,7 @@ scope 成员数降为 0 后先进入 `retiring`，停止新对象分配；内核
 
 当前固定资源边界：最多 4 个 workflow scope；进程池 128 槽中普通 admission 96 槽、受控保留 32 槽，每个 admitted scope 的保留份额为 8；Agent metadata 每 scope 112 条、dependency 16 条、action history 8 条、edit lease 8 条、span prefetch 8 条、audit 128 条。共享系统 metadata 另保留 64 条。表满返回可恢复错误，不允许一个 scope 占用另一个 scope 的保证份额。
 
-文件系统使用 `NINODE=2048`。workflow 的配置目标仍为总 inode 的三分之二和 `FSSIZE/2` 个 block，但真正的每 scope 保证由 mkfs 与内核共享的容量策略根据“完成镜像后”的空闲量计算，并把最多四个 workflow 的总目标限制在扣除 SYSTEM 后空闲量的四分之三。每个 admitted/future scope 的硬下限为 320 个 inode 和 512 个 block，SYSTEM 的硬下限为 8 个 inode 和 512 个 block；当前 `platform_agentos` 镜像实际得到每 scope 342 个 inode、1195 个 block，以及 SYSTEM 64 个 inode、512 个 block。mkfs 无法同时兑现硬下限时直接拒绝生成镜像，并把 policy version、scope 数、实际保证、系统保留量和 checksum 作为容量契约写入 superblock。启动时不会根据已经消耗的余量把保证越算越小，而是先按持久契约回收旧 boot lease，再验证仍可兑现四份固定保证并重建 SYSTEM 剩余信用；workflow admission 还会原子检查当时的实际余量。PUBLIC 分配必须留下所有尚未消费的 workflow 保证和 SYSTEM 剩余量；SYSTEM 维护分配可以消耗自己的信用，但不能侵占 workflow 的最低保证。
+文件系统使用 `NINODE=2048`。workflow 的配置目标仍为总 inode 的三分之二和 `FSSIZE/2` 个 block，但真正的每 scope 保证由 mkfs 与内核共享的容量策略根据“完成镜像后”的空闲量计算，并把最多四个 workflow 的总目标限制在扣除 SYSTEM 后空闲量的四分之三。每个 admitted/future scope 的硬下限为 320 个 inode 和 512 个 block，SYSTEM 的硬下限为 8 个 inode 和 512 个 block；当前 `platform_agentos` 镜像实际得到每 scope 342 个 inode、1195 个 block，以及 SYSTEM 64 个 inode、512 个 block。mkfs 无法同时兑现硬下限时直接拒绝生成镜像，并把 policy version、scope 数、PUBLIC principal、实际保证、系统保留量和 checksum 作为容量契约写入 superblock。挂载从 qmap 和 dinode 的持久 owner 重建 PUBLIC block/inode 用量，再按契约回收旧 boot lease、验证四份固定保证并重建 SYSTEM 剩余信用；workflow admission 还会原子检查当时的实际余量。PUBLIC 分配必须留下所有尚未消费的 workflow 保证和 SYSTEM 剩余量；SYSTEM 维护分配可以消耗自己的信用，但不能侵占 workflow 的最低保证。缺少稳定 PUBLIC principal 的旧格式镜像会被版本检查明确拒绝，不会用空账本继续运行。
 
 ## 角色与 capability
 

@@ -1,4 +1,4 @@
-.PHONY: clean build user run debug test doctor kernel-stack-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test proc-reap-test syscall-fairness-test reader target-readiness dual-platform-run full-verify dual-clean .FORCE
+.PHONY: clean build user run run-persist debug test doctor kernel-stack-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test proc-reap-test syscall-fairness-test reader target-readiness dual-platform-run full-verify dual-clean .FORCE
 .DELETE_ON_ERROR:
 all: build
 
@@ -217,13 +217,23 @@ QEMUOPTS = \
 	-drive file=$(F)/fs-copy.img,if=none,format=raw,id=x0 \
     -device virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0
 
-$(F)/fs.img: .FORCE
+$(F)/fs.img: user .FORCE
 	make -C $(F)
 
 $(F)/fs-copy.img: $(F)/fs.img
-	@$(CP) $< $@
+	@set -e; tmp="$@.$$$$.tmp"; \
+		trap 'rm -f "$$tmp"' 0 1 2 3 15; \
+		$(CP) "$<" "$$tmp"; \
+		mv -f "$$tmp" "$@"; \
+		trap - 0 1 2 3 15
 
 run: build/kernel $(F)/fs-copy.img
+	$(QEMU) $(QEMUOPTS)
+
+# Reboot the current writable disk explicitly.  Normal `run` always installs
+# the freshly built userspace image so code and manifest updates cannot go stale.
+run-persist: build/kernel
+	@if [ ! -f "$(F)/fs-copy.img" ]; then $(MAKE) $(F)/fs-copy.img; fi
 	$(QEMU) $(QEMUOPTS)
 
 # QEMU's gdb stub command line changed in 0.11

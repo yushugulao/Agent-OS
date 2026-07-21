@@ -9,6 +9,7 @@ struct user_image;
 
 struct vfs_cred {
 	uint scope_id;
+	uint storage_principal_id;
 	uint64 capabilities;
 	int kernel;
 };
@@ -42,6 +43,7 @@ void vfs_cred_kernel(struct vfs_cred *);
 void vfs_cred_from_proc(const struct proc *, struct vfs_cred *);
 uint vfs_cred_lookup_policy(const struct vfs_cred *);
 void vfs_proc_reset(struct proc *);
+void vfs_proc_drop_to_public(struct proc *);
 int vfs_scope_active(uint scope_id);
 int vfs_scope_retiring(uint scope_id);
 uint vfs_scope_storage_guarantee(uint exempt_scope, int inode,

@@ -37,11 +37,29 @@ struct superblock sb;
 #define FS_PUBLIC_RESERVE_DIVISOR 16U
 #define FS_DOMAIN_LIMIT_DIVISOR   4U
 
+// Mount-time reachability state lives in BSS rather than on the small kernel
+// stack.  The bounds are part of the filesystem format accepted by this
+// kernel; the current 8192-block/512-inode image is comfortably below them.
+#define FS_SCRUB_MAX_BLOCKS 65536U
+#define FS_SCRUB_MAX_INODES 65536U
+#define FS_SCRUB_BITMAP_BYTES(limit) (((limit) + 7U) / 8U)
+
 static uint fs_free_blocks;
 static uint fs_free_inodes;
+static uint fs_public_blocks;
+static uint fs_public_inodes;
 static uint fs_public_block_watermark;
 static uint fs_public_inode_watermark;
+static uint fs_public_block_limit;
+static uint fs_public_inode_limit;
 static int fs_resource_ready;
+static struct wait_queue fs_claim_waiters;
+static struct thread *fs_claim_owner;
+static uchar fs_scrub_all_blocks[FS_SCRUB_BITMAP_BYTES(FS_SCRUB_MAX_BLOCKS)];
+static uchar
+	fs_scrub_reachable_blocks[FS_SCRUB_BITMAP_BYTES(FS_SCRUB_MAX_BLOCKS)];
+static uchar
+	fs_scrub_reachable_inodes[FS_SCRUB_BITMAP_BYTES(FS_SCRUB_MAX_INODES)];
 
 // Read the super block.
 static void readsb(int dev, struct superblock *sb)
@@ -54,7 +72,7 @@ static void readsb(int dev, struct superblock *sb)
 
 static int fs_owner_valid(uint owner)
 {
-	return owner == FS_OWNER_SYSTEM || owner >= FS_OWNER_DYNAMIC_MIN;
+	return owner == FS_OWNER_SYSTEM || owner == FS_OWNER_PUBLIC;
 }
 
 static uint qmap_get(int dev, uint block)
@@ -113,7 +131,8 @@ static void fs_validate_layout(void)
 	uint bitmap_end;
 	uint qmap_end;
 
-	if (sb.size < 2 || sb.ninodes < 2 || sb.inodestart != 2)
+	if (sb.size < 2 || sb.ninodes < 2 || sb.inodestart != 2 ||
+	    sb.public_principal != FS_OWNER_PUBLIC)
 		panic("invalid file system layout");
 	inode_blocks = fs_div_round_up(sb.ninodes, IPB);
 	bitmap_blocks = fs_div_round_up(sb.size, BPB);
@@ -133,17 +152,264 @@ static void fs_validate_layout(void)
 		panic("invalid file system layout");
 }
 
+static int fs_scrub_bit_test(const uchar *bits, uint index)
+{
+	return (bits[index / 8] >> (index % 8)) & 1;
+}
+
+static void fs_scrub_bit_set(uchar *bits, uint index)
+{
+	bits[index / 8] |= 1U << (index % 8);
+}
+
+static void fs_scrub_read_dinode(int dev, uint inum, struct dinode *out)
+{
+	struct buf *bp = bread(dev, IBLOCK(inum, sb));
+	struct dinode *dip = (struct dinode *)bp->data + inum % IPB;
+
+	*out = *dip;
+	brelse(bp);
+}
+
+static void fs_scrub_validate_dinode(const struct dinode *dip)
+{
+	if ((dip->type != T_DIR && dip->type != T_FILE) ||
+	    dip->fs_owner_version != FS_OWNER_VERSION ||
+	    !fs_owner_valid(dip->fs_owner_domain) ||
+	    dip->size > MAXFILE * BSIZE)
+		panic("invalid allocated inode");
+}
+
+static void fs_scrub_mark_allocated_block(int dev, uint block)
+{
+	uint owner;
+
+	if (block < sb.datastart || block >= sb.size)
+		panic("inode block out of range");
+	if (fs_scrub_bit_test(fs_scrub_all_blocks, block))
+		panic("duplicate inode block");
+	if (!bitmap_used(dev, block))
+		panic("inode references free block");
+	owner = qmap_get(dev, block);
+	if (!fs_owner_valid(owner))
+		panic("invalid referenced block owner");
+	fs_scrub_bit_set(fs_scrub_all_blocks, block);
+}
+
+static void fs_scrub_scan_inode_blocks(int dev, const struct dinode *dip)
+{
+	struct buf *bp;
+	uint *entries;
+	uint data_blocks = fs_div_round_up(dip->size, BSIZE);
+
+	for (uint i = 0; i < NDIRECT; i++) {
+		if (i < data_blocks && dip->addrs[i] == 0)
+			panic("inode data hole");
+		if (dip->addrs[i] != 0)
+			fs_scrub_mark_allocated_block(dev, dip->addrs[i]);
+	}
+	if (data_blocks > NDIRECT && dip->addrs[NDIRECT] == 0)
+		panic("inode data hole");
+	if (dip->addrs[NDIRECT] == 0)
+		return;
+	fs_scrub_mark_allocated_block(dev, dip->addrs[NDIRECT]);
+	bp = bread(dev, dip->addrs[NDIRECT]);
+	entries = (uint *)bp->data;
+	for (uint i = 0; i < NINDIRECT; i++) {
+		if (i + NDIRECT < data_blocks && entries[i] == 0) {
+			brelse(bp);
+			panic("inode data hole");
+		}
+		if (entries[i] != 0)
+			fs_scrub_mark_allocated_block(dev, entries[i]);
+	}
+	brelse(bp);
+}
+
+static uint fs_scrub_inode_data_block(int dev, const struct dinode *dip,
+				      uint logical_block)
+{
+	struct buf *bp;
+	uint block;
+
+	if (logical_block < NDIRECT)
+		return dip->addrs[logical_block];
+	logical_block -= NDIRECT;
+	if (logical_block >= NINDIRECT || dip->addrs[NDIRECT] == 0)
+		return 0;
+	bp = bread(dev, dip->addrs[NDIRECT]);
+	block = ((uint *)bp->data)[logical_block];
+	brelse(bp);
+	return block;
+}
+
+static void fs_scrub_find_reachable_inodes(int dev)
+{
+	struct dinode root;
+	uint offset;
+
+	fs_scrub_read_dinode(dev, ROOTINO, &root);
+	if (root.type != T_DIR || root.size % sizeof(struct dirent) != 0)
+		panic("invalid root directory");
+	fs_scrub_bit_set(fs_scrub_reachable_inodes, ROOTINO);
+	for (offset = 0; offset < root.size;) {
+		struct buf *bp;
+		uint block = fs_scrub_inode_data_block(dev, &root,
+						       offset / BSIZE);
+		uint block_bytes = root.size - offset;
+
+		if (block == 0)
+			panic("root directory hole");
+		if (block_bytes > BSIZE)
+			block_bytes = BSIZE;
+		bp = bread(dev, block);
+		for (uint local = 0; local < block_bytes;
+		     local += sizeof(struct dirent)) {
+			struct dirent de;
+			struct dinode target;
+
+			memmove(&de, bp->data + local, sizeof(de));
+			if (de.inum == 0)
+				continue;
+			if (de.inum >= sb.ninodes) {
+				brelse(bp);
+				panic("dangling root directory entry");
+			}
+			fs_scrub_read_dinode(dev, de.inum, &target);
+			if (target.type == 0) {
+				brelse(bp);
+				panic("dangling root directory entry");
+			}
+			if (target.type != T_FILE ||
+			    fs_scrub_bit_test(fs_scrub_reachable_inodes,
+					      de.inum)) {
+				brelse(bp);
+				panic("non-flat root directory");
+			}
+			fs_scrub_bit_set(fs_scrub_reachable_inodes, de.inum);
+		}
+		brelse(bp);
+		offset += block_bytes;
+	}
+}
+
+static void fs_scrub_mark_reachable_blocks(int dev)
+{
+	for (uint inum = 1; inum < sb.ninodes; inum++) {
+		struct dinode dip;
+		struct buf *bp;
+		uint *entries;
+
+		if (!fs_scrub_bit_test(fs_scrub_reachable_inodes, inum))
+			continue;
+		fs_scrub_read_dinode(dev, inum, &dip);
+		for (uint i = 0; i < NDIRECT; i++)
+			if (dip.addrs[i] != 0)
+				fs_scrub_bit_set(fs_scrub_reachable_blocks,
+						 dip.addrs[i]);
+		if (dip.addrs[NDIRECT] == 0)
+			continue;
+		fs_scrub_bit_set(fs_scrub_reachable_blocks,
+				 dip.addrs[NDIRECT]);
+		bp = bread(dev, dip.addrs[NDIRECT]);
+		entries = (uint *)bp->data;
+		for (uint i = 0; i < NINDIRECT; i++)
+			if (entries[i] != 0)
+				fs_scrub_bit_set(fs_scrub_reachable_blocks,
+						 entries[i]);
+		brelse(bp);
+	}
+}
+
+static void fs_scrub_clear_orphan_inodes(int dev)
+{
+	for (uint inum = 1; inum < sb.ninodes; inum++) {
+		struct buf *bp = bread(dev, IBLOCK(inum, sb));
+		struct dinode *dip = (struct dinode *)bp->data + inum % IPB;
+
+		if (dip->type != 0 &&
+		    !fs_scrub_bit_test(fs_scrub_reachable_inodes, inum)) {
+			memset(dip, 0, sizeof(*dip));
+			bwrite(bp);
+		}
+		brelse(bp);
+	}
+}
+
+static void fs_scrub_clear_block_bitmap(int dev, uint block)
+{
+	struct buf *bp = bread(dev, BBLOCK(block, sb));
+	uint bit = block % BPB;
+
+	if ((bp->data[bit / 8] & (1U << (bit % 8))) == 0) {
+		brelse(bp);
+		panic("scrub clearing free block");
+	}
+	bp->data[bit / 8] &= ~(1U << (bit % 8));
+	bwrite(bp);
+	brelse(bp);
+}
+
+static void fs_scrub_clear_unreachable_blocks(int dev)
+{
+	for (uint block = sb.datastart; block < sb.size; block++) {
+		int used = bitmap_used(dev, block);
+		uint owner = qmap_get(dev, block);
+
+		if (fs_scrub_bit_test(fs_scrub_reachable_blocks, block)) {
+			if (!used || !fs_owner_valid(owner))
+				panic("invalid reachable block");
+			continue;
+		}
+		if (used)
+			fs_scrub_clear_block_bitmap(dev, block);
+		if (owner != FS_OWNER_FREE)
+			qmap_set(dev, block, FS_OWNER_FREE);
+	}
+}
+
+// This filesystem has a single flat root directory, so on-disk reachability
+// can be reconstructed completely at mount.  Clearing orphan inodes before
+// their blocks makes an interrupted scrub restartable: the next mount sees
+// only unreferenced allocated blocks and finishes reclaiming them.
+static void fs_mount_scrub(int dev)
+{
+	if (sb.size > FS_SCRUB_MAX_BLOCKS ||
+	    sb.ninodes > FS_SCRUB_MAX_INODES)
+		panic("file system exceeds scrub capacity");
+	memset(fs_scrub_all_blocks, 0, sizeof(fs_scrub_all_blocks));
+	memset(fs_scrub_reachable_blocks, 0,
+	       sizeof(fs_scrub_reachable_blocks));
+	memset(fs_scrub_reachable_inodes, 0,
+	       sizeof(fs_scrub_reachable_inodes));
+
+	// Validate every allocated inode first, including eventual orphans, so
+	// corruption cannot be hidden by reclamation.
+	for (uint inum = 1; inum < sb.ninodes; inum++) {
+		struct dinode dip;
+
+		fs_scrub_read_dinode(dev, inum, &dip);
+		if (dip.type == 0)
+			continue;
+		fs_scrub_validate_dinode(&dip);
+		fs_scrub_scan_inode_blocks(dev, &dip);
+	}
+	fs_scrub_find_reachable_inodes(dev);
+	fs_scrub_mark_reachable_blocks(dev);
+	fs_scrub_clear_orphan_inodes(dev);
+	fs_scrub_clear_unreachable_blocks(dev);
+}
+
 static void fs_resource_rebuild(int dev)
 {
-	uint max_cookie = FS_OWNER_SYSTEM;
 	uint inode_capacity = sb.ninodes - 1;
 	uint public_block_capacity;
 	uint public_inode_capacity;
-	uint domain_block_limit;
-	uint domain_inode_limit;
 
 	fs_free_blocks = 0;
 	fs_free_inodes = 0;
+	fs_public_blocks = 0;
+	fs_public_inodes = 0;
 	for (uint block = 0; block < sb.size; block++) {
 		int used = bitmap_used(dev, block);
 		uint owner = qmap_get(dev, block);
@@ -161,8 +427,8 @@ static void fs_resource_rebuild(int dev)
 		}
 		if (!fs_owner_valid(owner))
 			panic("invalid data block owner");
-		if (owner > max_cookie)
-			max_cookie = owner;
+		if (owner == FS_OWNER_PUBLIC)
+			fs_public_blocks++;
 	}
 	for (uint inum = 1; inum < sb.ninodes; inum++) {
 		struct buf *bp = bread(dev, IBLOCK(inum, sb));
@@ -181,8 +447,8 @@ static void fs_resource_rebuild(int dev)
 				brelse(bp);
 				panic("invalid inode owner");
 			}
-			if (dip->fs_owner_domain > max_cookie)
-				max_cookie = dip->fs_owner_domain;
+			if (dip->fs_owner_domain == FS_OWNER_PUBLIC)
+				fs_public_inodes++;
 		}
 		brelse(bp);
 	}
@@ -195,18 +461,19 @@ static void fs_resource_rebuild(int dev)
 		FS_PUBLIC_RESERVE_DIVISOR);
 	public_block_capacity = sb.nblocks - fs_public_block_watermark;
 	public_inode_capacity = inode_capacity - fs_public_inode_watermark;
-	domain_block_limit = fs_runtime_value(
+	fs_public_block_limit = fs_runtime_value(
 		FS_DOMAIN_BLOCK_LIMIT, public_block_capacity,
 		FS_DOMAIN_LIMIT_DIVISOR);
-	domain_inode_limit = fs_runtime_value(
+	fs_public_inode_limit = fs_runtime_value(
 		FS_DOMAIN_INODE_LIMIT, public_inode_capacity,
 		FS_DOMAIN_LIMIT_DIVISOR);
-	if (domain_block_limit == 0)
-		domain_block_limit = 1;
-	if (domain_inode_limit == 0)
-		domain_inode_limit = 1;
-	proc_storage_set_cookie_floor(max_cookie);
-	proc_storage_set_limits(domain_block_limit, domain_inode_limit);
+	if (fs_public_block_limit == 0)
+		fs_public_block_limit = 1;
+	if (fs_public_inode_limit == 0)
+		fs_public_inode_limit = 1;
+	// Existing persistent objects remain charged even with no live process.
+	// A mount whose durable PUBLIC usage is already over a newly lowered limit
+	// stays read-only for new PUBLIC allocations until objects are released.
 	fs_resource_ready = 1;
 }
 
@@ -215,10 +482,15 @@ static int fs_resource_reserve(uint owner, uint blocks, uint inodes)
 	int enabled;
 	int allowed = 0;
 
-	if (!fs_resource_ready || !fs_owner_valid(owner) ||
-	    proc_storage_reserve(owner, blocks, inodes) < 0)
+	if (!fs_resource_ready || !fs_owner_valid(owner))
 		return -1;
 	enabled = intr_save();
+	if (owner == FS_OWNER_PUBLIC &&
+	    (fs_public_blocks > fs_public_block_limit ||
+	     fs_public_inodes > fs_public_inode_limit ||
+	     blocks > fs_public_block_limit - fs_public_blocks ||
+	     inodes > fs_public_inode_limit - fs_public_inodes))
+		goto out;
 	if (blocks <= fs_free_blocks && inodes <= fs_free_inodes &&
 	    (owner == FS_OWNER_SYSTEM ||
 	     ((blocks == 0 ||
@@ -227,14 +499,15 @@ static int fs_resource_reserve(uint owner, uint blocks, uint inodes)
 	       fs_free_inodes - inodes >= fs_public_inode_watermark)))) {
 		fs_free_blocks -= blocks;
 		fs_free_inodes -= inodes;
+		if (owner == FS_OWNER_PUBLIC) {
+			fs_public_blocks += blocks;
+			fs_public_inodes += inodes;
+		}
 		allowed = 1;
 	}
+out:
 	intr_restore(enabled);
-	if (!allowed) {
-		proc_storage_release(owner, blocks, inodes);
-		return -1;
-	}
-	return 0;
+	return allowed ? 0 : -1;
 }
 
 static void fs_resource_release(uint owner, uint blocks, uint inodes)
@@ -245,10 +518,191 @@ static void fs_resource_release(uint owner, uint blocks, uint inodes)
 	    blocks > sb.nblocks - fs_free_blocks ||
 	    inodes > (sb.ninodes - 1) - fs_free_inodes)
 		panic("file system resource count invariant");
+	if (owner == FS_OWNER_PUBLIC &&
+	    (blocks > fs_public_blocks || inodes > fs_public_inodes))
+		panic("public storage count invariant");
 	fs_free_blocks += blocks;
 	fs_free_inodes += inodes;
+	if (owner == FS_OWNER_PUBLIC) {
+		fs_public_blocks -= blocks;
+		fs_public_inodes -= inodes;
+	}
 	intr_restore(enabled);
-	proc_storage_release(owner, blocks, inodes);
+}
+
+static int fs_claim_gate_lock(void)
+{
+	struct thread *self = curr_thread();
+	int enabled;
+
+	if (self == 0)
+		return -1;
+	enabled = intr_save();
+	for (;;) {
+		if (fs_claim_owner == 0) {
+			fs_claim_owner = self;
+			intr_restore(enabled);
+			return 0;
+		}
+		if (fs_claim_owner == self)
+			panic("storage claim gate recursion");
+		if (wait_queue_sleep(&fs_claim_waiters) != WAIT_QUEUE_OK) {
+			intr_restore(enabled);
+			return -1;
+		}
+	}
+}
+
+static void fs_claim_gate_unlock(void)
+{
+	struct thread *self = curr_thread();
+	int enabled = intr_save();
+
+	if (self == 0 || fs_claim_owner != self)
+		panic("storage claim gate owner");
+	fs_claim_owner = 0;
+	wait_queue_wake_all(&fs_claim_waiters);
+	intr_restore(enabled);
+}
+
+static int fs_resource_claim_public_existing(uint blocks, uint inodes)
+{
+	int enabled;
+
+	if (!fs_resource_ready)
+		return -1;
+	enabled = intr_save();
+	if (fs_public_blocks > fs_public_block_limit ||
+	    fs_public_inodes > fs_public_inode_limit ||
+	    blocks > fs_public_block_limit - fs_public_blocks ||
+	    inodes > fs_public_inode_limit - fs_public_inodes) {
+		intr_restore(enabled);
+		return -1;
+	}
+	fs_public_blocks += blocks;
+	fs_public_inodes += inodes;
+	intr_restore(enabled);
+	return 0;
+}
+
+static uint fs_claim_block_owner(int dev, uint block, int transfer,
+				 int *public_seen)
+{
+	uint owner;
+
+	if (block < sb.datastart || block >= sb.size)
+		panic("storage claim block range");
+	owner = qmap_get(dev, block);
+	if (owner == FS_OWNER_PUBLIC) {
+		if (public_seen)
+			*public_seen = 1;
+		return 0;
+	}
+	if (owner != FS_OWNER_SYSTEM)
+		panic("storage claim block owner");
+	if (transfer) {
+		qmap_set(dev, block, FS_OWNER_PUBLIC);
+		if (public_seen)
+			*public_seen = 1;
+	}
+	return 1;
+}
+
+static uint fs_claim_inode_blocks(int dev, const uint addrs[NDIRECT + 1],
+				  int transfer, int *public_seen)
+{
+	uint count = 0;
+	struct buf *bp;
+	uint *entries;
+
+	for (uint i = 0; i < NDIRECT; i++)
+		if (addrs[i] != 0)
+			count += fs_claim_block_owner(dev, addrs[i], transfer,
+						      public_seen);
+	if (addrs[NDIRECT] == 0)
+		return count;
+	count += fs_claim_block_owner(dev, addrs[NDIRECT], transfer,
+				      public_seen);
+	bp = bread(dev, addrs[NDIRECT]);
+	entries = (uint *)bp->data;
+	for (uint i = 0; i < NINDIRECT; i++)
+		if (entries[i] != 0)
+			count += fs_claim_block_owner(dev, entries[i], transfer,
+						      public_seen);
+	brelse(bp);
+	return count;
+}
+
+// Complete any qmap-first ownership transfer interrupted by a hard reboot.
+static void fs_recover_public_claims(int dev)
+{
+	for (uint inum = 1; inum < sb.ninodes; inum++) {
+		struct buf *bp = bread(dev, IBLOCK(inum, sb));
+		struct dinode *dip = (struct dinode *)bp->data + inum % IPB;
+		uint system_blocks;
+		int public_seen = 0;
+
+		if (dip->type != T_FILE ||
+		    (dip->fs_owner_domain != FS_OWNER_SYSTEM &&
+		     dip->fs_owner_domain != FS_OWNER_PUBLIC)) {
+			brelse(bp);
+			continue;
+		}
+		system_blocks = fs_claim_inode_blocks(dev, dip->addrs, 0,
+						      &public_seen);
+		if (dip->fs_owner_domain == FS_OWNER_PUBLIC) {
+			if (system_blocks != 0)
+				panic("committed PUBLIC inode has SYSTEM blocks");
+			brelse(bp);
+			continue;
+		}
+		if (!public_seen) {
+			brelse(bp);
+			continue;
+		}
+		if (dip->fs_owner_version != FS_OWNER_VERSION)
+			panic("invalid interrupted PUBLIC claim");
+		if (fs_claim_inode_blocks(dev, dip->addrs, 1, 0) != system_blocks)
+			panic("PUBLIC claim recovery changed beneath scanner");
+		dip->fs_owner_domain = FS_OWNER_PUBLIC;
+		bwrite(bp);
+		brelse(bp);
+	}
+}
+
+static int fs_claim_sponsored_inode(struct inode *ip, uint mutation_owner)
+{
+	uint missing_blocks;
+	int result = -1;
+
+	if (ip == 0 || ip->type != T_FILE ||
+	    mutation_owner != FS_OWNER_PUBLIC)
+		return 0;
+	if (ip->fs_owner_domain == FS_OWNER_PUBLIC)
+		return 0;
+	if (ip->fs_owner_domain != FS_OWNER_SYSTEM ||
+	    ip->fs_owner_version != FS_OWNER_VERSION)
+		return -1;
+	if (fs_claim_gate_lock() < 0)
+		return -1;
+	if (ip->fs_owner_domain == FS_OWNER_PUBLIC) {
+		result = 0;
+		goto out;
+	}
+	if (ip->fs_owner_domain != FS_OWNER_SYSTEM ||
+	    ip->fs_owner_version != FS_OWNER_VERSION)
+		goto out;
+	missing_blocks = fs_claim_inode_blocks(ip->dev, ip->addrs, 0, 0);
+	if (fs_resource_claim_public_existing(missing_blocks, 1) < 0)
+		goto out;
+	if (fs_claim_inode_blocks(ip->dev, ip->addrs, 1, 0) != missing_blocks)
+		panic("PUBLIC claim changed beneath scanner");
+	ip->fs_owner_domain = FS_OWNER_PUBLIC;
+	iupdate(ip);
+	result = 0;
+out:
+	fs_claim_gate_unlock();
+	return result;
 }
 
 // Init fs
@@ -260,6 +714,10 @@ void fsinit()
 		panic("invalid file system");
 	}
 	fs_validate_layout();
+	fs_claim_owner = 0;
+	wait_queue_init(&fs_claim_waiters, WAIT_REASON_FS_CLAIM);
+	fs_mount_scrub(dev);
+	fs_recover_public_claims(dev);
 	fs_resource_rebuild(dev);
 }
 
@@ -473,7 +931,8 @@ void iput(struct inode *ip)
 		if (ip->fs_owner_version != FS_OWNER_VERSION ||
 		    !fs_owner_valid(owner))
 			panic("invalid removed inode owner");
-		itrunc(ip);
+		if (itrunc(ip, owner) < 0)
+			panic("removed inode truncate failed");
 		ip->type = 0;
 		ip->fs_owner_version = 0;
 		ip->fs_owner_domain = FS_OWNER_FREE;
@@ -586,7 +1045,7 @@ static void bmap_discard(struct inode *ip, uint bn)
 }
 
 // Truncate inode (discard contents).
-void itrunc(struct inode *ip)
+int itrunc(struct inode *ip, uint mutation_owner)
 {
 	enum { ITRUNC_BATCH = 16 };
 	uint detached_direct[NDIRECT];
@@ -595,6 +1054,9 @@ void itrunc(struct inode *ip)
 	int i, j, count;
 	struct buf *bp;
 	uint *a;
+
+	if (fs_claim_sponsored_inode(ip, mutation_owner) < 0)
+		return -1;
 
 	// Make truncation logically complete before the first safe point. New I/O
 	// can only observe the empty mapping while the detached blocks are reclaimed.
@@ -635,6 +1097,7 @@ void itrunc(struct inode *ip)
 		bfree(ip->dev, detached_indirect);
 		(void)kernel_work_checkpoint_cleanup(KERNEL_WORK_OPERATION_UNITS);
 	}
+	return 0;
 }
 
 // Read data from inode.
@@ -682,6 +1145,7 @@ int readi(struct inode *ip, int user_dst, uint64 dst, uint off, uint n)
 int writei(struct inode *ip, int user_src, uint64 src, uint off, uint n,
 	   uint owner)
 {
+	uint allocation_owner = owner;
 	uint tot, m, addr, bn;
 	struct buf *bp;
 	int allocated;
@@ -693,13 +1157,18 @@ int writei(struct inode *ip, int user_src, uint64 src, uint off, uint n,
 		return -1;
 	if (n != 0 && !fs_owner_valid(owner))
 		return -1;
+	if (n != 0 && ip->type == T_FILE) {
+		if (fs_claim_sponsored_inode(ip, owner) < 0)
+			return -1;
+		allocation_owner = ip->fs_owner_domain;
+	}
 
 	for (tot = 0; tot < n; tot += m, off += m, src += m) {
 		bn = off / BSIZE;
-		addr = bmap(ip, bn, 0, owner);
+		addr = bmap(ip, bn, 0, allocation_owner);
 		allocated = 0;
 		if (addr == 0) {
-			addr = bmap(ip, bn, 1, owner);
+			addr = bmap(ip, bn, 1, allocation_owner);
 			if (addr == 0) {
 				failed = 1;
 				break;

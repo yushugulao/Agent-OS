@@ -62,7 +62,7 @@ flowchart LR
     KernelAgent --> Proc["proc/vm: PCB 与地址空间"]
     KernelAgent --> FileMeta["文件元数据表与索引"]
     KernelAgent --> Trust["可信映像与 VFS 安全域"]
-    KernelAgent --> Lifecycle["退出回收与进程/存储资源域"]
+    KernelAgent --> Lifecycle["退出回收、进程资源域与存储主体"]
     KernelAgent --> Clock["timer ticks: 性能与时间戳"]
     KernelAgent --> Context["Agent Context 用户镜像"]
 ```
@@ -78,7 +78,7 @@ flowchart LR
 | Context Path 手动追加/query/rollback/clear/snapshot | 已实现；公开 cause/span 由内核私有 source control/span owner 认证，手动 push 不得自报非零 cause/span |
 | 文件元数据表、真实 inode 关联、属性查询、索引查询、metadata 双 bank 持久化、根目录自动扫描 | 已实现；所有对象记录按 kernel-issued workflow scope 分区，读写由可睡眠事务门串行化 |
 | Agent Loop 心跳、等待、唤醒和 Agent 感知调度 | 已实现 16 槽事件队列、同 scope stable-control IPC 路由、watch/unwatch、wait cancel、heartbeat、自适应调度、当前可信 span 短记录、scope-local audit/Run Ledger 和统一 timeline |
-| 安全与资源韧性 | 已实现动态 workflow scope（public=0、system=1、workflow>=2，最多 4 个）、capability + exact scope/owner、可信映像、W^X、VFS 隔离、对象私有等待、协作退出、进程/存储资源域配额、分级保留量和 scope retirement 回收 |
+| 安全与资源韧性 | 已实现动态 workflow scope（public=0、system=1、workflow>=3，最多 4 个，2 保留为稳定 PUBLIC 存储 principal）、capability + exact scope/owner、可信映像、W^X、VFS 隔离、对象私有等待、协作退出、活进程资源域配额、持久存储主体配额、分级保留量和 scope retirement 回收 |
 | 代表性 uCore 基础 syscall | 已实现 `trace`、`mailread`、`mailwrite` |
 | 综合场景 | 已实现 `labdemo_ucore` 综合示例 |
 | LLM 友好路径 | 已实现 `llm_request`、`llm_response`、`AGENT_EVENT_LLM_DONE`、Context 记录和事件唤醒；真实云端 relay 保持在用户态或宿主机桥接层 |
@@ -103,7 +103,7 @@ flowchart LR
 | 内核角色与能力绑定 | `struct proc` 保存真实 role/capability/scope/control；敏感操作必须同时满足 capability、active scope 和精确对象 owner，不信任用户 role、PID 或公开 span |
 | 可信执行与 VFS 安全域 | 构建清单把角色、bootstrap、RX/RW+NX 和 VFS profile 写入不可变 SYSTEM inode；loader 将有效能力绑定到动态 workflow scope，普通文件操作逐次校验 inode scope |
 | 生命周期与进程配额 | 对象私有等待队列和协作退出不变；128 进程槽分为普通 96、受控保留 32，4 个 workflow 各保证 8 个保留槽；scope 从 active 进入 retiring 后统一清理全局表再释放 admission |
-| 存储配额与保留量 | mkfs 与内核共享容量策略；按完成镜像空闲量计算后把 version/slots/G/S/checksum 持久化到 superblock，重启固定使用该契约；每 scope 硬下限 320 inode/512 block，SYSTEM 硬下限 8 inode/512 block；当前平台镜像每 scope 为 342/1195，SYSTEM 为 64/512 |
+| 存储配额与保留量 | mkfs 与内核共享容量策略；按完成镜像空闲量计算后把 version/slots/PUBLIC principal/G/S/checksum 持久化到 superblock，挂载从 qmap/dinode 重建 PUBLIC 用量，workflow owner 只恢复 scope ID 下界，SYSTEM credit 由空闲量与 G/S 推导；每 scope 硬下限 320 inode/512 block，SYSTEM 硬下限 8 inode/512 block；当前平台镜像每 scope 为 342/1195，SYSTEM 为 64/512 |
 | 可恢复资源耗尽 | inode、inode cache、数据块和文件表分配失败返回错误并回滚；块、间接索引和 inode 释放按持久 owner 退款；每线程内核栈使用 guard、canary 和构建期调用图预算 |
 | 通用动作和工件更新 | `action_commit` 与 `artifact_update` 作为核心对象状态更新工具，`rerun_stage` 和 `write_report` 只作为旧示例兼容别名；记录、事件 action 和重复请求判断都归入通用类别 |
 | LLM Relay 支持 | 内核提供 `llm_request`、`llm_response`、`LLM_RELAY` capability 和 `AGENT_EVENT_LLM_DONE`；prompt/response 摘要进入 Context、timeline 和审计记录；云端 API、secret、HTTP/TLS 留在用户态 |
@@ -174,7 +174,7 @@ flowchart TB
 | workflow scope 测试 | `user/src/agentscope_ucore.c` | 新 scope factory、同名对象隔离、同 scope 协作、并发 metadata 提交、跨 scope IPC/租约/audit 拒绝、配额保证、一次性 pipe fd 委派和 retirement 回收 |
 | 可信执行测试 | `user/src/agenttrust_ucore.c` | RX/RW+NX 布局、映像不可变、bootstrap 授权范围和角色映像绑定 |
 | VFS 安全域测试 | `user/src/agentvfs_ucore.c` | public/workflow 隔离、worker 能力衰减、继承 fd 重新鉴权和受保护路径 |
-| 系统稳健性测试 | `user/src/usersafety_ucore.c`、`user/src/fsenospc_ucore.c`、`user/src/fsquota_ucore.c`、`user/src/procreap_ucore.c` | 用户地址、对象私有等待、真实 ENOSPC、存储域配额与系统保留量、退出回收和进程域配额 |
+| 系统稳健性测试 | `user/src/usersafety_ucore.c`、`user/src/fsenospc_ucore.c`、`user/src/fsquota_ucore.c`、`user/src/fspquota_ucore.c`、`user/src/procreap_ucore.c` | 用户地址、对象私有等待、真实 ENOSPC、持久 PUBLIC principal、存储配额与系统保留量、退出回收和进程域配额 |
 | 构建脚本 | `scripts/run-agent-tests.sh` | 顺序运行最终验证程序 |
 
 ## 6. 运行视图
@@ -201,7 +201,7 @@ sequenceDiagram
     P-->>U: 子进程 pid / 子进程返回 0
 ```
 
-普通角色创建和安全域创建是两种不同操作。可信、非 Agent bootstrap factory 使用 syscall 541 `agent_workflow_create(role)` 创建全新的动态 scope；scope 内 orchestrator 再用 `agent_create_role()` 或 `agent_worker_create()` 填充该 workflow，但不能再铸造新的 quota/object namespace。scope 编码为 PUBLIC=0、SYSTEM=1、动态 workflow>=2，同时最多 4 个 active/retiring scope。
+普通角色创建和安全域创建是两种不同操作。可信、非 Agent bootstrap factory 使用 syscall 541 `agent_workflow_create(role)` 创建全新的动态 scope；scope 内 orchestrator 再用 `agent_create_role()` 或 `agent_worker_create()` 填充该 workflow，但不能再铸造新的 quota/object namespace。scope 编码为 PUBLIC=0、SYSTEM=1、动态 workflow>=3，同时最多 4 个 active/retiring scope；数值 2 保留给稳定 PUBLIC 存储 principal，不作为 VFS scope 分配。
 
 跨 scope spawn 默认只保留 stdio。factory 可以先对选中的 pipe 端点调用 syscall 542 `agent_scope_delegate_fd(fd)`；票据在下一次边界尝试开始时一次性消费，即使后续分配失败也不会残留。普通文件和未委派 pipe 不跨边界。同 scope 创建维持正常协作继承。
 
@@ -354,7 +354,7 @@ sequenceDiagram
     K-->>A1: committed state
 ```
 
-文件编辑租约的资源身份是真实 `dev + inum + incarnation`。用户态传入的短文件名只用于找到 inode 和输出可读状态，不能伪造另一个资源身份；inode 槽复用后 incarnation 改变，旧 metadata、缓存和租约不会命中新文件。编辑版本和内容版本合并在按磁盘 `inum` 直接索引的 sidecar 中，每个存活 inode 只能使用自己的槽；租约表保存当前持有者、租约编号、基准版本、deadline、dirty 标志和冲突次数。最终 inode 回收会在身份字段清除前统一移除 sidecar、租约和 digest cache，因此短命 PUBLIC 文件不能永久占用版本状态，版本容量也自然服从 inode 资源域配额和系统保留量。真实文件修改入口在 `os/file.c`，因此即使另一个 Agent 绕过 `agent_file_edit_begin()` 直接 `open` 后 `write`，只要目标文件存在租约，内核仍会拒绝非持有者写入。
+文件编辑租约的资源身份是真实 `dev + inum + incarnation`。用户态传入的短文件名只用于找到 inode 和输出可读状态，不能伪造另一个资源身份；inode 槽复用后 incarnation 改变，旧 metadata、缓存和租约不会命中新文件。编辑版本和内容版本合并在按磁盘 `inum` 直接索引的 sidecar 中，每个存活 inode 只能使用自己的槽；租约表保存当前持有者、租约编号、基准版本、deadline、dirty 标志和冲突次数。最终 inode 回收会在身份字段清除前统一移除 sidecar、租约和 digest cache，因此短命 PUBLIC 文件不能永久占用版本状态，版本容量也自然服从稳定存储 principal 的 inode 配额和系统保留量。真实文件修改入口在 `os/file.c`，因此即使另一个 Agent 绕过 `agent_file_edit_begin()` 直接 `open` 后 `write`，只要目标文件存在租约，内核仍会拒绝非持有者写入。
 
 该机制采用无等待的独占租约：已有持有者时新申请立即返回 `AGENT_STATUS_CONFLICT`，调用者可以读取 owner pid、owner role、base/current version 和 conflict count，然后选择等待事件、重新读取文件、转交 orchestrator 或走恢复流程。租约有有限 TTL；持有者异常退出或长时间不提交时，下一次相关操作会释放过期租约。如果租约持有者写过文件，释放时也会推进版本，避免后续调用者仍基于旧版本继续提交。
 
@@ -432,9 +432,9 @@ Agent 的真实角色保存在 `agent_role`，业务能力在 `agent_capability_
 
 ### 8.8 安全约束与资源韧性
 
-通用内核路径在两个目标中共享 syscall 用户输入复制、对象私有等待队列、可恢复 ENOSPC、块 owner map、存储域 cookie 与系统保留水位、guarded kernel stack、孤儿回收、协作退出、child record 和进程资源域配额。已退出子进程的执行槽可以在父进程领取状态前释放；长存活后代始终计入不可变资源域，单普通域上限 64，128 个进程槽中普通 admission 最多 96，内核受控 admission 使用 32 个保留槽。AgentOS 再把保留槽按最多 4 个 workflow 各分 8 个，避免一个活跃 workflow 吞掉其他 workflow 的启动保证。
+通用内核路径在两个目标中共享 syscall 用户输入复制、对象私有等待队列、可恢复 ENOSPC、块 owner map、安装级 PUBLIC 存储 principal 与系统保留水位、guarded kernel stack、孤儿回收、协作退出、child record 和进程资源域配额。PUBLIC principal 固定为 2，并在挂载时从 qmap/dinode 重建用量，不随短命进程资源域退出或重启变化。已退出子进程的执行槽可以在父进程领取状态前释放；长存活后代始终计入不可变资源域，单普通域上限 64，128 个进程槽中普通 admission 最多 96，内核受控 admission 使用 32 个保留槽。AgentOS 再把保留槽按最多 4 个 workflow 各分 8 个，避免一个活跃 workflow 吞掉其他 workflow 的启动保证。
 
-AgentOS 专属路径在此基础上增加可信映像、role grant、capability 和动态 VFS scope。PUBLIC=0、SYSTEM=1、workflow>=2；不同 workflow 的文件数据命名空间彼此隔离，`open/read/write/truncate/unlink` 均按 inode scope、真实身份和当前有效能力检查，继承 fd 也会逐操作重新鉴权。跨 scope 创建默认只保留 stdio，一次性 pipe 委派是唯一显式对象传递。文件身份使用 `scope + dev + inum + incarnation`，防止同名对象、inode 重用或另一个 workflow 的旧 metadata/cache/lease 命中。存储保证由完成镜像的实际空闲量决定，并受每 scope 320 inode/512 block 与 SYSTEM 8 inode/512 block 的显式硬下限约束；当前平台镜像的每 scope 实际值为 342 inode/1195 block。
+AgentOS 专属路径在此基础上增加可信映像、role grant、capability 和动态 VFS scope。PUBLIC=0、SYSTEM=1、workflow>=3，数值 2 只保留为 PUBLIC 存储 principal；不同 workflow 的文件数据命名空间彼此隔离，`open/read/write/truncate/unlink` 均按 inode scope、真实身份和当前有效能力检查，继承 fd 也会逐操作重新鉴权。跨 scope 创建默认只保留 stdio，一次性 pipe 委派是唯一显式对象传递。文件身份使用 `scope + dev + inum + incarnation`，防止同名对象、inode 重用或另一个 workflow 的旧 metadata/cache/lease 命中。存储保证由完成镜像的实际空闲量决定，并受每 scope 320 inode/512 block 与 SYSTEM 8 inode/512 block 的显式硬下限约束；当前平台镜像的每 scope 实际值为 342 inode/1195 block。
 
 ### 8.9 性能
 
@@ -456,10 +456,10 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 | 跨 scope fd | 默认只继承 stdio；syscall 542 为下一次边界尝试一次性委派 pipe 端点 | 不让父进程预先打开的文件或 pipe 成为环境权限；失败尝试也消费票据 | 当前只支持 pipe，不提供普通文件跨 scope 传递 |
 | 可信程序授权 | 使用构建期 `EXEC_POLICY_ENTRIES`、不可变 inode 元数据和 loader 身份/version 校验 | 新程序必须显式声明 role mask、bootstrap 和 VFS profile，不能靠程序名或 PID 获权 | 信任根是构建镜像，不是密码学签名 |
 | W^X 装载 | 配套 ELF 决定 `exec_rw_offset`，代码 RX，数据、bss、栈和 Agent Context RW+NX | 阻止普通写入直接修改可执行代码，并让角色授权绑定到不可变映像 | 当前仍是受控 flat image，不是通用动态 ELF loader |
-| VFS 文件域 | PUBLIC=0、SYSTEM=1、动态 workflow>=2；逐操作同时校验 capability 和精确 inode scope | 普通路径、同名文件和继承 fd 均不能跨 workflow | SYSTEM 仅作为显式只读共享/可信映像来源 |
+| VFS 文件域 | PUBLIC=0、SYSTEM=1、动态 workflow>=3；2 保留为 PUBLIC 存储 principal；逐操作同时校验 capability 和精确 inode scope | 普通路径、同名文件和继承 fd 均不能跨 workflow | SYSTEM 仅作为显式只读共享/可信映像来源 |
 | 退出与等待 | 对象私有等待队列、逐线程定向取消、child record 与执行槽分离 | 阻塞 syscall 临时引用沿正常路径释放，恶意父进程不能用僵尸占住执行槽 | child record 使用固定容量 |
 | 进程资源域 | 普通后代受 64 live 上限；普通总槽 96、受控保留 32，4 个 workflow 各保证 8 | 限制 fork bomb和单 workflow 垄断，同时保持多 workflow admission | live 计数仅覆盖进程槽，退出结果另存 child record |
-| 文件系统资源域 | 稳定 owner、逐块 map 和共享容量策略；mkfs 计算并持久化容量契约，启动与 admission 使用固定 G/S，每 scope 下限 320 inode/512 block，SYSTEM 下限 8 inode/512 block | 限制单域块/inode及其版本状态，并为所有 admitted/future workflow 与 SYSTEM 保留可兑现容量，避免 SYSTEM 信用消耗后重启重复预留 | 平台实际保证随镜像构建结果变化并由 mkfs 输出；变更 FS 配置会强制重编 mkfs；教学文件系统无 journal |
+| 文件系统存储主体 | 稳定 owner、逐块 map 和共享容量策略；mkfs 持久化 PUBLIC principal 与容量契约，挂载重建 PUBLIC 用量并恢复 workflow scope ID 下界，启动与 admission 使用固定 G/S；可变 SYSTEM 赞助文件在首次用户修改前整体转为 PUBLIC；每 scope 下限 320 inode/512 block，SYSTEM 下限 8 inode/512 block | 限制单个稳定主体/scope 的块、inode 及版本状态，并为所有 admitted/future workflow 与 SYSTEM 保留可兑现容量，避免进程域退出清零、覆盖预装块绕过计费或 SYSTEM 信用消耗后重启重复预留 | 平台实际保证随镜像构建结果变化并由 mkfs 输出；变更 FS 配置会强制重编 mkfs；旧磁盘格式拒绝挂载，教学文件系统无 journal |
 | Context 地址 | 固定高地址 `AGENT_CONTEXT_BASE`，当前 6 页 | 便于用户态直接定位，并给 Context Path 完整性链和用户自管 cache 留出容量 | 每个 Agent 固定占用 6 页 |
 | 工具协议 | 主热路径为 `agent_op` / `agent_result`，名称协议作为正式结构化入口保留 | 比字符串键名协议更紧凑，适合批量执行；名称协议便于示例和兼容赛题描述 | 工具 ID 需要保持稳定 |
 | Context Path 容量 | 固定 128 条环形记录，每条包含 16 字节 payload/result 短文本摘要和 prev/record hash，并在内核 PCB 中保存最近 128 条完整请求/响应详情 | 可检查 FIFO 淘汰、相邻记录顺序和可审计详情；Context 尾部留给用户自管 cache | 当前不做跨重启持久化 |
@@ -522,7 +522,7 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 | 用户 cause/span 不能伪造可信 ancestry，低权限遥测不能淘汰 active principal 的 high evidence | `agentsecurity_ucore` 的 forged context、trusted cause attribution 和 audit authority partition 回归已通过 |
 | syscall 坏地址和超长输入可恢复 | `usersafety_ucore: parent passed` |
 | inode、inode cache 和 block 耗尽不触发 panic | `make fs-enospc-test`，两个目标均出现 `fsenospc_ucore: parent passed` |
-| PUBLIC 存储域不能吃掉 Agent/内核保留量或版本状态 | 同一入口的 `fsquota_ucore` 两组场景先完成 `public_version_churn=1 cycles=640`，随后出现 `public_domain_limited=1`、`post_exit_accounting=1`、`workflow_reserve=1`、`workflow_version_reserve=1`、`content_version_reserve=1`、`kernel_metadata_reserve=1`，低域配额场景另有 `quota_reuse=1` |
+| PUBLIC 存储主体不能吃掉 Agent/内核保留量或借进程域退出、重启清零 | `fsquota_ucore` 两组场景覆盖版本回收、运行期上限与分级保留；双目标 `fspquota_ucore` 已对同一镜像完成 crash/seed/verify 三次启动，并依次取得 `crash_orphan_ready=1`、`durable_fixture=1`、`reboot_charge_persisted=1`、`deletion_reuse=1`、`relaunch_charge_persisted=1` 和 `cleanup_reuse=1` |
 | 阻塞退出、孤儿/僵尸和 fork bomb 受生命周期与资源域约束 | `make proc-reap-test`，覆盖 `detached-wait`、`unreaped-parent-isolated`、`live-domain-limit` 和 `reserved-agent-slot` |
 | 内核栈有 guard 和构建期预算 | 每次内核 build 的栈分析；可单独运行 `make kernel-stack-check` |
 | 代表性 uCore 基础 syscall | `ch3_trace`、`agentsecurity_ucore: mail_basic=1` |
@@ -548,7 +548,7 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 | Agent 进程 | 被内核标记并分配 Agent Context 的特殊进程 |
 | Agent Context | Agent 用户地址空间中的固定镜像区域，用于高速读取响应和上下文路径；权威状态在内核 shadow 页 |
 | Context Path | Agent 多轮工具调用或手动上下文节点组成的历史路径；当前实现为 128 条短文本摘要记录 |
-| Workflow scope | 内核签发的工作流安全域：PUBLIC=0、SYSTEM=1、动态 workflow>=2；capability 只能在 active scope 和精确 owner 内生效 |
+| Workflow scope | 内核签发的工作流安全域：PUBLIC=0、SYSTEM=1、动态 workflow>=3；数值 2 只用于稳定 PUBLIC 存储 principal；capability 只能在 active scope 和精确 owner 内生效 |
 | Run Ledger | 内核为当前 workflow 的审计逻辑链维护的摘要，包含稀疏 sequence 窗口、dropped、分类计数和 scope-local 链尾 hash |
 | 工具调用 | Agent 通过结构化请求调用内核提供的能力 |
 | 文件对象元数据表 | Agent 子系统维护的文件对象属性表，服务任务四查询优化；科研工件只是其中一种用户态对象 |

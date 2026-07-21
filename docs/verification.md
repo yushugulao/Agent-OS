@@ -93,6 +93,8 @@ make target-readiness
 timeout 45s make run TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_plain LOG=warn INIT_PROC=rp_plain
 ```
 
+`make run` 表示用当前构建产物重新安装全新可写镜像；需要重启并保留 `nfs/fs-copy.img` 中的现有数据时使用 `make run-persist`。后者不会因用户程序或磁盘格式变化自动覆盖持久盘，不兼容格式由内核挂载校验明确拒绝。baseline 目录中的同名目标语义一致。
+
 关键输出应包含：
 
 ```text
@@ -427,7 +429,7 @@ bash scripts/run-agent-tests.sh
 # 主目标、Agent 对抗场景和 baseline 的退出、等待、回收与进程域配额
 make proc-reap-test TOOLPREFIX=riscv64-linux-gnu-
 
-# 双目标真实 ENOSPC，以及 AgentOS 存储域配额和分级保留量
+# 双目标真实 ENOSPC、持久 PUBLIC principal，以及 AgentOS 分级保留量
 make fs-enospc-test TOOLPREFIX=riscv64-linux-gnu-
 
 # 16 KiB 内核栈、4 KiB guard 和构建期调用图预算
@@ -435,7 +437,7 @@ make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-`run-agent-tests.sh` 中的 `agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore` 和 `usersafety_ucore` 分别覆盖事件与角色授权、可信映像和 W^X、普通 VFS 绕过及坏用户指针。`run-proc-reap-tests.sh` 覆盖定向取消、阻塞 syscall 临时引用释放、孤儿回收、child record、长存活 fork bomb 和 Agent 保留槽。`run-fs-enospc-tests.sh` 先保留两个目标的物理 ENOSPC 复测，再运行 AgentOS `fsquota_ucore` 的低域上限和高域上限两组配置：前者验证同一存储域累计及释放复用，后者确保测试确实触及 PUBLIC 全局水位后 workflow 文件和内核 `.agentmeta` 仍可写入。`make full-verify` 已串联 Agent 与进程生命周期测试，但没有串联文件系统专项；内核栈预算在每次 kernel build 时自动执行，也可用以上命令单独复现。完整机制和失败语义见 [agentos/security-hardening.md](agentos/security-hardening.md)。
+`run-agent-tests.sh` 中的 `agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore` 和 `usersafety_ucore` 分别覆盖事件与角色授权、可信映像和 W^X、普通 VFS 绕过及坏用户指针。`run-proc-reap-tests.sh` 覆盖定向取消、阻塞 syscall 临时引用释放、孤儿回收、child record、长存活 fork bomb 和 Agent 保留槽。`run-fs-enospc-tests.sh` 先保留两个目标的物理 ENOSPC 复测，再运行 AgentOS `fsquota_ucore` 的低主体上限和高水位两组配置：前者验证运行期累计及释放复用，后者确保 PUBLIC 压力下 workflow 文件和内核 `.agentmeta` 仍可写入。随后两个目标各用同一磁盘镜像连续运行三次 `fspquota_ucore`：第一轮在文件已 unlink 但描述符仍打开时强制断电；第二轮验证挂载回收孤儿后，让 PUBLIC 接管含间接块的 SYSTEM 赞助对象并使进程域满额退出；第三轮验证 qmap/dinode 重建计数、新进程域和重启都不能清零、删除后才可复用。`make full-verify` 已串联 Agent 与进程生命周期测试，但没有串联文件系统专项；内核栈预算在每次 kernel build 时自动执行，也可用以上命令单独复现。完整机制和失败语义见 [agentos/security-hardening.md](agentos/security-hardening.md)。
 
 ## 内核机制说明
 

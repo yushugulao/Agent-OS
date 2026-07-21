@@ -76,7 +76,7 @@ static uint current_scope(void)
 	check(info.is_agent == 1, "workflow root is agent");
 	check(info.agent_role == AGENT_ROLE_ORCHESTRATOR,
 	      "workflow root role");
-	check(info.filesystem_domain >= 2, "trusted dynamic scope");
+	check(info.filesystem_domain >= 3, "trusted dynamic scope");
 	return (uint)info.filesystem_domain;
 }
 
@@ -384,8 +384,8 @@ static __attribute__((noinline)) void check_scope_storage_quota(void)
 	if (pid == 0)
 		exit(create_quota_files('b', 70));
 	check(waitpid(pid, &second) == pid, "wait public quota writer");
-	check(second > 0 && second < 70,
-	      "public and workflow objects share one resource domain");
+	check(second == 70,
+	      "public principal is independent of workflow resource domain");
 }
 
 static __attribute__((noinline)) void
@@ -599,7 +599,7 @@ static struct scope_reply receive_reply(int fd, const char *message)
 	struct scope_reply reply;
 
 	read_exact(fd, &reply, sizeof(reply), message);
-	check(reply.ok == 1 && reply.scope_id >= 2, message);
+	check(reply.ok == 1 && reply.scope_id >= 3, message);
 	return reply;
 }
 

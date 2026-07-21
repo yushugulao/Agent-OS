@@ -63,6 +63,7 @@ bash scripts/run-agent-tests.sh
 | `agentvfs_ucore` | `inherited_fd_revalidated=1`、`protected_paths=1` | 普通 VFS 路径不能绕过文件能力，继承描述符会按当前凭据重新鉴权 |
 | `usersafety_ucore` | `live after pointer bounds`、`live after directed wakeup`、`parent passed` | syscall 输入检查、定向唤醒和失败事务回滚可验证 |
 | `fsenospc_ucore` | `inode exhaustion survived`、`block exhaustion survived` | inode、inode cache 与数据块耗尽返回失败而非触发内核 panic |
+| `fspquota_ucore` | `crash_orphan_ready=1`、`reboot_charge_persisted=1`、`relaunch_charge_persisted=1`、`cleanup_reuse=1` | 双目标同镜像三次启动已通过，验证掉电孤儿回收及 PUBLIC 计费跨完整进程域退出与重启保持 |
 | `procreap_ucore` / `procreap_agent_ucore` | `live-domain-limit=1`、`reserved-agent-slot=1` | 进程回收、资源域配额与系统保留槽可验证 |
 | `syscallfair_ucore` | console/inode/trunc 三组 `BEGIN < PEER < END`、`INODE_PEER < INODE_SHORT`、`parent passed` | 纯 Guest 验证控制台长写、inode 写的内核重调度计数/短写/peer 进展、detach 后截断回收和 worker 退出完整性 |
 | 内核栈预算 | `kernel stack budget`、`kernel stack user path` | 构建期 callgraph/栈帧预算检查随内核构建执行 |
@@ -427,7 +428,7 @@ usersafety_ucore: parent passed
 make fs-enospc-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-两类通用目标均需出现前三组程序标记；AgentOS 配额场景还需出现版本生命周期、工作流保留和清理标记：
+两类通用目标均需出现前三组程序标记；AgentOS 配额场景还需出现版本生命周期、工作流保留和清理标记。新增持久主体场景在两个目标各使用同一镜像连续启动三次，并要求按顺序出现以下标记：
 
 ```text
 fsenospc_ucore: inode exhaustion survived
@@ -442,10 +443,20 @@ fsquota_ucore: workflow_version_reserve=1
 fsquota_ucore: content_version_reserve=1
 fsquota_ucore: kernel_metadata_reserve=1
 fsquota_ucore: pressure_cleanup=1
-[fs-enospc] generic targets and Agent quota cases passed
+fspquota_ucore: crash_orphan_ready=1
+fspquota_ucore: sponsored_object_charged=1 blocks=14
+fspquota_ucore: durable_fixture=1 blocks=18 inodes=8 owner_exited=1
+fspquota_ucore: reboot_charge_persisted=1
+fspquota_ucore: deletion_reuse=1
+fspquota_ucore: relaunch_charge_persisted=1 launches=2
+fspquota_ucore: cleanup_reuse=1
+fspquota_ucore: parent passed
+[fs-enospc] generic, persistent principal, and Agent quota cases passed
 ```
 
-结论：磁盘 inode、内存 inode cache 和数据块耗尽均通过正常错误返回或短写报告，未转化为全内核 panic；释放资源后可以重新分配。PUBLIC 域完成超过旧版本表容量的 640 次短命 inode 循环后，workflow 仍能取得编辑版本并命中内容摘要缓存，说明版本 sidecar 随最终 inode 生命周期回收，且不能跨 inode 槽侵占 Agent 保留资源。此测试单独覆盖 AgentOS-uCore 与 `baseline_ucore/` 的通用 ENOSPC，并额外覆盖 AgentOS 资源域，但当前没有被 `make full-verify` 串联。
+历史结论：磁盘 inode、内存 inode cache 和数据块耗尽均通过正常错误返回或短写报告，未转化为全内核 panic；释放资源后可以重新分配。PUBLIC 域完成超过旧版本表容量的 640 次短命 inode 循环后，workflow 仍能取得编辑版本并命中内容摘要缓存，说明版本 sidecar 随最终 inode 生命周期回收，且不能跨 inode 槽侵占 Agent 保留资源。历史测试单独覆盖 AgentOS-uCore 与 `baseline_ucore/` 的通用 ENOSPC，并额外覆盖 AgentOS 运行期存储水位。
+
+本次稳定 principal 回归已在 AgentOS 与 baseline 上分别完成 crash/seed/verify 三轮。第一轮在 PUBLIC 文件已 unlink 但描述符仍打开时强制结束 QEMU，第二轮挂载必须回收该不可达 inode/block；runner 在 seed 后解析 raw bitmap/dinode/qmap，确认物理分配相对 mkfs 基线仅增加 4 block/7 inode，且非 FREE owner 同样只增加 4 个，排除只从账本忽略孤儿的假通过。镜像还预装一个由 SYSTEM 赞助的 13 数据块可变文件；PUBLIC 首次覆盖前必须把 inode、数据块和间接索引块整体接管，共计 `14 block/1 inode`，不能借预装对象绕过配额。第二轮随后让占满 `18 block/8 inode` 上限的 PUBLIC 进程资源域完整退出，第三轮在同一磁盘镜像上验证 qmap/dinode 重建、新域仍受旧文件计费、删除退款及清理复用；两个目标均依次取得 `reboot_charge_persisted`、`deletion_reuse`、`relaunch_charge_persisted`、`cleanup_reuse` 和 `parent passed`，runner 最终报告通过。该入口仍没有被 `make full-verify` 串联，发布验收时应继续单独执行。
 
 ## 专项输出：进程回收与配额
 
@@ -536,7 +547,7 @@ Test trace OK!
 
 - Agent 专项 15/15 通过；`agentsecurity_ucore` 输出 `trusted_span_authority=1`、`trusted_cause_attribution=1`、`audit_authority_partition=1` 和 `parent passed`。
 - `agentscope_ucore` 输出 scope、IPC、metadata reload、三 writer 事务竞争、存储配额、action/audit/lease 隔离、容量保留、一次性 fd 委派、生命周期回收全部标记及 `parent passed`。
-- ENOSPC 的容量契约、普通耗尽、资源域配额和系统保留量用例全部通过；进程回收的 baseline、Agent 和 adversarial 用例全部通过。
+- ENOSPC 的容量契约、普通耗尽、当时的运行期存储配额和系统保留量用例全部通过；该轮尚未包含后来新增的稳定 PUBLIC principal 同镜像重启回归。进程回收的 baseline、Agent 和 adversarial 用例全部通过。
 - 宿主提取器的路径穿越拒绝、旧输出清理、scope 选择隔离和存储策略 C 单测通过；相关 Python 文件通过语法检查。
 - AgentOS 平台构建通过，实际存储契约为 block `G=1195/S=512`、inode `G=342/S=64`；QEMU 成功挂载并启动 `rp_agentos_orch`，有界超时前无 panic 或非法文件系统。
 - 增强目标内核栈预算 `14144 < 16384`，对照目标 `8144 < 16384`；最终 `git diff --check` 通过且无残留 QEMU/构建进程。
@@ -561,4 +572,4 @@ make syscall-fairness-test TOOLPREFIX=riscv64-linux-gnu-
 
 测试没有依赖宿主输入注入。该轮日志证明两个目标都在一次 64 KiB 控制台 `write()` 返回前调度 Guest pipe gate 后的同级进程。随后终审把 inode 和 truncate 契约都改为 last-syscall 重调度计数加独立 observer：计数分别证明 64 KiB `write()` 与 `O_TRUNC` open 内部跨过调度边界，observer 分别证明 peer 读到已提交数据和原子 EOF 可见，避免把返回后的用户态 timer 抢占误当成 syscall 内调度。最外层父进程等待测试 worker 完整退出后才输出 `parent passed`，宿主 runner 还要求 QEMU 正常关机。终审后的契约尚未在当前受限身份下重新运行 QEMU。
 
-基础机制轮次还独立通过 `make agentos-test` 15/15、`make fs-enospc-test` 和 `make proc-reap-test`，当时的构建期内核栈检查为增强目标 `14144 < 16384`、对照目标 `8144 < 16384`。7 月 22 日审查后又补入 fork 逐页计费与 VM snapshot 屏障、Agent size 非阻塞发布 sidecar、baseline exec epoch、last-syscall 重调度观测、强化的 inode/ENOSPC/退出断言及结构检查；当前受限执行身份没有注册 WSL 发行版，因此这部分最终 diff 已通过双目标 MinGW `-fsyntax-only`、用户程序语法检查、`bash -n` 和 `git diff --check`，但尚未重新取得 RISC-V/QEMU 与栈预算输出。发布前应在标准 Linux 工具链重跑本节命令。覆盖也不表示任意 syscall 路径已被穷尽；固定上界目录扫描与仅可信 Agent 可达的 metadata raw I/O 仍缺独立公平性压力用例。
+基础机制轮次还独立通过 `make agentos-test` 15/15、当时的 `make fs-enospc-test` 和 `make proc-reap-test`。7 月 22 日审查后又补入 fork 逐页计费与 VM snapshot 屏障、Agent size 非阻塞发布 sidecar、baseline exec epoch、last-syscall 重调度观测、强化的 inode/ENOSPC/退出断言及结构检查；随后新增稳定 PUBLIC principal、挂载孤儿清扫与账本重建及三启动 `fspquota_ucore`。最终代码上的 Agent 15/15 与双目标同镜像 crash/seed/verify QEMU 已通过，不能由旧结果替代的物理孤儿回收和持久计费证据现已补齐；构建期内核栈预算为增强目标 `14432 < 16384`、对照目标 `8336 < 16384`。last-syscall 终审契约仍按其独立状态复测。覆盖也不表示任意 syscall 路径已被穷尽；固定上界目录扫描与仅可信 Agent 可达的 metadata raw I/O 仍缺独立公平性压力用例。

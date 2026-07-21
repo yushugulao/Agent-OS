@@ -47,13 +47,14 @@ struct superblock {
 	uint workflow_inode_guarantee;
 	uint system_block_reserve;
 	uint system_inode_reserve;
+	uint public_principal_id;
 	uint storage_policy_checksum;
 };
 
-_Static_assert(sizeof(struct superblock) == 60,
-	       "on-disk superblock format must remain 60 bytes");
+_Static_assert(sizeof(struct superblock) == 64,
+	       "on-disk superblock format must remain 64 bytes");
 
-#define FSMAGIC 0x10203045
+#define FSMAGIC 0x10203047
 
 #define NDIRECT 12
 #define NINDIRECT (BSIZE / sizeof(uint))
@@ -85,7 +86,7 @@ _Static_assert(sizeof(struct superblock) == 60,
 	 VFS_LABEL_F_KERNEL_PRIVATE | VFS_LABEL_F_ROOT | VFS_LABEL_F_FREE)
 #define VFS_SCOPE_NONE          0U
 #define VFS_SCOPE_SYSTEM        1U
-#define VFS_SCOPE_FIRST_DYNAMIC 2U
+#define VFS_SCOPE_FIRST_DYNAMIC FS_WORKFLOW_SCOPE_FIRST_ID
 #define VFS_POLICY_PUBLIC 1U
 #define VFS_POLICY_WORKFLOW 2U
 #define VFS_POLICY_KERNEL_PRIVATE 3U
@@ -97,15 +98,25 @@ _Static_assert(sizeof(struct superblock) == 60,
 #define VFS_EXEC_PROFILE_CONTENT_READ 2U
 #define VFS_EXEC_PROFILE_ARTIFACT_WRITE 3U
 
-#define FS_OWNER_VERSION 2U
+#define FS_OWNER_VERSION 3U
 #define FS_OWNER_NONE 0U
 #define FS_OWNER_SYSTEM 1U
-#define FS_OWNER_FIRST_DYNAMIC 2U
+#define FS_OWNER_PUBLIC FS_PUBLIC_PRINCIPAL_ID
 #define FS_OWNER_SCOPE_FLAG 0x80000000U
 #define FS_OWNER_ID_MASK (FS_OWNER_SCOPE_FLAG - 1U)
 #define FS_OWNER_SCOPE(id) (FS_OWNER_SCOPE_FLAG | (id))
 #define FS_OWNER_IS_SCOPE(owner) (((owner) & FS_OWNER_SCOPE_FLAG) != 0)
 #define FS_OWNER_SCOPE_ID(owner) ((owner) & FS_OWNER_ID_MASK)
+// Trusted mkfs images may sponsor immutable PUBLIC objects as SYSTEM;
+// runtime PUBLIC allocations always use FS_OWNER_PUBLIC.
+#define FS_OWNER_IS_PUBLIC_OBJECT(owner) \
+	((owner) == FS_OWNER_SYSTEM || (owner) == FS_OWNER_PUBLIC)
+
+_Static_assert(FS_OWNER_PUBLIC != FS_OWNER_SYSTEM &&
+	       FS_OWNER_PUBLIC < FS_OWNER_SCOPE_FLAG &&
+	       VFS_SCOPE_FIRST_DYNAMIC > FS_OWNER_PUBLIC &&
+	       VFS_SCOPE_FIRST_DYNAMIC < FS_OWNER_SCOPE_FLAG,
+	       "storage principal and workflow scope ranges must not overlap");
 
 #define FS_CHARGE_PUBLIC 0U
 #define FS_CHARGE_WORKFLOW 1U

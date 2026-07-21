@@ -131,6 +131,8 @@ static inline void exec_manifest_worker_image(const char *source,
 	X("fsquota_ucore", "fsquota_ucore", \
 	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
 	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
+	X("fspquota_ucore", "fspquota_ucore", EXEC_MANIFEST_F_SEALED, 0, 0, \
+	  EXEC_MANIFEST_VFS_PROFILE_NONE) \
 	X("procreap_agent_ucore", "procreap_agent_ucore", \
 	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
 	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \

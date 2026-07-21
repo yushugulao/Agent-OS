@@ -27,18 +27,12 @@ enum proc_admission {
 struct proc_resource_domain {
 	int used;
 	int live;
-	uint storage_cookie;
-	uint storage_blocks;
-	uint storage_inodes;
 };
 
 static struct proc_resource_domain
 	proc_resource_domains[PROC_RESOURCE_DOMAIN_CAP];
 static int proc_resource_ordinary_live;
 static int proc_resource_reserved_live;
-static uint proc_storage_next_cookie;
-static uint proc_storage_block_limit;
-static uint proc_storage_inode_limit;
 
 static void proc_reset_thread_slot(struct thread *t);
 static void proc_recycle(struct proc *p);
@@ -61,6 +55,9 @@ _Static_assert(PROC_RESERVED_SLOTS > 0 && PROC_RESERVED_SLOTS < NPROC,
 _Static_assert(PROC_RESOURCE_DOMAIN_LIMIT > 0 &&
 	       PROC_RESOURCE_DOMAIN_LIMIT <= PROC_ORDINARY_SLOTS,
 	       "resource domain limit must fit the ordinary process pool");
+_Static_assert(PROC_STORAGE_PRINCIPAL_SYSTEM == FS_OWNER_SYSTEM &&
+	       PROC_STORAGE_PRINCIPAL_PUBLIC == FS_OWNER_PUBLIC,
+	       "process and file-system storage principals must match");
 
 static uint64 kernel_stack_slot(int proc_index, int tid)
 {
@@ -256,9 +253,6 @@ static void proc_resource_domain_clear(struct proc_resource_domain *domain)
 {
 	domain->used = 0;
 	domain->live = 0;
-	domain->storage_cookie = PROC_STORAGE_COOKIE_FREE;
-	domain->storage_blocks = 0;
-	domain->storage_inodes = 0;
 }
 
 static void proc_resource_init(void)
@@ -267,102 +261,13 @@ static void proc_resource_init(void)
 		proc_resource_domain_clear(&proc_resource_domains[i]);
 	proc_resource_ordinary_live = 0;
 	proc_resource_reserved_live = 0;
-	proc_storage_next_cookie = PROC_STORAGE_COOKIE_MIN;
-	proc_storage_block_limit = 0;
-	proc_storage_inode_limit = 0;
 }
 
-uint proc_storage_cookie(const struct proc *p)
+uint proc_storage_principal(const struct proc *p)
 {
 	if (p == 0)
-		return PROC_STORAGE_COOKIE_SYSTEM;
-	return p->storage_cookie;
-}
-
-void proc_storage_set_cookie_floor(uint floor)
-{
-	int enabled = intr_save();
-
-	if (floor == ~0U)
-		panic("storage cookie exhausted");
-	if (proc_storage_next_cookie < PROC_STORAGE_COOKIE_MIN)
-		proc_storage_next_cookie = PROC_STORAGE_COOKIE_MIN;
-	if (proc_storage_next_cookie <= floor)
-		proc_storage_next_cookie = floor + 1;
-	intr_restore(enabled);
-}
-
-void proc_storage_set_limits(uint block_limit, uint inode_limit)
-{
-	int enabled = intr_save();
-
-	if (block_limit == 0 || inode_limit == 0)
-		panic("invalid storage domain limits");
-	proc_storage_block_limit = block_limit;
-	proc_storage_inode_limit = inode_limit;
-	intr_restore(enabled);
-}
-
-int proc_storage_reserve(uint cookie, uint blocks, uint inodes)
-{
-	int enabled = intr_save();
-	int result = -1;
-
-	if (blocks == 0 && inodes == 0) {
-		result = 0;
-		goto out;
-	}
-	if (cookie == PROC_STORAGE_COOKIE_SYSTEM) {
-		result = 0;
-		goto out;
-	}
-	if (cookie < PROC_STORAGE_COOKIE_MIN ||
-	    proc_storage_block_limit == 0 || proc_storage_inode_limit == 0)
-		goto out;
-	for (int i = 0; i < PROC_RESOURCE_DOMAIN_CAP; i++) {
-		struct proc_resource_domain *domain = &proc_resource_domains[i];
-
-		if (!domain->used || domain->live <= 0 ||
-		    domain->storage_cookie != cookie)
-			continue;
-		if (domain->storage_blocks > proc_storage_block_limit ||
-		    domain->storage_inodes > proc_storage_inode_limit ||
-		    blocks > proc_storage_block_limit - domain->storage_blocks ||
-		    inodes > proc_storage_inode_limit - domain->storage_inodes)
-			goto out;
-		domain->storage_blocks += blocks;
-		domain->storage_inodes += inodes;
-		result = 0;
-		goto out;
-	}
-out:
-	intr_restore(enabled);
-	return result;
-}
-
-void proc_storage_release(uint cookie, uint blocks, uint inodes)
-{
-	int enabled = intr_save();
-
-	if ((blocks == 0 && inodes == 0) ||
-	    cookie == PROC_STORAGE_COOKIE_SYSTEM ||
-	    cookie < PROC_STORAGE_COOKIE_MIN)
-		goto out;
-	for (int i = 0; i < PROC_RESOURCE_DOMAIN_CAP; i++) {
-		struct proc_resource_domain *domain = &proc_resource_domains[i];
-
-		if (!domain->used || domain->live <= 0 ||
-		    domain->storage_cookie != cookie)
-			continue;
-		if (blocks > domain->storage_blocks ||
-		    inodes > domain->storage_inodes)
-			panic("storage domain count invariant");
-		domain->storage_blocks -= blocks;
-		domain->storage_inodes -= inodes;
-		break;
-	}
-out:
-	intr_restore(enabled);
+		return PROC_STORAGE_PRINCIPAL_SYSTEM;
+	return p->storage_principal_id;
 }
 
 // Reserve a proc slot and charge its immutable resource domain atomically.
@@ -433,17 +338,6 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 		domain = &proc_resource_domains[domain_id];
 		domain->used = 1;
 		domain->live = 0;
-		if (admission == PROC_ADMIT_BOOT) {
-			domain->storage_cookie = PROC_STORAGE_COOKIE_SYSTEM;
-		} else {
-			if (proc_storage_next_cookie < PROC_STORAGE_COOKIE_MIN ||
-			    proc_storage_next_cookie == ~0U) {
-				proc_resource_domain_clear(domain);
-				p = 0;
-				goto out;
-			}
-			domain->storage_cookie = proc_storage_next_cookie++;
-		}
 	}
 	domain = &proc_resource_domains[domain_id];
 	domain->live++;
@@ -454,7 +348,10 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 	p->resource_domain_id = domain_id;
 	p->resource_slot_reserved = reserved;
 	p->resource_domain_admin = admission == PROC_ADMIT_BOOT;
-	p->storage_cookie = domain->storage_cookie;
+	// Process domains and bootstrap administration are short-lived control
+	// state. Every userspace image, including INIT_PROC, is billed to the
+	// stable PUBLIC principal; SYSTEM is reserved for p == NULL kernel I/O.
+	p->storage_principal_id = PROC_STORAGE_PRINCIPAL_PUBLIC;
 	p->state = P_USED;
 out:
 	intr_restore(enabled);
@@ -499,7 +396,7 @@ static void proc_resource_release(struct proc *p)
 	p->resource_domain_id = -1;
 	p->resource_slot_reserved = 0;
 	p->resource_domain_admin = 0;
-	p->storage_cookie = PROC_STORAGE_COOKIE_FREE;
+	p->storage_principal_id = PROC_STORAGE_PRINCIPAL_NONE;
 out:
 	intr_restore(enabled);
 }
@@ -711,7 +608,7 @@ void proc_init()
 		p->resource_domain_id = -1;
 		p->resource_slot_reserved = 0;
 		p->resource_domain_admin = 0;
-		p->storage_cookie = PROC_STORAGE_COOKIE_FREE;
+		p->storage_principal_id = PROC_STORAGE_PRINCIPAL_NONE;
 		p->vm_snapshot_depth = 0;
 		p->vm_snapshot_owner_tid = -1;
 		child_records_reset(p);

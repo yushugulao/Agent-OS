@@ -140,6 +140,8 @@ require_path "baseline_ucore/os/kernel_work.c" "baseline kernel work budget modu
 require_path "baseline_ucore/os/kernel_work.h" "baseline kernel work budget API is missing"
 require_path "user/src/syscallfair_ucore.c" "AgentOS syscall fairness guest is missing"
 require_path "baseline_ucore/user/src/syscallfair_ucore.c" "baseline syscall fairness guest is missing"
+require_path "user/src/fspquota_ucore.c" "AgentOS persistent quota guest is missing"
+require_path "baseline_ucore/user/src/fspquota_ucore.c" "baseline persistent quota guest is missing"
 require_path "baseline_ucore/user/src/rp_orch.c" "baseline platform orchestrator is missing"
 require_path "baseline_ucore/user/src/rp_backend.c" "baseline platform backend is missing"
 require_path "os/agent.c" "AgentOS kernel module is missing"
@@ -187,8 +189,43 @@ require_text "Makefile" "scripts/run-syscall-fairness-tests.sh" "Makefile syscal
 require_text "Makefile" "scripts/check-dependencies.sh" "Makefile doctor target does not call dependency checker"
 require_text "Makefile" "^QEMU \\?= qemu-system-riscv64" "plain Makefile QEMU is not environment-overridable"
 require_text "Makefile" "^QEMU \\?= qemu-system-riscv64" "AgentOS Makefile QEMU is not environment-overridable"
+require_text "Makefile" '^run: build/kernel \$\(F\)/fs-copy\.img$' "AgentOS fresh run does not rebuild the writable image"
+require_text "Makefile" '^\$\(F\)/fs\.img: user \.FORCE$' "AgentOS fresh image does not rebuild userspace"
+require_text "Makefile" '^run-persist: build/kernel$' "AgentOS persistent reboot depends on the fresh image"
+require_text "Makefile" 'if \[ ! -f "\$\(F\)/fs-copy\.img" \]' "AgentOS persistent reboot cannot initialize a missing disk"
+require_text "baseline_ucore/Makefile" '^run: build/kernel \$\(F\)/fs-copy\.img$' "baseline fresh run does not rebuild the writable image"
+require_text "baseline_ucore/Makefile" '^\$\(F\)/fs\.img: user \.FORCE$' "baseline fresh image does not rebuild userspace"
+require_text "baseline_ucore/Makefile" '^run-persist: build/kernel$' "baseline persistent reboot depends on the fresh image"
+require_text "baseline_ucore/Makefile" 'if \[ ! -f "\$\(F\)/fs-copy\.img" \]' "baseline persistent reboot cannot initialize a missing disk"
 
 require_text "baseline_ucore/user/Makefile" "platform_plain" "baseline platform chapter is not declared"
+require_text "user/Makefile" "FS_ENOSPC_TESTS.*fspquota_ucore" "AgentOS fs test chapter omits persistent quota guest"
+require_text "baseline_ucore/user/Makefile" "FS_ENOSPC_TESTS.*fspquota_ucore" "baseline fs test chapter omits persistent quota guest"
+if ! grep -A1 -F 'X("fspquota_ucore"' \
+	"${ROOT_DIR}/user/include/exec_policy_manifest.h" | \
+	grep -q "EXEC_MANIFEST_F_SEALED"; then
+	fail "persistent quota guest is not sealed"
+fi
+if ! grep -A1 -F 'X("fspquota_ucore"' \
+	"${ROOT_DIR}/user/include/exec_policy_manifest.h" | \
+	grep -q "EXEC_MANIFEST_VFS_PROFILE_NONE"; then
+	fail "persistent quota guest must install as stable PUBLIC"
+fi
+require_text "scripts/run-fs-enospc-tests.sh" "principal-agent-seed" "fs runner omits AgentOS persistent quota seed boot"
+require_text "scripts/run-fs-enospc-tests.sh" "principal-agent-verify" "fs runner omits AgentOS persistent quota verify boot"
+require_text "scripts/run-fs-enospc-tests.sh" "principal-baseline-seed" "fs runner omits baseline persistent quota seed boot"
+require_text "scripts/run-fs-enospc-tests.sh" "principal-baseline-verify" "fs runner omits baseline persistent quota verify boot"
+require_text "scripts/run-fs-enospc-tests.sh" "principal-agent-orphan" "fs runner omits AgentOS crash-orphan boot"
+require_text "scripts/run-fs-enospc-tests.sh" "principal-baseline-orphan" "fs runner omits baseline crash-orphan boot"
+require_text "scripts/run-fs-enospc-tests.sh" "crash_orphan_ready=1" "fs runner omits crash-orphan checkpoint"
+require_text "scripts/run-fs-enospc-tests.sh" "FS_PERSIST_BLOCK_LIMIT=18" "persistent quota block contract is not fixed at eighteen"
+require_text "scripts/run-fs-enospc-tests.sh" "FS_PERSIST_INODE_LIMIT=8" "persistent quota inode contract is not fixed at eight"
+require_text "scripts/run-fs-enospc-tests.sh" "sponsored_object_charged=1 blocks=" "fs runner omits sponsored PUBLIC ownership transfer contract"
+require_text "scripts/run-fs-enospc-tests.sh" "durable_fixture=1 blocks=18 inodes=8 owner_exited=1" "fs runner omits durable quota seed contract"
+require_text "scripts/run-fs-enospc-tests.sh" "reboot_charge_persisted=1" "fs runner omits reboot quota accounting contract"
+require_text "scripts/run-fs-enospc-tests.sh" "deletion_reuse=1" "fs runner omits persistent quota release contract"
+require_text "scripts/run-fs-enospc-tests.sh" "relaunch_charge_persisted=1 launches=2" "fs runner omits repeated relaunch quota contract"
+require_text "scripts/run-fs-enospc-tests.sh" "cleanup_reuse=1" "fs runner omits persistent quota cleanup contract"
 require_text "scripts/run-full-verification.sh" "verify-dual-target-structure" "full verification does not run the structure check"
 require_text "scripts/run-full-verification.sh" "test_check_host_platform_alignment.py" "full verification does not run host platform alignment unit test"
 require_text "scripts/run-full-verification.sh" "test_check_host_action_kind_alignment.py" "full verification does not run host action kind alignment unit test"
@@ -222,6 +259,10 @@ fi
 if ! cmp -s "${ROOT_DIR}/user/src/syscallfair_ucore.c" \
 	"${ROOT_DIR}/baseline_ucore/user/src/syscallfair_ucore.c"; then
 	fail "dual targets do not share the same syscall fairness guest"
+fi
+if ! same_source_content "${ROOT_DIR}/user/src/fspquota_ucore.c" \
+	"${ROOT_DIR}/baseline_ucore/user/src/fspquota_ucore.c"; then
+	fail "dual targets do not share the same persistent quota guest"
 fi
 
 require_text "scripts/check-target-readiness.sh" "verify-dual-target-structure" "target readiness checker does not run the structure check"

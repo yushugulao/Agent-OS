@@ -27,15 +27,27 @@ int main(void)
 	assert(workflow_inodes == 342);
 	checksum = fs_policy_contract_checksum(
 		FS_STORAGE_POLICY_VERSION, FS_WORKFLOW_SCOPE_SLOTS,
+		FS_PUBLIC_PRINCIPAL_ID,
 		workflow_blocks, workflow_inodes, system_blocks, system_inodes);
 	assert(fs_policy_contract_geometry_valid(
 		16060, 2047, FS_STORAGE_POLICY_VERSION,
-		FS_WORKFLOW_SCOPE_SLOTS, workflow_blocks, workflow_inodes,
+		FS_WORKFLOW_SCOPE_SLOTS, FS_PUBLIC_PRINCIPAL_ID,
+		workflow_blocks, workflow_inodes,
 		system_blocks, system_inodes, checksum));
 	assert(!fs_policy_contract_geometry_valid(
 		16060, 2047, FS_STORAGE_POLICY_VERSION,
-		FS_WORKFLOW_SCOPE_SLOTS, workflow_blocks, workflow_inodes,
+		FS_WORKFLOW_SCOPE_SLOTS, FS_PUBLIC_PRINCIPAL_ID,
+		workflow_blocks, workflow_inodes,
 		system_blocks, system_inodes, checksum ^ 1U));
+	assert(!fs_policy_contract_geometry_valid(
+		16060, 2047, FS_STORAGE_POLICY_VERSION,
+		FS_WORKFLOW_SCOPE_SLOTS, FS_PUBLIC_PRINCIPAL_ID + 1,
+		workflow_blocks, workflow_inodes,
+		system_blocks, system_inodes,
+		fs_policy_contract_checksum(
+			FS_STORAGE_POLICY_VERSION, FS_WORKFLOW_SCOPE_SLOTS,
+			FS_PUBLIC_PRINCIPAL_ID + 1, workflow_blocks,
+			workflow_inodes, system_blocks, system_inodes)));
 	assert(fs_policy_contract_initially_funded(
 		6890, 1892, workflow_blocks, workflow_inodes,
 		system_blocks, system_inodes));

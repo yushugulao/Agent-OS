@@ -99,6 +99,7 @@ int main(int argc, char *argv[])
 	sb.bmapstart = xint(2 + ninodeblocks);
 	sb.qmapstart = xint(2 + ninodeblocks + nbitmap);
 	sb.datastart = xint(nmeta);
+	sb.public_principal = xint(FS_OWNER_PUBLIC);
 
 	printf("nmeta %d (boot, super, inode blocks %u, bitmap blocks %u, "
 	       "owner blocks %u) blocks %d total %d\n",
@@ -140,7 +141,8 @@ int main(int argc, char *argv[])
 	// fix size of root inode dir
 	rinode(rootino, &din);
 	off = xint(din.size);
-	off = ((off / BSIZE) + 1) * BSIZE;
+	if (off % BSIZE != 0)
+		off = ((off / BSIZE) + 1) * BSIZE;
 	din.size = xint(off);
 	winode(rootino, &din);
 
