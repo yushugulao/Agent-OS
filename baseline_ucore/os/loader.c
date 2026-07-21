@@ -1,6 +1,7 @@
 #include "loader.h"
 #include "defs.h"
 #include "file.h"
+#include "kernel_work.h"
 #include "trap.h"
 
 extern char INIT_PROC[];
@@ -23,6 +24,7 @@ int user_image_build(struct inode *ip, uint64 trapframe_pa,
 {
 	char *page;
 	uint64 length;
+	uint64 content_epoch;
 	uint64 va_end;
 
 	if (ip == 0 || image == 0 || trapframe_pa == 0)
@@ -32,6 +34,7 @@ int user_image_build(struct inode *ip, uint64 trapframe_pa,
 	if (ip->type != T_FILE)
 		return -1;
 	length = ip->size;
+	content_epoch = ip->content_epoch;
 	if (length == 0 || length > MAXVA - BASE_ADDRESS)
 		return -1;
 	va_end = PGROUNDUP(BASE_ADDRESS + length);
@@ -63,6 +66,9 @@ int user_image_build(struct inode *ip, uint64 trapframe_pa,
 			goto fail;
 		}
 		image->max_page = (va + PAGE_SIZE) / PAGE_SIZE;
+		if (kernel_work_checkpoint(KERNEL_WORK_PAGE_UNITS) < 0 ||
+		    ip->content_epoch != content_epoch)
+			goto fail;
 	}
 
 	if (uvmmap(image->pagetable, image->ustack_base,

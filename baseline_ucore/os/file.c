@@ -2,6 +2,7 @@
 #include "defs.h"
 #include "fcntl.h"
 #include "fs.h"
+#include "kernel_work.h"
 #include "proc.h"
 
 //This is a system-level open file table that holds open files of all process.
@@ -23,12 +24,34 @@ struct file *stdio_init(int fd)
 //The operation performed on the system-level open file table entry after some process closes a file.
 void fileclose(struct file *f)
 {
+	int type;
+	int writable;
+	struct pipe *pipe;
+	struct inode *ip;
+
+	if (fd_is_reserved(f))
+		return;
 	if (f->ref < 1)
 		panic("fileclose");
 	if (--f->ref > 0) {
 		return;
 	}
-	switch (f->type) {
+
+	// Publish the slot as free before cleanup can reschedule. Cleanup uses only
+	// the snapshots below, so a later filealloc() may safely reuse this slot.
+	type = f->type;
+	writable = f->writable;
+	pipe = f->pipe;
+	ip = f->ip;
+	f->off = 0;
+	f->readable = 0;
+	f->writable = 0;
+	f->pipe = 0;
+	f->ip = 0;
+	f->type = FD_NONE;
+	f->ref = 0;
+
+	switch (type) {
 	case FD_NONE:
 		// A reserved file slot may be released before it is initialized.
 		break;
@@ -36,28 +59,20 @@ void fileclose(struct file *f)
 		// Do nothing
 		break;
 	case FD_PIPE:
-		pipeclose(f->pipe, f->writable);
+		pipeclose(pipe, writable);
 		break;
 	case FD_INODE:
-		iput(f->ip);
+		iput(ip);
 		break;
 	default:
-		panic("unknown file type %d\n", f->type);
+		panic("unknown file type %d\n", type);
 	}
-
-	f->off = 0;
-	f->readable = 0;
-	f->writable = 0;
-	f->pipe = 0;
-	f->ip = 0;
-	f->ref = 0;
-	f->type = FD_NONE;
 }
 
 // Pin an open-file entry across operations that may yield.
 struct file *filedup(struct file *f)
 {
-	if (f == 0 || f->ref < 1)
+	if (f == 0 || fd_is_reserved(f) || f->ref < 1)
 		return 0;
 	f->ref++;
 	return f;
@@ -100,43 +115,48 @@ int show_all_files()
 //if omode if the others,open a created file.
 int fileopen(char *path, uint64 omode)
 {
-	int fd;
-	struct file *f;
-	struct inode *ip;
+	int fd = -1;
+	struct file *f = 0;
+	struct inode *ip = 0;
 	uint owner = proc_storage_cookie(curr_proc());
+
+	// Reserve the process-local descriptor before any operation that may
+	// reschedule. The sentinel is neither usable nor inherited by fork().
+	if ((f = filealloc()) == 0)
+		return -1;
+	if ((fd = fdreserve()) < 0) {
+		fileclose(f);
+		return -1;
+	}
 	if (omode & O_CREATE) {
 		ip = fs_create(path, T_FILE, 0, owner);
-		if (ip == 0) {
-			return -1;
-		}
+		if (ip == 0)
+			goto fail;
 	} else {
-		if ((ip = namei(path)) == 0) {
-			return -1;
-		}
+		if ((ip = namei(path)) == 0)
+			goto fail;
 		ivalid(ip);
 	}
-	if (ip->type != T_FILE) {
-		iput(ip);
-		return -1;
-	}
-	if ((f = filealloc()) == 0 || (fd = fdalloc(f)) < 0) {
-		//Assign a system-level table entry to a newly created or opened file
-		//and then create a file descriptor that points to it
-		if (f)
-			fileclose(f);
-		iput(ip);
-		return -1;
-	}
+	if (ip->type != T_FILE)
+		goto fail;
+	if ((omode & O_TRUNC) && ip->type == T_FILE)
+		itrunc(ip);
 	// only support FD_INODE
 	f->type = FD_INODE;
 	f->off = 0;
 	f->ip = ip;
 	f->readable = !(omode & O_WRONLY);
 	f->writable = (omode & O_WRONLY) || (omode & O_RDWR);
-	if ((omode & O_TRUNC) && ip->type == T_FILE) {
-		itrunc(ip);
-	}
+	if (fdinstall(fd, f) < 0)
+		goto fail;
 	return fd;
+
+fail:
+	if (ip != 0 && f->ip == 0)
+		iput(ip);
+	fdrelease(fd);
+	fileclose(f);
+	return -1;
 }
 
 int fileunlink(char *path)
@@ -167,24 +187,79 @@ int fileunlink(char *path)
 // Write data to inode.
 uint64 inodewrite(struct file *f, uint64 va, uint64 len)
 {
+	uint64 done = 0;
+	uint64 user_addr;
+	uint64 remaining;
+	uint chunk;
+	uint off;
+	int checkpoint;
 	int r;
+
+	if (len == 0)
+		return 0;
 	ivalid(f->ip);
 	if (f->ip->type != T_FILE)
 		return (uint64)-1;
-	if ((r = writei(f->ip, 1, va, f->off, len,
-		       proc_storage_cookie(curr_proc()))) > 0)
-		f->off += r;
-	return r;
+	while (done < len) {
+		off = f->off;
+		remaining = len - done;
+		chunk = BSIZE - off % BSIZE;
+		if (remaining < chunk)
+			chunk = (uint)remaining;
+		if (checked_user_offset(va, done, 1, &user_addr) < 0)
+			return done != 0 ? done : (uint64)-1;
+		r = writei(f->ip, 1, user_addr, off, chunk,
+			   proc_storage_cookie(curr_proc()));
+		if (r < 0)
+			return done != 0 ? done : (uint64)-1;
+		if (r == 0)
+			break;
+		f->off = off + r;
+		done += r;
+		checkpoint = kernel_work_checkpoint((uint)r);
+		// Once another thread has run, do not continue mutating a shared
+		// open-file offset in this syscall. POSIX short writes let the caller
+		// resume explicitly from the now-published offset.
+		if (checkpoint != 0 || (uint)r < chunk)
+			break;
+	}
+	return done;
 }
 
 //Read data from inode.
 uint64 inoderead(struct file *f, uint64 va, uint64 len)
 {
+	uint64 done = 0;
+	uint64 user_addr;
+	uint64 remaining;
+	uint chunk;
+	uint off;
+	int checkpoint;
 	int r;
+
+	if (len == 0)
+		return 0;
 	ivalid(f->ip);
 	if (f->ip->type != T_FILE)
 		return (uint64)-1;
-	if ((r = readi(f->ip, 1, va, f->off, len)) > 0)
-		f->off += r;
-	return r;
+	while (done < len) {
+		off = f->off;
+		remaining = len - done;
+		chunk = BSIZE - off % BSIZE;
+		if (remaining < chunk)
+			chunk = (uint)remaining;
+		if (checked_user_offset(va, done, 1, &user_addr) < 0)
+			return done != 0 ? done : (uint64)-1;
+		r = readi(f->ip, 1, user_addr, off, chunk);
+		if (r < 0)
+			return done != 0 ? done : (uint64)-1;
+		if (r == 0)
+			break;
+		f->off = off + r;
+		done += r;
+		checkpoint = kernel_work_checkpoint((uint)r);
+		if (checkpoint != 0 || (uint)r < chunk)
+			break;
+	}
+	return done;
 }

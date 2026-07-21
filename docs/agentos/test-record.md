@@ -2,7 +2,7 @@
 
 测试目标：根目录 AgentOS-uCore 增强目标
 
-本次最终复测日期：2026-07-21
+本次最终复测日期：2026-07-22
 
 测试环境：
 
@@ -64,6 +64,7 @@ bash scripts/run-agent-tests.sh
 | `usersafety_ucore` | `live after pointer bounds`、`live after directed wakeup`、`parent passed` | syscall 输入检查、定向唤醒和失败事务回滚可验证 |
 | `fsenospc_ucore` | `inode exhaustion survived`、`block exhaustion survived` | inode、inode cache 与数据块耗尽返回失败而非触发内核 panic |
 | `procreap_ucore` / `procreap_agent_ucore` | `live-domain-limit=1`、`reserved-agent-slot=1` | 进程回收、资源域配额与系统保留槽可验证 |
+| `syscallfair_ucore` | console/inode/trunc 三组 `BEGIN < PEER < END`、`INODE_PEER < INODE_SHORT`、`parent passed` | 纯 Guest 验证控制台长写、inode 写的内核重调度计数/短写/peer 进展、detach 后截断回收和 worker 退出完整性 |
 | 内核栈预算 | `kernel stack budget`、`kernel stack user path` | 构建期 callgraph/栈帧预算检查随内核构建执行 |
 
 ## 本次可信 IPC 变更验证状态
@@ -454,7 +455,7 @@ fsquota_ucore: pressure_cleanup=1
 make proc-reap-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-关键输出：
+2026-07-21 在可用 RISC-V/QEMU 环境中的基础机制输出：
 
 ```text
 procreap_ucore: process lifecycle verification
@@ -525,9 +526,7 @@ Test trace OK!
 
 ## 当前聚合验证状态
 
-当前不记录 `make full-verify` 全绿。最近一次运行在宿主机 Reader E2E 阶段中止：`host_tools/test_plain_ucore_reader_e2e.py` 断言 API Catalog 页面应包含 `Reader GET Routes`，而实际页面缺少该文本。由于脚本使用 `set -eu`，该失败发生后不会继续运行双目标 QEMU、AgentOS 专项和进程回收阶段。
-
-因此，上述安全专项应按各自独立脚本和通过标记记录；`fs-enospc-test` 还必须始终单独执行，因为 `run-full-verification.sh` 当前没有调用它。后续修复 Reader 页面或测试契约后，应重新运行完整入口，再更新本节状态。
+当前不据独立专项结果宣称 `make full-verify` 全绿。上述安全机制只按各自脚本和通过标记记录；`fs-enospc-test` 还必须始终单独执行，因为 `run-full-verification.sh` 当前没有调用它。
 
 ## 2026-07-21 workflow scope 安全回归
 
@@ -540,6 +539,26 @@ Test trace OK!
 - ENOSPC 的容量契约、普通耗尽、资源域配额和系统保留量用例全部通过；进程回收的 baseline、Agent 和 adversarial 用例全部通过。
 - 宿主提取器的路径穿越拒绝、旧输出清理、scope 选择隔离和存储策略 C 单测通过；相关 Python 文件通过语法检查。
 - AgentOS 平台构建通过，实际存储契约为 block `G=1195/S=512`、inode `G=342/S=64`；QEMU 成功挂载并启动 `rp_agentos_orch`，有界超时前无 panic 或非法文件系统。
-- 增强目标内核栈预算 `14032 < 16384`，对照目标 `7968 < 16384`；最终 `git diff --check` 通过且无残留 QEMU/构建进程。
+- 增强目标内核栈预算 `14144 < 16384`，对照目标 `8144 < 16384`；最终 `git diff --check` 通过且无残留 QEMU/构建进程。
 
 原始日志保存在仓库同级工作目录的 `scope-169-*.log` 文件中。
+
+## 2026-07-22 syscall 公平性回归
+
+执行：
+
+```bash
+make syscall-fairness-test TOOLPREFIX=riscv64-linux-gnu-
+```
+
+关键输出：
+
+```text
+[syscall-fairness] agent passed console=2997/5046/68536 inode=68561/68611/68635 trunc=68658/68683/68707
+[syscall-fairness] baseline passed console=2997/5046/68536 inode=68561/68611/68635 trunc=68658/68683/68707
+[syscall-fairness] both targets passed
+```
+
+测试没有依赖宿主输入注入。该轮日志证明两个目标都在一次 64 KiB 控制台 `write()` 返回前调度 Guest pipe gate 后的同级进程。随后终审把 inode 和 truncate 契约都改为 last-syscall 重调度计数加独立 observer：计数分别证明 64 KiB `write()` 与 `O_TRUNC` open 内部跨过调度边界，observer 分别证明 peer 读到已提交数据和原子 EOF 可见，避免把返回后的用户态 timer 抢占误当成 syscall 内调度。最外层父进程等待测试 worker 完整退出后才输出 `parent passed`，宿主 runner 还要求 QEMU 正常关机。终审后的契约尚未在当前受限身份下重新运行 QEMU。
+
+基础机制轮次还独立通过 `make agentos-test` 15/15、`make fs-enospc-test` 和 `make proc-reap-test`，当时的构建期内核栈检查为增强目标 `14144 < 16384`、对照目标 `8144 < 16384`。7 月 22 日审查后又补入 fork 逐页计费与 VM snapshot 屏障、Agent size 非阻塞发布 sidecar、baseline exec epoch、last-syscall 重调度观测、强化的 inode/ENOSPC/退出断言及结构检查；当前受限执行身份没有注册 WSL 发行版，因此这部分最终 diff 已通过双目标 MinGW `-fsyntax-only`、用户程序语法检查、`bash -n` 和 `git diff --check`，但尚未重新取得 RISC-V/QEMU 与栈预算输出。发布前应在标准 Linux 工具链重跑本节命令。覆盖也不表示任意 syscall 路径已被穷尽；固定上界目录扫描与仅可信 Agent 可达的 metadata raw I/O 仍缺独立公平性压力用例。

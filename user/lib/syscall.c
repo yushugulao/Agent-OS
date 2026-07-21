@@ -235,6 +235,11 @@ int condvar_wait(int cid, int mid)
 	return syscall(SYS_condvar_wait, cid, mid);
 }
 
+long kernel_work_last_preemptions(void)
+{
+	return syscall(SYS_kernel_work_last_preemptions);
+}
+
 int enable_deadlock_detect(int enabled)
 {
 	return syscall(SYS_enable_deadlock_detect, enabled);

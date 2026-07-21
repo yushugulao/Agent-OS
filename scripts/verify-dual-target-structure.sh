@@ -134,6 +134,12 @@ is_agentos_adapted_source() {
 }
 
 require_path "baseline_ucore/os" "baseline kernel directory is missing"
+require_path "os/kernel_work.c" "AgentOS kernel work budget module is missing"
+require_path "os/kernel_work.h" "AgentOS kernel work budget API is missing"
+require_path "baseline_ucore/os/kernel_work.c" "baseline kernel work budget module is missing"
+require_path "baseline_ucore/os/kernel_work.h" "baseline kernel work budget API is missing"
+require_path "user/src/syscallfair_ucore.c" "AgentOS syscall fairness guest is missing"
+require_path "baseline_ucore/user/src/syscallfair_ucore.c" "baseline syscall fairness guest is missing"
 require_path "baseline_ucore/user/src/rp_orch.c" "baseline platform orchestrator is missing"
 require_path "baseline_ucore/user/src/rp_backend.c" "baseline platform backend is missing"
 require_path "os/agent.c" "AgentOS kernel module is missing"
@@ -155,6 +161,7 @@ require_path "scripts/check-windows-prereqs.ps1" "Windows dependency checker is 
 require_path "scripts/install-ubuntu-deps.sh" "Ubuntu dependency installer is missing"
 require_path "scripts/run-dual-platforms.sh" "dual target runner is missing"
 require_path "scripts/run-full-verification.sh" "full verification runner is missing"
+require_path "scripts/run-syscall-fairness-tests.sh" "syscall fairness runner is missing"
 require_path "scripts/serve-reader.sh" "reader server script is missing"
 require_path "docs/windows-quickstart.md" "Windows quickstart document is missing"
 
@@ -176,6 +183,7 @@ require_text "Makefile" "scripts/run-dual-platforms.sh" "Makefile dual platform 
 require_text "Makefile" "scripts/serve-reader.sh" "Makefile reader target does not call the reader server"
 require_text "Makefile" "scripts/check-target-readiness.sh" "Makefile target readiness target does not call the readiness checker"
 require_text "Makefile" "scripts/run-full-verification.sh" "Makefile full verification target does not call the full runner"
+require_text "Makefile" "scripts/run-syscall-fairness-tests.sh" "Makefile syscall fairness target does not call its runner"
 require_text "Makefile" "scripts/check-dependencies.sh" "Makefile doctor target does not call dependency checker"
 require_text "Makefile" "^QEMU \\?= qemu-system-riscv64" "plain Makefile QEMU is not environment-overridable"
 require_text "Makefile" "^QEMU \\?= qemu-system-riscv64" "AgentOS Makefile QEMU is not environment-overridable"
@@ -205,6 +213,16 @@ require_text "scripts/run-full-verification.sh" "test_plain_ucore_reader_e2e.py"
 require_text "scripts/run-full-verification.sh" "run-dual-platforms.sh" "full verification does not run dual platform QEMU"
 require_text "scripts/run-full-verification.sh" "QEMU=.*run-dual-platforms.sh" "full verification does not pass QEMU to dual platform runner"
 require_text "scripts/run-full-verification.sh" "run-agent-tests.sh" "full verification does not run AgentOS kernel tests"
+require_text "scripts/run-full-verification.sh" "run-syscall-fairness-tests.sh" "full verification does not run syscall fairness tests"
+
+if ! cmp -s "${ROOT_DIR}/os/kernel_work.c" "${ROOT_DIR}/baseline_ucore/os/kernel_work.c" ||
+	! cmp -s "${ROOT_DIR}/os/kernel_work.h" "${ROOT_DIR}/baseline_ucore/os/kernel_work.h"; then
+	fail "dual targets do not share the same kernel work budget mechanism"
+fi
+if ! cmp -s "${ROOT_DIR}/user/src/syscallfair_ucore.c" \
+	"${ROOT_DIR}/baseline_ucore/user/src/syscallfair_ucore.c"; then
+	fail "dual targets do not share the same syscall fairness guest"
+fi
 
 require_text "scripts/check-target-readiness.sh" "verify-dual-target-structure" "target readiness checker does not run the structure check"
 require_text "scripts/check-target-readiness.sh" "test_check_host_platform_alignment.py" "target readiness checker does not run host platform alignment unit test"

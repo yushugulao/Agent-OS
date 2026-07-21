@@ -3,6 +3,7 @@
 #include "defs.h"
 #include "exec_policy.h"
 #include "file.h"
+#include "kernel_work.h"
 #include "trap.h"
 #include "vfs_security.h"
 
@@ -96,6 +97,8 @@ int user_image_build(struct inode *ip, uint64 trapframe_pa,
 			goto fail;
 		}
 		image->max_page = (va + PAGE_SIZE) / PAGE_SIZE;
+		if (kernel_work_checkpoint(KERNEL_WORK_PAGE_UNITS) < 0)
+			goto fail;
 	}
 
 	if (uvmmap(image->pagetable, image->ustack_base,

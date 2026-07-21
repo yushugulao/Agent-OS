@@ -58,4 +58,10 @@ echo "[full-verify] process reaper tests"
 	TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" CASE_TIMEOUT="${CASE_TIMEOUT}" bash scripts/run-proc-reap-tests.sh
 )
 
+echo "[full-verify] syscall fairness tests"
+(
+	cd "${ROOT_DIR}"
+	TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" CASE_TIMEOUT="${CASE_TIMEOUT}" bash scripts/run-syscall-fairness-tests.sh
+)
+
 echo "[full-verify] all checks passed"

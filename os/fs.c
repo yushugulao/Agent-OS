@@ -14,6 +14,7 @@
 #include "defs.h"
 #include "exec_policy.h"
 #include "file.h"
+#include "kernel_work.h"
 #include "proc.h"
 #include "riscv.h"
 #include "types.h"
@@ -933,23 +934,154 @@ static void bmap_discard(struct inode *ip, uint bn)
 	}
 }
 
-// Shrink an inode and release every whole block beyond the new end.
-int itruncate(struct inode *ip, const struct vfs_cred *cred, uint size)
+static void truncate_free_block(int dev, uint block)
 {
-	uint first_discard;
-	uint old_blocks;
+	if (block == 0)
+		return;
+	bfree(dev, block);
+	(void)kernel_work_checkpoint_cleanup(KERNEL_WORK_OPERATION_UNITS);
+}
 
+#define TRUNCATE_INDIRECT_BATCH 16U
+
+// Once the inode no longer points at this indirect block, its entries can be
+// reclaimed in small batches without carrying a buffer across a safe point.
+static void truncate_free_indirect(int dev, uint indirect)
+{
+	uint blocks[TRUNCATE_INDIRECT_BATCH];
+	struct buf *bp;
+	uint count;
+	uint *entries;
+
+	if (indirect == 0)
+		return;
+	for (uint base = 0; base < NINDIRECT; base += count) {
+		count = MIN(TRUNCATE_INDIRECT_BATCH, NINDIRECT - base);
+		bp = bread(dev, indirect);
+		entries = (uint *)bp->data;
+		memmove(blocks, entries + base, count * sizeof(*blocks));
+		brelse(bp);
+		for (uint i = 0; i < count; i++)
+			truncate_free_block(dev, blocks[i]);
+		(void)kernel_work_checkpoint_cleanup(
+			KERNEL_WORK_OPERATION_UNITS);
+	}
+	truncate_free_block(dev, indirect);
+}
+
+static int itruncate_detach_all(struct inode *ip,
+				struct inode_reclaim *reclaim)
+{
+	reclaim->mode = INODE_RECLAIM_DIRECT;
+	reclaim->dev = ip->dev;
+	memmove(reclaim->direct, ip->addrs, sizeof(reclaim->direct));
+	reclaim->indirect = ip->addrs[NDIRECT];
+	memset(ip->addrs, 0, sizeof(ip->addrs));
+	ip->size = 0;
+	iupdate(ip);
+	return 0;
+}
+
+static int itruncate_detach_partial(struct inode *ip, uint size,
+				    struct inode_reclaim *reclaim)
+{
+	uint *blocks;
+	uint count = 0;
+	uint first_discard = (size + BSIZE - 1) / BSIZE;
+	struct buf *bp;
+	uint *entries;
+
+	_Static_assert(MAXFILE * sizeof(uint) <= PGSIZE,
+		       "truncate reclaim list must fit in one page");
+	blocks = (uint *)kalloc();
+	if (blocks == 0)
+		return -1;
+	reclaim->mode = INODE_RECLAIM_LIST;
+	reclaim->dev = ip->dev;
+	reclaim->block_list = blocks;
+
+	for (uint bn = first_discard; bn < NDIRECT; bn++) {
+		if (ip->addrs[bn] != 0)
+			blocks[count++] = ip->addrs[bn];
+		ip->addrs[bn] = 0;
+	}
+	if (ip->addrs[NDIRECT] != 0) {
+		bp = bread(ip->dev, ip->addrs[NDIRECT]);
+		entries = (uint *)bp->data;
+		if (first_discard <= NDIRECT) {
+			reclaim->indirect = ip->addrs[NDIRECT];
+			ip->addrs[NDIRECT] = 0;
+			for (uint i = 0; i < NINDIRECT; i++)
+				if (entries[i] != 0)
+					blocks[count++] = entries[i];
+		} else {
+			uint first_indirect = first_discard - NDIRECT;
+
+			for (uint i = first_indirect; i < NINDIRECT; i++) {
+				if (entries[i] != 0)
+					blocks[count++] = entries[i];
+				entries[i] = 0;
+			}
+			bwrite(bp);
+		}
+		brelse(bp);
+	}
+
+	// All discarded mappings become unreachable before the first yield.
+	ip->size = size;
+	iupdate(ip);
+	reclaim->block_count = count;
+	return 0;
+}
+
+// Atomically remove discarded mappings. The caller owns reclaim after success
+// and must release it even if process teardown is requested.
+int itruncate_detach(struct inode *ip, const struct vfs_cred *cred, uint size,
+			 struct inode_reclaim *reclaim)
+{
+	if (reclaim == 0)
+		return -1;
+	memset(reclaim, 0, sizeof(*reclaim));
 	if (!vfs_inode_authorize(ip, cred, VFS_OP_TRUNCATE) ||
 	    !exec_policy_inode_mutable(ip))
 		return -1;
 	if (size > ip->size)
 		return -1;
-	first_discard = (size + BSIZE - 1) / BSIZE;
-	old_blocks = (ip->size + BSIZE - 1) / BSIZE;
-	for (uint bn = first_discard; bn < old_blocks; bn++)
-		bmap_discard(ip, bn);
-	ip->size = size;
-	iupdate(ip);
+	if (size == ip->size)
+		return 0;
+	if (size == 0)
+		return itruncate_detach_all(ip, reclaim);
+	return itruncate_detach_partial(ip, size, reclaim);
+}
+
+void itruncate_reclaim(struct inode_reclaim *reclaim)
+{
+	if (reclaim == 0 || reclaim->mode == INODE_RECLAIM_NONE)
+		return;
+	if (reclaim->mode == INODE_RECLAIM_DIRECT) {
+		for (uint i = 0; i < NDIRECT; i++)
+			truncate_free_block(reclaim->dev, reclaim->direct[i]);
+		truncate_free_indirect(reclaim->dev, reclaim->indirect);
+	} else if (reclaim->mode == INODE_RECLAIM_LIST) {
+		for (uint i = 0; i < reclaim->block_count; i++)
+			truncate_free_block(reclaim->dev,
+					    reclaim->block_list[i]);
+		truncate_free_block(reclaim->dev, reclaim->indirect);
+		kfree((char *)reclaim->block_list);
+	} else {
+		panic("invalid inode reclaim mode");
+	}
+	memset(reclaim, 0, sizeof(*reclaim));
+}
+
+// Shrink an inode and release every whole block beyond the new end.
+int itruncate(struct inode *ip, const struct vfs_cred *cred, uint size)
+{
+	struct inode_reclaim reclaim;
+
+	if (itruncate_detach(ip, cred, size, &reclaim) < 0)
+		return -1;
+	itruncate_reclaim(&reclaim);
 	return 0;
 }
 

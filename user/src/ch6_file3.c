@@ -13,6 +13,19 @@ void repeat(char *target, const char *template, int times)
 		stpncpy(target + len * i, template, len);
 }
 char test_str[4096];
+
+static void write_fully(int fd, const char *buf, int len)
+{
+	int done = 0;
+
+	while (done < len) {
+		int n = write(fd, buf + done, len - done);
+
+		assert(n > 0);
+		done += n;
+	}
+}
+
 int main()
 {
 	char fname[] = "fname3-0";
@@ -27,7 +40,7 @@ int main()
 		int fd = open(fname, O_CREATE | O_WRONLY);
 		assert(fd > 0);
 		for (int j = 0; j < 50; j++) {
-			write(fd, test_str, len);
+			write_fully(fd, test_str, len);
 		}
 		close(fd);
 		assert_eq(unlink(fname), 0);

@@ -297,3 +297,4 @@
 #define __NR_condvar_create 471
 #define __NR_condvar_signal 472
 #define __NR_condvar_wait 473
+#define __NR_kernel_work_last_preemptions 543

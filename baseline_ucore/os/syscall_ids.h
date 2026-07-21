@@ -306,3 +306,4 @@
 #define SYS_condvar_create 471
 #define SYS_condvar_signal 472
 #define SYS_condvar_wait 473
+#define SYS_kernel_work_last_preemptions 543

@@ -21,11 +21,17 @@ static int write_exact_file(const char *path, const char *text)
 {
 	int fd = open(path, O_CREATE | O_WRONLY | O_TRUNC);
 	int len = (int)strlen(text);
-	int wrote;
+	int wrote = 0;
 
 	if (fd < 0)
 		return 0;
-	wrote = write(fd, text, len);
+	while (wrote < len) {
+		int n = write(fd, text + wrote, len - wrote);
+
+		if (n <= 0)
+			break;
+		wrote += n;
+	}
 	close(fd);
 	return wrote == len;
 }

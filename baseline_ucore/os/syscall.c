@@ -1,5 +1,6 @@
 #include "console.h"
 #include "defs.h"
+#include "kernel_work.h"
 #include "loader.h"
 #include "sync.h"
 #include "syscall.h"
@@ -17,9 +18,13 @@ uint64 console_write(uint64 va, uint64 len)
 		uint64 n = MIN(len - written, sizeof(buf));
 		if (copyin(p->pagetable, buf, va + written, n) < 0)
 			return written ? written : (uint64)-1;
-		for (uint64 i = 0; i < n; ++i)
+		for (uint64 i = 0; i < n; ++i) {
 			console_putchar(buf[i]);
-		written += n;
+			written++;
+			if ((written % KERNEL_WORK_STREAM_GRANULE) == 0 &&
+			    kernel_work_checkpoint(KERNEL_WORK_STREAM_GRANULE) < 0)
+				return written;
+		}
 	}
 	return written;
 }
@@ -130,6 +135,11 @@ uint64 sys_sched_yield()
 {
 	yield();
 	return 0;
+}
+
+uint64 sys_kernel_work_last_preemptions(void)
+{
+	return curr_thread()->kernel_last_syscall_preemptions;
 }
 
 uint64 sys_gettimeofday(uint64 val, int _tz)
@@ -299,7 +309,7 @@ uint64 sys_close(int fd)
 		return -1;
 	struct proc *p = curr_proc();
 	struct file *f = p->files[fd];
-	if (f == NULL) {
+	if (f == NULL || fd_is_reserved(f)) {
 		errorf("invalid fd %d", fd);
 		return -1;
 	}
@@ -480,6 +490,7 @@ void syscall()
 			   trapframe->a3, trapframe->a4, trapframe->a5 };
 	if (proc_thread_exit_requested())
 		exit(curr_proc()->exit_code);
+	kernel_work_begin();
 	if (id != SYS_write && id != SYS_read && id != SYS_sched_yield) {
 		debugf("syscall %d args = [%x, %x, %x, %x, %x, %x]", id,
 		       args[0], args[1], args[2], args[3], args[4], args[5]);
@@ -566,11 +577,15 @@ void syscall()
 	case SYS_condvar_wait:
 		ret = sys_condvar_wait(args[0], args[1]);
 		break;
+	case SYS_kernel_work_last_preemptions:
+		ret = sys_kernel_work_last_preemptions();
+		break;
 	// LAB5: (2) you may need to add case SYS_enable_deadlock_detect here
 	default:
 		ret = -1;
 		errorf("unknown syscall %d", id);
 	}
+	kernel_work_end();
 	if (proc_thread_exit_requested())
 		exit(curr_proc()->exit_code);
 	curr_thread()->trapframe->a0 = ret;

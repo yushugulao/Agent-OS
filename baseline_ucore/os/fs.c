@@ -13,6 +13,7 @@
 #include "bio.h"
 #include "defs.h"
 #include "file.h"
+#include "kernel_work.h"
 #include "proc.h"
 #include "riscv.h"
 #include "types.h"
@@ -426,6 +427,7 @@ static struct inode *iget(uint dev, uint inum)
 	ip->ref = 1;
 	ip->valid = 0;
 	ip->removed = 0;
+	ip->content_epoch = 1;
 	return ip;
 }
 
@@ -586,31 +588,53 @@ static void bmap_discard(struct inode *ip, uint bn)
 // Truncate inode (discard contents).
 void itrunc(struct inode *ip)
 {
-	int i, j;
+	enum { ITRUNC_BATCH = 16 };
+	uint detached_direct[NDIRECT];
+	uint detached_indirect;
+	uint detached_batch[ITRUNC_BATCH];
+	int i, j, count;
 	struct buf *bp;
 	uint *a;
 
-	for (i = 0; i < NDIRECT; i++) {
-		if (ip->addrs[i]) {
-			bfree(ip->dev, ip->addrs[i]);
-			ip->addrs[i] = 0;
-		}
-	}
-
-	if (ip->addrs[NDIRECT]) {
-		bp = bread(ip->dev, ip->addrs[NDIRECT]);
-		a = (uint *)bp->data;
-		for (j = 0; j < NINDIRECT; j++) {
-			if (a[j])
-				bfree(ip->dev, a[j]);
-		}
-		brelse(bp);
-		bfree(ip->dev, ip->addrs[NDIRECT]);
-		ip->addrs[NDIRECT] = 0;
-	}
-
+	// Make truncation logically complete before the first safe point. New I/O
+	// can only observe the empty mapping while the detached blocks are reclaimed.
+	memmove(detached_direct, ip->addrs, sizeof(detached_direct));
+	detached_indirect = ip->addrs[NDIRECT];
+	memset(ip->addrs, 0, sizeof(ip->addrs));
 	ip->size = 0;
 	iupdate(ip);
+	ip->content_epoch++;
+	if (ip->content_epoch == 0)
+		ip->content_epoch = 1;
+
+	for (i = 0; i < NDIRECT; i++) {
+		if (detached_direct[i] == 0)
+			continue;
+		bfree(ip->dev, detached_direct[i]);
+		(void)kernel_work_checkpoint_cleanup(KERNEL_WORK_OPERATION_UNITS);
+	}
+
+	if (detached_indirect != 0) {
+		for (i = 0; i < NINDIRECT; i += ITRUNC_BATCH) {
+			count = MIN(ITRUNC_BATCH, NINDIRECT - i);
+			bp = bread(ip->dev, detached_indirect);
+			a = (uint *)bp->data;
+			memmove(detached_batch, a + i,
+				count * sizeof(detached_batch[0]));
+			brelse(bp);
+			for (j = 0; j < count; j++) {
+				if (detached_batch[j] == 0)
+					continue;
+				bfree(ip->dev, detached_batch[j]);
+				(void)kernel_work_checkpoint_cleanup(
+					KERNEL_WORK_OPERATION_UNITS);
+			}
+			(void)kernel_work_checkpoint_cleanup(
+				KERNEL_WORK_OPERATION_UNITS);
+		}
+		bfree(ip->dev, detached_indirect);
+		(void)kernel_work_checkpoint_cleanup(KERNEL_WORK_OPERATION_UNITS);
+	}
 }
 
 // Read data from inode.
@@ -703,6 +727,11 @@ int writei(struct inode *ip, int user_src, uint64 src, uint off, uint n,
 	// because the loop above might have called bmap() and added a new
 	// block to ip->addrs[].
 	iupdate(ip);
+	if (tot != 0) {
+		ip->content_epoch++;
+		if (ip->content_epoch == 0)
+			ip->content_epoch = 1;
+	}
 
 	if (failed && tot == 0)
 		return -1;

@@ -1,6 +1,7 @@
 #include "proc.h"
 #include "defs.h"
 #include "exec_policy.h"
+#include "kernel_work.h"
 #include "loader.h"
 #include "trap.h"
 #include "vm.h"
@@ -214,6 +215,57 @@ int proc_thread_exit_requested(void)
 	if (t == 0 || t == &idle || (p = t->process) == 0)
 		return 0;
 	return p->exit_requested && t->tid != p->exit_owner_tid;
+}
+
+// A VM snapshot may yield between committed pages. While it is active, the
+// scheduler keeps sibling threads parked so the source page table cannot
+// change underneath the snapshot; unrelated processes remain schedulable.
+int proc_vm_snapshot_begin(struct proc *p)
+{
+	struct thread *t = curr_thread();
+	int enabled;
+	int result = -1;
+
+	if (p == 0 || t == 0 || t == &idle || t->process != p || t->tid < 0 ||
+	    t->tid >= NTHREAD)
+		return -1;
+	enabled = intr_save();
+	if (!p->exit_requested && p->vm_snapshot_depth == 0) {
+		p->vm_snapshot_owner_tid = t->tid;
+		p->vm_snapshot_depth = 1;
+		result = 0;
+	} else if (!p->exit_requested &&
+		   p->vm_snapshot_owner_tid == t->tid &&
+		   p->vm_snapshot_depth != (uint)-1) {
+		p->vm_snapshot_depth++;
+		result = 0;
+	}
+	intr_restore(enabled);
+	return result;
+}
+
+void proc_vm_snapshot_end(struct proc *p)
+{
+	struct thread *t = curr_thread();
+	int enabled = intr_save();
+
+	if (p == 0 || t == 0 || t == &idle || t->process != p ||
+	    p->vm_snapshot_depth == 0 || p->vm_snapshot_owner_tid != t->tid)
+		panic("vm snapshot owner");
+	p->vm_snapshot_depth--;
+	if (p->vm_snapshot_depth == 0)
+		p->vm_snapshot_owner_tid = -1;
+	intr_restore(enabled);
+}
+
+static int proc_vm_snapshot_schedulable(const struct thread *t)
+{
+	const struct proc *p;
+
+	if (t == 0 || (p = t->process) == 0)
+		return 0;
+	return p->vm_snapshot_depth == 0 ||
+	       p->vm_snapshot_owner_tid == t->tid;
 }
 
 static void proc_resource_domain_clear(struct proc_resource_domain *domain)
@@ -688,9 +740,12 @@ void proc_init()
 		p->storage_domain_id = FS_OWNER_NONE;
 		p->resource_slot_reserved = 0;
 		p->resource_domain_admin = 0;
+		p->vm_snapshot_depth = 0;
+		p->vm_snapshot_owner_tid = -1;
 		child_records_reset(p);
 		for (int tid = 0; tid < NTHREAD; ++tid) {
 			struct thread *t = &p->threads[tid];
+			kernel_work_reset(t);
 			t->state = T_UNUSED;
 			t->wait_channel = 0;
 			t->wait_next = 0;
@@ -709,6 +764,7 @@ void proc_init()
 	idle.wait_reason = WAIT_REASON_NONE;
 	idle.wait_interrupted = 0;
 	idle.on_run_queue = 0;
+	kernel_work_reset(&idle);
 	init_queue(&task_queue, TASK_QUEUE_SIZE, process_queue_data);
 	scheduler_agent_hint = 0;
 	scheduler_agent_burst = 0;
@@ -753,20 +809,35 @@ int task_to_id(struct thread *t)
 struct thread *fetch_task()
 {
 	int enabled = intr_save();
-	int index = pop_queue(&task_queue);
-	struct thread *t = id_to_task(index);
-	if (t == NULL) {
+	int remaining = task_queue.count;
+	int index;
+	struct thread *t;
+
+	while (remaining-- > 0) {
+		index = pop_queue(&task_queue);
+		t = id_to_task(index);
+		if (t == 0)
+			continue;
+		if (t->state != RUNNABLE) {
+			t->on_run_queue = 0;
+			continue;
+		}
+		if (!proc_vm_snapshot_schedulable(t)) {
+			if (push_queue(&task_queue, index) < 0)
+				panic("task queue invariant");
+			continue;
+		}
+		t->on_run_queue = 0;
+		int tid = t->tid;
+		int pid = t->process->pid;
 		intr_restore(enabled);
-		debugf("No task to fetch\n");
+		tracef("fetch index %d(pid=%d, tid=%d, addr=%p) from task queue",
+		       index, pid, tid, (uint64)t);
 		return t;
 	}
-	t->on_run_queue = 0;
-	int tid = t->tid;
-	int pid = t->process->pid;
 	intr_restore(enabled);
-	tracef("fetch index %d(pid=%d, tid=%d, addr=%p) from task queue", index,
-	       pid, tid, (uint64)t);
-	return t;
+	debugf("No task to fetch\n");
+	return 0;
 }
 
 static struct thread *fetch_best_task()
@@ -776,6 +847,8 @@ static struct thread *fetch_best_task()
 	int first_normal = -1;
 	int first_runnable = -1;
 	int candidate_count = 0;
+	int eligible_count = 0;
+	int runnable_agent = 0;
 	int selected;
 	int forced_fifo = 0;
 	int index;
@@ -792,6 +865,11 @@ static struct thread *fetch_best_task()
 		if (candidate == NULL || candidate->state != RUNNABLE)
 			continue;
 		scheduler_retained[candidate_count++] = index;
+		if (candidate->process && candidate->process->is_agent)
+			runnable_agent = 1;
+		if (!proc_vm_snapshot_schedulable(candidate))
+			continue;
+		eligible_count++;
 		if (first_runnable < 0)
 			first_runnable = index;
 		if (candidate->process && candidate->process->is_agent) {
@@ -806,7 +884,7 @@ static struct thread *fetch_best_task()
 	// Agent scores prioritize urgent work, but a bounded FIFO escape prevents
 	// any score combination from starving another runnable thread forever.
 	if (best_agent < 0) {
-		scheduler_agent_hint = 0;
+		scheduler_agent_hint = runnable_agent;
 		selected = first_normal;
 	} else if (first_normal >= 0 &&
 		   scheduler_agent_burst >= AGENT_SCHED_MAX_AGENT_BURST) {
@@ -841,7 +919,7 @@ static struct thread *fetch_best_task()
 		return 0;
 	}
 	best_task = id_to_task(selected);
-	if (forced_fifo || best_task == 0 || candidate_count <= 1)
+	if (forced_fifo || best_task == 0 || eligible_count <= 1)
 		scheduler_score_burst = 0;
 	else
 		scheduler_score_burst++;
@@ -927,6 +1005,8 @@ static struct proc *allocproc_admit(struct proc *parent,
 	p->exit_requested = 0;
 	p->exit_owner_tid = -1;
 	p->exit_finalizing = 0;
+	p->vm_snapshot_depth = 0;
+	p->vm_snapshot_owner_tid = -1;
 	child_records_reset(p);
 	p->exec_dev = 0;
 	p->exec_inum = 0;
@@ -1000,6 +1080,7 @@ int allocthread(struct proc *p, uint64 entry, int alloc_user_res)
 	return -1;
 
 found:
+	kernel_work_reset(t);
 	t->tid = tid;
 	t->state = T_USED;
 	t->process = p;
@@ -1138,6 +1219,7 @@ void scheduler()
 		kernel_stack_check(t);
 		t->state = RUNNING;
 		current_thread = t;
+		kernel_work_on_dispatch(t);
 		swtch(&idle.context, &t->context);
 		kernel_stack_check(t);
 		scheduler_finish_dying_thread(t);
@@ -1233,6 +1315,8 @@ void proc_install_user_image(struct proc *p, struct user_image *image,
 
 	for (int tid = 0; tid < NTHREAD; tid++) {
 		detach_task(&p->threads[tid]);
+		if (!running || tid != 0)
+			kernel_work_reset(&p->threads[tid]);
 		p->threads[tid].state = T_UNUSED;
 		p->threads[tid].tid = -1;
 		p->threads[tid].wait_channel = 0;
@@ -1280,6 +1364,7 @@ void freethread(struct thread *t)
 
 static void proc_reset_thread_slot(struct thread *t)
 {
+	kernel_work_reset(t);
 	t->state = T_UNUSED;
 	t->tid = -1;
 	t->wait_channel = 0;
@@ -1369,6 +1454,8 @@ static void proc_reset_slot(struct proc *p)
 	p->exit_requested = 0;
 	p->exit_owner_tid = -1;
 	p->exit_finalizing = 0;
+	p->vm_snapshot_depth = 0;
+	p->vm_snapshot_owner_tid = -1;
 	child_records_reset(p);
 	p->state = P_UNUSED;
 }
@@ -1403,6 +1490,7 @@ static int fork_common(int make_agent, int agent_role,
 	uchar scope_delegate[FD_BUFFER_SIZE];
 	uint parent_scope;
 	int boundary_attempt;
+	int copy_status;
 	int i;
 
 	memset(scope_delegate, 0, sizeof(scope_delegate));
@@ -1425,20 +1513,29 @@ static int fork_common(int make_agent, int agent_role,
 	if ((np = allocproc_admit(p, admission)) == 0) {
 		return -1;
 	}
-	// Copy user memory from parent to child.
-	if (uvmcopy(p->pagetable, np->pagetable, p->max_page) < 0) {
+	// Keep this thread as the process's sole dispatchable thread while the
+	// page-by-page snapshot yields to unrelated processes.
+	if (proc_vm_snapshot_begin(p) < 0) {
 		freeproc(np);
 		return -1;
 	}
-	np->max_page = p->max_page;
-	np->ustack_base = p->ustack_base;
-	np->exec_dev = p->exec_dev;
-	np->exec_inum = p->exec_inum;
-	np->exec_flags = p->exec_flags;
-	np->exec_generation = p->exec_generation;
-	np->exec_role_mask = p->exec_role_mask;
-	np->exec_layout_version = p->exec_layout_version;
-	np->exec_rw_offset = p->exec_rw_offset;
+	copy_status = uvmcopy(p->pagetable, np->pagetable, p->max_page);
+	if (copy_status == 0) {
+		np->max_page = p->max_page;
+		np->ustack_base = p->ustack_base;
+		np->exec_dev = p->exec_dev;
+		np->exec_inum = p->exec_inum;
+		np->exec_flags = p->exec_flags;
+		np->exec_generation = p->exec_generation;
+		np->exec_role_mask = p->exec_role_mask;
+		np->exec_layout_version = p->exec_layout_version;
+		np->exec_rw_offset = p->exec_rw_offset;
+	}
+	proc_vm_snapshot_end(p);
+	if (copy_status < 0) {
+		freeproc(np);
+		return -1;
+	}
 	if (vfs_proc_spawn_scope(p, np, scope_mode) < 0) {
 		freeproc(np);
 		return -1;

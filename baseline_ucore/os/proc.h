@@ -76,6 +76,14 @@ struct thread {
 	enum wait_reason wait_reason;
 	int wait_interrupted;
 	int on_run_queue;
+	uint kernel_work_depth;
+	uint kernel_work_resumed;
+	uint kernel_resched_pending;
+	uint kernel_work_units;
+	uint64 kernel_slice_deadline;
+	uint64 kernel_work_redispatches;
+	uint64 kernel_syscall_preemptions_start;
+	uint64 kernel_last_syscall_preemptions;
 };
 
 enum procstate { P_UNUSED, P_USED };
@@ -97,6 +105,8 @@ struct proc {
 	int exit_requested;
 	int exit_owner_tid;
 	int exit_finalizing;
+	uint vm_snapshot_depth;
+	int vm_snapshot_owner_tid;
 	struct child_record child_records[CHILD_RECORD_CAP];
 	uint64 child_exit_sequence;
 	//File descriptor table, using to record the files opened by the process
@@ -118,6 +128,8 @@ int cpuid();
 struct proc *curr_proc();
 struct thread *curr_thread(void);
 int proc_thread_exit_requested(void);
+int proc_vm_snapshot_begin(struct proc *);
+void proc_vm_snapshot_end(struct proc *);
 uint proc_storage_cookie(const struct proc *);
 void proc_storage_set_cookie_floor(uint);
 void proc_storage_set_limits(uint, uint);
@@ -143,6 +155,10 @@ int allocthread(struct proc *p, uint64 entry, int alloc_user_res);
 uint64 get_thread_trapframe_va(int tid);
 struct trapframe *proc_trapframe(struct proc *, int);
 int fdalloc(struct file *);
+int fdreserve(void);
+int fdinstall(int, struct file *);
+void fdrelease(int);
+int fd_is_reserved(struct file *);
 int init_stdio(struct proc *);
 int push_argv(struct proc *, char **);
 int push_argv_image(pagetable_t, uint64, struct trapframe *, char **);

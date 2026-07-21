@@ -21,6 +21,19 @@ static void check(int condition, const char *message)
 	exit(1);
 }
 
+static void write_fully(int fd, const char *buf, int size,
+			const char *message)
+{
+	int done = 0;
+
+	while (done < size) {
+		int n = write(fd, buf + done, size - done);
+
+		check(n > 0, message);
+		done += n;
+	}
+}
+
 static void make_inode_name(char *name, int index)
 {
 	static const char hex[] = "0123456789abcdef";
@@ -173,8 +186,11 @@ static void test_block_exhaustion(void)
 	check(fd >= 0 && close(fd) == 0, "release one reserved block");
 	fd = open(partial, O_WRONLY);
 	check(fd >= 0, "open partial write file");
-	check(write(fd, write_buf, sizeof(write_buf)) == BLOCK_SIZE,
+	n = write(fd, write_buf, sizeof(write_buf));
+	check(n == BLOCK_SIZE,
 	      "full disk reports a consistent short write");
+	check(write(fd, write_buf + n, sizeof(write_buf) - n) == -1,
+	      "short write is caused by exhausted storage");
 	check(close(fd) == 0, "close partial write file");
 	check_file_blocks(partial, 1);
 
@@ -182,8 +198,8 @@ static void test_block_exhaustion(void)
 	check(fd >= 0 && close(fd) == 0, "release filled blocks");
 	fd = open(partial, O_WRONLY | O_TRUNC);
 	check(fd >= 0, "truncate partial file");
-	check(write(fd, write_buf, sizeof(write_buf)) == sizeof(write_buf),
-	      "write succeeds after block reclamation");
+	write_fully(fd, write_buf, sizeof(write_buf),
+		    "write succeeds after block reclamation");
 	check(close(fd) == 0, "close recovered file");
 	check_file_blocks(partial, 2);
 	printf("fsenospc_ucore: block exhaustion survived\n");

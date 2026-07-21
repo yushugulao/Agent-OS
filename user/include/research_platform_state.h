@@ -36,7 +36,13 @@ static RP_UNUSED int rp_write_file(const char *path, const char *body)
 		return 0;
 	}
 	int len = (int)strlen(body);
-	int wrote = write(fd, body, len);
+	int wrote = 0;
+	while (wrote < len) {
+		int n = write(fd, body + wrote, len - wrote);
+		if (n <= 0)
+			break;
+		wrote += n;
+	}
 	close(fd);
 	if (wrote != len) {
 		printf("rp_state: write_failed path=%s expected=%d actual=%d\n", path, len, wrote);

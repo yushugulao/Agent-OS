@@ -3,6 +3,7 @@
 #include "exec_policy.h"
 #include "fcntl.h"
 #include "fs.h"
+#include "kernel_work.h"
 #include "proc.h"
 #include "vfs_security.h"
 
@@ -25,6 +26,11 @@ struct file *stdio_init(int fd)
 //The operation performed on the system-level open file table entry after some process closes a file.
 void fileclose(struct file *f)
 {
+	int type;
+	int writable;
+	struct pipe *pipe;
+	struct inode *ip;
+
 	if (fd_is_reserved(f))
 		return;
 	if (f->ref < 1)
@@ -32,23 +38,12 @@ void fileclose(struct file *f)
 	if (--f->ref > 0) {
 		return;
 	}
-	switch (f->type) {
-	case FD_NONE:
-		// A reserved file slot may be released before it is initialized.
-		break;
-	case FD_STDIO:
-		// Do nothing
-		break;
-	case FD_PIPE:
-		pipeclose(f->pipe, f->writable);
-		break;
-	case FD_INODE:
-		iput(f->ip);
-		break;
-	default:
-		panic("unknown file type %d\n", f->type);
-	}
 
+	// Publish the free slot before cleanup, which may cross safe points.
+	type = f->type;
+	writable = f->writable;
+	pipe = f->pipe;
+	ip = f->ip;
 	f->off = 0;
 	f->readable = 0;
 	f->writable = 0;
@@ -56,6 +51,23 @@ void fileclose(struct file *f)
 	f->ip = 0;
 	f->ref = 0;
 	f->type = FD_NONE;
+
+	switch (type) {
+	case FD_NONE:
+		// A reserved file slot may be released before it is initialized.
+		break;
+	case FD_STDIO:
+		// Do nothing
+		break;
+	case FD_PIPE:
+		pipeclose(pipe, writable);
+		break;
+	case FD_INODE:
+		iput(ip);
+		break;
+	default:
+		panic("unknown file type %d\n", type);
+	}
 }
 
 // Pin an open-file entry across operations that may yield.
@@ -99,6 +111,20 @@ int show_all_files()
 	result = dirls(root, &cred);
 	iput(root);
 	return result;
+}
+
+static int filetruncate(struct inode *ip, const struct vfs_cred *cred)
+{
+	struct inode_reclaim reclaim;
+
+	if (!agent_edit_truncate_allowed(ip) ||
+	    itruncate_detach(ip, cred, 0, &reclaim) < 0)
+		return -1;
+	// Commit both version domains before reclaim or persistence may yield.
+	agent_edit_note_truncate(ip);
+	agent_fs_note_truncate(ip);
+	itruncate_reclaim(&reclaim);
+	return 0;
 }
 
 //A process creates or opens a file according to its path, returning the file descriptor of the created or opened file.
@@ -162,13 +188,8 @@ int fileopen(char *path, uint64 omode)
 		if ((omode & (O_WRONLY | O_RDWR | O_TRUNC)) &&
 		    !exec_policy_inode_mutable(ip))
 			goto fail;
-		if (omode & O_TRUNC) {
-			if (!agent_edit_truncate_allowed(ip) ||
-			    itrunc(ip, &cred) < 0)
-				goto fail;
-			agent_fs_note_truncate(ip);
-			agent_edit_note_truncate(ip);
-		}
+		if ((omode & O_TRUNC) && filetruncate(ip, &cred) < 0)
+			goto fail;
 	}
 	// only support FD_INODE
 	f->type = FD_INODE;
@@ -249,9 +270,18 @@ int fileunlink(char *path)
 // Write data to inode.
 uint64 inodewrite(struct file *f, uint64 va, uint64 len)
 {
+	uint64 done = 0;
+	uint64 user_addr;
+	uint64 remaining;
+	uint offset;
+	uint chunk;
+	int checkpoint;
+	int noted = 0;
 	int r;
 	struct vfs_cred cred;
 
+	if (len == 0)
+		return 0;
 	ivalid(f->ip);
 	if (f->ip->type != T_FILE)
 		return (uint64)-1;
@@ -262,25 +292,71 @@ uint64 inodewrite(struct file *f, uint64 va, uint64 len)
 		return (uint64)-1;
 	if (!agent_edit_write_allowed(f->ip))
 		return (uint64)-1;
-	if ((r = writei(f->ip, &cred, 1, va, f->off, len)) > 0) {
-		f->off += r;
-		agent_fs_note_write(f->ip);
-		agent_edit_note_write(f->ip);
+
+	while (done < len) {
+		offset = f->off;
+		remaining = len - done;
+		chunk = BSIZE - offset % BSIZE;
+		if (remaining < chunk)
+			chunk = (uint)remaining;
+		if (checked_user_offset(va, done, 1, &user_addr) < 0)
+			return done == 0 ? (uint64)-1 : done;
+		r = writei(f->ip, &cred, 1, user_addr, offset, chunk);
+		if (r <= 0)
+			return done == 0 ? (uint64)r : done;
+
+		f->off = offset + r;
+		done += r;
+		if (!noted) {
+			agent_edit_note_write(f->ip);
+			agent_fs_note_write(f->ip);
+			noted = 1;
+		} else {
+			agent_fs_sync_write(f->ip);
+		}
+		checkpoint = kernel_work_checkpoint((uint)r);
+		if (checkpoint != 0 || (uint)r < chunk)
+			return done;
 	}
-	return r;
+	return done;
 }
 
 //Read data from inode.
 uint64 inoderead(struct file *f, uint64 va, uint64 len)
 {
+	uint64 done = 0;
+	uint64 user_addr;
+	uint64 remaining;
+	uint offset;
+	uint chunk;
+	int checkpoint;
 	int r;
 	struct vfs_cred cred;
 
+	if (len == 0)
+		return 0;
 	ivalid(f->ip);
 	if (f->ip->type != T_FILE)
 		return (uint64)-1;
 	vfs_cred_from_proc(curr_proc(), &cred);
-	if ((r = readi(f->ip, &cred, 1, va, f->off, len)) > 0)
-		f->off += r;
-	return r;
+
+	while (done < len) {
+		offset = f->off;
+		remaining = len - done;
+		chunk = BSIZE - offset % BSIZE;
+		if (remaining < chunk)
+			chunk = (uint)remaining;
+		if (checked_user_offset(va, done, 1, &user_addr) < 0)
+			return done == 0 ? (uint64)-1 : done;
+		r = readi(f->ip, &cred, 1, user_addr, offset, chunk);
+		if (r <= 0)
+			return done == 0 ? (uint64)r : done;
+
+		f->off = offset + r;
+		done += r;
+		checkpoint = kernel_work_checkpoint((uint)r);
+		if (checkpoint != 0 || (uint)r < chunk)
+			return done;
+	}
+	return done;
 }

@@ -671,3 +671,21 @@ agentscope_ucore: parent passed
 ```
 
 这些是当前源码的回归契约；在本轮 QEMU 日志实际出现前，本文不把它们记为已通过证据。
+
+## 19. syscall 内核工作预算复测
+
+入口为 `make syscall-fairness-test` 或 `bash scripts/run-syscall-fairness-tests.sh`。脚本为根目录 AgentOS-uCore 和 `baseline_ucore/` 分别构建独立临时镜像，运行同一个 `syscallfair_ucore`，不复用可被其他测试修改的 `fs-copy.img`。测试的同步与因果关系全部由 Guest 内的 pipe、进程和线程建立；宿主运行器把 QEMU stdin 设为 `/dev/null`，只采集原始输出，不注入字符或参与唤醒。
+
+控制台阶段先让同级进程阻塞在 Guest pipe gate。writer 释放 gate 后，以一次 `write(stdout, ..., 64 KiB)` 输出同时含 BEGIN/END 的数据；peer 读到 gate 后主动 `sched_yield()`，再输出进展标记。脚本要求：
+
+```text
+SYSCALLFAIR_CONSOLE_BEGIN < SYSCALLFAIR_CONSOLE_PEER < SYSCALLFAIR_CONSOLE_END
+```
+
+因为 BEGIN 和 END 位于同一个 64 KiB write buffer，这个顺序证明控制台 syscall 返回前发生过安全点调度。
+
+inode 阶段创建共享地址空间的 observer 线程。observer 反复从独立 fd 读取仍为空的目标文件，writer 首次返回必须满足 `0 < n < 64 KiB`，并立即通过只读的 `kernel_work_last_preemptions()` 要求前一个 syscall 至少经历一次内核态重调度；随后等待 observer 读到已提交数据、输出 `SYSCALLFAIR_INODE_SHORT` 并循环完成剩余数据。脚本要求 `INODE_BEGIN < INODE_PEER < INODE_SHORT < INODE_END`。重调度计数提供 write 内部的因果证据，observer 独立证明 peer 取得进展；二者动态验证真实 inode 数据和共享 file offset 的已提交前缀，而不把 write 返回后的用户态 timer 抢占误算成 syscall 内调度。AgentOS 专属 size 发布 sidecar、query overlay 与持久化 sequence 由源码审查覆盖，本双目标用例不把普通 inode read 夸大为 metadata query 证据。
+
+截断阶段先填充一个 64 KiB 文件，再在同一进程创建 observer 线程。主线程输出 TRUNC_BEGIN 后调用 `open(path, O_WRONLY | O_TRUNC)`，并用 last-syscall 重调度计数要求该 open 在内核态跨过调度边界；observer 连续两轮打开文件并读到 EOF，两轮之间主动让出，随后输出 TRUNC_PEER。脚本要求 `TRUNC_BEGIN < TRUNC_PEER < TRUNC_END`。计数提供 open 内部的因果证据，observer 独立证明原子 detach 后的 EOF 对其他线程可见；二者不依赖 open 返回后到共享标志写入前是否发生用户态 timer 抢占。
+
+三个阶段的每个标记都必须只出现一次。最外层父进程只在 fairness worker 被 `waitpid()` 完整回收后输出 `syscallfair_ucore: parent passed`；宿主 runner 随后要求 QEMU 在 5 秒内正常关机，日志不得包含 panic、非法地址或未知 syscall。这一部分验证退出完整性，不单独宣称证明退出清理内部的公平边界。两个目标都满足后输出 `[syscall-fairness] both targets passed`。本项动态覆盖控制台、普通 inode I/O 和截断回收，并结合源码检查覆盖 pipe、exec/fork 分页、VM snapshot 屏障和 Agent batch 安全点；它不等于穷尽任意 syscall 路径。固定上界目录扫描和仅可信 Agent 可达的 metadata raw I/O 仍是残余覆盖。

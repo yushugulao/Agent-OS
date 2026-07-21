@@ -76,6 +76,14 @@ struct thread {
 	enum wait_reason wait_reason;
 	int wait_interrupted;
 	int on_run_queue;
+	uint kernel_work_depth;
+	uint kernel_work_resumed;
+	uint kernel_resched_pending;
+	uint kernel_work_units;
+	uint64 kernel_slice_deadline;
+	uint64 kernel_work_redispatches;
+	uint64 kernel_syscall_preemptions_start;
+	uint64 kernel_last_syscall_preemptions;
 };
 
 enum procstate { P_UNUSED, P_USED };
@@ -97,6 +105,8 @@ struct proc {
 	int exit_requested;
 	int exit_owner_tid;
 	int exit_finalizing;
+	uint vm_snapshot_depth;
+	int vm_snapshot_owner_tid;
 	struct child_record child_records[CHILD_RECORD_CAP];
 	uint64 child_exit_sequence;
 	uint exec_dev;
@@ -259,6 +269,8 @@ int cpuid();
 struct proc *curr_proc();
 struct thread *curr_thread(void);
 int proc_thread_exit_requested(void);
+int proc_vm_snapshot_begin(struct proc *);
+void proc_vm_snapshot_end(struct proc *);
 void exit(int);
 void proc_init();
 void proc_mapstacks(pagetable_t);

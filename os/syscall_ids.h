@@ -352,3 +352,4 @@
 #define SYS_agent_route_config 540
 #define SYS_agent_workflow_create 541
 #define SYS_agent_scope_delegate_fd 542
+#define SYS_kernel_work_last_preemptions 543

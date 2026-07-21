@@ -10,6 +10,7 @@ int close(int);
 pid_t getpid();
 pid_t getppid();
 int sched_yield();
+long kernel_work_last_preemptions(void);
 void exit(int);
 int fork();
 int exec(const char *, char **);

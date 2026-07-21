@@ -18,14 +18,14 @@
 | G-1 | 在教学操作系统内核中实现 Agent-OS 功能模块 | 已验证 | `os/agent.c`、`os/agent.h`、`os/proc.c` | `agentfinal_ucore`、`agentbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore` |
 | G-2 | 系统可在 QEMU 上运行 | 已验证 | `Makefile`、`nfs/fs.img` | `scripts/run-agent-tests.sh`、`scripts/run-fs-enospc-tests.sh`、`scripts/run-proc-reap-tests.sh` |
 | G-3 | 提供内核代码 | 已验证 | `os/` | Git 仓库源码 |
-| G-4 | 提供用户态测试程序 | 已验证 | `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentconflict_ucore`、`agentllm_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`agentscope_ucore`、`usersafety_ucore`、`fsenospc_ucore`、`procreap_ucore`、`procreap_agent_ucore` | `scripts/run-agent-tests.sh` 15/15 通过；ENOSPC 与进程回收专项独立通过；证据见 [verification.md](verification.md) 和 [test-record.md](test-record.md) |
+| G-4 | 提供用户态测试程序 | 已验证 | `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentconflict_ucore`、`agentllm_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`agentscope_ucore`、`usersafety_ucore`、`fsenospc_ucore`、`procreap_ucore`、`procreap_agent_ucore`、`syscallfair_ucore` | `scripts/run-agent-tests.sh` 15/15、ENOSPC 与进程回收专项独立通过；syscall 公平性基础轮通过，last-syscall 终审契约待标准工具链复测；证据见 [verification.md](verification.md) 和 [test-record.md](test-record.md) |
 | G-5 | 提供综合示例场景 | 已验证 | `user/src/labdemo_ucore.c` | `labdemo_ucore: passed` |
 | G-6 | 提供设计文档和运行说明 | 已验证 | [../../README.md](../../README.md)、[design.md](design.md)、[scenario-script.md](scenario-script.md) | 本文档、[verification.md](verification.md) |
 | G-7 | 保留代表性的 uCore 基础 syscall 兼容性 | 已验证 | `SYS_trace`、`SYS_mailread`、`SYS_mailwrite` | `ch3_trace` 输出 `Test trace OK!`；`agentsecurity_ucore: mail_basic=1` |
 
 ## 内核安全与稳定性机制
 
-这些条目不是对个别测试程序的特判，而是普通进程和 Agent 共用的内核机制。普通 uCore 对照目标同步保留通用的输入检查、等待队列、文件系统失败处理、内核栈防护和进程生命周期机制；AgentOS 目标在此基础上增加 Agent 授权、可信映像、文件安全域和强制调度公平上限。
+这些条目不是对个别测试程序的特判，而是普通进程和 Agent 共用的内核机制。普通 uCore 对照目标同步保留通用的输入检查、等待队列、文件系统失败处理、内核工作预算、内核栈防护和进程生命周期机制；AgentOS 目标在此基础上增加 Agent 授权、可信映像、文件安全域和强制调度公平上限。
 
 | ID | 安全或稳定性要求 | 状态 | 实现位置 | 验证证据 |
 | --- | --- | --- | --- | --- |
@@ -44,8 +44,9 @@
 | S-13 | 活进程按不可伪造资源域计费；128 槽中普通 admission 96 槽、受控保留 32 槽，最多 4 个 workflow 各保证 8 个保留槽 | 已验证 | `proc_resource_reserve/release()`、`PROC_RESOURCE_DOMAIN_LIMIT=64`、`PROC_ORDINARY_SLOTS=96`、`PROC_RESERVED_SLOTS=32`、per-scope reserved admission | fork bomb/配额归还专项通过；`agentscope_ucore: scope_capacity_reservation=1` 覆盖 4 个 scope 的独立 admission 与回收再利用 |
 | S-14 | capability 必须与 active kernel-issued workflow scope 和精确对象 owner 共同命中；同能力、同名称、同 PID 或公开 span 都不能跨 scope 访问对象 | 已验证 | `VFS_SCOPE_NONE=0`、`VFS_SCOPE_SYSTEM=1`、动态 scope `>=2`；metadata/dependency/action/edit/audit/prefetch/IPC 的 scope 与 stable owner 字段；metadata force reload 只替换调用者 scope | `agentscope_ucore: scope_reload_isolation=1 action_scope_isolation=1 audit_event_scope_isolation=1 lease_scope_isolation=1 ipc_scope_isolation=1` |
 | S-15 | 物理 512 槽审计表按 4 个 workflow 各保留 128 条；scope 内 low/high 各 64，low principal 上限16、high active principal 上限8，其他主体不能淘汰其 protected evidence | 已验证 | scope ledger state、stable audit principal、private span owner、authority-effect 分类；high 满时仅自滚或回收 inactive principal，稀疏窗口由 `dropped_records` 说明 | `agentsecurity_ucore: trusted_span_authority=1 trusted_cause_attribution=1 audit_authority_partition=1` |
+| S-16 | syscall 不能越过调度公平边界；时间片由 dispatch 建立且不能由重复 syscall 刷新，长循环按已提交工作量在安全点延迟抢占 | 实现完成，待终审复测 | `os/kernel_work.c`、每线程 dispatch-cycle deadline/work units/pending/resumed/redispatch 状态、syscall 统一 begin/end、timer 延迟请求；console/pipe/exec/fork 分页、Agent batch 和 FD_INODE 块安全点；fork VM snapshot 调度屏障；inode 调度后短返回；truncate detach/reclaim 与 cleanup checkpoint；文件槽快照释放和 FD reservation；baseline 保持通用路径同语义 | 基础 QEMU 轮已验证 64 KiB 控制台写 `CONSOLE_BEGIN < CONSOLE_PEER < CONSOLE_END`；终审后的纯 Guest 契约增加 inode write 与 `O_TRUNC` open 的 last-syscall 重调度计数、短写/EOF observer 和 worker 退出完整性，当前已通过双目标语法及静态审查，待标准 Linux 工具链重跑 |
 
-全局文件池分配失败已经改为向上传播错误，`usersafety_ucore` 也验证了进程 fd 槽不足时文件/pipe 引用会回滚；但当前没有耗尽整个 `FILEPOOLSIZE` 的独立压力用例，因此不能把该部分计为全局文件表耗尽的运行证据。
+S-16 验证的是已识别的可扩展长路径和相应生命周期协议，不表示已经穷尽任意 syscall 实现。固定上界的目录扫描，以及只允许可信 Agent 到达的 metadata raw I/O，仍是后续接入统一 checkpoint 或增加专项压力证据的残余覆盖。全局文件池分配失败已经改为向上传播错误，`usersafety_ucore` 也验证了进程 fd 槽不足时文件/pipe 引用会回滚；但当前没有耗尽整个 `FILEPOOLSIZE` 的独立压力用例，因此不能把该部分计为全局文件表耗尽的运行证据。
 
 ## 任务一：Agent 进程创建与地址空间设计
 

@@ -1,4 +1,5 @@
 #include "defs.h"
+#include "kernel_work.h"
 #include "proc.h"
 #include "riscv.h"
 
@@ -64,6 +65,8 @@ int pipewrite(struct pipe *pi, uint64 addr, uint64 n)
 				return w == 0 ? -1 : (int)w;
 			pi->nwrite += size;
 			w += size;
+			if (kernel_work_checkpoint((uint)size) < 0)
+				return (int)w;
 		}
 	}
 	return (int)w;
@@ -97,6 +100,8 @@ int piperead(struct pipe *pi, uint64 addr, uint64 n)
 			return r == 0 ? -1 : (int)r;
 		pi->nread += size;
 		r += size;
+		if (kernel_work_checkpoint((uint)size) < 0)
+			return (int)r;
 	}
 	return (int)r;
 }

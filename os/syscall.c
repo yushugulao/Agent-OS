@@ -1,6 +1,7 @@
 #include "console.h"
 #include "agent.h"
 #include "defs.h"
+#include "kernel_work.h"
 #include "loader.h"
 #include "sync.h"
 #include "syscall.h"
@@ -26,9 +27,13 @@ uint64 console_write(uint64 va, uint64 len)
 		uint64 n = MIN(len - written, sizeof(buf));
 		if (copyin(p->pagetable, buf, va + written, n) < 0)
 			return written ? written : (uint64)-1;
-		for (uint64 i = 0; i < n; ++i)
+		for (uint64 i = 0; i < n; ++i) {
 			console_putchar(buf[i]);
-		written += n;
+			written++;
+			if ((written % KERNEL_WORK_STREAM_GRANULE) == 0 &&
+			    kernel_work_checkpoint(KERNEL_WORK_STREAM_GRANULE) < 0)
+				return written;
+		}
 	}
 	return written;
 }
@@ -139,6 +144,11 @@ uint64 sys_sched_yield()
 {
 	yield();
 	return 0;
+}
+
+uint64 sys_kernel_work_last_preemptions(void)
+{
+	return curr_thread()->kernel_last_syscall_preemptions;
 }
 
 uint64 sys_gettimeofday(uint64 val, int _tz)
@@ -564,6 +574,7 @@ void syscall()
 			   trapframe->a3, trapframe->a4, trapframe->a5 };
 	if (proc_thread_exit_requested())
 		exit(curr_proc()->exit_code);
+	kernel_work_begin();
 	if (id >= 0 && id < SYSCALL_COUNT_MAX)
 		curr_proc()->syscall_count[id]++;
 	if (id != SYS_write && id != SYS_read && id != SYS_sched_yield) {
@@ -660,6 +671,9 @@ void syscall()
 		break;
 	case SYS_condvar_wait:
 		ret = sys_condvar_wait(args[0], args[1]);
+		break;
+	case SYS_kernel_work_last_preemptions:
+		ret = sys_kernel_work_last_preemptions();
 		break;
 	case SYS_agent_create:
 		ret = sys_agent_create();
@@ -797,6 +811,7 @@ void syscall()
 		ret = -1;
 		errorf("unknown syscall %d", id);
 	}
+	kernel_work_end();
 	if (proc_thread_exit_requested())
 		exit(curr_proc()->exit_code);
 	curr_thread()->trapframe->a0 = ret;

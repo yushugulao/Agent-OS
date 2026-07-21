@@ -41,6 +41,31 @@ static void check(int condition, const char *message)
 	exit(1);
 }
 
+static void write_fully(int fd, const char *buf, int size,
+			const char *message)
+{
+	int done = 0;
+
+	while (done < size) {
+		int n = write(fd, buf + done, size - done);
+
+		check(n > 0, message);
+		done += n;
+	}
+}
+
+static void read_fully(int fd, char *buf, int size, const char *message)
+{
+	int done = 0;
+
+	while (done < size) {
+		int n = read(fd, buf + done, size - done);
+
+		check(n > 0, message);
+		done += n;
+	}
+}
+
 static int buffers_equal(const char *left, const char *right, int size)
 {
 	for (int i = 0; i < size; i++)
@@ -319,14 +344,14 @@ static void verify_workflow_storage(void)
 
 	fd = open(WORKFLOW_FILE, O_CREATE | O_RDWR | O_TRUNC);
 	check(fd >= 0, "create workflow reserve file");
-	check(write(fd, block_buf, sizeof(block_buf)) == sizeof(block_buf),
-	      "write workflow reserve blocks");
+	write_fully(fd, block_buf, sizeof(block_buf),
+		    "write workflow reserve blocks");
 	check(close(fd) == 0, "close workflow reserve file");
 	fd = open(WORKFLOW_FILE, O_RDONLY);
 	check(fd >= 0, "reopen workflow reserve file");
 	memset(read_buf, 0, sizeof(read_buf));
-	check(read(fd, read_buf, sizeof(read_buf)) == sizeof(read_buf),
-	      "read workflow reserve blocks");
+	read_fully(fd, read_buf, sizeof(read_buf),
+		   "read workflow reserve blocks");
 	check(buffers_equal(read_buf, block_buf, sizeof(block_buf)),
 	      "workflow reserve contents");
 	check(close(fd) == 0, "close workflow reserve reader");

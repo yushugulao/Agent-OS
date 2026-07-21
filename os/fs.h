@@ -185,6 +185,20 @@ struct dirent {
 struct inode;
 struct vfs_cred;
 
+// A truncate first publishes an inode without the discarded mappings, then
+// carries this private token while the old blocks are reclaimed safely.
+#define INODE_RECLAIM_NONE 0U
+#define INODE_RECLAIM_DIRECT 1U
+#define INODE_RECLAIM_LIST 2U
+struct inode_reclaim {
+	uint mode;
+	int dev;
+	uint direct[NDIRECT];
+	uint indirect;
+	uint *block_list;
+	uint block_count;
+};
+
 void fsinit();
 int fs_storage_scope_admissible(void);
 int dirlink(struct inode *, char *, uint, const struct vfs_cred *);
@@ -208,6 +222,9 @@ struct inode *namei_scope_status(char *, uint, uint, int *);
 struct inode *root_dir();
 int readi(struct inode *, const struct vfs_cred *, int, uint64, uint, uint);
 int writei(struct inode *, const struct vfs_cred *, int, uint64, uint, uint);
+int itruncate_detach(struct inode *, const struct vfs_cred *, uint,
+			 struct inode_reclaim *);
+void itruncate_reclaim(struct inode_reclaim *);
 int itruncate(struct inode *, const struct vfs_cred *, uint);
 int itrunc(struct inode *, const struct vfs_cred *);
 int dirls(struct inode *, const struct vfs_cred *);

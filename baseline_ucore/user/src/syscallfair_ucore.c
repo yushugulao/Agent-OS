@@ -1,0 +1,290 @@
+#include <fcntl.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+
+#define STRESS_BYTES (64 * 1024)
+
+static const char console_begin[] = "SYSCALLFAIR_CONSOLE_BEGIN\n";
+static const char console_peer[] = "SYSCALLFAIR_CONSOLE_PEER\n";
+static const char console_end[] = "SYSCALLFAIR_CONSOLE_END\n";
+static const char inode_begin[] = "SYSCALLFAIR_INODE_BEGIN\n";
+static const char inode_peer[] = "SYSCALLFAIR_INODE_PEER\n";
+static const char inode_short[] = "SYSCALLFAIR_INODE_SHORT\n";
+static const char inode_end[] = "SYSCALLFAIR_INODE_END\n";
+static const char trunc_begin[] = "SYSCALLFAIR_TRUNC_BEGIN\n";
+static const char trunc_peer[] = "SYSCALLFAIR_TRUNC_PEER\n";
+static const char trunc_end[] = "SYSCALLFAIR_TRUNC_END\n";
+static const char passed[] = "syscallfair_ucore: parent passed\n";
+static char stress[STRESS_BYTES];
+static volatile int inode_observer_ready;
+static volatile int inode_observed;
+static volatile int trunc_observer_ready;
+static volatile int trunc_started;
+static volatile int trunc_done;
+static volatile int trunc_observed;
+
+static void write_stdout(const char *data, int length)
+{
+	int done = 0;
+
+	while (done < length) {
+		int n = write(stdout, data + done, length - done);
+
+		if (n <= 0)
+			exit(3);
+		done += n;
+	}
+}
+
+static void fail(const char *message)
+{
+	static const char prefix[] = "syscallfair_ucore: check failed: ";
+	static const char newline[] = "\n";
+
+	write_stdout(prefix, sizeof(prefix) - 1);
+	write_stdout(message, strlen(message));
+	write_stdout(newline, sizeof(newline) - 1);
+	exit(1);
+}
+
+static void check(int ok, const char *message)
+{
+	if (!ok)
+		fail(message);
+}
+
+static int start_peer(int gate[2], const char *marker, int marker_length,
+		      int inherited_fd)
+{
+	char token;
+	int pid;
+
+	check(pipe(gate) == 0, "create phase gate");
+	pid = fork();
+	check(pid >= 0, "fork phase peer");
+	if (pid == 0) {
+		close(gate[1]);
+		if (inherited_fd >= 0)
+			close(inherited_fd);
+		if (read(gate[0], &token, 1) != 1)
+			exit(4);
+		if (sched_yield() != 0)
+			exit(5);
+		if (write(stdout, marker, marker_length) != marker_length)
+			exit(6);
+		close(gate[0]);
+		exit(0);
+	}
+
+	close(gate[0]);
+	check(sched_yield() == 0, "park phase peer on gate");
+	return pid;
+}
+
+static void finish_peer(int gate[2], int pid)
+{
+	int status = -1;
+
+	close(gate[1]);
+	check(waitpid(pid, &status) == pid, "wait phase peer");
+	check(status == 0, "phase peer completed");
+}
+
+static void release_peer(int gate[2])
+{
+	char token = 'G';
+
+	check(write(gate[1], &token, 1) == 1, "release phase peer");
+}
+
+static void run_console_phase(void)
+{
+	int gate[2];
+	int pid;
+	int n;
+
+	pid = start_peer(gate, console_peer, sizeof(console_peer) - 1, -1);
+	release_peer(gate);
+	n = write(stdout, stress, sizeof(stress));
+	check(n == sizeof(stress), "single long console write completed");
+	finish_peer(gate, pid);
+}
+
+static void inode_observer(void *arg)
+{
+	const char *path = arg;
+	char byte;
+
+	inode_observer_ready = 1;
+	for (;;) {
+		int fd = open(path, O_RDONLY);
+
+		if (fd >= 0) {
+			int n = read(fd, &byte, 1);
+
+			close(fd);
+			if (n > 0) {
+				inode_observed = 1;
+				if (write(stdout, inode_peer,
+					  sizeof(inode_peer) - 1) !=
+				    sizeof(inode_peer) - 1)
+					exit(6);
+				exit(0);
+			}
+		}
+		if (sched_yield() != 0)
+			exit(5);
+	}
+}
+
+static void run_inode_phase(void)
+{
+	static const char path[] = "fairdata";
+	int fd;
+	int first;
+	int status;
+	int tid;
+	int total;
+
+	unlink(path);
+	fd = open(path, O_CREATE | O_WRONLY | O_TRUNC);
+	check(fd >= 0, "create inode data file");
+	inode_observer_ready = 0;
+	inode_observed = 0;
+	tid = thread_create(inode_observer, (void *)path);
+	check(tid >= 0, "create inode observer");
+	while (!inode_observer_ready)
+		check(sched_yield() == 0, "start inode observer");
+	write_stdout(inode_begin, sizeof(inode_begin) - 1);
+	first = write(fd, stress, sizeof(stress));
+	check(first > 0, "first inode write made progress");
+	check(first < sizeof(stress), "inode budget produced a short write");
+	check(kernel_work_last_preemptions() > 0,
+	      "first inode write crossed a kernel scheduling boundary");
+	while ((status = waittid(tid)) == -2)
+		check(sched_yield() == 0, "finish inode observer");
+	check(status == 0 && inode_observed, "inode observer made progress");
+	write_stdout(inode_short, sizeof(inode_short) - 1);
+	total = first;
+	while (total < sizeof(stress)) {
+		int n = write(fd, stress + total, sizeof(stress) - total);
+
+		check(n > 0, "continued inode write made progress");
+		total += n;
+	}
+	write_stdout(inode_end, sizeof(inode_end) - 1);
+	check(close(fd) == 0, "close inode data file");
+	check(unlink(path) == 0, "remove inode data file");
+}
+
+static void fill_file(const char *path)
+{
+	int fd;
+	int total = 0;
+
+	unlink(path);
+	fd = open(path, O_CREATE | O_WRONLY | O_TRUNC);
+	check(fd >= 0, "create truncate data file");
+	while (total < sizeof(stress)) {
+		int n = write(fd, stress + total, sizeof(stress) - total);
+
+		check(n > 0, "fill truncate data file");
+		total += n;
+	}
+	check(close(fd) == 0, "close truncate data file");
+}
+
+static void truncate_observer(void *arg)
+{
+	const char *path = arg;
+	char byte;
+	int empty_rounds = 0;
+
+	trunc_observer_ready = 1;
+	while (!trunc_started)
+		sched_yield();
+	while (!trunc_done) {
+		int fd = open(path, O_RDONLY);
+
+		if (fd >= 0) {
+			int n = read(fd, &byte, 1);
+
+			if (n == 0 && !trunc_done) {
+				close(fd);
+				empty_rounds++;
+				if (empty_rounds >= 2 && !trunc_done) {
+					trunc_observed = 1;
+					if (write(stdout, trunc_peer,
+						  sizeof(trunc_peer) - 1) !=
+						    sizeof(trunc_peer) - 1)
+						exit(8);
+					exit(0);
+				}
+				check(sched_yield() == 0,
+				      "separate truncate observations");
+				continue;
+			}
+			close(fd);
+			empty_rounds = 0;
+		}
+		sched_yield();
+	}
+	exit(7);
+}
+
+static void run_truncate_phase(void)
+{
+	static const char path[] = "fairtrunc";
+	int fd;
+	int tid;
+
+	fill_file(path);
+	trunc_observer_ready = 0;
+	trunc_started = 0;
+	trunc_done = 0;
+	trunc_observed = 0;
+	tid = thread_create(truncate_observer, (void *)path);
+	check(tid >= 0, "create truncate observer");
+	while (!trunc_observer_ready)
+		check(sched_yield() == 0, "start truncate observer");
+	write_stdout(trunc_begin, sizeof(trunc_begin) - 1);
+	trunc_started = 1;
+	fd = open(path, O_WRONLY | O_TRUNC);
+	check(fd >= 0, "truncate populated file");
+	check(kernel_work_last_preemptions() > 0,
+	      "truncate crossed a kernel scheduling boundary");
+	check(waittid(tid) == 0, "truncate observer completed");
+	check(trunc_observed, "truncate observer saw committed EOF");
+	trunc_done = 1;
+	write_stdout(trunc_end, sizeof(trunc_end) - 1);
+	check(close(fd) == 0, "close truncated file");
+	check(unlink(path) == 0, "remove truncated file");
+}
+
+int main(void)
+{
+	int pid;
+	int status = -1;
+
+	memset(stress, '.', sizeof(stress));
+	memcpy(stress, console_begin, sizeof(console_begin) - 1);
+	memcpy(stress + sizeof(stress) - (sizeof(console_end) - 1),
+	       console_end, sizeof(console_end) - 1);
+	write_stdout("syscallfair_ucore: kernel work budget verification\n",
+		     sizeof("syscallfair_ucore: kernel work budget verification\n") - 1);
+	pid = fork();
+	check(pid >= 0, "fork fairness worker");
+	if (pid == 0) {
+		run_console_phase();
+		memset(stress, '.', sizeof(stress));
+		run_inode_phase();
+		run_truncate_phase();
+		exit(0);
+	}
+	check(waitpid(pid, &status) == pid, "wait fairness worker");
+	check(status == 0, "fairness worker exited cleanly");
+	write_stdout(passed, sizeof(passed) - 1);
+	return 0;
+}

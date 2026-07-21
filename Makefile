@@ -1,4 +1,4 @@
-.PHONY: clean build user run debug test doctor kernel-stack-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test proc-reap-test reader target-readiness dual-platform-run full-verify dual-clean .FORCE
+.PHONY: clean build user run debug test doctor kernel-stack-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test proc-reap-test syscall-fairness-test reader target-readiness dual-platform-run full-verify dual-clean .FORCE
 .DELETE_ON_ERROR:
 all: build
 
@@ -288,6 +288,9 @@ fs-enospc-test:
 
 proc-reap-test:
 	TOOLPREFIX=$(TOOLPREFIX) bash scripts/run-proc-reap-tests.sh
+
+syscall-fairness-test:
+	TOOLPREFIX=$(TOOLPREFIX) bash scripts/run-syscall-fairness-tests.sh
 
 agentos-platform-user:
 	$(MAKE) user TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform_agentos

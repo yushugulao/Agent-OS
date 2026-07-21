@@ -1,5 +1,6 @@
 #include "proc.h"
 #include "defs.h"
+#include "kernel_work.h"
 #include "loader.h"
 #include "trap.h"
 #include "vm.h"
@@ -7,6 +8,7 @@
 
 struct proc pool[NPROC];
 __attribute__((aligned(4096))) char trapframe[NPROC][NTHREAD][TRAP_PAGE_SIZE];
+static struct file fd_reservation;
 
 extern char boot_stack_top[];
 struct thread *current_thread;
@@ -197,6 +199,57 @@ int proc_thread_exit_requested(void)
 	if (t == 0 || t == &idle || (p = t->process) == 0)
 		return 0;
 	return p->exit_requested && t->tid != p->exit_owner_tid;
+}
+
+// A VM snapshot may yield between committed pages. While it is active, the
+// scheduler keeps sibling threads parked so the source page table cannot
+// change underneath the snapshot; unrelated processes remain schedulable.
+int proc_vm_snapshot_begin(struct proc *p)
+{
+	struct thread *t = curr_thread();
+	int enabled;
+	int result = -1;
+
+	if (p == 0 || t == 0 || t == &idle || t->process != p || t->tid < 0 ||
+	    t->tid >= NTHREAD)
+		return -1;
+	enabled = intr_save();
+	if (!p->exit_requested && p->vm_snapshot_depth == 0) {
+		p->vm_snapshot_owner_tid = t->tid;
+		p->vm_snapshot_depth = 1;
+		result = 0;
+	} else if (!p->exit_requested &&
+		   p->vm_snapshot_owner_tid == t->tid &&
+		   p->vm_snapshot_depth != (uint)-1) {
+		p->vm_snapshot_depth++;
+		result = 0;
+	}
+	intr_restore(enabled);
+	return result;
+}
+
+void proc_vm_snapshot_end(struct proc *p)
+{
+	struct thread *t = curr_thread();
+	int enabled = intr_save();
+
+	if (p == 0 || t == 0 || t == &idle || t->process != p ||
+	    p->vm_snapshot_depth == 0 || p->vm_snapshot_owner_tid != t->tid)
+		panic("vm snapshot owner");
+	p->vm_snapshot_depth--;
+	if (p->vm_snapshot_depth == 0)
+		p->vm_snapshot_owner_tid = -1;
+	intr_restore(enabled);
+}
+
+static int proc_vm_snapshot_schedulable(const struct thread *t)
+{
+	const struct proc *p;
+
+	if (t == 0 || (p = t->process) == 0)
+		return 0;
+	return p->vm_snapshot_depth == 0 ||
+	       p->vm_snapshot_owner_tid == t->tid;
 }
 
 static void proc_resource_domain_clear(struct proc_resource_domain *domain)
@@ -659,9 +712,12 @@ void proc_init()
 		p->resource_slot_reserved = 0;
 		p->resource_domain_admin = 0;
 		p->storage_cookie = PROC_STORAGE_COOKIE_FREE;
+		p->vm_snapshot_depth = 0;
+		p->vm_snapshot_owner_tid = -1;
 		child_records_reset(p);
 		for (int tid = 0; tid < NTHREAD; ++tid) {
 			struct thread *t = &p->threads[tid];
+			kernel_work_reset(t);
 			t->state = T_UNUSED;
 			t->wait_channel = 0;
 			t->wait_next = 0;
@@ -680,6 +736,7 @@ void proc_init()
 	idle.wait_reason = WAIT_REASON_NONE;
 	idle.wait_interrupted = 0;
 	idle.on_run_queue = 0;
+	kernel_work_reset(&idle);
 	init_queue(&task_queue, TASK_QUEUE_SIZE, process_queue_data);
 }
 
@@ -721,20 +778,35 @@ int task_to_id(struct thread *t)
 struct thread *fetch_task()
 {
 	int enabled = intr_save();
-	int index = pop_queue(&task_queue);
-	struct thread *t = id_to_task(index);
-	if (t == NULL) {
+	int remaining = task_queue.count;
+	int index;
+	struct thread *t;
+
+	while (remaining-- > 0) {
+		index = pop_queue(&task_queue);
+		t = id_to_task(index);
+		if (t == 0)
+			continue;
+		if (t->state != RUNNABLE) {
+			t->on_run_queue = 0;
+			continue;
+		}
+		if (!proc_vm_snapshot_schedulable(t)) {
+			if (push_queue(&task_queue, index) < 0)
+				panic("task queue invariant");
+			continue;
+		}
+		t->on_run_queue = 0;
+		int tid = t->tid;
+		int pid = t->process->pid;
 		intr_restore(enabled);
-		debugf("No task to fetch\n");
+		tracef("fetch index %d(pid=%d, tid=%d, addr=%p) from task queue",
+		       index, pid, tid, (uint64)t);
 		return t;
 	}
-	t->on_run_queue = 0;
-	int tid = t->tid;
-	int pid = t->process->pid;
 	intr_restore(enabled);
-	tracef("fetch index %d(pid=%d, tid=%d, addr=%p) from task queue", index,
-	       pid, tid, (uint64)t);
-	return t;
+	debugf("No task to fetch\n");
+	return 0;
 }
 
 void add_task(struct thread *t)
@@ -800,6 +872,8 @@ static struct proc *allocproc_admit(struct proc *parent,
 	p->exit_requested = 0;
 	p->exit_owner_tid = -1;
 	p->exit_finalizing = 0;
+	p->vm_snapshot_depth = 0;
+	p->vm_snapshot_owner_tid = -1;
 	child_records_reset(p);
 	p->pagetable = uvmcreate();
 	if (p->pagetable == 0) {
@@ -857,6 +931,7 @@ int allocthread(struct proc *p, uint64 entry, int alloc_user_res)
 	return -1;
 
 found:
+	kernel_work_reset(t);
 	t->tid = tid;
 	t->state = T_USED;
 	t->process = p;
@@ -994,6 +1069,7 @@ void scheduler()
 		kernel_stack_check(t);
 		t->state = RUNNING;
 		current_thread = t;
+		kernel_work_on_dispatch(t);
 		swtch(&idle.context, &t->context);
 		kernel_stack_check(t);
 		scheduler_finish_dying_thread(t);
@@ -1048,6 +1124,8 @@ void proc_install_user_image(struct proc *p, struct user_image *image,
 
 	for (int tid = 0; tid < NTHREAD; tid++) {
 		detach_task(&p->threads[tid]);
+		if (!running || tid != 0)
+			kernel_work_reset(&p->threads[tid]);
 		p->threads[tid].state = T_UNUSED;
 		p->threads[tid].tid = -1;
 		p->threads[tid].wait_channel = 0;
@@ -1094,6 +1172,7 @@ void freethread(struct thread *t)
 
 static void proc_reset_thread_slot(struct thread *t)
 {
+	kernel_work_reset(t);
 	t->state = T_UNUSED;
 	t->tid = -1;
 	t->wait_channel = 0;
@@ -1144,7 +1223,7 @@ static int proc_release_resources(struct proc *p)
 		p->files[i] = 0;
 	}
 	for (int i = 0; i < FD_BUFFER_SIZE; i++)
-		if (files[i] != 0)
+		if (files[i] != 0 && !fd_is_reserved(files[i]))
 			fileclose(files[i]);
 	if (teardown != 0)
 		freethread(teardown);
@@ -1168,6 +1247,8 @@ static void proc_reset_slot(struct proc *p)
 	p->exit_requested = 0;
 	p->exit_owner_tid = -1;
 	p->exit_finalizing = 0;
+	p->vm_snapshot_depth = 0;
+	p->vm_snapshot_owner_tid = -1;
 	child_records_reset(p);
 	p->state = P_UNUSED;
 }
@@ -1196,6 +1277,7 @@ int fork()
 {
 	struct proc *np;
 	struct proc *p = curr_proc();
+	int copy_status;
 	int i;
 	if (p->exit_requested || !proc_child_has_capacity(p))
 		return -1;
@@ -1203,16 +1285,25 @@ int fork()
 	if ((np = allocproc_admit(p, PROC_ADMIT_NORMAL)) == 0) {
 		return -1;
 	}
-	// Copy user memory from parent to child.
-	if (uvmcopy(p->pagetable, np->pagetable, p->max_page) < 0) {
+	// Keep this thread as the process's sole dispatchable thread while the
+	// page-by-page snapshot yields to unrelated processes.
+	if (proc_vm_snapshot_begin(p) < 0) {
 		freeproc(np);
 		return -1;
 	}
-	np->max_page = p->max_page;
-	np->ustack_base = p->ustack_base;
+	copy_status = uvmcopy(p->pagetable, np->pagetable, p->max_page);
+	if (copy_status == 0) {
+		np->max_page = p->max_page;
+		np->ustack_base = p->ustack_base;
+	}
+	proc_vm_snapshot_end(p);
+	if (copy_status < 0) {
+		freeproc(np);
+		return -1;
+	}
 	// Copy file table to new proc
 	for (i = 0; i < FD_BUFFER_SIZE; i++) {
-		if (p->files[i] != NULL) {
+		if (p->files[i] != NULL && !fd_is_reserved(p->files[i])) {
 			// Preserve the shared file entry reference across fork.
 			p->files[i]->ref++;
 			np->files[i] = p->files[i];
@@ -1452,4 +1543,42 @@ int fdalloc(struct file *f)
 		}
 	}
 	return -1;
+}
+
+int fd_is_reserved(struct file *f)
+{
+	return f == &fd_reservation;
+}
+
+int fdreserve(void)
+{
+	struct proc *p = curr_proc();
+
+	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
+		if (p->files[i] == 0) {
+			p->files[i] = &fd_reservation;
+			return i;
+		}
+	}
+	return -1;
+}
+
+int fdinstall(int fd, struct file *f)
+{
+	struct proc *p = curr_proc();
+
+	if (fd < 0 || fd >= FD_BUFFER_SIZE || f == 0 ||
+	    p->files[fd] != &fd_reservation)
+		return -1;
+	p->files[fd] = f;
+	return 0;
+}
+
+void fdrelease(int fd)
+{
+	struct proc *p = curr_proc();
+
+	if (fd >= 0 && fd < FD_BUFFER_SIZE &&
+	    p->files[fd] == &fd_reservation)
+		p->files[fd] = 0;
 }

@@ -18,6 +18,7 @@ struct inode {
 	short type; // copy of disk inode
 	ushort fs_owner_version;
 	uint fs_owner_domain;
+	uint64 content_epoch;
 	uint size;
 	uint addrs[NDIRECT + 1];
 	// LAB4: You may need to add link count here

@@ -43,6 +43,7 @@
 | `807b1e4` | 长存活 fork bomb 耗尽统一进程池 | 后代绑定不可变进程资源域，普通域有累计 live 配额，bootstrap/Agent worker 使用受控保留槽 | `procreap_ucore`、`procreap_agent_ucore` |
 | `7d87f76` | PUBLIC 进程持久耗尽块和 inode，使工作流与内核元数据进入 ENOSPC | 稳定存储域 cookie、逐块 owner map、inode owner、域配额及 PUBLIC/WORKFLOW/SYSTEM 分级保留水位共同约束分配 | `fsquota_ucore` 两组配额/保留场景，`fsenospc_ucore` 双目标复测 |
 | `ab246d4` | PUBLIC 进程用短命文件耗尽 Agent 全局版本表并阻断工作流编辑与摘要缓存 | 每个磁盘 inode 固定拥有一个版本 sidecar 槽；最终 `iput()` 回收同一生命期的版本、租约和摘要缓存，槽的可用性继承 inode 域配额与分级保留量 | `fsquota_ucore` 跨越旧 512 槽上限的 640 次创建/删除循环，并验证 workflow 版本和内容缓存仍可用 |
+| 本次内核工作预算变更 | 长时间运行的 syscall 在内核态关闭中断期间越过用户态时间片，PUBLIC 进程可持续独占 CPU | 每次 dispatch 建立不可由 syscall 重置的周期 deadline 和工作额度；统一 begin/end、timer pending、resumed 检测和显式安全点约束长路径；fork 用 VM snapshot 屏障稳定源页表且逐页计费；inode 调度后短返回，truncate 先 detach 再以不可取消 cleanup checkpoint 回收；FD reservation 与文件槽快照保证让出期间的生命周期 | 纯 Guest `syscallfair_ucore` 验证单次 64 KiB 控制台写、inode 大写入的内核重调度计数/短写/observer 进展和 `O_TRUNC` 两轮 EOF observer；AgentOS 与 baseline 使用同一契约 |
 | 当前变更 | `MESSAGE_SEND` 被解释为全局裸 PID 通道，低权限 Agent 可向 Recovery/Orchestrator 注入消息并耗尽关键事件队列 | stable control id 定向路由；接收方或受权控制者 grant/revoke；external/direct/attributed/source 三层配额，为显式内核 origin 保留至少 4 个容量名额；慢订阅者隔离和退出回收 | `agentsecurity_ucore` 已验证未授权拒绝、grant/revoke、target LLM_DONE consent、MESSAGE 位图隔离和 `ROUTE_MAX+2` 短命 source 槽回收；`agentloop_ucore` 已验证 source=4、directed=8、external=12、第 13 条 external 拒绝、4 条 KERNEL TIMER 保留容量、消费后重接纳和慢 watcher 隔离。attributed=8、同一来源混合跨类及路由幂等/部分撤销仍缺独立输出 |
 | 本次 scope 变更 | Agent capability、对象表和 IPC 仍可被解释为所有 workflow 共享的全局权限 | syscall 541 由可信 factory 创建动态 scope；所有敏感对象使用 capability + active scope + stable owner；syscall 542 只一次性委派 pipe；最多 4 scope 并保留独立进程/存储/对象份额 | `agentscope_ucore` 的同名对象、动作、租约、IPC、audit、配额、fd 委派、事务竞争和回收断言已在完整 Agent 回归中通过 |
 | 本次审计变更 | 用户可伪造 span/cause，低权限遥测或委派 span 可挤掉关键审计效果 | private span owner 与 cause control sidecar；`context_push` 拒绝非零 cause/span；审计按 scope low/high 分区，只有内核确认的特权状态效果进入 high | `agentsecurity_ucore` 的 forged context、trusted cause attribution、audit authority partition 回归已通过 |
@@ -182,6 +183,14 @@ inode 标签带布局版本和一致性校验值。该校验用于发现格式�
 
 Agent 评分仍可使用角色权重、priority、budget、事件、deadline、heartbeat 和虚拟运行量表达策略，但调度器额外维护不可配置的类级公平上限：连续选择 Agent 达到 `AGENT_SCHED_MAX_AGENT_BURST` 后，只要普通任务可运行，就必须选择普通 FIFO 任务。评分策略无法覆盖这条上限。
 
+类级公平只能约束两次调度之间选谁，不能约束一次 syscall 在内核中运行多久。`os/kernel_work.c` 因此为每个线程维护内核工作域：调度器在每次 dispatch 时重置一个 tick 的周期 deadline 和 1024 单位工作额度，syscall 的统一 begin/end 只维护嵌套深度，不刷新预算。timer 在内核态到期只设置 pending，不在中断、virtio 或持有临时对象的临界路径直接切换；下一安全点按 pending、deadline 或工作额度调用正常 `yield()`。线程在未退出 syscall 时重新 dispatch 会留下 resumed 标记，下一 checkpoint 把“已经发生调度”明确返回给调用者，避免调用者在同一次恢复后继续无界推进。syscall 返回前也执行统一检查，因此连续短 syscall 不能靠重复陷入刷新时间片。
+
+安全点只放在可提交边界：控制台按已输出的 64 字节、pipe 按已发布的传输块、exec 和 fork 按已完整处理的页面、`agent_run()` 按已完成的 operation、普通 FD_INODE 读写按单个块边界计费。fork 在开始逐页复制前建立进程级 VM snapshot 屏障，调度器暂缓同进程非 owner 线程，同时继续调度其他进程；失败回滚也使用不可取消 cleanup checkpoint。inode 路径在更新共享文件 offset、一次性内容版本和 Agent size 发布 sidecar 后才检查；sidecar 按 inode incarnation 非阻塞发布，查询和 metadata bank 快照都会覆盖事务表中的旧 size，持久化完成时再用 sequence 判断是否仍有并发更新。这样 metadata 事务忙或写线程退出也不会把已提交 size 隐藏在旧记录后。一旦 checkpoint 报告发生过调度，inode 路径就以合法短读或短写返回已提交前缀，让用户态重新发起操作，而不是跨调度继续使用旧 offset。新增长循环必须声明工作单位和原子提交边界并接入同一 checkpoint，不能自行判断 PID、角色或 syscall 编号。
+
+`O_TRUNC`、unlink 后的最终 `iput()` 和最后一次 `close()` 还涉及可跨调度的资源生命周期。truncate 先从 inode 原子 detach 被丢弃的直接/间接映射并提交新 size，再从私有 reclaim 描述中分批释放块；cleanup checkpoint 即使进程已经收到退出请求也继续完成这批无主资源的回收。`fileclose()` 在最后引用消失时先把类型、inode 或 pipe 复制到本地快照并发布空闲全局文件槽，之后不再访问可能已被复用的槽。`fileopen()` 则先占用不可读写、不可继承的进程 FD reservation，待 `O_TRUNC` 回收和文件初始化全部完成才安装真实文件，失败时统一释放 reservation。这些规则在 AgentOS 与 baseline 通用路径保持一致。
+
+当前专项验证覆盖上述可扩展数据、装载和回收路径，但不宣称已经穷尽任意 syscall。固定上界的目录扫描，以及只有可信 Agent 能到达的 metadata raw I/O，仍作为残余覆盖保留，后续新增可扩展循环时也必须按同一安全点协议审查。
+
 文件系统对 inode、inode cache 和数据块耗尽返回失败，回滚未提交状态并准确报告短写；存储域配额和分级水位进一步保证 PUBLIC 压力不能触及 workflow/system 保留量。Agent 文件版本 sidecar 与 inode 槽及其最终回收绑定，因此短命文件也不能绕开存储域边界耗尽独立的内核版本池。专项压力用例验证同域计数跨子进程退出仍有效、释放后可复用，以及 PUBLIC 触及全局水位后 workflow 文件、版本状态、内容摘要缓存与内核 metadata bank 仍可用。metadata 后端采用 generation + payload hash 的双 bank 提交：inactive bank 完整写入并回读后才成为新一代，ENOSPC 不覆盖上一代，显式 set/delete 失败还会回滚内存记录与 inode sidecar。metadata 内存表、索引、inode sidecar 和持久化由同一可睡眠事务门保护；VFS callback 与 scheduler 只做非阻塞尝试，失败后通过后台全量扫描协调，不能在持有底层文件系统状态时形成反向等待。事务 owner 在同一关中断临界区清空后广播其专属等待队列；所有 waiter 都重新检查条件并竞争，不把所有权绑定给单个被唤醒线程，因此任一 waiter 退出也不能把其余 syscall 永久遗弃。PUBLIC inode 在竞争事务门前被过滤，普通进程不能用无关文件 I/O 制造 metadata 锁竞争或扫描风暴。全局文件池分配失败也沿错误路径向上传播，但当前只验证了进程 fd 槽不足时的引用清理，尚缺耗尽整个 `FILEPOOLSIZE` 的独立压力用例。每线程内核栈使用 16 KiB 栈槽和 4 KiB 未映射 guard，并在低端保留 canary；构建时由 `make kernel-stack-check` 拒绝超过预算或无法确定上界的调用链。
 
 ## 9. 验证入口
@@ -195,6 +204,9 @@ make fs-enospc-test TOOLPREFIX=riscv64-linux-gnu-
 
 # 两个目标的退出、僵尸、阻塞 syscall 和资源域；主目标另测 Agent 保留槽
 make proc-reap-test TOOLPREFIX=riscv64-linux-gnu-
+
+# 两个目标的 syscall 内核工作预算和安全点公平性
+make syscall-fairness-test TOOLPREFIX=riscv64-linux-gnu-
 
 # 构建期内核栈预算
 make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-

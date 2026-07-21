@@ -1,5 +1,6 @@
 #include "vm.h"
 #include "defs.h"
+#include "kernel_work.h"
 #include "plic.h"
 #include "riscv.h"
 
@@ -302,29 +303,39 @@ void uvmfree(pagetable_t pagetable, uint64 max_page)
 int uvmcopy(pagetable_t old, pagetable_t new, uint64 max_page)
 {
 	pte_t *pte;
-	uint64 pa, i;
+	uint64 pa, page;
+	uint64 scanned_pages = 0;
 	uint flags;
 	char *mem;
 
-	for (i = 0; i < max_page * PAGE_SIZE; i += PGSIZE) {
-		if ((pte = walk(old, i, 0)) == 0)
-			continue;
-		if ((*pte & PTE_V) == 0)
-			continue;
-		pa = PTE2PA(*pte);
-		flags = PTE_FLAGS(*pte);
-		if ((mem = kalloc()) == 0)
-			goto err;
-		memmove(mem, (char *)pa, PGSIZE);
-		if (mappages(new, i, PGSIZE, (uint64)mem, flags) != 0) {
-			kfree(mem);
-			goto err;
+	for (page = 0; page < max_page; page++) {
+		uint64 va = page * PGSIZE;
+
+		pte = walk(old, va, 0);
+		if (pte != 0 && (*pte & PTE_V) != 0) {
+			pa = PTE2PA(*pte);
+			flags = PTE_FLAGS(*pte);
+			if ((mem = kalloc()) == 0)
+				goto err;
+			memmove(mem, (char *)pa, PGSIZE);
+			if (mappages(new, va, PGSIZE, (uint64)mem,
+				     flags) != 0) {
+				kfree(mem);
+				goto err;
+			}
 		}
+		scanned_pages = page + 1;
+		if (kernel_work_checkpoint(KERNEL_WORK_PAGE_UNITS) < 0)
+			goto err;
 	}
 	return 0;
 
 err:
-	uvmunmap(new, 0, i / PGSIZE, 1);
+	while (scanned_pages != 0) {
+		scanned_pages--;
+		uvmunmap(new, scanned_pages * PGSIZE, 1, 1);
+		(void)kernel_work_checkpoint_cleanup(KERNEL_WORK_PAGE_UNITS);
+	}
 	return -1;
 }
 

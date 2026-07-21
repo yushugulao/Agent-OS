@@ -2,6 +2,7 @@
 #include "agent.h"
 #include "defs.h"
 #include "loader.h"
+#include "kernel_work.h"
 #include "plic.h"
 #include "syscall.h"
 #include "timer.h"
@@ -48,6 +49,8 @@ void devintr(uint64 cause)
 		// if form user, allow yield
 		if ((r_sstatus() & SSTATUS_SPP) == 0) {
 			yield();
+		} else {
+			kernel_work_request_resched();
 		}
 		break;
 	case SupervisorExternal:

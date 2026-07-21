@@ -10,10 +10,10 @@ AgentOS-uCore 的验证分四层：
 | --- | --- | --- |
 | 构建检查 | `make agentos-user`、`make agentos-build`、`make kernel-stack-check` | 确认内核、用户态 ABI 和文件系统镜像能从当前源码构建；每次生成 `build/kernel` 前都会自动执行内核栈预算检查。 |
 | AgentOS 专项测试 | `make agentos-test` 或 `bash scripts/run-agent-tests.sh` | 在 QEMU 中逐项运行 Agent 功能、权限和用户输入检查。 |
-| 资源安全复测 | `make fs-enospc-test`、`make proc-reap-test` | 在增强目标和普通 uCore 对照目标上验证文件系统耗尽、进程回收及活进程配额。 |
+| 资源安全复测 | `make fs-enospc-test`、`make proc-reap-test`、`make syscall-fairness-test` | 在增强目标和普通 uCore 对照目标上验证文件系统耗尽、进程回收、活进程配额及 syscall 内核工作预算。 |
 | 双目标与聚合验证 | `make dual-platform-run`、`make full-verify` | 运行双目标科研平台负载，并串联宿主机、AgentOS 和进程回收检查。 |
 
-`agentos-test` 只关注根目录 AgentOS-uCore 目标；`fs-enospc-test` 和 `proc-reap-test` 同时覆盖根目录增强目标与 `baseline_ucore/` 普通目标。双目标验证详情见 [../verification.md](../verification.md)。
+`agentos-test` 只关注根目录 AgentOS-uCore 目标；`fs-enospc-test`、`proc-reap-test` 和 `syscall-fairness-test` 同时覆盖根目录增强目标与 `baseline_ucore/` 普通目标。双目标验证详情见 [../verification.md](../verification.md)。
 
 ## 验证环境
 
@@ -106,6 +106,14 @@ make fs-enospc-test TOOLPREFIX=riscv64-linux-gnu-
 make proc-reap-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
+syscall 公平性复测完全在 Guest 内用 pipe、进程和线程建立因果关系，宿主机只采集输出。它依次验证单次 64 KiB 控制台 `write()` 的 peer 进展、普通 inode 大写入的内核重调度计数、合法短写与 observer 进展，以及 `O_TRUNC` open 的内核重调度计数和原子 EOF 可见性：
+
+```bash
+make syscall-fairness-test TOOLPREFIX=riscv64-linux-gnu-
+```
+
+三个阶段都要求 `BEGIN < PEER < END`；inode 与 truncate 阶段都用只读的 last-syscall 重调度计数证明前一个 syscall 内部跨过调度边界，observer 分别证明 peer 进展和已提交 EOF 可见。最外层父进程等待 worker 完整退出，runner 要求 QEMU 正常关机；这验证退出完整性而不夸大为退出清理公平性。增强目标和 baseline 使用同一测试契约。
+
 内核栈使用检查由根目录和 `baseline_ucore/` 的 `build/kernel` 规则自动执行，在链接前根据编译器 callgraph 与栈帧数据核算用户陷入、嵌套中断和安全余量。也可单独执行：
 
 ```bash
@@ -113,7 +121,7 @@ make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-`make full-verify` 当前会串联 `run-agent-tests.sh` 和 `run-proc-reap-tests.sh`，但不会串联 `run-fs-enospc-tests.sh`；发布前必须额外执行 `make fs-enospc-test`。聚合流程中的内核构建仍会自动执行内核栈检查。
+`make full-verify` 当前会串联 `run-agent-tests.sh`、`run-proc-reap-tests.sh` 和 `run-syscall-fairness-tests.sh`，但不会串联 `run-fs-enospc-tests.sh`；发布前必须额外执行 `make fs-enospc-test`。聚合流程中的内核构建仍会自动执行内核栈检查。
 
 ## 覆盖关系
 
@@ -125,7 +133,7 @@ make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 | 任务四：文件属性查询 | `agentfs_ucore`、`agentscope_ucore`、`agentscan_ucore`、`agentbench_ucore`、`agentconflict_ucore`、`agentvfs_ucore` |
 | 任务五：Agent Loop | `agentloop_ucore`、`agentscope_ucore`、`agentsched_ucore`、`agentbench_ucore`、`labdemo_ucore` |
 | 任务六：综合场景 | `labdemo_ucore`、`labbench_ucore`、`make dual-platform-run` |
-| 安全与稳健性复测 | `agentscope_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`、`make fs-enospc-test`、`make proc-reap-test`、`make kernel-stack-check` |
+| 安全与稳健性复测 | `agentscope_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`、`make fs-enospc-test`、`make proc-reap-test`、`make syscall-fairness-test`、`make kernel-stack-check` |
 
 ## 性能数据说明
 
@@ -188,13 +196,14 @@ results/latest/
 
 ## 当前验证状态
 
-本文仍不把当前 `make full-verify` 记录为全绿：最近一次聚合入口在宿主机 Reader E2E 处中止。但本次所需专项已独立运行，不能与该历史聚合失败混为一谈：`scripts/run-agent-tests.sh` 15/15 通过，`agentscope_ucore` 和 `agentsecurity_ucore` 的新增标记均真实产生；ENOSPC、进程回收、宿主提取器、存储策略、AgentOS 平台构建与 QEMU 挂载也分别通过。详细命令、关键输出和边界见 [test-record.md](test-record.md)。
+本文仍不把当前 `make full-verify` 记录为全绿。各项独立专项不能与聚合入口状态混为一谈：2026-07-21 的 `scripts/run-agent-tests.sh` 15/15、ENOSPC、进程回收和基础 syscall 公平性双目标复测均通过，当时内核栈预算为增强目标 `14144/16384`、baseline `8144/16384`。7 月 22 日最终审查补丁已完成双目标语法、脚本语法和 diff 检查，但受限执行身份没有可用 WSL 发行版，尚待标准 Linux 环境重跑 RISC-V/QEMU 与栈预算。详细命令、关键输出和覆盖边界见 [test-record.md](test-record.md)。
 
 ## 当前范围说明
 
 | 方向 | 当前范围 |
 | --- | --- |
 | 文件扫描深度 | 自动扫描 uCore 根目录短文件名，文件对象 metadata 支持用户态显式写入和根目录自动发现。 |
+| syscall 公平性覆盖 | 动态契约覆盖控制台、inode 首次写内重调度/短写、截断回收和 worker 退出完整性；pipe、exec/fork 分页、VM snapshot 屏障、退出清理和 Agent batch 按源码安全点契约检查。固定上界目录扫描与仅可信 Agent 可达的 metadata raw I/O 尚无独立公平性压力用例。 |
 | Agent 调度 | 验证角色权重、受权调度配置、事件优先、deadline、heartbeat、wait cancel 和虚拟运行量。 |
 | LLM Gateway | 内核提供结构化请求、响应事件、Context 和审计记录；云端访问由用户态或宿主机 Relay 完成。 |
 | 页面和图表 | 内核输出 `agentos:event`、timeline、audit 和 provenance，宿主机工具负责转成页面和图表。 |
