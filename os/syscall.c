@@ -343,10 +343,14 @@ uint64 sys_pipe(uint64 fdarray)
 	return 0;
 
 err1:
-	if (fds[0] >= 0)
+	if (fds[0] >= 0) {
 		p->files[fds[0]] = 0;
-	if (fds[1] >= 0)
+		p->fd_scope_delegate[fds[0]] = 0;
+	}
+	if (fds[1] >= 0) {
 		p->files[fds[1]] = 0;
+		p->fd_scope_delegate[fds[1]] = 0;
+	}
 err0:
 	if (f0)
 		fileclose(f0);
@@ -388,6 +392,7 @@ uint64 sys_close(int fd)
 		return -1;
 	}
 	p->files[fd] = 0;
+	p->fd_scope_delegate[fd] = 0;
 	fileclose(f);
 	return 0;
 }
@@ -661,6 +666,12 @@ void syscall()
 		break;
 	case SYS_agent_create_role:
 		ret = sys_agent_create_role(args[0]);
+		break;
+	case SYS_agent_workflow_create:
+		ret = sys_agent_workflow_create(args[0]);
+		break;
+	case SYS_agent_scope_delegate_fd:
+		ret = sys_agent_scope_delegate_fd(args[0]);
 		break;
 	case SYS_agent_info:
 		ret = sys_agent_info(args[0]);

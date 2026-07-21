@@ -217,7 +217,7 @@
 #define AGENT_FILE_META_UPDATE_DEPENDENCY (1ULL << 9)
 #define AGENT_FILE_META_UPDATE_ALL        0x3ffULL
 
-#define AGENT_FILE_META_MAX       128
+#define AGENT_FILE_META_MAX       512
 #define AGENT_FILE_QUERY_MAX_HITS 8
 #define AGENT_FILE_NAME_SIZE      32
 #define AGENT_FILE_LOGICAL_SIZE   80
@@ -345,6 +345,7 @@ struct agent_info {
 	int resource_quota;
 	int loop_state;
 	uint64 agent_call_count;
+	uint64 metadata_txn_wait_count;
 	uint64 context_path_count;
 	uint64 context_path_capacity;
 	uint64 context_path_head;
@@ -792,6 +793,8 @@ struct agent_file_edit_state {
 
 int agent_create(void);
 int agent_create_role(int role);
+int agent_workflow_create(int role);
+int agent_scope_delegate_fd(int fd);
 int agent_worker_create(const char *image, uint64 capabilities);
 int agent_info(struct agent_info *info);
 int agent_sched_snapshot(struct agent_sched_record *records, int max);

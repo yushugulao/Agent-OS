@@ -31,7 +31,9 @@ def put_inode(
     put_u16(image, offset, file_type)
     if fs_magic == fsx.FSMAGIC_BASELINE_QUOTA:
         owner_domain = 0 if file_type == 0 else 1
-        owner_version = 0 if file_type == 0 else fsx.FS_OWNER_VERSION
+        owner_version = (
+            0 if file_type == 0 else fsx.FS_OWNER_VERSION_LEGACY
+        )
         put_u16(image, offset + 2, owner_version)
         put_u32(image, offset + 4, owner_domain)
     put_u32(image, offset + 8, size)
@@ -46,38 +48,83 @@ def put_vfs_label(
     policy: int,
     dinode_size: int,
     fs_magic: int = fsx.FSMAGIC_VFS_POLICY,
+    scope_id: int | None = None,
 ) -> None:
     ipb = fsx.BSIZE // dinode_size
     offset = (inum // ipb + 2) * fsx.BSIZE + (inum % ipb) * dinode_size
+    scoped_format = fs_magic == fsx.FSMAGIC_SCOPED_WORKFLOW
     if policy == fsx.VFS_POLICY_ROOT:
         flags = fsx.VFS_LABEL_F_ROOT
-        domain = fsx.VFS_DOMAIN_PUBLIC
+        domain = fsx.VFS_SCOPE_NONE if scoped_format else fsx.VFS_DOMAIN_PUBLIC
     elif policy == fsx.VFS_POLICY_WORKFLOW:
         flags = fsx.VFS_LABEL_F_PROTECTED
-        domain = fsx.VFS_DOMAIN_WORKFLOW
+        if scoped_format:
+            domain = (
+                scope_id
+                if scope_id is not None
+                else fsx.VFS_SCOPE_FIRST_DYNAMIC
+            )
+        else:
+            domain = fsx.VFS_DOMAIN_WORKFLOW
     elif policy == fsx.VFS_POLICY_PUBLIC:
         flags = fsx.VFS_LABEL_F_PUBLIC
-        domain = fsx.VFS_DOMAIN_PUBLIC
+        domain = fsx.VFS_SCOPE_NONE if scoped_format else fsx.VFS_DOMAIN_PUBLIC
     elif policy == fsx.VFS_POLICY_FREE:
         flags = fsx.VFS_LABEL_F_FREE
-        domain = fsx.VFS_DOMAIN_PUBLIC
+        domain = fsx.VFS_SCOPE_NONE if scoped_format else fsx.VFS_DOMAIN_PUBLIC
     else:
         raise AssertionError(f"unsupported test policy {policy}")
-    quota_format = fs_magic == fsx.FSMAGIC_AGENT_QUOTA
-    owner_domain = 0 if file_type == 0 or not quota_format else 1
-    owner_version = 0 if owner_domain == 0 else fsx.FS_OWNER_VERSION
+    quota_format = fs_magic in {
+        fsx.FSMAGIC_AGENT_QUOTA,
+        fsx.FSMAGIC_SCOPED_WORKFLOW,
+    }
+    if file_type == 0 or not quota_format:
+        owner_domain = fsx.FS_OWNER_NONE
+        owner_version = 0
+    elif scoped_format and policy == fsx.VFS_POLICY_WORKFLOW:
+        if domain == fsx.VFS_SCOPE_SYSTEM:
+            owner_domain = fsx.FS_OWNER_SYSTEM
+        else:
+            owner_domain = fsx.FS_OWNER_SCOPE_FLAG | domain
+        owner_version = fsx.FS_OWNER_VERSION
+    else:
+        owner_domain = fsx.FS_OWNER_SYSTEM
+        owner_version = (
+            fsx.FS_OWNER_VERSION
+            if scoped_format
+            else fsx.FS_OWNER_VERSION_LEGACY
+        )
+    if scoped_format:
+        label_version = fsx.VFS_LABEL_VERSION
+        policy_generation = fsx.VFS_POLICY_GENERATION
+    elif quota_format:
+        label_version = fsx.VFS_LABEL_VERSION_QUOTA
+        policy_generation = fsx.VFS_POLICY_GENERATION_LEGACY
+    else:
+        label_version = fsx.VFS_LABEL_VERSION_LEGACY
+        policy_generation = fsx.VFS_POLICY_GENERATION_LEGACY
+    exec_profile = fsx.VFS_EXEC_PROFILE_NONE
+    if (
+        scoped_format
+        and policy == fsx.VFS_POLICY_WORKFLOW
+        and domain == fsx.VFS_SCOPE_SYSTEM
+    ):
+        put_u32(
+            image,
+            offset + 64,
+            fsx.EXEC_FLAG_IMMUTABLE | fsx.EXEC_FLAG_DOMAIN_SAFE,
+        )
+        put_u32(image, offset + 68, fsx.EXEC_MANIFEST_VERSION)
+        put_u32(image, offset + 76, fsx.EXEC_LAYOUT_VERSION)
+        exec_profile = fsx.VFS_EXEC_PROFILE_WORKFLOW
     words = [
         fsx.VFS_LABEL_MAGIC,
-        (
-            fsx.VFS_LABEL_VERSION_QUOTA
-            if quota_format
-            else fsx.VFS_LABEL_VERSION
-        ),
+        label_version,
         flags,
         domain,
         policy,
-        fsx.VFS_EXEC_PROFILE_NONE,
-        fsx.VFS_POLICY_GENERATION,
+        exec_profile,
+        policy_generation,
         1,
         owner_domain,
         owner_version,
@@ -92,6 +139,25 @@ def put_dirent(block: bytearray, slot: int, inum: int, name: str) -> None:
     put_u16(block, offset, inum)
     raw = name.encode("utf-8")[: fsx.DIRSIZ]
     block[offset + 2 : offset + 2 + len(raw)] = raw
+
+
+def replace_vfs_label_word(
+    image: bytearray,
+    inode_offset: int,
+    inum: int,
+    word_index: int,
+    value: int,
+) -> None:
+    words = [
+        fsx.u32(image, inode_offset + 84 + index * 4) for index in range(10)
+    ]
+    words[word_index] = value
+    put_u32(image, inode_offset + 84 + word_index * 4, value)
+    put_u32(
+        image,
+        inode_offset + 124,
+        fsx.vfs_label_checksum(inum, words),
+    )
 
 
 def run_case(
@@ -119,10 +185,31 @@ def run_case(
         qmapstart = bmapstart + bitmap_blocks
         owner_blocks = (1000 + fsx.QPB - 1) // fsx.QPB
         datastart = qmapstart + owner_blocks
-        put_u32(image, fsx.BSIZE + 8, 1000 - datastart)
+        nblocks = 1000 - datastart
+        put_u32(image, fsx.BSIZE + 8, nblocks)
         put_u32(image, fsx.BSIZE + 20, bmapstart)
         put_u32(image, fsx.BSIZE + 24, qmapstart)
         put_u32(image, fsx.BSIZE + 28, datastart)
+        if magic == fsx.FSMAGIC_SCOPED_WORKFLOW:
+            workflow_blocks = 8
+            workflow_inodes = 8
+            system_blocks = 4
+            system_inodes = 4
+            policy_checksum = fsx.storage_policy_checksum(
+                fsx.FS_STORAGE_POLICY_VERSION,
+                fsx.FS_WORKFLOW_SCOPE_SLOTS,
+                workflow_blocks,
+                workflow_inodes,
+                system_blocks,
+                system_inodes,
+            )
+            put_u32(image, fsx.BSIZE + 32, fsx.FS_STORAGE_POLICY_VERSION)
+            put_u32(image, fsx.BSIZE + 36, fsx.FS_WORKFLOW_SCOPE_SLOTS)
+            put_u32(image, fsx.BSIZE + 40, workflow_blocks)
+            put_u32(image, fsx.BSIZE + 44, workflow_inodes)
+            put_u32(image, fsx.BSIZE + 48, system_blocks)
+            put_u32(image, fsx.BSIZE + 52, system_inodes)
+            put_u32(image, fsx.BSIZE + 56, policy_checksum)
     else:
         put_u32(image, fsx.BSIZE + 8, 980)
         put_u32(image, fsx.BSIZE + 20, 15)
@@ -191,6 +278,11 @@ def run_case(
             fsx.VFS_POLICY_WORKFLOW,
             dinode_size,
             magic,
+            (
+                fsx.VFS_SCOPE_SYSTEM
+                if magic == fsx.FSMAGIC_SCOPED_WORKFLOW
+                else None
+            ),
         )
 
     ack_text = b"delivery=kernel_event_queue\nstatus=ready\n"
@@ -228,7 +320,10 @@ def run_case(
             magic,
         )
 
-        if magic == fsx.FSMAGIC_AGENT_QUOTA:
+        if magic in {
+            fsx.FSMAGIC_AGENT_QUOTA,
+            fsx.FSMAGIC_SCOPED_WORKFLOW,
+        }:
             put_inode(image, 7, 0, 0, [], dinode_size, magic)
             put_vfs_label(
                 image, 7, 0, fsx.VFS_POLICY_FREE, dinode_size, magic
@@ -250,19 +345,83 @@ def run_case(
         assert superblock.qmapstart == qmapstart
         assert superblock.datastart == datastart
         root_inode = fsx.read_inode(image, superblock, fsx.ROOTINO)
-        assert root_inode.fs_owner_domain == 1
-        assert root_inode.fs_owner_version == fsx.FS_OWNER_VERSION
+        assert root_inode.fs_owner_domain == fsx.FS_OWNER_SYSTEM
+        assert root_inode.fs_owner_version == (
+            fsx.FS_OWNER_VERSION
+            if magic == fsx.FSMAGIC_SCOPED_WORKFLOW
+            else fsx.FS_OWNER_VERSION_LEGACY
+        )
+        if magic == fsx.FSMAGIC_SCOPED_WORKFLOW:
+            assert superblock.storage_policy_version == 1
+            assert superblock.storage_scope_slots == 4
+            assert superblock.workflow_block_guarantee == 8
+            assert superblock.workflow_inode_guarantee == 8
+            assert superblock.system_block_reserve == 4
+            assert superblock.system_inode_reserve == 4
+            workflow_inode = fsx.read_inode(image, superblock, 2)
+            assert workflow_inode.vfs_scope_id == fsx.VFS_SCOPE_FIRST_DYNAMIC
+            assert workflow_inode.fs_owner_domain == (
+                fsx.FS_OWNER_SCOPE_FLAG | fsx.VFS_SCOPE_FIRST_DYNAMIC
+            )
+            assert fsx.fs_owner_is_scope(workflow_inode.fs_owner_domain)
+            assert (
+                fsx.fs_owner_scope_id(workflow_inode.fs_owner_domain)
+                == workflow_inode.vfs_scope_id
+            )
     else:
         assert superblock.qmapstart is None
         assert superblock.datastart is None
 
-    summary = fsx.extract_state_files(image_path, out_dir, repo_dir)
+    summary = fsx.extract_state_files(
+        image_path, out_dir, repo_dir, require_single_scope=True
+    )
     assert summary["extracted_state_files"] == 3, summary
     assert (out_dir / "rp_input").read_text(encoding="utf-8") == input_text.decode("utf-8")
     assert (out_dir / "rp_artifact_manifest").read_text(encoding="utf-8") == manifest_text.decode("utf-8")
     assert (out_dir / "rp_agentos_collab_ack").read_text(encoding="utf-8") == ack_text.decode("utf-8")
     assert not (out_dir / "rp_orch").exists()
     assert (out_dir / "extract-summary.json").exists()
+
+    if magic == fsx.FSMAGIC_SCOPED_WORKFLOW:
+        stale_file = out_dir / "rp_stale"
+        stale_scope = out_dir / "scope-999"
+        unrelated_file = out_dir / "keep.txt"
+        stale_file.write_text("stale\n", encoding="utf-8")
+        stale_scope.mkdir()
+        (stale_scope / "rp_stale").write_text("stale\n", encoding="utf-8")
+        unrelated_file.write_text("keep\n", encoding="utf-8")
+        fsx.extract_state_files(
+            image_path, out_dir, repo_dir, require_single_scope=True
+        )
+        assert not stale_file.exists()
+        assert not stale_scope.exists()
+        assert unrelated_file.read_text(encoding="utf-8") == "keep\n"
+        assert (out_dir / "rp_input").read_bytes() == input_text
+
+        traversal = bytearray(image)
+        malicious_name = b"rp_/../../../x"
+        assert len(malicious_name) == fsx.DIRSIZ
+        workflow_slot = 1 if public_first else 0
+        name_offset = 20 * fsx.BSIZE + workflow_slot * 16 + 2
+        traversal[name_offset : name_offset + fsx.DIRSIZ] = malicious_name
+        traversal_path = case_dir / "traversal.img"
+        traversal_out = case_dir / "traversal-state"
+        escape_target = root / "x"
+        escape_target.write_text("sentinel\n", encoding="utf-8")
+        traversal_path.write_bytes(traversal)
+        try:
+            fsx.extract_state_files(
+                traversal_path,
+                traversal_out,
+                repo_dir,
+                require_single_scope=True,
+            )
+        except ValueError as error:
+            assert "unsafe state filename" in str(error)
+        else:
+            raise AssertionError("guest path traversal name accepted")
+        assert escape_target.read_text(encoding="utf-8") == "sentinel\n"
+        escape_target.unlink()
 
     if quota_format:
         bad_geometry = bytearray(image)
@@ -273,6 +432,20 @@ def run_case(
             assert "quota filesystem geometry" in str(error)
         else:
             raise AssertionError("overlapping quota map accepted")
+
+    if magic == fsx.FSMAGIC_SCOPED_WORKFLOW:
+        bad_contract = bytearray(image)
+        put_u32(
+            bad_contract,
+            fsx.BSIZE + 56,
+            superblock.storage_policy_checksum ^ 1,
+        )
+        try:
+            fsx.read_superblock(bad_contract)
+        except ValueError as error:
+            assert "storage policy contract" in str(error)
+        else:
+            raise AssertionError("corrupt scoped storage contract accepted")
 
     if magic == fsx.FSMAGIC_BASELINE_QUOTA:
         ownerless = bytearray(image)
@@ -326,7 +499,80 @@ def run_case(
         else:
             raise AssertionError("duplicate workflow name accepted")
 
-        if magic == fsx.FSMAGIC_AGENT_QUOTA:
+        # The scoped format permits the same physical name in independent
+        # workflow namespaces and must not overwrite either extracted object.
+        if magic == fsx.FSMAGIC_SCOPED_WORKFLOW:
+            cross_scope = bytearray(image)
+            put_vfs_label(
+                cross_scope,
+                6,
+                fsx.T_FILE,
+                fsx.VFS_POLICY_WORKFLOW,
+                dinode_size,
+                magic,
+                fsx.VFS_SCOPE_FIRST_DYNAMIC + 1,
+            )
+            cross_scope_path = case_dir / "cross-scope.img"
+            cross_scope_out = case_dir / "cross-scope-state"
+            cross_scope_path.write_bytes(cross_scope)
+            cross_scope_summary = fsx.extract_state_files(
+                cross_scope_path, cross_scope_out, repo_dir
+            )
+            assert cross_scope_summary["extracted_state_files"] == 4
+            assert cross_scope_summary["available_scope_ids"] == [
+                fsx.VFS_SCOPE_FIRST_DYNAMIC,
+                fsx.VFS_SCOPE_FIRST_DYNAMIC + 1,
+            ]
+            assert cross_scope_summary["selected_scope_id"] is None
+            assert cross_scope_summary["scope_layout"] == "partitioned"
+            assert (
+                cross_scope_out
+                / f"scope-{fsx.VFS_SCOPE_FIRST_DYNAMIC}"
+                / "rp_input"
+            ).read_bytes() == input_text
+            assert (
+                cross_scope_out
+                / f"scope-{fsx.VFS_SCOPE_FIRST_DYNAMIC + 1}"
+                / "rp_input"
+            ).read_bytes() == public_text
+            assert (
+                cross_scope_out
+                / f"scope-{fsx.VFS_SCOPE_FIRST_DYNAMIC}"
+                / "rp_artifact_manifest"
+            ).read_bytes() == manifest_text
+            assert not (cross_scope_out / "rp_artifact_manifest").exists()
+
+            try:
+                fsx.extract_state_files(
+                    cross_scope_path,
+                    case_dir / "ambiguous-scope-state",
+                    repo_dir,
+                    require_single_scope=True,
+                )
+            except ValueError as error:
+                assert "exactly one workflow scope" in str(error)
+            else:
+                raise AssertionError("ambiguous workflow scope was selected")
+
+            selected_out = case_dir / "selected-scope-state"
+            selected_summary = fsx.extract_state_files(
+                cross_scope_path,
+                selected_out,
+                repo_dir,
+                scope_id=fsx.VFS_SCOPE_FIRST_DYNAMIC,
+            )
+            assert selected_summary["selected_scope_id"] == (
+                fsx.VFS_SCOPE_FIRST_DYNAMIC
+            )
+            assert selected_summary["scope_layout"] == "selected"
+            assert selected_summary["extracted_state_files"] == 3
+            assert (selected_out / "rp_input").read_bytes() == input_text
+            assert not (selected_out / "scope-2").exists()
+
+        if magic in {
+            fsx.FSMAGIC_AGENT_QUOTA,
+            fsx.FSMAGIC_SCOPED_WORKFLOW,
+        }:
             allocated_without_owner = bytearray(image)
             words = [
                 fsx.u32(allocated_without_owner, inode_offset + 84 + i * 4)
@@ -361,7 +607,11 @@ def run_case(
                 fsx.u32(bad_owner_version, inode_offset + 84 + i * 4)
                 for i in range(10)
             ]
-            words[9] = fsx.FS_OWNER_VERSION + 1
+            words[9] = (
+                fsx.FS_OWNER_VERSION
+                if magic == fsx.FSMAGIC_AGENT_QUOTA
+                else fsx.FS_OWNER_VERSION_LEGACY
+            )
             for index, value in enumerate(words):
                 put_u32(
                     bad_owner_version,
@@ -391,7 +641,11 @@ def run_case(
                 fsx.u32(legacy_label, inode_offset + 84 + i * 4)
                 for i in range(10)
             ]
-            words[1] = fsx.VFS_LABEL_VERSION
+            words[1] = (
+                fsx.VFS_LABEL_VERSION_LEGACY
+                if magic == fsx.FSMAGIC_AGENT_QUOTA
+                else fsx.VFS_LABEL_VERSION_QUOTA
+            )
             put_u32(legacy_label, inode_offset + 88, words[1])
             put_u32(
                 legacy_label,
@@ -409,7 +663,48 @@ def run_case(
             except ValueError as error:
                 assert "VFS label" in str(error)
             else:
-                raise AssertionError("legacy VFS label accepted by quota format")
+                raise AssertionError("legacy VFS label accepted by newer format")
+
+            if magic == fsx.FSMAGIC_SCOPED_WORKFLOW:
+                invalid_scoped_labels = (
+                    (
+                        "untagged-workflow-owner",
+                        8,
+                        fsx.FS_OWNER_SYSTEM,
+                    ),
+                    (
+                        "mismatched-workflow-owner",
+                        8,
+                        fsx.FS_OWNER_SCOPE_FLAG
+                        | (fsx.VFS_SCOPE_FIRST_DYNAMIC + 1),
+                    ),
+                    (
+                        "legacy-policy-generation",
+                        6,
+                        fsx.VFS_POLICY_GENERATION_LEGACY,
+                    ),
+                )
+                for label, word_index, value in invalid_scoped_labels:
+                    invalid_label = bytearray(image)
+                    replace_vfs_label_word(
+                        invalid_label,
+                        inode_offset,
+                        2,
+                        word_index,
+                        value,
+                    )
+                    invalid_path = case_dir / f"{label}.img"
+                    invalid_path.write_bytes(invalid_label)
+                    try:
+                        fsx.extract_state_files(
+                            invalid_path,
+                            case_dir / f"{label}-state",
+                            repo_dir,
+                        )
+                    except ValueError as error:
+                        assert "VFS" in str(error)
+                    else:
+                        raise AssertionError(f"{label} accepted")
 
             free_inode = fsx.read_inode(image, superblock, 7)
             assert free_inode.vfs_policy == fsx.VFS_POLICY_FREE
@@ -455,6 +750,19 @@ def main() -> int:
             fsx.FSMAGIC_AGENT_QUOTA,
             fsx.DINODE_SIZE_EXEC_POLICY,
             "agent-quota-public-first",
+            public_first=True,
+        )
+        run_case(
+            root,
+            fsx.FSMAGIC_SCOPED_WORKFLOW,
+            fsx.DINODE_SIZE_EXEC_POLICY,
+            "scoped-workflow-first",
+        )
+        run_case(
+            root,
+            fsx.FSMAGIC_SCOPED_WORKFLOW,
+            fsx.DINODE_SIZE_EXEC_POLICY,
+            "scoped-public-first",
             public_first=True,
         )
 

@@ -5,6 +5,8 @@
 #include <string.h>
 #include <unistd.h>
 
+#define TEST_NOINLINE __attribute__((noinline))
+
 static void check(int ok, const char *msg)
 {
 	if (!ok) {
@@ -14,6 +16,17 @@ static void check(int ok, const char *msg)
 }
 
 static struct agent_sched_config security_sched_config;
+static struct agent_audit_record
+	security_audit_records[AGENT_AUDIT_MAX_RECORDS];
+static struct agent_provenance_edge security_provenance_edges[128];
+static struct agent_audit_filter security_audit_filter;
+static struct agent_event security_audit_event;
+static struct agent_info security_agent_info;
+static struct agent_op security_anchor_op;
+static struct agent_result security_anchor_result;
+static struct agent_file_query security_file_query;
+static struct agent_file_query_result security_file_result;
+static uint64 security_orchestrator_span;
 
 static void make_op(struct agent_op *op, int tool, uint64 id, uint64 arg0,
 		    const char *payload)
@@ -175,48 +188,42 @@ static void set_report_failed(const char *run_id, int fid, const char *physical)
 
 static void check_align_status(const char *run_id, const char *status)
 {
-	struct agent_file_query query;
-	struct agent_file_query_result result;
-
-	memset(&query, 0, sizeof(query));
-	query.flags = AGENT_FILE_QUERY_USE_INDEX;
-	query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
-	strcpy(query.project, "lab-gene-x");
-	strcpy(query.run_id, run_id);
-	strcpy(query.stage, "align");
-	strcpy(query.status, status);
-	check(agent_file_query(&query, &result) >= 1, "query align status");
-	check(result.total_hits >= 1, "align status hit");
+	memset(&security_file_query, 0, sizeof(security_file_query));
+	security_file_query.flags = AGENT_FILE_QUERY_USE_INDEX;
+	security_file_query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(security_file_query.project, "lab-gene-x");
+	strcpy(security_file_query.run_id, run_id);
+	strcpy(security_file_query.stage, "align");
+	strcpy(security_file_query.status, status);
+	check(agent_file_query(&security_file_query, &security_file_result) >= 1,
+	      "query align status");
+	check(security_file_result.total_hits >= 1, "align status hit");
 }
 
 static void check_report_status(const char *run_id, const char *status)
 {
-	struct agent_file_query query;
-	struct agent_file_query_result result;
-
-	memset(&query, 0, sizeof(query));
-	query.flags = AGENT_FILE_QUERY_USE_INDEX;
-	query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
-	strcpy(query.project, "lab-gene-x");
-	strcpy(query.run_id, run_id);
-	strcpy(query.stage, "report");
-	strcpy(query.kind, "report");
-	strcpy(query.status, status);
-	check(agent_file_query(&query, &result) >= 1, "query report status");
-	check(result.total_hits >= 1, "report status hit");
+	memset(&security_file_query, 0, sizeof(security_file_query));
+	security_file_query.flags = AGENT_FILE_QUERY_USE_INDEX;
+	security_file_query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(security_file_query.project, "lab-gene-x");
+	strcpy(security_file_query.run_id, run_id);
+	strcpy(security_file_query.stage, "report");
+	strcpy(security_file_query.kind, "report");
+	strcpy(security_file_query.status, status);
+	check(agent_file_query(&security_file_query, &security_file_result) >= 1,
+	      "query report status");
+	check(security_file_result.total_hits >= 1, "report status hit");
 }
 
-static void check_preinit_index_query(void)
+static TEST_NOINLINE void check_preinit_index_query(void)
 {
-	struct agent_file_query query;
-	struct agent_file_query_result result;
-
-	memset(&query, 0, sizeof(query));
-	query.flags = AGENT_FILE_QUERY_USE_INDEX;
-	query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
-	strcpy(query.status, "preinit-missing");
-	check(agent_file_query(&query, &result) == 0, "preinit query return");
-	check(result.total_hits == 0, "preinit query hits");
+	memset(&security_file_query, 0, sizeof(security_file_query));
+	security_file_query.flags = AGENT_FILE_QUERY_USE_INDEX;
+	security_file_query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(security_file_query.status, "preinit-missing");
+	check(agent_file_query(&security_file_query, &security_file_result) == 0,
+	      "preinit query return");
+	check(security_file_result.total_hits == 0, "preinit query hits");
 	printf("agentsecurity_ucore: preinit_index_query=1\n");
 }
 
@@ -303,7 +310,7 @@ static void check_plain_child_creation_denied(void)
 	printf("agentsecurity_ucore: plain_child_role_creation_denied=1\n");
 }
 
-static void check_orchestrator_plain_fork_denied(void)
+static TEST_NOINLINE void check_orchestrator_plain_fork_denied(void)
 {
 	int pid;
 	int status = 0;
@@ -384,14 +391,51 @@ static void check_wake_event_authorization(void)
 	printf("agentsecurity_ucore: wake_event_authorization=1\n");
 }
 
-static void run_sentinel(void)
+static TEST_NOINLINE void run_sentinel(int audit_gate_fd)
 {
+	struct agent_event event;
 	struct agent_op op;
 	struct agent_result res;
 	struct agent_file_meta meta;
+	struct agent_context_record manual;
+	struct agent_info before;
+	struct agent_info after;
+	char phase = 0;
+	int n;
 
 	check_role(AGENT_ROLE_SENTINEL, "sentinel");
 	check_delegation_denied("sentinel");
+	check(agent_info(&before) == 0, "sentinel span before forge");
+	memset(&manual, 0, sizeof(manual));
+	manual.span_id = security_orchestrator_span;
+	manual.cause_sequence = 1;
+	manual.tool_id = AGENT_TOOL_ECHO;
+	manual.status = AGENT_STATUS_OK;
+	strcpy(manual.result, "forged-span");
+	check(context_push(&manual) == AGENT_STATUS_BAD_PARAM,
+	      "user provenance rejected");
+	check(agent_info(&after) == 0, "sentinel span after forge");
+	check(after.current_span_id == before.current_span_id,
+	      "forged span not installed");
+	n = agent_span_trace_snapshot(security_audit_records,
+				      AGENT_AUDIT_MAX_RECORDS);
+	check(n >= 0, "sentinel trusted span trace");
+	for (int i = 0; i < n; i++)
+		check(strcmp(security_audit_records[i].text,
+			     "orchestrator-audit-anchor") != 0,
+		      "foreign span audit hidden");
+	check(read(audit_gate_fd, &phase, 1) == 1 && phase == 'G',
+	      "wait trusted audit route");
+	memset(&event, 0, sizeof(event));
+	event.type = AGENT_EVENT_MESSAGE;
+	event.corr_id = 8699;
+	strcpy(event.payload, "audit-delegation");
+	check(agent_wake(getppid(), &event) == AGENT_STATUS_OK,
+	      "send trusted audit delegation");
+	check(read(audit_gate_fd, &phase, 1) == 1 && phase == 'C',
+	      "wait audit delegation consume");
+	close(audit_gate_fd);
+	printf("agentsecurity_ucore: trusted_span_authority=1\n");
 	check_wake_event_authorization();
 	make_op(&op, AGENT_TOOL_CAPABILITY_CHECK, 8101,
 		AGENT_ROLE_RECOVERY, "action_commit");
@@ -437,11 +481,22 @@ static void run_sentinel(void)
 	check(agent_file_meta_set(&meta) == AGENT_STATUS_DENIED,
 	      "sentinel meta write denied");
 	check_align_status("RUN-042", "failed");
+	for (int i = 0; i < 200; i++) {
+		memset(&manual, 0, sizeof(manual));
+		manual.tool_id = AGENT_TOOL_ECHO;
+		manual.request_id = 8700 + i;
+		manual.status = AGENT_STATUS_OK;
+		strcpy(manual.payload, "low-audit-churn");
+		strcpy(manual.result,
+		       i == 199 ? "low-audit-new" : "low-audit-churn");
+		check(context_push(&manual) == AGENT_STATUS_OK,
+		      "bounded low audit churn");
+	}
 	printf("agentsecurity_ucore: sentinel spoof_denied=1\n");
 	exit(0);
 }
 
-static void run_recovery(void)
+static TEST_NOINLINE void run_recovery(void)
 {
 	struct agent_op op;
 	struct agent_result res;
@@ -476,15 +531,16 @@ static void run_recovery(void)
 	exit(0);
 }
 
-static void run_investigator(void)
+static TEST_NOINLINE void run_investigator(void)
 {
 	check_role(AGENT_ROLE_INVESTIGATOR, "investigator");
 	check_delegation_denied("investigator");
 	exit(0);
 }
 
-static void run_artifact(void)
+static TEST_NOINLINE void run_artifact(void)
 {
+	struct agent_file_edit_state state;
 	struct agent_op op;
 	struct agent_result res;
 
@@ -493,11 +549,20 @@ static void run_artifact(void)
 	make_op(&op, AGENT_TOOL_ACTION_COMMIT, 9201, AGENT_ROLE_SENTINEL,
 		"label=align;run_id=RUN-999;namespace=lab-gene-x");
 	run_one(&op, &res, AGENT_STATUS_DENIED, "artifact action denied");
+	for (int i = 0; i < 80; i++) {
+		memset(&state, 0, sizeof(state));
+		check(agent_file_edit_begin("auditobj", 0, 200, &state) == 0,
+		      "artifact effect churn begin");
+		check(agent_file_edit_abort(state.lease_id) == 0,
+		      "artifact effect churn abort");
+	}
 	printf("agentsecurity_ucore: artifact_action_denied=1\n");
+	printf("agentsecurity_ucore: artifact_effect_churn_bounded=1\n");
 	exit(0);
 }
 
-static void run_orphan_cancel_victim(int ready_fd, int result_fd, int gate_fd)
+static TEST_NOINLINE void run_orphan_cancel_victim(int ready_fd, int result_fd,
+					   int gate_fd)
 {
 	struct agent_event event;
 	char ready = 'R';
@@ -518,7 +583,8 @@ static void run_orphan_cancel_victim(int ready_fd, int result_fd, int gate_fd)
 	exit(0);
 }
 
-static void run_retired_cancel_controller(int report_fd, int victim_gate_fd)
+static TEST_NOINLINE void run_retired_cancel_controller(int report_fd,
+						 int victim_gate_fd)
 {
 	int ready_pipe[2];
 	int victim_pid;
@@ -543,7 +609,7 @@ static void run_retired_cancel_controller(int report_fd, int victim_gate_fd)
 	exit(0);
 }
 
-static void run_replacement_cancel_controller(int victim_pid)
+static TEST_NOINLINE void run_replacement_cancel_controller(int victim_pid)
 {
 	struct agent_event event;
 
@@ -648,7 +714,7 @@ static void receive_route_message(int source_pid, uint64 corr_id,
 	check(strcmp(event.payload, payload) == 0, "routed message payload");
 }
 
-static void run_ipc_route_target(int setup_fd, int ready_fd)
+static TEST_NOINLINE void run_ipc_route_target(int setup_fd, int ready_fd)
 {
 	struct agent_event event;
 	int source_pid = -1;
@@ -676,8 +742,9 @@ static void run_ipc_route_target(int setup_fd, int ready_fd)
 	exit(0);
 }
 
-static void run_ipc_route_source(int target_pid, int orchestrator_pid,
-				 int gate_fd, int report_fd)
+static TEST_NOINLINE void run_ipc_route_source(int target_pid,
+					      int orchestrator_pid, int gate_fd,
+					      int report_fd)
 {
 	char phase;
 
@@ -741,7 +808,7 @@ static void run_ipc_route_source(int target_pid, int orchestrator_pid,
 	exit(0);
 }
 
-static void check_ipc_route_authorization(void)
+static TEST_NOINLINE void check_ipc_route_authorization(void)
 {
 	struct agent_event event;
 	int target_setup[2];
@@ -811,7 +878,7 @@ static void check_ipc_route_authorization(void)
 	printf("agentsecurity_ucore: ipc_route_authorization=1\n");
 }
 
-static void run_consent_route_target(int ready_fd)
+static TEST_NOINLINE void run_consent_route_target(int ready_fd)
 {
 	struct agent_event event;
 	char phase = 'C';
@@ -837,7 +904,7 @@ static void run_consent_route_target(int ready_fd)
 	exit(0);
 }
 
-static void check_target_route_consent(void)
+static TEST_NOINLINE void check_target_route_consent(void)
 {
 	int ready[2];
 	int target_pid;
@@ -865,7 +932,7 @@ static void check_target_route_consent(void)
 	printf("agentsecurity_ucore: target_route_consent=1\n");
 }
 
-static void run_route_lifetime_source(int gate_fd, uint64 corr_id)
+static TEST_NOINLINE void run_route_lifetime_source(int gate_fd, uint64 corr_id)
 {
 	struct agent_event event;
 	char phase = 0;
@@ -882,7 +949,7 @@ static void run_route_lifetime_source(int gate_fd, uint64 corr_id)
 	exit(0);
 }
 
-static void check_route_slot_reclamation(void)
+static TEST_NOINLINE void check_route_slot_reclamation(void)
 {
 	int gate[2];
 	int source_pid;
@@ -926,7 +993,15 @@ static void check_route_slot_reclamation(void)
 
 static void run_orchestrator(void)
 {
+	char phase;
+	int audit_gate[2];
+	int artifact_fd;
 	int pid;
+	int sentinel_pid;
+	int n;
+	int found_anchor = 0;
+	int found_cause = 0;
+	int found_latest = 0;
 	int status = 0;
 
 	check_role(AGENT_ROLE_ORCHESTRATOR, "orchestrator");
@@ -941,26 +1016,119 @@ static void run_orchestrator(void)
 	set_align_failed("RUN-042", 3, "r42aerr");
 	set_align_failed("RUN-999", 30, "r999aerr");
 	set_align_failed("RUN-998", 31, "r998aerr");
+	set_align_failed("RUN-AUDIT", 32, "raudit");
 	set_report_failed("RUN-042", 40, "r42rerr");
 	set_report_failed("RUN-999", 41, "r999rerr");
+	check(agent_info(&security_agent_info) == 0,
+	      "orchestrator span authority");
+	security_orchestrator_span = security_agent_info.current_span_id;
+	make_op(&security_anchor_op, AGENT_TOOL_ECHO, 8698, 0,
+		"orchestrator-audit-anchor");
+	run_one(&security_anchor_op, &security_anchor_result, AGENT_STATUS_OK,
+		"orchestrator audit anchor");
+	check(pipe(audit_gate) == 0, "create trusted audit gate");
+	check(agent_watch(AGENT_EVENT_MESSAGE, "audit-delegation") == 0,
+	      "watch trusted audit delegation");
 	pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	check(pid >= 0, "create sentinel");
 	if (pid == 0)
-		run_sentinel();
+		run_sentinel(audit_gate[0]);
+	sentinel_pid = pid;
+	check(close(audit_gate[0]) == 0, "close parent audit gate reader");
+	check(agent_route_config(sentinel_pid, getpid(),
+				 AGENT_IPC_EVENT_MESSAGE,
+				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_OK,
+	      "grant trusted audit route");
+	phase = 'G';
+	check(write(audit_gate[1], &phase, 1) == 1,
+	      "release trusted audit sender");
+	memset(&security_audit_event, 0, sizeof(security_audit_event));
+	check(agent_wait(&security_audit_event, 50) == AGENT_STATUS_OK,
+	      "consume trusted audit delegation");
+	check(security_audit_event.type == AGENT_EVENT_MESSAGE &&
+		      security_audit_event.source_pid == sentinel_pid &&
+		      security_audit_event.corr_id == 8699 &&
+		      strcmp(security_audit_event.payload,
+			     "audit-delegation") == 0,
+	      "validate trusted audit delegation");
+	check(agent_route_config(sentinel_pid, getpid(),
+				 AGENT_IPC_EVENT_MESSAGE,
+				 AGENT_IPC_ROUTE_REVOKE) == AGENT_STATUS_OK,
+	      "revoke trusted audit route");
+	check(agent_unwatch(AGENT_EVENT_MESSAGE, "audit-delegation") == 1,
+	      "unwatch trusted audit delegation");
+	make_op(&security_anchor_op, AGENT_TOOL_ACTION_COMMIT, 8699, 0,
+		"label=align;run_id=RUN-AUDIT;namespace=lab-gene-x");
+	run_one(&security_anchor_op, &security_anchor_result, AGENT_STATUS_OK,
+		"trusted authority audit anchor");
+	n = agent_provenance_snapshot(security_provenance_edges, 128);
+	check(n > 0, "trusted cause provenance snapshot");
+	for (int i = 0; i < n; i++)
+		if (security_provenance_edges[i].kind ==
+				AGENT_PROVENANCE_EDGE_CONTEXT &&
+		    security_provenance_edges[i].source_pid == sentinel_pid &&
+		    security_provenance_edges[i].target_pid == getpid() &&
+		    security_provenance_edges[i].tool_id ==
+				AGENT_TOOL_AGENT_WAIT)
+			found_cause = 1;
+	check(found_cause, "trusted IPC cause attributed to sender");
+	phase = 'C';
+	check(write(audit_gate[1], &phase, 1) == 1,
+	      "release trusted audit churn");
+	check(close(audit_gate[1]) == 0, "close parent audit gate writer");
 	check(waitpid(pid, &status) == pid, "wait sentinel");
 	check(status == 0, "sentinel status");
+	memset(&security_audit_filter, 0, sizeof(security_audit_filter));
+	security_audit_filter.flags = AGENT_AUDIT_FILTER_PID |
+				      AGENT_AUDIT_FILTER_KIND;
+	security_audit_filter.pid = sentinel_pid;
+	security_audit_filter.kind = AGENT_AUDIT_KIND_CONTEXT;
+	n = agent_audit_query(&security_audit_filter, security_audit_records,
+			      AGENT_AUDIT_MAX_RECORDS);
+	check(n > 0 && n <= 16, "low principal audit partition bounded");
+	for (int i = 0; i < n; i++)
+		if (strcmp(security_audit_records[i].text,
+			   "low-audit-new") == 0)
+			found_latest = 1;
+	check(found_latest, "low principal audit remains current");
+	printf("agentsecurity_ucore: trusted_cause_attribution=1\n");
+	check(context_clear() == 0, "leave delegated audit span");
 	pid = agent_create_role(AGENT_ROLE_INVESTIGATOR);
 	check(pid >= 0, "create investigator");
 	if (pid == 0)
 		run_investigator();
 	check(waitpid(pid, &status) == pid, "wait investigator");
 	check(status == 0, "investigator status");
-	pid = agent_create_role(AGENT_ROLE_ARTIFACT);
-	check(pid >= 0, "create artifact");
-	if (pid == 0)
-		run_artifact();
-	check(waitpid(pid, &status) == pid, "wait artifact");
-	check(status == 0, "artifact status");
+	artifact_fd = open("auditobj", O_CREATE | O_WRONLY | O_TRUNC);
+	check(artifact_fd >= 0, "create artifact audit object");
+	check(write(artifact_fd, "audit", 5) == 5,
+	      "write artifact audit object");
+	check(close(artifact_fd) == 0, "close artifact audit object");
+	for (int i = 0; i < 10; i++) {
+		pid = agent_create_role(AGENT_ROLE_ARTIFACT);
+		check(pid >= 0, "create artifact audit principal");
+		if (pid == 0)
+			run_artifact();
+		status = -1;
+		check(waitpid(pid, &status) == pid,
+		      "wait artifact audit principal");
+		check(status == 0, "artifact audit principal status");
+	}
+	memset(&security_audit_filter, 0, sizeof(security_audit_filter));
+	security_audit_filter.flags = AGENT_AUDIT_FILTER_PID |
+				      AGENT_AUDIT_FILTER_TOOL_ID;
+	security_audit_filter.pid = getpid();
+	security_audit_filter.tool_id = AGENT_TOOL_ACTION_COMMIT;
+	n = agent_audit_query(&security_audit_filter, security_audit_records,
+			      AGENT_AUDIT_MAX_RECORDS);
+	check(n >= 1, "privileged audit partition visible");
+	for (int i = 0; i < n; i++)
+		if (strncmp(security_audit_records[i].text, "action_commit",
+			    strlen("action_commit")) == 0)
+			found_anchor = 1;
+	check(found_anchor,
+	      "writer churn preserves another principal authority audit");
+	printf("agentsecurity_ucore: audit_authority_partition=1\n");
 	check_align_status("RUN-042", "failed");
 	check_align_status("RUN-999", "failed");
 	check_align_status("RUN-998", "failed");
@@ -1023,6 +1191,12 @@ static void check_plain_process_denied(void)
 	fd = open(".agentmeta", O_CREATE | O_RDWR);
 	check(fd == -1, "plain create agentmeta denied");
 	check(unlink(".agentmeta") == -1, "plain unlink agentmeta denied");
+	fd = open(".agentmeta1", O_RDONLY);
+	check(fd == -1, "plain open agentmeta1 denied");
+	fd = open(".agentmeta1", O_CREATE | O_RDWR);
+	check(fd == -1, "plain create agentmeta1 denied");
+	check(unlink(".agentmeta1") == -1,
+	      "plain unlink agentmeta1 denied");
 	printf("agentsecurity_ucore: plain_process_denied=1\n");
 	printf("agentsecurity_ucore: .agentmeta_protected=1\n");
 }

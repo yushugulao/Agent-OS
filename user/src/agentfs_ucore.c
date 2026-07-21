@@ -61,11 +61,11 @@ static void wait_file_scan_quiet(void)
 {
 	struct agent_info info;
 
-	for (int i = 0; i < 4000; i++) {
+	for (int i = 0; i < 400; i++) {
 		check(agent_info(&info) == 0, "scan info");
 		if (info.file_scan_pending == 0)
 			return;
-		sched_yield();
+		sleep(10);
 	}
 	check(0, "file scan quiet");
 }
@@ -516,6 +516,9 @@ static void run_agent(void)
 	check(unlink(name) == 0, "unlink file");
 	check(query_stage("issue4", "RUN-FS", "ingest", 0, &fs_result) == 0,
 	      "delete clears metadata");
+	check(query_stage("issue4", "RUN-FS", "ingest", "failed",
+			  &fs_result) == 0,
+	      "delete invalidates cached metadata query");
 	printf("agentfs_ucore: delete_clears_metadata=1\n");
 
 	memset(&fs_op, 0, sizeof(fs_op));

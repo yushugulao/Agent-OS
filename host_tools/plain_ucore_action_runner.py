@@ -939,7 +939,12 @@ def run_seeded_ucore(
     extract_summary: dict[str, object] = {"status": "skipped", "extracted_state_files": 0}
     image_path = repo_dir / "nfs" / "fs-copy.img"
     if image_path.exists():
-        extract_summary = extract_state_files(image_path, run_dir / "state-extracted", repo_dir)
+        extract_summary = extract_state_files(
+            image_path,
+            run_dir / "state-extracted",
+            repo_dir,
+            require_single_scope=True,
+        )
         for item in sorted((run_dir / "state-extracted").iterdir()):
             if item.is_file() and item.name.startswith("rp_"):
                 shutil.copy2(item, next_state / item.name)

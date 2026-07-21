@@ -8,9 +8,15 @@ struct proc;
 struct user_image;
 
 struct vfs_cred {
-	uint domain;
+	uint scope_id;
 	uint64 capabilities;
 	int kernel;
+};
+
+enum vfs_spawn_scope_mode {
+	VFS_SPAWN_SCOPE_DROP = 0,
+	VFS_SPAWN_SCOPE_INHERIT,
+	VFS_SPAWN_SCOPE_FRESH,
 };
 
 enum vfs_operation {
@@ -28,11 +34,23 @@ enum vfs_operation {
 #define VFS_CAP_WORKFLOW \
 	(VFS_CAP_CONTENT_READ | VFS_CAP_ARTIFACT_WRITE)
 
+// Fixed global Agent tables reserve a full partition for every admitted
+// workflow. Retiring scopes continue to occupy a slot until reclamation ends.
+#define VFS_SCOPE_MAX_ACTIVE 4
+
 void vfs_cred_kernel(struct vfs_cred *);
 void vfs_cred_from_proc(const struct proc *, struct vfs_cred *);
 uint vfs_cred_lookup_policy(const struct vfs_cred *);
 void vfs_proc_reset(struct proc *);
-void vfs_proc_fork(const struct proc *, struct proc *, int);
+int vfs_scope_active(uint scope_id);
+int vfs_scope_retiring(uint scope_id);
+uint vfs_scope_storage_guarantee(uint exempt_scope, int inode,
+				 uint guarantee);
+int vfs_scope_storage_reserve(uint scope_id, int inode, uint limit);
+int vfs_scope_storage_release(uint scope_id, int inode);
+void vfs_scope_reap_pending(void);
+int vfs_proc_spawn_scope(const struct proc *, struct proc *,
+			 enum vfs_spawn_scope_mode);
 void vfs_proc_limit_capabilities(struct proc *, uint64);
 int vfs_proc_delegate_exec(const struct proc *, struct proc *, struct inode *,
 			   uint64);

@@ -98,7 +98,7 @@ Host 侧负责浏览器页面、动作提交、可选云端 LLM Relay 和文件�
 - Host action runner 生成 `rp_host_action_seed`。
 - `rp_seed_orch` 读取 seed，运行对应平台程序。
 - 平台程序写入 `rp_input`、`rp_runner`、`rp_report_text`、`rp_artifact`、`rp_stage_state`、`rp_package`、`rp_agentcmp` 等状态文件。
-- `host_tools/plain_ucore_fs_extract.py` 从 `nfs/fs-copy.img` 提取 `rp_*` 文件。
+- `host_tools/plain_ucore_fs_extract.py` 从 `nfs/fs-copy.img` 提取 `rp_*` 文件；带 workflow scope 的镜像默认稳定写入 `scope-N/`，调用方必须用 `--scope-id` 显式选择，或用 `--require-single-scope` 在且仅在一个 scope 时输出顶层文件。action runner 使用后一模式，发现多 scope 时拒绝混合状态。提取器只接受单路径分量形式的 `rp_[A-Za-z0-9_]+`，写入前再次验证规范化目标位于输出目录内，并清理上次运行遗留的受管文件和 scope 目录，避免 guest 文件名穿越宿主路径或让旧 scope 状态混入新结果。
 - `host_tools/plain_ucore_reader.py` 渲染 HTML 页面和 API JSON。
 
 这种分工让 plain target 不需要 AgentOS 专属内核服务，也能承载较复杂的平台表面；同时让 AgentOS target 可以复用同一状态文件协议进行对照。两侧共享的基础安全加固和只存在于增强目标的 AgentOS 安全机制见 [agentos/security-hardening.md](agentos/security-hardening.md)。

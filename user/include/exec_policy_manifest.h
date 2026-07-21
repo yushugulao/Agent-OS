@@ -108,6 +108,9 @@ static inline void exec_manifest_worker_image(const char *source,
 	X("agentsecurity_ucore", "agentsecurity_ucore", \
 	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
 	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
+	X("agentscope_ucore", "agentscope_ucore", \
+	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
+	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
 	X("agenttrust_ucore", "agenttrust_ucore", \
 	  EXEC_MANIFEST_F_BOOT_SEALED, \
 	  EXEC_MANIFEST_ROLE_BIT(EXEC_MANIFEST_ROLE_ORCHESTRATOR), 0, \

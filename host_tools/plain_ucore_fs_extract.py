@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,6 +17,9 @@ FSMAGIC_EXEC_POLICY = 0x10203041
 FSMAGIC_VFS_POLICY = 0x10203042
 FSMAGIC_BASELINE_QUOTA = 0x10203043
 FSMAGIC_AGENT_QUOTA = 0x10203044
+FSMAGIC_SCOPED_WORKFLOW = 0x10203045
+FS_STORAGE_POLICY_VERSION = 1
+FS_WORKFLOW_SCOPE_SLOTS = 4
 ROOTINO = 1
 NDIRECT = 12
 NINDIRECT = BSIZE // 4
@@ -28,38 +32,63 @@ DINODE_SIZE_BY_MAGIC = {
     FSMAGIC_VFS_POLICY: DINODE_SIZE_EXEC_POLICY,
     FSMAGIC_BASELINE_QUOTA: DINODE_SIZE_LEGACY,
     FSMAGIC_AGENT_QUOTA: DINODE_SIZE_EXEC_POLICY,
+    FSMAGIC_SCOPED_WORKFLOW: DINODE_SIZE_EXEC_POLICY,
 }
-QUOTA_MAGICS = {FSMAGIC_BASELINE_QUOTA, FSMAGIC_AGENT_QUOTA}
-VFS_POLICY_MAGICS = {FSMAGIC_VFS_POLICY, FSMAGIC_AGENT_QUOTA}
+QUOTA_MAGICS = {
+    FSMAGIC_BASELINE_QUOTA,
+    FSMAGIC_AGENT_QUOTA,
+    FSMAGIC_SCOPED_WORKFLOW,
+}
+VFS_POLICY_MAGICS = {
+    FSMAGIC_VFS_POLICY,
+    FSMAGIC_AGENT_QUOTA,
+    FSMAGIC_SCOPED_WORKFLOW,
+}
 DIRSIZ = 14
 T_FILE = 2
+STATE_NAME_RE = re.compile(r"rp_[A-Za-z0-9_]+\Z")
+SCOPE_DIRECTORY_RE = re.compile(r"scope-[0-9]+\Z")
 
 EXEC_MANIFEST_VERSION = 2
+EXEC_LAYOUT_VERSION = 1
 EXEC_FLAG_IMMUTABLE = 0x2
 EXEC_FLAG_DOMAIN_SAFE = 0x8
 
 VFS_LABEL_MAGIC = 0x56465331
-VFS_LABEL_VERSION = 1
+VFS_LABEL_VERSION_LEGACY = 1
 VFS_LABEL_VERSION_QUOTA = 2
+VFS_LABEL_VERSION = 3
 VFS_LABEL_F_PUBLIC = 0x1
 VFS_LABEL_F_PROTECTED = 0x2
 VFS_LABEL_F_KERNEL_PRIVATE = 0x4
 VFS_LABEL_F_ROOT = 0x8
 VFS_LABEL_F_FREE = 0x10
 VFS_LABEL_F_KNOWN = 0x1F
+# Magics through 0x10203044 stored a two-value domain in this word.
 VFS_DOMAIN_PUBLIC = 0
 VFS_DOMAIN_WORKFLOW = 1
+# Magic 0x10203045 stores a namespace scope identifier in the same word.
+VFS_SCOPE_NONE = 0
+VFS_SCOPE_SYSTEM = 1
+VFS_SCOPE_FIRST_DYNAMIC = 2
 VFS_POLICY_PUBLIC = 1
 VFS_POLICY_WORKFLOW = 2
 VFS_POLICY_KERNEL_PRIVATE = 3
 VFS_POLICY_ROOT = 4
 VFS_POLICY_FREE = 5
-VFS_POLICY_GENERATION = 1
+VFS_POLICY_GENERATION_LEGACY = 1
+VFS_POLICY_GENERATION = 2
 VFS_EXEC_PROFILE_NONE = 0
 VFS_EXEC_PROFILE_WORKFLOW = 1
 VFS_EXEC_PROFILE_CONTENT_READ = 2
 VFS_EXEC_PROFILE_ARTIFACT_WRITE = 3
-FS_OWNER_VERSION = 1
+FS_OWNER_VERSION_LEGACY = 1
+FS_OWNER_VERSION = 2
+FS_OWNER_NONE = 0
+FS_OWNER_SYSTEM = 1
+FS_OWNER_FIRST_DYNAMIC = 2
+FS_OWNER_SCOPE_FLAG = 0x80000000
+FS_OWNER_ID_MASK = FS_OWNER_SCOPE_FLAG - 1
 
 
 @dataclass
@@ -73,6 +102,13 @@ class Superblock:
     dinode_size: int
     qmapstart: int | None = None
     datastart: int | None = None
+    storage_policy_version: int | None = None
+    storage_scope_slots: int | None = None
+    workflow_block_guarantee: int | None = None
+    workflow_inode_guarantee: int | None = None
+    system_block_reserve: int | None = None
+    system_inode_reserve: int | None = None
+    storage_policy_checksum: int | None = None
 
     @property
     def ipb(self) -> int:
@@ -85,12 +121,34 @@ class Dinode:
     size: int
     addrs: list[int]
     vfs_policy: int | None = None
+    vfs_scope_id: int | None = None
     fs_owner_domain: int | None = None
     fs_owner_version: int | None = None
 
 
 def u16(data: bytes, offset: int) -> int:
     return int.from_bytes(data[offset : offset + 2], "little")
+
+
+def storage_policy_checksum(
+    version: int,
+    scope_slots: int,
+    workflow_blocks: int,
+    workflow_inodes: int,
+    system_blocks: int,
+    system_inodes: int,
+) -> int:
+    value = 2166136261
+    for item in (
+        version,
+        scope_slots,
+        workflow_blocks,
+        workflow_inodes,
+        system_blocks,
+        system_inodes,
+    ):
+        value = ((value ^ item) * 16777619) & 0xFFFFFFFF
+    return value
 
 
 def u32(data: bytes, offset: int) -> int:
@@ -107,10 +165,28 @@ def vfs_label_checksum(inum: int, words: list[int]) -> int:
     return value or 1
 
 
-def fs_owner_valid(file_type: int, owner_domain: int, owner_version: int) -> bool:
+def fs_owner_is_scope(owner_domain: int) -> bool:
+    return (owner_domain & FS_OWNER_SCOPE_FLAG) != 0
+
+
+def fs_owner_scope_id(owner_domain: int) -> int:
+    return owner_domain & FS_OWNER_ID_MASK
+
+
+def fs_owner_valid(
+    file_type: int,
+    owner_domain: int,
+    owner_version: int,
+    expected_version: int = FS_OWNER_VERSION,
+) -> bool:
     if file_type == 0:
-        return owner_domain == 0 and owner_version == 0
-    return owner_domain >= 1 and owner_version == FS_OWNER_VERSION
+        return owner_domain == FS_OWNER_NONE and owner_version == 0
+    if owner_domain < FS_OWNER_SYSTEM or owner_version != expected_version:
+        return False
+    if fs_owner_is_scope(owner_domain):
+        scope_id = fs_owner_scope_id(owner_domain)
+        return FS_OWNER_FIRST_DYNAMIC <= scope_id < FS_OWNER_SCOPE_FLAG
+    return owner_domain < FS_OWNER_SCOPE_FLAG
 
 
 def validate_vfs_label(
@@ -136,18 +212,34 @@ def validate_vfs_label(
         fs_owner_version,
     ) = words
 
-    quota_format = fs_magic == FSMAGIC_AGENT_QUOTA
-    expected_version = (
-        VFS_LABEL_VERSION_QUOTA if quota_format else VFS_LABEL_VERSION
-    )
+    quota_format = fs_magic in {
+        FSMAGIC_AGENT_QUOTA,
+        FSMAGIC_SCOPED_WORKFLOW,
+    }
+    scoped_format = fs_magic == FSMAGIC_SCOPED_WORKFLOW
+    if scoped_format:
+        expected_version = VFS_LABEL_VERSION
+        expected_generation = VFS_POLICY_GENERATION
+        expected_owner_version = FS_OWNER_VERSION
+    elif quota_format:
+        expected_version = VFS_LABEL_VERSION_QUOTA
+        expected_generation = VFS_POLICY_GENERATION_LEGACY
+        expected_owner_version = FS_OWNER_VERSION_LEGACY
+    else:
+        expected_version = VFS_LABEL_VERSION_LEGACY
+        expected_generation = VFS_POLICY_GENERATION_LEGACY
+        expected_owner_version = 0
     owner_valid = fs_owner_valid(
-        file_type, fs_owner_domain, fs_owner_version
+        file_type,
+        fs_owner_domain,
+        fs_owner_version,
+        expected_owner_version,
     )
 
     if (
         magic != VFS_LABEL_MAGIC
         or version != expected_version
-        or generation != VFS_POLICY_GENERATION
+        or generation != expected_generation
         or incarnation == 0
         or (quota_format and not owner_valid)
         or (not quota_format and (fs_owner_domain != 0 or fs_owner_version != 0))
@@ -171,7 +263,64 @@ def validate_vfs_label(
         raise ValueError(f"invalid VFS executable profile on inode {inum}")
 
     valid_shape = False
-    if policy == VFS_POLICY_PUBLIC:
+    if scoped_format:
+        exec_role_mask = u32(raw, 72)
+        exec_layout_version = u32(raw, 76)
+        if policy == VFS_POLICY_PUBLIC:
+            valid_shape = (
+                flags == VFS_LABEL_F_PUBLIC
+                and domain == VFS_SCOPE_NONE
+                and not fs_owner_is_scope(fs_owner_domain)
+                and exec_profile == VFS_EXEC_PROFILE_NONE
+            )
+        elif policy == VFS_POLICY_WORKFLOW:
+            if flags == VFS_LABEL_F_PROTECTED and domain == VFS_SCOPE_SYSTEM:
+                valid_shape = (
+                    file_type == T_FILE
+                    and fs_owner_domain == FS_OWNER_SYSTEM
+                    and (
+                        exec_flags
+                        & (EXEC_FLAG_IMMUTABLE | EXEC_FLAG_DOMAIN_SAFE)
+                    )
+                    == (EXEC_FLAG_IMMUTABLE | EXEC_FLAG_DOMAIN_SAFE)
+                    and exec_generation == EXEC_MANIFEST_VERSION
+                    and exec_layout_version == EXEC_LAYOUT_VERSION
+                )
+            elif (
+                flags == VFS_LABEL_F_PROTECTED
+                and VFS_SCOPE_FIRST_DYNAMIC <= domain < FS_OWNER_SCOPE_FLAG
+            ):
+                valid_shape = (
+                    fs_owner_is_scope(fs_owner_domain)
+                    and fs_owner_scope_id(fs_owner_domain) == domain
+                    and exec_profile == VFS_EXEC_PROFILE_NONE
+                    and exec_flags == 0
+                    and exec_generation == 0
+                    and exec_role_mask == 0
+                )
+        elif policy == VFS_POLICY_KERNEL_PRIVATE:
+            valid_shape = (
+                flags == VFS_LABEL_F_KERNEL_PRIVATE
+                and domain == VFS_SCOPE_NONE
+                and fs_owner_domain == FS_OWNER_SYSTEM
+                and exec_profile == VFS_EXEC_PROFILE_NONE
+            )
+        elif policy == VFS_POLICY_ROOT:
+            valid_shape = (
+                flags == VFS_LABEL_F_ROOT
+                and domain == VFS_SCOPE_NONE
+                and fs_owner_domain == FS_OWNER_SYSTEM
+                and file_type == 1
+                and exec_profile == VFS_EXEC_PROFILE_NONE
+            )
+        elif policy == VFS_POLICY_FREE:
+            valid_shape = (
+                flags == VFS_LABEL_F_FREE
+                and domain == VFS_SCOPE_NONE
+                and file_type == 0
+                and exec_profile == VFS_EXEC_PROFILE_NONE
+            )
+    elif policy == VFS_POLICY_PUBLIC:
         valid_shape = (
             flags == VFS_LABEL_F_PUBLIC
             and domain == VFS_DOMAIN_PUBLIC
@@ -221,6 +370,14 @@ def read_superblock(image: bytes) -> Superblock:
     bmapstart = u32(image, offset + 20)
     qmapstart = u32(image, offset + 24) if magic in QUOTA_MAGICS else None
     datastart = u32(image, offset + 28) if magic in QUOTA_MAGICS else None
+    scoped_format = magic == FSMAGIC_SCOPED_WORKFLOW
+    storage_policy_version = u32(image, offset + 32) if scoped_format else None
+    storage_scope_slots = u32(image, offset + 36) if scoped_format else None
+    workflow_block_guarantee = u32(image, offset + 40) if scoped_format else None
+    workflow_inode_guarantee = u32(image, offset + 44) if scoped_format else None
+    system_block_reserve = u32(image, offset + 48) if scoped_format else None
+    system_inode_reserve = u32(image, offset + 52) if scoped_format else None
+    policy_checksum = u32(image, offset + 56) if scoped_format else None
     sb = Superblock(
         magic=magic,
         size=size,
@@ -231,6 +388,13 @@ def read_superblock(image: bytes) -> Superblock:
         dinode_size=dinode_size,
         qmapstart=qmapstart,
         datastart=datastart,
+        storage_policy_version=storage_policy_version,
+        storage_scope_slots=storage_scope_slots,
+        workflow_block_guarantee=workflow_block_guarantee,
+        workflow_inode_guarantee=workflow_inode_guarantee,
+        system_block_reserve=system_block_reserve,
+        system_inode_reserve=system_inode_reserve,
+        storage_policy_checksum=policy_checksum,
     )
     if size < 1 or len(image) < size * BSIZE:
         raise ValueError("filesystem image is shorter than its superblock size")
@@ -251,6 +415,40 @@ def read_superblock(image: bytes) -> Superblock:
             and nblocks == size - datastart
         ):
             raise ValueError("invalid quota filesystem geometry")
+    if scoped_format:
+        assert storage_policy_version is not None
+        assert storage_scope_slots is not None
+        assert workflow_block_guarantee is not None
+        assert workflow_inode_guarantee is not None
+        assert system_block_reserve is not None
+        assert system_inode_reserve is not None
+        assert policy_checksum is not None
+        total_inodes = ninodes - 1
+        expected_checksum = storage_policy_checksum(
+            storage_policy_version,
+            storage_scope_slots,
+            workflow_block_guarantee,
+            workflow_inode_guarantee,
+            system_block_reserve,
+            system_inode_reserve,
+        )
+        valid_contract = (
+            storage_policy_version == FS_STORAGE_POLICY_VERSION
+            and storage_scope_slots == FS_WORKFLOW_SCOPE_SLOTS
+            and workflow_block_guarantee > 0
+            and workflow_inode_guarantee > 0
+            and system_block_reserve > 0
+            and system_inode_reserve > 0
+            and workflow_block_guarantee <= nblocks // storage_scope_slots
+            and workflow_inode_guarantee <= total_inodes // storage_scope_slots
+            and system_block_reserve
+            <= nblocks - workflow_block_guarantee * storage_scope_slots
+            and system_inode_reserve
+            <= total_inodes - workflow_inode_guarantee * storage_scope_slots
+            and policy_checksum == expected_checksum
+        )
+        if not valid_contract:
+            raise ValueError("invalid scoped storage policy contract")
     return sb
 
 
@@ -264,18 +462,23 @@ def read_inode(image: bytes, sb: Superblock, inum: int) -> Dinode:
     raw = image[offset : offset + sb.dinode_size]
     file_type = u16(raw, 0)
     vfs_policy = None
+    vfs_scope_id = None
     fs_owner_domain = None
     fs_owner_version = None
     if sb.magic == FSMAGIC_BASELINE_QUOTA:
         fs_owner_version = u16(raw, 2)
         fs_owner_domain = u32(raw, 4)
         if not fs_owner_valid(
-            file_type, fs_owner_domain, fs_owner_version
+            file_type,
+            fs_owner_domain,
+            fs_owner_version,
+            FS_OWNER_VERSION_LEGACY,
         ):
             raise ValueError(f"invalid filesystem owner on inode {inum}")
     if sb.magic in VFS_POLICY_MAGICS:
         vfs_policy = validate_vfs_label(raw, inum, file_type, sb.magic)
-        if sb.magic == FSMAGIC_AGENT_QUOTA:
+        vfs_scope_id = u32(raw, 96)
+        if sb.magic in {FSMAGIC_AGENT_QUOTA, FSMAGIC_SCOPED_WORKFLOW}:
             fs_owner_domain = u32(raw, 116)
             fs_owner_version = u32(raw, 120)
     addrs = [u32(raw, 12 + i * 4) for i in range(NDIRECT + 1)]
@@ -284,6 +487,7 @@ def read_inode(image: bytes, sb: Superblock, inum: int) -> Dinode:
         size=u32(raw, 8),
         addrs=addrs,
         vfs_policy=vfs_policy,
+        vfs_scope_id=vfs_scope_id,
         fs_owner_domain=fs_owner_domain,
         fs_owner_version=fs_owner_version,
     )
@@ -372,13 +576,56 @@ def looks_like_state_text(data: bytes) -> bool:
     return "=" in text and "\n" in text
 
 
-def extract_state_files(image_path: Path, out_dir: Path, repo_dir: Path | None = None) -> dict[str, object]:
+def validate_state_name(name: str) -> str:
+    if not STATE_NAME_RE.fullmatch(name):
+        raise ValueError(f"unsafe state filename: {name!r}")
+    return name
+
+
+def clear_extracted_state(out_dir: Path) -> None:
+    for item in out_dir.iterdir():
+        owned = (
+            item.name == "extract-summary.json"
+            or STATE_NAME_RE.fullmatch(item.name) is not None
+            or SCOPE_DIRECTORY_RE.fullmatch(item.name) is not None
+        )
+        if not owned:
+            continue
+        if item.is_symlink() or not item.is_dir():
+            item.unlink()
+        else:
+            shutil.rmtree(item)
+
+
+def contained_destination(out_dir: Path, relative: Path) -> Path:
+    root = out_dir.resolve()
+    destination = (out_dir / relative).resolve()
+    try:
+        destination.relative_to(root)
+    except ValueError as error:
+        raise ValueError(
+            f"state output escapes extraction directory: {relative}"
+        ) from error
+    return destination
+
+
+def extract_state_files(
+    image_path: Path,
+    out_dir: Path,
+    repo_dir: Path | None = None,
+    *,
+    scope_id: int | None = None,
+    require_single_scope: bool = False,
+) -> dict[str, object]:
+    if scope_id is not None and require_single_scope:
+        raise ValueError("scope_id and require_single_scope are mutually exclusive")
     image = image_path.read_bytes()
     sb = read_superblock(image)
     name_map = discover_name_map(repo_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     extracted: list[str] = []
-    workflow_short_names: set[str] = set()
+    workflow_names: set[tuple[int, str]] = set()
+    state_entries: list[tuple[int, str, bytes]] = []
     scanned = 0
     skipped_binary = 0
     for inum, short_name in root_entries(image, sb):
@@ -394,23 +641,73 @@ def extract_state_files(image_path: Path, out_dir: Path, repo_dir: Path | None =
         ):
             continue
         if sb.magic in VFS_POLICY_MAGICS:
-            if short_name in workflow_short_names:
+            entry_scope_id = (
+                inode.vfs_scope_id
+                if sb.magic == FSMAGIC_SCOPED_WORKFLOW
+                and inode.vfs_scope_id is not None
+                else VFS_SCOPE_SYSTEM
+            )
+            name_key = (entry_scope_id, short_name)
+            if name_key in workflow_names:
                 raise ValueError(
-                    f"duplicate workflow directory entry {short_name}"
+                    "duplicate workflow directory entry "
+                    f"scope={entry_scope_id} name={short_name}"
                 )
-            workflow_short_names.add(short_name)
+            workflow_names.add(name_key)
+        else:
+            entry_scope_id = VFS_SCOPE_SYSTEM
         data = read_file(image, inode)
         if not looks_like_state_text(data):
             skipped_binary += 1
             continue
-        full_name = name_map.get(short_name, short_name)
-        (out_dir / full_name).write_bytes(data)
-        extracted.append(full_name)
+        validate_state_name(short_name)
+        full_name = validate_state_name(name_map.get(short_name, short_name))
+        state_entries.append((entry_scope_id, full_name, data))
+    scoped_format = sb.magic == FSMAGIC_SCOPED_WORKFLOW
+    available_scope_ids = sorted(
+        {entry_scope for entry_scope, _, _ in state_entries}
+    ) if scoped_format else []
+    selected_scope_id: int | None = None
+    if scoped_format:
+        if require_single_scope:
+            if len(available_scope_ids) != 1:
+                raise ValueError(
+                    "expected exactly one workflow scope, found "
+                    f"{available_scope_ids}"
+                )
+            selected_scope_id = available_scope_ids[0]
+        elif scope_id is not None:
+            if scope_id < VFS_SCOPE_FIRST_DYNAMIC:
+                raise ValueError(f"invalid workflow scope: {scope_id}")
+            if scope_id not in available_scope_ids:
+                raise ValueError(
+                    f"workflow scope {scope_id} is absent; "
+                    f"available={available_scope_ids}"
+                )
+            selected_scope_id = scope_id
+    clear_extracted_state(out_dir)
+    for entry_scope_id, full_name, data in state_entries:
+        if (selected_scope_id is not None and
+                entry_scope_id != selected_scope_id):
+            continue
+        relative = Path(full_name)
+        if scoped_format and selected_scope_id is None:
+            relative = Path(f"scope-{entry_scope_id}") / full_name
+        destination = contained_destination(out_dir, relative)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+        extracted.append(relative.as_posix())
     summary = {
         "image": str(image_path),
         "scanned_rp_entries": scanned,
         "extracted_state_files": len(extracted),
         "skipped_binary_entries": skipped_binary,
+        "available_scope_ids": available_scope_ids,
+        "selected_scope_id": selected_scope_id,
+        "scope_layout": (
+            "selected" if selected_scope_id is not None else
+            "partitioned" if scoped_format else "legacy"
+        ),
         "files": sorted(extracted),
         "status": "ready",
     }
@@ -426,8 +723,21 @@ def main() -> int:
     parser.add_argument("--image", type=Path, required=True, help="Path to nfs/fs-copy.img.")
     parser.add_argument("--out-dir", type=Path, required=True, help="Directory for extracted rp_* state files.")
     parser.add_argument("--repo-dir", type=Path, default=None, help="Repository root for restoring long rp_* names.")
+    selection = parser.add_mutually_exclusive_group()
+    selection.add_argument("--scope-id", type=int, help="Extract one explicit workflow scope at the output root.")
+    selection.add_argument(
+        "--require-single-scope",
+        action="store_true",
+        help="Require exactly one workflow scope and extract it at the output root.",
+    )
     args = parser.parse_args()
-    summary = extract_state_files(args.image, args.out_dir, args.repo_dir)
+    summary = extract_state_files(
+        args.image,
+        args.out_dir,
+        args.repo_dir,
+        scope_id=args.scope_id,
+        require_single_scope=args.require_single_scope,
+    )
     print(
         "plain_ucore_fs_extract: scanned={scanned_rp_entries} extracted={extracted_state_files} skipped_binary={skipped_binary_entries} status={status}".format(
             **summary

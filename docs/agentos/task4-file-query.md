@@ -1,6 +1,6 @@
 # 任务四：面向 Agent 查询优化的文件系统扩展
 
-本文是 [design.md](design.md) 的任务四细节附录，重点说明 AgentOS-uCore 当前实现的文件元数据表、带 incarnation 的真实 inode 关联、VFS public/workflow 安全域、私有 `.agentmeta` 元数据文件、属性查询、索引路径、内容摘要工具、通用依赖注册/查询和查询历史驱动的预取提示。
+本文是 [design.md](design.md) 的任务四细节附录，重点说明 AgentOS-uCore 当前实现的文件元数据表、带 incarnation 的真实 inode 关联、VFS public/workflow 安全域、私有 metadata 双 bank、属性查询、索引路径、内容摘要工具、通用依赖注册/查询和查询历史驱动的预取提示。
 
 ## 目标
 
@@ -8,10 +8,10 @@
 
 AgentOS-uCore 当前实现的是内核级文件元数据服务：
 
-- 支持最多 128 条文件元数据；
+- 支持最多 512 条文件元数据，并为 SYSTEM 与最多四个活动 workflow scope 划分独立上限；
 - 以真实文件的 `dev + inum + incarnation` 作为主要身份，避免 inode 号复用后继承旧状态；
 - 要求 `physical_name` 能解析到 uCore 根目录中的真实文件名；
-- 使用根目录私有 `.agentmeta` 元数据文件保存固定格式元数据表；
+- 使用根目录私有 `.agentmeta` / `.agentmeta1` 双 bank 保存版本化紧凑快照；
 - 在普通 `open/read/write/truncate/unlink` 路径执行 public/workflow/kernel-private 数据访问策略，防止绕过 Agent 工具 capability；
 - 支持扫描查询；
 - 支持 state/label/type 索引查询，ABI 字段兼容保留为 status/stage/kind；
@@ -65,14 +65,14 @@ AgentOS-uCore 当前实现的是内核级文件元数据服务：
 
 任务四不是只保存一张脱离文件系统的示例表。当前实现会把 Agent 元数据绑定到真实 uCore 根目录文件：
 
-1. `agent_file_meta_init()` 会先强制重新加载 `.agentmeta` 私有元数据文件。
-2. 如果 `.agentmeta` 不存在、格式错误或没有有效记录，内核安装空元数据表，由用户态示例再写入需要的对象记录。
-3. 每条持久化元数据保存 `physical_name`、`dev`、`inum`、`incarnation`、`size` 和 `fs_generation`。
+1. `agent_file_meta_init()` 会强制读取 `.agentmeta` 和 `.agentmeta1`，选择 generation 最高且完整校验通过的私有快照，但只替换调用者 workflow scope 的记录。
+2. 其他 scope 的持久或内存态记录不会被调用者重载清除。已有 active bank 的重载失败会保留内存表并返回错误；尚无 active bank 时，内核把当前带 `PERSIST` 的记录提交为第一代，未加载时则从空表开始。
+3. 快照只串行化有效记录；每条记录显式保存原 slot、scope、`physical_name`、`dev`、`inum`、`incarnation`、`size` 和 `fs_generation`，header 保存 generation、精确记录数和 payload hash。
 4. `fileopen(O_CREATE)`、写入、截断、删除会通知 Agent 子系统刷新或删除关联元数据。
-5. `agent_file_meta_set()` 支持 `AGENT_FILE_META_F_DELETE` 删除属性，支持 `AGENT_FILE_META_F_PERSIST` 写入 `.agentmeta`。
+5. `agent_file_meta_set()` 支持 `AGENT_FILE_META_F_DELETE` 删除属性，支持 `AGENT_FILE_META_F_PERSIST` 事务写入 metadata 双 bank；持久化失败时恢复修改前的内存记录和 inode sidecar。
 6. 受权 Agent 显式写入 metadata 时会接管自动扫描槽位；除非显式带上 `AGENT_FILE_META_F_AUTOSCAN`，否则旧的自动扫描标志会被清除，后续扫描只刷新真实 inode 身份，不改写这些对象属性。
 
-`.agentmeta` 是标记为 `KERNEL_PRIVATE` 的 Agent 子系统内部后端文件。普通文件 syscall 直接读取、创建、修改或删除它都会返回 `-1`；Agent 子系统内部 helper 使用内核凭据读写，用于持久化和重新加载元数据。
+`.agentmeta` 和 `.agentmeta1` 是标记为 `KERNEL_PRIVATE` 的 Agent 子系统内部后端。普通文件 syscall 直接读取、创建、修改或删除任一 bank 都会返回 `-1`；Agent 子系统内部 helper 使用内核凭据读写。加载时验证版本、generation、精确文件长度、payload hash、slot 范围、scope 配额和 scope 内唯一性。提交时截短非活动 bank、完整写入紧凑快照并回读校验，成功后才切换活动 bank；短写或 ENOSPC 只留下无效目标 bank，上一代快照仍可恢复。
 
 这套实现让查询结果中的文件身份可以追溯到某一代真实 inode，同时保留 Agent 需要的 namespace、workflow、run、label、type、state 等高层属性。完整身份始终是 `dev + inum + incarnation`；删除文件后即使设备号和 inode 号被复用，新 incarnation 也会使旧 metadata、digest cache、版本和租约失效。为了兼容已有用户态测试，结构体字段名仍使用 project/stage/kind/status；字符串 selector 同时接受 `namespace/object_id/label/type/state` 等通用字段名。
 
@@ -100,16 +100,16 @@ Agent 工具 capability 只约束 `agent_file_query()`、`read_file_digest` 等 
 1. `agent_file_meta_init()` 或 `file_meta_init` 工具启用扫描能力。
 2. timer tick 和文件创建、写入、截断、删除 hook 只标记 `file_scan_pending`，不在中断上下文做文件系统遍历。
 3. 调度器空隙调用 `agent_background_maintain()`，同一 tick 内最多推进一次扫描，每次最多处理 16 个根目录项，避免一次扫描长时间占用内核，也避免调度循环越频繁、扫描成本越高。
-4. 扫描会跳过 `.agentmeta`，只为真实根目录文件建立 `AGENT_FILE_META_F_AUTOSCAN | AGENT_FILE_META_F_PERSIST` 元数据。
+4. 扫描会跳过两个 metadata bank，只为真实根目录文件建立 `AGENT_FILE_META_F_AUTOSCAN | AGENT_FILE_META_F_PERSIST` 元数据。
 5. 自动元数据使用真实 `dev + inum + incarnation + size` 作为身份，并填入 `project=root`、`workflow=background-scan`、`run_id=ROOT`、`stage=scan` 等默认属性。
 6. 完整扫描结束后，已经不存在的自动元数据会被清理；手动写入的对象元数据不会被扫描流程误删。
-7. 元数据变化后重建 status、stage、kind 索引，并按需写回 `.agentmeta`。
+7. 元数据变化后重建 status、stage、kind 索引，并按需事务写回 metadata 双 bank。
 
 `agentscan_ucore` 专门验证这条路径：系统先发现镜像中已有的 `usershell`，再通过普通文件 syscall 创建 `autoscan_ok`，确认无需显式调用 `agent_file_meta_set()` 也能查询到该文件；删除该文件后，下一轮扫描会清理对应元数据。
 
 ## 用户态初始化数据
 
-`agent_file_meta_init()` 只负责重新加载 `.agentmeta`、重建索引和启用扫描。如果 `.agentmeta` 不存在、格式错误或没有有效记录，内核安装空元数据表。科研示例需要的设定的模拟流程、示例项目名和对象依赖由用户态 orchestrator 调用 `agent_file_meta_set()` 写入。该模拟流程包含数据准备、比对处理、结果分析、报告生成和归档交付。
+`agent_file_meta_init()` 只负责强制选择最新有效 metadata bank 中属于调用者 scope 的记录、重建索引和启用扫描；其他 scope 的内存态对象不会被替换。没有 active bank 时会提交当前可持久记录作为第一代；已有 active bank 但两个 bank 都无效或存储忙时返回错误而不清空当前表。科研示例需要的设定的模拟流程、示例项目名和对象依赖由用户态 orchestrator 调用 `agent_file_meta_set()` 写入。该模拟流程包含数据准备、比对处理、结果分析、报告生成和归档交付。
 
 `labdemo_ucore` 中由 orchestrator Agent 写入科研平台示例数据，再把设定的模拟流程中的比对处理对象状态改为 failed，从而触发 sentinel Agent。普通进程不能直接初始化或修改这张全局元数据表。
 
@@ -334,11 +334,11 @@ align+analyze+report+archive
 
 | 限制项 | 说明 |
 | --- | --- |
-| 元数据来源 | 当前来自私有 `.agentmeta`、用户态 `agent_file_meta_set()` 和根目录自动扫描；后端为空时内核只安装空表 |
+| 元数据来源 | 当前来自私有 metadata 双 bank、用户态 `agent_file_meta_set()` 和根目录自动扫描；首次无后端状态时内核只安装空表 |
 | 文件系统扫描范围 | 当前自动扫描 uCore 根目录短文件名，不做多级目录递归 |
-| 持久化索引 | 元数据表可写入并重新加载 `.agentmeta`；内存索引启动后根据元数据重建 |
+| 持久化索引 | 元数据表事务写入并重新加载 `.agentmeta` / `.agentmeta1`；内存索引启动后根据元数据重建 |
 | 查询语法 | 当前支持结构体字段查询和简单 `key=value` 字符串 |
-| 查询规模 | 当前最多 128 条元数据，最多返回 8 条 hit |
+| 查询规模 | 当前最多 512 条元数据，单 workflow scope 最多 112 条，单次最多返回 8 条 hit |
 | 内容摘要 | 当前读取最多 4096 字节计算指纹，返回短预览，不做全文索引 |
 | 预取提示 | 当前只生成 metadata 提示，提示本身不预读文件内容，不保存到磁盘 |
 | 文件安全域 | 当前实现 public 和单一 workflow 域，以及 kernel-private/root 策略；尚未提供任意数量的用户命名域或动态策略语言 |

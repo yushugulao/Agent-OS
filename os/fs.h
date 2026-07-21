@@ -6,7 +6,7 @@
 // Both the kernel and user programs use this header file.
 
 #define NFILE 100 // open files per system
-#define NINODE 512 // maximum number of active i-nodes
+#define NINODE 2048 // maximum number of active i-nodes
 #ifndef FS_ICACHE_SIZE
 #define FS_ICACHE_SIZE NINODE
 #endif
@@ -17,6 +17,7 @@
 #ifndef FSSIZE
 #define FSSIZE 16384 // size of file system in blocks
 #endif
+#include "../fs_storage_policy.h"
 #define MAXPATH 128 // maximum file path name
 
 #define FS_LOOKUP_ERROR  (-1)
@@ -40,12 +41,19 @@ struct superblock {
 	uint bmapstart; // Block number of first free map block
 	uint qmapstart; // Block number of first storage-owner map block
 	uint datastart; // Block number of first allocatable data block
+	uint storage_policy_version;
+	uint storage_scope_slots;
+	uint workflow_block_guarantee;
+	uint workflow_inode_guarantee;
+	uint system_block_reserve;
+	uint system_inode_reserve;
+	uint storage_policy_checksum;
 };
 
-_Static_assert(sizeof(struct superblock) == 32,
-	       "on-disk superblock format must remain 32 bytes");
+_Static_assert(sizeof(struct superblock) == 60,
+	       "on-disk superblock format must remain 60 bytes");
 
-#define FSMAGIC 0x10203044
+#define FSMAGIC 0x10203045
 
 #define NDIRECT 12
 #define NINDIRECT (BSIZE / sizeof(uint))
@@ -66,7 +74,7 @@ _Static_assert(sizeof(struct superblock) == 32,
 #define EXEC_LAYOUT_VERSION 1U
 
 #define VFS_LABEL_MAGIC 0x56465331U
-#define VFS_LABEL_VERSION 2U
+#define VFS_LABEL_VERSION 3U
 #define VFS_LABEL_F_PUBLIC         0x1U
 #define VFS_LABEL_F_PROTECTED      0x2U
 #define VFS_LABEL_F_KERNEL_PRIVATE 0x4U
@@ -75,23 +83,29 @@ _Static_assert(sizeof(struct superblock) == 32,
 #define VFS_LABEL_F_KNOWN \
 	(VFS_LABEL_F_PUBLIC | VFS_LABEL_F_PROTECTED | \
 	 VFS_LABEL_F_KERNEL_PRIVATE | VFS_LABEL_F_ROOT | VFS_LABEL_F_FREE)
-#define VFS_DOMAIN_PUBLIC 0U
-#define VFS_DOMAIN_WORKFLOW 1U
+#define VFS_SCOPE_NONE          0U
+#define VFS_SCOPE_SYSTEM        1U
+#define VFS_SCOPE_FIRST_DYNAMIC 2U
 #define VFS_POLICY_PUBLIC 1U
 #define VFS_POLICY_WORKFLOW 2U
 #define VFS_POLICY_KERNEL_PRIVATE 3U
 #define VFS_POLICY_ROOT 4U
 #define VFS_POLICY_FREE 5U
-#define VFS_POLICY_GENERATION 1U
+#define VFS_POLICY_GENERATION 2U
 #define VFS_EXEC_PROFILE_NONE 0U
 #define VFS_EXEC_PROFILE_WORKFLOW 1U
 #define VFS_EXEC_PROFILE_CONTENT_READ 2U
 #define VFS_EXEC_PROFILE_ARTIFACT_WRITE 3U
 
-#define FS_OWNER_VERSION 1U
+#define FS_OWNER_VERSION 2U
 #define FS_OWNER_NONE 0U
 #define FS_OWNER_SYSTEM 1U
 #define FS_OWNER_FIRST_DYNAMIC 2U
+#define FS_OWNER_SCOPE_FLAG 0x80000000U
+#define FS_OWNER_ID_MASK (FS_OWNER_SCOPE_FLAG - 1U)
+#define FS_OWNER_SCOPE(id) (FS_OWNER_SCOPE_FLAG | (id))
+#define FS_OWNER_IS_SCOPE(owner) (((owner) & FS_OWNER_SCOPE_FLAG) != 0)
+#define FS_OWNER_SCOPE_ID(owner) ((owner) & FS_OWNER_ID_MASK)
 
 #define FS_CHARGE_PUBLIC 0U
 #define FS_CHARGE_WORKFLOW 1U
@@ -103,19 +117,12 @@ _Static_assert(sizeof(struct superblock) == 32,
 #ifndef FS_DOMAIN_INODE_LIMIT
 #define FS_DOMAIN_INODE_LIMIT 0U
 #endif
-#ifndef FS_WORKFLOW_BLOCK_RESERVE
-#define FS_WORKFLOW_BLOCK_RESERVE 0U
+#ifndef FS_WORKFLOW_DOMAIN_BLOCK_LIMIT
+#define FS_WORKFLOW_DOMAIN_BLOCK_LIMIT 0U
 #endif
-#ifndef FS_SYSTEM_BLOCK_RESERVE
-#define FS_SYSTEM_BLOCK_RESERVE 0U
+#ifndef FS_WORKFLOW_DOMAIN_INODE_LIMIT
+#define FS_WORKFLOW_DOMAIN_INODE_LIMIT 0U
 #endif
-#ifndef FS_WORKFLOW_INODE_RESERVE
-#define FS_WORKFLOW_INODE_RESERVE 0U
-#endif
-#ifndef FS_SYSTEM_INODE_RESERVE
-#define FS_SYSTEM_INODE_RESERVE 0U
-#endif
-
 struct fs_storage_charge {
 	uint owner;
 	uint level;
@@ -137,7 +144,7 @@ struct dinode {
 	uint vfs_magic;
 	uint vfs_version;
 	uint vfs_flags;
-	uint vfs_domain;
+	uint vfs_scope_id;
 	uint vfs_policy;
 	uint vfs_exec_profile;
 	uint vfs_policy_generation;
@@ -179,10 +186,12 @@ struct inode;
 struct vfs_cred;
 
 void fsinit();
+int fs_storage_scope_admissible(void);
 int dirlink(struct inode *, char *, uint, const struct vfs_cred *);
 int dirunlink(struct inode *, char *, uint, uint, uint,
 	      const struct vfs_cred *, uint);
-struct inode *dirlookup(struct inode *, char *, uint *, uint, int *);
+int fs_reclaim_scope_files(uint);
+struct inode *dirlookup(struct inode *, char *, uint *, uint, uint, int *);
 struct inode *fs_create(char *, short, int *, const struct vfs_cred *, uint);
 struct inode *ialloc(uint, short, const struct fs_storage_charge *);
 struct inode *inode_get(uint, uint);
@@ -194,11 +203,12 @@ void iput(struct inode *);
 void iunlock(struct inode *);
 void iunlockput(struct inode *);
 void iupdate(struct inode *);
-struct inode *namei_policy(char *, uint);
-struct inode *namei_policy_status(char *, uint, int *);
+struct inode *namei_scope(char *, uint, uint);
+struct inode *namei_scope_status(char *, uint, uint, int *);
 struct inode *root_dir();
 int readi(struct inode *, const struct vfs_cred *, int, uint64, uint, uint);
 int writei(struct inode *, const struct vfs_cred *, int, uint64, uint, uint);
+int itruncate(struct inode *, const struct vfs_cred *, uint);
 int itrunc(struct inode *, const struct vfs_cred *);
 int dirls(struct inode *, const struct vfs_cred *);
 #endif //!__FS_H__

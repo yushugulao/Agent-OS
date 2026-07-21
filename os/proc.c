@@ -25,6 +25,7 @@ static uint64 scheduler_score_burst;
 enum proc_admission {
 	PROC_ADMIT_BOOT,
 	PROC_ADMIT_NORMAL,
+	PROC_ADMIT_WORKFLOW,
 	PROC_ADMIT_AGENT,
 	PROC_ADMIT_WORKER,
 };
@@ -32,6 +33,8 @@ enum proc_admission {
 struct proc_resource_domain {
 	int used;
 	int live;
+	int ordinary_live;
+	int reserved_live;
 	uint storage_domain_id;
 	uint storage_blocks;
 	uint storage_inodes;
@@ -65,6 +68,14 @@ _Static_assert(PROC_RESERVED_SLOTS > 0 && PROC_RESERVED_SLOTS < NPROC,
 _Static_assert(PROC_RESOURCE_DOMAIN_LIMIT > 0 &&
 	       PROC_RESOURCE_DOMAIN_LIMIT <= PROC_ORDINARY_SLOTS,
 	       "resource domain limit must fit the ordinary process pool");
+_Static_assert(PROC_RESERVED_SLOTS % VFS_SCOPE_MAX_ACTIVE == 0,
+	       "reserved slots must partition across workflows");
+#define PROC_RESOURCE_DOMAIN_RESERVED_LIMIT \
+	(PROC_RESERVED_SLOTS / VFS_SCOPE_MAX_ACTIVE)
+#define PROC_WORKFLOW_RESERVED_WORKERS 2
+_Static_assert(PROC_RESOURCE_DOMAIN_RESERVED_LIMIT >=
+	       1 + AGENT_ROLE_ARTIFACT + PROC_WORKFLOW_RESERVED_WORKERS,
+	       "workflow reserve must fit bootstrap, all roles, and workers");
 
 static uint64 kernel_stack_slot(int proc_index, int tid)
 {
@@ -209,6 +220,8 @@ static void proc_resource_domain_clear(struct proc_resource_domain *domain)
 {
 	domain->used = 0;
 	domain->live = 0;
+	domain->ordinary_live = 0;
+	domain->reserved_live = 0;
 	domain->storage_domain_id = FS_OWNER_NONE;
 	domain->storage_blocks = 0;
 	domain->storage_inodes = 0;
@@ -230,7 +243,7 @@ void proc_storage_set_cookie_floor(uint floor)
 {
 	int enabled = intr_save();
 
-	if (floor == FS_OWNER_NONE) {
+	if (floor == FS_OWNER_NONE || floor >= FS_OWNER_SCOPE_FLAG) {
 		proc_storage_cookie_exhausted = 1;
 	} else {
 		if (floor < FS_OWNER_FIRST_DYNAMIC)
@@ -247,10 +260,11 @@ static uint proc_storage_alloc_cookie(void)
 	uint cookie;
 
 	if (proc_storage_cookie_exhausted ||
-	    proc_storage_next_cookie < FS_OWNER_FIRST_DYNAMIC)
+	    proc_storage_next_cookie < FS_OWNER_FIRST_DYNAMIC ||
+	    proc_storage_next_cookie >= FS_OWNER_SCOPE_FLAG)
 		return FS_OWNER_NONE;
 	cookie = proc_storage_next_cookie++;
-	if (proc_storage_next_cookie == FS_OWNER_NONE)
+	if (proc_storage_next_cookie >= FS_OWNER_SCOPE_FLAG)
 		proc_storage_cookie_exhausted = 1;
 	return cookie;
 }
@@ -344,11 +358,16 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 				new_domain = 1;
 			else
 				domain_id = parent->resource_domain_id;
-		} else {
+		} else if (admission == PROC_ADMIT_WORKFLOW) {
 			if (!parent->resource_slot_reserved ||
 			    !parent->resource_domain_admin)
 				goto out;
 			new_domain = 1;
+		} else {
+			// Every process launched inside a workflow shares one immutable
+			// resource domain. Agent creation authority must not mint fresh
+			// process or PUBLIC-storage quota domains.
+			domain_id = parent->resource_domain_id;
 		}
 	}
 	if (reserved) {
@@ -369,9 +388,13 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 		storage_cookie = proc_storage_alloc_cookie();
 		if (storage_cookie == FS_OWNER_NONE)
 			goto out;
-	} else if (proc_resource_domains[domain_id].live >=
-		   PROC_RESOURCE_DOMAIN_LIMIT) {
-		goto out;
+	} else {
+		domain = &proc_resource_domains[domain_id];
+		if ((reserved && domain->reserved_live >=
+				 PROC_RESOURCE_DOMAIN_RESERVED_LIMIT) ||
+		    (!reserved && domain->ordinary_live >=
+				  PROC_RESOURCE_DOMAIN_LIMIT))
+			goto out;
 	}
 	for (p = pool; p < &pool[NPROC]; p++)
 		if (p->state == P_UNUSED)
@@ -384,16 +407,21 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 		domain = &proc_resource_domains[domain_id];
 		domain->used = 1;
 		domain->live = 0;
+		domain->ordinary_live = 0;
+		domain->reserved_live = 0;
 		domain->storage_domain_id = storage_cookie;
 		domain->storage_blocks = 0;
 		domain->storage_inodes = 0;
 	}
 	domain = &proc_resource_domains[domain_id];
 	domain->live++;
-	if (reserved)
+	if (reserved) {
+		domain->reserved_live++;
 		proc_resource_reserved_live++;
-	else
+	} else {
+		domain->ordinary_live++;
 		proc_resource_ordinary_live++;
+	}
 	p->resource_domain_id = domain_id;
 	p->storage_domain_id = domain->storage_domain_id;
 	p->resource_slot_reserved = reserved;
@@ -402,21 +430,6 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 out:
 	intr_restore(enabled);
 	return p;
-}
-
-static void proc_resource_grant_admin(struct proc *p)
-{
-	int enabled = intr_save();
-
-	if (p == 0 || p->state != P_USED || !p->resource_slot_reserved ||
-	    p->resource_domain_id < 0 ||
-	    p->resource_domain_id >= PROC_RESOURCE_DOMAIN_CAP ||
-	    !proc_resource_domains[p->resource_domain_id].used ||
-	    p->storage_domain_id !=
-		    proc_resource_domains[p->resource_domain_id].storage_domain_id)
-		panic("process resource admin invariant");
-	p->resource_domain_admin = 1;
-	intr_restore(enabled);
 }
 
 static void proc_resource_drop_admin(struct proc *p)
@@ -444,12 +457,16 @@ static void proc_resource_release(struct proc *p)
 	    p->storage_domain_id != domain->storage_domain_id)
 		panic("process resource count invariant");
 	if (p->resource_slot_reserved) {
-		if (proc_resource_reserved_live <= 0)
+		if (proc_resource_reserved_live <= 0 ||
+		    domain->reserved_live <= 0)
 			panic("process reserve count invariant");
+		domain->reserved_live--;
 		proc_resource_reserved_live--;
 	} else {
-		if (proc_resource_ordinary_live <= 0)
+		if (proc_resource_ordinary_live <= 0 ||
+		    domain->ordinary_live <= 0)
 			panic("process ordinary count invariant");
+		domain->ordinary_live--;
 		proc_resource_ordinary_live--;
 	}
 	domain->live--;
@@ -927,6 +944,7 @@ static struct proc *allocproc_admit(struct proc *parent,
 	}
 	kernel_stack_reset_slot(p, 0);
 	memset((void *)p->files, 0, sizeof(struct file *) * FD_BUFFER_SIZE);
+	memset(p->fd_scope_delegate, 0, sizeof(p->fd_scope_delegate));
 	p->next_mutex_id = 0;
 	p->next_semaphore_id = 0;
 	p->next_condvar_id = 0;
@@ -1159,6 +1177,37 @@ void freepagetable(pagetable_t pagetable, uint64 max_page)
 	uvmfree(pagetable, max_page);
 }
 
+// Open objects are part of a workflow credential, not ambient POSIX state.
+// vfs_proc_reset() is the single revocation boundary for both active and
+// pending workflow identities. A successful pending-to-active exec does not
+// reset the identity and therefore keeps explicitly delegated bootstrap pipes.
+void proc_revoke_vfs_scope_fds(struct proc *p)
+{
+	struct file *files[FD_BUFFER_SIZE];
+	uint scope_id;
+
+	memset(files, 0, sizeof(files));
+	if (p == 0)
+		return;
+	scope_id = p->vfs_scope_id >= VFS_SCOPE_FIRST_DYNAMIC ?
+			   p->vfs_scope_id : p->vfs_pending_scope_id;
+	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC)
+		return;
+	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
+		struct file *f = p->files[i];
+
+		p->fd_scope_delegate[i] = 0;
+		if (f == 0 || (!fd_is_reserved(f) && f->type == FD_STDIO))
+			continue;
+		p->files[i] = 0;
+		if (!fd_is_reserved(f))
+			files[i] = f;
+	}
+	for (int i = 0; i < FD_BUFFER_SIZE; i++)
+		if (files[i] != 0)
+			fileclose(files[i]);
+}
+
 void proc_install_user_image(struct proc *p, struct user_image *image,
 			     struct trapframe *staged, int running)
 {
@@ -1279,6 +1328,7 @@ static int proc_release_resources(struct proc *p)
 	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
 		files[i] = p->files[i];
 		p->files[i] = 0;
+		p->fd_scope_delegate[i] = 0;
 	}
 	for (int i = 0; i < FD_BUFFER_SIZE; i++)
 		if (files[i] != 0 && !fd_is_reserved(files[i]))
@@ -1345,11 +1395,30 @@ void freeproc(struct proc *p)
 
 static int fork_common(int make_agent, int agent_role,
 		       struct inode *delegated_image, uint64 delegated_caps,
-		       enum proc_admission admission)
+		       enum proc_admission admission,
+		       enum vfs_spawn_scope_mode scope_mode)
 {
 	struct proc *np;
 	struct proc *p = curr_proc();
+	uchar scope_delegate[FD_BUFFER_SIZE];
+	uint parent_scope;
+	int boundary_attempt;
 	int i;
+
+	memset(scope_delegate, 0, sizeof(scope_delegate));
+	parent_scope = p->vfs_scope_id >= VFS_SCOPE_FIRST_DYNAMIC ?
+			       p->vfs_scope_id : p->vfs_pending_scope_id;
+	boundary_attempt = parent_scope >= VFS_SCOPE_FIRST_DYNAMIC &&
+		(scope_mode == VFS_SPAWN_SCOPE_FRESH ||
+		 (scope_mode == VFS_SPAWN_SCOPE_DROP && delegated_image == 0));
+	// Delegation tickets authorize one boundary attempt, not one successful
+	// fork. Consume them before any allocation failure can leave authority
+	// ambient for a later child.
+	if (boundary_attempt)
+		for (i = 0; i < FD_BUFFER_SIZE; i++) {
+			scope_delegate[i] = p->fd_scope_delegate[i];
+			p->fd_scope_delegate[i] = 0;
+		}
 	if (p->exit_requested || !proc_child_has_capacity(p))
 		return -1;
 	// Allocate process.
@@ -1370,16 +1439,30 @@ static int fork_common(int make_agent, int agent_role,
 	np->exec_role_mask = p->exec_role_mask;
 	np->exec_layout_version = p->exec_layout_version;
 	np->exec_rw_offset = p->exec_rw_offset;
-	vfs_proc_fork(p, np, make_agent);
+	if (vfs_proc_spawn_scope(p, np, scope_mode) < 0) {
+		freeproc(np);
+		return -1;
+	}
 	if (delegated_image != 0 &&
 	    vfs_proc_delegate_exec(p, np, delegated_image, delegated_caps) < 0) {
 		freeproc(np);
 		return -1;
 	}
+	// A pipe crossing a workflow boundary is an explicit one-shot object
+	// delegation. Same-scope workers keep normal POSIX inheritance.
+	uint inherited_scope = np->vfs_scope_id != VFS_SCOPE_NONE ?
+			       np->vfs_scope_id : np->vfs_pending_scope_id;
+	int scope_changed = parent_scope != inherited_scope;
 	// Copy file table to new proc
 	for (i = 0; i < FD_BUFFER_SIZE; i++) {
 		if (p->files[i] != NULL &&
 		    !fd_is_reserved(p->files[i])) {
+			int boundary_allowed = p->files[i]->type == FD_STDIO ||
+				(p->files[i]->type == FD_PIPE &&
+				 scope_delegate[i]);
+
+			if (scope_changed && !boundary_allowed)
+				continue;
 			// uCore teaching runtime shares the file object reference.
 			p->files[i]->ref++;
 			np->files[i] = p->files[i];
@@ -1404,8 +1487,6 @@ static int fork_common(int make_agent, int agent_role,
 		freeproc(np);
 		return -1;
 	}
-	if (make_agent)
-		proc_resource_grant_admin(np);
 	if (proc_child_bind(p, np) < 0) {
 		freeproc(np);
 		return -1;
@@ -1422,7 +1503,7 @@ static int fork_common(int make_agent, int agent_role,
 int fork()
 {
 	return fork_common(0, AGENT_ROLE_SENTINEL, 0, 0,
-			   PROC_ADMIT_NORMAL);
+			   PROC_ADMIT_NORMAL, VFS_SPAWN_SCOPE_DROP);
 }
 
 int agent_create_proc()
@@ -1436,7 +1517,25 @@ int agent_create_role_proc(int role)
 
 	if (status != AGENT_STATUS_OK)
 		return status;
-	return fork_common(1, role, 0, 0, PROC_ADMIT_AGENT);
+	return fork_common(1, role, 0, 0, PROC_ADMIT_AGENT,
+			   VFS_SPAWN_SCOPE_INHERIT);
+}
+
+int agent_workflow_create_proc(int role)
+{
+	struct proc *p = curr_proc();
+	int status = agent_authority_check(p, role);
+
+	if (status != AGENT_STATUS_OK)
+		return status;
+	// Creating a security namespace is a distinct, non-inheritable authority.
+	// A role grant lets an Orchestrator populate its own workflow, but it does
+	// not let that Agent mint fresh quota and object domains.
+	if (p == 0 || p->is_agent || !p->resource_domain_admin ||
+	    !exec_policy_process_bootstrap(p))
+		return AGENT_STATUS_DENIED;
+	return fork_common(1, role, 0, 0, PROC_ADMIT_WORKFLOW,
+			   VFS_SPAWN_SCOPE_FRESH);
 }
 
 int agent_worker_create_proc(char *path, uint64 requested_caps)
@@ -1447,7 +1546,8 @@ int agent_worker_create_proc(char *path, uint64 requested_caps)
 	int pid;
 
 	if (path == 0 ||
-	    (ip = namei_policy(path, VFS_POLICY_WORKFLOW)) == 0)
+	    (ip = namei_scope(path, VFS_POLICY_WORKFLOW,
+			      VFS_SCOPE_SYSTEM)) == 0)
 		return -1;
 	vfs_cred_from_proc(p, &cred);
 	if (!vfs_inode_authorize(ip, &cred, VFS_OP_EXEC)) {
@@ -1455,7 +1555,7 @@ int agent_worker_create_proc(char *path, uint64 requested_caps)
 		return -1;
 	}
 	pid = fork_common(0, AGENT_ROLE_SENTINEL, ip, requested_caps,
-			  PROC_ADMIT_WORKER);
+			  PROC_ADMIT_WORKER, VFS_SPAWN_SCOPE_DROP);
 	iput(ip);
 	return pid;
 }
@@ -1552,8 +1652,8 @@ static struct inode *proc_exec_lookup(struct proc *p, char *path,
 	int lookup_status;
 
 	if (p->vfs_pending_exec_inum != 0) {
-		ip = namei_policy_status(path, VFS_POLICY_WORKFLOW,
-					 &lookup_status);
+		ip = namei_scope_status(path, VFS_POLICY_WORKFLOW,
+					VFS_SCOPE_SYSTEM, &lookup_status);
 		if (lookup_status != FS_LOOKUP_FOUND)
 			return 0;
 		if (!proc_exec_inode_usable(p, ip, cred)) {
@@ -1572,7 +1672,11 @@ static struct inode *proc_exec_lookup(struct proc *p, char *path,
 	policies[1] = policies[0] == VFS_POLICY_WORKFLOW ?
 			      VFS_POLICY_PUBLIC : VFS_POLICY_WORKFLOW;
 	for (int i = 0; i < 2; i++) {
-		ip = namei_policy_status(path, policies[i], &lookup_status);
+		ip = namei_scope_status(
+			path, policies[i],
+			policies[i] == VFS_POLICY_WORKFLOW ?
+				VFS_SCOPE_SYSTEM : VFS_SCOPE_NONE,
+			&lookup_status);
 		if (lookup_status == FS_LOOKUP_ERROR)
 			return 0;
 		if (proc_exec_inode_usable(p, ip, cred))
@@ -1731,6 +1835,7 @@ int fdalloc(struct file *f)
 	for (int i = 0; i < FD_BUFFER_SIZE; ++i) {
 		if (p->files[i] == NULL) {
 			p->files[i] = f;
+			p->fd_scope_delegate[i] = 0;
 			debugf("debugf fd = %d, f = %p", i, p->files[i]);
 			return i;
 		}
@@ -1750,6 +1855,7 @@ int fdreserve()
 	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
 		if (p->files[i] == 0) {
 			p->files[i] = &fd_reservation;
+			p->fd_scope_delegate[i] = 0;
 			return i;
 		}
 	}
@@ -1764,6 +1870,7 @@ int fdinstall(int fd, struct file *f)
 	    p->files[fd] != &fd_reservation)
 		return -1;
 	p->files[fd] = f;
+	p->fd_scope_delegate[fd] = 0;
 	return 0;
 }
 
@@ -1772,6 +1879,20 @@ void fdrelease(int fd)
 	struct proc *p = curr_proc();
 
 	if (fd >= 0 && fd < FD_BUFFER_SIZE &&
-	    p->files[fd] == &fd_reservation)
+	    p->files[fd] == &fd_reservation) {
 		p->files[fd] = 0;
+		p->fd_scope_delegate[fd] = 0;
+	}
+}
+
+int proc_scope_delegate_fd(int fd)
+{
+	struct proc *p = curr_proc();
+
+	if (p == 0 || fd < 0 || fd >= FD_BUFFER_SIZE ||
+	    p->files[fd] == 0 || fd_is_reserved(p->files[fd]) ||
+	    p->files[fd]->type != FD_PIPE)
+		return AGENT_STATUS_BAD_PARAM;
+	p->fd_scope_delegate[fd] = 1;
+	return AGENT_STATUS_OK;
 }

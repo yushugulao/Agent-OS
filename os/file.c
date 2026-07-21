@@ -137,9 +137,14 @@ int fileopen(char *path, uint64 omode)
 		if (ip == 0)
 			goto fail;
 	} else {
-		if ((ip = namei_policy(path,
-				       vfs_cred_lookup_policy(&cred))) == 0)
-			goto fail;
+		if ((ip = namei_scope(path, vfs_cred_lookup_policy(&cred),
+				      cred.scope_id)) == 0) {
+			if ((omode & (O_WRONLY | O_RDWR | O_TRUNC)) != 0 ||
+			    cred.scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
+			    (ip = namei_scope(path, VFS_POLICY_WORKFLOW,
+					      VFS_SCOPE_SYSTEM)) == 0)
+				goto fail;
+		}
 		ivalid(ip);
 	}
 	if (ip->type != T_FILE)
@@ -202,7 +207,7 @@ int fileunlink(char *path)
 	if (dp == 0)
 		return -1;
 	ivalid(dp);
-	if ((ip = dirlookup(dp, path, &offset, policy, 0)) == 0) {
+	if ((ip = dirlookup(dp, path, &offset, policy, cred.scope_id, 0)) == 0) {
 		iput(dp);
 		return -1;
 	}

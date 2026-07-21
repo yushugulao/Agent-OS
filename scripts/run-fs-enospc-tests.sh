@@ -41,12 +41,53 @@ build_image() {
 	local inodes="$4"
 	local binary="$5"
 	local user_tag="${6:-${tag}}"
+	local workflow_blocks="${7:-1}"
+	local system_blocks="${8:-1}"
+	local workflow_inodes="${9:-1}"
+	local system_inodes="${10:-1}"
 	local prefix="${tree:+${tree}/}"
 
 	cc -DNINODE="${inodes}" -DFSSIZE="${blocks}" \
+		-DFS_WORKFLOW_BLOCK_RESERVE="${workflow_blocks}" \
+		-DFS_SYSTEM_BLOCK_RESERVE="${system_blocks}" \
+		-DFS_WORKFLOW_INODE_RESERVE="${workflow_inodes}" \
+		-DFS_SYSTEM_INODE_RESERVE="${system_inodes}" \
+		-DFS_WORKFLOW_BLOCK_MIN_PER_SCOPE=1 \
+		-DFS_WORKFLOW_INODE_MIN_PER_SCOPE=1 \
+		-DFS_SYSTEM_BLOCK_MIN_RESERVE=1 \
+		-DFS_SYSTEM_INODE_MIN_RESERVE=1 \
+		-DFS_STORAGE_TINY_TEST_PROFILE=1 \
 		"${prefix}nfs/fs.c" -o "${TMPDIR_FS}/${tag}-mkfs"
 	"${TMPDIR_FS}/${tag}-mkfs" "${TMPDIR_FS}/${tag}.img" \
 		"${TMPDIR_FS}/${user_tag}-user-target/bin/${binary}"
+}
+
+check_mkfs_capacity_contract() {
+	local binary="${TMPDIR_FS}/agent-user-target/bin/fsenospc_ucore"
+	local log="${TMPDIR_FS}/mkfs-capacity.log"
+
+	cc -DNINODE="${FS_INODES}" -DFSSIZE="${FS_BLOCKS}" \
+		-DFS_WORKFLOW_BLOCK_RESERVE="${FS_BLOCKS}" \
+		-DFS_SYSTEM_BLOCK_RESERVE="${FS_BLOCKS}" \
+		-DFS_WORKFLOW_INODE_RESERVE="${FS_INODES}" \
+		-DFS_SYSTEM_INODE_RESERVE="${FS_INODES}" \
+		-DFS_WORKFLOW_BLOCK_MIN_PER_SCOPE=1 \
+		-DFS_WORKFLOW_INODE_MIN_PER_SCOPE=1 \
+		-DFS_SYSTEM_BLOCK_MIN_RESERVE=1 \
+		-DFS_SYSTEM_INODE_MIN_RESERVE=1 \
+		-DFS_STORAGE_TINY_TEST_PROFILE=1 \
+		nfs/fs.c -o "${TMPDIR_FS}/unfunded-mkfs"
+	if "${TMPDIR_FS}/unfunded-mkfs" \
+		"${TMPDIR_FS}/unfunded.img" "${binary}" >"${log}" 2>&1; then
+		echo "[fs-enospc] mkfs accepted unfunded workflow guarantees" >&2
+		exit 1
+	fi
+	if ! grep -q "image cannot fund workflow guarantees" "${log}"; then
+		echo "[fs-enospc] mkfs capacity rejection lacked diagnostic" >&2
+		cat "${log}" >&2
+		exit 1
+	fi
+	echo "[fs-enospc] mkfs capacity contract passed"
 }
 
 run_case() {
@@ -177,39 +218,63 @@ PY
 }
 
 build_user "" agent
-build_image "" agent "${FS_BLOCKS}" "${FS_INODES}" fsenospc_ucore
+cc host_tools/test_fs_storage_policy.c -o "${TMPDIR_FS}/storage-policy-test"
+"${TMPDIR_FS}/storage-policy-test"
+check_mkfs_capacity_contract
+build_image "" agent "${FS_BLOCKS}" "${FS_INODES}" fsenospc_ucore agent \
+	1 1 1 1
 make -B build TOOLPREFIX="${TOOLPREFIX}" LOG=error \
 	INIT_PROC=fsenospc_ucore FS_ICACHE_SIZE="${FS_CACHE_INODES}" \
 	FS_DOMAIN_BLOCK_LIMIT=512 FS_DOMAIN_INODE_LIMIT=64 \
 	FS_WORKFLOW_BLOCK_RESERVE=1 FS_SYSTEM_BLOCK_RESERVE=1 \
-	FS_WORKFLOW_INODE_RESERVE=1 FS_SYSTEM_INODE_RESERVE=1
+	FS_WORKFLOW_INODE_RESERVE=1 FS_SYSTEM_INODE_RESERVE=1 \
+	FS_WORKFLOW_BLOCK_MIN_PER_SCOPE=1 \
+	FS_WORKFLOW_INODE_MIN_PER_SCOPE=1 \
+	FS_SYSTEM_BLOCK_MIN_RESERVE=1 FS_SYSTEM_INODE_MIN_RESERVE=1 \
+	FS_STORAGE_TINY_TEST_PROFILE=1
 cp build/kernel "${TMPDIR_FS}/agent-kernel"
 
 build_image "" quota-domain "${FS_QUOTA_DOMAIN_BLOCKS}" \
-	"${FS_QUOTA_DOMAIN_INODES}" fsquota_ucore agent
+	"${FS_QUOTA_DOMAIN_INODES}" fsquota_ucore agent \
+	"${FS_QUOTA_WORKFLOW_BLOCK_RESERVE}" \
+	"${FS_QUOTA_SYSTEM_BLOCK_RESERVE}" \
+	"${FS_QUOTA_WORKFLOW_INODE_RESERVE}" \
+	"${FS_QUOTA_SYSTEM_INODE_RESERVE}"
 make -B build TOOLPREFIX="${TOOLPREFIX}" LOG=error \
 	INIT_PROC=fsquota_ucore \
 	FS_DOMAIN_BLOCK_LIMIT=16 FS_DOMAIN_INODE_LIMIT=8 \
 	FS_WORKFLOW_BLOCK_RESERVE="${FS_QUOTA_WORKFLOW_BLOCK_RESERVE}" \
 	FS_SYSTEM_BLOCK_RESERVE="${FS_QUOTA_SYSTEM_BLOCK_RESERVE}" \
 	FS_WORKFLOW_INODE_RESERVE="${FS_QUOTA_WORKFLOW_INODE_RESERVE}" \
-	FS_SYSTEM_INODE_RESERVE="${FS_QUOTA_SYSTEM_INODE_RESERVE}"
+	FS_SYSTEM_INODE_RESERVE="${FS_QUOTA_SYSTEM_INODE_RESERVE}" \
+	FS_WORKFLOW_BLOCK_MIN_PER_SCOPE=1 \
+	FS_WORKFLOW_INODE_MIN_PER_SCOPE=1 \
+	FS_SYSTEM_BLOCK_MIN_RESERVE=1 FS_SYSTEM_INODE_MIN_RESERVE=1 \
+	FS_STORAGE_TINY_TEST_PROFILE=1
 cp build/kernel "${TMPDIR_FS}/quota-domain-kernel"
 
 build_image "" quota-reserve "${FS_QUOTA_RESERVE_BLOCKS}" \
-	"${FS_QUOTA_RESERVE_INODES}" fsquota_ucore agent
+	"${FS_QUOTA_RESERVE_INODES}" fsquota_ucore agent \
+	"${FS_QUOTA_WORKFLOW_BLOCK_RESERVE}" \
+	"${FS_QUOTA_SYSTEM_BLOCK_RESERVE}" \
+	"${FS_QUOTA_WORKFLOW_INODE_RESERVE}" \
+	"${FS_QUOTA_SYSTEM_INODE_RESERVE}"
 make -B build TOOLPREFIX="${TOOLPREFIX}" LOG=error \
 	INIT_PROC=fsquota_ucore \
 	FS_DOMAIN_BLOCK_LIMIT=512 FS_DOMAIN_INODE_LIMIT=128 \
 	FS_WORKFLOW_BLOCK_RESERVE="${FS_QUOTA_WORKFLOW_BLOCK_RESERVE}" \
 	FS_SYSTEM_BLOCK_RESERVE="${FS_QUOTA_SYSTEM_BLOCK_RESERVE}" \
 	FS_WORKFLOW_INODE_RESERVE="${FS_QUOTA_WORKFLOW_INODE_RESERVE}" \
-	FS_SYSTEM_INODE_RESERVE="${FS_QUOTA_SYSTEM_INODE_RESERVE}"
+	FS_SYSTEM_INODE_RESERVE="${FS_QUOTA_SYSTEM_INODE_RESERVE}" \
+	FS_WORKFLOW_BLOCK_MIN_PER_SCOPE=1 \
+	FS_WORKFLOW_INODE_MIN_PER_SCOPE=1 \
+	FS_SYSTEM_BLOCK_MIN_RESERVE=1 FS_SYSTEM_INODE_MIN_RESERVE=1 \
+	FS_STORAGE_TINY_TEST_PROFILE=1
 cp build/kernel "${TMPDIR_FS}/quota-reserve-kernel"
 
 build_user baseline_ucore baseline
 build_image baseline_ucore baseline "${FS_BLOCKS}" "${FS_INODES}" \
-	fsenospc_ucore
+	fsenospc_ucore baseline 1 1 1 1
 make -C baseline_ucore -B build \
 	TOOLPREFIX="${TOOLPREFIX}" LOG=error INIT_PROC=fsenospc_ucore \
 	FS_ICACHE_SIZE="${FS_CACHE_INODES}"

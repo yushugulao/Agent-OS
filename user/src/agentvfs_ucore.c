@@ -11,6 +11,7 @@
 #define REVERSE_FILE "vfsreverse"
 #define READER_IMAGE "vfs_reader"
 #define WRITER_IMAGE "vfs_writer"
+#define INHERITED_FD 3
 
 static const char public_origin[] = "public-origin";
 static const char workflow_origin[] = "workflow-origin";
@@ -20,6 +21,24 @@ static struct agent_file_edit_state investigator_edit_state;
 static struct agent_file_meta metadata;
 static struct agent_file_query metadata_query;
 static struct agent_file_query_result metadata_result;
+
+static void check(int ok, const char *message);
+
+static uint64 workflow_process_count(void)
+{
+	struct agent_op op;
+	struct agent_result result;
+
+	memset(&op, 0, sizeof(op));
+	op.version = AGENT_CALL_VERSION;
+	op.tool_id = AGENT_TOOL_GET_SYSTEM_STATUS;
+	memset(&result, 0, sizeof(result));
+	check(agent_run(&op, &result, 1, 0) == 1,
+	      "query workflow process count");
+	check(result.status == AGENT_STATUS_OK,
+	      "workflow process count authorized");
+	return result.value0;
+}
 
 static void check(int ok, const char *message)
 {
@@ -160,6 +179,7 @@ int main(void)
 		      "plain fork attenuated");
 		check(read(fd, &byte, 1) == -1, "deny fork inherited read");
 		check(write(fd, "x", 1) == -1, "deny fork inherited write");
+		check(close(fd) == -1, "fork descriptor revoked");
 		check(open(SECRET_FILE, O_RDONLY) == -1,
 		      "deny fork protected open");
 		check(open(SECRET_FILE, O_WRONLY | O_TRUNC) == -1,
@@ -191,6 +211,10 @@ int main(void)
 		char *wrong_argv[] = { "agentvfs_probe", "--wrong-first", 0 };
 		int worker;
 		int worker_status = -1;
+		int worker_gate[2];
+		uint64 processes_before;
+		uint64 processes_after;
+		char gate = 'G';
 
 		check(agent_worker_create(READER_IMAGE, 0) ==
 			      AGENT_STATUS_BAD_PARAM,
@@ -201,14 +225,51 @@ int main(void)
 		check(agent_worker_create(READER_IMAGE,
 				  AGENT_CAP_ARTIFACT_WRITE) == -1,
 		      "enforce image capability ceiling");
+		processes_before = workflow_process_count();
+		check(pipe(worker_gate) == 0, "create pending worker gate");
+		check(agent_scope_delegate_fd(worker_gate[0]) == AGENT_STATUS_OK,
+		      "delegate pending worker gate");
 		worker = agent_worker_create(READER_IMAGE,
 					 AGENT_CAP_CONTENT_READ);
 		check(worker >= 0, "create read worker");
 		if (worker == 0) {
+			int public_child;
+			int public_status = -1;
+			char received = 0;
+
+			check(read(worker_gate[0], &received, 1) == 1 &&
+				      received == 'G',
+			      "pending worker waits in workflow snapshot");
+			check(close(worker_gate[0]) == 0,
+			      "close pending worker gate");
+			public_child = fork();
+			check(public_child >= 0, "fork pending worker");
+			if (public_child == 0) {
+				struct agent_info public_info;
+
+				check(agent_info(&public_info) == 0,
+				      "read pending-fork credentials");
+				check(public_info.filesystem_domain == 0,
+				      "pending worker fork drops scope");
+				check(close(INHERITED_FD) == -1,
+				      "pending worker fork revokes workflow fd");
+				exit(0);
+			}
+			check(waitpid(public_child, &public_status) == public_child,
+			      "wait pending worker fork");
+			check(public_status == 0, "pending worker fork status");
 			if (exec(READER_IMAGE, read_argv) < 0)
 				exit(2);
 			exit(3);
 		}
+		processes_after = workflow_process_count();
+		check(processes_after >= processes_before + 1,
+		      "pending worker appears in workflow snapshot");
+		check(write(worker_gate[1], &gate, 1) == 1,
+		      "release pending worker");
+		check(close(worker_gate[0]) == 0 &&
+			      close(worker_gate[1]) == 0,
+		      "close pending worker gates");
 		check(waitpid(worker, &worker_status) == worker,
 		      "wait read worker");
 		check(worker_status == 0, "read worker status");

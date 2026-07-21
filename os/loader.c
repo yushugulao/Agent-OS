@@ -13,10 +13,12 @@ static struct inode *init_image_lookup(char *path)
 	struct inode *ip;
 	int status;
 
-	ip = namei_policy_status(path, VFS_POLICY_WORKFLOW, &status);
+	ip = namei_scope_status(path, VFS_POLICY_WORKFLOW,
+				VFS_SCOPE_SYSTEM, &status);
 	if (status == FS_LOOKUP_FOUND || status == FS_LOOKUP_ERROR)
 		return ip;
-	return namei_policy_status(path, VFS_POLICY_PUBLIC, &status);
+	return namei_scope_status(path, VFS_POLICY_PUBLIC, VFS_SCOPE_NONE,
+				  &status);
 }
 
 void user_image_discard(struct user_image *image)

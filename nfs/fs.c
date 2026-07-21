@@ -84,11 +84,11 @@ void install_file(uint rootino, const char *host_path, const char *image,
 		  const struct host_image *host_image);
 struct host_image read_host_image(const char *host_path);
 void validate_exec_policy(void);
-void label_inode(uint inum, uint flags, uint domain, uint policy,
+void label_inode(uint inum, uint flags, uint scope_id, uint policy,
 		 uint exec_profile);
 static int vfs_exec_profile_valid(uint profile);
 uint vfs_label_checksum(uint inum, uint magic, uint version, uint flags,
-			uint domain, uint policy, uint exec_profile,
+			uint scope_id, uint policy, uint exec_profile,
 			uint generation, uint incarnation, uint reserved0,
 			uint reserved1);
 
@@ -113,6 +113,59 @@ uint xint(uint x)
 	return y;
 }
 
+static void validate_storage_guarantees(void)
+{
+	uint total_inodes = NINODES - 1;
+	uint free_blocks = FSSIZE - freeblock;
+	uint free_inodes = NINODES - freeinode;
+	uint system_blocks = fs_policy_system_reserve(
+		FS_SYSTEM_BLOCK_RESERVE, nblocks,
+		FS_SYSTEM_BLOCK_MIN_RESERVE);
+	uint system_inodes = fs_policy_system_reserve(
+		FS_SYSTEM_INODE_RESERVE, total_inodes,
+		FS_SYSTEM_INODE_MIN_RESERVE);
+	uint workflow_blocks = fs_policy_workflow_guarantee(
+		FS_WORKFLOW_BLOCK_RESERVE, nblocks, system_blocks,
+		free_blocks, FS_WORKFLOW_BLOCK_MIN_PER_SCOPE);
+	uint workflow_inodes = fs_policy_workflow_guarantee(
+		FS_WORKFLOW_INODE_RESERVE, total_inodes, system_inodes,
+		free_inodes, FS_WORKFLOW_INODE_MIN_PER_SCOPE);
+	uint checksum = fs_policy_contract_checksum(
+		FS_STORAGE_POLICY_VERSION, FS_WORKFLOW_SCOPE_SLOTS,
+		workflow_blocks, workflow_inodes, system_blocks, system_inodes);
+
+	if (workflow_blocks < FS_WORKFLOW_BLOCK_MIN_PER_SCOPE ||
+	    workflow_inodes < FS_WORKFLOW_INODE_MIN_PER_SCOPE ||
+	    !fs_policy_contract_geometry_valid(
+		nblocks, total_inodes, FS_STORAGE_POLICY_VERSION,
+		FS_WORKFLOW_SCOPE_SLOTS, workflow_blocks, workflow_inodes,
+		system_blocks, system_inodes, checksum) ||
+	    !fs_policy_contract_initially_funded(
+		free_blocks, free_inodes, workflow_blocks, workflow_inodes,
+		system_blocks, system_inodes)) {
+		fprintf(stderr,
+			"mkfs: image cannot fund workflow guarantees: "
+			"free_blocks=%u per_scope=%u min=%u system=%u "
+			"free_inodes=%u per_scope=%u min=%u system=%u\n",
+			free_blocks, workflow_blocks,
+			FS_WORKFLOW_BLOCK_MIN_PER_SCOPE, system_blocks, free_inodes,
+			workflow_inodes, FS_WORKFLOW_INODE_MIN_PER_SCOPE,
+			system_inodes);
+		exit(1);
+	}
+	sb.storage_policy_version = xint(FS_STORAGE_POLICY_VERSION);
+	sb.storage_scope_slots = xint(FS_WORKFLOW_SCOPE_SLOTS);
+	sb.workflow_block_guarantee = xint(workflow_blocks);
+	sb.workflow_inode_guarantee = xint(workflow_inodes);
+	sb.system_block_reserve = xint(system_blocks);
+	sb.system_inode_reserve = xint(system_inodes);
+	sb.storage_policy_checksum = xint(checksum);
+	printf("storage guarantees: free blocks %u workflow/scope %u "
+	       "system %u; free inodes %u workflow/scope %u system %u\n",
+	       free_blocks, workflow_blocks, system_blocks, free_inodes,
+	       workflow_inodes, system_inodes);
+}
+
 int main(int argc, char *argv[])
 {
 	int i;
@@ -122,6 +175,15 @@ int main(int argc, char *argv[])
 	static_assert(sizeof(int) == 4, "Integers must be 4 bytes!");
 	static_assert(sizeof(struct dinode) == 128,
 		      "dinode format must stay fixed");
+	static_assert(FS_WORKFLOW_SCOPE_SLOTS > 0 &&
+		      FS_WORKFLOW_MAX_FREE_NUMERATOR > 0 &&
+		      FS_WORKFLOW_MAX_FREE_NUMERATOR <
+			      FS_WORKFLOW_MAX_FREE_DENOMINATOR &&
+		      FS_SYSTEM_BLOCK_MIN_RESERVE > 0 &&
+		      FS_SYSTEM_INODE_MIN_RESERVE > 0 &&
+		      FS_WORKFLOW_BLOCK_MIN_PER_SCOPE > 0 &&
+		      FS_WORKFLOW_INODE_MIN_PER_SCOPE > 0,
+		      "invalid workflow storage policy");
 	static_assert(EXEC_MANIFEST_F_TRUSTED == EXEC_FLAG_TRUSTED,
 		      "manifest trusted flag mismatch");
 	static_assert(EXEC_MANIFEST_F_IMMUTABLE == EXEC_FLAG_IMMUTABLE,
@@ -179,7 +241,7 @@ int main(int argc, char *argv[])
 	wsect(1, buf);
 
 	rootino = ialloc(T_DIR);
-	label_inode(rootino, VFS_LABEL_F_ROOT, VFS_DOMAIN_PUBLIC,
+	label_inode(rootino, VFS_LABEL_F_ROOT, VFS_SCOPE_NONE,
 		    VFS_POLICY_ROOT, VFS_EXEC_PROFILE_NONE);
 
 	for (i = 2; i < argc; i++) {
@@ -230,14 +292,31 @@ int main(int argc, char *argv[])
 		free(host_image.data);
 	}
 
-	// fix size of root inode dir
+	// Root directory blocks are fixed SYSTEM metadata. Preallocate one slot for
+	// every non-root inode so runtime namespace churn can only reuse directory
+	// entries and can never turn a workflow allocation into SYSTEM block growth.
 	rinode(rootino, &din);
 	off = xint(din.size);
-	off = ((off / BSIZE) + 1) * BSIZE;
-	din.size = xint(off);
-	winode(rootino, &din);
+	uint root_capacity = NINODES * sizeof(struct dirent);
+	if (off > root_capacity) {
+		fprintf(stderr, "mkfs: root directory exceeds inode capacity\n");
+		exit(1);
+	}
+	memset(buf, 0, sizeof(buf));
+	while (off < root_capacity) {
+		uint n = root_capacity - off;
 
+		if (n > sizeof(buf))
+			n = sizeof(buf);
+		iappend(rootino, buf, n);
+		off += n;
+	}
+
+	validate_storage_guarantees();
 	balloc(freeblock);
+	memset(buf, 0, sizeof(buf));
+	memmove(buf, &sb, sizeof(sb));
+	wsect(1, buf);
 	return 0;
 }
 
@@ -462,7 +541,7 @@ void install_file(uint rootino, const char *host_path, const char *image,
 		  const struct host_image *host_image)
 {
 	uint inum;
-	uint vfs_domain;
+	uint vfs_scope_id;
 	uint vfs_flags;
 	uint vfs_policy;
 	struct dirent de;
@@ -479,8 +558,8 @@ void install_file(uint rootino, const char *host_path, const char *image,
 	layout = &host_image->layout;
 	vfs_flags = flags == 0 && vfs_profile == VFS_EXEC_PROFILE_NONE ?
 		VFS_LABEL_F_PUBLIC : VFS_LABEL_F_PROTECTED;
-	vfs_domain = flags == 0 && vfs_profile == VFS_EXEC_PROFILE_NONE ?
-		VFS_DOMAIN_PUBLIC : VFS_DOMAIN_WORKFLOW;
+	vfs_scope_id = flags == 0 && vfs_profile == VFS_EXEC_PROFILE_NONE ?
+		VFS_SCOPE_NONE : VFS_SCOPE_SYSTEM;
 	vfs_policy = flags == 0 && vfs_profile == VFS_EXEC_PROFILE_NONE ?
 		VFS_POLICY_PUBLIC : VFS_POLICY_WORKFLOW;
 	if ((layout->version != 0 &&
@@ -518,14 +597,14 @@ void install_file(uint rootino, const char *host_path, const char *image,
 	din.vfs_magic = xint(VFS_LABEL_MAGIC);
 	din.vfs_version = xint(VFS_LABEL_VERSION);
 	din.vfs_flags = xint(vfs_flags);
-	din.vfs_domain = xint(vfs_domain);
+	din.vfs_scope_id = xint(vfs_scope_id);
 	din.vfs_policy = xint(vfs_policy);
 	din.vfs_exec_profile = xint(vfs_profile);
 	din.vfs_policy_generation = xint(VFS_POLICY_GENERATION);
 	din.vfs_incarnation = xint(1);
 	din.vfs_checksum = xint(vfs_label_checksum(
 		inum, VFS_LABEL_MAGIC, VFS_LABEL_VERSION,
-		vfs_flags, vfs_domain, vfs_policy, vfs_profile,
+		vfs_flags, vfs_scope_id, vfs_policy, vfs_profile,
 		VFS_POLICY_GENERATION, 1, FS_OWNER_SYSTEM,
 		FS_OWNER_VERSION));
 	winode(inum, &din);
@@ -540,12 +619,12 @@ static int vfs_exec_profile_valid(uint profile)
 }
 
 uint vfs_label_checksum(uint inum, uint magic, uint version, uint flags,
-			uint domain, uint policy, uint exec_profile,
+			uint scope_id, uint policy, uint exec_profile,
 			uint generation, uint incarnation, uint fs_owner_domain,
 			uint fs_owner_version)
 {
 	uint hash = 2166136261U ^ inum;
-	uint words[] = { magic, version, flags, domain, policy, exec_profile,
+	uint words[] = { magic, version, flags, scope_id, policy, exec_profile,
 			 generation, incarnation, fs_owner_domain,
 			 fs_owner_version };
 
@@ -557,7 +636,7 @@ uint vfs_label_checksum(uint inum, uint magic, uint version, uint flags,
 	return hash ? hash : 1U;
 }
 
-void label_inode(uint inum, uint flags, uint domain, uint policy,
+void label_inode(uint inum, uint flags, uint scope_id, uint policy,
 		 uint exec_profile)
 {
 	struct dinode din;
@@ -566,7 +645,7 @@ void label_inode(uint inum, uint flags, uint domain, uint policy,
 	din.vfs_magic = xint(VFS_LABEL_MAGIC);
 	din.vfs_version = xint(VFS_LABEL_VERSION);
 	din.vfs_flags = xint(flags);
-	din.vfs_domain = xint(domain);
+	din.vfs_scope_id = xint(scope_id);
 	din.vfs_policy = xint(policy);
 	din.vfs_exec_profile = xint(exec_profile);
 	din.vfs_policy_generation = xint(VFS_POLICY_GENERATION);
@@ -574,7 +653,7 @@ void label_inode(uint inum, uint flags, uint domain, uint policy,
 	din.fs_owner_domain = xint(FS_OWNER_SYSTEM);
 	din.fs_owner_version = xint(FS_OWNER_VERSION);
 	din.vfs_checksum = xint(vfs_label_checksum(
-		inum, VFS_LABEL_MAGIC, VFS_LABEL_VERSION, flags, domain,
+		inum, VFS_LABEL_MAGIC, VFS_LABEL_VERSION, flags, scope_id,
 		policy, exec_profile, VFS_POLICY_GENERATION, 1,
 		FS_OWNER_SYSTEM, FS_OWNER_VERSION));
 	winode(inum, &din);

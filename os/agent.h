@@ -219,7 +219,7 @@
 #define AGENT_FILE_META_UPDATE_DEPENDENCY (1ULL << 9)
 #define AGENT_FILE_META_UPDATE_ALL        0x3ffULL
 
-#define AGENT_FILE_META_MAX       128
+#define AGENT_FILE_META_MAX       512
 #define AGENT_FILE_QUERY_MAX_HITS 8
 #define AGENT_FILE_NAME_SIZE      32
 #define AGENT_FILE_LOGICAL_SIZE   80
@@ -342,6 +342,7 @@ struct agent_info {
 	int resource_quota;
 	int loop_state;
 	uint64 agent_call_count;
+	uint64 metadata_txn_wait_count;
 	uint64 context_path_count;
 	uint64 context_path_capacity;
 	uint64 context_path_head;
@@ -804,9 +805,11 @@ int agent_make(struct proc *p);
 int agent_make_role(struct proc *p, int role);
 int agent_create_proc(void);
 int agent_create_role_proc(int role);
+int agent_workflow_create_proc(int role);
 void agent_tick(void);
 void agent_background_maintain(void);
 void agent_file_request_scan(void);
+int agent_scope_reclaim(uint scope_id, int preserve_files);
 void agent_fs_note_create(struct inode *ip, char *path);
 void agent_fs_note_write(struct inode *ip);
 void agent_fs_note_truncate(struct inode *ip);
@@ -826,6 +829,8 @@ int agent_sched_better(struct thread *a, struct thread *b);
 
 int sys_agent_create(void);
 int sys_agent_create_role(int role);
+int sys_agent_workflow_create(int role);
+int sys_agent_scope_delegate_fd(int fd);
 int sys_agent_info(uint64 addr);
 int sys_agent_sched_snapshot(uint64 recordsaddr, int max);
 int sys_agent_sched_config(uint64 configaddr);

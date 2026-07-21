@@ -1,5 +1,7 @@
 #include "vfs_security.h"
+#include "agent.h"
 #include "const.h"
+#include "defs.h"
 #include "exec_policy.h"
 #include "file.h"
 #include "fs.h"
@@ -12,13 +14,287 @@ _Static_assert(EXEC_MANIFEST_VFS_CONTENT_READ == VFS_CAP_CONTENT_READ,
 _Static_assert(EXEC_MANIFEST_VFS_ARTIFACT_WRITE == VFS_CAP_ARTIFACT_WRITE,
 	       "artifact-write capability mismatch");
 
+struct vfs_scope_ref {
+	int used;
+	uint scope_id;
+	int members;
+	int retiring;
+	int preserve_on_retire;
+	uint storage_blocks;
+	uint storage_inodes;
+};
+
+static struct vfs_scope_ref vfs_scope_refs[NPROC];
+
+static int vfs_scope_acquire(uint scope_id)
+{
+	int free_slot = -1;
+	int allocated = 0;
+	int enabled;
+
+	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC)
+		return -1;
+	enabled = intr_save();
+	for (int i = 0; i < NPROC; i++) {
+		if (vfs_scope_refs[i].used &&
+		    vfs_scope_refs[i].scope_id == scope_id) {
+			if (vfs_scope_refs[i].retiring ||
+			    vfs_scope_refs[i].members <= 0) {
+				intr_restore(enabled);
+				return -1;
+			}
+			vfs_scope_refs[i].members++;
+			intr_restore(enabled);
+			return 0;
+		}
+		if (vfs_scope_refs[i].used)
+			allocated++;
+		else if (free_slot < 0)
+			free_slot = i;
+	}
+	if (free_slot >= 0 && allocated < VFS_SCOPE_MAX_ACTIVE &&
+	    fs_storage_scope_admissible()) {
+		vfs_scope_refs[free_slot].used = 1;
+		vfs_scope_refs[free_slot].scope_id = scope_id;
+		vfs_scope_refs[free_slot].members = 1;
+		vfs_scope_refs[free_slot].retiring = 0;
+		vfs_scope_refs[free_slot].preserve_on_retire = 0;
+		vfs_scope_refs[free_slot].storage_blocks = 0;
+		vfs_scope_refs[free_slot].storage_inodes = 0;
+	} else {
+		free_slot = -1;
+	}
+	intr_restore(enabled);
+	return free_slot >= 0 ? 0 : -1;
+}
+
+static int vfs_scope_release(uint scope_id)
+{
+	int last = 0;
+	int enabled;
+
+	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC)
+		return 0;
+	enabled = intr_save();
+	for (int i = 0; i < NPROC; i++) {
+		if (!vfs_scope_refs[i].used ||
+		    vfs_scope_refs[i].scope_id != scope_id)
+			continue;
+		if (vfs_scope_refs[i].members <= 0)
+			panic("workflow scope refcount");
+		vfs_scope_refs[i].members--;
+		if (vfs_scope_refs[i].members == 0) {
+			vfs_scope_refs[i].retiring = 1;
+			last = 1;
+		}
+		break;
+	}
+	intr_restore(enabled);
+	return last;
+}
+
+static void vfs_scope_reclaim_complete(uint scope_id)
+{
+	int preserve_files = 0;
+	int eligible = 0;
+	int enabled;
+
+	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC)
+		return;
+	enabled = intr_save();
+	for (int i = 0; i < NPROC; i++) {
+		if (!vfs_scope_refs[i].used ||
+		    vfs_scope_refs[i].scope_id != scope_id)
+			continue;
+		eligible = vfs_scope_refs[i].members == 0 &&
+			   vfs_scope_refs[i].retiring;
+		preserve_files = vfs_scope_refs[i].preserve_on_retire;
+		break;
+	}
+	intr_restore(enabled);
+	if (!eligible || agent_scope_reclaim(scope_id, preserve_files) < 0)
+		return;
+	enabled = intr_save();
+	for (int i = 0; i < NPROC; i++) {
+		if (!vfs_scope_refs[i].used ||
+		    vfs_scope_refs[i].scope_id != scope_id)
+			continue;
+		if (vfs_scope_refs[i].members == 0 &&
+		    vfs_scope_refs[i].retiring) {
+			if (preserve_files)
+				// A completed boot lease remains an admitted, inactive
+				// storage owner until reboot. This keeps its durable
+				// output in the same guarantee calculation.
+				vfs_scope_refs[i].retiring = 0;
+			else if (vfs_scope_refs[i].storage_blocks == 0 &&
+				 vfs_scope_refs[i].storage_inodes == 0)
+				memset(&vfs_scope_refs[i], 0,
+				       sizeof(vfs_scope_refs[i]));
+		}
+		break;
+	}
+	intr_restore(enabled);
+}
+
+static int vfs_scope_preserve_on_retire(uint scope_id)
+{
+	int result = -1;
+	int enabled = intr_save();
+
+	for (int i = 0; i < NPROC; i++) {
+		if (!vfs_scope_refs[i].used ||
+		    vfs_scope_refs[i].scope_id != scope_id)
+			continue;
+		if (!vfs_scope_refs[i].retiring &&
+		    vfs_scope_refs[i].members > 0) {
+			vfs_scope_refs[i].preserve_on_retire = 1;
+			result = 0;
+		}
+		break;
+	}
+	intr_restore(enabled);
+	return result;
+}
+
+void vfs_scope_reap_pending(void)
+{
+	uint scope_id = VFS_SCOPE_NONE;
+	int enabled = intr_save();
+
+	for (int i = 0; i < NPROC; i++) {
+		if (vfs_scope_refs[i].used && vfs_scope_refs[i].retiring &&
+		    vfs_scope_refs[i].members == 0) {
+			scope_id = vfs_scope_refs[i].scope_id;
+			break;
+		}
+	}
+	intr_restore(enabled);
+	if (scope_id != VFS_SCOPE_NONE)
+		vfs_scope_reclaim_complete(scope_id);
+}
+
+int vfs_scope_active(uint scope_id)
+{
+	int active = 0;
+	int enabled = intr_save();
+
+	for (int i = 0; i < NPROC; i++)
+		if (vfs_scope_refs[i].used &&
+		    vfs_scope_refs[i].scope_id == scope_id &&
+		    vfs_scope_refs[i].members > 0) {
+			active = 1;
+			break;
+		}
+	intr_restore(enabled);
+	return active;
+}
+
+int vfs_scope_retiring(uint scope_id)
+{
+	int retiring = 0;
+	int enabled = intr_save();
+
+	for (int i = 0; i < NPROC; i++)
+		if (vfs_scope_refs[i].used &&
+		    vfs_scope_refs[i].scope_id == scope_id &&
+		    vfs_scope_refs[i].retiring &&
+		    vfs_scope_refs[i].members == 0) {
+			retiring = 1;
+			break;
+		}
+	intr_restore(enabled);
+	return retiring;
+}
+
+// Return the unconsumed storage guarantee that an allocation must leave for
+// every other admitted or future workflow slot. Retiring scopes remain
+// admitted until teardown completes, so the accounting is continuous across
+// both lifecycle transitions.
+uint vfs_scope_storage_guarantee(uint exempt_scope, int inode, uint guarantee)
+{
+	uint required = 0;
+	int allocated = 0;
+	int enabled;
+
+	if (guarantee == 0)
+		return 0;
+	enabled = intr_save();
+	for (int i = 0; i < NPROC; i++) {
+		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
+		uint used;
+
+		if (!ref->used)
+			continue;
+		allocated++;
+		if (ref->scope_id == exempt_scope)
+			continue;
+		used = inode ? ref->storage_inodes : ref->storage_blocks;
+		if (used < guarantee)
+			required += guarantee - used;
+	}
+	if (allocated < VFS_SCOPE_MAX_ACTIVE)
+		required += (VFS_SCOPE_MAX_ACTIVE - allocated) * guarantee;
+	intr_restore(enabled);
+	return required;
+}
+
+int vfs_scope_storage_reserve(uint scope_id, int inode, uint limit)
+{
+	int result = -1;
+	int enabled;
+
+	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC || limit == 0)
+		return -1;
+	enabled = intr_save();
+	for (int i = 0; i < NPROC; i++) {
+		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
+		uint *used;
+
+		if (!ref->used || ref->scope_id != scope_id)
+			continue;
+		used = inode ? &ref->storage_inodes : &ref->storage_blocks;
+		if (!ref->retiring && ref->members > 0 && *used < limit) {
+			(*used)++;
+			result = 0;
+		}
+		break;
+	}
+	intr_restore(enabled);
+	return result;
+}
+
+int vfs_scope_storage_release(uint scope_id, int inode)
+{
+	int handled = 0;
+	int enabled;
+
+	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC)
+		return 0;
+	enabled = intr_save();
+	for (int i = 0; i < NPROC; i++) {
+		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
+		uint *used;
+
+		if (!ref->used || ref->scope_id != scope_id)
+			continue;
+		used = inode ? &ref->storage_inodes : &ref->storage_blocks;
+		if (*used == 0)
+			panic("workflow storage quota invariant");
+		(*used)--;
+		handled = 1;
+		break;
+	}
+	intr_restore(enabled);
+	return handled;
+}
+
 uint vfs_label_checksum(uint inum, uint magic, uint version, uint flags,
-			uint domain, uint policy, uint exec_profile,
+			uint scope_id, uint policy, uint exec_profile,
 			uint generation, uint incarnation, uint fs_owner_domain,
 			uint fs_owner_version)
 {
 	uint hash = 2166136261U ^ inum;
-	uint words[] = { magic, version, flags, domain, policy, exec_profile,
+	uint words[] = { magic, version, flags, scope_id, policy, exec_profile,
 			 generation, incarnation, fs_owner_domain,
 			 fs_owner_version };
 
@@ -33,7 +309,7 @@ uint vfs_label_checksum(uint inum, uint magic, uint version, uint flags,
 static uint vfs_inode_checksum(struct inode *ip)
 {
 	return vfs_label_checksum(ip->inum, ip->vfs_magic, ip->vfs_version,
-				  ip->vfs_flags, ip->vfs_domain,
+				  ip->vfs_flags, ip->vfs_scope_id,
 				  ip->vfs_policy, ip->vfs_exec_profile,
 				  ip->vfs_policy_generation,
 				  ip->vfs_incarnation, ip->fs_owner_domain,
@@ -44,35 +320,59 @@ void vfs_cred_kernel(struct vfs_cred *cred)
 {
 	if (cred == 0)
 		return;
-	cred->domain = VFS_DOMAIN_PUBLIC;
+	cred->scope_id = VFS_SCOPE_NONE;
 	cred->capabilities = ~0ULL;
 	cred->kernel = 1;
+}
+
+static int vfs_cred_valid(const struct vfs_cred *cred)
+{
+	if (cred == 0)
+		return 0;
+	if (cred->kernel)
+		return cred->scope_id == VFS_SCOPE_NONE;
+	if (cred->scope_id == VFS_SCOPE_NONE)
+		return cred->capabilities == 0;
+	return cred->scope_id >= VFS_SCOPE_FIRST_DYNAMIC &&
+	       cred->scope_id < FS_OWNER_SCOPE_FLAG &&
+	       (cred->capabilities & ~VFS_CAP_WORKFLOW) == 0 &&
+	       vfs_scope_active(cred->scope_id);
 }
 
 void vfs_cred_from_proc(const struct proc *p, struct vfs_cred *cred)
 {
 	if (cred == 0)
 		return;
-	cred->domain = p ? p->vfs_domain : VFS_DOMAIN_PUBLIC;
+	cred->scope_id = p ? p->vfs_scope_id : VFS_SCOPE_NONE;
 	cred->capabilities = p ? p->vfs_effective_caps : 0;
 	cred->kernel = 0;
 }
 
 uint vfs_cred_lookup_policy(const struct vfs_cred *cred)
 {
-	if (cred != 0 && cred->domain == VFS_DOMAIN_WORKFLOW)
+	if (!vfs_cred_valid(cred))
+		return 0;
+	if (cred->scope_id >= VFS_SCOPE_FIRST_DYNAMIC)
 		return VFS_POLICY_WORKFLOW;
 	return VFS_POLICY_PUBLIC;
 }
 
 void vfs_proc_reset(struct proc *p)
 {
+	uint old_scope_id;
+	uint pending_scope_id;
+	int active_last;
+	int pending_last;
+
 	if (p == 0)
 		return;
-	p->vfs_domain = VFS_DOMAIN_PUBLIC;
+	old_scope_id = p->vfs_scope_id;
+	pending_scope_id = p->vfs_pending_scope_id;
+	proc_revoke_vfs_scope_fds(p);
+	p->vfs_scope_id = VFS_SCOPE_NONE;
 	p->vfs_effective_caps = 0;
 	p->vfs_inheritable_caps = 0;
-	p->vfs_pending_domain = VFS_DOMAIN_PUBLIC;
+	p->vfs_pending_scope_id = VFS_SCOPE_NONE;
 	p->vfs_pending_caps = 0;
 	p->vfs_pending_exec_dev = 0;
 	p->vfs_pending_exec_inum = 0;
@@ -80,23 +380,44 @@ void vfs_proc_reset(struct proc *p)
 	p->vfs_bound_exec_dev = 0;
 	p->vfs_bound_exec_inum = 0;
 	p->vfs_bound_exec_incarnation = 0;
+	active_last = vfs_scope_release(old_scope_id);
+	pending_last = pending_scope_id != old_scope_id ?
+		vfs_scope_release(pending_scope_id) : 0;
+	if (active_last)
+		vfs_scope_reclaim_complete(old_scope_id);
+	if (pending_last)
+		vfs_scope_reclaim_complete(pending_scope_id);
 }
 
-void vfs_proc_fork(const struct proc *parent, struct proc *child,
-		   int retain_effective)
+int vfs_proc_spawn_scope(const struct proc *parent, struct proc *child,
+			 enum vfs_spawn_scope_mode mode)
 {
 	if (child == 0)
-		return;
-	if (parent == 0) {
-		vfs_proc_reset(child);
-		return;
-	}
+		return -1;
 	vfs_proc_reset(child);
-	if (!retain_effective)
-		return;
-	child->vfs_domain = parent->vfs_domain;
+	if (mode == VFS_SPAWN_SCOPE_DROP)
+		return 0;
+	if (parent == 0 || parent->vfs_scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
+	    parent->vfs_scope_id != parent->storage_domain_id)
+		return -1;
+	if (mode == VFS_SPAWN_SCOPE_FRESH) {
+		if (child->storage_domain_id < VFS_SCOPE_FIRST_DYNAMIC)
+			return -1;
+		child->vfs_scope_id = child->storage_domain_id;
+	} else if (mode == VFS_SPAWN_SCOPE_INHERIT) {
+		if (child->storage_domain_id != parent->storage_domain_id)
+			return -1;
+		child->vfs_scope_id = parent->vfs_scope_id;
+	} else {
+		return -1;
+	}
+	if (vfs_scope_acquire(child->vfs_scope_id) < 0) {
+		vfs_proc_reset(child);
+		return -1;
+	}
 	child->vfs_effective_caps = parent->vfs_effective_caps;
 	child->vfs_inheritable_caps = parent->vfs_inheritable_caps;
+	return 0;
 }
 
 void vfs_proc_limit_capabilities(struct proc *p, uint64 capabilities)
@@ -153,9 +474,12 @@ int vfs_proc_delegate_exec(const struct proc *parent, struct proc *child,
 	uint64 ceiling;
 
 	if (parent == 0 || child == 0 || image == 0 ||
-	    parent->vfs_domain != VFS_DOMAIN_WORKFLOW ||
+	    parent->vfs_scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
+	    parent->vfs_scope_id != parent->storage_domain_id ||
+	    child->storage_domain_id != parent->storage_domain_id ||
 	    !vfs_inode_label_valid(image) ||
 	    image->vfs_policy != VFS_POLICY_WORKFLOW ||
+	    image->vfs_scope_id != VFS_SCOPE_SYSTEM ||
 	    image->vfs_exec_profile == VFS_EXEC_PROFILE_NONE ||
 	    (image->exec_flags & (EXEC_FLAG_IMMUTABLE |
 				  EXEC_FLAG_DOMAIN_SAFE)) !=
@@ -167,7 +491,9 @@ int vfs_proc_delegate_exec(const struct proc *parent, struct proc *child,
 	    (requested_caps & ceiling) != requested_caps)
 		return -1;
 	vfs_proc_reset(child);
-	child->vfs_pending_domain = parent->vfs_domain;
+	if (vfs_scope_acquire(parent->vfs_scope_id) < 0)
+		return -1;
+	child->vfs_pending_scope_id = parent->vfs_scope_id;
 	child->vfs_pending_caps = requested_caps;
 	child->vfs_pending_exec_dev = image->dev;
 	child->vfs_pending_exec_inum = image->inum;
@@ -219,30 +545,48 @@ void vfs_proc_install_image(struct proc *p, const struct user_image *image,
 			vfs_proc_reset(p);
 			return;
 		}
-		p->vfs_domain = VFS_DOMAIN_WORKFLOW;
+		if (p->storage_domain_id < VFS_SCOPE_FIRST_DYNAMIC) {
+			vfs_proc_reset(p);
+			return;
+		}
+		p->vfs_scope_id = p->storage_domain_id;
+		if (vfs_scope_acquire(p->vfs_scope_id) < 0) {
+			vfs_proc_reset(p);
+			return;
+		}
+		if (vfs_scope_preserve_on_retire(p->vfs_scope_id) < 0) {
+			vfs_proc_reset(p);
+			return;
+		}
 		p->vfs_effective_caps = ceiling;
 		p->vfs_inheritable_caps = ceiling;
 		vfs_proc_bind_image(p, image);
 		return;
 	}
 	if (p->vfs_pending_exec_inum != 0) {
-		uint pending_domain = p->vfs_pending_domain;
+		uint pending_scope_id = p->vfs_pending_scope_id;
 		uint64 pending_caps = p->vfs_pending_caps;
+		uint64 effective_caps = pending_caps & ceiling;
 		int matches = p->vfs_pending_exec_dev == image->exec_dev &&
 			      p->vfs_pending_exec_inum == image->exec_inum &&
 			      p->vfs_pending_exec_incarnation ==
 				      image->vfs_exec_incarnation;
 
-		vfs_proc_reset(p);
-		if (!matches || !vfs_image_domain_safe(image))
-			return;
-		p->vfs_domain = pending_domain;
-		p->vfs_effective_caps = pending_caps & ceiling;
-		p->vfs_inheritable_caps = p->vfs_effective_caps;
-		if (p->vfs_effective_caps == 0) {
+		if (!matches || !vfs_image_domain_safe(image) ||
+		    pending_scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
+		    pending_scope_id != p->storage_domain_id ||
+		    p->vfs_scope_id != VFS_SCOPE_NONE || effective_caps == 0) {
 			vfs_proc_reset(p);
 			return;
 		}
+		p->vfs_scope_id = pending_scope_id;
+		p->vfs_pending_scope_id = VFS_SCOPE_NONE;
+		p->vfs_pending_caps = 0;
+		p->vfs_pending_exec_dev = 0;
+		p->vfs_pending_exec_inum = 0;
+		p->vfs_pending_exec_incarnation = 0;
+		p->vfs_effective_caps = effective_caps;
+		p->vfs_inheritable_caps = p->vfs_effective_caps;
 		vfs_proc_bind_image(p, image);
 		return;
 	}
@@ -260,7 +604,7 @@ void vfs_proc_install_image(struct proc *p, const struct user_image *image,
 		vfs_proc_bind_image(p, image);
 		return;
 	}
-	if (p->vfs_domain == VFS_DOMAIN_PUBLIC ||
+	if (p->vfs_scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
 	    !vfs_image_domain_safe(image) || !vfs_proc_image_bound(p, image)) {
 		vfs_proc_reset(p);
 		return;
@@ -303,23 +647,43 @@ static int vfs_label_shape_valid(struct inode *ip)
 	switch (ip->vfs_policy) {
 	case VFS_POLICY_PUBLIC:
 		return flag == VFS_LABEL_F_PUBLIC &&
-		       ip->vfs_domain == VFS_DOMAIN_PUBLIC &&
+		       ip->vfs_scope_id == VFS_SCOPE_NONE &&
+		       !FS_OWNER_IS_SCOPE(ip->fs_owner_domain) &&
 		       ip->vfs_exec_profile == VFS_EXEC_PROFILE_NONE;
 	case VFS_POLICY_WORKFLOW:
-		return flag == VFS_LABEL_F_PROTECTED &&
-		       ip->vfs_domain == VFS_DOMAIN_WORKFLOW;
+		if (flag != VFS_LABEL_F_PROTECTED ||
+		    ip->vfs_scope_id == VFS_SCOPE_NONE)
+			return 0;
+		if (ip->vfs_scope_id == VFS_SCOPE_SYSTEM)
+			return ip->type == T_FILE &&
+			       ip->fs_owner_domain == FS_OWNER_SYSTEM &&
+			       (ip->exec_flags &
+				(EXEC_FLAG_IMMUTABLE | EXEC_FLAG_DOMAIN_SAFE)) ==
+				(EXEC_FLAG_IMMUTABLE | EXEC_FLAG_DOMAIN_SAFE) &&
+			       ip->exec_generation == EXEC_MANIFEST_VERSION &&
+			       ip->exec_layout_version == EXEC_LAYOUT_VERSION;
+		return ip->vfs_scope_id >= VFS_SCOPE_FIRST_DYNAMIC &&
+		       ip->vfs_scope_id < FS_OWNER_SCOPE_FLAG &&
+		       FS_OWNER_IS_SCOPE(ip->fs_owner_domain) &&
+		       FS_OWNER_SCOPE_ID(ip->fs_owner_domain) ==
+			       ip->vfs_scope_id &&
+		       ip->vfs_exec_profile == VFS_EXEC_PROFILE_NONE &&
+		       ip->exec_flags == 0 && ip->exec_generation == 0 &&
+		       ip->exec_role_mask == 0;
 	case VFS_POLICY_KERNEL_PRIVATE:
 		return flag == VFS_LABEL_F_KERNEL_PRIVATE &&
-		       ip->vfs_domain == VFS_DOMAIN_PUBLIC &&
+		       ip->vfs_scope_id == VFS_SCOPE_NONE &&
+		       ip->fs_owner_domain == FS_OWNER_SYSTEM &&
 		       ip->vfs_exec_profile == VFS_EXEC_PROFILE_NONE;
 	case VFS_POLICY_ROOT:
 		return flag == VFS_LABEL_F_ROOT &&
-		       ip->vfs_domain == VFS_DOMAIN_PUBLIC &&
+		       ip->vfs_scope_id == VFS_SCOPE_NONE &&
+		       ip->fs_owner_domain == FS_OWNER_SYSTEM &&
 		       ip->type == T_DIR &&
 		       ip->vfs_exec_profile == VFS_EXEC_PROFILE_NONE;
 	case VFS_POLICY_FREE:
 		return flag == VFS_LABEL_F_FREE &&
-		       ip->vfs_domain == VFS_DOMAIN_PUBLIC &&
+		       ip->vfs_scope_id == VFS_SCOPE_NONE &&
 		       ip->vfs_exec_profile == VFS_EXEC_PROFILE_NONE;
 	default:
 		return 0;
@@ -339,33 +703,42 @@ int vfs_inode_authorize(struct inode *ip, const struct vfs_cred *cred,
 {
 	uint64 required = 0;
 
-	if (cred == 0 || !vfs_inode_label_valid(ip))
+	if (!vfs_cred_valid(cred) || !vfs_inode_label_valid(ip))
 		return 0;
-	if (cred->kernel)
+	if (cred->kernel && cred->scope_id == VFS_SCOPE_NONE)
 		return 1;
 	if (ip->vfs_policy == VFS_POLICY_FREE)
 		return 0;
 	if (ip->vfs_policy == VFS_POLICY_KERNEL_PRIVATE)
 		return 0;
 	if (ip->vfs_policy == VFS_POLICY_ROOT) {
-		if (op == VFS_OP_LOOKUP || op == VFS_OP_READ ||
-		    op == VFS_OP_EXEC)
+		if (op == VFS_OP_LOOKUP || op == VFS_OP_READ)
 			return 1;
-		if (op == VFS_OP_CREATE || op == VFS_OP_WRITE ||
-		    op == VFS_OP_TRUNCATE || op == VFS_OP_DELETE) {
-			if (cred->domain == VFS_DOMAIN_PUBLIC)
+		// Raw directory bytes are kernel-private. User credentials receive
+		// only target-aware namespace operations implemented by
+		// fs_create/dirlink/dirunlink.
+		if (op == VFS_OP_CREATE || op == VFS_OP_DELETE) {
+			if (cred->scope_id == VFS_SCOPE_NONE)
 				return 1;
-			return cred->domain == VFS_DOMAIN_WORKFLOW &&
+			return cred->scope_id >= VFS_SCOPE_FIRST_DYNAMIC &&
 			       (cred->capabilities & VFS_CAP_ARTIFACT_WRITE) != 0;
 		}
 		return 0;
 	}
 	if (op == VFS_OP_EXEC)
-		return ip->type == T_FILE;
+		return ip->type == T_FILE &&
+		       (ip->vfs_policy != VFS_POLICY_WORKFLOW ||
+			ip->vfs_scope_id == VFS_SCOPE_SYSTEM);
 	if (ip->vfs_policy == VFS_POLICY_PUBLIC)
-		return cred->domain == VFS_DOMAIN_PUBLIC;
+		return cred->scope_id == VFS_SCOPE_NONE;
+	if (ip->vfs_policy == VFS_POLICY_WORKFLOW &&
+	    ip->vfs_scope_id == VFS_SCOPE_SYSTEM)
+		return (op == VFS_OP_LOOKUP || op == VFS_OP_READ) &&
+		       cred->scope_id >= VFS_SCOPE_FIRST_DYNAMIC &&
+		       (cred->capabilities & VFS_CAP_CONTENT_READ) != 0;
 	if (ip->vfs_policy != VFS_POLICY_WORKFLOW ||
-	    cred->domain != ip->vfs_domain)
+	    cred->scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
+	    cred->scope_id != ip->vfs_scope_id)
 		return 0;
 	if (op == VFS_OP_LOOKUP || op == VFS_OP_READ)
 		required = VFS_CAP_CONTENT_READ;
@@ -378,13 +751,13 @@ int vfs_inode_authorize(struct inode *ip, const struct vfs_cred *cred,
 
 uint vfs_default_create_policy(const struct vfs_cred *cred)
 {
-	if (cred == 0)
+	if (!vfs_cred_valid(cred))
 		return 0;
-	if (cred->kernel)
+	if (cred->kernel && cred->scope_id == VFS_SCOPE_NONE)
 		return VFS_POLICY_KERNEL_PRIVATE;
-	if (cred->domain == VFS_DOMAIN_PUBLIC)
+	if (cred->scope_id == VFS_SCOPE_NONE)
 		return VFS_POLICY_PUBLIC;
-	if (cred->domain == VFS_DOMAIN_WORKFLOW &&
+	if (cred->scope_id >= VFS_SCOPE_FIRST_DYNAMIC &&
 	    (cred->capabilities & VFS_CAP_ARTIFACT_WRITE) != 0)
 		return VFS_POLICY_WORKFLOW;
 	return 0;
@@ -393,16 +766,16 @@ uint vfs_default_create_policy(const struct vfs_cred *cred)
 static int vfs_policy_subject_allowed(const struct vfs_cred *cred,
 				      uint policy)
 {
-	if (cred == 0)
+	if (!vfs_cred_valid(cred))
 		return 0;
 	if (policy == VFS_POLICY_KERNEL_PRIVATE)
-		return cred->kernel;
+		return cred->kernel && cred->scope_id == VFS_SCOPE_NONE;
 	if (policy == VFS_POLICY_PUBLIC)
-		return !cred->kernel && cred->domain == VFS_DOMAIN_PUBLIC;
+		return !cred->kernel && cred->scope_id == VFS_SCOPE_NONE;
 	if (policy == VFS_POLICY_WORKFLOW)
-		return cred->kernel ||
-		       (cred->domain == VFS_DOMAIN_WORKFLOW &&
-			(cred->capabilities & VFS_CAP_ARTIFACT_WRITE) != 0);
+		return !cred->kernel &&
+		       cred->scope_id >= VFS_SCOPE_FIRST_DYNAMIC &&
+		       (cred->capabilities & VFS_CAP_ARTIFACT_WRITE) != 0;
 	return 0;
 }
 
@@ -414,9 +787,9 @@ int vfs_create_request_authorize(const struct vfs_cred *cred, uint policy,
 	if (cred->kernel)
 		return 1;
 	if (policy == VFS_POLICY_PUBLIC)
-		return cred->domain == VFS_DOMAIN_PUBLIC;
+		return cred->scope_id == VFS_SCOPE_NONE;
 	if (policy != VFS_POLICY_WORKFLOW ||
-	    cred->domain != VFS_DOMAIN_WORKFLOW)
+	    cred->scope_id < VFS_SCOPE_FIRST_DYNAMIC)
 		return 0;
 	if (readable &&
 	    (cred->capabilities & VFS_CAP_CONTENT_READ) == 0)
@@ -435,19 +808,27 @@ int vfs_inode_init_label(struct inode *ip, const struct vfs_cred *cred,
 	    ip->fs_owner_domain < FS_OWNER_SYSTEM ||
 	    ip->fs_owner_version != FS_OWNER_VERSION)
 		return -1;
+	if ((policy == VFS_POLICY_WORKFLOW &&
+	     (cred->scope_id >= FS_OWNER_SCOPE_FLAG ||
+	      ip->fs_owner_domain != FS_OWNER_SCOPE(cred->scope_id))) ||
+	    (policy == VFS_POLICY_PUBLIC &&
+	     FS_OWNER_IS_SCOPE(ip->fs_owner_domain)) ||
+	    (policy == VFS_POLICY_KERNEL_PRIVATE &&
+	     ip->fs_owner_domain != FS_OWNER_SYSTEM))
+		return -1;
 	ip->vfs_magic = VFS_LABEL_MAGIC;
 	ip->vfs_version = VFS_LABEL_VERSION;
 	ip->vfs_policy_generation = VFS_POLICY_GENERATION;
 	ip->vfs_exec_profile = VFS_EXEC_PROFILE_NONE;
 	if (policy == VFS_POLICY_PUBLIC) {
 		ip->vfs_flags = VFS_LABEL_F_PUBLIC;
-		ip->vfs_domain = VFS_DOMAIN_PUBLIC;
+		ip->vfs_scope_id = VFS_SCOPE_NONE;
 	} else if (policy == VFS_POLICY_WORKFLOW) {
 		ip->vfs_flags = VFS_LABEL_F_PROTECTED;
-		ip->vfs_domain = VFS_DOMAIN_WORKFLOW;
+		ip->vfs_scope_id = cred->scope_id;
 	} else {
 		ip->vfs_flags = VFS_LABEL_F_KERNEL_PRIVATE;
-		ip->vfs_domain = VFS_DOMAIN_PUBLIC;
+		ip->vfs_scope_id = VFS_SCOPE_NONE;
 	}
 	ip->vfs_policy = policy;
 	ip->vfs_checksum = vfs_inode_checksum(ip);
@@ -460,7 +841,7 @@ int vfs_inode_create_matches(struct inode *ip, const struct vfs_cred *cred,
 	return vfs_policy_subject_allowed(cred, policy) &&
 	       vfs_inode_label_valid(ip) && ip->vfs_policy == policy &&
 	       (policy != VFS_POLICY_WORKFLOW ||
-		ip->vfs_domain == VFS_DOMAIN_WORKFLOW);
+		ip->vfs_scope_id == cred->scope_id);
 }
 
 void vfs_inode_mark_free(struct inode *ip)
@@ -470,7 +851,7 @@ void vfs_inode_mark_free(struct inode *ip)
 	ip->vfs_magic = VFS_LABEL_MAGIC;
 	ip->vfs_version = VFS_LABEL_VERSION;
 	ip->vfs_flags = VFS_LABEL_F_FREE;
-	ip->vfs_domain = VFS_DOMAIN_PUBLIC;
+	ip->vfs_scope_id = VFS_SCOPE_NONE;
 	ip->vfs_policy = VFS_POLICY_FREE;
 	ip->vfs_exec_profile = VFS_EXEC_PROFILE_NONE;
 	ip->vfs_policy_generation = VFS_POLICY_GENERATION;

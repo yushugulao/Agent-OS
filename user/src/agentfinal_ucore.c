@@ -443,6 +443,7 @@ static void check_provenance_graph(void)
 static void check_run_ledger(void)
 {
 	int n;
+	int chain_gaps = 0;
 
 	n = agent_audit_snapshot(span_records, AGENT_AUDIT_MAX_RECORDS);
 	check(n > 0, "ledger audit records");
@@ -475,13 +476,15 @@ static void check_run_ledger(void)
 		      "ledger latest hash");
 	for (int i = 0; i < n; i++) {
 		check(span_records[i].record_hash != 0, "ledger record hash");
-		if (i > 0)
-			check(span_records[i].prev_hash ==
-				      span_records[i - 1].record_hash,
-			      "ledger chain");
+		if (i > 0 && span_records[i].prev_hash !=
+				     span_records[i - 1].record_hash)
+			chain_gaps++;
 	}
-	printf("agentfinal_ucore: run_ledger=1 records=%d hash=%d context=%d event=%d sched=%d prefetch=%d\n",
-	       n, (int)final_ledger.ledger_hash,
+	check((uint64)chain_gaps <= final_ledger.dropped_records,
+	      "ledger pruning gaps accounted");
+	printf("agentfinal_ucore: run_ledger=1 records=%d gaps=%d dropped=%d hash=%d context=%d event=%d sched=%d prefetch=%d\n",
+	       n, chain_gaps, (int)final_ledger.dropped_records,
+	       (int)final_ledger.ledger_hash,
 	       (int)final_ledger.context_records,
 	       (int)final_ledger.event_records,
 	       (int)final_ledger.sched_records,

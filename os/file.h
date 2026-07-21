@@ -29,7 +29,7 @@ struct inode {
 	uint vfs_magic;
 	uint vfs_version;
 	uint vfs_flags;
-	uint vfs_domain;
+	uint vfs_scope_id;
 	uint vfs_policy;
 	uint vfs_exec_profile;
 	uint vfs_policy_generation;

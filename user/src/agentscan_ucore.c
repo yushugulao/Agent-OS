@@ -22,13 +22,13 @@ static void wait_for_scan(uint64 min_runs)
 {
 	struct agent_info info;
 
-	for (int i = 0; i < 4000; i++) {
+	for (int i = 0; i < 1000; i++) {
 		check(agent_info(&info) == 0, "agent_info");
 		if (info.file_scan_runs >= min_runs &&
 		    info.file_scan_entries > 0 &&
 		    query_status_physical("present", "usershell") >= 1)
 			return;
-		sched_yield();
+		sleep(10);
 	}
 	check(0, "background scan did not finish");
 }

@@ -528,3 +528,18 @@ Test trace OK!
 当前不记录 `make full-verify` 全绿。最近一次运行在宿主机 Reader E2E 阶段中止：`host_tools/test_plain_ucore_reader_e2e.py` 断言 API Catalog 页面应包含 `Reader GET Routes`，而实际页面缺少该文本。由于脚本使用 `set -eu`，该失败发生后不会继续运行双目标 QEMU、AgentOS 专项和进程回收阶段。
 
 因此，上述安全专项应按各自独立脚本和通过标记记录；`fs-enospc-test` 还必须始终单独执行，因为 `run-full-verification.sh` 当前没有调用它。后续修复 Reader 页面或测试契约后，应重新运行完整入口，再更新本节状态。
+
+## 2026-07-21 workflow scope 安全回归
+
+本轮在冻结快照上分别运行 `make agentos-test`、`make fs-enospc-test`、`make proc-reap-test`、宿主提取器与存储策略测试、`make agentos-platform-build`、平台 QEMU 挂载抽测，以及增强目标和对照目标的 `kernel-stack-check`。没有把这些独立通过项误记为 `make full-verify` 全绿。
+
+关键结果：
+
+- Agent 专项 15/15 通过；`agentsecurity_ucore` 输出 `trusted_span_authority=1`、`trusted_cause_attribution=1`、`audit_authority_partition=1` 和 `parent passed`。
+- `agentscope_ucore` 输出 scope、IPC、metadata reload、三 writer 事务竞争、存储配额、action/audit/lease 隔离、容量保留、一次性 fd 委派、生命周期回收全部标记及 `parent passed`。
+- ENOSPC 的容量契约、普通耗尽、资源域配额和系统保留量用例全部通过；进程回收的 baseline、Agent 和 adversarial 用例全部通过。
+- 宿主提取器的路径穿越拒绝、旧输出清理、scope 选择隔离和存储策略 C 单测通过；相关 Python 文件通过语法检查。
+- AgentOS 平台构建通过，实际存储契约为 block `G=1195/S=512`、inode `G=342/S=64`；QEMU 成功挂载并启动 `rp_agentos_orch`，有界超时前无 panic 或非法文件系统。
+- 增强目标内核栈预算 `14032 < 16384`，对照目标 `7968 < 16384`；最终 `git diff --check` 通过且无残留 QEMU/构建进程。
+
+原始日志保存在仓库同级工作目录的 `scope-169-*.log` 文件中。

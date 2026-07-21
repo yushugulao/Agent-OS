@@ -12,6 +12,7 @@
 #define READER_IMAGE "vfs_reader"
 #define WRITER_IMAGE "vfs_writer"
 #define INHERITED_FD 3
+#define SAME_BOUND_FD 4
 
 static const char public_origin[] = "public-origin";
 
@@ -42,6 +43,10 @@ static void check_unprivileged_access(const char *public_file,
 		      "deny inherited read");
 		check(write(INHERITED_FD, "x", 1) == -1,
 		      "deny inherited write");
+		check(close(INHERITED_FD) == -1,
+		      "revoked inherited descriptor is absent");
+		check(close(SAME_BOUND_FD) == -1,
+		      "revoked same-scope descriptor is absent");
 	}
 	check(open(SECRET_FILE, O_RDONLY) == -1, "deny protected read open");
 	check(open(SECRET_FILE, O_WRONLY) == -1,
@@ -51,6 +56,8 @@ static void check_unprivileged_access(const char *public_file,
 	check(unlink(SECRET_FILE) == -1, "deny protected unlink");
 	check(open(".agentmeta", O_RDONLY) == -1,
 	      "deny kernel metadata read");
+	check(open(".agentmeta1", O_RDONLY) == -1,
+	      "deny alternate kernel metadata read");
 
 	unlink(public_file);
 	fd = open(public_file, O_CREATE | O_WRONLY | O_TRUNC);
@@ -76,9 +83,8 @@ static void check_read_delegation(void)
 	      info.filesystem_capability_mask == AGENT_CAP_CONTENT_READ,
 	      "exact read delegation");
 	fd = open(SECRET_FILE, O_RDONLY);
-	check(fd >= 0, "delegated read open");
+	check(fd == SAME_BOUND_FD, "delegated read descriptor");
 	check(read(fd, &byte, 1) == 1 && byte == 't', "delegated read");
-	check(close(fd) == 0, "delegated read close");
 	check(open(SECRET_FILE, O_WRONLY) == -1, "delegated write denied");
 	check(open(SECRET_FILE, O_WRONLY | O_TRUNC) == -1,
 	      "delegated truncate denied");
@@ -119,11 +125,14 @@ int main(int argc, char **argv)
 	}
 	if (strcmp(argv[1], "--same-bound") == 0) {
 		struct agent_info info;
+		char byte = 0;
 
 		check(agent_info(&info) == 0, "read rebound credentials");
 		check(info.filesystem_domain != 0 &&
 		      info.filesystem_capability_mask == AGENT_CAP_CONTENT_READ,
 		      "same image retains delegation");
+		check(read(SAME_BOUND_FD, &byte, 1) == 1 && byte == 'r',
+		      "same-scope exec retains descriptor");
 		exec_manifest_worker_image("agentvfs_probe", worker_image);
 		if (exec(worker_image, cross_argv) < 0)
 			exit(2);

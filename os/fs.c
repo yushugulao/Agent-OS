@@ -27,14 +27,36 @@ struct fs_storage_state {
 	uint free_inodes;
 	uint block_domain_limit;
 	uint inode_domain_limit;
+	uint workflow_block_domain_limit;
+	uint workflow_inode_domain_limit;
 	uint workflow_block_reserve;
+	uint workflow_block_guarantee;
 	uint system_block_reserve;
+	uint system_block_reserve_remaining;
 	uint workflow_inode_reserve;
+	uint workflow_inode_guarantee;
 	uint system_inode_reserve;
+	uint system_inode_reserve_remaining;
 	int ready;
 };
 
 static struct fs_storage_state fs_storage;
+
+_Static_assert(VFS_SCOPE_MAX_ACTIVE == FS_WORKFLOW_SCOPE_SLOTS,
+	       "storage and workflow admission slots must match");
+_Static_assert(FS_WORKFLOW_SCOPE_SLOTS > 0 &&
+	       FS_WORKFLOW_MAX_FREE_NUMERATOR > 0 &&
+	       FS_WORKFLOW_MAX_FREE_NUMERATOR <
+		       FS_WORKFLOW_MAX_FREE_DENOMINATOR &&
+	       FS_SYSTEM_BLOCK_MIN_RESERVE > 0 &&
+	       FS_SYSTEM_INODE_MIN_RESERVE > 0 &&
+	       FS_WORKFLOW_BLOCK_MIN_PER_SCOPE > 0 &&
+	       FS_WORKFLOW_INODE_MIN_PER_SCOPE > 0,
+	       "workflow storage policy must keep bounded shared capacity");
+
+static int writei_charged(struct inode *, const struct vfs_cred *,
+			  const struct fs_storage_charge *, int, uint64, uint,
+			  uint);
 
 // Read the super block.
 static void readsb(int dev, struct superblock *sb)
@@ -47,18 +69,15 @@ static void readsb(int dev, struct superblock *sb)
 
 static uint fs_div_round_up(uint value, uint divisor)
 {
-	return value / divisor + (value % divisor != 0);
+	return fs_policy_div_round_up(value, divisor);
 }
 
-static uint fs_reserve_value(uint configured, uint total, uint divisor)
+static uint fs_unreserved_capacity(uint free_count, uint system_reserve,
+				   uint other_guarantees)
 {
-	uint value = configured;
+	uint reserved = system_reserve + other_guarantees;
 
-	if (value == 0 && total != 0)
-		value = fs_div_round_up(total, divisor);
-	if (value > total)
-		value = total;
-	return value;
+	return free_count > reserved ? free_count - reserved : 0;
 }
 
 static int fs_layout_valid(void)
@@ -79,7 +98,14 @@ static int fs_layout_valid(void)
 	       sb.qmapstart == sb.bmapstart + bitmap_blocks &&
 	       sb.datastart == sb.qmapstart + owner_blocks &&
 	       sb.datastart < sb.size &&
-	       sb.nblocks == sb.size - sb.datastart;
+	       sb.nblocks == sb.size - sb.datastart &&
+	       fs_policy_contract_geometry_valid(
+		       sb.nblocks, sb.ninodes - 1,
+		       sb.storage_policy_version, sb.storage_scope_slots,
+		       sb.workflow_block_guarantee,
+		       sb.workflow_inode_guarantee,
+		       sb.system_block_reserve, sb.system_inode_reserve,
+		       sb.storage_policy_checksum);
 }
 
 static uint fs_qmap_read(int dev, uint block)
@@ -103,7 +129,7 @@ static void fs_qmap_write(int dev, uint block, uint owner)
 	brelse(bp);
 }
 
-static void fs_storage_rebuild(int dev)
+static void fs_storage_rebuild(int dev, int enforce_policy)
 {
 	uint max_owner = FS_OWNER_SYSTEM;
 	uint total_inodes = sb.ninodes - 1;
@@ -129,6 +155,14 @@ static void fs_storage_rebuild(int dev)
 		owner = fs_qmap_read(dev, block);
 		if (owner < FS_OWNER_SYSTEM)
 			panic("allocated block has no storage owner");
+		if (FS_OWNER_IS_SCOPE(owner)) {
+			owner = FS_OWNER_SCOPE_ID(owner);
+			if (owner < FS_OWNER_FIRST_DYNAMIC)
+				panic("allocated block has invalid workflow owner");
+		} else if (owner != FS_OWNER_SYSTEM &&
+			   owner < FS_OWNER_FIRST_DYNAMIC) {
+			panic("allocated block has invalid public owner");
+		}
 		if (owner > max_owner)
 			max_owner = owner;
 	}
@@ -145,25 +179,56 @@ static void fs_storage_rebuild(int dev)
 				panic("free inode has storage owner");
 			fs_storage.free_inodes++;
 		} else {
-			if (dip->fs_owner_domain < FS_OWNER_SYSTEM ||
+			uint owner = dip->fs_owner_domain;
+
+			if (owner < FS_OWNER_SYSTEM ||
 			    dip->fs_owner_version != FS_OWNER_VERSION)
 				panic("allocated inode has invalid storage owner");
-			if (dip->fs_owner_domain > max_owner)
-				max_owner = dip->fs_owner_domain;
+			if (FS_OWNER_IS_SCOPE(owner)) {
+				owner = FS_OWNER_SCOPE_ID(owner);
+				if (owner < FS_OWNER_FIRST_DYNAMIC)
+					panic("inode has invalid workflow owner");
+			} else if (owner != FS_OWNER_SYSTEM &&
+				   owner < FS_OWNER_FIRST_DYNAMIC) {
+				panic("inode has invalid public owner");
+			}
+			if (owner > max_owner)
+				max_owner = owner;
+			if (dip->vfs_version == VFS_LABEL_VERSION &&
+			    dip->vfs_policy == VFS_POLICY_WORKFLOW &&
+			    dip->vfs_scope_id >= VFS_SCOPE_FIRST_DYNAMIC) {
+				if (!FS_OWNER_IS_SCOPE(dip->fs_owner_domain) ||
+				    FS_OWNER_SCOPE_ID(dip->fs_owner_domain) !=
+					    dip->vfs_scope_id)
+					panic("workflow inode owner mismatch");
+				if (dip->vfs_scope_id > max_owner)
+					max_owner = dip->vfs_scope_id;
+			}
 		}
 		brelse(bp);
 	}
 
-	fs_storage.system_block_reserve = fs_reserve_value(
-		FS_SYSTEM_BLOCK_RESERVE, sb.nblocks, 32);
-	fs_storage.workflow_block_reserve = fs_reserve_value(
-		FS_WORKFLOW_BLOCK_RESERVE,
-		sb.nblocks - fs_storage.system_block_reserve, 16);
-	fs_storage.system_inode_reserve = fs_reserve_value(
-		FS_SYSTEM_INODE_RESERVE, total_inodes, 32);
-	fs_storage.workflow_inode_reserve = fs_reserve_value(
-		FS_WORKFLOW_INODE_RESERVE,
-		total_inodes - fs_storage.system_inode_reserve, 16);
+	fs_storage.system_block_reserve = sb.system_block_reserve;
+	fs_storage.system_inode_reserve = sb.system_inode_reserve;
+	fs_storage.workflow_block_guarantee =
+		sb.workflow_block_guarantee;
+	fs_storage.workflow_inode_guarantee =
+		sb.workflow_inode_guarantee;
+	if (enforce_policy && !fs_policy_contract_runtime_funded(
+			      fs_storage.free_blocks, fs_storage.free_inodes,
+			      fs_storage.workflow_block_guarantee,
+			      fs_storage.workflow_inode_guarantee))
+		panic("filesystem cannot fund workflow guarantees");
+	fs_storage.workflow_block_reserve =
+		fs_storage.workflow_block_guarantee * VFS_SCOPE_MAX_ACTIVE;
+	fs_storage.workflow_inode_reserve =
+		fs_storage.workflow_inode_guarantee * VFS_SCOPE_MAX_ACTIVE;
+	fs_storage.system_block_reserve_remaining = fs_policy_system_remaining(
+		fs_storage.free_blocks, fs_storage.workflow_block_guarantee,
+		fs_storage.system_block_reserve);
+	fs_storage.system_inode_reserve_remaining = fs_policy_system_remaining(
+		fs_storage.free_inodes, fs_storage.workflow_inode_guarantee,
+		fs_storage.system_inode_reserve);
 
 	uint public_blocks = sb.nblocks - fs_storage.system_block_reserve -
 			     fs_storage.workflow_block_reserve;
@@ -177,9 +242,55 @@ static void fs_storage_rebuild(int dev)
 		fs_storage.block_domain_limit = 1;
 	if (fs_storage.inode_domain_limit == 0)
 		fs_storage.inode_domain_limit = 1;
-	proc_storage_set_cookie_floor(max_owner == ~0U ? FS_OWNER_NONE :
-				      max_owner + 1);
+	fs_storage.workflow_block_domain_limit =
+		FS_WORKFLOW_DOMAIN_BLOCK_LIMIT ?
+			FS_WORKFLOW_DOMAIN_BLOCK_LIMIT :
+			fs_unreserved_capacity(
+				fs_storage.free_blocks,
+				fs_storage.system_block_reserve_remaining,
+				(VFS_SCOPE_MAX_ACTIVE - 1) *
+					fs_storage.workflow_block_guarantee);
+	fs_storage.workflow_inode_domain_limit =
+		FS_WORKFLOW_DOMAIN_INODE_LIMIT ?
+			FS_WORKFLOW_DOMAIN_INODE_LIMIT :
+			fs_unreserved_capacity(
+				fs_storage.free_inodes,
+				fs_storage.system_inode_reserve_remaining,
+				(VFS_SCOPE_MAX_ACTIVE - 1) *
+					fs_storage.workflow_inode_guarantee);
+	if (fs_storage.workflow_block_domain_limit <
+	    fs_storage.workflow_block_guarantee)
+		fs_storage.workflow_block_domain_limit =
+			fs_storage.workflow_block_guarantee;
+	if (fs_storage.workflow_inode_domain_limit <
+	    fs_storage.workflow_inode_guarantee)
+		fs_storage.workflow_inode_domain_limit =
+			fs_storage.workflow_inode_guarantee;
+	proc_storage_set_cookie_floor(max_owner >= FS_OWNER_ID_MASK ?
+				      FS_OWNER_NONE : max_owner + 1);
 	fs_storage.ready = 1;
+}
+
+int fs_storage_scope_admissible(void)
+{
+	uint required_blocks;
+	uint required_inodes;
+	int admissible = 0;
+	int enabled = intr_save();
+
+	if (!fs_storage.ready)
+		goto out;
+	required_blocks = fs_storage.system_block_reserve_remaining +
+		vfs_scope_storage_guarantee(VFS_SCOPE_NONE, 0,
+					    fs_storage.workflow_block_guarantee);
+	required_inodes = fs_storage.system_inode_reserve_remaining +
+		vfs_scope_storage_guarantee(VFS_SCOPE_NONE, 1,
+					    fs_storage.workflow_inode_guarantee);
+	admissible = fs_storage.free_blocks >= required_blocks &&
+		     fs_storage.free_inodes >= required_inodes;
+out:
+	intr_restore(enabled);
+	return admissible;
 }
 
 static int fs_storage_charge_from_vfs(const struct vfs_cred *cred,
@@ -189,17 +300,23 @@ static int fs_storage_charge_from_vfs(const struct vfs_cred *cred,
 
 	if (charge == 0 || cred == 0)
 		return -1;
-	if (cred->kernel) {
+	p = curr_proc();
+	if (cred->kernel && cred->scope_id == VFS_SCOPE_NONE) {
 		charge->owner = FS_OWNER_SYSTEM;
 		charge->level = FS_CHARGE_SYSTEM;
 		return 0;
 	}
-	p = curr_proc();
 	if (p == 0 || p->state != P_USED ||
-	    p->storage_domain_id < FS_OWNER_FIRST_DYNAMIC)
+	    p->storage_domain_id < FS_OWNER_FIRST_DYNAMIC ||
+	    p->storage_domain_id >= FS_OWNER_SCOPE_FLAG)
 		return -1;
-	if (cred->domain == VFS_DOMAIN_WORKFLOW) {
-		charge->owner = p->storage_domain_id;
+	if (cred->scope_id >= VFS_SCOPE_FIRST_DYNAMIC) {
+		if (cred->scope_id >= FS_OWNER_SCOPE_FLAG ||
+		    p->vfs_scope_id != cred->scope_id ||
+		    p->storage_domain_id != cred->scope_id ||
+		    !vfs_scope_active(cred->scope_id))
+			return -1;
+		charge->owner = FS_OWNER_SCOPE(cred->scope_id);
 		charge->level = FS_CHARGE_WORKFLOW;
 	} else if (p->resource_slot_reserved && p->resource_domain_admin) {
 		charge->owner = FS_OWNER_SYSTEM;
@@ -216,33 +333,75 @@ static int fs_storage_reserve(const struct fs_storage_charge *charge,
 {
 	uint *free_count;
 	uint reserve;
+	uint guarantee;
 	uint limit;
+	uint *system_remaining;
+	uint scope_id = VFS_SCOPE_NONE;
 	int enabled;
 
 	if (!fs_storage.ready || charge == 0 ||
 	    charge->level > FS_CHARGE_SYSTEM ||
 	    charge->owner < FS_OWNER_SYSTEM)
 		return -1;
+	if ((charge->level == FS_CHARGE_WORKFLOW &&
+	     (!FS_OWNER_IS_SCOPE(charge->owner) ||
+	      FS_OWNER_SCOPE_ID(charge->owner) < FS_OWNER_FIRST_DYNAMIC)) ||
+	    (charge->level == FS_CHARGE_PUBLIC &&
+	     FS_OWNER_IS_SCOPE(charge->owner)) ||
+	    (charge->level == FS_CHARGE_SYSTEM &&
+	     charge->owner != FS_OWNER_SYSTEM))
+		return -1;
 	free_count = inode ? &fs_storage.free_inodes : &fs_storage.free_blocks;
-	limit = inode ? fs_storage.inode_domain_limit :
-			fs_storage.block_domain_limit;
-	reserve = inode ? fs_storage.system_inode_reserve :
-			  fs_storage.system_block_reserve;
-	if (charge->level == FS_CHARGE_PUBLIC)
-		reserve += inode ? fs_storage.workflow_inode_reserve :
-				   fs_storage.workflow_block_reserve;
-	else if (charge->level == FS_CHARGE_SYSTEM)
-		reserve = 0;
-
+	system_remaining = inode ?
+		&fs_storage.system_inode_reserve_remaining :
+		&fs_storage.system_block_reserve_remaining;
+	if (charge->level == FS_CHARGE_WORKFLOW)
+		limit = inode ? fs_storage.workflow_inode_domain_limit :
+				fs_storage.workflow_block_domain_limit;
+	else
+		limit = inode ? fs_storage.inode_domain_limit :
+				fs_storage.block_domain_limit;
+	guarantee = inode ? fs_storage.workflow_inode_guarantee :
+			      fs_storage.workflow_block_guarantee;
+	if (charge->level == FS_CHARGE_WORKFLOW)
+		scope_id = FS_OWNER_SCOPE_ID(charge->owner);
 	enabled = intr_save();
+	if (charge->level != FS_CHARGE_SYSTEM) {
+		reserve = *system_remaining;
+		reserve += vfs_scope_storage_guarantee(scope_id, inode,
+						       guarantee);
+	} else {
+		// SYSTEM consumes a fungible reserve credit only after shared
+		// capacity is gone. Lower tiers then stop reserving that spent
+		// credit while every workflow guarantee remains intact.
+		reserve = vfs_scope_storage_guarantee(VFS_SCOPE_NONE, inode,
+						      guarantee);
+	}
+
 	if (*free_count <= reserve) {
 		intr_restore(enabled);
 		return -1;
 	}
-	if (charge->owner != FS_OWNER_SYSTEM &&
-	    proc_storage_reserve(charge->owner, inode, limit) < 0) {
+	if (charge->level == FS_CHARGE_WORKFLOW) {
+		if (proc_storage_reserve(scope_id, inode, limit) < 0) {
+			intr_restore(enabled);
+			return -1;
+		}
+		if (vfs_scope_storage_reserve(scope_id, inode, limit) < 0) {
+			proc_storage_release(scope_id, inode);
+			intr_restore(enabled);
+			return -1;
+		}
+	} else if (charge->owner != FS_OWNER_SYSTEM &&
+		   proc_storage_reserve(charge->owner, inode, limit) < 0) {
 		intr_restore(enabled);
 		return -1;
+	}
+	if (charge->level == FS_CHARGE_SYSTEM &&
+	    *free_count <= reserve + *system_remaining) {
+		if (*system_remaining == 0)
+			panic("system storage reserve invariant");
+		(*system_remaining)--;
 	}
 	(*free_count)--;
 	intr_restore(enabled);
@@ -253,6 +412,11 @@ static void fs_storage_release(uint owner, int inode)
 {
 	uint *free_count = inode ? &fs_storage.free_inodes :
 					  &fs_storage.free_blocks;
+	uint *system_remaining = inode ?
+		&fs_storage.system_inode_reserve_remaining :
+		&fs_storage.system_block_reserve_remaining;
+	uint system_reserve = inode ? fs_storage.system_inode_reserve :
+				      fs_storage.system_block_reserve;
 	uint total = inode ? sb.ninodes - 1 : sb.nblocks;
 	int enabled;
 
@@ -262,8 +426,112 @@ static void fs_storage_release(uint owner, int inode)
 	if (*free_count >= total)
 		panic("storage free count invariant");
 	(*free_count)++;
-	proc_storage_release(owner, inode);
+	if (owner == FS_OWNER_SYSTEM && *system_remaining < system_reserve)
+		(*system_remaining)++;
+	if (FS_OWNER_IS_SCOPE(owner)) {
+		vfs_scope_storage_release(FS_OWNER_SCOPE_ID(owner), inode);
+		proc_storage_release(FS_OWNER_SCOPE_ID(owner), inode);
+	} else {
+		proc_storage_release(owner, inode);
+	}
 	intr_restore(enabled);
+}
+
+static int fs_dinode_has_scope_owner(int dev, uint inum)
+{
+	struct buf *bp;
+	struct dinode *dip;
+	int owned;
+
+	if (inum == 0 || inum >= sb.ninodes)
+		return 0;
+	bp = bread(dev, IBLOCK(inum, sb));
+	dip = (struct dinode *)bp->data + inum % IPB;
+	owned = dip->type != 0 && dip->fs_owner_version == FS_OWNER_VERSION &&
+		FS_OWNER_IS_SCOPE(dip->fs_owner_domain) &&
+		FS_OWNER_SCOPE_ID(dip->fs_owner_domain) >=
+			FS_OWNER_FIRST_DYNAMIC;
+	brelse(bp);
+	return owned;
+}
+
+// Dynamic workflow namespaces are boot leases. No persistent recovery token
+// exists yet, so a reboot revokes every old lease before a new workflow can
+// be admitted. The three passes are idempotent across power loss: names are
+// detached first, dinodes are then retired, and tagged orphan blocks last.
+static void fs_reap_boot_workflow_objects(int dev)
+{
+	struct fs_storage_charge system_charge = {
+		.owner = FS_OWNER_SYSTEM,
+		.level = FS_CHARGE_SYSTEM,
+	};
+	struct vfs_cred kernel_cred;
+	struct inode *root;
+	struct dirent de;
+
+	vfs_cred_kernel(&kernel_cred);
+	root = root_dir();
+	if (root == 0)
+		panic("missing root during workflow reap");
+	for (uint64 off = 0; off < root->size; off += sizeof(de)) {
+		if (readi(root, &kernel_cred, 0, (uint64)&de, off,
+			  sizeof(de)) != sizeof(de))
+			panic("workflow directory reap read");
+		if (de.inum == 0 ||
+		    !fs_dinode_has_scope_owner(dev, de.inum))
+			continue;
+		memset(&de, 0, sizeof(de));
+		if (writei_charged(root, &kernel_cred, &system_charge, 0,
+				   (uint64)&de, off, sizeof(de)) != sizeof(de))
+			panic("workflow directory reap write");
+	}
+	iput(root);
+
+	for (uint inum = 1; inum < sb.ninodes; inum++) {
+		struct buf *bp = bread(dev, IBLOCK(inum, sb));
+		struct dinode *dip = (struct dinode *)bp->data + inum % IPB;
+		uint incarnation;
+
+		if (dip->type == 0 ||
+		    !FS_OWNER_IS_SCOPE(dip->fs_owner_domain)) {
+			brelse(bp);
+			continue;
+		}
+		incarnation = dip->vfs_incarnation;
+		memset(dip, 0, sizeof(*dip));
+		dip->vfs_magic = VFS_LABEL_MAGIC;
+		dip->vfs_version = VFS_LABEL_VERSION;
+		dip->vfs_flags = VFS_LABEL_F_FREE;
+		dip->vfs_policy = VFS_POLICY_FREE;
+		dip->vfs_exec_profile = VFS_EXEC_PROFILE_NONE;
+		dip->vfs_policy_generation = VFS_POLICY_GENERATION;
+		dip->vfs_incarnation = incarnation ? incarnation : 1;
+		dip->vfs_checksum = vfs_label_checksum(
+			inum, dip->vfs_magic, dip->vfs_version, dip->vfs_flags,
+			dip->vfs_scope_id, dip->vfs_policy,
+			dip->vfs_exec_profile, dip->vfs_policy_generation,
+			dip->vfs_incarnation, dip->fs_owner_domain,
+			dip->fs_owner_version);
+		bwrite(bp);
+		brelse(bp);
+	}
+
+	for (uint block = sb.datastart; block < sb.size; block++) {
+		struct buf *bp;
+		uint owner = fs_qmap_read(dev, block);
+		uint bit;
+
+		if (!FS_OWNER_IS_SCOPE(owner))
+			continue;
+		bp = bread(dev, BBLOCK(block, sb));
+		bit = block % BPB;
+		if (bp->data[bit / 8] & (1 << (bit % 8))) {
+			bp->data[bit / 8] &= ~(1 << (bit % 8));
+			bwrite(bp);
+		}
+		brelse(bp);
+		fs_qmap_write(dev, block, FS_OWNER_NONE);
+	}
 }
 
 // Init fs
@@ -274,7 +542,9 @@ void fsinit()
 	if (!fs_layout_valid()) {
 		panic("invalid file system");
 	}
-	fs_storage_rebuild(dev);
+	fs_storage_rebuild(dev, 0);
+	fs_reap_boot_workflow_objects(dev);
+	fs_storage_rebuild(dev, 1);
 }
 
 // Zero a block.
@@ -391,7 +661,7 @@ struct inode *ialloc(uint dev, short type,
 			dip->fs_owner_version = FS_OWNER_VERSION;
 			dip->vfs_checksum = vfs_label_checksum(
 				inum, dip->vfs_magic, dip->vfs_version,
-				dip->vfs_flags, dip->vfs_domain,
+			dip->vfs_flags, dip->vfs_scope_id,
 				dip->vfs_policy, dip->vfs_exec_profile,
 				dip->vfs_policy_generation,
 				dip->vfs_incarnation, dip->fs_owner_domain,
@@ -429,7 +699,7 @@ void iupdate(struct inode *ip)
 	dip->vfs_magic = ip->vfs_magic;
 	dip->vfs_version = ip->vfs_version;
 	dip->vfs_flags = ip->vfs_flags;
-	dip->vfs_domain = ip->vfs_domain;
+	dip->vfs_scope_id = ip->vfs_scope_id;
 	dip->vfs_policy = ip->vfs_policy;
 	dip->vfs_exec_profile = ip->vfs_exec_profile;
 	dip->vfs_policy_generation = ip->vfs_policy_generation;
@@ -509,7 +779,7 @@ void ivalid(struct inode *ip)
 		ip->vfs_magic = dip->vfs_magic;
 		ip->vfs_version = dip->vfs_version;
 		ip->vfs_flags = dip->vfs_flags;
-		ip->vfs_domain = dip->vfs_domain;
+		ip->vfs_scope_id = dip->vfs_scope_id;
 		ip->vfs_policy = dip->vfs_policy;
 		ip->vfs_exec_profile = dip->vfs_exec_profile;
 		ip->vfs_policy_generation = dip->vfs_policy_generation;
@@ -663,39 +933,30 @@ static void bmap_discard(struct inode *ip, uint bn)
 	}
 }
 
-// Truncate inode (discard contents).
-int itrunc(struct inode *ip, const struct vfs_cred *cred)
+// Shrink an inode and release every whole block beyond the new end.
+int itruncate(struct inode *ip, const struct vfs_cred *cred, uint size)
 {
-	int i, j;
-	struct buf *bp;
-	uint *a;
+	uint first_discard;
+	uint old_blocks;
 
 	if (!vfs_inode_authorize(ip, cred, VFS_OP_TRUNCATE) ||
 	    !exec_policy_inode_mutable(ip))
 		return -1;
-
-	for (i = 0; i < NDIRECT; i++) {
-		if (ip->addrs[i]) {
-			bfree(ip->dev, ip->addrs[i]);
-			ip->addrs[i] = 0;
-		}
-	}
-
-	if (ip->addrs[NDIRECT]) {
-		bp = bread(ip->dev, ip->addrs[NDIRECT]);
-		a = (uint *)bp->data;
-		for (j = 0; j < NINDIRECT; j++) {
-			if (a[j])
-				bfree(ip->dev, a[j]);
-		}
-		brelse(bp);
-		bfree(ip->dev, ip->addrs[NDIRECT]);
-		ip->addrs[NDIRECT] = 0;
-	}
-
-	ip->size = 0;
+	if (size > ip->size)
+		return -1;
+	first_discard = (size + BSIZE - 1) / BSIZE;
+	old_blocks = (ip->size + BSIZE - 1) / BSIZE;
+	for (uint bn = first_discard; bn < old_blocks; bn++)
+		bmap_discard(ip, bn);
+	ip->size = size;
 	iupdate(ip);
 	return 0;
+}
+
+// Truncate inode (discard contents).
+int itrunc(struct inode *ip, const struct vfs_cred *cred)
+{
+	return itruncate(ip, cred, 0);
 }
 
 // Read data from inode.
@@ -813,7 +1074,7 @@ int writei(struct inode *ip, const struct vfs_cred *cred, int user_src,
 // Look for a directory entry in a directory.
 // If found, set *poff to byte offset of entry.
 struct inode *dirlookup(struct inode *dp, char *name, uint *poff,
-			uint policy, int *status)
+			uint policy, uint scope_id, int *status)
 {
 	uint off, found_off = 0;
 	struct dirent de;
@@ -851,6 +1112,11 @@ struct inode *dirlookup(struct inode *dp, char *name, uint *poff,
 				return 0;
 			}
 			if (policy != 0 && target->vfs_policy != policy) {
+				iput(target);
+				continue;
+			}
+			if (target->vfs_policy == VFS_POLICY_WORKFLOW &&
+			    target->vfs_scope_id != scope_id) {
 				iput(target);
 				continue;
 			}
@@ -924,14 +1190,16 @@ int dirlink(struct inode *dp, char *name, uint inum,
 	struct inode *ip;
 	struct inode *target;
 	struct vfs_cred kernel_cred;
-	struct fs_storage_charge charge;
+	struct fs_storage_charge charge = {
+		.owner = FS_OWNER_SYSTEM,
+		.level = FS_CHARGE_SYSTEM,
+	};
 	uint target_policy;
+	uint target_scope_id;
 	int lookup_status;
 	if (dp == 0 || dp->type != T_DIR)
 		return -1;
 	if (!vfs_inode_authorize(dp, cred, VFS_OP_CREATE))
-		return -1;
-	if (fs_storage_charge_from_vfs(cred, &charge) < 0)
 		return -1;
 	target = inode_get(dp->dev, inum);
 	if (target == 0 || !vfs_inode_label_valid(target)) {
@@ -940,10 +1208,36 @@ int dirlink(struct inode *dp, char *name, uint inum,
 		return -1;
 	}
 	target_policy = target->vfs_policy;
+	target_scope_id = target->vfs_scope_id;
+	if ((target_policy == VFS_POLICY_WORKFLOW &&
+	     target_scope_id >= VFS_SCOPE_FIRST_DYNAMIC &&
+	     (cred == 0 || cred->scope_id != target_scope_id)) ||
+	    (target_policy == VFS_POLICY_PUBLIC &&
+	     (cred == 0 || cred->scope_id != VFS_SCOPE_NONE || cred->kernel)) ||
+	    (target_policy == VFS_POLICY_KERNEL_PRIVATE &&
+	     (cred == 0 || !cred->kernel ||
+	      cred->scope_id != VFS_SCOPE_NONE))) {
+		iput(target);
+		return -1;
+	}
 	iput(target);
 	vfs_cred_kernel(&kernel_cred);
+	// Names of immutable SYSTEM images are reserved across every workflow
+	// namespace so a mutable artifact cannot shadow a trusted executable.
+	if (target_policy == VFS_POLICY_WORKFLOW &&
+	    target_scope_id >= VFS_SCOPE_FIRST_DYNAMIC) {
+		ip = dirlookup(dp, name, 0, VFS_POLICY_WORKFLOW,
+			       VFS_SCOPE_SYSTEM, &lookup_status);
+		if (ip != 0) {
+			iput(ip);
+			return -1;
+		}
+		if (lookup_status != FS_LOOKUP_ABSENT)
+			return -1;
+	}
 	// Check that name is not present.
-	ip = dirlookup(dp, name, 0, target_policy, &lookup_status);
+	ip = dirlookup(dp, name, 0, target_policy, target_scope_id,
+		       &lookup_status);
 	if (ip != 0) {
 		iput(ip);
 		return -1;
@@ -959,6 +1253,8 @@ int dirlink(struct inode *dp, char *name, uint inum,
 		if (de.inum == 0)
 			break;
 	}
+	if (off >= dp->size)
+		return -1;
 	strncpy(de.name, name, DIRSIZ);
 	de.inum = inum;
 	if (writei_charged(dp, &kernel_cred, &charge, 0, (uint64)&de,
@@ -974,13 +1270,14 @@ int dirunlink(struct inode *dp, char *name, uint offset, uint expected_inum,
 	struct dirent de;
 	struct inode *target;
 	struct vfs_cred kernel_cred;
-	struct fs_storage_charge charge;
+	struct fs_storage_charge charge = {
+		.owner = FS_OWNER_SYSTEM,
+		.level = FS_CHARGE_SYSTEM,
+	};
 
 	if (dp == 0 || dp->type != T_DIR)
 		return -1;
 	if (!vfs_inode_authorize(dp, cred, VFS_OP_DELETE))
-		return -1;
-	if (fs_storage_charge_from_vfs(cred, &charge) < 0)
 		return -1;
 	if (offset >= dp->size || offset % sizeof(de) != 0)
 		return -1;
@@ -1007,6 +1304,71 @@ int dirunlink(struct inode *dp, char *name, uint offset, uint expected_inum,
 			   offset, sizeof(de)) != sizeof(de))
 		return -1;
 	return 0;
+}
+
+// Remove every mutable object owned by a retired workflow namespace.  Scope
+// identifiers are never reused, so clearing the directory entries makes the
+// namespace teardown final even if an inode remains pinned briefly in memory.
+int fs_reclaim_scope_files(uint scope_id)
+{
+	struct fs_storage_charge system_charge = {
+		.owner = FS_OWNER_SYSTEM,
+		.level = FS_CHARGE_SYSTEM,
+	};
+	struct vfs_cred kernel_cred;
+	struct inode *dp;
+	struct inode *target;
+	struct dirent de;
+	uint64 off;
+	int reclaimed = 0;
+	int failed = 0;
+
+	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
+	    !vfs_scope_retiring(scope_id))
+		return -1;
+	dp = root_dir();
+	if (dp == 0)
+		return -1;
+	vfs_cred_kernel(&kernel_cred);
+	for (off = 0; off < dp->size; off += sizeof(de)) {
+		if (readi(dp, &kernel_cred, 0, (uint64)&de, off,
+			  sizeof(de)) != sizeof(de)) {
+			failed = 1;
+			break;
+		}
+		if (de.inum == 0)
+			continue;
+		target = inode_get(dp->dev, de.inum);
+		if (target == 0) {
+			failed = 1;
+			continue;
+		}
+		ivalid(target);
+		if (!vfs_inode_label_valid(target) ||
+		    target->vfs_policy != VFS_POLICY_WORKFLOW ||
+		    target->vfs_scope_id != scope_id) {
+			iput(target);
+			continue;
+		}
+		if (target->type != T_FILE ||
+		    !exec_policy_inode_mutable(target)) {
+			iput(target);
+			failed = 1;
+			continue;
+		}
+		memset(&de, 0, sizeof(de));
+		if (writei_charged(dp, &kernel_cred, &system_charge, 0,
+				   (uint64)&de, off, sizeof(de)) != sizeof(de)) {
+			iput(target);
+			failed = 1;
+			continue;
+		}
+		target->removed = 1;
+		iput(target);
+		reclaimed++;
+	}
+	iput(dp);
+	return failed ? -1 : reclaimed;
 }
 
 //Return the inode of the root directory
@@ -1040,7 +1402,10 @@ struct inode *fs_create(char *path, short type, int *created,
 		iput(dp);
 		return 0;
 	}
-	ip = dirlookup(dp, path, 0, policy, &lookup_status);
+	ip = dirlookup(dp, path, 0, policy,
+		       policy == VFS_POLICY_WORKFLOW ? cred->scope_id :
+						 VFS_SCOPE_NONE,
+		       &lookup_status);
 	if (ip != 0) {
 		iput(dp);
 		ivalid(ip);
@@ -1082,7 +1447,8 @@ struct inode *fs_create(char *path, short type, int *created,
 }
 
 // Find the corresponding inode in one security namespace.
-struct inode *namei_policy_status(char *path, uint policy, int *status)
+struct inode *namei_scope_status(char *path, uint policy, uint scope_id,
+				 int *status)
 {
 	int skip = 0;
 	struct inode *ip;
@@ -1096,12 +1462,12 @@ struct inode *namei_policy_status(char *path, uint policy, int *status)
 	struct inode *dp = root_dir();
 	if (dp == 0)
 		return 0;
-	ip = dirlookup(dp, path + skip, 0, policy, status);
+	ip = dirlookup(dp, path + skip, 0, policy, scope_id, status);
 	iput(dp);
 	return ip;
 }
 
-struct inode *namei_policy(char *path, uint policy)
+struct inode *namei_scope(char *path, uint policy, uint scope_id)
 {
-	return namei_policy_status(path, policy, 0);
+	return namei_scope_status(path, policy, scope_id, 0);
 }

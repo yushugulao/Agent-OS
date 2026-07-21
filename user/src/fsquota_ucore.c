@@ -351,6 +351,10 @@ int main(void)
 	      "trusted workflow bootstrap");
 	check(pipe(ready_pipe) == 0, "create attacker report pipe");
 	check(pipe(control_pipe) == 0, "create attacker control pipe");
+	check(agent_scope_delegate_fd(ready_pipe[1]) == AGENT_STATUS_OK,
+	      "delegate attacker report pipe");
+	check(agent_scope_delegate_fd(control_pipe[0]) == AGENT_STATUS_OK,
+	      "delegate attacker control pipe");
 	attacker = fork();
 	check(attacker >= 0, "create public attacker domain");
 	if (attacker == 0) {

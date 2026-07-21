@@ -66,12 +66,12 @@ bash scripts/run-agent-tests.sh
 
 脚本会按顺序启动 QEMU，并运行以下测试程序：
 
-下表描述当前测试程序的覆盖契约和通过标记。2026-07-21 已完成完整 AgentOS 专项 QEMU 复测；其后新增的路由槽实际投递和队列消费后立即重接纳断言，也分别通过 `agentsecurity_ucore` 与 `agentloop_ucore` 定向 QEMU 复测。
+下表同时区分既有运行证据和本次新增回归契约。2026-07-21 的输出支持既有 Agent/route/queue 机制；可信 workflow scope、私有 cause/span owner 和审计 authority 分区是其后新增，必须以本轮 QEMU 日志为准，不能从程序已编译或标记字符串存在推断通过。
 
 | 测试程序 | 覆盖重点 | 通过标记 |
 | --- | --- | --- |
 | `agentfinal_ucore` | Agent 创建、Context 映射、批量工具调用、Context Path、snapshot、rollback、用户 cache、timeline、provenance、Run Ledger。 | `agentfinal_ucore: parent passed` |
-| `agentfs_ucore` | 真实 inode 绑定、`.agentmeta`、属性查询、索引查询、查询缓存、内容摘要、预取提示、文件删除清理。 | `agentfs_ucore: parent passed` |
+| `agentfs_ucore` | 真实 inode 绑定、metadata 双 bank、属性查询、索引查询、查询缓存、内容摘要、预取提示、文件删除清理。 | `agentfs_ucore: parent passed` |
 | `agentscan_ucore` | 根目录自动扫描、自动 metadata 写入、文件创建和删除后的 metadata 更新。 | `agentscan_ucore: parent passed` |
 | `agentloop_ucore` | FIFO、stable source=4、directed=8、external=12、KERNEL origin 预留容量、消费后配额归还、慢 watcher 广播隔离、watch/unwatch、timeout、heartbeat、wait cancel、事件因果。 | `message_source_limit=4`、`ipc_class_limit=8`、`external_limit=12`、`system_event_reserved=4`、`external_reject_reclaim=1`、`broadcast_slow_watcher_isolated=1`、`parent passed` |
 | `agentsched_ucore` | 角色权重、受权调度配置、事件优先、调度原因记录、公平性观测。 | `agentsched_ucore: parent passed` |
@@ -80,12 +80,17 @@ bash scripts/run-agent-tests.sh
 | `agentbench_ucore` | 批量工具、Context、文件查询、预取、timeout/heartbeat，以及显式 route 下的 wait/wake 计时。 | `agentbench_ucore: parent passed` |
 | `labbench_ucore` | 综合场景中的性能入口，包装运行 `agentbench_ucore`。 | `labbench_ucore: parent passed` |
 | `labdemo_ucore` | orchestrator 建立 sentinel -> investigator -> recovery 路由后的恢复场景、文件查询、预取交接、消息、权限、audit/timeline/provenance。 | `labdemo_ucore: parent passed` |
-| `agentsecurity_ucore` | 普通/低权限拒绝、route grant/revoke、旧 controller 隔离、target consent、source 退出回收、`.agentmeta`、scoped action/artifact、审计权限、mail/trace。 | `route_source_enforced=1`、`route_target_isolated=1`、`ipc_route_authorization=1`、`message_route_lifecycle=1`、`target_route_consent=1`、`route_slot_reclaimed=1`、`parent passed` |
+| `agentsecurity_ucore` | 既有权限/route/controller 负向检查；新增用户非零 cause/span 拒绝、可信跨 Agent source attribution、low/high audit authority 隔离。 | `trusted_span_authority=1`、`trusted_cause_attribution=1`、`audit_authority_partition=1`、`parent passed`；本轮通过 |
 | `agenttrust_ucore` | 可执行映像 W^X、密封映像不可变、bootstrap 授权范围、Agent 角色与可信映像绑定。 | `agenttrust_ucore: parent passed` |
 | `agentvfs_ucore` | 工作流文件能力、公共/工作流命名空间隔离、继承描述符重新鉴权、精确能力委派和失败事务原子性。 | `agentvfs_ucore: parent passed` |
+| `agentscope_ucore` | syscall 541 factory、542 一次性 pipe fd 委派、动态 scope、同名对象/action/lease/audit/IPC 隔离、scope-local metadata reload、并发 metadata 事务、配额保证和 retirement 回收。 | `cross_scope_isolation=1`、`scope_reload_isolation=1`、`ipc_scope_isolation=1`、`metadata_transactions=1`、`scope_capacity_reservation=1`、`transactional_fd_delegation=1`、`lifecycle_reclamation=1`、`parent passed`；本轮通过 |
 | `usersafety_ucore` | syscall 指针、字符串、`exec` 参数、线程入口、等待队列、管道、文件和信号量输入范围。 | `usersafety_ucore: parent passed` |
 
 原始输出不在本文档重复展开，统一保存在 [test-record.md](test-record.md)。每个测试的流程和断言解释见 [testing-details.md](testing-details.md)。
+
+本次 scope 回归核对的固定机制参数如下：PUBLIC=0、SYSTEM=1、动态 workflow>=2，最多4个 active/retiring scope；进程普通槽96、受控保留槽32、每 scope 保留8；metadata/dependency/action/edit/span-prefetch 每 scope 分别112/16/8/8/8。审计物理512、每 scope128，low/high各64，low principal上限16、high active principal上限8；high 满时只能自滚或回收 inactive principal，active principal 互不淘汰。存储策略按完成镜像空闲量核算并把 G/S 持久化到 superblock，每 scope 硬下限320 inode/512 block，SYSTEM 硬下限8 inode/512 block；当前平台镜像实际核算为每 scope342/1195、SYSTEM 64/512，构建日志必须与内核使用同一版本化契约。
+
+账本验证不得假设当前可见窗口 sequence 连续：系统 sequence 跨 scope 单调，low/high/principal 分区独立滚动。测试仅对无 gap 的相邻记录核验直接 `prev_hash`，并用 `dropped_records=total_records-visible_records` 解释窗口外记录。非活跃 principal 的旧 high 证据是可观测但有界的历史窗口。
 
 ## 资源安全与内核栈入口
 
@@ -114,13 +119,13 @@ make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 
 | 赛题任务 | 对应测试 |
 | --- | --- |
-| 任务一：Agent 进程与地址空间 | `agentfinal_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`usersafety_ucore` |
+| 任务一：Agent 进程与地址空间 | `agentfinal_ucore`、`agentscope_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`usersafety_ucore` |
 | 任务二：结构化工具调用 | `agentfinal_ucore`、`agentbench_ucore`、`agentsecurity_ucore` |
-| 任务三：Context Path | `agentfinal_ucore`、`agentscan_ucore`、`labdemo_ucore` |
-| 任务四：文件属性查询 | `agentfs_ucore`、`agentscan_ucore`、`agentbench_ucore`、`agentconflict_ucore`、`agentvfs_ucore` |
-| 任务五：Agent Loop | `agentloop_ucore`、`agentsched_ucore`、`agentbench_ucore`、`labdemo_ucore` |
+| 任务三：Context Path | `agentfinal_ucore`、`agentscope_ucore`、`agentsecurity_ucore`、`agentscan_ucore`、`labdemo_ucore` |
+| 任务四：文件属性查询 | `agentfs_ucore`、`agentscope_ucore`、`agentscan_ucore`、`agentbench_ucore`、`agentconflict_ucore`、`agentvfs_ucore` |
+| 任务五：Agent Loop | `agentloop_ucore`、`agentscope_ucore`、`agentsched_ucore`、`agentbench_ucore`、`labdemo_ucore` |
 | 任务六：综合场景 | `labdemo_ucore`、`labbench_ucore`、`make dual-platform-run` |
-| 安全与稳健性复测 | `agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`、`make fs-enospc-test`、`make proc-reap-test`、`make kernel-stack-check` |
+| 安全与稳健性复测 | `agentscope_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`、`make fs-enospc-test`、`make proc-reap-test`、`make kernel-stack-check` |
 
 ## 性能数据说明
 
@@ -183,7 +188,7 @@ results/latest/
 
 ## 当前验证状态
 
-本文不把当前 `make full-verify` 记录为全绿。最近一次聚合入口在 `host_tools/test_plain_ucore_reader_e2e.py` 的 API Catalog 页面断言处中止：生成页面缺少预期文本 `Reader GET Routes`。该宿主机 Reader E2E 失败发生在后续 QEMU 阶段之前，因此不能用这次运行推断后续专项均已执行；各专项结果应以对应脚本的独立输出和通过标记为准。
+本文仍不把当前 `make full-verify` 记录为全绿：最近一次聚合入口在宿主机 Reader E2E 处中止。但本次所需专项已独立运行，不能与该历史聚合失败混为一谈：`scripts/run-agent-tests.sh` 15/15 通过，`agentscope_ucore` 和 `agentsecurity_ucore` 的新增标记均真实产生；ENOSPC、进程回收、宿主提取器、存储策略、AgentOS 平台构建与 QEMU 挂载也分别通过。详细命令、关键输出和边界见 [test-record.md](test-record.md)。
 
 ## 当前范围说明
 

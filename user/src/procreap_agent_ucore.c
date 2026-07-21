@@ -88,6 +88,10 @@ static void check_agent_creation_under_unreaped_pressure(void)
 	check(pipe(ready_pipe) == 0, "create Agent pressure ready pipe");
 	check(pipe(release_pipe) == 0,
 	      "create Agent pressure release pipe");
+	check(agent_scope_delegate_fd(ready_pipe[1]) == AGENT_STATUS_OK,
+	      "delegate Agent pressure ready pipe");
+	check(agent_scope_delegate_fd(release_pipe[0]) == AGENT_STATUS_OK,
+	      "delegate Agent pressure release pipe");
 	holder = fork();
 	check(holder >= 0, "create ordinary unreaped holder");
 	if (holder == 0) {
@@ -133,7 +137,12 @@ static void check_agent_reserve_under_live_pressure(void)
 	check(pipe(release_pipe) == 0,
 	      "create live global pressure pipe");
 	for (int i = 0; i < LIVE_GLOBAL_PRESSURE_ROUNDS; i++) {
-		int child = fork();
+		int child;
+
+		check(agent_scope_delegate_fd(release_pipe[0]) ==
+			      AGENT_STATUS_OK,
+		      "delegate live global pressure pipe");
+		child = fork();
 
 		if (child == 0) {
 			close(release_pipe[1]);
@@ -225,6 +234,10 @@ static void check_normal_score_boundary(void)
 
 	check(pipe(ready_pipe) == 0, "create normal readiness pipe");
 	check(pipe(stop_pipe) == 0, "create normal stop pipe");
+	check(agent_scope_delegate_fd(ready_pipe[1]) == AGENT_STATUS_OK,
+	      "delegate normal readiness pipe");
+	check(agent_scope_delegate_fd(stop_pipe[0]) == AGENT_STATUS_OK,
+	      "delegate normal stop pipe");
 	runner = fork();
 	check(runner >= 0, "create normal runner");
 	if (runner == 0) {

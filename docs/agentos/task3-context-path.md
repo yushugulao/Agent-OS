@@ -95,19 +95,19 @@ Context 使用双份数据：
 
 ## 因果链记录
 
-Context v6 会把工具调用、手动记录和事件消费串成轻量因果链，并为每条记录维护完整性链：
+Context v6 会把工具调用、手动记录和事件消费串成轻量因果链，并为每条记录维护完整性链。公开 cause/span 之外，内核 PCB sidecar 保存 source pid/control id 和 span owner，公开整数本身不构成可信身份：
 
 1. 第一条自动工具记录的 `cause_sequence` 为 0，表示 root。
 2. 后续自动工具记录默认指向上一条 Context sequence。
 3. 同一 Agent 连续调用使用同一个 `span_id`。
-4. `context_push(record)` 可以显式传入 cause/span，把手动记录接到指定链路。
-5. 工具触发的事件会携带 source Agent 的 cause/span。
-6. 目标 Agent 成功 `agent_wait()` 后继承事件 span，后续工具调用继续这条链路。
+4. `context_push(record)` 必须令 `cause_sequence=0` 且 `span_id=0`；非零值返回 `AGENT_STATUS_BAD_PARAM`，内核再把手动记录接入当前可信链。
+5. 工具触发的事件只有在同一 active workflow scope 的对象/路由授权通过后，才携带由内核认证的 source cause/span/owner。
+6. 目标 Agent 成功 `agent_wait()` 后继承公开 span 和私有 owner/source，后续工具调用继续这条可信链路。
 7. 第一条记录的 `prev_hash` 为 0。
 8. 后续记录的 `prev_hash` 等于上一条记录的 `record_hash`。
 9. header 中的 `latest_record_hash` 等于最新记录的 `record_hash`。
 
-这使 Context Path 不只保存“发生了什么”，还保存“为什么接着发生”，并能验证当前可见路径的相邻顺序由内核维护。跨 Agent 事件中的 `cause_sequence` 需要结合事件来源 pid 和 `span_id` 解释；它用于当前系统内的运行追踪，不是磁盘持久化日志。
+这使 Context Path 不只保存“发生了什么”，还保存“为什么接着发生”，并能验证当前可见路径的相邻顺序由内核维护。跨 Agent 事件中的 `cause_sequence` 是 source 进程本地序号；provenance 通过内核私有 source pid/control sidecar 解释它，不会把它误连到 target 恰好相同的本地序号。该链只在同一 workflow scope 内传播，用于运行追踪，不是磁盘持久化日志。
 
 `agentfinal_ucore` 会检查首条记录是 root，第二条记录指向第一条记录，span 连续，header 中的当前 cause/span 与最新状态一致；同时检查每条记录的 prev/hash 链接关系。对应检查项为 `causal_context` 和 `context_integrity`，原始输出见 [test-record.md](test-record.md)。
 
@@ -122,7 +122,7 @@ Context v6 会把工具调用、手动记录和事件消费串成轻量因果链
 5. 更新 count、head、oldest、latest、dropped。
 6. 同步用户镜像。
 
-手动 `context_push()` 使用同一个 sequence 流，保证手动记录和工具调用记录按同一顺序排列。
+手动 `context_push()` 使用同一个 sequence 流，保证手动记录和工具调用记录按同一顺序排列；用户只提交内容，cause/span/owner 由内核决定。
 
 ## 查询接口
 
@@ -138,9 +138,9 @@ Context v6 会把工具调用、手动记录和事件消费串成轻量因果链
 | `agent_timeline_wait(filter, timeout_ticks)` | 等待当前可见 timeline 出现匹配记录；命中后再用同一 filter 查询 |
 | `agent_timeline_read(filter, records, max, timeout_ticks)` | 等待匹配 timeline 记录，并在同一次 syscall 中复制记录 |
 | `agent_provenance_snapshot(edges, max)` | 把当前 Agent 可见的 Context、审计和预取提示导出为因果边 |
-| `agent_audit_snapshot(records, max)` | orchestrator 查询多 Agent 场景中的全局 Context、事件、调度和预取交接短记录 |
-| `agent_audit_query(filter, records, max)` | orchestrator 按 kind、span、目标事件、预取 source/target 或起始 sequence 过滤全局短记录 |
-| `agent_ledger_snapshot(summary)` | orchestrator 查询全局短记录的 sequence 范围、分类计数和链尾 hash |
+| `agent_audit_snapshot(records, max)` | orchestrator 查询当前 workflow scope 的 Context、事件、调度和预取交接短记录 |
+| `agent_audit_query(filter, records, max)` | 先按 scope/owner 裁剪，再按 kind、span、目标事件、source/target 或 sequence 过滤 |
+| `agent_ledger_snapshot(summary)` | orchestrator 查询当前 scope 稀疏可见窗口、dropped、分类计数和逻辑链尾 hash |
 | `agent_file_prefetch_span_snapshot(hints, max)` | 当前 Agent 按自己的 span 查询跨 Agent metadata 预取提示 |
 | `context_rollback(sequence)` | 回滚到仍可见 sequence |
 | `context_clear()` | 清空记录和元信息 |
@@ -149,19 +149,21 @@ Context v6 会把工具调用、手动记录和事件消费串成轻量因果链
 
 `agent_trace_snapshot()` 面向运行查看和问题排查。它不改变 Context Path，只读取当前 Agent 的 Context 摘要和最近调度原因，按 tick 合并为最多 144 条短记录。`agentfinal_ucore` 会检查结果中同时存在 Context、调度和事件等待记录。
 
-`agent_span_trace_snapshot()` 面向当前 span。它读取全局短记录 ring，但只返回当前 Agent 的 `current_span_id` 对应记录；调用者不能传入任意 span id。这样 investigator 或 recovery 可以在协作过程中直接看到当前 span 里的 Context、事件和预取交接摘要，而不需要等待 orchestrator 汇总。
+`agent_span_trace_snapshot()` 面向当前可信 span。它读取共享物理表，但只返回调用者 scope、`current_span_id` 和私有 span owner 全部匹配的记录；调用者不能传入任意 span id。这样参与 Agent 可以看到本 workflow 链路中的 Context、事件和预取交接，同时不能借公开 span 数字读取另一 scope/owner。
 
-`agent_timeline_snapshot()` 面向平台导出。它不改变 Context Path，也不新增新的权威历史，而是把当前 Agent 可见的 Context、调度、审计和预取提示转换成 `struct agent_timeline_record`。普通 Agent 只能看到自身 Context、调度、预取提示以及当前 span 的审计短记录；orchestrator 可以额外看到全局审计短记录。
+`agent_timeline_snapshot()` 面向平台导出。它不改变 Context Path，也不新增新的权威历史，而是把当前 Agent 可见的 Context、调度、审计和预取提示转换成 `struct agent_timeline_record`。普通 Agent 只能看到自身数据以及同 scope 当前可信 span 的审计；orchestrator 可以额外看到本 workflow scope 的审计窗口。
 
-`agent_timeline_query()` 用同一套权限规则，但允许在内核中按 source mask、起始 tick、span、kind、pid、tool、event、status、flags 和 after-cursor 过滤。`start_tick` 适合粗粒度读取某个 tick 之后的记录；after-cursor 使用上一条已读记录的 `tick/source/sequence`，只返回严格排在它之后的记录，适合状态页面增量刷新。过滤发生在当前 Agent 已可见的集合内，不能让普通 Agent 读取全局审计。
+`agent_timeline_query()` 用同一套权限规则，但允许在内核中按 source mask、起始 tick、span、kind、pid、tool、event、status、flags 和 after-cursor 过滤。`start_tick` 适合粗粒度读取某个 tick 之后的记录；after-cursor 使用上一条已读记录的 `tick/source/sequence`，只返回严格排在它之后的记录。过滤发生在 scope/owner 裁剪后的集合内，不能用 filter 读取其他 workflow。
 
 `agent_timeline_wait()` 复用同一套 filter。当前没有匹配记录时，Agent 进入睡眠；Context、审计、调度或预取提示写入后，内核递增 observe epoch，把新事实转换成统一 `agent_timeline_record`，再用等待者保存的完整 filter 判断是否唤醒。接口返回正数表示已有匹配记录，调用者随后用同一个 filter 调 `agent_timeline_query()` 读取；返回 `AGENT_STATUS_TIMEOUT` 表示有限等待到期。`agentfinal_ucore` 会验证 source=Context 的未来记录等待能 timeout，也会验证 heartbeat audit 不会误增加 Context-only 等待的 timeline wake 计数，MESSAGE 条件不会被 TIMER audit 唤醒，并验证 TIMER audit 写入能唤醒 source=Audit 且 event=TIMER 的等待。
 
 `agent_timeline_read()` 是 wait+query 的合并接口。它复用同一个 filter 和同一套权限裁剪；已有匹配记录时直接复制，没有匹配记录时睡眠等待，醒来后在同一次 syscall 中复制记录。该接口避免页面或 Agent worker 先 `agent_timeline_wait()` 再 `agent_timeline_query()` 的两次陷入，也避免 wait 返回与 query 执行之间出现新的记录导致读数不一致。
 
-`agent_provenance_snapshot()` 面向因果图导出。它不按时间排序，而是输出 `source_sequence -> target_sequence` 形式的因果边。当前 Agent 自己的 Context Path 会形成 Context 到 Context 的边；可见审计记录会形成 Context 到 Audit 的边；文件查询生成的预取提示会形成 Context 到 Prefetch 的边。该接口用于解释“哪个工具调用、事件或提示导致了后续动作”，和 timeline 的时间视图互补。
+`agent_provenance_snapshot()` 面向因果图导出。它输出 `source_sequence -> target_sequence`，但边身份不只依赖序号：本地 Context 使用当前进程，跨 Agent event/cause 使用私有 source pid/control，span 边还要求 scope 和 private owner。可见审计形成 Context 到 Audit 的边，文件查询形成 Context 到 Prefetch 的边。这样 source 本地 sequence 与 target 本地 sequence 碰撞时不会产生伪边。
 
-`agent_audit_snapshot()` 面向综合示例中的 orchestrator。它不替代单个 Agent 的 `context_snapshot()` 和 `context_detail()`，而是把多个 Agent 产生的 Context 追加、事件入队、事件消费、调度 dispatch 和预取提示交接摘要放入全局短记录，便于讲清楚多 Agent 协作过程。每条全局短记录都保存 `prev_hash` 和 `record_hash`，`agent_ledger_snapshot()` 返回当前可见 sequence 范围、累计写入数、已淘汰数、分类计数和链尾 hash。`agent_audit_query()` 在同一组全局短记录上执行过滤查询，可按 kind、span、目标进程、事件类型和起始 sequence 等条件读取。
+`agent_audit_snapshot()` 面向本 workflow orchestrator。物理审计表共 512 槽，按最多 4 个 scope 各保证 128；每 scope low/high 各64。Context/event/sched/prefetch/manual 遥测固定进入 low，low 每 principal 最多16；只有内核确认的特权状态效果进入 high，high 为每个 active principal 保证8条。high 满时只自滚当前 principal 或回收已退出/inactive principal 的记录，绝不淘汰另一 active principal；非活跃历史允许有界滚动并由 `dropped_records` 反映。
+
+每 scope 的 `prev_hash/record_hash/ledger_hash` 构成逻辑链，系统 `sequence` 则跨 scope 单调。因此当前可见记录可因其他 scope 写入和分区滚动而跳号，且某条记录的前驱可能已在窗口外。`agent_ledger_snapshot()` 返回 `total_records`、`visible_records` 和 `dropped_records=total-visible`；只对实际连续的可见记录检查直接 hash 邻接，合法 gap 不等同于损坏。`agent_audit_query()` 只能在 scope/owner 裁剪后的集合中继续过滤。
 
 本组接口的检查点如下。原始输出统一见 [test-record.md](test-record.md)。
 
@@ -172,10 +174,10 @@ Context v6 会把工具调用、手动记录和事件消费串成轻量因果链
 | `agent_timeline_snapshot()` / `agent_timeline_query()` | timeline 同时包含 Context、调度、审计和预取提示，且支持来源、tick 和游标过滤。 |
 | `agent_timeline_wait()` / `agent_timeline_read()` | 没有匹配记录时睡眠；source 或 event 不匹配时不误唤醒；匹配后可在同一次 syscall 中复制记录。 |
 | `agent_provenance_snapshot()` | Context 边、audit 边和 prefetch 边可以按因果关系导出。 |
-| `agent_audit_snapshot()` / `agent_audit_query()` | orchestrator 能看到多 Agent 场景中的 Context、事件、调度和预取交接摘要，并能按条件过滤。 |
-| `agent_ledger_snapshot()` | 全局短记录的 sequence 范围、分类计数和链尾 hash 可由一个摘要结构读取。 |
+| `agent_audit_snapshot()` / `agent_audit_query()` | orchestrator 能看到本 workflow 的摘要，并且 filter 不能扩大到其他 scope/owner。 |
+| `agent_ledger_snapshot()` | scope-local 总量、稀疏 sequence 窗口、dropped、分类计数和逻辑链尾可由一个摘要读取。 |
 
-span 同时用于文件预取提示。文件查询产生的 metadata 预取提示会进入当前 Agent 本地 ring；如果提示带有非零 span，内核还会写入全局 span 提示总线。目标 Agent 消费 message 事件并继承 span 后，可以调用 `agent_file_prefetch_span_snapshot()` 查询这条因果链中的提示，看到 source pid、target pid 和目标工件。这让跨 Agent 协作不需要只依赖消息文本或串口日志来拼接上游提示来源。
+span 同时用于文件预取提示。文件查询产生的 metadata 提示进入当前 Agent 本地 ring；可信 span 提示还进入物理 32 槽、每 scope 保留8条的共享表。目标 Agent 只在同 scope route 成功并消费 message 后继承私有 owner，才能查询该链提示；公开 span id 不允许跨 workflow 读取。
 
 ## 环形淘汰：FIFO
 
@@ -208,9 +210,9 @@ Context Path 有三种读取方式：
 | `agent_timeline_wait()` | 让页面或 Agent worker 在没有新匹配记录时睡眠，并按完整 timeline filter 减少无关唤醒 |
 | `agent_timeline_read()` | 把等待和复制合并到一次 syscall，减少事件驱动刷新热路径开销 |
 | `agent_provenance_snapshot()` | 直接导出因果边，减少从日志或短摘要中猜测触发关系 |
-| `agent_audit_snapshot()` | 呈现多 Agent 场景的全局短记录，包含 Context、事件、调度和预取交接摘要，仅 orchestrator 可读 |
-| `agent_audit_query()` | 过滤多 Agent 场景的全局短记录，仅 orchestrator 可读 |
-| `agent_ledger_snapshot()` | 读取全局短记录摘要和链尾 hash，仅 orchestrator 可读 |
+| `agent_audit_snapshot()` | 呈现当前 workflow 多 Agent 的 scope-local 短记录，仅本 scope orchestrator 可读 |
+| `agent_audit_query()` | 在当前 scope 可见窗口内过滤，不能扩大 scope/owner |
+| `agent_ledger_snapshot()` | 读取本 scope 稀疏窗口、dropped 和逻辑链尾，仅 orchestrator 可读 |
 
 `agentbench_ucore` 对比 direct、query 和 snapshot 三条读取路径，并在 [test-record.md](test-record.md) 中保留具体 tick 样例。本文档只说明结论：直接读 mirror 适合高频 latest 状态读取，`context_query()` 适合少量历史，`context_snapshot()` 适合批量读取当前可见路径。
 
@@ -233,9 +235,9 @@ Context Path 有三种读取方式：
 | 短文本历史 | payload/result 摘要进入最近 128 条 Context 记录。 |
 | 完整详情 | 最近 128 条 detail 可通过 `context_detail()` 查询。 |
 | 手动记录与自动记录 | 系统记录、手动 push 和截断标志可区分。 |
-| cause/span | 后续记录能继承上一条 cause，跨事件协作能保留同一 span。 |
+| cause/span | 自动记录和同 scope 事件继承可信 cause/span；手动 push 非零 cause/span 被拒绝，私有 sidecar 保证来源归属。 |
 | 完整性摘要 | Context 记录维护 `prev_hash` 和 `record_hash`。 |
-| 全局账本 | 多 Agent 场景能读取分类计数和链尾 hash。 |
+| Scope 账本 | 本 workflow 多 Agent 场景能读取稀疏窗口、dropped、分类计数和 scope-local 链尾 hash。 |
 | 用户态篡改保护 | mirror 被用户写脏后，snapshot 会恢复内核 shadow 权威状态。 |
 | 用户自管 cache | snapshot 不覆盖 Agent 自己维护的 cache 区。 |
 | FIFO 淘汰 | 写满后维护 `oldest_sequence`、`latest_sequence` 和 `dropped_records`。 |

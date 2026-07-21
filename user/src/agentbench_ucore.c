@@ -197,11 +197,11 @@ static void wait_file_scan_quiet(void)
 {
 	struct agent_info info;
 
-	for (int i = 0; i < 4000; i++) {
+	for (int i = 0; i < 400; i++) {
 		check(agent_info(&info) == 0, "scan info");
 		if (info.file_scan_pending == 0)
 			return;
-		sched_yield();
+		sleep(10);
 	}
 	check(0, "file scan quiet");
 }

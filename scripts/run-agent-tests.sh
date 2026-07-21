@@ -11,6 +11,7 @@ CASE_TIMEOUT="${CASE_TIMEOUT:-180s}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS:-20}"
+MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-2}"
 
 run_case() {
 	local init_proc="$1"
@@ -25,7 +26,7 @@ run_case() {
 		INIT_PROC="${init_proc}" \
 		CHAPTER="${CHAPTER}"
 	cp nfs/fs.img nfs/fs-copy.img
-	"${PYTHON_BIN}" - "$init_proc" "$marker" "$log_file" "$CASE_TIMEOUT" "$IDLE_NOTICE_SECONDS" "$QEMU" <<'PY'
+	"${PYTHON_BIN}" - "$init_proc" "$marker" "$log_file" "$CASE_TIMEOUT" "$IDLE_NOTICE_SECONDS" "$MARKER_GRACE_SECONDS" "$QEMU" <<'PY'
 import os
 import re
 import select
@@ -34,7 +35,7 @@ import subprocess
 import sys
 import time
 
-init_proc, marker, log_file, timeout_text, idle_text, qemu = sys.argv[1:7]
+init_proc, marker, log_file, timeout_text, idle_text, grace_text, qemu = sys.argv[1:8]
 
 
 def parse_duration(text):
@@ -55,6 +56,7 @@ def parse_duration(text):
 
 case_timeout = parse_duration(timeout_text)
 idle_notice = parse_duration(idle_text)
+marker_grace = parse_duration(grace_text)
 failure_re = re.compile(r"check failed|panic|unknown syscall|bad addr|IllegalInstruction|child_failed")
 cmd = [
     qemu,
@@ -75,6 +77,7 @@ start = time.monotonic()
 last_output = start
 last_notice = start
 marker_seen = False
+marker_time = None
 failure_seen = False
 lines = []
 
@@ -90,6 +93,9 @@ with open(log_file, "w", encoding="utf-8", errors="replace") as log:
     assert proc.stdout is not None
     while True:
         now = time.monotonic()
+        if marker_time is not None and now - marker_time >= marker_grace:
+            print(f"[agent-tests] {init_proc}: marker grace elapsed, stopping QEMU")
+            break
         if now - start > case_timeout:
             print(f"[agent-tests] {init_proc}: exceeded {timeout_text}", file=sys.stderr)
             break
@@ -118,12 +124,12 @@ with open(log_file, "w", encoding="utf-8", errors="replace") as log:
                 failure_seen = True
                 print(f"[agent-tests] {init_proc}: failure text detected", file=sys.stderr)
                 break
-            if marker in line:
+            if marker in line and marker_time is None:
                 marker_seen = True
-                print(f"[agent-tests] {init_proc}: marker observed, stopping QEMU")
-                log.write(f"[agent-tests] {init_proc}: marker observed, stopping QEMU\n")
+                marker_time = time.monotonic()
+                print(f"[agent-tests] {init_proc}: marker observed, checking teardown")
+                log.write(f"[agent-tests] {init_proc}: marker observed, checking teardown\n")
                 log.flush()
-                break
         elif proc.poll() is not None:
             break
 
@@ -165,6 +171,7 @@ run_case agentbench_ucore "agentbench_ucore: parent passed"
 run_case labbench_ucore "labbench_ucore: parent passed"
 run_case labdemo_ucore "labdemo_ucore: parent passed"
 run_case agentsecurity_ucore "agentsecurity_ucore: parent passed"
+run_case agentscope_ucore "agentscope_ucore: parent passed"
 run_case agenttrust_ucore "agenttrust_ucore: parent passed"
 run_case agentvfs_ucore "agentvfs_ucore: parent passed"
 run_case usersafety_ucore "usersafety_ucore: parent passed"

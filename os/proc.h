@@ -16,7 +16,7 @@
 #define CHILD_RECORD_CAP (NPROC)
 #define PROC_RESOURCE_DOMAIN_CAP (NPROC)
 #define PROC_RESOURCE_DOMAIN_LIMIT (NPROC / 2)
-#define PROC_RESERVED_SLOTS (NPROC / 8)
+#define PROC_RESERVED_SLOTS (NPROC / 4)
 #define PROC_ORDINARY_SLOTS (NPROC - PROC_RESERVED_SLOTS)
 
 struct file;
@@ -106,10 +106,10 @@ struct proc {
 	uint exec_role_mask;
 	uint exec_layout_version;
 	uint exec_rw_offset;
-	uint vfs_domain;
+	uint vfs_scope_id;
 	uint64 vfs_effective_caps;
 	uint64 vfs_inheritable_caps;
-	uint vfs_pending_domain;
+	uint vfs_pending_scope_id;
 	uint64 vfs_pending_caps;
 	uint vfs_pending_exec_dev;
 	uint vfs_pending_exec_inum;
@@ -119,6 +119,7 @@ struct proc {
 	uint vfs_bound_exec_incarnation;
 	//File descriptor table, using to record the files opened by the process
 	struct file *files[FD_BUFFER_SIZE];
+	uchar fd_scope_delegate[FD_BUFFER_SIZE];
 	struct thread threads[NTHREAD];
 	struct wait_queue child_waiters;
 	struct wait_queue thread_exit_waiters;
@@ -145,6 +146,7 @@ struct proc {
 	uint64 agent_ctx_base;
 	uint64 agent_ctx_size;
 	uint64 agent_call_count;
+	uint64 agent_meta_txn_wait_count;
 	int heartbeat_interval;
 	int resource_quota;
 	int loop_state;
@@ -173,6 +175,8 @@ struct proc {
 	struct agent_event agent_events[AGENT_EVENT_QUEUE_CAP];
 	// Source identities stay private so the public event ABI cannot forge them.
 	uint64 agent_event_source_control[AGENT_EVENT_QUEUE_CAP];
+	uint64 agent_event_span_owner[AGENT_EVENT_QUEUE_CAP];
+	uint64 agent_event_audit_principal[AGENT_EVENT_QUEUE_CAP];
 	uint64 agent_event_accounting[AGENT_EVENT_QUEUE_CAP];
 	int agent_event_head;
 	int agent_event_tail;
@@ -197,6 +201,9 @@ struct proc {
 	uint64 agent_wait_cancel_tick;
 	uint64 agent_wait_cancel_cause_sequence;
 	uint64 agent_wait_cancel_span_id;
+	uint64 agent_wait_cancel_span_owner;
+	uint64 agent_wait_cancel_source_control;
+	uint64 agent_wait_cancel_audit_principal;
 	char agent_wait_cancel_reason[AGENT_EVENT_PAYLOAD_SIZE];
 	uint64 agent_last_heartbeat_tick;
 	uint64 agent_capability_mask;
@@ -204,11 +211,15 @@ struct proc {
 	uint64 agent_detail_count;
 	uint64 agent_detail_head;
 	struct agent_context_detail agent_details[AGENT_CONTEXT_MAX_RECORDS];
+	uint64 agent_context_span_owner[AGENT_CONTEXT_MAX_RECORDS];
+	int agent_context_cause_pid[AGENT_CONTEXT_MAX_RECORDS];
+	uint64 agent_context_cause_control[AGENT_CONTEXT_MAX_RECORDS];
 	uint64 agent_prefetch_sequence;
 	int agent_prefetch_count;
 	int agent_prefetch_head;
 	struct agent_file_prefetch_hint
 		agent_prefetch_hints[AGENT_FILE_PREFETCH_MAX_HINTS];
+	uint64 agent_prefetch_span_owner[AGENT_FILE_PREFETCH_MAX_HINTS];
 	int agent_sched_policy;
 	int agent_sched_weight;
 	int agent_sched_priority;
@@ -227,7 +238,10 @@ struct proc {
 	uint64 agent_sched_trace_head;
 	struct agent_sched_record agent_sched_records[AGENT_SCHED_TRACE_CAP];
 	uint64 agent_current_span_id;
+	uint64 agent_current_span_owner;
 	uint64 agent_current_cause_sequence;
+	int agent_current_cause_pid;
+	uint64 agent_current_cause_control;
 	uint64 agent_context_chain_hash;
 	uint64 agent_provenance_edges;
 	uint64 agent_observe_epoch;
@@ -258,7 +272,10 @@ void yield();
 int fork();
 int agent_create_proc();
 int agent_create_role_proc(int role);
+int agent_workflow_create_proc(int role);
 int agent_worker_create_proc(char *, uint64);
+int proc_scope_delegate_fd(int);
+void proc_revoke_vfs_scope_fds(struct proc *);
 int exec(char *, char **);
 int wait(int, int *);
 void add_task(struct thread *);

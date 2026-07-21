@@ -350,3 +350,5 @@
 #define SYS_agent_file_edit_state 538
 #define SYS_agent_worker_create 539
 #define SYS_agent_route_config 540
+#define SYS_agent_workflow_create 541
+#define SYS_agent_scope_delegate_fd 542

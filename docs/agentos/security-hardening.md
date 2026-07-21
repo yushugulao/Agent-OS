@@ -19,7 +19,7 @@
 
 1. **预期失败返回错误。** 坏用户指针、非法长度、资源不足、权限不足和队列取消属于可恢复错误，不得进入 `panic()`。
 2. **对象唤醒必须定向。** 等待者只挂入所等待对象的队列，释放或事件发生时只唤醒相关线程。
-3. **权限来自内核绑定。** PID、父子关系、程序名和用户态自报 role 都不能直接产生权限；授权必须绑定可信可执行映像、内核角色和 capability。
+3. **权限来自内核绑定。** PID、父子关系、程序名、用户态自报 role/scope/span 都不能直接产生权限；授权必须同时绑定可信映像、内核角色/capability、active workflow scope 和精确对象 owner。
 4. **资源按所有权回收。** 阻塞 syscall 的临时引用、线程资源、进程执行槽和父进程等待凭据分别管理，退出时按依赖顺序释放。
 5. **配额按资源域累计。** fork 后代不能通过改变父子关系或长期存活绕过限制，系统关键工作保留独立槽位。
 6. **策略保持可配置，硬性约束不可绕过。** orchestrator 可以调整 Agent 调度权重等策略，但不能关闭普通进程的有限等待保证、可信映像校验或 VFS 能力检查。
@@ -44,6 +44,8 @@
 | `7d87f76` | PUBLIC 进程持久耗尽块和 inode，使工作流与内核元数据进入 ENOSPC | 稳定存储域 cookie、逐块 owner map、inode owner、域配额及 PUBLIC/WORKFLOW/SYSTEM 分级保留水位共同约束分配 | `fsquota_ucore` 两组配额/保留场景，`fsenospc_ucore` 双目标复测 |
 | `ab246d4` | PUBLIC 进程用短命文件耗尽 Agent 全局版本表并阻断工作流编辑与摘要缓存 | 每个磁盘 inode 固定拥有一个版本 sidecar 槽；最终 `iput()` 回收同一生命期的版本、租约和摘要缓存，槽的可用性继承 inode 域配额与分级保留量 | `fsquota_ucore` 跨越旧 512 槽上限的 640 次创建/删除循环，并验证 workflow 版本和内容缓存仍可用 |
 | 当前变更 | `MESSAGE_SEND` 被解释为全局裸 PID 通道，低权限 Agent 可向 Recovery/Orchestrator 注入消息并耗尽关键事件队列 | stable control id 定向路由；接收方或受权控制者 grant/revoke；external/direct/attributed/source 三层配额，为显式内核 origin 保留至少 4 个容量名额；慢订阅者隔离和退出回收 | `agentsecurity_ucore` 已验证未授权拒绝、grant/revoke、target LLM_DONE consent、MESSAGE 位图隔离和 `ROUTE_MAX+2` 短命 source 槽回收；`agentloop_ucore` 已验证 source=4、directed=8、external=12、第 13 条 external 拒绝、4 条 KERNEL TIMER 保留容量、消费后重接纳和慢 watcher 隔离。attributed=8、同一来源混合跨类及路由幂等/部分撤销仍缺独立输出 |
+| 本次 scope 变更 | Agent capability、对象表和 IPC 仍可被解释为所有 workflow 共享的全局权限 | syscall 541 由可信 factory 创建动态 scope；所有敏感对象使用 capability + active scope + stable owner；syscall 542 只一次性委派 pipe；最多 4 scope 并保留独立进程/存储/对象份额 | `agentscope_ucore` 的同名对象、动作、租约、IPC、audit、配额、fd 委派、事务竞争和回收断言已在完整 Agent 回归中通过 |
+| 本次审计变更 | 用户可伪造 span/cause，低权限遥测或委派 span 可挤掉关键审计效果 | private span owner 与 cause control sidecar；`context_push` 拒绝非零 cause/span；审计按 scope low/high 分区，只有内核确认的特权状态效果进入 high | `agentsecurity_ucore` 的 forged context、trusted cause attribution、audit authority partition 回归已通过 |
 
 ## 4. 用户输入与内核对象检查
 
@@ -72,7 +74,7 @@
 
 ### 5.3 活进程资源域与系统保留槽
 
-非管理员的普通 fork 后代继承不可变的 `resource_domain_id`，一个域的 live 进程数最多为 `PROC_RESOURCE_DOMAIN_LIMIT`。受控的资源域管理员创建普通直接子进程时会建立新域，而 Agent 和 worker admission 可建立受控保留域。普通进程合计只能使用 `PROC_ORDINARY_SLOTS`；`PROC_RESERVED_SLOTS` 由内核受控的 boot、Agent 和 worker admission 路径使用。创建新隔离域或消耗保留槽需要内核持有的 domain admin 状态，用户态不能通过参数自行获得。
+非管理员的普通 fork 后代继承不可变的 `resource_domain_id`，一个域的 live 进程数最多为 `PROC_RESOURCE_DOMAIN_LIMIT=64`。128 个进程槽中，普通 admission 合计最多使用 `PROC_ORDINARY_SLOTS=96`；`PROC_RESERVED_SLOTS=32` 仅供内核受控的 boot、workflow、Agent 和 worker admission。最多 4 个 workflow 各保证 8 个保留槽，单个 scope 不能消耗其他 scope 的 admission 份额。创建新隔离域或消耗保留槽需要内核持有的 domain admin/factory 状态，用户态参数和普通 Agent capability 都不能自行获得。
 
 这套机制同时满足三个目标：单个长存活 fork bomb 有上限；父进程退出或后代重新挂接不能重置配额；普通域达到上限后，受权 Agent 和 worker admission 仍有独立保留槽。
 
@@ -82,9 +84,9 @@
 
 新磁盘格式在 bitmap 后增加逐块 owner map，并在 inode 中保存创建域 cookie 和格式版本。数据块、间接索引块和目录扩容块按实际分配主体写入 owner；`truncate`、`unlink`、失败写回滚和 inode 回收再按持久 owner 精确退款。授权凭据与分配凭据是两个对象：例如根目录更新仍以 kernel cred 完成目录授权，但块配额使用发起创建操作的原始主体，普通进程不能借内核代办路径消耗系统保留量。
 
-分配水位分为三层：PUBLIC 必须同时留下 workflow 和 system 保留量；具有受控 workflow 写能力的主体可以使用 workflow 保留量，但必须留下 system 保留量；只有内核维护路径和受信任系统域可以使用最后的 system 保留量。PUBLIC 和 WORKFLOW 的块、inode 还分别累计到不可变进程资源域上限。同域最后一个进程退出后，内存域计数可以释放，因为该 cookie 不再授予任何新进程；遗留对象仍占 bitmap/inode，继续压低全局空闲量，因此退出、重启或换父进程都不能越过保留水位。
+分配水位分为三层：PUBLIC 必须同时留下所有 admitted/future workflow 和 SYSTEM 剩余量；某个 workflow 只能在自己的 scope 配额内使用共享 workflow 水位，并必须留下其他 scope 尚未消费的保证；内核维护路径和受信任 SYSTEM 可以消耗自己的系统信用，但仍须兑现所有 admitted/future workflow 的最低保证。容量算法由 `fs_storage_policy.h` 在 mkfs 和内核间共享：以完成镜像后的真实空闲量为输入，workflow 总保证最多使用扣除 SYSTEM 后余量的四分之三，并设置每 scope 320 inode/512 block、SYSTEM 8 inode/512 block 的显式硬下限。计算出的 version/slots/G/S/checksum 持久化在 superblock；内核重启固定使用 G，只从 `free-4G` 恢复尚未消耗的 SYSTEM 信用，避免把合法消耗的 S 再预留一次。当前平台镜像核算结果为每 scope 342 inode/1195 block、SYSTEM 64 inode/512 block。PUBLIC 和每个 WORKFLOW scope 的块/inode 还分别累计到稳定 owner 上限。
 
-挂载时会校验 `inode -> bitmap -> owner map -> data` 的完整布局，并从 bitmap、inode 和 owner map 重建空闲计数及 cookie 下界。已分配块缺少 owner、已分配 inode owner/version 无效或新旧格式混用会拒绝启动。当前教学文件系统没有日志，因此这里只保证分配器写入顺序和可识别的不一致状态，不宣称突然掉电时具备完整事务原子性。
+挂载时会校验 superblock 容量契约及 `inode -> bitmap -> owner map -> data` 的完整布局，并从 bitmap、inode 和 owner map 重建空闲计数及 cookie 下界。第一次核算只服务于恢复，先回收没有持久恢复令牌的旧 workflow boot lease；第二次核算才要求空闲量至少覆盖持久化的 `4G`，避免合法的旧 scope 残留在回收前把系统误判为不可启动。新 workflow admission 与分配使用同一关中断临界区检查实际剩余保证。mkfs 在安装完全部可信程序后要求初始空闲量同时覆盖 `S+4G`，不能兑现时拒绝出镜像；主机 mkfs 每次生成镜像前都按当次 `FS_*` 参数重编，避免配置与内核漂移。已分配块缺少 owner、已分配 inode owner/version 无效、容量 checksum 错误或新旧格式混用仍会拒绝启动。当前教学文件系统没有日志，因此这里只保证分配器写入顺序和可识别的不一致状态，不宣称突然掉电时具备完整事务原子性。
 
 ### 5.5 Agent 文件版本 sidecar 生命周期
 
@@ -130,7 +132,7 @@ Agent 权限由以下链路共同决定：
 
 ### 6.3 可信消息路由与事件资源隔离
 
-`MESSAGE_SEND` 只证明主体能够发起数据面操作，不再授予“向任意 PID 发送”的全局对象权限。跨 Agent `MESSAGE` 和 `LLM_DONE` 默认拒绝，必须先通过 `agent_route_config(source_pid, target_pid, event_mask, operation)` 建立定向路由。target 可凭 `WATCH` 主动接受一个 live source；非 target 调用者必须具备 `ROUTE_MANAGE`，且 source 和 target 都是调用者自身或其直接创建的 Agent。该规则允许 orchestrator 建立兄弟 Agent 之间的工作流边，但不会把共同父进程、相同角色或相同资源域自动解释为通信权。自投递是唯一隐式允许的路径。
+`MESSAGE_SEND` 只证明主体能够发起数据面操作，不再授予“向任意 PID 发送”的全局对象权限。跨 Agent `MESSAGE` 和 `LLM_DONE` 默认拒绝，必须先通过 `agent_route_config(source_pid, target_pid, event_mask, operation)` 建立定向路由。调用者、source 和 target 必须属于同一 active workflow scope；target 凭 `WATCH` 自主接受也不能越过此边界。非 target 调用者还必须具备 `ROUTE_MANAGE`，且 source/target 都是调用者自身或其直接创建的 Agent。共同父进程、角色、capability、PID 或 resource domain 都不是跨 scope 通信权。
 
 路由表保存在 target PCB 中，每项使用 source 的内核私有、单调且不复用的 64 位 `agent_control_id`，并单独记录允许的 `MESSAGE` / `LLM_DONE` 位图。PID 只在 syscall 当次用于定位对象；source/target 解析、存活状态、控制关系、route grant/revoke 和投递鉴权都在关中断临界区中完成。source 退出时内核遍历删除所有对应入站项，target 退出时清空自己的路由表。grant/revoke 幂等，revoke 只影响之后的入队，已通过授权并进入 FIFO 的事件不会被追溯删除。由此 PCB 槽或 PID 复用、reparent 和角色变化都不能复活旧通道。
 
@@ -142,22 +144,37 @@ external=12 的 admission 上限为显式 `KERNEL` origin 保留至少 4 个容�
 
 广播系统事件逐 watcher 独立尝试。某个慢订阅者队列已满、watch 不匹配或已经退出时，内核继续投递后续目标；文件 metadata 等权威状态一旦提交，不会因为一个通知接收者资源不足而错误返回 `NO_SPACE`。这种 best-effort 通知语义把控制状态提交与观察者背压分离，避免单个低权限 Agent 阻断全局工作流。
 
-当前路由授权表是内核私有执行状态，尚无 snapshot/query ABI，grant/revoke 也不追加 Context 或 audit。现有审计只能观察授权之后的事件入队和消费，不能完整重建路由策略变更历史。若后续需要运维审计，应新增只读快照和受权的 route-change audit record，而不是把用户日志当作权威控制面记录。
+当前路由授权表是 scope-local 内核私有执行状态，尚无 snapshot/query ABI，grant/revoke 也不追加 Context 或 audit。现有审计只能观察授权之后同 scope 的事件入队和消费，不能完整重建路由策略变更历史。若后续需要运维审计，应新增只读快照和受权的 route-change audit record，而不是把用户日志当作权威控制面记录。
+
+### 6.4 Workflow scope factory 与对象所有权
+
+scope 编号由内核定义：0 是 PUBLIC，1 是只读可信 SYSTEM，2 及以上是动态 workflow。只有非 Agent、具有 resource-domain admin 且仍运行可信 bootstrap 映像的 factory 可以调用 syscall 541 `agent_workflow_create(role)` 建立新 scope。普通 role grant 只允许在当前 scope 内调用 `agent_create_role()`，即使 orchestrator 有全部业务 capability，也不能用它铸造新对象域和新配额。
+
+同 scope Agent/worker 继承 scope；普通 fork 丢弃 workflow 凭据。跨 scope 创建默认仅继承 stdio。syscall 542 `agent_scope_delegate_fd(fd)` 只接受 pipe，并为下一次边界尝试签发一次性票据；票据在任何可能失败的资源分配前消费，不能因失败留给后续子进程，也不能用来传递普通文件。
+
+敏感对象身份按类型组合 scope 和 stable owner：文件/metadata/租约以 `scope + dev + inum + incarnation` 为基础，action/dependency/cache 先按 scope 分区，IPC/wait control 使用同 scope stable control id，span/audit/prefetch 使用 scope + 公开 span + 私有 span owner/cause principal。capability 只在当前 scope active 且对象 owner 精确匹配时生效；SYSTEM 仅在显式只读路径可见。
+
+scope 最后成员退出后先进入 retiring，禁止新对象/存储 admission。内核随后清理 metadata、dependency、action history、edit lease/version、query/digest cache、audit、span prefetch 和 IPC 状态，再释放 scope 槽。普通 scope 文件被回收；boot scope 持久文件保留，其 scope 作为 inactive storage owner 留存，避免旧工件被新 scope 重新解释。
+
+### 6.5 审计分区和可信因果
+
+物理审计表 512 槽按最多 4 个 workflow 各保证 128 条，每 scope 分成 low 64 和 high 64。Context/event/sched/prefetch/manual 等遥测始终 low，low 每 stable principal 最多16条。只有 syscall/tool 成功后由内核确认的特权状态效果进入 high；high 依据每 scope 8 个保留进程份额为每 active principal 保留8条。high 满时只滚动当前 principal 自己的记录或回收已退出/inactive principal 的最旧记录，绝不牺牲另一 active principal 的 protected evidence。inactive 历史仍是有界窗口，回收量通过 `dropped_records` 可见。
+
+公开 `span_id` 和 `cause_sequence` 是呈现字段，不是权限票据。内核为每个 Context/event 保存私有 span owner、source control 和 source pid；`context_push()` 要求用户输入的 cause/span 都为0，再由内核连接当前链。每 scope 独立维护 ledger hash，但 sequence 在系统中单调递增，因此当前窗口允许因跨 scope 写入、low/high 滚动和 principal 滚动而稀疏。`dropped_records=total-visible` 解释窗口外前驱，不能要求所有相邻可见 sequence 都直接 hash 相连。
 
 ## 7. 文件安全域
 
-VFS 把对象分为 public 域和 workflow 域。进程凭据由可执行映像 profile、Agent role capability 和受控 exec 委派共同得到。文件资源以 `dev + inum + incarnation` 标识，inode 号被回收再用时不会继承旧对象的 metadata、租约或缓存。`open/read/write/truncate/unlink` 等数据路径按实际 inode 标签和当前进程凭据检查，不只在 Agent 工具入口检查，因此普通文件 syscall 和继承来的文件描述符不能绕过能力模型。
+VFS 使用 PUBLIC=0、SYSTEM=1 和多个动态 workflow>=2，而不是一个所有 Agent 共享的 workflow 域。进程凭据由可执行映像 profile、Agent role capability、kernel-issued scope 和受控 exec 委派共同得到。文件资源以 `scope + dev + inum + incarnation` 标识；同名文件和复用 inode 均不会继承另一 scope/生命期的 metadata、租约或缓存。`open/read/write/truncate/unlink` 等真实数据路径同时检查 inode scope 和当前有效能力，因此普通 syscall、预先打开的 fd 或相同 capability 不能跨 workflow。
 
 主要规则如下：
 
-| 主体 | public 域 | workflow 域 |
-| --- | --- | --- |
-| 普通 public 进程 | 保留原有普通文件数据访问 | 数据操作默认拒绝 |
-| 具备内容读取能力的 workflow 进程或 Agent | 与 public 数据命名空间隔离 | 允许读取，不自动获得写入权 |
-| 具备工件写入能力的 workflow 进程或 Agent | 与 public 数据命名空间隔离 | 允许受控写入，仍受不可变映像和编辑租约约束 |
-| 内核内部维护路径 | 仅执行明确的内核操作 | 可维护标签和 Agent metadata 后端 |
+| 主体 | PUBLIC | SYSTEM | 动态 workflow |
+| --- | --- | --- | --- |
+| 普通 public 进程 | 保留普通文件数据访问 | 仅允许显式执行查找，不获得对象数据权限 | 数据操作拒绝 |
+| workflow Agent/worker | 与 public 数据隔离 | 只读执行/共享策略按明确操作开放 | 只访问与自身 scope 精确相等的对象，并继续检查 read/write capability |
+| 内核维护路径 | 只执行明确代办操作，分配仍按原主体计费 | 可维护可信映像和私有 metadata | 可在 retirement 中按目标 scope 回收 |
 
-`exec` 是跨域数据隔离的显式例外：内核可在当前域未命中后查找另一域的布局有效映像。普通进程仅执行 workflow 映像不会得到 workflow 凭据；非 Agent worker 必须匹配 `agent_worker_create()` 预先绑定的 inode，Agent 则必须通过可信 role-image 校验，才能安装或保留相应权限。
+`exec` 是数据隔离的显式例外：内核可查找布局有效的 SYSTEM 映像。普通进程仅执行该映像不会得到 workflow scope；worker 必须匹配 `agent_worker_create()` 预先绑定的 inode和父 scope，Agent 还必须通过可信 role-image 校验。跨 scope 的 pipe 则必须使用一次性 fd 委派，不由 exec 隐式携带。
 
 inode 标签带布局版本和一致性校验值。该校验用于发现格式或状态不一致，不是 MAC 或密码学防篡改。创建路径生成标签，装载和访问路径校验标签；未知或损坏标签按拒绝处理。可信可执行映像同时设置 immutable 标志，普通 `write`、`O_TRUNC` 和 `unlink` 不能改变整个映像文件。
 
@@ -165,7 +182,7 @@ inode 标签带布局版本和一致性校验值。该校验用于发现格式�
 
 Agent 评分仍可使用角色权重、priority、budget、事件、deadline、heartbeat 和虚拟运行量表达策略，但调度器额外维护不可配置的类级公平上限：连续选择 Agent 达到 `AGENT_SCHED_MAX_AGENT_BURST` 后，只要普通任务可运行，就必须选择普通 FIFO 任务。评分策略无法覆盖这条上限。
 
-文件系统对 inode、inode cache 和数据块耗尽返回失败，回滚未提交状态并准确报告短写；存储域配额和分级水位进一步保证 PUBLIC 压力不能触及 workflow/system 保留量。Agent 文件版本 sidecar 与 inode 槽及其最终回收绑定，因此短命文件也不能绕开存储域边界耗尽独立的内核版本池。专项压力用例验证同域计数跨子进程退出仍有效、释放后可复用，以及 PUBLIC 触及全局水位后 workflow 文件、版本状态、内容摘要缓存与内核 `.agentmeta` 仍可用。全局文件池分配失败也沿错误路径向上传播，但当前只验证了进程 fd 槽不足时的引用清理，尚缺耗尽整个 `FILEPOOLSIZE` 的独立压力用例。每线程内核栈使用 16 KiB 栈槽和 4 KiB 未映射 guard，并在低端保留 canary；构建时由 `make kernel-stack-check` 拒绝超过预算或无法确定上界的调用链。
+文件系统对 inode、inode cache 和数据块耗尽返回失败，回滚未提交状态并准确报告短写；存储域配额和分级水位进一步保证 PUBLIC 压力不能触及 workflow/system 保留量。Agent 文件版本 sidecar 与 inode 槽及其最终回收绑定，因此短命文件也不能绕开存储域边界耗尽独立的内核版本池。专项压力用例验证同域计数跨子进程退出仍有效、释放后可复用，以及 PUBLIC 触及全局水位后 workflow 文件、版本状态、内容摘要缓存与内核 metadata bank 仍可用。metadata 后端采用 generation + payload hash 的双 bank 提交：inactive bank 完整写入并回读后才成为新一代，ENOSPC 不覆盖上一代，显式 set/delete 失败还会回滚内存记录与 inode sidecar。metadata 内存表、索引、inode sidecar 和持久化由同一可睡眠事务门保护；VFS callback 与 scheduler 只做非阻塞尝试，失败后通过后台全量扫描协调，不能在持有底层文件系统状态时形成反向等待。事务 owner 在同一关中断临界区清空后广播其专属等待队列；所有 waiter 都重新检查条件并竞争，不把所有权绑定给单个被唤醒线程，因此任一 waiter 退出也不能把其余 syscall 永久遗弃。PUBLIC inode 在竞争事务门前被过滤，普通进程不能用无关文件 I/O 制造 metadata 锁竞争或扫描风暴。全局文件池分配失败也沿错误路径向上传播，但当前只验证了进程 fd 槽不足时的引用清理，尚缺耗尽整个 `FILEPOOLSIZE` 的独立压力用例。每线程内核栈使用 16 KiB 栈槽和 4 KiB 未映射 guard，并在低端保留 canary；构建时由 `make kernel-stack-check` 拒绝超过预算或无法确定上界的调用链。
 
 ## 9. 验证入口
 
@@ -184,7 +201,7 @@ make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-`scripts/run-agent-tests.sh` 当前包含 `agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore` 和 `usersafety_ucore`。`scripts/run-proc-reap-tests.sh` 分别运行主目标普通生命周期测试、主目标 Agent 对抗测试和 baseline 通用生命周期测试。`scripts/run-fs-enospc-tests.sh` 先在缩小镜像上运行两个目标的真实 ENOSPC 复测，再以低域配额和高域配额两种配置运行 AgentOS `fsquota_ucore`；每种 AgentOS 配置都先由 PUBLIC 域完成 640 次打开、删除、关闭循环，再验证 workflow 编辑版本、digest cache、存储保留量和内核 metadata 仍可用。
+`scripts/run-agent-tests.sh` 当前包含 `agentscope_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore` 和 `usersafety_ucore` 等专项程序。本轮 15 项 Agent 回归全部通过；`agentscope_ucore` 产生了 `cross_scope_isolation`、`ipc_scope_isolation`、`same_scope_collaboration`、`metadata_transactions`、`scope_storage_quota`、`action_scope_isolation`、`audit_event_scope_isolation`、`lease_scope_isolation`、`scope_capacity_reservation`、`transactional_fd_delegation`、`lifecycle_reclamation` 和 `parent passed`。宿主提取器测试也通过 scope 选择歧义、容量契约损坏、guest 路径穿越拒绝和旧 scope 输出清理用例；进程回收与 ENOSPC 专项均独立通过。
 
 这些专项入口检查的是机制约束。`make dual-platform-run` 继续验证科研平台功能等价和 AgentOS 专属证据，`make full-verify` 串联宿主机、双目标、Agent 和进程生命周期检查；ENOSPC 与内核栈预算仍保留为可单独复现的专项入口。
 
