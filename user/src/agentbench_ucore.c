@@ -527,6 +527,9 @@ static int bench_wait_wake(void)
 	close(ready[1]);
 	close(ack[1]);
 	check(read(ready[0], &ch, 1) == 1, "read ready");
+	check(agent_route_config(getpid(), pid, AGENT_IPC_EVENT_MESSAGE,
+				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_OK,
+	      "grant wake route");
 	memset(&event, 0, sizeof(event));
 	event.type = AGENT_EVENT_MESSAGE;
 	strcpy(event.payload, "bench");

@@ -177,7 +177,7 @@
 
 ## 4. `agentloop_ucore`
 
-`agentloop_ucore` 是任务五事件运行机制测试，重点检查 FIFO 事件队列、watch/unwatch、有限 timeout 睡眠、wait cancel、TIMER unwatch 和 heartbeat stop 是否都可运行。
+`agentloop_ucore` 是任务五事件运行机制测试，重点检查 FIFO 事件队列、单 stable source 配额、内核 TIMER 与外部事件共存、watch/unwatch、有限 timeout 睡眠、wait cancel、TIMER unwatch 和 heartbeat stop 是否都可运行。
 
 ### 4.1 测试流程
 
@@ -185,17 +185,19 @@
 2. 子进程注册 message watch。
 3. 子进程连续投递多个事件，调用 `agent_wait()` 检查 FIFO 顺序。
 4. 子进程检查投递和消费的事件包含 cause/span。
-5. 子进程填满 16 槽事件队列，再尝试投递第 17 个事件，确认返回 `AGENT_STATUS_NO_SPACE` 且旧事件没有被覆盖。
-6. 子进程删除 watch，再投递相同事件，确认不会唤醒。
-7. 子进程重新注册 watch，调用有限 timeout wait，确认线程进入睡眠并由 timeout 唤醒，且 `wait_loop_count` 增量很小。
-8. 子进程注册 TIMER watch，启动 heartbeat，确认 heartbeat 事件可唤醒等待。
-9. 子进程删除 TIMER watch 后再次启动 heartbeat，确认不会消费 TIMER 事件。
-10. 子进程调用 `agent_heartbeat_stop()`，确认停止后不再产生 heartbeat 事件。
-11. 子进程以带 `WAIT_CANCEL` 的 orchestrator 身份创建 sentinel 等待者，作为其直接 controller 调用 `agent_wait_cancel()`，确认等待者返回 `AGENT_STATUS_CANCELLED`，事件类型为 `AGENT_EVENT_CANCELLED`，并带有 reason、cause/span 和 Context 记录。
+5. 子进程从同一个 stable source 连续投递 4 条未消费 `MESSAGE`，第 5 条必须返回 `AGENT_STATUS_NO_SPACE`；消费首条后立即补投一条并要求成功，再按原顺序消费余下事件，确认 source=4 边界和逐槽归还。实现中的 source 计数跨 directed/attributed 共用，但该步骤没有混合两类。
+6. 另创建两个 directed source 各发送 4 条消息，把 directed IPC 填到 8，并确认继续 directed 投递被拒绝；第三个 source 触发 4 条 attributed `POLICY_DENIED`，使 external 合计达到 12。第四个 source 再触发 attributed 通知时，目标队列必须保持 12；随后 4 条 heartbeat TIMER 以显式 `KERNEL` origin 将队列填到 16。消费全部事件后，再分别投递 self directed 和第四个 source attributed 通知，确认两类都能重新接纳。
+7. 创建早期 full watcher，用 KERNEL heartbeat 把其队列填到 16；再创建 later watcher 和 attributed source，确认早期目标满队列不会终止扫描，later watcher 仍收到 `POLICY_DENIED` 广播。该用例不调用 `agent_file_meta_set()`，因此 metadata 提交不受通知背压的语义仍由实现审查支持。
+8. 子进程删除 message watch，再投递相同事件，确认不会唤醒。
+9. 子进程重新注册 watch，调用有限 timeout wait，确认线程进入睡眠并由 timeout 唤醒，且 `wait_loop_count` 增量很小。
+10. 子进程注册 TIMER watch，启动 heartbeat，确认 heartbeat 事件可唤醒等待。
+11. 子进程删除 TIMER watch 后再次启动 heartbeat，确认不会消费 TIMER 事件。
+12. 子进程调用 `agent_heartbeat_stop()`，确认停止后不再产生 heartbeat 事件。
+13. 子进程以带 `WAIT_CANCEL` 的 orchestrator 身份创建 sentinel 等待者，作为其直接 controller 调用 `agent_wait_cancel()`，确认等待者返回 `AGENT_STATUS_CANCELLED`，事件类型为 `AGENT_EVENT_CANCELLED`，并带有 reason、cause/span 和 Context 记录。
 
 ### 4.2 输出阅读方式
 
-本测试输出围绕事件顺序、事件因果、队列满处理、watch 删除、有限 timeout 睡眠、TIMER watch、heartbeat stop 和 wait cancel 展开。完整样例输出见 [test-record.md](test-record.md)。
+本测试输出围绕事件顺序、事件因果、single directed source、IPC 类、external 总量、内核 TIMER 保留容量、慢 watcher 隔离、watch 删除、有限 timeout 睡眠、TIMER watch、heartbeat stop 和 wait cancel 展开。2026-07-21 的 QEMU 运行已出现 `message_source_limit=4`、`ipc_class_limit=8`、`external_limit=12`、`system_event_reserved=4`、`external_reject_reclaim=1` 和 `broadcast_slow_watcher_isolated=1`。其中动态断言实际尝试第 13 条 external、把 4 条 KERNEL TIMER 同时填入保留容量，并在 drain 后重新接纳 directed 与 attributed；attributed=8、同一 stable source 混合跨类和 metadata 提交返回值仍没有独立断言。完整运行摘录见 [test-record.md](test-record.md)。
 
 ### 4.3 覆盖结论
 
@@ -203,10 +205,14 @@
 | --- | --- |
 | FIFO 顺序 | 多事件按投递顺序被消费 |
 | 事件因果信息 | 投递和消费事件均携带 cause/span |
-| 队列满语义 | 满队列返回 `AGENT_STATUS_NO_SPACE`，旧事件不被覆盖 |
+| 单 stable source 上限 | 同一 stable source 的 4 条 directed event 可入队，第 5 条返回 `AGENT_STATUS_NO_SPACE`，旧事件不被覆盖；消费 1 条后立即补投成功，证明 source 槽逐次归还。混合跨类 source 计数由实现保证，尚无独立输出 |
+| directed 与 external 压力 | 两个 stable source 各 4 条消息触及 directed=8，继续 directed 投递被拒绝；第三个 source 的 4 条 attributed 通知让 external 达到 12，第四个 source 的第 13 条 external 不入队且队列保持 12 |
+| 内核 origin 保留与重接纳 | external=12 后，4 条显式 `KERNEL` origin TIMER 将总队列填到 16；全部消费后 self directed 与新的 attributed 通知均可再次入队。该重接纳证明相关 admission 可恢复，但没有单独把 attributed 计数从 8 的边界清空后再验证 |
+| attributed 类边界 | 当前只填入 4 条 attributed 通知，没有单独触及 `ATTRIBUTED_LIMIT=8`，属于明确的剩余测试缺口 |
+| 慢 watcher 隔离 | 较早分配的 watcher 先把队列填满；同一 `POLICY_DENIED` attributed 广播仍继续送达后续 watcher；metadata 提交路径未在该用例中动态覆盖 |
 | watch 删除 | `agent_unwatch()` 后相同事件不再匹配 |
 | timeout 睡眠 | 有限 timeout wait 返回 `AGENT_STATUS_TIMEOUT`，并用 `wait_loop_count` 检查是否避免反复轮询 |
-| wait cancel | 受权 Agent 可取消目标 Agent 的等待，普通事件队列满也不会阻挡取消令牌 |
+| wait cancel | 受权 Agent 可取消目标 Agent 的等待；取消令牌与普通事件队列在实现上独立，但当前动态用例没有组合“队列已满 + cancel” |
 | heartbeat 唤醒 | 注册 TIMER watch 后可收到 heartbeat 事件 |
 | TIMER watch 删除 | 删除 TIMER watch 后 heartbeat 不再唤醒等待 |
 | heartbeat 停止 | stop 后不再继续产生 heartbeat 事件 |
@@ -470,39 +476,48 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 
 ## 10. `agentsecurity_ucore`
 
-`agentsecurity_ucore` 是权限限制负向测试，专门覆盖检查中指出的“普通进程能直接改全局元数据、伪造事件或取消等待”“低权限 Agent 能把消息能力扩大为全局等待取消权”“低权限 Agent 能把 `agent_wake()` 事件类型伪装成系统事件”“用户态自报 role 可绕过权限”等问题，并检查普通进程不能读取全局、当前 span、统一 timeline 或 timeline query/read 短记录，sentinel 不能读取或过滤全局审计短记录。
+`agentsecurity_ucore` 是权限限制负向测试，专门覆盖检查中指出的“普通进程能直接改全局元数据、伪造事件或取消等待”“低权限 Agent 能把消息能力扩大为全局等待取消权或全局裸 PID 通道”“低权限 Agent 能把 `agent_wake()` 事件类型伪装成系统事件”“用户态自报 role 可绕过权限”等问题，并检查普通进程不能读取全局、当前 span、统一 timeline 或 timeline query/read 短记录，sentinel 不能读取或过滤全局审计短记录。
 
 ### 10.1 测试流程
 
 1. 内核加载的可信初始进程检查自身保持普通进程身份且业务 capability 为零；随后成功创建 orchestrator，证明内核私有 bootstrap 授权生效。
-2. 可信初始进程验证普通 mail 路径可用，并验证事件、文件元数据、全局审计、timeline 和私有 `.agentmeta` 均受既有能力隔离保护。
+2. 可信初始进程验证普通 mail 路径可用，并验证事件、IPC 路由配置、文件元数据、全局审计、timeline 和私有 `.agentmeta` 均受既有能力隔离保护。
 3. 可信初始进程普通 `fork()` 后，子进程检查两种 Agent 创建接口和全部合法角色都返回 `AGENT_STATUS_DENIED`。
 4. 该普通子进程再执行 `exec()`，重复验证创建授权仍为零，证明授权不会经普通派生链传播。
-5. 可信初始进程创建 controller A；A 创建并等待一个 sentinel 就绪后退出，使 sentinel 成为孤儿。随后创建 controller B 复用 A 的 PCB 槽，验证 B 虽有 `WAIT_CANCEL` 仍不能取消该 sentinel，但可以用 `MESSAGE_SEND` 与其完成消息握手。
+5. 可信初始进程创建 controller A；A 创建并等待一个 sentinel 就绪，显式建立 A 到 sentinel 的消息路由后退出，使 sentinel 成为孤儿。随后创建 controller B，验证新 control id 即使将来发生 PID/PCB 槽复用，也不能取消该 sentinel 或继承 A 的旧消息路由；该用例本身不直接断言实际复用了同一 PID/PCB。
 6. 可信初始进程创建正常 orchestrator；orchestrator 通过 `agent_info()` 检查真实 role 和 capability mask，并通过成功委派各角色验证创建权。
 7. orchestrator 普通 `fork()` 后，子进程验证 Agent 身份、role、capability 和 Context 均已清零，且没有创建授权。
 8. orchestrator 在未初始化元数据前执行带索引查询，预期返回 0 条命中且不会阻塞，随后初始化文件元数据。
 9. orchestrator 使用 legacy `agent_call()` 验证工具名、工具 ID、参数键和参数类型校验。
 10. orchestrator 分别把设定的模拟流程和另两个模拟流程的比对处理、报告生成环节置为 failed。
 11. orchestrator 创建 sentinel、investigator 和 artifact；低权限 Agent 均检查真实 role/capability，验证保留 `MESSAGE_SEND`、缺少 `WAIT_CANCEL`，并确认创建接口、全部角色委派及对父 orchestrator 的取消均返回 `AGENT_STATUS_DENIED`。
-12. sentinel 验证系统事件伪造、用户态 role 伪造、依赖更新、内容读取、全局审计、调度配置和元数据写入均被拒绝，且合法消息仍可投递。
-13. orchestrator 创建 recovery；recovery 检查真实 role/capability，通过创建和等待取消拒绝验证没有委派或控制授权，并验证重复 corr_id、定向动作及工件更新行为。
-14. orchestrator 确认拒绝路径和定向更新没有跨 run 修改，输出 `agentsecurity_ucore: passed`。
-15. 可信初始进程等待 orchestrator 后再次派生普通子进程，验证复用已回收 Agent 槽时身份、能力和创建权均已清零。
-16. 可信初始进程执行自身 `exec()`，验证 bootstrap 创建授权被撤销，输出 `agentsecurity_ucore: parent passed`。
+12. sentinel 验证系统事件伪造、用户态 role 伪造、依赖更新、内容读取、全局审计、调度配置和元数据写入均被拒绝；在未授予路由时，分别通过 `agent_wake`、`send_message` 和 `llm_request` 向 Recovery/Orchestrator 投递都应返回 `AGENT_STATUS_DENIED`。
+13. orchestrator 为受控 source/target 显式 grant `MESSAGE` 路由，合法消息成功；随后 revoke 后再次投递被拒绝。测试同时核对事件的 source pid、corr id 和 payload，证明 route 只改变投递授权，不放宽事件来源语义。
+14. recovery target 以 `WATCH` 自主接受父 source 的 `LLM_DONE` 路由；父进程先验证该 LLM-only route 拒绝 `MESSAGE`，再通过 `llm_response` 成功投递 `LLM_DONE`。
+15. 同一个 orchestrator target 顺序经历 `AGENT_IPC_ROUTE_MAX+2` 个短命 sentinel source；每轮 grant 后 source 都成功投递 MESSAGE，再退出并被回收，第 18 轮仍成功，证明 source 退出会释放路由槽。
+16. orchestrator 创建 recovery；recovery 检查真实 role/capability，通过创建和等待取消拒绝验证没有委派或控制授权，并验证重复 corr_id、定向动作及工件更新行为。
+17. orchestrator 确认拒绝路径和定向更新没有跨 run 修改，输出 `agentsecurity_ucore: passed`。
+18. 可信初始进程等待 orchestrator 后再次派生普通子进程，验证复用已回收 Agent 槽时身份、能力和创建权均已清零；该子测试不观察 IPC route 表。
+19. 可信初始进程执行自身 `exec()`，验证 bootstrap 创建授权被撤销，输出 `agentsecurity_ucore: parent passed`。
 
 ### 10.2 输出阅读方式
 
-本测试输出围绕可信根授权、`fork/exec` 不继承创建权、低权限角色不可继续委派、`.agentmeta` 保护、真实 role/capability、初始化前索引查询安全、legacy 参数校验、sentinel 角色与系统事件伪造失败、recovery 定向动作和多 run 工件更新展开。完整样例输出见 [test-record.md](test-record.md)。
+本测试输出围绕可信根授权、`fork/exec` 不继承创建权、低权限角色不可继续委派、stable control id IPC 路由、grant/revoke、target consent、退出回收、`.agentmeta` 保护、真实 role/capability、初始化前索引查询安全、legacy 参数校验、sentinel 角色与系统事件伪造失败、recovery 定向动作和多 run 工件更新展开。2026-07-21 的 QEMU 运行已出现 `route_source_enforced=1`、`route_target_isolated=1`、`ipc_route_authorization=1`、`message_route_lifecycle=1`、`target_route_consent=1` 和 `route_slot_reclaimed=1`；旧 `message_send_preserved=1` 不再作为可信路由证据。完整运行摘录见 [test-record.md](test-record.md)。
 
 ### 10.3 覆盖结论
 
 | 覆盖点 | 检查方式 |
 | --- | --- |
 | 普通进程不能直接投递事件、取消等待或配置调度 | `agent_wake()`、`agent_wait_cancel()`、`agent_sched_config()` 返回 `-1` |
+| 普通进程不能配置 Agent IPC | `agent_route_config()` 返回 `-1`，不产生路由或队列副作用 |
 | 消息能力不隐含等待控制权 | sentinel、investigator、artifact 和 recovery 均保留 `MESSAGE_SEND`，但缺少 `WAIT_CANCEL`，取消父 orchestrator 返回 `AGENT_STATUS_DENIED` |
-| 等待取消绑定不可复用的控制对象 | controller A 退出后 controller B 复用其 PCB 槽；B 取消 A 的遗留子 Agent 被拒绝，普通 MESSAGE/ACK 仍成功 |
-| Agent 不能用消息接口伪造系统事件 | sentinel 直接投递 `LLM_DONE` 返回 `AGENT_STATUS_DENIED` 且不入队；非法类型返回 `AGENT_STATUS_BAD_PARAM`；合法 `MESSAGE` 仍可收发 |
+| 等待取消绑定不可复用的控制对象 | controller A 退出后创建 controller B；B 的新 control id 取消 A 的遗留子 Agent 被拒绝。测试不直接断言实际 PID/PCB 复用 |
+| 消息路由不随控制对象继承 | controller A 退出后，controller B 的新 control id 不能命中 A 的旧 route；独立的 churn 用例另行验证 source 退出释放路由槽 |
+| `MESSAGE_SEND` 不等于全局目标权限 | 未 grant 时 `agent_wake`、`send_message` 和 `llm_request` 均返回 `AGENT_STATUS_DENIED`；显式 grant 后成功，revoke 后再次拒绝 |
+| 路由管理有控制边界 | orchestrator 控制 source/target 的 grant/revoke 有专项断言；`target_route_consent=1` 验证 target 持有 `WATCH` 时可自主接受父 source 的 LLM_DONE，且 LLM-only route 不放行 MESSAGE |
+| 路由槽回收 | `route_slot_reclaimed=1` 让同一 target 顺序经历 `ROUTE_MAX+2` 个短命 source，每轮 route 投递均成功，证明 source 退出后槽可供后续来源使用 |
+| 慢订阅者广播隔离 | full watcher 在前、later watcher 在后；`broadcast_slow_watcher_isolated=1` 已确认后者收到同一 attributed 广播 |
+| Agent 不能用消息接口伪造系统事件 | sentinel 直接投递 `LLM_DONE` 返回 `AGENT_STATUS_DENIED` 且不入队；非法类型返回 `AGENT_STATUS_BAD_PARAM`；合法 `MESSAGE` 仍需先命中显式路由 |
 | 全局审计读取、过滤、调度配置和依赖注册权限 | 普通进程调用返回 `-1`，sentinel 调用返回 `AGENT_STATUS_DENIED` |
 | 普通进程不能直接修改文件元数据 | `agent_file_meta_init()`、`agent_file_meta_set()` 返回 `-1` |
 | 普通进程不能直接访问 `.agentmeta` | `open`、`open(O_CREATE)`、`unlink` 均返回 `-1` |

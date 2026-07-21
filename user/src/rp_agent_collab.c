@@ -9,12 +9,16 @@ static struct agent_event collab_event;
 static struct agent_op collab_op;
 static struct agent_result collab_result;
 
-static int collab_waiter(int parent_pid)
+static int collab_waiter(int parent_pid, int gate_fd)
 {
 	struct agent_event event;
+	char gate;
 
 	if (agent_watch(AGENT_EVENT_MESSAGE, "handoff=recovery-auditor") < 0)
 		return 1;
+	if (read(gate_fd, &gate, 1) != 1)
+		return 1;
+	close(gate_fd);
 	memset(&event, 0, sizeof(event));
 	event.type = AGENT_EVENT_MESSAGE;
 	event.source_pid = getpid();
@@ -55,8 +59,10 @@ static int collab_waiter(int parent_pid)
 static int run_kernel_collaboration(void)
 {
 	struct agent_info info;
+	int route_gate[2];
 	int pid;
 	int code = -1;
+	char gate = 'g';
 
 	if (agent_info(&info) < 0 || !info.is_agent)
 		return 0;
@@ -67,12 +73,26 @@ static int run_kernel_collaboration(void)
 	}
 	if (agent_watch(AGENT_EVENT_MESSAGE, "collab=") < 0)
 		return -1;
+	if (pipe(route_gate) < 0)
+		return -1;
 
 	pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	if (pid < 0)
 		return -1;
-	if (pid == 0)
-		exit(collab_waiter(getppid()));
+	if (pid == 0) {
+		close(route_gate[1]);
+		exit(collab_waiter(getppid(), route_gate[0]));
+	}
+	close(route_gate[0]);
+	if (agent_route_config(pid, getpid(), AGENT_IPC_EVENT_MESSAGE,
+			       AGENT_IPC_ROUTE_GRANT) != AGENT_STATUS_OK ||
+	    agent_route_config(getpid(), pid, AGENT_IPC_EVENT_MESSAGE,
+			       AGENT_IPC_ROUTE_GRANT) != AGENT_STATUS_OK ||
+	    write(route_gate[1], &gate, 1) != 1) {
+		close(route_gate[1]);
+		return -1;
+	}
+	close(route_gate[1]);
 
 	memset(&collab_event, 0, sizeof(collab_event));
 	if (agent_wait(&collab_event, 100) != AGENT_STATUS_OK ||

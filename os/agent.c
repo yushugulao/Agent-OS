@@ -92,6 +92,7 @@ static void agent_timeline_from_audit(struct agent_audit_record *record,
 static void agent_timeline_from_prefetch(struct proc *p,
 					 struct agent_file_prefetch_hint *hint,
 					 struct agent_timeline_record *timeline);
+static void agent_ipc_remove_source(uint64 source_control_id);
 
 static struct agent_tool_desc agent_tools[] = {
 	{ AGENT_TOOL_ECHO, AGENT_TOOL_F_CALLABLE, "echo", "payload:string,arg0:uint64,arg1:uint64",
@@ -490,6 +491,7 @@ static void agent_timeline_waiting_set(struct proc *p, int waiting)
 void agent_clear_metadata(struct proc *p)
 {
 	agent_timeline_waiting_set(p, 0);
+	agent_ipc_remove_source(p->agent_control_id);
 	for (int i = 0; i < AGENT_CONTEXT_PAGES; i++) {
 		p->agent_ctx_kva[i] = 0;
 		p->agent_shadow_kva[i] = 0;
@@ -522,10 +524,22 @@ void agent_clear_metadata(struct proc *p)
 	memset(p->agent_watch_valid, 0, sizeof(p->agent_watch_valid));
 	memset(p->agent_watch_event_type, 0, sizeof(p->agent_watch_event_type));
 	memset(p->agent_watch_filter, 0, sizeof(p->agent_watch_filter));
+	p->agent_ipc_route_count = 0;
+	memset(p->agent_ipc_route_source, 0,
+	       sizeof(p->agent_ipc_route_source));
+	memset(p->agent_ipc_route_events, 0,
+	       sizeof(p->agent_ipc_route_events));
 	memset(p->agent_events, 0, sizeof(p->agent_events));
+	memset(p->agent_event_source_control, 0,
+	       sizeof(p->agent_event_source_control));
+	memset(p->agent_event_accounting, 0,
+	       sizeof(p->agent_event_accounting));
 	p->agent_event_head = 0;
 	p->agent_event_tail = 0;
 	p->agent_event_count_queued = 0;
+	p->agent_external_event_count_queued = 0;
+	p->agent_ipc_count_queued = 0;
+	p->agent_attributed_event_count_queued = 0;
 	p->agent_event_count = 0;
 	p->agent_event_dropped = 0;
 	p->agent_wait_count = 0;
@@ -593,7 +607,7 @@ void agent_clear_metadata(struct proc *p)
 	 AGENT_CAP_ACTION_WRITE | AGENT_CAP_ARTIFACT_WRITE | \
 	 AGENT_CAP_AUDIT_WRITE | AGENT_CAP_META_WRITE | \
 	 AGENT_CAP_ORCHESTRATE | AGENT_CAP_LLM_RELAY | \
-	 AGENT_CAP_WAIT_CANCEL)
+	 AGENT_CAP_WAIT_CANCEL | AGENT_CAP_ROUTE_MANAGE)
 
 struct agent_role_policy {
 	int role;
@@ -705,6 +719,112 @@ static int agent_controls_target(struct proc *controller,
 	return controller != 0 && target != 0 && target->is_agent &&
 	       controller->agent_control_id != 0 &&
 	       target->agent_controller_id == controller->agent_control_id;
+}
+
+static int agent_controls_or_self(struct proc *controller,
+				  struct proc *target)
+{
+	return controller == target || agent_controls_target(controller, target);
+}
+
+static struct proc *agent_find_live_proc_locked(int pid)
+{
+	for (struct proc *p = pool; p < &pool[NPROC]; p++)
+		if (p->state == P_USED && p->pid == pid && p->is_agent &&
+		    !p->exit_requested && !p->exit_finalizing)
+			return p;
+	return 0;
+}
+
+static int agent_ipc_route_find(struct proc *target, uint64 source_control_id)
+{
+	if (target == 0 || source_control_id == 0)
+		return -1;
+	for (int i = 0; i < AGENT_IPC_ROUTE_MAX; i++)
+		if (target->agent_ipc_route_source[i] == source_control_id)
+			return i;
+	return -1;
+}
+
+static int agent_ipc_route_allows(struct proc *source, struct proc *target,
+				  int event_type)
+{
+	uint64 event_mask;
+	int slot;
+
+	if (source == 0 || target == 0 || source->agent_control_id == 0 ||
+	    target->agent_control_id == 0 || event_type <= AGENT_EVENT_NONE ||
+	    event_type > AGENT_EVENT_MAX)
+		return 0;
+	if (source == target)
+		return 1;
+	event_mask = AGENT_EVENT_MASK(event_type);
+	slot = agent_ipc_route_find(target, source->agent_control_id);
+	return slot >= 0 &&
+	       (target->agent_ipc_route_events[slot] & event_mask) != 0;
+}
+
+static void agent_ipc_remove_source_locked(uint64 source_control_id)
+{
+	if (source_control_id == 0)
+		return;
+	for (struct proc *target = pool; target < &pool[NPROC]; target++) {
+		for (int i = 0; i < AGENT_IPC_ROUTE_MAX; i++) {
+			if (target->agent_ipc_route_source[i] != source_control_id)
+				continue;
+			target->agent_ipc_route_source[i] = 0;
+			target->agent_ipc_route_events[i] = 0;
+			if (target->agent_ipc_route_count > 0)
+				target->agent_ipc_route_count--;
+		}
+	}
+}
+
+static void agent_ipc_remove_source(uint64 source_control_id)
+{
+	int enabled;
+
+	if (source_control_id == 0)
+		return;
+	enabled = intr_save();
+	agent_ipc_remove_source_locked(source_control_id);
+	intr_restore(enabled);
+}
+
+static int agent_ipc_route_update(struct proc *target,
+				  uint64 source_control_id, uint64 event_mask,
+				  int operation)
+{
+	int free_slot = -1;
+	int slot;
+
+	slot = agent_ipc_route_find(target, source_control_id);
+	if (operation == AGENT_IPC_ROUTE_REVOKE) {
+		if (slot < 0)
+			return AGENT_STATUS_OK;
+		target->agent_ipc_route_events[slot] &= ~event_mask;
+		if (target->agent_ipc_route_events[slot] == 0) {
+			target->agent_ipc_route_source[slot] = 0;
+			if (target->agent_ipc_route_count > 0)
+				target->agent_ipc_route_count--;
+		}
+		return AGENT_STATUS_OK;
+	}
+	if (slot >= 0) {
+		target->agent_ipc_route_events[slot] |= event_mask;
+		return AGENT_STATUS_OK;
+	}
+	for (int i = 0; i < AGENT_IPC_ROUTE_MAX; i++)
+		if (target->agent_ipc_route_source[i] == 0) {
+			free_slot = i;
+			break;
+		}
+	if (free_slot < 0)
+		return AGENT_STATUS_NO_SPACE;
+	target->agent_ipc_route_source[free_slot] = source_control_id;
+	target->agent_ipc_route_events[free_slot] = event_mask;
+	target->agent_ipc_route_count++;
+	return AGENT_STATUS_OK;
 }
 
 static void agent_audit_emit(int kind, uint64 tick, struct proc *actor,
@@ -3856,33 +3976,167 @@ static int agent_watch_clear(struct proc *p, int event_type, char *filter)
 	return removed;
 }
 
+#define AGENT_EVENT_ACCOUNT_EXTERNAL   (1ULL << 0)
+#define AGENT_EVENT_ACCOUNT_IPC        (1ULL << 1)
+#define AGENT_EVENT_ACCOUNT_ATTRIBUTED (1ULL << 2)
+
 static int agent_event_dequeue(struct proc *p, struct agent_event *event)
 {
-	if (p->agent_event_count_queued <= 0)
+	uint64 accounting;
+	int enabled;
+	int slot;
+
+	enabled = intr_save();
+	if (p->agent_event_count_queued <= 0) {
+		intr_restore(enabled);
 		return 0;
-	memmove(event, &p->agent_events[p->agent_event_head], sizeof(*event));
-	memset(&p->agent_events[p->agent_event_head], 0, sizeof(*event));
+	}
+	slot = p->agent_event_head;
+	memmove(event, &p->agent_events[slot], sizeof(*event));
+	accounting = p->agent_event_accounting[slot];
+	memset(&p->agent_events[slot], 0, sizeof(*event));
+	p->agent_event_source_control[slot] = 0;
+	p->agent_event_accounting[slot] = 0;
 	p->agent_event_head =
 		(p->agent_event_head + 1) % AGENT_EVENT_QUEUE_CAP;
 	p->agent_event_count_queued--;
+	if ((accounting & AGENT_EVENT_ACCOUNT_EXTERNAL) != 0 &&
+	    p->agent_external_event_count_queued > 0)
+		p->agent_external_event_count_queued--;
+	if ((accounting & AGENT_EVENT_ACCOUNT_IPC) != 0 &&
+	    p->agent_ipc_count_queued > 0)
+		p->agent_ipc_count_queued--;
+	if ((accounting & AGENT_EVENT_ACCOUNT_ATTRIBUTED) != 0 &&
+	    p->agent_attributed_event_count_queued > 0)
+		p->agent_attributed_event_count_queued--;
+	intr_restore(enabled);
 	return 1;
 }
 
-static int agent_queue_event(struct proc *target, int source_pid, int type,
-			     uint64 corr_id, uint64 cause_sequence,
-			     uint64 span_id, char *payload)
+enum agent_event_origin {
+	AGENT_EVENT_ORIGIN_KERNEL = 1,
+	AGENT_EVENT_ORIGIN_DIRECTED,
+	AGENT_EVENT_ORIGIN_ATTRIBUTED,
+};
+
+enum agent_event_resource_class {
+	AGENT_EVENT_RESOURCE_INVALID = 0,
+	AGENT_EVENT_RESOURCE_IPC,
+	AGENT_EVENT_RESOURCE_SYSTEM,
+};
+
+static int agent_event_resource_class(int type)
+{
+	switch (type) {
+	case AGENT_EVENT_MESSAGE:
+	case AGENT_EVENT_LLM_DONE:
+		return AGENT_EVENT_RESOURCE_IPC;
+	case AGENT_EVENT_FILE_STATUS:
+	case AGENT_EVENT_TIMER:
+	case AGENT_EVENT_JOB_DONE:
+	case AGENT_EVENT_POLICY_DENIED:
+	case AGENT_EVENT_CONTEXT_LIMIT:
+	case AGENT_EVENT_DASHBOARD_EXPORT:
+	case AGENT_EVENT_CANCELLED:
+		return AGENT_EVENT_RESOURCE_SYSTEM;
+	default:
+		return AGENT_EVENT_RESOURCE_INVALID;
+	}
+}
+
+static int agent_event_attributed_type(int type)
+{
+	switch (type) {
+	case AGENT_EVENT_FILE_STATUS:
+	case AGENT_EVENT_JOB_DONE:
+	case AGENT_EVENT_POLICY_DENIED:
+	case AGENT_EVENT_CONTEXT_LIMIT:
+	case AGENT_EVENT_DASHBOARD_EXPORT:
+		return 1;
+	default:
+		return 0;
+	}
+}
+
+static int agent_source_event_count(struct proc *target,
+				    uint64 source_control_id)
+{
+	int count = 0;
+	int slot = target->agent_event_head;
+
+	for (int i = 0; i < target->agent_event_count_queued; i++) {
+		if (target->agent_event_source_control[slot] == source_control_id)
+			count++;
+		slot = (slot + 1) % AGENT_EVENT_QUEUE_CAP;
+	}
+	return count;
+}
+
+static int agent_queue_event_locked(struct proc *target, struct proc *source,
+				    int origin, int type, uint64 corr_id,
+				    uint64 cause_sequence, uint64 span_id, char *payload)
 {
 	struct agent_event *event;
+	uint64 accounting = 0;
+	uint64 source_control_id = 0;
+	int source_pid = 0;
+	int event_class;
+	int slot;
 
-	if (!target->is_agent)
+	if (target->state != P_USED || !target->is_agent ||
+	    target->exit_requested || target->exit_finalizing)
 		return 0;
+	if (origin == AGENT_EVENT_ORIGIN_DIRECTED ||
+	    origin == AGENT_EVENT_ORIGIN_ATTRIBUTED) {
+		if (source == 0 || source->state != P_USED || !source->is_agent ||
+		    source->agent_control_id == 0 || source->exit_requested ||
+		    source->exit_finalizing)
+			return 0;
+		source_control_id = source->agent_control_id;
+		source_pid = source->pid;
+	} else if (origin != AGENT_EVENT_ORIGIN_KERNEL || source != 0) {
+		return 0;
+	}
 	if (!agent_filter_matches(target, type, payload))
 		return 0;
+	event_class = agent_event_resource_class(type);
+	if (event_class == AGENT_EVENT_RESOURCE_INVALID)
+		return 0;
+	if ((origin == AGENT_EVENT_ORIGIN_DIRECTED &&
+	     event_class != AGENT_EVENT_RESOURCE_IPC) ||
+	    (origin == AGENT_EVENT_ORIGIN_ATTRIBUTED &&
+	     !agent_event_attributed_type(type)) ||
+	    (origin == AGENT_EVENT_ORIGIN_KERNEL &&
+	     event_class != AGENT_EVENT_RESOURCE_SYSTEM))
+		return 0;
+	if (origin == AGENT_EVENT_ORIGIN_DIRECTED &&
+	    !agent_ipc_route_allows(source, target, type))
+		return 0;
+	if (origin == AGENT_EVENT_ORIGIN_DIRECTED)
+		accounting = AGENT_EVENT_ACCOUNT_EXTERNAL |
+			     AGENT_EVENT_ACCOUNT_IPC;
+	else if (origin == AGENT_EVENT_ORIGIN_ATTRIBUTED)
+		accounting = AGENT_EVENT_ACCOUNT_EXTERNAL |
+			     AGENT_EVENT_ACCOUNT_ATTRIBUTED;
 	if (target->agent_event_count_queued >= AGENT_EVENT_QUEUE_CAP) {
 		target->agent_event_dropped++;
 		return -1;
 	}
-	event = &target->agent_events[target->agent_event_tail];
+	if ((accounting & AGENT_EVENT_ACCOUNT_EXTERNAL) != 0 &&
+	    (target->agent_external_event_count_queued >=
+		     AGENT_EVENT_EXTERNAL_LIMIT ||
+	     agent_source_event_count(target, source_control_id) >=
+		     AGENT_EVENT_SOURCE_LIMIT ||
+	     ((accounting & AGENT_EVENT_ACCOUNT_IPC) != 0 &&
+	      target->agent_ipc_count_queued >= AGENT_EVENT_IPC_LIMIT) ||
+	     ((accounting & AGENT_EVENT_ACCOUNT_ATTRIBUTED) != 0 &&
+	      target->agent_attributed_event_count_queued >=
+		      AGENT_EVENT_ATTRIBUTED_LIMIT))) {
+		target->agent_event_dropped++;
+		return -1;
+	}
+	slot = target->agent_event_tail;
+	event = &target->agent_events[slot];
 	memset(event, 0, sizeof(*event));
 	event->type = type;
 	event->source_pid = source_pid;
@@ -3894,32 +4148,118 @@ static int agent_queue_event(struct proc *target, int source_pid, int type,
 	event->cause_sequence = cause_sequence;
 	event->span_id = span_id;
 	safestrcpy(event->payload, payload, sizeof(event->payload));
+	target->agent_event_source_control[slot] = source_control_id;
+	target->agent_event_accounting[slot] = accounting;
 	target->agent_event_tail =
 		(target->agent_event_tail + 1) % AGENT_EVENT_QUEUE_CAP;
 	target->agent_event_count_queued++;
+	if ((accounting & AGENT_EVENT_ACCOUNT_EXTERNAL) != 0)
+		target->agent_external_event_count_queued++;
+	if ((accounting & AGENT_EVENT_ACCOUNT_IPC) != 0)
+		target->agent_ipc_count_queued++;
+	if ((accounting & AGENT_EVENT_ACCOUNT_ATTRIBUTED) != 0)
+		target->agent_attributed_event_count_queued++;
 	target->agent_event_count++;
 	agent_audit_event(AGENT_AUDIT_KIND_EVENT_ENQUEUE, target, event);
 	agent_wake_event_waiters(target);
 	return 1;
 }
 
-static int agent_deliver_pid(int pid, struct proc *source, int source_pid,
-			     int type, uint64 corr_id, uint64 cause_sequence,
-			     uint64 span_id, char *payload)
+static int agent_queue_event(struct proc *target, struct proc *source,
+			     int origin, int type, uint64 corr_id,
+			     uint64 cause_sequence, uint64 span_id, char *payload)
 {
-	int delivered;
+	int enabled = intr_save();
+	int delivered = agent_queue_event_locked(target, source, origin, type,
+						 corr_id, cause_sequence,
+						 span_id, payload);
+
+	intr_restore(enabled);
+	return delivered;
+}
+
+static int agent_deliver_pid(int pid, struct proc *source, int type,
+			     uint64 corr_id, uint64 cause_sequence,
+			     uint64 span_id, char *payload, int mirror_mailbox,
+			     int *delivered)
+{
+	struct proc *target;
+	uint64 event_mask;
+	int enabled;
+	int queued;
+	int status;
+
+	if (delivered)
+		*delivered = 0;
+	if (pid <= 0 || source == 0 || type <= AGENT_EVENT_NONE ||
+	    type > AGENT_EVENT_MAX)
+		return AGENT_STATUS_BAD_PARAM;
+	event_mask = AGENT_EVENT_MASK(type);
+	if ((event_mask & AGENT_IPC_EVENT_MASK) == 0)
+		return AGENT_STATUS_BAD_PARAM;
+	enabled = intr_save();
+	if (source->state != P_USED || !source->is_agent ||
+	    source->agent_control_id == 0 || source->exit_requested ||
+	    source->exit_finalizing) {
+		status = AGENT_STATUS_NOT_FOUND;
+		goto out;
+	}
+	target = agent_find_live_proc_locked(pid);
+	if (target == 0) {
+		status = AGENT_STATUS_NOT_FOUND;
+		goto out;
+	}
+	if (!agent_ipc_route_allows(source, target, type)) {
+		status = AGENT_STATUS_DENIED;
+		goto out;
+	}
+	queued = agent_queue_event_locked(target, source,
+					  AGENT_EVENT_ORIGIN_DIRECTED, type, corr_id,
+					  cause_sequence, span_id, payload);
+	if (queued < 0) {
+		status = AGENT_STATUS_NO_SPACE;
+		goto out;
+	}
+	if (queued == 0) {
+		status = AGENT_STATUS_NOT_FOUND;
+		goto out;
+	}
+	if (type == AGENT_EVENT_MESSAGE)
+		agent_file_prefetch_handoff(target, source);
+	if (type == AGENT_EVENT_MESSAGE && mirror_mailbox) {
+		target->agent_mailbox_valid = 1;
+		target->agent_mailbox_from = source->pid;
+		safestrcpy(target->agent_mailbox, payload,
+			   sizeof(target->agent_mailbox));
+	}
+	if (delivered)
+		*delivered = 1;
+	status = AGENT_STATUS_OK;
+out:
+	intr_restore(enabled);
+	return status;
+}
+
+static int agent_deliver_watchers(struct proc *source, int type,
+				  uint64 corr_id, uint64 cause_sequence,
+				  uint64 span_id, char *payload)
+{
+	int delivered = 0;
+	int rc;
+
+	if (source == 0)
+		return 0;
 
 	for (struct proc *p = pool; p < &pool[NPROC]; p++) {
-		if (p->state == P_UNUSED || p->pid != pid)
+		if (p->state == P_UNUSED)
 			continue;
-		delivered = agent_queue_event(p, source_pid, type, corr_id,
-					      cause_sequence, span_id,
-					      payload);
-		if (delivered > 0 && type == AGENT_EVENT_MESSAGE)
-			agent_file_prefetch_handoff(p, source);
-		return delivered;
+		rc = agent_queue_event(p, source, AGENT_EVENT_ORIGIN_ATTRIBUTED,
+				       type, corr_id, cause_sequence, span_id,
+				       payload);
+		if (rc > 0)
+			delivered += rc;
 	}
-	return 0;
+	return delivered;
 }
 
 static int agent_wait_take_cancel(struct proc *p, struct agent_event *event)
@@ -3943,25 +4283,6 @@ static int agent_wait_take_cancel(struct proc *p, struct agent_event *event)
 	p->agent_wait_deadline = 0;
 	p->loop_state = AGENT_LOOP_RUNNING;
 	return 1;
-}
-
-static int agent_deliver_watchers(int source_pid, int type, uint64 corr_id,
-				  uint64 cause_sequence, uint64 span_id,
-				  char *payload)
-{
-	int delivered = 0;
-	int rc;
-
-	for (struct proc *p = pool; p < &pool[NPROC]; p++)
-		if (p->state != P_UNUSED) {
-			rc = agent_queue_event(p, source_pid, type, corr_id,
-					       cause_sequence, span_id,
-					       payload);
-			if (rc < 0)
-				return rc;
-			delivered += rc;
-		}
-	return delivered;
 }
 
 static int agent_append_system_context(struct proc *p, int tool_id,
@@ -4254,7 +4575,7 @@ static void agent_object_state_update(struct proc *p, struct agent_op *op,
 		agent_text_append(event_payload, sizeof(event_payload),
 				  event_action);
 	}
-	delivered = agent_deliver_watchers(p->pid, AGENT_EVENT_JOB_DONE,
+	delivered = agent_deliver_watchers(p, AGENT_EVENT_JOB_DONE,
 					   op->request_id,
 					   p->agent_call_count + 1,
 					   p->agent_current_span_id,
@@ -4272,6 +4593,7 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 	uint64 deps;
 	int found;
 	int delivered;
+	int delivery_status;
 	char dependency_label[AGENT_FILE_FIELD_SIZE];
 	char dependency_project[AGENT_FILE_PROJECT_SIZE];
 	char dependency_run_id[AGENT_FILE_FIELD_SIZE];
@@ -4394,39 +4716,30 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 			agent_result_text(res, "denied");
 			break;
 		}
-		if (op->arg0 == 0 || agent_text_empty(op->payload)) {
+		if (op->arg0 == 0 || op->arg0 > 0x7fffffffULL ||
+		    agent_text_empty(op->payload)) {
 			res->status = AGENT_STATUS_BAD_PARAM;
 			agent_result_text(res, "message_required");
 			break;
 		}
-		for (struct proc *target = pool; target < &pool[NPROC];
-		     target++) {
-			if (target->state != P_UNUSED &&
-			    target->pid == (int)op->arg0 && target->is_agent) {
-				delivered = agent_deliver_pid(
-					(int)op->arg0, p, p->pid,
-					AGENT_EVENT_MESSAGE, op->request_id,
-					p->agent_call_count + 1,
-					p->agent_current_span_id,
-					op->payload);
-				if (delivered < 0) {
-					res->status = AGENT_STATUS_NO_SPACE;
-					agent_result_text(res, "event_queue_full");
-					return;
-				}
-				target->agent_mailbox_valid = 1;
-				target->agent_mailbox_from = p->pid;
-				safestrcpy(target->agent_mailbox, op->payload,
-					   sizeof(target->agent_mailbox));
-				res->value0 = op->arg0;
-				res->value1 = p->pid;
-				res->value2 = strlen(op->payload);
-				agent_result_text(res, "send_message");
-				return;
-			}
+		delivery_status = agent_deliver_pid(
+			(int)op->arg0, p, AGENT_EVENT_MESSAGE, op->request_id,
+			p->agent_call_count + 1, p->agent_current_span_id,
+			op->payload, 1, &delivered);
+		if (delivery_status != AGENT_STATUS_OK) {
+			res->status = delivery_status;
+			if (delivery_status == AGENT_STATUS_DENIED)
+				agent_result_text(res, "route_denied");
+			else if (delivery_status == AGENT_STATUS_NO_SPACE)
+				agent_result_text(res, "event_queue_full");
+			else
+				agent_result_text(res, "target_missing");
+			break;
 		}
-		res->status = AGENT_STATUS_NOT_FOUND;
-		agent_result_text(res, "target_missing");
+		res->value0 = op->arg0;
+		res->value1 = p->pid;
+		res->value2 = strlen(op->payload);
+		agent_result_text(res, "send_message");
 		break;
 	case AGENT_TOOL_READ_MESSAGE:
 		if (p->agent_mailbox_valid) {
@@ -4553,7 +4866,7 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 		if (!agent_has_cap(p, AGENT_CAP_ACTION_WRITE)) {
 			res->status = AGENT_STATUS_DENIED;
 			agent_result_text(res, "denied");
-			agent_deliver_watchers(p->pid, AGENT_EVENT_POLICY_DENIED,
+			agent_deliver_watchers(p, AGENT_EVENT_POLICY_DENIED,
 					       op->request_id,
 					       p->agent_call_count + 1,
 					       p->agent_current_span_id,
@@ -4601,22 +4914,26 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 			agent_result_text(res, "denied");
 			break;
 		}
-		if (agent_text_empty(op->payload)) {
+		if (op->arg0 > 0x7fffffffULL || agent_text_empty(op->payload)) {
 			res->status = AGENT_STATUS_BAD_PARAM;
 			agent_result_text(res, "prompt_required");
 			break;
 		}
 		delivered = 0;
-		if (op->arg0) {
-			delivered = agent_deliver_pid((int)op->arg0, p, p->pid,
-						      AGENT_EVENT_MESSAGE,
-						      op->request_id,
-						      p->agent_call_count + 1,
-						      p->agent_current_span_id,
-						      op->payload);
-			if (delivered < 0) {
-				res->status = AGENT_STATUS_NO_SPACE;
-				agent_result_text(res, "event_queue_full");
+		if (op->arg0 != 0) {
+			delivery_status = agent_deliver_pid(
+				(int)op->arg0, p, AGENT_EVENT_MESSAGE,
+				op->request_id, p->agent_call_count + 1,
+				p->agent_current_span_id, op->payload, 0,
+				&delivered);
+			if (delivery_status != AGENT_STATUS_OK) {
+				res->status = delivery_status;
+				agent_result_text(res,
+					delivery_status == AGENT_STATUS_DENIED ?
+						"route_denied" :
+						delivery_status == AGENT_STATUS_NO_SPACE ?
+							"event_queue_full" :
+							"target_missing");
 				break;
 			}
 		}
@@ -4631,20 +4948,23 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 			agent_result_text(res, "denied");
 			break;
 		}
-		if (op->arg0 == 0 || agent_text_empty(op->payload)) {
+		if (op->arg0 == 0 || op->arg0 > 0x7fffffffULL ||
+		    agent_text_empty(op->payload)) {
 			res->status = AGENT_STATUS_BAD_PARAM;
 			agent_result_text(res, "response_required");
 			break;
 		}
-		delivered = agent_deliver_pid((int)op->arg0, p, p->pid,
-					      AGENT_EVENT_LLM_DONE,
-					      op->request_id,
-					      p->agent_call_count + 1,
-					      p->agent_current_span_id,
-					      op->payload);
-		if (delivered < 0) {
-			res->status = AGENT_STATUS_NO_SPACE;
-			agent_result_text(res, "event_queue_full");
+		delivery_status = agent_deliver_pid(
+			(int)op->arg0, p, AGENT_EVENT_LLM_DONE, op->request_id,
+			p->agent_call_count + 1, p->agent_current_span_id,
+			op->payload, 0, &delivered);
+		if (delivery_status != AGENT_STATUS_OK) {
+			res->status = delivery_status;
+			agent_result_text(res,
+				delivery_status == AGENT_STATUS_DENIED ?
+					"route_denied" :
+					delivery_status == AGENT_STATUS_NO_SPACE ?
+						"event_queue_full" : "target_missing");
 			break;
 		}
 		res->value0 = op->request_id;
@@ -6522,7 +6842,8 @@ int sys_agent_wait(uint64 eventaddr, int timeout_ticks)
 		    now - p->agent_last_heartbeat_tick >=
 			    (uint64)p->heartbeat_interval) {
 			p->agent_last_heartbeat_tick = now;
-			agent_queue_event(p, 0, AGENT_EVENT_TIMER, now,
+			agent_queue_event(p, 0, AGENT_EVENT_ORIGIN_KERNEL,
+					  AGENT_EVENT_TIMER, now,
 					  p->context_path_latest,
 					  p->agent_current_span_id,
 					  "timer=heartbeat");
@@ -6635,6 +6956,51 @@ int sys_agent_wait_cancel(int pid, uint64 reasonaddr)
 	return status;
 }
 
+int sys_agent_route_config(int source_pid, int target_pid, uint64 event_mask,
+			   int operation)
+{
+	struct proc *p = curr_proc();
+	struct proc *source;
+	struct proc *target;
+	int enabled;
+	int status;
+
+	if (!p->is_agent)
+		return -1;
+	if (source_pid <= 0 || target_pid <= 0 || event_mask == 0 ||
+	    (event_mask & ~AGENT_IPC_EVENT_MASK) != 0 ||
+	    (operation != AGENT_IPC_ROUTE_GRANT &&
+	     operation != AGENT_IPC_ROUTE_REVOKE))
+		return AGENT_STATUS_BAD_PARAM;
+	enabled = intr_save();
+	source = agent_find_live_proc_locked(source_pid);
+	target = agent_find_live_proc_locked(target_pid);
+	if (source == 0 || target == 0) {
+		status = AGENT_STATUS_NOT_FOUND;
+		goto out;
+	}
+	if (p != target) {
+		if (!agent_has_cap(p, AGENT_CAP_ROUTE_MANAGE) ||
+		    !agent_controls_or_self(p, source) ||
+		    !agent_controls_or_self(p, target)) {
+			status = AGENT_STATUS_DENIED;
+			goto out;
+		}
+	} else if (!agent_has_cap(p, AGENT_CAP_WATCH)) {
+		status = AGENT_STATUS_DENIED;
+		goto out;
+	}
+	if (source == target) {
+		status = AGENT_STATUS_OK;
+		goto out;
+	}
+	status = agent_ipc_route_update(target, source->agent_control_id,
+					event_mask, operation);
+out:
+	intr_restore(enabled);
+	return status;
+}
+
 int sys_agent_heartbeat(int interval_ticks)
 {
 	struct proc *p = curr_proc();
@@ -6658,6 +7024,7 @@ int sys_agent_wake(int pid, uint64 eventaddr)
 	struct agent_event event;
 	char payload[AGENT_EVENT_PAYLOAD_SIZE];
 	int delivered;
+	int status;
 
 	if (!p->is_agent)
 		return -1;
@@ -6673,14 +7040,11 @@ int sys_agent_wake(int pid, uint64 eventaddr)
 		return AGENT_STATUS_DENIED;
 	event.payload[sizeof(event.payload) - 1] = 0;
 	safestrcpy(payload, event.payload, sizeof(payload));
-	delivered = agent_deliver_pid(pid, p, p->pid, event.type, event.corr_id,
-				      p->context_path_latest,
-				      p->agent_current_span_id, payload);
-	if (delivered < 0)
-		return AGENT_STATUS_NO_SPACE;
-	if (!delivered)
-		return AGENT_STATUS_NOT_FOUND;
-	return 0;
+	status = agent_deliver_pid(pid, p, event.type, event.corr_id,
+				   p->context_path_latest,
+				   p->agent_current_span_id, payload, 0,
+				   &delivered);
+	return status;
 }
 
 static int agent_file_edit_lookup_path(struct proc *p, uint64 pathaddr,
@@ -7120,12 +7484,11 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 		agent_file_persist();
 	agent_file_event_payload(&agent_files[slot], event_payload,
 				 sizeof(event_payload));
-	if (status_changed && meta.status[0] &&
-	    agent_deliver_watchers(p->pid, AGENT_EVENT_FILE_STATUS, meta.fid,
-				   p->context_path_latest,
-				   p->agent_current_span_id,
-				   event_payload) < 0)
-		return AGENT_STATUS_NO_SPACE;
+	if (status_changed && meta.status[0])
+		agent_deliver_watchers(p, AGENT_EVENT_FILE_STATUS, meta.fid,
+				       p->context_path_latest,
+				       p->agent_current_span_id,
+				       event_payload);
 	agent_file_request_scan();
 	return 0;
 }
@@ -7361,7 +7724,8 @@ void agent_tick(void)
 			    (uint64)p->heartbeat_interval) {
 			p->agent_last_heartbeat_tick = now;
 			safestrcpy(payload, "timer=heartbeat", sizeof(payload));
-			agent_queue_event(p, 0, AGENT_EVENT_TIMER, now,
+			agent_queue_event(p, 0, AGENT_EVENT_ORIGIN_KERNEL,
+					  AGENT_EVENT_TIMER, now,
 					  p->context_path_latest,
 					  p->agent_current_span_id, payload);
 		}

@@ -59,7 +59,8 @@ static uint64 expected_caps(int role)
 		       AGENT_CAP_WATCH | AGENT_CAP_ACTION_WRITE |
 		       AGENT_CAP_ARTIFACT_WRITE | AGENT_CAP_AUDIT_WRITE |
 		       AGENT_CAP_META_WRITE | AGENT_CAP_ORCHESTRATE |
-		       AGENT_CAP_LLM_RELAY | AGENT_CAP_WAIT_CANCEL;
+		       AGENT_CAP_LLM_RELAY | AGENT_CAP_WAIT_CANCEL |
+		       AGENT_CAP_ROUTE_MANAGE;
 	return 0;
 }
 
@@ -71,14 +72,18 @@ static void check_role(int role, const char *name)
 	check(info.is_agent == 1, "is agent");
 	check(info.agent_role == role, name);
 	check(info.capability_mask == expected_caps(role), "capability mask");
-	if (role == AGENT_ROLE_ORCHESTRATOR)
+	if (role == AGENT_ROLE_ORCHESTRATOR) {
 		check((info.capability_mask & AGENT_CAP_WAIT_CANCEL) != 0,
 		      "orchestrator wait cancel capability");
-	else {
+		check((info.capability_mask & AGENT_CAP_ROUTE_MANAGE) != 0,
+		      "orchestrator route manage capability");
+	} else {
 		check((info.capability_mask & AGENT_CAP_MESSAGE_SEND) != 0,
 		      "low role message capability");
 		check((info.capability_mask & AGENT_CAP_WAIT_CANCEL) == 0,
 		      "low role lacks wait cancel capability");
+		check((info.capability_mask & AGENT_CAP_ROUTE_MANAGE) == 0,
+		      "low role lacks route manage capability");
 	}
 	check(info.filesystem_capability_mask ==
 		      (expected_caps(role) &
@@ -492,32 +497,28 @@ static void run_artifact(void)
 	exit(0);
 }
 
-static void run_orphan_cancel_victim(int ready_fd)
+static void run_orphan_cancel_victim(int ready_fd, int result_fd, int gate_fd)
 {
 	struct agent_event event;
-	struct agent_event ack;
 	char ready = 'R';
+	char result = 'T';
+	char gate = 0;
 
 	check_role(AGENT_ROLE_SENTINEL, "cancel-victim");
 	check(agent_watch(AGENT_EVENT_MESSAGE, "release=controller") == 0,
 	      "watch controller release");
 	check(write(ready_fd, &ready, 1) == 1, "report cancel victim ready");
+	check(read(gate_fd, &gate, 1) == 1 && gate == 'C',
+	      "wait stale controller probe");
 	memset(&event, 0, sizeof(event));
-	check(agent_wait(&event, -1) == AGENT_STATUS_OK,
-	      "orphan victim receives message");
-	check(event.type == AGENT_EVENT_MESSAGE, "orphan victim message type");
-	check(strcmp(event.payload, "release=controller") == 0,
-	      "orphan victim release payload");
-	memset(&ack, 0, sizeof(ack));
-	ack.type = AGENT_EVENT_MESSAGE;
-	ack.corr_id = event.event_id;
-	strcpy(ack.payload, "controller-replaced");
-	check(agent_wake(event.source_pid, &ack) == AGENT_STATUS_OK,
-	      "orphan victim acknowledgement");
+	check(agent_wait(&event, 0) == AGENT_STATUS_TIMEOUT,
+	      "stale controller route does not deliver");
+	check(write(result_fd, &result, 1) == 1,
+	      "report stale route timeout");
 	exit(0);
 }
 
-static void run_retired_cancel_controller(int report_fd)
+static void run_retired_cancel_controller(int report_fd, int victim_gate_fd)
 {
 	int ready_pipe[2];
 	int victim_pid;
@@ -528,9 +529,14 @@ static void run_retired_cancel_controller(int report_fd)
 	victim_pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	check(victim_pid >= 0, "create orphan cancel victim");
 	if (victim_pid == 0)
-		run_orphan_cancel_victim(ready_pipe[1]);
+		run_orphan_cancel_victim(ready_pipe[1], report_fd,
+					 victim_gate_fd);
 	check(read(ready_pipe[0], &ready, 1) == 1 && ready == 'R',
 	      "wait cancel victim ready");
+	check(agent_route_config(getpid(), victim_pid,
+				 AGENT_IPC_EVENT_MESSAGE,
+				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_OK,
+	      "grant retired controller route");
 	check(write(report_fd, &victim_pid, sizeof(victim_pid)) ==
 		      (int)sizeof(victim_pid),
 	      "report orphan cancel victim");
@@ -540,47 +546,42 @@ static void run_retired_cancel_controller(int report_fd)
 static void run_replacement_cancel_controller(int victim_pid)
 {
 	struct agent_event event;
-	struct agent_event ack;
 
 	check_role(AGENT_ROLE_ORCHESTRATOR, "replacement-controller");
 	check(agent_wait_cancel(victim_pid, "stale-controller") ==
 		      AGENT_STATUS_DENIED,
 	      "replacement controller cannot cancel orphan");
-	check(agent_watch(AGENT_EVENT_MESSAGE, "controller-replaced") == 0,
-	      "watch orphan acknowledgement");
+	check(agent_route_config(getpid(), victim_pid,
+				 AGENT_IPC_EVENT_MESSAGE,
+				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_DENIED,
+	      "replacement controller cannot inherit route authority");
 	memset(&event, 0, sizeof(event));
 	event.type = AGENT_EVENT_MESSAGE;
 	event.corr_id = 8301;
 	strcpy(event.payload, "release=controller");
-	check(agent_wake(victim_pid, &event) == AGENT_STATUS_OK,
-	      "replacement controller message delivery");
-	memset(&ack, 0, sizeof(ack));
-	check(agent_wait(&ack, 50) == AGENT_STATUS_OK,
-	      "replacement controller acknowledgement");
-	check(ack.type == AGENT_EVENT_MESSAGE,
-	      "replacement controller acknowledgement type");
-	check(ack.source_pid == victim_pid,
-	      "replacement controller acknowledgement source");
-	check(strcmp(ack.payload, "controller-replaced") == 0,
-	      "replacement controller acknowledgement payload");
+	check(agent_wake(victim_pid, &event) == AGENT_STATUS_DENIED,
+	      "replacement controller stale route denied");
 	printf("agentsecurity_ucore: wait_cancel_scope=1\n");
-	printf("agentsecurity_ucore: message_send_preserved=1\n");
+	printf("agentsecurity_ucore: message_route_lifecycle=1\n");
 	exit(0);
 }
 
 static void check_wait_cancel_controller_lifecycle(void)
 {
 	int report_pipe[2];
+	int victim_gate[2];
 	int controller_pid;
 	int replacement_pid;
 	int victim_pid = -1;
 	int status = 0;
+	char victim_result = 0;
 
 	check(pipe(report_pipe) == 0, "create cancel controller report pipe");
+	check(pipe(victim_gate) == 0, "create stale route victim gate");
 	controller_pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
 	check(controller_pid >= 0, "create retired cancel controller");
 	if (controller_pid == 0)
-		run_retired_cancel_controller(report_pipe[1]);
+		run_retired_cancel_controller(report_pipe[1], victim_gate[0]);
 	check(read(report_pipe[0], &victim_pid, sizeof(victim_pid)) ==
 		      (int)sizeof(victim_pid),
 	      "read orphan cancel victim");
@@ -588,8 +589,6 @@ static void check_wait_cancel_controller_lifecycle(void)
 	check(waitpid(controller_pid, &status) == controller_pid,
 	      "wait retired cancel controller");
 	check(status == 0, "retired cancel controller status");
-	close(report_pipe[0]);
-	close(report_pipe[1]);
 	replacement_pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
 	check(replacement_pid >= 0, "create replacement cancel controller");
 	if (replacement_pid == 0)
@@ -597,8 +596,332 @@ static void check_wait_cancel_controller_lifecycle(void)
 	check(waitpid(replacement_pid, &status) == replacement_pid,
 	      "wait replacement cancel controller");
 	check(status == 0, "replacement cancel controller status");
-	sleep(2);
+	victim_result = 'C';
+	check(write(victim_gate[1], &victim_result, 1) == 1,
+	      "release stale route victim");
+	victim_result = 0;
+	check(read(report_pipe[0], &victim_result, 1) == 1 &&
+		      victim_result == 'T',
+	      "orphan victim rejects stale route");
+	close(report_pipe[0]);
+	close(report_pipe[1]);
+	close(victim_gate[0]);
+	close(victim_gate[1]);
 	printf("agentsecurity_ucore: wait_cancel_controller_lifecycle=1\n");
+}
+
+static void check_route_tool(int tool, int target_pid, uint64 request_id,
+			     const char *payload, int expected_status,
+			     const char *msg)
+{
+	struct agent_op op;
+	struct agent_result res;
+
+	make_op(&op, tool, request_id, target_pid, payload);
+	run_one(&op, &res, expected_status, msg);
+}
+
+static void check_route_wake(int target_pid, uint64 corr_id,
+			     const char *payload, int expected_status,
+			     const char *msg)
+{
+	struct agent_event event;
+
+	memset(&event, 0, sizeof(event));
+	event.type = AGENT_EVENT_MESSAGE;
+	event.corr_id = corr_id;
+	strcpy(event.payload, payload);
+	check(agent_wake(target_pid, &event) == expected_status, msg);
+}
+
+static void receive_route_message(int source_pid, uint64 corr_id,
+				  const char *payload)
+{
+	struct agent_event event;
+
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, 200) == AGENT_STATUS_OK,
+	      "receive routed message");
+	check(event.type == AGENT_EVENT_MESSAGE, "routed message type");
+	check(event.source_pid == source_pid, "routed message source");
+	check(event.corr_id == corr_id, "routed message correlation");
+	check(strcmp(event.payload, payload) == 0, "routed message payload");
+}
+
+static void run_ipc_route_target(int setup_fd, int ready_fd)
+{
+	struct agent_event event;
+	int source_pid = -1;
+	char phase = 'T';
+
+	check_role(AGENT_ROLE_RECOVERY, "route-target");
+	check(agent_watch(AGENT_EVENT_MESSAGE, "ipc-route-") == 0,
+	      "watch routed messages");
+	check(write(ready_fd, &phase, 1) == 1, "report route target ready");
+	check(read(setup_fd, &source_pid, sizeof(source_pid)) ==
+		      (int)sizeof(source_pid) && source_pid > 0,
+	      "read route source pid");
+	receive_route_message(source_pid, 8521, "ipc-route-allowed-wake");
+	receive_route_message(source_pid, 8522, "ipc-route-allowed-tool");
+	receive_route_message(source_pid, 8523, "ipc-route-allowed-llm");
+	phase = 'A';
+	check(write(ready_fd, &phase, 1) == 1,
+	      "report routed messages consumed");
+	check(read(setup_fd, &phase, 1) == 1 && phase == 'X',
+	      "wait revoked route probes");
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, 0) == AGENT_STATUS_TIMEOUT,
+	      "revoked messages not queued");
+	printf("agentsecurity_ucore: route_target_isolated=1\n");
+	exit(0);
+}
+
+static void run_ipc_route_source(int target_pid, int orchestrator_pid,
+				 int gate_fd, int report_fd)
+{
+	char phase;
+
+	check_role(AGENT_ROLE_SENTINEL, "route-source");
+	check(agent_route_config(getpid(), target_pid,
+				 AGENT_IPC_EVENT_MESSAGE,
+				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_DENIED,
+	      "low role cannot grant route");
+
+	check_route_wake(target_pid, 8501, "ipc-route-denied-recovery-wake",
+			 AGENT_STATUS_DENIED, "unrouted recovery wake denied");
+	check_route_tool(AGENT_TOOL_SEND_MESSAGE, target_pid, 8502,
+			 "ipc-route-denied-recovery-tool",
+			 AGENT_STATUS_DENIED,
+			 "unrouted recovery send tool denied");
+	check_route_tool(AGENT_TOOL_LLM_REQUEST, target_pid, 8503,
+			 "ipc-route-denied-recovery-llm",
+			 AGENT_STATUS_DENIED,
+			 "unrouted recovery llm request denied");
+	check_route_wake(orchestrator_pid, 8511,
+			 "ipc-route-denied-orchestrator-wake",
+			 AGENT_STATUS_DENIED,
+			 "unrouted orchestrator wake denied");
+	check_route_tool(AGENT_TOOL_SEND_MESSAGE, orchestrator_pid, 8512,
+			 "ipc-route-denied-orchestrator-tool",
+			 AGENT_STATUS_DENIED,
+			 "unrouted orchestrator send tool denied");
+	check_route_tool(AGENT_TOOL_LLM_REQUEST, orchestrator_pid, 8513,
+			 "ipc-route-denied-orchestrator-llm",
+			 AGENT_STATUS_DENIED,
+			 "unrouted orchestrator llm request denied");
+	phase = 'D';
+	check(write(report_fd, &phase, 1) == 1, "report route denial phase");
+	check(read(gate_fd, &phase, 1) == 1 && phase == 'G',
+	      "wait route grant");
+
+	check_route_wake(target_pid, 8521, "ipc-route-allowed-wake",
+			 AGENT_STATUS_OK, "granted recovery wake");
+	check_route_tool(AGENT_TOOL_SEND_MESSAGE, target_pid, 8522,
+			 "ipc-route-allowed-tool", AGENT_STATUS_OK,
+			 "granted recovery send tool");
+	check_route_tool(AGENT_TOOL_LLM_REQUEST, target_pid, 8523,
+			 "ipc-route-allowed-llm", AGENT_STATUS_OK,
+			 "granted recovery llm request");
+	phase = 'A';
+	check(write(report_fd, &phase, 1) == 1, "report routed messages");
+	check(read(gate_fd, &phase, 1) == 1 && phase == 'R',
+	      "wait route revoke");
+
+	check_route_wake(target_pid, 8531, "ipc-route-revoked-wake",
+			 AGENT_STATUS_DENIED, "revoked recovery wake denied");
+	check_route_tool(AGENT_TOOL_SEND_MESSAGE, target_pid, 8532,
+			 "ipc-route-revoked-tool", AGENT_STATUS_DENIED,
+			 "revoked recovery send tool denied");
+	check_route_tool(AGENT_TOOL_LLM_REQUEST, target_pid, 8533,
+			 "ipc-route-revoked-llm", AGENT_STATUS_DENIED,
+			 "revoked recovery llm request denied");
+	phase = 'X';
+	check(write(report_fd, &phase, 1) == 1, "report route revoke phase");
+	printf("agentsecurity_ucore: route_source_enforced=1\n");
+	exit(0);
+}
+
+static void check_ipc_route_authorization(void)
+{
+	struct agent_event event;
+	int target_setup[2];
+	int target_ready[2];
+	int source_gate[2];
+	int source_report[2];
+	int target_pid;
+	int source_pid;
+	int status = 0;
+	char phase = 0;
+
+	check(pipe(target_setup) == 0, "create route target setup pipe");
+	check(pipe(target_ready) == 0, "create route target ready pipe");
+	check(pipe(source_gate) == 0, "create route source gate pipe");
+	check(pipe(source_report) == 0, "create route source report pipe");
+	check(agent_watch(AGENT_EVENT_MESSAGE, "ipc-route-") == 0,
+	      "watch orchestrator route probes");
+	target_pid = agent_create_role(AGENT_ROLE_RECOVERY);
+	check(target_pid >= 0, "create route target");
+	if (target_pid == 0)
+		run_ipc_route_target(target_setup[0], target_ready[1]);
+	check(read(target_ready[0], &phase, 1) == 1 && phase == 'T',
+	      "wait route target ready");
+
+	source_pid = agent_create_role(AGENT_ROLE_SENTINEL);
+	check(source_pid >= 0, "create route source");
+	if (source_pid == 0)
+		run_ipc_route_source(target_pid, getppid(), source_gate[0],
+				     source_report[1]);
+	check(write(target_setup[1], &source_pid, sizeof(source_pid)) ==
+		      (int)sizeof(source_pid),
+	      "configure route target source");
+	check(read(source_report[0], &phase, 1) == 1 && phase == 'D',
+	      "wait unauthorized route probes");
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, 0) == AGENT_STATUS_TIMEOUT,
+	      "unrouted orchestrator messages not queued");
+
+	check(agent_route_config(source_pid, target_pid,
+				 AGENT_IPC_EVENT_MESSAGE,
+				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_OK,
+	      "orchestrator grants child route");
+	phase = 'G';
+	check(write(source_gate[1], &phase, 1) == 1, "release granted source");
+	check(read(source_report[0], &phase, 1) == 1 && phase == 'A',
+	      "wait granted route traffic");
+	check(read(target_ready[0], &phase, 1) == 1 && phase == 'A',
+	      "wait routed messages consumed");
+	check(agent_route_config(source_pid, target_pid,
+				 AGENT_IPC_EVENT_MESSAGE,
+				 AGENT_IPC_ROUTE_REVOKE) == AGENT_STATUS_OK,
+	      "orchestrator revokes child route");
+	phase = 'R';
+	check(write(source_gate[1], &phase, 1) == 1, "release revoked source");
+	check(read(source_report[0], &phase, 1) == 1 && phase == 'X',
+	      "wait revoked route probes");
+	phase = 'X';
+	check(write(target_setup[1], &phase, 1) == 1,
+	      "release route target after revoke");
+
+	check(waitpid(source_pid, &status) == source_pid, "wait route source");
+	check(status == 0, "route source status");
+	check(waitpid(target_pid, &status) == target_pid, "wait route target");
+	check(status == 0, "route target status");
+	check(agent_unwatch(AGENT_EVENT_MESSAGE, "ipc-route-") == 1,
+	      "unwatch orchestrator route probes");
+	printf("agentsecurity_ucore: ipc_route_authorization=1\n");
+}
+
+static void run_consent_route_target(int ready_fd)
+{
+	struct agent_event event;
+	char phase = 'C';
+
+	check_role(AGENT_ROLE_RECOVERY, "consent-route-target");
+	check(agent_watch(AGENT_EVENT_LLM_DONE, "consent-response") == 0,
+	      "watch consent response");
+	check(agent_route_config(getppid(), getpid(),
+				 AGENT_IPC_EVENT_LLM_DONE,
+				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_OK,
+	      "target accepts llm response source");
+	check(write(ready_fd, &phase, 1) == 1,
+	      "report target route consent");
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, 200) == AGENT_STATUS_OK,
+	      "receive consent response");
+	check(event.type == AGENT_EVENT_LLM_DONE,
+	      "consent response type");
+	check(event.source_pid == getppid(), "consent response source");
+	check(event.corr_id == 8552, "consent response correlation");
+	check(strcmp(event.payload, "consent-response") == 0,
+	      "consent response payload");
+	exit(0);
+}
+
+static void check_target_route_consent(void)
+{
+	int ready[2];
+	int target_pid;
+	int status = 0;
+	char phase = 0;
+
+	check(pipe(ready) == 0, "create consent route ready pipe");
+	target_pid = agent_create_role(AGENT_ROLE_RECOVERY);
+	check(target_pid >= 0, "create consent route target");
+	if (target_pid == 0)
+		run_consent_route_target(ready[1]);
+	check(read(ready[0], &phase, 1) == 1 && phase == 'C',
+	      "wait target route consent");
+	check_route_wake(target_pid, 8551, "consent-message-denied",
+			 AGENT_STATUS_DENIED,
+			 "llm-only route rejects message");
+	check_route_tool(AGENT_TOOL_LLM_RESPONSE, target_pid, 8552,
+			 "consent-response", AGENT_STATUS_OK,
+			 "target-consented llm response");
+	check(waitpid(target_pid, &status) == target_pid,
+	      "wait consent route target");
+	check(status == 0, "consent route target status");
+	close(ready[0]);
+	close(ready[1]);
+	printf("agentsecurity_ucore: target_route_consent=1\n");
+}
+
+static void run_route_lifetime_source(int gate_fd, uint64 corr_id)
+{
+	struct agent_event event;
+	char phase = 0;
+
+	check_role(AGENT_ROLE_SENTINEL, "route-lifetime-source");
+	check(read(gate_fd, &phase, 1) == 1 && phase == 'X',
+	      "wait route lifetime release");
+	memset(&event, 0, sizeof(event));
+	event.type = AGENT_EVENT_MESSAGE;
+	event.corr_id = corr_id;
+	strcpy(event.payload, "route-lifetime");
+	check(agent_wake(getppid(), &event) == AGENT_STATUS_OK,
+	      "send through churned route");
+	exit(0);
+}
+
+static void check_route_slot_reclamation(void)
+{
+	int gate[2];
+	int source_pid;
+	int status = 0;
+	char phase = 'X';
+	struct agent_event event;
+
+	check(agent_watch(AGENT_EVENT_MESSAGE, "route-lifetime") == 0,
+	      "watch route lifetime messages");
+	for (int i = 0; i < AGENT_IPC_ROUTE_MAX + 2; i++) {
+		check(pipe(gate) == 0, "create route lifetime gate");
+		source_pid = agent_create_role(AGENT_ROLE_SENTINEL);
+		check(source_pid >= 0, "create route lifetime source");
+		if (source_pid == 0)
+			run_route_lifetime_source(gate[0], 8600 + i);
+		check(agent_route_config(source_pid, getpid(),
+					 AGENT_IPC_EVENT_MESSAGE,
+					 AGENT_IPC_ROUTE_GRANT) ==
+			      AGENT_STATUS_OK,
+		      "grant churned source route");
+		check(write(gate[1], &phase, 1) == 1,
+		      "release route lifetime source");
+		memset(&event, 0, sizeof(event));
+		check(agent_wait(&event, 50) == AGENT_STATUS_OK,
+		      "receive through churned route");
+		check(event.type == AGENT_EVENT_MESSAGE &&
+			      event.source_pid == source_pid &&
+			      event.corr_id == (uint64)(8600 + i) &&
+			      strcmp(event.payload, "route-lifetime") == 0,
+		      "validate churned route message");
+		check(waitpid(source_pid, &status) == source_pid,
+		      "wait route lifetime source");
+		check(status == 0, "route lifetime source status");
+		close(gate[0]);
+		close(gate[1]);
+	}
+	check(agent_unwatch(AGENT_EVENT_MESSAGE, "route-lifetime") == 1,
+	      "unwatch route lifetime messages");
+	printf("agentsecurity_ucore: route_slot_reclaimed=1\n");
 }
 
 static void run_orchestrator(void)
@@ -608,6 +931,9 @@ static void run_orchestrator(void)
 
 	check_role(AGENT_ROLE_ORCHESTRATOR, "orchestrator");
 	check_orchestrator_plain_fork_denied();
+	check_ipc_route_authorization();
+	check_target_route_consent();
+	check_route_slot_reclamation();
 	check_preinit_index_query();
 	check(agent_file_meta_init() == 0, "meta init");
 	check_legacy_tool_mismatch();
@@ -671,6 +997,9 @@ static void check_plain_process_denied(void)
 	strcpy(meta.stage, "align");
 	strcpy(meta.status, "failed");
 	check(agent_wake(1, &event) == -1, "plain wake denied");
+	check(agent_route_config(1, 1, AGENT_IPC_EVENT_MESSAGE,
+				 AGENT_IPC_ROUTE_GRANT) == -1,
+	      "plain route config denied");
 	check(agent_wait_cancel(1, "plain cancel") == -1,
 	      "plain wait cancel denied");
 	check(agent_audit_snapshot(0, 0) == -1, "plain audit denied");

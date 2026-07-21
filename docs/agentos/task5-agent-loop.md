@@ -10,10 +10,10 @@ AgentOS-uCore 当前实现的是可验证的 Agent Loop 内核机制：
 
 - Agent 最多可注册 8 条 watch；
 - Agent 可删除指定 watch，或一次清空全部 watch；
-- 每个 Agent 有 16 槽 FIFO 事件队列；
+- 每个 Agent 有 16 槽 FIFO 事件队列；可归因外部事件合计最多 12 条，directed IPC 与 attributed notification 各自最多 8 条，同一 stable source 跨两类最多 4 条，为显式内核 origin 保留至少 4 个容量名额；
 - Agent 可等待事件，有限 timeout 会进入睡眠并由 tick 唤醒，事件入队会唤醒目标 Agent；
-- 其他 Agent 或内核工具可唤醒目标 Agent；
-- 具备消息发送或编排能力的 Agent 可取消目标 Agent 的等待；
+- 跨 Agent 的 `MESSAGE` / `LLM_DONE` 只有在接收方或受权控制者建立定向路由后才能入队，自投递隐式允许；
+- 具备独立 `WAIT_CANCEL` 能力且持有直接控制关系的 Agent 可取消目标 Agent 的等待；消息路由不授予等待取消权；
 - 文件元数据状态变化可触发事件；
 - Agent 可设置 heartbeat，注册 TIMER watch 后可收到 heartbeat 事件；删除 TIMER watch 后不会消费 TIMER 事件；
 - Agent 可通过 `agent_heartbeat_stop()` 停止 heartbeat；
@@ -48,8 +48,8 @@ AgentOS-uCore 当前实现的是可验证的 Agent Loop 内核机制：
 | --- | --- | --- |
 | `AGENT_EVENT_FILE_STATUS` | 文件状态变化 | `agent_file_meta_set()` |
 | `AGENT_EVENT_MESSAGE` | Agent 消息 | 用户态 `agent_wake()` 或消息工具 |
-| `AGENT_EVENT_TIMER` | 定时或心跳 | `agent_tick()` |
-| `AGENT_EVENT_JOB_DONE` | 作业完成 | 预留 |
+| `AGENT_EVENT_TIMER` | 定时或心跳 | heartbeat 到期由 `agent_tick()` 或 `agent_wait()` 检查后入队；有限 wait timeout 直接返回 TIMER/TIMEOUT，不入队 |
+| `AGENT_EVENT_JOB_DONE` | 作业完成 | `agent_object_state_update()` 的 attributed 广播 |
 | `AGENT_EVENT_POLICY_DENIED` | 策略拒绝 | 预留或工具结果 |
 | `AGENT_EVENT_CONTEXT_LIMIT` | Context 限制事件 | 预留 |
 | `AGENT_EVENT_LLM_DONE` | LLM Relay 返回解释或摘要 | 受权 `llm_response` 工具路径 |
@@ -57,6 +57,16 @@ AgentOS-uCore 当前实现的是可验证的 Agent Loop 内核机制：
 | `AGENT_EVENT_CANCELLED` | 等待取消 | `agent_wait_cancel()` |
 
 事件结构 `struct agent_event` 包含 type、source_pid、target_pid、status、event_id、tick、corr_id、cause_sequence、span_id 和 payload。`cause_sequence` 指向触发事件的前序 Context sequence，`span_id` 表示事件所属因果链。
+
+事件队列仍保持单一 FIFO 顺序，但资源核算显式区分 origin 和事件类别：
+
+- `DIRECTED`：经定向路由投递的 `MESSAGE` / `LLM_DONE`，计入 IPC、external 和 stable source 三组计数；
+- `ATTRIBUTED`：由某个 Agent 操作触发的 `FILE_STATUS` / `JOB_DONE` / `POLICY_DENIED` / `CONTEXT_LIMIT` / `DASHBOARD_EXPORT`，计入 attributed、external 和同一 stable source 计数；
+- `KERNEL`：内核直接产生且不归因到 Agent 的系统事件，当前包括 heartbeat TIMER；不计入 external，只受 16 槽总容量约束。
+
+`AGENT_EVENT_EXTERNAL_LIMIT=12` 为 `KERNEL` origin 保留至少 4 个总容量名额；`AGENT_EVENT_IPC_LIMIT=8` 和 `AGENT_EVENT_ATTRIBUTED_LIMIT=8` 又让 directed 与 attributed 两类互相保留至少 4 个 external 名额；`AGENT_EVENT_SOURCE_LIMIT=4` 按 stable source control id 跨两类合计，防止同一主体换事件类型绕过配额。用户可见 `source_pid` 只用于观察，不参与身份核算。`LLM_DONE` 虽然只能由受权专用工具产生，但资源类别仍是 directed IPC，必须同时命中 `LLM_DONE` 路由。
+
+面向多个 watcher 的系统事件使用逐订阅者独立投递：一个目标未匹配、退出或队列已满时，内核继续检查后续目标，不让慢订阅者阻塞其他 Agent。文件元数据的权威状态一旦提交，事件广播只是通知，不会因某个 watcher 的队列资源不足而把已提交操作错误报告为失败。
 
 ## 观察项：Watch
 
@@ -108,6 +118,26 @@ Agent event、timeline、子进程退出和线程退出分别拥有独立 `struc
 
 这项机制同时保证 Agent Loop 的两个性质：事件入队只唤醒等待该 Agent event 的线程；timeline 新记录只在保存的完整 filter 匹配时唤醒 timeline waiter。`usersafety_ucore` 用互斥量和无关进程压力验证定向唤醒，`procreap_ucore` 验证阻塞线程退出时的队列取消，`agentfinal_ucore` 验证 source/event filter 不匹配时不会发生 timeline 唤醒。
 
+## 可信 IPC 路由
+
+接口：
+
+```c
+int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
+                       int operation);
+```
+
+跨 Agent 数据面采用默认拒绝的定向路由。每个目标 Agent 最多保存 16 条来源路由，键是 source 创建时由内核签发、单调且不复用的 `agent_control_id`，值是允许的事件类型位图。当前位图只包含 `AGENT_IPC_EVENT_MESSAGE` 和 `AGENT_IPC_EVENT_LLM_DONE`。自投递隐式允许，不占路由槽。
+
+路由可由两类主体配置：
+
+1. target 自己以 `WATCH` 能力显式接受某个仍存活的 source。
+2. 具备 `ROUTE_MANAGE` 的控制者为自己或其直接创建的 Agent 配置；source 与 target 都必须是控制者自身或其直接受控 Agent。
+
+grant/revoke 支持按事件位图增量更新并保持幂等。revoke 只阻止后续事件入队，已经通过授权并进入 FIFO 的事件仍可消费。PID 只用于当次定位；内核在同一关中断临界区内解析两个 PID、核对 stable control id、控制关系并更新路由。source 退出会从所有目标删除对应来源项，target 退出会清空自身路由表，因此 PID 或 PCB 槽复用不会继承旧授权。
+
+`agent_wake()`、`send_message`、`llm_request` 和 `llm_response` 的直接投递都经过同一条“解析存活对象 -> 路由鉴权 -> watch 匹配 -> 队列配额 -> 入队”路径。只有成功入队后才更新兼容 mailbox 和 metadata 预取交接，拒绝或资源不足不会留下旁路副作用。
+
 ## 唤醒：Wake
 
 接口：
@@ -120,11 +150,11 @@ int agent_wake(int pid, struct agent_event *event);
 
 1. 校验调用者是具备 `MESSAGE_SEND` 或 `ORCHESTRATE` 的 Agent。
 2. 用户态接口唯一接受 `AGENT_EVENT_MESSAGE`；即使调用者是 orchestrator，也不能提交 FILE_STATUS、TIMER、LLM_DONE 等系统事件。
-3. 查找目标 pid 并检查目标是否为 Agent。
+3. 在同一临界区内解析 source/target，并检查自投递或 `MESSAGE` 定向路由。
 4. 检查目标 watch 是否匹配消息类型和 payload。
-5. 写入目标 FIFO 事件队列并唤醒目标进程。
+5. 检查同一 stable source、directed IPC、external 和事件总量配额，成功后写入目标 FIFO 并唤醒目标进程。
 
-这里的授权能力只决定调用者能否发送消息，不扩大可提交的事件类型。非法/空事件类型返回 `AGENT_STATUS_BAD_PARAM`；`LLM_DONE`、`FILE_STATUS`、`TIMER` 等保留事件返回 `AGENT_STATUS_DENIED`，必须由各自的内核或受权专用工具路径产生。队列满时返回 `AGENT_STATUS_NO_SPACE`，不会覆盖旧事件。`send_message` 工具在目标队列满时也返回 `AGENT_STATUS_NO_SPACE`，并避免留下不可感知的消息副作用。`agentsecurity_ucore: wake_event_authorization=1` 覆盖普通进程拒绝、系统事件拒绝、非法类型拒绝和合法 MESSAGE 成功四类路径。
+这里的 capability 只决定调用者能否发起消息，不授予全局目标范围，也不扩大可提交的事件类型。非法/空事件类型返回 `AGENT_STATUS_BAD_PARAM`；`LLM_DONE`、`FILE_STATUS`、`TIMER` 等保留事件返回 `AGENT_STATUS_DENIED`，必须由各自的内核或受权专用工具路径产生。未建立路由同样返回 `AGENT_STATUS_DENIED`。同一 stable source 跨 directed/attributed 达到 4 条、directed IPC 达到 8 条、external 合计达到 12 条或总队列达到 16 槽时返回 `AGENT_STATUS_NO_SPACE`，不会覆盖旧事件；显式内核 origin 可以越过 external=12 的边界使用预留容量。`send_message` 工具遵循同一语义，并避免留下不可感知的 mailbox 副作用。
 
 `agentfinal_ucore` 用自唤醒验证最小路径，检查事件能够入队、等待能够返回，并且相关记录进入 Run Ledger。`labdemo_ucore` 用跨 Agent 消息验证场景路径，检查 sentinel 到 investigator 的消息事件能够被内核投递和消费。原始输出统一见 [test-record.md](test-record.md)。
 
@@ -158,13 +188,12 @@ int agent_wait_cancel(int pid, const char *reason);
 | 目标已有未消费取消令牌 | `AGENT_STATUS_DUPLICATE` |
 | 写入取消令牌成功 | 0 |
 
-取消令牌不进入普通事件队列，也不受 watch/filter 限制，因此授权边界必须独立于消息能力。`agentloop_ucore` 验证 orchestrator 能取消自己直接创建的 sentinel；`agentsecurity_ucore` 验证所有低权限角色虽保留 `MESSAGE_SEND` 却没有取消能力，并验证旧 controller 退出、PCB 槽被新 orchestrator 复用后，新进程仍不能取消遗留目标，而普通 MESSAGE 仍可交付：
+取消令牌不进入普通事件队列，也不受 watch/filter 或 IPC 路由限制，因此授权边界必须独立于消息能力。`agentloop_ucore` 验证 orchestrator 能取消自己直接创建的 sentinel；`agentsecurity_ucore` 验证所有低权限角色虽保留 `MESSAGE_SEND` 却没有取消能力，并验证旧 controller 退出、PCB 槽被新 orchestrator 复用后，新进程既不能取消遗留目标，也不能继承旧消息路由。历史测试输出只证明等待取消边界；新的路由和队列隔离标记必须以本次专项测试实际输出为准，不能从旧的 `message_send_preserved=1` 推断。
 
 ```text
 agentloop_ucore: wait_cancel=1
 agentsecurity_ucore: wait_cancel_capability_split=1
 agentsecurity_ucore: wait_cancel_scope=1
-agentsecurity_ucore: message_send_preserved=1
 ```
 
 ## 心跳：Heartbeat
@@ -285,14 +314,16 @@ agentsched_ucore: reason_trace=1 records=... reason=... score=...
 1. 具备 `AGENT_CAP_META_WRITE` 的 Agent 更新文件元数据；
 2. 如果状态字段发生变化，内核构造 `AGENT_EVENT_FILE_STATUS`；
 3. 内核查找匹配 watch 的 Agent；
-4. 把事件投递给目标 Agent；
+4. 逐目标独立投递；某个 watcher 队列已满时继续检查后续 watcher；
 5. 目标 Agent 从 `agent_wait()` 返回。
 
-`labdemo_ucore` 会在用户态写入科研示例数据后触发文件状态变化，sentinel 通过 watch 收到事件。原始输出见 [test-record.md](test-record.md)。
+文件 metadata 是先提交的权威状态，广播只是 best-effort 通知。单个慢 watcher 的队列资源不足不会回滚状态，也不会让 `agent_file_meta_set()` 在提交后错误返回 `AGENT_STATUS_NO_SPACE`。`labdemo_ucore` 会在用户态写入科研示例数据后触发文件状态变化，sentinel 通过 watch 收到事件。原始输出见 [test-record.md](test-record.md)。
 
 ## 消息事件
 
 `AGENT_TOOL_SEND_MESSAGE` 和 `agent_wake()` 都可以向目标 Agent 发送 MESSAGE 事件。消息事件用于多 Agent 协作。`agent_wake()` 是 Agent-only syscall，调用者必须具备 `AGENT_CAP_MESSAGE_SEND` 或 `AGENT_CAP_ORCHESTRATE`；普通进程直接调用会返回 `-1`。MESSAGE 是该用户态 syscall 唯一允许的事件类型：即使调用者是 Agent 或 orchestrator，也不能通过它把用户提供的类型伪装成 `FILE_STATUS`、`TIMER`、`LLM_DONE` 等系统事件。
+
+能力检查之后还必须命中 source -> target 的 `AGENT_IPC_EVENT_MESSAGE` 路由；知道目标 PID、与目标具有相同角色、controller 或资源域都不足以投递。自投递隐式允许。`send_message`、`agent_wake` 和 LLM 工具共用同一交付路径，未授权返回 `AGENT_STATUS_DENIED`，watch 不匹配或目标已退出返回 `AGENT_STATUS_NOT_FOUND`，stable source / directed IPC / external / total 任一配额不足返回 `AGENT_STATUS_NO_SPACE`。只有成功入队才执行 mailbox 镜像和 metadata 预取交接。
 
 `labdemo_ucore` 中两段消息：
 
@@ -300,6 +331,8 @@ agentsched_ucore: reason_trace=1 records=... reason=... score=...
 | --- | --- | --- |
 | sentinel | investigator | 发现失败后请求调查 |
 | investigator | recovery | 完成分析后请求恢复 |
+
+orchestrator 在三个工作 Agent 报告 ready、触发初始失败事件前，显式 grant sentinel -> investigator 和 investigator -> recovery 的 `MESSAGE` 路由。路由表达的是工作流拓扑，而不是对某个角色或 PID 范围的全局授权。
 
 message 入队时，内核还会把发送者当前可见的 metadata 预取提示复制到接收者的提示 ring。提示包含同一 span 时，还会写入全局 span 预取提示总线。接收者消费消息后继承 span，可以通过 `agent_file_prefetch_snapshot()` 查看交接到自己名下的提示，也可以通过 `agent_file_prefetch_span_snapshot()` 查看同一因果链中的提示来源和接收者。
 
@@ -332,7 +365,9 @@ Context v6 还会把事件和后续工具调用连起来，并继续维护 Conte
 | 限制项 | 说明 |
 | --- | --- |
 | 调度策略 | 当前支持 orchestrator 配置 weight、priority 和 budget，尚未实现复杂策略语言；这些参数都是软策略，固定为 8 的强制 Agent/FIFO 公平上限不可配置 |
-| 事件容量 | 当前每 Agent 固定 16 槽 FIFO，队列满时拒绝新事件 |
+| 事件容量 | 当前每 Agent 固定 16 槽 FIFO；external 合计 12、directed IPC 8、attributed notification 8、同一 stable source 跨两类 4，为显式 `KERNEL` origin 保留至少 4 个容量名额，所有事件仍受总容量 16 |
+| IPC 路由 | 每个 target 最多 16 条 stable source 路由，当前只授权 `MESSAGE` / `LLM_DONE`；需要更多事件类型时必须扩展事件分类、能力和负向测试，不能复用裸 PID |
+| 路由可观测性 | 当前没有 route snapshot/query，grant/revoke 本身也不追加 Context 或 audit；全局审计只能看到随后成功入队/消费的事件，不能据此还原全部授权变更 |
 | 取消范围 | 当前支持取消正在等待或下一次等待的 Agent；尚未实现通用任务取消 |
 | 多核复杂场景 | 当前按 uCore 当前运行环境和测试路径验证锁保护和队列状态 |
 | LLM 驱动 | 当前由用户测试程序驱动，不接真实 LLM |
@@ -345,9 +380,9 @@ Context v6 还会把事件和后续工具调用连起来，并继续维护 Conte
 | --- | --- |
 | `agentfinal_ucore` | 自唤醒事件可被 watch/wait 消费，相关 Context、事件、调度和预取统计进入 Run Ledger。 |
 | `agentbench_ucore` | timeout 会更新 heartbeat/timeout 统计；busy polling 与 wait/wake 都有可复查的 tick 观测。 |
-| `agentloop_ucore` | FIFO 顺序、cause/span、队列满拒绝、unwatch、睡眠 timeout、TIMER unwatch、heartbeat stop 和 wait cancel 均可用。 |
+| `agentloop_ucore` | FIFO、cause/span、unwatch、睡眠 timeout、TIMER unwatch、heartbeat stop 和 wait cancel 均通过；`message_source_limit=4`、`ipc_class_limit=8`、`external_limit=12`、`system_event_reserved=4`、`external_reject_reclaim=1` 和 `broadcast_slow_watcher_isolated=1` 进一步验证单来源/IPC/external 边界、第 13 条 external 被拒绝、4 条 KERNEL TIMER 填满保留容量、消费后 directed/attributed 重新接纳及慢 watcher 隔离。attributed=8 与 stable source 混合跨类仍缺独立边界输出。 |
 | `agentsched_ucore` | 角色权重、orchestrator 调度配置、事件优先、原因记录和公平性计数均写入调度记录；普通进程在持续可运行高分 Agent 下先取得进展，并输出 `normal_progress=1 max_agent_burst=8`。 |
-| `agentsecurity_ucore` | 用户态 `agent_wake()` 只允许 MESSAGE；普通进程、保留系统事件和非法类型均被拒绝，合法消息仍可投递。 |
+| `agentsecurity_ucore` | 用户态 `agent_wake()` 只允许 MESSAGE；普通进程、保留系统事件和非法类型均被拒绝。`route_source_enforced=1`、`route_target_isolated=1`、`ipc_route_authorization=1`、`message_route_lifecycle=1`、`target_route_consent=1` 和 `route_slot_reclaimed=1` 验证未授权拒绝、控制者 grant/revoke、新 control id 隔离、target 自主接受 LLM_DONE、LLM-only route 拒绝 MESSAGE，以及超过 16 个短命 source 后路由槽可回收。 |
 | `usersafety_ucore` | 无关睡眠者不会被同步对象的定向唤醒破坏，syscall 返回后内核继续存活。 |
 | `procreap_ucore` / `procreap_agent_ucore` | 阻塞线程退出会从等待队列安全取消；高分 Agent 持续可运行时，退出清理和普通任务仍得到有界调度。 |
-| `labdemo_ucore` | 文件状态事件唤醒 sentinel，message 触发 investigator，预取提示随 span 交接，digest、LLM 调用、恢复计划、全局审计、timeline 和 provenance 都进入同一条示例链路。 |
+| `labdemo_ucore` | orchestrator 显式建立 sentinel -> investigator -> recovery 路由后，文件状态和 message 驱动协作；预取提示、digest、LLM 调用、恢复计划、全局审计、timeline 和 provenance 在完整专项复测中保持同一条示例链路。 |

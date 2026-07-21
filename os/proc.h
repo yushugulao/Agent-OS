@@ -166,10 +166,20 @@ struct proc {
 	int agent_watch_valid[AGENT_WATCH_MAX];
 	int agent_watch_event_type[AGENT_WATCH_MAX];
 	char agent_watch_filter[AGENT_WATCH_MAX][AGENT_WATCH_FILTER_SIZE];
+	// Inbound routes bind senders to non-reused kernel control IDs.
+	int agent_ipc_route_count;
+	uint64 agent_ipc_route_source[AGENT_IPC_ROUTE_MAX];
+	uint64 agent_ipc_route_events[AGENT_IPC_ROUTE_MAX];
 	struct agent_event agent_events[AGENT_EVENT_QUEUE_CAP];
+	// Source identities stay private so the public event ABI cannot forge them.
+	uint64 agent_event_source_control[AGENT_EVENT_QUEUE_CAP];
+	uint64 agent_event_accounting[AGENT_EVENT_QUEUE_CAP];
 	int agent_event_head;
 	int agent_event_tail;
 	int agent_event_count_queued;
+	int agent_external_event_count_queued;
+	int agent_ipc_count_queued;
+	int agent_attributed_event_count_queued;
 	uint64 agent_event_count;
 	uint64 agent_event_dropped;
 	uint64 agent_wait_count;

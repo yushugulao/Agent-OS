@@ -66,19 +66,21 @@ bash scripts/run-agent-tests.sh
 
 脚本会按顺序启动 QEMU，并运行以下测试程序：
 
+下表描述当前测试程序的覆盖契约和通过标记。2026-07-21 已完成完整 AgentOS 专项 QEMU 复测；其后新增的路由槽实际投递和队列消费后立即重接纳断言，也分别通过 `agentsecurity_ucore` 与 `agentloop_ucore` 定向 QEMU 复测。
+
 | 测试程序 | 覆盖重点 | 通过标记 |
 | --- | --- | --- |
 | `agentfinal_ucore` | Agent 创建、Context 映射、批量工具调用、Context Path、snapshot、rollback、用户 cache、timeline、provenance、Run Ledger。 | `agentfinal_ucore: parent passed` |
 | `agentfs_ucore` | 真实 inode 绑定、`.agentmeta`、属性查询、索引查询、查询缓存、内容摘要、预取提示、文件删除清理。 | `agentfs_ucore: parent passed` |
 | `agentscan_ucore` | 根目录自动扫描、自动 metadata 写入、文件创建和删除后的 metadata 更新。 | `agentscan_ucore: parent passed` |
-| `agentloop_ucore` | FIFO 事件队列、watch/unwatch、timeout 睡眠、heartbeat、wait cancel、事件因果继承。 | `agentloop_ucore: parent passed` |
+| `agentloop_ucore` | FIFO、stable source=4、directed=8、external=12、KERNEL origin 预留容量、消费后配额归还、慢 watcher 广播隔离、watch/unwatch、timeout、heartbeat、wait cancel、事件因果。 | `message_source_limit=4`、`ipc_class_limit=8`、`external_limit=12`、`system_event_reserved=4`、`external_reject_reclaim=1`、`broadcast_slow_watcher_isolated=1`、`parent passed` |
 | `agentsched_ucore` | 角色权重、受权调度配置、事件优先、调度原因记录、公平性观测。 | `agentsched_ucore: parent passed` |
 | `agentconflict_ucore` | 文件编辑租约、非持有者写入拒绝、版本提交检查、普通进程拒绝。 | `agentconflict_ucore: parent passed` |
-| `agentllm_ucore` | 结构化 LLM 请求、Relay Agent 模板响应、LLM capability、完成事件、Context/timeline 记录。 | `agentllm_ucore: parent passed` |
-| `agentbench_ucore` | 批量工具调用、Context 快照、文件查询 scan/index 对照、查询缓存、预取提示、timeout/heartbeat 计时观测。 | `agentbench_ucore: parent passed` |
+| `agentllm_ucore` | 显式 `MESSAGE` / `LLM_DONE` route 下的结构化请求、Relay 模板响应、LLM capability、完成事件、Context/timeline。 | `agentllm_ucore: parent passed` |
+| `agentbench_ucore` | 批量工具、Context、文件查询、预取、timeout/heartbeat，以及显式 route 下的 wait/wake 计时。 | `agentbench_ucore: parent passed` |
 | `labbench_ucore` | 综合场景中的性能入口，包装运行 `agentbench_ucore`。 | `labbench_ucore: parent passed` |
-| `labdemo_ucore` | 多 Agent 科研恢复场景、文件查询、预取交接、消息唤醒、权限拒绝、恢复动作、audit、timeline、provenance。 | `labdemo_ucore: parent passed` |
-| `agentsecurity_ucore` | 普通进程拒绝、低权限 Agent 伪造拒绝、`.agentmeta` 保护、scoped action/artifact、全局审计权限、基础 mail/trace。 | `agentsecurity_ucore: parent passed` |
+| `labdemo_ucore` | orchestrator 建立 sentinel -> investigator -> recovery 路由后的恢复场景、文件查询、预取交接、消息、权限、audit/timeline/provenance。 | `labdemo_ucore: parent passed` |
+| `agentsecurity_ucore` | 普通/低权限拒绝、route grant/revoke、旧 controller 隔离、target consent、source 退出回收、`.agentmeta`、scoped action/artifact、审计权限、mail/trace。 | `route_source_enforced=1`、`route_target_isolated=1`、`ipc_route_authorization=1`、`message_route_lifecycle=1`、`target_route_consent=1`、`route_slot_reclaimed=1`、`parent passed` |
 | `agenttrust_ucore` | 可执行映像 W^X、密封映像不可变、bootstrap 授权范围、Agent 角色与可信映像绑定。 | `agenttrust_ucore: parent passed` |
 | `agentvfs_ucore` | 工作流文件能力、公共/工作流命名空间隔离、继承描述符重新鉴权、精确能力委派和失败事务原子性。 | `agentvfs_ucore: parent passed` |
 | `usersafety_ucore` | syscall 指针、字符串、`exec` 参数、线程入口、等待队列、管道、文件和信号量输入范围。 | `usersafety_ucore: parent passed` |

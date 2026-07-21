@@ -778,6 +778,9 @@ void syscall()
 	case SYS_agent_worker_create:
 		ret = sys_agent_worker_create(args[0], args[1]);
 		break;
+	case SYS_agent_route_config:
+		ret = sys_agent_route_config(args[0], args[1], args[2], args[3]);
+		break;
 	// LAB5: (2) you may need to add case SYS_enable_deadlock_detect here
 	default:
 		ret = -1;

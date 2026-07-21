@@ -32,7 +32,7 @@ usersafety_ucore
 | `agentfinal_ucore` | 覆盖任务一至三核心功能，同时检查文件索引和事件自唤醒 |
 | `agentfs_ucore` | 检查任务四的真实 inode 绑定、私有 `.agentmeta` 重新加载和索引查询 |
 | `agentscan_ucore` | 检查任务四的根目录自动扫描、真实文件元数据建立和索引维护 |
-| `agentloop_ucore` | 检查任务五的 FIFO 事件队列、unwatch、有限 timeout 睡眠、wait cancel、TIMER unwatch 和 heartbeat stop |
+| `agentloop_ucore` | 检查任务五的 FIFO 事件队列、stable source 上限、内核 TIMER 共存、unwatch、有限 timeout 睡眠、wait cancel、TIMER unwatch 和 heartbeat stop |
 | `agentsched_ucore` | 检查任务五的 Agent 感知调度、受权配置、事件状态、调度原因和公平性计数 |
 | `agentconflict_ucore` | 检查真实文件编辑租约、版本提交和非持有者写入拒绝 |
 | `agentllm_ucore` | 检查结构化 LLM 请求、Relay 响应、完成事件和 timeline 记录 |
@@ -158,7 +158,13 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentloop_ucore CHAPT
 | --- | --- |
 | `fifo=1` | 事件按照投递顺序被消费 |
 | `event_causality=1` | 事件携带 cause/span，消费事件后的工具调用可以继续同一因果链 |
-| `overflow_dropped=1` | 16 槽队列满时拒绝新事件，不覆盖旧事件 |
+| `overflow_dropped=1` | 当前由同一 stable source 的第 5 条消息触发拒绝，不覆盖旧事件；不再表示 16 槽已经填满 |
+| `message_source_limit=4` | 同一 stable source 的 directed MESSAGE 达到 4 条上限；消费 1 条后可立即补投，证明来源计数逐槽归还。跨 directed/attributed 共用仍没有混合事件输出 |
+| `ipc_class_limit=8` | 两个 stable source 各发送 4 条 directed MESSAGE，触及 IPC 类边界 |
+| `external_limit=12` | 再加入 4 条 attributed 通知，使 external 数量达到 12 |
+| `system_event_reserved=4` | external=12 后，4 条 heartbeat TIMER 越过 external admission 边界并将总队列填到 16 |
+| `external_reject_reclaim=1` | 第 13 条 external 不入队；消费全部事件后，directed 与 attributed 事件均可再次接纳 |
+| `broadcast_slow_watcher_isolated=1` | 较早 watcher 队列已满时，后续 watcher 仍收到同一 attributed 广播 |
 | `unwatch=1` | watch 可删除 |
 | `timeout_sleep_no_poll=1` | 有限 timeout 等待进入睡眠，不通过循环消耗 CPU |
 | `timer_unwatch=1` | TIMER watch 删除后，heartbeat 不再投递可消费 TIMER 事件 |
@@ -253,24 +259,25 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=labdemo_ucore CHAPTER
 
 1. 内核首次加载清单中带 bootstrap 标志且允许 orchestrator 的可信 init；启动 grant 只在这次初始装载建立。
 2. orchestrator 初始化文件元数据并创建三个业务 Agent。
-3. sentinel 监听 `status=failed`。
-4. orchestrator 注入 align 阶段失败。
-5. sentinel 收到事件并查询文件索引。
-6. sentinel 读取内核给出的 metadata 预取提示。
-7. sentinel 尝试恢复但权限不足，被内核拒绝。
-8. sentinel 发送普通 investigate 消息，内核在 message 入队时把 sentinel 的预取提示交接给 investigator。
-9. investigator 查询 align 摘要和依赖，确认影响范围。
-10. investigator 从自己的预取提示 snapshot 中读取带 `HANDOFF` 原因位的 analyze 提示，并从当前 span 的全局提示总线确认 source/target pid。
-11. investigator 查询当前 span 的系统级短记录，确认 Context、事件和预取交接摘要已经进入内核记录。
-12. investigator 输出模板 LLM 解释事件和恢复计划事件，预留 LLM Gateway 和 Planner/Auditor 拆分入口。
-13. investigator 输出 Context Snapshot，呈现决策过程中的可审计记录。
-14. investigator 唤醒 recovery。
-15. recovery 通过权限检查并执行恢复。
-16. recovery 重复执行同一恢复动作，内核识别为 duplicate。
-17. recovery 写报告状态并输出带 corr_id 的 report 事件。
-18. 最终查询报告文件，系统输出 recovered。
-19. orchestrator 查询全局审计短记录，确认三个业务 Agent 的 Context、事件、调度和预取交接摘要都可见。
-20. orchestrator 按 kind、span、文件状态事件、预取 source/target 和起始 sequence 过滤查询全局短记录。
+3. 三个 Agent 报告 ready 后，orchestrator 显式 grant sentinel -> investigator 和 investigator -> recovery 的 `MESSAGE` 路由，再开始故障流程。
+4. sentinel 监听 `status=failed`。
+5. orchestrator 注入 align 阶段失败。
+6. sentinel 收到事件并查询文件索引。
+7. sentinel 读取内核给出的 metadata 预取提示。
+8. sentinel 尝试恢复但权限不足，被内核拒绝。
+9. sentinel 发送普通 investigate 消息，内核在 message 入队时把 sentinel 的预取提示交接给 investigator。
+10. investigator 查询 align 摘要和依赖，确认影响范围。
+11. investigator 从自己的预取提示 snapshot 中读取带 `HANDOFF` 原因位的 analyze 提示，并从当前 span 的全局提示总线确认 source/target pid。
+12. investigator 查询当前 span 的系统级短记录，确认 Context、事件和预取交接摘要已经进入内核记录。
+13. investigator 输出模板 LLM 解释事件和恢复计划事件，预留 LLM Gateway 和 Planner/Auditor 拆分入口。
+14. investigator 输出 Context Snapshot，呈现决策过程中的可审计记录。
+15. investigator 沿已授权路由唤醒 recovery。
+16. recovery 通过权限检查并执行恢复。
+17. recovery 重复执行同一恢复动作，内核识别为 duplicate。
+18. recovery 写报告状态并输出带 corr_id 的 report 事件。
+19. 最终查询报告文件，系统输出 recovered。
+20. orchestrator 查询全局审计短记录，确认三个业务 Agent 的 Context、事件、调度和预取交接摘要都可见。
+21. orchestrator 按 kind、span、文件状态事件、预取 source/target 和起始 sequence 过滤查询全局短记录。
 
 ### 9.3 关键观察点
 

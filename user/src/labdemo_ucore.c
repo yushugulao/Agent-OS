@@ -213,6 +213,9 @@ static void run_investigator(void)
 	ready('I');
 	check(agent_wait(&event, 300) == AGENT_STATUS_OK,
 	      "investigator wait");
+	check(event.type == AGENT_EVENT_MESSAGE,
+	      "investigator message type");
+	check(event.corr_id == 1003, "investigator message correlation");
 	check(strncmp(event.payload, "investigate " DEMO_RUN " align",
 		      strlen("investigate " DEMO_RUN " align")) == 0,
 	      "investigator message payload");
@@ -336,6 +339,11 @@ static void run_recovery(void)
 	check(agent_watch(AGENT_EVENT_MESSAGE, "recover") == 0, "watch recover");
 	ready('R');
 	check(agent_wait(&event, 300) == AGENT_STATUS_OK, "recovery wait");
+	check(event.type == AGENT_EVENT_MESSAGE, "recovery message type");
+	check(event.corr_id == 2003, "recovery message correlation");
+	check(strncmp(event.payload, "recover " DEMO_RUN " align plan=" DEMO_PLAN,
+		      strlen("recover " DEMO_RUN " align plan=" DEMO_PLAN)) == 0,
+	      "recovery message payload");
 	make_op(&op, AGENT_TOOL_CAPABILITY_CHECK, 3001,
 		AGENT_ROLE_RECOVERY, "action_commit");
 	run_one(&op, &res, AGENT_STATUS_OK, "capability");
@@ -782,6 +790,14 @@ static void run_orchestrator(void)
 		check(read(ready_pipe[0], &ch, 1) == 1, "ready read");
 		ready_count++;
 	}
+	check(agent_route_config(sentinel_pid, investigator_pid,
+				 AGENT_IPC_EVENT_MESSAGE,
+				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_OK,
+	      "grant sentinel investigator route");
+	check(agent_route_config(investigator_pid, recovery_pid,
+				 AGENT_IPC_EVENT_MESSAGE,
+				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_OK,
+	      "grant investigator recovery route");
 	inject_failure();
 	while (wait(&status) > 0) {
 		check(status == 0, "child status");

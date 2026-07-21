@@ -90,8 +90,18 @@
 #define AGENT_CONTEXT_RECORD_F_MANUAL    2
 #define AGENT_CONTEXT_RECORD_F_TRUNCATED 4
 
-#define AGENT_EVENT_QUEUE_CAP 16
-#define AGENT_WATCH_MAX       8
+#define AGENT_EVENT_QUEUE_CAP           16
+#define AGENT_EVENT_KERNEL_RESERVE       4
+#define AGENT_EVENT_CLASS_RESERVE        4
+#define AGENT_EVENT_EXTERNAL_LIMIT \
+	(AGENT_EVENT_QUEUE_CAP - AGENT_EVENT_KERNEL_RESERVE)
+#define AGENT_EVENT_IPC_LIMIT \
+	(AGENT_EVENT_EXTERNAL_LIMIT - AGENT_EVENT_CLASS_RESERVE)
+#define AGENT_EVENT_ATTRIBUTED_LIMIT \
+	(AGENT_EVENT_EXTERNAL_LIMIT - AGENT_EVENT_CLASS_RESERVE)
+#define AGENT_EVENT_SOURCE_LIMIT         4
+#define AGENT_IPC_ROUTE_MAX              16
+#define AGENT_WATCH_MAX                   8
 
 #define AGENT_SCHED_POLICY_ADAPTIVE 1
 #define AGENT_SCHED_DEFAULT_BUDGET  8
@@ -279,6 +289,15 @@
 #define AGENT_EVENT_CANCELLED     9
 #define AGENT_EVENT_MAX           AGENT_EVENT_CANCELLED
 
+#define AGENT_EVENT_MASK(type) (1ULL << (type))
+#define AGENT_IPC_EVENT_MESSAGE  AGENT_EVENT_MASK(AGENT_EVENT_MESSAGE)
+#define AGENT_IPC_EVENT_LLM_DONE AGENT_EVENT_MASK(AGENT_EVENT_LLM_DONE)
+#define AGENT_IPC_EVENT_MASK \
+	(AGENT_IPC_EVENT_MESSAGE | AGENT_IPC_EVENT_LLM_DONE)
+
+#define AGENT_IPC_ROUTE_REVOKE 0
+#define AGENT_IPC_ROUTE_GRANT  1
+
 #define AGENT_ROLE_SENTINEL      1
 #define AGENT_ROLE_INVESTIGATOR  2
 #define AGENT_ROLE_RECOVERY      3
@@ -305,6 +324,7 @@
 #define AGENT_CAP_ORCHESTRATE   (1ULL << 9)
 #define AGENT_CAP_LLM_RELAY     (1ULL << 10)
 #define AGENT_CAP_WAIT_CANCEL   (1ULL << 11)
+#define AGENT_CAP_ROUTE_MANAGE  (1ULL << 12)
 #define AGENT_CAP_RECOVER_STAGE AGENT_CAP_ACTION_WRITE
 #define AGENT_CAP_REPORT_WRITE  AGENT_CAP_ARTIFACT_WRITE
 #define AGENT_CAP_DEPENDENCY_UPDATE AGENT_CAP_META_WRITE
@@ -845,6 +865,8 @@ int sys_agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
 int sys_agent_file_edit_abort(uint64 lease_id);
 int sys_agent_file_edit_state(uint64 pathaddr, uint64 stateaddr);
 int sys_agent_worker_create(uint64 pathaddr, uint64 requested_caps);
+int sys_agent_route_config(int source_pid, int target_pid, uint64 event_mask,
+			   int operation);
 int sys_agent_file_prefetch_snapshot(uint64 hintsaddr, int max);
 int sys_agent_file_prefetch_span_snapshot(uint64 hintsaddr, int max);
 

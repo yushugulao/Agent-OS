@@ -6,7 +6,7 @@
 
 ### 系统调用：Agent-OS
 
-Agent-OS 在 uCore syscall 编号空间中使用 500 至 539：
+Agent-OS 在 uCore syscall 编号空间中使用 500 至 540：
 
 | syscall | 编号 | 用户态原型 | 说明 |
 | --- | ---: | --- | --- |
@@ -50,6 +50,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 539：
 | `agent_file_edit_abort` | 537 | `int agent_file_edit_abort(uint64)` | 放弃当前进程持有的编辑租约 |
 | `agent_file_edit_state` | 538 | `int agent_file_edit_state(const char *, struct agent_file_edit_state *)` | 查询真实文件当前编辑租约和版本状态 |
 | `agent_worker_create` | 539 | `int agent_worker_create(const char *, uint64)` | 创建等待执行指定 immutable、domain-safe worker 映像的非 Agent workflow worker，并按映像安全配置衰减文件系统能力 |
+| `agent_route_config` | 540 | `int agent_route_config(int, int, uint64, int)` | 为指定 source/target Agent 授予或撤销 `MESSAGE` / `LLM_DONE` 定向 IPC 路由 |
 
 `agent_run` 和 `context_snapshot` 是性能主路径。`agent_file_prefetch_snapshot` 用于读取当前 Agent 自己可见的 metadata 预取提示，`agent_file_prefetch_span_snapshot` 用于读取同一 span 下跨 Agent 汇总的 metadata 预取提示。`agent_trace_snapshot` 是单个 Agent 的运行查看和排查主路径，用于把工具调用历史与调度原因放进同一组短记录中。`agent_span_trace_snapshot` 读取当前 Agent 所在 span 的系统级短记录，使参与协作的 Agent 能解释本轮协作中的 Context、事件和预取交接来源。`agent_timeline_snapshot` 是统一导出入口，把当前 Agent 可见的 Context、调度、审计和预取提示转换成同一种 record，便于科研平台页面直接读取。`agent_timeline_query` 在同一组可见记录上执行 source、tick、span、pid、kind、tool、event、status、flags 和 after-cursor 过滤，减少页面重复拉取和用户态筛选，也支持页面拿上一条记录作为游标继续读取后续记录。`agent_timeline_wait` 复用同一 filter，在没有匹配记录时让 Agent 睡眠；新记录写入时内核把新记录规范化为 `agent_timeline_record`，并直接用等待者保存的完整 filter 判断是否唤醒。`agent_timeline_read` 在同一套规则上把等待和复制合并为一次 syscall，减少页面或 Agent worker 的 wait 后再 query 成本。`agent_file_edit_begin`、`agent_file_edit_commit`、`agent_file_edit_abort` 和 `agent_file_edit_state` 是真实文件编辑冲突控制接口；内核用真实 `dev + inum + incarnation` 识别文件，并在 `write`、`O_TRUNC`、`unlink` 路径上检查租约持有者。`agent_worker_create` 不创建 Agent 身份或 Agent Context，而是让 orchestrator 显式建立一个最小权限 workflow worker；子进程随后必须执行创建时绑定的 immutable、domain-safe worker 映像才能取得受限文件系统能力。`agent_provenance_snapshot` 导出同一可见范围内的因果边，用于页面绘制“哪个 Context、事件或预取提示触发了后续动作”。`agent_audit_snapshot` 和 `agent_audit_query` 是 orchestrator 的系统级观测入口，用于读取和过滤最近 512 条全局短记录。`agent_ledger_snapshot` 在同一组全局短记录上返回可见范围、总量、已淘汰数、分类计数和账本 hash，便于页面用一个摘要判断本轮运行事实是否仍处在同一条内核维护的记录链上。`agent_call` 是赛题“工具名称 + 参数键值列表”结构化协议的正式入口，也兼容已有示例程序。
 
@@ -144,7 +145,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 539：
 | `sched_last_score` / `sched_last_reason` / `sched_trace_count` | 最近一次调度分数、原因 flags 和累计原因记录数 |
 | `current_span_id` / `current_cause_sequence` / `provenance_edges` | 当前 Agent 的因果链观测字段 |
 
-事件队列容量为 `AGENT_EVENT_QUEUE_CAP = 16`。watch 数量上限为 `AGENT_WATCH_MAX = 8`。
+事件队列容量为 `AGENT_EVENT_QUEUE_CAP = 16`。所有带 Agent 来源、可归因到外部主体的事件合计最多占 `AGENT_EVENT_EXTERNAL_LIMIT = 12` 槽，因此 admission accounting 始终为显式 `KERNEL` origin 保留至少 4 个容量名额；其中定向 IPC（`MESSAGE` / `LLM_DONE`）和带来源的系统通知（如 `FILE_STATUS` / `JOB_DONE` / `POLICY_DENIED`）各自最多占 8 槽，为另一类外部事件各保留至少 4 个 external 名额。同一个 stable source control id 跨这两类合计最多保留 4 条未消费事件。watch 数量上限为 `AGENT_WATCH_MAX = 8`，每个目标最多保存 `AGENT_IPC_ROUTE_MAX = 16` 条 IPC 来源路由。
 
 ## 角色与 capability
 
@@ -166,7 +167,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 539：
 | `AGENT_ROLE_INVESTIGATOR` | `META_READ`、`CONTENT_READ`、`MESSAGE_SEND`、`WATCH`、`AUDIT_WRITE` |
 | `AGENT_ROLE_RECOVERY` | `META_READ`、`CONTENT_READ`、`MESSAGE_SEND`、`WATCH`、`ACTION_WRITE`、`ARTIFACT_WRITE`、`AUDIT_WRITE` |
 | `AGENT_ROLE_ARTIFACT` | `META_READ`、`CONTENT_READ`、`MESSAGE_SEND`、`WATCH`、`ARTIFACT_WRITE`、`AUDIT_WRITE` |
-| `AGENT_ROLE_ORCHESTRATOR` | 全部能力，包括 `META_WRITE`、`ORCHESTRATE`、`LLM_RELAY` 和 `WAIT_CANCEL` |
+| `AGENT_ROLE_ORCHESTRATOR` | 全部能力，包括 `META_WRITE`、`ORCHESTRATE`、`LLM_RELAY`、`WAIT_CANCEL` 和 `ROUTE_MANAGE` |
 
 Agent 创建授权与业务操作授权彼此独立。前者只使用内核 `struct proc.agent_role_grant_mask`；后者使用 `agent_role` 和 `agent_capability_mask`。构建期可信清单集中定义源程序、安装映像名、不可变/启动标志、允许角色和文件系统安全配置；mkfs 把策略写入 inode，loader 按 inode 策略和映像布局建立进程凭据。bootstrap grant 只在内核初次装载带 `BOOTSTRAP` 标志的可信映像时产生，不根据 PID、父 PID 或用户态字符串推断；普通 fork 不复制 grant，普通进程成功 exec 会清空 grant，也不会因为执行同名或带 bootstrap 标志的映像而恢复。Agent 执行新映像时还必须满足该可信 inode 的角色掩码。`agent_op.arg0` 中传入的 role 只保留为旧兼容参数，不参与 `capability_check`、`action_commit`、`artifact_update`、`llm_response` 等敏感工具授权。`rerun_stage` 和 `write_report` 仍可调用，但它们只是面向旧示例的兼容别名；运行记录、事件 action 和重复请求判断都归入 `action_commit` 或 `artifact_update`。
 
@@ -198,6 +199,7 @@ Agent-only 直接 syscall 的权限要求：
 | syscall | 普通进程 | Agent capability 要求 |
 | --- | --- | --- |
 | `agent_wake` | 返回 `-1` | `MESSAGE_SEND` 或 `ORCHESTRATE` |
+| `agent_route_config` | 返回 `-1` | 接收方可用 `WATCH` 接受来源；非接收方调用需要 `ROUTE_MANAGE`，且 source/target 均为调用者自身或直接受控 Agent |
 | `agent_wait_cancel` | 返回 `-1` | `WAIT_CANCEL`，且目标由调用者直接创建并受其控制 |
 | `agent_file_meta_init` | 返回 `-1` | `META_WRITE` |
 | `agent_file_meta_set` | 返回 `-1` | `META_WRITE` |
@@ -220,7 +222,22 @@ Agent-only 直接 syscall 的权限要求：
 | `agent_sched_config` | 返回 `-1` | `ORCHESTRATE` |
 | `agent_worker_create` | 无 `ORCHESTRATE` 返回 `AGENT_STATUS_DENIED`；非法能力返回 `AGENT_STATUS_BAD_PARAM`；用户地址、映像查找、VFS 鉴权或进程分配失败返回 `-1` | `ORCHESTRATE`；并受请求能力、父凭据和目标映像 profile 的共同上限约束 |
 
-`agent_wake()` 是消息投递接口，只接受 `AGENT_EVENT_MESSAGE`。`AGENT_EVENT_NONE` 或超出 `AGENT_EVENT_MAX` 的类型返回 `AGENT_STATUS_BAD_PARAM`；`FILE_STATUS`、`TIMER`、`POLICY_DENIED`、`LLM_DONE` 等由内核或专用工具产生的事件返回 `AGENT_STATUS_DENIED`。例如 `LLM_DONE` 只能由具备 `LLM_RELAY` capability 的 `llm_response` 工具路径投递，不能通过 `agent_wake()` 伪造。
+`agent_wake()` 是消息投递接口，只接受 `AGENT_EVENT_MESSAGE`。`AGENT_EVENT_NONE` 或超出 `AGENT_EVENT_MAX` 的类型返回 `AGENT_STATUS_BAD_PARAM`；`FILE_STATUS`、`TIMER`、`POLICY_DENIED`、`LLM_DONE` 等由内核或专用工具产生的事件返回 `AGENT_STATUS_DENIED`。例如 `LLM_DONE` 只能由具备 `LLM_RELAY` capability 的 `llm_response` 工具路径投递，不能通过 `agent_wake()` 伪造。`MESSAGE_SEND` 只表示调用者能够发起消息，不再等价于向任意 PID 投递；跨 Agent 的 `agent_wake`、`send_message`、非零 target 的 `llm_request` 和 `llm_response` 还必须命中相应事件类型的定向 IPC 路由。`llm_request(target_pid=0, ...)` 是只记录摘要、不执行投递的模式，不需要 route。
+
+### 定向 Agent IPC 路由
+
+接口：
+
+```c
+int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
+                       int operation);
+```
+
+`event_mask` 只接受 `AGENT_IPC_EVENT_MESSAGE`、`AGENT_IPC_EVENT_LLM_DONE` 或两者的组合；`operation` 为 `AGENT_IPC_ROUTE_GRANT` 或 `AGENT_IPC_ROUTE_REVOKE`。跨 Agent 投递默认拒绝，自投递隐式允许且不占路由槽。接收方可用自己的 `WATCH` 能力显式接受某个仍存活的 source；具备 `ROUTE_MANAGE` 的控制者也可为自己或直接创建的 Agent 配置路由，但 source 和 target 都必须处于该控制边界内，因此不能借 PID 为无关 Agent 建立通道。
+
+内核把 PID 解析、存活检查、控制关系检查和路由更新放在同一临界区中。路由表保存 source 的内核私有 64 位 `agent_control_id`，不把 PID、PCB 槽、父指针、角色或资源域当作授权身份。source 退出时，其所有入站授权会从各目标回收；target 退出时清空自己的路由表，所以 PID 或 PCB 槽复用不会继承旧通道。重复 grant/revoke 是幂等操作；revoke 或 source 退出只阻止后续入队，之前已经成功入队的事件仍按 FIFO 消费。
+
+消息投递先完成路由授权，再匹配目标 watch 并占用队列资源。未授权返回 `AGENT_STATUS_DENIED`；目标不存在、正在退出或 watch/filter 不匹配返回 `AGENT_STATUS_NOT_FOUND`；路由表或队列配额耗尽返回 `AGENT_STATUS_NO_SPACE`。兼容 mailbox 镜像和 metadata 预取交接只在授权事件成功入队后更新，拒绝路径不会留下旁路副作用。
 
 ## 高性能请求结构
 
@@ -274,8 +291,8 @@ Agent-only 直接 syscall 的权限要求：
 | `AGENT_STATUS_UNKNOWN_TOOL` | -2 | 工具不存在 |
 | `AGENT_STATUS_NOT_AGENT` | -3 | 普通进程调用 Agent-only 接口 |
 | `AGENT_STATUS_BAD_PARAM` | -4 | 参数键、类型或必要参数错误 |
-| `AGENT_STATUS_NOT_FOUND` | -5 | 文件、Agent 或历史节点不存在 |
-| `AGENT_STATUS_NO_SPACE` | -6 | Context 空间、事件队列或布局不可用 |
+| `AGENT_STATUS_NOT_FOUND` | -5 | 文件、Agent 或历史节点不存在；直接事件投递的目标 watch 不匹配也使用该状态 |
+| `AGENT_STATUS_NO_SPACE` | -6 | Context、IPC route 表、事件总量/source/class/external 配额或布局空间不可用 |
 | `AGENT_STATUS_TIMEOUT` | -7 | `agent_wait()` 等待超时 |
 | `AGENT_STATUS_DENIED` | -8 | capability 或角色权限拒绝 |
 | `AGENT_STATUS_DUPLICATE` | -9 | 重复幂等动作被识别 |
@@ -294,7 +311,7 @@ Agent-only 直接 syscall 的权限要求：
 | 5 | `get_system_status` | `none` | 进程数量、Agent 数量和系统 tick |
 | 6 | `read_context` | `none` | 本次调用追加后的 Context Path 记录数、head 和总调用次数 |
 | 7 | `query_file` | `path:string` 或 `key=value` 属性过滤串 | 兼容路径查询；属性查询返回 hits、scanned、used_index、query plan、truncated 和首个命中文件 |
-| 8 | `send_message` | `target_pid:uint64,message:string` | 向目标 Agent 发送短消息 |
+| 8 | `send_message` | `target_pid:uint64,message:string` | 沿已授权 `MESSAGE` 路由向目标 Agent 发送短消息 |
 | 9 | `read_message` | `none` | 读取当前 Agent 消息 |
 | 10 | `file_meta_init` | `none` | 重新加载 `.agentmeta`、重建索引并启用根目录扫描；后端为空时安装空元数据表 |
 | 11 | `read_file_summary` | `selector:string` | 按物理名、逻辑路径或对象 label 返回摘要 |
@@ -309,8 +326,8 @@ Agent-only 直接 syscall 的权限要求：
 | 20 | `read_file_digest` | `selector:string` | 读取真实文件的短预览、参与计算字节数和 FNV-1a 内容指纹 |
 | 21 | `action_commit` | `selector:string` | 按通用对象 selector 幂等提交 Agent 动作，可根据依赖标签刷新后续对象 |
 | 22 | `artifact_update` | `selector:string` | 按通用对象 selector 更新工件、报告、记忆或结果对象状态 |
-| 23 | `llm_request` | `target_pid:uint64,prompt_summary:string` | 记录 LLM 请求摘要，可把请求事件投递给用户态 LLM Relay |
-| 24 | `llm_response` | `target_pid:uint64,response_summary:string` | 由具备 `LLM_RELAY` 的 Agent 投递 LLM 结果事件，唤醒请求方 |
+| 23 | `llm_request` | `target_pid:uint64,prompt_summary:string` | 记录 LLM 请求摘要；target 非零时沿 `MESSAGE` 路由投递，target 为零时只记录 |
+| 24 | `llm_response` | `target_pid:uint64,response_summary:string` | 由具备 `LLM_RELAY` 的 Agent 沿 `LLM_DONE` 路由投递结果，唤醒请求方 |
 | 25 | `dependency_update` | `selector:string` | 由具备元数据写权限的 Agent 注册或更新通用对象依赖 |
 
 工具描述中 `flags` 表示调用方式：
@@ -494,7 +511,7 @@ Agent-only 直接 syscall 的权限要求：
 
 ## 任务五 Agent Loop ABI
 
-Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。队列满时返回 `AGENT_STATUS_NO_SPACE`，不会覆盖旧事件。每个 Agent 最多注册 8 条 watch。相同 `event_type + filter` 会替换原 watch，`agent_unwatch()` 可删除匹配 watch 或清空全部 watch。有限 timeout 的 `agent_wait()` 会进入睡眠，由事件入队、heartbeat 到期、deadline 到期或 wait cancel 令牌唤醒；`agent_info.wait_loop_count` 用于观察该路径没有反复轮询。
+Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。可归因外部事件合计上限为 12；directed IPC 与 attributed system notification 各自上限为 8；同一 stable source 跨两类合计上限为 4。directed 投递达到任一 admission 边界时返回 `AGENT_STATUS_NO_SPACE`，不会覆盖旧事件。attributed 广播遇到某个目标超配额或总队列已满时只对该目标记 drop 并继续扫描，不把 `NO_SPACE` 透传给已经提交状态的源操作。只有显式 `KERNEL` origin（当前包括 heartbeat TIMER 等内核直接产生的事件）可以越过 external=12 的 admission 边界，继续使用总容量中保留的至少 4 个名额；它仍受 16 槽总容量约束。每个 Agent 最多注册 8 条 watch。相同 `event_type + filter` 会替换原 watch，`agent_unwatch()` 可删除匹配 watch 或清空全部 watch。有限 timeout 的 `agent_wait()` 会进入睡眠，由事件入队、heartbeat 到期、deadline 到期或 wait cancel 令牌唤醒；`agent_info.wait_loop_count` 用于观察该路径没有反复轮询。
 
 当可运行队列中存在 Agent 时，调度器会读取 Agent 状态选择可运行任务；纯普通进程负载仍走原 FIFO 取队路径。当前策略为内核自适应策略，并允许 orchestrator 配置目标 Agent 的 weight、priority 和 budget：角色权重、配置优先级、事件队列、等待状态、timeout deadline、heartbeat 到期、等待时长、虚拟运行量和预算使用量都会影响分数。分数只决定 Agent 工作的软优先级；运行队列另有不可配置的类级公平界限。当 Agent 与普通任务同时可运行时，连续调度 Agent 达到 `AGENT_SCHED_MAX_AGENT_BURST` 次后必须从 FIFO 队首选择一个普通任务，普通任务运行后重新开始 Agent burst。该界限不受 Agent 数量、角色、事件积压或调度配置影响。`agentsched_ucore` 通过 `agent_info`、`agent_sched_config()` 和 `agent_sched_snapshot()` 验证角色权重、受权调度配置、事件优先、调度原因记录、公平性计数和普通进程的有界进展。
 

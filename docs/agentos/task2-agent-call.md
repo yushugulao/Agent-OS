@@ -67,7 +67,7 @@
 | `get_system_status` | 5 | 无 | 返回进程数量、Agent 数量和系统 tick |
 | `read_context` | 6 | 无 | 返回本次调用追加后的 Context Path 记录数、head 和总调用次数 |
 | `query_file` | 7 | 路径或属性条件串 | 返回文件查询结果 |
-| `send_message` | 8 | `target_pid`、message | 向目标 Agent 发送短消息 |
+| `send_message` | 8 | `target_pid`、message | 沿显式 `MESSAGE` route 向目标 Agent 发送短消息 |
 | `read_message` | 9 | 无 | 读取当前 Agent 消息 |
 | `file_meta_init` | 10 | 无 | 重新加载任务四文件对象元数据表 |
 | `read_file_summary` | 11 | selector | 返回文件摘要 |
@@ -82,9 +82,11 @@
 | `read_file_digest` | 20 | selector | 读取真实文件短预览和 FNV-1a 内容指纹；绑定 metadata 的真实文件可复用 digest cache |
 | `action_commit` | 21 | selector | 按通用对象 selector 幂等提交 Agent 动作 |
 | `artifact_update` | 22 | selector | 按通用对象 selector 更新工件、报告、记忆或结果对象状态 |
-| `llm_request` | 23 | target_pid、prompt_summary | 记录 LLM 请求摘要，可投递给用户态 LLM Relay |
-| `llm_response` | 24 | target_pid、response_summary | 由具备 `LLM_RELAY` 的 Agent 投递 LLM 结果事件 |
+| `llm_request` | 23 | target_pid、prompt_summary | 记录请求摘要；target 非零时沿 `MESSAGE` route 投递，target 为零时只记录 |
+| `llm_response` | 24 | target_pid、response_summary | 由具备 `LLM_RELAY` 的 Agent 沿显式 `LLM_DONE` route 投递结果事件 |
 | `dependency_update` | 25 | selector | 注册或更新通用对象依赖关系 |
+
+`MESSAGE_SEND` 和 `LLM_RELAY` 只决定调用者能否发起对应操作，不授予任意目标范围。跨 Agent 的 `send_message`、非零 target `llm_request` 和 `llm_response` 还必须分别命中 target 入站表中的 `MESSAGE` 或 `LLM_DONE` route；自投递隐式允许。`llm_request(target_pid=0, ...)` 只记录摘要，不执行投递。`agentsecurity_ucore` 已覆盖 `send_message` / 非零 target `llm_request` 的未授权拒绝、`MESSAGE` grant/revoke、target 自主接受 `LLM_DONE`，并验证 LLM-only route 拒绝 `MESSAGE`；`agentllm_ucore` 提供 `LLM_DONE` route 的端到端正向回归。尚未由具备 `LLM_RELAY` 的 source 专项验证无 `LLM_DONE` 位时的响应拒绝。
 
 ## 错误处理
 
@@ -97,7 +99,7 @@
 | `AGENT_STATUS_UNKNOWN_TOOL` | 工具不存在 |
 | `AGENT_STATUS_BAD_PARAM` | 参数或必要字段不符合工具要求 |
 | `AGENT_STATUS_NOT_FOUND` | 查询文件或目标 Agent 不存在 |
-| `AGENT_STATUS_NO_SPACE` | Agent Context、事件槽或同步路径不可用 |
+| `AGENT_STATUS_NO_SPACE` | Agent Context、IPC route 表、事件 source/class/external/总量配额或同步路径不可用 |
 | `AGENT_STATUS_DENIED` | 权限检查拒绝 |
 | `AGENT_STATUS_DUPLICATE` | 重复幂等动作被识别 |
 | `AGENT_STATUS_CANCELLED` | Agent 等待被受权 Agent 取消 |

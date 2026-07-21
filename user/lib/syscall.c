@@ -485,3 +485,10 @@ int agent_file_edit_state(const char *path,
 {
 	return syscall(SYS_agent_file_edit_state, path, state);
 }
+
+int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
+		       int operation)
+{
+	return syscall(SYS_agent_route_config, source_pid, target_pid, event_mask,
+		       operation);
+}

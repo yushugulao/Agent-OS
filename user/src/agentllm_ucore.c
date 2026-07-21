@@ -96,9 +96,10 @@ static void check_relay_timeline(void)
 	say("agentllm_ucore: relay_timeline=1\n");
 }
 
-static void run_requester(void)
+static void run_requester(int gate_fd)
 {
 	int relay_pid = getppid();
+	char gate;
 
 	memset(&llm_info, 0, sizeof(llm_info));
 	check(agent_info(&llm_info) == 0, "requester info");
@@ -107,6 +108,8 @@ static void run_requester(void)
 	      "requester role");
 	check(agent_watch(AGENT_EVENT_LLM_DONE, "template_response") == 0,
 	      "watch llm done");
+	check(read(gate_fd, &gate, 1) == 1, "wait route grant");
+	close(gate_fd);
 
 	make_op(&llm_op, AGENT_TOOL_LLM_REQUEST, 9601, relay_pid,
 		"llm_request;prompt=template");
@@ -130,8 +133,10 @@ static void run_requester(void)
 
 static void run_orchestrator(void)
 {
+	int route_gate[2];
 	int requester_pid;
 	int status = 0;
+	char gate = 'g';
 
 	memset(&llm_info, 0, sizeof(llm_info));
 	check(agent_info(&llm_info) == 0, "orchestrator info");
@@ -142,11 +147,25 @@ static void run_orchestrator(void)
 	      "relay capability");
 	check(agent_watch(AGENT_EVENT_MESSAGE, "llm_request") == 0,
 	      "relay watch request");
+	check(pipe(route_gate) == 0, "route gate pipe");
 
 	requester_pid = agent_create_role(AGENT_ROLE_INVESTIGATOR);
 	check(requester_pid >= 0, "create requester");
-	if (requester_pid == 0)
-		run_requester();
+	if (requester_pid == 0) {
+		close(route_gate[1]);
+		run_requester(route_gate[0]);
+	}
+	close(route_gate[0]);
+	check(agent_route_config(requester_pid, getpid(),
+				 AGENT_IPC_EVENT_MESSAGE,
+				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_OK,
+	      "grant request route");
+	check(agent_route_config(getpid(), requester_pid,
+				 AGENT_IPC_EVENT_LLM_DONE,
+				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_OK,
+	      "grant response route");
+	check(write(route_gate[1], &gate, 1) == 1, "release requester");
+	close(route_gate[1]);
 
 	memset(&llm_event, 0, sizeof(llm_event));
 	check(agent_wait(&llm_event, 100) == AGENT_STATUS_OK,

@@ -37,6 +37,366 @@ static void expect_event(uint64 corr_id, const char *payload)
 	check(event.span_id != 0, "event span");
 }
 
+static void expect_heartbeat(void)
+{
+	struct agent_event event;
+
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, 50) == AGENT_STATUS_OK,
+	      "wait reserved heartbeat");
+	check(event.type == AGENT_EVENT_TIMER, "reserved heartbeat type");
+	check(event.source_pid == 0, "reserved heartbeat source");
+	check(strcmp(event.payload, "timer=heartbeat") == 0,
+	      "reserved heartbeat payload");
+}
+
+static void run_queue_source(int target_pid, int attributed, int gate_fd,
+			     int report_fd)
+{
+	struct agent_event event;
+	struct agent_op op;
+	struct agent_result res;
+	char phase;
+
+	check(read(gate_fd, &phase, 1) == 1 && phase == 'G',
+	      "wait queue source gate");
+	if (attributed) {
+		for (int i = 0; i < AGENT_EVENT_SOURCE_LIMIT; i++) {
+			memset(&op, 0, sizeof(op));
+			op.version = AGENT_CALL_VERSION;
+			op.tool_id = AGENT_TOOL_RERUN_STAGE;
+			op.request_id = 300 + i;
+			strcpy(op.payload, "queue-reserve-denied");
+			check(agent_run(&op, &res, 1, 0) == 1,
+			      "emit attributed event");
+			check(res.status == AGENT_STATUS_DENIED,
+			      "attributed operation denied");
+		}
+		phase = 'A';
+	} else {
+		for (int i = 0; i < AGENT_EVENT_SOURCE_LIMIT; i++) {
+			memset(&event, 0, sizeof(event));
+			event.type = AGENT_EVENT_MESSAGE;
+			event.corr_id = 200 + i;
+			strcpy(event.payload, "external-fill");
+			check(agent_wake(target_pid, &event) == AGENT_STATUS_OK,
+			      "fill directed event class");
+		}
+		phase = 'D';
+	}
+	check(write(report_fd, &phase, 1) == 1, "report queue source done");
+	exit(0);
+}
+
+static void run_external_probe(int gate_fd, int report_fd)
+{
+	struct agent_op op;
+	struct agent_result res;
+	char phase;
+
+	for (int i = 0; i < 2; i++) {
+		check(read(gate_fd, &phase, 1) == 1 &&
+			      phase == (i == 0 ? 'G' : 'R'),
+		      "wait external probe gate");
+		memset(&op, 0, sizeof(op));
+		op.version = AGENT_CALL_VERSION;
+		op.tool_id = AGENT_TOOL_RERUN_STAGE;
+		op.request_id = 380 + i;
+		strcpy(op.payload, "external-limit-probe");
+		check(agent_run(&op, &res, 1, 0) == 1,
+		      "emit external probe");
+		check(res.status == AGENT_STATUS_DENIED,
+		      "external probe operation denied");
+		phase = i == 0 ? 'X' : 'Y';
+		check(write(report_fd, &phase, 1) == 1,
+		      "report external probe");
+	}
+	exit(0);
+}
+
+static void check_queue_reservations(void)
+{
+	struct agent_info info;
+	struct agent_event event;
+	int gates[4][2];
+	int report[2];
+	int pids[4];
+	uint64 deadline;
+	int directed = 0;
+	int attributed = 0;
+	int kernel_events;
+	int status = 0;
+	char phase = 'G';
+
+	check(agent_watch(AGENT_EVENT_MESSAGE, "external-fill") == 0,
+	      "watch external fill");
+	check(agent_watch(AGENT_EVENT_POLICY_DENIED, "action=action_commit") ==
+		      0,
+	      "watch attributed denial");
+	check(agent_watch(AGENT_EVENT_TIMER, "heartbeat") == 0,
+	      "watch reserved kernel event");
+	check(pipe(report) == 0, "queue report pipe");
+	for (int i = 0; i < 4; i++) {
+		check(pipe(gates[i]) == 0, "queue gate pipe");
+		pids[i] = agent_create_role(AGENT_ROLE_SENTINEL);
+		check(pids[i] >= 0, "create queue source");
+		if (pids[i] == 0 && i < 3)
+			run_queue_source(getppid(), i == 2, gates[i][0],
+					 report[1]);
+		if (pids[i] == 0)
+			run_external_probe(gates[i][0], report[1]);
+	}
+	for (int i = 0; i < 2; i++) {
+		check(agent_route_config(pids[i], getpid(),
+					 AGENT_IPC_EVENT_MESSAGE,
+					 AGENT_IPC_ROUTE_GRANT) ==
+			      AGENT_STATUS_OK,
+		      "grant queue source route");
+		check(write(gates[i][1], &phase, 1) == 1,
+		      "release directed queue source");
+	}
+	for (int i = 0; i < 2; i++)
+		check(read(report[0], &phase, 1) == 1 && phase == 'D',
+		      "wait directed queue source");
+	check(agent_info(&info) == 0, "info at ipc class limit");
+	check(info.event_queue_count == AGENT_EVENT_IPC_LIMIT,
+	      "ipc class limit reached");
+	send_self(299, "external-fill", AGENT_STATUS_NO_SPACE);
+
+	phase = 'G';
+	check(write(gates[2][1], &phase, 1) == 1,
+	      "release attributed queue source");
+	check(read(report[0], &phase, 1) == 1 && phase == 'A',
+	      "wait attributed queue source");
+	check(agent_info(&info) == 0, "info at external limit");
+	check(info.event_queue_count == AGENT_EVENT_EXTERNAL_LIMIT,
+	      "external event limit reached");
+	phase = 'G';
+	check(write(gates[3][1], &phase, 1) == 1,
+	      "release external limit probe");
+	check(read(report[0], &phase, 1) == 1 && phase == 'X',
+	      "wait rejected external probe");
+	check(agent_info(&info) == 0 &&
+		      info.event_queue_count == AGENT_EVENT_EXTERNAL_LIMIT,
+	      "external limit rejects another source");
+
+	check(agent_heartbeat(2) == 0, "reserved kernel heartbeat set");
+	check(agent_info(&info) == 0, "info before kernel reserve");
+	deadline = info.last_heartbeat_tick + 100;
+	do {
+		check(agent_info(&info) == 0, "poll kernel reserve");
+		if (info.event_queue_count == AGENT_EVENT_QUEUE_CAP)
+			break;
+		sched_yield();
+	} while (info.current_tick < deadline);
+	check(info.event_queue_count == AGENT_EVENT_QUEUE_CAP,
+	      "kernel events fill reserved slots");
+	check(agent_heartbeat_stop() == 0, "reserved kernel heartbeat stop");
+	check(agent_info(&info) == 0, "info after kernel reserve");
+	kernel_events = (int)info.event_queue_count - AGENT_EVENT_EXTERNAL_LIMIT;
+	check(kernel_events == AGENT_EVENT_KERNEL_RESERVE,
+	      "kernel reserve event count");
+
+	for (int i = 0; i < AGENT_EVENT_EXTERNAL_LIMIT; i++) {
+		memset(&event, 0, sizeof(event));
+		check(agent_wait(&event, 50) == AGENT_STATUS_OK,
+		      "drain external queue");
+		if (event.type == AGENT_EVENT_MESSAGE) {
+			check(strcmp(event.payload, "external-fill") == 0,
+			      "directed fill payload");
+			directed++;
+		} else if (event.type == AGENT_EVENT_POLICY_DENIED) {
+			check(strcmp(event.payload,
+				     "action=action_commit;compat=rerun_stage") == 0,
+			      "attributed fill payload");
+			attributed++;
+		} else {
+			check(0, "unexpected external event type");
+		}
+	}
+	check(directed == AGENT_EVENT_IPC_LIMIT,
+	      "directed event class accounting");
+	check(attributed == AGENT_EVENT_CLASS_RESERVE,
+	      "attributed event class accounting");
+	for (int i = 0; i < kernel_events; i++)
+		expect_heartbeat();
+	check(agent_info(&info) == 0 && info.event_queue_count == 0,
+	      "reservation queue drained");
+	send_self(298, "external-fill", AGENT_STATUS_OK);
+	expect_event(298, "external-fill");
+	phase = 'R';
+	check(write(gates[3][1], &phase, 1) == 1,
+	      "release reclaimed external probe");
+	check(read(report[0], &phase, 1) == 1 && phase == 'Y',
+	      "wait reclaimed external probe");
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, 50) == AGENT_STATUS_OK,
+	      "receive reclaimed attributed event");
+	check(event.type == AGENT_EVENT_POLICY_DENIED &&
+		      event.source_pid == pids[3],
+	      "reclaimed attributed event source");
+	check(agent_info(&info) == 0 && info.event_queue_count == 0,
+	      "private event counters reclaimed");
+
+	for (int i = 0; i < 4; i++) {
+		check(waitpid(pids[i], &status) == pids[i],
+		      "wait queue source");
+		check(status == 0, "queue source status");
+		close(gates[i][0]);
+		close(gates[i][1]);
+	}
+	close(report[0]);
+	close(report[1]);
+	check(agent_unwatch(AGENT_EVENT_MESSAGE, "external-fill") == 1,
+	      "unwatch external fill");
+	check(agent_unwatch(AGENT_EVENT_POLICY_DENIED,
+			    "action=action_commit") == 1,
+	      "unwatch attributed denial");
+	check(agent_unwatch(AGENT_EVENT_TIMER, "heartbeat") == 1,
+	      "unwatch reserved kernel event");
+	printf("agentloop_ucore: ipc_class_limit=%d\n", AGENT_EVENT_IPC_LIMIT);
+	printf("agentloop_ucore: external_limit=%d\n",
+	       AGENT_EVENT_EXTERNAL_LIMIT);
+	printf("agentloop_ucore: system_event_reserved=%d\n",
+	       AGENT_EVENT_KERNEL_RESERVE);
+	printf("agentloop_ucore: external_reject_reclaim=1\n");
+}
+
+static void run_full_watcher(int ready_fd, int gate_fd)
+{
+	struct agent_info info;
+	uint64 deadline;
+	char phase = 'F';
+
+	check(agent_watch(AGENT_EVENT_TIMER, "heartbeat") == 0,
+	      "full watcher timer watch");
+	check(agent_watch(AGENT_EVENT_POLICY_DENIED, "action=action_commit") ==
+		      0,
+	      "full watcher policy watch");
+	check(agent_heartbeat(1) == 0, "full watcher heartbeat");
+	check(agent_info(&info) == 0, "full watcher info");
+	deadline = info.last_heartbeat_tick + 100;
+	do {
+		check(agent_info(&info) == 0, "poll full watcher");
+		if (info.event_queue_count == AGENT_EVENT_QUEUE_CAP)
+			break;
+		sched_yield();
+	} while (info.current_tick < deadline);
+	check(info.event_queue_count == AGENT_EVENT_QUEUE_CAP,
+	      "full watcher queue reached capacity");
+	check(agent_heartbeat_stop() == 0, "stop full watcher heartbeat");
+	check(write(ready_fd, &phase, 1) == 1, "report full watcher ready");
+	check(read(gate_fd, &phase, 1) == 1 && phase == 'X',
+	      "release full watcher");
+	exit(0);
+}
+
+static void run_later_watcher(int ready_fd, int report_fd)
+{
+	struct agent_event event;
+	char phase = 'L';
+
+	check(agent_watch(AGENT_EVENT_POLICY_DENIED, "action=action_commit") ==
+		      0,
+	      "later watcher policy watch");
+	check(write(ready_fd, &phase, 1) == 1, "report later watcher ready");
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, 200) == AGENT_STATUS_OK,
+	      "later watcher receives broadcast");
+	check(event.type == AGENT_EVENT_POLICY_DENIED,
+	      "later watcher event type");
+	check(strcmp(event.payload,
+		     "action=action_commit;compat=rerun_stage") == 0,
+	      "later watcher event payload");
+	phase = 'B';
+	check(write(report_fd, &phase, 1) == 1,
+	      "report later watcher broadcast");
+	exit(0);
+}
+
+static void run_broadcast_source(int gate_fd)
+{
+	struct agent_op op;
+	struct agent_result res;
+	char phase;
+
+	check(read(gate_fd, &phase, 1) == 1 && phase == 'G',
+	      "release broadcast source");
+	memset(&op, 0, sizeof(op));
+	op.version = AGENT_CALL_VERSION;
+	op.tool_id = AGENT_TOOL_RERUN_STAGE;
+	op.request_id = 390;
+	strcpy(op.payload, "broadcast-isolation");
+	check(agent_run(&op, &res, 1, 0) == 1,
+	      "emit isolated broadcast");
+	check(res.status == AGENT_STATUS_DENIED,
+	      "broadcast source operation denied");
+	exit(0);
+}
+
+static void check_broadcast_isolation(void)
+{
+	int ready[2];
+	int report[2];
+	int full_gate[2];
+	int source_gate[2];
+	int full_pid;
+	int later_pid;
+	int source_pid;
+	int status = 0;
+	int ready_count = 0;
+	char phase;
+
+	check(pipe(ready) == 0, "broadcast ready pipe");
+	check(pipe(report) == 0, "broadcast report pipe");
+	check(pipe(full_gate) == 0, "full watcher gate pipe");
+	check(pipe(source_gate) == 0, "broadcast source gate pipe");
+	full_pid = agent_create_role(AGENT_ROLE_SENTINEL);
+	check(full_pid >= 0, "create full watcher");
+	if (full_pid == 0)
+		run_full_watcher(ready[1], full_gate[0]);
+	later_pid = agent_create_role(AGENT_ROLE_SENTINEL);
+	check(later_pid >= 0, "create later watcher");
+	if (later_pid == 0)
+		run_later_watcher(ready[1], report[1]);
+	source_pid = agent_create_role(AGENT_ROLE_SENTINEL);
+	check(source_pid >= 0, "create broadcast source");
+	if (source_pid == 0)
+		run_broadcast_source(source_gate[0]);
+	while (ready_count < 2) {
+		check(read(ready[0], &phase, 1) == 1,
+		      "wait broadcast watcher ready");
+		check(phase == 'F' || phase == 'L',
+		      "broadcast watcher ready phase");
+		ready_count++;
+	}
+	phase = 'G';
+	check(write(source_gate[1], &phase, 1) == 1,
+	      "start broadcast source");
+	check(read(report[0], &phase, 1) == 1 && phase == 'B',
+	      "later watcher received after full watcher");
+	phase = 'X';
+	check(write(full_gate[1], &phase, 1) == 1,
+	      "stop full watcher");
+	check(waitpid(source_pid, &status) == source_pid,
+	      "wait broadcast source");
+	check(status == 0, "broadcast source status");
+	check(waitpid(later_pid, &status) == later_pid,
+	      "wait later watcher");
+	check(status == 0, "later watcher status");
+	check(waitpid(full_pid, &status) == full_pid, "wait full watcher");
+	check(status == 0, "full watcher status");
+	close(ready[0]);
+	close(ready[1]);
+	close(report[0]);
+	close(report[1]);
+	close(full_gate[0]);
+	close(full_gate[1]);
+	close(source_gate[0]);
+	close(source_gate[1]);
+	printf("agentloop_ucore: broadcast_slow_watcher_isolated=1\n");
+}
+
 static void run_cancel_waiter(void)
 {
 	struct agent_info before;
@@ -84,20 +444,32 @@ static void run_agent(void)
 
 	check(agent_watch(AGENT_EVENT_MESSAGE, "overflow") == 0,
 	      "watch overflow");
-	for (int i = 0; i < AGENT_EVENT_QUEUE_CAP; i++)
+	for (int i = 0; i < AGENT_EVENT_SOURCE_LIMIT; i++)
 		send_self(100 + i, "overflow", 0);
 	send_self(999, "overflow", AGENT_STATUS_NO_SPACE);
-	for (int i = 0; i < AGENT_EVENT_QUEUE_CAP; i++)
+	check(agent_info(&after) == 0, "info after source limit");
+	check(after.event_queue_count == AGENT_EVENT_SOURCE_LIMIT,
+	      "source limit queue depth");
+	expect_event(100, "overflow");
+	send_self(100 + AGENT_EVENT_SOURCE_LIMIT, "overflow",
+		  AGENT_STATUS_OK);
+	for (int i = 1; i < AGENT_EVENT_SOURCE_LIMIT; i++)
 		expect_event(100 + i, "overflow");
+	expect_event(100 + AGENT_EVENT_SOURCE_LIMIT, "overflow");
 	check(agent_info(&after) == 0, "info after overflow");
 	check(after.event_dropped >= 1, "dropped count");
+	check(after.event_queue_count == 0, "reserved queue drained");
 	printf("agentloop_ucore: overflow_dropped=%d\n",
 	       (int)after.event_dropped);
+	printf("agentloop_ucore: message_source_limit=%d\n",
+	       AGENT_EVENT_SOURCE_LIMIT);
 
 	check(agent_unwatch(AGENT_EVENT_MESSAGE, "overflow") == 1,
 	      "unwatch overflow");
 	send_self(1000, "overflow", AGENT_STATUS_NOT_FOUND);
 	printf("agentloop_ucore: unwatch=1\n");
+	check_queue_reservations();
+	check_broadcast_isolation();
 
 	check(agent_info(&before) == 0, "info before timeout");
 	memset(&event, 0, sizeof(event));

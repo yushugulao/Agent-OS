@@ -2,6 +2,8 @@
 
 测试目标：根目录 AgentOS-uCore 增强目标
 
+本次最终复测日期：2026-07-21
+
 测试环境：
 
 - WSL2 Ubuntu；
@@ -29,7 +31,7 @@ make build TOOLPREFIX=riscv64-linux-gnu- LOG=warn INIT_PROC=agentfinal_ucore
 bash scripts/run-agent-tests.sh
 ```
 
-独立专项记录：脚本依次运行 `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentconflict_ucore`、`agentllm_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`。专项运行要求每个程序在超时前输出 `parent passed`，且日志中不存在 `check failed`、`panic`、`unknown syscall`、`bad addr`、`IllegalInstruction` 或 `child_failed`。该记录不等于 `make full-verify` 全绿，聚合入口的已知状态见文末。
+独立专项记录：脚本依次运行 `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentconflict_ucore`、`agentllm_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`。专项运行要求每个程序在超时前输出 `parent passed`，且日志中不存在 `check failed`、`panic`、`unknown syscall`、`bad addr`、`IllegalInstruction` 或 `child_failed`。2026-07-21 完整脚本通过；其后增强的 `agentloop_ucore` 和 `agentsecurity_ucore` 边界断言也分别完成 QEMU 复测并通过。该记录不等于 `make full-verify` 全绿，聚合入口的已知状态见文末。
 
 ## 输出提取方式
 
@@ -50,19 +52,32 @@ bash scripts/run-agent-tests.sh
 | `agentfinal_ucore` | `batch first_seq=1 last_seq=64`、`tamper_protected=1`、`run_ledger=1` | Agent 创建、批量工具调用、Context 可信历史和全局运行账本可用 |
 | `agentfs_ucore` | `.agentmeta_reload=1`、`bulk_index scan=118 index=6`、`digest_cache_invalidated=1` | 真实文件元数据、索引查询和内容摘要缓存可用 |
 | `agentscan_ucore` | `background_scan usershell=1`、`auto_file_create=1`、`auto_file_delete=1` | 根目录真实文件能被扫描并同步到 Agent metadata |
-| `agentloop_ucore` | `fifo=1`、`timeout_sleep_no_poll=1`、`heartbeat_wake_stop=1` | 事件队列、睡眠等待和 heartbeat 机制可用 |
+| `agentloop_ucore` | `message_source_limit=4`、`ipc_class_limit=8`、`external_limit=12`、`system_event_reserved=4`、`external_reject_reclaim=1`、`broadcast_slow_watcher_isolated=1` | FIFO、睡眠等待、heartbeat、directed 单来源=4、directed 类=8、external=12、第 13 条 external 拒绝、4 条 KERNEL TIMER 保留容量、消费后重接纳和慢 watcher 隔离均通过 |
 | `agentsched_ucore` | `role_weights ...`、`event_priority=1`、`reason_trace=1` | Agent 感知调度和调度原因记录可用 |
 | `agentconflict_ucore` | `conflict_denied=1`、`direct_write_denied=1`、`stale_commit=1` | 文件编辑冲突由内核真实文件路径阻止 |
 | `agentllm_ucore` | `relay_timeline=1`、`requester_done=1` | LLM Relay 事件、唤醒和 timeline 摘要可用 |
 | `agentbench_ucore` | `batch_agent_run`、`file_index_query`、`timeline_query_prefetch` | 性能主路径和文件索引/Timeline 查询可观测 |
 | `labdemo_ucore` | `type=INCIDENT_CREATED`、`prefetch_handoff=analyze`、`provenance_graph edges=...` | 设定的模拟流程 多 Agent 恢复场景可复现 |
-| `agentsecurity_ucore` | `plain_process_denied=1`、`wake_event_authorization=1`、`sentinel spoof_denied=1` | 系统事件防伪、权限限制和多 run 定向写入可验证 |
+| `agentsecurity_ucore` | `route_source_enforced=1`、`route_target_isolated=1`、`ipc_route_authorization=1`、`message_route_lifecycle=1`、`target_route_consent=1`、`route_slot_reclaimed=1` | 系统事件防伪、未授权注入拒绝、grant/revoke、target LLM_DONE consent、MESSAGE 位图隔离、stable control id 生命周期和 source 退出槽回收均通过 |
 | `agenttrust_ucore` | `wx_image=1`、`immutable_image=1`、`role_image_binding=1` | W^X、可信映像不可变和 Agent 角色映像绑定可验证 |
 | `agentvfs_ucore` | `inherited_fd_revalidated=1`、`protected_paths=1` | 普通 VFS 路径不能绕过文件能力，继承描述符会按当前凭据重新鉴权 |
 | `usersafety_ucore` | `live after pointer bounds`、`live after directed wakeup`、`parent passed` | syscall 输入检查、定向唤醒和失败事务回滚可验证 |
 | `fsenospc_ucore` | `inode exhaustion survived`、`block exhaustion survived` | inode、inode cache 与数据块耗尽返回失败而非触发内核 panic |
 | `procreap_ucore` / `procreap_agent_ucore` | `live-domain-limit=1`、`reserved-agent-slot=1` | 进程回收、资源域配额与系统保留槽可验证 |
 | 内核栈预算 | `kernel stack budget`、`kernel stack user path` | 构建期 callgraph/栈帧预算检查随内核构建执行 |
+
+## 本次可信 IPC 变更验证状态
+
+2026-07-21 的 QEMU 复测确认 stable control id 定向路由，并动态覆盖 external 合计 12、directed IPC 8、directed 单 stable source 4，以及为显式内核 origin 保留 4 个容量名额。实现还把 attributed notification 上限设为 8，并让 stable source=4 跨 directed/attributed 统一核算；这两个边界尚缺专项动态断言：
+
+- 未 grant 时，低权限 Agent 经 `agent_wake`、`send_message` 和 `llm_request` 向 Recovery/Orchestrator 投递均被拒绝，对应 `route_source_enforced=1` 和 `route_target_isolated=1`；
+- orchestrator 合法 grant 后可投递，revoke 后再次拒绝，对应 `ipc_route_authorization=1`；新 controller 的新 control id 不能使用旧 source route，对应 `message_route_lifecycle=1`。该生命周期用例不直接断言实际 PID/PCB 复用；
+- target 使用 `WATCH` 自主接受 `LLM_DONE`，LLM-only route 仍拒绝 `MESSAGE`，对应 `target_route_consent=1`；同一 target 顺序接入 `ROUTE_MAX+2` 个短命 source，每轮 route 和实际 MESSAGE 都成功，证明 source 退出后路由槽可回收，对应 `route_slot_reclaimed=1`；
+- 同一 stable source 的第 5 条未消费 directed event 返回 `AGENT_STATUS_NO_SPACE`，消费 1 条后可立即补投；两个 source 填满 directed=8，第三个 source 用 4 条 attributed 让 external 达到 12，第四个 source 的第 13 条 external 不入队，随后 4 条 KERNEL TIMER 将总队列填到 16；全部消费后 directed 和 attributed 均可重新接纳，对应 `message_source_limit=4`、`ipc_class_limit=8`、`external_limit=12`、`system_event_reserved=4` 和 `external_reject_reclaim=1`；
+- 一个已满 watcher 不阻断后续 watcher 收到 attributed 广播，对应 `broadcast_slow_watcher_isolated=1`；
+- 完整 `run-agent-tests`、`run-proc-reap-tests` 的 AgentOS/基线目标及 `agentos-platform-run` 均通过，`agentllm_ucore`、`agentbench_ucore`、`rp_agent_collab` 和 `labdemo_ucore` 在显式建路由后保持通过。
+
+仍保留的非阻断测试缺口是：attributed 单类尚未填到 8；没有让同一 stable source 混合 directed/attributed 触及 4；满 watcher 场景未动态调用 `agent_file_meta_set()` 核对已提交 metadata 的返回值；满普通队列未与 wait cancel 组合。路由侧尚未专项覆盖重复 grant/revoke 幂等、组合位图的部分 revoke、同时占满 16 条 route 后第 17 条返回 `NO_SPACE`、target 退出清表和撤销前已入队事件保留。旧的 `message_send_preserved=1` 只属于等待取消拆分时的历史行为，不再作为可信路由证据。
 
 ## 样例输出：agentfinal_ucore
 
@@ -144,7 +159,13 @@ agentloop_ucore: Agent event queue test
 agentloop_ucore: fifo=1
 agentloop_ucore: event_causality=1
 agentloop_ucore: overflow_dropped=1
+agentloop_ucore: message_source_limit=4
 agentloop_ucore: unwatch=1
+agentloop_ucore: ipc_class_limit=8
+agentloop_ucore: external_limit=12
+agentloop_ucore: system_event_reserved=4
+agentloop_ucore: external_reject_reclaim=1
+agentloop_ucore: broadcast_slow_watcher_isolated=1
 agentloop_ucore: timeout_sleep_no_poll=1
 agentloop_ucore: timer_unwatch=1
 agentloop_ucore: heartbeat_wake_stop=1
@@ -153,7 +174,7 @@ agentloop_ucore: passed
 agentloop_ucore: parent passed
 ```
 
-结论：16 槽 FIFO 事件队列顺序正确，事件带有 cause/span，队列满时拒绝新事件且不覆盖旧事件；`agent_unwatch()`、有限 timeout 睡眠、wait cancel、TIMER unwatch、heartbeat 唤醒和停止均通过。
+结论：16 槽 FIFO 顺序、cause/span、`agent_unwatch()`、有限 timeout 睡眠、wait cancel、TIMER unwatch、heartbeat 唤醒和停止均通过。新增配额断言确认单来源 4 条、directed 8 条、external 12 条边界；单来源消费 1 条后可立即补投，第 13 条 external 不入队，4 条 KERNEL TIMER 可填满保留容量，全部消费后 directed 与 attributed 可重新接纳，满 watcher 也不阻断后续订阅者。`overflow_dropped=1` 现在由单来源第 5 条 MESSAGE 触发，不再代表总队列已经填满。
 
 ## 样例输出：agentsched_ucore
 
@@ -305,11 +326,16 @@ agentsecurity_ucore: role=retired-controller capability_checked=1
 agentsecurity_ucore: role=cancel-victim capability_checked=1
 agentsecurity_ucore: role=replacement-controller capability_checked=1
 agentsecurity_ucore: wait_cancel_scope=1
-agentsecurity_ucore: message_send_preserved=1
+agentsecurity_ucore: message_route_lifecycle=1
 agentsecurity_ucore: wait_cancel_controller_lifecycle=1
 agentsecurity_ucore: role=orchestrator capability_checked=1
 agentsecurity_ucore: bootstrap_orchestrator_create=1
 agentsecurity_ucore: orchestrator_plain_fork_denied=1
+agentsecurity_ucore: route_target_isolated=1
+agentsecurity_ucore: route_source_enforced=1
+agentsecurity_ucore: ipc_route_authorization=1
+agentsecurity_ucore: target_route_consent=1
+agentsecurity_ucore: route_slot_reclaimed=1
 agentsecurity_ucore: preinit_index_query=1
 agentsecurity_ucore: legacy_tool_mismatch=1
 agentsecurity_ucore: legacy_param_validation=1 syscall_only=1
@@ -338,7 +364,7 @@ agentsecurity_ucore: bootstrap_exec_grant_revoked=1
 agentsecurity_ucore: parent passed
 ```
 
-结论：内核加载的可信初始进程是唯一 bootstrap 创建授权根；授权留在内核 PCB 中并与业务 capability 分离，不扩展未版本化的 `agent_info` ABI。普通 `fork`、普通子进程 `exec`、orchestrator 的普通 `fork` 以及可信根自身 `exec` 均不会传播或保留创建权，已回收 Agent 进程槽再次用于普通进程时也不残留身份、能力或 Context；只有 orchestrator 能委派角色，低权限角色无法继续创建任何 Agent。等待取消进一步从 `MESSAGE_SEND` 中拆出：所有低权限角色保留消息能力但不能取消父 orchestrator；旧 controller 退出且 PCB 槽被新 orchestrator 复用后，新进程也不能获得遗留 Agent 的取消权，而普通 MESSAGE/ACK 仍可成功。既有能力隔离、legacy 参数校验、sentinel 防伪造以及 recovery 定向幂等更新均通过。
+结论：内核加载的可信初始进程是唯一 bootstrap 创建授权根；授权留在内核 PCB 中并与业务 capability 分离，不扩展未版本化的 `agent_info` ABI。普通 `fork`、普通子进程 `exec`、orchestrator 的普通 `fork` 以及可信根自身 `exec` 均不会传播或保留创建权，已回收 Agent 进程槽再次用于普通进程时也不残留身份、能力或 Context；只有 orchestrator 能委派角色，低权限角色无法继续创建任何 Agent。等待取消与消息能力分离，stable control id 防止新 controller 继承旧授权。可信 IPC 专项进一步确认低权限 Agent 不能向任意 PID 注入，控制者可 grant/revoke，target 可自主接受 LLM_DONE 且 LLM-only route 不放行 MESSAGE；同一 target 经 `ROUTE_MAX+2` 个短命 source 时，每轮授权与实际投递都成功，证明 source 退出回收路由槽。
 
 ## 样例输出：agenttrust_ucore
 
