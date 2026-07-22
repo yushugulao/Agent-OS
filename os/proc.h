@@ -18,6 +18,11 @@
 #define PROC_RESOURCE_DOMAIN_LIMIT (NPROC / 2)
 #define PROC_RESERVED_SLOTS (NPROC / 4)
 #define PROC_ORDINARY_SLOTS (NPROC - PROC_RESERVED_SLOTS)
+#define PROC_RESERVED_DOMAIN_CAP 4
+#define PROC_RESOURCE_DOMAIN_RESERVED_LIMIT \
+	(PROC_RESERVED_SLOTS / PROC_RESERVED_DOMAIN_CAP)
+
+#include "../file_resource_policy.h"
 
 struct file;
 struct proc;
@@ -297,11 +302,14 @@ void freeproc(struct proc *);
 int allocthread(struct proc *p, uint64 entry, int alloc_user_res);
 uint64 get_thread_trapframe_va(int tid);
 struct trapframe *proc_trapframe(struct proc *, int);
-int fdalloc(struct file *);
 int fdreserve();
 int fdinstall(int, struct file *);
 void fdrelease(int);
 int fd_is_reserved(struct file *);
+struct file *fdget(int);
+int fdclose(int);
+int proc_file_slot_reserve(struct proc *, int *, int *);
+void proc_file_slot_release(int, int);
 int init_stdio(struct proc *);
 int push_argv(struct proc *, char **);
 int push_argv_image(pagetable_t, uint64, struct trapframe *, char **);

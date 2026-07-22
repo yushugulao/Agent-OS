@@ -36,12 +36,17 @@ struct proc_resource_domain {
 	int live;
 	int ordinary_live;
 	int reserved_live;
+	int ordinary_file_slots;
+	int reserved_file_slots;
 };
 
 static struct proc_resource_domain
 	proc_resource_domains[PROC_RESOURCE_DOMAIN_CAP];
 static int proc_resource_ordinary_live;
 static int proc_resource_reserved_live;
+static int proc_file_slots_total;
+static int proc_file_slots_ordinary;
+static int proc_file_slots_reserved;
 static uint proc_scope_next_id;
 static int proc_scope_id_exhausted;
 
@@ -66,10 +71,10 @@ _Static_assert(PROC_RESERVED_SLOTS > 0 && PROC_RESERVED_SLOTS < NPROC,
 _Static_assert(PROC_RESOURCE_DOMAIN_LIMIT > 0 &&
 	       PROC_RESOURCE_DOMAIN_LIMIT <= PROC_ORDINARY_SLOTS,
 	       "resource domain limit must fit the ordinary process pool");
-_Static_assert(PROC_RESERVED_SLOTS % VFS_SCOPE_MAX_ACTIVE == 0,
+_Static_assert(PROC_RESERVED_DOMAIN_CAP == VFS_SCOPE_MAX_ACTIVE,
+	       "process and workflow reserve partitions must agree");
+_Static_assert(PROC_RESERVED_SLOTS % PROC_RESERVED_DOMAIN_CAP == 0,
 	       "reserved slots must partition across workflows");
-#define PROC_RESOURCE_DOMAIN_RESERVED_LIMIT \
-	(PROC_RESERVED_SLOTS / VFS_SCOPE_MAX_ACTIVE)
 #define PROC_WORKFLOW_RESERVED_WORKERS 2
 _Static_assert(PROC_RESOURCE_DOMAIN_RESERVED_LIMIT >=
 	       1 + AGENT_ROLE_ARTIFACT + PROC_WORKFLOW_RESERVED_WORKERS,
@@ -271,6 +276,8 @@ static void proc_resource_domain_clear(struct proc_resource_domain *domain)
 	domain->live = 0;
 	domain->ordinary_live = 0;
 	domain->reserved_live = 0;
+	domain->ordinary_file_slots = 0;
+	domain->reserved_file_slots = 0;
 }
 
 static void proc_resource_init(void)
@@ -279,6 +286,9 @@ static void proc_resource_init(void)
 		proc_resource_domain_clear(&proc_resource_domains[i]);
 	proc_resource_ordinary_live = 0;
 	proc_resource_reserved_live = 0;
+	proc_file_slots_total = 0;
+	proc_file_slots_ordinary = 0;
+	proc_file_slots_reserved = 0;
 	proc_scope_next_id = VFS_SCOPE_FIRST_DYNAMIC;
 	proc_scope_id_exhausted = 0;
 }
@@ -406,10 +416,8 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 	}
 	if (new_domain) {
 		domain = &proc_resource_domains[domain_id];
+		proc_resource_domain_clear(domain);
 		domain->used = 1;
-		domain->live = 0;
-		domain->ordinary_live = 0;
-		domain->reserved_live = 0;
 	}
 	domain = &proc_resource_domains[domain_id];
 	domain->live++;
@@ -467,13 +475,90 @@ static void proc_resource_release(struct proc *p)
 		proc_resource_ordinary_live--;
 	}
 	domain->live--;
-	if (domain->live == 0)
+	if (domain->live == 0 && domain->ordinary_file_slots == 0 &&
+	    domain->reserved_file_slots == 0)
 		proc_resource_domain_clear(domain);
 	p->resource_domain_id = -1;
 	p->storage_principal_id = FS_OWNER_NONE;
 	p->resource_slot_reserved = 0;
 	p->resource_domain_admin = 0;
 out:
+	intr_restore(enabled);
+}
+
+// Charge one unique open-file object to its creator's immutable admission
+// class. References inherited by fork or held by a blocking syscall share this
+// charge; the final fileclose refunds it.
+int proc_file_slot_reserve(struct proc *owner, int *domain_id,
+			   int *reserved)
+{
+	struct proc_resource_domain *domain;
+	int enabled = intr_save();
+	int result = -1;
+	int id;
+	int use_reserve;
+
+	if (owner == 0 || domain_id == 0 || reserved == 0 ||
+	    owner->state != P_USED)
+		goto out;
+	id = owner->resource_domain_id;
+	if (id < 0 || id >= PROC_RESOURCE_DOMAIN_CAP)
+		goto out;
+	domain = &proc_resource_domains[id];
+	if (!domain->used || domain->live <= 0 ||
+	    proc_file_slots_total >= FILE_RESOURCE_POOL_SIZE)
+		goto out;
+	use_reserve = owner->resource_slot_reserved != 0;
+	if (use_reserve) {
+		if (domain->reserved_file_slots >=
+		    FILE_RESOURCE_DOMAIN_RESERVED_LIMIT)
+			goto out;
+		domain->reserved_file_slots++;
+		proc_file_slots_reserved++;
+	} else {
+		if (proc_file_slots_ordinary >= FILE_RESOURCE_ORDINARY_LIMIT ||
+		    domain->ordinary_file_slots >=
+			    FILE_RESOURCE_DOMAIN_ORDINARY_LIMIT)
+			goto out;
+		domain->ordinary_file_slots++;
+		proc_file_slots_ordinary++;
+	}
+	proc_file_slots_total++;
+	*domain_id = id;
+	*reserved = use_reserve;
+	result = 0;
+out:
+	intr_restore(enabled);
+	return result;
+}
+
+void proc_file_slot_release(int domain_id, int reserved)
+{
+	struct proc_resource_domain *domain;
+	int enabled = intr_save();
+
+	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP)
+		panic("file resource domain invariant");
+	domain = &proc_resource_domains[domain_id];
+	if (!domain->used || proc_file_slots_total <= 0)
+		panic("file resource count invariant");
+	if (reserved) {
+		if (domain->reserved_file_slots <= 0 ||
+		    proc_file_slots_reserved <= 0)
+			panic("file reserve count invariant");
+		domain->reserved_file_slots--;
+		proc_file_slots_reserved--;
+	} else {
+		if (domain->ordinary_file_slots <= 0 ||
+		    proc_file_slots_ordinary <= 0)
+			panic("file ordinary count invariant");
+		domain->ordinary_file_slots--;
+		proc_file_slots_ordinary--;
+	}
+	proc_file_slots_total--;
+	if (domain->live == 0 && domain->ordinary_file_slots == 0 &&
+	    domain->reserved_file_slots == 0)
+		proc_resource_domain_clear(domain);
 	intr_restore(enabled);
 }
 
@@ -1082,7 +1167,7 @@ int init_stdio(struct proc *p)
 	for (int i = 0; i < 3; i++) {
 		if (p->files[i] != NULL)
 			goto fail;
-		p->files[i] = stdio_init(i);
+		p->files[i] = stdio_init(i, p);
 		if (p->files[i] == 0)
 			goto fail;
 	}
@@ -1505,9 +1590,14 @@ static int fork_common(int make_agent, int agent_role,
 
 			if (scope_changed && !boundary_allowed)
 				continue;
-			// uCore teaching runtime shares the file object reference.
-			p->files[i]->ref++;
-			np->files[i] = p->files[i];
+			// Sharing an existing open-file object does not mint a new
+			// resource charge; its creator remains accountable until the
+			// final reference closes.
+			np->files[i] = filedup(p->files[i]);
+			if (np->files[i] == 0) {
+				freeproc(np);
+				return -1;
+			}
 		}
 	}
 	memset(np->syscall_count, 0, sizeof(np->syscall_count));
@@ -1870,21 +1960,6 @@ void exit(int code)
 	panic("exited process resumed");
 }
 
-int fdalloc(struct file *f)
-{
-	debugf("debugf f = %p, type = %d", f, f->type);
-	struct proc *p = curr_proc();
-	for (int i = 0; i < FD_BUFFER_SIZE; ++i) {
-		if (p->files[i] == NULL) {
-			p->files[i] = f;
-			p->fd_scope_delegate[i] = 0;
-			debugf("debugf fd = %d, f = %p", i, p->files[i]);
-			return i;
-		}
-	}
-	return -1;
-}
-
 int fd_is_reserved(struct file *f)
 {
 	return f == &fd_reservation;
@@ -1893,38 +1968,77 @@ int fd_is_reserved(struct file *f)
 int fdreserve()
 {
 	struct proc *p = curr_proc();
+	int enabled = intr_save();
 
 	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
 		if (p->files[i] == 0) {
 			p->files[i] = &fd_reservation;
 			p->fd_scope_delegate[i] = 0;
+			intr_restore(enabled);
 			return i;
 		}
 	}
+	intr_restore(enabled);
 	return -1;
 }
 
 int fdinstall(int fd, struct file *f)
 {
 	struct proc *p = curr_proc();
+	int enabled = intr_save();
 
 	if (fd < 0 || fd >= FD_BUFFER_SIZE || f == 0 ||
-	    p->files[fd] != &fd_reservation)
+	    p->files[fd] != &fd_reservation) {
+		intr_restore(enabled);
 		return -1;
+	}
 	p->files[fd] = f;
 	p->fd_scope_delegate[fd] = 0;
+	intr_restore(enabled);
 	return 0;
 }
 
 void fdrelease(int fd)
 {
 	struct proc *p = curr_proc();
+	int enabled = intr_save();
 
 	if (fd >= 0 && fd < FD_BUFFER_SIZE &&
 	    p->files[fd] == &fd_reservation) {
 		p->files[fd] = 0;
 		p->fd_scope_delegate[fd] = 0;
 	}
+	intr_restore(enabled);
+}
+
+struct file *fdget(int fd)
+{
+	struct proc *p = curr_proc();
+	struct file *f = 0;
+	int enabled = intr_save();
+
+	if (fd >= 0 && fd < FD_BUFFER_SIZE && p != 0)
+		f = filedup(p->files[fd]);
+	intr_restore(enabled);
+	return f;
+}
+
+int fdclose(int fd)
+{
+	struct proc *p = curr_proc();
+	struct file *f;
+	int enabled = intr_save();
+
+	if (p == 0 || fd < 0 || fd >= FD_BUFFER_SIZE ||
+	    (f = p->files[fd]) == 0 || fd_is_reserved(f)) {
+		intr_restore(enabled);
+		return -1;
+	}
+	p->files[fd] = 0;
+	p->fd_scope_delegate[fd] = 0;
+	intr_restore(enabled);
+	fileclose(f);
+	return 0;
 }
 
 int proc_scope_delegate_fd(int fd)

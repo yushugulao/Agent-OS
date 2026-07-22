@@ -9,13 +9,12 @@
 struct file filepool[FILEPOOLSIZE];
 
 //Abstract the stdio into a file.
-struct file *stdio_init(int fd)
+struct file *stdio_init(int fd, struct proc *owner)
 {
-	struct file *f = filealloc();
+	struct file *f = filealloc(owner);
 	if (f == 0)
 		return 0;
 	f->type = FD_STDIO;
-	f->ref = 1;
 	f->readable = (fd == STDIN || fd == STDERR);
 	f->writable = (fd == STDOUT || fd == STDERR);
 	return f;
@@ -28,12 +27,17 @@ void fileclose(struct file *f)
 	int writable;
 	struct pipe *pipe;
 	struct inode *ip;
+	int domain_id;
+	int reserved;
+	int enabled;
 
 	if (fd_is_reserved(f))
 		return;
+	enabled = intr_save();
 	if (f->ref < 1)
 		panic("fileclose");
 	if (--f->ref > 0) {
+		intr_restore(enabled);
 		return;
 	}
 
@@ -43,6 +47,8 @@ void fileclose(struct file *f)
 	writable = f->writable;
 	pipe = f->pipe;
 	ip = f->ip;
+	domain_id = f->resource_domain_id;
+	reserved = f->resource_reserved;
 	f->off = 0;
 	f->readable = 0;
 	f->writable = 0;
@@ -50,6 +56,10 @@ void fileclose(struct file *f)
 	f->ip = 0;
 	f->type = FD_NONE;
 	f->ref = 0;
+	f->resource_domain_id = -1;
+	f->resource_reserved = 0;
+	proc_file_slot_release(domain_id, reserved);
+	intr_restore(enabled);
 
 	switch (type) {
 	case FD_NONE:
@@ -72,18 +82,31 @@ void fileclose(struct file *f)
 // Pin an open-file entry across operations that may yield.
 struct file *filedup(struct file *f)
 {
-	if (f == 0 || fd_is_reserved(f) || f->ref < 1)
+	int enabled = intr_save();
+
+	if (f == 0 || fd_is_reserved(f) || f->ref < 1) {
+		intr_restore(enabled);
 		return 0;
+	}
 	f->ref++;
+	intr_restore(enabled);
 	return f;
 }
 
 //Add a new system-level table entry for the open file table
-struct file *filealloc()
+struct file *filealloc(struct proc *owner)
 {
+	struct file *result = 0;
+	int enabled = intr_save();
+
 	for (int i = 0; i < FILEPOOLSIZE; ++i) {
 		if (filepool[i].ref == 0) {
 			struct file *f = &filepool[i];
+			int domain_id;
+			int reserved;
+
+			if (proc_file_slot_reserve(owner, &domain_id, &reserved) < 0)
+				break;
 			f->type = FD_NONE;
 			f->ref = 1;
 			f->readable = 0;
@@ -91,10 +114,14 @@ struct file *filealloc()
 			f->pipe = 0;
 			f->ip = 0;
 			f->off = 0;
-			return f;
+			f->resource_domain_id = domain_id;
+			f->resource_reserved = reserved;
+			result = f;
+			break;
 		}
 	}
-	return 0;
+	intr_restore(enabled);
+	return result;
 }
 
 //Show names of all files in the root_dir.
@@ -122,7 +149,7 @@ int fileopen(char *path, uint64 omode)
 
 	// Reserve the process-local descriptor before any operation that may
 	// reschedule. The sentinel is neither usable nor inherited by fork().
-	if ((f = filealloc()) == 0)
+	if ((f = filealloc(curr_proc())) == 0)
 		return -1;
 	if ((fd = fdreserve()) < 0) {
 		fileclose(f);

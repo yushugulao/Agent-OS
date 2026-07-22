@@ -136,6 +136,9 @@ static inline void exec_manifest_worker_image(const char *source,
 	X("procreap_agent_ucore", "procreap_agent_ucore", \
 	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
 	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
+	X("fileresource_ucore", "fileresource_ucore", \
+	  EXEC_MANIFEST_F_SEALED, 0, 0, \
+	  EXEC_MANIFEST_VFS_PROFILE_NONE) \
 	X("rp_agentos_orch", "rp_agentos_orch", \
 	  EXEC_MANIFEST_F_BOOT_SEALED, \
 	  EXEC_MANIFEST_ROLE_BIT(EXEC_MANIFEST_ROLE_ORCHESTRATOR), 0, \

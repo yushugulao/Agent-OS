@@ -217,7 +217,7 @@ Agent 调用 wait 后，如果没有匹配事件，有限 timeout 和无限等�
 
 AgentOS-uCore 将普通用户可触发的坏地址、同步取消、长 syscall 垄断、文件系统耗尽、进程退出、僵尸积压和 fork bomb 统一视为可恢复的资源与生命周期问题。syscall 在产生副作用前复制并校验用户输入。调度器为每次线程 dispatch 建立周期 deadline 和工作量预算，syscall 只进入或退出同一预算域，不能靠反复陷入刷新时间片；timer 到期先记录 pending，控制台、pipe、exec 分页、fork 页表快照、普通文件块 I/O 和 Agent batch 只在原子进度已提交、临时状态已释放后进入安全点。fork 复制期间由进程级 VM snapshot 屏障暂缓同进程 sibling，其他进程仍可运行。普通文件读写若已在安全点完成一次调度，会以合法短读/短写把已提交前缀交回用户态；截断和最终 inode 回收则先 detach 映射，再用不可取消的 cleanup checkpoint 分批回收。
 
-文件描述符和全局文件槽也按这套可睡眠生命周期管理：`O_TRUNC` 在工作完成前只持有不可使用的 FD reservation，最后才安装真实文件；最后一次 `close()` 会先发布可复用文件槽，再用本地快照完成可能让出的回收。mutex、semaphore、condvar、进程和 Agent 等睡眠对象使用私有等待队列；文件系统以持久 owner map、稳定存储 principal 配额和 PUBLIC/WORKFLOW/SYSTEM 分级水位保护块与 inode。当前没有 uid/tenant ABI，普通进程统一绑定安装级 PUBLIC principal 2；挂载从 qmap/dinode 重建用量，因此进程域退出或重启不能清零。分配失败向上传播错误；多线程退出先取消阻塞 syscall，再释放共享资源；退出状态与执行槽分离；活进程仍按独立的不可变资源域计费并为内核受控工作保留槽位。内核栈还同时使用 guard 和构建期预算检查。
+文件描述符和全局文件槽也按这套可睡眠生命周期管理：`O_TRUNC` 在工作完成前只持有不可使用的 FD reservation，最后才安装真实文件；唯一 filepool 槽按创建者进程资源域和 ordinary/reserved admission 类别计费，普通分配同时受每域上限与全局水位约束，内核受控工作保留独立容量。fork 和阻塞 syscall 临时引用不重复扣账，也不能借关闭原 FD 逃离账本；只有最后引用关闭才发布槽并向原域退款，域在 live 进程和文件槽都归零前不会复用。mutex、semaphore、condvar、进程和 Agent 等睡眠对象使用私有等待队列；文件系统以持久 owner map、稳定存储 principal 配额和 PUBLIC/WORKFLOW/SYSTEM 分级水位保护块与 inode。当前没有 uid/tenant ABI，普通进程统一绑定安装级 PUBLIC principal 2；挂载从 qmap/dinode 重建用量，因此进程域退出或重启不能清零。分配失败向上传播错误；多线程退出先取消阻塞 syscall，再释放共享资源；退出状态与执行槽分离；活进程仍按独立的不可变资源域计费并为内核受控工作保留槽位。内核栈还同时使用 guard 和构建期预算检查。
 
 Agent 专属安全链由构建期可信映像清单、loader 映像绑定、bootstrap/role grant、capability 和 VFS 文件安全域组成。可信 bootstrap factory 只能通过内核签发新的动态 workflow scope，scope 内 orchestrator 只能委派本域角色；敏感对象访问必须同时命中 capability、active scope 和精确 owner。跨 Agent 消息默认拒绝，只有同 scope 且命中 stable control id 入站路由后才能投递；`MESSAGE_SEND` 不授予等待控制权，等待取消还必须具备独立 `WAIT_CANCEL` capability 并命中直接 controller 关系。公共 `agent_wake()` 只能发送普通消息，系统事件由专用内核路径产生；调度器允许 orchestrator 配置软策略，但以不可配置的 Agent burst 上限保证普通任务有界进展。完整威胁模型、实现位置、自定义 Agent 注册步骤和专项测试入口见 [安全加固与资源韧性设计](docs/agentos/security-hardening.md)。
 
@@ -352,10 +352,10 @@ make target-readiness
 | 类型 | 入口 | 作用 |
 | --- | --- | --- |
 | AgentOS 专项测试 | `scripts/run-agent-tests.sh`、`make agentos-test` | 逐项检查 Agent 进程、工具调用、Context、文件查询、事件循环、调度、LLM、权限和冲突控制。 |
-| 安全与资源专项 | `make fs-enospc-test`、`make proc-reap-test`、`make syscall-fairness-test`、`make kernel-stack-check` | 检查可恢复资源耗尽、持久 PUBLIC 配额跨域退出/重启、退出回收、进程资源域、长 syscall 公平性、系统保留槽和内核栈预算。 |
+| 安全与资源专项 | `make fs-enospc-test`、`make proc-reap-test`、`make file-resource-test`、`make syscall-fairness-test`、`make kernel-stack-check` | 检查可恢复资源耗尽、持久 PUBLIC 配额跨域退出/重启、退出回收、进程与 filepool 资源域、长 syscall 公平性、系统保留槽和内核栈预算。 |
 | 双目标运行测试 | `make dual-platform-run` | 让同一科研 Agent 请求分别进入普通 uCore 和 AgentOS-uCore，生成可比较状态文件。 |
 | 宿主机工具测试 | `host_tools/test_*.py` | 检查镜像提取、状态对照、页面渲染、图表契约和 LLM Relay 模式。 |
-| 完整验证 | `make full-verify` | 串联结构检查、Host 工具测试、双目标运行、AgentOS 专项测试、进程生命周期和 syscall 公平性测试；ENOSPC 与栈预算保留独立入口。 |
+| 完整验证 | `make full-verify` | 串联结构检查、Host 工具测试、双目标运行、AgentOS 专项测试、进程生命周期、syscall 公平性和 filepool 配额测试；ENOSPC 与栈预算保留独立入口。 |
 
 AgentOS 专项测试程序如下：
 
@@ -518,11 +518,12 @@ make full-verify TOOLPREFIX=riscv64-linux-gnu-
 make agentos-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-运行文件系统耗尽、进程生命周期、syscall 公平性和内核栈安全专项验证：
+运行文件系统耗尽、进程生命周期、全局文件对象表配额、syscall 公平性和内核栈安全专项验证：
 
 ```bash
 make fs-enospc-test TOOLPREFIX=riscv64-linux-gnu-
 make proc-reap-test TOOLPREFIX=riscv64-linux-gnu-
+make file-resource-test TOOLPREFIX=riscv64-linux-gnu-
 make syscall-fairness-test TOOLPREFIX=riscv64-linux-gnu-
 make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 ```

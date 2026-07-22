@@ -65,9 +65,10 @@ make full-verify TOOLPREFIX=riscv64-linux-gnu-
 - 状态渲染与 API JSON 检查；
 - 共享基础安全加固、不含 AgentOS 扩展的 uCore 对照平台和 AgentOS-uCore 平台的 QEMU 运行；
 - AgentOS 内核专项测试；
-- 主目标、Agent 对抗场景和 baseline 的进程生命周期复测。
+- 主目标、Agent 对抗场景和 baseline 的进程生命周期复测；
+- 双目标 syscall 公平性和全局文件对象表资源配额复测。
 
-文件系统 ENOSPC 和显式内核栈预算检查保留独立入口，分别运行 `make fs-enospc-test` 和 `make kernel-stack-check`；每次内核构建也会自动执行栈预算分析。
+文件系统 ENOSPC 和显式内核栈预算检查保留在聚合验证之外，分别运行 `make fs-enospc-test` 和 `make kernel-stack-check`；全局文件对象表配额由 `make full-verify` 串联，也可独立运行 `make file-resource-test`。每次内核构建都会自动执行栈预算分析。
 
 期望最后看到：
 
@@ -429,6 +430,9 @@ bash scripts/run-agent-tests.sh
 # 主目标、Agent 对抗场景和 baseline 的退出、等待、回收与进程域配额
 make proc-reap-test TOOLPREFIX=riscv64-linux-gnu-
 
+# 双目标全局 filepool 的资源域上限、普通水位、系统保留和最终引用退款
+make file-resource-test TOOLPREFIX=riscv64-linux-gnu-
+
 # 双目标真实 ENOSPC、持久 PUBLIC principal，以及 AgentOS 分级保留量
 make fs-enospc-test TOOLPREFIX=riscv64-linux-gnu-
 
@@ -437,7 +441,7 @@ make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-`run-agent-tests.sh` 中的 `agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore` 和 `usersafety_ucore` 分别覆盖事件与角色授权、可信映像和 W^X、普通 VFS 绕过及坏用户指针。`run-proc-reap-tests.sh` 覆盖定向取消、阻塞 syscall 临时引用释放、孤儿回收、child record、长存活 fork bomb 和 Agent 保留槽。`run-fs-enospc-tests.sh` 先保留两个目标的物理 ENOSPC 复测，再运行 AgentOS `fsquota_ucore` 的低主体上限和高水位两组配置：前者验证运行期累计及释放复用，后者确保 PUBLIC 压力下 workflow 文件和内核 `.agentmeta` 仍可写入。随后两个目标各用同一磁盘镜像连续运行三次 `fspquota_ucore`：第一轮在文件已 unlink 但描述符仍打开时强制断电；第二轮验证挂载回收孤儿后，让 PUBLIC 接管含间接块的 SYSTEM 赞助对象并使进程域满额退出；第三轮验证 qmap/dinode 重建计数、新进程域和重启都不能清零、删除后才可复用。`make full-verify` 已串联 Agent 与进程生命周期测试，但没有串联文件系统专项；内核栈预算在每次 kernel build 时自动执行，也可用以上命令单独复现。完整机制和失败语义见 [agentos/security-hardening.md](agentos/security-hardening.md)。
+`run-agent-tests.sh` 中的 `agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore` 和 `usersafety_ucore` 分别覆盖事件与角色授权、可信映像和 W^X、普通 VFS 绕过及坏用户指针。`run-proc-reap-tests.sh` 覆盖定向取消、阻塞 syscall 临时引用释放、孤儿回收、child record、长存活 fork bomb 和 Agent 保留槽。`run-file-resource-tests.sh` 用双目标同一个 `fileresource_ucore` 和 64/48/16/16 配置，验证阻塞 syscall pin 在原 FD 关闭后仍计费、每域上限、pipe 部分分配回滚、普通全局水位、reserved 进展及退出后的最终退款；本次独立运行已输出 AgentOS、baseline 和 `[file-resource] both targets passed`。`run-fs-enospc-tests.sh` 先保留两个目标的物理 ENOSPC 复测，再运行 AgentOS `fsquota_ucore` 的低主体上限和高水位两组配置：前者验证运行期累计及释放复用，后者确保 PUBLIC 压力下 workflow 文件和内核 `.agentmeta` 仍可写入。随后两个目标各用同一磁盘镜像连续运行三次 `fspquota_ucore`：第一轮在文件已 unlink 但描述符仍打开时强制断电；第二轮验证挂载回收孤儿后，让 PUBLIC 接管含间接块的 SYSTEM 赞助对象并使进程域满额退出；第三轮验证 qmap/dinode 重建计数、新进程域和重启都不能清零、删除后才可复用。聚合脚本已串联 Agent、进程生命周期、syscall 公平性和 filepool 专项，但本次没有运行 `make full-verify`；文件系统专项仍不在聚合脚本中。内核栈预算在每次 kernel build 时自动执行，也可用以上命令单独复现。完整机制和失败语义见 [agentos/security-hardening.md](agentos/security-hardening.md)。
 
 ## 内核机制说明
 

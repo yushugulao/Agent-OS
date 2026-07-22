@@ -6,7 +6,7 @@
 #include "types.h"
 
 #define PIPESIZE (512)
-#define FILEPOOLSIZE (NPROC * FD_BUFFER_SIZE)
+#define FILEPOOLSIZE FILE_RESOURCE_POOL_SIZE
 
 // in-memory copy of an inode,it can be used to quickly locate file entities on disk
 struct inode {
@@ -43,6 +43,9 @@ struct file {
 	struct pipe *pipe; // FD_PIPE
 	struct inode *ip; // FD_INODE
 	uint off;
+	// This charge follows the unique object until its final reference closes.
+	int resource_domain_id;
+	int resource_reserved;
 };
 
 //A few specific fd
@@ -60,12 +63,12 @@ int piperead(struct pipe *, uint64, uint64);
 int pipewrite(struct pipe *, uint64, uint64);
 void fileclose(struct file *);
 struct file *filedup(struct file *);
-struct file *filealloc();
+struct file *filealloc(struct proc *);
 int fileopen(char *, uint64);
 int fileunlink(char *);
 uint64 inodewrite(struct file *, uint64, uint64);
 uint64 inoderead(struct file *, uint64, uint64);
-struct file *stdio_init(int);
+struct file *stdio_init(int, struct proc *);
 int show_all_files();
 
 #endif // FILE_H

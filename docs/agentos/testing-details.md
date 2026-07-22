@@ -693,3 +693,23 @@ inode 阶段创建共享地址空间的 observer 线程。observer 反复从独�
 截断阶段先填充一个 64 KiB 文件，再在同一进程创建 observer 线程。主线程输出 TRUNC_BEGIN 后调用 `open(path, O_WRONLY | O_TRUNC)`，并用 last-syscall 重调度计数要求该 open 在内核态跨过调度边界；observer 连续两轮打开文件并读到 EOF，两轮之间主动让出，随后输出 TRUNC_PEER。脚本要求 `TRUNC_BEGIN < TRUNC_PEER < TRUNC_END`。计数提供 open 内部的因果证据，observer 独立证明原子 detach 后的 EOF 对其他线程可见；二者不依赖 open 返回后到共享标志写入前是否发生用户态 timer 抢占。
 
 三个阶段的每个标记都必须只出现一次。最外层父进程只在 fairness worker 被 `waitpid()` 完整回收后输出 `syscallfair_ucore: parent passed`；宿主 runner 随后要求 QEMU 在 5 秒内正常关机，日志不得包含 panic、非法地址或未知 syscall。这一部分验证退出完整性，不单独宣称证明退出清理内部的公平边界。两个目标都满足后输出 `[syscall-fairness] both targets passed`。终审复测完成后，这一契约将动态覆盖控制台、普通 inode I/O 和截断回收；当前实际动态证据只覆盖基础控制台轮。源码检查覆盖 pipe、exec/fork 分页、VM snapshot 屏障和 Agent batch 安全点；它不等于穷尽任意 syscall 路径。固定上界目录扫描和仅可信 Agent 可达的 metadata raw I/O 仍是残余覆盖。
+
+## 20. 全局文件对象表资源配额复测
+
+入口为 `make file-resource-test` 或 `bash scripts/run-file-resource-tests.sh`。脚本用 `CHAPTER=file_resource` 为根目录 AgentOS-uCore 和 `baseline_ucore/` 分别构建同一个 `fileresource_ucore`，并把 filepool、普通全局水位、普通域上限和受控域上限分别缩小为 64、48、16、16，使 Guest 可以精确填满边界。本次独立运行中，AgentOS、baseline 和汇总检查均输出 passed。该资源专项也已接入 `make full-verify`，但本次没有运行聚合 `full-verify`，不能把专项通过外推为聚合验证通过。
+
+测试首先让线程阻塞在空 pipe 的 `read()`，随后关闭原读 FD。另一个同资源域进程仍有空闲 FD，但隐藏临时引用必须继续占用创建者域的 filepool 配额；达到域上限后的额外 `open()` 被拒绝。持有阻塞线程的进程退出后，协作撤销路径使引用降到零，随后完整容量可再次使用，分别输出 `blocking_pin_bounded=1` 和 `exit_reuse=1`。
+
+第二阶段把同一 ordinary 域推进到 15/16 槽，连续十六次请求需要两个 file 对象的 pipe。每次第二端分配失败时，第一端及两个 FD reservation 都必须完整回滚；否则即使每轮只泄漏一个 reservation，也足以占满该进程剩余的 14 个 FD 槽。测试随后关闭一个单文件对象，把域用量降至 14/16，并要求一个完整 pipe 立即成功，从动态结果同时证明 file 对象计费与 FD reservation 没有泄漏；关闭 pipe 后再把域精确填至 16 槽并验证额外 `open()` 被拒绝。第三阶段让三个独立 ordinary 域各占 16 槽，合计填满 48 槽普通水位；第四个 ordinary 域被拒绝时，bootstrap/reserved 进程仍能够 `open()` 和创建 pipe。实际顺序标记为：
+
+```text
+fileresource_ucore: blocking_pin_bounded=1
+fileresource_ucore: exit_reuse=1
+fileresource_ucore: pipe_rollback=1
+fileresource_ucore: domain_limit=1
+fileresource_ucore: ordinary_waterline=1
+fileresource_ucore: reserved_progress=1
+fileresource_ucore: parent passed
+```
+
+这些场景验证的计费单位是唯一 filepool 槽：fork 和 syscall pin 增加引用但不重复扣账，最终引用关闭才退款。主目标和 baseline 运行同一 Guest 断言并均通过，避免只在 AgentOS 专属角色路径上得到结果。runner 最终输出 `[file-resource] both targets passed`。

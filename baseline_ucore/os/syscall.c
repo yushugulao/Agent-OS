@@ -62,7 +62,7 @@ uint64 sys_write(int fd, uint64 va, uint64 len)
 	if (fd < 0 || fd >= FD_BUFFER_SIZE)
 		return -1;
 	p = curr_proc();
-	f = filedup(p->files[fd]);
+	f = fdget(fd);
 	if (f == NULL) {
 		errorf("invalid fd %d\n", fd);
 		return -1;
@@ -98,7 +98,7 @@ uint64 sys_read(int fd, uint64 va, uint64 len)
 	if (fd < 0 || fd >= FD_BUFFER_SIZE)
 		return -1;
 	p = curr_proc();
-	f = filedup(p->files[fd]);
+	f = fdget(fd);
 	if (f == NULL) {
 		errorf("invalid fd %d\n", fd);
 		return -1;
@@ -254,26 +254,25 @@ uint64 sys_pipe(uint64 fdarray)
 
 	if (user_range_check(p->pagetable, fdarray, sizeof(fds), PTE_W) < 0)
 		return -1;
-	f0 = filealloc();
-	f1 = filealloc();
+	fds[0] = fdreserve();
+	fds[1] = fdreserve();
+	if (fds[0] < 0 || fds[1] < 0)
+		goto err0;
+	f0 = filealloc(p);
+	f1 = filealloc(p);
 	if (f0 == 0 || f1 == 0)
 		goto err0;
 	if (pipealloc(f0, f1) < 0)
 		goto err0;
-	fds[0] = fdalloc(f0);
-	fds[1] = fdalloc(f1);
-	if (fds[0] < 0 || fds[1] < 0)
-		goto err1;
 	if (copyout(p->pagetable, fdarray, (char *)fds, sizeof(fds)) < 0)
-		goto err1;
+		goto err0;
+	if (fdinstall(fds[0], f0) < 0 || fdinstall(fds[1], f1) < 0)
+		panic("pipe descriptor reservation");
 	return 0;
 
-err1:
-	if (fds[0] >= 0)
-		p->files[fds[0]] = 0;
-	if (fds[1] >= 0)
-		p->files[fds[1]] = 0;
 err0:
+	fdrelease(fds[0]);
+	fdrelease(fds[1]);
 	if (f0)
 		fileclose(f0);
 	if (f1)
@@ -305,16 +304,10 @@ uint64 sys_unlinkat(int dirfd, uint64 va, uint64 flags)
 
 uint64 sys_close(int fd)
 {
-	if (fd < 0 || fd >= FD_BUFFER_SIZE)
-		return -1;
-	struct proc *p = curr_proc();
-	struct file *f = p->files[fd];
-	if (f == NULL || fd_is_reserved(f)) {
+	if (fdclose(fd) < 0) {
 		errorf("invalid fd %d", fd);
 		return -1;
 	}
-	p->files[fd] = 0;
-	fileclose(f);
 	return 0;
 }
 
