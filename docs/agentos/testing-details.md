@@ -674,7 +674,7 @@ agentscope_ucore: lifecycle_reclamation=1
 agentscope_ucore: parent passed
 ```
 
-这些是当前源码的回归契约；在本轮 QEMU 日志实际出现前，本文不把它们记为已通过证据。
+以上标记已经出现在 2026-07-22 当前代码的完整 Agent QEMU 回归中，`scripts/run-agent-tests.sh` 15/15 通过。该动态证据证明两域隔离、同域协作、事务等待、配额边界、fd 委派与生命周期回收；四份 workflow 数值保证仍由共享策略单测、mkfs 容量负例和挂载/admission 契约共同证明，不从单个输出标记外推。
 
 ## 19. syscall 内核工作预算复测
 
@@ -692,4 +692,4 @@ inode 阶段创建共享地址空间的 observer 线程。observer 反复从独�
 
 截断阶段先填充一个 64 KiB 文件，再在同一进程创建 observer 线程。主线程输出 TRUNC_BEGIN 后调用 `open(path, O_WRONLY | O_TRUNC)`，并用 last-syscall 重调度计数要求该 open 在内核态跨过调度边界；observer 连续两轮打开文件并读到 EOF，两轮之间主动让出，随后输出 TRUNC_PEER。脚本要求 `TRUNC_BEGIN < TRUNC_PEER < TRUNC_END`。计数提供 open 内部的因果证据，observer 独立证明原子 detach 后的 EOF 对其他线程可见；二者不依赖 open 返回后到共享标志写入前是否发生用户态 timer 抢占。
 
-三个阶段的每个标记都必须只出现一次。最外层父进程只在 fairness worker 被 `waitpid()` 完整回收后输出 `syscallfair_ucore: parent passed`；宿主 runner 随后要求 QEMU 在 5 秒内正常关机，日志不得包含 panic、非法地址或未知 syscall。这一部分验证退出完整性，不单独宣称证明退出清理内部的公平边界。两个目标都满足后输出 `[syscall-fairness] both targets passed`。本项动态覆盖控制台、普通 inode I/O 和截断回收，并结合源码检查覆盖 pipe、exec/fork 分页、VM snapshot 屏障和 Agent batch 安全点；它不等于穷尽任意 syscall 路径。固定上界目录扫描和仅可信 Agent 可达的 metadata raw I/O 仍是残余覆盖。
+三个阶段的每个标记都必须只出现一次。最外层父进程只在 fairness worker 被 `waitpid()` 完整回收后输出 `syscallfair_ucore: parent passed`；宿主 runner 随后要求 QEMU 在 5 秒内正常关机，日志不得包含 panic、非法地址或未知 syscall。这一部分验证退出完整性，不单独宣称证明退出清理内部的公平边界。两个目标都满足后输出 `[syscall-fairness] both targets passed`。终审复测完成后，这一契约将动态覆盖控制台、普通 inode I/O 和截断回收；当前实际动态证据只覆盖基础控制台轮。源码检查覆盖 pipe、exec/fork 分页、VM snapshot 屏障和 Agent batch 安全点；它不等于穷尽任意 syscall 路径。固定上界目录扫描和仅可信 Agent 可达的 metadata raw I/O 仍是残余覆盖。

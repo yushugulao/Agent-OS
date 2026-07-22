@@ -341,4 +341,4 @@ align+analyze+report+archive
 | 查询规模 | 当前最多 512 条元数据，单 workflow scope 最多 112 条，单次最多返回 8 条 hit |
 | 内容摘要 | 当前读取最多 4096 字节计算指纹，返回短预览，不做全文索引 |
 | 预取提示 | 当前只生成 metadata 提示，提示本身不预读文件内容，不保存到磁盘 |
-| 文件安全域 | 当前实现 public 和单一 workflow 域，以及 kernel-private/root 策略；尚未提供任意数量的用户命名域或动态策略语言 |
+| 文件安全域 | 当前实现 PUBLIC、SYSTEM 和最多 4 个由内核可信 factory 签发的动态 workflow scope，以及 kernel-private/root 策略；尚未提供任意数量的用户命名域或用户可编程动态策略语言 |

@@ -188,7 +188,7 @@ int agent_wait_cancel(int pid, const char *reason);
 | 目标已有未消费取消令牌 | `AGENT_STATUS_DUPLICATE` |
 | 写入取消令牌成功 | 0 |
 
-取消令牌不进入普通事件队列，也不受 watch/filter 或 IPC 路由限制，因此授权边界必须独立于消息能力。`agentloop_ucore` 验证 orchestrator 能取消自己直接创建的 sentinel；`agentsecurity_ucore` 验证所有低权限角色虽保留 `MESSAGE_SEND` 却没有取消能力，并验证旧 controller 退出、PCB 槽被新 orchestrator 复用后，新进程既不能取消遗留目标，也不能继承旧消息路由。历史测试输出只证明等待取消边界；新的路由和队列隔离标记必须以本次专项测试实际输出为准，不能从旧的 `message_send_preserved=1` 推断。
+取消令牌不进入普通事件队列，也不受 watch/filter 或 IPC 路由限制，因此授权边界必须独立于消息能力。`agentloop_ucore` 验证 orchestrator 能取消自己直接创建的 sentinel；`agentsecurity_ucore` 验证所有低权限角色虽保留 `MESSAGE_SEND` 却没有取消能力，并验证旧 controller 退出后，新 orchestrator 的新 control id 既不能取消遗留目标，也不能继承旧消息路由。测试不要求实际发生 PCB/PID 复用；内核不复用 control id 的机制保证未来槽复用也不扩权。历史测试输出只证明等待取消边界；新的路由和队列隔离标记必须以本次专项测试实际输出为准，不能从旧的 `message_send_preserved=1` 推断。
 
 ```text
 agentloop_ucore: wait_cancel=1
@@ -384,7 +384,7 @@ Context v6 还会把事件和后续工具调用连起来，并继续维护 Conte
 | `agentloop_ucore` | FIFO、cause/span、unwatch、睡眠 timeout、TIMER unwatch、heartbeat stop 和 wait cancel 均通过；`message_source_limit=4`、`ipc_class_limit=8`、`external_limit=12`、`system_event_reserved=4`、`external_reject_reclaim=1` 和 `broadcast_slow_watcher_isolated=1` 进一步验证单来源/IPC/external 边界、第 13 条 external 被拒绝、4 条 KERNEL TIMER 填满保留容量、消费后 directed/attributed 重新接纳及慢 watcher 隔离。attributed=8 与 stable source 混合跨类仍缺独立边界输出。 |
 | `agentsched_ucore` | 角色权重、orchestrator 调度配置、事件优先、原因记录和公平性计数均写入调度记录；普通进程在持续可运行高分 Agent 下先取得进展，并输出 `normal_progress=1 max_agent_burst=8`。 |
 | `agentsecurity_ucore` | 用户态 `agent_wake()` 只允许 MESSAGE；普通进程、保留系统事件和非法类型均被拒绝。`route_source_enforced=1`、`route_target_isolated=1`、`ipc_route_authorization=1`、`message_route_lifecycle=1`、`target_route_consent=1` 和 `route_slot_reclaimed=1` 验证未授权拒绝、控制者 grant/revoke、新 control id 隔离、target 自主接受 LLM_DONE、LLM-only route 拒绝 MESSAGE，以及超过 16 个短命 source 后路由槽可回收。 |
-| `agentscope_ucore` | 新增 `ipc_scope_isolation=1`、`audit_event_scope_isolation=1` 与同 scope collaboration 契约；本轮 QEMU 输出产生前不宣称通过。 |
+| `agentscope_ucore` | `ipc_scope_isolation=1`、`audit_event_scope_isolation=1`、`same_scope_collaboration=1` 和 `parent passed` 已在 2026-07-22 完整 Agent QEMU 回归中通过。 |
 | `usersafety_ucore` | 无关睡眠者不会被同步对象的定向唤醒破坏，syscall 返回后内核继续存活。 |
 | `procreap_ucore` / `procreap_agent_ucore` | 阻塞线程退出会从等待队列安全取消；高分 Agent 持续可运行时，退出清理和普通任务仍得到有界调度。 |
 | `labdemo_ucore` | orchestrator 在同一 workflow 建立路由后，scope audit、timeline 和 provenance 保持同一条示例链路。 |

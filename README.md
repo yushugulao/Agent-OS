@@ -219,7 +219,7 @@ AgentOS-uCore 将普通用户可触发的坏地址、同步取消、长 syscall 
 
 文件描述符和全局文件槽也按这套可睡眠生命周期管理：`O_TRUNC` 在工作完成前只持有不可使用的 FD reservation，最后才安装真实文件；最后一次 `close()` 会先发布可复用文件槽，再用本地快照完成可能让出的回收。mutex、semaphore、condvar、进程和 Agent 等睡眠对象使用私有等待队列；文件系统以持久 owner map、稳定存储 principal 配额和 PUBLIC/WORKFLOW/SYSTEM 分级水位保护块与 inode。当前没有 uid/tenant ABI，普通进程统一绑定安装级 PUBLIC principal 2；挂载从 qmap/dinode 重建用量，因此进程域退出或重启不能清零。分配失败向上传播错误；多线程退出先取消阻塞 syscall，再释放共享资源；退出状态与执行槽分离；活进程仍按独立的不可变资源域计费并为内核受控工作保留槽位。内核栈还同时使用 guard 和构建期预算检查。
 
-Agent 专属安全链由构建期可信映像清单、loader 映像绑定、bootstrap/role grant、capability 和 VFS 文件安全域组成。公共 `agent_wake()` 只能发送普通消息，系统事件由专用内核路径产生；调度器允许 orchestrator 配置软策略，但以不可配置的 Agent burst 上限保证普通任务有界进展。完整威胁模型、实现位置、自定义 Agent 注册步骤和专项测试入口见 [安全加固与资源韧性设计](docs/agentos/security-hardening.md)。
+Agent 专属安全链由构建期可信映像清单、loader 映像绑定、bootstrap/role grant、capability 和 VFS 文件安全域组成。可信 bootstrap factory 只能通过内核签发新的动态 workflow scope，scope 内 orchestrator 只能委派本域角色；敏感对象访问必须同时命中 capability、active scope 和精确 owner。跨 Agent 消息默认拒绝，只有同 scope 且命中 stable control id 入站路由后才能投递；`MESSAGE_SEND` 不授予等待控制权，等待取消还必须具备独立 `WAIT_CANCEL` capability 并命中直接 controller 关系。公共 `agent_wake()` 只能发送普通消息，系统事件由专用内核路径产生；调度器允许 orchestrator 配置软策略，但以不可配置的 Agent burst 上限保证普通任务有界进展。完整威胁模型、实现位置、自定义 Agent 注册步骤和专项测试入口见 [安全加固与资源韧性设计](docs/agentos/security-hardening.md)。
 
 ### 4.3 模块组合后的运行路径
 
@@ -374,8 +374,9 @@ AgentOS 专项测试程序如下：
 | `agentsecurity_ucore` | 普通进程拒绝、低权限 Agent 伪造拒绝、私有 metadata 后端保护、scoped action/artifact。 | `agentsecurity_ucore: parent passed` |
 | `agenttrust_ucore` | 可信映像、不可变代码、bootstrap 授权范围和 role-image 绑定。 | `agenttrust_ucore: parent passed` |
 | `agentvfs_ucore` | public/workflow 文件安全域、能力读写、继承 fd 重新校验和普通命名空间兼容。 | `agentvfs_ucore: parent passed` |
+| `agentscope_ucore` | 动态 workflow scope、跨域对象/IPC 隔离、事务门、配额、一次性 fd 委派和生命周期回收。 | `agentscope_ucore: parent passed` |
 | `usersafety_ucore` | syscall 坏地址、超长参数和对象私有等待队列。 | `usersafety_ucore: parent passed` |
-| `syscallfair_ucore` | 纯 Guest 验证单次 64 KiB 控制台写、inode 大写入的内核重调度计数、合法短写与 observer 进展，以及 detach 后截断回收；父进程在 worker 完整退出后才报告成功。 | 三组 `BEGIN < PEER < END`、`INODE_PEER < INODE_SHORT`、`parent passed` |
+| `syscallfair_ucore` | 纯 Guest 公平性契约；基础控制台轮已通过，inode 大写入和截断的 last-syscall 重调度计数、observer 与 worker 完整退出属于待复测终审契约。 | 基础轮 `both targets passed`；终审预期 `INODE_PEER < INODE_SHORT`、`parent passed` |
 
 ### 6.2 双目标对照负载
 

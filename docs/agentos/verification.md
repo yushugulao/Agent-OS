@@ -203,7 +203,7 @@ results/latest/
 | 方向 | 当前范围 |
 | --- | --- |
 | 文件扫描深度 | 自动扫描 uCore 根目录短文件名，文件对象 metadata 支持用户态显式写入和根目录自动发现。 |
-| syscall 公平性覆盖 | 动态契约覆盖控制台、inode 首次写内重调度/短写、截断回收和 worker 退出完整性；pipe、exec/fork 分页、VM snapshot 屏障、退出清理和 Agent batch 按源码安全点契约检查。固定上界目录扫描与仅可信 Agent 可达的 metadata raw I/O 尚无独立公平性压力用例。 |
+| syscall 公平性覆盖 | 基础 QEMU 轮已动态验证单次 64 KiB 控制台写内部的同级进程进展；inode 首次写的 last-syscall 重调度/短写、截断 observer 和 worker 退出完整性属于待标准工具链复测的终审契约。pipe、exec/fork 分页、VM snapshot 屏障、退出清理和 Agent batch 当前按源码安全点契约检查；固定上界目录扫描与仅可信 Agent 可达的 metadata raw I/O 尚无独立公平性压力用例。 |
 | Agent 调度 | 验证角色权重、受权调度配置、事件优先、deadline、heartbeat、wait cancel 和虚拟运行量。 |
 | LLM Gateway | 内核提供结构化请求、响应事件、Context 和审计记录；云端访问由用户态或宿主机 Relay 完成。 |
 | 页面和图表 | 内核输出 `agentos:event`、timeline、audit 和 provenance，宿主机工具负责转成页面和图表。 |

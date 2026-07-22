@@ -31,7 +31,7 @@ make build TOOLPREFIX=riscv64-linux-gnu- LOG=warn INIT_PROC=agentfinal_ucore
 bash scripts/run-agent-tests.sh
 ```
 
-独立专项记录：脚本依次运行 `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentconflict_ucore`、`agentllm_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`。专项运行要求每个程序在超时前输出 `parent passed`，且日志中不存在 `check failed`、`panic`、`unknown syscall`、`bad addr`、`IllegalInstruction` 或 `child_failed`。2026-07-21 完整脚本通过；其后增强的 `agentloop_ucore` 和 `agentsecurity_ucore` 边界断言也分别完成 QEMU 复测并通过。该记录不等于 `make full-verify` 全绿，聚合入口的已知状态见文末。
+独立专项记录：脚本依次运行 `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentconflict_ucore`、`agentllm_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`、`agentscope_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`。专项运行要求每个程序在超时前输出 `parent passed`，且日志中不存在 `check failed`、`panic`、`unknown syscall`、`bad addr`、`IllegalInstruction` 或 `child_failed`。2026-07-22 当前代码的完整脚本 15/15 通过，其中包含增强后的路由边界和动态 workflow scope 回归。该记录不等于 `make full-verify` 全绿，聚合入口的已知状态见文末。
 
 ## 输出提取方式
 
@@ -65,7 +65,7 @@ bash scripts/run-agent-tests.sh
 | `fsenospc_ucore` | `inode exhaustion survived`、`block exhaustion survived` | inode、inode cache 与数据块耗尽返回失败而非触发内核 panic |
 | `fspquota_ucore` | `crash_orphan_ready=1`、`reboot_charge_persisted=1`、`relaunch_charge_persisted=1`、`cleanup_reuse=1` | 双目标同镜像三次启动已通过，验证掉电孤儿回收及 PUBLIC 计费跨完整进程域退出与重启保持 |
 | `procreap_ucore` / `procreap_agent_ucore` | `live-domain-limit=1`、`reserved-agent-slot=1` | 进程回收、资源域配额与系统保留槽可验证 |
-| `syscallfair_ucore` | console/inode/trunc 三组 `BEGIN < PEER < END`、`INODE_PEER < INODE_SHORT`、`parent passed` | 纯 Guest 验证控制台长写、inode 写的内核重调度计数/短写/peer 进展、detach 后截断回收和 worker 退出完整性 |
+| `syscallfair_ucore` | 基础轮 `[syscall-fairness] both targets passed`；终审预期 console/inode/trunc 顺序、`INODE_PEER < INODE_SHORT`、`parent passed` | 基础 QEMU 轮已证明控制台长写内部的同级进程进展；inode 写和截断的 last-syscall 计数、observer 与 worker 退出完整性仍待复测 |
 | 内核栈预算 | `kernel stack budget`、`kernel stack user path` | 构建期 callgraph/栈帧预算检查随内核构建执行 |
 
 ## 本次可信 IPC 变更验证状态
@@ -570,6 +570,6 @@ make syscall-fairness-test TOOLPREFIX=riscv64-linux-gnu-
 [syscall-fairness] both targets passed
 ```
 
-测试没有依赖宿主输入注入。该轮日志证明两个目标都在一次 64 KiB 控制台 `write()` 返回前调度 Guest pipe gate 后的同级进程。随后终审把 inode 和 truncate 契约都改为 last-syscall 重调度计数加独立 observer：计数分别证明 64 KiB `write()` 与 `O_TRUNC` open 内部跨过调度边界，observer 分别证明 peer 读到已提交数据和原子 EOF 可见，避免把返回后的用户态 timer 抢占误当成 syscall 内调度。最外层父进程等待测试 worker 完整退出后才输出 `parent passed`，宿主 runner 还要求 QEMU 正常关机。终审后的契约尚未在当前受限身份下重新运行 QEMU。
+测试没有依赖宿主输入注入。该轮日志证明两个目标都在一次 64 KiB 控制台 `write()` 返回前调度 Guest pipe gate 后的同级进程。随后终审把 inode 和 truncate 契约都改为 last-syscall 重调度计数加独立 observer：终审契约将用计数证明 64 KiB `write()` 与 `O_TRUNC` open 内部跨过调度边界，并用 observer 证明 peer 读到已提交数据和原子 EOF 可见，避免把返回后的用户态 timer 抢占误当成 syscall 内调度。最外层父进程还将等待测试 worker 完整退出后才输出 `parent passed`，宿主 runner 还要求 QEMU 正常关机。终审后的契约尚未在当前受限身份下重新运行 QEMU。
 
 基础机制轮次还独立通过 `make agentos-test` 15/15、当时的 `make fs-enospc-test` 和 `make proc-reap-test`。7 月 22 日审查后又补入 fork 逐页计费与 VM snapshot 屏障、Agent size 非阻塞发布 sidecar、baseline exec epoch、last-syscall 重调度观测、强化的 inode/ENOSPC/退出断言及结构检查；随后新增稳定 PUBLIC principal、挂载孤儿清扫与账本重建及三启动 `fspquota_ucore`。最终代码上的 Agent 15/15 与双目标同镜像 crash/seed/verify QEMU 已通过，不能由旧结果替代的物理孤儿回收和持久计费证据现已补齐；构建期内核栈预算为增强目标 `14432 < 16384`、对照目标 `8336 < 16384`。last-syscall 终审契约仍按其独立状态复测。覆盖也不表示任意 syscall 路径已被穷尽；固定上界目录扫描与仅可信 Agent 可达的 metadata raw I/O 仍缺独立公平性压力用例。
