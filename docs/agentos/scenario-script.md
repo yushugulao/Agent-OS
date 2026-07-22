@@ -41,7 +41,7 @@ usersafety_ucore
 | `labbench_ucore` | 综合场景中的性能入口，当前包装运行 `agentbench_ucore` |
 | `labdemo_ucore` | 呈现一个由 orchestrator 控制的多 Agent 实验恢复场景 |
 | `agentsecurity_ucore` | 呈现普通进程和低权限 Agent 无法越权，并验证普通 mail 与多 run 精确恢复 |
-| `agentscope_ucore` | 检查动态 workflow scope、跨域对象/IPC 隔离、事务竞争、配额、fd 委派和生命周期回收 |
+| `agentscope_ucore` | 检查动态 workflow scope、跨域对象/IPC 隔离、事务竞争、微小写入合并、跨域查询进展、配额、fd 委派和生命周期回收 |
 | `agenttrust_ucore` | 检查代码 RX、数据 RW+NX、可信映像不可变及 Agent 角色与可执行 inode 绑定 |
 | `agentvfs_ucore` | 检查 public/workflow 文件隔离、非 Agent worker 能力衰减及继承 fd 重鉴权 |
 | `usersafety_ucore` | 检查用户指针范围、exec 参数、pipe/file 失败回滚和定向等待队列 |
@@ -123,8 +123,10 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfs_ucore CHAPTER
 | `query_plan` | 内核说明本次索引路径按 status 选择 bucket，并检查了多少候选记录 |
 | `prefetch_hints` | 内核根据历史查询和对象标签依赖给出后续 metadata 提示 |
 | `.agentmeta_reload` | 再次初始化时从私有 `.agentmeta` 重新加载自定义元数据 |
+| `partial_update_binding` | 启动早期的字段级更新仍绑定调用者指定的真实 inode，重载后身份不丢失 |
+| `selector_consistency` | fid/path 等非空 selector 若命中不同对象则拒绝修改或删除 |
 | `clear_status` | 属性清空能够生效 |
-| `delete_clears_metadata` | 删除真实文件会同步清理 Agent 元数据 |
+| `delete_clears_metadata` | 删除真实文件会立即清理内存查询状态，持久副本进入分域合并写回 |
 | `missing_selector_not_found` | 恢复/报告 selector 没有命中时返回明确失败 |
 
 看到 `agentfs_ucore: passed` 和 `agentfs_ucore: parent passed` 即可进入下一项。
@@ -323,7 +325,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=usersafety_ucore CHAP
 
 `agentsecurity_ucore` 覆盖普通进程 mail 最小路径；普通进程不能直接投递事件、取消 Agent 等待或修改 Agent 文件元数据；usershell 等价的普通 `fork/exec` 路径不能创建任何 Agent；低权限 Agent 不能继续委派。普通 exec 会撤销 bootstrap grant，之后执行同名或清单中的 bootstrap 映像也不会恢复启动授权。初始化前索引查询不会卡住；legacy 工具 ID/名称不一致会失败；sentinel 不能通过伪造 `AGENT_ROLE_RECOVERY` 获得动作权限；recovery 只会更新 selector 指定的 run。
 
-`agentscope_ucore` 同时建立多个由可信 factory 签发的 workflow scope，验证 capability 只有在 active scope 和精确 owner 同时命中时才生效；同名文件、metadata、action、audit、lease 和 IPC 不能跨域，事务门、存储/进程保留量、一次性 pipe fd 委派及 scope retirement 均有实际 QEMU 回归。
+`agentscope_ucore` 同时建立多个由可信 factory 签发的 workflow scope，验证 capability 只有在 active scope 和精确 owner 同时命中时才生效；同名文件、metadata、action、audit、lease 和 IPC 不能跨域。低权限 Artifact Agent 会在 guest pipe 存活屏障后持续微写已绑定持久对象和 metadata 满表后未绑定的对象，另一 scope 必须在 5 秒内完成 32 次查询；测试同时检查写回批次数、scan cooldown、dirty/durable 最终一致和强制重载后的 size/generation。另一个 Artifact 对 volatile 文件执行 32 次微写，request/commit 计数不得增长。事务门、存储/进程保留量、一次性 pipe fd 委派及 scope retirement 均有实际 QEMU 回归。
 
 `agenttrust_ucore` 检查构建期清单写入 inode 的可信策略：程序代码页为 RX，数据页为 RW+NX，可信映像拒绝写入、截断和删除；只有允许当前 Agent 角色的可信 inode 可以 exec，复制相同程序字节得到的普通文件不会继承信任。
 

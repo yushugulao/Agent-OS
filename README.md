@@ -181,12 +181,13 @@ flowchart LR
 
 本模块面向 Agent 的文件对象理解。普通文件系统以路径、目录项、inode 和文件描述符为核心；Agent 工作流更关心“这个文件属于哪个任务、当前状态是什么、是否是报告、是否已经失败、摘要是什么、哪个 Agent 正在编辑”。AgentOS-uCore 为文件对象附加 namespace、object id、type、state、owner、version、tags、labels、digest 和 summary，并把 metadata 绑定到真实 `dev + inum + incarnation`。`incarnation` 在 inode 槽复用时变化，避免旧 metadata、摘要缓存或租约错误命中新文件。
 
-metadata 持久化使用私有 `.agentmeta` 后端，普通文件系统调用不能直接打开、创建、截断或删除该后端文件。查询时，内核可以按 state、label、type 等字段走索引路径，也可以执行扫描路径；查询结果会返回候选数量、扫描数量、命中数量、查询计划和原因。文件内容摘要由受权 Agent 读取，重复读取同一版本可以命中 digest cache。编辑文件时，Agent 可以申请租约，内核在真实写入、截断和删除路径检查持有者和版本，降低并发覆盖风险。
+metadata 持久化使用私有 `.agentmeta` 双 bank，普通文件系统调用不能直接打开、创建、截断或删除后端文件。普通 workflow 文件变化先发布内存记录或 inode sidecar；只有 `PERSIST` 记录按 scope 进入固定窗口后台写回，volatile 微写不会制造空 checkpoint。每次 checkpoint 尝试无论成功或失败，后续休息期都会随实际 I/O 耗时增长；协调扫描也使用非滑动请求合并和四倍耗时休整，使低权限微小写入不能逐次同步放大全局快照，metadata 满表后也不能制造无间隔全根扫描。查询时，内核可以按 state、label、type 等字段走索引路径，也可以执行扫描路径；查询结果会返回候选数量、扫描数量、命中数量、查询计划和原因。文件内容摘要由受权 Agent 读取，重复读取同一版本可以命中 digest cache。编辑文件时，Agent 可以申请租约，内核在真实写入、截断和删除路径检查持有者和版本，降低并发覆盖风险。
 
 | 设计点 | 实现方式 | 测试入口 |
 | --- | --- | --- |
 | 真实文件绑定 | metadata 记录 `dev + inum + incarnation` | `agentfs_ucore`、`agentvfs_ucore` |
 | 私有后端 | `.agentmeta` 只允许 Agent 子系统内部访问 | `agentsecurity_ucore` |
+| 合并写回 | scope-local dirty/durable 代数、PERSIST 分流、固定窗口与写回/扫描耗时反馈限流 | `agentscope_ucore` |
 | 索引查询 | state、label、type 候选集 | `agentbench_ucore`、双目标实验 |
 | 内容摘要 | 读取短预览、长度和 hash | `agentfinal_ucore`、`labdemo_ucore` |
 | 编辑租约 | 持有者检查和版本提交检查 | `agentconflict_ucore` |
@@ -362,7 +363,7 @@ AgentOS 专项测试程序如下：
 | 测试程序 | 主要内容 | 关键输出 |
 | --- | --- | --- |
 | `agentfinal_ucore` | Agent 创建、Context 映射、批量工具调用、Context Path、用户 cache、timeline、Run Ledger、provenance。 | `agentfinal_ucore: parent passed` |
-| `agentfs_ucore` | 真实 inode 绑定、`.agentmeta`、索引查询、查询缓存、内容摘要、预取提示、删除清理。 | `agentfs_ucore: parent passed` |
+| `agentfs_ucore` | 真实 inode 绑定、partial update、selector 一致性、`.agentmeta`、索引查询、查询缓存、内容摘要、预取提示、删除清理。 | `agentfs_ucore: parent passed` |
 | `agentscan_ucore` | 根目录自动扫描、真实文件自动写入 metadata、文件创建和删除后的索引维护。 | `agentscan_ucore: parent passed` |
 | `agentloop_ucore` | FIFO 事件队列、watch/unwatch、睡眠等待、timeout、heartbeat、wait cancel。 | `agentloop_ucore: parent passed` |
 | `agentsched_ucore` | 角色权重、受权软调度配置、事件优先、强制 burst 公平上限和普通进程进展。 | `agentsched_ucore: parent passed` |
@@ -374,7 +375,7 @@ AgentOS 专项测试程序如下：
 | `agentsecurity_ucore` | 普通进程拒绝、低权限 Agent 伪造拒绝、私有 metadata 后端保护、scoped action/artifact。 | `agentsecurity_ucore: parent passed` |
 | `agenttrust_ucore` | 可信映像、不可变代码、bootstrap 授权范围和 role-image 绑定。 | `agenttrust_ucore: parent passed` |
 | `agentvfs_ucore` | public/workflow 文件安全域、能力读写、继承 fd 重新校验和普通命名空间兼容。 | `agentvfs_ucore: parent passed` |
-| `agentscope_ucore` | 动态 workflow scope、跨域对象/IPC 隔离、事务门、配额、一次性 fd 委派和生命周期回收。 | `agentscope_ucore: parent passed` |
+| `agentscope_ucore` | 动态 workflow scope、跨域对象/IPC 隔离、事务门、持久微写合并、volatile 分流、满表扫描限流与跨域查询时限、配额、一次性 fd 委派和生命周期回收。 | `agentscope_ucore: parent passed` |
 | `usersafety_ucore` | syscall 坏地址、超长参数和对象私有等待队列。 | `usersafety_ucore: parent passed` |
 | `syscallfair_ucore` | 纯 Guest 公平性契约；基础控制台轮已通过，inode 大写入和截断的 last-syscall 重调度计数、observer 与 worker 完整退出属于待复测终审契约。 | 基础轮 `both targets passed`；终审预期 `INODE_PEER < INODE_SHORT`、`parent passed` |
 

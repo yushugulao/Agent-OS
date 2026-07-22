@@ -396,10 +396,19 @@ agentbench_ucore: parent passed
 labbench_ucore: parent passed
 labdemo_ucore: parent passed
 agentsecurity_ucore: parent passed
+agentscope_ucore: metadata_write_coalescing=1 writes=<at-least-128> commits=<bounded>
+agentscope_ucore: metadata_cross_scope_progress=1 queries=32 latency_ms=<at-most-5000>
+agentscope_ucore: metadata_final_consistency=1
+agentscope_ucore: metadata_volatile_no_writeback=1 writes=32
+agentscope_ucore: metadata_scan_pressure_bounded=1
+agentscope_ucore: parent passed
+agenttrust_ucore: parent passed
+agentvfs_ucore: parent passed
+usersafety_ucore: parent passed
 [agent-tests] all Agent-OS uCore checks passed
 ```
 
-这组测试覆盖 Agent Context、结构化工具调用、Context Path、真实文件 metadata、根目录自动扫描、Agent 事件队列、Agent 调度、文件编辑租约、LLM Relay 模板路径、性能观测、综合示例和权限限制。
+这组测试覆盖 Agent Context、结构化工具调用、Context Path、真实文件 metadata、按 scope 合并写回、volatile 写回分流、满表扫描限流、跨 workflow 查询时限、根目录自动扫描、Agent 事件队列、Agent 调度、文件编辑租约、LLM Relay 模板路径、性能观测、综合示例和权限限制。
 
 ## 状态渲染验证
 

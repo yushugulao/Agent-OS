@@ -103,35 +103,40 @@
 ### 2.1 测试流程
 
 1. 父进程创建 orchestrator Agent 子进程。
-2. 子进程调用 `agent_file_meta_init()`，选择最新有效 bank；首次没有已提交 bank 时创建空快照。
-3. 子进程由用户态写入设定的模拟流程示例元数据，并查询该文件对象。返回项携带 `dev`、`inum`、`incarnation` 和 `size`；测试输出并断言可见的 inode 与大小字段。
-4. 子进程创建自定义真实文件，写入内容。
-5. 子进程用 `agent_file_meta_set()` 将自定义逻辑属性绑定到该真实文件。
-6. 子进程查询自定义文件，检查返回的 inode 与文件大小和真实文件一致；内核中的绑定、缓存和编辑版本均以 `dev + inum + incarnation` 为身份键。
-7. 子进程调用 `read_file_digest`，分别用物理文件名和属性 selector 定位同一文件，检查 size、bytes、hash 和 preview。
-8. 子进程通过 `agent_info()` 读取 digest cache 计数，确认第二次读取同一真实文件时命中缓存。
-9. 子进程改写同一真实文件内容，再次读取 digest，确认 hash/preview 更新且 digest cache 出现新的 miss。
-10. 子进程用 `agent_timeline_query()` 按 `source=CONTEXT` 和 `tool_id=READ_FILE_DIGEST` 查询，确认统一 timeline 中保留 size、bytes、hash 和 preview。
-11. 子进程再次调用 `agent_file_meta_init()`，确认自定义元数据来自双 bank 强制重新加载，没有被空表覆盖。
-12. 子进程重复执行同一个非强制扫描查询，确认 `plan_reason` 带有 `AGENT_FILE_QUERY_REASON_CACHE_HIT`。
-13. 子进程写入接近 128 条真实文件元数据，制造足够的数据量。
-14. 子进程分别运行扫描查询和索引查询，检查索引路径的 `scanned_records` 明显更少。
-15. 子进程检查查询计划：扫描路径必须返回 `AGENT_FILE_QUERY_PLAN_SCAN`，索引路径必须返回 `AGENT_FILE_QUERY_PLAN_STATUS_INDEX`，并带有 status 索引原因、索引桶和候选记录数。
-16. 子进程调用 `dependency_query`，分别带入设定的模拟流程和备用模拟流程，检查同名 label 的依赖结果按 run_id 分开。
-17. 子进程调用 `dependency_update` 注册一条 `source -> target` 通用对象依赖，再用 `dependency_query` 验证该依赖可见。
-18. 子进程读取预取提示，检查提示由对象标签依赖产生、使用 label 索引计划，并指向当前 run 内的 analyze/report 等后续 label。
-19. 子进程清空某条记录的 status，确认属性更新生效，并确认旧 generation 查询缓存没有返回过期命中。
-20. 子进程删除绑定文件，确认关联元数据随文件删除被清理。
-21. 子进程调用 `action_commit` 指向不存在的 selector，确认返回 `AGENT_STATUS_NOT_FOUND`。
+2. 子进程在首次显式 metadata 操作前创建两个真实 probe 文件，分别用于启动早期字段更新和后台协调扫描。
+3. 子进程对第一个 probe 只更新 STATUS；内核按 physical path 恢复真实 inode 绑定，随后 `agent_file_meta_init()` 强制重载，`dev + inum + incarnation` 和状态仍保持一致。
+4. 子进程轮询第二个 probe，确认它最终由有界后台扫描纳入查询，再删除该 probe。
+5. 子进程由用户态写入设定的模拟流程示例元数据，并查询该文件对象。返回项携带 `dev`、`inum`、`incarnation` 和 `size`；测试输出并断言可见的 inode 与大小字段。
+6. 子进程用 fid 和 physical path 指向两个不同记录，确认统一返回 `AGENT_STATUS_CONFLICT` 且两条记录均未受影响。
+7. 子进程删除并重建同名文件，再用旧 `dev + inum + incarnation` 请求删除新对象，确认不可变 identity guard 拒绝陈旧 selector。
+8. 子进程创建自定义真实文件，写入内容，并用 `agent_file_meta_set()` 绑定自定义逻辑属性。
+9. 子进程查询自定义文件，检查返回的 inode 与文件大小和真实文件一致；内核中的绑定、缓存和编辑版本均以 `dev + inum + incarnation` 为身份键。
+10. 子进程调用 `read_file_digest`，分别用物理文件名和属性 selector 定位同一文件，检查 size、bytes、hash 和 preview。
+11. 子进程通过 `agent_info()` 读取 digest cache 计数，确认第二次读取同一真实文件时命中缓存。
+12. 子进程改写同一真实文件内容，再次读取 digest，确认 hash/preview 更新且 digest cache 出现新的 miss。
+13. 子进程用 `agent_timeline_query()` 按 `source=CONTEXT` 和 `tool_id=READ_FILE_DIGEST` 查询，确认统一 timeline 中保留 size、bytes、hash 和 preview。
+14. 子进程再次调用 `agent_file_meta_init()`，确认自定义元数据来自双 bank 强制重新加载，没有被空表覆盖。
+15. 子进程重复执行同一个非强制扫描查询，确认 `plan_reason` 带有 `AGENT_FILE_QUERY_REASON_CACHE_HIT`。
+16. 子进程写入接近 128 条真实文件元数据，制造足够的数据量。
+17. 子进程分别运行扫描查询和索引查询，检查索引路径的 `scanned_records` 明显更少。
+18. 子进程检查查询计划：扫描路径必须返回 `AGENT_FILE_QUERY_PLAN_SCAN`，索引路径必须返回 `AGENT_FILE_QUERY_PLAN_STATUS_INDEX`，并带有 status 索引原因、索引桶和候选记录数。
+19. 子进程调用 `dependency_query`，分别带入设定的模拟流程和备用模拟流程，检查同名 label 的依赖结果按 run_id 分开。
+20. 子进程调用 `dependency_update` 注册一条 `source -> target` 通用对象依赖，再用 `dependency_query` 验证该依赖可见。
+21. 子进程读取预取提示，检查提示由对象标签依赖产生、使用 label 索引计划，并指向当前 run 内的 analyze/report 等后续 label。
+22. 子进程清空某条记录的 status，确认属性更新生效，并确认旧 generation 查询缓存没有返回过期命中。
+23. 子进程删除绑定文件，确认关联元数据随文件删除被清理。
+24. 子进程调用 `action_commit` 指向不存在的 selector，确认返回 `AGENT_STATUS_NOT_FOUND`。
 
 ### 2.2 输出阅读方式
 
-本测试的输出重点是 inode 绑定、私有 `.agentmeta` 重新加载、内容摘要、查询缓存、scan/index 候选差异、依赖注册和 selector 未命中。阅读时关注 `demo_inode`、`custom_inode`、`content_digest`、`digest_cache_invalidated`、`.agentmeta_reload`、`bulk_index`、`query_plan`、`dependency_update`、`delete_clears_metadata` 和最终通过标记。完整样例输出见 [test-record.md](test-record.md)。
+本测试的输出重点是启动早期绑定、后台扫描、selector 一致性、inode 生命周期 guard、私有 `.agentmeta` 重新加载、内容摘要、查询缓存、scan/index 候选差异、依赖注册和 selector 未命中。阅读时关注 `partial_update_binding`、`preload_create_query`、`selector_consistency`、`stale_identity_guard`、`demo_inode`、`custom_inode`、`content_digest`、`digest_cache_invalidated`、`.agentmeta_reload`、`bulk_index`、`query_plan`、`dependency_update`、`delete_clears_metadata` 和最终通过标记。完整样例输出见 [test-record.md](test-record.md)。
 
 ### 2.3 覆盖结论
 
 | 覆盖点 | 检查方式 |
 | --- | --- |
+| 启动早期真实对象协调 | 字段级更新经强制重载仍保留真实 inode identity；首次显式 metadata 操作前创建的另一文件最终由后台扫描纳入查询 |
+| selector 一致性 | fid/path 指向不同记录时返回冲突；陈旧 inode identity 不能选择路径复用后的新对象 |
 | 文件生命周期身份 | 查询结果携带 `dev`、`inum`、`incarnation`、`size`；安全绑定和版本状态以 `dev + inum + incarnation` 为键，测试断言并输出真实 inode 与大小 |
 | metadata 双 bank 可写入和重新加载 | 自定义元数据重新初始化后仍存在 |
 | 内容摘要缓存 | 两次读取同一真实文件输出 `digest_cache=1`，改写后输出 `digest_cache_invalidated=1` |
@@ -651,10 +656,14 @@ bash scripts/run-agent-tests.sh
 4. B 创建不带 `PERSIST` 的内存态 metadata，A 强制重载自己的 bank 记录后，B 的记录仍可查询，证明 `file_meta_init` 不能跨 scope 清表。
 5. target consent、route grant 和 MESSAGE 投递跨 scope 均拒绝；同 scope stable route 仍可协作。
 6. A 在同一 scope 内同时启动三个 Orchestrator；inactive bank 完整写入且 VFS 对象释放后，owner 在不释放事务 token 的前提下协作让出一次 CPU，使其他 writer 可达等待队列。三者各自持续创建并提交 `PERSIST` metadata，并通过每进程 `metadata_txn_wait_count` 要求至少两个 writer 实际睡眠等待事务门。结束后强制从双 bank 重载，再按 run 查询必须完整得到三组记录。事务释放采用专属队列广播，所有 waiter 都在锁内重新检查 owner，不依赖单个线程继续传递唤醒。
-7. 相同 action selector 在两个 scope 各自拥有幂等历史；audit/event/query 只返回本 scope，公开 PID/span 不扩大范围。
-8. A 的编辑 lease/version 不能由 B 查询、提交或终止。
-9. 同 scope 多进程共享 workflow 存储计费并受同一 scope limit；从该 workflow 明确降级出的普通子进程改用安装级 PUBLIC principal，不能继续借用短命进程资源域作为磁盘身份。其他 admitted/future scope 的数值保证另由共享 policy 单测、mkfs 初始 `S+4G` 契约、挂载 `4G` 复核和原子 admission 检查覆盖。
-10. 同时占用4个 workflow admission 后第5个创建失败；释放一个后可创建替代 scope。最后成员退出触发 retirement，回收 metadata/action/lease/audit/prefetch/IPC 等表后槽可复用。
+7. B 创建不带 `PERSIST` 的真实 volatile 对象，再由低权限 Artifact 连续执行 32 次单字节写入；前后 scope-local request/commit 计数必须完全不变，证明内存态记录不会制造不包含自身的空 bank checkpoint。
+8. A 的存储配额阶段先创建 120 个文件并占满本 scope 的 112 个 metadata 槽。随后低权限 Artifact 同时微写一个已绑定持久对象和经查询确认未绑定的超额对象，至少完成 128 轮；第 16 轮后通过 guest pipe 发出存活屏障，直到主进程明确停止前持续施压。B 在该存活窗口内完成 32 次本域 metadata 查询并主动让出 CPU，guest `get_mtime()` 要求总延迟不超过 5 秒。
+9. 测试读取 scope-local telemetry，要求持久变化全部进入记账、合并请求加成功批次等于总请求、完整 bank checkpoint 不超过请求数的八分之一；全局 scan runs 增量还必须满足 20 tick 非滑动 cooldown 的轮次上界。若攻击全程落在已有自适应 cooldown 内，零轮扫描也是合法结果。具体写入/批次数受调度时序影响，不把某次观测值固化为契约。
+10. A 在写回完成后要求 `dirty_generation == durable_generation` 且 pending 清零，再强制从双 bank 重载并比较 size 和文件代数，证明异步合并没有丢失最终状态。
+11. 相同 action selector 在两个 scope 各自拥有幂等历史；audit/event/query 只返回本 scope，公开 PID/span 不扩大范围。
+12. A 的编辑 lease/version 不能由 B 查询、提交或终止。
+13. 同 scope 多进程共享 workflow 存储计费并受同一 scope limit；从该 workflow 明确降级出的普通子进程改用安装级 PUBLIC principal，不能继续借用短命进程资源域作为磁盘身份。其他 admitted/future scope 的数值保证另由共享 policy 单测、mkfs 初始 `S+4G` 契约、挂载 `4G` 复核和原子 admission 检查覆盖。
+14. 同时占用4个 workflow admission 后第5个创建失败；释放一个后可创建替代 scope。最后成员退出触发 retirement，回收 metadata/action/lease/audit/prefetch/IPC 等表后槽可复用。
 
 预期回归标记包括：
 
@@ -665,6 +674,11 @@ agentscope_ucore: same_scope_collaboration=1
 agentscope_ucore: metadata_transactions=1
 agentscope_ucore: scope_storage_quota=1
 agentscope_ucore: scope_reload_isolation=1
+agentscope_ucore: metadata_write_coalescing=1 writes=<at-least-128> commits=<bounded>
+agentscope_ucore: metadata_cross_scope_progress=1 queries=32 latency_ms=<at-most-5000>
+agentscope_ucore: metadata_final_consistency=1
+agentscope_ucore: metadata_volatile_no_writeback=1 writes=32
+agentscope_ucore: metadata_scan_pressure_bounded=1
 agentscope_ucore: action_scope_isolation=1
 agentscope_ucore: audit_event_scope_isolation=1
 agentscope_ucore: lease_scope_isolation=1
@@ -674,7 +688,7 @@ agentscope_ucore: lifecycle_reclamation=1
 agentscope_ucore: parent passed
 ```
 
-以上标记已经出现在 2026-07-22 当前代码的完整 Agent QEMU 回归中，`scripts/run-agent-tests.sh` 15/15 通过。该动态证据证明两域隔离、同域协作、事务等待、配额边界、fd 委派与生命周期回收；四份 workflow 数值保证仍由共享策略单测、mkfs 容量负例和挂载/admission 契约共同证明，不从单个输出标记外推。
+以上全部标记均已出现在 2026-07-22 从 clean user/kernel 构建开始的完整 15/15 Agent QEMU 回归中。动态断言证明两域隔离、同域协作、事务等待、微小写入的有界合并、volatile 分流、满表扫描限流、跨 scope 有界进展、强制重载后的最终一致性、配额边界、fd 委派与生命周期回收；四份 workflow 数值保证仍由共享策略单测、mkfs 容量负例和挂载/admission 契约共同证明，不从单个输出标记外推。
 
 ## 19. syscall 内核工作预算复测
 

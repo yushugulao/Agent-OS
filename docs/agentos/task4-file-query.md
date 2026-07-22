@@ -12,6 +12,7 @@ AgentOS-uCore 当前实现的是内核级文件元数据服务：
 - 以真实文件的 `dev + inum + incarnation` 作为主要身份，避免 inode 号复用后继承旧状态；
 - 要求 `physical_name` 能解析到 uCore 根目录中的真实文件名；
 - 使用根目录私有 `.agentmeta` / `.agentmeta1` 双 bank 保存版本化紧凑快照；
+- 使用按 workflow scope 记账的固定窗口后台写回，把普通文件微小变化合并为有界 metadata checkpoint；
 - 在普通 `open/read/write/truncate/unlink` 路径执行 public/workflow/kernel-private 数据访问策略，防止绕过 Agent 工具 capability；
 - 支持扫描查询；
 - 支持 state/label/type 索引查询，ABI 字段兼容保留为 status/stage/kind；
@@ -68,11 +69,13 @@ AgentOS-uCore 当前实现的是内核级文件元数据服务：
 1. `agent_file_meta_init()` 会强制读取 `.agentmeta` 和 `.agentmeta1`，选择 generation 最高且完整校验通过的私有快照，但只替换调用者 workflow scope 的记录。
 2. 其他 scope 的持久或内存态记录不会被调用者重载清除。已有 active bank 的重载失败会保留内存表并返回错误；尚无 active bank 时，内核把当前带 `PERSIST` 的记录提交为第一代，未加载时则从空表开始。
 3. 快照只串行化有效记录；每条记录显式保存原 slot、scope、`physical_name`、`dev`、`inum`、`incarnation`、`size` 和 `fs_generation`，header 保存 generation、精确记录数和 payload hash。
-4. `fileopen(O_CREATE)`、写入、截断、删除会通知 Agent 子系统刷新或删除关联元数据。
+4. `fileopen(O_CREATE)`、写入、截断、删除会通知 Agent 子系统刷新或删除关联元数据。普通 VFS callback 只发布内存状态，且仅对 `PERSIST` 记录推进 scope-local 脏代数；volatile 记录不进入 bank 写回。
 5. `agent_file_meta_set()` 支持 `AGENT_FILE_META_F_DELETE` 删除属性，支持 `AGENT_FILE_META_F_PERSIST` 事务写入 metadata 双 bank；持久化失败时恢复修改前的内存记录和 inode sidecar。
 6. 受权 Agent 显式写入 metadata 时会接管自动扫描槽位；除非显式带上 `AGENT_FILE_META_F_AUTOSCAN`，否则旧的自动扫描标志会被清除，后续扫描只刷新真实 inode 身份，不改写这些对象属性。
 
 `.agentmeta` 和 `.agentmeta1` 是标记为 `KERNEL_PRIVATE` 的 Agent 子系统内部后端。普通文件 syscall 直接读取、创建、修改或删除任一 bank 都会返回 `-1`；Agent 子系统内部 helper 使用内核凭据读写。加载时验证版本、generation、精确文件长度、payload hash、slot 范围、scope 配额和 scope 内唯一性。提交时截短非活动 bank、完整写入紧凑快照并回读校验，成功后才切换活动 bank；短写或 ENOSPC 只留下无效目标 bank，上一代快照仍可恢复。
+
+普通持久文件变化采用写回而不是直写：write/truncate 通过 inode incarnation sidecar 先发布最新 size、更新时间和文件代数，查询及 bank 快照都会覆盖内存主表中的旧值；create/delete 则先完成内存记录变化。带 `PERSIST` 的记录随后让对应 scope 的 `dirty_generation` 进入固定一秒的非滑动合并窗口；不进入快照的 volatile 记录只更新内存/sidecar，不制造空 checkpoint。后台维护在事务门空闲时最多执行一个 checkpoint；每次尝试无论成功或失败，都至少等待一个窗口，并按该次尝试耗时的四倍延长休息期，从而限制正常提交和退化存储失败重试的完整 bank 全局 I/O 占空比。到期写回先于扫描获得维护机会，持续 scan pending 不能使其永久饥饿。快照开始时捕获各 scope 的脏代数，提交后只推进期间没有新增变化的 `durable_generation`，所以并发写入不会被错误标成已持久化；失败则保留脏状态并按同一自适应规则重试。显式持久 metadata set/delete、首次空 bank 和 scope retirement 仍同步提交，以保留管理操作的成功返回语义。
 
 这套实现让查询结果中的文件身份可以追溯到某一代真实 inode，同时保留 Agent 需要的 namespace、workflow、run、label、type、state 等高层属性。完整身份始终是 `dev + inum + incarnation`；删除文件后即使设备号和 inode 号被复用，新 incarnation 也会使旧 metadata、digest cache、版本和租约失效。为了兼容已有用户态测试，结构体字段名仍使用 project/stage/kind/status；字符串 selector 同时接受 `namespace/object_id/label/type/state` 等通用字段名。
 
@@ -98,12 +101,12 @@ Agent 工具 capability 只约束 `agent_file_query()`、`read_file_digest` 等 
 任务四的自动维护路径由 Agent 子系统和调度器配合完成：
 
 1. `agent_file_meta_init()` 或 `file_meta_init` 工具启用扫描能力。
-2. timer tick 和文件创建、写入、截断、删除 hook 只标记 `file_scan_pending`，不在中断上下文做文件系统遍历。
-3. 调度器空隙调用 `agent_background_maintain()`，同一 tick 内最多推进一次扫描，每次最多处理 16 个根目录项，避免一次扫描长时间占用内核，也避免调度循环越频繁、扫描成本越高。
+2. timer tick 只安排周期扫描；文件 hook 能直接绑定的对象只更新对应 scope 的内存记录或 inode sidecar，并按 `PERSIST` 属性登记合并写回。只有锁竞争且无法由 sidecar 表达、绑定丢失等需要协调的情况才标记 `file_scan_pending`。
+3. 扫描请求采用非滑动 pending/deadline 状态机：首次启用立即到期，后续请求不能提前 cooldown，active 期间的重复请求只合并为一轮。调度器空隙调用 `agent_background_maintain()`，获取全局 metadata 事务前先检查 deadline，同一 tick 内最多推进一次、每次最多处理 16 个根目录项。
 4. 扫描会跳过两个 metadata bank，只为真实根目录文件建立 `AGENT_FILE_META_F_AUTOSCAN | AGENT_FILE_META_F_PERSIST` 元数据。
 5. 自动元数据使用真实 `dev + inum + incarnation + size` 作为身份，并填入 `project=root`、`workflow=background-scan`、`run_id=ROOT`、`stage=scan` 等默认属性。
 6. 完整扫描结束后，已经不存在的自动元数据会被清理；手动写入的对象元数据不会被扫描流程误删。
-7. 元数据变化后重建 status、stage、kind 索引，并按需事务写回 metadata 双 bank。
+7. 完整扫描成功、加载失败或目录短读后统一进入 `max(20 tick, 4 * 本轮耗时)` 休息期；即使 metadata 槽已满，未绑定文件的持续微写也不能让全根扫描完成即重启。元数据变化后重建 status、stage、kind 索引；后台按 scope 脏代数和固定写回窗口批量提交 metadata 双 bank，不由单次微小写入同步触发全局快照。
 
 `agentscan_ucore` 专门验证这条路径：系统先发现镜像中已有的 `usershell`，再通过普通文件 syscall 创建 `autoscan_ok`，确认无需显式调用 `agent_file_meta_set()` 也能查询到该文件；删除该文件后，下一轮扫描会清理对应元数据。
 
@@ -111,7 +114,7 @@ Agent 工具 capability 只约束 `agent_file_query()`、`read_file_digest` 等 
 
 `agent_file_meta_init()` 只负责强制选择最新有效 metadata bank 中属于调用者 scope 的记录、重建索引和启用扫描；其他 scope 的内存态对象不会被替换。没有 active bank 时会提交当前可持久记录作为第一代；已有 active bank 但两个 bank 都无效或存储忙时返回错误而不清空当前表。科研示例需要的设定的模拟流程、示例项目名和对象依赖由用户态 orchestrator 调用 `agent_file_meta_set()` 写入。该模拟流程包含数据准备、比对处理、结果分析、报告生成和归档交付。
 
-`labdemo_ucore` 中由 orchestrator Agent 写入科研平台示例数据，再把设定的模拟流程中的比对处理对象状态改为 failed，从而触发 sentinel Agent。普通进程不能直接初始化或修改这张全局元数据表。
+`labdemo_ucore` 中由 orchestrator Agent 写入科研平台示例数据，再把设定的模拟流程中的比对处理对象状态改为 failed，从而触发 sentinel Agent。普通进程不能直接初始化或修改任一 workflow scope 的元数据状态。
 
 `agentsecurity_ucore` 还会在初始化前先执行一次 indexed query，确认未初始化索引不会卡住；随后同时构造设定的模拟流程和另一个模拟流程两个 failed run，用于验证通用 action/artifact 更新只修改 selector 指定的目标 run。
 
@@ -134,7 +137,7 @@ Agent 工具 capability 只约束 `agent_file_query()`、`read_file_digest` 等 
 | `plan_reason` | 位标记，说明是强制扫描、未请求索引、使用了某类索引、命中查询缓存或没有可用索引键 |
 | `index_bucket` | 命中的索引桶；扫描路径为 -1 |
 | `candidate_records` | 本次候选记录数量，用于和全量扫描规模对比 |
-| `fs_generation` | 查询时文件元数据服务的更新代数 |
+| `fs_generation` | 查询时当前 workflow scope（包含可见 SYSTEM 对象）的缓存代数 |
 
 这使 Agent 可以直接知道“为什么这次按 status 索引查，只检查了 6 条候选记录”，而不是只能看到最终命中结果。
 
@@ -142,7 +145,7 @@ Agent 工具 capability 只约束 `agent_file_query()`、`read_file_digest` 等 
 
 任务四在索引路径之上加入了一个 8 槽内核查询结果缓存。缓存 key 包含查询 flags、归一化后的 `max_hits` 以及 physical、logical、project、workflow、run、stage、kind、status、summary_contains 等查询字段。缓存 value 保存完整 `agent_file_query_result`。
 
-缓存只服务扫描未进行时的非 `AGENT_FILE_QUERY_SCAN` 命中查询。强制扫描查询总是重新遍历元数据，用于测试、诊断和对照索引路径；空结果不进入缓存，避免把“文件暂时不存在”当成稳定事实。自动扫描进行中也不读写缓存，因为这时元数据 generation 可能已经变化而索引链尚未完成重建。缓存条目记录生成时的 `fs_generation`；每次文件元数据新增、修改、删除或自动扫描造成 generation 增加后，旧缓存条目会因为 generation 不一致而被跳过，不需要额外遍历清空缓存表。
+缓存服务非 `AGENT_FILE_QUERY_SCAN` 的命中查询。强制扫描查询总是重新遍历元数据，用于测试、诊断和对照索引路径；空结果不进入缓存，避免把“文件暂时不存在”当成稳定事实。自动扫描进行中允许读取代数仍匹配的缓存，保证其他 workflow 的稳定结果可以继续服务，但不创建新缓存；扫描产生实际 metadata 变化时只推进对象所属 scope 的 generation。缓存条目记录生成时当前 workflow scope 的 `fs_generation`；本域文件变化只增加本域代数，SYSTEM 对象变化才增加所有已存在 scope 的代数。旧缓存条目因代数不一致被跳过，无需遍历清空缓存表，也不会让一个低权限 workflow 的写入冲掉其他 workflow 的查询缓存。
 
 命中缓存时，结果仍保留原查询计划、候选记录数、命中信息和 `fs_generation`，并额外设置 `AGENT_FILE_QUERY_REASON_CACHE_HIT`。因此 `plan_reason=68` 表示同一次查询既来自 status 索引计划，又命中了查询结果缓存。缓存命中不会追加额外的扫描成本，`query_ticks` 置为 0。
 
@@ -255,7 +258,7 @@ label=report;run_id=<另一个模拟流程>;namespace=<示例项目>
 
 文件查询成功后会追加 Context record。这样 Agent 的“看到什么文件、做出什么判断”可以在 Context Path 中回放。Context record 同时保存 cause/span：如果这次文件查询来自前一个事件或工具调用，它会指向对应的前序 sequence，并延续当前 span。
 
-文件元数据写接口要求调用者是 Agent 且具备 `AGENT_CAP_META_WRITE`。当前只有 orchestrator 拥有该能力；sentinel、investigator 和 recovery 可按各自能力读取元数据或内容，但不能直接改写全局文件状态。
+文件元数据写接口要求调用者是 Agent 且具备 `AGENT_CAP_META_WRITE`。当前只有 orchestrator 拥有该能力；sentinel、investigator 和 recovery 可按各自能力读取元数据或内容，但不能直接改写当前 workflow scope 的文件状态。
 
 在 `labdemo_ucore` 中：
 

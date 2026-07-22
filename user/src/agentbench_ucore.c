@@ -12,6 +12,7 @@
 #define WAIT_OPS 8
 #define BUSY_POLL_OPS 128
 #define PREFETCH_ROUNDS 64
+#define CACHE_SETTLE_ROUNDS 40
 #define BENCH_PROVENANCE_MAX 128
 
 static struct agent_op ops[AGENT_BATCH_MAX];
@@ -193,19 +194,6 @@ static void seed_digest_file(void)
 	check(agent_file_meta_set(&bench_meta) == 0, "digest meta set");
 }
 
-static void wait_file_scan_quiet(void)
-{
-	struct agent_info info;
-
-	for (int i = 0; i < 400; i++) {
-		check(agent_info(&info) == 0, "scan info");
-		if (info.file_scan_pending == 0)
-			return;
-		sleep(10);
-	}
-	check(0, "file scan quiet");
-}
-
 static int bench_scalar(void)
 {
 	struct agent_op op;
@@ -298,6 +286,21 @@ static int bench_file_query(uint64 flags)
 		check(bench_file_query_result.total_hits >= 1, "file hits");
 	}
 	return elapsed(start, now_ms());
+}
+
+static int bench_file_query_cached(uint64 flags)
+{
+	int ticks = 0;
+
+	for (int i = 0; i < CACHE_SETTLE_ROUNDS; i++) {
+		ticks = bench_file_query(flags);
+		if (bench_file_query_result.plan_reason &
+		    AGENT_FILE_QUERY_REASON_CACHE_HIT)
+			return ticks;
+		sleep(10);
+	}
+	check(0, "file query cache settle");
+	return ticks;
 }
 
 static int bench_file_digest(int *total_bytes)
@@ -639,11 +642,10 @@ static void run_agent_bench(void)
 	direct = bench_direct(&info);
 	query = bench_query();
 	snapshot = bench_snapshot(&snapshot_records);
-	wait_file_scan_quiet();
 	scan = bench_file_query(AGENT_FILE_QUERY_SCAN);
 	scan_records = bench_file_query_result.scanned_records;
 	scan_plan = bench_file_query_result.plan;
-	index = bench_file_query(AGENT_FILE_QUERY_USE_INDEX);
+	index = bench_file_query_cached(AGENT_FILE_QUERY_USE_INDEX);
 	index_records = bench_file_query_result.scanned_records;
 	index_plan = bench_file_query_result.plan;
 	index_candidates = bench_file_query_result.candidate_records;

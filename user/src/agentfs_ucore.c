@@ -5,9 +5,14 @@
 #include <string.h>
 #include <unistd.h>
 
+#define PRELOAD_QUERY_FILE "fspreqry"
+#define PRELOAD_PARTIAL_FILE "fspartial"
+
 static struct agent_file_meta fs_meta;
 static struct agent_file_query fs_query;
 static struct agent_file_query_result fs_result;
+static struct agent_file_hit stale_before;
+static struct agent_file_hit stale_after;
 static struct agent_file_prefetch_hint fs_hints[AGENT_FILE_PREFETCH_MAX_HINTS];
 static struct agent_op fs_op;
 static struct agent_result fs_res;
@@ -57,19 +62,6 @@ static void set_meta(const char *physical, const char *status, uint64 mask)
 	check(agent_file_meta_set(&fs_meta) == 0, "meta set");
 }
 
-static void wait_file_scan_quiet(void)
-{
-	struct agent_info info;
-
-	for (int i = 0; i < 400; i++) {
-		check(agent_info(&info) == 0, "scan info");
-		if (info.file_scan_pending == 0)
-			return;
-		sleep(10);
-	}
-	check(0, "file scan quiet");
-}
-
 static void make_file(const char *name)
 {
 	int fd;
@@ -80,6 +72,64 @@ static void make_file(const char *name)
 	check(write(fd, body, strlen(body)) == (ssize_t)strlen(body),
 	      "write file");
 	check(close(fd) == 0, "close file");
+}
+
+static void query_physical(const char *name)
+{
+	memset(&fs_query, 0, sizeof(fs_query));
+	fs_query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(fs_query.physical_name, name);
+	memset(&fs_result, 0, sizeof(fs_result));
+	check(agent_file_query(&fs_query, &fs_result) == 1,
+	      "physical metadata query");
+	check(fs_result.returned == 1 &&
+	      strcmp(fs_result.hits[0].physical_name, name) == 0,
+	      "physical metadata identity");
+}
+
+static void check_preload_create_query(void)
+{
+	const char *name = PRELOAD_QUERY_FILE;
+	int found = 0;
+
+	for (int i = 0; i < 400; i++) {
+		memset(&fs_query, 0, sizeof(fs_query));
+		fs_query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+		strcpy(fs_query.physical_name, name);
+		memset(&fs_result, 0, sizeof(fs_result));
+		if (agent_file_query(&fs_query, &fs_result) == 1) {
+			found = 1;
+			break;
+		}
+		sleep(10);
+	}
+	check(found && fs_result.returned == 1,
+	      "preload create becomes queryable");
+	check(fs_result.hits[0].dev != 0 && fs_result.hits[0].inum != 0,
+	      "preload create enters bounded background scan");
+	check(unlink(name) == 0, "remove preload create probe");
+	printf("agentfs_ucore: preload_create_query=1\n");
+}
+
+static void check_partial_update_binding(void)
+{
+	const char *name = PRELOAD_PARTIAL_FILE;
+
+	memset(&fs_meta, 0, sizeof(fs_meta));
+	fs_meta.fid = 500;
+	strcpy(fs_meta.physical_name, name);
+	strcpy(fs_meta.status, "partial");
+	fs_meta.flags = AGENT_FILE_META_F_PERSIST;
+	fs_meta.update_mask = AGENT_FILE_META_UPDATE_STATUS;
+	check(agent_file_meta_set(&fs_meta) == 0,
+	      "partial update binds existing inode");
+	check(agent_file_meta_init() == 0,
+	      "reload partial update binding");
+	query_physical(name);
+	check(strcmp(fs_result.hits[0].status, "partial") == 0 &&
+	      fs_result.hits[0].dev != 0 && fs_result.hits[0].inum != 0,
+	      "partial update keeps inode identity");
+	printf("agentfs_ucore: partial_update_binding=1\n");
 }
 
 static void set_demo_meta(int fid, const char *physical, const char *stage,
@@ -114,6 +164,51 @@ static void seed_demo_metadata(void)
 		      agent_dependency_label_bit("report"));
 	set_demo_meta(3, "r42report", "report", "report", "pending",
 		      "report waits for analyze", 0);
+}
+
+static void check_selector_consistency(void)
+{
+	memset(&fs_meta, 0, sizeof(fs_meta));
+	fs_meta.fid = 2;
+	strcpy(fs_meta.physical_name, "r42align");
+	fs_meta.flags = AGENT_FILE_META_F_DELETE;
+	check(agent_file_meta_set(&fs_meta) == AGENT_STATUS_CONFLICT,
+	      "conflicting selectors rejected");
+	query_physical("r42align");
+	query_physical("r42anlz");
+	printf("agentfs_ucore: selector_consistency=1\n");
+}
+
+static void check_stale_identity_guard(void)
+{
+	const char *name = "fsstale";
+
+	make_file(name);
+	query_physical(name);
+	stale_before = fs_result.hits[0];
+	check(unlink(name) == 0, "delete stale identity source");
+	make_file(name);
+	query_physical(name);
+	stale_after = fs_result.hits[0];
+	check(stale_before.dev != stale_after.dev ||
+		      stale_before.inum != stale_after.inum ||
+		      stale_before.incarnation != stale_after.incarnation,
+	      "recreated file has a fresh inode identity");
+	memset(&fs_meta, 0, sizeof(fs_meta));
+	fs_meta.fid = stale_after.fid;
+	strcpy(fs_meta.physical_name, name);
+	fs_meta.dev = stale_before.dev;
+	fs_meta.inum = stale_before.inum;
+	fs_meta.incarnation = stale_before.incarnation;
+	fs_meta.flags = AGENT_FILE_META_F_DELETE;
+	check(agent_file_meta_set(&fs_meta) == AGENT_STATUS_CONFLICT,
+	      "stale inode identity cannot select replacement metadata");
+	query_physical(name);
+	check(fs_result.hits[0].dev == stale_after.dev &&
+		      fs_result.hits[0].inum == stale_after.inum &&
+		      fs_result.hits[0].incarnation == stale_after.incarnation,
+	      "stale selector leaves replacement metadata intact");
+	printf("agentfs_ucore: stale_identity_guard=1\n");
 }
 
 static void set_scoped_meta(const char *run_id, int fid,
@@ -425,8 +520,14 @@ static void run_agent(void)
 {
 	const char *name = "fsissue4";
 
-	check(agent_file_meta_init() == 0, "meta init");
+	/* Create both probes before the first explicit metadata operation. */
+	make_file(PRELOAD_QUERY_FILE);
+	make_file(PRELOAD_PARTIAL_FILE);
+	check_partial_update_binding();
+	check_preload_create_query();
 	seed_demo_metadata();
+	check_selector_consistency();
+	check_stale_identity_guard();
 	seed_scoped_dependency_metadata();
 	seed_user_dependency_metadata();
 	check_scoped_dependency_query();
@@ -489,16 +590,21 @@ static void run_agent(void)
 	       AGENT_TOOL_READ_FILE_DIGEST);
 
 	check(agent_file_meta_init() == 0, "meta reload");
-	wait_file_scan_quiet();
 	check(query_stage("issue4", "RUN-FS", "ingest", "ok", &fs_result) >= 1,
 	      "reload keeps custom query");
 	check(strcmp(fs_result.hits[0].physical_name, name) == 0,
 	      "reload keeps physical name");
 	printf("agentfs_ucore: .agentmeta_reload=1\n");
-	check(query_stage("issue4", "RUN-FS", "ingest", "ok", &fs_result) >= 1,
-	      "query cache hit query");
+	for (int i = 0; i < 400; i++) {
+		check(query_stage("issue4", "RUN-FS", "ingest", "ok",
+				  &fs_result) >= 1,
+		      "query cache hit query");
+		if (fs_result.plan_reason & AGENT_FILE_QUERY_REASON_CACHE_HIT)
+			break;
+		sleep(10);
+	}
 	check((fs_result.plan_reason & AGENT_FILE_QUERY_REASON_CACHE_HIT) != 0,
-	      "query cache hit reason");
+	      "query cache eventually stabilizes");
 	printf("agentfs_ucore: query_cache=1 reason=%d\n",
 	       (int)fs_result.plan_reason);
 

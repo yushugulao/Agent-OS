@@ -76,7 +76,7 @@ flowchart LR
 | 结构化工具调用和工具列表 | 已实现，最终热路径为 `agent_run` 批量 ABI |
 | 工具调用自动写入 Context Path | 已实现 |
 | Context Path 手动追加/query/rollback/clear/snapshot | 已实现；公开 cause/span 由内核私有 source control/span owner 认证，手动 push 不得自报非零 cause/span |
-| 文件元数据表、真实 inode 关联、属性查询、索引查询、metadata 双 bank 持久化、根目录自动扫描 | 已实现；所有对象记录按 kernel-issued workflow scope 分区，读写由可睡眠事务门串行化 |
+| 文件元数据表、真实 inode 关联、属性查询、索引查询、metadata 双 bank 持久化、根目录自动扫描 | 已实现；所有对象记录按 kernel-issued workflow scope 分区，读写由可睡眠事务门串行化，普通文件变化按 scope 合并后台写回 |
 | Agent Loop 心跳、等待、唤醒和 Agent 感知调度 | 已实现 16 槽事件队列、同 scope stable-control IPC 路由、watch/unwatch、wait cancel、heartbeat、自适应调度、当前可信 span 短记录、scope-local audit/Run Ledger 和统一 timeline |
 | 安全与资源韧性 | 已实现动态 workflow scope（public=0、system=1、workflow>=3，最多 4 个，2 保留为稳定 PUBLIC 存储 principal）、capability + exact scope/owner、可信映像、W^X、VFS 隔离、对象私有等待、协作退出、活进程资源域配额、持久存储主体配额、分级保留量和 scope retirement 回收 |
 | 代表性 uCore 基础 syscall | 已实现 `trace`、`mailread`、`mailwrite` |
@@ -171,7 +171,7 @@ flowchart TB
 | 性能基准 | `user/src/agentbench_ucore.c`、`user/src/labbench_ucore.c` | scalar run、batch run、direct Context、query/snapshot、timeline、timeline wait-ready、provenance、文件查询候选记录数、timeout/heartbeat、busy polling、wait/wake 计时 |
 | 综合示例 | `user/src/labdemo_ucore.c` | 同 workflow 三 Agent 故障诊断、scope audit、可信 span、timeline 和 provenance |
 | 权限限制测试 | `user/src/agentsecurity_ucore.c` | 普通/低权限调用拒绝、可信 cause/span、audit authority 分区、role 与 route 边界 |
-| workflow scope 测试 | `user/src/agentscope_ucore.c` | 新 scope factory、同名对象隔离、同 scope 协作、并发 metadata 提交、跨 scope IPC/租约/audit 拒绝、配额保证、一次性 pipe fd 委派和 retirement 回收 |
+| workflow scope 测试 | `user/src/agentscope_ucore.c` | 新 scope factory、同名对象隔离、同 scope 协作、并发 metadata 提交、微小写入合并与跨 scope 查询进展、跨 scope IPC/租约/audit 拒绝、配额保证、一次性 pipe fd 委派和 retirement 回收 |
 | 可信执行测试 | `user/src/agenttrust_ucore.c` | RX/RW+NX 布局、映像不可变、bootstrap 授权范围和角色映像绑定 |
 | VFS 安全域测试 | `user/src/agentvfs_ucore.c` | public/workflow 隔离、worker 能力衰减、继承 fd 重新鉴权和受保护路径 |
 | 系统稳健性测试 | `user/src/usersafety_ucore.c`、`user/src/fsenospc_ucore.c`、`user/src/fsquota_ucore.c`、`user/src/fspquota_ucore.c`、`user/src/procreap_ucore.c` | 用户地址、对象私有等待、真实 ENOSPC、持久 PUBLIC principal、存储配额与系统保留量、退出回收和进程域配额 |
@@ -445,7 +445,7 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 3. 用户态可直接读取 Context 镜像中的 header 和 latest result。
 4. `context_snapshot()` 一次返回多条有序历史，避免逐条 query。
 
-文件查询性能通过扫描路径和索引路径的候选记录数差异体现。索引、generation-aware 查询缓存、dependency 和 digest cache 的 key 均先包含 scope；相同 namespace/run/label 或文件名不会跨 workflow 命中。查询命中后，每 Agent 最多生成 8 条本地提示；共享 32 槽 span prefetch 表按 4 个 scope 各保留 8 条，并同时核对公开 span id 与私有 owner。message handoff 也只在同 scope 的可信 route 成功入队后发生。现有 `agentfs_ucore`、`agentbench_ucore` 和 `labdemo_ucore` 继续验证同 workflow 功能，新 `agentscope_ucore` 负责相同名称和相同业务标识的跨 scope 负向边界。
+文件查询性能通过扫描路径和索引路径的候选记录数差异体现。索引、generation-aware 查询缓存、dependency 和 digest cache 的 key 均先包含 scope；相同 namespace/run/label 或文件名不会跨 workflow 命中。查询缓存代数也按 scope 递增，只有所有 workflow 都可见的 SYSTEM 对象变化才使各域缓存失效。普通 workflow 文件写入先把已提交 size 和代数发布到 inode incarnation sidecar；只有 `PERSIST` 记录登记本域 dirty generation，volatile 记录不进入 bank。固定一秒的非滑动窗口把重复变化合并，scheduler 在扫描前给到期写回一次独立机会。完整 bank checkpoint 每次尝试后的休息期都不短于一个窗口和本次耗时的四倍，失败尝试也使用同一退避，因此持续低权限写入和退化存储上的重试都具有设备速度无关的 I/O 占空比上界。协调扫描用独立的非滑动 pending/deadline 和 `max(20 tick, 4 * 扫描耗时)` 休整，满表未绑定对象的微写不能让全根扫描完成即重启。写入期间继续变化的 scope 不推进 durable generation，失败也保留待办，因此合并不会牺牲最终一致性。显式持久 metadata 管理操作仍同步提交。查询命中后，每 Agent 最多生成 8 条本地提示；共享 32 槽 span prefetch 表按 4 个 scope 各保留 8 条，并同时核对公开 span id 与私有 owner。message handoff 也只在同 scope 的可信 route 成功入队后发生。现有 `agentfs_ucore`、`agentbench_ucore` 和 `labdemo_ucore` 继续验证同 workflow 功能，`agentscope_ucore` 负责相同名称和相同业务标识的跨 scope 负向边界，以及低权限微小写入下的合并率、另一 scope 查询进展和重载一致性。
 
 ## 9. 架构决策
 
@@ -472,7 +472,7 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 | 因果图接口 | `agent_provenance_snapshot()` 把可见 Context、审计和预取提示转换成因果边 | 让 Web UI 可以直接画出跨 Agent 触发关系，减少用户态日志拼接 | 当前是短摘要内存图，不是持久化 provenance 数据库 |
 | 工具查找 | ID 直接定位，legacy name 兼容 | 最终性能路径避免字符串扫描 | 工具 ID 需要保持稳定 |
 | 批量执行 | `agent_run()` 一次最多 64 个 op | 减少 syscall 次数，提高端到端吞吐 | 单个 op 错误通过 result 表达 |
-| 文件查询实现 | scope + `dev + inum + incarnation` 主键、scope-local metadata/index/cache，以及带 generation、slot、精确长度和 payload hash 的 `.agentmeta` / `.agentmeta1` 双 bank 紧凑快照 | 同名、同 fid/run/label 的不同 workflow 对象保持隔离；inactive bank 完整写入并回读后才切换，ENOSPC 保留上一代；持久大小随有效记录数增长并回收目标 bank 尾块 | 当前只扫描 uCore 根目录，不做多级目录递归 |
+| 文件查询实现 | scope + `dev + inum + incarnation` 主键、scope-local metadata/index/cache、inode size 发布 sidecar、PERSIST/volatile 写回分流、按 scope dirty/durable 代数管理的固定窗口后台写回、带自适应 cooldown 的协调扫描，以及 `.agentmeta` / `.agentmeta1` 双 bank 紧凑快照 | 同名、同 fid/run/label 的不同 workflow 对象保持隔离；微小文件变化不会同步放大全 bank I/O，满表对象也不能制造无间隔扫描；inactive bank 完整写入并回读后才切换，ENOSPC 保留上一代 | 当前只扫描 uCore 根目录，不做多级目录递归；普通写回提供全局频率上界而非每对象独立日志 |
 | 文件内容摘要 | `read_file_digest` 受 `CONTENT_READ` capability 控制，按 selector 读取真实文件短预览、最多 4096 字节内容和 FNV-1a 指纹；绑定 Agent metadata 的真实文件进入 8 槽内容版本感知 digest cache | 让 Agent 在 metadata 命中后取得轻量内容证据，重复读取同一文件证据时复用结果，并自动进入 Context/timeline | 不是全文搜索，不建立内容倒排索引；未绑定 Agent metadata 的普通文件不缓存 |
 | 文件编辑冲突处理 | 使用 `scope + dev + inum + incarnation` 租约和版本检查，并接入真实 VFS 修改路径 | 防止同 scope 无序覆盖，也拒绝跨 scope 租约号复用 | 不做内容自动合并 |
 | 对象预取提示 | 每 Agent 8 条；物理 span 表 32 条按 4 scope 各8，并核对 private owner | 同 scope 因果链可交接提示，跨 scope 不能借公开 span 查询 | 当前只提示 metadata，提示本身不预读文件内容 |

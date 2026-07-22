@@ -114,6 +114,9 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 542：
 | `loop_state` | Agent Loop 状态 |
 | `agent_call_count` | 工具调用总数 |
 | `metadata_txn_wait_count` | 当前进程实际等待 metadata 事务门的次数，用于确认并发争用测试确实进入等待路径 |
+| `metadata_writeback_dirty` / `metadata_writeback_durable` | 当前 workflow scope 已发布和已持久化的 metadata 写回代数；两者相等表示该域没有未提交变化 |
+| `metadata_writeback_requests` / `metadata_writeback_coalesced` | 当前 scope 进入写回队列的变化数，以及在已有脏代数上被合并的变化数 |
+| `metadata_writeback_commits` / `metadata_writeback_pending` | 当前 scope 完成的批量 checkpoint 数，以及是否仍有等待后台写回的变化 |
 | `context_path_count` | 当前可见历史记录数 |
 | `context_path_capacity` | 历史记录容量 |
 | `context_path_head` | 下一次写入槽位 |
@@ -402,7 +405,11 @@ int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 
 文件元数据授权键先包含当前 kernel-issued workflow scope，再使用真实文件的 `dev + inum + incarnation` 标识该 scope 内的对象生命期。`incarnation` 在 inode 槽重新分配时递增，使删除后复用同一 inode 号的新文件不会继承旧 metadata、租约或摘要缓存；另一 scope 即使创建相同 `physical_name`、`fid`、namespace、run 或 label，也只会命中自己的记录。`physical_name` 必须能解析为 uCore 根目录中当前 scope 的真实短文件名，复杂逻辑路径保存在 `logical_path` 等 Agent 属性字段中。根目录私有文件 `.agentmeta` 和 `.agentmeta1` 组成双 bank 版本化紧凑快照：每次只向非活动 bank 写入带 `PERSIST` 的有效记录、原 slot、scope、generation、精确长度和 payload hash，截短旧目标后完整写入并回读校验，成功后才切换活动 generation。这样缩短快照会回收尾块，写入短缺或 ENOSPC 也不会覆盖上一份已提交 bank；显式 metadata set/delete 在提交失败时同时回滚内存表和 inode sidecar。`agent_file_meta_init()` 会强制读取两个 bank 并选择 generation 最高的完整快照，但只替换调用者 scope 的已提交记录，其他 scope 的内存记录保持不变；已有 active bank 时重载失败会保留当前状态并返回错误，尚无 active bank 时则把当前可持久记录提交为第一代，避免一次只读查询抢先初始化后阻断 Orchestrator。两个 bank 都标记为 `KERNEL_PRIVATE`，普通文件 syscall 不能直接读取、创建、修改或删除，Agent 子系统内部 helper 使用内核凭据负责持久化和重新加载。
 
-内存 metadata、索引、依赖表、inode sidecar 与双 bank 提交属于同一个可睡眠、可重入的内核事务域。进程 syscall 在竞争时进入对象私有等待队列；scheduler、scope retirement 和真实 VFS callback 不持有底层 inode/VFS 状态阻塞等待，而是使用禁止外部重入的 try-lock。持久化写完 inactive bank 并释放 VFS 对象后设置一个协作调度点，事务 owner token 跨调度保持不变，使其他 writer 能真正到达等待队列；回读验证和 active generation 发布仍在同一事务中。事务门采用条件队列语义：owner 在同一关中断临界区清空后广播事务专属 wait queue，所有 waiter 被唤醒后重新检查 owner 并竞争。唤醒不转移所有权，因此任一 waiter 随进程退出或中断都不会使其他等待者永久沉睡。workflow 文件 callback 竞争失败时只登记一次全量协调扫描，PUBLIC 或其他非 workflow inode 在抢锁前即被过滤。后台扫描每个分片完成后重建索引，并用 `persist_pending` 汇总整轮变更；因此查询不会看到半构造槽，失败回滚也不会覆盖另一线程已经提交的记录。
+内存 metadata、索引、依赖表、inode sidecar 与双 bank 提交属于同一个可睡眠、可重入的内核事务域。进程 syscall 在竞争时进入对象私有等待队列；scheduler、scope retirement 和真实 VFS callback 不持有底层 inode/VFS 状态阻塞等待，而是使用禁止外部重入的 try-lock。持久化写完 inactive bank 并释放 VFS 对象后设置一个协作调度点，事务 owner token 跨调度保持不变，使其他 writer 能真正到达等待队列；回读验证和 active generation 发布仍在同一事务中。事务门采用条件队列语义：owner 在同一关中断临界区清空后广播事务专属 wait queue，所有 waiter 被唤醒后重新检查 owner 并竞争。唤醒不转移所有权，因此任一 waiter 随进程退出或中断都不会使其他等待者永久沉睡。
+
+普通 workflow 文件的 create/write/truncate/delete callback 不再同步重写全局 metadata bank。write/truncate 先按 inode incarnation 把已提交的 size、更新时间和文件代数发布到 sidecar，create/delete 直接完成对应内存记录变化；只有带 `PERSIST` 的记录才在所属 workflow scope 的 `dirty_generation` 上登记写回，volatile 记录只更新内存和 sidecar。重复持久变化进入固定一秒、不会因新请求延长的合并窗口。scheduler 只在窗口到期且事务门空闲时执行一个后台 checkpoint；每次尝试无论成功或失败，下一次后台提交前都至少等待一个合并窗口，并按本次尝试耗时的四倍延长休息期，从而给持续攻击和退化存储上的失败重试设置不依赖设备速度的全局 I/O 占空比上界。扫描请求不能饿死已经到期的 checkpoint。一次 checkpoint 会合并所有当时已捕获的 scope，但只把写入期间没有继续变化的 scope 推进到 `durable_generation`，失败则保留脏代数并按同一自适应规则重试。callback 竞争失败时，已有 sidecar 发布的普通写入无需扩大成全目录扫描；确需恢复绑定时才登记协调扫描。显式 `PERSIST` set/delete、空 bank 安装和 scope retirement 仍保持同步提交语义，`agent_file_meta_init()` 也只在调用者自己的 scope 有未提交变化时先建立持久化屏障。按真实路径设置 metadata 时只读探测单个 inode 是否应继承自动持久属性，不以全局扫描作为正常提交前置条件，也不会在请求校验失败前修改 metadata。
+
+查询缓存代数同样按 workflow scope 维护；某域的普通变化只使该域缓存失效，SYSTEM 对象变化才使所有已存在 scope 的缓存代数失效。这样低权限 Agent 的微小写入既不能逐次触发全 bank I/O，也不能借另一 workflow 的脏状态迫使其同步提交；查询仍通过 sidecar 立即看到本域已经提交到文件系统的数据。
 
 字符串 selector 支持两组字段名：兼容字段 `project/run_id/stage/kind/status`，以及通用字段 `namespace/object_id/label/type/state`。内核按这些字段执行同一套查询、状态更新、依赖查询和预取提示生成。科研平台中的设定的模拟流程数据由用户态 orchestrator 写入；内核不会预置项目名、run id 或固定阶段顺序。该流程的用户态环节包括数据准备、比对处理、结果分析、报告生成和归档交付。
 
@@ -414,11 +421,13 @@ int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 
 | flag | 含义 |
 | --- | --- |
-| `AGENT_FILE_META_F_DELETE` | 按 path/fid 或 `dev + inum + incarnation` 删除元数据 |
-| `AGENT_FILE_META_F_PERSIST` | 更新后事务写入元数据双 bank |
+| `AGENT_FILE_META_F_DELETE` | 删除所有非空 selector 共同指向的元数据；fid、physical/logical path 和完整 inode identity 必须收敛到同一记录 |
+| `AGENT_FILE_META_F_PERSIST` | 记录纳入持久快照；显式 set/delete 同步提交，普通 VFS 自动变化按 scope 合并后台写回 |
 | `AGENT_FILE_META_F_AUTOSCAN` | 由根目录自动扫描维护的元数据 |
 
-根目录自动扫描由 Agent 文件元数据服务启用。timer tick 和文件系统 hook 只标记扫描请求；调度器空隙调用 `agent_background_maintain()` 分批扫描 uCore 根目录。扫描发现的新真实文件会生成 `AUTOSCAN | PERSIST` 元数据，文件删除后对应自动元数据会被清理。当前扫描范围是 uCore 根目录短文件名，不承诺多级目录递归或全文内容索引。
+`dev + inum + incarnation` 是不可变身份 guard，不是可写更新值。多个 selector 指向不同记录时返回 `AGENT_STATUS_CONFLICT`；没有 selector 命中时返回 `AGENT_STATUS_NOT_FOUND`，失败请求不会先改写或删除其他对象。
+
+根目录自动扫描由 Agent 文件元数据服务启用。timer tick 安排周期扫描；文件系统 hook 能局部更新时直接发布内存记录或 inode sidecar 并登记分域写回，只有绑定缺失等无法局部协调的状态才追加扫描请求。扫描请求采用非滑动合并：首次启用可立即执行，之后不能提前已有 cooldown；扫描中到达的任意数量请求最多排队一轮。调度器空隙调用 `agent_background_maintain()`，先给到期写回一次独立机会，再按每 tick 最多 16 个目录项推进扫描。完整扫描成功或失败后都至少休息 20 tick，并按本轮耗时的四倍延长休息期；metadata 满表后的未绑定文件微写因此不能让扫描完成即重启。扫描发现的新真实文件会生成 `AUTOSCAN | PERSIST` 元数据，文件删除后对应自动元数据会被清理。当前扫描范围是 uCore 根目录短文件名，不承诺多级目录递归或全文内容索引。
 
 `struct agent_file_query` 以空字符串表示“不限制该字段”。`flags` 支持：
 
@@ -441,7 +450,7 @@ int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 | `candidate_records` | 本次候选记录数量，和 `scanned_records` 一起用于解释索引收益 |
 | `query_ticks` | 查询内部 tick 差值 |
 | `plan_reason` | 查询计划原因 flags，例如强制扫描、status 索引、stage 索引、kind 索引、查询缓存命中或没有可用索引键 |
-| `fs_generation` | 查询时文件元数据服务的全局更新代数 |
+| `fs_generation` | 查询时当前 workflow scope（包含其可见 SYSTEM 对象）的缓存代数 |
 
 每条 hit 还返回 `dev`、`inum`、`incarnation`、`size` 和 `fs_generation`，用于说明查询结果来自同一代真实文件绑定和当前元数据版本。
 
@@ -454,7 +463,7 @@ int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 | `AGENT_FILE_QUERY_PLAN_STAGE_INDEX` | 使用 stage 索引链 |
 | `AGENT_FILE_QUERY_PLAN_KIND_INDEX` | 使用 kind 索引链 |
 
-`plan_reason` 使用位标记说明为什么选择该计划：`FORCED_SCAN` 表示调用者强制扫描；`INDEX_OFF` 表示未请求索引；`STATUS_INDEX`、`STAGE_INDEX`、`KIND_INDEX` 表示对应索引参与计划；`NO_INDEX_KEY` 表示请求了索引但查询条件没有 status、stage 或 kind；`CACHE_HIT` 表示本次非强制扫描命中查询直接复用了同一 `fs_generation` 下的结果缓存。空结果和自动扫描进行中的查询不进入缓存。
+`plan_reason` 使用位标记说明为什么选择该计划：`FORCED_SCAN` 表示调用者强制扫描；`INDEX_OFF` 表示未请求索引；`STATUS_INDEX`、`STAGE_INDEX`、`KIND_INDEX` 表示对应索引参与计划；`NO_INDEX_KEY` 表示请求了索引但查询条件没有 status、stage 或 kind；`CACHE_HIT` 表示本次非强制扫描命中查询直接复用了同一 scope cache generation 下的结果缓存。自动扫描可以和其他 scope 的缓存命中并行；扫描真正改变调用 scope 或 SYSTEM 记录时，相应 cache generation 会使旧结果失效。显式 `AGENT_FILE_QUERY_SCAN` 不进入缓存。
 
 ### 文件编辑租约 ABI
 

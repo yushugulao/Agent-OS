@@ -346,6 +346,12 @@ struct agent_info {
 	int loop_state;
 	uint64 agent_call_count;
 	uint64 metadata_txn_wait_count;
+	uint64 metadata_writeback_dirty;
+	uint64 metadata_writeback_durable;
+	uint64 metadata_writeback_requests;
+	uint64 metadata_writeback_coalesced;
+	uint64 metadata_writeback_commits;
+	uint64 metadata_writeback_pending;
 	uint64 context_path_count;
 	uint64 context_path_capacity;
 	uint64 context_path_head;

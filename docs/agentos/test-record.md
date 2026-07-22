@@ -573,3 +573,38 @@ make syscall-fairness-test TOOLPREFIX=riscv64-linux-gnu-
 测试没有依赖宿主输入注入。该轮日志证明两个目标都在一次 64 KiB 控制台 `write()` 返回前调度 Guest pipe gate 后的同级进程。随后终审把 inode 和 truncate 契约都改为 last-syscall 重调度计数加独立 observer：终审契约将用计数证明 64 KiB `write()` 与 `O_TRUNC` open 内部跨过调度边界，并用 observer 证明 peer 读到已提交数据和原子 EOF 可见，避免把返回后的用户态 timer 抢占误当成 syscall 内调度。最外层父进程还将等待测试 worker 完整退出后才输出 `parent passed`，宿主 runner 还要求 QEMU 正常关机。终审后的契约尚未在当前受限身份下重新运行 QEMU。
 
 基础机制轮次还独立通过 `make agentos-test` 15/15、当时的 `make fs-enospc-test` 和 `make proc-reap-test`。7 月 22 日审查后又补入 fork 逐页计费与 VM snapshot 屏障、Agent size 非阻塞发布 sidecar、baseline exec epoch、last-syscall 重调度观测、强化的 inode/ENOSPC/退出断言及结构检查；随后新增稳定 PUBLIC principal、挂载孤儿清扫与账本重建及三启动 `fspquota_ucore`。最终代码上的 Agent 15/15 与双目标同镜像 crash/seed/verify QEMU 已通过，不能由旧结果替代的物理孤儿回收和持久计费证据现已补齐；构建期内核栈预算为增强目标 `14432 < 16384`、对照目标 `8336 < 16384`。last-syscall 终审契约仍按其独立状态复测。覆盖也不表示任意 syscall 路径已被穷尽；固定上界目录扫描与仅可信 Agent 可达的 metadata raw I/O 仍缺独立公平性压力用例。
+
+## 2026-07-22 metadata 合并写回回归
+
+执行：
+
+```bash
+TOOLPREFIX=riscv64-linux-gnu- CASE_TIMEOUT=240s bash scripts/run-agent-tests.sh
+```
+
+当前工作区从 clean user/kernel 构建开始完成整套 Agent QEMU 回归，15/15 通过，最终输出 `[agent-tests] all Agent-OS uCore checks passed`。构建期内核栈预算同时通过，本轮增强目标为 `required=14128 < limit=16384`。
+
+写回与跨域进展的实际输出：
+
+```text
+agentscope_ucore: metadata_write_coalescing=1 writes=131 commits=4
+agentscope_ucore: metadata_cross_scope_progress=1 queries=32 latency_ms=3626
+agentscope_ucore: metadata_final_consistency=1
+agentscope_ucore: metadata_volatile_no_writeback=1 writes=32
+agentscope_ucore: metadata_scan_pressure_bounded=1
+agentscope_ucore: parent passed
+```
+
+`writes=131`、`commits=4` 和 `latency_ms=3626` 是本轮调度时序下的观测值，不是固定常量。测试契约要求每次变化进入 scope-local 记账，`commits > 0`、`commits * 8 <= requests`、`coalesced + commits == requests`，安静后 `dirty == durable` 且 pending 清零。随后强制重载 bank，size 和文件代数保持一致。另一 workflow 在 writer 存活屏障与显式停止之间完成 32 次查询，证明数据路径不再逐次同步执行完整 metadata checkpoint。volatile 微写前后的 request/commit 计数完全不变，满表未绑定对象的扫描轮次满足 cooldown 上界。成功与失败 checkpoint 共用 `agent_file_writeback_rest_deadline()`，失败保留 dirty 且按实际尝试耗时退避；本轮没有注入退化设备时延，因此该失败分支由源码审查、编译和全量回归覆盖，不把正常路径观测夸大为故障注入证据。
+
+显式 metadata 事务边界的新增输出：
+
+```text
+agentfs_ucore: partial_update_binding=1
+agentfs_ucore: preload_create_query=1
+agentfs_ucore: selector_consistency=1
+agentfs_ucore: stale_identity_guard=1
+agentfs_ucore: parent passed
+```
+
+`partial_update_binding` 覆盖启动早期只更新 STATUS 的请求仍绑定调用者指定的真实 `dev + inum + incarnation`，并在重载后保持身份；`preload_create_query` 覆盖首次显式 metadata 操作之前创建的文件最终由有界后台扫描纳入查询。后两个标记分别覆盖 fid 与 path 指向不同对象时返回冲突，以及旧 inode identity 不能修改或删除路径复用后的新对象；失败请求不会提前协调、误删或持久化其他记录。
