@@ -66,9 +66,10 @@ make full-verify TOOLPREFIX=riscv64-linux-gnu-
 - 共享基础安全加固、不含 AgentOS 扩展的 uCore 对照平台和 AgentOS-uCore 平台的 QEMU 运行；
 - AgentOS 内核专项测试；
 - 主目标、Agent 对抗场景和 baseline 的进程生命周期复测；
-- 双目标 syscall 公平性和全局文件对象表资源配额复测。
+- 双目标 syscall 公平性和全局文件对象表资源配额复测；
+- AgentOS 线程资源域配额、系统保留和跨域调度公平复测。
 
-文件系统 ENOSPC 和显式内核栈预算检查保留在聚合验证之外，分别运行 `make fs-enospc-test` 和 `make kernel-stack-check`；全局文件对象表配额由 `make full-verify` 串联，也可独立运行 `make file-resource-test`。每次内核构建都会自动执行栈预算分析。
+文件系统 ENOSPC 和显式内核栈预算检查保留在聚合验证之外，分别运行 `make fs-enospc-test` 和 `make kernel-stack-check`；全局文件对象表与线程资源域配额由 `make full-verify` 串联，也可分别运行 `make file-resource-test` 和 `make thread-resource-test`。每次内核构建都会自动执行栈预算分析。
 
 期望最后看到：
 

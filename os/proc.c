@@ -16,13 +16,13 @@ static struct file fd_reservation;
 extern char boot_stack_top[];
 struct thread *current_thread;
 struct thread idle;
-struct queue task_queue;
-#define TASK_QUEUE_SIZE (NPROC * NTHREAD)
-static int process_queue_data[TASK_QUEUE_SIZE];
-static int scheduler_retained[TASK_QUEUE_SIZE];
-static int scheduler_agent_hint;
-static uint64 scheduler_agent_burst;
-static uint64 scheduler_score_burst;
+static struct queue scheduler_active_domains;
+static int scheduler_active_domain_data[PROC_RESOURCE_DOMAIN_CAP];
+static struct queue scheduler_domain_tasks[PROC_RESOURCE_DOMAIN_CAP];
+static int scheduler_domain_task_data[PROC_RESOURCE_DOMAIN_CAP]
+				     [THREAD_RESOURCE_DOMAIN_QUEUE_LIMIT];
+static int scheduler_domain_active[PROC_RESOURCE_DOMAIN_CAP];
+static int scheduler_retained[THREAD_RESOURCE_DOMAIN_QUEUE_LIMIT];
 
 enum proc_admission {
 	PROC_ADMIT_BOOT,
@@ -39,6 +39,12 @@ struct proc_resource_domain {
 	int reserved_live;
 	int ordinary_file_slots;
 	int reserved_file_slots;
+	int ordinary_threads;
+	int reserved_threads;
+	int runnable_threads;
+	int runnable_agents;
+	uint64 scheduler_agent_burst;
+	uint64 scheduler_score_burst;
 };
 
 static struct proc_resource_domain
@@ -48,11 +54,15 @@ static int proc_resource_reserved_live;
 static int proc_file_slots_total;
 static int proc_file_slots_ordinary;
 static int proc_file_slots_reserved;
+static int proc_thread_slots_total;
+static int proc_thread_slots_ordinary;
+static int proc_thread_slots_reserved;
 static uint proc_scope_next_id;
 static int proc_scope_id_exhausted;
 
 static void proc_reset_thread_slot(struct thread *t);
 static void proc_recycle(struct proc *p);
+static void proc_thread_resource_release(struct thread *t);
 
 #define KSTACK_POISON 0xa5
 #define KSTACK_CANARY 0x6b737461636b4f53ULL
@@ -80,7 +90,6 @@ _Static_assert(PROC_RESERVED_SLOTS % PROC_RESERVED_DOMAIN_CAP == 0,
 _Static_assert(PROC_RESOURCE_DOMAIN_RESERVED_LIMIT >=
 	       1 + AGENT_ROLE_ARTIFACT + PROC_WORKFLOW_RESERVED_WORKERS,
 	       "workflow reserve must fit bootstrap, all roles, and workers");
-
 static uint64 kernel_stack_slot(int proc_index, int tid)
 {
 	return (uint64)proc_index * NTHREAD + tid;
@@ -271,14 +280,42 @@ static int proc_vm_snapshot_schedulable(const struct thread *t)
 	       p->vm_snapshot_owner_tid == t->tid;
 }
 
+static void scheduler_queues_init(void)
+{
+	init_queue(&scheduler_active_domains, PROC_RESOURCE_DOMAIN_CAP,
+		   scheduler_active_domain_data);
+	for (int i = 0; i < PROC_RESOURCE_DOMAIN_CAP; i++) {
+		init_queue(&scheduler_domain_tasks[i],
+			   THREAD_RESOURCE_DOMAIN_QUEUE_LIMIT,
+			   scheduler_domain_task_data[i]);
+		scheduler_domain_active[i] = 0;
+	}
+}
+
 static void proc_resource_domain_clear(struct proc_resource_domain *domain)
 {
+	int domain_id = domain - proc_resource_domains;
+
+	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP)
+		panic("resource domain address invariant");
+	if (scheduler_domain_tasks[domain_id].count != 0 ||
+	    scheduler_domain_active[domain_id])
+		panic("resource domain run queue invariant");
+	init_queue(&scheduler_domain_tasks[domain_id],
+		   THREAD_RESOURCE_DOMAIN_QUEUE_LIMIT,
+		   scheduler_domain_task_data[domain_id]);
 	domain->used = 0;
 	domain->live = 0;
 	domain->ordinary_live = 0;
 	domain->reserved_live = 0;
 	domain->ordinary_file_slots = 0;
 	domain->reserved_file_slots = 0;
+	domain->ordinary_threads = 0;
+	domain->reserved_threads = 0;
+	domain->runnable_threads = 0;
+	domain->runnable_agents = 0;
+	domain->scheduler_agent_burst = 0;
+	domain->scheduler_score_burst = 0;
 }
 
 static void proc_resource_init(void)
@@ -290,8 +327,96 @@ static void proc_resource_init(void)
 	proc_file_slots_total = 0;
 	proc_file_slots_ordinary = 0;
 	proc_file_slots_reserved = 0;
+	proc_thread_slots_total = 0;
+	proc_thread_slots_ordinary = 0;
+	proc_thread_slots_reserved = 0;
 	proc_scope_next_id = VFS_SCOPE_FIRST_DYNAMIC;
 	proc_scope_id_exhausted = 0;
+}
+
+static int proc_thread_resource_available(
+	struct proc_resource_domain *domain, int reserved)
+{
+	if (domain == 0 ||
+	    proc_thread_slots_total >= THREAD_RESOURCE_POOL_SIZE)
+		return 0;
+	if (reserved)
+		return proc_thread_slots_reserved <
+				       THREAD_RESOURCE_RESERVED_LIMIT &&
+		       domain->reserved_threads <
+				       THREAD_RESOURCE_DOMAIN_RESERVED_LIMIT;
+	return proc_thread_slots_ordinary < THREAD_RESOURCE_ORDINARY_LIMIT &&
+	       domain->ordinary_threads <
+		       THREAD_RESOURCE_DOMAIN_ORDINARY_LIMIT;
+}
+
+static void proc_thread_resource_charge_locked(struct thread *t,
+					       int domain_id,
+					       int reserved)
+{
+	struct proc_resource_domain *domain;
+
+	if (t == 0 || t->resource_slot_charged ||
+	    domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP)
+		panic("thread resource charge invariant");
+	domain = &proc_resource_domains[domain_id];
+	if (!domain->used ||
+	    !proc_thread_resource_available(domain, reserved))
+		panic("thread resource capacity invariant");
+	proc_thread_slots_total++;
+	if (reserved) {
+		proc_thread_slots_reserved++;
+		domain->reserved_threads++;
+	} else {
+		proc_thread_slots_ordinary++;
+		domain->ordinary_threads++;
+	}
+	t->resource_domain_id = domain_id;
+	t->resource_slot_reserved = reserved;
+	t->resource_slot_charged = 1;
+}
+
+static void proc_thread_resource_release(struct thread *t)
+{
+	struct proc_resource_domain *domain;
+	int enabled = intr_save();
+	int domain_id;
+
+	if (t == 0 || !t->resource_slot_charged)
+		goto out;
+	if (t->on_run_queue || t->state == RUNNABLE || t->state == RUNNING ||
+	    t->state == SLEEPING)
+		panic("active thread resource release");
+	domain_id = t->resource_domain_id;
+	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP ||
+	    proc_thread_slots_total <= 0)
+		panic("thread resource domain invariant");
+	domain = &proc_resource_domains[domain_id];
+	if (!domain->used)
+		panic("thread resource lifetime invariant");
+	if (t->resource_slot_reserved) {
+		if (proc_thread_slots_reserved <= 0 ||
+		    domain->reserved_threads <= 0)
+			panic("thread reserve count invariant");
+		proc_thread_slots_reserved--;
+		domain->reserved_threads--;
+	} else {
+		if (proc_thread_slots_ordinary <= 0 ||
+		    domain->ordinary_threads <= 0)
+			panic("thread ordinary count invariant");
+		proc_thread_slots_ordinary--;
+		domain->ordinary_threads--;
+	}
+	proc_thread_slots_total--;
+	t->resource_domain_id = -1;
+	t->resource_slot_reserved = 0;
+	t->resource_slot_charged = 0;
+	if (domain->live == 0 && domain->ordinary_file_slots == 0 &&
+	    domain->reserved_file_slots == 0 &&
+	    domain->ordinary_threads == 0 && domain->reserved_threads == 0)
+		proc_resource_domain_clear(domain);
+out:
+	intr_restore(enabled);
 }
 
 // The file system raises this floor after scanning persistent workflow owners.
@@ -399,6 +524,14 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 		p = 0;
 		goto out;
 	}
+	domain = &proc_resource_domains[domain_id];
+	if (!proc_thread_resource_available(domain, reserved)) {
+		p = 0;
+		goto out;
+	}
+	for (int tid = 0; tid < NTHREAD; tid++)
+		if (p->threads[tid].resource_slot_charged)
+			panic("stale thread resource charge");
 	if (admission == PROC_ADMIT_BOOT || admission == PROC_ADMIT_WORKFLOW) {
 		storage_principal = proc_scope_alloc_id();
 		if (storage_principal == FS_OWNER_NONE) {
@@ -416,11 +549,9 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 		}
 	}
 	if (new_domain) {
-		domain = &proc_resource_domains[domain_id];
 		proc_resource_domain_clear(domain);
 		domain->used = 1;
 	}
-	domain = &proc_resource_domains[domain_id];
 	domain->live++;
 	if (reserved) {
 		domain->reserved_live++;
@@ -433,6 +564,8 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 	p->storage_principal_id = storage_principal;
 	p->resource_slot_reserved = reserved;
 	p->resource_domain_admin = admission == PROC_ADMIT_BOOT;
+	proc_thread_resource_charge_locked(&p->threads[0], domain_id,
+					   reserved);
 	p->state = P_USED;
 out:
 	intr_restore(enabled);
@@ -456,6 +589,9 @@ static void proc_resource_release(struct proc *p)
 
 	if (p == 0)
 		goto out;
+	for (int tid = 0; tid < NTHREAD; tid++)
+		if (p->threads[tid].resource_slot_charged)
+			panic("process released with charged thread");
 	domain_id = p->resource_domain_id;
 	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP)
 		panic("process resource domain invariant");
@@ -477,7 +613,8 @@ static void proc_resource_release(struct proc *p)
 	}
 	domain->live--;
 	if (domain->live == 0 && domain->ordinary_file_slots == 0 &&
-	    domain->reserved_file_slots == 0)
+	    domain->reserved_file_slots == 0 &&
+	    domain->ordinary_threads == 0 && domain->reserved_threads == 0)
 		proc_resource_domain_clear(domain);
 	p->resource_domain_id = -1;
 	p->storage_principal_id = FS_OWNER_NONE;
@@ -558,7 +695,8 @@ void proc_file_slot_release(int domain_id, int reserved)
 	}
 	proc_file_slots_total--;
 	if (domain->live == 0 && domain->ordinary_file_slots == 0 &&
-	    domain->reserved_file_slots == 0)
+	    domain->reserved_file_slots == 0 &&
+	    domain->ordinary_threads == 0 && domain->reserved_threads == 0)
 		proc_resource_domain_clear(domain);
 	intr_restore(enabled);
 }
@@ -762,6 +900,7 @@ static void proc_orphan_children(struct proc *parent)
 void proc_init()
 {
 	struct proc *p;
+	scheduler_queues_init();
 	proc_resource_init();
 	for (p = pool; p < &pool[NPROC]; p++) {
 		p->state = P_UNUSED;
@@ -784,6 +923,10 @@ void proc_init()
 			t->wait_interrupted = 0;
 			t->wait_interruptible = 0;
 			t->on_run_queue = 0;
+			t->run_queue_agent = -1;
+			t->resource_domain_id = -1;
+			t->resource_slot_reserved = 0;
+			t->resource_slot_charged = 0;
 		}
 	}
 	idle.kstack = (uint64)boot_stack_top;
@@ -797,11 +940,11 @@ void proc_init()
 	idle.wait_interrupted = 0;
 	idle.wait_interruptible = 0;
 	idle.on_run_queue = 0;
+	idle.run_queue_agent = -1;
+	idle.resource_domain_id = -1;
+	idle.resource_slot_reserved = 0;
+	idle.resource_slot_charged = 0;
 	kernel_work_reset(&idle);
-	init_queue(&task_queue, TASK_QUEUE_SIZE, process_queue_data);
-	scheduler_agent_hint = 0;
-	scheduler_agent_burst = 0;
-	scheduler_score_burst = 0;
 }
 
 int allocpid()
@@ -839,73 +982,119 @@ int task_to_id(struct thread *t)
 	return task_id;
 }
 
-struct thread *fetch_task()
+static void scheduler_activate_domain(int domain_id)
 {
-	int enabled = intr_save();
-	int remaining = task_queue.count;
-	int index;
-	struct thread *t;
+	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP)
+		panic("scheduler domain id invariant");
+	if (scheduler_domain_tasks[domain_id].count == 0 ||
+	    scheduler_domain_active[domain_id])
+		return;
+	if (push_queue(&scheduler_active_domains, domain_id) < 0)
+		panic("active domain queue invariant");
+	scheduler_domain_active[domain_id] = 1;
+}
+
+static void scheduler_deactivate_domain(int domain_id)
+{
+	int removed;
+
+	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP)
+		panic("scheduler domain id invariant");
+	if (!scheduler_domain_active[domain_id])
+		return;
+	removed = remove_queue_value(&scheduler_active_domains, domain_id);
+	if (removed != 1)
+		panic("active domain uniqueness invariant");
+	scheduler_domain_active[domain_id] = 0;
+}
+
+static void scheduler_drop_queued_thread(struct proc_resource_domain *domain,
+					 struct thread *t)
+{
+	if (domain == 0 || t == 0 || !t->on_run_queue ||
+	    domain->runnable_threads <= 0)
+		panic("runnable thread count invariant");
+	if (t->run_queue_agent) {
+		if (domain->runnable_agents <= 0)
+			panic("runnable agent count invariant");
+		domain->runnable_agents--;
+	}
+	domain->runnable_threads--;
+	t->on_run_queue = 0;
+	t->run_queue_agent = -1;
+}
+
+static void scheduler_validate_queued_thread(struct thread *t, int domain_id)
+{
+	if (t == 0 || !t->on_run_queue || !t->resource_slot_charged ||
+	    t->resource_domain_id != domain_id || t->process == 0 ||
+	    t->process->state != P_USED ||
+	    t->process->resource_domain_id != domain_id)
+		panic("domain task queue ownership invariant");
+}
+
+static struct thread *fetch_domain_fifo(int domain_id)
+{
+	struct proc_resource_domain *domain =
+		&proc_resource_domains[domain_id];
+	struct queue *queue = &scheduler_domain_tasks[domain_id];
+	int remaining = queue->count;
 
 	while (remaining-- > 0) {
-		index = pop_queue(&task_queue);
-		t = id_to_task(index);
-		if (t == 0)
-			continue;
+		int index = pop_queue(queue);
+		struct thread *t = id_to_task(index);
+
+		scheduler_validate_queued_thread(t, domain_id);
 		if (t->state != RUNNABLE) {
-			t->on_run_queue = 0;
+			scheduler_drop_queued_thread(domain, t);
 			continue;
 		}
 		if (!proc_vm_snapshot_schedulable(t)) {
-			if (push_queue(&task_queue, index) < 0)
-				panic("task queue invariant");
+			if (push_queue(queue, index) < 0)
+				panic("domain task queue invariant");
 			continue;
 		}
-		t->on_run_queue = 0;
-		int tid = t->tid;
-		int pid = t->process->pid;
-		intr_restore(enabled);
-		tracef("fetch index %d(pid=%d, tid=%d, addr=%p) from task queue",
-		       index, pid, tid, (uint64)t);
+		scheduler_drop_queued_thread(domain, t);
 		return t;
 	}
-	intr_restore(enabled);
-	debugf("No task to fetch\n");
 	return 0;
 }
 
-static struct thread *fetch_best_task()
+static struct thread *fetch_domain_best(int domain_id)
 {
-	int enabled = intr_save();
+	struct proc_resource_domain *domain =
+		&proc_resource_domains[domain_id];
+	struct queue *queue = &scheduler_domain_tasks[domain_id];
 	int best_agent = -1;
 	int first_normal = -1;
 	int first_runnable = -1;
 	int candidate_count = 0;
 	int eligible_count = 0;
-	int runnable_agent = 0;
 	int selected;
 	int forced_fifo = 0;
-	int index;
 	struct thread *candidate;
 	struct thread *best_task;
 
 	for (;;) {
-		index = pop_queue(&task_queue);
+		int index = pop_queue(queue);
+
 		if (index < 0)
 			break;
 		candidate = id_to_task(index);
-		if (candidate)
-			candidate->on_run_queue = 0;
-		if (candidate == NULL || candidate->state != RUNNABLE)
+		scheduler_validate_queued_thread(candidate, domain_id);
+		if (candidate->state != RUNNABLE) {
+			scheduler_drop_queued_thread(domain, candidate);
 			continue;
+		}
+		if (candidate_count >= THREAD_RESOURCE_DOMAIN_QUEUE_LIMIT)
+			panic("scheduler retained queue invariant");
 		scheduler_retained[candidate_count++] = index;
-		if (candidate->process && candidate->process->is_agent)
-			runnable_agent = 1;
 		if (!proc_vm_snapshot_schedulable(candidate))
 			continue;
 		eligible_count++;
 		if (first_runnable < 0)
 			first_runnable = index;
-		if (candidate->process && candidate->process->is_agent) {
+		if (candidate->run_queue_agent) {
 			if (best_agent < 0 ||
 			    agent_sched_better(candidate,
 					       id_to_task(best_agent)))
@@ -914,15 +1103,18 @@ static struct thread *fetch_best_task()
 			first_normal = index;
 		}
 	}
-	// Agent scores prioritize urgent work, but a bounded FIFO escape prevents
-	// any score combination from starving another runnable thread forever.
+	/*
+	 * The outer queue is the hard resource-domain boundary. Agent scoring is
+	 * deliberately confined to the selected domain, where the existing burst
+	 * limit still protects ordinary workers in that same workflow.
+	 */
 	if (best_agent < 0) {
-		scheduler_agent_hint = runnable_agent;
 		selected = first_normal;
 	} else if (first_normal >= 0 &&
-		   scheduler_agent_burst >= AGENT_SCHED_MAX_AGENT_BURST) {
+		   domain->scheduler_agent_burst >=
+			   AGENT_SCHED_MAX_AGENT_BURST) {
 		selected = first_normal;
-	} else if (scheduler_score_burst >=
+	} else if (domain->scheduler_score_burst >=
 		   AGENT_SCHED_MAX_AGENT_BURST) {
 		selected = first_runnable;
 		forced_fifo = 1;
@@ -937,42 +1129,71 @@ static struct thread *fetch_best_task()
 	for (int i = 0; i < candidate_count; i++) {
 		if (scheduler_retained[i] == selected)
 			continue;
-		candidate = id_to_task(scheduler_retained[i]);
-		if (candidate == 0 || candidate->state != RUNNABLE ||
-		    candidate->on_run_queue)
-			continue;
-		if (push_queue(&task_queue, scheduler_retained[i]) < 0)
-			panic("task queue invariant");
-		candidate->on_run_queue = 1;
+		if (push_queue(queue, scheduler_retained[i]) < 0)
+			panic("domain task queue invariant");
 	}
 	if (selected < 0) {
-		scheduler_agent_burst = 0;
-		scheduler_score_burst = 0;
-		intr_restore(enabled);
+		domain->scheduler_agent_burst = 0;
+		domain->scheduler_score_burst = 0;
 		return 0;
 	}
 	best_task = id_to_task(selected);
-	if (forced_fifo || best_task == 0 || eligible_count <= 1)
-		scheduler_score_burst = 0;
+	scheduler_validate_queued_thread(best_task, domain_id);
+	scheduler_drop_queued_thread(domain, best_task);
+	if (forced_fifo || eligible_count <= 1)
+		domain->scheduler_score_burst = 0;
 	else
-		scheduler_score_burst++;
-	if (best_task && best_task->process && best_task->process->is_agent &&
-	    first_normal >= 0)
-		scheduler_agent_burst++;
+		domain->scheduler_score_burst++;
+	if (best_task->process->is_agent && first_normal >= 0)
+		domain->scheduler_agent_burst++;
 	else
-		scheduler_agent_burst = 0;
-	if (best_task) {
-		tracef("fetch best index %d(pid=%d, tid=%d, addr=%p)", selected,
-		       best_task->process->pid, best_task->tid,
-		       (uint64)best_task);
+		domain->scheduler_agent_burst = 0;
+	return best_task;
+}
+
+struct thread *fetch_task()
+{
+	int enabled = intr_save();
+	int remaining = scheduler_active_domains.count;
+
+	while (remaining-- > 0) {
+		int domain_id = pop_queue(&scheduler_active_domains);
+		struct proc_resource_domain *domain;
+		struct thread *t;
+
+		if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP ||
+		    !scheduler_domain_active[domain_id])
+			panic("active domain queue entry invariant");
+		scheduler_domain_active[domain_id] = 0;
+		domain = &proc_resource_domains[domain_id];
+		if (!domain->used || domain->runnable_threads <= 0 ||
+		    domain->runnable_threads !=
+			    scheduler_domain_tasks[domain_id].count)
+			panic("active domain accounting invariant");
+		t = domain->runnable_agents > 0 ?
+			    fetch_domain_best(domain_id) :
+			    fetch_domain_fifo(domain_id);
+		scheduler_activate_domain(domain_id);
+		if (t != 0) {
+			int tid = t->tid;
+			int pid = t->process->pid;
+
+			intr_restore(enabled);
+			tracef("fetch domain %d(pid=%d, tid=%d, addr=%p)",
+			       domain_id, pid, tid, (uint64)t);
+			return t;
+		}
 	}
 	intr_restore(enabled);
-	return best_task;
+	debugf("No task to fetch\n");
+	return 0;
 }
 
 void add_task(struct thread *t)
 {
 	int enabled = intr_save();
+	struct proc_resource_domain *domain;
+	int domain_id;
 
 	if (t == 0 || t->process == 0 || t->process < pool ||
 	    t->process >= &pool[NPROC] ||
@@ -981,22 +1202,39 @@ void add_task(struct thread *t)
 		intr_restore(enabled);
 		return;
 	}
+	if (!t->resource_slot_charged)
+		panic("runnable thread without resource charge");
+	domain_id = t->resource_domain_id;
+	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP ||
+	    t->process->resource_domain_id != domain_id ||
+	    !proc_resource_domains[domain_id].used)
+		panic("task resource domain invariant");
+	domain = &proc_resource_domains[domain_id];
 	int task_id = task_to_id(t);
 	int pid = t->process->pid;
 	agent_sched_on_enqueue(t);
-	if (t->process && t->process->is_agent)
-		scheduler_agent_hint = 1;
-	if (push_queue(&task_queue, task_id) < 0)
-		panic("task queue invariant");
+	if (push_queue(&scheduler_domain_tasks[domain_id], task_id) < 0)
+		panic("domain task queue invariant");
 	t->on_run_queue = 1;
+	t->run_queue_agent = t->process->is_agent != 0;
+	domain->runnable_threads++;
+	if (t->run_queue_agent)
+		domain->runnable_agents++;
+	if (domain->runnable_threads !=
+	    scheduler_domain_tasks[domain_id].count)
+		panic("runnable task accounting invariant");
+	scheduler_activate_domain(domain_id);
 	intr_restore(enabled);
-	tracef("add index %d(pid=%d, tid=%d, addr=%p) to task queue", task_id,
-	       pid, t->tid, (uint64)t);
+	tracef("add domain %d index %d(pid=%d, tid=%d, addr=%p)",
+	       domain_id, task_id, pid, t->tid, (uint64)t);
 }
 
 static void remove_task(struct thread *t)
 {
 	int enabled = intr_save();
+	struct proc_resource_domain *domain;
+	int domain_id;
+	int removed;
 
 	if (t == 0 || t->process == 0 || t->process < pool ||
 	    t->process >= &pool[NPROC] ||
@@ -1004,8 +1242,23 @@ static void remove_task(struct thread *t)
 		intr_restore(enabled);
 		return;
 	}
-	remove_queue_value(&task_queue, task_to_id(t));
-	t->on_run_queue = 0;
+	if (!t->on_run_queue) {
+		intr_restore(enabled);
+		return;
+	}
+	domain_id = t->resource_domain_id;
+	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP)
+		panic("queued task domain invariant");
+	domain = &proc_resource_domains[domain_id];
+	removed = remove_queue_value(&scheduler_domain_tasks[domain_id],
+				     task_to_id(t));
+	if (removed != 1)
+		panic("domain task uniqueness invariant");
+	scheduler_drop_queued_thread(domain, t);
+	if (scheduler_domain_tasks[domain_id].count == 0)
+		scheduler_deactivate_domain(domain_id);
+	else
+		scheduler_activate_domain(domain_id);
 	intr_restore(enabled);
 }
 
@@ -1051,6 +1304,7 @@ static struct proc *allocproc_admit(struct proc *parent,
 	vfs_proc_reset(p);
 	p->pagetable = uvmcreate();
 	if (p->pagetable == 0) {
+		proc_thread_resource_release(&p->threads[0]);
 		proc_resource_release(p);
 		p->state = P_UNUSED;
 		return 0;
@@ -1100,9 +1354,16 @@ int allocthread(struct proc *p, uint64 entry, int alloc_user_res)
 	int tid;
 	struct thread *t;
 	uint64 old_max_page;
+	int enabled;
+	int new_charge = 0;
 
-	if (p == 0 || p->exit_requested)
+	if (p == 0)
 		return -1;
+	enabled = intr_save();
+	if (p->state != P_USED || p->exit_requested) {
+		intr_restore(enabled);
+		return -1;
+	}
 	old_max_page = p->max_page;
 	for (tid = 0; tid < NTHREAD; ++tid) {
 		t = &p->threads[tid];
@@ -1110,9 +1371,28 @@ int allocthread(struct proc *p, uint64 entry, int alloc_user_res)
 			goto found;
 		}
 	}
+	intr_restore(enabled);
 	return -1;
 
 found:
+	if (!t->resource_slot_charged) {
+		int domain_id = p->resource_domain_id;
+
+		if (domain_id < 0 ||
+		    domain_id >= PROC_RESOURCE_DOMAIN_CAP ||
+		    !proc_thread_resource_available(
+			    &proc_resource_domains[domain_id],
+			    p->resource_slot_reserved)) {
+			intr_restore(enabled);
+			return -1;
+		}
+		proc_thread_resource_charge_locked(
+			t, domain_id, p->resource_slot_reserved);
+		new_charge = 1;
+	} else if (t->resource_domain_id != p->resource_domain_id ||
+		   t->resource_slot_reserved != p->resource_slot_reserved) {
+		panic("precharged thread ownership invariant");
+	}
 	kernel_work_reset(t);
 	t->tid = tid;
 	t->state = T_USED;
@@ -1124,6 +1404,8 @@ found:
 	t->wait_interrupted = 0;
 	t->wait_interruptible = 0;
 	t->on_run_queue = 0;
+	t->run_queue_agent = -1;
+	intr_restore(enabled);
 	// kernel stack
 	t->kstack = kernel_stack_base(p - pool, tid);
 	kernel_stack_reset_slot(p, tid);
@@ -1134,6 +1416,9 @@ found:
 			   PTE_U | PTE_R | PTE_W) < 0) {
 			t->state = T_UNUSED;
 			t->tid = -1;
+			t->run_queue_agent = -1;
+			if (new_charge)
+				proc_thread_resource_release(t);
 			return -1;
 		}
 		p->max_page =
@@ -1151,6 +1436,9 @@ found:
 		p->max_page = old_max_page;
 		t->state = T_UNUSED;
 		t->tid = -1;
+		t->run_queue_agent = -1;
+		if (new_charge)
+			proc_thread_resource_release(t);
 		return -1;
 	}
 	t->trapframe->sp = t->ustack + USTACK_SIZE;
@@ -1196,6 +1484,7 @@ static void scheduler_finish_dying_thread(struct thread *t)
 		return;
 	tid = t->tid;
 	t->state = EXITED;
+	proc_thread_resource_release(t);
 	if (tid != p->exit_owner_tid || !p->exit_finalizing) {
 		wait_queue_wake_all(&p->thread_exit_waiters);
 		return;
@@ -1226,7 +1515,7 @@ void scheduler()
 		asm volatile("nop");
 		intr_off();
 		agent_background_maintain();
-		t = scheduler_agent_hint ? fetch_best_task() : fetch_task();
+		t = fetch_task();
 		if (t == NULL) {
 			int live = 0;
 			for (struct proc *p = pool; p < &pool[NPROC]; p++) {
@@ -1359,18 +1648,30 @@ void proc_install_user_image(struct proc *p, struct user_image *image,
 		proc_resource_drop_admin(p);
 	image->pagetable = 0;
 
+	if (!p->threads[0].resource_slot_charged ||
+	    p->threads[0].resource_domain_id != p->resource_domain_id ||
+	    p->threads[0].resource_slot_reserved !=
+		    p->resource_slot_reserved)
+		panic("main thread resource invariant");
 	for (int tid = 0; tid < NTHREAD; tid++) {
-		detach_task(&p->threads[tid]);
-		if (!running || tid != 0)
-			kernel_work_reset(&p->threads[tid]);
-		p->threads[tid].state = T_UNUSED;
-		p->threads[tid].tid = -1;
-		p->threads[tid].wait_channel = 0;
-		p->threads[tid].wait_next = 0;
-		p->threads[tid].wait_reason = WAIT_REASON_NONE;
-		p->threads[tid].wait_interrupted = 0;
-		p->threads[tid].wait_interruptible = 0;
-		p->threads[tid].on_run_queue = 0;
+		struct thread *slot = &p->threads[tid];
+
+		detach_task(slot);
+		if (tid != 0) {
+			proc_reset_thread_slot(slot);
+			continue;
+		}
+		if (!running)
+			kernel_work_reset(slot);
+		slot->state = T_UNUSED;
+		slot->tid = -1;
+		slot->wait_channel = 0;
+		slot->wait_next = 0;
+		slot->wait_reason = WAIT_REASON_NONE;
+		slot->wait_interrupted = 0;
+		slot->wait_interruptible = 0;
+		slot->on_run_queue = 0;
+		slot->run_queue_agent = -1;
 	}
 	main_thread = &p->threads[0];
 	main_thread->tid = 0;
@@ -1413,6 +1714,7 @@ void freethread(struct thread *t)
 static void proc_reset_thread_slot(struct thread *t)
 {
 	kernel_work_reset(t);
+	proc_thread_resource_release(t);
 	t->state = T_UNUSED;
 	t->tid = -1;
 	t->wait_channel = 0;
@@ -1421,6 +1723,10 @@ static void proc_reset_thread_slot(struct thread *t)
 	t->wait_interrupted = 0;
 	t->wait_interruptible = 0;
 	t->on_run_queue = 0;
+	t->run_queue_agent = -1;
+	t->resource_domain_id = -1;
+	t->resource_slot_reserved = 0;
+	t->resource_slot_charged = 0;
 }
 
 static struct thread *proc_current_teardown_thread(struct proc *p)

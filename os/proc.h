@@ -23,6 +23,7 @@
 	(PROC_RESERVED_SLOTS / PROC_RESERVED_DOMAIN_CAP)
 
 #include "../file_resource_policy.h"
+#include "../thread_resource_policy.h"
 
 struct file;
 struct proc;
@@ -82,6 +83,10 @@ struct thread {
 	int wait_interrupted;
 	int wait_interruptible;
 	int on_run_queue;
+	int run_queue_agent;
+	int resource_domain_id;
+	int resource_slot_reserved;
+	int resource_slot_charged;
 	uint kernel_work_depth;
 	uint kernel_work_resumed;
 	uint kernel_resched_pending;

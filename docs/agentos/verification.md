@@ -10,10 +10,10 @@ AgentOS-uCore 的验证分四层：
 | --- | --- | --- |
 | 构建检查 | `make agentos-user`、`make agentos-build`、`make kernel-stack-check` | 确认内核、用户态 ABI 和文件系统镜像能从当前源码构建；每次生成 `build/kernel` 前都会自动执行内核栈预算检查。 |
 | AgentOS 专项测试 | `make agentos-test` 或 `bash scripts/run-agent-tests.sh` | 在 QEMU 中逐项运行 Agent 功能、权限和用户输入检查。 |
-| 资源安全复测 | `make fs-enospc-test`、`make proc-reap-test`、`make syscall-fairness-test` | 在增强目标和普通 uCore 对照目标上验证文件系统耗尽、持久 PUBLIC 配额跨域退出/重启、进程回收、活进程配额及 syscall 内核工作预算。 |
-| 双目标与聚合验证 | `make dual-platform-run`、`make full-verify` | 运行双目标科研平台负载，并串联宿主机、AgentOS 和进程回收检查。 |
+| 资源安全复测 | `make fs-enospc-test`、`make proc-reap-test`、`make thread-resource-test`、`make file-resource-test`、`make syscall-fairness-test` | 验证文件系统耗尽、持久 PUBLIC 配额、进程回收、进程/线程/filepool 资源域、线程域级调度公平及 syscall 内核工作预算。线程专项当前只构建 AgentOS 主目标，其余标明双目标的脚本同时运行 baseline。 |
+| 双目标与聚合验证 | `make dual-platform-run`、`make full-verify` | 运行双目标科研平台负载，并串联宿主机、AgentOS、进程回收、syscall 公平性、filepool 和线程资源检查。 |
 
-`agentos-test` 只关注根目录 AgentOS-uCore 目标；`fs-enospc-test`、`proc-reap-test` 和 `syscall-fairness-test` 同时覆盖根目录增强目标与 `baseline_ucore/` 普通目标。双目标验证详情见 [../verification.md](../verification.md)。
+`agentos-test` 和 `thread-resource-test` 只关注根目录 AgentOS-uCore 目标；`fs-enospc-test`、`proc-reap-test`、`file-resource-test` 和 `syscall-fairness-test` 同时覆盖根目录增强目标与 `baseline_ucore/` 普通目标。双目标验证详情见 [../verification.md](../verification.md)。
 
 ## 验证环境
 
@@ -74,7 +74,7 @@ bash scripts/run-agent-tests.sh
 | `agentfs_ucore` | 真实 inode 绑定、metadata 双 bank、属性查询、索引查询、查询缓存、内容摘要、预取提示、文件删除清理。 | `agentfs_ucore: parent passed` |
 | `agentscan_ucore` | 根目录自动扫描、自动 metadata 写入、文件创建和删除后的 metadata 更新。 | `agentscan_ucore: parent passed` |
 | `agentloop_ucore` | FIFO、stable source=4、directed=8、external=12、KERNEL origin 预留容量、消费后配额归还、慢 watcher 广播隔离、watch/unwatch、timeout、heartbeat、wait cancel、事件因果。 | `message_source_limit=4`、`ipc_class_limit=8`、`external_limit=12`、`system_event_reserved=4`、`external_reject_reclaim=1`、`broadcast_slow_watcher_isolated=1`、`parent passed` |
-| `agentsched_ucore` | 角色权重、受权调度配置、事件优先、调度原因记录、公平性观测。 | `agentsched_ucore: parent passed` |
+| `agentsched_ucore` | 角色权重、受权调度配置、事件优先、调度原因记录和资源域内 Agent/FIFO 公平性观测。 | 本次线程改动后单独运行输出 `agentsched_ucore: parent passed` |
 | `agentconflict_ucore` | 文件编辑租约、非持有者写入拒绝、版本提交检查、普通进程拒绝。 | `agentconflict_ucore: parent passed` |
 | `agentllm_ucore` | 显式 `MESSAGE` / `LLM_DONE` route 下的结构化请求、Relay 模板响应、LLM capability、完成事件、Context/timeline。 | `agentllm_ucore: parent passed` |
 | `agentbench_ucore` | 批量工具、Context、文件查询、预取、timeout/heartbeat，以及显式 route 下的 wait/wake 计时。 | `agentbench_ucore: parent passed` |
@@ -83,7 +83,7 @@ bash scripts/run-agent-tests.sh
 | `agentsecurity_ucore` | 既有权限/route/controller 负向检查；新增用户非零 cause/span 拒绝、可信跨 Agent source attribution、low/high audit authority 隔离。 | `trusted_span_authority=1`、`trusted_cause_attribution=1`、`audit_authority_partition=1`、`parent passed`；本轮通过 |
 | `agenttrust_ucore` | 可执行映像 W^X、密封映像不可变、bootstrap 授权范围、Agent 角色与可信映像绑定。 | `agenttrust_ucore: parent passed` |
 | `agentvfs_ucore` | 工作流文件能力、公共/工作流命名空间隔离、继承描述符重新鉴权、精确能力委派和失败事务原子性。 | `agentvfs_ucore: parent passed` |
-| `agentscope_ucore` | syscall 541 factory、542 一次性 pipe fd 委派、动态 scope、同名对象/action/lease/audit/IPC 隔离、scope-local metadata reload、FIFO metadata submit lane、并发 COW 事务、持久微写合并、跨 scope 查询时限、最终一致性、配额和 retirement 回收。 | 当前独立轮输出完整标记及 `parent passed`，`elapsed=148.9s`；当前冻结源码的最终 16 项轮也通过 |
+| `agentscope_ucore` | syscall 541 factory、542 一次性 pipe fd 委派、动态 scope、同名对象/action/lease/audit/IPC 隔离、scope-local metadata reload、FIFO metadata submit lane、并发 COW 事务、持久微写合并、跨 scope 查询时限、最终一致性、配额和 retirement 回收。 | 线程资源域改动前的独立轮输出完整标记及 `parent passed`，`elapsed=148.9s`，当时的最终 16 项轮也通过 |
 | `iobudget_ucore` | syscall 544 ABI v3 sized-copy、稳定 PUBLIC/workflow owner、NORMAL/CONTROL class、owner/shared/device lease 上界、线程退出 lease 回收、scheduler 内核态中断交付、fault teardown 清理归因/debt 结算、完成归因、PUBLIC cache/速率压力、workflow cache floor 与压力下写入进展。 | 最终 teardown 修复后的独立轮输出八项具名机制 marker 与 `parent passed`，`elapsed=2.4s`；ABI sized-copy 是无单独 marker 的第九类断言 |
 | `usersafety_ucore` | syscall 指针、字符串、`exec` 参数、线程入口、等待队列、管道、文件和信号量输入范围。 | `usersafety_ucore: parent passed` |
 
@@ -95,7 +95,7 @@ bash scripts/run-agent-tests.sh
 
 buffer cache 以 exclusive holder、递归深度和私有等待队列串行化同块访问；持有 buffer 时 I/O/CPU checkpoint 均不能睡眠或 yield。复合文件系统原语另有 FS atomic depth；只有释放全部 buffer、且调用者已提交对象状态的 quiescent checkpoint 才可等待。loader 与 metadata exact-read 从正数短读前缀继续。PUBLIC 赞助对象接管使用固定工作区收集/排序块，按 qmap block 分组，并在唯一 claim gate 下完成 qmap-first、inode-last 前向提交。metadata COW 先验证新 primary 再更新旧 mirror；同步管理请求使用 FIFO ticket 接纳并建立不可替换 job，失败条件检查到 condition queue 入队保持关中断原子，不把 syscall 返回描述成 primary 已完成验证的持久化屏障。
 
-scheduler 每轮在 idle context 安装 kernel trap 向量并短暂开启中断，再进入后台维护和线程选择。该机制为所有调度轮提供 timer/device 中断交付边界，防止唯一 runnable 线程在内核 pipe 条件路径反复 `yield()`、长期不返回用户态时锁死 I/O debt 与后台 token refill；`scheduler_interrupt_progress=1` 对此作动态回归。
+scheduler 每轮在 idle context 安装 kernel trap 向量并短暂开启中断，再进入后台维护和线程选择。该机制为所有调度轮提供 timer/device 中断交付边界，防止唯一 runnable 线程在内核 pipe 条件路径反复 `yield()`、长期不返回用户态时锁死 I/O debt 与后台 token refill；`scheduler_interrupt_progress=1` 对此作动态回归。线程选择本身再分两级：外层 active-domain FIFO 严格轮转，内层才执行普通 FIFO 或 Agent 软评分；Agent/score burst 按域维护。
 
 由主线程触发的正常退出、用户 fault 或非法指令共用不可中断的进程级 terminal cleanup I/O/kernel-work 上下文；非主 sibling 无论正常退出还是 fault 都只退出自身线程。文件关闭和 inode 回收产生的物理传输继续按原 owner/class 记账；剩余 lease 与 owner/class debt 在释放 teardown thread 前结算，PUBLIC/NORMAL 还等待 device debt，SYSTEM/CONTROL 的受保护 device debt 留在全局设备根账本中由 refill 偿还。`fault_exit_cleanup=1` 覆盖 PUBLIC 主线程 page fault、未链接文件清理、物理写归因和两级 debt 清零。可信 metadata bank 则在 `timer_init()` 后、`bio_policy_start()` 与用户进程发布前完成加载尝试和可信判定；单副本损坏从另一有效 bank 恢复，无可验证有效 bank 时 metadata API fail closed，但系统继续启动且 scope 的 VFS-labelled 清理仍可退休。当前没有启动 bank 损坏动态注入。
 
@@ -115,6 +115,14 @@ make fs-enospc-test TOOLPREFIX=riscv64-linux-gnu-
 make proc-reap-test TOOLPREFIX=riscv64-linux-gnu-
 ```
 
+线程资源专项使用 19/12/6/6/4 tiny policy 精确触发线程物理池、普通/保留全局水位和普通/保留域上限，验证主线程预扣、额外线程扣账、容量拒绝计数稳定、退出退款、系统保留进展、跨域复用及 active-domain 公平轮转。策略还在编译期要求每类域上限严格小于对应全局水位，防止错误配置允许单域耗尽整个类别：
+
+```bash
+make thread-resource-test TOOLPREFIX=riscv64-linux-gnu-
+```
+
+通过标记依次为 `domain_limit`、`capacity_reject_stable`、`reserved_domain_limit`、`reserved_domain_reuse`、`exit_reuse`、`ordinary_waterline`、`global_thread_limit`、`reserved_global_limit`、`reserved_progress`、`reserved_global_reuse`、`global_reuse`、`domain_fairness`、`parent passed` 和 `[thread-resource] all checks passed`。`global_thread_limit` 在第三普通域仍有域内余量时触发普通全局水位；`reserved_global_limit` 在两个保留域都未满、物理池还留一槽时触发保留全局水位。公平阶段让攻击域的 5 个 worker 全部实际运行，同时要求独立 victim 完成 512 次让出且攻击域 yield-loop 总计数不超过固定 `bound=576`。`capacity_reject_stable` 只证明容量拒绝不污染计数，不代表动态注入映射失败。
+
 syscall 公平性复测完全在 Guest 内用 pipe、进程和线程建立因果关系，宿主机只采集输出。它依次验证单次 64 KiB 控制台 `write()` 的 peer 进展、普通 inode 大写入的内核重调度计数、合法短写与 observer 进展，以及 `O_TRUNC` open 的内核重调度计数和原子 EOF 可见性：
 
 ```bash
@@ -130,7 +138,7 @@ make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-`make full-verify` 当前会串联 `run-agent-tests.sh`、`run-proc-reap-tests.sh` 和 `run-syscall-fairness-tests.sh`，但不会串联 `run-fs-enospc-tests.sh`；发布前必须额外执行 `make fs-enospc-test`。聚合流程中的内核构建仍会自动执行内核栈检查。
+`make full-verify` 当前会串联 `run-agent-tests.sh`、`run-proc-reap-tests.sh`、`run-syscall-fairness-tests.sh`、`run-file-resource-tests.sh` 和 `run-thread-resource-tests.sh`，但不会串联 `run-fs-enospc-tests.sh`；发布前必须额外执行 `make fs-enospc-test`。聚合流程中的内核构建仍会自动执行内核栈检查。
 
 ## 覆盖关系
 
@@ -140,7 +148,7 @@ make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 | 任务二：结构化工具调用 | `agentfinal_ucore`、`agentbench_ucore`、`agentsecurity_ucore` |
 | 任务三：Context Path | `agentfinal_ucore`、`agentscope_ucore`、`agentsecurity_ucore`、`agentscan_ucore`、`labdemo_ucore` |
 | 任务四：文件属性查询 | `agentfs_ucore`、`agentscope_ucore`、`agentscan_ucore`、`agentbench_ucore`、`agentconflict_ucore`、`agentvfs_ucore` |
-| 任务五：Agent Loop | `agentloop_ucore`、`agentscope_ucore`、`agentsched_ucore`、`agentbench_ucore`、`labdemo_ucore` |
+| 任务五：Agent Loop | `agentloop_ucore`、`agentscope_ucore`、`agentsched_ucore`、`threadresource_ucore`、`agentbench_ucore`、`labdemo_ucore` |
 | 任务六：综合场景 | `labdemo_ucore`、`labbench_ucore`、`make dual-platform-run` |
 | 安全与稳健性复测 | `agentscope_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`、`make fs-enospc-test`、`make proc-reap-test`、`make syscall-fairness-test`、`make kernel-stack-check` |
 
@@ -205,12 +213,13 @@ results/latest/
 
 ## 当前验证状态
 
-本文仍不把当前 `make full-verify` 记录为全绿。各项专项不能与该聚合入口状态混为一谈。当前冻结源码的证据为：
+本文仍不把当前 `make full-verify` 记录为全绿。各项专项不能与该聚合入口状态混为一谈。本次线程资源域代码改动后的证据为：
 
-- 当前冻结源码以 `CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 完成 16/16，墙钟 `337.1s`，其中 `iobudget_ucore elapsed=2.1s`；
-- 独立 `iobudget_ucore elapsed=2.4s`，输出八项具名机制 marker 与 `parent passed`；独立 `agentscope_ucore elapsed=148.9s`；
-- `make fs-enospc-test` 以 `75.1s` 通过 quota/domain、持久 principal、孤儿回收与重启全流程；
-- `make syscall-fairness-test`、`make proc-reap-test`、`make file-resource-test` 和 `make kernel-stack-check` 分别以 `21.7s`、`42.0s`、`20.3s`、`16.6s` 通过，栈预算为 `13584 < 16384`；
+- 默认 AgentOS 构建通过，自动内核栈预算为 `required=13680 < 16384`；
+- `make thread-resource-test` 以 19/12/6/6/4 tiny policy 通过 12 项机制标记、`parent passed` 和 runner 汇总检查；
+- 单独 `agentsched_ucore` 通过；
+- `run-proc-reap-tests.sh`、`run-syscall-fairness-tests.sh` 和 `run-file-resource-tests.sh` 均在 AgentOS 与 baseline 双目标通过，其中进程回收包含 adversarial Agent 场景；
+- 完整 16 项 Agent 脚本通过，墙钟约 `321s`；`make full-verify` 尚未运行，不能据这些专项外推聚合全绿；
 
 详细命令、关键输出和覆盖边界见 [test-record.md](test-record.md)。
 
@@ -220,7 +229,7 @@ results/latest/
 | --- | --- |
 | 文件扫描深度 | 自动扫描 uCore 根目录短文件名，文件对象 metadata 支持用户态显式写入和根目录自动发现。 |
 | syscall 与 I/O 公平性覆盖 | CPU 终审轮已动态覆盖控制台、inode 写和截断；CPU checkpoint 与 I/O debt checkpoint 是互补机制。`iobudget_ucore` 还动态覆盖唯一 runnable 内核 pipe waiter 下的 scheduler 中断交付、fault teardown 的 attributed cleanup/debt settlement，以及一个 PUBLIC 和一个 workflow Orchestrator CONTROL owner；它没有断言 shared 排队轮转，也未覆盖 Recovery、SYSTEM/workflow BACKGROUND、多 workflow 同压、retiring 3/8、跨 owner LRU/transient 或主动 device-debt 注入。启动 bank 损坏、VirtIO 设备错误/短 I/O、metadata COW 掉电及 grouped qmap claim 中点掉电仍缺动态证据。 |
-| Agent 调度 | 验证角色权重、受权调度配置、事件优先、deadline、heartbeat、wait cancel 和虚拟运行量。 |
+| Agent 调度 | 验证 active resource domain 外层轮转、域内角色权重、受权调度配置、事件优先、deadline、heartbeat、wait cancel、虚拟运行量和 thread bomb 下的 victim 进展。 |
 | LLM Gateway | 内核提供结构化请求、响应事件、Context 和审计记录；云端访问由用户态或宿主机 Relay 完成。 |
 | 页面和图表 | 内核输出 `agentos:event`、timeline、audit 和 provenance，宿主机工具负责转成页面和图表。 |
 | 性能数据 | 当前采用同一 QEMU 环境下的 tick、扫描数、候选数、轮询数、拒绝数和重建步骤等相对指标。 |

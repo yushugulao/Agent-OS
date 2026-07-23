@@ -100,7 +100,9 @@ int io_policy_info(struct io_policy_info *info);
 
 设备根不是对所有 class 一刀切的硬总上限。PUBLIC、workflow `NORMAL` 和非保护后台流量必须取得根信用，并在 device debt 清零前等待；SYSTEM owner、`CONTROL` 和 `SYSTEM` class 在根信用耗尽时仍可凭自己的 owner/class 保留预算前进，但物理完成仍记入 device debt，后续 refill 先偿债。这样普通流量受 560/280 根速率约束，关键恢复/控制路径又不会因 PUBLIC 已耗尽根信用而停顿。编译期断言只验证已配置的 PUBLIC、4 个 active workflow、最多 8 个 retiring workflow `BACKGROUND`、SYSTEM 与 shared burst/refill 落在 560/280 静态 envelope 内；它不把保护流量的运行时带债前进描述成硬聚合限额。生命周期 admission 仍要求 active + retiring 不超过 8。
 
-scheduler 每轮先把 `current_thread` 指向 idle context，安装 kernel trap 向量，短暂开启中断后再执行后台维护和选择下一线程。这个固定交付窗口不是按进程或 syscall 加白名单；它保证唯一 runnable 线程反复在内核态 pipe 条件路径 `yield()`、长期不返回用户态时，pending timer/device 中断仍能推进 I/O debt、token refill 和设备完成。中断窗口结束后 scheduler 再关中断进入原有选择流程。
+scheduler 每轮先把 `current_thread` 指向 idle context，安装 kernel trap 向量，短暂开启中断后再执行后台维护和选择下一线程。这个固定交付窗口不是按进程或 syscall 加白名单；它保证唯一 runnable 线程反复在内核态 pipe 条件路径 `yield()`、长期不返回用户态时，pending timer/device 中断仍能推进 I/O debt、token refill 和设备完成。中断窗口结束后 scheduler 再关中断进入两级选择：先严格轮转 active `resource_domain_id`，再从选中域的线程队列选择一个候选。
+
+线程资源策略是内核 admission 契约，不新增用户态 syscall。进程 admission 原子预扣 t0 主线程；额外线程把不可变 `resource_domain_id`、ordinary/reserved admission 类别和 charged 状态保存在 `struct thread` 中。`THREAD_RESOURCE_POOL_SIZE` 约束物理总量，`THREAD_RESOURCE_ORDINARY_LIMIT` / `THREAD_RESOURCE_RESERVED_LIMIT` 划分普通水位与系统保留，两个 `THREAD_RESOURCE_DOMAIN_*_LIMIT` 再限制单域；策略头以静态断言保证 ordinary/reserved 单域上限分别严格小于对应全局水位，使两层 admission 始终是可独立验证的机制。创建失败、线程退出和 exec 清理 sibling 都经过统一退款；域只有在进程、线程和文件对象计数都归零后才可复用。
 
 由主线程触发的正常退出、用户 fault 或非法指令通过 `exit()` 进入进程级 terminal teardown；非主 sibling 无论正常退出还是 fault 都走 `thread_exit_current()`，不释放整个进程。进程级退出等待 sibling 内核栈静止后，主线程调用 `kernel_work_begin_cleanup()` 与 `bio_request_begin_current_cleanup()` 建立不可中断的清理上下文；`fileclose()`、未链接 inode 回收和其他资源释放继续使用该线程原有稳定 owner/class。`bio_request_end_current_cleanup()` 提交剩余 lease 并结算 owner/class debt；PUBLIC/NORMAL 还等待 device debt，SYSTEM/CONTROL 的受保护 device debt 留在全局设备根账本中由 refill 偿还。随后才结束 kernel-work cleanup、`freethread()` 和 `vfs_proc_reset()`，因此主线程异常退出不能借线程账本先消失而制造未归因传输或遗留线程私有账目。
 
@@ -632,7 +634,9 @@ int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 
 Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。可归因外部事件合计上限为 12；directed IPC 与 attributed system notification 各自上限为 8；同一 stable source 跨两类合计上限为 4。directed 投递达到任一 admission 边界时返回 `AGENT_STATUS_NO_SPACE`，不会覆盖旧事件。attributed 广播遇到某个目标超配额或总队列已满时只对该目标记 drop 并继续扫描，不把 `NO_SPACE` 透传给已经提交状态的源操作。只有显式 `KERNEL` origin（当前包括 heartbeat TIMER 等内核直接产生的事件）可以越过 external=12 的 admission 边界，继续使用总容量中保留的至少 4 个名额；它仍受 16 槽总容量约束。每个 Agent 最多注册 8 条 watch。相同 `event_type + filter` 会替换原 watch，`agent_unwatch()` 可删除匹配 watch 或清空全部 watch。有限 timeout 的 `agent_wait()` 会进入睡眠，由事件入队、heartbeat 到期、deadline 到期或 wait cancel 令牌唤醒；`agent_info.wait_loop_count` 用于观察该路径没有反复轮询。
 
-当可运行队列中存在 Agent 时，调度器会读取 Agent 状态选择可运行任务；纯普通进程负载仍走原 FIFO 取队路径。当前策略为内核自适应策略，并允许 orchestrator 配置目标 Agent 的 weight、priority 和 budget：角色权重、配置优先级、事件队列、等待状态、timeout deadline、heartbeat 到期、等待时长、虚拟运行量和预算使用量都会影响分数。分数只决定 Agent 工作的软优先级；运行队列另有不可配置的类级公平界限。当 Agent 与普通任务同时可运行时，连续调度 Agent 达到 `AGENT_SCHED_MAX_AGENT_BURST` 次后必须从 FIFO 队首选择一个普通任务，普通任务运行后重新开始 Agent burst。该界限不受 Agent 数量、角色、事件积压或调度配置影响。`agentsched_ucore` 通过 `agent_info`、`agent_sched_config()` 和 `agent_sched_snapshot()` 验证角色权重、受权调度配置、事件优先、调度原因记录、公平性计数和普通进程的有界进展。
+所有 runnable 线程先进入所属资源域的私有队列；外层 active-domain FIFO 中每个非空域至多有一个节点。每次调度只从队首域取一个线程，域仍非空时把它放回外层队尾，因此线程数量不能换取更多跨域 dispatch。纯普通域在本域按 FIFO 选择；本域存在 Agent 时才读取 Agent 状态并允许 orchestrator 配置 weight、priority 和 budget。角色权重、配置优先级、事件队列、等待状态、timeout deadline、heartbeat 到期、等待时长、虚拟运行量和预算使用量只影响该域内分数。
+
+每个域独立维护不可配置的 Agent/score burst。当选中域内同时有 Agent 和普通线程时，连续调度 Agent 达到 `AGENT_SCHED_MAX_AGENT_BURST` 次后必须选择本域普通 FIFO 候选；连续按分值绕过队首达到同一上限后必须选择本域 FIFO 队首。域内任一线程运行后，外层仍轮转到下一个 active 域。`agentsched_ucore` 验证既有角色权重、受权配置、事件优先、原因记录和域内普通进展；`threadresource_ucore` 验证多线程 PUBLIC 域不能阻断另一资源域完成 512 次让出。
 
 `agent_sched_snapshot(records, max)` 返回当前 Agent 最近最多 16 次被调度时的原因记录。`max=0` 时不复制记录，只返回当前可见记录数。普通进程调用返回 `-1`。
 

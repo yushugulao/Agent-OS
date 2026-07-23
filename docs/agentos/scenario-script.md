@@ -6,7 +6,7 @@
 
 本项目在 uCore 内核上实现 Agent-OS，把 Agent 进程身份、结构化工具调用、上下文历史、文件元数据索引和 Agent 事件运行机制放入内核支持层。
 
-完整专项脚本当前依次运行十六个程序。当前冻结源码以 `CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 完成 16/16，整条命令墙钟 `337.1s`：
+完整专项脚本当前依次运行十六个程序。本次线程资源域改动后已以 `CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 完成 16/16，整条命令墙钟约 `321s`：
 
 ```bash
 agentfinal_ucore
@@ -193,7 +193,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentsched_ucore CHAP
 | 输出项 | 讲解重点 |
 | --- | --- |
 | `role_weights` | 不同 Agent 角色有不同内核调度权重 |
-| `normal_progress` | 连续 Agent dispatch 达到不可配置的 burst 上限后必须运行普通任务，普通进程获得有界进展 |
+| `normal_progress` | 选中资源域内连续 Agent dispatch 达到不可配置的 burst 上限后必须运行本域普通任务；外层 active-domain FIFO 另保证跨域有界进展 |
 | `configurable_policy` | orchestrator 可受权调整目标 Agent 的 weight、priority 和 budget |
 | `event_priority` | 有待处理事件的 Agent 被调度器识别并记录 |
 | `reason_trace` | `agent_sched_snapshot()` 能读出最近调度原因，输出包含事件队列、角色权重和调度分数 |

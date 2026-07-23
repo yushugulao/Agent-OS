@@ -688,7 +688,7 @@ agentscope_ucore: lifecycle_reclamation=1
 agentscope_ucore: parent passed
 ```
 
-以上标记最早已出现在 2026-07-22 的旧 15 项 Agent QEMU 回归中。当前独立复测再次到达 metadata transaction/COW、最终一致性、`lifecycle_reclamation=1` 和 `parent passed`，`elapsed=148.9s`；当前冻结源码的最终 16 项脚本也通过该程序。`NPROC` 身份账本只复用未使用记录，active 最多 4 个且 active + retiring 不超过 8；FS reclaim cursor 最多 8 个，reaper 在 `NPROC` 账本范围轮转选择 retiring scope，因而新 workflow 不会覆盖旧退役状态或遗失其 I/O owner。
+以上标记最早已出现在 2026-07-22 的旧 15 项 Agent QEMU 回归中。线程资源域改动前的独立复测再次到达 metadata transaction/COW、最终一致性、`lifecycle_reclamation=1` 和 `parent passed`，`elapsed=148.9s`；当时的最终 16 项脚本也通过该程序。`NPROC` 身份账本只复用未使用记录，active 最多 4 个且 active + retiring 不超过 8；FS reclaim cursor 最多 8 个，reaper 在 `NPROC` 账本范围轮转选择 retiring scope，因而新 workflow 不会覆盖旧退役状态或遗失其 I/O owner。
 
 ## 19. syscall 内核工作预算复测
 
@@ -706,7 +706,7 @@ inode 阶段创建共享地址空间的 observer 线程。observer 反复从独�
 
 截断阶段先填充一个 64 KiB 文件，再在同一进程创建 observer 线程。主线程输出 TRUNC_BEGIN 后调用 `open(path, O_WRONLY | O_TRUNC)`，并用 last-syscall 重调度计数要求该 open 在内核态跨过调度边界；observer 连续两轮打开文件并读到 EOF，两轮之间主动让出，随后输出 TRUNC_PEER。脚本要求 `TRUNC_BEGIN < TRUNC_PEER < TRUNC_END`。计数提供 open 内部的因果证据，observer 独立证明原子 detach 后的 EOF 对其他线程可见；二者不依赖 open 返回后到共享标志写入前是否发生用户态 timer 抢占。
 
-三个阶段的每个标记都必须只出现一次。最外层父进程只在 fairness worker 被 `waitpid()` 完整回收后输出 `syscallfair_ucore: parent passed`；宿主 runner 随后要求 QEMU 在 5 秒内正常关机，日志不得包含 panic、非法地址或未知 syscall。这一部分验证退出完整性，不单独宣称证明退出清理内部的公平边界。两个目标都满足后输出 `[syscall-fairness] both targets passed`。当前冻结源码已通过本终审轮，动态覆盖控制台、普通 inode I/O 和截断回收。源码检查覆盖 pipe、exec/fork 分页、VM snapshot 屏障和 Agent batch 安全点；它不等于穷尽任意 syscall 路径。目录 scanner 仍采用固定每轮上限，metadata raw I/O 由独立 COW/I/O budget 专项覆盖。
+三个阶段的每个标记都必须只出现一次。最外层父进程只在 fairness worker 被 `waitpid()` 完整回收后输出 `syscallfair_ucore: parent passed`；宿主 runner 随后要求 QEMU 在 5 秒内正常关机，日志不得包含 panic、非法地址或未知 syscall。这一部分验证退出完整性，不单独宣称证明退出清理内部的公平边界。两个目标都满足后输出 `[syscall-fairness] both targets passed`。本次线程改动后双目标已通过本终审轮，动态覆盖控制台、普通 inode I/O 和截断回收。源码检查覆盖 pipe、exec/fork 分页、VM snapshot 屏障和 Agent batch 安全点；它不等于穷尽任意 syscall 路径。目录 scanner 仍采用固定每轮上限，metadata raw I/O 由独立 COW/I/O budget 专项覆盖。
 
 ## 20. 全局文件对象表资源配额复测
 
@@ -728,7 +728,41 @@ fileresource_ucore: parent passed
 
 这些场景验证的计费单位是唯一 filepool 槽：fork 和 syscall pin 增加引用但不重复扣账，最终引用关闭才退款。主目标和 baseline 运行同一 Guest 断言并均通过，避免只在 AgentOS 专属角色路径上得到结果。runner 最终输出 `[file-resource] both targets passed`。
 
-## 21. `iobudget_ucore`
+## 21. 线程资源域与域级公平调度复测
+
+入口为 `make thread-resource-test` 或 `bash scripts/run-thread-resource-tests.sh`。脚本只构建 AgentOS 主目标和独立临时镜像，把线程物理池、普通全局水位、保留全局水位、普通域上限和保留域上限依次缩小为 19、12、6、6、4。生产默认值仍由 `thread_resource_policy.h` 公式决定；tiny policy 只让边界可以在一个短 QEMU 用例中精确填满，不改变 admission、退款或调度机制。策略头还以静态断言要求普通和保留域上限严格小于对应全局水位，防止错误配置让单域耗尽整个类别。
+
+测试依次执行：
+
+1. 普通子域占满 6 个线程槽，连续 8 次额外 `thread_create()` 都必须因容量拒绝；回收一个线程后可立即创建 replacement。`capacity_reject_stable` 只证明这类容量拒绝不污染计数，不声称注入了用户栈或 trapframe 映射故障。
+2. 受控根域占满 4 个保留线程槽，额外创建被域上限拒绝；回收后 replacement 成功，分别验证保留域上限和退款复用。
+3. 子进程创建多个永不主动退出的 sibling 后直接进程退出，不调用 `waittid()`；terminal teardown 撤销 sibling 并退款，随后同域可重新占满线程上限。
+4. 两个普通 holder 加第三普通探针共同占满普通全局水位 12。第三域只有预扣主线程、远未达到域上限，其 `thread_create()` 仍被全局 ordinary 水位拒绝；新的普通进程 admission 同样拒绝。普通压力下，根保留域和新 workflow 保留域继续运行；两个保留域都各自未满、物理池仍留 1 槽时，额外保留线程被全局 reserved 水位 6 拒绝。释放保留/普通线程后，两类容量都可复用。
+5. 攻击域占满主线程加 5 个 worker 的 6 个槽，其中 5 个 worker 不断 `sched_yield()`；独立 victim 域完成 512 次让出。每个攻击 worker 必须实际运行，但其 yield-loop 总计数不得超过固定 `bound=576`，即只允许 64 轮启停余量，证明线程数量没有放大外层域 CPU 份额。
+
+runner 要求以下标记按顺序且各出现一次，日志中不得出现 `check failed`、`panic`、`unknown syscall`、`bad addr` 或 `IllegalInstruction`；`parent passed` 后 QEMU 还必须正常结束：
+
+```text
+threadresource_ucore: domain_limit=1
+threadresource_ucore: capacity_reject_stable=1
+threadresource_ucore: reserved_domain_limit=1
+threadresource_ucore: reserved_domain_reuse=1
+threadresource_ucore: exit_reuse=1
+threadresource_ucore: ordinary_waterline=1
+threadresource_ucore: global_thread_limit=1
+threadresource_ucore: reserved_global_limit=1
+threadresource_ucore: reserved_progress=1
+threadresource_ucore: reserved_global_reuse=1
+threadresource_ucore: global_reuse=1
+threadresource_ucore: domain_fairness=1 hog=... victim=512 bound=576
+threadresource_ucore: parent passed
+[thread-resource] passed pool=19 ordinary=12 reserved=6 domain=6/4
+[thread-resource] all checks passed
+```
+
+本次代码改动后该专项已通过。默认 AgentOS 构建、完整 Agent 16/16、单独 `agentsched_ucore`、双目标进程回收、syscall 公平性和 filepool 资源测试也已通过；完整 Agent 轮墙钟约 `321s`，构建期 AgentOS 内核栈预算为 `13680 < 16384`。`make full-verify` 尚未执行。
+
+## 22. `iobudget_ucore`
 
 `iobudget_ucore` 是块设备 I/O 与 buffer cache 分域机制的回归，随 `scripts/run-agent-tests.sh` 运行。它不通过固定 PID、文件名白名单或 sleep 时长推断公平性，而是用 syscall 544 读取 `io_policy_info()` ABI v3 的稳定 owner、class、owner/device lease/debt、物理完成和 cache sponsor 计数，再用 Guest pipe 建立 PUBLIC 压力进程与独立 workflow 的先后关系。测试还构造唯一 runnable 线程在内核 pipe 条件路径反复 `yield()` 的场景，要求 scheduler 的 idle kerneltrap 窗口仍能交付 timer/device 中断；另让持有已 unlink 文件的 PUBLIC 子进程触发 page fault，验证 terminal teardown 的清理 I/O 仍归因并结清 debt。用户 wrapper 自动传入当前 `sizeof(struct io_policy_info)`；测试同时调用较小旧结构前缀，要求 `version/struct_size` 可读且尾部哨兵不被覆盖。内核的 sized-copy 规则由 `(addr, user_size)` 分发、8 字节最小头和 `min(user_size, current_size)` copyout 实现。
 
@@ -759,7 +793,7 @@ iobudget_ucore: control_reserve_progress=1
 iobudget_ucore: parent passed
 ```
 
-最终 teardown 修复后的独立 QEMU 中八个具名机制 marker 与 `parent passed` 全部出现，`elapsed=2.4s`；ABI sized-copy 是第九类实质断言，但没有单独 marker。当前冻结源码以 `CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 在 `337.1s` 完成 16/16，本项 `elapsed=2.1s`。
+最终 teardown 修复后的独立 QEMU 中八个具名机制 marker 与 `parent passed` 全部出现，`elapsed=2.4s`；ABI sized-copy 是第九类实质断言，但没有单独 marker。本次线程资源域改动后的完整 Agent 脚本也以约 `321s` 完成 16/16，确认本项继续通过。
 
 PUBLIC 32/16、每 active workflow 24/12 + 48/24 + 8/4、每 retiring workflow `BACKGROUND` 8/4、SYSTEM 96/48 + 16/8、shared 32/16 的配置总和由编译期断言保守按 4 active + 8 retiring 放入 560/280 静态 envelope。运行时设备根对普通流量执行 token/lease/debt 限速；SYSTEM owner、`CONTROL` 和 `SYSTEM` class 在根信用耗尽时仍可凭 owner/class 保留预算带 device debt 前进，所以根 bucket 不是保护流量的硬总上限。shared fast path 在没有 admission waiter 时可直接借用，只有排队授权再按 owner/class cursor 轮转；当前测试没有断言 `shared_grants` 或排队轮转。
 

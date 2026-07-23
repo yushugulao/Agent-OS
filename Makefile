@@ -1,4 +1,4 @@
-.PHONY: clean build user run run-persist debug test doctor kernel-stack-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test proc-reap-test syscall-fairness-test file-resource-test reader target-readiness dual-platform-run full-verify dual-clean .FORCE
+.PHONY: clean build user run run-persist debug test doctor kernel-stack-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test reader target-readiness dual-platform-run full-verify dual-clean .FORCE
 .DELETE_ON_ERROR:
 all: build
 
@@ -80,6 +80,22 @@ CFLAGS += -DFILE_RESOURCE_DOMAIN_ORDINARY_LIMIT=$(FILE_RESOURCE_DOMAIN_ORDINARY_
 endif
 ifneq ($(FILE_RESOURCE_DOMAIN_RESERVED_LIMIT),)
 CFLAGS += -DFILE_RESOURCE_DOMAIN_RESERVED_LIMIT=$(FILE_RESOURCE_DOMAIN_RESERVED_LIMIT)
+endif
+
+ifneq ($(THREAD_RESOURCE_POOL_SIZE),)
+CFLAGS += -DTHREAD_RESOURCE_POOL_SIZE=$(THREAD_RESOURCE_POOL_SIZE)
+endif
+ifneq ($(THREAD_RESOURCE_ORDINARY_LIMIT),)
+CFLAGS += -DTHREAD_RESOURCE_ORDINARY_LIMIT=$(THREAD_RESOURCE_ORDINARY_LIMIT)
+endif
+ifneq ($(THREAD_RESOURCE_RESERVED_LIMIT),)
+CFLAGS += -DTHREAD_RESOURCE_RESERVED_LIMIT=$(THREAD_RESOURCE_RESERVED_LIMIT)
+endif
+ifneq ($(THREAD_RESOURCE_DOMAIN_ORDINARY_LIMIT),)
+CFLAGS += -DTHREAD_RESOURCE_DOMAIN_ORDINARY_LIMIT=$(THREAD_RESOURCE_DOMAIN_ORDINARY_LIMIT)
+endif
+ifneq ($(THREAD_RESOURCE_DOMAIN_RESERVED_LIMIT),)
+CFLAGS += -DTHREAD_RESOURCE_DOMAIN_RESERVED_LIMIT=$(THREAD_RESOURCE_DOMAIN_RESERVED_LIMIT)
 endif
 
 ifneq ($(FS_DOMAIN_BLOCK_LIMIT),)
@@ -317,6 +333,9 @@ syscall-fairness-test:
 
 file-resource-test:
 	TOOLPREFIX=$(TOOLPREFIX) bash scripts/run-file-resource-tests.sh
+
+thread-resource-test:
+	TOOLPREFIX=$(TOOLPREFIX) bash scripts/run-thread-resource-tests.sh
 
 agentos-platform-user:
 	$(MAKE) user TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform_agentos

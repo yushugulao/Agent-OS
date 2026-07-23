@@ -18,8 +18,8 @@ AgentOS-uCore 当前实现的是可验证的 Agent Loop 内核机制：
 - Agent 可设置 heartbeat，注册 TIMER watch 后可收到 heartbeat 事件；删除 TIMER watch 后不会消费 TIMER 事件；
 - Agent 可通过 `agent_heartbeat_stop()` 停止 heartbeat；
 - 等待、唤醒和事件消费会写入 Context Path；公开 cause/span 的 source control 与 span owner 由内核私有 sidecar 认证；
-- 调度器按 Agent 角色、orchestrator 配置的调度参数、事件队列、deadline、heartbeat 到期、等待时长和虚拟运行量选择可运行任务，并记录最近 16 次调度原因；
-- 调度分值只表达软优先级；连续选择 Agent 或连续按分值选择达到 `AGENT_SCHED_MAX_AGENT_BURST=8` 后，调度器强制回到普通任务或 FIFO 队首，任何角色、事件积压和 orchestrator 配置都不能越过该上限；
+- 调度器先严格轮转 active 进程资源域，再按选中域内的 FIFO 或 Agent 软评分选择线程，并记录最近 16 次 Agent 调度原因；
+- 调度分值只表达域内软优先级；连续选择 Agent 或连续按分值选择达到 `AGENT_SCHED_MAX_AGENT_BURST=8` 后，本域强制回到普通线程或 FIFO 队首；线程数、角色、事件积压和 orchestrator 配置都不能越过外层资源域轮转；
 - 参与 Agent 可按当前 span 查询 Context、事件、调度和预取交接短记录；
 - 内核物理审计表 512 槽按最多 4 个 workflow 各保证 128，orchestrator 只能查询自己的 scope；
 - 每 scope low/high 各64，low principal 上限16、high active principal 上限8，并维护独立逻辑 hash 链和稀疏窗口；
@@ -216,9 +216,11 @@ int agent_heartbeat_stop(void);
 
 当前 `agentbench_ucore` 会调用 `agent_heartbeat()`，随后用 `agent_info()` 检查 `heartbeat_interval` 和 `last_heartbeat_tick`。`agentloop_ucore` 进一步验证 heartbeat 可以唤醒等待中的 Agent、删除 TIMER watch 后不再消费 TIMER 事件、停止后不会继续产生 heartbeat 事件。
 
-## 感知调度：Agent
+## 感知调度：资源域与 Agent
 
-uCore 原有调度器从可运行队列中取任务。AgentOS-uCore 当前实现保留普通 FIFO 取队路径，并增加一个 Agent 任务提示位：当可运行队列中没有 Agent 时，调度器继续使用原有 `fetch_task()`；当 Agent 进入可运行队列后，调度器改用 `fetch_best_task()`，短时取出一批可运行任务，用 `agent_sched_better()` 比较任务优先级，选出最适合运行的任务后把其余任务放回队列。若本次扫描发现队列中已经没有 Agent，提示位会被清除，后续普通进程负载回到原 FIFO 路径。
+AgentOS-uCore 的运行队列采用两级结构。`scheduler_active_domains` 是 active `resource_domain_id` 的 FIFO，每个有可运行线程的域最多出现一次；调度器每轮弹出一个域、只从该域选择一个线程，再把仍有 runnable 线程的域放回队尾。每域的线程保存在独立 `scheduler_domain_tasks[]` 中，因此一个 PUBLIC 进程创建更多线程不会在外层队列取得更多节点，也不能按线程数放大跨域 CPU 份额。
+
+进入选中域后，如果本域没有 runnable Agent，直接按域内 FIFO 取队；存在 Agent 时，调度器在本域短时扫描候选，用 `agent_sched_better()` 比较软优先级，选出一个线程后把其余候选放回同一域队列。VM snapshot 暂停的 sibling 也只在原域内保留，不会迁移到其他域或破坏外层轮转。
 
 Agent 任务的调度分值因素包括：
 
@@ -234,14 +236,14 @@ Agent 任务的调度分值因素包括：
 | 虚拟运行量 | 已经运行较多的 Agent 被扣分，提升公平性 |
 | 运行预算 | 单个 Agent 超过默认预算后被扣分 |
 
-上述因素全部属于软评分，只能决定强制上限以内的候选优先级，不能授权 Agent 无限连续运行。`fetch_best_task()` 在选择前维护两条不可配置的公平上限：
+上述因素全部属于软评分，只能决定选中资源域内的候选优先级，不能授权 Agent 无限连续运行。每个资源域独立维护两条不可配置的公平上限：
 
 1. 当队列中同时存在普通任务时，连续选择 Agent 达到 `AGENT_SCHED_MAX_AGENT_BURST=8` 次后，本次必须选择扫描到的首个普通任务；普通任务运行后重新计算 Agent burst。
 2. 无论被选任务是否为 Agent，连续 8 次按分值绕过 FIFO 后，本次必须选择 FIFO 队首；完成这次 FIFO escape 后重新计算 score burst。
 
-两条检查位于角色权重、priority、budget、事件、deadline、heartbeat、ready age 和 vruntime 的比较之外。`agent_sched_config()` 只能修改软评分参数，不能修改常量 8，也不能清除或绕过 burst 计数。因此即使高权限 Agent 持续制造消息、堆积事件并把 weight/priority 配到最大，普通可运行进程仍会在最多 8 次连续 Agent dispatch 后获得一次运行机会；Agent 之间也不能利用高分永久绕过 FIFO 队首。
+两条检查位于角色权重、priority、budget、事件、deadline、heartbeat、ready age 和 vruntime 的比较之外。`agent_sched_config()` 只能修改软评分参数，不能修改常量 8，也不能清除或绕过本域 burst 计数。因此即使高权限 Agent 持续制造消息、堆积事件并把 weight/priority 配到最大，同域普通线程仍在有限 dispatch 内获得进展；其他 active 资源域更由外层轮转在每个域轮次取得一次选择机会。
 
-普通支持程序没有 Agent 身份时，不需要反复经过 Agent 调度分值计算路径。只有队列出现可运行 Agent 时才启用增强选择；没有 Agent 时仍直接使用原 FIFO 路径。
+普通支持程序没有 Agent 身份时不经过 Agent 分值计算，只走本域 FIFO。外层域轮转始终存在，不因当前是否有 Agent 而切换成全局线程 FIFO。
 
 `struct agent_info` 暴露调度观测字段：`sched_weight`、`sched_priority`、`sched_budget`、`sched_dispatch_count`、`sched_event_dispatch_count`、`sched_deadline_dispatch_count`、`sched_vruntime`、`sched_ready_tick`、`sched_last_dispatch_tick`、`sched_preemptions` 和 `sched_budget_used`。`agentsched_ucore` 用这些字段验证角色权重、受权调度配置、事件优先和公平性计数，并让一个具有未消费消息的 Agent 连续让出 CPU，确认普通进程先写出结果，输出 `normal_progress=1 max_agent_burst=8`。`procreap_agent_ucore` 还在高分 Agent 持续可运行时验证退出回收线程仍能得到有界调度。
 
@@ -364,7 +366,7 @@ Context v6 还会把事件和后续工具调用连起来，并继续维护 Conte
 
 | 限制项 | 说明 |
 | --- | --- |
-| 调度策略 | 当前支持 orchestrator 配置 weight、priority 和 budget，尚未实现复杂策略语言；这些参数都是软策略，固定为 8 的强制 Agent/FIFO 公平上限不可配置 |
+| 调度策略 | 当前支持 orchestrator 配置 weight、priority 和 budget，尚未实现复杂策略语言；这些参数都是域内软策略，外层 active-domain 轮转和固定为 8 的域内 Agent/FIFO 公平上限不可配置 |
 | 事件容量 | 当前每 Agent 固定 16 槽 FIFO；external 合计 12、directed IPC 8、attributed notification 8、同一 stable source 跨两类 4，为显式 `KERNEL` origin 保留至少 4 个容量名额，所有事件仍受总容量 16 |
 | IPC 路由 | 每个 target 最多16条同 scope stable-source route；不支持跨 scope，即使 target consent 也拒绝 |
 | 路由可观测性 | 没有 route snapshot/query；scope audit 只能看到成功入队/消费，不能还原全部授权变更 |
@@ -383,6 +385,7 @@ Context v6 还会把事件和后续工具调用连起来，并继续维护 Conte
 | `agentbench_ucore` | timeout 会更新 heartbeat/timeout 统计；busy polling 与 wait/wake 都有可复查的 tick 观测。 |
 | `agentloop_ucore` | FIFO、cause/span、unwatch、睡眠 timeout、TIMER unwatch、heartbeat stop 和 wait cancel 均通过；`message_source_limit=4`、`ipc_class_limit=8`、`external_limit=12`、`system_event_reserved=4`、`external_reject_reclaim=1` 和 `broadcast_slow_watcher_isolated=1` 进一步验证单来源/IPC/external 边界、第 13 条 external 被拒绝、4 条 KERNEL TIMER 填满保留容量、消费后 directed/attributed 重新接纳及慢 watcher 隔离。attributed=8 与 stable source 混合跨类仍缺独立边界输出。 |
 | `agentsched_ucore` | 角色权重、orchestrator 调度配置、事件优先、原因记录和公平性计数均写入调度记录；普通进程在持续可运行高分 Agent 下先取得进展，并输出 `normal_progress=1 max_agent_burst=8`。 |
+| `threadresource_ucore` | 以 19/12/6/6/4 tiny policy 验证普通/保留域上限与复用、容量拒绝计数稳定、线程/进程退出退款、普通/保留全局水位与复用、系统保留进展和 active-domain 公平轮转；输出 12 项机制标记及 `parent passed`。 |
 | `agentsecurity_ucore` | 用户态 `agent_wake()` 只允许 MESSAGE；普通进程、保留系统事件和非法类型均被拒绝。`route_source_enforced=1`、`route_target_isolated=1`、`ipc_route_authorization=1`、`message_route_lifecycle=1`、`target_route_consent=1` 和 `route_slot_reclaimed=1` 验证未授权拒绝、控制者 grant/revoke、新 control id 隔离、target 自主接受 LLM_DONE、LLM-only route 拒绝 MESSAGE，以及超过 16 个短命 source 后路由槽可回收。 |
 | `agentscope_ucore` | `ipc_scope_isolation=1`、`audit_event_scope_isolation=1`、`same_scope_collaboration=1` 和 `parent passed` 已在 2026-07-22 完整 Agent QEMU 回归中通过。 |
 | `usersafety_ucore` | 无关睡眠者不会被同步对象的定向唤醒破坏，syscall 返回后内核继续存活。 |
