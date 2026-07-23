@@ -405,14 +405,16 @@ static void check_index_scan_gap(void)
 	       index.total_hits, index.returned, index.truncated);
 }
 
-static void check_prefetch_hints(void)
+static void check_prefetch_hints(uint64 preemptions)
 {
 	int n;
 	int found = 0;
 
 	n = agent_file_prefetch_snapshot(fs_hints,
 					 AGENT_FILE_PREFETCH_MAX_HINTS);
-	check(n >= 1, "prefetch snapshot");
+	check(n >= 1 && n <= AGENT_FILE_PREFETCH_MAX_HINTS,
+	      "bounded prefetch snapshot");
+	check(preemptions > 0, "prefetch kernel work budget");
 	for (int i = 0; i < n; i++) {
 		check(fs_hints[i].source_sequence > 0,
 		      "prefetch source sequence");
@@ -428,13 +430,189 @@ static void check_prefetch_hints(void)
 		      "prefetch candidates");
 		check(strcmp(fs_hints[i].hit.stage, "archive") != 0,
 		      "prefetch scoped run");
+		for (int j = 0; j < i; j++)
+			check(fs_hints[i].fid != fs_hints[j].fid,
+			      "prefetch target de-duplication");
 		if (strcmp(fs_hints[i].hit.stage, "analyze") == 0 ||
 		    strcmp(fs_hints[i].hit.stage, "report") == 0)
 			found = 1;
 	}
 	check(found, "prefetch dependent stage");
-	printf("agentfs_ucore: prefetch_hints=1 count=%d first_stage=%s source_seq=%d\n",
-	       n, fs_hints[0].hit.stage, (int)fs_hints[0].source_sequence);
+	printf("agentfs_ucore: prefetch_hints=1 bounded=1 count=%d preemptions=%d first_stage=%s source_seq=%d\n",
+	       n, (int)preemptions, fs_hints[0].hit.stage,
+	       (int)fs_hints[0].source_sequence);
+}
+
+struct handoff_replacement_result {
+	int pid;
+	int prefetch_count;
+	int mailbox_valid;
+};
+
+struct handoff_target_ready {
+	int pid;
+	char ready;
+};
+
+static void run_handoff_exit_target(int source_pid, int ready_fd,
+				    int churn_fd)
+{
+	struct agent_event event;
+	struct handoff_target_ready ready;
+	char churn = 'C';
+
+	check(agent_watch(AGENT_EVENT_MESSAGE, "handoff-exit") == 0,
+	      "watch handoff exit message");
+	check(agent_route_config(source_pid, getpid(),
+				 AGENT_IPC_EVENT_MESSAGE,
+				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_OK,
+	      "accept handoff exit route");
+	memset(&ready, 0, sizeof(ready));
+	ready.pid = getpid();
+	ready.ready = 'R';
+	check(write(ready_fd, &ready, sizeof(ready)) == (int)sizeof(ready),
+	      "handoff exit target ready");
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, -1) == AGENT_STATUS_OK,
+	      "handoff exit target wait");
+	check(event.type == AGENT_EVENT_MESSAGE && event.corr_id == 78100,
+	      "handoff exit target event");
+	check(write(churn_fd, &churn, 1) == 1,
+	      "release handoff replacement churn");
+	exit(0);
+}
+
+static void run_handoff_replacement(int inspect_fd, int report_fd)
+{
+	struct handoff_replacement_result replacement;
+	struct agent_op op;
+	struct agent_result result;
+	char inspect = 0;
+
+	check(read(inspect_fd, &inspect, 1) == 1 && inspect == 'I',
+	      "wait handoff replacement inspection");
+	memset(&replacement, 0, sizeof(replacement));
+	replacement.pid = getpid();
+	replacement.prefetch_count = agent_file_prefetch_snapshot(
+		fs_hints, AGENT_FILE_PREFETCH_MAX_HINTS);
+	memset(&op, 0, sizeof(op));
+	memset(&result, 0, sizeof(result));
+	op.version = AGENT_CALL_VERSION;
+	op.tool_id = AGENT_TOOL_READ_MESSAGE;
+	op.request_id = 78101;
+	check(agent_run(&op, &result, 1, 0) == 1,
+	      "read replacement mailbox");
+	check(result.status == AGENT_STATUS_OK,
+	      "replacement mailbox status");
+	replacement.mailbox_valid = result.value0 != 0;
+	check(write(report_fd, &replacement, sizeof(replacement)) ==
+		      (int)sizeof(replacement),
+	      "report handoff replacement state");
+	exit(0);
+}
+
+static void run_handoff_churner(int source_pid, int ready_fd,
+				int churn_read_fd, int churn_write_fd,
+				int inspect_fd, int report_fd)
+{
+	int target_pid;
+	int target_status = 0;
+	int replacement_pid;
+	int status = 0;
+	char churn = 0;
+
+	target_pid = agent_create_role(AGENT_ROLE_RECOVERY);
+	check(target_pid >= 0, "create handoff exit target");
+	if (target_pid == 0)
+		run_handoff_exit_target(source_pid, ready_fd, churn_write_fd);
+	check(read(churn_read_fd, &churn, 1) == 1 && churn == 'C',
+	      "wait handoff target recycle");
+	check(waitpid(target_pid, &target_status) == target_pid,
+	      "reap handoff exit target");
+	check(target_status == 0, "handoff exit target status");
+	/*
+	 * waitpid observes the child record only after scheduler-side recycle.
+	 * The first-free allocator must therefore give this lowest free slot to
+	 * the immediately-created replacement.
+	 */
+	replacement_pid = agent_create_role(AGENT_ROLE_RECOVERY);
+	check(replacement_pid >= 0, "create handoff replacement");
+	if (replacement_pid == 0)
+		run_handoff_replacement(inspect_fd, report_fd);
+	check(write(report_fd, &replacement_pid, sizeof(replacement_pid)) ==
+		      (int)sizeof(replacement_pid),
+	      "report handoff replacement pid");
+	check(waitpid(replacement_pid, &status) == replacement_pid,
+	      "reap handoff replacement");
+	check(status == 0, "handoff replacement status");
+	exit(0);
+}
+
+static void check_handoff_target_exit(void)
+{
+	struct handoff_replacement_result replacement;
+	struct handoff_target_ready ready;
+	struct agent_event event;
+	uint64 preemptions;
+	int ready_pipe[2];
+	int churn_pipe[2];
+	int inspect_pipe[2];
+	int report_pipe[2];
+	int churner_status = 0;
+	int send_status;
+	int target_pid;
+	int churner_pid;
+	int replacement_pid = 0;
+	char inspect = 'I';
+	int source_pid = getpid();
+
+	check(pipe(ready_pipe) == 0, "handoff exit ready pipe");
+	check(pipe(churn_pipe) == 0, "handoff churn pipe");
+	check(pipe(inspect_pipe) == 0, "handoff inspect pipe");
+	check(pipe(report_pipe) == 0, "handoff report pipe");
+	churner_pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
+	check(churner_pid >= 0, "create handoff churner");
+	if (churner_pid == 0)
+		run_handoff_churner(source_pid, ready_pipe[1], churn_pipe[0],
+				   churn_pipe[1], inspect_pipe[0],
+				   report_pipe[1]);
+	memset(&ready, 0, sizeof(ready));
+	check(read(ready_pipe[0], &ready, sizeof(ready)) ==
+		      (int)sizeof(ready) &&
+	      ready.ready == 'R' && ready.pid > 0,
+	      "wait handoff exit target ready");
+	target_pid = ready.pid;
+	memset(&event, 0, sizeof(event));
+	event.type = AGENT_EVENT_MESSAGE;
+	event.corr_id = 78100;
+	strcpy(event.payload, "handoff-exit");
+	send_status = agent_wake(target_pid, &event);
+	preemptions = kernel_work_last_preemptions();
+	printf("agentfs_ucore: handoff_target_exit_send=%d preemptions=%d\n",
+	       send_status, (int)preemptions);
+	check(send_status == AGENT_STATUS_OK, "send handoff exit message");
+	check(preemptions > 0, "handoff lifecycle kernel work budget");
+	check(read(report_pipe[0], &replacement_pid,
+		   sizeof(replacement_pid)) == (int)sizeof(replacement_pid),
+	      "read handoff replacement pid");
+	check(replacement_pid > 0 && replacement_pid != target_pid,
+	      "handoff replacement identity");
+	check(write(inspect_pipe[1], &inspect, 1) == 1,
+	      "release handoff replacement inspection");
+	check(read(report_pipe[0], &replacement, sizeof(replacement)) ==
+		      (int)sizeof(replacement),
+	      "read handoff replacement state");
+	check(replacement.pid == replacement_pid,
+	      "handoff replacement report identity");
+	check(replacement.prefetch_count == 0,
+	      "no stale handoff prefetch");
+	check(replacement.mailbox_valid == 0,
+	      "no stale handoff mailbox");
+	check(waitpid(churner_pid, &churner_status) == churner_pid,
+	      "reap handoff churner");
+	check(churner_status == 0, "handoff churner status");
+	printf("agentfs_ucore: handoff_target_exit=1 endpoint_reuse=1 preemptions=%d replacement=%d clean=1\n",
+	       (int)preemptions, replacement_pid);
 }
 
 static int text_contains(const char *text, const char *needle)
@@ -516,9 +694,113 @@ static void check_user_dependency_update(void)
 	       fs_res.result, (int)fs_res.value2);
 }
 
+static void check_batched_action_maintenance(void)
+{
+	uint64 dependency_generation;
+	uint64 preemptions;
+
+	memset(&fs_op, 0, sizeof(fs_op));
+	memset(&fs_res, 0, sizeof(fs_res));
+	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.tool_id = AGENT_TOOL_DEPENDENCY_QUERY;
+	fs_op.request_id = 78005;
+	strcpy(fs_op.payload,
+	       "label=align;namespace=lab-gene-x;run_id=RUN-042");
+	check(agent_run(&fs_op, &fs_res, 1, 0) == 1,
+	      "action dependency generation query");
+	check(fs_res.status == AGENT_STATUS_OK,
+	      "action dependency generation status");
+	dependency_generation = fs_res.value2;
+
+	memset(&fs_meta, 0, sizeof(fs_meta));
+	fs_meta.fid = 1;
+	strcpy(fs_meta.summary, "pre-action summary update");
+	fs_meta.update_mask = AGENT_FILE_META_UPDATE_SUMMARY;
+	check(agent_file_meta_set(&fs_meta) == 0,
+	      "summary-only metadata update");
+
+	memset(&fs_op, 0, sizeof(fs_op));
+	memset(&fs_res, 0, sizeof(fs_res));
+	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.tool_id = AGENT_TOOL_DEPENDENCY_QUERY;
+	fs_op.request_id = 780051;
+	strcpy(fs_op.payload,
+	       "label=align;namespace=lab-gene-x;run_id=RUN-042");
+	check(agent_run(&fs_op, &fs_res, 1, 0) == 1,
+	      "summary dependency generation query");
+	check(fs_res.status == AGENT_STATUS_OK &&
+	      fs_res.value2 == dependency_generation,
+	      "summary update leaves dependency generation unchanged");
+
+	memset(&fs_meta, 0, sizeof(fs_meta));
+	fs_meta.fid = 21;
+	fs_meta.dependency_mask = agent_dependency_label_bit("archive");
+	fs_meta.update_mask = AGENT_FILE_META_UPDATE_DEPENDENCY;
+	check(agent_file_meta_set(&fs_meta) == 0,
+	      "topology metadata update");
+	memset(&fs_op, 0, sizeof(fs_op));
+	memset(&fs_res, 0, sizeof(fs_res));
+	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.tool_id = AGENT_TOOL_DEPENDENCY_QUERY;
+	fs_op.request_id = 780052;
+	strcpy(fs_op.payload,
+	       "label=align;namespace=lab-gene-x;run_id=RUN-GEN");
+	check(agent_run(&fs_op, &fs_res, 1, 0) == 1,
+	      "topology dependency generation query");
+	check(fs_res.status == AGENT_STATUS_OK &&
+	      fs_res.value2 > dependency_generation,
+	      "topology update advances dependency generation");
+	dependency_generation = fs_res.value2;
+
+	memset(&fs_op, 0, sizeof(fs_op));
+	memset(&fs_res, 0, sizeof(fs_res));
+	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.tool_id = AGENT_TOOL_ACTION_COMMIT;
+	fs_op.request_id = 78006;
+	strcpy(fs_op.payload,
+	       "label=align;namespace=lab-gene-x;run_id=RUN-042");
+	check(agent_run(&fs_op, &fs_res, 1, 0) == 1,
+	      "batched action run");
+	check(fs_res.status == AGENT_STATUS_OK, "batched action status");
+	preemptions = kernel_work_last_preemptions();
+	check(preemptions > 0, "batched action kernel work budget");
+
+	check(query_stage("lab-gene-x", "RUN-042", "align", "ok",
+			  &fs_result) >= 1,
+	      "batched action primary status");
+	check(strcmp(fs_result.hits[0].summary, "action completed") == 0,
+	      "batched action primary summary");
+	check(query_stage("lab-gene-x", "RUN-042", "analyze", "ok",
+			  &fs_result) >= 1,
+	      "batched action dependency status");
+	check(strcmp(fs_result.hits[0].summary,
+		     "dependency refreshed") == 0,
+	      "batched action dependency summary");
+	check(query_stage("lab-gene-x", "RUN-042", "report", "ok",
+			  &fs_result) >= 1,
+	      "batched action transitive status");
+
+	memset(&fs_op, 0, sizeof(fs_op));
+	memset(&fs_res, 0, sizeof(fs_res));
+	fs_op.version = AGENT_CALL_VERSION;
+	fs_op.tool_id = AGENT_TOOL_DEPENDENCY_QUERY;
+	fs_op.request_id = 78007;
+	strcpy(fs_op.payload,
+	       "label=align;namespace=lab-gene-x;run_id=RUN-042");
+	check(agent_run(&fs_op, &fs_res, 1, 0) == 1,
+	      "post-action dependency query");
+	check(fs_res.status == AGENT_STATUS_OK,
+	      "post-action dependency status");
+	check(fs_res.value2 == dependency_generation,
+	      "non-topology updates leave dependency generation unchanged");
+	printf("agentfs_ucore: metadata_action_bounded=1 field_driven=1 batched=1 preemptions=%d\n",
+	       (int)preemptions);
+}
+
 static void run_agent(void)
 {
 	const char *name = "fsissue4";
+	uint64 prefetch_preemptions;
 
 	/* Create both probes before the first explicit metadata operation. */
 	make_file(PRELOAD_QUERY_FILE);
@@ -532,14 +814,17 @@ static void run_agent(void)
 	seed_user_dependency_metadata();
 	check_scoped_dependency_query();
 	check_user_dependency_update();
+	check_batched_action_maintenance();
 	check(query_stage("lab-gene-x", "RUN-042", "align", 0, &fs_result) >= 1,
 	      "default query");
+	prefetch_preemptions = kernel_work_last_preemptions();
 	check(fs_result.hits[0].dev != 0 && fs_result.hits[0].inum != 0,
 	      "default inode binding");
 	printf("agentfs_ucore: demo_inode dev=%d inum=%d scanned=%d\n",
 	       (int)fs_result.hits[0].dev, (int)fs_result.hits[0].inum,
 	       fs_result.scanned_records);
-	check_prefetch_hints();
+	check_prefetch_hints(prefetch_preemptions);
+	check_handoff_target_exit();
 
 	make_file(name);
 	set_meta(name, "ok", 0);

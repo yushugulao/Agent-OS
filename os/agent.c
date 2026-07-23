@@ -45,6 +45,19 @@ extern struct proc pool[NPROC];
 #define AGENT_FS_SCAN_REST_MULTIPLIER 4
 #define AGENT_META_WRITEBACK_COALESCE_TICKS TICKS_PER_SEC
 #define AGENT_META_WRITEBACK_SCOPE_MAX NPROC
+#define AGENT_META_TXN_WORK_GRANULE 128U
+#define AGENT_FILE_CHANGE_STATUS       (1U << 0)
+#define AGENT_FILE_CHANGE_STAGE        (1U << 1)
+#define AGENT_FILE_CHANGE_KIND         (1U << 2)
+#define AGENT_FILE_CHANGE_SCOPE_KEYS   (1U << 3)
+#define AGENT_FILE_CHANGE_DEPENDENCY   (1U << 4)
+#define AGENT_FILE_CHANGE_MEMBERSHIP   (1U << 5)
+#define AGENT_FILE_CHANGE_INDEX_ALL					\
+	(AGENT_FILE_CHANGE_STATUS | AGENT_FILE_CHANGE_STAGE |		\
+	 AGENT_FILE_CHANGE_KIND | AGENT_FILE_CHANGE_MEMBERSHIP)
+#define AGENT_FILE_CHANGE_ALL						\
+	(AGENT_FILE_CHANGE_INDEX_ALL | AGENT_FILE_CHANGE_SCOPE_KEYS |	\
+	 AGENT_FILE_CHANGE_DEPENDENCY)
 
 _Static_assert(AGENT_FILE_VERSION_MAX == NINODE,
 	       "inode version sidecar must cover every filesystem inode");
@@ -113,12 +126,20 @@ static uint agent_span_prefetch_scopes[AGENT_FILE_PREFETCH_SPAN_MAX];
 static uint64 agent_span_prefetch_owners[AGENT_FILE_PREFETCH_SPAN_MAX];
 static int agent_timeline_waiting_agents;
 
+struct agent_endpoint_handle {
+	int slot;
+	int pid;
+	uint scope_id;
+	uint64 control_id;
+};
+
 struct agent_file_query_cache_entry {
 	int valid;
 	uint scope_id;
 	uint64 fs_generation;
 	struct agent_file_query key;
 	struct agent_file_query_result result;
+	int hit_slots[AGENT_FILE_QUERY_MAX_HITS];
 };
 
 static struct agent_file_query_cache_entry
@@ -421,6 +442,7 @@ static uchar agent_meta_stale_slots[(AGENT_FILE_META_MAX + 7) / 8];
 static struct agent_file_version_entry
 	agent_file_versions[AGENT_FILE_VERSION_MAX];
 static struct agent_file_edit_entry agent_file_edits[AGENT_FILE_EDIT_MAX];
+/* Explicit user edges only; file dependency masks are resolved on demand. */
 static struct agent_dependency_entry agent_dependencies[AGENT_DEPENDENCY_MAX];
 static int agent_action_history_count;
 static uint64 agent_action_next_sequence;
@@ -428,6 +450,10 @@ static int agent_file_loaded;
 static int agent_meta_store_busy;
 static void *agent_meta_txn_owner;
 static int agent_meta_txn_depth;
+static uint64 agent_meta_txn_next_ticket;
+static uint64 agent_meta_txn_serving_ticket;
+static uint agent_meta_txn_work_records;
+static int agent_meta_txn_reserved_turn;
 static struct wait_queue agent_meta_txn_waiters;
 static struct wait_queue agent_meta_submit_waiters;
 static char agent_meta_scheduler_token;
@@ -461,7 +487,7 @@ static volatile int agent_file_edit_guard;
 static uint64 agent_file_edit_next_lease;
 
 static void agent_file_reset_indexes(void);
-static void agent_file_rebuild_indexes(void);
+static void agent_file_maintain(uint changes);
 static int agent_file_bind_slot(int slot, int create, struct proc *actor);
 static int agent_file_bind_slot_status(int slot, int create,
 				       struct proc *actor, int *lookup_status);
@@ -473,10 +499,10 @@ static int agent_meta_txn_lock(int wait);
 static int agent_meta_txn_try_external(void);
 static void agent_meta_txn_unlock(void);
 static void agent_meta_txn_relock_uninterruptible(void);
+static void agent_meta_txn_work_charge(uint records);
 static int agent_meta_submit_wait_locked(void);
 static int agent_query_from_payload(struct agent_file_query *q, char *payload);
 static void agent_file_enable_scan(void);
-static void agent_dependency_rebuild_records(void);
 static void agent_action_history_clear_scope(uint scope_id);
 static int agent_dependency_for_label(uint scope_id, char *label,
 				      char *namespace, char *run_id,
@@ -532,6 +558,10 @@ void agentinit(void)
 	agent_meta_store_busy = 0;
 	agent_meta_txn_owner = 0;
 	agent_meta_txn_depth = 0;
+	agent_meta_txn_next_ticket = 1;
+	agent_meta_txn_serving_ticket = 1;
+	agent_meta_txn_work_records = 0;
+	agent_meta_txn_reserved_turn = 0;
 	wait_queue_init(&agent_meta_txn_waiters, WAIT_REASON_AGENT_META);
 	wait_queue_init(&agent_meta_submit_waiters, WAIT_REASON_AGENT_META);
 	agent_meta_sync_submit_owner = 0;
@@ -922,9 +952,13 @@ static void *agent_meta_txn_token(void)
 }
 
 /*
- * Metadata transactions may cross filesystem I/O.  Process threads wait;
- * scheduler and VFS callback paths use try-lock and leave a reconciliation
- * request rather than sleeping while they may hold unrelated kernel state.
+ * Metadata transactions may cross filesystem I/O. Process threads enter the
+ * gate in ticket order. The scheduler may take one bounded maintenance turn
+ * while the gate is idle, even if a process ticket is queued; process-context
+ * VFS callbacks may not barge. Once a thread has a ticket it waits
+ * uninterruptibly, then hands the gate on before reporting a pending exit.
+ * This prevents an abandoned ticket without letting a permanent process
+ * stream starve writeback, reclamation, or the bounded filesystem scanner.
  */
 static int agent_meta_txn_lock(int wait)
 {
@@ -932,6 +966,8 @@ static int agent_meta_txn_lock(int wait)
 	void *token = agent_meta_txn_token();
 	int scheduler_context = token == &agent_meta_scheduler_token;
 	int enabled = intr_save();
+	uint64 ticket = 0;
+	int queued = 0;
 
 	for (;;) {
 		if (agent_meta_txn_owner == token) {
@@ -939,9 +975,22 @@ static int agent_meta_txn_lock(int wait)
 			intr_restore(enabled);
 			return 1;
 		}
-		if (agent_meta_txn_owner == 0) {
+		if (agent_meta_txn_owner == 0 &&
+		    ((!queued &&
+		      agent_meta_txn_next_ticket ==
+			      agent_meta_txn_serving_ticket) ||
+		     (queued && ticket == agent_meta_txn_serving_ticket))) {
 			agent_meta_txn_owner = token;
 			agent_meta_txn_depth = 1;
+			agent_meta_txn_work_records = 0;
+			agent_meta_txn_reserved_turn = 0;
+			if (queued)
+				agent_meta_txn_serving_ticket++;
+			if (queued && proc_thread_exit_requested()) {
+				agent_meta_txn_unlock();
+				intr_restore(enabled);
+				return 0;
+			}
 			intr_restore(enabled);
 			return 1;
 		}
@@ -949,26 +998,40 @@ static int agent_meta_txn_lock(int wait)
 			intr_restore(enabled);
 			return 0;
 		}
+		if (!queued) {
+			if (proc_thread_exit_requested()) {
+				intr_restore(enabled);
+				return 0;
+			}
+			ticket = agent_meta_txn_next_ticket++;
+			queued = 1;
+		}
 		if (p != 0)
 			p->agent_meta_txn_wait_count++;
-		if (wait_queue_sleep(&agent_meta_txn_waiters) != WAIT_QUEUE_OK) {
-			intr_restore(enabled);
-			return 0;
-		}
+		if (wait_queue_sleep_irq_uninterruptible(
+			    &agent_meta_txn_waiters) != WAIT_QUEUE_OK)
+			panic("metadata transaction wait failed");
 	}
 }
 
 static int agent_meta_txn_try_external(void)
 {
 	void *token = agent_meta_txn_token();
+	int scheduler_context = token == &agent_meta_scheduler_token;
 	int enabled = intr_save();
 
-	if (agent_meta_txn_owner != 0 || agent_meta_reload_owner != 0) {
+	if (agent_meta_txn_owner != 0 || agent_meta_reload_owner != 0 ||
+	    (!scheduler_context &&
+	     agent_meta_txn_next_ticket != agent_meta_txn_serving_ticket)) {
 		intr_restore(enabled);
 		return 0;
 	}
 	agent_meta_txn_owner = token;
 	agent_meta_txn_depth = 1;
+	agent_meta_txn_work_records = 0;
+	agent_meta_txn_reserved_turn =
+		scheduler_context &&
+		agent_meta_txn_next_ticket != agent_meta_txn_serving_ticket;
 	intr_restore(enabled);
 	return 1;
 }
@@ -982,13 +1045,18 @@ static void agent_meta_txn_unlock(void)
 		panic("Agent metadata transaction invariant");
 	agent_meta_txn_depth--;
 	if (agent_meta_txn_depth == 0) {
+		int reserved_turn = agent_meta_txn_reserved_turn;
+
 		agent_meta_txn_owner = 0;
+		agent_meta_txn_work_records = 0;
+		agent_meta_txn_reserved_turn = 0;
 		/*
-		 * This is a condition queue, not an ownership baton. Wake every
-		 * waiter and let each re-check the gate under the interrupt lock.
-		 * One interrupted or exiting waiter therefore cannot strand peers.
+		 * A reserved scheduler turn barges only after the preceding owner
+		 * has already woken the serving ticket. Do not wake another waiter
+		 * and disturb the FIFO correspondence between tickets and sleepers.
 		 */
-		wait_queue_wake_all(&agent_meta_txn_waiters);
+		if (!reserved_turn)
+			wait_queue_wake_one(&agent_meta_txn_waiters);
 	}
 	intr_restore(enabled);
 }
@@ -1078,6 +1146,8 @@ static void agent_meta_txn_relock_uninterruptible(void)
 {
 	struct proc *p = curr_proc();
 	void *token = agent_meta_txn_token();
+	uint64 ticket = 0;
+	int queued = 0;
 
 	if (token == &agent_meta_scheduler_token)
 		panic("scheduler metadata relock");
@@ -1089,11 +1159,23 @@ static void agent_meta_txn_relock_uninterruptible(void)
 			intr_restore(enabled);
 			return;
 		}
-		if (agent_meta_txn_owner == 0) {
+		if (agent_meta_txn_owner == 0 &&
+		    ((!queued &&
+		      agent_meta_txn_next_ticket ==
+			      agent_meta_txn_serving_ticket) ||
+		     (queued && ticket == agent_meta_txn_serving_ticket))) {
 			agent_meta_txn_owner = token;
 			agent_meta_txn_depth = 1;
+			agent_meta_txn_work_records = 0;
+			agent_meta_txn_reserved_turn = 0;
+			if (queued)
+				agent_meta_txn_serving_ticket++;
 			intr_restore(enabled);
 			return;
+		}
+		if (!queued) {
+			ticket = agent_meta_txn_next_ticket++;
+			queued = 1;
 		}
 		if (p != 0)
 			p->agent_meta_txn_wait_count++;
@@ -1101,6 +1183,40 @@ static void agent_meta_txn_relock_uninterruptible(void)
 			    &agent_meta_txn_waiters) != WAIT_QUEUE_OK)
 			panic("metadata relock failed");
 		intr_restore(enabled);
+	}
+}
+
+/*
+ * In-place metadata maintenance remains atomic under the transaction gate,
+ * but it must still participate in kernel scheduling. Call this only between
+ * records, after releasing inode, buffer-cache, or edit-table transient state.
+ */
+static void agent_meta_txn_work_charge(uint records)
+{
+	void *token = agent_meta_txn_token();
+
+	if (agent_meta_txn_owner != token || agent_meta_txn_depth <= 0)
+		panic("metadata work outside transaction");
+	/*
+	 * Scheduler maintenance is split into hard-bounded scan/persist steps.
+	 * It cannot yield here because no process thread owns the CPU context;
+	 * superlinear derived work is deferred to a process transaction below.
+	 */
+	if (token == &agent_meta_scheduler_token)
+		return;
+	while (records > 0) {
+		uint room = AGENT_META_TXN_WORK_GRANULE -
+			    agent_meta_txn_work_records;
+		uint add = records < room ? records : room;
+
+		agent_meta_txn_work_records += add;
+		records -= add;
+		if (agent_meta_txn_work_records <
+		    AGENT_META_TXN_WORK_GRANULE)
+			continue;
+		agent_meta_txn_work_records = 0;
+		(void)kernel_work_checkpoint_cleanup(
+			KERNEL_WORK_OPERATION_UNITS);
 	}
 }
 
@@ -1789,6 +1905,38 @@ static struct proc *agent_find_live_proc_locked(int pid)
 	return 0;
 }
 
+static void agent_endpoint_capture_locked(struct agent_endpoint_handle *handle,
+					  struct proc *p)
+{
+	/* The caller keeps the process slot and identity fields stable. */
+	memset(handle, 0, sizeof(*handle));
+	if (p == 0 || p < pool || p >= &pool[NPROC])
+		return;
+	handle->slot = p - pool;
+	handle->pid = p->pid;
+	handle->scope_id = agent_proc_scope(p);
+	handle->control_id = p->agent_control_id;
+}
+
+static struct proc *
+agent_endpoint_resolve_locked(struct agent_endpoint_handle *handle)
+{
+	struct proc *p;
+
+	/* The caller keeps validation and all subsequent proc access atomic. */
+	if (handle == 0 || handle->slot < 0 || handle->slot >= NPROC ||
+	    handle->pid <= 0 || handle->control_id == 0 ||
+	    !agent_scope_valid(handle->scope_id))
+		return 0;
+	p = &pool[handle->slot];
+	if (p->state != P_USED || p->pid != handle->pid || !p->is_agent ||
+	    p->agent_control_id != handle->control_id ||
+	    agent_proc_scope(p) != handle->scope_id || p->exit_requested ||
+	    p->exit_finalizing)
+		return 0;
+	return p;
+}
+
 static int agent_ipc_route_find(struct proc *target, uint64 source_control_id)
 {
 	if (target == 0 || source_control_id == 0)
@@ -1923,12 +2071,13 @@ static int agent_audit_principal_live(uint scope_id, uint64 principal)
 {
 	if (principal == 0)
 		return 0;
-	for (struct proc *p = pool; p < &pool[NPROC]; p++)
+	for (struct proc *p = pool; p < &pool[NPROC]; p++) {
 		if (p->state == P_USED && p->is_agent &&
 		    !p->exit_requested && !p->exit_finalizing &&
 		    p->agent_control_id == principal &&
 		    agent_proc_scope(p) == scope_id)
 			return 1;
+	}
 	return 0;
 }
 
@@ -2136,20 +2285,22 @@ static void agent_audit_sched(struct proc *p, struct agent_sched_record *record)
 			 "sched");
 }
 
-static void agent_audit_prefetch_handoff(struct proc *source,
+static void agent_audit_prefetch_handoff(int source_pid,
+					 uint64 source_control_id,
 					 struct proc *target,
 					 struct agent_file_prefetch_hint *hint,
 					 uint64 span_owner,
 					 struct agent_file_meta *target_meta,
 					 uint64 reason)
 {
-	if (source == 0 || target == 0 || hint == 0 || target_meta == 0)
+	if (source_pid <= 0 || source_control_id == 0 || target == 0 ||
+	    hint == 0 || target_meta == 0)
 		return;
 	agent_audit_emit(AGENT_AUDIT_KIND_PREFETCH, agent_ticks(), target,
-			 source->pid, target->pid, AGENT_EVENT_MESSAGE,
+			 source_pid, target->pid, AGENT_EVENT_MESSAGE,
 			 AGENT_TOOL_QUERY_FILE, AGENT_STATUS_OK,
 			 hint->source_sequence, hint->span_id,
-			 span_owner, source->agent_control_id, 0,
+			 span_owner, source_control_id, 0,
 			 hint->source_sequence, hint->source_fid, hint->fid,
 			 reason, target_meta->stage);
 }
@@ -3910,7 +4061,7 @@ static int agent_file_load_snapshot(int force, uint reload_scope)
 		agent_meta_store_active_bank = -1;
 		agent_meta_store_generation = 0;
 		agent_file_loaded = 1;
-		agent_file_rebuild_indexes();
+		agent_file_maintain(AGENT_FILE_CHANGE_ALL);
 		result = 0;
 		goto out_txn;
 	}
@@ -3999,9 +4150,9 @@ static int agent_file_load_snapshot(int force, uint reload_scope)
 	agent_meta_store_active_bank = selected_bank;
 	agent_meta_store_generation = selected_generation;
 	agent_file_loaded = 1;
-	agent_file_rebuild_indexes();
 	agent_meta_store_leave();
 	store_locked = 0;
+	agent_file_maintain(AGENT_FILE_CHANGE_ALL);
 	if (stale_reload)
 		agent_file_writeback_mark(reload_scope);
 	if (orphan_stale) {
@@ -4905,7 +5056,7 @@ static void agent_file_restore_slot(int slot,
 		if (agent_file_bind_slot(slot, 0, 0) == 0)
 			agent_files[slot] = *previous;
 	}
-	agent_file_rebuild_indexes();
+	agent_file_maintain(AGENT_FILE_CHANGE_ALL);
 }
 
 static int agent_file_find_slot_by_physical(char *path, uint scope_id)
@@ -4982,13 +5133,14 @@ static void agent_file_infer_status(char *name, char *out, int n)
 		safestrcpy(out, "present", n);
 }
 
-static int agent_file_scan_bind_inode(struct inode *ip, char *path,
-				      int account_scan)
+static uint agent_file_scan_bind_inode(struct inode *ip, char *path,
+				       int account_scan)
 {
 	struct agent_file_meta *m;
 	int slot;
 	int added = 0;
 	int changed = 0;
+	uint changes = 0;
 
 	if (ip == 0 || path == 0 || path[0] == 0 ||
 	    agent_file_is_meta_store_name(path))
@@ -5037,6 +5189,7 @@ static int agent_file_scan_bind_inode(struct inode *ip, char *path,
 			   AGENT_FILE_META_F_AUTOSCAN;
 		agent_file_scopes[slot] = ip->vfs_scope_id;
 		added = 1;
+		changes |= AGENT_FILE_CHANGE_MEMBERSHIP;
 	}
 	if (agent_file_scopes[slot] != ip->vfs_scope_id)
 		return 0;
@@ -5047,6 +5200,7 @@ static int agent_file_scan_bind_inode(struct inode *ip, char *path,
 			safestrcpy(m->physical_name, path,
 				   sizeof(m->physical_name));
 			changed = 1;
+			changes |= AGENT_FILE_CHANGE_SCOPE_KEYS;
 		}
 	}
 	if (m->logical_path[0] == 0 ||
@@ -5056,32 +5210,39 @@ static int agent_file_scan_bind_inode(struct inode *ip, char *path,
 			safestrcpy(m->logical_path, path,
 				   sizeof(m->logical_path));
 			changed = 1;
+			changes |= AGENT_FILE_CHANGE_SCOPE_KEYS;
 		}
 	}
 	if (m->project[0] == 0 && (m->flags & AGENT_FILE_META_F_AUTOSCAN)) {
 		safestrcpy(m->project, "root", sizeof(m->project));
 		changed = 1;
+		changes |= AGENT_FILE_CHANGE_SCOPE_KEYS;
 	}
 	if (m->workflow[0] == 0 && (m->flags & AGENT_FILE_META_F_AUTOSCAN)) {
 		safestrcpy(m->workflow, "background-scan",
 			   sizeof(m->workflow));
 		changed = 1;
+		changes |= AGENT_FILE_CHANGE_SCOPE_KEYS;
 	}
 	if (m->run_id[0] == 0 && (m->flags & AGENT_FILE_META_F_AUTOSCAN)) {
 		safestrcpy(m->run_id, "ROOT", sizeof(m->run_id));
 		changed = 1;
+		changes |= AGENT_FILE_CHANGE_SCOPE_KEYS;
 	}
 	if (m->stage[0] == 0 && (m->flags & AGENT_FILE_META_F_AUTOSCAN)) {
 		safestrcpy(m->stage, "scan", sizeof(m->stage));
 		changed = 1;
+		changes |= AGENT_FILE_CHANGE_STAGE;
 	}
 	if (m->kind[0] == 0 && (m->flags & AGENT_FILE_META_F_AUTOSCAN)) {
 		agent_file_infer_kind(path, m->kind, sizeof(m->kind));
 		changed = 1;
+		changes |= AGENT_FILE_CHANGE_KIND;
 	}
 	if (m->status[0] == 0 && (m->flags & AGENT_FILE_META_F_AUTOSCAN)) {
 		agent_file_infer_status(path, m->status, sizeof(m->status));
 		changed = 1;
+		changes |= AGENT_FILE_CHANGE_STATUS;
 	}
 	if (m->summary[0] == 0 && (m->flags & AGENT_FILE_META_F_AUTOSCAN)) {
 		safestrcpy(m->summary, "auto scanned root file",
@@ -5118,7 +5279,7 @@ static int agent_file_scan_bind_inode(struct inode *ip, char *path,
 		}
 	}
 	agent_file_scan_seen[slot] = 1;
-	return changed || added;
+	return changes;
 }
 
 static uint64 agent_file_scan_rest_deadline(uint64 started_tick, uint64 now)
@@ -5206,7 +5367,7 @@ void agent_background_maintain(void)
 	uint64 now;
 	uint64 off;
 	int steps = 0;
-	int changed = 0;
+	uint changes = 0;
 	int scan_failed = 0;
 	int enabled;
 	struct vfs_cred kernel_cred;
@@ -5267,12 +5428,12 @@ void agent_background_maintain(void)
 		if (ip == 0)
 			continue;
 		ivalid(ip);
-		changed += agent_file_scan_bind_inode(ip, name, 1);
+		changes |= agent_file_scan_bind_inode(ip, name, 1);
 		iput(ip);
 	}
 	agent_file_scan_offset = off;
-	if (changed)
-		agent_file_rebuild_indexes();
+	if (changes)
+		agent_file_maintain(changes);
 	if (scan_failed) {
 		agent_file_scan_pause(1);
 		iput(root);
@@ -5293,11 +5454,11 @@ void agent_background_maintain(void)
 				agent_file_scan_removed++;
 				if (removed_persistent)
 					agent_file_writeback_mark(removed_scope);
-				changed++;
+				changes |= AGENT_FILE_CHANGE_ALL;
 			}
 		}
-		if (changed)
-			agent_file_rebuild_indexes();
+		if (changes)
+			agent_file_maintain(changes);
 		agent_file_scan_pause(0);
 	}
 	iput(root);
@@ -5402,7 +5563,7 @@ void agent_fs_note_create(struct inode *ip, char *path)
 		reconcile = 1;
 		goto out_txn;
 	}
-	agent_file_rebuild_indexes();
+	agent_file_maintain(AGENT_FILE_CHANGE_ALL);
 	agent_file_writeback_mark(scope_id);
 out_txn:
 	if (reconcile)
@@ -5550,7 +5711,7 @@ void agent_fs_note_delete(struct inode *ip)
 	ip->agent_meta_flags = 0;
 	ip->agent_meta_version = 0;
 	iupdate(ip);
-	agent_file_rebuild_indexes();
+	agent_file_maintain(AGENT_FILE_CHANGE_ALL);
 	if (persistent)
 		agent_file_writeback_mark(scope_id);
 out_txn:
@@ -5662,31 +5823,81 @@ static void agent_file_reset_indexes(void)
 	}
 }
 
-static void agent_file_rebuild_indexes(void)
+static void agent_file_rebuild_indexes(uint changes)
 {
 	uint64 b;
 
-	agent_file_reset_indexes();
+	if (changes & (AGENT_FILE_CHANGE_STATUS |
+		       AGENT_FILE_CHANGE_MEMBERSHIP)) {
+		for (int i = 0; i < AGENT_FILE_INDEX_BUCKETS; i++)
+			agent_file_status_head[i] = -1;
+		for (int i = 0; i < AGENT_FILE_META_MAX; i++)
+			agent_file_status_next[i] = -1;
+	}
+	if (changes & (AGENT_FILE_CHANGE_STAGE |
+		       AGENT_FILE_CHANGE_MEMBERSHIP)) {
+		for (int i = 0; i < AGENT_FILE_INDEX_BUCKETS; i++)
+			agent_file_stage_head[i] = -1;
+		for (int i = 0; i < AGENT_FILE_META_MAX; i++)
+			agent_file_stage_next[i] = -1;
+	}
+	if (changes & (AGENT_FILE_CHANGE_KIND |
+		       AGENT_FILE_CHANGE_MEMBERSHIP)) {
+		for (int i = 0; i < AGENT_FILE_INDEX_BUCKETS; i++)
+			agent_file_kind_head[i] = -1;
+		for (int i = 0; i < AGENT_FILE_META_MAX; i++)
+			agent_file_kind_next[i] = -1;
+	}
 	for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
-		if (!agent_files[i].used)
+		if (!agent_files[i].used) {
+			agent_meta_txn_work_charge(1);
 			continue;
-		if (agent_files[i].status[0]) {
+		}
+		if ((changes & (AGENT_FILE_CHANGE_STATUS |
+				AGENT_FILE_CHANGE_MEMBERSHIP)) &&
+		    agent_files[i].status[0]) {
 			b = agent_bucket(agent_files[i].status);
 			agent_file_status_next[i] = agent_file_status_head[b];
 			agent_file_status_head[b] = i;
 		}
-		if (agent_files[i].stage[0]) {
+		if ((changes & (AGENT_FILE_CHANGE_STAGE |
+				AGENT_FILE_CHANGE_MEMBERSHIP)) &&
+		    agent_files[i].stage[0]) {
 			b = agent_bucket(agent_files[i].stage);
 			agent_file_stage_next[i] = agent_file_stage_head[b];
 			agent_file_stage_head[b] = i;
 		}
-		if (agent_files[i].kind[0]) {
+		if ((changes & (AGENT_FILE_CHANGE_KIND |
+				AGENT_FILE_CHANGE_MEMBERSHIP)) &&
+		    agent_files[i].kind[0]) {
 			b = agent_bucket(agent_files[i].kind);
 			agent_file_kind_next[i] = agent_file_kind_head[b];
 			agent_file_kind_head[b] = i;
 		}
+		agent_meta_txn_work_charge(1);
 	}
-	agent_dependency_rebuild_records();
+}
+
+/*
+ * Metadata mutations declare the fields they changed. Secondary indexes are
+ * rebuilt only for affected fields. Legacy dependency masks stay canonical in
+ * the file records and are interpreted by consumers, so topology changes only
+ * advance a generation and never materialize a global derived graph.
+ */
+static void agent_file_maintain(uint changes)
+{
+	uint index_changes = changes &
+		(AGENT_FILE_CHANGE_STATUS | AGENT_FILE_CHANGE_STAGE |
+		 AGENT_FILE_CHANGE_KIND | AGENT_FILE_CHANGE_MEMBERSHIP);
+
+	if (index_changes)
+		agent_file_rebuild_indexes(index_changes);
+	if ((changes & (AGENT_FILE_CHANGE_STAGE |
+			AGENT_FILE_CHANGE_SCOPE_KEYS |
+			AGENT_FILE_CHANGE_DEPENDENCY |
+			AGENT_FILE_CHANGE_MEMBERSHIP)) == 0)
+		return;
+	agent_dependency_generation++;
 }
 
 static int agent_file_install_empty_store(void)
@@ -5694,7 +5905,7 @@ static int agent_file_install_empty_store(void)
 	memset(agent_files, 0, sizeof(agent_files));
 	memset(agent_file_scopes, 0, sizeof(agent_file_scopes));
 	agent_file_loaded = 1;
-	agent_file_rebuild_indexes();
+	agent_file_maintain(AGENT_FILE_CHANGE_ALL);
 	agent_meta_store_recovery_required = 1;
 	agent_file_writeback_mark(VFS_SCOPE_SYSTEM);
 	agent_file_writeback_expedite(VFS_SCOPE_SYSTEM);
@@ -5713,6 +5924,7 @@ int agent_scope_reclaim(uint scope_id, int preserve_files)
 	int persist_status;
 	int result;
 	int changed;
+	int dependency_changed = 0;
 	int metadata_available;
 
 	if (!agent_scope_valid(scope_id))
@@ -5737,9 +5949,13 @@ int agent_scope_reclaim(uint scope_id, int preserve_files)
 		}
 	for (int i = 0; i < AGENT_DEPENDENCY_MAX; i++)
 		if (agent_dependencies[i].used &&
-		    agent_dependencies[i].scope_id == scope_id)
+		    agent_dependencies[i].scope_id == scope_id) {
 			memset(&agent_dependencies[i], 0,
 			       sizeof(agent_dependencies[i]));
+			dependency_changed = 1;
+		}
+	if (dependency_changed)
+		agent_dependency_generation++;
 	agent_action_history_clear_scope(scope_id);
 	for (int i = 0; i < AGENT_FILE_QUERY_CACHE_MAX; i++)
 		if (agent_file_query_cache[i].valid &&
@@ -5789,7 +6005,9 @@ int agent_scope_reclaim(uint scope_id, int preserve_files)
 			       sizeof(agent_file_versions[i]));
 	agent_edit_unlock(enabled);
 	if (metadata_available)
-		agent_file_rebuild_indexes();
+		agent_file_maintain(AGENT_FILE_CHANGE_STATUS |
+				    AGENT_FILE_CHANGE_STAGE |
+				    AGENT_FILE_CHANGE_KIND);
 	files_status = preserve_files ? 0 : fs_reclaim_scope_files(scope_id);
 	if (changed) {
 		agent_file_writeback_mark(scope_id);
@@ -5877,7 +6095,8 @@ static int agent_file_query_key_equal(struct agent_file_query *a,
 
 static int agent_file_query_cache_lookup(uint scope_id,
 					 struct agent_file_query *key,
-					 struct agent_file_query_result *r)
+					 struct agent_file_query_result *r,
+					 int *hit_slots)
 {
 	struct agent_file_query_cache_entry *e;
 
@@ -5893,6 +6112,7 @@ static int agent_file_query_cache_lookup(uint scope_id,
 		if (!agent_file_query_key_equal(&e->key, key))
 			continue;
 		memmove(r, &e->result, sizeof(*r));
+		memmove(hit_slots, e->hit_slots, sizeof(e->hit_slots));
 		r->plan_reason |= AGENT_FILE_QUERY_REASON_CACHE_HIT;
 		r->query_ticks = 0;
 		return 1;
@@ -5902,7 +6122,8 @@ static int agent_file_query_cache_lookup(uint scope_id,
 
 static void agent_file_query_cache_store(uint scope_id,
 					 struct agent_file_query *key,
-					 struct agent_file_query_result *r)
+					 struct agent_file_query_result *r,
+					 int *hit_slots)
 {
 	struct agent_file_query_cache_entry *e;
 
@@ -5919,6 +6140,7 @@ static void agent_file_query_cache_store(uint scope_id,
 	e->fs_generation = agent_file_scope_generation(scope_id);
 	memmove(&e->key, key, sizeof(e->key));
 	memmove(&e->result, r, sizeof(e->result));
+	memmove(e->hit_slots, hit_slots, sizeof(e->hit_slots));
 }
 
 static void agent_file_make_hit(struct agent_file_hit *hit,
@@ -5953,7 +6175,8 @@ static void agent_file_make_hit(struct agent_file_hit *hit,
 
 static int agent_file_query_internal(uint scope_id,
 				     struct agent_file_query *q,
-				     struct agent_file_query_result *r)
+				     struct agent_file_query_result *r,
+				     int *hit_slots)
 {
 	int cursor = -1;
 	int *next = 0;
@@ -5966,6 +6189,8 @@ static int agent_file_query_internal(uint scope_id,
 	int result;
 
 	memset(r, 0, sizeof(*r));
+	for (int i = 0; i < AGENT_FILE_QUERY_MAX_HITS; i++)
+		hit_slots[i] = -1;
 	if (!agent_meta_txn_lock(1))
 		return AGENT_STATUS_NO_SPACE;
 	if (!agent_scope_valid(scope_id)) {
@@ -5984,7 +6209,7 @@ static int agent_file_query_internal(uint scope_id,
 	memmove(&key, q, sizeof(key));
 	key.max_hits = max_hits;
 	if (agent_file_query_cacheable(&key) &&
-	    agent_file_query_cache_lookup(scope_id, &key, r)) {
+	    agent_file_query_cache_lookup(scope_id, &key, r, hit_slots)) {
 		result = r->returned;
 		goto out_txn;
 	}
@@ -6022,22 +6247,26 @@ static int agent_file_query_internal(uint scope_id,
 	if (use_index) {
 		r->index_bucket = bucket;
 		for (int i = cursor; i >= 0; i = next[i]) {
+			agent_meta_txn_work_charge(1);
 			if (!agent_object_scope_visible(scope_id,
 						agent_file_scopes[i]))
 				continue;
 			r->scanned_records++;
 			if (agent_file_matches(scope_id, q, &agent_files[i])) {
 				r->total_hits++;
-				if (r->returned < max_hits)
+				if (r->returned < max_hits) {
+					hit_slots[r->returned] = i;
 					agent_file_make_hit(
 						&r->hits[r->returned++],
 						&agent_files[i]);
-				else
+				} else {
 					r->truncated = 1;
+				}
 			}
 		}
 	} else {
 		for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
+			agent_meta_txn_work_charge(1);
 			if (!agent_files[i].used ||
 			    !agent_object_scope_visible(
 				    scope_id, agent_file_scopes[i]))
@@ -6045,12 +6274,14 @@ static int agent_file_query_internal(uint scope_id,
 			r->scanned_records++;
 			if (agent_file_matches(scope_id, q, &agent_files[i])) {
 				r->total_hits++;
-				if (r->returned < max_hits)
+				if (r->returned < max_hits) {
+					hit_slots[r->returned] = i;
 					agent_file_make_hit(
 						&r->hits[r->returned++],
 						&agent_files[i]);
-				else
+				} else {
 					r->truncated = 1;
+				}
 			}
 		}
 	}
@@ -6060,7 +6291,7 @@ static int agent_file_query_internal(uint scope_id,
 	r->plan_reason = reason;
 	r->fs_generation = agent_file_scope_generation(scope_id);
 	if (agent_file_query_cacheable(&key))
-		agent_file_query_cache_store(scope_id, &key, r);
+		agent_file_query_cache_store(scope_id, &key, r, hit_slots);
 	result = r->returned;
 out_txn:
 	agent_meta_txn_unlock();
@@ -6082,61 +6313,6 @@ static uint64 agent_label_bit(char *label)
 	return 1ULL << bit;
 }
 
-static int agent_dependency_same_scope(struct agent_file_meta *source,
-				       struct agent_file_meta *target)
-{
-	if (source == 0 || target == 0)
-		return 0;
-	if (!agent_scope_valid(agent_file_scope(source)) ||
-	    agent_file_scope(source) != agent_file_scope(target))
-		return 0;
-	if (source->project[0] && target->project[0] &&
-	    strncmp(source->project, target->project,
-		    sizeof(source->project)) != 0)
-		return 0;
-	if (source->run_id[0] && target->run_id[0] &&
-	    strncmp(source->run_id, target->run_id,
-		    sizeof(source->run_id)) != 0)
-		return 0;
-	return 1;
-}
-
-static void agent_dependency_record_set(struct agent_dependency_entry *dep,
-					struct agent_file_meta *source,
-					struct agent_file_meta *target)
-{
-	memset(dep, 0, sizeof(*dep));
-	dep->used = 1;
-	dep->scope_id = agent_file_scope(source);
-	dep->flags = 0;
-	safestrcpy(dep->namespace, source->project, sizeof(dep->namespace));
-	safestrcpy(dep->run_id, source->run_id, sizeof(dep->run_id));
-	safestrcpy(dep->source, source->stage, sizeof(dep->source));
-	safestrcpy(dep->target, target->stage, sizeof(dep->target));
-	safestrcpy(dep->relation, "depends_on", sizeof(dep->relation));
-	safestrcpy(dep->summary, target->summary, sizeof(dep->summary));
-}
-
-static int agent_dependency_record_exists(struct agent_file_meta *source,
-					  struct agent_file_meta *target)
-{
-	for (int i = 0; i < AGENT_DEPENDENCY_MAX; i++) {
-		if (!agent_dependencies[i].used)
-			continue;
-		if (agent_dependencies[i].scope_id == agent_file_scope(source) &&
-		    strncmp(agent_dependencies[i].namespace, source->project,
-			    sizeof(source->project)) == 0 &&
-		    strncmp(agent_dependencies[i].run_id, source->run_id,
-			    sizeof(source->run_id)) == 0 &&
-		    strncmp(agent_dependencies[i].source, source->stage,
-			    sizeof(source->stage)) == 0 &&
-		    strncmp(agent_dependencies[i].target, target->stage,
-			    sizeof(target->stage)) == 0)
-			return 1;
-	}
-	return 0;
-}
-
 static int agent_key_is(char *key, char *want)
 {
 	return strncmp(key, want, AGENT_FILE_FIELD_SIZE) == 0;
@@ -6146,10 +6322,12 @@ static int agent_dependency_scope_count(uint scope_id)
 {
 	int count = 0;
 
-	for (int i = 0; i < AGENT_DEPENDENCY_MAX; i++)
+	for (int i = 0; i < AGENT_DEPENDENCY_MAX; i++) {
 		if (agent_dependencies[i].used &&
 		    agent_dependencies[i].scope_id == scope_id)
 			count++;
+		agent_meta_txn_work_charge(1);
+	}
 	return count;
 }
 
@@ -6220,6 +6398,7 @@ static int agent_dependency_update_from_payload(uint scope_id, char *payload,
 		if (!agent_dependencies[d].used) {
 			if (free_slot < 0)
 				free_slot = d;
+			agent_meta_txn_work_charge(1);
 			continue;
 		}
 		if (agent_dependencies[d].scope_id == scope_id &&
@@ -6232,8 +6411,10 @@ static int agent_dependency_update_from_payload(uint scope_id, char *payload,
 		    strncmp(agent_dependencies[d].target, dep.target,
 			    sizeof(dep.target)) == 0) {
 			slot = d;
+			agent_meta_txn_work_charge(1);
 			break;
 		}
+		agent_meta_txn_work_charge(1);
 	}
 	if (slot < 0)
 		slot = free_slot;
@@ -6253,61 +6434,6 @@ static int agent_dependency_update_from_payload(uint scope_id, char *payload,
 	return AGENT_STATUS_OK;
 }
 
-static void agent_dependency_rebuild_records(void)
-{
-	uint64 bit;
-	int out = 0;
-
-	for (int i = 0; i < AGENT_DEPENDENCY_MAX; i++) {
-		struct agent_dependency_entry keep;
-
-		if (agent_dependencies[i].used &&
-		    agent_scope_valid(agent_dependencies[i].scope_id) &&
-		    (agent_dependencies[i].flags & AGENT_DEPENDENCY_F_USER)) {
-			memmove(&keep, &agent_dependencies[i], sizeof(keep));
-			if (i != out) {
-				memmove(&agent_dependencies[out], &keep,
-					sizeof(keep));
-				memset(&agent_dependencies[i], 0,
-				       sizeof(agent_dependencies[i]));
-			}
-			out++;
-		} else {
-			memset(&agent_dependencies[i], 0,
-			       sizeof(agent_dependencies[i]));
-		}
-	}
-	for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
-		if (!agent_files[i].used || agent_files[i].stage[0] == 0 ||
-		    agent_files[i].dependency_mask == 0)
-			continue;
-		for (int j = 0; j < AGENT_FILE_META_MAX; j++) {
-			if (i == j || !agent_files[j].used ||
-			    agent_files[j].stage[0] == 0)
-				continue;
-			if (!agent_dependency_same_scope(&agent_files[i],
-							 &agent_files[j]))
-				continue;
-			bit = agent_label_bit(agent_files[j].stage);
-			if ((agent_files[i].dependency_mask & bit) == 0)
-				continue;
-			if (agent_dependency_record_exists(&agent_files[i],
-							   &agent_files[j]))
-				continue;
-			if (agent_dependency_scope_count(
-				    agent_file_scopes[i]) >=
-			    AGENT_DEPENDENCY_SCOPE_LIMIT)
-				break;
-			if (out >= AGENT_DEPENDENCY_MAX)
-				break;
-			agent_dependency_record_set(&agent_dependencies[out++],
-						    &agent_files[i],
-						    &agent_files[j]);
-		}
-	}
-	agent_dependency_generation++;
-}
-
 static int agent_mask_count(uint64 mask)
 {
 	int count = 0;
@@ -6321,66 +6447,36 @@ static int agent_mask_count(uint64 mask)
 
 static int agent_file_find_fid(uint scope_id, int fid)
 {
-	for (int i = 0; i < AGENT_FILE_META_MAX; i++)
+	for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
+		agent_meta_txn_work_charge(1);
 		if (agent_files[i].used &&
 		    agent_file_scopes[i] == scope_id &&
 		    agent_files[i].fid == fid)
 			return i;
-	return -1;
-}
-
-static int agent_file_find_hit(uint scope_id, struct agent_file_hit *hit)
-{
-	if (hit == 0)
-		return -1;
-	for (int i = 0; i < AGENT_FILE_META_MAX; i++)
-		if (agent_files[i].used &&
-		    agent_object_scope_visible(scope_id,
-					       agent_file_scopes[i]) &&
-		    agent_files[i].dev == hit->dev &&
-		    agent_files[i].inum == hit->inum &&
-		    agent_files[i].incarnation == hit->incarnation)
-			return i;
-	return -1;
-}
-
-static int agent_file_prefetch_count_stage(struct agent_file_meta *source,
-					   char *stage)
-{
-	int bucket;
-	int count = 0;
-
-	if (!stage[0])
-		return 0;
-	bucket = agent_bucket(stage);
-	for (int i = agent_file_stage_head[bucket]; i >= 0;
-	     i = agent_file_stage_next[i]) {
-		if (!agent_files[i].used ||
-		    agent_file_scope(source) != agent_file_scopes[i])
-			continue;
-		if (strncmp(agent_files[i].stage, stage,
-			    sizeof(agent_files[i].stage)) != 0)
-			continue;
-		if (source->project[0] &&
-		    strncmp(agent_files[i].project, source->project,
-			    sizeof(agent_files[i].project)) != 0)
-			continue;
-		if (source->workflow[0] &&
-		    strncmp(agent_files[i].workflow, source->workflow,
-			    sizeof(agent_files[i].workflow)) != 0)
-			continue;
-		if (source->run_id[0] &&
-		    strncmp(agent_files[i].run_id, source->run_id,
-			    sizeof(agent_files[i].run_id)) != 0)
-			continue;
-		count++;
 	}
-	return count;
+	return -1;
 }
 
-static void agent_file_prefetch_bus_store(struct agent_file_prefetch_hint *hint,
-					  uint scope_id,
-					  uint64 span_owner)
+static int agent_file_hit_slot_valid(uint scope_id, int slot,
+				     struct agent_file_hit *hit)
+{
+	if (hit == 0 || slot < 0 || slot >= AGENT_FILE_META_MAX)
+		return 0;
+	return agent_files[slot].used &&
+	       agent_object_scope_visible(scope_id, agent_file_scopes[slot]) &&
+	       agent_files[slot].dev == hit->dev &&
+	       agent_files[slot].inum == hit->inum &&
+	       agent_files[slot].incarnation == hit->incarnation &&
+	       agent_files[slot].fid == hit->fid;
+}
+
+/*
+ * The shared span bus has a fixed-size search domain. Callers prepay that
+ * bound before entering any endpoint commit, so this helper never schedules.
+ */
+static void
+agent_file_prefetch_bus_store_commit(struct agent_file_prefetch_hint *hint,
+				     uint scope_id, uint64 span_owner)
 {
 	struct agent_file_prefetch_hint copy;
 	int slot;
@@ -6455,6 +6551,18 @@ fill:
 	agent_span_prefetch_owners[slot] = span_owner;
 }
 
+static void agent_file_prefetch_bus_store(struct agent_file_prefetch_hint *hint,
+					  uint scope_id,
+					  uint64 span_owner)
+{
+	int enabled;
+
+	agent_meta_txn_work_charge(2U * AGENT_FILE_PREFETCH_SPAN_MAX);
+	enabled = intr_save();
+	agent_file_prefetch_bus_store_commit(hint, scope_id, span_owner);
+	intr_restore(enabled);
+}
+
 static int agent_span_prefetch_scope_next(
 	uint scope_id, uint64 after_sequence,
 	struct agent_file_prefetch_hint *out, uint64 *span_owner)
@@ -6463,6 +6571,7 @@ static int agent_span_prefetch_scope_next(
 	int slot = -1;
 
 	for (int i = 0; i < AGENT_FILE_PREFETCH_SPAN_MAX; i++) {
+		agent_meta_txn_work_charge(1);
 		if (agent_span_prefetch_scopes[i] != scope_id ||
 		    agent_span_prefetch_hints[i].sequence <= after_sequence ||
 		    agent_span_prefetch_hints[i].sequence >= best)
@@ -6479,18 +6588,52 @@ static int agent_span_prefetch_scope_next(
 	return 1;
 }
 
+static int agent_file_prefetch_count_stage(struct agent_file_meta *source,
+					   char *stage)
+{
+	int bucket;
+	int count = 0;
+
+	if (!stage[0])
+		return 0;
+	bucket = agent_bucket(stage);
+	for (int i = agent_file_stage_head[bucket]; i >= 0;
+	     i = agent_file_stage_next[i]) {
+		agent_meta_txn_work_charge(1);
+		if (!agent_files[i].used ||
+		    agent_file_scope(source) != agent_file_scopes[i])
+			continue;
+		if (strncmp(agent_files[i].stage, stage,
+			    sizeof(agent_files[i].stage)) != 0)
+			continue;
+		if (source->project[0] &&
+		    strncmp(agent_files[i].project, source->project,
+			    sizeof(agent_files[i].project)) != 0)
+			continue;
+		if (source->workflow[0] &&
+		    strncmp(agent_files[i].workflow, source->workflow,
+			    sizeof(agent_files[i].workflow)) != 0)
+			continue;
+		if (source->run_id[0] &&
+		    strncmp(agent_files[i].run_id, source->run_id,
+			    sizeof(agent_files[i].run_id)) != 0)
+			continue;
+		count++;
+	}
+	return count;
+}
+
 static void agent_file_prefetch_store(struct proc *p,
 				      struct agent_file_meta *source,
 				      struct agent_file_meta *target,
 				      uint64 source_sequence, uint64 reason,
 				      int source_pid, uint64 span_id,
-				      uint64 span_owner)
+				      uint64 span_owner, int candidates)
 {
 	struct agent_file_prefetch_hint *hint;
 	struct agent_timeline_record timeline;
 	int slot;
 	int visible;
-	int candidates;
 
 	if (!p || !p->is_agent || !source || !source->used || !target ||
 	    !target->used || agent_proc_scope(p) != agent_file_scope(source) ||
@@ -6502,12 +6645,12 @@ static void agent_file_prefetch_store(struct proc *p,
 	}
 	if (span_id == 0 || span_owner == 0)
 		return;
-	candidates = agent_file_prefetch_count_stage(source, target->stage);
 	for (int i = 0; i < p->agent_prefetch_count; i++) {
 		slot = (p->agent_prefetch_head +
 			AGENT_FILE_PREFETCH_MAX_HINTS -
 			p->agent_prefetch_count + i) %
 		       AGENT_FILE_PREFETCH_MAX_HINTS;
+		agent_meta_txn_work_charge(1);
 		if (p->agent_prefetch_hints[slot].fid == target->fid)
 			goto fill;
 	}
@@ -6564,36 +6707,84 @@ fill:
 	}
 	agent_timeline_from_prefetch(p, hint, &timeline);
 	agent_observe_record(agent_proc_scope(p), &timeline, span_owner);
+	/*
+	 * Audit allocation and observe fan-out intentionally remain atomic: they
+	 * are shared outside the metadata gate. Charge their fixed upper bound
+	 * only after publication, so the next hint cannot amplify that work
+	 * without crossing a scheduler checkpoint.
+	 */
+	agent_meta_txn_work_charge(
+		(reason & AGENT_FILE_PREFETCH_REASON_HANDOFF) ?
+			2U * NPROC :
+			2U * AGENT_AUDIT_MAX_RECORDS + 5U * NPROC);
 }
 
 static void agent_file_prefetch_update(struct proc *p,
 				       struct agent_file_query *q,
 				       struct agent_file_query_result *r,
+				       int *hit_slots,
 				       uint64 source_sequence)
 {
+	uint64 fallback_targets[AGENT_FILE_QUERY_MAX_HITS]
+			       [(AGENT_FILE_META_MAX + 63) / 64];
+	uint64 selected_targets[(AGENT_FILE_META_MAX + 63) / 64];
+	uint64 explicit_target_masks[AGENT_FILE_QUERY_MAX_HITS];
+	int dependency_slots[AGENT_FILE_QUERY_MAX_HITS]
+			    [AGENT_DEPENDENCY_SCOPE_LIMIT];
+	int dependency_counts[AGENT_FILE_QUERY_MAX_HITS];
+	int source_slots[AGENT_FILE_QUERY_MAX_HITS];
+	int selected_source_slots[AGENT_FILE_PREFETCH_MAX_HINTS];
+	int selected_target_slots[AGENT_FILE_PREFETCH_MAX_HINTS];
 	struct agent_file_meta *source;
 	struct agent_file_meta *target;
-	uint64 deps;
 	uint64 target_bit;
 	uint64 reason;
-	int source_slot;
-	int emitted;
+	uint scope_id;
+	int source_count;
+	int selected_count = 0;
+	int explicit_found[AGENT_FILE_QUERY_MAX_HITS];
 
-	if (!p || !p->is_agent || !r || r->returned <= 0)
+	if (!p || !p->is_agent || !q || !r || !hit_slots ||
+	    r->returned <= 0)
 		return;
 	if (!agent_meta_txn_lock(1))
 		return;
-	for (int h = 0; h < r->returned; h++) {
-		source_slot = agent_file_find_hit(agent_proc_scope(p),
-					       &r->hits[h]);
-		if (source_slot < 0)
-			continue;
-		source = &agent_files[source_slot];
-		emitted = 0;
-		for (int d = 0; d < AGENT_DEPENDENCY_MAX; d++) {
-			if (!agent_dependencies[d].used ||
-			    agent_dependencies[d].scope_id != agent_proc_scope(p))
+	scope_id = agent_proc_scope(p);
+	source_count = r->returned;
+	if (source_count > AGENT_FILE_QUERY_MAX_HITS)
+		source_count = AGENT_FILE_QUERY_MAX_HITS;
+	memset(fallback_targets, 0, sizeof(fallback_targets));
+	memset(selected_targets, 0, sizeof(selected_targets));
+	memset(explicit_target_masks, 0, sizeof(explicit_target_masks));
+	memset(dependency_slots, 0, sizeof(dependency_slots));
+	memset(dependency_counts, 0, sizeof(dependency_counts));
+	memset(source_slots, -1, sizeof(source_slots));
+	memset(explicit_found, 0, sizeof(explicit_found));
+
+	/*
+	 * Query execution records the exact slots behind each returned hit,
+	 * including cache hits. Validate those O(1) identities here instead of
+	 * rescanning the global file table once per hit.
+	 */
+	for (int h = 0; h < source_count; h++)
+		if (agent_file_hit_slot_valid(scope_id, hit_slots[h],
+					     &r->hits[h]) &&
+		    agent_file_scopes[hit_slots[h]] == scope_id)
+			source_slots[h] = hit_slots[h];
+
+	/*
+	 * Build a fixed, scope-quota-bounded selector set once. The hash mask is
+	 * only a prefilter; exact stage/namespace/run comparisons below preserve
+	 * dependency semantics even when label hashes collide.
+	 */
+	for (int d = 0; d < AGENT_DEPENDENCY_MAX; d++) {
+		if (!agent_dependencies[d].used ||
+		    agent_dependencies[d].scope_id != scope_id)
+			goto next_dependency;
+		for (int h = 0; h < source_count; h++) {
+			if (source_slots[h] < 0)
 				continue;
+			source = &agent_files[source_slots[h]];
 			if (strncmp(agent_dependencies[d].source, source->stage,
 				    sizeof(agent_dependencies[d].source)) != 0)
 				continue;
@@ -6607,140 +6798,313 @@ static void agent_file_prefetch_update(struct proc *p,
 				    source->run_id,
 				    sizeof(agent_dependencies[d].run_id)) != 0)
 				continue;
-			for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
-				if (!agent_files[i].used || i == source_slot ||
-				    agent_file_scopes[i] != agent_proc_scope(p))
+			if (dependency_counts[h] >=
+			    AGENT_DEPENDENCY_SCOPE_LIMIT)
+				continue;
+			dependency_slots[h][dependency_counts[h]++] = d;
+			explicit_target_masks[h] |=
+				agent_label_bit(agent_dependencies[d].target);
+		}
+next_dependency:
+		agent_meta_txn_work_charge(1);
+	}
+
+	/*
+	 * Scan the file table exactly once. Explicit edges are selected
+	 * immediately and fallback candidates are kept in per-source bitmaps
+	 * until we know that no explicit target exists. A target slot can be
+	 * published only once and side effects are capped by the hint ring.
+	 */
+	for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
+		if (!agent_files[i].used || agent_file_scopes[i] != scope_id ||
+		    agent_files[i].stage[0] == 0)
+			goto next_target;
+		target = &agent_files[i];
+		target_bit = agent_label_bit(target->stage);
+		for (int h = 0; h < source_count; h++) {
+			int explicit_match = 0;
+			int source_slot = source_slots[h];
+
+			if (source_slot < 0 || source_slot == i)
+				goto next_source;
+			source = &agent_files[source_slot];
+			if ((explicit_target_masks[h] & target_bit) != 0)
+				for (int k = 0; k < dependency_counts[h]; k++) {
+					struct agent_dependency_entry *dep =
+						&agent_dependencies[
+							dependency_slots[h][k]];
+
+					agent_meta_txn_work_charge(1);
+					if (strncmp(target->stage, dep->target,
+						    sizeof(target->stage)) != 0)
+						continue;
+					if (dep->namespace[0] &&
+					    strncmp(target->project,
+						    dep->namespace,
+						    sizeof(target->project)) != 0)
+						continue;
+					if (dep->run_id[0] &&
+					    strncmp(target->run_id, dep->run_id,
+						    sizeof(target->run_id)) != 0)
+						continue;
+					if (source->workflow[0] &&
+					    strncmp(target->workflow,
+						    source->workflow,
+						    sizeof(target->workflow)) != 0)
+						continue;
+					explicit_match = 1;
+					break;
+				}
+			if (explicit_match) {
+				explicit_found[h] = 1;
+				if (selected_count <
+					    AGENT_FILE_PREFETCH_MAX_HINTS &&
+				    (selected_targets[i / 64] &
+				     (1ULL << (i % 64))) == 0) {
+					selected_targets[i / 64] |=
+						1ULL << (i % 64);
+					selected_source_slots[selected_count] =
+						source_slot;
+					selected_target_slots[selected_count++] = i;
+				}
+			}
+			if (target_bit != 0 &&
+			    (source->dependency_mask & target_bit) != 0 &&
+			    (!source->project[0] ||
+			     strncmp(source->project, target->project,
+				     sizeof(source->project)) == 0) &&
+			    (!source->workflow[0] ||
+			     strncmp(source->workflow, target->workflow,
+				     sizeof(source->workflow)) == 0) &&
+			    (!source->run_id[0] ||
+			     strncmp(source->run_id, target->run_id,
+				     sizeof(source->run_id)) == 0))
+				fallback_targets[h][i / 64] |=
+					1ULL << (i % 64);
+next_source:
+			agent_meta_txn_work_charge(1);
+		}
+next_target:
+		agent_meta_txn_work_charge(1);
+	}
+
+	for (int h = 0; h < source_count &&
+				selected_count < AGENT_FILE_PREFETCH_MAX_HINTS; h++) {
+		if (source_slots[h] < 0 || explicit_found[h])
+			continue;
+		for (int word = 0;
+		     word < (AGENT_FILE_META_MAX + 63) / 64 &&
+			     selected_count < AGENT_FILE_PREFETCH_MAX_HINTS;
+		     word++) {
+			uint64 bits = fallback_targets[h][word];
+
+			agent_meta_txn_work_charge(1);
+			for (int bit = 0; bit < 64 &&
+				     selected_count <
+					     AGENT_FILE_PREFETCH_MAX_HINTS;
+			     bit++) {
+				int slot = word * 64 + bit;
+
+				if (slot >= AGENT_FILE_META_MAX ||
+				    (bits & (1ULL << bit)) == 0 ||
+				    (selected_targets[word] &
+				     (1ULL << bit)) != 0)
 					continue;
-				target = &agent_files[i];
-				if (strncmp(target->stage,
-					    agent_dependencies[d].target,
-					    sizeof(target->stage)) != 0)
-					continue;
-				if (agent_dependencies[d].namespace[0] &&
-				    strncmp(target->project,
-					    agent_dependencies[d].namespace,
-					    sizeof(target->project)) != 0)
-					continue;
-				if (agent_dependencies[d].run_id[0] &&
-				    strncmp(target->run_id,
-					    agent_dependencies[d].run_id,
-					    sizeof(target->run_id)) != 0)
-					continue;
-				if (source->workflow[0] &&
-				    strncmp(target->workflow, source->workflow,
-					    sizeof(target->workflow)) != 0)
-					continue;
-				reason = AGENT_FILE_PREFETCH_REASON_DEPENDENCY |
-					 AGENT_FILE_PREFETCH_REASON_SAME_RUN;
-				if ((q->flags & AGENT_FILE_QUERY_USE_INDEX) ||
-				    r->used_index)
-					reason |=
-						AGENT_FILE_PREFETCH_REASON_STAGE_INDEX;
-				agent_file_prefetch_store(
-					p, source, target, source_sequence,
-					reason, p->pid, p->agent_current_span_id,
-					p->agent_current_span_owner);
-				emitted = 1;
+				selected_targets[word] |= 1ULL << bit;
+				selected_source_slots[selected_count] =
+					source_slots[h];
+				selected_target_slots[selected_count++] = slot;
 			}
 		}
-		if (emitted)
-			continue;
-		deps = source->dependency_mask;
-		if (deps == 0)
-			continue;
-		for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
-			if (!agent_files[i].used || i == source_slot ||
-			    agent_file_scopes[i] != agent_proc_scope(p))
-				continue;
-			target = &agent_files[i];
-			target_bit = agent_label_bit(target->stage);
-			if (target_bit == 0)
-				continue;
-			if ((deps & target_bit) == 0)
-				continue;
-			if (source->project[0] &&
-			    strncmp(source->project, target->project,
-				    sizeof(source->project)) != 0)
-				continue;
-			if (source->workflow[0] &&
-			    strncmp(source->workflow, target->workflow,
-				    sizeof(source->workflow)) != 0)
-				continue;
-			if (source->run_id[0] &&
-			    strncmp(source->run_id, target->run_id,
-				    sizeof(source->run_id)) != 0)
-				continue;
-			reason = AGENT_FILE_PREFETCH_REASON_DEPENDENCY |
-				 AGENT_FILE_PREFETCH_REASON_SAME_RUN;
-			if ((q->flags & AGENT_FILE_QUERY_USE_INDEX) ||
-			    r->used_index)
-				reason |=
-					AGENT_FILE_PREFETCH_REASON_STAGE_INDEX;
-			agent_file_prefetch_store(p, source, target,
-						 source_sequence, reason,
-						 p->pid,
-						 p->agent_current_span_id,
-						 p->agent_current_span_owner);
-		}
+	}
+
+	reason = AGENT_FILE_PREFETCH_REASON_DEPENDENCY |
+		 AGENT_FILE_PREFETCH_REASON_SAME_RUN;
+	if ((q->flags & AGENT_FILE_QUERY_USE_INDEX) || r->used_index)
+		reason |= AGENT_FILE_PREFETCH_REASON_STAGE_INDEX;
+	for (int i = 0; i < selected_count; i++) {
+		int candidates;
+
+		source = &agent_files[selected_source_slots[i]];
+		target = &agent_files[selected_target_slots[i]];
+		candidates = agent_file_prefetch_count_stage(source,
+						     target->stage);
+		agent_file_prefetch_store(
+			p, source, target, source_sequence, reason, p->pid,
+			p->agent_current_span_id, p->agent_current_span_owner,
+			candidates);
 	}
 	agent_meta_txn_unlock();
 }
 
-static int agent_file_prefetch_handoff(struct proc *target,
-				       struct proc *source)
+static int
+agent_file_prefetch_handoff(struct agent_endpoint_handle *target_handle,
+			    struct agent_endpoint_handle *source_handle)
 {
-	struct agent_file_prefetch_hint hint;
+	struct agent_file_prefetch_hint source_hint;
+	struct agent_file_prefetch_hint published;
+	struct agent_timeline_record timeline;
 	struct agent_file_meta *source_meta;
 	struct agent_file_meta *target_meta;
+	struct proc *source;
+	struct proc *target;
 	uint64 reason;
+	uint64 span_id;
+	uint64 span_owner;
+	int source_pid;
+	int candidates;
 	int visible;
 	int start;
 	int slot;
 	int source_slot;
 	int target_slot;
 	int copied = 0;
+	int enabled;
 
-	if (!target || !source || target == source || !target->is_agent ||
-	    !source->is_agent || agent_proc_scope(target) == VFS_SCOPE_NONE ||
-	    agent_proc_scope(target) != agent_proc_scope(source))
+	if (target_handle == 0 || source_handle == 0 ||
+	    target_handle->slot == source_handle->slot ||
+	    target_handle->scope_id != source_handle->scope_id ||
+	    !agent_scope_valid(source_handle->scope_id))
 		return 0;
 	if (!agent_meta_txn_lock(0))
 		return 0;
+
+	enabled = intr_save();
+	source = agent_endpoint_resolve_locked(source_handle);
+	target = agent_endpoint_resolve_locked(target_handle);
+	if (source == 0 || target == 0) {
+		intr_restore(enabled);
+		goto out;
+	}
 	visible = source->agent_prefetch_count;
 	if (visible > AGENT_FILE_PREFETCH_MAX_HINTS)
 		visible = AGENT_FILE_PREFETCH_MAX_HINTS;
 	start = (source->agent_prefetch_head + AGENT_FILE_PREFETCH_MAX_HINTS -
 		 visible) %
 		AGENT_FILE_PREFETCH_MAX_HINTS;
+	intr_restore(enabled);
+
 	for (int i = 0; i < visible; i++) {
 		slot = (start + i) % AGENT_FILE_PREFETCH_MAX_HINTS;
-		memmove(&hint, &source->agent_prefetch_hints[slot],
-			sizeof(hint));
-		source_slot = agent_file_find_fid(agent_proc_scope(source),
-						 hint.source_fid);
-		target_slot = agent_file_find_fid(agent_proc_scope(source),
-						 hint.fid);
+		/*
+		 * Copy one bounded source record under a short endpoint check.
+		 * No proc pointer survives the following budget checkpoints.
+		 */
+		enabled = intr_save();
+		source = agent_endpoint_resolve_locked(source_handle);
+		if (source == 0) {
+			intr_restore(enabled);
+			break;
+		}
+		memmove(&source_hint, &source->agent_prefetch_hints[slot],
+			sizeof(source_hint));
+		source_pid = source_hint.source_pid ?
+				     source_hint.source_pid : source_handle->pid;
+		if (source_hint.span_id) {
+			span_id = source_hint.span_id;
+			span_owner = source->agent_prefetch_span_owner[slot];
+		} else {
+			span_id = source->agent_current_span_id;
+			span_owner = source->agent_current_span_owner;
+		}
+		intr_restore(enabled);
+
+		agent_meta_txn_work_charge(1);
+		if (span_id == 0 || span_owner == 0)
+			continue;
+		source_slot = agent_file_find_fid(source_handle->scope_id,
+						 source_hint.source_fid);
+		target_slot = agent_file_find_fid(source_handle->scope_id,
+						 source_hint.fid);
 		if (source_slot < 0 || target_slot < 0)
 			continue;
 		source_meta = &agent_files[source_slot];
 		target_meta = &agent_files[target_slot];
-		reason = hint.reason | AGENT_FILE_PREFETCH_REASON_HANDOFF;
-		agent_file_prefetch_store(target, source_meta, target_meta,
-					  hint.source_sequence, reason,
-					  hint.source_pid ? hint.source_pid :
-							    source->pid,
-					  hint.span_id ? hint.span_id :
-							source->agent_current_span_id,
-					  hint.span_id ?
-						  source->agent_prefetch_span_owner[slot] :
-						  source->agent_current_span_owner);
+		if (!source_meta->used || !target_meta->used ||
+		    agent_file_scope(source_meta) != source_handle->scope_id ||
+		    agent_file_scope(target_meta) != source_handle->scope_id)
+			continue;
+
+		reason = source_hint.reason |
+			 AGENT_FILE_PREFETCH_REASON_HANDOFF;
+		candidates = source_hint.candidate_records > 0 ?
+				     source_hint.candidate_records : 1;
+		memset(&published, 0, sizeof(published));
+		published.source_sequence = source_hint.source_sequence;
+		published.span_id = span_id;
+		published.reason = reason;
+		published.fs_generation = agent_file_scope_generation(
+			source_handle->scope_id);
+		published.fid = target_meta->fid;
+		published.source_fid = source_meta->fid;
+		published.source_pid = source_pid;
+		published.target_pid = target_handle->pid;
+		published.plan = AGENT_FILE_QUERY_PLAN_STAGE_INDEX;
+		published.candidate_records = candidates;
+		published.total_hits = candidates;
+		published.score = 1000 + candidates;
+		if (strncmp(target_meta->status, "pending",
+			    AGENT_FILE_FIELD_SIZE) == 0) {
+			published.reason |= AGENT_FILE_PREFETCH_REASON_PENDING;
+			published.score += 100;
+		}
+		if (target_meta->stage[0]) {
+			published.reason |=
+				AGENT_FILE_PREFETCH_REASON_STAGE_INDEX;
+			published.score += 50;
+		}
+		agent_file_make_hit(&published.hit, target_meta);
+
+		/*
+		 * Prepay every fixed-size publication scan. The following
+		 * endpoint revalidation and commit cannot schedule.
+		 */
+		agent_meta_txn_work_charge(
+			2U * AGENT_FILE_PREFETCH_SPAN_MAX +
+			2U * AGENT_AUDIT_MAX_RECORDS + 5U * NPROC);
+		enabled = intr_save();
+		target = agent_endpoint_resolve_locked(target_handle);
+		if (target == 0) {
+			intr_restore(enabled);
+			continue;
+		}
+		for (int j = 0; j < target->agent_prefetch_count; j++) {
+			slot = (target->agent_prefetch_head +
+				AGENT_FILE_PREFETCH_MAX_HINTS -
+				target->agent_prefetch_count + j) %
+			       AGENT_FILE_PREFETCH_MAX_HINTS;
+			if (target->agent_prefetch_hints[slot].fid ==
+			    published.fid)
+				goto fill;
+		}
+		slot = target->agent_prefetch_head %
+		       AGENT_FILE_PREFETCH_MAX_HINTS;
+		target->agent_prefetch_head =
+			(target->agent_prefetch_head + 1) %
+			AGENT_FILE_PREFETCH_MAX_HINTS;
+		if (target->agent_prefetch_count <
+		    AGENT_FILE_PREFETCH_MAX_HINTS)
+			target->agent_prefetch_count++;
+
+fill:
+		published.sequence = ++target->agent_prefetch_sequence;
+		published.tick = agent_ticks();
+		published.score += target->agent_prefetch_count;
+		memmove(&target->agent_prefetch_hints[slot], &published,
+			sizeof(published));
+		target->agent_prefetch_span_owner[slot] = span_owner;
+		agent_file_prefetch_bus_store_commit(
+			&published, target_handle->scope_id, span_owner);
 		agent_audit_prefetch_handoff(
-			source, target, &hint,
-			hint.span_id ? source->agent_prefetch_span_owner[slot] :
-				       source->agent_current_span_owner,
-					     target_meta, reason);
+			source_handle->pid, source_handle->control_id, target,
+			&published, span_owner, target_meta, published.reason);
+		agent_timeline_from_prefetch(target, &published, &timeline);
+		agent_observe_record(target_handle->scope_id, &timeline,
+				     span_owner);
+		intr_restore(enabled);
 		copied++;
 	}
+out:
 	agent_meta_txn_unlock();
 	return copied;
 }
@@ -7000,23 +7364,32 @@ static int agent_dependency_for_label(uint scope_id, char *label,
 
 	for (int i = 0; i < AGENT_DEPENDENCY_MAX; i++) {
 		if (!agent_dependencies[i].used ||
-		    agent_dependencies[i].scope_id != scope_id)
+		    agent_dependencies[i].scope_id != scope_id) {
+			agent_meta_txn_work_charge(1);
 			continue;
+		}
 		if (strncmp(agent_dependencies[i].source, label,
-			    sizeof(agent_dependencies[i].source)) != 0)
+			    sizeof(agent_dependencies[i].source)) != 0) {
+			agent_meta_txn_work_charge(1);
 			continue;
+		}
 		if (namespace && namespace[0] &&
 		    strncmp(agent_dependencies[i].namespace, namespace,
-			    sizeof(agent_dependencies[i].namespace)) != 0)
+			    sizeof(agent_dependencies[i].namespace)) != 0) {
+			agent_meta_txn_work_charge(1);
 			continue;
+		}
 		if (run_id && run_id[0] &&
 		    strncmp(agent_dependencies[i].run_id, run_id,
-			    sizeof(agent_dependencies[i].run_id)) != 0)
+			    sizeof(agent_dependencies[i].run_id)) != 0) {
+			agent_meta_txn_work_charge(1);
 			continue;
+		}
 		if (agent_dependencies[i].target[0]) {
 			found |= agent_label_bit(agent_dependencies[i].source);
 			found |= agent_label_bit(agent_dependencies[i].target);
 		}
+		agent_meta_txn_work_charge(1);
 	}
 	if (found) {
 		*mask = found;
@@ -7024,23 +7397,31 @@ static int agent_dependency_for_label(uint scope_id, char *label,
 	}
 	for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
 		if (!agent_files[i].used || agent_file_scopes[i] != scope_id ||
-		    agent_files[i].dependency_mask == 0)
+		    agent_files[i].dependency_mask == 0) {
+			agent_meta_txn_work_charge(1);
 			continue;
+		}
 		if (namespace && namespace[0] &&
 		    strncmp(agent_files[i].project, namespace,
-			    sizeof(agent_files[i].project)) != 0)
+			    sizeof(agent_files[i].project)) != 0) {
+			agent_meta_txn_work_charge(1);
 			continue;
+		}
 		if (run_id && run_id[0] &&
 		    strncmp(agent_files[i].run_id, run_id,
-			    sizeof(agent_files[i].run_id)) != 0)
+			    sizeof(agent_files[i].run_id)) != 0) {
+			agent_meta_txn_work_charge(1);
 			continue;
+		}
 		if (strncmp(agent_files[i].stage, label,
 			    sizeof(agent_files[i].stage)) == 0 ||
 		    strncmp(agent_files[i].physical_name, label,
 			    sizeof(agent_files[i].physical_name)) == 0 ||
 		    strncmp(agent_files[i].logical_path, label,
 			    sizeof(agent_files[i].logical_path)) == 0)
-			found |= agent_files[i].dependency_mask;
+			found |= agent_label_bit(agent_files[i].stage) |
+				 agent_files[i].dependency_mask;
+		agent_meta_txn_work_charge(1);
 	}
 	if (found) {
 		*mask = found;
@@ -7058,18 +7439,25 @@ static void agent_stage_text(uint scope_id, uint64 mask, char *out, int n)
 	memset(out, 0, n);
 	for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
 		if (!agent_files[i].used || agent_file_scopes[i] != scope_id ||
-		    agent_files[i].stage[0] == 0)
+		    agent_files[i].stage[0] == 0) {
+			agent_meta_txn_work_charge(1);
 			continue;
+		}
 		bit = agent_label_bit(agent_files[i].stage);
-		if ((mask & bit) == 0)
+		if ((mask & bit) == 0) {
+			agent_meta_txn_work_charge(1);
 			continue;
-		if ((emitted & bit) != 0)
+		}
+		if ((emitted & bit) != 0) {
+			agent_meta_txn_work_charge(1);
 			continue;
+		}
 		emitted |= bit;
 		if (!first)
 			agent_text_append(out, n, "+");
 		agent_text_append(out, n, agent_files[i].stage);
 		first = 0;
+		agent_meta_txn_work_charge(1);
 	}
 	if (!out[0])
 		safestrcpy(out, "none", n);
@@ -7467,8 +7855,11 @@ static int agent_deliver_pid(int pid, struct proc *source, int type,
 			     char *payload, int mirror_mailbox,
 			     int *delivered)
 {
+	struct agent_endpoint_handle source_handle;
+	struct agent_endpoint_handle target_handle;
 	struct proc *target;
 	uint64 event_mask;
+	int handoff_ready = 0;
 	int enabled;
 	int queued;
 	int status;
@@ -7508,19 +7899,25 @@ static int agent_deliver_pid(int pid, struct proc *source, int type,
 		status = AGENT_STATUS_NOT_FOUND;
 		goto out;
 	}
-	if (type == AGENT_EVENT_MESSAGE)
-		agent_file_prefetch_handoff(target, source);
 	if (type == AGENT_EVENT_MESSAGE && mirror_mailbox) {
 		target->agent_mailbox_valid = 1;
 		target->agent_mailbox_from = source->pid;
 		safestrcpy(target->agent_mailbox, payload,
 			   sizeof(target->agent_mailbox));
 	}
+	if (type == AGENT_EVENT_MESSAGE && target != source) {
+		agent_endpoint_capture_locked(&source_handle, source);
+		agent_endpoint_capture_locked(&target_handle, target);
+		handoff_ready = source_handle.control_id != 0 &&
+				target_handle.control_id != 0;
+	}
 	if (delivered)
 		*delivered = 1;
 	status = AGENT_STATUS_OK;
 out:
 	intr_restore(enabled);
+	if (handoff_ready)
+		agent_file_prefetch_handoff(&target_handle, &source_handle);
 	return status;
 }
 
@@ -7673,21 +8070,29 @@ static int agent_parse_selector(char *payload, char *stage, int stage_n,
 	return 0;
 }
 
-static int agent_file_update_status_select(uint scope_id, char *stage,
-					   char *project,
-					   char *run_id, char *status,
-					   char *summary)
+static int agent_file_update_status_batch(uint scope_id, char *stage,
+					  char *project, char *run_id,
+					  char *status, char *summary,
+					  uint64 dependency_mask,
+					  int propagate_dependencies)
 {
+	uchar selected[(AGENT_FILE_META_MAX + 7) / 8];
+	uchar primary[(AGENT_FILE_META_MAX + 7) / 8];
 	int persistent_updated = 0;
+	int primary_updated = 0;
 	int updated = 0;
 
+	memset(selected, 0, sizeof(selected));
+	memset(primary, 0, sizeof(primary));
 	if (!agent_meta_txn_lock(1))
 		return 0;
 	if (agent_file_load() < 0)
 		goto out_txn;
 	for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
-		if (!agent_files[i].used || agent_file_scopes[i] != scope_id)
+		if (!agent_files[i].used || agent_file_scopes[i] != scope_id) {
+			agent_meta_txn_work_charge(1);
 			continue;
+		}
 		if (strncmp(agent_files[i].stage, stage,
 			    sizeof(agent_files[i].stage)) == 0 &&
 		    (!project[0] ||
@@ -7696,21 +8101,60 @@ static int agent_file_update_status_select(uint scope_id, char *stage,
 		    (!run_id[0] ||
 		     strncmp(agent_files[i].run_id, run_id,
 			     sizeof(agent_files[i].run_id)) == 0)) {
-			safestrcpy(agent_files[i].status, status,
-				   sizeof(agent_files[i].status));
+			selected[i / 8] |= 1U << (i % 8);
+			primary[i / 8] |= 1U << (i % 8);
+			primary_updated++;
+		}
+		agent_meta_txn_work_charge(1);
+	}
+	if (primary_updated == 0)
+		goto out_txn;
+	if (propagate_dependencies && dependency_mask != 0)
+		for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
+			uint64 target_bit;
+
+			if (!agent_files[i].used ||
+			    agent_file_scopes[i] != scope_id)
+				goto next_dependency;
+			if (project[0] &&
+			    strncmp(agent_files[i].project, project,
+				    sizeof(agent_files[i].project)) != 0)
+				goto next_dependency;
+			if (run_id[0] &&
+			    strncmp(agent_files[i].run_id, run_id,
+				    sizeof(agent_files[i].run_id)) != 0)
+				goto next_dependency;
+			target_bit = agent_label_bit(agent_files[i].stage);
+			if (dependency_mask & target_bit)
+				selected[i / 8] |= 1U << (i % 8);
+next_dependency:
+			agent_meta_txn_work_charge(1);
+		}
+	for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
+		if ((selected[i / 8] & (1U << (i % 8))) == 0) {
+			agent_meta_txn_work_charge(1);
+			continue;
+		}
+		safestrcpy(agent_files[i].status, status,
+			   sizeof(agent_files[i].status));
+		if (primary[i / 8] & (1U << (i % 8))) {
 			if (summary && summary[0])
 				safestrcpy(agent_files[i].summary, summary,
 					   sizeof(agent_files[i].summary));
-			agent_files[i].updated_tick = agent_ticks();
-			agent_files[i].fs_generation =
-				agent_file_generation_next(scope_id);
-			agent_file_bind_slot(i, 0, 0);
-			if (agent_files[i].flags & AGENT_FILE_META_F_PERSIST)
-				persistent_updated = 1;
-			updated++;
+		} else {
+			safestrcpy(agent_files[i].summary,
+				   "dependency refreshed",
+				   sizeof(agent_files[i].summary));
 		}
+		agent_files[i].updated_tick = agent_ticks();
+		agent_files[i].fs_generation =
+			agent_file_generation_next(scope_id);
+		if (agent_files[i].flags & AGENT_FILE_META_F_PERSIST)
+			persistent_updated = 1;
+		updated++;
+		agent_meta_txn_work_charge(1);
 	}
-	agent_file_rebuild_indexes();
+	agent_file_maintain(AGENT_FILE_CHANGE_STATUS);
 	if (persistent_updated)
 		agent_file_writeback_mark(scope_id);
 out_txn:
@@ -7791,7 +8235,6 @@ static void agent_object_state_update(struct proc *p, struct agent_op *op,
 				      int history_tool_id)
 {
 	uint64 deps = 0;
-	uint64 target_bit;
 	int action_tool_id;
 	int updated;
 	int delivered;
@@ -7832,37 +8275,13 @@ static void agent_object_state_update(struct proc *p, struct agent_op *op,
 		agent_result_text(res, "duplicate");
 		return;
 	}
-	updated = agent_file_update_status_select(
+	updated = agent_file_update_status_batch(
 		agent_proc_scope(p), selector_label, selector_project,
-		selector_run_id, "ok",
-		summary);
+		selector_run_id, "ok", summary, deps, propagate_deps);
 	if (updated == 0) {
 		res->status = AGENT_STATUS_NOT_FOUND;
 		agent_result_text(res, "target_not_found");
 		return;
-	}
-	if (propagate_deps) {
-		for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
-			if (!agent_files[i].used ||
-			    agent_file_scopes[i] != agent_proc_scope(p))
-				continue;
-			target_bit = agent_label_bit(agent_files[i].stage);
-			if ((deps & target_bit) == 0)
-				continue;
-			if (selector_project[0] &&
-			    strncmp(agent_files[i].project, selector_project,
-				    sizeof(agent_files[i].project)) != 0)
-				continue;
-			if (selector_run_id[0] &&
-			    strncmp(agent_files[i].run_id, selector_run_id,
-				    sizeof(agent_files[i].run_id)) != 0)
-				continue;
-			agent_file_update_status_select(agent_proc_scope(p),
-						agent_files[i].stage,
-							selector_project,
-							selector_run_id, "ok",
-							"dependency refreshed");
-		}
 	}
 	agent_action_remember(agent_proc_scope(p), action_tool_id,
 			      selector_project, selector_run_id,
@@ -7922,6 +8341,7 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 	struct inode *ip;
 	struct agent_file_query query;
 	struct agent_file_query_result query_result;
+	int query_hit_slots[AGENT_FILE_QUERY_MAX_HITS];
 	uint64 deps;
 	int found;
 	int delivered;
@@ -8030,13 +8450,15 @@ static void agent_execute_op(struct proc *p, struct agent_op *op,
 				break;
 			}
 			found = agent_file_query_internal(agent_proc_scope(p),
-						       &query, &query_result);
+						       &query, &query_result,
+						       query_hit_slots);
 			if (found < 0) {
 				res->status = found;
 				agent_result_text(res, "metadata_unavailable");
 				break;
 			}
 			agent_file_prefetch_update(p, &query, &query_result,
+						   query_hit_slots,
 						   p->agent_call_count);
 			res->value0 = query_result.total_hits;
 			res->value1 = query_result.scanned_records;
@@ -10912,6 +11334,7 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 	int status_changed = 0;
 	int auto_persist;
 	int result = AGENT_STATUS_NO_SPACE;
+	uint changes = 0;
 	uint64 audit_fid;
 	uint64 mask;
 	char event_payload[AGENT_EVENT_PAYLOAD_SIZE];
@@ -11012,7 +11435,7 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 		had_previous = 1;
 		audit_fid = agent_files[slot].fid;
 		agent_file_clear_slot(slot);
-		agent_file_rebuild_indexes();
+		agent_file_maintain(AGENT_FILE_CHANGE_ALL);
 		agent_file_writeback_mark(scope_id);
 		if (agent_file_persist() < 0) {
 			agent_file_restore_slot(slot, &previous,
@@ -11151,7 +11574,37 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 	}
 	if (agent_file_scan_active)
 		agent_file_scan_seen[slot] = 1;
-	agent_file_rebuild_indexes();
+	if (!had_previous) {
+		changes = AGENT_FILE_CHANGE_ALL;
+	} else {
+		if (strncmp(previous.status, agent_files[slot].status,
+			    sizeof(previous.status)) != 0)
+			changes |= AGENT_FILE_CHANGE_STATUS;
+		if (strncmp(previous.stage, agent_files[slot].stage,
+			    sizeof(previous.stage)) != 0)
+			changes |= AGENT_FILE_CHANGE_STAGE;
+		if (strncmp(previous.kind, agent_files[slot].kind,
+			    sizeof(previous.kind)) != 0)
+			changes |= AGENT_FILE_CHANGE_KIND;
+		if (strncmp(previous.project, agent_files[slot].project,
+			    sizeof(previous.project)) != 0 ||
+		    strncmp(previous.workflow, agent_files[slot].workflow,
+			    sizeof(previous.workflow)) != 0 ||
+		    strncmp(previous.run_id, agent_files[slot].run_id,
+			    sizeof(previous.run_id)) != 0 ||
+		    strncmp(previous.physical_name,
+			    agent_files[slot].physical_name,
+			    sizeof(previous.physical_name)) != 0 ||
+		    strncmp(previous.logical_path,
+			    agent_files[slot].logical_path,
+			    sizeof(previous.logical_path)) != 0)
+			changes |= AGENT_FILE_CHANGE_SCOPE_KEYS;
+		if (previous.dependency_mask !=
+		    agent_files[slot].dependency_mask)
+			changes |= AGENT_FILE_CHANGE_DEPENDENCY;
+	}
+	if (changes)
+		agent_file_maintain(changes);
 	if (agent_files[slot].flags & AGENT_FILE_META_F_PERSIST)
 		agent_file_writeback_mark(scope_id);
 	if ((agent_files[slot].flags & AGENT_FILE_META_F_PERSIST) &&
@@ -11183,6 +11636,7 @@ int sys_agent_file_query(uint64 queryaddr, uint64 resultaddr)
 	struct proc *p = curr_proc();
 	struct agent_file_query query;
 	struct agent_file_query_result result;
+	int query_hit_slots[AGENT_FILE_QUERY_MAX_HITS];
 	int returned;
 
 	if (!p->is_agent)
@@ -11209,7 +11663,7 @@ int sys_agent_file_query(uint64 queryaddr, uint64 resultaddr)
 	if (!agent_meta_txn_lock(1))
 		return AGENT_STATUS_NO_SPACE;
 	returned = agent_file_query_internal(agent_proc_scope(p), &query,
-					     &result);
+					     &result, query_hit_slots);
 	if (copyout(p->pagetable, resultaddr, (char *)&result,
 		    sizeof(result)) < 0) {
 		returned = -1;
@@ -11224,6 +11678,7 @@ int sys_agent_file_query(uint64 queryaddr, uint64 resultaddr)
 		    AGENT_STATUS_OK, result.total_hits, result.scanned_records,
 		    result.used_index) == 0)
 		agent_file_prefetch_update(p, &query, &result,
+					   query_hit_slots,
 					   p->agent_call_count);
 out_txn:
 	agent_meta_txn_unlock();

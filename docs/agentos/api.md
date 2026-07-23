@@ -346,7 +346,7 @@ int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 
 内核把 PID 解析、存活检查、控制关系检查和路由更新放在同一临界区中。路由表保存 source 的内核私有 64 位 `agent_control_id`，不把 PID、PCB 槽、父指针、角色或资源域当作授权身份。source 退出时，其所有入站授权会从各目标回收；target 退出时清空自己的路由表，所以 PID 或 PCB 槽复用不会继承旧通道。重复 grant/revoke 是幂等操作；revoke 或 source 退出只阻止后续入队，之前已经成功入队的事件仍按 FIFO 消费。
 
-消息投递先完成路由授权，再匹配目标 watch 并占用队列资源。未授权返回 `AGENT_STATUS_DENIED`；目标不存在、正在退出或 watch/filter 不匹配返回 `AGENT_STATUS_NOT_FOUND`；路由表或队列配额耗尽返回 `AGENT_STATUS_NO_SPACE`。兼容 mailbox 镜像和 metadata 预取交接只在授权事件成功入队后更新，拒绝路径不会留下旁路副作用。
+消息投递先完成路由授权，再匹配目标 watch 并占用队列资源。未授权返回 `AGENT_STATUS_DENIED`；目标不存在、正在退出或 watch/filter 不匹配返回 `AGENT_STATUS_NOT_FOUND`；路由表或队列配额耗尽返回 `AGENT_STATUS_NO_SPACE`。兼容 mailbox 镜像在授权事件成功入队后于同一临界区更新。metadata 预取交接随后使用内核捕获的 `slot + pid + control_id + scope` 稳定端点句柄；长阶段不保存目标 PCB 指针，发布前完整重校验身份，退出或槽复用只会丢弃派生提示。拒绝路径不会留下旁路副作用。
 
 ## 高性能请求结构
 
@@ -473,7 +473,7 @@ int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 
 可信 bank 还是用户进程发布的启动依赖。`main()` 在 `fsinit()` 和 `timer_init()` 之后调用 `agent_storage_init()`，在启动继续前完成可信加载判定：成功时选择、校验、绑定并按需恢复 bank，失败时设置 fail-closed；随后才执行 `bio_policy_start()` 和 `load_init_app()`。单个 bank 损坏时选择另一份可验证副本并标记恢复；不存在可验证有效 bank 或选择失败时设置 `agent_meta_store_failed_closed`，系统继续启动，但后续 metadata load/persist/init API 返回失败，不能用空表冒充可信状态。这个 fail-closed 状态不阻断 scope 的 VFS 生命周期回收：`agent_scope_reclaim()` 仍清理 scope 的依赖、动作、缓存、审计、租约和真实 VFS-labelled 文件，并在成功后退休 scope 身份；它不会声称已恢复损坏 bank 中不可读的 metadata。
 
-内存 metadata、索引、依赖表、inode sidecar 与双 bank 提交属于同一个可睡眠、可重入的内核事务域。进程 syscall 在竞争时进入对象私有等待队列；scheduler、scope retirement 和真实 VFS callback 不持有底层 inode/VFS 状态阻塞等待，而是使用禁止外部重入的 try-lock。事务门采用条件队列语义：owner 在同一关中断临界区清空后广播事务专属 wait queue，所有 waiter 被唤醒后重新检查 owner 并竞争。唤醒不转移所有权，因此任一 waiter 随进程退出或中断都不会使其他等待者永久沉睡。
+内存 metadata、索引、依赖表、inode sidecar 与双 bank 提交属于同一个可睡眠、可重入的内核事务域。进程 syscall 在竞争时原子领取单调 ticket，并在对象私有等待队列中不可中断地等待 serving ticket；最外层 owner 清空后只唤醒队首。退出请求不能遗弃 ticket：线程先取得并传递事务门，再由 syscall 边界退出。真实 VFS callback、scope retirement 等进程态外部路径只使用不插队的 try-lock。scheduler 可在事务门恰好空闲时取得一个硬有界维护轮次；若 serving waiter 已由前任唤醒，该保留轮次解锁时抑制第二次 wake-one，保持 ticket 与睡眠队列一一对应。进程态可扩展扫描每 128 条记录计入 kernel-work 预算；scheduler 只执行固定 16 目录项扫描或单个持久化步骤。依赖表只存放每 scope 最多 16 条显式用户边；兼容 `dependency_mask` 始终留在文件记录中，由依赖查询、action 和预取在固定表的线性遍历中按需解释，不再建立全局派生依赖图。
 
 所有可能替换物理 COW job 的同步 set/delete/init/reload 还必须进入单独的 FIFO submit lane。调用者先领取单调 ticket，只有 serving ticket、persist idle、sync owner 和 reload owner 条件同时满足时才能进入；若条件不满足，内核从失败检查开始一直保持中断关闭，依次释放 metadata 事务门、把当前线程插入 submit condition queue，再恢复中断。完成检查到入队之间不存在可丢失 wake 的窗口。ticket 不允许在线程退出时放弃，否则会卡住全部后继；退出请求在该有界 COW lane 完成后由 syscall 边界处理。持久化跨预算等待时 immutable job 保持同一 `job_id`，同步调用者临时释放全局事务门，维护线程只能推进该 job，不能让后来提交者替换它。
 
@@ -483,7 +483,7 @@ int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 
 字符串 selector 支持两组字段名：兼容字段 `project/run_id/stage/kind/status`，以及通用字段 `namespace/object_id/label/type/state`。内核按这些字段执行同一套查询、状态更新、依赖查询和预取提示生成。科研平台中的设定的模拟流程数据由用户态 orchestrator 写入；内核不会预置项目名、run id 或固定阶段顺序。该流程的用户态环节包括数据准备、比对处理、结果分析、报告生成和归档交付。
 
-对象依赖关系不再由内核固定解释某几个阶段名称。用户态可以通过 `dependency_update` 显式注册 `source/target/namespace/run_id/relation/summary` 形式的通用依赖记录，也可以继续通过 `agent_file_meta_set()` 写入对象 label 和 `dependency_mask` 作为紧凑兼容输入。每条记录包含源对象 label、目标对象 label、关系、namespace、run_id 和摘要；`dependency_query` 可用 `label=...;namespace=...;run_id=...` 缩小查询范围，文件查询后的预取提示和 provenance 也优先读取这些通用记录。旧的 `dependency_mask` 仍保留为兼容格式。
+对象依赖关系不再由内核固定解释某几个阶段名称。用户态可以通过 `dependency_update` 显式注册 `source/target/namespace/run_id/relation/summary` 形式的通用依赖记录，也可以继续通过 `agent_file_meta_set()` 写入对象 label 和 `dependency_mask` 作为紧凑兼容输入。每条显式记录包含源对象 label、目标对象 label、关系、namespace、run_id 和摘要；`dependency_query` 可用 `label=...;namespace=...;run_id=...` 缩小查询范围，文件查询后的预取提示和 provenance 也优先读取这些通用记录。旧的 `dependency_mask` 不复制进全局依赖表；没有匹配显式边时，消费者直接在同 scope、namespace、workflow 和 run 的文件记录上解释位图。这既保留兼容 ABI，也避免文件拓扑变化触发全局派生重建。
 
 `update_mask` 用于精确更新字段，也允许清空字段。例如只清空 status 时传入 `AGENT_FILE_META_UPDATE_STATUS` 并让 `status` 为空字符串。
 
@@ -591,9 +591,9 @@ int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 
 ### 文件预取提示 ABI
 
-文件查询成功写入 Context 后，内核会根据命中的 source 文件、同一 namespace/workflow/run 的对象标签依赖和当前索引信息，生成 metadata 预取提示。提示首先保存在当前 Agent 的 PCB 中，容量为 `AGENT_FILE_PREFETCH_MAX_HINTS = 8`。同时，带有可信 span 的提示会写入物理容量为 `AGENT_FILE_PREFETCH_SPAN_MAX = 32` 的 scope 分区提示表；最多 4 个 workflow 各保留 8 条，查询还必须同时匹配调用者 scope 和内核私有 span owner。它只提示“后续可能需要哪些文件 metadata”，预取提示本身不读取文件内容，也不替代 `agent_file_query()`；需要内容级证据时使用 `read_file_digest` 工具读取短预览和内容指纹。
+文件查询成功写入 Context 后，内核会根据命中的 source 文件、同一 namespace/workflow/run 的对象标签依赖和当前索引信息，生成 metadata 预取提示。查询结果缓存连同精确 hit slot 一起保存；预取先验证 slot 身份，再在当前 scope 的依赖配额内收集选择器。label hash 只作预筛，label、namespace、run 和 workflow 仍作精确比较；目标通过一次文件表扫描和槽位位图全局去重，单次查询最多发布 `AGENT_FILE_PREFETCH_MAX_HINTS = 8` 个唯一目标。相关依赖、文件表、提示总线和 handoff 遍历统一计入 metadata 工作预算。提示首先保存在当前 Agent 的 PCB 中，容量为 8。同时，带有可信 span 的提示会写入物理容量为 `AGENT_FILE_PREFETCH_SPAN_MAX = 32` 的 scope 分区提示表；最多 4 个 workflow 各保留 8 条，查询还必须同时匹配调用者 scope 和内核私有 span owner。它只提示“后续可能需要哪些文件 metadata”，预取提示本身不读取文件内容，也不替代 `agent_file_query()`；需要内容级证据时使用 `read_file_digest` 工具读取短预览和内容指纹。
 
-当 Agent 通过 message 事件唤醒另一个 Agent 时，内核会把发送者当前可见的 metadata 预取提示复制到接收者的预取提示 ring，并给复制后的提示增加 `AGENT_FILE_PREFETCH_REASON_HANDOFF`。这样接收者可以直接调用 `agent_file_prefetch_snapshot()` 得到上游 Agent 的下一步候选，不需要从消息文本中解析策略字段。复制后的提示也会写入 span 预取提示总线，保留 source pid、target pid 和 span id，便于同一因果链上的 Agent 用统一接口查询本轮协作中的候选工件。
+当 Agent 通过 message 事件唤醒另一个 Agent 时，内核会把发送者当前可见的 metadata 预取提示复制到接收者的预取提示 ring，并给复制后的提示增加 `AGENT_FILE_PREFETCH_REASON_HANDOFF`。这样接收者可以直接调用 `agent_file_prefetch_snapshot()` 得到上游 Agent 的下一步候选，不需要从消息文本中解析策略字段。复制后的提示也会写入 span 预取提示总线，保留 source pid、target pid 和 span id，便于同一因果链上的 Agent 用统一接口查询本轮协作中的候选工件。依赖/FID 查找、总线选择和审计预留先纳入 metadata 工作预算；最终只在重新解析稳定接收端点成功后，以固定上界、不可调度的短提交同时发布本地 hint、span bus 和观测记录。
 
 `agent_file_prefetch_snapshot(hints, max)` 返回当前可见提示数量，普通进程调用返回 `-1`，无 `META_READ` 能力的 Agent 返回 `AGENT_STATUS_DENIED`。`max=0` 时只返回数量，不复制记录；`max>0` 时按产生顺序复制最多 `max` 条。
 

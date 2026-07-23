@@ -2,7 +2,7 @@
 
 测试目标：根目录 AgentOS-uCore 增强目标
 
-本次最终复测日期：2026-07-23
+本次最终复测日期：2026-07-24
 
 测试环境：
 
@@ -31,7 +31,7 @@ make build TOOLPREFIX=riscv64-linux-gnu- LOG=warn INIT_PROC=agentfinal_ucore
 bash scripts/run-agent-tests.sh
 ```
 
-独立专项记录：2026-07-22 的脚本依次运行 `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentconflict_ucore`、`agentllm_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`、`agentscope_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`，当时完整 15/15 通过；随后增加 `iobudget_ucore`。线程资源域最终改动后，`CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 已完成 16/16，整条命令墙钟约 `321s`。专项运行要求每个程序在超时前输出 `parent passed`，且日志中不存在未被用例明确声明为预期故障的 `check failed`、`panic`、`unknown syscall`、`bad addr`、`IllegalInstruction` 或 `child_failed`。本轮 16/16 仍不等于尚未运行的 `make full-verify` 全绿。
+独立专项记录：2026-07-22 的脚本依次运行 15 个 Agent 程序并全部通过；随后增加 `iobudget_ucore`。2026-07-24 的依赖按需解析改动后，`CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 从 clean user/kernel 构建开始完成 16/16，整条命令墙钟约 `315.1s`。专项运行要求每个程序在超时前输出 `parent passed`，且日志中不存在未被用例明确声明为预期故障的 `check failed`、`panic`、`unknown syscall`、`bad addr`、`IllegalInstruction` 或 `child_failed`。本轮 16/16 仍不等于尚未运行的 `make full-verify` 全绿。
 
 ## 输出提取方式
 
@@ -50,7 +50,7 @@ bash scripts/run-agent-tests.sh
 | 测试程序 | 关键输出 | 对应内容 |
 | --- | --- | --- |
 | `agentfinal_ucore` | `batch first_seq=1 last_seq=64`、`tamper_protected=1`、`run_ledger=1` | Agent 创建、批量工具调用、Context 可信历史和全局运行账本可用 |
-| `agentfs_ucore` | `.agentmeta_reload=1`、`bulk_index scan=118 index=6`、`digest_cache_invalidated=1` | 真实文件元数据、索引查询和内容摘要缓存可用 |
+| `agentfs_ucore` | `.agentmeta_reload=1`、`bulk_index scan=149 index=6`、`metadata_action_bounded=1 field_driven=1 batched=1 preemptions=5`、`prefetch_hints=1 bounded=1 count=2 preemptions=8`、`handoff_target_exit=1 endpoint_reuse=1 preemptions=6 ... clean=1` | 真实文件元数据、显式依赖与兼容位图按需解析、索引查询、字段驱动批量状态维护、有界去重预取、metadata 内核工作预算和稳定交接端点可用 |
 | `agentscan_ucore` | `background_scan usershell=1`、`auto_file_create=1`、`auto_file_delete=1` | 根目录真实文件能被扫描并同步到 Agent metadata |
 | `agentloop_ucore` | `message_source_limit=4`、`ipc_class_limit=8`、`external_limit=12`、`system_event_reserved=4`、`external_reject_reclaim=1`、`broadcast_slow_watcher_isolated=1` | FIFO、睡眠等待、heartbeat、directed 单来源=4、directed 类=8、external=12、第 13 条 external 拒绝、4 条 KERNEL TIMER 保留容量、消费后重接纳和慢 watcher 隔离均通过 |
 | `agentsched_ucore` | `role_weights ...`、`event_priority=1`、`reason_trace=1` | Agent 感知调度和调度原因记录可用 |
@@ -68,7 +68,7 @@ bash scripts/run-agent-tests.sh
 | `procreap_ucore` / `procreap_agent_ucore` | `live-domain-limit=1`、`reserved-agent-slot=1` | 进程回收、资源域配额与系统保留槽可验证 |
 | `syscallfair_ucore` | `[syscall-fairness] both targets passed`、console/inode/trunc 顺序、last-syscall 重调度与 `parent passed` | 本次线程改动后双目标脚本已通过 |
 | `threadresource_ucore` | `domain_limit`、`capacity_reject_stable`、`reserved_domain_limit`、`reserved_domain_reuse`、`exit_reuse`、`ordinary_waterline`、`global_thread_limit`、`reserved_global_limit`、`reserved_progress`、`reserved_global_reuse`、`global_reuse`、`domain_fairness`、`parent passed` | 本次改动后 19/12/6/6/4 tiny policy 专项通过 |
-| 内核栈预算 | `kernel stack budget: ... required=13680 limit=16384` | 本次改动后的 AgentOS 构建期 callgraph/栈帧预算检查通过 |
+| 内核栈预算 | `kernel stack budget: user=7488 interrupt=2256 margin=4096 required=13840 limit=16384` | 当前 metadata 依赖按需解析改动后的 AgentOS 构建期 callgraph/栈帧预算检查通过 |
 
 ## 本次可信 IPC 变更验证状态
 
@@ -119,21 +119,24 @@ agentfinal_ucore: parent passed
 
 ```text
 agentfs_ucore: Agent FS metadata test
-agentfs_ucore: demo_inode dev=1 inum=14 scanned=2
-agentfs_ucore: prefetch_hints=1 count=3 first_stage=analyze source_seq=1
-agentfs_ucore: scoped_dependency=1 设定的模拟流程=align+analyze+report runalt=align+archive
-agentfs_ucore: custom_inode dev=1 inum=20 size=7
+agentfs_ucore: scoped_dependency=1 run042=align+analyze+report runalt=align+archive
+agentfs_ucore: dependency_update=1 result=align+review generation=26
+agentfs_ucore: metadata_action_bounded=1 field_driven=1 batched=1 preemptions=5
+agentfs_ucore: demo_inode dev=1 inum=44 scanned=3
+agentfs_ucore: prefetch_hints=1 bounded=1 count=2 preemptions=8 first_stage=analyze source_seq=20
+agentfs_ucore: handoff_target_exit_send=0 preemptions=6
+agentfs_ucore: handoff_target_exit=1 endpoint_reuse=1 preemptions=6 replacement=5 clean=1
+agentfs_ucore: custom_inode dev=1 inum=55 size=7
 agentfs_ucore: content_digest=1 size=7 bytes=7 hash=52642947 preview=agentfs
 agentfs_ucore: digest_cache=1 hits=1 misses=1
 agentfs_ucore: digest_cache_invalidated=1 misses=1
 agentfs_ucore: digest_timeline=1 tool=20 preview=agentfs2
 agentfs_ucore: .agentmeta_reload=1
 agentfs_ucore: query_cache=1 reason=68
-agentfs_ucore: bulk_index scan=118 index=6 hits=1
+agentfs_ucore: bulk_index scan=149 index=6 hits=1
 agentfs_ucore: query_plan scan_plan=0 index_plan=1 reason=4 bucket=15 candidates=6
 agentfs_ucore: scan_index_consistent=1
 agentfs_ucore: truncated_query total=100 returned=3 truncated=1
-agentfs_ucore: dependency_update=1 result=align+review generation=...
 agentfs_ucore: clear_status=1 cache_invalidated=1
 agentfs_ucore: delete_clears_metadata=1
 agentfs_ucore: missing_selector_not_found=1
@@ -141,7 +144,7 @@ agentfs_ucore: passed
 agentfs_ucore: parent passed
 ```
 
-结论：文件元数据可绑定真实根目录文件；查询结果携带 `dev`、`inum`、`incarnation`、`size`，其中安全绑定、缓存与编辑版本以 `dev + inum + incarnation` 区分 inode 的不同生命周期，样例日志输出可见的 inode 和大小字段。用户态写入的 align 元数据查询后会产生后续 label metadata 预取提示；用户态也可通过 `dependency_update` 显式注册通用对象依赖，再用 `dependency_query` 读取；自定义 metadata 可从私有 `.agentmeta` 重新加载；真实文件内容摘要可以被缓存，改写文件后旧 digest 缓存不会返回过期内容；内容摘要工具调用会进入统一 timeline，页面可按 `tool_id=20` 读取 size、bytes、hash 和 preview；接近 128 条记录时 scan/index 的 `scanned_records` 差异可见；query plan 能说明索引路径按 status 索引选择 bucket 15 并检查 6 条候选记录；重复查询会命中同一 `fs_generation` 下的结果缓存，属性更新后旧缓存不会返回过期结果；属性清空、文件删除同步和不存在 selector 返回 `NOT_FOUND` 均通过。
+结论：文件元数据可绑定真实根目录文件；查询结果携带 `dev`、`inum`、`incarnation`、`size`，其中安全绑定、缓存与编辑版本以 `dev + inum + incarnation` 区分 inode 的不同生命周期。用户态可注册并按 run 查询通用对象依赖；自定义 metadata 可从私有 `.agentmeta` 重新加载；真实文件内容摘要缓存、timeline、scan/index 差异、查询缓存失效、属性清空、删除同步和未命中 selector 均通过。action 回归确认一次批量提交产生 4 次 syscall 内核重调度、每个目标槽只更新一次且纯状态更新不改变 dependency generation；预取回归确认一次查询最多产生 8 条唯一提示，本轮实际为 2 条，target fid 不重复且查询内部产生 8 次内核重调度。交接竞态让原目标在 7 次重调度期间退出并由 replacement 复用进程槽，replacement 的 hint ring 与 mailbox 均保持为空。2026-07-24 独立 `agentfs_ucore` 通过，`elapsed=86.5s`。
 
 ## 样例输出：agentscan_ucore
 
@@ -506,7 +509,7 @@ kernel stack user path: ...
 kernel stack interrupt path: kernelvec -> ...
 ```
 
-结论：该检查不是只在上述独立命令运行。根目录和 `baseline_ucore/` 的 `build/kernel` 都会在链接前执行同一脚本；预算超限、未建模递归/间接调用或超大单帧会直接使构建失败。本次线程改动后的增强目标结果为 `user=7328`、`interrupt=2256`、`margin=4096`、`required=13680 < limit=16384`。运行时不可映射 guard page 与 canary 提供第二层防护。
+结论：该检查不是只在上述独立命令运行。根目录和 `baseline_ucore/` 的 `build/kernel` 都会在链接前执行同一脚本；预算超限、未建模递归/间接调用或超大单帧会直接使构建失败。当前依赖按需解析改动后的增强目标结果为 `user=7488`、`interrupt=2256`、`margin=4096`、`required=13840 < limit=16384`。运行时不可映射 guard page 与 canary 提供第二层防护。
 
 ## 基础兼容抽测：ch3_trace
 
@@ -629,9 +632,9 @@ iobudget_ucore: control_reserve_progress=1
 iobudget_ucore: parent passed
 ```
 
-最终修复后的独立运行 `elapsed=2.4s`。ABI sized-copy、线程退出 lease、scheduler 中断交付、fault 退出清理、PUBLIC budget/shared 上界、完成归因、cache 服务隔离、workflow 进展和 CONTROL class 共九类实质断言；日志中是八个具名机制 marker 加 `parent passed`。线程资源域最终改动后的完整 Agent 脚本以墙钟约 `321s` 完成 16/16。ABI v3 的设备 burst/refill 为 560/280：普通流量必须取得根信用，SYSTEM/CONTROL 可在根信用耗尽时带 device debt 前进，因此根 bucket 不是保护流量的硬总上限。静态 envelope 只约束配置总和。cache 的 SYSTEM/PUBLIC/active workflow floor/cap 为 40/96、24/48、36/64，退役清理 job 临时为 3/8。
+最终修复后的独立运行 `elapsed=2.4s`。ABI sized-copy、线程退出 lease、scheduler 中断交付、fault 退出清理、PUBLIC budget/shared 上界、完成归因、cache 服务隔离、workflow 进展和 CONTROL class 共九类实质断言；日志中是八个具名机制 marker 加 `parent passed`。2026-07-24 的依赖按需解析改动后，完整 Agent 脚本以墙钟约 `315.1s` 完成 16/16。ABI v3 的设备 burst/refill 为 560/280：普通流量必须取得根信用，SYSTEM/CONTROL 可在根信用耗尽时带 device debt 前进，因此根 bucket 不是保护流量的硬总上限。静态 envelope 只约束配置总和。cache 的 SYSTEM/PUBLIC/active workflow floor/cap 为 40/96、24/48、36/64，退役清理 job 临时为 3/8。
 
-当前独立 `agentscope_ucore` 还观察到 metadata transaction/COW、微写合并、跨 scope 查询、最终一致性、容量与 `lifecycle_reclamation=1`、`parent passed`，`elapsed=148.9s`。`NPROC` 身份账本只复用 `used == 0` 的记录，active 最多 4 个且 active + retiring 不超过 8；全部 active 退出积压时最多 8 个退役任务占用最多 8 个 FS reclaim cursor，并由 reaper 在 `NPROC` 身份账本范围轮转选择清理。
+当前完整轮的 `agentscope_ucore` 观察到 `metadata_txn_contentions=3`、`metadata_cross_scope_progress=1 queries=32 latency_ms=840`、metadata transaction/COW、微写合并、最终一致性、容量、`lifecycle_reclamation=1` 和 `parent passed`，`elapsed=142.0s`。`NPROC` 身份账本只复用 `used == 0` 的记录，active 最多 4 个且 active + retiring 不超过 8；全部 active 退出积压时最多 8 个退役任务占用最多 8 个 FS reclaim cursor，并由 reaper 在 `NPROC` 身份账本范围轮转选择清理。
 
 当前动态 I/O 用例只覆盖一个 PUBLIC 与一个 workflow Orchestrator `CONTROL` owner；没有断言 `shared_grants` 或排队轮转，也未覆盖 Recovery、SYSTEM/workflow `BACKGROUND`、多 workflow 同时压力、retiring 3/8、跨 owner LRU/transient、主动 device-debt 注入，以及启动 bank 损坏、VirtIO 设备错误/短 I/O/metadata COW 中途掉电。线程资源域改动前的冻结源码曾以 `75.1s` 通过 `make fs-enospc-test` 的 quota/domain/persistent principal/orphan/reboot 全流程，但其中没有专门在 grouped qmap claim 中点断电。以上历史专项仍不等于本次改动后的 `make full-verify` 全绿。
 

@@ -13,6 +13,7 @@ AgentOS-uCore 当前实现的是内核级文件元数据服务：
 - 要求 `physical_name` 能解析到 uCore 根目录中的真实文件名；
 - 使用根目录私有 `.agentmeta` / `.agentmeta1` 双 bank 保存带 generation/hash 的版本化快照，并以可恢复分块 COW 状态机发布；
 - 使用按 workflow scope 记账的固定窗口后台写回和稳定 sponsor `BACKGROUND` I/O 预算，把普通文件微小变化合并为有界 metadata checkpoint；
+- 使用 FIFO ticket 事务门、统一 metadata 工作预算和按字段变化驱动的维护入口，为跨 workflow 请求提供有界接纳；
 - 在普通 `open/read/write/truncate/unlink` 路径执行 public/workflow/kernel-private 数据访问策略，防止绕过 Agent 工具 capability；
 - 支持扫描查询；
 - 支持 state/label/type 索引查询，ABI 字段兼容保留为 status/stage/kind；
@@ -79,7 +80,9 @@ AgentOS-uCore 当前实现的是内核级文件元数据服务：
 
 普通持久文件变化采用写回而不是直写：write/truncate 通过 inode incarnation sidecar 先发布最新 size、更新时间和文件代数，查询及 bank 快照都会覆盖内存主表中的旧值；create/delete 则先完成内存记录变化。带 `PERSIST` 的记录随后让对应 scope 的 `dirty_generation` 进入固定一秒的非滑动合并窗口；不进入快照的 volatile 记录只更新内存/sidecar，不制造空 checkpoint。后台维护在事务门空闲时每轮只推进 COW 状态机的一个步骤；dirty scope 轮转成为整个 job 的稳定 sponsor，物理传输使用该 owner 的硬 `BACKGROUND` burst/refill。checkpoint 成功或失败后的 not-before deadline 都是固定合并窗口，不再按 checkpoint 执行耗时延长；I/O debt 决定何时能推进下一步。到期写回先于扫描获得维护机会，持续 scan pending 不能使其永久饥饿。快照开始时捕获各 scope 的脏代数，提交后只推进期间没有新增变化的 `durable_generation`，所以并发写入不会被错误标成已持久化；失败则保留脏状态等待固定窗口和 budget。
 
-显式持久 metadata set/delete、首次空 bank、reload 和 scope retirement 同步进入单调 ticket 的 FIFO submit lane，并建立不可替换的 COW job；该语义保证有序接纳，不保证调用返回时 primary 已完成回读验证。全局 metadata transaction gate 本身仍是 wake-all 条件门，不宣称 FIFO。条件不满足时，中断从失败检查一直保持关闭，直到事务门释放且线程已经进入 submit condition queue，避免 unlock-to-sleep 丢失唤醒。持久化在预算边界暂时释放事务门时，immutable job 保持同一 `job_id`，后来提交者不能替换。metadata exact-read 在文件系统原子段之外偿还 I/O 预算，并从正数短读前缀继续；临时 interruption 不会被记成 bank corruption。scanner 仍独立使用 `max(20 tick, 4 * 扫描耗时)` 自适应 cooldown，不能与 checkpoint 的固定窗口混为一谈。
+全局 metadata transaction gate 对进程请求使用单调 ticket FIFO，并只唤醒队首。线程取得 ticket 后不可中断地等到自己的 turn；若进程已经请求退出，也会先接过并立即传递事务门，不能遗弃 ticket。scheduler 在门空闲时可取得硬有界维护轮次，以免后台写回和扫描被持续进程请求饿死；该轮次不会重复唤醒已由前任唤醒的 serving ticket，普通进程态 VFS callback 仍不能插队。进程态表扫描、索引维护、显式依赖和预取工作按 128 records 进入统一 kernel-work 安全点；scheduler 每轮最多扫描 16 个目录项，字段变化只发布线性索引。显式用户依赖保存在每 scope 最多 16 条的固定表中；兼容 `dependency_mask` 留在源文件记录，由依赖查询、action 和预取在已有线性扫描中按需解释，不再物化全局派生图。字段变化掩码分别维护 status/stage/kind 索引和依赖代数，纯状态变化不推进依赖 generation。通用 action 先用位图形成目标与依赖选集，再一次更新每个槽、一次重建 status 索引并合并持久写回，复杂度为固定次数的有界表扫描。
+
+显式持久 metadata set/delete、首次空 bank、reload 和 scope retirement 还会同步进入单调 ticket 的 FIFO submit lane，并建立不可替换的 COW job；该语义保证有序接纳，不保证调用返回时 primary 已完成回读验证。条件不满足时，中断从失败检查一直保持关闭，直到事务门释放且线程已经进入 submit condition queue，避免 unlock-to-sleep 丢失唤醒。持久化在预算边界暂时释放事务门时，immutable job 保持同一 `job_id`，后来提交者不能替换。metadata exact-read 在文件系统原子段之外偿还 I/O 预算，并从正数短读前缀继续；临时 interruption 不会被记成 bank corruption。scanner 仍独立使用 `max(20 tick, 4 * 扫描耗时)` 自适应 cooldown，不能与 checkpoint 的固定窗口混为一谈。
 
 这套实现让查询结果中的文件身份可以追溯到某一代真实 inode，同时保留 Agent 需要的 namespace、workflow、run、label、type、state 等高层属性。完整身份始终是 `dev + inum + incarnation`；删除文件后即使设备号和 inode 号被复用，新 incarnation 也会使旧 metadata、digest cache、版本和租约失效。为了兼容已有用户态测试，结构体字段名仍使用 project/stage/kind/status；字符串 selector 同时接受 `namespace/object_id/label/type/state` 等通用字段名。
 
@@ -204,7 +207,9 @@ metadata 查询说明“哪个文件符合条件”，内容摘要工具说明�
 5. target label 位于 source 的依赖集合中；
 6. target label 可以通过 label 索引解释候选记录数量。
 
-每个 Agent 最多保留 8 条本地预取提示。相同 target fid 的提示会被更新；容量满后按 FIFO 方式替换较早提示。带有 span 的提示还会写入全局 span 预取提示总线，最多保留 32 条，并记录 source pid 和 target pid。提示使用 `AGENT_FILE_PREFETCH_REASON_DEPENDENCY`、`AGENT_FILE_PREFETCH_REASON_SAME_RUN`、`AGENT_FILE_PREFETCH_REASON_PENDING`、`AGENT_FILE_PREFETCH_REASON_STAGE_INDEX`、`AGENT_FILE_PREFETCH_REASON_HANDOFF` 和 `AGENT_FILE_PREFETCH_REASON_SPAN_BUS` 说明生成原因。其中 `HANDOFF` 表示提示来自另一个 Agent 的 message 事件交接，`SPAN_BUS` 表示该提示已进入同一 span 的全局提示总线。
+查询结果和查询缓存都保存命中项对应的精确 metadata slot。生成预取时，内核先按每 scope 16 条依赖配额收集选择器；label hash 只作预筛，最终仍精确比较 label、namespace、run 和 workflow。随后只扫描一次文件表，以槽位位图对所有 source 的目标全局去重；没有显式目标的 source 才使用兼容 `dependency_mask` 候选。整次查询最多发布 8 个唯一目标，dependency、文件表、提示总线和 handoff 的可扩展遍历都计入 metadata 工作预算。handoff 在事件入队时只捕获稳定端点句柄，预算化阶段只处理一个 hint 的局部副本；固定表扫描预算预付后，再用 `slot + pid + control_id + scope` 重新解析接收者并执行不可调度的有界提交。
+
+每个 Agent 最多保留 8 条本地预取提示。相同 target fid 的提示会被更新；容量满后按 FIFO 方式替换较早提示。带有 span 的提示还会写入全局 span 预取提示总线，最多保留 32 条，并记录 source pid 和 target pid。提示使用 `AGENT_FILE_PREFETCH_REASON_DEPENDENCY`、`AGENT_FILE_PREFETCH_REASON_SAME_RUN`、`AGENT_FILE_PREFETCH_REASON_PENDING`、`AGENT_FILE_PREFETCH_REASON_STAGE_INDEX`、`AGENT_FILE_PREFETCH_REASON_HANDOFF` 和 `AGENT_FILE_PREFETCH_REASON_SPAN_BUS` 说明生成原因。其中 `HANDOFF` 表示提示来自另一个 Agent 的 message 事件交接，`SPAN_BUS` 表示该提示已进入同一 span 的全局提示总线。若接收 Agent 在预算检查点期间退出，端点重校验失败后不会向已回收或复用的 PCB、本地 ring、span bus、timeline 或 audit 发布任何交接副作用。
 
 读取接口：
 
@@ -288,7 +293,7 @@ label=report;run_id=<另一个模拟流程>;namespace=<示例项目>
 
 ## 依赖关系查询
 
-`dependency_update` 是通用依赖注册工具，payload 使用 `source/target/namespace/run_id/relation/summary` 这组字段。内核只保存对象之间的标签关系，不解释这些标签的业务含义。`dependency_mask` 仍作为紧凑兼容 ABI，表示某个对象 label 会影响哪些后续对象 label；每个 label 通过稳定 hash 映射到一个 bit。用户态写入元数据或调用 `dependency_update` 后，内核会按同一 namespace 和 run_id 维护依赖记录：
+`dependency_update` 是通用依赖注册工具，payload 使用 `source/target/namespace/run_id/relation/summary` 这组字段。内核只保存显式注册的对象标签关系，不解释这些标签的业务含义。`dependency_mask` 仍作为紧凑兼容 ABI，表示某个对象 label 会影响哪些后续对象 label；每个 label 通过稳定 hash 映射到一个 bit。该位图保留在文件 metadata 中并按需解析，不复制成全局依赖记录。用户态写入元数据或调用 `dependency_update` 后，内核会按同一 namespace 和 run_id 查询依赖：
 
 | 字段 | 说明 |
 | --- | --- |

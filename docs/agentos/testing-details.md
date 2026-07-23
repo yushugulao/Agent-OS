@@ -122,14 +122,16 @@
 18. 子进程检查查询计划：扫描路径必须返回 `AGENT_FILE_QUERY_PLAN_SCAN`，索引路径必须返回 `AGENT_FILE_QUERY_PLAN_STATUS_INDEX`，并带有 status 索引原因、索引桶和候选记录数。
 19. 子进程调用 `dependency_query`，分别带入设定的模拟流程和备用模拟流程，检查同名 label 的依赖结果按 run_id 分开。
 20. 子进程调用 `dependency_update` 注册一条 `source -> target` 通用对象依赖，再用 `dependency_query` 验证该依赖可见。
-21. 子进程读取预取提示，检查提示由对象标签依赖产生、使用 label 索引计划，并指向当前 run 内的 analyze/report 等后续 label。
-22. 子进程清空某条记录的 status，确认属性更新生效，并确认旧 generation 查询缓存没有返回过期命中。
-23. 子进程删除绑定文件，确认关联元数据随文件删除被清理。
-24. 子进程调用 `action_commit` 指向不存在的 selector，确认返回 `AGENT_STATUS_NOT_FOUND`。
+21. 子进程提交覆盖主对象和依赖对象的 `action_commit`，要求一次 syscall 发生 kernel-work 重调度、每个槽只更新一次、主对象与依赖对象摘要正确，并确认纯状态提交不改变 dependency generation。
+22. 子进程执行默认 align 查询并读取预取提示，要求提示由对象标签依赖产生、使用 label 索引计划、只指向当前 run、target fid 不重复、数量不超过 8，且该查询的 last-syscall 重调度计数大于 0。
+23. 子进程创建等待消息的 Recovery 目标和独立 churner；发送者在预取交接预算检查点让目标消费事件并退出，churner 随即创建 replacement 复用释放的进程槽。发送 syscall 恢复后才允许 replacement 检查状态，要求它没有收到旧目标的 hint 或 mailbox，证明交接提交按稳定端点重校验而非跨检查点保存 PCB 指针。
+24. 子进程清空某条记录的 status，确认属性更新生效，并确认旧 generation 查询缓存没有返回过期命中。
+25. 子进程删除绑定文件，确认关联元数据随文件删除被清理。
+26. 子进程调用 `action_commit` 指向不存在的 selector，确认返回 `AGENT_STATUS_NOT_FOUND`。
 
 ### 2.2 输出阅读方式
 
-本测试的输出重点是启动早期绑定、后台扫描、selector 一致性、inode 生命周期 guard、私有 `.agentmeta` 重新加载、内容摘要、查询缓存、scan/index 候选差异、依赖注册和 selector 未命中。阅读时关注 `partial_update_binding`、`preload_create_query`、`selector_consistency`、`stale_identity_guard`、`demo_inode`、`custom_inode`、`content_digest`、`digest_cache_invalidated`、`.agentmeta_reload`、`bulk_index`、`query_plan`、`dependency_update`、`delete_clears_metadata` 和最终通过标记。完整样例输出见 [test-record.md](test-record.md)。
+本测试的输出重点是启动早期绑定、后台扫描、selector 一致性、inode 生命周期 guard、私有 `.agentmeta` 重新加载、内容摘要、查询缓存、scan/index 候选差异、显式依赖与兼容位图按需解析、字段驱动批量 action、有界预取和交接端点复用。阅读时关注 `partial_update_binding`、`preload_create_query`、`selector_consistency`、`stale_identity_guard`、`metadata_action_bounded=1 field_driven=1 batched=1`、`prefetch_hints=1 bounded=1`、`handoff_target_exit=1 endpoint_reuse=1`、`demo_inode`、`custom_inode`、`content_digest`、`digest_cache_invalidated`、`.agentmeta_reload`、`bulk_index`、`query_plan`、`dependency_update`、`delete_clears_metadata` 和最终通过标记。完整样例输出见 [test-record.md](test-record.md)。
 
 ### 2.3 覆盖结论
 
@@ -148,7 +150,9 @@
 | 未命中 selector | `action_commit` 对不存在目标返回 `AGENT_STATUS_NOT_FOUND` |
 | 依赖查询 | `label/namespace/run_id` selector 只返回所选运行的对象依赖，不混入同名 label 的其他运行 |
 | 依赖注册 | `dependency_update` 可由用户态注册通用对象依赖，后续 `dependency_query` 可按同一 selector 读取 |
-| 预取提示 | 默认 align 查询后得到当前运行内 analyze/report 等后续 label metadata 提示 |
+| 批量 action | 主对象与依赖对象在一次有预算的状态提交中各更新一次，纯状态变化不推进 dependency generation |
+| 预取提示 | 默认 align 查询后得到当前运行内 analyze/report 等后续 label metadata 提示；目标去重、总数不超过 8，且查询内部产生 kernel-work 重调度 |
+| 交接端点生命周期 | 目标在交接检查点退出并由 replacement 复用槽位；replacement 的 hint ring 与 mailbox 保持为空 |
 
 ## 3. `agentscan_ucore`
 
@@ -655,7 +659,7 @@ bash scripts/run-agent-tests.sh
 3. A/B 创建同名文件和相同 metadata/fid，各自只能查询、打开和读取自己的对象。
 4. B 创建不带 `PERSIST` 的内存态 metadata，A 强制重载自己的 bank 记录后，B 的记录仍可查询，证明 `file_meta_init` 不能跨 scope 清表。
 5. target consent、route grant 和 MESSAGE 投递跨 scope 均拒绝；同 scope stable route 仍可协作。
-6. A 在同一 scope 内同时启动三个 Orchestrator；目标 bank 经 invalidate、分块 payload 写入、header publish 和回读验证后，owner 只在安全边界协作让出 CPU，使其他 writer 有机会到达事务门。三者各自持续创建并提交 `PERSIST` metadata，结束后强制从双 bank 重载，再按 run 查询必须完整得到三组共 12 条记录。`metadata_txn_contentions` 只报告该次单核时序实际发生的等待次数，允许为 0，不作为正确性门槛；并发提交、完整重载和查询结果才是断言。事务释放采用专属队列广播，实际 waiter 都在锁内重新检查 owner，不依赖单个线程继续传递唤醒。
+6. A 在同一 scope 内同时启动三个 Orchestrator；目标 bank 经 invalidate、分块 payload 写入、header publish 和回读验证后，owner 只在安全边界协作让出 CPU，使其他 writer 有机会到达事务门。三者各自持续创建并提交 `PERSIST` metadata，结束后强制从双 bank 重载，再按 run 查询必须完整得到三组共 12 条记录。`metadata_txn_contentions` 只报告该次单核时序实际发生的等待次数，允许为 0，不作为正确性门槛；并发提交、完整重载和查询结果才是断言。进程 waiter 领取单调 ticket，最外层释放只 wake-one；scheduler 的有界保留轮次不会重复唤醒已经 runnable 的 serving ticket。
 7. B 创建不带 `PERSIST` 的真实 volatile 对象，再由低权限 Artifact 连续执行 32 次单字节写入；前后 scope-local request/commit 计数必须完全不变，证明内存态记录不会制造不包含自身的空 bank checkpoint。
 8. A 的存储配额阶段先创建 120 个文件并占满本 scope 的 112 个 metadata 槽。随后低权限 Artifact 同时微写一个已绑定持久对象和经查询确认未绑定的超额对象，至少完成 128 轮；第 16 轮后通过 guest pipe 发出存活屏障，直到主进程明确停止前持续施压。B 在该存活窗口内完成 32 次本域 metadata 查询并主动让出 CPU，guest `get_mtime()` 要求总延迟不超过 5 秒。
 9. 测试读取 scope-local telemetry，要求持久变化全部进入记账、合并请求加成功批次等于总请求、完整 bank checkpoint 不超过请求数的八分之一；全局 scan runs 增量还必须满足 20 tick 非滑动 cooldown 的轮次上界。若攻击全程落在已有自适应 cooldown 内，零轮扫描也是合法结果。具体写入/批次数受调度时序影响，不把某次观测值固化为契约。
@@ -688,7 +692,7 @@ agentscope_ucore: lifecycle_reclamation=1
 agentscope_ucore: parent passed
 ```
 
-以上标记最早已出现在 2026-07-22 的旧 15 项 Agent QEMU 回归中。线程资源域改动前的独立复测再次到达 metadata transaction/COW、最终一致性、`lifecycle_reclamation=1` 和 `parent passed`，`elapsed=148.9s`；当时的最终 16 项脚本也通过该程序。`NPROC` 身份账本只复用未使用记录，active 最多 4 个且 active + retiring 不超过 8；FS reclaim cursor 最多 8 个，reaper 在 `NPROC` 账本范围轮转选择 retiring scope，因而新 workflow 不会覆盖旧退役状态或遗失其 I/O owner。
+以上标记最早已出现在 2026-07-22 的旧 15 项 Agent QEMU 回归中。2026-07-24 的依赖按需解析改动后完整 16 项脚本再次通过该程序，输出 `metadata_txn_contentions=3`、`metadata_cross_scope_progress=1 queries=32 latency_ms=840`、最终一致性、`lifecycle_reclamation=1` 和 `parent passed`，`elapsed=142.0s`。`NPROC` 身份账本只复用未使用记录，active 最多 4 个且 active + retiring 不超过 8；FS reclaim cursor 最多 8 个，reaper 在 `NPROC` 账本范围轮转选择 retiring scope，因而新 workflow 不会覆盖旧退役状态或遗失其 I/O owner。
 
 ## 19. syscall 内核工作预算复测
 
@@ -760,7 +764,7 @@ threadresource_ucore: parent passed
 [thread-resource] all checks passed
 ```
 
-本次代码改动后该专项已通过。默认 AgentOS 构建、完整 Agent 16/16、单独 `agentsched_ucore`、双目标进程回收、syscall 公平性和 filepool 资源测试也已通过；完整 Agent 轮墙钟约 `321s`，构建期 AgentOS 内核栈预算为 `13680 < 16384`。`make full-verify` 尚未执行。
+该线程资源改动轮已通过本专项、默认 AgentOS 构建、完整 Agent 16/16、单独 `agentsched_ucore`、双目标进程回收、syscall 公平性和 filepool 资源测试；当时完整 Agent 轮墙钟约 `321s`，构建期 AgentOS 内核栈预算为 `13680 < 16384`。当前依赖按需解析改动后的完整 Agent 轮另以约 `315.1s` 通过，栈预算为 `13840 < 16384`。`make full-verify` 尚未执行。
 
 ## 22. `iobudget_ucore`
 
@@ -793,7 +797,7 @@ iobudget_ucore: control_reserve_progress=1
 iobudget_ucore: parent passed
 ```
 
-最终 teardown 修复后的独立 QEMU 中八个具名机制 marker 与 `parent passed` 全部出现，`elapsed=2.4s`；ABI sized-copy 是第九类实质断言，但没有单独 marker。本次线程资源域改动后的完整 Agent 脚本也以约 `321s` 完成 16/16，确认本项继续通过。
+最终 teardown 修复后的独立 QEMU 中八个具名机制 marker 与 `parent passed` 全部出现，`elapsed=2.4s`；ABI sized-copy 是第九类实质断言，但没有单独 marker。当前依赖按需解析改动后的完整 Agent 脚本以约 `315.1s` 完成 16/16，确认本项继续通过。
 
 PUBLIC 32/16、每 active workflow 24/12 + 48/24 + 8/4、每 retiring workflow `BACKGROUND` 8/4、SYSTEM 96/48 + 16/8、shared 32/16 的配置总和由编译期断言保守按 4 active + 8 retiring 放入 560/280 静态 envelope。运行时设备根对普通流量执行 token/lease/debt 限速；SYSTEM owner、`CONTROL` 和 `SYSTEM` class 在根信用耗尽时仍可凭 owner/class 保留预算带 device debt 前进，所以根 bucket 不是保护流量的硬总上限。shared fast path 在没有 admission waiter 时可直接借用，只有排队授权再按 owner/class cursor 轮转；当前测试没有断言 `shared_grants` 或排队轮转。
 

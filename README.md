@@ -182,13 +182,14 @@ flowchart LR
 
 本模块面向 Agent 的文件对象理解。普通文件系统以路径、目录项、inode 和文件描述符为核心；Agent 工作流更关心“这个文件属于哪个任务、当前状态是什么、是否是报告、是否已经失败、摘要是什么、哪个 Agent 正在编辑”。AgentOS-uCore 为文件对象附加 namespace、object id、type、state、owner、version、tags、labels、digest 和 summary，并把 metadata 绑定到真实 `dev + inum + incarnation`。`incarnation` 在 inode 槽复用时变化，避免旧 metadata、摘要缓存或租约错误命中新文件。
 
-metadata 持久化使用私有 `.agentmeta` 双 bank，普通文件系统调用不能直接打开、创建、截断或删除后端文件。内核在 `timer_init()` 之后、运行时 I/O policy 和首个用户进程发布之前完成可信启动加载；单个 bank 损坏时从另一份可验证副本恢复，不存在可验证副本或可信判定失败时 metadata API 进入 fail-closed 状态，但 scope retirement 仍可按 VFS label 清理文件并释放生命周期身份。普通 workflow 文件变化先发布内存记录或 inode sidecar；只有 `PERSIST` 记录按 scope 进入固定窗口后台写回，volatile 微写不会制造空 checkpoint。后台 checkpoint 由触发它的稳定 owner 赞助并使用硬 `BACKGROUND` I/O 预算，尝试后的固定合并窗口负责请求聚合，不再用执行耗时放大 checkpoint 休整期。双 bank 写回按块推进：先使目标 header 无效，再更新并逐段验证变化的 payload，最后发布并回读 header；新主 bank 完整验证后才切换 active generation，随后才允许用同一不可变快照更新旧 bank。未使用的高水位块可复用。在新 primary 的 header 回读验证完成前，故障保留旧 active bank；切换后 mirror 更新失败时，已验证的新 primary 仍可恢复。同步 metadata 操作通过 FIFO submit lane 排队并建立不可替换的 COW job，不把调用返回解释成 primary 已验证；条件检查、事务门释放和等待入队处于同一关中断临界区，避免丢失唤醒。协调扫描仍使用独立的非滑动请求合并和四倍扫描耗时自适应休整，使 metadata 满表后的未绑定文件微写不能制造无间隔全根扫描。查询时，内核可以按 state、label、type 等字段走索引路径，也可以执行扫描路径；查询结果会返回候选数量、扫描数量、命中数量、查询计划和原因。文件内容摘要由受权 Agent 读取，重复读取同一版本可以命中 digest cache。编辑文件时，Agent 可以申请租约，内核在真实写入、截断和删除路径检查持有者和版本，降低并发覆盖风险。
+metadata 持久化使用私有 `.agentmeta` 双 bank，普通文件系统调用不能直接打开、创建、截断或删除后端文件。内核在 `timer_init()` 之后、运行时 I/O policy 和首个用户进程发布之前完成可信启动加载；单个 bank 损坏时从另一份可验证副本恢复，不存在可验证副本或可信判定失败时 metadata API 进入 fail-closed 状态，但 scope retirement 仍可按 VFS label 清理文件并释放生命周期身份。普通 workflow 文件变化先发布内存记录或 inode sidecar；只有 `PERSIST` 记录按 scope 进入固定窗口后台写回，volatile 微写不会制造空 checkpoint。后台 checkpoint 由触发它的稳定 owner 赞助并使用硬 `BACKGROUND` I/O 预算，尝试后的固定合并窗口负责请求聚合，不再用执行耗时放大 checkpoint 休整期。双 bank 写回按块推进：先使目标 header 无效，再更新并逐段验证变化的 payload，最后发布并回读 header；新主 bank 完整验证后才切换 active generation，随后才允许用同一不可变快照更新旧 bank。未使用的高水位块可复用。在新 primary 的 header 回读验证完成前，故障保留旧 active bank；切换后 mirror 更新失败时，已验证的新 primary 仍可恢复。进程态全局 metadata 事务门按单调 ticket FIFO 接纳，最外层释放只唤醒队首；scheduler 在门空闲时可取得硬有界维护轮次，但不会二次唤醒已由前任唤醒的 serving ticket。进程态查询、索引、显式依赖和预取扫描每处理 128 条记录计入统一 kernel-work 预算。scheduler 的每轮 16 目录项扫描只发布字段变化与线性索引。依赖表只保存每 scope 有界的显式用户边；兼容 `dependency_mask` 保持在文件记录中，由查询、action 和预取在既有线性扫描内按需解析，不再在全局事务门内物化超线性派生图。维护入口按字段变化掩码区分 state 索引和依赖代数，`ACTION_COMMIT` / `RERUN_STAGE` 以一次选集扫描和一次原子提交更新目标，不再为每个依赖对象重复重建全局图。查询预取复用缓存保存的精确命中槽，收集 scope 内有配额上限的依赖选择器后只扫描一次文件表，对目标全局去重并把单次副作用限制在 8 条提示内。跨 Agent 预取交接不再让裸 `proc *` 跨预算检查点存活：消息入队时只捕获 `slot + pid + control_id + scope` 稳定端点，长阶段仅处理局部快照，预付固定扫描预算后重新解析端点并原子发布；目标退出或槽复用时直接丢弃派生提示。同步持久化操作另通过 FIFO submit lane 排队并建立不可替换的 COW job，不把调用返回解释成 primary 已验证；条件检查、事务门释放和等待入队处于同一关中断临界区，避免丢失唤醒。协调扫描仍使用独立的非滑动请求合并和四倍扫描耗时自适应休整，使 metadata 满表后的未绑定文件微写不能制造无间隔全根扫描。查询时，内核可以按 state、label、type 等字段走索引路径，也可以执行扫描路径；查询结果会返回候选数量、扫描数量、命中数量、查询计划和原因。文件内容摘要由受权 Agent 读取，重复读取同一版本可以命中 digest cache。编辑文件时，Agent 可以申请租约，内核在真实写入、截断和删除路径检查持有者和版本，降低并发覆盖风险。
 
 | 设计点 | 实现方式 | 测试入口 |
 | --- | --- | --- |
 | 真实文件绑定 | metadata 记录 `dev + inum + incarnation` | `agentfs_ucore`、`agentvfs_ucore` |
 | 私有后端 | `.agentmeta` 只允许 Agent 子系统内部访问 | `agentsecurity_ucore` |
 | 合并写回 | scope-local dirty/durable 代数、PERSIST 分流、固定窗口、分块 COW 状态机与 `BACKGROUND` I/O 预算；扫描保留独立自适应休整 | `agentscope_ucore`；BACKGROUND 设备预算仍缺独立动态压力 |
+| 事务公平 | FIFO ticket/wake-one、scheduler 有界保留轮次、128-record 工作预算、按需依赖解析、字段化维护、批量状态提交、最多 8 条去重预取及稳定端点交接 | `agentfs_ucore`、`agentscope_ucore`、`agentscan_ucore` |
 | 索引查询 | state、label、type 候选集 | `agentbench_ucore`、双目标实验 |
 | 内容摘要 | 读取短预览、长度和 hash | `agentfinal_ucore`、`labdemo_ucore` |
 | 编辑租约 | 持有者检查和版本提交检查 | `agentconflict_ucore` |
@@ -372,7 +373,7 @@ AgentOS 专项测试程序如下：
 | 测试程序 | 主要内容 | 关键输出 |
 | --- | --- | --- |
 | `agentfinal_ucore` | Agent 创建、Context 映射、批量工具调用、Context Path、用户 cache、timeline、Run Ledger、provenance。 | `agentfinal_ucore: parent passed` |
-| `agentfs_ucore` | 真实 inode 绑定、partial update、selector 一致性、`.agentmeta`、索引查询、查询缓存、内容摘要、预取提示、删除清理。 | `agentfs_ucore: parent passed` |
+| `agentfs_ucore` | 真实 inode 绑定、partial update、selector 一致性、`.agentmeta`、索引查询、查询缓存、内容摘要、有界去重预取、字段驱动批量状态维护、metadata 工作预算与交接端点生命周期。 | `metadata_action_bounded=1 field_driven=1 batched=1 preemptions=5`、`prefetch_hints=1 bounded=1 ... preemptions=8`、`handoff_target_exit=1 endpoint_reuse=1 preemptions=6 ... clean=1`、`agentfs_ucore: parent passed` |
 | `agentscan_ucore` | 根目录自动扫描、真实文件自动写入 metadata、文件创建和删除后的索引维护。 | `agentscan_ucore: parent passed` |
 | `agentloop_ucore` | FIFO 事件队列、watch/unwatch、睡眠等待、timeout、heartbeat、wait cancel。 | `agentloop_ucore: parent passed` |
 | `agentsched_ucore` | 角色权重、受权软调度配置、事件优先、强制 burst 公平上限和普通进程进展。 | `agentsched_ucore: parent passed` |
@@ -390,7 +391,7 @@ AgentOS 专项测试程序如下：
 | `syscallfair_ucore` | 纯 Guest 公平性契约，覆盖控制台、inode 大写入、截断的 last-syscall 重调度计数、observer 与 worker 完整退出。 | 当前源码 `make syscall-fairness-test` 已通过 |
 | `threadresource_ucore` | 普通/保留域上限与复用、容量拒绝计数稳定、普通/保留全局水位与复用、系统保留进展和跨域调度公平。 | `make thread-resource-test` 输出 12 项机制标记、`parent passed` 和 `[thread-resource] all checks passed` |
 
-本次线程资源域改动后已以 `CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 完成 16/16，墙钟约 `321s`；默认 `make build`、`make thread-resource-test`、单独 `agentsched_ucore`，以及双目标进程回收、syscall 公平性和 filepool 资源脚本也通过，AgentOS 构建期栈预算为 `13680 < 16384`。这些结果仍不等同于尚未运行的 `make full-verify`，更早的 ENOSPC 专项继续作为历史记录。
+当前依赖按需解析改动后已以 `CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 完成 16/16，整条命令墙钟约 `315.1s`；其中 `agentfs_ucore`、`agentscan_ucore`、`agentscope_ucore` 分别约为 `81.9s`、`10.0s`、`142.0s`。默认构建及构建期栈预算同时通过，AgentOS 为 `13840 < 16384`。此前线程资源、双目标进程回收、syscall 公平性和 filepool 资源脚本的通过结果继续保留为历史证据；这些结果仍不等同于尚未运行的 `make full-verify`。
 
 ### 6.2 双目标对照负载
 

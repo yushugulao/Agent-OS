@@ -76,7 +76,7 @@ flowchart LR
 | 结构化工具调用和工具列表 | 已实现，最终热路径为 `agent_run` 批量 ABI |
 | 工具调用自动写入 Context Path | 已实现 |
 | Context Path 手动追加/query/rollback/clear/snapshot | 已实现；公开 cause/span 由内核私有 source control/span owner 认证，手动 push 不得自报非零 cause/span |
-| 文件元数据表、真实 inode 关联、属性查询、索引查询、metadata 双 bank 持久化、根目录自动扫描 | 已实现；所有对象记录按 kernel-issued workflow scope 分区，读写由可睡眠事务门串行化，普通文件变化按 scope 合并，双 bank 由可恢复分块 COW 状态机后台写回 |
+| 文件元数据表、真实 inode 关联、属性查询、索引查询、metadata 双 bank 持久化、根目录自动扫描 | 已实现；所有对象记录按 kernel-issued workflow scope 分区，进程事务使用 FIFO ticket/wake-one 和 128-record 工作预算，scheduler 只做硬有界维护；显式依赖表与文件内兼容位图分离，消费者按需线性解析，不建立全局派生图；普通文件变化按 scope 合并，双 bank 由可恢复分块 COW 状态机后台写回 |
 | Agent Loop 心跳、等待、唤醒和 Agent 感知调度 | 已实现 16 槽事件队列、同 scope stable-control IPC 路由、watch/unwatch、wait cancel、heartbeat、自适应调度、当前可信 span 短记录、scope-local audit/Run Ledger 和统一 timeline |
 | 安全与资源韧性 | 已实现动态 workflow scope（public=0、system=1、workflow>=3，最多 4 个 active，active + retiring 硬上限 8，2 保留为稳定 PUBLIC 存储 principal）、capability + exact scope/owner、可信映像、W^X、VFS 隔离、对象私有等待、协作退出、进程/线程资源域配额、资源域两级调度、持久存储主体配额、块 I/O/cache 分域、分级保留量和 scope retirement 回收 |
 | 代表性 uCore 基础 syscall | 已实现 `trace`、`mailread`、`mailwrite` |
@@ -95,7 +95,7 @@ flowchart LR
 | 环形 Context Path | 固定容量 128 条短文本摘要记录，超长 FIFO 覆盖，记录 `oldest/latest/dropped/rollback` 元信息，并维护 prev/record hash 完整性链 |
 | 内核维护因果链 | Context record 和事件公开 `cause_sequence` / `span_id`，PCB sidecar 保存可信 source pid/control 与 span owner；`context_push` 的非零 cause/span 被拒绝，事件消费只继承同 scope 的内核认证链路 |
 | 批量 Snapshot | `context_snapshot()` 一次返回 header 和按时间顺序排列的可见路径 |
-| 文件对象查询引擎 | 物理 metadata 表按 SYSTEM 64 条和 4 个 workflow 各 112 条预留；主键先匹配 scope，再匹配 `dev + inum + incarnation`，依赖记录每 scope 16 条，查询/缓存/预取同样按 scope 裁剪 |
+| 文件对象查询引擎 | 物理 metadata 表按 SYSTEM 64 条和 4 个 workflow 各 112 条预留；主键先匹配 scope，再匹配 `dev + inum + incarnation`，依赖记录每 scope 16 条；查询/缓存保存精确 hit slot，预取精确核验 selector、一次扫描文件表并最多发布 8 个唯一目标 |
 | 文件编辑租约 | 租约表为 4 个 scope 各保留 8 条，内核用 `scope + dev + inum + incarnation` 识别对象，在真实 VFS 修改路径上拒绝跨 scope 或非持有者操作 |
 | Agent Loop | 每个 Agent 有 16 槽 FIFO 和最多 8 条 watch；事件三层资源限制不变；跨 Agent `MESSAGE` / `LLM_DONE` 必须同时命中 stable route 与相同 active workflow scope，target consent 不能越过 scope |
 | Agent 感知调度 | 调度器先严格轮转 active 资源域，再在选中域内按 FIFO 或 Agent 软评分选择线程；角色权重、orchestrator 配置的 priority/budget、事件队列、等待 deadline、heartbeat 到期、等待时长和虚拟运行量只影响域内选择，并记录最近 16 次 Agent 调度原因；域内连续 Agent 或分值选择最多 8 次 |
@@ -109,7 +109,7 @@ flowchart LR
 | 通用动作和工件更新 | `action_commit` 与 `artifact_update` 作为核心对象状态更新工具，`rerun_stage` 和 `write_report` 只作为旧示例兼容别名；记录、事件 action 和重复请求判断都归入通用类别 |
 | LLM Relay 支持 | 内核提供 `llm_request`、`llm_response`、`LLM_RELAY` capability 和 `AGENT_EVENT_LLM_DONE`；prompt/response 摘要进入 Context、timeline 和审计记录；云端 API、secret、HTTP/TLS 留在用户态 |
 | 结构化事件 | `labdemo_ucore` 输出 `agentos:event type=... key=value`，为页面工具和 LLM Relay 保留解析契约 |
-| 测试驱动验收 | 功能测试之外，以 `agentscope_ucore`、`iobudget_ucore`、`threadresource_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`、`fsenospc_ucore`、`procreap_ucore` 和栈预算脚本验证 scope、授权、输入、资源耗尽及生命周期机制；本次线程改动后已通过默认构建、线程资源专项、完整 Agent 16/16、单独 `agentsched_ucore` 和双目标进程回收/syscall 公平性/filepool 脚本，完整 Agent 轮墙钟约 321s，AgentOS 栈预算为 13680/16384；`full-verify` 尚未运行 |
+| 测试驱动验收 | 功能测试之外，以 `agentscope_ucore`、`iobudget_ucore`、`threadresource_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`、`fsenospc_ucore`、`procreap_ucore` 和栈预算脚本验证 scope、授权、输入、资源耗尽及生命周期机制；当前依赖按需解析改动后已通过默认构建和完整 Agent 16/16，完整轮墙钟约 315.1s，AgentOS 栈预算为 13840/16384；此前线程资源、单独 `agentsched_ucore` 和双目标进程回收/syscall 公平性/filepool 脚本结果按历史轮保留，`full-verify` 尚未运行 |
 
 ## 5. 构件视图
 
@@ -423,7 +423,7 @@ Agent-only syscall 对普通进程、非法参数、未知工具、历史节点�
 
 Agent Loop 使用进程字段保存 8 条 watch、16 槽 FIFO 事件队列、最多 16 条入站 IPC 路由、每个事件槽的私有来源 control id、一次性 wait cancel 令牌、等待次数、超时次数和心跳信息。`agent_wait()` 优先处理取消令牌，再消费队列中的事件；没有事件时，有限 timeout 和无限等待都进入对象私有等待队列，由事件入队、deadline 到期、heartbeat 到期或定向取消唤醒。
 
-公共 `agent_wake()` 只能投递 `AGENT_EVENT_MESSAGE`，文件、定时器和 LLM 完成事件只能由对应内核或专用工具路径产生。跨 Agent 的 `agent_wake`、`send_message`、非零 target `llm_request` 和 `llm_response` 统一要求 source/target 位于同一 active workflow scope，再使用 stable control id 路由鉴权；target consent、共同 controller、相同角色或相同 capability 都不能跨 scope。PID 解析、scope/存活/路由检查和入队在同一临界区完成，兼容 mailbox 与预取交接只在入队成功后更新。directed IPC 达到 8 条、外部可归因事件合计达到 12 条，或同一 stable source 跨 directed/attributed 两类达到 4 条时即拒绝；显式内核 origin 可以越过 external 边界使用预留容量。广播只扫描本 scope watcher，且不会因单个订阅者失败而停止后续投递。
+公共 `agent_wake()` 只能投递 `AGENT_EVENT_MESSAGE`，文件、定时器和 LLM 完成事件只能由对应内核或专用工具路径产生。跨 Agent 的 `agent_wake`、`send_message`、非零 target `llm_request` 和 `llm_response` 统一要求 source/target 位于同一 active workflow scope，再使用 stable control id 路由鉴权；target consent、共同 controller、相同角色或相同 capability 都不能跨 scope。PID 解析、scope/存活/路由检查、事件入队和兼容 mailbox 更新在同一临界区完成。预取交接随后只携带 `slot + pid + stable control id + scope` 端点句柄和局部 hint 快照跨预算检查点；发布前在关中断短区间重新解析完整句柄，槽已退出或复用时丢弃提示，因此不会向 replacement 进程写入 PCB、span bus 或审计记录。directed IPC 达到 8 条、外部可归因事件合计达到 12 条，或同一 stable source 跨 directed/attributed 两类达到 4 条时即拒绝；显式内核 origin 可以越过 external 边界使用预留容量。广播只扫描本 scope watcher，且不会因单个订阅者失败而停止后续投递。
 
 取消是独立控制操作：`WAIT_CANCEL` capability 决定主体能否发起，同一 active scope、内核 control id 和直接 controller 绑定共同决定主体能控制哪个对象；消息路由不授予取消权，取消权也不自动建立消息路由。`agent_sched_config()` 同样只允许 orchestrator 调整本 scope 受控 Agent。调度参数都是域内软策略：外层 active-domain FIFO 严格轮转；选中域内连续选择 Agent 或连续按分值选择达到 `AGENT_SCHED_MAX_AGENT_BURST = 8` 后，只要对应普通/FIFO 候选存在，调度器就强制选择该候选。调度器的采样记录写入当前 workflow 的 low 审计分区，不会占用 protected/high 状态效果证据。
 
@@ -450,7 +450,7 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 3. 用户态可直接读取 Context 镜像中的 header 和 latest result。
 4. `context_snapshot()` 一次返回多条有序历史，避免逐条 query。
 
-文件查询性能通过扫描路径和索引路径的候选记录数差异体现。索引、generation-aware 查询缓存、dependency 和 digest cache 的 key 均先包含 scope；相同 namespace/run/label 或文件名不会跨 workflow 命中。查询缓存代数也按 scope 递增，只有所有 workflow 都可见的 SYSTEM 对象变化才使各域缓存失效。普通 workflow 文件写入先把已提交 size 和代数发布到 inode incarnation sidecar；只有 `PERSIST` 记录登记本域 dirty generation，volatile 记录不进入 bank。固定一秒的非滑动窗口把重复变化合并，scheduler 在扫描前给到期写回一次独立机会。后台 checkpoint 使用触发 scope 的 `BACKGROUND` token budget，并依次完成 invalidate、变化 payload 写入与逐段验证、header publish 与回读、active generation 切换，再更新旧 bank mirror；新 primary 未完整验证前不覆盖旧的已验证代。同步提交通过 FIFO ticket 进入单一物理 lane，失败条件检查、事务门释放和 condition queue 入队保持原子，避免丢失唤醒。协调扫描继续使用独立的非滑动 pending/deadline 和 `max(20 tick, 4 * 扫描耗时)` 自适应休整，满表未绑定对象的微写不能让全根扫描完成即重启。写入期间继续变化的 scope 不推进 durable generation，失败也保留待办，因此合并不会牺牲最终一致性。显式持久 metadata 管理操作仍同步提交。查询命中后，每 Agent 最多生成 8 条本地提示；共享 32 槽 span prefetch 表按 4 个 scope 各保留 8 条，并同时核对公开 span id 与私有 owner。message handoff 也只在同 scope 的可信 route 成功入队后发生。现有 `agentfs_ucore`、`agentbench_ucore` 和 `labdemo_ucore` 继续验证同 workflow 功能，`agentscope_ucore` 负责相同名称和相同业务标识的跨 scope 负向边界；当前独立 `iobudget_ucore` 已验证单 PUBLIC 压力下的速率、cache 和单 workflow CONTROL 进展。
+文件查询性能通过扫描路径和索引路径的候选记录数差异体现。索引、generation-aware 查询缓存、dependency 和 digest cache 的 key 均先包含 scope；相同 namespace/run/label 或文件名不会跨 workflow 命中。查询缓存代数也按 scope 递增，只有所有 workflow 都可见的 SYSTEM 对象变化才使各域缓存失效。进程态 metadata 工作按 128 records 计费，事务请求按 ticket FIFO/wake-one 接纳；scheduler 的有界维护轮次只发布字段变化和线性索引。`agent_dependencies[]` 仅保存受每 scope 配额约束的显式用户边，文件记录中的兼容 `dependency_mask` 是规范输入，由查询、action 和预取各自在已有固定表遍历中按需解析；结构变化只推进依赖代数，不再产生持门的超线性全局重建。普通 workflow 文件写入先把已提交 size 和代数发布到 inode incarnation sidecar；只有 `PERSIST` 记录登记本域 dirty generation，volatile 记录不进入 bank。固定一秒的非滑动窗口把重复变化合并，scheduler 在扫描前给到期写回一次独立机会。后台 checkpoint 使用触发 scope 的 `BACKGROUND` token budget，并依次完成 invalidate、变化 payload 写入与逐段验证、header publish 与回读、active generation 切换，再更新旧 bank mirror；新 primary 未完整验证前不覆盖旧的已验证代。同步提交通过 FIFO ticket 进入单一物理 lane，失败条件检查、事务门释放和 condition queue 入队保持原子，避免丢失唤醒。协调扫描继续使用独立的非滑动 pending/deadline 和 `max(20 tick, 4 * 扫描耗时)` 自适应休整，满表未绑定对象的微写不能让全根扫描完成即重启。写入期间继续变化的 scope 不推进 durable generation，失败也保留待办，因此合并不会牺牲最终一致性。显式持久 metadata 管理操作仍同步提交。查询命中后，缓存保留精确 hit slot；依赖选择器先受 scope 配额约束并精确核验，再一次扫描文件表、全局去重，每次最多生成 8 条提示。共享 32 槽 span prefetch 表按 4 个 scope 各保留 8 条，并同时核对公开 span id 与私有 owner。message handoff 只在同 scope 的可信 route 成功入队后发生，并使用稳定端点句柄、预算化 prepare 和重新校验后的固定上界 commit，不能把跨检查点保存的旧 PCB 指针写入复用槽。现有 `agentfs_ucore`、`agentbench_ucore` 和 `labdemo_ucore` 继续验证同 workflow 功能，`agentscope_ucore` 负责相同名称和相同业务标识的跨 scope 负向边界；当前独立 `iobudget_ucore` 已验证单 PUBLIC 压力下的速率、cache 和单 workflow CONTROL 进展。
 
 ## 9. 架构决策
 
@@ -481,10 +481,10 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 | 因果图接口 | `agent_provenance_snapshot()` 把可见 Context、审计和预取提示转换成因果边 | 让 Web UI 可以直接画出跨 Agent 触发关系，减少用户态日志拼接 | 当前是短摘要内存图，不是持久化 provenance 数据库 |
 | 工具查找 | ID 直接定位，legacy name 兼容 | 最终性能路径避免字符串扫描 | 工具 ID 需要保持稳定 |
 | 批量执行 | `agent_run()` 一次最多 64 个 op | 减少 syscall 次数，提高端到端吞吐 | 单个 op 错误通过 result 表达 |
-| 文件查询实现 | scope + `dev + inum + incarnation` 主键、scope-local metadata/index/cache、inode size 发布 sidecar、PERSIST/volatile 写回分流、按 scope dirty/durable 代数管理的固定窗口后台写回、FIFO COW submit lane、带自适应 cooldown 的协调扫描，以及 `.agentmeta` / `.agentmeta1` 分块 COW 双 bank；启动在 runtime I/O policy/用户进程发布前完成可信加载，单个 bank 损坏时从另一份有效副本恢复，无可验证有效 bank 时 metadata API fail closed | 同名、同 fid/run/label 的不同 workflow 对象保持隔离；微小文件变化不会同步放大全 bank I/O；目标 bank 先无效、payload 写入并验证、header 发布并回读后才切换 primary，之后才镜像旧 bank；无有效 bank 时不能用空表继续授权，VFS-labelled scope cleanup 仍可退休身份 | 当前只扫描 uCore 根目录，不做多级目录递归；后台 checkpoint 使用固定合并窗口和硬 BACKGROUND I/O 预算，四倍耗时自适应只属于 scanner；未动态注入启动 bank 损坏、VirtIO 短写/错误或掉电 |
+| 文件查询实现 | scope + `dev + inum + incarnation` 主键、scope-local metadata/index/cache、FIFO transaction gate、128-record 工作预算、字段化维护、显式依赖表与兼容位图按需解析、inode size sidecar、PERSIST/volatile 写回分流、固定窗口后台写回、FIFO COW submit lane、带自适应 cooldown 的协调扫描，以及 `.agentmeta` / `.agentmeta1` 分块 COW 双 bank | 同名、同 fid/run/label 的不同 workflow 对象保持隔离；Recovery action 不再触发全局依赖物化，长 action/query 的线性工作计入域级调度；scheduler 和进程请求均有接纳边界；微小文件变化不会同步放大全 bank I/O；目标 bank 验证后才切换 primary，之后才镜像旧 bank | 当前只扫描 uCore 根目录，不做多级目录递归；后台 checkpoint 使用固定合并窗口和硬 BACKGROUND I/O 预算，四倍耗时自适应只属于 scanner；未动态注入启动 bank 损坏、VirtIO 短写/错误或掉电 |
 | 文件内容摘要 | `read_file_digest` 受 `CONTENT_READ` capability 控制，按 selector 读取真实文件短预览、最多 4096 字节内容和 FNV-1a 指纹；绑定 Agent metadata 的真实文件进入 8 槽内容版本感知 digest cache | 让 Agent 在 metadata 命中后取得轻量内容证据，重复读取同一文件证据时复用结果，并自动进入 Context/timeline | 不是全文搜索，不建立内容倒排索引；未绑定 Agent metadata 的普通文件不缓存 |
 | 文件编辑冲突处理 | 使用 `scope + dev + inum + incarnation` 租约和版本检查，并接入真实 VFS 修改路径 | 防止同 scope 无序覆盖，也拒绝跨 scope 租约号复用 | 不做内容自动合并 |
-| 对象预取提示 | 每 Agent 8 条；物理 span 表 32 条按 4 scope 各8，并核对 private owner | 同 scope 因果链可交接提示，跨 scope 不能借公开 span 查询 | 当前只提示 metadata，提示本身不预读文件内容 |
+| 对象预取提示 | 查询/缓存携带精确 hit slot；scope 配额内依赖选择器经精确核验后只扫描一次文件表，以槽位位图去重并最多发布 8 条；物理 span 表 32 条按 4 scope 各8，并核对 private owner | 单次查询副作用有固定上限，同 scope 因果链可交接提示，跨 scope 不能借公开 span 查询 | 当前只提示 metadata，提示本身不预读文件内容 |
 | LLM 友好路径 | 内核记录 `llm_request`/`llm_response`，使用 `LLM_RELAY` capability 限制结果投递，并用 `AGENT_EVENT_LLM_DONE` 唤醒请求 Agent | 让 LLM 驱动 Agent 的请求、结果、Context、事件和审计进入 OS 管理视野，同时不让内核持有 secret 或访问网络 | 真实云端模型调用由用户态或宿主机 relay 实现 |
 | Agent Loop | watch/unwatch/wait/wake/route_config/wait_cancel/heartbeat/sched_snapshot/sched_config 独立 syscall，并让调度器感知 Agent 状态 | 等待事件不放进 batch 热路径；跨 Agent 数据面显式授权；调度原因由内核记录，orchestrator 可受权调整目标 Agent 参数 | 路由当前只覆盖 `MESSAGE` / `LLM_DONE`；调度策略字段为 weight、priority 和 budget |
 | 基础 syscall 兼容 | 实现 `SYS_trace=410`、`SYS_mailread=401`、`SYS_mailwrite=402` | 满足代表性 uCore 基础测试和普通进程消息接口 | 不把当前工作扩大成全部 chapter 的完整兼容验收 |
@@ -535,7 +535,7 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 | PUBLIC 块 I/O/cache 压力不能消耗 workflow 控制与缓存保留，内核态 yield loop 与 fault teardown 不能阻断 refill/完成或绕过归因 | 最终修复后的独立 `iobudget_ucore` 新增 `scheduler_interrupt_progress=1` 和 `fault_exit_cleanup=1`，与线程退出、PUBLIC budget/attribution、workflow cache、bounded progress、CONTROL reserve 共八项具名机制标记和 `parent passed`，`elapsed=2.4s`；只动态覆盖一个 PUBLIC 与一个 workflow CONTROL owner，未断言 shared 排队 grant 轮转，也未覆盖多 workflow、SYSTEM/BACKGROUND、retiring 3/8 或设备故障注入 |
 | 阻塞退出、孤儿/僵尸和 fork bomb 受生命周期与资源域约束 | `make proc-reap-test`，覆盖 `detached-wait`、`unreaped-parent-isolated`、`live-domain-limit` 和 `reserved-agent-slot` |
 | thread bomb 不能耗尽普通/保留线程池或垄断跨域 CPU | `make thread-resource-test`，覆盖普通/保留域上限与复用、容量拒绝计数稳定、普通/保留全局水位与复用、退出退款、系统保留进展和 `domain_fairness` |
-| 内核栈有 guard 和构建期预算 | 本次线程改动后的 AgentOS 构建为 `required=13680 < limit=16384` |
+| 内核栈有 guard 和构建期预算 | 当前依赖按需解析改动后的 AgentOS 构建为 `required=13840 < limit=16384` |
 | 代表性 uCore 基础 syscall | `ch3_trace`、`agentsecurity_ucore: mail_basic=1` |
 
 详细验证见 [verification.md](verification.md) 和 [test-record.md](test-record.md)。

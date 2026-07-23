@@ -6,7 +6,7 @@
 
 本项目在 uCore 内核上实现 Agent-OS，把 Agent 进程身份、结构化工具调用、上下文历史、文件元数据索引和 Agent 事件运行机制放入内核支持层。
 
-完整专项脚本当前依次运行十六个程序。本次线程资源域改动后已以 `CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 完成 16/16，整条命令墙钟约 `321s`：
+完整专项脚本当前依次运行十六个程序。2026-07-24 的依赖按需解析改动后已以 `CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 完成 16/16，整条命令墙钟约 `315.1s`：
 
 ```bash
 agentfinal_ucore
@@ -124,6 +124,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentfs_ucore CHAPTER
 | `bulk_index` | 接近 128 条记录时，索引路径检查的候选记录少于扫描路径 |
 | `query_plan` | 内核说明本次索引路径按 status 选择 bucket，并检查了多少候选记录 |
 | `prefetch_hints` | 内核根据历史查询和对象标签依赖给出后续 metadata 提示 |
+| `handoff_target_exit` | 目标在交接检查点退出并复用槽位后，replacement 没有收到旧端点的 hint 或 mailbox |
 | `.agentmeta_reload` | 再次初始化时从私有 `.agentmeta` 重新加载自定义元数据 |
 | `partial_update_binding` | 启动早期的字段级更新仍绑定调用者指定的真实 inode，重载后身份不丢失 |
 | `selector_consistency` | fid/path 等非空 selector 若命中不同对象则拒绝修改或删除 |
