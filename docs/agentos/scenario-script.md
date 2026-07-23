@@ -6,7 +6,7 @@
 
 本项目在 uCore 内核上实现 Agent-OS，把 Agent 进程身份、结构化工具调用、上下文历史、文件元数据索引和 Agent 事件运行机制放入内核支持层。
 
-完整专项脚本依次运行十五个程序：
+完整专项脚本当前依次运行十六个程序。当前冻结源码以 `CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 完成 16/16，整条命令墙钟 `337.1s`：
 
 ```bash
 agentfinal_ucore
@@ -23,6 +23,7 @@ agentsecurity_ucore
 agentscope_ucore
 agenttrust_ucore
 agentvfs_ucore
+iobudget_ucore
 usersafety_ucore
 ```
 
@@ -44,6 +45,7 @@ usersafety_ucore
 | `agentscope_ucore` | 检查动态 workflow scope、跨域对象/IPC 隔离、事务竞争、微小写入合并、跨域查询进展、配额、fd 委派和生命周期回收 |
 | `agenttrust_ucore` | 检查代码 RX、数据 RW+NX、可信映像不可变及 Agent 角色与可执行 inode 绑定 |
 | `agentvfs_ucore` | 检查 public/workflow 文件隔离、非 Agent worker 能力衰减及继承 fd 重鉴权 |
+| `iobudget_ucore` | 检查稳定 PUBLIC/workflow owner、普通流量设备根预算、完成归因、线程退出 lease 回收、唯一 runnable 内核 pipe waiter 下的 scheduler 中断交付、fault 退出清理的归因/debt 结算、buffer cache floor/cap 和 CONTROL 保留预算下的有界进展；最终机制独立轮 `elapsed=2.4s`，完整轮 `2.1s` |
 | `usersafety_ucore` | 检查用户指针范围、exec 参数、pipe/file 失败回滚和定向等待队列 |
 
 ## 2. 环境和运行方式

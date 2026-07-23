@@ -79,6 +79,8 @@ last_notice = start
 marker_seen = False
 marker_time = None
 failure_seen = False
+expected_fault_exit = False
+timed_out = False
 lines = []
 
 with open(log_file, "w", encoding="utf-8", errors="replace") as log:
@@ -93,11 +95,12 @@ with open(log_file, "w", encoding="utf-8", errors="replace") as log:
     assert proc.stdout is not None
     while True:
         now = time.monotonic()
-        if marker_time is not None and now - marker_time >= marker_grace:
-            print(f"[agent-tests] {init_proc}: marker grace elapsed, stopping QEMU")
-            break
         if now - start > case_timeout:
             print(f"[agent-tests] {init_proc}: exceeded {timeout_text}", file=sys.stderr)
+            timed_out = True
+            break
+        if marker_time is not None and now - marker_time >= marker_grace:
+            print(f"[agent-tests] {init_proc}: marker grace elapsed, stopping QEMU")
             break
         if now - last_output >= idle_notice and now - last_notice >= idle_notice:
             print(
@@ -120,7 +123,13 @@ with open(log_file, "w", encoding="utf-8", errors="replace") as log:
             lines.append(line.rstrip("\n"))
             if len(lines) > 80:
                 lines = lines[-80:]
+            if (init_proc == "iobudget_ucore" and
+                    "iobudget_ucore: fault_exit_armed=1" in line):
+                expected_fault_exit = True
             if failure_re.search(line):
+                if expected_fault_exit and "bad addr" in line:
+                    expected_fault_exit = False
+                    continue
                 failure_seen = True
                 print(f"[agent-tests] {init_proc}: failure text detected", file=sys.stderr)
                 break
@@ -141,7 +150,7 @@ with open(log_file, "w", encoding="utf-8", errors="replace") as log:
             os.killpg(proc.pid, signal.SIGKILL)
             proc.wait(timeout=2)
 
-if failure_seen or not marker_seen:
+if failure_seen or timed_out or not marker_seen:
     print(f"[agent-tests] {init_proc}: last log lines:", file=sys.stderr)
     for line in lines[-40:]:
         print(line, file=sys.stderr)
@@ -160,6 +169,11 @@ make user TOOLPREFIX="${TOOLPREFIX}" CHAPTER="${CHAPTER}"
 make nfs/fs.img TOOLPREFIX="${TOOLPREFIX}" CHAPTER="${CHAPTER}"
 make build TOOLPREFIX="${TOOLPREFIX}" LOG=warn INIT_PROC=agentfinal_ucore
 
+if [[ -n "${AGENT_TEST_CASE:-}" ]]; then
+	run_case "${AGENT_TEST_CASE}" "${AGENT_TEST_CASE}: parent passed"
+	exit 0
+fi
+
 run_case agentfinal_ucore "agentfinal_ucore: parent passed"
 run_case agentfs_ucore "agentfs_ucore: parent passed"
 run_case agentscan_ucore "agentscan_ucore: parent passed"
@@ -174,6 +188,7 @@ run_case agentsecurity_ucore "agentsecurity_ucore: parent passed"
 run_case agentscope_ucore "agentscope_ucore: parent passed"
 run_case agenttrust_ucore "agenttrust_ucore: parent passed"
 run_case agentvfs_ucore "agentvfs_ucore: parent passed"
+run_case iobudget_ucore "iobudget_ucore: parent passed"
 run_case usersafety_ucore "usersafety_ucore: parent passed"
 
 echo "[agent-tests] all Agent-OS uCore checks passed"

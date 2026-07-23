@@ -1,5 +1,6 @@
 #include "console.h"
 #include "agent.h"
+#include "bio.h"
 #include "defs.h"
 #include "loader.h"
 #include "plic.h"
@@ -28,6 +29,8 @@ void main()
 	binit();
 	fsinit();
 	timer_init();
+	agent_storage_init();
+	bio_policy_start();
 	load_init_app();
 	infof("start scheduler!");
 	show_all_files();

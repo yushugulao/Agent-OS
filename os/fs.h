@@ -13,7 +13,7 @@
 #define NDEV 10 // maximum major device number
 #define ROOTDEV 1 // device number of file system root disk
 #define MAXOPBLOCKS 10 // max # of blocks any FS op writes
-#define NBUF (MAXOPBLOCKS * 3) // size of disk block cache
+#define NBUF 256 // size of the partitioned disk block cache
 #ifndef FSSIZE
 #define FSSIZE 16384 // size of file system in blocks
 #endif
@@ -201,6 +201,7 @@ struct vfs_cred;
 #define INODE_RECLAIM_NONE 0U
 #define INODE_RECLAIM_DIRECT 1U
 #define INODE_RECLAIM_LIST 2U
+#define FS_RECLAIM_PENDING (-2)
 struct inode_reclaim {
 	uint mode;
 	int dev;
@@ -208,6 +209,9 @@ struct inode_reclaim {
 	uint indirect;
 	uint *block_list;
 	uint block_count;
+	uint direct_cursor;
+	uint indirect_cursor;
+	uint block_cursor;
 };
 
 void fsinit();
@@ -225,6 +229,7 @@ struct inode *idup(struct inode *);
 void iinit();
 void ivalid(struct inode *);
 void iput(struct inode *);
+int inode_remove_detach(struct inode *, struct inode_reclaim *);
 void iunlock(struct inode *);
 void iunlockput(struct inode *);
 void iupdate(struct inode *);
@@ -236,6 +241,7 @@ int writei(struct inode *, const struct vfs_cred *, int, uint64, uint, uint);
 int itruncate_detach(struct inode *, const struct vfs_cred *, uint,
 			 struct inode_reclaim *);
 void itruncate_reclaim(struct inode_reclaim *);
+int itruncate_reclaim_step(struct inode_reclaim *, uint);
 int itruncate(struct inode *, const struct vfs_cred *, uint);
 int itrunc(struct inode *, const struct vfs_cred *);
 int dirls(struct inode *, const struct vfs_cred *);

@@ -16,6 +16,8 @@ void kernel_work_reset(struct thread *);
 void kernel_work_on_dispatch(struct thread *);
 void kernel_work_begin(void);
 void kernel_work_end(void);
+void kernel_work_begin_cleanup(void);
+void kernel_work_end_cleanup(void);
 void kernel_work_request_resched(void);
 int kernel_work_checkpoint(uint work_units);
 int kernel_work_checkpoint_cleanup(uint work_units);

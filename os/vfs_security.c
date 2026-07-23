@@ -1,5 +1,6 @@
 #include "vfs_security.h"
 #include "agent.h"
+#include "bio.h"
 #include "const.h"
 #include "defs.h"
 #include "exec_policy.h"
@@ -25,11 +26,13 @@ struct vfs_scope_ref {
 };
 
 static struct vfs_scope_ref vfs_scope_refs[NPROC];
+static uint vfs_scope_reap_cursor;
 
 static int vfs_scope_acquire(uint scope_id)
 {
 	int free_slot = -1;
 	int allocated = 0;
+	int retiring = 0;
 	int enabled;
 
 	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC)
@@ -47,13 +50,20 @@ static int vfs_scope_acquire(uint scope_id)
 			intr_restore(enabled);
 			return 0;
 		}
-		if (vfs_scope_refs[i].used)
-			allocated++;
-		else if (free_slot < 0)
+		if (vfs_scope_refs[i].used) {
+			if (!vfs_scope_refs[i].retiring &&
+			    vfs_scope_refs[i].members > 0)
+				allocated++;
+			else if (vfs_scope_refs[i].retiring &&
+				 vfs_scope_refs[i].members == 0)
+				retiring++;
+		} else if (free_slot < 0) {
 			free_slot = i;
+		}
 	}
 	if (free_slot >= 0 && allocated < VFS_SCOPE_MAX_ACTIVE &&
-	    fs_storage_scope_admissible()) {
+	    allocated + retiring < VFS_SCOPE_LIFECYCLE_CAP &&
+	    fs_storage_scope_admissible() && bio_scope_acquire(scope_id) == 0) {
 		vfs_scope_refs[free_slot].used = 1;
 		vfs_scope_refs[free_slot].scope_id = scope_id;
 		vfs_scope_refs[free_slot].members = 1;
@@ -90,6 +100,8 @@ static int vfs_scope_release(uint scope_id)
 		break;
 	}
 	intr_restore(enabled);
+	if (last)
+		bio_scope_quiesce(scope_id);
 	return last;
 }
 
@@ -97,6 +109,7 @@ static void vfs_scope_reclaim_complete(uint scope_id)
 {
 	int preserve_files = 0;
 	int eligible = 0;
+	int retired = 0;
 	int enabled;
 
 	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC)
@@ -127,13 +140,17 @@ static void vfs_scope_reclaim_complete(uint scope_id)
 				// output in the same guarantee calculation.
 				vfs_scope_refs[i].retiring = 0;
 			else if (vfs_scope_refs[i].storage_blocks == 0 &&
-				 vfs_scope_refs[i].storage_inodes == 0)
+				 vfs_scope_refs[i].storage_inodes == 0) {
 				memset(&vfs_scope_refs[i], 0,
 				       sizeof(vfs_scope_refs[i]));
+				retired = 1;
+			}
 		}
 		break;
 	}
 	intr_restore(enabled);
+	if (retired)
+		bio_scope_retire(scope_id);
 }
 
 static int vfs_scope_preserve_on_retire(uint scope_id)
@@ -161,16 +178,23 @@ void vfs_scope_reap_pending(void)
 	uint scope_id = VFS_SCOPE_NONE;
 	int enabled = intr_save();
 
-	for (int i = 0; i < NPROC; i++) {
-		if (vfs_scope_refs[i].used && vfs_scope_refs[i].retiring &&
+	for (uint scanned = 0; scanned < NPROC; scanned++) {
+		uint i = (vfs_scope_reap_cursor + scanned) % NPROC;
+
+		if (vfs_scope_refs[i].used &&
+		    vfs_scope_refs[i].retiring &&
 		    vfs_scope_refs[i].members == 0) {
 			scope_id = vfs_scope_refs[i].scope_id;
+			vfs_scope_reap_cursor = (i + 1) % NPROC;
 			break;
 		}
 	}
 	intr_restore(enabled);
-	if (scope_id != VFS_SCOPE_NONE)
+	if (scope_id != VFS_SCOPE_NONE &&
+	    bio_background_begin(FS_OWNER_SCOPE(scope_id))) {
 		vfs_scope_reclaim_complete(scope_id);
+		bio_background_end();
+	}
 }
 
 int vfs_scope_active(uint scope_id)
@@ -206,10 +230,25 @@ int vfs_scope_retiring(uint scope_id)
 	return retiring;
 }
 
+int vfs_scope_retained(uint scope_id)
+{
+	int retained = 0;
+	int enabled = intr_save();
+
+	for (int i = 0; i < NPROC; i++)
+		if (vfs_scope_refs[i].used &&
+		    vfs_scope_refs[i].scope_id == scope_id) {
+			retained = 1;
+			break;
+		}
+	intr_restore(enabled);
+	return retained;
+}
+
 // Return the unconsumed storage guarantee that an allocation must leave for
-// every other admitted or future workflow slot. Retiring scopes remain
-// admitted until teardown completes, so the accounting is continuous across
-// both lifecycle transitions.
+// every active or future workflow slot. Retiring scopes keep their exact
+// usage charged, while their unused guarantee becomes available to a new
+// active scope.
 uint vfs_scope_storage_guarantee(uint exempt_scope, int inode, uint guarantee)
 {
 	uint required = 0;
@@ -223,7 +262,7 @@ uint vfs_scope_storage_guarantee(uint exempt_scope, int inode, uint guarantee)
 		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
 		uint used;
 
-		if (!ref->used)
+		if (!ref->used || ref->retiring || ref->members <= 0)
 			continue;
 		allocated++;
 		if (ref->scope_id == exempt_scope)
@@ -372,8 +411,6 @@ void vfs_proc_reset(struct proc *p)
 {
 	uint old_scope_id;
 	uint pending_scope_id;
-	int active_last;
-	int pending_last;
 
 	if (p == 0)
 		return;
@@ -391,13 +428,12 @@ void vfs_proc_reset(struct proc *p)
 	p->vfs_bound_exec_dev = 0;
 	p->vfs_bound_exec_inum = 0;
 	p->vfs_bound_exec_incarnation = 0;
-	active_last = vfs_scope_release(old_scope_id);
-	pending_last = pending_scope_id != old_scope_id ?
-		vfs_scope_release(pending_scope_id) : 0;
-	if (active_last)
-		vfs_scope_reclaim_complete(old_scope_id);
-	if (pending_last)
-		vfs_scope_reclaim_complete(pending_scope_id);
+	// The last reference only transitions the scope to RETIRING. The
+	// round-robin reaper is the sole cleanup driver, so every reclaim step is
+	// admitted through the scope's BACKGROUND budget and cache partition.
+	vfs_scope_release(old_scope_id);
+	if (pending_scope_id != old_scope_id)
+		vfs_scope_release(pending_scope_id);
 }
 
 // Once an image is installed without a workflow credential, storage charging

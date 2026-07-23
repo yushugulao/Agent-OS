@@ -1,12 +1,12 @@
 # 接口与 ABI：Agent-OS
 
-本文档描述用户态程序与 Agent-OS 内核扩展之间的稳定接口约定。结构体和常量定义以内核态 `os/agent.h` 和用户态 `user/include/agent.h` 为准。
+本文档描述用户态程序与 Agent-OS 内核扩展之间的稳定接口约定。Agent 结构体和常量定义以内核态 `os/agent.h` 和用户态 `user/include/agent.h` 为准；块 I/O 策略 ABI 由根目录 `io_policy.h` 与 `user/include/io_policy.h` 同步定义。
 
 ## 系统调用
 
 ### 系统调用：Agent-OS
 
-Agent-OS 在 uCore syscall 编号空间中使用 500 至 542：
+Agent-OS 在 uCore syscall 编号空间中使用 500 至 542；通用内核工作与块 I/O 观测接口继续使用 543、544：
 
 | syscall | 编号 | 用户态原型 | 说明 |
 | --- | ---: | --- | --- |
@@ -53,6 +53,8 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 542：
 | `agent_route_config` | 540 | `int agent_route_config(int, int, uint64, int)` | 为指定 source/target Agent 授予或撤销 `MESSAGE` / `LLM_DONE` 定向 IPC 路由 |
 | `agent_workflow_create` | 541 | `int agent_workflow_create(int role)` | 由可信 bootstrap factory 创建新的、内核签发的 workflow scope，并在其中创建根 Agent |
 | `agent_scope_delegate_fd` | 542 | `int agent_scope_delegate_fd(int fd)` | 为下一次跨 workflow 边界创建授予一个一次性 pipe fd 继承票据 |
+| `kernel_work_last_preemptions` | 543 | `long kernel_work_last_preemptions(void)` | 读取当前线程上一 syscall 的内核工作重调度次数 |
+| `io_policy_info` | 544 | `int io_policy_info(struct io_policy_info *)` | 读取当前持久 owner 和前台 I/O class 的预算、等待、物理传输及 cache 观测，不修改策略状态 |
 
 `agent_run` 和 `context_snapshot` 是性能主路径。`agent_file_prefetch_snapshot` 用于读取当前 Agent 自己可见的 metadata 预取提示，`agent_file_prefetch_span_snapshot` 用于读取同一可信 scope 和 span 下跨 Agent 汇总的 metadata 预取提示。`agent_trace_snapshot` 是单个 Agent 的运行查看和排查主路径，用于把工具调用历史与调度原因放进同一组短记录中。`agent_span_trace_snapshot` 读取当前 Agent 所在可信 span 的系统级短记录，使参与协作的 Agent 能解释本轮协作中的 Context、事件和预取交接来源。`agent_timeline_snapshot` 是统一导出入口，把当前 Agent 可见的 Context、调度、审计和预取提示转换成同一种 record，便于科研平台页面直接读取。`agent_timeline_query` 在同一组可见记录上执行 source、tick、span、pid、kind、tool、event、status、flags 和 after-cursor 过滤，减少页面重复拉取和用户态筛选，也支持页面拿上一条记录作为游标继续读取后续记录。`agent_timeline_wait` 复用同一 filter，在没有匹配记录时让 Agent 睡眠；新记录写入时内核把新记录规范化为 `agent_timeline_record`，并直接用等待者保存的完整 filter 判断是否唤醒。`agent_timeline_read` 在同一套规则上把等待和复制合并为一次 syscall，减少页面或 Agent worker 的 wait 后再 query 成本。`agent_file_edit_begin`、`agent_file_edit_commit`、`agent_file_edit_abort` 和 `agent_file_edit_state` 是真实文件编辑冲突控制接口；内核用真实 `dev + inum + incarnation` 识别文件，并在 `write`、`O_TRUNC`、`unlink` 路径上检查租约持有者和精确 scope。`agent_worker_create` 不创建 Agent 身份或 Agent Context，而是让 orchestrator 在自己的 scope 内显式建立一个最小权限 workflow worker；子进程随后必须执行创建时绑定的 immutable、domain-safe worker 映像才能取得受限文件系统能力。`agent_workflow_create` 是唯一创建新 workflow security boundary 的用户 ABI，角色委派接口本身不能铸造新 scope。`agent_scope_delegate_fd` 只为下一次边界创建显式携带选中的 pipe 端点。`agent_provenance_snapshot` 导出同一可见范围内的因果边，用于页面绘制“哪个 Context、事件或预取提示触发了后续动作”。`agent_audit_snapshot` 和 `agent_audit_query` 是 orchestrator 的 scope 内系统级观测入口；底层物理表共 512 槽，但调用者最多看到自己的 128 槽配额窗口。`agent_ledger_snapshot` 在同一 scope 的逻辑账本上返回可见范围、总量、已淘汰数、分类计数和账本 hash。`agent_call` 是赛题“工具名称 + 参数键值列表”结构化协议的正式入口，也兼容已有示例程序。
 
@@ -69,6 +71,66 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 542：
 `mailread` / `mailwrite` 使用每进程 16 槽普通消息队列，每条最多 256 字节。`mailread` 无消息时返回 0，成功时返回读取字节数；`mailwrite` 成功时返回写入字节数。目标不存在、长度非法、队列满或用户指针错误返回 `-1`。
 
 `trace` 的 `TRACE_READ` / `TRACE_WRITE` 只做 1 字节用户地址读写检查。`TRACE_SYSCALL` 返回对应 syscall ID 的累计进入次数，查询 `SYS_trace` 时本次 `trace` 调用也计入。AgentOS-uCore 的镜像构建器从配套 ELF 提取只读可执行段与可写段的页对齐分界点，loader 校验该布局后把代码页映射为 RX，把数据、bss、用户栈和 Agent Context 映射为 RW+NX；用户页不会同时拥有写和执行权限。
+
+### 块 I/O 策略观测
+
+```c
+int io_policy_info(struct io_policy_info *info);
+```
+
+用户态 wrapper 自动把 `sizeof(*info)` 作为 syscall 544 的隐式第二参数传给内核；底层内核 ABI 是 `(addr, user_size)`。内核要求 `user_size >= 8`，先生成当前完整结构，再只复制 `min(user_size, sizeof(struct io_policy_info))` 字节。前两个 32 位字段固定为 `version` 和 `struct_size`，以后只能在结构尾部追加字段。因此旧用户库仍按它编译时的较小 `sizeof` 读取稳定前缀，并可用 `struct_size` 判断当前内核完整结构的大小，不需要因尾部扩展破坏已有读取程序。
+
+该接口是只读观测面。普通进程返回安装级 PUBLIC owner，workflow 进程返回带 `IO_POLICY_OWNER_SCOPE_FLAG` 的稳定 scope owner；Orchestrator/Recovery 的前台请求使用 `CONTROL` class，其他 workflow 与 PUBLIC 前台请求使用 `NORMAL`。内核扫描、metadata checkpoint 和 scope reclaim 不伪装成调用 scheduler 的进程，而是显式使用 SYSTEM 或触发 workflow 的 `BACKGROUND` class。owner 在 syscall 或后台 job 开始时捕获，PID 退出、重新 fork 或调度切换不会重置其账本。
+
+预算信用代表一次已经完成的 1 KiB 块设备传输，refill 以 I/O policy tick 为单位：
+
+| owner / class | burst | 每 tick refill |
+| --- | ---: | ---: |
+| PUBLIC / NORMAL | 32 | 16 |
+| 每个 active workflow / NORMAL | 24 | 12 |
+| 每个 active workflow / CONTROL | 48 | 24 |
+| 每个 active workflow / BACKGROUND | 8 | 4 |
+| 每个 retiring workflow / BACKGROUND | 8 | 4 |
+| SYSTEM / SYSTEM | 96 | 48 |
+| SYSTEM / BACKGROUND | 16 | 8 |
+| 前台共享 slice | 32 | 16 |
+| 设备根 bucket | 560 | 280 |
+
+每个可能触盘的 syscall 先取得 owner 或 shared lease，并尝试取得设备根 lease；首个 VirtIO 完成事件提交已有 lease，后续完成事件继续消费本 class 与设备根 token，超额分别形成 owner debt 和 device debt。没有发生物理传输的请求会退款。相同线程中的嵌套文件操作沿用外层归因；退出撤销会清理未提交 lease。owner/class admission 使用各自的 FIFO 等待队列；存在 admission 排队者时，shared grant 按有资格的前台 owner/class cursor 轮转，没有排队者的 fast path 可直接借用 shared slice。`BACKGROUND` 不能借 shared slice。
+
+设备根不是对所有 class 一刀切的硬总上限。PUBLIC、workflow `NORMAL` 和非保护后台流量必须取得根信用，并在 device debt 清零前等待；SYSTEM owner、`CONTROL` 和 `SYSTEM` class 在根信用耗尽时仍可凭自己的 owner/class 保留预算前进，但物理完成仍记入 device debt，后续 refill 先偿债。这样普通流量受 560/280 根速率约束，关键恢复/控制路径又不会因 PUBLIC 已耗尽根信用而停顿。编译期断言只验证已配置的 PUBLIC、4 个 active workflow、最多 8 个 retiring workflow `BACKGROUND`、SYSTEM 与 shared burst/refill 落在 560/280 静态 envelope 内；它不把保护流量的运行时带债前进描述成硬聚合限额。生命周期 admission 仍要求 active + retiring 不超过 8。
+
+scheduler 每轮先把 `current_thread` 指向 idle context，安装 kernel trap 向量，短暂开启中断后再执行后台维护和选择下一线程。这个固定交付窗口不是按进程或 syscall 加白名单；它保证唯一 runnable 线程反复在内核态 pipe 条件路径 `yield()`、长期不返回用户态时，pending timer/device 中断仍能推进 I/O debt、token refill 和设备完成。中断窗口结束后 scheduler 再关中断进入原有选择流程。
+
+由主线程触发的正常退出、用户 fault 或非法指令通过 `exit()` 进入进程级 terminal teardown；非主 sibling 无论正常退出还是 fault 都走 `thread_exit_current()`，不释放整个进程。进程级退出等待 sibling 内核栈静止后，主线程调用 `kernel_work_begin_cleanup()` 与 `bio_request_begin_current_cleanup()` 建立不可中断的清理上下文；`fileclose()`、未链接 inode 回收和其他资源释放继续使用该线程原有稳定 owner/class。`bio_request_end_current_cleanup()` 提交剩余 lease 并结算 owner/class debt；PUBLIC/NORMAL 还等待 device debt，SYSTEM/CONTROL 的受保护 device debt 留在全局设备根账本中由 refill 偿还。随后才结束 kernel-work cleanup、`freethread()` 和 `vfs_proc_reset()`，因此主线程异常退出不能借线程账本先消失而制造未归因传输或遗留线程私有账目。
+
+`struct io_policy_info` 的字段语义如下：
+
+| 字段 | 说明 |
+| --- | --- |
+| `version` | 当前为 `IO_POLICY_VERSION=3` |
+| `struct_size` | 当前内核完整 `struct io_policy_info` 的字节数；调用者收到的前缀长度仍由它传入的 `user_size` 决定 |
+| `owner` / `io_class` | 调用者的稳定 owner 与前台 class |
+| `tokens` / `leased` / `debt` | 当前 class 可用信用、尚未由完成事件提交的 lease 和待偿还超额传输 |
+| `class_burst` / `class_refill` | 当前 class 配置 |
+| `shared_tokens` / `shared_leased` | 前台共享 slice 的可用与已租信用 |
+| `device_burst` / `device_refill` | 普通流量设备根 bucket 的 560/280 配置；保护流量可带债前进 |
+| `device_tokens` / `device_leased` / `device_debt` | 设备根可用信用、未提交 lease 和累计待偿还传输；其中 debt 也包含保护流量在根信用耗尽后的实际完成 |
+| `waiters` | admission 与 debt waiter 总数 |
+| `admission_waiters` / `debt_waiters` / `admission_granted` | 两阶段等待队列及当前 FIFO baton 状态 |
+| `admissions` / `throttles` / `waits` / `refills` | owner 聚合的接纳、限流、睡眠和补充计数 |
+| `reserved_grants` / `shared_grants` | owner 保留信用和共享信用的累计授予数 |
+| `physical_reads` / `physical_writes` | 在 VirtIO 完成路径按稳定 owner 累计的真实块传输 |
+| `unreserved_transfers` | 未处于 syscall/background reservation 的防御性计数；正常用户 I/O 应保持不增长 |
+| `cache_resident` / `cache_floor` / `cache_cap` | 当前 owner 的 buffer cache 驻留数、受保护下限和稳态上限；必要的 transient 引用可暂时越过 cap，归零即失效 |
+| `cache_hits` / `cache_misses` / `cache_evictions` | owner 聚合 cache 观测 |
+| `completion_sequence` | 该 owner 最近一次物理完成对应的全局单调序号 |
+
+buffer cache 固定为 256 个 1 KiB buffer。SYSTEM 的 floor/cap 为 40/96，PUBLIC 为 24/48，每个 active workflow 为 36/64。新分配的数据块通过 `bclaim()` 绑定当前 sponsor；共享文件系统 metadata 不会因一次跨域读取被改绑。跨 sponsor 命中可以复用同一块，但不会刷新原 sponsor 的 LRU。victim owner 只有高于自己的 floor 时才能捐出空闲块；调用者达到 cap 后只能轮换自身驻留，必要的超 cap transient buffer 在最后释放时立即失效。scope 进入 retirement 时撤销 36/64 active 分区，仅在该 scope 的轮转清理 job 实际运行期间提供 3/8 的临时 floor/cap。后台 job 的 cache sponsor 始终是其 SYSTEM 或 workflow owner，不存在所有 workflow 共用的全局后台 cache 身份。
+
+每个 `struct buf` 还保存 exclusive holder、递归 `hold_depth` 和私有 holder wait queue。命中同一 `dev + blockno` 的其他进程必须等待当前 holder 完整 `brelse()`，不能只靠引用计数并发修改同一块。线程和 background job 分别累计自己持有的 buffer 数；持有任一 buffer 时预算 checkpoint 只能返回 deferred，不能睡眠。`readi()` / `writei()` 用 `bio_fs_atomic_enter/leave()` 包住复合文件系统原语，普通 checkpoint 在原子段内也只能延后；只有调用者已经释放全部 buffer、并已提交对外可见的 inode/目录状态时，才可调用 quiescent checkpoint 睡眠偿债。进入 qmap-first、truncate 或退役清理等不可回滚阶段后使用 cleanup 变体，即使线程收到退出请求也要完成有界的前向提交。
+
+因此文件读写可以在已提交块边界返回合法短 I/O。loader 和 metadata bank 的 exact-read helper 会在文件系统原子段外执行预算 checkpoint，并从正数短读的已完成 offset 继续；临时 interruption 与持久 bank 损坏使用不同状态，不会把公平限流误判成镜像损坏。
 
 ## 上下文 ABI：Agent Context
 
@@ -113,7 +175,7 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 542：
 | `resource_quota` | 当前 Context Path 记录配额 |
 | `loop_state` | Agent Loop 状态 |
 | `agent_call_count` | 工具调用总数 |
-| `metadata_txn_wait_count` | 当前进程实际等待 metadata 事务门的次数，用于确认并发争用测试确实进入等待路径 |
+| `metadata_txn_wait_count` | 当前进程实际等待 metadata 事务门的次数；仅用于争用 telemetry，不是并发提交正确性的时序门槛 |
 | `metadata_writeback_dirty` / `metadata_writeback_durable` | 当前 workflow scope 已发布和已持久化的 metadata 写回代数；两者相等表示该域没有未提交变化 |
 | `metadata_writeback_requests` / `metadata_writeback_coalesced` | 当前 scope 进入写回队列的变化数，以及在已有脏代数上被合并的变化数 |
 | `metadata_writeback_commits` / `metadata_writeback_pending` | 当前 scope 完成的批量 checkpoint 数，以及是否仍有等待后台写回的变化 |
@@ -174,7 +236,7 @@ int agent_workflow_create(int role);
 int agent_scope_delegate_fd(int fd);
 ```
 
-`agent_workflow_create(role)` 仅允许“非 Agent、具有内核 resource-domain admin 状态、当前执行可信 bootstrap 映像”的 factory 调用。它先执行正常 role grant 检查，再原子申请新的进程资源域和动态 workflow scope，并创建该 scope 的根 Agent；该 scope 同时是 workflow 的存储计费主体，但与进程资源域槽独立。已在某个 scope 内的 orchestrator 即使具备 `ORCHESTRATE`，也只能用 `agent_create_role()` 在本 scope 内创建角色，不能用角色 grant 铸造新安全域。最多 4 个 active/retiring workflow scope；没有可接纳槽时创建失败且不留下半初始化 scope。
+`agent_workflow_create(role)` 仅允许“非 Agent、具有内核 resource-domain admin 状态、当前执行可信 bootstrap 映像”的 factory 调用。它先执行正常 role grant 检查，再原子申请新的进程资源域和动态 workflow scope，并创建该 scope 的根 Agent；该 scope 同时是 workflow 的存储计费主体，但与进程资源域槽独立。已在某个 scope 内的 orchestrator 即使具备 `ORCHESTRATE`，也只能用 `agent_create_role()` 在本 scope 内创建角色，不能用角色 grant 铸造新安全域。系统最多同时接纳 4 个 active workflow；`VFS_SCOPE_LIFECYCLE_CAP=8` 同时限制 active + retiring，所以退役积压最多 8 个。没有可接纳槽时创建失败且不留下半初始化 scope。
 
 同 scope 的 `agent_create_role()` 和 `agent_worker_create()` 继承该 scope。普通 `fork()` 跨出 workflow 边界并丢弃 Agent/VFS 权限，不能把 capability 或 scope 带给普通后代。边界创建默认只继承 stdio；普通文件和未委派 pipe 均不跨 scope。
 
@@ -182,11 +244,13 @@ int agent_scope_delegate_fd(int fd);
 
 ### 生命周期和配额
 
-scope 成员数降为 0 后先进入 `retiring`，停止新对象分配；内核随后按 scope 清理 metadata、dependency、action history、edit lease/version、digest/query cache、audit、span prefetch、IPC route 等全局表状态，清理完成后才释放 admission 槽。普通动态 workflow 的文件随 scope 回收。由 boot scope 产生并声明持久化的文件保留在磁盘，其 scope 作为 inactive storage owner 保留，避免下一次分配把旧文件解释为新 workflow 的对象。
+scope 成员数降为 0 后先进入 `retiring`，停止新对象分配并撤销 active I/O/cache 份额；内核随后按 scope 清理 metadata、dependency、action history、edit lease/version、digest/query cache、audit、span prefetch、IPC route 等全局表状态，清理完成后才释放 admission 槽。VFS 生命周期身份账本有 `NPROC` 条记录，active 与 retiring 独立计数，只有 `used == 0` 的记录才允许分配给新 scope；`VFS_SCOPE_LIFECYCLE_CAP=8` 限制 active + retiring 的 admission，并最多提供 8 个 FS reclaim cursor。reaper 在 `NPROC` 身份账本范围内轮转选择 retiring scope，避免固定顺序饥饿，也不会用新身份覆盖尚未完成的文件回收或 I/O owner。普通动态 workflow 的文件随 scope 回收。由 boot scope 产生并声明持久化的文件保留在磁盘，其 scope 作为 inactive storage owner 保留，避免下一次分配把旧文件解释为新 workflow 的对象。
 
-当前固定资源边界：最多 4 个 workflow scope；进程池 128 槽中普通 admission 96 槽、受控保留 32 槽，每个 admitted scope 的保留份额为 8；Agent metadata 每 scope 112 条、dependency 16 条、action history 8 条、edit lease 8 条、span prefetch 8 条、audit 128 条。共享系统 metadata 另保留 64 条。表满返回可恢复错误，不允许一个 scope 占用另一个 scope 的保证份额。
+当前固定资源边界：最多 4 个 active workflow，active + retiring 硬上限 8，因而没有 active 时最多积压 8 个 retiring cleanup；进程池 128 槽中普通 admission 96 槽、受控保留 32 槽，每个 admitted scope 的保留份额为 8；Agent metadata 每 scope 112 条、dependency 16 条、action history 8 条、edit lease 8 条、span prefetch 8 条、audit 128 条。共享系统 metadata 另保留 64 条。表满返回可恢复错误，不允许一个 scope 占用另一个 scope 的保证份额。
 
 文件系统使用 `NINODE=2048`。workflow 的配置目标仍为总 inode 的三分之二和 `FSSIZE/2` 个 block，但真正的每 scope 保证由 mkfs 与内核共享的容量策略根据“完成镜像后”的空闲量计算，并把最多四个 workflow 的总目标限制在扣除 SYSTEM 后空闲量的四分之三。每个 admitted/future scope 的硬下限为 320 个 inode 和 512 个 block，SYSTEM 的硬下限为 8 个 inode 和 512 个 block；当前 `platform_agentos` 镜像实际得到每 scope 342 个 inode、1195 个 block，以及 SYSTEM 64 个 inode、512 个 block。mkfs 无法同时兑现硬下限时直接拒绝生成镜像，并把 policy version、scope 数、PUBLIC principal、实际保证、系统保留量和 checksum 作为容量契约写入 superblock。挂载从 qmap 和 dinode 的持久 owner 重建 PUBLIC block/inode 用量，再按契约回收旧 boot lease、验证四份固定保证并重建 SYSTEM 剩余信用；workflow admission 还会原子检查当时的实际余量。PUBLIC 分配必须留下所有尚未消费的 workflow 保证和 SYSTEM 剩余量；SYSTEM 维护分配可以消耗自己的信用，但不能侵占 workflow 的最低保证。缺少稳定 PUBLIC principal 的旧格式镜像会被版本检查明确拒绝，不会用空账本继续运行。
+
+PUBLIC 第一次修改 SYSTEM 赞助的可变文件时不会逐块反复申请配额。内核在固定 `MAXFILE + 1` 工作区收集直接块、间接索引块和间接数据块，排序后按 `QBLOCK` 分组，每个 qmap block 在一轮中只读写一次。可睡眠 claim gate 串行化同类接管；预检可中断且只在释放 buffer 后进入 quiescent checkpoint，随后一次性预留全部 PUBLIC 配额并开始 qmap-first 前向提交。此后 cleanup checkpoint 可以等待但不能因线程退出回滚；所有 qmap owner 转换完成后才发布 inode owner。挂载发现“SYSTEM inode + 部分 PUBLIC qmap”时沿同一顺序继续完成，而不是猜测回滚。
 
 ## 角色与 capability
 
@@ -403,11 +467,15 @@ int agent_route_config(int source_pid, int target_pid, uint64 event_mask,
 - `fs_generation`
 - `update_mask`
 
-文件元数据授权键先包含当前 kernel-issued workflow scope，再使用真实文件的 `dev + inum + incarnation` 标识该 scope 内的对象生命期。`incarnation` 在 inode 槽重新分配时递增，使删除后复用同一 inode 号的新文件不会继承旧 metadata、租约或摘要缓存；另一 scope 即使创建相同 `physical_name`、`fid`、namespace、run 或 label，也只会命中自己的记录。`physical_name` 必须能解析为 uCore 根目录中当前 scope 的真实短文件名，复杂逻辑路径保存在 `logical_path` 等 Agent 属性字段中。根目录私有文件 `.agentmeta` 和 `.agentmeta1` 组成双 bank 版本化紧凑快照：每次只向非活动 bank 写入带 `PERSIST` 的有效记录、原 slot、scope、generation、精确长度和 payload hash，截短旧目标后完整写入并回读校验，成功后才切换活动 generation。这样缩短快照会回收尾块，写入短缺或 ENOSPC 也不会覆盖上一份已提交 bank；显式 metadata set/delete 在提交失败时同时回滚内存表和 inode sidecar。`agent_file_meta_init()` 会强制读取两个 bank 并选择 generation 最高的完整快照，但只替换调用者 scope 的已提交记录，其他 scope 的内存记录保持不变；已有 active bank 时重载失败会保留当前状态并返回错误，尚无 active bank 时则把当前可持久记录提交为第一代，避免一次只读查询抢先初始化后阻断 Orchestrator。两个 bank 都标记为 `KERNEL_PRIVATE`，普通文件 syscall 不能直接读取、创建、修改或删除，Agent 子系统内部 helper 使用内核凭据负责持久化和重新加载。
+文件元数据授权键先包含当前 kernel-issued workflow scope，再使用真实文件的 `dev + inum + incarnation` 标识该 scope 内的对象生命期。`incarnation` 在 inode 槽重新分配时递增，使删除后复用同一 inode 号的新文件不会继承旧 metadata、租约或摘要缓存；另一 scope 即使创建相同 `physical_name`、`fid`、namespace、run 或 label，也只会命中自己的记录。`physical_name` 必须能解析为 uCore 根目录中当前 scope 的真实短文件名，复杂逻辑路径保存在 `logical_path` 等 Agent 属性字段中。根目录私有文件 `.agentmeta` 和 `.agentmeta1` 组成双 bank 版本化快照：目标 bank 先写入无效 header，再按 1 KiB segment 与已验证的内存 shadow 比较，只写入并逐段回读变化的 `PERSIST` payload；未变化 segment 沿用该 shadow。整体 payload 摘要一致后才发布包含 count、generation 和 payload hash 的有效 header，header 回读一致后才切换 active generation。只有新的 primary 已完整验证并成为 active bank，状态机才用同一不可变快照更新旧 bank 作为 mirror，因此旧的已验证代不会在新主副本可恢复前被覆盖。bank 不再为缩短快照同步 truncate，而是复用已有高水位块；loader 只按 header 声明的精确逻辑长度校验 payload，旧尾部不属于已提交快照。在新 primary 的 header 回读验证完成前，失败保留旧 active bank；切换 active 后 mirror 更新失败时，已验证的新 primary 仍可恢复。校验不匹配会使失败目标 bank 的内存 shadow 失效并强制下次完整重写。显式 metadata set/delete 在同步提交失败时同时回滚内存表和 inode sidecar。`agent_file_meta_init()` 会强制读取两个 bank 并选择 generation 最高的完整快照，但只替换调用者 scope 的已提交记录，其他 scope 的内存记录保持不变；已有 active bank 时重载失败会保留当前状态并返回错误，尚无 active bank 时则把当前可持久记录提交为第一代，避免一次只读查询抢先初始化后阻断 Orchestrator。两个 bank 都标记为 `KERNEL_PRIVATE`，普通文件 syscall 不能直接读取、创建、修改或删除，Agent 子系统内部 helper 使用内核凭据负责持久化和重新加载。
 
-内存 metadata、索引、依赖表、inode sidecar 与双 bank 提交属于同一个可睡眠、可重入的内核事务域。进程 syscall 在竞争时进入对象私有等待队列；scheduler、scope retirement 和真实 VFS callback 不持有底层 inode/VFS 状态阻塞等待，而是使用禁止外部重入的 try-lock。持久化写完 inactive bank 并释放 VFS 对象后设置一个协作调度点，事务 owner token 跨调度保持不变，使其他 writer 能真正到达等待队列；回读验证和 active generation 发布仍在同一事务中。事务门采用条件队列语义：owner 在同一关中断临界区清空后广播事务专属 wait queue，所有 waiter 被唤醒后重新检查 owner 并竞争。唤醒不转移所有权，因此任一 waiter 随进程退出或中断都不会使其他等待者永久沉睡。
+可信 bank 还是用户进程发布的启动依赖。`main()` 在 `fsinit()` 和 `timer_init()` 之后调用 `agent_storage_init()`，在启动继续前完成可信加载判定：成功时选择、校验、绑定并按需恢复 bank，失败时设置 fail-closed；随后才执行 `bio_policy_start()` 和 `load_init_app()`。单个 bank 损坏时选择另一份可验证副本并标记恢复；不存在可验证有效 bank 或选择失败时设置 `agent_meta_store_failed_closed`，系统继续启动，但后续 metadata load/persist/init API 返回失败，不能用空表冒充可信状态。这个 fail-closed 状态不阻断 scope 的 VFS 生命周期回收：`agent_scope_reclaim()` 仍清理 scope 的依赖、动作、缓存、审计、租约和真实 VFS-labelled 文件，并在成功后退休 scope 身份；它不会声称已恢复损坏 bank 中不可读的 metadata。
 
-普通 workflow 文件的 create/write/truncate/delete callback 不再同步重写全局 metadata bank。write/truncate 先按 inode incarnation 把已提交的 size、更新时间和文件代数发布到 sidecar，create/delete 直接完成对应内存记录变化；只有带 `PERSIST` 的记录才在所属 workflow scope 的 `dirty_generation` 上登记写回，volatile 记录只更新内存和 sidecar。重复持久变化进入固定一秒、不会因新请求延长的合并窗口。scheduler 只在窗口到期且事务门空闲时执行一个后台 checkpoint；每次尝试无论成功或失败，下一次后台提交前都至少等待一个合并窗口，并按本次尝试耗时的四倍延长休息期，从而给持续攻击和退化存储上的失败重试设置不依赖设备速度的全局 I/O 占空比上界。扫描请求不能饿死已经到期的 checkpoint。一次 checkpoint 会合并所有当时已捕获的 scope，但只把写入期间没有继续变化的 scope 推进到 `durable_generation`，失败则保留脏代数并按同一自适应规则重试。callback 竞争失败时，已有 sidecar 发布的普通写入无需扩大成全目录扫描；确需恢复绑定时才登记协调扫描。显式 `PERSIST` set/delete、空 bank 安装和 scope retirement 仍保持同步提交语义，`agent_file_meta_init()` 也只在调用者自己的 scope 有未提交变化时先建立持久化屏障。按真实路径设置 metadata 时只读探测单个 inode 是否应继承自动持久属性，不以全局扫描作为正常提交前置条件，也不会在请求校验失败前修改 metadata。
+内存 metadata、索引、依赖表、inode sidecar 与双 bank 提交属于同一个可睡眠、可重入的内核事务域。进程 syscall 在竞争时进入对象私有等待队列；scheduler、scope retirement 和真实 VFS callback 不持有底层 inode/VFS 状态阻塞等待，而是使用禁止外部重入的 try-lock。事务门采用条件队列语义：owner 在同一关中断临界区清空后广播事务专属 wait queue，所有 waiter 被唤醒后重新检查 owner 并竞争。唤醒不转移所有权，因此任一 waiter 随进程退出或中断都不会使其他等待者永久沉睡。
+
+所有可能替换物理 COW job 的同步 set/delete/init/reload 还必须进入单独的 FIFO submit lane。调用者先领取单调 ticket，只有 serving ticket、persist idle、sync owner 和 reload owner 条件同时满足时才能进入；若条件不满足，内核从失败检查开始一直保持中断关闭，依次释放 metadata 事务门、把当前线程插入 submit condition queue，再恢复中断。完成检查到入队之间不存在可丢失 wake 的窗口。ticket 不允许在线程退出时放弃，否则会卡住全部后继；退出请求在该有界 COW lane 完成后由 syscall 边界处理。持久化跨预算等待时 immutable job 保持同一 `job_id`，同步调用者临时释放全局事务门，维护线程只能推进该 job，不能让后来提交者替换它。
+
+普通 workflow 文件的 create/write/truncate/delete callback 不再同步重写全局 metadata bank。write/truncate 先按 inode incarnation 把已提交的 size、更新时间和文件代数发布到 sidecar，create/delete 直接完成对应内存记录变化；只有带 `PERSIST` 的记录才在所属 workflow scope 的 `dirty_generation` 上登记写回，volatile 记录只更新内存和 sidecar。重复持久变化进入固定一秒、不会因新请求延长的合并窗口。scheduler 只在窗口到期且事务门空闲时推进一个后台 checkpoint step；诱发写回的 dirty scope 按轮转选择稳定 owner，整个 job 使用该 owner 的硬 `BACKGROUND` I/O 预算。每个维护轮次至多推进一个 invalidate/write/publish/verify/commit 状态机步骤，I/O debt 通过预算安全点延后续步。checkpoint 尝试成功或失败后的 not-before deadline 都是一个固定合并窗口，不再按 checkpoint 执行耗时放大；其实际块设备占用由 `BACKGROUND` token budget 限制。扫描请求不能饿死已经到期的 checkpoint。一次 checkpoint 会合并所有当时已捕获的 scope，但只把写入期间没有继续变化的 scope 推进到 `durable_generation`，失败则保留脏代数等待固定窗口后的预算接纳。callback 竞争失败时，已有 sidecar 发布的普通写入无需扩大成全目录扫描；确需恢复绑定时才登记协调扫描。显式 `PERSIST` set/delete、空 bank 安装、reload 和 scope retirement 同步进入 FIFO submit lane 并建立不可替换的持久化任务；这保证有序接纳，不保证调用返回时 primary 已完成回读验证。`agent_file_meta_init()` 只在调用者自己的 scope 有未提交变化时建立相同任务。按真实路径设置 metadata 时只读探测单个 inode 是否应继承自动持久属性，不以全局扫描作为正常提交前置条件，也不会在请求校验失败前修改 metadata。
 
 查询缓存代数同样按 workflow scope 维护；某域的普通变化只使该域缓存失效，SYSTEM 对象变化才使所有已存在 scope 的缓存代数失效。这样低权限 Agent 的微小写入既不能逐次触发全 bank I/O，也不能借另一 workflow 的脏状态迫使其同步提交；查询仍通过 sidecar 立即看到本域已经提交到文件系统的数据。
 

@@ -655,7 +655,7 @@ bash scripts/run-agent-tests.sh
 3. A/B 创建同名文件和相同 metadata/fid，各自只能查询、打开和读取自己的对象。
 4. B 创建不带 `PERSIST` 的内存态 metadata，A 强制重载自己的 bank 记录后，B 的记录仍可查询，证明 `file_meta_init` 不能跨 scope 清表。
 5. target consent、route grant 和 MESSAGE 投递跨 scope 均拒绝；同 scope stable route 仍可协作。
-6. A 在同一 scope 内同时启动三个 Orchestrator；inactive bank 完整写入且 VFS 对象释放后，owner 在不释放事务 token 的前提下协作让出一次 CPU，使其他 writer 可达等待队列。三者各自持续创建并提交 `PERSIST` metadata，并通过每进程 `metadata_txn_wait_count` 要求至少两个 writer 实际睡眠等待事务门。结束后强制从双 bank 重载，再按 run 查询必须完整得到三组记录。事务释放采用专属队列广播，所有 waiter 都在锁内重新检查 owner，不依赖单个线程继续传递唤醒。
+6. A 在同一 scope 内同时启动三个 Orchestrator；目标 bank 经 invalidate、分块 payload 写入、header publish 和回读验证后，owner 只在安全边界协作让出 CPU，使其他 writer 有机会到达事务门。三者各自持续创建并提交 `PERSIST` metadata，结束后强制从双 bank 重载，再按 run 查询必须完整得到三组共 12 条记录。`metadata_txn_contentions` 只报告该次单核时序实际发生的等待次数，允许为 0，不作为正确性门槛；并发提交、完整重载和查询结果才是断言。事务释放采用专属队列广播，实际 waiter 都在锁内重新检查 owner，不依赖单个线程继续传递唤醒。
 7. B 创建不带 `PERSIST` 的真实 volatile 对象，再由低权限 Artifact 连续执行 32 次单字节写入；前后 scope-local request/commit 计数必须完全不变，证明内存态记录不会制造不包含自身的空 bank checkpoint。
 8. A 的存储配额阶段先创建 120 个文件并占满本 scope 的 112 个 metadata 槽。随后低权限 Artifact 同时微写一个已绑定持久对象和经查询确认未绑定的超额对象，至少完成 128 轮；第 16 轮后通过 guest pipe 发出存活屏障，直到主进程明确停止前持续施压。B 在该存活窗口内完成 32 次本域 metadata 查询并主动让出 CPU，guest `get_mtime()` 要求总延迟不超过 5 秒。
 9. 测试读取 scope-local telemetry，要求持久变化全部进入记账、合并请求加成功批次等于总请求、完整 bank checkpoint 不超过请求数的八分之一；全局 scan runs 增量还必须满足 20 tick 非滑动 cooldown 的轮次上界。若攻击全程落在已有自适应 cooldown 内，零轮扫描也是合法结果。具体写入/批次数受调度时序影响，不把某次观测值固化为契约。
@@ -688,7 +688,7 @@ agentscope_ucore: lifecycle_reclamation=1
 agentscope_ucore: parent passed
 ```
 
-以上全部标记均已出现在 2026-07-22 从 clean user/kernel 构建开始的完整 15/15 Agent QEMU 回归中。动态断言证明两域隔离、同域协作、事务等待、微小写入的有界合并、volatile 分流、满表扫描限流、跨 scope 有界进展、强制重载后的最终一致性、配额边界、fd 委派与生命周期回收；四份 workflow 数值保证仍由共享策略单测、mkfs 容量负例和挂载/admission 契约共同证明，不从单个输出标记外推。
+以上标记最早已出现在 2026-07-22 的旧 15 项 Agent QEMU 回归中。当前独立复测再次到达 metadata transaction/COW、最终一致性、`lifecycle_reclamation=1` 和 `parent passed`，`elapsed=148.9s`；当前冻结源码的最终 16 项脚本也通过该程序。`NPROC` 身份账本只复用未使用记录，active 最多 4 个且 active + retiring 不超过 8；FS reclaim cursor 最多 8 个，reaper 在 `NPROC` 账本范围轮转选择 retiring scope，因而新 workflow 不会覆盖旧退役状态或遗失其 I/O owner。
 
 ## 19. syscall 内核工作预算复测
 
@@ -706,7 +706,7 @@ inode 阶段创建共享地址空间的 observer 线程。observer 反复从独�
 
 截断阶段先填充一个 64 KiB 文件，再在同一进程创建 observer 线程。主线程输出 TRUNC_BEGIN 后调用 `open(path, O_WRONLY | O_TRUNC)`，并用 last-syscall 重调度计数要求该 open 在内核态跨过调度边界；observer 连续两轮打开文件并读到 EOF，两轮之间主动让出，随后输出 TRUNC_PEER。脚本要求 `TRUNC_BEGIN < TRUNC_PEER < TRUNC_END`。计数提供 open 内部的因果证据，observer 独立证明原子 detach 后的 EOF 对其他线程可见；二者不依赖 open 返回后到共享标志写入前是否发生用户态 timer 抢占。
 
-三个阶段的每个标记都必须只出现一次。最外层父进程只在 fairness worker 被 `waitpid()` 完整回收后输出 `syscallfair_ucore: parent passed`；宿主 runner 随后要求 QEMU 在 5 秒内正常关机，日志不得包含 panic、非法地址或未知 syscall。这一部分验证退出完整性，不单独宣称证明退出清理内部的公平边界。两个目标都满足后输出 `[syscall-fairness] both targets passed`。终审复测完成后，这一契约将动态覆盖控制台、普通 inode I/O 和截断回收；当前实际动态证据只覆盖基础控制台轮。源码检查覆盖 pipe、exec/fork 分页、VM snapshot 屏障和 Agent batch 安全点；它不等于穷尽任意 syscall 路径。固定上界目录扫描和仅可信 Agent 可达的 metadata raw I/O 仍是残余覆盖。
+三个阶段的每个标记都必须只出现一次。最外层父进程只在 fairness worker 被 `waitpid()` 完整回收后输出 `syscallfair_ucore: parent passed`；宿主 runner 随后要求 QEMU 在 5 秒内正常关机，日志不得包含 panic、非法地址或未知 syscall。这一部分验证退出完整性，不单独宣称证明退出清理内部的公平边界。两个目标都满足后输出 `[syscall-fairness] both targets passed`。当前冻结源码已通过本终审轮，动态覆盖控制台、普通 inode I/O 和截断回收。源码检查覆盖 pipe、exec/fork 分页、VM snapshot 屏障和 Agent batch 安全点；它不等于穷尽任意 syscall 路径。目录 scanner 仍采用固定每轮上限，metadata raw I/O 由独立 COW/I/O budget 专项覆盖。
 
 ## 20. 全局文件对象表资源配额复测
 
@@ -727,3 +727,42 @@ fileresource_ucore: parent passed
 ```
 
 这些场景验证的计费单位是唯一 filepool 槽：fork 和 syscall pin 增加引用但不重复扣账，最终引用关闭才退款。主目标和 baseline 运行同一 Guest 断言并均通过，避免只在 AgentOS 专属角色路径上得到结果。runner 最终输出 `[file-resource] both targets passed`。
+
+## 21. `iobudget_ucore`
+
+`iobudget_ucore` 是块设备 I/O 与 buffer cache 分域机制的回归，随 `scripts/run-agent-tests.sh` 运行。它不通过固定 PID、文件名白名单或 sleep 时长推断公平性，而是用 syscall 544 读取 `io_policy_info()` ABI v3 的稳定 owner、class、owner/device lease/debt、物理完成和 cache sponsor 计数，再用 Guest pipe 建立 PUBLIC 压力进程与独立 workflow 的先后关系。测试还构造唯一 runnable 线程在内核 pipe 条件路径反复 `yield()` 的场景，要求 scheduler 的 idle kerneltrap 窗口仍能交付 timer/device 中断；另让持有已 unlink 文件的 PUBLIC 子进程触发 page fault，验证 terminal teardown 的清理 I/O 仍归因并结清 debt。用户 wrapper 自动传入当前 `sizeof(struct io_policy_info)`；测试同时调用较小旧结构前缀，要求 `version/struct_size` 可读且尾部哨兵不被覆盖。内核的 sized-copy 规则由 `(addr, user_size)` 分发、8 字节最小头和 `min(user_size, current_size)` copyout 实现。
+
+测试流程：
+
+1. 在创建压力进程前先检查完整 ABI 和较短前缀 sized-copy，覆盖 `version`、内核 `struct_size`、最小 8 字节头和调用者尾部不被越界写。
+2. 创建一个线程，使其阻塞在 I/O admission 后请求进程退出；等待线程展开，再比较 lease 计数，确认未完成 request 的 owner/shared/device lease 已退款。
+3. 用一对 pipe 让子进程阻塞在内核读条件路径，父进程创建超过 workflow NORMAL burst 的文件并等待 I/O refill。该场景只有反复在内核态 `yield()` 的 waiter 可运行；操作必须完成并回收 waiter，证明 scheduler 每轮短中断窗口能交付 timer/device interrupt。
+4. PUBLIC 子进程创建并写入文件、保持已 unlink 文件描述符后报告 I/O 状态，再触发用户 page fault。父进程确认退出码为 `-2`，随后用同一稳定 PUBLIC owner 读取状态：清理物理写增长、`unreserved_transfers` 不变，且 `leased`、owner debt、device debt 均为 0。
+5. bootstrap 创建 Orchestrator workflow，并只委派探针所需 pipe 端点。workflow 创建、预热并保持一个私有热块，读取 `io_policy_info()` 确认带 workflow scope 标志的 owner。
+6. 独立 PUBLIC 子进程创建循环读写文件和超过 `IO_CACHE_PUBLIC_CAP` 的冷工作集。它必须观察到 `throttles`、`waits` 和 `cache_evictions` 都增长，证明压力实际到达速率与 cache 边界。
+7. PUBLIC 探针确认 owner 为稳定 PUBLIC、class 为 `NORMAL`，并要求 `tokens + leased <= class_burst`、`shared_tokens + shared_leased <= IO_POLICY_SHARED_BURST` 且 `device_tokens + device_leased <= device_burst`。
+8. PUBLIC 压力存活期间，父进程命令 workflow 读取此前预热的块。前后 `physical_reads` 不增长而 `cache_hits` 增长，且 `0 < cache_resident <= cache_cap`，说明 PUBLIC 冷工作集没有挤掉 workflow 的稳态 cache 保留。
+9. 同一 Orchestrator 再完成真实文件写入，要求 `physical_writes` 增长且 `io_class == CONTROL`，证明 PUBLIC 压力下 workflow 控制预算仍有进展。
+10. 停止 PUBLIC 压力并等待两个子进程完整退出。PUBLIC 的 `unreserved_transfers` 不得增长，证明用户物理传输没有丢失 syscall/background 归因。
+
+通过标记：
+
+```text
+iobudget_ucore: thread_exit_lease_cleanup=1
+iobudget_ucore: scheduler_interrupt_progress=1
+iobudget_ucore: fault_exit_cleanup=1
+iobudget_ucore: public_budget_shared=1
+iobudget_ucore: nested_io_attribution=1
+iobudget_ucore: cache_scope_isolation=1
+iobudget_ucore: workflow_bounded_progress=1
+iobudget_ucore: control_reserve_progress=1
+iobudget_ucore: parent passed
+```
+
+最终 teardown 修复后的独立 QEMU 中八个具名机制 marker 与 `parent passed` 全部出现，`elapsed=2.4s`；ABI sized-copy 是第九类实质断言，但没有单独 marker。当前冻结源码以 `CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 在 `337.1s` 完成 16/16，本项 `elapsed=2.1s`。
+
+PUBLIC 32/16、每 active workflow 24/12 + 48/24 + 8/4、每 retiring workflow `BACKGROUND` 8/4、SYSTEM 96/48 + 16/8、shared 32/16 的配置总和由编译期断言保守按 4 active + 8 retiring 放入 560/280 静态 envelope。运行时设备根对普通流量执行 token/lease/debt 限速；SYSTEM owner、`CONTROL` 和 `SYSTEM` class 在根信用耗尽时仍可凭 owner/class 保留预算带 device debt 前进，所以根 bucket 不是保护流量的硬总上限。shared fast path 在没有 admission waiter 时可直接借用，只有排队授权再按 owner/class cursor 轮转；当前测试没有断言 `shared_grants` 或排队轮转。
+
+cache 的 SYSTEM/PUBLIC/active workflow floor/cap 为 40/96、24/48、36/64，当前退役清理 job 临时使用 3/8；cap 是稳态驻留边界，transient buffer 可暂时越界并在最后释放时失效。同块用 exclusive holder 串行化；持有 buffer 时 I/O/CPU checkpoint 均不睡眠或 yield，复合文件系统原语使用 FS atomic depth，只有释放全部 buffer 后才能在 quiescent checkpoint 偿债。这些 holder/atomic 条件由源码不变量和相关回归共同覆盖，`iobudget_ucore` 不逐项输出 marker。
+
+当前动态压力只覆盖一个 PUBLIC owner 和一个 workflow Orchestrator `CONTROL` owner。Recovery、SYSTEM/workflow `BACKGROUND`、多 workflow 同时压力、retiring 3/8、跨 owner LRU/transient、主动 device-debt 注入、启动 bank 损坏、VirtIO 错误/短 I/O/power-loss 仍缺独立用例，不能从当前场景外推。当前 `make fs-enospc-test` 已以 `75.1s` 通过 quota/domain/persistent principal/orphan/reboot 全流程，但没有在 grouped qmap claim 中点注入掉电。

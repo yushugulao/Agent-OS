@@ -1,4 +1,5 @@
 #include "file.h"
+#include "bio.h"
 #include "defs.h"
 #include "exec_policy.h"
 #include "fcntl.h"
@@ -341,6 +342,8 @@ uint64 inodewrite(struct file *f, uint64 va, uint64 len)
 		} else {
 			agent_fs_sync_write(f->ip);
 		}
+		if (bio_request_checkpoint() < 0)
+			return done;
 		checkpoint = kernel_work_checkpoint((uint)r);
 		if (checkpoint != 0 || (uint)r < chunk)
 			return done;
@@ -381,6 +384,8 @@ uint64 inoderead(struct file *f, uint64 va, uint64 len)
 
 		f->off = offset + r;
 		done += r;
+		if (bio_request_checkpoint() < 0)
+			return done;
 		checkpoint = kernel_work_checkpoint((uint)r);
 		if (checkpoint != 0 || (uint)r < chunk)
 			return done;

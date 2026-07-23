@@ -799,6 +799,7 @@ struct inode;
 struct thread;
 
 void agentinit(void);
+void agent_storage_init(void);
 void agent_clear_metadata(struct proc *p);
 void agent_authority_bootstrap(struct proc *p);
 void agent_authority_on_exec(struct proc *p);

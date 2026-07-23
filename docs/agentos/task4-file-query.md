@@ -8,11 +8,11 @@
 
 AgentOS-uCore 当前实现的是内核级文件元数据服务：
 
-- 支持最多 512 条文件元数据，并为 SYSTEM 与最多四个活动 workflow scope 划分独立上限；
+- 支持最多 512 条文件元数据，并为 SYSTEM 与最多四个 active workflow scope 划分独立上限；退役 scope 由独立生命周期账本和轮转 reaper 有界清理；
 - 以真实文件的 `dev + inum + incarnation` 作为主要身份，避免 inode 号复用后继承旧状态；
 - 要求 `physical_name` 能解析到 uCore 根目录中的真实文件名；
-- 使用根目录私有 `.agentmeta` / `.agentmeta1` 双 bank 保存版本化紧凑快照；
-- 使用按 workflow scope 记账的固定窗口后台写回，把普通文件微小变化合并为有界 metadata checkpoint；
+- 使用根目录私有 `.agentmeta` / `.agentmeta1` 双 bank 保存带 generation/hash 的版本化快照，并以可恢复分块 COW 状态机发布；
+- 使用按 workflow scope 记账的固定窗口后台写回和稳定 sponsor `BACKGROUND` I/O 预算，把普通文件微小变化合并为有界 metadata checkpoint；
 - 在普通 `open/read/write/truncate/unlink` 路径执行 public/workflow/kernel-private 数据访问策略，防止绕过 Agent 工具 capability；
 - 支持扫描查询；
 - 支持 state/label/type 索引查询，ABI 字段兼容保留为 status/stage/kind；
@@ -73,9 +73,13 @@ AgentOS-uCore 当前实现的是内核级文件元数据服务：
 5. `agent_file_meta_set()` 支持 `AGENT_FILE_META_F_DELETE` 删除属性，支持 `AGENT_FILE_META_F_PERSIST` 事务写入 metadata 双 bank；持久化失败时恢复修改前的内存记录和 inode sidecar。
 6. 受权 Agent 显式写入 metadata 时会接管自动扫描槽位；除非显式带上 `AGENT_FILE_META_F_AUTOSCAN`，否则旧的自动扫描标志会被清除，后续扫描只刷新真实 inode 身份，不改写这些对象属性。
 
-`.agentmeta` 和 `.agentmeta1` 是标记为 `KERNEL_PRIVATE` 的 Agent 子系统内部后端。普通文件 syscall 直接读取、创建、修改或删除任一 bank 都会返回 `-1`；Agent 子系统内部 helper 使用内核凭据读写。加载时验证版本、generation、精确文件长度、payload hash、slot 范围、scope 配额和 scope 内唯一性。提交时截短非活动 bank、完整写入紧凑快照并回读校验，成功后才切换活动 bank；短写或 ENOSPC 只留下无效目标 bank，上一代快照仍可恢复。
+`.agentmeta` 和 `.agentmeta1` 是标记为 `KERNEL_PRIVATE` 的 Agent 子系统内部后端。普通文件 syscall 直接读取、创建、修改或删除任一 bank 都会返回 `-1`；Agent 子系统内部 helper 使用内核凭据读写。加载时按 header 声明的逻辑长度验证版本、generation、payload hash、slot 范围、scope 配额和 scope 内唯一性，物理文件可以保留更长的已分配高水位。提交先向目标 bank 写无效 header，再按固定 1 KiB segment 与已验证的内存 bank shadow 做字节比较，只写并逐段读回核对变化 payload；整体摘要一致后才发布有效 header，header 回读一致后才切换 active generation。新的 primary 完整验证后，状态机才允许用同一不可变快照更新旧 bank 作为 mirror。缩短快照不在 checkpoint 中同步 truncate，而是复用旧尾块；primary 验证前失败保留旧 active bank，mirror 阶段失败仍保留新 primary。payload hash 是一致性摘要，不是密码学认证。
 
-普通持久文件变化采用写回而不是直写：write/truncate 通过 inode incarnation sidecar 先发布最新 size、更新时间和文件代数，查询及 bank 快照都会覆盖内存主表中的旧值；create/delete 则先完成内存记录变化。带 `PERSIST` 的记录随后让对应 scope 的 `dirty_generation` 进入固定一秒的非滑动合并窗口；不进入快照的 volatile 记录只更新内存/sidecar，不制造空 checkpoint。后台维护在事务门空闲时最多执行一个 checkpoint；每次尝试无论成功或失败，都至少等待一个窗口，并按该次尝试耗时的四倍延长休息期，从而限制正常提交和退化存储失败重试的完整 bank 全局 I/O 占空比。到期写回先于扫描获得维护机会，持续 scan pending 不能使其永久饥饿。快照开始时捕获各 scope 的脏代数，提交后只推进期间没有新增变化的 `durable_generation`，所以并发写入不会被错误标成已持久化；失败则保留脏状态并按同一自适应规则重试。显式持久 metadata set/delete、首次空 bank 和 scope retirement 仍同步提交，以保留管理操作的成功返回语义。
+启动时，可信 bank 不再等到首个 Agent 查询才懒加载。`main()` 在文件系统和 timer 初始化完成后立即调用 `agent_storage_init()`，只有加载/恢复结束后才启动运行时 I/O policy 并发布首个用户进程。单个 bank 损坏时会从另一份可验证副本恢复；只有不存在有效 bank 或选择失败时 metadata API 才 fail closed，不会用空表继续。但 scope retirement 仍可清理依赖、动作、缓存、审计、租约和真实 VFS-labelled 文件并释放 scope 身份。当前测试只覆盖正常 bank 加载/重载，没有动态注入启动 bank 损坏。
+
+普通持久文件变化采用写回而不是直写：write/truncate 通过 inode incarnation sidecar 先发布最新 size、更新时间和文件代数，查询及 bank 快照都会覆盖内存主表中的旧值；create/delete 则先完成内存记录变化。带 `PERSIST` 的记录随后让对应 scope 的 `dirty_generation` 进入固定一秒的非滑动合并窗口；不进入快照的 volatile 记录只更新内存/sidecar，不制造空 checkpoint。后台维护在事务门空闲时每轮只推进 COW 状态机的一个步骤；dirty scope 轮转成为整个 job 的稳定 sponsor，物理传输使用该 owner 的硬 `BACKGROUND` burst/refill。checkpoint 成功或失败后的 not-before deadline 都是固定合并窗口，不再按 checkpoint 执行耗时延长；I/O debt 决定何时能推进下一步。到期写回先于扫描获得维护机会，持续 scan pending 不能使其永久饥饿。快照开始时捕获各 scope 的脏代数，提交后只推进期间没有新增变化的 `durable_generation`，所以并发写入不会被错误标成已持久化；失败则保留脏状态等待固定窗口和 budget。
+
+显式持久 metadata set/delete、首次空 bank、reload 和 scope retirement 同步进入单调 ticket 的 FIFO submit lane，并建立不可替换的 COW job；该语义保证有序接纳，不保证调用返回时 primary 已完成回读验证。全局 metadata transaction gate 本身仍是 wake-all 条件门，不宣称 FIFO。条件不满足时，中断从失败检查一直保持关闭，直到事务门释放且线程已经进入 submit condition queue，避免 unlock-to-sleep 丢失唤醒。持久化在预算边界暂时释放事务门时，immutable job 保持同一 `job_id`，后来提交者不能替换。metadata exact-read 在文件系统原子段之外偿还 I/O 预算，并从正数短读前缀继续；临时 interruption 不会被记成 bank corruption。scanner 仍独立使用 `max(20 tick, 4 * 扫描耗时)` 自适应 cooldown，不能与 checkpoint 的固定窗口混为一谈。
 
 这套实现让查询结果中的文件身份可以追溯到某一代真实 inode，同时保留 Agent 需要的 namespace、workflow、run、label、type、state 等高层属性。完整身份始终是 `dev + inum + incarnation`；删除文件后即使设备号和 inode 号被复用，新 incarnation 也会使旧 metadata、digest cache、版本和租约失效。为了兼容已有用户态测试，结构体字段名仍使用 project/stage/kind/status；字符串 selector 同时接受 `namespace/object_id/label/type/state` 等通用字段名。
 
@@ -344,4 +348,5 @@ align+analyze+report+archive
 | 查询规模 | 当前最多 512 条元数据，单 workflow scope 最多 112 条，单次最多返回 8 条 hit |
 | 内容摘要 | 当前读取最多 4096 字节计算指纹，返回短预览，不做全文索引 |
 | 预取提示 | 当前只生成 metadata 提示，提示本身不预读文件内容，不保存到磁盘 |
-| 文件安全域 | 当前实现 PUBLIC、SYSTEM 和最多 4 个由内核可信 factory 签发的动态 workflow scope，以及 kernel-private/root 策略；尚未提供任意数量的用户命名域或用户可编程动态策略语言 |
+| 文件安全域 | 当前实现 PUBLIC、SYSTEM、最多 4 个 active workflow，以及 active + retiring 合计不超过 8 的生命周期域；退役积压最多 8 个，身份槽只在 `used == 0` 后复用，尚未提供任意数量的用户命名域或用户可编程动态策略语言 |
+| 故障验证 | 当前回归覆盖正常 I/O、ENOSPC 和重载一致性；没有注入启动 bank 损坏、VirtIO 短写/设备错误或 metadata COW 中途掉电，不据此声称完整崩溃原子性 |

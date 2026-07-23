@@ -80,6 +80,7 @@ struct thread {
 	struct thread *wait_next;
 	enum wait_reason wait_reason;
 	int wait_interrupted;
+	int wait_interruptible;
 	int on_run_queue;
 	uint kernel_work_depth;
 	uint kernel_work_resumed;
@@ -89,6 +90,14 @@ struct thread {
 	uint64 kernel_work_redispatches;
 	uint64 kernel_syscall_preemptions_start;
 	uint64 kernel_last_syscall_preemptions;
+	uint io_request_depth;
+	uint io_request_owner;
+	uint io_request_class;
+	uint io_request_reservation;
+	uint io_request_device_reservation;
+	uint io_request_transfers;
+	uint bio_buffer_holds;
+	uint bio_fs_atomic_depth;
 };
 
 enum procstate { P_UNUSED, P_USED };

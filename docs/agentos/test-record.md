@@ -2,7 +2,7 @@
 
 测试目标：根目录 AgentOS-uCore 增强目标
 
-本次最终复测日期：2026-07-22
+本次最终复测日期：2026-07-23
 
 测试环境：
 
@@ -31,7 +31,7 @@ make build TOOLPREFIX=riscv64-linux-gnu- LOG=warn INIT_PROC=agentfinal_ucore
 bash scripts/run-agent-tests.sh
 ```
 
-独立专项记录：脚本依次运行 `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentconflict_ucore`、`agentllm_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`、`agentscope_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`。专项运行要求每个程序在超时前输出 `parent passed`，且日志中不存在 `check failed`、`panic`、`unknown syscall`、`bad addr`、`IllegalInstruction` 或 `child_failed`。2026-07-22 当前代码的完整脚本 15/15 通过，其中包含增强后的路由边界和动态 workflow scope 回归。该记录不等于 `make full-verify` 全绿，聚合入口的已知状态见文末。
+独立专项记录：2026-07-22 的脚本依次运行 `agentfinal_ucore`、`agentfs_ucore`、`agentscan_ucore`、`agentloop_ucore`、`agentsched_ucore`、`agentconflict_ucore`、`agentllm_ucore`、`agentbench_ucore`、`labbench_ucore`、`labdemo_ucore`、`agentsecurity_ucore`、`agentscope_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`，当时完整 15/15 通过。当前脚本已增加 `iobudget_ucore`，变为 16 项；当前冻结源码以 `CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 完成 16/16，整条命令墙钟 `337.1s`，其中 `iobudget_ucore elapsed=2.1s`。专项运行要求每个程序在超时前输出 `parent passed`，且日志中不存在未被用例明确声明为预期故障的 `check failed`、`panic`、`unknown syscall`、`bad addr`、`IllegalInstruction` 或 `child_failed`。16 项 Agent 专项通过仍不等于 `make full-verify` 全绿。
 
 ## 输出提取方式
 
@@ -61,12 +61,13 @@ bash scripts/run-agent-tests.sh
 | `agentsecurity_ucore` | `route_source_enforced=1`、`route_target_isolated=1`、`ipc_route_authorization=1`、`message_route_lifecycle=1`、`target_route_consent=1`、`route_slot_reclaimed=1` | 系统事件防伪、未授权注入拒绝、grant/revoke、target LLM_DONE consent、MESSAGE 位图隔离、stable control id 生命周期和 source 退出槽回收均通过 |
 | `agenttrust_ucore` | `wx_image=1`、`immutable_image=1`、`role_image_binding=1` | W^X、可信映像不可变和 Agent 角色映像绑定可验证 |
 | `agentvfs_ucore` | `inherited_fd_revalidated=1`、`protected_paths=1` | 普通 VFS 路径不能绕过文件能力，继承描述符会按当前凭据重新鉴权 |
+| `iobudget_ucore` | `thread_exit_lease_cleanup=1`、`scheduler_interrupt_progress=1`、`fault_exit_cleanup=1`、`public_budget_shared=1`、`nested_io_attribution=1`、`cache_scope_isolation=1`、`workflow_bounded_progress=1`、`control_reserve_progress=1`、`parent passed` | 最终 teardown 修复后独立轮 `elapsed=2.4s`；ABI sized-copy 另由无单独 marker 的断言覆盖 |
 | `usersafety_ucore` | `live after pointer bounds`、`live after directed wakeup`、`parent passed` | syscall 输入检查、定向唤醒和失败事务回滚可验证 |
 | `fsenospc_ucore` | `inode exhaustion survived`、`block exhaustion survived` | inode、inode cache 与数据块耗尽返回失败而非触发内核 panic |
 | `fspquota_ucore` | `crash_orphan_ready=1`、`reboot_charge_persisted=1`、`relaunch_charge_persisted=1`、`cleanup_reuse=1` | 双目标同镜像三次启动已通过，验证掉电孤儿回收及 PUBLIC 计费跨完整进程域退出与重启保持 |
 | `procreap_ucore` / `procreap_agent_ucore` | `live-domain-limit=1`、`reserved-agent-slot=1` | 进程回收、资源域配额与系统保留槽可验证 |
-| `syscallfair_ucore` | 基础轮 `[syscall-fairness] both targets passed`；终审预期 console/inode/trunc 顺序、`INODE_PEER < INODE_SHORT`、`parent passed` | 基础 QEMU 轮已证明控制台长写内部的同级进程进展；inode 写和截断的 last-syscall 计数、observer 与 worker 退出完整性仍待复测 |
-| 内核栈预算 | `kernel stack budget`、`kernel stack user path` | 构建期 callgraph/栈帧预算检查随内核构建执行 |
+| `syscallfair_ucore` | `[syscall-fairness] both targets passed`、console/inode/trunc 顺序、last-syscall 重调度与 `parent passed` | 当前冻结源码 `make syscall-fairness-test` 已通过 |
+| 内核栈预算 | `kernel stack budget: ... required=13584 limit=16384` | 当前冻结源码构建期 callgraph/栈帧预算检查通过 |
 
 ## 本次可信 IPC 变更验证状态
 
@@ -454,7 +455,7 @@ fspquota_ucore: parent passed
 [fs-enospc] generic, persistent principal, and Agent quota cases passed
 ```
 
-历史结论：磁盘 inode、内存 inode cache 和数据块耗尽均通过正常错误返回或短写报告，未转化为全内核 panic；释放资源后可以重新分配。PUBLIC 域完成超过旧版本表容量的 640 次短命 inode 循环后，workflow 仍能取得编辑版本并命中内容摘要缓存，说明版本 sidecar 随最终 inode 生命周期回收，且不能跨 inode 槽侵占 Agent 保留资源。历史测试单独覆盖 AgentOS-uCore 与 `baseline_ucore/` 的通用 ENOSPC，并额外覆盖 AgentOS 运行期存储水位。
+本次冻结源码的 `make fs-enospc-test` 全流程通过，墙钟 `75.1s`；quota/domain、持久 PUBLIC principal、孤儿回收、重启计费与删除复用场景均完成。磁盘 inode、内存 inode cache 和数据块耗尽均通过正常错误返回或短写报告，未转化为全内核 panic；释放资源后可以重新分配。PUBLIC 域完成超过旧版本表容量的 640 次短命 inode 循环后，workflow 仍能取得编辑版本并命中内容摘要缓存，说明版本 sidecar 随最终 inode 生命周期回收，且不能跨 inode 槽侵占 Agent 保留资源。
 
 本次稳定 principal 回归已在 AgentOS 与 baseline 上分别完成 crash/seed/verify 三轮。第一轮在 PUBLIC 文件已 unlink 但描述符仍打开时强制结束 QEMU，第二轮挂载必须回收该不可达 inode/block；runner 在 seed 后解析 raw bitmap/dinode/qmap，确认物理分配相对 mkfs 基线仅增加 4 block/7 inode，且非 FREE owner 同样只增加 4 个，排除只从账本忽略孤儿的假通过。镜像还预装一个由 SYSTEM 赞助的 13 数据块可变文件；PUBLIC 首次覆盖前必须把 inode、数据块和间接索引块整体接管，共计 `14 block/1 inode`，不能借预装对象绕过配额。第二轮随后让占满 `18 block/8 inode` 上限的 PUBLIC 进程资源域完整退出，第三轮在同一磁盘镜像上验证 qmap/dinode 重建、新域仍受旧文件计费、删除退款及清理复用；两个目标均依次取得 `reboot_charge_persisted`、`deletion_reuse`、`relaunch_charge_persisted`、`cleanup_reuse` 和 `parent passed`，runner 最终报告通过。该入口仍没有被 `make full-verify` 串联，发布验收时应继续单独执行。
 
@@ -504,7 +505,7 @@ kernel stack user path: ...
 kernel stack interrupt path: kernelvec -> ...
 ```
 
-结论：该检查不是只在上述独立命令运行。根目录和 `baseline_ucore/` 的 `build/kernel` 都会在链接前执行同一脚本；预算超限、未建模递归/间接调用或超大单帧会直接使构建失败。运行时不可映射 guard page 与 canary 提供第二层防护。
+结论：该检查不是只在上述独立命令运行。根目录和 `baseline_ucore/` 的 `build/kernel` 都会在链接前执行同一脚本；预算超限、未建模递归/间接调用或超大单帧会直接使构建失败。当前增强目标结果为 `user=7280`、`interrupt=2208`、`margin=4096`、`required=13584 < limit=16384`。运行时不可映射 guard page 与 canary 提供第二层防护。
 
 ## 基础兼容抽测：ch3_trace
 
@@ -570,9 +571,9 @@ make syscall-fairness-test TOOLPREFIX=riscv64-linux-gnu-
 [syscall-fairness] both targets passed
 ```
 
-测试没有依赖宿主输入注入。该轮日志证明两个目标都在一次 64 KiB 控制台 `write()` 返回前调度 Guest pipe gate 后的同级进程。随后终审把 inode 和 truncate 契约都改为 last-syscall 重调度计数加独立 observer：终审契约将用计数证明 64 KiB `write()` 与 `O_TRUNC` open 内部跨过调度边界，并用 observer 证明 peer 读到已提交数据和原子 EOF 可见，避免把返回后的用户态 timer 抢占误当成 syscall 内调度。最外层父进程还将等待测试 worker 完整退出后才输出 `parent passed`，宿主 runner 还要求 QEMU 正常关机。终审后的契约尚未在当前受限身份下重新运行 QEMU。
+测试没有依赖宿主输入注入。历史轮日志证明两个目标都在一次 64 KiB 控制台 `write()` 返回前调度 Guest pipe gate 后的同级进程；随后终审把 inode 和 truncate 契约改为 last-syscall 重调度计数加独立 observer，用计数证明 64 KiB `write()` 与 `O_TRUNC` open 内部跨过调度边界，并用 observer 证明 peer 读到已提交数据和原子 EOF 可见。最外层父进程等待测试 worker 完整退出后才输出 `parent passed`，宿主 runner 要求 QEMU 正常关机。本次冻结源码已重新执行 `make syscall-fairness-test` 并通过双目标终审契约。
 
-基础机制轮次还独立通过 `make agentos-test` 15/15、当时的 `make fs-enospc-test` 和 `make proc-reap-test`。7 月 22 日审查后又补入 fork 逐页计费与 VM snapshot 屏障、Agent size 非阻塞发布 sidecar、baseline exec epoch、last-syscall 重调度观测、强化的 inode/ENOSPC/退出断言及结构检查；随后新增稳定 PUBLIC principal、挂载孤儿清扫与账本重建及三启动 `fspquota_ucore`。最终代码上的 Agent 15/15 与双目标同镜像 crash/seed/verify QEMU 已通过，不能由旧结果替代的物理孤儿回收和持久计费证据现已补齐；构建期内核栈预算为增强目标 `14432 < 16384`、对照目标 `8336 < 16384`。last-syscall 终审契约仍按其独立状态复测。覆盖也不表示任意 syscall 路径已被穷尽；固定上界目录扫描与仅可信 Agent 可达的 metadata raw I/O 仍缺独立公平性压力用例。
+基础机制轮次还独立通过 `make agentos-test` 15/15、当时的 `make fs-enospc-test` 和 `make proc-reap-test`。7 月 22 日审查后又补入 fork 逐页计费与 VM snapshot 屏障、Agent size 非阻塞发布 sidecar、baseline exec epoch、last-syscall 重调度观测、强化的 inode/ENOSPC/退出断言及结构检查；随后新增稳定 PUBLIC principal、挂载孤儿清扫与账本重建及三启动 `fspquota_ucore`。当时版本的 Agent 15/15 与双目标同镜像 crash/seed/verify QEMU 已通过，不能由旧结果替代的物理孤儿回收和持久计费证据现已补齐；构建期内核栈预算为增强目标 `14432 < 16384`、对照目标 `8336 < 16384`。块 I/O policy、分块 metadata COW、resumable scope reclaim、scheduler 中断窗口和 terminal teardown 随后补齐；当前冻结源码已在这些最终修改后以 `337.1s` 完成 Agent 专项 16/16，并保留下述独立机制证据。
 
 ## 2026-07-22 metadata 合并写回回归
 
@@ -582,7 +583,7 @@ make syscall-fairness-test TOOLPREFIX=riscv64-linux-gnu-
 TOOLPREFIX=riscv64-linux-gnu- CASE_TIMEOUT=240s bash scripts/run-agent-tests.sh
 ```
 
-当前工作区从 clean user/kernel 构建开始完成整套 Agent QEMU 回归，15/15 通过，最终输出 `[agent-tests] all Agent-OS uCore checks passed`。构建期内核栈预算同时通过，本轮增强目标为 `required=14128 < limit=16384`。
+当时工作区从 clean user/kernel 构建开始完成整套 Agent QEMU 回归，15/15 通过，最终输出 `[agent-tests] all Agent-OS uCore checks passed`。构建期内核栈预算同时通过，本轮增强目标为 `required=14128 < limit=16384`。
 
 写回与跨域进展的实际输出：
 
@@ -595,7 +596,7 @@ agentscope_ucore: metadata_scan_pressure_bounded=1
 agentscope_ucore: parent passed
 ```
 
-`writes=131`、`commits=4` 和 `latency_ms=3626` 是本轮调度时序下的观测值，不是固定常量。测试契约要求每次变化进入 scope-local 记账，`commits > 0`、`commits * 8 <= requests`、`coalesced + commits == requests`，安静后 `dirty == durable` 且 pending 清零。随后强制重载 bank，size 和文件代数保持一致。另一 workflow 在 writer 存活屏障与显式停止之间完成 32 次查询，证明数据路径不再逐次同步执行完整 metadata checkpoint。volatile 微写前后的 request/commit 计数完全不变，满表未绑定对象的扫描轮次满足 cooldown 上界。成功与失败 checkpoint 共用 `agent_file_writeback_rest_deadline()`，失败保留 dirty 且按实际尝试耗时退避；本轮没有注入退化设备时延，因此该失败分支由源码审查、编译和全量回归覆盖，不把正常路径观测夸大为故障注入证据。
+`writes=131`、`commits=4` 和 `latency_ms=3626` 是该轮调度时序下的观测值，不是固定常量。测试契约要求每次变化进入 scope-local 记账，`commits > 0`、`commits * 8 <= requests`、`coalesced + commits == requests`，安静后 `dirty == durable` 且 pending 清零。随后强制重载 bank，size 和文件代数保持一致。另一 workflow 在 writer 存活屏障与显式停止之间完成 32 次查询，证明数据路径不再逐次同步执行完整 metadata checkpoint。volatile 微写前后的 request/commit 计数完全不变，满表未绑定对象的扫描轮次满足 cooldown 上界。当前实现仍复用 `agent_file_writeback_rest_deadline()`，但它只返回固定合并窗口；checkpoint 的物理占用改由稳定 sponsor 的硬 `BACKGROUND` I/O budget 限制，不再按 checkpoint 自身耗时做四倍休整。scanner 的 `max(20 tick, 4 * 扫描耗时)` 自适应 cooldown 保持不变。该历史 QEMU 轮没有覆盖新的分块 COW/budget 组合。
 
 显式 metadata 事务边界的新增输出：
 
@@ -608,3 +609,27 @@ agentfs_ucore: parent passed
 ```
 
 `partial_update_binding` 覆盖启动早期只更新 STATUS 的请求仍绑定调用者指定的真实 `dev + inum + incarnation`，并在重载后保持身份；`preload_create_query` 覆盖首次显式 metadata 操作之前创建的文件最终由有界后台扫描纳入查询。后两个标记分别覆盖 fid 与 path 指向不同对象时返回冲突，以及旧 inode identity 不能修改或删除路径复用后的新对象；失败请求不会提前协调、误删或持久化其他记录。
+
+## 2026-07-23 块 I/O 与 buffer cache 分域回归
+
+当前源码已把 `iobudget_ucore` 加入 `scripts/run-agent-tests.sh`。测试通过 syscall 544 读取 I/O policy ABI v3，先验证 `version`、当前 `struct_size`、较短旧前缀和尾部哨兵不被覆盖，再要求 PUBLIC 冷工作集实际触发 throttle、wait 和 eviction；同时验证 owner/shared/device lease 不超过各自 burst、线程退出归还未提交 lease、唯一 runnable 内核 pipe waiter 下 timer/device 中断仍可推进、page fault 退出时未链接文件回收 I/O 仍归因且结清两级 debt、PUBLIC 物理传输不存在未归因增长，以及独立 workflow 的热块仍命中 cache、Orchestrator 使用 `CONTROL` class 并完成物理写入。用户 wrapper 自动把当前结构大小作为第二参数；内核至少接收固定的 8 字节 `version + struct_size` 头，并只 copyout 用户声明大小与当前大小中的较小值，所以旧用户库可以继续读取其已知前缀。
+
+最终 teardown 修复后的独立 QEMU 观察到：
+
+```text
+iobudget_ucore: thread_exit_lease_cleanup=1
+iobudget_ucore: scheduler_interrupt_progress=1
+iobudget_ucore: fault_exit_cleanup=1
+iobudget_ucore: public_budget_shared=1
+iobudget_ucore: nested_io_attribution=1
+iobudget_ucore: cache_scope_isolation=1
+iobudget_ucore: workflow_bounded_progress=1
+iobudget_ucore: control_reserve_progress=1
+iobudget_ucore: parent passed
+```
+
+最终修复后的独立运行 `elapsed=2.4s`。ABI sized-copy、线程退出 lease、scheduler 中断交付、fault 退出清理、PUBLIC budget/shared 上界、完成归因、cache 服务隔离、workflow 进展和 CONTROL class 共九类实质断言；日志中是八个具名机制 marker 加 `parent passed`。当前冻结源码的完整 Agent 脚本以墙钟 `337.1s` 完成 16/16，本项 `elapsed=2.1s`。ABI v3 的设备 burst/refill 为 560/280：普通流量必须取得根信用，SYSTEM/CONTROL 可在根信用耗尽时带 device debt 前进，因此根 bucket 不是保护流量的硬总上限。静态 envelope 只约束配置总和。cache 的 SYSTEM/PUBLIC/active workflow floor/cap 为 40/96、24/48、36/64，退役清理 job 临时为 3/8。
+
+当前独立 `agentscope_ucore` 还观察到 metadata transaction/COW、微写合并、跨 scope 查询、最终一致性、容量与 `lifecycle_reclamation=1`、`parent passed`，`elapsed=148.9s`。`NPROC` 身份账本只复用 `used == 0` 的记录，active 最多 4 个且 active + retiring 不超过 8；全部 active 退出积压时最多 8 个退役任务占用最多 8 个 FS reclaim cursor，并由 reaper 在 `NPROC` 身份账本范围轮转选择清理。
+
+当前动态 I/O 用例只覆盖一个 PUBLIC 与一个 workflow Orchestrator `CONTROL` owner；没有断言 `shared_grants` 或排队轮转，也未覆盖 Recovery、SYSTEM/workflow `BACKGROUND`、多 workflow 同时压力、retiring 3/8、跨 owner LRU/transient、主动 device-debt 注入，以及启动 bank 损坏、VirtIO 设备错误/短 I/O/metadata COW 中途掉电。`make fs-enospc-test` 已在当前冻结源码以 `75.1s` 通过 quota/domain/persistent principal/orphan/reboot 全流程，但其中没有专门在 grouped qmap claim 中点断电。以上专项仍不等于 `make full-verify` 全绿。

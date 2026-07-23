@@ -1,4 +1,5 @@
 #include "defs.h"
+#include "bio.h"
 #include "kernel_work.h"
 #include "timer.h"
 
@@ -17,6 +18,7 @@ void kernel_work_reset(struct thread *t)
 {
 	if (t == 0)
 		return;
+	bio_request_abort_thread(t);
 	t->kernel_work_depth = 0;
 	t->kernel_work_resumed = 0;
 	t->kernel_resched_pending = 0;
@@ -25,6 +27,14 @@ void kernel_work_reset(struct thread *t)
 	t->kernel_work_redispatches = 0;
 	t->kernel_syscall_preemptions_start = 0;
 	t->kernel_last_syscall_preemptions = 0;
+	t->io_request_depth = 0;
+	t->io_request_owner = 0;
+	t->io_request_class = 0;
+	t->io_request_reservation = 0;
+	t->io_request_device_reservation = 0;
+	t->io_request_transfers = 0;
+	t->bio_buffer_holds = 0;
+	t->bio_fs_atomic_depth = 0;
 }
 
 // A dispatch, rather than a syscall entry, starts a new slice. Otherwise a
@@ -57,6 +67,16 @@ void kernel_work_begin(void)
 	t->kernel_work_depth++;
 }
 
+void kernel_work_begin_cleanup(void)
+{
+	struct thread *t = curr_thread();
+
+	/* A terminal exit reuses an enclosing syscall slice when one exists. */
+	if (!kernel_work_running(t) || t->kernel_work_depth != 0)
+		return;
+	kernel_work_begin();
+}
+
 void kernel_work_request_resched(void)
 {
 	struct thread *t = curr_thread();
@@ -78,6 +98,10 @@ static int kernel_work_checkpoint_mode(uint work_units, int cleanup)
 	else
 		t->kernel_work_units += work_units;
 	exit_requested = !cleanup && proc_thread_exit_requested();
+	// Buffer holders must finish their small critical section before a
+	// scheduler hand-off; bget provides exclusion, not a sleepable lock.
+	if (t->bio_buffer_holds != 0 || t->bio_fs_atomic_depth != 0)
+		return exit_requested ? -1 : 0;
 	if (!cleanup && t->kernel_work_resumed) {
 		t->kernel_work_resumed = 0;
 		return exit_requested ? -1 : 1;
@@ -108,7 +132,7 @@ int kernel_work_checkpoint_cleanup(uint work_units)
 	return kernel_work_checkpoint_mode(work_units, 1);
 }
 
-void kernel_work_end(void)
+static void kernel_work_end_mode(int cleanup, int terminal)
 {
 	struct thread *t = curr_thread();
 
@@ -116,11 +140,24 @@ void kernel_work_end(void)
 		return;
 	if (t->kernel_work_depth == 0)
 		panic("kernel work depth underflow");
-	if (t->kernel_work_depth == 1) {
-		(void)kernel_work_checkpoint(0);
+	if (terminal || t->kernel_work_depth == 1) {
+		(void)kernel_work_checkpoint_mode(0, cleanup);
 		t->kernel_last_syscall_preemptions =
 			t->kernel_work_redispatches -
 			t->kernel_syscall_preemptions_start;
 	}
-	t->kernel_work_depth--;
+	if (terminal)
+		t->kernel_work_depth = 0;
+	else
+		t->kernel_work_depth--;
+}
+
+void kernel_work_end(void)
+{
+	kernel_work_end_mode(0, 0);
+}
+
+void kernel_work_end_cleanup(void)
+{
+	kernel_work_end_mode(1, 1);
 }

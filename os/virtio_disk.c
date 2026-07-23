@@ -61,6 +61,8 @@ static struct disk {
 	// indexed by first descriptor index of chain.
 	struct {
 		struct buf *b;
+		uint owner;
+		uint io_class;
 		char status;
 	} info[NUM];
 
@@ -193,6 +195,7 @@ extern int PID;
 void virtio_disk_rw(struct buf *b, int write)
 {
 	uint64 sector = b->blockno * (BSIZE / 512);
+	int irq_enabled = intr_save();
 	// the spec's Section 5.2 says that legacy block operations use
 	// three descriptors: one for type/reserved/sector, one for the
 	// data, one for a 1-byte status result.
@@ -231,6 +234,8 @@ void virtio_disk_rw(struct buf *b, int write)
 	disk.desc[idx[1]].next = idx[2];
 
 	disk.info[idx[0]].status = 0xfb; // device writes 0 on success
+	bio_current_sponsor(&disk.info[idx[0]].owner,
+			    &disk.info[idx[0]].io_class);
 	disk.desc[idx[2]].addr = (uint64)&disk.info[idx[0]].status;
 	disk.desc[idx[2]].len = 1;
 	disk.desc[idx[2]].flags =
@@ -264,6 +269,9 @@ void virtio_disk_rw(struct buf *b, int write)
 	intr_off();
 	disk.info[idx[0]].b = 0;
 	free_chain(idx[0]);
+	bio_account_transfer(disk.info[idx[0]].owner,
+			     disk.info[idx[0]].io_class, write != 0);
+	intr_restore(irq_enabled);
 }
 
 void virtio_disk_intr()

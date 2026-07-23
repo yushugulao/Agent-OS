@@ -35,9 +35,15 @@ enum vfs_operation {
 #define VFS_CAP_WORKFLOW \
 	(VFS_CAP_CONTENT_READ | VFS_CAP_ARTIFACT_WRITE)
 
-// Fixed global Agent tables reserve a full partition for every admitted
-// workflow. Retiring scopes continue to occupy a slot until reclamation ends.
+// At most four workflows may be active. Retiring identities remain in the
+// lifecycle ledger until reclamation ends, but no longer consume an active
+// admission slot.
 #define VFS_SCOPE_MAX_ACTIVE 4
+// The resumable filesystem reclaimer owns one cursor per retiring scope.
+// Active and retiring identities share this bounded lifecycle ledger, so a
+// burst of exits cannot overrun the reclaimer after admission has succeeded.
+#define VFS_SCOPE_LIFECYCLE_CAP (VFS_SCOPE_MAX_ACTIVE * 2)
+#define VFS_SCOPE_MAX_RETIRING VFS_SCOPE_LIFECYCLE_CAP
 
 void vfs_cred_kernel(struct vfs_cred *);
 void vfs_cred_from_proc(const struct proc *, struct vfs_cred *);
@@ -46,6 +52,7 @@ void vfs_proc_reset(struct proc *);
 void vfs_proc_drop_to_public(struct proc *);
 int vfs_scope_active(uint scope_id);
 int vfs_scope_retiring(uint scope_id);
+int vfs_scope_retained(uint scope_id);
 uint vfs_scope_storage_guarantee(uint exempt_scope, int inode,
 				 uint guarantee);
 int vfs_scope_storage_reserve(uint scope_id, int inode, uint limit);

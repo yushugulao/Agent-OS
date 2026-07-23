@@ -1,5 +1,6 @@
 #include "loader.h"
 #include "agent.h"
+#include "bio.h"
 #include "defs.h"
 #include "exec_policy.h"
 #include "file.h"
@@ -8,6 +9,48 @@
 #include "vfs_security.h"
 
 extern char INIT_PROC[];
+
+enum user_image_read_status {
+	USER_IMAGE_READ_COMPLETE,
+	USER_IMAGE_READ_ERROR,
+	USER_IMAGE_READ_EOF,
+	USER_IMAGE_READ_INTERRUPTED,
+	USER_IMAGE_READ_DEFERRED,
+};
+
+/*
+ * readi() may commit a positive prefix when the I/O governor asks it to
+ * leave the filesystem atomic section. Pay that debt outside the section,
+ * then resume from the committed offset instead of rejecting a valid short
+ * read as a corrupt executable.
+ */
+static enum user_image_read_status
+user_image_read_exact(struct inode *ip, const struct vfs_cred *cred,
+		      char *dst, uint off, uint length)
+{
+	uint done = 0;
+
+	while (done < length) {
+		int n = readi(ip, cred, 0, (uint64)(dst + done),
+			      off + done, length - done);
+		int checkpoint = bio_request_checkpoint();
+
+		if (checkpoint == BIO_CHECKPOINT_INTERRUPTED)
+			return USER_IMAGE_READ_INTERRUPTED;
+		if (n < 0)
+			return USER_IMAGE_READ_ERROR;
+		if (n == 0)
+			return USER_IMAGE_READ_EOF;
+		if ((uint)n > length - done)
+			return USER_IMAGE_READ_ERROR;
+		done += n;
+		if (checkpoint == BIO_CHECKPOINT_DEFERRED)
+			return USER_IMAGE_READ_DEFERRED;
+		if (checkpoint < 0)
+			return USER_IMAGE_READ_ERROR;
+	}
+	return USER_IMAGE_READ_COMPLETE;
+}
 
 static struct inode *init_image_lookup(char *path)
 {
@@ -84,8 +127,8 @@ int user_image_build(struct inode *ip, uint64 trapframe_pa,
 		if (page == 0)
 			goto fail;
 		memset(page, 0, PAGE_SIZE);
-		if (readi(ip, &kernel_cred, 0, (uint64)page, off, want) !=
-		    (int)want) {
+		if (user_image_read_exact(ip, &kernel_cred, page, off, want) !=
+		    USER_IMAGE_READ_COMPLETE) {
 			kfree(page);
 			goto fail;
 		}

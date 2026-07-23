@@ -83,12 +83,21 @@ bash scripts/run-agent-tests.sh
 | `agentsecurity_ucore` | 既有权限/route/controller 负向检查；新增用户非零 cause/span 拒绝、可信跨 Agent source attribution、low/high audit authority 隔离。 | `trusted_span_authority=1`、`trusted_cause_attribution=1`、`audit_authority_partition=1`、`parent passed`；本轮通过 |
 | `agenttrust_ucore` | 可执行映像 W^X、密封映像不可变、bootstrap 授权范围、Agent 角色与可信映像绑定。 | `agenttrust_ucore: parent passed` |
 | `agentvfs_ucore` | 工作流文件能力、公共/工作流命名空间隔离、继承描述符重新鉴权、精确能力委派和失败事务原子性。 | `agentvfs_ucore: parent passed` |
-| `agentscope_ucore` | syscall 541 factory、542 一次性 pipe fd 委派、动态 scope、同名对象/action/lease/audit/IPC 隔离、scope-local metadata reload、并发 metadata 事务、持久微写合并、volatile 写回分流、满表 scan-pressure 限流、跨 scope 查询时限、最终持久化一致性、配额保证和 retirement 回收。 | `cross_scope_isolation=1`、`scope_reload_isolation=1`、`ipc_scope_isolation=1`、`metadata_transactions=1`、`metadata_write_coalescing=1 writes=<at-least-128> commits=<bounded>`、`metadata_cross_scope_progress=1 queries=32 latency_ms=<at-most-5000>`、`metadata_final_consistency=1`、`metadata_volatile_no_writeback=1 writes=32`、`metadata_scan_pressure_bounded=1`、`scope_capacity_reservation=1`、`transactional_fd_delegation=1`、`lifecycle_reclamation=1`、`parent passed`；完整 15/15 QEMU 回归通过 |
+| `agentscope_ucore` | syscall 541 factory、542 一次性 pipe fd 委派、动态 scope、同名对象/action/lease/audit/IPC 隔离、scope-local metadata reload、FIFO metadata submit lane、并发 COW 事务、持久微写合并、跨 scope 查询时限、最终一致性、配额和 retirement 回收。 | 当前独立轮输出完整标记及 `parent passed`，`elapsed=148.9s`；当前冻结源码的最终 16 项轮也通过 |
+| `iobudget_ucore` | syscall 544 ABI v3 sized-copy、稳定 PUBLIC/workflow owner、NORMAL/CONTROL class、owner/shared/device lease 上界、线程退出 lease 回收、scheduler 内核态中断交付、fault teardown 清理归因/debt 结算、完成归因、PUBLIC cache/速率压力、workflow cache floor 与压力下写入进展。 | 最终 teardown 修复后的独立轮输出八项具名机制 marker 与 `parent passed`，`elapsed=2.4s`；ABI sized-copy 是无单独 marker 的第九类断言 |
 | `usersafety_ucore` | syscall 指针、字符串、`exec` 参数、线程入口、等待队列、管道、文件和信号量输入范围。 | `usersafety_ucore: parent passed` |
 
 原始输出不在本文档重复展开，统一保存在 [test-record.md](test-record.md)。每个测试的流程和断言解释见 [testing-details.md](testing-details.md)。
 
-本次 scope 回归核对的固定机制参数如下：PUBLIC=0、SYSTEM=1、动态 workflow>=3，数值 2 保留为安装级 PUBLIC 存储 principal，最多 4 个 active/retiring scope；进程普通槽 96、受控保留槽 32、每 scope 保留 8；metadata/dependency/action/edit/span-prefetch 每 scope 分别 112/16/8/8/8。审计物理 512、每 scope 128，low/high 各 64，low principal 上限 16、high active principal 上限 8；high 满时只能自滚或回收 inactive principal，active principal 互不淘汰。存储策略按完成镜像空闲量核算并把 PUBLIC principal/G/S 持久化到 superblock，挂载从 qmap/dinode 重建 PUBLIC 用量；每 scope 硬下限 320 inode/512 block，SYSTEM 硬下限 8 inode/512 block。当前平台镜像实际核算为每 scope 342/1195、SYSTEM 64/512，构建日志必须与内核使用同一版本化契约。
+本次 scope 回归核对的固定机制参数如下：PUBLIC=0、SYSTEM=1、动态 workflow>=3，数值 2 保留为安装级 PUBLIC 存储 principal；最多 4 个 active scope，`VFS_SCOPE_LIFECYCLE_CAP=8` 同时约束 active + retiring，因此全部退出积压时 retiring 最多 8 个。VFS 生命周期 ledger 有 `NPROC` 条身份记录，只复用 `used == 0` 的记录并独立统计 active/retiring；FS reclaim cursor 最多 8 个，reaper 在 `NPROC` 账本范围轮转选择，防止固定槽位饥饿和退役状态覆盖。进程普通槽 96、受控保留槽 32、每 active scope 保留 8；metadata/dependency/action/edit/span-prefetch 每 scope 分别 112/16/8/8/8。审计物理 512、每 scope 128，low/high 各 64，low principal 上限 16、high active principal 上限 8；high 满时只能自滚或回收 inactive principal，active principal 互不淘汰。存储策略按完成镜像空闲量核算并把 PUBLIC principal/G/S 持久化到 superblock，挂载从 qmap/dinode 重建 PUBLIC 用量；每 scope 硬下限 320 inode/512 block，SYSTEM 硬下限 8 inode/512 block。当前平台镜像实际核算为每 scope 342/1195、SYSTEM 64/512，构建日志必须与内核使用同一版本化契约。
+
+块 I/O policy ABI v3 的设备根 burst/refill 为 560/280，PUBLIC NORMAL 为 32/16；每个 active workflow 的 NORMAL/CONTROL/BACKGROUND 为 24/12、48/24、8/4，每个 retiring workflow 只保留 BACKGROUND 8/4；SYSTEM SYSTEM/BACKGROUND 为 96/48、16/8，共享前台 slice 为 32/16。普通流量必须取得设备根信用并等待 device debt；SYSTEM owner、CONTROL 和 SYSTEM class 可在根信用耗尽时带 debt 前进，因此静态 560/280 envelope 是配置约束，不是保护流量的运行时硬总上限。shared fast path 在没有 admission waiter 时可直接借信用，排队 grant 才按 owner/class cursor 轮转。cache 的 SYSTEM/PUBLIC/active workflow floor/cap 为 40/96、24/48、36/64，`NBUF=256`；当前轮转退役清理 job 临时使用 3/8，cap 是稳态驻留边界而非瞬时硬上限。
+
+buffer cache 以 exclusive holder、递归深度和私有等待队列串行化同块访问；持有 buffer 时 I/O/CPU checkpoint 均不能睡眠或 yield。复合文件系统原语另有 FS atomic depth；只有释放全部 buffer、且调用者已提交对象状态的 quiescent checkpoint 才可等待。loader 与 metadata exact-read 从正数短读前缀继续。PUBLIC 赞助对象接管使用固定工作区收集/排序块，按 qmap block 分组，并在唯一 claim gate 下完成 qmap-first、inode-last 前向提交。metadata COW 先验证新 primary 再更新旧 mirror；同步管理请求使用 FIFO ticket 接纳并建立不可替换 job，失败条件检查到 condition queue 入队保持关中断原子，不把 syscall 返回描述成 primary 已完成验证的持久化屏障。
+
+scheduler 每轮在 idle context 安装 kernel trap 向量并短暂开启中断，再进入后台维护和线程选择。该机制为所有调度轮提供 timer/device 中断交付边界，防止唯一 runnable 线程在内核 pipe 条件路径反复 `yield()`、长期不返回用户态时锁死 I/O debt 与后台 token refill；`scheduler_interrupt_progress=1` 对此作动态回归。
+
+由主线程触发的正常退出、用户 fault 或非法指令共用不可中断的进程级 terminal cleanup I/O/kernel-work 上下文；非主 sibling 无论正常退出还是 fault 都只退出自身线程。文件关闭和 inode 回收产生的物理传输继续按原 owner/class 记账；剩余 lease 与 owner/class debt 在释放 teardown thread 前结算，PUBLIC/NORMAL 还等待 device debt，SYSTEM/CONTROL 的受保护 device debt 留在全局设备根账本中由 refill 偿还。`fault_exit_cleanup=1` 覆盖 PUBLIC 主线程 page fault、未链接文件清理、物理写归因和两级 debt 清零。可信 metadata bank 则在 `timer_init()` 后、`bio_policy_start()` 与用户进程发布前完成加载尝试和可信判定；单副本损坏从另一有效 bank 恢复，无可验证有效 bank 时 metadata API fail closed，但系统继续启动且 scope 的 VFS-labelled 清理仍可退休。当前没有启动 bank 损坏动态注入。
 
 账本验证不得假设当前可见窗口 sequence 连续：系统 sequence 跨 scope 单调，low/high/principal 分区独立滚动。测试仅对无 gap 的相邻记录核验直接 `prev_hash`，并用 `dropped_records=total_records-visible_records` 解释窗口外记录。非活跃 principal 的旧 high 证据是可观测但有界的历史窗口。
 
@@ -196,14 +205,21 @@ results/latest/
 
 ## 当前验证状态
 
-本文仍不把当前 `make full-verify` 记录为全绿。各项独立专项不能与聚合入口状态混为一谈：2026-07-22 的 `scripts/run-agent-tests.sh` 15/15 已通过；稳定 PUBLIC principal、挂载孤儿清扫与账本重建、以及三启动 `fspquota_ucore` 也已在 AgentOS 与 baseline 的同一 raw 镜像 crash/seed/verify 三轮中动态通过。当前构建期内核栈预算为增强目标 `14432/16384`、baseline `8336/16384`；进程回收与基础 syscall 公平性沿用此前双目标通过记录，last-syscall 终审契约仍按其独立状态复测。详细命令、关键输出和覆盖边界见 [test-record.md](test-record.md)。
+本文仍不把当前 `make full-verify` 记录为全绿。各项专项不能与该聚合入口状态混为一谈。当前冻结源码的证据为：
+
+- 当前冻结源码以 `CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 完成 16/16，墙钟 `337.1s`，其中 `iobudget_ucore elapsed=2.1s`；
+- 独立 `iobudget_ucore elapsed=2.4s`，输出八项具名机制 marker 与 `parent passed`；独立 `agentscope_ucore elapsed=148.9s`；
+- `make fs-enospc-test` 以 `75.1s` 通过 quota/domain、持久 principal、孤儿回收与重启全流程；
+- `make syscall-fairness-test`、`make proc-reap-test`、`make file-resource-test` 和 `make kernel-stack-check` 分别以 `21.7s`、`42.0s`、`20.3s`、`16.6s` 通过，栈预算为 `13584 < 16384`；
+
+详细命令、关键输出和覆盖边界见 [test-record.md](test-record.md)。
 
 ## 当前范围说明
 
 | 方向 | 当前范围 |
 | --- | --- |
 | 文件扫描深度 | 自动扫描 uCore 根目录短文件名，文件对象 metadata 支持用户态显式写入和根目录自动发现。 |
-| syscall 公平性覆盖 | 基础 QEMU 轮已动态验证单次 64 KiB 控制台写内部的同级进程进展；inode 首次写的 last-syscall 重调度/短写、截断 observer 和 worker 退出完整性属于待标准工具链复测的终审契约。pipe、exec/fork 分页、VM snapshot 屏障、退出清理和 Agent batch 当前按源码安全点契约检查；固定上界目录扫描与仅可信 Agent 可达的 metadata raw I/O 尚无独立公平性压力用例。 |
+| syscall 与 I/O 公平性覆盖 | CPU 终审轮已动态覆盖控制台、inode 写和截断；CPU checkpoint 与 I/O debt checkpoint 是互补机制。`iobudget_ucore` 还动态覆盖唯一 runnable 内核 pipe waiter 下的 scheduler 中断交付、fault teardown 的 attributed cleanup/debt settlement，以及一个 PUBLIC 和一个 workflow Orchestrator CONTROL owner；它没有断言 shared 排队轮转，也未覆盖 Recovery、SYSTEM/workflow BACKGROUND、多 workflow 同压、retiring 3/8、跨 owner LRU/transient 或主动 device-debt 注入。启动 bank 损坏、VirtIO 设备错误/短 I/O、metadata COW 掉电及 grouped qmap claim 中点掉电仍缺动态证据。 |
 | Agent 调度 | 验证角色权重、受权调度配置、事件优先、deadline、heartbeat、wait cancel 和虚拟运行量。 |
 | LLM Gateway | 内核提供结构化请求、响应事件、Context 和审计记录；云端访问由用户态或宿主机 Relay 完成。 |
 | 页面和图表 | 内核输出 `agentos:event`、timeline、audit 和 provenance，宿主机工具负责转成页面和图表。 |

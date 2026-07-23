@@ -1,4 +1,5 @@
 #include "proc.h"
+#include "bio.h"
 #include "defs.h"
 #include "exec_policy.h"
 #include "kernel_work.h"
@@ -781,6 +782,7 @@ void proc_init()
 			t->wait_next = 0;
 			t->wait_reason = WAIT_REASON_NONE;
 			t->wait_interrupted = 0;
+			t->wait_interruptible = 0;
 			t->on_run_queue = 0;
 		}
 	}
@@ -793,6 +795,7 @@ void proc_init()
 	idle.wait_next = 0;
 	idle.wait_reason = WAIT_REASON_NONE;
 	idle.wait_interrupted = 0;
+	idle.wait_interruptible = 0;
 	idle.on_run_queue = 0;
 	kernel_work_reset(&idle);
 	init_queue(&task_queue, TASK_QUEUE_SIZE, process_queue_data);
@@ -1119,6 +1122,7 @@ found:
 	t->wait_next = 0;
 	t->wait_reason = WAIT_REASON_NONE;
 	t->wait_interrupted = 0;
+	t->wait_interruptible = 0;
 	t->on_run_queue = 0;
 	// kernel stack
 	t->kstack = kernel_stack_base(p - pool, tid);
@@ -1209,6 +1213,18 @@ void scheduler()
 {
 	struct thread *t;
 	for (;;) {
+		/*
+		 * A runnable thread may yield repeatedly without returning to user
+		 * space (for example while polling a pipe condition).  Give pending
+		 * device and timer interrupts a scheduler-context delivery window on
+		 * every round, otherwise I/O debt waiters can depend on a timer that
+		 * the runnable kernel loop permanently masks.
+		 */
+		current_thread = &idle;
+		set_kerneltrap();
+		intr_on();
+		asm volatile("nop");
+		intr_off();
 		agent_background_maintain();
 		t = scheduler_agent_hint ? fetch_best_task() : fetch_task();
 		if (t == NULL) {
@@ -1353,6 +1369,7 @@ void proc_install_user_image(struct proc *p, struct user_image *image,
 		p->threads[tid].wait_next = 0;
 		p->threads[tid].wait_reason = WAIT_REASON_NONE;
 		p->threads[tid].wait_interrupted = 0;
+		p->threads[tid].wait_interruptible = 0;
 		p->threads[tid].on_run_queue = 0;
 	}
 	main_thread = &p->threads[0];
@@ -1384,6 +1401,7 @@ void proc_install_user_image(struct proc *p, struct user_image *image,
 void freethread(struct thread *t)
 {
 	pagetable_t pt = t->process->pagetable;
+	kernel_work_reset(t);
 	detach_task(t);
 	// fill with junk
 	memset((void *)t->trapframe, 6, TRAP_PAGE_SIZE);
@@ -1401,6 +1419,7 @@ static void proc_reset_thread_slot(struct thread *t)
 	t->wait_next = 0;
 	t->wait_reason = WAIT_REASON_NONE;
 	t->wait_interrupted = 0;
+	t->wait_interruptible = 0;
 	t->on_run_queue = 0;
 }
 
@@ -1416,7 +1435,7 @@ static struct thread *proc_current_teardown_thread(struct proc *p)
 
 // Release a quiescent process. Published threads must unwind and stop first;
 // T_USED slots are safe because they have never entered their kernel stack.
-static int proc_release_resources(struct proc *p)
+static int proc_release_resources(struct proc *p, int finish_teardown)
 {
 	struct thread *teardown = proc_current_teardown_thread(p);
 	struct file *files[FD_BUFFER_SIZE];
@@ -1452,6 +1471,16 @@ static int proc_release_resources(struct proc *p)
 		agent_free_proc_context(p);
 	else
 		agent_clear_metadata(p);
+	/*
+	 * File close may reclaim arbitrarily many unlinked blocks. Settle its
+	 * owner and device debt before vfs_proc_reset() quiesces the last workflow
+	 * member, and before freethread() clears the accounting context.
+	 */
+	if (finish_teardown && teardown != 0) {
+		if (bio_request_end_current_cleanup() < 0)
+			panic("process teardown I/O settlement");
+		kernel_work_end_cleanup();
+	}
 	if (teardown != 0)
 		freethread(teardown);
 	wait_queue_init(&p->child_waiters, WAIT_REASON_CHILD);
@@ -1505,7 +1534,7 @@ void freeproc(struct proc *p)
 {
 	proc_child_unbind(p);
 	proc_orphan_children(p);
-	if (proc_release_resources(p) < 0)
+	if (proc_release_resources(p, 0) < 0)
 		panic("active process release");
 	proc_recycle(p);
 }
@@ -1950,8 +1979,11 @@ void exit(int code)
 		if (wait_queue_sleep(&p->thread_exit_waiters) < 0)
 			yield();
 	}
+	kernel_work_begin_cleanup();
+	if (bio_request_begin_current_cleanup() < 0)
+		panic("process teardown I/O admission");
 	proc_orphan_children(p);
-	if (proc_release_resources(p) < 0)
+	if (proc_release_resources(p, 1) < 0)
 		panic("active process exit");
 	p->exit_finalizing = 1;
 	t->exit_code = code;

@@ -47,6 +47,11 @@ int sched_yield()
 	return syscall(SYS_sched_yield);
 }
 
+int io_policy_info(struct io_policy_info *info)
+{
+	return syscall(SYS_io_policy_info, info, sizeof(*info));
+}
+
 int fork()
 {
 	return syscall(SYS_clone);

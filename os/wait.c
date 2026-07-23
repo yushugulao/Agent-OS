@@ -11,7 +11,7 @@ void wait_queue_init(struct wait_queue *q, enum wait_reason reason)
 	intr_restore(enabled);
 }
 
-int wait_queue_sleep(struct wait_queue *q)
+static int wait_queue_sleep_mode(struct wait_queue *q, int interruptible)
 {
 	struct thread *t = curr_thread();
 	int enabled = intr_save();
@@ -22,11 +22,12 @@ int wait_queue_sleep(struct wait_queue *q)
 		intr_restore(enabled);
 		return WAIT_QUEUE_ERROR;
 	}
-	if (proc_thread_exit_requested()) {
+	if (interruptible && proc_thread_exit_requested()) {
 		intr_restore(enabled);
 		return WAIT_QUEUE_INTERRUPTED;
 	}
 	t->wait_interrupted = 0;
+	t->wait_interruptible = interruptible;
 	t->wait_channel = q;
 	t->wait_reason = q->reason;
 	t->wait_next = 0;
@@ -36,11 +37,33 @@ int wait_queue_sleep(struct wait_queue *q)
 		q->head = t;
 	q->tail = t;
 	t->state = SLEEPING;
+	/*
+	 * Switch with interrupts disabled. The scheduler publishes idle as the
+	 * current thread before opening its interrupt window, so an interrupt can
+	 * never be attributed to this sleeping thread on the scheduler stack.
+	 */
 	sched();
-	interrupted = t->wait_interrupted || proc_thread_exit_requested();
+	interrupted = t->wait_interrupted ||
+		(interruptible && proc_thread_exit_requested());
 	t->wait_interrupted = 0;
+	t->wait_interruptible = 0;
 	intr_restore(enabled);
 	return interrupted ? WAIT_QUEUE_INTERRUPTED : WAIT_QUEUE_OK;
+}
+
+int wait_queue_sleep(struct wait_queue *q)
+{
+	return wait_queue_sleep_mode(q, 1);
+}
+
+int wait_queue_sleep_irq(struct wait_queue *q)
+{
+	return wait_queue_sleep_mode(q, 1);
+}
+
+int wait_queue_sleep_irq_uninterruptible(struct wait_queue *q)
+{
+	return wait_queue_sleep_mode(q, 0);
 }
 
 int wait_queue_wake_one(struct wait_queue *q)
@@ -58,6 +81,7 @@ int wait_queue_wake_one(struct wait_queue *q)
 			continue;
 		t->wait_channel = 0;
 		t->wait_reason = WAIT_REASON_NONE;
+		t->wait_interruptible = 0;
 		if (t->state != SLEEPING)
 			continue;
 		t->state = RUNNABLE;
@@ -109,6 +133,7 @@ void wait_queue_cancel(struct thread *t)
 	t->wait_next = 0;
 	t->wait_reason = WAIT_REASON_NONE;
 	t->wait_interrupted = 0;
+	t->wait_interruptible = 0;
 	intr_restore(enabled);
 }
 
@@ -116,7 +141,8 @@ int wait_queue_interrupt(struct thread *t)
 {
 	int enabled = intr_save();
 
-	if (t == 0 || t->state != SLEEPING || t->wait_channel == 0) {
+	if (t == 0 || t->state != SLEEPING || t->wait_channel == 0 ||
+	    !t->wait_interruptible) {
 		intr_restore(enabled);
 		return 0;
 	}

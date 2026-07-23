@@ -1,5 +1,6 @@
 #include "trap.h"
 #include "agent.h"
+#include "bio.h"
 #include "defs.h"
 #include "loader.h"
 #include "kernel_work.h"
@@ -45,6 +46,7 @@ void devintr(uint64 cause)
 	switch (cause) {
 	case SupervisorTimer:
 		set_next_timer();
+		bio_policy_tick();
 		agent_tick();
 		// if form user, allow yield
 		if ((r_sstatus() & SSTATUS_SPP) == 0) {

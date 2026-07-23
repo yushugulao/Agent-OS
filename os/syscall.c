@@ -1,5 +1,6 @@
 #include "console.h"
 #include "agent.h"
+#include "bio.h"
 #include "defs.h"
 #include "kernel_work.h"
 #include "loader.h"
@@ -149,6 +150,21 @@ uint64 sys_sched_yield()
 uint64 sys_kernel_work_last_preemptions(void)
 {
 	return curr_thread()->kernel_last_syscall_preemptions;
+}
+
+int sys_io_policy_info(uint64 addr, uint64 user_size)
+{
+	struct proc *p = curr_proc();
+	struct io_policy_info info;
+	uint64 copy_size;
+
+	if (user_size < 2 * sizeof(unsigned int))
+		return -1;
+	copy_size = MIN(user_size, sizeof(info));
+	if (user_range_check(p->pagetable, addr, copy_size, PTE_W) < 0 ||
+	    bio_policy_snapshot(p, &info) < 0)
+		return -1;
+	return copyout(p->pagetable, addr, (char *)&info, copy_size);
 }
 
 uint64 sys_gettimeofday(uint64 val, int _tz)
@@ -556,15 +572,100 @@ int sys_condvar_wait(int cond_id, int mutex_id)
 
 extern char trap_page[];
 
+static int syscall_fd_uses_disk(uint64 fd)
+{
+	struct proc *p = curr_proc();
+	struct file *f;
+	int result = 0;
+	int enabled = intr_save();
+
+	if (p != 0 && fd < FD_BUFFER_SIZE && (f = p->files[fd]) != 0 &&
+	    !fd_is_reserved(f) && f->type == FD_INODE)
+		result = 1;
+	intr_restore(enabled);
+	return result;
+}
+
+// New syscalls are admitted by default. A syscall may bypass the block-I/O
+// governor only when its implementation is known not to reach the filesystem.
+static int syscall_may_issue_block_io(int id, uint64 *args)
+{
+	switch (id) {
+	case SYS_read:
+	case SYS_write:
+	case SYS_close:
+		return syscall_fd_uses_disk(args[0]);
+	case SYS_sched_yield:
+	case SYS_gettimeofday:
+	case SYS_getpid:
+	case SYS_getppid:
+	case SYS_mailread:
+	case SYS_mailwrite:
+	case SYS_trace:
+	case SYS_clone:
+	case SYS_wait4:
+	case SYS_pipe2:
+	case SYS_thread_create:
+	case SYS_gettid:
+	case SYS_waittid:
+	case SYS_mutex_create:
+	case SYS_mutex_lock:
+	case SYS_mutex_unlock:
+	case SYS_semaphore_create:
+	case SYS_semaphore_up:
+	case SYS_semaphore_down:
+	case SYS_condvar_create:
+	case SYS_condvar_signal:
+	case SYS_condvar_wait:
+	case SYS_kernel_work_last_preemptions:
+	case SYS_io_policy_info:
+	case SYS_agent_scope_delegate_fd:
+	case SYS_agent_info:
+	case SYS_agent_sched_snapshot:
+	case SYS_agent_sched_config:
+	case SYS_agent_trace_snapshot:
+	case SYS_agent_audit_snapshot:
+	case SYS_agent_audit_query:
+	case SYS_agent_span_trace_snapshot:
+	case SYS_agent_timeline_snapshot:
+	case SYS_agent_timeline_query:
+	case SYS_agent_timeline_wait:
+	case SYS_agent_timeline_read:
+	case SYS_agent_provenance_snapshot:
+	case SYS_agent_ledger_snapshot:
+	case SYS_agent_file_prefetch_snapshot:
+	case SYS_agent_file_prefetch_span_snapshot:
+	case SYS_agent_tool_list:
+	case SYS_agent_watch:
+	case SYS_agent_unwatch:
+	case SYS_agent_wait:
+	case SYS_agent_wait_cancel:
+	case SYS_agent_heartbeat:
+	case SYS_agent_wake:
+	case SYS_agent_route_config:
+		return 0;
+	default:
+		return 1;
+	}
+}
+
 void syscall()
 {
 	struct trapframe *trapframe = curr_thread()->trapframe;
 	int id = trapframe->a7, ret;
+	int io_admitted = 0;
 	uint64 args[6] = { trapframe->a0, trapframe->a1, trapframe->a2,
 			   trapframe->a3, trapframe->a4, trapframe->a5 };
 	if (proc_thread_exit_requested())
 		exit(curr_proc()->exit_code);
 	kernel_work_begin();
+	if (syscall_may_issue_block_io(id, args)) {
+		if (bio_request_begin_current() < 0) {
+			ret = -1;
+			goto syscall_out;
+		}
+		io_admitted = 1;
+	}
 	if (id >= 0 && id < SYSCALL_COUNT_MAX)
 		curr_proc()->syscall_count[id]++;
 	if (id != SYS_write && id != SYS_read && id != SYS_sched_yield) {
@@ -664,6 +765,9 @@ void syscall()
 		break;
 	case SYS_kernel_work_last_preemptions:
 		ret = sys_kernel_work_last_preemptions();
+		break;
+	case SYS_io_policy_info:
+		ret = sys_io_policy_info(args[0], args[1]);
 		break;
 	case SYS_agent_create:
 		ret = sys_agent_create();
@@ -801,6 +905,9 @@ void syscall()
 		ret = -1;
 		errorf("unknown syscall %d", id);
 	}
+syscall_out:
+	if (io_admitted)
+		(void)bio_request_end_current(1);
 	kernel_work_end();
 	if (proc_thread_exit_requested())
 		exit(curr_proc()->exit_code);
