@@ -78,7 +78,7 @@ flowchart LR
 | Context Path 手动追加/query/rollback/clear/snapshot | 已实现；公开 cause/span 由内核私有 source control/span owner 认证，手动 push 不得自报非零 cause/span |
 | 文件元数据表、真实 inode 关联、属性查询、索引查询、metadata 双 bank 持久化、根目录自动扫描 | 已实现；所有对象记录按 kernel-issued workflow scope 分区，进程事务使用 FIFO ticket/wake-one 和 128-record 工作预算，scheduler 只做硬有界维护；显式依赖表与文件内兼容位图分离，消费者按需线性解析，不建立全局派生图；普通文件变化按 scope 合并，双 bank 由可恢复分块 COW 状态机后台写回 |
 | Agent Loop 心跳、等待、唤醒和 Agent 感知调度 | 已实现 16 槽事件队列、同 scope stable-control IPC 路由、watch/unwatch、wait cancel、heartbeat、自适应调度、当前可信 span 短记录、scope-local audit/Run Ledger 和统一 timeline |
-| 安全与资源韧性 | 已实现动态 workflow scope（public=0、system=1、workflow>=3，最多 4 个 active，active + retiring 硬上限 8，2 保留为稳定 PUBLIC 存储 principal）、capability + exact scope/owner、可信映像、W^X、VFS 隔离、对象私有等待、协作退出、进程/线程资源域配额、资源域两级调度、持久存储主体配额、块 I/O/cache 分域、分级保留量和 scope retirement 回收 |
+| 安全与资源韧性 | 已实现动态 workflow scope（public=0、system=1、workflow>=3，ACTIVE+CLOSING admission 最多 4 个，计入 admission 的 ACTIVE/CLOSING 与 RETIRING 身份合计硬上限 8，2 保留为稳定 PUBLIC 存储 principal）、唯一根 controller 强制撤销、capability + exact scope/owner、可信映像、W^X、VFS 隔离、对象私有等待、协作退出、进程/线程资源域配额、资源域两级调度、持久存储主体配额、块 I/O/cache 分域、分级保留量和 scope retirement 回收 |
 | 代表性 uCore 基础 syscall | 已实现 `trace`、`mailread`、`mailwrite` |
 | 综合场景 | 已实现 `labdemo_ucore` 综合示例 |
 | LLM 友好路径 | 已实现 `llm_request`、`llm_response`、`AGENT_EVENT_LLM_DONE`、Context 记录和事件唤醒；真实云端 relay 保持在用户态或宿主机桥接层 |
@@ -102,14 +102,14 @@ flowchart LR
 | scope 审计视图 | 物理 512 槽按 4 个 workflow 各保证 128；每 scope low/high 各64，low principal 上限16、high active principal 上限8。每 scope 另维护 sequence 与 `(tick, sequence)` 两个 128 槽有序索引，统一淘汰发布，查询不重扫全局物理表 |
 | 内核角色与能力绑定 | `struct proc` 保存真实 role/capability/scope/control；敏感操作必须同时满足 capability、active scope 和精确对象 owner，不信任用户 role、PID 或公开 span |
 | 可信执行与 VFS 安全域 | 构建清单把角色、bootstrap、RX/RW+NX 和 VFS profile 写入不可变 SYSTEM inode；loader 将有效能力绑定到动态 workflow scope，普通文件操作逐次校验 inode scope |
-| 生命周期与进程配额 | 对象私有等待队列和协作退出不变；128 进程槽分为普通 96、受控保留 32，4 个 active workflow 各保证 8 个保留槽；`VFS_SCOPE_LIFECYCLE_CAP=8` 约束 active + retiring，退役积压最多 8 个；reaper 在 `NPROC` 身份账本范围轮转选择，并使用最多 8 个 FS reclaim cursor 清理 |
+| 生命周期与进程配额 | workflow 使用 ACTIVE -> CLOSING -> RETIRING 状态机；唯一根 controller 或可信 factory 可触发强制关闭，CLOSING 撤销授权并协作终止 active/pending 成员，线程自行展开临时资源后才退休；128 进程槽分为普通 96、受控保留 32 槽，4 个 active workflow 各保证 8 个保留槽；`VFS_SCOPE_LIFECYCLE_CAP=8` 约束计入 admission 的 ACTIVE/CLOSING 与 RETIRING scope，reaper 在 `NPROC` 身份账本范围轮转选择，并使用最多 8 个 FS reclaim cursor 清理 |
 | 存储配额与保留量 | mkfs 与内核共享容量策略；按完成镜像空闲量计算后把 version/slots/PUBLIC principal/G/S/checksum 持久化到 superblock，挂载从 qmap/dinode 重建 PUBLIC 用量，workflow owner 只恢复 scope ID 下界，SYSTEM credit 由空闲量与 G/S 推导；每 scope 硬下限 320 inode/512 block，SYSTEM 硬下限 8 inode/512 block；当前平台镜像每 scope 为 342/1195，SYSTEM 为 64/512 |
 | 块 I/O 与 buffer cache 分域 | syscall 入口捕获稳定 owner/class，按完成的 1 KiB VirtIO 传输同时消费 owner 与设备根账本的 lease/token/debt；560/280 根 bucket 限制普通流量，SYSTEM/CONTROL 在根信用耗尽时仍可带债使用自己的保留预算；syscall 544 使用 `version + struct_size + user_size` 的可扩展前缀 ABI；cache 为 SYSTEM、PUBLIC 和各 active workflow 维护 floor/cap，退役清理仅在轮到时取得 3/8 临时分区 |
 | 可恢复资源耗尽 | inode、inode cache、数据块、文件表和线程分配失败返回错误并回滚；线程按不可变资源域和 ordinary/reserved 类别退款，块、间接索引和 inode 按持久 owner 退款；每线程内核栈使用 guard、canary 和构建期调用图预算 |
 | 通用动作和工件更新 | `action_commit` 与 `artifact_update` 作为核心对象状态更新工具，`rerun_stage` 和 `write_report` 只作为旧示例兼容别名；记录、事件 action 和重复请求判断都归入通用类别 |
 | LLM Relay 支持 | 内核提供 `llm_request`、`llm_response`、`LLM_RELAY` capability 和 `AGENT_EVENT_LLM_DONE`；prompt/response 摘要进入 Context、timeline 和审计记录；云端 API、secret、HTTP/TLS 留在用户态 |
 | 结构化事件 | `labdemo_ucore` 输出 `agentos:event type=... key=value`，为页面工具和 LLM Relay 保留解析契约 |
-| 测试驱动验收 | 功能测试之外，以 `agentscope_ucore`、`iobudget_ucore`、`threadresource_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`、`fsenospc_ucore`、`procreap_ucore` 和栈预算脚本验证 scope、授权、输入、资源耗尽及生命周期机制；本次观测查询修复已通过完整 Agent 16/16，墙钟约 338.4s，AgentOS 栈预算为 13824/16384；`full-verify` 尚未运行 |
+| 测试驱动验收 | 功能测试之外，以 `agentscope_ucore`、`iobudget_ucore`、`threadresource_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`、`fsenospc_ucore`、`procreap_ucore` 和栈预算脚本验证 scope、授权、输入、资源耗尽及生命周期机制；强制撤销实现快照通过完整 Agent 16/16（371.5s），审查修正后 `agentscope_ucore` 专项再通过（126.1s），AgentOS 栈预算为 13824/16384；审查后未重跑完整轮，`full-verify` 尚未运行 |
 
 ## 5. 构件视图
 
@@ -174,7 +174,7 @@ flowchart TB
 | 性能基准 | `user/src/agentbench_ucore.c`、`user/src/labbench_ucore.c` | scalar run、batch run、direct Context、query/snapshot、timeline、timeline wait-ready、provenance、文件查询候选记录数、timeout/heartbeat、busy polling、wait/wake 计时 |
 | 综合示例 | `user/src/labdemo_ucore.c` | 同 workflow 三 Agent 故障诊断、scope audit、可信 span、timeline 和 provenance |
 | 权限限制测试 | `user/src/agentsecurity_ucore.c` | 普通/低权限调用拒绝、可信 cause/span、audit authority 分区、role 与 route 边界 |
-| workflow scope 测试 | `user/src/agentscope_ucore.c` | 新 scope factory、同名对象隔离、同 scope 协作、并发 metadata 提交、微小写入合并与跨 scope 查询进展、跨 scope IPC/租约/audit 拒绝、观测查询线性上界与跨 scope 进展、配额保证、一次性 pipe fd 委派和 retirement 回收 |
+| workflow scope 测试 | `user/src/agentscope_ucore.c` | 新 scope factory、同名对象隔离、同 scope 协作、并发 metadata 提交、微小写入合并与跨 scope 查询进展、跨 scope IPC/租约/audit 拒绝、观测查询线性上界与跨 scope 进展、配额保证、一次性 pipe fd 委派，以及关闭权拒绝、根退出/factory 关闭、阻塞成员清理、9 轮强制撤销和 replacement admission |
 | 块 I/O 分域测试 | `user/src/iobudget_ucore.c` | PUBLIC 冷缓存/速率压力、owner/device lease 上界、线程退出 lease 回收、唯一 runnable 内核 pipe waiter 下的 scheduler 中断交付、fault 退出的清理 I/O 归因/debt 结算，以及 workflow cache floor、CONTROL 预算和压力下有界进展；最终修复后独立轮输出八项机制标记和 `parent passed`，`elapsed=2.4s` |
 | 可信执行测试 | `user/src/agenttrust_ucore.c` | RX/RW+NX 布局、映像不可变、bootstrap 授权范围和角色映像绑定 |
 | VFS 安全域测试 | `user/src/agentvfs_ucore.c` | public/workflow 隔离、worker 能力衰减、跨 scope inode fd 撤销、worker pipe 单跳委派和受保护路径 |
@@ -206,11 +206,13 @@ sequenceDiagram
     P-->>U: 子进程 pid / 子进程返回 0
 ```
 
-普通角色创建和安全域创建是两种不同操作。可信、非 Agent bootstrap factory 使用 syscall 541 `agent_workflow_create(role)` 创建全新的动态 scope；scope 内 orchestrator 再用 `agent_create_role()` 或 `agent_worker_create()` 填充该 workflow，但不能再铸造新的 quota/object namespace。scope 编码为 PUBLIC=0、SYSTEM=1、动态 workflow>=3，同时最多 4 个 active scope；`VFS_SCOPE_LIFECYCLE_CAP=8` 还要求 active + retiring 不超过 8，因而全部 active 退出后最多可积压 8 个 retiring scope。数值 2 保留给稳定 PUBLIC 存储 principal，不作为 VFS scope 分配。
+普通角色创建和安全域创建是两种不同操作。可信、非 Agent bootstrap factory 使用 syscall 541 `agent_workflow_create(role)` 创建全新的动态 scope；scope 内 orchestrator 再用 `agent_create_role()` 或 `agent_worker_create()` 填充该 workflow，但不能再铸造新的 quota/object namespace。创建路径在根进程发布前，把该根不复用的 `agent_control_id` 绑定为生命周期 controller；关闭权不因角色、PID、父子关系或 `ORCHESTRATE` capability 传播给后续成员。可信 factory 可用 syscall 545 `agent_workflow_close(scope_id)` 执行恢复性关闭，绑定根也可关闭自身 scope。scope 编码为 PUBLIC=0、SYSTEM=1、动态 workflow>=3；ACTIVE+CLOSING admission 最多 4 个，`VFS_SCOPE_LIFECYCLE_CAP=8` 约束计入 admission 的 ACTIVE/CLOSING 与 RETIRING 身份。数值 2 保留给稳定 PUBLIC 存储 principal，不作为 VFS scope 分配。
 
 pipe 按持有型 capability 管理。每次创建 workflow、Agent、worker，或由 workflow/可信 bootstrap 动态 scope 创建降权普通子主体时默认不继承 pipe，即使父子仍在同一 scope；factory 或 Orchestrator 必须先对确需交接的端点调用 syscall 542 `agent_scope_delegate_fd(fd)`。票据绑定发起线程，其他线程的并发 spawn 不能抢走或合并授权集。内核在任何可让出操作前原子固定精确 file 对象并消费发起线程的全部一次性票据；关闭/替换 fd 槽、`exec` 和失败的创建 syscall 都撤销票据。普通 PUBLIC 同安全主体 `fork()` 仍维持 POSIX 继承；resource-domain admin 仅改变资源记账域，不单独构成安全主体转换。inode 描述符仅在 scope 不变时继承，并继续依靠每次操作的 scope/capability 重校验。所有 file 对象还带显式继承类别，未知的新类型默认拒绝跨安全主体继承。
 
-最后一个成员退出后，scope 先进入 retiring。内核停止该 scope 新分配并撤销 active cache floor；`NPROC` 身份账本只复用 `used == 0` 的记录，避免新 scope 覆盖未完成的退役状态。active + retiring admission 硬上限为 8，FS reclaim cursor 最多 8 个；reaper 在 `NPROC` 账本范围轮转选择 retiring scope，逐 scope 回收 metadata、dependency、action、lease/version、cache、audit、prefetch、IPC 和普通文件。清理执行时仅保留该 owner 的 `BACKGROUND` 8/4 与临时 cache 3/8，完成后才释放 admission 和 I/O owner。boot scope 的持久工件保留为 inactive storage owner，不会被新 scope 接管。
+显式关闭、根 controller 正常退出、异常退出和凭据清除都汇合到同一个幂等入口。关闭使用连续的两阶段关中断协议：第一段把 ACTIVE 原子标记为 CLOSING；从这一刻起 `vfs_scope_active()` 为假，Agent/VFS 操作、新 spawn、pending exec 发布和存储预留均失败。调用路径在两段之间不主动让出，第二段重新关中断扫描 active 与 pending 成员，首次写入进程级协作退出请求并唤醒可中断等待，但不抢占已开始 terminal teardown 的 owner，也不在其他线程栈外释放 FD、inode 或内存。spawn 的最终发布在自己的关中断区复核 active 状态；在当前单 hart 模型中，它与 CLOSING 发布经关中断边界序列化，避免关闭后出现新 runnable 成员。CLOSING 仍以完整 owner 保留 I/O/cache admission，使每个成员能沿正常 teardown 结算临时引用、lease 和 debt。
+
+最后一个成员退出后，scope 才进入 RETIRING 并撤销 active cache floor；自然耗尽的 scope 可从 ACTIVE 直接进入 RETIRING。`NPROC` 身份账本只复用 `used == 0` 的记录，避免新 scope 覆盖未完成的退役状态。计入 admission 的 ACTIVE/CLOSING 与 RETIRING scope 合计硬上限为 8，FS reclaim cursor 最多 8 个；reaper 在 `NPROC` 账本范围轮转选择 retiring scope，逐 scope 回收 metadata、dependency、action、lease/version、cache、audit、prefetch、IPC 和普通文件。清理执行时仅保留该 owner 的 `BACKGROUND` 8/4 与临时 cache 3/8，完成后才释放 admission 和 I/O owner。boot scope 的持久工件保留为 inactive storage owner，不计入 admission 上限，也不会被新 scope 接管。
 
 ### 6.2 结构化工具调用
 
@@ -463,7 +465,7 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 | 决策 | 选择 | 理由 | 取舍 |
 | --- | --- | --- | --- |
 | Agent 创建方式 | 使用 `agent_create()` 兼容创建 sentinel，使用 `agent_create_role()` 创建指定角色 Agent | 与 uCore 现有进程模型结合直接，且能把 role/capability 绑定到内核 PCB | 暂未支持用户态自定义配额或任意 capability 组合 |
-| Workflow scope factory | syscall 541 仅允许可信 bootstrap factory 创建新 scope；scope 内角色创建只继承当前 scope | 把“委派角色”与“铸造新对象/配额域”分开，避免全局 capability | 最多 4 active，active + retiring 不超过 8，退役积压最多 8 |
+| Workflow scope factory 与终止 | syscall 541 仅允许可信 bootstrap factory 创建新 scope；scope 内角色创建只继承当前 scope；syscall 545 只接受绑定根或可信 factory 的关闭请求 | 把“委派角色”“铸造新对象/配额域”和“终止安全域”分开，避免全局 capability 与永久 scope pin | ACTIVE+CLOSING admission 最多 4 个，计入 admission 的 ACTIVE/CLOSING 与 RETIRING 身份合计不超过 8；CLOSING 成员安全展开后再退休 |
 | 安全主体 fd | 新 Agent/worker/workflow 和降权普通主体默认不继承 pipe；syscall 542 为调用线程下一次主体创建一次性委派精确端点；file 继承类别默认拒绝 | 不让控制 pipe 变成可跨角色/线程传播的环境权限；对象快照防 fd 关闭复用，所有创建失败也消费调用线程票据 | 当前显式委派只支持 pipe；inode 仅同 scope 继承并逐操作重鉴权 |
 | 可信程序授权 | 使用构建期 `EXEC_POLICY_ENTRIES`、不可变 inode 元数据和 loader 身份/version 校验 | 新程序必须显式声明 role mask、bootstrap 和 VFS profile，不能靠程序名或 PID 获权 | 信任根是构建镜像，不是密码学签名 |
 | W^X 装载 | 配套 ELF 决定 `exec_rw_offset`，代码 RX，数据、bss、栈和 Agent Context RW+NX | 阻止普通写入直接修改可执行代码，并让角色授权绑定到不可变映像 | 当前仍是受控 flat image，不是通用动态 ELF loader |
@@ -541,7 +543,7 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 | PUBLIC 块 I/O/cache 压力不能消耗 workflow 控制与缓存保留，内核态 yield loop 与 fault teardown 不能阻断 refill/完成或绕过归因 | 最终修复后的独立 `iobudget_ucore` 新增 `scheduler_interrupt_progress=1` 和 `fault_exit_cleanup=1`，与线程退出、PUBLIC budget/attribution、workflow cache、bounded progress、CONTROL reserve 共八项具名机制标记和 `parent passed`，`elapsed=2.4s`；只动态覆盖一个 PUBLIC 与一个 workflow CONTROL owner，未断言 shared 排队 grant 轮转，也未覆盖多 workflow、SYSTEM/BACKGROUND、retiring 3/8 或设备故障注入 |
 | 阻塞退出、孤儿/僵尸和 fork bomb 受生命周期与资源域约束 | `make proc-reap-test`，覆盖 `detached-wait`、`unreaped-parent-isolated`、`live-domain-limit` 和 `reserved-agent-slot` |
 | thread bomb 不能耗尽普通/保留线程池或垄断跨域 CPU | `make thread-resource-test`，覆盖普通/保留域上限与复用、容量拒绝计数稳定、普通/保留全局水位与复用、退出退款、系统保留进展和 `domain_fairness` |
-| 内核栈有 guard 和构建期预算 | 当前 pipe 安全主体委派改动后的 AgentOS 构建为 `required=13856 < limit=16384` |
+| 内核栈有 guard 和构建期预算 | 当前 workflow 强制撤销构建为 `required=13824 < limit=16384` |
 | 代表性 uCore 基础 syscall | `ch3_trace`、`agentsecurity_ucore: mail_basic=1` |
 
 详细验证见 [verification.md](verification.md) 和 [test-record.md](test-record.md)。

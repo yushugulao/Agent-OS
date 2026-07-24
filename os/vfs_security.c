@@ -19,8 +19,10 @@ struct vfs_scope_ref {
 	int used;
 	uint scope_id;
 	int members;
+	int closing;
 	int retiring;
 	int preserve_on_retire;
+	uint64 controller_control_id;
 	uint storage_blocks;
 	uint storage_inodes;
 };
@@ -41,7 +43,8 @@ static int vfs_scope_acquire(uint scope_id)
 	for (int i = 0; i < NPROC; i++) {
 		if (vfs_scope_refs[i].used &&
 		    vfs_scope_refs[i].scope_id == scope_id) {
-			if (vfs_scope_refs[i].retiring ||
+			if (vfs_scope_refs[i].closing ||
+			    vfs_scope_refs[i].retiring ||
 			    vfs_scope_refs[i].members <= 0) {
 				intr_restore(enabled);
 				return -1;
@@ -67,8 +70,10 @@ static int vfs_scope_acquire(uint scope_id)
 		vfs_scope_refs[free_slot].used = 1;
 		vfs_scope_refs[free_slot].scope_id = scope_id;
 		vfs_scope_refs[free_slot].members = 1;
+		vfs_scope_refs[free_slot].closing = 0;
 		vfs_scope_refs[free_slot].retiring = 0;
 		vfs_scope_refs[free_slot].preserve_on_retire = 0;
+		vfs_scope_refs[free_slot].controller_control_id = 0;
 		vfs_scope_refs[free_slot].storage_blocks = 0;
 		vfs_scope_refs[free_slot].storage_inodes = 0;
 	} else {
@@ -162,7 +167,8 @@ static int vfs_scope_preserve_on_retire(uint scope_id)
 		if (!vfs_scope_refs[i].used ||
 		    vfs_scope_refs[i].scope_id != scope_id)
 			continue;
-		if (!vfs_scope_refs[i].retiring &&
+		if (!vfs_scope_refs[i].closing &&
+		    !vfs_scope_refs[i].retiring &&
 		    vfs_scope_refs[i].members > 0) {
 			vfs_scope_refs[i].preserve_on_retire = 1;
 			result = 0;
@@ -205,6 +211,8 @@ int vfs_scope_active(uint scope_id)
 	for (int i = 0; i < NPROC; i++)
 		if (vfs_scope_refs[i].used &&
 		    vfs_scope_refs[i].scope_id == scope_id &&
+		    !vfs_scope_refs[i].closing &&
+		    !vfs_scope_refs[i].retiring &&
 		    vfs_scope_refs[i].members > 0) {
 			active = 1;
 			break;
@@ -245,10 +253,74 @@ int vfs_scope_retained(uint scope_id)
 	return retained;
 }
 
+int vfs_scope_bind_controller(uint scope_id, uint64 control_id)
+{
+	int result = -1;
+	int enabled;
+
+	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC || control_id == 0)
+		return -1;
+	enabled = intr_save();
+	for (int i = 0; i < NPROC; i++) {
+		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
+
+		if (!ref->used || ref->scope_id != scope_id)
+			continue;
+		if (!ref->closing && !ref->retiring && ref->members > 0 &&
+		    (ref->controller_control_id == 0 ||
+		     ref->controller_control_id == control_id)) {
+			ref->controller_control_id = control_id;
+			result = 0;
+		}
+		break;
+	}
+	intr_restore(enabled);
+	return result;
+}
+
+static int vfs_scope_close(uint scope_id, uint64 control_id, int trusted)
+{
+	int result = -1;
+	int enabled;
+
+	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC)
+		return -1;
+	enabled = intr_save();
+	for (int i = 0; i < NPROC; i++) {
+		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
+
+		if (!ref->used || ref->scope_id != scope_id)
+			continue;
+		if (ref->controller_control_id == 0 ||
+		    (!trusted && ref->controller_control_id != control_id))
+			break;
+		if (ref->retiring || ref->members <= 0)
+			break;
+		// CLOSING immediately revokes authorization and new joins, but it
+		// remains a full I/O/cache resident until every member has performed
+		// its own terminal cleanup.
+		ref->closing = 1;
+		result = 0;
+		break;
+	}
+	intr_restore(enabled);
+	return result;
+}
+
+int vfs_scope_close_owned(uint scope_id, uint64 control_id)
+{
+	return vfs_scope_close(scope_id, control_id, 0);
+}
+
+int vfs_scope_close_trusted(uint scope_id)
+{
+	return vfs_scope_close(scope_id, 0, 1);
+}
+
 // Return the unconsumed storage guarantee that an allocation must leave for
-// every active or future workflow slot. Retiring scopes keep their exact
-// usage charged, while their unused guarantee becomes available to a new
-// active scope.
+// every active, closing, or future workflow slot. Retiring scopes keep their
+// exact usage charged, while their unused guarantee becomes available to a
+// new active scope.
 uint vfs_scope_storage_guarantee(uint exempt_scope, int inode, uint guarantee)
 {
 	uint required = 0;
@@ -292,7 +364,8 @@ int vfs_scope_storage_reserve(uint scope_id, int inode, uint limit)
 		if (!ref->used || ref->scope_id != scope_id)
 			continue;
 		used = inode ? &ref->storage_inodes : &ref->storage_blocks;
-		if (!ref->retiring && ref->members > 0 && *used < limit) {
+		if (!ref->closing && !ref->retiring &&
+		    ref->members > 0 && *used < limit) {
 			(*used)++;
 			result = 0;
 		}
@@ -414,10 +487,12 @@ void vfs_proc_reset(struct proc *p)
 
 	if (p == 0)
 		return;
+	agent_scope_controller_departing(p);
 	old_scope_id = p->vfs_scope_id;
 	pending_scope_id = p->vfs_pending_scope_id;
 	proc_revoke_vfs_scope_fds(p);
 	p->vfs_scope_id = VFS_SCOPE_NONE;
+	p->vfs_scope_controller = 0;
 	p->vfs_effective_caps = 0;
 	p->vfs_inheritable_caps = 0;
 	p->vfs_pending_scope_id = VFS_SCOPE_NONE;
@@ -448,6 +523,8 @@ void vfs_proc_drop_to_public(struct proc *p)
 int vfs_proc_spawn_scope(const struct proc *parent, struct proc *child,
 			 enum vfs_spawn_scope_mode mode)
 {
+	uint scope_id;
+
 	if (child == 0)
 		return -1;
 	vfs_proc_reset(child);
@@ -459,21 +536,35 @@ int vfs_proc_spawn_scope(const struct proc *parent, struct proc *child,
 	if (mode == VFS_SPAWN_SCOPE_FRESH) {
 		if (child->storage_principal_id < VFS_SCOPE_FIRST_DYNAMIC)
 			return -1;
-		child->vfs_scope_id = child->storage_principal_id;
+		scope_id = child->storage_principal_id;
 	} else if (mode == VFS_SPAWN_SCOPE_INHERIT) {
 		if (child->storage_principal_id != parent->storage_principal_id)
 			return -1;
-		child->vfs_scope_id = parent->vfs_scope_id;
+		scope_id = parent->vfs_scope_id;
 	} else {
 		return -1;
 	}
-	if (vfs_scope_acquire(child->vfs_scope_id) < 0) {
-		vfs_proc_reset(child);
+	// Publish the credential only after its reference is held. In particular,
+	// a CLOSING-scope join failure must not release another member's ref.
+	if (vfs_scope_acquire(scope_id) < 0)
 		return -1;
-	}
+	child->vfs_scope_id = scope_id;
+	child->vfs_scope_controller = mode == VFS_SPAWN_SCOPE_FRESH;
 	child->vfs_effective_caps = parent->vfs_effective_caps;
 	child->vfs_inheritable_caps = parent->vfs_inheritable_caps;
 	return 0;
+}
+
+int vfs_proc_scope_publishable(const struct proc *p)
+{
+	uint scope_id;
+
+	if (p == 0)
+		return 0;
+	scope_id = p->vfs_scope_id >= VFS_SCOPE_FIRST_DYNAMIC ?
+			   p->vfs_scope_id : p->vfs_pending_scope_id;
+	return scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
+	       vfs_scope_active(scope_id);
 }
 
 void vfs_proc_limit_capabilities(struct proc *p, uint64 capabilities)
@@ -595,6 +686,7 @@ void vfs_proc_install_image(struct proc *p, const struct user_image *image,
 	if (!running) {
 		uint required = EXEC_FLAG_TRUSTED | EXEC_FLAG_IMMUTABLE |
 				EXEC_FLAG_BOOTSTRAP | EXEC_FLAG_DOMAIN_SAFE;
+		uint scope_id;
 
 		if (!vfs_image_domain_safe(image) ||
 		    (image->exec_flags & required) != required) {
@@ -605,11 +697,12 @@ void vfs_proc_install_image(struct proc *p, const struct user_image *image,
 			vfs_proc_drop_to_public(p);
 			return;
 		}
-		p->vfs_scope_id = p->storage_principal_id;
-		if (vfs_scope_acquire(p->vfs_scope_id) < 0) {
+		scope_id = p->storage_principal_id;
+		if (vfs_scope_acquire(scope_id) < 0) {
 			vfs_proc_drop_to_public(p);
 			return;
 		}
+		p->vfs_scope_id = scope_id;
 		if (vfs_scope_preserve_on_retire(p->vfs_scope_id) < 0) {
 			vfs_proc_drop_to_public(p);
 			return;
@@ -631,7 +724,8 @@ void vfs_proc_install_image(struct proc *p, const struct user_image *image,
 		if (!matches || !vfs_image_domain_safe(image) ||
 		    pending_scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
 		    pending_scope_id != p->storage_principal_id ||
-		    p->vfs_scope_id != VFS_SCOPE_NONE || effective_caps == 0) {
+		    p->vfs_scope_id != VFS_SCOPE_NONE || effective_caps == 0 ||
+		    !vfs_scope_active(pending_scope_id)) {
 			vfs_proc_drop_to_public(p);
 			return;
 		}

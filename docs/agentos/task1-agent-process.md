@@ -17,7 +17,7 @@ AgentOS-uCore 当前实现不是只做“能创建一个特殊进程”的最小
 - 构建期可信映像清单、角色与可执行 inode 绑定；
 - 代码 RX、数据/栈/Context RW+NX 的用户映像布局；
 - 面向非 Agent workflow worker 的最小文件能力委派；
-- Agent 退出释放；
+- Agent 退出释放和 workflow 可信强制撤销；
 - 与后续任务二至五共用的状态字段。
 
 ## 当前接口
@@ -26,10 +26,13 @@ AgentOS-uCore 当前实现不是只做“能创建一个特殊进程”的最小
 | --- | --- |
 | `agent_create()` | 在当前 role grant 允许时创建 sentinel Agent 子进程，保留兼容入口 |
 | `agent_create_role(int role)` | 在当前 role grant 允许时创建指定角色 Agent 子进程；与兼容入口共用授权机制 |
+| `agent_workflow_create(int role)` | 仅由可信 bootstrap factory 创建带独立动态 scope、资源份额和对象命名空间的 workflow 根 Agent |
+| `agent_workflow_close(uint64 scope_id)` | 由创建时绑定的唯一根 controller 或可信 bootstrap factory 强制关闭 workflow；scope 立即失效，成员协作退出后进入回收 |
+| `agent_scope_delegate_fd(int fd)` | 为调用线程的下一次安全主体创建登记一次性 pipe 端点票据；子主体不继承继续委派权 |
 | `agent_worker_create(const char *image, uint64 capabilities)` | 由 orchestrator 创建绑定到指定 immutable、domain-safe 映像的非 Agent workflow worker；只委派受映像 profile 限制的文件能力 |
 | `agent_info(struct agent_info *)` | 查询当前进程的 Agent 状态、Agent ID、Agent Context、配额、Loop 状态和路径元信息 |
 
-当前任务一能力由 `agentfinal_ucore`、`labdemo_ucore`、`agentsecurity_ucore`、`agenttrust_ucore` 和 `agentvfs_ucore` 共同验证，覆盖 Agent 创建、Context 映射、多个 Agent 并存、角色能力绑定、可信 exec、非 Agent worker 和退出路径。
+当前任务一能力由 `agentfinal_ucore`、`labdemo_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore` 和 `agentscope_ucore` 共同验证，覆盖 Agent 创建、Context 映射、多个 Agent 并存、角色能力绑定、可信 exec、非 Agent worker、强制撤销和退出路径。
 
 ## 进程元数据
 
@@ -109,10 +112,12 @@ sequenceDiagram
     participant K as proc.c
     participant A as agent_make
     participant C as Agent Context
-    P->>S: agent_create() / agent_create_role(role)
-    S->>K: agent_create_proc() / agent_create_role_proc(role)
+    P->>S: agent_workflow_create(role) / agent_create_role(role)
+    S->>K: fresh scope factory / same-scope role delegation
     K->>K: 校验 role_grant_mask
-    K->>K: 复制基础进程状态
+    K->>K: 建立或继承 kernel-issued scope，消费本线程 pipe 票据
+    K->>K: fresh root 在发布前绑定唯一 lifecycle control id
+    K->>K: 固定精确 file 对象并复制基础进程状态
     K->>A: 标记子进程为 Agent 并绑定 role/capability
     A->>C: 分配 shadow 页和镜像页
     A->>C: 初始化 Context header
@@ -130,7 +135,9 @@ worker 映像不使用 Agent 的 `TRUSTED` role-image 身份。mkfs 为布局有
 
 ## 释放流程
 
-Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 Agent 元数据。当前最终测试均会创建 Agent 子进程并等待其退出，用于覆盖正常释放路径。
+每个新 workflow 根在成为 runnable 前，把不复用的 `agent_control_id` 绑定到 scope 生命周期账本。显式 `agent_workflow_close()`、根 controller 正常退出、fault 退出和凭据清除汇合到同一幂等入口：ACTIVE 原子转为 CLOSING，Agent/VFS 授权立即失效，新 spawn、pending exec 发布和存储分配被拒绝；内核向 active/pending 成员提交进程级协作退出请求。关闭扫描不覆盖已开始 teardown 的 owner，也不在其他线程栈外释放临时 FD、inode 或内存。
+
+Agent 自身退出时，`freeproc()` 会释放 Agent Context 相关页面并清空 Agent 元数据。CLOSING 在最后成员完成 terminal cleanup 前仍保留完整 I/O/cache owner，使阻塞 syscall 临时引用、lease 和 debt 能沿正常路径结算；最后成员释放引用后才进入 RETIRING。带 BACKGROUND 预算的轮转 reaper 清理 metadata、依赖、动作、租约、缓存、审计、IPC 和 VFS-labelled 文件，资源归零后才释放不可复用的生命周期槽。`agentscope_ucore` 覆盖根自关、factory 关闭、根自然退出、低权限阻塞成员释放、超过 8 槽上限的 9 轮强制回收，以及既有的正常退出和 132 轮创建回收。
 
 ## 示例路径
 
@@ -169,6 +176,7 @@ Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 
 - Artifact 角色与独立 VFS effective capability；
 - 清单驱动的可信映像和角色绑定；
 - 非 Agent workflow worker 委派；
+- 唯一根 controller、ACTIVE/CLOSING/RETIRING 和可信 factory 强制终止；
 - 与任务四、五、六共享的 Agent 状态。
 
 ## 已知限制
@@ -189,3 +197,4 @@ Agent 退出时，`freeproc()` 会释放 Agent Context 相关页面，并清空 
 | `labdemo_ucore` | orchestrator、recovery、investigator、sentinel 多个 Agent 能同时创建；它们使用相同虚拟 Context 地址，但对应不同物理页和角色能力。 |
 | `agenttrust_ucore` | 代码 RX、数据 RW+NX，可信映像不可改写，Agent exec 的角色与可信 inode 绑定，普通复制映像不能继承信任。 |
 | `agentvfs_ucore` | 非 Agent worker 只取得显式委派且不超过映像 profile 的文件能力，普通 fork/exec 和继承 fd 不能扩权。 |
+| `agentscope_ucore` | 低权限/子 Orchestrator 关闭拒绝、非规范 scope id 拒绝、根自关、factory 关闭、根离开强制撤销、阻塞成员资源释放、9 轮回收和 replacement admission。 |

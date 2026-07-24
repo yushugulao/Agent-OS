@@ -138,6 +138,7 @@ struct proc {
 	uint exec_layout_version;
 	uint exec_rw_offset;
 	uint vfs_scope_id;
+	int vfs_scope_controller;
 	uint64 vfs_effective_caps;
 	uint64 vfs_inheritable_caps;
 	uint vfs_pending_scope_id;
@@ -289,6 +290,7 @@ int cpuid();
 struct proc *curr_proc();
 struct thread *curr_thread(void);
 int proc_thread_exit_requested(void);
+int proc_request_scope_exit(uint, int);
 int proc_vm_snapshot_begin(struct proc *);
 void proc_vm_snapshot_end(struct proc *);
 void exit(int);

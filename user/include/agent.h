@@ -800,6 +800,7 @@ struct agent_file_edit_state {
 int agent_create(void);
 int agent_create_role(int role);
 int agent_workflow_create(int role);
+int agent_workflow_close(uint64 scope_id);
 int agent_scope_delegate_fd(int fd);
 int agent_worker_create(const char *image, uint64 capabilities);
 int agent_info(struct agent_info *info);

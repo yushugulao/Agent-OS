@@ -35,13 +35,13 @@ enum vfs_operation {
 #define VFS_CAP_WORKFLOW \
 	(VFS_CAP_CONTENT_READ | VFS_CAP_ARTIFACT_WRITE)
 
-// At most four workflows may be active. Retiring identities remain in the
-// lifecycle ledger until reclamation ends, but no longer consume an active
-// admission slot.
+// At most four workflows may be active or closing. Closing identities retain
+// their full admission slot until all members finish teardown; retiring
+// identities remain in the lifecycle ledger until reclamation ends.
 #define VFS_SCOPE_MAX_ACTIVE 4
 // The resumable filesystem reclaimer owns one cursor per retiring scope.
-// Active and retiring identities share this bounded lifecycle ledger, so a
-// burst of exits cannot overrun the reclaimer after admission has succeeded.
+// Admission-counted active/closing and retiring identities share this bounded
+// lifecycle ledger, so a burst of exits cannot overrun the reclaimer.
 #define VFS_SCOPE_LIFECYCLE_CAP (VFS_SCOPE_MAX_ACTIVE * 2)
 #define VFS_SCOPE_MAX_RETIRING VFS_SCOPE_LIFECYCLE_CAP
 
@@ -53,6 +53,9 @@ void vfs_proc_drop_to_public(struct proc *);
 int vfs_scope_active(uint scope_id);
 int vfs_scope_retiring(uint scope_id);
 int vfs_scope_retained(uint scope_id);
+int vfs_scope_bind_controller(uint scope_id, uint64 control_id);
+int vfs_scope_close_owned(uint scope_id, uint64 control_id);
+int vfs_scope_close_trusted(uint scope_id);
 uint vfs_scope_storage_guarantee(uint exempt_scope, int inode,
 				 uint guarantee);
 int vfs_scope_storage_reserve(uint scope_id, int inode, uint limit);
@@ -60,6 +63,7 @@ int vfs_scope_storage_release(uint scope_id, int inode);
 void vfs_scope_reap_pending(void);
 int vfs_proc_spawn_scope(const struct proc *, struct proc *,
 			 enum vfs_spawn_scope_mode);
+int vfs_proc_scope_publishable(const struct proc *);
 void vfs_proc_limit_capabilities(struct proc *, uint64);
 int vfs_proc_delegate_exec(const struct proc *, struct proc *, struct inode *,
 			   uint64);

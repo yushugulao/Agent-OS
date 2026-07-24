@@ -620,6 +620,7 @@ static int syscall_may_issue_block_io(int id, uint64 *args)
 	case SYS_kernel_work_last_preemptions:
 	case SYS_io_policy_info:
 	case SYS_agent_scope_delegate_fd:
+	case SYS_agent_workflow_close:
 	case SYS_agent_info:
 	case SYS_agent_sched_snapshot:
 	case SYS_agent_sched_config:
@@ -780,6 +781,9 @@ void syscall()
 		break;
 	case SYS_agent_scope_delegate_fd:
 		ret = sys_agent_scope_delegate_fd(args[0]);
+		break;
+	case SYS_agent_workflow_close:
+		ret = sys_agent_workflow_close(args[0]);
 		break;
 	case SYS_agent_info:
 		ret = sys_agent_info(args[0]);

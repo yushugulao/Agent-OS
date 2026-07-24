@@ -229,6 +229,39 @@ int proc_thread_exit_requested(void)
 	return p->exit_requested && t->tid != p->exit_owner_tid;
 }
 
+int proc_request_scope_exit(uint scope_id, int code)
+{
+	int requested = 0;
+	int enabled;
+
+	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC)
+		return 0;
+	enabled = intr_save();
+	for (struct proc *p = pool; p < &pool[NPROC]; p++) {
+		if (p->state != P_USED || p->exit_finalizing ||
+		    (p->vfs_scope_id != scope_id &&
+		     p->vfs_pending_scope_id != scope_id))
+			continue;
+		requested++;
+		// Never steal terminal ownership from a main thread that already
+		// started teardown. First-time requests use -1 so every thread,
+		// including tid 0, observes the cooperative exit request.
+		if (!p->exit_requested) {
+			p->exit_code = (uint64)code;
+			p->exit_requested = 1;
+			p->exit_owner_tid = -1;
+		}
+		for (int tid = 0; tid < NTHREAD; tid++) {
+			struct thread *t = &p->threads[tid];
+
+			if (t->state == SLEEPING)
+				wait_queue_interrupt(t);
+		}
+	}
+	intr_restore(enabled);
+	return requested;
+}
+
 // A VM snapshot may yield between committed pages. While it is active, the
 // scheduler keeps sibling threads parked so the source page table cannot
 // change underneath the snapshot; unrelated processes remain schedulable.
@@ -2109,12 +2142,24 @@ static int fork_common(int make_agent, int agent_role,
 		return -1;
 	}
 	struct thread *nt = &np->threads[tid], *t = issuer;
+	int publish_enabled;
+
 	nt->ustack = t->ustack;
 	if (make_agent && agent_make_role(np, agent_role) < 0) {
 		freeproc(np);
 		return -1;
 	}
+	// Final publication is serialized by the local interrupt-off boundary and
+	// rechecks the lifecycle barrier. A child marked for exit, or a pending
+	// credential whose scope ceased to be ACTIVE, must never become runnable.
+	publish_enabled = intr_save();
+	if (np->exit_requested || !vfs_proc_scope_publishable(np)) {
+		intr_restore(publish_enabled);
+		freeproc(np);
+		return -1;
+	}
 	if (proc_child_bind(p, np) < 0) {
+		intr_restore(publish_enabled);
 		freeproc(np);
 		return -1;
 	}
@@ -2124,6 +2169,7 @@ static int fork_common(int make_agent, int agent_role,
 	nt->trapframe->a0 = 0;
 	nt->state = RUNNABLE;
 	add_task(nt);
+	intr_restore(publish_enabled);
 	return np->pid;
 
 fail:
@@ -2442,6 +2488,7 @@ void exit(int code)
 	p->exit_code = code;
 	p->exit_requested = 1;
 	p->exit_owner_tid = t->tid;
+	agent_scope_controller_departing(p);
 	for (;;) {
 		proc_interrupt_siblings(p, t);
 		if (proc_siblings_quiescent(p, t))

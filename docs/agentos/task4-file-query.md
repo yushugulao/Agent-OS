@@ -218,7 +218,7 @@ int agent_file_prefetch_snapshot(struct agent_file_prefetch_hint *hints, int max
 int agent_file_prefetch_span_snapshot(struct agent_file_prefetch_hint *hints, int max);
 ```
 
-`agent_file_prefetch_snapshot()` 查询当前 Agent 自己可见的提示。`agent_file_prefetch_span_snapshot()` 查询当前 Agent 的 `current_span_id` 对应的全局提示，只返回同一 span 下的记录；当前 Agent 尚未进入 span 时返回 0。两者在 `max=0` 时只返回当前提示数量；`max>0` 会按产生顺序复制提示。普通进程调用返回 `-1`；没有 `META_READ` 能力的 Agent 返回 `AGENT_STATUS_DENIED`。
+`agent_file_prefetch_snapshot()` 查询当前 Agent 自己可见的提示。`agent_file_prefetch_span_snapshot()` 查询当前 Agent 的可信 span，只有 `scope_id + current_span_id + 内核私有 span_owner` 全部匹配才返回记录；公开 span 数字相同不能跨 workflow 或 owner 读取。当前 Agent 尚未进入可信 span 时返回 0。两者在 `max=0` 时只返回当前提示数量；`max>0` 会按产生顺序复制提示。普通进程调用返回 `-1`；没有 `META_READ` 能力的 Agent 返回 `AGENT_STATUS_DENIED`。
 
 这项能力不是完整文件内容预加载。它的作用是把“Agent 查到一个阶段后，后续大概率会继续查哪些相关工件”提前交给内核表达，减少下一轮 Agent 继续做宽泛扫描或重新拼接依赖关系的成本。Agent 之间通过 message 事件协作时，内核可以把发送者当前可见的提示复制给接收者，让接收者直接从自己的 snapshot 中读取上游提示，而不需要从消息文本中解析策略字段。
 同一 span 的提示总线进一步减少了跨 Agent 协作时的状态拼接成本：接收者不仅能读取自己 PCB 中被交接来的提示，还能用 span 查询看到“这条因果链中是谁产生了提示、提示交给了谁、目标工件是什么”。这为后续宿主机科研 Agent 对比示例提供了更直观的内核级协作证据。
@@ -353,5 +353,5 @@ align+analyze+report+archive
 | 查询规模 | 当前最多 512 条元数据，单 workflow scope 最多 112 条，单次最多返回 8 条 hit |
 | 内容摘要 | 当前读取最多 4096 字节计算指纹，返回短预览，不做全文索引 |
 | 预取提示 | 当前只生成 metadata 提示，提示本身不预读文件内容，不保存到磁盘 |
-| 文件安全域 | 当前实现 PUBLIC、SYSTEM、最多 4 个 active workflow，以及 active + retiring 合计不超过 8 的生命周期域；退役积压最多 8 个，身份槽只在 `used == 0` 后复用，尚未提供任意数量的用户命名域或用户可编程动态策略语言 |
+| 文件安全域 | 当前实现 PUBLIC、SYSTEM、ACTIVE+CLOSING admission 最多 4 个，以及计入 admission 的 ACTIVE/CLOSING 与 RETIRING 身份合计不超过 8 的生命周期域；身份槽只在 `used == 0` 后复用，尚未提供任意数量的用户命名域或用户可编程动态策略语言 |
 | 故障验证 | 当前回归覆盖正常 I/O、ENOSPC 和重载一致性；没有注入启动 bank 损坏、VirtIO 短写/设备错误或 metadata COW 中途掉电，不据此声称完整崩溃原子性 |

@@ -86,7 +86,7 @@
 | `llm_response` | 24 | target_pid、response_summary | 由具备 `LLM_RELAY` 的 Agent 沿显式 `LLM_DONE` route 投递结果事件 |
 | `dependency_update` | 25 | selector | 注册或更新通用对象依赖关系 |
 
-`MESSAGE_SEND` 和 `LLM_RELAY` 只决定调用者能否发起对应操作，不授予任意目标范围。跨 Agent 的 `send_message`、非零 target `llm_request` 和 `llm_response` 还必须分别命中 target 入站表中的 `MESSAGE` 或 `LLM_DONE` route；自投递隐式允许。`llm_request(target_pid=0, ...)` 只记录摘要，不执行投递。`agentsecurity_ucore` 已覆盖 `send_message` / 非零 target `llm_request` 的未授权拒绝、`MESSAGE` grant/revoke、target 自主接受 `LLM_DONE`，并验证 LLM-only route 拒绝 `MESSAGE`；`agentllm_ucore` 提供 `LLM_DONE` route 的端到端正向回归。尚未由具备 `LLM_RELAY` 的 source 专项验证无 `LLM_DONE` 位时的响应拒绝。
+`MESSAGE_SEND` 和 `LLM_RELAY` 只决定调用者能否发起对应操作，不授予任意目标范围。跨 Agent 的 `send_message`、非零 target `llm_request` 和 `llm_response` 必须先解析 source/target 的不可复用 stable control id，确认两端属于同一 active workflow scope，再分别命中 target 入站表中的 `MESSAGE` 或 `LLM_DONE` route；target consent 也不能越过 scope。自投递隐式允许。`llm_request(target_pid=0, ...)` 只记录摘要，不执行投递。`agentsecurity_ucore` 已覆盖 `send_message` / 非零 target `llm_request` 的未授权拒绝、`MESSAGE` grant/revoke、target 自主接受 `LLM_DONE`，并验证 LLM-only route 拒绝 `MESSAGE`；`agentllm_ucore` 提供 `LLM_DONE` route 的端到端正向回归。尚未由具备 `LLM_RELAY` 的 source 专项验证无 `LLM_DONE` 位时的响应拒绝。
 
 ## 错误处理
 

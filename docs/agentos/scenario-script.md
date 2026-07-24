@@ -6,7 +6,7 @@
 
 本项目在 uCore 内核上实现 Agent-OS，把 Agent 进程身份、结构化工具调用、上下文历史、文件元数据索引和 Agent 事件运行机制放入内核支持层。
 
-完整专项脚本当前依次运行十六个程序。2026-07-24 的 pipe 安全主体委派改动后已以 `CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 完成 16/16，整条命令墙钟约 `359.4s`：
+完整专项脚本当前依次运行十六个程序。2026-07-24 的 workflow 强制撤销实现快照已以 `CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 完成 16/16，整条命令墙钟约 `371.5s`，其中 `agentscope_ucore` 约 `127.9s`。子代理审查补强回归后，最终 `agentscope_ucore` 又以 `CASE_TIMEOUT=260s AGENT_TEST_CASE=agentscope_ucore bash scripts/run-agent-tests.sh` 通过，约 `126.1s`；审查后未重跑完整 16 项。构建期 AgentOS 栈预算为 `13824 < 16384`：
 
 ```bash
 agentfinal_ucore
@@ -32,7 +32,7 @@ usersafety_ucore
 | 程序 | 作用 |
 | --- | --- |
 | `agentfinal_ucore` | 覆盖任务一至三核心功能，同时检查文件索引和事件自唤醒 |
-| `agentfs_ucore` | 检查任务四的真实 inode 绑定、私有 `.agentmeta` 重新加载和索引查询 |
+| `agentfs_ucore` | 检查真实 inode 绑定、私有 `.agentmeta` 重载、字段驱动 action、依赖按需解析、metadata 工作预算和稳定 handoff 端点 |
 | `agentscan_ucore` | 检查任务四的根目录自动扫描、真实文件元数据建立和索引维护 |
 | `agentloop_ucore` | 检查任务五的 FIFO 事件队列、stable source 上限、内核 TIMER 共存、unwatch、有限 timeout 睡眠、wait cancel、TIMER unwatch 和 heartbeat stop |
 | `agentsched_ucore` | 检查任务五的 Agent 感知调度、受权配置、事件状态、调度原因和公平性计数 |
@@ -42,7 +42,7 @@ usersafety_ucore
 | `labbench_ucore` | 综合场景中的性能入口，当前包装运行 `agentbench_ucore` |
 | `labdemo_ucore` | 呈现一个由 orchestrator 控制的多 Agent 实验恢复场景 |
 | `agentsecurity_ucore` | 呈现普通进程和低权限 Agent 无法越权，并验证普通 mail 与多 run 精确恢复 |
-| `agentscope_ucore` | 检查动态 workflow scope、跨域对象/IPC 隔离、事务竞争、微小写入合并、跨域查询进展、配额、fd 委派和生命周期回收 |
+| `agentscope_ucore` | 检查动态 workflow scope、跨域对象/IPC 隔离、事务竞争、微写合并、观测双索引与预算化查询、跨域进展、配额、fd 委派，以及可信关闭权、根退出强制撤销、阻塞成员清理和生命周期回收 |
 | `agenttrust_ucore` | 检查代码 RX、数据 RW+NX、可信映像不可变及 Agent 角色与可执行 inode 绑定 |
 | `agentvfs_ucore` | 检查 public/workflow 文件隔离、非 Agent worker 能力衰减、跨 scope fd 撤销及 pipe 单跳委派 |
 | `iobudget_ucore` | 检查稳定 PUBLIC/workflow owner、普通流量设备根预算、完成归因、线程退出 lease 回收、唯一 runnable 内核 pipe waiter 下的 scheduler 中断交付、fault 退出清理的归因/debt 结算、buffer cache floor/cap 和 CONTROL 保留预算下的有界进展；最终机制独立轮 `elapsed=2.4s`，完整轮 `2.1s` |
@@ -330,10 +330,22 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=usersafety_ucore CHAP
 
 `agentscope_ucore` 同时建立多个由可信 factory 签发的 workflow scope，验证 capability 只有在 active scope 和精确 owner 同时命中时才生效；同名文件、metadata、action、audit、lease 和 IPC 不能跨域。低权限 Artifact Agent 会在 guest pipe 存活屏障后持续微写已绑定持久对象和 metadata 满表后未绑定的对象，另一 scope 必须在 5 秒内完成 32 次查询；测试同时检查写回批次数、scan cooldown、dirty/durable 最终一致和强制重载后的 size/generation。另一个 Artifact 对 volatile 文件执行 32 次微写，request/commit 计数不得增长。事务门、存储/进程保留量、一次性 pipe fd 委派及 scope retirement 均有实际 QEMU 回归。
 
+同一程序还验证 workflow 的可信终止协议。低权限 Sentinel 和后创建的 Orchestrator 调用 `agent_workflow_close()` 必须返回 `AGENT_STATUS_DENIED`，带高位别名的 64 位 scope id 必须返回 `AGENT_STATUS_BAD_PARAM`；只有创建时绑定的根 controller 或仍运行可信 bootstrap 的 factory 可以发起关闭。显式关闭和根自然退出都会先把 scope 置为 CLOSING、撤销授权，再让一个阻塞在 `agent_wait()` 且持有 pipe 的低权限成员沿正常退出路径释放端点。测试在 pipe EOF 前设置返回后 poison 写入，避免把“等待意外返回”误判为成功清理；自动根退出重复 9 轮，超过 `VFS_SCOPE_LIFECYCLE_CAP=8` 后仍能接纳 replacement workflow。
+
+关键输出为：
+
+```text
+agentscope_ucore: scope_close_authority=1
+agentscope_ucore: scope_controller_exit_revoke=1
+agentscope_ucore: scope_forced_cleanup=1
+agentscope_ucore: scope_replacement_admitted=1
+agentscope_ucore: parent passed
+```
+
 `agenttrust_ucore` 检查构建期清单写入 inode 的可信策略：程序代码页为 RX，数据页为 RW+NX，可信映像拒绝写入、截断和删除；只有允许当前 Agent 角色的可信 inode 可以 exec，复制相同程序字节得到的普通文件不会继承信任。
 
 `agentvfs_ucore` 检查普通文件路径不能绕过 Agent capability：public 进程无法读取、修改或删除 workflow 工件，workflow Agent 也不能把 public 文件冒充受保护工件；orchestrator 可通过 syscall 539 `agent_worker_create()` 创建非 Agent worker，但请求能力同时受父凭据和目标映像 profile 限制。错误 exec 不安装委派，降权普通 fork 撤销跨 scope inode fd，worker pipe 只通过创建线程的一次性票据进入子主体。
 
 `usersafety_ucore` 检查坏指针、跨页和整数溢出范围不会破坏内核状态，失败的 wait copyout 不会提前回收子进程，pipe/file 分配失败会回滚，并且不相关的子进程退出不会错误唤醒 mutex 等待者。
 
-当前版本已经具备任务一至三的增强实现，完成任务四基于 `dev + inum + incarnation` 的真实文件元数据服务、public/workflow VFS 隔离、索引查询和根目录自动扫描，完成任务五的有界事件队列、等待/唤醒/取消机制、Agent 感知调度、普通进程强制公平上限、受权调度配置、调度原因记录、当前 span 短记录、统一 timeline、timeline 过滤查询、timeline 游标增量读取、全局审计短记录和过滤查询，并提供任务六综合示例。多级目录递归扫描、云端访问和页面大屏属于用户态或宿主机工具的扩展范围，不写入当前内核职责。
+当前版本已经具备任务一至三的增强实现，完成任务四基于 `dev + inum + incarnation` 的真实文件元数据服务、public/workflow VFS 隔离、索引查询和根目录自动扫描，完成任务五的有界事件队列、等待/唤醒/取消机制、Agent 感知调度、普通进程强制公平上限、受权调度配置、调度原因记录、当前 span 短记录、统一 timeline、timeline 过滤查询、timeline 游标增量读取、全局审计短记录和过滤查询。观测查询使用 scope-local 双有序索引、单遍扫描或四路归并，并按候选数预付内核工作预算；计数查询不再成为无预算旁路。系统同时提供任务六综合示例。多级目录递归扫描、云端访问和页面大屏属于用户态或宿主机工具的扩展范围，不写入当前内核职责。

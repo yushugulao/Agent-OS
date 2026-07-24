@@ -1404,6 +1404,25 @@ static int create_workflow_after_reap(void)
 	return -1;
 }
 
+static int create_workflow_with_delegated_fds(int first_fd, int second_fd)
+{
+	for (int i = 0; i < 2000; i++) {
+		int pid;
+
+		check(agent_scope_delegate_fd(first_fd) == AGENT_STATUS_OK,
+		      "delegate close control");
+		if (second_fd >= 0)
+			check(agent_scope_delegate_fd(second_fd) ==
+				      AGENT_STATUS_OK,
+			      "delegate close lifetime");
+		pid = agent_workflow_create(AGENT_ROLE_ORCHESTRATOR);
+		if (pid >= 0)
+			return pid;
+		sleep(1);
+	}
+	return -1;
+}
+
 static void check_scope_lifecycle(void)
 {
 	for (int i = 0; i < SCOPE_LIFECYCLE_ROUNDS; i++) {
@@ -1417,6 +1436,195 @@ static void check_scope_lifecycle(void)
 		      "wait recycled workflow scope");
 		check(status == 0, "recycled workflow scope status");
 	}
+}
+
+static void workflow_close_denial_probe(uint scope_id, int reply_fd)
+{
+	int result = agent_workflow_close(scope_id);
+
+	write_exact(reply_fd, &result, sizeof(result),
+		    "report close denial");
+	exit(result == AGENT_STATUS_DENIED ? 0 : 1);
+}
+
+static void check_workflow_close_denied(uint scope_id, int role,
+					const char *message)
+{
+	int reply[2];
+	int result = AGENT_STATUS_OK;
+	int status = -1;
+	int pid;
+
+	check(pipe(reply) == 0, "create close denial pipe");
+	check(agent_scope_delegate_fd(reply[1]) == AGENT_STATUS_OK,
+	      "delegate denial reply");
+	pid = agent_create_role(role);
+	check(pid >= 0, message);
+	if (pid == 0)
+		workflow_close_denial_probe(scope_id, reply[1]);
+	check(close(reply[1]) == 0, "close workflow close denial writer");
+	read_exact(reply[0], &result, sizeof(result),
+		   "receive close denial");
+	check(result == AGENT_STATUS_DENIED, message);
+	check(waitpid(pid, &status) == pid,
+	      "wait close denial probe");
+	check(status == 0, message);
+	check(close(reply[0]) == 0, "close denial reader");
+}
+
+static void workflow_self_close_root(int report_fd)
+{
+	uint scope_id = current_scope();
+
+	check_workflow_close_denied(scope_id, AGENT_ROLE_SENTINEL,
+				    "sentinel close denied");
+	check_workflow_close_denied(scope_id, AGENT_ROLE_ORCHESTRATOR,
+				    "child root close denied");
+	send_reply(report_fd, scope_id, AGENT_STATUS_DENIED,
+		   AGENT_STATUS_DENIED);
+	check(close(report_fd) == 0, "close authority report");
+	(void)agent_workflow_close(scope_id);
+	exit(99);
+}
+
+static void workflow_scope_holder_root(int report_fd, int lifetime_fd,
+				       int depart);
+
+static void check_scope_close_authority(void)
+{
+	struct scope_reply ready;
+	char eof;
+	int lifetime[2];
+	int report[2];
+	int status = -1;
+	int pid;
+
+	check(pipe(report) == 0, "create root close pipe");
+	pid = create_workflow_with_delegated_fds(report[1], -1);
+	check(pid >= 0, "create self-closing workflow root");
+	if (pid == 0)
+		workflow_self_close_root(report[1]);
+	check(close(report[1]) == 0, "close root report writer");
+	ready = receive_reply(report[0], "receive root close result");
+	check(ready.value0 == (uint64)AGENT_STATUS_DENIED &&
+		      ready.value1 == (uint64)AGENT_STATUS_DENIED,
+	      "only bound workflow root may self-close");
+	check(waitpid(pid, &status) == pid, "wait self-closing root");
+	check(status == AGENT_STATUS_CANCELLED,
+	      "root close terminates at syscall boundary");
+	check(close(report[0]) == 0, "close root report reader");
+
+	check(pipe(report) == 0 && pipe(lifetime) == 0,
+	      "create factory close pipes");
+	pid = create_workflow_with_delegated_fds(report[1], lifetime[1]);
+	check(pid >= 0, "create factory-close target");
+	if (pid == 0)
+		workflow_scope_holder_root(report[1], lifetime[1], 0);
+	check(close(report[1]) == 0 && close(lifetime[1]) == 0,
+	      "close factory writers");
+	ready = receive_reply(report[0], "receive factory target");
+	check(agent_workflow_close((1ULL << 32) | ready.scope_id) ==
+		      AGENT_STATUS_BAD_PARAM,
+	      "reject noncanonical workflow scope");
+	check(agent_workflow_close(ready.scope_id) == AGENT_STATUS_OK,
+	      "trusted bootstrap closes workflow");
+	check(waitpid(pid, &status) == pid, "wait factory target");
+	check(status == AGENT_STATUS_CANCELLED,
+	      "factory close terminates workflow root");
+	check(read(lifetime[0], &eof, sizeof(eof)) < 0,
+	      "factory close drains members");
+	check(close(report[0]) == 0 && close(lifetime[0]) == 0,
+	      "close factory readers");
+}
+
+static void workflow_wait_holder(int ready_fd, int lifetime_fd)
+{
+	struct agent_event event;
+	char poison = 'P';
+	char ready = 'R';
+
+	write_exact(ready_fd, &ready, sizeof(ready),
+		    "report lifetime holder");
+	check(close(ready_fd) == 0, "close holder ready pipe");
+	memset(&event, 0, sizeof(event));
+	(void)agent_wait(&event, -1);
+	(void)write(lifetime_fd, &poison, sizeof(poison));
+	exit(99);
+}
+
+static void workflow_scope_holder_root(int report_fd, int lifetime_fd,
+				       int depart)
+{
+	struct agent_event event;
+	int child_ready[2];
+	int child;
+	char ready;
+	uint scope_id = current_scope();
+
+	check(pipe(child_ready) == 0, "create holder ready pipe");
+	check(agent_scope_delegate_fd(child_ready[1]) == AGENT_STATUS_OK &&
+		      agent_scope_delegate_fd(lifetime_fd) == AGENT_STATUS_OK,
+	      "delegate holder endpoints");
+	child = agent_create_role(AGENT_ROLE_SENTINEL);
+	check(child >= 0, "create workflow lifetime holder");
+	if (child == 0)
+		workflow_wait_holder(child_ready[1], lifetime_fd);
+	check(close(child_ready[1]) == 0 &&
+		      close(lifetime_fd) == 0,
+	      "drop root lifetime fds");
+	read_exact(child_ready[0], &ready, sizeof(ready),
+		   "wait lifetime holder");
+	check(ready == 'R', "workflow lifetime holder ready");
+	check(close(child_ready[0]) == 0,
+	      "close holder ready reader");
+	send_reply(report_fd, scope_id, child, 0);
+	check(close(report_fd) == 0, "close exit report");
+	if (depart)
+		exit(0);
+	memset(&event, 0, sizeof(event));
+	(void)agent_wait(&event, -1);
+	exit(99);
+}
+
+static void check_scope_controller_exit_revoke(void)
+{
+	int replacement;
+
+	for (int round = 0; round < 9; round++) {
+		struct scope_reply ready;
+		char eof;
+		int report[2];
+		int lifetime[2];
+		int status = -1;
+		int pid;
+
+		check(pipe(report) == 0 && pipe(lifetime) == 0,
+		      "create exit controls");
+		pid = create_workflow_with_delegated_fds(report[1],
+							lifetime[1]);
+		check(pid >= 0, "create controller-exit workflow");
+		if (pid == 0)
+			workflow_scope_holder_root(report[1], lifetime[1], 1);
+		check(close(report[1]) == 0 && close(lifetime[1]) == 0,
+		      "drop bootstrap exit writers");
+		ready = receive_reply(report[0], "receive exit readiness");
+		check(ready.value0 > 0, "workflow lifetime holder published");
+		check(waitpid(pid, &status) == pid, "wait departing root");
+		check(status == 0, "departing root status");
+		check(read(lifetime[0], &eof, sizeof(eof)) < 0,
+		      "lifetime pipe reaches EOF");
+		check(close(report[0]) == 0 && close(lifetime[0]) == 0,
+		      "close exit readers");
+	}
+
+	replacement = create_workflow_after_reap();
+	check(replacement >= 0, "admit replacement after forced cleanup");
+	if (replacement == 0)
+		scope_lifecycle_child();
+	int status = -1;
+	check(waitpid(replacement, &status) == replacement,
+	      "wait replacement workflow");
+	check(status == 0, "replacement workflow status");
 }
 
 static void check_scope_capacity_reservation(void)
@@ -1628,6 +1836,12 @@ int main(void)
 	check_scope_capacity_reservation();
 	printf("agentscope_ucore: scope_capacity_reservation=1\n");
 	printf("agentscope_ucore: transactional_fd_delegation=1\n");
+	check_scope_close_authority();
+	printf("agentscope_ucore: scope_close_authority=1\n");
+	check_scope_controller_exit_revoke();
+	printf("agentscope_ucore: scope_controller_exit_revoke=1\n");
+	printf("agentscope_ucore: scope_forced_cleanup=1\n");
+	printf("agentscope_ucore: scope_replacement_admitted=1\n");
 	check_scope_lifecycle();
 	printf("agentscope_ucore: lifecycle_reclamation=1\n");
 	printf("agentscope_ucore: parent passed\n");

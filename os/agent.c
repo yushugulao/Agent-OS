@@ -1627,8 +1627,27 @@ static void agent_timeline_waiting_set(struct proc *p, int waiting)
 	p->agent_timeline_waiting = waiting;
 }
 
+void agent_scope_controller_departing(struct proc *p)
+{
+	uint scope_id;
+	uint64 control_id;
+
+	if (p == 0 || !p->vfs_scope_controller || !p->is_agent ||
+	    p->vfs_scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
+	    p->agent_control_id == 0)
+		return;
+	scope_id = p->vfs_scope_id;
+	control_id = p->agent_control_id;
+	// The marker is a one-shot ownership attachment. Ledger identity remains
+	// authoritative, so explicit close followed by normal exit is idempotent.
+	p->vfs_scope_controller = 0;
+	if (vfs_scope_close_owned(scope_id, control_id) == 0)
+		proc_request_scope_exit(scope_id, AGENT_STATUS_CANCELLED);
+}
+
 void agent_clear_metadata(struct proc *p)
 {
+	agent_scope_controller_departing(p);
 	agent_timeline_waiting_set(p, 0);
 	agent_ipc_remove_source(p->agent_control_id);
 	for (int i = 0; i < AGENT_CONTEXT_PAGES; i++) {
@@ -3084,6 +3103,12 @@ int agent_make_role(struct proc *p, int role)
 		agent_free_proc_context(p);
 		return -1;
 	}
+	if (p->vfs_scope_controller &&
+	    vfs_scope_bind_controller(p->vfs_scope_id,
+				      p->agent_control_id) < 0) {
+		agent_free_proc_context(p);
+		return -1;
+	}
 	return 0;
 }
 
@@ -3128,7 +3153,8 @@ static void agent_info_fill(struct proc *p, struct agent_info *info)
 	info->timeout_count = p->agent_timeout_count;
 	info->last_heartbeat_tick = p->agent_last_heartbeat_tick;
 	info->current_tick = agent_ticks();
-	info->capability_mask = p->agent_capability_mask;
+	info->capability_mask = agent_proc_scope(p) != VFS_SCOPE_NONE ?
+				p->agent_capability_mask : 0;
 	info->file_scan_runs = agent_file_scan_runs;
 	info->file_scan_entries = agent_file_scan_entries;
 	info->file_scan_added = agent_file_scan_added;
@@ -3165,7 +3191,8 @@ static void agent_info_fill(struct proc *p, struct agent_info *info)
 	info->timeline_wait_wakeup_count = p->agent_timeline_wait_wakeup_count;
 	info->timeline_wait_timeout_count = p->agent_timeline_wait_timeout_count;
 	info->filesystem_domain = p->vfs_scope_id;
-	info->filesystem_capability_mask = p->vfs_effective_caps;
+	info->filesystem_capability_mask =
+		vfs_scope_active(p->vfs_scope_id) ? p->vfs_effective_caps : 0;
 }
 
 static struct agent_tool_desc *agent_tool_by_id(int tool_id)
@@ -9169,6 +9196,35 @@ int sys_agent_workflow_create(int role)
 	if (result < 0)
 		proc_discard_fd_delegations();
 	return result;
+}
+
+int sys_agent_workflow_close(uint64 requested_scope_id)
+{
+	struct proc *p = curr_proc();
+	int factory = p != 0 && !p->is_agent && p->resource_domain_admin &&
+		      exec_policy_process_bootstrap(p);
+	uint scope_id;
+	int result;
+
+	if (requested_scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
+	    requested_scope_id >= FS_OWNER_SCOPE_FLAG)
+		return AGENT_STATUS_BAD_PARAM;
+	scope_id = (uint)requested_scope_id;
+	// Non-factory callers are authorized only by the non-reused lifecycle
+	// controller ID bound before their root process becomes runnable.
+	if (!factory) {
+		if (p == 0 || !p->is_agent || !p->vfs_scope_controller ||
+		    p->vfs_scope_id != scope_id || p->agent_control_id == 0)
+			return AGENT_STATUS_DENIED;
+		result = vfs_scope_close_owned(scope_id, p->agent_control_id);
+		if (result < 0)
+			return AGENT_STATUS_DENIED;
+	} else {
+		if (vfs_scope_close_trusted(scope_id) < 0)
+			return AGENT_STATUS_NOT_FOUND;
+	}
+	proc_request_scope_exit(scope_id, AGENT_STATUS_CANCELLED);
+	return AGENT_STATUS_OK;
 }
 
 int sys_agent_scope_delegate_fd(int fd)

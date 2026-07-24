@@ -402,6 +402,13 @@ agentscope_ucore: metadata_cross_scope_progress=1 queries=32 latency_ms=<at-most
 agentscope_ucore: metadata_final_consistency=1
 agentscope_ucore: metadata_volatile_no_writeback=1 writes=32
 agentscope_ucore: metadata_scan_pressure_bounded=1
+agentscope_ucore: observe_query_bounded=1 ...
+agentscope_ucore: observe_index_ordered=1
+agentscope_ucore: observe_cross_scope_progress=1 ...
+agentscope_ucore: scope_close_authority=1
+agentscope_ucore: scope_controller_exit_revoke=1
+agentscope_ucore: scope_forced_cleanup=1
+agentscope_ucore: scope_replacement_admitted=1
 agentscope_ucore: parent passed
 agenttrust_ucore: parent passed
 agentvfs_ucore: parent passed
@@ -409,7 +416,7 @@ usersafety_ucore: parent passed
 [agent-tests] all Agent-OS uCore checks passed
 ```
 
-这组测试覆盖 Agent Context、结构化工具调用、Context Path、真实文件 metadata、按 scope 合并写回、volatile 写回分流、满表扫描限流、跨 workflow 查询时限、根目录自动扫描、Agent 事件队列、Agent 调度、文件编辑租约、LLM Relay 模板路径、性能观测、综合示例和权限限制。
+这组测试覆盖 Agent Context、结构化工具调用、Context Path、真实文件 metadata、按 scope 合并写回、volatile 写回分流、满表扫描限流、预算化观测查询、跨 workflow 查询时限、可信 workflow 关闭权、根退出强制撤销、阻塞成员协作清理、生命周期重复回收、根目录自动扫描、Agent 事件队列、Agent 调度、文件编辑租约、LLM Relay 模板路径、性能观测、综合示例和权限限制。
 
 ## 状态渲染验证
 
@@ -451,7 +458,7 @@ make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-`run-agent-tests.sh` 中的 `agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore` 和 `usersafety_ucore` 分别覆盖事件与角色授权、可信映像和 W^X、普通 VFS 绕过及坏用户指针。`run-proc-reap-tests.sh` 覆盖定向取消、阻塞 syscall 临时引用释放、孤儿回收、child record、长存活 fork bomb 和 Agent 保留槽。`run-file-resource-tests.sh` 用双目标同一个 `fileresource_ucore` 和 64/48/16/16 配置，验证阻塞 syscall pin 在原 FD 关闭后仍计费、每域上限、pipe 部分分配回滚、普通全局水位、reserved 进展及退出后的最终退款；本次独立运行已输出 AgentOS、baseline 和 `[file-resource] both targets passed`。`run-fs-enospc-tests.sh` 先保留两个目标的物理 ENOSPC 复测，再运行 AgentOS `fsquota_ucore` 的低主体上限和高水位两组配置：前者验证运行期累计及释放复用，后者确保 PUBLIC 压力下 workflow 文件和内核 `.agentmeta` 仍可写入。随后两个目标各用同一磁盘镜像连续运行三次 `fspquota_ucore`：第一轮在文件已 unlink 但描述符仍打开时强制断电；第二轮验证挂载回收孤儿后，让 PUBLIC 接管含间接块的 SYSTEM 赞助对象并使进程域满额退出；第三轮验证 qmap/dinode 重建计数、新进程域和重启都不能清零、删除后才可复用。聚合脚本已串联 Agent、进程生命周期、syscall 公平性和 filepool 专项，但本次没有运行 `make full-verify`；文件系统专项仍不在聚合脚本中。内核栈预算在每次 kernel build 时自动执行，也可用以上命令单独复现。完整机制和失败语义见 [agentos/security-hardening.md](agentos/security-hardening.md)。
+`run-agent-tests.sh` 中的 `agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`agentscope_ucore` 和 `usersafety_ucore` 分别覆盖事件与角色授权、可信映像和 W^X、普通 VFS 绕过、workflow 强制撤销及坏用户指针。强制撤销实现快照已完成完整 16/16；子代理审查补强后，最终 `agentscope_ucore` 专项验证低权限/子 Orchestrator 关闭拒绝、根自关、factory 关闭、根退出自动撤销、阻塞成员资源释放、9 轮回收和 replacement admission。`run-proc-reap-tests.sh` 覆盖定向取消、阻塞 syscall 临时引用释放、孤儿回收、child record、长存活 fork bomb 和 Agent 保留槽。`run-file-resource-tests.sh` 用双目标同一个 `fileresource_ucore` 和 64/48/16/16 配置，验证阻塞 syscall pin 在原 FD 关闭后仍计费、每域上限、pipe 部分分配回滚、普通全局水位、reserved 进展及退出后的最终退款；独立历史轮已输出 AgentOS、baseline 和 `[file-resource] both targets passed`。`run-fs-enospc-tests.sh` 先保留两个目标的物理 ENOSPC 复测，再运行 AgentOS `fsquota_ucore` 的低主体上限和高水位两组配置：前者验证运行期累计及释放复用，后者确保 PUBLIC 压力下 workflow 文件和内核 `.agentmeta` 仍可写入。随后两个目标各用同一磁盘镜像连续运行三次 `fspquota_ucore`：第一轮在文件已 unlink 但描述符仍打开时强制断电；第二轮验证挂载回收孤儿后，让 PUBLIC 接管含间接块的 SYSTEM 赞助对象并使进程域满额退出；第三轮验证 qmap/dinode 重建计数、新进程域和重启都不能清零、删除后才可复用。聚合脚本已串联 Agent、进程生命周期、syscall 公平性和 filepool 专项，但本次没有运行 `make full-verify`；文件系统专项仍不在聚合脚本中。内核栈预算在每次 kernel build 时自动执行，也可用以上命令单独复现。完整机制和失败语义见 [agentos/security-hardening.md](agentos/security-hardening.md)。
 
 ## 内核机制说明
 

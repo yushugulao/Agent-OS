@@ -341,3 +341,4 @@
 #define __NR_agent_workflow_create 541
 #define __NR_agent_scope_delegate_fd 542
 #define __NR_kernel_work_last_preemptions 543
+#define __NR_agent_workflow_close 545

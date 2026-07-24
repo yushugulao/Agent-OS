@@ -290,6 +290,11 @@ int agent_workflow_create(int role)
 	return syscall(SYS_agent_workflow_create, role);
 }
 
+int agent_workflow_close(uint64 scope_id)
+{
+	return syscall(SYS_agent_workflow_close, scope_id);
+}
+
 int agent_scope_delegate_fd(int fd)
 {
 	return syscall(SYS_agent_scope_delegate_fd, fd);

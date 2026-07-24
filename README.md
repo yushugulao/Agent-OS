@@ -59,6 +59,9 @@ AI Agent 平台已经能够在用户态完成任务编排、工具调用、文�
 4. **文件查询从路径扫描扩展到对象语义查询**：文件对象可以附加 namespace、object id、type、state、owner、tags、digest 和 summary，并返回候选数量、扫描数量和查询计划。
 5. **运行记录统一进入 timeline、audit 和 provenance**：Context、事件、调度、文件查询、权限拒绝、预取提示和 LLM 请求可以按同一套记录读取，减少用户态从日志中重新拼接运行事实的成本。
 6. **块 I/O 与缓存按持久主体隔离**：进程 syscall 在入口捕获 PUBLIC 或 workflow owner 和 I/O class，内核维护显式建立 SYSTEM 或触发 workflow 的 background job；实际完成的 1 KiB 传输同时计入分域 bucket 和设备根账本。普通流量受设备根速率限制，SYSTEM/CONTROL 在根信用耗尽时仍可带债前进；buffer cache 以同一稳定 owner 设置保留量和上限。
+7. **高成本内核服务使用统一工作预算**：metadata action/依赖解析和 audit/span/timeline/provenance 查询都使用有界选集、单遍或有序归并，并按候选批次预付 kernel-work；计数查询和不复制结果的路径同样不能绕过公平边界。
+8. **跨主体 pipe 只允许显式单跳委派**：一次性票据绑定发起线程的下一次主体创建并固定精确 file 对象；子主体获得端点但不获得继续传播权，失败、exec 和未知继承类别默认撤销或拒绝。
+9. **Workflow 具有可信强制撤销生命周期**：内核把唯一根 controller 绑定到不复用的 control id；根退出或可信 factory 显式关闭时，scope 原子进入 CLOSING、立即撤销授权并协作终止全部成员，最后沿既有 RETIRING 回收路径释放资源。
 
 ## 三、完成情况
 
@@ -68,7 +71,7 @@ AI Agent 平台已经能够在用户态完成任务编排、工具调用、文�
 
 | 任务 | 当前完成内容 | 主要验证入口 |
 | --- | --- | --- |
-| 任务一：Agent 进程与地址空间 | Agent 身份、角色模板、capability、Agent Context 映射、fork/exec/exit 处理、普通进程隔离。 | `agentfinal_ucore`、`agentsecurity_ucore` |
+| 任务一：Agent 进程与地址空间 | Agent 身份、角色模板、capability、Agent Context 映射、fork/exec/exit 处理、普通进程隔离，以及由可信根/factory 驱动的 workflow 强制撤销。 | `agentfinal_ucore`、`agentsecurity_ucore`、`agentscope_ucore` |
 | 任务二：结构化工具调用 | name-based 兼容接口、id-based 快速接口、批量 `agent_run`、参数键/类型校验、工具权限检查和结果记录。 | `agentfinal_ucore`、`agentbench_ucore`、`agentsecurity_ucore` |
 | 任务三：Context Path | 内核 shadow 可信历史、用户态 mirror/cache、自动记录、手动 push、query、snapshot、rollback、clear、短摘要和 detail 记录。 | `agentfinal_ucore`、`agentscan_ucore` |
 | 任务四：文件属性与摘要查询 | 真实 inode 关联、私有 `.agentmeta` 后端、属性索引、根目录自动扫描、内容摘要、查询计划、文件编辑租约和预取提示。 | `agentfs_ucore`、`agentscan_ucore`、`agentconflict_ucore` |
@@ -228,9 +231,9 @@ buffer cache 同样记录稳定 sponsor，为 SYSTEM、PUBLIC 和每个 active w
 
 由主线程触发的正常 `exit()`、用户 page fault 或非法指令进入同一进程级 terminal teardown；非主 sibling 无论正常退出还是 fault 都只回收自身线程。进程级 teardown 先让 sibling 从阻塞点展开，再建立不可中断的 cleanup I/O request 与 kernel-work 上下文；关闭未链接文件等释放操作产生的真实 I/O 继续按原稳定 owner 计费。剩余 lease 与 owner/class debt 在清理上下文中结算；PUBLIC/NORMAL 还会等待 device debt，SYSTEM/CONTROL 的受保护 device debt 则保留在全局设备根账本中由 refill 偿还，不绑定退出线程。随后才清除 teardown thread 的账本并释放内核栈，最后由 `vfs_proc_reset()` quiesce VFS。
 
-workflow 最后成员退出后停止用户 I/O，并立即撤销 active cache floor；其不可复用的生命周期账本继续保留 `BACKGROUND` 预算，轮转 reaper 以临时 3/8 cache floor/cap 分步完成清理。`VFS_SCOPE_LIFECYCLE_CAP=8` 同时约束 active + retiring，active 最多 4 个，全部退出积压时 retiring 最多 8 个；只有 `used` 清零的槽才可复用，避免新 scope 覆盖旧清理状态或泄漏 I/O owner。清理完成后才唤醒残余等待者，并在请求、lease 与 debt 归零后回收 I/O 状态和空闲缓存。截断、最终 inode 回收和 scope 文件清理都使用“先 detach、后分步 reclaim”的通用状态机，不跨预算边界持有 inode 或 buffer。
+workflow 生命周期为 ACTIVE -> CLOSING -> RETIRING。可信 factory 可按稳定 scope id 发起关闭，创建时绑定的唯一根 controller 自行关闭或退出也会走同一幂等路径。CLOSING 立即使 Agent/VFS 授权失效，并拒绝新成员、pending exec 发布和存储分配；内核向 active 与 pending 成员设置协作退出请求，只中断可中断等待，不从外部释放仍被线程持有的 FD、inode 或内存。为保证这些成员能沿正常 teardown 结算资源，CLOSING 在最后成员退出前仍按完整 owner 保留 I/O/cache admission。最后成员退出后才进入 RETIRING，撤销 active cache floor；其不可复用的生命周期账本继续保留 `BACKGROUND` 预算，轮转 reaper 以临时 3/8 cache floor/cap 分步完成清理。ACTIVE+CLOSING admission 最多 4 个，`VFS_SCOPE_LIFECYCLE_CAP=8` 约束计入 admission 的 ACTIVE/CLOSING 与 RETIRING 身份；只有 `used` 清零的槽才可复用，避免新 scope 覆盖旧清理状态或泄漏 I/O owner。清理完成后才唤醒残余等待者，并在请求、lease 与 debt 归零后回收 I/O 状态和空闲缓存。截断、最终 inode 回收和 scope 文件清理都使用“先 detach、后分步 reclaim”的通用状态机，不跨预算边界持有 inode 或 buffer。
 
-Agent 专属安全链由构建期可信映像清单、loader 映像绑定、bootstrap/role grant、capability 和 VFS 文件安全域组成。可信 bootstrap factory 只能通过内核签发新的动态 workflow scope，scope 内 orchestrator 只能委派本域角色；敏感对象访问必须同时命中 capability、active scope 和精确 owner。跨 Agent 消息默认拒绝，只有同 scope 且命中 stable control id 入站路由后才能投递；`MESSAGE_SEND` 不授予等待控制权，等待取消还必须具备独立 `WAIT_CANCEL` capability 并命中直接 controller 关系。公共 `agent_wake()` 只能发送普通消息，系统事件由专用内核路径产生；调度器允许 orchestrator 配置域内软策略，但 Agent burst 和评分逃生边界也只在域内生效，外层资源域轮转不可配置。完整威胁模型、实现位置、自定义 Agent 注册步骤和专项测试入口见 [安全加固与资源韧性设计](docs/agentos/security-hardening.md)。
+Agent 专属安全链由构建期可信映像清单、loader 映像绑定、bootstrap/role grant、capability 和 VFS 文件安全域组成。可信 bootstrap factory 只能通过内核签发新的动态 workflow scope，scope 内 orchestrator 只能委派本域角色；敏感对象访问必须同时命中 capability、active scope 和精确 owner。workflow 的关闭权不由 PID、父子关系、角色名或 `ORCHESTRATE` capability 推导，而是由创建发布前写入生命周期账本的根 `agent_control_id` 精确绑定；低权限 Agent 和后创建的 Orchestrator 都不能关闭或继续钉住该 scope。跨 Agent 消息默认拒绝，只有同 scope 且命中 stable control id 入站路由后才能投递；`MESSAGE_SEND` 不授予等待控制权，等待取消还必须具备独立 `WAIT_CANCEL` capability 并命中直接 controller 关系。公共 `agent_wake()` 只能发送普通消息，系统事件由专用内核路径产生；调度器允许 orchestrator 配置域内软策略，但 Agent burst 和评分逃生边界也只在域内生效，外层资源域轮转不可配置。完整威胁模型、实现位置、自定义 Agent 注册步骤和专项测试入口见 [安全加固与资源韧性设计](docs/agentos/security-hardening.md)。
 
 ### 4.3 模块组合后的运行路径
 
@@ -385,13 +388,13 @@ AgentOS 专项测试程序如下：
 | `agentsecurity_ucore` | 普通进程拒绝、低权限 Agent 伪造拒绝、私有 metadata 后端保护、scoped action/artifact。 | `agentsecurity_ucore: parent passed` |
 | `agenttrust_ucore` | 可信映像、不可变代码、bootstrap 授权范围和 role-image 绑定。 | `agenttrust_ucore: parent passed` |
 | `agentvfs_ucore` | public/workflow 文件安全域、能力读写、继承 fd 重新校验和普通命名空间兼容。 | `agentvfs_ucore: parent passed` |
-| `agentscope_ucore` | 动态 workflow scope、跨域对象/IPC 隔离、事务门、持久微写合并、volatile 分流、满表扫描限流与跨域查询时限、配额、一次性 fd 委派和生命周期回收。 | `agentscope_ucore: parent passed` |
+| `agentscope_ucore` | 动态 workflow scope、跨域对象/IPC 隔离、事务门、持久微写合并、volatile 分流、观测双索引与预算化查询、配额、线程私有一次性 fd 委派，以及根退出/factory 关闭触发的强制撤销和生命周期回收。 | `scope_close_authority=1`、`scope_controller_exit_revoke=1`、`scope_forced_cleanup=1`、`scope_replacement_admitted=1`、`agentscope_ucore: parent passed` |
 | `iobudget_ucore` | PUBLIC 速率/缓存压力、稳定 owner 归因、两级 lease 上界、线程退出 lease 回收、scheduler 内核态中断交付、fault/异常退出清理归因与 debt 结算、workflow cache floor、CONTROL 保留预算和跨域有界进展。 | 最终 teardown 修复后的独立轮输出八项机制标记与 `parent passed`，`elapsed=2.4s`；完整轮本项 `2.1s` |
 | `usersafety_ucore` | syscall 坏地址、超长参数和对象私有等待队列。 | `usersafety_ucore: parent passed` |
-| `syscallfair_ucore` | 纯 Guest 公平性契约，覆盖控制台、inode 大写入、截断的 last-syscall 重调度计数、observer 与 worker 完整退出。 | 当前源码 `make syscall-fairness-test` 已通过 |
+| `syscallfair_ucore` | 纯 Guest 公平性契约，覆盖控制台、inode 大写入、截断的 last-syscall 重调度计数、observer 与 worker 完整退出。 | 历史独立轮 `make syscall-fairness-test` 已通过；本轮审查后未重跑 |
 | `threadresource_ucore` | 普通/保留域上限与复用、容量拒绝计数稳定、普通/保留全局水位与复用、系统保留进展和跨域调度公平。 | `make thread-resource-test` 输出 12 项机制标记、`parent passed` 和 `[thread-resource] all checks passed` |
 
-当前依赖按需解析改动后已以 `CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 完成 16/16，整条命令墙钟约 `315.1s`；其中 `agentfs_ucore`、`agentscan_ucore`、`agentscope_ucore` 分别约为 `81.9s`、`10.0s`、`142.0s`。默认构建及构建期栈预算同时通过，AgentOS 为 `13840 < 16384`。此前线程资源、双目标进程回收、syscall 公平性和 filepool 资源脚本的通过结果继续保留为历史证据；这些结果仍不等同于尚未运行的 `make full-verify`。
+Workflow 强制撤销实现快照已以 `CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 完成 16/16，整条命令墙钟约 `371.5s`，其中 `agentscope_ucore` 约 `127.9s`。根据子代理审查补入 EOF 防伪、跨越 8 槽生命周期上限的 9 轮回收、低权限成员持有资源和非规范 64 位 scope id 用例后，又完成最终 `agentscope_ucore` 专项复测，耗时约 `126.1s`。默认构建和构建期栈预算同时通过，AgentOS 为 `13824 < 16384`；审查后未再次运行完整 16 项或 `make full-verify`。
 
 ### 6.2 双目标对照负载
 

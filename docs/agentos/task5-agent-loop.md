@@ -309,6 +309,8 @@ agentsched_ucore: reason_trace=1 records=... reason=... score=...
 
 `agent_audit_snapshot()` 面向本 scope orchestrator。物理 512 槽按 4 scope 各保证128；每 scope low/high 各64。遥测总是 low，low principal 上限16；内核确认的特权状态效果才是 high，high 每 active principal 保证8。high 满时只自滚当前 principal 或回收 inactive principal，active principal 互不淘汰；非活跃历史允许有界滚动并进入 `dropped_records`。每 scope 独立维护逻辑 hash 链，系统 sequence 可因其他 scope 和分区滚动而稀疏；只对没有 gap 的相邻可见记录检查直接 hash 邻接。
 
+上述 audit/span/timeline/provenance 查询不以 `max=0` 或过滤结果为空为由跳过计费。scope-local 双有序索引消除全局重扫，单遍 scan 或 timeline 四路归并按每 16 个候选预付 kernel-work；让出后重新读取来源边界并补足增长差额，因此低权限 Agent 不能用计数查询在一个 syscall 内绕过资源域调度。
+
 ## 文件状态事件
 
 任务四和任务五的结合点是 `agent_file_meta_set()`：
@@ -387,7 +389,7 @@ Context v6 还会把事件和后续工具调用连起来，并继续维护 Conte
 | `agentsched_ucore` | 角色权重、orchestrator 调度配置、事件优先、原因记录和公平性计数均写入调度记录；普通进程在持续可运行高分 Agent 下先取得进展，并输出 `normal_progress=1 max_agent_burst=8`。 |
 | `threadresource_ucore` | 以 19/12/6/6/4 tiny policy 验证普通/保留域上限与复用、容量拒绝计数稳定、线程/进程退出退款、普通/保留全局水位与复用、系统保留进展和 active-domain 公平轮转；输出 12 项机制标记及 `parent passed`。 |
 | `agentsecurity_ucore` | 用户态 `agent_wake()` 只允许 MESSAGE；普通进程、保留系统事件和非法类型均被拒绝。`route_source_enforced=1`、`route_target_isolated=1`、`ipc_route_authorization=1`、`message_route_lifecycle=1`、`target_route_consent=1` 和 `route_slot_reclaimed=1` 验证未授权拒绝、控制者 grant/revoke、新 control id 隔离、target 自主接受 LLM_DONE、LLM-only route 拒绝 MESSAGE，以及超过 16 个短命 source 后路由槽可回收。 |
-| `agentscope_ucore` | `ipc_scope_isolation=1`、`audit_event_scope_isolation=1`、`same_scope_collaboration=1` 和 `parent passed` 已在 2026-07-22 完整 Agent QEMU 回归中通过。 |
+| `agentscope_ucore` | 除 IPC/audit/协作和观测预算标记外，最终专项还输出 `scope_close_authority=1`、`scope_controller_exit_revoke=1`、`scope_forced_cleanup=1`、`scope_replacement_admitted=1` 和 `parent passed`，验证根离开会撤销阻塞 Agent 的 event wait 并完整回收 scope。 |
 | `usersafety_ucore` | 无关睡眠者不会被同步对象的定向唤醒破坏，syscall 返回后内核继续存活。 |
 | `procreap_ucore` / `procreap_agent_ucore` | 阻塞线程退出会从等待队列安全取消；高分 Agent 持续可运行时，退出清理和普通任务仍得到有界调度。 |
 | `labdemo_ucore` | orchestrator 在同一 workflow 建立路由后，scope audit、timeline 和 provenance 保持同一条示例链路。 |

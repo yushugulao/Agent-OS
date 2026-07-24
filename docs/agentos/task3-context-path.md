@@ -165,6 +165,8 @@ Context v6 会把工具调用、手动记录和事件消费串成轻量因果链
 
 每 scope 的 `prev_hash/record_hash/ledger_hash` 构成逻辑链，系统 `sequence` 则跨 scope 单调。因此当前可见记录可因其他 scope 写入和分区滚动而跳号，且某条记录的前驱可能已在窗口外。`agent_ledger_snapshot()` 返回 `total_records`、`visible_records` 和 `dropped_records=total-visible`；只对实际连续的可见记录检查直接 hash 邻接，合法 gap 不等同于损坏。`agent_audit_query()` 只能在 scope/owner 裁剪后的集合中继续过滤。
 
+观测接口本身也纳入公平边界。每个 scope 同时维护按 sequence 和按 `(tick, sequence)` 排列的 128 槽索引，audit/span/provenance 使用单遍读取，timeline 对四个已排序来源做四路归并；包括 `max=0` 计数在内，每检查 16 个候选就预付 kernel-work，发生预算让出后重新读取可见边界并补足增长差额。`agentscope_ucore` 用 `observe_query_bounded`、`observe_index_ordered` 和 `observe_cross_scope_progress` 验证让出证据、顺序/隔离及另一 scope 的实际进展。
+
 本组接口的检查点如下。原始输出统一见 [test-record.md](test-record.md)。
 
 | 接口 | 检查点 |
