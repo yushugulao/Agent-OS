@@ -669,6 +669,8 @@ bash scripts/run-agent-tests.sh
 13. 同 scope 多进程共享 workflow 存储计费并受同一 scope limit；从该 workflow 明确降级出的普通子进程改用安装级 PUBLIC principal，不能继续借用短命进程资源域作为磁盘身份。其他 admitted/future scope 的数值保证另由共享 policy 单测、mkfs 初始 `S+4G` 契约、挂载 `4G` 复核和原子 admission 检查覆盖。
 14. 同时占用4个 workflow admission 后第5个创建失败；释放一个后可创建替代 scope。最后成员退出触发 retirement，回收 metadata/action/lease/audit/prefetch/IPC 等表后槽可复用。
 15. `agentvfs_ucore` 对 `agent_worker_create()` 独立验证无票据拒绝、一次显式授权成功和消费后再次拒绝，防止 worker/pending-exec 分支偏离统一安全主体机制。
+16. A 创建低权限 Sentinel，填满 Context 后持续执行 span、audit-only timeline 和 provenance 查询。每轮检查返回记录保持 sequence/timeline 顺序，且全部满足当前 scope 与可信 span 的可见性边界；查询后通过 `kernel_work_last_preemptions()` 确认可扩展扫描实际进入既有调度预算。
+17. Sentinel 保持压力期间，父进程经 scope B 的命令/回复通道驱动本域查询并等待完整回复，再停止并回收 scope A 压力子进程。该父侧端到端流程同时证明另一 workflow 能持续前进、控制通道没有跨 scope 混淆，且压力结束后资源可正常回收。
 
 预期回归标记包括：
 
@@ -684,6 +686,9 @@ agentscope_ucore: metadata_cross_scope_progress=1 queries=32 latency_ms=<at-most
 agentscope_ucore: metadata_final_consistency=1
 agentscope_ucore: metadata_volatile_no_writeback=1 writes=32
 agentscope_ucore: metadata_scan_pressure_bounded=1
+agentscope_ucore: observe_query_bounded=1 ...
+agentscope_ucore: observe_index_ordered=1
+agentscope_ucore: observe_cross_scope_progress=1 ...
 agentscope_ucore: action_scope_isolation=1
 agentscope_ucore: audit_event_scope_isolation=1
 agentscope_ucore: lease_scope_isolation=1
@@ -693,7 +698,7 @@ agentscope_ucore: lifecycle_reclamation=1
 agentscope_ucore: parent passed
 ```
 
-以上大部分 scope 标记最早已出现在 2026-07-22 的旧 15 项 Agent QEMU 回归中；pipe 票据隔离断言为本轮新增。2026-07-24 的 pipe 安全主体委派改动后完整 16 项脚本通过该程序，输出 `metadata_txn_contentions=3`、`metadata_cross_scope_progress=1 queries=32 latency_ms=684`、最终一致性、`lifecycle_reclamation=1` 和 `parent passed`，`elapsed=139.9s`。`NPROC` 身份账本只复用未使用记录，active 最多 4 个且 active + retiring 不超过 8；FS reclaim cursor 最多 8 个，reaper 在 `NPROC` 账本范围轮转选择 retiring scope，因而新 workflow 不会覆盖旧退役状态或遗失其 I/O owner。
+以上大部分 scope 标记最早已出现在 2026-07-22 的旧 15 项 Agent QEMU 回归中。本次观测查询修复后的完整 Agent 16/16 通过，墙钟约 338.4s；`agentscope_ucore` 输出 `observe_query_bounded=1 context=128 loops=12 preemptions=64`、`observe_index_ordered=1`、`observe_cross_scope_progress=1 queries=32 latency_ms=3`、`parent passed`，约 128.1s。该回归按“查询后调度证据、结果顺序与隔离、跨 scope 父侧端到端进展”验收，不依赖新增公共 telemetry ABI。`NPROC` 身份账本只复用未使用记录，active 最多 4 个且 active + retiring 不超过 8；FS reclaim cursor 最多 8 个，reaper 在 `NPROC` 账本范围轮转选择 retiring scope，因而新 workflow 不会覆盖旧退役状态或遗失其 I/O owner。
 
 ## 19. syscall 内核工作预算复测
 

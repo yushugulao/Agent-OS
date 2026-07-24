@@ -21,6 +21,8 @@
 #define META_CROSS_QUERY_MAX_MS 5000
 #define META_SCAN_MIN_REST_TICKS 20
 #define META_WRITEBACK_WAIT_ROUNDS 800
+#define OBSERVE_CROSS_QUERY_ROUNDS 32
+#define OBSERVE_CROSS_QUERY_MAX_MS 15000
 
 struct scope_command {
 	int operation;
@@ -35,6 +37,14 @@ struct scope_reply {
 	uint64 value1;
 };
 
+struct observe_pressure_result {
+	uint64 iterations;
+	uint64 preemptions;
+	uint64 context_records;
+	uint64 span_records;
+	uint64 timeline_records;
+};
+
 static struct agent_audit_record scope_audit_records[AGENT_AUDIT_MAX_RECORDS];
 static struct agent_file_query_result scope_query_result;
 static struct agent_file_query_result meta_race_result;
@@ -43,8 +53,26 @@ static struct agent_info scope_writeback_before;
 static struct agent_info scope_writeback_after;
 static struct agent_info volatile_writeback_before;
 static struct agent_info volatile_writeback_after;
+static struct agent_context_record observe_context_scratch;
+static struct agent_timeline_filter observe_filter_scratch;
+static struct agent_audit_record
+	observe_span_scratch[AGENT_AUDIT_MAX_RECORDS];
+static struct agent_timeline_record
+	observe_timeline_scratch[AGENT_AUDIT_MAX_RECORDS];
+static struct observe_pressure_result observe_result_scratch;
+static struct scope_reply observe_start_reply;
+static struct scope_reply observe_progress_reply;
+static struct scope_reply observe_join_reply;
 static struct agent_file_hit scope_before_reload;
 static volatile int metadata_writer_stop;
+static volatile int observe_query_stop;
+static int observe_ready_pipe[2] = {-1, -1};
+static int observe_stop_pipe[2] = {-1, -1};
+static int observe_result_pipe[2] = {-1, -1};
+static int observe_child_pid = -1;
+static int observe_child_status;
+static char observe_ready_signal;
+static char observe_stop_signal;
 
 static void check(int ok, const char *message)
 {
@@ -238,6 +266,191 @@ static int metadata_cross_scope_queries(const char *summary)
 		completed++;
 		check(sched_yield() == 0, "yield during cross-scope query probe");
 	}
+	return completed;
+}
+
+static void observe_query_stop_listener(void *arg)
+{
+	char signal;
+	int fd = (int)(long)arg;
+
+	read_exact(fd, &signal, sizeof(signal), "observation query stop signal");
+	__sync_synchronize();
+	observe_query_stop = 1;
+	exit(0);
+}
+
+static void fill_observe_context(void)
+{
+	for (uint64 i = 0; i < AGENT_CONTEXT_MAX_RECORDS; i++) {
+		memset(&observe_context_scratch, 0,
+		       sizeof(observe_context_scratch));
+		observe_context_scratch.tool_id = AGENT_TOOL_CONTEXT_PUSH;
+		observe_context_scratch.request_id = 88000 + i;
+		observe_context_scratch.status = AGENT_STATUS_OK;
+		strcpy(observe_context_scratch.payload, "observe-pressure");
+		strcpy(observe_context_scratch.result, "recorded");
+		check(context_push(&observe_context_scratch) == AGENT_STATUS_OK,
+		      "fill observation context");
+	}
+}
+
+static uint64 require_observe_query_preemption(const char *message)
+{
+	long preemptions;
+
+	preemptions = kernel_work_last_preemptions();
+	check(preemptions > 0, message);
+	return (uint64)preemptions;
+}
+
+static uint64 check_observe_ordered_indexes(void)
+{
+	uint64 preemptions = 0;
+	uint64 span_id;
+	int count;
+	int copied;
+
+	count = agent_span_trace_snapshot(0, 0);
+	check(count > 0 && count <= AGENT_AUDIT_MAX_RECORDS,
+	      "count bounded span trace");
+	preemptions += require_observe_query_preemption(
+		"span count query reaches fairness checkpoint");
+	memset(observe_span_scratch, 0, sizeof(observe_span_scratch));
+	copied = agent_span_trace_snapshot(observe_span_scratch,
+					  AGENT_AUDIT_MAX_RECORDS);
+	check(copied > 0 && copied <= AGENT_AUDIT_MAX_RECORDS,
+	      "copy bounded span trace");
+	preemptions += require_observe_query_preemption(
+		"span copy query reaches fairness checkpoint");
+	span_id = observe_span_scratch[0].span_id;
+	check(span_id != 0, "span trace has kernel-issued span");
+	for (int i = 0; i < copied; i++) {
+		check(observe_span_scratch[i].span_id == span_id,
+		      "span trace excludes foreign span");
+		if (i > 0)
+			check(observe_span_scratch[i].sequence >
+				      observe_span_scratch[i - 1].sequence,
+			      "span trace sequence is monotonic");
+	}
+	observe_result_scratch.span_records = copied;
+
+	count = agent_timeline_query(&observe_filter_scratch, 0, 0);
+	check(count > 0 && count <= AGENT_AUDIT_MAX_RECORDS,
+	      "count bounded audit timeline");
+	preemptions += require_observe_query_preemption(
+		"timeline count query reaches fairness checkpoint");
+	memset(observe_timeline_scratch, 0,
+	       sizeof(observe_timeline_scratch));
+	copied = agent_timeline_query(&observe_filter_scratch,
+				      observe_timeline_scratch,
+				      AGENT_AUDIT_MAX_RECORDS);
+	check(copied > 0 && copied <= AGENT_AUDIT_MAX_RECORDS,
+	      "copy bounded audit timeline");
+	preemptions += require_observe_query_preemption(
+		"timeline copy query reaches fairness checkpoint");
+	for (int i = 0; i < copied; i++) {
+		check(observe_timeline_scratch[i].source ==
+			      AGENT_TIMELINE_SOURCE_AUDIT,
+		      "audit-only timeline excludes other sources");
+		check(observe_timeline_scratch[i].span_id == span_id,
+		      "audit timeline excludes foreign span");
+		if (i > 0) {
+			check(observe_timeline_scratch[i].tick >
+				      observe_timeline_scratch[i - 1].tick ||
+				      (observe_timeline_scratch[i].tick ==
+					       observe_timeline_scratch[i - 1]
+						       .tick &&
+				       observe_timeline_scratch[i].sequence >
+					       observe_timeline_scratch[i - 1]
+						       .sequence),
+			      "audit timeline order is monotonic");
+		}
+		for (int j = 0; j < i; j++)
+			check(observe_timeline_scratch[i].sequence !=
+				      observe_timeline_scratch[j].sequence,
+			      "audit timeline has no duplicate sequence");
+	}
+	observe_result_scratch.timeline_records = copied;
+	return preemptions;
+}
+
+static __attribute__((noinline)) void
+observe_query_pressure(int ready_fd, int stop_fd, int result_fd)
+{
+	char ready = 1;
+	int stop_tid;
+
+	memset(&observe_result_scratch, 0, sizeof(observe_result_scratch));
+	fill_observe_context();
+	observe_result_scratch.context_records = AGENT_CONTEXT_MAX_RECORDS;
+	observe_query_stop = 0;
+	stop_tid = thread_create(observe_query_stop_listener,
+				 (void *)(long)stop_fd);
+	check(stop_tid > 0, "create observation query stop listener");
+	memset(&observe_filter_scratch, 0, sizeof(observe_filter_scratch));
+	observe_filter_scratch.flags = AGENT_TIMELINE_FILTER_SOURCE_MASK;
+	observe_filter_scratch.source_mask =
+		AGENT_TIMELINE_SOURCE_MASK_AUDIT;
+	observe_result_scratch.preemptions +=
+		check_observe_ordered_indexes();
+	while (!observe_query_stop || observe_result_scratch.iterations == 0) {
+		check(agent_span_trace_snapshot(0, 0) >= 0,
+		      "count span trace under pressure");
+		observe_result_scratch.preemptions +=
+			require_observe_query_preemption(
+				"span pressure query reaches fairness checkpoint");
+
+		check(agent_timeline_query(&observe_filter_scratch, 0, 0) >= 0,
+		      "count audit timeline under pressure");
+		observe_result_scratch.preemptions +=
+			require_observe_query_preemption(
+				"timeline pressure query reaches fairness checkpoint");
+
+		check(agent_provenance_snapshot(0, 0) >= 0,
+		      "count provenance under pressure");
+		observe_result_scratch.preemptions +=
+			require_observe_query_preemption(
+				"provenance pressure query reaches fairness checkpoint");
+		observe_result_scratch.iterations++;
+		if (observe_result_scratch.iterations == 1) {
+			check(observe_result_scratch.preemptions > 0,
+			      "observation query pressure reaches fairness checkpoints");
+			write_exact(ready_fd, &ready, sizeof(ready),
+				    "observation query pressure ready");
+		}
+	}
+	check(observe_result_scratch.preemptions > 0,
+	      "observation query pressure reaches fairness checkpoints");
+	check(waittid(stop_tid) >= 0,
+	      "join observation query stop listener");
+	write_exact(result_fd, &observe_result_scratch,
+		    sizeof(observe_result_scratch),
+		    "send observation query pressure result");
+	check(close(ready_fd) == 0 && close(stop_fd) == 0 &&
+		      close(result_fd) == 0,
+	      "close observation query pressure controls");
+	exit(0);
+}
+
+static int observe_cross_scope_queries(void)
+{
+	uint64 preemptions = 0;
+	int completed = 0;
+
+	for (int i = 0; i < OBSERVE_CROSS_QUERY_ROUNDS; i++) {
+		long last_preemptions;
+
+		check(agent_audit_query(0, 0, 0) >= 0,
+		      "cross-scope observation query");
+		last_preemptions = kernel_work_last_preemptions();
+		check(last_preemptions >= 0,
+		      "read cross-scope audit query preemptions");
+		preemptions += (uint64)last_preemptions;
+		completed++;
+	}
+	check(preemptions > 0,
+	      "cross-scope audit queries reach fairness checkpoints");
 	return completed;
 }
 
@@ -989,6 +1202,99 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 			      "coalesced metadata survives forced reload");
 			value0 = requests;
 			value1 = commits;
+		} else if (command.operation == 'O') {
+			check(identity == 'A' && observe_child_pid < 0,
+			      "observation query pressure owner");
+			check(pipe(observe_ready_pipe) == 0 &&
+				      pipe(observe_stop_pipe) == 0 &&
+				      pipe(observe_result_pipe) == 0,
+			      "create observation query controls");
+			check(agent_scope_delegate_fd(observe_ready_pipe[1]) ==
+				      AGENT_STATUS_OK &&
+				      agent_scope_delegate_fd(observe_stop_pipe[0]) ==
+					      AGENT_STATUS_OK &&
+				      agent_scope_delegate_fd(observe_result_pipe[1]) ==
+					      AGENT_STATUS_OK,
+			      "delegate observation query controls");
+			observe_child_pid =
+				agent_create_role(AGENT_ROLE_SENTINEL);
+			check(observe_child_pid >= 0,
+			      "create low-privilege observation query pressure");
+			if (observe_child_pid == 0) {
+				check(close(observe_ready_pipe[0]) < 0 &&
+					      close(observe_stop_pipe[1]) < 0 &&
+					      close(observe_result_pipe[0]) < 0,
+				      "unused observation controls not inherited");
+				observe_query_pressure(observe_ready_pipe[1],
+						       observe_stop_pipe[0],
+						       observe_result_pipe[1]);
+			}
+			check(close(observe_ready_pipe[1]) == 0 &&
+				      close(observe_stop_pipe[0]) == 0 &&
+				      close(observe_result_pipe[1]) == 0,
+			      "close parent observation controls");
+			read_exact(observe_ready_pipe[0],
+				   &observe_ready_signal,
+				   sizeof(observe_ready_signal),
+				   "observation query live barrier");
+			check(close(observe_ready_pipe[0]) == 0,
+			      "close observation query ready control");
+			observe_ready_pipe[0] = observe_ready_pipe[1] = -1;
+			check(agent_audit_query(0, 0, 0) >= 0,
+			      "orchestrator audit count query");
+			value1 = require_observe_query_preemption(
+				"orchestrator audit query reaches fairness checkpoint");
+			value0 = observe_child_pid;
+		} else if (command.operation == 'G') {
+			int64 started;
+			int64 elapsed;
+
+			check(identity == 'B',
+			      "cross-scope observation query owner");
+			started = get_mtime();
+			value0 = observe_cross_scope_queries();
+			elapsed = get_mtime() - started;
+			check(elapsed >= 0 &&
+				      elapsed <= OBSERVE_CROSS_QUERY_MAX_MS,
+			      "cross-scope observation query latency bound");
+			value1 = elapsed;
+		} else if (command.operation == 'K') {
+			check(identity == 'A' && observe_child_pid > 0,
+			      "observation query pressure join owner");
+			observe_stop_signal = 1;
+			write_exact(observe_stop_pipe[1],
+				    &observe_stop_signal,
+				    sizeof(observe_stop_signal),
+				    "stop observation query pressure");
+			check(close(observe_stop_pipe[1]) == 0,
+			      "close observation query stop control");
+			observe_stop_pipe[0] = observe_stop_pipe[1] = -1;
+			memset(&observe_result_scratch, 0,
+			       sizeof(observe_result_scratch));
+			read_exact(observe_result_pipe[0],
+				   &observe_result_scratch,
+				   sizeof(observe_result_scratch),
+				   "receive observation query pressure result");
+			check(close(observe_result_pipe[0]) == 0,
+			      "close observation query result control");
+			observe_result_pipe[0] = observe_result_pipe[1] = -1;
+			observe_child_status = -1;
+			check(waitpid(observe_child_pid,
+				      &observe_child_status) ==
+				      observe_child_pid,
+			      "wait low-privilege observation query pressure");
+			check(observe_child_status == 0,
+			      "low-privilege observation query status");
+			check(observe_result_scratch.iterations > 0 &&
+				      observe_result_scratch.preemptions > 0 &&
+				      observe_result_scratch.context_records ==
+					      AGENT_CONTEXT_MAX_RECORDS &&
+				      observe_result_scratch.span_records > 0 &&
+				      observe_result_scratch.timeline_records > 0,
+			      "observation query pressure result");
+			observe_child_pid = -1;
+			value0 = observe_result_scratch.iterations;
+			value1 = observe_result_scratch.preemptions;
 		} else if (command.operation == 'W') {
 			check(identity == 'B', "scoped watcher owner");
 			check(agent_watch(AGENT_EVENT_JOB_DONE,
@@ -1172,6 +1478,8 @@ int main(void)
 	int pid_a;
 	int pid_b;
 	int status = 0;
+	int64 observe_progress_started;
+	int64 observe_progress_elapsed;
 
 	printf("agentscope_ucore: workflow scope isolation test\n");
 	check(pipe(a_command) == 0 && pipe(a_reply) == 0,
@@ -1259,6 +1567,34 @@ int main(void)
 	printf("agentscope_ucore: metadata_volatile_no_writeback=1 writes=%d\n",
 	       META_VOLATILE_WRITE_FLOOD);
 	printf("agentscope_ucore: metadata_scan_pressure_bounded=1\n");
+
+	observe_start_reply = run_command(a_command[1], a_reply[0], 'O', 0, 0,
+					  ready_a.scope_id,
+					  "start bounded observation query pressure");
+	check(observe_start_reply.value0 > 0 && observe_start_reply.value1 > 0,
+	      "scope A observation query pressure starts");
+	observe_progress_started = get_mtime();
+	observe_progress_reply = run_command(
+		b_command[1], b_reply[0], 'G', 0, 0, ready_b.scope_id,
+		"scope B progresses during observation queries");
+	observe_progress_elapsed = get_mtime() - observe_progress_started;
+	check(observe_progress_reply.value0 == OBSERVE_CROSS_QUERY_ROUNDS &&
+		      observe_progress_elapsed >= 0 &&
+		      observe_progress_elapsed <=
+			      OBSERVE_CROSS_QUERY_MAX_MS,
+	      "scope B observation queries progress during scope A pressure");
+	observe_join_reply = run_command(a_command[1], a_reply[0], 'K', 0, 0,
+					 ready_a.scope_id,
+					 "join bounded observation query pressure");
+	check(observe_join_reply.value0 > 0 && observe_join_reply.value1 > 0,
+	      "bounded observation query pressure completes");
+	printf("agentscope_ucore: observe_query_bounded=1 context=%d loops=%d preemptions=%d\n",
+	       AGENT_CONTEXT_MAX_RECORDS, (int)observe_join_reply.value0,
+	       (int)observe_join_reply.value1);
+	printf("agentscope_ucore: observe_index_ordered=1\n");
+	printf("agentscope_ucore: observe_cross_scope_progress=1 queries=%d latency_ms=%d\n",
+	       (int)observe_progress_reply.value0,
+	       (int)observe_progress_elapsed);
 
 	run_command(b_command[1], b_reply[0], 'W', 0, 0, ready_b.scope_id,
 		    "scope B installs watcher");

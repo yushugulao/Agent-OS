@@ -25,6 +25,7 @@
 6. **策略保持可配置，硬性约束不可绕过。** orchestrator 可以调整 Agent 域内调度权重等策略，但不能关闭资源域轮转、普通进程的有限等待保证、可信映像校验或 VFS 能力检查。
 7. **高频局部变化不能同步放大全局维护。** 数据路径只发布可立即查询的局部状态，昂贵的全局 checkpoint 由分域待办、固定合并窗口和后台频率上界统一调度。
 8. **设备服务和缓存也服从稳定 owner。** 块 I/O 以持久主体/workflow 而不是 PID 归因，前台、控制和后台预算分离；cache floor、cap 和 retirement 使用同一 owner 生命周期，系统关键工作保留独立份额。
+9. **观测查询也必须计费。** 计数查询和不复制结果的查询不能成为绕过调度预算的旁路；所有被检查的来源记录都按固定批次预付内核工作预算，可扩展集合通过有序索引或单遍归并读取。
 
 ## 3. 修复与机制总览
 
@@ -55,6 +56,7 @@
 | metadata 合并写回修复 | 低权限 Agent 的微小文件写入同步放大全局 metadata 持久化并阻断其他 workflow | inode sidecar 即时发布、scope-local dirty/durable 代数、固定非滑动合并窗口、分块 COW bank 状态机和 scope-local 缓存失效共同解耦数据路径与 bank 提交；scanner 保留独立自适应 cooldown | `agentscope_ucore` 已验证至少 128 次单字节写只形成有界批次、另一 scope 完成 32 次查询，并在强制重载后保持最终一致 |
 | I/O 分域修复 | 块设备队列和全局 buffer cache 没有持久主体/workflow 公平边界；内核态 yield loop 可长期屏蔽 timer/device 中断，fault 退出还可在 `freethread()` 前后丢失清理 I/O 账本 | 稳定 owner/class 的 lease/token/debt、排队 shared grant 轮转、普通流量设备根限速、SYSTEM/CONTROL 带债前进、每轮 scheduler idle kerneltrap 中断窗口、terminal cleanup I/O/kernel-work 上下文、按 sponsor 设置的 cache floor/cap 与 exclusive holder；FS atomic/quiescent checkpoint、grouped qmap claim、FIFO metadata submit lane 把跨预算生命周期纳入统一机制 | 最终修复后的独立 `iobudget_ucore` 输出八项具名机制标记和 `parent passed`，`elapsed=2.4s`；当前 pipe 安全主体委派改动后的完整 Agent 脚本也以约 `359.4s` 通过 16/16；`make fs-enospc-test` 的既有 75.1s 历史轮通过，设备错误、短 I/O、metadata COW 和 grouped claim 中点掉电仍缺动态注入 |
 | 本次线程修复 | 线程未计入资源域，PUBLIC 进程可用 thread bomb 扩大 CPU 竞争份额并耗尽线程槽 | admission 原子预扣主线程；额外线程按不可变资源域和 ordinary/reserved 类别计费，受域上限、普通全局水位和系统保留量约束；每类域上限必须严格小于对应全局水位；创建失败与退出统一退款；调度器先严格轮转 active 域，再执行域内 FIFO/Agent 软评分 | 本次改动后 `make thread-resource-test` 以 19/12/6/6/4 tiny policy 验证 12 项边界并通过；完整 Agent 16/16、默认构建、单独 `agentsched_ucore`、双目标进程回收/syscall 公平性/filepool 脚本也通过，`full-verify` 尚未运行 |
+| 本次观测查询修复 | audit/span/timeline/provenance 的计数和过滤路径反复扫描全局 512 槽，低权限 Agent 可在一次 syscall 内制造超线性 CPU 工作并绕过域级公平 | 每 workflow audit scope 维护 sequence 与 `(tick, sequence)` 两个 128 槽有序索引，淘汰统一执行 unlink/publish；ledger 窗口摘要直接读取索引状态；四类观测查询按单遍或四路归并读取，并在扫描前分量子预付、让出后重计和补足 kernel-work 预算 | 完整 Agent 16/16 通过；`agentscope_ucore` 验证索引顺序、低权限查询调度证据和跨 scope 进展，压力循环 12 次、查询内让出 64 次，另一 scope 的 32 次查询在 3ms 内完成 |
 
 ## 4. 用户输入与内核对象检查
 
@@ -205,6 +207,8 @@ scope 最后成员退出后先进入 retiring，禁止新对象/存储 admission
 
 公开 `span_id` 和 `cause_sequence` 是呈现字段，不是权限票据。内核为每个 Context/event 保存私有 span owner、source control 和 source pid；`context_push()` 要求用户输入的 cause/span 都为0，再由内核连接当前链。每 scope 独立维护 ledger hash，但 sequence 在系统中单调递增，因此当前窗口允许因跨 scope 写入、low/high 滚动和 principal 滚动而稀疏。`dropped_records=total-visible` 解释窗口外前驱，不能要求所有相邻可见 sequence 都直接 hash 相连。
 
+每个 scope 同时维护按 `sequence` 和按 `(tick, sequence)` 排列的两个 128 槽索引。新记录发布和旧槽淘汰都通过统一 unlink/publish 路径更新两份索引，ledger 的 `visible/oldest/latest` 因而可在 O(1) 时间得到，无需重扫物理 512 槽。audit/span/provenance 沿 sequence 索引单遍扫描，timeline 对 Context、sched、audit 和 prefetch 四个有序来源做四路归并，不再为每条输出重新选择全表最小项。需要扫描的计数查询按候选扫描上界计费；每 16 条换算一批预算，单次 checkpoint 不超过一个工作量子，并在每次让出后重计来源、补足增长差额。所有预算让出都发生在读取开始前，因此 timeline wait 不会在“扫描未命中”和“登记等待者”之间新增丢唤醒窗口。实现不增加公共查询 ABI，也不向低权限调用者暴露其他 scope 的观测负载。
+
 ## 7. 文件安全域
 
 VFS 使用 PUBLIC=0、SYSTEM=1 和多个动态 workflow>=3，而不是一个所有 Agent 共享的 workflow 域；数值 2 保留为稳定 PUBLIC 存储 principal。进程凭据由可执行映像 profile、Agent role capability、kernel-issued scope 和受控 exec 委派共同得到。文件资源以 `scope + dev + inum + incarnation` 标识；同名文件和复用 inode 均不会继承另一 scope/生命期的 metadata、租约或缓存。`open/read/write/truncate/unlink` 等真实数据路径同时检查 inode scope 和当前有效能力，因此普通 syscall、预先打开的 fd 或相同 capability 不能跨 workflow。
@@ -275,7 +279,7 @@ make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-`scripts/run-agent-tests.sh` 当前在既有 15 个程序之外加入 `iobudget_ucore`，并继续包含 `agentscope_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore` 和 `usersafety_ucore` 等专项程序。当前 pipe 安全主体委派改动已通过完整回归；`agentfs_ucore` 输出 `metadata_action_bounded=1 field_driven=1 batched=1 preemptions=5`、`prefetch_hints=1 bounded=1 ... preemptions=8` 和 `handoff_target_exit=1 endpoint_reuse=1 preemptions=6 ... clean=1`，`labdemo_ucore` 仍输出完整恢复流程，AgentOS 栈预算为 `13856 < 16384`。完整 16/16 墙钟约 `359.4s`，`agentscope_ucore` 输出 `metadata_cross_scope_progress=1 queries=32 latency_ms=684` 并在约 `139.9s` 完成。此前 tiny policy 线程资源、双目标进程回收、syscall 公平性和 filepool 资源脚本的通过结果继续按历史轮保留。`full-verify` 尚未运行；更早的 ENOSPC 结果也继续按历史轮记录。
+`scripts/run-agent-tests.sh` 当前在既有 15 个程序之外加入 `iobudget_ucore`，并继续包含 `agentscope_ucore`、`agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore` 和 `usersafety_ucore` 等专项程序。本次观测查询修复后的完整回归通过 16/16，墙钟约 `338.4s`，内核栈预算为 `13824 < 16384`。其中 `agentscope_ucore` 输出 `observe_query_bounded=1 context=128 loops=12 preemptions=64`、`observe_index_ordered=1`、`observe_cross_scope_progress=1 queries=32 latency_ms=3` 和 `parent passed`，该项约 `128.1s`。测试依据是查询后的 kernel-work 调度证据、查询结果顺序与隔离，以及另一 scope 的父侧端到端进展，而不是新增公共计数 ABI。此前 tiny policy 线程资源、双目标进程回收、syscall 公平性和 filepool 资源脚本的通过结果继续按历史轮保留。`full-verify` 尚未运行。
 
 这些专项入口检查的是机制约束。`make dual-platform-run` 继续验证科研平台功能等价和 AgentOS 专属证据，`make full-verify` 串联宿主机、双目标、Agent、进程生命周期、线程资源域、syscall 公平性和全局文件对象表配额检查；ENOSPC 与内核栈预算仍保留为可单独复现的专项入口。
 

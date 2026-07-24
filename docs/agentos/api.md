@@ -644,9 +644,13 @@ Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。可归因外部事件合�
 
 `agent_span_trace_snapshot(records, max)` 返回当前 Agent 所在可信 span 的系统级短记录。它读取共享物理表，但只返回调用者 scope、`current_span_id` 和内核私有 `current_span_owner` 全部匹配的记录；当前 Agent 尚未进入 span 时返回 0。普通进程调用返回 `-1`；缺少 `AUDIT_WRITE` 能力的 Agent 返回 `AGENT_STATUS_DENIED`；`max=0` 返回匹配数量；`max>0` 时按 sequence 顺序复制最多 `max` 条。该接口不接受调用者传入 span id，公开 span 字段也不构成跨 scope 或跨 owner 的查询票据。
 
+该接口按调用者 scope 的 sequence 索引单遍检查，`max=0` 的计数模式不会绕过工作计费。内核在扫描前按每 16 条候选记录换算预算，按不超过一个 `kernel_work` 量子的批次分段预付，并在让出后重计和补足增长差额。该机制不增加公共 ABI，也不公开内部扫描量。
+
 `agent_audit_snapshot(records, max)` 返回调用者 workflow scope 的系统级 Agent 审计短记录。内核物理表固定为 `AGENT_AUDIT_MAX_RECORDS = 512`，按最多 4 个 admitted workflow 划分为每 scope 128 条保证；每个 scope 再独立划分 general/low 64 条和 protected/high 64 条。low 对每个 stable principal 最多保留 16 条；high 按每 scope 8 个保留进程份额均分为每 active principal 8 条。Context、事件入队/消费、调度、预取和用户手动记录等遥测始终进入 low；只有工具或 syscall 成功后由内核确认的特权状态效果才进入 high，用户 flags、公开 span 或委派来的 cause 不能把遥测提升为 protected evidence。high 满时只滚动当前 principal 自己的 8 条，或回收已经退出/inactive principal 的最旧记录，绝不淘汰另一 active principal 的 protected evidence；inactive 历史仍是由 `dropped_records` 明示的有界窗口。低权限主体持续制造遥测也不能占用其他 workflow 的 128 条份额。
 
 每个 scope 维护自己的逻辑 hash 链。物理 `sequence` 仍为系统单调序号，所以同一 scope 可见 sequence 可以因其他 scope 写入而跳号；low/high 与 per-principal 独立滚动还会使当前 128 条窗口缺少早期前驱。每条新记录的 `prev_hash` 指向本 scope 上一条逻辑记录的 hash，即使该前驱已被淘汰。因而只在两条相邻可见记录的 sequence/prev-hash 连续时逐条核验；`dropped_records = total_records - visible_records` 说明窗口外记录数量，sequence/hash 间隙不等同于链损坏。`ledger_hash` 始终是本 scope 最新逻辑记录的 hash。
+
+每个 scope 维护 sequence 与 `(tick, sequence)` 两个 128 槽有序索引。记录覆盖统一先从两份索引 unlink 旧槽，再 publish 新槽；因此 ledger 的 `visible_records`、`oldest_sequence` 和 `latest_sequence` 都可在 O(1) 时间得到，不需要扫描物理 512 槽。需要复制或过滤的审计查询沿 sequence 索引单遍推进。
 
 普通进程调用返回 `-1`；不具备 `ORCHESTRATE` 的 Agent 返回 `AGENT_STATUS_DENIED`；`max=0` 返回本 scope 当前可见记录数；`max>0` 时按 sequence 复制记录。该接口是内存态观测能力，不写磁盘，也不替代完整 `context_detail()`。
 
@@ -664,6 +668,8 @@ Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。可归因外部事件合�
 普通进程调用返回 `-1`。`max=0` 返回当前可见记录总数，不复制记录；`max>0` 时按 tick 输出最多 `max` 条。共享物理审计表中的记录按系统 sequence 排序，导出前先按 scope/owner 裁剪，再按 tick 选择，避免多 Agent 并发记录导致页面时间线乱序。该接口不替代 `context_detail()`，也不保存完整 raw 请求/响应；它面向结果页面和研究平台运行详情。
 
 `agent_timeline_query(filter, records, max)` 在同一组当前可见记录上执行内核侧过滤。`filter=NULL` 表示不过滤，语义等同于 `agent_timeline_snapshot()`。`max=0` 返回匹配数量，不复制记录；`max>0` 时按 tick 复制最多 `max` 条匹配记录。普通进程调用返回 `-1`。过滤只能缩小当前 Agent 已经有权看到的记录集合：普通 Agent 不能通过 filter 读取其他 scope/span 的审计记录，非 orchestrator Agent 也不能把 source mask 设为 audit 后获得整个 scope 的审计。
+
+timeline 将 Context、Sched、Audit 和 Prefetch 四个有序来源按 `(tick, source, sequence)` 四路归并；Audit 来源使用当前 scope 的 `(tick, sequence)` 索引。每个来源记录至多被检查一次，需要过滤扫描的计数查询与复制查询采用相同预算规则。预算让出在扫描开始前完成，`agent_timeline_wait()` 不会因本机制在“确认当前无匹配记录”和“登记等待者”之间新增调度窗口。
 
 `AGENT_TIMELINE_FILTER_AFTER_CURSOR` 用于增量读取。调用者把已经处理过的最后一条 record 的 `tick`、`source` 和 `sequence` 填入 `after_tick`、`after_source` 和 `after_sequence`，内核只返回严格晚于该游标的记录。比较顺序与 timeline 导出顺序一致：先比较 `tick`，同一 tick 下按 `source` 顺序比较，再比较来源内部 `sequence`。它比只使用 `start_tick` 更适合页面刷新，因为同一个 tick 中可能存在多条不同来源记录。
 
@@ -706,6 +712,8 @@ Agent Loop 使用每 Agent 16 槽 FIFO 事件队列。可归因外部事件合�
 | `status` | 匹配状态码 |
 
 `agent_provenance_snapshot(edges, max)` 返回当前 Agent 可见的因果边。`max=0` 返回匹配到的边数量，不复制记录；`max>0` 时复制最多 `max` 条。普通进程调用返回 `-1`。该接口不扩大权限：每个 Agent 都能看到自己的 Context 因果边和本地预取提示边；审计边遵循与 timeline 相同的可见规则，orchestrator 可见本 scope 审计边，其他具备审计能力的 Agent 只可见当前可信 span 内的审计边。跨 Agent cause 的 source pid/control 来自内核 sidecar，不把 source 本地 sequence 误解释为 target 本地 Context。
+
+provenance 对 Context、scope audit 和本地 prefetch 各执行一次有界扫描；被过滤掉的候选仍计入 kernel-work 预算，`max=0` 不形成免计费旁路。
 
 `struct agent_provenance_edge` 字段如下：
 

@@ -31,7 +31,7 @@ make build TOOLPREFIX=riscv64-linux-gnu- LOG=warn INIT_PROC=agentfinal_ucore
 bash scripts/run-agent-tests.sh
 ```
 
-独立专项记录：2026-07-22 的脚本依次运行 15 个 Agent 程序并全部通过；随后增加 `iobudget_ucore`。2026-07-24 完成 pipe 安全主体委派机制后，`CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 从 clean user/kernel 构建开始完成 16/16，整条命令墙钟约 `359.4s`。专项运行要求每个程序在超时前输出 `parent passed`，且日志中不存在未被用例明确声明为预期故障的 `check failed`、`panic`、`unknown syscall`、`bad addr`、`IllegalInstruction` 或 `child_failed`。本轮 16/16 仍不等于尚未运行的 `make full-verify` 全绿。
+独立专项记录：2026-07-22 的脚本依次运行 15 个 Agent 程序并全部通过；随后增加 `iobudget_ucore`。2026-07-24 完成 pipe 安全主体委派机制后的历史轮以 `359.4s` 完成 16/16；本次观测查询修复后，`CASE_TIMEOUT=240s scripts/run-agent-tests.sh` 再次完成 16/16，整条命令墙钟约 `338.4s`。专项运行要求每个程序在超时前输出 `parent passed`，且日志中不存在未被用例明确声明为预期故障的 `check failed`、`panic`、`unknown syscall`、`bad addr`、`IllegalInstruction` 或 `child_failed`。本轮 16/16 仍不等于尚未运行的 `make full-verify` 全绿。
 
 ## 输出提取方式
 
@@ -59,7 +59,7 @@ bash scripts/run-agent-tests.sh
 | `agentbench_ucore` | `batch_agent_run`、`file_index_query`、`timeline_query_prefetch` | 性能主路径和文件索引/Timeline 查询可观测 |
 | `labdemo_ucore` | `type=INCIDENT_CREATED`、`prefetch_handoff=analyze`、`provenance_graph edges=...` | 设定的模拟流程 多 Agent 恢复场景可复现 |
 | `agentsecurity_ucore` | `route_source_enforced=1`、`route_target_isolated=1`、`ipc_route_authorization=1`、`message_route_lifecycle=1`、`target_route_consent=1`、`route_slot_reclaimed=1` | 系统事件防伪、未授权注入拒绝、grant/revoke、target LLM_DONE consent、MESSAGE 位图隔离、stable control id 生命周期和 source 退出槽回收均通过 |
-| `agentscope_ucore` | `pipe_redelegation_isolation=1`、`transactional_fd_delegation=1`、`cross_scope_isolation=1` | pipe 只凭创建线程的一次性票据交接；动态覆盖并发隔离、失败/成功消费和关闭复用，`exec` 清票由统一映像安装路径的实现审计确认 |
+| `agentscope_ucore` | `observe_query_bounded=1 ... preemptions=64`、`observe_index_ordered=1`、`observe_cross_scope_progress=1 queries=32 latency_ms=3`、`pipe_redelegation_isolation=1`、`transactional_fd_delegation=1` | audit/span/timeline/provenance 查询进入内核工作预算，有序索引保持结果顺序与 scope/span 隔离，压力下另一 workflow 仍有界前进；pipe 只凭创建线程的一次性票据交接 |
 | `agenttrust_ucore` | `wx_image=1`、`immutable_image=1`、`role_image_binding=1` | W^X、可信映像不可变和 Agent 角色映像绑定可验证 |
 | `agentvfs_ucore` | `cross_scope_fd_revoked=1`、`worker_pipe_delegation=1`、`protected_paths=1` | 普通 VFS 路径不能绕过文件能力；降权 fork 撤销跨 scope inode fd，worker pipe 只接受单跳显式委派 |
 | `iobudget_ucore` | `thread_exit_lease_cleanup=1`、`scheduler_interrupt_progress=1`、`fault_exit_cleanup=1`、`public_budget_shared=1`、`nested_io_attribution=1`、`cache_scope_isolation=1`、`workflow_bounded_progress=1`、`control_reserve_progress=1`、`parent passed` | 最终 teardown 修复后独立轮 `elapsed=2.4s`；ABI sized-copy 另由无单独 marker 的断言覆盖 |
@@ -69,7 +69,7 @@ bash scripts/run-agent-tests.sh
 | `procreap_ucore` / `procreap_agent_ucore` | `live-domain-limit=1`、`reserved-agent-slot=1` | 进程回收、资源域配额与系统保留槽可验证 |
 | `syscallfair_ucore` | `[syscall-fairness] both targets passed`、console/inode/trunc 顺序、last-syscall 重调度与 `parent passed` | 本次线程改动后双目标脚本已通过 |
 | `threadresource_ucore` | `domain_limit`、`capacity_reject_stable`、`reserved_domain_limit`、`reserved_domain_reuse`、`exit_reuse`、`ordinary_waterline`、`global_thread_limit`、`reserved_global_limit`、`reserved_progress`、`reserved_global_reuse`、`global_reuse`、`domain_fairness`、`parent passed` | 本次改动后 19/12/6/6/4 tiny policy 专项通过 |
-| 内核栈预算 | `kernel stack budget: user=7488 interrupt=2272 margin=4096 required=13856 limit=16384` | 当前 pipe 安全主体委派改动后的 AgentOS 构建期 callgraph/栈帧预算检查通过 |
+| 内核栈预算 | `kernel stack budget: user=7456 interrupt=2272 margin=4096 required=13824 limit=16384` | 当前观测查询修复后的 AgentOS 构建期 callgraph/栈帧预算检查通过 |
 
 ## 本次可信 IPC 变更验证状态
 
@@ -638,6 +638,34 @@ iobudget_ucore: parent passed
 当前完整轮的 `agentscope_ucore` 观察到 `metadata_txn_contentions=3`、`metadata_cross_scope_progress=1 queries=32 latency_ms=684`、metadata transaction/COW、微写合并、最终一致性、容量、`lifecycle_reclamation=1` 和 `parent passed`，`elapsed=139.9s`。`NPROC` 身份账本只复用 `used == 0` 的记录，active 最多 4 个且 active + retiring 不超过 8；全部 active 退出积压时最多 8 个退役任务占用最多 8 个 FS reclaim cursor，并由 reaper 在 `NPROC` 身份账本范围轮转选择清理。
 
 当前动态 I/O 用例只覆盖一个 PUBLIC 与一个 workflow Orchestrator `CONTROL` owner；没有断言 `shared_grants` 或排队轮转，也未覆盖 Recovery、SYSTEM/workflow `BACKGROUND`、多 workflow 同时压力、retiring 3/8、跨 owner LRU/transient、主动 device-debt 注入，以及启动 bank 损坏、VirtIO 设备错误/短 I/O/metadata COW 中途掉电。线程资源域改动前的冻结源码曾以 `75.1s` 通过 `make fs-enospc-test` 的 quota/domain/persistent principal/orphan/reboot 全流程，但其中没有专门在 grouped qmap claim 中点断电。以上历史专项仍不等于本次改动后的 `make full-verify` 全绿。
+
+## 2026-07-24 观测查询预算与索引回归
+
+本次把 audit 物理记录表从查询入口降为存储后端：每个 workflow scope 维护 sequence 与 `(tick, sequence)` 两个 128 槽有序索引，覆盖记录统一先 unlink 再 publish；ledger 窗口摘要直接读取索引状态。audit、span 和 provenance 沿 sequence 索引单遍扫描，timeline 对四个有序来源做线性归并。计数、过滤和复制路径在扫描前按每 16 条候选记录换算 `kernel_work` 预算，单次 checkpoint 不超过一个工作量子；让出后重新统计来源并补足增长差额。预算安全点不落在 timeline wait 的未命中扫描与等待者登记之间，公共 ABI 也没有增加内部扫描量字段。
+
+`agentscope_ucore` 由低权限 Sentinel 填满 128 条 Context 后反复执行 span、audit-only timeline 和 provenance 计数/复制查询。测试逐轮要求查询产生内核重调度证据，并验证 span 记录 sequence 单调、timeline 按 `(tick, sequence)` 排序、记录不重复且没有越过 scope/span 可见边界。压力持续期间，父进程从发送命令前开始计时，驱动另一 scope 完成 32 次查询和完整回复，避免只测到子进程启动后的局部窗口。
+
+```text
+agentscope_ucore: observe_query_bounded=1 context=128 loops=12 preemptions=64
+agentscope_ucore: observe_index_ordered=1
+agentscope_ucore: observe_cross_scope_progress=1 queries=32 latency_ms=3
+agentscope_ucore: parent passed
+```
+
+验证命令及结果：
+
+```text
+AGENT_TEST_CASE=agentscope_ucore CASE_TIMEOUT=240s scripts/run-agent-tests.sh
+[agent-tests] agentscope_ucore: elapsed=139.0s
+[agent-tests] agentscope_ucore passed
+
+CASE_TIMEOUT=240s scripts/run-agent-tests.sh
+[agent-tests] agentscope_ucore: elapsed=128.1s
+[agent-tests] all Agent-OS uCore checks passed
+elapsed=338.4s
+```
+
+构建期内核栈预算为 `user=7456`、`interrupt=2272`、`margin=4096`、`required=13824 < limit=16384`。代码、安全和测试子代理完成最终复核，未发现阻塞提交的问题。本轮没有运行 `make full-verify`。
 
 ## 2026-07-24 pipe 安全主体委派回归
 

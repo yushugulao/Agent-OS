@@ -46,6 +46,7 @@ extern struct proc pool[NPROC];
 #define AGENT_META_WRITEBACK_COALESCE_TICKS TICKS_PER_SEC
 #define AGENT_META_WRITEBACK_SCOPE_MAX NPROC
 #define AGENT_META_TXN_WORK_GRANULE 128U
+#define AGENT_OBSERVE_QUERY_WORK_GRANULE 16U
 #define AGENT_FILE_CHANGE_STATUS       (1U << 0)
 #define AGENT_FILE_CHANGE_STAGE        (1U << 1)
 #define AGENT_FILE_CHANGE_KIND         (1U << 2)
@@ -91,6 +92,8 @@ _Static_assert(VFS_SCOPE_MAX_ACTIVE * AGENT_PREFETCH_SCOPE_LIMIT <=
 	       "prefetch table must reserve every workflow partition");
 _Static_assert(AGENT_META_WRITEBACK_SCOPE_MAX > VFS_SCOPE_MAX_ACTIVE,
 	       "writeback table must include the system metadata owner");
+_Static_assert(KERNEL_WORK_OPERATION_UNITS <= KERNEL_WORK_BUDGET_UNITS,
+	       "observation query work must fit one scheduling checkpoint");
 
 static int nextagentid = 1;
 static uint64 next_agent_control_id = 1;
@@ -110,10 +113,13 @@ static uchar agent_audit_low_class[AGENT_AUDIT_MAX_RECORDS];
 struct agent_audit_scope_state {
 	int used;
 	uint scope_id;
+	uint visible_records;
 	uint64 total_records;
 	uint64 ledger_hash;
 	uint64 kind_counts[AGENT_AUDIT_KIND_PREFETCH + 1];
 	uint64 observe_epoch;
+	ushort sequence_slots[AGENT_AUDIT_SCOPE_LIMIT];
+	ushort timeline_slots[AGENT_AUDIT_SCOPE_LIMIT];
 };
 
 static struct agent_audit_scope_state agent_audit_scope_states[NPROC];
@@ -2081,38 +2087,157 @@ static int agent_audit_principal_live(uint scope_id, uint64 principal)
 	return 0;
 }
 
-static int agent_audit_slot_alloc(uint scope_id, uint64 principal,
-				  int low_class)
+static int
+agent_audit_time_before(int left_slot, int right_slot)
 {
-	uint64 oldest_low = ~0ULL;
-	uint64 oldest_principal = ~0ULL;
+	struct agent_audit_record *left = &agent_audit_records[left_slot];
+	struct agent_audit_record *right = &agent_audit_records[right_slot];
+
+	return left->tick < right->tick ||
+	       (left->tick == right->tick &&
+		left->sequence < right->sequence);
+}
+
+static int
+agent_audit_index_remove(struct agent_audit_scope_state *state, int slot)
+{
+	uint visible;
+	int sequence_pos = -1;
+	int timeline_pos = -1;
+
+	if (state == 0 || slot < 0 || slot >= AGENT_AUDIT_MAX_RECORDS)
+		return -1;
+	visible = state->visible_records;
+	for (uint i = 0; i < visible; i++) {
+		if (state->sequence_slots[i] == slot)
+			sequence_pos = i;
+		if (state->timeline_slots[i] == slot)
+			timeline_pos = i;
+	}
+	if (sequence_pos < 0 || timeline_pos < 0)
+		return -1;
+	for (uint i = sequence_pos; i + 1 < visible; i++)
+		state->sequence_slots[i] = state->sequence_slots[i + 1];
+	for (uint i = timeline_pos; i + 1 < visible; i++)
+		state->timeline_slots[i] = state->timeline_slots[i + 1];
+	if (visible > 0) {
+		state->sequence_slots[visible - 1] = 0;
+		state->timeline_slots[visible - 1] = 0;
+		state->visible_records--;
+	}
+	return 0;
+}
+
+static int
+agent_audit_index_insert(struct agent_audit_scope_state *state, int slot)
+{
+	uint lo;
+	uint hi;
+	uint pos;
+	uint visible;
+
+	if (state == 0 || slot < 0 || slot >= AGENT_AUDIT_MAX_RECORDS ||
+	    state->visible_records >= AGENT_AUDIT_SCOPE_LIMIT)
+		return -1;
+	visible = state->visible_records;
+
+	lo = 0;
+	hi = visible;
+	while (lo < hi) {
+		uint mid = lo + (hi - lo) / 2;
+		int current = state->sequence_slots[mid];
+
+		if (agent_audit_records[current].sequence <
+		    agent_audit_records[slot].sequence)
+			lo = mid + 1;
+		else
+			hi = mid;
+	}
+	pos = lo;
+	for (uint i = visible; i > pos; i--)
+		state->sequence_slots[i] = state->sequence_slots[i - 1];
+	state->sequence_slots[pos] = slot;
+
+	lo = 0;
+	hi = visible;
+	while (lo < hi) {
+		uint mid = lo + (hi - lo) / 2;
+		int current = state->timeline_slots[mid];
+
+		if (agent_audit_time_before(current, slot))
+			lo = mid + 1;
+		else
+			hi = mid;
+	}
+	pos = lo;
+	for (uint i = visible; i > pos; i--)
+		state->timeline_slots[i] = state->timeline_slots[i - 1];
+	state->timeline_slots[pos] = slot;
+	state->visible_records++;
+	return 0;
+}
+
+static void agent_audit_slot_clear(int slot)
+{
+	if (slot < 0 || slot >= AGENT_AUDIT_MAX_RECORDS)
+		return;
+	agent_audit_scopes[slot] = VFS_SCOPE_NONE;
+	agent_audit_principals[slot] = 0;
+	agent_audit_span_owners[slot] = 0;
+	agent_audit_low_class[slot] = 0;
+	memset(&agent_audit_records[slot], 0,
+	       sizeof(agent_audit_records[slot]));
+}
+
+static int agent_audit_slot_unpublish(int slot)
+{
+	struct agent_audit_scope_state *state;
+	uint scope_id;
+
+	if (slot < 0 || slot >= AGENT_AUDIT_MAX_RECORDS)
+		return -1;
+	scope_id = agent_audit_scopes[slot];
+	if (scope_id == VFS_SCOPE_NONE)
+		return 0;
+	state = agent_audit_scope_state_get(scope_id, 0);
+	if (state == 0 || agent_audit_index_remove(state, slot) < 0)
+		return -1;
+	agent_audit_slot_clear(slot);
+	return 0;
+}
+
+static int
+agent_audit_slot_alloc(struct agent_audit_scope_state *state,
+		       uint64 principal, int low_class)
+{
+	uint scope_id;
 	int high_owned = 0;
 	int low_owned = 0;
 	int principal_owned = 0;
 	int oldest_low_slot = -1;
 	int oldest_principal_slot = -1;
 
-	if (principal == 0)
+	if (state == 0 || principal == 0)
 		return -1;
-	for (int i = 0; i < AGENT_AUDIT_MAX_RECORDS; i++) {
-		if (agent_audit_scopes[i] != scope_id)
-			continue;
+	scope_id = state->scope_id;
+	for (uint j = 0; j < state->visible_records; j++) {
+		int i = state->sequence_slots[j];
+
+		if (i < 0 || i >= AGENT_AUDIT_MAX_RECORDS ||
+		    agent_audit_scopes[i] != scope_id)
+			return -1;
 		if (agent_audit_low_class[i]) {
 			low_owned++;
-			if (agent_audit_records[i].sequence < oldest_low) {
-				oldest_low = agent_audit_records[i].sequence;
+			if (oldest_low_slot < 0)
 				oldest_low_slot = i;
-			}
 		} else {
 			high_owned++;
 		}
 		if (agent_audit_low_class[i] == low_class &&
 		    agent_audit_principals[i] == principal) {
 			principal_owned++;
-			if (agent_audit_records[i].sequence < oldest_principal) {
-				oldest_principal = agent_audit_records[i].sequence;
+			if (oldest_principal_slot < 0)
 				oldest_principal_slot = i;
-			}
 		}
 	}
 	// The two authority classes have independent rolling partitions. Every
@@ -2125,21 +2250,16 @@ static int agent_audit_slot_alloc(uint scope_id, uint64 principal,
 	if (low_class && low_owned >= AGENT_AUDIT_LOW_SCOPE_LIMIT)
 		return oldest_low_slot;
 	if (!low_class && high_owned >= AGENT_AUDIT_HIGH_SCOPE_LIMIT) {
-		uint64 oldest_inactive = ~0ULL;
-		int oldest_inactive_slot = -1;
+		for (uint j = 0; j < state->visible_records; j++) {
+			int i = state->sequence_slots[j];
 
-		for (int i = 0; i < AGENT_AUDIT_MAX_RECORDS; i++) {
-			if (agent_audit_scopes[i] != scope_id ||
-			    agent_audit_low_class[i] ||
+			if (agent_audit_low_class[i] ||
 			    agent_audit_principal_live(
 				    scope_id, agent_audit_principals[i]))
 				continue;
-			if (agent_audit_records[i].sequence < oldest_inactive) {
-				oldest_inactive = agent_audit_records[i].sequence;
-				oldest_inactive_slot = i;
-			}
+			return i;
 		}
-		return oldest_inactive_slot;
+		return -1;
 	}
 	for (int i = 0; i < AGENT_AUDIT_MAX_RECORDS; i++) {
 		int slot = (agent_audit_head + i) %
@@ -2183,11 +2303,12 @@ static void agent_audit_emit(int kind, uint64 tick, struct proc *actor,
 	low_class = !authority_effect;
 	if (!agent_scope_valid(scope_id) ||
 	    (scope_state = agent_audit_scope_state_get(scope_id, 1)) == 0 ||
-	    (slot = agent_audit_slot_alloc(scope_id, principal,
+	    (slot = agent_audit_slot_alloc(scope_state, principal,
 					   low_class)) < 0)
 		return;
+	if (agent_audit_slot_unpublish(slot) < 0)
+		return;
 	record = &agent_audit_records[slot];
-	memset(record, 0, sizeof(*record));
 	record->sequence = agent_audit_next_sequence++;
 	record->tick = tick;
 	record->kind = kind;
@@ -2211,6 +2332,14 @@ static void agent_audit_emit(int kind, uint64 tick, struct proc *actor,
 	safestrcpy(record->text, text ? text : "", sizeof(record->text));
 	record->prev_hash = scope_state->ledger_hash;
 	record->record_hash = agent_audit_record_hash(record);
+	agent_audit_scopes[slot] = scope_id;
+	agent_audit_principals[slot] = principal;
+	agent_audit_span_owners[slot] = span_owner;
+	agent_audit_low_class[slot] = low_class;
+	if (agent_audit_index_insert(scope_state, slot) < 0) {
+		agent_audit_slot_clear(slot);
+		return;
+	}
 	scope_state->ledger_hash = record->record_hash;
 	scope_state->total_records++;
 	agent_audit_ledger_hash = record->record_hash;
@@ -2218,10 +2347,6 @@ static void agent_audit_emit(int kind, uint64 tick, struct proc *actor,
 		scope_state->kind_counts[kind]++;
 		agent_audit_kind_counts[kind]++;
 	}
-	agent_audit_scopes[slot] = scope_id;
-	agent_audit_principals[slot] = principal;
-	agent_audit_span_owners[slot] = span_owner;
-	agent_audit_low_class[slot] = low_class;
 	agent_audit_head = (slot + 1) % AGENT_AUDIT_MAX_RECORDS;
 	agent_audit_count++;
 	agent_timeline_from_audit(record, &timeline);
@@ -5972,15 +6097,24 @@ int agent_scope_reclaim(uint scope_id, int preserve_files)
 		if (agent_span_prefetch_count > 0)
 			agent_span_prefetch_count--;
 	}
-	for (int i = 0; i < AGENT_AUDIT_MAX_RECORDS; i++) {
-		if (agent_audit_scopes[i] != scope_id)
-			continue;
-		agent_audit_scopes[i] = VFS_SCOPE_NONE;
-		agent_audit_principals[i] = 0;
-		agent_audit_span_owners[i] = 0;
-		agent_audit_low_class[i] = 0;
-		memset(&agent_audit_records[i], 0,
-		       sizeof(agent_audit_records[i]));
+	{
+		struct agent_audit_scope_state *state =
+			agent_audit_scope_state_get(scope_id, 0);
+
+		while (state != 0 && state->visible_records > 0) {
+			int slot = state->sequence_slots[
+				state->visible_records - 1];
+
+			if (agent_audit_slot_unpublish(slot) < 0)
+				break;
+		}
+		/*
+		 * The ordered index is authoritative. The fallback only prevents
+		 * stale evidence from surviving an internal index inconsistency.
+		 */
+		for (int i = 0; i < AGENT_AUDIT_MAX_RECORDS; i++)
+			if (agent_audit_scopes[i] == scope_id)
+				agent_audit_slot_clear(i);
 	}
 	for (int i = 0; i < NPROC; i++)
 		if (agent_audit_scope_states[i].used &&
@@ -9313,32 +9447,27 @@ int sys_agent_trace_snapshot(uint64 recordsaddr, int max)
 	return copied;
 }
 
-static int agent_audit_scope_visible(uint scope_id)
+static uint agent_audit_scope_visible(uint scope_id)
 {
-	int visible = 0;
+	struct agent_audit_scope_state *state;
 
-	for (int i = 0; i < AGENT_AUDIT_MAX_RECORDS; i++)
-		if (agent_audit_scopes[i] == scope_id)
-			visible++;
-	return visible;
+	state = agent_audit_scope_state_get(scope_id, 0);
+	return state ? state->visible_records : 0;
 }
 
-static int agent_audit_scope_next(uint scope_id, uint64 after_sequence,
-				  struct agent_audit_record *out,
-				  uint64 *span_owner)
+static int
+agent_audit_scope_record(struct agent_audit_scope_state *state, uint index,
+			 int timeline_order,
+			 struct agent_audit_record *out, uint64 *span_owner)
 {
-	uint64 best = ~0ULL;
-	int slot = -1;
+	int slot;
 
-	for (int i = 0; i < AGENT_AUDIT_MAX_RECORDS; i++) {
-		if (agent_audit_scopes[i] != scope_id ||
-		    agent_audit_records[i].sequence <= after_sequence ||
-		    agent_audit_records[i].sequence >= best)
-			continue;
-		best = agent_audit_records[i].sequence;
-		slot = i;
-	}
-	if (slot < 0)
+	if (state == 0 || index >= state->visible_records)
+		return 0;
+	slot = timeline_order ? state->timeline_slots[index] :
+				state->sequence_slots[index];
+	if (slot < 0 || slot >= AGENT_AUDIT_MAX_RECORDS ||
+	    agent_audit_scopes[slot] != state->scope_id)
 		return 0;
 	if (out)
 		*out = agent_audit_records[slot];
@@ -9347,12 +9476,56 @@ static int agent_audit_scope_next(uint scope_id, uint64 after_sequence,
 	return 1;
 }
 
+static int agent_observe_query_reserve(uint64 records)
+{
+	uint64 batches;
+	uint64 checkpoint_batches;
+	uint64 max_checkpoint_batches;
+
+	if (records == 0)
+		return 0;
+	batches = (records + AGENT_OBSERVE_QUERY_WORK_GRANULE - 1) /
+		  AGENT_OBSERVE_QUERY_WORK_GRANULE;
+	max_checkpoint_batches = KERNEL_WORK_BUDGET_UNITS /
+				 KERNEL_WORK_OPERATION_UNITS;
+	while (batches > 0) {
+		checkpoint_batches = batches < max_checkpoint_batches ?
+					     batches :
+					     max_checkpoint_batches;
+		if (kernel_work_checkpoint(
+			    (uint)(checkpoint_batches *
+				   KERNEL_WORK_OPERATION_UNITS)) < 0)
+			return -1;
+		batches -= checkpoint_batches;
+	}
+	return 0;
+}
+
+static int
+agent_observe_query_reserve_to(uint64 records, uint64 *reserved)
+{
+	uint64 additional;
+
+	if (reserved == 0 || records <= *reserved)
+		return 0;
+	additional = records - *reserved;
+	/*
+	 * Publish the reservation before a possible yield. The caller recounts
+	 * after every checkpoint and tops up if another thread grew a source.
+	 */
+	*reserved = records;
+	return agent_observe_query_reserve(additional);
+}
+
 int sys_agent_audit_snapshot(uint64 recordsaddr, int max)
 {
 	struct proc *p = curr_proc();
+	struct agent_audit_scope_state *state;
 	struct agent_audit_record record;
+	uint64 reserved = 0;
 	uint64 visible;
-	uint64 sequence = 0;
+	uint scope_id;
+	int copied = 0;
 	int limit;
 
 	if (!p->is_agent)
@@ -9361,24 +9534,34 @@ int sys_agent_audit_snapshot(uint64 recordsaddr, int max)
 		return AGENT_STATUS_DENIED;
 	if (max < 0)
 		return AGENT_STATUS_BAD_PARAM;
-	visible = agent_audit_scope_visible(agent_proc_scope(p));
+	scope_id = agent_proc_scope(p);
+	visible = agent_audit_scope_visible(scope_id);
 	if (max == 0)
 		return visible;
 	if (recordsaddr == 0)
 		return AGENT_STATUS_BAD_PARAM;
+	for (;;) {
+		visible = agent_audit_scope_visible(scope_id);
+		limit = max < (int)visible ? max : (int)visible;
+		if ((uint64)limit <= reserved)
+			break;
+		if (agent_observe_query_reserve_to(limit, &reserved) < 0)
+			return -1;
+	}
+	state = agent_audit_scope_state_get(scope_id, 0);
+	visible = state ? state->visible_records : 0;
 	limit = max < (int)visible ? max : (int)visible;
 	for (int i = 0; i < limit; i++) {
-		if (!agent_audit_scope_next(agent_proc_scope(p), sequence,
-					    &record, 0))
+		if (!agent_audit_scope_record(state, i, 0, &record, 0))
 			break;
-		sequence = record.sequence;
 		if (copyout(p->pagetable,
 			    recordsaddr +
 				    i * sizeof(struct agent_audit_record),
 			    (char *)&record, sizeof(record)) < 0)
 			return -1;
+		copied++;
 	}
-	return limit;
+	return copied;
 }
 
 int sys_agent_ledger_snapshot(uint64 summaryaddr)
@@ -9387,8 +9570,6 @@ int sys_agent_ledger_snapshot(uint64 summaryaddr)
 	struct agent_audit_scope_state *scope_state;
 	struct agent_ledger_summary summary;
 	uint64 visible;
-	uint64 oldest = ~0ULL;
-	uint64 latest = 0;
 	uint64 prefetch_visible = 0;
 	uint scope_id;
 
@@ -9401,15 +9582,7 @@ int sys_agent_ledger_snapshot(uint64 summaryaddr)
 	scope_id = agent_proc_scope(p);
 	scope_state = agent_audit_scope_state_get(scope_id, 0);
 	memset(&summary, 0, sizeof(summary));
-	visible = agent_audit_scope_visible(scope_id);
-	for (int i = 0; i < AGENT_AUDIT_MAX_RECORDS; i++) {
-		if (agent_audit_scopes[i] != scope_id)
-			continue;
-		if (agent_audit_records[i].sequence < oldest)
-			oldest = agent_audit_records[i].sequence;
-		if (agent_audit_records[i].sequence > latest)
-			latest = agent_audit_records[i].sequence;
-	}
+	visible = scope_state ? scope_state->visible_records : 0;
 	for (int i = 0; i < AGENT_FILE_PREFETCH_SPAN_MAX; i++)
 		if (agent_span_prefetch_scopes[i] == scope_id)
 			prefetch_visible++;
@@ -9421,8 +9594,14 @@ int sys_agent_ledger_snapshot(uint64 summaryaddr)
 			summary.total_records - visible :
 			0;
 	if (visible > 0) {
-		summary.oldest_sequence = oldest;
-		summary.latest_sequence = latest;
+		int oldest_slot = scope_state->sequence_slots[0];
+		int latest_slot =
+			scope_state->sequence_slots[visible - 1];
+
+		summary.oldest_sequence =
+			agent_audit_records[oldest_slot].sequence;
+		summary.latest_sequence =
+			agent_audit_records[latest_slot].sequence;
 	}
 	summary.ledger_hash = scope_state ? scope_state->ledger_hash : 0;
 	summary.context_records = scope_state ?
@@ -9481,10 +9660,12 @@ static int agent_audit_match(struct agent_audit_record *record,
 int sys_agent_audit_query(uint64 filteraddr, uint64 recordsaddr, int max)
 {
 	struct proc *p = curr_proc();
+	struct agent_audit_scope_state *state;
 	struct agent_audit_filter filter;
 	struct agent_audit_record record;
+	uint64 reserved = 0;
 	uint scope_id;
-	uint64 sequence = 0;
+	uint visible;
 	int matched = 0;
 	int copied = 0;
 
@@ -9502,12 +9683,22 @@ int sys_agent_audit_query(uint64 filteraddr, uint64 recordsaddr, int max)
 	if (max > 0 && recordsaddr == 0)
 		return AGENT_STATUS_BAD_PARAM;
 	scope_id = agent_proc_scope(p);
-	while (agent_audit_scope_next(scope_id, sequence, &record, 0)) {
-		sequence = record.sequence;
+	for (;;) {
+		visible = agent_audit_scope_visible(scope_id);
+		if (visible <= reserved)
+			break;
+		if (agent_observe_query_reserve_to(visible, &reserved) < 0)
+			return -1;
+	}
+	state = agent_audit_scope_state_get(scope_id, 0);
+	visible = state ? state->visible_records : 0;
+	for (uint i = 0; i < visible; i++) {
+		if (!agent_audit_scope_record(state, i, 0, &record, 0))
+			break;
 		if (!agent_audit_match(&record, &filter))
 			continue;
 		matched++;
-		if (max == 0 || copied >= max)
+		if (max == 0)
 			continue;
 		if (copyout(p->pagetable,
 			    recordsaddr +
@@ -9515,6 +9706,8 @@ int sys_agent_audit_query(uint64 filteraddr, uint64 recordsaddr, int max)
 			    (char *)&record, sizeof(record)) < 0)
 			return -1;
 		copied++;
+		if (copied >= max)
+			break;
 	}
 	if (max == 0)
 		return matched;
@@ -9524,12 +9717,14 @@ int sys_agent_audit_query(uint64 filteraddr, uint64 recordsaddr, int max)
 int sys_agent_span_trace_snapshot(uint64 recordsaddr, int max)
 {
 	struct proc *p = curr_proc();
+	struct agent_audit_scope_state *state;
 	struct agent_audit_record record;
 	uint64 span_id;
 	uint64 span_owner;
 	uint64 record_span_owner;
-	uint64 sequence = 0;
+	uint64 reserved = 0;
 	uint scope_id;
+	uint visible;
 	int matched = 0;
 	int copied = 0;
 
@@ -9546,13 +9741,27 @@ int sys_agent_span_trace_snapshot(uint64 recordsaddr, int max)
 	if (span_id == 0 || span_owner == 0)
 		return 0;
 	scope_id = agent_proc_scope(p);
-	while (agent_audit_scope_next(scope_id, sequence, &record,
-				      &record_span_owner)) {
-		sequence = record.sequence;
+	for (;;) {
+		visible = agent_audit_scope_visible(scope_id);
+		if (visible <= reserved)
+			break;
+		if (agent_observe_query_reserve_to(visible, &reserved) < 0)
+			return -1;
+	}
+	span_id = p->agent_current_span_id;
+	span_owner = p->agent_current_span_owner;
+	if (span_id == 0 || span_owner == 0)
+		return 0;
+	state = agent_audit_scope_state_get(scope_id, 0);
+	visible = state ? state->visible_records : 0;
+	for (uint i = 0; i < visible; i++) {
+		if (!agent_audit_scope_record(state, i, 0, &record,
+					      &record_span_owner))
+			break;
 		if (record.span_id != span_id || record_span_owner != span_owner)
 			continue;
 		matched++;
-		if (max == 0 || copied >= max)
+		if (max == 0)
 			continue;
 		if (copyout(p->pagetable,
 			    recordsaddr +
@@ -9560,6 +9769,8 @@ int sys_agent_span_trace_snapshot(uint64 recordsaddr, int max)
 			    (char *)&record, sizeof(record)) < 0)
 			return -1;
 		copied++;
+		if (copied >= max)
+			break;
 	}
 	if (max == 0)
 		return matched;
@@ -9666,14 +9877,17 @@ static void agent_provenance_from_prefetch(
 int sys_agent_provenance_snapshot(uint64 edgesaddr, int max)
 {
 	struct proc *p = curr_proc();
+	struct agent_audit_scope_state *audit_state;
 	struct agent_context_record context_record;
 	struct agent_audit_record audit_record;
 	struct agent_file_prefetch_hint hint;
 	struct agent_provenance_edge edge;
 	uint64 context_visible;
+	uint64 audit_visible;
 	uint64 prefetch_visible;
+	uint64 reserved = 0;
+	uint64 scan_visible;
 	uint64 seq;
-	uint64 audit_sequence = 0;
 	uint64 slot;
 	uint64 start;
 	uint64 span_id;
@@ -9691,6 +9905,29 @@ int sys_agent_provenance_snapshot(uint64 edgesaddr, int max)
 	if (max > 0 && edgesaddr == 0)
 		return AGENT_STATUS_BAD_PARAM;
 
+	audit_global = agent_has_cap(p, AGENT_CAP_ORCHESTRATE);
+	audit_allowed = audit_global || agent_has_cap(p, AGENT_CAP_AUDIT_WRITE);
+	for (;;) {
+		context_visible = p->context_path_count;
+		if (context_visible > p->context_path_capacity)
+			context_visible = p->context_path_capacity;
+		prefetch_visible = p->agent_prefetch_count;
+		if (prefetch_visible > AGENT_FILE_PREFETCH_MAX_HINTS)
+			prefetch_visible = AGENT_FILE_PREFETCH_MAX_HINTS;
+		audit_visible = audit_allowed ?
+					agent_audit_scope_visible(
+						agent_proc_scope(p)) :
+					0;
+		scan_visible = context_visible + audit_visible +
+			       prefetch_visible;
+		if (scan_visible <= reserved)
+			break;
+		if (agent_observe_query_reserve_to(scan_visible, &reserved) < 0)
+			return -1;
+	}
+
+	span_id = p->agent_current_span_id;
+	span_owner = p->agent_current_span_owner;
 	context_visible = p->context_path_count;
 	if (context_visible > p->context_path_capacity)
 		context_visible = p->context_path_capacity;
@@ -9709,16 +9946,18 @@ int sys_agent_provenance_snapshot(uint64 edgesaddr, int max)
 		if (agent_provenance_emit(p, edgesaddr, max, &matched,
 					  &copied, &edge) < 0)
 			return -1;
+		if (max > 0 && copied >= max)
+			goto provenance_done;
 	}
 
-	audit_global = agent_has_cap(p, AGENT_CAP_ORCHESTRATE);
-	audit_allowed = audit_global || agent_has_cap(p, AGENT_CAP_AUDIT_WRITE);
-	span_id = p->agent_current_span_id;
-	span_owner = p->agent_current_span_owner;
-	while (audit_allowed &&
-	       agent_audit_scope_next(agent_proc_scope(p), audit_sequence,
-				      &audit_record, &audit_span_owner)) {
-		audit_sequence = audit_record.sequence;
+	audit_state = audit_allowed ?
+			      agent_audit_scope_state_get(agent_proc_scope(p), 0) :
+			      0;
+	audit_visible = audit_state ? audit_state->visible_records : 0;
+	for (uint i = 0; i < audit_visible; i++) {
+		if (!agent_audit_scope_record(audit_state, i, 0, &audit_record,
+					      &audit_span_owner))
+			break;
 		if (!audit_global &&
 		    (audit_record.span_id != span_id ||
 		     audit_span_owner != span_owner))
@@ -9729,6 +9968,8 @@ int sys_agent_provenance_snapshot(uint64 edgesaddr, int max)
 		if (agent_provenance_emit(p, edgesaddr, max, &matched,
 					  &copied, &edge) < 0)
 			return -1;
+		if (max > 0 && copied >= max)
+			goto provenance_done;
 	}
 
 	prefetch_visible = p->agent_prefetch_count;
@@ -9746,8 +9987,11 @@ int sys_agent_provenance_snapshot(uint64 edgesaddr, int max)
 		if (agent_provenance_emit(p, edgesaddr, max, &matched,
 					  &copied, &edge) < 0)
 			return -1;
+		if (max > 0 && copied >= max)
+			break;
 	}
 
+provenance_done:
 	if (max == 0)
 		return matched;
 	return copied;
@@ -9858,7 +10102,7 @@ static void agent_timeline_from_prefetch(struct proc *p,
 }
 
 static int agent_timeline_load_context(struct proc *p, uint64 *cursor,
-				       uint64 visible,
+				       uint64 visible, uint64 oldest,
 				       struct agent_timeline_record *timeline)
 {
 	struct agent_context_record record;
@@ -9866,7 +10110,7 @@ static int agent_timeline_load_context(struct proc *p, uint64 *cursor,
 	uint64 slot;
 
 	while (*cursor < visible && p->context_path_capacity > 0) {
-		seq = p->context_path_oldest + *cursor;
+		seq = oldest + *cursor;
 		(*cursor)++;
 		slot = (seq - 1) % p->context_path_capacity;
 		if (agent_read_record(p, slot, &record) < 0)
@@ -9895,41 +10139,26 @@ static int agent_timeline_load_sched(struct proc *p, uint64 *cursor,
 	return 1;
 }
 
-static int agent_timeline_load_audit(char *used, uint64 visible,
-				     uint64 start, uint scope_id, int global,
+static int agent_timeline_load_audit(
+				     struct agent_audit_scope_state *state,
+				     uint64 *cursor, int global,
 				     uint64 span_id, uint64 span_owner,
 				     struct agent_timeline_record *timeline)
 {
 	struct agent_audit_record record;
-	struct agent_audit_record best_record;
-	uint64 slot;
-	uint64 best_tick = (uint64)-1;
-	uint64 best_sequence = (uint64)-1;
-	int best_index = -1;
+	uint64 record_span_owner;
 
-	for (int i = 0; i < (int)visible; i++) {
-		if (used[i])
-			continue;
-		slot = (start + i) % AGENT_AUDIT_MAX_RECORDS;
-		if (agent_audit_scopes[slot] != scope_id)
-			continue;
-		memmove(&record, &agent_audit_records[slot], sizeof(record));
+	while (state != 0 && *cursor < state->visible_records) {
+		uint index = (*cursor)++;
+
+		if (!agent_audit_scope_record(state, index, 1, &record,
+					      &record_span_owner))
+			return 0;
 		if (!global &&
 		    (record.span_id != span_id ||
-		     agent_audit_span_owners[slot] != span_owner))
+		     record_span_owner != span_owner))
 			continue;
-		if (best_index < 0 || record.tick < best_tick ||
-		    (record.tick == best_tick &&
-		     record.sequence < best_sequence)) {
-			best_index = i;
-			best_tick = record.tick;
-			best_sequence = record.sequence;
-			memmove(&best_record, &record, sizeof(best_record));
-		}
-	}
-	if (best_index >= 0) {
-		used[best_index] = 1;
-		agent_timeline_from_audit(&best_record, timeline);
+		agent_timeline_from_audit(&record, timeline);
 		return 1;
 	}
 	return 0;
@@ -9949,30 +10178,6 @@ static int agent_timeline_load_prefetch(struct proc *p, uint64 *cursor,
 	memmove(&hint, &p->agent_prefetch_hints[slot], sizeof(hint));
 	agent_timeline_from_prefetch(p, &hint, timeline);
 	return 1;
-}
-
-static int agent_timeline_audit_visible(uint scope_id, int global,
-					uint64 span_id, uint64 span_owner)
-{
-	struct agent_audit_record record;
-	uint64 visible;
-	uint64 start;
-	uint64 slot;
-	int matched = 0;
-
-	visible = AGENT_AUDIT_MAX_RECORDS;
-	if (!global && (span_id == 0 || span_owner == 0))
-		return 0;
-	start = 0;
-	for (int i = 0; i < (int)visible; i++) {
-		slot = (start + i) % AGENT_AUDIT_MAX_RECORDS;
-		memmove(&record, &agent_audit_records[slot], sizeof(record));
-		if (agent_audit_scopes[slot] == scope_id &&
-		    (global || (record.span_id == span_id &&
-			       agent_audit_span_owners[slot] == span_owner)))
-			matched++;
-	}
-	return matched;
 }
 
 static int agent_timeline_source_enabled(struct agent_timeline_filter *filter,
@@ -10105,6 +10310,7 @@ static int agent_timeline_export(struct proc *p,
 				 struct agent_timeline_filter *filter,
 				 uint64 recordsaddr, int max)
 {
+	struct agent_audit_scope_state *audit_state;
 	struct agent_timeline_record context_timeline;
 	struct agent_timeline_record sched_timeline;
 	struct agent_timeline_record audit_timeline;
@@ -10112,19 +10318,20 @@ static int agent_timeline_export(struct proc *p,
 	struct agent_timeline_record *selected;
 	uint64 context_visible;
 	uint64 sched_visible;
-	uint64 audit_visible;
-	uint64 audit_ring_visible;
+	uint64 audit_scan_visible;
 	uint64 prefetch_visible;
+	uint64 reserved = 0;
+	uint64 scan_visible;
+	uint64 context_oldest;
 	uint64 sched_start;
-	uint64 audit_start;
 	uint64 prefetch_start;
 	uint64 ci = 0;
 	uint64 si = 0;
+	uint64 ai = 0;
 	uint64 pi = 0;
 	uint64 best_tick;
 	uint64 span_id;
 	uint64 span_owner;
-	char audit_used[AGENT_AUDIT_MAX_RECORDS];
 	int audit_global;
 	int audit_allowed;
 	int have_context;
@@ -10160,40 +10367,73 @@ static int agent_timeline_export(struct proc *p,
 				filter, AGENT_TIMELINE_SOURCE_AUDIT) &&
 				(audit_global ||
 				 agent_has_cap(p, AGENT_CAP_AUDIT_WRITE));
-	span_id = p->agent_current_span_id;
-	span_owner = p->agent_current_span_owner;
-	audit_visible = audit_allowed ?
-				agent_timeline_audit_visible(
-					agent_proc_scope(p), audit_global, span_id,
-					span_owner) :
-				0;
-	audit_ring_visible = audit_allowed ? AGENT_AUDIT_MAX_RECORDS : 0;
+	audit_state = audit_allowed ?
+			      agent_audit_scope_state_get(agent_proc_scope(p), 0) :
+			      0;
+	audit_scan_visible = audit_state ? audit_state->visible_records : 0;
 	total = (int)(context_visible + sched_visible + prefetch_visible +
-		      audit_visible);
-	if (max == 0 && (filter == 0 || filter->flags == 0))
+		      audit_scan_visible);
+	if (max == 0 && (filter == 0 || filter->flags == 0) &&
+	    (!audit_allowed || audit_global))
 		return total;
 
+	for (;;) {
+		context_visible = agent_timeline_source_enabled(
+					  filter,
+					  AGENT_TIMELINE_SOURCE_CONTEXT) ?
+					  p->context_path_count :
+					  0;
+		if (context_visible > p->context_path_capacity)
+			context_visible = p->context_path_capacity;
+		sched_visible = agent_timeline_source_enabled(
+					filter, AGENT_TIMELINE_SOURCE_SCHED) ?
+					p->agent_sched_trace_count :
+					0;
+		if (sched_visible > AGENT_SCHED_TRACE_CAP)
+			sched_visible = AGENT_SCHED_TRACE_CAP;
+		prefetch_visible = agent_timeline_source_enabled(
+					   filter,
+					   AGENT_TIMELINE_SOURCE_PREFETCH) &&
+					   agent_has_cap(p,
+							 AGENT_CAP_META_READ) ?
+					   p->agent_prefetch_count :
+					   0;
+		if (prefetch_visible > AGENT_FILE_PREFETCH_MAX_HINTS)
+			prefetch_visible = AGENT_FILE_PREFETCH_MAX_HINTS;
+		audit_state = audit_allowed ?
+				      agent_audit_scope_state_get(
+					      agent_proc_scope(p), 0) :
+				      0;
+		audit_scan_visible =
+			audit_state ? audit_state->visible_records : 0;
+		scan_visible = context_visible + sched_visible +
+			       audit_scan_visible + prefetch_visible;
+		if (scan_visible <= reserved)
+			break;
+		if (agent_observe_query_reserve_to(scan_visible, &reserved) < 0)
+			return -1;
+	}
+
+	span_id = p->agent_current_span_id;
+	span_owner = p->agent_current_span_owner;
+	context_oldest = p->context_path_oldest;
 	sched_start = p->agent_sched_trace_count > AGENT_SCHED_TRACE_CAP ?
 			      p->agent_sched_trace_head :
 			      0;
-	audit_start = 0;
-	memset(audit_used, 0, sizeof(audit_used));
 	prefetch_start =
 		(p->agent_prefetch_head + AGENT_FILE_PREFETCH_MAX_HINTS -
 		 prefetch_visible) %
 		AGENT_FILE_PREFETCH_MAX_HINTS;
 
 	have_context = agent_timeline_load_context(
-		p, &ci, context_visible, &context_timeline);
+		p, &ci, context_visible, context_oldest, &context_timeline);
 	if (have_context < 0)
 		return AGENT_STATUS_NO_SPACE;
 	have_sched = agent_timeline_load_sched(p, &si, sched_visible,
-					       sched_start, &sched_timeline);
+					       sched_start,
+					       &sched_timeline);
 	have_audit = audit_allowed ?
-			     agent_timeline_load_audit(audit_used,
-						       audit_ring_visible,
-						       audit_start,
-						       agent_proc_scope(p),
+			     agent_timeline_load_audit(audit_state, &ai,
 						       audit_global,
 						       span_id, span_owner,
 						       &audit_timeline) :
@@ -10242,7 +10482,8 @@ static int agent_timeline_export(struct proc *p,
 		}
 		if (pick == AGENT_TIMELINE_SOURCE_CONTEXT) {
 			have_context = agent_timeline_load_context(
-				p, &ci, context_visible, &context_timeline);
+				p, &ci, context_visible, context_oldest,
+				&context_timeline);
 			if (have_context < 0)
 				return AGENT_STATUS_NO_SPACE;
 		} else if (pick == AGENT_TIMELINE_SOURCE_SCHED) {
@@ -10251,9 +10492,8 @@ static int agent_timeline_export(struct proc *p,
 				&sched_timeline);
 		} else if (pick == AGENT_TIMELINE_SOURCE_AUDIT) {
 			have_audit = agent_timeline_load_audit(
-				audit_used, audit_ring_visible,
-				audit_start, agent_proc_scope(p),
-				audit_global, span_id, span_owner,
+				audit_state, &ai, audit_global, span_id,
+				span_owner,
 				&audit_timeline);
 		} else if (pick == AGENT_TIMELINE_SOURCE_PREFETCH) {
 			have_prefetch = agent_timeline_load_prefetch(
