@@ -9012,17 +9012,29 @@ static int agent_validate_legacy_request(struct agent_request *req,
 
 int sys_agent_create(void)
 {
-	return agent_create_proc();
+	int result = agent_create_proc();
+
+	if (result < 0)
+		proc_discard_fd_delegations();
+	return result;
 }
 
 int sys_agent_create_role(int role)
 {
-	return agent_create_role_proc(role);
+	int result = agent_create_role_proc(role);
+
+	if (result < 0)
+		proc_discard_fd_delegations();
+	return result;
 }
 
 int sys_agent_workflow_create(int role)
 {
-	return agent_workflow_create_proc(role);
+	int result = agent_workflow_create_proc(role);
+
+	if (result < 0)
+		proc_discard_fd_delegations();
+	return result;
 }
 
 int sys_agent_scope_delegate_fd(int fd)
@@ -9033,7 +9045,7 @@ int sys_agent_scope_delegate_fd(int fd)
 
 	if (!factory && !agent_has_cap(p, AGENT_CAP_ORCHESTRATE))
 		return AGENT_STATUS_DENIED;
-	return proc_scope_delegate_fd(fd);
+	return proc_delegate_fd(fd);
 }
 
 int sys_agent_worker_create(uint64 pathaddr, uint64 requested_caps)
@@ -9041,17 +9053,29 @@ int sys_agent_worker_create(uint64 pathaddr, uint64 requested_caps)
 	struct proc *p = curr_proc();
 	char path[MAXPATH];
 
-	if (!agent_has_cap(p, AGENT_CAP_ORCHESTRATE))
+	if (!agent_has_cap(p, AGENT_CAP_ORCHESTRATE)) {
+		proc_discard_fd_delegations();
 		return AGENT_STATUS_DENIED;
+	}
 	if (requested_caps == 0 ||
 	    (requested_caps & ~(AGENT_CAP_CONTENT_READ |
 				 AGENT_CAP_ARTIFACT_WRITE)) != 0 ||
-	    (requested_caps & p->agent_capability_mask) != requested_caps)
+	    (requested_caps & p->agent_capability_mask) != requested_caps) {
+		proc_discard_fd_delegations();
 		return AGENT_STATUS_BAD_PARAM;
-	if (copyinstr(p->pagetable, path, pathaddr, sizeof(path)) < 0)
+	}
+	if (copyinstr(p->pagetable, path, pathaddr, sizeof(path)) < 0) {
+		proc_discard_fd_delegations();
 		return -1;
+	}
 	path[sizeof(path) - 1] = 0;
-	return agent_worker_create_proc(path, requested_caps);
+	{
+		int result = agent_worker_create_proc(path, requested_caps);
+
+		if (result < 0)
+			proc_discard_fd_delegations();
+		return result;
+	}
 }
 
 int sys_agent_info(uint64 addr)

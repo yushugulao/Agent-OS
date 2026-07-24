@@ -59,6 +59,9 @@ static void check_normal_progress(void)
 
 	check(pipe(ready) == 0, "ready pipe");
 	check(pipe(result) == 0, "result pipe");
+	check(agent_scope_delegate_fd(ready[1]) == AGENT_STATUS_OK &&
+		      agent_scope_delegate_fd(result[1]) == AGENT_STATUS_OK,
+	      "delegate fairness pipe endpoints");
 	agent_pid = agent_create();
 	check(agent_pid >= 0, "create fairness agent");
 	if (agent_pid == 0)

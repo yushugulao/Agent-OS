@@ -82,8 +82,8 @@ bash scripts/run-agent-tests.sh
 | `labdemo_ucore` | orchestrator 建立 sentinel -> investigator -> recovery 路由后的恢复场景、文件查询、预取交接、消息、权限、audit/timeline/provenance。 | `labdemo_ucore: parent passed` |
 | `agentsecurity_ucore` | 既有权限/route/controller 负向检查；新增用户非零 cause/span 拒绝、可信跨 Agent source attribution、low/high audit authority 隔离。 | `trusted_span_authority=1`、`trusted_cause_attribution=1`、`audit_authority_partition=1`、`parent passed`；本轮通过 |
 | `agenttrust_ucore` | 可执行映像 W^X、密封映像不可变、bootstrap 授权范围、Agent 角色与可信映像绑定。 | `agenttrust_ucore: parent passed` |
-| `agentvfs_ucore` | 工作流文件能力、公共/工作流命名空间隔离、继承描述符重新鉴权、精确能力委派和失败事务原子性。 | `agentvfs_ucore: parent passed` |
-| `agentscope_ucore` | syscall 541 factory、542 一次性 pipe fd 委派、动态 scope、同名对象/action/lease/audit/IPC 隔离、scope-local metadata reload、FIFO metadata 事务/submit lane、并发 COW、持久微写合并、跨 scope 查询时限、最终一致性、配额和 retirement 回收。 | 当前完整轮输出 `metadata_txn_contentions=3`、`metadata_cross_scope_progress=1 ... latency_ms=840`、`parent passed`，`elapsed=142.0s` |
+| `agentvfs_ucore` | 工作流文件能力、公共/工作流命名空间隔离、跨 scope inode 描述符撤销、worker pipe 单跳委派和失败事务原子性。 | `cross_scope_fd_revoked=1`、`worker_pipe_delegation=1`、`parent passed` |
+| `agentscope_ucore` | syscall 541 factory、542 线程绑定的一次性 pipe fd 委派、双线程错序隔离、单字节交付、失败/消费/关闭复用撤销、动态 scope、同名对象/action/lease/audit/IPC 隔离、scope-local metadata reload、FIFO metadata 事务/submit lane、并发 COW、持久微写合并、跨 scope 查询时限、最终一致性、配额和 retirement 回收。 | 回归要求输出 `pipe_redelegation_isolation=1`、`metadata_txn_contentions=...`、`metadata_cross_scope_progress=1 ...` 和 `parent passed` |
 | `iobudget_ucore` | syscall 544 ABI v3 sized-copy、稳定 PUBLIC/workflow owner、NORMAL/CONTROL class、owner/shared/device lease 上界、线程退出 lease 回收、scheduler 内核态中断交付、fault teardown 清理归因/debt 结算、完成归因、PUBLIC cache/速率压力、workflow cache floor 与压力下写入进展。 | 最终 teardown 修复后的独立轮输出八项具名机制 marker 与 `parent passed`，`elapsed=2.4s`；ABI sized-copy 是无单独 marker 的第九类断言 |
 | `usersafety_ucore` | syscall 指针、字符串、`exec` 参数、线程入口、等待队列、管道、文件和信号量输入范围。 | `usersafety_ucore: parent passed` |
 
@@ -213,10 +213,10 @@ results/latest/
 
 ## 当前验证状态
 
-本文仍不把当前 `make full-verify` 记录为全绿。各项专项不能与该聚合入口状态混为一谈。当前依赖按需解析改动后的证据为：
+本文仍不把当前 `make full-verify` 记录为全绿。各项专项不能与该聚合入口状态混为一谈。当前 pipe 安全主体委派改动后的证据为：
 
-- 默认 AgentOS 构建通过，自动内核栈预算为 `required=13840 < 16384`；
-- 完整 16 项 Agent 脚本通过，墙钟约 `315.1s`；`agentfs_ucore` 的 action 与预取路径均观察到 syscall 内核重调度，`agentscope_ucore` 在压力窗口内完成 32 次跨域查询；
+- 默认 AgentOS 构建通过，自动内核栈预算为 `required=13856 < 16384`；
+- 完整 16 项 Agent 脚本通过，墙钟约 `359.4s`；`agentfs_ucore` 的 action 与预取路径均观察到 syscall 内核重调度，`agentscope_ucore` 在压力窗口内完成 32 次跨域查询；
 - 此前 19/12/6/6/4 tiny policy 线程资源、单独 `agentsched_ucore`、双目标进程回收、syscall 公平性和 filepool 脚本的通过结果继续按历史轮保留；
 - `make full-verify` 尚未运行，不能据这些专项外推聚合全绿；
 

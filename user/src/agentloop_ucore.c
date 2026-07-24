@@ -138,6 +138,11 @@ static void check_queue_reservations(void)
 	check(pipe(report) == 0, "queue report pipe");
 	for (int i = 0; i < 4; i++) {
 		check(pipe(gates[i]) == 0, "queue gate pipe");
+		check(agent_scope_delegate_fd(gates[i][0]) ==
+				      AGENT_STATUS_OK &&
+			      agent_scope_delegate_fd(report[1]) ==
+				      AGENT_STATUS_OK,
+		      "delegate queue source pipe endpoints");
 		pids[i] = agent_create_role(AGENT_ROLE_SENTINEL);
 		check(pids[i] >= 0, "create queue source");
 		if (pids[i] == 0 && i < 3)
@@ -351,14 +356,22 @@ static void check_broadcast_isolation(void)
 	check(pipe(report) == 0, "broadcast report pipe");
 	check(pipe(full_gate) == 0, "full watcher gate pipe");
 	check(pipe(source_gate) == 0, "broadcast source gate pipe");
+	check(agent_scope_delegate_fd(ready[1]) == AGENT_STATUS_OK &&
+		      agent_scope_delegate_fd(full_gate[0]) == AGENT_STATUS_OK,
+	      "delegate full watcher pipe endpoints");
 	full_pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	check(full_pid >= 0, "create full watcher");
 	if (full_pid == 0)
 		run_full_watcher(ready[1], full_gate[0]);
+	check(agent_scope_delegate_fd(ready[1]) == AGENT_STATUS_OK &&
+		      agent_scope_delegate_fd(report[1]) == AGENT_STATUS_OK,
+	      "delegate later watcher pipe endpoints");
 	later_pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	check(later_pid >= 0, "create later watcher");
 	if (later_pid == 0)
 		run_later_watcher(ready[1], report[1]);
+	check(agent_scope_delegate_fd(source_gate[0]) == AGENT_STATUS_OK,
+	      "delegate broadcast source gate");
 	source_pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	check(source_pid >= 0, "create broadcast source");
 	if (source_pid == 0)

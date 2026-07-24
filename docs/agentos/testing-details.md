@@ -573,14 +573,14 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 
 1. 先后以“公共文件先创建”和“工作流文件先创建”两种顺序制造同名对象，验证公共命名空间与工作流命名空间互不覆盖。
 2. sentinel 对受保护文件的读、写、截断和删除均被拒绝；investigator 只能读取，不能写入、截断、删除或取得编辑租约。
-3. 普通 `fork()` 子进程失去 Agent 身份和文件能力；即使继承了父进程已打开的文件描述符，后续读写仍会按当前进程凭据重新鉴权并被拒绝。
+3. 普通 `fork()` 子进程失去 Agent 身份、文件能力和动态 scope，父进程已打开的 workflow inode fd 因而直接撤销；同 scope inode fd 的逐操作重鉴权是内核机制，不把该跨 scope 撤销用例误记为动态覆盖。
 4. orchestrator 只能向 mkfs 生成的 immutable、domain-safe worker 映像委派精确能力。空能力、未知位、超过映像 profile 上限、错误映像和跨映像执行都被拒绝或降权；普通进程直接执行该映像不会获得 workflow 权限。
 5. 写能力不足时，带创建/截断意图的 `open()` 在改变文件系统之前失败，验证失败事务没有留下半创建或半截断状态。
 6. 普通进程不能访问两个 metadata bank；元数据查询只定位工作流命名空间中的对象，不会误绑定同名公共文件。
 
 ### 12.2 通过标记与覆盖结论
 
-关注辅助程序输出的 `failed_open_atomic=1`、`cross_image_attenuated=1`、`wrong_first_exec_attenuated=1`、`sealed_exec_no_elevation=1`，以及主程序的 `inherited_fd_revalidated=1`、`protected_paths=1` 和 `parent passed`。测试同时覆盖打开时授权、描述符使用时重新鉴权、映像绑定委派和命名空间隔离。
+关注辅助程序输出的 `failed_open_atomic=1`、`cross_image_attenuated=1`、`wrong_first_exec_attenuated=1`、`sealed_exec_no_elevation=1`，以及主程序的 `cross_scope_fd_revoked=1`、`worker_pipe_delegation=1`、`protected_paths=1` 和 `parent passed`。测试同时覆盖打开时授权、跨 scope 描述符撤销、worker pipe 单跳委派、映像绑定委派和命名空间隔离。
 
 ## 13. `usersafety_ucore`
 
@@ -654,8 +654,8 @@ bash scripts/run-agent-tests.sh
 
 测试流程：
 
-1. 可信 bootstrap factory 对命令/回复 pipe 的指定端点调用 syscall 542，再分别创建 scope A/B；未委派 pipe 和普通 fd 不跨边界，一次性票据在边界尝试后消失。
-2. 两个根 Agent 的 `filesystem_domain` 都不小于 3 且彼此不同；数值 2 保留为稳定 PUBLIC 存储 principal。同 scope `agent_create_role()` 子 Agent 继承 scope，scope 内 orchestrator 不能再调用 workflow factory。
+1. 可信 bootstrap factory 对命令/回复 pipe 的指定端点调用 syscall 542，再分别创建 scope A/B；未委派 pipe 和跨 scope inode fd 不跨边界，一次性票据在主体创建尝试后消失。
+2. 两个根 Agent 的 `filesystem_domain` 都不小于 3 且彼此不同；数值 2 保留为稳定 PUBLIC 存储 principal。同 scope `agent_create_role()` 子 Agent 继承 scope，但不会自动继承 pipe。测试先证明 bootstrap 控制端点不能进入 Artifact，再让两个线程分别签发不同端点并交错创建子主体，要求每个子主体只看到创建线程自己的票据；由非主线程发起 fork 的子主体还要成功创建并回收一个新线程，验证线程栈 VA 与 tid 解耦且不会覆盖复制地址空间中的既有栈；随后验证单字节数据交付、单次消费、失败创建撤销、关闭后同槽 fd 复用不继承旧票据。scope 内 orchestrator 仍不能再调用 workflow factory。`exec` 清票由统一映像安装/凭据重置路径的实现审计确认，本轮未设置单独动态断言。
 3. A/B 创建同名文件和相同 metadata/fid，各自只能查询、打开和读取自己的对象。
 4. B 创建不带 `PERSIST` 的内存态 metadata，A 强制重载自己的 bank 记录后，B 的记录仍可查询，证明 `file_meta_init` 不能跨 scope 清表。
 5. target consent、route grant 和 MESSAGE 投递跨 scope 均拒绝；同 scope stable route 仍可协作。
@@ -668,6 +668,7 @@ bash scripts/run-agent-tests.sh
 12. A 的编辑 lease/version 不能由 B 查询、提交或终止。
 13. 同 scope 多进程共享 workflow 存储计费并受同一 scope limit；从该 workflow 明确降级出的普通子进程改用安装级 PUBLIC principal，不能继续借用短命进程资源域作为磁盘身份。其他 admitted/future scope 的数值保证另由共享 policy 单测、mkfs 初始 `S+4G` 契约、挂载 `4G` 复核和原子 admission 检查覆盖。
 14. 同时占用4个 workflow admission 后第5个创建失败；释放一个后可创建替代 scope。最后成员退出触发 retirement，回收 metadata/action/lease/audit/prefetch/IPC 等表后槽可复用。
+15. `agentvfs_ucore` 对 `agent_worker_create()` 独立验证无票据拒绝、一次显式授权成功和消费后再次拒绝，防止 worker/pending-exec 分支偏离统一安全主体机制。
 
 预期回归标记包括：
 
@@ -692,7 +693,7 @@ agentscope_ucore: lifecycle_reclamation=1
 agentscope_ucore: parent passed
 ```
 
-以上标记最早已出现在 2026-07-22 的旧 15 项 Agent QEMU 回归中。2026-07-24 的依赖按需解析改动后完整 16 项脚本再次通过该程序，输出 `metadata_txn_contentions=3`、`metadata_cross_scope_progress=1 queries=32 latency_ms=840`、最终一致性、`lifecycle_reclamation=1` 和 `parent passed`，`elapsed=142.0s`。`NPROC` 身份账本只复用未使用记录，active 最多 4 个且 active + retiring 不超过 8；FS reclaim cursor 最多 8 个，reaper 在 `NPROC` 账本范围轮转选择 retiring scope，因而新 workflow 不会覆盖旧退役状态或遗失其 I/O owner。
+以上大部分 scope 标记最早已出现在 2026-07-22 的旧 15 项 Agent QEMU 回归中；pipe 票据隔离断言为本轮新增。2026-07-24 的 pipe 安全主体委派改动后完整 16 项脚本通过该程序，输出 `metadata_txn_contentions=3`、`metadata_cross_scope_progress=1 queries=32 latency_ms=684`、最终一致性、`lifecycle_reclamation=1` 和 `parent passed`，`elapsed=139.9s`。`NPROC` 身份账本只复用未使用记录，active 最多 4 个且 active + retiring 不超过 8；FS reclaim cursor 最多 8 个，reaper 在 `NPROC` 账本范围轮转选择 retiring scope，因而新 workflow 不会覆盖旧退役状态或遗失其 I/O owner。
 
 ## 19. syscall 内核工作预算复测
 
@@ -764,7 +765,7 @@ threadresource_ucore: parent passed
 [thread-resource] all checks passed
 ```
 
-该线程资源改动轮已通过本专项、默认 AgentOS 构建、完整 Agent 16/16、单独 `agentsched_ucore`、双目标进程回收、syscall 公平性和 filepool 资源测试；当时完整 Agent 轮墙钟约 `321s`，构建期 AgentOS 内核栈预算为 `13680 < 16384`。当前依赖按需解析改动后的完整 Agent 轮另以约 `315.1s` 通过，栈预算为 `13840 < 16384`。`make full-verify` 尚未执行。
+该线程资源改动轮已通过本专项、默认 AgentOS 构建、完整 Agent 16/16、单独 `agentsched_ucore`、双目标进程回收、syscall 公平性和 filepool 资源测试；当时完整 Agent 轮墙钟约 `321s`，构建期 AgentOS 内核栈预算为 `13680 < 16384`。当前 pipe 安全主体委派改动后的完整 Agent 轮另以约 `359.4s` 通过，栈预算为 `13856 < 16384`。`make full-verify` 尚未执行。
 
 ## 22. `iobudget_ucore`
 
@@ -797,7 +798,7 @@ iobudget_ucore: control_reserve_progress=1
 iobudget_ucore: parent passed
 ```
 
-最终 teardown 修复后的独立 QEMU 中八个具名机制 marker 与 `parent passed` 全部出现，`elapsed=2.4s`；ABI sized-copy 是第九类实质断言，但没有单独 marker。当前依赖按需解析改动后的完整 Agent 脚本以约 `315.1s` 完成 16/16，确认本项继续通过。
+最终 teardown 修复后的独立 QEMU 中八个具名机制 marker 与 `parent passed` 全部出现，`elapsed=2.4s`；ABI sized-copy 是第九类实质断言，但没有单独 marker。当前 pipe 安全主体委派改动后的完整 Agent 脚本以约 `359.4s` 完成 16/16，确认本项继续通过。
 
 PUBLIC 32/16、每 active workflow 24/12 + 48/24 + 8/4、每 retiring workflow `BACKGROUND` 8/4、SYSTEM 96/48 + 16/8、shared 32/16 的配置总和由编译期断言保守按 4 active + 8 retiring 放入 560/280 静态 envelope。运行时设备根对普通流量执行 token/lease/debt 限速；SYSTEM owner、`CONTROL` 和 `SYSTEM` class 在根信用耗尽时仍可凭 owner/class 保留预算带 device debt 前进，所以根 bucket 不是保护流量的硬总上限。shared fast path 在没有 admission waiter 时可直接借用，只有排队授权再按 owner/class cursor 轮转；当前测试没有断言 `shared_grants` 或排队轮转。
 

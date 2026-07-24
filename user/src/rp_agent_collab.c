@@ -75,6 +75,11 @@ static int run_kernel_collaboration(void)
 		return -1;
 	if (pipe(route_gate) < 0)
 		return -1;
+	if (agent_scope_delegate_fd(route_gate[0]) != AGENT_STATUS_OK) {
+		close(route_gate[0]);
+		close(route_gate[1]);
+		return -1;
+	}
 
 	pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	if (pid < 0)

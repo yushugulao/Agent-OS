@@ -192,6 +192,10 @@ static void check_high_score_agent_boundary(void)
 
 	check(pipe(ready_pipe) == 0, "create readiness pipe");
 	check(pipe(stop_pipe) == 0, "create stop pipe");
+	check(agent_scope_delegate_fd(ready_pipe[1]) == AGENT_STATUS_OK,
+	      "delegate high-score readiness pipe");
+	check(agent_scope_delegate_fd(stop_pipe[0]) == AGENT_STATUS_OK,
+	      "delegate high-score stop pipe");
 	hog = agent_create();
 	check(hog >= 0, "create high-score agent");
 	if (hog == 0) {

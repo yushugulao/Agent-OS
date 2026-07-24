@@ -520,6 +520,9 @@ static int bench_wait_wake(void)
 
 	check(pipe(ready) == 0, "ready pipe");
 	check(pipe(ack) == 0, "ack pipe");
+	check(agent_scope_delegate_fd(ready[1]) == AGENT_STATUS_OK &&
+		      agent_scope_delegate_fd(ack[1]) == AGENT_STATUS_OK,
+	      "delegate waiter pipe endpoints");
 	pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	check(pid >= 0, "create waiter");
 	if (pid == 0) {

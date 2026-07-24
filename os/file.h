@@ -49,10 +49,21 @@ struct pipe {
 	int writeopen; // write fd is still open
 };
 
+// Descriptor inheritance is deny-by-default at a security-principal boundary.
+// Reauthorizing objects are checked against the child credential on every use;
+// held capabilities require an explicit one-shot delegation ticket.
+enum fd_inherit_class {
+	FD_INHERIT_DENY = 0,
+	FD_INHERIT_STDIO,
+	FD_INHERIT_REAUTHORIZE,
+	FD_INHERIT_DELEGATE,
+};
+
 // file.h
 // Defines a file in memory that provides information about the current use of the file and the corresponding inode location
 struct file {
 	enum { FD_NONE = 0, FD_PIPE, FD_INODE, FD_STDIO } type;
+	enum fd_inherit_class inherit_class;
 	int ref; // reference count
 	char readable;
 	char writable;

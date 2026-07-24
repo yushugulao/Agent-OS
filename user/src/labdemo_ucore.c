@@ -773,14 +773,20 @@ static void run_orchestrator(void)
 	seed_demo_metadata();
 	check(pipe(ready_pipe) == 0, "pipe");
 	ready_fd = ready_pipe[1];
+	check(agent_scope_delegate_fd(ready_pipe[1]) == AGENT_STATUS_OK,
+	      "delegate recovery ready pipe");
 	recovery_pid = agent_create_role(AGENT_ROLE_RECOVERY);
 	check(recovery_pid >= 0, "create recovery");
 	if (recovery_pid == 0)
 		run_recovery();
+	check(agent_scope_delegate_fd(ready_pipe[1]) == AGENT_STATUS_OK,
+	      "delegate investigator ready pipe");
 	investigator_pid = agent_create_role(AGENT_ROLE_INVESTIGATOR);
 	check(investigator_pid >= 0, "create investigator");
 	if (investigator_pid == 0)
 		run_investigator();
+	check(agent_scope_delegate_fd(ready_pipe[1]) == AGENT_STATUS_OK,
+	      "delegate sentinel ready pipe");
 	sentinel_pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	check(sentinel_pid >= 0, "create sentinel");
 	if (sentinel_pid == 0)

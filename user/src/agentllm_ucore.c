@@ -149,6 +149,8 @@ static void run_orchestrator(void)
 	      "relay watch request");
 	check(pipe(route_gate) == 0, "route gate pipe");
 
+	check(agent_scope_delegate_fd(route_gate[0]) == AGENT_STATUS_OK,
+	      "delegate requester route gate");
 	requester_pid = agent_create_role(AGENT_ROLE_INVESTIGATOR);
 	check(requester_pid >= 0, "create requester");
 	if (requester_pid == 0) {

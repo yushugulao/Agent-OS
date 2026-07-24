@@ -521,6 +521,10 @@ static void run_handoff_churner(int source_pid, int ready_fd,
 	int status = 0;
 	char churn = 0;
 
+	check(agent_scope_delegate_fd(ready_fd) == AGENT_STATUS_OK,
+	      "delegate handoff target ready pipe");
+	check(agent_scope_delegate_fd(churn_write_fd) == AGENT_STATUS_OK,
+	      "delegate handoff target churn pipe");
 	target_pid = agent_create_role(AGENT_ROLE_RECOVERY);
 	check(target_pid >= 0, "create handoff exit target");
 	if (target_pid == 0)
@@ -535,6 +539,10 @@ static void run_handoff_churner(int source_pid, int ready_fd,
 	 * The first-free allocator must therefore give this lowest free slot to
 	 * the immediately-created replacement.
 	 */
+	check(agent_scope_delegate_fd(inspect_fd) == AGENT_STATUS_OK,
+	      "delegate handoff replacement inspect pipe");
+	check(agent_scope_delegate_fd(report_fd) == AGENT_STATUS_OK,
+	      "delegate handoff replacement report pipe");
 	replacement_pid = agent_create_role(AGENT_ROLE_RECOVERY);
 	check(replacement_pid >= 0, "create handoff replacement");
 	if (replacement_pid == 0)
@@ -570,6 +578,16 @@ static void check_handoff_target_exit(void)
 	check(pipe(churn_pipe) == 0, "handoff churn pipe");
 	check(pipe(inspect_pipe) == 0, "handoff inspect pipe");
 	check(pipe(report_pipe) == 0, "handoff report pipe");
+	check(agent_scope_delegate_fd(ready_pipe[1]) == AGENT_STATUS_OK,
+	      "delegate handoff churner ready pipe");
+	check(agent_scope_delegate_fd(churn_pipe[0]) == AGENT_STATUS_OK,
+	      "delegate handoff churner wait pipe");
+	check(agent_scope_delegate_fd(churn_pipe[1]) == AGENT_STATUS_OK,
+	      "delegate handoff churner signal pipe");
+	check(agent_scope_delegate_fd(inspect_pipe[0]) == AGENT_STATUS_OK,
+	      "delegate handoff churner inspect pipe");
+	check(agent_scope_delegate_fd(report_pipe[1]) == AGENT_STATUS_OK,
+	      "delegate handoff churner report pipe");
 	churner_pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
 	check(churner_pid >= 0, "create handoff churner");
 	if (churner_pid == 0)

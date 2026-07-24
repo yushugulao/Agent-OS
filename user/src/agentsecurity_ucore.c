@@ -592,6 +592,12 @@ static TEST_NOINLINE void run_retired_cancel_controller(int report_fd,
 
 	check_role(AGENT_ROLE_ORCHESTRATOR, "retired-controller");
 	check(pipe(ready_pipe) == 0, "create cancel victim ready pipe");
+	check(agent_scope_delegate_fd(ready_pipe[1]) == AGENT_STATUS_OK,
+	      "delegate cancel victim ready pipe");
+	check(agent_scope_delegate_fd(report_fd) == AGENT_STATUS_OK,
+	      "delegate cancel victim report pipe");
+	check(agent_scope_delegate_fd(victim_gate_fd) == AGENT_STATUS_OK,
+	      "delegate cancel victim gate pipe");
 	victim_pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	check(victim_pid >= 0, "create orphan cancel victim");
 	if (victim_pid == 0)
@@ -644,6 +650,10 @@ static void check_wait_cancel_controller_lifecycle(void)
 
 	check(pipe(report_pipe) == 0, "create cancel controller report pipe");
 	check(pipe(victim_gate) == 0, "create stale route victim gate");
+	check(agent_scope_delegate_fd(report_pipe[1]) == AGENT_STATUS_OK,
+	      "delegate cancel controller report pipe");
+	check(agent_scope_delegate_fd(victim_gate[0]) == AGENT_STATUS_OK,
+	      "delegate cancel controller victim gate");
 	controller_pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
 	check(controller_pid >= 0, "create retired cancel controller");
 	if (controller_pid == 0)
@@ -826,6 +836,10 @@ static TEST_NOINLINE void check_ipc_route_authorization(void)
 	check(pipe(source_report) == 0, "create route source report pipe");
 	check(agent_watch(AGENT_EVENT_MESSAGE, "ipc-route-") == 0,
 	      "watch orchestrator route probes");
+	check(agent_scope_delegate_fd(target_setup[0]) == AGENT_STATUS_OK,
+	      "delegate route target setup pipe");
+	check(agent_scope_delegate_fd(target_ready[1]) == AGENT_STATUS_OK,
+	      "delegate route target ready pipe");
 	target_pid = agent_create_role(AGENT_ROLE_RECOVERY);
 	check(target_pid >= 0, "create route target");
 	if (target_pid == 0)
@@ -833,6 +847,10 @@ static TEST_NOINLINE void check_ipc_route_authorization(void)
 	check(read(target_ready[0], &phase, 1) == 1 && phase == 'T',
 	      "wait route target ready");
 
+	check(agent_scope_delegate_fd(source_gate[0]) == AGENT_STATUS_OK,
+	      "delegate route source gate pipe");
+	check(agent_scope_delegate_fd(source_report[1]) == AGENT_STATUS_OK,
+	      "delegate route source report pipe");
 	source_pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	check(source_pid >= 0, "create route source");
 	if (source_pid == 0)
@@ -912,6 +930,8 @@ static TEST_NOINLINE void check_target_route_consent(void)
 	char phase = 0;
 
 	check(pipe(ready) == 0, "create consent route ready pipe");
+	check(agent_scope_delegate_fd(ready[1]) == AGENT_STATUS_OK,
+	      "delegate consent route ready pipe");
 	target_pid = agent_create_role(AGENT_ROLE_RECOVERY);
 	check(target_pid >= 0, "create consent route target");
 	if (target_pid == 0)
@@ -961,6 +981,8 @@ static TEST_NOINLINE void check_route_slot_reclamation(void)
 	      "watch route lifetime messages");
 	for (int i = 0; i < AGENT_IPC_ROUTE_MAX + 2; i++) {
 		check(pipe(gate) == 0, "create route lifetime gate");
+		check(agent_scope_delegate_fd(gate[0]) == AGENT_STATUS_OK,
+		      "delegate route lifetime gate");
 		source_pid = agent_create_role(AGENT_ROLE_SENTINEL);
 		check(source_pid >= 0, "create route lifetime source");
 		if (source_pid == 0)
@@ -1029,6 +1051,8 @@ static void run_orchestrator(void)
 	check(pipe(audit_gate) == 0, "create trusted audit gate");
 	check(agent_watch(AGENT_EVENT_MESSAGE, "audit-delegation") == 0,
 	      "watch trusted audit delegation");
+	check(agent_scope_delegate_fd(audit_gate[0]) == AGENT_STATUS_OK,
+	      "delegate trusted audit gate");
 	pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	check(pid >= 0, "create sentinel");
 	if (pid == 0)

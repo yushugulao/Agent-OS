@@ -52,11 +52,11 @@ Agent-OS 在 uCore syscall 编号空间中使用 500 至 542；通用内核工�
 | `agent_worker_create` | 539 | `int agent_worker_create(const char *, uint64)` | 创建等待执行指定 immutable、domain-safe worker 映像的非 Agent workflow worker，并按映像安全配置衰减文件系统能力 |
 | `agent_route_config` | 540 | `int agent_route_config(int, int, uint64, int)` | 为指定 source/target Agent 授予或撤销 `MESSAGE` / `LLM_DONE` 定向 IPC 路由 |
 | `agent_workflow_create` | 541 | `int agent_workflow_create(int role)` | 由可信 bootstrap factory 创建新的、内核签发的 workflow scope，并在其中创建根 Agent |
-| `agent_scope_delegate_fd` | 542 | `int agent_scope_delegate_fd(int fd)` | 为下一次跨 workflow 边界创建授予一个一次性 pipe fd 继承票据 |
+| `agent_scope_delegate_fd` | 542 | `int agent_scope_delegate_fd(int fd)` | 为调用线程的下一次安全主体创建授予一个一次性 pipe fd 继承票据 |
 | `kernel_work_last_preemptions` | 543 | `long kernel_work_last_preemptions(void)` | 读取当前线程上一 syscall 的内核工作重调度次数 |
 | `io_policy_info` | 544 | `int io_policy_info(struct io_policy_info *)` | 读取当前持久 owner 和前台 I/O class 的预算、等待、物理传输及 cache 观测，不修改策略状态 |
 
-`agent_run` 和 `context_snapshot` 是性能主路径。`agent_file_prefetch_snapshot` 用于读取当前 Agent 自己可见的 metadata 预取提示，`agent_file_prefetch_span_snapshot` 用于读取同一可信 scope 和 span 下跨 Agent 汇总的 metadata 预取提示。`agent_trace_snapshot` 是单个 Agent 的运行查看和排查主路径，用于把工具调用历史与调度原因放进同一组短记录中。`agent_span_trace_snapshot` 读取当前 Agent 所在可信 span 的系统级短记录，使参与协作的 Agent 能解释本轮协作中的 Context、事件和预取交接来源。`agent_timeline_snapshot` 是统一导出入口，把当前 Agent 可见的 Context、调度、审计和预取提示转换成同一种 record，便于科研平台页面直接读取。`agent_timeline_query` 在同一组可见记录上执行 source、tick、span、pid、kind、tool、event、status、flags 和 after-cursor 过滤，减少页面重复拉取和用户态筛选，也支持页面拿上一条记录作为游标继续读取后续记录。`agent_timeline_wait` 复用同一 filter，在没有匹配记录时让 Agent 睡眠；新记录写入时内核把新记录规范化为 `agent_timeline_record`，并直接用等待者保存的完整 filter 判断是否唤醒。`agent_timeline_read` 在同一套规则上把等待和复制合并为一次 syscall，减少页面或 Agent worker 的 wait 后再 query 成本。`agent_file_edit_begin`、`agent_file_edit_commit`、`agent_file_edit_abort` 和 `agent_file_edit_state` 是真实文件编辑冲突控制接口；内核用真实 `dev + inum + incarnation` 识别文件，并在 `write`、`O_TRUNC`、`unlink` 路径上检查租约持有者和精确 scope。`agent_worker_create` 不创建 Agent 身份或 Agent Context，而是让 orchestrator 在自己的 scope 内显式建立一个最小权限 workflow worker；子进程随后必须执行创建时绑定的 immutable、domain-safe worker 映像才能取得受限文件系统能力。`agent_workflow_create` 是唯一创建新 workflow security boundary 的用户 ABI，角色委派接口本身不能铸造新 scope。`agent_scope_delegate_fd` 只为下一次边界创建显式携带选中的 pipe 端点。`agent_provenance_snapshot` 导出同一可见范围内的因果边，用于页面绘制“哪个 Context、事件或预取提示触发了后续动作”。`agent_audit_snapshot` 和 `agent_audit_query` 是 orchestrator 的 scope 内系统级观测入口；底层物理表共 512 槽，但调用者最多看到自己的 128 槽配额窗口。`agent_ledger_snapshot` 在同一 scope 的逻辑账本上返回可见范围、总量、已淘汰数、分类计数和账本 hash。`agent_call` 是赛题“工具名称 + 参数键值列表”结构化协议的正式入口，也兼容已有示例程序。
+`agent_run` 和 `context_snapshot` 是性能主路径。`agent_file_prefetch_snapshot` 用于读取当前 Agent 自己可见的 metadata 预取提示，`agent_file_prefetch_span_snapshot` 用于读取同一可信 scope 和 span 下跨 Agent 汇总的 metadata 预取提示。`agent_trace_snapshot` 是单个 Agent 的运行查看和排查主路径，用于把工具调用历史与调度原因放进同一组短记录中。`agent_span_trace_snapshot` 读取当前 Agent 所在可信 span 的系统级短记录，使参与协作的 Agent 能解释本轮协作中的 Context、事件和预取交接来源。`agent_timeline_snapshot` 是统一导出入口，把当前 Agent 可见的 Context、调度、审计和预取提示转换成同一种 record，便于科研平台页面直接读取。`agent_timeline_query` 在同一组可见记录上执行 source、tick、span、pid、kind、tool、event、status、flags 和 after-cursor 过滤，减少页面重复拉取和用户态筛选，也支持页面拿上一条记录作为游标继续读取后续记录。`agent_timeline_wait` 复用同一 filter，在没有匹配记录时让 Agent 睡眠；新记录写入时内核把新记录规范化为 `agent_timeline_record`，并直接用等待者保存的完整 filter 判断是否唤醒。`agent_timeline_read` 在同一套规则上把等待和复制合并为一次 syscall，减少页面或 Agent worker 的 wait 后再 query 成本。`agent_file_edit_begin`、`agent_file_edit_commit`、`agent_file_edit_abort` 和 `agent_file_edit_state` 是真实文件编辑冲突控制接口；内核用真实 `dev + inum + incarnation` 识别文件，并在 `write`、`O_TRUNC`、`unlink` 路径上检查租约持有者和精确 scope。`agent_worker_create` 不创建 Agent 身份或 Agent Context，而是让 orchestrator 在自己的 scope 内显式建立一个最小权限 workflow worker；子进程随后必须执行创建时绑定的 immutable、domain-safe worker 映像才能取得受限文件系统能力。`agent_workflow_create` 是唯一创建新 workflow security boundary 的用户 ABI，角色委派接口本身不能铸造新 scope。`agent_scope_delegate_fd` 只让调用线程的下一次 workflow、Agent、worker 或降权普通子主体显式携带选中的 pipe 端点。`agent_provenance_snapshot` 导出同一可见范围内的因果边，用于页面绘制“哪个 Context、事件或预取提示触发了后续动作”。`agent_audit_snapshot` 和 `agent_audit_query` 是 orchestrator 的 scope 内系统级观测入口；底层物理表共 512 槽，但调用者最多看到自己的 128 槽配额窗口。`agent_ledger_snapshot` 在同一 scope 的逻辑账本上返回可见范围、总量、已淘汰数、分类计数和账本 hash。`agent_call` 是赛题“工具名称 + 参数键值列表”结构化协议的正式入口，也兼容已有示例程序。
 
 ### 基础兼容系统调用：uCore
 
@@ -240,9 +240,9 @@ int agent_scope_delegate_fd(int fd);
 
 `agent_workflow_create(role)` 仅允许“非 Agent、具有内核 resource-domain admin 状态、当前执行可信 bootstrap 映像”的 factory 调用。它先执行正常 role grant 检查，再原子申请新的进程资源域和动态 workflow scope，并创建该 scope 的根 Agent；该 scope 同时是 workflow 的存储计费主体，但与进程资源域槽独立。已在某个 scope 内的 orchestrator 即使具备 `ORCHESTRATE`，也只能用 `agent_create_role()` 在本 scope 内创建角色，不能用角色 grant 铸造新安全域。系统最多同时接纳 4 个 active workflow；`VFS_SCOPE_LIFECYCLE_CAP=8` 同时限制 active + retiring，所以退役积压最多 8 个。没有可接纳槽时创建失败且不留下半初始化 scope。
 
-同 scope 的 `agent_create_role()` 和 `agent_worker_create()` 继承该 scope。普通 `fork()` 跨出 workflow 边界并丢弃 Agent/VFS 权限，不能把 capability 或 scope 带给普通后代。边界创建默认只继承 stdio；普通文件和未委派 pipe 均不跨 scope。
+同 scope 的 `agent_create_role()` 和 `agent_worker_create()` 继承该 scope，但会建立新的安全主体。pipe 是持有型 capability，不会因 scope 相同而自动进入新主体；inode 文件在 scope 不变时继续在每次操作中按新主体凭据重新鉴权，跨 scope 时连描述符也不继承。workflow 或可信 bootstrap 的动态 scope 中，普通 `fork()` 会丢弃 Agent/VFS 凭据，同样属于安全主体边界；普通 PUBLIC init 的 resource-domain admin 位只控制记账域 admission，不参与 Agent/VFS/IPC 授权，父子仍是同一安全主体并保留 POSIX pipe 继承。
 
-`agent_scope_delegate_fd(fd)` 只接受当前打开的 pipe fd。调用者必须是可信 bootstrap factory 或具备 `ORCHESTRATE` 的 Agent。成功只设置一个一次性票据：下一次发生 workflow 边界尝试时，内核在任何可能失败的分配之前消费本进程的全部此类票据；被标记的 pipe 端点才允许随该次创建继承。票据不适用于普通文件、不转化为长期 fd 权限，也不会因创建失败而残留给后续子进程。
+`agent_scope_delegate_fd(fd)` 只接受当前打开的 pipe fd。调用者必须是可信 bootstrap factory 或具备 `ORCHESTRATE` 的 Agent。成功票据绑定调用线程，而不是整个进程：该线程下一次创建 workflow、Agent、worker 或发生凭据降级的普通子主体时，内核在不可让出的临界区固定精确 file 对象并消费该线程的全部票据。其他线程只能消费自己的票据；关闭、替换 fd 槽或 `exec` 会撤销相应票据，不能把旧票据转移给新对象。被标记端点才进入该子主体，子进程不继承票据；继续传递必须再次显式授权。创建 syscall 的参数、权限、映像或资源检查失败也会清除调用线程的票据。
 
 ### 生命周期和配额
 
@@ -293,7 +293,7 @@ Agent 业务 capability 与 VFS effective capability 是两套独立凭据，但
 | `KERNEL_PRIVATE` | 只允许内核凭据访问，例如 metadata 双 bank 后端 |
 | `ROOT` | 两个域都可查找、读取和执行目录入口；修改要求 public 域或 workflow 域的 `ARTIFACT_WRITE` |
 
-普通 `fork()` 不继承 workflow effective capability，也不保留动态 scope。已经继承的文件描述符也不是授权票据：每次 `read`、`write` 等操作都会用当前进程的 capability 和 scope 重新检查 inode，因此失去权限或属于另一 scope 的子进程不能通过父进程预先打开的 fd 绕过策略。跨 scope 创建默认关闭所有非 stdio fd；只有 `agent_scope_delegate_fd()` 明确标记的一次性 pipe 端点例外。
+普通 `fork()` 不继承 workflow effective capability，也不保留动态 scope，因此跨 scope 的 inode 描述符直接撤销。同 scope 继承的 inode 描述符也不是授权票据：每次 `read`、`write` 等操作都会用当前进程的 capability 和 scope 重新检查 inode。每次新 Agent/worker/workflow 主体，以及从 workflow 或可信 bootstrap 动态 scope 降权的普通子主体，都默认不继承 pipe；只有调用线程通过 `agent_scope_delegate_fd()` 明确标记的一次性端点例外。同一 PUBLIC 安全主体内的普通 `fork()` 仍保留 POSIX pipe 继承，单纯更换资源记账域不改变这一语义。
 
 `exec` 是命名空间隔离中的显式例外。内核可在调用者所在域未命中后查找另一域的布局有效映像，但仅执行该映像不会安装 workflow 凭据：普通进程仍保持 public/无能力状态。只有 `agent_worker_create()` 预先绑定的精确委派可以为非 Agent worker 安装能力；已有 Agent 则还要通过可信 role-image 校验才能保留身份和能力。
 
@@ -329,7 +329,7 @@ Agent-only 直接 syscall 的权限要求：
 | `agent_sched_config` | 返回 `-1` | `ORCHESTRATE` |
 | `agent_worker_create` | 无 `ORCHESTRATE` 返回 `AGENT_STATUS_DENIED`；非法能力返回 `AGENT_STATUS_BAD_PARAM`；用户地址、映像查找、VFS 鉴权或进程分配失败返回 `-1` | `ORCHESTRATE`；并受请求能力、父凭据和目标映像 profile 的共同上限约束 |
 | `agent_workflow_create` | 未获 bootstrap factory 权限返回 `AGENT_STATUS_DENIED`，admission/资源不足返回失败 | 仅可信 bootstrap、非 Agent resource-domain factory；创建全新 scope，不接受普通 Agent capability 替代 |
-| `agent_scope_delegate_fd` | 非法/非 pipe fd 返回 `AGENT_STATUS_BAD_PARAM` | 可信 bootstrap factory 或 `ORCHESTRATE`；仅签发下一次 workflow 边界尝试的一次性票据 |
+| `agent_scope_delegate_fd` | 非法/非 pipe fd 返回 `AGENT_STATUS_BAD_PARAM` | 可信 bootstrap factory 或 `ORCHESTRATE`；仅签发调用线程下一次安全主体创建的一次性票据 |
 
 `agent_wake()` 是消息投递接口，只接受 `AGENT_EVENT_MESSAGE`。`AGENT_EVENT_NONE` 或超出 `AGENT_EVENT_MAX` 的类型返回 `AGENT_STATUS_BAD_PARAM`；`FILE_STATUS`、`TIMER`、`POLICY_DENIED`、`LLM_DONE` 等由内核或专用工具产生的事件返回 `AGENT_STATUS_DENIED`。例如 `LLM_DONE` 只能由具备 `LLM_RELAY` capability 的 `llm_response` 工具路径投递，不能通过 `agent_wake()` 伪造。`MESSAGE_SEND` 只表示调用者能够发起消息，不再等价于向任意 PID 投递；跨 Agent 的 `agent_wake`、`send_message`、非零 target 的 `llm_request` 和 `llm_response` 还必须命中相应事件类型的定向 IPC 路由，并且 source/target 必须属于同一 active workflow scope。`llm_request(target_pid=0, ...)` 是只记录摘要、不执行投递的模式，不需要 route。
 

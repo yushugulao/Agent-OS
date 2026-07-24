@@ -458,6 +458,8 @@ static __attribute__((noinline)) void check_metadata_transactions(void)
 
 	check(pipe(start_pipe) == 0, "create metadata race pipe");
 	for (int i = 0; i < META_RACE_WRITERS; i++) {
+		check(agent_scope_delegate_fd(start_pipe[0]) == AGENT_STATUS_OK,
+		      "delegate metadata race gate");
 		children[i] = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
 		check(children[i] >= 0, "create metadata race writer");
 		if (children[i] == 0)
@@ -627,6 +629,199 @@ check_foreign_lease(uint64 lease_id, uint64 base_version)
 	      "abort local isolated lease");
 }
 
+static void pipe_redelegation_probe(int reply_fd, int expected)
+{
+	char byte = 0;
+
+	check(write(reply_fd, &byte, 0) == expected,
+	      expected == 0 ? "explicit pipe redelegation works" :
+			      "ambient pipe propagation denied");
+	exit(0);
+}
+
+static void pipe_data_probe(int fd, int expected)
+{
+	char byte = 'D';
+
+	check(write(fd, &byte, 1) == expected,
+	      expected == 1 ? "delegated pipe transfers data" :
+			      "undelegated pipe rejects data");
+	exit(0);
+}
+
+struct competing_pipe_args {
+	int protected_fd;
+	int delegated_fd;
+};
+
+static void forked_child_stack_probe(void *arg)
+{
+	exit((int)(long)arg);
+}
+
+static void competing_pipe_spawn(void *arg)
+{
+	struct competing_pipe_args *args = arg;
+	char byte = 'T';
+	int join_status;
+	int status = -1;
+	int child_tid;
+	int pid;
+
+	if (agent_scope_delegate_fd(args->delegated_fd) != AGENT_STATUS_OK)
+		exit(1);
+	pid = agent_create_role(AGENT_ROLE_ARTIFACT);
+	if (pid < 0)
+		exit(2);
+	if (pid == 0) {
+		child_tid = thread_create(forked_child_stack_probe, 0);
+		if (child_tid < 0)
+			exit(3);
+		while ((join_status = waittid(child_tid)) == -2)
+			sched_yield();
+		if (join_status != 0)
+			exit(4);
+		if (write(args->protected_fd, &byte, 0) != -1 ||
+		    write(args->delegated_fd, &byte, 1) != 1)
+			exit(5);
+		exit(0);
+	}
+	if (waitpid(pid, &status) != pid || status != 0)
+		exit(6);
+	exit(0);
+}
+
+static void check_pipe_redelegation(int reply_fd)
+{
+	struct competing_pipe_args competing_args;
+	int competing_pipe[2];
+	int data_pipe[2];
+	int failed_spawn_pipe[2];
+	int replacement[2];
+	int stale[2];
+	int stale_read_fd;
+	int stale_write_fd;
+	int status = -1;
+	int tid;
+	int pid;
+
+	pid = agent_create_role(AGENT_ROLE_ARTIFACT);
+	check(pid >= 0, "create undelegated pipe probe");
+	if (pid == 0)
+		pipe_redelegation_probe(reply_fd, -1);
+	check(waitpid(pid, &status) == pid, "wait undelegated pipe probe");
+	check(status == 0, "undelegated pipe probe status");
+
+	check(pipe(competing_pipe) == 0,
+	      "create cross-thread delegation pipe");
+	competing_args.protected_fd = reply_fd;
+	competing_args.delegated_fd = competing_pipe[1];
+	check(agent_scope_delegate_fd(reply_fd) == AGENT_STATUS_OK,
+	      "authorize explicit pipe redelegation");
+	tid = thread_create(competing_pipe_spawn, &competing_args);
+	check(tid > 0, "create competing delegation thread");
+	check(waittid(tid) == 0, "thread cannot steal delegation ticket");
+	{
+		char byte = 0;
+
+		read_exact(competing_pipe[0], &byte, 1,
+			   "receive competing thread data");
+		check(byte == 'T', "competing thread receives only own ticket");
+	}
+	pid = agent_create_role(AGENT_ROLE_ARTIFACT);
+	check(pid >= 0, "create delegated pipe probe");
+	if (pid == 0) {
+		char byte = 0;
+
+		check(write(reply_fd, &byte, 0) == 0,
+		      "issuing thread keeps own delegation ticket");
+		check(write(competing_pipe[1], &byte, 0) == -1,
+		      "issuing thread cannot consume sibling ticket");
+		exit(0);
+	}
+	status = -1;
+	check(waitpid(pid, &status) == pid, "wait delegated pipe probe");
+	check(status == 0, "delegated pipe probe status");
+
+	pid = agent_create_role(AGENT_ROLE_ARTIFACT);
+	check(pid >= 0, "create consumed-ticket pipe probe");
+	if (pid == 0)
+		pipe_redelegation_probe(reply_fd, -1);
+	status = -1;
+	check(waitpid(pid, &status) == pid, "wait consumed-ticket pipe probe");
+	check(status == 0, "consumed-ticket pipe probe status");
+	check(close(competing_pipe[0]) == 0 &&
+		      close(competing_pipe[1]) == 0,
+	      "close cross-thread delegation pipe");
+
+	check(pipe(data_pipe) == 0, "create delegated data pipe");
+	check(agent_scope_delegate_fd(data_pipe[1]) == AGENT_STATUS_OK,
+	      "authorize delegated data pipe");
+	pid = agent_create_role(AGENT_ROLE_ARTIFACT);
+	check(pid >= 0, "create delegated data probe");
+	if (pid == 0)
+		pipe_data_probe(data_pipe[1], 1);
+	status = -1;
+	check(waitpid(pid, &status) == pid, "wait delegated data probe");
+	check(status == 0, "delegated data probe status");
+	{
+		char byte = 0;
+
+		read_exact(data_pipe[0], &byte, 1,
+			   "receive delegated pipe data");
+		check(byte == 'D', "delegated pipe data value");
+	}
+	pid = agent_create_role(AGENT_ROLE_ARTIFACT);
+	check(pid >= 0, "create consumed data-ticket probe");
+	if (pid == 0)
+		pipe_data_probe(data_pipe[1], -1);
+	status = -1;
+	check(waitpid(pid, &status) == pid,
+	      "wait consumed data-ticket probe");
+	check(status == 0, "consumed data-ticket probe status");
+	check(close(data_pipe[0]) == 0 && close(data_pipe[1]) == 0,
+	      "close delegated data pipe");
+
+	check(pipe(failed_spawn_pipe) == 0,
+	      "create failed-spawn delegation pipe");
+	check(agent_scope_delegate_fd(failed_spawn_pipe[1]) ==
+		      AGENT_STATUS_OK,
+	      "authorize failed-spawn pipe");
+	check(agent_create_role(99) < 0, "reject invalid delegated spawn");
+	pid = agent_create_role(AGENT_ROLE_ARTIFACT);
+	check(pid >= 0, "create failed-spawn ticket probe");
+	if (pid == 0)
+		pipe_data_probe(failed_spawn_pipe[1], -1);
+	status = -1;
+	check(waitpid(pid, &status) == pid,
+	      "wait failed-spawn ticket probe");
+	check(status == 0, "failed-spawn ticket probe status");
+	check(close(failed_spawn_pipe[0]) == 0 &&
+		      close(failed_spawn_pipe[1]) == 0,
+	      "close failed-spawn delegation pipe");
+
+	check(pipe(stale) == 0, "create stale-ticket pipe");
+	stale_read_fd = stale[0];
+	stale_write_fd = stale[1];
+	check(agent_scope_delegate_fd(stale_write_fd) == AGENT_STATUS_OK,
+	      "authorize stale-ticket pipe");
+	check(close(stale_read_fd) == 0 && close(stale_write_fd) == 0,
+	      "close stale-ticket pipe");
+	check(pipe(replacement) == 0, "reuse stale-ticket fd slots");
+	check(replacement[0] == stale_read_fd &&
+		      replacement[1] == stale_write_fd,
+	      "pipe fd slots reused deterministically");
+	pid = agent_create_role(AGENT_ROLE_ARTIFACT);
+	check(pid >= 0, "create stale-ticket reuse probe");
+	if (pid == 0)
+		pipe_data_probe(replacement[1], -1);
+	status = -1;
+	check(waitpid(pid, &status) == pid, "wait stale-ticket reuse probe");
+	check(status == 0, "stale-ticket reuse probe status");
+	check(close(replacement[0]) == 0 && close(replacement[1]) == 0,
+	      "close replacement pipe");
+}
+
 static void run_scope_root(char identity, int command_fd, int reply_fd,
 			   int peer_pid)
 {
@@ -703,13 +898,18 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 			check_scan_pressure_untracked();
 			check(pipe(writeback_ready) == 0 && pipe(writeback_stop) == 0,
 			      "create metadata writer controls");
+			check(agent_scope_delegate_fd(writeback_ready[1]) ==
+				      AGENT_STATUS_OK &&
+				      agent_scope_delegate_fd(writeback_stop[0]) ==
+					      AGENT_STATUS_OK,
+			      "delegate metadata writer controls");
 			writeback_child = agent_create_role(AGENT_ROLE_ARTIFACT);
 			check(writeback_child >= 0,
 			      "create low-privilege metadata writer");
 			if (writeback_child == 0) {
-				check(close(writeback_ready[0]) == 0 &&
-					      close(writeback_stop[1]) == 0,
-				      "close child metadata controls");
+				check(close(writeback_ready[0]) < 0 &&
+					      close(writeback_stop[1]) < 0,
+				      "unused metadata controls not inherited");
 				metadata_micro_writer(writeback_ready[1],
 						      writeback_stop[0]);
 			}
@@ -837,6 +1037,9 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 			check(agent_file_edit_abort(scope_lease_state.lease_id) == 0,
 			      "release scoped lease");
 			memset(&scope_lease_state, 0, sizeof(scope_lease_state));
+		} else if (command.operation == 'H') {
+			check(identity == 'A', "pipe redelegation probe owner");
+			check_pipe_redelegation(reply_fd);
 		} else if (command.operation == 'Q') {
 			send_reply(reply_fd, scope_id, 0, 0);
 			exit(0);
@@ -1024,6 +1227,8 @@ int main(void)
 		    "cross-scope IPC isolation");
 	run_command(a_command[1], a_reply[0], 'S', 0, 0, ready_a.scope_id,
 		    "same-scope child collaboration");
+	run_command(a_command[1], a_reply[0], 'H', 0, 0, ready_a.scope_id,
+		    "pipe delegation remains single hop");
 	run_command(a_command[1], a_reply[0], 'Y', 0, 0, ready_a.scope_id,
 		    "serialize concurrent metadata transactions");
 	run_command(a_command[1], a_reply[0], 'T', 0, 0, ready_a.scope_id,
@@ -1042,6 +1247,7 @@ int main(void)
 	printf("agentscope_ucore: cross_scope_isolation=1\n");
 	printf("agentscope_ucore: ipc_scope_isolation=1\n");
 	printf("agentscope_ucore: same_scope_collaboration=1\n");
+	printf("agentscope_ucore: pipe_redelegation_isolation=1\n");
 	printf("agentscope_ucore: metadata_transactions=1\n");
 	printf("agentscope_ucore: scope_storage_quota=1\n");
 	printf("agentscope_ucore: scope_reload_isolation=1\n");

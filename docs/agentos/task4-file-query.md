@@ -101,7 +101,7 @@ Agent 工具 capability 只约束 `agent_file_query()`、`read_file_digest` 等 
 
 `exec` 不等同于读取文件内容。当前实现可以在调用者所在域没有匹配项时查找另一域的布局有效映像；普通进程直接执行 workflow 映像后仍是 public 域且没有文件能力。Agent 只有执行允许当前角色的可信映像才能保留身份；非 Agent worker 只有通过精确 pending 委派才能安装 workflow 凭据。
 
-`agent_worker_create()` 的 pending 委派绑定到目标可执行 inode 的 `dev + inum + incarnation`。worker 映像只要求 immutable、domain-safe、有效 W^X 布局和非空 VFS profile，不要求 Agent `TRUSTED` role-image 标志。子进程只有执行创建时绑定的同一映像才取得 workflow 凭据；执行其他映像会清除委派。普通 `fork()` 不复制 workflow effective capability。文件描述符虽然按 uCore 进程语义复制，但每次 `read/write` 都会用当前进程凭据重新检查 inode，因此没有权限的子进程不能利用父进程预先打开的 fd 绕过策略。
+`agent_worker_create()` 的 pending 委派绑定到目标可执行 inode 的 `dev + inum + incarnation`。worker 映像只要求 immutable、domain-safe、有效 W^X 布局和非空 VFS profile，不要求 Agent `TRUSTED` role-image 标志。子进程只有执行创建时绑定的同一映像才取得 workflow 凭据；执行其他映像会清除委派。普通 `fork()` 不复制 workflow effective capability，跨 scope 的 inode fd 也直接撤销；仅在 scope 不变时继承 inode fd，并在每次 `read/write` 中按当前进程凭据重新检查。
 
 ## 根目录自动扫描
 
@@ -338,7 +338,7 @@ align+analyze+report+archive
 
 `agentsecurity_ucore` 说明索引初始化前查询安全，且 recovery 只更新 selector 指定的 run。`agentfs_ucore` 说明真实文件关联、预取提示、自定义 inode、内容摘要、digest cache、`.agentmeta` reload、查询缓存、scan/index 一致性、截断查询、字段清空、删除清理和 selector 未命中都可验证。`agentscan_ucore` 说明根目录后台扫描、普通文件创建后的自动元数据和文件删除后的清理都可运行。
 
-`agentvfs_ucore` 进一步验证 public/workflow 路径隔离、普通进程不能读写或删除 workflow 工件、读写 worker 的映像 profile 上限、错误映像不能取得 pending 委派、普通 fork 不继承文件能力、继承 fd 会重新鉴权，以及 public 命名空间仍可由普通进程使用。
+`agentvfs_ucore` 进一步验证 public/workflow 路径隔离、普通进程不能读写或删除 workflow 工件、读写 worker 的映像 profile 上限、错误映像不能取得 pending 委派、普通 fork 不继承文件能力、跨 scope inode fd 被撤销、worker pipe 需单跳委派，以及 public 命名空间仍可由普通进程使用。
 
 原始输出统一见 [test-record.md](test-record.md)，测试步骤见 [testing-details.md](testing-details.md)。
 

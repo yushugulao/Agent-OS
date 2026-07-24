@@ -18,6 +18,7 @@ struct file *stdio_init(int fd, struct proc *owner)
 	if (f == 0)
 		return 0;
 	f->type = FD_STDIO;
+	f->inherit_class = FD_INHERIT_STDIO;
 	f->readable = (fd == STDIN || fd == STDERR);
 	f->writable = (fd == STDOUT || fd == STDERR);
 	return f;
@@ -58,6 +59,7 @@ void fileclose(struct file *f)
 	f->ip = 0;
 	f->ref = 0;
 	f->type = FD_NONE;
+	f->inherit_class = FD_INHERIT_DENY;
 	f->resource_domain_id = -1;
 	f->resource_reserved = 0;
 	proc_file_slot_release(domain_id, reserved);
@@ -110,6 +112,7 @@ struct file *filealloc(struct proc *owner)
 			if (proc_file_slot_reserve(owner, &domain_id, &reserved) < 0)
 				break;
 			f->type = FD_NONE;
+			f->inherit_class = FD_INHERIT_DENY;
 			f->ref = 1;
 			f->readable = 0;
 			f->writable = 0;
@@ -221,6 +224,7 @@ int fileopen(char *path, uint64 omode)
 	}
 	// only support FD_INODE
 	f->type = FD_INODE;
+	f->inherit_class = FD_INHERIT_REAUTHORIZE;
 	f->off = 0;
 	f->ip = ip;
 	f->readable = !(omode & O_WRONLY);

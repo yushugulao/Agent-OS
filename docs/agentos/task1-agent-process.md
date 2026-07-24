@@ -126,7 +126,7 @@ sequenceDiagram
 
 `agent_worker_create(image, capabilities)` 与 Agent 创建接口共享进程返回约定，但不会设置 Agent 身份、角色或 Context。它只允许具备 `ORCHESTRATE` 的 Agent 调用，能力只能从 `CONTENT_READ` 和 `ARTIFACT_WRITE` 中选择，并同时受父进程业务能力、父进程 VFS effective capability 和目标映像 profile 上限约束。
 
-worker 映像不使用 Agent 的 `TRUSTED` role-image 身份。mkfs 为布局有效的程序生成 immutable、domain-safe worker 别名和 VFS profile；权限来自 orchestrator 通过 `agent_worker_create()` 建立的精确委派。委派在创建时绑定到目标 inode 的 `dev + inum + incarnation`，子进程随后必须成功 `exec()` 完全相同的 worker 映像才能安装 workflow 凭据。执行其他映像会清除 pending 委派。普通 fork 不继承 workflow 凭据；即使文件描述符由父进程复制给子进程，后续 `read/write` 仍按当前进程凭据重新鉴权，不能把已打开的 fd 当作能力票据。
+worker 映像不使用 Agent 的 `TRUSTED` role-image 身份。mkfs 为布局有效的程序生成 immutable、domain-safe worker 别名和 VFS profile；权限来自 orchestrator 通过 `agent_worker_create()` 建立的精确委派。委派在创建时绑定到目标 inode 的 `dev + inum + incarnation`，子进程随后必须成功 `exec()` 完全相同的 worker 映像才能安装 workflow 凭据。执行其他映像会清除 pending 委派。普通 fork 不继承 workflow 凭据，跨 scope inode fd 直接撤销；同 scope inode fd 的后续 `read/write` 仍按当前进程凭据重新鉴权，不能把已打开的 fd 当作能力票据。worker 的 pipe 端点还必须由创建线程逐次显式委派。
 
 ## 释放流程
 

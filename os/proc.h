@@ -103,6 +103,8 @@ struct thread {
 	uint io_request_transfers;
 	uint bio_buffer_holds;
 	uint bio_fs_atomic_depth;
+	// Tickets belong to the calling thread's next principal creation.
+	uchar fd_delegate_ticket[FD_BUFFER_SIZE];
 };
 
 enum procstate { P_UNUSED, P_USED };
@@ -148,7 +150,6 @@ struct proc {
 	uint vfs_bound_exec_incarnation;
 	//File descriptor table, using to record the files opened by the process
 	struct file *files[FD_BUFFER_SIZE];
-	uchar fd_scope_delegate[FD_BUFFER_SIZE];
 	struct thread threads[NTHREAD];
 	struct wait_queue child_waiters;
 	struct wait_queue thread_exit_waiters;
@@ -303,7 +304,8 @@ int agent_create_proc();
 int agent_create_role_proc(int role);
 int agent_workflow_create_proc(int role);
 int agent_worker_create_proc(char *, uint64);
-int proc_scope_delegate_fd(int);
+int proc_delegate_fd(int);
+void proc_discard_fd_delegations(void);
 void proc_revoke_vfs_scope_fds(struct proc *);
 int exec(char *, char **);
 int wait(int, int *);

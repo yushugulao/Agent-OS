@@ -212,6 +212,7 @@ int main(void)
 		int worker;
 		int worker_status = -1;
 		int worker_gate[2];
+		int worker_ticket_probe[2];
 		uint64 processes_before;
 		uint64 processes_after;
 		char gate = 'G';
@@ -225,6 +226,52 @@ int main(void)
 		check(agent_worker_create(READER_IMAGE,
 				  AGENT_CAP_ARTIFACT_WRITE) == -1,
 		      "enforce image capability ceiling");
+		check(pipe(worker_ticket_probe) == 0,
+		      "create worker delegation probe");
+		worker = agent_worker_create(READER_IMAGE,
+					 AGENT_CAP_CONTENT_READ);
+		check(worker >= 0, "create undelegated worker probe");
+		if (worker == 0) {
+			check(close(worker_ticket_probe[0]) == -1,
+			      "worker has no ambient pipe");
+			exit(0);
+		}
+		check(waitpid(worker, &worker_status) == worker,
+		      "wait undelegated worker probe");
+		check(worker_status == 0, "undelegated worker probe status");
+		check(agent_scope_delegate_fd(worker_ticket_probe[0]) ==
+			      AGENT_STATUS_OK,
+		      "delegate worker probe pipe");
+		worker_status = -1;
+		worker = agent_worker_create(READER_IMAGE,
+					 AGENT_CAP_CONTENT_READ);
+		check(worker >= 0, "create delegated worker probe");
+		if (worker == 0) {
+			check(close(worker_ticket_probe[0]) == 0,
+			      "worker receives explicit pipe");
+			exit(0);
+		}
+		check(waitpid(worker, &worker_status) == worker,
+		      "wait delegated worker probe");
+		check(worker_status == 0, "delegated worker probe status");
+		worker_status = -1;
+		worker = agent_worker_create(READER_IMAGE,
+					 AGENT_CAP_CONTENT_READ);
+		check(worker >= 0, "create consumed worker-ticket probe");
+		if (worker == 0) {
+			check(close(worker_ticket_probe[0]) == -1,
+			      "worker ticket is single use");
+			exit(0);
+		}
+		check(waitpid(worker, &worker_status) == worker,
+		      "wait consumed worker-ticket probe");
+		check(worker_status == 0,
+		      "consumed worker-ticket probe status");
+		check(close(worker_ticket_probe[0]) == 0 &&
+			      close(worker_ticket_probe[1]) == 0,
+		      "close worker delegation probe");
+		printf("agentvfs_ucore: worker_pipe_delegation=1\n");
+		worker_status = -1;
 		processes_before = workflow_process_count();
 		check(pipe(worker_gate) == 0, "create pending worker gate");
 		check(agent_scope_delegate_fd(worker_gate[0]) == AGENT_STATUS_OK,
@@ -369,7 +416,7 @@ int main(void)
 	check(waitpid(pid, &status) == pid, "wait public cleanup");
 	check(status == 0, "public cleanup status");
 	check(unlink(SECRET_FILE) == 0, "remove protected artifact");
-	printf("agentvfs_ucore: inherited_fd_revalidated=1\n");
+	printf("agentvfs_ucore: cross_scope_fd_revoked=1\n");
 	printf("agentvfs_ucore: protected_paths=1\n");
 	printf("agentvfs_ucore: parent passed\n");
 	return 0;

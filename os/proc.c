@@ -927,6 +927,8 @@ void proc_init()
 			t->resource_domain_id = -1;
 			t->resource_slot_reserved = 0;
 			t->resource_slot_charged = 0;
+			memset(t->fd_delegate_ticket, 0,
+			       sizeof(t->fd_delegate_ticket));
 		}
 	}
 	idle.kstack = (uint64)boot_stack_top;
@@ -1311,7 +1313,6 @@ static struct proc *allocproc_admit(struct proc *parent,
 	}
 	kernel_stack_reset_slot(p, 0);
 	memset((void *)p->files, 0, sizeof(struct file *) * FD_BUFFER_SIZE);
-	memset(p->fd_scope_delegate, 0, sizeof(p->fd_scope_delegate));
 	p->next_mutex_id = 0;
 	p->next_semaphore_id = 0;
 	p->next_condvar_id = 0;
@@ -1344,9 +1345,45 @@ struct trapframe *proc_trapframe(struct proc *p, int tid)
 	return (struct trapframe *)trapframe[p - pool][tid];
 }
 
-inline uint64 get_thread_ustack_base_va(struct thread *t)
+static uint64 get_thread_ustack_base_va(struct thread *t)
 {
-	return t->process->ustack_base + t->tid * USTACK_SIZE;
+	return t->ustack;
+}
+
+// Thread IDs name kernel-owned slots, not user-stack virtual addresses.  This
+// distinction matters after a non-main thread forks: the child must resume on
+// the issuer's stack at the same virtual address because saved frame pointers
+// and stack contents may refer to that address.
+static uint64 proc_alloc_thread_ustack(struct proc *p, struct thread *owner)
+{
+	for (int slot = 0; slot < NTHREAD; slot++) {
+		uint64 candidate = p->ustack_base + slot * USTACK_SIZE;
+		int in_use = 0;
+
+		// A fork child retains every page of the parent's address space.
+		// Unowned sibling stacks may still contain objects referenced by the
+		// surviving thread, so only an entirely unmapped slot may be reused.
+		for (uint64 offset = 0; offset < USTACK_SIZE; offset += PGSIZE)
+			if (walkaddr(p->pagetable, candidate + offset) != 0) {
+				in_use = 1;
+				break;
+			}
+		if (in_use)
+			continue;
+		for (int tid = 0; tid < NTHREAD; tid++) {
+			struct thread *t = &p->threads[tid];
+
+			if (t == owner || t->state == T_UNUSED)
+				continue;
+			if (t->ustack == candidate) {
+				in_use = 1;
+				break;
+			}
+		}
+		if (!in_use)
+			return candidate;
+	}
+	return 0;
 }
 
 int allocthread(struct proc *p, uint64 entry, int alloc_user_res)
@@ -1354,6 +1391,7 @@ int allocthread(struct proc *p, uint64 entry, int alloc_user_res)
 	int tid;
 	struct thread *t;
 	uint64 old_max_page;
+	uint64 user_stack;
 	int enabled;
 	int new_charge = 0;
 
@@ -1375,6 +1413,13 @@ int allocthread(struct proc *p, uint64 entry, int alloc_user_res)
 	return -1;
 
 found:
+	user_stack = alloc_user_res != 0 ?
+			     proc_alloc_thread_ustack(p, t) :
+			     p->ustack_base;
+	if (user_stack == 0) {
+		intr_restore(enabled);
+		return -1;
+	}
 	if (!t->resource_slot_charged) {
 		int domain_id = p->resource_domain_id;
 
@@ -1405,17 +1450,19 @@ found:
 	t->wait_interruptible = 0;
 	t->on_run_queue = 0;
 	t->run_queue_agent = -1;
+	t->ustack = user_stack;
+	memset(t->fd_delegate_ticket, 0, sizeof(t->fd_delegate_ticket));
 	intr_restore(enabled);
 	// kernel stack
 	t->kstack = kernel_stack_base(p - pool, tid);
 	kernel_stack_reset_slot(p, tid);
 	// user stack
-	t->ustack = get_thread_ustack_base_va(t);
 	if (alloc_user_res != 0) {
 		if (uvmmap(p->pagetable, t->ustack, USTACK_SIZE / PAGE_SIZE,
 			   PTE_U | PTE_R | PTE_W) < 0) {
 			t->state = T_UNUSED;
 			t->tid = -1;
+			t->ustack = 0;
 			t->run_queue_agent = -1;
 			if (new_charge)
 				proc_thread_resource_release(t);
@@ -1436,6 +1483,7 @@ found:
 		p->max_page = old_max_page;
 		t->state = T_UNUSED;
 		t->tid = -1;
+		t->ustack = 0;
 		t->run_queue_agent = -1;
 		if (new_charge)
 			proc_thread_resource_release(t);
@@ -1594,6 +1642,25 @@ void freepagetable(pagetable_t pagetable, uint64 max_page)
 	uvmfree(pagetable, max_page);
 }
 
+// The descriptor table is process-wide, while delegation intent belongs to a
+// thread. Replacing or closing a slot invalidates every thread's intent for
+// that slot so a later object cannot inherit a stale ticket.
+static void proc_clear_fd_delegate_tickets(struct proc *p, int fd)
+{
+	if (p == 0 || fd < 0 || fd >= FD_BUFFER_SIZE)
+		return;
+	for (int tid = 0; tid < NTHREAD; tid++)
+		p->threads[tid].fd_delegate_ticket[fd] = 0;
+}
+
+static void proc_clear_all_fd_delegate_tickets(struct proc *p)
+{
+	if (p == 0)
+		return;
+	for (int fd = 0; fd < FD_BUFFER_SIZE; fd++)
+		proc_clear_fd_delegate_tickets(p, fd);
+}
+
 // Open objects are part of a workflow credential, not ambient POSIX state.
 // vfs_proc_reset() is the single revocation boundary for both active and
 // pending workflow identities. A successful pending-to-active exec does not
@@ -1602,6 +1669,7 @@ void proc_revoke_vfs_scope_fds(struct proc *p)
 {
 	struct file *files[FD_BUFFER_SIZE];
 	uint scope_id;
+	int enabled;
 
 	memset(files, 0, sizeof(files));
 	if (p == 0)
@@ -1610,16 +1678,18 @@ void proc_revoke_vfs_scope_fds(struct proc *p)
 			   p->vfs_scope_id : p->vfs_pending_scope_id;
 	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC)
 		return;
+	enabled = intr_save();
+	proc_clear_all_fd_delegate_tickets(p);
 	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
 		struct file *f = p->files[i];
 
-		p->fd_scope_delegate[i] = 0;
 		if (f == 0 || (!fd_is_reserved(f) && f->type == FD_STDIO))
 			continue;
 		p->files[i] = 0;
 		if (!fd_is_reserved(f))
 			files[i] = f;
 	}
+	intr_restore(enabled);
 	for (int i = 0; i < FD_BUFFER_SIZE; i++)
 		if (files[i] != 0)
 			fileclose(files[i]);
@@ -1672,6 +1742,8 @@ void proc_install_user_image(struct proc *p, struct user_image *image,
 		slot->wait_interruptible = 0;
 		slot->on_run_queue = 0;
 		slot->run_queue_agent = -1;
+		memset(slot->fd_delegate_ticket, 0,
+		       sizeof(slot->fd_delegate_ticket));
 	}
 	main_thread = &p->threads[0];
 	main_thread->tid = 0;
@@ -1715,8 +1787,10 @@ static void proc_reset_thread_slot(struct thread *t)
 {
 	kernel_work_reset(t);
 	proc_thread_resource_release(t);
+	memset(t->fd_delegate_ticket, 0, sizeof(t->fd_delegate_ticket));
 	t->state = T_UNUSED;
 	t->tid = -1;
+	t->ustack = 0;
 	t->wait_channel = 0;
 	t->wait_next = 0;
 	t->wait_reason = WAIT_REASON_NONE;
@@ -1768,8 +1842,8 @@ static int proc_release_resources(struct proc *p, int finish_teardown)
 	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
 		files[i] = p->files[i];
 		p->files[i] = 0;
-		p->fd_scope_delegate[i] = 0;
 	}
+	proc_clear_all_fd_delegate_tickets(p);
 	for (int i = 0; i < FD_BUFFER_SIZE; i++)
 		if (files[i] != 0 && !fd_is_reserved(files[i]))
 			fileclose(files[i]);
@@ -1845,44 +1919,111 @@ void freeproc(struct proc *p)
 	proc_recycle(p);
 }
 
+struct fd_spawn_snapshot {
+	struct file *files[FD_BUFFER_SIZE];
+	uchar delegated[FD_BUFFER_SIZE];
+};
+
+// Pin the exact descriptor objects before VM copying can yield. Principal
+// creation consumes the issuing thread's one-shot tickets in the same critical
+// section, so another thread cannot steal them and slot reuse cannot retarget
+// them.
+static void fd_spawn_snapshot_take(struct proc *p, struct thread *issuer,
+				   int consume_tickets,
+				   struct fd_spawn_snapshot *snapshot)
+{
+	int enabled;
+
+	memset(snapshot, 0, sizeof(*snapshot));
+	enabled = intr_save();
+	if (issuer == 0 || issuer == &idle || issuer->process != p)
+		panic("fd delegation issuer");
+	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
+		struct file *f = p->files[i];
+
+		if (consume_tickets) {
+			snapshot->delegated[i] =
+				issuer->fd_delegate_ticket[i] != 0;
+			issuer->fd_delegate_ticket[i] = 0;
+		}
+		if (f == 0 || fd_is_reserved(f))
+			continue;
+		snapshot->files[i] = filedup(f);
+		if (snapshot->files[i] == 0)
+			panic("fd spawn snapshot");
+	}
+	intr_restore(enabled);
+}
+
+static void fd_spawn_snapshot_release(struct fd_spawn_snapshot *snapshot)
+{
+	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
+		if (snapshot->files[i] == 0)
+			continue;
+		fileclose(snapshot->files[i]);
+		snapshot->files[i] = 0;
+	}
+}
+
+// A process fork has one surviving thread. Its stack stays at the original
+// virtual address because saved frames can contain absolute stack pointers.
+// Other copied stacks remain ordinary address-space contents; the stack-slot
+// allocator will not overwrite them while they are still mapped.
+static int fork_child_validate_issuer_stack(struct proc *child,
+					     struct thread *issuer)
+{
+	uint64 span = (uint64)NTHREAD * USTACK_SIZE;
+	uint64 keep;
+
+	if (child == 0 || issuer == 0 ||
+	    child->ustack_base > MAXVA - span)
+		return -1;
+	keep = issuer->ustack;
+	if (keep < child->ustack_base ||
+	    keep >= child->ustack_base + span ||
+	    (keep - child->ustack_base) % USTACK_SIZE != 0)
+		return -1;
+	for (uint64 offset = 0; offset < USTACK_SIZE; offset += PGSIZE)
+		if (walkaddr(child->pagetable, keep + offset) == 0)
+			return -1;
+	return 0;
+}
+
 static int fork_common(int make_agent, int agent_role,
 		       struct inode *delegated_image, uint64 delegated_caps,
 		       enum proc_admission admission,
 		       enum vfs_spawn_scope_mode scope_mode)
 {
-	struct proc *np;
+	struct fd_spawn_snapshot fds;
+	struct proc *np = 0;
 	struct proc *p = curr_proc();
-	uchar scope_delegate[FD_BUFFER_SIZE];
+	struct thread *issuer = curr_thread();
 	uint parent_scope;
-	int boundary_attempt;
+	int authority_boundary;
 	int copy_status;
 	int i;
 
-	memset(scope_delegate, 0, sizeof(scope_delegate));
 	parent_scope = p->vfs_scope_id >= VFS_SCOPE_FIRST_DYNAMIC ?
 			       p->vfs_scope_id : p->vfs_pending_scope_id;
-	boundary_attempt = parent_scope >= VFS_SCOPE_FIRST_DYNAMIC &&
-		(scope_mode == VFS_SPAWN_SCOPE_FRESH ||
-		 (scope_mode == VFS_SPAWN_SCOPE_DROP && delegated_image == 0));
-	// Delegation tickets authorize one boundary attempt, not one successful
-	// fork. Consume them before any allocation failure can leave authority
-	// ambient for a later child.
-	if (boundary_attempt)
-		for (i = 0; i < FD_BUFFER_SIZE; i++) {
-			scope_delegate[i] = p->fd_scope_delegate[i];
-			p->fd_scope_delegate[i] = 0;
-		}
+	// Resource-domain admin controls accounting admission only; changing that
+	// domain does not create an Agent/VFS principal or revoke POSIX FD state.
+	authority_boundary = admission != PROC_ADMIT_NORMAL ||
+		make_agent || delegated_image != 0 ||
+		scope_mode == VFS_SPAWN_SCOPE_FRESH ||
+		(parent_scope >= VFS_SCOPE_FIRST_DYNAMIC &&
+		 scope_mode == VFS_SPAWN_SCOPE_DROP);
+	fd_spawn_snapshot_take(p, issuer, authority_boundary, &fds);
 	if (p->exit_requested || !proc_child_has_capacity(p))
-		return -1;
+		goto fail;
 	// Allocate process.
-	if ((np = allocproc_admit(p, admission)) == 0) {
-		return -1;
-	}
+	if ((np = allocproc_admit(p, admission)) == 0)
+		goto fail;
 	// Keep this thread as the process's sole dispatchable thread while the
 	// page-by-page snapshot yields to unrelated processes.
 	if (proc_vm_snapshot_begin(p) < 0) {
 		freeproc(np);
-		return -1;
+		np = 0;
+		goto fail;
 	}
 	copy_status = uvmcopy(p->pagetable, np->pagetable, p->max_page);
 	if (copy_status == 0) {
@@ -1895,46 +2036,62 @@ static int fork_common(int make_agent, int agent_role,
 		np->exec_role_mask = p->exec_role_mask;
 		np->exec_layout_version = p->exec_layout_version;
 		np->exec_rw_offset = p->exec_rw_offset;
+		if (fork_child_validate_issuer_stack(np, issuer) < 0)
+			copy_status = -1;
 	}
 	proc_vm_snapshot_end(p);
 	if (copy_status < 0) {
 		freeproc(np);
-		return -1;
+		np = 0;
+		goto fail;
 	}
 	if (vfs_proc_spawn_scope(p, np, scope_mode) < 0) {
 		freeproc(np);
-		return -1;
+		np = 0;
+		goto fail;
 	}
 	if (delegated_image != 0 &&
 	    vfs_proc_delegate_exec(p, np, delegated_image, delegated_caps) < 0) {
 		freeproc(np);
-		return -1;
+		np = 0;
+		goto fail;
 	}
-	// A pipe crossing a workflow boundary is an explicit one-shot object
-	// delegation. Same-scope workers keep normal POSIX inheritance.
+	// Pipes are held capabilities. Every new Agent/worker principal receives
+	// one only through a ticket consumed by this spawn; PUBLIC fork within the
+	// same credential retains ordinary POSIX inheritance.
 	uint inherited_scope = np->vfs_scope_id != VFS_SCOPE_NONE ?
 			       np->vfs_scope_id : np->vfs_pending_scope_id;
 	int scope_changed = parent_scope != inherited_scope;
-	// Copy file table to new proc
 	for (i = 0; i < FD_BUFFER_SIZE; i++) {
-		if (p->files[i] != NULL &&
-		    !fd_is_reserved(p->files[i])) {
-			int boundary_allowed = p->files[i]->type == FD_STDIO ||
-				(p->files[i]->type == FD_PIPE &&
-				 scope_delegate[i]);
+		struct file *f = fds.files[i];
+		int allowed;
 
-			if (scope_changed && !boundary_allowed)
-				continue;
-			// Sharing an existing open-file object does not mint a new
-			// resource charge; its creator remains accountable until the
-			// final reference closes.
-			np->files[i] = filedup(p->files[i]);
-			if (np->files[i] == 0) {
-				freeproc(np);
-				return -1;
-			}
+		if (f == 0)
+			continue;
+		switch (f->inherit_class) {
+		case FD_INHERIT_STDIO:
+			allowed = f->type == FD_STDIO;
+			break;
+		case FD_INHERIT_REAUTHORIZE:
+			allowed = !scope_changed;
+			break;
+		case FD_INHERIT_DELEGATE:
+			allowed = (!scope_changed && !authority_boundary) ||
+				fds.delegated[i];
+			break;
+		case FD_INHERIT_DENY:
+		default:
+			allowed = 0;
+			break;
 		}
+		if (!allowed)
+			continue;
+		// Transfer the pinned reference. The creating resource domain remains
+		// accountable until the final holder closes it.
+		np->files[i] = f;
+		fds.files[i] = 0;
 	}
+	fd_spawn_snapshot_release(&fds);
 	memset(np->syscall_count, 0, sizeof(np->syscall_count));
 	memset(np->mail_payload, 0, sizeof(np->mail_payload));
 	memset(np->mail_len, 0, sizeof(np->mail_len));
@@ -1943,13 +2100,16 @@ static int fork_common(int make_agent, int agent_role,
 	np->mail_tail = 0;
 	np->mail_count = 0;
 
-	// currently only copy main thread
+	// A new process contains one thread, but it resumes the thread that issued
+	// the spawn. Using thread 0 here would redirect a sibling's spawn into the
+	// main thread's syscall continuation and break thread-bound delegation.
 	int tid = allocthread(np, 0, 0);
 	if (tid < 0) {
 		freeproc(np);
 		return -1;
 	}
-	struct thread *nt = &np->threads[tid], *t = &p->threads[0];
+	struct thread *nt = &np->threads[tid], *t = issuer;
+	nt->ustack = t->ustack;
 	if (make_agent && agent_make_role(np, agent_role) < 0) {
 		freeproc(np);
 		return -1;
@@ -1965,6 +2125,10 @@ static int fork_common(int make_agent, int agent_role,
 	nt->state = RUNNABLE;
 	add_task(nt);
 	return np->pid;
+
+fail:
+	fd_spawn_snapshot_release(&fds);
+	return -1;
 }
 
 int fork()
@@ -2311,7 +2475,7 @@ int fdreserve()
 	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
 		if (p->files[i] == 0) {
 			p->files[i] = &fd_reservation;
-			p->fd_scope_delegate[i] = 0;
+			proc_clear_fd_delegate_tickets(p, i);
 			intr_restore(enabled);
 			return i;
 		}
@@ -2331,7 +2495,7 @@ int fdinstall(int fd, struct file *f)
 		return -1;
 	}
 	p->files[fd] = f;
-	p->fd_scope_delegate[fd] = 0;
+	proc_clear_fd_delegate_tickets(p, fd);
 	intr_restore(enabled);
 	return 0;
 }
@@ -2344,7 +2508,7 @@ void fdrelease(int fd)
 	if (fd >= 0 && fd < FD_BUFFER_SIZE &&
 	    p->files[fd] == &fd_reservation) {
 		p->files[fd] = 0;
-		p->fd_scope_delegate[fd] = 0;
+		proc_clear_fd_delegate_tickets(p, fd);
 	}
 	intr_restore(enabled);
 }
@@ -2373,20 +2537,38 @@ int fdclose(int fd)
 		return -1;
 	}
 	p->files[fd] = 0;
-	p->fd_scope_delegate[fd] = 0;
+	proc_clear_fd_delegate_tickets(p, fd);
 	intr_restore(enabled);
 	fileclose(f);
 	return 0;
 }
 
-int proc_scope_delegate_fd(int fd)
+int proc_delegate_fd(int fd)
 {
 	struct proc *p = curr_proc();
+	struct thread *t = curr_thread();
+	int enabled = intr_save();
 
-	if (p == 0 || fd < 0 || fd >= FD_BUFFER_SIZE ||
+	if (p == 0 || t == 0 || t == &idle || t->process != p ||
+	    fd < 0 || fd >= FD_BUFFER_SIZE ||
 	    p->files[fd] == 0 || fd_is_reserved(p->files[fd]) ||
-	    p->files[fd]->type != FD_PIPE)
+	    p->files[fd]->inherit_class != FD_INHERIT_DELEGATE) {
+		intr_restore(enabled);
 		return AGENT_STATUS_BAD_PARAM;
-	p->fd_scope_delegate[fd] = 1;
+	}
+	t->fd_delegate_ticket[fd] = 1;
+	intr_restore(enabled);
 	return AGENT_STATUS_OK;
+}
+
+void proc_discard_fd_delegations(void)
+{
+	struct proc *p = curr_proc();
+	struct thread *t = curr_thread();
+	int enabled = intr_save();
+
+	if (p != 0 && t != 0 && t != &idle && t->process == p)
+		memset(t->fd_delegate_ticket, 0,
+		       sizeof(t->fd_delegate_ticket));
+	intr_restore(enabled);
 }
