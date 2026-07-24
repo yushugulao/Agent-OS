@@ -1,4 +1,6 @@
 #include "proc.h"
+#include "agent_context.h"
+#include "agent_lifecycle.h"
 #include "bio.h"
 #include "defs.h"
 #include "exec_policy.h"
@@ -34,13 +36,7 @@ enum proc_admission {
 
 struct proc_resource_domain {
 	int used;
-	int live;
-	int ordinary_live;
-	int reserved_live;
-	int ordinary_file_slots;
-	int reserved_file_slots;
-	int ordinary_threads;
-	int reserved_threads;
+	struct resource_account_handle account;
 	int runnable_threads;
 	int runnable_agents;
 	uint64 scheduler_agent_burst;
@@ -49,36 +45,64 @@ struct proc_resource_domain {
 
 static struct proc_resource_domain
 	proc_resource_domains[PROC_RESOURCE_DOMAIN_CAP];
-static int proc_resource_ordinary_live;
-static int proc_resource_reserved_live;
-static int proc_file_slots_total;
-static int proc_file_slots_ordinary;
-static int proc_file_slots_reserved;
-static int proc_thread_slots_total;
-static int proc_thread_slots_ordinary;
-static int proc_thread_slots_reserved;
+static uint64 proc_resource_next_account_id;
 static uint proc_scope_next_id;
 static int proc_scope_id_exhausted;
+static uint kernel_stack_live_slots;
+static uint kernel_stack_live_ordinary;
+static uint kernel_stack_live_reserved;
 
 static void proc_reset_thread_slot(struct thread *t);
 static void proc_recycle(struct proc *p);
 static void proc_thread_resource_release(struct thread *t);
+static void proc_teardown_advance(struct proc *p,
+				  enum proc_teardown_state expected,
+				  enum proc_teardown_state next);
 
 #define KSTACK_POISON 0xa5
 #define KSTACK_CANARY 0x6b737461636b4f53ULL
+#define AGENT_STATE_PAGE_POOL_SIZE \
+	((uint64)NPROC * AGENT_STATE_PAGE_COUNT)
+#define AGENT_STATE_PAGE_ORDINARY_LIMIT \
+	((uint64)PROC_ORDINARY_SLOTS * AGENT_STATE_PAGE_COUNT)
+#define AGENT_STATE_PAGE_RESERVED_LIMIT \
+	((uint64)PROC_RESERVED_SLOTS * AGENT_STATE_PAGE_COUNT)
+#define AGENT_STATE_PAGE_DOMAIN_ORDINARY_LIMIT \
+	((uint64)PROC_RESOURCE_DOMAIN_LIMIT * AGENT_STATE_PAGE_COUNT)
+#define AGENT_STATE_PAGE_DOMAIN_RESERVED_LIMIT \
+	((uint64)PROC_RESOURCE_DOMAIN_RESERVED_LIMIT * AGENT_STATE_PAGE_COUNT)
 
 _Static_assert(KSTACK_SIZE >= 2 * PGSIZE,
 	       "kernel stacks need room for calls and interrupt frames");
 _Static_assert(KSTACK_SIZE % PGSIZE == 0,
 	       "kernel stack size must be page aligned");
+_Static_assert(PGSIZE == PAGE_SIZE,
+	       "kernel stack page definitions must agree");
 _Static_assert(KSTACK_GUARD_SIZE >= PGSIZE,
 	       "kernel stack guard must cover at least one page");
 _Static_assert(KSTACK_GUARD_SIZE % PGSIZE == 0,
 	       "kernel stack guard size must be page aligned");
-_Static_assert((uint64)NPROC * NTHREAD * KSTACK_SLOT_SIZE < TRAMPOLINE,
+_Static_assert(KSTACK_PAGES_PER_THREAD > 0,
+	       "kernel stacks must contain at least one page");
+_Static_assert(KSTACK_VIRTUAL_CAPACITY_BYTES <
+		       (uint64)NPROC * NTHREAD * KSTACK_SLOT_SIZE,
+	       "guard pages must remain outside stack capacity");
+_Static_assert((uint64)NPROC * NTHREAD * KSTACK_SLOT_SIZE <
+		       TRAMPOLINE,
 	       "kernel stack virtual region must not wrap");
+_Static_assert(KSTACK_RESERVED_PAGE_COUNT ==
+		       (uint)THREAD_RESOURCE_RESERVED_LIMIT *
+			       KSTACK_PAGES_PER_THREAD,
+	       "reserved thread slots need complete physical stacks");
 _Static_assert(PROC_RESERVED_SLOTS > 0 && PROC_RESERVED_SLOTS < NPROC,
 	       "process reserve must leave both resource classes usable");
+_Static_assert(RESOURCE_ACCOUNT_CAP >=
+		       PROC_RESOURCE_DOMAIN_CAP + NPROC + 2,
+	       "resource accounts must fit exec and persistent principals");
+_Static_assert(AGENT_STATE_PAGE_ORDINARY_LIMIT +
+		       AGENT_STATE_PAGE_RESERVED_LIMIT ==
+		       AGENT_STATE_PAGE_POOL_SIZE,
+	       "Agent state page classes must partition the global pool");
 _Static_assert(PROC_RESOURCE_DOMAIN_LIMIT > 0 &&
 	       PROC_RESOURCE_DOMAIN_LIMIT <= PROC_ORDINARY_SLOTS,
 	       "resource domain limit must fit the ordinary process pool");
@@ -111,12 +135,49 @@ static uint64 kernel_stack_canary(uint64 slot)
 	return KSTACK_CANARY ^ (slot * 0x9e3779b97f4a7c15ULL);
 }
 
+static int kernel_stack_identity(struct thread *t, struct proc **owner,
+				 int *tid_out)
+{
+	uint64 pool_start = (uint64)&pool[0];
+	uint64 pool_end = (uint64)&pool[NPROC];
+	uint64 thread_address;
+	uint64 thread_start;
+	uint64 thread_end;
+	struct proc *p;
+	int proc_index;
+	int tid;
+
+	if (t == 0 || t == &idle || owner == 0 || tid_out == 0)
+		return -1;
+	thread_address = (uint64)t;
+	if (thread_address < pool_start || thread_address >= pool_end)
+		return -1;
+	proc_index = (thread_address - pool_start) / sizeof(struct proc);
+	p = &pool[proc_index];
+	thread_start = (uint64)&p->threads[0];
+	thread_end = (uint64)&p->threads[NTHREAD];
+	if (thread_address < thread_start || thread_address >= thread_end ||
+	    (thread_address - thread_start) % sizeof(struct thread) != 0 ||
+	    t->process != p)
+		return -1;
+	tid = (thread_address - thread_start) / sizeof(struct thread);
+	if (t->kstack != kernel_stack_base(proc_index, tid))
+		return -1;
+	*owner = p;
+	*tid_out = tid;
+	return 0;
+}
+
 static void kernel_stack_reset_slot(struct proc *p, int tid)
 {
 	uint64 slot = kernel_stack_slot(p - pool, tid);
 	uint64 *low = (uint64 *)kernel_stack_base(p - pool, tid);
 	uint64 canary = kernel_stack_canary(slot);
 
+	if (p < pool || p >= &pool[NPROC] || tid < 0 || tid >= NTHREAD ||
+	    p->threads[tid].kstack_state != KSTACK_LIVE ||
+	    p->threads[tid].kstack != (uint64)low)
+		panic("kernel stack reset");
 	memset((void *)low, KSTACK_POISON, KSTACK_SIZE);
 	low[0] = canary;
 	low[1] = ~canary;
@@ -124,32 +185,217 @@ static void kernel_stack_reset_slot(struct proc *p, int tid)
 
 void proc_mapstacks(pagetable_t kpgtbl)
 {
+	if (kalloc_stack_reserve_init(KSTACK_RESERVED_PAGE_COUNT) < 0)
+		panic("kernel stack reserve");
 	for (int proc_index = 0; proc_index < NPROC; proc_index++) {
 		for (int tid = 0; tid < NTHREAD; tid++) {
-			uint64 slot = kernel_stack_slot(proc_index, tid);
-			uint64 guard = kernel_stack_guard(slot);
+			uint64 guard =
+				kernel_stack_guard(
+					kernel_stack_slot(proc_index, tid));
 			uint64 stack = guard + KSTACK_GUARD_SIZE;
-			uint64 *low = 0;
 
 			for (uint64 off = 0; off < KSTACK_SIZE; off += PGSIZE) {
-				char *mem = kalloc();
+				pte_t *pte = walk(kpgtbl, stack + off, 1);
 
-				if (mem == 0)
-					panic("kernel stack allocation");
-				memset(mem, KSTACK_POISON, PGSIZE);
-				if (off == 0)
-					low = (uint64 *)mem;
-				kvmmap(kpgtbl, stack + off, (uint64)mem, PGSIZE,
-				       PTE_R | PTE_W);
+				if (pte == 0 || *pte != 0)
+					panic("kernel stack leaf preparation");
 			}
-			low[0] = kernel_stack_canary(slot);
-			low[1] = ~low[0];
 			for (uint64 off = 0; off < KSTACK_GUARD_SIZE;
 			     off += PGSIZE) {
 				pte_t *guard_pte = walk(kpgtbl, guard + off, 0);
 
-				if (guard_pte != 0 && (*guard_pte & PTE_V))
+				if (guard_pte != 0 && *guard_pte != 0)
 					panic("kernel stack guard mapped");
+			}
+		}
+	}
+	if (kalloc_stack_reserved_total_pages() !=
+		    KSTACK_RESERVED_PAGE_COUNT ||
+	    kalloc_stack_reserved_free_pages() !=
+		    KSTACK_RESERVED_PAGE_COUNT)
+		panic("kernel stack reserve accounting");
+}
+
+static int kernel_stack_acquire(struct thread *t)
+{
+	void *pages[KSTACK_PAGES_PER_THREAD];
+	pte_t *ptes[KSTACK_PAGES_PER_THREAD];
+	struct proc *p;
+	int tid;
+	int reserved;
+	int allocated = 0;
+	int enabled;
+	uint64 slot;
+	uint64 base;
+
+	if (kernel_stack_identity(t, &p, &tid) < 0 ||
+	    !t->resource_slot_charged)
+		panic("kernel stack acquire owner");
+	if (t->kstack_state == KSTACK_LIVE)
+		return 0;
+	if (t->kstack_state != KSTACK_NONE)
+		panic("kernel stack acquire state");
+	reserved = t->resource_slot_reserved != 0;
+	for (; allocated < KSTACK_PAGES_PER_THREAD; allocated++) {
+		pages[allocated] = kalloc_stack_page(reserved);
+		if (pages[allocated] == 0)
+			goto fail;
+		memset(pages[allocated], KSTACK_POISON, PGSIZE);
+	}
+	slot = kernel_stack_slot(p - pool, tid);
+	base = kernel_stack_base(p - pool, tid);
+	((uint64 *)pages[0])[0] = kernel_stack_canary(slot);
+	((uint64 *)pages[0])[1] = ~((uint64 *)pages[0])[0];
+	enabled = intr_save();
+	if (t->kstack_state != KSTACK_NONE)
+		panic("kernel stack acquire race");
+	for (int page = 0; page < KSTACK_PAGES_PER_THREAD; page++) {
+		ptes[page] =
+			walk(kernel_pagetable, base + page * PGSIZE, 0);
+		if (ptes[page] == 0 || *ptes[page] != 0)
+			panic("kernel stack leaf invariant");
+	}
+	for (uint64 off = 0; off < KSTACK_GUARD_SIZE; off += PGSIZE) {
+		pte_t *guard = walk(kernel_pagetable,
+				    kernel_stack_guard(slot) + off, 0);
+
+		if (guard != 0 && *guard != 0)
+			panic("kernel stack guard invariant");
+	}
+	for (int page = 0; page < KSTACK_PAGES_PER_THREAD; page++)
+		*ptes[page] =
+			PA2PTE((uint64)pages[page]) |
+			PTE_R | PTE_W | PTE_V;
+	sfence_vma();
+	t->kstack_state = KSTACK_LIVE;
+	kernel_stack_live_slots++;
+	if (reserved)
+		kernel_stack_live_reserved++;
+	else
+		kernel_stack_live_ordinary++;
+	intr_restore(enabled);
+	return 0;
+
+fail:
+	while (allocated > 0)
+		kfree_stack_page(pages[--allocated], reserved);
+	return -1;
+}
+
+static void kernel_stack_mark_reap(struct thread *t)
+{
+	int enabled = intr_save();
+
+	if (t == 0 || t != current_thread ||
+	    t->kstack_state != KSTACK_LIVE ||
+	    t->state != T_DYING)
+		panic("kernel stack reap request");
+	t->kstack_state = KSTACK_REAP;
+	intr_restore(enabled);
+}
+
+static void kernel_stack_release_inactive(struct thread *t)
+{
+	void *pages[KSTACK_PAGES_PER_THREAD];
+	pte_t *ptes[KSTACK_PAGES_PER_THREAD];
+	struct proc *p;
+	int tid;
+	int reserved;
+	int enabled;
+	uint64 slot;
+	uint64 base;
+
+	if (kernel_stack_identity(t, &p, &tid) < 0)
+		panic("kernel stack release owner");
+	enabled = intr_save();
+	if (t->kstack_state == KSTACK_NONE) {
+		intr_restore(enabled);
+		return;
+	}
+	if (t == current_thread ||
+	    (t->kstack_state != KSTACK_LIVE &&
+	     t->kstack_state != KSTACK_REAP))
+		panic("active kernel stack release");
+	reserved = t->resource_slot_reserved != 0;
+	slot = kernel_stack_slot(p - pool, tid);
+	base = kernel_stack_base(p - pool, tid);
+	for (int page = 0; page < KSTACK_PAGES_PER_THREAD; page++) {
+		uint64 flags;
+
+		ptes[page] =
+			walk(kernel_pagetable, base + page * PGSIZE, 0);
+		if (ptes[page] == 0)
+			panic("kernel stack release leaf");
+		flags = PTE_FLAGS(*ptes[page]);
+		if ((flags & (PTE_V | PTE_R | PTE_W)) !=
+			    (PTE_V | PTE_R | PTE_W) ||
+		    (flags & (PTE_U | PTE_X)) != 0)
+			panic("kernel stack release mapping");
+		pages[page] = (void *)PTE2PA(*ptes[page]);
+		for (int prior = 0; prior < page; prior++)
+			if (pages[prior] == pages[page])
+				panic("kernel stack duplicate page");
+	}
+	for (uint64 off = 0; off < KSTACK_GUARD_SIZE; off += PGSIZE) {
+		pte_t *guard = walk(kernel_pagetable,
+				    kernel_stack_guard(slot) + off, 0);
+
+		if (guard != 0 && *guard != 0)
+			panic("kernel stack guard release");
+	}
+	for (int page = 0; page < KSTACK_PAGES_PER_THREAD; page++)
+		*ptes[page] = 0;
+	sfence_vma();
+	t->kstack_state = KSTACK_NONE;
+	if (kernel_stack_live_slots == 0)
+		panic("kernel stack live count");
+	kernel_stack_live_slots--;
+	if (reserved) {
+		if (kernel_stack_live_reserved == 0)
+			panic("kernel stack reserve live count");
+		kernel_stack_live_reserved--;
+	} else {
+		if (kernel_stack_live_ordinary == 0)
+			panic("kernel stack ordinary live count");
+		kernel_stack_live_ordinary--;
+	}
+	for (int page = 0; page < KSTACK_PAGES_PER_THREAD; page++)
+		kfree_stack_page(pages[page], reserved);
+	intr_restore(enabled);
+}
+
+static void kernel_stack_assert_quiescent(void)
+{
+	if (current_thread != &idle || kernel_stack_live_slots != 0 ||
+	    kernel_stack_live_ordinary != 0 ||
+	    kernel_stack_live_reserved != 0 ||
+	    kalloc_stack_reserved_free_pages() !=
+		    kalloc_stack_reserved_total_pages())
+		panic("kernel stack shutdown accounting");
+	for (int proc_index = 0; proc_index < NPROC; proc_index++) {
+		for (int tid = 0; tid < NTHREAD; tid++) {
+			uint64 slot = kernel_stack_slot(proc_index, tid);
+			uint64 guard = kernel_stack_guard(slot);
+			uint64 base = kernel_stack_base(proc_index, tid);
+
+			if (pool[proc_index].threads[tid].kstack_state !=
+			    KSTACK_NONE)
+				panic("kernel stack shutdown state");
+			for (uint64 off = 0; off < KSTACK_SIZE;
+			     off += PGSIZE) {
+				pte_t *pte =
+					walk(kernel_pagetable, base + off, 0);
+
+				if (pte == 0 || *pte != 0)
+					panic("kernel stack shutdown mapping");
+			}
+			for (uint64 off = 0; off < KSTACK_GUARD_SIZE;
+			     off += PGSIZE) {
+				pte_t *pte =
+					walk(kernel_pagetable, guard + off, 0);
+
+				if (pte != 0 && *pte != 0)
+					panic("kernel stack shutdown guard");
 			}
 		}
 	}
@@ -158,11 +404,6 @@ void proc_mapstacks(pagetable_t kpgtbl)
 void kernel_stack_check(struct thread *t)
 {
 	struct proc *p;
-	uint64 pool_start = (uint64)&pool[0];
-	uint64 pool_end = (uint64)&pool[NPROC];
-	uint64 thread_address;
-	uint64 thread_start;
-	uint64 thread_end;
 	int proc_index;
 	int tid;
 	uint64 slot;
@@ -172,22 +413,13 @@ void kernel_stack_check(struct thread *t)
 
 	if (t == 0 || t == &idle)
 		return;
-	thread_address = (uint64)t;
-	if (thread_address < pool_start || thread_address >= pool_end)
+	if (kernel_stack_identity(t, &p, &tid) < 0 ||
+	    (t->kstack_state != KSTACK_LIVE &&
+	     t->kstack_state != KSTACK_REAP))
 		panic("invalid kernel stack owner");
-	proc_index = (thread_address - pool_start) / sizeof(struct proc);
-	p = &pool[proc_index];
-	thread_start = (uint64)&p->threads[0];
-	thread_end = (uint64)&p->threads[NTHREAD];
-	if (thread_address < thread_start || thread_address >= thread_end ||
-	    (thread_address - thread_start) % sizeof(struct thread) != 0 ||
-	    (uint64)t->process != (uint64)p)
-		panic("invalid kernel stack owner");
-	tid = (thread_address - thread_start) / sizeof(struct thread);
+	proc_index = p - pool;
 	slot = kernel_stack_slot(proc_index, tid);
 	expected_base = kernel_stack_base(proc_index, tid);
-	if (t->kstack != expected_base)
-		panic("invalid kernel stack address");
 	low = (uint64 *)expected_base;
 	canary = kernel_stack_canary(slot);
 	if (low[0] != canary || low[1] != ~canary)
@@ -219,6 +451,12 @@ struct thread *curr_thread()
 	return current_thread;
 }
 
+int proc_teardown_live(const struct proc *p)
+{
+	return p != 0 && p->state == P_USED &&
+	       p->teardown_state == PROC_TEARDOWN_LIVE;
+}
+
 int proc_thread_exit_requested(void)
 {
 	struct thread *t = curr_thread();
@@ -226,35 +464,67 @@ int proc_thread_exit_requested(void)
 
 	if (t == 0 || t == &idle || (p = t->process) == 0)
 		return 0;
-	return p->exit_requested && t->tid != p->exit_owner_tid;
+	return p->teardown_state >= PROC_TEARDOWN_REQUESTED &&
+	       p->teardown_state < PROC_TEARDOWN_HANDOFF &&
+	       t->tid != p->teardown_owner_tid;
 }
 
-int proc_request_scope_exit(uint scope_id, int code)
+// Call with interrupts disabled. The first request fixes the exit status;
+// later revocations may wake non-owners but can never steal teardown ownership.
+static int proc_teardown_request_locked(struct proc *p, int code)
+{
+	if (p == 0 || p->state != P_USED)
+		return -1;
+	if (p->teardown_state == PROC_TEARDOWN_LIVE) {
+		p->exit_code = (uint64)code;
+		p->teardown_owner_tid = PROC_TEARDOWN_OWNER_NONE;
+		p->teardown_state = PROC_TEARDOWN_REQUESTED;
+		return 1;
+	}
+	if (p->teardown_state >= PROC_TEARDOWN_REQUESTED &&
+	    p->teardown_state < PROC_TEARDOWN_HANDOFF)
+		return 0;
+	return -1;
+}
+
+// Call with interrupts disabled. Only the main thread or the unpublished
+// rollback executor can claim a process, and ownership never changes later.
+static int proc_teardown_claim_locked(struct proc *p, int owner)
+{
+	if (p == 0 || p->state != P_USED ||
+	    p->teardown_state != PROC_TEARDOWN_REQUESTED ||
+	    p->teardown_owner_tid != PROC_TEARDOWN_OWNER_NONE ||
+	    (owner != 0 && owner != PROC_TEARDOWN_OWNER_KERNEL))
+		return -1;
+	p->teardown_owner_tid = owner;
+	p->teardown_state = PROC_TEARDOWN_QUIESCING;
+	return 0;
+}
+
+int proc_request_workflow_exit(struct workflow_lifecycle_key lifecycle,
+			       int code)
 {
 	int requested = 0;
 	int enabled;
 
-	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC)
+	if (!workflow_lifecycle_key_valid(lifecycle))
 		return 0;
 	enabled = intr_save();
 	for (struct proc *p = pool; p < &pool[NPROC]; p++) {
-		if (p->state != P_USED || p->exit_finalizing ||
-		    (p->vfs_scope_id != scope_id &&
-		     p->vfs_pending_scope_id != scope_id))
+		if (p->state != P_USED ||
+		    p->teardown_state >= PROC_TEARDOWN_DETACHED ||
+		    !p->workflow_lifecycle_charged ||
+		    p->workflow_lifecycle_id != lifecycle.id ||
+		    p->workflow_lifecycle_generation !=
+			    lifecycle.generation)
 			continue;
 		requested++;
-		// Never steal terminal ownership from a main thread that already
-		// started teardown. First-time requests use -1 so every thread,
-		// including tid 0, observes the cooperative exit request.
-		if (!p->exit_requested) {
-			p->exit_code = (uint64)code;
-			p->exit_requested = 1;
-			p->exit_owner_tid = -1;
-		}
+		(void)proc_teardown_request_locked(p, code);
 		for (int tid = 0; tid < NTHREAD; tid++) {
 			struct thread *t = &p->threads[tid];
 
-			if (t->state == SLEEPING)
+			if (tid != p->teardown_owner_tid &&
+			    t->state == SLEEPING)
 				wait_queue_interrupt(t);
 		}
 	}
@@ -275,11 +545,12 @@ int proc_vm_snapshot_begin(struct proc *p)
 	    t->tid >= NTHREAD)
 		return -1;
 	enabled = intr_save();
-	if (!p->exit_requested && p->vm_snapshot_depth == 0) {
+	if (p->teardown_state == PROC_TEARDOWN_LIVE &&
+	    p->vm_snapshot_depth == 0) {
 		p->vm_snapshot_owner_tid = t->tid;
 		p->vm_snapshot_depth = 1;
 		result = 0;
-	} else if (!p->exit_requested &&
+	} else if (p->teardown_state == PROC_TEARDOWN_LIVE &&
 		   p->vm_snapshot_owner_tid == t->tid &&
 		   p->vm_snapshot_depth != (uint)-1) {
 		p->vm_snapshot_depth++;
@@ -338,13 +609,7 @@ static void proc_resource_domain_clear(struct proc_resource_domain *domain)
 		   THREAD_RESOURCE_DOMAIN_QUEUE_LIMIT,
 		   scheduler_domain_task_data[domain_id]);
 	domain->used = 0;
-	domain->live = 0;
-	domain->ordinary_live = 0;
-	domain->reserved_live = 0;
-	domain->ordinary_file_slots = 0;
-	domain->reserved_file_slots = 0;
-	domain->ordinary_threads = 0;
-	domain->reserved_threads = 0;
+	domain->account = resource_account_none();
 	domain->runnable_threads = 0;
 	domain->runnable_agents = 0;
 	domain->scheduler_agent_burst = 0;
@@ -353,67 +618,101 @@ static void proc_resource_domain_clear(struct proc_resource_domain *domain)
 
 static void proc_resource_init(void)
 {
+	resource_controller_init();
+	if (resource_policy_configure(
+		    RESOURCE_PROCESS, NPROC, PROC_ORDINARY_SLOTS,
+		    PROC_RESERVED_SLOTS) < 0 ||
+	    resource_policy_configure(
+		    RESOURCE_THREAD, THREAD_RESOURCE_POOL_SIZE,
+		    THREAD_RESOURCE_ORDINARY_LIMIT,
+		    THREAD_RESOURCE_RESERVED_LIMIT) < 0 ||
+	    resource_policy_configure(
+		    RESOURCE_FILE_OBJECT, FILE_RESOURCE_POOL_SIZE,
+		    FILE_RESOURCE_ORDINARY_LIMIT,
+		    FILE_RESOURCE_POOL_SIZE -
+			    FILE_RESOURCE_ORDINARY_LIMIT) < 0 ||
+	    resource_policy_configure(
+		    RESOURCE_AGENT_STATE_PAGE,
+		    AGENT_STATE_PAGE_POOL_SIZE,
+		    AGENT_STATE_PAGE_ORDINARY_LIMIT,
+		    AGENT_STATE_PAGE_RESERVED_LIMIT) < 0)
+		panic("process resource policy");
 	for (int i = 0; i < PROC_RESOURCE_DOMAIN_CAP; i++)
 		proc_resource_domain_clear(&proc_resource_domains[i]);
-	proc_resource_ordinary_live = 0;
-	proc_resource_reserved_live = 0;
-	proc_file_slots_total = 0;
-	proc_file_slots_ordinary = 0;
-	proc_file_slots_reserved = 0;
-	proc_thread_slots_total = 0;
-	proc_thread_slots_ordinary = 0;
-	proc_thread_slots_reserved = 0;
+	proc_resource_next_account_id = 1;
 	proc_scope_next_id = VFS_SCOPE_FIRST_DYNAMIC;
 	proc_scope_id_exhausted = 0;
 }
 
-static int proc_thread_resource_available(
-	struct proc_resource_domain *domain, int reserved)
+static void proc_resource_limits(
+	struct resource_account_limits *limits)
 {
-	if (domain == 0 ||
-	    proc_thread_slots_total >= THREAD_RESOURCE_POOL_SIZE)
-		return 0;
-	if (reserved)
-		return proc_thread_slots_reserved <
-				       THREAD_RESOURCE_RESERVED_LIMIT &&
-		       domain->reserved_threads <
-				       THREAD_RESOURCE_DOMAIN_RESERVED_LIMIT;
-	return proc_thread_slots_ordinary < THREAD_RESOURCE_ORDINARY_LIMIT &&
-	       domain->ordinary_threads <
-		       THREAD_RESOURCE_DOMAIN_ORDINARY_LIMIT;
+	memset(limits, 0, sizeof(*limits));
+	limits->class_limit[RESOURCE_CHARGE_ORDINARY]
+			   [RESOURCE_PROCESS] =
+		PROC_RESOURCE_DOMAIN_LIMIT;
+	limits->class_limit[RESOURCE_CHARGE_RESERVED]
+			   [RESOURCE_PROCESS] =
+		PROC_RESOURCE_DOMAIN_RESERVED_LIMIT;
+	limits->class_limit[RESOURCE_CHARGE_ORDINARY][RESOURCE_THREAD] =
+		THREAD_RESOURCE_DOMAIN_ORDINARY_LIMIT;
+	limits->class_limit[RESOURCE_CHARGE_RESERVED][RESOURCE_THREAD] =
+		THREAD_RESOURCE_DOMAIN_RESERVED_LIMIT;
+	limits->class_limit[RESOURCE_CHARGE_ORDINARY]
+			   [RESOURCE_FILE_OBJECT] =
+		FILE_RESOURCE_DOMAIN_ORDINARY_LIMIT;
+	limits->class_limit[RESOURCE_CHARGE_RESERVED]
+			   [RESOURCE_FILE_OBJECT] =
+		FILE_RESOURCE_DOMAIN_RESERVED_LIMIT;
+	limits->class_limit[RESOURCE_CHARGE_ORDINARY]
+			   [RESOURCE_AGENT_STATE_PAGE] =
+		AGENT_STATE_PAGE_DOMAIN_ORDINARY_LIMIT;
+	limits->class_limit[RESOURCE_CHARGE_RESERVED]
+			   [RESOURCE_AGENT_STATE_PAGE] =
+		AGENT_STATE_PAGE_DOMAIN_RESERVED_LIMIT;
 }
 
-static void proc_thread_resource_charge_locked(struct thread *t,
-					       int domain_id,
-					       int reserved)
+static int proc_thread_resource_charge_locked(struct thread *t,
+					      int domain_id,
+					      int reserved)
 {
 	struct proc_resource_domain *domain;
+	struct resource_request request = {
+		.kind = RESOURCE_THREAD,
+		.amount = 1,
+	};
+	struct resource_reservation reservation;
 
 	if (t == 0 || t->resource_slot_charged ||
 	    domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP)
 		panic("thread resource charge invariant");
 	domain = &proc_resource_domains[domain_id];
 	if (!domain->used ||
-	    !proc_thread_resource_available(domain, reserved))
-		panic("thread resource capacity invariant");
-	proc_thread_slots_total++;
-	if (reserved) {
-		proc_thread_slots_reserved++;
-		domain->reserved_threads++;
-	} else {
-		proc_thread_slots_ordinary++;
-		domain->ordinary_threads++;
-	}
+	    resource_reserve_many(
+		    domain->account,
+		    reserved ? RESOURCE_CHARGE_RESERVED :
+			       RESOURCE_CHARGE_ORDINARY,
+		    &request, 1,
+				  &reservation) < 0)
+		return -1;
+	if (resource_reservation_commit(&reservation) < 0)
+		panic("thread resource commit");
+	t->resource_account = domain->account;
 	t->resource_domain_id = domain_id;
 	t->resource_slot_reserved = reserved;
 	t->resource_slot_charged = 1;
+	return 0;
 }
 
 static void proc_thread_resource_release(struct thread *t)
 {
-	struct proc_resource_domain *domain;
 	int enabled = intr_save();
 	int domain_id;
+	struct resource_account_handle account;
+	struct resource_request request = {
+		.kind = RESOURCE_THREAD,
+		.amount = 1,
+	};
 
 	if (t == 0 || !t->resource_slot_charged)
 		goto out;
@@ -421,33 +720,22 @@ static void proc_thread_resource_release(struct thread *t)
 	    t->state == SLEEPING)
 		panic("active thread resource release");
 	domain_id = t->resource_domain_id;
+	account = t->resource_account;
 	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP ||
-	    proc_thread_slots_total <= 0)
+	    !proc_resource_domains[domain_id].used ||
+	    !resource_account_handle_equal(
+		    proc_resource_domains[domain_id].account, account))
 		panic("thread resource domain invariant");
-	domain = &proc_resource_domains[domain_id];
-	if (!domain->used)
-		panic("thread resource lifetime invariant");
-	if (t->resource_slot_reserved) {
-		if (proc_thread_slots_reserved <= 0 ||
-		    domain->reserved_threads <= 0)
-			panic("thread reserve count invariant");
-		proc_thread_slots_reserved--;
-		domain->reserved_threads--;
-	} else {
-		if (proc_thread_slots_ordinary <= 0 ||
-		    domain->ordinary_threads <= 0)
-			panic("thread ordinary count invariant");
-		proc_thread_slots_ordinary--;
-		domain->ordinary_threads--;
-	}
-	proc_thread_slots_total--;
+	if (resource_release_many(
+		    account,
+		    t->resource_slot_reserved ? RESOURCE_CHARGE_RESERVED :
+						RESOURCE_CHARGE_ORDINARY,
+		    &request, 1) < 0)
+		panic("thread resource release invariant");
+	t->resource_account = resource_account_none();
 	t->resource_domain_id = -1;
 	t->resource_slot_reserved = 0;
 	t->resource_slot_charged = 0;
-	if (domain->live == 0 && domain->ordinary_file_slots == 0 &&
-	    domain->reserved_file_slots == 0 &&
-	    domain->ordinary_threads == 0 && domain->reserved_threads == 0)
-		proc_resource_domain_clear(domain);
 out:
 	intr_restore(enabled);
 }
@@ -493,23 +781,35 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 	int enabled = intr_save();
 	int domain_id = -1;
 	int new_domain = 0;
+	int account_created = 0;
+	int member_acquired = 0;
 	int reserved = admission != PROC_ADMIT_NORMAL;
 	uint storage_principal = FS_OWNER_NONE;
+	struct resource_account_handle account = resource_account_none();
+	struct resource_account_limits limits;
+	struct resource_reservation reservation;
+	struct resource_request requests[] = {
+		{ .kind = RESOURCE_PROCESS, .amount = 1 },
+		{ .kind = RESOURCE_THREAD, .amount = 1 },
+	};
 
 	if (admission < PROC_ADMIT_BOOT || admission > PROC_ADMIT_WORKER)
-		goto out;
+		goto fail;
 	if (admission == PROC_ADMIT_BOOT) {
 		if (parent != 0)
-			goto out;
+			goto fail;
 		new_domain = 1;
 	} else {
-		if (parent == 0 || parent->state != P_USED ||
+		if (!proc_teardown_live(parent) ||
 		    parent->resource_domain_id < 0 ||
 		    parent->resource_domain_id >= PROC_RESOURCE_DOMAIN_CAP)
-			goto out;
+			goto fail;
 		domain = &proc_resource_domains[parent->resource_domain_id];
-		if (!domain->used || domain->live <= 0)
-			goto out;
+		if (!domain->used ||
+		    !resource_account_handle_equal(
+			    domain->account, parent->resource_account) ||
+		    !resource_account_active(domain->account))
+			goto fail;
 		if (admission == PROC_ADMIT_NORMAL) {
 			if (parent->resource_domain_admin)
 				new_domain = 1;
@@ -518,7 +818,7 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 		} else if (admission == PROC_ADMIT_WORKFLOW) {
 			if (!parent->resource_slot_reserved ||
 			    !parent->resource_domain_admin)
-				goto out;
+				goto fail;
 			new_domain = 1;
 		} else {
 			// Every process launched inside a workflow shares one immutable
@@ -526,12 +826,6 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 			// process or PUBLIC-storage quota domains.
 			domain_id = parent->resource_domain_id;
 		}
-	}
-	if (reserved) {
-		if (proc_resource_reserved_live >= PROC_RESERVED_SLOTS)
-			goto out;
-	} else if (proc_resource_ordinary_live >= PROC_ORDINARY_SLOTS) {
-		goto out;
 	}
 	if (new_domain) {
 		for (int i = 0; i < PROC_RESOURCE_DOMAIN_CAP; i++) {
@@ -541,35 +835,27 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 			}
 		}
 		if (domain_id < 0)
-			goto out;
-	} else {
+			goto fail;
 		domain = &proc_resource_domains[domain_id];
-		if ((reserved && domain->reserved_live >=
-				 PROC_RESOURCE_DOMAIN_RESERVED_LIMIT) ||
-		    (!reserved && domain->ordinary_live >=
-				  PROC_RESOURCE_DOMAIN_LIMIT))
-			goto out;
 	}
 	for (p = pool; p < &pool[NPROC]; p++)
 		if (p->state == P_UNUSED)
 			break;
 	if (p == &pool[NPROC]) {
 		p = 0;
-		goto out;
+		goto fail;
 	}
-	domain = &proc_resource_domains[domain_id];
-	if (!proc_thread_resource_available(domain, reserved)) {
-		p = 0;
-		goto out;
-	}
+	if (!agent_context_is_empty(p))
+		panic("stale Agent context state");
 	for (int tid = 0; tid < NTHREAD; tid++)
-		if (p->threads[tid].resource_slot_charged)
+		if (p->threads[tid].resource_slot_charged ||
+		    p->threads[tid].kstack_state != KSTACK_NONE)
 			panic("stale thread resource charge");
 	if (admission == PROC_ADMIT_BOOT || admission == PROC_ADMIT_WORKFLOW) {
 		storage_principal = proc_scope_alloc_id();
 		if (storage_principal == FS_OWNER_NONE) {
 			p = 0;
-			goto out;
+			goto fail;
 		}
 	} else if (admission == PROC_ADMIT_NORMAL) {
 		storage_principal = FS_OWNER_PUBLIC;
@@ -578,31 +864,84 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 		if (storage_principal < VFS_SCOPE_FIRST_DYNAMIC ||
 		    storage_principal >= FS_OWNER_SCOPE_FLAG) {
 			p = 0;
-			goto out;
+			goto fail;
 		}
 	}
 	if (new_domain) {
+		uint grants =
+			RESOURCE_CHARGE_GRANT(
+				RESOURCE_CHARGE_ORDINARY);
+
+		if (reserved)
+			grants |= RESOURCE_CHARGE_GRANT(
+				RESOURCE_CHARGE_RESERVED);
+		if (proc_resource_next_account_id == 0 ||
+		    proc_resource_next_account_id ==
+			    RESOURCE_LIMIT_UNBOUNDED) {
+			p = 0;
+			goto fail;
+		}
+		proc_resource_limits(&limits);
+		if (resource_account_create(
+			    RESOURCE_ACCOUNT_EXEC,
+			    proc_resource_next_account_id++, grants, &limits,
+			    &account) < 0) {
+			p = 0;
+			goto fail;
+		}
 		proc_resource_domain_clear(domain);
 		domain->used = 1;
-	}
-	domain->live++;
-	if (reserved) {
-		domain->reserved_live++;
-		proc_resource_reserved_live++;
+		domain->account = account;
+		account_created = 1;
 	} else {
-		domain->ordinary_live++;
-		proc_resource_ordinary_live++;
+		domain = &proc_resource_domains[domain_id];
+		account = domain->account;
 	}
+	if (resource_account_member_acquire(account) < 0) {
+		p = 0;
+		goto fail;
+	}
+	member_acquired = 1;
+	if (resource_reserve_many(
+		    account,
+		    reserved ? RESOURCE_CHARGE_RESERVED :
+			       RESOURCE_CHARGE_ORDINARY,
+		    requests, sizeof(requests) / sizeof(requests[0]),
+		    &reservation) < 0) {
+		p = 0;
+		goto fail;
+	}
+	if (resource_reservation_commit(&reservation) < 0)
+		panic("process resource commit");
+	p->resource_account = account;
 	p->resource_domain_id = domain_id;
 	p->storage_principal_id = storage_principal;
 	p->resource_slot_reserved = reserved;
 	p->resource_domain_admin = admission == PROC_ADMIT_BOOT;
-	proc_thread_resource_charge_locked(&p->threads[0], domain_id,
-					   reserved);
+	p->threads[0].resource_account = account;
+	p->threads[0].resource_domain_id = domain_id;
+	p->threads[0].resource_slot_reserved = reserved;
+	p->threads[0].resource_slot_charged = 1;
 	p->state = P_USED;
-out:
 	intr_restore(enabled);
 	return p;
+fail:
+	if (member_acquired &&
+	    resource_account_member_release(account,
+					    account_created) < 0)
+		panic("process resource member rollback");
+	if (account_created &&
+	    resource_account_handle_valid(account)) {
+		if (resource_account_close(account) < 0)
+			panic("process resource account rollback");
+	}
+	if (account_created &&
+	    resource_account_state_get(account) ==
+		    RESOURCE_ACCOUNT_FREE)
+		proc_resource_domain_clear(
+			&proc_resource_domains[domain_id]);
+	intr_restore(enabled);
+	return 0;
 }
 
 static void proc_resource_drop_admin(struct proc *p)
@@ -619,6 +958,11 @@ static void proc_resource_release(struct proc *p)
 	struct proc_resource_domain *domain;
 	int enabled = intr_save();
 	int domain_id;
+	struct resource_account_handle account;
+	struct resource_request request = {
+		.kind = RESOURCE_PROCESS,
+		.amount = 1,
+	};
 
 	if (p == 0)
 		goto out;
@@ -626,29 +970,23 @@ static void proc_resource_release(struct proc *p)
 		if (p->threads[tid].resource_slot_charged)
 			panic("process released with charged thread");
 	domain_id = p->resource_domain_id;
+	account = p->resource_account;
 	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP)
 		panic("process resource domain invariant");
 	domain = &proc_resource_domains[domain_id];
-	if (!domain->used || domain->live <= 0)
+	if (!domain->used ||
+	    !resource_account_handle_equal(domain->account, account))
 		panic("process resource count invariant");
-	if (p->resource_slot_reserved) {
-		if (proc_resource_reserved_live <= 0 ||
-		    domain->reserved_live <= 0)
-			panic("process reserve count invariant");
-		domain->reserved_live--;
-		proc_resource_reserved_live--;
-	} else {
-		if (proc_resource_ordinary_live <= 0 ||
-		    domain->ordinary_live <= 0)
-			panic("process ordinary count invariant");
-		domain->ordinary_live--;
-		proc_resource_ordinary_live--;
-	}
-	domain->live--;
-	if (domain->live == 0 && domain->ordinary_file_slots == 0 &&
-	    domain->reserved_file_slots == 0 &&
-	    domain->ordinary_threads == 0 && domain->reserved_threads == 0)
+	if (resource_release_many(
+		    account,
+		    p->resource_slot_reserved ? RESOURCE_CHARGE_RESERVED :
+						RESOURCE_CHARGE_ORDINARY,
+		    &request, 1) < 0 ||
+	    resource_account_member_release(account, 1) < 0)
+		panic("process resource release invariant");
+	if (resource_account_state_get(account) == RESOURCE_ACCOUNT_FREE)
 		proc_resource_domain_clear(domain);
+	p->resource_account = resource_account_none();
 	p->resource_domain_id = -1;
 	p->storage_principal_id = FS_OWNER_NONE;
 	p->resource_slot_reserved = 0;
@@ -660,42 +998,42 @@ out:
 // Charge one unique open-file object to its creator's immutable admission
 // class. References inherited by fork or held by a blocking syscall share this
 // charge; the final fileclose refunds it.
-int proc_file_slot_reserve(struct proc *owner, int *domain_id,
-			   int *reserved)
+int proc_file_slots_reserve(struct proc *owner, uint count,
+			    struct resource_account_handle *account,
+			    int *reserved)
 {
 	struct proc_resource_domain *domain;
 	int enabled = intr_save();
 	int result = -1;
 	int id;
 	int use_reserve;
+	struct resource_request request = {
+		.kind = RESOURCE_FILE_OBJECT,
+		.amount = count,
+	};
+	struct resource_reservation reservation;
 
-	if (owner == 0 || domain_id == 0 || reserved == 0 ||
-	    owner->state != P_USED)
+	if (!proc_teardown_live(owner) || account == 0 || reserved == 0 ||
+	    count == 0)
 		goto out;
 	id = owner->resource_domain_id;
 	if (id < 0 || id >= PROC_RESOURCE_DOMAIN_CAP)
 		goto out;
 	domain = &proc_resource_domains[id];
-	if (!domain->used || domain->live <= 0 ||
-	    proc_file_slots_total >= FILE_RESOURCE_POOL_SIZE)
+	if (!domain->used ||
+	    !resource_account_handle_equal(
+		    domain->account, owner->resource_account))
 		goto out;
 	use_reserve = owner->resource_slot_reserved != 0;
-	if (use_reserve) {
-		if (domain->reserved_file_slots >=
-		    FILE_RESOURCE_DOMAIN_RESERVED_LIMIT)
-			goto out;
-		domain->reserved_file_slots++;
-		proc_file_slots_reserved++;
-	} else {
-		if (proc_file_slots_ordinary >= FILE_RESOURCE_ORDINARY_LIMIT ||
-		    domain->ordinary_file_slots >=
-			    FILE_RESOURCE_DOMAIN_ORDINARY_LIMIT)
-			goto out;
-		domain->ordinary_file_slots++;
-		proc_file_slots_ordinary++;
-	}
-	proc_file_slots_total++;
-	*domain_id = id;
+	if (resource_reserve_many(
+		    domain->account,
+		    use_reserve ? RESOURCE_CHARGE_RESERVED :
+				  RESOURCE_CHARGE_ORDINARY,
+		    &request, 1, &reservation) < 0)
+		goto out;
+	if (resource_reservation_commit(&reservation) < 0)
+		panic("file resource commit");
+	*account = domain->account;
 	*reserved = use_reserve;
 	result = 0;
 out:
@@ -703,34 +1041,39 @@ out:
 	return result;
 }
 
-void proc_file_slot_release(int domain_id, int reserved)
+int proc_file_slot_reserve(struct proc *owner,
+			   struct resource_account_handle *account,
+			   int *reserved)
 {
-	struct proc_resource_domain *domain;
-	int enabled = intr_save();
+	return proc_file_slots_reserve(owner, 1, account, reserved);
+}
 
-	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP)
-		panic("file resource domain invariant");
-	domain = &proc_resource_domains[domain_id];
-	if (!domain->used || proc_file_slots_total <= 0)
-		panic("file resource count invariant");
-	if (reserved) {
-		if (domain->reserved_file_slots <= 0 ||
-		    proc_file_slots_reserved <= 0)
-			panic("file reserve count invariant");
-		domain->reserved_file_slots--;
-		proc_file_slots_reserved--;
-	} else {
-		if (domain->ordinary_file_slots <= 0 ||
-		    proc_file_slots_ordinary <= 0)
-			panic("file ordinary count invariant");
-		domain->ordinary_file_slots--;
-		proc_file_slots_ordinary--;
+void proc_file_slot_release(struct resource_account_handle account,
+			    int reserved)
+{
+	int enabled = intr_save();
+	struct resource_request request = {
+		.kind = RESOURCE_FILE_OBJECT,
+		.amount = 1,
+	};
+
+	if (resource_release_many(
+		    account,
+		    reserved ? RESOURCE_CHARGE_RESERVED :
+			       RESOURCE_CHARGE_ORDINARY,
+		    &request, 1) < 0)
+		panic("file resource release invariant");
+	if (resource_account_state_get(account) == RESOURCE_ACCOUNT_FREE) {
+		for (int i = 0; i < PROC_RESOURCE_DOMAIN_CAP; i++)
+			if (proc_resource_domains[i].used &&
+			    resource_account_handle_equal(
+				    proc_resource_domains[i].account,
+				    account)) {
+				proc_resource_domain_clear(
+					&proc_resource_domains[i]);
+				break;
+			}
 	}
-	proc_file_slots_total--;
-	if (domain->live == 0 && domain->ordinary_file_slots == 0 &&
-	    domain->reserved_file_slots == 0 &&
-	    domain->ordinary_threads == 0 && domain->reserved_threads == 0)
-		proc_resource_domain_clear(domain);
 	intr_restore(enabled);
 }
 
@@ -794,8 +1137,8 @@ static int proc_child_bind(struct proc *parent, struct proc *child)
 	int enabled = intr_save();
 	int slot = -1;
 
-	if (parent == 0 || child == 0 || parent->state != P_USED ||
-	    child->state != P_USED || child->parent != 0)
+	if (!proc_teardown_live(parent) || !proc_teardown_live(child) ||
+	    child->parent != 0)
 		goto out;
 	for (int i = 0; i < CHILD_RECORD_CAP; i++) {
 		struct child_record *record = &parent->child_records[i];
@@ -935,14 +1278,21 @@ void proc_init()
 	struct proc *p;
 	scheduler_queues_init();
 	proc_resource_init();
+	kernel_stack_live_slots = 0;
+	kernel_stack_live_ordinary = 0;
+	kernel_stack_live_reserved = 0;
 	for (p = pool; p < &pool[NPROC]; p++) {
 		p->state = P_UNUSED;
 		p->parent = 0;
 		p->parent_record_index = -1;
+		p->resource_account = resource_account_none();
 		p->resource_domain_id = -1;
 		p->storage_principal_id = FS_OWNER_NONE;
 		p->resource_slot_reserved = 0;
 		p->resource_domain_admin = 0;
+		agent_context_free(p);
+		p->teardown_state = PROC_TEARDOWN_RECYCLED;
+		p->teardown_owner_tid = PROC_TEARDOWN_OWNER_NONE;
 		p->vm_snapshot_depth = 0;
 		p->vm_snapshot_owner_tid = -1;
 		child_records_reset(p);
@@ -950,6 +1300,12 @@ void proc_init()
 			struct thread *t = &p->threads[tid];
 			kernel_work_reset(t);
 			t->state = T_UNUSED;
+			t->tid = -1;
+			t->process = p;
+			t->ustack = 0;
+			t->kstack = kernel_stack_base(p - pool, tid);
+			t->kstack_state = KSTACK_NONE;
+			t->trapframe = 0;
 			t->wait_channel = 0;
 			t->wait_next = 0;
 			t->wait_reason = WAIT_REASON_NONE;
@@ -957,6 +1313,7 @@ void proc_init()
 			t->wait_interruptible = 0;
 			t->on_run_queue = 0;
 			t->run_queue_agent = -1;
+			t->resource_account = resource_account_none();
 			t->resource_domain_id = -1;
 			t->resource_slot_reserved = 0;
 			t->resource_slot_charged = 0;
@@ -965,6 +1322,7 @@ void proc_init()
 		}
 	}
 	idle.kstack = (uint64)boot_stack_top;
+	idle.kstack_state = KSTACK_LIVE;
 	current_thread = &idle;
 	// for procid() and threadid()
 	idle.process = pool;
@@ -976,6 +1334,7 @@ void proc_init()
 	idle.wait_interruptible = 0;
 	idle.on_run_queue = 0;
 	idle.run_queue_agent = -1;
+	idle.resource_account = resource_account_none();
 	idle.resource_domain_id = -1;
 	idle.resource_slot_reserved = 0;
 	idle.resource_slot_charged = 0;
@@ -1064,7 +1423,12 @@ static void scheduler_validate_queued_thread(struct thread *t, int domain_id)
 	if (t == 0 || !t->on_run_queue || !t->resource_slot_charged ||
 	    t->resource_domain_id != domain_id || t->process == 0 ||
 	    t->process->state != P_USED ||
-	    t->process->resource_domain_id != domain_id)
+	    t->process->resource_domain_id != domain_id ||
+	    !resource_account_handle_equal(
+		    t->resource_account, t->process->resource_account) ||
+	    !resource_account_handle_equal(
+		    t->resource_account,
+		    proc_resource_domains[domain_id].account))
 		panic("domain task queue ownership invariant");
 }
 
@@ -1242,7 +1606,12 @@ void add_task(struct thread *t)
 	domain_id = t->resource_domain_id;
 	if (domain_id < 0 || domain_id >= PROC_RESOURCE_DOMAIN_CAP ||
 	    t->process->resource_domain_id != domain_id ||
-	    !proc_resource_domains[domain_id].used)
+	    !proc_resource_domains[domain_id].used ||
+	    !resource_account_handle_equal(
+		    t->resource_account, t->process->resource_account) ||
+	    !resource_account_handle_equal(
+		    t->resource_account,
+		    proc_resource_domains[domain_id].account))
 		panic("task resource domain invariant");
 	domain = &proc_resource_domains[domain_id];
 	int task_id = task_to_id(t);
@@ -1319,13 +1688,13 @@ static struct proc *allocproc_admit(struct proc *parent,
 	wait_queue_init(&p->thread_exit_waiters, WAIT_REASON_THREAD_EXIT);
 	wait_queue_init(&p->agent_event_waiters, WAIT_REASON_EVENT);
 	wait_queue_init(&p->agent_timeline_waiters, WAIT_REASON_TIMELINE);
+	agent_lifecycle_context_lane_init(p);
 	p->max_page = 0;
 	p->parent = NULL;
 	p->parent_record_index = -1;
 	p->exit_code = 0;
-	p->exit_requested = 0;
-	p->exit_owner_tid = -1;
-	p->exit_finalizing = 0;
+	p->teardown_state = PROC_TEARDOWN_LIVE;
+	p->teardown_owner_tid = PROC_TEARDOWN_OWNER_NONE;
 	p->vm_snapshot_depth = 0;
 	p->vm_snapshot_owner_tid = -1;
 	child_records_reset(p);
@@ -1336,12 +1705,19 @@ static struct proc *allocproc_admit(struct proc *parent,
 	p->exec_role_mask = 0;
 	p->exec_layout_version = 0;
 	p->exec_rw_offset = 0;
+	if (p->workflow_lifecycle_charged)
+		panic("stale workflow lifecycle charge");
+	p->workflow_lifecycle_id = WORKFLOW_LIFECYCLE_ID_NONE;
+	p->workflow_lifecycle_generation = 0;
+	p->workflow_lifecycle_charged = 0;
 	vfs_proc_reset(p);
 	p->pagetable = uvmcreate();
 	if (p->pagetable == 0) {
-		proc_thread_resource_release(&p->threads[0]);
-		proc_resource_release(p);
-		p->state = P_UNUSED;
+		freeproc(p);
+		return 0;
+	}
+	if (kernel_stack_acquire(&p->threads[0]) < 0) {
+		freeproc(p);
 		return 0;
 	}
 	kernel_stack_reset_slot(p, 0);
@@ -1356,7 +1732,7 @@ static struct proc *allocproc_admit(struct proc *parent,
 	p->mail_head = 0;
 	p->mail_tail = 0;
 	p->mail_count = 0;
-	agent_clear_metadata(p);
+	agent_proc_prepare(p);
 	return p;
 }
 
@@ -1431,7 +1807,7 @@ int allocthread(struct proc *p, uint64 entry, int alloc_user_res)
 	if (p == 0)
 		return -1;
 	enabled = intr_save();
-	if (p->state != P_USED || p->exit_requested) {
+	if (!proc_teardown_live(p)) {
 		intr_restore(enabled);
 		return -1;
 	}
@@ -1458,16 +1834,16 @@ found:
 
 		if (domain_id < 0 ||
 		    domain_id >= PROC_RESOURCE_DOMAIN_CAP ||
-		    !proc_thread_resource_available(
-			    &proc_resource_domains[domain_id],
-			    p->resource_slot_reserved)) {
+		    proc_thread_resource_charge_locked(
+			    t, domain_id,
+			    p->resource_slot_reserved) < 0) {
 			intr_restore(enabled);
 			return -1;
 		}
-		proc_thread_resource_charge_locked(
-			t, domain_id, p->resource_slot_reserved);
 		new_charge = 1;
 	} else if (t->resource_domain_id != p->resource_domain_id ||
+		   !resource_account_handle_equal(
+			   t->resource_account, p->resource_account) ||
 		   t->resource_slot_reserved != p->resource_slot_reserved) {
 		panic("precharged thread ownership invariant");
 	}
@@ -1487,20 +1863,14 @@ found:
 	memset(t->fd_delegate_ticket, 0, sizeof(t->fd_delegate_ticket));
 	intr_restore(enabled);
 	// kernel stack
-	t->kstack = kernel_stack_base(p - pool, tid);
+	if (kernel_stack_acquire(t) < 0)
+		goto fail_slot;
 	kernel_stack_reset_slot(p, tid);
 	// user stack
 	if (alloc_user_res != 0) {
 		if (uvmmap(p->pagetable, t->ustack, USTACK_SIZE / PAGE_SIZE,
-			   PTE_U | PTE_R | PTE_W) < 0) {
-			t->state = T_UNUSED;
-			t->tid = -1;
-			t->ustack = 0;
-			t->run_queue_agent = -1;
-			if (new_charge)
-				proc_thread_resource_release(t);
-			return -1;
-		}
+			   PTE_U | PTE_R | PTE_W) < 0)
+			goto fail_slot;
 		p->max_page =
 			MAX(p->max_page,
 			    PGROUNDUP(t->ustack + USTACK_SIZE - 1) / PAGE_SIZE);
@@ -1513,14 +1883,7 @@ found:
 		if (alloc_user_res != 0)
 			uvmunmap(p->pagetable, t->ustack,
 				 USTACK_SIZE / PAGE_SIZE, 1);
-		p->max_page = old_max_page;
-		t->state = T_UNUSED;
-		t->tid = -1;
-		t->ustack = 0;
-		t->run_queue_agent = -1;
-		if (new_charge)
-			proc_thread_resource_release(t);
-		return -1;
+		goto fail_slot;
 	}
 	t->trapframe->sp = t->ustack + USTACK_SIZE;
 	t->trapframe->epc = entry;
@@ -1533,6 +1896,18 @@ found:
 	       p->pid, (p - pool), t->tid, entry, t->ustack,
 	       walkaddr(p->pagetable, t->ustack));
 	return tid;
+
+fail_slot:
+	p->max_page = old_max_page;
+	kernel_stack_release_inactive(t);
+	t->state = T_UNUSED;
+	t->tid = -1;
+	t->ustack = 0;
+	t->trapframe = 0;
+	t->run_queue_agent = -1;
+	if (new_charge)
+		proc_thread_resource_release(t);
+	return -1;
 }
 
 int init_stdio(struct proc *p)
@@ -1564,13 +1939,20 @@ static void scheduler_finish_dying_thread(struct thread *t)
 	if (t == 0 || t->state != T_DYING || (p = t->process) == 0)
 		return;
 	tid = t->tid;
+	if (t->kstack_state != KSTACK_REAP)
+		panic("dying thread kernel stack");
+	kernel_stack_release_inactive(t);
 	t->state = EXITED;
 	proc_thread_resource_release(t);
-	if (tid != p->exit_owner_tid || !p->exit_finalizing) {
+	if (tid != p->teardown_owner_tid) {
 		wait_queue_wake_all(&p->thread_exit_waiters);
 		return;
 	}
+	if (p->teardown_state != PROC_TEARDOWN_HANDOFF)
+		panic("teardown scheduler handoff");
 	proc_child_publish_exit(p);
+	proc_teardown_advance(p, PROC_TEARDOWN_HANDOFF,
+			      PROC_TEARDOWN_PUBLISHED);
 	proc_recycle(p);
 }
 
@@ -1620,6 +2002,7 @@ void scheduler()
 				intr_off();
 				continue;
 			}
+			kernel_stack_assert_quiescent();
 			infof("all app are over!");
 			shutdown();
 			for (;;)
@@ -1638,6 +2021,7 @@ void scheduler()
 		kernel_work_on_dispatch(t);
 		swtch(&idle.context, &t->context);
 		kernel_stack_check(t);
+		current_thread = &idle;
 		scheduler_finish_dying_thread(t);
 	}
 }
@@ -1673,6 +2057,12 @@ void freepagetable(pagetable_t pagetable, uint64 max_page)
 {
 	uvmunmap(pagetable, TRAMPOLINE, 1, 0);
 	uvmfree(pagetable, max_page);
+}
+
+static void freepagetable_cleanup(pagetable_t pagetable, uint64 max_page)
+{
+	uvmunmap(pagetable, TRAMPOLINE, 1, 0);
+	uvmfree_cleanup(pagetable, max_page);
 }
 
 // The descriptor table is process-wide, while delegation intent belongs to a
@@ -1728,14 +2118,29 @@ void proc_revoke_vfs_scope_fds(struct proc *p)
 			fileclose(files[i]);
 }
 
-void proc_install_user_image(struct proc *p, struct user_image *image,
-			     struct trapframe *staged, int running)
+int proc_install_user_image(struct proc *p, struct user_image *image,
+			    struct trapframe *staged, int running)
 {
 	pagetable_t old_pagetable = p->pagetable;
 	uint64 old_max_page = p->max_page;
+	struct vfs_exec_transition transition;
 	struct thread *main_thread;
+	int enabled;
 
-	vfs_proc_install_image(p, image, running);
+	if (vfs_proc_exec_prepare(p, image, running, &transition) < 0)
+		return -1;
+	/*
+	 * Image construction and credential preparation may yield. Credential
+	 * commit and the VM pointer swap form one publication boundary: once
+	 * teardown is requested, neither half of the new identity is visible.
+	 */
+	enabled = intr_save();
+	if (!proc_teardown_live(p) ||
+	    vfs_proc_exec_commit(p, &transition) < 0) {
+		intr_restore(enabled);
+		vfs_proc_exec_abort(&transition);
+		return -1;
+	}
 	p->pagetable = image->pagetable;
 	p->max_page = image->max_page;
 	p->ustack_base = image->ustack_base;
@@ -1746,13 +2151,16 @@ void proc_install_user_image(struct proc *p, struct user_image *image,
 	p->exec_role_mask = image->exec_role_mask;
 	p->exec_layout_version = image->exec_layout_version;
 	p->exec_rw_offset = image->exec_rw_offset;
+	image->pagetable = 0;
+	intr_restore(enabled);
 	agent_authority_on_exec(p);
 	if (running && !p->is_agent)
 		proc_resource_drop_admin(p);
-	image->pagetable = 0;
 
 	if (!p->threads[0].resource_slot_charged ||
 	    p->threads[0].resource_domain_id != p->resource_domain_id ||
+	    !resource_account_handle_equal(
+		    p->threads[0].resource_account, p->resource_account) ||
 	    p->threads[0].resource_slot_reserved !=
 		    p->resource_slot_reserved)
 		panic("main thread resource invariant");
@@ -1779,6 +2187,8 @@ void proc_install_user_image(struct proc *p, struct user_image *image,
 		       sizeof(slot->fd_delegate_ticket));
 	}
 	main_thread = &p->threads[0];
+	if (main_thread->kstack_state != KSTACK_LIVE)
+		panic("main thread without kernel stack");
 	main_thread->tid = 0;
 	main_thread->state = running ? RUNNING : T_USED;
 	main_thread->process = p;
@@ -1799,31 +2209,47 @@ void proc_install_user_image(struct proc *p, struct user_image *image,
 				 0);
 		agent_unmap_exec_context(p, old_pagetable);
 		uvmunmap(old_pagetable, TRAMPOLINE, 1, 0);
-		uvmfree(old_pagetable, old_max_page);
+		uvmfree_cleanup(old_pagetable, old_max_page);
 	}
 	memset(image, 0, sizeof(*image));
+	return 0;
+}
+
+static void thread_user_vm_release(struct thread *t)
+{
+	pagetable_t pt;
+
+	if (t == 0 || t->process == 0)
+		return;
+	pt = t->process->pagetable;
+	detach_task(t);
+	if (t->trapframe != 0)
+		memset((void *)t->trapframe, 6, TRAP_PAGE_SIZE);
+	memset(&t->context, 6, sizeof(t->context));
+	if (pt == 0 || t->tid < 0 || t->tid >= NTHREAD)
+		return;
+	uvmunmap(pt, get_thread_trapframe_va(t->tid), 1, 0);
+	if (t->ustack != 0)
+		uvmunmap(pt, get_thread_ustack_base_va(t),
+			 USTACK_SIZE / PAGE_SIZE, 1);
 }
 
 void freethread(struct thread *t)
 {
-	pagetable_t pt = t->process->pagetable;
 	kernel_work_reset(t);
-	detach_task(t);
-	// fill with junk
-	memset((void *)t->trapframe, 6, TRAP_PAGE_SIZE);
-	memset(&t->context, 6, sizeof(t->context));
-	uvmunmap(pt, get_thread_trapframe_va(t->tid), 1, 0);
-	uvmunmap(pt, get_thread_ustack_base_va(t), USTACK_SIZE / PAGE_SIZE, 1);
+	thread_user_vm_release(t);
 }
 
 static void proc_reset_thread_slot(struct thread *t)
 {
 	kernel_work_reset(t);
+	kernel_stack_release_inactive(t);
 	proc_thread_resource_release(t);
 	memset(t->fd_delegate_ticket, 0, sizeof(t->fd_delegate_ticket));
 	t->state = T_UNUSED;
 	t->tid = -1;
 	t->ustack = 0;
+	t->trapframe = 0;
 	t->wait_channel = 0;
 	t->wait_next = 0;
 	t->wait_reason = WAIT_REASON_NONE;
@@ -1831,77 +2257,88 @@ static void proc_reset_thread_slot(struct thread *t)
 	t->wait_interruptible = 0;
 	t->on_run_queue = 0;
 	t->run_queue_agent = -1;
+	t->resource_account = resource_account_none();
 	t->resource_domain_id = -1;
 	t->resource_slot_reserved = 0;
 	t->resource_slot_charged = 0;
 }
 
-static struct thread *proc_current_teardown_thread(struct proc *p)
+static void proc_teardown_advance(struct proc *p,
+				  enum proc_teardown_state expected,
+				  enum proc_teardown_state next)
 {
-	struct thread *t = current_thread;
+	int enabled = intr_save();
 
-	if (t == NULL || t == &idle || t->process != p || t->tid < 0 ||
-	    t->tid >= NTHREAD || t != &p->threads[t->tid])
-		return NULL;
-	return t;
+	if (p == 0 || p->state != P_USED ||
+	    p->teardown_state != expected || next != expected + 1)
+		panic("process teardown transition");
+	p->teardown_state = next;
+	intr_restore(enabled);
 }
 
-// Release a quiescent process. Published threads must unwind and stop first;
-// T_USED slots are safe because they have never entered their kernel stack.
-static int proc_release_resources(struct proc *p, int finish_teardown)
+/*
+ * The caller is the sole teardown owner. Pointer publication is removed before
+ * any destructor can sleep; workflow and resource identities remain live until
+ * all reclaim I/O has settled.
+ */
+static int proc_teardown_run(struct proc *p, struct thread *owner,
+			     int terminal_current)
 {
-	struct thread *teardown = proc_current_teardown_thread(p);
 	struct file *files[FD_BUFFER_SIZE];
+	int enabled;
 
+	if (p == 0 || p->teardown_state != PROC_TEARDOWN_QUIESCING)
+		return -1;
+	if (terminal_current) {
+		if (owner == 0 || owner != current_thread || owner->process != p ||
+		    owner->tid != 0 ||
+		    p->teardown_owner_tid != owner->tid ||
+		    owner->state != RUNNING)
+			return -1;
+	} else if (owner != 0 ||
+		   p->teardown_owner_tid != PROC_TEARDOWN_OWNER_KERNEL) {
+		return -1;
+	}
 	for (int tid = 0; tid < NTHREAD; ++tid) {
 		struct thread *t = &p->threads[tid];
 
-		if (t == teardown)
+		if (t == owner)
 			continue;
 		if (t->state != T_UNUSED && t->state != T_USED &&
 		    t->state != EXITED)
 			return -1;
 	}
+	proc_orphan_children(p);
 	for (int tid = 0; tid < NTHREAD; ++tid) {
 		struct thread *t = &p->threads[tid];
 
-		if (t == teardown)
+		if (t == owner)
 			continue;
-		detach_task(t);
 		if (t->state == T_USED)
-			freethread(t);
-		proc_reset_thread_slot(t);
+			thread_user_vm_release(t);
+		else
+			detach_task(t);
 	}
+	memset(files, 0, sizeof(files));
+	enabled = intr_save();
 	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
 		files[i] = p->files[i];
 		p->files[i] = 0;
 	}
 	proc_clear_all_fd_delegate_tickets(p);
+	intr_restore(enabled);
+	proc_teardown_advance(p, PROC_TEARDOWN_QUIESCING,
+			      PROC_TEARDOWN_DETACHED);
+	proc_teardown_advance(p, PROC_TEARDOWN_DETACHED,
+			      PROC_TEARDOWN_RECLAIMING);
 	for (int i = 0; i < FD_BUFFER_SIZE; i++)
 		if (files[i] != 0 && !fd_is_reserved(files[i]))
 			fileclose(files[i]);
-	if (p->is_agent)
-		agent_free_proc_context(p);
-	else
-		agent_clear_metadata(p);
-	/*
-	 * File close may reclaim arbitrarily many unlinked blocks. Settle its
-	 * owner and device debt before vfs_proc_reset() quiesces the last workflow
-	 * member, and before freethread() clears the accounting context.
-	 */
-	if (finish_teardown && teardown != 0) {
-		if (bio_request_end_current_cleanup() < 0)
-			panic("process teardown I/O settlement");
-		kernel_work_end_cleanup();
-	}
-	if (teardown != 0)
-		freethread(teardown);
-	wait_queue_init(&p->child_waiters, WAIT_REASON_CHILD);
-	wait_queue_init(&p->thread_exit_waiters, WAIT_REASON_THREAD_EXIT);
-	wait_queue_init(&p->agent_event_waiters, WAIT_REASON_EVENT);
-	wait_queue_init(&p->agent_timeline_waiters, WAIT_REASON_TIMELINE);
+	agent_proc_teardown(p);
+	if (owner != 0)
+		thread_user_vm_release(owner);
 	if (p->pagetable)
-		freepagetable(p->pagetable, p->max_page);
+		freepagetable_cleanup(p->pagetable, p->max_page);
 	p->pagetable = 0;
 	p->max_page = 0;
 	p->ustack_base = 0;
@@ -1912,20 +2349,61 @@ static int proc_release_resources(struct proc *p, int finish_teardown)
 	p->exec_role_mask = 0;
 	p->exec_layout_version = 0;
 	p->exec_rw_offset = 0;
-	vfs_proc_reset(p);
+	proc_teardown_advance(p, PROC_TEARDOWN_RECLAIMING,
+			      PROC_TEARDOWN_SETTLING);
+	agent_proc_teardown(p);
+	/*
+	 * File and VM reclaim are complete. The terminal owner settles the entire
+	 * syscall/cleanup lease before lifecycle release can quiesce its BIO
+	 * principal. Foreign unpublished rollback must never end its caller's
+	 * lease.
+	 */
+	if (terminal_current) {
+		if (bio_request_end_current_cleanup() < 0)
+			panic("process teardown I/O settlement");
+		kernel_work_end_cleanup();
+	}
+	vfs_proc_terminal_clear(p);
+	vfs_proc_lifecycle_release(p);
+	if (p->pagetable != 0 || p->workflow_lifecycle_charged ||
+	    p->vfs_scope_id != VFS_SCOPE_NONE ||
+	    p->vfs_pending_scope_id != VFS_SCOPE_NONE || p->is_agent)
+		panic("process teardown settlement");
+	if (terminal_current &&
+	    (owner->io_request_depth != 0 || owner->kernel_work_depth != 0 ||
+	     owner->bio_buffer_holds != 0 ||
+	     owner->bio_fs_atomic_depth != 0))
+		panic("process teardown active work");
+	proc_teardown_advance(p, PROC_TEARDOWN_SETTLING,
+			      PROC_TEARDOWN_HANDOFF);
 	return 0;
 }
 
 static void proc_reset_slot(struct proc *p)
 {
+	if (p->teardown_state != PROC_TEARDOWN_PUBLISHED)
+		panic("process recycled before publication");
+	if (p->workflow_lifecycle_charged)
+		panic("process recycled with workflow lifecycle");
+	if (!agent_lifecycle_context_lane_quiescent(p))
+		panic("process recycled with Agent context operation");
+	for (int tid = 0; tid < NTHREAD; tid++)
+		if (p->threads[tid].kstack_state != KSTACK_NONE)
+			panic("process recycled with kernel stack");
+	agent_context_free(p);
+	if (!agent_context_is_empty(p))
+		panic("process recycled with Agent context state");
+	proc_teardown_advance(p, PROC_TEARDOWN_PUBLISHED,
+			      PROC_TEARDOWN_RECYCLED);
+	p->workflow_lifecycle_id = WORKFLOW_LIFECYCLE_ID_NONE;
+	p->workflow_lifecycle_generation = 0;
+	p->workflow_lifecycle_charged = 0;
 	proc_resource_release(p);
 	p->parent = NULL;
 	p->parent_record_index = -1;
 	p->pid = 0;
 	p->exit_code = 0;
-	p->exit_requested = 0;
-	p->exit_owner_tid = -1;
-	p->exit_finalizing = 0;
+	p->teardown_owner_tid = PROC_TEARDOWN_OWNER_NONE;
 	p->vm_snapshot_depth = 0;
 	p->vm_snapshot_owner_tid = -1;
 	child_records_reset(p);
@@ -1945,10 +2423,23 @@ static void proc_recycle(struct proc *p)
 
 void freeproc(struct proc *p)
 {
+	int enabled;
+
+	if (p == 0)
+		return;
+	enabled = intr_save();
+	if (proc_teardown_request_locked(p, -1) < 0 ||
+	    proc_teardown_claim_locked(p, PROC_TEARDOWN_OWNER_KERNEL) < 0) {
+		intr_restore(enabled);
+		panic("invalid unpublished process rollback");
+	}
+	intr_restore(enabled);
+	agent_proc_teardown(p);
 	proc_child_unbind(p);
-	proc_orphan_children(p);
-	if (proc_release_resources(p, 0) < 0)
+	if (proc_teardown_run(p, 0, 0) < 0)
 		panic("active process release");
+	proc_teardown_advance(p, PROC_TEARDOWN_HANDOFF,
+			      PROC_TEARDOWN_PUBLISHED);
 	proc_recycle(p);
 }
 
@@ -2046,7 +2537,7 @@ static int fork_common(int make_agent, int agent_role,
 		(parent_scope >= VFS_SCOPE_FIRST_DYNAMIC &&
 		 scope_mode == VFS_SPAWN_SCOPE_DROP);
 	fd_spawn_snapshot_take(p, issuer, authority_boundary, &fds);
-	if (p->exit_requested || !proc_child_has_capacity(p))
+	if (!proc_teardown_live(p) || !proc_child_has_capacity(p))
 		goto fail;
 	// Allocate process.
 	if ((np = allocproc_admit(p, admission)) == 0)
@@ -2153,7 +2644,7 @@ static int fork_common(int make_agent, int agent_role,
 	// rechecks the lifecycle barrier. A child marked for exit, or a pending
 	// credential whose scope ceased to be ACTIVE, must never become runnable.
 	publish_enabled = intr_save();
-	if (np->exit_requested || !vfs_proc_scope_publishable(np)) {
+	if (!proc_teardown_live(np) || !vfs_proc_scope_publishable(np)) {
 		intr_restore(publish_enabled);
 		freeproc(np);
 		return -1;
@@ -2297,7 +2788,7 @@ int push_argv(struct proc *p, char **argv)
 
 static int exec_thread_ready(struct proc *p)
 {
-	if (p->exit_requested || curr_thread() != &p->threads[0] ||
+	if (!proc_teardown_live(p) || curr_thread() != &p->threads[0] ||
 	    curr_thread()->state != RUNNING)
 		return 0;
 	for (int tid = 1; tid < NTHREAD; tid++) {
@@ -2338,11 +2829,6 @@ static struct inode *proc_exec_lookup(struct proc *p, char *path,
 				iput(ip);
 			return 0;
 		}
-		if (ip->dev != p->vfs_pending_exec_dev ||
-		    ip->inum != p->vfs_pending_exec_inum ||
-		    ip->vfs_incarnation !=
-			    p->vfs_pending_exec_incarnation)
-			vfs_proc_drop_to_public(p);
 		return ip;
 	}
 	policies[0] = vfs_cred_lookup_policy(cred);
@@ -2403,7 +2889,10 @@ int exec(char *path, char **argv)
 		user_image_discard(&image);
 		return -1;
 	}
-	proc_install_user_image(p, &image, &staged, 1);
+	if (proc_install_user_image(p, &image, &staged, 1) < 0) {
+		user_image_discard(&image);
+		return -1;
+	}
 	return argc;
 }
 
@@ -2470,6 +2959,7 @@ static __attribute__((noreturn)) void thread_exit_current(int code)
 	t->exit_code = code;
 	freethread(t);
 	t->state = T_DYING;
+	kernel_stack_mark_reap(t);
 	sched();
 	panic("dead thread resumed");
 }
@@ -2481,14 +2971,21 @@ void exit(int code)
 {
 	struct proc *p = curr_proc();
 	struct thread *t = curr_thread();
+	int enabled;
+	int claimed;
 
 	debugf("thread exit with %d", code);
 	if (t->tid != 0)
 		thread_exit_current(code);
-	p->exit_code = code;
-	p->exit_requested = 1;
-	p->exit_owner_tid = t->tid;
-	agent_scope_controller_departing(p);
+	enabled = intr_save();
+	claimed = proc_teardown_request_locked(p, code);
+	if (claimed >= 0)
+		claimed = proc_teardown_claim_locked(p, t->tid);
+	code = (int)p->exit_code;
+	intr_restore(enabled);
+	if (claimed < 0)
+		panic("process teardown owner");
+	agent_proc_teardown(p);
 	for (;;) {
 		proc_interrupt_siblings(p, t);
 		if (proc_siblings_quiescent(p, t))
@@ -2499,12 +2996,11 @@ void exit(int code)
 	kernel_work_begin_cleanup();
 	if (bio_request_begin_current_cleanup() < 0)
 		panic("process teardown I/O admission");
-	proc_orphan_children(p);
-	if (proc_release_resources(p, 1) < 0)
+	if (proc_teardown_run(p, t, 1) < 0)
 		panic("active process exit");
-	p->exit_finalizing = 1;
 	t->exit_code = code;
 	t->state = T_DYING;
+	kernel_stack_mark_reap(t);
 	sched();
 	panic("exited process resumed");
 }
@@ -2519,6 +3015,10 @@ int fdreserve()
 	struct proc *p = curr_proc();
 	int enabled = intr_save();
 
+	if (!proc_teardown_live(p)) {
+		intr_restore(enabled);
+		return -1;
+	}
 	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
 		if (p->files[i] == 0) {
 			p->files[i] = &fd_reservation;
@@ -2536,7 +3036,7 @@ int fdinstall(int fd, struct file *f)
 	struct proc *p = curr_proc();
 	int enabled = intr_save();
 
-	if (fd < 0 || fd >= FD_BUFFER_SIZE || f == 0 ||
+	if (!proc_teardown_live(p) || fd < 0 || fd >= FD_BUFFER_SIZE || f == 0 ||
 	    p->files[fd] != &fd_reservation) {
 		intr_restore(enabled);
 		return -1;
@@ -2596,7 +3096,8 @@ int proc_delegate_fd(int fd)
 	struct thread *t = curr_thread();
 	int enabled = intr_save();
 
-	if (p == 0 || t == 0 || t == &idle || t->process != p ||
+	if (!proc_teardown_live(p) || t == 0 || t == &idle ||
+	    t->process != p ||
 	    fd < 0 || fd >= FD_BUFFER_SIZE ||
 	    p->files[fd] == 0 || fd_is_reserved(p->files[fd]) ||
 	    p->files[fd]->inherit_class != FD_INHERIT_DELEGATE) {

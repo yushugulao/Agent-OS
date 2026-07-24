@@ -12,7 +12,19 @@
 | `agent_call(struct agent_request *, struct agent_response *)` | 名称协议结构化工具调用入口 |
 | `agent_tool_list(struct agent_tool_desc *, int)` | Agent 工具列表查询入口 |
 
-系统调用层只负责分发，Agent 相关逻辑集中在 `os/agent.c`。这样工具表、工具执行、Context 写入、文件属性查询、Agent Loop 和消息读写位于同一个模块，便于统一维护。
+系统调用层只负责分发，`os/agent.c` 只保留历史入口的薄 facade。可写状态和实现按所有权拆分，避免工具调用、IPC、metadata 和观测继续堆积在同一编译单元：
+
+| owner 模块 | 职责 |
+| --- | --- |
+| `agent_core.c` | 工具运行时与跨 owner 流程编排 |
+| `agent_context.c` | Context shadow/mirror、按需私有 sidecar 与 `sys_context_*` |
+| `agent_identity.c` | role、capability 和对象授权 |
+| `agent_ipc.c` | route、event、watch、wait/cancel、heartbeat |
+| `agent_lifecycle.c` | control id 与 controller departure |
+| `agent_metadata.c` / `agent_metadata_objects.c` / `agent_metadata_store.c` | 事务门、对象状态和 COW 持久化 |
+| `agent_observe.c` | audit、span、timeline、ledger 与 provenance |
+
+模块间只通过 `agent_internal.h` 和 metadata 私有接口传递操作，不导出可由其他模块直接修改的全局数据。`make ci-check` 对 facade 行数、十二个 Agent/资源/生命周期模块的代码预算、符号所有权和依赖方向执行静态门禁；阈值以 `ci/kernel-budgets.json` 为准。
 
 ## 协议
 
@@ -46,6 +58,10 @@
 7. 写入对应 `agent_result`。
 8. 将结果追加到 Context Path。
 9. 同步 shadow Context 到用户镜像。
+
+完整 `agent_op/result` 详情与可信 attribution 不再嵌入每个 PCB，而是写入 Context owner 为活跃 Agent 按需分配的 9 页 sidecar。运行时把它与 6 页用户 mirror、6 页可信 shadow 合为一次 21 页 `RESOURCE_AGENT_STATE_PAGE` 请求，由 EXEC resource account 原子预留、提交和退款；sidecar-only 的 9 页预算仍由 CI 独立观察。
+
+同一进程的 sequence 接纳、工具执行、result/header/Context record、Context syscall、IPC 状态、文件查询和 wait 归因进入可睡眠、FIFO、可重入的 Context commit lane；需要 metadata 时锁序固定为 `lane -> metadata`。`agent_call_count` 是已接纳并保留的调用序号，可在在途慢调用期间暂时领先；`latest_sequence` 是完整记录已经提交的水位。并发回归要求 `context_commit_lane=1 sequence=1..3 hash=1`。
 
 批量执行的性能收益来自：
 

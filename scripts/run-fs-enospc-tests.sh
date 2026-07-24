@@ -7,6 +7,9 @@ cd "${SCRIPT_DIR}/.."
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
+CASE_TIMEOUT="${CASE_TIMEOUT:-120s}"
+IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS:-20s}"
+MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-5s}"
 FS_BLOCKS="${FS_ENOSPC_BLOCKS:-192}"
 FS_INODES="${FS_ENOSPC_INODES:-24}"
 FS_CACHE_INODES="${FS_ENOSPC_CACHE_INODES:-8}"
@@ -229,155 +232,32 @@ run_case() {
 	local marker="$4"
 	local profile="$5"
 
-	"${PYTHON_BIN}" - "${tag}" "${kernel}" "${image}" "${QEMU}" \
-		"${marker}" "${profile}" <<'PY'
-import os
-import re
-import select
-import signal
-import subprocess
-import sys
-import time
+	local log_file="${TMPDIR_FS}/${tag}.log"
+	local completion_args=()
 
-tag, kernel, image, qemu, marker, profile = sys.argv[1:7]
-failure = re.compile(
-    r"check failed|panic|unknown syscall|bad addr|IllegalInstruction",
-    re.IGNORECASE,
-)
-cmd = [
-    qemu, "-nographic", "-machine", "virt", "-bios", "default",
-    "-kernel", kernel,
-    "-drive", f"file={image},if=none,format=raw,id=x0",
-    "-device", "virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0",
-]
-start = time.monotonic()
-proc = subprocess.Popen(
-    cmd,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.STDOUT,
-    preexec_fn=os.setsid,
-)
-chunks = []
-marker_at = -1
-failure_match = None
-timed_out = False
-assert proc.stdout is not None
-while time.monotonic() - start < 120:
-    ready, _, _ = select.select([proc.stdout], [], [], 0.2)
-    if ready:
-        chunk = os.read(proc.stdout.fileno(), 4096)
-        if not chunk:
-            break
-        chunks.append(chunk)
-        output = b"".join(chunks).decode("utf-8", errors="replace")
-        marker_at = output.find(marker)
-        failure_match = failure.search(output)
-        if marker_at >= 0 or failure_match is not None:
-            break
-    elif proc.poll() is not None:
-        break
-else:
-    timed_out = True
+	case "${profile}" in
+	orphan-crash | persistent-seed)
+		completion_args+=(--completion-mode checkpoint)
+		;;
+	esac
 
-if proc.poll() is None:
-    os.killpg(proc.pid, signal.SIGTERM)
-    try:
-        proc.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)
-        proc.wait(timeout=2)
-
-output = b"".join(chunks).decode("utf-8", errors="replace")
-print(output, end="")
-lines = output.splitlines()
-failed_before_marker = (
-    failure_match is not None
-    and (marker_at < 0 or failure_match.start() < marker_at)
-)
-profile_error = None
-if profile in ("domain", "reserve"):
-    required = [
-        "fsquota_ucore: public_version_churn=1",
-        "fsquota_ucore: public_domain_limited=1",
-        "fsquota_ucore: post_exit_accounting=1",
-        "fsquota_ucore: workflow_reserve=1",
-        "fsquota_ucore: workflow_version_reserve=1",
-        "fsquota_ucore: content_version_reserve=1",
-        "fsquota_ucore: kernel_metadata_reserve=1",
-        "fsquota_ucore: pressure_cleanup=1",
-    ]
-    if profile == "domain":
-        required.append("fsquota_ucore: quota_reuse=1")
-    positions = [output.find(text) for text in required]
-    if marker_at < 0 or any(pos < 0 or pos >= marker_at for pos in positions):
-        profile_error = "missing quota marker"
-    elif positions != sorted(positions):
-        profile_error = "quota markers are out of order"
-    pressure = re.search(
-        r"fsquota_ucore: public_domain_limited=1 blocks=(\d+) inodes=(\d+)",
-        output,
-    )
-    if pressure is None:
-        profile_error = "missing quota pressure counts"
-    else:
-        blocks, inodes = (int(value) for value in pressure.groups())
-        if profile == "domain" and not (2 <= blocks <= 16 and 4 <= inodes <= 8):
-            profile_error = (
-                f"domain boundary mismatch: blocks={blocks} inodes={inodes}"
-            )
-        if profile == "reserve" and not (blocks > 32 and inodes > 12):
-            profile_error = (
-                f"reserve boundary mismatch: blocks={blocks} inodes={inodes}"
-            )
-    churn = re.search(
-        r"fsquota_ucore: public_version_churn=1 cycles=(\d+)", output
-    )
-    if churn is None or int(churn.group(1)) <= 512:
-        profile_error = "version churn did not cross the former table capacity"
-elif profile == "orphan-crash":
-    if "fspquota_ucore: crash_orphan_ready=1" not in output:
-        profile_error = "missing crash-orphan checkpoint"
-elif profile == "persistent-seed":
-    sponsor = re.search(
-        r"fspquota_ucore: sponsored_object_charged=1 blocks=(\d+)",
-        output,
-    )
-    seed = re.search(
-        r"fspquota_ucore: durable_fixture=1 blocks=(\d+) "
-        r"inodes=(\d+) owner_exited=1",
-        output,
-    )
-    if sponsor is None or int(sponsor.group(1)) != 14:
-        profile_error = "missing sponsored object ownership transfer marker"
-    elif seed is None:
-        profile_error = "missing durable quota seed marker"
-    elif tuple(int(value) for value in seed.groups()) != (18, 8):
-        profile_error = "durable quota seed limits do not match 18/8"
-elif profile == "persistent-verify":
-    required = [
-        "fspquota_ucore: reboot_charge_persisted=1",
-        "fspquota_ucore: deletion_reuse=1",
-        "fspquota_ucore: relaunch_charge_persisted=1 launches=2",
-        "fspquota_ucore: cleanup_reuse=1",
-    ]
-    positions = [output.find(text) for text in required]
-    if marker_at < 0 or any(pos < 0 or pos >= marker_at for pos in positions):
-        profile_error = "missing persistent quota marker"
-    elif positions != sorted(positions):
-        profile_error = "persistent quota markers are out of order"
-elif profile != "generic":
-    profile_error = f"unknown validation profile: {profile}"
-if timed_out:
-    print(f"[fs-enospc] {tag} timed out", file=sys.stderr)
-if timed_out or marker_at < 0 or failed_before_marker or profile_error:
-    if profile_error:
-        print(f"[fs-enospc] {tag} {profile_error}", file=sys.stderr)
-    print(f"[fs-enospc] {tag} failed", file=sys.stderr)
-    for line in lines[-40:]:
-        print(line, file=sys.stderr)
-    raise SystemExit(1)
-print(f"[fs-enospc] {tag} passed in {time.monotonic() - start:.1f}s")
-PY
+	"${PYTHON_BIN}" scripts/agent_test_runner.py \
+		--init-proc "${tag}" \
+		--marker "${marker}" \
+		--log-file "${log_file}" \
+		--case-timeout "${CASE_TIMEOUT}" \
+		--idle-notice-seconds "${IDLE_NOTICE_SECONDS}" \
+		--marker-grace-seconds "${MARKER_GRACE_SECONDS}" \
+		--qemu "${QEMU}" \
+		--kernel "${kernel}" \
+		--image "${image}" \
+		"${completion_args[@]}"
+	"${PYTHON_BIN}" scripts/validate-kernel-test-log.py \
+		--log-file "${log_file}" \
+		--tag "fs-enospc:${tag}" \
+		--profile "${profile}" \
+		--marker "${marker}"
+	echo "[fs-enospc] ${tag} passed"
 }
 
 build_user "" agent

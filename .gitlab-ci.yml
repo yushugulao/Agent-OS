@@ -1,0 +1,67 @@
+stages:
+  - budget
+  - test
+
+variables:
+  DEBIAN_FRONTEND: noninteractive
+  TOOLPREFIX: riscv64-linux-gnu-
+
+.agentos-toolchain:
+  image: ubuntu:26.04
+  before_script:
+    - apt-get update
+    - >-
+      apt-get install -y --no-install-recommends
+      build-essential make python3
+      gcc-riscv64-linux-gnu=4:15.2.0-5ubuntu1
+      gcc-15-riscv64-linux-gnu=15.2.0-16ubuntu1cross1
+      cpp-15-riscv64-linux-gnu=15.2.0-16ubuntu1cross1
+      libgcc-15-dev-riscv64-cross=15.2.0-16ubuntu1cross1
+      binutils-riscv64-linux-gnu=2.46-3ubuntu2
+      qemu-system-riscv=1:10.2.1+ds-1ubuntu3
+      opensbi=1.8.1-1
+
+kernel-budgets:
+  extends: .agentos-toolchain
+  stage: budget
+  script:
+    - bash scripts/verify-dual-target-structure.sh
+    - make ci-check
+
+agent-regression:
+  extends: .agentos-toolchain
+  stage: test
+  tags:
+    - agentos-qemu-calibrated
+  resource_group: agentos-qemu-performance
+  needs:
+    - kernel-budgets
+  timeout: 15m
+  script:
+    - >-
+      env -u AGENT_TEST_CASE
+      REQUIRE_FULL_SUITE=1
+      AGENT_TEST_CALIBRATE=0
+      TOOLPREFIX=riscv64-linux-gnu-
+      LOG=error
+      CHAPTER=agent
+      QEMU=qemu-system-riscv64
+      PYTHON_BIN=python3
+      CASE_TIMEOUT=300s
+      IDLE_NOTICE_SECONDS=20
+      MARKER_GRACE_SECONDS=2
+      bash scripts/run-agent-tests.sh
+
+kernel-mechanism-regression:
+  extends: .agentos-toolchain
+  stage: test
+  resource_group: agentos-qemu-performance
+  needs:
+    - kernel-budgets
+  timeout: 35m
+  script:
+    - TOOLPREFIX=riscv64-linux-gnu- QEMU=qemu-system-riscv64 CASE_TIMEOUT=300s bash scripts/run-proc-reap-tests.sh
+    - TOOLPREFIX=riscv64-linux-gnu- QEMU=qemu-system-riscv64 CASE_TIMEOUT=300s bash scripts/run-syscall-fairness-tests.sh
+    - TOOLPREFIX=riscv64-linux-gnu- QEMU=qemu-system-riscv64 CASE_TIMEOUT=300s bash scripts/run-file-resource-tests.sh
+    - TOOLPREFIX=riscv64-linux-gnu- QEMU=qemu-system-riscv64 CASE_TIMEOUT=300s bash scripts/run-thread-resource-tests.sh
+    - TOOLPREFIX=riscv64-linux-gnu- QEMU=qemu-system-riscv64 CASE_TIMEOUT=300s bash scripts/run-fs-enospc-tests.sh

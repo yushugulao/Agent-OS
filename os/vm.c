@@ -297,6 +297,18 @@ void uvmfree(pagetable_t pagetable, uint64 max_page)
 	freewalk(pagetable);
 }
 
+// Terminal and rollback teardown may own a large sparse address space. Release
+// one leaf at a time so the cleanup owner remains subject to kernel fairness;
+// all other process threads are quiescent before this function is entered.
+void uvmfree_cleanup(pagetable_t pagetable, uint64 max_page)
+{
+	for (uint64 page = 0; page < max_page; page++) {
+		uvmunmap(pagetable, page * PGSIZE, 1, 1);
+		(void)kernel_work_checkpoint_cleanup(KERNEL_WORK_PAGE_UNITS);
+	}
+	freewalk(pagetable);
+}
+
 // Used in fork.
 // Copy the pagetable page and all the user pages.
 // Return 0 on success, -1 on error.

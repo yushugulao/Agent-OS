@@ -74,7 +74,7 @@ void user_image_discard(struct user_image *image)
 			 image->shared_pages, 0);
 	uvmunmap(image->pagetable, TRAPFRAME, 1, 0);
 	uvmunmap(image->pagetable, TRAMPOLINE, 1, 0);
-	uvmfree(image->pagetable, image->max_page);
+	uvmfree_cleanup(image->pagetable, image->max_page);
 	memset(image, 0, sizeof(*image));
 }
 
@@ -194,7 +194,11 @@ int load_init_app()
 		freeproc(p);
 		return -1;
 	}
-	proc_install_user_image(p, &image, &staged, 0);
+	if (proc_install_user_image(p, &image, &staged, 0) < 0) {
+		user_image_discard(&image);
+		freeproc(p);
+		return -1;
+	}
 	if (exec_policy_process_bootstrap(p))
 		agent_authority_bootstrap(p);
 	struct thread *t = &p->threads[0];

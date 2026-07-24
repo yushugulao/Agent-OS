@@ -2,6 +2,7 @@
 #define __FS_H__
 
 #include "types.h"
+#include "resource_controller.h"
 // On-disk file system format.
 // Both the kernel and user programs use this header file.
 
@@ -216,6 +217,10 @@ struct inode_reclaim {
 
 void fsinit();
 int fs_storage_scope_admissible(void);
+int fs_storage_scope_account_create(
+	uint, struct resource_account_handle *);
+int fs_storage_owner_account(uint, struct resource_account_handle *);
+void fs_storage_scope_account_close(struct resource_account_handle);
 int dirlink(struct inode *, char *, uint, const struct vfs_cred *);
 int dirunlink(struct inode *, char *, uint, uint, uint,
 	      const struct vfs_cred *, uint);

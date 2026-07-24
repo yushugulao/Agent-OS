@@ -607,7 +607,7 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 
 `fsquota_ucore` 的 PUBLIC 子进程先循环 640 次创建文件、在描述符仍打开时删除目录项、继续写入，再关闭最后引用。循环次数严格超过旧全局版本表的 512 槽容量，既覆盖“unlink 不是最终生命期”的语义，也迫使每个 incarnation 走最终 inode/sidecar 回收。随后测试继续施加块和 inode 压力，并由 workflow orchestrator 创建工件、提交编辑版本、连续读取两次内容摘要以确认 digest cache 命中。关键标记为 `public_version_churn=1 cycles=640`、`workflow_version_reserve=1` 和 `content_version_reserve=1`；它们与既有 `workflow_reserve=1`、`kernel_metadata_reserve=1` 一起证明 PUBLIC 域不能耗尽工作流的存储或版本状态。这里的 QEMU 用例证明分配水位和回收行为；四个 scope 的数值容量契约由共享策略单测、mkfs 负例、版本化 superblock 校验和 admission 检查共同证明，不把单个 `scope_storage_quota` 标记夸大为全盘块压力证明。
 
-`fspquota_ucore` 专门区分“短命进程资源域”和“持久存储主体”。第一次启动先持久化 phase 文件，再创建 1 block PUBLIC 文件、删除目录项但保持描述符打开；输出 `crash_orphan_ready=1` 后 runner 直接终止 QEMU。第二次挂载必须在计费前回收该不可达 inode/block，否则后续精确上限断言无法完成。为避免“只忽略计费但不释放物理状态”的假通过，runner 还保存 mkfs 基线并在 seed 后直接解析 raw image，要求 bitmap 分配与非 FREE qmap owner 都只比基线增加 4 个数据块，dinode 只增加 7 个。镜像还带入一个 SYSTEM 赞助、可变 PUBLIC 的 13 数据块文件；PUBLIC 子进程首次覆盖它时，内核必须把 inode、12 个直接块、间接索引块和第 13 个数据块整体接管，共计 14 block/1 inode。子进程再创建其余对象，恰好占满 18 block/8 inode 上限后完整退出；init 只在回收该域后输出 `sponsored_object_charged=1 blocks=14` 和 `durable_fixture=1 blocks=18 inodes=8 owner_exited=1`，runner 再次关闭 QEMU但保留镜像。第三次以同一 kernel/镜像启动时，新 PUBLIC 域先读取旧内容，再验证额外 block 与 inode 都被拒绝；通过 `O_TRUNC` 释放一个 block、通过 `unlink` 释放一个 inode并分别复用，之后再次增长仍被拒绝。该域退出后，另一个新域仍被旧文件计费；最终清理持久 fixture 后才能重新分配。顺序标记为 `crash_orphan_ready=1`、`reboot_charge_persisted=1`、`deletion_reuse=1`、`relaunch_charge_persisted=1 launches=2`、`cleanup_reuse=1` 和 `parent passed`。AgentOS 与 baseline 使用相同用户程序和三阶段 runner，因此这个回归不依赖 Agent 角色或某个 PID 特判。
+`fspquota_ucore` 专门区分“短命进程资源域”和“持久存储主体”。第一次启动先持久化 phase 文件，再创建 1 block PUBLIC 文件、删除目录项但保持描述符打开；输出 `crash_orphan_ready=1` 后，runner 以显式 checkpoint mode 发送一次 `SIGTERM` 终止 QEMU，若需升级 `SIGKILL` 则该阶段失败。第二次挂载必须在计费前回收该不可达 inode/block，否则后续精确上限断言无法完成。为避免“只忽略计费但不释放物理状态”的假通过，runner 还保存 mkfs 基线并在 seed 后直接解析 raw image，要求 bitmap 分配与非 FREE qmap owner 都只比基线增加 4 个数据块，dinode 只增加 7 个。镜像还带入一个 SYSTEM 赞助、可变 PUBLIC 的 13 数据块文件；PUBLIC 子进程首次覆盖它时，内核必须把 inode、12 个直接块、间接索引块和第 13 个数据块整体接管，共计 14 block/1 inode。子进程再创建其余对象，恰好占满 18 block/8 inode 上限后完整退出；init 只在回收该域后输出 `sponsored_object_charged=1 blocks=14` 和 `durable_fixture=1 blocks=18 inodes=8 owner_exited=1`，runner 对 seed checkpoint 使用相同的单次 `SIGTERM` 合约并保留镜像。第三次以同一 kernel/镜像启动时，新 PUBLIC 域先读取旧内容，再验证额外 block 与 inode 都被拒绝；通过 `O_TRUNC` 释放一个 block、通过 `unlink` 释放一个 inode并分别复用，之后再次增长仍被拒绝。该域退出后，另一个新域仍被旧文件计费；最终清理持久 fixture 后才能重新分配。顺序标记为 `crash_orphan_ready=1`、`reboot_charge_persisted=1`、`deletion_reuse=1`、`relaunch_charge_persisted=1 launches=2`、`cleanup_reuse=1` 和 `parent passed`。AgentOS 与 baseline 使用相同用户程序和三阶段 runner，因此这个回归不依赖 Agent 角色或某个 PID 特判。
 
 该测试对应的磁盘契约将 PUBLIC principal 写入 superblock，并提升策略/owner 格式版本。挂载时从 qmap 和 dinode 分别重建 block/inode 用量；缺少该字段的旧镜像会因版本或布局不匹配被明确拒绝，而不是以空账本继续运行。
 
@@ -623,7 +623,7 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 
 ## 16. 内核栈预算检查
 
-根目录与 `baseline_ucore/` 的每个 `build/kernel` 规则都会在链接前调用 `scripts/check-kernel-stack-usage.py`，因此栈检查随内核构建自动执行，而不只是一个可选测试。脚本读取编译器 callgraph 和函数栈帧数据，计算用户陷入路径、内核中断路径、入口帧与安全余量的总预算；超出配置栈大小、出现未建模递归/间接调用或单帧越过 guard 上限都会阻止构建。
+根目录与 `baseline_ucore/` 都执行调用图栈深检查，但物理映射策略不同。AgentOS 为全部线程保留 16 KiB 栈虚拟槽和 4 KiB guard/canary，只在线程 admission 时取得物理页，并在 scheduler 已切回 idle stack 后释放；32 MiB 是虚拟容量，8 MiB 是受信/保留线程物理池。baseline 当前仍使用固定物理栈。`scripts/check-kernel-stack-usage.py` 读取 callgraph 与栈帧数据，超出配置栈大小、未建模递归/间接调用或大帧都会阻止构建。
 
 独立复查命令为：
 
@@ -632,7 +632,7 @@ make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-成功时输出 `kernel stack budget`、`kernel stack user path` 和 `kernel stack interrupt path`；失败时输出 `kernel stack check failed` 并返回非零状态。运行时的每进程内核栈还使用不可映射 guard page 和 canary 检查，构建期预算与运行时防护共同覆盖栈溢出。
+成功时输出 `kernel stack budget`、`kernel stack user path`、`kernel stack interrupt path` 和独立的 boot path 预算；失败时返回非零状态。`make ci-check` 还核对 `boot_stack..boot_stack_top` 的 64 KiB 链接跨度，并通过 probe 限制 32 MiB 虚拟容量和 8 MiB 物理保留池，防止把“虚拟槽稳定”误写成“全部物理页常驻”。当前单 hart 使用本地 TLB fence，未来 SMP 还需远端 shootdown 测试。
 
 ## 17. 运行方式和复现建议
 
@@ -642,7 +642,7 @@ make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 bash scripts/run-agent-tests.sh
 ```
 
-该脚本包含 `agenttrust_ucore`、`agentvfs_ucore` 和 `usersafety_ucore`，但不包含 ENOSPC 与进程回收脚本。资源安全入口和聚合验证的实际串联关系见 [verification.md](verification.md)。如果需要单独复现其他场景，运行命令见 [scenario-script.md](scenario-script.md)。
+该脚本包含 `agenttrust_ucore`、`agentvfs_ucore` 和 `usersafety_ucore`，但不单独运行 ENOSPC 与进程回收脚本。`make full-verify` 当前先执行 `ci-check`，再串联 Agent、进程、syscall、file、thread 和 ENOSPC 专项。实际关系见 [verification.md](verification.md)。
 
 当前不能把 `make full-verify` 记为完整通过：最近一次运行在 `host_tools/test_plain_ucore_reader_e2e.py` 的 `Reader GET Routes` 页面断言处中止，尚未进入后续 QEMU 阶段。该 Reader E2E 问题应与上述内核专项结果分开记录。
 
@@ -672,8 +672,8 @@ bash scripts/run-agent-tests.sh
 16. A 创建低权限 Sentinel，填满 Context 后持续执行 span、audit-only timeline 和 provenance 查询。每轮检查返回记录保持 sequence/timeline 顺序，且全部满足当前 scope 与可信 span 的可见性边界；查询后通过 `kernel_work_last_preemptions()` 确认可扩展扫描实际进入既有调度预算。
 17. Sentinel 保持压力期间，父进程经 scope B 的命令/回复通道驱动本域查询并等待完整回复，再停止并回收 scope A 压力子进程。该父侧端到端流程同时证明另一 workflow 能持续前进、控制通道没有跨 scope 混淆，且压力结束后资源可正常回收。
 18. 新 workflow 根检查低权限 Sentinel 和后创建 Orchestrator 的关闭请求均被拒绝，再关闭自身 scope；父侧要求根以 `AGENT_STATUS_CANCELLED` 结束。可信 factory 另按 scope id 关闭一个由低权限 Sentinel 持有 lifetime pipe 的 workflow，并要求成员全部退出、pipe 到达 EOF。非规范 `(1ULL << 32) | scope` 必须返回 `AGENT_STATUS_BAD_PARAM`。
-19. 根 controller 自然退出时，内核自动把 scope 转为 CLOSING；阻塞在 `agent_wait()` 的低权限成员必须被协作撤销并释放 pipe。等待意外返回后测试会尝试写入 poison byte，因此父侧只有读到真正 EOF 才接受，避免假阳性。
-20. 自动 controller-exit 撤销连续执行 9 轮，超过 `VFS_SCOPE_LIFECYCLE_CAP=8`；随后必须成功创建并回收 replacement workflow，证明 CLOSING 成员清理和 RETIRING reaper 没有永久占用生命周期身份。
+19. 根 controller 自然退出时，内核按不可变 lifecycle key 撤销谱系。测试创建已降权为 PUBLIC 的 child 与 grandchild；两者分别验证 `is_agent==0`、filesystem domain/capability 清零，并独立发送 `P`/`G` 就绪标记。随后二者仍必须与低权限阻塞成员一起退出，证明撤销不依赖当前 Agent/VFS 凭据。
+20. 自动 controller-exit 撤销连续执行 9 轮，跨越 8 槽 lifecycle ledger；随后必须成功创建 replacement workflow。槽允许回收，但新 admission 必须取得更高 generation，旧 `(id,generation)` 不能覆盖新 workflow。
 
 预期回归标记包括：
 
@@ -698,14 +698,14 @@ agentscope_ucore: lease_scope_isolation=1
 agentscope_ucore: scope_capacity_reservation=1
 agentscope_ucore: transactional_fd_delegation=1
 agentscope_ucore: scope_close_authority=1
-agentscope_ucore: scope_controller_exit_revoke=1
+agentscope_ucore: scope_controller_exit_revoke=1 public_lineage=1
 agentscope_ucore: scope_forced_cleanup=1
 agentscope_ucore: scope_replacement_admitted=1
 agentscope_ucore: lifecycle_reclamation=1
 agentscope_ucore: parent passed
 ```
 
-以上大部分 scope 标记最早已出现在 2026-07-22 的旧 15 项 Agent QEMU 回归中。观测查询修复的历史完整轮为 16/16、墙钟约 338.4s，`agentscope_ucore` 约 128.1s。Workflow 强制撤销实现快照的后续完整轮同样通过 16/16，墙钟约 371.5s，`agentscope_ucore` 约 127.9s；子代理审查补强测试和 64 位参数校验后，最终 `agentscope_ucore` 专项又以约 126.1s 通过。`NPROC` 身份账本只复用未使用记录，active 最多 4 个，计入 admission 的 ACTIVE/CLOSING 与 RETIRING 身份合计不超过 8；CLOSING 在成员正常清理前保留完整 I/O/cache owner，FS reclaim cursor 最多 8 个，reaper 在 `NPROC` 账本范围轮转选择 retiring scope，因而新 workflow 不会覆盖旧退役状态或遗失其 I/O owner。
+338.4s、371.5s、128.1s、127.9s 和 126.1s 都是 generation-safe lifecycle 与 PUBLIC lineage 用例之前的历史记录。权威 lifecycle ledger 现在固定 8 槽并使用 `(id,generation)`；`vfs_scope_refs[NPROC]` 只保存清理引用。当前专项约 `93.7s`，已经实际取得上述 `public_lineage=1` 和 `parent passed`。
 
 ## 19. syscall 内核工作预算复测
 
@@ -723,11 +723,11 @@ inode 阶段创建共享地址空间的 observer 线程。observer 反复从独�
 
 截断阶段先填充一个 64 KiB 文件，再在同一进程创建 observer 线程。主线程输出 TRUNC_BEGIN 后调用 `open(path, O_WRONLY | O_TRUNC)`，并用 last-syscall 重调度计数要求该 open 在内核态跨过调度边界；observer 连续两轮打开文件并读到 EOF，两轮之间主动让出，随后输出 TRUNC_PEER。脚本要求 `TRUNC_BEGIN < TRUNC_PEER < TRUNC_END`。计数提供 open 内部的因果证据，observer 独立证明原子 detach 后的 EOF 对其他线程可见；二者不依赖 open 返回后到共享标志写入前是否发生用户态 timer 抢占。
 
-三个阶段的每个标记都必须只出现一次。最外层父进程只在 fairness worker 被 `waitpid()` 完整回收后输出 `syscallfair_ucore: parent passed`；宿主 runner 随后要求 QEMU 在 5 秒内正常关机，日志不得包含 panic、非法地址或未知 syscall。这一部分验证退出完整性，不单独宣称证明退出清理内部的公平边界。两个目标都满足后输出 `[syscall-fairness] both targets passed`。本次线程改动后双目标已通过本终审轮，动态覆盖控制台、普通 inode I/O 和截断回收。源码检查覆盖 pipe、exec/fork 分页、VM snapshot 屏障和 Agent batch 安全点；它不等于穷尽任意 syscall 路径。目录 scanner 仍采用固定每轮上限，metadata raw I/O 由独立 COW/I/O budget 专项覆盖。
+三个阶段的每个标记都必须只出现一次。最外层父进程只在 fairness worker 被 `waitpid()` 完整回收后输出 `syscallfair_ucore: parent passed`；宿主 runner 随后要求 QEMU 在 5 秒内正常关机，日志不得包含 panic、非法地址或未知 syscall。这一部分验证退出完整性，不单独宣称证明退出清理内部的公平边界。两个目标都满足后输出 `[syscall-fairness] both targets passed`。统一 resource account、teardown 和 lazy stack 后的当前双目标专项已经通过，动态覆盖控制台、普通 inode I/O 和截断回收。源码检查覆盖 pipe、exec/fork 分页、VM snapshot 屏障和 Agent batch 安全点；它不等于穷尽任意 syscall 路径。目录 scanner 仍采用固定每轮上限，metadata raw I/O 由独立 COW/I/O budget 专项覆盖。
 
 ## 20. 全局文件对象表资源配额复测
 
-入口为 `make file-resource-test` 或 `bash scripts/run-file-resource-tests.sh`。脚本用 `CHAPTER=file_resource` 为根目录 AgentOS-uCore 和 `baseline_ucore/` 分别构建同一个 `fileresource_ucore`，并把 filepool、普通全局水位、普通域上限和受控域上限分别缩小为 64、48、16、16，使 Guest 可以精确填满边界。本次独立运行中，AgentOS、baseline 和汇总检查均输出 passed。该资源专项也已接入 `make full-verify`，但本次没有运行聚合 `full-verify`，不能把专项通过外推为聚合验证通过。
+入口为 `make file-resource-test` 或 `bash scripts/run-file-resource-tests.sh`。两个目标运行同一个行为契约，但实现不同：AgentOS 的唯一 file object 计入 generation-safe EXEC account，pipe 两端使用向量 reservation；baseline 保留旧 per-domain 计数。tiny 配置让 Guest 精确触发隐藏引用、ordinary 水位与 reserved 进展。当前重构后的双目标专项已经通过。
 
 测试首先让线程阻塞在空 pipe 的 `read()`，随后关闭原读 FD。另一个同资源域进程仍有空闲 FD，但隐藏临时引用必须继续占用创建者域的 filepool 配额；达到域上限后的额外 `open()` 被拒绝。持有阻塞线程的进程退出后，协作撤销路径使引用降到零，随后完整容量可再次使用，分别输出 `blocking_pin_bounded=1` 和 `exit_reuse=1`。
 
@@ -743,11 +743,11 @@ fileresource_ucore: reserved_progress=1
 fileresource_ucore: parent passed
 ```
 
-这些场景验证的计费单位是唯一 filepool 槽：fork 和 syscall pin 增加引用但不重复扣账，最终引用关闭才退款。主目标和 baseline 运行同一 Guest 断言并均通过，避免只在 AgentOS 专属角色路径上得到结果。runner 最终输出 `[file-resource] both targets passed`。
+这些场景验证的计费单位是唯一 filepool 槽：fork 和 syscall pin 增加引用但不重复扣账，最终引用关闭才退款。AgentOS 还必须验证迟到退款携带原 resource account generation，不能记到复用后的新账户；同一 Guest 契约不等于两目标共享实现。
 
 ## 21. 线程资源域与域级公平调度复测
 
-入口为 `make thread-resource-test` 或 `bash scripts/run-thread-resource-tests.sh`。脚本只构建 AgentOS 主目标和独立临时镜像，把线程物理池、普通全局水位、保留全局水位、普通域上限和保留域上限依次缩小为 19、12、6、6、4。生产默认值仍由 `thread_resource_policy.h` 公式决定；tiny policy 只让边界可以在一个短 QEMU 用例中精确填满，不改变 admission、退款或调度机制。策略头还以静态断言要求普通和保留域上限严格小于对应全局水位，防止错误配置让单域耗尽整个类别。
+入口为 `make thread-resource-test` 或 `bash scripts/run-thread-resource-tests.sh`。脚本只构建 AgentOS。THREAD usage 现在计入 EXEC resource account，`resource_domain_id` 只用于外层 CPU 调度分区；process+t0 使用向量 admission。线程还必须在资源预留后取得按需物理内核栈，任一映射失败都取消预留。19/12/6/6/4 tiny policy 仍用于精确触发账户/全局 ordinary/reserved 边界，不改变机制。
 
 测试依次执行：
 
@@ -777,7 +777,7 @@ threadresource_ucore: parent passed
 [thread-resource] all checks passed
 ```
 
-该线程资源改动轮已通过本专项、默认 AgentOS 构建、完整 Agent 16/16、单独 `agentsched_ucore`、双目标进程回收、syscall 公平性和 filepool 资源测试；当时完整 Agent 轮墙钟约 `321s`，构建期 AgentOS 内核栈预算为 `13680 < 16384`。之后 pipe 安全主体委派的历史完整 Agent 轮另以约 `359.4s` 通过，栈预算为 `13856 < 16384`。`make full-verify` 尚未执行。
+321s、359.4s、13680 和 13856 是旧线程计数/固定物理栈路径的历史结果。统一 resource account 与 lazy physical stack 版本已经通过本专项、`ci-check` 和三轮完整 Agent 套件；线程专项还在同一镜像连续 50/50 轮通过。
 
 ## 22. `iobudget_ucore`
 
@@ -816,7 +816,7 @@ PUBLIC 32/16、每 active workflow 24/12 + 48/24 + 8/4、每 retiring workflow `
 
 cache 的 SYSTEM/PUBLIC/active workflow floor/cap 为 40/96、24/48、36/64，当前退役清理 job 临时使用 3/8；cap 是稳态驻留边界，transient buffer 可暂时越界并在最后释放时失效。同块用 exclusive holder 串行化；持有 buffer 时 I/O/CPU checkpoint 均不睡眠或 yield，复合文件系统原语使用 FS atomic depth，只有释放全部 buffer 后才能在 quiescent checkpoint 偿债。这些 holder/atomic 条件由源码不变量和相关回归共同覆盖，`iobudget_ucore` 不逐项输出 marker。
 
-当前动态压力只覆盖一个 PUBLIC owner 和一个 workflow Orchestrator `CONTROL` owner。Recovery、SYSTEM/workflow `BACKGROUND`、多 workflow 同时压力、retiring 3/8、跨 owner LRU/transient、主动 device-debt 注入、启动 bank 损坏、VirtIO 错误/短 I/O/power-loss 仍缺独立用例，不能从当前场景外推。当前 `make fs-enospc-test` 已以 `75.1s` 通过 quota/domain/persistent principal/orphan/reboot 全流程，但没有在 grouped qmap claim 中点注入掉电。
+动态 I/O 压力仍只覆盖一个 PUBLIC owner 和一个 workflow Orchestrator `CONTROL` owner。Recovery、SYSTEM/workflow `BACKGROUND`、多 workflow 同时压力、retiring 3/8、跨 owner LRU/transient、主动 device-debt 注入、启动 bank 损坏、VirtIO 错误/短 I/O/power-loss 仍缺独立用例，不能从该场景外推。统一 STORAGE account 后的当前 `make fs-enospc-test` 已覆盖双目标 generic/domain/reserve/persistent/orphan/reclaim/verify 全流程，但仍没有在 grouped qmap claim 中点注入掉电。
 
 ## 23. Workflow 强制撤销复测
 
@@ -830,19 +830,45 @@ CASE_TIMEOUT=260s AGENT_TEST_CASE=agentscope_ucore \
 机制断言分为四组：
 
 1. **关闭权。** 低权限 Sentinel 和后创建的 Orchestrator 不能关闭 scope；绑定根可以关闭自身，可信 bootstrap factory 可以按稳定 scope id 关闭目标；高位非零但截断后看似合法的 64 位参数被拒绝。
-2. **先撤权、后清理。** ACTIVE -> CLOSING 立即使 Agent/VFS 授权失效并拒绝新 join、pending exec 发布和存储预留。关闭请求只设置进程级协作退出并中断可中断等待，不从其他线程栈外释放资源；根自关在 syscall 边界以 `AGENT_STATUS_CANCELLED` 终止。
+2. **先撤权、后清理。** ACTIVE -> CLOSING 立即使 Agent/VFS 授权失效并拒绝新 join、pending exec commit 和存储预留。关闭按完整 `(lifecycle id,generation)` 请求统一 teardown，不从其他线程栈外释放资源。
 3. **成员与临时资源。** factory 关闭和根自然退出都包含一个阻塞在 `agent_wait()` 且持有 pipe 的低权限 Sentinel。父侧要求 lifetime pipe 真正 EOF；成员若从 wait 意外返回，会先写 poison byte 使测试失败。
-4. **有界生命周期。** 根自然退出触发的撤销重复 9 轮，跨越 8 槽 admission 生命周期账本容量，随后 replacement workflow 仍可 admission 并正常回收。
+4. **有界生命周期。** 根自然退出触发的撤销重复 9 轮，跨越 8 槽 ledger；replacement workflow 必须取得新 generation 并正常回收。
+5. **PUBLIC 谱系。** workflow 根创建 PUBLIC child 和 grandchild；二者分别验证 Agent/VFS 凭据清零并发送 `P`/`G` 就绪标记，随后仍随原 lifecycle 被撤销。
 
 最终输出：
 
 ```text
 agentscope_ucore: scope_close_authority=1
-agentscope_ucore: scope_controller_exit_revoke=1
+agentscope_ucore: scope_controller_exit_revoke=1 public_lineage=1
 agentscope_ucore: scope_forced_cleanup=1
 agentscope_ucore: scope_replacement_admitted=1
 agentscope_ucore: lifecycle_reclamation=1
 agentscope_ucore: parent passed
 ```
 
-验证时间线必须区分：实现快照先通过完整 16/16，墙钟约 `371.5s`，其中 `agentscope_ucore` 约 `127.9s`；子代理审查发现并修正 EOF 假阳性、单轮 replacement 覆盖不足、factory 仅终止根、以及 64 位 scope 截断别名后，最终专项约 `126.1s` 通过。最终源码未再次运行完整 16 项或 `make full-verify`。尚缺动态注入 close 与 spawn/pending exec 的精确竞态、多线程 controller、纯 CPU 成员，以及关闭期间主动 I/O debt/inode 回收压力；这些边界目前由关中断发布协议和既有 teardown/I/O 专项的实现审查共同支撑。
+验证时间线必须区分：371.5s、127.9s 和 126.1s 是当前 generation-safe lifecycle、PUBLIC 谱系、统一 teardown 和资源控制器之前的历史结果。当前专项约 `93.7s`，已实际取得 `public_lineage=1`；三轮完整 16 项和五组机制专项也已通过。close 与 exec/spawn 精确竞态、多线程 controller、纯 CPU 成员及主动 I/O debt/inode 压力仍是独立缺口。
+
+## 24. 内核增长与模块边界预算
+
+静态门入口：
+
+```bash
+make ci-check
+```
+
+该命令执行 budget checker 自测、Agent 模块边界脚本、canonical kernel/probe 构建，以及 kernel 与 agent-modules 两组检查。`ci/kernel-budgets.json` 是唯一阈值事实源，覆盖：
+
+- 内核源码物理行数；
+- stripped ELF、raw binary、text、data、BSS 和运行总量；
+- `sizeof(struct proc)`；
+- 9 页 Context detail sidecar 与完整 21 页 Agent 状态的单实例、全局、ordinary/reserved 池和单 account 容量；
+- 线程调用图栈深、64 KiB boot stack 的链接跨度与启动调用图、32 MiB 虚拟栈容量和 8 MiB 受信/保留物理栈池；
+- facade、core、context、identity、ipc、lifecycle、metadata、metadata_objects、metadata_store、observe、resource_controller、workflow_lifecycle 十二个模块的代码预算；
+- 对象符号所有权、依赖方向，以及 core 不得重新定义已迁移权威状态；
+- 12 个注册模块与 `bio/file/fs/loader/main/proc/syscall/trap/vfs_security` 9 个 bridge 构成的受控符号 integration graph，硬性 SCC 上限为 3。该图只追踪受控 Agent 符号，不是完整 uCore 调用图。
+
+预算采用 downward ratchet：体积下降后应收紧 baseline/max，不能保留足以让旧大数组或 monolith 回归的宽松上限。当前静态 probe 为 `sizeof(struct proc)=28808`；JSON 中 `28776` B 是冻结审查 baseline，`30215` B 是 max，baseline 不因当前 actual 略高而上调。每个活跃 Agent 以一次 `RESOURCE_AGENT_STATE_PAGE` 请求原子计费 21 页：9 页 detail/attribution sidecar、6 页用户 mirror、6 页可信 shadow，共 84 KiB；六项总状态预算为每进程/全局/ordinary 池/reserved 池/ordinary 域/reserved 域 `86016/11010048/8257536/2752512/5505024/688128` B。9 页 sidecar 自身仍有每 Agent 36 KiB、全局 1152 页（4.5 MiB）的独立细节预算。idle 普通进程不分配这些页；它们都从通用 `kalloc` 取得，不是全局 OOM 下的硬保留。预算 checker 当前有 31 项 fail-closed 自测，具体指标见 [test-record.md](test-record.md)。
+
+完整 Agent 时间预算与静态门分开。它只统计 16 个 QEMU case 的 monotonic 运行时间总和，不含编译；targeted `AGENT_TEST_CASE` 不能满足全套时间门。当前 JSON 为 `calibrated_full_suite`，bounded/flood-safe runner 的 `bounded-runner-final-01/02/03` 三轮总时间为 `261.343281873s`、`237.948978492s`、`255.370930671s`，基线/上限为 `255.370930671s/268.14s`；相对中位数约 5% headroom，足以覆盖最大样本且比旧门更紧。GitLab job 同时使用 `resource_group` 和 `agentos-qemu-calibrated` runner tag。
+
+QEMU runner 以二进制方式读取并全量 drain 子进程输出，大小写不敏感检测包括 panic 在内的预定义 failure 模式，marker 后仍继续扫描。监控循环每轮最多读取一个 64 KiB 块便重查 case/marker deadline，持续 stdout 洪泛不能饿死 timeout 或 grace。每个 case 最多接受 16 MiB 总输出，未终止记录最多保留 64 KiB，诊断行最多保留 4 KiB；输出总量或记录越界 fail closed，诊断副本则有界截断。case deadline 先于 checkpoint 成功判定，并在 scanner feed 和 runner notice 后再次检查，所以迟到 marker 不能通过。普通 case 必须自然 `rc=0`。若 pipe EOF 先于进程状态，runner 仍受原 case deadline 和 marker grace 约束地等待退出：EOF 不触发信号，也不能延长宽限期；stop 阶段继续等待 status 与 EOF 双发布。marker grace 只负责终止已失败/挂起的 case，`SIGTERM` 或升级 `SIGKILL` 都仍视为失败；仅两个持久化 checkpoint 阶段显式选择 checkpoint mode 后，可在预期 marker 后接受单次 runner `SIGTERM`，`SIGKILL` 仍失败。该 checkpoint 合约验证 marker 前状态的重挂载恢复，不等同硬掉电注入。超时、非零退出和后置 panic 也失败。预期 `bad addr` 必须先由测试输出的显式 marker 逐次 arm，并逐条消费；未 arm 的 fault 或未被 fault 消费的 marker 都失败。24 项通用 runner 单测覆盖分片 marker、marker 前后 panic、自然/检查点退出、pipe EOF/退出状态边界、持续输出洪泛与边界、迟到 marker、信号处理、预期 fault、未知 mode 和超时边界；另有 5 项生产 profile validator 检查 shell 入口使用正确 profile。duration checker 显式拒绝摘要式 `--agent-test-seconds` 和 `--agent-test-start-ns`，只接受恰好包含全部 16 个预期 case 且顺序一致的 timing file。`agentfinal_ucore` 的并发 Context 回归还要求 `context_commit_lane=1 sequence=1..3 hash=1`：同一进程的 lane 是可睡眠、FIFO、可重入的，锁序为 `lane -> metadata`；`agent_call_count` 表示已接纳/预留序号，`latest_sequence` 表示已提交水位。

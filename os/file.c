@@ -31,7 +31,7 @@ void fileclose(struct file *f)
 	int writable;
 	struct pipe *pipe;
 	struct inode *ip;
-	int domain_id;
+	struct resource_account_handle account;
 	int reserved;
 	int enabled;
 
@@ -50,7 +50,7 @@ void fileclose(struct file *f)
 	writable = f->writable;
 	pipe = f->pipe;
 	ip = f->ip;
-	domain_id = f->resource_domain_id;
+	account = f->resource_account;
 	reserved = f->resource_reserved;
 	f->off = 0;
 	f->readable = 0;
@@ -60,9 +60,8 @@ void fileclose(struct file *f)
 	f->ref = 0;
 	f->type = FD_NONE;
 	f->inherit_class = FD_INHERIT_DENY;
-	f->resource_domain_id = -1;
+	f->resource_account = resource_account_none();
 	f->resource_reserved = 0;
-	proc_file_slot_release(domain_id, reserved);
 	intr_restore(enabled);
 
 	switch (type) {
@@ -81,6 +80,9 @@ void fileclose(struct file *f)
 	default:
 		panic("unknown file type %d\n", type);
 	}
+	// The charge covers the complete destructor, including reclaim I/O that
+	// may yield after the table slot itself has been unpublished.
+	proc_file_slot_release(account, reserved);
 }
 
 // Pin an open-file entry across operations that may yield.
@@ -97,36 +99,55 @@ struct file *filedup(struct file *f)
 	return f;
 }
 
-//Add a new system-level table entry for the open file table
-struct file *filealloc(struct proc *owner)
+int filealloc_many(struct proc *owner, struct file **files, uint count)
 {
-	struct file *result = 0;
 	int enabled = intr_save();
+	struct resource_account_handle account;
+	int reserved;
+	uint found = 0;
 
-	for (int i = 0; i < FILEPOOLSIZE; ++i) {
-		if (filepool[i].ref == 0) {
-			struct file *f = &filepool[i];
-			int domain_id;
-			int reserved;
+	if (owner == 0 || files == 0 || count == 0 ||
+	    count > FILEPOOLSIZE)
+		goto fail;
+	for (uint i = 0; i < count; i++)
+		files[i] = 0;
+	for (int i = 0; i < FILEPOOLSIZE && found < count; i++) {
+		if (filepool[i].ref == 0)
+			files[found++] = &filepool[i];
+	}
+	if (found != count ||
+	    proc_file_slots_reserve(owner, count, &account, &reserved) < 0)
+		goto fail;
+	for (uint i = 0; i < count; i++) {
+		struct file *f = files[i];
 
-			if (proc_file_slot_reserve(owner, &domain_id, &reserved) < 0)
-				break;
-			f->type = FD_NONE;
-			f->inherit_class = FD_INHERIT_DENY;
-			f->ref = 1;
-			f->readable = 0;
-			f->writable = 0;
-			f->pipe = 0;
-			f->ip = 0;
-			f->off = 0;
-			f->resource_domain_id = domain_id;
-			f->resource_reserved = reserved;
-			result = f;
-			break;
-		}
+		f->type = FD_NONE;
+		f->inherit_class = FD_INHERIT_DENY;
+		f->ref = 1;
+		f->readable = 0;
+		f->writable = 0;
+		f->pipe = 0;
+		f->ip = 0;
+		f->off = 0;
+		f->resource_account = account;
+		f->resource_reserved = reserved;
 	}
 	intr_restore(enabled);
-	return result;
+	return 0;
+fail:
+	if (files != 0 && count <= FILEPOOLSIZE)
+		for (uint i = 0; i < count; i++)
+			files[i] = 0;
+	intr_restore(enabled);
+	return -1;
+}
+
+// Add one unique object to the system-wide open-file table.
+struct file *filealloc(struct proc *owner)
+{
+	struct file *file = 0;
+
+	return filealloc_many(owner, &file, 1) == 0 ? file : 0;
 }
 
 //Show names of all files in the root_dir.

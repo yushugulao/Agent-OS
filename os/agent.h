@@ -77,6 +77,9 @@
 #define AGENT_CONTEXT_MAGIC       0x4147435458543031ULL
 #define AGENT_CONTEXT_VERSION     6
 #define AGENT_CONTEXT_PAGES       6
+#define AGENT_CONTEXT_SIDECAR_PAGE_COUNT 9U
+#define AGENT_STATE_PAGE_COUNT \
+	(AGENT_CONTEXT_SIDECAR_PAGE_COUNT + 2U * AGENT_CONTEXT_PAGES)
 #define AGENT_CONTEXT_SIZE        (AGENT_CONTEXT_PAGES * PAGE_SIZE)
 #define AGENT_CONTEXT_MAX_RECORDS 128
 #define AGENT_CONTEXT_HEADER_OFFSET 0
@@ -800,7 +803,8 @@ struct thread;
 
 void agentinit(void);
 void agent_storage_init(void);
-void agent_clear_metadata(struct proc *p);
+void agent_proc_prepare(struct proc *p);
+void agent_proc_teardown(struct proc *p);
 void agent_scope_controller_departing(struct proc *p);
 void agent_authority_bootstrap(struct proc *p);
 void agent_authority_on_exec(struct proc *p);
@@ -808,7 +812,6 @@ int agent_authority_check(struct proc *p, int role);
 int agent_map_context(struct proc *p);
 int agent_alias_exec_context(struct proc *p, pagetable_t pagetable);
 void agent_unmap_exec_context(struct proc *p, pagetable_t pagetable);
-void agent_free_proc_context(struct proc *p);
 int agent_make(struct proc *p);
 int agent_make_role(struct proc *p, int role);
 int agent_create_proc(void);

@@ -27,8 +27,6 @@ struct fs_storage_state {
 	uint free_blocks;
 	uint free_inodes;
 	uint public_principal_id;
-	uint public_blocks;
-	uint public_inodes;
 	uint block_domain_limit;
 	uint inode_domain_limit;
 	uint workflow_block_domain_limit;
@@ -45,6 +43,9 @@ struct fs_storage_state {
 };
 
 static struct fs_storage_state fs_storage;
+static struct resource_account_handle fs_system_account;
+static struct resource_account_handle fs_public_account;
+static int fs_storage_accounts_ready;
 static struct wait_queue fs_claim_waiters;
 static struct thread *fs_claim_owner;
 // The claim gate serializes this bounded workspace after mount recovery.
@@ -373,10 +374,133 @@ static void fs_mount_scrub(int dev)
 	}
 }
 
+static int fs_storage_import_account(
+	struct resource_account_handle account,
+	enum resource_charge_class charge_class, uint blocks, uint inodes)
+{
+	struct resource_request requests[2];
+	uint count = 0;
+
+	if (blocks != 0) {
+		requests[count].kind = RESOURCE_FS_BLOCK;
+		requests[count++].amount = blocks;
+	}
+	if (inodes != 0) {
+		requests[count].kind = RESOURCE_FS_INODE;
+		requests[count++].amount = inodes;
+	}
+	if (count == 0)
+		return 0;
+	return resource_import_usage(account, charge_class, requests, count);
+}
+
+static void fs_storage_accounts_sync(uint public_blocks,
+				     uint public_inodes,
+				     uint reserved_blocks,
+				     uint reserved_inodes)
+{
+	struct resource_account_limits system_limits;
+	struct resource_account_limits public_limits;
+
+	if (!fs_storage_accounts_ready) {
+		memset(&system_limits, 0, sizeof(system_limits));
+		memset(&public_limits, 0, sizeof(public_limits));
+		system_limits.class_limit[RESOURCE_CHARGE_RESERVED]
+					 [RESOURCE_FS_BLOCK] =
+			sb.nblocks;
+		system_limits.class_limit[RESOURCE_CHARGE_RESERVED]
+					 [RESOURCE_FS_INODE] =
+			sb.ninodes - 1;
+		system_limits.class_limit[RESOURCE_CHARGE_RESERVED]
+					 [RESOURCE_BUFFER_CACHE] =
+			IO_CACHE_SYSTEM_CAP;
+		public_limits.class_limit[RESOURCE_CHARGE_ORDINARY]
+					 [RESOURCE_FS_BLOCK] =
+			fs_storage.block_domain_limit;
+		public_limits.class_limit[RESOURCE_CHARGE_ORDINARY]
+					 [RESOURCE_FS_INODE] =
+			fs_storage.inode_domain_limit;
+		public_limits.class_limit[RESOURCE_CHARGE_ORDINARY]
+					 [RESOURCE_BUFFER_CACHE] =
+			IO_CACHE_PUBLIC_CAP;
+		if (resource_policy_configure(
+			    RESOURCE_FS_BLOCK, sb.nblocks,
+			    fs_storage.block_domain_limit, sb.nblocks) < 0 ||
+		    resource_policy_configure(
+			    RESOURCE_FS_INODE, sb.ninodes - 1,
+			    fs_storage.inode_domain_limit,
+			    sb.ninodes - 1) < 0 ||
+		    resource_account_create(
+			    RESOURCE_ACCOUNT_STORAGE, FS_OWNER_SYSTEM,
+			    RESOURCE_CHARGE_GRANT(
+				    RESOURCE_CHARGE_RESERVED),
+			    &system_limits, &fs_system_account) < 0 ||
+		    resource_account_create(
+			    RESOURCE_ACCOUNT_STORAGE,
+			    fs_storage.public_principal_id,
+			    RESOURCE_CHARGE_GRANT(
+				    RESOURCE_CHARGE_ORDINARY),
+			    &public_limits, &fs_public_account) < 0 ||
+		    resource_account_member_acquire(fs_system_account) < 0 ||
+		    resource_account_member_acquire(fs_public_account) < 0 ||
+		    fs_storage_import_account(
+			    fs_system_account, RESOURCE_CHARGE_RESERVED,
+			    reserved_blocks, reserved_inodes) < 0 ||
+		    fs_storage_import_account(
+			    fs_public_account, RESOURCE_CHARGE_ORDINARY,
+			    public_blocks, public_inodes) < 0 ||
+		    bio_principal_bind(FS_OWNER_SYSTEM,
+				       fs_system_account) < 0 ||
+		    bio_principal_bind(fs_storage.public_principal_id,
+				       fs_public_account) < 0)
+			panic("filesystem resource accounts");
+		fs_storage_accounts_ready = 1;
+		return;
+	}
+	struct resource_request system_usage[2] = {
+		{
+			.kind = RESOURCE_FS_BLOCK,
+			.amount = reserved_blocks,
+		},
+		{
+			.kind = RESOURCE_FS_INODE,
+			.amount = reserved_inodes,
+		},
+	};
+	struct resource_request public_usage[2] = {
+		{
+			.kind = RESOURCE_FS_BLOCK,
+			.amount = public_blocks,
+		},
+		{
+			.kind = RESOURCE_FS_INODE,
+			.amount = public_inodes,
+		},
+	};
+
+	/*
+	 * Mount scans are authoritative.  Recovery and boot-lease reaping may
+	 * change persistent ownership without going through the live allocator,
+	 * so replace both counters as one bounded controller transaction instead
+	 * of asserting against a stale first-pass import.
+	 */
+	if (resource_reconcile_usage(
+		    fs_system_account, RESOURCE_CHARGE_RESERVED,
+		    system_usage, 2) < 0 ||
+	    resource_reconcile_usage(
+		    fs_public_account, RESOURCE_CHARGE_ORDINARY,
+		    public_usage, 2) < 0)
+		panic("filesystem resource rebuild mismatch");
+}
+
 static void fs_storage_rebuild(int dev, int enforce_policy)
 {
 	uint max_scope_id = VFS_SCOPE_FIRST_DYNAMIC - 1;
 	uint total_inodes = sb.ninodes - 1;
+	uint public_blocks = 0;
+	uint public_inodes = 0;
+	uint reserved_blocks = 0;
+	uint reserved_inodes = 0;
 	struct buf *bitmap = 0;
 	uint bitmap_block = ~0U;
 
@@ -407,12 +531,15 @@ static void fs_storage_rebuild(int dev, int enforce_policy)
 				panic("allocated block has invalid workflow owner");
 			if (scope_id > max_scope_id)
 				max_scope_id = scope_id;
+			reserved_blocks++;
 		} else if (owner == fs_storage.public_principal_id) {
-			if (fs_storage.public_blocks == (uint)-1)
+			if (public_blocks == (uint)-1)
 				panic("public block accounting overflow");
-			fs_storage.public_blocks++;
+			public_blocks++;
 		} else if (owner != FS_OWNER_SYSTEM) {
 			panic("allocated block has invalid public owner");
+		} else {
+			reserved_blocks++;
 		}
 	}
 	if (bitmap)
@@ -440,12 +567,15 @@ static void fs_storage_rebuild(int dev, int enforce_policy)
 					panic("inode has invalid workflow owner");
 				if (scope_id > max_scope_id)
 					max_scope_id = scope_id;
+				reserved_inodes++;
 			} else if (owner == fs_storage.public_principal_id) {
-				if (fs_storage.public_inodes == (uint)-1)
+				if (public_inodes == (uint)-1)
 					panic("public inode accounting overflow");
-				fs_storage.public_inodes++;
+				public_inodes++;
 			} else if (owner != FS_OWNER_SYSTEM) {
 				panic("inode has invalid public owner");
+			} else {
+				reserved_inodes++;
 			}
 			if (dip->vfs_version == VFS_LABEL_VERSION &&
 			    dip->vfs_policy == VFS_POLICY_WORKFLOW &&
@@ -483,17 +613,31 @@ static void fs_storage_rebuild(int dev, int enforce_policy)
 		fs_storage.free_inodes, fs_storage.workflow_inode_guarantee,
 		fs_storage.system_inode_reserve);
 
-	uint public_blocks = sb.nblocks - fs_storage.system_block_reserve -
-			     fs_storage.workflow_block_reserve;
-	uint public_inodes = total_inodes - fs_storage.system_inode_reserve -
-			     fs_storage.workflow_inode_reserve;
+	uint public_block_capacity =
+		sb.nblocks - fs_storage.system_block_reserve -
+		fs_storage.workflow_block_reserve;
+	uint public_inode_capacity =
+		total_inodes - fs_storage.system_inode_reserve -
+		fs_storage.workflow_inode_reserve;
 	fs_storage.block_domain_limit = FS_DOMAIN_BLOCK_LIMIT ?
-		FS_DOMAIN_BLOCK_LIMIT : fs_div_round_up(public_blocks, 4);
+		FS_DOMAIN_BLOCK_LIMIT :
+		fs_div_round_up(public_block_capacity, 4);
 	fs_storage.inode_domain_limit = FS_DOMAIN_INODE_LIMIT ?
-		FS_DOMAIN_INODE_LIMIT : fs_div_round_up(public_inodes, 4);
-	if (fs_storage.block_domain_limit == 0)
+		FS_DOMAIN_INODE_LIMIT :
+		fs_div_round_up(public_inode_capacity, 4);
+	/*
+	 * A configured tenant ceiling is an upper bound, not a promise that can
+	 * exceed this filesystem's ordinary allocation pool.  Tiny images and
+	 * deliberately large "unlimited" test profiles must therefore converge
+	 * on the same effective limit used by the global controller.
+	 */
+	if (fs_storage.block_domain_limit > public_block_capacity)
+		fs_storage.block_domain_limit = public_block_capacity;
+	if (fs_storage.inode_domain_limit > public_inode_capacity)
+		fs_storage.inode_domain_limit = public_inode_capacity;
+	if (fs_storage.block_domain_limit == 0 && public_block_capacity != 0)
 		fs_storage.block_domain_limit = 1;
-	if (fs_storage.inode_domain_limit == 0)
+	if (fs_storage.inode_domain_limit == 0 && public_inode_capacity != 0)
 		fs_storage.inode_domain_limit = 1;
 	fs_storage.workflow_block_domain_limit =
 		FS_WORKFLOW_DOMAIN_BLOCK_LIMIT ?
@@ -521,7 +665,76 @@ static void fs_storage_rebuild(int dev, int enforce_policy)
 			fs_storage.workflow_inode_guarantee;
 	proc_scope_set_id_floor(max_scope_id >= FS_OWNER_ID_MASK ?
 				FS_OWNER_NONE : max_scope_id + 1);
+	fs_storage_accounts_sync(public_blocks, public_inodes,
+				 reserved_blocks, reserved_inodes);
 	fs_storage.ready = 1;
+}
+
+int fs_storage_scope_account_create(
+	uint scope_id, struct resource_account_handle *out)
+{
+	struct resource_account_limits limits;
+	uint owner;
+	int enabled;
+
+	if (out == 0 || scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
+	    scope_id >= FS_OWNER_SCOPE_FLAG)
+		return -1;
+	*out = resource_account_none();
+	enabled = intr_save();
+	if (!fs_storage.ready) {
+		intr_restore(enabled);
+		return -1;
+	}
+	owner = FS_OWNER_SCOPE(scope_id);
+	memset(&limits, 0, sizeof(limits));
+	limits.class_limit[RESOURCE_CHARGE_RESERVED][RESOURCE_FS_BLOCK] =
+		fs_storage.workflow_block_domain_limit;
+	limits.class_limit[RESOURCE_CHARGE_RESERVED][RESOURCE_FS_INODE] =
+		fs_storage.workflow_inode_domain_limit;
+	limits.class_limit[RESOURCE_CHARGE_RESERVED][RESOURCE_BUFFER_CACHE] =
+		IO_CACHE_WORKFLOW_CAP;
+	if (resource_account_create(
+		    RESOURCE_ACCOUNT_STORAGE, owner,
+		    RESOURCE_CHARGE_GRANT(RESOURCE_CHARGE_RESERVED),
+		    &limits, out) < 0 ||
+	    resource_account_member_acquire(*out) < 0) {
+		if (resource_account_handle_valid(*out))
+			(void)resource_account_close(*out);
+		*out = resource_account_none();
+		intr_restore(enabled);
+		return -1;
+	}
+	intr_restore(enabled);
+	return 0;
+}
+
+int fs_storage_owner_account(uint owner,
+			     struct resource_account_handle *out)
+{
+	if (out == 0 || !fs_storage_accounts_ready)
+		return -1;
+	if (owner == FS_OWNER_SYSTEM) {
+		*out = fs_system_account;
+		return resource_account_handle_valid(*out) ? 0 : -1;
+	}
+	if (owner == fs_storage.public_principal_id) {
+		*out = fs_public_account;
+		return resource_account_handle_valid(*out) ? 0 : -1;
+	}
+	if (FS_OWNER_IS_SCOPE(owner) &&
+	    FS_OWNER_SCOPE_ID(owner) >= VFS_SCOPE_FIRST_DYNAMIC)
+		return resource_account_find(
+			RESOURCE_ACCOUNT_STORAGE, owner, out);
+	return -1;
+}
+
+void fs_storage_scope_account_close(
+	struct resource_account_handle account)
+{
+	if (resource_account_close(account) < 0 ||
+	    resource_account_member_release(account, 0) < 0)
+		panic("workflow storage account close");
 }
 
 int fs_storage_scope_admissible(void)
@@ -582,11 +795,16 @@ static int fs_storage_reserve(const struct fs_storage_charge *charge,
 	uint *free_count;
 	uint reserve;
 	uint guarantee;
-	uint limit;
-	uint *public_used;
 	uint *system_remaining;
 	uint scope_id = VFS_SCOPE_NONE;
 	int enabled;
+	struct resource_account_handle account;
+	struct resource_request request = {
+		.kind = inode ? RESOURCE_FS_INODE : RESOURCE_FS_BLOCK,
+		.amount = 1,
+	};
+	struct resource_reservation reservation;
+	enum resource_charge_class charge_class;
 
 	if (!fs_storage.ready || charge == 0 ||
 	    charge->level > FS_CHARGE_SYSTEM ||
@@ -604,14 +822,6 @@ static int fs_storage_reserve(const struct fs_storage_charge *charge,
 	system_remaining = inode ?
 		&fs_storage.system_inode_reserve_remaining :
 		&fs_storage.system_block_reserve_remaining;
-	if (charge->level == FS_CHARGE_WORKFLOW)
-		limit = inode ? fs_storage.workflow_inode_domain_limit :
-				fs_storage.workflow_block_domain_limit;
-	else
-		limit = inode ? fs_storage.inode_domain_limit :
-				fs_storage.block_domain_limit;
-	public_used = inode ? &fs_storage.public_inodes :
-			      &fs_storage.public_blocks;
 	guarantee = inode ? fs_storage.workflow_inode_guarantee :
 			      fs_storage.workflow_block_guarantee;
 	if (charge->level == FS_CHARGE_WORKFLOW)
@@ -633,18 +843,19 @@ static int fs_storage_reserve(const struct fs_storage_charge *charge,
 		intr_restore(enabled);
 		return -1;
 	}
-	if (charge->level == FS_CHARGE_WORKFLOW) {
-		if (vfs_scope_storage_reserve(scope_id, inode, limit) < 0) {
-			intr_restore(enabled);
-			return -1;
-		}
-	} else if (charge->level == FS_CHARGE_PUBLIC) {
-		if (*public_used >= limit) {
-			intr_restore(enabled);
-			return -1;
-		}
-		(*public_used)++;
+	if (fs_storage_owner_account(charge->owner, &account) < 0) {
+		intr_restore(enabled);
+		return -1;
 	}
+	charge_class = charge->level == FS_CHARGE_PUBLIC ?
+		RESOURCE_CHARGE_ORDINARY : RESOURCE_CHARGE_RESERVED;
+	if (resource_reserve_many(account, charge_class, &request, 1,
+				  &reservation) < 0) {
+		intr_restore(enabled);
+		return -1;
+	}
+	if (resource_reservation_commit(&reservation) < 0)
+		panic("filesystem resource commit");
 	if (charge->level == FS_CHARGE_SYSTEM &&
 	    *free_count <= reserve + *system_remaining) {
 		if (*system_remaining == 0)
@@ -666,9 +877,13 @@ static void fs_storage_release(uint owner, int inode)
 	uint system_reserve = inode ? fs_storage.system_inode_reserve :
 				      fs_storage.system_block_reserve;
 	uint total = inode ? sb.ninodes - 1 : sb.nblocks;
-	uint *public_used = inode ? &fs_storage.public_inodes :
-					  &fs_storage.public_blocks;
 	int enabled;
+	struct resource_account_handle account;
+	struct resource_request request = {
+		.kind = inode ? RESOURCE_FS_INODE : RESOURCE_FS_BLOCK,
+		.amount = 1,
+	};
+	enum resource_charge_class charge_class;
 
 	if (!fs_storage.ready || owner < FS_OWNER_SYSTEM)
 		panic("storage release invariant");
@@ -681,17 +896,24 @@ static void fs_storage_release(uint owner, int inode)
 	if (FS_OWNER_IS_SCOPE(owner)) {
 		if (FS_OWNER_SCOPE_ID(owner) < VFS_SCOPE_FIRST_DYNAMIC)
 			panic("workflow storage release invariant");
-		// A previous boot's workflow ledger is intentionally absent while
-		// its persisted objects are reaped. Live scopes still release their
-		// transient usage here; the on-disk owner remains the source of truth.
-		vfs_scope_storage_release(FS_OWNER_SCOPE_ID(owner), inode);
+		/*
+		 * Previous-boot workflow objects are imported into the reserved
+		 * cleanup account. A live generation has its own exact principal.
+		 */
+		if (fs_storage_owner_account(owner, &account) < 0)
+			account = fs_system_account;
+		charge_class = RESOURCE_CHARGE_RESERVED;
 	} else if (owner == fs_storage.public_principal_id) {
-		if (*public_used == 0)
-			panic("public storage release invariant");
-		(*public_used)--;
+		account = fs_public_account;
+		charge_class = RESOURCE_CHARGE_ORDINARY;
 	} else if (owner != FS_OWNER_SYSTEM) {
 		panic("storage principal release invariant");
+	} else {
+		account = fs_system_account;
+		charge_class = RESOURCE_CHARGE_RESERVED;
 	}
+	if (resource_release_many(account, charge_class, &request, 1) < 0)
+		panic("storage resource release invariant");
 	intr_restore(enabled);
 }
 
@@ -735,21 +957,29 @@ static void fs_claim_gate_unlock(void)
 static int fs_storage_claim_public_existing(uint blocks, uint inodes)
 {
 	int enabled;
+	struct resource_request requests[2];
+	uint count = 0;
+	int result;
 
 	if (!fs_storage.ready)
 		return -1;
-	enabled = intr_save();
-	if (fs_storage.public_blocks > fs_storage.block_domain_limit ||
-	    fs_storage.public_inodes > fs_storage.inode_domain_limit ||
-	    blocks > fs_storage.block_domain_limit - fs_storage.public_blocks ||
-	    inodes > fs_storage.inode_domain_limit - fs_storage.public_inodes) {
-		intr_restore(enabled);
-		return -1;
+	if (blocks != 0) {
+		requests[count].kind = RESOURCE_FS_BLOCK;
+		requests[count++].amount = blocks;
 	}
-	fs_storage.public_blocks += blocks;
-	fs_storage.public_inodes += inodes;
+	if (inodes != 0) {
+		requests[count].kind = RESOURCE_FS_INODE;
+		requests[count++].amount = inodes;
+	}
+	if (count == 0)
+		return 0;
+	enabled = intr_save();
+	result = resource_transfer_usage(
+		fs_system_account, RESOURCE_CHARGE_RESERVED,
+		fs_public_account, RESOURCE_CHARGE_ORDINARY,
+		requests, count);
 	intr_restore(enabled);
-	return 0;
+	return result;
 }
 
 static int fs_claim_checkpoint(int transfer)

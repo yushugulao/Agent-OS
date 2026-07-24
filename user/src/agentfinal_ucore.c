@@ -27,6 +27,9 @@ static struct agent_file_prefetch_hint
 static struct agent_event final_event;
 static struct agent_request final_req;
 static struct agent_response final_resp;
+static volatile int context_lane_slow_ready;
+static volatile int context_lane_slow_done;
+static struct agent_result context_lane_slow_result;
 
 static void check(int ok, const char *msg)
 {
@@ -102,6 +105,91 @@ static void make_echo(struct agent_op *op, uint64 id, const char *text)
 	op->arg0 = id;
 	op->arg1 = id + 1;
 	strcpy(op->payload, text);
+}
+
+static void context_lane_slow_worker(void *unused)
+{
+	struct agent_op op;
+	struct agent_result result;
+
+	(void)unused;
+	make_echo(&op, 7201, "context-lane-ready");
+	if (agent_run(&op, &result, 1, 0) != 1 ||
+	    result.status != AGENT_STATUS_OK)
+		exit(71);
+	__sync_synchronize();
+	context_lane_slow_ready = 1;
+	__sync_synchronize();
+	memset(&op, 0, sizeof(op));
+	op.version = AGENT_CALL_VERSION;
+	op.tool_id = AGENT_TOOL_RERUN_STAGE;
+	op.request_id = 7202;
+	strcpy(op.payload, "align");
+	if (agent_run(&op, &result, 1, 0) != 1 ||
+	    result.status != AGENT_STATUS_OK)
+		exit(72);
+	context_lane_slow_result = result;
+	__sync_synchronize();
+	context_lane_slow_done = 1;
+	__sync_synchronize();
+	exit(0);
+}
+
+static void check_context_commit_lane(void)
+{
+	int tid;
+	int status;
+	int n;
+
+	check(agent_file_meta_init() == 0, "context lane meta init");
+	seed_demo_metadata();
+	check(context_clear() == 0, "context lane clear");
+	context_lane_slow_ready = 0;
+	context_lane_slow_done = 0;
+	memset(&context_lane_slow_result, 0,
+	       sizeof(context_lane_slow_result));
+	tid = thread_create(context_lane_slow_worker, 0);
+	check(tid >= 0, "context lane slow thread");
+	while (!context_lane_slow_ready)
+		sched_yield();
+	for (;;) {
+		check(agent_info(&final_info) == 0, "context lane progress");
+		if (final_info.agent_call_count >= 2)
+			break;
+		check(!context_lane_slow_done, "context lane overlap");
+		sched_yield();
+	}
+	check(!context_lane_slow_done, "context lane slow path yielded");
+	make_echo(&ops[0], 7203, "context-lane-fast");
+	check(agent_run(&ops[0], &results[0], 1, 0) == 1,
+	      "context lane fast run");
+	status = waittid(tid);
+	check(status == 0, "context lane slow join");
+	check(context_lane_slow_done, "context lane slow completed");
+	check(context_lane_slow_result.sequence == 2,
+	      "context lane slow sequence");
+	check(results[0].sequence == 3, "context lane fast sequence");
+	n = context_snapshot(&final_header, records,
+			     AGENT_CONTEXT_MAX_RECORDS);
+	check(n == 3, "context lane snapshot count");
+	check(final_header.oldest_sequence == 1,
+	      "context lane oldest");
+	check(final_header.latest_sequence == 3,
+	      "context lane latest");
+	for (int i = 0; i < n; i++) {
+		check(records[i].sequence == (uint64)i + 1,
+		      "context lane monotonic sequence");
+		check(records[i].record_hash != 0,
+		      "context lane record hash");
+		if (i > 0)
+			check(records[i].prev_hash ==
+				      records[i - 1].record_hash,
+			      "context lane hash chain");
+	}
+	check(final_header.latest_record_hash ==
+		      records[n - 1].record_hash,
+	      "context lane header hash");
+	printf("agentfinal_ucore: context_commit_lane=1 sequence=1..3 hash=1\n");
 }
 
 static void check_legacy_name_protocol(void)
@@ -682,6 +770,7 @@ static void run_agent_child(void)
 	printf("agentfinal_ucore: context size=%d capacity=%d\n",
 	       (int)info->context_size, (int)direct_header->capacity);
 
+	check_context_commit_lane();
 	check(context_clear() == 0, "context clear");
 	for (int i = 0; i < AGENT_BATCH_MAX; i++)
 		make_echo(&ops[i], i + 1, i == 7 ? "ucore-final" : "final");

@@ -301,7 +301,8 @@ static void global_waterline_phase(void)
 	int workflow;
 	int reserved_tid;
 	int probe;
-	char markers[3];
+	char markers[2];
+	char marker;
 
 	check(pipe(ready) == 0, "create global ready pipe");
 	check(pipe(release) == 0, "create global release pipe");
@@ -314,6 +315,17 @@ static void global_waterline_phase(void)
 			global_holder(ready[1], release[0], 'A' + i,
 				      TEST_DOMAIN_LIMIT - 1 - i);
 	}
+	/*
+	 * Establish the ordinary waterline before admitting the probe domain.
+	 * Domain-fair scheduling may otherwise run the probe between the two
+	 * holders: its speculative worker can steal the last slot from a holder,
+	 * or be admitted before the waterline exists.
+	 */
+	read_exact(ready[0], markers, sizeof(markers));
+	check((markers[0] == 'A' || markers[0] == 'B') &&
+		      (markers[1] == 'A' || markers[1] == 'B') &&
+		      markers[0] != markers[1],
+	      "ordinary holders reached pre-probe waterline");
 	delegate_fd(ready[1], "delegate global probe ready pipe");
 	delegate_fd(release[0], "delegate global probe release pipe");
 	global_probe = fork();
@@ -322,17 +334,8 @@ static void global_waterline_phase(void)
 		global_limit_probe(ready[1], release[0]);
 	close(ready[1]);
 	close(release[0]);
-	read_exact(ready[0], markers, sizeof(markers));
-	int seen_a = 0;
-	int seen_b = 0;
-	int seen_g = 0;
-	for (int i = 0; i < 3; i++) {
-		seen_a += markers[i] == 'A';
-		seen_b += markers[i] == 'B';
-		seen_g += markers[i] == 'G';
-	}
-	check(seen_a == 1 && seen_b == 1 && seen_g == 1,
-	      "ordinary holders reached waterline");
+	read_exact(ready[0], &marker, 1);
+	check(marker == 'G', "ordinary probe reached waterline");
 	check(fork() == -1, "ordinary global waterline enforced");
 	printf("threadresource_ucore: ordinary_waterline=1\n");
 	printf("threadresource_ucore: global_thread_limit=1\n");

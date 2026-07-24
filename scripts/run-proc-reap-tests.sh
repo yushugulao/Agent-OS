@@ -8,6 +8,8 @@ TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 CASE_TIMEOUT="${CASE_TIMEOUT:-180s}"
+IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS:-20s}"
+MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-5s}"
 TMPDIR_REAP="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR_REAP}"' EXIT
 
@@ -51,103 +53,23 @@ run_case() {
 	local run_image="${TMPDIR_REAP}/${tag}-run.img"
 
 	cp "${image}" "${run_image}"
-	"${PYTHON_BIN}" - "${tag}" "${kernel}" "${run_image}" \
-		"${QEMU}" "${CASE_TIMEOUT}" "${marker}" <<'PY'
-import os
-import re
-import select
-import signal
-import subprocess
-import sys
-import time
+	local log_file="${TMPDIR_REAP}/${tag}.log"
 
-tag, kernel, image, qemu, timeout_text, marker = sys.argv[1:7]
-failure = re.compile(
-    r"check failed|panic|unknown syscall|bad addr|IllegalInstruction",
-    re.IGNORECASE,
-)
-cmd = [
-    qemu, "-nographic", "-machine", "virt", "-bios", "default",
-    "-kernel", kernel,
-    "-drive", f"file={image},if=none,format=raw,id=x0",
-    "-device", "virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0",
-]
-unit = timeout_text[-1:]
-number = timeout_text[:-1] if unit.isalpha() else timeout_text
-timeout = float(number)
-if unit in ("m", "M"):
-    timeout *= 60
-elif unit in ("h", "H"):
-    timeout *= 3600
-elif unit not in ("", "s", "S"):
-    raise SystemExit(f"[proc-reap] unsupported timeout: {timeout_text}")
-start = time.monotonic()
-proc = subprocess.Popen(
-    cmd,
-    stdout=subprocess.PIPE,
-    stderr=subprocess.STDOUT,
-    preexec_fn=os.setsid,
-)
-chunks = []
-marker_at = -1
-marker_time = None
-failure_match = None
-failure_time = None
-timed_out = False
-shutdown_hung = False
-assert proc.stdout is not None
-while time.monotonic() - start < timeout:
-    now = time.monotonic()
-    if failure_time is not None and now - failure_time >= 1.0:
-        break
-    if (failure_time is None and marker_time is not None and
-            now - marker_time >= 5.0):
-        shutdown_hung = True
-        break
-    ready, _, _ = select.select([proc.stdout], [], [], 0.2)
-    if ready:
-        chunk = os.read(proc.stdout.fileno(), 4096)
-        if not chunk:
-            break
-        chunks.append(chunk)
-        output = b"".join(chunks).decode("utf-8", errors="replace")
-        marker_at = output.find(marker)
-        if marker_at >= 0 and marker_time is None:
-            marker_time = time.monotonic()
-        failure_match = failure.search(output)
-        if failure_match is not None and failure_time is None:
-            failure_time = time.monotonic()
-    elif proc.poll() is not None:
-        break
-else:
-    timed_out = True
-
-stopped_by_runner = proc.poll() is None
-if stopped_by_runner:
-    os.killpg(proc.pid, signal.SIGTERM)
-    try:
-        proc.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        os.killpg(proc.pid, signal.SIGKILL)
-        proc.wait(timeout=2)
-
-output = b"".join(chunks).decode("utf-8", errors="replace")
-print(output, end="")
-bad_exit = not stopped_by_runner and proc.returncode != 0
-if (timed_out or shutdown_hung or marker_at < 0 or
-        failure_match is not None or bad_exit):
-    if timed_out:
-        reason = "timed out"
-    elif shutdown_hung:
-        reason = "did not shut down"
-    else:
-        reason = "failed"
-    print(f"[proc-reap] {tag} {reason}", file=sys.stderr)
-    for line in output.splitlines()[-40:]:
-        print(line, file=sys.stderr)
-    raise SystemExit(1)
-print(f"[proc-reap] {tag} passed in {time.monotonic() - start:.1f}s")
-PY
+	"${PYTHON_BIN}" scripts/agent_test_runner.py \
+		--init-proc "${tag}" \
+		--marker "${marker}" \
+		--log-file "${log_file}" \
+		--case-timeout "${CASE_TIMEOUT}" \
+		--idle-notice-seconds "${IDLE_NOTICE_SECONDS}" \
+		--marker-grace-seconds "${MARKER_GRACE_SECONDS}" \
+		--qemu "${QEMU}" \
+		--kernel "${kernel}" \
+		--image "${run_image}"
+	"${PYTHON_BIN}" scripts/validate-kernel-test-log.py \
+		--log-file "${log_file}" \
+		--tag "proc-reap:${tag}" \
+		--profile proc-reap
+	echo "[proc-reap] ${tag} passed"
 }
 
 build_case "" agent

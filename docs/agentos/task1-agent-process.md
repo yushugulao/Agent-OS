@@ -11,6 +11,7 @@ AgentOS-uCore 当前实现不是只做“能创建一个特殊进程”的最小
 - Agent PCB 元数据；
 - 6 页 Agent Context；
 - kernel shadow 权威历史；
+- 按活跃 Agent 分配、受 EXEC account 计费的私有 Context sidecar；
 - user mirror 高速读取镜像；
 - cause/span 因果链状态；
 - 用户自管 Context cache；
@@ -18,6 +19,7 @@ AgentOS-uCore 当前实现不是只做“能创建一个特殊进程”的最小
 - 代码 RX、数据/栈/Context RW+NX 的用户映像布局；
 - 面向非 Agent workflow worker 的最小文件能力委派；
 - Agent 退出释放和 workflow 可信强制撤销；
+- generation-safe workflow lifecycle、统一 teardown 与按需物理内核栈；
 - 与后续任务二至五共用的状态字段。
 
 ## 当前接口
@@ -50,7 +52,7 @@ AgentOS-uCore 当前实现不是只做“能创建一个特殊进程”的最小
 | `heartbeat_interval` | Agent 心跳周期，`agent_heartbeat()` 可设置 |
 | `resource_quota` | Agent Context Path 记录配额，当前为 128 条 |
 | `loop_state` | Agent Loop 状态，支持 `IDLE`、`RUNNING`、`WAITING` |
-| `agent_call_count` | 当前 Agent 工具调用总数 |
+| `agent_call_count` | 当前 Agent 已接纳并保留 sequence 的工具调用数；在途调用尚未提交时可领先 Context latest 水位 |
 | `context_path_count` | 当前有效 Context Path 记录数 |
 | `context_path_capacity` | Context Path 最大记录数 |
 | `context_path_head` | 下一条 Context Path 写入槽位 |
@@ -76,6 +78,8 @@ AgentOS-uCore 当前实现不是只做“能创建一个特殊进程”的最小
 | `filesystem_domain` | 当前进程所在的 VFS 安全域；普通进程位于 public 域，受权 Agent/worker 位于 workflow 域 |
 | `filesystem_capability_mask` | 当前映像实际生效的 `CONTENT_READ` / `ARTIFACT_WRITE` 文件能力；它与 Agent 业务 capability 分开管理 |
 
+内核还维护不直接暴露为 `agent_info` ABI 的安全字段：不可变 `workflow_lifecycle_id + generation`、generation-safe EXEC `resource_account`、teardown 状态/owner，以及完整 Agent 状态页句柄。一个 Agent 的 9 页 detail sidecar、6 页用户 mirror 和 6 页可信 shadow 通过一次 21 页 `RESOURCE_AGENT_STATE_PAGE` 请求原子计费。`resource_domain_id` 只保留为 scheduler 的 CPU 分区索引，不是资源计费身份。
+
 普通进程的 `is_agent` 为 0，`agent_id` 为 0，且不会安装 Agent metadata 或 Agent Context 特殊映射。普通进程调用 Agent-only syscall 时会返回错误。受权 workflow worker 也保持 `is_agent == 0`，只通过独立的文件系统域和 capability 执行普通 `open/read/write` 操作，不能调用 Agent-only 接口。
 
 ## 地址空间设计
@@ -92,7 +96,7 @@ Agent Context 使用固定高地址用户虚拟区：
 
 用户程序仍使用 flat binary 内容，但 mkfs 会从配套 ELF 提取只读可执行段与可写段的页对齐分界点，并把布局版本和 `exec_rw_offset` 写入 inode。AgentOS loader 校验该布局后把代码页映射为 RX，把数据、bss 和用户栈映射为 RW+NX；Agent Context 镜像页同样是 RW+NX。布局缺失、分界点非法或同时要求写和执行的映像不会被装载。
 
-该区域位于 trapframe 下方，只有 Agent 进程在创建时安装 Agent Context 特殊映射。内核在 `struct proc` 中保存 6 个用户镜像页地址和 6 个 shadow 权威页地址，写 header、latest result 和 Context Path record 时先写内核 shadow 页，再同步到用户镜像页。
+该区域位于 trapframe 下方，只有 Agent 进程在创建时安装 Agent Context 特殊映射。内核在 `struct proc` 中保存 6 个用户镜像页和 6 个 shadow 权威页的映射句柄，写 header、latest result 和 Context Path record 时先写 shadow，再同步到用户镜像。
 
 这种设计的效果：
 
@@ -101,7 +105,9 @@ Agent Context 使用固定高地址用户虚拟区：
 3. 固定地址简化用户态 ABI。
 4. 6 页容量足以容纳 header、latest result、128 条摘要记录、完整性链字段，并在尾部保留用户自管 cache。
 
-完整工具调用详情保存在内核 PCB 的 detail ring 中，通过 `context_detail()` 查询；它不占用用户 Context 页。这样用户 Context 可以同时承担高速镜像和 Agent 自管缓存，不把完整详情暴露为可被用户态直接改写的内存。
+完整工具调用详情、span owner 与 cause attribution 保存在 9 页内核私有 sidecar 中，通过 `context_detail()` 和观测 owner 查询；它不占用用户 Context 页，也不再作为固定大数组嵌入每个 PCB。sidecar 与 6 页用户 mirror、6 页可信 shadow 只为活跃 Agent 按需分配，并以一次 21 页 `RESOURCE_AGENT_STATE_PAGE` 请求原子预留、提交、失败回滚和退出退款；CI 仍单独观察 sidecar-only 的 9 页细节预算。
+
+线程内核栈也采用按需物理映射。每个线程仍拥有稳定的 16 KiB 栈虚拟槽和 4 KiB guard/canary，但物理页只在线程 admission 成功时取得，并在 scheduler 已切回 idle stack 后释放。全部 `NPROC * NTHREAD` 槽的 32 MiB 只是虚拟容量；8 MiB 才是受信/保留线程的物理栈池。
 
 ## 创建流程
 
@@ -115,11 +121,12 @@ sequenceDiagram
     P->>S: agent_workflow_create(role) / agent_create_role(role)
     S->>K: fresh scope factory / same-scope role delegation
     K->>K: 校验 role_grant_mask
-    K->>K: 建立或继承 kernel-issued scope，消费本线程 pipe 票据
-    K->>K: fresh root 在发布前绑定唯一 lifecycle control id
+    K->>K: 建立或继承 scope 与不可变 lifecycle (id,generation)
+    K->>K: 原子预留 EXEC account 的 process + t0
+    K->>K: fresh root 绑定唯一 control id，消费本线程 pipe 票据
     K->>K: 固定精确 file 对象并复制基础进程状态
     K->>A: 标记子进程为 Agent 并绑定 role/capability
-    A->>C: 分配 shadow 页和镜像页
+    A->>C: 分配 shadow/mirror 与按需私有 sidecar
     A->>C: 初始化 Context header
     A-->>K: 完成
     K-->>P: 返回子进程 pid
@@ -135,9 +142,9 @@ worker 映像不使用 Agent 的 `TRUSTED` role-image 身份。mkfs 为布局有
 
 ## 释放流程
 
-每个新 workflow 根在成为 runnable 前，把不复用的 `agent_control_id` 绑定到 scope 生命周期账本。显式 `agent_workflow_close()`、根 controller 正常退出、fault 退出和凭据清除汇合到同一幂等入口：ACTIVE 原子转为 CLOSING，Agent/VFS 授权立即失效，新 spawn、pending exec 发布和存储分配被拒绝；内核向 active/pending 成员提交进程级协作退出请求。关闭扫描不覆盖已开始 teardown 的 owner，也不在其他线程栈外释放临时 FD、inode 或内存。
+每个新 workflow 根在成为 runnable 前取得不可变 `(workflow_lifecycle_id,generation)`，并把不复用的 `agent_control_id` 绑定到该 key。显式 `agent_workflow_close()`、根 controller 正常退出、fault 退出和 terminal credential clear 汇合到同一幂等入口：ACTIVE 原子转为 CLOSING，新 spawn、pending exec commit 和存储分配被拒绝。撤销按完整 lifecycle key 扫描，不依赖当前 Agent/VFS 凭据；普通 fork 后代即使已经降权为 PUBLIC，仍在原 workflow 谱系中。
 
-Agent 自身退出时，`freeproc()` 会释放 Agent Context 相关页面并清空 Agent 元数据。CLOSING 在最后成员完成 terminal cleanup 前仍保留完整 I/O/cache owner，使阻塞 syscall 临时引用、lease 和 debt 能沿正常路径结算；最后成员释放引用后才进入 RETIRING。带 BACKGROUND 预算的轮转 reaper 清理 metadata、依赖、动作、租约、缓存、审计、IPC 和 VFS-labelled 文件，资源归零后才释放不可复用的生命周期槽。`agentscope_ucore` 覆盖根自关、factory 关闭、根自然退出、低权限阻塞成员释放、超过 8 槽上限的 9 轮强制回收，以及既有的正常退出和 132 轮创建回收。
+进程级终止统一经过 `LIVE -> REQUESTED -> QUIESCING -> DETACHED -> RECLAIMING -> SETTLING -> HANDOFF -> PUBLISHED -> RECYCLED`。Agent 侧只暴露 phase-aware、幂等的 `agent_proc_teardown()`：QUIESCING 撤销控制权，RECLAIMING 释放 Context 状态并清除身份，SETTLING 验空。唯一 owner 先展开 sibling、分离 child/FD，再释放文件、Context 状态和 VM，结算 I/O/resource account，最后清除凭据并释放 lifecycle 引用；scheduler 切回 idle stack 后才释放最后物理栈页和进程槽。CLOSING 在最后成员完成 teardown 前保留完整 owner，随后进入 RETIRING。8 槽 lifecycle ledger 只有彻底清理后才以更高 generation 复用，旧 key 不会别名到新 workflow。
 
 ## 示例路径
 
@@ -177,6 +184,9 @@ Agent 自身退出时，`freeproc()` 会释放 Agent Context 相关页面并清�
 - 清单驱动的可信映像和角色绑定；
 - 非 Agent workflow worker 委派；
 - 唯一根 controller、ACTIVE/CLOSING/RETIRING 和可信 factory 强制终止；
+- 不可变 lifecycle id+generation 与 PUBLIC 降权后代撤销；
+- EXEC/STORAGE resource account、统一 teardown 和按需物理内核栈；
+- 按需 Context sidecar，避免在每个 PCB 常驻完整 detail/attribution；
 - 与任务四、五、六共享的 Agent 状态。
 
 ## 已知限制
@@ -197,4 +207,4 @@ Agent 自身退出时，`freeproc()` 会释放 Agent Context 相关页面并清�
 | `labdemo_ucore` | orchestrator、recovery、investigator、sentinel 多个 Agent 能同时创建；它们使用相同虚拟 Context 地址，但对应不同物理页和角色能力。 |
 | `agenttrust_ucore` | 代码 RX、数据 RW+NX，可信映像不可改写，Agent exec 的角色与可信 inode 绑定，普通复制映像不能继承信任。 |
 | `agentvfs_ucore` | 非 Agent worker 只取得显式委派且不超过映像 profile 的文件能力，普通 fork/exec 和继承 fd 不能扩权。 |
-| `agentscope_ucore` | 低权限/子 Orchestrator 关闭拒绝、非规范 scope id 拒绝、根自关、factory 关闭、根离开强制撤销、阻塞成员资源释放、9 轮回收和 replacement admission。 |
+| `agentscope_ucore` | 当前专项约 `93.7s` 并输出 `scope_controller_exit_revoke=1 public_lineage=1` 与 `parent passed`，验证低权限/子 Orchestrator 关闭拒绝、根/factory 关闭、generation 回收和 PUBLIC child/grandchild 降权后仍可撤销。 |

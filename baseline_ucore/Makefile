@@ -43,6 +43,8 @@ CFLAGS += -I$K
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 
 KSTACK_SIZE_BYTES ?= 16384
+KSTACK_BOOT_SIZE_BYTES ?= 65536
+KSTACK_BOOT_ROOT ?= main
 KSTACK_GUARD_SIZE_BYTES ?= 4096
 KSTACK_FRAME_BUDGET ?= $(KSTACK_GUARD_SIZE_BYTES)
 KSTACK_SAFETY_MARGIN ?= 4096
@@ -125,6 +127,8 @@ $(KSTACK_BUILD_CONFIG): .FORCE
 		'CC=$(CC)' \
 		'CFLAGS=$(CFLAGS)' \
 		'KSTACK_SIZE_BYTES=$(KSTACK_SIZE_BYTES)' \
+		'KSTACK_BOOT_SIZE_BYTES=$(KSTACK_BOOT_SIZE_BYTES)' \
+		'KSTACK_BOOT_ROOT=$(KSTACK_BOOT_ROOT)' \
 		'KSTACK_GUARD_SIZE_BYTES=$(KSTACK_GUARD_SIZE_BYTES)' \
 		'KSTACK_FRAME_BUDGET=$(KSTACK_FRAME_BUDGET)' \
 		'KSTACK_SAFETY_MARGIN=$(KSTACK_SAFETY_MARGIN)' \
@@ -165,6 +169,8 @@ build/kernel: $(OBJS) os/kernel.ld ../scripts/check-kernel-stack-usage.py $(KSTA
 	$(PY) ../scripts/check-kernel-stack-usage.py \
 		--callgraph-dir $(BUILDDIR)/$(K) --source-dir $(K) \
 		--stack-size $(KSTACK_SIZE_BYTES) --guard-size $(KSTACK_GUARD_SIZE_BYTES) \
+		--boot-stack-size $(KSTACK_BOOT_SIZE_BYTES) \
+		--boot-root $(KSTACK_BOOT_ROOT) \
 		--safety-margin $(KSTACK_SAFETY_MARGIN) \
 		--interrupt-entry $(KERNELVEC_FRAME_SIZE_BYTES) $(KSTACK_POLICY_ARGS)
 	$(LD) $(LDFLAGS) -T os/kernel.ld -o $(BUILDDIR)/kernel $(OBJS)
@@ -176,6 +182,8 @@ kernel-stack-check: build/kernel
 	@$(PY) ../scripts/check-kernel-stack-usage.py \
 		--callgraph-dir $(BUILDDIR)/$(K) --source-dir $(K) \
 		--stack-size $(KSTACK_SIZE_BYTES) --guard-size $(KSTACK_GUARD_SIZE_BYTES) \
+		--boot-stack-size $(KSTACK_BOOT_SIZE_BYTES) \
+		--boot-root $(KSTACK_BOOT_ROOT) \
 		--safety-margin $(KSTACK_SAFETY_MARGIN) \
 		--interrupt-entry $(KERNELVEC_FRAME_SIZE_BYTES) $(KSTACK_POLICY_ARGS)
 

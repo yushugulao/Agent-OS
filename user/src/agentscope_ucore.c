@@ -45,7 +45,6 @@ struct observe_pressure_result {
 	uint64 timeline_records;
 };
 
-static struct agent_audit_record scope_audit_records[AGENT_AUDIT_MAX_RECORDS];
 static struct agent_file_query_result scope_query_result;
 static struct agent_file_query_result meta_race_result;
 static struct agent_file_edit_state scope_lease_state;
@@ -55,10 +54,18 @@ static struct agent_info volatile_writeback_before;
 static struct agent_info volatile_writeback_after;
 static struct agent_context_record observe_context_scratch;
 static struct agent_timeline_filter observe_filter_scratch;
-static struct agent_audit_record
-	observe_span_scratch[AGENT_AUDIT_MAX_RECORDS];
-static struct agent_timeline_record
-	observe_timeline_scratch[AGENT_AUDIT_MAX_RECORDS];
+/*
+ * These full-size query results are consumed in separate test phases. Sharing
+ * their backing store keeps the W^X flat image below the filesystem file cap.
+ */
+static union {
+	struct agent_audit_record audit[AGENT_AUDIT_MAX_RECORDS];
+	struct agent_audit_record span[AGENT_AUDIT_MAX_RECORDS];
+	struct agent_timeline_record timeline[AGENT_AUDIT_MAX_RECORDS];
+} scope_observe_scratch;
+#define scope_audit_records scope_observe_scratch.audit
+#define observe_span_scratch scope_observe_scratch.span
+#define observe_timeline_scratch scope_observe_scratch.timeline
 static struct observe_pressure_result observe_result_scratch;
 static struct scope_reply observe_start_reply;
 static struct scope_reply observe_progress_reply;
@@ -1558,7 +1565,8 @@ static void workflow_scope_holder_root(int report_fd, int lifetime_fd,
 	struct agent_event event;
 	int child_ready[2];
 	int child;
-	char ready;
+	int public_child;
+	char ready[3];
 	uint scope_id = current_scope();
 
 	check(pipe(child_ready) == 0, "create holder ready pipe");
@@ -1569,15 +1577,55 @@ static void workflow_scope_holder_root(int report_fd, int lifetime_fd,
 	check(child >= 0, "create workflow lifetime holder");
 	if (child == 0)
 		workflow_wait_holder(child_ready[1], lifetime_fd);
+	check(agent_scope_delegate_fd(child_ready[1]) == AGENT_STATUS_OK &&
+		      agent_scope_delegate_fd(lifetime_fd) == AGENT_STATUS_OK,
+	      "delegate holder endpoints");
+	public_child = fork();
+	check(public_child >= 0, "create workflow lifetime holder");
+	if (public_child == 0) {
+		struct agent_info info;
+		int grandchild = fork();
+
+		memset(&info, 0, sizeof(info));
+		if (agent_info(&info) < 0 || info.is_agent != 0 ||
+		    info.filesystem_domain != 0 || info.capability_mask != 0 ||
+		    info.filesystem_capability_mask != 0)
+			exit(98);
+		if (grandchild < 0)
+			exit(98);
+		if (grandchild == 0) {
+			memset(&info, 0, sizeof(info));
+			if (agent_info(&info) < 0 || info.is_agent != 0 ||
+			    info.filesystem_domain != 0 ||
+			    info.capability_mask != 0 ||
+			    info.filesystem_capability_mask != 0 ||
+			    write(child_ready[1], "G", 1) != 1)
+				exit(98);
+		} else if (write(child_ready[1], "P", 1) != 1) {
+			exit(98);
+		}
+		(void)close(child_ready[1]);
+		for (;;)
+			sleep(1);
+	}
 	check(close(child_ready[1]) == 0 &&
 		      close(lifetime_fd) == 0,
 	      "drop root lifetime fds");
-	read_exact(child_ready[0], &ready, sizeof(ready),
+	read_exact(child_ready[0], ready, sizeof(ready),
 		   "wait lifetime holder");
-	check(ready == 'R', "workflow lifetime holder ready");
+	int seen_agent = 0;
+	int seen_public = 0;
+	int seen_grandchild = 0;
+	for (uint i = 0; i < sizeof(ready); i++) {
+		seen_agent |= ready[i] == 'R';
+		seen_public |= ready[i] == 'P';
+		seen_grandchild |= ready[i] == 'G';
+	}
+	check(seen_agent && seen_public && seen_grandchild,
+	      "all workflow lineage holders ready");
 	check(close(child_ready[0]) == 0,
 	      "close holder ready reader");
-	send_reply(report_fd, scope_id, child, 0);
+	send_reply(report_fd, scope_id, child, public_child);
 	check(close(report_fd) == 0, "close exit report");
 	if (depart)
 		exit(0);
@@ -1609,6 +1657,7 @@ static void check_scope_controller_exit_revoke(void)
 		      "drop bootstrap exit writers");
 		ready = receive_reply(report[0], "receive exit readiness");
 		check(ready.value0 > 0, "workflow lifetime holder published");
+		check(ready.value1 > 0, "public workflow lineage published");
 		check(waitpid(pid, &status) == pid, "wait departing root");
 		check(status == 0, "departing root status");
 		check(read(lifetime[0], &eof, sizeof(eof)) < 0,
@@ -1839,7 +1888,7 @@ int main(void)
 	check_scope_close_authority();
 	printf("agentscope_ucore: scope_close_authority=1\n");
 	check_scope_controller_exit_revoke();
-	printf("agentscope_ucore: scope_controller_exit_revoke=1\n");
+	printf("agentscope_ucore: scope_controller_exit_revoke=1 public_lineage=1\n");
 	printf("agentscope_ucore: scope_forced_cleanup=1\n");
 	printf("agentscope_ucore: scope_replacement_admitted=1\n");
 	check_scope_lifecycle();

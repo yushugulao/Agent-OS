@@ -41,6 +41,14 @@ make -C baseline_ucore build TOOLPREFIX=riscv64-linux-gnu- CHAPTER=platform_seed
 
 AgentOS 专项构建和测试命令见 [agentos/verification.md](agentos/verification.md)。双目标平台构建由 `make dual-platform-run` 和 `make full-verify` 自动调用。
 
+不启动 QEMU 的 AgentOS 内核增长与模块边界检查：
+
+```bash
+make ci-check
+```
+
+它使用 `ci/kernel-budgets.json` 的固定 profile 检查源码、镜像、运行段、`struct proc`、9 页 Context sidecar 和完整 21 页 Agent 状态的单实例/池/账户容量、线程栈与独立 64 KiB boot stack 的调用图和容量，以及 facade/core/context/identity/ipc/lifecycle/metadata/metadata_objects/metadata_store/observe/resource_controller/workflow_lifecycle 的预算和符号所有权。所有引用受控 Agent 符号的内核对象还必须属于精确登记的 9 个 integration bridge；受控图的 SCC 上限硬编码为 3，但该图不是完整 uCore 调用图。完整 16 case 的耗时预算已由同一 `agentos-qemu-calibrated` runner 上 bounded/flood-safe 版本的三轮 16/16 校准；普通 CI 只有在命中该 runner tag、执行完整套件且总时间不超过 `268.14s` 时才通过。
+
 双目标运行：
 
 ```bash
@@ -58,6 +66,7 @@ make full-verify TOOLPREFIX=riscv64-linux-gnu-
 
 这条命令会按顺序执行：
 
+- 内核增长、PCB、栈容量和 Agent 模块边界门；
 - 双目标结构检查；
 - 宿主机科研 Agent 平台能力对齐检查；
 - 宿主机科研 Agent 平台测试主题对齐检查；
@@ -67,9 +76,10 @@ make full-verify TOOLPREFIX=riscv64-linux-gnu-
 - AgentOS 内核专项测试；
 - 主目标、Agent 对抗场景和 baseline 的进程生命周期复测；
 - 双目标 syscall 公平性和全局文件对象表资源配额复测；
-- AgentOS 线程资源域配额、系统保留和跨域调度公平复测。
+- AgentOS 线程资源账户、系统保留和跨域调度公平复测；
+- 双目标 ENOSPC、持久 PUBLIC principal 与 AgentOS 存储保留复测。
 
-文件系统 ENOSPC 和显式内核栈预算检查保留在聚合验证之外，分别运行 `make fs-enospc-test` 和 `make kernel-stack-check`；全局文件对象表与线程资源域配额由 `make full-verify` 串联，也可分别运行 `make file-resource-test` 和 `make thread-resource-test`。每次内核构建都会自动执行栈预算分析。
+`make full-verify` 已串联 ENOSPC、全局 file object、线程资源和 `ci-check`；各项仍可用 `make fs-enospc-test`、`make file-resource-test`、`make thread-resource-test`、`make kernel-stack-check` 单独复现。聚合是否通过只以本次完整命令日志为准。
 
 期望最后看到：
 
@@ -406,7 +416,7 @@ agentscope_ucore: observe_query_bounded=1 ...
 agentscope_ucore: observe_index_ordered=1
 agentscope_ucore: observe_cross_scope_progress=1 ...
 agentscope_ucore: scope_close_authority=1
-agentscope_ucore: scope_controller_exit_revoke=1
+agentscope_ucore: scope_controller_exit_revoke=1 public_lineage=1
 agentscope_ucore: scope_forced_cleanup=1
 agentscope_ucore: scope_replacement_admitted=1
 agentscope_ucore: parent passed
@@ -416,7 +426,7 @@ usersafety_ucore: parent passed
 [agent-tests] all Agent-OS uCore checks passed
 ```
 
-这组测试覆盖 Agent Context、结构化工具调用、Context Path、真实文件 metadata、按 scope 合并写回、volatile 写回分流、满表扫描限流、预算化观测查询、跨 workflow 查询时限、可信 workflow 关闭权、根退出强制撤销、阻塞成员协作清理、生命周期重复回收、根目录自动扫描、Agent 事件队列、Agent 调度、文件编辑租约、LLM Relay 模板路径、性能观测、综合示例和权限限制。
+这组测试覆盖 Agent Context、结构化工具调用、metadata/观测、可信 workflow 关闭和资源回收。当前 lifecycle 回归还要求：PUBLIC child 与 grandchild 分别确认 Agent/VFS 凭据清零、独立发送 `P`/`G` ready，之后仍随原 `(id,generation)` 谱系撤销。独立 `agentscope_ucore` 已实际取得 `public_lineage=1` 和 `parent passed`；完整套件仍必须在固定 runner 上按上述严格退出契约单独验收。
 
 ## 状态渲染验证
 
@@ -456,9 +466,12 @@ make fs-enospc-test TOOLPREFIX=riscv64-linux-gnu-
 # 16 KiB 内核栈、4 KiB guard 和构建期调用图预算
 make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
+
+# canonical profile 下的增长、PCB、栈容量和 Agent 模块边界
+make ci-check
 ```
 
-`run-agent-tests.sh` 中的 `agentsecurity_ucore`、`agenttrust_ucore`、`agentvfs_ucore`、`agentscope_ucore` 和 `usersafety_ucore` 分别覆盖事件与角色授权、可信映像和 W^X、普通 VFS 绕过、workflow 强制撤销及坏用户指针。强制撤销实现快照已完成完整 16/16；子代理审查补强后，最终 `agentscope_ucore` 专项验证低权限/子 Orchestrator 关闭拒绝、根自关、factory 关闭、根退出自动撤销、阻塞成员资源释放、9 轮回收和 replacement admission。`run-proc-reap-tests.sh` 覆盖定向取消、阻塞 syscall 临时引用释放、孤儿回收、child record、长存活 fork bomb 和 Agent 保留槽。`run-file-resource-tests.sh` 用双目标同一个 `fileresource_ucore` 和 64/48/16/16 配置，验证阻塞 syscall pin 在原 FD 关闭后仍计费、每域上限、pipe 部分分配回滚、普通全局水位、reserved 进展及退出后的最终退款；独立历史轮已输出 AgentOS、baseline 和 `[file-resource] both targets passed`。`run-fs-enospc-tests.sh` 先保留两个目标的物理 ENOSPC 复测，再运行 AgentOS `fsquota_ucore` 的低主体上限和高水位两组配置：前者验证运行期累计及释放复用，后者确保 PUBLIC 压力下 workflow 文件和内核 `.agentmeta` 仍可写入。随后两个目标各用同一磁盘镜像连续运行三次 `fspquota_ucore`：第一轮在文件已 unlink 但描述符仍打开时强制断电；第二轮验证挂载回收孤儿后，让 PUBLIC 接管含间接块的 SYSTEM 赞助对象并使进程域满额退出；第三轮验证 qmap/dinode 重建计数、新进程域和重启都不能清零、删除后才可复用。聚合脚本已串联 Agent、进程生命周期、syscall 公平性和 filepool 专项，但本次没有运行 `make full-verify`；文件系统专项仍不在聚合脚本中。内核栈预算在每次 kernel build 时自动执行，也可用以上命令单独复现。完整机制和失败语义见 [agentos/security-hardening.md](agentos/security-hardening.md)。
+旧 Agent、进程、file、thread、I/O 与 ENOSPC 结果继续作为历史问题证据。generation-safe lifecycle、PUBLIC 后代撤销、统一 resource controller/teardown、lazy physical stack 和 Agent 模块拆分后的当前代码已完成三轮 16/16 Agent 套件，并通过 proc、syscall、file、thread 和 ENOSPC 专项；`make ci-check` 也已通过。`make full-verify` 现在会串联这些入口，但本轮没有执行该聚合命令，不能把独立通过外推成聚合全绿。完整机制和证据边界见 [agentos/security-hardening.md](agentos/security-hardening.md) 与 [agentos/verification.md](agentos/verification.md)。
 
 ## 内核机制说明
 
@@ -478,9 +491,9 @@ make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 
 3. 虚拟内存、地址空间、地址翻译、页表、缺页处理、权限检查。
 
-   代码位置：`baseline_ucore/os/vm.c`、`baseline_ucore/os/proc.c`、`baseline_ucore/os/loader.c`、`baseline_ucore/os/trap.c`、`os/agent.c`。
+   代码位置：`baseline_ucore/os/vm.c`、`baseline_ucore/os/proc.c`、`baseline_ucore/os/loader.c`、`baseline_ucore/os/trap.c`；增强目标的 `os/vm.c`、`os/proc.c`、`os/agent_context.c`、`os/workflow_lifecycle.c`。
 
-   相关处理：syscall 访问用户地址时使用 `copyin()`、`copyout()`、`copyinstr()`；`uvmcopy()` 服务 `fork()`；`exec()` 替换地址空间。增强目标按可信映像布局建立 RX 代码页、RW+NX 数据页；Agent Context 的可信历史由内核 shadow 状态维护，用户可见镜像不能伪造可信记录。
+   相关处理：syscall 访问用户地址时使用 `copyin()`、`copyout()`、`copyinstr()`；`uvmcopy()` 服务 `fork()`；exec 用 prepare/commit/abort 把身份与地址空间原子发布。Agent Context 的 9 页 detail sidecar、6 页用户 mirror 和 6 页可信 shadow 由 Context owner 管理，并作为 21 页整体通过 `RESOURCE_AGENT_STATE_PAGE` 原子计费；4.5 MiB 是 sidecar-only 的独立细节预算，完整状态全局预算为 10.5 MiB。每线程物理内核栈按 live admission 映射，32 MiB 是虚拟容量，8 MiB 是受信/保留物理池；启动/调度另使用 64 KiB boot stack。
 
 4. 文件系统、目录、文件描述符、pipe、设备文件和文件抽象。
 
@@ -496,9 +509,9 @@ make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 
 6. 并发同步、资源管理、死锁处理、竞态处理、用户态/内核态隔离。
 
-   代码位置：`baseline_ucore/os/sync.c`、`baseline_ucore/os/sync.h`、`baseline_ucore/os/proc.c`、`baseline_ucore/os/file.c`、`baseline_ucore/os/fs.c`、`os/agent.c`、`os/agent.h`。
+   代码位置：`baseline_ucore/os/sync.c`、`baseline_ucore/os/proc.c`、`baseline_ucore/os/file.c`、`baseline_ucore/os/fs.c`；增强目标的 `os/resource_controller.c`、`os/workflow_lifecycle.c`、`os/proc.c`、`os/agent_core.c`、`os/agent_context.c`、`os/agent_identity.c`、`os/agent_ipc.c`、`os/agent_lifecycle.c`、`os/agent_metadata*.c`、`os/agent_observe.c`。
 
-   相关处理：进程、线程、文件、inode、pipe、buffer、mutex、semaphore、condvar 都有各自的生命周期和同步规则。plain target 暴露用户态约定的局限；AgentOS target 将 role/capability、Context、事件队列、wait/wake、heartbeat、metadata、edit lease、timeline、ledger 放入内核状态，由内核根据真实状态判断。
+   相关处理：AgentOS 用 generation-safe EXEC/STORAGE account 统一核算进程、线程、file object、block/inode、cache、I/O 和 Agent state page；`resource_domain_id` 仅用于 CPU 调度分区。workflow 以 `(id,generation)` 维持撤销谱系；正常退出、fault、revoke 和构造回滚共用单一 teardown。`os/agent.c` 只保留 facade，可写状态归各 owner 模块。
 
 7. QEMU、RISC-V、设备适配和行为一致性。
 

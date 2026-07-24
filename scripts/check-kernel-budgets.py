@@ -1,0 +1,1952 @@
+#!/usr/bin/env python3
+"""Enforce reproducible kernel growth and Agent test-suite budgets."""
+
+import argparse
+import json
+import math
+import re
+import shlex
+import statistics
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+
+class BudgetError(ValueError):
+    pass
+
+
+CALIBRATION_SECONDS_TOLERANCE = 0.001
+REQUIRED_KERNEL_SOURCE_GLOBS = frozenset(
+    (
+        "os/**/*.c",
+        "os/**/*.h",
+        "os/**/*.S",
+        "os/**/*.ld",
+        "os/**/*.inc",
+        "*_policy.h",
+        "*_policy.inc",
+    )
+)
+REQUIRED_AGENT_TEST_CASES = (
+    "agentfinal_ucore",
+    "agentfs_ucore",
+    "agentscan_ucore",
+    "agentloop_ucore",
+    "agentsched_ucore",
+    "agentconflict_ucore",
+    "agentllm_ucore",
+    "agentbench_ucore",
+    "labbench_ucore",
+    "labdemo_ucore",
+    "agentsecurity_ucore",
+    "agentscope_ucore",
+    "agenttrust_ucore",
+    "agentvfs_ucore",
+    "iobudget_ucore",
+    "usersafety_ucore",
+)
+CONTROLLED_AGENT_SYMBOL_PREFIXES = (
+    "agent_",
+    "sys_agent_",
+    "sys_context_",
+    "resource_",
+    "workflow_lifecycle_",
+)
+CONTROLLED_AGENT_EXACT_SYMBOLS = frozenset(("agentinit",))
+REQUIRED_AGENT_MAX_SCC_SIZE = 3
+REQUIRED_AGENT_ALLOWED_SCCS = frozenset(
+    (
+        frozenset(("context", "observe")),
+        frozenset(("ipc", "metadata_objects", "metadata_store")),
+    )
+)
+REQUIRED_AGENT_INTEGRATION_ALLOWED_SCCS = frozenset(
+    (
+        frozenset(("context", "observe")),
+        frozenset(("core", "facade", "proc")),
+        frozenset(("ipc", "metadata_objects", "metadata_store")),
+    )
+)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--root", default=".")
+    parser.add_argument(
+        "--check",
+        choices=("kernel", "agent-modules", "agent-tests", "config"),
+        default="kernel",
+    )
+    parser.add_argument("--kernel", default="build/kernel")
+    parser.add_argument(
+        "--struct-probe", default="build/ci/struct-proc-size.o"
+    )
+    parser.add_argument(
+        "--agent-core-probe", default="build/ci/agent-core-boundary.o"
+    )
+    parser.add_argument("--objcopy")
+    parser.add_argument("--nm")
+    parser.add_argument("--cc")
+    parser.add_argument("--size")
+    parser.add_argument("--callgraph-dir", default="build/os")
+    parser.add_argument(
+        "--stack-build-config", default="build/.kernel-stack-config"
+    )
+    parser.add_argument(
+        "--stack-checker", default="scripts/check-kernel-stack-usage.py"
+    )
+    parser.add_argument("--agent-test-timing-file")
+    parser.add_argument("--agent-test-calibration", action="store_true")
+    return parser.parse_args()
+
+
+def require_mapping(value, name):
+    if not isinstance(value, dict):
+        raise BudgetError(f"{name} must be an object")
+    return value
+
+
+def require_positive_number(mapping, name, integer=False):
+    value = mapping.get(name)
+    valid_type = isinstance(value, int) if integer else isinstance(value, (int, float))
+    if (
+        not valid_type
+        or isinstance(value, bool)
+        or value <= 0
+        or (not integer and not math.isfinite(value))
+    ):
+        raise BudgetError(f"{name} must be a positive number")
+    return value
+
+
+def require_string_list(mapping, name):
+    value = mapping.get(name)
+    if not isinstance(value, list) or not value:
+        raise BudgetError(f"{name} must be a non-empty string array")
+    if any(not isinstance(item, str) or not item for item in value):
+        raise BudgetError(f"{name} must be a non-empty string array")
+    return value
+
+
+def require_string_array(mapping, name):
+    value = mapping.get(name)
+    if not isinstance(value, list):
+        raise BudgetError(f"{name} must be a string array")
+    if any(not isinstance(item, str) or not item for item in value):
+        raise BudgetError(f"{name} must be a string array")
+    return value
+
+
+def validate_pair(section, baseline_name, maximum_name, integer=False):
+    baseline = require_positive_number(section, baseline_name, integer)
+    maximum = require_positive_number(section, maximum_name, integer)
+    if maximum < baseline:
+        raise BudgetError(f"{maximum_name} must not be below {baseline_name}")
+    if maximum > baseline * 1.100001:
+        raise BudgetError(f"{maximum_name} leaves more than 10% growth headroom")
+    if maximum < baseline * 1.049999:
+        raise BudgetError(f"{maximum_name} leaves less than 5% growth headroom")
+    return baseline, maximum
+
+
+def validate_config(config):
+    require_mapping(config, "config")
+    if config.get("schema_version") != 1:
+        raise BudgetError("unsupported kernel budget schema")
+
+    toolchain = require_mapping(
+        config.get("canonical_toolchain"), "canonical_toolchain"
+    )
+    for name in (
+        "prefix",
+        "gcc_version",
+        "gcc_package",
+        "gcc_package_version",
+        "binutils_version",
+        "binutils_package",
+        "binutils_package_version",
+        "init_proc",
+        "log_level",
+    ):
+        if not isinstance(toolchain.get(name), str) or not toolchain[name]:
+            raise BudgetError(f"canonical_toolchain.{name} must be a string")
+    require_string_list(toolchain, "cflags")
+    require_string_list(toolchain, "ldflags")
+
+    source = require_mapping(config.get("kernel_source"), "kernel_source")
+    include_globs = require_string_list(source, "include_globs")
+    missing_source_globs = REQUIRED_KERNEL_SOURCE_GLOBS - set(include_globs)
+    if missing_source_globs:
+        raise BudgetError(
+            "kernel_source.include_globs omits required source inventory: "
+            + ", ".join(sorted(missing_source_globs))
+        )
+    exclude_paths = source.get("exclude_paths")
+    if not isinstance(exclude_paths, list) or any(
+        not isinstance(item, str) or not item for item in exclude_paths
+    ):
+        raise BudgetError("exclude_paths must be a string array")
+    validate_pair(source, "baseline_lines", "max_lines", integer=True)
+
+    image = require_mapping(config.get("kernel_image"), "kernel_image")
+    validate_pair(
+        image,
+        "baseline_stripped_elf_bytes",
+        "max_stripped_elf_bytes",
+        integer=True,
+    )
+    validate_pair(
+        image,
+        "baseline_raw_binary_bytes",
+        "max_raw_binary_bytes",
+        integer=True,
+    )
+
+    runtime = require_mapping(config.get("kernel_runtime"), "kernel_runtime")
+    for section in ("text", "data", "bss", "total"):
+        validate_pair(
+            runtime,
+            f"baseline_{section}_bytes",
+            f"max_{section}_bytes",
+            integer=True,
+        )
+
+    proc = require_mapping(config.get("struct_proc"), "struct_proc")
+    if not isinstance(proc.get("symbol"), str) or not proc["symbol"]:
+        raise BudgetError("struct_proc.symbol must be a non-empty string")
+    validate_pair(proc, "baseline_bytes", "max_bytes", integer=True)
+
+    sidecar = require_mapping(
+        config.get("agent_context_sidecar"), "agent_context_sidecar"
+    )
+    for name in (
+        "per_process",
+        "pool",
+        "ordinary_pool",
+        "reserved_pool",
+        "domain_ordinary",
+        "domain_reserved",
+    ):
+        symbol_name = f"{name}_symbol"
+        if (
+            not isinstance(sidecar.get(symbol_name), str)
+            or not sidecar[symbol_name]
+        ):
+            raise BudgetError(
+                f"agent_context_sidecar.{symbol_name} must be a string"
+            )
+        validate_pair(
+            sidecar,
+            f"baseline_{name}_bytes",
+            f"max_{name}_bytes",
+            integer=True,
+        )
+
+    agent_state = require_mapping(
+        config.get("agent_state_pages"), "agent_state_pages"
+    )
+    for name in (
+        "per_process",
+        "pool",
+        "ordinary_pool",
+        "reserved_pool",
+        "domain_ordinary",
+        "domain_reserved",
+    ):
+        symbol_name = f"{name}_symbol"
+        if (
+            not isinstance(agent_state.get(symbol_name), str)
+            or not agent_state[symbol_name]
+        ):
+            raise BudgetError(
+                f"agent_state_pages.{symbol_name} must be a string"
+            )
+        validate_pair(
+            agent_state,
+            f"baseline_{name}_bytes",
+            f"max_{name}_bytes",
+            integer=True,
+        )
+
+    tests = require_mapping(config.get("agent_test_suite"), "agent_test_suite")
+    require_string_list(tests, "expected_cases")
+    if len(set(tests["expected_cases"])) != len(tests["expected_cases"]):
+        raise BudgetError("agent_test_suite.expected_cases contains duplicates")
+    if tuple(tests["expected_cases"]) != REQUIRED_AGENT_TEST_CASES:
+        raise BudgetError(
+            "agent_test_suite.expected_cases must match the required "
+            "16-case regression contract"
+        )
+    validate_pair(tests, "baseline_seconds", "max_seconds")
+    calibration_status = tests.get("calibration_status")
+    if calibration_status not in (
+        "calibrated_full_suite",
+        "provisional_requires_full_suite",
+    ):
+        raise BudgetError(
+            "agent_test_suite.calibration_status is not recognized"
+        )
+    if calibration_status == "calibrated_full_suite":
+        runner_tag = tests.get("runner_tag")
+        if (
+            not isinstance(runner_tag, str)
+            or not re.fullmatch(r"[A-Za-z0-9_.-]+", runner_tag)
+        ):
+            raise BudgetError(
+                "agent_test_suite.runner_tag must be a GitLab runner tag"
+            )
+        runner = require_mapping(
+            tests.get("runner_profile"), "agent_test_suite.runner_profile"
+        )
+        for name in ("cpu", "virtualization", "qemu_version"):
+            if not isinstance(runner.get(name), str) or not runner[name]:
+                raise BudgetError(
+                    f"agent_test_suite.runner_profile.{name} must be a string"
+                )
+        samples = tests.get("calibration_samples")
+        if not isinstance(samples, list) or len(samples) < 3:
+            raise BudgetError(
+                "calibrated Agent duration requires at least three samples"
+            )
+        sample_ids = set()
+        totals = []
+        for index, sample in enumerate(samples):
+            sample_name = f"agent_test_suite.calibration_samples[{index}]"
+            sample = require_mapping(sample, sample_name)
+            sample_id = sample.get("sample_id")
+            if (
+                not isinstance(sample_id, str)
+                or not re.fullmatch(r"[A-Za-z0-9_.-]+", sample_id)
+            ):
+                raise BudgetError(
+                    f"{sample_name}.sample_id must be an audit identifier"
+                )
+            if sample_id in sample_ids:
+                raise BudgetError("Agent calibration sample ids must be unique")
+            sample_ids.add(sample_id)
+            totals.append(
+                require_positive_number(sample, "total_seconds")
+            )
+        median = statistics.median(totals)
+        if not math.isclose(
+            tests["baseline_seconds"],
+            median,
+            rel_tol=1e-6,
+            abs_tol=CALIBRATION_SECONDS_TOLERANCE,
+        ):
+            raise BudgetError(
+                "Agent duration baseline must match the calibration median"
+            )
+        if tests["max_seconds"] < max(totals):
+            raise BudgetError(
+                "Agent duration limit does not cover every calibration sample"
+            )
+        if tests["max_seconds"] > tests["baseline_seconds"] * 1.10:
+            raise BudgetError(
+                "Agent duration limit exceeds 110% of the calibration median"
+            )
+
+    stack = require_mapping(config.get("kernel_stack"), "kernel_stack")
+    validate_pair(
+        stack, "baseline_required_bytes", "max_required_bytes", integer=True
+    )
+    validate_pair(
+        stack,
+        "baseline_boot_required_bytes",
+        "max_boot_required_bytes",
+        integer=True,
+    )
+    for name in (
+        "boot_root",
+        "boot_stack_start_symbol",
+        "boot_stack_end_symbol",
+    ):
+        if (
+            not isinstance(stack.get(name), str)
+            or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", stack[name])
+        ):
+            raise BudgetError(f"kernel_stack.{name} must be a symbol name")
+    if stack["boot_stack_start_symbol"] == stack["boot_stack_end_symbol"]:
+        raise BudgetError("kernel stack boundary symbols must be distinct")
+    if (
+        not isinstance(stack.get("virtual_capacity_symbol"), str)
+        or not stack["virtual_capacity_symbol"]
+    ):
+        raise BudgetError(
+            "kernel_stack.virtual_capacity_symbol must be a string"
+        )
+    validate_pair(
+        stack,
+        "baseline_virtual_capacity_bytes",
+        "max_virtual_capacity_bytes",
+        integer=True,
+    )
+    if (
+        not isinstance(stack.get("reserved_physical_pool_symbol"), str)
+        or not stack["reserved_physical_pool_symbol"]
+    ):
+        raise BudgetError(
+            "kernel_stack.reserved_physical_pool_symbol must be a string"
+        )
+    validate_pair(
+        stack,
+        "baseline_reserved_physical_pool_bytes",
+        "max_reserved_physical_pool_bytes",
+        integer=True,
+    )
+    for name in (
+        "stack_size_bytes",
+        "boot_stack_size_bytes",
+        "guard_size_bytes",
+        "safety_margin_bytes",
+        "interrupt_entry_bytes",
+    ):
+        require_positive_number(stack, name, integer=True)
+    require_string_list(stack, "stack_boundaries")
+    require_string_list(stack, "allowed_indirect_callers")
+    require_string_list(stack, "recursion_bounds")
+    if stack["max_required_bytes"] > stack["stack_size_bytes"]:
+        raise BudgetError("kernel stack growth limit exceeds the configured stack")
+    if stack["max_boot_required_bytes"] > stack["boot_stack_size_bytes"]:
+        raise BudgetError(
+            "boot stack growth limit exceeds the configured stack"
+        )
+
+    modules = require_mapping(config.get("agent_modules"), "agent_modules")
+    entries = modules.get("modules")
+    if not isinstance(entries, list) or not entries:
+        raise BudgetError("agent_modules.modules must be a non-empty array")
+    names = set()
+    paths = set()
+    object_paths = set()
+    for index, entry in enumerate(entries):
+        entry_name = f"agent_modules.modules[{index}]"
+        entry = require_mapping(entry, entry_name)
+        name = entry.get("name")
+        if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9_]+", name):
+            raise BudgetError(f"{entry_name}.name must be a module identifier")
+        if name in names:
+            raise BudgetError(f"duplicate Agent module name: {name}")
+        names.add(name)
+        for field in ("source_path", "object_path"):
+            value = entry.get(field)
+            if (
+                not isinstance(value, str)
+                or not value
+                or Path(value).is_absolute()
+                or ".." in Path(value).parts
+            ):
+                raise BudgetError(f"{entry_name}.{field} must be a relative path")
+        if entry["source_path"] in paths:
+            raise BudgetError(
+                f"duplicate Agent module source: {entry['source_path']}"
+            )
+        paths.add(entry["source_path"])
+        if entry["object_path"] in object_paths:
+            raise BudgetError(
+                f"duplicate Agent module object: {entry['object_path']}"
+            )
+        object_paths.add(entry["object_path"])
+        validate_pair(
+            entry, "baseline_lines", "max_lines", integer=True
+        )
+        prefixes = require_string_array(entry, "allowed_global_prefixes")
+        symbols = require_string_array(entry, "allowed_global_symbols")
+        readonly = require_string_array(entry, "allowed_readonly_symbols")
+        dependencies = require_string_array(entry, "allowed_dependencies")
+        bridge_dependencies = require_string_array(
+            entry, "allowed_bridge_dependencies"
+        )
+        if not prefixes and not symbols:
+            raise BudgetError(
+                f"{entry_name} must allow at least one global symbol"
+            )
+        if any(
+            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value)
+            for value in prefixes + symbols
+        ):
+            raise BudgetError(
+                f"{entry_name} global symbol policy is not an identifier"
+            )
+        if any(
+            not is_controlled_agent_symbol(value)
+            for value in prefixes + symbols
+        ):
+            raise BudgetError(
+                f"{entry_name} global symbols must use a controlled namespace"
+            )
+        namespace_roots = {
+            "resource_controller": ("resource_",),
+            "workflow_lifecycle": ("workflow_lifecycle_",),
+        }.get(name, ("agent_", "sys_"))
+        if any(
+            not prefix.endswith("_")
+            or not prefix.startswith(namespace_roots)
+            for prefix in prefixes
+        ):
+            raise BudgetError(
+                f"{entry_name} global prefixes do not belong to the module"
+            )
+        if (
+            len(set(prefixes)) != len(prefixes)
+            or len(set(symbols)) != len(symbols)
+            or len(set(readonly)) != len(readonly)
+            or len(set(dependencies)) != len(dependencies)
+            or len(set(bridge_dependencies)) != len(bridge_dependencies)
+        ):
+            raise BudgetError(f"{entry_name} contains duplicate policy entries")
+        if any(symbol not in symbols for symbol in readonly):
+            raise BudgetError(
+                f"{entry_name} read-only symbols must be exact global symbols"
+            )
+
+    exact_owners = {}
+    prefix_owners = []
+    for entry in entries:
+        owner = entry["name"]
+        for symbol in entry["allowed_global_symbols"]:
+            previous_owner = exact_owners.get(symbol)
+            if previous_owner is not None:
+                raise BudgetError(
+                    "duplicate Agent module exact export owner: "
+                    f"{previous_owner}:{symbol} and {owner}:{symbol}"
+                )
+            exact_owners[symbol] = owner
+        for prefix in entry["allowed_global_prefixes"]:
+            for previous_prefix, previous_owner in prefix_owners:
+                if (
+                    prefix.startswith(previous_prefix)
+                    or previous_prefix.startswith(prefix)
+                ):
+                    raise BudgetError(
+                        "overlapping Agent module export prefixes: "
+                        f"{previous_owner}:{previous_prefix} and "
+                        f"{owner}:{prefix}"
+                    )
+            prefix_owners.append((prefix, owner))
+
+    for symbol, exact_owner in exact_owners.items():
+        for prefix, prefix_owner in prefix_owners:
+            if exact_owner != prefix_owner and symbol.startswith(prefix):
+                raise BudgetError(
+                    "ambiguous Agent module export owner: "
+                    f"{exact_owner}:{symbol} is covered by "
+                    f"{prefix_owner}:{prefix}"
+                )
+
+    for index, entry in enumerate(entries):
+        unknown = set(entry["allowed_dependencies"]) - names
+        if entry["name"] in entry["allowed_dependencies"]:
+            raise BudgetError(
+                f"Agent module {entry['name']} depends on itself"
+            )
+        if unknown:
+            raise BudgetError(
+                f"Agent module {entry['name']} has unknown dependencies: "
+                f"{sorted(unknown)!r}"
+            )
+    required_modules = {
+        "facade",
+        "core",
+        "context",
+        "identity",
+        "ipc",
+        "lifecycle",
+        "metadata",
+        "metadata_objects",
+        "metadata_store",
+        "observe",
+        "resource_controller",
+        "workflow_lifecycle",
+    }
+    if names != required_modules:
+        raise BudgetError(
+            "agent_modules.modules inventory drift: "
+            f"missing={sorted(required_modules - names)!r}, "
+            f"extra={sorted(names - required_modules)!r}"
+        )
+    expected_sources = {
+        "facade": "os/agent.c",
+        "core": "os/agent_core.c",
+        "context": "os/agent_context.c",
+        "identity": "os/agent_identity.c",
+        "ipc": "os/agent_ipc.c",
+        "lifecycle": "os/agent_lifecycle.c",
+        "metadata": "os/agent_metadata.c",
+        "metadata_objects": "os/agent_metadata_objects.c",
+        "metadata_store": "os/agent_metadata_store.c",
+        "observe": "os/agent_observe.c",
+        "resource_controller": "os/resource_controller.c",
+        "workflow_lifecycle": "os/workflow_lifecycle.c",
+    }
+    for entry in entries:
+        expected_source = expected_sources[entry["name"]]
+        expected_object = "build/" + expected_source.removesuffix(".c") + ".o"
+        if (
+            entry["source_path"] != expected_source
+            or entry["object_path"] != expected_object
+        ):
+            raise BudgetError(
+                f"Agent module {entry['name']} path drift: expected "
+                f"{expected_source} and {expected_object}"
+            )
+
+    bridges = modules.get("integration_bridges")
+    if not isinstance(bridges, list) or not bridges:
+        raise BudgetError(
+            "agent_modules.integration_bridges must be a non-empty array"
+        )
+    bridge_names = set()
+    bridge_paths = set()
+    for index, bridge in enumerate(bridges):
+        label = f"agent_modules.integration_bridges[{index}]"
+        bridge = require_mapping(bridge, label)
+        name = bridge.get("name")
+        if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9_]+", name):
+            raise BudgetError(f"{label}.name must be a bridge identifier")
+        if name in names or name in bridge_names:
+            raise BudgetError(f"duplicate Agent integration node name: {name}")
+        bridge_names.add(name)
+        object_path = bridge.get("object_path")
+        if (
+            not isinstance(object_path, str)
+            or not object_path
+            or Path(object_path).is_absolute()
+            or ".." in Path(object_path).parts
+            or Path(object_path).parent.as_posix() != "build/os"
+            or Path(object_path).suffix != ".o"
+        ):
+            raise BudgetError(
+                f"{label}.object_path must be a build/os object path"
+            )
+        if object_path in object_paths or object_path in bridge_paths:
+            raise BudgetError(
+                f"duplicate Agent integration object: {object_path}"
+            )
+        bridge_paths.add(object_path)
+        symbols = require_string_array(bridge, "allowed_global_symbols")
+        readonly = require_string_array(bridge, "allowed_readonly_symbols")
+        dependencies = require_string_array(bridge, "allowed_dependencies")
+        if (
+            len(set(symbols)) != len(symbols)
+            or len(set(readonly)) != len(readonly)
+            or len(set(dependencies)) != len(dependencies)
+        ):
+            raise BudgetError(f"{label} contains duplicate policy entries")
+        if any(
+            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", symbol)
+            or not is_controlled_agent_symbol(symbol)
+            for symbol in symbols
+        ):
+            raise BudgetError(
+                f"{label} global symbols must use a controlled namespace"
+            )
+        if any(symbol not in symbols for symbol in readonly):
+            raise BudgetError(
+                f"{label} read-only symbols must be exact global symbols"
+            )
+
+    for entry in entries:
+        unknown = set(entry["allowed_bridge_dependencies"]) - bridge_names
+        if unknown:
+            raise BudgetError(
+                f"Agent module {entry['name']} has unknown integration "
+                f"dependencies: {sorted(unknown)!r}"
+            )
+    integration_names = names | bridge_names
+    for bridge in bridges:
+        dependencies = set(bridge["allowed_dependencies"])
+        unknown = dependencies - integration_names
+        if bridge["name"] in dependencies:
+            raise BudgetError(
+                f"Agent integration bridge {bridge['name']} depends on itself"
+            )
+        if unknown:
+            raise BudgetError(
+                f"Agent integration bridge {bridge['name']} has unknown "
+                f"dependencies: {sorted(unknown)!r}"
+            )
+
+    max_scc_size = modules.get("max_scc_size")
+    if (
+        isinstance(max_scc_size, bool)
+        or not isinstance(max_scc_size, int)
+        or max_scc_size < 1
+    ):
+        raise BudgetError("agent_modules.max_scc_size must be a positive integer")
+    if max_scc_size != REQUIRED_AGENT_MAX_SCC_SIZE:
+        raise BudgetError(
+            "agent_modules.max_scc_size must preserve the architectural "
+            f"limit {REQUIRED_AGENT_MAX_SCC_SIZE}"
+        )
+    allowed_sccs = modules.get("allowed_sccs")
+    if not isinstance(allowed_sccs, list):
+        raise BudgetError("agent_modules.allowed_sccs must be an array")
+    normalized_sccs = []
+    members = set()
+    for index, component in enumerate(allowed_sccs):
+        label = f"agent_modules.allowed_sccs[{index}]"
+        if (
+            not isinstance(component, list)
+            or len(component) < 2
+            or any(not isinstance(name, str) for name in component)
+            or component != sorted(component)
+            or len(set(component)) != len(component)
+        ):
+            raise BudgetError(
+                f"{label} must be a sorted array of distinct module names"
+            )
+        unknown = set(component) - names
+        if unknown:
+            raise BudgetError(f"{label} has unknown modules: {sorted(unknown)!r}")
+        overlap = members & set(component)
+        if overlap:
+            raise BudgetError(
+                f"{label} overlaps another allowed SCC: {sorted(overlap)!r}"
+            )
+        members.update(component)
+        normalized_sccs.append(frozenset(component))
+    if len(set(normalized_sccs)) != len(normalized_sccs):
+        raise BudgetError("agent_modules.allowed_sccs contains duplicates")
+    if set(normalized_sccs) != REQUIRED_AGENT_ALLOWED_SCCS:
+        raise BudgetError(
+            "agent_modules.allowed_sccs must match the reviewed "
+            "architectural cycles"
+        )
+    expected_graph = {
+        entry["name"]: set(entry["allowed_dependencies"]) for entry in entries
+    }
+    validate_module_dependency_graph(
+        expected_graph,
+        expected_graph,
+        normalized_sccs,
+        max_scc_size,
+        "configured Agent module graph",
+    )
+
+    integration_max_scc_size = modules.get("integration_max_scc_size")
+    if (
+        isinstance(integration_max_scc_size, bool)
+        or not isinstance(integration_max_scc_size, int)
+        or integration_max_scc_size < 1
+    ):
+        raise BudgetError(
+            "agent_modules.integration_max_scc_size must be a positive integer"
+        )
+    if integration_max_scc_size != REQUIRED_AGENT_MAX_SCC_SIZE:
+        raise BudgetError(
+            "agent_modules.integration_max_scc_size must preserve the "
+            f"architectural limit {REQUIRED_AGENT_MAX_SCC_SIZE}"
+        )
+    integration_allowed_sccs = modules.get("integration_allowed_sccs")
+    if not isinstance(integration_allowed_sccs, list):
+        raise BudgetError(
+            "agent_modules.integration_allowed_sccs must be an array"
+        )
+    normalized_integration_sccs = []
+    integration_members = set()
+    for index, component in enumerate(integration_allowed_sccs):
+        label = f"agent_modules.integration_allowed_sccs[{index}]"
+        if (
+            not isinstance(component, list)
+            or len(component) < 2
+            or any(not isinstance(name, str) for name in component)
+            or component != sorted(component)
+            or len(set(component)) != len(component)
+        ):
+            raise BudgetError(
+                f"{label} must be a sorted array of distinct node names"
+            )
+        unknown = set(component) - integration_names
+        if unknown:
+            raise BudgetError(
+                f"{label} has unknown nodes: {sorted(unknown)!r}"
+            )
+        overlap = integration_members & set(component)
+        if overlap:
+            raise BudgetError(
+                f"{label} overlaps another allowed SCC: {sorted(overlap)!r}"
+            )
+        integration_members.update(component)
+        normalized_integration_sccs.append(frozenset(component))
+    if len(set(normalized_integration_sccs)) != len(
+        normalized_integration_sccs
+    ):
+        raise BudgetError(
+            "agent_modules.integration_allowed_sccs contains duplicates"
+        )
+    if (
+        set(normalized_integration_sccs)
+        != REQUIRED_AGENT_INTEGRATION_ALLOWED_SCCS
+    ):
+        raise BudgetError(
+            "agent_modules.integration_allowed_sccs must match the "
+            "reviewed architectural cycles"
+        )
+    expected_integration_graph = {
+        entry["name"]: set(entry["allowed_dependencies"])
+        | set(entry["allowed_bridge_dependencies"])
+        for entry in entries
+    }
+    expected_integration_graph.update(
+        {
+            bridge["name"]: set(bridge["allowed_dependencies"])
+            for bridge in bridges
+        }
+    )
+    validate_module_dependency_graph(
+        expected_integration_graph,
+        expected_integration_graph,
+        normalized_integration_sccs,
+        integration_max_scc_size,
+        "configured Agent integration graph",
+    )
+
+    prefixes = require_string_list(
+        modules, "forbidden_core_authority_symbol_prefixes"
+    )
+    symbols = require_string_array(
+        modules, "forbidden_core_authority_symbols"
+    )
+    allowlist = require_string_array(
+        modules, "allowed_core_facade_symbols"
+    )
+    if (
+        len(set(prefixes)) != len(prefixes)
+        or len(set(symbols)) != len(symbols)
+        or len(set(allowlist)) != len(allowlist)
+    ):
+        raise BudgetError("agent_modules core symbol policy contains duplicates")
+    if any(
+        not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value)
+        for value in prefixes + symbols + allowlist
+    ):
+        raise BudgetError("agent_modules core symbol policy is not an identifier")
+    if any(
+        not prefix.endswith("_")
+        or not prefix.startswith(("agent_", "sys_"))
+        for prefix in prefixes
+    ):
+        raise BudgetError(
+            "agent_modules forbidden prefixes must be Agent namespaces"
+        )
+    if any(
+        not (
+            any(symbol.startswith(prefix) for prefix in prefixes)
+            or symbol in symbols
+        )
+        for symbol in allowlist
+    ):
+        raise BudgetError(
+            "agent_modules facade allowlist must name forbidden authority"
+        )
+
+
+def load_config(path):
+    def reject_constant(value):
+        raise BudgetError(f"non-finite JSON number is forbidden: {value}")
+
+    try:
+        with Path(path).open(encoding="utf-8") as stream:
+            config = json.load(stream, parse_constant=reject_constant)
+    except (OSError, json.JSONDecodeError) as error:
+        raise BudgetError(f"cannot load budget config: {error}") from error
+    validate_config(config)
+    return config
+
+
+def physical_line_count(data):
+    if not data:
+        return 0
+    return data.count(b"\n") + (0 if data.endswith(b"\n") else 1)
+
+
+def measure_source_lines(root, include_globs, exclude_paths):
+    root = Path(root).resolve()
+    excluded = {Path(path).as_posix() for path in exclude_paths}
+    paths = set()
+    for pattern in include_globs:
+        for path in root.glob(pattern):
+            relative = path.relative_to(root).as_posix()
+            if path.is_file() and relative not in excluded:
+                paths.add(path)
+    if not paths:
+        raise BudgetError("kernel source globs matched no files")
+    total = 0
+    for path in sorted(paths):
+        try:
+            total += physical_line_count(path.read_bytes())
+        except OSError as error:
+            raise BudgetError(f"cannot read kernel source {path}: {error}") from error
+    return total, len(paths)
+
+
+def measure_file_lines(root, relative_path):
+    path = (Path(root).resolve() / relative_path).resolve()
+    try:
+        path.relative_to(Path(root).resolve())
+    except ValueError as error:
+        raise BudgetError(f"source path escapes repository: {relative_path}") from error
+    try:
+        return physical_line_count(path.read_bytes())
+    except OSError as error:
+        raise BudgetError(f"cannot read source {path}: {error}") from error
+
+
+def read_agent_timing_file(path, expected_cases):
+    try:
+        records = []
+        for line in Path(path).read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            fields = line.split()
+            if len(fields) != 2:
+                raise ValueError(f"invalid timing row: {line!r}")
+            records.append((fields[0], float(fields[1])))
+    except (OSError, ValueError) as error:
+        raise BudgetError(f"cannot read Agent timing file: {error}") from error
+    if not records:
+        raise BudgetError("Agent timing file is empty")
+    if any(not math.isfinite(value) or value <= 0 for _, value in records):
+        raise BudgetError("Agent timing rows must be finite and positive")
+    actual_cases = [name for name, _ in records]
+    if actual_cases != expected_cases:
+        raise BudgetError(
+            f"Agent timing cases {actual_cases!r}, expected {expected_cases!r}"
+        )
+    return records, sum(value for _, value in records)
+
+
+def run_tool(command, description):
+    try:
+        result = subprocess.run(
+            command, check=False, capture_output=True, text=True
+        )
+    except OSError as error:
+        raise BudgetError(f"cannot run {description}: {error}") from error
+    if result.returncode != 0:
+        details = result.stderr.strip() or result.stdout.strip()
+        raise BudgetError(f"{description} failed: {details}")
+    return result.stdout
+
+
+def measure_kernel_images(kernel, objcopy):
+    kernel = Path(kernel)
+    if not kernel.is_file():
+        raise BudgetError(f"kernel ELF is missing: {kernel}")
+    with tempfile.TemporaryDirectory(prefix="agentos-kernel-budget-") as temp:
+        temp_dir = Path(temp)
+        stripped = temp_dir / "kernel.stripped.elf"
+        raw = temp_dir / "kernel.bin"
+        run_tool(
+            [
+                objcopy,
+                "--strip-all",
+                "--remove-section=.comment",
+                "--remove-section=.note.gnu.build-id",
+                str(kernel),
+                str(stripped),
+            ],
+            "ELF normalization",
+        )
+        run_tool(
+            [objcopy, "-O", "binary", str(kernel), str(raw)],
+            "raw kernel extraction",
+        )
+        return stripped.stat().st_size, raw.stat().st_size
+
+
+def parse_size_output(output):
+    matches = []
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) < 6:
+            continue
+        try:
+            text_size, data_size, bss_size, total_size = (
+                int(value, 10) for value in fields[:4]
+            )
+        except ValueError:
+            continue
+        if text_size + data_size + bss_size != total_size:
+            raise BudgetError("target size output has an inconsistent total")
+        matches.append((text_size, data_size, bss_size, total_size))
+    if len(matches) != 1:
+        raise BudgetError(f"expected one target size row, found {len(matches)}")
+    return matches[0]
+
+
+def measure_kernel_runtime(kernel, size):
+    output = run_tool([size, "-B", str(kernel)], "kernel runtime size inspection")
+    return parse_size_output(output)
+
+
+def parse_nm_symbol_size(output, symbol):
+    matches = []
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) >= 4 and fields[-1] == symbol:
+            try:
+                matches.append(int(fields[-3], 16))
+            except ValueError as error:
+                raise BudgetError(f"invalid nm size for {symbol}") from error
+    if len(matches) != 1:
+        raise BudgetError(f"expected one {symbol} symbol, found {len(matches)}")
+    return matches[0]
+
+
+def parse_nm_symbol_address(output, symbol):
+    matches = []
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) >= 3 and fields[-1] == symbol:
+            try:
+                matches.append(int(fields[0], 16))
+            except ValueError as error:
+                raise BudgetError(f"invalid nm address for {symbol}") from error
+    if len(matches) != 1:
+        raise BudgetError(f"expected one {symbol} symbol, found {len(matches)}")
+    return matches[0]
+
+
+def parse_nm_defined_symbols(output):
+    return set(parse_nm_defined_records(output))
+
+
+def parse_nm_defined_records(output):
+    symbols = {}
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) >= 3 and len(fields[-2]) == 1:
+            symbols[fields[-1]] = fields[-2]
+    return symbols
+
+
+def forbidden_symbols(symbols, prefixes, allowlist):
+    allowed = set(allowlist)
+    return sorted(
+        symbol
+        for symbol in symbols
+        if any(symbol.startswith(prefix) for prefix in prefixes)
+        and symbol not in allowed
+    )
+
+
+def parse_nm_undefined_symbols(output):
+    return {
+        fields[-1]
+        for line in output.splitlines()
+        if (fields := line.split())
+    }
+
+
+def symbol_allowed(symbol, prefixes, exact_symbols):
+    return symbol in exact_symbols or any(
+        symbol.startswith(prefix) for prefix in prefixes
+    )
+
+
+def invalid_global_object_exports(records, allowed_readonly):
+    readonly = set(allowed_readonly)
+    return sorted(
+        f"{symbol} ({kind})"
+        for symbol, kind in records.items()
+        if kind.upper() not in ("T", "W")
+        and not (kind.upper() == "R" and symbol in readonly)
+    )
+
+
+def is_controlled_agent_symbol(symbol):
+    return (
+        symbol in CONTROLLED_AGENT_EXACT_SYMBOLS
+        or symbol.startswith(CONTROLLED_AGENT_SYMBOL_PREFIXES)
+    )
+
+
+def controlled_defined_records(records):
+    return {
+        symbol: kind
+        for symbol, kind in records.items()
+        if is_controlled_agent_symbol(symbol)
+    }
+
+
+def controlled_undefined_symbols(symbols):
+    return {symbol for symbol in symbols if is_controlled_agent_symbol(symbol)}
+
+
+def validate_integration_bridge_exports(
+    name, records, allowed_symbols, allowed_readonly=()
+):
+    controlled = controlled_defined_records(records)
+    writable = invalid_global_object_exports(controlled, allowed_readonly)
+    if writable:
+        raise BudgetError(
+            f"Agent integration bridge {name} exports writable controlled "
+            "data: " + ", ".join(writable)
+        )
+    actual = set(controlled)
+    expected = set(allowed_symbols)
+    if actual != expected:
+        raise BudgetError(
+            f"Agent integration bridge {name} controlled export drift: "
+            f"missing={sorted(expected - actual)!r}, "
+            f"unexpected={sorted(actual - expected)!r}"
+        )
+    return actual
+
+
+def validate_integration_bridge_inventory(discovered_paths, configured_paths):
+    discovered = set(discovered_paths)
+    configured = set(configured_paths)
+    unregistered = sorted(discovered - configured)
+    stale = sorted(configured - discovered)
+    if unregistered or stale:
+        raise BudgetError(
+            "Agent integration bridge inventory drift: "
+            f"unregistered={unregistered!r}, stale={stale!r}"
+        )
+
+
+def build_controlled_dependency_graph(defined_by_node, undefined_by_node):
+    if set(defined_by_node) != set(undefined_by_node):
+        raise BudgetError("controlled dependency graph node inventory drift")
+    symbol_owner = {}
+    for node, symbols in defined_by_node.items():
+        for symbol in symbols:
+            if not is_controlled_agent_symbol(symbol):
+                continue
+            previous = symbol_owner.get(symbol)
+            if previous is not None:
+                raise BudgetError(
+                    f"controlled Agent symbol {symbol} is owned by both "
+                    f"{previous} and {node}"
+                )
+            symbol_owner[symbol] = node
+    graph = {}
+    for node, symbols in undefined_by_node.items():
+        dependencies = set()
+        for symbol in controlled_undefined_symbols(symbols):
+            owner = symbol_owner.get(symbol)
+            if owner is None:
+                raise BudgetError(
+                    f"controlled Agent symbol {symbol} referenced by {node} "
+                    "has no registered owner"
+                )
+            if owner != node:
+                dependencies.add(owner)
+        graph[node] = dependencies
+    return graph
+
+
+def strongly_connected_components(graph):
+    index = 0
+    indices = {}
+    lowlinks = {}
+    stack = []
+    on_stack = set()
+    components = []
+
+    def visit(node):
+        nonlocal index
+        indices[node] = index
+        lowlinks[node] = index
+        index += 1
+        stack.append(node)
+        on_stack.add(node)
+        for target in sorted(graph[node]):
+            if target not in indices:
+                visit(target)
+                lowlinks[node] = min(lowlinks[node], lowlinks[target])
+            elif target in on_stack:
+                lowlinks[node] = min(lowlinks[node], indices[target])
+        if lowlinks[node] != indices[node]:
+            return
+        component = set()
+        while True:
+            member = stack.pop()
+            on_stack.remove(member)
+            component.add(member)
+            if member == node:
+                break
+        components.append(frozenset(component))
+
+    for node in sorted(graph):
+        if node not in indices:
+            visit(node)
+    return components
+
+
+def validate_module_dependency_graph(
+    actual, expected, allowed_sccs, max_scc_size, label
+):
+    if set(actual) != set(expected):
+        raise BudgetError(f"{label} module inventory does not match policy")
+    for name in sorted(expected):
+        if set(actual[name]) != set(expected[name]):
+            missing = sorted(set(expected[name]) - set(actual[name]))
+            stale = sorted(set(actual[name]) - set(expected[name]))
+            raise BudgetError(
+                f"{label} dependency drift for {name}: "
+                f"missing={missing!r}, unexpected={stale!r}"
+            )
+    cyclic = {
+        component
+        for component in strongly_connected_components(actual)
+        if len(component) > 1
+    }
+    oversized = sorted(
+        sorted(component)
+        for component in cyclic
+        if len(component) > max_scc_size
+    )
+    if oversized:
+        raise BudgetError(
+            f"{label} exceeds max_scc_size={max_scc_size}: {oversized!r}"
+        )
+    allowed = set(allowed_sccs)
+    if cyclic != allowed:
+        raise BudgetError(
+            f"{label} cyclic dependency drift: "
+            f"actual={sorted(sorted(c) for c in cyclic)!r}, "
+            f"allowed={sorted(sorted(c) for c in allowed)!r}"
+        )
+
+
+def measure_probe_symbol(probe, nm, symbol):
+    probe = Path(probe)
+    if not probe.is_file():
+        raise BudgetError(f"kernel layout probe is missing: {probe}")
+    output = run_tool(
+        [nm, "-S", "--defined-only", str(probe)],
+        "kernel layout probe inspection",
+    )
+    return parse_nm_symbol_size(output, symbol)
+
+
+def measure_kernel_symbol_span(kernel, nm, start_symbol, end_symbol):
+    kernel = Path(kernel)
+    if not kernel.is_file():
+        raise BudgetError(f"kernel ELF is missing: {kernel}")
+    output = run_tool(
+        [nm, "-n", "--defined-only", str(kernel)],
+        "kernel symbol boundary inspection",
+    )
+    start = parse_nm_symbol_address(output, start_symbol)
+    end = parse_nm_symbol_address(output, end_symbol)
+    if end <= start:
+        raise BudgetError(
+            f"kernel symbol span is invalid: {start_symbol}={start:#x}, "
+            f"{end_symbol}={end:#x}"
+        )
+    return end - start
+
+
+def measure_boot_entry_target(entry_source):
+    try:
+        text = Path(entry_source).read_text(encoding="utf-8")
+    except OSError as error:
+        raise BudgetError(f"cannot read boot entry source: {error}") from error
+    targets = re.findall(
+        r"^[ \t]*call[ \t]+([A-Za-z_][A-Za-z0-9_]*)"
+        r"(?:[ \t]*(?:#.*)?)?$",
+        text,
+        flags=re.MULTILINE,
+    )
+    if len(targets) != 1:
+        raise BudgetError(
+            f"expected one direct boot entry call, found {len(targets)}"
+        )
+    return targets[0]
+
+
+def check_limit(name, actual, baseline, maximum, unit, ratchet=False):
+    def display(value):
+        if isinstance(value, int):
+            return str(value)
+        return f"{value:.3f}".rstrip("0").rstrip(".")
+
+    for value in (actual, baseline, maximum):
+        if isinstance(value, float) and not math.isfinite(value):
+            raise BudgetError(f"{name} contains a non-finite measurement")
+
+    print(
+        f"[kernel-budget] {name}: actual={display(actual)}{unit} "
+        f"baseline={display(baseline)}{unit} limit={display(maximum)}{unit}"
+    )
+    if actual > maximum:
+        raise BudgetError(
+            f"{name} exceeded: {display(actual)}{unit} > "
+            f"{display(maximum)}{unit}"
+        )
+    if ratchet and actual < baseline * 0.98:
+        raise BudgetError(
+            f"{name} shrank materially: {display(actual)}{unit} < "
+            f"98% of baseline {display(baseline)}{unit}; "
+            "tighten the baseline and limit"
+        )
+
+
+def read_stack_build_config(path):
+    try:
+        lines = Path(path).read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise BudgetError(f"cannot read kernel stack build config: {error}") from error
+    actual = {}
+    for line in lines:
+        if "=" in line:
+            name, value = line.split("=", 1)
+            actual[name] = value
+    return actual
+
+
+def validate_stack_build_config(path, stack):
+    actual = read_stack_build_config(path)
+    expected = {
+        "KSTACK_SIZE_BYTES": str(stack["stack_size_bytes"]),
+        "KSTACK_BOOT_SIZE_BYTES": str(stack["boot_stack_size_bytes"]),
+        "KSTACK_BOOT_ROOT": stack["boot_root"],
+        "KSTACK_GUARD_SIZE_BYTES": str(stack["guard_size_bytes"]),
+        "KSTACK_SAFETY_MARGIN": str(stack["safety_margin_bytes"]),
+        "KERNELVEC_FRAME_SIZE_BYTES": str(stack["interrupt_entry_bytes"]),
+        "KSTACK_STACK_BOUNDARIES": " ".join(stack["stack_boundaries"]),
+        "KSTACK_INDIRECT_CALLERS": " ".join(
+            stack["allowed_indirect_callers"]
+        ),
+        "KSTACK_RECURSION_BOUNDS": " ".join(stack["recursion_bounds"]),
+    }
+    mismatches = [
+        f"{name}={actual.get(name)!r}, expected {value!r}"
+        for name, value in expected.items()
+        if actual.get(name) != value
+    ]
+    if mismatches:
+        raise BudgetError("kernel stack build config drift: " + "; ".join(mismatches))
+
+
+def validate_canonical_defines(cflags, config, expected_log):
+    tokens = shlex.split(cflags)
+    defines = set()
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "-D":
+            index += 1
+            if index >= len(tokens):
+                raise BudgetError("kernel CFLAGS ends with an incomplete -D")
+            defines.add(tokens[index])
+        elif token.startswith("-D"):
+            defines.add(token[2:])
+        index += 1
+    allowed_defines = {
+        expected_log,
+        f"KSTACK_SIZE={config['kernel_stack']['stack_size_bytes']}",
+        f"KSTACK_GUARD_SIZE={config['kernel_stack']['guard_size_bytes']}",
+        "KERNELVEC_FRAME_SIZE="
+        f"{config['kernel_stack']['interrupt_entry_bytes']}",
+    }
+    if defines != allowed_defines:
+        raise BudgetError(
+            f"non-canonical kernel preprocessor defines: {sorted(defines)!r}, "
+            f"expected {sorted(allowed_defines)!r}"
+        )
+
+
+def validate_canonical_toolchain(config, cc, objcopy, build_config, initproc):
+    canonical = config["canonical_toolchain"]
+    expected_cc = canonical["prefix"] + "gcc"
+    expected_objcopy = canonical["prefix"] + "objcopy"
+    if Path(cc).name != expected_cc or Path(objcopy).name != expected_objcopy:
+        raise BudgetError(
+            f"kernel budget requires {expected_cc} and {expected_objcopy}"
+        )
+    gcc_version = run_tool(
+        [cc, "-dumpfullversion", "-dumpversion"], "GCC version check"
+    ).strip()
+    if gcc_version != canonical["gcc_version"]:
+        raise BudgetError(
+            f"GCC version {gcc_version!r}, expected {canonical['gcc_version']!r}"
+        )
+    gcc_package_version = run_tool(
+        [
+            "dpkg-query",
+            "-W",
+            "-f=${Version}",
+            canonical["gcc_package"],
+        ],
+        "GCC package version check",
+    ).strip()
+    if gcc_package_version != canonical["gcc_package_version"]:
+        raise BudgetError(
+            f"GCC package version {gcc_package_version!r}, "
+            f"expected {canonical['gcc_package_version']!r}"
+        )
+    first_line = run_tool([objcopy, "--version"], "binutils version check").splitlines()
+    if not first_line:
+        raise BudgetError("binutils version output is empty")
+    version_match = re.search(r"([0-9]+(?:\.[0-9]+)+)\s*$", first_line[0])
+    binutils_version = version_match.group(1) if version_match else ""
+    if binutils_version != canonical["binutils_version"]:
+        raise BudgetError(
+            "binutils version "
+            f"{binutils_version!r}, expected {canonical['binutils_version']!r}"
+        )
+    binutils_package_version = run_tool(
+        [
+            "dpkg-query",
+            "-W",
+            "-f=${Version}",
+            canonical["binutils_package"],
+        ],
+        "binutils package version check",
+    ).strip()
+    if binutils_package_version != canonical["binutils_package_version"]:
+        raise BudgetError(
+            f"binutils package version {binutils_package_version!r}, "
+            f"expected {canonical['binutils_package_version']!r}"
+        )
+
+    actual_build = read_stack_build_config(build_config)
+    actual_cflags = shlex.split(actual_build.get("CFLAGS", ""))
+    if actual_cflags != canonical["cflags"]:
+        raise BudgetError(
+            f"kernel CFLAGS drift: {actual_cflags!r}, "
+            f"expected {canonical['cflags']!r}"
+        )
+    actual_ldflags = shlex.split(actual_build.get("LDFLAGS", ""))
+    if actual_ldflags != canonical["ldflags"]:
+        raise BudgetError(
+            f"kernel LDFLAGS drift: {actual_ldflags!r}, "
+            f"expected {canonical['ldflags']!r}"
+        )
+    expected_log = f"LOG_LEVEL_{canonical['log_level']}"
+    if expected_log not in actual_build.get("CFLAGS", "").split():
+        raise BudgetError(f"kernel was not built with {expected_log}")
+    validate_canonical_defines(
+        actual_build.get("CFLAGS", ""), config, expected_log
+    )
+    try:
+        initproc_text = Path(initproc).read_text(encoding="utf-8")
+    except OSError as error:
+        raise BudgetError(f"cannot read generated init process: {error}") from error
+    expected_init = f'.string "{canonical["init_proc"]}"'
+    if expected_init not in initproc_text:
+        raise BudgetError(
+            f"kernel was not built with {canonical['init_proc']} init process"
+        )
+
+
+def stack_check_command(root, config, callgraph_dir, checker):
+    stack = config["kernel_stack"]
+    command = [
+        sys.executable,
+        str(root / checker),
+        "--callgraph-dir",
+        str(root / callgraph_dir),
+        "--source-dir",
+        str(root / "os"),
+        "--stack-size",
+        str(stack["stack_size_bytes"]),
+        "--guard-size",
+        str(stack["guard_size_bytes"]),
+        "--safety-margin",
+        str(stack["safety_margin_bytes"]),
+        "--interrupt-entry",
+        str(stack["interrupt_entry_bytes"]),
+        "--required-limit",
+        str(stack["max_required_bytes"]),
+        "--required-baseline",
+        str(stack["baseline_required_bytes"]),
+        "--boot-root",
+        stack["boot_root"],
+        "--boot-stack-size",
+        str(stack["boot_stack_size_bytes"]),
+        "--boot-required-limit",
+        str(stack["max_boot_required_bytes"]),
+        "--boot-required-baseline",
+        str(stack["baseline_boot_required_bytes"]),
+    ]
+    for boundary in stack["stack_boundaries"]:
+        command.extend(("--stack-boundary", boundary))
+    for caller in stack["allowed_indirect_callers"]:
+        command.extend(("--allow-indirect-from", caller))
+    for bound in stack["recursion_bounds"]:
+        command.extend(("--recursion-bound", bound))
+    return command
+
+
+def check_kernel(args, config):
+    if not args.cc or not args.objcopy or not args.nm or not args.size:
+        raise BudgetError("--cc, --objcopy, --nm, and --size are required")
+    root = Path(args.root).resolve()
+    build_config = root / args.stack_build_config
+    validate_canonical_toolchain(
+        config,
+        args.cc,
+        args.objcopy,
+        build_config,
+        root / "os" / "initproc.S",
+    )
+    source = config["kernel_source"]
+    lines, file_count = measure_source_lines(
+        root, source["include_globs"], source["exclude_paths"]
+    )
+    check_limit(
+        f"kernel source ({file_count} files)",
+        lines,
+        source["baseline_lines"],
+        source["max_lines"],
+        " lines",
+        ratchet=True,
+    )
+
+    image = config["kernel_image"]
+    stripped_size, raw_size = measure_kernel_images(
+        root / args.kernel, args.objcopy
+    )
+    check_limit(
+        "stripped kernel ELF",
+        stripped_size,
+        image["baseline_stripped_elf_bytes"],
+        image["max_stripped_elf_bytes"],
+        " bytes",
+        ratchet=True,
+    )
+    check_limit(
+        "raw kernel image",
+        raw_size,
+        image["baseline_raw_binary_bytes"],
+        image["max_raw_binary_bytes"],
+        " bytes",
+        ratchet=True,
+    )
+
+    runtime = config["kernel_runtime"]
+    text_size, data_size, bss_size, total_size = measure_kernel_runtime(
+        root / args.kernel, args.size
+    )
+    for name, actual in (
+        ("text", text_size),
+        ("data", data_size),
+        ("bss", bss_size),
+        ("total", total_size),
+    ):
+        check_limit(
+            f"kernel runtime {name}",
+            actual,
+            runtime[f"baseline_{name}_bytes"],
+            runtime[f"max_{name}_bytes"],
+            " bytes",
+            ratchet=True,
+        )
+
+    proc = config["struct_proc"]
+    proc_size = measure_probe_symbol(
+        root / args.struct_probe, args.nm, proc["symbol"]
+    )
+    check_limit(
+        "struct proc",
+        proc_size,
+        proc["baseline_bytes"],
+        proc["max_bytes"],
+        " bytes",
+        ratchet=True,
+    )
+
+    sidecar = config["agent_context_sidecar"]
+    for name, label in (
+        ("per_process", "Agent context sidecar per process"),
+        ("pool", "Agent context sidecar global pool"),
+        ("ordinary_pool", "Agent context sidecar ordinary pool"),
+        ("reserved_pool", "Agent context sidecar reserved pool"),
+        ("domain_ordinary", "Agent context sidecar ordinary domain"),
+        ("domain_reserved", "Agent context sidecar reserved domain"),
+    ):
+        actual = measure_probe_symbol(
+            root / args.struct_probe, args.nm, sidecar[f"{name}_symbol"]
+        )
+        check_limit(
+            label,
+            actual,
+            sidecar[f"baseline_{name}_bytes"],
+            sidecar[f"max_{name}_bytes"],
+            " bytes",
+            ratchet=True,
+        )
+
+    agent_state = config["agent_state_pages"]
+    for name, label in (
+        ("per_process", "Agent total state per process"),
+        ("pool", "Agent total state global pool"),
+        ("ordinary_pool", "Agent total state ordinary pool"),
+        ("reserved_pool", "Agent total state reserved pool"),
+        ("domain_ordinary", "Agent total state ordinary domain"),
+        ("domain_reserved", "Agent total state reserved domain"),
+    ):
+        actual = measure_probe_symbol(
+            root / args.struct_probe, args.nm,
+            agent_state[f"{name}_symbol"]
+        )
+        check_limit(
+            label,
+            actual,
+            agent_state[f"baseline_{name}_bytes"],
+            agent_state[f"max_{name}_bytes"],
+            " bytes",
+            ratchet=True,
+        )
+
+    stack = config["kernel_stack"]
+    stack_virtual_capacity = measure_probe_symbol(
+        root / args.struct_probe, args.nm, stack["virtual_capacity_symbol"]
+    )
+    check_limit(
+        "kernel stack virtual capacity",
+        stack_virtual_capacity,
+        stack["baseline_virtual_capacity_bytes"],
+        stack["max_virtual_capacity_bytes"],
+        " bytes",
+        ratchet=True,
+    )
+    stack_reserved_physical_pool = measure_probe_symbol(
+        root / args.struct_probe,
+        args.nm,
+        stack["reserved_physical_pool_symbol"],
+    )
+    check_limit(
+        "kernel stack reserved physical pool",
+        stack_reserved_physical_pool,
+        stack["baseline_reserved_physical_pool_bytes"],
+        stack["max_reserved_physical_pool_bytes"],
+        " bytes",
+        ratchet=True,
+    )
+    boot_stack_capacity = measure_kernel_symbol_span(
+        root / args.kernel,
+        args.nm,
+        stack["boot_stack_start_symbol"],
+        stack["boot_stack_end_symbol"],
+    )
+    print(
+        "[kernel-budget] boot stack capacity: "
+        f"actual={boot_stack_capacity} bytes "
+        f"configured={stack['boot_stack_size_bytes']} bytes"
+    )
+    if boot_stack_capacity != stack["boot_stack_size_bytes"]:
+        raise BudgetError(
+            f"boot stack capacity drifted: {boot_stack_capacity} bytes != "
+            f"{stack['boot_stack_size_bytes']} bytes"
+        )
+    boot_entry_target = measure_boot_entry_target(root / "os" / "entry.S")
+    print(
+        "[kernel-budget] boot entry root: "
+        f"actual={boot_entry_target} configured={stack['boot_root']}"
+    )
+    if boot_entry_target != stack["boot_root"]:
+        raise BudgetError(
+            f"boot entry root drifted: {boot_entry_target} != "
+            f"{stack['boot_root']}"
+        )
+
+    validate_stack_build_config(build_config, stack)
+    command = stack_check_command(
+        root, config, Path(args.callgraph_dir), Path(args.stack_checker)
+    )
+    output = run_tool(command, "kernel stack budget check")
+    if output:
+        print(output, end="" if output.endswith("\n") else "\n")
+
+
+def check_agent_modules(args, config):
+    modules = config["agent_modules"]
+    if not args.nm:
+        raise BudgetError("--nm is required")
+    root = Path(args.root).resolve()
+    entries = modules["modules"]
+    defined_by_module = {}
+    symbol_owner = {}
+    for entry in entries:
+        lines = measure_file_lines(root, entry["source_path"])
+        check_limit(
+            f"Agent module {entry['name']}",
+            lines,
+            entry["baseline_lines"],
+            entry["max_lines"],
+            " lines",
+            ratchet=True,
+        )
+        object_path = root / entry["object_path"]
+        if not object_path.is_file():
+            raise BudgetError(
+                f"Agent module object is missing: {object_path}"
+            )
+        output = run_tool(
+            [args.nm, "-g", "--defined-only", str(object_path)],
+            f"Agent module {entry['name']} export inspection",
+        )
+        records = parse_nm_defined_records(output)
+        defined = set(records)
+        writable_exports = invalid_global_object_exports(
+            records, entry["allowed_readonly_symbols"]
+        )
+        if writable_exports:
+            raise BudgetError(
+                f"Agent module {entry['name']} exports writable data: "
+                + ", ".join(writable_exports)
+            )
+        bad_exports = sorted(
+            symbol
+            for symbol in defined
+            if not symbol_allowed(
+                symbol,
+                entry["allowed_global_prefixes"],
+                entry["allowed_global_symbols"],
+            )
+        )
+        if bad_exports:
+            raise BudgetError(
+                f"Agent module {entry['name']} exports unowned symbols: "
+                + ", ".join(bad_exports)
+            )
+        defined_by_module[entry["name"]] = defined
+        for symbol in defined:
+            previous = symbol_owner.get(symbol)
+            if previous is not None:
+                raise BudgetError(
+                    f"Agent global symbol {symbol} is owned by both "
+                    f"{previous} and {entry['name']}"
+                )
+            symbol_owner[symbol] = entry["name"]
+
+    actual_graph = {}
+    undefined_by_module = {}
+    expected_graph = {
+        entry["name"]: set(entry["allowed_dependencies"]) for entry in entries
+    }
+    for entry in entries:
+        object_path = root / entry["object_path"]
+        output = run_tool(
+            [args.nm, "-u", str(object_path)],
+            f"Agent module {entry['name']} dependency inspection",
+        )
+        undefined = parse_nm_undefined_symbols(output)
+        undefined_by_module[entry["name"]] = undefined
+        dependencies = set()
+        for symbol in undefined:
+            owner = symbol_owner.get(symbol)
+            if owner is not None and owner != entry["name"]:
+                dependencies.add(owner)
+        actual_graph[entry["name"]] = dependencies
+    validate_module_dependency_graph(
+        actual_graph,
+        expected_graph,
+        [frozenset(component) for component in modules["allowed_sccs"]],
+        modules["max_scc_size"],
+        "registered Agent module graph",
+    )
+    print(
+        "[kernel-budget] registered Agent module graph: exact dependencies, "
+        f"max SCC={max(len(c) for c in strongly_connected_components(actual_graph))}"
+    )
+
+    callgraph_dir = (root / args.callgraph_dir).resolve()
+    if not callgraph_dir.is_dir():
+        raise BudgetError(
+            f"Agent integration object directory is missing: {callgraph_dir}"
+        )
+    registered_paths = {
+        (root / entry["object_path"]).resolve() for entry in entries
+    }
+    discovered = {}
+    for object_path in sorted(callgraph_dir.glob("*.o")):
+        resolved = object_path.resolve()
+        if resolved in registered_paths:
+            continue
+        defined_output = run_tool(
+            [args.nm, "-g", "--defined-only", str(object_path)],
+            f"Agent integration object {object_path.name} export inspection",
+        )
+        undefined_output = run_tool(
+            [args.nm, "-u", str(object_path)],
+            f"Agent integration object {object_path.name} dependency inspection",
+        )
+        records = parse_nm_defined_records(defined_output)
+        undefined = parse_nm_undefined_symbols(undefined_output)
+        if not controlled_defined_records(records) and not (
+            controlled_undefined_symbols(undefined)
+        ):
+            continue
+        try:
+            relative_path = resolved.relative_to(root).as_posix()
+        except ValueError as error:
+            raise BudgetError(
+                f"Agent integration object escapes repository: {object_path}"
+            ) from error
+        discovered[relative_path] = (records, undefined)
+
+    bridges = modules["integration_bridges"]
+    bridge_by_path = {
+        Path(bridge["object_path"]).as_posix(): bridge for bridge in bridges
+    }
+    validate_integration_bridge_inventory(
+        discovered, bridge_by_path
+    )
+    integration_defined = {
+        name: controlled_defined_records(
+            {symbol: "T" for symbol in symbols}
+        )
+        for name, symbols in defined_by_module.items()
+    }
+    integration_undefined = dict(undefined_by_module)
+    for relative_path, bridge in bridge_by_path.items():
+        records, undefined = discovered[relative_path]
+        integration_defined[bridge["name"]] = (
+            validate_integration_bridge_exports(
+                bridge["name"],
+                records,
+                bridge["allowed_global_symbols"],
+                bridge["allowed_readonly_symbols"],
+            )
+        )
+        integration_undefined[bridge["name"]] = undefined
+    integration_graph = build_controlled_dependency_graph(
+        integration_defined, integration_undefined
+    )
+    expected_integration_graph = {
+        entry["name"]: set(entry["allowed_dependencies"])
+        | set(entry["allowed_bridge_dependencies"])
+        for entry in entries
+    }
+    expected_integration_graph.update(
+        {
+            bridge["name"]: set(bridge["allowed_dependencies"])
+            for bridge in bridges
+        }
+    )
+    validate_module_dependency_graph(
+        integration_graph,
+        expected_integration_graph,
+        [
+            frozenset(component)
+            for component in modules["integration_allowed_sccs"]
+        ],
+        modules["integration_max_scc_size"],
+        "Agent integration graph",
+    )
+    print(
+        "[kernel-budget] Agent integration graph: exact controlled-symbol "
+        "dependencies, "
+        f"{len(bridges)} bridges, max SCC="
+        f"{max(len(c) for c in strongly_connected_components(integration_graph))}"
+    )
+
+    probe = root / args.agent_core_probe
+    if not probe.is_file():
+        raise BudgetError(f"Agent core boundary probe is missing: {probe}")
+    output = run_tool(
+        [args.nm, "--defined-only", str(probe)],
+        "Agent core boundary inspection",
+    )
+    violations = forbidden_symbols(
+        parse_nm_defined_symbols(output),
+        modules["forbidden_core_authority_symbol_prefixes"],
+        modules["allowed_core_facade_symbols"],
+    )
+    defined = parse_nm_defined_symbols(output)
+    forbidden_exact = set(modules["forbidden_core_authority_symbols"])
+    allowed_facades = set(modules["allowed_core_facade_symbols"])
+    violations.extend(sorted((defined & forbidden_exact) - allowed_facades))
+    violations = sorted(set(violations))
+    if violations:
+        shown = ", ".join(violations[:12])
+        if len(violations) > 12:
+            shown += f", ... ({len(violations)} total)"
+        raise BudgetError(
+            "agent_core.c still defines migrated authority symbols: " + shown
+        )
+    print("[kernel-budget] Agent core migrated authority symbols: absent")
+
+
+def check_agent_tests(args, config):
+    if (
+        getattr(args, "agent_test_seconds", None) is not None
+        or getattr(args, "agent_test_start_ns", None) is not None
+    ):
+        raise BudgetError(
+            "Agent duration requires a complete per-case timing file; "
+            "summary-only inputs are forbidden"
+        )
+    if args.agent_test_timing_file is None:
+        raise BudgetError(
+            "Agent duration requires a complete per-case timing file"
+        )
+    _, elapsed = read_agent_timing_file(
+        args.agent_test_timing_file,
+        config["agent_test_suite"]["expected_cases"],
+    )
+    if not math.isfinite(elapsed) or elapsed <= 0:
+        raise BudgetError("Agent test duration must be finite and positive")
+    tests = config["agent_test_suite"]
+    calibration = getattr(args, "agent_test_calibration", False)
+    if calibration:
+        if args.agent_test_timing_file is None:
+            raise BudgetError(
+                "Agent calibration requires a persisted per-case timing file"
+            )
+        if tests["calibration_status"] != "provisional_requires_full_suite":
+            raise BudgetError(
+                "Agent calibration mode is only valid while the budget "
+                "is provisional"
+            )
+        print(
+            "[kernel-budget] Agent test suite calibration: "
+            f"actual={elapsed:.3f} seconds "
+            f"provisional_baseline={tests['baseline_seconds']} seconds "
+            f"provisional_limit={tests['max_seconds']} seconds"
+        )
+        print(
+            "[kernel-budget] Agent test calibration captured; "
+            "review repeated dedicated-runner samples before marking calibrated"
+        )
+        return
+    check_limit(
+        "Agent test suite",
+        elapsed,
+        tests["baseline_seconds"],
+        tests["max_seconds"],
+        " seconds",
+    )
+    if tests["calibration_status"] != "calibrated_full_suite":
+        raise BudgetError(
+            "Agent test duration is provisional; record this full-suite result"
+        )
+
+
+def main():
+    args = parse_args()
+    try:
+        if args.agent_test_calibration and args.check != "agent-tests":
+            raise BudgetError(
+                "--agent-test-calibration requires --check agent-tests"
+            )
+        config = load_config(args.config)
+        if args.check == "kernel":
+            check_kernel(args, config)
+        elif args.check == "agent-modules":
+            check_agent_modules(args, config)
+        elif args.check == "agent-tests":
+            check_agent_tests(args, config)
+        else:
+            print("[kernel-budget] configuration is valid")
+    except BudgetError as error:
+        print(f"[kernel-budget] failed: {error}", file=sys.stderr)
+        return 1
+    print(f"[kernel-budget] {args.check} checks passed")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

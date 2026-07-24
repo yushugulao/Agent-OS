@@ -1,0 +1,683 @@
+{
+  "schema_version": 1,
+  "canonical_toolchain": {
+    "prefix": "riscv64-linux-gnu-",
+    "gcc_version": "15.2.0",
+    "gcc_package": "gcc-15-riscv64-linux-gnu",
+    "gcc_package_version": "15.2.0-16ubuntu1cross1",
+    "binutils_version": "2.46",
+    "binutils_package": "binutils-riscv64-linux-gnu",
+    "binutils_package_version": "2.46-3ubuntu2",
+    "init_proc": "agentfinal_ucore",
+    "log_level": "WARN",
+    "cflags": [
+      "-Wall",
+      "-Werror",
+      "-O",
+      "-fno-omit-frame-pointer",
+      "-ggdb",
+      "-MD",
+      "-march=rv64imac_zicsr_zifencei",
+      "-mabi=lp64",
+      "-mcmodel=medany",
+      "-ffreestanding",
+      "-fno-common",
+      "-nostdlib",
+      "-mno-relax",
+      "-Ios",
+      "-fno-stack-protector",
+      "-D",
+      "LOG_LEVEL_WARN",
+      "-fno-pie",
+      "-no-pie",
+      "-DKSTACK_SIZE=16384",
+      "-DKSTACK_GUARD_SIZE=4096",
+      "-DKERNELVEC_FRAME_SIZE=256",
+      "-fcallgraph-info=su",
+      "-Wframe-larger-than=4096",
+      "-Wstack-usage=4096",
+      "-Wvla",
+      "-Walloca",
+      "-fstack-clash-protection"
+    ],
+    "ldflags": [
+      "-z",
+      "max-page-size=4096"
+    ]
+  },
+  "kernel_source": {
+    "include_globs": [
+      "os/**/*.c",
+      "os/**/*.h",
+      "os/**/*.S",
+      "os/**/*.ld",
+      "os/**/*.inc",
+      "*_policy.h",
+      "*_policy.inc"
+    ],
+    "exclude_paths": [
+      "os/initproc.S"
+    ],
+    "baseline_lines": 32793,
+    "max_lines": 34433
+  },
+  "kernel_image": {
+    "baseline_stripped_elf_bytes": 259912,
+    "max_stripped_elf_bytes": 272908,
+    "baseline_raw_binary_bytes": 255060,
+    "max_raw_binary_bytes": 267813
+  },
+  "kernel_runtime": {
+    "baseline_text_bytes": 247760,
+    "max_text_bytes": 260148,
+    "baseline_data_bytes": 5204,
+    "max_data_bytes": 5465,
+    "baseline_bss_bytes": 14836528,
+    "max_bss_bytes": 15578355,
+    "baseline_total_bytes": 15089492,
+    "max_total_bytes": 15843967
+  },
+  "struct_proc": {
+    "symbol": "kernel_budget_struct_proc",
+    "baseline_bytes": 28776,
+    "max_bytes": 30215
+  },
+  "agent_context_sidecar": {
+    "per_process_symbol": "kernel_budget_agent_context_sidecar_per_process",
+    "baseline_per_process_bytes": 36864,
+    "max_per_process_bytes": 38708,
+    "pool_symbol": "kernel_budget_agent_context_sidecar_pool",
+    "baseline_pool_bytes": 4718592,
+    "max_pool_bytes": 4954522,
+    "ordinary_pool_symbol": "kernel_budget_agent_context_sidecar_ordinary_pool",
+    "baseline_ordinary_pool_bytes": 3538944,
+    "max_ordinary_pool_bytes": 3715892,
+    "reserved_pool_symbol": "kernel_budget_agent_context_sidecar_reserved_pool",
+    "baseline_reserved_pool_bytes": 1179648,
+    "max_reserved_pool_bytes": 1238631,
+    "domain_ordinary_symbol": "kernel_budget_agent_context_sidecar_domain_ordinary",
+    "baseline_domain_ordinary_bytes": 2359296,
+    "max_domain_ordinary_bytes": 2477261,
+    "domain_reserved_symbol": "kernel_budget_agent_context_sidecar_domain_reserved",
+    "baseline_domain_reserved_bytes": 294912,
+    "max_domain_reserved_bytes": 309658
+  },
+  "agent_state_pages": {
+    "per_process_symbol": "kernel_budget_agent_state_total_per_process",
+    "baseline_per_process_bytes": 86016,
+    "max_per_process_bytes": 90317,
+    "pool_symbol": "kernel_budget_agent_state_total_pool",
+    "baseline_pool_bytes": 11010048,
+    "max_pool_bytes": 11560551,
+    "ordinary_pool_symbol": "kernel_budget_agent_state_total_ordinary_pool",
+    "baseline_ordinary_pool_bytes": 8257536,
+    "max_ordinary_pool_bytes": 8670413,
+    "reserved_pool_symbol": "kernel_budget_agent_state_total_reserved_pool",
+    "baseline_reserved_pool_bytes": 2752512,
+    "max_reserved_pool_bytes": 2890138,
+    "domain_ordinary_symbol": "kernel_budget_agent_state_total_domain_ordinary",
+    "baseline_domain_ordinary_bytes": 5505024,
+    "max_domain_ordinary_bytes": 5780276,
+    "domain_reserved_symbol": "kernel_budget_agent_state_total_domain_reserved",
+    "baseline_domain_reserved_bytes": 688128,
+    "max_domain_reserved_bytes": 722535
+  },
+  "agent_modules": {
+    "modules": [
+      {
+        "name": "facade",
+        "source_path": "os/agent.c",
+        "object_path": "build/os/agent.o",
+        "baseline_lines": 99,
+        "max_lines": 104,
+        "allowed_global_prefixes": [],
+        "allowed_global_symbols": [
+          "agentinit",
+          "agent_proc_prepare",
+          "agent_proc_teardown",
+          "agent_scope_controller_departing",
+          "agent_storage_init",
+          "agent_background_maintain",
+          "agent_tick",
+          "agent_authority_bootstrap",
+          "agent_authority_on_exec",
+          "agent_authority_check"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "context",
+          "core",
+          "identity",
+          "lifecycle"
+        ],
+        "allowed_bridge_dependencies": [
+        ]
+      },
+      {
+        "name": "core",
+        "source_path": "os/agent_core.c",
+        "object_path": "build/os/agent_core.o",
+        "baseline_lines": 1392,
+        "max_lines": 1462,
+        "allowed_global_prefixes": [
+          "agent_core_",
+          "agent_make_",
+          "agent_sched_"
+        ],
+        "allowed_global_symbols": [
+          "agent_make",
+          "sys_agent_call",
+          "sys_agent_create",
+          "sys_agent_create_role",
+          "sys_agent_info",
+          "sys_agent_run",
+          "sys_agent_scope_delegate_fd",
+          "sys_agent_tool_list",
+          "sys_agent_worker_create",
+          "sys_agent_workflow_close",
+          "sys_agent_workflow_create"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "context",
+          "identity",
+          "ipc",
+          "lifecycle",
+          "metadata",
+          "metadata_objects",
+          "observe"
+        ],
+        "allowed_bridge_dependencies": [
+          "proc"
+        ]
+      },
+      {
+        "name": "context",
+        "source_path": "os/agent_context.c",
+        "object_path": "build/os/agent_context.o",
+        "baseline_lines": 1161,
+        "max_lines": 1220,
+        "allowed_global_prefixes": [
+          "agent_context_"
+        ],
+        "allowed_global_symbols": [
+          "agent_map_context",
+          "agent_alias_exec_context",
+          "agent_unmap_exec_context",
+          "agent_free_proc_context",
+          "sys_context_clear",
+          "sys_context_detail",
+          "sys_context_push",
+          "sys_context_query",
+          "sys_context_rollback",
+          "sys_context_snapshot"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "lifecycle",
+          "observe",
+          "resource_controller"
+        ],
+        "allowed_bridge_dependencies": [
+        ]
+      },
+      {
+        "name": "identity",
+        "source_path": "os/agent_identity.c",
+        "object_path": "build/os/agent_identity.o",
+        "baseline_lines": 173,
+        "max_lines": 182,
+        "allowed_global_prefixes": [
+          "agent_identity_"
+        ],
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [],
+        "allowed_bridge_dependencies": []
+      },
+      {
+        "name": "ipc",
+        "source_path": "os/agent_ipc.c",
+        "object_path": "build/os/agent_ipc.o",
+        "baseline_lines": 1057,
+        "max_lines": 1110,
+        "allowed_global_prefixes": [
+          "agent_ipc_"
+        ],
+        "allowed_global_symbols": [
+          "sys_agent_heartbeat",
+          "sys_agent_route_config",
+          "sys_agent_unwatch",
+          "sys_agent_wait",
+          "sys_agent_wait_cancel",
+          "sys_agent_wake",
+          "sys_agent_watch"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "context",
+          "identity",
+          "lifecycle",
+          "metadata",
+          "metadata_objects",
+          "observe"
+        ],
+        "allowed_bridge_dependencies": [
+        ]
+      },
+      {
+        "name": "lifecycle",
+        "source_path": "os/agent_lifecycle.c",
+        "object_path": "build/os/agent_lifecycle.o",
+        "baseline_lines": 199,
+        "max_lines": 209,
+        "allowed_global_prefixes": [
+          "agent_lifecycle_"
+        ],
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "metadata"
+        ],
+        "allowed_bridge_dependencies": [
+        ]
+      },
+      {
+        "name": "metadata",
+        "source_path": "os/agent_metadata.c",
+        "object_path": "build/os/agent_metadata.o",
+        "baseline_lines": 291,
+        "max_lines": 306,
+        "allowed_global_prefixes": [],
+        "allowed_global_symbols": [
+          "agent_metadata_init",
+          "agent_metadata_reload_available",
+          "agent_metadata_reload_claim",
+          "agent_metadata_reload_is_current",
+          "agent_metadata_reload_release",
+          "agent_metadata_txn_checkpoint_unlocked",
+          "agent_metadata_txn_depth",
+          "agent_metadata_txn_lock",
+          "agent_metadata_txn_owned",
+          "agent_metadata_txn_relock_uninterruptible",
+          "agent_metadata_txn_token",
+          "agent_metadata_txn_try_external",
+          "agent_metadata_txn_unlock",
+          "agent_metadata_txn_work_charge"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [],
+        "allowed_bridge_dependencies": []
+      },
+      {
+        "name": "metadata_objects",
+        "source_path": "os/agent_metadata_objects.c",
+        "object_path": "build/os/agent_metadata_objects.o",
+        "baseline_lines": 4942,
+        "max_lines": 5190,
+        "allowed_global_prefixes": [],
+        "allowed_global_symbols": [
+          "agent_edit_note_delete",
+          "agent_edit_note_truncate",
+          "agent_edit_note_write",
+          "agent_edit_truncate_allowed",
+          "agent_edit_unlink_allowed",
+          "agent_edit_write_allowed",
+          "agent_file_request_scan",
+          "agent_file_version_reclaim",
+          "agent_fs_note_create",
+          "agent_fs_note_delete",
+          "agent_fs_note_truncate",
+          "agent_fs_note_write",
+          "agent_fs_sync_write",
+          "agent_metadata_background_maintain",
+          "agent_metadata_execute_tool",
+          "agent_metadata_fill_info",
+          "agent_metadata_objects_apply_snapshot",
+          "agent_metadata_objects_clear_catalog",
+          "agent_metadata_objects_export_scope",
+          "agent_metadata_objects_init",
+          "agent_metadata_objects_live_count",
+          "agent_metadata_objects_sizes_persisted",
+          "agent_metadata_prefetch_handoff",
+          "agent_metadata_storage_init",
+          "agent_metadata_tick",
+          "agent_metadata_tool_enter",
+          "agent_metadata_tool_exit",
+          "agent_scope_reclaim",
+          "sys_agent_file_edit_abort",
+          "sys_agent_file_edit_begin",
+          "sys_agent_file_edit_commit",
+          "sys_agent_file_edit_state",
+          "sys_agent_file_meta_init",
+          "sys_agent_file_meta_set",
+          "sys_agent_file_prefetch_snapshot",
+          "sys_agent_file_prefetch_span_snapshot",
+          "sys_agent_file_query"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "context",
+          "identity",
+          "ipc",
+          "lifecycle",
+          "metadata",
+          "metadata_store",
+          "observe"
+        ],
+        "allowed_bridge_dependencies": [
+        ]
+      },
+      {
+        "name": "metadata_store",
+        "source_path": "os/agent_metadata_store.c",
+        "object_path": "build/os/agent_metadata_store.o",
+        "baseline_lines": 2025,
+        "max_lines": 2127,
+        "allowed_global_prefixes": [
+          "agent_metadata_store_"
+        ],
+        "allowed_global_symbols": [
+          "agent_file_is_meta_store_name"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "metadata",
+          "metadata_objects"
+        ],
+        "allowed_bridge_dependencies": [
+        ]
+      },
+      {
+        "name": "observe",
+        "source_path": "os/agent_observe.c",
+        "object_path": "build/os/agent_observe.o",
+        "baseline_lines": 2414,
+        "max_lines": 2535,
+        "allowed_global_prefixes": [
+          "agent_observe_"
+        ],
+        "allowed_global_symbols": [
+          "sys_agent_audit_query",
+          "sys_agent_audit_snapshot",
+          "sys_agent_ledger_snapshot",
+          "sys_agent_provenance_snapshot",
+          "sys_agent_sched_config",
+          "sys_agent_sched_snapshot",
+          "sys_agent_span_trace_snapshot",
+          "sys_agent_timeline_query",
+          "sys_agent_timeline_read",
+          "sys_agent_timeline_snapshot",
+          "sys_agent_timeline_wait",
+          "sys_agent_trace_snapshot"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "context",
+          "identity",
+          "metadata"
+        ],
+        "allowed_bridge_dependencies": [
+        ]
+      },
+      {
+        "name": "resource_controller",
+        "source_path": "os/resource_controller.c",
+        "object_path": "build/os/resource_controller.o",
+        "baseline_lines": 1560,
+        "max_lines": 1638,
+        "allowed_global_prefixes": [
+          "resource_"
+        ],
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [],
+        "allowed_bridge_dependencies": []
+      },
+      {
+        "name": "workflow_lifecycle",
+        "source_path": "os/workflow_lifecycle.c",
+        "object_path": "build/os/workflow_lifecycle.o",
+        "baseline_lines": 284,
+        "max_lines": 299,
+        "allowed_global_prefixes": [
+          "workflow_lifecycle_"
+        ],
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [],
+        "allowed_bridge_dependencies": []
+      }
+    ],
+    "integration_bridges": [
+      {
+        "name": "bio",
+        "object_path": "build/os/bio.o",
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "resource_controller"
+        ]
+      },
+      {
+        "name": "file",
+        "object_path": "build/os/file.o",
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "metadata_objects",
+          "metadata_store",
+          "resource_controller"
+        ]
+      },
+      {
+        "name": "fs",
+        "object_path": "build/os/fs.o",
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "metadata_objects",
+          "resource_controller"
+        ]
+      },
+      {
+        "name": "loader",
+        "object_path": "build/os/loader.o",
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "facade"
+        ]
+      },
+      {
+        "name": "main",
+        "object_path": "build/os/main.o",
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "facade"
+        ]
+      },
+      {
+        "name": "proc",
+        "object_path": "build/os/proc.o",
+        "allowed_global_symbols": [
+          "agent_create_proc",
+          "agent_create_role_proc",
+          "agent_worker_create_proc",
+          "agent_workflow_create_proc"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "context",
+          "core",
+          "facade",
+          "lifecycle",
+          "resource_controller"
+        ]
+      },
+      {
+        "name": "syscall",
+        "object_path": "build/os/syscall.o",
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "context",
+          "core",
+          "ipc",
+          "metadata_objects",
+          "observe"
+        ]
+      },
+      {
+        "name": "trap",
+        "object_path": "build/os/trap.o",
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "facade"
+        ]
+      },
+      {
+        "name": "vfs_security",
+        "object_path": "build/os/vfs_security.o",
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "facade",
+          "metadata_objects",
+          "resource_controller",
+          "workflow_lifecycle"
+        ]
+      }
+    ],
+    "max_scc_size": 3,
+    "allowed_sccs": [
+      [
+        "context",
+        "observe"
+      ],
+      [
+        "ipc",
+        "metadata_objects",
+        "metadata_store"
+      ]
+    ],
+    "integration_max_scc_size": 3,
+    "integration_allowed_sccs": [
+      [
+        "context",
+        "observe"
+      ],
+      [
+        "core",
+        "facade",
+        "proc"
+      ],
+      [
+        "ipc",
+        "metadata_objects",
+        "metadata_store"
+      ]
+    ],
+    "forbidden_core_authority_symbol_prefixes": [
+      "agent_audit_",
+      "agent_context_",
+      "agent_edit_",
+      "agent_event_",
+      "agent_file_",
+      "agent_fs_",
+      "agent_meta_",
+      "agent_metadata_",
+      "agent_object_",
+      "agent_provenance_",
+      "agent_timeline_",
+      "sys_agent_audit_",
+      "sys_agent_file_",
+      "sys_agent_provenance_",
+      "sys_agent_timeline_",
+      "sys_context_"
+    ],
+    "forbidden_core_authority_symbols": [
+      "agent_alias_exec_context",
+      "agent_free_proc_context",
+      "agent_map_context",
+      "agent_scope_reclaim",
+      "agent_unmap_exec_context"
+    ],
+    "allowed_core_facade_symbols": []
+  },
+  "agent_test_suite": {
+    "expected_cases": [
+      "agentfinal_ucore",
+      "agentfs_ucore",
+      "agentscan_ucore",
+      "agentloop_ucore",
+      "agentsched_ucore",
+      "agentconflict_ucore",
+      "agentllm_ucore",
+      "agentbench_ucore",
+      "labbench_ucore",
+      "labdemo_ucore",
+      "agentsecurity_ucore",
+      "agentscope_ucore",
+      "agenttrust_ucore",
+      "agentvfs_ucore",
+      "iobudget_ucore",
+      "usersafety_ucore"
+    ],
+    "baseline_seconds": 255.370930671,
+    "max_seconds": 268.14,
+    "calibration_status": "calibrated_full_suite",
+    "runner_tag": "agentos-qemu-calibrated",
+    "runner_profile": {
+      "cpu": "Intel Core Ultra 9 275HX",
+      "virtualization": "WSL2",
+      "qemu_version": "10.2.1"
+    },
+    "calibration_samples": [
+      {
+        "sample_id": "bounded-runner-final-01",
+        "total_seconds": 261.343281873
+      },
+      {
+        "sample_id": "bounded-runner-final-02",
+        "total_seconds": 237.948978492
+      },
+      {
+        "sample_id": "bounded-runner-final-03",
+        "total_seconds": 255.370930671
+      }
+    ]
+  },
+  "kernel_stack": {
+    "baseline_required_bytes": 14592,
+    "max_required_bytes": 15322,
+    "boot_root": "main",
+    "boot_stack_start_symbol": "boot_stack",
+    "boot_stack_end_symbol": "boot_stack_top",
+    "boot_stack_size_bytes": 65536,
+    "baseline_boot_required_bytes": 10144,
+    "max_boot_required_bytes": 10652,
+    "virtual_capacity_symbol": "kernel_budget_kernel_stack_virtual_capacity",
+    "baseline_virtual_capacity_bytes": 33554432,
+    "max_virtual_capacity_bytes": 35232154,
+    "reserved_physical_pool_symbol": "kernel_budget_kernel_stack_reserved_physical_pool",
+    "baseline_reserved_physical_pool_bytes": 8388608,
+    "max_reserved_physical_pool_bytes": 8808039,
+    "stack_size_bytes": 16384,
+    "guard_size_bytes": 4096,
+    "safety_margin_bytes": 4096,
+    "interrupt_entry_bytes": 256,
+    "stack_boundaries": [
+      "swtch"
+    ],
+    "allowed_indirect_callers": [
+      "usertrapret"
+    ],
+    "recursion_bounds": [
+      "printf=2",
+      "freewalk=3"
+    ]
+  }
+}

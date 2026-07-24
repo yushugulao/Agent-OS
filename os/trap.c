@@ -37,6 +37,8 @@ void trap_init()
 void unknown_trap()
 {
 	errorf("unknown trap: %p, stval = %p", r_scause(), r_stval());
+	if ((r_sstatus() & SSTATUS_SPP) != 0)
+		panic("unknown supervisor trap");
 	exit(-1);
 }
 
@@ -167,7 +169,12 @@ void kerneltrap()
 	} else {
 		errorf("invalid trap from kernel: %p, stval = %p sepc = %p\n",
 		       scause, r_stval(), sepc);
-		exit(-1);
+		/*
+		 * Process teardown may sleep while closing files and settling I/O.
+		 * An arbitrary supervisor fault can hold buffers or kernel locks, so
+		 * it cannot safely enter that state machine.
+		 */
+		panic("invalid supervisor trap");
 	}
 	// the yield() may have caused some traps to occur,
 	// so restore trap registers for use by kernelvec.S's sepc instruction.

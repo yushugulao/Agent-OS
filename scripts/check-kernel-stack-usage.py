@@ -25,6 +25,12 @@ def parse_args():
     parser.add_argument("--guard-size", required=True, type=int)
     parser.add_argument("--safety-margin", required=True, type=int)
     parser.add_argument("--interrupt-entry", required=True, type=int)
+    parser.add_argument("--required-baseline", type=int)
+    parser.add_argument("--required-limit", type=int)
+    parser.add_argument("--boot-root", required=True)
+    parser.add_argument("--boot-stack-size", required=True, type=int)
+    parser.add_argument("--boot-required-baseline", type=int)
+    parser.add_argument("--boot-required-limit", type=int)
     parser.add_argument("--stack-boundary", action="append", default=[])
     parser.add_argument("--allow-indirect-from", action="append", default=[])
     parser.add_argument("--recursion-bound", action="append", default=[])
@@ -300,8 +306,58 @@ def longest_path(
 def main():
     args = parse_args()
     try:
-        if args.stack_size <= 0 or args.guard_size <= 0 or args.safety_margin < 0:
+        if (
+            args.stack_size <= 0
+            or args.boot_stack_size <= 0
+            or args.guard_size <= 0
+            or args.safety_margin < 0
+        ):
             raise ValueError("stack, guard, and margin sizes must be valid")
+        if (
+            args.required_limit is not None
+            and (
+                args.required_limit <= 0
+                or args.required_limit > args.stack_size
+            )
+        ):
+            raise ValueError("required stack limit must fit the configured stack")
+        if (
+            args.required_baseline is not None
+            and (
+                args.required_baseline <= 0
+                or args.required_baseline > args.stack_size
+                or (
+                    args.required_limit is not None
+                    and args.required_baseline > args.required_limit
+                )
+            )
+        ):
+            raise ValueError("required stack baseline must fit the growth limit")
+        if (
+            args.boot_required_limit is not None
+            and (
+                args.boot_required_limit <= 0
+                or args.boot_required_limit > args.boot_stack_size
+            )
+        ):
+            raise ValueError(
+                "boot stack required limit must fit the configured stack"
+            )
+        if (
+            args.boot_required_baseline is not None
+            and (
+                args.boot_required_baseline <= 0
+                or args.boot_required_baseline > args.boot_stack_size
+                or (
+                    args.boot_required_limit is not None
+                    and args.boot_required_baseline
+                    > args.boot_required_limit
+                )
+            )
+        ):
+            raise ValueError(
+                "boot stack required baseline must fit the growth limit"
+            )
         if (
             args.interrupt_entry < 256
             or args.interrupt_entry > 2047
@@ -348,22 +404,100 @@ def main():
             allowed_indirect_callers,
             recursion_bounds,
         )
+        boot_size, boot_path = longest_path(
+            args.boot_root,
+            graph,
+            incoming,
+            definitions,
+            frames,
+            title_to_name,
+            stack_boundaries,
+            allowed_indirect_callers,
+            recursion_bounds,
+        )
     except ValueError as error:
         print(f"kernel stack check failed: {error}", file=sys.stderr)
         return 1
 
     required = user_size + args.interrupt_entry + interrupt_size + args.safety_margin
+    boot_required = (
+        boot_size + args.interrupt_entry + interrupt_size + args.safety_margin
+    )
     print(
         "kernel stack budget: "
         f"user={user_size} interrupt={args.interrupt_entry + interrupt_size} "
         f"margin={args.safety_margin} required={required} limit={args.stack_size}"
     )
+    if args.required_limit is not None:
+        print(f"kernel stack growth limit: {args.required_limit}")
+    if args.required_baseline is not None:
+        print(f"kernel stack calibrated baseline: {args.required_baseline}")
     print("kernel stack user path: " + " -> ".join(user_path))
     print("kernel stack interrupt path: kernelvec -> " + " -> ".join(interrupt_path))
+    print(
+        "boot stack budget: "
+        f"root={args.boot_root} path={boot_size} "
+        f"interrupt={args.interrupt_entry + interrupt_size} "
+        f"margin={args.safety_margin} required={boot_required} "
+        f"limit={args.boot_stack_size}"
+    )
+    if args.boot_required_limit is not None:
+        print(f"boot stack growth limit: {args.boot_required_limit}")
+    if args.boot_required_baseline is not None:
+        print(
+            "boot stack calibrated baseline: "
+            f"{args.boot_required_baseline}"
+        )
+    print("boot stack root path: " + " -> ".join(boot_path))
     if required > args.stack_size:
         print(
             f"kernel stack check failed: required {required} bytes, "
             f"configured {args.stack_size}",
+            file=sys.stderr,
+        )
+        return 1
+    if args.required_limit is not None and required > args.required_limit:
+        print(
+            f"kernel stack check failed: required {required} bytes, "
+            f"growth limit {args.required_limit}",
+            file=sys.stderr,
+        )
+        return 1
+    if (
+        args.required_baseline is not None
+        and required * 100 < args.required_baseline * 98
+    ):
+        print(
+            f"kernel stack check failed: required {required} bytes is below "
+            f"98% of baseline {args.required_baseline}; tighten the budget",
+            file=sys.stderr,
+        )
+        return 1
+    if boot_required > args.boot_stack_size:
+        print(
+            f"boot stack check failed: required {boot_required} bytes, "
+            f"configured {args.boot_stack_size}",
+            file=sys.stderr,
+        )
+        return 1
+    if (
+        args.boot_required_limit is not None
+        and boot_required > args.boot_required_limit
+    ):
+        print(
+            f"boot stack check failed: required {boot_required} bytes, "
+            f"growth limit {args.boot_required_limit}",
+            file=sys.stderr,
+        )
+        return 1
+    if (
+        args.boot_required_baseline is not None
+        and boot_required * 100 < args.boot_required_baseline * 98
+    ):
+        print(
+            f"boot stack check failed: required {boot_required} bytes is below "
+            f"98% of baseline {args.boot_required_baseline}; "
+            "tighten the budget",
             file=sys.stderr,
         )
         return 1

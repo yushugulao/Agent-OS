@@ -12,11 +12,69 @@ QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS:-20}"
 MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-2}"
+REQUIRE_FULL_SUITE="${REQUIRE_FULL_SUITE:-0}"
+AGENT_TEST_CALIBRATE="${AGENT_TEST_CALIBRATE:-0}"
+timing_file_owned=0
+if [[ -z "${AGENT_TEST_TIMING_FILE:-}" ]]; then
+	AGENT_TEST_TIMING_FILE="${TMPDIR:-/tmp}/agentos-agent-timings.$$"
+	timing_file_owned=1
+fi
+
+cleanup() {
+	if [[ "${timing_file_owned}" == "1" ]]; then
+		rm -f "${AGENT_TEST_TIMING_FILE}"
+	fi
+}
+trap cleanup EXIT
+
+if [[ "${REQUIRE_FULL_SUITE}" != "0" && "${REQUIRE_FULL_SUITE}" != "1" ]]; then
+	echo "[agent-tests] REQUIRE_FULL_SUITE must be 0 or 1" >&2
+	exit 1
+fi
+if [[ "${REQUIRE_FULL_SUITE}" == "1" && -n "${AGENT_TEST_CASE:-}" ]]; then
+	echo "[agent-tests] AGENT_TEST_CASE is forbidden for a required full suite" >&2
+	exit 1
+fi
+if [[ "${AGENT_TEST_CALIBRATE}" != "0" && "${AGENT_TEST_CALIBRATE}" != "1" ]]; then
+	echo "[agent-tests] AGENT_TEST_CALIBRATE must be 0 or 1" >&2
+	exit 1
+fi
+if [[ "${AGENT_TEST_CALIBRATE}" == "1" ]]; then
+	if [[ "${REQUIRE_FULL_SUITE}" != "1" ]]; then
+		echo "[agent-tests] calibration requires REQUIRE_FULL_SUITE=1" >&2
+		exit 1
+	fi
+	if [[ "${timing_file_owned}" == "1" ]]; then
+		echo "[agent-tests] calibration requires a persistent AGENT_TEST_TIMING_FILE" >&2
+		exit 1
+	fi
+fi
+: >"${AGENT_TEST_TIMING_FILE}"
+
+check_suite_budget() {
+	local calibration_args=()
+	if [[ "${AGENT_TEST_CALIBRATE}" == "1" ]]; then
+		calibration_args+=(--agent-test-calibration)
+	fi
+	"${PYTHON_BIN}" scripts/check-kernel-budgets.py \
+		--check agent-tests \
+		--config ci/kernel-budgets.json \
+		--agent-test-timing-file "${AGENT_TEST_TIMING_FILE}" \
+		"${calibration_args[@]}"
+}
 
 run_case() {
 	local init_proc="$1"
 	local marker="$2"
+	local expected_bad_addr_marker="${3:-}"
 	local log_file="/tmp/agentos-${init_proc}.log"
+	local expected_fault_args=()
+
+	if [[ -n "${expected_bad_addr_marker}" ]]; then
+		expected_fault_args+=(
+			--expected-bad-addr-after "${expected_bad_addr_marker}"
+		)
+	fi
 
 	echo "[agent-tests] running ${init_proc}"
 	rm -f nfs/fs-copy.img os/initproc.S build/os/initproc.o
@@ -26,140 +84,16 @@ run_case() {
 		INIT_PROC="${init_proc}" \
 		CHAPTER="${CHAPTER}"
 	cp nfs/fs.img nfs/fs-copy.img
-	"${PYTHON_BIN}" - "$init_proc" "$marker" "$log_file" "$CASE_TIMEOUT" "$IDLE_NOTICE_SECONDS" "$MARKER_GRACE_SECONDS" "$QEMU" <<'PY'
-import os
-import re
-import select
-import signal
-import subprocess
-import sys
-import time
-
-init_proc, marker, log_file, timeout_text, idle_text, grace_text, qemu = sys.argv[1:8]
-
-
-def parse_duration(text):
-    unit = text[-1:]
-    number = text[:-1] if unit.isalpha() else text
-    try:
-        value = float(number)
-    except ValueError:
-        raise SystemExit(f"[agent-tests] {init_proc}: bad CASE_TIMEOUT={text!r}")
-    if unit in ("s", "S") or not unit.isalpha():
-        return value
-    if unit in ("m", "M"):
-        return value * 60
-    if unit in ("h", "H"):
-        return value * 3600
-    raise SystemExit(f"[agent-tests] {init_proc}: unsupported CASE_TIMEOUT={text!r}")
-
-
-case_timeout = parse_duration(timeout_text)
-idle_notice = parse_duration(idle_text)
-marker_grace = parse_duration(grace_text)
-failure_re = re.compile(r"check failed|panic|unknown syscall|bad addr|IllegalInstruction|child_failed")
-cmd = [
-    qemu,
-    "-nographic",
-    "-machine",
-    "virt",
-    "-bios",
-    "default",
-    "-kernel",
-    "build/kernel",
-    "-drive",
-    "file=nfs/fs-copy.img,if=none,format=raw,id=x0",
-    "-device",
-    "virtio-blk-device,drive=x0,bus=virtio-mmio-bus.0",
-]
-
-start = time.monotonic()
-last_output = start
-last_notice = start
-marker_seen = False
-marker_time = None
-failure_seen = False
-expected_fault_exit = False
-timed_out = False
-lines = []
-
-with open(log_file, "w", encoding="utf-8", errors="replace") as log:
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-        preexec_fn=os.setsid,
-    )
-    assert proc.stdout is not None
-    while True:
-        now = time.monotonic()
-        if now - start > case_timeout:
-            print(f"[agent-tests] {init_proc}: exceeded {timeout_text}", file=sys.stderr)
-            timed_out = True
-            break
-        if marker_time is not None and now - marker_time >= marker_grace:
-            print(f"[agent-tests] {init_proc}: marker grace elapsed, stopping QEMU")
-            break
-        if now - last_output >= idle_notice and now - last_notice >= idle_notice:
-            print(
-                f"[agent-tests] {init_proc}: no output for {int(now - last_output)}s",
-                file=sys.stderr,
-            )
-            last_notice = now
-        ready, _, _ = select.select([proc.stdout], [], [], 0.2)
-        if ready:
-            line = proc.stdout.readline()
-            if line == "":
-                if proc.poll() is not None:
-                    break
-                continue
-            last_output = time.monotonic()
-            sys.stdout.write(line)
-            sys.stdout.flush()
-            log.write(line)
-            log.flush()
-            lines.append(line.rstrip("\n"))
-            if len(lines) > 80:
-                lines = lines[-80:]
-            if (init_proc == "iobudget_ucore" and
-                    "iobudget_ucore: fault_exit_armed=1" in line):
-                expected_fault_exit = True
-            if failure_re.search(line):
-                if expected_fault_exit and "bad addr" in line:
-                    expected_fault_exit = False
-                    continue
-                failure_seen = True
-                print(f"[agent-tests] {init_proc}: failure text detected", file=sys.stderr)
-                break
-            if marker in line and marker_time is None:
-                marker_seen = True
-                marker_time = time.monotonic()
-                print(f"[agent-tests] {init_proc}: marker observed, checking teardown")
-                log.write(f"[agent-tests] {init_proc}: marker observed, checking teardown\n")
-                log.flush()
-        elif proc.poll() is not None:
-            break
-
-    if proc.poll() is None:
-        try:
-            os.killpg(proc.pid, signal.SIGTERM)
-            proc.wait(timeout=2)
-        except subprocess.TimeoutExpired:
-            os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait(timeout=2)
-
-if failure_seen or timed_out or not marker_seen:
-    print(f"[agent-tests] {init_proc}: last log lines:", file=sys.stderr)
-    for line in lines[-40:]:
-        print(line, file=sys.stderr)
-    sys.exit(1)
-
-elapsed = time.monotonic() - start
-print(f"[agent-tests] {init_proc}: elapsed={elapsed:.1f}s")
-sys.exit(0)
-PY
+	"${PYTHON_BIN}" scripts/agent_test_runner.py \
+		--init-proc "${init_proc}" \
+		--marker "${marker}" \
+		--log-file "${log_file}" \
+		--case-timeout "${CASE_TIMEOUT}" \
+		--idle-notice-seconds "${IDLE_NOTICE_SECONDS}" \
+		--marker-grace-seconds "${MARKER_GRACE_SECONDS}" \
+		--qemu "${QEMU}" \
+		--timing-file "${AGENT_TEST_TIMING_FILE}" \
+		"${expected_fault_args[@]}"
 	echo "[agent-tests] ${init_proc} passed"
 }
 
@@ -170,7 +104,13 @@ make nfs/fs.img TOOLPREFIX="${TOOLPREFIX}" CHAPTER="${CHAPTER}"
 make build TOOLPREFIX="${TOOLPREFIX}" LOG=warn INIT_PROC=agentfinal_ucore
 
 if [[ -n "${AGENT_TEST_CASE:-}" ]]; then
-	run_case "${AGENT_TEST_CASE}" "${AGENT_TEST_CASE}: parent passed"
+	expected_bad_addr_marker=""
+	if [[ "${AGENT_TEST_CASE}" == "iobudget_ucore" ]]; then
+		expected_bad_addr_marker="iobudget_ucore: fault_exit_armed=1"
+	fi
+	run_case "${AGENT_TEST_CASE}" "${AGENT_TEST_CASE}: parent passed" \
+		"${expected_bad_addr_marker}"
+	echo "[agent-tests] full-suite duration budget skipped for targeted run"
 	exit 0
 fi
 
@@ -188,7 +128,9 @@ run_case agentsecurity_ucore "agentsecurity_ucore: parent passed"
 run_case agentscope_ucore "agentscope_ucore: parent passed"
 run_case agenttrust_ucore "agenttrust_ucore: parent passed"
 run_case agentvfs_ucore "agentvfs_ucore: parent passed"
-run_case iobudget_ucore "iobudget_ucore: parent passed"
+run_case iobudget_ucore "iobudget_ucore: parent passed" \
+	"iobudget_ucore: fault_exit_armed=1"
 run_case usersafety_ucore "usersafety_ucore: parent passed"
 
+check_suite_budget
 echo "[agent-tests] all Agent-OS uCore checks passed"

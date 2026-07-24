@@ -2,13 +2,59 @@
 
 测试目标：根目录 AgentOS-uCore 增强目标
 
-本次最终复测日期：2026-07-24
+本次最终复测日期：2026-07-25
 
 测试环境：
 
-- WSL2 Ubuntu；
-- QEMU riscv64；
-- `riscv64-linux-gnu-` 工具链。
+- 固定 WSL2 runner，Linux `6.6.114.1`；
+- Intel Core Ultra 9 275HX，24 CPU；
+- QEMU `10.2.1`，riscv64 system emulation；
+- `riscv64-linux-gnu-gcc 15.2.0`。
+
+## 2026-07-25 当前重构验收
+
+本轮针对 generation-safe workflow lifecycle、PUBLIC 降权后代撤销、统一 resource controller、phase-aware teardown、21 页 Agent 状态原子计费、Context commit lane、lazy physical stack 和 Agent 模块拆分后的同一源码，在上述固定 runner 上连续执行三次完整 16-case Agent 套件。三轮均为 16/16，通过时间只累计各 QEMU case 的 monotonic duration，不包含编译：
+
+| 轮次 | 16 case monotonic 总时间 | 结果 |
+| --- | ---: | --- |
+| `bounded-runner-final-01` | `261.343281873s` | 16/16 |
+| `bounded-runner-final-02` | `237.948978492s` | 16/16 |
+| `bounded-runner-final-03` | `255.370930671s` | 16/16 |
+
+三轮的校准中位数为 `255.370930671s`，CI 上限为 `268.14s`。上限相对中位数约保留 5% headroom，足以覆盖最大样本，同时比旧门更紧。`ci/kernel-budgets.json` 已将状态设为 `calibrated_full_suite`，GitLab duration job 绑定 `agentos-qemu-calibrated` runner tag；因此 targeted `AGENT_TEST_CASE` 不能代替这条完整时间门，异构 shared runner 的墙钟结果也不能用于调整阈值。
+
+同一版本的 `agentfinal_ucore` 还以两个并发工具调用验证 Context commit lane，得到 `context_commit_lane=1 sequence=1..3 hash=1`。lane 对单进程 FIFO 接纳且可重入，锁序固定为 `lane -> metadata`；`agent_call_count` 是已经接纳并保留的调用序号总数，允许在慢调用执行期间暂时领先，`latest_sequence` 才是完整 Context 记录的已提交水位。
+
+当前 `agentscope_ucore` 专项约 `93.7s`，并实际出现：
+
+```text
+agentscope_ucore: scope_controller_exit_revoke=1 public_lineage=1
+agentscope_ucore: parent passed
+```
+
+这证明 PUBLIC child 与 grandchild 即使已清除 Agent/VFS 凭据，仍保留原 `(workflow_lifecycle_id,generation)` 终止谱系并随 controller 撤销；该 marker 不再只是预期契约。
+
+同一重构源码还分别通过以下机制专项：
+
+| 专项 | 当前结果与覆盖 |
+| --- | --- |
+| `run-proc-reap-tests.sh` | AgentOS、对抗 Agent 与 baseline 的退出、wait、孤儿/僵尸和进程资源账户路径通过 |
+| `run-syscall-fairness-tests.sh` | 双目标 console、inode write、truncate 安全点与退出完整性通过 |
+| `run-file-resource-tests.sh` | 双目标唯一 file object、隐藏引用、ordinary 水位和系统保留通过 |
+| `run-thread-resource-tests.sh` | 线程账户、保留量、退款与跨域公平通过；随后在同一镜像上额外连续执行 50 轮压力复测 |
+| `run-fs-enospc-tests.sh` | AgentOS/baseline 的 generic、domain、reserve、persistent、orphan、reclaim 和 verify 路径全部通过 |
+
+本轮没有运行 `make full-verify`。上述 3 次 Agent 套件和各机制专项只能按各自入口记为通过，不能写成聚合入口全绿。预算 checker 当前包含 31 项、通用 runner 包含 24 项、生产 profile validator 包含 5 项 fail-closed 自测。runner 会二进制全量 drain，并大小写不敏感识别包括 panic 在内的预定义 failure 模式；每轮最多读取一个 64 KiB 块后重查 deadline，持续输出不能绕过 timeout/grace。每 case 总输出/未终止记录/诊断行分别有 16 MiB/64 KiB/4 KiB 上限；输出或记录超限 fail closed，诊断副本有界截断。case deadline 在 checkpoint 之前判定，并在 feed/notice 后重查；普通 case 必须自然 `rc=0`。pipe EOF 早于退出状态时仍在原 deadline/grace 内等待，既不发送信号也不延长宽限期，stop 阶段继续等待 status+EOF 双发布。marker grace 只负责终止已失败/挂起的 case，随后的 `SIGTERM` 或升级 `SIGKILL` 都不转为成功；仅两个持久化 checkpoint 阶段显式选择 checkpoint mode 后，可在预期 marker 后接受单次 runner `SIGTERM`，`SIGKILL` 仍失败。duration checker 拒绝 `--agent-test-seconds` / `--agent-test-start-ns`，只接受完整有序的 16-case timing file。该 checkpoint 合约验证重挂载，不宣称硬掉电注入；超时、非零退出和 marker 后 panic 同样失败。当前已确认的结构指标如下；源码、镜像、运行段和栈的最终实测值由主验收 `make ci-check` 日志与版本化 JSON 冻结，不在本表复制尚可能变化的工作树快照：
+
+| 静态指标 | 当前确认值 | 说明 |
+| --- | ---: | --- |
+| `sizeof(struct proc)` | 当前 actual `28808` B | JSON 冻结 baseline/max 为 `28776/30215` B；actual 低于 max，不上调 ratchet |
+| 完整 Agent 状态 | 每 Agent `86016` B；全局 `11010048` B | 21 页 = 9 sidecar + 6 mirror + 6 shadow，一次 `RESOURCE_AGENT_STATE_PAGE` 原子计费 |
+| Agent 状态 ordinary / reserved 池 | `8257536 / 2752512` B | 完整 21 页口径 |
+| Agent 状态 ordinary / reserved 域 | `5505024 / 688128` B | 完整 21 页口径 |
+| Context detail sidecar | 每 Agent `36864` B；全局 `4718592` B | 仅 9 页 detail/attribution 的独立细节预算 |
+
+内核源码与镜像继续采用 downward-ratchet；最终数值应直接引用同一提交的 `make ci-check` 输出，避免把中间工作树的测量误写为发布事实。
 
 ## 构建
 
@@ -31,7 +77,7 @@ make build TOOLPREFIX=riscv64-linux-gnu- LOG=warn INIT_PROC=agentfinal_ucore
 bash scripts/run-agent-tests.sh
 ```
 
-独立专项记录：2026-07-22 的脚本依次运行 15 个 Agent 程序并全部通过；随后增加 `iobudget_ucore`。2026-07-24 的 pipe 安全主体委派和观测查询修复历史轮分别以 `359.4s`、`338.4s` 完成 16/16。Workflow 强制撤销实现快照随后以 `CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 完成 16/16，墙钟约 `371.5s`，其中 `agentscope_ucore` 约 `127.9s`；子代理审查修正后，最终 `CASE_TIMEOUT=260s AGENT_TEST_CASE=agentscope_ucore bash scripts/run-agent-tests.sh` 专项约 `126.1s` 通过。专项运行要求每个程序在超时前输出 `parent passed`，且日志中不存在未被用例明确声明为预期故障的 `check failed`、`panic`、`unknown syscall`、`bad addr`、`IllegalInstruction` 或 `child_failed`。审查后没有重跑完整 16 项，本次记录仍不等于尚未运行的 `make full-verify` 全绿。
+当前重构验收见上节。以下时间保留为历史演进证据：2026-07-22 的脚本依次运行 15 个 Agent 程序并全部通过，随后增加 `iobudget_ucore`；2026-07-24 的 pipe 安全主体委派和观测查询修复轮分别以 `359.4s`、`338.4s` 完成 16/16；Workflow 强制撤销实现快照随后以约 `371.5s` 完成 16/16，其中 `agentscope_ucore` 约 `127.9s`，审查修正后的单项约 `126.1s`。这些旧结果不替代上面的 2026-07-25 当前源码三轮校准，也都不表示未运行的 `make full-verify` 已全绿。
 
 ## 输出提取方式
 
@@ -59,13 +105,13 @@ bash scripts/run-agent-tests.sh
 | `agentbench_ucore` | `batch_agent_run`、`file_index_query`、`timeline_query_prefetch` | 性能主路径和文件索引/Timeline 查询可观测 |
 | `labdemo_ucore` | `type=INCIDENT_CREATED`、`prefetch_handoff=analyze`、`provenance_graph edges=...` | 设定的模拟流程 多 Agent 恢复场景可复现 |
 | `agentsecurity_ucore` | `route_source_enforced=1`、`route_target_isolated=1`、`ipc_route_authorization=1`、`message_route_lifecycle=1`、`target_route_consent=1`、`route_slot_reclaimed=1` | 系统事件防伪、未授权注入拒绝、grant/revoke、target LLM_DONE consent、MESSAGE 位图隔离、stable control id 生命周期和 source 退出槽回收均通过 |
-| `agentscope_ucore` | `scope_close_authority=1`、`scope_controller_exit_revoke=1`、`scope_forced_cleanup=1`、`scope_replacement_admitted=1`，以及既有 observe/pipe 标记 | 唯一根/factory 可信关闭、低权限拒绝、根退出自动撤销、阻塞成员资源释放和 9 轮生命周期回收通过；观测查询预算和 pipe 单跳委派继续通过 |
+| `agentscope_ucore` | `scope_close_authority=1`、`scope_controller_exit_revoke=1 public_lineage=1`、`scope_forced_cleanup=1`、`scope_replacement_admitted=1`，以及既有 observe/pipe 标记 | 唯一根/factory 可信关闭、PUBLIC child/grandchild 谱系撤销、阻塞成员资源释放和 9 轮 generation 回收通过；观测查询预算和 pipe 单跳委派继续通过 |
 | `agenttrust_ucore` | `wx_image=1`、`immutable_image=1`、`role_image_binding=1` | W^X、可信映像不可变和 Agent 角色映像绑定可验证 |
 | `agentvfs_ucore` | `cross_scope_fd_revoked=1`、`worker_pipe_delegation=1`、`protected_paths=1` | 普通 VFS 路径不能绕过文件能力；降权 fork 撤销跨 scope inode fd，worker pipe 只接受单跳显式委派 |
 | `iobudget_ucore` | `thread_exit_lease_cleanup=1`、`scheduler_interrupt_progress=1`、`fault_exit_cleanup=1`、`public_budget_shared=1`、`nested_io_attribution=1`、`cache_scope_isolation=1`、`workflow_bounded_progress=1`、`control_reserve_progress=1`、`parent passed` | 最终 teardown 修复后独立轮 `elapsed=2.4s`；ABI sized-copy 另由无单独 marker 的断言覆盖 |
 | `usersafety_ucore` | `live after pointer bounds`、`live after directed wakeup`、`parent passed` | syscall 输入检查、定向唤醒和失败事务回滚可验证 |
 | `fsenospc_ucore` | `inode exhaustion survived`、`block exhaustion survived` | inode、inode cache 与数据块耗尽返回失败而非触发内核 panic |
-| `fspquota_ucore` | `crash_orphan_ready=1`、`reboot_charge_persisted=1`、`relaunch_charge_persisted=1`、`cleanup_reuse=1` | 双目标同镜像三次启动已通过，验证掉电孤儿回收及 PUBLIC 计费跨完整进程域退出与重启保持 |
+| `fspquota_ucore` | `crash_orphan_ready=1`、`reboot_charge_persisted=1`、`relaunch_charge_persisted=1`、`cleanup_reuse=1` | 双目标同镜像三次启动已通过，验证 checkpoint 终止后的孤儿回收及 PUBLIC 计费跨完整进程域退出与重启保持；不宣称硬掉电注入 |
 | `procreap_ucore` / `procreap_agent_ucore` | `live-domain-limit=1`、`reserved-agent-slot=1` | 进程回收、资源域配额与系统保留槽可验证 |
 | `syscallfair_ucore` | `[syscall-fairness] both targets passed`、console/inode/trunc 顺序、last-syscall 重调度与 `parent passed` | 本次线程改动后双目标脚本已通过 |
 | `threadresource_ucore` | `domain_limit`、`capacity_reject_stable`、`reserved_domain_limit`、`reserved_domain_reuse`、`exit_reuse`、`ordinary_waterline`、`global_thread_limit`、`reserved_global_limit`、`reserved_progress`、`reserved_global_reuse`、`global_reuse`、`domain_fairness`、`parent passed` | 本次改动后 19/12/6/6/4 tiny policy 专项通过 |
@@ -462,7 +508,7 @@ fspquota_ucore: parent passed
 
 本次冻结源码的 `make fs-enospc-test` 全流程通过，墙钟 `75.1s`；quota/domain、持久 PUBLIC principal、孤儿回收、重启计费与删除复用场景均完成。磁盘 inode、内存 inode cache 和数据块耗尽均通过正常错误返回或短写报告，未转化为全内核 panic；释放资源后可以重新分配。PUBLIC 域完成超过旧版本表容量的 640 次短命 inode 循环后，workflow 仍能取得编辑版本并命中内容摘要缓存，说明版本 sidecar 随最终 inode 生命周期回收，且不能跨 inode 槽侵占 Agent 保留资源。
 
-本次稳定 principal 回归已在 AgentOS 与 baseline 上分别完成 crash/seed/verify 三轮。第一轮在 PUBLIC 文件已 unlink 但描述符仍打开时强制结束 QEMU，第二轮挂载必须回收该不可达 inode/block；runner 在 seed 后解析 raw bitmap/dinode/qmap，确认物理分配相对 mkfs 基线仅增加 4 block/7 inode，且非 FREE owner 同样只增加 4 个，排除只从账本忽略孤儿的假通过。镜像还预装一个由 SYSTEM 赞助的 13 数据块可变文件；PUBLIC 首次覆盖前必须把 inode、数据块和间接索引块整体接管，共计 `14 block/1 inode`，不能借预装对象绕过配额。第二轮随后让占满 `18 block/8 inode` 上限的 PUBLIC 进程资源域完整退出，第三轮在同一磁盘镜像上验证 qmap/dinode 重建、新域仍受旧文件计费、删除退款及清理复用；两个目标均依次取得 `reboot_charge_persisted`、`deletion_reuse`、`relaunch_charge_persisted`、`cleanup_reuse` 和 `parent passed`，runner 最终报告通过。该入口仍没有被 `make full-verify` 串联，发布验收时应继续单独执行。
+本次稳定 principal 回归已在 AgentOS 与 baseline 上分别完成 crash/seed/verify 三轮。第一轮在 PUBLIC 文件已 unlink 但描述符仍打开时强制结束 QEMU，第二轮挂载必须回收该不可达 inode/block；runner 在 seed 后解析 raw bitmap/dinode/qmap，确认物理分配相对 mkfs 基线仅增加 4 block/7 inode，且非 FREE owner 同样只增加 4 个，排除只从账本忽略孤儿的假通过。镜像还预装一个由 SYSTEM 赞助的 13 数据块可变文件；PUBLIC 首次覆盖前必须把 inode、数据块和间接索引块整体接管，共计 `14 block/1 inode`，不能借预装对象绕过配额。第二轮随后让占满 `18 block/8 inode` 上限的 PUBLIC 进程资源域完整退出，第三轮在同一磁盘镜像上验证 qmap/dinode 重建、新域仍受旧文件计费、删除退款及清理复用；两个目标均依次取得 `reboot_charge_persisted`、`deletion_reuse`、`relaunch_charge_persisted`、`cleanup_reuse` 和 `parent passed`，runner 最终报告通过。历史执行时该入口尚未串入聚合脚本；当前 `make full-verify` 已包含它，但 2026-07-25 没有执行聚合入口。
 
 ## 专项输出：进程回收与配额
 
@@ -543,7 +589,7 @@ Test trace OK!
 
 ## 当前聚合验证状态
 
-当前不据独立专项结果宣称 `make full-verify` 全绿。上述安全机制只按各自脚本和通过标记记录；`run-full-verification.sh` 已串联线程资源专项，但本次改动后未执行该聚合入口。`fs-enospc-test` 还必须始终单独执行，因为聚合脚本当前没有调用它。
+当前不据独立专项结果宣称 `make full-verify` 全绿。2026-07-25 的三轮 16-case Agent 套件、proc-reap、syscall-fairness、file-resource、thread-resource 和 fs-enospc 均已分别通过；`run-full-verification.sh` 也已串联这些入口和 `ci-check`，但本轮没有实际执行该聚合命令。
 
 ## 2026-07-21 workflow scope 安全回归
 
@@ -770,4 +816,4 @@ agentscope_ucore: parent passed
 elapsed=126.1s
 ```
 
-并发/生命周期审查未发现会导致 panic、UAF、双重释放或 I/O/cache owner 提前退休的阻断问题：关闭先在第一段关中断区发布不可逆 CLOSING 屏障，调用路径不主动让出并在第二段关中断区扫描成员；最终 spawn 发布在自己的关中断区复核 active 状态，pending 凭据激活也复核 active 状态。CLOSING 在最后成员释放前保持完整 owner 驻留，退出请求不抢占已有 terminal owner，controller-departure 可重复调用。当前动态缺口是 close 与 spawn/pending exec 的精确竞态、多线程 controller、纯 CPU 成员，以及关闭期间主动 I/O debt/inode 压力。审查后未重跑完整 16 项，`make full-verify` 也未运行。
+并发/生命周期审查未发现会导致 panic、UAF、双重释放或 I/O/cache owner 提前退休的阻断问题：关闭先在第一段关中断区发布不可逆 CLOSING 屏障，调用路径不主动让出并在第二段关中断区扫描成员；最终 spawn 发布在自己的关中断区复核 active 状态，pending 凭据激活也复核 active 状态。CLOSING 在最后成员释放前保持完整 owner 驻留，退出请求不抢占已有 terminal owner，controller-departure 可重复调用。当前动态缺口是 close 与 spawn/pending exec 的精确竞态、多线程 controller、纯 CPU 成员，以及关闭期间主动 I/O debt/inode 压力。该段 `126.1s` 输出属于历史轮；当前源码随后已完成三轮 16/16 和 `93.7s` 专项，`make full-verify` 仍未运行。

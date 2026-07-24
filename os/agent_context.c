@@ -1,0 +1,1179 @@
+#include "agent_context.h"
+#include "agent_internal.h"
+#include "defs.h"
+#include "timer.h"
+#include "trap.h"
+
+struct agent_context_private_slot {
+	struct agent_context_detail detail;
+	uint64 span_owner;
+	uint64 cause_control;
+	int cause_pid;
+	uint reserved;
+};
+
+#define AGENT_CONTEXT_SLOTS_PER_PAGE \
+	(PAGE_SIZE / sizeof(struct agent_context_private_slot))
+
+_Static_assert(AGENT_CONTEXT_SLOTS_PER_PAGE > 0,
+	       "an Agent context slot must fit in one page");
+_Static_assert(sizeof(struct agent_context_private_slot) *
+			       AGENT_CONTEXT_SLOTS_PER_PAGE <=
+		       PAGE_SIZE,
+	       "Agent context slots must not cross page boundaries");
+_Static_assert(AGENT_CONTEXT_SIDECAR_PAGE_COUNT *
+			       AGENT_CONTEXT_SLOTS_PER_PAGE >=
+		       AGENT_CONTEXT_MAX_RECORDS,
+	       "nine sidecar pages must cover every context record");
+_Static_assert((AGENT_CONTEXT_SIDECAR_PAGE_COUNT - 1) *
+			       AGENT_CONTEXT_SLOTS_PER_PAGE <
+		       AGENT_CONTEXT_MAX_RECORDS,
+	       "eight sidecar pages must remain insufficient");
+_Static_assert(AGENT_STATE_PAGE_COUNT ==
+		       AGENT_CONTEXT_SIDECAR_PAGE_COUNT +
+			       2U * AGENT_CONTEXT_PAGES,
+	       "Agent state accounting must cover sidecar, user, and shadow pages");
+
+static void
+agent_context_metadata_reset(struct proc *p)
+{
+	for (uint page = 0; page < AGENT_CONTEXT_SIDECAR_PAGE_COUNT; page++)
+		p->agent_context_sidecar_kva[page] = 0;
+	p->agent_state_account = resource_account_none();
+	p->agent_state_charge_class = RESOURCE_CHARGE_CLASS_COUNT;
+	p->agent_state_charged_pages = 0;
+}
+
+int
+agent_context_is_empty(const struct proc *p)
+{
+	if (p == 0 || p->agent_state_charged_pages != 0 ||
+	    resource_account_handle_valid(p->agent_state_account))
+		return 0;
+	for (uint page = 0; page < AGENT_CONTEXT_SIDECAR_PAGE_COUNT; page++)
+		if (p->agent_context_sidecar_kva[page] != 0)
+			return 0;
+	for (uint page = 0; page < AGENT_CONTEXT_PAGES; page++)
+		if (p->agent_ctx_kva[page] != 0 ||
+		    p->agent_shadow_kva[page] != 0)
+			return 0;
+	return 1;
+}
+
+static int
+agent_state_reservation_ready(struct proc *p)
+{
+	if (p == 0 ||
+	    p->agent_state_charged_pages != AGENT_STATE_PAGE_COUNT ||
+	    p->agent_state_charge_class < RESOURCE_CHARGE_ORDINARY ||
+	    p->agent_state_charge_class >= RESOURCE_CHARGE_CLASS_COUNT ||
+	    !resource_account_handle_valid(p->agent_state_account))
+		return 0;
+	for (uint page = 0; page < AGENT_CONTEXT_SIDECAR_PAGE_COUNT; page++)
+		if (p->agent_context_sidecar_kva[page] == 0)
+			return 0;
+	return 1;
+}
+
+static int
+agent_context_ready(struct proc *p)
+{
+	if (!agent_state_reservation_ready(p))
+		return 0;
+	for (uint page = 0; page < AGENT_CONTEXT_PAGES; page++)
+		if (p->agent_ctx_kva[page] == 0 ||
+		    p->agent_shadow_kva[page] == 0)
+			return 0;
+	return 1;
+}
+
+static struct agent_context_private_slot *
+agent_context_slot(struct proc *p, uint64 slot)
+{
+	uint page = slot / AGENT_CONTEXT_SLOTS_PER_PAGE;
+	uint index = slot % AGENT_CONTEXT_SLOTS_PER_PAGE;
+
+	return &((struct agent_context_private_slot *)
+			 p->agent_context_sidecar_kva[page])[index];
+}
+
+int
+agent_context_alloc(struct proc *p)
+{
+	void *pages[AGENT_CONTEXT_SIDECAR_PAGE_COUNT];
+	struct resource_account_handle account;
+	enum resource_charge_class charge_class;
+	struct resource_reservation reservation;
+	struct resource_request request = {
+		.kind = RESOURCE_AGENT_STATE_PAGE,
+		.amount = AGENT_STATE_PAGE_COUNT,
+	};
+	uint allocated = 0;
+	int pid;
+	int enabled;
+
+	enabled = intr_save();
+	if (p == 0 || !proc_teardown_live(p) ||
+	    !agent_context_is_empty(p) ||
+	    !resource_account_active(p->resource_account)) {
+		intr_restore(enabled);
+		return -1;
+	}
+	pid = p->pid;
+	account = p->resource_account;
+	charge_class = p->resource_slot_reserved ?
+			       RESOURCE_CHARGE_RESERVED :
+			       RESOURCE_CHARGE_ORDINARY;
+	if (resource_reserve_many(account, charge_class, &request, 1,
+				  &reservation) < 0) {
+		intr_restore(enabled);
+		return -1;
+	}
+	intr_restore(enabled);
+	while (allocated < AGENT_CONTEXT_SIDECAR_PAGE_COUNT) {
+		pages[allocated] = kalloc();
+		if (pages[allocated] == 0)
+			goto fail;
+		memset(pages[allocated], 0, PAGE_SIZE);
+		allocated++;
+	}
+
+	enabled = intr_save();
+	if (!proc_teardown_live(p) || p->pid != pid ||
+	    !agent_context_is_empty(p) ||
+	    !resource_account_handle_equal(p->resource_account, account) ||
+	    (p->resource_slot_reserved != 0) !=
+		    (charge_class == RESOURCE_CHARGE_RESERVED)) {
+		intr_restore(enabled);
+		goto fail;
+	}
+	if (resource_reservation_commit(&reservation) < 0) {
+		intr_restore(enabled);
+		goto fail;
+	}
+	for (uint page = 0; page < AGENT_CONTEXT_SIDECAR_PAGE_COUNT; page++)
+		p->agent_context_sidecar_kva[page] = (uint64)pages[page];
+	p->agent_state_account = account;
+	p->agent_state_charge_class = charge_class;
+	p->agent_state_charged_pages = AGENT_STATE_PAGE_COUNT;
+	intr_restore(enabled);
+	return 0;
+
+fail:
+	while (allocated > 0)
+		kfree(pages[--allocated]);
+	resource_reservation_cancel(&reservation);
+	return -1;
+}
+
+void
+agent_context_free(struct proc *p)
+{
+	void *pages[AGENT_CONTEXT_SIDECAR_PAGE_COUNT];
+	struct resource_account_handle account;
+	enum resource_charge_class charge_class;
+	struct resource_request request = {
+		.kind = RESOURCE_AGENT_STATE_PAGE,
+		.amount = AGENT_STATE_PAGE_COUNT,
+	};
+	int enabled;
+
+	if (p == 0)
+		return;
+	enabled = intr_save();
+	if (agent_context_is_empty(p)) {
+		agent_context_metadata_reset(p);
+		intr_restore(enabled);
+		return;
+	}
+	if (!agent_state_reservation_ready(p) ||
+	    !resource_account_handle_equal(
+		    p->agent_state_account, p->resource_account))
+		panic("Agent context state");
+	account = p->agent_state_account;
+	charge_class = p->agent_state_charge_class;
+	for (uint page = 0; page < AGENT_CONTEXT_SIDECAR_PAGE_COUNT; page++)
+		pages[page] = (void *)p->agent_context_sidecar_kva[page];
+	agent_context_metadata_reset(p);
+	for (uint page = 0; page < AGENT_CONTEXT_SIDECAR_PAGE_COUNT; page++)
+		kfree(pages[page]);
+	if (resource_release_many(account, charge_class, &request, 1) < 0)
+		panic("Agent context resource release");
+	intr_restore(enabled);
+}
+
+int
+agent_context_clear(struct proc *p)
+{
+	int enabled = intr_save();
+
+	if (!agent_context_ready(p)) {
+		intr_restore(enabled);
+		return -1;
+	}
+	for (uint page = 0; page < AGENT_CONTEXT_SIDECAR_PAGE_COUNT; page++)
+		memset((void *)p->agent_context_sidecar_kva[page], 0,
+		       PAGE_SIZE);
+	intr_restore(enabled);
+	return 0;
+}
+
+int
+agent_context_store(struct proc *p, uint64 slot,
+		    const struct agent_context_detail *detail,
+		    uint64 span_owner, int cause_pid, uint64 cause_control)
+{
+	struct agent_context_private_slot staged;
+	struct agent_context_private_slot *target;
+	int enabled = intr_save();
+
+	if (detail == 0 || slot >= AGENT_CONTEXT_MAX_RECORDS ||
+	    !agent_context_ready(p)) {
+		intr_restore(enabled);
+		return -1;
+	}
+	memset(&staged, 0, sizeof(staged));
+	memmove(&staged.detail, detail, sizeof(staged.detail));
+	staged.span_owner = span_owner;
+	staged.cause_pid = cause_pid;
+	staged.cause_control = cause_control;
+	target = agent_context_slot(p, slot);
+	memmove(target, &staged, sizeof(*target));
+	intr_restore(enabled);
+	return 0;
+}
+
+int
+agent_context_load_detail(struct proc *p, uint64 slot,
+			  struct agent_context_detail *detail)
+{
+	struct agent_context_private_slot *source;
+	int enabled = intr_save();
+
+	if (detail == 0 || slot >= AGENT_CONTEXT_MAX_RECORDS ||
+	    !agent_context_ready(p)) {
+		intr_restore(enabled);
+		return -1;
+	}
+	source = agent_context_slot(p, slot);
+	memmove(detail, &source->detail, sizeof(*detail));
+	intr_restore(enabled);
+	return 0;
+}
+
+int
+agent_context_load_attribution(struct proc *p, uint64 slot,
+			       uint64 *span_owner, int *cause_pid,
+			       uint64 *cause_control)
+{
+	struct agent_context_private_slot *source;
+	int enabled = intr_save();
+
+	if (span_owner == 0 || cause_pid == 0 || cause_control == 0 ||
+	    slot >= AGENT_CONTEXT_MAX_RECORDS ||
+	    !agent_context_ready(p)) {
+		intr_restore(enabled);
+		return -1;
+	}
+	source = agent_context_slot(p, slot);
+	*span_owner = source->span_owner;
+	*cause_pid = source->cause_pid;
+	*cause_control = source->cause_control;
+	intr_restore(enabled);
+	return 0;
+}
+
+static uint64
+agent_context_ticks(void)
+{
+	return get_cycle() / (CPU_FREQ / TICKS_PER_SEC);
+}
+
+static uint64
+agent_context_hash_mix(uint64 h, uint64 v)
+{
+	for (int i = 0; i < 8; i++) {
+		h ^= (uchar)(v & 0xff);
+		h *= 1099511628211ULL;
+		v >>= 8;
+	}
+	return h;
+}
+
+static uint64
+agent_context_hash_bytes(uint64 h, char *buf, int n)
+{
+	for (int i = 0; i < n; i++) {
+		h ^= (uchar)buf[i];
+		h *= 1099511628211ULL;
+	}
+	return h;
+}
+
+static uint64
+agent_context_record_hash(struct agent_context_record *record)
+{
+	uint64 h = 1469598103934665603ULL;
+
+	h = agent_context_hash_mix(h, record->prev_hash);
+	h = agent_context_hash_mix(h, record->sequence);
+	h = agent_context_hash_mix(h, record->request_id);
+	h = agent_context_hash_mix(h, record->cause_sequence);
+	h = agent_context_hash_mix(h, record->span_id);
+	h = agent_context_hash_mix(h, record->arg0);
+	h = agent_context_hash_mix(h, record->value0);
+	h = agent_context_hash_mix(h, record->value1);
+	h = agent_context_hash_mix(h, record->value2);
+	h = agent_context_hash_mix(h, record->tick);
+	h = agent_context_hash_mix(h, record->flags);
+	h = agent_context_hash_mix(h, (uint64)(uint)record->tool_id);
+	h = agent_context_hash_mix(h, (uint64)(uint)record->status);
+	h = agent_context_hash_bytes(h, record->payload, sizeof(record->payload));
+	h = agent_context_hash_bytes(h, record->result, sizeof(record->result));
+	return h ? h : 1;
+}
+
+static int
+agent_context_layout_ok(void)
+{
+	uint64 cache_offset;
+
+	if (AGENT_CONTEXT_LATEST_RESPONSE_OFFSET !=
+	    sizeof(struct agent_context_header))
+		return 0;
+	if (AGENT_CONTEXT_RECORDS_OFFSET != PAGE_SIZE)
+		return 0;
+	cache_offset = AGENT_CONTEXT_RECORDS_OFFSET +
+		       AGENT_CONTEXT_MAX_RECORDS *
+			       sizeof(struct agent_context_record);
+	return cache_offset < AGENT_CONTEXT_SIZE;
+}
+
+static uint64
+agent_context_user_cache_offset(void)
+{
+	return AGENT_CONTEXT_RECORDS_OFFSET +
+	       AGENT_CONTEXT_MAX_RECORDS *
+		       sizeof(struct agent_context_record);
+}
+
+static uint64
+agent_context_user_cache_size(void)
+{
+	uint64 offset = agent_context_user_cache_offset();
+
+	return offset < AGENT_CONTEXT_SIZE ? AGENT_CONTEXT_SIZE - offset : 0;
+}
+
+static void
+agent_context_free_shadow(uint64 *kva)
+{
+	for (int i = 0; i < AGENT_CONTEXT_PAGES; i++) {
+		if (kva[i] != 0) {
+			kfree((void *)kva[i]);
+			kva[i] = 0;
+		}
+	}
+}
+
+static char *
+agent_context_array_ptr(uint64 *kva, uint64 offset, uint64 len)
+{
+	uint64 page;
+	uint64 page_offset;
+
+	if (offset + len < offset || offset + len > AGENT_CONTEXT_SIZE)
+		return 0;
+	page = offset / PAGE_SIZE;
+	page_offset = offset % PAGE_SIZE;
+	if (page >= AGENT_CONTEXT_PAGES || page_offset + len > PAGE_SIZE ||
+	    kva[page] == 0)
+		return 0;
+	return (char *)(kva[page] + page_offset);
+}
+
+static int
+agent_context_array_read(uint64 *kva, uint64 offset, char *dst, uint64 len)
+{
+	uint64 page;
+	uint64 page_offset;
+	uint64 n;
+
+	if (offset + len < offset || offset + len > AGENT_CONTEXT_SIZE)
+		return -1;
+	while (len > 0) {
+		page = offset / PAGE_SIZE;
+		page_offset = offset % PAGE_SIZE;
+		if (page >= AGENT_CONTEXT_PAGES || kva[page] == 0)
+			return -1;
+		n = PAGE_SIZE - page_offset;
+		if (n > len)
+			n = len;
+		memmove(dst, (char *)(kva[page] + page_offset), n);
+		dst += n;
+		offset += n;
+		len -= n;
+	}
+	return 0;
+}
+
+static int
+agent_context_array_write(uint64 *kva, uint64 offset, char *src, uint64 len)
+{
+	uint64 page;
+	uint64 page_offset;
+	uint64 n;
+
+	if (offset + len < offset || offset + len > AGENT_CONTEXT_SIZE)
+		return -1;
+	while (len > 0) {
+		page = offset / PAGE_SIZE;
+		page_offset = offset % PAGE_SIZE;
+		if (page >= AGENT_CONTEXT_PAGES || kva[page] == 0)
+			return -1;
+		n = PAGE_SIZE - page_offset;
+		if (n > len)
+			n = len;
+		memmove((char *)(kva[page] + page_offset), src, n);
+		src += n;
+		offset += n;
+		len -= n;
+	}
+	return 0;
+}
+
+static int
+agent_context_sync_range(struct proc *p, uint64 offset, uint64 len)
+{
+	char buf[128];
+	uint64 n;
+
+	if (offset + len < offset || offset + len > AGENT_CONTEXT_SIZE)
+		return -1;
+	while (len > 0) {
+		n = len > sizeof(buf) ? sizeof(buf) : len;
+		if (agent_context_array_read(p->agent_shadow_kva, offset, buf, n) <
+			    0 ||
+		    agent_context_array_write(p->agent_ctx_kva, offset, buf, n) <
+			    0)
+			return -1;
+		offset += n;
+		len -= n;
+	}
+	return 0;
+}
+
+static int
+agent_context_sync_all(struct proc *p)
+{
+	return agent_context_sync_range(p, 0,
+					agent_context_user_cache_offset());
+}
+
+static struct agent_context_header *
+agent_context_header_ptr(struct proc *p)
+{
+	return (struct agent_context_header *)agent_context_array_ptr(
+		p->agent_shadow_kva, AGENT_CONTEXT_HEADER_OFFSET,
+		sizeof(struct agent_context_header));
+}
+
+static struct agent_result *
+agent_context_latest_ptr(struct proc *p)
+{
+	return (struct agent_result *)agent_context_array_ptr(
+		p->agent_shadow_kva, AGENT_CONTEXT_LATEST_RESPONSE_OFFSET,
+		sizeof(struct agent_result));
+}
+
+static uint64
+agent_context_record_offset(struct proc *p, uint64 slot)
+{
+	return p->records_offset + slot * sizeof(struct agent_context_record);
+}
+
+int
+agent_context_read_record(struct proc *p, uint64 slot,
+			  struct agent_context_record *record)
+{
+	if (p == 0 || record == 0 || slot >= p->context_path_capacity)
+		return -1;
+	return agent_context_array_read(p->agent_shadow_kva,
+					agent_context_record_offset(p, slot),
+					(char *)record, sizeof(*record));
+}
+
+static int
+agent_context_write_record(struct proc *p, uint64 slot,
+			   struct agent_context_record *record)
+{
+	uint64 offset;
+
+	if (p == 0 || record == 0 || slot >= p->context_path_capacity)
+		return -1;
+	offset = agent_context_record_offset(p, slot);
+	if (agent_context_array_write(p->agent_shadow_kva, offset,
+				      (char *)record, sizeof(*record)) < 0)
+		return -1;
+	return agent_context_sync_range(p, offset, sizeof(*record));
+}
+
+static void
+agent_context_fill_header(struct proc *p,
+			  struct agent_context_header *header)
+{
+	memset(header, 0, sizeof(*header));
+	header->magic = AGENT_CONTEXT_MAGIC;
+	header->version = AGENT_CONTEXT_VERSION;
+	header->capacity = p->context_path_capacity;
+	header->count = p->context_path_count;
+	header->head = p->context_path_head;
+	header->total_calls = p->agent_call_count;
+	header->oldest_sequence = p->context_path_oldest;
+	header->latest_sequence = p->context_path_latest;
+	header->dropped_records = p->context_path_dropped;
+	header->rollback_count = p->context_path_rollback_count;
+	header->latest_response_offset = p->latest_response_offset;
+	header->records_offset = p->records_offset;
+	header->user_cache_offset = agent_context_user_cache_offset();
+	header->user_cache_size = agent_context_user_cache_size();
+	header->current_span_id = p->agent_current_span_id;
+	header->current_cause_sequence = p->agent_current_cause_sequence;
+	header->latest_record_hash = p->agent_context_chain_hash;
+	header->provenance_edges = p->agent_provenance_edges;
+}
+
+static int
+agent_context_write_header_locked(struct proc *p)
+{
+	struct agent_context_header *header;
+
+	if (p == 0)
+		return -1;
+	header = agent_context_header_ptr(p);
+	if (header == 0)
+		return -1;
+	agent_context_fill_header(p, header);
+	return agent_context_sync_range(p, AGENT_CONTEXT_HEADER_OFFSET,
+					sizeof(*header));
+}
+
+int
+agent_context_write_header(struct proc *p)
+{
+	int result;
+
+	if (agent_lifecycle_context_lane_enter(p) < 0)
+		return -1;
+	result = agent_context_write_header_locked(p);
+	agent_lifecycle_context_lane_leave(p);
+	return result;
+}
+
+static int
+agent_context_write_latest(struct proc *p, struct agent_result *latest)
+{
+	struct agent_result *dst = agent_context_latest_ptr(p);
+
+	if (dst == 0)
+		return -1;
+	if (latest != 0)
+		memmove(dst, latest, sizeof(*dst));
+	else {
+		memset(dst, 0, sizeof(*dst));
+		dst->version = AGENT_CALL_VERSION;
+	}
+	return agent_context_sync_range(p, AGENT_CONTEXT_LATEST_RESPONSE_OFFSET,
+					sizeof(*dst));
+}
+
+int
+agent_context_init(struct proc *p)
+{
+	uint64 span_id;
+
+	if (p == 0 || !agent_context_layout_ok() ||
+	    p->agent_control_id == 0 ||
+	    (span_id = agent_observe_alloc_span_id()) == 0 ||
+	    agent_context_clear(p) < 0)
+		return -1;
+	for (int i = 0; i < AGENT_CONTEXT_PAGES; i++) {
+		if (p->agent_shadow_kva[i] == 0 || p->agent_ctx_kva[i] == 0)
+			return -1;
+		memset((void *)p->agent_shadow_kva[i], 0, PAGE_SIZE);
+		memset((void *)p->agent_ctx_kva[i], 0, PAGE_SIZE);
+	}
+	p->agent_call_count = 0;
+	p->context_path_count = 0;
+	p->context_path_capacity = AGENT_CONTEXT_MAX_RECORDS;
+	p->context_path_head = 0;
+	p->context_path_oldest = 0;
+	p->context_path_latest = 0;
+	p->context_path_dropped = 0;
+	p->context_path_rollback_count = 0;
+	p->latest_response_offset = AGENT_CONTEXT_LATEST_RESPONSE_OFFSET;
+	p->records_offset = AGENT_CONTEXT_RECORDS_OFFSET;
+	p->agent_current_span_id = span_id;
+	p->agent_current_span_owner = p->agent_control_id;
+	p->agent_current_cause_sequence = 0;
+	p->agent_current_cause_pid = 0;
+	p->agent_current_cause_control = 0;
+	p->agent_context_chain_hash = 0;
+	p->agent_provenance_edges = 0;
+	if (agent_context_write_header_locked(p) < 0)
+		return -1;
+	return agent_context_write_latest(p, 0);
+}
+
+int
+agent_context_map(struct proc *p)
+{
+	char *mem;
+	char *shadow;
+	uint64 ctx_kva[AGENT_CONTEXT_PAGES];
+	uint64 shadow_kva[AGENT_CONTEXT_PAGES];
+	uint64 va;
+	int mapped = 0;
+
+	if (p == 0 || p->pagetable == 0 ||
+	    !agent_state_reservation_ready(p))
+		return -1;
+	for (int i = 0; i < AGENT_CONTEXT_PAGES; i++)
+		if (p->agent_ctx_kva[i] != 0 || p->agent_shadow_kva[i] != 0)
+			return -1;
+	memset(ctx_kva, 0, sizeof(ctx_kva));
+	memset(shadow_kva, 0, sizeof(shadow_kva));
+	for (va = AGENT_CONTEXT_BASE;
+	     va < AGENT_CONTEXT_BASE + AGENT_CONTEXT_SIZE;
+	     va += PAGE_SIZE) {
+		mem = kalloc();
+		if (mem == 0)
+			goto bad;
+		shadow = kalloc();
+		if (shadow == 0) {
+			kfree(mem);
+			goto bad;
+		}
+		memset(mem, 0, PAGE_SIZE);
+		memset(shadow, 0, PAGE_SIZE);
+		if (mappages(p->pagetable, va, PAGE_SIZE, (uint64)mem,
+			     PTE_R | PTE_W | PTE_U) != 0) {
+			kfree(mem);
+			kfree(shadow);
+			goto bad;
+		}
+		ctx_kva[mapped] = (uint64)mem;
+		shadow_kva[mapped] = (uint64)shadow;
+		mapped++;
+	}
+	memmove(p->agent_ctx_kva, ctx_kva, sizeof(ctx_kva));
+	memmove(p->agent_shadow_kva, shadow_kva, sizeof(shadow_kva));
+	return 0;
+
+bad:
+	if (mapped > 0)
+		uvmunmap(p->pagetable, AGENT_CONTEXT_BASE, mapped, 1);
+	agent_context_free_shadow(shadow_kva);
+	return -1;
+}
+
+int
+agent_map_context(struct proc *p)
+{
+	return agent_context_map(p);
+}
+
+int
+agent_alias_exec_context(struct proc *p, pagetable_t pagetable)
+{
+	int mapped = 0;
+
+	if (p == 0 || pagetable == 0)
+		return -1;
+	if (!p->is_agent)
+		return 0;
+	if (p->agent_ctx_base == 0 ||
+	    p->agent_ctx_base > MAXVA - AGENT_CONTEXT_SIZE)
+		return -1;
+	for (int i = 0; i < AGENT_CONTEXT_PAGES; i++) {
+		if (p->agent_ctx_kva[i] == 0 ||
+		    mappages(pagetable, p->agent_ctx_base + i * PAGE_SIZE,
+			     PAGE_SIZE, p->agent_ctx_kva[i],
+			     PTE_U | PTE_R | PTE_W) < 0)
+			goto fail;
+		mapped++;
+	}
+	return 0;
+
+fail:
+	if (mapped != 0)
+		uvmunmap(pagetable, p->agent_ctx_base, mapped, 0);
+	return -1;
+}
+
+void
+agent_unmap_exec_context(struct proc *p, pagetable_t pagetable)
+{
+	if (p != 0 && pagetable != 0 && p->is_agent &&
+	    p->agent_ctx_base != 0)
+		uvmunmap(pagetable, p->agent_ctx_base, AGENT_CONTEXT_PAGES, 0);
+}
+
+void
+agent_free_proc_context(struct proc *p)
+{
+	int mapped = 0;
+	uint64 base;
+
+	if (p == 0)
+		return;
+	if (!agent_lifecycle_context_lane_quiescent(p))
+		panic("Agent context freed with active operation");
+	for (int i = 0; i < AGENT_CONTEXT_PAGES; i++) {
+		if (p->agent_ctx_kva[i] == 0)
+			break;
+		mapped++;
+	}
+	for (int i = mapped; i < AGENT_CONTEXT_PAGES; i++)
+		if (p->agent_ctx_kva[i] != 0)
+			panic("Agent context page layout");
+	if (mapped != 0) {
+		if (p->pagetable == 0)
+			panic("Agent context without pagetable");
+		base = p->agent_ctx_base != 0 ?
+			       p->agent_ctx_base :
+			       AGENT_CONTEXT_BASE;
+		uvmunmap(p->pagetable, base, mapped, 1);
+	}
+	for (int i = 0; i < AGENT_CONTEXT_PAGES; i++)
+		p->agent_ctx_kva[i] = 0;
+	agent_context_free_shadow(p->agent_shadow_kva);
+	agent_context_free(p);
+}
+
+static int
+agent_context_append_flags(struct proc *p, struct agent_op *op,
+			   struct agent_result *latest, uint64 tick,
+			   uint64 flags, int authority_effect)
+{
+	struct agent_context_detail detail;
+	struct agent_context_record record;
+	struct thread *t = curr_thread();
+	uint64 slot;
+
+	if (p == 0 || op == 0 || latest == 0 || p->agent_ctx_base == 0 ||
+	    p->context_path_capacity == 0 || !agent_context_layout_ok() ||
+	    p->agent_current_span_id == 0 ||
+	    p->agent_current_span_owner == 0 || t == 0 || t->process != p ||
+	    p->agent_context_lane_owner_tid != t->tid ||
+	    p->agent_context_lane_depth == 0)
+		return -1;
+	slot = p->context_path_head % p->context_path_capacity;
+	if (p->context_path_count < p->context_path_capacity) {
+		if (p->context_path_count == 0)
+			p->context_path_oldest = latest->sequence;
+		p->context_path_count++;
+	} else {
+		p->context_path_dropped++;
+		p->context_path_oldest =
+			latest->sequence - p->context_path_capacity + 1;
+	}
+	p->context_path_latest = latest->sequence;
+	p->context_path_head = (slot + 1) % p->context_path_capacity;
+
+	memset(&record, 0, sizeof(record));
+	record.sequence = latest->sequence;
+	record.request_id = latest->request_id;
+	record.cause_sequence = p->agent_current_cause_sequence;
+	record.span_id = p->agent_current_span_id;
+	record.arg0 = op->arg0;
+	record.value0 = latest->value0;
+	record.value1 = latest->value1;
+	record.value2 = latest->value2;
+	record.tick = tick;
+	record.flags = flags;
+	if (strlen(op->payload) >= sizeof(record.payload) ||
+	    strlen(latest->result) >= sizeof(record.result))
+		record.flags |= AGENT_CONTEXT_RECORD_F_TRUNCATED;
+	record.tool_id = latest->tool_id;
+	record.status = latest->status;
+	safestrcpy(record.payload, op->payload, sizeof(record.payload));
+	safestrcpy(record.result, latest->result, sizeof(record.result));
+	record.prev_hash = p->agent_context_chain_hash;
+	record.record_hash = agent_context_record_hash(&record);
+
+	memset(&detail, 0, sizeof(detail));
+	detail.sequence = latest->sequence;
+	detail.flags = record.flags;
+	memmove(&detail.op, op, sizeof(*op));
+	memmove(&detail.result, latest, sizeof(*latest));
+	if (agent_context_store(p, slot, &detail,
+				p->agent_current_span_owner,
+				p->agent_current_cause_pid,
+				p->agent_current_cause_control) < 0 ||
+	    agent_context_write_record(p, slot, &record) < 0)
+		return -1;
+	p->agent_context_chain_hash = record.record_hash;
+	if (record.cause_sequence != 0)
+		p->agent_provenance_edges++;
+	p->agent_current_cause_sequence = latest->sequence;
+	p->agent_current_cause_pid = p->pid;
+	p->agent_current_cause_control = p->agent_control_id;
+	p->agent_current_span_id = record.span_id;
+	if (agent_context_write_latest(p, latest) < 0)
+		return -1;
+	agent_observe_record_context(p, &record, authority_effect);
+	return 0;
+}
+
+int
+agent_context_append(struct proc *p, struct agent_op *op,
+		     struct agent_result *latest, uint64 tick,
+		     int authority_effect)
+{
+	int result = agent_context_append_flags(
+		p, op, latest, tick, AGENT_CONTEXT_RECORD_F_SYSTEM,
+		authority_effect);
+
+	if (result == 0)
+		result = agent_context_write_header_locked(p);
+	return result;
+}
+
+static void
+agent_context_result_text(struct agent_result *result, char *text)
+{
+	safestrcpy(result->result, text, sizeof(result->result));
+}
+
+int
+agent_context_append_system(struct proc *p, int tool_id, uint64 request_id,
+			    uint64 arg0, char *payload, char *result,
+			    int status, uint64 value0, uint64 value1,
+			    uint64 value2)
+{
+	struct agent_op op;
+	struct agent_result latest;
+	int append_status;
+
+	if (p == 0 || !p->is_agent)
+		return -1;
+	if (agent_lifecycle_context_lane_enter(p) < 0)
+		return -1;
+	memset(&op, 0, sizeof(op));
+	op.version = AGENT_CALL_VERSION;
+	op.tool_id = tool_id;
+	op.request_id = request_id;
+	op.arg0 = arg0;
+	safestrcpy(op.payload, payload, sizeof(op.payload));
+	memset(&latest, 0, sizeof(latest));
+	latest.version = AGENT_CALL_VERSION;
+	latest.status = status;
+	latest.tool_id = tool_id;
+	latest.request_id = request_id;
+	p->agent_call_count++;
+	latest.sequence = p->agent_call_count;
+	latest.value0 = value0;
+	latest.value1 = value1;
+	latest.value2 = value2;
+	agent_context_result_text(&latest, result);
+	append_status = agent_context_append_flags(
+		p, &op, &latest, agent_context_ticks(),
+		AGENT_CONTEXT_RECORD_F_SYSTEM, 0);
+	if (append_status == 0)
+		append_status = agent_context_write_header_locked(p);
+	agent_lifecycle_context_lane_leave(p);
+	return append_status < 0 ? AGENT_STATUS_NO_SPACE : 0;
+}
+
+int
+sys_context_push(uint64 recordaddr)
+{
+	struct proc *p = curr_proc();
+	struct agent_context_record record;
+	struct agent_op op;
+	struct agent_result latest;
+	int result = 0;
+
+	if (!p->is_agent)
+		return -1;
+	if (copyin(p->pagetable, (char *)&record, recordaddr,
+		   sizeof(record)) < 0)
+		return -1;
+	if (record.span_id != 0 || record.cause_sequence != 0)
+		return AGENT_STATUS_BAD_PARAM;
+	if (agent_lifecycle_context_lane_enter(p) < 0)
+		return -1;
+	record.payload[sizeof(record.payload) - 1] = 0;
+	record.result[sizeof(record.result) - 1] = 0;
+	memset(&op, 0, sizeof(op));
+	op.version = AGENT_CALL_VERSION;
+	op.tool_id = record.tool_id;
+	op.request_id = record.request_id;
+	op.arg0 = record.arg0;
+	safestrcpy(op.payload, record.payload, sizeof(op.payload));
+	p->agent_call_count++;
+	memset(&latest, 0, sizeof(latest));
+	latest.version = AGENT_CALL_VERSION;
+	latest.status = record.status;
+	latest.tool_id = record.tool_id;
+	latest.request_id = record.request_id;
+	latest.sequence = p->agent_call_count;
+	latest.value0 = record.value0;
+	latest.value1 = record.value1;
+	latest.value2 = record.value2;
+	agent_context_result_text(&latest,
+				  record.result[0] ? record.result : "manual");
+	if (agent_context_append_flags(p, &op, &latest,
+				       agent_context_ticks(),
+				       AGENT_CONTEXT_RECORD_F_MANUAL, 0) < 0 ||
+	    agent_context_write_header_locked(p) < 0)
+		result = AGENT_STATUS_NO_SPACE;
+	agent_lifecycle_context_lane_leave(p);
+	return result;
+}
+
+int
+sys_context_query(uint64 start_sequence, uint64 outaddr, int max)
+{
+	struct proc *p = curr_proc();
+	struct agent_context_record record;
+	uint64 seq;
+	uint64 slot;
+	int copied = 0;
+	int result;
+
+	if (!p->is_agent)
+		return -1;
+	if (max < 0)
+		return -1;
+	if (agent_lifecycle_context_lane_enter(p) < 0)
+		return -1;
+	if (max == 0 || p->context_path_count == 0) {
+		result = 0;
+		goto out;
+	}
+	seq = (start_sequence == 0 ||
+	       start_sequence < p->context_path_oldest) ?
+		      p->context_path_oldest :
+		      start_sequence;
+	if (seq > p->context_path_latest) {
+		result = 0;
+		goto out;
+	}
+	while (seq <= p->context_path_latest && copied < max) {
+		slot = (seq - 1) % p->context_path_capacity;
+		if (agent_context_read_record(p, slot, &record) < 0) {
+			result = AGENT_STATUS_NO_SPACE;
+			goto out;
+		}
+		if (record.sequence == seq) {
+			if (copyout(p->pagetable,
+				    outaddr +
+					    copied *
+						    sizeof(struct agent_context_record),
+				    (char *)&record, sizeof(record)) < 0) {
+				result = -1;
+				goto out;
+			}
+			copied++;
+		}
+		seq++;
+	}
+	result = copied;
+out:
+	agent_lifecycle_context_lane_leave(p);
+	return result;
+}
+
+int
+sys_context_snapshot(uint64 headeraddr, uint64 recordsaddr, int max)
+{
+	struct proc *p = curr_proc();
+	struct agent_context_header *header;
+	int result;
+
+	if (!p->is_agent)
+		return -1;
+	if (max < 0)
+		return -1;
+	if (agent_lifecycle_context_lane_enter(p) < 0)
+		return -1;
+	if (agent_context_write_header_locked(p) < 0 ||
+	    agent_context_sync_all(p) < 0) {
+		result = AGENT_STATUS_NO_SPACE;
+		goto out;
+	}
+	header = agent_context_header_ptr(p);
+	if (header == 0) {
+		result = AGENT_STATUS_NO_SPACE;
+		goto out;
+	}
+	if (headeraddr != 0 &&
+	    copyout(p->pagetable, headeraddr, (char *)header,
+		    sizeof(*header)) < 0) {
+		result = -1;
+		goto out;
+	}
+	result = max == 0 || recordsaddr == 0 ?
+		       0 : sys_context_query(0, recordsaddr, max);
+out:
+	agent_lifecycle_context_lane_leave(p);
+	return result;
+}
+
+int
+sys_context_detail(uint64 sequence, uint64 detailaddr)
+{
+	struct proc *p = curr_proc();
+	struct agent_context_detail detail;
+	uint64 slot;
+	int result;
+
+	if (!p->is_agent)
+		return -1;
+	if (detailaddr == 0)
+		return AGENT_STATUS_BAD_PARAM;
+	if (agent_lifecycle_context_lane_enter(p) < 0)
+		return -1;
+	if (p->context_path_count == 0 ||
+	    sequence < p->context_path_oldest ||
+	    sequence > p->context_path_latest) {
+		result = AGENT_STATUS_NOT_FOUND;
+		goto out;
+	}
+	slot = (sequence - 1) % p->context_path_capacity;
+	if (agent_context_load_detail(p, slot, &detail) < 0) {
+		result = AGENT_STATUS_NO_SPACE;
+		goto out;
+	}
+	if (detail.sequence != sequence) {
+		result = AGENT_STATUS_NOT_FOUND;
+		goto out;
+	}
+	if (copyout(p->pagetable, detailaddr, (char *)&detail,
+		    sizeof(detail)) < 0) {
+		result = -1;
+		goto out;
+	}
+	result = 0;
+out:
+	agent_lifecycle_context_lane_leave(p);
+	return result;
+}
+
+int
+sys_context_rollback(uint64 sequence)
+{
+	struct proc *p = curr_proc();
+	struct agent_context_record record;
+	struct agent_result latest;
+	uint64 span_owner;
+	uint64 cause_control;
+	uint64 slot;
+	int cause_pid;
+	int result;
+
+	if (!p->is_agent)
+		return -1;
+	if (agent_lifecycle_context_lane_enter(p) < 0)
+		return -1;
+	if (p->context_path_count == 0 ||
+	    sequence < p->context_path_oldest ||
+	    sequence > p->context_path_latest) {
+		result = AGENT_STATUS_NOT_FOUND;
+		goto out;
+	}
+	slot = (sequence - 1) % p->context_path_capacity;
+	if (agent_context_read_record(p, slot, &record) < 0) {
+		result = AGENT_STATUS_NO_SPACE;
+		goto out;
+	}
+	if (record.sequence != sequence) {
+		result = AGENT_STATUS_NOT_FOUND;
+		goto out;
+	}
+	if (agent_context_load_attribution(p, slot, &span_owner, &cause_pid,
+					   &cause_control) < 0) {
+		result = AGENT_STATUS_NO_SPACE;
+		goto out;
+	}
+	if (record.span_id == 0 || span_owner == 0) {
+		result = AGENT_STATUS_NOT_FOUND;
+		goto out;
+	}
+	p->agent_call_count = sequence;
+	p->context_path_latest = sequence;
+	p->context_path_count = sequence - p->context_path_oldest + 1;
+	p->context_path_head = sequence % p->context_path_capacity;
+	p->context_path_rollback_count++;
+	memset(&latest, 0, sizeof(latest));
+	latest.version = AGENT_CALL_VERSION;
+	latest.status = record.status;
+	latest.tool_id = record.tool_id;
+	latest.request_id = record.request_id;
+	latest.sequence = record.sequence;
+	latest.value0 = record.value0;
+	latest.value1 = record.value1;
+	latest.value2 = record.value2;
+	agent_context_result_text(&latest, "rollback");
+	p->agent_current_cause_sequence = record.sequence;
+	p->agent_current_cause_pid = p->pid;
+	p->agent_current_cause_control = p->agent_control_id;
+	p->agent_context_chain_hash = record.record_hash;
+	p->agent_current_span_id = record.span_id;
+	p->agent_current_span_owner = span_owner;
+	if (agent_context_write_latest(p, &latest) < 0 ||
+	    agent_context_write_header_locked(p) < 0)
+		result = AGENT_STATUS_NO_SPACE;
+	else
+		result = 0;
+out:
+	agent_lifecycle_context_lane_leave(p);
+	return result;
+}
+
+int
+sys_context_clear(void)
+{
+	struct proc *p = curr_proc();
+	uint64 span_id;
+	int result;
+
+	if (!p->is_agent)
+		return -1;
+	if (agent_lifecycle_context_lane_enter(p) < 0)
+		return -1;
+	if (p->agent_control_id == 0 ||
+	    (span_id = agent_observe_alloc_span_id()) == 0 ||
+	    agent_context_clear(p) < 0) {
+		result = AGENT_STATUS_NO_SPACE;
+		goto out;
+	}
+	p->agent_call_count = 0;
+	p->context_path_count = 0;
+	p->context_path_head = 0;
+	p->context_path_oldest = 0;
+	p->context_path_latest = 0;
+	p->context_path_dropped = 0;
+	p->context_path_rollback_count = 0;
+	p->agent_current_span_id = span_id;
+	p->agent_current_span_owner = p->agent_control_id;
+	p->agent_current_cause_sequence = 0;
+	p->agent_current_cause_pid = 0;
+	p->agent_current_cause_control = 0;
+	p->agent_context_chain_hash = 0;
+	p->agent_provenance_edges = 0;
+	for (int i = 1; i < AGENT_CONTEXT_PAGES; i++)
+		if (p->agent_shadow_kva[i] != 0)
+			memset((void *)p->agent_shadow_kva[i], 0, PAGE_SIZE);
+	if (agent_context_write_latest(p, 0) < 0 ||
+	    agent_context_write_header_locked(p) < 0 ||
+	    agent_context_sync_all(p) < 0)
+		result = AGENT_STATUS_NO_SPACE;
+	else
+		result = 0;
+out:
+	agent_lifecycle_context_lane_leave(p);
+	return result;
+}

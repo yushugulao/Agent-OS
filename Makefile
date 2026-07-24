@@ -1,4 +1,4 @@
-.PHONY: clean build user run run-persist debug test doctor kernel-stack-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test reader target-readiness dual-platform-run full-verify dual-clean .FORCE
+.PHONY: clean build user run run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest agent-module-check ci-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test reader target-readiness dual-platform-run full-verify dual-clean .FORCE
 .DELETE_ON_ERROR:
 all: build
 
@@ -12,6 +12,8 @@ AS = $(TOOLPREFIX)gcc
 LD = $(TOOLPREFIX)ld
 OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
+NM = $(TOOLPREFIX)nm
+SIZE = $(TOOLPREFIX)size
 PY = python3
 PYTHON_BIN ?= $(PY)
 GDB = $(TOOLPREFIX)gdb
@@ -44,6 +46,8 @@ CFLAGS += -I$K
 CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 
 KSTACK_SIZE_BYTES ?= 16384
+KSTACK_BOOT_SIZE_BYTES ?= 65536
+KSTACK_BOOT_ROOT ?= main
 KSTACK_GUARD_SIZE_BYTES ?= 4096
 KSTACK_FRAME_BUDGET ?= $(KSTACK_GUARD_SIZE_BYTES)
 KSTACK_SAFETY_MARGIN ?= 4096
@@ -168,7 +172,10 @@ $(KSTACK_BUILD_CONFIG): .FORCE
 	@printf '%s\n' \
 		'CC=$(CC)' \
 		'CFLAGS=$(CFLAGS)' \
+		'LDFLAGS=$(LDFLAGS)' \
 		'KSTACK_SIZE_BYTES=$(KSTACK_SIZE_BYTES)' \
+		'KSTACK_BOOT_SIZE_BYTES=$(KSTACK_BOOT_SIZE_BYTES)' \
+		'KSTACK_BOOT_ROOT=$(KSTACK_BOOT_ROOT)' \
 		'KSTACK_GUARD_SIZE_BYTES=$(KSTACK_GUARD_SIZE_BYTES)' \
 		'KSTACK_FRAME_BUDGET=$(KSTACK_FRAME_BUDGET)' \
 		'KSTACK_SAFETY_MARGIN=$(KSTACK_SAFETY_MARGIN)' \
@@ -209,6 +216,8 @@ build/kernel: $(OBJS) os/kernel.ld scripts/check-kernel-stack-usage.py $(KSTACK_
 	$(PY) scripts/check-kernel-stack-usage.py \
 		--callgraph-dir $(BUILDDIR)/$(K) --source-dir $(K) \
 		--stack-size $(KSTACK_SIZE_BYTES) --guard-size $(KSTACK_GUARD_SIZE_BYTES) \
+		--boot-stack-size $(KSTACK_BOOT_SIZE_BYTES) \
+		--boot-root $(KSTACK_BOOT_ROOT) \
 		--safety-margin $(KSTACK_SAFETY_MARGIN) \
 		--interrupt-entry $(KERNELVEC_FRAME_SIZE_BYTES) $(KSTACK_POLICY_ARGS)
 	$(LD) $(LDFLAGS) -T os/kernel.ld -o $(BUILDDIR)/kernel $(OBJS)
@@ -220,8 +229,107 @@ kernel-stack-check: build/kernel
 	@$(PY) scripts/check-kernel-stack-usage.py \
 		--callgraph-dir $(BUILDDIR)/$(K) --source-dir $(K) \
 		--stack-size $(KSTACK_SIZE_BYTES) --guard-size $(KSTACK_GUARD_SIZE_BYTES) \
+		--boot-stack-size $(KSTACK_BOOT_SIZE_BYTES) \
+		--boot-root $(KSTACK_BOOT_ROOT) \
 		--safety-margin $(KSTACK_SAFETY_MARGIN) \
 		--interrupt-entry $(KERNELVEC_FRAME_SIZE_BYTES) $(KSTACK_POLICY_ARGS)
+
+override KERNEL_BUDGET_CONFIG = ci/kernel-budgets.json
+override KERNEL_BUDGET_BUILDDIR = build
+override STRUCT_PROC_BUDGET_PROBE = $(KERNEL_BUDGET_BUILDDIR)/ci/struct-proc-size.o
+override AGENT_CORE_BOUNDARY_PROBE = $(KERNEL_BUDGET_BUILDDIR)/ci/agent-core-boundary.o
+override KERNEL_BUDGET_TOOLPREFIX = riscv64-linux-gnu-
+override KERNEL_BUDGET_INIT_PROC = agentfinal_ucore
+override KERNEL_BUDGET_LOG = warn
+override KERNEL_BUDGET_CHAPTER = agent
+override KERNEL_BUDGET_PYTHON = python3
+override KERNEL_BUDGET_SUBMAKE = env \
+	-u MAKEFLAGS -u MFLAGS -u MAKEOVERRIDES \
+	-u CFLAGS -u CPPFLAGS -u LDFLAGS -u ASFLAGS \
+	make
+override KERNEL_BUDGET_MAKE_ARGS = \
+	MAKEOVERRIDES= \
+	TOOLPREFIX=$(KERNEL_BUDGET_TOOLPREFIX) \
+	LOG=$(KERNEL_BUDGET_LOG) \
+	INIT_PROC=$(KERNEL_BUDGET_INIT_PROC) \
+	CHAPTER=$(KERNEL_BUDGET_CHAPTER) \
+	KSTACK_SIZE_BYTES=16384 \
+	KSTACK_BOOT_SIZE_BYTES=65536 \
+	KSTACK_BOOT_ROOT=main \
+	KSTACK_GUARD_SIZE_BYTES=4096 \
+	KSTACK_FRAME_BUDGET=4096 \
+	KSTACK_SAFETY_MARGIN=4096 \
+	KERNELVEC_FRAME_SIZE_BYTES=256 \
+	KSTACK_STACK_BOUNDARIES=swtch \
+	KSTACK_INDIRECT_CALLERS=usertrapret \
+	KSTACK_RECURSION_BOUNDS='printf=2 freewalk=3' \
+	FS_ICACHE_SIZE= \
+	FILE_RESOURCE_POOL_SIZE= \
+	FILE_RESOURCE_ORDINARY_LIMIT= \
+	FILE_RESOURCE_DOMAIN_ORDINARY_LIMIT= \
+	FILE_RESOURCE_DOMAIN_RESERVED_LIMIT= \
+	THREAD_RESOURCE_POOL_SIZE= \
+	THREAD_RESOURCE_ORDINARY_LIMIT= \
+	THREAD_RESOURCE_RESERVED_LIMIT= \
+	THREAD_RESOURCE_DOMAIN_ORDINARY_LIMIT= \
+	THREAD_RESOURCE_DOMAIN_RESERVED_LIMIT= \
+	FS_DOMAIN_BLOCK_LIMIT= \
+	FS_DOMAIN_INODE_LIMIT= \
+	FS_WORKFLOW_DOMAIN_BLOCK_LIMIT= \
+	FS_WORKFLOW_DOMAIN_INODE_LIMIT= \
+	FS_WORKFLOW_BLOCK_RESERVE= \
+	FS_SYSTEM_BLOCK_RESERVE= \
+	FS_WORKFLOW_INODE_RESERVE= \
+	FS_SYSTEM_INODE_RESERVE= \
+	FS_WORKFLOW_BLOCK_MIN_PER_SCOPE= \
+	FS_WORKFLOW_INODE_MIN_PER_SCOPE= \
+	FS_SYSTEM_BLOCK_MIN_RESERVE= \
+	FS_SYSTEM_INODE_MIN_RESERVE= \
+	FS_STORAGE_TINY_TEST_PROFILE=
+
+$(STRUCT_PROC_BUDGET_PROBE): scripts/probes/struct-proc-size.c $(wildcard $(K)/*.h) $(wildcard *_policy.h) $(KSTACK_BUILD_CONFIG)
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(AGENT_CORE_BOUNDARY_PROBE): $(K)/agent_core.c $(wildcard $(K)/*.h) $(wildcard *_policy.h) $(KSTACK_BUILD_CONFIG)
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) -fno-inline -fkeep-static-functions \
+		-fkeep-inline-functions -c $< -o $@
+
+agent-module-check: scripts/check-agent-module-boundaries.sh scripts/check-kernel-budgets.py $(KERNEL_BUDGET_CONFIG)
+	@bash scripts/check-agent-module-boundaries.sh
+	@$(KERNEL_BUDGET_SUBMAKE) build/kernel $(KERNEL_BUDGET_MAKE_ARGS)
+	@$(KERNEL_BUDGET_SUBMAKE) $(AGENT_CORE_BOUNDARY_PROBE) $(KERNEL_BUDGET_MAKE_ARGS)
+	@$(KERNEL_BUDGET_PYTHON) scripts/check-kernel-budgets.py \
+		--check agent-modules --config $(KERNEL_BUDGET_CONFIG) --root . \
+		--agent-core-probe $(AGENT_CORE_BOUNDARY_PROBE) \
+		--nm $(KERNEL_BUDGET_TOOLPREFIX)nm
+
+kernel-budget-check: scripts/check-agent-module-boundaries.sh scripts/check-kernel-budgets.py $(KERNEL_BUDGET_CONFIG)
+	@bash scripts/check-agent-module-boundaries.sh
+	@$(KERNEL_BUDGET_SUBMAKE) build/kernel $(KERNEL_BUDGET_MAKE_ARGS)
+	@$(KERNEL_BUDGET_SUBMAKE) $(STRUCT_PROC_BUDGET_PROBE) $(KERNEL_BUDGET_MAKE_ARGS)
+	@$(KERNEL_BUDGET_SUBMAKE) $(AGENT_CORE_BOUNDARY_PROBE) $(KERNEL_BUDGET_MAKE_ARGS)
+	@$(KERNEL_BUDGET_PYTHON) scripts/check-kernel-budgets.py \
+		--check kernel --config $(KERNEL_BUDGET_CONFIG) --root . \
+		--kernel $(KERNEL_BUDGET_BUILDDIR)/kernel \
+		--struct-probe $(STRUCT_PROC_BUDGET_PROBE) \
+		--cc $(KERNEL_BUDGET_TOOLPREFIX)gcc \
+		--objcopy $(KERNEL_BUDGET_TOOLPREFIX)objcopy \
+		--nm $(KERNEL_BUDGET_TOOLPREFIX)nm \
+		--size $(KERNEL_BUDGET_TOOLPREFIX)size \
+		--callgraph-dir $(KERNEL_BUDGET_BUILDDIR)/os
+	@$(KERNEL_BUDGET_PYTHON) scripts/check-kernel-budgets.py \
+		--check agent-modules --config $(KERNEL_BUDGET_CONFIG) --root . \
+		--agent-core-probe $(AGENT_CORE_BOUNDARY_PROBE) \
+		--nm $(KERNEL_BUDGET_TOOLPREFIX)nm
+
+kernel-budget-selftest: scripts/test-check-kernel-budgets.py scripts/test-agent-test-runner.py scripts/test-validate-kernel-test-log.py
+	@$(KERNEL_BUDGET_PYTHON) scripts/test-check-kernel-budgets.py
+	@$(KERNEL_BUDGET_PYTHON) scripts/test-agent-test-runner.py
+	@$(KERNEL_BUDGET_PYTHON) scripts/test-validate-kernel-test-log.py
+
+ci-check: kernel-budget-selftest kernel-budget-check
 
 clean:
 	make -C $(U) clean

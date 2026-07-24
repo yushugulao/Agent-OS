@@ -6,7 +6,7 @@
 
 本项目在 uCore 内核上实现 Agent-OS，把 Agent 进程身份、结构化工具调用、上下文历史、文件元数据索引和 Agent 事件运行机制放入内核支持层。
 
-完整专项脚本当前依次运行十六个程序。2026-07-24 的 workflow 强制撤销实现快照已以 `CASE_TIMEOUT=300s bash scripts/run-agent-tests.sh` 完成 16/16，整条命令墙钟约 `371.5s`，其中 `agentscope_ucore` 约 `127.9s`。子代理审查补强回归后，最终 `agentscope_ucore` 又以 `CASE_TIMEOUT=260s AGENT_TEST_CASE=agentscope_ucore bash scripts/run-agent-tests.sh` 通过，约 `126.1s`；审查后未重跑完整 16 项。构建期 AgentOS 栈预算为 `13824 < 16384`：
+完整专项脚本当前依次运行十六个程序。2026-07-25 的 generation-safe lifecycle、统一 resource controller、phase-aware teardown、21 页 Agent 状态原子计费、Context commit lane、lazy physical stack 和模块拆分版本已在固定 `agentos-qemu-calibrated` runner 由 bounded/flood-safe runner 连续完成三次 16/16，总 case monotonic 时间为 `261.343281873s`、`237.948978492s` 和 `255.370930671s`，中位 `255.370930671s`，CI 上限 `268.14s`；相对中位数约 5% headroom，足以覆盖最大样本，同时比旧门更紧。独立 `agentscope_ucore` 约 `93.7s`，实际输出 `scope_controller_exit_revoke=1 public_lineage=1` 和 `parent passed`；`agentfinal_ucore` 输出 `context_commit_lane=1 sequence=1..3 hash=1`。旧 `371.5s`、`127.9s`、`126.1s` 与 `13824 < 16384` 只保留为历史快照；预算 checker 31 项、通用 runner 24 项、生产 profile validator 5 项 fail-closed 自测当前纳入 CI，静态预算以 `ci/kernel-budgets.json` 为准：
 
 ```bash
 agentfinal_ucore

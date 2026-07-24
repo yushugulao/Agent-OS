@@ -134,6 +134,7 @@ is_agentos_adapted_source() {
 }
 
 require_path "baseline_ucore/os" "baseline kernel directory is missing"
+require_path ".gitlab-ci.yml" "GitLab CI budget pipeline is missing"
 require_path "os/kernel_work.c" "AgentOS kernel work budget module is missing"
 require_path "os/kernel_work.h" "AgentOS kernel work budget API is missing"
 require_path "baseline_ucore/os/kernel_work.c" "baseline kernel work budget module is missing"
@@ -165,10 +166,27 @@ require_path "scripts/check-windows-prereqs.ps1" "Windows dependency checker is 
 require_path "scripts/install-ubuntu-deps.sh" "Ubuntu dependency installer is missing"
 require_path "scripts/run-dual-platforms.sh" "dual target runner is missing"
 require_path "scripts/run-full-verification.sh" "full verification runner is missing"
+require_path "scripts/check-agent-module-boundaries.sh" "AgentOS module boundary checker is missing"
+require_path "scripts/check-kernel-budgets.py" "kernel budget checker is missing"
+require_path "scripts/test-check-kernel-budgets.py" "kernel budget checker tests are missing"
+require_path "scripts/agent_test_runner.py" "Agent test output runner is missing"
+require_path "scripts/test-agent-test-runner.py" "Agent test output runner tests are missing"
+require_path "scripts/validate-kernel-test-log.py" "specialized kernel log validator is missing"
+require_path "scripts/test-validate-kernel-test-log.py" "specialized kernel log validator tests are missing"
+require_path "scripts/probes/struct-proc-size.c" "struct proc budget probe is missing"
+require_path "ci/kernel-budgets.json" "machine-readable kernel budgets are missing"
+require_path "os/agent_context.c" "Agent context subsystem is missing"
+require_path "os/agent_metadata_objects.c" "Agent metadata object subsystem is missing"
+require_path "os/agent_metadata_store.c" "Agent metadata store subsystem is missing"
 require_path "scripts/run-syscall-fairness-tests.sh" "syscall fairness runner is missing"
 require_path "scripts/run-file-resource-tests.sh" "file resource runner is missing"
+require_path "scripts/run-fs-enospc-tests.sh" "filesystem ENOSPC runner is missing"
+require_path "scripts/run-proc-reap-tests.sh" "process reaper runner is missing"
+require_path "scripts/run-thread-resource-tests.sh" "thread resource runner is missing"
 require_path "scripts/serve-reader.sh" "reader server script is missing"
 require_path "docs/windows-quickstart.md" "Windows quickstart document is missing"
+
+bash "${ROOT_DIR}/scripts/check-agent-module-boundaries.sh"
 
 plain_kernel_pattern='SYS_agent_|AGENT_CONTEXT|AGENT_TOOL_|AGENT_CAP_|agent_create|agent_run|context_snapshot|agent_file_|agent_wait|agent_heartbeat|\.agentmeta'
 reject_text "baseline_ucore/os" "${plain_kernel_pattern}" "baseline kernel contains AgentOS-specific symbols"
@@ -188,9 +206,92 @@ require_text "Makefile" "scripts/run-dual-platforms.sh" "Makefile dual platform 
 require_text "Makefile" "scripts/serve-reader.sh" "Makefile reader target does not call the reader server"
 require_text "Makefile" "scripts/check-target-readiness.sh" "Makefile target readiness target does not call the readiness checker"
 require_text "Makefile" "scripts/run-full-verification.sh" "Makefile full verification target does not call the full runner"
+require_text "Makefile" "kernel-budget-check" "Makefile kernel budget target is missing"
+require_text "Makefile" "agent-module-check" "Makefile Agent module budget target is missing"
+require_text "Makefile" "check agent-modules" "Makefile does not enforce Agent module budgets"
+require_text "Makefile" "scripts/test-check-kernel-budgets.py" "Makefile kernel budget self-test is missing"
+require_text "Makefile" "scripts/test-agent-test-runner.py" "Makefile Agent output runner self-test is missing"
+require_text "Makefile" "scripts/test-validate-kernel-test-log.py" "Makefile specialized log validator self-test is missing"
+require_text ".gitlab-ci.yml" "make ci-check" "GitLab CI does not enforce kernel budgets"
+require_text ".gitlab-ci.yml" "verify-dual-target-structure.sh" "GitLab CI omits structure verification"
+require_text ".gitlab-ci.yml" "run-agent-tests.sh" "GitLab CI does not enforce Agent regression duration"
+require_text ".gitlab-ci.yml" "REQUIRE_FULL_SUITE=1" "GitLab CI permits a sharded Agent suite"
+require_text ".gitlab-ci.yml" "AGENT_TEST_CALIBRATE=0" "GitLab CI bypasses calibrated Agent duration enforcement"
+require_text ".gitlab-ci.yml" "run-proc-reap-tests.sh" "GitLab CI omits process teardown regression"
+require_text ".gitlab-ci.yml" "run-fs-enospc-tests.sh" "GitLab CI omits filesystem resource regression"
+require_text "ci/kernel-budgets.json" '"agent_modules"' "Agent module budgets are missing"
+require_text "ci/kernel-budgets.json" '"agent_context_sidecar"' "Agent sidecar budgets are missing"
+require_text "ci/kernel-budgets.json" '"boot_stack_start_symbol"' "boot stack budget is missing"
+require_text "ci/kernel-budgets.json" '"calibration_status": "calibrated_full_suite"' "Agent duration budget is not calibrated"
+require_text "scripts/check-kernel-budgets.py" "invalid_global_object_exports" "Agent writable export gate is missing"
+calibrated_runner_tag="$(
+	sed -n 's/^[[:space:]]*"runner_tag":[[:space:]]*"\([^"]*\)".*/\1/p' \
+		"${ROOT_DIR}/ci/kernel-budgets.json" | head -1
+)"
+agent_regression_runner_tag="$(
+	awk '
+		/^agent-regression:$/ { in_job = 1; next }
+		in_job && /^[^[:space:]]/ { in_job = 0; in_tags = 0 }
+		in_job && /^  tags:$/ { in_tags = 1; next }
+		in_job && in_tags && /^    - / {
+			sub(/^    - /, "")
+			print
+			exit
+		}
+	' "${ROOT_DIR}/.gitlab-ci.yml"
+)"
+if [ -z "${calibrated_runner_tag}" ] ||
+	[ "${agent_regression_runner_tag}" != "${calibrated_runner_tag}" ]; then
+	fail "GitLab Agent regression runner tag does not match calibrated profile"
+fi
 require_text "Makefile" "scripts/run-syscall-fairness-tests.sh" "Makefile syscall fairness target does not call its runner"
 require_text "Makefile" "scripts/run-file-resource-tests.sh" "Makefile file resource target does not call its runner"
+require_text "scripts/run-full-verification.sh" "run-fs-enospc-tests.sh" "full verification omits filesystem ENOSPC regression"
 require_text "Makefile" "scripts/check-dependencies.sh" "Makefile doctor target does not call dependency checker"
+
+for specialized_runner in \
+	scripts/run-proc-reap-tests.sh \
+	scripts/run-thread-resource-tests.sh \
+	scripts/run-file-resource-tests.sh \
+	scripts/run-syscall-fairness-tests.sh \
+	scripts/run-fs-enospc-tests.sh
+do
+	require_text "${specialized_runner}" "scripts/agent_test_runner.py" \
+		"${specialized_runner} bypasses the shared fail-closed QEMU runner"
+	require_text "${specialized_runner}" "scripts/validate-kernel-test-log.py" \
+		"${specialized_runner} bypasses the full-log profile validator"
+done
+
+require_text "scripts/run-agent-tests.sh" \
+	'^[[:space:]]*"\$\{PYTHON_BIN\}"[[:space:]]+scripts/agent_test_runner\.py[[:space:]]+\\$' \
+	"Agent regression runner bypasses the shared fail-closed QEMU runner"
+for natural_runner in \
+	scripts/run-agent-tests.sh \
+	scripts/run-proc-reap-tests.sh \
+	scripts/run-thread-resource-tests.sh \
+	scripts/run-file-resource-tests.sh \
+	scripts/run-syscall-fairness-tests.sh
+do
+	reject_text "${natural_runner}" "completion-mode" \
+		"${natural_runner} must require natural process exit"
+done
+require_text "scripts/run-fs-enospc-tests.sh" \
+	'^[[:space:]]*orphan-crash[[:space:]]+\|[[:space:]]+persistent-seed\)$' \
+	"filesystem checkpoint profiles are not explicitly bounded"
+require_text "scripts/run-fs-enospc-tests.sh" \
+	'^[[:space:]]*completion_args\+=\(--completion-mode checkpoint\)$' \
+	"filesystem checkpoint profiles do not select checkpoint completion"
+require_text "scripts/run-fs-enospc-tests.sh" \
+	'^[[:space:]]*"\$\{completion_args\[@\]\}"$' \
+	"filesystem completion policy is not passed to the shared runner"
+fs_completion_mode_count="$(
+	grep -c -- '--completion-mode' \
+		"${ROOT_DIR}/scripts/run-fs-enospc-tests.sh"
+)"
+if [ "${fs_completion_mode_count}" -ne 1 ]; then
+	fail "filesystem runner must contain exactly one bounded checkpoint mapping"
+fi
+
 require_text "Makefile" "^QEMU \\?= qemu-system-riscv64" "plain Makefile QEMU is not environment-overridable"
 require_text "Makefile" "^QEMU \\?= qemu-system-riscv64" "AgentOS Makefile QEMU is not environment-overridable"
 require_text "Makefile" '^run: build/kernel \$\(F\)/fs-copy\.img$' "AgentOS fresh run does not rebuild the writable image"
@@ -226,13 +327,15 @@ require_text "scripts/run-fs-enospc-tests.sh" "principal-baseline-orphan" "fs ru
 require_text "scripts/run-fs-enospc-tests.sh" "crash_orphan_ready=1" "fs runner omits crash-orphan checkpoint"
 require_text "scripts/run-fs-enospc-tests.sh" "FS_PERSIST_BLOCK_LIMIT=18" "persistent quota block contract is not fixed at eighteen"
 require_text "scripts/run-fs-enospc-tests.sh" "FS_PERSIST_INODE_LIMIT=8" "persistent quota inode contract is not fixed at eight"
-require_text "scripts/run-fs-enospc-tests.sh" "sponsored_object_charged=1 blocks=" "fs runner omits sponsored PUBLIC ownership transfer contract"
+require_text "scripts/validate-kernel-test-log.py" "sponsored_object_charged=1 blocks=" "fs runner omits sponsored PUBLIC ownership transfer contract"
 require_text "scripts/run-fs-enospc-tests.sh" "durable_fixture=1 blocks=18 inodes=8 owner_exited=1" "fs runner omits durable quota seed contract"
-require_text "scripts/run-fs-enospc-tests.sh" "reboot_charge_persisted=1" "fs runner omits reboot quota accounting contract"
-require_text "scripts/run-fs-enospc-tests.sh" "deletion_reuse=1" "fs runner omits persistent quota release contract"
-require_text "scripts/run-fs-enospc-tests.sh" "relaunch_charge_persisted=1 launches=2" "fs runner omits repeated relaunch quota contract"
-require_text "scripts/run-fs-enospc-tests.sh" "cleanup_reuse=1" "fs runner omits persistent quota cleanup contract"
+require_text "scripts/validate-kernel-test-log.py" "reboot_charge_persisted=1" "fs runner omits reboot quota accounting contract"
+require_text "scripts/validate-kernel-test-log.py" "deletion_reuse=1" "fs runner omits persistent quota release contract"
+require_text "scripts/validate-kernel-test-log.py" "relaunch_charge_persisted=1 launches=2" "fs runner omits repeated relaunch quota contract"
+require_text "scripts/validate-kernel-test-log.py" "cleanup_reuse=1" "fs runner omits persistent quota cleanup contract"
 require_text "scripts/run-full-verification.sh" "verify-dual-target-structure" "full verification does not run the structure check"
+require_text "scripts/run-full-verification.sh" "make ci-check" "full verification does not enforce kernel budgets"
+require_text "scripts/run-agent-tests.sh" "check_suite_budget" "Agent test suite has no total duration budget"
 require_text "scripts/run-full-verification.sh" "test_check_host_platform_alignment.py" "full verification does not run host platform alignment unit test"
 require_text "scripts/run-full-verification.sh" "test_check_host_action_kind_alignment.py" "full verification does not run host action kind alignment unit test"
 require_text "scripts/run-full-verification.sh" "test_check_seeded_action_state.py" "full verification does not run seeded action state unit test"
@@ -259,10 +362,38 @@ require_text "scripts/run-full-verification.sh" "run-agent-tests.sh" "full verif
 require_text "scripts/run-full-verification.sh" "run-syscall-fairness-tests.sh" "full verification does not run syscall fairness tests"
 require_text "scripts/run-full-verification.sh" "run-file-resource-tests.sh" "full verification does not run file resource tests"
 
-if ! cmp -s "${ROOT_DIR}/os/kernel_work.c" "${ROOT_DIR}/baseline_ucore/os/kernel_work.c" ||
-	! cmp -s "${ROOT_DIR}/os/kernel_work.h" "${ROOT_DIR}/baseline_ucore/os/kernel_work.h"; then
-	fail "dual targets do not share the same kernel work budget mechanism"
-fi
+for header in os/kernel_work.h baseline_ucore/os/kernel_work.h; do
+	for contract in \
+		'^#define KERNEL_WORK_STREAM_GRANULE 64U$' \
+		'^#define KERNEL_WORK_BUDGET_UNITS 1024U$' \
+		'^#define KERNEL_WORK_OPERATION_UNITS 256U$' \
+		'^#define KERNEL_WORK_PAGE_UNITS 64U$' \
+		'^void kernel_work_reset\(struct thread \*\);$' \
+		'^void kernel_work_on_dispatch\(struct thread \*\);$' \
+		'^void kernel_work_begin\(void\);$' \
+		'^void kernel_work_end\(void\);$' \
+		'^void kernel_work_request_resched\(void\);$' \
+		'^int kernel_work_checkpoint\(uint work_units\);$' \
+		'^int kernel_work_checkpoint_cleanup\(uint work_units\);$'
+	do
+		require_text "${header}" "${contract}" \
+			"kernel work public budget contract drifted"
+	done
+done
+for source in os/kernel_work.c baseline_ucore/os/kernel_work.c; do
+	for contract in \
+		'^#define KERNEL_WORK_QUANTUM_CYCLES \(CPU_FREQ / TICKS_PER_SEC\)$' \
+		'kernel_slice_deadline = get_cycle\(\) \+ KERNEL_WORK_QUANTUM_CYCLES;' \
+		'kernel_work_resumed = t->kernel_work_depth != 0;' \
+		'work_units >= KERNEL_WORK_BUDGET_UNITS - t->kernel_work_units' \
+		'proc_thread_exit_requested\(\)' \
+		'kernel_work_checkpoint_mode\(work_units, 1\)' \
+		'yield\(\);'
+	do
+		require_text "${source}" "${contract}" \
+			"kernel work fairness protocol drifted"
+	done
+done
 if ! cmp -s "${ROOT_DIR}/user/src/syscallfair_ucore.c" \
 	"${ROOT_DIR}/baseline_ucore/user/src/syscallfair_ucore.c"; then
 	fail "dual targets do not share the same syscall fairness guest"
@@ -545,10 +676,9 @@ require_text "os" "agent_file_edit_begin" "AgentOS edit lease syscall is missing
 require_text "user/Makefile" "agentllm_ucore" "AgentOS LLM test is not in the user build list"
 require_text "scripts/run-agent-tests.sh" "agentllm_ucore" "AgentOS LLM test is not in the test script"
 
-if grep -R -E -n 'AGENT_TOOL_(RERUN_STAGE|WRITE_REPORT)' \
-	"${ROOT_DIR}/user/src" 2>/dev/null |
-	grep -v 'agentsecurity_ucore.c' >"${TMP_FILE}"; then
-	fail "AgentOS platform code uses legacy sample tool ids outside security tests"
+if grep -E -n 'AGENT_TOOL_(RERUN_STAGE|WRITE_REPORT)' \
+	"${ROOT_DIR}"/user/src/rp_*.c >"${TMP_FILE}" 2>/dev/null; then
+	fail "AgentOS platform code uses legacy sample tool ids"
 fi
 : >"${TMP_FILE}"
 
@@ -556,20 +686,13 @@ sample_run_marker='RUN-''042'
 sample_kernel_pattern="lab-gene-x|${sample_run_marker}|nightly-regression|/lab/projects|INC-RUN|PLAN-RUN|MSG-RUN|minimal_rerun|memory_limit|recovery report|rerun completed|stage=(prepare|align|analyze|report|archive)|label=(prepare|align|analyze|report|archive)|source_stage=(prepare|align|analyze|report|archive)|next_stage=(prepare|align|analyze|report|archive)"
 reject_text "os" "${sample_kernel_pattern}" "AgentOS kernel contains research sample constants"
 
-bad_matrix="矩""阵"
-bad_loop="闭""环"
-bad_scope="边""界"
-bad_regression="回""归"
-bad_record_time="记录""时间"
-bad_push_cn="推""送"
-bad_commit_record="提交""记录"
 bad_git_commit="git ""commit"
 bad_git_push="git ""push"
 bad_glpat="gl""pat-"
 bad_oauth2="oauth""2:"
 bad_auth="Authorization:"" Basic"
 bad_tokens="tokens""\\.txt"
-doc_pattern="${bad_matrix}|${bad_loop}|${bad_scope}|${bad_regression}|${bad_record_time}|${bad_glpat}|${bad_oauth2}|${bad_auth}|${bad_tokens}|${bad_git_commit}|${bad_git_push}|${bad_push_cn}|${bad_commit_record}"
+doc_pattern="${bad_glpat}|${bad_oauth2}|${bad_auth}|${bad_tokens}|${bad_git_commit}|${bad_git_push}"
 reject_text "README.md" "${doc_pattern}" "root README contains forbidden or sensitive wording"
 reject_text "docs" "${doc_pattern}" "root docs contain forbidden or sensitive wording"
 

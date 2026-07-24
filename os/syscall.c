@@ -358,8 +358,14 @@ uint64 sys_pipe(uint64 fdarray)
 	fds[1] = fdreserve();
 	if (fds[0] < 0 || fds[1] < 0)
 		goto err0;
-	f0 = filealloc(p);
-	f1 = filealloc(p);
+	{
+		struct file *pipe_files[2];
+
+		if (filealloc_many(p, pipe_files, 2) < 0)
+			goto err0;
+		f0 = pipe_files[0];
+		f1 = pipe_files[1];
+	}
 	if (f0 == 0 || f1 == 0)
 		goto err0;
 	if (pipealloc(f0, f1) < 0)
@@ -416,7 +422,7 @@ uint64 sys_close(int fd)
 int sys_thread_create(uint64 entry, uint64 arg)
 {
 	struct proc *p = curr_proc();
-	if (p->exit_requested)
+	if (!proc_teardown_live(p))
 		return -1;
 	if (user_range_check(p->pagetable, entry, 1, PTE_X) < 0)
 		return -1;
@@ -439,21 +445,35 @@ int sys_gettid()
 
 int sys_waittid(int tid)
 {
+	struct thread *t;
+	int enabled;
+	int exit_code;
+
 	if (tid < 0 || tid >= NTHREAD) {
 		errorf("unexpected tid %d", tid);
 		return -1;
 	}
-	struct thread *t = &curr_proc()->threads[tid];
+	t = &curr_proc()->threads[tid];
+	enabled = intr_save();
 	if (t->state == T_UNUSED || tid == curr_thread()->tid) {
+		intr_restore(enabled);
 		return -1;
 	}
 	if (t->state != EXITED) {
+		intr_restore(enabled);
 		return -2;
 	}
-	memset((void *)t->kstack, 7, KSTACK_SIZE);
+	if (t->kstack_state != KSTACK_NONE ||
+	    t->resource_slot_charged || t->on_run_queue)
+		panic("waittid unreaped thread");
+	exit_code = (int)t->exit_code;
 	t->tid = -1;
+	t->ustack = 0;
+	t->trapframe = 0;
+	t->exit_code = 0;
 	t->state = T_UNUSED;
-	return t->exit_code;
+	intr_restore(enabled);
+	return exit_code;
 }
 
 /*

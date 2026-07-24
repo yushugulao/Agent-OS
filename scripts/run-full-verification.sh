@@ -10,6 +10,16 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 echo "[full-verify] target structure"
 bash "${ROOT_DIR}/scripts/verify-dual-target-structure.sh"
 
+echo "[full-verify] kernel growth budgets"
+(
+	cd "${ROOT_DIR}"
+	make ci-check \
+		TOOLPREFIX="${TOOLPREFIX}" \
+		LOG=warn \
+		INIT_PROC=agentfinal_ucore \
+		CHAPTER=agent
+)
+
 echo "[full-verify] 本地结果阅读器"
 (
 	cd "${ROOT_DIR}"
@@ -49,7 +59,10 @@ echo "[full-verify] dual platforms"
 echo "[full-verify] AgentOS kernel tests"
 (
 	cd "${ROOT_DIR}"
-	TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" CASE_TIMEOUT="${CASE_TIMEOUT}" bash scripts/run-agent-tests.sh
+	env -u AGENT_TEST_CASE -u AGENT_TEST_TIMING_FILE \
+		AGENT_TEST_CALIBRATE=0 REQUIRE_FULL_SUITE=1 \
+		TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \
+		CASE_TIMEOUT="${CASE_TIMEOUT}" bash scripts/run-agent-tests.sh
 )
 
 echo "[full-verify] process reaper tests"
@@ -74,6 +87,12 @@ echo "[full-verify] thread resource tests"
 (
 	cd "${ROOT_DIR}"
 	TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" CASE_TIMEOUT="${CASE_TIMEOUT}" bash scripts/run-thread-resource-tests.sh
+)
+
+echo "[full-verify] filesystem ENOSPC tests"
+(
+	cd "${ROOT_DIR}"
+	TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" CASE_TIMEOUT="${CASE_TIMEOUT}" bash scripts/run-fs-enospc-tests.sh
 )
 
 echo "[full-verify] all checks passed"

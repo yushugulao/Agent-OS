@@ -71,7 +71,7 @@ struct file {
 	struct inode *ip; // FD_INODE
 	uint off;
 	// This charge follows the unique object until its final reference closes.
-	int resource_domain_id;
+	struct resource_account_handle resource_account;
 	int resource_reserved;
 };
 
@@ -91,6 +91,7 @@ int pipewrite(struct pipe *, uint64, uint64);
 void fileclose(struct file *);
 struct file *filedup(struct file *);
 struct file *filealloc(struct proc *);
+int filealloc_many(struct proc *, struct file **, uint);
 int fileopen(char *, uint64);
 int fileunlink(char *);
 uint64 inodewrite(struct file *, uint64, uint64);

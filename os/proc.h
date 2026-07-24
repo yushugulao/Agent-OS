@@ -1,10 +1,13 @@
 #ifndef PROC_H
 #define PROC_H
 
+#include "const.h"
 #include "riscv.h"
 #include "types.h"
 #include "sync.h"
 #include "agent.h"
+#include "resource_controller.h"
+#include "workflow_lifecycle.h"
 
 #define NPROC (128)
 #define NTHREAD (16)
@@ -24,6 +27,12 @@
 
 #include "../file_resource_policy.h"
 #include "../thread_resource_policy.h"
+
+#define KSTACK_PAGES_PER_THREAD (KSTACK_SIZE / PAGE_SIZE)
+#define KSTACK_VIRTUAL_CAPACITY_BYTES \
+	((uint64)NPROC * NTHREAD * KSTACK_SIZE)
+#define KSTACK_RESERVED_PAGE_COUNT \
+	((uint)THREAD_RESOURCE_RESERVED_LIMIT * KSTACK_PAGES_PER_THREAD)
 
 struct file;
 struct proc;
@@ -68,6 +77,13 @@ enum threadstate {
 	T_DYING,
 	EXITED
 };
+
+enum kernel_stack_state {
+	KSTACK_NONE = 0,
+	KSTACK_LIVE,
+	KSTACK_REAP,
+};
+
 struct thread {
 	enum threadstate state; // Thread state
 	int tid; // Thread ID
@@ -84,6 +100,9 @@ struct thread {
 	int wait_interruptible;
 	int on_run_queue;
 	int run_queue_agent;
+	enum kernel_stack_state kstack_state;
+	struct resource_account_handle resource_account;
+	// Scheduler partition index; accounting identity is resource_account.
 	int resource_domain_id;
 	int resource_slot_reserved;
 	int resource_slot_charged;
@@ -109,6 +128,28 @@ struct thread {
 
 enum procstate { P_UNUSED, P_USED };
 
+/*
+ * Process teardown is a forward-only protocol.  Once REQUESTED is visible,
+ * no new process-owned object may be published.  The main thread owns
+ * QUIESCING through HANDOFF; the scheduler alone performs PUBLISHED and slot
+ * recycling.  Unpublished construction rollback uses the explicit kernel
+ * owner and follows the same detach/reclaim/settle phases.
+ */
+enum proc_teardown_state {
+	PROC_TEARDOWN_LIVE = 0,
+	PROC_TEARDOWN_REQUESTED,
+	PROC_TEARDOWN_QUIESCING,
+	PROC_TEARDOWN_DETACHED,
+	PROC_TEARDOWN_RECLAIMING,
+	PROC_TEARDOWN_SETTLING,
+	PROC_TEARDOWN_HANDOFF,
+	PROC_TEARDOWN_PUBLISHED,
+	PROC_TEARDOWN_RECYCLED,
+};
+
+#define PROC_TEARDOWN_OWNER_NONE (-1)
+#define PROC_TEARDOWN_OWNER_KERNEL (-2)
+
 // Per-process state
 struct proc {
 	enum procstate state; // Process state
@@ -118,14 +159,15 @@ struct proc {
 	uint64 ustack_base; // Virtual address of user stack base
 	struct proc *parent; // Parent process; NULL means kernel-owned
 	int parent_record_index;
+	struct resource_account_handle resource_account;
+	// Scheduler partition index; accounting identity is resource_account.
 	int resource_domain_id;
 	uint storage_principal_id;
 	int resource_slot_reserved;
 	int resource_domain_admin;
 	uint64 exit_code;
-	int exit_requested;
-	int exit_owner_tid;
-	int exit_finalizing;
+	enum proc_teardown_state teardown_state;
+	int teardown_owner_tid;
 	uint vm_snapshot_depth;
 	int vm_snapshot_owner_tid;
 	struct child_record child_records[CHILD_RECORD_CAP];
@@ -137,6 +179,9 @@ struct proc {
 	uint exec_role_mask;
 	uint exec_layout_version;
 	uint exec_rw_offset;
+	uint workflow_lifecycle_id;
+	uint64 workflow_lifecycle_generation;
+	int workflow_lifecycle_charged;
 	uint vfs_scope_id;
 	int vfs_scope_controller;
 	uint64 vfs_effective_caps;
@@ -156,6 +201,9 @@ struct proc {
 	struct wait_queue thread_exit_waiters;
 	struct wait_queue agent_event_waiters;
 	struct wait_queue agent_timeline_waiters;
+	struct wait_queue agent_context_lane_waiters;
+	int agent_context_lane_owner_tid;
+	uint agent_context_lane_depth;
 	// Use dummy increasing id as index index of lock pool because we don't have destroy method yet
 	uint next_mutex_id, next_semaphore_id, next_condvar_id;
 	struct mutex mutex_pool[LOCK_POOL_SIZE];
@@ -239,12 +287,11 @@ struct proc {
 	uint64 agent_last_heartbeat_tick;
 	uint64 agent_capability_mask;
 	uint64 agent_role_grant_mask;
-	uint64 agent_detail_count;
-	uint64 agent_detail_head;
-	struct agent_context_detail agent_details[AGENT_CONTEXT_MAX_RECORDS];
-	uint64 agent_context_span_owner[AGENT_CONTEXT_MAX_RECORDS];
-	int agent_context_cause_pid[AGENT_CONTEXT_MAX_RECORDS];
-	uint64 agent_context_cause_control[AGENT_CONTEXT_MAX_RECORDS];
+	uint64
+		agent_context_sidecar_kva[AGENT_CONTEXT_SIDECAR_PAGE_COUNT];
+	struct resource_account_handle agent_state_account;
+	enum resource_charge_class agent_state_charge_class;
+	uint agent_state_charged_pages;
 	uint64 agent_prefetch_sequence;
 	int agent_prefetch_count;
 	int agent_prefetch_head;
@@ -289,8 +336,9 @@ struct proc {
 int cpuid();
 struct proc *curr_proc();
 struct thread *curr_thread(void);
+int proc_teardown_live(const struct proc *);
 int proc_thread_exit_requested(void);
-int proc_request_scope_exit(uint, int);
+int proc_request_workflow_exit(struct workflow_lifecycle_key, int);
 int proc_vm_snapshot_begin(struct proc *);
 void proc_vm_snapshot_end(struct proc *);
 void exit(int);
@@ -326,13 +374,16 @@ void fdrelease(int);
 int fd_is_reserved(struct file *);
 struct file *fdget(int);
 int fdclose(int);
-int proc_file_slot_reserve(struct proc *, int *, int *);
-void proc_file_slot_release(int, int);
+int proc_file_slot_reserve(struct proc *,
+			   struct resource_account_handle *, int *);
+int proc_file_slots_reserve(struct proc *, uint,
+			    struct resource_account_handle *, int *);
+void proc_file_slot_release(struct resource_account_handle, int);
 int init_stdio(struct proc *);
 int push_argv(struct proc *, char **);
 int push_argv_image(pagetable_t, uint64, struct trapframe *, char **);
-void proc_install_user_image(struct proc *, struct user_image *,
-			     struct trapframe *, int);
+int proc_install_user_image(struct proc *, struct user_image *,
+			    struct trapframe *, int);
 // swtch.S
 void swtch(struct context *, struct context *);
 
