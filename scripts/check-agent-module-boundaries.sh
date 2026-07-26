@@ -21,6 +21,7 @@ modules="
 agent
 agent_core
 agent_context
+agent_file_state
 agent_identity
 agent_ipc
 agent_lifecycle
@@ -49,7 +50,7 @@ done
 for path in "${ROOT_DIR}"/os/agent*.c; do
 	module="$(basename "${path}" .c)"
 	case "${module}" in
-	agent | agent_core | agent_context | agent_identity | agent_ipc | \
+	agent | agent_core | agent_context | agent_file_state | agent_identity | agent_ipc | \
 		agent_lifecycle | agent_metadata | agent_metadata_objects | \
 		agent_metadata_store | agent_observe)
 		;;
@@ -59,7 +60,8 @@ for path in "${ROOT_DIR}"/os/agent*.c; do
 	esac
 done
 
-for header in agent_internal.h agent_metadata_internal.h agent_context.h; do
+for header in agent_internal.h agent_metadata_internal.h agent_context.h \
+	agent_file_state_internal.h agent_file_name_policy.h; do
 	path="${ROOT_DIR}/os/${header}"
 	[ -f "${path}" ] || fail "missing private contract: os/${header}"
 	if grep -n -E '^[[:space:]]*extern[[:space:]]+' \

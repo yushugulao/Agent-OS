@@ -310,12 +310,14 @@
         "allowed_bridge_dependencies": []
       },
       {
-        "name": "metadata_objects",
-        "source_path": "os/agent_metadata_objects.c",
-        "object_path": "build/os/agent_metadata_objects.o",
-        "baseline_lines": 4942,
-        "max_lines": 5190,
-        "allowed_global_prefixes": [],
+        "name": "file_state",
+        "source_path": "os/agent_file_state.c",
+        "object_path": "build/os/agent_file_state.o",
+        "baseline_lines": 1176,
+        "max_lines": 1235,
+        "allowed_global_prefixes": [
+          "agent_file_state_"
+        ],
         "allowed_global_symbols": [
           "agent_edit_note_delete",
           "agent_edit_note_truncate",
@@ -323,8 +325,28 @@
           "agent_edit_truncate_allowed",
           "agent_edit_unlink_allowed",
           "agent_edit_write_allowed",
-          "agent_file_request_scan",
           "agent_file_version_reclaim",
+          "sys_agent_file_edit_abort",
+          "sys_agent_file_edit_begin",
+          "sys_agent_file_edit_commit",
+          "sys_agent_file_edit_state"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "identity",
+          "observe"
+        ],
+        "allowed_bridge_dependencies": []
+      },
+      {
+        "name": "metadata_objects",
+        "source_path": "os/agent_metadata_objects.c",
+        "object_path": "build/os/agent_metadata_objects.o",
+        "baseline_lines": 3882,
+        "max_lines": 4077,
+        "allowed_global_prefixes": [],
+        "allowed_global_symbols": [
+          "agent_file_request_scan",
           "agent_fs_note_create",
           "agent_fs_note_delete",
           "agent_fs_note_truncate",
@@ -345,10 +367,6 @@
           "agent_metadata_tool_enter",
           "agent_metadata_tool_exit",
           "agent_scope_reclaim",
-          "sys_agent_file_edit_abort",
-          "sys_agent_file_edit_begin",
-          "sys_agent_file_edit_commit",
-          "sys_agent_file_edit_state",
           "sys_agent_file_meta_init",
           "sys_agent_file_meta_set",
           "sys_agent_file_prefetch_snapshot",
@@ -358,6 +376,7 @@
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
           "context",
+          "file_state",
           "identity",
           "ipc",
           "lifecycle",
@@ -465,6 +484,7 @@
         "allowed_global_symbols": [],
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
+          "file_state",
           "metadata_objects",
           "metadata_store",
           "resource_controller"
@@ -476,7 +496,7 @@
         "allowed_global_symbols": [],
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
-          "metadata_objects",
+          "file_state",
           "resource_controller"
         ]
       },
@@ -524,6 +544,7 @@
         "allowed_dependencies": [
           "context",
           "core",
+          "file_state",
           "ipc",
           "metadata_objects",
           "observe"

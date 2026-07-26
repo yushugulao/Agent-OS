@@ -1,4 +1,5 @@
 #include "agent_internal.h"
+#include "agent_file_name_policy.h"
 #include "agent_metadata_internal.h"
 #include "bio.h"
 #include "defs.h"
@@ -15,8 +16,6 @@
 
 #define AGENT_FILE_SYSTEM_LIMIT 64
 #define AGENT_FILE_SCOPE_LIMIT 112
-#define AGENT_META_STORE_NAME_0 ".agentmeta"
-#define AGENT_META_STORE_NAME_1 ".agentmeta1"
 #define AGENT_META_STORE_BANKS 2
 #define AGENT_META_STORE_MAGIC 0x41474d4554413036ULL
 #define AGENT_META_STORE_VERSION 5
