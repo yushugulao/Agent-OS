@@ -30,6 +30,7 @@ REMOTE_CI_TAGS = {"host": "agentos-host-calibrated", "qemu": "agentos-qemu-calib
 REMOTE_RESPONSE_LIMIT = 256 * 1024 * 1024
 SUMMARY_NAME = "verification-summary.json"
 SUCCESS_MARKER = "[full-verify] all checks passed"
+KERNEL_BUDGET_END = "[kernel-budget] kernel checks passed"
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,95}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
 SUMMARY_FIELDS = {"schema_version", "full_verify_profile_version", "kind", "status", "commit",
@@ -440,31 +441,49 @@ def parse_measurements(full_log: Path, timing_log: Path, config: dict[str, objec
     text = full_log.read_text(encoding="utf-8", errors="replace")
     metrics: dict[str, dict[str, object]] = {}
     stack_match = boot_match = None
-    stack_line = boot_line = 0
+    stack_line = boot_line = 0; block_state = "before"
     for line_number, line in enumerate(text.splitlines(), 1):
-        match = BUDGET_LINE.fullmatch(line.strip())
+        stripped = line.strip(); match = BUDGET_LINE.fullmatch(stripped)
+        unit = match.group("unit").strip() if match else ""
+        key = metric_key(match.group("name"), unit) if match else None
+        is_start = key == "kernel_source_lines"; is_end = line == KERNEL_BUDGET_END
+        if is_start:
+            if block_state != "before":
+                raise EvidenceError("full-verify log has multiple kernel budget blocks")
+            block_state = "inside"
+        if is_end:
+            if block_state != "inside":
+                raise EvidenceError("kernel budget block boundary is invalid")
+            block_state = "after"
+            continue
+        if block_state != "inside":
+            continue
         if match:
-            unit = match.group("unit").strip()
-            key = metric_key(match.group("name"), unit)
             if key:
                 if key in metrics:
-                    raise EvidenceError(f"duplicate kernel metric: {key}")
+                    raise EvidenceError(f"duplicate kernel metric in budget block: {key}")
                 metrics[key] = {
                     "metric": key, "actual": float(match.group("actual")),
                     "baseline": float(match.group("baseline")),
                     "limit": float(match.group("limit")), "unit": unit,
                     "source_line": line_number,
                 }
-        new_stack = STACK_LINE.fullmatch(line.strip())
-        new_boot = BOOT_STACK_LINE.fullmatch(line.strip())
+        new_stack = STACK_LINE.fullmatch(stripped)
+        new_boot = BOOT_STACK_LINE.fullmatch(stripped)
         if (new_stack and stack_match) or (new_boot and boot_match):
-            raise EvidenceError("duplicate stack budget metric")
+            raise EvidenceError("duplicate stack metric in kernel budget block")
         stack_match, boot_match = new_stack or stack_match, new_boot or boot_match
         stack_line = line_number if new_stack else stack_line
         boot_line = line_number if new_boot else boot_line
-    missing = sorted(REQUIRED_KERNEL_METRICS - set(metrics))
-    if missing or stack_match is None or boot_match is None:
-        raise EvidenceError(f"full-verify log lacks required metrics: {missing}")
+    if block_state == "before":
+        raise EvidenceError("full-verify log lacks kernel budget block")
+    if block_state == "inside":
+        raise EvidenceError("kernel budget block is unterminated")
+    missing = REQUIRED_KERNEL_METRICS - set(metrics)
+    if stack_match is None: missing.add("kernel_stack_required_bytes")
+    if boot_match is None: missing.add("boot_stack_required_bytes")
+    if missing:
+        raise EvidenceError(f"kernel budget block lacks required metrics: {sorted(missing)}")
     kernel_stack = config.get("kernel_stack")
     if not isinstance(kernel_stack, dict):
         raise EvidenceError("kernel stack budget configuration is invalid")

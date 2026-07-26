@@ -128,6 +128,8 @@ printf 'target-structure\t1\t2\nkernel-budgets\t2\t3\nreader-e2e\t3\t4\treader-e
 python3 scripts/capture-final-evidence.py write-summary \
   --stage "${FINAL_EVIDENCE_STAGE}" --steps "${runtime}/steps.tsv" \
   --commit "$(git rev-parse HEAD)" --agent-grace 2s --mechanism-grace 5s --workflow-runs 3
+echo 'kernel stack budget: user=1 interrupt=1 margin=1 required=4095 limit=4096'
+echo 'boot stack budget: root=main path=1 interrupt=1 margin=1 required=2047 limit=2048'
 echo '[kernel-budget] kernel source (os): actual=100 lines baseline=90 lines limit=110 lines'
 echo '[kernel-budget] stripped kernel ELF: actual=100 bytes baseline=90 bytes limit=110 bytes'
 echo '[kernel-budget] raw kernel image: actual=100 bytes baseline=90 bytes limit=110 bytes'
@@ -138,6 +140,9 @@ echo '[kernel-budget] kernel runtime total: actual=100 bytes baseline=80 bytes l
 echo '[kernel-budget] struct proc: actual=100 bytes baseline=90 bytes limit=110 bytes'
 echo 'kernel stack budget: user=1 interrupt=1 margin=1 required=101 limit=120'
 echo 'boot stack budget: root=main path=1 interrupt=1 margin=1 required=81 limit=100'
+echo '[kernel-budget] kernel checks passed'
+echo 'kernel stack budget: user=1 interrupt=1 margin=1 required=8191 limit=8192'
+echo 'boot stack budget: root=main path=1 interrupt=1 margin=1 required=4095 limit=4096'
 echo '[full-verify] all checks passed'
 '''
         if slow_make:
@@ -240,6 +245,66 @@ class FinalEvidenceTests(unittest.TestCase):
         self.assert_verify_rejected(bundle, cwd, message)
         target.write_bytes(original)
         manifest_path.write_bytes(manifest_bytes)
+    def test_kernel_budget_metrics_are_bound_to_unique_block(self) -> None:
+        namespace = __import__("runpy").run_path(str(COLLECTOR))
+        parse_measurements = namespace["parse_measurements"]
+        evidence_error = namespace["EvidenceError"]
+        canonical = [
+            "[kernel-budget] kernel source (os): actual=100 lines baseline=90 lines limit=110 lines",
+            "[kernel-budget] stripped kernel ELF: actual=100 bytes baseline=90 bytes limit=110 bytes",
+            "[kernel-budget] raw kernel image: actual=100 bytes baseline=90 bytes limit=110 bytes",
+            "[kernel-budget] kernel runtime text: actual=60 bytes baseline=50 bytes limit=70 bytes",
+            "[kernel-budget] kernel runtime data: actual=20 bytes baseline=15 bytes limit=25 bytes",
+            "[kernel-budget] kernel runtime bss: actual=20 bytes baseline=15 bytes limit=25 bytes",
+            "[kernel-budget] kernel runtime total: actual=100 bytes baseline=80 bytes limit=120 bytes",
+            "[kernel-budget] struct proc: actual=100 bytes baseline=90 bytes limit=110 bytes",
+            "kernel stack budget: user=1 interrupt=1 margin=1 required=101 limit=120",
+            "boot stack budget: root=main path=1 interrupt=1 margin=1 required=81 limit=100",
+            "[kernel-budget] kernel checks passed",
+        ]
+        config = {
+            "agent_test_suite": {"expected_cases": ["case_one", "case_two"],
+                                 "baseline_seconds": 2.0, "max_seconds": 4.0},
+            "kernel_stack": {"baseline_required_bytes": 100, "max_required_bytes": 110,
+                             "stack_size_bytes": 120, "baseline_boot_required_bytes": 80,
+                             "max_boot_required_bytes": 90, "boot_stack_size_bytes": 100},
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            full_log, timing_log = base / "full.log", base / "timing.log"
+            timing_log.write_text("case_one 1.250000000\ncase_two 1.500000000\n")
+            outside = [
+                "kernel stack budget: user=1 required=4095 limit=4096",
+                "boot stack budget: root=main required=2047 limit=2048",
+            ]
+            lines = outside + canonical + list(reversed(outside))
+            full_log.write_text("\n".join(lines) + "\n")
+            rows, _ = parse_measurements(full_log, timing_log, config)
+            metrics = {row["metric"]: row for row in rows}
+            self.assertEqual(metrics["kernel_stack_required_bytes"]["actual"], 101)
+            self.assertEqual(metrics["boot_stack_required_bytes"]["actual"], 81)
+            self.assertEqual(metrics["kernel_stack_required_bytes"]["source_line"],
+                             lines.index(canonical[8]) + 1)
+            malformed = (
+                (canonical[:9] + [canonical[8]] + canonical[9:], "duplicate stack metric"),
+                (canonical[:10] + [canonical[9]] + canonical[10:], "duplicate stack metric"),
+                (canonical + canonical, "multiple kernel budget blocks"),
+                (canonical[:1] + canonical, "multiple kernel budget blocks"),
+                (canonical[:-1], "unterminated"),
+                (canonical[:-1] + [" " + canonical[-1]], "unterminated"),
+                (canonical[1:], "block boundary"),
+                ([canonical[-1]] + canonical, "block boundary"),
+                (canonical[:2] + [canonical[1]] + canonical[2:], "duplicate kernel metric"),
+                (canonical + [canonical[-1]], "block boundary"),
+                (outside + canonical[:8] + canonical[9:] + outside,
+                 "kernel_stack_required_bytes"),
+                ([canonical[1]] + canonical[:1] + canonical[2:], "stripped_kernel_elf_bytes"),
+            )
+            for index, (contents, message) in enumerate(malformed):
+                with self.subTest(index=index, message=message):
+                    full_log.write_text("\n".join(contents) + "\n")
+                    with self.assertRaisesRegex(evidence_error, message):
+                        parse_measurements(full_log, timing_log, config)
     def test_summary_inventory_is_generated_and_atomic(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
