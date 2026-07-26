@@ -34,3 +34,5 @@ docs/assets/*gfuse-style*.pptx
 *.fls
 *.fdb_latexmk
 *.synctex.gz
+!evidence/releases/
+!evidence/releases/**

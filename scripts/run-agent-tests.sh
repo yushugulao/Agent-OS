@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/evidence-wiring.sh"
 cd "${SCRIPT_DIR}/.."
 
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
@@ -11,7 +12,7 @@ CASE_TIMEOUT="${CASE_TIMEOUT:-180s}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS:-20}"
-MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-2}"
+MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-2s}"
 REQUIRE_FULL_SUITE="${REQUIRE_FULL_SUITE:-0}"
 AGENT_TEST_CALIBRATE="${AGENT_TEST_CALIBRATE:-0}"
 timing_file_owned=0
@@ -67,8 +68,9 @@ run_case() {
 	local init_proc="$1"
 	local marker="$2"
 	local expected_bad_addr_marker="${3:-}"
-	local log_file="/tmp/agentos-${init_proc}.log"
+	local log_file="${TMPDIR:-/tmp}/agentos-${init_proc}.$$.log"
 	local expected_fault_args=()
+	local runner_status
 
 	if [[ -n "${expected_bad_addr_marker}" ]]; then
 		expected_fault_args+=(
@@ -84,16 +86,28 @@ run_case() {
 		INIT_PROC="${init_proc}" \
 		CHAPTER="${CHAPTER}"
 	cp nfs/fs.img nfs/fs-copy.img
-	"${PYTHON_BIN}" scripts/agent_test_runner.py \
+	if "${PYTHON_BIN}" scripts/agent_test_runner.py \
 		--init-proc "${init_proc}" \
 		--marker "${marker}" \
+		--marker-mode exact-line \
+		--expected-bad-addr-marker-mode exact-line \
 		--log-file "${log_file}" \
 		--case-timeout "${CASE_TIMEOUT}" \
 		--idle-notice-seconds "${IDLE_NOTICE_SECONDS}" \
 		--marker-grace-seconds "${MARKER_GRACE_SECONDS}" \
 		--qemu "${QEMU}" \
 		--timing-file "${AGENT_TEST_TIMING_FILE}" \
-		"${expected_fault_args[@]}"
+		"${expected_fault_args[@]}"; then
+		runner_status=0
+	else
+		runner_status=$?
+	fi
+	evidence_append_guest_log \
+		"agent-case:${init_proc}" "${log_file}" \
+		"${AGENT_TEST_GUEST_LOG_FILE:-}"
+	if [[ ${runner_status} -ne 0 ]]; then
+		return "${runner_status}"
+	fi
 	echo "[agent-tests] ${init_proc} passed"
 }
 

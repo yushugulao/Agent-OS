@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import json
 import tempfile
 import threading
@@ -11,9 +12,23 @@ from pathlib import Path
 from urllib import request
 
 import plain_ucore_reader
+import test_plain_ucore_reader_e2e
 
 
 class FakeRunner:
+    @staticmethod
+    def seeded_ucore_deadline_contract(timeout_seconds: int) -> dict[str, object]:
+        phase_timeout = timeout_seconds + 30
+        return {
+            "contract": "plain_ucore_action_deadline_v1",
+            "contract_version": 1,
+            "runner_timeout_seconds": timeout_seconds,
+            "phases": ["clean", "build", "guest"],
+            "phase_timeout_seconds": phase_timeout,
+            "observer_cleanup_allowance_seconds": 10,
+            "server_deadline_seconds": phase_timeout * 3 + 10,
+        }
+
     @staticmethod
     def read_jsonl(path: Path) -> list[dict[str, object]]:
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
@@ -2318,6 +2333,88 @@ def main() -> int:
             encoding="utf-8",
         )
         try:
+            with request.urlopen(base + "/api/action-contract", timeout=5) as response:
+                action_contract = json.loads(response.read().decode("utf-8"))[
+                    "action_contract"
+                ]
+            assert action_contract["contract"] == "plain_ucore_action_deadline_v1"
+            assert action_contract["auto_run_ucore"] is True
+            assert action_contract["runner_timeout_seconds"] == 80
+            assert action_contract["server_deadline_seconds"] == 340
+
+            valid_deadline_contract = FakeRunner.seeded_ucore_deadline_contract(80)
+            forged_deadlines = (
+                {"contract": "plain_ucore_action_deadline_v2"},
+                {"contract_version": 2},
+                {"contract_version": True},
+                {"phases": ["clean", "guest", "build"]},
+                {"phases": ("clean", "build", "guest")},
+                {"runner_timeout_seconds": True},
+                {"runner_timeout_seconds": 81},
+                {"phase_timeout_seconds": True},
+                {"phase_timeout_seconds": 109},
+                {"observer_cleanup_allowance_seconds": True},
+                {"observer_cleanup_allowance_seconds": 11},
+                {"server_deadline_seconds": True},
+                {"server_deadline_seconds": 339},
+                {"server_deadline_seconds": 1_000_000},
+            )
+            for replacement in forged_deadlines:
+                forged_contract = dict(valid_deadline_contract)
+                forged_contract.update(replacement)
+
+                class ForgedDeadlineRunner:
+                    @staticmethod
+                    def seeded_ucore_deadline_contract(
+                        timeout_seconds: int,
+                    ) -> dict[str, object]:
+                        return dict(forged_contract)
+
+                try:
+                    plain_ucore_reader.service_action_deadline_contract(
+                        True, 80, ForgedDeadlineRunner
+                    )
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError(
+                        f"forged v1 deadline was accepted: {replacement}"
+                    )
+            for invalid_runner_timeout in (0, -1, True, 1.5, 3601):
+                try:
+                    plain_ucore_reader.service_action_deadline_contract(
+                        True, invalid_runner_timeout, FakeRunner
+                    )
+                except ValueError:
+                    pass
+                else:
+                    raise AssertionError(
+                        "out-of-range Reader runner timeout was accepted"
+                    )
+
+            e2e_source_path = Path(test_plain_ucore_reader_e2e.__file__)
+            e2e_tree = ast.parse(e2e_source_path.read_text(encoding="utf-8"))
+            assert not any(
+                isinstance(node, ast.ExceptHandler) and node.name == "error"
+                for node in ast.walk(e2e_tree)
+            )
+            failing_action = request.Request(
+                base + "/not-an-action",
+                data=b"{}",
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+            try:
+                test_plain_ucore_reader_e2e.read_action_json(
+                    failing_action, timeout=5
+                )
+            except AssertionError as http_error:
+                diagnostic = str(http_error)
+                assert "batch action failed status=404" in diagnostic
+                assert '"error": "action_not_found"' in diagnostic
+            else:
+                raise AssertionError("Reader E2E HTTPError path was not exercised")
+
             with request.urlopen(base + "/api/contract", timeout=5) as response:
                 contract = json.loads(response.read().decode("utf-8"))
             assert contract["contract"]["contract"] == "host_plain_ucore_v2"

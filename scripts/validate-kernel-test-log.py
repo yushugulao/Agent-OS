@@ -33,6 +33,20 @@ FILE_MARKERS = (
     "fileresource_ucore: parent passed",
 )
 
+WORKFLOW_TEARDOWN_MARKERS = (
+    "workflow_teardown_race_ucore: lifecycle_abi_prefix=1 bad_param_no_write=1 factory_charged=1 self_only_stale=1",
+    "workflow_teardown_race_ucore: factory_close=1 final_snapshot=1 context_waiter=1 metadata_waiter=1 public_lineage=1 lifecycle_reclaimed=1",
+    "workflow_teardown_race_ucore: io_retire=1 debt_observed=1 cache_observed=1 dual_scope_progress=1",
+    "workflow_teardown_race_ucore: natural_exit=1 final_snapshot=1 context_waiter=1 metadata_waiter=1 lifecycle_reclaimed=1",
+    "workflow_teardown_race_ucore: blocked_fdget_capacity_crossed=1 file_objects_reclaimed=1",
+    "workflow_teardown_race_ucore: lifecycle_id_reused=1 generation_advanced=1 factory_reclaimed=1 natural_reclaimed=1 stale_keys_rejected=1",
+    "workflow_teardown_race_ucore: fresh_account=1 io_debt=0 cache=0 inode_reusable=1",
+    "workflow_teardown_race_ucore: parent passed",
+)
+WORKFLOW_TEARDOWN_CAPACITY_PREFIX = (
+    "workflow_teardown_race_ucore: blocked_fdget_cycles="
+)
+
 SYSCALL_PHASES = (
     (
         "console",
@@ -123,6 +137,57 @@ def validate_thread(text):
 def validate_file(text):
     positions = ordered_unique(text, FILE_MARKERS)
     return f"positions={positions}"
+
+
+def validate_workflow_teardown(text, domain_file_cap, global_reserved_cap):
+    if domain_file_cap <= 6 or global_reserved_cap < domain_file_cap:
+        raise ValidationError(
+            "invalid expected workflow teardown resource capacities"
+        )
+    lines = text.splitlines()
+    positions = []
+    for marker in WORKFLOW_TEARDOWN_MARKERS:
+        hits = [index for index, line in enumerate(lines) if line == marker]
+        if len(hits) != 1:
+            raise ValidationError(
+                "marker must occur once as a complete line: "
+                f"{marker!r}; hits={hits}"
+            )
+        positions.append(hits[0])
+    capacity_hits = [
+        (index, line)
+        for index, line in enumerate(lines)
+        if line.startswith(WORKFLOW_TEARDOWN_CAPACITY_PREFIX)
+    ]
+    if len(capacity_hits) != 1:
+        raise ValidationError(
+            "capacity marker must occur once as a complete line: "
+            f"hits={capacity_hits}"
+        )
+    capacity_position, capacity_line = capacity_hits[0]
+    expected_cycles = global_reserved_cap + 1
+    expected_capacity_line = (
+        f"{WORKFLOW_TEARDOWN_CAPACITY_PREFIX}{expected_cycles} "
+        f"domain_cap={domain_file_cap} "
+        f"global_reserved_cap={global_reserved_cap}"
+    )
+    if capacity_line != expected_capacity_line:
+        raise ValidationError(
+            "workflow teardown capacity mismatch: "
+            f"expected {expected_capacity_line!r}, got {capacity_line!r}"
+        )
+    ordered_positions = (
+        positions[:4] + [capacity_position] + positions[4:]
+    )
+    if ordered_positions != sorted(ordered_positions):
+        raise ValidationError(
+            f"markers out of order: {ordered_positions}"
+        )
+    return (
+        f"positions={ordered_positions} cycles={expected_cycles} "
+        f"domain_cap={domain_file_cap} "
+        f"global_reserved_cap={global_reserved_cap}"
+    )
 
 
 def validate_syscall(text):
@@ -228,6 +293,7 @@ def parse_args():
             "proc-reap",
             "thread-resource",
             "file-resource",
+            "workflow-teardown-race",
             "syscall-fairness",
             "generic",
             "domain",
@@ -238,6 +304,8 @@ def parse_args():
         ),
     )
     parser.add_argument("--marker", default="")
+    parser.add_argument("--workflow-domain-file-cap", type=int)
+    parser.add_argument("--workflow-global-reserved-cap", type=int)
     return parser.parse_args()
 
 
@@ -253,6 +321,19 @@ def main():
             summary = validate_thread(text)
         elif args.profile == "file-resource":
             summary = validate_file(text)
+        elif args.profile == "workflow-teardown-race":
+            if (
+                args.workflow_domain_file_cap is None
+                or args.workflow_global_reserved_cap is None
+            ):
+                raise ValidationError(
+                    "workflow teardown profile requires both capacity arguments"
+                )
+            summary = validate_workflow_teardown(
+                text,
+                args.workflow_domain_file_cap,
+                args.workflow_global_reserved_cap,
+            )
         elif args.profile == "syscall-fairness":
             summary = validate_syscall(text)
         else:

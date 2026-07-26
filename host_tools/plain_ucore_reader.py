@@ -14,6 +14,14 @@ from typing import Iterable
 from urllib.parse import parse_qs, unquote, urlparse
 
 
+ACTION_DEADLINE_CONTRACT = "plain_ucore_action_deadline_v1"
+ACTION_DEADLINE_CONTRACT_VERSION = 1
+ACTION_DEADLINE_PHASES = ("clean", "build", "guest")
+ACTION_DEADLINE_PHASE_TIMEOUT_MARGIN_SECONDS = 30
+ACTION_DEADLINE_CLEANUP_ALLOWANCE_SECONDS = 10
+ACTION_DEADLINE_MAX_RUNNER_TIMEOUT_SECONDS = 3600
+
+
 PAGE_SPECS = [
     ("index.html", "Home", "rp_api_home", ["rp_ui_home", "rp_web_bundle"]),
     ("run.html", "Run Detail", "rp_api_run", ["rp_ui_run", "rp_runner", "rp_artifact"]),
@@ -4937,6 +4945,95 @@ def parse_request_body(headers: object, body: bytes) -> dict[str, object]:
     return {"raw": text}
 
 
+def service_action_deadline_contract(
+    auto_run_ucore: bool,
+    runner_timeout: int,
+    runner_module: object | None = None,
+) -> dict[str, object]:
+    if not auto_run_ucore:
+        return {
+            "contract": ACTION_DEADLINE_CONTRACT,
+            "contract_version": ACTION_DEADLINE_CONTRACT_VERSION,
+            "auto_run_ucore": False,
+            "server_deadline_seconds": 0,
+        }
+
+    if (
+        type(runner_timeout) is not int
+        or not 1 <= runner_timeout <= ACTION_DEADLINE_MAX_RUNNER_TIMEOUT_SECONDS
+    ):
+        raise ValueError("uCore action runner timeout is outside the contract range")
+
+    runner = runner_module or importlib.import_module("plain_ucore_action_runner")
+    provider = getattr(runner, "seeded_ucore_deadline_contract", None)
+    if not callable(provider):
+        raise ValueError("uCore action runner does not declare a deadline contract")
+    declared = provider(runner_timeout)
+    if type(declared) is not dict:
+        raise ValueError("uCore action runner deadline contract must be an object")
+    declared_contract = declared.get("contract")
+    if type(declared_contract) is not str or declared_contract != ACTION_DEADLINE_CONTRACT:
+        raise ValueError("unsupported uCore action runner deadline contract")
+    declared_version = declared.get("contract_version")
+    if (
+        type(declared_version) is not int
+        or declared_version != ACTION_DEADLINE_CONTRACT_VERSION
+    ):
+        raise ValueError("unsupported uCore action runner deadline version")
+    expected_phases = list(ACTION_DEADLINE_PHASES)
+    declared_phases = declared.get("phases")
+    if (
+        type(declared_phases) is not list
+        or any(type(phase) is not str for phase in declared_phases)
+        or declared_phases != expected_phases
+    ):
+        raise ValueError("uCore action runner deadline phases do not match v1")
+
+    declared_runner_timeout = declared.get("runner_timeout_seconds")
+    if (
+        type(declared_runner_timeout) is not int
+        or declared_runner_timeout != runner_timeout
+    ):
+        raise ValueError("uCore action runner deadline does not match its timeout")
+    expected_phase_timeout = (
+        runner_timeout + ACTION_DEADLINE_PHASE_TIMEOUT_MARGIN_SECONDS
+    )
+    declared_phase_timeout = declared.get("phase_timeout_seconds")
+    if (
+        type(declared_phase_timeout) is not int
+        or declared_phase_timeout != expected_phase_timeout
+    ):
+        raise ValueError("uCore action runner phase timeout does not match v1")
+    declared_cleanup = declared.get("observer_cleanup_allowance_seconds")
+    if (
+        type(declared_cleanup) is not int
+        or declared_cleanup != ACTION_DEADLINE_CLEANUP_ALLOWANCE_SECONDS
+    ):
+        raise ValueError("uCore action runner cleanup allowance does not match v1")
+    expected_deadline = (
+        len(expected_phases) * expected_phase_timeout
+        + ACTION_DEADLINE_CLEANUP_ALLOWANCE_SECONDS
+    )
+    declared_deadline = declared.get("server_deadline_seconds")
+    maximum_deadline = (
+        len(expected_phases)
+        * (
+            ACTION_DEADLINE_MAX_RUNNER_TIMEOUT_SECONDS
+            + ACTION_DEADLINE_PHASE_TIMEOUT_MARGIN_SECONDS
+        )
+        + ACTION_DEADLINE_CLEANUP_ALLOWANCE_SECONDS
+    )
+    if (
+        type(declared_deadline) is not int
+        or declared_deadline != expected_deadline
+        or not 1 <= declared_deadline <= maximum_deadline
+    ):
+        raise ValueError("uCore action runner server deadline does not match v1")
+    contract = dict(declared)
+    contract["auto_run_ucore"] = True
+    return contract
+
+
 def make_service_handler(
     state_dir: Path,
     out_dir: Path,
@@ -4954,6 +5051,9 @@ def make_service_handler(
     action_lock = Lock()
     actual_repo_dir = repo_dir or Path(".")
     actual_run_root = run_root or (out_dir / "auto-runs")
+    action_deadline_contract = service_action_deadline_contract(
+        auto_run_ucore, runner_timeout, runner_module
+    )
 
     class PlainUCoreReaderHandler(BaseHTTPRequestHandler):
         server_version = "PlainUCoreReader/0.3"
@@ -4987,6 +5087,9 @@ def make_service_handler(
                 state = load_state(state_dir)
                 contract = reader_contract(state)
                 self.send_json(200, {"contract": contract, "problems": validate_contract(contract)})
+                return
+            if path == "/api/action-contract":
+                self.send_json(200, {"action_contract": action_deadline_contract})
                 return
             if path == "/api/live":
                 summary = render_site(state_dir, out_dir)

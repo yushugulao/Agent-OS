@@ -4,13 +4,18 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import tempfile
 import threading
 from http.server import ThreadingHTTPServer
 from pathlib import Path
 from urllib import error, request
 
+import plain_ucore_action_runner
 import plain_ucore_reader
+
+E2E_CLIENT_DEADLINE_MARGIN_SECONDS = 15
 
 
 def read_json(url: str, timeout: int = 10) -> dict[str, object]:
@@ -23,7 +28,64 @@ def read_text(url: str, timeout: int = 10) -> str:
         return response.read().decode("utf-8", errors="replace")
 
 
+def read_action_json(action: request.Request, timeout: int) -> dict[str, object]:
+    try:
+        with request.urlopen(action, timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        log_tail = ""
+        try:
+            detail = json.loads(body)
+            log_path_text = str(
+                detail.get("run", {}).get("run", {}).get("log", "")
+            ).strip()
+            if log_path_text:
+                log_path = Path(log_path_text)
+                if log_path.is_file():
+                    log_tail = "\n".join(
+                        log_path.read_text(
+                            encoding="utf-8", errors="replace"
+                        ).splitlines()[-80:]
+                    )
+        except Exception as tail_exc:  # pragma: no cover - diagnostic fallback
+            log_tail = f"unable to read log tail: {tail_exc}"
+        raise AssertionError(
+            f"batch action failed status={exc.code} body={body}\nlog_tail={log_tail}"
+        ) from exc
+
+
+def action_client_timeout_seconds(contract: dict[str, object]) -> int:
+    phases = contract.get("phases")
+    phase_timeout = contract.get("phase_timeout_seconds")
+    cleanup_allowance = contract.get("observer_cleanup_allowance_seconds")
+    server_deadline = contract.get("server_deadline_seconds")
+    if (
+        not isinstance(phases, list)
+        or not phases
+        or any(not isinstance(phase, str) or not phase for phase in phases)
+        or type(phase_timeout) is not int
+        or phase_timeout <= 0
+        or type(cleanup_allowance) is not int
+        or cleanup_allowance < 0
+        or type(server_deadline) is not int
+    ):
+        raise AssertionError("Reader E2E received an invalid action deadline contract")
+    legal_server_runtime = len(phases) * phase_timeout + cleanup_allowance
+    if server_deadline < legal_server_runtime:
+        raise AssertionError(
+            "Reader E2E server deadline is shorter than its phase contract"
+        )
+    return server_deadline + E2E_CLIENT_DEADLINE_MARGIN_SECONDS
+
+
 def main() -> int:
+    persistent_log_dir = None
+    persistent_log_dir_text = os.environ.get("PLAIN_UCORE_READER_E2E_LOG_DIR", "").strip()
+    if persistent_log_dir_text:
+        persistent_log_dir = plain_ucore_action_runner.prepare_reader_e2e_log_dir(
+            Path(persistent_log_dir_text)
+        )
     repo_root = Path(__file__).resolve().parents[1]
     repo_dir = repo_root / "baseline_ucore"
     with tempfile.TemporaryDirectory(prefix="plain-ucore-reader-e2e-") as tmp:
@@ -48,7 +110,16 @@ def main() -> int:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         base = f"http://127.0.0.1:{server.server_address[1]}"
+        test_error: BaseException | None = None
         try:
+            action_contract = read_json(base + "/api/action-contract")[
+                "action_contract"
+            ]
+            assert action_contract["contract"] == "plain_ucore_action_deadline_v1"
+            assert action_contract["runner_timeout_seconds"] == 180
+            server_deadline_seconds = int(action_contract["server_deadline_seconds"])
+            action_client_timeout = action_client_timeout_seconds(action_contract)
+            assert action_client_timeout > server_deadline_seconds
             actions = [
                 {
                     "path": "/actions/research/run",
@@ -201,20 +272,7 @@ def main() -> int:
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
-            try:
-                with request.urlopen(action, timeout=180) as response:
-                    result = json.loads(response.read().decode("utf-8"))
-            except error.HTTPError as exc:
-                body = exc.read().decode("utf-8", errors="replace")
-                log_tail = ""
-                try:
-                    detail = json.loads(body)
-                    log_path = Path(str(detail.get("run", {}).get("run", {}).get("log", "")))
-                    if log_path.exists():
-                        log_tail = "\n".join(log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-80:])
-                except Exception as tail_error:  # pragma: no cover - diagnostic path
-                    log_tail = f"unable to read log tail: {tail_error}"
-                raise AssertionError(f"batch action failed status={exc.code} body={body}\nlog_tail={log_tail}") from exc
+            result = read_action_json(action, action_client_timeout)
             assert len(result["actions"]) == len(actions), result
             assert result["actions"][0]["path"] == "/actions/research/run", result
             assert result["actions"][-1]["path"] == "/actions/agentcompare/run", result
@@ -2048,10 +2106,40 @@ def main() -> int:
             assert "matched" in llm_html
             assert "host_relay_eval_batch" in llm_html
             assert "relay-llm-q1" in llm_html
+        except BaseException as test_exc:
+            test_error = test_exc
+            raise
         finally:
-            server.shutdown()
-            server.server_close()
-            thread.join(timeout=5)
+            cleanup_error: BaseException | None = None
+            try:
+                server.shutdown()
+                server.server_close()
+                thread.join(timeout=5)
+            except BaseException as cleanup_exc:
+                cleanup_error = cleanup_exc
+                if test_error is None:
+                    raise
+                print(
+                    f"Reader E2E cleanup also failed: {cleanup_exc}", file=sys.stderr
+                )
+            finally:
+                if persistent_log_dir is not None:
+                    try:
+                        manifest = plain_ucore_action_runner.persist_reader_e2e_logs(
+                            run_root, persistent_log_dir
+                        )
+                        if test_error is None and cleanup_error is None:
+                            plain_ucore_action_runner.validate_reader_e2e_logs(
+                                persistent_log_dir, manifest
+                            )
+                    except Exception as persistence_exc:
+                        if test_error is None and cleanup_error is None:
+                            raise
+                        print(
+                            "Reader E2E log persistence also failed: "
+                            f"{persistence_exc}",
+                            file=sys.stderr,
+                        )
 
     print("test_plain_ucore_reader_e2e: passed")
     return 0

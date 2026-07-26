@@ -2,6 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/evidence-wiring.sh"
 cd "${SCRIPT_DIR}/.."
 
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
@@ -61,20 +62,30 @@ run_case() {
 	local kernel="$2"
 	local image="$3"
 	local run_image="${TMPDIR_FILE_RESOURCE}/${tag}-run.img"
+	local runner_status
 
 	cp "${image}" "${run_image}"
 	local log_file="${TMPDIR_FILE_RESOURCE}/${tag}.log"
 
-	"${PYTHON_BIN}" scripts/agent_test_runner.py \
+	if "${PYTHON_BIN}" scripts/agent_test_runner.py \
 		--init-proc "${tag}" \
 		--marker "fileresource_ucore: parent passed" \
+		--marker-mode exact-line \
 		--log-file "${log_file}" \
 		--case-timeout "${CASE_TIMEOUT}" \
 		--idle-notice-seconds "${IDLE_NOTICE_SECONDS}" \
 		--marker-grace-seconds "${MARKER_GRACE_SECONDS}" \
 		--qemu "${QEMU}" \
 		--kernel "${kernel}" \
-		--image "${run_image}"
+		--image "${run_image}"; then
+		runner_status=0
+	else
+		runner_status=$?
+	fi
+	evidence_append_guest_log "file-resource:${tag}" "${log_file}"
+	if [[ ${runner_status} -ne 0 ]]; then
+		return "${runner_status}"
+	fi
 	"${PYTHON_BIN}" scripts/validate-kernel-test-log.py \
 		--log-file "${log_file}" \
 		--tag "file-resource:${tag}" \

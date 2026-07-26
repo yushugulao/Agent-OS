@@ -16,12 +16,27 @@ _Static_assert(EXEC_MANIFEST_VFS_CONTENT_READ == VFS_CAP_CONTENT_READ,
 _Static_assert(EXEC_MANIFEST_VFS_ARTIFACT_WRITE == VFS_CAP_ARTIFACT_WRITE,
 	       "artifact-write capability mismatch");
 
+enum vfs_scope_reclaim_phase {
+	VFS_SCOPE_RECLAIM_BEGIN = 0,
+	VFS_SCOPE_RECLAIM_FILES,
+	VFS_SCOPE_RECLAIM_METADATA,
+	VFS_SCOPE_RECLAIM_RETIRE,
+	VFS_SCOPE_RECLAIM_DONE,
+};
+
+_Static_assert(VFS_SCOPE_RECLAIM_BEGIN < VFS_SCOPE_RECLAIM_FILES &&
+	       VFS_SCOPE_RECLAIM_FILES < VFS_SCOPE_RECLAIM_METADATA &&
+	       VFS_SCOPE_RECLAIM_METADATA < VFS_SCOPE_RECLAIM_RETIRE &&
+	       VFS_SCOPE_RECLAIM_RETIRE < VFS_SCOPE_RECLAIM_DONE,
+	       "workflow reclaim phases must remain forward-only");
+
 struct vfs_scope_ref {
 	int used;
 	uint scope_id;
 	int retiring;
 	int preserve_on_retire;
-	int cleanup_complete;
+	uint reclaim_phase;
+	uint64 reclaim_metadata_target;
 	struct workflow_lifecycle_key lifecycle;
 	struct resource_account_handle storage_account;
 };
@@ -77,7 +92,8 @@ static int vfs_scope_create(uint scope_id,
 		ref->scope_id = scope_id;
 		ref->retiring = 0;
 		ref->preserve_on_retire = 0;
-		ref->cleanup_complete = 0;
+		ref->reclaim_phase = VFS_SCOPE_RECLAIM_BEGIN;
+		ref->reclaim_metadata_target = 0;
 		ref->lifecycle = created;
 		ref->storage_account = storage;
 		*lifecycle = created;
@@ -145,6 +161,8 @@ static int vfs_scope_release(uint scope_id,
 		last = workflow_lifecycle_leave(lifecycle);
 		if (last > 0) {
 			matched->retiring = 1;
+			matched->reclaim_phase = VFS_SCOPE_RECLAIM_BEGIN;
+			matched->reclaim_metadata_target = 0;
 			storage = matched->storage_account;
 		}
 	}
@@ -158,10 +176,39 @@ static int vfs_scope_release(uint scope_id,
 	return last;
 }
 
+static int
+vfs_scope_reclaim_advance(uint scope_id,
+			  struct workflow_lifecycle_key lifecycle,
+			  uint expected, uint next, uint64 metadata_target)
+{
+	int advanced = 0;
+	int enabled;
+
+	/* Slow phase work runs unlocked; the immutable key guards publication. */
+	enabled = intr_save();
+	for (int i = 0; i < NPROC; i++) {
+		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
+
+		if (!ref->used || ref->scope_id != scope_id || !ref->retiring ||
+		    !workflow_lifecycle_key_equal(ref->lifecycle, lifecycle))
+			continue;
+		if (ref->reclaim_phase == expected &&
+		    workflow_lifecycle_retiring(lifecycle)) {
+			ref->reclaim_metadata_target = metadata_target;
+			ref->reclaim_phase = next;
+			advanced = 1;
+		}
+		break;
+	}
+	intr_restore(enabled);
+	return advanced;
+}
+
 static void vfs_scope_reclaim_complete(uint scope_id)
 {
 	int preserve_files = 0;
-	int cleanup_complete = 0;
+	uint phase = VFS_SCOPE_RECLAIM_BEGIN;
+	uint64 metadata_target = 0;
 	int eligible = 0;
 	int enabled;
 	struct workflow_lifecycle_key lifecycle =
@@ -179,40 +226,59 @@ static void vfs_scope_reclaim_complete(uint scope_id)
 		eligible = ref->retiring &&
 			   workflow_lifecycle_retiring(lifecycle);
 		preserve_files = ref->preserve_on_retire;
-		cleanup_complete = ref->cleanup_complete;
+		phase = ref->reclaim_phase;
+		metadata_target = ref->reclaim_metadata_target;
 		break;
 	}
 	intr_restore(enabled);
 	if (!eligible)
 		return;
-	if (!cleanup_complete) {
-		if (agent_scope_reclaim(scope_id, preserve_files) < 0)
-			return;
-		/*
-		 * BIO owns an account member. Retire its I/O/cache principal before
-		 * waiting for the account to become FREE. Once cleanup is published,
-		 * later reaper rounds no longer need retired BIO admission.
-		 */
-		bio_scope_retire(scope_id);
-		enabled = intr_save();
-		for (int i = 0; i < NPROC; i++) {
-			struct vfs_scope_ref *ref = &vfs_scope_refs[i];
 
-			if (!ref->used || ref->scope_id != scope_id ||
-			    !workflow_lifecycle_key_equal(ref->lifecycle,
-							  lifecycle))
-				continue;
-			if (ref->retiring &&
-			    workflow_lifecycle_retiring(lifecycle)) {
-				ref->cleanup_complete = 1;
-				cleanup_complete = 1;
-			}
-			break;
-		}
-		intr_restore(enabled);
-		if (!cleanup_complete)
+	if (phase == VFS_SCOPE_RECLAIM_BEGIN) {
+		uint64 target = 0;
+		uint next = preserve_files ? VFS_SCOPE_RECLAIM_METADATA :
+					     VFS_SCOPE_RECLAIM_FILES;
+
+		if (agent_scope_reclaim_begin(scope_id, &target) < 0)
 			return;
+		(void)vfs_scope_reclaim_advance(scope_id, lifecycle, phase,
+					 next, target);
+		return;
 	}
+	if (phase == VFS_SCOPE_RECLAIM_FILES) {
+		int status = fs_reclaim_scope_files(scope_id);
+
+		if (status == FS_RECLAIM_PENDING)
+			return;
+		if (status < 0) {
+			/* A failed labelled cleanup needs a full consistency pass. */
+			agent_file_request_scan();
+			return;
+		}
+		(void)vfs_scope_reclaim_advance(
+			scope_id, lifecycle, phase, VFS_SCOPE_RECLAIM_METADATA,
+			metadata_target);
+		return;
+	}
+	if (phase == VFS_SCOPE_RECLAIM_METADATA) {
+		if (!agent_scope_reclaim_metadata_done(scope_id,
+						       metadata_target))
+			return;
+		(void)vfs_scope_reclaim_advance(
+			scope_id, lifecycle, phase, VFS_SCOPE_RECLAIM_RETIRE,
+			metadata_target);
+		return;
+	}
+	if (phase == VFS_SCOPE_RECLAIM_RETIRE) {
+		bio_scope_retire(scope_id);
+		(void)vfs_scope_reclaim_advance(scope_id, lifecycle, phase,
+					 VFS_SCOPE_RECLAIM_DONE,
+					 metadata_target);
+		return;
+	}
+	if (phase != VFS_SCOPE_RECLAIM_DONE)
+		panic("invalid workflow reclaim phase");
+
 	enabled = intr_save();
 	for (int i = 0; i < NPROC; i++) {
 		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
@@ -220,7 +286,8 @@ static void vfs_scope_reclaim_complete(uint scope_id)
 		if (!ref->used || ref->scope_id != scope_id ||
 		    !workflow_lifecycle_key_equal(ref->lifecycle, lifecycle))
 			continue;
-		if (ref->retiring && ref->cleanup_complete &&
+		if (ref->retiring &&
+		    ref->reclaim_phase == VFS_SCOPE_RECLAIM_DONE &&
 		    workflow_lifecycle_retiring(lifecycle)) {
 			if (preserve_files &&
 			    workflow_lifecycle_reclaim(lifecycle) == 0) {
@@ -266,7 +333,7 @@ static int vfs_scope_preserve_on_retire(uint scope_id)
 void vfs_scope_reap_pending(void)
 {
 	uint scope_id = VFS_SCOPE_NONE;
-	int cleanup_complete = 0;
+	uint reclaim_phase = VFS_SCOPE_RECLAIM_BEGIN;
 	int enabled = intr_save();
 
 	for (uint scanned = 0; scanned < NPROC; scanned++) {
@@ -277,8 +344,7 @@ void vfs_scope_reap_pending(void)
 		    workflow_lifecycle_retiring(
 			    vfs_scope_refs[i].lifecycle)) {
 			scope_id = vfs_scope_refs[i].scope_id;
-			cleanup_complete =
-				vfs_scope_refs[i].cleanup_complete;
+			reclaim_phase = vfs_scope_refs[i].reclaim_phase;
 			vfs_scope_reap_cursor = (i + 1) % NPROC;
 			break;
 		}
@@ -286,7 +352,7 @@ void vfs_scope_reap_pending(void)
 	intr_restore(enabled);
 	if (scope_id == VFS_SCOPE_NONE)
 		return;
-	if (cleanup_complete) {
+	if (reclaim_phase >= VFS_SCOPE_RECLAIM_METADATA) {
 		vfs_scope_reclaim_complete(scope_id);
 	} else if (bio_background_begin(FS_OWNER_SCOPE(scope_id))) {
 		vfs_scope_reclaim_complete(scope_id);

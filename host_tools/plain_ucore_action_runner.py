@@ -19,19 +19,36 @@ from typing import Iterable
 from plain_ucore_fs_extract import extract_state_files
 
 UCORE_FS_BLOCK_SIZE = 1024
-ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+READER_E2E_LOG_FILENAMES = (
+    "ucore-build.log",
+    "ucore-run.log",
+    "ucore-run-summary.json",
+)
+SEEDED_ACTION_PHASES = ("clean", "build", "guest")
+SEEDED_ACTION_PHASE_TIMEOUT_MARGIN_SECONDS = 30
+SEEDED_ACTION_OBSERVER_CLEANUP_ALLOWANCE_SECONDS = 10
+SEEDED_ACTION_MAX_TIMEOUT_SECONDS = 3600
 GUEST_FAILURE_RULES = (
     (
         "kernel_panic",
         re.compile(
-            r"^(?:\[PANIC\s+-?\d+--?\d+\]|PANIC:)(?:\s|.).*$",
+            r"^\[PANIC (?:(?:-?\d+--?\d+\]\s+\S+:\d+:)|"
+            r"(?:-?\d+\]\[\S+:\d+\]:))\s+.+$",
             re.IGNORECASE,
         ),
     ),
     (
         "kernel_fault",
         re.compile(
-            r"^\[ERROR\s+-?\d+--?\d+\].*(?:unknown syscall|bad addr\s*=|IllegalInstruction).*$",
+            r"^\[ERROR -?\d+--?\d+\](?:"
+            r"unknown syscall\s+-?\d+"
+            r"|-?\d+ in application, bad addr = .+?, bad instruction = .+?, "
+            r"core dumped\."
+            r"|IllegalInstruction in application, core dumped\."
+            r"|unknown trap:.+"
+            r"|invalid trap from kernel:.+"
+            r")$",
             re.IGNORECASE,
         ),
     ),
@@ -425,6 +442,110 @@ def write_json(path: Path, data: object) -> None:
     path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def prepare_reader_e2e_log_dir(path: Path) -> Path:
+    expanded = path.expanduser()
+    if expanded.is_symlink():
+        raise ValueError(f"Reader E2E log directory cannot be a symlink: {expanded}")
+    destination = expanded.resolve()
+    if destination.exists() and not destination.is_dir():
+        raise ValueError(f"Reader E2E log path is not a directory: {destination}")
+    destination.mkdir(parents=True, exist_ok=True)
+    if any(destination.iterdir()):
+        raise ValueError(f"Reader E2E log directory must start empty: {destination}")
+    return destination
+
+
+def persist_reader_e2e_logs(run_root: Path, destination: Path) -> dict[str, object]:
+    source_root = run_root.resolve()
+    if destination.is_symlink():
+        raise ValueError(f"Reader E2E log directory cannot be a symlink: {destination}")
+    target_root = destination.resolve()
+    if not target_root.is_dir():
+        raise ValueError(f"Reader E2E log directory is unavailable: {target_root}")
+    try:
+        target_root.relative_to(source_root)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("Reader E2E log directory cannot be inside the temporary run tree")
+
+    runs: list[dict[str, object]] = []
+    if source_root.is_dir() and not source_root.is_symlink():
+        for run_dir in sorted(source_root.iterdir(), key=lambda item: item.name):
+            if not run_dir.name.startswith("run-") or not run_dir.is_dir():
+                continue
+            if run_dir.is_symlink():
+                raise ValueError(f"Reader E2E run directory cannot be a symlink: {run_dir}")
+            copied: list[str] = []
+            missing: list[str] = []
+            for filename in READER_E2E_LOG_FILENAMES:
+                source = run_dir / filename
+                if not source.exists():
+                    missing.append(filename)
+                    continue
+                if source.is_symlink() or not source.is_file():
+                    raise ValueError(f"Reader E2E log is not a regular file: {source}")
+                target = target_root / run_dir.name / filename
+                target.parent.mkdir(parents=True, exist_ok=True)
+                partial = target.with_name(f".{target.name}.partial-{os.getpid()}")
+                try:
+                    shutil.copy2(source, partial)
+                    partial.replace(target)
+                finally:
+                    partial.unlink(missing_ok=True)
+                copied.append(filename)
+            runs.append({"run": run_dir.name, "files": copied, "missing": missing})
+
+    manifest = {
+        "schema_version": 1,
+        "required_files": list(READER_E2E_LOG_FILENAMES),
+        "runs": runs,
+    }
+    manifest_path = target_root / "reader-e2e-log-manifest.json"
+    manifest_partial = manifest_path.with_name(
+        f".{manifest_path.name}.partial-{os.getpid()}"
+    )
+    try:
+        manifest_partial.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        manifest_partial.replace(manifest_path)
+    finally:
+        manifest_partial.unlink(missing_ok=True)
+    return manifest
+
+
+def validate_reader_e2e_logs(
+    destination: Path, manifest: dict[str, object]
+) -> None:
+    required = list(READER_E2E_LOG_FILENAMES)
+    if manifest.get("schema_version") != 1:
+        raise ValueError("Reader E2E log manifest has an unsupported schema")
+    if manifest.get("required_files") != required:
+        raise ValueError("Reader E2E log manifest has an unexpected file contract")
+    runs = manifest.get("runs")
+    if not isinstance(runs, list) or not runs:
+        raise ValueError("Reader E2E produced no persistent run logs")
+    destination = destination.resolve()
+    for record in runs:
+        if not isinstance(record, dict):
+            raise ValueError("Reader E2E log manifest contains an invalid run")
+        run_name = record.get("run")
+        if (
+            not isinstance(run_name, str)
+            or not run_name.startswith("run-")
+            or Path(run_name).name != run_name
+        ):
+            raise ValueError("Reader E2E log manifest contains an unsafe run name")
+        if record.get("files") != required or record.get("missing") != []:
+            raise ValueError(f"Reader E2E run logs are incomplete: {run_name}")
+        for filename in required:
+            path = destination / run_name / filename
+            if path.is_symlink() or not path.is_file():
+                raise ValueError(f"Reader E2E persistent log is missing: {path}")
+
+
 def write_fs_aligned_seed(path: Path, seed_text: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     data = seed_text.encode("utf-8")
@@ -539,22 +660,115 @@ def parse_seconds(value: str | int | float) -> float:
     raise ValueError(f"unsupported duration: {text}")
 
 
-def terminate_process(proc: subprocess.Popen[str]) -> None:
-    if proc.poll() is not None:
-        return
+def seeded_ucore_deadline_contract(timeout_seconds: int) -> dict[str, object]:
+    if (
+        type(timeout_seconds) is not int
+        or timeout_seconds <= 0
+        or timeout_seconds > SEEDED_ACTION_MAX_TIMEOUT_SECONDS
+    ):
+        raise ValueError(
+            "seeded uCore timeout must be an integer between 1 and "
+            f"{SEEDED_ACTION_MAX_TIMEOUT_SECONDS} seconds"
+        )
+    phase_timeout = timeout_seconds + SEEDED_ACTION_PHASE_TIMEOUT_MARGIN_SECONDS
+    return {
+        "contract": "plain_ucore_action_deadline_v1",
+        "contract_version": 1,
+        "runner_timeout_seconds": timeout_seconds,
+        "phases": list(SEEDED_ACTION_PHASES),
+        "phase_timeout_seconds": phase_timeout,
+        "observer_cleanup_allowance_seconds": (
+            SEEDED_ACTION_OBSERVER_CLEANUP_ALLOWANCE_SECONDS
+        ),
+        "server_deadline_seconds": (
+            len(SEEDED_ACTION_PHASES) * phase_timeout
+            + SEEDED_ACTION_OBSERVER_CLEANUP_ALLOWANCE_SECONDS
+        ),
+    }
+
+
+def process_group_alive(proc: subprocess.Popen[str]) -> bool:
+    if os.name != "posix":
+        return proc.poll() is None
     try:
-        if os.name == "nt":
-            proc.terminate()
-        else:
-            os.killpg(proc.pid, signal.SIGTERM)
-        proc.wait(timeout=2)
-    except Exception:
-        if proc.poll() is None:
+        os.killpg(proc.pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def signal_process_tree(
+    proc: subprocess.Popen[str], sig: signal.Signals
+) -> tuple[bool, bool]:
+    """Signal the owned leader and group, reporting confirmed leader delivery."""
+
+    leader_sent = False
+    group_sent = False
+    if proc.poll() is None:
+        try:
             if os.name == "nt":
-                proc.kill()
+                if sig == signal.SIGTERM:
+                    proc.terminate()
+                else:
+                    proc.kill()
             else:
-                os.killpg(proc.pid, signal.SIGKILL)
-            proc.wait(timeout=2)
+                os.kill(proc.pid, sig)
+            leader_sent = True
+        except (OSError, ProcessLookupError):
+            pass
+    if os.name == "posix":
+        try:
+            os.killpg(proc.pid, sig)
+            group_sent = True
+        except (OSError, ProcessLookupError):
+            pass
+    return leader_sent or group_sent, leader_sent
+
+
+def terminate_process(proc: subprocess.Popen[str]) -> dict[str, object]:
+    """Stop an owned process tree without confusing cleanup with natural exit."""
+
+    signals_sent: list[int] = []
+    term_sent, term_sent_to_leader = signal_process_tree(proc, signal.SIGTERM)
+    if term_sent:
+        signals_sent.append(int(signal.SIGTERM))
+
+    deadline = time.monotonic() + 2
+    while time.monotonic() < deadline:
+        leader_alive = proc.poll() is None
+        if not leader_alive and not process_group_alive(proc):
+            break
+        time.sleep(0.05)
+
+    if proc.poll() is None or process_group_alive(proc):
+        kill_sent, _ = signal_process_tree(proc, signal.SIGKILL)
+        if kill_sent:
+            signals_sent.append(int(signal.SIGKILL))
+    try:
+        proc.wait(timeout=2)
+    except subprocess.TimeoutExpired:
+        kill_sent, _ = signal_process_tree(proc, signal.SIGKILL)
+        if kill_sent:
+            signals_sent.append(int(signal.SIGKILL))
+        proc.wait(timeout=2)
+
+    raw_returncode = proc.returncode
+    if os.name == "nt":
+        term_leader_confirmed = term_sent_to_leader
+    else:
+        # A successful kill(2) can race with a naturally exiting zombie. The
+        # wait status proves that TERM, rather than a natural non-zero exit,
+        # actually completed the leader.
+        term_leader_confirmed = (
+            term_sent_to_leader and raw_returncode == -int(signal.SIGTERM)
+        )
+    return {
+        "signals_sent": tuple(signals_sent),
+        "term_leader_confirmed": term_leader_confirmed,
+        "raw_returncode": raw_returncode,
+    }
 
 
 def run_observed_command(
@@ -569,7 +783,7 @@ def run_observed_command(
 ) -> dict[str, object]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     mode = "a" if append else "w"
-    output_queue: queue.Queue[str | None] = queue.Queue()
+    output_queue: queue.Queue[tuple[str, str]] = queue.Queue()
     popen_kwargs: dict[str, object] = {
         "stdout": subprocess.PIPE,
         "stderr": subprocess.STDOUT,
@@ -588,9 +802,13 @@ def run_observed_command(
     def read_output() -> None:
         try:
             for line in proc.stdout:
-                output_queue.put(line)
-        finally:
-            output_queue.put(None)
+                output_queue.put(("line", line))
+        except BaseException as error:
+            output_queue.put(
+                ("error", f"{type(error).__name__}: {error}")
+            )
+        else:
+            output_queue.put(("eof", ""))
 
     reader = threading.Thread(target=read_output, daemon=True)
     reader.start()
@@ -605,10 +823,69 @@ def run_observed_command(
     failure_reason = ""
     timed_out = False
     idle_notices = 0
+    termination = {
+        "signals_sent": (),
+        "term_leader_confirmed": False,
+        "raw_returncode": None,
+    }
+    output_eof = False
+    output_error = ""
     last_lines: list[str] = []
     failure_re = re.compile(failure_pattern, re.IGNORECASE) if failure_pattern else None
+    normalized_marker = normalize_guest_log_line(pass_marker)
 
     with log_path.open(mode, encoding="utf-8", errors="replace") as handle:
+        def consume_output(item: str) -> None:
+            nonlocal last_output, failure_seen, failure_line, failure_reason
+            nonlocal marker_seen, marker_seen_at, last_lines
+
+            last_output = time.monotonic()
+            handle.write(item)
+            handle.flush()
+            line = item.rstrip("\n")
+            last_lines.append(line)
+            if len(last_lines) > 80:
+                last_lines = last_lines[-80:]
+            normalized_line = normalize_guest_log_line(item)
+            if (
+                not failure_seen
+                and failure_re
+                and failure_re.fullmatch(normalized_line)
+            ):
+                failure_seen = True
+                failure_line = normalized_line
+                failure_reason = (
+                    classify_guest_failure(normalized_line)
+                    or "custom_failure_pattern"
+                )
+                handle.write(
+                    f"[runner] guest failure detected: {failure_reason}\n"
+                )
+                handle.flush()
+            if normalized_marker and normalized_line == normalized_marker and not marker_seen:
+                marker_seen = True
+                marker_seen_at = time.monotonic()
+                handle.write("[runner] pass marker observed\n")
+                handle.flush()
+
+        def consume_output_event(event: tuple[str, str]) -> None:
+            nonlocal output_eof, output_error
+
+            event_kind, payload = event
+            if event_kind == "line":
+                consume_output(payload)
+            elif event_kind == "eof":
+                output_eof = True
+            elif event_kind == "error":
+                if not output_error:
+                    output_error = payload or "unknown output reader error"
+                    handle.write(f"[runner] output reader failed: {output_error}\n")
+                    handle.flush()
+            elif not output_error:
+                output_error = f"unknown output event: {event_kind}"
+                handle.write(f"[runner] output reader failed: {output_error}\n")
+                handle.flush()
+
         while True:
             now = time.monotonic()
             if now - start > timeout_seconds:
@@ -628,56 +905,86 @@ def run_observed_command(
                     handle.flush()
                     break
             try:
-                item = output_queue.get(timeout=0.2)
+                event = output_queue.get(timeout=0.2)
             except queue.Empty:
-                if proc.poll() is not None:
+                if proc.poll() is not None and output_eof:
                     break
                 continue
-            if item is None:
-                if proc.poll() is not None:
-                    break
-                continue
-            last_output = time.monotonic()
-            handle.write(item)
-            handle.flush()
-            line = item.rstrip("\n")
-            last_lines.append(line)
-            if len(last_lines) > 80:
-                last_lines = last_lines[-80:]
-            normalized_line = normalize_guest_log_line(item)
-            if failure_re and failure_re.fullmatch(normalized_line):
-                failure_seen = True
-                failure_line = normalized_line
-                failure_reason = classify_guest_failure(normalized_line) or "custom_failure_pattern"
-                handle.write(f"[runner] guest failure detected: {failure_reason}\n")
+            consume_output_event(event)
+            if output_eof and proc.poll() is not None:
                 break
-            if pass_marker and pass_marker in item and not marker_seen:
-                marker_seen = True
-                marker_seen_at = time.monotonic()
-                handle.write("[runner] pass marker observed\n")
-                handle.flush()
+            if failure_seen or output_error:
+                break
 
-        if proc.poll() is None:
-            terminate_process(proc)
-        reader.join(timeout=1)
-        if timed_out or failure_seen or (pass_marker and not marker_seen):
+        natural_completion = proc.poll() is not None and output_eof
+        if not natural_completion:
+            termination = terminate_process(proc)
+
+        drain_deadline = time.monotonic() + 2
+        while not output_eof and time.monotonic() < drain_deadline:
+            try:
+                event = output_queue.get(timeout=0.1)
+            except queue.Empty:
+                if not reader.is_alive():
+                    break
+                continue
+            consume_output_event(event)
+        reader.join(timeout=max(0.0, drain_deadline - time.monotonic()))
+        while True:
+            try:
+                event = output_queue.get_nowait()
+            except queue.Empty:
+                break
+            consume_output_event(event)
+        if (
+            timed_out
+            or failure_seen
+            or output_error
+            or (normalized_marker and not marker_seen)
+        ):
             handle.write("[runner] last log lines:\n")
             for line in last_lines[-40:]:
                 handle.write(line + "\n")
 
     elapsed = time.monotonic() - start
-    returncode = proc.returncode
-    ok = not timed_out and not failure_seen and (not pass_marker or marker_seen)
+    raw_returncode = proc.returncode
+    signals_sent = tuple(int(item) for item in termination["signals_sent"])
+    runner_terminated = (
+        marker_seen
+        and not failure_seen
+        and not output_error
+        and not timed_out
+        and signals_sent == (int(signal.SIGTERM),)
+        and bool(termination["term_leader_confirmed"])
+        and output_eof
+    )
+    natural_exit_ok = raw_returncode == 0 and not signals_sent
+    exit_ok = natural_exit_ok or runner_terminated
+    ok = (
+        not timed_out
+        and not failure_seen
+        and not output_error
+        and (not normalized_marker or marker_seen)
+        and output_eof
+        and exit_ok
+    )
     if not ok and not failure_reason:
         if timed_out:
             failure_reason = "guest_timeout"
-        elif returncode not in (0, None):
+        elif output_error:
+            failure_reason = "guest_output_error"
+        elif raw_returncode not in (0, None):
             failure_reason = "guest_exit_nonzero"
-        elif pass_marker and not marker_seen:
+        elif normalized_marker and not marker_seen:
             failure_reason = "pass_marker_missing"
+        elif not output_eof:
+            failure_reason = "guest_output_incomplete"
+        elif signals_sent:
+            failure_reason = "runner_termination_unconfirmed"
         else:
             failure_reason = "guest_failed"
-    if ok and returncode not in (0, None):
+    returncode = raw_returncode
+    if ok and runner_terminated and returncode not in (0, None):
         returncode = 0
     elif not ok and returncode in (0, None):
         returncode = 1
@@ -688,6 +995,11 @@ def run_observed_command(
         "failure_line": failure_line,
         "failure_reason": failure_reason,
         "timed_out": timed_out,
+        "runner_terminated": runner_terminated,
+        "runner_signals": signals_sent,
+        "raw_returncode": raw_returncode,
+        "output_eof": output_eof,
+        "output_error": output_error,
         "idle_notices": idle_notices,
         "elapsed_seconds": round(elapsed, 3),
     }
@@ -898,8 +1210,19 @@ def find_log_value(text: str, prefix: str) -> str:
     return ""
 
 
+def find_exact_guest_log_line(text: str, expected: str) -> str:
+    normalized_expected = normalize_guest_log_line(expected)
+    for line in text.splitlines():
+        normalized = normalize_guest_log_line(line)
+        if normalized == normalized_expected:
+            return normalized
+    return ""
+
+
 def write_run_result_state(next_state: Path, run_summary: dict[str, object], log_text: str) -> None:
-    passed = bool(run_summary.get("passed"))
+    # The summary is an internal typed contract. Treat malformed truthy values
+    # as failure so diagnostic state can never advertise a successful guest.
+    passed = run_summary.get("passed") is True
     lines = [
         "host_runner=plain_ucore_action_runner",
         f"status={'ready' if passed else 'failed'}",
@@ -908,6 +1231,7 @@ def write_run_result_state(next_state: Path, run_summary: dict[str, object], log
         f"extracted_state_files={run_summary.get('extracted_state_files', 0)}",
         f"build_returncode={run_summary.get('build_returncode', '')}",
         f"guest_returncode={run_summary.get('guest_returncode', '')}",
+        f"guest_raw_returncode={run_summary.get('guest_raw_returncode', '')}",
         f"failure_phase={line_value(run_summary.get('failure_phase', ''))}",
         f"failure_reason={line_value(run_summary.get('failure_reason', ''))}",
         f"build_log={line_value(run_summary.get('build_log', ''))}",
@@ -915,15 +1239,19 @@ def write_run_result_state(next_state: Path, run_summary: dict[str, object], log
         f"qemu_elapsed_seconds={run_summary.get('elapsed_seconds', 0)}",
         f"qemu_idle_notices={run_summary.get('idle_notices', 0)}",
         f"qemu_timed_out={1 if run_summary.get('timed_out') else 0}",
+        f"qemu_runner_terminated={1 if run_summary.get('runner_terminated') else 0}",
+        f"qemu_output_eof={1 if run_summary.get('output_eof') else 0}",
+        "qemu_runner_signals="
+        + ",".join(str(item) for item in run_summary.get("runner_signals", ())),
     ]
     host_reader_actions = find_log_value(log_text, "rp_web_export: host_reader_actions=")
     host_actions_verified = find_log_value(log_text, "rp_compare_plain: host_actions=")
-    orch_passed = find_log_value(log_text, "rp_orch: passed")
+    orch_passed = find_exact_guest_log_line(log_text, "rp_orch: passed")
     if host_reader_actions:
         lines.append("qemu_" + host_reader_actions)
     if host_actions_verified:
         lines.append("qemu_" + host_actions_verified)
-    if orch_passed:
+    if passed and orch_passed:
         lines.append("qemu_orch_passed=1")
     write_text(next_state / "rp_host_run_result", "\n".join(lines) + "\n")
 
@@ -945,6 +1273,8 @@ def run_seeded_ucore(
     pass_marker: str = "rp_orch: passed",
 ) -> dict[str, object]:
     repo_dir = repo_dir.resolve()
+    deadline_contract = seeded_ucore_deadline_contract(timeout_seconds)
+    phase_timeout_seconds = int(deadline_contract["phase_timeout_seconds"])
     run_dir.mkdir(parents=True, exist_ok=True)
     build_log_path = run_dir / "ucore-build.log"
     log_path = run_dir / "ucore-run.log"
@@ -958,7 +1288,7 @@ def run_seeded_ucore(
     clean_code = run_command(
         make_wsl_command(clean_command, wsl_distro),
         build_log_path,
-        timeout_seconds + 30,
+        phase_timeout_seconds,
     )
     if clean_code != 0:
         summary = {
@@ -966,6 +1296,7 @@ def run_seeded_ucore(
             "returncode": clean_code,
             "build_returncode": clean_code,
             "guest_returncode": None,
+            "guest_raw_returncode": None,
             "embedded_action_records": 0,
             "passed": False,
             "build_log": str(build_log_path),
@@ -993,7 +1324,7 @@ def run_seeded_ucore(
     build_code = run_command(
         make_wsl_command(build_command_text, wsl_distro),
         build_log_path,
-        timeout_seconds + 30,
+        phase_timeout_seconds,
         append=True,
     )
     if build_code != 0:
@@ -1002,6 +1333,7 @@ def run_seeded_ucore(
             "returncode": build_code,
             "build_returncode": build_code,
             "guest_returncode": None,
+            "guest_raw_returncode": None,
             "embedded_action_records": embedded_records,
             "passed": False,
             "build_log": str(build_log_path),
@@ -1018,7 +1350,7 @@ def run_seeded_ucore(
     observed = run_observed_command(
         make_wsl_command(run_command_text, wsl_distro),
         log_path,
-        timeout_seconds + 30,
+        phase_timeout_seconds,
         append=False,
         pass_marker=pass_marker,
         idle_notice_seconds=int(os.environ.get("SEEDED_ACTION_IDLE_NOTICE_SECONDS", "20")),
@@ -1029,6 +1361,7 @@ def run_seeded_ucore(
         bool(observed["marker_seen"])
         and not bool(observed["failure_seen"])
         and not bool(observed["timed_out"])
+        and code == 0
     )
     guest_passed = passed
     failure_phase = "" if passed else "guest"
@@ -1072,12 +1405,16 @@ def run_seeded_ucore(
         "returncode": code if passed or code != 0 else 1,
         "build_returncode": build_code,
         "guest_returncode": code,
+        "guest_raw_returncode": observed["raw_returncode"],
         "marker_seen": bool(observed["marker_seen"]),
         "failure_seen": bool(observed["failure_seen"]),
         "failure_line": str(observed["failure_line"]),
         "failure_reason": failure_reason,
         "failure_phase": failure_phase,
         "timed_out": bool(observed["timed_out"]),
+        "runner_terminated": bool(observed["runner_terminated"]),
+        "runner_signals": list(observed["runner_signals"]),
+        "output_eof": bool(observed["output_eof"]),
         "idle_notices": int(observed["idle_notices"]),
         "elapsed_seconds": observed["elapsed_seconds"],
         "embedded_action_records": embedded_records,

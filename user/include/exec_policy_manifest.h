@@ -111,6 +111,9 @@ static inline void exec_manifest_worker_image(const char *source,
 	X("agentscope_ucore", "agentscope_ucore", \
 	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
 	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
+	X("workflow_teardown_race_ucore", "workflow_teardown_race_ucore", \
+	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
+	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
 	X("iobudget_ucore", "iobudget_ucore", \
 	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
 	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \

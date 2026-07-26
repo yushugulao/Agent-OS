@@ -2,6 +2,7 @@
 #define USER_AGENT_H
 
 #include <stddef.h>
+#include "../../agent_lifecycle_abi.h"
 
 #define AGENT_CALL_VERSION 1
 #define AGENT_TYPE_NONE  0
@@ -801,6 +802,9 @@ int agent_create(void);
 int agent_create_role(int role);
 int agent_workflow_create(int role);
 int agent_workflow_close(uint64 scope_id);
+int agent_workflow_lifecycle_info(
+	struct agent_workflow_lifecycle_info *info,
+	const struct agent_workflow_lifecycle_key *expected);
 int agent_scope_delegate_fd(int fd);
 int agent_worker_create(const char *image, uint64 capabilities);
 int agent_info(struct agent_info *info);

@@ -340,3 +340,4 @@
 #define SYS_kernel_work_last_preemptions 543
 #define SYS_io_policy_info 544
 #define SYS_agent_workflow_close 545
+#define SYS_agent_workflow_lifecycle_info 546

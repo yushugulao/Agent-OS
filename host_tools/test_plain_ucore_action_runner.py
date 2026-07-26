@@ -5,15 +5,28 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import signal
 import sys
 import tempfile
 from pathlib import Path
 
 import plain_ucore_action_runner as runner
+import test_plain_ucore_reader_e2e as reader_e2e
 
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
+
+
+def ci_job_block(ci_text: str, job_name: str) -> str:
+    match = re.search(
+        rf"(?m)^{re.escape(job_name)}:\n(?P<body>(?:(?:[ \t].*)?\n)*)",
+        ci_text,
+    )
+    if match is None:
+        raise AssertionError(f"missing CI job: {job_name}")
+    return match.group(0)
 
 
 def main() -> int:
@@ -43,6 +56,32 @@ def main() -> int:
         )
         assert build_code == 0
         assert "build/riscv64/ch6b_panic" in read(build_log)
+        deadline_contract = runner.seeded_ucore_deadline_contract(180)
+        assert deadline_contract == {
+            "contract": "plain_ucore_action_deadline_v1",
+            "contract_version": 1,
+            "runner_timeout_seconds": 180,
+            "phases": ["clean", "build", "guest"],
+            "phase_timeout_seconds": 210,
+            "observer_cleanup_allowance_seconds": 10,
+            "server_deadline_seconds": 640,
+        }
+        assert reader_e2e.action_client_timeout_seconds(deadline_contract) == 655
+        invalid_deadline_contract = dict(deadline_contract)
+        invalid_deadline_contract["server_deadline_seconds"] = 639
+        try:
+            reader_e2e.action_client_timeout_seconds(invalid_deadline_contract)
+        except AssertionError:
+            pass
+        else:
+            raise AssertionError("short Reader E2E server deadline was accepted")
+        for invalid_timeout in (0, -1, True, 1.5, 3601):
+            try:
+                runner.seeded_ucore_deadline_contract(invalid_timeout)
+            except ValueError:
+                pass
+            else:
+                raise AssertionError("invalid seeded uCore timeout was accepted")
 
         observed_ok = runner.run_observed_command(
             [
@@ -50,7 +89,8 @@ def main() -> int:
                 "-c",
                 (
                     "print('CC -o build/riscv64/ch6b_panic user/ch6b_panic.c'); "
-                    "print('stage=clean;status=failed'); print('rp_orch: passed')"
+                    "print('stage=clean;status=failed'); "
+                    "print('\\x1b[32mrp_orch: passed\\x1b[0m')"
                 ),
             ],
             root / "observed-ok.log",
@@ -63,6 +103,22 @@ def main() -> int:
         assert observed_ok["marker_seen"] is True
         assert observed_ok["failure_seen"] is False
         assert "rp_orch: passed" in read(root / "observed-ok.log")
+
+        observed_diagnostic = runner.run_observed_command(
+            [
+                sys.executable,
+                "-c",
+                "print('\\x1b[33mdiagnostic: rp_orch: passed is the expected marker\\x1b[0m')",
+            ],
+            root / "observed-diagnostic.log",
+            timeout_seconds=5,
+            pass_marker="rp_orch: passed",
+            idle_notice_seconds=1,
+            marker_grace_seconds=0,
+        )
+        assert observed_diagnostic["returncode"] != 0
+        assert observed_diagnostic["marker_seen"] is False
+        assert observed_diagnostic["failure_reason"] == "pass_marker_missing"
 
         observed_fail = runner.run_observed_command(
             [
@@ -84,6 +140,40 @@ def main() -> int:
         assert runner.classify_guest_failure("rp_orch: failed code=1") == "orchestrator_failed"
         assert runner.classify_guest_failure("artifact=status=failed") == ""
 
+        trap_records = (
+            "[ERROR 2-0]unknown trap: 0x2, stval = 0x0",
+            "[ERROR -1--1]invalid trap from kernel: 0x2, "
+            "stval = 0x0 sepc = 0x80000000",
+        )
+        for index, record in enumerate(trap_records):
+            observed_trap = runner.run_observed_command(
+                [
+                    sys.executable,
+                    "-c",
+                    f"print('\\x1b[31m{record}\\x1b[0m')",
+                ],
+                root / f"observed-trap-{index}.log",
+                timeout_seconds=5,
+                pass_marker="rp_orch: passed",
+                idle_notice_seconds=1,
+            )
+            assert observed_trap["returncode"] != 0
+            assert observed_trap["failure_seen"] is True
+            assert observed_trap["failure_reason"] == "kernel_fault"
+            assert observed_trap["failure_line"] == record
+        assert runner.classify_guest_failure(
+            "diagnostic: unknown trap: expected only in a structured kernel record"
+        ) == ""
+        for fault_record in (
+            "[ERROR 2-0]unknown syscall 999",
+            "[ERROR 2-0]7 in application, bad addr = 0x1, "
+            "bad instruction = 0x2, core dumped.",
+            "[ERROR 2-0]IllegalInstruction in application, core dumped.",
+        ):
+            assert runner.classify_guest_failure(
+                f"\x1b[31m{fault_record}\x1b[0m"
+            ) == "kernel_fault"
+
         observed_missing = runner.run_observed_command(
             [sys.executable, "-c", "print('guest exited before completion')"],
             root / "observed-missing.log",
@@ -103,6 +193,283 @@ def main() -> int:
         )
         assert observed_exit["returncode"] == 7
         assert observed_exit["failure_reason"] == "guest_exit_nonzero"
+
+        marker_then_exit = runner.run_observed_command(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys,time; print('rp_orch: passed', flush=True); "
+                    "time.sleep(0.05); sys.exit(7)"
+                ),
+            ],
+            root / "marker-then-exit.log",
+            timeout_seconds=5,
+            pass_marker="rp_orch: passed",
+            idle_notice_seconds=1,
+            marker_grace_seconds=1,
+        )
+        assert marker_then_exit["marker_seen"] is True
+        assert marker_then_exit["runner_terminated"] is False
+        assert marker_then_exit["returncode"] == 7
+        assert marker_then_exit["failure_reason"] == "guest_exit_nonzero"
+        assert marker_then_exit["output_eof"] is True
+
+        queued_tail_fault = runner.run_observed_command(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys,time; "
+                    "sys.stdout.write('rp_orch: passed\\n"
+                    "[PANIC -1--1] os/proc.c:10: queued late failure\\n'); "
+                    "sys.stdout.flush(); time.sleep(5)"
+                ),
+            ],
+            root / "queued-tail-fault.log",
+            timeout_seconds=5,
+            pass_marker="rp_orch: passed",
+            idle_notice_seconds=1,
+            marker_grace_seconds=0,
+        )
+        assert queued_tail_fault["marker_seen"] is True
+        assert queued_tail_fault["failure_seen"] is True
+        assert queued_tail_fault["failure_reason"] == "kernel_panic"
+        assert queued_tail_fault["returncode"] != 0
+        assert queued_tail_fault["runner_signals"] == (int(signal.SIGTERM),)
+        assert queued_tail_fault["output_eof"] is True
+        queued_tail_log = read(root / "queued-tail-fault.log")
+        stop_notice = "[runner] pass marker observed; stopping process after 0s grace"
+        assert queued_tail_log.index(stop_notice) < queued_tail_log.index(
+            "[PANIC -1--1] os/proc.c:10: queued late failure"
+        )
+
+        original_popen = runner.subprocess.Popen
+
+        class ErrorAfterEofStream:
+            def __init__(self, stream: object) -> None:
+                self.stream = stream
+
+            def __iter__(self) -> object:
+                return self
+
+            def __next__(self) -> str:
+                line = self.stream.readline()
+                if line:
+                    return line
+                raise OSError("synthetic stdout iteration failure")
+
+        def popen_with_reader_error(*args: object, **kwargs: object) -> object:
+            proc = original_popen(*args, **kwargs)
+            assert proc.stdout is not None
+            proc.stdout = ErrorAfterEofStream(proc.stdout)
+            return proc
+
+        runner.subprocess.Popen = popen_with_reader_error
+        try:
+            observed_reader_error = runner.run_observed_command(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import sys,time; "
+                        "sys.stdout.write('rp_orch: passed\\n"
+                        "reader-tail=preserved\\n'); "
+                        "sys.stdout.flush(); time.sleep(5)"
+                    ),
+                ],
+                root / "observed-reader-error.log",
+                timeout_seconds=5,
+                pass_marker="rp_orch: passed",
+                idle_notice_seconds=1,
+                marker_grace_seconds=0,
+            )
+        finally:
+            runner.subprocess.Popen = original_popen
+        assert observed_reader_error["marker_seen"] is True
+        assert observed_reader_error["returncode"] != 0
+        assert observed_reader_error["failure_reason"] == "guest_output_error"
+        assert observed_reader_error["output_eof"] is False
+        assert observed_reader_error["output_error"] == (
+            "OSError: synthetic stdout iteration failure"
+        )
+        reader_error_log = read(root / "observed-reader-error.log")
+        assert reader_error_log.index(stop_notice) < reader_error_log.index(
+            "reader-tail=preserved"
+        )
+        assert "[runner] output reader failed: OSError: synthetic" in reader_error_log
+
+        if os.name == "posix":
+            fault_during_termination = runner.run_observed_command(
+                [
+                    "bash",
+                    "-c",
+                    (
+                        "trap \"echo '[PANIC -1--1] os/proc.c:10: "
+                        "termination failure'; exit 0\" TERM; "
+                        "echo 'rp_orch: passed'; while :; do sleep 1; done"
+                    ),
+                ],
+                root / "fault-during-termination.log",
+                timeout_seconds=5,
+                pass_marker="rp_orch: passed",
+                idle_notice_seconds=1,
+                marker_grace_seconds=0,
+            )
+            assert fault_during_termination["marker_seen"] is True
+            assert fault_during_termination["failure_seen"] is True
+            assert fault_during_termination["failure_reason"] == "kernel_panic"
+            assert fault_during_termination["returncode"] != 0
+            assert fault_during_termination["output_eof"] is True
+            assert fault_during_termination["runner_terminated"] is False
+            assert fault_during_termination["runner_signals"] == (
+                int(signal.SIGTERM),
+            )
+            termination_fault_log = read(root / "fault-during-termination.log")
+            assert termination_fault_log.index(stop_notice) < termination_fault_log.index(
+                "[PANIC -1--1] os/proc.c:10: termination failure"
+            )
+
+            marker_then_term_trap = runner.run_observed_command(
+                [
+                    "bash",
+                    "-c",
+                    (
+                        "trap 'exit 0' TERM; echo 'rp_orch: passed'; "
+                        "while :; do sleep 1; done"
+                    ),
+                ],
+                root / "marker-then-term-trap.log",
+                timeout_seconds=5,
+                pass_marker="rp_orch: passed",
+                idle_notice_seconds=1,
+                marker_grace_seconds=0,
+            )
+            assert marker_then_term_trap["marker_seen"] is True
+            assert marker_then_term_trap["runner_terminated"] is False
+            assert marker_then_term_trap["runner_signals"] == (
+                int(signal.SIGTERM),
+            )
+            assert marker_then_term_trap["raw_returncode"] == 0
+            assert marker_then_term_trap["returncode"] != 0
+            assert (
+                marker_then_term_trap["failure_reason"]
+                == "runner_termination_unconfirmed"
+            )
+
+            marker_then_kill = runner.run_observed_command(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import signal,time; "
+                        "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
+                        "print('rp_orch: passed', flush=True); time.sleep(10)"
+                    ),
+                ],
+                root / "marker-then-kill.log",
+                timeout_seconds=10,
+                pass_marker="rp_orch: passed",
+                idle_notice_seconds=1,
+                marker_grace_seconds=0,
+            )
+            assert marker_then_kill["marker_seen"] is True
+            assert marker_then_kill["runner_terminated"] is False
+            assert marker_then_kill["runner_signals"] == (
+                int(signal.SIGTERM),
+                int(signal.SIGKILL),
+            )
+            assert marker_then_kill["raw_returncode"] == -int(signal.SIGKILL)
+            assert marker_then_kill["returncode"] != 0
+            assert marker_then_kill["failure_reason"] == "guest_exit_nonzero"
+
+            leader_with_child = runner.run_observed_command(
+                [
+                    sys.executable,
+                    "-c",
+                    (
+                        "import subprocess,sys; "
+                        "subprocess.Popen([sys.executable, '-c', "
+                        "'import time; time.sleep(0.25)']); "
+                        "print('rp_orch: passed', flush=True); sys.exit(7)"
+                    ),
+                ],
+                root / "marker-exit-with-child.log",
+                timeout_seconds=5,
+                pass_marker="rp_orch: passed",
+                idle_notice_seconds=1,
+                marker_grace_seconds=1,
+            )
+            assert leader_with_child["marker_seen"] is True
+            assert leader_with_child["runner_terminated"] is False
+            assert leader_with_child["runner_signals"] == ()
+            assert leader_with_child["raw_returncode"] == 7
+            assert leader_with_child["returncode"] == 7
+            assert leader_with_child["failure_reason"] == "guest_exit_nonzero"
+            assert leader_with_child["output_eof"] is True
+
+        marker_then_wait = runner.run_observed_command(
+            [
+                sys.executable,
+                "-c",
+                "import time; print('rp_orch: passed', flush=True); time.sleep(5)",
+            ],
+            root / "marker-then-wait.log",
+            timeout_seconds=5,
+            pass_marker="rp_orch: passed",
+            idle_notice_seconds=1,
+            marker_grace_seconds=0,
+        )
+        assert marker_then_wait["marker_seen"] is True
+        assert marker_then_wait["runner_terminated"] is True
+        assert marker_then_wait["returncode"] == 0
+        assert marker_then_wait["failure_reason"] == ""
+        assert marker_then_wait["runner_signals"] == (int(signal.SIGTERM),)
+        assert marker_then_wait["output_eof"] is True
+
+        persisted_source = root / "reader-runs"
+        persisted_run = persisted_source / "run-0001"
+        persisted_run.mkdir(parents=True)
+        for filename in runner.READER_E2E_LOG_FILENAMES:
+            (persisted_run / filename).write_text(
+                f"original:{filename}\n", encoding="utf-8"
+            )
+        (persisted_run / "not-evidence.tmp").write_text("ignore\n", encoding="utf-8")
+        persisted_target = runner.prepare_reader_e2e_log_dir(root / "reader-e2e-logs")
+        persisted_manifest = runner.persist_reader_e2e_logs(
+            persisted_source, persisted_target
+        )
+        assert persisted_manifest["runs"] == [
+            {
+                "run": "run-0001",
+                "files": list(runner.READER_E2E_LOG_FILENAMES),
+                "missing": [],
+            }
+        ]
+        for filename in runner.READER_E2E_LOG_FILENAMES:
+            assert read(persisted_target / "run-0001" / filename) == (
+                f"original:{filename}\n"
+            )
+        assert not (persisted_target / "run-0001" / "not-evidence.tmp").exists()
+        persisted_manifest_file = json.loads(
+            read(persisted_target / "reader-e2e-log-manifest.json")
+        )
+        assert persisted_manifest_file == persisted_manifest
+        runner.validate_reader_e2e_logs(persisted_target, persisted_manifest)
+        incomplete_manifest = dict(persisted_manifest)
+        incomplete_manifest["runs"] = []
+        try:
+            runner.validate_reader_e2e_logs(persisted_target, incomplete_manifest)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("empty Reader E2E manifest was accepted")
+        try:
+            runner.prepare_reader_e2e_log_dir(persisted_target)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("non-empty Reader E2E log directory was accepted")
 
         state_dir = root / "state"
         run_dir = root / "run"
@@ -1123,10 +1490,91 @@ def main() -> int:
         assert f"qemu_rp_compare_plain: host_actions={expected_actions} verified" in result_state
         assert "qemu_orch_passed=1" in result_state
 
+        diagnostic_state = root / "diagnostic-result-state"
+        diagnostic_state.mkdir()
+        runner.write_run_result_state(
+            diagnostic_state,
+            {"passed": False},
+            "diagnostic: rp_orch: passed is only an expected marker\n",
+        )
+        assert "qemu_orch_passed=1" not in read(
+            diagnostic_state / "rp_host_run_result"
+        )
+
+        failed_marker_state = root / "failed-marker-result-state"
+        failed_marker_state.mkdir()
+        runner.write_run_result_state(
+            failed_marker_state,
+            {
+                "passed": False,
+                "failure_phase": "guest",
+                "failure_reason": "kernel_panic",
+            },
+            "rp_orch: passed\n[PANIC -1--1] os/proc.c:10: late failure\n",
+        )
+        failed_marker_result = read(
+            failed_marker_state / "rp_host_run_result"
+        )
+        assert "status=failed" in failed_marker_result
+        assert "failure_reason=kernel_panic" in failed_marker_result
+        assert "qemu_orch_passed=1" not in failed_marker_result
+
+        malformed_passed_state = root / "malformed-passed-result-state"
+        malformed_passed_state.mkdir()
+        runner.write_run_result_state(
+            malformed_passed_state,
+            {"passed": "true"},
+            "rp_orch: passed\n",
+        )
+        malformed_passed_result = read(
+            malformed_passed_state / "rp_host_run_result"
+        )
+        assert "status=failed" in malformed_passed_result
+        assert "passed=0" in malformed_passed_result
+        assert "qemu_orch_passed=1" not in malformed_passed_result
+
         publish_dir = root / "published"
         runner.publish_next_state(next_state, publish_dir)
         assert (publish_dir / "rp_host_run_result").exists()
         assert (publish_dir / "rp_host_action_inbox").exists()
+
+    repo_root = Path(__file__).resolve().parents[1]
+    ci_text = read(repo_root / ".gitlab-ci.yml")
+    budget_job = ci_job_block(ci_text, "kernel-budgets")
+    reader_job = ci_job_block(ci_text, "reader-e2e")
+    agent_job = ci_job_block(ci_text, "agent-regression")
+    mechanism_job = ci_job_block(ci_text, "kernel-mechanism-regression")
+    host_tag = "agentos-host-calibrated"
+    qemu_tag = "agentos-qemu-calibrated"
+    assert host_tag != qemu_tag
+    assert host_tag in budget_job and qemu_tag not in budget_job
+    for job in (reader_job, agent_job, mechanism_job):
+        assert qemu_tag in job
+        assert "  dependencies: []\n" in job
+        assert "resource_group: agentos-qemu-performance" in job
+        assert "when: always" in job
+    assert "PLAIN_UCORE_READER_E2E_LOG_DIR=ci-artifacts/reader-e2e-raw" in reader_job
+    assert "tee ci-artifacts/reader-e2e.log" in reader_job
+    assert "- ci-artifacts/reader-e2e.log" in reader_job
+    assert "ci-artifacts/reader-e2e-raw/" in reader_job
+    assert "tee ci-artifacts/agent-regression-job.log" in agent_job
+    assert "- ci-artifacts/agent-regression-job.log" in agent_job
+    assert "--marker-mode exact-line" in read(
+        repo_root / "scripts" / "run-agent-tests.sh"
+    )
+    mechanism_runners = (
+        "proc-reap",
+        "syscall-fairness",
+        "file-resource",
+        "thread-resource",
+        "workflow-teardown-race",
+        "fs-enospc",
+    )
+    for label in mechanism_runners:
+        assert f"tee ci-artifacts/{label}-job.log" in mechanism_job
+        script_path = repo_root / "scripts" / f"run-{label}-tests.sh"
+        assert "--marker-mode exact-line" in read(script_path)
+    assert "- ci-artifacts/*-job.log" in mechanism_job
 
     print("test_plain_ucore_action_runner: passed")
     return 0

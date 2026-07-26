@@ -163,6 +163,83 @@ agent_lifecycle_init(void)
 	next_control_id = 1;
 }
 
+int
+sys_agent_workflow_lifecycle_info(uint64 addr, uint64 user_size,
+				  uint64 flags, uint64 expected_id,
+				  uint64 expected_generation)
+{
+	struct proc *p = curr_proc();
+	struct agent_metadata_runtime_snapshot metadata;
+	struct agent_workflow_lifecycle_info info;
+	struct workflow_lifecycle_key current = workflow_lifecycle_none();
+	struct workflow_lifecycle_key expected = workflow_lifecycle_none();
+	uint64 copy_size;
+	uint scope_id;
+	int enabled;
+	int lifecycle_charged;
+	int match;
+	int status = AGENT_STATUS_OK;
+
+	if (user_size < 2 * sizeof(unsigned int))
+		return -1;
+	if ((flags & ~((uint64)
+		      AGENT_WORKFLOW_LIFECYCLE_INFO_F_MATCH_CURRENT)) != 0)
+		return AGENT_STATUS_BAD_PARAM;
+	match = (flags &
+		 AGENT_WORKFLOW_LIFECYCLE_INFO_F_MATCH_CURRENT) != 0;
+	if ((!match && (expected_id != 0 || expected_generation != 0)) ||
+	    (match &&
+	     (expected_id == 0 || expected_id > (uint64)(uint)-1 ||
+	      expected_generation == 0)))
+		return AGENT_STATUS_BAD_PARAM;
+	copy_size = MIN(user_size, sizeof(info));
+	if (p == 0 ||
+	    user_range_check(p->pagetable, addr, copy_size, PTE_W) < 0)
+		return -1;
+
+	memset(&info, 0, sizeof(info));
+	info.version = AGENT_WORKFLOW_LIFECYCLE_INFO_VERSION;
+	info.struct_size = sizeof(info);
+	enabled = intr_save();
+	lifecycle_charged = p->workflow_lifecycle_charged != 0;
+	if (lifecycle_charged) {
+		current.id = p->workflow_lifecycle_id;
+		current.generation = p->workflow_lifecycle_generation;
+	}
+	info.context_lane_depth = p->agent_context_lane_depth;
+	for (int tid = 0; tid < NTHREAD; tid++) {
+		struct thread *t = &p->threads[tid];
+
+		if (t->state == SLEEPING &&
+		    t->wait_channel == &p->agent_context_lane_waiters &&
+		    t->wait_reason == WAIT_REASON_AGENT_CONTEXT)
+			info.context_lane_waiters++;
+	}
+	agent_metadata_proc_runtime_snapshot(p, &metadata);
+	info.metadata_txn_owned = metadata.metadata_txn_owned;
+	info.metadata_txn_waiters = metadata.metadata_txn_waiters;
+	intr_restore(enabled);
+	if (lifecycle_charged && workflow_lifecycle_key_valid(current) &&
+	    workflow_lifecycle_scope(current, &scope_id) == 0) {
+		info.charged = 1;
+		info.key.id = current.id;
+		info.key.generation = current.generation;
+	} else if (lifecycle_charged) {
+		status = AGENT_STATUS_NOT_FOUND;
+	}
+	if (match) {
+		expected.id = (uint)expected_id;
+		expected.generation = expected_generation;
+		if (!info.charged)
+			status = AGENT_STATUS_NOT_FOUND;
+		else if (!workflow_lifecycle_key_equal(current, expected))
+			status = AGENT_STATUS_STALE;
+	}
+	if (copyout(p->pagetable, addr, (char *)&info, copy_size) < 0)
+		return -1;
+	return status;
+}
+
 uint64
 agent_lifecycle_alloc_control_id(void)
 {

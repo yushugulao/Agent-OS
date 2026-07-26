@@ -5,11 +5,13 @@ import importlib.util
 import io
 import json
 import copy
+import re
 import statistics
 import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from types import SimpleNamespace
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -23,6 +25,36 @@ SPEC.loader.exec_module(kernel_budgets)
 
 
 class KernelBudgetTests(unittest.TestCase):
+    def assert_store_wrapper_projection_protocol(self, body, call):
+        call_at = body.index(call)
+        complete_at = body.index("agent_file_store_complete(&commit, result)")
+        self.assertLess(call_at, complete_at)
+        before_complete = body[call_at:complete_at]
+        before_complete = re.sub(r"\breturn\s*$", "", before_complete)
+        self.assertIsNone(
+            re.search(r"\b(?:goto|return)\b", before_complete)
+        )
+
+    def assert_projection_checkpoint_guard(self, body):
+        self.assertIn("txn_projection_pending", body)
+        guard = body.index("txn_projection_pending")
+        self.assertLess(guard, body.index("agent_metadata_txn_unlock()"))
+
+    def assert_projection_idle_guard(self, body):
+        compact = re.sub(r"\s+", "", body)
+        self.assertIn(
+            "if(!agent_metadata_txn_owned(0)||txn_projection_pending)panic(",
+            compact,
+        )
+
+    def assert_persist_projection_guard(self, body, barriers):
+        self.assertEqual(
+            body.count("agent_metadata_txn_projection_require_idle()"), 1
+        )
+        idle_at = body.index("agent_metadata_txn_projection_require_idle()")
+        for barrier in barriers:
+            self.assertLess(idle_at, body.index(barrier))
+
     def test_source_measurement_is_physical_and_excludes_generated_file(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
@@ -44,6 +76,259 @@ class KernelBudgetTests(unittest.TestCase):
                 ["os/initproc.S"],
             )
             self.assertEqual((lines, files), (7, 4))
+
+    def test_aggregate_source_bytes_ignore_checkout_line_endings(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "lf.c").write_bytes(b"one\ntwo\n")
+            (root / "crlf.c").write_bytes(b"one\r\ntwo\r\n")
+            self.assertEqual(
+                kernel_budgets.measure_file_source(root, "lf.c"),
+                kernel_budgets.measure_file_source(root, "crlf.c"),
+            )
+
+    def test_metadata_private_apis_stay_out_of_shared_agent_contract(self):
+        shared = (SCRIPT.parent.parent / "os" / "agent_internal.h").read_text(
+            encoding="utf-8"
+        )
+        private_api = re.compile(
+            r"agent_(?:metadata_(?:catalog|store|query|scan|directory)|"
+            r"file_(?:state|query|scan|directory)|query|scan|directory)_"
+        )
+        private_include = re.compile(
+            r'#include\s+"agent_(?:metadata_(?:catalog|internal|query|scan|directory)|'
+            r'file_(?:state_internal|name_policy)|query|scan|directory).*\.h"'
+        )
+        self.assertIsNone(private_api.search(shared))
+        self.assertIsNone(private_include.search(shared))
+
+    def test_catalog_projection_commit_is_explicit_and_non_indirect(self):
+        root = SCRIPT.parent.parent
+        catalog = (root / "os" / "agent_metadata_catalog.c").read_text(
+            encoding="utf-8"
+        )
+        metadata = (root / "os" / "agent_metadata.c").read_text(
+            encoding="utf-8"
+        )
+        objects = (root / "os" / "agent_metadata_objects.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("projection_commit", catalog)
+        self.assertNotIn("agent_file_catalog_sync", catalog)
+        self.assertIsNone(
+            re.search(r"\(\*\s*[A-Za-z_]\w*\s*\)\s*\(", catalog)
+        )
+        wrappers = (
+            (
+                "agent_metadata_storage_init(void)",
+                "agent_metadata_store_load(&commit)",
+            ),
+            (
+                "agent_file_store_load(void)",
+                "agent_metadata_store_load(&commit)",
+            ),
+            (
+                "agent_file_store_reload(uint scope_id)",
+                "agent_metadata_store_reload(scope_id, &commit)",
+            ),
+            (
+                "agent_file_install_empty_store(void)",
+                "agent_metadata_store_install_empty(&commit)",
+            ),
+        )
+        for signature, call in wrappers:
+            with self.subTest(signature=signature):
+                start = objects.index(signature)
+                end = objects.index("\n}\n", start)
+                body = objects[start:end]
+                self.assert_store_wrapper_projection_protocol(body, call)
+        complete_at = objects.index(
+            "static int\nagent_file_store_complete("
+        )
+        complete_end = objects.index("\n}\n", complete_at)
+        complete = objects[complete_at:complete_end]
+        sync_at = complete.index("agent_file_catalog_sync(&commit->delta)")
+        finish_at = complete.index("agent_metadata_store_finish(commit")
+        unlock_at = complete.index("agent_metadata_txn_unlock()")
+        self.assertLess(sync_at, finish_at)
+        self.assertLess(finish_at, unlock_at)
+        install_at = objects.index("agent_file_install_empty_store(void)")
+        install_end = objects.index("\n}\n", install_at)
+        install = objects[install_at:install_end]
+        install_sync_at = install.index(
+            "agent_file_store_complete(&commit, result)"
+        )
+        install_failure_at = install.index("if (result < 0)")
+        self.assertLess(install_sync_at, install_failure_at)
+
+        clear_at = catalog.index("agent_metadata_catalog_clear(")
+        clear_end = catalog.index("\n}\n", clear_at)
+        clear = catalog[clear_at:clear_end]
+        self.assertLess(
+            clear.index("agent_metadata_txn_projection_begin()"),
+            clear.index("memset(agent_catalog_files"),
+        )
+        apply_at = catalog.index("agent_metadata_catalog_apply_snapshot(")
+        apply_end = catalog.index("\n}\n", apply_at)
+        apply = catalog[apply_at:apply_end]
+        self.assertLess(
+            apply.index("agent_metadata_txn_projection_begin()"),
+            apply.index("if (reload_one_scope)"),
+        )
+
+        sync_at = objects.index(
+            "agent_file_catalog_sync(const struct agent_catalog_delta *delta)"
+        )
+        sync_end = objects.index("\n}\n", sync_at)
+        sync = objects[sync_at:sync_end]
+        self.assertEqual(sync.count("agent_metadata_txn_projection_ack()"), 1)
+        self.assertLess(
+            sync.index("agent_file_cache_invalidate_scope("),
+            sync.index("agent_metadata_txn_projection_ack()"),
+        )
+        self.assertLess(
+            sync.index("agent_file_scan_seen[i] = 1"),
+            sync.index("agent_metadata_txn_projection_ack()"),
+        )
+
+        unlock_at = metadata.index("agent_metadata_txn_unlock(void)")
+        unlock_end = metadata.index("\n}\n", unlock_at)
+        unlock = metadata[unlock_at:unlock_end]
+        self.assertLess(
+            unlock.index("txn_depth == 1 && txn_projection_pending"),
+            unlock.index("txn_depth--"),
+        )
+        checkpoint_at = metadata.index(
+            "agent_metadata_txn_checkpoint_unlocked(void)"
+        )
+        checkpoint_end = metadata.index("\n}\n", checkpoint_at)
+        checkpoint = metadata[checkpoint_at:checkpoint_end]
+        self.assert_projection_checkpoint_guard(checkpoint)
+        transition_at = metadata.index(
+            "agent_metadata_txn_projection_transition(int pending)"
+        )
+        transition_end = metadata.index("\n}\n", transition_at)
+        transition = metadata[transition_at:transition_end]
+        self.assertIn("agent_metadata_txn_owned(0)", transition)
+        self.assertIn("pending == txn_projection_pending", transition)
+        require_idle_at = metadata.index(
+            "agent_metadata_txn_projection_require_idle(void)"
+        )
+        require_idle_end = metadata.index("\n}\n", require_idle_at)
+        require_idle = metadata[require_idle_at:require_idle_end]
+        self.assert_projection_idle_guard(require_idle)
+
+        store = (root / "os" / "agent_metadata_store.c").read_text(
+            encoding="utf-8"
+        )
+        load_at = store.index("agent_file_load_snapshot(int force")
+        load_end = store.index("\n}\n", load_at)
+        self.assertNotIn("agent_file_persist_system()", store[load_at:load_end])
+        install_at = store.index("agent_metadata_store_install_empty(")
+        install_end = store.index("\n}\n", install_at)
+        self.assertNotIn(
+            "agent_file_persist_system()", store[install_at:install_end]
+        )
+        for signature, barriers in (
+            (
+                "agent_meta_persist_start_locked(uint owner)",
+                (
+                    "if (agent_meta_persist.phase",
+                    "agent_meta_store_prepare_banks_locked()",
+                ),
+            ),
+            (
+                "agent_meta_persist_step_locked(void)",
+                (
+                    "if (agent_meta_persist.phase",
+                    "if (agent_meta_persist.restart_target)",
+                ),
+            ),
+        ):
+            with self.subTest(signature=signature):
+                start = store.index(signature)
+                end = store.index("\n}\n", start)
+                body = store[start:end]
+                self.assert_persist_projection_guard(body, barriers)
+        finish_at = store.index("agent_metadata_store_finish(")
+        finish_end = store.index("\n}\n", finish_at)
+        finish = store[finish_at:finish_end]
+        self.assert_persist_projection_guard(
+            finish,
+            (
+                "if (commit->repair_required",
+                "agent_file_persist_system()",
+                "agent_metadata_reload_release()",
+            ),
+        )
+        self.assertIn(
+            "!!commit->reload_owned != agent_metadata_reload_is_current()",
+            finish,
+        )
+        self.assertLess(
+            finish.index("agent_file_persist_system()"),
+            finish.index("agent_metadata_reload_release()"),
+        )
+
+    def test_projection_protocol_rejects_early_wrapper_return(self):
+        body = """
+agent_metadata_store_load(&commit);
+return -1;
+agent_file_store_complete(&commit, result);
+"""
+        with self.assertRaises(AssertionError):
+            self.assert_store_wrapper_projection_protocol(
+                body, "agent_metadata_store_load(&commit)"
+            )
+
+    def test_projection_protocol_guards_indirect_checkpoint_helpers(self):
+        body = """
+if (txn_projection_pending)
+    panic("pending");
+evil_repair_helper();
+agent_metadata_txn_unlock();
+"""
+        self.assert_projection_checkpoint_guard(body)
+        with self.assertRaises(AssertionError):
+            self.assert_projection_checkpoint_guard(
+                body.replace("txn_projection_pending", "0")
+            )
+
+    def test_projection_protocol_rejects_weakened_idle_guard(self):
+        body = """
+if (!agent_metadata_txn_owned(0) || txn_projection_pending)
+    panic("pending");
+"""
+        self.assert_projection_idle_guard(body)
+        with self.assertRaises(AssertionError):
+            self.assert_projection_idle_guard(
+                body.replace(" || txn_projection_pending", "")
+            )
+
+    def test_projection_protocol_rejects_late_persist_guard(self):
+        body = """
+if (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE)
+    agent_meta_store_prepare_banks_locked();
+agent_metadata_txn_projection_require_idle();
+"""
+        with self.assertRaises(AssertionError):
+            self.assert_persist_projection_guard(
+                body,
+                (
+                    "if (agent_meta_persist.phase",
+                    "agent_meta_store_prepare_banks_locked()",
+                ),
+            )
+        with self.assertRaises(AssertionError):
+            self.assert_persist_projection_guard(
+                body.replace(
+                    "agent_metadata_txn_projection_require_idle();", ""
+                ),
+                (
+                    "if (agent_meta_persist.phase",
+                    "agent_meta_store_prepare_banks_locked()",
+                ),
+            )
 
     def test_limit_accepts_boundary_and_rejects_growth(self):
         output = io.StringIO()
@@ -663,6 +948,65 @@ class KernelBudgetTests(unittest.TestCase):
             "overlapping Agent module export prefixes",
         ):
             kernel_budgets.validate_config(overlapping_prefix)
+        missing_aggregate_member = copy.deepcopy(config)
+        missing_aggregate_member["agent_modules"]["aggregate_budgets"][0][
+            "members"
+        ].remove("metadata_catalog")
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "member inventory drift"
+        ):
+            kernel_budgets.validate_config(missing_aggregate_member)
+        duplicate_aggregate_member = copy.deepcopy(config)
+        duplicate_aggregate_member["agent_modules"]["aggregate_budgets"][0][
+            "members"
+        ].append("metadata_catalog")
+        with self.assertRaisesRegex(kernel_budgets.BudgetError, "contains duplicates"):
+            kernel_budgets.validate_config(duplicate_aggregate_member)
+        missing_contract_header = copy.deepcopy(config)
+        missing_contract_header["agent_modules"]["aggregate_budgets"][0][
+            "contract_headers"
+        ].pop()
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "contract header inventory drift"
+        ):
+            kernel_budgets.validate_config(missing_contract_header)
+        duplicate_contract_header = copy.deepcopy(config)
+        duplicate_contract_header["agent_modules"]["aggregate_budgets"][0][
+            "contract_headers"
+        ].append("os/agent_metadata_internal.h")
+        with self.assertRaisesRegex(kernel_budgets.BudgetError, "contains duplicates"):
+            kernel_budgets.validate_config(duplicate_contract_header)
+        missing_header_glob = copy.deepcopy(config)
+        missing_header_glob["agent_modules"]["aggregate_budgets"][0][
+            "contract_header_globs"
+        ].pop()
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "contract_header_globs inventory drift"
+        ):
+            kernel_budgets.validate_config(missing_header_glob)
+        missing_discard = copy.deepcopy(config)
+        missing_discard["agent_modules"]["aggregate_budgets"][0][
+            "discarded_sections"
+        ].clear()
+        with self.assertRaises(kernel_budgets.BudgetError):
+            kernel_budgets.validate_config(missing_discard)
+        unexplained_source_allowance = copy.deepcopy(config)
+        unexplained_source_allowance["agent_modules"]["aggregate_budgets"][0][
+            "source_budget_policy"
+        ] = "unreviewed"
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "must explain the 5% source allowance"
+        ):
+            kernel_budgets.validate_config(unexplained_source_allowance)
+        excess_source_bytes = copy.deepcopy(config)
+        source_group = excess_source_bytes["agent_modules"]["aggregate_budgets"][0]
+        source_group["max_source_bytes"] = int(
+            source_group["baseline_source_bytes"] * 1.05
+        ) + 1
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "max_source_bytes exceeds"
+        ):
+            kernel_budgets.validate_config(excess_source_bytes)
         for case_change in ("remove", "append"):
             with self.subTest(case_change=case_change):
                 incomplete = copy.deepcopy(config)
@@ -674,7 +1018,7 @@ class KernelBudgetTests(unittest.TestCase):
                     )
                 with self.assertRaises(kernel_budgets.BudgetError):
                     kernel_budgets.validate_config(incomplete)
-        for required_glob in ("os/**/*.inc", "*_policy.inc"):
+        for required_glob in ("os/**/*.inc", "*_abi.h", "*_policy.inc"):
             with self.subTest(required_glob=required_glob):
                 incomplete = copy.deepcopy(config)
                 incomplete["kernel_source"]["include_globs"].remove(
@@ -771,6 +1115,193 @@ class KernelBudgetTests(unittest.TestCase):
         context["object_path"] = "build/os/agent_core.o"
         with self.assertRaises(kernel_budgets.BudgetError):
             kernel_budgets.validate_config(wrong_object)
+
+    def test_lifecycle_abi_modules_have_ratchet_baselines(self):
+        config_path = SCRIPT.parent.parent / "ci" / "kernel-budgets.json"
+        with config_path.open(encoding="utf-8") as stream:
+            config = json.load(stream)
+        lifecycle = next(
+            entry
+            for entry in config["agent_modules"]["modules"]
+            if entry["name"] == "lifecycle"
+        )
+        source = SCRIPT.parent.parent / lifecycle["source_path"]
+        self.assertEqual(lifecycle["baseline_lines"], 279)
+        self.assertEqual(lifecycle["max_lines"], 293)
+        self.assertEqual(
+            lifecycle["allowed_dependencies"],
+            ["metadata", "workflow_lifecycle"],
+        )
+        self.assertEqual(len(source.read_text(encoding="utf-8").splitlines()), 279)
+        metadata = next(
+            entry
+            for entry in config["agent_modules"]["modules"]
+            if entry["name"] == "metadata"
+        )
+        source = SCRIPT.parent.parent / metadata["source_path"]
+        self.assertEqual(metadata["baseline_lines"], 322)
+        self.assertEqual(metadata["max_lines"], 339)
+        self.assertEqual(len(source.read_text(encoding="utf-8").splitlines()), 322)
+        syscall = next(
+            bridge
+            for bridge in config["agent_modules"]["integration_bridges"]
+            if bridge["name"] == "syscall"
+        )
+        self.assertIn("lifecycle", syscall["allowed_dependencies"])
+
+    def test_agent_aggregate_rejects_unregistered_private_header(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "os").mkdir()
+            (root / "os" / "agent_metadata.c").write_text(
+                '#include "agent_metadata_query_internal.h"\n', encoding="utf-8"
+            )
+            (root / "os" / "agent_metadata_query_internal.h").write_text(
+                "int private_query(void);\n", encoding="utf-8"
+            )
+            entries = [
+                {"name": "metadata", "source_path": "os/agent_metadata.c"}
+            ]
+            group = {
+                "name": "metadata_control_plane",
+                "members": ["metadata"],
+                "contract_headers": [],
+                "contract_header_globs": ["os/agent_metadata*.h"],
+            }
+            with self.assertRaisesRegex(
+                kernel_budgets.BudgetError, "private header inventory drift"
+            ):
+                kernel_budgets.validate_agent_aggregate_header_inventory(
+                    root, entries, group
+                )
+
+    def test_agent_aggregate_include_closure_rejects_unplanned_header_name(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "os").mkdir()
+            (root / "os" / "agent_metadata.c").write_text(
+                '#include "agent_catalog_extra.h"\n', encoding="utf-8"
+            )
+            (root / "os" / "agent_catalog_extra.h").write_text(
+                "int catalog_extra(void);\n", encoding="utf-8"
+            )
+            entries = [
+                {"name": "metadata", "source_path": "os/agent_metadata.c"}
+            ]
+            group = {
+                "name": "metadata_control_plane",
+                "members": ["metadata"],
+                "contract_headers": [],
+                "contract_header_globs": ["os/agent_metadata*.h"],
+            }
+            with self.assertRaisesRegex(
+                kernel_budgets.BudgetError, "include closure has unregistered"
+            ):
+                kernel_budgets.validate_agent_aggregate_header_inventory(
+                    root, entries, group
+                )
+
+    def test_agent_aggregate_residency_counts_unknown_sections(self):
+        berkeley = (
+            "text data bss dec hex filename\n"
+            "117 0 13 130 82 object.o\n"
+        )
+        sections = (
+            ".text 10 0\n.gnu.linkonce.r.future 7 0\n"
+            ".eh_frame 100 0\n.bss 7 0\n.future_nobits 6 0\n"
+        )
+
+        def fake_size(command, description):
+            return berkeley if "-B" in command else sections
+
+        with mock.patch.object(kernel_budgets, "run_tool", side_effect=fake_size):
+            self.assertEqual(
+                kernel_budgets.measure_agent_object_residency(
+                    "fake-size", Path("object.o"), [".eh_frame"]
+                ),
+                (17, 13),
+            )
+
+    def test_agent_aggregate_residency_rejects_initialized_data(self):
+        output = "text data bss dec hex filename\n10 1 0 11 b object.o\n"
+        with mock.patch.object(kernel_budgets, "run_tool", return_value=output):
+            with self.assertRaisesRegex(
+                kernel_budgets.BudgetError, "initialized writable data"
+            ):
+                kernel_budgets.measure_agent_object_residency(
+                    "fake-size", Path("object.o"), [".eh_frame"]
+                )
+
+    def test_agent_aggregate_runtime_limit_is_enforced(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            entries = []
+            for name in ("one", "two", "three"):
+                source = root / f"{name}.c"
+                obj = root / f"{name}.o"
+                source.write_text("line\n", encoding="utf-8")
+                obj.write_bytes(b"object")
+                entries.append(
+                    {
+                        "name": name,
+                        "source_path": source.name,
+                        "object_path": obj.name,
+                    }
+                )
+            group = {
+                "name": "test_group",
+                "members": ["one", "two", "three"],
+                "contract_headers": ["contract.h"],
+                "contract_header_globs": ["contract.h"],
+                # Source gets 5% for contracts; binary residency gets no growth.
+                "baseline_source_lines": 4,
+                "max_source_lines": 4,
+                "baseline_source_bytes": 24,
+                "max_source_bytes": 24,
+                "baseline_loaded_text_bytes": 30,
+                "max_loaded_text_bytes": 30,
+                "baseline_bss_bytes": 30,
+                "max_bss_bytes": 30,
+                "discarded_sections": [".eh_frame"],
+            }
+            (root / "contract.h").write_text("contract\n", encoding="utf-8")
+            (root / "os").mkdir()
+            (root / "os" / "kernel.ld").write_text(
+                "SECTIONS { /DISCARD/ : { *(.eh_frame) } }\n", encoding="utf-8"
+            )
+            cases = (
+                ("source_lines", "line\nextra\n", 10, 10),
+                ("source_bytes", "longer\n", 10, 10),
+                ("loaded_text_bytes", "line\n", 11, 10),
+                ("bss_bytes", "line\n", 10, 11),
+            )
+            for metric, source_text, text_size, bss_size in cases:
+                with self.subTest(metric=metric):
+                    for entry in entries:
+                        (root / entry["source_path"]).write_text(
+                            "line\n", encoding="utf-8"
+                        )
+                    (root / entries[0]["source_path"]).write_text(
+                        source_text, encoding="utf-8"
+                    )
+                    def fake_size(command, description):
+                        if "-B" in command:
+                            total = text_size + bss_size
+                            return (
+                                "text data bss dec hex filename\n"
+                                f"{text_size} 0 {bss_size} {total} 0 object.o\n"
+                            )
+                        return ".text 1 0\n"
+
+                    with mock.patch.object(
+                        kernel_budgets, "run_tool", side_effect=fake_size
+                    ), redirect_stdout(io.StringIO()):
+                        with self.assertRaisesRegex(
+                            kernel_budgets.BudgetError, f"{metric} exceeded"
+                        ):
+                            kernel_budgets.check_agent_aggregate_budgets(
+                                root, entries, [group], "fake-size"
+                            )
 
     def test_json_loader_rejects_non_finite_numbers(self):
         with tempfile.TemporaryDirectory() as temp:

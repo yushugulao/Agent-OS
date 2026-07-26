@@ -11,6 +11,7 @@ static uint64 txn_next_ticket;
 static uint64 txn_serving_ticket;
 static uint txn_work_records;
 static int txn_reserved_turn;
+static int txn_projection_pending;
 static struct wait_queue txn_waiters;
 static char scheduler_token;
 static void *reload_owner;
@@ -24,6 +25,7 @@ agent_metadata_init(void)
 	txn_serving_ticket = 1;
 	txn_work_records = 0;
 	txn_reserved_turn = 0;
+	txn_projection_pending = 0;
 	reload_owner = 0;
 	wait_queue_init(&txn_waiters, WAIT_REASON_AGENT_META);
 }
@@ -123,7 +125,8 @@ agent_metadata_txn_unlock(void)
 	void *token = agent_metadata_txn_token();
 	int enabled = intr_save();
 
-	if (txn_owner != token || txn_depth <= 0)
+	if (txn_owner != token || txn_depth <= 0 ||
+	    (txn_depth == 1 && txn_projection_pending))
 		panic("Agent metadata transaction invariant");
 	txn_depth--;
 	if (txn_depth == 0) {
@@ -136,6 +139,19 @@ agent_metadata_txn_unlock(void)
 			wait_queue_wake_one(&txn_waiters);
 	}
 	intr_restore(enabled);
+}
+
+void agent_metadata_txn_projection_transition(int pending) {
+	pending = !!pending;
+	if (!agent_metadata_txn_owned(0) ||
+	    pending == txn_projection_pending)
+		panic("Agent metadata transaction invariant");
+	txn_projection_pending = pending;
+}
+
+void agent_metadata_txn_projection_require_idle(void) {
+	if (!agent_metadata_txn_owned(0) || txn_projection_pending)
+		panic("Agent metadata transaction invariant");
 }
 
 void
@@ -211,7 +227,7 @@ agent_metadata_txn_checkpoint_unlocked(void)
 	int depth;
 	int checkpoint;
 
-	if (txn_owner != token || txn_depth <= 0)
+	if (txn_owner != token || txn_depth <= 0 || txn_projection_pending)
 		panic("metadata checkpoint invariant");
 	if (token == &scheduler_token)
 		return bio_request_checkpoint();
@@ -241,40 +257,57 @@ agent_metadata_txn_depth(void)
 	return txn_depth;
 }
 
+void
+agent_metadata_proc_runtime_snapshot(
+	struct proc *p, struct agent_metadata_runtime_snapshot *snapshot)
+{
+	int enabled;
+
+	if (snapshot == 0)
+		return;
+	memset(snapshot, 0, sizeof(*snapshot));
+	enabled = intr_save();
+	if (p == 0)
+		goto out;
+	for (int tid = 0; tid < NTHREAD; tid++) {
+		struct thread *t = &p->threads[tid];
+
+		if (txn_owner == t)
+			snapshot->metadata_txn_owned = 1;
+		if (t->state != SLEEPING)
+			continue;
+		if (t->wait_channel == &txn_waiters &&
+		    t->wait_reason == WAIT_REASON_AGENT_META)
+			snapshot->metadata_txn_waiters++;
+	}
+out:
+	intr_restore(enabled);
+}
+
 int
 agent_metadata_reload_available(void)
 {
 	void *token = agent_metadata_txn_token();
-	int enabled = intr_save();
-	int available = reload_owner == 0 || reload_owner == token;
 
-	intr_restore(enabled);
-	return available;
+	return reload_owner == 0 || reload_owner == token;
 }
 
 int
 agent_metadata_reload_is_current(void)
 {
 	void *token = agent_metadata_txn_token();
-	int enabled = intr_save();
-	int current = reload_owner == token;
 
-	intr_restore(enabled);
-	return current;
+	return reload_owner == token;
 }
 
 int
 agent_metadata_reload_claim(void)
 {
 	void *token = agent_metadata_txn_token();
-	int enabled = intr_save();
 
-	if (reload_owner != 0 && reload_owner != token) {
-		intr_restore(enabled);
+	if (reload_owner != 0 && reload_owner != token)
 		return 0;
-	}
 	reload_owner = token;
-	intr_restore(enabled);
 	return 1;
 }
 
@@ -282,10 +315,8 @@ void
 agent_metadata_reload_release(void)
 {
 	void *token = agent_metadata_txn_token();
-	int enabled = intr_save();
 
 	if (reload_owner != token)
 		panic("metadata reload owner");
 	reload_owner = 0;
-	intr_restore(enabled);
 }

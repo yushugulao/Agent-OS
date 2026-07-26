@@ -144,6 +144,7 @@ require_path "baseline_ucore/user/src/syscallfair_ucore.c" "baseline syscall fai
 require_path "user/src/fileresource_ucore.c" "AgentOS file resource guest is missing"
 require_path "baseline_ucore/user/src/fileresource_ucore.c" "baseline file resource guest is missing"
 require_path "user/src/fspquota_ucore.c" "AgentOS persistent quota guest is missing"
+require_path "user/src/workflow_teardown_race_ucore.c" "workflow teardown race guest is missing"
 require_path "baseline_ucore/user/src/fspquota_ucore.c" "baseline persistent quota guest is missing"
 require_path "baseline_ucore/user/src/rp_orch.c" "baseline platform orchestrator is missing"
 require_path "baseline_ucore/user/src/rp_backend.c" "baseline platform backend is missing"
@@ -183,6 +184,11 @@ require_path "scripts/run-file-resource-tests.sh" "file resource runner is missi
 require_path "scripts/run-fs-enospc-tests.sh" "filesystem ENOSPC runner is missing"
 require_path "scripts/run-proc-reap-tests.sh" "process reaper runner is missing"
 require_path "scripts/run-thread-resource-tests.sh" "thread resource runner is missing"
+require_path "scripts/run-workflow-teardown-race-tests.sh" "workflow teardown race runner is missing"
+require_path "scripts/evidence-wiring.sh" "final evidence runner wiring is missing"
+require_path "scripts/capture-final-evidence.py" "final evidence collector is missing"
+require_path "host_tools/test_capture_final_evidence.py" "final evidence selftest is missing"
+require_path "evidence/README.md" "final evidence documentation is missing"
 require_path "scripts/serve-reader.sh" "reader server script is missing"
 require_path "docs/windows-quickstart.md" "Windows quickstart document is missing"
 
@@ -199,6 +205,9 @@ require_text "Makefile" "^dual-platform-run:" "dual platform run target is missi
 require_text "Makefile" "^reader:" "reader target is missing"
 require_text "Makefile" "^target-readiness:" "target readiness target is missing"
 require_text "Makefile" "^full-verify:" "full verification target is missing"
+require_text "Makefile" "^workflow-teardown-race-test:" "workflow teardown race target is missing"
+require_text "Makefile" "^evidence-capture-selftest:" "evidence collector selftest target is missing"
+require_text "Makefile" "^ci-check:.*evidence-capture-selftest" "ci-check omits the evidence collector selftest"
 require_text "Makefile" "^doctor:" "dependency doctor target is missing"
 require_text "Makefile" "INIT_PROC=rp_orch CHAPTER=platform" "plain platform run target does not launch rp_orch"
 require_text "Makefile" "INIT_PROC=rp_agentos_orch CHAPTER=platform_agentos" "AgentOS platform run target does not launch rp_agentos_orch"
@@ -219,6 +228,12 @@ require_text ".gitlab-ci.yml" "REQUIRE_FULL_SUITE=1" "GitLab CI permits a sharde
 require_text ".gitlab-ci.yml" "AGENT_TEST_CALIBRATE=0" "GitLab CI bypasses calibrated Agent duration enforcement"
 require_text ".gitlab-ci.yml" "run-proc-reap-tests.sh" "GitLab CI omits process teardown regression"
 require_text ".gitlab-ci.yml" "run-fs-enospc-tests.sh" "GitLab CI omits filesystem resource regression"
+require_text ".gitlab-ci.yml" "run-workflow-teardown-race-tests.sh" "GitLab CI omits workflow teardown race regression"
+require_text ".gitlab-ci.yml" "build-essential make python3 git" "GitLab CI lacks git for evidence selftests"
+require_text ".gitlab-ci.yml" "AGENT_TEST_TIMING_FILE=ci-artifacts/agent-suite-timings.log" "GitLab CI does not retain exact Agent timings"
+require_text ".gitlab-ci.yml" "EVIDENCE_GUEST_LOG_FILE=ci-artifacts/workflow-teardown-race-guest.log" "GitLab CI does not retain mechanism Guest logs"
+require_text ".gitlab-ci.yml" "when: always" "GitLab CI evidence artifacts are not retained on failure"
+require_text ".gitlab-ci.yml" "test_plain_ucore_action_runner.py" "ordinary GitLab runner omits plain action tests"
 require_text "ci/kernel-budgets.json" '"agent_modules"' "Agent module budgets are missing"
 require_text "ci/kernel-budgets.json" '"agent_context_sidecar"' "Agent sidecar budgets are missing"
 require_text "ci/kernel-budgets.json" '"boot_stack_start_symbol"' "boot stack budget is missing"
@@ -246,6 +261,7 @@ if [ -z "${calibrated_runner_tag}" ] ||
 fi
 require_text "Makefile" "scripts/run-syscall-fairness-tests.sh" "Makefile syscall fairness target does not call its runner"
 require_text "Makefile" "scripts/run-file-resource-tests.sh" "Makefile file resource target does not call its runner"
+require_text "Makefile" "scripts/run-workflow-teardown-race-tests.sh" "Makefile workflow teardown target does not call its runner"
 require_text "scripts/run-full-verification.sh" "run-fs-enospc-tests.sh" "full verification omits filesystem ENOSPC regression"
 require_text "Makefile" "scripts/check-dependencies.sh" "Makefile doctor target does not call dependency checker"
 
@@ -253,6 +269,7 @@ for specialized_runner in \
 	scripts/run-proc-reap-tests.sh \
 	scripts/run-thread-resource-tests.sh \
 	scripts/run-file-resource-tests.sh \
+	scripts/run-workflow-teardown-race-tests.sh \
 	scripts/run-syscall-fairness-tests.sh \
 	scripts/run-fs-enospc-tests.sh
 do
@@ -260,16 +277,21 @@ do
 		"${specialized_runner} bypasses the shared fail-closed QEMU runner"
 	require_text "${specialized_runner}" "scripts/validate-kernel-test-log.py" \
 		"${specialized_runner} bypasses the full-log profile validator"
+	require_text "${specialized_runner}" "evidence_append_guest_log" \
+		"${specialized_runner} does not preserve validated Guest evidence"
 done
 
 require_text "scripts/run-agent-tests.sh" \
-	'^[[:space:]]*"\$\{PYTHON_BIN\}"[[:space:]]+scripts/agent_test_runner\.py[[:space:]]+\\$' \
+	'^[[:space:]]*(if[[:space:]]+)?"\$\{PYTHON_BIN\}"[[:space:]]+scripts/agent_test_runner\.py[[:space:]]+\\$' \
 	"Agent regression runner bypasses the shared fail-closed QEMU runner"
+require_text "scripts/run-agent-tests.sh" "AGENT_TEST_GUEST_LOG_FILE" \
+	"Agent regression runner does not preserve per-case Guest evidence"
 for natural_runner in \
 	scripts/run-agent-tests.sh \
 	scripts/run-proc-reap-tests.sh \
 	scripts/run-thread-resource-tests.sh \
 	scripts/run-file-resource-tests.sh \
+	scripts/run-workflow-teardown-race-tests.sh \
 	scripts/run-syscall-fairness-tests.sh
 do
 	reject_text "${natural_runner}" "completion-mode" \
@@ -282,7 +304,7 @@ require_text "scripts/run-fs-enospc-tests.sh" \
 	'^[[:space:]]*completion_args\+=\(--completion-mode checkpoint\)$' \
 	"filesystem checkpoint profiles do not select checkpoint completion"
 require_text "scripts/run-fs-enospc-tests.sh" \
-	'^[[:space:]]*"\$\{completion_args\[@\]\}"$' \
+	'^[[:space:]]*"\$\{completion_args\[@\]\}";[[:space:]]*then$' \
 	"filesystem completion policy is not passed to the shared runner"
 fs_completion_mode_count="$(
 	grep -c -- '--completion-mode' \
@@ -305,6 +327,7 @@ require_text "baseline_ucore/Makefile" 'if \[ ! -f "\$\(F\)/fs-copy\.img" \]' "b
 
 require_text "baseline_ucore/user/Makefile" "platform_plain" "baseline platform chapter is not declared"
 require_text "user/Makefile" "FILE_RESOURCE_TESTS.*fileresource_ucore" "AgentOS file resource chapter omits its guest"
+require_text "user/Makefile" "WORKFLOW_TEARDOWN_TESTS.*workflow_teardown_race_ucore" "AgentOS workflow teardown chapter omits its guest"
 require_text "baseline_ucore/user/Makefile" "FILE_RESOURCE_TESTS.*fileresource_ucore" "baseline file resource chapter omits its guest"
 require_text "user/Makefile" "FS_ENOSPC_TESTS.*fspquota_ucore" "AgentOS fs test chapter omits persistent quota guest"
 require_text "baseline_ucore/user/Makefile" "FS_ENOSPC_TESTS.*fspquota_ucore" "baseline fs test chapter omits persistent quota guest"
@@ -357,10 +380,43 @@ require_text "scripts/run-full-verification.sh" "test_chart_svg_layout_contract.
 require_text "scripts/run-full-verification.sh" "test_plain_ucore_reader.py" "full verification does not run 本地结果阅读器 unit test"
 require_text "scripts/run-full-verification.sh" "test_plain_ucore_reader_e2e.py" "full verification does not run 本地结果阅读器 e2e test"
 require_text "scripts/run-full-verification.sh" "run-dual-platforms.sh" "full verification does not run dual platform QEMU"
-require_text "scripts/run-full-verification.sh" "QEMU=.*run-dual-platforms.sh" "full verification does not pass QEMU to dual platform runner"
+require_text "scripts/run-full-verification.sh" 'QEMU="\$\{QEMU\}"' "full verification does not pass QEMU to child runners"
 require_text "scripts/run-full-verification.sh" "run-agent-tests.sh" "full verification does not run AgentOS kernel tests"
 require_text "scripts/run-full-verification.sh" "run-syscall-fairness-tests.sh" "full verification does not run syscall fairness tests"
 require_text "scripts/run-full-verification.sh" "run-file-resource-tests.sh" "full verification does not run file resource tests"
+require_text "scripts/run-full-verification.sh" "run-workflow-teardown-race-tests.sh" "full verification does not run workflow teardown race tests"
+require_text "scripts/run-full-verification.sh" "evidence_initialize" "full verification does not initialize collector-owned evidence"
+require_text "scripts/run-full-verification.sh" "evidence_step_end" \
+	"full verification does not derive summary steps from actual orchestration"
+require_text "scripts/run-full-verification.sh" "write-summary" \
+	"full verification does not atomically publish its public summary"
+require_text "scripts/evidence-wiring.sh" 'pipeline_status=.*PIPESTATUS' \
+	"evidence tee status is not captured fail-closed"
+require_text "scripts/capture-final-evidence.py" '^SCHEMA_VERSION = 2$' \
+	"evidence summary schema version is not stable"
+require_text "scripts/capture-final-evidence.py" '^FULL_VERIFY_PROFILE_VERSION = 1$' \
+	"evidence full-verify profile version is not stable"
+require_text "scripts/capture-final-evidence.py" '^REMOTE_CI_SCHEMA_VERSION = 1$' \
+	"evidence remote CI provenance schema version is not stable"
+require_text "scripts/capture-final-evidence.py" 'SUMMARY_NAME = "verification-summary.json"' \
+	"evidence collector does not expose verification-summary.json"
+require_text "scripts/capture-final-evidence.py" 'commands.add_parser\("write-summary"\)' \
+	"evidence collector lacks the summary writer interface"
+require_text ".gitignore" '^!evidence/releases/\*\*$' \
+	"final evidence releases cannot be tracked without git add -f"
+require_text "scripts/run-full-verification.sh" 'MECHANISM_MARKER_GRACE_SECONDS=.*5s' \
+	"full verification does not reserve a 5s mechanism fault window"
+for mechanism_runner in \
+	scripts/run-proc-reap-tests.sh \
+	scripts/run-syscall-fairness-tests.sh \
+	scripts/run-file-resource-tests.sh \
+	scripts/run-thread-resource-tests.sh \
+	scripts/run-workflow-teardown-race-tests.sh \
+	scripts/run-fs-enospc-tests.sh
+do
+	require_text "${mechanism_runner}" 'MARKER_GRACE_SECONDS=.*:-5s' \
+		"${mechanism_runner} does not default to a 5s fault window"
+done
 
 for header in os/kernel_work.h baseline_ucore/os/kernel_work.h; do
 	for contract in \

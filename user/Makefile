@@ -23,6 +23,7 @@ CFLAGS := -std=gnu11 -march=rv64imac_zicsr_zifencei -mabi=lp64 -mcmodel=medany
 CFLAGS += -fno-builtin -nostdinc -fno-stack-protector -ggdb -Wall -Os
 CFLAGS += -ffunction-sections -fdata-sections -fno-asynchronous-unwind-tables -fno-unwind-tables
 CFLAGS += -fno-pie -static -Iinclude -Ilib -I$(arch_dir) -I$(generated_dir)
+CFLAGS += $(USER_EXTRA_CFLAGS)
 LDFLAGS := -nostdlib -T $(arch_dir)/user.ld -Wl,-Ttext=0x1000 -Wl,--gc-sections
 
 LIB_C := $(wildcard lib/*.c)
@@ -44,6 +45,7 @@ FS_ENOSPC_TESTS := fsenospc_ucore fsquota_ucore fspquota_ucore
 PROC_REAP_TESTS := procreap_ucore procreap_agent_ucore
 FILE_RESOURCE_TESTS := fileresource_ucore
 THREAD_RESOURCE_TESTS := threadresource_ucore
+WORKFLOW_TEARDOWN_TESTS := workflow_teardown_race_ucore
 AGENT_TESTS := agentfinal_ucore agentfs_ucore agentscan_ucore agentloop_ucore agentsched_ucore agentconflict_ucore agentllm_ucore agentbench_ucore labbench_ucore labdemo_ucore agentsecurity_ucore agentscope_ucore agenttrust_ucore agentvfs_ucore agentvfs_probe iobudget_ucore $(SAFETY_TESTS)
 PLATFORM_TESTS := rp_orch rp_catalog rp_state_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_workbench rp_agent_collab rp_package rp_calculation rp_realtask rp_analysisres rp_campaign rp_delta rp_release rp_dossier rp_service_surface rp_startup_doctor rp_notebook_export rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_revdash rp_modelreg rp_sysreview rp_expsched rp_traincomp rp_publication rp_runbooks rp_projectrel rp_studyproto rp_stdesign rp_opsboard rp_reviewboard rp_controlplane rp_integrityplane rp_coherenceplane rp_mature rp_prov_view rp_prov_query rp_reldossier rp_decsupport rp_usable rp_usableproject rp_compare_plain rp_test_suite
 PLATFORM_SEEDED_TESTS := rp_seed_orch rp_catalog rp_state_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_workbench rp_agent_collab rp_package rp_calculation rp_realtask rp_analysisres rp_campaign rp_delta rp_release rp_dossier rp_service_surface rp_startup_doctor rp_notebook_export rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_revdash rp_modelreg rp_sysreview rp_expsched rp_traincomp rp_publication rp_runbooks rp_projectrel rp_studyproto rp_stdesign rp_opsboard rp_reviewboard rp_controlplane rp_integrityplane rp_coherenceplane rp_mature rp_prov_view rp_prov_query rp_reldossier rp_decsupport rp_usable rp_usableproject rp_compare_plain rp_test_suite
@@ -92,6 +94,8 @@ else ifeq ($(CHAPTER), file_resource)
 CH_TESTS := $(FILE_RESOURCE_TESTS)
 else ifeq ($(CHAPTER), thread_resource)
 CH_TESTS := $(THREAD_RESOURCE_TESTS)
+else ifeq ($(CHAPTER), workflow_teardown)
+CH_TESTS := $(WORKFLOW_TEARDOWN_TESTS)
 else ifeq ($(CHAPTER), platform)
 CH_TESTS := $(PLATFORM_TESTS)
 else ifeq ($(CHAPTER), platform_seeded)

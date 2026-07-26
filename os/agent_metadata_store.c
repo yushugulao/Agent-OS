@@ -1,5 +1,6 @@
 #include "agent_internal.h"
 #include "agent_file_name_policy.h"
+#include "agent_file_state_internal.h"
 #include "agent_metadata_internal.h"
 #include "bio.h"
 #include "defs.h"
@@ -35,6 +36,10 @@
 #define AGENT_META_BANK_ABSENT 1
 #define AGENT_META_BANK_CORRUPT (-1)
 #define AGENT_META_BANK_INTERRUPTED (-2)
+
+_Static_assert(AGENT_META_WRITEBACK_SCOPE_MAX >=
+	       VFS_SCOPE_LIFECYCLE_CAP + 1,
+	       "metadata writeback must cover every workflow and system scope");
 
 struct agent_meta_store_header {
 	uint64 magic;
@@ -136,6 +141,7 @@ static int agent_meta_store_active_bank;
 static uint64 agent_meta_store_generation;
 static int agent_meta_store_failed_closed;
 static int agent_meta_store_recovery_required;
+static int agent_meta_reconcile_required;
 static uint64 agent_file_writeback_next_tick;
 static uint agent_file_writeback_owner_cursor;
 
@@ -147,19 +153,6 @@ static uint64
 agent_ticks(void)
 {
 	return get_cycle() / (CPU_FREQ / TICKS_PER_SEC);
-}
-
-static int
-agent_scope_valid(uint scope_id)
-{
-	return scope_id >= VFS_SCOPE_FIRST_DYNAMIC &&
-	       scope_id < FS_OWNER_SCOPE_FLAG;
-}
-
-static int
-agent_object_scope_valid(uint scope_id)
-{
-	return scope_id == VFS_SCOPE_SYSTEM || agent_scope_valid(scope_id);
 }
 
 static uint64
@@ -255,21 +248,23 @@ agent_metadata_store_init(void)
 	agent_meta_store_generation = 0;
 	agent_meta_store_failed_closed = 0;
 	agent_meta_store_recovery_required = 0;
+	agent_meta_reconcile_required = 0;
 	agent_file_writeback_next_tick = 0;
 	agent_file_writeback_owner_cursor = 0;
 }
-static void agent_file_writeback_mark(uint scope_id)
+static uint64 agent_file_writeback_mark(uint scope_id)
 {
 	struct agent_file_scope_state *state;
 	uint64 now = agent_ticks();
+	uint64 target;
 	int enabled = intr_save();
 
 	state = agent_file_scope_state_locked(scope_id, 1);
 	if (state == 0) {
-		/* Fail closed: force the scanner to reconstruct untracked state. */
+		/* Objects consumes this edge-triggered reconciliation request. */
+		agent_meta_reconcile_required = 1;
 		intr_restore(enabled);
-		agent_file_request_scan();
-		return;
+		return 0;
 	}
 	if (state->dirty_generation != state->durable_generation)
 		state->coalesced_count++;
@@ -279,7 +274,9 @@ static void agent_file_writeback_mark(uint scope_id)
 	if (state->dirty_generation == 0)
 		state->dirty_generation = 1;
 	state->request_count++;
+	target = state->dirty_generation;
 	intr_restore(enabled);
+	return target;
 }
 
 static void agent_file_writeback_expedite(uint scope_id)
@@ -361,16 +358,21 @@ static int agent_file_writeback_generation_reached(uint64 generation,
 	return target == 0 || (long)(generation - target) >= 0;
 }
 
-static int agent_file_writeback_scope_reached(uint scope_id, uint64 target)
+static int agent_file_writeback_scope_reached(uint scope_id, uint64 target,
+					       int settled)
 {
 	struct agent_file_scope_state *state;
-	int reached = target == 0;
+	int reached = target == 0 || settled;
 	int enabled = intr_save();
 
 	state = agent_file_scope_state_locked(scope_id, 0);
 	if (state != 0)
 		reached = agent_file_writeback_generation_reached(
-			state->durable_generation, target);
+				  state->durable_generation, target) &&
+			  (!settled || state->dirty_generation ==
+					       state->durable_generation);
+	if (settled && agent_file_writeback_scope_busy(scope_id))
+		reached = 0;
 	intr_restore(enabled);
 	return reached;
 }
@@ -483,7 +485,8 @@ static void agent_file_scope_state_retire(uint scope_id)
 			&agent_file_scope_states[i];
 
 		if (state->used && state->scope_id == scope_id &&
-		    state->dirty_generation == state->durable_generation) {
+		    (agent_meta_store_failed_closed ||
+		     state->dirty_generation == state->durable_generation)) {
 			memset(state, 0, sizeof(*state));
 			break;
 		}
@@ -1059,7 +1062,8 @@ agent_meta_store_classify_missing(const struct agent_meta_store *store,
 }
 
 static int
-agent_file_load_snapshot(int force, uint reload_scope)
+agent_file_load_snapshot(int force, uint reload_scope,
+			 struct agent_metadata_store_commit *commit)
 {
 	struct agent_meta_store *store = &agent_meta_store_buf;
 	struct agent_metadata_apply_result apply;
@@ -1071,25 +1075,24 @@ agent_file_load_snapshot(int force, uint reload_scope)
 	int orphan_stale = 0;
 	int select_status;
 	int store_locked = 0;
-	int reload_owned = 0;
 	int result = -1;
 
+	if (commit == 0)
+		return -1;
+	memset(commit, 0, sizeof(*commit));
 	if (!agent_metadata_txn_lock(1))
 		return -1;
 	if (agent_meta_store_failed_closed && !force)
 		goto out_txn;
 	if (!force && agent_file_loaded) {
-		if (agent_meta_store_recovery_required) {
-			if (agent_file_persist_system() < 0 ||
-			    agent_meta_store_recovery_required)
-				goto out_txn;
-		}
-		result = agent_metadata_objects_live_count();
+		if (agent_meta_store_recovery_required)
+			commit->repair_required = 1;
+		result = agent_metadata_catalog_live_count();
 		goto out_txn;
 	}
 	if (!agent_metadata_reload_claim())
 		goto out_txn;
-	reload_owned = 1;
+	commit->reload_owned = 1;
 	if (!agent_meta_store_enter())
 		goto out_txn;
 	store_locked = 1;
@@ -1105,7 +1108,7 @@ agent_file_load_snapshot(int force, uint reload_scope)
 		if (select_status == AGENT_META_BANK_INTERRUPTED || force ||
 		    select_status == AGENT_META_BANK_CORRUPT)
 			goto out_txn;
-		agent_metadata_objects_clear_catalog();
+		agent_metadata_catalog_clear(&commit->delta);
 		agent_meta_store_active_bank = -1;
 		agent_meta_store_generation = 0;
 		agent_file_loaded = 1;
@@ -1124,10 +1127,11 @@ agent_file_load_snapshot(int force, uint reload_scope)
 	if (!reload_one_scope)
 		memset(agent_meta_stale_slots, 0,
 		       sizeof(agent_meta_stale_slots));
-	if (agent_metadata_objects_apply_snapshot(
+	if (agent_metadata_catalog_apply_snapshot(
 		    store->records, store->header.count, reload_one_scope,
 		    reload_scope, &apply) < 0)
 		goto out_store;
+	commit->delta = apply.delta;
 	orphan_stale = agent_meta_store_classify_missing(
 		store, reload_one_scope, reload_scope, &apply);
 	agent_meta_store_active_bank = selected_bank;
@@ -1144,9 +1148,8 @@ agent_file_load_snapshot(int force, uint reload_scope)
 		agent_file_writeback_mark(VFS_SCOPE_SYSTEM);
 		agent_file_writeback_expedite(VFS_SCOPE_SYSTEM);
 	}
-	if ((needs_recovery || orphan_stale) &&
-	    agent_file_persist_system() < 0)
-		goto out_txn;
+	if (needs_recovery || orphan_stale)
+		commit->repair_required = 1;
 	result = apply.used;
 	goto out_txn;
 
@@ -1154,33 +1157,46 @@ out_store:
 	if (store_locked)
 		agent_meta_store_leave();
 out_txn:
-	if (reload_owned) {
-		agent_metadata_reload_release();
-		wait_queue_wake_all(&agent_meta_submit_waiters);
-	}
 	agent_metadata_txn_unlock();
 	return result;
 }
 
 int
-agent_metadata_store_load(void)
+agent_metadata_store_load(struct agent_metadata_store_commit *commit)
 {
-	return agent_file_load_snapshot(0, VFS_SCOPE_NONE);
+	return agent_file_load_snapshot(0, VFS_SCOPE_NONE, commit);
 }
 
 int
-agent_metadata_store_reload(uint scope_id)
+agent_metadata_store_reload(uint scope_id,
+			    struct agent_metadata_store_commit *commit)
 {
-	return agent_file_load_snapshot(1, scope_id);
+	return agent_file_load_snapshot(1, scope_id, commit);
+}
+
+int
+agent_metadata_store_finish(struct agent_metadata_store_commit *commit,
+			    int result)
+{
+	if (commit == 0)
+		return -1;
+	agent_metadata_txn_projection_require_idle();
+	if (!!commit->reload_owned != agent_metadata_reload_is_current())
+		panic("metadata reload finish invariant");
+	if (commit->repair_required && agent_file_persist_system() < 0)
+		result = -1;
+	if (commit->reload_owned) {
+		agent_metadata_reload_release();
+		wait_queue_wake_all(&agent_meta_submit_waiters);
+	}
+	return result;
 }
 
 void
-agent_metadata_store_storage_init(void)
+agent_metadata_store_fail_closed_at_boot(void)
 {
-	if (agent_metadata_store_load() < 0) {
-		agent_meta_store_failed_closed = 1;
-		errorf("Agent metadata storage failed closed at boot\n");
-	}
+	agent_meta_store_failed_closed = 1;
+	errorf("Agent metadata storage failed closed at boot\n");
 }
 
 static int agent_meta_store_append(struct agent_meta_store *store,
@@ -1276,7 +1292,7 @@ static int agent_meta_store_build_scope(struct agent_meta_store *store,
 				return -1;
 		}
 	base_count = store->header.count;
-	exported = agent_metadata_objects_export_scope(
+	exported = agent_metadata_catalog_export_scope(
 		scope_id, &store->records[base_count],
 		AGENT_FILE_META_MAX - base_count, size_sequence);
 	if (exported < 0)
@@ -1360,6 +1376,8 @@ static int agent_meta_persist_start_locked(uint owner)
 	uint64 size_sequence;
 	int target_bank;
 
+	agent_metadata_txn_projection_require_idle();
+
 	if (agent_meta_persist.phase != AGENT_META_PERSIST_IDLE)
 		return 0;
 	if (agent_meta_store_generation == ~0ULL ||
@@ -1431,7 +1449,7 @@ static void agent_meta_persist_primary_publish_locked(void)
 	agent_meta_store_active_bank = agent_meta_persist.target_bank;
 	agent_meta_store_generation = agent_meta_persist.expected_generation;
 	agent_meta_persist.published = 1;
-	agent_metadata_objects_sizes_persisted(
+	agent_file_state_sizes_persisted(
 		agent_meta_persist.scope_id,
 		agent_meta_persist.size_sequence);
 	agent_file_writeback_complete(agent_meta_persist.started_tick);
@@ -1491,6 +1509,8 @@ static int agent_meta_persist_step_locked(void)
 	uint chunk;
 	int result = 0;
 	int n = 0;
+
+	agent_metadata_txn_projection_require_idle();
 
 	if (agent_meta_persist.phase == AGENT_META_PERSIST_IDLE)
 		return 1;
@@ -1721,7 +1741,7 @@ static int agent_file_persist(void)
 			break;
 		}
 		if (agent_file_writeback_scope_reached(
-			    scope_id, target_generation)) {
+			    scope_id, target_generation, 0)) {
 			status = 0;
 			break;
 		}
@@ -1766,7 +1786,7 @@ static int agent_file_persist(void)
 		checkpoint = agent_meta_persist_checkpoint_unlocked(
 			job_id, &same_job);
 		if (agent_file_writeback_scope_reached(
-			    scope_id, target_generation)) {
+			    scope_id, target_generation, 0)) {
 			status = 0;
 			break;
 		}
@@ -1923,14 +1943,18 @@ out_io:
 }
 
 int
-agent_metadata_store_install_empty(void)
+agent_metadata_store_install_empty(struct agent_metadata_store_commit *commit)
 {
-	agent_metadata_objects_clear_catalog();
+	if (commit == 0)
+		return -1;
+	memset(commit, 0, sizeof(*commit));
+	agent_metadata_catalog_clear(&commit->delta);
 	agent_file_loaded = 1;
 	agent_meta_store_recovery_required = 1;
 	agent_file_writeback_mark(VFS_SCOPE_SYSTEM);
 	agent_file_writeback_expedite(VFS_SCOPE_SYSTEM);
-	return agent_file_persist_system();
+	commit->repair_required = 1;
+	return 0;
 }
 
 int
@@ -1969,10 +1993,22 @@ agent_metadata_store_reload_wait_locked(void)
 	return agent_meta_reload_wait_locked();
 }
 
-void
+int
+agent_metadata_store_take_reconcile_request(void)
+{
+	int requested;
+	int enabled = intr_save();
+
+	requested = agent_meta_reconcile_required;
+	agent_meta_reconcile_required = 0;
+	intr_restore(enabled);
+	return requested;
+}
+
+uint64
 agent_metadata_store_mark_dirty(uint scope_id)
 {
-	agent_file_writeback_mark(scope_id);
+	return agent_file_writeback_mark(scope_id);
 }
 
 void
@@ -1994,21 +2030,19 @@ agent_metadata_store_persist_system(void)
 }
 
 int
-agent_metadata_store_scope_pending(uint scope_id)
+agent_metadata_store_scope_target_done(uint scope_id, uint64 target)
 {
-	return agent_file_writeback_scope_pending(scope_id);
+	if (!agent_meta_store_failed_closed &&
+	    !agent_file_writeback_scope_reached(scope_id, target, 1))
+		return 0;
+	agent_file_scope_state_retire(scope_id);
+	return 1;
 }
 
 int
-agent_metadata_store_scope_busy(uint scope_id)
+agent_metadata_store_scope_pending(uint scope_id)
 {
-	return agent_file_writeback_scope_busy(scope_id);
-}
-
-void
-agent_metadata_store_scope_retire(uint scope_id)
-{
-	agent_file_scope_state_retire(scope_id);
+	return agent_file_writeback_scope_pending(scope_id);
 }
 
 void

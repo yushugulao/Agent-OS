@@ -325,7 +325,6 @@ static void set_bulk_meta(int i)
 
 	make_code(name, 'm', i);
 	make_code(status, 'b', i);
-	make_file(name);
 	memset(&fs_meta, 0, sizeof(fs_meta));
 	fs_meta.fid = 200 + i;
 	strcpy(fs_meta.physical_name, name);
@@ -339,6 +338,8 @@ static void set_bulk_meta(int i)
 	strcpy(fs_meta.summary, "bulk metadata file");
 	fs_meta.dependency_mask = agent_dependency_label_bit("ready");
 	check(agent_file_meta_set(&fs_meta) == 0, "bulk meta set");
+	/* Keep the index fixture volatile; durable writeback is tested separately. */
+	write_file_body(name, "agentfs");
 }
 
 static void check_index_scan_gap(void)
@@ -375,6 +376,11 @@ static void check_index_scan_gap(void)
 	      "index generation");
 	check(scan.total_hits == index.total_hits, "scan index hits");
 	check(scan.returned == index.returned, "scan index returned");
+	check(scan.hits[0].fid == 242 && scan.hits[0].dev != 0 &&
+		      scan.hits[0].inum != 0 &&
+		      scan.hits[0].incarnation != 0 &&
+		      scan.hits[0].size == strlen("agentfs"),
+	      "bulk metadata remains bound to a real file");
 	check(strcmp(scan.hits[0].physical_name,
 		     index.hits[0].physical_name) == 0,
 	      "scan index first hit");

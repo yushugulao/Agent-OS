@@ -295,6 +295,26 @@ int agent_workflow_close(uint64 scope_id)
 	return syscall(SYS_agent_workflow_close, scope_id);
 }
 
+int agent_workflow_lifecycle_info(
+	struct agent_workflow_lifecycle_info *info,
+	const struct agent_workflow_lifecycle_key *expected)
+{
+	uint64 flags = 0;
+	uint64 expected_id = 0;
+	uint64 expected_generation = 0;
+
+	if (expected != 0) {
+		if (expected->reserved != 0)
+			return AGENT_STATUS_BAD_PARAM;
+		flags = AGENT_WORKFLOW_LIFECYCLE_INFO_F_MATCH_CURRENT;
+		expected_id = expected->id;
+		expected_generation = expected->generation;
+	}
+	return syscall(SYS_agent_workflow_lifecycle_info, info,
+		       sizeof(*info), flags, expected_id,
+		       expected_generation);
+}
+
 int agent_scope_delegate_fd(int fd)
 {
 	return syscall(SYS_agent_scope_delegate_fd, fd);

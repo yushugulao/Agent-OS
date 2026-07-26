@@ -1,4 +1,4 @@
-.PHONY: clean build user run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest agent-module-check ci-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test reader target-readiness dual-platform-run full-verify dual-clean .FORCE
+.PHONY: clean build user run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest evidence-capture-selftest agent-module-check ci-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test workflow-teardown-race-test reader target-readiness dual-platform-run full-verify dual-clean .FORCE
 .DELETE_ON_ERROR:
 all: build
 
@@ -296,16 +296,17 @@ $(AGENT_CORE_BOUNDARY_PROBE): $(K)/agent_core.c $(wildcard $(K)/*.h) $(wildcard 
 	$(CC) $(CFLAGS) -fno-inline -fkeep-static-functions \
 		-fkeep-inline-functions -c $< -o $@
 
-agent-module-check: scripts/check-agent-module-boundaries.sh scripts/check-kernel-budgets.py $(KERNEL_BUDGET_CONFIG)
+agent-module-check: scripts/check-agent-module-boundaries.sh scripts/check-teardown-protocol.py scripts/check-kernel-budgets.py $(KERNEL_BUDGET_CONFIG)
 	@bash scripts/check-agent-module-boundaries.sh
 	@$(KERNEL_BUDGET_SUBMAKE) build/kernel $(KERNEL_BUDGET_MAKE_ARGS)
 	@$(KERNEL_BUDGET_SUBMAKE) $(AGENT_CORE_BOUNDARY_PROBE) $(KERNEL_BUDGET_MAKE_ARGS)
 	@$(KERNEL_BUDGET_PYTHON) scripts/check-kernel-budgets.py \
 		--check agent-modules --config $(KERNEL_BUDGET_CONFIG) --root . \
 		--agent-core-probe $(AGENT_CORE_BOUNDARY_PROBE) \
-		--nm $(KERNEL_BUDGET_TOOLPREFIX)nm
+		--nm $(KERNEL_BUDGET_TOOLPREFIX)nm \
+		--size $(KERNEL_BUDGET_TOOLPREFIX)size
 
-kernel-budget-check: scripts/check-agent-module-boundaries.sh scripts/check-kernel-budgets.py $(KERNEL_BUDGET_CONFIG)
+kernel-budget-check: scripts/check-agent-module-boundaries.sh scripts/check-teardown-protocol.py scripts/check-kernel-budgets.py $(KERNEL_BUDGET_CONFIG)
 	@bash scripts/check-agent-module-boundaries.sh
 	@$(KERNEL_BUDGET_SUBMAKE) build/kernel $(KERNEL_BUDGET_MAKE_ARGS)
 	@$(KERNEL_BUDGET_SUBMAKE) $(STRUCT_PROC_BUDGET_PROBE) $(KERNEL_BUDGET_MAKE_ARGS)
@@ -322,14 +323,19 @@ kernel-budget-check: scripts/check-agent-module-boundaries.sh scripts/check-kern
 	@$(KERNEL_BUDGET_PYTHON) scripts/check-kernel-budgets.py \
 		--check agent-modules --config $(KERNEL_BUDGET_CONFIG) --root . \
 		--agent-core-probe $(AGENT_CORE_BOUNDARY_PROBE) \
-		--nm $(KERNEL_BUDGET_TOOLPREFIX)nm
+		--nm $(KERNEL_BUDGET_TOOLPREFIX)nm \
+		--size $(KERNEL_BUDGET_TOOLPREFIX)size
 
-kernel-budget-selftest: scripts/test-check-kernel-budgets.py scripts/test-agent-test-runner.py scripts/test-validate-kernel-test-log.py
+kernel-budget-selftest: scripts/test-check-kernel-budgets.py scripts/test-check-teardown-protocol.py scripts/test-agent-test-runner.py scripts/test-validate-kernel-test-log.py
 	@$(KERNEL_BUDGET_PYTHON) scripts/test-check-kernel-budgets.py
+	@$(KERNEL_BUDGET_PYTHON) scripts/test-check-teardown-protocol.py
 	@$(KERNEL_BUDGET_PYTHON) scripts/test-agent-test-runner.py
 	@$(KERNEL_BUDGET_PYTHON) scripts/test-validate-kernel-test-log.py
 
-ci-check: kernel-budget-selftest kernel-budget-check
+evidence-capture-selftest: scripts/capture-final-evidence.py host_tools/test_capture_final_evidence.py
+	@$(KERNEL_BUDGET_PYTHON) host_tools/test_capture_final_evidence.py
+
+ci-check: evidence-capture-selftest kernel-budget-selftest kernel-budget-check
 
 clean:
 	make -C $(U) clean
@@ -400,7 +406,8 @@ gdbclient:
 CHAPTER ?= $(shell git rev-parse --abbrev-ref HEAD | grep -oP 'ch\K[0-9]' || echo 8)
 
 user:
-	make -C user CHAPTER=$(CHAPTER) BASE=$(BASE)
+	make -C user CHAPTER=$(CHAPTER) BASE=$(BASE) \
+		USER_EXTRA_CFLAGS='$(USER_EXTRA_CFLAGS)'
 
 test:
 	$(MAKE) user CHAPTER=$(CHAPTER) BASE=$(BASE)
@@ -451,6 +458,9 @@ file-resource-test:
 
 thread-resource-test:
 	TOOLPREFIX=$(TOOLPREFIX) bash scripts/run-thread-resource-tests.sh
+
+workflow-teardown-race-test:
+	TOOLPREFIX=$(TOOLPREFIX) bash scripts/run-workflow-teardown-race-tests.sh
 
 agentos-platform-user:
 	$(MAKE) user TOOLPREFIX=$(TOOLPREFIX) CHAPTER=platform_agentos

@@ -25,6 +25,11 @@ struct agent_endpoint_handle {
 	uint64 control_id;
 };
 
+struct agent_metadata_runtime_snapshot {
+	uint metadata_txn_owned;
+	uint metadata_txn_waiters;
+};
+
 /* Thin facade targets implemented by the core owner module. */
 void agent_core_init(void);
 void agent_core_clear_metadata(struct proc *);
@@ -72,10 +77,18 @@ int agent_metadata_txn_lock(int);
 int agent_metadata_txn_try_external(void);
 void agent_metadata_txn_unlock(void);
 void agent_metadata_txn_relock_uninterruptible(void);
+void agent_metadata_txn_projection_transition(int);
+#define agent_metadata_txn_projection_begin() \
+	agent_metadata_txn_projection_transition(1)
+#define agent_metadata_txn_projection_ack() \
+	agent_metadata_txn_projection_transition(0)
+void agent_metadata_txn_projection_require_idle(void);
 void agent_metadata_txn_work_charge(uint);
 int agent_metadata_txn_checkpoint_unlocked(void);
 int agent_metadata_txn_owned(int);
 int agent_metadata_txn_depth(void);
+void agent_metadata_proc_runtime_snapshot(
+	struct proc *, struct agent_metadata_runtime_snapshot *);
 int agent_metadata_reload_available(void);
 int agent_metadata_reload_is_current(void);
 int agent_metadata_reload_claim(void);

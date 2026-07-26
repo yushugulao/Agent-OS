@@ -42,6 +42,51 @@ class KernelLogValidatorTests(unittest.TestCase):
         with self.assertRaisesRegex(validator.ValidationError, "missing"):
             validator.validate_file(text.replace(validator.FILE_MARKERS[2], ""))
 
+    def test_workflow_teardown_contract_uses_complete_ordered_lines(self):
+        capacity = (
+            validator.WORKFLOW_TEARDOWN_CAPACITY_PREFIX
+            + "65 domain_cap=14 global_reserved_cap=64"
+        )
+        lines = list(validator.WORKFLOW_TEARDOWN_MARKERS)
+        lines.insert(4, capacity)
+        text = "\n".join(lines)
+        self.assertIn(
+            "cycles=65",
+            validator.validate_workflow_teardown(text, 14, 64),
+        )
+        with self.assertRaisesRegex(validator.ValidationError, "once"):
+            validator.validate_workflow_teardown(
+                text + "\n" + validator.WORKFLOW_TEARDOWN_MARKERS[0],
+                14,
+                64,
+            )
+        with self.assertRaisesRegex(validator.ValidationError, "out of order"):
+            validator.validate_workflow_teardown(
+                "\n".join(
+                    (
+                        lines[1],
+                        lines[0],
+                        *lines[2:],
+                    )
+                ),
+                14,
+                64,
+            )
+        with self.assertRaisesRegex(validator.ValidationError, "once"):
+            validator.validate_workflow_teardown(
+                text.replace(validator.WORKFLOW_TEARDOWN_MARKERS[3], ""),
+                14,
+                64,
+            )
+        with self.assertRaisesRegex(
+            validator.ValidationError, "capacity mismatch"
+        ):
+            validator.validate_workflow_teardown(
+                text,
+                14,
+                63,
+            )
+
     def test_syscall_contract_checks_phase_and_short_marker_order(self):
         lines = []
         for name, begin, peer, end in validator.SYSCALL_PHASES:

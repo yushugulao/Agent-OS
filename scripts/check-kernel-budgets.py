@@ -25,6 +25,7 @@ REQUIRED_KERNEL_SOURCE_GLOBS = frozenset(
         "os/**/*.S",
         "os/**/*.ld",
         "os/**/*.inc",
+        "*_abi.h",
         "*_policy.h",
         "*_policy.inc",
     )
@@ -59,15 +60,58 @@ REQUIRED_AGENT_MAX_SCC_SIZE = 3
 REQUIRED_AGENT_ALLOWED_SCCS = frozenset(
     (
         frozenset(("context", "observe")),
-        frozenset(("ipc", "metadata_objects", "metadata_store")),
+        frozenset(("ipc", "metadata_objects")),
     )
 )
 REQUIRED_AGENT_INTEGRATION_ALLOWED_SCCS = frozenset(
     (
         frozenset(("context", "observe")),
         frozenset(("core", "facade", "proc")),
-        frozenset(("ipc", "metadata_objects", "metadata_store")),
+        frozenset(("ipc", "metadata_objects")),
     )
+)
+REQUIRED_AGENT_AGGREGATES = {
+    "metadata_control_plane": frozenset(
+        (
+            "metadata",
+            "file_state",
+            "metadata_objects",
+            "metadata_catalog",
+            "metadata_store",
+            "ipc",
+        )
+    )
+}
+REQUIRED_AGENT_AGGREGATE_HEADERS = {
+    "metadata_control_plane": frozenset(
+        (
+            "os/agent_file_name_policy.h",
+            "os/agent_file_state_internal.h",
+            "os/agent_metadata_internal.h",
+            "os/agent_metadata_catalog.h",
+        )
+    )
+}
+REQUIRED_AGENT_AGGREGATE_HEADER_GLOBS = {
+    "metadata_control_plane": (
+        "os/agent_metadata*.h",
+        "os/agent_file*.h",
+        "os/agent_query*.h",
+        "os/agent_scan*.h",
+        "os/agent_directory*.h",
+    )
+}
+REQUIRED_AGENT_AGGREGATE_SHARED_HEADERS = frozenset(
+    (
+        "os/agent.h",
+        "os/agent_internal.h",
+        "os/agent_context.h",
+        "os/agent_lifecycle.h",
+    )
+)
+REQUIRED_AGENT_DISCARDED_SECTIONS = (".eh_frame",)
+REQUIRED_AGENT_SOURCE_BUDGET_POLICY = (
+    "5% for fixed module contract overhead; loaded text and BSS remain no-growth"
 )
 
 
@@ -150,6 +194,83 @@ def validate_pair(section, baseline_name, maximum_name, integer=False):
     if maximum < baseline * 1.049999:
         raise BudgetError(f"{maximum_name} leaves less than 5% growth headroom")
     return baseline, maximum
+
+
+def validate_agent_aggregate_budgets(modules, module_names):
+    groups = modules.get("aggregate_budgets")
+    if not isinstance(groups, list) or not groups:
+        raise BudgetError("agent_modules.aggregate_budgets must be a non-empty array")
+    names = set()
+    claimed_members = set()
+    for index, group in enumerate(groups):
+        label = f"agent_modules.aggregate_budgets[{index}]"
+        group = require_mapping(group, label)
+        name = group.get("name")
+        if not isinstance(name, str) or not re.fullmatch(r"[a-z0-9_]+", name):
+            raise BudgetError(f"{label}.name must be an aggregate identifier")
+        if name in names:
+            raise BudgetError(f"duplicate Agent aggregate budget name: {name}")
+        names.add(name)
+        members = require_string_list(group, "members")
+        if len(set(members)) != len(members):
+            raise BudgetError(f"{label}.members contains duplicates")
+        unknown = set(members) - module_names
+        if unknown:
+            raise BudgetError(f"{label}.members has unknown modules: {sorted(unknown)!r}")
+        duplicated = claimed_members & set(members)
+        if duplicated:
+            raise BudgetError(
+                f"Agent aggregate members appear in multiple groups: {sorted(duplicated)!r}"
+            )
+        claimed_members.update(members)
+        headers = require_string_list(group, "contract_headers")
+        if len(set(headers)) != len(headers):
+            raise BudgetError(f"{label}.contract_headers contains duplicates")
+        if any(Path(header).is_absolute() or ".." in Path(header).parts for header in headers):
+            raise BudgetError(f"{label}.contract_headers must be relative paths")
+        header_globs = tuple(require_string_list(group, "contract_header_globs"))
+        if header_globs != REQUIRED_AGENT_AGGREGATE_HEADER_GLOBS.get(name):
+            raise BudgetError(f"{label}.contract_header_globs inventory drift")
+        if group.get("source_budget_policy") != REQUIRED_AGENT_SOURCE_BUDGET_POLICY:
+            raise BudgetError(f"{label}.source_budget_policy must explain the 5% source allowance")
+        for metric in (
+            "source_lines",
+            "source_bytes",
+            "loaded_text_bytes",
+            "bss_bytes",
+        ):
+            baseline = require_positive_number(group, f"baseline_{metric}", integer=True)
+            maximum = require_positive_number(group, f"max_{metric}", integer=True)
+            if maximum < baseline:
+                raise BudgetError(f"{label}.max_{metric} is below its baseline")
+            # Module contracts have fixed source cost; runtime footprint may not grow.
+            allowed_ratio = 1.05 if metric in ("source_lines", "source_bytes") else 1.0
+            if maximum > baseline * allowed_ratio:
+                raise BudgetError(
+                    f"{label}.max_{metric} exceeds its no-bloat allowance"
+                )
+        discarded = tuple(require_string_list(group, "discarded_sections"))
+        if discarded != REQUIRED_AGENT_DISCARDED_SECTIONS:
+            raise BudgetError(
+                f"{label}.discarded_sections must match the linker discard inventory"
+            )
+    if names != set(REQUIRED_AGENT_AGGREGATES):
+        raise BudgetError("Agent aggregate budget inventory drift")
+    for group in groups:
+        required = REQUIRED_AGENT_AGGREGATES[group["name"]]
+        if set(group["members"]) != required:
+            raise BudgetError(
+                f"Agent aggregate {group['name']} member inventory drift: "
+                f"missing={sorted(required - set(group['members']))!r}, "
+                f"extra={sorted(set(group['members']) - required)!r}"
+            )
+        required_headers = REQUIRED_AGENT_AGGREGATE_HEADERS[group["name"]]
+        if set(group["contract_headers"]) != required_headers:
+            raise BudgetError(
+                f"Agent aggregate {group['name']} contract header inventory drift: "
+                f"missing={sorted(required_headers - set(group['contract_headers']))!r}, "
+                f"extra={sorted(set(group['contract_headers']) - required_headers)!r}"
+            )
 
 
 def validate_config(config):
@@ -557,6 +678,7 @@ def validate_config(config):
         "ipc",
         "lifecycle",
         "metadata",
+        "metadata_catalog",
         "metadata_objects",
         "metadata_store",
         "observe",
@@ -578,6 +700,7 @@ def validate_config(config):
         "ipc": "os/agent_ipc.c",
         "lifecycle": "os/agent_lifecycle.c",
         "metadata": "os/agent_metadata.c",
+        "metadata_catalog": "os/agent_metadata_catalog.c",
         "metadata_objects": "os/agent_metadata_objects.c",
         "metadata_store": "os/agent_metadata_store.c",
         "observe": "os/agent_observe.c",
@@ -595,6 +718,8 @@ def validate_config(config):
                 f"Agent module {entry['name']} path drift: expected "
                 f"{expected_source} and {expected_object}"
             )
+
+    validate_agent_aggregate_budgets(modules, names)
 
     bridges = modules.get("integration_bridges")
     if not isinstance(bridges, list) or not bridges:
@@ -886,16 +1011,23 @@ def measure_source_lines(root, include_globs, exclude_paths):
     return total, len(paths)
 
 
-def measure_file_lines(root, relative_path):
+def measure_file_source(root, relative_path):
     path = (Path(root).resolve() / relative_path).resolve()
     try:
         path.relative_to(Path(root).resolve())
     except ValueError as error:
         raise BudgetError(f"source path escapes repository: {relative_path}") from error
     try:
-        return physical_line_count(path.read_bytes())
+        data = path.read_bytes()
     except OSError as error:
         raise BudgetError(f"cannot read source {path}: {error}") from error
+    # Git content is LF-normalized; checkout policy must not consume budget.
+    normalized = data.replace(b"\r\n", b"\n")
+    return physical_line_count(normalized), len(normalized)
+
+
+def measure_file_lines(root, relative_path):
+    return measure_file_source(root, relative_path)[0]
 
 
 def read_agent_timing_file(path, expected_cases):
@@ -984,6 +1116,200 @@ def parse_size_output(output):
 def measure_kernel_runtime(kernel, size):
     output = run_tool([size, "-B", str(kernel)], "kernel runtime size inspection")
     return parse_size_output(output)
+
+
+def parse_object_size_sections(output):
+    sections = {}
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) < 3 or not fields[0].startswith("."):
+            continue
+        try:
+            section_size = int(fields[1], 10)
+            int(fields[2], 0)
+        except ValueError:
+            continue
+        if fields[0] in sections:
+            raise BudgetError(f"duplicate object section in size output: {fields[0]}")
+        sections[fields[0]] = section_size
+    if ".text" not in sections:
+        raise BudgetError("object size output is missing .text")
+    return sections
+
+
+def section_matches_any(name, patterns):
+    return any(
+        name.startswith(pattern[:-1]) if pattern.endswith("*") else name == pattern
+        for pattern in patterns
+    )
+
+
+def agent_aggregate_private_header(path):
+    return (
+        path.startswith("os/agent")
+        and path.endswith(".h")
+        and path not in REQUIRED_AGENT_AGGREGATE_SHARED_HEADERS
+    )
+
+
+def quoted_include_closure(root, source_paths):
+    root = Path(root).resolve()
+    pending = []
+    for source_path in source_paths:
+        path = (root / source_path).resolve()
+        try:
+            path.relative_to(root)
+        except ValueError as error:
+            raise BudgetError(f"aggregate source escapes repository: {source_path}") from error
+        if not path.is_file():
+            raise BudgetError(f"aggregate source is missing: {source_path}")
+        pending.append(path)
+
+    closure = set()
+    include_pattern = re.compile(r'^\s*#\s*include\s+"([^"]+)"', re.MULTILINE)
+    while pending:
+        path = pending.pop()
+        relative = path.relative_to(root).as_posix()
+        if relative in closure:
+            continue
+        closure.add(relative)
+        text = path.read_text(encoding="utf-8")
+        for include in include_pattern.findall(text):
+            candidates = (path.parent / include, root / include)
+            resolved = next(
+                (candidate.resolve() for candidate in candidates if candidate.is_file()),
+                None,
+            )
+            if resolved is None:
+                continue
+            try:
+                resolved.relative_to(root)
+            except ValueError as error:
+                raise BudgetError(
+                    f"quoted include escapes repository: {relative}: {include}"
+                ) from error
+            if resolved.relative_to(root).as_posix() not in closure:
+                pending.append(resolved)
+    return closure
+
+
+def validate_agent_aggregate_header_inventory(root, entries, group):
+    root = Path(root).resolve()
+    registered = set(group["contract_headers"])
+    discovered = set()
+    for pattern in group.get("contract_header_globs", ()):
+        discovered.update(
+            path.relative_to(root).as_posix()
+            for path in root.glob(pattern)
+            if path.is_file()
+        )
+    if discovered != registered:
+        raise BudgetError(
+            f"Agent aggregate {group['name']} private header inventory drift: "
+            f"unregistered={sorted(discovered - registered)!r}, "
+            f"stale={sorted(registered - discovered)!r}"
+        )
+
+    by_name = {entry["name"]: entry for entry in entries}
+    seeds = [by_name[member]["source_path"] for member in group["members"]]
+    seeds.extend(group["contract_headers"])
+    closure = quoted_include_closure(root, seeds)
+    unregistered = sorted(
+        path
+        for path in closure
+        if agent_aggregate_private_header(path) and path not in registered
+    )
+    if unregistered:
+        raise BudgetError(
+            f"Agent aggregate {group['name']} include closure has unregistered "
+            f"private headers: {unregistered!r}"
+        )
+
+
+def validate_agent_discarded_sections(root, expected):
+    linker = Path(root).resolve() / "os" / "kernel.ld"
+    if not linker.is_file():
+        raise BudgetError(f"kernel linker script is missing: {linker}")
+    text = linker.read_text(encoding="utf-8")
+    blocks = re.findall(r"/DISCARD/\s*:\s*\{(.*?)\}", text, re.DOTALL)
+    if len(blocks) != 1:
+        raise BudgetError("kernel linker script must have one /DISCARD/ block")
+    discarded = set(re.findall(r"\*\(\s*(\.[A-Za-z0-9_.-]+)\s*\)", blocks[0]))
+    if discarded != set(expected):
+        raise BudgetError(
+            "Agent aggregate discarded section inventory does not match kernel.ld: "
+            f"expected={sorted(expected)!r}, actual={sorted(discarded)!r}"
+        )
+
+
+def measure_agent_object_residency(size_tool, object_path, discarded_sections):
+    totals = parse_size_output(
+        run_tool(
+            [size_tool, "-B", str(object_path)],
+            "Agent aggregate object residency inspection",
+        )
+    )
+    text_size, data_size, bss_size, _ = totals
+    if data_size != 0:
+        raise BudgetError(
+            f"Agent aggregate object has initialized writable data: {object_path} "
+            f"({data_size} bytes)"
+        )
+    sections = parse_object_size_sections(
+        run_tool(
+            [size_tool, "-A", str(object_path)],
+            "Agent aggregate discarded section inspection",
+        )
+    )
+    discarded_size = sum(sections.get(name, 0) for name in discarded_sections)
+    if discarded_size > text_size:
+        raise BudgetError(f"discarded sections exceed object text size: {object_path}")
+    return text_size - discarded_size, bss_size
+
+
+def check_agent_aggregate_budgets(root, entries, groups, size_tool):
+    if not size_tool:
+        raise BudgetError("--size is required for Agent aggregate budgets")
+    by_name = {entry["name"]: entry for entry in entries}
+    for group in groups:
+        validate_agent_aggregate_header_inventory(root, entries, group)
+        validate_agent_discarded_sections(root, group["discarded_sections"])
+        source_paths = list(group["contract_headers"])
+        source_paths.extend(
+            by_name[member]["source_path"] for member in group["members"]
+        )
+        source_measurements = [
+            measure_file_source(root, path) for path in source_paths
+        ]
+        source_lines = sum(lines for lines, _ in source_measurements)
+        source_bytes = sum(size for _, size in source_measurements)
+        loaded_text = 0
+        bss = 0
+        for member in group["members"]:
+            entry = by_name[member]
+            object_path = Path(root).resolve() / entry["object_path"]
+            if not object_path.is_file():
+                raise BudgetError(f"Agent aggregate object is missing: {object_path}")
+            object_loaded, object_bss = measure_agent_object_residency(
+                size_tool,
+                object_path,
+                group["discarded_sections"],
+            )
+            loaded_text += object_loaded
+            bss += object_bss
+        for metric, actual, unit in (
+            ("source_lines", source_lines, " lines"),
+            ("source_bytes", source_bytes, " bytes"),
+            ("loaded_text_bytes", loaded_text, " bytes"),
+            ("bss_bytes", bss, " bytes"),
+        ):
+            check_limit(
+                f"Agent aggregate {group['name']} {metric}",
+                actual,
+                group[f"baseline_{metric}"],
+                group[f"max_{metric}"],
+                unit,
+            )
 
 
 def parse_nm_symbol_size(output, symbol):
@@ -1666,6 +1992,8 @@ def check_agent_modules(args, config):
     modules = config["agent_modules"]
     if not args.nm:
         raise BudgetError("--nm is required")
+    if not args.size:
+        raise BudgetError("--size is required")
     root = Path(args.root).resolve()
     entries = modules["modules"]
     defined_by_module = {}
@@ -1722,6 +2050,10 @@ def check_agent_modules(args, config):
                     f"{previous} and {entry['name']}"
                 )
             symbol_owner[symbol] = entry["name"]
+
+    check_agent_aggregate_budgets(
+        root, entries, modules["aggregate_budgets"], args.size
+    )
 
     actual_graph = {}
     undefined_by_module = {}
