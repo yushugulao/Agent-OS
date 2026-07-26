@@ -95,7 +95,7 @@ AI Agent 平台已经能够在用户态完成任务编排、工具调用、文�
 
 本项目的设计从 Agent 工作流的运行路径出发，将系统划分为三条主线：第一条是 Agent 进程和上下文管理，负责让内核识别、隔离并记录 Agent；第二条是工具调用和文件对象查询，负责把 Agent 对外部世界的操作变成结构化内核接口；第三条是事件、时间线和来源追踪，负责把多 Agent 协作中的等待、唤醒、恢复和记录组织成可查询的运行事实。
 
-**面向 Agent 进程的内核支持。** 我们在 uCore 的进程模型上增加 Agent 身份、角色模板、能力位、上下文区、事件队列、心跳信息和运行统计。普通进程仍按原有 uCore 路径运行；Agent 进程在创建时由内核分配专属元数据和上下文页，之后的工具调用、事件等待、文件查询和审计记录都围绕该身份展开。Agent 实现不再堆叠在单个大文件中：`os/agent.c` 只保留不持有可写状态的兼容 facade，core、Context、身份授权、IPC、Agent 生命周期、metadata 协调/对象/存储、观测、通用资源控制器和 workflow lifecycle ledger 共同构成 12 个注册编译单元，状态由对应 owner 模块持有。
+**面向 Agent 进程的内核支持。** 我们在 uCore 的进程模型上增加 Agent 身份、角色模板、能力位、上下文区、事件队列、心跳信息和运行统计。普通进程仍按原有 uCore 路径运行；Agent 进程在创建时由内核分配专属元数据和上下文页，之后的工具调用、事件等待、文件查询和审计记录都围绕该身份展开。Agent 实现不再堆叠在单个大文件中：`os/agent.c` 只保留不持有可写状态的兼容 facade，实际 owner 集合由 `ci/kernel-budgets.json` 版本化登记。metadata 控制面进一步拆为事务门 `agent_metadata.c`、incarnation-bound 文件状态 `agent_file_state.c`、catalog、query、scan、目录协调、对象操作和 COW store；Context、身份授权、IPC、生命周期、观测、通用资源控制器与 workflow lifecycle ledger 也各自由对应模块持有。
 
 **面向工具调用和文件对象的系统接口。** Agent 的行动通过结构化工具调用进入内核，工具请求包含工具名称或工具编号、参数类型、参数值、payload 和执行标志；文件对象查询则通过 metadata、摘要、索引和真实 inode 关联完成。这样同一科研平台负载既能在普通 uCore 上运行，也能在 AgentOS-uCore 上使用内核加速和内核记录。
 
@@ -239,9 +239,15 @@ buffer cache 同样记录稳定 sponsor，为 SYSTEM、PUBLIC 和每个 active w
 
 workflow 生命周期为 ACTIVE -> CLOSING -> RETIRING，并由独立的 8 槽 generation-safe ledger 管理，ACTIVE+CLOSING 最多 4 个。槽可以在彻底回收后复用，但每次复用都取得更高 generation；旧 `(id, generation)` 永远不能指向新 workflow，generation 耗尽时拒绝复用。唯一根 `agent_control_id` 仍是不复用的关闭权身份，但它与 lifecycle slot 不是同一概念。可信 factory 关闭、根 controller 自行关闭或退出都先使 Agent/VFS 授权失效，再按精确 lifecycle key 撤销 active、pending 和已经降权为 PUBLIC 的 fork 后代。CLOSING 保留完整 I/O/cache 归因直到最后成员沿统一 teardown 结算；RETIRING 再以 `BACKGROUND` 预算和临时 3/8 cache floor/cap 分步清理 namespace、metadata 与 detached block。
 
+syscall 546 `agent_workflow_lifecycle_info()` 只读取调用进程自身的 lifecycle 快照，或把调用者给出的 expected key 与当前 key 做精确比较。共享 ABI 使用可扩展的 sized-prefix，返回 `charged`、不可变 `(id,generation)`、Context commit lane 和 metadata transaction gate 的运行状态。这个 key 只是身份与比较值，不是 bearer credential；它不能查询其他进程、关闭 workflow 或取得任何对象能力。
+
 Agent 专属安全链由构建期可信映像清单、loader 映像绑定、bootstrap/role grant、capability 和 VFS 文件安全域组成。可信 bootstrap factory 只能通过内核签发新的动态 workflow scope，scope 内 orchestrator 只能委派本域角色；敏感对象访问必须同时命中 capability、active scope 和精确 owner。workflow 的关闭权不由 PID、父子关系、角色名或 `ORCHESTRATE` capability 推导，而是由创建发布前写入生命周期账本的根 `agent_control_id` 精确绑定；低权限 Agent 和后创建的 Orchestrator 都不能关闭或继续钉住该 scope。跨 Agent 消息默认拒绝，只有同 scope 且命中 stable control id 入站路由后才能投递；`MESSAGE_SEND` 不授予等待控制权，等待取消还必须具备独立 `WAIT_CANCEL` capability 并命中直接 controller 关系。公共 `agent_wake()` 只能发送普通消息，系统事件由专用内核路径产生；调度器允许 orchestrator 配置域内软策略，但 Agent burst 和评分逃生边界也只在域内生效，外层资源域轮转不可配置。完整威胁模型、实现位置、自定义 Agent 注册步骤和专项测试入口见 [安全加固与资源韧性设计](docs/agentos/security-hardening.md)。
 
-为防止机制性修复再次把内核推向臃肿，`.gitlab-ci.yml` 和 `make ci-check` 使用 `ci/kernel-budgets.json` 作为可审查事实源，限制内核源码行数、ELF/raw 镜像、text/data/BSS/总运行体积、`struct proc`、Context sidecar 与完整 21 页 Agent 状态的单实例/全局/分类/账户上限、线程栈深度与虚拟/物理容量、64 KiB boot stack 的实际跨度和调用图。facade/core/context/identity/ipc/lifecycle/metadata/metadata_objects/metadata_store/observe/resource_controller/workflow_lifecycle 共 12 个注册模块分别限制 LOC、导出和依赖；所有引用受控 Agent 符号的 `build/os/*.o` 还必须属于 9 个精确 bridge，受控符号 integration graph 的 SCC 上限硬编码为 3。该图只覆盖 Agent 受控符号，不声称是完整 uCore 调用图。预算检查器有 31 项 fail-closed 自测，通用 QEMU monitor 有 24 项自测，另有 5 项生产 profile validator 确认 shell 入口选择正确的 natural/checkpoint/expected-fault 契约。runner 采用二进制全量 drain，并大小写不敏感识别包括 panic 在内的预定义 failure 模式；每轮最多读取一个 64 KiB 块并重新检查 case/marker deadline，持续输出不能饿死超时。每个 case 的总输出上限为 16 MiB，未终止记录最多保留 64 KiB，诊断行最多保留 4 KiB；输出或记录越界 fail closed，诊断副本有界截断。case deadline 在 checkpoint 判断之前生效，并在 feed/notice 后重新核对，迟到 marker 不能伪装成功。普通 case 必须自然 `rc=0`。marker grace 只用于终止已失败或挂起的 case，`SIGTERM` 或升级为 `SIGKILL` 都仍判失败；只有两个持久化 checkpoint 阶段显式选择 checkpoint mode 后，命中预期 marker 的单次 runner `SIGTERM` 才是该阶段的成功契约，`SIGKILL` 永不成功。该合约验证 marker 前状态的重挂载恢复，不把 SIGTERM 描述为硬掉电注入。超时、非零退出或 marker 后 panic 同样失败。完整 16 项 QEMU 套件的 monotonic case duration 只在固定、已校准 runner 上作为硬门，且不把编译耗时混入测试时间；checker 拒绝摘要式 `--agent-test-seconds` / `--agent-test-start-ns`，只接受含完整 16-case 顺序记录的 timing file。2026-07-25 在 `agentos-qemu-calibrated` runner 上以 bounded/flood-safe runner 连续三轮均为 16/16，总 case 时间为 `261.343281873s`、`237.948978492s` 和 `255.370930671s`；校准中位数 `255.370930671s`，max gate `268.14s`，相对中位数约保留 5% headroom、足以覆盖最大样本，并比旧门更紧。静态预算的最终数值仍以版本化 JSON 为准，且这些独立结果不表示未运行的 `make full-verify` 已全绿。
+为防止机制性修复再次把内核推向臃肿，`.gitlab-ci.yml` 和 `make ci-check` 使用 `ci/kernel-budgets.json` 作为可审查事实源，限制内核源码行数、ELF/raw 镜像、text/data/BSS/总运行体积、`struct proc`、Context sidecar 与完整 21 页 Agent 状态的单实例/全局/分类/账户上限、线程栈深度与虚拟/物理容量、64 KiB boot stack 的实际跨度和调用图。每个 owner 模块、integration bridge、允许依赖和 SCC 边界均来自同一版本化注册集合，不在文档复制容易漂移的固定数量。metadata 拆分单元及其 contract headers 还共同进入 `metadata_control_plane` 聚合预算：source 只保留固定接口开销，loaded text 与 BSS 不得增长，因而不能靠把状态或代码迁到另一个文件绕过 downward ratchet。预算 checker、通用 QEMU monitor 和生产 profile validator 的 fail-closed 自测集合也以源码和配置为准。
+
+通用 QEMU runner 采用二进制全量 drain，并大小写不敏感识别包括 panic 在内的预定义 failure 模式；每轮最多读取一个 64 KiB 块并重新检查 case/marker deadline，持续输出不能饿死超时。每个 case 的总输出上限为 16 MiB，未终止记录最多保留 64 KiB，诊断行最多保留 4 KiB；输出或记录越界 fail closed，诊断副本有界截断。case deadline 在 checkpoint 判断之前生效，并在 feed/notice 后重新核对，迟到 marker 不能伪装成功。普通 case 必须自然 `rc=0`。marker grace 只用于终止已失败或挂起的 case，`SIGTERM` 或升级为 `SIGKILL` 都仍判失败；只有两个持久化 checkpoint 阶段显式选择 checkpoint mode 后，命中预期 marker 的单次 runner `SIGTERM` 才是该阶段的成功契约，`SIGKILL` 永不成功。该合约验证 marker 前状态的重挂载恢复，不把 SIGTERM 描述为硬掉电注入。超时、非零退出或 marker 后 panic 同样失败。完整 16 项 QEMU 套件的 monotonic case duration 只在固定、已校准 runner 上作为硬门，且不把编译耗时混入测试时间；checker 拒绝摘要式 `--agent-test-seconds` / `--agent-test-start-ns`，只接受含完整 16-case 顺序记录的 timing file。2026-07-25 在 `agentos-qemu-calibrated` runner 上以 bounded/flood-safe runner 连续三轮均为 16/16，总 case 时间为 `261.343281873s`、`237.948978492s` 和 `255.370930671s`；校准中位数 `255.370930671s`，max gate `268.14s`，相对中位数约保留 5% headroom、足以覆盖最大样本，并比旧门更紧。
+
+Reader seeded-action runner 另把 clean、build、guest 明确分阶段：clean/build 只按子进程退出码判定，只有 QEMU guest 启动后才逐条完整匹配 Guest panic/fault/check-failed 记录。构建输出中的 `build/riscv64/ch6b_panic` 因而不会再被字符串扫描误判；对应单测同时要求这种文件名通过、规范 Guest `[PANIC ...]` 行失败。
 
 ### 4.3 模块组合后的运行路径
 
@@ -355,7 +361,7 @@ http://127.0.0.1:8767/
 make full-verify TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-该命令串起结构检查、Host 工具测试、双目标 QEMU 运行、AgentOS 专项、进程生命周期、syscall 公平性、filepool、线程资源域和 ENOSPC 测试。需要快速检查目录职责和 Host 工具时，可以运行：
+该命令串起结构检查、Host 工具测试、Reader 定向 E2E、双目标 QEMU 运行、16-case AgentOS 专项、进程生命周期、syscall 公平性、filepool、线程资源域、workflow teardown race 和 ENOSPC 测试。需要快速检查目录职责和 Host 工具时，可以运行：
 
 ```bash
 make target-readiness
@@ -374,11 +380,11 @@ make target-readiness
 | 类型 | 入口 | 作用 |
 | --- | --- | --- |
 | AgentOS 专项测试 | `scripts/run-agent-tests.sh`、`make agentos-test` | 逐项检查 Agent 进程、工具调用、Context、文件查询、事件循环、调度、LLM、权限和冲突控制。 |
-| 安全与资源专项 | `make fs-enospc-test`、`make proc-reap-test`、`make thread-resource-test`、`make file-resource-test`、`make syscall-fairness-test`、`make kernel-stack-check`；`iobudget_ucore` 随 Agent 专项运行 | 检查可恢复资源耗尽、持久 PUBLIC 配额跨域退出/重启、退出回收、进程/线程/filepool 资源域、线程域级 CPU 公平、长 syscall 公平性、块 I/O/cache 分域和系统保留槽及内核栈预算。 |
+| 安全与资源专项 | `make fs-enospc-test`、`make proc-reap-test`、`make thread-resource-test`、`make file-resource-test`、`make syscall-fairness-test`、`make workflow-teardown-race-test`、`make kernel-stack-check`；`iobudget_ucore` 随 Agent 专项运行 | 检查可恢复资源耗尽、持久 PUBLIC 配额跨域退出/重启、退出回收、进程/线程/filepool 资源域、线程域级 CPU 公平、长 syscall 公平性，以及撤销/退出/阻塞资源/metadata/I/O/lifecycle 复用的组合竞争。 |
 | 内核增长预算 | `make ci-check` | 以固定工具链/profile 检查源码、镜像、运行段、PCB、栈容量和 Agent 模块边界；不启动 QEMU，也不等同于动态回归。 |
 | 双目标运行测试 | `make dual-platform-run` | 让同一科研 Agent 请求分别进入普通 uCore 和 AgentOS-uCore，生成可比较状态文件。 |
 | 宿主机工具测试 | `host_tools/test_*.py` | 检查镜像提取、状态对照、页面渲染、图表契约和 LLM Relay 模式。 |
-| 完整验证 | `make full-verify` | 先执行 `ci-check`，再串联结构检查、Host 工具测试、双目标运行、AgentOS 专项、进程生命周期、线程资源域、syscall 公平性、filepool 和 ENOSPC 测试；各机制仍保留独立入口。 |
+| 完整验证 | `make full-verify` | 先执行 `ci-check`，再串联结构检查、Host 工具与 Reader E2E、双目标运行、16-case AgentOS 专项、进程生命周期、线程资源域、syscall 公平性、filepool、workflow teardown race 和 ENOSPC 测试；各机制仍保留独立入口。 |
 
 AgentOS 专项测试程序如下：
 
@@ -403,7 +409,9 @@ AgentOS 专项测试程序如下：
 | `syscallfair_ucore` | 纯 Guest 公平性契约，覆盖控制台、inode 大写入、截断的 last-syscall 重调度计数、observer 与 worker 完整退出。 | 当前重构后的双目标 `make syscall-fairness-test` 已通过 |
 | `threadresource_ucore` | 普通/保留域上限与复用、容量拒绝计数稳定、普通/保留全局水位与复用、系统保留进展和跨域调度公平。 | `make thread-resource-test` 输出 12 项机制标记、`parent passed` 和 `[thread-resource] all checks passed` |
 
-`371.5s`、`127.9s` 和 `126.1s` 保留为 Workflow 强制撤销早期实现的历史数据。当前 generation-safe lifecycle、PUBLIC 后代谱系撤销、通用资源控制器、统一 teardown、按需物理内核栈和 Agent 模块拆分版本已在固定 runner 连续完成三次 16/16；proc-reap、syscall-fairness、file-resource、thread-resource 和 fs-enospc 当前专项也全部通过，其中 thread-resource 在同一镜像额外 50/50 轮通过。详细环境、时间和证据边界见 [测试记录](docs/agentos/test-record.md)；`make full-verify` 本轮仍未运行。
+`workflow_teardown_race_ucore` 是独立机制专项，不改变上表 Agent 套件仍为 16 case。它通过 syscall 546 的 self-only lifecycle 快照确定竞态窗口，并连续三轮组合覆盖 factory 撤销、根自然退出、PUBLIC 后代、Context lane、metadata transaction gate、阻塞 `fdget` 临时引用、I/O debt/cache、inode/file object 回收和 lifecycle generation 重用。
+
+`371.5s`、`127.9s` 和 `126.1s` 保留为 Workflow 强制撤销早期实现的历史数据。2026-07-26，提交 `75d0dfde716453af90d7310c6a1521968fcf7167` 在干净环境完成一次 `make full-verify TOOLPREFIX=riscv64-linux-gnu-`，墙钟 `19:45.97`，Reader E2E、独立三轮 teardown race 及其余聚合步骤全部通过。此后又进行了 metadata query/scan/directory 的分阶段行为保持拆分；这些后续变更尚未在最终 HEAD 上完成新的 clean `full-verify`，远程普通 Runner 与 QEMU Runner 也尚无成功证据，因此不能把 checkpoint 结果外推为最终发布验收。详细环境、历史时间和证据边界见 [测试记录](docs/agentos/test-record.md)。
 
 ### 6.2 双目标对照负载
 

@@ -75,7 +75,8 @@ QEMU job 使用相同设置。
 - `checksums.sha256`：除自身外的全部普通文件。
 
 仓库的 `.gitignore` 对 `evidence/releases/**` 有专用负例，因此包内 `.log` 可以正常纳入
-版本控制，不需要 `git add -f`。
+版本控制，不需要 `git add -f`。`.gitattributes` 同时将该目录标为 `-text`，避免不同平台的
+自动换行转换破坏证据包内逐字节 SHA256。
 
 正式发布前还必须确认普通 Runner 的 plain action/Reader E2E，以及校准 Agent Runner
 和机制 QEMU Runner 都在同一最终提交上实际成功。本目录当前不声称已有最终验收包。

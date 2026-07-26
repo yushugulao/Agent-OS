@@ -47,7 +47,7 @@ AgentOS 专项构建和测试命令见 [agentos/verification.md](agentos/verific
 make ci-check
 ```
 
-它使用 `ci/kernel-budgets.json` 的固定 profile 检查源码、镜像、运行段、`struct proc`、9 页 Context sidecar 和完整 21 页 Agent 状态的单实例/池/账户容量、线程栈与独立 64 KiB boot stack 的调用图和容量，以及 facade/core/context/identity/ipc/lifecycle/metadata/metadata_objects/metadata_store/observe/resource_controller/workflow_lifecycle 的预算和符号所有权。所有引用受控 Agent 符号的内核对象还必须属于精确登记的 9 个 integration bridge；受控图的 SCC 上限硬编码为 3，但该图不是完整 uCore 调用图。完整 16 case 的耗时预算已由同一 `agentos-qemu-calibrated` runner 上 bounded/flood-safe 版本的三轮 16/16 校准；普通 CI 只有在命中该 runner tag、执行完整套件且总时间不超过 `268.14s` 时才通过。
+它使用 `ci/kernel-budgets.json` 的固定 profile 检查源码、镜像、运行段、`struct proc`、9 页 Context sidecar 和完整 21 页 Agent 状态的单实例/池/账户容量，以及线程栈与独立 64 KiB boot stack 的调用图和容量。owner 模块、integration bridge、允许依赖和 SCC 边界均来自同一版本化注册集合；metadata transaction/file-state/catalog/query/scan/directory/objects/store、IPC 及 contract headers 还受聚合 source/text/BSS 预算约束，不能靠拆文件迁移绕过增长门。受控图不是完整 uCore 调用图。完整 16 case 的耗时预算已由同一 `agentos-qemu-calibrated` runner 上 bounded/flood-safe 版本的三轮 16/16 校准；普通 CI 只有在命中该 runner tag、执行完整套件且总时间不超过 `268.14s` 时才通过。
 
 双目标运行：
 

@@ -642,9 +642,9 @@ make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 bash scripts/run-agent-tests.sh
 ```
 
-该脚本包含 `agenttrust_ucore`、`agentvfs_ucore` 和 `usersafety_ucore`，但不单独运行 ENOSPC 与进程回收脚本。`make full-verify` 当前先执行 `ci-check`，再串联 Agent、进程、syscall、file、thread 和 ENOSPC 专项。实际关系见 [verification.md](verification.md)。
+该脚本包含 `agenttrust_ucore`、`agentvfs_ucore` 和 `usersafety_ucore`，但不单独运行 ENOSPC、进程回收或 workflow teardown race。`make full-verify` 当前先执行 `ci-check`，再串联 Host/Reader、双目标、16-case Agent、进程、syscall、file、thread、独立 teardown race 和 ENOSPC 专项。实际关系见 [verification.md](verification.md)。
 
-当前不能把 `make full-verify` 记为完整通过：最近一次运行在 `host_tools/test_plain_ucore_reader_e2e.py` 的 `Reader GET Routes` 页面断言处中止，尚未进入后续 QEMU 阶段。该 Reader E2E 问题应与上述内核专项结果分开记录。
+Reader E2E 的历史阻塞已经修复。根因不是内核：旧 `plain_ucore_action_runner.py` 在构建阶段扫描 `panic` 子串，把 `build/riscv64/ch6b_panic` 当成 Guest panic。当前执行器明确区分 clean/build/guest，前两阶段只看退出码；QEMU guest 启动后才对去 ANSI 的完整日志行匹配 panic、trap、`check failed` 和 orchestrator failure。`test_plain_ucore_action_runner.py` 同时覆盖“构建文件名含 panic 仍通过”和“规范 Guest `[PANIC ...]` 必须失败”。提交 `75d0dfd` 的 clean `full-verify` 已通过 Reader E2E；后续 metadata 拆分后的最终 HEAD 仍需重新执行聚合验收。
 
 不要在同一工作树中并行启动多个 QEMU 测试，因为 `nfs/fs-copy.img` 会被多个进程同时访问，可能造成镜像锁冲突。
 
@@ -846,9 +846,29 @@ agentscope_ucore: lifecycle_reclamation=1
 agentscope_ucore: parent passed
 ```
 
-验证时间线必须区分：371.5s、127.9s 和 126.1s 是当前 generation-safe lifecycle、PUBLIC 谱系、统一 teardown 和资源控制器之前的历史结果。当前专项约 `93.7s`，已实际取得 `public_lineage=1`；三轮完整 16 项和五组机制专项也已通过。close 与 exec/spawn 精确竞态、多线程 controller、纯 CPU 成员及主动 I/O debt/inode 压力仍是独立缺口。
+验证时间线必须区分：371.5s、127.9s 和 126.1s 是 generation-safe lifecycle、PUBLIC 谱系、统一 teardown 和资源控制器之前的历史结果。后续 `agentscope_ucore` 专项约 `93.7s` 并取得 `public_lineage=1`；`75d0dfd` checkpoint 又完成 clean 聚合验收。最终拆分 `14a9450` 只完成具名定向复测，仍待新的 clean `full-verify`。close 与 exec/spawn 精确竞态和多线程 controller 仍是独立缺口。
 
-## 24. 内核增长与模块边界预算
+## 24. `workflow_teardown_race_ucore`
+
+这是独立的组合竞态专项，不属于 `scripts/run-agent-tests.sh` 的 16 case。默认入口至少连续运行三轮：
+
+```bash
+make workflow-teardown-race-test TOOLPREFIX=riscv64-linux-gnu-
+```
+
+测试用 syscall 546 的 self-only lifecycle snapshot/compare ABI 观察当前进程自己的 immutable key、Context commit lane 与 metadata transaction gate；它不读裸 PCB，也不能把 key 当作关闭权限。完整 ABI 为 version 1/48 字节，raw syscall 接受至少 8 字节的 sized-prefix。坏 flags/key/地址在 copyout 前失败，合法 stale/not-found 则可以同时返回 self snapshot。
+
+每轮组合覆盖：
+
+1. factory 关闭和根自然退出两种入口都进入相同 phased teardown，并保留最终竞态快照；
+2. PUBLIC 降权后代、Context lane owner/waiter 与 metadata gate owner/waiter 同时存在时仍被撤销并展开；
+3. 阻塞 syscall 关闭用户 FD 后仍持有的临时 file 引用按 account 计费，连续生命周期超过全局保留边界后仍全部退款；
+4. teardown 期间的 I/O debt、cache sponsor、inode 和 file object 被结算，另一 scope 保持进展；
+5. factory-close 与 natural-exit 的 lifecycle id 都只有在退休完成后才能以更高 generation 重用，旧 key 返回 stale，新 account 为零债务且 inode 可复用。
+
+profile validator 要求有序出现 ABI、两类退出、I/O、阻塞引用容量、generation 重用、fresh account 和 `parent passed` marker，并交叉核对 runner 注入的 domain/global file capacity。提交 `75d0dfd` 的 clean `full-verify` 已连续三轮通过；metadata 目录拆分提交 `14a9450` 后又完成三轮定向复测。该用例仍没有精确注入 close 与 spawn/pending exec 的发布瞬间或多线程 controller。
+
+## 25. 内核增长与模块边界预算
 
 静态门入口：
 
@@ -863,12 +883,12 @@ make ci-check
 - `sizeof(struct proc)`；
 - 9 页 Context detail sidecar 与完整 21 页 Agent 状态的单实例、全局、ordinary/reserved 池和单 account 容量；
 - 线程调用图栈深、64 KiB boot stack 的链接跨度与启动调用图、32 MiB 虚拟栈容量和 8 MiB 受信/保留物理栈池；
-- facade、core、context、identity、ipc、lifecycle、metadata、metadata_objects、metadata_store、observe、resource_controller、workflow_lifecycle 十二个模块的代码预算；
-- 对象符号所有权、依赖方向，以及 core 不得重新定义已迁移权威状态；
-- 12 个注册模块与 `bio/file/fs/loader/main/proc/syscall/trap/vfs_security` 9 个 bridge 构成的受控符号 integration graph，硬性 SCC 上限为 3。该图只追踪受控 Agent 符号，不是完整 uCore 调用图。
+- `ci/kernel-budgets.json` 版本化登记的 owner/bridge 集合的逐模块 LOC、导出符号和依赖方向，以及 core 不得重新定义已迁移权威状态；
+- metadata transaction/file-state/catalog/query/scan/directory/objects/store、IPC 和 contract headers 的 `metadata_control_plane` 聚合 source/text/BSS 预算；source 仅允许固定接口开销，loaded text/BSS no-growth；
+- 受控符号 integration graph 的 SCC 硬上限。该图只追踪受控 Agent 符号，不是完整 uCore 调用图。
 
-预算采用 downward ratchet：体积下降后应收紧 baseline/max，不能保留足以让旧大数组或 monolith 回归的宽松上限。当前静态 probe 为 `sizeof(struct proc)=28808`；JSON 中 `28776` B 是冻结审查 baseline，`30215` B 是 max，baseline 不因当前 actual 略高而上调。每个活跃 Agent 以一次 `RESOURCE_AGENT_STATE_PAGE` 请求原子计费 21 页：9 页 detail/attribution sidecar、6 页用户 mirror、6 页可信 shadow，共 84 KiB；六项总状态预算为每进程/全局/ordinary 池/reserved 池/ordinary 域/reserved 域 `86016/11010048/8257536/2752512/5505024/688128` B。9 页 sidecar 自身仍有每 Agent 36 KiB、全局 1152 页（4.5 MiB）的独立细节预算。idle 普通进程不分配这些页；它们都从通用 `kalloc` 取得，不是全局 OOM 下的硬保留。预算 checker 当前有 31 项 fail-closed 自测，具体指标见 [test-record.md](test-record.md)。
+预算采用 downward ratchet：体积下降后应收紧 baseline/max，不能保留足以让旧大数组或 monolith 回归的宽松上限。当前静态 probe 为 `sizeof(struct proc)=28808`；JSON 中 `28776` B 是冻结审查 baseline，`30215` B 是 max，baseline 不因当前 actual 略高而上调。每个活跃 Agent 以一次 `RESOURCE_AGENT_STATE_PAGE` 请求原子计费 21 页：9 页 detail/attribution sidecar、6 页用户 mirror、6 页可信 shadow，共 84 KiB。idle 普通进程不分配这些页；它们都从通用 `kalloc` 取得，不是全局 OOM 下的硬保留。预算 checker 的 fail-closed 自测集合以当前源码为准，具体指标见 [test-record.md](test-record.md)。
 
 完整 Agent 时间预算与静态门分开。它只统计 16 个 QEMU case 的 monotonic 运行时间总和，不含编译；targeted `AGENT_TEST_CASE` 不能满足全套时间门。当前 JSON 为 `calibrated_full_suite`，bounded/flood-safe runner 的 `bounded-runner-final-01/02/03` 三轮总时间为 `261.343281873s`、`237.948978492s`、`255.370930671s`，基线/上限为 `255.370930671s/268.14s`；相对中位数约 5% headroom，足以覆盖最大样本且比旧门更紧。GitLab job 同时使用 `resource_group` 和 `agentos-qemu-calibrated` runner tag。
 
-QEMU runner 以二进制方式读取并全量 drain 子进程输出，大小写不敏感检测包括 panic 在内的预定义 failure 模式，marker 后仍继续扫描。监控循环每轮最多读取一个 64 KiB 块便重查 case/marker deadline，持续 stdout 洪泛不能饿死 timeout 或 grace。每个 case 最多接受 16 MiB 总输出，未终止记录最多保留 64 KiB，诊断行最多保留 4 KiB；输出总量或记录越界 fail closed，诊断副本则有界截断。case deadline 先于 checkpoint 成功判定，并在 scanner feed 和 runner notice 后再次检查，所以迟到 marker 不能通过。普通 case 必须自然 `rc=0`。若 pipe EOF 先于进程状态，runner 仍受原 case deadline 和 marker grace 约束地等待退出：EOF 不触发信号，也不能延长宽限期；stop 阶段继续等待 status 与 EOF 双发布。marker grace 只负责终止已失败/挂起的 case，`SIGTERM` 或升级 `SIGKILL` 都仍视为失败；仅两个持久化 checkpoint 阶段显式选择 checkpoint mode 后，可在预期 marker 后接受单次 runner `SIGTERM`，`SIGKILL` 仍失败。该 checkpoint 合约验证 marker 前状态的重挂载恢复，不等同硬掉电注入。超时、非零退出和后置 panic 也失败。预期 `bad addr` 必须先由测试输出的显式 marker 逐次 arm，并逐条消费；未 arm 的 fault 或未被 fault 消费的 marker 都失败。24 项通用 runner 单测覆盖分片 marker、marker 前后 panic、自然/检查点退出、pipe EOF/退出状态边界、持续输出洪泛与边界、迟到 marker、信号处理、预期 fault、未知 mode 和超时边界；另有 5 项生产 profile validator 检查 shell 入口使用正确 profile。duration checker 显式拒绝摘要式 `--agent-test-seconds` 和 `--agent-test-start-ns`，只接受恰好包含全部 16 个预期 case 且顺序一致的 timing file。`agentfinal_ucore` 的并发 Context 回归还要求 `context_commit_lane=1 sequence=1..3 hash=1`：同一进程的 lane 是可睡眠、FIFO、可重入的，锁序为 `lane -> metadata`；`agent_call_count` 表示已接纳/预留序号，`latest_sequence` 表示已提交水位。
+QEMU runner 以二进制方式读取并全量 drain 子进程输出，大小写不敏感检测包括 panic 在内的预定义 failure 模式，marker 后仍继续扫描。监控循环有界并持续重查 case/marker deadline，输出洪泛、迟到 marker、普通 case 信号退出、`SIGKILL`、非零退出和后置 panic 都不能成功。预期 fault 与持久化 checkpoint 只能由各自显式 profile 启用。通用 runner/profile validator 的自测集合以源码为准；duration checker只接受恰好包含全部 16 个预期 Agent case 且顺序一致的 timing file。Reader action runner 另按 clean/build/guest 分阶段：构建只看退出码，guest 才按完整日志行识别故障。`agentfinal_ucore` 的并发 Context 回归还要求 `context_commit_lane=1 sequence=1..3 hash=1`。

@@ -2,7 +2,7 @@
 
 测试目标：根目录 AgentOS-uCore 增强目标
 
-本次最终复测日期：2026-07-25
+最近一次固定 runner 的 16-case 校准日期：2026-07-25。最近一次 clean 聚合 checkpoint：2026-07-26；最终拆分 HEAD 尚待新的 clean 聚合验收。
 
 测试环境：
 
@@ -11,7 +11,29 @@
 - QEMU `10.2.1`，riscv64 system emulation；
 - `riscv64-linux-gnu-gcc 15.2.0`。
 
-## 2026-07-25 当前重构验收
+## 2026-07-26 聚合 checkpoint 与后续拆分边界
+
+提交 `75d0dfde716453af90d7310c6a1521968fcf7167` 在执行 clean 后运行：
+
+```bash
+make full-verify TOOLPREFIX=riscv64-linux-gnu-
+```
+
+命令最终输出 `[full-verify] all checks passed`，墙钟 `19:45.97`。该次聚合明确包含：
+
+- Reader 定向 E2E 通过；seeded action runner 的 clean/build/guest 阶段契约已生效；
+- `test_plain_ucore_action_runner.py` 要求构建日志中的 `build/riscv64/ch6b_panic` 不失败，并要求规范 Guest `[PANIC ...]` 行失败；
+- 16-case Agent 套件按其既有入口运行；
+- `workflow_teardown_race_ucore` 作为独立专项连续三轮通过，不计为第 17 个 Agent case；
+- proc-reap、syscall-fairness、file-resource、thread-resource 与 fs-enospc 等聚合步骤均完成。
+
+teardown race 的 profile 每轮核对 syscall 546 ABI/self-only stale、factory close、根自然退出、PUBLIC lineage、Context/metadata waiter、阻塞 fdget 跨容量、I/O debt/cache、inode/file/account 回收、同 id 更高 generation 重用和 `parent passed`。它证明这些机制可以在同一竞争窗口中结算，但仍不等同穷尽所有 close/spawn 发布瞬间或 SMP 交错。
+
+checkpoint 后又按阶段提交 metadata query、scan 和 directory 拆分，最终目录边界提交为 `14a9450`。当前 metadata owner 为 transaction、file state、catalog、query、scan、directory、objects 和 store；`ci/kernel-budgets.json` 用逐模块门和 `metadata_control_plane` 聚合 source/text/BSS 双重约束迁移。最终拆分已完成 `agentfs_ucore`、`agentscan_ucore`、`agentvfs_ucore` 及 teardown race 三轮定向复测，但尚未开始最终 HEAD 的 clean `full-verify` 与最终证据包重建。
+
+远程流水线没有可用的普通/QEMU Runner 成功记录。本文因此只把 `75d0dfd` 记为本地 clean checkpoint，不把它写成后续 `14a9450` HEAD 或远程 CI 的最终通过。
+
+## 2026-07-25 历史重构验收
 
 本轮针对 generation-safe workflow lifecycle、PUBLIC 降权后代撤销、统一 resource controller、phase-aware teardown、21 页 Agent 状态原子计费、Context commit lane、lazy physical stack 和 Agent 模块拆分后的同一源码，在上述固定 runner 上连续执行三次完整 16-case Agent 套件。三轮均为 16/16，通过时间只累计各 QEMU case 的 monotonic duration，不包含编译：
 
@@ -44,7 +66,7 @@ agentscope_ucore: parent passed
 | `run-thread-resource-tests.sh` | 线程账户、保留量、退款与跨域公平通过；随后在同一镜像上额外连续执行 50 轮压力复测 |
 | `run-fs-enospc-tests.sh` | AgentOS/baseline 的 generic、domain、reserve、persistent、orphan、reclaim 和 verify 路径全部通过 |
 
-本轮没有运行 `make full-verify`。上述 3 次 Agent 套件和各机制专项只能按各自入口记为通过，不能写成聚合入口全绿。预算 checker 当前包含 31 项、通用 runner 包含 24 项、生产 profile validator 包含 5 项 fail-closed 自测。runner 会二进制全量 drain，并大小写不敏感识别包括 panic 在内的预定义 failure 模式；每轮最多读取一个 64 KiB 块后重查 deadline，持续输出不能绕过 timeout/grace。每 case 总输出/未终止记录/诊断行分别有 16 MiB/64 KiB/4 KiB 上限；输出或记录超限 fail closed，诊断副本有界截断。case deadline 在 checkpoint 之前判定，并在 feed/notice 后重查；普通 case 必须自然 `rc=0`。pipe EOF 早于退出状态时仍在原 deadline/grace 内等待，既不发送信号也不延长宽限期，stop 阶段继续等待 status+EOF 双发布。marker grace 只负责终止已失败/挂起的 case，随后的 `SIGTERM` 或升级 `SIGKILL` 都不转为成功；仅两个持久化 checkpoint 阶段显式选择 checkpoint mode 后，可在预期 marker 后接受单次 runner `SIGTERM`，`SIGKILL` 仍失败。duration checker 拒绝 `--agent-test-seconds` / `--agent-test-start-ns`，只接受完整有序的 16-case timing file。该 checkpoint 合约验证重挂载，不宣称硬掉电注入；超时、非零退出和 marker 后 panic 同样失败。当前已确认的结构指标如下；源码、镜像、运行段和栈的最终实测值由主验收 `make ci-check` 日志与版本化 JSON 冻结，不在本表复制尚可能变化的工作树快照：
+2026-07-25 该轮没有运行 `make full-verify`。上述 3 次 Agent 套件和各机制专项在当时只能按各自入口记为通过，不能写成当日聚合入口全绿；2026-07-26 的 checkpoint 结果已另列在上一节，不能反向改写这条历史。预算 checker、通用 runner 和生产 profile validator 的 fail-closed 自测集合以对应提交源码为准。runner 会二进制全量 drain，并大小写不敏感识别包括 panic 在内的预定义 failure 模式；输出洪泛、迟到 marker、普通 case 信号退出、`SIGKILL`、非零退出和 marker 后 panic 都不能成功。duration checker只接受完整有序的 16-case timing file。持久化 checkpoint 合约验证重挂载，不宣称硬掉电注入。该轮已确认的结构指标如下；源码、镜像、运行段和栈的最终实测值由同一提交的 `make ci-check` 日志与版本化 JSON 冻结，不在本表复制尚可能变化的工作树快照：
 
 | 静态指标 | 当前确认值 | 说明 |
 | --- | ---: | --- |
@@ -77,7 +99,7 @@ make build TOOLPREFIX=riscv64-linux-gnu- LOG=warn INIT_PROC=agentfinal_ucore
 bash scripts/run-agent-tests.sh
 ```
 
-当前重构验收见上节。以下时间保留为历史演进证据：2026-07-22 的脚本依次运行 15 个 Agent 程序并全部通过，随后增加 `iobudget_ucore`；2026-07-24 的 pipe 安全主体委派和观测查询修复轮分别以 `359.4s`、`338.4s` 完成 16/16；Workflow 强制撤销实现快照随后以约 `371.5s` 完成 16/16，其中 `agentscope_ucore` 约 `127.9s`，审查修正后的单项约 `126.1s`。这些旧结果不替代上面的 2026-07-25 当前源码三轮校准，也都不表示未运行的 `make full-verify` 已全绿。
+当前状态见 2026-07-26 一节。以下时间保留为历史演进证据：2026-07-22 的脚本依次运行 15 个 Agent 程序并全部通过，随后增加 `iobudget_ucore`；2026-07-24 的 pipe 安全主体委派和观测查询修复轮分别以 `359.4s`、`338.4s` 完成 16/16；Workflow 强制撤销实现快照随后以约 `371.5s` 完成 16/16，其中 `agentscope_ucore` 约 `127.9s`，审查修正后的单项约 `126.1s`。这些旧结果不替代 2026-07-25 的三轮校准，也不替代 2026-07-26 的 checkpoint 或最终拆分 HEAD 验收。
 
 ## 输出提取方式
 
@@ -589,7 +611,7 @@ Test trace OK!
 
 ## 当前聚合验证状态
 
-当前不据独立专项结果宣称 `make full-verify` 全绿。2026-07-25 的三轮 16-case Agent 套件、proc-reap、syscall-fairness、file-resource、thread-resource 和 fs-enospc 均已分别通过；`run-full-verification.sh` 也已串联这些入口和 `ci-check`，但本轮没有实际执行该聚合命令。
+聚合状态按提交区分：2026-07-25 只有分项证据；2026-07-26 的 `75d0dfd` 已在 clean 环境实际完成 `make full-verify` 并输出 all checks passed。此后 metadata query/scan/directory 拆分冻结到 `14a9450`，已完成具名定向 QEMU 和 teardown race 三轮，但最终 HEAD 的 clean `full-verify` 尚未开始。远程普通/QEMU Runner 没有成功记录，不能据本地 checkpoint 宣称远程 CI 或最终发布全绿。
 
 ## 2026-07-21 workflow scope 安全回归
 

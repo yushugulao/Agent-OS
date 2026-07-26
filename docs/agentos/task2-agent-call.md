@@ -21,10 +21,14 @@
 | `agent_identity.c` | role、capability 和对象授权 |
 | `agent_ipc.c` | route、event、watch、wait/cancel、heartbeat |
 | `agent_lifecycle.c` | control id 与 controller departure |
-| `agent_metadata.c` / `agent_metadata_objects.c` / `agent_metadata_store.c` | 事务门、对象状态和 COW 持久化 |
+| `agent_metadata.c` | FIFO transaction/projection gate、工作预算和 runtime snapshot |
+| `agent_file_state.c` | incarnation-bound 文件版本、租约、digest cache 和 size/generation sidecar |
+| `agent_metadata_catalog.c` / `agent_metadata_query.c` | live catalog、scope/index、bounded snapshot exchange、查询 cache/filter/execute |
+| `agent_metadata_scan.c` / `agent_metadata_directory.c` | 有界根扫描状态，以及 VFS create/write/truncate/delete 的无状态目录协调 |
+| `agent_metadata_objects.c` / `agent_metadata_store.c` | dependency/action/prefetch 对象语义和 COW 双 bank 持久化 |
 | `agent_observe.c` | audit、span、timeline、ledger 与 provenance |
 
-模块间只通过 `agent_internal.h` 和 metadata 私有接口传递操作，不导出可由其他模块直接修改的全局数据。`make ci-check` 对 facade 行数、十二个 Agent/资源/生命周期模块的代码预算、符号所有权和依赖方向执行静态门禁；阈值以 `ci/kernel-budgets.json` 为准。
+模块间只通过 `agent_internal.h` 和 metadata 私有接口传递操作，不导出可由其他模块直接修改的全局数据。`make ci-check` 对 `ci/kernel-budgets.json` 中版本化登记的 owner、bridge、符号所有权和依赖方向执行静态门禁。metadata 拆分单元、IPC 及 contract headers 还共同进入 `metadata_control_plane` 聚合 source/text/BSS 预算；source 仅允许固定接口开销，loaded text 与 BSS 保持 no-growth，避免通过新建文件迁移旧单体实现。
 
 ## 协议
 

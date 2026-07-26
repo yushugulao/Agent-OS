@@ -9,10 +9,10 @@ AgentOS-uCore 的验证分五层：
 | 层次 | 入口 | 作用 |
 | --- | --- | --- |
 | 构建检查 | `make agentos-user`、`make agentos-build`、`make kernel-stack-check` | 确认内核、用户态 ABI 和文件系统镜像能从当前源码构建。 |
-| 增长与边界门 | `make ci-check` | 固定 profile 下检查源码、镜像、运行段、PCB、栈深/容量、完整 Agent 状态、十二个 Agent 模块预算、符号所有权和依赖方向；不启动 QEMU。 |
+| 增长与边界门 | `make ci-check` | 固定 profile 下检查源码、镜像、运行段、PCB、栈深/容量、完整 Agent 状态、版本化 owner/bridge 集合及 metadata 聚合 source/text/BSS；不启动 QEMU。 |
 | AgentOS 专项测试 | `make agentos-test` 或 `bash scripts/run-agent-tests.sh` | 在 QEMU 中逐项运行 Agent 功能、权限和用户输入检查。 |
-| 资源安全复测 | `make fs-enospc-test`、`make proc-reap-test`、`make thread-resource-test`、`make file-resource-test`、`make syscall-fairness-test` | 验证文件系统耗尽、持久 PUBLIC 配额、统一资源账户/teardown、调度公平和 syscall 工作预算。 |
-| 双目标与聚合验证 | `make dual-platform-run`、`make full-verify` | 运行双目标负载；`full-verify` 先执行 `ci-check`，再串联 Agent、进程、syscall、file、thread 和 ENOSPC 机制专项。 |
+| 资源安全复测 | `make fs-enospc-test`、`make proc-reap-test`、`make thread-resource-test`、`make file-resource-test`、`make syscall-fairness-test`、`make workflow-teardown-race-test` | 验证文件系统耗尽、持久 PUBLIC 配额、统一资源账户/teardown、调度公平、syscall 工作预算和跨资源退出竞态。 |
+| 双目标与聚合验证 | `make dual-platform-run`、`make full-verify` | 运行双目标负载；`full-verify` 先执行 `ci-check`，再串联 Host/Reader、Agent、进程、syscall、file、thread、workflow teardown race 和 ENOSPC 专项。 |
 
 `agentos-test` 和 `thread-resource-test` 只关注根目录 AgentOS-uCore 目标；`fs-enospc-test`、`proc-reap-test`、`file-resource-test` 和 `syscall-fairness-test` 同时覆盖根目录增强目标与 `baseline_ucore/` 普通目标。双目标验证详情见 [../verification.md](../verification.md)。
 
@@ -46,11 +46,13 @@ make agentos-build TOOLPREFIX=riscv64-linux-gnu-
 make ci-check
 ```
 
-`make ci-check` 使用 `ci/kernel-budgets.json` 的 canonical toolchain/profile。静态指标包括内核 LOC、stripped ELF/raw、text/data/BSS/total、`struct proc`、Context detail sidecar 与完整 21 页 Agent 状态的单实例/全局/ordinary/reserved/account 容量、线程调用图栈深、64 KiB boot stack 的链接跨度与启动调用图、32 MiB 虚拟栈容量、8 MiB 受信/保留物理栈池，以及 facade/core/context/identity/ipc/lifecycle/metadata/metadata_objects/metadata_store/observe/resource_controller/workflow_lifecycle 十二个模块。其受控符号 integration graph 还精确登记 `bio/file/fs/loader/main/proc/syscall/trap/vfs_security` 九个 bridge；SCC 上限 3 是 checker 内硬约束。该图不包含只通过普通 uCore 符号形成的依赖，不能解释为完整 uCore 调用图。阈值以 JSON 为准。
+`make ci-check` 使用 `ci/kernel-budgets.json` 的 canonical toolchain/profile。静态指标包括内核 LOC、stripped ELF/raw、text/data/BSS/total、`struct proc`、Context detail sidecar 与完整 21 页 Agent 状态的单实例/全局/ordinary/reserved/account 容量、线程调用图栈深、64 KiB boot stack 的链接跨度与启动调用图、32 MiB 虚拟栈容量和 8 MiB 受信/保留物理栈池。owner 模块、integration bridge、允许依赖和 SCC 边界都由版本化注册集合给出，不在文档复制固定数量。metadata transaction/file-state/catalog/query/scan/directory/objects/store、IPC 及 contract headers 还共同受 `metadata_control_plane` 聚合 source/text/BSS 预算；source 只保留固定接口开销，loaded text 与 BSS 维持 no-growth，防止跨文件迁移。受控 integration graph 不包含只通过普通 uCore 符号形成的依赖，不能解释为完整 uCore 调用图。
 
 完整 16 case 的 duration 只累计各 QEMU case 的 monotonic 运行时间，不包含编译。当前 `calibrated_full_suite` 配置来自固定 runner 上 `bounded-runner-final-01/02/03` 三轮 16/16，时间为 `261.343281873s`、`237.948978492s`、`255.370930671s`，中位基线为 `255.370930671s`，上限为 `268.14s`；相对中位数约 5% headroom，足以覆盖最大样本，并比旧门更紧。GitLab job 同时用 `resource_group` 串行并绑定 `agentos-qemu-calibrated` tag；更换硬件、虚拟化层或 QEMU 后必须先恢复 provisional 状态并重新采样。
 
-宿主 runner 以字节流读取并在进程退出前后全量 drain，不依赖文本行边界；包括 panic 在内的预定义 failure 模式按大小写不敏感方式检查，marker 后的剩余输出也不会跳过。监控循环每轮最多读取一个 64 KiB 块，随后重新检查 case timeout 和 marker grace，持续 stdout 洪泛不能饿死 deadline。每 case 最多接受 16 MiB 总输出，未终止记录最多保留 64 KiB，诊断行最多保留 4 KiB；总量/记录越界 fail closed，诊断副本截断。case deadline 优先于 checkpoint 成功，并在 scanner feed 和 runner notice 后重新核对，迟到 marker 不能通过。普通 case 必须自然 `rc=0`；stdout/stderr pipe 先到 EOF 时仍在原 case deadline 和 marker grace 内等待真实退出状态，不能因 EOF 触发信号，也不能借 EOF 延长宽限期。stop 阶段同样等待退出状态与 EOF 两者发布。marker grace 只用于终止已经失败或挂起的 case，其 `SIGTERM` 结果或升级 `SIGKILL` 都仍失败。仅两个持久化 checkpoint 阶段显式选择 checkpoint mode 后，可在预期 marker 后接受单次 runner `SIGTERM`；这验证 checkpoint 前状态的重挂载恢复，不等同硬掉电注入。`SIGKILL`、超时、非零退出和后置 panic 都失败。预期 guest fault 也必须先由显式 marker 逐次 arm，再精确消费一条 `bad addr`；未 arm 或 arm 后未发生都会 fail closed。预算 checker 31 项、通用 runner 24 项和生产 profile validator 5 项自测分别覆盖策略放宽、输出/退出边界与 shell 入口 profile 选择。
+通用 QEMU runner 以字节流读取并在进程退出前后全量 drain，不依赖文本行边界；包括 panic 在内的预定义 failure 模式按大小写不敏感方式检查，marker 后的剩余输出也不会跳过。监控循环每轮最多读取一个 64 KiB 块，随后重新检查 case timeout 和 marker grace，持续 stdout 洪泛不能饿死 deadline。每 case 最多接受 16 MiB 总输出，未终止记录最多保留 64 KiB，诊断行最多保留 4 KiB；总量/记录越界 fail closed，诊断副本截断。case deadline 优先于 checkpoint 成功，并在 scanner feed 和 runner notice 后重新核对，迟到 marker 不能通过。普通 case 必须自然 `rc=0`；stdout/stderr pipe 先到 EOF 时仍在原 case deadline 和 marker grace 内等待真实退出状态，不能因 EOF 触发信号，也不能借 EOF 延长宽限期。marker grace 只用于终止已经失败或挂起的 case，其 `SIGTERM` 结果或升级 `SIGKILL` 都仍失败。仅持久化 checkpoint profile 可在预期 marker 后接受约定的单次 runner `SIGTERM`；`SIGKILL`、超时、非零退出和后置 panic 都失败。预算 checker、通用 runner 和生产 profile validator 的 fail-closed 自测集合以当前源码为准，不固化易过时数量。
+
+Reader seeded-action runner 不复用“对所有阶段扫描 panic 子串”的旧逻辑。clean/build/guest 各有独立 phase 和 timeout，前两阶段只依据进程退出码；QEMU guest 启动后才对去除 ANSI 的完整日志行匹配 Guest panic、trap、`check failed` 或 orchestrator failure，并在 summary 中记录 `failure_phase`。单测明确要求构建输出 `build/riscv64/ch6b_panic` 成功，也要求规范 Guest `[PANIC ...]` 行失败。
 
 只需要构建用户态测试程序时：
 
@@ -74,7 +76,7 @@ bash scripts/run-agent-tests.sh
 
 脚本会按顺序启动 QEMU，并运行以下测试程序：
 
-下表记录当前回归契约。generation-safe lifecycle、统一 resource controller/teardown、lazy physical stack、Context sidecar 和模块拆分后的当前工作树已在固定 runner 连续完成三轮 16/16；裸 marker 仍只表示对应脚本断言，不能从程序已编译或标记字符串存在推断通过。
+下表记录 16-case Agent 回归契约。2026-07-25 的 generation-safe lifecycle、统一 resource controller/teardown、lazy physical stack 和 Context sidecar checkpoint 曾在固定 runner 连续完成三轮 16/16；后续 metadata 拆分只完成了具名定向复测，不能借历史套件外推最终 HEAD 的 16/16。裸 marker 仍只表示对应脚本断言，不能从程序已编译或标记字符串存在推断通过。
 
 | 测试程序 | 覆盖重点 | 通过标记 |
 | --- | --- | --- |
@@ -96,6 +98,8 @@ bash scripts/run-agent-tests.sh
 | `usersafety_ucore` | syscall 指针、字符串、`exec` 参数、线程入口、等待队列、管道、文件和信号量输入范围。 | `usersafety_ucore: parent passed` |
 
 原始输出不在本文档重复展开，统一保存在 [test-record.md](test-record.md)。每个测试的流程和断言解释见 [testing-details.md](testing-details.md)。
+
+`workflow_teardown_race_ucore` 不在上述 16-case Agent 套件中。独立入口 `make workflow-teardown-race-test` 默认连续运行三轮，并按顺序核对 syscall 546 ABI/self-only stale、factory close、根自然退出、PUBLIC lineage、Context/metadata waiter、阻塞 `fdget` 容量跨越、I/O debt/cache、inode/file/account 回收、同 id 更高 generation 重用和 `parent passed`。checkpoint `75d0dfd` 的 clean `full-verify` 已执行这三轮；目录拆分提交 `14a9450` 后又完成三轮定向复测。
 
 scope 回归核对：PUBLIC=0、SYSTEM=1、动态 workflow>=3，数值 2 是安装级 PUBLIC 存储 principal。权威 lifecycle ledger 固定 8 槽，key 为 `(id,generation)`，ACTIVE+CLOSING 最多 4 个；槽彻底退休后才以更高 generation 复用。`vfs_scope_refs[NPROC]` 只是 VFS 引用/清理记录。进程、线程、file object、block/inode、cache 和 Agent 状态页统一映射到 generation-safe EXEC/STORAGE account；每个 Agent 的 9 sidecar + 6 mirror + 6 shadow 以一次 21 页 `RESOURCE_AGENT_STATE_PAGE` 请求原子计费。`resource_domain_id` 只做 CPU 调度分区。其余 metadata/audit 与存储容量契约仍按对应 policy 文件核对。
 
@@ -148,7 +152,7 @@ make kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-`make full-verify` 当前先执行 `make ci-check`，随后串联 `run-agent-tests.sh`、`run-proc-reap-tests.sh`、`run-syscall-fairness-tests.sh`、`run-file-resource-tests.sh`、`run-thread-resource-tests.sh` 和 `run-fs-enospc-tests.sh`。GitLab 还用独立串行 job 运行五组机制回归。是否通过必须以本次命令日志为准。
+`make full-verify` 当前先执行 `make ci-check`，随后串联 Host/Reader 验证、双目标运行、`run-agent-tests.sh`、`run-proc-reap-tests.sh`、`run-syscall-fairness-tests.sh`、`run-file-resource-tests.sh`、`run-thread-resource-tests.sh`、`run-workflow-teardown-race-tests.sh` 和 `run-fs-enospc-tests.sh`。GitLab 还将机制回归拆成串行 job；具体集合以 `.gitlab-ci.yml` 为准。是否通过必须以本次提交的完整日志为准。
 
 ## 覆盖关系
 
@@ -223,14 +227,16 @@ results/latest/
 
 ## 当前验证状态
 
-本文仍不把当前 `make full-verify` 记录为全绿。当前独立回归不能与未运行的聚合入口状态混为一谈：
+当前状态必须区分已经冻结的 checkpoint 与后续模块拆分 HEAD：
 
 - 13824/16384、371.5s 和 126.1s 均是当前 lifecycle/resource/teardown/lazy-stack/module 重构之前的历史快照；
 - `sizeof(struct proc)` 的当前静态探针为 `28808` B；版本化 JSON 保留 `28776` B 的冻结 baseline 和 `30215` B 的 max，当前 actual 只需低于 max，不能据此向上移动 ratchet。完整 Agent 状态按 21 页/`86016` B 原子计费，全局/ordinary/reserved/ordinary-domain/reserved-domain 六项预算为 `11010048/8257536/2752512/5505024/688128` B，9 页 detail sidecar 仍另以每活跃 Agent 36 KiB、全局 4.5 MiB 观察；
-- 源码、镜像、运行段和栈的最终值不在本文抄录可能漂移的工作树快照，以本次 `make ci-check` 输出和版本化 JSON 为准；checker 当前含 31 项预算、24 项通用 runner 和 5 项生产 profile validator 自测；
+- 源码、镜像、运行段和栈的最终值不在本文抄录可能漂移的工作树快照，以本次 `make ci-check` 输出和版本化 JSON 为准；owner/bridge、自测集合和 metadata 聚合 source/text/BSS 成员同样以版本化注册为准；
 - duration budget 已由 bounded/flood-safe runner 在固定 runner 三轮 16/16 校准为 `255.370930671s` 基线、`268.14s` 上限；
 - 当前 `agentscope_ucore` 已取得 `public_lineage=1`，proc、syscall、file、thread、ENOSPC 专项也已通过；
-- `make full-verify` 尚未在当前工作树完成，不能据旧专项外推聚合全绿；
+- 2026-07-26 的提交 `75d0dfde716453af90d7310c6a1521968fcf7167` 已在 clean 环境完成一次 `make full-verify`，墙钟 `19:45.97`，Reader E2E、16-case Agent 套件、workflow teardown race 三轮及其余聚合步骤通过；这是 checkpoint 证据；
+- 后续 metadata query/scan/directory 拆分已在 `14a9450` 冻结，并完成 `agentfs_ucore`、`agentscan_ucore`、`agentvfs_ucore` 与 teardown race 三轮定向复测；最终 HEAD 的 clean `full-verify` 和最终证据包尚未开始；
+- 远程普通 Runner 与 QEMU Runner 当前没有可用 Runner 的成功记录，不能把本地 checkpoint 或定向测试写成远程 CI 成功；
 
 详细命令、关键输出和覆盖边界见 [test-record.md](test-record.md)。
 
@@ -241,7 +247,7 @@ results/latest/
 | 文件扫描深度 | 自动扫描 uCore 根目录短文件名，文件对象 metadata 支持用户态显式写入和根目录自动发现。 |
 | syscall 与 I/O 公平性覆盖 | CPU 终审轮已动态覆盖控制台、inode 写和截断；CPU checkpoint 与 I/O debt checkpoint 是互补机制。`iobudget_ucore` 还动态覆盖唯一 runnable 内核 pipe waiter 下的 scheduler 中断交付、fault teardown 的 attributed cleanup/debt settlement，以及一个 PUBLIC 和一个 workflow Orchestrator CONTROL owner；它没有断言 shared 排队轮转，也未覆盖 Recovery、SYSTEM/workflow BACKGROUND、多 workflow 同压、retiring 3/8、跨 owner LRU/transient 或主动 device-debt 注入。启动 bank 损坏、VirtIO 设备错误/短 I/O、metadata COW 掉电及 grouped qmap claim 中点掉电仍缺动态证据。 |
 | Agent 调度 | 验证 active resource domain 外层轮转、域内角色权重、受权调度配置、事件优先、deadline、heartbeat、wait cancel、虚拟运行量和 thread bomb 下的 victim 进展。 |
-| Workflow 撤销 | 动态验证根自关、factory 关闭、根自然退出、阻塞低权限成员清理和 9 轮回收；尚未精确注入 close 与 spawn/pending exec 竞态、多线程 controller、纯 CPU 成员或关闭期间主动 I/O debt/inode 压力。 |
+| Workflow 撤销 | `agentscope_ucore` 验证根自关、factory 关闭、阻塞低权限成员和 9 轮回收；独立 teardown race 再组合 factory/自然退出、PUBLIC lineage、Context/metadata waiter、阻塞 fdget、主动 I/O debt/cache、inode/file/account 和 generation 重用。仍未精确注入 close 与 spawn/pending exec 的发布瞬间或多线程 controller。 |
 | LLM Gateway | 内核提供结构化请求、响应事件、Context 和审计记录；云端访问由用户态或宿主机 Relay 完成。 |
 | 页面和图表 | 内核输出 `agentos:event`、timeline、audit 和 provenance，宿主机工具负责转成页面和图表。 |
 | 性能数据 | 当前采用同一 QEMU 环境下的 tick、扫描数、候选数、轮询数、拒绝数和重建步骤等相对指标。 |

@@ -67,7 +67,7 @@ AgentOS target 使用 `rp_agentos_orch` 作为入口。它创建 orchestrator Ag
 
 2. 进程、线程、调度、`fork`、`exec`、`wait` 等进程管理机制。
 
-   plain target 中 `rp_orch` 启动多个普通程序并等待结果，覆盖 `fork()`、`exec()`、`wait()`、`exit()`、`allocthread()`、trapframe 复制、用户栈布置和文件描述符继承等路径。AgentOS target 在同一进程模型上增加 role、capability、Agent Context、批量工具调用和 Agent 调度证据。Agent 进程建立在普通进程体系之上，继承原有生命周期和调度路径。
+   plain target 中 `rp_orch` 启动多个普通程序并等待结果，覆盖 `fork()`、`exec()`、`wait()`、`exit()`、`allocthread()`、trapframe 复制、用户栈布置和文件描述符继承等路径。AgentOS target 在同一进程模型上增加 role、capability、Agent Context、批量工具调用和 Agent 调度证据，并把 workflow 成员挂入不可变 `(lifecycle id,generation)` ledger。正常退出、主线程 fault、workflow revoke 和构造回滚汇入同一 phased teardown；这是根目录增强目标的机制，不能外推为 `baseline_ucore/` 的共享实现。
 
 3. 虚拟内存、地址空间、地址翻译、页表、缺页处理、权限检查。
 
@@ -75,7 +75,7 @@ AgentOS target 使用 `rp_agentos_orch` 作为入口。它创建 orchestrator Ag
 
 4. 文件系统、目录、文件描述符、pipe、设备文件和文件抽象。
 
-   plain target 通过普通文件保存科研平台状态，实际覆盖 inode 分配、目录查找、文件描述符分配、读写、关闭、pipe、console 和 virtio block 设备路径。相关源码包括 `os/fs.c`、`os/file.c`、`os/pipe.c`、`os/console.c`、`os/virtio_disk.c`。AgentOS target 把文件 metadata 绑定到真实 `dev/inum/incarnation`，使用 `.agentmeta` 作为内核私有后端，并在创建、写入、截断、删除和 inode 槽复用时维护 metadata、digest cache 和编辑租约。
+   plain target 通过普通文件保存科研平台状态，实际覆盖 inode 分配、目录查找、文件描述符分配、读写、关闭、pipe、console 和 virtio block 设备路径。相关源码包括 `os/fs.c`、`os/file.c`、`os/pipe.c`、`os/console.c`、`os/virtio_disk.c`。AgentOS target 把文件 metadata 绑定到真实 `dev/inum/incarnation`，使用私有 `.agentmeta/.agentmeta1` COW 双 bank，并把事务门、incarnation-bound 文件状态、catalog、query、scan、目录协调、对象操作和持久 store 分给独立 owner；真实创建、写入、截断、删除和 inode 槽复用继续更新 metadata、digest cache 和编辑租约。
 
 5. Linux syscall 功能、ABI 兼容、参数传递、返回值、错误码和极端输入。
 
@@ -83,7 +83,7 @@ AgentOS target 使用 `rp_agentos_orch` 作为入口。它创建 orchestrator Ag
 
 6. 并发同步、资源管理、死锁处理、竞态处理、内核态与用户态隔离。
 
-   `os/sync.c`、`os/sync.h` 提供 mutex、semaphore、condvar 等同步接口。进程、线程、文件、inode、pipe 和 buffer cache 都有明确的生命周期和引用管理。plain target 故意把 Agent 状态放在普通文件中，以呈现用户态约定的局限；AgentOS target 则把 role/capability、Context、事件队列、wait/wake、heartbeat、metadata、edit lease、timeline、ledger 放入内核状态，并由内核检查真实权限和对象状态。
+   `os/sync.c`、`os/sync.h` 提供 mutex、semaphore、condvar 等同步接口。进程、线程、文件、inode、pipe 和 buffer cache 都有明确的生命周期和引用管理。AgentOS target 还以 generation-safe EXEC/STORAGE account 统一核算进程、线程、文件、存储和 I/O，并让退出、撤销与结算沿单一 teardown 顺序推进。plain target 故意把 Agent 状态放在普通文件中，以呈现用户态约定的局限；AgentOS target 则把 role/capability、Context、事件队列、wait/wake、heartbeat、metadata、edit lease、timeline、ledger 放入内核状态，并由内核检查真实权限和对象状态。
 
 7. QEMU 与 RISC-V 平台适配和行为一致性。
 
@@ -100,6 +100,8 @@ Host 侧负责浏览器页面、动作提交、可选云端 LLM Relay 和文件�
 - 平台程序写入 `rp_input`、`rp_runner`、`rp_report_text`、`rp_artifact`、`rp_stage_state`、`rp_package`、`rp_agentcmp` 等状态文件。
 - `host_tools/plain_ucore_fs_extract.py` 从 `nfs/fs-copy.img` 提取 `rp_*` 文件；带 workflow scope 的镜像默认稳定写入 `scope-N/`，调用方必须用 `--scope-id` 显式选择，或用 `--require-single-scope` 在且仅在一个 scope 时输出顶层文件。action runner 使用后一模式，发现多 scope 时拒绝混合状态。提取器只接受单路径分量形式的 `rp_[A-Za-z0-9_]+`，写入前再次验证规范化目标位于输出目录内，并清理上次运行遗留的受管文件和 scope 目录，避免 guest 文件名穿越宿主路径或让旧 scope 状态混入新结果。
 - `host_tools/plain_ucore_reader.py` 渲染 HTML 页面和 API JSON。
+
+Host seeded-action 执行按 clean、build、guest 三阶段记录。clean/build 阶段只以进程退出码判定，构建日志中的目标名或源文件名不参与 Guest 故障识别；QEMU guest 启动后才对规范化的完整日志行匹配 panic、trap、check-failed 和 orchestrator failure。回归测试明确要求 `build/riscv64/ch6b_panic` 通过，同时要求规范的 Guest `[PANIC ...]` 行失败。
 
 这种分工让 plain target 不需要 AgentOS 专属内核服务，也能承载较复杂的平台表面；同时让 AgentOS target 可以复用同一状态文件协议进行对照。两侧共享的基础安全加固和只存在于增强目标的 AgentOS 安全机制见 [agentos/security-hardening.md](agentos/security-hardening.md)。
 

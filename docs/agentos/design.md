@@ -89,7 +89,7 @@ flowchart LR
 
 | 策略 | 说明 |
 | --- | --- |
-| Agent 子系统模块化 | `os/agent.c` 仅保留 ABI facade；`agent_core`、`agent_context`、`agent_identity`、`agent_ipc`、`agent_lifecycle`、`agent_metadata*` 与 `agent_observe` 分别持有运行时、Context、授权、通信、生命周期、持久对象和观测状态 |
+| Agent 子系统模块化 | `os/agent.c` 仅保留 ABI facade；运行时、Context、授权、通信、生命周期、观测和资源控制由版本化 owner 集合持有；metadata 再拆为 transaction、file state、catalog、query、scan、directory、objects 与 store，避免对象表继续形成单体文件 |
 | 高性能 ABI | 最终热路径使用 `agent_op` / `agent_result` 和 `agent_run()`，一次 syscall 最多执行 64 个 op |
 | shadow 权威 Context | Agent Context 扩为 6 页，内核保存 shadow 权威页和用户镜像页，写入时先更新 shadow 再同步镜像 |
 | 用户态可读 Context | latest result 和历史路径同步到用户镜像，Agent 可直接读取，避免每次都系统调用查询；可信历史通过 shadow 和 snapshot 保证；Context 尾部保留用户自管 cache |
@@ -109,7 +109,7 @@ flowchart LR
 | 存储配额与保留量 | mkfs 与内核共享容量策略；按完成镜像空闲量计算后把 version/slots/PUBLIC principal/G/S/checksum 持久化到 superblock，挂载从 qmap/dinode 重建 PUBLIC 用量，workflow owner 只恢复 scope ID 下界，SYSTEM credit 由空闲量与 G/S 推导；每 scope 硬下限 320 inode/512 block，SYSTEM 硬下限 8 inode/512 block；当前平台镜像每 scope 为 342/1195，SYSTEM 为 64/512 |
 | 块 I/O 与 buffer cache 分域 | syscall 入口捕获稳定 owner/class，按完成的 1 KiB VirtIO 传输同时消费 owner 与设备根账本的 lease/token/debt；560/280 根 bucket 限制普通流量，SYSTEM/CONTROL 在根信用耗尽时仍可带债使用自己的保留预算；syscall 544 使用 `version + struct_size + user_size` 的可扩展前缀 ABI；cache 为 SYSTEM、PUBLIC 和各 active workflow 维护 floor/cap，退役清理仅在轮到时取得 3/8 临时分区 |
 | 可恢复资源耗尽 | inode、inode cache、数据块、文件表和线程分配失败返回错误并回滚；计费走 generation-safe resource account，`resource_domain_id` 仅用于 CPU 调度分区；每线程 16 KiB 虚拟栈按需取得物理页，保留 guard、canary 和调用图预算 |
-| 增长预算 | `make ci-check` 在固定 profile 下检查源码、镜像、运行段、PCB、9 页 sidecar、完整 21 页 Agent 状态、栈虚拟/物理容量及 12 个注册模块；facade 不持有可写状态，受控符号图精确登记 9 个 bridge，SCC 硬限 3；阈值以 `ci/kernel-budgets.json` 为事实源 |
+| 增长预算 | `make ci-check` 在固定 profile 下检查源码、镜像、运行段、PCB、9 页 sidecar、完整 21 页 Agent 状态、栈虚拟/物理容量及 `ci/kernel-budgets.json` 登记的 owner/bridge 集合；metadata control plane 另受聚合 source/text/BSS 预算，防止靠跨文件迁移绕过单模块门；facade 不持有可写状态，受控符号图的 SCC 硬限由 checker 强制 |
 | 通用动作和工件更新 | `action_commit` 与 `artifact_update` 作为核心对象状态更新工具，`rerun_stage` 和 `write_report` 只作为旧示例兼容别名；记录、事件 action 和重复请求判断都归入通用类别 |
 | LLM Relay 支持 | 内核提供 `llm_request`、`llm_response`、`LLM_RELAY` capability 和 `AGENT_EVENT_LLM_DONE`；prompt/response 摘要进入 Context、timeline 和审计记录；云端 API、secret、HTTP/TLS 留在用户态 |
 | 结构化事件 | `labdemo_ucore` 输出 `agentos:event type=... key=value`，为页面工具和 LLM Relay 保留解析契约 |
@@ -165,13 +165,18 @@ flowchart TB
 | syscall 编号 | `user/lib/syscall_ids.h`、`os/syscall_ids.h` | 注册 500 起的 Agent syscall 编号 |
 | syscall 分发 | `os/syscall.c` | 根据 syscall id 调用 Agent 内核函数 |
 | Agent ABI 与常量 | `os/agent.h` | 定义结构体、工具 ID、状态码、Context 布局 |
+| Workflow lifecycle ABI | `agent_lifecycle_abi.h`、`user/lib/syscall.c`、`os/agent_lifecycle.c` | syscall 546 的版本化 sized-prefix 结构、self-only 快照与 expected-key 比较 |
 | 稳定 facade 与公共 ABI | `os/agent.c`、`os/agent.h` | 保留历史入口和公共结构；不持有其他模块可写状态 |
 | Agent 运行时与协调 | `os/agent_core.c`、`os/agent_internal.h` | 工具执行、公共流程编排和 owner 模块之间的窄接口 |
 | Context owner | `os/agent_context.c`、`os/agent_context.h` | Context 映射、shadow/mirror、按需私有 sidecar、记录追加和 `sys_context_*` |
 | 身份授权 owner | `os/agent_identity.c` | role、capability 和对象授权判断 |
 | IPC owner | `os/agent_ipc.c` | stable route、事件/watch/wait/cancel/heartbeat 与 IPC 调度状态 |
-| 生命周期 owner | `os/agent_lifecycle.c` | control id、controller departure 与 Agent 侧 lifecycle 协调 |
-| Metadata owner | `os/agent_metadata.c`、`os/agent_metadata_objects.c`、`os/agent_metadata_store.c`、`os/agent_metadata_internal.h` | 事务门、对象目录/索引/动作/依赖/租约及 COW 双 bank 存储 |
+| 生命周期 owner | `os/agent_lifecycle.c` | control id、controller departure、self-only lifecycle 观测与 Agent 侧 lifecycle 协调 |
+| Metadata transaction owner | `os/agent_metadata.c`、`os/agent_metadata_internal.h` | FIFO transaction gate、projection 发布边界、工作预算与进程 runtime snapshot |
+| 文件生命期状态 owner | `os/agent_file_state.c`、`os/agent_file_state_internal.h` | incarnation-bound 内容/编辑版本、租约、digest cache、size 与 scope generation |
+| Metadata catalog/query owner | `os/agent_metadata_catalog.c/.h`、`os/agent_metadata_query.c/.h` | live catalog、scope/索引、bounded snapshot apply/export、query filter/cache/execute |
+| Metadata scan/directory owner | `os/agent_metadata_scan.c/.h`、`os/agent_metadata_directory.c/.h` | 根目录扫描状态和有界 step；VFS create/write/truncate/delete 到 catalog/scan 的无状态协调 |
+| Metadata objects/store owner | `os/agent_metadata_objects.c`、`os/agent_metadata_store.c` | 依赖、action、prefetch、对象工具与 COW 双 bank、dirty/durable generation、submit lane |
 | 观测 owner | `os/agent_observe.c` | audit、span、timeline、ledger 和 provenance |
 | PCB、teardown 与按需栈 | `os/proc.h`、`os/proc.c` | 保存热路径句柄，处理进程/线程 admission、统一 teardown 和 scheduler 侧内核栈回收 |
 | 通用资源账户 | `os/resource_controller.c`、`os/resource_controller.h` | EXEC/STORAGE account、ordinary/reserved 配额、向量 reservation、usage reconcile 与 rate lease |
@@ -191,11 +196,12 @@ flowchart TB
 | 综合示例 | `user/src/labdemo_ucore.c` | 同 workflow 三 Agent 故障诊断、scope audit、可信 span、timeline 和 provenance |
 | 权限限制测试 | `user/src/agentsecurity_ucore.c` | 普通/低权限调用拒绝、可信 cause/span、audit authority 分区、role 与 route 边界 |
 | workflow scope 测试 | `user/src/agentscope_ucore.c` | 新 scope factory、同名对象隔离、同 scope 协作、并发 metadata 提交、微小写入合并与跨 scope 查询进展、跨 scope IPC/租约/audit 拒绝、观测查询线性上界与跨 scope 进展、配额保证、一次性 pipe fd 委派，以及关闭权拒绝、根退出/factory 关闭、阻塞成员清理、9 轮强制撤销和 replacement admission |
+| Workflow teardown 组合测试 | `user/src/workflow_teardown_race_ucore.c`、`scripts/run-workflow-teardown-race-tests.sh` | syscall 546 ABI、factory close/自然退出、PUBLIC 谱系、Context/metadata waiter、阻塞 file 引用、I/O debt/cache、inode/account 回收和 lifecycle generation 重用；默认三轮，独立于 16-case Agent 套件 |
 | 块 I/O 分域测试 | `user/src/iobudget_ucore.c` | PUBLIC 冷缓存/速率压力、owner/device lease 上界、线程退出 lease 回收、唯一 runnable 内核 pipe waiter 下的 scheduler 中断交付、fault 退出的清理 I/O 归因/debt 结算，以及 workflow cache floor、CONTROL 预算和压力下有界进展；最终修复后独立轮输出八项机制标记和 `parent passed`，`elapsed=2.4s` |
 | 可信执行测试 | `user/src/agenttrust_ucore.c` | RX/RW+NX 布局、映像不可变、bootstrap 授权范围和角色映像绑定 |
 | VFS 安全域测试 | `user/src/agentvfs_ucore.c` | public/workflow 隔离、worker 能力衰减、跨 scope inode fd 撤销、worker pipe 单跳委派和受保护路径 |
 | 系统稳健性测试 | `user/src/usersafety_ucore.c`、`user/src/fsenospc_ucore.c`、`user/src/fsquota_ucore.c`、`user/src/fspquota_ucore.c`、`user/src/procreap_ucore.c` | 用户地址、对象私有等待、真实 ENOSPC、持久 PUBLIC principal、存储配额与系统保留量、退出回收和进程域配额 |
-| 构建与 QEMU runner | `scripts/run-agent-tests.sh`、`scripts/agent_test_runner.py` | 顺序运行最终验证程序；二进制全量 drain，大小写不敏感识别包括 panic 在内的预定义 failure 模式；普通 case 必须自然 `rc=0`，marker grace、信号终止、超时和后置错误均 fail closed |
+| 构建与 QEMU runner | `scripts/run-agent-tests.sh`、`scripts/agent_test_runner.py`、`host_tools/plain_ucore_action_runner.py` | Agent case runner 二进制全量 drain 并 fail closed；Reader action runner 把 clean/build/guest 分阶段，构建只看退出码，Guest 启动后才按完整日志行识别 panic/fault |
 | 线程资源脚本 | `scripts/run-thread-resource-tests.sh` | 以 19/12/6/6/4 tiny policy 构建并检查线程域 12 项机制标记 |
 
 ## 6. 运行视图
@@ -229,6 +235,8 @@ pipe 按持有型 capability 管理。每次创建 workflow、Agent、worker，�
 显式关闭、根 controller 正常退出、异常退出和凭据清除都汇合到同一个幂等入口。关闭先把 ACTIVE 原子标记为 CLOSING；从这一刻起 `vfs_scope_active()` 为假，Agent/VFS 操作、新 spawn、pending exec 发布和存储预留均失败。随后内核按不可变 `(workflow_lifecycle_id, generation)` 扫描成员，而不是按当前 Agent/VFS 凭据扫描；因此已经降权为 PUBLIC 的子孙仍收到同一次撤销。成员进入统一进程 teardown，只在自己的执行上下文中释放 FD、inode、VM、Context sidecar 和 I/O 账目。exec 的 prepare/commit/abort 协议把凭据提交和地址空间发布放在同一个关中断边界，关闭不能与半发布身份交错。
 
 最后一个成员退出后，scope 才进入 RETIRING 并撤销 active cache floor；自然耗尽的 scope 可从 ACTIVE 直接进入 RETIRING。权威 lifecycle ledger 固定为 8 槽；槽只有在成员与退休清理全部完成后才能以更高 generation 复用，旧 key 因而不会覆盖新 workflow。`vfs_scope_refs[NPROC]` 仅保存 VFS 引用/清理记录，不是 lifecycle 身份分配器。reaper 逐 scope 回收 metadata、dependency、action、lease/version、cache、audit、prefetch、IPC 和普通文件；清理执行时仅保留该 owner 的 `BACKGROUND` 预算与临时 cache 3/8。boot scope 的持久工件保留为 inactive storage owner，不被新 scope 接管。
+
+syscall 546 `agent_workflow_lifecycle_info()` 为竞争测试和诊断提供版本化 self-only 快照。它可返回调用进程当前不可变 key、Context commit lane 深度/等待者和 metadata transaction owner/等待者，并可把 expected key 与当前 key 做精确比较。ABI 只复制用户声明的已知前缀；返回的 key 不是 bearer credential，不能替代 syscall 545 所需的根 control id/factory authority，也不能查询另一个 PID。
 
 ### 6.2 结构化工具调用
 
@@ -486,6 +494,7 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 | --- | --- | --- | --- |
 | Agent 创建方式 | 使用 `agent_create()` 兼容创建 sentinel，使用 `agent_create_role()` 创建指定角色 Agent | 与 uCore 现有进程模型结合直接，且能把 role/capability 绑定到内核 PCB | 暂未支持用户态自定义配额或任意 capability 组合 |
 | Workflow scope factory 与终止 | syscall 541 仅允许可信 bootstrap factory 创建新 scope；8 槽 ledger 签发 `(id,generation)`，syscall 545 只接受绑定根或可信 factory 的关闭请求 | 把角色委派、资源账户、安全域和终止权分开；降权为 PUBLIC 的后代仍留在原 lifecycle 谱系 | ACTIVE+CLOSING 最多 4 个；槽彻底回收后可以更高 generation 复用，旧 key 永不别名 |
+| Workflow lifecycle 观测 | syscall 546 只返回调用进程自身的版本化 sized-prefix 快照，并可比较 expected `(id,generation)` | 让并发回归在不暴露内部 PCB 或任意 PID 查询的前提下确认 teardown 窗口和 generation 重用 | key 只是身份/比较值，不是 bearer credential，不能替代 control id、capability 或对象 owner |
 | 安全主体 fd | 新 Agent/worker/workflow 和降权普通主体默认不继承 pipe；syscall 542 为调用线程下一次主体创建一次性委派精确端点；file 继承类别默认拒绝 | 不让控制 pipe 变成可跨角色/线程传播的环境权限；对象快照防 fd 关闭复用，所有创建失败也消费调用线程票据 | 当前显式委派只支持 pipe；inode 仅同 scope 继承并逐操作重鉴权 |
 | 可信程序授权 | 使用构建期 `EXEC_POLICY_ENTRIES`、不可变 inode 元数据和 loader 身份/version 校验 | 新程序必须显式声明 role mask、bootstrap 和 VFS profile，不能靠程序名或 PID 获权 | 信任根是构建镜像，不是密码学签名 |
 | W^X 装载 | 配套 ELF 决定 `exec_rw_offset`，代码 RX，数据、bss、栈和 Agent Context RW+NX | 阻止普通写入直接修改可执行代码，并让角色授权绑定到不可变映像 | 当前仍是受控 flat image，不是通用动态 ELF loader |
@@ -511,6 +520,7 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 | 工具查找 | ID 直接定位，legacy name 兼容 | 最终性能路径避免字符串扫描 | 工具 ID 需要保持稳定 |
 | 批量执行 | `agent_run()` 一次最多 64 个 op | 减少 syscall 次数，提高端到端吞吐 | 单个 op 错误通过 result 表达 |
 | 文件查询实现 | scope + `dev + inum + incarnation` 主键、scope-local metadata/index/cache、FIFO transaction gate、128-record 工作预算、字段化维护、显式依赖表与兼容位图按需解析、inode size sidecar、PERSIST/volatile 写回分流、固定窗口后台写回、FIFO COW submit lane、带自适应 cooldown 的协调扫描，以及 `.agentmeta` / `.agentmeta1` 分块 COW 双 bank | 同名、同 fid/run/label 的不同 workflow 对象保持隔离；Recovery action 不再触发全局依赖物化，长 action/query 的线性工作计入域级调度；scheduler 和进程请求均有接纳边界；微小文件变化不会同步放大全 bank I/O；目标 bank 验证后才切换 primary，之后才镜像旧 bank | 当前只扫描 uCore 根目录，不做多级目录递归；后台 checkpoint 使用固定合并窗口和硬 BACKGROUND I/O 预算，四倍耗时自适应只属于 scanner；未动态注入启动 bank 损坏、VirtIO 短写/错误或掉电 |
+| Metadata 拆分与聚合预算 | transaction、file state、catalog、query、scan、directory、objects 和 store 各自持有单一职责；目录桥无可写 BSS；相关模块、IPC 和 contract headers 共同进入 `metadata_control_plane` source/text/BSS 预算 | 依赖方向和状态 owner 可静态审查，同时防止把 monolith 的代码或数组横向搬到新文件后绕过单模块 LOC/BSS 门 | source 允许固定接口开销，loaded text/BSS 维持 no-growth；成员和阈值只以版本化 JSON 为准 |
 | 文件内容摘要 | `read_file_digest` 受 `CONTENT_READ` capability 控制，按 selector 读取真实文件短预览、最多 4096 字节内容和 FNV-1a 指纹；绑定 Agent metadata 的真实文件进入 8 槽内容版本感知 digest cache | 让 Agent 在 metadata 命中后取得轻量内容证据，重复读取同一文件证据时复用结果，并自动进入 Context/timeline | 不是全文搜索，不建立内容倒排索引；未绑定 Agent metadata 的普通文件不缓存 |
 | 文件编辑冲突处理 | 使用 `scope + dev + inum + incarnation` 租约和版本检查，并接入真实 VFS 修改路径 | 防止同 scope 无序覆盖，也拒绝跨 scope 租约号复用 | 不做内容自动合并 |
 | 对象预取提示 | 查询/缓存携带精确 hit slot；scope 配额内依赖选择器经精确核验后只扫描一次文件表，以槽位位图去重并最多发布 8 条；物理 span 表 32 条按 4 scope 各8，并核对 private owner | 单次查询副作用有固定上限，同 scope 因果链可交接提示，跨 scope 不能借公开 span 查询 | 当前只提示 metadata，提示本身不预读文件内容 |
@@ -522,7 +532,7 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 
 ## 10. 质量要求与验证
 
-下表保存当前动态证据及仍保留的历史边界。generation-safe lifecycle、统一 resource controller/teardown、lazy physical stack、Context sidecar 和模块拆分后的代码已在固定 runner 连续三轮完成 16/16，五组机制专项也已通过；静态 deterministic metrics 仍以 `ci/kernel-budgets.json` 为准，且本轮未运行 `make full-verify`。
+下表保存动态证据及仍保留的历史边界。2026-07-25 的 generation-safe lifecycle、统一 resource controller/teardown、lazy physical stack 和 Context sidecar 版本曾在固定 runner 连续三轮完成 16/16。2026-07-26 的 checkpoint 提交 `75d0dfd` 又在干净环境完成一次聚合 `make full-verify`，包含 Reader E2E 和独立三轮 workflow teardown race。后续 query/scan/directory 拆分后的最终 HEAD 尚未重新完成 clean `full-verify`，远程 Runner 也尚无成功证据；静态 deterministic metrics 仍只以 `ci/kernel-budgets.json` 为准。
 
 | 质量要求 | 证据与当前边界 |
 | --- | --- |
@@ -566,6 +576,7 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 | PUBLIC 存储主体不能吃掉 Agent/内核保留量或借进程域退出、重启清零 | `fsquota_ucore` 两组场景覆盖版本回收、运行期上限与分级保留；双目标 `fspquota_ucore` 已对同一镜像完成 crash/seed/verify 三次启动，并依次取得 `crash_orphan_ready=1`、`durable_fixture=1`、`reboot_charge_persisted=1`、`deletion_reuse=1`、`relaunch_charge_persisted=1` 和 `cleanup_reuse=1` |
 | PUBLIC 块 I/O/cache 压力不能消耗 workflow 控制与缓存保留，内核态 yield loop 与 fault teardown 不能阻断 refill/完成或绕过归因 | 当前三轮 16-case 都包含 `iobudget_ucore`；八项具名机制 marker 与 `parent passed` 保持通过。动态范围仍只覆盖一个 PUBLIC 与一个 workflow CONTROL owner，未断言 shared 排队 grant 轮转，也未覆盖多 workflow、SYSTEM/BACKGROUND、retiring 3/8 或设备故障注入 |
 | 阻塞退出、孤儿/僵尸和 fork bomb 受生命周期与资源域约束 | 当前 `make proc-reap-test` 通过，覆盖 `detached-wait`、`unreaped-parent-isolated`、`live-domain-limit` 和 `reserved-agent-slot` |
+| 撤销、自然退出和跨资源结算竞争不会遗留旧 lifecycle 或临时资源 | checkpoint 的 `make workflow-teardown-race-test` 连续三轮通过；覆盖 syscall 546 sized-prefix/self-only 比较、PUBLIC 谱系、Context/metadata waiter、阻塞 file 引用、I/O debt/cache、inode/account 回收和 generation 重用；该专项独立于 16-case Agent 套件 |
 | thread bomb 不能耗尽普通/保留线程池或垄断跨域 CPU | 当前 `make thread-resource-test` 通过，并在同一镜像额外完成 50/50 轮压力复测；覆盖普通/保留域上限与复用、全局水位、退出退款、系统保留进展和 `domain_fairness` |
 | 内核栈有 guard、按需物理映射和构建期预算 | 当前 Agent 与线程/退出专项构建均经过栈检查；具体调用图和容量阈值以 `ci/kernel-budgets.json` 为准，旧 `13824 < 16384` 只作为历史快照 |
 | 内核增长和模块所有权受预算约束 | `make ci-check`；检查项和 deterministic 阈值以 `ci/kernel-budgets.json` 为准，不根据最终文件系统补丁后的轻微变化猜测数值 |
@@ -585,7 +596,7 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 | LLM Relay | 内核提供结构化请求、响应事件、Context 和审计记录 | 云端访问、密钥和 HTTP/TLS 保持在用户态或宿主机侧。 |
 | 页面和图表 | 内核输出结构化事件、状态文件、timeline、audit 和 provenance | 宿主机工具负责渲染页面、生成 SVG 和汇总 CSV。 |
 | Agent Context 状态 | 每个活跃 Agent 原子计费 21 页：9 页 detail/attribution sidecar + 6 页用户 mirror + 6 页可信 shadow | `struct proc` 从历史 62072 字节降至当前静态探针的 28808 字节；CI 保留更严格的 28776 字节冻结 baseline 和 30215 字节 max，而不是随当前值向上移动 ratchet。完整状态 84 KiB/Agent、全局 10.5 MiB，sidecar-only 的 36 KiB/Agent 与 4.5 MiB 仍作为独立细节预算。 |
-| CI 模块与 runner 门 | 12 个注册模块和 9 个受控符号 bridge；受控 integration graph 硬限 SCC=3；预算 checker 31 项、通用 runner 24 项、生产 profile validator 5 项 fail-closed 自测 | integration graph 不是完整 uCore 调用图；runner 全量 drain 并要求普通 case 自然 `rc=0`。每轮最多读一个 64 KiB 块后重查 deadline；case 总输出/未终止记录/诊断行分别有 16 MiB/64 KiB/4 KiB 边界。case deadline 优先 checkpoint，输出洪泛、迟到 marker、普通 marker grace、`SIGKILL`、非零退出或后置 panic 都不能成功。仅两个持久化 checkpoint 阶段可在预期 marker 后接受单次 runner `SIGTERM`，该合约不等同硬掉电。 |
+| CI 模块与 runner 门 | owner、bridge、依赖和 aggregate budget 以版本化注册集合为准；受控 integration graph 的 SCC=3 为 checker 硬约束；metadata 聚合 source/text/BSS 防止跨文件迁移；各 fail-closed 自测集合随源码演进 | integration graph 不是完整 uCore 调用图；通用 runner 全量 drain 并要求普通 case 自然 `rc=0`。Reader action runner 则只在 guest 阶段按完整日志行识别故障，构建阶段仅看退出码。输出洪泛、迟到 marker、普通 marker grace、`SIGKILL`、非零退出或后置 panic 都不能成功。 |
 | CI 时间预算 | 只统计完整 16 个 QEMU case 的 monotonic 运行时，不含编译 | bounded/flood-safe runner 固定三样本为 261.343281873/237.948978492/255.370930671s，中位 255.370930671s，max 268.14s；相对中位数约 5% headroom，足以覆盖最大样本，状态为 `calibrated_full_suite`，job 绑定 `agentos-qemu-calibrated`。 |
 
 ## 12. 术语表
@@ -596,7 +607,7 @@ AgentOS 专属路径在此基础上增加可信映像、role grant、capability 
 | Agent Context | Agent 用户地址空间中的固定镜像区域，用于高速读取响应和上下文路径；权威状态在内核 shadow 页 |
 | Context Path | Agent 多轮工具调用或手动上下文节点组成的历史路径；当前实现为 128 条短文本摘要记录 |
 | Workflow scope | 内核签发的工作流安全域：PUBLIC=0、SYSTEM=1、动态 workflow>=3；数值 2 只用于稳定 PUBLIC 存储 principal；capability 只能在 active scope 和精确 owner 内生效 |
-| Workflow lifecycle key | 内核不可变的 `(id, generation)` 谱系身份；可以回收槽，但旧 generation 永不别名到新 workflow |
+| Workflow lifecycle key | 内核不可变的 `(id, generation)` 谱系身份；可以回收槽，但旧 generation 永不别名到新 workflow；它只用于身份/比较，不是可转移权限 |
 | Resource account | generation-safe EXEC/STORAGE 计费账户；与仅用于 CPU 公平分区的 `resource_domain_id` 分离 |
 | Run Ledger | 内核为当前 workflow 的审计逻辑链维护的摘要，包含稀疏 sequence 窗口、dropped、分类计数和 scope-local 链尾 hash |
 | 工具调用 | Agent 通过结构化请求调用内核提供的能力 |
