@@ -100,10 +100,35 @@ static uint64 agent_file_size_sequence;
 static volatile int agent_file_edit_guard;
 static uint64 agent_file_edit_next_lease;
 
-static uint64
-agent_file_state_ticks(void)
+uint64
+agent_file_state_now(void)
 {
 	return get_cycle() / (CPU_FREQ / TICKS_PER_SEC);
+}
+
+void
+agent_file_state_project_hit(struct agent_file_hit *hit,
+			     const struct agent_file_meta *meta, uint scope_id)
+{
+	struct agent_file_meta snapshot = *meta;
+
+	agent_file_state_overlay_published_size(&snapshot, scope_id);
+	memset(hit, 0, sizeof(*hit));
+	hit->fid = snapshot.fid;
+	safestrcpy(hit->physical_name, snapshot.physical_name,
+		   sizeof(hit->physical_name));
+	safestrcpy(hit->logical_path, snapshot.logical_path,
+		   sizeof(hit->logical_path));
+	safestrcpy(hit->stage, snapshot.stage, sizeof(hit->stage));
+	safestrcpy(hit->kind, snapshot.kind, sizeof(hit->kind));
+	safestrcpy(hit->status, snapshot.status, sizeof(hit->status));
+	safestrcpy(hit->summary, snapshot.summary, sizeof(hit->summary));
+	hit->dependency_mask = snapshot.dependency_mask;
+	hit->dev = snapshot.dev;
+	hit->inum = snapshot.inum;
+	hit->incarnation = snapshot.incarnation;
+	hit->size = snapshot.size;
+	hit->fs_generation = snapshot.fs_generation;
 }
 
 void
@@ -380,7 +405,7 @@ agent_file_state_size_publish(struct inode *ip, int force)
 				__sync_add_and_fetch(&agent_file_size_sequence, 1);
 			entry->published_size_generation =
 				agent_file_state_generation_next(ip->vfs_scope_id);
-			entry->published_size_tick = agent_file_state_ticks();
+			entry->published_size_tick = agent_file_state_now();
 			changed = 1;
 		} else {
 			changed = 0;
@@ -669,7 +694,7 @@ agent_edit_modify_allowed(struct inode *ip, char *action)
 	if (ip == 0)
 		return 0;
 	enabled = agent_edit_lock();
-	now = agent_file_state_ticks();
+	now = agent_file_state_now();
 	agent_edit_cleanup_expired_locked(now);
 	edit = agent_edit_find_locked(ip->vfs_scope_id, ip->dev, ip->inum,
 				      ip->vfs_incarnation);
@@ -713,7 +738,7 @@ agent_edit_note_modify(struct inode *ip)
 	if (ip == 0)
 		return;
 	enabled = agent_edit_lock();
-	agent_edit_cleanup_expired_locked(agent_file_state_ticks());
+	agent_edit_cleanup_expired_locked(agent_file_state_now());
 	edit = agent_edit_find_locked(ip->vfs_scope_id, ip->dev, ip->inum,
 				      ip->vfs_incarnation);
 	if (edit && agent_edit_owner(edit, p))
@@ -938,7 +963,7 @@ sys_agent_file_edit_begin(uint64 pathaddr, uint64 flags, int ttl_ticks,
 	if (rc < 0)
 		return rc;
 
-	now = agent_file_state_ticks();
+	now = agent_file_state_now();
 	ttl = ttl_ticks <= 0 ? AGENT_FILE_EDIT_DEFAULT_TTL : ttl_ticks;
 	if (ttl > AGENT_FILE_EDIT_MAX_TTL)
 		ttl = AGENT_FILE_EDIT_MAX_TTL;
@@ -1033,7 +1058,7 @@ sys_agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
 	if (stateaddr &&
 	    user_range_check(p->pagetable, stateaddr, sizeof(state), PTE_W) < 0)
 		return -1;
-	now = agent_file_state_ticks();
+	now = agent_file_state_now();
 	enabled = agent_edit_lock();
 	agent_edit_cleanup_expired_locked(now);
 	edit = agent_edit_find_lease_locked(agent_identity_proc_scope(p), lease_id);
@@ -1104,7 +1129,7 @@ sys_agent_file_edit_abort(uint64 lease_id)
 	if (!p->is_agent)
 		return -1;
 	enabled = agent_edit_lock();
-	agent_edit_cleanup_expired_locked(agent_file_state_ticks());
+	agent_edit_cleanup_expired_locked(agent_file_state_now());
 	edit = agent_edit_find_lease_locked(agent_identity_proc_scope(p), lease_id);
 	if (edit == 0) {
 		agent_edit_unlock(enabled);
@@ -1149,7 +1174,7 @@ sys_agent_file_edit_state(uint64 pathaddr, uint64 stateaddr)
 	if (rc < 0)
 		return rc;
 	enabled = agent_edit_lock();
-	agent_edit_cleanup_expired_locked(agent_file_state_ticks());
+	agent_edit_cleanup_expired_locked(agent_file_state_now());
 	agent_edit_version_inode_locked(ip, 1, &ok);
 	if (!ok) {
 		agent_edit_unlock(enabled);

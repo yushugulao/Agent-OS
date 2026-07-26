@@ -77,6 +77,7 @@ REQUIRED_AGENT_AGGREGATES = {
             "file_state",
             "metadata_objects",
             "metadata_catalog",
+            "metadata_query",
             "metadata_store",
             "ipc",
         )
@@ -89,6 +90,7 @@ REQUIRED_AGENT_AGGREGATE_HEADERS = {
             "os/agent_file_state_internal.h",
             "os/agent_metadata_internal.h",
             "os/agent_metadata_catalog.h",
+            "os/agent_metadata_query.h",
         )
     )
 }
@@ -680,6 +682,7 @@ def validate_config(config):
         "metadata",
         "metadata_catalog",
         "metadata_objects",
+        "metadata_query",
         "metadata_store",
         "observe",
         "resource_controller",
@@ -702,6 +705,7 @@ def validate_config(config):
         "metadata": "os/agent_metadata.c",
         "metadata_catalog": "os/agent_metadata_catalog.c",
         "metadata_objects": "os/agent_metadata_objects.c",
+        "metadata_query": "os/agent_metadata_query.c",
         "metadata_store": "os/agent_metadata_store.c",
         "observe": "os/agent_observe.c",
         "resource_controller": "os/resource_controller.c",

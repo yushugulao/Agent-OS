@@ -218,7 +218,7 @@ def validate_begin(objects):
         "dependency table": "memset(&agent_dependencies[i],0,sizeof(agent_dependencies[i]))",
         "dependency generation": "agent_dependency_generation++",
         "action history": "agent_action_history_clear_scope(scope_id)",
-        "query cache": "memset(&agent_file_query_cache[i],0,sizeof(agent_file_query_cache[i]))",
+        "query cache": "agent_metadata_query_invalidate_locked(scope_id,0)",
         "observability": "agent_observe_scope_reclaim(scope_id)",
         "file state": "agent_file_state_scope_reclaim(scope_id)",
     }

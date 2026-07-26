@@ -7,6 +7,7 @@
 
 /* Incarnation-bound file versions, edit leases, and digest cache. */
 void agent_file_state_init(void);
+uint64 agent_file_state_now(void);
 void agent_file_state_scope_reclaim(uint);
 uint64 agent_file_state_scope_generation(uint);
 uint64 agent_file_state_generation_next(uint);
@@ -17,6 +18,8 @@ void agent_file_state_snapshot_end(int);
 void agent_file_state_content_bump(struct inode *);
 int agent_file_state_size_publish(struct inode *, int);
 void agent_file_state_overlay_published_size(struct agent_file_meta *, uint);
+void agent_file_state_project_hit(struct agent_file_hit *,
+				  const struct agent_file_meta *, uint);
 void agent_file_state_sizes_persisted(uint, uint64);
 int agent_file_state_digest_cacheable(struct inode *);
 int agent_file_state_digest_cache_lookup(struct inode *,

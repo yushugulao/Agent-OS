@@ -70,6 +70,7 @@ static inline int agent_object_scope_visible(uint requester_scope, uint object_s
 }
 
 void agent_metadata_catalog_init(void);
+int agent_metadata_catalog_field_contains(const char *, const char *);
 uint64 agent_metadata_catalog_generation(void);
 int agent_metadata_catalog_borrow(uint64, int, struct agent_catalog_view *);
 int agent_metadata_catalog_edit_begin(int, uint, struct agent_catalog_edit *);

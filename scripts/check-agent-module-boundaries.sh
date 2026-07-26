@@ -28,6 +28,7 @@ agent_lifecycle
 agent_metadata
 agent_metadata_catalog
 agent_metadata_objects
+agent_metadata_query
 agent_metadata_store
 agent_observe
 resource_controller
@@ -53,7 +54,7 @@ for path in "${ROOT_DIR}"/os/agent*.c; do
 	case "${module}" in
 	agent | agent_core | agent_context | agent_file_state | agent_identity | agent_ipc | \
 		agent_lifecycle | agent_metadata | agent_metadata_objects | \
-		agent_metadata_catalog | agent_metadata_store | agent_observe)
+		agent_metadata_catalog | agent_metadata_query | agent_metadata_store | agent_observe)
 		;;
 	*)
 		fail "unregistered AgentOS implementation: os/${module}.c"
@@ -66,6 +67,7 @@ agent_file_name_policy.h
 agent_file_state_internal.h
 agent_metadata_catalog.h
 agent_metadata_internal.h
+agent_metadata_query.h
 "
 registered_agent_headers="
 agent.h

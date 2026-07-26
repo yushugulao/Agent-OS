@@ -113,6 +113,9 @@ class KernelBudgetTests(unittest.TestCase):
         objects = (root / "os" / "agent_metadata_objects.c").read_text(
             encoding="utf-8"
         )
+        query = (root / "os" / "agent_metadata_query.c").read_text(
+            encoding="utf-8"
+        )
         self.assertNotIn("projection_commit", catalog)
         self.assertNotIn("agent_file_catalog_sync", catalog)
         self.assertIsNone(
@@ -183,12 +186,29 @@ class KernelBudgetTests(unittest.TestCase):
         sync = objects[sync_at:sync_end]
         self.assertEqual(sync.count("agent_metadata_txn_projection_ack()"), 1)
         self.assertLess(
-            sync.index("agent_file_cache_invalidate_scope("),
+            sync.index("agent_metadata_query_invalidate_locked("),
             sync.index("agent_metadata_txn_projection_ack()"),
         )
         self.assertLess(
             sync.index("agent_file_scan_seen[i] = 1"),
             sync.index("agent_metadata_txn_projection_ack()"),
+        )
+
+        invalidate_at = query.index(
+            "agent_metadata_query_invalidate_locked(uint scope_id, int full)"
+        )
+        invalidate_end = query.index("\n}\n", invalidate_at)
+        invalidate = query[invalidate_at:invalidate_end]
+        self.assertLess(
+            invalidate.index("agent_metadata_txn_work_charge(0)"),
+            invalidate.index("if (full)"),
+        )
+        execute_at = query.index("agent_metadata_query_execute_locked(")
+        execute_end = query.index("\n}\n", execute_at)
+        execute = query[execute_at:execute_end]
+        self.assertLess(
+            execute.index("agent_metadata_txn_projection_require_idle()"),
+            execute.index("limit = q->max_hits"),
         )
 
         unlock_at = metadata.index("agent_metadata_txn_unlock(void)")
@@ -861,6 +881,19 @@ agent_metadata_txn_projection_require_idle();
             if entry["name"] == "core"
         )
         self.assertEqual(core["allowed_bridge_dependencies"], ["proc"])
+        query = next(
+            entry for entry in modules["modules"]
+            if entry["name"] == "metadata_query"
+        )
+        self.assertEqual(
+            query["allowed_dependencies"],
+            ["file_state", "metadata", "metadata_catalog"],
+        )
+        objects = next(
+            entry for entry in modules["modules"]
+            if entry["name"] == "metadata_objects"
+        )
+        self.assertIn("metadata_query", objects["allowed_dependencies"])
         duplicate_bridge_path = copy.deepcopy(config)
         duplicate_bridge_path["agent_modules"]["integration_bridges"][1][
             "object_path"

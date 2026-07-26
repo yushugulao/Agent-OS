@@ -41,6 +41,25 @@ static struct agent_catalog_edit *agent_catalog_active_edit;
 static uint64 agent_catalog_generation;
 static uint agent_catalog_dirty_indexes;
 
+int
+agent_metadata_catalog_field_contains(const char *haystack, const char *needle)
+{
+	int hlen, nlen;
+
+	if (needle == 0 || needle[0] == 0)
+		return 1;
+	if (haystack == 0)
+		return 0;
+	hlen = strlen(haystack);
+	nlen = strlen(needle);
+	if (nlen > hlen)
+		return 0;
+	for (int i = 0; i <= hlen - nlen; i++)
+		if (strncmp(haystack + i, needle, nlen) == 0)
+			return 1;
+	return 0;
+}
+
 static void agent_catalog_require_txn(void) {
 	if (!agent_metadata_txn_owned(0))
 		panic("Agent catalog transaction invariant");

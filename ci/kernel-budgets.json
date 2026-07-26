@@ -363,11 +363,29 @@
         "allowed_bridge_dependencies": []
       },
       {
+        "name": "metadata_query",
+        "source_path": "os/agent_metadata_query.c",
+        "object_path": "build/os/agent_metadata_query.o",
+        "baseline_lines": 240,
+        "max_lines": 252,
+        "allowed_global_prefixes": [
+          "agent_metadata_query_"
+        ],
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "file_state",
+          "metadata",
+          "metadata_catalog"
+        ],
+        "allowed_bridge_dependencies": []
+      },
+      {
         "name": "metadata_objects",
         "source_path": "os/agent_metadata_objects.c",
         "object_path": "build/os/agent_metadata_objects.o",
-        "baseline_lines": 3501,
-        "max_lines": 3677,
+        "baseline_lines": 3202,
+        "max_lines": 3363,
         "allowed_global_prefixes": [],
         "allowed_global_symbols": [
           "agent_file_request_scan",
@@ -402,6 +420,7 @@
           "lifecycle",
           "metadata",
           "metadata_catalog",
+          "metadata_query",
           "metadata_store",
           "observe"
         ],
@@ -603,6 +622,7 @@
           "file_state",
           "metadata_objects",
           "metadata_catalog",
+          "metadata_query",
           "metadata_store",
           "ipc"
         ],
@@ -610,7 +630,8 @@
           "os/agent_file_name_policy.h",
           "os/agent_file_state_internal.h",
           "os/agent_metadata_internal.h",
-          "os/agent_metadata_catalog.h"
+          "os/agent_metadata_catalog.h",
+          "os/agent_metadata_query.h"
         ],
         "contract_header_globs": [
           "os/agent_metadata*.h",
@@ -624,10 +645,10 @@
         "max_source_lines": 8948,
         "baseline_source_bytes": 250823,
         "max_source_bytes": 263364,
-        "baseline_loaded_text_bytes": 68576,
-        "max_loaded_text_bytes": 68576,
-        "baseline_bss_bytes": 1090212,
-        "max_bss_bytes": 1090212,
+        "baseline_loaded_text_bytes": 68516,
+        "max_loaded_text_bytes": 68516,
+        "baseline_bss_bytes": 1080300,
+        "max_bss_bytes": 1080300,
         "discarded_sections": [
           ".eh_frame"
         ]
