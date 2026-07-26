@@ -1329,9 +1329,9 @@ def main() -> int:
             assert "Host Pages" in api_catalog_html
             assert "Host Dynamic Pages" in api_catalog_html
             assert "Host Downloads" in api_catalog_html
-            assert "Reader GET Routes" in api_catalog_html
-            assert "Reader Dynamic Prefixes" in api_catalog_html
-            assert "Reader Downloads" in api_catalog_html
+            assert "阅读器 GET 路由" in api_catalog_html
+            assert "阅读器动态前缀" in api_catalog_html
+            assert "阅读器下载入口" in api_catalog_html
             assert "Grouped Routes" in api_catalog_html
             assert "/api/analysis-results" in api_catalog_html
             assert "/api/usable-research-workbench-file-catalog" in api_catalog_html

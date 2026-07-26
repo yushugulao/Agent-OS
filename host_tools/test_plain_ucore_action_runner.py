@@ -31,11 +31,27 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
+        build_log = root / "build.log"
+        build_code = runner.run_command(
+            [
+                sys.executable,
+                "-c",
+                "print('CC -o build/riscv64/ch6b_panic user/ch6b_panic.c')",
+            ],
+            build_log,
+            timeout_seconds=5,
+        )
+        assert build_code == 0
+        assert "build/riscv64/ch6b_panic" in read(build_log)
+
         observed_ok = runner.run_observed_command(
             [
                 sys.executable,
                 "-c",
-                "print('boot'); print('rp_orch: passed')",
+                (
+                    "print('CC -o build/riscv64/ch6b_panic user/ch6b_panic.c'); "
+                    "print('stage=clean;status=failed'); print('rp_orch: passed')"
+                ),
             ],
             root / "observed-ok.log",
             timeout_seconds=5,
@@ -52,7 +68,7 @@ def main() -> int:
             [
                 sys.executable,
                 "-c",
-                "print('boot'); print('panic: synthetic failure')",
+                "print('boot'); print('\\x1b[31m[PANIC 1-1] os/proc.c:10: synthetic failure\\x1b[0m')",
             ],
             root / "observed-fail.log",
             timeout_seconds=5,
@@ -62,7 +78,31 @@ def main() -> int:
         )
         assert observed_fail["returncode"] != 0
         assert observed_fail["failure_seen"] is True
-        assert "panic: synthetic failure" in read(root / "observed-fail.log")
+        assert observed_fail["failure_reason"] == "kernel_panic"
+        assert observed_fail["failure_line"] == "[PANIC 1-1] os/proc.c:10: synthetic failure"
+        assert "[PANIC 1-1]" in read(root / "observed-fail.log")
+        assert runner.classify_guest_failure("rp_orch: failed code=1") == "orchestrator_failed"
+        assert runner.classify_guest_failure("artifact=status=failed") == ""
+
+        observed_missing = runner.run_observed_command(
+            [sys.executable, "-c", "print('guest exited before completion')"],
+            root / "observed-missing.log",
+            timeout_seconds=5,
+            pass_marker="rp_orch: passed",
+            idle_notice_seconds=1,
+        )
+        assert observed_missing["returncode"] != 0
+        assert observed_missing["failure_reason"] == "pass_marker_missing"
+
+        observed_exit = runner.run_observed_command(
+            [sys.executable, "-c", "raise SystemExit(7)"],
+            root / "observed-exit.log",
+            timeout_seconds=5,
+            pass_marker="rp_orch: passed",
+            idle_notice_seconds=1,
+        )
+        assert observed_exit["returncode"] == 7
+        assert observed_exit["failure_reason"] == "guest_exit_nonzero"
 
         state_dir = root / "state"
         run_dir = root / "run"

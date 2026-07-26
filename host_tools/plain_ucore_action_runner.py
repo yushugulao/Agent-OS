@@ -19,7 +19,44 @@ from typing import Iterable
 from plain_ucore_fs_extract import extract_state_files
 
 UCORE_FS_BLOCK_SIZE = 1024
-DEFAULT_FAILURE_PATTERN = r"check failed|panic|unknown syscall|bad addr|IllegalInstruction|child_failed|status=failed"
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+GUEST_FAILURE_RULES = (
+    (
+        "kernel_panic",
+        re.compile(r"^(?:\[PANIC\s+\d+-\d+\]|PANIC:)(?:\s|.).*$", re.IGNORECASE),
+    ),
+    (
+        "kernel_fault",
+        re.compile(
+            r"^\[ERROR\s+\d+-\d+\].*(?:unknown syscall|bad addr\s*=|IllegalInstruction).*$",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "guest_check_failed",
+        re.compile(r"^[A-Za-z0-9_.-]+:\s+check failed(?:\s|:|$).*$", re.IGNORECASE),
+    ),
+    (
+        "orchestrator_failed",
+        re.compile(
+            r"^rp_(?:seed_|agentos_)?orch:\s+(?:child_failed|failed)(?:\s|:|$).*$",
+            re.IGNORECASE,
+        ),
+    ),
+)
+DEFAULT_FAILURE_PATTERN = "|".join(f"(?:{rule.pattern})" for _, rule in GUEST_FAILURE_RULES)
+
+
+def normalize_guest_log_line(line: str) -> str:
+    return ANSI_ESCAPE_RE.sub("", line).rstrip("\r\n")
+
+
+def classify_guest_failure(line: str) -> str:
+    normalized = normalize_guest_log_line(line)
+    for reason, rule in GUEST_FAILURE_RULES:
+        if rule.fullmatch(normalized):
+            return reason
+    return ""
 
 
 def read_jsonl(path: Path) -> list[dict[str, object]]:
@@ -561,10 +598,12 @@ def run_observed_command(
     marker_seen_at = 0.0
     marker_seen = False
     failure_seen = False
+    failure_line = ""
+    failure_reason = ""
     timed_out = False
     idle_notices = 0
     last_lines: list[str] = []
-    failure_re = re.compile(failure_pattern) if failure_pattern else None
+    failure_re = re.compile(failure_pattern, re.IGNORECASE) if failure_pattern else None
 
     with log_path.open(mode, encoding="utf-8", errors="replace") as handle:
         while True:
@@ -602,9 +641,12 @@ def run_observed_command(
             last_lines.append(line)
             if len(last_lines) > 80:
                 last_lines = last_lines[-80:]
-            if failure_re and failure_re.search(item):
+            normalized_line = normalize_guest_log_line(item)
+            if failure_re and failure_re.fullmatch(normalized_line):
                 failure_seen = True
-                handle.write("[runner] failure text detected\n")
+                failure_line = normalized_line
+                failure_reason = classify_guest_failure(normalized_line) or "custom_failure_pattern"
+                handle.write(f"[runner] guest failure detected: {failure_reason}\n")
                 break
             if pass_marker and pass_marker in item and not marker_seen:
                 marker_seen = True
@@ -623,12 +665,25 @@ def run_observed_command(
     elapsed = time.monotonic() - start
     returncode = proc.returncode
     ok = not timed_out and not failure_seen and (not pass_marker or marker_seen)
+    if not ok and not failure_reason:
+        if timed_out:
+            failure_reason = "guest_timeout"
+        elif returncode not in (0, None):
+            failure_reason = "guest_exit_nonzero"
+        elif pass_marker and not marker_seen:
+            failure_reason = "pass_marker_missing"
+        else:
+            failure_reason = "guest_failed"
     if ok and returncode not in (0, None):
         returncode = 0
+    elif not ok and returncode in (0, None):
+        returncode = 1
     return {
-        "returncode": 0 if ok else (returncode if returncode is not None else 1),
+        "returncode": returncode,
         "marker_seen": marker_seen,
         "failure_seen": failure_seen,
+        "failure_line": failure_line,
+        "failure_reason": failure_reason,
         "timed_out": timed_out,
         "idle_notices": idle_notices,
         "elapsed_seconds": round(elapsed, 3),
@@ -848,6 +903,11 @@ def write_run_result_state(next_state: Path, run_summary: dict[str, object], log
         f"passed={1 if passed else 0}",
         f"embedded_action_records={run_summary.get('embedded_action_records', 0)}",
         f"extracted_state_files={run_summary.get('extracted_state_files', 0)}",
+        f"build_returncode={run_summary.get('build_returncode', '')}",
+        f"guest_returncode={run_summary.get('guest_returncode', '')}",
+        f"failure_phase={line_value(run_summary.get('failure_phase', ''))}",
+        f"failure_reason={line_value(run_summary.get('failure_reason', ''))}",
+        f"build_log={line_value(run_summary.get('build_log', ''))}",
         f"log={line_value(run_summary.get('log', ''))}",
         f"qemu_elapsed_seconds={run_summary.get('elapsed_seconds', 0)}",
         f"qemu_idle_notices={run_summary.get('idle_notices', 0)}",
@@ -883,6 +943,7 @@ def run_seeded_ucore(
 ) -> dict[str, object]:
     repo_dir = repo_dir.resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
+    build_log_path = run_dir / "ucore-build.log"
     log_path = run_dir / "ucore-run.log"
     next_state = run_dir / "state-next"
     repo_bash = bash_path(repo_dir)
@@ -891,14 +952,22 @@ def run_seeded_ucore(
         "make -C user clean >/dev/null && "
         "make clean >/dev/null"
     )
-    build_code = run_command(make_wsl_command(clean_command, wsl_distro), log_path, timeout_seconds + 30)
-    if build_code != 0:
+    clean_code = run_command(
+        make_wsl_command(clean_command, wsl_distro),
+        build_log_path,
+        timeout_seconds + 30,
+    )
+    if clean_code != 0:
         summary = {
             "commands": [clean_command],
-            "returncode": build_code,
+            "returncode": clean_code,
+            "build_returncode": clean_code,
+            "guest_returncode": None,
             "embedded_action_records": 0,
             "passed": False,
+            "build_log": str(build_log_path),
             "log": str(log_path),
+            "failure_phase": "clean",
             "status": "failed",
         }
         write_json(run_dir / "ucore-run-summary.json", summary)
@@ -908,22 +977,46 @@ def run_seeded_ucore(
     seed_file = next_state / "rp_host_action_seed"
     seed_file_bash = bash_path(seed_file)
     toolprefix = toolprefix_arg()
-    run_command_text = (
+    build_command_text = (
         f"cd {shell_quote(repo_bash)} && "
-        f"make user {toolprefix} CHAPTER={chapter} >/dev/null"
+        f"make user {toolprefix} CHAPTER={chapter}"
         " && "
         f"cp {shell_quote(seed_file_bash)} user/target/bin/rp_host_action_seed"
         " && "
         "rm -rf nfs/fs nfs/fs.img nfs/fs-copy.img && "
-        "make nfs/fs.img >/dev/null && "
-        f"make build {toolprefix} CHAPTER={chapter} LOG=warn INIT_PROC={init_proc} >/dev/null && "
-        f"make run {toolprefix} CHAPTER={chapter} LOG=warn INIT_PROC={init_proc}"
+        f"make nfs/fs-copy.img {toolprefix} CHAPTER={chapter} && "
+        f"make build {toolprefix} CHAPTER={chapter} LOG=warn INIT_PROC={init_proc}"
+    )
+    build_code = run_command(
+        make_wsl_command(build_command_text, wsl_distro),
+        build_log_path,
+        timeout_seconds + 30,
+        append=True,
+    )
+    if build_code != 0:
+        summary = {
+            "commands": [clean_command, f"embedded_action_records={embedded_records}", build_command_text],
+            "returncode": build_code,
+            "build_returncode": build_code,
+            "guest_returncode": None,
+            "embedded_action_records": embedded_records,
+            "passed": False,
+            "build_log": str(build_log_path),
+            "log": str(log_path),
+            "failure_phase": "build",
+            "status": "failed",
+        }
+        write_json(run_dir / "ucore-run-summary.json", summary)
+        return summary
+    run_command_text = (
+        f"cd {shell_quote(repo_bash)} && "
+        f"make run-prebuilt {toolprefix} CHAPTER={chapter} LOG=warn INIT_PROC={init_proc}"
     )
     observed = run_observed_command(
         make_wsl_command(run_command_text, wsl_distro),
         log_path,
         timeout_seconds + 30,
-        append=True,
+        append=False,
         pass_marker=pass_marker,
         idle_notice_seconds=int(os.environ.get("SEEDED_ACTION_IDLE_NOTICE_SECONDS", "20")),
     )
@@ -933,29 +1026,54 @@ def run_seeded_ucore(
         bool(observed["marker_seen"])
         and not bool(observed["failure_seen"])
         and not bool(observed["timed_out"])
-        and "child_failed" not in text
-        and "ialloc" not in text
     )
+    guest_passed = passed
+    failure_phase = "" if passed else "guest"
+    failure_reason = str(observed["failure_reason"])
     extract_summary: dict[str, object] = {"status": "skipped", "extracted_state_files": 0}
     image_path = repo_dir / "nfs" / "fs-copy.img"
     if image_path.exists():
-        extract_summary = extract_state_files(
-            image_path,
-            run_dir / "state-extracted",
-            repo_dir,
-            require_single_scope=True,
-        )
-        for item in sorted((run_dir / "state-extracted").iterdir()):
-            if item.is_file() and item.name.startswith("rp_"):
-                shutil.copy2(item, next_state / item.name)
+        try:
+            extract_summary = extract_state_files(
+                image_path,
+                run_dir / "state-extracted",
+                repo_dir,
+                require_single_scope=True,
+            )
+            for item in sorted((run_dir / "state-extracted").iterdir()):
+                if item.is_file() and item.name.startswith("rp_"):
+                    shutil.copy2(item, next_state / item.name)
+        except (OSError, ValueError) as error:
+            passed = False
+            if guest_passed:
+                failure_phase = "extract"
+                failure_reason = "extract_failed"
+            extract_summary = {
+                "status": "failed",
+                "error": str(error),
+                "extracted_state_files": 0,
+            }
     else:
         passed = False
+        if guest_passed:
+            failure_phase = "extract"
+            failure_reason = "missing_image"
         extract_summary = {"status": "missing_image", "extracted_state_files": 0}
     summary = {
-        "commands": [clean_command, f"embedded_action_records={embedded_records}", run_command_text],
-        "returncode": code,
+        "commands": [
+            clean_command,
+            f"embedded_action_records={embedded_records}",
+            build_command_text,
+            run_command_text,
+        ],
+        "returncode": code if passed or code != 0 else 1,
+        "build_returncode": build_code,
+        "guest_returncode": code,
         "marker_seen": bool(observed["marker_seen"]),
         "failure_seen": bool(observed["failure_seen"]),
+        "failure_line": str(observed["failure_line"]),
+        "failure_reason": failure_reason,
+        "failure_phase": failure_phase,
         "timed_out": bool(observed["timed_out"]),
         "idle_notices": int(observed["idle_notices"]),
         "elapsed_seconds": observed["elapsed_seconds"],
@@ -963,6 +1081,7 @@ def run_seeded_ucore(
         "extracted_state_files": extract_summary.get("extracted_state_files", 0),
         "extract_status": extract_summary.get("status", "unknown"),
         "passed": passed,
+        "build_log": str(build_log_path),
         "log": str(log_path),
         "status": "ready" if passed else "failed",
     }

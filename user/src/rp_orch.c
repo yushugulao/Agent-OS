@@ -155,21 +155,6 @@ static int orchestrator_context(void)
 	       info.agent_role == AGENT_ROLE_ORCHESTRATOR;
 }
 
-static void record_stage_role(const char *program, int role, int agent_child)
-{
-	char line[160];
-
-	rp_copy_text(line, sizeof(line), "program=");
-	rp_append_text(line, sizeof(line), program);
-	rp_append_text(line, sizeof(line), ";role=");
-	rp_append_text(line, sizeof(line), launch_role_name(role, agent_child));
-	rp_append_text(line, sizeof(line), ";launcher=");
-	rp_append_text(line, sizeof(line),
-		       agent_child ? "agent_create_role" : "fork");
-	rp_append_text(line, sizeof(line), ";status=started");
-	rp_append_file("rp_agentos_roles", line);
-}
-
 static void record_timing(const char *program, int role, int agent_child,
 			  int ok, int code, unsigned long long elapsed_ms)
 {
@@ -235,7 +220,6 @@ static int run_child(const struct program_launch_policy *launch,
 		record_timing(program, role, agent_child, 0, -1, 0);
 		return 0;
 	}
-	record_stage_role(program, role, agent_child);
 	int code = -1;
 	int got = waitpid(pid, &code);
 	int64 end = get_mtime();
@@ -268,6 +252,7 @@ int main(void)
 				   "role_policy=program_specific\n"
 				   "launch_policy=kernel_bound_programs_agent_plain_support_fork\n"
 				   "agent_bound_programs=rp_query,rp_repair,rp_execobs,rp_agent_collab,rp_auditor,rp_workbench,rp_package,rp_realtask,rp_service_surface,rp_backend\n"
+				   "execution_ledger=rp_orch_timing\n"
 				   "status=ready\n")) {
 			return 1;
 		}

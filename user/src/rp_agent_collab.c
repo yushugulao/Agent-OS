@@ -85,7 +85,8 @@ static int run_kernel_collaboration(void)
 	if (pid < 0)
 		return -1;
 	if (pid == 0) {
-		close(route_gate[1]);
+		// Cross-scope principals receive only explicitly delegated endpoints.
+		// The write end is intentionally absent from this child.
 		exit(collab_waiter(getppid(), route_gate[0]));
 	}
 	close(route_gate[0]);

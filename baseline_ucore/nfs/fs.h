@@ -7,14 +7,14 @@
 
 #define NFILE 100 // open files per system
 #ifndef NINODE
-#define NINODE 512 // maximum number of file-system i-nodes in the image
+#define NINODE 2048 // maximum number of file-system i-nodes in the image
 #endif
 #define NDEV 10 // maximum major device number
 #define ROOTDEV 1 // device number of file system root disk
 #define MAXOPBLOCKS 10 // max # of blocks any FS op writes
 #define NBUF (MAXOPBLOCKS * 3) // size of disk block cache
 #ifndef FSSIZE
-#define FSSIZE 8192 // size of file system in blocks
+#define FSSIZE 16384 // size of file system in blocks
 #endif
 #define MAXPATH 128 // maximum file path name
 

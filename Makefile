@@ -1,4 +1,4 @@
-.PHONY: clean build user run run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest agent-module-check ci-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test reader target-readiness dual-platform-run full-verify dual-clean .FORCE
+.PHONY: clean build user run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest agent-module-check ci-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test reader target-readiness dual-platform-run full-verify dual-clean .FORCE
 .DELETE_ON_ERROR:
 all: build
 
@@ -365,6 +365,13 @@ $(F)/fs-copy.img: $(F)/fs.img
 		trap - 0 1 2 3 15
 
 run: build/kernel $(F)/fs-copy.img
+	$(QEMU) $(QEMUOPTS)
+
+# Start only already-built artifacts. Host-side observers use this target so
+# compiler output can never be interpreted as guest runtime output.
+run-prebuilt:
+	@test -f build/kernel || { echo "missing prebuilt kernel" >&2; exit 1; }
+	@test -f $(F)/fs-copy.img || { echo "missing prebuilt filesystem image" >&2; exit 1; }
 	$(QEMU) $(QEMUOPTS)
 
 # Reboot the current writable disk explicitly.  Normal `run` always installs

@@ -26,6 +26,7 @@ struct superblock sb;
 struct fs_storage_state {
 	uint free_blocks;
 	uint free_inodes;
+	uint block_alloc_cursor;
 	uint public_principal_id;
 	uint block_domain_limit;
 	uint inode_domain_limit;
@@ -506,6 +507,7 @@ static void fs_storage_rebuild(int dev, int enforce_policy)
 
 	memset(&fs_storage, 0, sizeof(fs_storage));
 	fs_storage.public_principal_id = sb.public_principal_id;
+	fs_storage.block_alloc_cursor = sb.datastart;
 	for (uint block = sb.datastart; block < sb.size; block++) {
 		uint current = BBLOCK(block, sb);
 		uint bit = block % BPB;
@@ -1369,32 +1371,59 @@ static void bzero(int dev, int bno)
 // Allocate a zeroed disk block.
 static uint balloc(uint dev, const struct fs_storage_charge *charge)
 {
-	int b, bi, m;
+	uint b, bi, block, first, limit, range_start, range_end;
+	uint cursor;
+	int checkpoint, m, pass;
 	struct buf *bp;
 
 	if (fs_storage_reserve(charge, 0) < 0)
 		return 0;
-	bp = 0;
-	for (b = sb.datastart - sb.datastart % BPB;
-	     b < sb.size; b += BPB) {
-		bp = bread(dev, BBLOCK(b, sb));
-		for (bi = 0; bi < BPB && b + bi < sb.size; bi++) {
-			if (b + bi < sb.datastart)
-				continue;
-			m = 1 << (bi % 8);
-			if ((bp->data[bi / 8] & m) == 0) { // Is block free?
-				fs_qmap_write(dev, b + bi, charge->owner);
-				bp->data[bi / 8] |= m; // Mark block in use.
-				bwrite(bp);
-				brelse(bp);
-				bzero(dev, b + bi);
-				return b + bi;
+	cursor = fs_storage.block_alloc_cursor;
+	if (cursor < sb.datastart || cursor >= sb.size)
+		cursor = sb.datastart;
+	for (pass = 0; pass < 2; pass++) {
+		range_start = pass == 0 ? cursor : sb.datastart;
+		range_end = pass == 0 ? sb.size : cursor;
+		if (range_start >= range_end)
+			continue;
+		for (b = range_start - range_start % BPB;
+		     b < range_end; b += BPB) {
+			first = range_start > b ? range_start - b : 0;
+			if (b + first < sb.datastart)
+				first = sb.datastart - b;
+			limit = MIN(BPB, range_end - b);
+			bp = bread(dev, BBLOCK(b, sb));
+			for (bi = first; bi < limit; bi++) {
+				block = b + bi;
+				m = 1 << (bi % 8);
+				if ((bp->data[bi / 8] & m) == 0) { // Is block free?
+					fs_qmap_write(dev, block, charge->owner);
+					bp->data[bi / 8] |= m; // Mark block in use.
+					bwrite(bp);
+					brelse(bp);
+					fs_storage.block_alloc_cursor = block + 1;
+					if (fs_storage.block_alloc_cursor >= sb.size)
+						fs_storage.block_alloc_cursor = sb.datastart;
+					bzero(dev, block);
+					return block;
+				}
 			}
-		}
-		brelse(bp);
-		if (bio_request_checkpoint() < 0) {
-			fs_storage_release(charge->owner, 0);
-			return 0;
+			brelse(bp);
+			fs_storage.block_alloc_cursor = b + limit;
+			if (fs_storage.block_alloc_cursor >= sb.size)
+				fs_storage.block_alloc_cursor = sb.datastart;
+			checkpoint = bio_request_checkpoint();
+			if (checkpoint == BIO_CHECKPOINT_INTERRUPTED) {
+				fs_storage_release(charge->owner, 0);
+				return 0;
+			}
+			/*
+			 * DEFERRED means this filesystem atomic unit cannot sleep yet.
+			 * The scan owns a reservation and is guaranteed a free block, so
+			 * continue from the rotating cursor and settle debt at the outer
+			 * syscall boundary. Treating DEFERRED as cancellation livelocks
+			 * allocations that cross a bitmap block.
+			 */
 		}
 	}
 	fs_storage_release(charge->owner, 0);

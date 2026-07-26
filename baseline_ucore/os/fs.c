@@ -39,7 +39,7 @@ struct superblock sb;
 
 // Mount-time reachability state lives in BSS rather than on the small kernel
 // stack.  The bounds are part of the filesystem format accepted by this
-// kernel; the current 8192-block/512-inode image is comfortably below them.
+// kernel; the current 16384-block/2048-inode image is comfortably below them.
 #define FS_SCRUB_MAX_BLOCKS 65536U
 #define FS_SCRUB_MAX_INODES 65536U
 #define FS_SCRUB_BITMAP_BYTES(limit) (((limit) + 7U) / 8U)
