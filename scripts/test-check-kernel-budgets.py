@@ -116,6 +116,9 @@ class KernelBudgetTests(unittest.TestCase):
         query = (root / "os" / "agent_metadata_query.c").read_text(
             encoding="utf-8"
         )
+        scan = (root / "os" / "agent_metadata_scan.c").read_text(
+            encoding="utf-8"
+        )
         self.assertNotIn("projection_commit", catalog)
         self.assertNotIn("agent_file_catalog_sync", catalog)
         self.assertIsNone(
@@ -187,12 +190,22 @@ class KernelBudgetTests(unittest.TestCase):
         self.assertEqual(sync.count("agent_metadata_txn_projection_ack()"), 1)
         self.assertLess(
             sync.index("agent_metadata_query_invalidate_locked("),
-            sync.index("agent_metadata_txn_projection_ack()"),
+            sync.index("agent_metadata_scan_catalog_sync(delta)"),
         )
         self.assertLess(
-            sync.index("agent_file_scan_seen[i] = 1"),
+            sync.index("agent_metadata_scan_catalog_sync(delta)"),
             sync.index("agent_metadata_txn_projection_ack()"),
         )
+        scan_sync = kernel_budgets.source_function_body(
+            scan,
+            "agent_metadata_scan_catalog_sync(const struct agent_catalog_delta *delta)",
+        )
+        self.assertIn("delta->applied_slots", scan_sync)
+        self.assertLess(
+            scan_sync.index("delta->applied_slots"),
+            scan_sync.index("scan.seen[i] = 1"),
+        )
+        self.assertNotIn("agent_metadata_txn_projection_ack", scan_sync)
 
         invalidate_at = query.index(
             "agent_metadata_query_invalidate_locked(uint scope_id, int full)"
@@ -300,6 +313,58 @@ agent_file_store_complete(&commit, result);
             self.assert_store_wrapper_projection_protocol(
                 body, "agent_metadata_store_load(&commit)"
             )
+
+    def test_metadata_scan_boundary_rejects_static_regressions(self):
+        root = SCRIPT.parent.parent
+        objects = (root / "os" / "agent_metadata_objects.c").read_text(
+            encoding="utf-8"
+        )
+        scan = (root / "os" / "agent_metadata_scan.c").read_text(
+            encoding="utf-8"
+        )
+        kernel_budgets.validate_metadata_scan_boundary_text(objects, scan)
+        early_ack = objects.replace(
+            "\tagent_metadata_scan_catalog_sync(delta);\n"
+            "\tagent_metadata_txn_projection_ack();",
+            "\tagent_metadata_txn_projection_ack();\n"
+            "\tagent_metadata_scan_catalog_sync(delta);",
+            1,
+        )
+        reverse_dependency = scan + "\nvoid bad(void) { agent_file_maintain(0); }\n"
+        unbounded_step = scan.replace(
+            "steps < SCAN_STEP",
+            "steps < AGENT_FILE_META_MAX",
+            1,
+        )
+        inflated_step = scan.replace("#define SCAN_STEP 16", "#define SCAN_STEP 160", 1)
+        inflated_interval = scan.replace(
+            "#define SCAN_INTERVAL 20", "#define SCAN_INTERVAL 200", 1
+        )
+        inflated_rest = scan.replace(
+            "#define SCAN_REST_MULTIPLIER 4",
+            "#define SCAN_REST_MULTIPLIER 40",
+            1,
+        )
+        no_tick_budget = scan.replace("scan.last_step_tick != now", "1", 1)
+        no_request_cooldown = scan.replace(
+            "scan_rest_deadline(now, now)", "now", 1
+        )
+        cases = (
+            ("projection ACK before scan sync", early_ack, scan),
+            ("scan reverse dependency", objects, reverse_dependency),
+            ("unbounded directory step", objects, unbounded_step),
+            ("inflated directory budget", objects, inflated_step),
+            ("inflated scan interval", objects, inflated_interval),
+            ("inflated cooldown multiplier", objects, inflated_rest),
+            ("missing per-tick budget", objects, no_tick_budget),
+            ("missing request cooldown", objects, no_request_cooldown),
+        )
+        for name, bad_objects, bad_scan in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(kernel_budgets.BudgetError):
+                    kernel_budgets.validate_metadata_scan_boundary_text(
+                        bad_objects, bad_scan
+                    )
 
     def test_projection_protocol_guards_indirect_checkpoint_helpers(self):
         body = """
@@ -889,11 +954,21 @@ agent_metadata_txn_projection_require_idle();
             query["allowed_dependencies"],
             ["file_state", "metadata", "metadata_catalog"],
         )
+        scan = next(
+            entry for entry in modules["modules"]
+            if entry["name"] == "metadata_scan"
+        )
+        self.assertEqual(
+            scan["allowed_dependencies"],
+            ["file_state", "metadata", "metadata_catalog", "metadata_store"],
+        )
+        self.assertEqual(scan["allowed_global_symbols"], ["agent_file_request_scan"])
         objects = next(
             entry for entry in modules["modules"]
             if entry["name"] == "metadata_objects"
         )
         self.assertIn("metadata_query", objects["allowed_dependencies"])
+        self.assertIn("metadata_scan", objects["allowed_dependencies"])
         duplicate_bridge_path = copy.deepcopy(config)
         duplicate_bridge_path["agent_modules"]["integration_bridges"][1][
             "object_path"

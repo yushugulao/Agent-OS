@@ -78,6 +78,7 @@ REQUIRED_AGENT_AGGREGATES = {
             "metadata_objects",
             "metadata_catalog",
             "metadata_query",
+            "metadata_scan",
             "metadata_store",
             "ipc",
         )
@@ -91,6 +92,7 @@ REQUIRED_AGENT_AGGREGATE_HEADERS = {
             "os/agent_metadata_internal.h",
             "os/agent_metadata_catalog.h",
             "os/agent_metadata_query.h",
+            "os/agent_metadata_scan.h",
         )
     )
 }
@@ -683,6 +685,7 @@ def validate_config(config):
         "metadata_catalog",
         "metadata_objects",
         "metadata_query",
+        "metadata_scan",
         "metadata_store",
         "observe",
         "resource_controller",
@@ -706,6 +709,7 @@ def validate_config(config):
         "metadata_catalog": "os/agent_metadata_catalog.c",
         "metadata_objects": "os/agent_metadata_objects.c",
         "metadata_query": "os/agent_metadata_query.c",
+        "metadata_scan": "os/agent_metadata_scan.c",
         "metadata_store": "os/agent_metadata_store.c",
         "observe": "os/agent_observe.c",
         "resource_controller": "os/resource_controller.c",
@@ -1992,6 +1996,129 @@ def check_kernel(args, config):
         print(output, end="" if output.endswith("\n") else "\n")
 
 
+def source_function_body(source, signature):
+    start = source.find(signature)
+    end = source.find("\n}\n", start)
+    if start < 0 or end < 0:
+        raise BudgetError(f"required source function is missing: {signature}")
+    return source[start : end + 2]
+
+
+def require_source_order(body, tokens, context):
+    cursor = -1
+    for token in tokens:
+        cursor = body.find(token, cursor + 1)
+        if cursor < 0:
+            raise BudgetError(f"{context} lost ordered operation: {token}")
+
+
+def require_source_tokens(body, tokens, context):
+    missing = [token for token in tokens if token not in body]
+    if missing:
+        raise BudgetError(f"{context} lost operations: {missing!r}")
+
+
+def validate_metadata_scan_boundary_text(objects, scan):
+    state = (
+        r"\bscan_control\b|\bscan\.(?:offset|seen|next_tick|last_step_tick|"
+        r"started_tick|runs|entries|added|updated|removed)\b|\broot_dir\s*\("
+    )
+    reverse = (
+        r"agent_file_maintain|agent_file_store_load|agent_metadata_query_|"
+        r"bio_background_|agent_metadata_txn_try_external|"
+        r"agent_metadata_objects\.h|\(\s*\*\s*[A-Za-z_]\w*\s*\)\s*\("
+    )
+    if re.search(state, objects):
+        raise BudgetError("metadata objects retained scan-owned state or traversal")
+    if re.search(reverse, scan):
+        raise BudgetError("metadata scan acquired a reverse dependency or callback")
+    for name, value in (
+        ("SCAN_INTERVAL", 20),
+        ("SCAN_STEP", 16),
+        ("SCAN_REST_MULTIPLIER", 4),
+    ):
+        pattern = rf"(?m)^#define {name} {value}$"
+        if len(re.findall(pattern, scan)) != 1:
+            raise BudgetError(f"metadata scan fairness constant changed: {name}")
+
+    sync = source_function_body(
+        objects, "agent_file_catalog_sync(const struct agent_catalog_delta *delta)"
+    )
+    if sync.count("agent_metadata_txn_projection_ack()") != 1:
+        raise BudgetError("metadata catalog sync must ACK its projection once")
+    require_source_order(
+        sync,
+        (
+            "agent_metadata_query_invalidate_locked(",
+            "agent_metadata_scan_catalog_sync(delta)",
+            "agent_metadata_txn_projection_ack()",
+        ),
+        "metadata catalog projection",
+    )
+    scan_sync = source_function_body(
+        scan,
+        "agent_metadata_scan_catalog_sync(const struct agent_catalog_delta *delta)",
+    )
+    require_source_tokens(
+        scan_sync, ("delta->applied_slots", "scan.seen[i] = 1"), "scan delta sync"
+    )
+    if "agent_metadata_txn_projection_ack" in scan_sync:
+        raise BudgetError("metadata scan must not ACK the catalog projection")
+
+    background = source_function_body(
+        objects, "agent_metadata_background_maintain(void)"
+    )
+    if background.count("agent_metadata_scan_plan(now)") != 2:
+        raise BudgetError("metadata background must revalidate its scan plan")
+    require_source_order(
+        background,
+        (
+            "agent_metadata_store_background_maintain()",
+            "agent_metadata_scan_plan(now)",
+            "bio_background_begin(FS_OWNER_SYSTEM)",
+            "agent_metadata_txn_try_external()",
+            "agent_metadata_scan_plan(now)",
+            "agent_file_store_load()",
+            "agent_metadata_scan_step(now, plan, load_ok)",
+            "agent_file_maintain(changes)",
+            "agent_metadata_txn_unlock()",
+            "bio_background_end()",
+        ),
+        "metadata background coordinator",
+    )
+    step = source_function_body(scan, "agent_metadata_scan_step(uint64 now")
+    require_source_tokens(
+        step,
+        ("root_dir()", "readi(", "inode_get(", "scan_bind_inode(", "steps < SCAN_STEP"),
+        "metadata scan step",
+    )
+    plan = source_function_body(scan, "agent_metadata_scan_plan(uint64 now)")
+    require_source_tokens(
+        plan,
+        ("scan.last_step_tick != now", "now >= scan.next_tick"),
+        "metadata scan tick budget",
+    )
+    request = source_function_body(scan, "agent_file_request_scan(void)")
+    require_source_tokens(
+        request,
+        ("!scan_control.pending", "scan_rest_deadline(now, now)"),
+        "metadata scan request coalescing",
+    )
+    if "agent_file_request_scan(void)" in objects:
+        raise BudgetError("metadata objects retained a scan request wrapper")
+    if scan.count("agent_file_request_scan(void)") != 1:
+        raise BudgetError("metadata scan must own one scan request entry point")
+
+
+def validate_metadata_scan_boundary_sources(root):
+    try:
+        objects = (root / "os" / "agent_metadata_objects.c").read_text(encoding="utf-8")
+        scan = (root / "os" / "agent_metadata_scan.c").read_text(encoding="utf-8")
+    except OSError as error:
+        raise BudgetError(f"cannot read metadata scan boundary source: {error}") from error
+    validate_metadata_scan_boundary_text(objects, scan)
+
+
 def check_agent_modules(args, config):
     modules = config["agent_modules"]
     if not args.nm:
@@ -1999,6 +2126,7 @@ def check_agent_modules(args, config):
     if not args.size:
         raise BudgetError("--size is required")
     root = Path(args.root).resolve()
+    validate_metadata_scan_boundary_sources(root)
     entries = modules["modules"]
     defined_by_module = {}
     symbol_owner = {}

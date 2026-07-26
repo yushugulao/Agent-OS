@@ -381,14 +381,34 @@
         "allowed_bridge_dependencies": []
       },
       {
+        "name": "metadata_scan",
+        "source_path": "os/agent_metadata_scan.c",
+        "object_path": "build/os/agent_metadata_scan.o",
+        "baseline_lines": 457,
+        "max_lines": 480,
+        "allowed_global_prefixes": [
+          "agent_metadata_scan_"
+        ],
+        "allowed_global_symbols": [
+          "agent_file_request_scan"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "file_state",
+          "metadata",
+          "metadata_catalog",
+          "metadata_store"
+        ],
+        "allowed_bridge_dependencies": []
+      },
+      {
         "name": "metadata_objects",
         "source_path": "os/agent_metadata_objects.c",
         "object_path": "build/os/agent_metadata_objects.o",
-        "baseline_lines": 3202,
-        "max_lines": 3363,
+        "baseline_lines": 2772,
+        "max_lines": 2911,
         "allowed_global_prefixes": [],
         "allowed_global_symbols": [
-          "agent_file_request_scan",
           "agent_fs_note_create",
           "agent_fs_note_delete",
           "agent_fs_note_truncate",
@@ -421,6 +441,7 @@
           "metadata",
           "metadata_catalog",
           "metadata_query",
+          "metadata_scan",
           "metadata_store",
           "observe"
         ],
@@ -609,6 +630,7 @@
         "allowed_dependencies": [
           "facade",
           "metadata_objects",
+          "metadata_scan",
           "resource_controller",
           "workflow_lifecycle"
         ]
@@ -623,6 +645,7 @@
           "metadata_objects",
           "metadata_catalog",
           "metadata_query",
+          "metadata_scan",
           "metadata_store",
           "ipc"
         ],
@@ -631,7 +654,8 @@
           "os/agent_file_state_internal.h",
           "os/agent_metadata_internal.h",
           "os/agent_metadata_catalog.h",
-          "os/agent_metadata_query.h"
+          "os/agent_metadata_query.h",
+          "os/agent_metadata_scan.h"
         ],
         "contract_header_globs": [
           "os/agent_metadata*.h",

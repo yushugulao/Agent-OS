@@ -4,9 +4,9 @@
 #include "agent_internal.h"
 #include "agent_metadata_internal.h"
 #include "agent_metadata_query.h"
+#include "agent_metadata_scan.h"
 #include "bio.h"
 #include "defs.h"
-#include "kernel_work.h"
 #include "exec_policy.h"
 #include "file.h"
 #include "fs.h"
@@ -15,17 +15,14 @@
 #include "vfs_security.h"
 
 /*
- * Authoritative Agent object catalog. Live object tables, indexes, dependency
- * graph, and scan projections share this owner. Incarnation-bound file state
- * and durable COW storage are owned by their dedicated modules.
+ * Authoritative Agent object catalog. Live object tables, dependency graph,
+ * and their transaction coordination share this owner. Query, scan,
+ * incarnation-bound state, and durable storage have dedicated modules.
  */
 #define AGENT_ACTION_HISTORY_MAX 32
 #define AGENT_DEPENDENCY_MAX 64
 #define AGENT_DEPENDENCY_SCOPE_LIMIT 16
 #define AGENT_ACTION_SCOPE_LIMIT 8
-#define AGENT_FS_SCAN_INTERVAL 20
-#define AGENT_FS_SCAN_STEP 16
-#define AGENT_FS_SCAN_REST_MULTIPLIER 4
 _Static_assert(VFS_SCOPE_MAX_ACTIVE * AGENT_DEPENDENCY_SCOPE_LIMIT <=
 	       AGENT_DEPENDENCY_MAX,
 	       "dependency table must reserve every workflow partition");
@@ -61,25 +58,11 @@ static struct agent_action_history_entry
 static struct agent_dependency_entry agent_dependencies[AGENT_DEPENDENCY_MAX];
 static int agent_action_history_count;
 static uint64 agent_action_next_sequence;
-static int agent_file_scan_enabled;
-static int agent_file_scan_pending;
-static int agent_file_scan_active;
-static uint64 agent_file_scan_offset;
-static int agent_file_scan_seen[AGENT_FILE_META_MAX];
-static uint64 agent_file_scan_next_tick;
-static uint64 agent_file_scan_last_step_tick;
-static uint64 agent_file_scan_started_tick;
-static uint64 agent_file_scan_runs;
-static uint64 agent_file_scan_entries;
-static uint64 agent_file_scan_added;
-static uint64 agent_file_scan_updated;
-static uint64 agent_file_scan_removed;
 static uint64 agent_dependency_generation;
 
 static void agent_file_maintain(uint changes);
 static int agent_query_from_payload(struct agent_file_query *q, char *payload);
 static void agent_text_append(char *dst, int n, const char *src);
-static void agent_file_enable_scan(void);
 static void agent_action_history_clear_scope(uint scope_id);
 static int agent_dependency_for_label(uint scope_id, char *label,
 				      char *namespace, char *run_id,
@@ -96,22 +79,10 @@ agent_metadata_objects_init(void)
 {
 	agent_file_state_init();
 	agent_metadata_query_init();
+	agent_metadata_scan_init();
 	agent_action_history_count = 0;
 	agent_action_next_sequence = 1;
 	memset(agent_action_history, 0, sizeof(agent_action_history));
-	agent_file_scan_enabled = 0;
-	agent_file_scan_pending = 0;
-	agent_file_scan_active = 0;
-	agent_file_scan_offset = 0;
-	memset(agent_file_scan_seen, 0, sizeof(agent_file_scan_seen));
-	agent_file_scan_next_tick = 0;
-	agent_file_scan_last_step_tick = 0;
-	agent_file_scan_started_tick = 0;
-	agent_file_scan_runs = 0;
-	agent_file_scan_entries = 0;
-	agent_file_scan_added = 0;
-	agent_file_scan_updated = 0;
-	agent_file_scan_removed = 0;
 	agent_dependency_generation = 0;
 	memset(agent_dependencies, 0, sizeof(agent_dependencies));
 	agent_metadata_catalog_init();
@@ -145,19 +116,7 @@ agent_file_catalog_sync(const struct agent_catalog_delta *delta)
 	agent_dependency_generation++;
 	agent_metadata_query_invalidate_locked(delta->scope_id,
 					       delta->full_reset);
-	if (agent_file_scan_active) {
-		if (delta->full_reset) {
-			agent_file_scan_offset = 0;
-			agent_file_scan_started_tick = agent_file_state_now();
-			memset(agent_file_scan_seen, 0,
-			       sizeof(agent_file_scan_seen));
-		}
-		agent_metadata_txn_work_charge(AGENT_META_STALE_BYTES);
-		for (int i = 0; i < AGENT_FILE_META_MAX; i++)
-			if (delta->applied_slots[i / 8] &
-			    (1U << (i % 8)))
-				agent_file_scan_seen[i] = 1;
-	}
+	agent_metadata_scan_catalog_sync(delta);
 	agent_metadata_txn_projection_ack();
 }
 
@@ -219,299 +178,13 @@ static void agent_file_restore_slot(int slot,
 	agent_dependency_generation++;
 }
 
-static void agent_file_infer_kind(char *name, char *out, int n)
+void
+agent_metadata_background_maintain(void)
 {
-	if (agent_metadata_catalog_field_contains(name, "md") ||
-	    agent_metadata_catalog_field_contains(name, "txt"))
-		safestrcpy(out, "document", n);
-	else if (agent_metadata_catalog_field_contains(name, "log") ||
-		 agent_metadata_catalog_field_contains(name, "err"))
-		safestrcpy(out, "log", n);
-	else if (agent_metadata_catalog_field_contains(name, "status") ||
-		 agent_metadata_catalog_field_contains(name, "ok"))
-		safestrcpy(out, "status", n);
-	else if (agent_metadata_catalog_field_contains(name, "data") ||
-		 agent_metadata_catalog_field_contains(name, "csv"))
-		safestrcpy(out, "dataset", n);
-	else
-		safestrcpy(out, "file", n);
-}
-
-static void agent_file_infer_status(char *name, char *out, int n)
-{
-	if (agent_metadata_catalog_field_contains(name, "fail") ||
-	    agent_metadata_catalog_field_contains(name, "err"))
-		safestrcpy(out, "failed", n);
-	else if (agent_metadata_catalog_field_contains(name, "ok") ||
-		 agent_metadata_catalog_field_contains(name, "pass"))
-		safestrcpy(out, "ok", n);
-	else
-		safestrcpy(out, "present", n);
-}
-
-static uint agent_file_scan_bind_inode(struct inode *ip, char *path,
-				       int account_scan)
-{
-	struct agent_catalog_view view;
-	struct agent_catalog_edit edit;
-	struct agent_file_meta *meta;
-	uint64 fid = 0;
-	int slot;
-	int added = 0;
-	int changed = 0;
-	int inode_changed = 0;
-	int persistent;
-	uint changes = 0;
-
-	if (ip == 0 || path == 0 || path[0] == 0 ||
-	    agent_file_is_meta_store_name(path))
-		return 0;
-	ivalid(ip);
-	if (!vfs_inode_label_valid(ip) ||
-	    ip->vfs_policy != VFS_POLICY_WORKFLOW || ip->type != T_FILE ||
-	    !agent_object_scope_valid(ip->vfs_scope_id))
-		return 0;
-	if (ip->vfs_scope_id == VFS_SCOPE_SYSTEM) {
-		if (exec_policy_inode_mutable(ip))
-			return 0;
-	} else if (!vfs_scope_active(ip->vfs_scope_id) ||
-		   !exec_policy_inode_mutable(ip)) {
-		return 0;
-	}
-	slot = ip->agent_meta_slot - 1;
-	if (agent_file_read_slot(slot, &view) <= 0 ||
-	    view.scope_id != ip->vfs_scope_id ||
-	    view.meta->dev != ip->dev || view.meta->inum != ip->inum ||
-	    view.meta->incarnation != ip->vfs_incarnation) {
-		slot = agent_metadata_catalog_find(ip->vfs_scope_id, 0, path);
-		if (agent_file_read_slot(slot, &view) <= 0)
-			slot = -1;
-	}
-	if (slot >= 0 && view.meta->dev != 0 &&
-	    (view.meta->dev != ip->dev || view.meta->inum != ip->inum ||
-	     view.meta->incarnation != ip->vfs_incarnation) &&
-	    (view.meta->flags & AGENT_FILE_META_F_AUTOSCAN) == 0)
-		slot = -1;
-	if (slot < 0) {
-		slot = agent_metadata_catalog_alloc_slot(ip->vfs_scope_id);
-		if (slot < 0)
-			return 0;
-		fid = agent_metadata_catalog_alloc_fid(ip->vfs_scope_id);
-		if (fid == 0)
-			return 0;
-	}
-	if (agent_metadata_catalog_edit_begin(
-		    slot, ip->vfs_scope_id, &edit) < 0)
-		return 0;
-	meta = edit.meta;
-	if (!meta->used) {
-		memset(meta, 0, sizeof(*meta));
-		meta->used = 1;
-		meta->fid = fid;
-		meta->flags = AGENT_FILE_META_F_PERSIST |
-			      AGENT_FILE_META_F_AUTOSCAN;
-		edit.scope_id = ip->vfs_scope_id;
-		added = 1;
-		changes |= AGENT_FILE_CHANGE_MEMBERSHIP;
-	}
-	if (edit.scope_id != ip->vfs_scope_id) {
-		agent_metadata_catalog_edit_abort(&edit);
-		return 0;
-	}
-	if (meta->physical_name[0] == 0 ||
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {
-		if (strncmp(meta->physical_name, path,
-			    sizeof(meta->physical_name)) != 0) {
-			safestrcpy(meta->physical_name, path,
-				   sizeof(meta->physical_name));
-			changed = 1;
-			changes |= AGENT_FILE_CHANGE_SCOPE_KEYS;
-		}
-	}
-	if (meta->logical_path[0] == 0 ||
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {
-		if (strncmp(meta->logical_path, path,
-			    sizeof(meta->logical_path)) != 0) {
-			safestrcpy(meta->logical_path, path,
-				   sizeof(meta->logical_path));
-			changed = 1;
-			changes |= AGENT_FILE_CHANGE_SCOPE_KEYS;
-		}
-	}
-	if (meta->project[0] == 0 &&
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {
-		safestrcpy(meta->project, "root", sizeof(meta->project));
-		changed = 1;
-		changes |= AGENT_FILE_CHANGE_SCOPE_KEYS;
-	}
-	if (meta->workflow[0] == 0 &&
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {
-		safestrcpy(meta->workflow, "background-scan",
-			   sizeof(meta->workflow));
-		changed = 1;
-		changes |= AGENT_FILE_CHANGE_SCOPE_KEYS;
-	}
-	if (meta->run_id[0] == 0 &&
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {
-		safestrcpy(meta->run_id, "ROOT", sizeof(meta->run_id));
-		changed = 1;
-		changes |= AGENT_FILE_CHANGE_SCOPE_KEYS;
-	}
-	if (meta->stage[0] == 0 &&
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {
-		safestrcpy(meta->stage, "scan", sizeof(meta->stage));
-		changed = 1;
-		changes |= AGENT_FILE_CHANGE_STAGE;
-	}
-	if (meta->kind[0] == 0 &&
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {
-		agent_file_infer_kind(path, meta->kind, sizeof(meta->kind));
-		changed = 1;
-		changes |= AGENT_FILE_CHANGE_KIND;
-	}
-	if (meta->status[0] == 0 &&
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {
-		agent_file_infer_status(path, meta->status,
-					sizeof(meta->status));
-		changed = 1;
-		changes |= AGENT_FILE_CHANGE_STATUS;
-	}
-	if (meta->summary[0] == 0 &&
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {
-		safestrcpy(meta->summary, "auto scanned root file",
-			   sizeof(meta->summary));
-		changed = 1;
-	}
-	if (meta->dev != ip->dev || meta->inum != ip->inum ||
-	    meta->incarnation != ip->vfs_incarnation ||
-	    meta->size != ip->size) {
-		meta->dev = ip->dev;
-		meta->inum = ip->inum;
-		meta->incarnation = ip->vfs_incarnation;
-		meta->size = ip->size;
-		changed = 1;
-	}
-	if (ip->agent_meta_slot != slot + 1 ||
-	    ip->agent_meta_version != AGENT_INODE_META_VERSION)
-		inode_changed = 1;
-	if (inode_changed)
-		changed = 1;
-	if (changed || added) {
-		meta->updated_tick = agent_file_state_now();
-		meta->fs_generation =
-			agent_file_state_generation_next(edit.scope_id);
-		persistent = meta->flags & AGENT_FILE_META_F_PERSIST;
-		if (agent_metadata_catalog_edit_commit(&edit, changes) < 0)
-			return 0;
-		if (inode_changed) {
-			ip->agent_meta_slot = slot + 1;
-			ip->agent_meta_flags = persistent;
-			ip->agent_meta_version = AGENT_INODE_META_VERSION;
-			iupdate(ip);
-		}
-		if (persistent)
-			agent_metadata_store_mark_dirty(ip->vfs_scope_id);
-		if (account_scan) {
-			if (added)
-				agent_file_scan_added++;
-			else
-				agent_file_scan_updated++;
-		}
-	} else
-		agent_metadata_catalog_edit_abort(&edit);
-	agent_file_scan_seen[slot] = 1;
-	return changes;
-}
-
-static uint64 agent_file_scan_rest_deadline(uint64 started_tick, uint64 now)
-{
-	uint64 duration = now > started_tick ? now - started_tick : 0;
-	uint64 rest = AGENT_FS_SCAN_INTERVAL;
-
-	if (duration > ~0ULL / AGENT_FS_SCAN_REST_MULTIPLIER)
-		return ~0ULL;
-	duration *= AGENT_FS_SCAN_REST_MULTIPLIER;
-	if (duration > rest)
-		rest = duration;
-	if (rest > ~0ULL - now)
-		return ~0ULL;
-	return now + rest;
-}
-
-static int agent_file_scan_due(uint64 now)
-{
-	int due;
-	int enabled = intr_save();
-
-	due = agent_file_scan_enabled &&
-		(agent_file_scan_active ?
-		 agent_file_scan_last_step_tick != now :
-		 agent_file_scan_pending && now >= agent_file_scan_next_tick);
-	intr_restore(enabled);
-	return due;
-}
-
-static void agent_file_scan_pause(int retry)
-{
-	uint64 now = agent_file_state_now();
-	uint64 started;
-	uint64 deadline;
-	int enabled = intr_save();
-
-	started = agent_file_scan_active ? agent_file_scan_started_tick : now;
-	deadline = agent_file_scan_rest_deadline(started, now);
-	agent_file_scan_active = 0;
-	agent_file_scan_started_tick = 0;
-	if (retry)
-		agent_file_scan_pending = 1;
-	if (agent_file_scan_next_tick < deadline)
-		agent_file_scan_next_tick = deadline;
-	intr_restore(enabled);
-}
-
-void agent_file_request_scan(void)
-{
-	uint64 now = agent_file_state_now();
-	int enabled = intr_save();
-
-	if (!agent_file_scan_enabled) {
-		agent_file_scan_enabled = 1;
-		agent_file_scan_pending = 1;
-		agent_file_scan_next_tick = now;
-	} else if (!agent_file_scan_pending) {
-		agent_file_scan_pending = 1;
-		/*
-		 * Requests coalesce behind the current scan or cooldown. Repeated
-		 * reconciliation faults therefore cannot slide the deadline forward
-		 * or bypass the scanner's global duty-cycle bound.
-		 */
-		if (agent_file_scan_active)
-			agent_file_scan_next_tick =
-				agent_file_scan_rest_deadline(now, now);
-		else if (now >= agent_file_scan_next_tick)
-			agent_file_scan_next_tick = now;
-	}
-	intr_restore(enabled);
-}
-
-static void agent_file_enable_scan(void)
-{
-	agent_file_request_scan();
-}
-
-void agent_metadata_background_maintain(void)
-{
-	struct inode *root;
-	struct inode *ip;
-	struct dirent de;
-	char name[DIRSIZ + 1];
 	uint64 now;
-	uint64 off;
-	int steps = 0;
-	uint changes = 0;
-	int scan_failed = 0;
-	int enabled;
-	struct vfs_cred kernel_cred;
+	uint changes;
+	int plan;
+	int load_ok = 1;
 
 	vfs_scope_reap_pending();
 	/* A scan storm must not starve an already due durable checkpoint. */
@@ -519,93 +192,22 @@ void agent_metadata_background_maintain(void)
 	if (agent_metadata_store_take_reconcile_request())
 		agent_file_request_scan();
 	now = agent_file_state_now();
-	if (!agent_file_scan_due(now))
+	plan = agent_metadata_scan_plan(now);
+	if (plan == AGENT_METADATA_SCAN_IDLE)
 		return;
 	if (!bio_background_begin(FS_OWNER_SYSTEM))
 		return;
 	if (!agent_metadata_txn_try_external())
 		goto out_io;
-	vfs_cred_kernel(&kernel_cred);
 	now = agent_file_state_now();
-	if (!agent_file_scan_active) {
-		if (!agent_file_scan_pending || now < agent_file_scan_next_tick)
-			goto out_txn;
-		if (agent_file_store_load() < 0) {
-			agent_file_scan_pause(1);
-			goto out_txn;
-		}
-		enabled = intr_save();
-		agent_file_scan_pending = 0;
-		agent_file_scan_active = 1;
-		agent_file_scan_started_tick = now;
-		agent_file_scan_offset = 0;
-		memset(agent_file_scan_seen, 0, sizeof(agent_file_scan_seen));
-		agent_file_scan_runs++;
-		intr_restore(enabled);
-	} else if (agent_file_scan_last_step_tick == now) {
+	plan = agent_metadata_scan_plan(now);
+	if (plan == AGENT_METADATA_SCAN_IDLE)
 		goto out_txn;
-	}
-	agent_file_scan_last_step_tick = now;
-	root = root_dir();
-	if (root == 0) {
-		agent_file_scan_pause(1);
-		goto out_txn;
-	}
-	for (off = agent_file_scan_offset;
-	     off < root->size && steps < AGENT_FS_SCAN_STEP;
-	     off += sizeof(de), steps++) {
-		if (readi(root, &kernel_cred, 0, (uint64)&de, off,
-			  sizeof(de)) != sizeof(de)) {
-			scan_failed = 1;
-			break;
-		}
-		agent_file_scan_entries++;
-		if (de.inum == 0)
-			continue;
-		memset(name, 0, sizeof(name));
-		memmove(name, de.name, DIRSIZ);
-		name[DIRSIZ] = 0;
-		if (name[0] == 0 || agent_file_is_meta_store_name(name))
-			continue;
-		ip = inode_get(root->dev, de.inum);
-		if (ip == 0)
-			continue;
-		ivalid(ip);
-		changes |= agent_file_scan_bind_inode(ip, name, 1);
-		iput(ip);
-	}
-	agent_file_scan_offset = off;
+	if (plan == AGENT_METADATA_SCAN_START)
+		load_ok = agent_file_store_load() >= 0;
+	changes = agent_metadata_scan_step(now, plan, load_ok);
 	if (changes)
 		agent_file_maintain(changes);
-	if (scan_failed) {
-		agent_file_scan_pause(1);
-		iput(root);
-		goto out_txn;
-	}
-	if (agent_file_scan_offset >= root->size) {
-		for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
-			struct agent_catalog_view view;
-			int removed_persistent;
-			uint removed_scope;
-
-			if (agent_file_read_slot(i, &view) <= 0)
-				continue;
-			if (!agent_file_scan_seen[i]) {
-				removed_scope = view.scope_id;
-				removed_persistent =
-					view.meta->flags & AGENT_FILE_META_F_PERSIST;
-				agent_metadata_catalog_clear_slot(i);
-				agent_file_scan_removed++;
-				if (removed_persistent)
-					agent_metadata_store_mark_dirty(removed_scope);
-				changes |= AGENT_FILE_CHANGE_ALL;
-			}
-		}
-		if (changes)
-			agent_file_maintain(changes);
-		agent_file_scan_pause(0);
-	}
-	iput(root);
 out_txn:
 	agent_metadata_txn_unlock();
 out_io:
@@ -705,8 +307,7 @@ void agent_fs_note_create(struct inode *ip, char *path)
 		reconcile = 1;
 		goto out_txn;
 	}
-	if (agent_file_scan_active)
-		agent_file_scan_seen[slot] = 1;
+	agent_metadata_scan_note_slot(slot);
 	if (agent_metadata_catalog_bind(slot, 0, 0) < 0) {
 		agent_metadata_catalog_clear_slot(slot);
 		reconcile = 1;
@@ -892,7 +493,7 @@ static int agent_file_install_empty_store(void)
 	result = agent_file_store_complete(&commit, result);
 	if (result < 0)
 		return -1;
-	agent_file_enable_scan();
+	agent_file_request_scan();
 	return 0;
 }
 
@@ -983,7 +584,7 @@ static int __attribute__((noinline)) agent_file_query_internal(uint scope_id,
 		goto out_txn;
 	}
 	result = agent_metadata_query_execute_locked(
-		scope_id, q, r, hit_slots, !agent_file_scan_active);
+		scope_id, q, r, hit_slots, agent_metadata_scan_query_stable());
 out_txn:
 	agent_metadata_txn_unlock();
 	return result;
@@ -2546,7 +2147,7 @@ agent_metadata_execute_tool(struct proc *p, struct agent_op *op,
 			agent_result_text(res, "metadata_unavailable");
 			break;
 		}
-		agent_file_enable_scan();
+		agent_file_request_scan();
 		agent_result_text(res, "file_meta_init");
 		break;
 	case AGENT_TOOL_READ_FILE_SUMMARY:
@@ -2682,7 +2283,7 @@ int sys_agent_file_meta_init(void)
 		}
 	}
 	agent_action_history_clear_scope(agent_identity_proc_scope(p));
-	agent_file_enable_scan();
+	agent_file_request_scan();
 	agent_direct_effect_audit(p, AGENT_TOOL_FILE_META_INIT,
 				  AGENT_STATUS_OK, "meta_init", 0, 0, 0,
 				  0, 1);
@@ -2918,30 +2519,8 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 		if (auto_persist) {
 			working->flags = AGENT_FILE_META_F_PERSIST |
 					 AGENT_FILE_META_F_AUTOSCAN;
-			safestrcpy(working->physical_name,
-				   meta.physical_name,
-				   sizeof(working->physical_name));
-			safestrcpy(working->logical_path,
-				   meta.physical_name,
-				   sizeof(working->logical_path));
-			safestrcpy(working->project, "root",
-				   sizeof(working->project));
-			safestrcpy(working->workflow,
-				   "background-scan",
-				   sizeof(working->workflow));
-			safestrcpy(working->run_id, "ROOT",
-				   sizeof(working->run_id));
-			safestrcpy(working->stage, "scan",
-				   sizeof(working->stage));
-			agent_file_infer_kind(meta.physical_name,
-					      working->kind,
-					      sizeof(working->kind));
-			agent_file_infer_status(meta.physical_name,
-						working->status,
-						sizeof(working->status));
-			safestrcpy(working->summary,
-				   "auto scanned root file",
-				   sizeof(working->summary));
+			(void)agent_metadata_scan_apply_defaults(
+				working, meta.physical_name, 0);
 			working->dev = auto_binding.dev;
 			working->inum = auto_binding.inum;
 			working->incarnation =
@@ -2986,8 +2565,7 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 					had_previous);
 		goto out_txn;
 	}
-	if (agent_file_scan_active)
-		agent_file_scan_seen[slot] = 1;
+	agent_metadata_scan_note_slot(slot);
 	if (had_previous &&
 	    strncmp(previous.physical_name, view.meta->physical_name,
 		    sizeof(previous.physical_name)) != 0)
@@ -3181,13 +2759,7 @@ agent_metadata_fill_info(uint scope_id, struct agent_info *info)
 	agent_metadata_store_fill_info(scope_id, info);
 	if (info == 0)
 		return;
-	info->file_scan_runs = agent_file_scan_runs;
-	info->file_scan_entries = agent_file_scan_entries;
-	info->file_scan_added = agent_file_scan_added;
-	info->file_scan_updated = agent_file_scan_updated;
-	info->file_scan_removed = agent_file_scan_removed;
-	info->file_scan_pending =
-		agent_file_scan_pending || agent_file_scan_active;
+	agent_metadata_scan_fill_info(info);
 	agent_file_state_fill_info(info);
 }
 
@@ -3196,7 +2768,5 @@ agent_metadata_tick(uint64 now)
 {
 	if (agent_metadata_store_take_reconcile_request())
 		agent_file_request_scan();
-	if (agent_file_scan_enabled && !agent_file_scan_active &&
-	    !agent_file_scan_pending && now >= agent_file_scan_next_tick)
-		agent_file_scan_pending = 1;
+	(void)agent_metadata_scan_plan(now);
 }

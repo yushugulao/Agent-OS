@@ -29,6 +29,7 @@ agent_metadata
 agent_metadata_catalog
 agent_metadata_objects
 agent_metadata_query
+agent_metadata_scan
 agent_metadata_store
 agent_observe
 resource_controller
@@ -54,7 +55,8 @@ for path in "${ROOT_DIR}"/os/agent*.c; do
 	case "${module}" in
 	agent | agent_core | agent_context | agent_file_state | agent_identity | agent_ipc | \
 		agent_lifecycle | agent_metadata | agent_metadata_objects | \
-		agent_metadata_catalog | agent_metadata_query | agent_metadata_store | agent_observe)
+		agent_metadata_catalog | agent_metadata_query | agent_metadata_scan | \
+		agent_metadata_store | agent_observe)
 		;;
 	*)
 		fail "unregistered AgentOS implementation: os/${module}.c"
@@ -68,6 +70,7 @@ agent_file_state_internal.h
 agent_metadata_catalog.h
 agent_metadata_internal.h
 agent_metadata_query.h
+agent_metadata_scan.h
 "
 registered_agent_headers="
 agent.h
@@ -119,6 +122,7 @@ fi
 catalog_source="${ROOT_DIR}/os/agent_metadata_catalog.c"
 metadata_source="${ROOT_DIR}/os/agent_metadata.c"
 objects_source="${ROOT_DIR}/os/agent_metadata_objects.c"
+scan_source="${ROOT_DIR}/os/agent_metadata_scan.c"
 store_source="${ROOT_DIR}/os/agent_metadata_store.c"
 if grep -n -E 'projection_commit|agent_file_catalog_sync|\(\*[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\)[[:space:]]*\(' \
 	"${catalog_source}" >"${TMP_FILE}"; then
@@ -130,6 +134,22 @@ if grep -n -E 'agent_metadata_store_(load|reload|storage_init|install_empty)\([^
 	fail "metadata objects must consume every store commit delta"
 fi
 : >"${TMP_FILE}"
+
+if grep -n -E '\bscan_control\b|\bscan\.(offset|seen|next_tick|last_step_tick|started_tick|runs|entries|added|updated|removed)\b|root_dir\(' \
+	"${objects_source}" >"${TMP_FILE}"; then
+	fail "metadata objects retained scan-owned state or directory traversal"
+fi
+: >"${TMP_FILE}"
+if grep -n -E 'agent_file_maintain|agent_file_store_load|agent_metadata_query_|bio_background_|agent_metadata_txn_try_external|\(\*[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\)[[:space:]]*\(' \
+	"${scan_source}" >"${TMP_FILE}"; then
+	fail "metadata scan acquired a reverse dependency or callback"
+fi
+: >"${TMP_FILE}"
+for scan_owner_operation in 'root_dir(' 'readi(' 'inode_get(' \
+	'steps < SCAN_STEP'; do
+	grep -q -F "${scan_owner_operation}" "${scan_source}" ||
+		fail "metadata scan lost owner operation: ${scan_owner_operation}"
+done
 
 # A pending catalog projection is a hard persistence barrier. Keep the guard
 # at the shared finish boundary and at both physical writeback transitions so
