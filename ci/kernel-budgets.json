@@ -402,18 +402,41 @@
         "allowed_bridge_dependencies": []
       },
       {
-        "name": "metadata_objects",
-        "source_path": "os/agent_metadata_objects.c",
-        "object_path": "build/os/agent_metadata_objects.o",
-        "baseline_lines": 2772,
-        "max_lines": 2911,
+        "name": "metadata_directory",
+        "source_path": "os/agent_metadata_directory.c",
+        "object_path": "build/os/agent_metadata_directory.o",
+        "baseline_lines": 219,
+        "max_lines": 230,
+        "max_bss_bytes": 0,
         "allowed_global_prefixes": [],
         "allowed_global_symbols": [
           "agent_fs_note_create",
           "agent_fs_note_delete",
           "agent_fs_note_truncate",
           "agent_fs_note_write",
-          "agent_fs_sync_write",
+          "agent_fs_sync_write"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "file_state",
+          "metadata",
+          "metadata_catalog",
+          "metadata_objects",
+          "metadata_scan",
+          "metadata_store"
+        ],
+        "allowed_bridge_dependencies": []
+      },
+      {
+        "name": "metadata_objects",
+        "source_path": "os/agent_metadata_objects.c",
+        "object_path": "build/os/agent_metadata_objects.o",
+        "baseline_lines": 2553,
+        "max_lines": 2681,
+        "allowed_global_prefixes": [],
+        "allowed_global_symbols": [
+          "agent_metadata_inode_trackable",
+          "agent_metadata_note_catalog_changes",
           "agent_metadata_background_maintain",
           "agent_metadata_execute_tool",
           "agent_metadata_fill_info",
@@ -547,7 +570,7 @@
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
           "file_state",
-          "metadata_objects",
+          "metadata_directory",
           "metadata_store",
           "resource_controller"
         ]
@@ -644,6 +667,7 @@
           "file_state",
           "metadata_objects",
           "metadata_catalog",
+          "metadata_directory",
           "metadata_query",
           "metadata_scan",
           "metadata_store",
@@ -654,6 +678,7 @@
           "os/agent_file_state_internal.h",
           "os/agent_metadata_internal.h",
           "os/agent_metadata_catalog.h",
+          "os/agent_metadata_directory.h",
           "os/agent_metadata_query.h",
           "os/agent_metadata_scan.h"
         ],

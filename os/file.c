@@ -5,6 +5,7 @@
 #include "fcntl.h"
 #include "fs.h"
 #include "kernel_work.h"
+#include "agent_metadata_directory.h"
 #include "proc.h"
 #include "vfs_security.h"
 

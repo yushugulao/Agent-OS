@@ -226,7 +226,7 @@ def validate_begin(objects):
     for owner, contract in required_cleanup.items():
         if compact.count(contract) != 1:
             raise ProtocolError(f"{label} lost {owner} cleanup ownership")
-    require_calls(begin, "agent_file_maintain", 1, label)
+    require_calls(begin, "agent_metadata_note_catalog_changes", 1, label)
     require_calls(begin, "agent_metadata_store_mark_dirty", 1, label)
     assignment = "*metadata_target=agent_metadata_store_mark_dirty(scope_id);"
     if compact.count(assignment) != 1:

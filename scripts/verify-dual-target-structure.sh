@@ -178,6 +178,8 @@ require_path "scripts/probes/struct-proc-size.c" "struct proc budget probe is mi
 require_path "ci/kernel-budgets.json" "machine-readable kernel budgets are missing"
 require_path "os/agent_context.c" "Agent context subsystem is missing"
 require_path "os/agent_metadata_objects.c" "Agent metadata object subsystem is missing"
+require_path "os/agent_metadata_directory.c" "Agent metadata directory subsystem is missing"
+require_path "os/agent_metadata_directory.h" "Agent metadata directory contract is missing"
 require_path "os/agent_metadata_store.c" "Agent metadata store subsystem is missing"
 require_path "scripts/run-syscall-fairness-tests.sh" "syscall fairness runner is missing"
 require_path "scripts/run-file-resource-tests.sh" "file resource runner is missing"

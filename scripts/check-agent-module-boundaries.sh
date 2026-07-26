@@ -27,6 +27,7 @@ agent_ipc
 agent_lifecycle
 agent_metadata
 agent_metadata_catalog
+agent_metadata_directory
 agent_metadata_objects
 agent_metadata_query
 agent_metadata_scan
@@ -55,7 +56,7 @@ for path in "${ROOT_DIR}"/os/agent*.c; do
 	case "${module}" in
 	agent | agent_core | agent_context | agent_file_state | agent_identity | agent_ipc | \
 		agent_lifecycle | agent_metadata | agent_metadata_objects | \
-		agent_metadata_catalog | agent_metadata_query | agent_metadata_scan | \
+		agent_metadata_catalog | agent_metadata_directory | agent_metadata_query | agent_metadata_scan | \
 		agent_metadata_store | agent_observe)
 		;;
 	*)
@@ -68,6 +69,7 @@ metadata_private_headers="
 agent_file_name_policy.h
 agent_file_state_internal.h
 agent_metadata_catalog.h
+agent_metadata_directory.h
 agent_metadata_internal.h
 agent_metadata_query.h
 agent_metadata_scan.h
@@ -122,6 +124,7 @@ fi
 catalog_source="${ROOT_DIR}/os/agent_metadata_catalog.c"
 metadata_source="${ROOT_DIR}/os/agent_metadata.c"
 objects_source="${ROOT_DIR}/os/agent_metadata_objects.c"
+directory_source="${ROOT_DIR}/os/agent_metadata_directory.c"
 scan_source="${ROOT_DIR}/os/agent_metadata_scan.c"
 store_source="${ROOT_DIR}/os/agent_metadata_store.c"
 if grep -n -E 'projection_commit|agent_file_catalog_sync|\(\*[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\)[[:space:]]*\(' \
@@ -140,7 +143,7 @@ if grep -n -E '\bscan_control\b|\bscan\.(offset|seen|next_tick|last_step_tick|st
 	fail "metadata objects retained scan-owned state or directory traversal"
 fi
 : >"${TMP_FILE}"
-if grep -n -E 'agent_file_maintain|agent_file_store_load|agent_metadata_query_|bio_background_|agent_metadata_txn_try_external|\(\*[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\)[[:space:]]*\(' \
+if grep -n -E 'agent_file_maintain|agent_metadata_note_catalog_changes|agent_file_store_load|agent_metadata_query_|bio_background_|agent_metadata_txn_try_external|\(\*[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\)[[:space:]]*\(' \
 	"${scan_source}" >"${TMP_FILE}"; then
 	fail "metadata scan acquired a reverse dependency or callback"
 fi
@@ -149,6 +152,29 @@ for scan_owner_operation in 'root_dir(' 'readi(' 'inode_get(' \
 	'steps < SCAN_STEP'; do
 	grep -q -F "${scan_owner_operation}" "${scan_source}" ||
 		fail "metadata scan lost owner operation: ${scan_owner_operation}"
+done
+
+if grep -n -E '^void[[:space:]]+agent_fs_(note_create|note_write|sync_write|note_truncate|note_delete)[[:space:]]*\(' \
+	"${objects_source}" >"${TMP_FILE}"; then
+	fail "metadata objects retained a directory hook"
+fi
+: >"${TMP_FILE}"
+if grep -n -E 'agent_metadata_query_|agent_file_store_load|bio_background_|agent_metadata_store_persist[[:space:]]*\(|agent_metadata_txn_lock[[:space:]]*\(|agent_dependency_generation|\bscan_control\b|\bscan\.(offset|seen|next_tick|last_step_tick|started_tick|runs|entries|added|updated|removed)\b|\(\*[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\)[[:space:]]*\(' \
+	"${directory_source}" >"${TMP_FILE}"; then
+	fail "metadata directory acquired coordination state or blocking work"
+fi
+: >"${TMP_FILE}"
+if grep -n -E '^static[[:space:]]+(char|short|int|long|uint|uint64|struct[[:space:]]+[A-Za-z_][A-Za-z0-9_]*)[[:space:]]+[A-Za-z_][A-Za-z0-9_]*([[:space:]]*\[[^]]*\])?[[:space:]]*(=[^;]*)?;' \
+	"${directory_source}" >"${TMP_FILE}"; then
+	fail "metadata directory acquired writable file-scope state"
+fi
+: >"${TMP_FILE}"
+for directory_operation in 'agent_metadata_txn_try_external()' \
+	'agent_metadata_scan_note_slot(slot)' \
+	'agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL)' \
+	'agent_metadata_store_mark_dirty(scope_id)'; do
+	grep -q -F "${directory_operation}" "${directory_source}" ||
+		fail "metadata directory lost owner operation: ${directory_operation}"
 done
 
 # A pending catalog projection is a hard persistence barrier. Keep the guard

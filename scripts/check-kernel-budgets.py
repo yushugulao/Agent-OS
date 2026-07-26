@@ -77,6 +77,7 @@ REQUIRED_AGENT_AGGREGATES = {
             "file_state",
             "metadata_objects",
             "metadata_catalog",
+            "metadata_directory",
             "metadata_query",
             "metadata_scan",
             "metadata_store",
@@ -91,6 +92,7 @@ REQUIRED_AGENT_AGGREGATE_HEADERS = {
             "os/agent_file_state_internal.h",
             "os/agent_metadata_internal.h",
             "os/agent_metadata_catalog.h",
+            "os/agent_metadata_directory.h",
             "os/agent_metadata_query.h",
             "os/agent_metadata_scan.h",
         )
@@ -114,6 +116,9 @@ REQUIRED_AGENT_AGGREGATE_SHARED_HEADERS = frozenset(
     )
 )
 REQUIRED_AGENT_DISCARDED_SECTIONS = (".eh_frame",)
+REQUIRED_METADATA_DIRECTORY_STORE_SYMBOLS = frozenset(
+    ("agent_metadata_store_loaded", "agent_metadata_store_mark_dirty")
+)
 REQUIRED_AGENT_SOURCE_BUDGET_POLICY = (
     "5% for fixed module contract overhead; loaded text and BSS remain no-growth"
 )
@@ -578,6 +583,11 @@ def validate_config(config):
         validate_pair(
             entry, "baseline_lines", "max_lines", integer=True
         )
+        max_bss = entry.get("max_bss_bytes")
+        if max_bss is not None and (
+            isinstance(max_bss, bool) or not isinstance(max_bss, int) or max_bss < 0
+        ):
+            raise BudgetError(f"{entry_name}.max_bss_bytes must be a non-negative integer")
         prefixes = require_string_array(entry, "allowed_global_prefixes")
         symbols = require_string_array(entry, "allowed_global_symbols")
         readonly = require_string_array(entry, "allowed_readonly_symbols")
@@ -683,6 +693,7 @@ def validate_config(config):
         "lifecycle",
         "metadata",
         "metadata_catalog",
+        "metadata_directory",
         "metadata_objects",
         "metadata_query",
         "metadata_scan",
@@ -707,6 +718,7 @@ def validate_config(config):
         "lifecycle": "os/agent_lifecycle.c",
         "metadata": "os/agent_metadata.c",
         "metadata_catalog": "os/agent_metadata_catalog.c",
+        "metadata_directory": "os/agent_metadata_directory.c",
         "metadata_objects": "os/agent_metadata_objects.c",
         "metadata_query": "os/agent_metadata_query.c",
         "metadata_scan": "os/agent_metadata_scan.c",
@@ -726,6 +738,10 @@ def validate_config(config):
                 f"Agent module {entry['name']} path drift: expected "
                 f"{expected_source} and {expected_object}"
             )
+
+    directory = next(entry for entry in entries if entry["name"] == "metadata_directory")
+    if directory.get("max_bss_bytes") != 0:
+        raise BudgetError("metadata_directory must preserve a zero-BSS ownership boundary")
 
     validate_agent_aggregate_budgets(modules, names)
 
@@ -2024,7 +2040,8 @@ def validate_metadata_scan_boundary_text(objects, scan):
         r"started_tick|runs|entries|added|updated|removed)\b|\broot_dir\s*\("
     )
     reverse = (
-        r"agent_file_maintain|agent_file_store_load|agent_metadata_query_|"
+        r"agent_file_maintain|agent_metadata_note_catalog_changes|"
+        r"agent_file_store_load|agent_metadata_query_|"
         r"bio_background_|agent_metadata_txn_try_external|"
         r"agent_metadata_objects\.h|\(\s*\*\s*[A-Za-z_]\w*\s*\)\s*\("
     )
@@ -2080,7 +2097,7 @@ def validate_metadata_scan_boundary_text(objects, scan):
             "agent_metadata_scan_plan(now)",
             "agent_file_store_load()",
             "agent_metadata_scan_step(now, plan, load_ok)",
-            "agent_file_maintain(changes)",
+            "agent_metadata_note_catalog_changes(changes)",
             "agent_metadata_txn_unlock()",
             "bio_background_end()",
         ),
@@ -2119,6 +2136,152 @@ def validate_metadata_scan_boundary_sources(root):
     validate_metadata_scan_boundary_text(objects, scan)
 
 
+def validate_metadata_directory_boundary_text(objects, directory):
+    hooks = (
+        "agent_fs_note_create",
+        "agent_fs_note_write",
+        "agent_fs_sync_write",
+        "agent_fs_note_truncate",
+        "agent_fs_note_delete",
+    )
+    for hook in hooks:
+        definition = rf"(?m)^void\s+{hook}\s*\("
+        if re.search(definition, objects):
+            raise BudgetError(f"metadata objects retained directory hook: {hook}")
+        if len(re.findall(definition, directory)) != 1:
+            raise BudgetError(f"metadata directory must own one hook: {hook}")
+    if 'agent_metadata_directory.h' in objects:
+        raise BudgetError("metadata objects acquired a directory dependency")
+    if re.search(
+        r"agent_metadata_query_|agent_file_store_load|bio_background_|"
+        r"agent_metadata_store_persist\s*\(|agent_metadata_txn_lock\s*\(|"
+        r"\bscan_control\b|\bscan\.(?:offset|seen|next_tick|last_step_tick|"
+        r"started_tick|runs|entries|added|updated|removed)\b",
+        directory,
+    ):
+        raise BudgetError("metadata directory acquired forbidden coordination work")
+    if "agent_dependency_generation" in directory:
+        raise BudgetError("metadata directory bypassed the catalog-change operation")
+    if re.search(r"\(\s*\*\s*[A-Za-z_]\w*\s*\)\s*\(", directory):
+        raise BudgetError("metadata directory introduced an indirect callback")
+    writable_state = re.compile(
+        r"(?m)^static\s+(?:char|short|int|long|uint|uint64|"
+        r"struct\s+[A-Za-z_]\w*)\s+[A-Za-z_]\w*(?:\[[^\n]*\])?\s*(?:=[^\n]*)?;"
+    )
+    if writable_state.search(directory):
+        raise BudgetError("metadata directory acquired writable file-scope state")
+    require_source_tokens(
+        objects,
+        (
+            "agent_metadata_inode_trackable(struct inode *ip)",
+            "agent_metadata_note_catalog_changes(uint changes)",
+        ),
+        "metadata directory leaf operations",
+    )
+
+    create = source_function_body(directory, "agent_fs_note_create(struct inode *ip")
+    require_source_order(
+        create,
+        (
+            "agent_metadata_txn_try_external()",
+            "agent_metadata_catalog_edit_commit(",
+            "agent_metadata_scan_note_slot(slot)",
+            "agent_metadata_catalog_bind(slot, 0, 0)",
+            "agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL)",
+            "agent_metadata_store_mark_dirty(scope_id)",
+            "agent_metadata_txn_unlock()",
+        ),
+        "metadata directory create hook",
+    )
+    require_source_tokens(
+        create,
+        ("agent_metadata_inode_trackable(ip)", "agent_file_request_scan()"),
+        "metadata directory create revalidation",
+    )
+    if create.count("agent_metadata_txn_unlock()") != 1:
+        raise BudgetError("metadata directory create must unlock exactly once")
+    update = source_function_body(
+        directory, "agent_fs_update_inode_meta(struct inode *ip"
+    )
+    require_source_order(
+        update,
+        (
+            "agent_metadata_txn_try_external()",
+            "agent_metadata_catalog_borrow(0, slot, &view)",
+            "view.scope_id != scope_id",
+            "view.meta->dev != ip->dev",
+            "view.meta->inum != ip->inum",
+            "view.meta->incarnation != ip->vfs_incarnation",
+            "agent_metadata_catalog_edit_commit(&edit, 0)",
+            "agent_metadata_store_mark_dirty(scope_id)",
+            "agent_metadata_txn_unlock()",
+        ),
+        "metadata directory inode update",
+    )
+    require_source_tokens(
+        update,
+        ("published > 0", "published < 0", "agent_file_request_scan()"),
+        "metadata directory write-contention fallback",
+    )
+    if update.count("agent_metadata_txn_unlock()") != 1:
+        raise BudgetError("metadata directory inode update must unlock exactly once")
+    delete = source_function_body(directory, "agent_fs_note_delete(struct inode *ip")
+    require_source_order(
+        delete,
+        (
+            "agent_file_state_content_bump(ip)",
+            "agent_metadata_txn_try_external()",
+            "agent_metadata_catalog_borrow(0, slot, &view)",
+            "view.scope_id != scope_id",
+            "view.meta->dev != ip->dev",
+            "view.meta->inum != ip->inum",
+            "view.meta->incarnation != ip->vfs_incarnation",
+            "agent_metadata_catalog_clear_slot(slot)",
+            "ip->agent_meta_slot = 0",
+            "iupdate(ip)",
+            "agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL)",
+            "agent_metadata_store_mark_dirty(scope_id)",
+            "agent_metadata_txn_unlock()",
+        ),
+        "metadata directory delete hook",
+    )
+    if delete.count("agent_metadata_txn_unlock()") != 1:
+        raise BudgetError("metadata directory delete must unlock exactly once")
+
+
+def validate_metadata_directory_store_symbols(undefined):
+    actual = frozenset(
+        symbol for symbol in undefined
+        if symbol.startswith("agent_metadata_store_")
+    )
+    if actual != REQUIRED_METADATA_DIRECTORY_STORE_SYMBOLS:
+        raise BudgetError(
+            "metadata directory store API boundary mismatch: "
+            f"expected={sorted(REQUIRED_METADATA_DIRECTORY_STORE_SYMBOLS)!r}, "
+            f"actual={sorted(actual)!r}"
+        )
+
+
+def validate_metadata_directory_callgraph(callgraph):
+    if 'targetname: "__indirect_call"' in callgraph:
+        raise BudgetError("metadata directory introduced an indirect call")
+
+
+def validate_metadata_directory_boundary_sources(root):
+    try:
+        objects = (root / "os" / "agent_metadata_objects.c").read_text(
+            encoding="utf-8"
+        )
+        directory = (root / "os" / "agent_metadata_directory.c").read_text(
+            encoding="utf-8"
+        )
+    except OSError as error:
+        raise BudgetError(
+            f"cannot read metadata directory boundary source: {error}"
+        ) from error
+    validate_metadata_directory_boundary_text(objects, directory)
+
+
 def check_agent_modules(args, config):
     modules = config["agent_modules"]
     if not args.nm:
@@ -2127,6 +2290,17 @@ def check_agent_modules(args, config):
         raise BudgetError("--size is required")
     root = Path(args.root).resolve()
     validate_metadata_scan_boundary_sources(root)
+    validate_metadata_directory_boundary_sources(root)
+    directory_callgraph = (
+        root / args.callgraph_dir / "agent_metadata_directory.ci"
+    ).resolve()
+    try:
+        directory_callgraph_text = directory_callgraph.read_text(encoding="utf-8")
+    except OSError as error:
+        raise BudgetError(
+            f"cannot read metadata directory callgraph: {error}"
+        ) from error
+    validate_metadata_directory_callgraph(directory_callgraph_text)
     entries = modules["modules"]
     defined_by_module = {}
     symbol_owner = {}
@@ -2145,6 +2319,23 @@ def check_agent_modules(args, config):
             raise BudgetError(
                 f"Agent module object is missing: {object_path}"
             )
+        max_bss = entry.get("max_bss_bytes")
+        if max_bss is not None:
+            _, _, object_bss, _ = parse_size_output(
+                run_tool(
+                    [args.size, "-B", str(object_path)],
+                    f"Agent module {entry['name']} BSS inspection",
+                )
+            )
+            print(
+                f"[kernel-budget] Agent module {entry['name']} BSS: "
+                f"actual={object_bss} max={max_bss} bytes"
+            )
+            if object_bss > max_bss:
+                raise BudgetError(
+                    f"Agent module {entry['name']} BSS exceeds budget: "
+                    f"{object_bss} > {max_bss} bytes"
+                )
         output = run_tool(
             [args.nm, "-g", "--defined-only", str(object_path)],
             f"Agent module {entry['name']} export inspection",
@@ -2199,6 +2390,8 @@ def check_agent_modules(args, config):
             f"Agent module {entry['name']} dependency inspection",
         )
         undefined = parse_nm_undefined_symbols(output)
+        if entry["name"] == "metadata_directory":
+            validate_metadata_directory_store_symbols(undefined)
         undefined_by_module[entry["name"]] = undefined
         dependencies = set()
         for symbol in undefined:

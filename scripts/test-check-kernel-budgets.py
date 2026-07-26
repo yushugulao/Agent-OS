@@ -330,7 +330,9 @@ agent_file_store_complete(&commit, result);
             "\tagent_metadata_scan_catalog_sync(delta);",
             1,
         )
-        reverse_dependency = scan + "\nvoid bad(void) { agent_file_maintain(0); }\n"
+        reverse_dependency = scan + (
+            "\nvoid bad(void) { agent_metadata_note_catalog_changes(0); }\n"
+        )
         unbounded_step = scan.replace(
             "steps < SCAN_STEP",
             "steps < AGENT_FILE_META_MAX",
@@ -365,6 +367,121 @@ agent_file_store_complete(&commit, result);
                     kernel_budgets.validate_metadata_scan_boundary_text(
                         bad_objects, bad_scan
                     )
+
+    def test_metadata_directory_boundary_rejects_static_regressions(self):
+        root = SCRIPT.parent.parent
+        objects = (root / "os" / "agent_metadata_objects.c").read_text(
+            encoding="utf-8"
+        )
+        directory = (root / "os" / "agent_metadata_directory.c").read_text(
+            encoding="utf-8"
+        )
+        kernel_budgets.validate_metadata_directory_boundary_text(objects, directory)
+        retained_hook = objects + (
+            "\nvoid agent_fs_note_create(struct inode *ip, char *path) {}\n"
+        )
+        reverse_dependency = objects + '#include "agent_metadata_directory.h"\n'
+        blocking_gate = directory.replace(
+            "agent_metadata_txn_try_external()", "agent_metadata_txn_lock(1)", 1
+        )
+        synchronous_persist = directory.replace(
+            "agent_metadata_store_mark_dirty(scope_id)",
+            "agent_metadata_store_persist()",
+            1,
+        )
+        direct_generation = directory.replace(
+            "agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL)",
+            "agent_dependency_generation++",
+            1,
+        )
+        writable_state = "static int directory_state;\n" + directory
+        indirect_callback = directory + (
+            "\nvoid bad(void) { void (*callback)(void); callback(); }\n"
+        )
+        missing_scan_note = directory.replace(
+            "\tagent_metadata_scan_note_slot(slot);\n", "", 1
+        )
+        early_unlock = directory.replace(
+            "\tagent_metadata_scan_note_slot(slot);",
+            "\tagent_metadata_txn_unlock();\n"
+            "\tagent_metadata_scan_note_slot(slot);",
+            1,
+        )
+        cases = (
+            ("objects retained hook", retained_hook, directory),
+            ("objects reverse dependency", reverse_dependency, directory),
+            ("blocking VFS gate", objects, blocking_gate),
+            ("synchronous persistence", objects, synchronous_persist),
+            ("direct generation state", objects, direct_generation),
+            ("writable directory state", objects, writable_state),
+            ("indirect callback", objects, indirect_callback),
+            ("missing scan note", objects, missing_scan_note),
+            ("early transaction unlock", objects, early_unlock),
+        )
+        for name, bad_objects, bad_directory in cases:
+            with self.subTest(name=name):
+                with self.assertRaises(kernel_budgets.BudgetError):
+                    kernel_budgets.validate_metadata_directory_boundary_text(
+                        bad_objects, bad_directory
+                    )
+
+        identity_fields = (
+            "view.scope_id != scope_id",
+            "view.meta->dev != ip->dev",
+            "view.meta->inum != ip->inum",
+            "view.meta->incarnation != ip->vfs_incarnation",
+        )
+        for field in identity_fields:
+            self.assertEqual(directory.count(field), 2)
+            missing_update = directory.replace(field, "0", 1)
+            missing_delete = "0".join(directory.rsplit(field, 1))
+            for owner, weakened in (
+                ("update", missing_update),
+                ("delete", missing_delete),
+            ):
+                with self.subTest(owner=owner, missing=field):
+                    with self.assertRaises(kernel_budgets.BudgetError):
+                        kernel_budgets.validate_metadata_directory_boundary_text(
+                            objects, weakened
+                        )
+
+    def test_metadata_directory_store_symbol_whitelist(self):
+        allowed = set(
+            kernel_budgets.REQUIRED_METADATA_DIRECTORY_STORE_SYMBOLS
+        )
+        kernel_budgets.validate_metadata_directory_store_symbols(allowed)
+        forbidden = (
+            "agent_metadata_store_persist_system",
+            "agent_metadata_store_submit_wait_locked",
+            "agent_metadata_store_reload_wait_locked",
+        )
+        for symbol in forbidden:
+            with self.subTest(symbol=symbol):
+                with self.assertRaises(kernel_budgets.BudgetError):
+                    kernel_budgets.validate_metadata_directory_store_symbols(
+                        allowed | {symbol}
+                    )
+
+    def test_metadata_directory_callgraph_rejects_indirect_forms(self):
+        direct = (
+            'edge: { sourcename: "hook" '
+            'targetname: "agent_metadata_store_mark_dirty" }'
+        )
+        kernel_budgets.validate_metadata_directory_callgraph(direct)
+        forms = (
+            ("typedef callback", "agent_callback_t callback; callback();"),
+            ("ops member callback", "ops->callback();"),
+        )
+        for name, source in forms:
+            callgraph = (
+                'node: { title: "__indirect_call" '
+                'label: "Indirect Call Placeholder" }\n'
+                'edge: { sourcename: "hook" '
+                f'targetname: "__indirect_call" label: "{source}" }}'
+            )
+            with self.subTest(name=name):
+                with self.assertRaises(kernel_budgets.BudgetError):
+                    kernel_budgets.validate_metadata_directory_callgraph(callgraph)
 
     def test_projection_protocol_guards_indirect_checkpoint_helpers(self):
         body = """
@@ -963,12 +1080,54 @@ agent_metadata_txn_projection_require_idle();
             ["file_state", "metadata", "metadata_catalog", "metadata_store"],
         )
         self.assertEqual(scan["allowed_global_symbols"], ["agent_file_request_scan"])
+        directory = next(
+            entry for entry in modules["modules"]
+            if entry["name"] == "metadata_directory"
+        )
+        self.assertEqual(directory["max_bss_bytes"], 0)
+        self.assertEqual(
+            directory["allowed_dependencies"],
+            [
+                "file_state",
+                "metadata",
+                "metadata_catalog",
+                "metadata_objects",
+                "metadata_scan",
+                "metadata_store",
+            ],
+        )
+        self.assertEqual(
+            directory["allowed_global_symbols"],
+            [
+                "agent_fs_note_create",
+                "agent_fs_note_delete",
+                "agent_fs_note_truncate",
+                "agent_fs_note_write",
+                "agent_fs_sync_write",
+            ],
+        )
         objects = next(
             entry for entry in modules["modules"]
             if entry["name"] == "metadata_objects"
         )
         self.assertIn("metadata_query", objects["allowed_dependencies"])
         self.assertIn("metadata_scan", objects["allowed_dependencies"])
+        self.assertNotIn("metadata_directory", objects["allowed_dependencies"])
+        file_bridge = next(
+            bridge for bridge in modules["integration_bridges"]
+            if bridge["name"] == "file"
+        )
+        self.assertIn("metadata_directory", file_bridge["allowed_dependencies"])
+        self.assertNotIn("metadata_objects", file_bridge["allowed_dependencies"])
+        writable_directory = copy.deepcopy(config)
+        next(
+            entry for entry in writable_directory["agent_modules"]["modules"]
+            if entry["name"] == "metadata_directory"
+        )["max_bss_bytes"] = 1
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "zero-BSS ownership boundary"
+        ):
+            kernel_budgets.validate_config(writable_directory)
         duplicate_bridge_path = copy.deepcopy(config)
         duplicate_bridge_path["agent_modules"]["integration_bridges"][1][
             "object_path"

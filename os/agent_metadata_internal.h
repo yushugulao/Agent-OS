@@ -10,6 +10,9 @@ struct agent_metadata_store_commit {
 	int reload_owned;
 };
 
+int agent_metadata_inode_trackable(struct inode *);
+void agent_metadata_note_catalog_changes(uint);
+
 /* Store-owned durable state and writeback scheduling. */
 void agent_metadata_store_init(void);
 void agent_metadata_store_fail_closed_at_boot(void);

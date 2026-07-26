@@ -60,7 +60,6 @@ static int agent_action_history_count;
 static uint64 agent_action_next_sequence;
 static uint64 agent_dependency_generation;
 
-static void agent_file_maintain(uint changes);
 static int agent_query_from_payload(struct agent_file_query *q, char *payload);
 static void agent_text_append(char *dst, int n, const char *src);
 static void agent_action_history_clear_scope(uint scope_id);
@@ -207,14 +206,14 @@ agent_metadata_background_maintain(void)
 		load_ok = agent_file_store_load() >= 0;
 	changes = agent_metadata_scan_step(now, plan, load_ok);
 	if (changes)
-		agent_file_maintain(changes);
+		agent_metadata_note_catalog_changes(changes);
 out_txn:
 	agent_metadata_txn_unlock();
 out_io:
 	bio_background_end();
 }
 
-static int agent_fs_inode_trackable(struct inode *ip)
+int agent_metadata_inode_trackable(struct inode *ip)
 {
 	if (ip == 0)
 		return 0;
@@ -236,7 +235,7 @@ static int agent_file_path_autopersist(uint scope_id, char *path,
 	ip = namei_scope(path, VFS_POLICY_WORKFLOW, scope_id);
 	if (ip == 0)
 		return 0;
-	eligible = agent_fs_inode_trackable(ip) &&
+	eligible = agent_metadata_inode_trackable(ip) &&
 		   ip->vfs_scope_id == scope_id && vfs_scope_active(scope_id) &&
 		   exec_policy_inode_mutable(ip);
 	if (eligible && binding) {
@@ -249,231 +248,13 @@ static int agent_file_path_autopersist(uint scope_id, char *path,
 	return eligible;
 }
 
-void agent_fs_note_create(struct inode *ip, char *path)
-{
-	struct agent_catalog_edit edit;
-	struct agent_file_meta *meta;
-	int slot = -1;
-	int reconcile = 0;
-	uint scope_id;
-	uint64 fid;
-
-	if (ip == 0 || path == 0 || agent_file_is_meta_store_name(path))
-		return;
-	if (!agent_fs_inode_trackable(ip) ||
-	    !agent_scope_valid(ip->vfs_scope_id) || ip->agent_meta_slot > 0)
-		return;
-	scope_id = ip->vfs_scope_id;
-	if (!agent_metadata_txn_try_external()) {
-		agent_file_request_scan();
-		return;
-	}
-	if (!agent_fs_inode_trackable(ip) ||
-	    !agent_scope_valid(ip->vfs_scope_id) ||
-	    ip->agent_meta_slot > 0 || !agent_metadata_store_loaded()) {
-		reconcile = 1;
-		goto out_txn;
-	}
-	agent_file_state_content_bump(ip);
-	slot = agent_metadata_catalog_alloc_slot(scope_id);
-	if (slot < 0) {
-		reconcile = 1;
-		goto out_txn;
-	}
-	fid = agent_metadata_catalog_alloc_fid(scope_id);
-	if (fid == 0) {
-		reconcile = 1;
-		goto out_txn;
-	}
-	if (agent_metadata_catalog_edit_begin(slot, scope_id, &edit) < 0) {
-		reconcile = 1;
-		goto out_txn;
-	}
-	meta = edit.meta;
-	memset(meta, 0, sizeof(*meta));
-	meta->used = 1;
-	meta->fid = fid;
-	meta->flags = AGENT_FILE_META_F_PERSIST |
-		      AGENT_FILE_META_F_AUTOSCAN;
-	safestrcpy(meta->physical_name, path, sizeof(meta->physical_name));
-	safestrcpy(meta->logical_path, path, sizeof(meta->logical_path));
-	safestrcpy(meta->kind, "file", sizeof(meta->kind));
-	safestrcpy(meta->status, "created", sizeof(meta->status));
-	safestrcpy(meta->summary, "created by fileopen",
-		   sizeof(meta->summary));
-	meta->updated_tick = agent_file_state_now();
-	if (agent_metadata_catalog_edit_commit(
-		    &edit, AGENT_FILE_CHANGE_ALL) < 0) {
-		reconcile = 1;
-		goto out_txn;
-	}
-	agent_metadata_scan_note_slot(slot);
-	if (agent_metadata_catalog_bind(slot, 0, 0) < 0) {
-		agent_metadata_catalog_clear_slot(slot);
-		reconcile = 1;
-		goto out_txn;
-	}
-	agent_file_maintain(AGENT_FILE_CHANGE_ALL);
-	agent_metadata_store_mark_dirty(scope_id);
-out_txn:
-	if (reconcile)
-		agent_file_request_scan();
-	agent_metadata_txn_unlock();
-}
-
-static void agent_fs_update_inode_meta(struct inode *ip, char *summary,
-				       int published)
-{
-	struct agent_catalog_view view;
-	struct agent_catalog_edit edit;
-	struct agent_file_meta *meta;
-	int slot;
-	int persistent;
-	int reconcile = 0;
-	uint scope_id;
-
-	if (!agent_fs_inode_trackable(ip))
-		return;
-	scope_id = ip->vfs_scope_id;
-	if (!agent_metadata_txn_try_external()) {
-		/*
-		 * A successful sidecar publication already carries the latest size,
-		 * generation and tick into queries and checkpoints. Contention must
-		 * not turn an ordinary write into a global directory scan.
-		 */
-		if (published > 0 &&
-		    (ip->agent_meta_flags & AGENT_FILE_META_F_PERSIST))
-			agent_metadata_store_mark_dirty(scope_id);
-		else if (published < 0)
-			agent_file_request_scan();
-		return;
-	}
-	if (!agent_fs_inode_trackable(ip) ||
-	    !agent_metadata_store_loaded()) {
-		reconcile = 1;
-		goto out_txn;
-	}
-	slot = ip->agent_meta_slot - 1;
-	if (agent_file_read_slot(slot, &view) <= 0 ||
-	    view.scope_id != scope_id || view.meta->dev != ip->dev ||
-	    view.meta->inum != ip->inum ||
-	    view.meta->incarnation != ip->vfs_incarnation ||
-	    agent_metadata_catalog_edit_begin(slot, scope_id, &edit) < 0) {
-		reconcile = 1;
-		goto out_txn;
-	}
-	meta = edit.meta;
-	meta->size = ip->size;
-	if (published > 0)
-		agent_file_state_overlay_published_size(meta, scope_id);
-	else {
-		meta->updated_tick = agent_file_state_now();
-		meta->fs_generation =
-			agent_file_state_generation_next(scope_id);
-	}
-	if (summary && summary[0] &&
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN))
-		safestrcpy(meta->summary, summary, sizeof(meta->summary));
-	persistent = meta->flags & AGENT_FILE_META_F_PERSIST;
-	if (agent_metadata_catalog_edit_commit(&edit, 0) < 0) {
-		reconcile = 1;
-		goto out_txn;
-	}
-	/* Content-derived fields do not participate in catalog indexes. */
-	if (persistent)
-		agent_metadata_store_mark_dirty(scope_id);
-out_txn:
-	if (reconcile)
-		agent_file_request_scan();
-	agent_metadata_txn_unlock();
-}
-
-void agent_fs_note_write(struct inode *ip)
-{
-	int published;
-
-	if (!agent_fs_inode_trackable(ip))
-		return;
-	agent_file_state_content_bump(ip);
-	published = agent_file_state_size_publish(ip, 1);
-	agent_fs_update_inode_meta(ip, "file content updated", published);
-}
-
-// A logical write invalidates cached content once, but a block-bounded write
-// must publish its latest committed size before every scheduling safe point.
-void agent_fs_sync_write(struct inode *ip)
-{
-	int published;
-
-	if (!agent_fs_inode_trackable(ip))
-		return;
-	published = agent_file_state_size_publish(ip, 0);
-	if (published != 0)
-		agent_fs_update_inode_meta(ip, "file content updated", published);
-}
-
-void agent_fs_note_truncate(struct inode *ip)
-{
-	int published;
-
-	if (!agent_fs_inode_trackable(ip))
-		return;
-	agent_file_state_content_bump(ip);
-	published = agent_file_state_size_publish(ip, 1);
-	agent_fs_update_inode_meta(ip, "file truncated", published);
-}
-
-void agent_fs_note_delete(struct inode *ip)
-{
-	struct agent_catalog_view view;
-	int slot;
-	int persistent;
-	int reconcile = 0;
-	uint scope_id;
-
-	if (!agent_fs_inode_trackable(ip))
-		return;
-	scope_id = ip->vfs_scope_id;
-	agent_file_state_content_bump(ip);
-	if (!agent_metadata_txn_try_external()) {
-		agent_file_request_scan();
-		return;
-	}
-	if (!agent_fs_inode_trackable(ip) ||
-	    !agent_metadata_store_loaded()) {
-		reconcile = 1;
-		goto out_txn;
-	}
-	slot = ip->agent_meta_slot - 1;
-	if (agent_file_read_slot(slot, &view) <= 0 ||
-	    view.scope_id != scope_id || view.meta->dev != ip->dev ||
-	    view.meta->inum != ip->inum ||
-	    view.meta->incarnation != ip->vfs_incarnation) {
-		reconcile = 1;
-		goto out_txn;
-	}
-	persistent = view.meta->flags & AGENT_FILE_META_F_PERSIST;
-	agent_metadata_catalog_clear_slot(slot);
-	ip->agent_meta_slot = 0;
-	ip->agent_meta_flags = 0;
-	ip->agent_meta_version = 0;
-	iupdate(ip);
-	agent_file_maintain(AGENT_FILE_CHANGE_ALL);
-	if (persistent)
-		agent_metadata_store_mark_dirty(scope_id);
-out_txn:
-	if (reconcile)
-		agent_file_request_scan();
-	agent_metadata_txn_unlock();
-}
-
 /*
  * Metadata mutations declare the fields they changed. Secondary indexes are
  * rebuilt only for affected fields. Legacy dependency masks stay canonical in
  * the file records and are interpreted by consumers, so topology changes only
  * advance a generation and never materialize a global derived graph.
  */
-static void agent_file_maintain(uint changes)
+void agent_metadata_note_catalog_changes(uint changes)
 {
 	if (changes & (AGENT_FILE_CHANGE_STAGE |
 		       AGENT_FILE_CHANGE_SCOPE_KEYS |
@@ -536,7 +317,7 @@ int agent_scope_reclaim_begin(uint scope_id, uint64 *metadata_target)
 	agent_observe_scope_reclaim(scope_id);
 	agent_file_state_scope_reclaim(scope_id);
 	if (metadata_available)
-		agent_file_maintain(AGENT_FILE_CHANGE_STATUS |
+		agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_STATUS |
 				    AGENT_FILE_CHANGE_STAGE |
 				    AGENT_FILE_CHANGE_KIND);
 	if (changed) {
@@ -2464,7 +2245,7 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 		audit_fid = previous.fid;
 		view.meta = 0;
 		agent_metadata_catalog_clear_slot(slot);
-		agent_file_maintain(AGENT_FILE_CHANGE_ALL);
+		agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL);
 		agent_metadata_store_mark_dirty(scope_id);
 		if (agent_metadata_store_persist() < 0) {
 			agent_file_restore_slot(slot, &previous,
@@ -2576,7 +2357,7 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 				 sizeof(event_payload));
 	view.meta = 0;
 	if (changes)
-		agent_file_maintain(changes);
+		agent_metadata_note_catalog_changes(changes);
 	if (persistent)
 		agent_metadata_store_mark_dirty(scope_id);
 	if (persistent && agent_metadata_store_persist() < 0) {
