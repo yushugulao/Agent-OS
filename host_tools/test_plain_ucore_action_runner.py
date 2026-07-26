@@ -68,7 +68,7 @@ def main() -> int:
             [
                 sys.executable,
                 "-c",
-                "print('boot'); print('\\x1b[31m[PANIC 1-1] os/proc.c:10: synthetic failure\\x1b[0m')",
+                "print('boot'); print('\\x1b[31m[PANIC -1--1] os/proc.c:10: synthetic failure\\x1b[0m')",
             ],
             root / "observed-fail.log",
             timeout_seconds=5,
@@ -79,8 +79,8 @@ def main() -> int:
         assert observed_fail["returncode"] != 0
         assert observed_fail["failure_seen"] is True
         assert observed_fail["failure_reason"] == "kernel_panic"
-        assert observed_fail["failure_line"] == "[PANIC 1-1] os/proc.c:10: synthetic failure"
-        assert "[PANIC 1-1]" in read(root / "observed-fail.log")
+        assert observed_fail["failure_line"] == "[PANIC -1--1] os/proc.c:10: synthetic failure"
+        assert "[PANIC -1--1]" in read(root / "observed-fail.log")
         assert runner.classify_guest_failure("rp_orch: failed code=1") == "orchestrator_failed"
         assert runner.classify_guest_failure("artifact=status=failed") == ""
 

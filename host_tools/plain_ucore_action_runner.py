@@ -23,12 +23,15 @@ ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
 GUEST_FAILURE_RULES = (
     (
         "kernel_panic",
-        re.compile(r"^(?:\[PANIC\s+\d+-\d+\]|PANIC:)(?:\s|.).*$", re.IGNORECASE),
+        re.compile(
+            r"^(?:\[PANIC\s+-?\d+--?\d+\]|PANIC:)(?:\s|.).*$",
+            re.IGNORECASE,
+        ),
     ),
     (
         "kernel_fault",
         re.compile(
-            r"^\[ERROR\s+\d+-\d+\].*(?:unknown syscall|bad addr\s*=|IllegalInstruction).*$",
+            r"^\[ERROR\s+-?\d+--?\d+\].*(?:unknown syscall|bad addr\s*=|IllegalInstruction).*$",
             re.IGNORECASE,
         ),
     ),
