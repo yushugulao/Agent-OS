@@ -17,9 +17,33 @@ from contextlib import nullcontext
 from dataclasses import dataclass
 
 
-FAILURE_RE = re.compile(
-    r"check failed|panic|unknown syscall|bad addr|"
-    r"illegalinstruction|child_failed",
+ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+PANIC_LINE_RE = re.compile(
+    r"^\[PANIC (?:"
+    r"-?\d+--?\d+\]\s+\S+:\d+:"
+    r"|-?\d+\]\[\S+:\d+\]:"
+    r")\s+.+$",
+    re.IGNORECASE,
+)
+ERROR_LINE_RE = re.compile(
+    r"^\[ERROR -?\d+--?\d+\](?:"
+    r"unknown syscall\s+-?\d+"
+    r"|-?\d+ in application, bad addr = .+?, bad instruction = .+?, "
+    r"core dumped\."
+    r"|IllegalInstruction in application, core dumped\."
+    r"|unknown trap:.+"
+    r"|invalid trap from kernel:.+"
+    r")$",
+    re.IGNORECASE,
+)
+BAD_ADDR_LINE_RE = re.compile(
+    r"^\[ERROR -?\d+--?\d+\]-?\d+ in application, bad addr = .+?, "
+    r"bad instruction = .+?, core dumped\.$",
+    re.IGNORECASE,
+)
+USER_FAILURE_LINE_RE = re.compile(
+    r"^[A-Za-z0-9_.-]+:\s+(?:.*\s)?(?:check failed|child_failed)"
+    r"(?::|\s|$).*$",
     re.IGNORECASE,
 )
 READ_SIZE = 64 * 1024
@@ -32,6 +56,15 @@ COMPLETION_NATURAL = "natural"
 COMPLETION_CHECKPOINT = "checkpoint"
 MARKER_SUBSTRING = "substring"
 MARKER_EXACT_LINE = "exact-line"
+CONTROL_SIGNALS = tuple(
+    signum
+    for signum in (
+        getattr(signal, "SIGHUP", None),
+        signal.SIGINT,
+        signal.SIGTERM,
+    )
+    if signum is not None
+)
 
 
 def parse_duration(text, name):
@@ -66,6 +99,7 @@ class MonitorResult:
     signals_sent: tuple[int, ...]
     output_eof: bool
     expected_faults_satisfied: bool
+    checkpoint_leader_signaled: bool
     lines: tuple[str, ...]
 
     @property
@@ -89,6 +123,7 @@ class MonitorResult:
             and not self.timed_out
             and self.reason == "expected_checkpoint"
             and self.signals_sent == (signal.SIGTERM,)
+            and self.checkpoint_leader_signaled
             and self.returncode in (0, -signal.SIGTERM)
             and self.output_eof
             and self.expected_faults_satisfied
@@ -105,7 +140,8 @@ class OutputScanner:
         output_stream,
         log_stream,
         expected_bad_addr_markers=(),
-        marker_mode=MARKER_SUBSTRING,
+        marker_mode=MARKER_EXACT_LINE,
+        expected_fault_marker_mode=MARKER_EXACT_LINE,
         max_output_bytes=MAX_OUTPUT_BYTES,
         max_pending_chars=MAX_PENDING_CHARS,
     ):
@@ -113,10 +149,27 @@ class OutputScanner:
         self.marker = marker
         if marker_mode not in (MARKER_SUBSTRING, MARKER_EXACT_LINE):
             raise ValueError(f"unsupported marker mode: {marker_mode!r}")
+        if expected_fault_marker_mode not in (
+            MARKER_SUBSTRING,
+            MARKER_EXACT_LINE,
+        ):
+            raise ValueError(
+                "unsupported expected fault marker mode: "
+                f"{expected_fault_marker_mode!r}"
+            )
+        if not marker:
+            raise ValueError("completion marker must not be empty")
         self.marker_mode = marker_mode
         self.output_stream = output_stream
         self.log_stream = log_stream
         self.expected_bad_addr_markers = tuple(expected_bad_addr_markers)
+        if any(not marker for marker in self.expected_bad_addr_markers):
+            raise ValueError("expected fault markers must not be empty")
+        if len(set(self.expected_bad_addr_markers)) != len(
+            self.expected_bad_addr_markers
+        ):
+            raise ValueError("expected fault markers must be unique")
+        self.expected_fault_marker_mode = expected_fault_marker_mode
         self.max_output_bytes = max_output_bytes
         self.max_pending_chars = max_pending_chars
         self.decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
@@ -174,32 +227,38 @@ class OutputScanner:
         ):
             self._note_marker()
 
-        events = [(match.start(), "failure", match) for match in FAILURE_RE.finditer(line)]
+        normalized = ANSI_ESCAPE_RE.sub("", line)
         for marker in self.expected_bad_addr_markers:
+            if self.expected_fault_marker_mode == MARKER_EXACT_LINE:
+                if line == marker:
+                    self._arm_expected_fault(marker)
+                continue
             start = line.find(marker)
             while start >= 0:
-                events.append((start, "arm", marker))
+                self._arm_expected_fault(marker)
                 start = line.find(marker, start + len(marker))
-        events.sort(key=lambda event: event[0])
-
-        for _, kind, value in events:
-            if kind == "arm":
-                if (
-                    value in self.expected_fault_markers_seen
-                    or self.expected_fault_pending != 0
-                ):
-                    self.failure_seen = True
-                    continue
-                self.expected_fault_markers_seen.add(value)
-                self.expected_fault_pending += 1
-                continue
-            match = value
-            failure_text = match.group(0).casefold()
-            if self.expected_fault_pending and failure_text == "bad addr":
+        if BAD_ADDR_LINE_RE.fullmatch(normalized):
+            if self.expected_fault_pending:
                 self.expected_fault_pending -= 1
                 self.expected_faults_consumed += 1
-                continue
+            else:
+                self.failure_seen = True
+        elif (
+            PANIC_LINE_RE.fullmatch(normalized)
+            or ERROR_LINE_RE.fullmatch(normalized)
+            or USER_FAILURE_LINE_RE.fullmatch(normalized)
+        ):
             self.failure_seen = True
+
+    def _arm_expected_fault(self, marker):
+        if (
+            marker in self.expected_fault_markers_seen
+            or self.expected_fault_pending != 0
+        ):
+            self.failure_seen = True
+            return
+        self.expected_fault_markers_seen.add(marker)
+        self.expected_fault_pending += 1
 
     def _note_marker(self):
         if self.marker_seen:
@@ -295,9 +354,70 @@ def _drain_until(proc, fd, scanner, deadline):
     return eof
 
 
+def _leader_exited(proc):
+    """Observe leader exit without reaping its PID on Linux/WSL."""
+    if proc.returncode is not None:
+        return True
+    if (
+        os.name == "posix"
+        and hasattr(os, "waitid")
+        and hasattr(os, "WNOWAIT")
+    ):
+        try:
+            status = os.waitid(
+                os.P_PID,
+                proc.pid,
+                os.WEXITED | os.WNOHANG | os.WNOWAIT,
+            )
+        except ChildProcessError:
+            return proc.poll() is not None
+        return status is not None
+    return proc.poll() is not None
+
+
+def _linux_process_group_has_live_member(pgid):
+    """Return None off procfs, otherwise ignore exited group zombies."""
+    try:
+        entries = os.scandir("/proc")
+    except OSError:
+        return None
+    with entries:
+        for entry in entries:
+            if not entry.name.isdigit():
+                continue
+            try:
+                with open(
+                    f"/proc/{entry.name}/stat",
+                    "r",
+                    encoding="ascii",
+                    errors="replace",
+                ) as stat_file:
+                    stat = stat_file.read()
+                close_paren = stat.rfind(")")
+                if close_paren < 0:
+                    continue
+                fields = stat[close_paren + 2:].split()
+                state = fields[0]
+                process_group = int(fields[2])
+            except (FileNotFoundError, ProcessLookupError):
+                continue
+            except PermissionError:
+                return None
+            except (OSError, ValueError, IndexError):
+                continue
+            if process_group == pgid and state not in ("X", "Z"):
+                return True
+    return False
+
+
 def _process_tree_alive(proc):
+    if not _leader_exited(proc):
+        return True
     if os.name != "posix":
-        return proc.poll() is None
+        return False
+    live_member = _linux_process_group_has_live_member(proc.pid)
+    if live_member is not None:
+        return live_member
     try:
         os.killpg(proc.pid, 0)
     except ProcessLookupError:
@@ -307,24 +427,79 @@ def _process_tree_alive(proc):
     return True
 
 
-def _signal_process_tree(proc, sig):
-    """Signal the isolated QEMU tree even after its leader has exited."""
+def _open_pidfd(proc):
+    if (
+        os.name != "posix"
+        or not hasattr(os, "pidfd_open")
+        or not hasattr(signal, "pidfd_send_signal")
+    ):
+        return None
     try:
-        if os.name == "posix":
-            os.killpg(proc.pid, sig)
-        elif proc.poll() is not None:
-            return False
-        elif sig == signal.SIGTERM:
-            proc.terminate()
-        else:
-            proc.kill()
+        return os.pidfd_open(proc.pid, 0)
+    except OSError:
+        return None
+
+
+def _signal_leader(proc, pidfd, sig):
+    """Return (sent, identity_confirmed) for the QEMU leader itself."""
+    if _leader_exited(proc):
+        return False, False
+    try:
+        if pidfd is not None:
+            signal.pidfd_send_signal(pidfd, sig)
+            return True, True
+        if os.name == "nt":
+            if sig == signal.SIGTERM:
+                proc.terminate()
+            else:
+                proc.kill()
+            return True, True
+        os.kill(proc.pid, sig)
+    except ProcessLookupError:
+        return False, False
+    return True, False
+
+
+def _signal_process_group(proc, sig):
+    if os.name != "posix":
+        return False
+    try:
+        os.killpg(proc.pid, sig)
     except ProcessLookupError:
         return False
     return True
 
 
+def _signal_process_tree(proc, pidfd, sig):
+    """Signal the stable leader and its still-reserved process group."""
+    group_liveness = (
+        _linux_process_group_has_live_member(proc.pid)
+        if os.name == "posix"
+        else None
+    )
+    leader_sent, leader_confirmed = _signal_leader(proc, pidfd, sig)
+    group_sent = False
+    if os.name == "posix":
+        # The unreaped leader reserves its PID and PGID. Always attempt the
+        # group signal so a procfs observation race cannot orphan a child.
+        group_sent = _signal_process_group(proc, sig)
+    elif os.name == "nt" and not leader_sent and not _leader_exited(proc):
+        try:
+            if sig == signal.SIGTERM:
+                proc.terminate()
+            else:
+                proc.kill()
+            leader_sent = True
+            leader_confirmed = True
+        except ProcessLookupError:
+            pass
+    group_delivery = group_sent and group_liveness is not False
+    return leader_sent or group_delivery, leader_confirmed
+
+
 def _wait_for_tree_exit_and_eof(
     proc,
+    pidfd,
     fd,
     scanner,
     deadline,
@@ -336,7 +511,7 @@ def _wait_for_tree_exit_and_eof(
         if not eof:
             _, reached_eof = _read_available_chunk(fd, scanner)
             eof = eof or reached_eof
-        leader_exited = proc.poll() is not None
+        leader_exited = _leader_exited(proc)
         if leader_exited and not _process_tree_alive(proc) and eof:
             return eof
 
@@ -344,60 +519,73 @@ def _wait_for_tree_exit_and_eof(
         if now >= deadline:
             return eof
         wait = min(POLL_SECONDS, deadline - now)
-        if eof:
-            if not leader_exited:
-                try:
-                    proc.wait(timeout=wait)
-                except subprocess.TimeoutExpired:
-                    pass
-            else:
-                time.sleep(wait)
+        readers = []
+        if not eof:
+            readers.append(fd)
+        if not leader_exited and pidfd is not None:
+            readers.append(pidfd)
+        if readers:
+            select.select(readers, [], [], wait)
         else:
-            select.select([fd], [], [], wait)
+            # Do not reap the leader until group teardown is complete. Keeping
+            # its PID reserved prevents a recycled PGID from being signaled.
+            time.sleep(wait)
 
 
 def _stop_and_drain(
     proc,
+    pidfd,
     fd,
     scanner,
     first_signal=signal.SIGTERM,
     natural_exit_deadline=None,
 ):
     signals_sent = []
+    first_signal_confirmed_for_leader = False
     eof = False
     if natural_exit_deadline is not None:
         eof = _wait_for_tree_exit_and_eof(
             proc,
+            pidfd,
             fd,
             scanner,
             natural_exit_deadline,
         )
-    if _process_tree_alive(proc):
-        if _signal_process_tree(proc, first_signal):
-            signals_sent.append(first_signal)
+    sent, confirmed = _signal_process_tree(proc, pidfd, first_signal)
+    if sent:
+        signals_sent.append(first_signal)
+    first_signal_confirmed_for_leader = confirmed
     eof = _wait_for_tree_exit_and_eof(
         proc,
+        pidfd,
         fd,
         scanner,
         time.monotonic() + TERMINATE_SECONDS,
         initial_eof=eof,
     )
-    if _process_tree_alive(proc):
-        if _signal_process_tree(proc, signal.SIGKILL):
-            signals_sent.append(signal.SIGKILL)
-        eof = _wait_for_tree_exit_and_eof(
-            proc,
-            fd,
-            scanner,
-            time.monotonic() + TERMINATE_SECONDS,
-            initial_eof=eof,
-        )
+    sent, _ = _signal_process_tree(proc, pidfd, signal.SIGKILL)
+    if sent:
+        signals_sent.append(signal.SIGKILL)
+    eof = _wait_for_tree_exit_and_eof(
+        proc,
+        pidfd,
+        fd,
+        scanner,
+        time.monotonic() + TERMINATE_SECONDS,
+        initial_eof=eof,
+    )
     try:
         proc.wait(timeout=TERMINATE_SECONDS)
     except subprocess.TimeoutExpired:
-        if _signal_process_tree(proc, signal.SIGKILL):
+        sent, _ = _signal_process_tree(proc, pidfd, signal.SIGKILL)
+        if sent:
             signals_sent.append(signal.SIGKILL)
         proc.wait(timeout=TERMINATE_SECONDS)
+    if (
+        not first_signal_confirmed_for_leader
+        and proc.returncode == -first_signal
+    ):
+        first_signal_confirmed_for_leader = True
     if not eof:
         eof = _drain_until(
             proc,
@@ -405,29 +593,29 @@ def _stop_and_drain(
             scanner,
             time.monotonic() + TERMINATE_SECONDS,
         )
-    return tuple(signals_sent), eof
+    return tuple(signals_sent), eof, first_signal_confirmed_for_leader
 
 
-def _force_stop_process_tree(proc):
+def _force_stop_process_tree(proc, pidfd):
     """Exception-path teardown that cannot depend on output decoding."""
     if proc is None:
         return
     try:
-        _signal_process_tree(proc, signal.SIGTERM)
+        _signal_process_tree(proc, pidfd, signal.SIGTERM)
     except Exception:
         pass
     deadline = time.monotonic() + TERMINATE_SECONDS
     while time.monotonic() < deadline:
         try:
-            leader_alive = proc.poll() is None
+            leader_alive = not _leader_exited(proc)
             tree_alive = _process_tree_alive(proc)
         except Exception:
             break
         if not leader_alive and not tree_alive:
-            return
+            break
         time.sleep(POLL_SECONDS)
     try:
-        _signal_process_tree(proc, signal.SIGKILL)
+        _signal_process_tree(proc, pidfd, signal.SIGKILL)
     except Exception:
         pass
     try:
@@ -464,7 +652,7 @@ def _discard_output(fd):
 def _unblock_child_control_signals():
     signal.pthread_sigmask(
         signal.SIG_UNBLOCK,
-        {signal.SIGINT, signal.SIGTERM},
+        set(CONTROL_SIGNALS),
     )
 
 
@@ -474,6 +662,7 @@ class _ProcessLifecycle:
     def __init__(self):
         self.proc = None
         self.fd = None
+        self.pidfd = None
         self.scanner = None
         self.released = False
 
@@ -487,7 +676,7 @@ class _ProcessLifecycle:
         if maskable:
             blocked = signal.pthread_sigmask(
                 signal.SIG_BLOCK,
-                {signal.SIGINT, signal.SIGTERM},
+                set(CONTROL_SIGNALS),
             )
         try:
             popen_options = {
@@ -508,6 +697,7 @@ class _ProcessLifecycle:
                 )
             proc = subprocess.Popen(command, **popen_options)
             self.proc = proc
+            self.pidfd = _open_pidfd(proc)
             self.scanner = scanner
             assert proc.stdout is not None
             self.fd = proc.stdout.fileno()
@@ -518,18 +708,33 @@ class _ProcessLifecycle:
                 signal.pthread_sigmask(signal.SIG_SETMASK, blocked)
 
     def release(self):
+        self._close_pidfd()
         self.released = True
+
+    def _close_pidfd(self):
+        if self.pidfd is None:
+            return
+        try:
+            os.close(self.pidfd)
+        except OSError:
+            pass
+        self.pidfd = None
 
     def abort(self):
         if self.released or self.proc is None:
             return
         try:
             if self.fd is not None and self.scanner is not None:
-                _stop_and_drain(self.proc, self.fd, self.scanner)
+                _stop_and_drain(
+                    self.proc,
+                    self.pidfd,
+                    self.fd,
+                    self.scanner,
+                )
             else:
-                _force_stop_process_tree(self.proc)
+                _force_stop_process_tree(self.proc, self.pidfd)
         except BaseException:
-            _force_stop_process_tree(self.proc)
+            _force_stop_process_tree(self.proc, self.pidfd)
             _discard_output(self.fd)
         try:
             if self.scanner is not None:
@@ -541,6 +746,7 @@ class _ProcessLifecycle:
                 self.proc.stdout.close()
         except (OSError, ValueError):
             pass
+        self._close_pidfd()
         self.released = True
 
 
@@ -561,7 +767,7 @@ class _SignalRelay:
     def __enter__(self):
         if threading.current_thread() is not threading.main_thread():
             return self
-        for signum in (signal.SIGINT, signal.SIGTERM):
+        for signum in CONTROL_SIGNALS:
             previous = signal.getsignal(signum)
             if previous == signal.SIG_IGN:
                 continue
@@ -604,7 +810,8 @@ def _monitor_command_impl(
     marker_grace,
     completion_mode=COMPLETION_NATURAL,
     expected_bad_addr_markers=(),
-    marker_mode=MARKER_SUBSTRING,
+    marker_mode=MARKER_EXACT_LINE,
+    expected_fault_marker_mode=MARKER_EXACT_LINE,
     log_file=None,
     output_stream=sys.stdout,
     diagnostic_stream=sys.stderr,
@@ -618,6 +825,14 @@ def _monitor_command_impl(
         raise ValueError(f"unsupported completion mode: {completion_mode!r}")
     if marker_mode not in (MARKER_SUBSTRING, MARKER_EXACT_LINE):
         raise ValueError(f"unsupported marker mode: {marker_mode!r}")
+    if expected_fault_marker_mode not in (
+        MARKER_SUBSTRING,
+        MARKER_EXACT_LINE,
+    ):
+        raise ValueError(
+            "unsupported expected fault marker mode: "
+            f"{expected_fault_marker_mode!r}"
+        )
     if max_output_bytes <= 0 or max_pending_chars <= 0:
         raise ValueError("output limits must be positive")
 
@@ -637,14 +852,15 @@ def _monitor_command_impl(
     )
     with log_context as log:
         scanner = OutputScanner(
-            init_proc,
-            marker,
-            output_stream,
-            log,
-            expected_bad_addr_markers,
-            marker_mode,
-            max_output_bytes,
-            max_pending_chars,
+            init_proc=init_proc,
+            marker=marker,
+            output_stream=output_stream,
+            log_stream=log,
+            expected_bad_addr_markers=expected_bad_addr_markers,
+            marker_mode=marker_mode,
+            expected_fault_marker_mode=expected_fault_marker_mode,
+            max_output_bytes=max_output_bytes,
+            max_pending_chars=max_pending_chars,
         )
         if _lifecycle is None:
             raise RuntimeError("missing process lifecycle owner")
@@ -752,7 +968,7 @@ def _monitor_command_impl(
                 if eof:
                     reason = "process_exit"
                     break
-            elif proc.poll() is not None:
+            elif _leader_exited(proc):
                 reason = "process_exit"
                 break
 
@@ -764,8 +980,13 @@ def _monitor_command_impl(
                     natural_exit_deadline,
                     marker_deadline,
                 )
-        signals_sent, output_eof = _stop_and_drain(
+        (
+            signals_sent,
+            output_eof,
+            checkpoint_leader_signaled,
+        ) = _stop_and_drain(
             proc,
+            _lifecycle.pidfd,
             fd,
             scanner,
             natural_exit_deadline=natural_exit_deadline,
@@ -828,6 +1049,7 @@ def _monitor_command_impl(
             signals_sent=signals_sent,
             output_eof=output_eof,
             expected_faults_satisfied=scanner.expected_faults_satisfied,
+            checkpoint_leader_signaled=checkpoint_leader_signaled,
             lines=tuple(scanner.lines),
         )
 
@@ -876,7 +1098,7 @@ def parse_args():
     parser.add_argument(
         "--marker-mode",
         choices=(MARKER_SUBSTRING, MARKER_EXACT_LINE),
-        default=MARKER_SUBSTRING,
+        default=MARKER_EXACT_LINE,
     )
     parser.add_argument("--log-file", required=True)
     parser.add_argument("--case-timeout", required=True)
@@ -891,6 +1113,11 @@ def parse_args():
         default=COMPLETION_NATURAL,
     )
     parser.add_argument("--expected-bad-addr-after", action="append", default=[])
+    parser.add_argument(
+        "--expected-bad-addr-marker-mode",
+        choices=(MARKER_SUBSTRING, MARKER_EXACT_LINE),
+        default=MARKER_EXACT_LINE,
+    )
     parser.add_argument("--timing-file")
     return parser.parse_args()
 
@@ -927,6 +1154,7 @@ def main():
         completion_mode=args.completion_mode,
         expected_bad_addr_markers=args.expected_bad_addr_after,
         marker_mode=args.marker_mode,
+        expected_fault_marker_mode=args.expected_bad_addr_marker_mode,
         log_file=args.log_file,
     )
     succeeded = (

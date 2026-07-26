@@ -43,7 +43,8 @@ class AgentTestRunnerTests(unittest.TestCase):
         grace=0.1,
         completion_mode=agent_test_runner.COMPLETION_NATURAL,
         expected_bad_addr_markers=(),
-        marker_mode=agent_test_runner.MARKER_SUBSTRING,
+        marker_mode=agent_test_runner.MARKER_EXACT_LINE,
+        expected_fault_marker_mode=agent_test_runner.MARKER_EXACT_LINE,
         output_stream=None,
         max_output_bytes=agent_test_runner.MAX_OUTPUT_BYTES,
         max_pending_chars=agent_test_runner.MAX_PENDING_CHARS,
@@ -60,6 +61,7 @@ class AgentTestRunnerTests(unittest.TestCase):
             completion_mode=completion_mode,
             expected_bad_addr_markers=expected_bad_addr_markers,
             marker_mode=marker_mode,
+            expected_fault_marker_mode=expected_fault_marker_mode,
             output_stream=output_stream,
             diagnostic_stream=io.StringIO(),
             max_output_bytes=max_output_bytes,
@@ -199,7 +201,8 @@ class AgentTestRunnerTests(unittest.TestCase):
         result = self.monitor(
             "import os, signal, time\n"
             "def stop(*_):\n"
-            "    os.write(1, b'PANIC: checkpoint teardown failed\\n')\n"
+            "    os.write(1, b'\\x1b[31m[PANIC 1-0] "
+            "os/test.c:7: checkpoint teardown failed\\x1b[0m\\n')\n"
             "    raise SystemExit(0)\n"
             "signal.signal(signal.SIGTERM, stop)\n"
             "print('case: parent passed', flush=True)\n"
@@ -212,7 +215,8 @@ class AgentTestRunnerTests(unittest.TestCase):
     def test_pass_and_uppercase_panic_in_one_write_fails(self):
         result = self.monitor(
             "import os\n"
-            "os.write(1, b'case: parent passed\\nPANIC: teardown failed\\n')\n"
+            "os.write(1, b'case: parent passed\\n[PANIC 1-0] "
+            "os/test.c:7: teardown failed\\n')\n"
         )
         self.assertTrue(result.marker_seen)
         self.assertTrue(result.failure_seen)
@@ -248,6 +252,28 @@ class AgentTestRunnerTests(unittest.TestCase):
         self.assertEqual(result.reason, "eof_without_marker")
         self.assertFalse(result.succeeded)
 
+    def test_checkpoint_default_rejects_diagnostic_substring(self):
+        result = self.monitor(
+            "import time\n"
+            "print('diagnostic: case: parent passed (not completion)', "
+            "flush=True)\n"
+            "time.sleep(10)\n",
+            timeout=0.05,
+            completion_mode=agent_test_runner.COMPLETION_CHECKPOINT,
+        )
+        self.assertFalse(result.marker_seen)
+        self.assertTrue(result.timed_out)
+        self.assertEqual(result.reason, "timeout")
+        self.assertFalse(result.checkpoint_succeeded)
+
+    def test_substring_marker_requires_explicit_opt_in(self):
+        result = self.monitor(
+            "print('diagnostic: case: parent passed (legacy completion)')\n",
+            marker_mode=agent_test_runner.MARKER_SUBSTRING,
+        )
+        self.assertTrue(result.marker_seen)
+        self.assertTrue(result.succeeded)
+
     def test_exact_line_marker_waits_for_record_boundary(self):
         result = self.monitor(
             "import os, time\n"
@@ -264,9 +290,10 @@ class AgentTestRunnerTests(unittest.TestCase):
     def test_partial_panic_is_drained_after_marker_grace(self):
         result = self.monitor(
             "import os, time\n"
-            "os.write(1, b'case: parent passed\\nPA')\n"
+            "os.write(1, b'case: parent passed\\n[PANIC 1-0] "
+            "os/test.c:7: la')\n"
             "time.sleep(0.01)\n"
-            "os.write(1, b'NIC: late failure')\n"
+            "os.write(1, b'te failure')\n"
             "time.sleep(10)\n",
             grace=0.05,
         )
@@ -276,9 +303,13 @@ class AgentTestRunnerTests(unittest.TestCase):
 
     def test_expected_bad_addr_requires_explicit_marker_and_fault(self):
         arm = "case: expected_fault_armed=1"
+        fault = (
+            "\\x1b[31m[ERROR 3-0]15 in application, bad addr = 0x1, "
+            "bad instruction = 0x2, core dumped.\\x1b[0m"
+        )
         result = self.monitor(
             "print('case: expected_fault_armed=1')\n"
-            "print('bad addr')\n"
+            f"print('{fault}')\n"
             "print('case: parent passed')\n",
             expected_bad_addr_markers=(arm,),
         )
@@ -288,7 +319,7 @@ class AgentTestRunnerTests(unittest.TestCase):
 
         unscoped = self.monitor(
             "print('case: expected_fault_armed=1')\n"
-            "print('bad addr')\n"
+            f"print('{fault}')\n"
             "print('case: parent passed')\n"
         )
         self.assertTrue(unscoped.failure_seen)
@@ -301,6 +332,71 @@ class AgentTestRunnerTests(unittest.TestCase):
         )
         self.assertFalse(missing_fault.expected_faults_satisfied)
         self.assertFalse(missing_fault.succeeded)
+
+    def test_expected_fault_marker_defaults_to_exact_line(self):
+        arm = "case: expected_fault_armed=1"
+        fault = (
+            "[ERROR 3-0]15 in application, bad addr = 0x1, "
+            "bad instruction = 0x2, core dumped."
+        )
+        result = self.monitor(
+            "print('diagnostic: case: expected_fault_armed=1 (ignored)')\n"
+            f"print({fault!r})\n"
+            "print('case: parent passed')\n",
+            expected_bad_addr_markers=(arm,),
+        )
+        self.assertTrue(result.failure_seen)
+        self.assertFalse(result.expected_faults_satisfied)
+        self.assertFalse(result.succeeded)
+
+    def test_expected_fault_substring_mode_is_explicit(self):
+        arm = "case: expected_fault_armed=1"
+        fault = (
+            "[ERROR 3-0]15 in application, bad addr = 0x1, "
+            "bad instruction = 0x2, core dumped."
+        )
+        result = self.monitor(
+            "print('diagnostic: case: expected_fault_armed=1 (legacy)')\n"
+            f"print({fault!r})\n"
+            "print('case: parent passed')\n",
+            expected_bad_addr_markers=(arm,),
+            expected_fault_marker_mode=agent_test_runner.MARKER_SUBSTRING,
+        )
+        self.assertFalse(result.failure_seen)
+        self.assertTrue(result.expected_faults_satisfied)
+        self.assertTrue(result.succeeded)
+
+    def test_negative_unknown_syscall_is_a_structured_failure(self):
+        result = self.monitor(
+            "print('[ERROR 4-0]unknown syscall -1')\n"
+            "print('case: parent passed')\n"
+        )
+        self.assertTrue(result.failure_seen)
+        self.assertFalse(result.succeeded)
+
+    def test_all_kernel_fault_record_shapes_fail_closed(self):
+        records = (
+            "[PANIC -1--1] os/main.c:7: boot failed",
+            "[ERROR 2-0]IllegalInstruction in application, core dumped.",
+            "[ERROR 2-0]unknown trap: 0x2, stval = 0x0",
+            "[ERROR -1--1]invalid trap from kernel: 0x2, "
+            "stval = 0x0 sepc = 0x80000000",
+        )
+        for record in records:
+            with self.subTest(record=record):
+                result = self.monitor(
+                    f"print({record!r})\nprint('case: parent passed')\n"
+                )
+                self.assertTrue(result.failure_seen)
+                self.assertFalse(result.succeeded)
+
+    def test_failure_words_inside_diagnostics_are_not_failures(self):
+        result = self.monitor(
+            "print('diagnostic: /tmp/panic-report unknown syscall notes')\n"
+            "print('case: parent passed')\n"
+        )
+        self.assertFalse(result.failure_seen)
+        self.assertTrue(result.succeeded)
 
     def test_eof_without_marker_fails(self):
         result = self.monitor("print('boot stopped early')")
@@ -402,7 +498,7 @@ class AgentTestRunnerTests(unittest.TestCase):
     def test_signal_handlers_are_restored_after_normal_run(self):
         previous = {
             signum: signal.getsignal(signum)
-            for signum in (signal.SIGINT, signal.SIGTERM)
+            for signum in agent_test_runner.CONTROL_SIGNALS
         }
         result = self.monitor("print('case: parent passed')")
         self.assertTrue(result.succeeded)
@@ -410,7 +506,7 @@ class AgentTestRunnerTests(unittest.TestCase):
             previous,
             {
                 signum: signal.getsignal(signum)
-                for signum in (signal.SIGINT, signal.SIGTERM)
+                for signum in agent_test_runner.CONTROL_SIGNALS
             },
         )
 
@@ -465,12 +561,50 @@ class AgentTestRunnerTests(unittest.TestCase):
             self.assert_process_gone(descendant_pid)
 
     @unittest.skipUnless(os.name == "posix", "POSIX process groups required")
+    def test_checkpoint_rejects_exited_leader_and_cleans_descendant(self):
+        class SlowStream:
+            def write(self, _text):
+                time.sleep(0.1)
+
+            def flush(self):
+                pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            pid_file = Path(directory) / "descendant.pid"
+            child = "import time; time.sleep(60)"
+            source = (
+                "import os, subprocess, sys\n"
+                f"child = {child!r}\n"
+                "proc = subprocess.Popen([sys.executable, '-u', '-c', child])\n"
+                f"open({str(pid_file)!r}, 'w').write(str(proc.pid))\n"
+                "os.write(1, b'case: parent passed\\n')\n"
+                "os._exit(0)\n"
+            )
+            result = self.monitor(
+                source,
+                completion_mode=agent_test_runner.COMPLETION_CHECKPOINT,
+                output_stream=SlowStream(),
+            )
+            descendant_pid = int(pid_file.read_text())
+            self.assertEqual(result.returncode, 0)
+            self.assertFalse(result.checkpoint_leader_signaled)
+            self.assertFalse(result.checkpoint_succeeded)
+            self.assert_process_gone(descendant_pid)
+
+    @unittest.skipUnless(os.name == "posix", "POSIX process groups required")
     def test_sigterm_cleans_descendants_and_preserves_cancel_status(self):
         self.assert_cancel_signal_cleanup(signal.SIGTERM)
 
     @unittest.skipUnless(os.name == "posix", "POSIX process groups required")
     def test_sigint_cleans_descendants_and_preserves_cancel_status(self):
         self.assert_cancel_signal_cleanup(signal.SIGINT)
+
+    @unittest.skipUnless(
+        os.name == "posix" and hasattr(signal, "SIGHUP"),
+        "POSIX SIGHUP required",
+    )
+    def test_sighup_cleans_descendants_and_preserves_cancel_status(self):
+        self.assert_cancel_signal_cleanup(signal.SIGHUP)
 
     def assert_cancel_signal_cleanup(self, cancel_signal):
         with tempfile.TemporaryDirectory() as directory:
