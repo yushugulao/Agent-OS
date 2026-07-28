@@ -13,20 +13,11 @@ from pathlib import Path
 
 import plain_ucore_action_runner as runner
 import test_plain_ucore_reader_e2e as reader_e2e
+from gitlab_ci_contract import validate_repository_ci
 
 
 def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
-
-
-def ci_job_block(ci_text: str, job_name: str) -> str:
-    match = re.search(
-        rf"(?m)^{re.escape(job_name)}:\n(?P<body>(?:(?:[ \t].*)?\n)*)",
-        ci_text,
-    )
-    if match is None:
-        raise AssertionError(f"missing CI job: {job_name}")
-    return match.group(0)
 
 
 def main() -> int:
@@ -44,6 +35,17 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
+        repo = root / "repo"
+        repo.mkdir()
+        with runner.exclusive_repo_run_lock(repo):
+            busy = runner.run_seeded_ucore(repo, root / "busy-run", 5, "")
+            assert busy["status"] == "failed"
+            assert busy["failure_phase"] == "coordination"
+            assert busy["failure_reason"] == "repo_busy"
+            assert busy["commands"] == []
+        with runner.exclusive_repo_run_lock(repo):
+            pass
+
         build_log = root / "build.log"
         build_code = runner.run_command(
             [
@@ -1539,26 +1541,30 @@ def main() -> int:
         assert (publish_dir / "rp_host_action_inbox").exists()
 
     repo_root = Path(__file__).resolve().parents[1]
-    ci_text = read(repo_root / ".gitlab-ci.yml")
-    budget_job = ci_job_block(ci_text, "kernel-budgets")
-    reader_job = ci_job_block(ci_text, "reader-e2e")
-    agent_job = ci_job_block(ci_text, "agent-regression")
-    mechanism_job = ci_job_block(ci_text, "kernel-mechanism-regression")
+    ci = validate_repository_ci(
+        repo_root / ".gitlab-ci.yml", repo_root / "ci" / "kernel-budgets.json"
+    )
+    budget_job = ci.effective("kernel-budgets")
+    reader_job = ci.effective("reader-e2e")
+    agent_job = ci.effective("agent-regression")
+    mechanism_job = ci.effective("kernel-mechanism-regression")
     host_tag = "agentos-host-calibrated"
     qemu_tag = "agentos-qemu-calibrated"
     assert host_tag != qemu_tag
-    assert host_tag in budget_job and qemu_tag not in budget_job
+    assert budget_job.field("tags").items() == (host_tag,)
     for job in (reader_job, agent_job, mechanism_job):
-        assert qemu_tag in job
-        assert "  dependencies: []\n" in job
-        assert "resource_group: agentos-qemu-performance" in job
-        assert "when: always" in job
-    assert "PLAIN_UCORE_READER_E2E_LOG_DIR=ci-artifacts/reader-e2e-raw" in reader_job
-    assert "tee ci-artifacts/reader-e2e.log" in reader_job
-    assert "- ci-artifacts/reader-e2e.log" in reader_job
-    assert "ci-artifacts/reader-e2e-raw/" in reader_job
-    assert "tee ci-artifacts/agent-regression-job.log" in agent_job
-    assert "- ci-artifacts/agent-regression-job.log" in agent_job
+        assert job.field("tags").items() == (qemu_tag,)
+        assert job.field("dependencies").items() == ()
+        assert job.field("resource_group").scalar() == "agentos-qemu-performance"
+        assert "when: always" in job.field("artifacts").text()
+    reader_script = reader_job.field("script").text()
+    reader_artifacts = reader_job.field("artifacts").text()
+    assert "PLAIN_UCORE_READER_E2E_LOG_DIR=ci-artifacts/reader-e2e-raw" in reader_script
+    assert "tee ci-artifacts/reader-e2e.log" in reader_script
+    assert "ci-artifacts/reader-e2e.log" in reader_artifacts
+    assert "ci-artifacts/reader-e2e-raw/" in reader_artifacts
+    assert "tee ci-artifacts/agent-regression-job.log" in agent_job.field("script").text()
+    assert "ci-artifacts/agent-regression-job.log" in agent_job.field("artifacts").text()
     assert "--marker-mode exact-line" in read(
         repo_root / "scripts" / "run-agent-tests.sh"
     )
@@ -1570,11 +1576,16 @@ def main() -> int:
         "workflow-teardown-race",
         "fs-enospc",
     )
+    mechanism_script = mechanism_job.field("script").text()
+    wrapper = read(repo_root / "scripts" / "run-ci-mechanism.sh")
     for label in mechanism_runners:
-        assert f"tee ci-artifacts/{label}-job.log" in mechanism_job
+        assert f"run-ci-mechanism.sh {label}" in mechanism_script
         script_path = repo_root / "scripts" / f"run-{label}-tests.sh"
         assert "--marker-mode exact-line" in read(script_path)
-    assert "- ci-artifacts/*-job.log" in mechanism_job
+    for token in ('job_log="${artifact_dir}/${label}-job.log"',
+                  'guest_log="${artifact_dir}/${label}-guest.log"',
+                  'combined_log="${artifact_dir}/${label}-combined.log"'):
+        assert token in wrapper
 
     print("test_plain_ucore_action_runner: passed")
     return 0

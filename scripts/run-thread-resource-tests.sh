@@ -24,7 +24,7 @@ make -C user \
 	build_dir="${TMPDIR_THREAD_RESOURCE}/user-build" \
 	out_dir="${TMPDIR_THREAD_RESOURCE}/user-target" \
 	asm_dir="${TMPDIR_THREAD_RESOURCE}/user-asm"
-cc nfs/fs.c -o "${TMPDIR_THREAD_RESOURCE}/mkfs"
+cc nfs/fs.c nfs/host_image_snapshot.c -o "${TMPDIR_THREAD_RESOURCE}/mkfs"
 "${TMPDIR_THREAD_RESOURCE}/mkfs" \
 	"${TMPDIR_THREAD_RESOURCE}/thread-resource.img" \
 	"${TMPDIR_THREAD_RESOURCE}/user-target/bin/threadresource_ucore"

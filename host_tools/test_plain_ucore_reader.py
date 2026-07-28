@@ -9,7 +9,7 @@ import tempfile
 import threading
 from http.server import ThreadingHTTPServer
 from pathlib import Path
-from urllib import request
+from urllib import error, request
 
 import plain_ucore_reader
 import test_plain_ucore_reader_e2e
@@ -319,12 +319,12 @@ status=ready
         "review_board_checks=24;boards=1;requests=1;votes=4;signoffs=4;assignments=4;workloads=4;filters=2;decision=approved;agentos_replacements=4;status=ready\n"
         "control_plane_checks=30;approvals=4;notifications=4;queue_items=4;plugins=3;workspaces=1;permissions=5;agentos_replacements=4;status=ready\n"
         "integrity_plane_checks=36;evidence_contracts=8;reference_contracts=8;namespace_checks=5;status_checks=5;review_alignment_checks=4;report_source_checks=3;package_trace_checks=3;agentos_replacements=4;status=ready\n"
-        "coherence_plane_checks=40;delivery_contracts=7;run_state_contracts=7;lifecycle_contracts=6;workflow_lint=5;tool_protocol=5;report_validation=5;agent_coordination=3;agentos_replacements=4;status=ready\n"
+        "evidence_role=demo_reference;catalog_generation=demo_expected;coherence_plane_checks=40;delivery_contracts=7;run_state_contracts=7;lifecycle_contracts=6;workflow_lint=5;tool_protocol=5;report_validation=5;agent_coordination=3;agentos_replacements=4;status=reference_ready\n"
         "publication_checks=48;targets=2;submissions=2;review_rounds=2;revision_tasks=3;response_packages=2;response_items=4;decisions=2;agentos_replacements=4;status=ready\n"
         "calculation_checks=84;computers=1;codes=1;jobs=1;retrieved=3;parser_results=1;exports=1;agentos_replacements=4;status=ready\n"
         "real_task_checks=96;dataset=palmer-penguins;rows=344;numeric_fields=5;answer_audit=pass;bundle=ready;status=ready\n"
         "analysis_results_checks=96;plans=1;runs=2;tables=2;statistics=2;figures=2;interpretations=2;charts=4;agentos_replacements=4;status=ready\n"
-        "decision_support_checks=80;options=3;criteria=5;scores=15;review_packets=1;selected=agentos_ucore_hybrid;agentos_replacements=4;status=ready\n"
+        "evidence_role=demo_reference;catalog_generation=demo_expected;decision_support_checks=80;options=3;criteria=5;scores=15;review_packets=1;selected=agentos_ucore_hybrid;agentos_replacements=4;status=reference_ready\n"
         "usable_research_checks=100;templates=3;datasets=3;library_sources=3;dag_stages=9;plan_queue=4;action_queue=5;handoffs=3;deliverables=8;status=ready\n"
         "usable_project_checks=120;scaffold_templates=3;project_launches=2;project_bundles=2;doctor_checks=10;status=ready\n"
         "experiment_campaign_checks=108;campaigns=1;trials=4;best_trial=04;result_review=accept_candidate;status=ready\n"
@@ -642,6 +642,8 @@ status=ready
         "status=ready\n"
     ),
     "rp_decsupport": (
+        "evidence_file_role=demo_reference\n"
+        "evidence_file_generation=demo_expected\n"
         "service=decision-support\n"
         "decision_support_checks=80\n"
         "decision=decision:agentos-final-demo-backend\n"
@@ -652,31 +654,42 @@ status=ready
         "review_packets=1\n"
         "recommended_option=agentos_ucore_hybrid\n"
         "weighted_score_agentos_ucore_hybrid=8.15\n"
-        "status=ready\n"
+        "evidence_file_status=reference_ready\n"
     ),
     "rp_decopt": (
+        "evidence_file_role=demo_reference\n"
+        "evidence_file_generation=demo_expected\n"
         "options=3\n"
         "option=userland_only;benefit=replayable_baseline;cost=weak_os_argument;recommendation=baseline_arm;status=ready\n"
         "option=agentos_ucore_hybrid;benefit=direct_os_value;cost=syscall_adapter;recommendation=final_target;status=ready\n"
         "option=full_kernel_llm_path;benefit=max_kernel_ownership;cost=tls_dns_secret_risk;recommendation=reject_for_final_delivery;status=ready\n"
+        "evidence_file_status=reference_ready\n"
     ),
     "rp_deccrit": (
+        "evidence_file_role=demo_reference\n"
+        "evidence_file_generation=demo_expected\n"
         "criteria=5\n"
         "criterion=agentos_value;weight=0.30;description=How directly the option proves OS-level Agent support.;status=ready\n"
         "criterion=reproducibility;weight=0.25;description=Replay without unstable cloud or host state.;status=ready\n"
+        "evidence_file_status=reference_ready\n"
     ),
     "rp_decscore": (
+        "evidence_file_role=demo_reference\n"
+        "evidence_file_generation=demo_expected\n"
         "scores=15\n"
         "score=agentos_ucore_hybrid:agentos_value;option=agentos_ucore_hybrid;criterion=agentos_value;value=9;rationale=Kernel services carry Agent state.;status=ready\n"
         "score=userland_only:agentos_value;option=userland_only;criterion=agentos_value;value=2;rationale=Baseline only.;status=ready\n"
+        "evidence_file_status=reference_ready\n"
     ),
     "rp_decpacket": (
+        "evidence_file_role=demo_reference\n"
+        "evidence_file_generation=demo_expected\n"
         "packet=decision-review-packet:agentos-final-demo-backend\n"
         "decision=decision:agentos-final-demo-backend\n"
         "recommended_option=agentos_ucore_hybrid\n"
         "option_scores=userland_only:5.35,agentos_ucore_hybrid:8.15,full_kernel_llm_path:4.55\n"
         "evidence=rp_backend_exec,rp_study,rp_llm_packets,rp_package,rp_reldossier\n"
-        "status=ready\n"
+        "evidence_file_status=reference_ready\n"
     ),
     "rp_usable": (
         "service=usable-research\n"
@@ -1060,36 +1073,25 @@ status=ready
         "packet=provenance-query-packet:RUN-042:lineage-review;comparison=provenance-query-comparison:RUN-042:rendered-vs-direct;executions=2;nodes=8;links=7;checksum=packet042;status=ready\n"
     ),
     "rp_backend_exec": (
-        "runner_case=plain-ucore;input=rp_wfio;artifact=rp_artifact_manifest;result=passed;reason=native_programs_ok;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=3\n"
-        "runner_case=retry-recovery;input=rp_retry_plan;artifact=rp_stage_state;result=passed;reason=recovered_align;input_check=pass;artifact_check=pass;att=2;retry=tool_output_missing;ticks=5\n"
-        "runner_case=user-context;input=rp_query;artifact=rp_provpath;result=passed;reason=user_space_context_log;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=6\n"
-        "runner_case=user-fsmeta;input=rp_artifact_manifest;artifact=rp_query;result=passed;reason=file_manifest_scan;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=7\n"
-        "runner_case=user-recovery;input=rp_retrylog;artifact=rp_fix;result=passed;reason=user_space_repair_record;input_check=pass;artifact_check=pass;att=2;retry=tool_output_missing;ticks=5\n"
-        "runner_case=user-event;input=rp_worker+rp_timeline;artifact=rp_agent_run;result=passed;reason=file_backed_event_log;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=6\n"
-        "runner_case=user-audit;input=rp_audit+rp_provpath;artifact=rp_package;result=passed;reason=append_only_audit_files;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=6\n"
-        "runner_detail=plain-ucore;src=rp_wfio;req=execution_plan;obs=pass;act=record;review=baseline\n"
-        "runner_detail=retry-recovery;src=rp_retry_plan+rp_stage_state;req=retry_stage+stage;obs=pass;act=rerun_align;review=recovered\n"
-        "runner_detail=user-context;src=rp_query+rp_provpath;req=context_path;obs=pass;act=rebuild_from_files;review=userland\n"
-        "runner_detail=user-fsmeta;src=rp_artifact_manifest;req=metadata_index;obs=pass;act=scan_manifest;review=userland\n"
-        "runner_detail=user-recovery;src=rp_retrylog+rp_fix;req=action_commit+artifact_update;obs=pass;act=repair_files;review=userland\n"
-        "runner_detail=user-event;src=rp_worker+rp_timeline;req=event_wait_wake;obs=pass;act=file_event_records;review=userland\n"
-        "runner_detail=user-audit;src=rp_audit+rp_provpath;req=audit+provenance;obs=pass;act=append_logs;review=userland\n"
-        "runner_detail=user-edit;src=rp_agentos_conflict;req=file_edit_lease;obs=pass;act=kernel_edit_lease;review=agentos\n"
-        "runner_detail_rows=8\nrunner_detail_schema=src,req,obs,act,review\n"
-        "runner_report=plain-ucore;plain_cost=file_scan_manifest;agentos_replace=batch_tool_context;risk=manual_state;status=passed\n"
-        "runner_report=retry-recovery;plain_cost=retry_file_stage_file;agentos_replace=event_context;risk=stale_retry;status=passed\n"
-        "runner_report=user-context;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;risk=untrusted_context;status=passed\n"
-        "runner_report=user-fsmeta;plain_cost=scan_records_128;agentos_replace=metadata_index;risk=scan_growth;status=passed\n"
-        "runner_report=user-recovery;plain_cost=manual_retry_contract;agentos_replace=capability_checked_action;risk=wrong_object_update;status=passed\n"
-        "runner_report=user-event;plain_cost=file_polling;agentos_replace=kernel_event_queue;risk=lost_handoff;status=passed\n"
-        "runner_report=user-audit;plain_cost=append_only_logs;agentos_replace=kernel_ledger_provenance;risk=tampered_context;status=passed\n"
-        "runner_report=user-edit;plain_cost=userland_lock_file;agentos_replace=kernel_edit_lease;risk=lost_update;status=passed\n"
-        "runner_report_rows=8\nrunner_report_schema=plain_cost,agentos_replace,risk,status\n"
-        "runner_cases=8\nrunner_detail_fields=input_check,artifact_check,att,retry,ticks\nrunner_detail_checks=32\nrunner_verified_inputs=8\nrunner_passed=8\nrunner_planned=0\n"
+        "evidence_role=demo_reference;catalog_generation=demo_expected;reference_case=plain-ucore;expected_input=rp_wfio;expected_artifact=rp_artifact_manifest;expected_outcome=native_programs_ok;status=reference_ready\n"
+        "evidence_role=demo_reference;catalog_generation=demo_expected;reference_case=retry-recovery;expected_input=rp_retry_plan;expected_artifact=rp_stage_state;expected_outcome=recovered_align;expected_attempts=2;expected_retry=tool_output_missing;status=reference_ready\n"
+        "evidence_role=demo_reference;catalog_generation=demo_expected;runner_report=plain-ucore;plain_cost=file_scan_manifest;agentos_replace=batch_tool_context;risk=manual_state;status=reference_ready\n"
+        "evidence_role=demo_reference;catalog_generation=demo_expected;runner_report=retry-recovery;plain_cost=retry_file_stage_file;agentos_replace=event_context;risk=stale_retry;status=reference_ready\n"
+        "evidence_role=demo_reference;catalog_generation=demo_expected;runner_report=kernel-context;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;risk=untrusted_context;status=reference_ready\n"
+        "evidence_role=demo_reference;catalog_generation=demo_expected;runner_report=kernel-file-query;plain_cost=scan_records_128;agentos_replace=metadata_index;risk=scan_growth;status=reference_ready\n"
+        "evidence_role=runtime_verified;runtime_case=workflow-contract;source=rp_wfio;source_bytes=10;source_hash=101;assertions_executed=1;assertions_passed=1;generation=runtime;status=verified\n"
+        "evidence_role=runtime_verified;runtime_case=retry-state;source=rp_retry_plan;source_bytes=11;source_hash=102;assertions_executed=1;assertions_passed=1;generation=runtime;status=verified\n"
+        "evidence_role=runtime_verified;runtime_case=kernel-context;source=rp_agentos_kernel;source_bytes=12;source_hash=103;assertions_executed=1;assertions_passed=1;generation=runtime;status=verified\n"
+        "evidence_role=runtime_verified;runtime_case=kernel-file-query;source=rp_agentos_query;source_bytes=13;source_hash=104;assertions_executed=1;assertions_passed=1;generation=runtime;status=verified\n"
+        "evidence_role=runtime_verified;runtime_case=kernel-recovery;source=rp_agentos_recovery;source_bytes=14;source_hash=105;assertions_executed=1;assertions_passed=1;generation=runtime;status=verified\n"
+        "evidence_role=runtime_verified;runtime_case=kernel-event;source=rp_agentos_timeline;source_bytes=15;source_hash=106;assertions_executed=1;assertions_passed=1;generation=runtime;status=verified\n"
+        "evidence_role=runtime_verified;runtime_case=kernel-audit;source=rp_agentos_audit;source_bytes=16;source_hash=107;assertions_executed=1;assertions_passed=1;generation=runtime;status=verified\n"
+        "evidence_role=runtime_verified;runtime_case=kernel-edit;source=rp_agentos_conflict;source_bytes=17;source_hash=108;assertions_executed=1;assertions_passed=1;generation=runtime;status=verified\n"
+        "evidence_role=runtime_verified;runtime_cases_executed=8;runtime_cases_verified=8;runtime_assertions_executed=8;runtime_assertions_passed=8;runtime_source_digest=999;generation=runtime;status=verified\n"
     ),
     "rp_study": (
-        "study_metric=plain_ucore;file_scans=128;context_trusted=0;rebuild_steps=6;detail_checks=7;result=passed\n"
-        "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;metadata_index=1;event_queue=1;recovery_tool=1;audit_ledger=1;edit_lease=1;mainflow_facts=11;detail_checks=kernel;result=kernel_target\n"
+        "reference_metric=plain_ucore;expected_file_scans=128;expected_context_trusted=0;expected_rebuild_steps=6;status=reference_ready\n"
+        "reference_metric=agentos_ucore;expected_context_trusted=1;expected_batch_tools=1;expected_metadata_index=1;expected_event_queue=1;status=reference_ready\n"
         "study_handoff=rp_backend_exec->rp_agentcmp;status=ready\n"
     ),
     "rp_agentos_kernel": (
@@ -1230,6 +1232,8 @@ status=ready
         "status=ready\n"
     ),
     "rp_coherence": (
+        "evidence_file_role=demo_reference\n"
+        "evidence_file_generation=demo_expected\n"
         "service=coherence-plane\n"
         "project=lab-gene-x\n"
         "run_id=RUN-042\n"
@@ -1258,7 +1262,7 @@ status=ready
         "report_validation=llm_source;source=rp_report_text;target=rp_llm_resp;result=pass;status=ready\n"
         "agent_coordination=decision_trace;source=rp_decisions;target=rp_review_dashboard;result=pass;status=ready\n"
         "coherence_report=coherence-report:RUN-042;checks=40;errors=0;warnings=0;status=ready\n"
-        "status=ready\n"
+        "evidence_file_status=reference_ready\n"
     ),
     "rp_publication": (
         "service=publication-workflow\n"
@@ -1427,9 +1431,8 @@ status=ready
         "evidence=operations_ready;source=rp_runner;status=pass\n"
         "evidence=project_space_ready;source=rp_package;status=pass\n"
         "backend_evidence_review=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;source=rp_review_dashboard;status=ready\n"
-        "backend_action_review=plain-ucore;action=record;review=baseline;plain_cost=file_scan_manifest;agentos_replace=batch_tool_context;status=passed\n"
-        "backend_action_review=retry-recovery;action=rerun_align;review=recovered;plain_cost=retry_file_stage_file;agentos_replace=event_context;status=passed\n"
-        "backend_action_review=user-context;action=rebuild_from_files;review=userland;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;status=passed\n"
+        "backend_runtime_review=kernel-context;source=rp_agentos_kernel;source_bytes=12;source_hash=103;assertions=1/1;status=verified\n"
+        "backend_runtime_review=kernel-file-query;source=rp_agentos_query;source_bytes=13;source_hash=104;assertions=1/1;status=verified\n"
         "action=send_to_reviewer;owner=orchestrator;artifact=rp_review_pack;status=ready\n"
         "action=open_operations_report;owner=orchestrator;artifact=rp_runner;status=ready\n"
         "bridge=delivery_to_operations;delivery=rp_package;operations=rp_runner;project=rp_package;status=ready\n"
@@ -1700,8 +1703,8 @@ def main() -> int:
         assert "Run Action Impact" in run_html
         assert "Run Action Delta" in run_html
         assert "batch_tool_context" in run_html
-        assert "execution_plan:pass:record:baseline" in run_html
-        assert "context_path:pass:rebuild_from_files:userland" in run_html
+        assert "rp_wfio:10:101:verified" in run_html
+        assert "rp_agentos_kernel:12:103:verified" in run_html
         assert "risks" in run_html
         workflow_html = (out_dir / "workflow.html").read_text(encoding="utf-8")
         assert "Workflow Runner" in workflow_html
@@ -1844,6 +1847,9 @@ def main() -> int:
         coherence_html = (out_dir / "coherence.html").read_text(encoding="utf-8")
         assert "Coherence Plane" in coherence_html
         assert "Coherence Detail" in coherence_html
+        assert "Reference Catalog" in coherence_html
+        assert "Reference only." in coherence_html
+        assert "demo_reference:rp_coherence" in coherence_html
         assert "Delivery Contracts" in coherence_html
         assert "Run State Checks" in coherence_html
         assert "Lifecycle Checks" in coherence_html
@@ -1896,6 +1902,11 @@ def main() -> int:
         assert "Manual QC analysis is ready for review." in analysis_results_html
         decision_support_html = (out_dir / "decision-support.html").read_text(encoding="utf-8")
         assert "Decision Support" in decision_support_html
+        assert "Reference Catalog" in decision_support_html
+        assert "Reference only." in decision_support_html
+        assert "Reference Hybrid Score" in decision_support_html
+        assert "demo_reference:rp_decsupport" in decision_support_html
+        assert "<span>Hybrid Score</span><strong>8.15</strong>" not in decision_support_html
         assert "Decision Options" in decision_support_html
         assert "Decision Criteria" in decision_support_html
         assert "Decision Scores" in decision_support_html
@@ -2024,6 +2035,8 @@ def main() -> int:
         assert "integrity_plane_checks" in compare_html
         assert "Integrity Plane" in compare_html
         assert "coherence_plane_checks" in compare_html
+        assert "<span>Coherence Plane</span><strong>n/a</strong>" in compare_html
+        assert "<span>Decision Support</span><strong>n/a</strong>" in compare_html
         assert "publication_checks" in compare_html
         assert "calculation_checks" in compare_html
         assert "Calculation Checks" in compare_html
@@ -2045,6 +2058,65 @@ def main() -> int:
         assert "Mature Capability" in compare_html
         assert "provenance_view_checks" in compare_html
         assert "Provenance View" in compare_html
+
+        partial_reference = {
+            "rp_partial": {
+                "text": "evidence_file_role=demo_reference\nstatus=ready\n",
+                "values": {
+                    "evidence_file_role": "demo_reference",
+                    "status": "ready",
+                },
+                "lines": ["evidence_file_role=demo_reference", "status=ready"],
+            }
+        }
+        try:
+            plain_ucore_reader.is_reference_state(partial_reference, "rp_partial")
+        except ValueError as exc:
+            assert "incomplete file envelope" in str(exc), exc
+        else:
+            raise AssertionError("partial reference file envelope was accepted")
+
+        valid_reference = {
+            "rp_reference": {
+                "text": "",
+                "values": {},
+                "lines": [
+                    "evidence_file_role=demo_reference",
+                    "evidence_file_generation=demo_expected",
+                    "evidence_file_status=reference_ready",
+                    "status=ready",
+                    "status=passed",
+                ],
+            }
+        }
+        assert plain_ucore_reader.is_reference_state(valid_reference, "rp_reference")
+
+        duplicate_reference = {
+            "rp_duplicate": {
+                "text": "",
+                "values": {},
+                "lines": [
+                    "evidence_file_role=demo_reference",
+                    "evidence_file_generation=demo_expected",
+                    "evidence_file_status=reference_ready",
+                    "evidence_file_status=reference_ready",
+                ],
+            }
+        }
+        try:
+            plain_ucore_reader.is_reference_state(duplicate_reference, "rp_duplicate")
+        except ValueError as exc:
+            assert "duplicate file envelope key" in str(exc), exc
+        else:
+            raise AssertionError("duplicate reference file envelope was accepted")
+        try:
+            plain_ucore_reader.record_is_reference(
+                {"evidence_role": "demo_reference", "status": "ready"}
+            )
+        except ValueError as exc:
+            assert "incomplete evidence envelope" in str(exc), exc
+        else:
+            raise AssertionError("partial reference record envelope was accepted")
         assert "provenance_query_checks" in compare_html
         assert "Provenance Queries" in compare_html
         assert "Coherence Plane" in compare_html
@@ -2070,19 +2142,20 @@ def main() -> int:
         assert "stale_write_policy" in compare_html
         assert "rp_agentos_mainflow" in compare_html
         assert "rp_agentos_workbench" in compare_html
-        assert "Backend Runner Cases" in compare_html
-        assert "Backend Case Details" in compare_html
+        assert "Backend Reference Cases" in compare_html
+        assert "Backend Runtime Cases" in compare_html
+        assert "Backend Runtime Receipt" in compare_html
         assert "Backend Evidence Report" in compare_html
         assert "retry-recovery" in compare_html
-        assert "rerun_align" in compare_html
+        assert "recovered_align" in compare_html
         assert "metadata_index" in compare_html
         assert "scan_records_128" in compare_html
         assert "kernel_context_path" in compare_html
-        assert "Input Check" in compare_html
+        assert "Assertions" in compare_html
         assert "tool_output_missing" in compare_html
-        assert "detail_checks=kernel" in compare_html
-        assert "Backend Study Metrics" in compare_html
-        assert "Detail Checks" in compare_html
+        assert "runtime_verified" in compare_html
+        assert "Backend Study Reference" in compare_html
+        assert "Expected Metadata Index" in compare_html
         assert "plain_ucore" in compare_html
         assert "Backend Scenario Handoff" in compare_html
         assert "rp_backend_exec" in compare_html
@@ -2158,13 +2231,13 @@ def main() -> int:
         assert "host_report_run_id=RUN-042" in review_html
         assert "record=1;kind=input;path=rp_input_fastq;status=ready" in review_html
         assert "host_relay_eval_batch=checked:6;passed:6;blocked:0;status=ready" in review_html
-        assert "runner_case=plain-ucore" in review_html
+        assert "kernel-context" in review_html
         assert "Review Backend Evidence" in review_html
-        assert "Review Backend Actions" in review_html
+        assert "Review Backend Runtime" in review_html
         assert "backend_evidence_review" in review_html
         assert "backend_review_evidence" in review_html
-        assert "rerun_align" in review_html
-        assert "kernel_context_path" in review_html
+        assert "rp_agentos_kernel" in review_html
+        assert "103" in review_html
         assert "Review Pack Bridges" in review_html
         assert "Review Operations Summary" in review_html
         assert "Review Workbench Summary" in review_html
@@ -2427,6 +2500,21 @@ def main() -> int:
                 studio = json.loads(response.read().decode("utf-8"))
             assert any(line == "studio=usable-research-studio" for line in studio["lines"])
             assert any("studio_session=usable-research-studio-session:W1:1" in line for line in studio["lines"])
+
+            unknown_state = state_dir / "rp_unmanifested_state"
+            unknown_state.write_text("status=ready\n", encoding="utf-8")
+            assert "rp_unmanifested_state" not in plain_ucore_reader.load_state(
+                state_dir
+            )
+            try:
+                request.urlopen(base + "/api/state/rp_unmanifested_state", timeout=5)
+            except error.HTTPError as http_error:
+                assert http_error.code == 404
+                detail = json.loads(http_error.read().decode("utf-8"))
+                assert detail["error"] == "state_name_not_allowed", detail
+            else:
+                raise AssertionError("Reader exposed an unmanifested state file")
+            unknown_state.unlink()
 
             action = request.Request(
                 base + "/actions/research/run",

@@ -19,13 +19,17 @@ build_case() {
 	local tag="$2"
 	local prefix="${tree:+${tree}/}"
 	local user_dir="${prefix}user"
+	local mkfs_sources=("${prefix}nfs/fs.c")
+	if [[ -z "${tree}" ]]; then
+		mkfs_sources+=(nfs/host_image_snapshot.c)
+	fi
 
 	make -C "${user_dir}" \
 		TOOLPREFIX="${TOOLPREFIX}" CHAPTER=safety \
 		build_dir="${TMPDIR_FAIR}/${tag}-user-build" \
 		out_dir="${TMPDIR_FAIR}/${tag}-user-target" \
 		asm_dir="${TMPDIR_FAIR}/${tag}-user-asm"
-	cc "${prefix}nfs/fs.c" -o "${TMPDIR_FAIR}/${tag}-mkfs"
+	cc "${mkfs_sources[@]}" -o "${TMPDIR_FAIR}/${tag}-mkfs"
 	"${TMPDIR_FAIR}/${tag}-mkfs" "${TMPDIR_FAIR}/${tag}.img" \
 		"${TMPDIR_FAIR}/${tag}-user-target/bin/syscallfair_ucore"
 	if [[ -n "${tree}" ]]; then

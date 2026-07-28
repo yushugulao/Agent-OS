@@ -5,7 +5,9 @@ import importlib.util
 import io
 import json
 import copy
+import os
 import re
+import shutil
 import statistics
 import subprocess
 import sys
@@ -22,6 +24,9 @@ STACK_SCRIPT = Path(__file__).with_name("check-kernel-stack-usage.py")
 SPEC = importlib.util.spec_from_file_location("kernel_budgets", SCRIPT)
 kernel_budgets = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(kernel_budgets)
+STACK_SPEC = importlib.util.spec_from_file_location("kernel_stack", STACK_SCRIPT)
+kernel_stack = importlib.util.module_from_spec(STACK_SPEC)
+STACK_SPEC.loader.exec_module(kernel_stack)
 
 
 class KernelBudgetTests(unittest.TestCase):
@@ -137,10 +142,6 @@ class KernelBudgetTests(unittest.TestCase):
                 "agent_file_store_reload(uint scope_id)",
                 "agent_metadata_store_reload(scope_id, &commit)",
             ),
-            (
-                "agent_file_install_empty_store(void)",
-                "agent_metadata_store_install_empty(&commit)",
-            ),
         )
         for signature, call in wrappers:
             with self.subTest(signature=signature):
@@ -158,22 +159,6 @@ class KernelBudgetTests(unittest.TestCase):
         unlock_at = complete.index("agent_metadata_txn_unlock()")
         self.assertLess(sync_at, finish_at)
         self.assertLess(finish_at, unlock_at)
-        install_at = objects.index("agent_file_install_empty_store(void)")
-        install_end = objects.index("\n}\n", install_at)
-        install = objects[install_at:install_end]
-        install_sync_at = install.index(
-            "agent_file_store_complete(&commit, result)"
-        )
-        install_failure_at = install.index("if (result < 0)")
-        self.assertLess(install_sync_at, install_failure_at)
-
-        clear_at = catalog.index("agent_metadata_catalog_clear(")
-        clear_end = catalog.index("\n}\n", clear_at)
-        clear = catalog[clear_at:clear_end]
-        self.assertLess(
-            clear.index("agent_metadata_txn_projection_begin()"),
-            clear.index("memset(agent_catalog_files"),
-        )
         apply_at = catalog.index("agent_metadata_catalog_apply_snapshot(")
         apply_end = catalog.index("\n}\n", apply_at)
         apply = catalog[apply_at:apply_end]
@@ -212,10 +197,8 @@ class KernelBudgetTests(unittest.TestCase):
         )
         invalidate_end = query.index("\n}\n", invalidate_at)
         invalidate = query[invalidate_at:invalidate_end]
-        self.assertLess(
-            invalidate.index("agent_metadata_txn_work_charge(0)"),
-            invalidate.index("if (full)"),
-        )
+        self.assertEqual(invalidate.count("agent_metadata_txn_work_charge(0)"), 1)
+        self.assertNotIn("query_cache", invalidate)
         execute_at = query.index("agent_metadata_query_execute_locked(")
         execute_end = query.index("\n}\n", execute_at)
         execute = query[execute_at:execute_end]
@@ -232,11 +215,17 @@ class KernelBudgetTests(unittest.TestCase):
             unlock.index("txn_depth--"),
         )
         checkpoint_at = metadata.index(
-            "agent_metadata_txn_checkpoint_unlocked(void)"
+            "agent_metadata_txn_checkpoint_mode(int cleanup)"
         )
         checkpoint_end = metadata.index("\n}\n", checkpoint_at)
         checkpoint = metadata[checkpoint_at:checkpoint_end]
         self.assert_projection_checkpoint_guard(checkpoint)
+        self.assertIn(
+            "return agent_metadata_txn_checkpoint_mode(0);", metadata
+        )
+        self.assertIn(
+            "return agent_metadata_txn_checkpoint_mode(1);", metadata
+        )
         transition_at = metadata.index(
             "agent_metadata_txn_projection_transition(int pending)"
         )
@@ -257,11 +246,16 @@ class KernelBudgetTests(unittest.TestCase):
         load_at = store.index("agent_file_load_snapshot(int force")
         load_end = store.index("\n}\n", load_at)
         self.assertNotIn("agent_file_persist_system()", store[load_at:load_end])
-        install_at = store.index("agent_metadata_store_install_empty(")
-        install_end = store.index("\n}\n", install_at)
-        self.assertNotIn(
-            "agent_file_persist_system()", store[install_at:install_end]
+        internal = (root / "os" / "agent_metadata_internal.h").read_text(
+            encoding="utf-8"
         )
+        for removed in (
+            "agent_meta_store_empty_proven",
+            "agent_metadata_store_install_empty",
+            "agent_file_install_empty_store",
+            "agent_metadata_store_has_durable_bank",
+        ):
+            self.assertNotIn(removed, store + objects + internal)
         for signature, barriers in (
             (
                 "agent_meta_persist_start_locked(uint owner)",
@@ -338,6 +332,46 @@ agent_file_store_complete(&commit, result);
             "steps < AGENT_FILE_META_MAX",
             1,
         )
+        lossy_root_lookup = scan.replace(
+            "root_dir_status(&root_status)", "root_dir()", 1
+        )
+        ignored_root_status = scan.replace(
+            "root == 0 || root_status != FS_LOOKUP_FOUND", "root == 0", 1
+        )
+        ignored_bind_failure = scan.replace(
+            "\t\tif (bind_failed) {\n\t\t\tscan.failures++;\n"
+            "\t\t\tscan.retry = 1;",
+            "\t\tif (bind_failed) {\n\t\t\t(void)bind_failed;",
+            1,
+        )
+        unseen_on_failure = scan.replace(
+            "scan.seen[slot] = 1;", "scan.seen[slot] = 0;"
+        )
+        lost_iupdate_failure = scan.replace(
+            "\t\t\tif (iupdate(ip) < 0) {\n"
+            "\t\t\t\tip->agent_meta_slot = old_slot;\n"
+            "\t\t\t\tip->agent_meta_flags = old_flags;\n"
+            "\t\t\t\tip->agent_meta_version = old_version;\n"
+            "\t\t\t\t*failed = SCAN_BIND_RETRY;\n"
+            "\t\t\t\treturn changes;",
+            "\t\t\tif (iupdate(ip) < 0) {\n"
+            "\t\t\t\tip->agent_meta_slot = old_slot;\n"
+            "\t\t\t\tip->agent_meta_flags = old_flags;\n"
+            "\t\t\t\tip->agent_meta_version = old_version;\n"
+            "\t\t\t\treturn changes;",
+            1,
+        )
+        optional_failure_output = scan.replace(
+            "\t*failed = 0;", "\tif (failed)\n\t\t*failed = 0;", 1
+        )
+        lost_resume = scan.replace(
+            "scan.offset = off;\n\t\t\tscan_pause(1, 1);",
+            "scan.offset = 0;\n\t\t\tscan_pause(1, 0);",
+            1,
+        )
+        lost_scope_isolation = scan.replace(
+            "scan_scope_failed(view.scope_id, 0)", "0", 1
+        )
         inflated_step = scan.replace("#define SCAN_STEP 16", "#define SCAN_STEP 160", 1)
         inflated_interval = scan.replace(
             "#define SCAN_INTERVAL 20", "#define SCAN_INTERVAL 200", 1
@@ -355,6 +389,14 @@ agent_file_store_complete(&commit, result);
             ("projection ACK before scan sync", early_ack, scan),
             ("scan reverse dependency", objects, reverse_dependency),
             ("unbounded directory step", objects, unbounded_step),
+            ("lossy root lookup", objects, lossy_root_lookup),
+            ("ignored root status", objects, ignored_root_status),
+            ("ignored bind failure", objects, ignored_bind_failure),
+            ("unseen mutation failure", objects, unseen_on_failure),
+            ("lost iupdate failure", objects, lost_iupdate_failure),
+            ("optional bind failure output", objects, optional_failure_output),
+            ("lost resumable offset", objects, lost_resume),
+            ("lost scope isolation", objects, lost_scope_isolation),
             ("inflated directory budget", objects, inflated_step),
             ("inflated scan interval", objects, inflated_interval),
             ("inflated cooldown multiplier", objects, inflated_rest),
@@ -407,6 +449,12 @@ agent_file_store_complete(&commit, result);
             "\tagent_metadata_scan_note_slot(slot);",
             1,
         )
+        direct_inode_unbind = directory.replace(
+            "\tif (agent_metadata_catalog_clear_slot(slot) < 0) {",
+            "\tip->agent_meta_slot = 0;\n"
+            "\tif (agent_metadata_catalog_clear_slot(slot) < 0) {",
+            1,
+        )
         cases = (
             ("objects retained hook", retained_hook, directory),
             ("objects reverse dependency", reverse_dependency, directory),
@@ -417,6 +465,7 @@ agent_file_store_complete(&commit, result);
             ("indirect callback", objects, indirect_callback),
             ("missing scan note", objects, missing_scan_note),
             ("early transaction unlock", objects, early_unlock),
+            ("directory bypasses catalog unbind", objects, direct_inode_unbind),
         )
         for name, bad_objects, bad_directory in cases:
             with self.subTest(name=name):
@@ -546,6 +595,44 @@ agent_metadata_txn_projection_require_idle();
                 kernel_budgets.check_limit(
                     "metric", 97, 100, 105, " bytes", ratchet=True
                 )
+
+    def test_budget_headroom_is_tight_by_default(self):
+        self.assertEqual(
+            kernel_budgets.validate_pair(
+                {"baseline": 100, "maximum": 100},
+                "baseline",
+                "maximum",
+                integer=True,
+            ),
+            (100, 100),
+        )
+        self.assertEqual(
+            kernel_budgets.validate_pair(
+                {"baseline": 101, "maximum": 107},
+                "baseline",
+                "maximum",
+                integer=True,
+            ),
+            (101, 107),
+        )
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "more than 5%"
+        ):
+            kernel_budgets.validate_pair(
+                {"baseline": 100, "maximum": 106},
+                "baseline",
+                "maximum",
+                integer=True,
+            )
+        self.assertEqual(
+            kernel_budgets.validate_pair(
+                {"baseline": 100.0, "maximum": 110.0},
+                "baseline",
+                "maximum",
+                max_headroom=0.10,
+            ),
+            (100.0, 110.0),
+        )
 
     def test_nm_symbol_size_is_read_as_hex(self):
         output = (
@@ -890,11 +977,16 @@ agent_metadata_txn_projection_require_idle();
                 "max_boot_required_bytes": 10500,
                 "stack_boundaries": ["swtch"],
                 "allowed_indirect_callers": ["usertrapret"],
+                "indirect_call_edges": ["dispatch=target"],
                 "recursion_bounds": ["printf=2"],
             }
         }
         command = kernel_budgets.stack_check_command(
-            Path("/repo"), config, Path("build/os"), Path("scripts/stack.py")
+            Path("/repo"),
+            config,
+            Path("build/os"),
+            Path("scripts/stack.py"),
+            ("proc", "syscall"),
         )
         limit_index = command.index("--required-limit")
         self.assertEqual(command[limit_index + 1], "15188")
@@ -906,6 +998,98 @@ agent_metadata_txn_projection_require_idle();
         self.assertEqual(command[boot_baseline_index + 1], "10000")
         self.assertIn("main", command)
         self.assertIn("printf=2", command)
+        self.assertIn("dispatch=target", command)
+        self.assertEqual(command.count("--translation-unit"), 2)
+        self.assertLess(command.index("proc"), command.index("syscall"))
+
+    def test_stack_callgraph_inventory_tracks_production_units(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = root / "os"
+            callgraph = root / "build"
+            source.mkdir()
+            callgraph.mkdir()
+            (source / "production.c").write_text("void live(void) {}\n")
+            (source / "profile_test.c").write_text("void test(void) {}\n")
+            (callgraph / "production.ci").write_text("", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "missing: profile_test"):
+                kernel_stack.read_callgraphs(callgraph, source)
+            kernel_stack.read_callgraphs(
+                callgraph, source, ("production",)
+            )
+            (callgraph / "profile_test.ci").write_text("", encoding="utf-8")
+            kernel_stack.read_callgraphs(
+                callgraph, source, ("production",)
+            )
+            (callgraph / "unknown.ci").write_text("", encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "stale: unknown"):
+                kernel_stack.read_callgraphs(
+                    callgraph, source, ("production",)
+                )
+            (callgraph / "unknown.ci").unlink()
+            for inventory, message in (
+                (("production", "production"), "duplicate"),
+                (("missing",), "source is missing"),
+                (("../escape",), "invalid"),
+            ):
+                with self.subTest(inventory=inventory), self.assertRaisesRegex(
+                    ValueError, message
+                ):
+                    kernel_stack.read_callgraphs(
+                        callgraph, source, inventory
+                    )
+
+    def test_repository_production_stack_inventory_excludes_profiles(self):
+        root = SCRIPT.parent.parent
+        config = json.loads(
+            (root / "ci" / "kernel-budgets.json").read_text(encoding="utf-8")
+        )
+        units = kernel_budgets.production_translation_units(root, config)
+        self.assertIn("proc", units)
+        self.assertNotIn("agent_metadata_test", units)
+        self.assertNotIn("agent_observe_test", units)
+        self.assertNotIn("wait_atomic_test", units)
+        self.assertNotIn("fs_allocator_test", units)
+
+    def test_stack_indirect_edges_replace_only_declared_callsite(self):
+        graph = {
+            "caller-node": {kernel_stack.INDIRECT_NODE},
+            "other-node": {kernel_stack.INDIRECT_NODE},
+        }
+        incoming = {
+            kernel_stack.INDIRECT_NODE: {"caller-node", "other-node"}
+        }
+        definitions = {
+            "caller": ["caller-node"],
+            "target": ["target-node"],
+        }
+        kernel_stack.resolve_indirect_call_edges(
+            graph,
+            incoming,
+            definitions,
+            {},
+            {"caller": {"target"}},
+        )
+        self.assertEqual(graph["caller-node"], {"target-node"})
+        self.assertEqual(
+            graph["other-node"], {kernel_stack.INDIRECT_NODE}
+        )
+        self.assertEqual(
+            incoming[kernel_stack.INDIRECT_NODE], {"other-node"}
+        )
+
+    def test_stack_indirect_edge_must_match_compiled_call(self):
+        with self.assertRaisesRegex(ValueError, "no compiled call"):
+            kernel_stack.resolve_indirect_call_edges(
+                {"caller-node": set()},
+                {kernel_stack.INDIRECT_NODE: set()},
+                {
+                    "caller": ["caller-node"],
+                    "target": ["target-node"],
+                },
+                {},
+                {"caller": {"target"}},
+            )
 
     def test_stack_build_config_must_match_machine_budget(self):
         stack = {
@@ -917,7 +1101,12 @@ agent_metadata_txn_projection_require_idle();
             "interrupt_entry_bytes": 256,
             "stack_boundaries": ["swtch"],
             "allowed_indirect_callers": ["usertrapret"],
-            "recursion_bounds": ["printf=2", "freewalk=3"],
+            "indirect_call_edges": ["dispatch=target"],
+            "recursion_bounds": [
+                "printf=2",
+                "freewalk=3",
+                "uvm_prune_empty_walk=3",
+            ],
         }
         text = "\n".join(
             (
@@ -929,7 +1118,9 @@ agent_metadata_txn_projection_require_idle();
                 "KERNELVEC_FRAME_SIZE_BYTES=256",
                 "KSTACK_STACK_BOUNDARIES=swtch",
                 "KSTACK_INDIRECT_CALLERS=usertrapret",
-                "KSTACK_RECURSION_BOUNDS=printf=2 freewalk=3",
+                "KSTACK_INDIRECT_CALL_EDGES=dispatch=target",
+                "KSTACK_RECURSION_BOUNDS=printf=2 freewalk=3 "
+                "uvm_prune_empty_walk=3",
             )
         )
         with tempfile.TemporaryDirectory() as temp:
@@ -1028,7 +1219,31 @@ agent_metadata_txn_projection_require_idle();
             config = json.load(stream)
         kernel_budgets.validate_config(config)
         tests = config["agent_test_suite"]
-        self.assertEqual(len(tests["calibration_samples"]), 3)
+        expected_statuses = frozenset(
+            ("calibrated_full_suite", "provisional_requires_full_suite")
+        )
+        self.assertEqual(
+            kernel_budgets.AGENT_TEST_CALIBRATION_STATUSES,
+            expected_statuses,
+        )
+        self.assertIn(
+            tests["calibration_status"],
+            expected_statuses,
+        )
+        calibrated_fields = frozenset(
+            ("baseline_seconds", "max_seconds", "calibration_samples")
+        )
+        self.assertEqual(
+            kernel_budgets.AGENT_TEST_CALIBRATED_FIELDS,
+            calibrated_fields,
+        )
+        if (
+            tests["calibration_status"]
+            == kernel_budgets.AGENT_TEST_CALIBRATION_READY
+        ):
+            self.assertTrue(calibrated_fields.issubset(tests))
+        else:
+            self.assertEqual(calibrated_fields.intersection(tests), set())
         self.assertEqual(tests["runner_tag"], "agentos-qemu-calibrated")
         self.assertEqual(
             tuple(tests["expected_cases"]),
@@ -1039,18 +1254,50 @@ agent_metadata_txn_projection_require_idle();
             config["agent_state_pages"]["baseline_per_process_bytes"],
             21 * 4096,
         )
+        trapframes = config["trapframe_pages"]
+        self.assertEqual(trapframes["baseline_per_thread_bytes"], 4096)
+        self.assertEqual(
+            trapframes["baseline_admitted_pool_bytes"], 128 * 16 * 4096
+        )
+        self.assertEqual(
+            trapframes["baseline_reserved_pool_bytes"], 32 * 16 * 4096
+        )
+        legacy_mail = config["legacy_mail_sidecar"]
+        self.assertEqual(
+            legacy_mail["baseline_per_process_bytes"], 2 * 4096
+        )
+        self.assertEqual(
+            legacy_mail["baseline_pool_bytes"], 128 * 2 * 4096
+        )
+        self.assertEqual(
+            legacy_mail["baseline_ordinary_pool_bytes"], 96 * 2 * 4096
+        )
+        self.assertEqual(
+            legacy_mail["baseline_reserved_pool_bytes"], 32 * 2 * 4096
+        )
+        missing_legacy_mail = copy.deepcopy(config)
+        del missing_legacy_mail["legacy_mail_sidecar"]
+        with self.assertRaises(kernel_budgets.BudgetError):
+            kernel_budgets.validate_config(missing_legacy_mail)
+        missing_trapframes = copy.deepcopy(config)
+        del missing_trapframes["trapframe_pages"]
+        with self.assertRaises(kernel_budgets.BudgetError):
+            kernel_budgets.validate_config(missing_trapframes)
         missing_agent_state = copy.deepcopy(config)
         del missing_agent_state["agent_state_pages"]
         with self.assertRaises(kernel_budgets.BudgetError):
             kernel_budgets.validate_config(missing_agent_state)
+
         self.assertEqual(
             {bridge["name"] for bridge in modules["integration_bridges"]},
             {
                 "bio",
                 "file",
                 "fs",
+                "kalloc",
                 "loader",
                 "main",
+                "pipe",
                 "proc",
                 "syscall",
                 "trap",
@@ -1067,6 +1314,7 @@ agent_metadata_txn_projection_require_idle();
             entry for entry in modules["modules"]
             if entry["name"] == "metadata_query"
         )
+
         self.assertEqual(
             query["allowed_dependencies"],
             ["file_state", "metadata", "metadata_catalog"],
@@ -1077,7 +1325,13 @@ agent_metadata_txn_projection_require_idle();
         )
         self.assertEqual(
             scan["allowed_dependencies"],
-            ["file_state", "metadata", "metadata_catalog", "metadata_store"],
+            [
+                "background",
+                "file_state",
+                "metadata",
+                "metadata_catalog",
+                "metadata_store",
+            ],
         )
         self.assertEqual(scan["allowed_global_symbols"], ["agent_file_request_scan"])
         directory = next(
@@ -1113,6 +1367,34 @@ agent_metadata_txn_projection_require_idle();
         self.assertIn("metadata_query", objects["allowed_dependencies"])
         self.assertIn("metadata_scan", objects["allowed_dependencies"])
         self.assertNotIn("metadata_directory", objects["allowed_dependencies"])
+        self.assertEqual(
+            {
+                entry["name"]: tuple(entry["required_cflags"])
+                for entry in modules["modules"]
+                if "required_cflags" in entry
+            },
+            kernel_budgets.REQUIRED_AGENT_MODULE_CFLAGS,
+        )
+        missing_size_policy = copy.deepcopy(config)
+        del next(
+            entry
+            for entry in missing_size_policy["agent_modules"]["modules"]
+            if entry["name"] == "metadata_actions"
+        )["required_cflags"]
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "optimization policy drift"
+        ):
+            kernel_budgets.validate_config(missing_size_policy)
+        expanded_size_policy = copy.deepcopy(config)
+        next(
+            entry
+            for entry in expanded_size_policy["agent_modules"]["modules"]
+            if entry["name"] == "core"
+        )["required_cflags"] = ["-Os"]
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "optimization policy drift"
+        ):
+            kernel_budgets.validate_config(expanded_size_policy)
         file_bridge = next(
             bridge for bridge in modules["integration_bridges"]
             if bridge["name"] == "file"
@@ -1194,7 +1476,7 @@ agent_metadata_txn_projection_require_idle();
             if entry["name"] == "facade"
         )
         ambiguous_facade["allowed_global_symbols"].append(
-            "agent_identity_unreviewed"
+            "agent_core_unreviewed"
         )
         with self.assertRaisesRegex(
             kernel_budgets.BudgetError,
@@ -1294,10 +1576,421 @@ agent_metadata_txn_projection_require_idle();
                 with self.assertRaises(kernel_budgets.BudgetError):
                     kernel_budgets.validate_config(incomplete)
 
-    def test_calibrated_duration_summary_is_fail_closed(self):
+    def test_repository_background_maintain_stays_in_core_owner(self):
+        source = (SCRIPT.parent.parent / "os" / "agent_core.c").read_text(
+            encoding="utf-8"
+        )
+        body = kernel_budgets.source_function_body(
+            source, "agent_background_maintain(void)"
+        )
+        self.assertEqual(
+            body.count("agent_metadata_background_maintain();"), 1
+        )
+        facade = (SCRIPT.parent.parent / "os" / "agent.c").read_text(
+            encoding="utf-8"
+        )
+        self.assertNotIn("agent_background_maintain(void)", facade)
+
+    def test_profile_support_is_explicitly_test_only(self):
         config_path = SCRIPT.parent.parent / "ci" / "kernel-budgets.json"
         with config_path.open(encoding="utf-8") as stream:
             config = json.load(stream)
+        supports = config["agent_modules"]["test_only_sources"]
+        self.assertEqual(
+            [support["name"] for support in supports],
+            [
+                "metadata_crash_profile",
+                "metadata_boot_recovery_profile",
+                "observe_recovery_profile",
+                "wait_atomic_profile",
+                "fs_allocator_fault_profile",
+                "physical_page_profile",
+            ],
+        )
+        support = supports[0]
+        self.assertTrue(support["production_object_excluded"])
+        self.assertEqual(
+            support["required_macro"], "AGENT_METADATA_CRASH_PHASE"
+        )
+        self.assertEqual(
+            set(config["kernel_source"]["exclude_paths"]),
+            {
+                "os/initproc.S",
+                *(owner["source_path"] for owner in supports),
+            },
+        )
+        kernel_budgets.validate_config(config)
+        for field, value in (
+            ("production_object_excluded", False),
+            ("required_macro", "AGENT_METADATA_EIO_PHASE"),
+        ):
+            broken = copy.deepcopy(config)
+            broken["agent_modules"]["test_only_sources"][0][field] = value
+            with self.subTest(field=field), self.assertRaises(
+                kernel_budgets.BudgetError
+            ):
+                kernel_budgets.validate_config(broken)
+
+        for name, mutate in (
+            (
+                "missing filesystem allocator owner",
+                lambda broken: broken["agent_modules"][
+                    "test_only_sources"
+                ].pop(),
+            ),
+            (
+                "test owner counted as production",
+                lambda broken: broken["kernel_source"]["exclude_paths"].remove(
+                    "os/wait_atomic_test.c"
+                ),
+            ),
+            (
+                "production source hidden",
+                lambda broken: broken["kernel_source"]["exclude_paths"].append(
+                    "os/proc.c"
+                ),
+            ),
+            (
+                "duplicate exclusion",
+                lambda broken: broken["kernel_source"]["exclude_paths"].append(
+                    "os/initproc.S"
+                ),
+            ),
+        ):
+            broken = copy.deepcopy(config)
+            mutate(broken)
+            with self.subTest(name=name), self.assertRaises(
+                kernel_budgets.BudgetError
+            ):
+                kernel_budgets.validate_config(broken)
+
+    def test_profile_symbols_are_forbidden_in_production(self):
+        supports = [
+            {"allowed_profile_symbols": ["profile_one", "profile_two"]},
+            {"allowed_profile_symbols": ["profile_three"]},
+        ]
+        self.assertEqual(
+            kernel_budgets.test_only_symbol_leaks(
+                {"production", "profile_two"}, supports
+            ),
+            ["profile_two"],
+        )
+        self.assertEqual(
+            kernel_budgets.test_only_symbol_leaks({"production"}, supports),
+            [],
+        )
+
+    def test_canonical_budget_submake_clears_test_profiles(self):
+        makefile = (SCRIPT.parent.parent / "Makefile").read_text(
+            encoding="utf-8"
+        )
+        start = makefile.index("override KERNEL_BUDGET_MAKE_ARGS =")
+        end = makefile.index("\n\n$(STRUCT_PROC_BUDGET_PROBE):", start)
+        budget_args = makefile[start:end]
+        for variable in (
+            "PHYSICAL_PAGE_TEST_HOOKS",
+            "AGENT_CONTEXT_SYNC_TEST_PROFILE",
+            "AGENT_OBSERVE_TEST_PROFILE",
+            "WAIT_ATOMIC_TEST_PROFILE",
+            "FS_ALLOCATOR_FAULT_TEST_PROFILE",
+            "FS_ALLOCATOR_DELETE_BARRIER_MUTANT",
+            "DURABILITY_POWERCUT_TEST_PROFILE",
+            "AGENT_METADATA_CRASH_PHASE",
+            "AGENT_METADATA_EIO_PHASE",
+            "AGENT_METADATA_SELECT_FAULT_BANK",
+            "AGENT_METADATA_BOOT_READ_FAULT",
+            "AGENT_METADATA_BOOT_READ_FAULT_COUNT",
+            "AGENT_METADATA_BOOT_READ_FAULT_BANK",
+            "VIRTIO_DISK_TEST",
+            "FS_STORAGE_TINY_TEST_PROFILE",
+        ):
+            with self.subTest(variable=variable):
+                self.assertEqual(
+                    sum(
+                        line in (f"\t{variable}= \\", f"\t{variable}=")
+                        for line in budget_args.splitlines()
+                    ),
+                    1,
+                )
+        self.assertIn("KSTACK_INDIRECT_CALL_EDGES='", budget_args)
+        self.assertIn("override KERNEL_BUDGET_TOOLPREFIX = $(TOOLPREFIX)", makefile)
+        self.assertIn("override KERNEL_BUDGET_PYTHON = $(PYTHON_BIN)", makefile)
+        self.assertIn("override PY = $(PYTHON_BIN)", makefile)
+
+    def test_inactive_profile_objects_are_removed_before_build(self):
+        makefile = (SCRIPT.parent.parent / "Makefile").read_text(
+            encoding="utf-8"
+        )
+        inventory_start = makefile.index("INACTIVE_PROFILE_C_SRCS :=")
+        inventory_end = makefile.index("\nAS_SRCS =", inventory_start)
+        inventory = makefile[inventory_start:inventory_end]
+        self.assertEqual(
+            set(re.findall(r"INACTIVE_PROFILE_C_SRCS \+= \$K/(\S+\.c)", inventory)),
+            {
+                "agent_metadata_test.c",
+                "agent_metadata_recovery_test.c",
+                "agent_observe_test.c",
+                "wait_atomic_test.c",
+                "fs_allocator_test.c",
+                "physical_page_test.c",
+            },
+        )
+        self.assertEqual(
+            inventory.count("C_SRCS := $(filter-out $K/"), 6
+        )
+        self.assertIn(
+            "INACTIVE_PROFILE_OBJS = $(addprefix $(BUILDDIR)/,"
+            "$(INACTIVE_PROFILE_C_SRCS:.c=.o))",
+            inventory,
+        )
+
+        config_start = makefile.index("$(KSTACK_BUILD_CONFIG): .FORCE")
+        config_end = makefile.index("\n\n$(AS_OBJS):", config_start)
+        config_rule = makefile[config_start:config_end]
+        cleanup = "@rm -f $(INACTIVE_PROFILE_OBJS)"
+        self.assertEqual(config_rule.count(cleanup), 1)
+        self.assertLess(config_rule.index(cleanup), config_rule.index("@printf"))
+
+    @unittest.skipUnless(
+        sys.platform != "win32" and shutil.which("make"),
+        "GNU make profile transition test requires a POSIX host",
+    )
+    def test_profile_transition_removes_only_inactive_objects(self):
+        root = SCRIPT.parent.parent
+        profile_objects = {
+            "agent_metadata_test.o",
+            "agent_metadata_recovery_test.o",
+            "agent_observe_test.o",
+            "wait_atomic_test.o",
+            "fs_allocator_test.o",
+            "physical_page_test.o",
+        }
+        enabled = (
+            "AGENT_METADATA_CRASH_PHASE=1",
+            "AGENT_METADATA_BOOT_READ_FAULT=busy",
+            "AGENT_OBSERVE_TEST_PROFILE=1",
+            "WAIT_ATOMIC_TEST_PROFILE=1",
+            "FS_ALLOCATOR_FAULT_TEST_PROFILE=1",
+            "PHYSICAL_PAGE_TEST_HOOKS=1",
+        )
+        env = os.environ.copy()
+        for variable in ("MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES"):
+            env.pop(variable, None)
+
+        with tempfile.TemporaryDirectory() as temp:
+            build = Path(temp) / "build"
+            object_dir = build / "os"
+            object_dir.mkdir(parents=True)
+            for name in profile_objects | {"proc.o"}:
+                (object_dir / name).touch()
+            target = build / ".kernel-stack-config"
+            command = [
+                "make",
+                "--no-print-directory",
+                str(target),
+                f"BUILDDIR={build}",
+            ]
+
+            subprocess.run(
+                command + list(enabled),
+                cwd=root,
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertTrue(
+                all((object_dir / name).exists() for name in profile_objects)
+            )
+
+            subprocess.run(
+                command,
+                cwd=root,
+                env=env,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            self.assertTrue((object_dir / "proc.o").exists())
+            self.assertTrue(
+                all(not (object_dir / name).exists() for name in profile_objects)
+            )
+
+    def test_kernel_host_selftest_inventory_is_exact_and_non_overridable(self):
+        root = SCRIPT.parent.parent
+        makefile = (root / "Makefile").read_text(encoding="utf-8")
+        match = re.search(
+            r"override KERNEL_BUDGET_PYTHON_SELFTESTS := \\\n(?P<body>.*?)\n\n"
+            r"kernel-budget-selftest:",
+            makefile,
+            re.DOTALL,
+        )
+        self.assertIsNotNone(match)
+        actual = set(
+            re.findall(
+                r"(?:scripts|host_tools)/[A-Za-z0-9_-]+\.py",
+                match.group("body"),
+            )
+        )
+        expected = {
+            path.relative_to(root).as_posix()
+            for path in (root / "scripts").glob("test-*.py")
+        } | {
+            "scripts/check-wait-queue-contract.py",
+            "scripts/check-bio-fs-must-check.py",
+            "scripts/check-fs-allocator-state.py",
+        }
+        self.assertEqual(actual, expected)
+        self.assertRegex(makefile, r"(?m)^kernel-budget-selftest:.*printf-format-static-check$")
+        self.assertNotRegex(makefile, r"(?m)^kernel-budget-selftest:.*\bprintf-format-check\b")
+        self.assertEqual(makefile.count("$(PYTHON_BIN) scripts/test-printf-format-contract.py"), 1)
+        self.assertIn("@CC=cc bash scripts/test-durable-dirty-retry.sh", makefile)
+
+    def test_stack_indirect_edge_inventory_matches_compiled_call_owners(self):
+        expected = [
+            "agent_durable_arena_validate=agent_observe_store_validate",
+            "agent_durable_arena_update_scope=agent_observe_store_update_scope",
+            "agent_durable_arena_recover=agent_observe_store_recover",
+            "agent_durable_arena_has_scope=agent_observe_store_has_scope",
+            "agent_durable_notify_locked=agent_meta_durable_dirty",
+            "agent_durable_section_replicated=agent_meta_durable_replicated",
+            "agent_durable_section_active_replicated=agent_meta_durable_active_replicated",
+            "agent_durable_section_persist_scope=agent_meta_durable_persist_scope",
+            "agent_durable_section_mirror_scope=agent_observe_store_replicated_scope",
+            "agent_identity_lease_progress=agent_observe_lease_persist_bridge",
+        ]
+        root = SCRIPT.parent.parent
+        makefile = (root / "Makefile").read_text(encoding="utf-8")
+        default_start = makefile.index("KSTACK_INDIRECT_CALL_EDGES ?=")
+        default_end = makefile.index("\n# printf", default_start)
+        default_edges = re.findall(
+            r"[A-Za-z0-9_]+=[A-Za-z0-9_]+",
+            makefile[default_start:default_end],
+        )
+        canonical_match = re.search(
+            r"KSTACK_INDIRECT_CALL_EDGES='([^']+)'",
+            makefile,
+        )
+        self.assertIsNotNone(canonical_match)
+        canonical_edges = canonical_match.group(1).split()
+        with (root / "ci" / "kernel-budgets.json").open(
+            encoding="utf-8"
+        ) as stream:
+            configured_edges = json.load(stream)["kernel_stack"][
+                "indirect_call_edges"
+            ]
+
+        self.assertEqual(default_edges, expected)
+        self.assertEqual(canonical_edges, expected)
+        self.assertEqual(sorted(configured_edges), sorted(expected))
+        self.assertEqual(len(configured_edges), len(set(configured_edges)))
+
+    def test_stack_recursion_inventory_matches_bounded_walkers(self):
+        expected = ["printf=2", "freewalk=3", "uvm_prune_empty_walk=3"]
+        root = SCRIPT.parent.parent
+        makefile = (root / "Makefile").read_text(encoding="utf-8")
+        default_match = re.search(
+            r"^KSTACK_RECURSION_BOUNDS \?= (.+)$",
+            makefile,
+            flags=re.MULTILINE,
+        )
+        canonical_match = re.search(
+            r"^\s*KSTACK_RECURSION_BOUNDS='([^']+)'",
+            makefile,
+            flags=re.MULTILINE,
+        )
+        self.assertIsNotNone(default_match)
+        self.assertIsNotNone(canonical_match)
+        with (root / "ci" / "kernel-budgets.json").open(
+            encoding="utf-8"
+        ) as stream:
+            configured_bounds = json.load(stream)["kernel_stack"][
+                "recursion_bounds"
+            ]
+
+        self.assertEqual(default_match.group(1).split(), expected)
+        self.assertEqual(canonical_match.group(1).split(), expected)
+        self.assertEqual(configured_bounds, expected)
+
+    def test_legacy_mail_sidecar_schema_is_fail_closed(self):
+        config_path = SCRIPT.parent.parent / "ci" / "kernel-budgets.json"
+        with config_path.open(encoding="utf-8") as stream:
+            config = json.load(stream)
+
+        legacy_mail = config["legacy_mail_sidecar"]
+        self.assertEqual(legacy_mail["baseline_per_process_bytes"], 8192)
+        self.assertEqual(legacy_mail["baseline_pool_bytes"], 128 * 8192)
+        kernel_budgets.validate_config(config)
+
+        missing = copy.deepcopy(config)
+        del missing["legacy_mail_sidecar"]
+        with self.assertRaises(kernel_budgets.BudgetError):
+            kernel_budgets.validate_config(missing)
+
+        bad_symbol = copy.deepcopy(config)
+        bad_symbol["legacy_mail_sidecar"]["per_process_symbol"] = ""
+        with self.assertRaises(kernel_budgets.BudgetError):
+            kernel_budgets.validate_config(bad_symbol)
+
+    def test_duration_calibration_state_schema_is_fail_closed(self):
+        config_path = SCRIPT.parent.parent / "ci" / "kernel-budgets.json"
+        with config_path.open(encoding="utf-8") as stream:
+            config = json.load(stream)
+
+        calibrated_fields = frozenset(
+            ("baseline_seconds", "max_seconds", "calibration_samples")
+        )
+        self.assertEqual(
+            kernel_budgets.AGENT_TEST_CALIBRATED_FIELDS,
+            calibrated_fields,
+        )
+        suite = config["agent_test_suite"]
+        suite["calibration_status"] = (
+            kernel_budgets.AGENT_TEST_CALIBRATION_PROVISIONAL
+        )
+        for field in calibrated_fields:
+            suite.pop(field, None)
+        kernel_budgets.validate_config(config)
+
+        suite.update(
+            {
+                "baseline_seconds": 255.370930671,
+                "max_seconds": 268.14,
+                "calibration_status": (
+                    kernel_budgets.AGENT_TEST_CALIBRATION_READY
+                ),
+                "calibration_samples": [
+                    {
+                        "sample_id": "bounded-runner-final-01",
+                        "total_seconds": 261.343281873,
+                    },
+                    {
+                        "sample_id": "bounded-runner-final-02",
+                        "total_seconds": 237.948978492,
+                    },
+                    {
+                        "sample_id": "bounded-runner-final-03",
+                        "total_seconds": 255.370930671,
+                    },
+                ],
+            }
+        )
+        kernel_budgets.validate_config(config)
+
+        unknown = copy.deepcopy(config)
+        unknown["agent_test_suite"]["calibration_status"] = "unknown"
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "calibration_status is not recognized"
+        ):
+            kernel_budgets.validate_config(unknown)
+
+        for field in calibrated_fields:
+            missing = copy.deepcopy(config)
+            del missing["agent_test_suite"][field]
+            with self.subTest(missing_calibrated_field=field), self.assertRaises(
+                kernel_budgets.BudgetError
+            ):
+                kernel_budgets.validate_config(missing)
 
         too_few = copy.deepcopy(config)
         too_few["agent_test_suite"]["calibration_samples"].pop()
@@ -1356,9 +2049,23 @@ agent_metadata_txn_projection_require_idle();
         )
         with self.assertRaisesRegex(
             kernel_budgets.BudgetError,
-            "limit exceeds 110% of the calibration median",
+            "more than 10% growth headroom",
         ):
             kernel_budgets.validate_config(excessive_headroom)
+
+        for stale_field in calibrated_fields:
+            provisional = copy.deepcopy(config)
+            provisional_suite = provisional["agent_test_suite"]
+            provisional_suite["calibration_status"] = (
+                kernel_budgets.AGENT_TEST_CALIBRATION_PROVISIONAL
+            )
+            for field in calibrated_fields - {stale_field}:
+                del provisional_suite[field]
+            with self.subTest(stale_field=stale_field), self.assertRaisesRegex(
+                kernel_budgets.BudgetError,
+                "must not carry stale calibrated fields",
+            ):
+                kernel_budgets.validate_config(provisional)
 
     def test_agent_module_inventory_and_object_paths_are_fail_closed(self):
         config_path = SCRIPT.parent.parent / "ci" / "kernel-budgets.json"
@@ -1383,6 +2090,80 @@ agent_metadata_txn_projection_require_idle();
         with self.assertRaises(kernel_budgets.BudgetError):
             kernel_budgets.validate_config(wrong_object)
 
+        missing_bss = copy.deepcopy(config)
+        background = next(
+            entry
+            for entry in missing_bss["agent_modules"]["modules"]
+            if entry["name"] == "background"
+        )
+        del background["max_bss_bytes"]
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "max_bss_bytes"
+        ):
+            kernel_budgets.validate_config(missing_bss)
+
+        modules = {
+            entry["name"]: entry
+            for entry in config["agent_modules"]["modules"]
+        }
+        self.assertIn(
+            "agent_context_append_system_causal",
+            modules["context"]["allowed_global_symbols"],
+        )
+        self.assertEqual(
+            modules["background"]["allowed_global_symbols"],
+            ["agent_background_request", "agent_background_take"],
+        )
+        self.assertEqual(modules["background"]["allowed_dependencies"], [])
+        self.assertEqual(modules["identity_lease"]["allowed_dependencies"], [])
+        self.assertEqual(
+            modules["identity_lease"]["allowed_global_prefixes"], []
+        )
+        self.assertIn(
+            "agent_identity_lease_allocator_admit",
+            modules["identity_lease"]["allowed_global_symbols"],
+        )
+        recovery = modules["observe_recovery"]
+        self.assertEqual(recovery["baseline_lines"], 374)
+        self.assertEqual(recovery["max_lines"], 393)
+        self.assertEqual(recovery["max_bss_bytes"], 240)
+        self.assertEqual(
+            recovery["allowed_dependencies"],
+            ["metadata", "observe_store"],
+        )
+        self.assertEqual(
+            recovery["allowed_global_symbols"],
+            [
+                "agent_observe_recovery_bind",
+                "agent_observe_recovery_init",
+                "agent_observe_recovery_unbind_proc",
+                "sys_agent_observe_recovery",
+            ],
+        )
+        self.assertNotIn(
+            "sys_agent_observe_recovery",
+            modules["observe_store"]["allowed_global_symbols"],
+        )
+        capacity = modules["observe_capacity"]
+        self.assertEqual(capacity["baseline_lines"], 707)
+        self.assertEqual(capacity["max_lines"], 742)
+        self.assertEqual(capacity["max_bss_bytes"], 256)
+        self.assertEqual(
+            capacity["allowed_dependencies"],
+            ["background", "durable_section", "workflow_lifecycle"],
+        )
+        ledger = modules["observe_ledger"]
+        self.assertEqual(ledger["baseline_lines"], 2374)
+        self.assertEqual(ledger["max_lines"], 2374)
+        self.assertEqual(ledger["max_bss_bytes"], 223232)
+        self.assertIn(
+            "agent_observe_checkpoint_entry_validate",
+            ledger["allowed_global_symbols"],
+        )
+        self.assertEqual(modules["observe_store"]["baseline_lines"], 896)
+        self.assertEqual(modules["observe_store"]["max_lines"], 923)
+        self.assertEqual(modules["observe_store"]["max_bss_bytes"], 0)
+
     def test_lifecycle_abi_modules_have_ratchet_baselines(self):
         config_path = SCRIPT.parent.parent / "ci" / "kernel-budgets.json"
         with config_path.open(encoding="utf-8") as stream:
@@ -1393,22 +2174,22 @@ agent_metadata_txn_projection_require_idle();
             if entry["name"] == "lifecycle"
         )
         source = SCRIPT.parent.parent / lifecycle["source_path"]
-        self.assertEqual(lifecycle["baseline_lines"], 279)
-        self.assertEqual(lifecycle["max_lines"], 293)
+        self.assertEqual(lifecycle["baseline_lines"], 340)
+        self.assertEqual(lifecycle["max_lines"], 357)
         self.assertEqual(
             lifecycle["allowed_dependencies"],
-            ["metadata", "workflow_lifecycle"],
+            ["identity", "identity_lease", "metadata", "workflow_lifecycle"],
         )
-        self.assertEqual(len(source.read_text(encoding="utf-8").splitlines()), 279)
+        self.assertEqual(len(source.read_text(encoding="utf-8").splitlines()), 340)
         metadata = next(
             entry
             for entry in config["agent_modules"]["modules"]
             if entry["name"] == "metadata"
         )
         source = SCRIPT.parent.parent / metadata["source_path"]
-        self.assertEqual(metadata["baseline_lines"], 322)
-        self.assertEqual(metadata["max_lines"], 339)
-        self.assertEqual(len(source.read_text(encoding="utf-8").splitlines()), 322)
+        self.assertEqual(metadata["baseline_lines"], 294)
+        self.assertEqual(metadata["max_lines"], 300)
+        self.assertEqual(len(source.read_text(encoding="utf-8").splitlines()), 294)
         syscall = next(
             bridge
             for bridge in config["agent_modules"]["integration_bridges"]
@@ -1592,6 +2373,7 @@ agent_metadata_txn_projection_require_idle();
                     "baseline_seconds": 300.0,
                     "max_seconds": 330.0,
                     "calibration_status": "calibrated_full_suite",
+                    "runner_tag": "agentos-qemu-calibrated",
                 }
             }
             output = io.StringIO()
@@ -1643,11 +2425,9 @@ agent_metadata_txn_projection_require_idle();
 
     def test_agent_suite_rejects_provisional_duration(self):
         config = {
-            "agent_test_suite": {
-                "expected_cases": ["one"],
-                "baseline_seconds": 1.0,
-                "max_seconds": 1.1,
-                "calibration_status": "provisional_requires_full_suite",
+                "agent_test_suite": {
+                    "expected_cases": ["one"],
+                    "calibration_status": "provisional_requires_full_suite",
             }
         }
         with tempfile.TemporaryDirectory() as temp:
@@ -1678,8 +2458,6 @@ agent_metadata_txn_projection_require_idle();
             config = {
                 "agent_test_suite": {
                     "expected_cases": ["one", "two"],
-                    "baseline_seconds": 10.0,
-                    "max_seconds": 11.0,
                     "calibration_status": "provisional_requires_full_suite",
                 }
             }
@@ -1691,6 +2469,19 @@ agent_metadata_txn_projection_require_idle();
                 timings.read_text(encoding="utf-8"),
                 "one 12.5\ntwo 13.5\n",
             )
+
+    def test_agent_suite_policy_rejects_provisional_before_execution(self):
+        config = {
+            "agent_test_suite": {
+                "expected_cases": ["one"],
+                "runner_tag": "agentos-qemu-calibrated",
+                "calibration_status": "provisional_requires_full_suite",
+            }
+        }
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError, "duration is provisional"
+        ):
+            kernel_budgets.check_agent_test_policy(config)
 
 
 if __name__ == "__main__":

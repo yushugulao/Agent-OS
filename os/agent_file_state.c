@@ -48,7 +48,7 @@ struct agent_file_cache_scope_state {
 	uint64 cache_generation;
 };
 
-struct agent_file_version_entry {
+struct file_version {
 	int used;
 	int published_size_valid;
 	int published_size_dirty;
@@ -84,11 +84,19 @@ struct agent_file_edit_entry {
 	char path[AGENT_FILE_LOGICAL_SIZE];
 };
 
+struct edit_call {
+	struct proc *proc;
+	struct inode *inode;
+	struct agent_file_edit_entry *entry;
+	struct agent_file_edit_state state;
+	int enabled;
+};
+
 static struct agent_file_digest_cache_entry
 	agent_file_digest_cache[AGENT_FILE_DIGEST_CACHE_MAX];
 static struct agent_file_cache_scope_state
 	agent_file_cache_scopes[AGENT_FILE_CACHE_SCOPE_MAX];
-static struct agent_file_version_entry
+static struct file_version
 	agent_file_versions[AGENT_FILE_VERSION_MAX];
 static struct agent_file_edit_entry agent_file_edits[AGENT_FILE_EDIT_MAX];
 static int agent_file_digest_cache_head;
@@ -104,6 +112,12 @@ uint64
 agent_file_state_now(void)
 {
 	return get_cycle() / (CPU_FREQ / TICKS_PER_SEC);
+}
+
+static uint64
+agent_file_counter_next(uint64 *counter)
+{
+	return ++*counter ? *counter : (*counter = 1);
 }
 
 void
@@ -202,24 +216,18 @@ agent_file_state_generation_next(uint scope_id)
 	uint64 generation;
 	int enabled = intr_save();
 
-	agent_file_generation++;
-	if (agent_file_generation == 0)
-		agent_file_generation = 1;
-	generation = agent_file_generation;
+	generation = agent_file_counter_next(&agent_file_generation);
 	state = agent_file_cache_scope_locked(scope_id, 1);
 	if (state && state->scope_id == VFS_SCOPE_SYSTEM) {
 		/* SYSTEM objects are visible in every workflow query. */
 		for (int i = 0; i < AGENT_FILE_CACHE_SCOPE_MAX; i++) {
 			if (!agent_file_cache_scopes[i].used)
 				continue;
-			agent_file_cache_scopes[i].cache_generation++;
-			if (agent_file_cache_scopes[i].cache_generation == 0)
-				agent_file_cache_scopes[i].cache_generation = 1;
+			agent_file_counter_next(
+				&agent_file_cache_scopes[i].cache_generation);
 		}
 	} else if (state) {
-		state->cache_generation++;
-		if (state->cache_generation == 0)
-			state->cache_generation = 1;
+		agent_file_counter_next(&state->cache_generation);
 	}
 	intr_restore(enabled);
 	return generation;
@@ -244,38 +252,10 @@ agent_edit_unlock(int enabled)
 	intr_restore(enabled);
 }
 
-static int
-agent_file_version_index(uint64 dev, uint64 inum)
-{
-	if (dev != ROOTDEV || inum == 0 || inum >= AGENT_FILE_VERSION_MAX)
-		return -1;
-	return inum;
-}
-
-static int
-agent_file_version_matches_identity(struct agent_file_version_entry *entry,
-				    uint64 dev, uint64 inum,
-				    uint64 incarnation)
-{
-	return entry->used && entry->dev == dev && entry->inum == inum &&
-	       entry->incarnation == incarnation;
-}
-
-static int
-agent_file_version_matches_inode(struct agent_file_version_entry *entry,
-				 struct inode *ip)
-{
-	return agent_file_version_matches_identity(
-		       entry, ip->dev, ip->inum, ip->vfs_incarnation) &&
-	       entry->scope_id == ip->vfs_scope_id &&
-	       entry->storage_owner == ip->fs_owner_domain &&
-	       entry->vfs_policy == ip->vfs_policy;
-}
-
 static void
-agent_file_version_clear_locked(int slot)
+file_version_clear_locked(int slot)
 {
-	struct agent_file_version_entry *entry;
+	struct file_version *entry;
 	uint64 dev;
 	uint64 inum;
 	uint64 incarnation;
@@ -304,28 +284,44 @@ agent_file_version_clear_locked(int slot)
 			       sizeof(agent_file_digest_cache[i]));
 }
 
-static int
-agent_file_version_slot_locked(struct inode *ip, int create)
+static struct file_version *
+file_version_identity_locked(uint64 dev, uint64 inum, uint64 incarnation)
 {
-	struct agent_file_version_entry *entry;
-	int slot;
+	struct file_version *entry;
+
+	if (dev != ROOTDEV || inum == 0 || inum >= AGENT_FILE_VERSION_MAX)
+		return 0;
+	entry = &agent_file_versions[inum];
+	if (!entry->used || entry->dev != dev || entry->inum != inum ||
+	    entry->incarnation != incarnation)
+		return 0;
+	return entry;
+}
+
+static struct file_version *
+file_version_inode_locked(struct inode *ip, int create)
+{
+	struct file_version *entry;
 
 	if (ip == 0 || !ip->valid || ip->type != T_FILE ||
-	    ip->vfs_incarnation == 0 || ip->vfs_policy == VFS_POLICY_FREE ||
+	    ip->dev != ROOTDEV || ip->inum == 0 ||
+	    ip->inum >= AGENT_FILE_VERSION_MAX || ip->vfs_incarnation == 0 ||
+	    ip->vfs_policy == VFS_POLICY_FREE ||
 	    ip->fs_owner_domain < FS_OWNER_SYSTEM ||
 	    ip->fs_owner_version != FS_OWNER_VERSION)
-		return -1;
-	slot = agent_file_version_index(ip->dev, ip->inum);
-	if (slot < 0)
-		return -1;
-	entry = &agent_file_versions[slot];
-	if (agent_file_version_matches_inode(entry, ip))
-		return slot;
+		return 0;
+	entry = file_version_identity_locked(
+		ip->dev, ip->inum, ip->vfs_incarnation);
+	if (entry && entry->scope_id == ip->vfs_scope_id &&
+	    entry->storage_owner == ip->fs_owner_domain &&
+	    entry->vfs_policy == ip->vfs_policy)
+		return entry;
 	if (!create)
-		return -1;
+		return 0;
 
-	/* A new inode incarnation retires every prior transient sidecar. */
-	agent_file_version_clear_locked(slot);
+	/* A new identity retires every prior transient sidecar in this slot. */
+	file_version_clear_locked(ip->inum);
+	entry = &agent_file_versions[ip->inum];
 	memset(entry, 0, sizeof(*entry));
 	entry->used = 1;
 	entry->scope_id = ip->vfs_scope_id;
@@ -334,50 +330,20 @@ agent_file_version_slot_locked(struct inode *ip, int create)
 	entry->incarnation = ip->vfs_incarnation;
 	entry->storage_owner = ip->fs_owner_domain;
 	entry->vfs_policy = ip->vfs_policy;
-	return slot;
-}
-
-static int
-agent_file_version_identity_slot_locked(uint64 dev, uint64 inum,
-					uint64 incarnation)
-{
-	int slot = agent_file_version_index(dev, inum);
-
-	if (slot < 0 || !agent_file_version_matches_identity(
-				 &agent_file_versions[slot], dev, inum, incarnation))
-		return -1;
-	return slot;
-}
-
-static int
-agent_file_content_version_locked(struct inode *ip, uint64 *version,
-				  int create)
-{
-	int slot;
-
-	if (version == 0)
-		return -1;
-	slot = agent_file_version_slot_locked(ip, create);
-	if (slot < 0)
-		return -1;
-	*version = agent_file_versions[slot].content_version;
-	return 0;
+	return entry;
 }
 
 void
 agent_file_state_content_bump(struct inode *ip)
 {
-	int slot;
+	struct file_version *entry;
 	int enabled;
 
 	enabled = agent_edit_lock();
-	slot = agent_file_version_slot_locked(ip, 1);
-	if (slot >= 0) {
-		agent_file_content_generation++;
-		if (agent_file_content_generation == 0)
-			agent_file_content_generation = 1;
-		agent_file_versions[slot].content_version =
-			agent_file_content_generation;
+	entry = file_version_inode_locked(ip, 1);
+	if (entry) {
+		entry->content_version =
+			agent_file_counter_next(&agent_file_content_generation);
 	}
 	agent_edit_unlock(enabled);
 }
@@ -385,17 +351,15 @@ agent_file_state_content_bump(struct inode *ip)
 int
 agent_file_state_size_publish(struct inode *ip, int force)
 {
-	struct agent_file_version_entry *entry;
+	struct file_version *entry;
 	int changed = -1;
 	int enabled;
-	int slot;
 
 	if (ip == 0)
 		return -1;
 	enabled = agent_edit_lock();
-	slot = agent_file_version_slot_locked(ip, 1);
-	if (slot >= 0) {
-		entry = &agent_file_versions[slot];
+	entry = file_version_inode_locked(ip, 1);
+	if (entry) {
 		if (force || !entry->published_size_valid ||
 		    entry->published_size != ip->size) {
 			entry->published_size_valid = 1;
@@ -419,16 +383,14 @@ static void
 agent_file_overlay_published_size_locked(struct agent_file_meta *meta,
 					 uint scope_id)
 {
-	struct agent_file_version_entry *entry;
-	int slot;
+	struct file_version *entry;
 
 	if (meta == 0)
 		return;
-	slot = agent_file_version_identity_slot_locked(
+	entry = file_version_identity_locked(
 		meta->dev, meta->inum, meta->incarnation);
-	if (slot < 0)
+	if (entry == 0)
 		return;
-	entry = &agent_file_versions[slot];
 	if (!entry->published_size_valid || entry->scope_id != scope_id)
 		return;
 	meta->size = entry->published_size;
@@ -485,98 +447,32 @@ agent_file_state_snapshot_end(int enabled)
 void
 agent_file_version_reclaim(struct inode *ip)
 {
-	int slot;
+	struct file_version *entry;
 	int enabled;
 
 	if (ip == 0)
 		return;
-	slot = agent_file_version_index(ip->dev, ip->inum);
-	if (slot < 0)
-		return;
 	enabled = agent_edit_lock();
-	if (agent_file_version_matches_identity(
-		    &agent_file_versions[slot], ip->dev, ip->inum,
-		    ip->vfs_incarnation))
-		agent_file_version_clear_locked(slot);
+	entry = file_version_identity_locked(
+		ip->dev, ip->inum, ip->vfs_incarnation);
+	if (entry)
+		file_version_clear_locked(ip->inum);
 	agent_edit_unlock(enabled);
 }
 
-static uint64
-agent_edit_version_locked(uint64 dev, uint64 inum, uint64 incarnation,
-			  int *ok)
-{
-	int slot = agent_file_version_identity_slot_locked(dev, inum,
-							  incarnation);
-
-	if (slot < 0) {
-		if (ok)
-			*ok = 0;
-		return 0;
-	}
-	if (ok)
-		*ok = 1;
-	return agent_file_versions[slot].edit_version;
-}
-
-static uint64
-agent_edit_version_inode_locked(struct inode *ip, int create, int *ok)
-{
-	int slot = agent_file_version_slot_locked(ip, create);
-
-	if (slot < 0) {
-		if (ok)
-			*ok = 0;
-		return 0;
-	}
-	if (ok)
-		*ok = 1;
-	return agent_file_versions[slot].edit_version;
-}
-
-static int
-agent_edit_set_version_locked(uint64 dev, uint64 inum, uint64 incarnation,
-			      uint64 version)
-{
-	int slot = agent_file_version_identity_slot_locked(dev, inum,
-							  incarnation);
-
-	if (slot < 0)
-		return -1;
-	agent_file_versions[slot].edit_version = version;
-	return 0;
-}
-
-static void
-agent_edit_bump_version_locked(struct inode *ip)
-{
-	int slot = agent_file_version_slot_locked(ip, 1);
-
-	if (slot >= 0)
-		agent_file_versions[slot].edit_version++;
-}
-
 static struct agent_file_edit_entry *
-agent_edit_find_locked(uint scope_id, uint64 dev, uint64 inum,
-		       uint64 incarnation)
+agent_edit_find_locked(uint scope_id, uint64 lease_id, struct inode *ip)
 {
-	for (int i = 0; i < AGENT_FILE_EDIT_MAX; i++)
-		if (agent_file_edits[i].active &&
-		    agent_file_edits[i].scope_id == scope_id &&
-		    agent_file_edits[i].dev == dev &&
-		    agent_file_edits[i].inum == inum &&
-		    agent_file_edits[i].incarnation == incarnation)
-			return &agent_file_edits[i];
-	return 0;
-}
+	for (int i = 0; i < AGENT_FILE_EDIT_MAX; i++) {
+		struct agent_file_edit_entry *e = &agent_file_edits[i];
 
-static struct agent_file_edit_entry *
-agent_edit_find_lease_locked(uint scope_id, uint64 lease)
-{
-	for (int i = 0; i < AGENT_FILE_EDIT_MAX; i++)
-		if (agent_file_edits[i].active &&
-		    agent_file_edits[i].scope_id == scope_id &&
-		    agent_file_edits[i].lease_id == lease)
-			return &agent_file_edits[i];
+		/* NULL inode selects the scoped lease key instead. */
+		if (e->active && e->scope_id == scope_id &&
+		    (ip ? e->dev == ip->dev && e->inum == ip->inum &&
+			  e->incarnation == ip->vfs_incarnation :
+			  e->lease_id == lease_id))
+			return e;
+	}
 	return 0;
 }
 
@@ -597,20 +493,16 @@ agent_edit_free_locked(uint scope_id)
 	return 0;
 }
 
-static int
-agent_edit_expired(struct agent_file_edit_entry *e, uint64 now)
-{
-	return e->active && e->deadline_tick != 0 && now >= e->deadline_tick;
-}
-
 static void
 agent_edit_release_locked(struct agent_file_edit_entry *e, int publish_dirty)
 {
+	struct file_version *version;
+
 	if (e == 0 || !e->active)
 		return;
-	if (publish_dirty && e->dirty)
-		agent_edit_set_version_locked(e->dev, e->inum, e->incarnation,
-					      e->base_version + 1);
+	version = file_version_identity_locked(e->dev, e->inum, e->incarnation);
+	if (version && publish_dirty && e->dirty)
+		version->edit_version = e->base_version + 1;
 	memset(e, 0, sizeof(*e));
 }
 
@@ -618,7 +510,9 @@ static void
 agent_edit_cleanup_expired_locked(uint64 now)
 {
 	for (int i = 0; i < AGENT_FILE_EDIT_MAX; i++)
-		if (agent_edit_expired(&agent_file_edits[i], now))
+		if (agent_file_edits[i].active &&
+		    agent_file_edits[i].deadline_tick != 0 &&
+		    now >= agent_file_edits[i].deadline_tick)
 			agent_edit_release_locked(&agent_file_edits[i], 1);
 }
 
@@ -631,42 +525,43 @@ agent_edit_owner(struct agent_file_edit_entry *e, struct proc *p)
 	       e->owner_control_id == p->agent_control_id;
 }
 
-static int
-agent_edit_can_write(struct proc *p)
-{
-	return agent_identity_has_any_cap(p, AGENT_CAP_ARTIFACT_WRITE |
-				    AGENT_CAP_ORCHESTRATE);
-}
-
 static void
-agent_edit_fill_state_locked(struct agent_file_edit_state *state,
-			     struct agent_file_edit_entry *e,
-			     uint64 dev, uint64 inum,
-			     uint64 incarnation, char *path)
+edit_state_locked(struct agent_file_edit_state *state,
+		  struct agent_file_edit_entry *e, struct inode *ip,
+		  char *path, int finished)
 {
-	int ok;
+	struct file_version *version;
 
 	memset(state, 0, sizeof(*state));
-	state->dev = dev;
-	state->inum = inum;
-	state->incarnation = incarnation;
-	state->current_version =
-		agent_edit_version_locked(dev, inum, incarnation, &ok);
+	if (e) {
+		state->dev = e->dev;
+		state->inum = e->inum;
+		state->incarnation = e->incarnation;
+	} else {
+		state->dev = ip->dev;
+		state->inum = ip->inum;
+		state->incarnation = ip->vfs_incarnation;
+	}
+	version = file_version_identity_locked(
+		state->dev, state->inum, state->incarnation);
+	state->current_version = version ? version->edit_version : 0;
+	if (e && e->active && e->path[0])
+		path = e->path;
 	if (path)
 		safestrcpy(state->path, path, sizeof(state->path));
 	if (e == 0 || !e->active)
+		return;
+	state->lease_id = e->lease_id;
+	state->base_version = e->base_version;
+	state->dirty = e->dirty;
+	if (finished)
 		return;
 	state->active = 1;
 	state->owner_pid = e->owner_pid;
 	state->owner_agent_id = e->owner_agent_id;
 	state->owner_role = e->owner_role;
-	state->dirty = e->dirty;
-	state->lease_id = e->lease_id;
-	state->base_version = e->base_version;
 	state->deadline_tick = e->deadline_tick;
 	state->conflict_count = e->conflict_count;
-	if (e->path[0])
-		safestrcpy(state->path, e->path, sizeof(state->path));
 }
 
 static void
@@ -696,12 +591,10 @@ agent_edit_modify_allowed(struct inode *ip, char *action)
 	enabled = agent_edit_lock();
 	now = agent_file_state_now();
 	agent_edit_cleanup_expired_locked(now);
-	edit = agent_edit_find_locked(ip->vfs_scope_id, ip->dev, ip->inum,
-				      ip->vfs_incarnation);
+	edit = agent_edit_find_locked(ip->vfs_scope_id, 0, ip);
 	if (edit && !agent_edit_owner(edit, p)) {
 		edit->conflict_count++;
-		agent_edit_fill_state_locked(&state, edit, ip->dev, ip->inum,
-					     ip->vfs_incarnation, 0);
+		edit_state_locked(&state, edit, ip, 0, 0);
 		allowed = 0;
 	}
 	agent_edit_unlock(enabled);
@@ -710,71 +603,64 @@ agent_edit_modify_allowed(struct inode *ip, char *action)
 	return allowed;
 }
 
-int
-agent_edit_write_allowed(struct inode *ip)
-{
-	return agent_edit_modify_allowed(ip, "edit_write_conflict");
-}
+#define DEFINE_AGENT_EDIT_ALLOWED(operation, event) \
+	int agent_edit_##operation##_allowed(struct inode *ip) \
+	{ return agent_edit_modify_allowed(ip, event); }
 
-int
-agent_edit_truncate_allowed(struct inode *ip)
-{
-	return agent_edit_modify_allowed(ip, "edit_trunc_conflict");
-}
-
-int
-agent_edit_unlink_allowed(struct inode *ip)
-{
-	return agent_edit_modify_allowed(ip, "edit_unlink_conflict");
-}
+DEFINE_AGENT_EDIT_ALLOWED(write, "edit_write_conflict")
+DEFINE_AGENT_EDIT_ALLOWED(truncate, "edit_trunc_conflict")
+DEFINE_AGENT_EDIT_ALLOWED(unlink, "edit_unlink_conflict")
+#undef DEFINE_AGENT_EDIT_ALLOWED
 
 static void
 agent_edit_note_modify(struct inode *ip)
 {
 	struct proc *p = curr_proc();
 	struct agent_file_edit_entry *edit;
+	struct file_version *version;
 	int enabled;
 
 	if (ip == 0)
 		return;
 	enabled = agent_edit_lock();
 	agent_edit_cleanup_expired_locked(agent_file_state_now());
-	edit = agent_edit_find_locked(ip->vfs_scope_id, ip->dev, ip->inum,
-				      ip->vfs_incarnation);
+	edit = agent_edit_find_locked(ip->vfs_scope_id, 0, ip);
 	if (edit && agent_edit_owner(edit, p))
 		edit->dirty = 1;
-	else if (edit == 0)
-		agent_edit_bump_version_locked(ip);
+	else if (edit == 0) {
+		version = file_version_inode_locked(ip, 1);
+		if (version)
+			version->edit_version++;
+	}
 	agent_edit_unlock(enabled);
 }
 
-void
-agent_edit_note_write(struct inode *ip)
-{
-	agent_edit_note_modify(ip);
-}
+#define DEFINE_AGENT_EDIT_NOTE(operation) \
+	void agent_edit_note_##operation(struct inode *ip) \
+	{ agent_edit_note_modify(ip); }
 
-void
-agent_edit_note_truncate(struct inode *ip)
-{
-	agent_edit_note_modify(ip);
-}
+DEFINE_AGENT_EDIT_NOTE(write)
+DEFINE_AGENT_EDIT_NOTE(truncate)
+#undef DEFINE_AGENT_EDIT_NOTE
 
 void
 agent_edit_note_delete(struct inode *ip)
 {
 	struct agent_file_edit_entry *edit;
+	struct file_version *version;
 	int enabled;
 
 	if (ip == 0)
 		return;
 	enabled = agent_edit_lock();
-	edit = agent_edit_find_locked(ip->vfs_scope_id, ip->dev, ip->inum,
-				      ip->vfs_incarnation);
+	edit = agent_edit_find_locked(ip->vfs_scope_id, 0, ip);
 	if (edit)
 		agent_edit_release_locked(edit, 1);
-	else
-		agent_edit_bump_version_locked(ip);
+	else {
+		version = file_version_inode_locked(ip, 1);
+		if (version)
+			version->edit_version++;
+	}
 	agent_edit_unlock(enabled);
 }
 
@@ -783,21 +669,15 @@ agent_file_state_scope_reclaim(uint scope_id)
 {
 	int enabled = agent_edit_lock();
 
-	for (int i = 0; i < AGENT_FILE_EDIT_MAX; i++)
-		if (agent_file_edits[i].active &&
-		    agent_file_edits[i].scope_id == scope_id)
-			memset(&agent_file_edits[i], 0,
-			       sizeof(agent_file_edits[i]));
-	for (int i = 0; i < AGENT_FILE_DIGEST_CACHE_MAX; i++)
-		if (agent_file_digest_cache[i].valid &&
-		    agent_file_digest_cache[i].scope_id == scope_id)
-			memset(&agent_file_digest_cache[i], 0,
-			       sizeof(agent_file_digest_cache[i]));
-	for (int i = 0; i < AGENT_FILE_VERSION_MAX; i++)
-		if (agent_file_versions[i].used &&
-		    agent_file_versions[i].scope_id == scope_id)
-			memset(&agent_file_versions[i], 0,
-			       sizeof(agent_file_versions[i]));
+#define CLEAR_SCOPED(array, count, present) do { \
+	for (int i = 0; i < (count); i++) \
+		if ((array)[i].present && (array)[i].scope_id == scope_id) \
+			memset(&(array)[i], 0, sizeof((array)[i])); \
+} while (0)
+	CLEAR_SCOPED(agent_file_edits, AGENT_FILE_EDIT_MAX, active);
+	CLEAR_SCOPED(agent_file_digest_cache, AGENT_FILE_DIGEST_CACHE_MAX, valid);
+	CLEAR_SCOPED(agent_file_versions, AGENT_FILE_VERSION_MAX, used);
+#undef CLEAR_SCOPED
 	agent_edit_unlock(enabled);
 }
 
@@ -814,15 +694,18 @@ agent_file_state_digest_cache_lookup(struct inode *ip,
 				     uint64 *content_generation)
 {
 	struct agent_file_digest_cache_entry *e;
+	struct file_version *version;
 	int found = 0;
 	int enabled;
 
 	enabled = agent_edit_lock();
-	if (agent_file_content_version_locked(ip, content_generation, 1) < 0) {
+	version = content_generation ? file_version_inode_locked(ip, 1) : 0;
+	if (version == 0) {
 		agent_file_digest_cache_misses++;
 		agent_edit_unlock(enabled);
 		return 0;
 	}
+	*content_generation = version->content_version;
 	for (int i = 0; i < AGENT_FILE_DIGEST_CACHE_MAX; i++) {
 		e = &agent_file_digest_cache[i];
 		if (!e->valid)
@@ -858,15 +741,15 @@ agent_file_state_digest_cache_store(struct inode *ip,
 				    uint64 hash, char *preview)
 {
 	struct agent_file_digest_cache_entry *e;
-	uint64 content_generation;
+	struct file_version *version;
 	int enabled;
 
 	if (ip == 0 || ip->agent_meta_slot <= 0 ||
 	    ip->agent_meta_version != AGENT_INODE_META_VERSION)
 		return;
 	enabled = agent_edit_lock();
-	if (agent_file_content_version_locked(ip, &content_generation, 0) < 0 ||
-	    content_generation != expected_generation ||
+	version = file_version_inode_locked(ip, 0);
+	if (version == 0 || version->content_version != expected_generation ||
 	    ip->size != expected_size) {
 		agent_edit_unlock(enabled);
 		return;
@@ -883,7 +766,7 @@ agent_file_state_digest_cache_store(struct inode *ip,
 	e->inum = ip->inum;
 	e->incarnation = ip->vfs_incarnation;
 	e->size = expected_size;
-	e->content_generation = content_generation;
+	e->content_generation = version->content_version;
 	e->bytes = bytes;
 	e->hash = hash;
 	safestrcpy(e->preview, preview[0] ? preview : "empty_file",
@@ -892,23 +775,33 @@ agent_file_state_digest_cache_store(struct inode *ip,
 }
 
 static int
-agent_file_edit_lookup_path(struct proc *p, uint64 pathaddr, char *path,
-			    struct inode **out,
-			    enum vfs_operation operation)
+edit_lookup_path(struct proc *p, uint64 pathaddr, char *path,
+		 struct inode **out, enum vfs_operation operation)
 {
 	struct inode *ip;
 	struct vfs_cred cred;
+	int lookup_status;
+	int result;
 
 	if (copyinstr(p->pagetable, path, pathaddr, MAXPATH) < 0)
 		return -1;
 	path[MAXPATH - 1] = 0;
 	if (path[0] == 0 || agent_file_state_reserved_path(path))
 		return AGENT_STATUS_BAD_PARAM;
-	ip = namei_scope(path, VFS_POLICY_WORKFLOW,
-			 agent_identity_proc_scope(p));
-	if (ip == 0)
-		return AGENT_STATUS_NOT_FOUND;
-	ivalid(ip);
+	ip = namei_scope_status(path, VFS_POLICY_WORKFLOW,
+			       agent_identity_proc_scope(p), &lookup_status);
+	if (ip == 0) {
+		if (lookup_status == FS_LOOKUP_ABSENT)
+			return AGENT_STATUS_NOT_FOUND;
+		return lookup_status == FS_LOOKUP_BUSY ? AGENT_STATUS_RETRY :
+						       AGENT_STATUS_IO_ERROR;
+	}
+	result = ivalid(ip);
+	if (result < 0) {
+		iput(ip);
+		return result == FS_LOOKUP_BUSY ? AGENT_STATUS_RETRY :
+						 AGENT_STATUS_IO_ERROR;
+	}
 	if (ip->type != T_FILE) {
 		iput(ip);
 		return AGENT_STATUS_BAD_PARAM;
@@ -924,8 +817,8 @@ agent_file_edit_lookup_path(struct proc *p, uint64 pathaddr, char *path,
 }
 
 static int
-agent_file_edit_copy_state(struct proc *p, uint64 stateaddr,
-			   struct agent_file_edit_state *state)
+edit_copy_state(struct proc *p, uint64 stateaddr,
+		struct agent_file_edit_state *state)
 {
 	if (stateaddr == 0)
 		return 0;
@@ -935,31 +828,78 @@ agent_file_edit_copy_state(struct proc *p, uint64 stateaddr,
 		       sizeof(*state));
 }
 
+static int
+edit_call_init(struct edit_call *call)
+{
+	call->proc = curr_proc();
+	call->inode = 0;
+	return call->proc->is_agent ? 0 : -1;
+}
+
+static int
+edit_call_output(struct edit_call *call, uint64 stateaddr,
+		 int required)
+{
+	if (stateaddr == 0)
+		return required ? -1 : 0;
+	return user_range_check(call->proc->pagetable, stateaddr,
+				sizeof(call->state), PTE_W);
+}
+
+static int
+edit_reply(struct edit_call *call, int status, char *event,
+	   uint64 stateaddr)
+{
+	agent_edit_unlock(call->enabled);
+	if (call->inode)
+		iput(call->inode);
+	/* Only successful edit events describe an authority-changing effect. */
+	if (event)
+		agent_edit_audit(call->proc, status, event, &call->state,
+				 status == AGENT_STATUS_OK);
+	if (edit_copy_state(call->proc, stateaddr, &call->state) < 0)
+		return -1;
+	return status;
+}
+
+static int
+edit_lease_locked(struct edit_call *call, uint64 lease_id,
+		  char *denied_event, uint64 stateaddr)
+{
+	call->enabled = agent_edit_lock();
+	agent_edit_cleanup_expired_locked(agent_file_state_now());
+	call->entry = agent_edit_find_locked(
+		agent_identity_proc_scope(call->proc), lease_id, 0);
+	if (call->entry == 0)
+		return edit_reply(call, AGENT_STATUS_NOT_FOUND, 0, 0);
+	if (agent_edit_owner(call->entry, call->proc) ||
+	    agent_identity_has_cap(call->proc, AGENT_CAP_ORCHESTRATE))
+		return AGENT_STATUS_OK;
+	edit_state_locked(&call->state, call->entry, 0, call->entry->path, 0);
+	return edit_reply(call, AGENT_STATUS_DENIED, denied_event, stateaddr);
+}
+
 int
 sys_agent_file_edit_begin(uint64 pathaddr, uint64 flags, int ttl_ticks,
 			  uint64 stateaddr)
 {
-	struct proc *p = curr_proc();
-	struct inode *ip;
-	struct agent_file_edit_entry *edit;
-	struct agent_file_edit_entry *slot;
-	struct agent_file_edit_state state;
+	struct edit_call call;
+	struct file_version *version_entry;
 	char path[MAXPATH];
 	uint64 now;
 	uint64 version;
-	int ok;
 	int rc;
 	int ttl;
-	int enabled;
 
-	if (!p->is_agent)
+	if (edit_call_init(&call) < 0)
 		return -1;
-	if (!agent_edit_can_write(p))
+	if (!agent_identity_has_any_cap(call.proc,
+		AGENT_CAP_ARTIFACT_WRITE | AGENT_CAP_ORCHESTRATE))
 		return AGENT_STATUS_DENIED;
-	if (stateaddr &&
-	    user_range_check(p->pagetable, stateaddr, sizeof(state), PTE_W) < 0)
+	if (edit_call_output(&call, stateaddr, 0) < 0)
 		return -1;
-	rc = agent_file_edit_lookup_path(p, pathaddr, path, &ip, VFS_OP_WRITE);
+	rc = edit_lookup_path(call.proc, pathaddr, path, &call.inode,
+			      VFS_OP_WRITE);
 	if (rc < 0)
 		return rc;
 
@@ -968,226 +908,130 @@ sys_agent_file_edit_begin(uint64 pathaddr, uint64 flags, int ttl_ticks,
 	if (ttl > AGENT_FILE_EDIT_MAX_TTL)
 		ttl = AGENT_FILE_EDIT_MAX_TTL;
 
-	enabled = agent_edit_lock();
+	call.enabled = agent_edit_lock();
 	agent_edit_cleanup_expired_locked(now);
-	version = agent_edit_version_inode_locked(ip, 1, &ok);
-	if (!ok) {
-		agent_edit_unlock(enabled);
-		iput(ip);
-		return AGENT_STATUS_NO_SPACE;
-	}
-	edit = agent_edit_find_locked(agent_identity_proc_scope(p), ip->dev,
-				      ip->inum, ip->vfs_incarnation);
-	if (edit) {
+	version_entry = file_version_inode_locked(call.inode, 1);
+	if (version_entry == 0)
+		return edit_reply(&call, AGENT_STATUS_NO_SPACE, 0, 0);
+	version = version_entry->edit_version;
+	call.entry = agent_edit_find_locked(
+		agent_identity_proc_scope(call.proc), 0, call.inode);
+	if (call.entry) {
 		if ((flags & AGENT_FILE_EDIT_F_ORCHESTRATOR_BREAK) &&
-		    agent_identity_has_cap(p, AGENT_CAP_ORCHESTRATE)) {
-			agent_edit_release_locked(edit, 1);
-			version = agent_edit_version_locked(
-				ip->dev, ip->inum, ip->vfs_incarnation, &ok);
-			if (!ok) {
-				agent_edit_unlock(enabled);
-				iput(ip);
-				return AGENT_STATUS_NO_SPACE;
-			}
+		    agent_identity_has_cap(call.proc, AGENT_CAP_ORCHESTRATE)) {
+			agent_edit_release_locked(call.entry, 1);
+			version_entry = file_version_identity_locked(
+				call.inode->dev, call.inode->inum,
+				call.inode->vfs_incarnation);
+			if (version_entry == 0)
+				return edit_reply(
+					&call, AGENT_STATUS_NO_SPACE, 0, 0);
+			version = version_entry->edit_version;
 		} else {
-			edit->conflict_count++;
-			agent_edit_fill_state_locked(
-				&state, edit, ip->dev, ip->inum,
-				ip->vfs_incarnation, path);
-			agent_edit_unlock(enabled);
-			iput(ip);
-			agent_edit_audit(p, AGENT_STATUS_CONFLICT,
-					 "edit_begin_conflict", &state, 0);
-			if (agent_file_edit_copy_state(p, stateaddr, &state) < 0)
-				return -1;
-			return AGENT_STATUS_CONFLICT;
+			call.entry->conflict_count++;
+			edit_state_locked(
+				&call.state, call.entry, call.inode, path, 0);
+			return edit_reply(&call,
+				AGENT_STATUS_CONFLICT, "edit_begin_conflict",
+				stateaddr);
 		}
 	}
-	slot = agent_edit_free_locked(agent_identity_proc_scope(p));
-	if (slot == 0) {
-		agent_edit_unlock(enabled);
-		iput(ip);
-		return AGENT_STATUS_NO_SPACE;
-	}
-	memset(slot, 0, sizeof(*slot));
-	slot->active = 1;
-	slot->scope_id = agent_identity_proc_scope(p);
-	slot->owner_pid = p->pid;
-	slot->owner_agent_id = p->agent_id;
-	slot->owner_role = p->agent_role;
-	slot->owner_control_id = p->agent_control_id;
-	slot->lease_id = agent_file_edit_next_lease++;
+	call.entry = agent_edit_free_locked(agent_identity_proc_scope(call.proc));
+	if (call.entry == 0)
+		return edit_reply(&call, AGENT_STATUS_NO_SPACE, 0, 0);
+	memset(call.entry, 0, sizeof(*call.entry));
+	call.entry->active = 1;
+	call.entry->scope_id = agent_identity_proc_scope(call.proc);
+	call.entry->owner_pid = call.proc->pid;
+	call.entry->owner_agent_id = call.proc->agent_id;
+	call.entry->owner_role = call.proc->agent_role;
+	call.entry->owner_control_id = call.proc->agent_control_id;
+	call.entry->lease_id = agent_file_edit_next_lease++;
 	if (agent_file_edit_next_lease == 0)
 		agent_file_edit_next_lease = 1;
-	slot->dev = ip->dev;
-	slot->inum = ip->inum;
-	slot->incarnation = ip->vfs_incarnation;
-	slot->base_version = version;
-	slot->deadline_tick = now + ttl;
-	safestrcpy(slot->path, path, sizeof(slot->path));
-	agent_edit_fill_state_locked(&state, slot, ip->dev, ip->inum,
-				     ip->vfs_incarnation, path);
-	agent_edit_unlock(enabled);
-	iput(ip);
-	agent_edit_audit(p, AGENT_STATUS_OK, "edit_begin", &state, 1);
-	return agent_file_edit_copy_state(p, stateaddr, &state);
+	call.entry->dev = call.inode->dev;
+	call.entry->inum = call.inode->inum;
+	call.entry->incarnation = call.inode->vfs_incarnation;
+	call.entry->base_version = version;
+	call.entry->deadline_tick = now + ttl;
+	safestrcpy(call.entry->path, path, sizeof(call.entry->path));
+	edit_state_locked(&call.state, call.entry, call.inode, path, 0);
+	return edit_reply(&call, AGENT_STATUS_OK, "edit_begin", stateaddr);
 }
 
 int
 sys_agent_file_edit_commit(uint64 lease_id, uint64 expected_version,
 			   uint64 stateaddr)
 {
-	struct proc *p = curr_proc();
-	struct agent_file_edit_entry *edit;
-	struct agent_file_edit_state state;
-	char path[AGENT_FILE_LOGICAL_SIZE];
-	uint64 dev;
-	uint64 inum;
-	uint64 incarnation;
-	uint64 base;
-	uint64 now;
-	uint64 current;
+	struct edit_call call;
+	struct file_version *version;
 	uint64 new_version;
-	int ok;
-	int dirty;
 	int rc;
-	int enabled;
 
-	if (!p->is_agent)
+	if (edit_call_init(&call) < 0)
 		return -1;
-	if (stateaddr &&
-	    user_range_check(p->pagetable, stateaddr, sizeof(state), PTE_W) < 0)
+	if (edit_call_output(&call, stateaddr, 0) < 0)
 		return -1;
-	now = agent_file_state_now();
-	enabled = agent_edit_lock();
-	agent_edit_cleanup_expired_locked(now);
-	edit = agent_edit_find_lease_locked(agent_identity_proc_scope(p), lease_id);
-	if (edit == 0) {
-		agent_edit_unlock(enabled);
-		return AGENT_STATUS_NOT_FOUND;
+	rc = edit_lease_locked(
+		&call, lease_id, "edit_commit_denied", stateaddr);
+	if (rc != AGENT_STATUS_OK)
+		return rc;
+	version = file_version_identity_locked(
+		call.entry->dev, call.entry->inum, call.entry->incarnation);
+	if (version == 0 || version->edit_version != call.entry->base_version ||
+	    expected_version != call.entry->base_version) {
+		edit_state_locked(
+			&call.state, call.entry, 0, call.entry->path, 0);
+		return edit_reply(&call, AGENT_STATUS_STALE,
+			"edit_commit_stale", stateaddr);
 	}
-	if (!agent_edit_owner(edit, p) &&
-	    !agent_identity_has_cap(p, AGENT_CAP_ORCHESTRATE)) {
-		agent_edit_fill_state_locked(&state, edit, edit->dev,
-					     edit->inum, edit->incarnation,
-					     edit->path);
-		agent_edit_unlock(enabled);
-		agent_edit_audit(p, AGENT_STATUS_DENIED,
-				 "edit_commit_denied", &state, 0);
-		if (agent_file_edit_copy_state(p, stateaddr, &state) < 0)
-			return -1;
-		return AGENT_STATUS_DENIED;
-	}
-	current = agent_edit_version_locked(edit->dev, edit->inum,
-					    edit->incarnation, &ok);
-	if (!ok || current != edit->base_version ||
-	    expected_version != edit->base_version) {
-		agent_edit_fill_state_locked(&state, edit, edit->dev,
-					     edit->inum, edit->incarnation,
-					     edit->path);
-		agent_edit_unlock(enabled);
-		agent_edit_audit(p, AGENT_STATUS_STALE,
-				 "edit_commit_stale", &state, 0);
-		if (agent_file_edit_copy_state(p, stateaddr, &state) < 0)
-			return -1;
-		return AGENT_STATUS_STALE;
-	}
-	dev = edit->dev;
-	inum = edit->inum;
-	incarnation = edit->incarnation;
-	base = edit->base_version;
-	dirty = edit->dirty;
-	safestrcpy(path, edit->path, sizeof(path));
-	new_version = dirty ? base + 1 : base;
-	rc = agent_edit_set_version_locked(dev, inum, incarnation, new_version);
-	memset(edit, 0, sizeof(*edit));
-	memset(&state, 0, sizeof(state));
-	state.active = 0;
-	state.lease_id = lease_id;
-	state.dev = dev;
-	state.inum = inum;
-	state.incarnation = incarnation;
-	state.base_version = base;
-	state.current_version = new_version;
-	state.dirty = dirty;
-	safestrcpy(state.path, path, sizeof(state.path));
-	agent_edit_unlock(enabled);
-	if (rc < 0)
-		return AGENT_STATUS_NO_SPACE;
-	agent_edit_audit(p, AGENT_STATUS_OK, "edit_commit", &state, 1);
-	return agent_file_edit_copy_state(p, stateaddr, &state);
+	new_version = call.entry->dirty ? call.entry->base_version + 1 :
+					call.entry->base_version;
+	version->edit_version = new_version;
+	edit_state_locked(&call.state, call.entry, 0, call.entry->path, 1);
+	memset(call.entry, 0, sizeof(*call.entry));
+	return edit_reply(&call, AGENT_STATUS_OK, "edit_commit", stateaddr);
 }
 
 int
 sys_agent_file_edit_abort(uint64 lease_id)
 {
-	struct proc *p = curr_proc();
-	struct agent_file_edit_entry *edit;
-	struct agent_file_edit_state state;
-	int enabled;
+	struct edit_call call;
+	int rc;
 
-	if (!p->is_agent)
+	if (edit_call_init(&call) < 0)
 		return -1;
-	enabled = agent_edit_lock();
-	agent_edit_cleanup_expired_locked(agent_file_state_now());
-	edit = agent_edit_find_lease_locked(agent_identity_proc_scope(p), lease_id);
-	if (edit == 0) {
-		agent_edit_unlock(enabled);
-		return AGENT_STATUS_NOT_FOUND;
-	}
-	if (!agent_edit_owner(edit, p) &&
-	    !agent_identity_has_cap(p, AGENT_CAP_ORCHESTRATE)) {
-		agent_edit_fill_state_locked(&state, edit, edit->dev,
-					     edit->inum, edit->incarnation,
-					     edit->path);
-		agent_edit_unlock(enabled);
-		agent_edit_audit(p, AGENT_STATUS_DENIED,
-				 "edit_abort_denied", &state, 0);
-		return AGENT_STATUS_DENIED;
-	}
-	agent_edit_fill_state_locked(&state, edit, edit->dev, edit->inum,
-				     edit->incarnation, edit->path);
-	agent_edit_release_locked(edit, 1);
-	agent_edit_unlock(enabled);
-	agent_edit_audit(p, AGENT_STATUS_OK, "edit_abort", &state, 1);
-	return 0;
+	rc = edit_lease_locked(&call, lease_id, "edit_abort_denied", 0);
+	if (rc != AGENT_STATUS_OK)
+		return rc;
+	edit_state_locked(&call.state, call.entry, 0, call.entry->path, 0);
+	agent_edit_release_locked(call.entry, 1);
+	return edit_reply(&call, AGENT_STATUS_OK, "edit_abort", 0);
 }
 
 int
 sys_agent_file_edit_state(uint64 pathaddr, uint64 stateaddr)
 {
-	struct proc *p = curr_proc();
-	struct inode *ip;
-	struct agent_file_edit_entry *edit;
-	struct agent_file_edit_state state;
+	struct edit_call call;
 	char path[MAXPATH];
-	int ok;
 	int rc;
-	int enabled;
 
-	if (!p->is_agent)
+	if (edit_call_init(&call) < 0)
 		return -1;
-	if (stateaddr == 0 ||
-	    user_range_check(p->pagetable, stateaddr, sizeof(state), PTE_W) < 0)
+	if (edit_call_output(&call, stateaddr, 1) < 0)
 		return -1;
-	rc = agent_file_edit_lookup_path(p, pathaddr, path, &ip, VFS_OP_LOOKUP);
+	rc = edit_lookup_path(call.proc, pathaddr, path, &call.inode,
+			      VFS_OP_LOOKUP);
 	if (rc < 0)
 		return rc;
-	enabled = agent_edit_lock();
+	call.enabled = agent_edit_lock();
 	agent_edit_cleanup_expired_locked(agent_file_state_now());
-	agent_edit_version_inode_locked(ip, 1, &ok);
-	if (!ok) {
-		agent_edit_unlock(enabled);
-		iput(ip);
-		return AGENT_STATUS_NO_SPACE;
-	}
-	edit = agent_edit_find_locked(agent_identity_proc_scope(p), ip->dev,
-				      ip->inum, ip->vfs_incarnation);
-	agent_edit_fill_state_locked(&state, edit, ip->dev, ip->inum,
-				     ip->vfs_incarnation, path);
-	agent_edit_unlock(enabled);
-	iput(ip);
-	return agent_file_edit_copy_state(p, stateaddr, &state);
+	if (file_version_inode_locked(call.inode, 1) == 0)
+		return edit_reply(&call, AGENT_STATUS_NO_SPACE, 0, 0);
+	call.entry = agent_edit_find_locked(
+		agent_identity_proc_scope(call.proc), 0, call.inode);
+	edit_state_locked(&call.state, call.entry, call.inode, path, 0);
+	return edit_reply(&call, AGENT_STATUS_OK, 0, stateaddr);
 }
 
 void

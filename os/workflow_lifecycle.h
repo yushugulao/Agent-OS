@@ -44,6 +44,7 @@ workflow_lifecycle_key_equal(struct workflow_lifecycle_key a,
 
 int workflow_lifecycle_create(uint scope_id,
 			      struct workflow_lifecycle_key *key);
+int workflow_lifecycle_prepare_create(void);
 int workflow_lifecycle_join(struct workflow_lifecycle_key key);
 int workflow_lifecycle_leave(struct workflow_lifecycle_key key);
 int workflow_lifecycle_bind_controller(struct workflow_lifecycle_key key,
@@ -59,6 +60,17 @@ int workflow_lifecycle_closing(struct workflow_lifecycle_key key);
 int workflow_lifecycle_retiring(struct workflow_lifecycle_key key);
 int workflow_lifecycle_scope(struct workflow_lifecycle_key key,
 			     uint *scope_id);
+int workflow_lifecycle_controller(struct workflow_lifecycle_key key,
+				  uint scope_id, uint64 *control_id);
+int workflow_lifecycle_generation_floor(struct workflow_lifecycle_key key);
+void workflow_lifecycle_generation_snapshot(
+	uint64 generations[WORKFLOW_LIFECYCLE_CAP]);
+int workflow_lifecycle_generation_lease_floor(uint, uint64);
+#ifdef AGENT_OBSERVE_TEST_PROFILE
+int workflow_lifecycle_test_consume_generation(uint *, uint64 *);
+#endif
+int workflow_lifecycle_alloc_context_branch(struct workflow_lifecycle_key key,
+					    uint64 *branch_generation);
 int workflow_lifecycle_reclaim(struct workflow_lifecycle_key key);
 
 #endif

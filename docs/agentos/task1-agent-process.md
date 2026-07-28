@@ -49,7 +49,7 @@ AgentOS-uCore 当前实现不是只做“能创建一个特殊进程”的最小
 | `agent_role_grant_mask` | 内核持有的角色创建授权；bootstrap 和 orchestrator 按策略获得，普通进程及低权限 Agent 为 0 |
 | `agent_ctx_base` | Agent Context 用户虚拟地址起点 |
 | `agent_ctx_size` | Agent Context 大小 |
-| `heartbeat_interval` | Agent 心跳周期，`agent_heartbeat()` 可设置 |
+| `heartbeat_interval` | Agent 心跳周期；独立 set/stop syscall 可动态调整，旧 `agent_heartbeat()` ABI 兼容，最大值为 `AGENT_HEARTBEAT_MAX_TICKS` |
 | `resource_quota` | Agent Context Path 记录配额，当前为 128 条 |
 | `loop_state` | Agent Loop 状态，支持 `IDLE`、`RUNNING`、`WAITING` |
 | `agent_call_count` | 当前 Agent 已接纳并保留 sequence 的工具调用数；在途调用尚未提交时可领先 Context latest 水位 |
@@ -207,4 +207,4 @@ worker 映像不使用 Agent 的 `TRUSTED` role-image 身份。mkfs 为布局有
 | `labdemo_ucore` | orchestrator、recovery、investigator、sentinel 多个 Agent 能同时创建；它们使用相同虚拟 Context 地址，但对应不同物理页和角色能力。 |
 | `agenttrust_ucore` | 代码 RX、数据 RW+NX，可信映像不可改写，Agent exec 的角色与可信 inode 绑定，普通复制映像不能继承信任。 |
 | `agentvfs_ucore` | 非 Agent worker 只取得显式委派且不超过映像 profile 的文件能力，普通 fork/exec 和继承 fd 不能扩权。 |
-| `agentscope_ucore` | 当前专项约 `93.7s` 并输出 `scope_controller_exit_revoke=1 public_lineage=1` 与 `parent passed`，验证低权限/子 Orchestrator 关闭拒绝、根/factory 关闭、generation 回收和 PUBLIC child/grandchild 降权后仍可撤销。 |
+| `agentscope_ucore` | 历史专项约 `93.7s` 并曾输出 `scope_controller_exit_revoke=1 public_lineage=1` 与 `parent passed`，验证低权限/子 Orchestrator 关闭拒绝、根/factory 关闭、generation 回收和 PUBLIC child/grandchild 降权后仍可撤销；最终 HEAD 待复跑。 |

@@ -344,3 +344,15 @@
 #define __NR_io_policy_info 544
 #define __NR_agent_workflow_close 545
 #define __NR_agent_workflow_lifecycle_info 546
+#define __NR_tool_call 547
+#define __NR_tool_list 548
+#define __NR_virtio_disk_test 549
+#define __NR_agent_observe_recovery 550
+#define __NR_physical_page_test 551
+#define __NR_agent_heartbeat_set 552
+#define __NR_agent_heartbeat_stop 553
+#define __NR_agent_metadata_test 554
+#define __NR_wait_atomic_test 555
+#define __NR_fs_allocator_fault_test 556
+#define __NR_agent_audit_receipt 557
+#define __NR_kernel_work_receipt_snapshot 558

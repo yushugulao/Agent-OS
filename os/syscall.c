@@ -1,5 +1,6 @@
 #include "console.h"
 #include "agent.h"
+#include "agent_internal.h"
 #include "bio.h"
 #include "defs.h"
 #include "kernel_work.h"
@@ -9,8 +10,129 @@
 #include "syscall_ids.h"
 #include "timer.h"
 #include "trap.h"
+#include "user_stack_layout.h"
+#ifdef VIRTIO_DISK_TEST_PROFILE
+#include "virtio.h"
+#endif
+#ifdef PHYSICAL_PAGE_TEST_HOOKS
+#include "physical_page_test.h"
+#endif
+#ifdef WAIT_ATOMIC_TEST_PROFILE
+#include "wait_atomic_test.h"
+#endif
+#ifdef FS_ALLOCATOR_FAULT_TEST_PROFILE
+#include "fs_allocator_test.h"
+#endif
 
 extern struct proc pool[NPROC];
+
+#ifdef VIRTIO_DISK_TEST_PROFILE
+static int sys_virtio_disk_test(uint command, uint64 arg0, uint64 arg1,
+				uint64 arg2, uint64 arg3, uint64 arg4)
+{
+	const uint64 known = VIRTIO_TEST_DROP_COMPLETION |
+		VIRTIO_TEST_DELAY_COMPLETION | VIRTIO_TEST_FORCE_STATUS |
+		VIRTIO_TEST_DISABLE_FLUSH | VIRTIO_TEST_STALL_COMPLETION |
+		VIRTIO_TEST_REPEAT | VIRTIO_TEST_STUCK_RESET |
+		VIRTIO_TEST_FORGE_USED_INDEX | VIRTIO_TEST_DUPLICATE_USED |
+		VIRTIO_TEST_FULL_RING_RECLAIM;
+	struct virtio_test_stats stats;
+	uint completion_faults;
+	uint structural_faults;
+
+	if (!virtio_disk_test_authorized(curr_proc()))
+		return -1;
+
+	switch (command) {
+	case VIRTIO_TEST_CONFIGURE:
+		completion_faults = arg0 & (VIRTIO_TEST_DROP_COMPLETION |
+			VIRTIO_TEST_DELAY_COMPLETION |
+			VIRTIO_TEST_STALL_COMPLETION);
+		structural_faults = arg0 & (VIRTIO_TEST_FORGE_USED_INDEX |
+			VIRTIO_TEST_DUPLICATE_USED |
+			VIRTIO_TEST_FULL_RING_RECLAIM);
+		if ((arg0 & ~known) != 0 || arg1 > 1000 ||
+		    arg2 > VIRTIO_TEST_STATUS_UNSUPPORTED ||
+		    arg3 > VIRTIO_DISK_REQUEST_TIMEOUT_TICKS || arg4 > 1024 ||
+		    (completion_faults & (completion_faults - 1)) != 0 ||
+		    (!!(arg0 & (VIRTIO_TEST_DELAY_COMPLETION |
+				 VIRTIO_TEST_FULL_RING_RECLAIM)) != !!arg1) ||
+		    (!!(arg0 & VIRTIO_TEST_FORCE_STATUS) != !!arg2) ||
+		    (structural_faults &&
+		     (structural_faults & (structural_faults - 1))) ||
+		    ((arg0 & (VIRTIO_TEST_FORGE_USED_INDEX |
+			      VIRTIO_TEST_DUPLICATE_USED)) &&
+		     (arg0 != structural_faults || arg1 != 0 || arg2 != 0 ||
+		      arg4 != 0)) ||
+		    ((arg0 & VIRTIO_TEST_FULL_RING_RECLAIM) &&
+		     (arg0 != VIRTIO_TEST_FULL_RING_RECLAIM || arg1 > 100 ||
+		      arg3 <= 4 * arg1 || arg4 != 0)) ||
+		    ((arg0 & VIRTIO_TEST_STUCK_RESET) &&
+		     !(arg0 & VIRTIO_TEST_STALL_COMPLETION)) ||
+		    ((arg0 & VIRTIO_TEST_DISABLE_FLUSH) &&
+		     (arg0 & ~VIRTIO_TEST_DISABLE_FLUSH)))
+			return -1;
+		return virtio_disk_test_configure(arg0, arg1, arg2, arg3,
+						  arg4);
+	case VIRTIO_TEST_READ:
+		return arg0 < FSSIZE && arg1 == 0 && arg2 == 0 && arg3 == 0 &&
+			       arg4 == 0 ?
+			virtio_disk_test_read(arg0) : -1;
+	case VIRTIO_TEST_READ_RANGE:
+		return (arg0 | arg1 | arg2 | arg3 | arg4) == 0 ?
+			virtio_disk_test_read_range() : -1;
+	case VIRTIO_TEST_FLUSH:
+		return (arg0 | arg1 | arg2 | arg3 | arg4) == 0 ?
+			virtio_disk_test_flush() : -1;
+	case VIRTIO_TEST_STATS:
+		if (arg0 == 0 || arg1 != 0 || arg2 != 0 || arg3 != 0 || arg4 != 0)
+			return -1;
+		virtio_disk_test_stats(&stats);
+		return copyout(curr_proc()->pagetable, arg0, (char *)&stats,
+			       sizeof(stats));
+	default:
+		return -1;
+	}
+}
+#endif
+
+#ifdef FS_ALLOCATOR_FAULT_TEST_PROFILE
+static int sys_fs_allocator_fault_test(uint command, uint64 arg0,
+				       uint64 arg1, uint64 arg2,
+				       uint64 arg3, uint64 arg4)
+{
+	struct fsalloc_test_snapshot snapshot;
+
+	if (!fs_allocator_test_authorized(curr_proc()))
+		return -1;
+	switch (command) {
+	case FSALLOC_TEST_ARM:
+		if (arg4 != 0)
+			return -1;
+		if (bio_durable_flush() < 0)
+			return -1;
+		return fs_allocator_test_arm(arg0, arg1, arg2, arg3);
+	case FSALLOC_TEST_SNAPSHOT:
+		if (arg0 == 0 || arg1 != sizeof(snapshot) ||
+		    (arg2 | arg3 | arg4) != 0)
+			return -1;
+		fs_allocator_test_snapshot(&snapshot);
+		return copyout(curr_proc()->pagetable, arg0, (char *)&snapshot,
+			       sizeof(snapshot));
+	case FSALLOC_TEST_DISARM:
+		if ((arg0 | arg1 | arg2 | arg3 | arg4) != 0)
+			return -1;
+		fs_allocator_test_disarm();
+		return 0;
+	case FSALLOC_TEST_FLUSH:
+		if ((arg0 | arg1 | arg2 | arg3 | arg4) != 0)
+			return -1;
+		return bio_durable_flush();
+	default:
+		return -1;
+	}
+}
+#endif
 
 enum trace_request {
 	TRACE_READ,
@@ -47,14 +169,11 @@ uint64 console_read(uint64 va, uint64 len)
 	uint64 got = 0;
 
 	while (got < n) {
-		int c = consgetc();
+		int c = got == 0 ? console_getc_wait() : consgetc();
 		if (c < 0) {
 			if (got != 0)
 				break;
-			if (proc_thread_exit_requested())
-				return (uint64)-1;
-			yield();
-			continue;
+			return (uint64)-1;
 		}
 		buf[got++] = c;
 	}
@@ -147,9 +266,26 @@ uint64 sys_sched_yield()
 	return 0;
 }
 
+static int sys_sbrk(uint64 raw_delta)
+{
+	return proc_sbrk((long)raw_delta);
+}
+
 uint64 sys_kernel_work_last_preemptions(void)
 {
-	return curr_thread()->kernel_last_syscall_preemptions;
+	return kernel_work_last_preemptions(curr_thread());
+}
+
+int sys_kernel_work_receipt_snapshot(uint64 addr, uint64 user_size)
+{
+	struct proc *p = curr_proc();
+	struct kernel_work_receipt receipt;
+
+	if (addr == 0 || user_size != sizeof(receipt) ||
+	    user_range_check(p->pagetable, addr, sizeof(receipt), PTE_W) < 0 ||
+	    kernel_work_receipt_snapshot(curr_thread(), &receipt) < 0)
+		return -1;
+	return copyout(p->pagetable, addr, (char *)&receipt, sizeof(receipt));
 }
 
 int sys_io_policy_info(uint64 addr, uint64 user_size)
@@ -214,51 +350,36 @@ int sys_trace(int req, uint64 id, uint8 data)
 
 int sys_mailwrite(int pid, uint64 buf, int len)
 {
-	struct proc *target = 0;
 	struct proc *sender = curr_proc();
 	char payload[MAILBOX_PAYLOAD_SIZE];
-	int slot;
 
 	if (len <= 0 || len > MAILBOX_PAYLOAD_SIZE)
 		return -1;
-	for (struct proc *p = pool; p < &pool[NPROC]; p++) {
-		if (p->state != P_UNUSED && p->pid == pid) {
-			target = p;
-			break;
-		}
-	}
-	if (target == 0 || target->mail_count >= MAILBOX_SLOT_COUNT)
-		return -1;
 	if (copyin(sender->pagetable, payload, buf, len) < 0)
 		return -1;
-	slot = target->mail_tail;
-	memmove(target->mail_payload[slot], payload, len);
-	target->mail_len[slot] = len;
-	target->mail_from[slot] = sender->pid;
-	target->mail_tail = (target->mail_tail + 1) % MAILBOX_SLOT_COUNT;
-	target->mail_count++;
-	return len;
+	return agent_ipc_legacy_public_send(sender, pid, payload, len);
 }
 
 int sys_mailread(uint64 buf, int len)
 {
 	struct proc *p = curr_proc();
-	int slot;
+	struct agent_legacy_read_receipt receipt;
+	char payload[MAILBOX_PAYLOAD_SIZE];
 	int n;
 
 	if (len <= 0 || len > MAILBOX_PAYLOAD_SIZE)
 		return -1;
-	if (p->mail_count <= 0)
-		return 0;
-	slot = p->mail_head;
-	n = MIN(len, p->mail_len[slot]);
-	if (copyout(p->pagetable, buf, p->mail_payload[slot], n) < 0)
+	if (user_range_check(p->pagetable, buf, len, PTE_W) < 0)
 		return -1;
-	memset(p->mail_payload[slot], 0, sizeof(p->mail_payload[slot]));
-	p->mail_len[slot] = 0;
-	p->mail_from[slot] = 0;
-	p->mail_head = (p->mail_head + 1) % MAILBOX_SLOT_COUNT;
-	p->mail_count--;
+	n = agent_ipc_legacy_public_read_begin(p, payload, len, &receipt);
+	if (n <= 0)
+		return n;
+	if (copyout(p->pagetable, buf, payload, n) < 0) {
+		(void)agent_ipc_legacy_public_read_finish(p, &receipt, 0);
+		return -1;
+	}
+	if (agent_ipc_legacy_public_read_finish(p, &receipt, 1) < 0)
+		return -1;
 	return n;
 }
 
@@ -272,9 +393,14 @@ static int copy_exec_args(pagetable_t pagetable, uint64 uargv, char **argv,
 			  char *storage)
 {
 	uint64 storage_used = 0;
-	uint64 stack_left = USTACK_SIZE;
+	uint64 checked_layout_bytes;
+	struct user_stack_argv_layout layout;
 
+	user_stack_argv_layout_init(&layout);
 	if (uargv == 0) {
+		if (user_stack_argv_layout_finish(&layout,
+						  &checked_layout_bytes) < 0)
+			return -1;
 		argv[0] = 0;
 		return 0;
 	}
@@ -286,23 +412,26 @@ static int copy_exec_args(pagetable_t pagetable, uint64 uargv, char **argv,
 		    fetch_user_u64(pagetable, slot, &user_arg) < 0)
 			return -1;
 		if (user_arg == 0) {
-			uint64 pointers = (i + 1) * sizeof(uint64);
-			if (pointers > stack_left)
+			if (user_stack_argv_layout_finish(
+				    &layout, &checked_layout_bytes) < 0)
 				return -1;
 			argv[i] = 0;
 			return i;
 		}
-		if (i == MAX_ARG_NUM || storage_used >= USTACK_SIZE)
+		if (i == MAX_ARG_NUM ||
+		    storage_used >= USER_STACK_ARGV_LAYOUT_BYTES)
 			return -1;
 
 		int len = copyinstr(pagetable, storage + storage_used, user_arg,
-				    USTACK_SIZE - storage_used);
-		if (len < 0 || (uint64)len + 1 > stack_left)
+				    USER_STACK_ARGV_LAYOUT_BYTES - storage_used);
+		if (len < 0 ||
+		    user_stack_argv_layout_add_string(
+			    &layout, (uint64)len + 1) < 0 ||
+		    user_stack_argv_layout_finish(
+			    &layout, &checked_layout_bytes) < 0)
 			return -1;
 		argv[i] = storage + storage_used;
 		storage_used += len + 1;
-		stack_left -= len + 1;
-		stack_left -= stack_left % 16;
 	}
 	return -1;
 }
@@ -314,18 +443,23 @@ uint64 sys_exec(uint64 path, uint64 uargv)
 	char *argv[MAX_ARG_NUM + 1];
 	char *storage;
 	int rc;
+	enum resource_charge_class charge_class =
+		p->resource_slot_reserved ? RESOURCE_CHARGE_RESERVED :
+					    RESOURCE_CHARGE_ORDINARY;
 
 	if (copyinstr(p->pagetable, name, path, sizeof(name)) < 0)
 		return -1;
-	storage = kalloc();
+	storage = kalloc_account_page(p->resource_account, charge_class);
 	if (storage == 0)
 		return -1;
 	if (copy_exec_args(p->pagetable, uargv, argv, storage) < 0) {
-		kfree(storage);
+		(void)kfree_account_page(storage, p->resource_account,
+					 charge_class);
 		return -1;
 	}
 	rc = exec(name, argv);
-	kfree(storage);
+	(void)kfree_account_page(storage, p->resource_account,
+				 charge_class);
 	return rc;
 }
 
@@ -448,6 +582,7 @@ int sys_waittid(int tid)
 	struct thread *t;
 	int enabled;
 	int exit_code;
+	uint64 target_generation;
 
 	if (tid < 0 || tid >= NTHREAD) {
 		errorf("unexpected tid %d", tid);
@@ -455,19 +590,33 @@ int sys_waittid(int tid)
 	}
 	t = &curr_proc()->threads[tid];
 	enabled = intr_save();
-	if (t->state == T_UNUSED || tid == curr_thread()->tid) {
+	target_generation = t->identity_generation;
+	if (t->state == T_UNUSED || target_generation == 0 ||
+	    tid == curr_thread()->tid) {
 		intr_restore(enabled);
 		return -1;
 	}
-	if (t->state != EXITED) {
+	while (t->state != EXITED) {
+		if (t->state == T_UNUSED ||
+		    t->identity_generation != target_generation ||
+		    wait_queue_sleep_key_irq(&curr_proc()->thread_exit_waiters,
+					     target_generation) != WAIT_QUEUE_OK) {
+			intr_restore(enabled);
+			return -1;
+		}
+	}
+	if (t->identity_generation != target_generation) {
 		intr_restore(enabled);
-		return -2;
+		return -1;
 	}
 	if (t->kstack_state != KSTACK_NONE ||
 	    t->resource_slot_charged || t->on_run_queue)
 		panic("waittid unreaped thread");
 	exit_code = (int)t->exit_code;
+	agent_thread_runtime_transition(t, AGENT_THREAD_RUNTIME_RELEASE);
+	agent_observe_thread_reset(t);
 	t->tid = -1;
+	t->identity_generation = 0;
 	t->ustack = 0;
 	t->trapframe = 0;
 	t->exit_code = 0;
@@ -619,6 +768,7 @@ static int syscall_may_issue_block_io(int id, uint64 *args)
 	case SYS_gettimeofday:
 	case SYS_getpid:
 	case SYS_getppid:
+	case SYS_brk:
 	case SYS_mailread:
 	case SYS_mailwrite:
 	case SYS_trace:
@@ -638,6 +788,7 @@ static int syscall_may_issue_block_io(int id, uint64 *args)
 	case SYS_condvar_signal:
 	case SYS_condvar_wait:
 	case SYS_kernel_work_last_preemptions:
+	case SYS_kernel_work_receipt_snapshot:
 	case SYS_io_policy_info:
 	case SYS_agent_scope_delegate_fd:
 	case SYS_agent_workflow_close:
@@ -658,16 +809,40 @@ static int syscall_may_issue_block_io(int id, uint64 *args)
 	case SYS_agent_file_prefetch_snapshot:
 	case SYS_agent_file_prefetch_span_snapshot:
 	case SYS_agent_tool_list:
+	case SYS_tool_list:
 	case SYS_agent_watch:
 	case SYS_agent_unwatch:
 	case SYS_agent_wait:
 	case SYS_agent_wait_cancel:
 	case SYS_agent_heartbeat:
+	case SYS_agent_heartbeat_set:
+	case SYS_agent_heartbeat_stop:
 	case SYS_agent_wake:
 	case SYS_agent_route_config:
+	case SYS_agent_observe_recovery:
+#ifdef AGENT_METADATA_CRASH_PHASE
+	case SYS_agent_metadata_test:
+#endif
+#ifdef PHYSICAL_PAGE_TEST_HOOKS
+	case SYS_physical_page_test:
+#endif
+#ifdef WAIT_ATOMIC_TEST_PROFILE
+	case SYS_wait_atomic_test:
+#endif
 		return 0;
 	default:
 		return 1;
+	}
+}
+
+static uint syscall_kernel_work_class(int id)
+{
+	switch (id) {
+	case SYS_kernel_work_last_preemptions:
+	case SYS_kernel_work_receipt_snapshot:
+		return KERNEL_WORK_SYSCALL_OBSERVER;
+	default:
+		return KERNEL_WORK_SYSCALL_PUBLISH;
 	}
 }
 
@@ -680,7 +855,7 @@ void syscall()
 			   trapframe->a3, trapframe->a4, trapframe->a5 };
 	if (proc_thread_exit_requested())
 		exit(curr_proc()->exit_code);
-	kernel_work_begin();
+	kernel_work_begin_syscall(id, syscall_kernel_work_class(id));
 	if (syscall_may_issue_block_io(id, args)) {
 		if (bio_request_begin_current() < 0) {
 			ret = -1;
@@ -691,7 +866,7 @@ void syscall()
 	if (id >= 0 && id < SYSCALL_COUNT_MAX)
 		curr_proc()->syscall_count[id]++;
 	if (id != SYS_write && id != SYS_read && id != SYS_sched_yield) {
-		debugf("syscall %d args = [%x, %x, %x, %x, %x, %x]", id,
+		debugf("syscall %d args = [%lx, %lx, %lx, %lx, %lx, %lx]", id,
 		       args[0], args[1], args[2], args[3], args[4], args[5]);
 	}
 	switch (id) {
@@ -718,6 +893,9 @@ void syscall()
 	// 	break;
 	case SYS_sched_yield:
 		ret = sys_sched_yield();
+		break;
+	case SYS_brk:
+		ret = sys_sbrk(args[0]);
 		break;
 	case SYS_gettimeofday:
 		ret = sys_gettimeofday(args[0], args[1]);
@@ -788,6 +966,9 @@ void syscall()
 	case SYS_kernel_work_last_preemptions:
 		ret = sys_kernel_work_last_preemptions();
 		break;
+	case SYS_kernel_work_receipt_snapshot:
+		ret = sys_kernel_work_receipt_snapshot(args[0], args[1]);
+		break;
 	case SYS_io_policy_info:
 		ret = sys_io_policy_info(args[0], args[1]);
 		break;
@@ -828,6 +1009,9 @@ void syscall()
 	case SYS_agent_audit_query:
 		ret = sys_agent_audit_query(args[0], args[1], args[2]);
 		break;
+	case SYS_agent_audit_receipt:
+		ret = sys_agent_audit_receipt(args[0]);
+		break;
 	case SYS_agent_span_trace_snapshot:
 		ret = sys_agent_span_trace_snapshot(args[0], args[1]);
 		break;
@@ -865,6 +1049,43 @@ void syscall()
 	case SYS_agent_tool_list:
 		ret = sys_agent_tool_list(args[0], args[1]);
 		break;
+	case SYS_tool_call:
+		ret = sys_tool_call(args[0], args[1]);
+		break;
+	case SYS_tool_list:
+		ret = sys_tool_list(args[0], args[1], args[2], args[3]);
+		break;
+	case SYS_agent_observe_recovery:
+		ret = sys_agent_observe_recovery(args[0], args[1]);
+		break;
+#ifdef VIRTIO_DISK_TEST_PROFILE
+	case SYS_virtio_disk_test:
+		ret = sys_virtio_disk_test(args[0], args[1], args[2], args[3],
+					   args[4], args[5]);
+		break;
+#endif
+#ifdef PHYSICAL_PAGE_TEST_HOOKS
+	case SYS_physical_page_test:
+		ret = sys_physical_page_test(args[0], args[1], args[2]);
+		break;
+#endif
+#ifdef AGENT_METADATA_CRASH_PHASE
+	case SYS_agent_metadata_test:
+		ret = sys_agent_metadata_test(args[0], args[1], args[2]);
+		break;
+#endif
+#ifdef WAIT_ATOMIC_TEST_PROFILE
+	case SYS_wait_atomic_test:
+		ret = sys_wait_atomic_test(args[0], args[1], args[2], args[3],
+					   args[4], args[5]);
+		break;
+#endif
+#ifdef FS_ALLOCATOR_FAULT_TEST_PROFILE
+	case SYS_fs_allocator_fault_test:
+		ret = sys_fs_allocator_fault_test(
+			args[0], args[1], args[2], args[3], args[4], args[5]);
+		break;
+#endif
 	case SYS_context_push:
 		ret = sys_context_push(args[0]);
 		break;
@@ -897,6 +1118,12 @@ void syscall()
 		break;
 	case SYS_agent_heartbeat:
 		ret = sys_agent_heartbeat(args[0]);
+		break;
+	case SYS_agent_heartbeat_set:
+		ret = sys_agent_heartbeat_set(args[0]);
+		break;
+	case SYS_agent_heartbeat_stop:
+		ret = sys_agent_heartbeat_stop();
 		break;
 	case SYS_agent_wake:
 		ret = sys_agent_wake(args[0], args[1]);
@@ -937,6 +1164,8 @@ void syscall()
 syscall_out:
 	if (io_admitted)
 		(void)bio_request_end_current(1);
+	/* Bounded maintenance runs only on a schedulable, real thread context. */
+	agent_background_checkpoint();
 	kernel_work_end();
 	if (proc_thread_exit_requested())
 		exit(curr_proc()->exit_code);

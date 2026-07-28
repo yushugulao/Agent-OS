@@ -53,7 +53,8 @@ int exec_policy_inode_mutable(struct inode *ip)
 {
 	if (ip == 0)
 		return 0;
-	ivalid(ip);
+	if (ivalid(ip) < 0)
+		return 0;
 	return ip->type != T_FILE || (ip->exec_flags & EXEC_FLAG_IMMUTABLE) == 0;
 }
 
@@ -71,7 +72,8 @@ int exec_policy_inode_layout_valid(struct inode *ip)
 {
 	if (ip == 0)
 		return 0;
-	ivalid(ip);
+	if (ivalid(ip) < 0)
+		return 0;
 	return ip->type == T_FILE && ip->size > ip->exec_rw_offset &&
 	       exec_layout_valid(ip->dev, ip->inum,
 			 ip->exec_layout_version, ip->exec_rw_offset);

@@ -15,8 +15,8 @@ AgentOS-uCore 当前实现的是可验证的 Agent Loop 内核机制：
 - 跨 Agent 的 `MESSAGE` / `LLM_DONE` 只有 source/target 属于同一 active workflow scope，且接收方或受权控制者建立定向路由后才能入队；
 - 具备独立 `WAIT_CANCEL` 能力且持有直接控制关系的 Agent 可取消目标 Agent 的等待；消息路由不授予等待取消权；
 - 文件元数据状态变化可触发事件；
-- Agent 可设置 heartbeat，注册 TIMER watch 后可收到 heartbeat 事件；删除 TIMER watch 后不会消费 TIMER 事件；
-- Agent 可通过 `agent_heartbeat_stop()` 停止 heartbeat；
+- Agent 可通过独立 set/stop syscall 动态调整或幂等停止 heartbeat，旧 512 ABI 继续兼容；
+- heartbeat 是不受 watch/unwatch 抑制的内生 SYSTEM TIMER，能直接唤醒等待 Agent，且同一 Agent 最多保留一条未消费 heartbeat；
 - 等待、唤醒和事件消费会写入 Context Path；公开 cause/span 的 source control 与 span owner 由内核私有 sidecar 认证；
 - 调度器先严格轮转 active 进程资源域，再按选中域内的 FIFO 或 Agent 软评分选择线程，并记录最近 16 次 Agent 调度原因；
 - 调度分值只表达域内软优先级；连续选择 Agent 或连续按分值选择达到 `AGENT_SCHED_MAX_AGENT_BURST=8` 后，本域强制回到普通线程或 FIFO 队首；线程数、角色、事件积压和 orchestrator 配置都不能越过外层资源域轮转；
@@ -62,7 +62,7 @@ AgentOS-uCore 当前实现的是可验证的 Agent Loop 内核机制：
 
 - `DIRECTED`：经定向路由投递的 `MESSAGE` / `LLM_DONE`，计入 IPC、external 和 stable source 三组计数；
 - `ATTRIBUTED`：由某个 Agent 操作触发的 `FILE_STATUS` / `JOB_DONE` / `POLICY_DENIED` / `CONTEXT_LIMIT` / `DASHBOARD_EXPORT`，计入 attributed、external 和同一 stable source 计数；
-- `KERNEL`：内核直接产生且不归因到 Agent 的系统事件，当前包括 heartbeat TIMER；不计入 external，只受 16 槽总容量约束。
+- `KERNEL`：内核直接产生且不归因到 Agent 的系统事件，当前包括 heartbeat TIMER；不计入 external，只受 16 槽总容量约束。heartbeat 额外使用 intrinsic/coalesced policy，绕过 watch 过滤并限制为一条待处理记录。
 
 `AGENT_EVENT_EXTERNAL_LIMIT=12` 为 `KERNEL` origin 保留至少 4 个总容量名额；`AGENT_EVENT_IPC_LIMIT=8` 和 `AGENT_EVENT_ATTRIBUTED_LIMIT=8` 又让 directed 与 attributed 两类互相保留至少 4 个 external 名额；`AGENT_EVENT_SOURCE_LIMIT=4` 按 stable source control id 跨两类合计，防止同一主体换事件类型绕过配额。用户可见 `source_pid` 只用于观察，不参与身份核算。`LLM_DONE` 虽然只能由受权专用工具产生，但资源类别仍是 directed IPC，必须同时命中 `LLM_DONE` 路由。
 
@@ -107,6 +107,10 @@ int agent_wait(struct agent_event *event, int timeout_ticks);
 7. 若目标 Agent 有未消费的 wait cancel 令牌，则立即返回 `AGENT_STATUS_CANCELLED`，并把取消事件写入用户态输出结构。
 
 当前有限 timeout 也会进入 `SLEEPING` 状态，由事件入队、heartbeat 到期或 deadline 到期唤醒，不通过反复 `yield()` 消耗 CPU。`agent_info.wait_loop_count` 用于观察等待检查次数，`agentloop_ucore` 会验证有限 timeout 的循环次数保持在很小范围。
+
+事件或 cancel 被选中时不会立即从队列消失。内核在关中断窗口内 reserve 精确 FIFO 队首或 cancel token，用 event id cookie 标记单一消费者；释放短临界区后进入 Context commit lane，完成用户 copyout、可信 source/span 归因及 Context/audit 记录。finish 再核对 slot/head/cookie：成功才 commit 出队、退还 external/IPC/attributed 配额并 handoff 下一 waiter；lane 或 copyout 失败则 abort reservation、保留原事件或 cancel，并定向唤醒等待者。这样坏用户页和 sibling 并发不能在结果交付前提前消费队首。
+
+`WAIT_ATOMIC_TEST_PROFILE` 不是生产 ABI，而是原子边界的动态注入 profile。runner 要求 `agentfinal_ucore: thread_wait_deadlines finite_infinite=1 distinct_deadlines=1 keyed_timer=1 loop_aggregate=1 slot_reuse=1`，以及 `agentfinal_ucore: wait_publication_atomic=1 event_wake_none=1 event_no_sleep=1 sibling_wake_none=1 teardown_completed=1`。前者覆盖 sibling 独立 deadline、generation key 和线程槽复用，后者覆盖事件在最终谓词重检前到达时不误睡，以及 teardown 撤销等待 sibling；reserve/cookie/commit/abort 顺序另由静态与 mutation 合同约束。当前 profile 尚未把“reserve 后用户页失效、sibling waiter、cancel、teardown”四项同时组合，不能把该组合写成已取得 Guest 证据。
 
 `agentbench_ucore` 先验证无事件等待会返回 timeout，并检查 `timeout_count` 增加；随后输出 busy polling 查询和 wait/wake 的计时观测，便于用户看到轮询路径与事件路径的成本都可测。具体 tick 样例统一保存在 [test-record.md](test-record.md)。
 
@@ -201,6 +205,9 @@ agentsecurity_ucore: wait_cancel_scope=1
 接口：
 
 ```c
+int sys_agent_heartbeat_set(uint64 interval_ticks);
+int sys_agent_heartbeat_stop(void);
+int agent_heartbeat_set(uint64 interval_ticks);
 int agent_heartbeat(int interval_ticks);
 int agent_heartbeat_stop(void);
 ```
@@ -208,13 +215,14 @@ int agent_heartbeat_stop(void);
 语义：
 
 1. 当前进程必须是 Agent。
-2. `agent_heartbeat(interval)` 设置心跳间隔。
-3. `agent_heartbeat_stop()` 是用户态便利 wrapper，内部调用 `agent_heartbeat(0)`，停止后不再投递 heartbeat 事件。
-4. 注册 `AGENT_EVENT_TIMER` watch 后，heartbeat 到期会投递 `timer=heartbeat` 事件。
-5. 后续 `agent_info()` 可观察 last heartbeat tick。
-6. 删除 TIMER watch 后，heartbeat 到期不会投递可消费 TIMER 事件。
+2. syscall 552 的 `sys_agent_heartbeat_set(interval)` 设置心跳间隔，重设时从当前 tick 重新计时；syscall 553 的 `sys_agent_heartbeat_stop()` 幂等停止后续生成。`agent_heartbeat_set()` 和 `agent_heartbeat_stop()` 是便利 wrapper。
+3. syscall 512 的 `agent_heartbeat(int)` 保留为兼容入口，正值设置周期，0 停止。
+4. 所有 syscall 和工具路径共用 `AGENT_HEARTBEAT_MAX_TICKS=0x7fffffffULL` 校验；超界、负值的 64 位表示和 `UINT64_MAX` 返回 `AGENT_STATUS_BAD_PARAM`，原状态不变。
+5. heartbeat 到期会投递 payload 为 `timer=heartbeat` 的 SYSTEM `AGENT_EVENT_TIMER` 并唤醒 Agent；它不依赖 TIMER watch，删除或清空 watch 也不能抑制。
+6. 同一 Agent 最多保留一条未消费 heartbeat；后续到期与该记录合并。stop 不删除已入队记录，调用者在断言停止后无新唤醒前应先消费旧记录。
+7. `agent_info()` 可观察 heartbeat interval 和 last heartbeat tick。
 
-当前 `agentbench_ucore` 会调用 `agent_heartbeat()`，随后用 `agent_info()` 检查 `heartbeat_interval` 和 `last_heartbeat_tick`。`agentloop_ucore` 进一步验证 heartbeat 可以唤醒等待中的 Agent、删除 TIMER watch 后不再消费 TIMER 事件、停止后不会继续产生 heartbeat 事件。
+`agentbench_ucore` 会设置 heartbeat、用 `agent_info()` 检查 interval/tick 后立即停止，避免干扰后续基准。`agentloop_ucore` 动态覆盖无 watch 唤醒、频率调整、单条 pending coalesce、消费旧记录后的 stop、最大值与越界拒绝、工具路径边界，以及旧 512 ABI，并输出精确机制标记 `heartbeat_intrinsic=1 dynamic=1 coalesced=1 stop=1 bounds=1 legacy=1`。
 
 ## 感知调度：资源域与 Agent
 
@@ -353,7 +361,7 @@ Agent Loop 行为会写入 Context Path：
 
 这使得示例不仅能看到最终结果，也能回放 Agent 做出判断的过程。
 
-Context v6 还会把事件和后续工具调用连起来，并继续维护 Context 完整性链：
+Context v8 还会把事件和后续工具调用连起来，并继续维护 Context 完整性链：
 
 1. 事件入队时，内核写公开 cause/span，同时私存 source control/pid 和 span owner。
 2. `agent_wait()` 只消费本 scope 已认证事件，并继承公开 span 与私有 owner/source。
@@ -373,6 +381,7 @@ Context v6 还会把事件和后续工具调用连起来，并继续维护 Conte
 | IPC 路由 | 每个 target 最多16条同 scope stable-source route；不支持跨 scope，即使 target consent 也拒绝 |
 | 路由可观测性 | 没有 route snapshot/query；scope audit 只能看到成功入队/消费，不能还原全部授权变更 |
 | 审计窗口 | 每 scope 128（low/high各64）；low principal16，high active principal8；inactive high 历史允许有界滚动并由 dropped 说明 |
+| 线程历史身份 | timeline/trace/sched 当前只保存采样时的 raw tid，不保存 `thread.identity_generation`；`tid=0` 是合法主线程，也可能表示规范化来源没有独立线程信息，因此 tid 过滤不具备 incarnation-safe 归因语义 |
 | 取消范围 | 当前支持取消正在等待或下一次等待的 Agent；尚未实现通用任务取消 |
 | 多核复杂场景 | 当前按 uCore 当前运行环境和测试路径验证锁保护和队列状态 |
 | LLM 驱动 | 当前由用户测试程序驱动，不接真实 LLM |
@@ -383,9 +392,9 @@ Context v6 还会把事件和后续工具调用连起来，并继续维护 Conte
 
 | 程序 | 检查项 |
 | --- | --- |
-| `agentfinal_ucore` | 自唤醒事件可被 watch/wait 消费，相关 Context、事件、调度和预取统计进入 Run Ledger。 |
+| `agentfinal_ucore` | 自唤醒事件可被 watch/wait 消费，相关 Context、事件、调度和预取统计进入 Run Ledger；`WAIT_ATOMIC_TEST_PROFILE` 另要求 `thread_wait_deadlines ... slot_reuse=1` 与 `wait_publication_atomic=1 ... teardown_completed=1` 两条完整 marker。 |
 | `agentbench_ucore` | timeout 会更新 heartbeat/timeout 统计；busy polling 与 wait/wake 都有可复查的 tick 观测。 |
-| `agentloop_ucore` | FIFO、cause/span、unwatch、睡眠 timeout、TIMER unwatch、heartbeat stop 和 wait cancel 均通过；`message_source_limit=4`、`ipc_class_limit=8`、`external_limit=12`、`system_event_reserved=4`、`external_reject_reclaim=1` 和 `broadcast_slow_watcher_isolated=1` 进一步验证单来源/IPC/external 边界、第 13 条 external 被拒绝、4 条 KERNEL TIMER 填满保留容量、消费后 directed/attributed 重新接纳及慢 watcher 隔离。attributed=8 与 stable source 混合跨类仍缺独立边界输出。 |
+| `agentloop_ucore` | FIFO、cause/span、unwatch、睡眠 timeout、wait cancel 和严格 heartbeat 语义均有动态断言；精确 heartbeat 标记覆盖无 watch 内生唤醒、动态频率、单条 coalesce、stop、边界和旧 ABI。`message_source_limit=4`、`ipc_class_limit=8`、`external_limit=12`、`system_event_reserved=4`、`heartbeat_reserve_coalesced=1`、`external_reject_reclaim=1` 和 `broadcast_slow_watcher_isolated=1` 验证外部 admission、一个 heartbeat 可进入保留容量、消费后重新接纳，以及 external 已饱和的慢 watcher 不阻断后续 watcher。attributed=8 与 stable source 混合跨类仍缺独立边界输出。 |
 | `agentsched_ucore` | 角色权重、orchestrator 调度配置、事件优先、原因记录和公平性计数均写入调度记录；普通进程在持续可运行高分 Agent 下先取得进展，并输出 `normal_progress=1 max_agent_burst=8`。 |
 | `threadresource_ucore` | 以 19/12/6/6/4 tiny policy 验证普通/保留域上限与复用、容量拒绝计数稳定、线程/进程退出退款、普通/保留全局水位与复用、系统保留进展和 active-domain 公平轮转；输出 12 项机制标记及 `parent passed`。 |
 | `agentsecurity_ucore` | 用户态 `agent_wake()` 只允许 MESSAGE；普通进程、保留系统事件和非法类型均被拒绝。`route_source_enforced=1`、`route_target_isolated=1`、`ipc_route_authorization=1`、`message_route_lifecycle=1`、`target_route_consent=1` 和 `route_slot_reclaimed=1` 验证未授权拒绝、控制者 grant/revoke、新 control id 隔离、target 自主接受 LLM_DONE、LLM-only route 拒绝 MESSAGE，以及超过 16 个短命 source 后路由槽可回收。 |

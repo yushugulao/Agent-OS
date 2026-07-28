@@ -18,6 +18,14 @@ class BudgetError(ValueError):
 
 
 CALIBRATION_SECONDS_TOLERANCE = 0.001
+AGENT_TEST_CALIBRATION_READY = "calibrated_full_suite"
+AGENT_TEST_CALIBRATION_PROVISIONAL = "provisional_requires_full_suite"
+AGENT_TEST_CALIBRATION_STATUSES = frozenset(
+    (AGENT_TEST_CALIBRATION_READY, AGENT_TEST_CALIBRATION_PROVISIONAL)
+)
+AGENT_TEST_CALIBRATED_FIELDS = frozenset(
+    ("baseline_seconds", "max_seconds", "calibration_samples")
+)
 REQUIRED_KERNEL_SOURCE_GLOBS = frozenset(
     (
         "os/**/*.c",
@@ -29,6 +37,92 @@ REQUIRED_KERNEL_SOURCE_GLOBS = frozenset(
         "*_policy.h",
         "*_policy.inc",
     )
+)
+GENERATED_KERNEL_SOURCE_EXCLUDES = frozenset(("os/initproc.S",))
+REQUIRED_TEST_ONLY_SUPPORTS = (
+    {
+        "name": "metadata_crash_profile",
+        "source_path": "os/agent_metadata_test.c",
+        "header_path": "os/metadata_crash_test.h",
+        "required_macro": "AGENT_METADATA_CRASH_PHASE",
+        "production_object_excluded": True,
+        "allowed_profile_symbols": (
+            "agent_metadata_test_init",
+            "agent_metadata_test_bind",
+            "agent_metadata_test_checkpoint",
+            "agent_metadata_test_eio_start",
+            "agent_metadata_test_eio_cancel",
+            "agent_metadata_test_eio_pre_io",
+            "agent_metadata_test_eio_commit",
+            "sys_agent_metadata_test",
+        ),
+    },
+    {
+        "name": "metadata_boot_recovery_profile",
+        "source_path": "os/agent_metadata_recovery_test.c",
+        "header_path": "os/agent_metadata_recovery_test.h",
+        "required_macro": "AGENT_METADATA_BOOT_READ_FAULT",
+        "production_object_excluded": True,
+        "allowed_profile_symbols": (
+            "agent_metadata_recovery_test_init",
+            "agent_metadata_recovery_test_fault",
+            "agent_metadata_recovery_test_retry",
+            "agent_metadata_recovery_test_admission",
+        ),
+    },
+    {
+        "name": "observe_recovery_profile",
+        "source_path": "os/agent_observe_test.c",
+        "header_path": "os/agent_observe_test.h",
+        "required_macro": "AGENT_OBSERVE_TEST_PROFILE",
+        "production_object_excluded": True,
+        "allowed_profile_symbols": (
+            "agent_observe_test_operation",
+            "agent_observe_test_execute",
+        ),
+    },
+    {
+        "name": "wait_atomic_profile",
+        "source_path": "os/wait_atomic_test.c",
+        "header_path": "os/wait_atomic_test.h",
+        "required_macro": "WAIT_ATOMIC_TEST_PROFILE",
+        "production_object_excluded": True,
+        "allowed_profile_symbols": (
+            "sys_wait_atomic_test",
+            "wait_atomic_test_begin",
+            "wait_atomic_test_complete",
+            "wait_atomic_test_agent_wait",
+            "agent_ipc_wait_test_publish",
+        ),
+    },
+    {
+        "name": "fs_allocator_fault_profile",
+        "source_path": "os/fs_allocator_test.c",
+        "header_path": "os/fs_allocator_test.h",
+        "required_macro": "FS_ALLOCATOR_FAULT_TEST_PROFILE",
+        "production_object_excluded": True,
+        "allowed_profile_symbols": (
+            "fs_allocator_test_bind_boot_init",
+            "fs_allocator_test_authorized",
+            "fs_allocator_test_arm",
+            "fs_allocator_test_disarm",
+            "fs_allocator_test_snapshot",
+            "fs_allocator_test_before",
+            "fs_allocator_test_after",
+            "fs_allocator_test_storage_snapshot",
+        ),
+    },
+    {
+        "name": "physical_page_profile",
+        "source_path": "os/physical_page_test.c",
+        "header_path": "os/physical_page_test.h",
+        "required_macro": "PHYSICAL_PAGE_TEST_HOOKS",
+        "production_object_excluded": True,
+        "allowed_profile_symbols": (
+            "physical_page_test_bind_boot_init",
+            "sys_physical_page_test",
+        ),
+    },
 )
 REQUIRED_AGENT_TEST_CASES = (
     "agentfinal_ucore",
@@ -42,16 +136,19 @@ REQUIRED_AGENT_TEST_CASES = (
     "labbench_ucore",
     "labdemo_ucore",
     "agentsecurity_ucore",
+    "agenttoolabi_ucore",
     "agentscope_ucore",
     "agenttrust_ucore",
     "agentvfs_ucore",
     "iobudget_ucore",
     "usersafety_ucore",
+    "blocking_semantics_ucore",
 )
 CONTROLLED_AGENT_SYMBOL_PREFIXES = (
     "agent_",
     "sys_agent_",
     "sys_context_",
+    "sys_tool_",
     "resource_",
     "workflow_lifecycle_",
 )
@@ -59,15 +156,17 @@ CONTROLLED_AGENT_EXACT_SYMBOLS = frozenset(("agentinit",))
 REQUIRED_AGENT_MAX_SCC_SIZE = 3
 REQUIRED_AGENT_ALLOWED_SCCS = frozenset(
     (
-        frozenset(("context", "observe")),
-        frozenset(("ipc", "metadata_objects")),
+        frozenset(("context", "observe", "observe_timeline")),
+        frozenset(("observe_ledger", "observe_store")),
+        frozenset(("ipc", "metadata_prefetch")),
     )
 )
 REQUIRED_AGENT_INTEGRATION_ALLOWED_SCCS = frozenset(
     (
-        frozenset(("context", "observe")),
+        frozenset(("context", "observe", "observe_timeline")),
+        frozenset(("observe_ledger", "observe_store")),
         frozenset(("core", "facade", "proc")),
-        frozenset(("ipc", "metadata_objects")),
+        frozenset(("ipc", "metadata_prefetch")),
     )
 )
 REQUIRED_AGENT_AGGREGATES = {
@@ -75,12 +174,18 @@ REQUIRED_AGENT_AGGREGATES = {
         (
             "metadata",
             "file_state",
+            "metadata_actions",
             "metadata_objects",
+            "metadata_prefetch",
             "metadata_catalog",
             "metadata_directory",
             "metadata_query",
+            "metadata_probe",
+            "metadata_recovery",
             "metadata_scan",
             "metadata_store",
+            "metadata_store_format",
+            "metadata_store_io",
             "ipc",
         )
     )
@@ -88,23 +193,35 @@ REQUIRED_AGENT_AGGREGATES = {
 REQUIRED_AGENT_AGGREGATE_HEADERS = {
     "metadata_control_plane": frozenset(
         (
+            "agent_metadata_disk_abi.h",
             "os/agent_file_name_policy.h",
             "os/agent_file_state_internal.h",
+            "os/agent_metadata_actions.h",
             "os/agent_metadata_internal.h",
             "os/agent_metadata_catalog.h",
             "os/agent_metadata_directory.h",
+            "os/agent_metadata_disk.h",
+            "os/agent_metadata_probe.h",
+            "os/agent_metadata_recovery.h",
+            "os/agent_metadata_recovery_test.h",
+            "os/agent_metadata_store_format.h",
+            "os/agent_metadata_store_io.h",
             "os/agent_metadata_query.h",
             "os/agent_metadata_scan.h",
+            "os/agent_metadata_prefetch.h",
+            "os/agent_observe_persist_context.h",
         )
     )
 }
 REQUIRED_AGENT_AGGREGATE_HEADER_GLOBS = {
     "metadata_control_plane": (
+        "agent_metadata_disk_abi.h",
         "os/agent_metadata*.h",
         "os/agent_file*.h",
         "os/agent_query*.h",
         "os/agent_scan*.h",
         "os/agent_directory*.h",
+        "os/agent_observe_persist_context.h",
     )
 }
 REQUIRED_AGENT_AGGREGATE_SHARED_HEADERS = frozenset(
@@ -112,9 +229,32 @@ REQUIRED_AGENT_AGGREGATE_SHARED_HEADERS = frozenset(
         "os/agent.h",
         "os/agent_internal.h",
         "os/agent_context.h",
+        "os/agent_durable_section.h",
         "os/agent_lifecycle.h",
     )
 )
+REQUIRED_AGENT_MODULE_CFLAGS = {
+    "context_path": ("-Os",),
+    "file_state": ("-Os",),
+    "ipc": ("-Os",),
+    "metadata": ("-Os",),
+    "metadata_actions": ("-Os",),
+    "metadata_catalog": ("-Os",),
+    "metadata_directory": ("-Os",),
+    "metadata_objects": ("-Os",),
+    "metadata_prefetch": ("-Os",),
+    "metadata_probe": ("-Os",),
+    "metadata_query": ("-Os",),
+    "metadata_recovery": ("-Os",),
+    "metadata_scan": ("-Os",),
+    "metadata_store": ("-Os",),
+    "metadata_store_format": ("-Os",),
+    "metadata_store_io": ("-Os",),
+    "observe_capacity": ("-Os",),
+    "observe_ledger": ("-Os",),
+    "observe_recovery": ("-Os",),
+    "observe_store": ("-Os",),
+}
 REQUIRED_AGENT_DISCARDED_SECTIONS = (".eh_frame",)
 REQUIRED_METADATA_DIRECTORY_STORE_SYMBOLS = frozenset(
     ("agent_metadata_store_loaded", "agent_metadata_store_mark_dirty")
@@ -130,7 +270,13 @@ def parse_args():
     parser.add_argument("--root", default=".")
     parser.add_argument(
         "--check",
-        choices=("kernel", "agent-modules", "agent-tests", "config"),
+        choices=(
+            "kernel",
+            "agent-modules",
+            "agent-test-policy",
+            "agent-tests",
+            "config",
+        ),
         default="kernel",
     )
     parser.add_argument("--kernel", default="build/kernel")
@@ -193,15 +339,23 @@ def require_string_array(mapping, name):
     return value
 
 
-def validate_pair(section, baseline_name, maximum_name, integer=False):
+def validate_pair(
+    section, baseline_name, maximum_name, integer=False, max_headroom=0.05
+):
     baseline = require_positive_number(section, baseline_name, integer)
     maximum = require_positive_number(section, maximum_name, integer)
     if maximum < baseline:
         raise BudgetError(f"{maximum_name} must not be below {baseline_name}")
-    if maximum > baseline * 1.100001:
-        raise BudgetError(f"{maximum_name} leaves more than 10% growth headroom")
-    if maximum < baseline * 1.049999:
-        raise BudgetError(f"{maximum_name} leaves less than 5% growth headroom")
+    if not isinstance(max_headroom, (int, float)) or not 0 <= max_headroom <= 0.10:
+        raise BudgetError("budget headroom policy is invalid")
+    allowed = baseline * (1 + max_headroom)
+    if integer:
+        allowed = math.ceil(allowed)
+    if maximum > allowed + 1e-9:
+        raise BudgetError(
+            f"{maximum_name} leaves more than {max_headroom * 100:g}% "
+            "growth headroom"
+        )
     return baseline, maximum
 
 
@@ -349,6 +503,51 @@ def validate_config(config):
         raise BudgetError("struct_proc.symbol must be a non-empty string")
     validate_pair(proc, "baseline_bytes", "max_bytes", integer=True)
 
+    trapframes = require_mapping(
+        config.get("trapframe_pages"), "trapframe_pages"
+    )
+    for name in ("per_thread", "admitted_pool", "reserved_pool"):
+        symbol_name = f"{name}_symbol"
+        if (
+            not isinstance(trapframes.get(symbol_name), str)
+            or not trapframes[symbol_name]
+        ):
+            raise BudgetError(
+                f"trapframe_pages.{symbol_name} must be a string"
+            )
+        validate_pair(
+            trapframes,
+            f"baseline_{name}_bytes",
+            f"max_{name}_bytes",
+            integer=True,
+        )
+
+    legacy_mail = require_mapping(
+        config.get("legacy_mail_sidecar"), "legacy_mail_sidecar"
+    )
+    for name in (
+        "per_process",
+        "pool",
+        "ordinary_pool",
+        "reserved_pool",
+        "domain_ordinary",
+        "domain_reserved",
+    ):
+        symbol_name = f"{name}_symbol"
+        if (
+            not isinstance(legacy_mail.get(symbol_name), str)
+            or not legacy_mail[symbol_name]
+        ):
+            raise BudgetError(
+                f"legacy_mail_sidecar.{symbol_name} must be a string"
+            )
+        validate_pair(
+            legacy_mail,
+            f"baseline_{name}_bytes",
+            f"max_{name}_bytes",
+            integer=True,
+        )
+
     sidecar = require_mapping(
         config.get("agent_context_sidecar"), "agent_context_sidecar"
     )
@@ -408,34 +607,36 @@ def validate_config(config):
     if tuple(tests["expected_cases"]) != REQUIRED_AGENT_TEST_CASES:
         raise BudgetError(
             "agent_test_suite.expected_cases must match the required "
-            "16-case regression contract"
+            f"{len(REQUIRED_AGENT_TEST_CASES)}-case regression contract"
         )
-    validate_pair(tests, "baseline_seconds", "max_seconds")
     calibration_status = tests.get("calibration_status")
-    if calibration_status not in (
-        "calibrated_full_suite",
-        "provisional_requires_full_suite",
-    ):
+    if calibration_status not in AGENT_TEST_CALIBRATION_STATUSES:
         raise BudgetError(
             "agent_test_suite.calibration_status is not recognized"
         )
-    if calibration_status == "calibrated_full_suite":
-        runner_tag = tests.get("runner_tag")
-        if (
-            not isinstance(runner_tag, str)
-            or not re.fullmatch(r"[A-Za-z0-9_.-]+", runner_tag)
-        ):
-            raise BudgetError(
-                "agent_test_suite.runner_tag must be a GitLab runner tag"
-            )
-        runner = require_mapping(
-            tests.get("runner_profile"), "agent_test_suite.runner_profile"
+    runner_tag = tests.get("runner_tag")
+    if (
+        not isinstance(runner_tag, str)
+        or not re.fullmatch(r"[A-Za-z0-9_.-]+", runner_tag)
+    ):
+        raise BudgetError(
+            "agent_test_suite.runner_tag must be a GitLab runner tag"
         )
-        for name in ("cpu", "virtualization", "qemu_version"):
-            if not isinstance(runner.get(name), str) or not runner[name]:
-                raise BudgetError(
-                    f"agent_test_suite.runner_profile.{name} must be a string"
-                )
+    runner = require_mapping(
+        tests.get("runner_profile"), "agent_test_suite.runner_profile"
+    )
+    for name in ("cpu", "virtualization", "qemu_version"):
+        if not isinstance(runner.get(name), str) or not runner[name]:
+            raise BudgetError(
+                f"agent_test_suite.runner_profile.{name} must be a string"
+            )
+    if calibration_status == AGENT_TEST_CALIBRATION_READY:
+        validate_pair(
+            tests,
+            "baseline_seconds",
+            "max_seconds",
+            max_headroom=0.10,
+        )
         samples = tests.get("calibration_samples")
         if not isinstance(samples, list) or len(samples) < 3:
             raise BudgetError(
@@ -477,6 +678,17 @@ def validate_config(config):
         if tests["max_seconds"] > tests["baseline_seconds"] * 1.10:
             raise BudgetError(
                 "Agent duration limit exceeds 110% of the calibration median"
+            )
+    else:
+        stale_fields = sorted(
+            field
+            for field in AGENT_TEST_CALIBRATED_FIELDS
+            if field in tests
+        )
+        if stale_fields:
+            raise BudgetError(
+                "provisional Agent duration must not carry stale calibrated "
+                f"fields: {stale_fields!r}"
             )
 
     stack = require_mapping(config.get("kernel_stack"), "kernel_stack")
@@ -537,6 +749,7 @@ def validate_config(config):
         require_positive_number(stack, name, integer=True)
     require_string_list(stack, "stack_boundaries")
     require_string_list(stack, "allowed_indirect_callers")
+    require_string_list(stack, "indirect_call_edges")
     require_string_list(stack, "recursion_bounds")
     if stack["max_required_bytes"] > stack["stack_size_bytes"]:
         raise BudgetError("kernel stack growth limit exceeds the configured stack")
@@ -584,10 +797,14 @@ def validate_config(config):
             entry, "baseline_lines", "max_lines", integer=True
         )
         max_bss = entry.get("max_bss_bytes")
-        if max_bss is not None and (
-            isinstance(max_bss, bool) or not isinstance(max_bss, int) or max_bss < 0
+        if (
+            isinstance(max_bss, bool)
+            or not isinstance(max_bss, int)
+            or max_bss < 0
         ):
-            raise BudgetError(f"{entry_name}.max_bss_bytes must be a non-negative integer")
+            raise BudgetError(
+                f"{entry_name}.max_bss_bytes must be a non-negative integer"
+            )
         prefixes = require_string_array(entry, "allowed_global_prefixes")
         symbols = require_string_array(entry, "allowed_global_symbols")
         readonly = require_string_array(entry, "allowed_readonly_symbols")
@@ -595,6 +812,13 @@ def validate_config(config):
         bridge_dependencies = require_string_array(
             entry, "allowed_bridge_dependencies"
         )
+        required_cflags = entry.get("required_cflags")
+        if required_cflags is not None:
+            required_cflags = require_string_list(entry, "required_cflags")
+            if len(set(required_cflags)) != len(required_cflags):
+                raise BudgetError(
+                    f"{entry_name}.required_cflags contains duplicates"
+                )
         if not prefixes and not symbols:
             raise BudgetError(
                 f"{entry_name} must allow at least one global symbol"
@@ -684,22 +908,39 @@ def validate_config(config):
                 f"{sorted(unknown)!r}"
             )
     required_modules = {
+        "background",
         "facade",
         "core",
         "context",
+        "context_path",
+        "durable_section",
         "file_state",
         "identity",
+        "identity_lease",
         "ipc",
         "lifecycle",
         "metadata",
+        "metadata_actions",
         "metadata_catalog",
         "metadata_directory",
         "metadata_objects",
+        "metadata_prefetch",
         "metadata_query",
+        "metadata_probe",
+        "metadata_recovery",
         "metadata_scan",
         "metadata_store",
+        "metadata_store_format",
+        "metadata_store_io",
         "observe",
+        "observe_audit_query",
+        "observe_capacity",
+        "observe_ledger",
+        "observe_recovery",
+        "observe_store",
+        "observe_timeline",
         "resource_controller",
+        "tool_protocol",
         "workflow_lifecycle",
     }
     if names != required_modules:
@@ -708,23 +949,51 @@ def validate_config(config):
             f"missing={sorted(required_modules - names)!r}, "
             f"extra={sorted(names - required_modules)!r}"
         )
+    required_cflags = {
+        entry["name"]: tuple(entry["required_cflags"])
+        for entry in entries
+        if "required_cflags" in entry
+    }
+    if required_cflags != REQUIRED_AGENT_MODULE_CFLAGS:
+        raise BudgetError(
+            "Agent module optimization policy drift: "
+            f"expected={REQUIRED_AGENT_MODULE_CFLAGS!r}, "
+            f"actual={required_cflags!r}"
+        )
     expected_sources = {
+        "background": "os/agent_background.c",
         "facade": "os/agent.c",
         "core": "os/agent_core.c",
         "context": "os/agent_context.c",
+        "context_path": "os/agent_context_path.c",
+        "durable_section": "os/agent_durable_section.c",
         "file_state": "os/agent_file_state.c",
         "identity": "os/agent_identity.c",
+        "identity_lease": "os/agent_identity_lease.c",
         "ipc": "os/agent_ipc.c",
         "lifecycle": "os/agent_lifecycle.c",
         "metadata": "os/agent_metadata.c",
+        "metadata_actions": "os/agent_metadata_actions.c",
         "metadata_catalog": "os/agent_metadata_catalog.c",
         "metadata_directory": "os/agent_metadata_directory.c",
         "metadata_objects": "os/agent_metadata_objects.c",
+        "metadata_prefetch": "os/agent_metadata_prefetch.c",
         "metadata_query": "os/agent_metadata_query.c",
+        "metadata_probe": "os/agent_metadata_probe.c",
+        "metadata_recovery": "os/agent_metadata_recovery.c",
         "metadata_scan": "os/agent_metadata_scan.c",
         "metadata_store": "os/agent_metadata_store.c",
+        "metadata_store_format": "os/agent_metadata_store_format.c",
+        "metadata_store_io": "os/agent_metadata_store_io.c",
         "observe": "os/agent_observe.c",
+        "observe_audit_query": "os/agent_observe_audit_query.c",
+        "observe_capacity": "os/agent_observe_capacity.c",
+        "observe_ledger": "os/agent_observe_ledger.c",
+        "observe_recovery": "os/agent_observe_recovery.c",
+        "observe_store": "os/agent_observe_store.c",
+        "observe_timeline": "os/agent_observe_timeline.c",
         "resource_controller": "os/resource_controller.c",
+        "tool_protocol": "os/agent_tool_protocol.c",
         "workflow_lifecycle": "os/workflow_lifecycle.c",
     }
     for entry in entries:
@@ -738,6 +1007,47 @@ def validate_config(config):
                 f"Agent module {entry['name']} path drift: expected "
                 f"{expected_source} and {expected_object}"
             )
+
+    test_only = modules.get("test_only_sources")
+    if not isinstance(test_only, list) or len(test_only) != len(
+        REQUIRED_TEST_ONLY_SUPPORTS
+    ):
+        raise BudgetError(
+            "agent_modules.test_only_sources must contain the exact profile "
+            "owner inventory"
+        )
+    for index, (raw_support, expected_support) in enumerate(
+        zip(test_only, REQUIRED_TEST_ONLY_SUPPORTS)
+    ):
+        support = require_mapping(
+            raw_support, f"agent_modules.test_only_sources[{index}]"
+        )
+        for field, expected in expected_support.items():
+            actual = support.get(field)
+            if field == "allowed_profile_symbols" and isinstance(actual, list):
+                actual = tuple(actual)
+            if actual != expected:
+                raise BudgetError(
+                    f"profile owner {support.get('name', index)} {field} "
+                    f"drift: expected {expected!r}"
+                )
+        validate_pair(support, "baseline_lines", "max_lines", integer=True)
+        if support["source_path"] in paths:
+            raise BudgetError(
+                "test-only source was registered as a production module"
+            )
+
+    production_excludes = GENERATED_KERNEL_SOURCE_EXCLUDES | {
+        support["source_path"] for support in test_only
+    }
+    if (
+        len(exclude_paths) != len(production_excludes)
+        or set(exclude_paths) != production_excludes
+    ):
+        raise BudgetError(
+            "kernel_source.exclude_paths must contain only generated source "
+            "and the exact test-only owner inventory"
+        )
 
     directory = next(entry for entry in entries if entry["name"] == "metadata_directory")
     if directory.get("max_bss_bytes") != 0:
@@ -1411,6 +1721,15 @@ def invalid_global_object_exports(records, allowed_readonly):
     )
 
 
+def test_only_symbol_leaks(symbols, supports):
+    profile_symbols = {
+        symbol
+        for support in supports
+        for symbol in support["allowed_profile_symbols"]
+    }
+    return sorted(profile_symbols & set(symbols))
+
+
 def is_controlled_agent_symbol(symbol):
     return (
         symbol in CONTROLLED_AGENT_EXACT_SYMBOLS
@@ -1668,6 +1987,9 @@ def validate_stack_build_config(path, stack):
         "KSTACK_INDIRECT_CALLERS": " ".join(
             stack["allowed_indirect_callers"]
         ),
+        "KSTACK_INDIRECT_CALL_EDGES": " ".join(
+            stack["indirect_call_edges"]
+        ),
         "KSTACK_RECURSION_BOUNDS": " ".join(stack["recursion_bounds"]),
     }
     mismatches = [
@@ -1791,7 +2113,28 @@ def validate_canonical_toolchain(config, cc, objcopy, build_config, initproc):
         )
 
 
-def stack_check_command(root, config, callgraph_dir, checker):
+def production_translation_units(root, config):
+    source_dir = Path(root) / "os"
+    all_units = {path.stem for path in source_dir.glob("*.c")}
+    test_units = {
+        Path(support["source_path"]).stem
+        for support in config["agent_modules"]["test_only_sources"]
+    }
+    missing = sorted(test_units - all_units)
+    if missing:
+        raise BudgetError(
+            "test-only translation-unit source is missing: "
+            + ", ".join(missing)
+        )
+    production = sorted(all_units - test_units)
+    if not production:
+        raise BudgetError("production translation-unit inventory is empty")
+    return production
+
+
+def stack_check_command(
+    root, config, callgraph_dir, checker, translation_units=()
+):
     stack = config["kernel_stack"]
     command = [
         sys.executable,
@@ -1825,8 +2168,12 @@ def stack_check_command(root, config, callgraph_dir, checker):
         command.extend(("--stack-boundary", boundary))
     for caller in stack["allowed_indirect_callers"]:
         command.extend(("--allow-indirect-from", caller))
+    for edge in stack["indirect_call_edges"]:
+        command.extend(("--indirect-call-edge", edge))
     for bound in stack["recursion_bounds"]:
         command.extend(("--recursion-bound", bound))
+    for unit in translation_units:
+        command.extend(("--translation-unit", unit))
     return command
 
 
@@ -1907,6 +2254,47 @@ def check_kernel(args, config):
         " bytes",
         ratchet=True,
     )
+
+    trapframes = config["trapframe_pages"]
+    for name, label in (
+        ("per_thread", "trapframe per admitted thread"),
+        ("admitted_pool", "trapframe admitted-thread capacity"),
+        ("reserved_pool", "trapframe reserved-thread capacity"),
+    ):
+        actual = measure_probe_symbol(
+            root / args.struct_probe, args.nm, trapframes[f"{name}_symbol"]
+        )
+        check_limit(
+            label,
+            actual,
+            trapframes[f"baseline_{name}_bytes"],
+            trapframes[f"max_{name}_bytes"],
+            " bytes",
+            ratchet=True,
+        )
+
+    legacy_mail = config["legacy_mail_sidecar"]
+    for name, label in (
+        ("per_process", "legacy mail sidecar per process"),
+        ("pool", "legacy mail sidecar global pool"),
+        ("ordinary_pool", "legacy mail sidecar ordinary pool"),
+        ("reserved_pool", "legacy mail sidecar reserved pool"),
+        ("domain_ordinary", "legacy mail sidecar ordinary domain"),
+        ("domain_reserved", "legacy mail sidecar reserved domain"),
+    ):
+        actual = measure_probe_symbol(
+            root / args.struct_probe,
+            args.nm,
+            legacy_mail[f"{name}_symbol"],
+        )
+        check_limit(
+            label,
+            actual,
+            legacy_mail[f"baseline_{name}_bytes"],
+            legacy_mail[f"max_{name}_bytes"],
+            " bytes",
+            ratchet=True,
+        )
 
     sidecar = config["agent_context_sidecar"]
     for name, label in (
@@ -2005,7 +2393,11 @@ def check_kernel(args, config):
 
     validate_stack_build_config(build_config, stack)
     command = stack_check_command(
-        root, config, Path(args.callgraph_dir), Path(args.stack_checker)
+        root,
+        config,
+        Path(args.callgraph_dir),
+        Path(args.stack_checker),
+        production_translation_units(root, config),
     )
     output = run_tool(command, "kernel stack budget check")
     if output:
@@ -2037,7 +2429,9 @@ def require_source_tokens(body, tokens, context):
 def validate_metadata_scan_boundary_text(objects, scan):
     state = (
         r"\bscan_control\b|\bscan\.(?:offset|seen|next_tick|last_step_tick|"
-        r"started_tick|runs|entries|added|updated|removed)\b|\broot_dir\s*\("
+        r"started_tick|runs|entries|added|updated|removed|failures|deferred|"
+        r"retry|sweep_uncertain|failed_scopes|failed_scope_count)\b|"
+        r"\broot_dir\s*\("
     )
     reverse = (
         r"agent_file_maintain|agent_metadata_note_catalog_changes|"
@@ -2106,9 +2500,75 @@ def validate_metadata_scan_boundary_text(objects, scan):
     step = source_function_body(scan, "agent_metadata_scan_step(uint64 now")
     require_source_tokens(
         step,
-        ("root_dir()", "readi(", "inode_get(", "scan_bind_inode(", "steps < SCAN_STEP"),
+        (
+            "root_dir_status(&root_status)",
+            "root_status != FS_LOOKUP_FOUND",
+            "readi(",
+            "inode_get(",
+            "scan_bind_inode(ip, name, &bind_failed)",
+            "if (bind_failed) {\n"
+            "\t\t\tscan.failures++;\n"
+            "\t\t\tscan.retry = 1;",
+            "scan_pause(1, 1)",
+            "scan.offset = off;\n\t\t\tscan_pause(1, 1)",
+            "scan_scope_failed(view.scope_id, 0)",
+            "steps < SCAN_STEP",
+        ),
         "metadata scan step",
     )
+    bind = source_function_body(scan, "scan_bind_inode(struct inode *ip")
+    if "if (failed)" in bind:
+        raise BudgetError("metadata scan bind failure output became optional")
+    require_source_order(
+        bind,
+        (
+            "scan.seen[slot] = 1",
+            "agent_metadata_catalog_edit_begin_scan(",
+            "agent_metadata_catalog_edit_commit(&edit, changes)",
+            "agent_metadata_store_mark_dirty(ip->vfs_scope_id)",
+            "iupdate(ip)",
+            "return changes",
+        ),
+        "metadata scan bind fail-stop protocol",
+    )
+    for operation in (
+        "agent_metadata_catalog_edit_begin_scan(",
+        "agent_metadata_catalog_edit_commit(&edit, changes)",
+        "iupdate(ip)",
+    ):
+        start = bind.find(operation)
+        if start < 0 or "*failed = SCAN_BIND_RETRY" not in bind[start : start + 500]:
+            raise BudgetError(
+                f"metadata scan bind failure is not propagated: {operation}"
+            )
+    require_source_tokens(
+        bind,
+        (
+            "if (iupdate(ip) < 0) {\n"
+            "\t\t\t\tip->agent_meta_slot = old_slot;\n"
+            "\t\t\t\tip->agent_meta_flags = old_flags;\n"
+            "\t\t\t\tip->agent_meta_version = old_version;\n"
+            "\t\t\t\t*failed = SCAN_BIND_RETRY;\n"
+            "\t\t\t\treturn changes;",
+        ),
+        "metadata scan inode sidecar failure",
+    )
+    require_source_order(
+        step,
+        (
+            "scan_bind_inode(ip, name, &bind_failed)",
+            "if (bind_failed)",
+            "scan.retry = 1",
+            "scan_scope_failed(ip->vfs_scope_id, 1)",
+            "if (!scan_control.active)",
+            "if (scan.offset >= root->size)",
+            "scan_scope_failed(view.scope_id, 0)",
+            "scan_pause(scan.retry, 0)",
+        ),
+        "metadata scan isolated retry protocol",
+    )
+    if "scan_failed" in step or "int seen[AGENT_FILE_META_MAX]" in scan:
+        raise BudgetError("metadata scan restored global abort or oversized seen state")
     plan = source_function_body(scan, "agent_metadata_scan_plan(uint64 now)")
     require_source_tokens(
         plan,
@@ -2237,14 +2697,16 @@ def validate_metadata_directory_boundary_text(objects, directory):
             "view.meta->inum != ip->inum",
             "view.meta->incarnation != ip->vfs_incarnation",
             "agent_metadata_catalog_clear_slot(slot)",
-            "ip->agent_meta_slot = 0",
-            "iupdate(ip)",
             "agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL)",
             "agent_metadata_store_mark_dirty(scope_id)",
             "agent_metadata_txn_unlock()",
         ),
         "metadata directory delete hook",
     )
+    if re.search(r"ip->agent_meta_(?:slot|flags|version)\s*=|iupdate\s*\(", delete):
+        raise BudgetError(
+            "metadata directory delete must unbind through the catalog API"
+        )
     if delete.count("agent_metadata_txn_unlock()") != 1:
         raise BudgetError("metadata directory delete must unlock exactly once")
 
@@ -2304,6 +2766,34 @@ def check_agent_modules(args, config):
     entries = modules["modules"]
     defined_by_module = {}
     symbol_owner = {}
+    for support in modules["test_only_sources"]:
+        lines = measure_file_lines(root, support["source_path"])
+        check_limit(
+            f"Agent test-only source {support['name']}",
+            lines,
+            support["baseline_lines"],
+            support["max_lines"],
+            " lines",
+            ratchet=True,
+        )
+    kernel_path = root / args.kernel
+    if not kernel_path.is_file():
+        raise BudgetError(f"production kernel is missing: {kernel_path}")
+    production_symbols = parse_nm_defined_symbols(
+        run_tool(
+            [args.nm, "-g", "--defined-only", str(kernel_path)],
+            "production test-only symbol inspection",
+        )
+    )
+    leaked_test_symbols = test_only_symbol_leaks(
+        production_symbols, modules["test_only_sources"]
+    )
+    if leaked_test_symbols:
+        raise BudgetError(
+            "production kernel exports test-only symbols: "
+            + ", ".join(leaked_test_symbols)
+        )
+    print("[kernel-budget] production test-only symbols: absent")
     for entry in entries:
         lines = measure_file_lines(root, entry["source_path"])
         check_limit(
@@ -2555,22 +3045,21 @@ def check_agent_tests(args, config):
             raise BudgetError(
                 "Agent calibration requires a persisted per-case timing file"
             )
-        if tests["calibration_status"] != "provisional_requires_full_suite":
+        if tests["calibration_status"] != AGENT_TEST_CALIBRATION_PROVISIONAL:
             raise BudgetError(
                 "Agent calibration mode is only valid while the budget "
                 "is provisional"
             )
         print(
             "[kernel-budget] Agent test suite calibration: "
-            f"actual={elapsed:.3f} seconds "
-            f"provisional_baseline={tests['baseline_seconds']} seconds "
-            f"provisional_limit={tests['max_seconds']} seconds"
+            f"actual={elapsed:.3f} seconds"
         )
         print(
             "[kernel-budget] Agent test calibration captured; "
             "review repeated dedicated-runner samples before marking calibrated"
         )
         return
+    check_agent_test_policy(config)
     check_limit(
         "Agent test suite",
         elapsed,
@@ -2578,10 +3067,21 @@ def check_agent_tests(args, config):
         tests["max_seconds"],
         " seconds",
     )
-    if tests["calibration_status"] != "calibrated_full_suite":
+
+
+def check_agent_test_policy(config):
+    tests = config["agent_test_suite"]
+    if tests["calibration_status"] != AGENT_TEST_CALIBRATION_READY:
         raise BudgetError(
-            "Agent test duration is provisional; record this full-suite result"
+            "Agent test duration is provisional; run the complete "
+            f"{len(tests['expected_cases'])}-case "
+            "suite with AGENT_TEST_CALIBRATE=1 on the pinned runner and "
+            "record at least three samples before final acceptance"
         )
+    print(
+        "[kernel-budget] Agent duration policy: "
+        f"calibrated runner={tests['runner_tag']}"
+    )
 
 
 def main():
@@ -2595,9 +3095,12 @@ def main():
         if args.check == "kernel":
             check_kernel(args, config)
         elif args.check == "agent-modules":
+            print("[kernel-budget] agent-modules checks begin")
             check_agent_modules(args, config)
         elif args.check == "agent-tests":
             check_agent_tests(args, config)
+        elif args.check == "agent-test-policy":
+            check_agent_test_policy(config)
         else:
             print("[kernel-budget] configuration is valid")
     except BudgetError as error:

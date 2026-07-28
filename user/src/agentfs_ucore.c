@@ -3,10 +3,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <syscall.h>
 #include <unistd.h>
 
 #define PRELOAD_QUERY_FILE "fspreqry"
 #define PRELOAD_PARTIAL_FILE "fspartial"
+#define RECEIPT_OBSERVE_LIMIT 65536
 
 static struct agent_file_meta fs_meta;
 static struct agent_file_query fs_query;
@@ -16,6 +18,14 @@ static struct agent_file_hit stale_after;
 static struct agent_file_prefetch_hint fs_hints[AGENT_FILE_PREFETCH_MAX_HINTS];
 static struct agent_op fs_op;
 static struct agent_result fs_res;
+static struct kernel_work_receipt query_receipt_prior;
+static struct kernel_work_receipt query_receipt_before;
+static struct kernel_work_receipt query_receipt_after;
+
+struct digest_counters {
+	uint64 hits;
+	uint64 misses;
+};
 
 static void check(int ok, const char *msg)
 {
@@ -211,6 +221,45 @@ static void check_stale_identity_guard(void)
 	printf("agentfs_ucore: stale_identity_guard=1\n");
 }
 
+static void check_same_name_recreate_persist(void)
+{
+	const char *name = "fsrebind";
+	struct agent_file_hit before;
+
+	make_file(name);
+	memset(&fs_meta, 0, sizeof(fs_meta));
+	fs_meta.fid = 509;
+	strcpy(fs_meta.physical_name, name);
+	strcpy(fs_meta.logical_path, "/agentfs/rebind");
+	strcpy(fs_meta.status, "old");
+	fs_meta.flags = AGENT_FILE_META_F_PERSIST;
+	check(agent_file_meta_set(&fs_meta) == 0, "persist rebind source");
+	query_physical(name);
+	before = fs_result.hits[0];
+	check(unlink(name) == 0, "unlink rebind source");
+	make_file(name);
+	memset(&fs_meta, 0, sizeof(fs_meta));
+	fs_meta.fid = 509;
+	strcpy(fs_meta.physical_name, name);
+	strcpy(fs_meta.status, "rebuilt");
+	fs_meta.flags = AGENT_FILE_META_F_PERSIST;
+	fs_meta.update_mask = AGENT_FILE_META_UPDATE_STATUS;
+	check(agent_file_meta_set(&fs_meta) == 0, "persist recreated pathname");
+	check(agent_file_meta_init() == 0, "reload recreated pathname");
+	query_physical(name);
+	check((before.dev != fs_result.hits[0].dev ||
+	       before.inum != fs_result.hits[0].inum ||
+	       before.incarnation != fs_result.hits[0].incarnation) &&
+	      strcmp(fs_result.hits[0].status, "rebuilt") == 0,
+	      "recreated pathname has one durable fresh identity");
+	memset(&fs_meta, 0, sizeof(fs_meta));
+	fs_meta.fid = 509;
+	fs_meta.flags = AGENT_FILE_META_F_DELETE;
+	check(agent_file_meta_set(&fs_meta) == 0, "delete rebind metadata");
+	check(unlink(name) == 0, "delete rebind file");
+	printf("agentfs_ucore: same_name_recreate_persist=1\n");
+}
+
 static void set_scoped_meta(const char *run_id, int fid,
 			    const char *physical, const char *label,
 			    uint64 deps)
@@ -283,7 +332,17 @@ static void check_digest_text(const char *selector, const char *text)
 	check(strcmp(fs_res.result, text) == 0, "digest preview");
 }
 
-static void check_digest_timeline(const char *text)
+static __attribute__((noinline)) void
+read_digest_counters(struct digest_counters *counters, const char *msg)
+{
+	struct agent_info info;
+
+	check(agent_info(&info) == 0, msg);
+	counters->hits = info.file_digest_cache_hits;
+	counters->misses = info.file_digest_cache_misses;
+}
+
+static __attribute__((noinline)) void check_digest_timeline(const char *text)
 {
 	struct agent_timeline_filter filter;
 	struct agent_timeline_record records[8];
@@ -411,17 +470,89 @@ static void check_index_scan_gap(void)
 	       index.total_hits, index.returned, index.truncated);
 }
 
-static void check_prefetch_hints(uint64 preemptions)
+static uint64 latest_prefetch_sequence(void)
+{
+	uint64 latest = 0;
+	int n;
+
+	n = agent_file_prefetch_snapshot(fs_hints,
+					 AGENT_FILE_PREFETCH_MAX_HINTS);
+	check(n >= 0 && n <= AGENT_FILE_PREFETCH_MAX_HINTS,
+	      "read prefetch sequence baseline");
+	for (int i = 0; i < n; i++)
+		if (fs_hints[i].sequence > latest)
+			latest = fs_hints[i].sequence;
+	return latest;
+}
+
+static void observe_query_receipt(int owner_tid, int owner_pid)
+{
+	int advanced = 0;
+
+	check(kernel_work_receipt_snapshot(&query_receipt_before) == 0,
+	      "snapshot query work receipt");
+	check(query_receipt_before.version == KERNEL_WORK_RECEIPT_ABI_VERSION &&
+	      query_receipt_before.struct_size == sizeof(query_receipt_before),
+	      "query work receipt ABI");
+	check(query_receipt_before.generation > query_receipt_prior.generation,
+	      "query work receipt generation");
+	check(query_receipt_before.owner_generation != 0 &&
+	      query_receipt_before.owner_tid == owner_tid &&
+	      query_receipt_before.owner_pid == owner_pid &&
+	      query_receipt_before.owner_kind ==
+		      KERNEL_WORK_RECEIPT_OWNER_THREAD,
+	      "query work receipt owner");
+	check(query_receipt_before.kind == KERNEL_WORK_RECEIPT_KIND_SYSCALL &&
+	      query_receipt_before.syscall_id == SYS_agent_file_query,
+	      "query work receipt syscall identity");
+	check(query_receipt_before.preemptions > 0,
+	      "query kernel work budget");
+	check(query_receipt_before.observed_timer_epoch >=
+		      query_receipt_before.completion_timer_epoch,
+	      "query work receipt completion epoch");
+
+	for (int i = 0; i < RECEIPT_OBSERVE_LIMIT; i++) {
+		check(kernel_work_receipt_snapshot(&query_receipt_after) == 0,
+		      "resnapshot query work receipt");
+		if (query_receipt_after.observed_timer_epoch >
+		    query_receipt_before.observed_timer_epoch) {
+			advanced = 1;
+			break;
+		}
+	}
+	check(advanced, "query receipt timer epoch advances");
+	check(query_receipt_after.generation ==
+		      query_receipt_before.generation &&
+	      query_receipt_after.owner_generation ==
+		      query_receipt_before.owner_generation &&
+	      query_receipt_after.preemptions ==
+		      query_receipt_before.preemptions &&
+	      query_receipt_after.completion_timer_epoch ==
+		      query_receipt_before.completion_timer_epoch &&
+	      query_receipt_after.owner_tid == query_receipt_before.owner_tid &&
+	      query_receipt_after.owner_pid == query_receipt_before.owner_pid &&
+	      query_receipt_after.owner_kind ==
+		      query_receipt_before.owner_kind &&
+	      query_receipt_after.kind == query_receipt_before.kind &&
+	      query_receipt_after.syscall_id ==
+		      query_receipt_before.syscall_id,
+	      "query work receipt remains immutable");
+}
+
+static void check_prefetch_hints(uint64 preemptions, uint64 prior_sequence)
 {
 	int n;
 	int found = 0;
+	int fresh = 0;
 
 	n = agent_file_prefetch_snapshot(fs_hints,
 					 AGENT_FILE_PREFETCH_MAX_HINTS);
 	check(n >= 1 && n <= AGENT_FILE_PREFETCH_MAX_HINTS,
 	      "bounded prefetch snapshot");
-	check(preemptions > 0, "prefetch kernel work budget");
+	check(preemptions > 0, "query kernel work budget");
 	for (int i = 0; i < n; i++) {
+		if (fs_hints[i].sequence > prior_sequence)
+			fresh = 1;
 		check(fs_hints[i].source_sequence > 0,
 		      "prefetch source sequence");
 		check((fs_hints[i].reason &
@@ -444,6 +575,7 @@ static void check_prefetch_hints(uint64 preemptions)
 			found = 1;
 	}
 	check(found, "prefetch dependent stage");
+	check(fresh, "query publishes fresh prefetch hints");
 	printf("agentfs_ucore: prefetch_hints=1 bounded=1 count=%d preemptions=%d first_stage=%s source_seq=%d\n",
 	       n, (int)preemptions, fs_hints[0].hit.stage,
 	       (int)fs_hints[0].source_sequence);
@@ -825,6 +957,11 @@ static void run_agent(void)
 {
 	const char *name = "fsissue4";
 	uint64 prefetch_preemptions;
+	uint64 prefetch_sequence_before;
+	int receipt_owner_tid = gettid();
+	int receipt_owner_pid = getpid();
+	struct digest_counters digest_before;
+	struct digest_counters digest_after;
 
 	/* Create both probes before the first explicit metadata operation. */
 	make_file(PRELOAD_QUERY_FILE);
@@ -833,21 +970,26 @@ static void run_agent(void)
 	check_preload_create_query();
 	seed_demo_metadata();
 	check_selector_consistency();
+	check_same_name_recreate_persist();
 	check_stale_identity_guard();
 	seed_scoped_dependency_metadata();
 	seed_user_dependency_metadata();
 	check_scoped_dependency_query();
 	check_user_dependency_update();
 	check_batched_action_maintenance();
+	prefetch_sequence_before = latest_prefetch_sequence();
+	check(kernel_work_receipt_snapshot(&query_receipt_prior) == 0,
+	      "snapshot prior work receipt");
 	check(query_stage("lab-gene-x", "RUN-042", "align", 0, &fs_result) >= 1,
 	      "default query");
-	prefetch_preemptions = kernel_work_last_preemptions();
+	observe_query_receipt(receipt_owner_tid, receipt_owner_pid);
+	prefetch_preemptions = query_receipt_before.preemptions;
 	check(fs_result.hits[0].dev != 0 && fs_result.hits[0].inum != 0,
 	      "default inode binding");
 	printf("agentfs_ucore: demo_inode dev=%d inum=%d scanned=%d\n",
 	       (int)fs_result.hits[0].dev, (int)fs_result.hits[0].inum,
 	       fs_result.scanned_records);
-	check_prefetch_hints(prefetch_preemptions);
+	check_prefetch_hints(prefetch_preemptions, prefetch_sequence_before);
 	check_handoff_target_exit();
 
 	make_file(name);
@@ -860,41 +1002,30 @@ static void run_agent(void)
 	printf("agentfs_ucore: custom_inode dev=%d inum=%d size=%d\n",
 	       (int)fs_result.hits[0].dev, (int)fs_result.hits[0].inum,
 	       (int)fs_result.hits[0].size);
-	struct agent_info digest_before;
-	struct agent_info digest_after;
-	struct agent_info rewrite_before;
-	struct agent_info rewrite_after;
-
-	check(agent_info(&digest_before) == 0, "digest info before");
+	read_digest_counters(&digest_before, "digest info before");
 	check_digest_text(name, "agentfs");
 	check_digest_text("project=issue4;run_id=RUN-FS;stage=ingest;status=ok",
 			  "agentfs");
-	check(agent_info(&digest_after) == 0, "digest info after");
-	check(digest_after.file_digest_cache_hits >
-		      digest_before.file_digest_cache_hits,
+	read_digest_counters(&digest_after, "digest info after");
+	check(digest_after.hits > digest_before.hits,
 	      "digest cache hit");
-	check(digest_after.file_digest_cache_misses >
-		      digest_before.file_digest_cache_misses,
+	check(digest_after.misses > digest_before.misses,
 	      "digest cache miss");
 	printf("agentfs_ucore: content_digest=1 size=%d bytes=%d hash=%d preview=%s\n",
 	       (int)fs_res.value0, (int)fs_res.value1, (int)fs_res.value2,
 	       fs_res.result);
 	printf("agentfs_ucore: digest_cache=1 hits=%d misses=%d\n",
-	       (int)(digest_after.file_digest_cache_hits -
-		     digest_before.file_digest_cache_hits),
-	       (int)(digest_after.file_digest_cache_misses -
-		     digest_before.file_digest_cache_misses));
-	check(agent_info(&rewrite_before) == 0, "rewrite info before");
+	       (int)(digest_after.hits - digest_before.hits),
+	       (int)(digest_after.misses - digest_before.misses));
+	read_digest_counters(&digest_before, "rewrite info before");
 	write_file_body(name, "agentfs2");
 	check_digest_text(name, "agentfs2");
-	check(agent_info(&rewrite_after) == 0, "rewrite info after");
-	check(rewrite_after.file_digest_cache_misses >
-		      rewrite_before.file_digest_cache_misses,
+	read_digest_counters(&digest_after, "rewrite info after");
+	check(digest_after.misses > digest_before.misses,
 	      "digest cache invalidated");
 	check_digest_timeline("agentfs2");
 	printf("agentfs_ucore: digest_cache_invalidated=1 misses=%d\n",
-	       (int)(rewrite_after.file_digest_cache_misses -
-		     rewrite_before.file_digest_cache_misses));
+	       (int)(digest_after.misses - digest_before.misses));
 	printf("agentfs_ucore: digest_timeline=1 tool=%d preview=agentfs2\n",
 	       AGENT_TOOL_READ_FILE_DIGEST);
 
@@ -904,17 +1035,12 @@ static void run_agent(void)
 	check(strcmp(fs_result.hits[0].physical_name, name) == 0,
 	      "reload keeps physical name");
 	printf("agentfs_ucore: .agentmeta_reload=1\n");
-	for (int i = 0; i < 400; i++) {
-		check(query_stage("issue4", "RUN-FS", "ingest", "ok",
-				  &fs_result) >= 1,
-		      "query cache hit query");
-		if (fs_result.plan_reason & AGENT_FILE_QUERY_REASON_CACHE_HIT)
-			break;
-		sleep(10);
-	}
-	check((fs_result.plan_reason & AGENT_FILE_QUERY_REASON_CACHE_HIT) != 0,
-	      "query cache eventually stabilizes");
-	printf("agentfs_ucore: query_cache=1 reason=%d\n",
+	check(query_stage("issue4", "RUN-FS", "ingest", "ok",
+			  &fs_result) >= 1 && fs_result.used_index,
+	      "repeated query executes isolated index");
+	check((fs_result.plan_reason & AGENT_FILE_QUERY_REASON_CACHE_HIT) == 0,
+	      "kernel query does not share hidden result cache");
+	printf("agentfs_ucore: query_execution_isolated=1 kernel_cache_hit=0 reason=%d\n",
 	       (int)fs_result.plan_reason);
 
 	check_index_scan_gap();
@@ -922,7 +1048,7 @@ static void run_agent(void)
 	set_meta(name, "", AGENT_FILE_META_UPDATE_STATUS);
 	check(query_stage("issue4", "RUN-FS", "ingest", "ok", &fs_result) == 0,
 	      "cleared status query");
-	printf("agentfs_ucore: clear_status=1 cache_invalidated=1\n");
+	printf("agentfs_ucore: clear_status=1 stale_query_result=0\n");
 
 	set_meta(name, "failed", AGENT_FILE_META_UPDATE_STATUS);
 	check(query_stage("issue4", "RUN-FS", "ingest", "failed",

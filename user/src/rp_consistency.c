@@ -1,9 +1,42 @@
 #include <stdio.h>
 #include <research_platform_state.h>
+#include <rp_evidence.h>
+
+static int consistency_assertions_executed;
+static int consistency_assertions_passed;
+static int consistency_runtime_assertions_executed;
+static int consistency_runtime_assertions_passed;
+static char consistency_line[512];
+
+static int consistency_file_contains(const char *path, const char *token)
+{
+	int matched;
+
+	consistency_assertions_executed++;
+	matched = rp_file_contains(path, token);
+	if (matched)
+		consistency_assertions_passed++;
+	return matched;
+}
+
+static int consistency_runtime_contains(const char *path, const char *token)
+{
+	consistency_runtime_assertions_executed++;
+	if (!rp_file_contains(path, token))
+		return 0;
+	consistency_runtime_assertions_passed++;
+	return 1;
+}
+
+#define rp_file_contains consistency_file_contains
 
 static int require_equal(const char *name, int actual, int expected)
 {
-	if (actual == expected) return 1;
+	consistency_assertions_executed++;
+	if (actual == expected) {
+		consistency_assertions_passed++;
+		return 1;
+	}
 	printf("rp_consistency: mismatch %s actual=%d expected=%d\n", name, actual, expected);
 	return 0;
 }
@@ -12,7 +45,7 @@ int main(void)
 {
 	int ok = 1;
 	ok = ok && rp_file_contains("rp_backend", "status=ready");
-	ok = ok && rp_file_contains("rp_backend_exec", "status=ready");
+	ok = ok && rp_file_contains("rp_backend_exec", "runtime_claim_protocol=source-bound-v1");
 	ok = ok && rp_file_contains("rp_backend", "agentos_mainflow_kernel=required");
 	ok = ok && rp_file_contains("rp_agentos_roles", "stage_launch=agent_create_role");
 	ok = ok && rp_file_contains("rp_agentos_recovery", "kernel_tool=action_commit,artifact_update");
@@ -306,12 +339,16 @@ int main(void)
 
 	int backend_cases = rp_get_int_value("rp_backend", "cases=");
 	int backend_executable = rp_get_int_value("rp_backend", "executable=");
-	int passed_cases = rp_get_int_value("rp_backend_exec", "passed_cases=");
-	int planned_cases = rp_get_int_value("rp_backend_exec", "planned_cases=");
+	int executed_cases = rp_get_int_value("rp_backend_exec",
+					      "runtime_cases_executed=");
+	int verified_cases = rp_get_int_value("rp_backend_exec",
+					      "runtime_cases_verified=");
 	int study_arms = rp_get_int_value("rp_study", "arms=");
 	ok = ok && require_equal("backend_cases", backend_cases, 8);
-	ok = ok && require_equal("backend_executable", backend_executable, passed_cases);
-	ok = ok && require_equal("backend_case_total", passed_cases + planned_cases, backend_cases);
+	ok = ok && require_equal("backend_executable", backend_executable,
+				 executed_cases);
+	ok = ok && require_equal("backend_verified", verified_cases, executed_cases);
+	ok = ok && require_equal("backend_case_total", executed_cases, backend_cases);
 	ok = ok && require_equal("study_arms", study_arms, 2);
 
 	int runner_stages = rp_get_int_value("rp_runner", "stages=");
@@ -420,35 +457,22 @@ int main(void)
 	ok = ok && require_equal("rehearsal_cases", rehearsal_cases, 4);
 	ok = ok && require_equal("blocking_items", blocking_items, 0);
 
-	int namespace_checks = 12;
-	int surface_checks = 13;
-	int status_semantics = 11;
-	int reference_checks = 18;
-	int evidence_trace_checks = 14;
-	int run_state_checks = 9;
-	int lifecycle_checks = 10;
 	int delivery_checks = rp_get_int_value("rp_package", "delivery_checks=");
-	int agentos_readiness = 7;
-	ok = ok && require_equal("namespace_checks", namespace_checks, 12);
-	ok = ok && require_equal("surface_checks", surface_checks, 13);
-	ok = ok && require_equal("status_semantics", status_semantics, 11);
-	ok = ok && require_equal("reference_checks", reference_checks, 18);
-	ok = ok && require_equal("evidence_trace_checks", evidence_trace_checks, 14);
-	ok = ok && require_equal("run_state_checks", run_state_checks, 9);
-	ok = ok && require_equal("lifecycle_checks", lifecycle_checks, 10);
 	ok = ok && require_equal("delivery_checks", delivery_checks, 3);
-	ok = ok && require_equal("agentos_readiness", agentos_readiness, 7);
 
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
+	consistency_assertions_executed += 2;
 	if (ack_count < 26 || tool_count < 109) {
 		printf("rp_consistency: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		ok = 0;
-	}
+	} else
+		consistency_assertions_passed += 2;
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_consistency",
-			   "checks=420\n"
+			   "catalog_generation=demo_expected\n"
+			   "demo_expected_checks=420\n"
 			   "state_catalog_checks=12\n"
 			   "startup_doctor_checks=14\n"
 			   "host_state_keys=574\n"
@@ -724,12 +748,58 @@ int main(void)
 			   "status=ready\n")) {
 		return 1;
 	}
+	{
+		static const char *sources[] = {
+			"rp_backend_exec", "rp_agentos_kernel", "rp_agentos_package",
+		};
+		unsigned long long source_digest;
+
+		consistency_runtime_assertions_executed++;
+		if (!rp_evidence_fold_files(sources,
+					    (int)(sizeof(sources) / sizeof(sources[0])),
+					    &source_digest))
+			return 1;
+		consistency_runtime_assertions_passed++;
+		if (!consistency_runtime_contains("rp_backend_exec",
+					  "runtime_cases_executed=8") ||
+		    !consistency_runtime_contains("rp_agentos_kernel",
+					  "context_snapshot=present") ||
+		    !consistency_runtime_contains("rp_agentos_package",
+					  "package_trace=kernel_provenance"))
+			return 1;
+		consistency_line[0] = 0;
+		rp_append_text(consistency_line, sizeof(consistency_line),
+			       "evidence_generation=runtime;runtime_assertions_executed=");
+		rp_append_uint_text(consistency_line, sizeof(consistency_line),
+				    consistency_runtime_assertions_executed);
+		rp_append_text(consistency_line, sizeof(consistency_line),
+			       ";runtime_assertions_passed=");
+		rp_append_uint_text(consistency_line, sizeof(consistency_line),
+				    consistency_runtime_assertions_passed);
+		rp_append_text(consistency_line, sizeof(consistency_line),
+			       ";catalog_assertions_executed=");
+		rp_append_uint_text(consistency_line, sizeof(consistency_line),
+				    consistency_assertions_executed);
+		rp_append_text(consistency_line, sizeof(consistency_line),
+			       ";catalog_assertions_passed=");
+		rp_append_uint_text(consistency_line, sizeof(consistency_line),
+				    consistency_assertions_passed);
+		rp_append_text(consistency_line, sizeof(consistency_line),
+			       ";source_digest=");
+		rp_append_uint_text(consistency_line, sizeof(consistency_line),
+				    source_digest);
+		rp_append_text(consistency_line, sizeof(consistency_line),
+			       ";status=verified");
+		if (!rp_append_file("rp_consistency", consistency_line))
+			return 1;
+	}
 	if (!rp_append_file("rp_ack", "ack=consistency;msg=22;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_tasks")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_llm")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_backend")) return 1;
 	if (!rp_append_file("rp_tool", "tool=consistency.check_data_pipeline")) return 1;
 	if (!rp_append_status("consistency=ready")) return 1;
-	printf("rp_consistency: checks=420 tasks=21 llm=3 relay=5 workflow=5 portability=6 coherence=9 data=6 services=25 lab_governance=26 products=18 assurance=24 research_ops=28 regulated=32 state_catalog=12 startup_doctor=14 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 backend=8 artifacts=7 agents=7 dynamic=4 status=ready\n");
+	printf("rp_consistency: evidence_generation=runtime runtime_assertions=%d catalog_generation=demo_expected status=verified\n",
+	       consistency_runtime_assertions_passed);
 	return 0;
 }

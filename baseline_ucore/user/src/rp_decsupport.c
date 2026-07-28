@@ -4,7 +4,7 @@
 int main(void)
 {
 	int ok = 1;
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_report_rows=7");
+	ok = ok && rp_file_contains("rp_backend_exec", "reference_report_rows=7");
 	ok = ok && rp_file_contains("rp_study", "migration_status=plain_userland_equivalents_ready");
 	ok = ok && rp_file_contains("rp_llm_packets", "packets=3");
 	ok = ok && rp_file_contains("rp_package", "status=ready");
@@ -12,6 +12,8 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_decsupport",
+			   "evidence_file_role=demo_reference\n"
+			   "evidence_file_generation=demo_expected\n"
 			   "service=decision-support\n"
 			   "decision_support_checks=80\n"
 			   "decision=decision:agentos-final-demo-backend\n"
@@ -28,28 +30,34 @@ int main(void)
 			   "weighted_score_agentos_ucore_hybrid=8.15\n"
 			   "weighted_score_full_kernel_llm_path=4.55\n"
 			   "evidence_sources=rp_backend_exec,rp_study,rp_llm_packets,rp_package,rp_reldossier\n"
-			   "status=ready\n")) {
+			   "evidence_file_status=reference_ready\n")) {
 		return 1;
 	}
 	if (!rp_write_file("rp_decopt",
+			   "evidence_file_role=demo_reference\n"
+			   "evidence_file_generation=demo_expected\n"
 			   "options=3\n"
 			   "option=userland_only;summary=Keep the complete research Agent workflow in ordinary user space.;benefit=replayable_baseline;cost=weak_os_argument;recommendation=baseline_arm;status=ready\n"
 			   "option=agentos_ucore_hybrid;summary=Use AgentOS-uCore for lifecycle, Context, metadata, events, and audit while keeping cloud LLM access on the host.;benefit=direct_os_value;cost=syscall_adapter;recommendation=final_target;status=ready\n"
 			   "option=full_kernel_llm_path;summary=Move Agent workflow and cloud LLM path into the teaching kernel.;benefit=max_kernel_ownership;cost=tls_dns_secret_risk;recommendation=reject_for_final_delivery;status=ready\n"
-			   "status=ready\n")) {
+			   "evidence_file_status=reference_ready\n")) {
 		return 1;
 	}
 	if (!rp_write_file("rp_deccrit",
+			   "evidence_file_role=demo_reference\n"
+			   "evidence_file_generation=demo_expected\n"
 			   "criteria=5\n"
 			   "criterion=agentos_value;weight=0.30;description=How directly the option proves OS-level Agent support.;status=ready\n"
 			   "criterion=reproducibility;weight=0.25;description=Whether the option can be replayed without unstable cloud or host state.;status=ready\n"
 			   "criterion=performance_signal;weight=0.20;description=Whether the option exposes measurable context, tool, and metadata signals.;status=ready\n"
 			   "criterion=migration_effort;weight=0.15;description=Whether the option preserves the core research workflow during migration.;status=ready\n"
 			   "criterion=reviewer_clarity;weight=0.10;description=Whether reviewers can inspect the same-workflow two-backend story.;status=ready\n"
-			   "status=ready\n")) {
+			   "evidence_file_status=reference_ready\n")) {
 		return 1;
 	}
 	if (!rp_write_file("rp_decscore",
+			   "evidence_file_role=demo_reference\n"
+			   "evidence_file_generation=demo_expected\n"
 			   "scores=15\n"
 			   "score=userland_only:agentos_value;option=userland_only;criterion=agentos_value;value=2;rationale=Useful baseline but Agent state remains outside the OS.;status=ready\n"
 			   "score=userland_only:reproducibility;option=userland_only;criterion=reproducibility;value=8;rationale=Plain local run is easy to replay.;status=ready\n"
@@ -66,10 +74,12 @@ int main(void)
 			   "score=full_kernel_llm_path:performance_signal;option=full_kernel_llm_path;criterion=performance_signal;value=5;rationale=TLS and network cost obscure OS-level measurements.;status=ready\n"
 			   "score=full_kernel_llm_path:migration_effort;option=full_kernel_llm_path;criterion=migration_effort;value=2;rationale=High implementation burden and high risk.;status=ready\n"
 			   "score=full_kernel_llm_path:reviewer_clarity;option=full_kernel_llm_path;criterion=reviewer_clarity;value=3;rationale=Review focus shifts away from task requirements.;status=ready\n"
-			   "status=ready\n")) {
+			   "evidence_file_status=reference_ready\n")) {
 		return 1;
 	}
 	if (!rp_write_file("rp_decpacket",
+			   "evidence_file_role=demo_reference\n"
+			   "evidence_file_generation=demo_expected\n"
 			   "packet=decision-review-packet:agentos-final-demo-backend\n"
 			   "decision=decision:agentos-final-demo-backend\n"
 			   "recommended_option=agentos_ucore_hybrid\n"
@@ -78,13 +88,13 @@ int main(void)
 			   "finding=agentos_ucore_hybrid:selected_for_same_workflow_kernel_assistance\n"
 			   "finding=full_kernel_llm_path:rejected_due_network_secret_complexity\n"
 			   "evidence=rp_backend_exec,rp_study,rp_llm_packets,rp_package,rp_reldossier\n"
-			   "status=ready\n")) {
+			   "evidence_file_status=reference_ready\n")) {
 		return 1;
 	}
-	if (!rp_append_file("rp_package", "decision_support=rp_decsupport;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;status=ready")) return 1;
-	if (!rp_append_file("rp_web_bundle", "decision_support_page=rp_decsupport;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;status=ready")) return 1;
-	if (!rp_append_file("rp_review_dashboard", "subsection=decision_support;source=rp_decsupport;options=3;criteria=5;scores=15;selected=select_agentos_ucore_hybrid;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "decision_support_checks=80;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;agentos_replacements=4;status=ready")) return 1;
+	if (!rp_append_file("rp_package", "evidence_role=demo_reference;catalog_generation=demo_expected;decision_support=rp_decsupport;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;status=reference_ready")) return 1;
+	if (!rp_append_file("rp_web_bundle", "evidence_role=demo_reference;catalog_generation=demo_expected;decision_support_page=rp_decsupport;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;status=reference_ready")) return 1;
+	if (!rp_append_file("rp_review_dashboard", "evidence_role=demo_reference;catalog_generation=demo_expected;subsection=decision_support;source=rp_decsupport;options=3;criteria=5;scores=15;selected=select_agentos_ucore_hybrid;status=reference_ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "evidence_role=demo_reference;catalog_generation=demo_expected;decision_support_checks=80;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;agentos_replacements=4;status=reference_ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=decision_support;msg=architecture_decision;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=decision_support.create_decision")) return 1;
 	if (!rp_append_file("rp_tool", "tool=decision_support.add_option")) return 1;
@@ -95,6 +105,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=decision_support.attach_evidence")) return 1;
 	if (!rp_append_file("rp_tool", "tool=decision_support.export_review")) return 1;
 	if (!rp_append_status("decision_support=ready")) return 1;
-	printf("rp_decsupport: options=3 criteria=5 scores=15 selected=agentos_ucore_hybrid checks=80 status=ready\n");
+	printf("rp_decsupport: evidence_role=demo_reference catalog_generation=demo_expected options=3 status=reference_ready\n");
 	return 0;
 }

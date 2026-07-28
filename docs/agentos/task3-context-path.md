@@ -6,7 +6,7 @@
 
 任务三要求系统维护 Agent 多轮工具调用上下文，使 Agent 能看到自己历史调用路径，并能在路径过长时自动淘汰旧记录。
 
-AgentOS-uCore 当前实现的是“128 条固定容量短文本摘要路径 + 最近 128 条完整详情 + 用户自管 cache + cause/span 因果字段 + prev/record hash 完整性链”。摘要 record 用于快速呈现和高频查询；完整 `agent_op`、`agent_result`、flags 与可信 attribution 位于按活跃 Agent 分配的内核私有 sidecar。sidecar 不属于用户 Context 页，也不作为大数组嵌入每个 PCB；运行时把它与 6 页用户 mirror、6 页可信 shadow 组成 21 页 Agent 状态整体原子计费。
+AgentOS-uCore 当前实现的是“128 条固定容量不可变摘要 archive + 当前 active-path 投影 + 最近 128 条完整详情 + 用户自管 cache + cause/span 因果字段 + prev/record hash 完整性链”。摘要 record 用于快速呈现和高频查询；完整 `agent_op`、`agent_result`、flags 与可信 attribution 位于按活跃 Agent 分配的内核私有 sidecar。sidecar 不属于用户 Context 页，也不作为大数组嵌入每个 PCB；运行时把它与 6 页用户 mirror、6 页可信 shadow 组成 21 页 Agent 状态整体原子计费。
 
 ## 上下文布局：Context
 
@@ -17,7 +17,7 @@ Agent Context 共 6 页：
 | header | 0 | `struct agent_context_header` |
 | latest | `sizeof(struct agent_context_header)` | `struct agent_result` |
 | records | 4096 | `struct agent_context_record[128]` |
-| user cache | `header.user_cache_offset` | Agent 自管缓存区，当前测试输出为 offset 21504、size 3072 |
+| user cache | `header.user_cache_offset` | Agent 自管缓存区，Context v8 为 offset 23552、size 1024 |
 
 `struct agent_context_header` 关键字段：
 
@@ -26,11 +26,14 @@ Agent Context 共 6 页：
 | `magic` | Context magic |
 | `version` | Context layout 版本 |
 | `capacity` | 最大记录数，当前为 128 |
-| `count` | 当前有效记录数 |
+| `count` | FIFO archive 中当前保留的物理记录数；可能包含已放弃分支 |
 | `head` | 下一次写入槽位 |
 | `total_calls` | 已接纳并保留 sequence 的工具调用数；在途调用尚未提交时可领先 `latest_sequence` |
 | `oldest_sequence` | 当前最早可见 sequence |
 | `latest_sequence` | 已完整提交到 Context 的最新 sequence 水位 |
+| `visible_head_sequence` | 当前 active path 的链尾 sequence |
+| `active_path_count` | 当前 active path 在 FIFO archive 中仍保留的 suffix 长度 |
+| `active_path_oldest_sequence` | retained active suffix 的最早 sequence |
 | `dropped_records` | 因 FIFO 淘汰的记录数 |
 | `rollback_count` | 成功 rollback 次数 |
 | `current_span_id` | 当前 Agent 正在延续的因果链 span |
@@ -49,6 +52,7 @@ Agent Context 共 6 页：
 | `sequence` | 内核分配的递增序号 |
 | `request_id` | 用户请求 ID |
 | `cause_sequence` | 触发当前记录的前序 sequence；0 表示根节点 |
+| `path_parent_sequence` | 当前 Agent 本地 active path 的直接父记录；与可能来自其他 Agent 的 provenance cause 分离 |
 | `span_id` | 当前因果链 ID |
 | `arg0` | 第一个数值参数摘要 |
 | `value0/value1/value2` | 工具结果数值槽 |
@@ -70,7 +74,7 @@ Agent Context 共 6 页：
 | `op` | 完整 `struct agent_op` |
 | `result` | 完整 `struct agent_result` |
 
-迁移后静态探针测得 `sizeof(struct proc)` 从历史 62072 字节降到 28808 字节，`NPROC=128` 的固定 PCB BSS 减少约 4.061 MiB。仅比较从 PCB 移出的 detail 数据，每个活跃 Agent 的 9 页 sidecar 为 36 KiB：少于约 116 个活跃 Agent 时仍低于旧嵌入布局；理论上 128 槽全是 Agent 时，页粒度碎片约多 450 KiB。完整运行状态则是 21 页/84 KiB，因为还必须计入本来就属于 Agent Context 的 6 页用户 mirror 与 6 页可信 shadow。六项总状态预算为每进程 `86016` B、全局 `11010048` B、ordinary 池 `8257536` B、reserved 池 `2752512` B、ordinary 域 `5505024` B、reserved 域 `688128` B。CI 同时保留 sidecar-only 的 1152 页全局上限，ordinary/reserved 池 864/288 页、单 ordinary/reserved account 576/72 页，用于阻止 detail 结构单独膨胀；它不是另一份运行时 charge。idle 普通进程不分配这些页，所有配额仍使用通用 `kalloc`，不是全局物理内存 OOM 下的硬页保留。
+Context detail 迁移时的静态探针曾测得 `sizeof(struct proc)` 从 62072 字节降到 28808 字节，`NPROC=128` 的固定 PCB BSS 减少约 4.061 MiB；后续把 legacy mail 迁为按需两页 sidecar 后曾降至 25640 字节，加入 lifecycle/resource 所有权字段及两个 active-path 水位后的当前冻结探针为 25936 字节，CI 上限为 27233 字节。仅比较该次从 PCB 移出的 detail 数据，每个活跃 Agent 的 9 页 sidecar 为 36 KiB：少于约 116 个活跃 Agent 时仍低于旧嵌入布局；理论上 128 槽全是 Agent 时，页粒度碎片约多 450 KiB。完整运行状态仍是 21 页/84 KiB，因为 v8 在既有 6 页 mirror/shadow 内重排 record 与 cache，没有新增物理页。六项总状态预算为每进程 `86016` B、全局 `11010048` B、ordinary 池 `8257536` B、reserved 池 `2752512` B、ordinary 域 `5505024` B、reserved 域 `688128` B。CI 同时保留 sidecar-only 的 1152 页全局上限，ordinary/reserved 池 864/288 页、单 ordinary/reserved account 576/72 页，用于阻止 detail 结构单独膨胀；它不是另一份运行时 charge。idle 普通进程不分配这些页，所有配额仍使用通用 `kalloc`，不是全局物理内存 OOM 下的硬页保留。
 
 ## 权威历史：shadow
 
@@ -81,7 +85,9 @@ Context 使用双份数据：
 | kernel shadow | 内核权威历史，用户态无法直接修改 |
 | user mirror | 用户态高速读取镜像 |
 
-所有写入先进入 kernel shadow，再同步到 user mirror。`context_query()` 和 `context_snapshot()` 都读取 shadow。用户态即使直接写坏镜像，也不能伪造内核返回的历史。
+所有写入先进入 kernel shadow，再同步到 user mirror。append、rollback、clear 和 snapshot 在修改可信状态前预检完整发布范围；预检成功后先提交 record/body 和 latest，最后提交 header。`context_query()` 和 `context_snapshot()` 都读取 shadow。用户态即使直接写坏镜像，也不能伪造内核返回的历史。
+
+header-last 是发布顺序，不是面向无锁多线程 reader 的 seqlock。直接读取 mirror 适合不要求跨字段原子性的低成本提示；并发 reader 需要一致视图时必须使用 `context_snapshot()`。Context 内部事务也不扩展到事件、watch、文件或 metadata 等外部效果，system record 是归因记录而不是这些效果的两阶段提交日志。
 
 `agentfinal_ucore` 的篡改和 cache 测试：
 
@@ -97,7 +103,7 @@ Context 使用双份数据：
 
 ## 因果链记录
 
-Context v6 会把工具调用、手动记录和事件消费串成轻量因果链，并为每条记录维护完整性链。公开 cause/span 之外，Context 私有 sidecar 保存 source pid/control id 和 span owner，公开整数本身不构成可信身份：
+Context v8 会把工具调用、手动记录和事件消费串成轻量因果链，并为每条记录维护完整性链。公开 cause/span 之外，Context 私有 sidecar 保存 source pid/control id 和 span owner，公开整数本身不构成可信身份。`cause_sequence` 表示 provenance 触发关系，可能来自另一个 Agent；`path_parent_sequence` 只表示本进程分支拓扑，append 时由内核绑定当时的 visible head 并纳入 `record_hash`：
 
 1. 第一条自动工具记录的 `cause_sequence` 为 0，表示 root。
 2. 后续自动工具记录默认指向上一条 Context sequence。
@@ -119,12 +125,13 @@ Context v6 会把工具调用、手动记录和事件消费串成轻量因果链
 
 `agent_call_count` 和 header `total_calls` 统计已经接纳并保留的 sequence，因而慢调用还在执行时可能暂时比 `latest_sequence` 大；后者只在一条记录的 result、hash、header 和 mirror 完整发布后推进。每次工具调用在 lane 内执行：
 
-1. 给本次调用分配 sequence。
-2. 把 `struct agent_result` 写入 latest 区。
-3. 构造 `struct agent_context_record`。
-4. 写入当前 head 指向的 record 槽。
-5. 更新 count、head、oldest、latest、dropped。
-6. 同步用户镜像。
+1. 计算候选 sequence，并预检 record、latest、header 的全部 shadow/mirror 范围；失败时不执行工具，也不改变可信 Context。
+2. 接纳 sequence 并执行工具。
+3. 在私有 sidecar 和 shadow 中暂存完整 detail、record、latest 与 header，并更新同一 lane 持有的 PCB 字段。
+4. 将 record、latest、header 依次发布到用户 mirror；header 最后提交。
+5. 发布完成后再写入 Context 观测记录。
+
+rollback 先验证目标与 attribution，再预检 latest/header，之后才分配新 branch 并提交；clear 和 snapshot 都预检整个 managed body 与 header，提交时保留尾部 user cache，且 header 最后发布。测试 profile 可在预检阶段确定性拒绝一次发布，用来证明失败 append 不覆盖满 FIFO 的 oldest record/detail，失败 rollback/clear 不改变 branch、hash、计数或 mirror，下一次 append 仍能正常推进。
 
 手动 `context_push()` 使用同一个 sequence 流，保证手动记录和工具调用记录按同一顺序排列；用户只提交内容，cause/span/owner 由内核决定。
 
@@ -134,8 +141,9 @@ Context v6 会把工具调用、手动记录和事件消费串成轻量因果链
 
 | 接口 | 说明 |
 | --- | --- |
-| `context_query(start_sequence, out, max)` | 从指定 sequence 开始返回可见记录；`start_sequence=0` 表示从最早可见记录开始 |
-| `context_snapshot(header, records, max)` | 一次返回 header 和有序 records，是推荐读取方式 |
+| `context_query(start_sequence, out, max)` | 从指定 sequence 开始返回当前 active path 的 retained records；`start_sequence=0` 表示从 retained active suffix 起点开始 |
+| `context_snapshot(header, records, max)` | 一次返回 archive header 和有序 active-path records，是推荐读取方式 |
+| `context_mirror_active_query(header, mirror, start, out, max)` | 用户态对直接 mirror 的 active path 做有界、fail-closed 重建；重算 record hash 并校验 head hash，遇到内容篡改、槽位错配、断链、倒序或环立即失败 |
 | `context_detail(sequence, out)` | 查询仍在内核私有 sidecar 中的最近 128 条完整请求/响应 |
 | `agent_trace_snapshot(records, max)` | 把 Context 摘要和调度原因合并为当前 Agent 的运行轨迹短记录 |
 | `agent_span_trace_snapshot(records, max)` | 当前 Agent 查询自己所在 span 的系统级短记录 |
@@ -148,10 +156,10 @@ Context v6 会把工具调用、手动记录和事件消费串成轻量因果链
 | `agent_audit_query(filter, records, max)` | 先按 scope/owner 裁剪，再按 kind、span、目标事件、source/target 或 sequence 过滤 |
 | `agent_ledger_snapshot(summary)` | orchestrator 查询当前 scope 稀疏可见窗口、dropped、分类计数和逻辑链尾 hash |
 | `agent_file_prefetch_span_snapshot(hints, max)` | 当前 Agent 按自己的 span 查询跨 Agent metadata 预取提示 |
-| `context_rollback(sequence)` | 回滚到仍可见 sequence |
+| `context_rollback(sequence)` | 以仍在 FIFO 窗口内的 sequence 为因果锚点创建新分支；不截断旧记录，不复用 sequence |
 | `context_clear()` | 清空记录和元信息 |
 
-`context_snapshot()` 是测试和示例的主路径，因为它一次 syscall 就能拿到 header 和多条记录。`context_detail()` 用于在需要完整审计证据时补充摘要 record 中没有保存的完整参数和结果。
+`context_snapshot()` 是测试和示例的主路径，因为它一次 syscall 就能拿到 header 和当前 active path。rollback 后放弃分支仍作为不可变 archive 保留，直到 FIFO 淘汰；调用者可用 `context_detail(sequence)` 精确读取其完整记录，provenance/timeline 也继续使用全局单调 sequence。内核查询不在栈上保存 128 项临时数组，而是沿 `path_parent_sequence` 有界回溯并执行 kernel-work checkpoint。
 
 `agent_trace_snapshot()` 面向运行查看和问题排查。它不改变 Context Path，只读取当前 Agent 的 Context 摘要和最近调度原因，按 tick 合并为最多 144 条短记录。`agentfinal_ucore` 会检查结果中同时存在 Context、调度和事件等待记录。
 
@@ -199,6 +207,8 @@ span 同时用于文件预取提示。文件查询产生的 metadata 提示进�
 | `oldest_sequence` | 66 |
 | `latest_sequence` | 193 |
 | `dropped_records` | 65 |
+| `active_path_count` | 128 |
+| `active_path_oldest_sequence` | 66 |
 
 对应原始输出见 [test-record.md](test-record.md)。
 
@@ -232,6 +242,7 @@ Context Path 有三种读取方式：
 | 文本长度 | payload/result 各保存 16 字节摘要 |
 | 完整详情容量 | 最近 128 条位于按需 sidecar，可通过 `context_detail()` 查询；更早详情会随环形记录淘汰 |
 | 用户自管 cache | 不进入 Context Path，不被 snapshot 覆盖，内核不把它作为可信历史 |
+| 当前分支投影 | rollback 采用非破坏性分支；`context_query()` / `context_snapshot()` 只返回可信 active path。物理 mirror 仍含不可变 FIFO archive，直接读时用 header 的 active head/count 和 record 的 `path_parent_sequence` 重建；并发一致或抗镜像篡改读取仍必须使用 syscall |
 | 持久化 | Context Path 当前随进程生命周期存在，不持久化到磁盘 |
 
 ## 验证证据

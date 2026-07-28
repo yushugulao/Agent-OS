@@ -13,6 +13,11 @@ from threading import Lock
 from typing import Iterable
 from urllib.parse import parse_qs, unquote, urlparse
 
+if __package__:
+    from .research_state_manifest import repository_state_inventory
+else:
+    from research_state_manifest import repository_state_inventory
+
 
 ACTION_DEADLINE_CONTRACT = "plain_ucore_action_deadline_v1"
 ACTION_DEADLINE_CONTRACT_VERSION = 1
@@ -20,6 +25,9 @@ ACTION_DEADLINE_PHASES = ("clean", "build", "guest")
 ACTION_DEADLINE_PHASE_TIMEOUT_MARGIN_SECONDS = 30
 ACTION_DEADLINE_CLEANUP_ALLOWANCE_SECONDS = 10
 ACTION_DEADLINE_MAX_RUNNER_TIMEOUT_SECONDS = 3600
+STATE_API_ALLOWLIST = frozenset(
+    repository_state_inventory(Path(__file__).resolve().parents[1])
+)
 
 
 PAGE_SPECS = [
@@ -87,6 +95,8 @@ def load_state(state_dir: Path) -> dict[str, dict[str, object]]:
     for path in sorted(state_dir.iterdir()):
         if not path.is_file() or path.name.startswith("."):
             continue
+        if path.name.startswith("rp_") and path.name not in STATE_API_ALLOWLIST:
+            continue
         text = path.read_text(encoding="utf-8", errors="replace")
         state[path.name] = {
             "text": text,
@@ -108,6 +118,35 @@ def state_lines(state: dict[str, dict[str, object]], name: str) -> list[str]:
     if not item:
         return []
     return item["lines"]  # type: ignore[return-value]
+
+
+def is_reference_state(state: dict[str, dict[str, object]], name: str) -> bool:
+    envelope_keys = {
+        "evidence_file_role",
+        "evidence_file_generation",
+        "evidence_file_status",
+    }
+    values: dict[str, str] = {}
+    for raw in state_lines(state, name):
+        line = raw.strip()
+        if not line or ";" in line or line.count("=") != 1:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if key in envelope_keys and key in values:
+            raise ValueError(
+                f"reference state has a duplicate file envelope key: {name}:{key}"
+            )
+        values[key] = value.strip()
+    is_reference = (
+        values.get("evidence_file_role") == "demo_reference"
+        and values.get("evidence_file_generation") == "demo_expected"
+        and values.get("evidence_file_status") == "reference_ready"
+    )
+    claims_reference = any(key in values for key in envelope_keys)
+    if claims_reference and not is_reference:
+        raise ValueError(f"reference state has an incomplete file envelope: {name}")
+    return is_reference
 
 
 def split_list(value: str) -> list[str]:
@@ -361,11 +400,41 @@ def read_jsonl_file(path: Path) -> list[dict[str, object]]:
     return records
 
 
+def record_is_reference(record: dict[str, str]) -> bool:
+    is_reference = (
+        record.get("evidence_role") == "demo_reference"
+        and record.get("catalog_generation") == "demo_expected"
+        and record.get("status") == "reference_ready"
+    )
+    claims_reference = (
+        record.get("evidence_role") == "demo_reference"
+        or record.get("status") == "reference_ready"
+    )
+    if claims_reference and not is_reference:
+        raise ValueError("reference record has an incomplete evidence envelope")
+    return is_reference
+
+
 def metric_value(state: dict[str, dict[str, object]], sources: list[tuple[str, str]], default: str = "n/a") -> str:
     for name, key in sources:
-        value = state_values(state, name).get(key, "")
-        if value:
-            return value
+        if is_reference_state(state, name):
+            continue
+        for line in reversed(state_lines(state, name)):
+            record = parse_kv_record(line)
+            value = record.get(key, "")
+            if value and not record_is_reference(record):
+                return value
+    return default
+
+
+def reference_value(state: dict[str, dict[str, object]], sources: list[tuple[str, str]], default: str = "n/a") -> str:
+    for name, key in sources:
+        file_reference = is_reference_state(state, name)
+        for line in reversed(state_lines(state, name)):
+            record = parse_kv_record(line)
+            value = record.get(key, "")
+            if value and (file_reference or record_is_reference(record)):
+                return value
     return default
 
 
@@ -396,6 +465,24 @@ def render_summary_panel(title: str, items: list[tuple[str, object, str]]) -> st
         html.escape(title),
         "".join(rows),
     )
+
+
+def render_reference_summary_panel(title: str, items: list[tuple[str, object, str]]) -> str:
+    rows = []
+    for label, value, source in items:
+        rows.append(
+            "<article class='summary-item'><span>{}</span><strong>{}</strong><small>demo_reference:{}</small></article>".format(
+                html.escape(label),
+                html.escape(str(value)),
+                html.escape(source),
+            )
+        )
+    return (
+        "<section class='panel summary-panel' data-evidence-role='demo_reference'>"
+        "<h2>Reference Catalog: {}</h2>"
+        "<p><strong>Reference only.</strong> demo_expected values are not runtime pass or performance evidence.</p>"
+        "<div class='summary-grid'>{}</div></section>"
+    ).format(html.escape(title), "".join(rows))
 
 
 def parse_kv_record(line: str) -> dict[str, str]:
@@ -455,21 +542,47 @@ def key_value_rows(state: dict[str, dict[str, object]], names: tuple[str, ...], 
 def backend_case_narratives(state: dict[str, dict[str, object]]) -> list[dict[str, str]]:
     reports = {row.get("runner_report", ""): row for row in state_records(state, "rp_backend_exec", "runner_report")}
     rows: list[dict[str, str]] = []
-    for detail in state_records(state, "rp_backend_exec", "runner_detail"):
-        case = detail.get("runner_detail", "")
+    runtime_records = state_records(state, "rp_backend_exec", "runtime_case")
+    if runtime_records:
+        for record in runtime_records:
+            if (
+                record.get("evidence_role") != "runtime_verified"
+                or record.get("generation") != "runtime"
+                or record.get("status") != "verified"
+            ):
+                continue
+            case = record.get("runtime_case", "")
+            report = reports.get(case, {})
+            rows.append(
+                {
+                    "runner_narrative": case,
+                    "summary": "{}:{}:{}:verified".format(
+                        record.get("source", ""),
+                        record.get("source_bytes", ""),
+                        record.get("source_hash", ""),
+                    ),
+                    "plain_cost": report.get("plain_cost", ""),
+                    "agentos_replace": report.get("agentos_replace", ""),
+                    "next": "runtime_verified",
+                }
+            )
+        return rows
+
+    for reference in state_records(state, "rp_backend_exec", "reference_case"):
+        case = reference.get("reference_case", "")
         report = reports.get(case, {})
         rows.append(
             {
                 "runner_narrative": case,
                 "summary": "{}:{}:{}:{}".format(
-                    detail.get("req", ""),
-                    detail.get("obs", ""),
-                    detail.get("act", ""),
-                    detail.get("review", ""),
+                    reference.get("expected_input", ""),
+                    reference.get("expected_artifact", ""),
+                    reference.get("expected_outcome", ""),
+                    reference.get("status", ""),
                 ),
                 "plain_cost": report.get("plain_cost", ""),
                 "agentos_replace": report.get("agentos_replace", ""),
-                "next": report.get("status", ""),
+                "next": "reference_only",
             }
         )
     return rows
@@ -1544,14 +1657,14 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Decision", metric_value(state, [("rp_integrity", "decision")]), "rp_integrity"),
     ]
     coherence_items = [
-        ("Checks", metric_value(state, [("rp_coherence", "coherence_checks")]), "rp_coherence"),
-        ("Delivery", metric_value(state, [("rp_coherence", "delivery_checks")]), "rp_coherence"),
-        ("Run State", metric_value(state, [("rp_coherence", "run_state_checks")]), "rp_coherence"),
-        ("Lifecycle", metric_value(state, [("rp_coherence", "lifecycle_checks")]), "rp_coherence"),
-        ("Workflow Lint", metric_value(state, [("rp_coherence", "workflow_lint_checks")]), "rp_coherence"),
-        ("Tool Protocol", metric_value(state, [("rp_coherence", "tool_protocol_checks")]), "rp_coherence"),
-        ("Errors", metric_value(state, [("rp_coherence", "errors")]), "rp_coherence"),
-        ("Decision", metric_value(state, [("rp_coherence", "decision")]), "rp_coherence"),
+        ("Expected Checks", reference_value(state, [("rp_coherence", "coherence_checks")]), "rp_coherence"),
+        ("Expected Delivery", reference_value(state, [("rp_coherence", "delivery_checks")]), "rp_coherence"),
+        ("Expected Run State", reference_value(state, [("rp_coherence", "run_state_checks")]), "rp_coherence"),
+        ("Expected Lifecycle", reference_value(state, [("rp_coherence", "lifecycle_checks")]), "rp_coherence"),
+        ("Expected Workflow Lint", reference_value(state, [("rp_coherence", "workflow_lint_checks")]), "rp_coherence"),
+        ("Expected Tool Protocol", reference_value(state, [("rp_coherence", "tool_protocol_checks")]), "rp_coherence"),
+        ("Expected Errors", reference_value(state, [("rp_coherence", "errors")]), "rp_coherence"),
+        ("Reference Decision", reference_value(state, [("rp_coherence", "decision")]), "rp_coherence"),
     ]
     publication_items = [
         ("Checks", metric_value(state, [("rp_publication", "publication_checks")]), "rp_publication"),
@@ -1604,14 +1717,14 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Status", metric_value(state, [("rp_analysisres", "status")]), "rp_analysisres"),
     ]
     decision_support_items = [
-        ("Checks", metric_value(state, [("rp_decsupport", "decision_support_checks"), ("rp_agentcmp", "decision_support_checks")]), "rp_decsupport"),
-        ("Options", metric_value(state, [("rp_decsupport", "options"), ("rp_decopt", "options")]), "rp_decopt"),
-        ("Criteria", metric_value(state, [("rp_decsupport", "criteria"), ("rp_deccrit", "criteria")]), "rp_deccrit"),
-        ("Scores", metric_value(state, [("rp_decsupport", "scores"), ("rp_decscore", "scores")]), "rp_decscore"),
-        ("Packets", metric_value(state, [("rp_decsupport", "review_packets")]), "rp_decpacket"),
-        ("Selected", metric_value(state, [("rp_decsupport", "recommended_option"), ("rp_decpacket", "recommended_option")]), "rp_decsupport"),
-        ("Hybrid Score", metric_value(state, [("rp_decsupport", "weighted_score_agentos_ucore_hybrid")]), "rp_decsupport"),
-        ("Status", metric_value(state, [("rp_decsupport", "status")]), "rp_decsupport"),
+        ("Expected Checks", reference_value(state, [("rp_decsupport", "decision_support_checks"), ("rp_agentcmp", "decision_support_checks")]), "rp_decsupport"),
+        ("Reference Options", reference_value(state, [("rp_decsupport", "options"), ("rp_decopt", "options")]), "rp_decopt"),
+        ("Reference Criteria", reference_value(state, [("rp_decsupport", "criteria"), ("rp_deccrit", "criteria")]), "rp_deccrit"),
+        ("Reference Scores", reference_value(state, [("rp_decsupport", "scores"), ("rp_decscore", "scores")]), "rp_decscore"),
+        ("Reference Packets", reference_value(state, [("rp_decsupport", "review_packets")]), "rp_decpacket"),
+        ("Reference Selection", reference_value(state, [("rp_decsupport", "recommended_option"), ("rp_decpacket", "recommended_option")]), "rp_decsupport"),
+        ("Reference Hybrid Score", reference_value(state, [("rp_decsupport", "weighted_score_agentos_ucore_hybrid")]), "rp_decsupport"),
+        ("Evidence Role", "demo_reference", "rp_decsupport"),
     ]
     usable_research_items = [
         ("Checks", metric_value(state, [("rp_usable", "usable_research_checks"), ("rp_agentcmp", "usable_research_checks")]), "rp_usable"),
@@ -1693,7 +1806,7 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
     if file_name == "integrity.html":
         return render_summary_panel("Integrity Plane", integrity_items)
     if file_name == "coherence.html":
-        return render_summary_panel("Coherence Plane", coherence_items)
+        return render_reference_summary_panel("Coherence Plane", coherence_items)
     if file_name == "publication.html":
         return render_summary_panel("Publication Workflow", publication_items)
     if file_name == "systematic-review.html":
@@ -1705,7 +1818,7 @@ def render_page_summary(file_name: str, state: dict[str, dict[str, object]]) -> 
     if file_name == "analysis-results.html":
         return render_summary_panel("Analysis Results", analysis_results_items)
     if file_name == "decision-support.html":
-        return render_summary_panel("Decision Support", decision_support_items)
+        return render_reference_summary_panel("Decision Support", decision_support_items)
     if file_name == "usable-research.html":
         return render_summary_panel("Usable Research", usable_research_items)
     if file_name == "usable-project.html":
@@ -1801,12 +1914,12 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Report", metric_value(state, [("rp_integrity", "integrity_report")]), "rp_integrity"),
     ]
     coherence_detail_items = [
-        ("Delivery Contracts", metric_value(state, [("rp_coherence", "delivery_contracts")]), "rp_coherence"),
-        ("Run State Contracts", metric_value(state, [("rp_coherence", "run_state_contracts")]), "rp_coherence"),
-        ("Lifecycle Contracts", metric_value(state, [("rp_coherence", "lifecycle_contracts")]), "rp_coherence"),
-        ("Report Validation", metric_value(state, [("rp_coherence", "report_validation_checks")]), "rp_coherence"),
-        ("Agent Coordination", metric_value(state, [("rp_coherence", "agent_coordination_checks")]), "rp_coherence"),
-        ("Report", metric_value(state, [("rp_coherence", "coherence_report")]), "rp_coherence"),
+        ("Reference Delivery Contracts", reference_value(state, [("rp_coherence", "delivery_contracts")]), "rp_coherence"),
+        ("Reference Run State Contracts", reference_value(state, [("rp_coherence", "run_state_contracts")]), "rp_coherence"),
+        ("Reference Lifecycle Contracts", reference_value(state, [("rp_coherence", "lifecycle_contracts")]), "rp_coherence"),
+        ("Reference Report Validation", reference_value(state, [("rp_coherence", "report_validation_checks")]), "rp_coherence"),
+        ("Reference Agent Coordination", reference_value(state, [("rp_coherence", "agent_coordination_checks")]), "rp_coherence"),
+        ("Reference Report", reference_value(state, [("rp_coherence", "coherence_report")]), "rp_coherence"),
     ]
     publication_detail_items = [
         ("Checklist Items", metric_value(state, [("rp_pubplan", "checklist_items")]), "rp_pubplan"),
@@ -1827,13 +1940,12 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
         ("Package", metric_value(state, [("rp_package", "analysis_results")]), "rp_package"),
     ]
     decision_support_detail_items = [
-        ("Decision", metric_value(state, [("rp_decsupport", "decision"), ("rp_decpacket", "decision")]), "rp_decsupport"),
-        ("Target", metric_value(state, [("rp_decsupport", "target")]), "rp_decsupport"),
-        ("Recommended", metric_value(state, [("rp_decsupport", "recommended_option"), ("rp_decpacket", "recommended_option")]), "rp_decsupport"),
-        ("Option Scores", metric_value(state, [("rp_decpacket", "option_scores")]), "rp_decpacket"),
-        ("Evidence", metric_value(state, [("rp_decpacket", "evidence"), ("rp_decsupport", "evidence_sources")]), "rp_decpacket"),
-        ("Review Dashboard", metric_value(state, [("rp_review_dashboard", "subsection")]), "rp_review_dashboard"),
-        ("Package", metric_value(state, [("rp_package", "decision_support")]), "rp_package"),
+        ("Reference Decision", reference_value(state, [("rp_decsupport", "decision"), ("rp_decpacket", "decision")]), "rp_decsupport"),
+        ("Reference Target", reference_value(state, [("rp_decsupport", "target")]), "rp_decsupport"),
+        ("Reference Recommendation", reference_value(state, [("rp_decsupport", "recommended_option"), ("rp_decpacket", "recommended_option")]), "rp_decsupport"),
+        ("Reference Option Scores", reference_value(state, [("rp_decpacket", "option_scores")]), "rp_decpacket"),
+        ("Reference Evidence Catalog", reference_value(state, [("rp_decpacket", "evidence"), ("rp_decsupport", "evidence_sources")]), "rp_decpacket"),
+        ("Evidence Role", "demo_reference", "rp_decsupport"),
     ]
     usable_research_detail_items = [
         ("Entry", metric_value(state, [("rp_usable", "entry")]), "rp_usable"),
@@ -1903,13 +2015,13 @@ def render_detail_panel(file_name: str, state: dict[str, dict[str, object]]) -> 
     if file_name == "integrity.html":
         return render_summary_panel("Integrity Detail", integrity_detail_items)
     if file_name == "coherence.html":
-        return render_summary_panel("Coherence Detail", coherence_detail_items)
+        return render_reference_summary_panel("Coherence Detail", coherence_detail_items)
     if file_name == "publication.html":
         return render_summary_panel("Publication Detail", publication_detail_items)
     if file_name == "analysis-results.html":
         return render_summary_panel("Analysis Result Detail", analysis_results_detail_items)
     if file_name == "decision-support.html":
-        return render_summary_panel("Decision Support Detail", decision_support_detail_items)
+        return render_reference_summary_panel("Decision Support Detail", decision_support_detail_items)
     if file_name == "usable-research.html":
         return render_summary_panel("Usable Research Detail", usable_research_detail_items)
     if file_name == "usable-project.html":
@@ -3258,32 +3370,46 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 agentos_kernel_outputs(state),
             ),
             render_record_panel(
-                "Backend Runner Cases",
+                "Backend Reference Cases",
                 [
-                    ("Case", "runner_case"),
-                    ("Input", "input"),
-                    ("Artifact", "artifact"),
-                    ("Result", "result"),
-                    ("Input Check", "input_check"),
-                    ("Artifact Check", "artifact_check"),
-                    ("Attempts", "att"),
-                    ("Retry", "retry"),
-                    ("Ticks", "ticks"),
-                    ("Reason", "reason"),
+                    ("Case", "reference_case"),
+                    ("Expected Input", "expected_input"),
+                    ("Expected Artifact", "expected_artifact"),
+                    ("Expected Outcome", "expected_outcome"),
+                    ("Expected Attempts", "expected_attempts"),
+                    ("Expected Retry", "expected_retry"),
+                    ("Status", "status"),
                 ],
-                state_records(state, "rp_backend_exec", "runner_case"),
+                state_records(state, "rp_backend_exec", "reference_case"),
             ),
             render_record_panel(
-                "Backend Case Details",
+                "Backend Runtime Cases",
                 [
-                    ("Case", "runner_detail"),
-                    ("Source", "src"),
-                    ("Required", "req"),
-                    ("Observed", "obs"),
-                    ("Action", "act"),
-                    ("Review", "review"),
+                    ("Case", "runtime_case"),
+                    ("Source", "source"),
+                    ("Bytes", "source_bytes"),
+                    ("Hash", "source_hash"),
+                    ("Assertions", "assertions_passed"),
+                    ("Generation", "generation"),
+                    ("Status", "status"),
                 ],
-                state_records(state, "rp_backend_exec", "runner_detail"),
+                state_records(state, "rp_backend_exec", "runtime_case"),
+            ),
+            render_record_panel(
+                "Backend Runtime Receipt",
+                [
+                    ("Role", "evidence_role"),
+                    ("Executed", "runtime_cases_executed"),
+                    ("Verified", "runtime_cases_verified"),
+                    ("Assertions", "runtime_assertions_passed"),
+                    ("Digest", "runtime_source_digest"),
+                    ("Status", "status"),
+                ],
+                [
+                    row
+                    for row in state_records(state, "rp_backend_exec", "evidence_role")
+                    if "runtime_cases_verified" in row
+                ],
             ),
             render_record_panel(
                 "Backend Evidence Report",
@@ -3297,18 +3423,17 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 state_records(state, "rp_backend_exec", "runner_report"),
             ),
             render_record_panel(
-                "Backend Study Metrics",
+                "Backend Study Reference",
                 [
-                    ("Arm", "study_metric"),
-                    ("File Scans", "file_scans"),
-                    ("Context Trusted", "context_trusted"),
-                    ("Rebuild Steps", "rebuild_steps"),
-                    ("Batch Tools", "batch_tools"),
-                    ("Metadata Index", "metadata_index"),
-                    ("Detail Checks", "detail_checks"),
-                    ("Result", "result"),
+                    ("Arm", "reference_metric"),
+                    ("Expected File Scans", "expected_file_scans"),
+                    ("Expected Context Trusted", "expected_context_trusted"),
+                    ("Expected Rebuild Steps", "expected_rebuild_steps"),
+                    ("Expected Batch Tools", "expected_batch_tools"),
+                    ("Expected Metadata Index", "expected_metadata_index"),
+                    ("Status", "status"),
                 ],
-                state_records(state, "rp_study", "study_metric"),
+                state_records(state, "rp_study", "reference_metric"),
             ),
             render_record_panel(
                 "Backend Scenario Handoff",
@@ -3488,9 +3613,9 @@ def render_grouped_details(file_name: str, state: dict[str, dict[str, object]]) 
                 state_records(state, "rp_review_dashboard", "backend_review_evidence"),
             ),
             render_record_panel(
-                "Review Backend Actions",
-                [("Case", "backend_action_review"), ("Action", "action"), ("Review", "review"), ("Plain Cost", "plain_cost"), ("AgentOS Replace", "agentos_replace"), ("Status", "status")],
-                state_records(state, "rp_review_pack", "backend_action_review"),
+                "Review Backend Runtime",
+                [("Case", "backend_runtime_review"), ("Source", "source"), ("Bytes", "source_bytes"), ("Hash", "source_hash"), ("Assertions", "assertions"), ("Status", "status")],
+                state_records(state, "rp_review_pack", "backend_runtime_review"),
             ),
             render_record_panel(
                 "Review Pack Actions",
@@ -3813,7 +3938,15 @@ def action_evidence_prefixes(path: str, group: str) -> tuple[str, ...]:
             "package_index=",
         )
     if group == "compare":
-        return ("host_action_compare", "backend_runner", "study_metric=", "runner_case=")
+        return (
+            "host_action_compare",
+            "backend_runner",
+            "study_metric=",
+            "reference_metric=",
+            "runtime_case=",
+            "runner_case=",
+            "reference_case=",
+        )
     if group == "portability":
         return ("host_portability_", "host_action_portability_")
     if group == "inputs":
@@ -5103,6 +5236,9 @@ def make_service_handler(
                 return
             if path.startswith("/api/state/"):
                 name = unquote(path[len("/api/state/") :])
+                if name not in STATE_API_ALLOWLIST:
+                    self.send_json(404, {"error": "state_name_not_allowed", "name": name})
+                    return
                 state = load_state(state_dir)
                 item = state.get(name)
                 if not item:

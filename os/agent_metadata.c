@@ -16,6 +16,11 @@ static struct wait_queue txn_waiters;
 static char scheduler_token;
 static void *reload_owner;
 
+#define TXN_NOWAIT 0
+#define TXN_WAIT 1
+#define TXN_RELOCK 2
+#define TXN_EXTERNAL 3
+
 void
 agent_metadata_init(void)
 {
@@ -40,6 +45,76 @@ agent_metadata_txn_token(void)
 	return &scheduler_token;
 }
 
+static int
+agent_metadata_txn_acquire(int mode)
+{
+	struct proc *p = curr_proc();
+	void *token = agent_metadata_txn_token();
+	int scheduler_context = token == &scheduler_token;
+	uint64 ticket = 0;
+	int queued = 0;
+
+	if (mode == TXN_RELOCK && scheduler_context)
+		panic("scheduler metadata relock");
+	int enabled = intr_save();
+	if (mode == TXN_EXTERNAL) {
+		if (txn_owner != 0 || reload_owner != 0 ||
+		    (!scheduler_context &&
+		     txn_next_ticket != txn_serving_ticket))
+			goto unavailable;
+		txn_reserved_turn =
+			scheduler_context &&
+			txn_next_ticket != txn_serving_ticket;
+		goto take;
+	}
+	for (;;) {
+		if (txn_owner == token) {
+			txn_depth++;
+			goto acquired;
+		}
+		if (txn_owner == 0 &&
+		    (queued ? ticket : txn_next_ticket) ==
+			    txn_serving_ticket) {
+			txn_reserved_turn = 0;
+			if (queued)
+				txn_serving_ticket++;
+			goto take;
+		}
+		if (mode == TXN_NOWAIT || scheduler_context)
+			goto unavailable;
+		if (!queued) {
+			if (mode == TXN_WAIT && proc_thread_exit_requested())
+				goto unavailable;
+			ticket = txn_next_ticket++;
+			queued = 1;
+		}
+		if (p != 0)
+			p->agent_meta_txn_wait_count++;
+		if (wait_queue_sleep_irq_uninterruptible(&txn_waiters) !=
+		    WAIT_QUEUE_OK)
+			panic("%s", mode == TXN_RELOCK ? "metadata relock failed" :
+			      "metadata transaction wait failed");
+		if (mode == TXN_RELOCK) {
+			intr_restore(enabled);
+			enabled = intr_save();
+		}
+	}
+take:
+	txn_owner = token;
+	txn_depth = 1;
+	txn_work_records = 0;
+acquired:
+	if (mode == TXN_WAIT && queued && proc_thread_exit_requested()) {
+		agent_metadata_txn_unlock();
+		goto unavailable;
+	}
+	intr_restore(enabled);
+	return 1;
+unavailable:
+	intr_restore(enabled);
+	return 0;
+}
+
 /*
  * Process threads enter the metadata gate in ticket order.  The scheduler may
  * take one bounded maintenance turn while idle, but process callbacks may not
@@ -48,84 +123,21 @@ agent_metadata_txn_token(void)
 int
 agent_metadata_txn_lock(int wait)
 {
-	struct proc *p = curr_proc();
-	void *token = agent_metadata_txn_token();
-	int scheduler_context = token == &scheduler_token;
-	int enabled = intr_save();
-	uint64 ticket = 0;
-	int queued = 0;
-
-	for (;;) {
-		if (txn_owner == token) {
-			txn_depth++;
-			intr_restore(enabled);
-			return 1;
-		}
-		if (txn_owner == 0 &&
-		    ((!queued && txn_next_ticket == txn_serving_ticket) ||
-		     (queued && ticket == txn_serving_ticket))) {
-			txn_owner = token;
-			txn_depth = 1;
-			txn_work_records = 0;
-			txn_reserved_turn = 0;
-			if (queued)
-				txn_serving_ticket++;
-			if (queued && proc_thread_exit_requested()) {
-				agent_metadata_txn_unlock();
-				intr_restore(enabled);
-				return 0;
-			}
-			intr_restore(enabled);
-			return 1;
-		}
-		if (!wait || scheduler_context) {
-			intr_restore(enabled);
-			return 0;
-		}
-		if (!queued) {
-			if (proc_thread_exit_requested()) {
-				intr_restore(enabled);
-				return 0;
-			}
-			ticket = txn_next_ticket++;
-			queued = 1;
-		}
-		if (p != 0)
-			p->agent_meta_txn_wait_count++;
-		if (wait_queue_sleep_irq_uninterruptible(&txn_waiters) !=
-		    WAIT_QUEUE_OK)
-			panic("metadata transaction wait failed");
-	}
+	return agent_metadata_txn_acquire(wait ? TXN_WAIT : TXN_NOWAIT);
 }
 
 int
 agent_metadata_txn_try_external(void)
 {
-	void *token = agent_metadata_txn_token();
-	int scheduler_context = token == &scheduler_token;
-	int enabled = intr_save();
-
-	if (txn_owner != 0 || reload_owner != 0 ||
-	    (!scheduler_context && txn_next_ticket != txn_serving_ticket)) {
-		intr_restore(enabled);
-		return 0;
-	}
-	txn_owner = token;
-	txn_depth = 1;
-	txn_work_records = 0;
-	txn_reserved_turn =
-		scheduler_context && txn_next_ticket != txn_serving_ticket;
-	intr_restore(enabled);
-	return 1;
+	return agent_metadata_txn_acquire(TXN_EXTERNAL);
 }
 
 void
 agent_metadata_txn_unlock(void)
 {
-	void *token = agent_metadata_txn_token();
 	int enabled = intr_save();
 
-	if (txn_owner != token || txn_depth <= 0 ||
+	if (!agent_metadata_txn_owned(0) ||
 	    (txn_depth == 1 && txn_projection_pending))
 		panic("Agent metadata transaction invariant");
 	txn_depth--;
@@ -157,54 +169,15 @@ void agent_metadata_txn_projection_require_idle(void) {
 void
 agent_metadata_txn_relock_uninterruptible(void)
 {
-	struct proc *p = curr_proc();
-	void *token = agent_metadata_txn_token();
-	uint64 ticket = 0;
-	int queued = 0;
-
-	if (token == &scheduler_token)
-		panic("scheduler metadata relock");
-	for (;;) {
-		int enabled = intr_save();
-
-		if (txn_owner == token) {
-			txn_depth++;
-			intr_restore(enabled);
-			return;
-		}
-		if (txn_owner == 0 &&
-		    ((!queued && txn_next_ticket == txn_serving_ticket) ||
-		     (queued && ticket == txn_serving_ticket))) {
-			txn_owner = token;
-			txn_depth = 1;
-			txn_work_records = 0;
-			txn_reserved_turn = 0;
-			if (queued)
-				txn_serving_ticket++;
-			intr_restore(enabled);
-			return;
-		}
-		if (!queued) {
-			ticket = txn_next_ticket++;
-			queued = 1;
-		}
-		if (p != 0)
-			p->agent_meta_txn_wait_count++;
-		if (wait_queue_sleep_irq_uninterruptible(&txn_waiters) !=
-		    WAIT_QUEUE_OK)
-			panic("metadata relock failed");
-		intr_restore(enabled);
-	}
+	(void)agent_metadata_txn_acquire(TXN_RELOCK);
 }
 
 void
 agent_metadata_txn_work_charge(uint records)
 {
-	void *token = agent_metadata_txn_token();
-
-	if (txn_owner != token || txn_depth <= 0)
+	if (!agent_metadata_txn_owned(0))
 		panic("metadata work outside transaction");
-	if (token == &scheduler_token)
+	if (agent_metadata_txn_token() == &scheduler_token)
 		return;
 	while (records > 0) {
 		uint room = AGENT_META_TXN_WORK_GRANULE - txn_work_records;
@@ -220,56 +193,64 @@ agent_metadata_txn_work_charge(uint records)
 	}
 }
 
-int
-agent_metadata_txn_checkpoint_unlocked(void)
+static struct bio_checkpoint_result
+agent_metadata_txn_checkpoint_mode(int cleanup)
 {
-	void *token = agent_metadata_txn_token();
-	int depth;
-	int checkpoint;
-
-	if (txn_owner != token || txn_depth <= 0 || txn_projection_pending)
+	if (!agent_metadata_txn_owned(0) || txn_projection_pending)
 		panic("metadata checkpoint invariant");
-	if (token == &scheduler_token)
+	if (agent_metadata_txn_token() == &scheduler_token)
 		return bio_request_checkpoint();
-	depth = txn_depth;
+	int depth = txn_depth;
 	for (int i = 0; i < depth; i++)
 		agent_metadata_txn_unlock();
-	checkpoint = bio_request_checkpoint();
+	struct bio_checkpoint_result checkpoint =
+		cleanup ? bio_request_checkpoint_cleanup() :
+			  bio_request_checkpoint();
 	for (int i = 0; i < depth; i++)
 		agent_metadata_txn_relock_uninterruptible();
 	return checkpoint;
 }
 
+struct bio_checkpoint_result agent_metadata_txn_checkpoint_unlocked(void)
+{
+	return agent_metadata_txn_checkpoint_mode(0);
+}
+
+struct bio_checkpoint_result
+agent_metadata_txn_checkpoint_cleanup_unlocked(void)
+{
+	return agent_metadata_txn_checkpoint_mode(1);
+}
+
 int
 agent_metadata_txn_owned(int exact_depth)
 {
-	void *token = agent_metadata_txn_token();
-
-	return txn_owner == token && txn_depth > 0 &&
+	return txn_owner == agent_metadata_txn_token() && txn_depth > 0 &&
 	       (exact_depth <= 0 || txn_depth == exact_depth);
+}
+
+void __attribute__((noinline))
+agent_metadata_txn_require_owned(int exact_depth, const char *reason)
+{
+	if (!agent_metadata_txn_owned(exact_depth))
+		panic("%s", reason);
 }
 
 int
 agent_metadata_txn_depth(void)
 {
-	if (!agent_metadata_txn_owned(0))
-		return 0;
-	return txn_depth;
+	return agent_metadata_txn_owned(0) ? txn_depth : 0;
 }
 
 void
 agent_metadata_proc_runtime_snapshot(
 	struct proc *p, struct agent_metadata_runtime_snapshot *snapshot)
 {
-	int enabled;
-
 	if (snapshot == 0)
 		return;
 	memset(snapshot, 0, sizeof(*snapshot));
-	enabled = intr_save();
-	if (p == 0)
-		goto out;
-	for (int tid = 0; tid < NTHREAD; tid++) {
+	int enabled = intr_save();
+	for (int tid = 0; p != 0 && tid < NTHREAD; tid++) {
 		struct thread *t = &p->threads[tid];
 
 		if (txn_owner == t)
@@ -280,43 +261,34 @@ agent_metadata_proc_runtime_snapshot(
 		    t->wait_reason == WAIT_REASON_AGENT_META)
 			snapshot->metadata_txn_waiters++;
 	}
-out:
 	intr_restore(enabled);
 }
 
 int
 agent_metadata_reload_available(void)
 {
-	void *token = agent_metadata_txn_token();
-
-	return reload_owner == 0 || reload_owner == token;
+	return reload_owner == 0 || agent_metadata_reload_is_current();
 }
 
 int
 agent_metadata_reload_is_current(void)
 {
-	void *token = agent_metadata_txn_token();
-
-	return reload_owner == token;
+	return reload_owner == agent_metadata_txn_token();
 }
 
 int
 agent_metadata_reload_claim(void)
 {
-	void *token = agent_metadata_txn_token();
-
-	if (reload_owner != 0 && reload_owner != token)
+	if (!agent_metadata_reload_available())
 		return 0;
-	reload_owner = token;
+	reload_owner = agent_metadata_txn_token();
 	return 1;
 }
 
 void
 agent_metadata_reload_release(void)
 {
-	void *token = agent_metadata_txn_token();
-
-	if (reload_owner != token)
+	if (!agent_metadata_reload_is_current())
 		panic("metadata reload owner");
 	reload_owner = 0;
 }

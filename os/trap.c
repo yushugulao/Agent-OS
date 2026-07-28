@@ -1,6 +1,7 @@
 #include "trap.h"
 #include "agent.h"
 #include "bio.h"
+#include "console.h"
 #include "defs.h"
 #include "loader.h"
 #include "kernel_work.h"
@@ -47,7 +48,10 @@ void devintr(uint64 cause)
 	int irq;
 	switch (cause) {
 	case SupervisorTimer:
+		kernel_work_timer_advance();
 		set_next_timer();
+		console_input_tick();
+		virtio_disk_tick();
 		bio_policy_tick();
 		agent_tick();
 		// if form user, allow yield
@@ -90,6 +94,15 @@ void usertrap()
 	uint64 cause = r_scause();
 	if (cause & (1ULL << 63)) {
 		devintr(cause & 0xff);
+		/*
+		 * Timer-driven metadata work must enter I/O from a real, dispatched
+		 * thread. One pending checkpoint per user interrupt also guarantees
+		 * progress for CPU-bound processes without running I/O on the idle
+		 * scheduler stack.
+		 */
+		kernel_work_begin_background();
+		agent_background_checkpoint();
+		kernel_work_end_background();
 	} else {
 		switch (cause) {
 		case UserEnvCall:

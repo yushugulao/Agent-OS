@@ -165,7 +165,7 @@ static void run_configured_child(void)
 	exit(0);
 }
 
-static void check_configurable_policy(void)
+static __attribute__((noinline)) void check_configurable_policy(void)
 {
 	int pid;
 	int status = 0;
@@ -196,7 +196,7 @@ static void check_configurable_policy(void)
 	check(status == 0, "configured child status");
 }
 
-static void check_event_priority(void)
+static __attribute__((noinline)) void check_event_priority(void)
 {
 	struct agent_info before;
 	struct agent_info after;
@@ -241,7 +241,7 @@ static void check_event_priority(void)
 	       n, (int)latest->reason_flags, (int)latest->score);
 }
 
-static void check_fairness_counters(void)
+static __attribute__((noinline)) void check_fairness_counters(void)
 {
 	struct agent_info before;
 	struct agent_info after;

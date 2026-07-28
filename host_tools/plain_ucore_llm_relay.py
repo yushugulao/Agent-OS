@@ -281,24 +281,27 @@ def conclusion_spec_by_route(route: str) -> dict[str, str] | None:
     return None
 
 
-def backend_action_review_lines(state_dir: Path) -> list[str]:
-    details: list[dict[str, str]] = []
-    reports: dict[str, dict[str, str]] = {}
+def backend_runtime_review_lines(state_dir: Path) -> list[str]:
+    runtime_records: list[dict[str, str]] = []
     for raw in read_text(state_dir / "rp_backend_exec").splitlines():
         record = parse_kv_line(raw)
-        if "runner_detail" in record:
-            details.append(record)
-        if "runner_report" in record:
-            reports[record["runner_report"]] = record
+        if (
+            record.get("evidence_role") == "runtime_verified"
+            and record.get("generation") == "runtime"
+            and record.get("status") == "verified"
+            and record.get("assertions_executed") == "1"
+            and record.get("assertions_passed") == "1"
+            and record.get("runtime_case")
+        ):
+            runtime_records.append(record)
     lines: list[str] = []
-    for detail in details:
-        case = detail.get("runner_detail", "")
-        report = reports.get(case, {})
+    for record in runtime_records:
         lines.append(
-            "backend_action_review="
-            f"{line_value(case)};action={line_value(detail.get('act', ''))};review={line_value(detail.get('review', ''))};"
-            f"plain_cost={line_value(report.get('plain_cost', ''))};agentos_replace={line_value(report.get('agentos_replace', ''))};"
-            f"status={line_value(report.get('status', ''))}"
+            "backend_runtime_review="
+            f"{line_value(record['runtime_case'])};source={line_value(record.get('source', ''))};"
+            f"source_bytes={line_value(record.get('source_bytes', ''))};"
+            f"source_hash={line_value(record.get('source_hash', ''))};"
+            "assertions=1/1;status=verified"
         )
     return lines
 
@@ -710,7 +713,7 @@ def append_relay_state(out_dir: Path, requests: list[RelayRequest], responses: l
         out_dir / "rp_review_pack",
         "backend_evidence_review=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;source=rp_review_dashboard;status=ready",
     )
-    for line in backend_action_review_lines(out_dir):
+    for line in backend_runtime_review_lines(out_dir):
         append_line(out_dir / "rp_review_pack", line)
     for line in review_handoff_lines(out_dir):
         append_line(out_dir / "rp_review_pack", line)

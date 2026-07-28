@@ -20,6 +20,10 @@ build_case() {
 	local prefix="${tree:+${tree}/}"
 	local user_dir="${prefix}user"
 	local apps=("${TMPDIR_REAP}/${tag}-user-target/bin/procreap_ucore")
+	local mkfs_sources=("${prefix}nfs/fs.c")
+	if [[ -z "${tree}" ]]; then
+		mkfs_sources+=(nfs/host_image_snapshot.c)
+	fi
 
 	make -C "${user_dir}" \
 		TOOLPREFIX="${TOOLPREFIX}" CHAPTER=proc_reap \
@@ -29,7 +33,7 @@ build_case() {
 	if [[ -z "${tree}" ]]; then
 		apps+=("${TMPDIR_REAP}/${tag}-user-target/bin/procreap_agent_ucore")
 	fi
-	cc "${prefix}nfs/fs.c" -o "${TMPDIR_REAP}/${tag}-mkfs"
+	cc "${mkfs_sources[@]}" -o "${TMPDIR_REAP}/${tag}-mkfs"
 	"${TMPDIR_REAP}/${tag}-mkfs" "${TMPDIR_REAP}/${tag}.img" \
 		"${apps[@]}"
 	if [[ -n "${tree}" ]]; then

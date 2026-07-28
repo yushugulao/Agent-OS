@@ -11,11 +11,12 @@
 | 1 | [../../README.md](../../README.md) | 项目概览、构建运行、当前完成状态 |
 | 2 | [design.md](design.md) | 主设计文档：架构、模块、运行视图、关键决策、当前范围和取舍 |
 | 3 | [requirements-traceability.md](requirements-traceability.md) | 赛题要求到实现位置、测试证据和文档材料的对应表 |
-| 4 | [api.md](api.md) | 系统调用、Agent ABI、self-only workflow lifecycle 观测、工具协议和错误语义 |
-| 5 | [security-hardening.md](security-hardening.md) | 安全威胁、可信执行、文件安全域、统一 teardown、生命周期和资源韧性设计 |
-| 6 | [verification.md](verification.md) | 验证计划、Reader E2E、16-case Agent 套件、独立 teardown race、测试覆盖和性能数据摘要 |
-| 7 | [testing-details.md](testing-details.md) | Agent 功能、可信映像、VFS、安全约束、资源耗尽和进程生命周期测试的逐项说明 |
-| 8 | [scenario-script.md](scenario-script.md) | 综合场景运行脚本 |
+| 4 | [final-hardening-matrix.md](final-hardening-matrix.md) | 终审 17 项问题的机制、测试、限制和最终证据状态矩阵 |
+| 5 | [api.md](api.md) | 系统调用、Agent ABI、self-only workflow lifecycle 观测、工具协议和错误语义 |
+| 6 | [security-hardening.md](security-hardening.md) | 安全威胁、可信执行、文件安全域、统一 teardown、生命周期和资源韧性设计 |
+| 7 | [verification.md](verification.md) | 验证计划、Reader E2E、18-case Agent 套件、独立持久化/故障/teardown 专项、测试覆盖和性能数据摘要 |
+| 8 | [testing-details.md](testing-details.md) | Agent 功能、可信映像、VFS、安全约束、资源耗尽和进程生命周期测试的逐项说明 |
+| 9 | [scenario-script.md](scenario-script.md) | 综合场景运行脚本 |
 
 ## 详细附录
 
@@ -41,7 +42,8 @@
 - 用户态/内核态接口分工和结构体布局以 [api.md](api.md) 为准。
 - 通用安全修复与 AgentOS 专属安全机制的分工以 [security-hardening.md](security-hardening.md) 为准。
 - 赛题完成度判断以 [requirements-traceability.md](requirements-traceability.md) 和 [verification.md](verification.md) 共同为准。
+- 当前终审问题及发布阻塞以 [final-hardening-matrix.md](final-hardening-matrix.md) 为准；其中 E0/E1 不得写成当前 HEAD 的 QEMU 或最终发布通过。
 - 新增功能需要同步更新对应设计说明、API/ABI、验证记录和示例脚本。
 - `test-record.md` 保留测试输出摘要，不替代验证结论。
 - 模块列表、自测集合和增长阈值以 `ci/kernel-budgets.json` 及对应 checker 的版本化注册集合为准；文档不复制会随拆分变化的固定计数。
-- 16-case Agent 套件与 `workflow_teardown_race_ucore` 独立专项分别记账，不把后者写成第 17 个 Agent case。
+- 18-case Agent 套件与 physical/metadata recovery/observation recovery/VirtIO/workflow teardown 等独立专项分别记账，不把这些机制 runner 混入 Agent case 数量。

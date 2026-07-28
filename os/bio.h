@@ -9,12 +9,39 @@
 struct proc;
 struct thread;
 
-#define BIO_CHECKPOINT_INTERRUPTED (-1)
-#define BIO_CHECKPOINT_DEFERRED (-2)
+enum bio_checkpoint_state {
+	BIO_CHECKPOINT_READY = 0,
+	BIO_CHECKPOINT_DEFERRED,
+	BIO_CHECKPOINT_INTERRUPTED,
+};
+
+/* Keep scheduling control out of integer device/filesystem error domains. */
+struct bio_checkpoint_result {
+	enum bio_checkpoint_state state;
+};
+
+static inline struct bio_checkpoint_result
+bio_checkpoint_make(enum bio_checkpoint_state state)
+{
+	return (struct bio_checkpoint_result){ .state = state };
+}
+
+static inline int
+bio_checkpoint_should_stop(struct bio_checkpoint_result result)
+{
+	return result.state != BIO_CHECKPOINT_READY;
+}
+
+#if defined(__GNUC__)
+#define BIO_MUST_CHECK __attribute__((warn_unused_result))
+#else
+#define BIO_MUST_CHECK
+#endif
 
 struct buf {
 	int valid; // has data been read from disk?
 	int disk; // does disk "own" buf?
+	int disk_result; // result of the most recent device transfer
 	uint dev;
 	uint blockno;
 	uint refcnt;
@@ -34,10 +61,12 @@ struct buf {
 };
 
 void binit(void);
-struct buf *bread(uint, uint);
+int bread(uint, uint, struct buf **) BIO_MUST_CHECK;
+int bread_device(uint, uint, struct buf **) BIO_MUST_CHECK;
 void brelse(struct buf *);
-void bwrite(struct buf *);
-void bclaim(struct buf *);
+int bwrite(struct buf *) BIO_MUST_CHECK;
+int bio_durable_flush(void) BIO_MUST_CHECK;
+int bclaim(struct buf *) BIO_MUST_CHECK;
 void bpin(struct buf *);
 void bunpin(struct buf *);
 
@@ -45,10 +74,12 @@ void bio_policy_start(void);
 void bio_policy_tick(void);
 int bio_request_begin_current(void);
 int bio_request_begin_current_cleanup(void);
-int bio_request_checkpoint(void);
-int bio_request_checkpoint_cleanup(void);
-int bio_request_checkpoint_quiescent(void);
-int bio_request_checkpoint_quiescent_cleanup(void);
+struct bio_checkpoint_result bio_request_checkpoint(void) BIO_MUST_CHECK;
+struct bio_checkpoint_result bio_request_checkpoint_cleanup(void)
+	BIO_MUST_CHECK;
+struct bio_checkpoint_result bio_request_checkpoint_quiescent(void)
+	BIO_MUST_CHECK;
+int bio_request_settle_quiescent_cleanup(void) BIO_MUST_CHECK;
 int bio_request_end_current(int);
 int bio_request_end_current_cleanup(void);
 void bio_request_abort_thread(struct thread *);
@@ -58,7 +89,12 @@ int bio_background_begin(uint);
 void bio_background_end(void);
 int bio_background_active(uint);
 void bio_current_sponsor(uint *, uint *);
-void bio_account_transfer(uint, uint, int);
+enum bio_transfer_type {
+	BIO_TRANSFER_READ = 0,
+	BIO_TRANSFER_WRITE,
+	BIO_TRANSFER_FLUSH,
+};
+void bio_account_transfer(uint, uint, enum bio_transfer_type, int);
 uint bio_current_owner(void);
 int bio_principal_bind(uint, struct resource_account_handle);
 int bio_scope_acquire(uint, struct resource_account_handle);

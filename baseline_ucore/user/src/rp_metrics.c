@@ -88,7 +88,7 @@ int main(void)
 	if (!rp_file_contains("rp_decisions", "decisions=8")) return 1;
 	if (!rp_file_contains("rp_handoff", "handoffs=6")) return 1;
 	if (!rp_file_contains("rp_agent_run", "agent_messages=21")) return 1;
-	if (!rp_file_contains("rp_backend", "cases=7")) return 1;
+	if (!rp_file_contains("rp_backend", "reference_cases=7")) return 1;
 	if (!rp_file_contains("rp_consistency", "state_relation=passed")) return 1;
 	if (!rp_file_contains("rp_consistency", "coherence_checks=9")) return 1;
 	if (!rp_file_contains("rp_sreg", "samples=8")) return 1;
@@ -448,6 +448,9 @@ int main(void)
 		return 1;
 	}
 	if (!rp_write_file("rp_agentcmp",
+			   "evidence_file_role=demo_reference\n"
+			   "evidence_file_generation=demo_expected\n"
+			   "evidence_file_status=reference_ready\n"
 			   "case=user_on_plain_ucore\n"
 			   "status=ready\n"
 			   "coherence_checks=9\n"

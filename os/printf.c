@@ -3,27 +3,25 @@
 #include "defs.h"
 static char digits[] = "0123456789abcdef";
 
-static void printint(int xx, int base, int sign)
+static void printint(unsigned long long value, int base, int negative)
 {
-	char buf[16];
+	char buf[20];
 	int i;
-	uint x;
 
-	if (sign && (sign = xx < 0))
-		x = -xx;
-	else
-		x = xx;
-
+	if (negative)
+		consputc('-');
 	i = 0;
 	do {
-		buf[i++] = digits[x % base];
-	} while ((x /= base) != 0);
-
-	if (sign)
-		buf[i++] = '-';
+		buf[i++] = digits[value % (unsigned)base];
+	} while ((value /= (unsigned)base) != 0);
 
 	while (--i >= 0)
 		consputc(buf[i]);
+}
+
+static int integer_conversion(int c)
+{
+	return c == 'd' || c == 'u' || c == 'x';
 }
 
 static void printptr(uint64 x)
@@ -35,11 +33,11 @@ static void printptr(uint64 x)
 		consputc(digits[x >> (sizeof(uint64) * 8 - 4)]);
 }
 
-// Print to the console. only understands %d, %x, %p, %s.
+// Print to the console. Integer formats support the default, l, and ll widths.
 void printf(char *fmt, ...)
 {
 	va_list ap;
-	int i, c;
+	int i, c, length;
 	char *s;
 
 	if (fmt == 0)
@@ -51,16 +49,50 @@ void printf(char *fmt, ...)
 			consputc(c);
 			continue;
 		}
+		length = 0;
 		c = fmt[++i] & 0xff;
 		if (c == 0)
 			break;
+		if (c == 'l') {
+			if (fmt[i + 1] == 'l' &&
+			    integer_conversion(fmt[i + 2] & 0xff)) {
+				length = 2;
+				i += 2;
+				c = fmt[i] & 0xff;
+			} else if (integer_conversion(fmt[i + 1] & 0xff)) {
+				length = 1;
+				c = fmt[++i] & 0xff;
+			}
+		}
 		switch (c) {
-		case 'd':
-			printint(va_arg(ap, int), 10, 1);
+		case 'd': {
+			long long value;
+			int negative;
+
+			if (length == 0)
+				value = va_arg(ap, int);
+			else if (length == 1)
+				value = va_arg(ap, long);
+			else
+				value = va_arg(ap, long long);
+			negative = value < 0;
+			printint(negative ? 0ULL - (unsigned long long)value :
+				 (unsigned long long)value, 10, negative);
 			break;
-		case 'x':
-			printint(va_arg(ap, int), 16, 1);
+		}
+		case 'u':
+		case 'x': {
+			unsigned long long value;
+
+			if (length == 0)
+				value = va_arg(ap, unsigned int);
+			else if (length == 1)
+				value = va_arg(ap, unsigned long);
+			else
+				value = va_arg(ap, unsigned long long);
+			printint(value, c == 'x' ? 16 : 10, 0);
 			break;
+		}
 		case 'p':
 			printptr(va_arg(ap, uint64));
 			break;
@@ -76,8 +108,11 @@ void printf(char *fmt, ...)
 		default:
 			// Print unknown % sequence to draw attention.
 			consputc('%');
+			while (length-- > 0)
+				consputc('l');
 			consputc(c);
 			break;
 		}
 	}
+	va_end(ap);
 }

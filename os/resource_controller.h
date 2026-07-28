@@ -14,7 +14,15 @@ enum resource_kind {
 	RESOURCE_FS_INODE,
 	RESOURCE_BUFFER_CACHE,
 	RESOURCE_AGENT_STATE_PAGE,
+	RESOURCE_PHYSICAL_PAGE,
 	RESOURCE_KIND_COUNT,
+};
+
+enum resource_kind_attribute {
+	/* Counter ownership may move without moving an allocator-owned object. */
+	RESOURCE_KIND_COUNT_TRANSFERABLE = 1U << 0,
+	/* The allocator's concrete pool/class provenance must move with the object. */
+	RESOURCE_KIND_POOL_AFFINE = 1U << 1,
 };
 
 enum resource_account_kind {
@@ -49,6 +57,19 @@ struct resource_request {
 
 struct resource_account_limits {
 	uint64 class_limit[RESOURCE_CHARGE_CLASS_COUNT][RESOURCE_KIND_COUNT];
+};
+
+/* One-lock view of one resource kind in an account. */
+struct resource_account_kind_snapshot {
+	struct resource_account_handle handle;
+	enum resource_account_state state;
+	enum resource_account_kind account_kind;
+	uint charge_grants;
+	uint members;
+	uint64 external_id;
+	uint64 limit[RESOURCE_CHARGE_CLASS_COUNT];
+	uint64 used[RESOURCE_CHARGE_CLASS_COUNT];
+	uint64 pending[RESOURCE_CHARGE_CLASS_COUNT];
 };
 
 /*
@@ -114,7 +135,12 @@ struct resource_rate_snapshot {
 };
 
 void resource_controller_init(void);
+uint resource_kind_attributes(enum resource_kind);
 int resource_policy_configure(enum resource_kind, uint64, uint64, uint64);
+int resource_policy_guarantee_reserved(enum resource_kind);
+#ifdef PHYSICAL_PAGE_TEST_HOOKS
+int resource_policy_reserved_snapshot(enum resource_kind, uint64 *, uint64 *);
+#endif
 
 struct resource_account_handle resource_account_none(void);
 int resource_account_handle_valid(struct resource_account_handle);
@@ -173,6 +199,9 @@ uint64 resource_account_class_usage(struct resource_account_handle,
 				    enum resource_kind);
 uint64 resource_account_pending(struct resource_account_handle,
 				enum resource_kind);
+int resource_account_kind_snapshot(struct resource_account_handle,
+				   enum resource_kind,
+				   struct resource_account_kind_snapshot *);
 
 struct resource_rate_lease_handle resource_rate_lease_none(void);
 int resource_rate_lease_valid(struct resource_rate_lease_handle);

@@ -17,7 +17,7 @@ int main(void)
 	ok = ok && require_token("rp_package", "latest_delivery_status=ready");
 	ok = ok && require_token("rp_report_text", "report_source=workflow");
 	ok = ok && require_token("rp_llm_guard", "secrets_in_ucore=0");
-	ok = ok && require_token("rp_backend_exec", "status=ready");
+	ok = ok && require_token("rp_backend_exec", "runtime_claim_protocol=source-bound-v1");
 	ok = ok && require_token("rp_agentos_mainflow", "context_trusted=kernel_shadow");
 	ok = ok && require_token("rp_agentos_kernel", "agent_run=echo");
 	ok = ok && require_token("rp_agentos_package", "package_trace=kernel_provenance");
@@ -25,6 +25,8 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_coherence",
+			   "evidence_file_role=demo_reference\n"
+			   "evidence_file_generation=demo_expected\n"
 			   "service=coherence-plane\n"
 			   "project=lab-gene-x\n"
 			   "run_id=RUN-042\n"
@@ -102,15 +104,15 @@ int main(void)
 			   "agent_coordination=recovery_path;source=rp_retry_plan;target=rp_runbooks;result=pass;status=ready\n"
 			   "coherence_report=coherence-report:RUN-042;checks=40;errors=0;warnings=0;status=ready\n"
 			   "agentos_adaptation=kernel_run_state_views,kernel_tool_contract_table,kernel_delivery_metadata,kernel_agent_coordination_trace;evidence=rp_agentos_mainflow,rp_agentos_kernel,rp_agentos_package,rp_agentos_collab_ack;result=observed;status=ready\n"
-			   "status=ready\n")) {
+			   "evidence_file_status=reference_ready\n")) {
 		return 1;
 	}
 
-	if (!rp_append_file("rp_web_bundle", "coherence_plane=rp_coherence;checks=40;errors=0;status=ready")) return 1;
-	if (!rp_append_file("rp_review_dashboard", "subsection=coherence_plane;source=rp_coherence;checks=40;errors=0;result=passed;status=ready")) return 1;
+	if (!rp_append_file("rp_web_bundle", "evidence_role=demo_reference;catalog_generation=demo_expected;coherence_plane=rp_coherence;checks=40;errors=0;status=reference_ready")) return 1;
+	if (!rp_append_file("rp_review_dashboard", "evidence_role=demo_reference;catalog_generation=demo_expected;subsection=coherence_plane;source=rp_coherence;checks=40;errors=0;reference_result=expected_pass;status=reference_ready")) return 1;
 	if (!rp_append_file("rp_opsboard", "handoff=coherence-plane->operations;artifact=rp_coherence;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "coherence_plane_checks=40;delivery=7;run_state=7;lifecycle=6;workflow_lint=5;tool_protocol=5;report_validation=5;agent_coordination=3;agentos_replacements=4;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "coherence_kernel_binding=run_state_views,tool_contract_table,delivery_metadata,agent_coordination_trace;source=rp_coherence;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "evidence_role=demo_reference;catalog_generation=demo_expected;coherence_plane_checks=40;delivery=7;run_state=7;lifecycle=6;workflow_lint=5;tool_protocol=5;report_validation=5;agent_coordination=3;agentos_replacements=4;status=reference_ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "evidence_role=demo_reference;catalog_generation=demo_expected;coherence_kernel_binding=run_state_views,tool_contract_table,delivery_metadata,agent_coordination_trace;source=rp_coherence;status=reference_ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=coherenceplane;msg=coherence-plane;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=coherence.delivery_check")) return 1;
 	if (!rp_append_file("rp_tool", "tool=coherence.run_state_check")) return 1;
@@ -122,6 +124,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=coherence.export_report")) return 1;
 	if (!rp_append_status("coherenceplane=ready")) return 1;
 
-	printf("rp_coherenceplane: checks=40 delivery=7 run_state=7 lifecycle=6 workflow_lint=5 tool_protocol=5 report_validation=5 status=ready\n");
+	printf("rp_coherenceplane: evidence_role=demo_reference catalog_generation=demo_expected checks=40 status=reference_ready\n");
 	return 0;
 }

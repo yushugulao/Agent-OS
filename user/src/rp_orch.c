@@ -1,6 +1,9 @@
 #include <agent.h>
 #include <exec_policy_manifest.h>
 #include <research_platform_state.h>
+#include <rp_evidence.h>
+#include <rp_launch_attestation.h>
+#include <rp_program_manifest.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -13,85 +16,27 @@ struct program_launch_policy {
 
 #define RP_WORKFLOW_WORKER \
 	(AGENT_CAP_CONTENT_READ | AGENT_CAP_ARTIFACT_WRITE)
-#define RP_PROGRAM(name) { name, RP_WORKFLOW_WORKER }
+#define RP_PROGRAM(name) { name, RP_WORKFLOW_WORKER },
 static const struct program_launch_policy PROGRAMS[] = {
-	RP_PROGRAM("rp_catalog"),
-	RP_PROGRAM("rp_state_catalog"),
-	RP_PROGRAM("rp_object_store"),
-	RP_PROGRAM("rp_object_query"),
-	RP_PROGRAM("rp_lineage"),
-	RP_PROGRAM("rp_site_export"),
-	RP_PROGRAM("rp_planner"),
-	RP_PROGRAM("rp_portability"),
-	RP_PROGRAM("rp_retriever"),
-	RP_PROGRAM("rp_analyst"),
-	RP_PROGRAM("rp_reviewer"),
-	RP_PROGRAM("rp_lab"),
-	RP_PROGRAM("rp_governance"),
-	RP_PROGRAM("rp_writer"),
-	RP_PROGRAM("rp_repair"),
-	RP_PROGRAM("rp_auditor"),
-	RP_PROGRAM("rp_query"),
-	RP_PROGRAM("rp_evidence"),
-	RP_PROGRAM("rp_llm_bridge"),
-	RP_PROGRAM("rp_llm_relay"),
-	RP_PROGRAM("rp_privacy"),
-	RP_PROGRAM("rp_runconf"),
-	RP_PROGRAM("rp_execobs"),
-	RP_PROGRAM("rp_invoke"),
-	RP_PROGRAM("rp_complete"),
-	RP_PROGRAM("rp_artifact_ops"),
-	RP_PROGRAM("rp_data_pipeline"),
-	RP_PROGRAM("rp_workflow_runner"),
-	RP_PROGRAM("rp_workbench"),
-	RP_PROGRAM("rp_agent_collab"),
-	RP_PROGRAM("rp_package"),
-	RP_PROGRAM("rp_calculation"),
-	RP_PROGRAM("rp_realtask"),
-	RP_PROGRAM("rp_analysisres"),
-	RP_PROGRAM("rp_campaign"),
-	RP_PROGRAM("rp_delta"),
-	RP_PROGRAM("rp_release"),
-	RP_PROGRAM("rp_dossier"),
-	RP_PROGRAM("rp_service_surface"),
-	RP_PROGRAM("rp_startup_doctor"),
-	RP_PROGRAM("rp_notebook_export"),
-	RP_PROGRAM("rp_backend"),
-	RP_PROGRAM("rp_consistency"),
-	RP_PROGRAM("rp_metrics"),
-	RP_PROGRAM("rp_ui_export"),
-	RP_PROGRAM("rp_web_export"),
-	RP_PROGRAM("rp_revdash"),
-	RP_PROGRAM("rp_modelreg"),
-	RP_PROGRAM("rp_sysreview"),
-	RP_PROGRAM("rp_expsched"),
-	RP_PROGRAM("rp_traincomp"),
-	RP_PROGRAM("rp_publication"),
-	RP_PROGRAM("rp_runbooks"),
-	RP_PROGRAM("rp_projectrel"),
-	RP_PROGRAM("rp_studyproto"),
-	RP_PROGRAM("rp_stdesign"),
-	RP_PROGRAM("rp_opsboard"),
-	RP_PROGRAM("rp_reviewboard"),
-	RP_PROGRAM("rp_controlplane"),
-	RP_PROGRAM("rp_integrityplane"),
-	RP_PROGRAM("rp_coherenceplane"),
-	RP_PROGRAM("rp_mature"),
-	RP_PROGRAM("rp_prov_view"),
-	RP_PROGRAM("rp_prov_query"),
-	RP_PROGRAM("rp_reldossier"),
-	RP_PROGRAM("rp_decsupport"),
-	RP_PROGRAM("rp_usable"),
-	RP_PROGRAM("rp_usableproject"),
-	RP_PROGRAM("rp_compare_plain"),
-	RP_PROGRAM("rp_test_suite"),
+	RP_PLATFORM_PROGRAMS(RP_PROGRAM)
 };
 #undef RP_PROGRAM
+
+#define RP_PROGRAM_NAME(name) name,
+static const char *const PROGRAM_NAMES[] = {
+	RP_PLATFORM_PROGRAMS(RP_PROGRAM_NAME)
+};
+#undef RP_PROGRAM_NAME
 
 struct trusted_launch_policy {
 	const char *program;
 	const char *image;
 	int role;
+};
+
+struct declared_role_policy {
+	const char *program;
+	const char *role;
 };
 
 #define TRUSTED_LAUNCH_ROW(source, image, flags, role_mask, launch_role, profile) \
@@ -100,6 +45,12 @@ static const struct trusted_launch_policy TRUSTED_LAUNCHES[] = {
 	EXEC_POLICY_ENTRIES(TRUSTED_LAUNCH_ROW)
 };
 #undef TRUSTED_LAUNCH_ROW
+
+#define DECLARED_ROLE_ROW(program, role) { program, role },
+static const struct declared_role_policy DECLARED_ROLES[] = {
+	RP_AGENTOS_ROLE_PROGRAMS(DECLARED_ROLE_ROW)
+};
+#undef DECLARED_ROLE_ROW
 
 _Static_assert(EXEC_MANIFEST_ROLE_SENTINEL == AGENT_ROLE_SENTINEL,
 	       "exec policy sentinel role mismatch");
@@ -129,9 +80,14 @@ static const char *role_name(int role)
 	}
 }
 
-static const char *launch_role_name(int role, int agent_child)
+static const char *declared_role_for_program(const char *program)
 {
-	return agent_child ? role_name(role) : "plain";
+	int total = (int)(sizeof(DECLARED_ROLES) / sizeof(DECLARED_ROLES[0]));
+
+	for (int i = 0; i < total; i++)
+		if (strcmp(program, DECLARED_ROLES[i].program) == 0)
+			return DECLARED_ROLES[i].role;
+	return 0;
 }
 
 static const struct trusted_launch_policy *trusted_launch_for_program(
@@ -155,18 +111,95 @@ static int orchestrator_context(void)
 	       info.agent_role == AGENT_ROLE_ORCHESTRATOR;
 }
 
-static void record_timing(const char *program, int role, int agent_child,
+static int launch_manifest_valid(void)
+{
+	int declared = (int)(sizeof(DECLARED_ROLES) / sizeof(DECLARED_ROLES[0]));
+	int trusted = 0;
+
+	for (uint i = 0; i < sizeof(PROGRAMS) / sizeof(PROGRAMS[0]); i++) {
+		const struct trusted_launch_policy *policy =
+			trusted_launch_for_program(PROGRAMS[i].program);
+		const char *role = declared_role_for_program(PROGRAMS[i].program);
+
+		if ((policy == 0) != (role == 0) ||
+		    (policy && strcmp(role_name(policy->role), role) != 0))
+			return 0;
+		if (policy)
+			trusted++;
+	}
+	return trusted == declared;
+}
+
+static int read_launch_attestation(int fd,
+				   struct rp_launch_attestation *attestation)
+{
+	char *bytes = (char *)attestation;
+	int received = 0;
+
+	memset(attestation, 0, sizeof(*attestation));
+	while (received < (int)sizeof(*attestation)) {
+		int n = read(fd, bytes + received,
+			     sizeof(*attestation) - received);
+
+		if (n <= 0)
+			return 0;
+		received += n;
+	}
+	return 1;
+}
+
+static int launch_attestation_valid(
+	const struct program_launch_policy *launch,
+	const struct trusted_launch_policy *policy, const char *launcher,
+	int pid, const struct rp_launch_attestation *attestation)
+{
+	if (attestation->magic != RP_LAUNCH_ATTEST_MAGIC ||
+	    attestation->version != RP_LAUNCH_ATTEST_VERSION ||
+	    attestation->status != 0 || attestation->pid != pid ||
+	    attestation->filesystem_domain == 0)
+		return 0;
+	if (policy != 0)
+		return strcmp(launcher, "agent_create_role") == 0 &&
+		       attestation->is_agent == 1 &&
+		       attestation->agent_role == policy->role &&
+		       attestation->filesystem_capability_mask != 0;
+	return strcmp(launcher, "agent_worker_create") == 0 &&
+	       attestation->is_agent == 0 && attestation->agent_role == 0 &&
+	       attestation->filesystem_capability_mask ==
+		       launch->worker_capabilities;
+}
+
+static void record_timing(const char *program, const char *launcher,
+			  const struct rp_launch_attestation *attestation,
 			  int ok, int code, unsigned long long elapsed_ms)
 {
-	char line[224];
+	char line[256];
+	int identity_ready = attestation != 0 && attestation->status == 0;
 
 	rp_copy_text(line, sizeof(line), "program=");
 	rp_append_text(line, sizeof(line), program);
 	rp_append_text(line, sizeof(line), ";role=");
-	rp_append_text(line, sizeof(line), launch_role_name(role, agent_child));
-	rp_append_text(line, sizeof(line), ";launcher=");
 	rp_append_text(line, sizeof(line),
-		       agent_child ? "agent_create_role" : "fork");
+		       identity_ready && attestation->is_agent ?
+			       role_name(attestation->agent_role) : "plain");
+	rp_append_text(line, sizeof(line), ";launcher=");
+	rp_append_text(line, sizeof(line), launcher);
+	rp_append_text(line, sizeof(line), ";identity_source=");
+	rp_append_text(line, sizeof(line),
+		       identity_ready ? "child_after_exec" : "unavailable");
+	rp_append_text(line, sizeof(line), ";is_agent=");
+	rp_append_uint_text(line, sizeof(line),
+			    identity_ready ? attestation->is_agent : 0);
+	rp_append_text(line, sizeof(line), ";agent_role=");
+	rp_append_uint_text(line, sizeof(line),
+			    identity_ready ? attestation->agent_role : 0);
+	rp_append_text(line, sizeof(line), ";filesystem_domain=");
+	rp_append_uint_text(line, sizeof(line),
+			    identity_ready ? attestation->filesystem_domain : 0);
+	rp_append_text(line, sizeof(line), ";filesystem_capabilities=");
+	rp_append_uint_text(
+		line, sizeof(line),
+		identity_ready ? attestation->filesystem_capability_mask : 0);
 	rp_append_text(line, sizeof(line), ";ok=");
 	rp_append_text(line, sizeof(line), ok ? "1" : "0");
 	rp_append_text(line, sizeof(line), ";code=");
@@ -174,6 +207,37 @@ static void record_timing(const char *program, int role, int agent_child,
 	rp_append_text(line, sizeof(line), ";elapsed_ms=");
 	rp_append_uint_text(line, sizeof(line), elapsed_ms);
 	rp_append_file("rp_orch_timing", line);
+}
+
+static int append_program_inventory_evidence(void)
+{
+	struct rp_evidence_program_inventory inventory;
+	char line[384];
+	int expected_programs = (int)(sizeof(PROGRAM_NAMES) /
+				     sizeof(PROGRAM_NAMES[0]));
+
+	if (!rp_evidence_measure_program_ledger("rp_orch_timing", PROGRAM_NAMES,
+						expected_programs,
+						"mixed_attested", 1,
+						&inventory))
+		return 0;
+	line[0] = 0;
+	rp_append_text(line, sizeof(line),
+		       "evidence_role=runtime_verified;evidence_generation=runtime;program_source=rp_orch_timing;program_source_bytes=");
+	rp_append_uint_text(line, sizeof(line), inventory.source_bytes);
+	rp_append_text(line, sizeof(line), ";program_source_hash=");
+	rp_append_uint_text(line, sizeof(line), inventory.source_hash);
+	rp_append_text(line, sizeof(line), ";program_names_digest=");
+	rp_append_uint_text(line, sizeof(line), inventory.program_names_digest);
+	rp_append_text(line, sizeof(line), ";programs_observed=");
+	rp_append_uint_text(line, sizeof(line), inventory.programs_observed);
+	rp_append_text(line, sizeof(line), ";status=verified");
+	if (!rp_append_file("rp_agentcmp", line))
+		return 0;
+	printf("rp_orch: evidence_role=runtime_verified evidence_generation=runtime program_source=rp_orch_timing program_source_bytes=%llu program_source_hash=%llu program_names_digest=%llu programs_observed=%d status=verified\n",
+	       inventory.source_bytes, inventory.source_hash,
+	       inventory.program_names_digest, inventory.programs_observed);
+	return 1;
 }
 
 static int run_child(const struct program_launch_policy *launch,
@@ -185,9 +249,15 @@ static int run_child(const struct program_launch_policy *launch,
 		trusted_launch_for_program(program);
 	int agent_child = in_orchestrator && policy != 0;
 	int role = policy ? policy->role : AGENT_ROLE_SENTINEL;
+	int attest_pipe[2];
+	struct rp_launch_attestation attestation;
+	const char *launcher = agent_child ? "agent_create_role" :
+		in_orchestrator ? "agent_worker_create" : "fork";
 	char worker_image[11];
+	char attest_arg[32];
 	const char *image = program;
 	int64 start = get_mtime();
+	int attested = 0;
 
 	if (agent_child)
 		image = policy->image;
@@ -196,6 +266,16 @@ static int run_child(const struct program_launch_policy *launch,
 		image = worker_image;
 	}
 
+	if (pipe(attest_pipe) < 0) {
+		printf("rp_orch: attest_pipe_failed program=%s\n", program);
+		return 0;
+	}
+	if (in_orchestrator && agent_scope_delegate_fd(attest_pipe[1]) < 0) {
+		close(attest_pipe[0]);
+		close(attest_pipe[1]);
+		printf("rp_orch: attest_delegate_failed program=%s\n", program);
+		return 0;
+	}
 	if (agent_child) {
 		pid = agent_create_role(role);
 	} else if (in_orchestrator) {
@@ -204,8 +284,13 @@ static int run_child(const struct program_launch_policy *launch,
 		pid = fork();
 	}
 	if (pid == 0) {
+		close(attest_pipe[0]);
+		rp_copy_text(attest_arg, sizeof(attest_arg),
+			     RP_LAUNCH_ATTEST_PREFIX);
+		rp_append_uint_text(attest_arg, sizeof(attest_arg), attest_pipe[1]);
 		char *argv[] = {
 			(char *)program,
+			attest_arg,
 			0,
 		};
 		if (exec(image, argv) < 0) {
@@ -214,27 +299,41 @@ static int run_child(const struct program_launch_policy *launch,
 		}
 		exit(1);
 	}
+	close(attest_pipe[1]);
 	if (pid < 0) {
+		close(attest_pipe[0]);
 		printf("rp_orch: create_failed program=%s role=%s\n",
 		       program, role_name(role));
-		record_timing(program, role, agent_child, 0, -1, 0);
+		record_timing(program, launcher, 0, 0, -1, 0);
 		return 0;
 	}
+	attested = read_launch_attestation(attest_pipe[0], &attestation);
+	close(attest_pipe[0]);
 	int code = -1;
 	int got = waitpid(pid, &code);
 	int64 end = get_mtime();
 	unsigned long long elapsed = end >= start ? (unsigned long long)(end - start) : 0;
 	if (got != pid) {
 		printf("rp_orch: wait_failed program=%s\n", program);
-		record_timing(program, role, agent_child, 0, code, elapsed);
+		record_timing(program, launcher,
+			      attested ? &attestation : 0, 0, code, elapsed);
 		return 0;
 	}
 	if (code != 0) {
 		printf("rp_orch: child_failed program=%s code=%d\n", program, code);
-		record_timing(program, role, agent_child, 0, code, elapsed);
+		record_timing(program, launcher,
+			      attested ? &attestation : 0, 0, code, elapsed);
 		return 0;
 	}
-	record_timing(program, role, agent_child, 1, code, elapsed);
+	if (!attested || !launch_attestation_valid(launch, policy, launcher, pid,
+						    &attestation)) {
+		printf("rp_orch: identity_attestation_failed program=%s launcher=%s\n",
+		       program, launcher);
+		record_timing(program, launcher,
+			      attested ? &attestation : 0, 0, code, elapsed);
+		return 0;
+	}
+	record_timing(program, launcher, &attestation, 1, code, elapsed);
 	return 1;
 }
 
@@ -243,14 +342,18 @@ int main(void)
 	int total = (int)(sizeof(PROGRAMS) / sizeof(PROGRAMS[0]));
 	int ok = 0;
 	int in_orchestrator = orchestrator_context();
+	if (!launch_manifest_valid()) {
+		printf("rp_orch: launch_manifest_invalid\n");
+		return 1;
+	}
 	if (in_orchestrator) {
 		if (!rp_write_file("rp_agentos_roles",
 				   "launcher=agentos-orchestrator\n"
 				   "stage_launch=agent_create_role\n"
-				   "support_launch=fork\n"
-				   "support_role=plain_process\n"
+				   "support_launch=agent_worker_create\n"
+				   "support_role=delegated_non_agent_worker\n"
 				   "role_policy=program_specific\n"
-				   "launch_policy=kernel_bound_programs_agent_plain_support_fork\n"
+				   "launch_policy=kernel_bound_roles_and_delegated_workers\n"
 				   "agent_bound_programs=rp_query,rp_repair,rp_execobs,rp_agent_collab,rp_auditor,rp_workbench,rp_package,rp_realtask,rp_service_surface,rp_backend\n"
 				   "execution_ledger=rp_orch_timing\n"
 				   "status=ready\n")) {
@@ -258,7 +361,7 @@ int main(void)
 		}
 	}
 	if (!rp_write_file("rp_orch_timing",
-			   "orchestrator=rp_orch\nlauncher=agent_create_role\n")) {
+			   "orchestrator=rp_orch\nlauncher=mixed_attested\n")) {
 		return 1;
 	}
 	printf("rp_orch: start programs=%d\n", total);
@@ -268,6 +371,10 @@ int main(void)
 	printf("rp_orch: programs_ok=%d programs_total=%d\n", ok, total);
 	if (ok != total) {
 		printf("rp_orch: failed\n");
+		return 1;
+	}
+	if (!append_program_inventory_evidence()) {
+		printf("rp_orch: program_inventory_failed\n");
 		return 1;
 	}
 	printf("rp_orch: state_ok=1\n");

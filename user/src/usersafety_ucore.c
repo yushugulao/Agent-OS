@@ -4,14 +4,31 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <user_stack_policy.h>
 
 #define EXEC_ARG_LIMIT 32
 #define NON_NUL_PATH_SIZE 320
 #define TEST_PAGE_SIZE 4096
 #define WAIT_WAKE_ROUNDS 32
+#define EXEC_LAYOUT_BOUNDARY_MODE "exec-argv-layout-boundary"
+#define EXEC_LAYOUT_OVERFLOW_MODE "exec-argv-layout-overflow"
+#define EXEC_LAYOUT_BOUNDARY_ARG_BYTES 945
+#define EXEC_LAYOUT_OVERFLOW_ARG_BYTES 961
 
 static char non_nul_path[NON_NUL_PATH_SIZE];
 static char *too_many_argv[EXEC_ARG_LIMIT + 2];
+static char exec_layout_boundary_arg[EXEC_LAYOUT_BOUNDARY_ARG_BYTES];
+static char exec_layout_overflow_arg[EXEC_LAYOUT_OVERFLOW_ARG_BYTES];
+static char *exec_layout_boundary_argv[] = {
+	EXEC_LAYOUT_BOUNDARY_MODE,
+	exec_layout_boundary_arg,
+	NULL,
+};
+static char *exec_layout_overflow_argv[] = {
+	EXEC_LAYOUT_OVERFLOW_MODE,
+	exec_layout_overflow_arg,
+	NULL,
+};
 static int initial_pid;
 static int concurrent_pipe[2];
 static int wait_mutex;
@@ -78,6 +95,8 @@ static void test_string_bounds(void)
 static void test_exec_argv_bounds(void)
 {
 	static char arg[] = "x";
+	int pid;
+	int status;
 
 	for (int i = 0; i <= EXEC_ARG_LIMIT; i++)
 		too_many_argv[i] = arg;
@@ -87,6 +106,25 @@ static void test_exec_argv_bounds(void)
 	check(exec("usersafety_ucore", (char **)(uintptr_t)8) == -1,
 	      "unmapped exec argv");
 	check_live("exec argv bounds");
+
+	memset(exec_layout_boundary_arg, 'x', sizeof(exec_layout_boundary_arg));
+	exec_layout_boundary_arg[sizeof(exec_layout_boundary_arg) - 1] = 0;
+	pid = fork();
+	check(pid >= 0, "fork exact argv layout child");
+	if (pid == 0) {
+		exec("usersafety_ucore", exec_layout_boundary_argv);
+		exit(1);
+	}
+	check(waitpid(pid, &status) == pid && status == 0,
+	      "exact exec argv layout budget");
+
+	/* Raw bytes still fit; per-string alignment and pointers make this 1040B. */
+	memset(exec_layout_overflow_arg, 'x', sizeof(exec_layout_overflow_arg));
+	exec_layout_overflow_arg[sizeof(exec_layout_overflow_arg) - 1] = 0;
+	check(exec("usersafety_ucore", exec_layout_overflow_argv) == -1,
+	      "complete exec argv layout budget");
+	check_live("exec argv layout budget");
+	printf("usersafety_ucore: argv_layout_budget=1024 boundary_accept=1 over_limit_rejected=1 caller_live=1\n");
 }
 
 static void secondary_exec(void *arg)
@@ -339,6 +377,14 @@ static void test_semaphore_inputs(void)
 
 int main(int argc, char **argv)
 {
+	if (argc == 2 && strcmp(argv[0], EXEC_LAYOUT_BOUNDARY_MODE) == 0) {
+		printf("usersafety_ucore: exec argv boundary child passed\n");
+		return 0;
+	}
+	if (argc == 2 && strcmp(argv[0], EXEC_LAYOUT_OVERFLOW_MODE) == 0) {
+		printf("usersafety_ucore: check failed: exec argv layout overflow accepted\n");
+		return 1;
+	}
 	if (argc == 2 && strcmp(argv[1], "exec-child") == 0) {
 		printf("usersafety_ucore: exec child passed\n");
 		return 0;

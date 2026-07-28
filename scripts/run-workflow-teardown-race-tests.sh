@@ -60,7 +60,6 @@ if ((GLOBAL_RESERVED_CAP > SHELL_ARITH_MAX / 2 ||
 	echo "[workflow-teardown] file-object capacity arithmetic overflow" >&2
 	exit 2
 fi
-
 FILE_POOL_SIZE=$((GLOBAL_RESERVED_CAP * 2))
 FILE_ORDINARY_LIMIT=$((FILE_POOL_SIZE - GLOBAL_RESERVED_CAP))
 # Workflow children retain their creator's caller frames until their root exits.
@@ -85,6 +84,7 @@ run_logged "${SETUP_LOG}" make -C user \
 USER_BIN="${TMPDIR_WORKFLOW_TEARDOWN}/user-target/bin/${INIT_PROC}"
 test -f "${USER_BIN}"
 run_logged "${SETUP_LOG}" "${HOSTCC}" nfs/fs.c \
+	nfs/host_image_snapshot.c \
 	-o "${TMPDIR_WORKFLOW_TEARDOWN}/mkfs"
 run_logged "${SETUP_LOG}" "${TMPDIR_WORKFLOW_TEARDOWN}/mkfs" \
 	"${TMPDIR_WORKFLOW_TEARDOWN}/master.img" "${USER_BIN}"

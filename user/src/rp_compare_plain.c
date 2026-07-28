@@ -1,17 +1,45 @@
 #include <stdio.h>
 #define RP_ENABLE_HOST_ACTION_SEED 1
 #include <research_platform_state.h>
+#include <rp_evidence.h>
+
+static int compare_assertions_executed;
+static int compare_assertions_passed;
+static int compare_runtime_assertions_executed;
+static int compare_runtime_assertions_passed;
+static char compare_line[512];
+
+static int compare_file_contains(const char *path, const char *token)
+{
+	int matched;
+
+	compare_assertions_executed++;
+	matched = rp_file_contains(path, token);
+	if (matched)
+		compare_assertions_passed++;
+	return matched;
+}
+
+#define rp_file_contains compare_file_contains
 
 static int require_equal(const char *name, int actual, int expected)
 {
-	if (actual == expected) return 1;
+	compare_assertions_executed++;
+	if (actual == expected) {
+		compare_assertions_passed++;
+		return 1;
+	}
 	printf("rp_compare_plain: mismatch %s actual=%d expected=%d\n", name, actual, expected);
 	return 0;
 }
 
 static int require_at_least(const char *name, int actual, int minimum)
 {
-	if (actual >= minimum) return 1;
+	compare_assertions_executed++;
+	if (actual >= minimum) {
+		compare_assertions_passed++;
+		return 1;
+	}
 	printf("rp_compare_plain: mismatch %s actual=%d minimum=%d\n", name, actual, minimum);
 	return 0;
 }
@@ -20,8 +48,11 @@ static int check_seed_value(const char *kind, const char *key, const char *fallb
 {
 	char value[96];
 	char token[160];
+	(void)fallback;
 	if (!rp_host_seed_copy_value_for_kind(kind, key, value, sizeof(value))) {
-		rp_copy_text(value, sizeof(value), fallback);
+		compare_assertions_executed++;
+		printf("rp_compare_plain: missing_seed kind=%s key=%s\n", kind, key);
+		return 0;
 	}
 	rp_copy_text(token, sizeof(token), prefix);
 	rp_append_text(token, sizeof(token), value);
@@ -33,6 +64,42 @@ static int optional_file_contains(const char *path, const char *needle)
 	int n = rp_read_file(path, rp_state_buf, RP_STATE_BUFFER_SIZE);
 	if (n < 0) return 0;
 	return rp_text_contains(rp_state_buf, needle);
+}
+
+struct compare_runtime_spec {
+	const char *name;
+	const char *source;
+	const char *key;
+	const char *value;
+};
+
+static const struct compare_runtime_spec COMPARE_RUNTIME_SPECS[] = {
+	{"backend", "rp_backend_exec", "runtime_cases_executed", "8"},
+	{"consistency", "rp_consistency", "evidence_generation", "runtime"},
+	{"kernel-context", "rp_agentos_kernel", "context_snapshot", "present"},
+	{"audit", "rp_audit", "evidence_generation", "runtime"},
+	{"provenance", "rp_prov_view", "evidence_generation", "runtime"},
+};
+
+static int append_compare_runtime_case(
+	const struct compare_runtime_spec *spec,
+	const struct rp_evidence_file_measurement *measured)
+{
+	char line[384];
+
+	line[0] = 0;
+	rp_append_text(line, sizeof(line),
+		       "evidence_role=runtime_verified;runtime_compare_case=");
+	rp_append_text(line, sizeof(line), spec->name);
+	rp_append_text(line, sizeof(line), ";source=");
+	rp_append_text(line, sizeof(line), spec->source);
+	rp_append_text(line, sizeof(line), ";source_bytes=");
+	rp_append_uint_text(line, sizeof(line), measured->bytes);
+	rp_append_text(line, sizeof(line), ";source_hash=");
+	rp_append_uint_text(line, sizeof(line), measured->hash);
+	rp_append_text(line, sizeof(line),
+		       ";claim_protocol=exact-field-v1;assertions_executed=1;assertions_passed=1;generation=runtime;status=verified");
+	return rp_append_file("rp_agentcmp", line);
 }
 
 int main(void)
@@ -1005,7 +1072,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_backend", "cases=8");
 	ok = ok && rp_file_contains("rp_backend", "agentos_mainflow_kernel=required");
 	ok = ok && rp_file_contains("rp_backend", "agentos_mainflow_facts=12");
-	ok = ok && rp_file_contains("rp_backend_exec", "passed_cases=8");
+	ok = ok && rp_file_contains("rp_backend_exec", "runtime_cases_verified=");
 	ok = ok && rp_file_contains("rp_study", "arms=2");
 	ok = ok && rp_file_contains("rp_consistency", "state_relation=passed");
 	ok = ok && rp_file_contains("rp_consistency", "task_records=21");
@@ -1634,10 +1701,10 @@ int main(void)
 	ok = ok && rp_file_contains("rp_coherence", "agent_coordination=recovery_path;source=rp_retry_plan;target=rp_runbooks;result=pass;status=ready");
 	ok = ok && rp_file_contains("rp_coherence", "coherence_report=coherence-report:RUN-042;checks=40;errors=0;warnings=0;status=ready");
 	ok = ok && rp_file_contains("rp_coherence", "agentos_adaptation=kernel_run_state_views,kernel_tool_contract_table,kernel_delivery_metadata,kernel_agent_coordination_trace;evidence=rp_agentos_mainflow,rp_agentos_kernel,rp_agentos_package,rp_agentos_collab_ack;result=observed;status=ready");
-	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=coherence_plane;source=rp_coherence;checks=40;errors=0;result=passed;status=ready");
+	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=coherence_plane;source=rp_coherence;checks=40;errors=0;reference_result=expected_pass;status=reference_ready");
 	ok = ok && rp_file_contains("rp_opsboard", "handoff=coherence-plane->operations;artifact=rp_coherence;status=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "coherence_plane_checks=40");
-	ok = ok && rp_file_contains("rp_agentcmp", "coherence_kernel_binding=run_state_views,tool_contract_table,delivery_metadata,agent_coordination_trace;source=rp_coherence;status=ready");
+	ok = ok && rp_file_contains("rp_agentcmp", "coherence_kernel_binding=run_state_views,tool_contract_table,delivery_metadata,agent_coordination_trace;source=rp_coherence;status=reference_ready");
 	ok = ok && rp_file_contains("rp_publication", "publication_checks=48");
 	ok = ok && rp_file_contains("rp_publication", "targets=2");
 	ok = ok && rp_file_contains("rp_publication", "submissions=2");
@@ -1753,9 +1820,9 @@ int main(void)
 	ok = ok && rp_file_contains("rp_deccrit", "criterion=agentos_value");
 	ok = ok && rp_file_contains("rp_decscore", "score=agentos_ucore_hybrid:agentos_value");
 	ok = ok && rp_file_contains("rp_decpacket", "packet=decision-review-packet:agentos-final-demo-backend");
-	ok = ok && rp_file_contains("rp_package", "decision_support=rp_decsupport;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;status=ready");
-	ok = ok && rp_file_contains("rp_web_bundle", "decision_support_page=rp_decsupport;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;status=ready");
-	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=decision_support;source=rp_decsupport;options=3;criteria=5;scores=15;selected=select_agentos_ucore_hybrid;status=ready");
+	ok = ok && rp_file_contains("rp_package", "decision_support=rp_decsupport;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;status=reference_ready");
+	ok = ok && rp_file_contains("rp_web_bundle", "decision_support_page=rp_decsupport;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;status=reference_ready");
+	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=decision_support;source=rp_decsupport;options=3;criteria=5;scores=15;selected=select_agentos_ucore_hybrid;status=reference_ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "decision_support_checks=80");
 	ok = ok && rp_file_contains("rp_usable", "usable_research_checks=100");
 	ok = ok && rp_file_contains("rp_usable", "entry=research-question-to-review-package");
@@ -1795,29 +1862,29 @@ int main(void)
 	ok = ok && rp_file_contains("rp_web_bundle", "mature_capability_page=rp_mature;profiles=6;mappings=6;checks=72;status=ready");
 	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=mature_capabilities;source=rp_mature;profiles=6;mappings=6;checks=72;outcome=passed;status=ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "mature_capability_checks=72");
-	ok = ok && rp_file_contains("rp_prov_view", "provenance_view_checks=64");
+	ok = ok && rp_file_contains("rp_prov_view", "demo_expected_provenance_view_checks=64");
 	ok = ok && rp_file_contains("rp_prov_view", "agentos_kernel_timeline=observed");
 	ok = ok && rp_file_contains("rp_prov_view", "agentos_kernel_provenance=observed");
 	ok = ok && rp_file_contains("rp_prov_view", "agentos_kernel_ledger=observed");
 	ok = ok && rp_file_contains("rp_prov_edges", "edge=12;source=rp_agent_run;target=rp_prov_view;kind=agent_to_trace;status=ready");
 	ok = ok && rp_file_contains("rp_evidence_packet", "packet=agentos-readiness;run=RUN-042");
 	ok = ok && rp_file_contains("rp_timeline_view", "view=agent_decision_flow;events=6;source=rp_agent_run;status=ready");
-	ok = ok && rp_file_contains("rp_web_bundle", "provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=ready");
-	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=provenance_view;source=rp_prov_view;timeline=4;packets=4;checks=64;outcome=passed;status=ready");
-	ok = ok && rp_file_contains("rp_agentcmp", "provenance_view_checks=64");
-	ok = ok && rp_file_contains("rp_prov_query", "provenance_query_checks=72");
+	ok = ok && rp_file_contains("rp_web_bundle", "provenance_page=rp_prov_view;timeline_views=4;demo_expected_subgraphs=3;packets=4;status=verified");
+	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=provenance_view;source=rp_prov_view;timeline=4;packets=4;demo_expected_checks=64;catalog_outcome=matched;status=verified");
+	ok = ok && rp_file_contains("rp_agentcmp", "demo_expected_provenance_view_checks=64");
+	ok = ok && rp_file_contains("rp_prov_query", "demo_expected_provenance_query_checks=72");
 	ok = ok && rp_file_contains("rp_prov_query", "agentos_kernel_timeline=observed");
 	ok = ok && rp_file_contains("rp_prov_query", "agentos_kernel_provenance=observed");
 	ok = ok && rp_file_contains("rp_prov_query", "agentos_kernel_ledger=observed");
 	ok = ok && rp_file_contains("rp_prov_specs", "template=provenance-query-template:calculation-root-neighborhood");
-	ok = ok && rp_file_contains("rp_prov_specs", "spec=provenance-query:RUN-042:calculation-lineage");
-	ok = ok && rp_file_contains("rp_prov_exec", "execution=provenance-query-execution:calculation-lineage");
-	ok = ok && rp_file_contains("rp_prov_exec", "row=calculation-job:lab-gene-x:run042-qc");
+	ok = ok && rp_file_contains("rp_prov_specs", "spec=provenance-query:RUN-042:workflow-recovery");
+	ok = ok && rp_file_contains("rp_prov_exec", "execution=provenance-query-execution:workflow-recovery");
+	ok = ok && rp_file_contains("rp_prov_exec", "row=rp_stage_state");
 	ok = ok && rp_file_contains("rp_prov_query_pkg", "comparison=provenance-query-comparison:RUN-042:rendered-vs-direct");
 	ok = ok && rp_file_contains("rp_prov_query_pkg", "packet=provenance-query-packet:RUN-042:lineage-review");
 	ok = ok && rp_file_contains("rp_web_bundle", "provenance_queries_page=rp_prov_query;specs=3;executions=3;packets=1;status=ready");
-	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=provenance_queries;source=rp_prov_query;queries=3;executions=3;checks=72;outcome=passed;status=ready");
-	ok = ok && rp_file_contains("rp_agentcmp", "provenance_query_checks=72");
+	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=provenance_queries;source=rp_prov_query;queries=3;executions=3;demo_expected_checks=72;catalog_outcome=matched;status=verified");
+	ok = ok && rp_file_contains("rp_agentcmp", "demo_expected_provenance_query_checks=72");
 	int portability_imports = rp_get_int_value("rp_wfio", "portability_imports=");
 	int portability_adapters = rp_get_int_value("rp_wfio", "adapter_specs=");
 	int portability_migration = rp_get_int_value("rp_wfio", "migration_steps=");
@@ -1843,68 +1910,39 @@ int main(void)
 	ok = ok && rp_file_contains("rp_wfio", "package=workflow-portability");
 	ok = ok && rp_file_contains("rp_web_bundle", "workflow_portability=rp_wfio");
 	int backend_cases = rp_get_int_value("rp_backend", "cases=");
-	int backend_exec_passed = rp_get_int_value("rp_backend_exec", "passed_cases=");
-	int backend_exec_planned = rp_get_int_value("rp_backend_exec", "planned_cases=");
+	int backend_exec_executed = rp_get_int_value("rp_backend_exec",
+						 "runtime_cases_executed=");
+	int backend_exec_verified = rp_get_int_value("rp_backend_exec",
+						 "runtime_cases_verified=");
+	int backend_assertions_executed = rp_get_int_value(
+		"rp_backend_exec", "runtime_assertions_executed=");
+	int backend_assertions_passed = rp_get_int_value(
+		"rp_backend_exec", "runtime_assertions_passed=");
+	int backend_case_records = rp_count_token(
+		"rp_backend_exec",
+		"evidence_role=runtime_verified;runtime_case=");
 	ok = ok && require_equal("backend_cases", backend_cases, 8);
-	ok = ok && require_equal("backend_exec_passed", backend_exec_passed, 8);
-	ok = ok && require_equal("backend_exec_planned", backend_exec_planned, 0);
+	ok = ok && require_equal("backend_exec_verified",
+				 backend_exec_verified, backend_exec_executed);
+	ok = ok && require_equal("backend_exec_contract",
+				 backend_exec_executed, backend_cases);
+	ok = ok && require_equal("backend_case_records",
+				 backend_case_records, backend_exec_executed);
+	ok = ok && require_equal("backend_assertions",
+				 backend_assertions_passed,
+				 backend_assertions_executed);
 	ok = ok && rp_file_contains("rp_backend", "workflow_portability=rp_wfio");
 	ok = ok && rp_file_contains("rp_backend", "execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare");
 	ok = ok && rp_file_contains("rp_backend", "compare_profile=compare-profile:RUN-042:migration");
 	ok = ok && rp_file_contains("rp_backend", "runner=agentos-kernel-assisted");
-	ok = ok && rp_file_contains("rp_backend_exec", "workflow_portability=rp_wfio");
-	ok = ok && rp_file_contains("rp_backend_exec", "scenario=backend-scenario:RUN-042:agentcompare");
-	ok = ok && rp_file_contains("rp_backend_exec", "case=plain-ucore;source=rp_wfio;status=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "case=agentos-ucore;source=rp_agentos_kernel;status=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_cases=8");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_case=plain-ucore;input=rp_wfio;artifact=rp_artifact_manifest;result=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_case=retry-recovery;input=rp_retry_plan;artifact=rp_stage_state;result=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_case=agentos-context;input=rp_agentos_kernel;artifact=agent_context;result=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_case=agentos-fsmeta;input=rp_agentos_kernel;artifact=agent_file_meta;result=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_case=agentos-recovery;input=rp_agentos_recovery;artifact=rp_fix;result=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_case=agentos-event;input=rp_agentos_timeline+rp_agentos_collab_ack;artifact=rp_agent_run;result=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_case=agentos-audit;input=rp_agentos_audit;artifact=rp_audit;result=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_case=agentos-edit;input=rp_agentos_conflict;artifact=agent_file_edit;result=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_case=plain-ucore;input=rp_wfio;artifact=rp_artifact_manifest;result=passed;reason=native_programs_ok;input_check=pass;artifact_check=pass");
-	ok = ok && rp_file_contains("rp_backend_exec", ";att=1;retry=none;ticks=3");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_case=retry-recovery;input=rp_retry_plan;artifact=rp_stage_state;result=passed;reason=recovered_align;input_check=pass;artifact_check=pass");
-	ok = ok && rp_file_contains("rp_backend_exec", ";att=2;retry=tool_output_missing;ticks=5");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_case=agentos-context;input=rp_agentos_kernel;artifact=agent_context;result=passed;reason=kernel_context;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=1");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_case=agentos-fsmeta;input=rp_agentos_kernel;artifact=agent_file_meta;result=passed;reason=kernel_metadata;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=1");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_case=agentos-recovery;input=rp_agentos_recovery;artifact=rp_fix;result=passed;reason=kernel_action_commit;input_check=pass;artifact_check=pass;att=1;retry=generic_action;ticks=1");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_case=agentos-event;input=rp_agentos_timeline+rp_agentos_collab_ack;artifact=rp_agent_run;result=passed;reason=kernel_event_queue;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=1");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_case=agentos-audit;input=rp_agentos_audit;artifact=rp_audit;result=passed;reason=kernel_ledger;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=1");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_case=agentos-edit;input=rp_agentos_conflict;artifact=agent_file_edit;result=passed;reason=kernel_edit_lease;input_check=pass;artifact_check=pass;att=1;retry=none;ticks=1");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail=plain-ucore;src=rp_wfio;req=execution_plan;obs=pass;act=record;review=baseline");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail=retry-recovery;src=rp_retry_plan+rp_stage_state;req=retry_stage+stage;obs=pass;act=rerun_align;review=recovered");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail=agentos-context;src=rp_agentos_kernel;req=context_path;obs=pass;act=context_snapshot;review=observed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail=agentos-fsmeta;src=rp_agentos_kernel;req=metadata_index;obs=pass;act=file_meta_init;review=observed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail=agentos-recovery;src=rp_agentos_recovery;req=action_commit+artifact_update;obs=pass;act=generic_kernel_tools;review=verified");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail=agentos-event;src=rp_agentos_timeline+rp_agentos_collab_ack;req=event_wait_wake;obs=pass;act=kernel_queue;review=verified");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail=agentos-audit;src=rp_agentos_audit;req=audit+provenance;obs=pass;act=ledger_snapshot;review=verified");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail=agentos-edit;src=rp_agentos_conflict;req=file_edit_lease;obs=pass;act=edit_begin_commit;review=verified");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail_rows=8");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail_schema=src,req,obs,act,review");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_report=plain-ucore;plain_cost=file_scan_manifest;agentos_replace=batch_tool_context;risk=manual_state;status=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_report=retry-recovery;plain_cost=retry_file_stage_file;agentos_replace=event_context;risk=stale_retry;status=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_report=agentos-context;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;risk=untrusted_context;status=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_report=agentos-fsmeta;plain_cost=scan_records_128;agentos_replace=metadata_index;risk=scan_growth;status=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_report=agentos-recovery;plain_cost=manual_retry_contract;agentos_replace=capability_checked_action;risk=wrong_object_update;status=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_report=agentos-event;plain_cost=file_polling;agentos_replace=kernel_event_queue;risk=lost_handoff;status=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_report=agentos-audit;plain_cost=append_only_logs;agentos_replace=kernel_ledger_provenance;risk=tampered_context;status=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_report=agentos-edit;plain_cost=userland_lock_file;agentos_replace=kernel_edit_lease;risk=lost_update;status=passed");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_report_rows=8");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_report_schema=plain_cost,agentos_replace,risk,status");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_observed=rp_stage_state,rp_retry_plan,rp_artifact_manifest,rp_llmeval,rp_agentos_kernel,rp_agentos_mainflow,rp_agentos_recovery,rp_agentos_query,rp_agentos_timeline,rp_agentos_audit,rp_agentos_workbench,rp_agentos_package,rp_agentos_real_task,rp_agentos_conflict");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail_fields=input_check,artifact_check,att,retry,ticks");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_detail_checks=32");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_verified_inputs=8");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_passed=8");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_planned=0");
+	ok = ok && rp_file_contains("rp_backend_exec", "runtime_claim_protocol=source-bound-v1");
+	ok = ok && rp_file_contains("rp_backend_exec", "catalog_generation=demo_expected");
+	ok = ok && rp_file_contains("rp_backend_exec", "runtime_source_digest=");
+	ok = ok && rp_file_contains("rp_backend_exec", "generation=runtime;status=verified");
 	ok = ok && rp_file_contains("rp_study", "workflow_portability=rp_wfio");
 	ok = ok && rp_file_contains("rp_study", "migration_status=baseline_and_agentos_observed");
-	ok = ok && rp_file_contains("rp_study", "study_metric=plain_ucore;file_scans=128;context_trusted=0;rebuild_steps=6;detail_checks=4;result=passed");
-	ok = ok && rp_file_contains("rp_study", "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;dependency_graph=1;metadata_index=1;event_queue=1;recovery_tool=1;audit_ledger=1;permission_control=1;timeline_observe=1;workbench_verify=1;package_trace=1;real_task_context=1;edit_lease=1;mainflow_facts=12;detail_checks=kernel;result=passed");
+	ok = ok && rp_file_contains("rp_study", "study_metric=plain_ucore;file_scans=128;context_trusted=0;rebuild_steps=6;detail_checks=4;reference_result=pass");
+	ok = ok && rp_file_contains("rp_study", "study_metric=agentos_ucore;context_trusted=1;batch_tools=1;dependency_graph=1;metadata_index=1;event_queue=1;recovery_tool=1;audit_ledger=1;permission_control=1;timeline_observe=1;workbench_verify=1;package_trace=1;real_task_context=1;edit_lease=1;mainflow_facts=12;detail_checks=kernel;reference_result=pass");
 	ok = ok && rp_file_contains("rp_study", "metrics=13");
 	ok = ok && rp_file_contains("rp_study", "study_handoff=rp_backend_exec->rp_agentcmp;status=ready");
 	ok = ok && rp_file_contains("rp_study", "agentos_kernel=mainflow_bound");
@@ -1938,11 +1976,72 @@ int main(void)
 	if (!ok) return 1;
 	int ack_count = rp_count_lines("rp_ack");
 	int tool_count = rp_count_lines("rp_tool");
+	compare_assertions_executed += 2;
 	if (ack_count < 69 || tool_count < 328) {
 		printf("rp_compare_plain: bad_event_counts acks=%d tools=%d\n", ack_count, tool_count);
 		return 1;
 	}
-	if (!rp_append_file("rp_agentcmp", "plain_kernel=passed;programs=70;state_files=261;message_acks=69;tool_events=328;action_state_records=12;test_cases=2800;action_side_effect_records=16;service_page=1;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;runbook_service_checks=16;project_delivery_checks=18;study_protocol_checks=20;statistical_design_checks=120;model_registry_service_checks=96;systematic_review_checks=104;experiment_scheduling_checks=88;training_compliance_checks=92;operations_board_checks=18;review_board_checks=24;control_plane_checks=30;integrity_plane_checks=36;coherence_plane_checks=40;publication_checks=48;calculation_checks=84;real_task_checks=96;analysis_results_checks=96;decision_support_checks=80;usable_research_checks=100;usable_project_checks=120;experiment_campaign_checks=108;release_dossier_checks=112;mature_capability_checks=72;provenance_view_checks=64;provenance_query_checks=72;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;advanced_surface_objects=5;startup_health_checks=8;startup_doctor_checks=14;research_product_checks=18;runtime_assurance_checks=24;research_ops_checks=28;regulated_research_checks=32;lab_governance_ops_checks=26;state_catalog_checks=12;knowledge_index_checks=22;llm_transcript_checks=3;workbench_delivery_checks=15;research_portfolio_checks=16;execution_scale_checks=14;operations_scale_checks=12;project_revision_incident_checks=12;reserved_research_surface_checks=21;root_state_surface_checks=10;agentos_reserved_surface_checks=21;status=ready")) return 1;
+	compare_assertions_passed += 2;
+	{
+		const int runtime_case_count =
+			(int)(sizeof(COMPARE_RUNTIME_SPECS) /
+			      sizeof(COMPARE_RUNTIME_SPECS[0]));
+		const char *runtime_sources[
+			sizeof(COMPARE_RUNTIME_SPECS) /
+			sizeof(COMPARE_RUNTIME_SPECS[0])];
+		unsigned long long source_digest;
+
+		for (int i = 0; i < runtime_case_count; i++) {
+			struct rp_evidence_file_measurement measured;
+
+			compare_runtime_assertions_executed++;
+			if (!rp_evidence_measure_file_field(
+				    COMPARE_RUNTIME_SPECS[i].source,
+				    COMPARE_RUNTIME_SPECS[i].key,
+				    COMPARE_RUNTIME_SPECS[i].value, &measured))
+				return 1;
+			compare_runtime_assertions_passed++;
+			if (!append_compare_runtime_case(&COMPARE_RUNTIME_SPECS[i],
+							 &measured))
+				return 1;
+			runtime_sources[i] = COMPARE_RUNTIME_SPECS[i].source;
+		}
+		if (!rp_evidence_fold_files(runtime_sources, runtime_case_count,
+					    &source_digest))
+			return 1;
+		compare_line[0] = 0;
+		rp_append_text(compare_line, sizeof(compare_line),
+			       "evidence_role=runtime_verified;evidence_generation=runtime;claim_protocol=exact-field-v1;runtime_compare_cases=");
+		rp_append_uint_text(compare_line, sizeof(compare_line),
+				    runtime_case_count);
+		rp_append_text(compare_line, sizeof(compare_line),
+			       ";runtime_assertions_executed=");
+		rp_append_uint_text(compare_line, sizeof(compare_line),
+				    compare_runtime_assertions_executed);
+		rp_append_text(compare_line, sizeof(compare_line),
+			       ";runtime_assertions_passed=");
+		rp_append_uint_text(compare_line, sizeof(compare_line),
+				    compare_runtime_assertions_passed);
+		rp_append_text(compare_line, sizeof(compare_line),
+			       ";catalog_assertions_executed=");
+		rp_append_uint_text(compare_line, sizeof(compare_line),
+				    compare_assertions_executed);
+		rp_append_text(compare_line, sizeof(compare_line),
+			       ";catalog_assertions_passed=");
+		rp_append_uint_text(compare_line, sizeof(compare_line),
+				    compare_assertions_passed);
+		rp_append_text(compare_line, sizeof(compare_line),
+			       ";source_digest=");
+		rp_append_uint_text(compare_line, sizeof(compare_line), source_digest);
+		rp_append_text(compare_line, sizeof(compare_line),
+			       ";status=verified");
+		if (!rp_append_file("rp_agentcmp", compare_line))
+			return 1;
+		printf("rp_compare_plain: evidence_generation=runtime runtime_assertions_executed=%d runtime_assertions_passed=%d status=verified\n",
+		       compare_runtime_assertions_executed,
+		       compare_runtime_assertions_passed);
+	}
+	if (!rp_append_file("rp_agentcmp", "evidence_role=demo_reference;catalog_generation=demo_expected;demo_expected_programs=70;state_files=261;message_acks=69;tool_events=328;action_state_records=12;demo_expected_test_cases=2800;action_side_effect_records=16;service_page=1;llm_queue_checks=3;llm_guard_checks=3;review_dashboard=1;review_pack=1;runbook_service_checks=16;project_delivery_checks=18;study_protocol_checks=20;statistical_design_checks=120;model_registry_service_checks=96;systematic_review_checks=104;experiment_scheduling_checks=88;training_compliance_checks=92;operations_board_checks=18;review_board_checks=24;control_plane_checks=30;integrity_plane_checks=36;coherence_plane_checks=40;publication_checks=48;calculation_checks=84;real_task_checks=96;analysis_results_checks=96;decision_support_checks=80;usable_research_checks=100;usable_project_checks=120;experiment_campaign_checks=108;release_dossier_checks=112;mature_capability_checks=72;provenance_view_checks=64;provenance_query_checks=72;workbench_exports=7;dynamic_inputs=4;host_ui_events=10;reader_contract=1;advanced_surface_objects=5;startup_health_checks=8;startup_doctor_checks=14;research_product_checks=18;runtime_assurance_checks=24;research_ops_checks=28;regulated_research_checks=32;lab_governance_ops_checks=26;state_catalog_checks=12;knowledge_index_checks=22;llm_transcript_checks=3;workbench_delivery_checks=15;research_portfolio_checks=16;execution_scale_checks=14;operations_scale_checks=12;project_revision_incident_checks=12;reserved_research_surface_checks=21;root_state_surface_checks=10;agentos_reserved_surface_checks=21;status=reference_ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "state_catalog=keys:574;nonzero:71;zero:503;represented:574;checks:12;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "startup_doctor=quickstart:ready;doctor:ready;checks:14;commands:startup_guide,platform_doctor,project_launch,open_research_studio;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "model_registry_service_checks=96;models=1;versions=1;evaluations=1;deployments=1;serving_checks=1;agentos_replacements=4;kernel_metadata=observed;status=ready")) return 1;
@@ -1950,7 +2049,7 @@ int main(void)
 	if (!rp_append_file("rp_agentcmp", "experiment_scheduling_checks=88;schedules=1;tasks=3;bookings=4;conflicts=1;executions=2;charts=4;agentos_replacements=4;kernel_metadata=observed;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "training_compliance_checks=92;requirements=4;training_records=4;competency=4;authorizations=3;gaps=1;open_gaps=0;charts=4;agentos_replacements=4;kernel_metadata=observed;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "analysis_results_checks=96;plans=1;runs=2;tables=2;statistics=2;figures=2;interpretations=2;charts=4;agentos_replacements=4;kernel_metadata=observed;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "decision_support_checks=80;options=3;criteria=5;scores=15;review_packets=1;selected=agentos_ucore_hybrid;agentos_replacements=4;kernel_observed=1;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "evidence_role=demo_reference;catalog_generation=demo_expected;decision_support_checks=80;options=3;criteria=5;scores=15;review_packets=1;selected=agentos_ucore_hybrid;agentos_replacements=4;kernel_observed=1;status=reference_ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "usable_research_checks=100;templates=3;datasets=3;library_sources=3;dag_stages=9;plan_queue=4;action_queue=5;handoffs=3;deliverables=8;kernel_observed=1;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "usable_project_checks=120;scaffold_templates=3;project_launches=2;project_bundles=2;doctor_checks=10;kernel_observed=1;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "knowledge_index=search_documents:1685;provenance_nodes:406;provenance_links:544;events:8966;context_records:380;usable_artifacts:507;usable_runs:23;status=ready")) return 1;
@@ -1972,15 +2071,15 @@ int main(void)
 	if (!rp_append_file("rp_agentcmp", "review_board_checks=24;boards=1;requests=1;votes=4;signoffs=4;assignments=4;workloads=4;filters=2;decision=approved;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "control_plane_checks=30;approvals=4;notifications=4;queue_items=4;plugins=3;workspaces=1;permissions=5;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "integrity_plane_checks=36;evidence_contracts=8;reference_contracts=8;namespace_checks=5;status_checks=5;review_alignment_checks=4;report_source_checks=3;package_trace_checks=3;agentos_replacements=4;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "coherence_plane_checks=40;delivery_contracts=7;run_state_contracts=7;lifecycle_contracts=6;workflow_lint=5;tool_protocol=5;report_validation=5;agent_coordination=3;agentos_replacements=4;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "evidence_role=demo_reference;catalog_generation=demo_expected;coherence_plane_checks=40;delivery_contracts=7;run_state_contracts=7;lifecycle_contracts=6;workflow_lint=5;tool_protocol=5;report_validation=5;agent_coordination=3;agentos_replacements=4;status=reference_ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "publication_checks=48;targets=2;submissions=2;review_rounds=2;revision_tasks=3;response_packages=2;response_items=4;decisions=2;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "mature_capability_checks=72;profiles=6;mappings=6;checks=72;platforms=Galaxy,AiiDA,DVC,MLflow,Nextflow,Snakemake;agentos_replacements=6;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "provenance_view_checks=64;timeline_views=4;subgraphs=3;packets=4;agentos_replacements=4;kernel_timeline=observed;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "provenance_query_checks=72;specs=3;templates=1;executions=3;comparisons=1;exports=1;packets=1;agentos_replacements=4;kernel_timeline=observed;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "evidence_role=demo_reference;catalog_generation=demo_expected;demo_expected_provenance_view_checks=64;timeline_views=4;demo_expected_subgraphs=3;packets=4;agentos_replacements=4;kernel_timeline=observed;status=reference_ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "evidence_role=demo_reference;catalog_generation=demo_expected;demo_expected_provenance_query_checks=72;specs=3;templates=1;executions=3;comparisons=1;exports=1;packets=1;agentos_replacements=4;kernel_timeline=observed;status=reference_ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "llm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "workflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "portability_backend_checks=18;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;passed_cases=8;planned_cases=0;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "backend_runner_checks=24;runner_cases=8;runner_passed=8;runner_planned=0;plain_inputs=8;study_metrics=2;backend_runner_detail_checks=48;runner_detail_rows=8;backend_runner_report_checks=40;runner_report_rows=8;backend_report_links=2;mainflow_facts=12;status=ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "evidence_role=demo_reference;catalog_generation=demo_expected;portability_backend_checks=18;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;demo_expected_passed_cases=8;planned_cases=0;status=reference_ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "evidence_role=demo_reference;catalog_generation=demo_expected;backend_runner_checks=24;runner_cases=8;demo_expected_runner_passed=8;runner_planned=0;plain_inputs=8;study_metrics=2;backend_runner_detail_checks=48;runner_detail_rows=8;backend_runner_report_checks=40;runner_report_rows=8;backend_report_links=2;mainflow_facts=12;status=reference_ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "agentos_kernel=mainflow_bound;context_snapshot=1;metadata_index=1;batch_tool=1;event_queue=1;recovery_tool=1;audit_ledger=1;capability_check=1;workbench_verify=1;package_trace=1;real_task_context=1;edit_lease=1;advanced_surface_kernel=1;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "research_governance_checks=18;protocol_compliance=1;protocol_amendments=1;sop_executions=1;risk_reviews=1;capa_verifications=2;decision_support=1;provenance_graph=1;status=ready")) return 1;
 	if (rp_host_seed_has("kind=research_run")) {
@@ -2025,6 +2124,5 @@ int main(void)
 	if (rp_host_seed_count() > 0) {
 		printf("rp_compare_plain: host_actions=%d verified\n", rp_host_seed_count());
 	}
-	printf("rp_compare_plain: plain_kernel=passed objects=500 programs=70 state_files=261 acks=69 tools=328 dynamic=4 products=18 assurance=24 research_ops=28 regulated=32 lab_governance=26 state_catalog=12 startup_doctor=14 model_registry=96 systematic_review=104 experiment_scheduling=88 training_compliance=92 runbook_service=16 project_delivery=18 study_protocol=20 statistical_design=120 opsboard=18 review_board=24 control_plane=30 integrity_plane=36 coherence_plane=40 publication=48 calculation=84 real_task=96 analysis_results=96 decision_support=80 usable_research=100 usable_project=120 campaign=108 release_dossier=112 mature=72 provenance=64 provenance_query=72 knowledge_index=22 llm_transcripts=3 workbench_delivery=15 portfolio_scale=16 execution_scale=14 operations_scale=12 project_revision_incident=12 reserved_surfaces=21 root_state=10 agentos_reserved=21 reader=1 status=ready\n");
 	return 0;
 }

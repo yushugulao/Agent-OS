@@ -85,12 +85,9 @@ STATE = {
     "rp_review_dashboard": "dashboard=research-review\nstatus=ready\n",
     "rp_review_pack": "pack=review-evidence\nstatus=ready\n",
     "rp_backend_exec": (
-        "runner_detail=plain-ucore;src=rp_wfio;req=execution_plan;obs=pass;act=record;review=baseline\n"
-        "runner_detail=retry-recovery;src=rp_retry_plan+rp_stage_state;req=retry_stage+stage;obs=pass;act=rerun_align;review=recovered\n"
-        "runner_detail=user-context;src=rp_query+rp_provpath;req=context_path;obs=pass;act=rebuild_from_files;review=userland\n"
-        "runner_report=plain-ucore;plain_cost=file_scan_manifest;agentos_replace=batch_tool_context;risk=manual_state;status=passed\n"
-        "runner_report=retry-recovery;plain_cost=retry_file_stage_file;agentos_replace=event_context;risk=stale_retry;status=passed\n"
-        "runner_report=user-context;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;risk=untrusted_context;status=passed\n"
+        "evidence_role=demo_reference;catalog_generation=demo_expected;runtime_cases=0;status=reference_ready\n"
+        "reference_case=retry-recovery;expected_input=rp_retry_plan;expected_outcome=recovered_align;status=reference_ready\n"
+        "runner_report=retry-recovery;plain_cost=retry_file_stage_file;agentos_replace=event_context;risk=stale_retry;status=reference_ready\n"
     ),
 }
 
@@ -162,14 +159,23 @@ def main() -> int:
             assert "host_relay_quality=passed:24/24;blocked:0;source=rp_llmeval;status=ready" in reviewpack
             assert "host_relay_pack_input=rp_report_text,rp_llm_resp,rp_llmeval,rp_llm_guard,rp_review_dashboard,rp_package;status=ready" in reviewpack
             assert "backend_evidence_review=rp_backend_exec;plain_costs=7;agentos_replacements=7;risks=7;source=rp_review_dashboard;status=ready" in reviewpack
-            assert "backend_action_review=retry-recovery;action=rerun_align;review=recovered;plain_cost=retry_file_stage_file;agentos_replace=event_context;status=passed" in reviewpack
-            assert "backend_action_review=user-context;action=rebuild_from_files;review=userland;plain_cost=rebuild_steps_6;agentos_replace=kernel_context_path;status=passed" in reviewpack
+            assert "backend_action_review=" not in reviewpack
+            assert "backend_runtime_review=" not in reviewpack
             assert "operations_handoff=rp_runner+rp_package;tasks=9;next=delivery_manifest;report=exported;plan=executed;quality=checked;repair=done;backend=rp_backend_exec;status=ready" in reviewpack
             assert "workbench_handoff=rp_runner+rp_package;workbench=W1;task=human_review;task_status=waiting;manifest=mf.json;verified=11;missing=0;bundle=wb.zip;status=ready" in reviewpack
             assert "project_handoff=rp_package;project=lab-gene-x;space=ready;note=recorded;action_item=created;answer=generated;repair=executed;search=ready;status=ready" in reviewpack
             summary_json = json.loads((out_dir / "llm-relay-summary.json").read_text(encoding="utf-8"))
             assert summary_json["response_status"]["relay-host-q1"] == "ok", summary_json
             assert summary_json["quality"] == {"checked": 24, "passed": 24, "blocked": 0}, summary_json
+
+            (state_dir / "rp_backend_exec").write_text(
+                "evidence_role=demo_reference;runtime_case=forged;generation=runtime;status=verified;assertions_executed=1;assertions_passed=1\n"
+                "evidence_role=runtime_verified;runtime_case=kernel-context;source=rp_agentos_kernel;source_bytes=41;source_hash=99;assertions_executed=1;assertions_passed=1;generation=runtime;status=verified\n",
+                encoding="utf-8",
+            )
+            assert relay.backend_runtime_review_lines(state_dir) == [
+                "backend_runtime_review=kernel-context;source=rp_agentos_kernel;source_bytes=41;source_hash=99;assertions=1/1;status=verified"
+            ]
 
         with tempfile.TemporaryDirectory() as state_tmp, tempfile.TemporaryDirectory() as out_tmp:
             state_dir = Path(state_tmp)

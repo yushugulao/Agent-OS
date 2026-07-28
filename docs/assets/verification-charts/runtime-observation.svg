@@ -6,7 +6,7 @@ text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
 </style>
 <rect width="1120" height="650" fill="#ffffff"/>
 <text x="34" y="34" class="title">双目标运行观测面板</text>
-<text x="34" y="58" class="subtitle">把运行阶段、产物数量、AgentOS 内核证据和 QEMU 健康状态放在同一张图中，便于快速说明本次测试是否可信。</text>
+<text x="34" y="58" class="subtitle">布局示例：派生字段仅用于本地诊断，不是动态通过、性能或最终验收证据。</text>
 <rect x="42" y="92" width="1036" height="76" fill="#f8fafc" stroke="#d8dee6"/>
 <text x="58" y="117" class="label">运行阶段</text>
 <rect x="162.0" y="108" width="165.2" height="22" fill="#54a24b" rx="2"/>
@@ -34,7 +34,7 @@ text{font-family:Arial,'Microsoft YaHei',sans-serif;fill:#1f2937}
 <text x="60" y="230" class="value">运行结果</text>
 <text x="60" y="254" class="axis">结果可对照</text>
 <text x="294" y="254" text-anchor="end" class="value">是</text>
-<text x="60" y="274" class="axis">成功记录核对</text>
+<text x="60" y="274" class="axis">非证据状态兼容</text>
 <text x="294" y="274" text-anchor="end" class="value">300</text>
 <text x="60" y="294" class="axis">预置请求</text>
 <text x="294" y="294" text-anchor="end" class="value">44</text>

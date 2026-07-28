@@ -10,6 +10,7 @@
 #include "proc.h"
 #include "workflow_lifecycle.h"
 #include "../user/include/exec_policy_manifest.h"
+#include "../exec_image_policy.h"
 
 _Static_assert(EXEC_MANIFEST_VFS_CONTENT_READ == VFS_CAP_CONTENT_READ,
 	       "content-read capability mismatch");
@@ -62,6 +63,9 @@ static int vfs_scope_create(uint scope_id,
 	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC || lifecycle == 0)
 		return -1;
 	*lifecycle = workflow_lifecycle_none();
+	/* Lease renewal may sleep; it must precede the scope allocation lock. */
+	if (workflow_lifecycle_prepare_create() < 0)
+		return -1;
 	enabled = intr_save();
 	for (int i = 0; i < NPROC; i++) {
 		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
@@ -172,6 +176,13 @@ static int vfs_scope_release(uint scope_id,
 			panic("workflow storage account missing");
 		fs_storage_scope_account_close(storage);
 		bio_scope_quiesce(scope_id);
+		/*
+		 * The last reference is the edge that makes this lifecycle
+		 * reclaimable.  Publish it only after the storage and I/O owners are
+		 * quiesced; every exit, revocation, and rollback path reaches this
+		 * common release boundary.
+		 */
+		agent_background_request();
 	}
 	return last;
 }
@@ -330,6 +341,24 @@ static int vfs_scope_preserve_on_retire(uint scope_id)
 	return result;
 }
 
+static int vfs_scope_reap_work_pending(void)
+{
+	int pending = 0;
+	int enabled = intr_save();
+
+	for (int i = 0; i < NPROC; i++) {
+		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
+
+		if (ref->used && ref->retiring &&
+		    workflow_lifecycle_retiring(ref->lifecycle)) {
+			pending = 1;
+			break;
+		}
+	}
+	intr_restore(enabled);
+	return pending;
+}
+
 void vfs_scope_reap_pending(void)
 {
 	uint scope_id = VFS_SCOPE_NONE;
@@ -358,6 +387,14 @@ void vfs_scope_reap_pending(void)
 		vfs_scope_reclaim_complete(scope_id);
 		bio_background_end();
 	}
+	/*
+	 * One checkpoint performs at most one bounded phase.  Re-arm the neutral
+	 * edge from level state after the phase: requests concurrent with the
+	 * earlier atomic take remain set, while requests coalesced into that take
+	 * cannot strand a still-retiring lifecycle.
+	 */
+	if (vfs_scope_reap_work_pending())
+		agent_background_request();
 }
 
 int vfs_scope_active(uint scope_id)
@@ -409,6 +446,28 @@ int vfs_scope_retained(uint scope_id)
 		}
 	intr_restore(enabled);
 	return retained;
+}
+
+int
+vfs_scope_lifecycle(uint scope_id, struct workflow_lifecycle_key *lifecycle)
+{
+	int result = -1;
+	int enabled;
+
+	if (lifecycle == 0)
+		return -1;
+	*lifecycle = workflow_lifecycle_none();
+	enabled = intr_save();
+	for (int i = 0; i < NPROC; i++)
+		if (vfs_scope_refs[i].used &&
+		    vfs_scope_refs[i].scope_id == scope_id &&
+		    workflow_lifecycle_key_valid(vfs_scope_refs[i].lifecycle)) {
+			*lifecycle = vfs_scope_refs[i].lifecycle;
+			result = 0;
+			break;
+		}
+	intr_restore(enabled);
+	return result;
 }
 
 int vfs_scope_bind_controller(uint scope_id,
@@ -527,6 +586,33 @@ uint vfs_scope_storage_guarantee(uint exempt_scope, int inode, uint guarantee)
 	return required;
 }
 
+uint
+vfs_scope_metadata_inode_usage(void)
+{
+	uint64 total = 0;
+	int enabled = intr_save();
+
+	for (int i = 0; i < NPROC; i++) {
+		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
+		uint64 used;
+
+		if (!ref->used ||
+		    (!ref->retiring &&
+		     !workflow_lifecycle_key_valid(ref->lifecycle)) ||
+		    !resource_account_handle_valid(ref->storage_account))
+			continue;
+		used = resource_account_usage(ref->storage_account,
+					      RESOURCE_FS_INODE);
+		if (used > (uint)-1 - total) {
+			total = (uint)-1;
+			break;
+		}
+		total += used;
+	}
+	intr_restore(enabled);
+	return (uint)total;
+}
+
 uint vfs_label_checksum(uint inum, uint magic, uint version, uint flags,
 			uint scope_id, uint policy, uint exec_profile,
 			uint generation, uint incarnation, uint fs_owner_domain,
@@ -553,6 +639,23 @@ static uint vfs_inode_checksum(struct inode *ip)
 				  ip->vfs_policy_generation,
 				  ip->vfs_incarnation, ip->fs_owner_domain,
 				  ip->fs_owner_version);
+}
+
+static int vfs_system_workflow_data_valid(struct inode *ip)
+{
+	return ip->vfs_exec_profile == VFS_EXEC_PROFILE_NONE &&
+	       ip->exec_flags == 0 && ip->exec_generation == 0 &&
+	       ip->exec_role_mask == 0 && ip->exec_layout_version == 0 &&
+	       ip->exec_rw_offset == 0;
+}
+
+static int vfs_system_workflow_exec_valid(struct inode *ip)
+{
+	return exec_image_protected_shape_valid(
+		ip->type == T_FILE, ip->size, ip->exec_flags,
+		ip->exec_generation, ip->exec_role_mask,
+		ip->exec_layout_version, ip->exec_rw_offset,
+		ip->vfs_exec_profile, PAGE_SIZE);
 }
 
 void vfs_cred_kernel(struct vfs_cred *cred)
@@ -800,10 +903,7 @@ void vfs_proc_limit_capabilities(struct proc *p, uint64 capabilities)
 
 int vfs_exec_profile_valid(uint profile)
 {
-	return profile == VFS_EXEC_PROFILE_NONE ||
-	       profile == VFS_EXEC_PROFILE_WORKFLOW ||
-	       profile == VFS_EXEC_PROFILE_CONTENT_READ ||
-	       profile == VFS_EXEC_PROFILE_ARTIFACT_WRITE;
+	return exec_image_profile_valid(profile);
 }
 
 uint64 vfs_exec_profile_capabilities(uint profile)
@@ -885,6 +985,7 @@ static int vfs_agent_image_allowed(const struct proc *p,
 				   const struct user_image *image)
 {
 	return p->is_agent && p->agent_role > 0 && p->agent_role < 32 &&
+	       image->agent_class == USER_IMAGE_AGENT_TRUSTED &&
 	       vfs_image_domain_safe(image) &&
 	       (image->exec_flags & EXEC_FLAG_TRUSTED) != 0 &&
 	       (image->exec_role_mask & EXEC_ROLE_BIT(p->agent_role)) != 0;
@@ -977,6 +1078,7 @@ vfs_exec_target_public(struct vfs_exec_transition *transition)
 	target->bound_exec_inum = 0;
 	target->bound_exec_incarnation = 0;
 	target->storage_principal_id = FS_OWNER_PUBLIC;
+	transition->identity_policy = VFS_EXEC_IDENTITY_PUBLIC;
 	transition->drop_to_public = 1;
 }
 
@@ -990,6 +1092,7 @@ int vfs_proc_exec_prepare(struct proc *p, const struct user_image *image,
 	    !proc_teardown_live(p))
 		return -1;
 	memset(transition, 0, sizeof(*transition));
+	transition->identity_policy = VFS_EXEC_IDENTITY_PUBLIC;
 	vfs_proc_security_state_capture(p, &transition->source);
 	transition->target = transition->source;
 	ceiling = vfs_exec_profile_capabilities(image->vfs_exec_profile);
@@ -1064,6 +1167,8 @@ int vfs_proc_exec_prepare(struct proc *p, const struct user_image *image,
 		transition->target.bound_exec_inum = image->exec_inum;
 		transition->target.bound_exec_incarnation =
 			image->vfs_exec_incarnation;
+		transition->identity_policy =
+			VFS_EXEC_IDENTITY_PRESERVE_AGENT;
 		goto prepared;
 	}
 	if (p->vfs_scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
@@ -1078,33 +1183,32 @@ int vfs_proc_exec_prepare(struct proc *p, const struct user_image *image,
 		vfs_exec_target_public(transition);
 
 prepared:
-	/*
-	 * A downgrade revokes old held rights before publication. It may request
-	 * teardown, but it never installs the target credential. Re-capture the
-	 * post-revocation source so commit can reject every other mutation.
-	 */
-	if (transition->drop_to_public) {
-		agent_scope_controller_departing(p);
-		proc_revoke_vfs_scope_fds(p);
-		vfs_proc_security_state_capture(p, &transition->source);
-	}
+	/* Prepare is deliberately side-effect free; revocation belongs to commit. */
 	transition->prepared = 1;
 	return 0;
 }
 
-int vfs_proc_exec_commit(struct proc *p,
-			 struct vfs_exec_transition *transition)
+int vfs_proc_exec_validate_locked(
+	struct proc *p, const struct vfs_exec_transition *transition)
 {
-	struct vfs_proc_security_state *target;
-	uint lifecycle_scope;
+	const struct vfs_proc_security_state *target;
+	uint lifecycle_scope = VFS_SCOPE_NONE;
 
 	if (intr_get())
-		panic("exec credential commit unlocked");
+		panic("exec credential validation unlocked");
 	if (p == 0 || transition == 0 || !transition->prepared ||
 	    !proc_teardown_live(p) ||
 	    !vfs_proc_security_state_matches(p, &transition->source))
 		return -1;
 	target = &transition->target;
+	if (transition->identity_policy != VFS_EXEC_IDENTITY_PUBLIC &&
+	    transition->identity_policy !=
+		    VFS_EXEC_IDENTITY_PRESERVE_AGENT)
+		return -1;
+	if (transition->identity_policy ==
+		    VFS_EXEC_IDENTITY_PRESERVE_AGENT &&
+	    (!p->is_agent || transition->drop_to_public))
+		return -1;
 	if (target->lifecycle_charged) {
 		if (!workflow_lifecycle_key_valid(target->lifecycle) ||
 		    !workflow_lifecycle_active(target->lifecycle) ||
@@ -1120,9 +1224,28 @@ int vfs_proc_exec_commit(struct proc *p,
 	     target->scope_id != lifecycle_scope ||
 	     !vfs_scope_active(target->scope_id)))
 		return -1;
+	if (transition->lifecycle_reserved &&
+	    p->workflow_lifecycle_charged)
+		return -1;
+	return 0;
+}
+
+int vfs_proc_exec_commit(struct proc *p,
+			 struct vfs_exec_transition *transition)
+{
+	struct vfs_proc_security_state *target;
+
+	if (vfs_proc_exec_validate_locked(p, transition) < 0)
+		return -1;
+	/* A caller may not publish PUBLIC VFS credentials around stale Agent state. */
+	if (transition->identity_policy == VFS_EXEC_IDENTITY_PUBLIC &&
+	    (p->is_agent || p->agent_type != AGENT_TYPE_NONE ||
+	     p->agent_role != 0 || p->agent_control_id != 0 ||
+	     p->agent_ctx_base != 0 || p->agent_capability_mask != 0))
+		return -1;
+	target = &transition->target;
 	if (transition->lifecycle_reserved) {
-		if (p->workflow_lifecycle_charged ||
-		    vfs_scope_preserve_on_retire(target->scope_id) < 0)
+		if (vfs_scope_preserve_on_retire(target->scope_id) < 0)
 			return -1;
 		if (vfs_proc_lifecycle_attach(p, target->scope_id,
 					      target->lifecycle) < 0)
@@ -1188,14 +1311,13 @@ static int vfs_label_shape_valid(struct inode *ip)
 		if (flag != VFS_LABEL_F_PROTECTED ||
 		    ip->vfs_scope_id == VFS_SCOPE_NONE)
 			return 0;
-		if (ip->vfs_scope_id == VFS_SCOPE_SYSTEM)
-			return ip->type == T_FILE &&
-			       ip->fs_owner_domain == FS_OWNER_SYSTEM &&
-			       (ip->exec_flags &
-				(EXEC_FLAG_IMMUTABLE | EXEC_FLAG_DOMAIN_SAFE)) ==
-				(EXEC_FLAG_IMMUTABLE | EXEC_FLAG_DOMAIN_SAFE) &&
-			       ip->exec_generation == EXEC_MANIFEST_VERSION &&
-			       ip->exec_layout_version == EXEC_LAYOUT_VERSION;
+		if (ip->vfs_scope_id == VFS_SCOPE_SYSTEM) {
+			if (ip->type != T_FILE ||
+			    ip->fs_owner_domain != FS_OWNER_SYSTEM)
+				return 0;
+			return vfs_system_workflow_data_valid(ip) ||
+			       vfs_system_workflow_exec_valid(ip);
+		}
 		return ip->vfs_scope_id >= VFS_SCOPE_FIRST_DYNAMIC &&
 		       ip->vfs_scope_id < FS_OWNER_SCOPE_FLAG &&
 		       FS_OWNER_IS_SCOPE(ip->fs_owner_domain) &&
@@ -1228,7 +1350,8 @@ int vfs_inode_label_valid(struct inode *ip)
 {
 	if (ip == 0)
 		return 0;
-	ivalid(ip);
+	if (ivalid(ip) < 0)
+		return 0;
 	return vfs_label_shape_valid(ip);
 }
 
@@ -1262,7 +1385,8 @@ int vfs_inode_authorize(struct inode *ip, const struct vfs_cred *cred,
 	if (op == VFS_OP_EXEC)
 		return ip->type == T_FILE &&
 		       (ip->vfs_policy != VFS_POLICY_WORKFLOW ||
-			ip->vfs_scope_id == VFS_SCOPE_SYSTEM);
+			(ip->vfs_scope_id == VFS_SCOPE_SYSTEM &&
+			 vfs_system_workflow_exec_valid(ip)));
 	if (ip->vfs_policy == VFS_POLICY_PUBLIC)
 		return cred->scope_id == VFS_SCOPE_NONE;
 	if (ip->vfs_policy == VFS_POLICY_WORKFLOW &&

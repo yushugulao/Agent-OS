@@ -3,18 +3,44 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#ifdef WAIT_ATOMIC_TEST_PROFILE
+#include <wait_atomic_test_abi.h>
+#endif
 
 #define FINAL_PROVENANCE_MAX 256
+#define FINAL_QUERY_CACHE_MAGIC 0x51434143U
+
+struct final_query_cache_entry {
+	uint magic;
+	uint version;
+	uint bytes;
+	uint reserved;
+	uint64 fs_generation;
+	uint64 query_ticks;
+	uint64 plan_reason;
+	int total_hits;
+	int returned;
+	int plan;
+	int used_index;
+	struct agent_file_hit first_hit;
+};
 
 static struct agent_op ops[AGENT_BATCH_MAX];
 static struct agent_result results[AGENT_BATCH_MAX];
 static struct agent_context_record records[AGENT_CONTEXT_MAX_RECORDS];
-static struct agent_trace_record trace_records[AGENT_TRACE_MAX_RECORDS];
-static struct agent_audit_record span_records[AGENT_AUDIT_MAX_RECORDS];
-static struct agent_timeline_record timeline_records[AGENT_TIMELINE_MAX_RECORDS];
+/* These snapshots are consumed one at a time; sharing their backing storage
+ * keeps the acceptance binary below the filesystem's ordinary MAXFILE limit. */
+static union {
+	struct agent_trace_record trace[AGENT_TRACE_MAX_RECORDS];
+	struct agent_audit_record audit[AGENT_AUDIT_MAX_RECORDS];
+	struct agent_timeline_record timeline[AGENT_TIMELINE_MAX_RECORDS];
+	struct agent_provenance_edge provenance[FINAL_PROVENANCE_MAX];
+} final_observe_scratch;
+#define TRACE_RECORDS final_observe_scratch.trace
+#define SPAN_RECORDS final_observe_scratch.audit
+#define TIMELINE_RECORDS final_observe_scratch.timeline
+#define PROVENANCE_EDGES final_observe_scratch.provenance
 static struct agent_timeline_filter timeline_filter;
-static struct agent_provenance_edge
-	provenance_edges[FINAL_PROVENANCE_MAX];
 static struct agent_ledger_summary final_ledger;
 static struct agent_info final_info;
 static struct agent_context_header final_header;
@@ -49,6 +75,274 @@ static int text_contains(const char *text, const char *needle)
 		if (strncmp(text + i, needle, n) == 0)
 			return 1;
 	return 0;
+}
+
+#ifdef AGENT_CONTEXT_SYNC_TEST_PROFILE
+static unsigned char sync_mirror_before[AGENT_CONTEXT_SIZE];
+static struct agent_context_record
+	sync_records_before[AGENT_CONTEXT_MAX_RECORDS];
+
+static int bytes_equal(const void *left, const void *right, int n)
+{
+	const unsigned char *a = left;
+	const unsigned char *b = right;
+
+	for (int i = 0; i < n; i++)
+		if (a[i] != b[i])
+			return 0;
+	return 1;
+}
+#endif
+
+#ifdef WAIT_ATOMIC_TEST_PROFILE
+static volatile int wait_atomic_sibling_ready;
+static volatile int wait_deadline_status[2];
+static int wait_deadline_timeout[2];
+
+static void wait_deadline_worker(void *arg)
+{
+	struct agent_event event;
+	int slot = (int)(long)arg;
+
+	memset(&event, 0, sizeof(event));
+	wait_deadline_status[slot] =
+		agent_wait(&event, wait_deadline_timeout[slot]);
+	exit(0);
+}
+
+static void wait_deadline_observe(uint phase,
+				  struct wait_atomic_deadline_snapshot *snapshot)
+{
+	int status;
+
+	for (;;) {
+		memset(snapshot, 0, sizeof(*snapshot));
+		status = wait_atomic_test_deadline_observe(phase, snapshot);
+		if (status == 0)
+			return;
+		check(status == WAIT_ATOMIC_TEST_RETRY,
+		      "deadline profile observation");
+		sched_yield();
+	}
+}
+
+static void check_thread_wait_deadlines(void)
+{
+	struct wait_atomic_deadline_snapshot snapshot;
+	struct wait_atomic_test_receipt receipt;
+	struct agent_event event;
+	int tids[2];
+
+	wait_deadline_timeout[0] = 30;
+	wait_deadline_timeout[1] = -1;
+	wait_deadline_status[0] = wait_deadline_status[1] = -99;
+	tids[0] = thread_create(wait_deadline_worker, (void *)0);
+	tids[1] = thread_create(wait_deadline_worker, (void *)1);
+	check(tids[0] > 0 && tids[1] > 0 && tids[0] != tids[1],
+	      "finite and infinite wait threads");
+	wait_deadline_observe(WAIT_ATOMIC_TEST_DEADLINE_FINITE_INFINITE,
+			      &snapshot);
+	check(snapshot.finite_threads == 1 &&
+	      snapshot.infinite_threads == 1 && snapshot.keyed_threads == 2,
+	      "finite and infinite wait publication");
+	check(waittid(tids[0]) == 0 &&
+	      wait_deadline_status[0] == AGENT_STATUS_TIMEOUT,
+	      "finite waiter timeout");
+	wait_deadline_observe(WAIT_ATOMIC_TEST_DEADLINE_INFINITE_ONLY,
+			      &snapshot);
+	check(snapshot.waiting_threads == 1 &&
+	      snapshot.infinite_threads == 1 &&
+	      snapshot.loop_state == AGENT_LOOP_WAITING,
+	      "infinite waiter preserved");
+	check(agent_watch(AGENT_EVENT_MESSAGE, "thread-deadline-release") == 0,
+	      "watch infinite waiter release");
+	memset(&event, 0, sizeof(event));
+	event.type = AGENT_EVENT_MESSAGE;
+	event.corr_id = 8011;
+	strcpy(event.payload, "thread-deadline-release");
+	check(agent_wake(getpid(), &event) == 0, "release infinite waiter");
+	check(waittid(tids[1]) == 0 &&
+	      wait_deadline_status[1] == AGENT_STATUS_OK,
+	      "infinite waiter event");
+	check(agent_unwatch(AGENT_EVENT_MESSAGE,
+			    "thread-deadline-release") == 1,
+	      "unwatch infinite waiter release");
+	wait_deadline_observe(WAIT_ATOMIC_TEST_DEADLINE_IDLE_FIRST, &snapshot);
+
+	wait_deadline_timeout[0] = 30;
+	wait_deadline_timeout[1] = 120;
+	wait_deadline_status[0] = wait_deadline_status[1] = -99;
+	tids[0] = thread_create(wait_deadline_worker, (void *)0);
+	tids[1] = thread_create(wait_deadline_worker, (void *)1);
+	check(tids[0] > 0 && tids[1] > 0 && tids[0] != tids[1],
+	      "distinct deadline wait threads");
+	wait_deadline_observe(WAIT_ATOMIC_TEST_DEADLINE_DISTINCT, &snapshot);
+	check(snapshot.finite_threads == 2 &&
+	      snapshot.reused_threads == 2 &&
+	      snapshot.earliest_deadline < snapshot.latest_deadline &&
+	      snapshot.earliest_tid != snapshot.latest_tid,
+	      "distinct deadline publication");
+	check(waittid(tids[0]) == 0 &&
+	      wait_deadline_status[0] == AGENT_STATUS_TIMEOUT,
+	      "short waiter timeout");
+	wait_deadline_observe(WAIT_ATOMIC_TEST_DEADLINE_LONG_ONLY, &snapshot);
+	check(snapshot.waiting_threads == 1 &&
+	      snapshot.earliest_deadline == snapshot.latest_deadline &&
+	      snapshot.loop_state == AGENT_LOOP_WAITING,
+	      "long waiter preserved");
+	check(waittid(tids[1]) == 0 &&
+	      wait_deadline_status[1] == AGENT_STATUS_TIMEOUT,
+	      "long waiter timeout");
+	wait_deadline_observe(WAIT_ATOMIC_TEST_DEADLINE_COMPLETE, &snapshot);
+	memset(&receipt, 0, sizeof(receipt));
+	check(wait_atomic_test_query(WAIT_ATOMIC_TEST_THREAD_DEADLINE,
+				     getpid(), &receipt) == 0,
+	      "query thread deadline receipt");
+	check(receipt.operation == WAIT_ATOMIC_TEST_THREAD_DEADLINE &&
+	      receipt.target_pid == getpid() && receipt.sequence != 0 &&
+	      receipt.flags == WAIT_ATOMIC_TEST_DEADLINE_FLAGS,
+	      "thread deadline receipt");
+	printf("agentfinal_ucore: thread_wait_deadlines finite_infinite=1 distinct_deadlines=1 keyed_timer=1 loop_aggregate=1 slot_reuse=1\n");
+}
+
+static void wait_atomic_teardown_sibling(void *unused)
+{
+	(void)unused;
+	wait_atomic_sibling_ready = 1;
+	for (;;)
+		sched_yield();
+}
+
+static void check_wait_publication_atomicity(void)
+{
+	struct agent_info before;
+	struct agent_info after;
+	struct agent_event event;
+	struct wait_atomic_test_receipt receipt;
+	int pid;
+	int status = 0;
+	int tid;
+
+	check(agent_info(&before) == 0, "wait injection info before");
+	check(before.event_queue_count == 0, "wait injection empty event queue");
+	check(wait_atomic_test_arm(WAIT_ATOMIC_TEST_AGENT_WAIT) == 0,
+	      "arm agent wait injection");
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, -1) == AGENT_STATUS_OK,
+	      "consume injected wait event");
+	check(event.type == AGENT_EVENT_TIMER &&
+	      strcmp(event.payload, "wait=atomic-injected") == 0,
+	      "injected wait event identity");
+	check(agent_info(&after) == 0, "wait injection info after");
+	check(after.event_queue_count == 0 &&
+	      after.wait_sleep_count == before.wait_sleep_count,
+	      "injected event consumed before sleep");
+	memset(&receipt, 0, sizeof(receipt));
+	check(wait_atomic_test_query(WAIT_ATOMIC_TEST_AGENT_WAIT, getpid(),
+				     &receipt) == 0,
+	      "query agent wait injection");
+	check(receipt.version == WAIT_ATOMIC_TEST_ABI_VERSION &&
+	      receipt.size == sizeof(receipt) &&
+	      receipt.operation == WAIT_ATOMIC_TEST_AGENT_WAIT &&
+	      receipt.target_pid == getpid() && receipt.sequence != 0 &&
+	      receipt.flags == WAIT_ATOMIC_TEST_AGENT_FLAGS,
+	      "agent wait injection receipt");
+	check_thread_wait_deadlines();
+
+	pid = fork();
+	check(pid >= 0, "fork teardown injection child");
+	if (pid == 0) {
+		wait_atomic_sibling_ready = 0;
+		tid = thread_create(wait_atomic_teardown_sibling, 0);
+		if (tid <= 0)
+			exit(91);
+		while (!wait_atomic_sibling_ready)
+			sched_yield();
+		if (wait_atomic_test_arm(WAIT_ATOMIC_TEST_TEARDOWN) < 0)
+			exit(92);
+		exit(73);
+	}
+	check(waitpid(pid, &status) == pid, "wait teardown injection child");
+	check(status == 73, "teardown injection child status");
+	memset(&receipt, 0, sizeof(receipt));
+	check(wait_atomic_test_query(WAIT_ATOMIC_TEST_TEARDOWN, pid,
+				     &receipt) == 0,
+	      "query teardown injection");
+	check(receipt.version == WAIT_ATOMIC_TEST_ABI_VERSION &&
+	      receipt.size == sizeof(receipt) &&
+	      receipt.operation == WAIT_ATOMIC_TEST_TEARDOWN &&
+	      receipt.target_pid == pid && receipt.sequence != 0 &&
+	      receipt.flags == WAIT_ATOMIC_TEST_TEARDOWN_FLAGS,
+	      "teardown injection receipt");
+	printf("agentfinal_ucore: wait_publication_atomic=1 event_wake_none=1 event_no_sleep=1 sibling_wake_none=1 teardown_completed=1\n");
+}
+#endif
+
+static int file_hit_equal(const struct agent_file_hit *left,
+			  const struct agent_file_hit *right)
+{
+	return left->fid == right->fid &&
+	       strcmp(left->physical_name, right->physical_name) == 0 &&
+	       strcmp(left->logical_path, right->logical_path) == 0 &&
+	       strcmp(left->stage, right->stage) == 0 &&
+	       strcmp(left->kind, right->kind) == 0 &&
+	       strcmp(left->status, right->status) == 0 &&
+	       strcmp(left->summary, right->summary) == 0 &&
+	       left->dependency_mask == right->dependency_mask &&
+	       left->dev == right->dev && left->inum == right->inum &&
+	       left->incarnation == right->incarnation &&
+	       left->size == right->size &&
+	       left->fs_generation == right->fs_generation;
+}
+
+static void check_user_query_cache(
+	struct agent_info *info, struct agent_context_header *header,
+	const struct agent_file_query_result *result)
+{
+	struct final_query_cache_entry *cache;
+	int n;
+
+	check(header->version == AGENT_CONTEXT_VERSION, "query cache version");
+	check(header->eviction_policy == AGENT_CONTEXT_EVICT_FIFO,
+	      "query cache FIFO policy");
+	check(header->user_cache_size >= sizeof(*cache),
+	      "structured query cache size");
+	check((result->plan_reason & AGENT_FILE_QUERY_REASON_CACHE_HIT) == 0,
+	      "kernel query result cache disabled");
+	cache = (struct final_query_cache_entry *)(info->context_base +
+					      header->user_cache_offset);
+	memset(cache, 0, sizeof(*cache));
+	cache->magic = FINAL_QUERY_CACHE_MAGIC;
+	cache->version = AGENT_CONTEXT_VERSION;
+	cache->bytes = sizeof(*cache);
+	cache->fs_generation = result->fs_generation;
+	cache->query_ticks = result->query_ticks;
+	cache->plan_reason = result->plan_reason;
+	cache->total_hits = result->total_hits;
+	cache->returned = result->returned;
+	cache->plan = result->plan;
+	cache->used_index = result->used_index;
+	if (result->returned > 0)
+		cache->first_hit = result->hits[0];
+	n = context_snapshot(header, records, AGENT_CONTEXT_MAX_RECORDS);
+	check(n > 0, "snapshot after structured query cache");
+	check(cache->magic == FINAL_QUERY_CACHE_MAGIC &&
+	      cache->version == AGENT_CONTEXT_VERSION &&
+	      cache->bytes == sizeof(*cache),
+	      "user query cache header preserved");
+	check(cache->fs_generation == result->fs_generation &&
+		      cache->query_ticks == result->query_ticks &&
+		      cache->plan_reason == result->plan_reason &&
+		      cache->total_hits == result->total_hits &&
+		      cache->returned == result->returned &&
+		      cache->plan == result->plan &&
+		      cache->used_index == result->used_index &&
+		      (result->returned == 0 ||
+		       file_hit_equal(&cache->first_hit, &result->hits[0])),
+	      "user query cache fields preserved");
+	printf("agentfinal_ucore: user_cache_preserved=1 offset=%d size=%d\n",
+	       (int)header->user_cache_offset, (int)header->user_cache_size);
+	printf("agentfinal_ucore: context_query_cache=1 user_managed=1 kernel_cache_hit=0\n");
 }
 
 static void set_demo_meta(int fid, const char *physical, const char *stage,
@@ -140,6 +434,11 @@ static void check_context_commit_lane(void)
 	int tid;
 	int status;
 	int n;
+	int main_tid = gettid();
+	int slow_tid = 0;
+	int fast_tid = 0;
+	int slow_found = 0;
+	int fast_found = 0;
 
 	check(agent_file_meta_init() == 0, "context lane meta init");
 	seed_demo_metadata();
@@ -189,8 +488,244 @@ static void check_context_commit_lane(void)
 	check(final_header.latest_record_hash ==
 		      records[n - 1].record_hash,
 	      "context lane header hash");
+	memset(&timeline_filter, 0, sizeof(timeline_filter));
+	timeline_filter.flags = AGENT_TIMELINE_FILTER_SOURCE_MASK;
+	timeline_filter.source_mask = AGENT_TIMELINE_SOURCE_MASK_CONTEXT;
+	n = agent_timeline_query(&timeline_filter, TIMELINE_RECORDS,
+				 AGENT_TIMELINE_MAX_RECORDS);
+	for (int i = 0; i < n; i++) {
+		if (TIMELINE_RECORDS[i].sequence == 2) {
+			slow_tid = TIMELINE_RECORDS[i].tid;
+			slow_found = 1;
+		}
+		if (TIMELINE_RECORDS[i].sequence == 3) {
+			fast_tid = TIMELINE_RECORDS[i].tid;
+			fast_found = 1;
+		}
+	}
+	check(slow_found && fast_found && slow_tid == tid &&
+	      fast_tid == main_tid &&
+	      slow_tid != fast_tid,
+	      "context historical thread identity");
 	printf("agentfinal_ucore: context_commit_lane=1 sequence=1..3 hash=1\n");
 }
+
+static void check_context_rollback_identity(void)
+{
+	struct agent_context_header tampered_header;
+	struct agent_context_record *mirror_records;
+	uint64 old_branch, new_branch, source_hash;
+	uint64 abandoned_sequence, abandoned_hash, abandoned_branch;
+	int n, edges, found = 0;
+
+	check(context_clear() == 0, "rollback identity clear");
+	check(context_rollback(999999) == AGENT_STATUS_NOT_FOUND,
+	      "rollback nonexistent sequence rejected");
+	for (int i = 0; i < 3; i++)
+		make_echo(&ops[i], 7300 + i, "branch-old");
+	check(agent_run(ops, results, 3, 0) == 3, "rollback identity seed");
+	n = context_snapshot(&final_header, records, AGENT_CONTEXT_MAX_RECORDS);
+	check(n == 3, "rollback identity seed snapshot");
+	old_branch = records[0].branch_generation;
+	source_hash = records[0].record_hash;
+	abandoned_sequence = records[2].sequence;
+	abandoned_hash = records[2].record_hash;
+	abandoned_branch = records[2].branch_generation;
+	check(context_rollback(records[0].sequence) == 0,
+	      "rollback identity rollback");
+	check(context_snapshot(&final_header, records,
+			       AGENT_CONTEXT_MAX_RECORDS) == 1,
+	      "rollback publishes active path only");
+	new_branch = final_header.branch_generation;
+	check(new_branch != old_branch && final_header.visible_head_sequence == 1 &&
+		      final_header.latest_sequence == 3 && final_header.count == 3 &&
+		      final_header.active_path_count == 1 &&
+		      final_header.active_path_oldest_sequence == 1 &&
+		      records[0].sequence == 1 &&
+		      records[0].path_parent_sequence == 0,
+	      "rollback creates branch without truncation");
+	check(context_detail(abandoned_sequence, &final_detail) == 0 &&
+		      final_detail.sequence == abandoned_sequence &&
+		      final_detail.op.request_id == 7302,
+	      "rollback archive remains queryable by identity");
+	mirror_records = (struct agent_context_record *)(
+		final_info.context_base + final_header.records_offset);
+	check(mirror_records[(abandoned_sequence - 1) % final_header.capacity]
+			      .record_hash == abandoned_hash &&
+		      mirror_records[(abandoned_sequence - 1) %
+				     final_header.capacity]
+			      .branch_generation == abandoned_branch,
+	      "rollback direct mirror preserves archive");
+	check(context_mirror_active_query(&final_header, mirror_records, 0,
+					 records,
+					 AGENT_CONTEXT_MAX_RECORDS) == 1 &&
+		      records[0].sequence == 1,
+	      "rollback direct mirror active path");
+	mirror_records[0].path_parent_sequence = mirror_records[0].sequence;
+	check(context_mirror_active_query(&final_header, mirror_records, 0,
+					 records,
+					 AGENT_CONTEXT_MAX_RECORDS) == -1,
+	      "direct active path rejects a cycle");
+	check(context_snapshot(&final_header, records,
+			       AGENT_CONTEXT_MAX_RECORDS) == 1 &&
+		      mirror_records[0].path_parent_sequence == 0,
+	      "trusted snapshot restores active path mirror");
+	mirror_records[0].payload[0] ^= 1;
+	check(context_mirror_active_query(&final_header, mirror_records, 0,
+					 records,
+					 AGENT_CONTEXT_MAX_RECORDS) == -1,
+	      "direct active path rejects content hash tamper");
+	mirror_records[0].payload[0] ^= 1;
+	tampered_header = final_header;
+	tampered_header.latest_record_hash ^= 1;
+	check(context_mirror_active_query(&tampered_header, mirror_records, 0,
+					 records,
+					 AGENT_CONTEXT_MAX_RECORDS) == -1,
+	      "direct active path rejects head hash tamper");
+	make_echo(&ops[0], 7304, "branch-new");
+	check(agent_run(&ops[0], &results[0], 1, 0) == 1 &&
+		      results[0].sequence == 4,
+	      "rollback does not reuse sequence");
+	n = context_snapshot(&final_header, records, AGENT_CONTEXT_MAX_RECORDS);
+	check(n == 2 && final_header.count == 4 &&
+		      final_header.active_path_count == 2 &&
+		      records[0].sequence == 1 && records[1].sequence == 4 &&
+		      records[1].cause_sequence == 1 &&
+		      records[1].path_parent_sequence == 1 &&
+		      records[1].branch_generation == new_branch &&
+		      records[1].prev_hash == source_hash,
+	      "rollback branch ancestry");
+	edges = agent_provenance_snapshot(PROVENANCE_EDGES,
+					 FINAL_PROVENANCE_MAX);
+	for (int i = 0; i < edges; i++)
+		if (PROVENANCE_EDGES[i].source_sequence == 1 &&
+		    PROVENANCE_EDGES[i].target_sequence == 4 &&
+		    PROVENANCE_EDGES[i].source_branch_generation == old_branch &&
+		    PROVENANCE_EDGES[i].target_branch_generation == new_branch &&
+		    PROVENANCE_EDGES[i].source_record_hash == source_hash &&
+		    PROVENANCE_EDGES[i].target_record_hash == records[1].record_hash)
+			found = 1;
+	check(found, "rollback provenance immutable identity");
+	printf("agentfinal_ucore: context_rollback_branch=1 sequence_reuse=0 provenance_bound=1\n");
+	printf("agentfinal_ucore: context_active_path=1 archive_retained=1 direct_query=1 fifo_suffix=1\n");
+}
+
+#ifdef AGENT_CONTEXT_SYNC_TEST_PROFILE
+static void arm_context_sync_failure(struct agent_info *info,
+				     struct agent_context_header *header)
+{
+	volatile uint64 *marker;
+
+	check(header->user_cache_size >= sizeof(*marker),
+	      "context sync test cache slot");
+	marker = (volatile uint64 *)(info->context_base +
+				     header->user_cache_offset);
+	*marker = ~AGENT_CONTEXT_MAGIC;
+}
+
+static void check_context_sync_unchanged(
+	const struct agent_context_header *before_header,
+	const struct agent_context_record *before_records, int before_count,
+	const struct agent_result *before_latest,
+	const struct agent_context_detail *before_detail)
+{
+	struct agent_context_detail after_detail;
+	struct agent_result *direct_latest =
+		(struct agent_result *)(final_info.context_base +
+					final_info.latest_response_offset);
+	int n;
+
+	check(bytes_equal((void *)final_info.context_base, sync_mirror_before,
+			  before_header->user_cache_offset),
+	      "failed context publish preserves direct mirror");
+	check(context_detail(before_records[0].sequence, &after_detail) == 0 &&
+	      bytes_equal(&after_detail, before_detail, sizeof(after_detail)),
+	      "failed context publish preserves overwritten detail");
+	n = context_snapshot(&final_header, records, AGENT_CONTEXT_MAX_RECORDS);
+
+	check(n == before_count &&
+	      bytes_equal(&final_header, before_header, sizeof(final_header)),
+	      "failed context publish preserves header");
+	check(bytes_equal(records, before_records,
+			  before_count * sizeof(records[0])),
+	      "failed context publish preserves records");
+	check(bytes_equal(direct_latest, before_latest, sizeof(*before_latest)),
+	      "failed context publish preserves latest");
+}
+
+static void check_context_sync_failure_atomicity(void)
+{
+	struct agent_context_header before_header;
+	struct agent_context_detail before_detail;
+	struct agent_result before_latest;
+	struct agent_result *direct_latest;
+	int n;
+
+	check(context_clear() == 0, "context sync test clear");
+	for (int seeded = 0; seeded < AGENT_CONTEXT_MAX_RECORDS;
+	     seeded += AGENT_BATCH_MAX) {
+		int count = AGENT_CONTEXT_MAX_RECORDS - seeded;
+
+		if (count > AGENT_BATCH_MAX)
+			count = AGENT_BATCH_MAX;
+		for (int i = 0; i < count; i++)
+			make_echo(&ops[i], 7350 + seeded + i, "sync-atomic");
+		check(agent_run(ops, results, count, 0) == count,
+		      "context sync test seed");
+	}
+	n = context_snapshot(&final_header, records, AGENT_CONTEXT_MAX_RECORDS);
+	check(n == AGENT_CONTEXT_MAX_RECORDS && final_header.oldest_sequence == 1 &&
+		      final_header.latest_sequence == AGENT_CONTEXT_MAX_RECORDS,
+	      "context sync test full fifo snapshot");
+	before_header = final_header;
+	memcpy(sync_records_before, records, sizeof(sync_records_before));
+	memcpy(sync_mirror_before, (void *)final_info.context_base,
+	       before_header.user_cache_offset);
+	direct_latest = (struct agent_result *)(final_info.context_base +
+					       final_info.latest_response_offset);
+	before_latest = *direct_latest;
+	check(context_detail(sync_records_before[0].sequence, &before_detail) == 0,
+	      "context sync test overwrite detail");
+
+	arm_context_sync_failure(&final_info, &final_header);
+	make_echo(&ops[0], 7350 + AGENT_CONTEXT_MAX_RECORDS,
+		  "sync-fail-append");
+	check(agent_run(&ops[0], &results[0], 1, 0) == -1,
+	      "append sync failure surfaced");
+	check_context_sync_unchanged(&before_header, sync_records_before, n,
+				     &before_latest, &before_detail);
+
+	arm_context_sync_failure(&final_info, &final_header);
+	check(context_rollback(sync_records_before[0].sequence) ==
+		      AGENT_STATUS_NO_SPACE,
+	      "rollback sync failure surfaced");
+	check_context_sync_unchanged(&before_header, sync_records_before, n,
+				     &before_latest, &before_detail);
+
+	arm_context_sync_failure(&final_info, &final_header);
+	check(context_clear() == AGENT_STATUS_NO_SPACE,
+	      "clear sync failure surfaced");
+	check_context_sync_unchanged(&before_header, sync_records_before, n,
+				     &before_latest, &before_detail);
+
+	make_echo(&ops[0], 7351 + AGENT_CONTEXT_MAX_RECORDS, "sync-recovered");
+	check(agent_run(&ops[0], &results[0], 1, 0) == 1 &&
+	      results[0].sequence == before_header.total_calls + 1,
+	      "context publish recovers after sync failure");
+	n = context_snapshot(&final_header, records, AGENT_CONTEXT_MAX_RECORDS);
+	check(n == AGENT_CONTEXT_MAX_RECORDS &&
+	      final_header.oldest_sequence ==
+		      before_header.oldest_sequence + 1 &&
+	      final_header.latest_sequence == before_header.latest_sequence + 1 &&
+	      final_header.dropped_records == before_header.dropped_records + 1,
+	      "context publish recovery commits fifo state");
+	check(context_detail(sync_records_before[0].sequence, &before_detail) ==
+		      AGENT_STATUS_NOT_FOUND &&
+	      context_detail(final_header.latest_sequence, &before_detail) == 0,
+	      "context publish recovery replaces oldest detail");
+	printf("agentfinal_ucore: context_sync_atomic=1 append=1 rollback=1 clear=1 recovery=1\n");
+}
+#endif
 
 static void check_legacy_name_protocol(void)
 {
@@ -339,24 +874,24 @@ static void check_runtime_trace(void)
 	int has_wait = 0;
 	uint64 last_tick = 0;
 
-	n = agent_trace_snapshot(trace_records, AGENT_TRACE_MAX_RECORDS);
+	n = agent_trace_snapshot(TRACE_RECORDS, AGENT_TRACE_MAX_RECORDS);
 	check(n > 0, "runtime trace count");
 	check(n <= AGENT_TRACE_MAX_RECORDS, "runtime trace cap");
 	for (int i = 0; i < n; i++) {
-		check(trace_records[i].tick >= last_tick,
+		check(TRACE_RECORDS[i].tick >= last_tick,
 		      "runtime trace order");
-		last_tick = trace_records[i].tick;
-		if (trace_records[i].kind == AGENT_TRACE_KIND_CONTEXT) {
+		last_tick = TRACE_RECORDS[i].tick;
+		if (TRACE_RECORDS[i].kind == AGENT_TRACE_KIND_CONTEXT) {
 			has_context = 1;
-			check(trace_records[i].sequence != 0,
+			check(TRACE_RECORDS[i].sequence != 0,
 			      "trace context sequence");
-			if (trace_records[i].tool_id == AGENT_TOOL_AGENT_WAIT &&
-			    trace_records[i].value0 == AGENT_EVENT_MESSAGE)
+			if (TRACE_RECORDS[i].tool_id == AGENT_TOOL_AGENT_WAIT &&
+			    TRACE_RECORDS[i].value0 == AGENT_EVENT_MESSAGE)
 				has_wait = 1;
 		}
-		if (trace_records[i].kind == AGENT_TRACE_KIND_SCHED) {
+		if (TRACE_RECORDS[i].kind == AGENT_TRACE_KIND_SCHED) {
 			has_sched = 1;
-			check((trace_records[i].flags &
+			check((TRACE_RECORDS[i].flags &
 			       AGENT_SCHED_REASON_ROLE_WEIGHT) != 0,
 			      "trace sched reason");
 		}
@@ -380,19 +915,19 @@ static void check_span_trace(struct agent_info *info)
 	check(info->current_span_id != 0, "span trace current span");
 	total = agent_span_trace_snapshot(0, 0);
 	check(total > 0, "span trace total");
-	n = agent_span_trace_snapshot(span_records, AGENT_AUDIT_MAX_RECORDS);
+	n = agent_span_trace_snapshot(SPAN_RECORDS, AGENT_AUDIT_MAX_RECORDS);
 	check(n > 0, "span trace records");
 	check(n <= total, "span trace count");
 	for (int i = 0; i < n; i++) {
-		check(span_records[i].span_id == info->current_span_id,
+		check(SPAN_RECORDS[i].span_id == info->current_span_id,
 		      "span trace id");
-		check(span_records[i].sequence >= last_sequence,
+		check(SPAN_RECORDS[i].sequence >= last_sequence,
 		      "span trace order");
-		last_sequence = span_records[i].sequence;
-		if (span_records[i].kind == AGENT_AUDIT_KIND_CONTEXT)
+		last_sequence = SPAN_RECORDS[i].sequence;
+		if (SPAN_RECORDS[i].kind == AGENT_AUDIT_KIND_CONTEXT)
 			has_context = 1;
-		if (span_records[i].kind == AGENT_AUDIT_KIND_EVENT_ENQUEUE ||
-		    span_records[i].kind == AGENT_AUDIT_KIND_EVENT_CONSUME)
+		if (SPAN_RECORDS[i].kind == AGENT_AUDIT_KIND_EVENT_ENQUEUE ||
+		    SPAN_RECORDS[i].kind == AGENT_AUDIT_KIND_EVENT_CONSUME)
 			has_event = 1;
 	}
 	check(has_context, "span trace context");
@@ -420,22 +955,22 @@ static void check_unified_timeline(void)
 
 	total = agent_timeline_snapshot(0, 0);
 	check(total > 0, "timeline total");
-	n = agent_timeline_snapshot(timeline_records,
+	n = agent_timeline_snapshot(TIMELINE_RECORDS,
 				    AGENT_TIMELINE_MAX_RECORDS);
 	check(n > 0, "timeline records");
 	check(n <= AGENT_TIMELINE_MAX_RECORDS, "timeline count");
 	for (int i = 0; i < n; i++) {
-		check(timeline_records[i].tick >= last_tick,
+		check(TIMELINE_RECORDS[i].tick >= last_tick,
 		      "timeline order");
-		last_tick = timeline_records[i].tick;
-		if (timeline_records[i].source ==
+		last_tick = TIMELINE_RECORDS[i].tick;
+		if (TIMELINE_RECORDS[i].source ==
 		    AGENT_TIMELINE_SOURCE_CONTEXT)
 			has_context = 1;
-		if (timeline_records[i].source == AGENT_TIMELINE_SOURCE_SCHED)
+		if (TIMELINE_RECORDS[i].source == AGENT_TIMELINE_SOURCE_SCHED)
 			has_sched = 1;
-		if (timeline_records[i].source == AGENT_TIMELINE_SOURCE_AUDIT)
+		if (TIMELINE_RECORDS[i].source == AGENT_TIMELINE_SOURCE_AUDIT)
 			has_audit = 1;
-		if (timeline_records[i].source ==
+		if (TIMELINE_RECORDS[i].source ==
 		    AGENT_TIMELINE_SOURCE_PREFETCH)
 			has_prefetch = 1;
 	}
@@ -443,30 +978,30 @@ static void check_unified_timeline(void)
 	check(has_sched, "timeline sched");
 	check(has_audit, "timeline audit");
 	check(has_prefetch, "timeline prefetch");
-	mid_tick = timeline_records[n / 2].tick;
-	cursor_tick = timeline_records[n / 2].tick;
-	cursor_source = timeline_records[n / 2].source;
-	cursor_sequence = timeline_records[n / 2].sequence;
+	mid_tick = TIMELINE_RECORDS[n / 2].tick;
+	cursor_tick = TIMELINE_RECORDS[n / 2].tick;
+	cursor_source = TIMELINE_RECORDS[n / 2].source;
+	cursor_sequence = TIMELINE_RECORDS[n / 2].sequence;
 
 	memset(&timeline_filter, 0, sizeof(timeline_filter));
 	timeline_filter.flags = AGENT_TIMELINE_FILTER_SOURCE_MASK;
 	timeline_filter.source_mask = AGENT_TIMELINE_SOURCE_MASK_AUDIT;
-	audit_records = agent_timeline_query(&timeline_filter, timeline_records,
+	audit_records = agent_timeline_query(&timeline_filter, TIMELINE_RECORDS,
 					     AGENT_TIMELINE_MAX_RECORDS);
 	check(audit_records > 0, "timeline query audit");
 	for (int i = 0; i < audit_records; i++)
-		check(timeline_records[i].source == AGENT_TIMELINE_SOURCE_AUDIT,
+		check(TIMELINE_RECORDS[i].source == AGENT_TIMELINE_SOURCE_AUDIT,
 		      "timeline query audit source");
 
 	memset(&timeline_filter, 0, sizeof(timeline_filter));
 	timeline_filter.flags = AGENT_TIMELINE_FILTER_START_TICK;
 	timeline_filter.start_tick = mid_tick;
 	recent_records = agent_timeline_query(&timeline_filter,
-					      timeline_records,
+					      TIMELINE_RECORDS,
 					      AGENT_TIMELINE_MAX_RECORDS);
 	check(recent_records > 0, "timeline query recent");
 	for (int i = 0; i < recent_records; i++)
-		check(timeline_records[i].tick >= mid_tick,
+		check(TIMELINE_RECORDS[i].tick >= mid_tick,
 		      "timeline query recent tick");
 
 	memset(&timeline_filter, 0, sizeof(timeline_filter));
@@ -475,11 +1010,11 @@ static void check_unified_timeline(void)
 	timeline_filter.after_source = cursor_source;
 	timeline_filter.after_sequence = cursor_sequence;
 	cursor_records = agent_timeline_query(&timeline_filter,
-					      timeline_records,
+					      TIMELINE_RECORDS,
 					      AGENT_TIMELINE_MAX_RECORDS);
 	check(cursor_records > 0, "timeline query cursor");
 	for (int i = 0; i < cursor_records; i++)
-		check(timeline_after_cursor(&timeline_records[i], cursor_tick,
+		check(timeline_after_cursor(&TIMELINE_RECORDS[i], cursor_tick,
 					    cursor_source, cursor_sequence),
 		      "timeline query cursor order");
 
@@ -498,11 +1033,11 @@ static void check_provenance_graph(void)
 
 	total = agent_provenance_snapshot(0, 0);
 	check(total >= AGENT_BATCH_MAX - 1, "provenance total");
-	n = agent_provenance_snapshot(provenance_edges, FINAL_PROVENANCE_MAX);
+	n = agent_provenance_snapshot(PROVENANCE_EDGES, FINAL_PROVENANCE_MAX);
 	check(n > 0, "provenance records");
 	check(n <= total, "provenance count");
 	for (int i = 0; i < n; i++) {
-		struct agent_provenance_edge *edge = &provenance_edges[i];
+		struct agent_provenance_edge *edge = &PROVENANCE_EDGES[i];
 
 		check(edge->source_sequence != 0,
 		      "provenance source sequence");
@@ -533,7 +1068,7 @@ static void check_run_ledger(void)
 	int n;
 	int chain_gaps = 0;
 
-	n = agent_audit_snapshot(span_records, AGENT_AUDIT_MAX_RECORDS);
+	n = agent_audit_snapshot(SPAN_RECORDS, AGENT_AUDIT_MAX_RECORDS);
 	check(n > 0, "ledger audit records");
 	check(n <= AGENT_AUDIT_MAX_RECORDS, "ledger audit cap");
 	memset(&final_ledger, 0, sizeof(final_ledger));
@@ -552,20 +1087,20 @@ static void check_run_ledger(void)
 	check(final_ledger.prefetch_records > 0, "ledger prefetch");
 	check(final_ledger.timeline_total >= final_ledger.total_records,
 	      "ledger timeline total");
-	check(span_records[0].sequence >= final_ledger.oldest_sequence,
+	check(SPAN_RECORDS[0].sequence >= final_ledger.oldest_sequence,
 	      "ledger oldest window");
-	check(span_records[n - 1].sequence <= final_ledger.latest_sequence,
+	check(SPAN_RECORDS[n - 1].sequence <= final_ledger.latest_sequence,
 	      "ledger latest window");
 	if (n == (int)final_ledger.visible_records)
-		check(span_records[0].sequence == final_ledger.oldest_sequence,
+		check(SPAN_RECORDS[0].sequence == final_ledger.oldest_sequence,
 		      "ledger oldest");
-	if (span_records[n - 1].sequence == final_ledger.latest_sequence)
-		check(span_records[n - 1].record_hash == final_ledger.ledger_hash,
+	if (SPAN_RECORDS[n - 1].sequence == final_ledger.latest_sequence)
+		check(SPAN_RECORDS[n - 1].record_hash == final_ledger.ledger_hash,
 		      "ledger latest hash");
 	for (int i = 0; i < n; i++) {
-		check(span_records[i].record_hash != 0, "ledger record hash");
-		if (i > 0 && span_records[i].prev_hash !=
-				     span_records[i - 1].record_hash)
+		check(SPAN_RECORDS[i].record_hash != 0, "ledger record hash");
+		if (i > 0 && SPAN_RECORDS[i].prev_hash !=
+				     SPAN_RECORDS[i - 1].record_hash)
 			chain_gaps++;
 	}
 	check((uint64)chain_gaps <= final_ledger.dropped_records,
@@ -674,7 +1209,7 @@ static void check_timeline_wait(void)
 	wait_wakeup_before = final_info.timeline_wait_wakeup_count;
 	waited = agent_timeline_wait(&timeline_filter, 50);
 	check(waited > 0, "timeline wait wake");
-	queried = agent_timeline_query(&timeline_filter, timeline_records,
+	queried = agent_timeline_query(&timeline_filter, TIMELINE_RECORDS,
 				       AGENT_TIMELINE_MAX_RECORDS);
 	check(queried == waited, "timeline wait query count");
 	check(queried > 0, "timeline wait query records");
@@ -705,14 +1240,14 @@ static void check_timeline_wait(void)
 	      "timeline read info before");
 	read_sleep_before = final_info.timeline_wait_sleep_count;
 	read_wakeup_before = final_info.timeline_wait_wakeup_count;
-	read_records = agent_timeline_read(&timeline_filter, timeline_records,
+	read_records = agent_timeline_read(&timeline_filter, TIMELINE_RECORDS,
 					   AGENT_TIMELINE_MAX_RECORDS, 50);
 	check(read_records > 0, "timeline read wake");
 	for (int i = 0; i < read_records; i++) {
-		check(timeline_records[i].source ==
+		check(TIMELINE_RECORDS[i].source ==
 			      AGENT_TIMELINE_SOURCE_AUDIT,
 		      "timeline read source");
-		check(timeline_records[i].event_type == AGENT_EVENT_TIMER,
+		check(TIMELINE_RECORDS[i].event_type == AGENT_EVENT_TIMER,
 		      "timeline read event type");
 	}
 	check(agent_info(&final_info) == 0,
@@ -771,6 +1306,10 @@ static void run_agent_child(void)
 	       (int)info->context_size, (int)direct_header->capacity);
 
 	check_context_commit_lane();
+	check_context_rollback_identity();
+#ifdef AGENT_CONTEXT_SYNC_TEST_PROFILE
+	check_context_sync_failure_atomicity();
+#endif
 	check(context_clear() == 0, "context clear");
 	for (int i = 0; i < AGENT_BATCH_MAX; i++)
 		make_echo(&ops[i], i + 1, i == 7 ? "ucore-final" : "final");
@@ -842,17 +1381,6 @@ static void run_agent_child(void)
 	      "snapshot refreshes mirror");
 	printf("agentfinal_ucore: tamper_protected=1\n");
 
-	check(header->user_cache_size >= 16, "user cache size");
-	strcpy((char *)(info->context_base + header->user_cache_offset),
-	       "cache-ok");
-	n = context_snapshot(header, records, AGENT_CONTEXT_MAX_RECORDS);
-	check(n == AGENT_BATCH_MAX, "snapshot after cache");
-	check(strcmp((char *)(info->context_base + header->user_cache_offset),
-		     "cache-ok") == 0,
-	      "user cache preserved");
-	printf("agentfinal_ucore: user_cache_preserved=1 offset=%d size=%d\n",
-	       (int)header->user_cache_offset, (int)header->user_cache_size);
-
 	memset(manual, 0, sizeof(*manual));
 	manual->tool_id = AGENT_TOOL_CONTEXT_PUSH;
 	manual->request_id = 6501;
@@ -885,9 +1413,32 @@ static void run_agent_child(void)
 	check(header->oldest_sequence == 66, "fifo oldest");
 	check(header->latest_sequence == 193, "fifo latest");
 	check(header->dropped_records == 65, "fifo dropped");
-	printf("agentfinal_ucore: fifo oldest=%d latest=%d dropped=%d\n",
+	check(header->active_path_count == AGENT_CONTEXT_MAX_RECORDS &&
+		      header->active_path_oldest_sequence == 66 &&
+		      records[0].sequence == 66 &&
+		      records[0].path_parent_sequence == 65,
+	      "FIFO active path converges to retained suffix");
+	check(header->eviction_policy == AGENT_CONTEXT_EVICT_FIFO,
+	      "FIFO policy published");
+	{
+		uint64 branch = header->branch_generation;
+		uint64 visible_head = header->visible_head_sequence;
+
+		check(context_rollback(header->oldest_sequence - 1) ==
+			      AGENT_STATUS_NOT_FOUND,
+		      "rollback evicted sequence rejected");
+		check(context_snapshot(header, records,
+				       AGENT_CONTEXT_MAX_RECORDS) ==
+			      AGENT_CONTEXT_MAX_RECORDS,
+		      "snapshot after rejected rollback");
+		check(header->branch_generation == branch &&
+		      header->visible_head_sequence == visible_head,
+		      "rejected rollback leaves branch unchanged");
+	}
+	printf("agentfinal_ucore: fifo oldest=%d latest=%d dropped=%d policy=1\n",
 	       (int)header->oldest_sequence, (int)header->latest_sequence,
 	       (int)header->dropped_records);
+	printf("agentfinal_ucore: context_rollback_negative nonexistent=1 evicted=1\n");
 
 	check(agent_file_meta_init() == 0, "meta init");
 	seed_demo_metadata();
@@ -905,6 +1456,7 @@ static void run_agent_child(void)
 	      "file query reason");
 	check(qr->candidate_records == qr->scanned_records,
 	      "file query candidates");
+	check_user_query_cache(info, header, qr);
 	n = agent_file_prefetch_snapshot(final_prefetch_hints,
 					 AGENT_FILE_PREFETCH_MAX_HINTS);
 	check(n >= 1, "prefetch snapshot");
@@ -950,6 +1502,9 @@ static void run_agent_child(void)
 	check_unified_timeline();
 	check_timeline_wait();
 	check_run_ledger();
+#ifdef WAIT_ATOMIC_TEST_PROFILE
+	check_wait_publication_atomicity();
+#endif
 
 	printf("agentfinal_ucore: passed\n");
 	exit(0);

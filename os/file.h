@@ -47,6 +47,10 @@ struct pipe {
 	uint nwrite; // number of bytes written
 	int readopen; // read fd is still open
 	int writeopen; // write fd is still open
+	struct resource_account_handle page_account;
+	enum resource_charge_class page_charge_class;
+	struct wait_queue read_waiters;
+	struct wait_queue write_waiters;
 };
 
 // Descriptor inheritance is deny-by-default at a security-principal boundary.

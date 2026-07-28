@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Mutation tests for the shared exec argv/user stack contract."""
+
+import shutil
+import subprocess
+import sys
+import tempfile
+import unittest
+from pathlib import Path
+
+
+CHECKER = Path(__file__).with_name("check-user-stack-contract.py")
+REPO = Path(__file__).resolve().parent.parent
+FILES = (
+    "user_stack_policy.h",
+    "os/user_stack_layout.h",
+    "os/loader.h",
+    "os/proc.c",
+    "os/syscall.c",
+    "user/Makefile",
+    "user/include/user_stack_policy.h",
+    "user/src/usersafety_ucore.c",
+    "scripts/run-agent-tests.sh",
+    "scripts/validate-kernel-test-log.py",
+    "scripts/test-check-user-stack-contract.py",
+    "Makefile",
+)
+
+
+class UserStackContractTests(unittest.TestCase):
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self.temporary.name)
+        for relative in FILES:
+            target = self.root / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(REPO / relative, target)
+
+    def tearDown(self):
+        self.temporary.cleanup()
+
+    def mutate(self, relative, old, new):
+        path = self.root / relative
+        text = path.read_text(encoding="utf-8")
+        self.assertIn(old, text, f"stale mutation fixture: {relative}")
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+    def run_checker(self):
+        return subprocess.run(
+            [sys.executable, str(CHECKER), "--root", str(self.root)],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=False,
+        )
+
+    def assert_rejected(self, needle):
+        result = self.run_checker()
+        self.assertNotEqual(result.returncode, 0, result.stdout)
+        self.assertIn(needle, result.stderr)
+
+    def test_accepts_complete_contract(self):
+        result = self.run_checker()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("boundary=1024 overflow=1040", result.stdout)
+
+    def test_mutation_policy_constant_drift_is_rejected(self):
+        self.mutate(
+            "user_stack_policy.h",
+            "#define USER_STACK_ARGV_LAYOUT_BYTES 1024ULL",
+            "#define USER_STACK_ARGV_LAYOUT_BYTES 1040ULL",
+        )
+        self.assert_rejected("constant drift")
+
+    def test_mutation_loader_boundary_bypass_is_rejected(self):
+        self.mutate(
+            "os/proc.c",
+            "user_stack_argv_layout_add_string(&layout, n)",
+            "user_stack_argv_layout_add_string_bypassed(&layout, n)",
+        )
+        self.assert_rejected("loader string accounting")
+
+    def test_mutation_user_policy_wrapper_bypass_is_rejected(self):
+        self.mutate(
+            "user/include/user_stack_policy.h",
+            '#include "../../user_stack_policy.h"',
+            "#define USER_STACK_ARGV_LAYOUT_BYTES 4096",
+        )
+        self.assert_rejected("user policy wrapper include")
+
+    def test_mutation_syscall_boundary_bypass_is_rejected(self):
+        self.mutate(
+            "os/syscall.c",
+            "USER_STACK_ARGV_LAYOUT_BYTES - storage_used",
+            "USTACK_SIZE - storage_used",
+        )
+        self.assert_rejected("syscall bounded argument copy")
+
+    def test_mutation_pointer_vector_omission_is_rejected(self):
+        self.mutate(
+            "os/user_stack_layout.h",
+            "pointer_bytes = (layout->argc + 1) * USER_STACK_POINTER_BYTES;",
+            "pointer_bytes = 0;",
+        )
+        self.assert_rejected("argv pointer-vector accounting")
+
+    def test_mutation_per_string_alignment_omission_is_rejected(self):
+        self.mutate(
+            "os/user_stack_layout.h",
+            "next = user_stack_layout_align(layout->used + bytes);",
+            "next = layout->used + bytes;",
+        )
+        self.assert_rejected("per-string alignment accounting")
+
+    def test_mutation_preflight_after_write_is_rejected(self):
+        self.mutate(
+            "os/proc.c",
+            "if (user_range_check(pagetable, argv_sp, layout_bytes, PTE_W) < 0)\n\t\treturn -1;",
+            "/* range preflight removed */",
+        )
+        self.assert_rejected("stack range preflight")
+
+    def test_mutation_liveness_evidence_removal_is_rejected(self):
+        self.mutate(
+            "user/src/usersafety_ucore.c",
+            'check_live("exec argv layout budget");',
+            "/* liveness proof removed */",
+        )
+        self.assert_rejected("reject-and-live")
+
+    def test_mutation_runner_marker_removal_is_rejected(self):
+        self.mutate(
+            "scripts/run-agent-tests.sh",
+            "usersafety_ucore: argv_layout_budget=1024 boundary_accept=1 over_limit_rejected=1 caller_live=1",
+            "usersafety_ucore: argv layout omitted",
+        )
+        self.assert_rejected("runner exact argv marker")
+
+    def test_mutation_validator_marker_removal_is_rejected(self):
+        self.mutate(
+            "scripts/validate-kernel-test-log.py",
+            "usersafety_ucore: argv_layout_budget=1024 boundary_accept=1 over_limit_rejected=1 caller_live=1",
+            "usersafety_ucore: argv layout omitted",
+        )
+        self.assert_rejected("validator exact argv marker")
+
+    def test_mutation_selftest_wiring_removal_is_rejected(self):
+        self.mutate(
+            "Makefile",
+            "scripts/test-check-user-stack-contract.py",
+            "scripts/test-check-user-stack-contract-removed.py",
+        )
+        self.assert_rejected("mutation test wiring")
+
+
+if __name__ == "__main__":
+    unittest.main()

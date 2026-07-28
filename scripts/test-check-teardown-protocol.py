@@ -32,6 +32,103 @@ class TeardownProtocolTests(unittest.TestCase):
     def test_repository_protocol_is_valid(self):
         teardown_protocol.validate_protocol(copy.deepcopy(self.good))
 
+    def test_last_reference_must_request_reaper(self):
+        sources = self.changed(
+            "vfs",
+            "\t\tagent_background_request();\n"
+            "\t}\n"
+            "\treturn last;\n",
+            "\t}\n\treturn last;\n",
+        )
+        self.assert_rejected(sources, "last workflow reference")
+
+    def test_last_reference_must_quiesce_before_request(self):
+        before = (
+            "\t\tfs_storage_scope_account_close(storage);\n"
+            "\t\tbio_scope_quiesce(scope_id);\n"
+        )
+        after = (
+            "\t\tagent_background_request();\n"
+            "\t\tfs_storage_scope_account_close(storage);\n"
+            "\t\tbio_scope_quiesce(scope_id);\n"
+        )
+        sources = self.changed("vfs", before, after)
+        self.assert_rejected(sources, "exactly one maintenance edge|quiesce")
+
+    def test_unfinished_reaper_phase_must_rearm(self):
+        sources = self.changed(
+            "vfs",
+            "\tif (vfs_scope_reap_work_pending())\n"
+            "\t\tagent_background_request();\n",
+            "",
+        )
+        self.assert_rejected(sources, "level-rearm|exactly 1")
+
+    def test_reaper_rearm_must_be_level_guarded(self):
+        sources = self.changed(
+            "vfs",
+            "\tif (vfs_scope_reap_work_pending())\n"
+            "\t\tagent_background_request();",
+            "\tagent_background_request();",
+        )
+        self.assert_rejected(sources, "level-rearm|exactly 1")
+
+    def test_reaper_cannot_busy_loop(self):
+        sources = self.changed(
+            "vfs",
+            "\tif (vfs_scope_reap_work_pending())\n"
+            "\t\tagent_background_request();",
+            "\twhile (vfs_scope_reap_work_pending())\n"
+            "\t\tagent_background_request();",
+        )
+        self.assert_rejected(sources, "level-rearm|busy-loop")
+
+    def test_background_edge_take_must_remain_atomic(self):
+        sources = self.changed(
+            "background",
+            "return __atomic_exchange_n(&agent_background_pending, 0,\n"
+            "\t\t\t\t   __ATOMIC_ACQ_REL);",
+            "return agent_background_pending;",
+        )
+        self.assert_rejected(sources, "atomically merge concurrent requests")
+
+    def test_background_checkpoint_cannot_drain_in_a_loop(self):
+        sources = self.changed(
+            "agent_core",
+            "\tagent_background_maintain();\n}",
+            "\tdo {\n"
+            "\t\tagent_background_maintain();\n"
+            "\t} while (agent_background_take());\n}",
+        )
+        self.assert_rejected(sources, "exactly 1|one maintenance pass")
+
+    def test_vfs_bridge_must_admit_neutral_background_latch(self):
+        sources = copy.deepcopy(self.good)
+        bridge = next(
+            entry
+            for entry in sources["budget"]["agent_modules"][
+                "integration_bridges"
+            ]
+            if entry["name"] == "vfs_security"
+        )
+        bridge["allowed_dependencies"].remove("background")
+        self.assert_rejected(sources, "teardown dependency")
+
+    def test_same_pass_metadata_commit_cannot_consume_reaper_edge(self):
+        sources = copy.deepcopy(self.good)
+        reap = "vfs_scope_reap_pending();"
+        store = "agent_metadata_store_background_maintain();"
+        self.assertEqual(sources["objects"].count(reap), 1)
+        self.assertEqual(sources["objects"].count(store), 1)
+        sources["objects"] = sources["objects"].replace(
+            reap, "REAPER_ORDER_MUTATION();", 1
+        )
+        sources["objects"] = sources["objects"].replace(store, reap, 1)
+        sources["objects"] = sources["objects"].replace(
+            "REAPER_ORDER_MUTATION();", store, 1
+        )
+        self.assert_rejected(sources, "same-pass commit")
+
     def test_wrong_phase_transition_is_rejected(self):
         sources = self.changed(
             "vfs",
@@ -75,25 +172,112 @@ class TeardownProtocolTests(unittest.TestCase):
         )
         self.assert_rejected(sources, "FILES phase crosses phase ownership")
 
+    def test_metadata_failure_cannot_retire_state(self):
+        sources = self.changed(
+            "store",
+            "\tif (agent_meta_store_failed_closed ||\n"
+            "\t    agent_durable_section_scope_pending(scope_id))",
+            "\tif (agent_durable_section_scope_pending(scope_id))",
+        )
+        self.assert_rejected(sources, "target retirement must contain one if")
+
+    def test_metadata_pending_durable_state_blocks_target_zero(self):
+        sources = self.changed(
+            "store",
+            "\tif (agent_meta_store_failed_closed ||\n"
+            "\t    agent_durable_section_scope_pending(scope_id))",
+            "\tif (agent_meta_store_failed_closed)",
+        )
+        self.assert_rejected(sources, "target retirement must contain one if")
+
+    def test_metadata_dirty_must_reach_durable_generation(self):
+        sources = self.changed(
+            "store",
+            "\t    state->dirty_generation != state->durable_generation ||\n",
+            "",
+        )
+        self.assert_rejected(sources, "target retirement must contain one if")
+
+    def test_metadata_durable_must_reach_replicated_generation(self):
+        sources = self.changed(
+            "store",
+            "\t    state->dirty_generation != state->replicated_generation ||\n",
+            "",
+        )
+        self.assert_rejected(sources, "target retirement must contain one if")
+
+    def test_metadata_busy_lane_cannot_retire_state(self):
+        sources = self.changed(
+            "store",
+            "\t    agent_file_writeback_scope_busy(scope_id))",
+            "\t    0)",
+        )
+        self.assert_rejected(sources, "target retirement must contain one if")
+
+    def test_metadata_missing_slot_rejects_nonzero_generation(self):
+        sources = self.changed(
+            "store", "\tretired = target == 0;", "\tretired = 1;"
+        )
+        self.assert_rejected(sources, "absent slot only for target zero")
+
+    def test_metadata_target_zero_cannot_bypass_failure_barriers(self):
+        absent = (
+            "\tstate = agent_file_scope_state_locked(scope_id, 0);\n"
+            "\tif (state == 0) {\n"
+            "\t\tretired = target == 0;\n"
+            "\t\tgoto out;\n\t}\n"
+        )
+        barrier = (
+            "\tif (agent_meta_store_failed_closed ||\n"
+            "\t    agent_durable_section_scope_pending(scope_id))\n"
+            "\t\tgoto out;\n"
+        )
+        sources = self.changed(
+            "store", barrier + absent, absent + barrier,
+        )
+        self.assert_rejected(sources, "retired before its target settled")
+
+    def test_metadata_retirement_requires_transaction_lock(self):
+        sources = self.changed(
+            "store",
+            "\tif (!agent_metadata_txn_lock(0))\n\t\treturn 0;\n",
+            "",
+        )
+        self.assert_rejected(sources, "atomically check and retire")
+
+    def test_metadata_background_retries_unnotified_durable_state(self):
+        sources = self.changed(
+            "store",
+            "\tint durable_pending = agent_durable_section_retry_pending();",
+            "\tint durable_pending = 0;",
+        )
+        self.assert_rejected(sources, "retry unnotified durable state")
+
     def test_metadata_state_cannot_retire_before_settlement(self):
         guard = (
-            "\tif (!agent_meta_store_failed_closed &&\n"
-            "\t    !agent_file_writeback_scope_reached(scope_id, target, 1))\n"
-            "\t\treturn 0;\n"
-            "\tagent_file_scope_state_retire(scope_id);"
+            "\tif (!agent_file_writeback_generation_reached(\n"
+            "\t\t    state->replicated_generation, target) ||\n"
+            "\t    state->dirty_generation != state->durable_generation ||\n"
+            "\t    state->dirty_generation != state->replicated_generation ||\n"
+            "\t    agent_file_writeback_scope_busy(scope_id))\n"
+            "\t\tgoto out;\n"
+            "\tmemset(state, 0, sizeof(*state));"
         )
         early = (
-            "\tagent_file_scope_state_retire(scope_id);\n"
-            "\tif (!agent_meta_store_failed_closed &&\n"
-            "\t    !agent_file_writeback_scope_reached(scope_id, target, 1))\n"
-            "\t\treturn 0;"
+            "\tmemset(state, 0, sizeof(*state));\n"
+            "\tif (!agent_file_writeback_generation_reached(\n"
+            "\t\t    state->replicated_generation, target) ||\n"
+            "\t    state->dirty_generation != state->durable_generation ||\n"
+            "\t    state->dirty_generation != state->replicated_generation ||\n"
+            "\t    agent_file_writeback_scope_busy(scope_id))\n"
+            "\t\tgoto out;"
         )
         sources = self.changed("store", guard, early)
         self.assert_rejected(sources, "retired before its target settled")
 
     def test_missing_begin_cleanup_is_rejected(self):
         sources = self.changed(
-            "objects", "\tagent_observe_scope_reclaim(scope_id);\n", ""
+            "objects", "agent_observe_scope_reclaim(scope_id)", "0"
         )
         self.assert_rejected(sources, "lost observability cleanup ownership")
 
@@ -113,6 +297,306 @@ class TeardownProtocolTests(unittest.TestCase):
         )
         bridge["allowed_dependencies"].append("metadata_store")
         self.assert_rejected(sources, "dependency bypasses metadata_objects")
+
+    def test_global_trapframe_pool_is_rejected(self):
+        sources = copy.deepcopy(self.good)
+        sources["proc"] = (
+            "char trapframe[NPROC][NTHREAD][TRAP_PAGE_SIZE];\n"
+            + sources["proc"]
+        )
+        self.assert_rejected(sources, "global NPROC x NTHREAD trapframe pool")
+
+    def test_unaccounted_trapframe_allocation_is_rejected(self):
+        sources = self.changed(
+            "proc", "kalloc_account_page(t->resource_account,", "kalloc("
+        )
+        self.assert_rejected(sources, "must call kalloc_account_page")
+
+    def test_trapframe_must_precede_thread_account_release(self):
+        sources = self.changed(
+            "proc",
+            "\tthread_trapframe_release(t);\n"
+            "\tproc_thread_resource_release(t);",
+            "\tproc_thread_resource_release(t);\n"
+            "\tthread_trapframe_release(t);",
+        )
+        self.assert_rejected(sources, "thread account released before")
+
+    def test_exec_requires_trapframe_mapping_validation(self):
+        sources = self.changed(
+            "proc",
+            "if (!proc_user_image_trapframe_valid(p, image) ||\n"
+            "\t    vfs_proc_exec_prepare(p, image, live_exec, &transition) < 0)",
+            "if (vfs_proc_exec_prepare(p, image, live_exec, &transition) < 0)",
+        )
+        self.assert_rejected(sources, "lost trapframe image validation")
+
+    def test_public_exec_identity_must_precede_fd_detach(self):
+        identity = (
+            "\t\tif (transition.identity_policy == VFS_EXEC_IDENTITY_PUBLIC &&\n"
+            "\t\t    agent_exec_public_identity_commit(p) < 0) {\n"
+            "\t\t\tintr_restore(enabled);\n"
+            "\t\t\tvfs_proc_exec_abort(&transition);\n"
+            "\t\t\treturn -1;\n"
+            "\t\t}\n"
+        )
+        detach = (
+            "\t\tif (transition.drop_to_public)\n"
+            "\t\t\tproc_detach_vfs_scope_fds_locked(p, revoked_files);\n"
+        )
+        sources = self.changed("proc", identity + detach, detach + identity)
+        self.assert_rejected(sources, "publication order")
+
+    def test_public_exec_vfs_commit_must_precede_vm_swap(self):
+        before = (
+            "\t\tif (vfs_proc_exec_commit(p, &transition) < 0)\n"
+            "\t\t\tpanic(\"validated exec credential commit\");\n"
+            "\t}\n"
+            "\tagent_process_image_install_locked(p);\n"
+            "\tsync_proc_exec_reset_locked(p, &p->threads[0]);\n"
+            "\tp->pagetable = image->pagetable;"
+        )
+        after = (
+            "\t}\n"
+            "\tagent_process_image_install_locked(p);\n"
+            "\tsync_proc_exec_reset_locked(p, &p->threads[0]);\n"
+            "\tp->pagetable = image->pagetable;\n"
+            "\t\tif (vfs_proc_exec_commit(p, &transition) < 0)\n"
+            "\t\t\tpanic(\"validated exec credential commit\");"
+        )
+        sources = self.changed("proc", before, after)
+        self.assert_rejected(sources, "publication order")
+
+    def test_public_exec_image_reset_is_required(self):
+        sources = self.changed(
+            "proc", "\tagent_process_image_install_locked(p);\n", ""
+        )
+        self.assert_rejected(
+            sources, "must call agent_process_image_install_locked exactly 1"
+        )
+
+    def test_public_exec_image_reset_must_precede_vm_swap(self):
+        before = (
+            "\tagent_process_image_install_locked(p);\n"
+            "\tsync_proc_exec_reset_locked(p, &p->threads[0]);\n"
+            "\tp->pagetable = image->pagetable;"
+        )
+        after = (
+            "\tsync_proc_exec_reset_locked(p, &p->threads[0]);\n"
+            "\tp->pagetable = image->pagetable;\n"
+            "\tagent_process_image_install_locked(p);"
+        )
+        sources = self.changed("proc", before, after)
+        self.assert_rejected(sources, "publication order")
+
+    def test_exec_context_alias_failure_requires_abort(self):
+        failure = (
+            "\t\tif (agent_alias_exec_context(p, image->pagetable) < 0) {\n"
+            "\t\t\tvfs_proc_exec_abort(&transition);\n"
+            "\t\t\treturn -1;\n"
+            "\t\t}"
+        )
+        sources = self.changed(
+            "proc", failure, failure.replace("\t\t\tvfs_proc_exec_abort(&transition);\n", "")
+        )
+        self.assert_rejected(sources, "Context alias failure must abort")
+
+    def test_exec_locked_validation_failure_requires_abort(self):
+        failure = (
+            "\tif (!proc_teardown_live(p) ||\n"
+            "\t    !proc_image_install_state_valid_locked(p, mode) ||\n"
+            "\t    sync_proc_exec_validate_locked(p, &p->threads[0]) < 0 ||\n"
+            "\t    vfs_proc_exec_validate_locked(p, &transition) < 0) {\n"
+            "\t\tintr_restore(enabled);\n"
+            "\t\tvfs_proc_exec_abort(&transition);\n"
+            "\t\treturn -1;\n"
+            "\t}"
+        )
+        sources = self.changed(
+            "proc", failure, failure.replace("\t\tvfs_proc_exec_abort(&transition);\n", "")
+        )
+        self.assert_rejected(sources, "locked validation failure must abort")
+
+    def test_exec_locked_validation_rejects_missing_predicate(self):
+        predicates = (
+            (
+                "!proc_teardown_live(p) ||\n\t    ",
+                "",
+            ),
+            (
+                "!proc_image_install_state_valid_locked(p, mode) ||\n\t    ",
+                "",
+            ),
+            (
+                "sync_proc_exec_validate_locked(p, &p->threads[0]) < 0 ||\n\t    ",
+                "",
+            ),
+            (
+                " ||\n\t    vfs_proc_exec_validate_locked(p, &transition) < 0",
+                "",
+            ),
+        )
+        for old, new in predicates:
+            with self.subTest(predicate=old):
+                sources = self.changed("proc", old, new)
+                self.assert_rejected(
+                    sources, "independent predicates|must call"
+                )
+
+    def test_exec_locked_validation_rejects_moved_predicate(self):
+        original = (
+            "\tif (!proc_teardown_live(p) ||\n"
+            "\t    !proc_image_install_state_valid_locked(p, mode) ||\n"
+            "\t    sync_proc_exec_validate_locked(p, &p->threads[0]) < 0 ||\n"
+            "\t    vfs_proc_exec_validate_locked(p, &transition) < 0) {"
+        )
+        moved = (
+            "\tif (!proc_teardown_live(p) ||\n"
+            "\t    sync_proc_exec_validate_locked(p, &p->threads[0]) < 0 ||\n"
+            "\t    vfs_proc_exec_validate_locked(p, &transition) < 0) {"
+            "\n\t\tif (!proc_image_install_state_valid_locked(p, mode))\n"
+            "\t\t\treturn -1;"
+        )
+        sources = self.changed("proc", original, moved)
+        self.assert_rejected(sources, "independent predicates")
+
+    def test_exec_locked_validation_rejects_short_circuit_predicate(self):
+        guard = (
+            "\tif (!proc_teardown_live(p) ||\n"
+            "\t    !proc_image_install_state_valid_locked(p, mode) ||\n"
+            "\t    sync_proc_exec_validate_locked(p, &p->threads[0]) < 0 ||\n"
+            "\t    vfs_proc_exec_validate_locked(p, &transition) < 0) {"
+        )
+        predicates = (
+            "!proc_teardown_live(p)",
+            "!proc_image_install_state_valid_locked(p, mode)",
+            "sync_proc_exec_validate_locked(p, &p->threads[0]) < 0",
+            "vfs_proc_exec_validate_locked(p, &transition) < 0",
+        )
+        for predicate in predicates:
+            with self.subTest(predicate=predicate):
+                sources = self.changed(
+                    "proc", guard, guard.replace(
+                        predicate, f"(0 && ({predicate}))", 1
+                    )
+                )
+                self.assert_rejected(sources, "independent predicates")
+
+    def test_exec_locked_validation_rejects_irq_guard_movement(self):
+        guard = (
+            "\tenabled = intr_save();\n"
+            "\tif (!proc_teardown_live(p) ||\n"
+            "\t    !proc_image_install_state_valid_locked(p, mode) ||\n"
+            "\t    sync_proc_exec_validate_locked(p, &p->threads[0]) < 0 ||\n"
+            "\t    vfs_proc_exec_validate_locked(p, &transition) < 0) {"
+        )
+        sources = self.changed(
+            "proc", guard, guard.replace("\tenabled = intr_save();\n", "", 1)
+        )
+        self.assert_rejected(sources, "IRQ publication boundary")
+
+    def test_exec_reserved_commit_failure_requires_abort(self):
+        failure = (
+            "\t\tif (vfs_proc_exec_commit(p, &transition) < 0) {\n"
+            "\t\t\tintr_restore(enabled);\n"
+            "\t\t\tvfs_proc_exec_abort(&transition);\n"
+            "\t\t\treturn -1;\n"
+            "\t\t}"
+        )
+        sources = self.changed(
+            "proc", failure, failure.replace("\t\t\tvfs_proc_exec_abort(&transition);\n", "")
+        )
+        self.assert_rejected(sources, "reserved lifecycle commit failure must abort")
+
+    def test_exec_public_identity_failure_requires_abort(self):
+        failure = (
+            "\t\tif (transition.identity_policy == VFS_EXEC_IDENTITY_PUBLIC &&\n"
+            "\t\t    agent_exec_public_identity_commit(p) < 0) {\n"
+            "\t\t\tintr_restore(enabled);\n"
+            "\t\t\tvfs_proc_exec_abort(&transition);\n"
+            "\t\t\treturn -1;\n"
+            "\t\t}"
+        )
+        sources = self.changed(
+            "proc", failure, failure.replace("\t\t\tvfs_proc_exec_abort(&transition);\n", "")
+        )
+        self.assert_rejected(sources, "PUBLIC identity failure must abort")
+
+    def test_exec_failure_must_abort_before_return(self):
+        before = (
+            "\t\tif (agent_alias_exec_context(p, image->pagetable) < 0) {\n"
+            "\t\t\tvfs_proc_exec_abort(&transition);\n"
+            "\t\t\treturn -1;\n"
+            "\t\t}"
+        )
+        after = (
+            "\t\tif (agent_alias_exec_context(p, image->pagetable) < 0) {\n"
+            "\t\t\treturn -1;\n"
+            "\t\t\tvfs_proc_exec_abort(&transition);\n"
+            "\t\t}"
+        )
+        sources = self.changed("proc", before, after)
+        self.assert_rejected(sources, "Context alias failure must abort")
+
+    def test_public_exec_cannot_use_teardown_endpoint_operation(self):
+        before = "\t\tagent_ipc_exec_public(p);\n\t\treturn 0;"
+        after = "\t\tagent_ipc_proc_teardown(p);\n\t\treturn 0;"
+        sources = self.changed("agent_core", before, after)
+        self.assert_rejected(sources, "legacy mail endpoint lifecycle")
+
+    def test_process_clear_cannot_rotate_live_endpoint(self):
+        sources = self.changed(
+            "agent_core",
+            "\tagent_ipc_proc_teardown(p);",
+            "\tagent_ipc_exec_public(p);",
+        )
+        self.assert_rejected(sources, "legacy mail endpoint lifecycle")
+
+    def test_legacy_mail_copyout_failure_requires_abort(self):
+        sources = self.changed(
+            "syscall",
+            "\t\t(void)agent_ipc_legacy_public_read_finish(p, &receipt, 0);\n",
+            "",
+        )
+        self.assert_rejected(
+            sources, "exactly 2|one abort and one commit|copyout failure must abort"
+        )
+
+    def test_legacy_mail_cannot_commit_before_copyout(self):
+        before = (
+            "\tif (copyout(p->pagetable, buf, payload, n) < 0) {\n"
+            "\t\t(void)agent_ipc_legacy_public_read_finish(p, &receipt, 0);\n"
+            "\t\treturn -1;\n\t}\n"
+            "\tif (agent_ipc_legacy_public_read_finish(p, &receipt, 1) < 0)\n"
+            "\t\treturn -1;"
+        )
+        after = (
+            "\tif (agent_ipc_legacy_public_read_finish(p, &receipt, 1) < 0)\n"
+            "\t\treturn -1;\n"
+            "\tif (copyout(p->pagetable, buf, payload, n) < 0) {\n"
+            "\t\t(void)agent_ipc_legacy_public_read_finish(p, &receipt, 0);\n"
+            "\t\treturn -1;\n\t}"
+        )
+        sources = self.changed("syscall", before, after)
+        self.assert_rejected(sources, "begin, copyout, then commit")
+
+    def test_legacy_mail_read_begin_cannot_dequeue(self):
+        before = "\treceipt->slot = slot;\nout:"
+        after = (
+            "\treceipt->slot = slot;\n"
+            "\tmailbox->head = (mailbox->head + 1) % MAILBOX_SLOT_COUNT;\n"
+            "out:"
+        )
+        sources = self.changed("agent_ipc", before, after)
+        self.assert_rejected(sources, "read begin must not dequeue")
+
+    def test_legacy_mail_snapshot_requires_endpoint_generation(self):
+        sources = self.changed(
+            "agent_ipc",
+            "\t       snapshot->endpoint_generation == current->endpoint_generation;",
+            "\t       1;",
+        )
+        self.assert_rejected(sources, "mailbox snapshot lost invariant")
 
 
 if __name__ == "__main__":

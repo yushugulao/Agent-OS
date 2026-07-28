@@ -12,8 +12,8 @@
 #define WAIT_OPS 8
 #define BUSY_POLL_OPS 128
 #define PREFETCH_ROUNDS 64
-#define CACHE_SETTLE_ROUNDS 40
 #define BENCH_PROVENANCE_MAX 128
+#define FILE_QUERY_MEASUREMENT_SCHEMA 2
 
 static struct agent_op ops[AGENT_BATCH_MAX];
 static struct agent_result results[AGENT_BATCH_MAX];
@@ -22,7 +22,15 @@ static struct agent_result digest_result;
 static struct agent_context_record records[AGENT_CONTEXT_MAX_RECORDS];
 static struct agent_file_meta bench_meta;
 static struct agent_file_query bench_file_query_arg;
-static struct agent_file_query_result bench_file_query_result;
+
+/* Serialized benchmark phases can share their large syscall buffers. */
+union bench_transient_scratch {
+	struct agent_info info;
+	struct agent_event event;
+	struct agent_file_query_result file_query_result;
+};
+
+static union bench_transient_scratch bench_scratch;
 static struct agent_file_prefetch_hint
 	bench_prefetch_hints[AGENT_FILE_PREFETCH_MAX_HINTS];
 static struct agent_timeline_record
@@ -30,6 +38,26 @@ static struct agent_timeline_record
 static struct agent_timeline_filter bench_timeline_filter;
 static struct agent_provenance_edge
 	bench_provenance_edges[BENCH_PROVENANCE_MAX];
+
+struct file_query_measurement_receipt {
+	int schema;
+	int load;
+	int traversal_ops;
+	int traversal_records;
+	int traversal_duration_us;
+	int traversal_plan;
+	int cold_index_ops;
+	int cold_index_records;
+	int cold_index_duration_us;
+	int cold_rebuild_records;
+	int warm_index_ops;
+	int warm_index_records;
+	int warm_index_duration_us;
+	int warm_index_plan;
+	int warm_index_candidates;
+	uint64 warm_index_reason;
+	int warm_index_cache_hit;
+};
 
 static void check(int ok, const char *msg)
 {
@@ -93,6 +121,24 @@ static int elapsed(int start, int end)
 {
 	int d = end - start;
 	return d <= 0 ? 1 : d;
+}
+
+static uint64 now_us(void)
+{
+	TimeVal now;
+
+	check(sys_get_time(&now, 0) == 0, "file benchmark clock");
+	return now.sec * 1000000ULL + now.usec;
+}
+
+static int raw_elapsed_us(uint64 start, uint64 end)
+{
+	uint64 delta;
+
+	check(end >= start, "file benchmark monotonic clock");
+	delta = end - start;
+	check(delta <= INT_MAX, "file benchmark duration range");
+	return (int)delta;
 }
 
 static void print_perf(const char *name, int ops_count, int ticks,
@@ -266,9 +312,9 @@ static int bench_snapshot(int *total)
 	return elapsed(start, now_ms());
 }
 
-static int bench_file_query(uint64 flags)
+static int bench_file_query_traversal_us(uint64 flags)
 {
-	int start;
+	uint64 start;
 
 	memset(&bench_file_query_arg, 0, sizeof(bench_file_query_arg));
 	bench_file_query_arg.flags = flags;
@@ -278,29 +324,132 @@ static int bench_file_query(uint64 flags)
 	strcpy(bench_file_query_arg.run_id, "RUN-BENCH");
 	strcpy(bench_file_query_arg.stage, "bulk");
 	strcpy(bench_file_query_arg.status, "b042");
-	start = now_ms();
+	start = now_us();
 	for (int i = 0; i < FILE_OPS; i++) {
 		check(agent_file_query(&bench_file_query_arg,
-				       &bench_file_query_result) >= 1,
+				       &bench_scratch.file_query_result) >= 1,
 		      "file query");
-		check(bench_file_query_result.total_hits >= 1, "file hits");
+		check(bench_scratch.file_query_result.total_hits >= 1,
+		      "file hits");
 	}
-	return elapsed(start, now_ms());
+	return raw_elapsed_us(start, now_us());
 }
 
-static int bench_file_query_cached(uint64 flags)
+static void prepare_file_query(uint64 flags, int max_hits)
 {
-	int ticks = 0;
+	memset(&bench_file_query_arg, 0, sizeof(bench_file_query_arg));
+	bench_file_query_arg.flags = flags;
+	bench_file_query_arg.max_hits = max_hits;
+	strcpy(bench_file_query_arg.project, "bench");
+	strcpy(bench_file_query_arg.workflow, "metadata");
+	strcpy(bench_file_query_arg.run_id, "RUN-BENCH");
+	strcpy(bench_file_query_arg.stage, "bulk");
+	strcpy(bench_file_query_arg.status, "b042");
+}
 
-	for (int i = 0; i < CACHE_SETTLE_ROUNDS; i++) {
-		ticks = bench_file_query(flags);
-		if (bench_file_query_result.plan_reason &
-		    AGENT_FILE_QUERY_REASON_CACHE_HIT)
-			return ticks;
-		sleep(10);
+static int bench_file_query_cold_us(uint64 flags, int max_hits,
+				    struct agent_file_query_result *result)
+{
+	uint64 start;
+
+	prepare_file_query(flags, max_hits);
+	start = now_us();
+	check(agent_file_query(&bench_file_query_arg, result) >= 1,
+	      "file query once");
+	check(result->total_hits >= 1, "file query once hits");
+	return raw_elapsed_us(start, now_us());
+}
+
+static int bench_file_query_warm_us(int operations,
+				    struct agent_file_query_result *result)
+{
+	uint64 start;
+
+	prepare_file_query(AGENT_FILE_QUERY_USE_INDEX,
+			   AGENT_FILE_QUERY_MAX_HITS);
+	start = now_us();
+	for (int i = 0; i < operations; i++) {
+		check(agent_file_query(&bench_file_query_arg, result) >= 1,
+		      "warm index query");
+		check(result->total_hits >= 1, "warm index hits");
+		check((result->plan_reason &
+		       AGENT_FILE_QUERY_REASON_CACHE_HIT) == 0,
+		      "warm index must execute instead of using kernel cache");
 	}
-	check(0, "file query cache settle");
-	return ticks;
+	return raw_elapsed_us(start, now_us());
+}
+
+static struct file_query_measurement_receipt
+measure_file_query_paths(void)
+{
+	struct file_query_measurement_receipt receipt;
+
+	memset(&receipt, 0, sizeof(receipt));
+	receipt.schema = FILE_QUERY_MEASUREMENT_SCHEMA;
+	receipt.traversal_ops = FILE_OPS;
+	receipt.traversal_duration_us =
+		bench_file_query_traversal_us(AGENT_FILE_QUERY_SCAN);
+	receipt.load =
+		bench_scratch.file_query_result.scanned_records;
+	receipt.traversal_records =
+		bench_scratch.file_query_result.scanned_records;
+	receipt.traversal_plan =
+		bench_scratch.file_query_result.plan;
+
+	memset(&bench_scratch.file_query_result, 0,
+	       sizeof(bench_scratch.file_query_result));
+	receipt.cold_index_ops = 1;
+	receipt.cold_index_duration_us =
+		bench_file_query_cold_us(
+			AGENT_FILE_QUERY_USE_INDEX,
+			AGENT_FILE_QUERY_MAX_HITS,
+			&bench_scratch.file_query_result);
+	receipt.cold_index_records =
+		bench_scratch.file_query_result.scanned_records;
+	receipt.cold_rebuild_records =
+		bench_scratch.file_query_result.index_rebuild_records;
+	check((bench_scratch.file_query_result.plan_reason &
+	       AGENT_FILE_QUERY_REASON_CACHE_HIT) == 0,
+	      "cold index must include real index work");
+	check(receipt.cold_rebuild_records > 0,
+	      "cold index reports measured rebuild work");
+
+	memset(&bench_scratch.file_query_result, 0,
+	       sizeof(bench_scratch.file_query_result));
+	receipt.warm_index_ops = FILE_OPS;
+	receipt.warm_index_duration_us =
+		bench_file_query_warm_us(FILE_OPS,
+					 &bench_scratch.file_query_result);
+	receipt.warm_index_records =
+		bench_scratch.file_query_result.scanned_records;
+	receipt.warm_index_plan =
+		bench_scratch.file_query_result.plan;
+	receipt.warm_index_candidates =
+		bench_scratch.file_query_result.candidate_records;
+	receipt.warm_index_reason =
+		bench_scratch.file_query_result.plan_reason;
+	receipt.warm_index_cache_hit =
+		(receipt.warm_index_reason &
+		 AGENT_FILE_QUERY_REASON_CACHE_HIT) != 0;
+
+	check(receipt.traversal_plan ==
+			      AGENT_FILE_QUERY_PLAN_SCAN,
+	      "scan plan");
+	check(receipt.warm_index_plan ==
+			      AGENT_FILE_QUERY_PLAN_STATUS_INDEX,
+	      "index plan");
+	check((receipt.warm_index_reason &
+	       AGENT_FILE_QUERY_REASON_STATUS_INDEX) != 0,
+	      "index reason");
+	check(!receipt.warm_index_cache_hit,
+	      "kernel query cache disabled");
+	check(receipt.warm_index_candidates == receipt.warm_index_records,
+	      "index candidates");
+	check(receipt.cold_index_records == receipt.warm_index_records,
+	      "cold and warm index candidates");
+	check(bench_scratch.file_query_result.index_rebuild_records == 0,
+	      "warm index excludes rebuild work");
+	return receipt;
 }
 
 static int bench_file_digest(int *total_bytes)
@@ -335,7 +484,7 @@ static void seed_prefetch_history(void)
 	strcpy(bench_file_query_arg.run_id, "RUN-042");
 	strcpy(bench_file_query_arg.stage, "align");
 	check(agent_file_query(&bench_file_query_arg,
-			       &bench_file_query_result) >= 1,
+			       &bench_scratch.file_query_result) >= 1,
 	      "prefetch seed query");
 	check(agent_file_prefetch_snapshot(bench_prefetch_hints,
 					   AGENT_FILE_PREFETCH_MAX_HINTS) >= 1,
@@ -487,7 +636,7 @@ static int bench_busy_poll_query(void)
 	start = now_ms();
 	for (int i = 0; i < BUSY_POLL_OPS; i++) {
 		check(agent_file_query(&bench_file_query_arg,
-				       &bench_file_query_result) == 0,
+				       &bench_scratch.file_query_result) == 0,
 		      "busy poll no hit");
 	}
 	return elapsed(start, now_ms());
@@ -552,51 +701,45 @@ static int bench_wait_wake(void)
 
 static void check_timeout_and_heartbeat(void)
 {
-	struct agent_event event;
-	struct agent_info before;
-	struct agent_info after_timeout;
-	struct agent_info after_heartbeat;
+	uint64 timeout_count;
 	uint64 old_heartbeat;
 
-	check(agent_info(&before) == 0, "info before timeout");
-	memset(&event, 0, sizeof(event));
-	check(agent_wait(&event, 1) == AGENT_STATUS_TIMEOUT, "wait timeout");
-	check(event.status == AGENT_STATUS_TIMEOUT, "timeout event status");
-	check(strcmp(event.payload, "timeout") == 0, "timeout payload");
-	check(agent_info(&after_timeout) == 0, "info after timeout");
-	check(after_timeout.timeout_count == before.timeout_count + 1,
+	check(agent_info(&bench_scratch.info) == 0, "info before timeout");
+	timeout_count = bench_scratch.info.timeout_count;
+	memset(&bench_scratch.event, 0, sizeof(bench_scratch.event));
+	check(agent_wait(&bench_scratch.event, 1) == AGENT_STATUS_TIMEOUT,
+	      "wait timeout");
+	check(bench_scratch.event.status == AGENT_STATUS_TIMEOUT,
+	      "timeout event status");
+	check(strcmp(bench_scratch.event.payload, "timeout") == 0,
+	      "timeout payload");
+	check(agent_info(&bench_scratch.info) == 0, "info after timeout");
+	check(bench_scratch.info.timeout_count == timeout_count + 1,
 	      "timeout count");
-	old_heartbeat = after_timeout.last_heartbeat_tick;
+	old_heartbeat = bench_scratch.info.last_heartbeat_tick;
 	check(agent_heartbeat(7) == 0, "heartbeat set");
-	check(agent_info(&after_heartbeat) == 0, "info after heartbeat");
-	check(after_heartbeat.heartbeat_interval == 7,
+	check(agent_info(&bench_scratch.info) == 0,
+	      "info after heartbeat");
+	check(bench_scratch.info.heartbeat_interval == 7,
 	      "heartbeat interval");
-	check(after_heartbeat.last_heartbeat_tick >= old_heartbeat,
+	check(bench_scratch.info.last_heartbeat_tick >= old_heartbeat,
 	      "heartbeat tick");
+	check(agent_heartbeat_stop() == 0, "heartbeat stop");
 	printf("agentbench_ucore: timeout_heartbeat=1\n");
 }
 
 static void run_agent_bench(void)
 {
-	struct agent_info info;
 	int scalar;
 	int batch;
 	int direct;
 	int query;
 	int snapshot;
 	int snapshot_records;
-	int scan;
-	int index;
 	int digest;
 	int digest_bytes;
 	int digest_cache_hits;
 	int digest_cache_misses;
-	int scan_records;
-	int index_records;
-	int scan_plan;
-	int index_plan;
-	int index_candidates;
-	int index_cache_hit;
 	int prefetch;
 	int prefetch_records;
 	int timeline;
@@ -611,7 +754,6 @@ static void run_agent_bench(void)
 	int timeline_wait_records;
 	int timeline_read_ready;
 	int timeline_read_records;
-	uint64 index_reason;
 	int waitwake;
 	int busypoll;
 	int scalar_runs[3];
@@ -620,19 +762,19 @@ static void run_agent_bench(void)
 	int scalar_max;
 	int batch_min;
 	int batch_max;
-	struct agent_info digest_before;
-	struct agent_info digest_after;
+	uint64 digest_hits_before;
+	uint64 digest_misses_before;
 
-	check(agent_info(&info) == 0, "info");
-	check(info.agent_role == AGENT_ROLE_ORCHESTRATOR, "orchestrator role");
-	check((info.capability_mask & AGENT_CAP_META_WRITE) != 0,
+	check(agent_info(&bench_scratch.info) == 0, "info");
+	check(bench_scratch.info.agent_role == AGENT_ROLE_ORCHESTRATOR,
+	      "orchestrator role");
+	check((bench_scratch.info.capability_mask & AGENT_CAP_META_WRITE) != 0,
 	      "meta write cap");
-	check((info.capability_mask & AGENT_CAP_ORCHESTRATE) != 0,
+	check((bench_scratch.info.capability_mask & AGENT_CAP_ORCHESTRATE) != 0,
 	      "orchestrate cap");
 	check(context_clear() == 0, "clear");
 	check(agent_file_meta_init() == 0, "meta init");
 	seed_demo_metadata();
-	seed_prefetch_history();
 	seed_file_bench_metadata();
 	seed_digest_file();
 	check_timeout_and_heartbeat();
@@ -642,35 +784,23 @@ static void run_agent_bench(void)
 	}
 	tick_stats(scalar_runs, 3, &scalar_min, &scalar, &scalar_max);
 	tick_stats(batch_runs, 3, &batch_min, &batch, &batch_max);
-	direct = bench_direct(&info);
+	direct = bench_direct(&bench_scratch.info);
 	query = bench_query();
 	snapshot = bench_snapshot(&snapshot_records);
-	scan = bench_file_query(AGENT_FILE_QUERY_SCAN);
-	scan_records = bench_file_query_result.scanned_records;
-	scan_plan = bench_file_query_result.plan;
-	index = bench_file_query_cached(AGENT_FILE_QUERY_USE_INDEX);
-	index_records = bench_file_query_result.scanned_records;
-	index_plan = bench_file_query_result.plan;
-	index_candidates = bench_file_query_result.candidate_records;
-	index_reason = bench_file_query_result.plan_reason;
-	index_cache_hit =
-		(index_reason & AGENT_FILE_QUERY_REASON_CACHE_HIT) != 0;
-	check(scan_plan == AGENT_FILE_QUERY_PLAN_SCAN, "scan plan");
-	check(index_plan == AGENT_FILE_QUERY_PLAN_STATUS_INDEX,
-	      "index plan");
-	check((index_reason & AGENT_FILE_QUERY_REASON_STATUS_INDEX) != 0,
-	      "index reason");
-	check(index_cache_hit, "index cache hit");
-	check(index_candidates == index_records, "index candidates");
-	check(agent_info(&digest_before) == 0, "digest info before");
+	const struct file_query_measurement_receipt file_query_receipt =
+		measure_file_query_paths();
+	seed_prefetch_history();
+	check(agent_info(&bench_scratch.info) == 0, "digest info before");
+	digest_hits_before = bench_scratch.info.file_digest_cache_hits;
+	digest_misses_before = bench_scratch.info.file_digest_cache_misses;
 	digest = bench_file_digest(&digest_bytes);
-	check(agent_info(&digest_after) == 0, "digest info after");
+	check(agent_info(&bench_scratch.info) == 0, "digest info after");
 	digest_cache_hits =
-		(int)(digest_after.file_digest_cache_hits -
-		      digest_before.file_digest_cache_hits);
+		(int)(bench_scratch.info.file_digest_cache_hits -
+		      digest_hits_before);
 	digest_cache_misses =
-		(int)(digest_after.file_digest_cache_misses -
-		      digest_before.file_digest_cache_misses);
+		(int)(bench_scratch.info.file_digest_cache_misses -
+		      digest_misses_before);
 	check(digest_cache_hits >= FILE_OPS - 1, "digest cache hits");
 	check(digest_cache_misses >= 1, "digest cache miss");
 	prefetch = bench_prefetch_snapshot(&prefetch_records);
@@ -686,11 +816,28 @@ static void run_agent_bench(void)
 	printf("agentbench_ucore: repeated_ticks scalar_min=%d scalar_avg=%d scalar_max=%d batch_min=%d batch_avg=%d batch_max=%d\n",
 	       scalar_min, scalar, scalar_max, batch_min, batch, batch_max);
 	printf("agentbench_ucore: file_query_records scan_records=%d index_records=%d\n",
-	       scan_records, index_records);
+	       file_query_receipt.traversal_records,
+	       file_query_receipt.warm_index_records);
 	printf("agentbench_ucore: file_query_plan scan_plan=%d index_plan=%d index_reason=%d index_candidates=%d\n",
-	       scan_plan, index_plan, (int)index_reason, index_candidates);
-	printf("agentbench_ucore: file_query_cache hit=%d reason=%d\n",
-	       index_cache_hit, (int)index_reason);
+	       file_query_receipt.traversal_plan,
+	       file_query_receipt.warm_index_plan,
+	       (int)file_query_receipt.warm_index_reason,
+	       file_query_receipt.warm_index_candidates);
+	printf("agentbench_ucore: file_query_execution kernel_cache_hit=%d reason=%d\n",
+	       file_query_receipt.warm_index_cache_hit,
+	       (int)file_query_receipt.warm_index_reason);
+	printf("agentbench_ucore: file_query_benchmark schema=2 unit=us load=%d traversal_ops=%d traversal_records=%d traversal_duration_us=%d cold_index_ops=%d cold_index_records=%d cold_index_duration_us=%d cold_rebuild_records=%d cold_rebuild_included=1 warm_index_ops=%d warm_index_records=%d warm_index_duration_us=%d status=measured\n",
+	       file_query_receipt.load,
+	       file_query_receipt.traversal_ops,
+	       file_query_receipt.traversal_records,
+	       file_query_receipt.traversal_duration_us,
+	       file_query_receipt.cold_index_ops,
+	       file_query_receipt.cold_index_records,
+	       file_query_receipt.cold_index_duration_us,
+	       file_query_receipt.cold_rebuild_records,
+	       file_query_receipt.warm_index_ops,
+	       file_query_receipt.warm_index_records,
+	       file_query_receipt.warm_index_duration_us);
 	printf("agentbench_ucore: file_digest bytes=%d ticks=%d preview=%s\n",
 	       digest_bytes, digest, digest_result.result);
 	printf("agentbench_ucore: file_digest_cache hits=%d misses=%d\n",
@@ -714,8 +861,6 @@ static void run_agent_bench(void)
 		   query);
 	print_perf("context_snapshot", snapshot_records, snapshot,
 		   SNAPSHOT_ROUNDS, query);
-	print_perf("file_scan_query", FILE_OPS, scan, FILE_OPS, scan);
-	print_perf("file_index_query", FILE_OPS, index, FILE_OPS, scan);
 	print_perf("file_digest_read", digest_bytes, digest, digest_bytes,
 		   digest);
 	print_perf("file_prefetch_snapshot", prefetch_records, prefetch,
@@ -745,14 +890,14 @@ static void run_agent_bench(void)
 
 int main(void)
 {
-	struct agent_info info;
 	int pid;
 	int status = 0;
 
 	printf("agentbench_ucore: Agent-OS on uCore benchmark\n");
-	check(agent_info(&info) == 0, "query bench launcher");
-	if (info.is_agent) {
-		check(info.agent_role == AGENT_ROLE_ORCHESTRATOR,
+	check(agent_info(&bench_scratch.info) == 0,
+	      "query bench launcher");
+	if (bench_scratch.info.is_agent) {
+		check(bench_scratch.info.agent_role == AGENT_ROLE_ORCHESTRATOR,
 		      "bench launcher is orchestrator");
 		run_agent_bench();
 	}

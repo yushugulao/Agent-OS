@@ -175,6 +175,45 @@ def require_if(body, condition, label, top_level=False):
     return matches[0]
 
 
+def split_top_level_or(condition):
+    terms = []
+    depth = 0
+    start = 0
+    index = 0
+    while index < len(condition):
+        char = condition[index]
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+            if depth < 0:
+                raise ProtocolError("unbalanced exec validation predicate")
+        elif condition.startswith("||", index) and depth == 0:
+            terms.append(condition[start:index])
+            start = index + 2
+            index += 1
+        index += 1
+    if depth != 0:
+        raise ProtocolError("unbalanced exec validation predicate")
+    terms.append(condition[start:])
+    return terms
+
+
+def require_if_predicates(body, predicates, label, top_level=False):
+    expected = tuple(predicates)
+    matches = []
+    for branch in parsed_ifs(body, top_level=top_level):
+        terms = split_top_level_or(branch["condition"])
+        if len(terms) == len(expected) and set(terms) == set(expected):
+            matches.append(branch)
+    if len(matches) != 1:
+        raise ProtocolError(
+            f"{label} must contain one if with independent predicates "
+            f"{expected!r}"
+        )
+    return matches[0]
+
+
 def call_positions(body, name):
     return [
         match.start()
@@ -210,14 +249,12 @@ def phase_blocks(driver):
     return blocks
 
 
-def validate_begin(objects):
+def validate_begin(objects, actions):
     begin = function_body(objects, "agent_scope_reclaim_begin")
     label = "teardown BEGIN"
     required_cleanup = {
         "catalog": "agent_metadata_catalog_reclaim_scope(scope_id)",
-        "dependency table": "memset(&agent_dependencies[i],0,sizeof(agent_dependencies[i]))",
-        "dependency generation": "agent_dependency_generation++",
-        "action history": "agent_action_history_clear_scope(scope_id)",
+        "action/dependency owner": "agent_metadata_actions_reclaim_scope(scope_id)",
         "query cache": "agent_metadata_query_invalidate_locked(scope_id,0)",
         "observability": "agent_observe_scope_reclaim(scope_id)",
         "file state": "agent_file_state_scope_reclaim(scope_id)",
@@ -226,6 +263,17 @@ def validate_begin(objects):
     for owner, contract in required_cleanup.items():
         if compact.count(contract) != 1:
             raise ProtocolError(f"{label} lost {owner} cleanup ownership")
+
+    owner_cleanup = function_body(actions, "agent_metadata_actions_reclaim_scope")
+    owner_compact = normalize(owner_cleanup)
+    owned_contracts = {
+        "dependency table": "memset(&agent_dependencies[i],0,sizeof(agent_dependencies[i]))",
+        "dependency generation": "agent_metadata_actions_generation_advance()",
+        "action history": "agent_metadata_actions_clear_history(scope_id)",
+    }
+    for owner, contract in owned_contracts.items():
+        if owner_compact.count(contract) != 1:
+            raise ProtocolError(f"metadata actions lost {owner} cleanup ownership")
     require_calls(begin, "agent_metadata_note_catalog_changes", 1, label)
     require_calls(begin, "agent_metadata_store_mark_dirty", 1, label)
     assignment = "*metadata_target=agent_metadata_store_mark_dirty(scope_id);"
@@ -256,34 +304,82 @@ def validate_metadata_poll(objects, store):
     if compact != expected:
         raise ProtocolError("teardown METADATA wrapper may only poll its captured target")
 
-    reached = function_body(store, "agent_file_writeback_scope_reached")
-    require_calls(reached, "intr_save", 1, "metadata target snapshot")
-    require_calls(reached, "intr_restore", 1, "metadata target snapshot")
-    for invariant in (
-        "agent_file_writeback_generation_reached(",
-        "!settled||state->dirty_generation==state->durable_generation",
-        "settled&&agent_file_writeback_scope_busy(scope_id)",
-        "reached=0;",
-    ):
-        if invariant not in normalize(reached):
-            raise ProtocolError(f"metadata target snapshot lost invariant: {invariant}")
-
-    target_done = function_body(store, "agent_metadata_store_scope_target_done")
-    guard = require_if(
-        target_done,
-        "!agent_meta_store_failed_closed&&!agent_file_writeback_scope_reached(scope_id,target,1)",
-        "metadata target completion",
-    )
-    if normalize(guard["statement"]) != "return0;":
-        raise ProtocolError("metadata target completion must return while unsettled")
-    retire = require_calls(
-        target_done,
-        "agent_file_scope_state_retire",
-        1,
-        "metadata target completion",
+    retire = function_body(store, "agent_file_scope_state_retire")
+    retire_compact = normalize(retire)
+    intr_save_at = require_calls(
+        retire, "intr_save", 1, "metadata target retirement"
     )[0]
-    if retire < guard["end"]:
+    intr_restore_at = require_calls(
+        retire, "intr_restore", 1, "metadata target retirement"
+    )[0]
+    pending = require_if(
+        retire,
+        "agent_meta_store_failed_closed||"
+        "agent_durable_section_scope_pending(scope_id)",
+        "metadata target retirement",
+    )
+    if normalize(pending["statement"]) != "gotoout;":
+        raise ProtocolError("metadata target retirement must stop while dirty")
+    settled = require_if(
+        retire,
+        "!agent_file_writeback_generation_reached("
+        "state->replicated_generation,target)||"
+        "state->dirty_generation!=state->durable_generation||"
+        "state->dirty_generation!=state->replicated_generation||"
+        "agent_file_writeback_scope_busy(scope_id)",
+        "metadata target retirement",
+    )
+    if normalize(settled["statement"]) != "gotoout;":
+        raise ProtocolError("metadata target retirement must stop before settlement")
+    retire_call = "memset(state,0,sizeof(*state));"
+    if retire_compact.count(retire_call) != 1:
+        raise ProtocolError("metadata target retirement must clear one settled slot")
+    retire_at = require_calls(
+        retire, "memset", 1, "metadata target retirement"
+    )[0]
+    lookup_at = require_calls(
+        retire, "agent_file_scope_state_locked", 1,
+        "metadata target retirement",
+    )[0]
+    absent = require_if(retire, "state==0", "metadata target retirement")
+    if normalize(absent["statement"]) != "retired=target==0;gotoout;":
+        raise ProtocolError(
+            "metadata target retirement may accept an absent slot only for target zero"
+        )
+    if not (
+        intr_save_at < pending["end"] < lookup_at < absent["end"]
+        < settled["end"] < retire_at < intr_restore_at
+    ):
         raise ProtocolError("metadata scope state retired before its target settled")
+
+    target_done = normalize(
+        function_body(store, "agent_metadata_store_scope_target_done")
+    )
+    expected_done = (
+        "intretired;"
+        "if(!agent_metadata_txn_lock(0))return0;"
+        "retired=agent_file_scope_state_retire(scope_id,target);"
+        "agent_metadata_txn_unlock();"
+        "returnretired;"
+    )
+    if target_done != expected_done:
+        raise ProtocolError(
+            "metadata target completion must atomically check and retire under its transaction"
+        )
+
+    maintain = normalize(
+        function_body(store, "agent_metadata_store_background_maintain")
+    )
+    expected_maintain = (
+        "intdurable_pending=agent_durable_section_retry_pending();"
+        "agent_file_writeback_maintain();"
+        "if(durable_pending||agent_file_writeback_pending())"
+        "agent_background_request();"
+    )
+    if maintain != expected_maintain:
+        raise ProtocolError(
+            "metadata background maintenance must retry unnotified durable state"
+        )
 
 
 def validate_driver(vfs):
@@ -470,6 +566,424 @@ def validate_driver(vfs):
             raise ProtocolError(f"{function} must reset teardown phase and target")
 
 
+def validate_reaper_liveness(vfs, objects, background, agent_core):
+    release = function_body(vfs, "vfs_scope_release")
+    release_compact = normalize(release)
+    if release_compact.count("agent_background_request();") != 1:
+        raise ProtocolError(
+            "last workflow reference must publish exactly one maintenance edge"
+        )
+    close_at = release_compact.find("fs_storage_scope_account_close(storage);")
+    quiesce_at = release_compact.find("bio_scope_quiesce(scope_id);")
+    request_at = release_compact.find("agent_background_request();")
+    if min(close_at, quiesce_at, request_at) < 0 or not (
+        close_at < quiesce_at < request_at
+    ):
+        raise ProtocolError(
+            "last workflow reference must quiesce storage and I/O before reaping"
+        )
+    release_branches = [
+        branch
+        for branch in parsed_ifs(release)
+        if branch["condition"] == "last>0"
+        and "agent_background_request();" in normalize(branch["statement"])
+    ]
+    if len(release_branches) != 1:
+        raise ProtocolError(
+            "last workflow reference maintenance edge escaped its common boundary"
+        )
+
+    pending = function_body(vfs, "vfs_scope_reap_work_pending")
+    pending_compact = normalize(pending)
+    for invariant in (
+        "ref->used&&ref->retiring&&workflow_lifecycle_retiring(ref->lifecycle)",
+        "pending=1;",
+        "intr_save()",
+        "intr_restore(enabled)",
+    ):
+        if pending_compact.count(invariant) != 1:
+            raise ProtocolError(
+                f"workflow reaper level predicate lost invariant: {invariant}"
+            )
+    if "agent_background_request(" in pending_compact or re.search(
+        r"\b(?:while|goto)\b", pending
+    ):
+        raise ProtocolError("workflow reaper level predicate may not spin or publish")
+
+    reap = function_body(vfs, "vfs_scope_reap_pending")
+    reap_compact = normalize(reap)
+    require_calls(reap, "vfs_scope_reclaim_complete", 2, "workflow reaper")
+    require_calls(reap, "vfs_scope_reap_work_pending", 1, "workflow reaper")
+    require_calls(reap, "agent_background_request", 1, "workflow reaper")
+    rearm = (
+        "if(vfs_scope_reap_work_pending())agent_background_request();"
+    )
+    if reap_compact.count(rearm) != 1:
+        raise ProtocolError(
+            "workflow reaper must level-rearm every unfinished bounded phase"
+        )
+    last_phase_at = max(call_positions(reap, "vfs_scope_reclaim_complete"))
+    pending_at = call_positions(reap, "vfs_scope_reap_work_pending")[0]
+    request_at = call_positions(reap, "agent_background_request")[0]
+    if not (last_phase_at < pending_at < request_at):
+        raise ProtocolError("workflow reaper re-armed before completing its phase")
+    if re.search(r"\b(?:while|goto)\b", reap):
+        raise ProtocolError("workflow reaper must not busy-loop")
+    for forbidden in (
+        "agent_background_maintain",
+        "agent_background_checkpoint",
+        "vfs_scope_reap_pending",
+    ):
+        if call_positions(reap, forbidden):
+            raise ProtocolError("workflow reaper must return after one bounded pass")
+
+    metadata_maintain = function_body(
+        objects, "agent_metadata_background_maintain"
+    )
+    reap_calls = require_calls(
+        metadata_maintain,
+        "vfs_scope_reap_pending",
+        1,
+        "metadata background coordinator",
+    )
+    store_calls = require_calls(
+        metadata_maintain,
+        "agent_metadata_store_background_maintain",
+        1,
+        "metadata background coordinator",
+    )
+    if reap_calls[0] > store_calls[0]:
+        raise ProtocolError(
+            "metadata background must preserve a reaper edge across same-pass commit"
+        )
+
+    request = normalize(function_body(background, "agent_background_request"))
+    take = normalize(function_body(background, "agent_background_take"))
+    if request != (
+        "__atomic_store_n(&agent_background_pending,1,__ATOMIC_RELEASE);"
+    ) or take != (
+        "return__atomic_exchange_n(&agent_background_pending,0,"
+        "__ATOMIC_ACQ_REL);"
+    ):
+        raise ProtocolError(
+            "background edge latch must atomically merge concurrent requests"
+        )
+
+    checkpoint = function_body(agent_core, "agent_background_checkpoint")
+    take_calls = require_calls(
+        checkpoint, "agent_background_take", 1, "background checkpoint"
+    )
+    maintain_calls = require_calls(
+        checkpoint, "agent_background_maintain", 1, "background checkpoint"
+    )
+    if take_calls[0] > maintain_calls[0] or re.search(
+        r"\b(?:while|goto)\b", checkpoint
+    ):
+        raise ProtocolError(
+            "background checkpoint must consume once before one maintenance pass"
+        )
+
+
+def validate_trapframe_lifecycle(proc):
+    clean = sanitize_c(proc)
+    if re.search(
+        r"\btrapframe\s*\[\s*NPROC\s*\]\s*\[\s*NTHREAD\s*\]", clean
+    ):
+        raise ProtocolError("global NPROC x NTHREAD trapframe pool returned")
+
+    acquire = function_body(proc, "thread_trapframe_acquire")
+    require_calls(acquire, "kalloc_account_page", 1, "trapframe acquire")
+    if call_positions(acquire, "kalloc"):
+        raise ProtocolError("trapframe acquire bypasses page accounting")
+
+    release = function_body(proc, "thread_trapframe_release")
+    require_calls(release, "kfree_account_page", 1, "trapframe release")
+    if call_positions(release, "kfree"):
+        raise ProtocolError("trapframe release bypasses page accounting")
+
+    user_release = normalize(function_body(proc, "thread_user_vm_release"))
+    unmap = "uvmunmap(pt,get_thread_trapframe_va(t->tid),1,0);"
+    free = "thread_trapframe_release(t);"
+    if user_release.count(unmap) != 1 or user_release.count(free) != 1:
+        raise ProtocolError("thread teardown lost one trapframe unmap/free")
+    if user_release.index(unmap) > user_release.index(free):
+        raise ProtocolError("thread teardown frees trapframe before unmapping it")
+
+    reset = normalize(function_body(proc, "proc_reset_thread_slot"))
+    trapframe_release = "thread_trapframe_release(t);"
+    thread_release = "proc_thread_resource_release(t);"
+    if reset.count(trapframe_release) != 1 or reset.count(thread_release) != 1:
+        raise ProtocolError("thread slot reset lost trapframe/account release")
+    if reset.index(trapframe_release) > reset.index(thread_release):
+        raise ProtocolError("thread account released before its trapframe page")
+
+    install = normalize(function_body(proc, "proc_install_user_image"))
+    image_check = "proc_user_image_trapframe_valid(p,image)"
+    prepare = "vfs_proc_exec_prepare(p,image,live_exec,&transition)"
+    commit = "vfs_proc_exec_commit(p,&transition)"
+    if image_check not in install or prepare not in install or commit not in install:
+        raise ProtocolError("exec replacement lost trapframe image validation")
+    if install.index(image_check) > install.index(prepare) or install.index(
+        image_check
+    ) > install.index(commit):
+        raise ProtocolError("exec publishes credentials/VM before trapframe validation")
+    image_validator = normalize(
+        function_body(proc, "proc_user_image_trapframe_valid")
+    )
+    for invariant in (
+        "walk(image->pagetable,TRAPFRAME,0)",
+        "PTE2PA(*pte)!=(uint64)p->threads[0].trapframe",
+        "PTE_V|PTE_R|PTE_W",
+        "PTE_U|PTE_X",
+    ):
+        if invariant not in image_validator:
+            raise ProtocolError(
+                f"trapframe image validator lost invariant: {invariant}"
+            )
+    old_unmap = (
+        "uvmunmap(old_pagetable,get_thread_trapframe_va(tid),1,0);"
+    )
+    sibling_reset = "proc_reset_thread_slot(slot);"
+    if old_unmap not in install or sibling_reset not in install:
+        raise ProtocolError("exec replacement lost sibling trapframe teardown")
+    if install.index(old_unmap) > install.index(sibling_reset):
+        raise ProtocolError("exec frees sibling trapframe before old VM unmap")
+
+    dying = function_body(proc, "scheduler_finish_dying_thread")
+    dying_guard = require_if(
+        dying, "t->trapframe!=0", "scheduler trapframe handoff"
+    )
+    if len(call_positions(dying_guard["statement"], "panic")) != 1:
+        raise ProtocolError("scheduler handoff lost trapframe quiescence guard")
+    thread_release_at = normalize(dying).find(thread_release)
+    if thread_release_at < 0:
+        raise ProtocolError("scheduler handoff lost thread account release")
+    if len(normalize(dying[: dying_guard["end"]])) > thread_release_at:
+        raise ProtocolError("scheduler releases thread account with live trapframe")
+
+
+def validate_exec_publication(proc):
+    install = function_body(proc, "proc_install_user_image")
+    compact = normalize(install)
+    label = "PUBLIC exec publication"
+
+    validate_at = require_calls(
+        compact, "vfs_proc_exec_validate_locked", 1, label
+    )[0]
+    image_state_at = require_calls(
+        compact, "proc_image_install_state_valid_locked", 1, label
+    )[0]
+    sync_validate_at = require_calls(
+        compact, "sync_proc_exec_validate_locked", 1, label
+    )[0]
+    identity_at = require_calls(
+        compact, "agent_exec_public_identity_commit", 1, label
+    )[0]
+    detach_at = require_calls(
+        compact, "proc_detach_vfs_scope_fds_locked", 1, label
+    )[0]
+    commit_positions = require_calls(compact, "vfs_proc_exec_commit", 2, label)
+    image_reset_at = require_calls(
+        compact, "agent_process_image_install_locked", 1, label
+    )[0]
+    forbid_calls(compact, ("agent_thread_runtime_transition",), label)
+    sync_reset_at = require_calls(
+        compact, "sync_proc_exec_reset_locked", 1, label
+    )[0]
+    vm_swap = "p->pagetable=image->pagetable;"
+    if compact.count(vm_swap) != 1:
+        raise ProtocolError(f"{label} must swap the VM exactly once")
+    publication_order = (
+        max(image_state_at, validate_at, sync_validate_at),
+        identity_at,
+        detach_at,
+        max(commit_positions),
+        image_reset_at,
+        sync_reset_at,
+        compact.index(vm_swap),
+    )
+    if publication_order != tuple(sorted(publication_order)):
+        raise ProtocolError(
+            f"{label} order must be validate, identity, FDs, VFS, runtime, sync, VM"
+        )
+
+    prepare_failure = require_if(
+        install,
+        "!proc_user_image_trapframe_valid(p,image)||"
+        "vfs_proc_exec_prepare(p,image,live_exec,&transition)<0",
+        "exec prepare",
+    )
+    alias_failure = require_if(
+        install,
+        "agent_alias_exec_context(p,image->pagetable)<0",
+        "exec Context alias failure",
+    )
+    validate_failure = require_if_predicates(
+        install,
+        (
+            "!proc_teardown_live(p)",
+            "!proc_image_install_state_valid_locked(p,mode)",
+            "sync_proc_exec_validate_locked(p,&p->threads[0])<0",
+            "vfs_proc_exec_validate_locked(p,&transition)<0",
+        ),
+        "exec locked validation failure",
+        top_level=True,
+    )
+    guard_prefix = normalize(install[: validate_failure["start"]])
+    if not guard_prefix.endswith("enabled=intr_save();"):
+        raise ProtocolError(
+            "exec locked validation predicates must share the IRQ publication boundary"
+        )
+    reserved = require_if(
+        install, "transition.lifecycle_reserved", "exec reserved lifecycle"
+    )
+    reserved_failure = require_if(
+        reserved["statement"],
+        "vfs_proc_exec_commit(p,&transition)<0",
+        "exec reserved lifecycle commit failure",
+    )
+    identity_failure = require_if(
+        install,
+        "transition.identity_policy==VFS_EXEC_IDENTITY_PUBLIC&&"
+        "agent_exec_public_identity_commit(p)<0",
+        "exec PUBLIC identity failure",
+    )
+    abort = "vfs_proc_exec_abort(&transition);"
+    for failure_label, failure in (
+        ("exec Context alias failure", alias_failure),
+        ("exec locked validation failure", validate_failure),
+        ("exec reserved lifecycle commit failure", reserved_failure),
+        ("exec PUBLIC identity failure", identity_failure),
+    ):
+        statement = normalize(failure["statement"])
+        failed_return = "return-1;"
+        if (
+            statement.count(abort) != 1
+            or statement.count(failed_return) != 1
+            or statement.index(abort) > statement.index(failed_return)
+        ):
+            raise ProtocolError(
+                f"{failure_label} must abort prepared exec before returning"
+            )
+
+    vm_swap_match = re.search(
+        r"\bp\s*->\s*pagetable\s*=\s*image\s*->\s*pagetable\s*;", install
+    )
+    if vm_swap_match is None:
+        raise ProtocolError(f"{label} lost VM swap")
+    prepublication = install[prepare_failure["end"] : vm_swap_match.start()]
+    if len(re.findall(r"\breturn\b", prepublication)) != 4:
+        raise ProtocolError(
+            "exec pre-publication failure paths changed without rollback contract"
+        )
+    require_calls(prepublication, "vfs_proc_exec_abort", 4, "exec pre-publication")
+
+
+def validate_legacy_mail_protocol(agent_core, agent_ipc, syscall):
+    label = "legacy mail endpoint lifecycle"
+    core_exec = function_body(agent_core, "agent_core_exec_public_commit")
+    core_clear = function_body(agent_core, "agent_core_clear_metadata")
+    core_prepare = function_body(agent_core, "agent_core_proc_prepare")
+    require_calls(core_exec, "agent_ipc_exec_public", 2, label)
+    forbid_calls(core_exec, ("agent_ipc_proc_teardown",), label)
+    require_calls(core_clear, "agent_ipc_proc_teardown", 1, label)
+    forbid_calls(core_clear, ("agent_ipc_exec_public",), label)
+    clear_at = require_calls(
+        core_prepare, "agent_core_clear_metadata", 1, label
+    )[0]
+    prepare_at = require_calls(
+        core_prepare, "agent_ipc_proc_prepare", 1, label
+    )[0]
+    if clear_at >= prepare_at:
+        raise ProtocolError(f"{label} must clear before assigning an endpoint")
+
+    exec_public = function_body(agent_ipc, "agent_ipc_exec_public")
+    teardown = function_body(agent_ipc, "agent_ipc_proc_teardown")
+    require_calls(exec_public, "agent_ipc_proc_reset", 1, label)
+    require_calls(exec_public, "agent_ipc_legacy_endpoint_alloc_locked", 1, label)
+    require_calls(teardown, "agent_ipc_proc_reset", 1, label)
+    if "p->legacy_mail_endpoint_generation=0;" not in normalize(teardown):
+        raise ProtocolError(f"{label} teardown must invalidate its generation")
+
+    matches = function_body(
+        agent_ipc, "agent_ipc_legacy_mailbox_domain_matches"
+    )
+    match_compact = normalize(matches)
+    for invariant in (
+        "agent_ipc_legacy_domain_equal(snapshot,current)",
+        "snapshot->endpoint_generation!=0",
+        "snapshot->endpoint_generation==current->endpoint_generation",
+    ):
+        if invariant not in match_compact:
+            raise ProtocolError(
+                f"{label} mailbox snapshot lost invariant: {invariant}"
+            )
+
+    read_begin = function_body(
+        agent_ipc, "agent_ipc_legacy_public_read_begin"
+    )
+    if re.search(
+        r"mailbox\s*->\s*(?:head|tail|count|len\s*\[[^]]+\])\s*"
+        r"(?:=|\+\+|--)",
+        read_begin,
+    ):
+        raise ProtocolError("legacy mail read begin must not dequeue")
+    read_finish = function_body(
+        agent_ipc, "agent_ipc_legacy_public_read_finish"
+    )
+    commit = require_if(read_finish, "commit", "legacy mail read finish")
+    commit_compact = normalize(commit["statement"])
+    for invariant in (
+        "mailbox->head=(mailbox->head+1)%MAILBOX_SLOT_COUNT;",
+        "mailbox->count--;",
+    ):
+        if invariant not in commit_compact:
+            raise ProtocolError(
+                f"legacy mail read finish lost commit invariant: {invariant}"
+            )
+
+    sys_read = function_body(syscall, "sys_mailread")
+    begin_at = require_calls(
+        sys_read, "agent_ipc_legacy_public_read_begin", 1,
+        "legacy mail syscall",
+    )[0]
+    copyout_at = require_calls(sys_read, "copyout", 1, "legacy mail syscall")[0]
+    finishes = require_calls(
+        sys_read, "agent_ipc_legacy_public_read_finish", 2,
+        "legacy mail syscall",
+    )
+    sys_read_compact = normalize(sys_read)
+    commit_call = "agent_ipc_legacy_public_read_finish(p,&receipt,1)"
+    abort_call = "agent_ipc_legacy_public_read_finish(p,&receipt,0)"
+    if (
+        sys_read_compact.count(commit_call) != 1
+        or sys_read_compact.count(abort_call) != 1
+    ):
+        raise ProtocolError(
+            "legacy mail syscall needs one abort and one commit"
+        )
+    commit_at = sys_read_compact.index(commit_call)
+    compact_begin_at = sys_read_compact.index(
+        "agent_ipc_legacy_public_read_begin"
+    )
+    compact_copyout_at = sys_read_compact.index("copyout(")
+    if not compact_begin_at < compact_copyout_at < commit_at:
+        raise ProtocolError(
+            "legacy mail syscall must begin, copyout, then commit"
+        )
+    copyout_failure = require_if(
+        sys_read,
+        "copyout(p->pagetable,buf,payload,n)<0",
+        "legacy mail copyout failure",
+    )
+    failure = normalize(copyout_failure["statement"])
+    abort = abort_call + ";"
+    if failure.count(abort) != 1 or failure.index(abort) > failure.index("return-1;"):
+        raise ProtocolError(
+            "legacy mail copyout failure must abort before returning"
+        )
+
+
 def validate_legacy_absent(os_sources):
     legacy = re.compile(r"\bagent_scope_reclaim\s*\(")
     for path, source in os_sources.items():
@@ -496,7 +1010,11 @@ def validate_budget_wiring(budget):
     if vfs is None:
         raise ProtocolError("vfs_security is absent from integration budgets")
     dependencies = set(vfs.get("allowed_dependencies", []))
-    if "metadata_objects" not in dependencies or "metadata_store" in dependencies:
+    if (
+        "background" not in dependencies
+        or "metadata_objects" not in dependencies
+        or "metadata_store" in dependencies
+    ):
         raise ProtocolError("vfs_security teardown dependency bypasses metadata_objects")
 
 
@@ -504,8 +1022,14 @@ def load_sources(root):
     root = Path(root).resolve()
     paths = {
         "objects": root / "os" / "agent_metadata_objects.c",
+        "actions": root / "os" / "agent_metadata_actions.c",
         "store": root / "os" / "agent_metadata_store.c",
         "vfs": root / "os" / "vfs_security.c",
+        "proc": root / "os" / "proc.c",
+        "agent_core": root / "os" / "agent_core.c",
+        "background": root / "os" / "agent_background.c",
+        "agent_ipc": root / "os" / "agent_ipc.c",
+        "syscall": root / "os" / "syscall.c",
         "budget": root / "ci" / "kernel-budgets.json",
     }
     for label, path in paths.items():
@@ -523,8 +1047,14 @@ def load_sources(root):
         raise ProtocolError(f"invalid kernel budget config: {error}") from error
     return {
         "objects": paths["objects"].read_text(encoding="utf-8"),
+        "actions": paths["actions"].read_text(encoding="utf-8"),
         "store": paths["store"].read_text(encoding="utf-8"),
         "vfs": paths["vfs"].read_text(encoding="utf-8"),
+        "proc": paths["proc"].read_text(encoding="utf-8"),
+        "agent_core": paths["agent_core"].read_text(encoding="utf-8"),
+        "background": paths["background"].read_text(encoding="utf-8"),
+        "agent_ipc": paths["agent_ipc"].read_text(encoding="utf-8"),
+        "syscall": paths["syscall"].read_text(encoding="utf-8"),
         "os_sources": os_sources,
         "budget": budget,
     }
@@ -532,9 +1062,18 @@ def load_sources(root):
 
 def validate_protocol(sources):
     validate_legacy_absent(sources["os_sources"])
-    validate_begin(sources["objects"])
+    validate_begin(sources["objects"], sources["actions"])
     validate_metadata_poll(sources["objects"], sources["store"])
     validate_driver(sources["vfs"])
+    validate_reaper_liveness(
+        sources["vfs"], sources["objects"], sources["background"],
+        sources["agent_core"]
+    )
+    validate_trapframe_lifecycle(sources["proc"])
+    validate_exec_publication(sources["proc"])
+    validate_legacy_mail_protocol(
+        sources["agent_core"], sources["agent_ipc"], sources["syscall"]
+    )
     validate_budget_wiring(sources["budget"])
 
 

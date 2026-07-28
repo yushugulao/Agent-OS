@@ -14,64 +14,35 @@ agentinit(void)
 }
 
 void
-agent_scope_controller_departing(struct proc *p)
-{
-	agent_lifecycle_controller_departing(p);
-}
-
-/*
- * Process allocation and destruction enter Agent state through these two
- * phase-aware operations.  The process teardown state is authoritative: a
- * caller cannot clear the control identity before controller revocation, nor
- * free Context state while another thread can still publish into it.
- */
-void
 agent_proc_prepare(struct proc *p)
 {
-	if (p == 0 || !proc_teardown_live(p))
-		panic("Agent prepare outside live process");
-	agent_core_clear_metadata(p);
+	agent_core_proc_prepare(p);
 }
 
 void
 agent_proc_teardown(struct proc *p)
 {
-	if (p == 0 ||
-	    p->teardown_state < PROC_TEARDOWN_QUIESCING ||
-	    p->teardown_state > PROC_TEARDOWN_SETTLING)
-		panic("Agent teardown phase");
+	agent_core_proc_teardown(p);
+}
 
-	/*
-	 * QUIESCING closes authority before sibling syscalls unwind.  Repeating
-	 * this step in RECLAIMING is intentional and keeps the operation
-	 * idempotent if an unpublished process skipped the early call.
-	 */
-	if (p->is_agent || p->agent_control_id != 0)
-		agent_lifecycle_controller_departing(p);
-	if (p->teardown_state == PROC_TEARDOWN_QUIESCING)
-		return;
-	if (p->teardown_state == PROC_TEARDOWN_SETTLING) {
-		if (p->is_agent || !agent_context_is_empty(p))
-			panic("Agent teardown incomplete");
-		return;
-	}
-	if (p->teardown_state != PROC_TEARDOWN_RECLAIMING)
-		panic("Agent teardown transition");
-	if (p->is_agent || !agent_context_is_empty(p))
-		agent_free_proc_context(p);
-	agent_core_clear_metadata(p);
+void agent_thread_runtime_transition(struct thread *t, int transition)
+{
+	agent_ipc_thread_runtime_transition(t, transition);
+}
+
+void agent_process_image_install_locked(struct proc *p)
+{ agent_ipc_process_image_install_locked(p); }
+
+int
+agent_exec_public_identity_commit(struct proc *p)
+{
+	return agent_core_exec_public_commit(p);
 }
 
 void
 agent_storage_init(void)
 {
 	agent_core_storage_init();
-}
-
-void
-agent_background_maintain(void)
-{
-	agent_core_background_maintain();
 }
 
 void

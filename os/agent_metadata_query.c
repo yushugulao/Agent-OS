@@ -4,45 +4,97 @@
 #include "agent_metadata_query.h"
 #include "defs.h"
 
-#define QUERY_CACHE_MAX 8
-
-struct query_cache_entry {
-	int valid;
-	uint scope_id;
-	uint64 generation;
-	struct agent_file_query key;
-	struct agent_file_query_result result;
-	int slots[AGENT_FILE_QUERY_MAX_HITS];
+struct agent_query_alias {
+	char name[10];
+	ushort offset, size;
 };
 
-static struct query_cache_entry query_cache[QUERY_CACHE_MAX];
-static int query_cache_head;
+#define AGENT_QUERY_ALIAS(name_value, field) \
+	{ name_value, (ushort)__builtin_offsetof(struct agent_file_query, field), \
+	  (ushort)sizeof(((struct agent_file_query *)0)->field) }
+#define AGENT_QUERY_FIELDS 8
+#define AGENT_QUERY_INDEX_FIRST 5
+#define AGENT_QUERY_META_DELTA \
+	((int)__builtin_offsetof(struct agent_file_meta, physical_name) - \
+	 (int)__builtin_offsetof(struct agent_file_query, physical_name))
+static const struct agent_query_alias agent_query_aliases[] = {
+	AGENT_QUERY_ALIAS("path", physical_name),
+	AGENT_QUERY_ALIAS("logical", logical_path),
+	AGENT_QUERY_ALIAS("project", project),
+	AGENT_QUERY_ALIAS("workflow", workflow),
+	AGENT_QUERY_ALIAS("run", run_id),
+	AGENT_QUERY_ALIAS("status", status),
+	AGENT_QUERY_ALIAS("stage", stage),
+	AGENT_QUERY_ALIAS("kind", kind),
+	AGENT_QUERY_ALIAS("physical", physical_name),
+	AGENT_QUERY_ALIAS("object", logical_path),
+	AGENT_QUERY_ALIAS("object_id", logical_path),
+	AGENT_QUERY_ALIAS("namespace", project),
+	AGENT_QUERY_ALIAS("run_id", run_id),
+	AGENT_QUERY_ALIAS("state", status),
+	AGENT_QUERY_ALIAS("label", stage),
+	AGENT_QUERY_ALIAS("type", kind),
+	AGENT_QUERY_ALIAS("summary", summary_contains),
+};
+#undef AGENT_QUERY_ALIAS
 
-void
-agent_metadata_query_init(void)
+int
+agent_metadata_query_from_payload(struct agent_file_query *q, char *payload)
 {
-	memset(query_cache, 0, sizeof(query_cache));
-	query_cache_head = 0;
+	int i = 0, key, key_end, val, matched;
+	char separator, tail;
+
+	memset(q, 0, sizeof(*q));
+	q->flags = AGENT_FILE_QUERY_USE_INDEX;
+	q->max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	while (payload[i]) {
+		while (payload[i] == ' ' || payload[i] == ';' ||
+		       payload[i] == ',')
+			i++;
+		key = i;
+		while (payload[i] && payload[i] != '=' && payload[i] != ':' &&
+		       payload[i] != ';' && payload[i] != ',')
+			i++;
+		key_end = i;
+		separator = payload[i];
+		if (key_end - key >= AGENT_FILE_FIELD_SIZE ||
+		    (payload[i] != '=' && payload[i] != ':'))
+			return -1;
+		val = ++i;
+		while (payload[i] && payload[i] != ';' &&
+		       payload[i] != ',')
+			i++;
+		if (i - val >= AGENT_FILE_LOGICAL_SIZE)
+			return -1;
+		tail = payload[i];
+		payload[key_end] = payload[i] = 0;
+		matched = 0;
+		for (uint j = 0; j < NELEM(agent_query_aliases); j++) {
+			const struct agent_query_alias *alias =
+				&agent_query_aliases[j];
+
+			if (strncmp(payload + key, alias->name,
+				    AGENT_FILE_FIELD_SIZE) != 0)
+				continue;
+			safestrcpy((char *)q + alias->offset, payload + val,
+				   alias->size);
+			matched = 1;
+			break;
+		}
+		payload[key_end] = separator;
+		payload[i] = tail;
+		if (!matched)
+			return -1;
+	}
+	return 0;
 }
 
 void
 agent_metadata_query_invalidate_locked(uint scope_id, int full)
 {
+	(void)scope_id;
+	(void)full;
 	agent_metadata_txn_work_charge(0);
-	if (full) {
-		memset(query_cache, 0, sizeof(query_cache));
-		return;
-	}
-	for (int i = 0; i < QUERY_CACHE_MAX; i++)
-		if (query_cache[i].valid && query_cache[i].scope_id == scope_id)
-			memset(&query_cache[i], 0, sizeof(query_cache[i]));
-}
-
-static int
-query_field_match(const char *want, const char *have)
-{
-	return want[0] == 0 ||
-	       strncmp(want, have, AGENT_FILE_LOGICAL_SIZE) == 0;
 }
 
 int
@@ -52,22 +104,15 @@ agent_metadata_query_matches(uint scope, uint owner,
 {
 	if (!m->used || !agent_object_scope_visible(scope, owner))
 		return 0;
-	if (!query_field_match(q->physical_name, m->physical_name))
-		return 0;
-	if (!query_field_match(q->logical_path, m->logical_path))
-		return 0;
-	if (!query_field_match(q->project, m->project))
-		return 0;
-	if (!query_field_match(q->workflow, m->workflow))
-		return 0;
-	if (!query_field_match(q->run_id, m->run_id))
-		return 0;
-	if (!query_field_match(q->stage, m->stage))
-		return 0;
-	if (!query_field_match(q->kind, m->kind))
-		return 0;
-	if (!query_field_match(q->status, m->status))
-		return 0;
+	for (int i = 0; i < AGENT_QUERY_FIELDS; i++) {
+		const struct agent_query_alias *field = &agent_query_aliases[i];
+		const char *want = (const char *)q + field->offset;
+		const char *have = (const char *)m + field->offset +
+				   AGENT_QUERY_META_DELTA;
+
+		if (want[0] && strncmp(want, have, field->size) != 0)
+			return 0;
+	}
 	if (q->summary_contains[0] &&
 	    !agent_metadata_catalog_field_contains(m->summary,
 					    q->summary_contains))
@@ -78,77 +123,10 @@ agent_metadata_query_matches(uint scope, uint owner,
 int
 agent_metadata_query_has_filter(const struct agent_file_query *q)
 {
-	return q->physical_name[0] || q->logical_path[0] || q->project[0] ||
-	       q->workflow[0] || q->run_id[0] || q->stage[0] || q->kind[0] ||
-	       q->status[0] || q->summary_contains[0];
-}
-
-static int
-query_cacheable(const struct agent_file_query *q)
-{
-	return (q->flags & AGENT_FILE_QUERY_SCAN) == 0;
-}
-
-static int
-query_key_equal(const struct agent_file_query *a,
-		const struct agent_file_query *b)
-{
-	return a->flags == b->flags && a->max_hits == b->max_hits &&
-	       strncmp(a->physical_name, b->physical_name,
-		       sizeof(a->physical_name)) == 0 &&
-	       strncmp(a->logical_path, b->logical_path,
-		       sizeof(a->logical_path)) == 0 &&
-	       strncmp(a->project, b->project, sizeof(a->project)) == 0 &&
-	       strncmp(a->workflow, b->workflow, sizeof(a->workflow)) == 0 &&
-	       strncmp(a->run_id, b->run_id, sizeof(a->run_id)) == 0 &&
-	       strncmp(a->stage, b->stage, sizeof(a->stage)) == 0 &&
-	       strncmp(a->kind, b->kind, sizeof(a->kind)) == 0 &&
-	       strncmp(a->status, b->status, sizeof(a->status)) == 0 &&
-	       strncmp(a->summary_contains, b->summary_contains,
-		       sizeof(a->summary_contains)) == 0;
-}
-
-static int
-query_cache_lookup(uint scope, const struct agent_file_query *key,
-		   struct agent_file_query_result *r, int *slots)
-{
-	struct query_cache_entry *e;
-
-	for (int i = 0; i < QUERY_CACHE_MAX; i++) {
-		e = &query_cache[i];
-		if (!e->valid || e->scope_id != scope)
-			continue;
-		if (e->generation != agent_file_state_scope_generation(scope))
-			continue;
-		if (!query_key_equal(&e->key, key))
-			continue;
-		memmove(r, &e->result, sizeof(*r));
-		memmove(slots, e->slots, sizeof(e->slots));
-		r->plan_reason |= AGENT_FILE_QUERY_REASON_CACHE_HIT;
-		r->query_ticks = 0;
-		return 1;
-	}
-	return 0;
-}
-
-static void
-query_cache_store(uint scope, const struct agent_file_query *key,
-		  const struct agent_file_query_result *r, const int *slots,
-		  int allow_insert)
-{
-	struct query_cache_entry *e;
-
-	if (r->total_hits <= 0 || !allow_insert)
-		return;
-	e = &query_cache[query_cache_head % QUERY_CACHE_MAX];
-	query_cache_head = (query_cache_head + 1) % QUERY_CACHE_MAX;
-	memset(e, 0, sizeof(*e));
-	e->valid = 1;
-	e->scope_id = scope;
-	e->generation = agent_file_state_scope_generation(scope);
-	memmove(&e->key, key, sizeof(e->key));
-	memmove(&e->result, r, sizeof(e->result));
-	memmove(e->slots, slots, sizeof(e->slots));
+	for (int i = 0; i < AGENT_QUERY_FIELDS; i++)
+		if (*((const char *)q + agent_query_aliases[i].offset))
+			return 1;
+	return q->summary_contains[0] != 0;
 }
 
 int
@@ -160,46 +138,44 @@ agent_metadata_query_execute_locked(
 	struct agent_catalog_view view;
 	struct agent_file_query key;
 	int cursor = -1, index = 0, use_index = 0, bucket = -1;
+	int rebuild_records = 0;
 	int limit;
 	uint64 start, generation, reason = 0;
 
 	agent_metadata_txn_projection_require_idle();
+	(void)allow_insert;
 	limit = q->max_hits;
 	if (limit <= 0 || limit > AGENT_FILE_QUERY_MAX_HITS)
 		limit = AGENT_FILE_QUERY_MAX_HITS;
 	memmove(&key, q, sizeof(key));
 	key.max_hits = limit;
-	if (query_cacheable(&key) && query_cache_lookup(scope, &key, r, slots))
-		return r->returned;
 	start = agent_file_state_now();
 	generation = agent_metadata_catalog_generation();
 	if (key.flags & AGENT_FILE_QUERY_SCAN) {
 		reason |= AGENT_FILE_QUERY_REASON_FORCED_SCAN;
 	} else if (key.flags & AGENT_FILE_QUERY_USE_INDEX) {
-		if (key.status[0]) {
-			index = AGENT_CATALOG_INDEX_STATUS;
+		for (int i = AGENT_QUERY_INDEX_FIRST;
+		     i < AGENT_QUERY_FIELDS; i++) {
+			const struct agent_query_alias *alias =
+				&agent_query_aliases[i];
+			char *value = (char *)&key + alias->offset;
+
+			if (!value[0])
+				continue;
+			index = AGENT_CATALOG_INDEX_STATUS +
+				i - AGENT_QUERY_INDEX_FIRST;
 			cursor = agent_metadata_catalog_index_seek(
-				generation, index, key.status, -1, &bucket);
+				generation, index, value, -1, &bucket,
+				&rebuild_records);
 			use_index = 1;
-			r->plan = AGENT_FILE_QUERY_PLAN_STATUS_INDEX;
-			reason |= AGENT_FILE_QUERY_REASON_STATUS_INDEX;
-		} else if (key.stage[0]) {
-			index = AGENT_CATALOG_INDEX_STAGE;
-			cursor = agent_metadata_catalog_index_seek(
-				generation, index, key.stage, -1, &bucket);
-			use_index = 1;
-			r->plan = AGENT_FILE_QUERY_PLAN_STAGE_INDEX;
-			reason |= AGENT_FILE_QUERY_REASON_STAGE_INDEX;
-		} else if (key.kind[0]) {
-			index = AGENT_CATALOG_INDEX_KIND;
-			cursor = agent_metadata_catalog_index_seek(
-				generation, index, key.kind, -1, &bucket);
-			use_index = 1;
-			r->plan = AGENT_FILE_QUERY_PLAN_KIND_INDEX;
-			reason |= AGENT_FILE_QUERY_REASON_KIND_INDEX;
-		} else {
-			reason |= AGENT_FILE_QUERY_REASON_NO_INDEX_KEY;
+			r->plan = AGENT_FILE_QUERY_PLAN_STATUS_INDEX +
+				i - AGENT_QUERY_INDEX_FIRST;
+			reason |= AGENT_FILE_QUERY_REASON_STATUS_INDEX <<
+				  (i - AGENT_QUERY_INDEX_FIRST);
+			break;
 		}
+		if (!use_index)
+			reason |= AGENT_FILE_QUERY_REASON_NO_INDEX_KEY;
 	} else {
 		reason |= AGENT_FILE_QUERY_REASON_INDEX_OFF;
 	}
@@ -208,7 +184,7 @@ agent_metadata_query_execute_locked(
 	for (int i = use_index ? cursor : 0;
 	     i >= 0 && i < AGENT_FILE_META_MAX;
 	     i = use_index ? agent_metadata_catalog_index_seek(
-				     generation, index, 0, i, 0) : i + 1) {
+				     generation, index, 0, i, 0, 0) : i + 1) {
 		agent_metadata_txn_work_charge(1);
 		if (agent_metadata_catalog_borrow(generation, i, &view) <= 0)
 			continue;
@@ -233,10 +209,9 @@ agent_metadata_query_execute_locked(
 	}
 	r->used_index = use_index;
 	r->candidate_records = r->scanned_records;
+	r->index_rebuild_records = rebuild_records;
 	r->query_ticks = agent_file_state_now() - start;
 	r->plan_reason = reason;
 	r->fs_generation = agent_file_state_scope_generation(scope);
-	if (query_cacheable(&key))
-		query_cache_store(scope, &key, r, slots, allow_insert);
 	return r->returned;
 }

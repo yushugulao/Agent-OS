@@ -6,7 +6,7 @@
 
 本项目在 uCore 内核上实现 Agent-OS，把 Agent 进程身份、结构化工具调用、上下文历史、文件元数据索引和 Agent 事件运行机制放入内核支持层。
 
-完整专项脚本当前依次运行十六个程序。2026-07-25 的 generation-safe lifecycle、统一 resource controller、phase-aware teardown、21 页 Agent 状态原子计费、Context commit lane、lazy physical stack 和模块拆分版本已在固定 `agentos-qemu-calibrated` runner 由 bounded/flood-safe runner 连续完成三次 16/16，总 case monotonic 时间为 `261.343281873s`、`237.948978492s` 和 `255.370930671s`，中位 `255.370930671s`，CI 上限 `268.14s`；相对中位数约 5% headroom，足以覆盖最大样本，同时比旧门更紧。独立 `agentscope_ucore` 约 `93.7s`，实际输出 `scope_controller_exit_revoke=1 public_lineage=1` 和 `parent passed`；`agentfinal_ucore` 输出 `context_commit_lane=1 sequence=1..3 hash=1`。旧 `371.5s`、`127.9s`、`126.1s` 与 `13824 < 16384` 只保留为历史快照。`workflow_teardown_race_ucore` 是不计入这十六项的独立三轮机制专项；预算 checker、通用 runner 和生产 profile validator 的 fail-closed 自测集合以当前源码为准，静态预算与 owner 注册以 `ci/kernel-budgets.json` 为准：
+完整专项脚本当前依次运行十八个程序。2026-07-25 固定 runner 的三次 16/16 及 `261.343281873s`、`237.948978492s`、`255.370930671s` 只作为历史 checkpoint，不能用于当前 18-case 时长验收；`ci/kernel-budgets.json` 已回到 fail-closed provisional，必须在相同 `agentos-qemu-calibrated` runner 重新取得至少三轮完整 timing file 后才能恢复 calibrated。历史独立 `agentscope_ucore` 专项约 `93.7s`，曾输出 `scope_controller_exit_revoke=1 public_lineage=1` 和 `parent passed`；历史 `agentfinal_ucore` 也曾输出 `context_commit_lane=1 sequence=1..3 hash=1`，两者均不能替代最终 HEAD 复跑。旧 `371.5s`、`127.9s`、`126.1s` 与 `13824 < 16384` 也只保留为历史快照。`workflow_teardown_race_ucore` 及 physical、metadata/observation recovery、VirtIO 故障 runner 不计入这十八项；预算 checker、通用 runner 和生产 profile validator 的 fail-closed 自测集合以当前源码为准，静态预算与 owner 注册以 `ci/kernel-budgets.json` 为准：
 
 ```bash
 agentfinal_ucore
@@ -20,11 +20,13 @@ agentbench_ucore
 labbench_ucore
 labdemo_ucore
 agentsecurity_ucore
+agenttoolabi_ucore
 agentscope_ucore
 agenttrust_ucore
 agentvfs_ucore
 iobudget_ucore
 usersafety_ucore
+blocking_semantics_ucore
 ```
 
 各程序分工：
@@ -34,7 +36,7 @@ usersafety_ucore
 | `agentfinal_ucore` | 覆盖任务一至三核心功能，同时检查文件索引和事件自唤醒 |
 | `agentfs_ucore` | 检查真实 inode 绑定、私有 `.agentmeta` 重载、字段驱动 action、依赖按需解析、metadata 工作预算和稳定 handoff 端点 |
 | `agentscan_ucore` | 检查任务四的根目录自动扫描、真实文件元数据建立和索引维护 |
-| `agentloop_ucore` | 检查任务五的 FIFO 事件队列、stable source 上限、内核 TIMER 共存、unwatch、有限 timeout 睡眠、wait cancel、TIMER unwatch 和 heartbeat stop |
+| `agentloop_ucore` | 检查任务五的 FIFO 事件队列、stable source 上限、SYSTEM TIMER 共存、unwatch、有限 timeout 睡眠、wait cancel，以及 heartbeat 的内生唤醒、调频、合并、停止、边界和旧 ABI |
 | `agentsched_ucore` | 检查任务五的 Agent 感知调度、受权配置、事件状态、调度原因和公平性计数 |
 | `agentconflict_ucore` | 检查真实文件编辑租约、版本提交和非持有者写入拒绝 |
 | `agentllm_ucore` | 检查结构化 LLM 请求、Relay 响应、完成事件和 timeline 记录 |
@@ -170,13 +172,13 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentloop_ucore CHAPT
 | `message_source_limit=4` | 同一 stable source 的 directed MESSAGE 达到 4 条上限；消费 1 条后可立即补投，证明来源计数逐槽归还。跨 directed/attributed 共用仍没有混合事件输出 |
 | `ipc_class_limit=8` | 两个 stable source 各发送 4 条 directed MESSAGE，触及 IPC 类边界 |
 | `external_limit=12` | 再加入 4 条 attributed 通知，使 external 数量达到 12 |
-| `system_event_reserved=4` | external=12 后，4 条 heartbeat TIMER 越过 external admission 边界并将总队列填到 16 |
+| `system_event_reserved=4` | external admission 固定为 12，因此总容量中至少 4 个名额保留给 KERNEL/SYSTEM origin |
+| `heartbeat_reserve_coalesced=1` | external=12 后一条 heartbeat TIMER 可进入保留容量，跨多个周期仍只保留一条 pending |
 | `external_reject_reclaim=1` | 第 13 条 external 不入队；消费全部事件后，directed 与 attributed 事件均可再次接纳 |
-| `broadcast_slow_watcher_isolated=1` | 较早 watcher 队列已满时，后续 watcher 仍收到同一 attributed 广播 |
+| `broadcast_slow_watcher_isolated=1` | 较早 watcher 的 external admission 已饱和时，后续 watcher 仍收到同一 attributed 广播 |
 | `unwatch=1` | watch 可删除 |
 | `timeout_sleep_no_poll=1` | 有限 timeout 等待进入睡眠，不通过循环消耗 CPU |
-| `timer_unwatch=1` | TIMER watch 删除后，heartbeat 不再投递可消费 TIMER 事件 |
-| `heartbeat_wake_stop=1` | heartbeat 能唤醒 Agent，停止后不再投递 |
+| `heartbeat_intrinsic=1 dynamic=1 coalesced=1 stop=1 bounds=1 legacy=1` | 无 TIMER watch 仍唤醒；调频立即生效；最多一条 pending；drain 后 stop 无新事件；边界严格；512 ABI 兼容 |
 | `wait_cancel=1` | 具备独立取消能力的 controller 能取消自己直接创建的 Agent，目标返回取消事件 |
 
 看到 `agentloop_ucore: passed` 和 `agentloop_ucore: parent passed` 即可进入下一项。
@@ -225,7 +227,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=agentbench_ucore CHAP
 | `file_digest_cache` | 呈现重复读取同一真实文件内容证据时的 digest cache 命中 |
 | `file_query_records` | 直接呈现扫描路径和索引路径检查的候选记录数量 |
 | `file_query_plan` | 直接呈现查询计划和索引选择原因 |
-| `file_query_cache` | 呈现重复文件属性查询命中同一 `fs_generation` 下的内核结果缓存 |
+| `file_query_execution` | 呈现重复文件属性查询仍实际执行索引候选遍历，并明确 `kernel_cache_hit=0` |
 | `prefetch_records` | 呈现预取提示 snapshot 返回的 metadata 提示数量 |
 | `file_prefetch_snapshot` | 呈现读取预取提示的计时观测 |
 | `timeout_heartbeat` | 无事件等待会 timeout，心跳字段可通过 `agent_info()` 观察 |

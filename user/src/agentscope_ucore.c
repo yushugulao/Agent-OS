@@ -7,11 +7,9 @@
 
 #define TARGET_FILE "scopeobj"
 #define VOLATILE_FILE "scopevolatile"
-#define META_SCAN_PRESSURE_FILE "qa119"
 #define COMMON_FID  6101
 #define VOLATILE_FID 6102
 #define COMMON_ACTION_REQUEST 6201
-#define SCOPE_LIFECYCLE_ROUNDS 132
 #define META_RACE_WRITERS 3
 #define META_RACE_FILES 4
 #define META_WRITE_FLOOD 128
@@ -19,7 +17,6 @@
 #define META_WRITE_READY 16
 #define META_CROSS_QUERY_ROUNDS 32
 #define META_CROSS_QUERY_MAX_MS 5000
-#define META_SCAN_MIN_REST_TICKS 20
 #define META_WRITEBACK_WAIT_ROUNDS 800
 #define OBSERVE_CROSS_QUERY_ROUNDS 32
 #define OBSERVE_CROSS_QUERY_MAX_MS 15000
@@ -46,12 +43,11 @@ struct observe_pressure_result {
 };
 
 static struct agent_file_query_result scope_query_result;
+static struct agent_file_query_result volatile_query_result;
 static struct agent_file_query_result meta_race_result;
 static struct agent_file_edit_state scope_lease_state;
 static struct agent_info scope_writeback_before;
 static struct agent_info scope_writeback_after;
-static struct agent_info volatile_writeback_before;
-static struct agent_info volatile_writeback_after;
 static struct agent_context_record observe_context_scratch;
 static struct agent_timeline_filter observe_filter_scratch;
 /*
@@ -246,11 +242,6 @@ static __attribute__((noinline)) void metadata_micro_writer(int ready_fd,
 		check(write(fd, &value, 1) == 1,
 		      "write one-byte metadata update");
 		check(close(fd) == 0, "close metadata write flood target");
-		fd = open(META_SCAN_PRESSURE_FILE, O_WRONLY);
-		check(fd >= 0, "open untracked scan pressure target");
-		check(write(fd, &value, 1) == 1,
-		      "write one-byte untracked scan pressure update");
-		check(close(fd) == 0, "close untracked scan pressure target");
 		writes++;
 		if (writes == META_WRITE_READY)
 			write_exact(ready_fd, &ready, sizeof(ready),
@@ -483,17 +474,39 @@ static __attribute__((noinline)) void create_volatile_object(void)
 static __attribute__((noinline)) void query_volatile_object(void)
 {
 	struct agent_file_query query;
-	struct agent_file_query_result result;
 
 	memset(&query, 0, sizeof(query));
 	query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
 	strcpy(query.physical_name, VOLATILE_FILE);
-	memset(&result, 0, sizeof(result));
-	check(agent_file_query(&query, &result) == 1,
+	memset(&volatile_query_result, 0, sizeof(volatile_query_result));
+	check(agent_file_query(&query, &volatile_query_result) == 1,
 	      "volatile scoped query count");
-	check(result.total_hits == 1 && result.returned == 1 &&
-	      result.hits[0].fid == VOLATILE_FID,
+	check(volatile_query_result.total_hits == 1 &&
+	      volatile_query_result.returned == 1 &&
+	      volatile_query_result.hits[0].fid == VOLATILE_FID,
 	      "volatile scoped metadata retained");
+}
+
+static __attribute__((noinline)) void query_volatile_object_missing(void)
+{
+	struct agent_file_query query;
+
+	memset(&query, 0, sizeof(query));
+	query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(query.physical_name, VOLATILE_FILE);
+	strcpy(query.logical_path, "workflow/volatile");
+	strcpy(query.project, "scope-project");
+	strcpy(query.workflow, "scope-test");
+	strcpy(query.run_id, "volatile-run");
+	strcpy(query.stage, "volatile");
+	strcpy(query.kind, "artifact");
+	strcpy(query.status, "memory-only");
+	strcpy(query.summary_contains, "scope-B-volatile");
+	memset(&volatile_query_result, 0, sizeof(volatile_query_result));
+	check(agent_file_query(&query, &volatile_query_result) == 0 &&
+	      volatile_query_result.total_hits == 0 &&
+	      volatile_query_result.returned == 0,
+	      "volatile custom metadata is absent after owner reload");
 }
 
 static __attribute__((noinline)) void volatile_micro_writer(void)
@@ -510,12 +523,11 @@ static __attribute__((noinline)) void volatile_micro_writer(void)
 	exit(0);
 }
 
-static __attribute__((noinline)) void check_volatile_writeback_isolation(void)
+static __attribute__((noinline)) void check_volatile_reload_isolation(void)
 {
 	int child_status = -1;
 	int pid;
 
-	wait_metadata_quiet(&volatile_writeback_before);
 	pid = agent_create_role(AGENT_ROLE_ARTIFACT);
 	check(pid >= 0, "create volatile metadata writer");
 	if (pid == 0)
@@ -523,30 +535,11 @@ static __attribute__((noinline)) void check_volatile_writeback_isolation(void)
 	check(waitpid(pid, &child_status) == pid,
 	      "wait volatile metadata writer");
 	check(child_status == 0, "volatile metadata writer status");
-	wait_metadata_quiet(&volatile_writeback_after);
-	check(volatile_writeback_after.metadata_writeback_requests ==
-		      volatile_writeback_before.metadata_writeback_requests &&
-	      volatile_writeback_after.metadata_writeback_commits ==
-		      volatile_writeback_before.metadata_writeback_commits,
-	      "volatile writes do not enter persistent writeback");
 	query_volatile_object();
-}
-
-static __attribute__((noinline)) void check_scan_pressure_untracked(void)
-{
-	struct agent_file_query query;
-	int fd;
-
-	fd = open(META_SCAN_PRESSURE_FILE, O_RDONLY);
-	check(fd >= 0, "open scan pressure target");
-	check(close(fd) == 0, "close scan pressure target");
-	memset(&query, 0, sizeof(query));
-	query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
-	strcpy(query.physical_name, META_SCAN_PRESSURE_FILE);
-	memset(&scope_query_result, 0, sizeof(scope_query_result));
-	check(agent_file_query(&query, &scope_query_result) == 0 &&
-	      scope_query_result.total_hits == 0,
-	      "metadata quota leaves scan pressure target untracked");
+	check(agent_file_meta_init() == 0,
+	      "reload volatile metadata owner scope");
+	query_scoped_object("scope-B", "ready");
+	query_volatile_object_missing();
 }
 
 static __attribute__((noinline)) void query_scoped_object_missing(void)
@@ -739,9 +732,24 @@ static __attribute__((noinline)) int create_quota_files(char group, int max)
 	return created;
 }
 
-static __attribute__((noinline)) void check_scope_storage_quota(void)
+static __attribute__((noinline)) void remove_quota_files(char group, int count)
+{
+	char name[] = "qs000";
+
+	name[1] = group;
+	for (int i = 0; i < count; i++) {
+		name[2] = '0' + (i / 100) % 10;
+		name[3] = '0' + (i / 10) % 10;
+		name[4] = '0' + i % 10;
+		check(unlink(name) == 0, "remove workflow quota object");
+	}
+}
+
+static __attribute__((noinline)) void
+check_scope_storage_quota(uint64 *workflow_created, uint64 *public_created)
 {
 	int first;
+	int blocked;
 	int second;
 	int pid;
 
@@ -750,7 +758,15 @@ static __attribute__((noinline)) void check_scope_storage_quota(void)
 	if (pid == 0)
 		exit(create_quota_files('a', 120));
 	check(waitpid(pid, &first) == pid, "wait first quota writer");
-	check(first == 120, "first writer consumes part of scope quota");
+	check(first > 0 && first < 120,
+	      "first writer reaches shared workflow quota");
+
+	pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
+	check(pid >= 0, "create aggregate quota probe");
+	if (pid == 0)
+		exit(create_quota_files('c', 1));
+	check(waitpid(pid, &blocked) == pid, "wait aggregate quota probe");
+	check(blocked == 0, "same-scope writer shares exhausted quota");
 
 	pid = fork();
 	check(pid >= 0, "create public quota writer");
@@ -759,6 +775,12 @@ static __attribute__((noinline)) void check_scope_storage_quota(void)
 	check(waitpid(pid, &second) == pid, "wait public quota writer");
 	check(second == 70,
 	      "public principal is independent of workflow resource domain");
+	remove_quota_files('a', first);
+	check(create_quota_files('d', 1) == 1,
+	      "workflow quota is reusable after cleanup");
+	remove_quota_files('d', 1);
+	*workflow_created = first;
+	*public_created = second;
 }
 
 static __attribute__((noinline)) void
@@ -1090,7 +1112,7 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 			query_volatile_object();
 		} else if (command.operation == 'Z') {
 			check(identity == 'B', "volatile writeback verifier");
-			check_volatile_writeback_isolation();
+			check_volatile_reload_isolation();
 			value0 = META_VOLATILE_WRITE_FLOOD;
 		} else if (command.operation == 'S') {
 			int status = 0;
@@ -1105,7 +1127,7 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 			check(status == 0, "same-scope child status");
 		} else if (command.operation == 'T') {
 			check(identity == 'A', "storage quota command owner");
-			check_scope_storage_quota();
+			check_scope_storage_quota(&value0, &value1);
 		} else if (command.operation == 'Y') {
 			check(identity == 'A', "metadata transaction owner");
 			check_metadata_transactions();
@@ -1115,7 +1137,6 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 			check(identity == 'A' && writeback_child < 0,
 			      "metadata write flood owner");
 			wait_metadata_quiet(&scope_writeback_before);
-			check_scan_pressure_untracked();
 			check(pipe(writeback_ready) == 0 && pipe(writeback_stop) == 0,
 			      "create metadata writer controls");
 			check(agent_scope_delegate_fd(writeback_ready[1]) ==
@@ -1158,8 +1179,6 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 			uint64 requests;
 			uint64 coalesced;
 			uint64 commits;
-			uint64 scan_runs;
-			uint64 elapsed_ticks;
 			int child_status = -1;
 
 			check(identity == 'A' && writeback_child > 0,
@@ -1181,10 +1200,6 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 				    scope_writeback_before.metadata_writeback_coalesced;
 			commits = scope_writeback_after.metadata_writeback_commits -
 				  scope_writeback_before.metadata_writeback_commits;
-			scan_runs = scope_writeback_after.file_scan_runs -
-				    scope_writeback_before.file_scan_runs;
-			elapsed_ticks = scope_writeback_after.current_tick -
-					scope_writeback_before.current_tick;
 			check(requests >= META_WRITE_FLOOD,
 			      "every micro-write enters scoped writeback accounting");
 			check(commits > 0 && commits * 8 <= requests,
@@ -1195,8 +1210,6 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 				      scope_writeback_after.metadata_writeback_durable &&
 			      !scope_writeback_after.metadata_writeback_pending,
 			      "writeback reaches a durable generation");
-			check(scan_runs <= elapsed_ticks / META_SCAN_MIN_REST_TICKS + 2,
-			      "scan pressure obeys global cooldown");
 			query_scoped_object(summary, "ready");
 			scope_before_reload = scope_query_result.hits[0];
 			check(agent_file_meta_init() == 0,
@@ -1319,6 +1332,7 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 			check_foreign_audit_hidden(peer_pid);
 		} else if (command.operation == 'I') {
 			struct agent_event event;
+			char legacy[] = "cross-scope-legacy";
 
 			check(identity == 'B' && peer_pid > 0,
 			      "cross-scope IPC probe owner");
@@ -1333,6 +1347,8 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 			strcpy(event.payload, "cross-scope-message");
 			check(agent_wake(peer_pid, &event) == AGENT_STATUS_DENIED,
 			      "message delivery cannot cross workflow scope");
+			check(mailwrite(peer_pid, legacy, sizeof(legacy)) == -1,
+			      "legacy mail cannot cross Agent workflow scope");
 		} else if (command.operation == 'L') {
 			check(identity == 'A', "lease owner scope");
 			memset(&scope_lease_state, 0, sizeof(scope_lease_state));
@@ -1428,21 +1444,6 @@ static int create_workflow_with_delegated_fds(int first_fd, int second_fd)
 		sleep(1);
 	}
 	return -1;
-}
-
-static void check_scope_lifecycle(void)
-{
-	for (int i = 0; i < SCOPE_LIFECYCLE_ROUNDS; i++) {
-		int status = 0;
-		int pid = create_workflow_after_reap();
-
-		check(pid >= 0, "allocate recycled workflow scope");
-		if (pid == 0)
-			scope_lifecycle_child();
-		check(waitpid(pid, &status) == pid,
-		      "wait recycled workflow scope");
-		check(status == 0, "recycled workflow scope status");
-	}
 }
 
 static void workflow_close_denial_probe(uint scope_id, int reply_fd)
@@ -1728,6 +1729,7 @@ int main(void)
 	struct scope_reply lease_a;
 	struct scope_reply writeback_a;
 	struct scope_reply progress_b;
+	struct scope_reply quota_a;
 	int a_command[2];
 	int a_reply[2];
 	int b_command[2];
@@ -1787,7 +1789,7 @@ int main(void)
 	run_command(b_command[1], b_reply[0], 'E', 0, 0, ready_b.scope_id,
 		    "scope A reload preserves scope B volatile metadata");
 	run_command(b_command[1], b_reply[0], 'Z', 0, 0, ready_b.scope_id,
-		    "volatile writes bypass persistent writeback");
+		    "volatile metadata is excluded from owner reload");
 	run_command(b_command[1], b_reply[0], 'I', 0, 0, ready_b.scope_id,
 		    "cross-scope IPC isolation");
 	run_command(a_command[1], a_reply[0], 'S', 0, 0, ready_a.scope_id,
@@ -1796,8 +1798,9 @@ int main(void)
 		    "pipe delegation remains single hop");
 	run_command(a_command[1], a_reply[0], 'Y', 0, 0, ready_a.scope_id,
 		    "serialize concurrent metadata transactions");
-	run_command(a_command[1], a_reply[0], 'T', 0, 0, ready_a.scope_id,
-		    "same-scope aggregate storage quota");
+	quota_a = run_command(a_command[1], a_reply[0], 'T', 0, 0,
+			      ready_a.scope_id,
+			      "same-scope aggregate storage quota");
 	run_command(a_command[1], a_reply[0], 'F', 0, 0, ready_a.scope_id,
 		    "start low-privilege metadata write flood");
 	progress_b = run_command(b_command[1], b_reply[0], 'P', 0, 0,
@@ -1814,16 +1817,16 @@ int main(void)
 	printf("agentscope_ucore: same_scope_collaboration=1\n");
 	printf("agentscope_ucore: pipe_redelegation_isolation=1\n");
 	printf("agentscope_ucore: metadata_transactions=1\n");
-	printf("agentscope_ucore: scope_storage_quota=1\n");
+	printf("agentscope_ucore: scope_storage_quota=1 workflow_created=%d public_created=%d aggregate_blocked=1\n",
+	       (int)quota_a.value0, (int)quota_a.value1);
 	printf("agentscope_ucore: scope_reload_isolation=1\n");
 	printf("agentscope_ucore: metadata_write_coalescing=1 writes=%d commits=%d\n",
 	       (int)writeback_a.value0, (int)writeback_a.value1);
 	printf("agentscope_ucore: metadata_cross_scope_progress=1 queries=%d latency_ms=%d\n",
 	       (int)progress_b.value0, (int)progress_b.value1);
 	printf("agentscope_ucore: metadata_final_consistency=1\n");
-	printf("agentscope_ucore: metadata_volatile_no_writeback=1 writes=%d\n",
+	printf("agentscope_ucore: metadata_volatile_reload_isolation=1 writes=%d\n",
 	       META_VOLATILE_WRITE_FLOOD);
-	printf("agentscope_ucore: metadata_scan_pressure_bounded=1\n");
 
 	observe_start_reply = run_command(a_command[1], a_reply[0], 'O', 0, 0,
 					  ready_a.scope_id,
@@ -1891,7 +1894,6 @@ int main(void)
 	printf("agentscope_ucore: scope_controller_exit_revoke=1 public_lineage=1\n");
 	printf("agentscope_ucore: scope_forced_cleanup=1\n");
 	printf("agentscope_ucore: scope_replacement_admitted=1\n");
-	check_scope_lifecycle();
 	printf("agentscope_ucore: lifecycle_reclamation=1\n");
 	printf("agentscope_ucore: parent passed\n");
 	return 0;

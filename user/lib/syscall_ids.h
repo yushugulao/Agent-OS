@@ -341,3 +341,15 @@
 #define SYS_io_policy_info 544
 #define SYS_agent_workflow_close 545
 #define SYS_agent_workflow_lifecycle_info 546
+#define SYS_tool_call 547
+#define SYS_tool_list 548
+#define SYS_virtio_disk_test 549
+#define SYS_agent_observe_recovery 550
+#define SYS_physical_page_test 551
+#define SYS_agent_heartbeat_set 552
+#define SYS_agent_heartbeat_stop 553
+#define SYS_agent_metadata_test 554
+#define SYS_wait_atomic_test 555
+#define SYS_fs_allocator_fault_test 556
+#define SYS_agent_audit_receipt 557
+#define SYS_kernel_work_receipt_snapshot 558

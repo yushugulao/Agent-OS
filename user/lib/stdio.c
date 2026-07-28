@@ -24,17 +24,47 @@ static int buffer_len;
 static int buffer_lock;
 int buffer_lock_enabled = 0;
 
-// Returns: number of chars written, negative for failure
-// Warn: buffer_len[f] will not be changed
-int __write_buffer()
+int __stdio_process_spawn_prepare(void)
 {
-	if (buffer_len == 0)
+	if (!buffer_lock_enabled)
 		return 0;
-	int r = write(stdout, buffer, buffer_len);
-	return r;
+	return mutex_lock(buffer_lock) == 0 ? 1 : -1;
 }
 
-// Clear buffer_len[f]
+int __stdio_process_spawn_finish(int locked, int result)
+{
+	if (result == 0) {
+		/* A child has a new kernel synchronization namespace. */
+		buffer_lock = -1;
+		buffer_lock_enabled = 0;
+		return 0;
+	}
+	if (locked)
+		assert(mutex_unlock(buffer_lock) == 0);
+	return result;
+}
+
+// Returns the bytes drained; an unwritten suffix remains buffered on failure.
+int __write_buffer()
+{
+	int written = 0;
+
+	while (buffer_len > 0) {
+		int r = write(stdout, buffer, buffer_len);
+
+		if (r <= 0)
+			return -1;
+		if (r > buffer_len)
+			return -1;
+		written += r;
+		buffer_len -= r;
+		for (int i = 0; i < buffer_len; i++)
+			buffer[i] = buffer[i + r];
+	}
+	return written;
+}
+
+// Discard any buffered output.
 void __clear_buffer()
 {
 	buffer_len = 0;
@@ -43,7 +73,6 @@ void __clear_buffer()
 int __fflush()
 {
 	int r = __write_buffer();
-	__clear_buffer();
 	return r >= 0 ? 0 : r;
 }
 
@@ -77,18 +106,19 @@ static int out_unlocked(const char *s, size_t l)
 {
 	int ret = 0;
 	for (size_t i = 0; i < l; i++) {
+		if (buffer_len >= __LINE_WIDTH) {
+			int r = __write_buffer();
+
+			if (r < 0)
+				return r;
+			ret += r;
+		}
 		char c = s[i];
 		buffer[buffer_len++] = c;
 		if (buffer_len >= __LINE_WIDTH || c == '\n') {
-			// check overflow
-			assert(buffer_len <= __LINE_WIDTH);
 			int r = __write_buffer();
-			__clear_buffer();
 			if (r < 0) {
 				return r;
-			}
-			if (r < buffer_len) {
-				return ret + r;
 			}
 			ret += r;
 		}
@@ -127,29 +157,23 @@ int puts(const char *s)
 
 static char digits[] = "0123456789abcdef";
 
-static void printint(int xx, int base, int sign)
+static void printint(unsigned long long value, int base, int negative)
 {
-	char buf[16 + 1];
+	char buf[20];
 	int i;
-	uint x;
 
-	if (sign && (sign = xx < 0))
-		x = -xx;
-	else
-		x = xx;
-
-	buf[16] = 0;
-	i = 15;
+	if (negative)
+		out(stdout, "-", 1);
+	i = sizeof(buf);
 	do {
-		buf[i--] = digits[x % base];
-	} while ((x /= base) != 0);
+		buf[--i] = digits[value % (unsigned)base];
+	} while ((value /= (unsigned)base) != 0);
+	out(stdout, buf + i, sizeof(buf) - i);
+}
 
-	if (sign)
-		buf[i--] = '-';
-	i++;
-	if (i < 0)
-		puts("printint error");
-	out(stdout, buf + i, 16 - i);
+static int integer_conversion(int c)
+{
+	return c == 'd' || c == 'u' || c == 'x';
 }
 
 static void printptr(uint64 x)
@@ -164,51 +188,84 @@ static void printptr(uint64 x)
 	out(stdout, buf, i);
 }
 
-// Print to the console. only understands %d, %x, %p, %s.
+// Integer formats support the default, l, and ll widths.
 void printf(const char *fmt, ...)
 {
 	va_list ap;
-	int l = 0;
-	char *a, *z, *s = (char *)fmt;
+	const char *percent, *s = fmt;
+	char *text;
 	int f = stdout;
 
 	va_start(ap, fmt);
-	for (;;) {
-		if (!*s)
+	while (*s) {
+		const char *literal = s;
+		int length = 0;
+		char conversion;
+
+		while (*s && *s != '%')
+			s++;
+		if (s != literal)
+			out(f, literal, s - literal);
+		if (*s == 0)
 			break;
-		for (a = s; *s && *s != '%'; s++)
-			;
-		for (z = s; s[0] == '%' && s[1] == '%'; z++, s += 2)
-			;
-		l = z - a;
-		out(f, a, l);
-		if (l)
-			continue;
-		if (s[1] == 0)
+		percent = s++;
+		if (*s == 0)
 			break;
-		switch (s[1]) {
-		case 'd':
-			printint(va_arg(ap, int), 10, 1);
+		if (*s == 'l') {
+			if (s[1] == 'l' && integer_conversion(s[2])) {
+				length = 2;
+				s += 2;
+			} else if (integer_conversion(s[1])) {
+				length = 1;
+				s++;
+			}
+		}
+		conversion = *s++;
+		switch (conversion) {
+		case 'd': {
+			long long value;
+			int negative;
+
+			if (length == 0)
+				value = va_arg(ap, int);
+			else if (length == 1)
+				value = va_arg(ap, long);
+			else
+				value = va_arg(ap, long long);
+			negative = value < 0;
+			printint(negative ? 0ULL - (unsigned long long)value :
+				 (unsigned long long)value, 10, negative);
 			break;
-		case 'x':
-			printint(va_arg(ap, int), 16, 1);
+		}
+		case 'u':
+		case 'x': {
+			unsigned long long value;
+
+			if (length == 0)
+				value = va_arg(ap, unsigned int);
+			else if (length == 1)
+				value = va_arg(ap, unsigned long);
+			else
+				value = va_arg(ap, unsigned long long);
+			printint(value, conversion == 'x' ? 16 : 10, 0);
 			break;
+		}
 		case 'p':
 			printptr(va_arg(ap, uint64));
 			break;
 		case 's':
-			if ((a = va_arg(ap, char *)) == 0)
-				a = "(null)";
-			l = strnlen(a, 200);
-			out(f, a, l);
+			if ((text = va_arg(ap, char *)) == 0)
+				text = "(null)";
+			out(f, text, strnlen(text, 200));
+			break;
+		case '%':
+			out(f, percent, 1);
 			break;
 		default:
 			// Print unknown % sequence to draw attention.
-			putchar('%');
-			putchar(s[1]);
+			out(f, percent, s - percent);
 			break;
 		}
-		s += 2;
 	}
 	va_end(ap);
 }

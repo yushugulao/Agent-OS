@@ -53,9 +53,9 @@ static void expect_heartbeat(void)
 static void run_queue_source(int target_pid, int attributed, int gate_fd,
 			     int report_fd)
 {
-	struct agent_event event;
-	struct agent_op op;
-	struct agent_result res;
+	static struct agent_event event;
+	static struct agent_op op;
+	static struct agent_result res;
 	char phase;
 
 	check(read(gate_fd, &phase, 1) == 1 && phase == 'G',
@@ -133,8 +133,6 @@ static void check_queue_reservations(void)
 	check(agent_watch(AGENT_EVENT_POLICY_DENIED, "action=action_commit") ==
 		      0,
 	      "watch attributed denial");
-	check(agent_watch(AGENT_EVENT_TIMER, "heartbeat") == 0,
-	      "watch reserved kernel event");
 	check(pipe(report) == 0, "queue report pipe");
 	for (int i = 0; i < 4; i++) {
 		check(pipe(gates[i]) == 0, "queue gate pipe");
@@ -185,22 +183,28 @@ static void check_queue_reservations(void)
 		      info.event_queue_count == AGENT_EVENT_EXTERNAL_LIMIT,
 	      "external limit rejects another source");
 
-	check(agent_heartbeat(2) == 0, "reserved kernel heartbeat set");
+	check(agent_heartbeat_set(1) == 0, "reserved kernel heartbeat set");
 	check(agent_info(&info) == 0, "info before kernel reserve");
-	deadline = info.last_heartbeat_tick + 100;
+	deadline = info.current_tick + 50;
 	do {
 		check(agent_info(&info) == 0, "poll kernel reserve");
-		if (info.event_queue_count == AGENT_EVENT_QUEUE_CAP)
+		if (info.event_queue_count == AGENT_EVENT_EXTERNAL_LIMIT + 1)
 			break;
 		sched_yield();
 	} while (info.current_tick < deadline);
-	check(info.event_queue_count == AGENT_EVENT_QUEUE_CAP,
-	      "kernel events fill reserved slots");
+	check(info.event_queue_count == AGENT_EVENT_EXTERNAL_LIMIT + 1,
+	      "kernel event uses reserved capacity");
+	deadline = info.current_tick + 8;
+	do {
+		sched_yield();
+		check(agent_info(&info) == 0, "poll coalesced kernel event");
+	} while (info.current_tick < deadline);
+	check(info.event_queue_count == AGENT_EVENT_EXTERNAL_LIMIT + 1,
+	      "pending heartbeat is coalesced");
 	check(agent_heartbeat_stop() == 0, "reserved kernel heartbeat stop");
 	check(agent_info(&info) == 0, "info after kernel reserve");
 	kernel_events = (int)info.event_queue_count - AGENT_EVENT_EXTERNAL_LIMIT;
-	check(kernel_events == AGENT_EVENT_KERNEL_RESERVE,
-	      "kernel reserve event count");
+	check(kernel_events == 1, "coalesced kernel event count");
 
 	for (int i = 0; i < AGENT_EVENT_EXTERNAL_LIMIT; i++) {
 		memset(&event, 0, sizeof(event));
@@ -257,42 +261,92 @@ static void check_queue_reservations(void)
 	check(agent_unwatch(AGENT_EVENT_POLICY_DENIED,
 			    "action=action_commit") == 1,
 	      "unwatch attributed denial");
-	check(agent_unwatch(AGENT_EVENT_TIMER, "heartbeat") == 1,
-	      "unwatch reserved kernel event");
 	printf("agentloop_ucore: ipc_class_limit=%d\n", AGENT_EVENT_IPC_LIMIT);
 	printf("agentloop_ucore: external_limit=%d\n",
 	       AGENT_EVENT_EXTERNAL_LIMIT);
 	printf("agentloop_ucore: system_event_reserved=%d\n",
 	       AGENT_EVENT_KERNEL_RESERVE);
+	printf("agentloop_ucore: heartbeat_reserve_coalesced=1\n");
 	printf("agentloop_ucore: external_reject_reclaim=1\n");
+}
+
+static void fill_external_target(int target_pid)
+{
+	int gate[2];
+	int report[2];
+	int pids[3];
+	int directed = 0;
+	int attributed = 0;
+	int status = 0;
+	char phase = 'G';
+
+	check(pipe(report) == 0, "slow watcher fill report pipe");
+	check(pipe(gate) == 0, "slow watcher fill gate pipe");
+	for (int i = 0; i < 3; i++) {
+		check(agent_scope_delegate_fd(gate[0]) ==
+				      AGENT_STATUS_OK &&
+		      agent_scope_delegate_fd(report[1]) == AGENT_STATUS_OK,
+		      "delegate slow watcher filler pipes");
+		pids[i] = agent_create_role(AGENT_ROLE_SENTINEL);
+		check(pids[i] >= 0, "create slow watcher filler");
+		if (pids[i] == 0)
+			run_queue_source(target_pid, i == 2, gate[0],
+					 report[1]);
+	}
+	close(gate[0]);
+	close(report[1]);
+	for (int i = 0; i < 2; i++)
+		check(agent_route_config(pids[i], target_pid,
+					 AGENT_IPC_EVENT_MESSAGE,
+					 AGENT_IPC_ROUTE_GRANT) ==
+			      AGENT_STATUS_OK,
+		      "grant slow watcher filler route");
+	for (int i = 0; i < 3; i++)
+		check(write(gate[1], &phase, 1) == 1,
+		      "release slow watcher filler");
+	for (int i = 0; i < 3; i++) {
+		check(read(report[0], &phase, 1) == 1,
+		      "wait slow watcher filler");
+		if (phase == 'D')
+			directed++;
+		else if (phase == 'A')
+			attributed++;
+		else
+			check(0, "slow watcher filler phase");
+	}
+	check(directed == 2 && attributed == 1,
+	      "slow watcher filler classes");
+	for (int i = 0; i < 3; i++) {
+		check(waitpid(pids[i], &status) == pids[i],
+		      "wait slow watcher filler process");
+		check(status == 0, "slow watcher filler status");
+	}
+	close(gate[1]);
+	close(report[0]);
 }
 
 static void run_full_watcher(int ready_fd, int gate_fd)
 {
 	struct agent_info info;
-	uint64 deadline;
-	char phase = 'F';
+	char phase = 'W';
 
-	check(agent_watch(AGENT_EVENT_TIMER, "heartbeat") == 0,
-	      "full watcher timer watch");
+	check(agent_watch(AGENT_EVENT_MESSAGE, "external-fill") == 0,
+	      "slow watcher message watch");
 	check(agent_watch(AGENT_EVENT_POLICY_DENIED, "action=action_commit") ==
 		      0,
-	      "full watcher policy watch");
-	check(agent_heartbeat(1) == 0, "full watcher heartbeat");
-	check(agent_info(&info) == 0, "full watcher info");
-	deadline = info.last_heartbeat_tick + 100;
-	do {
-		check(agent_info(&info) == 0, "poll full watcher");
-		if (info.event_queue_count == AGENT_EVENT_QUEUE_CAP)
-			break;
-		sched_yield();
-	} while (info.current_tick < deadline);
-	check(info.event_queue_count == AGENT_EVENT_QUEUE_CAP,
-	      "full watcher queue reached capacity");
-	check(agent_heartbeat_stop() == 0, "stop full watcher heartbeat");
-	check(write(ready_fd, &phase, 1) == 1, "report full watcher ready");
+	      "slow watcher policy watch");
+	check(write(ready_fd, &phase, 1) == 1,
+	      "report slow watcher installed");
+	check(read(gate_fd, &phase, 1) == 1 && phase == 'C',
+	      "check slow watcher admission");
+	check(agent_info(&info) == 0, "slow watcher info");
+	check(info.event_queue_count == AGENT_EVENT_EXTERNAL_LIMIT,
+	      "slow watcher external admission saturated");
+	phase = 'F';
+	check(write(ready_fd, &phase, 1) == 1,
+	      "report slow watcher saturated");
 	check(read(gate_fd, &phase, 1) == 1 && phase == 'X',
-	      "release full watcher");
+	      "release slow watcher");
 	exit(0);
 }
 
@@ -349,13 +403,10 @@ static void check_broadcast_isolation(void)
 	int later_pid;
 	int source_pid;
 	int status = 0;
-	int ready_count = 0;
 	char phase;
 
 	check(pipe(ready) == 0, "broadcast ready pipe");
-	check(pipe(report) == 0, "broadcast report pipe");
 	check(pipe(full_gate) == 0, "full watcher gate pipe");
-	check(pipe(source_gate) == 0, "broadcast source gate pipe");
 	check(agent_scope_delegate_fd(ready[1]) == AGENT_STATUS_OK &&
 		      agent_scope_delegate_fd(full_gate[0]) == AGENT_STATUS_OK,
 	      "delegate full watcher pipe endpoints");
@@ -363,6 +414,17 @@ static void check_broadcast_isolation(void)
 	check(full_pid >= 0, "create full watcher");
 	if (full_pid == 0)
 		run_full_watcher(ready[1], full_gate[0]);
+	close(full_gate[0]);
+	check(read(ready[0], &phase, 1) == 1 && phase == 'W',
+	      "wait slow watcher install");
+	fill_external_target(full_pid);
+	phase = 'C';
+	check(write(full_gate[1], &phase, 1) == 1,
+	      "check slow watcher saturation");
+	check(read(ready[0], &phase, 1) == 1 && phase == 'F',
+	      "wait slow watcher saturation");
+	check(pipe(report) == 0, "broadcast report pipe");
+	check(pipe(source_gate) == 0, "broadcast source gate pipe");
 	check(agent_scope_delegate_fd(ready[1]) == AGENT_STATUS_OK &&
 		      agent_scope_delegate_fd(report[1]) == AGENT_STATUS_OK,
 	      "delegate later watcher pipe endpoints");
@@ -370,19 +432,17 @@ static void check_broadcast_isolation(void)
 	check(later_pid >= 0, "create later watcher");
 	if (later_pid == 0)
 		run_later_watcher(ready[1], report[1]);
+	close(ready[1]);
+	close(report[1]);
 	check(agent_scope_delegate_fd(source_gate[0]) == AGENT_STATUS_OK,
 	      "delegate broadcast source gate");
 	source_pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	check(source_pid >= 0, "create broadcast source");
 	if (source_pid == 0)
 		run_broadcast_source(source_gate[0]);
-	while (ready_count < 2) {
-		check(read(ready[0], &phase, 1) == 1,
-		      "wait broadcast watcher ready");
-		check(phase == 'F' || phase == 'L',
-		      "broadcast watcher ready phase");
-		ready_count++;
-	}
+	close(source_gate[0]);
+	check(read(ready[0], &phase, 1) == 1 && phase == 'L',
+	      "wait later watcher ready");
 	phase = 'G';
 	check(write(source_gate[1], &phase, 1) == 1,
 	      "start broadcast source");
@@ -400,12 +460,8 @@ static void check_broadcast_isolation(void)
 	check(waitpid(full_pid, &status) == full_pid, "wait full watcher");
 	check(status == 0, "full watcher status");
 	close(ready[0]);
-	close(ready[1]);
 	close(report[0]);
-	close(report[1]);
-	close(full_gate[0]);
 	close(full_gate[1]);
-	close(source_gate[0]);
 	close(source_gate[1]);
 	printf("agentloop_ucore: broadcast_slow_watcher_isolated=1\n");
 }
@@ -439,9 +495,9 @@ static void run_cancel_waiter(void)
 
 static void run_agent(void)
 {
-	struct agent_info before;
-	struct agent_info after;
-	struct agent_event event;
+	static struct agent_info before;
+	static struct agent_info after;
+	static struct agent_event event;
 	int pid;
 	int status = 0;
 
@@ -497,27 +553,79 @@ static void run_agent(void)
 	      "finite timeout no polling");
 	printf("agentloop_ucore: timeout_sleep_no_poll=1\n");
 
-	check(agent_watch(AGENT_EVENT_TIMER, "heartbeat") == 0,
-	      "watch heartbeat");
-	check(agent_heartbeat(2) == 0, "heartbeat set");
+	check(agent_unwatch(AGENT_EVENT_TIMER, "heartbeat") == 0,
+	      "heartbeat starts without timer watch");
+	check(sys_agent_heartbeat_set(2) == 0, "heartbeat set syscall");
 	memset(&event, 0, sizeof(event));
-	check(agent_wait(&event, 30) == AGENT_STATUS_OK, "heartbeat wait");
+	check(agent_wait(&event, 30) == AGENT_STATUS_OK,
+	      "intrinsic heartbeat wait");
 	check(event.type == AGENT_EVENT_TIMER, "heartbeat type");
 	check(strcmp(event.payload, "timer=heartbeat") == 0,
 	      "heartbeat payload");
 	check(event.span_id != 0, "heartbeat span");
-	check(agent_unwatch(AGENT_EVENT_TIMER, "heartbeat") == 1,
-	      "unwatch heartbeat");
-	check(agent_heartbeat(1) == 0, "heartbeat after unwatch");
+
+	check(agent_heartbeat_set(AGENT_HEARTBEAT_MAX_TICKS) == 0,
+	      "heartbeat slow frequency");
+	sched_yield();
+	check(agent_heartbeat_set(1) == 0, "heartbeat dynamic frequency");
 	memset(&event, 0, sizeof(event));
-	check(agent_wait(&event, 3) == AGENT_STATUS_TIMEOUT,
-	      "heartbeat unwatched timeout");
-	printf("agentloop_ucore: timer_unwatch=1\n");
-	check(agent_heartbeat_stop() == 0, "heartbeat stop");
+	check(agent_wait(&event, 6) == AGENT_STATUS_OK,
+	      "adjusted heartbeat wakes promptly");
+	check(event.type == AGENT_EVENT_TIMER &&
+		      strcmp(event.payload, "timer=heartbeat") == 0,
+	      "adjusted heartbeat event");
+
+	check(agent_heartbeat_set(1) == 0, "heartbeat coalesce set");
+	check(agent_info(&after) == 0, "heartbeat coalesce info start");
+	{
+		uint64 deadline = after.current_tick + 8;
+
+		do {
+			sched_yield();
+			check(agent_info(&after) == 0,
+			      "heartbeat coalesce info poll");
+		} while (after.current_tick < deadline);
+	}
+	check(after.event_queue_count == 1,
+	      "only one pending heartbeat is queued");
+	check(sys_agent_heartbeat_stop() == 0, "heartbeat stop syscall");
+	expect_heartbeat();
 	memset(&event, 0, sizeof(event));
 	check(agent_wait(&event, 3) == AGENT_STATUS_TIMEOUT,
 	      "heartbeat stopped timeout");
-	printf("agentloop_ucore: heartbeat_wake_stop=1\n");
+
+	check(agent_heartbeat_set(AGENT_HEARTBEAT_MAX_TICKS) == 0,
+	      "heartbeat maximum accepted");
+	check(agent_heartbeat_stop() == 0, "stop maximum heartbeat");
+	check(agent_heartbeat_set(AGENT_HEARTBEAT_MAX_TICKS + 1ULL) ==
+		      AGENT_STATUS_BAD_PARAM,
+	      "heartbeat above maximum rejected");
+	check(agent_heartbeat_set(~(uint64)0) == AGENT_STATUS_BAD_PARAM,
+	      "heartbeat uint64 overflow rejected");
+	check(agent_heartbeat(-1) == AGENT_STATUS_BAD_PARAM,
+	      "legacy negative heartbeat rejected");
+	{
+		static struct agent_op heartbeat_op;
+		static struct agent_result heartbeat_res;
+
+		memset(&heartbeat_op, 0, sizeof(heartbeat_op));
+		heartbeat_op.version = AGENT_CALL_VERSION;
+		heartbeat_op.tool_id = AGENT_TOOL_AGENT_HEARTBEAT;
+		heartbeat_op.request_id = 391;
+		heartbeat_op.arg0 = AGENT_HEARTBEAT_MAX_TICKS + 1ULL;
+		check(agent_run(&heartbeat_op, &heartbeat_res, 1, 0) == 1,
+		      "heartbeat tool boundary call");
+		check(heartbeat_res.status == AGENT_STATUS_BAD_PARAM,
+		      "heartbeat tool boundary rejected");
+	}
+	check(agent_info(&after) == 0 && after.heartbeat_interval == 0,
+	      "invalid heartbeat leaves stopped state");
+	check(agent_heartbeat(1) == 0, "legacy heartbeat ABI set");
+	expect_heartbeat();
+	check(agent_heartbeat(0) == 0, "legacy heartbeat ABI stop");
+	check(sys_agent_heartbeat_stop() == 0, "heartbeat stop syscall");
+	check(sys_agent_heartbeat_stop() == 0, "heartbeat stop idempotent");
+	printf("agentloop_ucore: heartbeat_intrinsic=1 dynamic=1 coalesced=1 stop=1 bounds=1 legacy=1\n");
 
 	pid = agent_create_role(AGENT_ROLE_SENTINEL);
 	check(pid >= 0, "create cancel waiter");

@@ -5,11 +5,30 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 
 GOOD_STATUS = {"ready", "passed", "ok"}
+REFERENCE_ROLE = "demo_reference"
+REFERENCE_GENERATION = "demo_expected"
+REFERENCE_STATUS = "reference_ready"
+REFERENCE_FILE_ROLE_KEY = "evidence_file_role"
+REFERENCE_FILE_GENERATION_KEY = "evidence_file_generation"
+REFERENCE_FILE_STATUS_KEY = "evidence_file_status"
+RUNTIME_ROLE = "runtime_verified"
+RUNTIME_GENERATION = "runtime"
+RUNTIME_STATUS = "verified"
+FNV_OFFSET = 1469598103934665603
+FNV_PRIME = 1099511628211
+U64_MASK = (1 << 64) - 1
+STATE_SOURCE_RE = re.compile(r"rp_[A-Za-z0-9_]+\Z")
+FILE_EVIDENCE_ENVELOPE_KEYS = {
+    REFERENCE_FILE_ROLE_KEY,
+    REFERENCE_FILE_GENERATION_KEY,
+    REFERENCE_FILE_STATUS_KEY,
+}
 ADAPTED_ANCHORS = {
     ("rp_agentcmp", "backend_runner_checks"),
 }
@@ -36,8 +55,8 @@ AGENTOS_EVIDENCE_REQUIREMENTS = {
     ),
     "rp_agentos_roles": (
         "stage_launch=agent_create_role",
-        "support_launch=fork",
-        "support_role=plain_process",
+        "support_launch=agent_worker_create",
+        "support_role=delegated_non_agent_worker",
         "agent_bound_programs=rp_query,rp_repair,rp_execobs,rp_agent_collab,rp_auditor,rp_workbench,rp_package,rp_realtask,rp_service_surface,rp_backend",
     ),
     "rp_agentos_query": ("metadata_source=kernel_file_index",),
@@ -86,6 +105,13 @@ AGENTOS_REQUIRED_AGENT_ROLES = {
     "rp_backend": "orchestrator",
 }
 AGENTOS_REQUIRED_AGENT_PROGRAMS = set(AGENTOS_REQUIRED_AGENT_ROLES)
+AGENTOS_ROLE_NUMBERS = {
+    "sentinel": 1,
+    "investigator": 2,
+    "recovery": 3,
+    "orchestrator": 4,
+    "artifact": 5,
+}
 SCENARIO_EVIDENCE_SPECS = (
     ("Context Path", "上下文可信记录", ("context_trusted=kernel_shadow", "context_snapshot=trusted", "report_answer=kernel_context_record")),
     ("File Metadata", "文件对象查询", ("metadata_query=used_index", "metadata_source=kernel_file_index", "file_verify=kernel_metadata_index")),
@@ -165,6 +191,178 @@ def parse_key_value_file(state_dir: Path, file_name: str) -> dict[str, str]:
     return values
 
 
+def top_level_fields(path: Path) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for raw in read_text(path).splitlines():
+        line = raw.strip()
+        if not line or ";" in line or line.count("=") != 1:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip()
+        if key in FILE_EVIDENCE_ENVELOPE_KEYS and key in values:
+            raise ValueError(
+                f"duplicate file evidence envelope key in {path.name}: {key}"
+            )
+        values[key] = value
+    return values
+
+
+def is_reference_file(path: Path) -> bool:
+    fields = top_level_fields(path)
+    claims_reference = any(key in fields for key in FILE_EVIDENCE_ENVELOPE_KEYS)
+    if not claims_reference:
+        return False
+    if (
+        fields.get(REFERENCE_FILE_ROLE_KEY) != REFERENCE_ROLE
+        or fields.get(REFERENCE_FILE_GENERATION_KEY) != REFERENCE_GENERATION
+        or fields.get(REFERENCE_FILE_STATUS_KEY) != REFERENCE_STATUS
+    ):
+        raise ValueError(f"reference product has an incomplete file envelope: {path.name}")
+    return True
+
+
+def is_reference_record(fields: dict[str, str]) -> bool:
+    claims_reference = (
+        fields.get("evidence_role") == REFERENCE_ROLE
+        or fields.get("status") == REFERENCE_STATUS
+    )
+    if not claims_reference:
+        return False
+    if (
+        fields.get("evidence_role") == REFERENCE_ROLE
+        and fields.get("status") == "reference_observed"
+        and fields.get("observation_source") == "guest_runtime"
+    ):
+        return True
+    if (
+        fields.get("evidence_role") != REFERENCE_ROLE
+        or fields.get("catalog_generation") != REFERENCE_GENERATION
+        or fields.get("status") != REFERENCE_STATUS
+    ):
+        raise ValueError("reference record has an incomplete evidence role")
+    return True
+
+
+def fnv1a64(data: bytes) -> int:
+    value = FNV_OFFSET
+    for byte in data:
+        value ^= byte
+        value = (value * FNV_PRIME) & U64_MASK
+    return value
+
+
+def is_source_bound_runtime_record(
+    state_dir: Path,
+    fields: dict[str, str],
+    allowed_sources: set[str] | None = None,
+) -> bool:
+    if fields.get("evidence_role") != RUNTIME_ROLE:
+        return False
+    generation = fields.get("generation", fields.get("evidence_generation", ""))
+    if generation != RUNTIME_GENERATION or fields.get("status") != RUNTIME_STATUS:
+        raise ValueError("runtime record is not generation-bound and verified")
+    source = fields.get("source", "")
+    if not source:
+        return False
+    source_name = Path(source)
+    if (
+        not STATE_SOURCE_RE.fullmatch(source)
+        or source_name.is_absolute()
+        or source_name.name != source
+        or len(source_name.parts) != 1
+    ):
+        raise ValueError(f"runtime record source is not a state-file name: {source}")
+    if allowed_sources is None:
+        summary_sources = read_summary(state_dir).get("files", [])
+        if not isinstance(summary_sources, list) or not all(
+            isinstance(item, str) for item in summary_sources
+        ):
+            raise ValueError("extract summary has an invalid files inventory")
+        allowed_sources = set(summary_sources)
+    if source not in allowed_sources:
+        raise ValueError(f"runtime record source is outside the state inventory: {source}")
+    state_root = state_dir.resolve(strict=True)
+    lexical_path = state_root / source
+    if lexical_path.is_symlink():
+        raise ValueError(f"runtime record source is missing or unsafe: {source}")
+    try:
+        source_path = lexical_path.resolve(strict=True)
+    except (FileNotFoundError, OSError) as error:
+        raise ValueError(f"runtime record source is missing or unsafe: {source}") from error
+    if source_path.parent != state_root or not source_path.is_file():
+        raise ValueError(f"runtime record source escapes the state directory: {source}")
+    try:
+        source_bytes = int(fields.get("source_bytes", "0"))
+        source_hash = int(fields.get("source_hash", "0"))
+        executed = int(fields.get("assertions_executed", "0"))
+        passed = int(fields.get("assertions_passed", "0"))
+    except ValueError as error:
+        raise ValueError("runtime record has nonnumeric source evidence") from error
+    data = source_path.read_bytes()
+    if (
+        source_bytes != len(data)
+        or source_hash != fnv1a64(data)
+        or executed <= 0
+        or passed != executed
+    ):
+        raise ValueError(f"runtime record is not source-bound: {source}")
+    return True
+
+
+def collect_evidence_counts(state_dir: Path, files: set[str]) -> dict[str, int]:
+    reference_products = 0
+    reference_records = 0
+    source_bound_runtime_records = 0
+    runtime_identities: set[tuple[str, str, str]] = set()
+    for file_name in sorted(files):
+        path = state_dir / file_name
+        if file_name == "extract-summary.json" or not path.is_file():
+            continue
+        if is_reference_file(path):
+            reference_products += 1
+            continue
+        for raw in read_text(path).splitlines():
+            fields = parse_fields(raw.strip())
+            if not fields:
+                continue
+            if is_reference_record(fields):
+                reference_records += 1
+                continue
+            if fields.get("evidence_role") == RUNTIME_ROLE:
+                if is_source_bound_runtime_record(state_dir, fields, files):
+                    identity_key = next(
+                        (
+                            key
+                            for key in (
+                                "runtime_case",
+                                "runtime_compare_case",
+                                "runner_case",
+                                "case",
+                            )
+                            if fields.get(key)
+                        ),
+                        "source",
+                    )
+                    identity = (
+                        file_name,
+                        identity_key,
+                        fields.get(identity_key, fields.get("source", "")),
+                    )
+                    if identity in runtime_identities:
+                        raise ValueError(
+                            "duplicate source-bound runtime evidence: "
+                            f"{file_name}:{identity_key}={identity[2]}"
+                        )
+                    runtime_identities.add(identity)
+                    source_bound_runtime_records += 1
+    return {
+        "reference_products": reference_products,
+        "reference_records": reference_records,
+        "source_bound_runtime_records": source_bound_runtime_records,
+    }
+
+
 def line_anchor(fields: dict[str, str]) -> str:
     if not fields:
         return ""
@@ -180,11 +378,15 @@ def collect_good_status_lines(state_dir: Path, files: set[str]) -> list[StateLin
         path = state_dir / file_name
         if file_name == "extract-summary.json" or not path.is_file():
             continue
+        if is_reference_file(path):
+            continue
         for index, raw in enumerate(read_text(path).splitlines(), start=1):
             line = raw.strip()
             if not line:
                 continue
             fields = parse_fields(line)
+            if is_reference_record(fields) or fields.get("evidence_role") == RUNTIME_ROLE:
+                continue
             status = fields.get("status", "").lower()
             if status not in GOOD_STATUS:
                 continue
@@ -201,8 +403,12 @@ def collect_agentos_status_index(state_dir: Path, files: set[str]) -> dict[tuple
         path = state_dir / file_name
         if file_name == "extract-summary.json" or not path.is_file():
             continue
+        if is_reference_file(path):
+            continue
         for raw in read_text(path).splitlines():
             fields = parse_fields(raw.strip())
+            if is_reference_record(fields) or fields.get("evidence_role") == RUNTIME_ROLE:
+                continue
             status = fields.get("status", "").lower()
             if status not in GOOD_STATUS:
                 continue
@@ -235,7 +441,14 @@ def collect_plain_costs(state_dir: Path) -> set[str]:
     costs: set[str] = set()
     for raw in read_text(path).splitlines():
         fields = parse_fields(raw.strip())
-        if fields.get("runner_report") and fields.get("status", "").lower() in GOOD_STATUS:
+        reference_record = (
+            fields.get("evidence_role") == "demo_reference"
+            and fields.get("catalog_generation") == "demo_expected"
+            and fields.get("status") == "reference_ready"
+        )
+        if fields.get("runner_report") and (
+            fields.get("status", "").lower() in GOOD_STATUS or reference_record
+        ):
             cost = fields.get("plain_cost", "")
             if cost:
                 costs.add(cost)
@@ -249,7 +462,14 @@ def collect_backend_reports(state_dir: Path) -> list[dict[str, str]]:
     reports: list[dict[str, str]] = []
     for raw in read_text(path).splitlines():
         fields = parse_fields(raw.strip())
-        if fields.get("runner_report") and fields.get("status", "").lower() in GOOD_STATUS:
+        reference_record = (
+            fields.get("evidence_role") == "demo_reference"
+            and fields.get("catalog_generation") == "demo_expected"
+            and fields.get("status") == "reference_ready"
+        )
+        if fields.get("runner_report") and (
+            fields.get("status", "").lower() in GOOD_STATUS or reference_record
+        ):
             reports.append(
                 {
                     "case": fields.get("runner_report", ""),
@@ -291,11 +511,23 @@ def collect_runner_cases(state_dir: Path) -> dict[str, dict[str, str]]:
     if not path.is_file():
         return {}
     rows: dict[str, dict[str, str]] = {}
+    summary_sources = read_summary(state_dir).get("files", [])
+    if not isinstance(summary_sources, list) or not all(
+        isinstance(item, str) for item in summary_sources
+    ):
+        raise ValueError("extract summary has an invalid files inventory")
+    allowed_sources = set(summary_sources)
     for raw in read_text(path).splitlines():
         fields = parse_fields(raw.strip())
-        case = fields.get("runner_case", "")
-        if not case or fields.get("result", "").lower() not in GOOD_STATUS:
+        if fields.get("evidence_role") != RUNTIME_ROLE:
             continue
+        case = fields.get("runner_case", "")
+        if not case:
+            continue
+        if not is_source_bound_runtime_record(state_dir, fields, allowed_sources):
+            continue
+        if case in rows:
+            raise ValueError(f"duplicate source-bound runner case: {case}")
         rows[case] = fields
     return rows
 
@@ -435,7 +667,7 @@ def verify_orch_timing(
     text = require_file_text(state_dir, "rp_orch_timing")
     program_count = 0
     agent_launcher_count = 0
-    fork_launcher_count = 0
+    support_launcher_count = 0
     agent_programs: set[str] = set()
     for raw in text.splitlines():
         fields = parse_fields(raw.strip())
@@ -462,12 +694,37 @@ def verify_orch_timing(
                     f"{label} Agent program has wrong role: "
                     f"program={program} expected={expected_role} record={raw}"
                 )
-        elif launcher and launcher.startswith("fork"):
+            if required_agent_roles and (
+                fields.get("identity_source") != "child_after_exec"
+                or fields.get("is_agent") != "1"
+                or fields.get("agent_role")
+                != str(AGENTOS_ROLE_NUMBERS[expected_role or "sentinel"])
+            ):
+                raise ValueError(f"{label} Agent identity is not post-exec attested: {raw}")
+        elif (
+            launcher == "agent_worker_create"
+            if required_agent_roles
+            else bool(launcher and launcher.startswith("fork"))
+        ):
             if required_agent_roles and fields.get("role") != "plain":
                 raise ValueError(
-                    f"{label} fork support program is not recorded as plain process: {raw}"
+                    f"{label} delegated worker is not recorded as a plain process: {raw}"
                 )
-            fork_launcher_count += 1
+            if required_agent_roles and program in required_agent_roles:
+                raise ValueError(f"{label} Agent program used the worker launcher: {raw}")
+            if required_agent_roles and (
+                fields.get("identity_source") != "child_after_exec"
+                or fields.get("is_agent") != "0"
+                or fields.get("agent_role") != "0"
+                or not fields.get("filesystem_domain", "").isdigit()
+                or int(fields.get("filesystem_domain", "0")) <= 0
+                or not fields.get("filesystem_capabilities", "").isdigit()
+                or int(fields.get("filesystem_capabilities", "0")) <= 0
+            ):
+                raise ValueError(f"{label} worker identity is not post-exec attested: {raw}")
+            support_launcher_count += 1
+        else:
+            raise ValueError(f"{label} timing record has an invalid launcher: {raw}")
     if program_count < 60:
         raise ValueError(f"{label} timing records too few: {program_count}")
     if required_agent_roles:
@@ -476,9 +733,9 @@ def verify_orch_timing(
             raise ValueError(
                 f"{label} timing records are missing required Agent launches: {','.join(missing)}"
             )
-        if fork_launcher_count == 0:
-            raise ValueError(f"{label} timing records do not show ordinary fork support programs")
-    return program_count, agent_launcher_count, fork_launcher_count
+        if support_launcher_count == 0:
+            raise ValueError(f"{label} timing records do not show delegated workers")
+    return program_count, agent_launcher_count, support_launcher_count
 
 
 def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> dict[str, object]:
@@ -497,6 +754,8 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
 
     plain_good_lines = collect_good_status_lines(plain_dir, plain_files)
     agentos_index = collect_agentos_status_index(agentos_dir, agentos_files)
+    plain_evidence = collect_evidence_counts(plain_dir, plain_files)
+    agentos_evidence = collect_evidence_counts(agentos_dir, agentos_files)
     missing_status: list[StateLine] = []
     for line in plain_good_lines:
         if line.file_name == "rp_backend_exec":
@@ -514,7 +773,7 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
             f"{line.file_name}:{line.line_no}:{line.anchor}:status={line.status}"
             for line in missing_status[:20]
         ]
-        raise ValueError("AgentOS state is missing plain success records: " + ", ".join(details))
+        raise ValueError("AgentOS state is missing plain compatibility records: " + ", ".join(details))
 
     preserved_costs = verify_backend_costs(plain_dir, agentos_dir)
     cost_replacements = collect_cost_replacements(plain_dir, agentos_dir)
@@ -530,7 +789,7 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
     (
         agentos_timing_records,
         agentos_agent_launches,
-        agentos_fork_launches,
+        agentos_worker_launches,
     ) = verify_orch_timing(
         agentos_dir,
         "AgentOS",
@@ -543,7 +802,12 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
         "agentos_files": int(agentos_summary.get("extracted_state_files", 0)),
         "common_files": len(common_files),
         "agentos_extra_files": len(agentos_files - plain_files),
-        "checked_success_records": len(plain_good_lines),
+        "checked_compatibility_records": len(plain_good_lines),
+        "plain_reference_products": plain_evidence["reference_products"],
+        "agentos_reference_products": agentos_evidence["reference_products"],
+        "plain_reference_records": plain_evidence["reference_records"],
+        "agentos_reference_records": agentos_evidence["reference_records"],
+        "source_bound_runtime_records": agentos_evidence["source_bound_runtime_records"],
         "preserved_plain_costs": preserved_costs,
         "cost_replacements": cost_replacements,
         "cost_replacement_count": len(cost_replacements),
@@ -560,7 +824,7 @@ def compare_state(plain_dir: Path, agentos_dir: Path, min_common_files: int) -> 
         "plain_fork_launches": plain_fork_launches,
         "agentos_timing_records": agentos_timing_records,
         "agentos_agent_launches": agentos_agent_launches,
-        "agentos_fork_launches": agentos_fork_launches,
+        "agentos_worker_launches": agentos_worker_launches,
         "status": "ready",
     }
 
@@ -577,7 +841,7 @@ def main() -> int:
     if args.json_out is not None:
         args.json_out.write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(
-        "dual_platform_state_compare: plain_files={plain_files} agentos_files={agentos_files} common_files={common_files} agentos_extra_files={agentos_extra_files} checked_success_records={checked_success_records} preserved_plain_costs={preserved_plain_costs} embedded_action_records={embedded_action_records} run_result_match={run_result_match} agentos_evidence_checks={agentos_evidence_checks} agentos_mainflow_stages={agentos_mainflow_stages} agentos_mainflow_facts={agentos_mainflow_facts} plain_timing_records={plain_timing_records} plain_agent_launches={plain_agent_launches} plain_fork_launches={plain_fork_launches} agentos_timing_records={agentos_timing_records} agentos_agent_launches={agentos_agent_launches} agentos_fork_launches={agentos_fork_launches} status={status}".format(
+        "dual_platform_state_compare: plain_files={plain_files} agentos_files={agentos_files} common_files={common_files} agentos_extra_files={agentos_extra_files} checked_compatibility_records={checked_compatibility_records} source_bound_runtime_records={source_bound_runtime_records} preserved_plain_costs={preserved_plain_costs} embedded_action_records={embedded_action_records} run_result_match={run_result_match} agentos_evidence_checks={agentos_evidence_checks} agentos_mainflow_stages={agentos_mainflow_stages} agentos_mainflow_facts={agentos_mainflow_facts} plain_timing_records={plain_timing_records} plain_agent_launches={plain_agent_launches} plain_fork_launches={plain_fork_launches} agentos_timing_records={agentos_timing_records} agentos_agent_launches={agentos_agent_launches} agentos_worker_launches={agentos_worker_launches} status={status}".format(
             **summary
         )
     )

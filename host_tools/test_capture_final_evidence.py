@@ -2,6 +2,7 @@
 """No-QEMU regression tests for the compact final-evidence pipeline."""
 from __future__ import annotations
 import csv
+import importlib.util
 import json
 import os
 import shlex
@@ -14,8 +15,67 @@ import time
 import unittest
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from gitlab_ci_contract import validate_repository_ci
+from evidence_semantic_registry import (
+    RAW_ARTIFACT_REGISTRY,
+    EvidenceSemanticError,
+    validate_selected_artifacts,
+)
+from remote_ci_test_fixture import JOB_SPECS, build_remote_job_payloads
 REPO = Path(__file__).resolve().parents[1]
 COLLECTOR = REPO / "scripts" / "capture-final-evidence.py"
+CI_MECHANISM = REPO / "scripts" / "run-ci-mechanism.sh"
+MEASUREMENT_MODULE = REPO / "host_tools" / "measured_experiments.py"
+BENCHMARK_SOURCE_CONTRACT = REPO / "host_tools" / "benchmark_source_contract.py"
+DELIVERY_CONTRACT = REPO / "host_tools" / "evidence_delivery_contract.py"
+STRICT_JSON = REPO / "host_tools" / "strict_json.py"
+SEMANTIC_REGISTRY = REPO / "host_tools" / "evidence_semantic_registry.py"
+SEMANTIC_COMMON = REPO / "host_tools" / "evidence_semantic_common.py"
+SEMANTIC_PROFILES = REPO / "host_tools" / "evidence_semantic_profiles.py"
+SEMANTIC_METADATA = REPO / "host_tools" / "evidence_semantic_metadata.py"
+OBSERVE_EVIDENCE_MODULES = tuple(
+    REPO / "host_tools" / name
+    for name in (
+        "agent_metadata_disk_format.py", "agent_observe_disk_acceptance.py",
+        "agent_observe_disk_contract.py", "agent_observe_disk_evidence.py",
+        "agent_observe_disk_fixture.py", "plain_ucore_fs_extract.py",
+        "research_state_manifest.py",
+    )
+)
+OBSERVE_EVIDENCE_CONTRACTS = tuple(
+    REPO / "ci" / name
+    for name in ("agent-metadata-disk-format.json", "agent-observe-disk-format.json")
+)
+BACKEND_EVIDENCE_CONTRACT = REPO / "host_tools" / "backend_evidence_contract.py"
+KERNEL_LOG_VALIDATOR = REPO / "scripts" / "validate-kernel-test-log.py"
+METADATA_LOG_VALIDATOR = REPO / "scripts" / "validate-metadata-crash-log.py"
+METADATA_REPROBE_VALIDATOR = REPO / "scripts" / "validate-metadata-reprobe-log.py"
+VIRTIO_LOG_VALIDATOR = REPO / "scripts" / "validate-virtio-disk-log.py"
+REMOTE_CI_MODULES = tuple(
+    REPO / "host_tools" / name
+    for name in (
+        "gitlab_ci_contract.py", "remote_ci_archive.py", "remote_ci_bundle.py",
+        "remote_ci_evidence.py", "remote_ci_job_semantics.py",
+    )
+)
+FS_ALLOCATOR_IMAGE = REPO / "scripts" / "fs-allocator-image.py"
+BENCHMARK_SOURCE = REPO / "user" / "src" / "agentbench_ucore.c"
+FS_EVIDENCE_TEST = REPO / "scripts" / "test-fs-allocator-evidence.py"
+BENCHMARK_MARKER = (
+    "agentbench_ucore: file_query_benchmark schema=2 unit=us load=143 "
+    "traversal_ops=64 traversal_records=143 traversal_duration_us=36 "
+    "cold_index_ops=1 cold_index_records=6 cold_index_duration_us=2 "
+    "cold_rebuild_records=512 cold_rebuild_included=1 "
+    "warm_index_ops=64 warm_index_records=6 warm_index_duration_us=20 "
+    "status=measured"
+)
+FIXTURE_AGENT_CASES = (
+    "agentfinal_ucore", "agentfs_ucore", "agentscan_ucore", "agentloop_ucore",
+    "agentsched_ucore", "agentconflict_ucore", "agentllm_ucore", "agentbench_ucore",
+    "labbench_ucore", "labdemo_ucore", "agentsecurity_ucore", "agenttoolabi_ucore",
+    "agentscope_ucore", "agenttrust_ucore", "agentvfs_ucore", "iobudget_ucore",
+    "usersafety_ucore", "blocking_semantics_ucore",
+)
 PROFILE_ARTIFACTS = {
     "target-structure": [],
     "kernel-budgets": [],
@@ -24,16 +84,24 @@ PROFILE_ARTIFACTS = {
                    "reader-e2e-run-fixture-ucore-run.log",
                    "reader-e2e-run-fixture-ucore-run-summary.json"],
     "host-platform-alignment": [],
-    "dual-platforms": ["dual-plain-qemu.log", "dual-agentos-qemu.log",
-                       "dual-stage-timings.csv", "dual-state-compare.json",
-                       "dual-reader-compare.json"],
     "agent-suite": ["agent-suite-timings.log", "agent-suite-guest.log"],
+    "dual-platforms": ["dual-plain-qemu.log", "dual-agentos-qemu.log",
+                        "dual-stage-timings.csv", "dual-state-compare.json",
+                        "dual-reader-compare.json",
+                        "dual-targeted-agentbench-guest.log",
+                        "dual-measured-experiments.json",
+                        "dual-file-query-benchmark.csv"],
     "proc-reap": ["proc-reap.log"],
     "syscall-fairness": ["syscall-fairness.log"],
     "file-resource": ["file-resource.log"],
     "thread-resource": ["thread-resource.log"],
+    "physical-resource": ["physical-resource.log"],
+    "metadata-recovery": ["metadata-recovery.log"],
+    "observe-recovery": ["observe-recovery.log", "observe-recovery-before-reap.img"],
+    "virtio-disk": ["virtio-disk.log"],
     "workflow-teardown-race": ["workflow-teardown-race.log"],
     "fs-enospc": ["fs-enospc.log"],
+    "fs-allocator-fault": ["fs-allocator-fault.log", "fs-allocator-evidence.tar"],
 }
 def run(argv: list[str], cwd: Path, check: bool = True,
         env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
@@ -53,6 +121,465 @@ def rewrite_checksums(bundle: Path) -> None:
         digest = __import__("hashlib").sha256(path.read_bytes()).hexdigest()
         rows.append(f"{digest}  {path.relative_to(bundle).as_posix()}")
     checksum.write_text("\n".join(rows) + "\n", encoding="ascii")
+def rebind_raw_artifact(bundle: Path, name: str, payload: bytes) -> tuple[bytes, bytes, bytes]:
+    raw_path = bundle / "logs" / "raw" / name
+    summary_path = bundle / "verification-summary.json"
+    manifest_path = bundle / "manifest.json"
+    originals = (raw_path.read_bytes(), summary_path.read_bytes(), manifest_path.read_bytes())
+    raw_path.write_bytes(payload)
+    digest = __import__("hashlib").sha256(payload).hexdigest()
+    summary = json.loads(originals[1])
+    summary_record = next(record for record in summary["artifacts"] if record["name"] == name)
+    summary_record.update({"bytes": len(payload), "sha256": digest})
+    summary_path.write_text(json.dumps(summary) + "\n", encoding="utf-8")
+    manifest = json.loads(originals[2])
+    raw_record = next(record for record in manifest["raw_artifacts"] if record["name"] == name)
+    raw_record.update({"bytes": len(payload), "sha256": digest})
+    manifest["verification_summary"]["sha256"] = \
+        __import__("hashlib").sha256(summary_path.read_bytes()).hexdigest()
+    manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+    rewrite_checksums(bundle)
+    return originals
+def restore_raw_artifact(bundle: Path, name: str, originals: tuple[bytes, bytes, bytes]) -> None:
+    (bundle / "logs" / "raw" / name).write_bytes(originals[0])
+    (bundle / "verification-summary.json").write_bytes(originals[1])
+    (bundle / "manifest.json").write_bytes(originals[2])
+    rewrite_checksums(bundle)
+def rebind_full_log(bundle: Path, payload: bytes) -> dict[Path, bytes]:
+    paths = [bundle / relative for relative in (
+        "logs/full-verify.log", "metrics/measurements.csv", "metrics/commands.csv",
+        "charts/budget-usage.svg", "manifest.json")]
+    originals = {path: path.read_bytes() for path in paths}
+    manifest = json.loads(originals[paths[-1]])
+    old_full_hash = manifest["command"]["log_sha256"]
+    paths[0].write_bytes(payload)
+    new_full_hash = __import__("hashlib").sha256(payload).hexdigest()
+    manifest["command"]["log_sha256"] = new_full_hash
+    for key, path in (("measurements_csv", paths[1]), ("command_csv", paths[2])):
+        with path.open(newline="", encoding="utf-8") as handle:
+            rows = list(csv.DictReader(handle)); fields = list(rows[0])
+        for row in rows:
+            if row["source_log"] == "logs/full-verify.log":
+                row["source_log_sha256"] = new_full_hash
+        with path.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader(); writer.writerows(rows)
+        manifest["metrics"][key]["sha256"] = \
+            __import__("hashlib").sha256(path.read_bytes()).hexdigest()
+    old_measurements_hash = manifest["metrics"]["source_measurements_sha256"]
+    new_measurements_hash = manifest["metrics"]["measurements_csv"]["sha256"]
+    chart = paths[3].read_text(encoding="utf-8").replace(
+        old_full_hash, new_full_hash).replace(old_measurements_hash, new_measurements_hash)
+    paths[3].write_text(chart, encoding="utf-8")
+    chart_hash = __import__("hashlib").sha256(paths[3].read_bytes()).hexdigest()
+    manifest["metrics"]["source_measurements_sha256"] = new_measurements_hash
+    manifest["metrics"]["chart"].update({"sha256": chart_hash})
+    manifest["metrics"]["chart_sha256"] = chart_hash
+    paths[4].write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+    rewrite_checksums(bundle)
+    return originals
+def restore_files(bundle: Path, originals: dict[Path, bytes]) -> None:
+    for path, payload in originals.items():
+        path.write_bytes(payload)
+    rewrite_checksums(bundle)
+def write_fs_evidence_fixture(output: Path) -> None:
+    spec = importlib.util.spec_from_file_location("fs_allocator_evidence_fixture", FS_EVIDENCE_TEST)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    with tempfile.TemporaryDirectory() as temp:
+        package = Path(temp) / "package"
+        package.mkdir()
+        original_tool = module.MODULE._IMAGE_TOOL
+        original_mutation = module.MODULE._raw_mutation_cli_rejection
+        try:
+            module.MODULE._IMAGE_TOOL = module.FakeImageTool()
+            module.MODULE._raw_mutation_cli_rejection = module.fake_mutation_rejection
+            module.make_package(package)
+            module.MODULE.write_manifest(package)
+            module.MODULE.pack_archive(package, output)
+        finally:
+            module.MODULE._IMAGE_TOOL = original_tool
+            module.MODULE._raw_mutation_cli_rejection = original_mutation
+def write_fixture_fs_verifier(path: Path, archive: Path) -> None:
+    digest = __import__("hashlib").sha256(archive.read_bytes()).hexdigest()
+    path.write_text(f'''#!/usr/bin/env python3
+import hashlib, pathlib, sys
+EXPECTED = "{digest}"
+def verify_archive(path):
+    raw = pathlib.Path(path).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != EXPECTED:
+        raise ValueError("fixture allocator archive differs")
+    return {{"case_count": 36, "backend": {{"identity": "fixture"}}}}
+if __name__ == "__main__":
+    if len(sys.argv) != 4 or sys.argv[1:3] != ["verify-archive", "--archive"]:
+        raise SystemExit(2)
+    try:
+        verify_archive(sys.argv[3])
+    except ValueError:
+        raise SystemExit(1)
+''', encoding="utf-8")
+def write_semantic_fixture_generator(path: Path) -> None:
+    executable(path, r'''#!/usr/bin/env python3
+import importlib.util
+import json
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+OUT = Path(sys.argv[1])
+sys.path.insert(0, str(ROOT / "host_tools"))
+from agent_observe_disk_fixture import write_fixture
+
+def load(name):
+    source = ROOT / "scripts" / name
+    spec = importlib.util.spec_from_file_location("fixture_" + name.replace("-", "_"), source)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+kernel = load("validate-kernel-test-log.py")
+virtio = load("validate-virtio-disk-log.py")
+agent_cases = (
+    "agentfinal_ucore", "agentfs_ucore", "agentscan_ucore", "agentloop_ucore",
+    "agentsched_ucore", "agentconflict_ucore", "agentllm_ucore", "agentbench_ucore",
+    "labbench_ucore", "labdemo_ucore", "agentsecurity_ucore", "agenttoolabi_ucore",
+    "agentscope_ucore", "agenttrust_ucore", "agentvfs_ucore", "iobudget_ucore",
+    "usersafety_ucore", "blocking_semantics_ucore",
+)
+
+def write(name, value):
+    (OUT / name).write_text(value.rstrip("\n") + "\n", encoding="utf-8")
+
+def section(tag, lines):
+    if isinstance(lines, str):
+        lines = lines.splitlines()
+    return "\n".join([f"===== guest:{tag} =====", *lines, "", f"===== end-guest:{tag} ====="])
+
+def combined(label, sections, final):
+    body = [f"===== runner-stdout:{label} =====", final,
+            "", f"===== runner-guest-logs:{label} ====="]
+    body.extend(section(tag, lines) for tag, lines in sections)
+    write(label + ".log", "\n".join(body))
+
+def thread_lines():
+    return [marker if marker != "threadresource_ucore: domain_fairness=1"
+            else marker + " hog=575 victim=512 bound=576"
+            for marker in kernel.THREAD_MARKERS]
+
+def physical_lines():
+    result = []
+    for marker in kernel.PHYSICAL_RESOURCE_MARKERS:
+        if marker == "physicalresource_ucore: reserved_domain_fairness=1":
+            marker += " pressure_pages=8 pressure_pipes=2 physical_usage=48 physical_limit=48"
+        if marker == "physicalresource_ucore: reserved_promise_lifecycle=1":
+            marker += " promised=64 limit=64"
+        result.append(marker)
+    raw = (
+        [(0, 2, 0)] + [(0, 0, 0)] * 4 + [(-1, 0, 0)] * 3
+        + [(0, 1, 1), (0, 0, 0), (0, 16, 64)] + [(0, 0, 0)] * 5
+        + [(0, 64, 64), (-1, 0, 0), (0, 2, 0), (-1, 0, 0)]
+        + [(0, 3, 0), (-1, 0, 0), (0, 0, 3), (-1, 0, 0)]
+        + [(0, 0, 0), (0, 16, 64), (0, 0, 0), (0, 64, 64)]
+        + [(0, 0, 0), (0, 16, 64)]
+    )
+    raw_lines = [
+        "physicalresource_ucore: raw "
+        f"step={step} result={rc} value0={value0} value1={value1}"
+        for step, (rc, value0, value1) in enumerate(raw, 1)
+    ]
+    result[2:2] = raw_lines
+    return result
+
+def syscall_lines():
+    result = []
+    for name, begin, peer, end in kernel.SYSCALL_PHASES:
+        result.extend((begin, peer))
+        if name == "inode":
+            result.append("SYSCALLFAIR_INODE_SHORT")
+        result.append(end)
+    result.append("syscallfair_ucore: parent passed")
+    return result
+
+def workflow_lines():
+    return list(kernel.workflow_teardown_expected_lines(14, 64))
+
+def quota_lines(profile):
+    result = list(kernel.FS_QUOTA_MARKERS)
+    result = [line.replace("public_version_churn=1",
+                           "public_version_churn=1 cycles=" + ("513" if profile == "domain" else "700"))
+              for line in result]
+    result = [line.replace("public_domain_limited=1",
+                           "public_domain_limited=1 blocks=" +
+                           ("16 inodes=8" if profile == "domain" else "64 inodes=16"))
+              for line in result]
+    if profile == "domain":
+        result.append("fsquota_ucore: quota_reuse=1")
+    result.append("fsquota_ucore: parent passed")
+    return result
+
+def crash_lines(bank, phase):
+    return [
+        "agentmetacrash_ucore: baseline_dirty=0x0000000000000029 baseline_durable=0x0000000000000029 pending=0",
+        "agentmetacrash_ucore: baseline_ready=1 replicated=1",
+        "agentmetacrash_ucore: target_armed scope=3 generation=0x000000000000002a token=0x0000000000000099",
+        "agentmetacrash_ucore: target_bound scope=3 generation=0x000000000000002a token=0x0000000000000099 job=0x0000000000000077",
+        "agentmetacrash_ucore: target_fire scope=3 generation=0x000000000000002a token=0x0000000000000099 job=0x0000000000000077 bank=%d phase=%d" % (bank, phase),
+        "agentmetacrash_ucore: metadata_phase=%d" % phase,
+    ]
+
+def reprobe_lines(kind="busy", bank=None, progress=False):
+    banks = (0, 1) if bank is None else (bank,)
+    faults = [
+        f"agentmeta_boot_fault: kind={kind} bank={item} remaining={remaining}"
+        for remaining in (2, 1, 0) for item in banks
+    ]
+    retries = len(faults) - 1
+    lines = [faults[0], "agentmeta_boot_reprobe: admission_rejected status=-17"]
+    if progress:
+        lines.extend((
+            "agentmeta_boot_reprobe: progress sequence=0x0000000000000001 bank=1 phase=1 offset=64",
+            "agentmeta_boot_reprobe: progress sequence=0x0000000000000002 bank=1 phase=2 offset=128",
+            "agentmeta_boot_reprobe: progress sequence=0x0000000000000003 bank=1 phase=4 offset=16",
+        ))
+    now = 0x10
+    for attempt, fault in enumerate(faults[1:], 1):
+        delay = 1 << min(attempt, 6)
+        deadline = now + delay
+        lines.extend((
+            fault,
+            f"agentmeta_boot_reprobe: deferred attempt={attempt} now=0x{now:016x} deadline=0x{deadline:016x}",
+            f"agentmetatransient_ucore: admission_retry={attempt} status=-17",
+            "agentmeta_boot_reprobe: admission_rejected status=-17",
+        ))
+        now = deadline
+    lines.extend((
+        f"agentmeta_boot_reprobe: recovered=1 retries={retries}",
+        f"agentmetatransient_ucore: admission_retry={retries + 1} status=-17",
+        "agentmetatransient_ucore: create_succeeded=1",
+        "agentmetatransient_ucore: query_succeeded=1",
+        "agentmetatransient_ucore: unavailable_seen=1 recovered=1",
+        "agentmetatransient_ucore: parent passed",
+    ))
+    return lines
+
+def virtio_lines():
+    requests = []
+    for index, (case, request_type, result) in enumerate(virtio.REQUEST_CASES, 1):
+        tick = index * 10
+        requests.append("virtiodisk_ucore: request case=%s id=0x%016x type=%d submit=0x%016x complete=0x%016x result=%d" %
+                        (case, tick, request_type, tick, tick + 1, result))
+    return [
+        requests[0], virtio.MARKERS[0], requests[1], virtio.MARKERS[1],
+        requests[2], virtio.MARKERS[2], virtio.MARKERS[3], requests[3],
+        virtio.MARKERS[4],
+        "virtiodisk_ucore: range-rejection id=0x000000000000002d rejected=0x0000000000000001 submits=0x0000000000000000 result=-6",
+        virtio.MARKERS[5], requests[4], virtio.MARKERS[6], requests[5],
+        virtio.MARKERS[7], requests[6], virtio.MARKERS[8], requests[7],
+        virtio.MARKERS[9], requests[8], virtio.MARKERS[10], requests[9],
+        virtio.MARKERS[11], virtio.MARKERS[12],
+    ]
+
+reader = (OUT / "reader-e2e.log").read_text(encoding="utf-8")
+write("reader-e2e.log", reader + "\ntest_plain_ucore_reader_e2e: passed")
+write("reader-e2e-run-fixture-ucore-build.log", "fixture build command\nfixture build complete")
+write("reader-e2e-run-fixture-ucore-run.log", "rp_orch: passed")
+(OUT / "reader-e2e-run-fixture-ucore-run-summary.json").write_text(json.dumps({
+    "commands": ["clean", "seed", "make", "qemu"], "returncode": 0, "build_returncode": 0,
+    "guest_returncode": 0, "guest_raw_returncode": 0, "marker_seen": True,
+    "failure_seen": False, "failure_line": "", "failure_reason": "",
+    "failure_phase": "", "timed_out": False, "runner_terminated": False,
+    "runner_signals": [], "output_eof": True, "idle_notices": 0,
+    "elapsed_seconds": 1.0, "embedded_action_records": 1,
+    "extracted_state_files": 300, "extract_status": "ready", "passed": True,
+    "build_log": "ucore-build.log", "log": "ucore-run.log", "status": "ready",
+}, sort_keys=True) + "\n", encoding="utf-8")
+
+benchmark = "agentbench_ucore: file_query_benchmark schema=2 unit=us load=143 traversal_ops=64 traversal_records=143 traversal_duration_us=36 cold_index_ops=1 cold_index_records=6 cold_index_duration_us=2 cold_rebuild_records=512 cold_rebuild_included=1 warm_index_ops=64 warm_index_records=6 warm_index_duration_us=20 status=measured"
+mechanism = list(dict.fromkeys([
+    "agentfinal_ucore: context_sync_atomic=1 append=1 rollback=1 clear=1 recovery=1",
+    *kernel.WAIT_ATOMIC_MARKERS,
+    *kernel.AGENT_CASE_MARKERS["agentfinal_ucore"],
+]))
+agent_sections = [("agent-mechanism:context-sync-atomicity", mechanism)]
+for case in agent_cases:
+    lines = list(kernel.AGENT_CASE_MARKERS.get(case, ()))
+    if case == "agentbench_ucore":
+        lines.append(benchmark)
+    lines.append(case + ": parent passed")
+    agent_sections.append(("agent-case:" + case, lines))
+write("agent-suite-guest.log", "\n".join(section(tag, lines) for tag, lines in agent_sections))
+write("agent-suite-timings.log", "\n".join(
+    "%s %.9f" % (case, 1.05 if index == len(agent_cases) - 1 else 0.1)
+    for index, case in enumerate(agent_cases)
+))
+write("dual-targeted-agentbench-guest.log",
+      section("agent-case:agentbench_ucore", [benchmark, "agentbench_ucore: parent passed"]))
+
+write("dual-plain-qemu.log", "\n".join([
+    "rp_backend: evidence_role=demo_reference catalog_generation=demo_expected cases=7 status=reference_ready",
+    "rp_orch: evidence_role=demo_reference observation_source=guest_runtime program_source=rp_orch_timing program_source_bytes=1 program_source_hash=1 program_names_digest=1 programs_observed=69 status=reference_observed",
+    "rp_orch: programs_ok=69 programs_total=69",
+    "rp_compare_plain: evidence_role=demo_reference catalog_generation=demo_expected status=reference_ready",
+    "rp_orch: passed",
+]))
+write("dual-agentos-qemu.log", "\n".join([
+    "rp_backend: evidence_generation=runtime runtime_cases=8 source_reads=8 kernel_checks=4 context_sequence=1 query_returned=1 query_used_index=1 status=verified",
+    "rp_orch: evidence_role=runtime_verified evidence_generation=runtime program_source=rp_orch_timing program_source_bytes=1 program_source_hash=1 program_names_digest=1 programs_observed=69 status=verified",
+    "rp_orch: programs_ok=69 programs_total=69",
+    "rp_compare_plain: evidence_generation=runtime runtime_assertions_executed=8 runtime_assertions_passed=8 status=verified",
+    "rp_agentos_orch: kernel_agent=1 workflow=rp_orch status=ready",
+    "rp_agentos_orch: passed",
+]))
+stages = ("structure-check", "seeded-dual-run", "qemu-log-marker-check",
+          "state-extract-copy", "host-alignment", "state-compare",
+          "reader-render-check", "measured-file-query", "result-report-chart")
+write("dual-stage-timings.csv", "stage,start_epoch,end_epoch,duration_seconds,status\n" +
+      "\n".join("%s,%d,%d,1,ready" % (stage, index, index + 1)
+                  for index, stage in enumerate(stages, 1)))
+(OUT / "dual-state-compare.json").write_text(json.dumps({
+    "plain_files": 300, "agentos_files": 320, "common_files": 300,
+    "agentos_extra_files": 20, "checked_compatibility_records": 10,
+    "plain_reference_products": 7, "agentos_reference_products": 7,
+    "plain_reference_records": 7, "agentos_reference_records": 7,
+    "source_bound_runtime_records": 8, "preserved_plain_costs": 8,
+    "cost_replacements": [{"case": index} for index in range(8)],
+    "cost_replacement_count": 8,
+    "runner_tick_comparison": [{"case": index} for index in range(7)],
+    "runner_tick_pairs": 7, "embedded_action_records": 1,
+    "run_result_match": 1, "agentos_evidence_checks": 8,
+    "scenario_evidence": [{"status": "ready"}],
+    "agentos_mainflow_stages": 11, "agentos_mainflow_facts": 12,
+    "plain_timing_records": 7, "plain_agent_launches": 7,
+    "plain_fork_launches": 7, "agentos_timing_records": 8,
+    "agentos_agent_launches": 8, "agentos_worker_launches": 8,
+    "status": "ready",
+}) + "\n", encoding="utf-8")
+(OUT / "dual-reader-compare.json").write_text(json.dumps({
+    "plain_pages": 10, "agentos_pages": 10, "plain_state_files": 300,
+    "agentos_state_files": 320, "agentos_extra_state_files": 20,
+    "plain_api_json": 20, "agentos_api_json": 25, "agentos_extra_api_json": 5,
+    "checked_pages": 10, "checked_api_json": 20, "status": "ready",
+}) + "\n", encoding="utf-8")
+
+proc = [
+    "procreap_ucore: process lifecycle verification", "procreap_ucore: child-first=160",
+    "procreap_ucore: parent-first=160", "procreap_ucore: orphan-resource=136",
+    "procreap_ucore: blocked-syscall=384", "procreap_ucore: wait-queue cancellation passed",
+    "procreap_ucore: detached-wait=8", "procreap_ucore: unreaped-parent-isolated=1",
+    "procreap_ucore: live-domain-limit=1", "procreap_ucore: lineage-bypass-denied=1",
+    "procreap_ucore: live-quota-returned=1", "procreap_ucore: peer-domain-isolated=1",
+    "procreap_ucore: parent passed",
+]
+proc_agent = ["procreap_agent_ucore: bounded teardown scheduling",
+              "procreap_agent_ucore: child-pressure-isolated=1",
+              "procreap_agent_ucore: reserved-agent-slot=1",
+              "procreap_agent_ucore: adversarial-agent=1",
+              "procreap_agent_ucore: parent passed"]
+combined("proc-reap", [("proc-reap:agent", proc),
+                       ("proc-reap:agent-adversarial", proc_agent),
+                       ("proc-reap:baseline", proc)], "[proc-reap] both targets passed")
+combined("syscall-fairness", [("syscall-fairness:agent", syscall_lines()),
+                              ("syscall-fairness:baseline", syscall_lines())],
+         "[syscall-fairness] both targets passed")
+combined("file-resource", [("file-resource:agent", kernel.FILE_MARKERS),
+                            ("file-resource:baseline", kernel.FILE_MARKERS)],
+         "[file-resource] both targets passed")
+combined("thread-resource", [("thread-resource", thread_lines())],
+         "[thread-resource] all checks passed")
+combined("physical-resource", [("physical-resource", physical_lines())],
+         "[physical-resource] all checks passed")
+
+metadata = []
+recover = ["agentmetarecover_ucore: readonly_recovery=1 metadata_available=1",
+           "agentmetarecover_ucore: query_found=0 returned=0",
+           "agentmetarecover_ucore: parent passed"]
+for bank_name, bank in (("primary", 0), ("mirror", 1)):
+    for phase in range(1, 9):
+        metadata.append((f"metadata-agentmetacrash_ucore-{bank_name}-{phase}", crash_lines(bank, phase)))
+        metadata.append((f"metadata-agentmetarecover_ucore-{bank_name}-{phase}", recover))
+metadata.extend([
+    ("metadata-agentmetarecover_ucore-select-baseline",
+     ["agentmetarecover_ucore: query_found=0 returned=0", "agentmetarecover_ucore: parent passed"]),
+    *[(f"metadata-agentmetatransient_ucore-boot-{kind}-{target}",
+       reprobe_lines(kind, None if target == "all" else 1))
+      for kind in ("busy", "io", "interrupted") for target in ("all", "newer")],
+    ("metadata-agentmetalarge_ucore-large-seed",
+     ["agentmetalarge_ucore: runtime_reload_once=1",
+      "agentmetalarge_ucore: seed_ready=1 records=32"]),
+    *[(f"metadata-agentmetatransient_ucore-large-{terminal}",
+       reprobe_lines("busy", 1, True))
+      for terminal in ("absent", "uncommitted", "corrupt")],
+    ("metadata-agentmetarecover_ucore-eio-baseline",
+     ["agentmetarecover_ucore: query_found=0 returned=0", "agentmetarecover_ucore: parent passed"]),
+    ("metadata-agentmetaeio_ucore-eio",
+     ["agentmetaeio_ucore: transient_eio_repaired=1", "agentmetaeio_ucore: parent passed"]),
+])
+combined("metadata-recovery", metadata,
+         "\n".join([
+             *[f"metadata_authority_check: kind={kind} newer_bank=1 before=41 after=42 rollback=0"
+               for kind in ("busy", "io", "interrupted")],
+             *[f"metadata_large_bank_check: peer={peer} selected=valid over_burst=1"
+               for peer in ("valid", "absent", "uncommitted", "corrupt")],
+             "[metadata-recovery] power-cut, bounded boot reprobe, over-burst terminal-peer recovery, and EIO recovery passed",
+         ]))
+
+identity0 = "audit=1 span=2 event=3 control=4 agent=5 lifecycle_slot=6 lifecycle_generation=7"
+identity1 = "audit=11 span=12 event=13 control=14 agent=15 lifecycle_slot=6 lifecycle_generation=8"
+durable_identity = write_fixture(OUT / "observe-recovery-before-reap.img")
+observe = [
+    ("observe-recovery-boot0-cut", ["agentobsreboot_ucore: lease_cut_alloc " + identity0,
+                                    "agentobsreboot_ucore: receipt_permission_not_agent=1"]),
+    ("observe-recovery-boot1", ["agentobsreboot_ucore: lease_cut_successor " + identity1,
+                                durable_identity,
+                                "agentobsreboot_ucore: receipt_pending_not_evidence=1 receipt_durable_exact=1 receipt_fake_stale=1 receipt_window_not_evidence=1",
+                                "agentobsreboot_ucore: boot1_checkpoint_ready=1"]),
+    ("observe-recovery-boot2", ["agentobsreboot_ucore: receipt_teardown_stale=1",
+                                "agentobsreboot_ucore: receipt_permission_recovery_denied=1",
+                                "agentobsreboot_ucore: receipt_recovery_exact=1 receipt_v1_compatible=1 bank_generation_bound=1",
+                                "agentobsreboot_ucore: boot2_reap_replicated=1"]),
+    ("observe-recovery-boot3", ["agentobsreboot_ucore: boot3_erased=1 generation_isolated=1 stable_identity=1",
+                                "agentobsreboot_ucore: timeline_wait_epoch_recheck=1 injection=2 retries=1 bounded_timeout=1",
+                                "agentobsreboot_ucore: timeline_wait_threads=1 filters=2 deadlines=2 targeted=1 timeout=1 cleanup=1",
+                                "agentobsreboot_ucore: parent passed"]),
+]
+combined("observe-recovery", observe,
+         "[observe-recovery] power-cut lease and three-boot durable evidence lifecycle passed")
+
+combined("virtio-disk", [("virtio-disk:fault-matrix", virtio_lines())],
+         "[virtio-disk] fault matrix passed")
+combined("workflow-teardown-race",
+         [(f"workflow-teardown:{index}", workflow_lines()) for index in range(1, 4)],
+         "[workflow-teardown] 3 stable runs passed")
+
+persistent_seed = ["fspquota_ucore: sponsored_object_charged=1 blocks=14",
+                   "fspquota_ucore: durable_fixture=1 blocks=18 inodes=8 owner_exited=1"]
+persistent_verify = [*kernel.FS_PERSISTENT_MARKERS, "fspquota_ucore: parent passed"]
+fs_sections = [
+    ("fs-enospc:agent", ["fsenospc_ucore: inode exhaustion survived",
+                         "fsenospc_ucore: inode cache exhaustion survived",
+                         "fsenospc_ucore: block exhaustion survived", "fsenospc_ucore: parent passed"]),
+    ("fs-enospc:baseline", ["fsenospc_ucore: inode exhaustion survived",
+                            "fsenospc_ucore: inode cache exhaustion survived",
+                            "fsenospc_ucore: block exhaustion survived", "fsenospc_ucore: parent passed"]),
+    ("fs-enospc:quota-domain", quota_lines("domain")),
+    ("fs-enospc:quota-reserve", quota_lines("reserve")),
+    ("fs-enospc:principal-agent-orphan", ["fspquota_ucore: crash_orphan_ready=1"]),
+    ("fs-enospc:principal-agent-seed", persistent_seed),
+    ("fs-enospc:principal-agent-verify", persistent_verify),
+    ("fs-enospc:principal-baseline-orphan", ["fspquota_ucore: crash_orphan_ready=1"]),
+    ("fs-enospc:principal-baseline-seed", persistent_seed),
+    ("fs-enospc:principal-baseline-verify", persistent_verify),
+]
+combined("fs-enospc", fs_sections,
+         "[fs-enospc] generic, persistent principal, and Agent quota cases passed")
+combined("fs-allocator-fault", [("fs-allocator:fixture:prepare",
+                                 ["fsallocfault_ucore: case=alloc phase=intent action=busy prepared=1"])],
+         "[fs-allocator-fault] dynamic matrix, negative mutant, and raw evidence passed")
+''')
+def fixture_collector(root: Path) -> Path:
+    candidate = root / "scripts" / COLLECTOR.name
+    return candidate if candidate.is_file() else COLLECTOR
 def populate_summary_stage(stage: Path) -> Path:
     incoming, runtime = stage / "incoming", stage / "runtime"
     incoming.mkdir(parents=True)
@@ -70,6 +597,9 @@ def populate_summary_stage(stage: Path) -> Path:
         json.dumps(reader_manifest) + "\n", encoding="utf-8")
     (incoming / "agent-suite-timings.log").write_text(
         "case_one 1.250000000\ncase_two 1.500000000\n", encoding="utf-8")
+    (incoming / "agent-suite-guest.log").write_text(
+        BENCHMARK_MARKER + "\nagentbench_ucore: parent passed\n", encoding="utf-8"
+    )
     rows = []
     for index, (name, artifacts) in enumerate(PROFILE_ARTIFACTS.items(), 1):
         rows.append("\t".join([name, str(index), str(index + 1), *artifacts]))
@@ -81,18 +611,58 @@ def init_fixture_repo(root: Path, failing_make: bool = False, slow_make: bool = 
     run(["git", "init", "-q"], root)
     run(["git", "config", "user.email", "evidence@example.invalid"], root)
     run(["git", "config", "user.name", "Evidence Test"], root)
+    (root / ".gitignore").write_text("__pycache__/\n*.pyc\n", encoding="ascii")
+    shutil.copyfile(REPO / ".gitlab-ci.yml", root / ".gitlab-ci.yml")
     (root / "scripts").mkdir()
     shutil.copyfile(COLLECTOR, root / "scripts" / COLLECTOR.name)
+    (root / "host_tools").mkdir()
+    shutil.copyfile(MEASUREMENT_MODULE, root / "host_tools" / MEASUREMENT_MODULE.name)
+    shutil.copyfile(
+        BENCHMARK_SOURCE_CONTRACT,
+        root / "host_tools" / BENCHMARK_SOURCE_CONTRACT.name,
+    )
+    shutil.copyfile(DELIVERY_CONTRACT, root / "host_tools" / DELIVERY_CONTRACT.name)
+    shutil.copyfile(STRICT_JSON, root / "host_tools" / STRICT_JSON.name)
+    for module in (
+        SEMANTIC_REGISTRY, SEMANTIC_COMMON, SEMANTIC_PROFILES,
+        SEMANTIC_METADATA,
+    ):
+        shutil.copyfile(module, root / "host_tools" / module.name)
+    for module in OBSERVE_EVIDENCE_MODULES:
+        shutil.copyfile(module, root / "host_tools" / module.name)
+    for module in REMOTE_CI_MODULES:
+        shutil.copyfile(module, root / "host_tools" / module.name)
+    shutil.copyfile(BACKEND_EVIDENCE_CONTRACT,
+                    root / "host_tools" / BACKEND_EVIDENCE_CONTRACT.name)
+    for validator in (KERNEL_LOG_VALIDATOR, METADATA_LOG_VALIDATOR,
+                      METADATA_REPROBE_VALIDATOR,
+                      VIRTIO_LOG_VALIDATOR):
+        shutil.copyfile(validator, root / "scripts" / validator.name)
+    shutil.copyfile(FS_ALLOCATOR_IMAGE, root / "scripts" / FS_ALLOCATOR_IMAGE.name)
+    (root / "user" / "src").mkdir(parents=True)
+    shutil.copyfile(BENCHMARK_SOURCE, root / "user" / "src" / BENCHMARK_SOURCE.name)
+    write_fs_evidence_fixture(root / "fs-allocator-evidence.tar")
+    write_fixture_fs_verifier(root / "scripts" / "fs-allocator-evidence.py",
+                              root / "fs-allocator-evidence.tar")
     config = {
-        "agent_test_suite": {"expected_cases": (["case_two", "case_one"] if bad_timing else
-                                                  ["case_one", "case_two"]),
+        "agent_test_suite": {"expected_cases": (list(reversed(FIXTURE_AGENT_CASES)) if bad_timing else
+                                                  list(FIXTURE_AGENT_CASES)),
                              "baseline_seconds": 2.0, "max_seconds": 4.0},
         "kernel_stack": {"baseline_required_bytes": 100, "max_required_bytes": 110,
                          "stack_size_bytes": 121 if bad_stack else 120,
                          "baseline_boot_required_bytes": 80,
                          "max_boot_required_bytes": 90, "boot_stack_size_bytes": 100},
+        "agent_modules": {"aggregate_budgets": [{
+            "name": "metadata_control_plane",
+            "baseline_source_lines": 70, "max_source_lines": 90,
+            "baseline_source_bytes": 7000, "max_source_bytes": 9000,
+            "baseline_loaded_text_bytes": 5000, "max_loaded_text_bytes": 7000,
+            "baseline_bss_bytes": 1500, "max_bss_bytes": 2500,
+        }]},
     }
     (root / "ci").mkdir()
+    for contract in OBSERVE_EVIDENCE_CONTRACTS:
+        shutil.copyfile(contract, root / "ci" / contract.name)
     (root / "ci" / "kernel-budgets.json").write_text(json.dumps(config) + "\n", encoding="utf-8")
     tools = root / "tools"
     version_tool = "#!/usr/bin/env bash\necho 'fixture tool 1.0'\n"
@@ -101,6 +671,7 @@ def init_fixture_repo(root: Path, failing_make: bool = False, slow_make: bool = 
     host_cc = tools / "cc"
     for tool in (compiler, qemu, host_cc):
         executable(tool, version_tool)
+    write_semantic_fixture_generator(tools / "write-semantic-artifacts.py")
     make = tools / "make"
     if failing_make:
         make_body = "#!/usr/bin/env bash\n[[ ${1:-} == --version ]] && { echo fixture-make; exit 0; }\nexit 7\n"
@@ -120,11 +691,41 @@ for artifact in \
   reader-e2e-run-fixture-ucore-run-summary.json dual-plain-qemu.log dual-agentos-qemu.log \
   dual-stage-timings.csv dual-state-compare.json dual-reader-compare.json agent-suite-guest.log \
   proc-reap.log syscall-fairness.log file-resource.log thread-resource.log \
-  workflow-teardown-race.log fs-enospc.log; do
+  physical-resource.log metadata-recovery.log observe-recovery.log observe-recovery-before-reap.img virtio-disk.log \
+  workflow-teardown-race.log fs-enospc.log fs-allocator-fault.log; do
   printf '%s passed\n' "${artifact}" >"${incoming}/${artifact}"
 done
-printf 'case_one 1.250000000\ncase_two 1.500000000\n' >"${incoming}/agent-suite-timings.log"
-printf 'target-structure\t1\t2\nkernel-budgets\t2\t3\nreader-e2e\t3\t4\treader-e2e.log\treader-e2e-log-manifest.json\treader-e2e-run-fixture-ucore-build.log\treader-e2e-run-fixture-ucore-run.log\treader-e2e-run-fixture-ucore-run-summary.json\nhost-platform-alignment\t4\t5\ndual-platforms\t5\t6\tdual-plain-qemu.log\tdual-agentos-qemu.log\tdual-stage-timings.csv\tdual-state-compare.json\tdual-reader-compare.json\nagent-suite\t6\t7\tagent-suite-timings.log\tagent-suite-guest.log\nproc-reap\t7\t8\tproc-reap.log\nsyscall-fairness\t8\t9\tsyscall-fairness.log\nfile-resource\t9\t10\tfile-resource.log\nthread-resource\t10\t11\tthread-resource.log\nworkflow-teardown-race\t11\t12\tworkflow-teardown-race.log\nfs-enospc\t12\t13\tfs-enospc.log\n' >"${runtime}/steps.tsv"
+cp fs-allocator-evidence.tar "${incoming}/fs-allocator-evidence.tar"
+cat >"${incoming}/agent-suite-guest.log" <<'EOF'
+agentbench_ucore: file_query_benchmark schema=2 unit=us load=143 traversal_ops=64 traversal_records=143 traversal_duration_us=36 cold_index_ops=1 cold_index_records=6 cold_index_duration_us=2 cold_rebuild_records=512 cold_rebuild_included=1 warm_index_ops=64 warm_index_records=6 warm_index_duration_us=20 status=measured
+agentbench_ucore: parent passed
+EOF
+cp "${incoming}/agent-suite-guest.log" \
+  "${incoming}/dual-targeted-agentbench-guest.log"
+tools/write-semantic-artifacts.py "${incoming}"
+PYTHONPATH=host_tools python3 - "${incoming}" "$(git rev-parse HEAD)" <<'PY'
+import sys
+from pathlib import Path
+from measured_experiments import (
+    extract_file_query_measurements,
+    write_csv,
+    write_manifest,
+)
+
+incoming = Path(sys.argv[1])
+commit = sys.argv[2]
+source_name = "dual-targeted-agentbench-guest.log"
+manifest = extract_file_query_measurements(
+    incoming / source_name,
+    source_name,
+    ["env", "AGENT_TEST_CASE=agentbench_ucore", "bash", "scripts/run-agent-tests.sh"],
+    commit,
+    f"dual-{commit[:12]}-fixture",
+)
+write_manifest(incoming / "dual-measured-experiments.json", manifest)
+write_csv(incoming / "dual-file-query-benchmark.csv", manifest["rows"])
+PY
+printf 'target-structure\t1\t2\nkernel-budgets\t2\t3\nreader-e2e\t3\t4\treader-e2e.log\treader-e2e-log-manifest.json\treader-e2e-run-fixture-ucore-build.log\treader-e2e-run-fixture-ucore-run.log\treader-e2e-run-fixture-ucore-run-summary.json\nhost-platform-alignment\t4\t5\nagent-suite\t5\t6\tagent-suite-timings.log\tagent-suite-guest.log\ndual-platforms\t6\t7\tdual-plain-qemu.log\tdual-agentos-qemu.log\tdual-stage-timings.csv\tdual-state-compare.json\tdual-reader-compare.json\tdual-targeted-agentbench-guest.log\tdual-measured-experiments.json\tdual-file-query-benchmark.csv\nproc-reap\t7\t8\tproc-reap.log\nsyscall-fairness\t8\t9\tsyscall-fairness.log\nfile-resource\t9\t10\tfile-resource.log\nthread-resource\t10\t11\tthread-resource.log\nphysical-resource\t11\t12\tphysical-resource.log\nmetadata-recovery\t12\t13\tmetadata-recovery.log\nobserve-recovery\t13\t14\tobserve-recovery.log\tobserve-recovery-before-reap.img\nvirtio-disk\t14\t15\tvirtio-disk.log\nworkflow-teardown-race\t15\t16\tworkflow-teardown-race.log\nfs-enospc\t16\t17\tfs-enospc.log\nfs-allocator-fault\t17\t18\tfs-allocator-fault.log\tfs-allocator-evidence.tar\n' >"${runtime}/steps.tsv"
 python3 scripts/capture-final-evidence.py write-summary \
   --stage "${FINAL_EVIDENCE_STAGE}" --steps "${runtime}/steps.tsv" \
   --commit "$(git rev-parse HEAD)" --agent-grace 2s --mechanism-grace 5s --workflow-runs 3
@@ -141,6 +742,12 @@ echo '[kernel-budget] struct proc: actual=100 bytes baseline=90 bytes limit=110 
 echo 'kernel stack budget: user=1 interrupt=1 margin=1 required=101 limit=120'
 echo 'boot stack budget: root=main path=1 interrupt=1 margin=1 required=81 limit=100'
 echo '[kernel-budget] kernel checks passed'
+echo '[kernel-budget] agent-modules checks begin'
+echo '[kernel-budget] Agent aggregate metadata_control_plane source_lines: actual=80 lines baseline=70 lines limit=90 lines'
+echo '[kernel-budget] Agent aggregate metadata_control_plane source_bytes: actual=8000 bytes baseline=7000 bytes limit=9000 bytes'
+echo '[kernel-budget] Agent aggregate metadata_control_plane loaded_text_bytes: actual=6000 bytes baseline=5000 bytes limit=7000 bytes'
+echo '[kernel-budget] Agent aggregate metadata_control_plane bss_bytes: actual=2000 bytes baseline=1500 bytes limit=2500 bytes'
+echo '[kernel-budget] agent-modules checks passed'
 echo 'kernel stack budget: user=1 interrupt=1 margin=1 required=8191 limit=8192'
 echo 'boot stack budget: root=main path=1 interrupt=1 margin=1 required=4095 limit=4096'
 echo '[full-verify] all checks passed'
@@ -157,18 +764,16 @@ echo '[full-verify] all checks passed'
     return {"make": make, "compiler_prefix": tools / "riscv64-linux-gnu-",
             "qemu": qemu, "host_cc": host_cc, "sentinel": root / "slow-sentinel"}
 def collect_args(repo: Path, output: Path, tools: dict[str, Path]) -> list[str]:
-    return [sys.executable, str(COLLECTOR), "collect", "--repo-root", str(repo),
+    return [sys.executable, str(fixture_collector(repo)), "collect", "--repo-root", str(repo),
             "--output", str(output), "--toolprefix", str(tools["compiler_prefix"]),
             "--qemu", str(tools["qemu"]), "--make", str(tools["make"]),
             "--host-cc", str(tools["host_cc"]), "--python", sys.executable,
             "--bash", shutil.which("bash") or "bash", "--command-timeout", "30"]
 def start_gitlab_fixture(commit: str, pipeline_sha: str | None = None,
-                         missing_trace: bool = False, redirect_artifact_url: str | None = None
+                         missing_trace: bool = False, redirect_artifact_url: str | None = None,
+                         job_payloads: dict[int, tuple[bytes, bytes]] | None = None
                          ) -> tuple[ThreadingHTTPServer, threading.Thread, str]:
-    specs = (("kernel-budgets", 801, 901, "agentos-host-calibrated"),
-             ("reader-e2e", 802, 902, "agentos-qemu-calibrated"),
-             ("agent-regression", 803, 902, "agentos-qemu-calibrated"),
-             ("kernel-mechanism-regression", 804, 902, "agentos-qemu-calibrated"))
+    specs = JOB_SPECS
     actual_sha = pipeline_sha or commit
     project = {"id": 39809, "path_with_namespace": "contest/agentos",
                "web_url": "https://gitlab.example/contest/agentos"}
@@ -199,9 +804,13 @@ def start_gitlab_fixture(commit: str, pipeline_sha: str | None = None,
                     job_id, kind = int(match.group(1)), match.group(2)
                     if kind is None: value = details.get(job_id)
                     elif kind == "trace" and not (missing_trace and job_id == 804):
-                        value = f"job {job_id} trace passed\n".encode(); content_type = "text/plain"
+                        value = (job_payloads or {}).get(
+                            job_id, (f"job {job_id} trace passed\n".encode(), b"")
+                        )[0]; content_type = "text/plain"
                     elif kind == "artifacts":
-                        value = f"PK fixture artifact {job_id}".encode(); content_type = "application/zip"
+                        value = (job_payloads or {}).get(
+                            job_id, (b"", f"PK fixture artifact {job_id}".encode())
+                        )[1]; content_type = "application/zip"
             if value is None:
                 self.send_error(404); return
             data = value if isinstance(value, bytes) else json.dumps(value).encode()
@@ -215,12 +824,12 @@ def start_gitlab_fixture(commit: str, pipeline_sha: str | None = None,
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
     return server, thread, f"http://127.0.0.1:{server.server_address[1]}"
-def start_redirect_sink() -> tuple[ThreadingHTTPServer, threading.Thread, str, list[str | None]]:
+def start_redirect_sink(payload: bytes) -> tuple[ThreadingHTTPServer, threading.Thread, str, list[str | None]]:
     observed: list[str | None] = []
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             observed.append(self.headers.get("PRIVATE-TOKEN"))
-            data = b"PK redirected fixture artifact"
+            data = payload
             self.send_response(200); self.send_header("Content-Length", str(len(data)))
             self.end_headers(); self.wfile.write(data)
         def log_message(self, format: str, *args: object) -> None:
@@ -231,7 +840,9 @@ def start_redirect_sink() -> tuple[ThreadingHTTPServer, threading.Thread, str, l
 class FinalEvidenceTests(unittest.TestCase):
     def assert_verify_rejected(self, bundle: Path, cwd: Path, message: str) -> None:
         rewrite_checksums(bundle)
-        result = run([sys.executable, str(COLLECTOR), "verify", str(bundle)], cwd, check=False)
+        result = run([sys.executable, str(fixture_collector(cwd)), "verify", str(bundle)], cwd,
+                     check=False)
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
         self.assertIn(message, result.stderr)
     def assert_metric_tamper_rejected(self, bundle: Path, cwd: Path, key: str, replacement: tuple[str, str], message: str) -> None:
         manifest_path, manifest_bytes = bundle / "manifest.json", (bundle / "manifest.json").read_bytes()
@@ -245,11 +856,26 @@ class FinalEvidenceTests(unittest.TestCase):
         self.assert_verify_rejected(bundle, cwd, message)
         target.write_bytes(original)
         manifest_path.write_bytes(manifest_bytes)
+    def test_semantic_registry_has_one_rule_per_static_raw_artifact(self) -> None:
+        registered = [artifact for rule in RAW_ARTIFACT_REGISTRY for artifact in rule.artifacts]
+        expected = {
+            artifact for artifacts in PROFILE_ARTIFACTS.values() for artifact in artifacts
+            if not artifact.startswith("reader-e2e-run-")
+        }
+        self.assertEqual(set(registered), expected)
+        self.assertEqual(len(registered), len(set(registered)))
+        for name in (
+            "proc-reap.log", "syscall-fairness.log", "file-resource.log",
+            "thread-resource.log", "physical-resource.log", "metadata-recovery.log",
+            "observe-recovery.log", "virtio-disk.log", "workflow-teardown-race.log",
+            "fs-enospc.log", "fs-allocator-fault.log",
+        ):
+            self.assertEqual(sum(name in rule.artifacts for rule in RAW_ARTIFACT_REGISTRY), 1)
     def test_kernel_budget_metrics_are_bound_to_unique_block(self) -> None:
         namespace = __import__("runpy").run_path(str(COLLECTOR))
         parse_measurements = namespace["parse_measurements"]
         evidence_error = namespace["EvidenceError"]
-        canonical = [
+        kernel = [
             "[kernel-budget] kernel source (os): actual=100 lines baseline=90 lines limit=110 lines",
             "[kernel-budget] stripped kernel ELF: actual=100 bytes baseline=90 bytes limit=110 bytes",
             "[kernel-budget] raw kernel image: actual=100 bytes baseline=90 bytes limit=110 bytes",
@@ -262,12 +888,28 @@ class FinalEvidenceTests(unittest.TestCase):
             "boot stack budget: root=main path=1 interrupt=1 margin=1 required=81 limit=100",
             "[kernel-budget] kernel checks passed",
         ]
+        aggregate = [
+            "[kernel-budget] agent-modules checks begin",
+            "[kernel-budget] Agent aggregate metadata_control_plane source_lines: actual=80 lines baseline=70 lines limit=90 lines",
+            "[kernel-budget] Agent aggregate metadata_control_plane source_bytes: actual=8000 bytes baseline=7000 bytes limit=9000 bytes",
+            "[kernel-budget] Agent aggregate metadata_control_plane loaded_text_bytes: actual=6000 bytes baseline=5000 bytes limit=7000 bytes",
+            "[kernel-budget] Agent aggregate metadata_control_plane bss_bytes: actual=2000 bytes baseline=1500 bytes limit=2500 bytes",
+            "[kernel-budget] agent-modules checks passed",
+        ]
+        canonical = kernel + aggregate
         config = {
             "agent_test_suite": {"expected_cases": ["case_one", "case_two"],
                                  "baseline_seconds": 2.0, "max_seconds": 4.0},
             "kernel_stack": {"baseline_required_bytes": 100, "max_required_bytes": 110,
                              "stack_size_bytes": 120, "baseline_boot_required_bytes": 80,
                              "max_boot_required_bytes": 90, "boot_stack_size_bytes": 100},
+            "agent_modules": {"aggregate_budgets": [{
+                "name": "metadata_control_plane",
+                "baseline_source_lines": 70, "max_source_lines": 90,
+                "baseline_source_bytes": 7000, "max_source_bytes": 9000,
+                "baseline_loaded_text_bytes": 5000, "max_loaded_text_bytes": 7000,
+                "baseline_bss_bytes": 1500, "max_bss_bytes": 2500,
+            }]},
         }
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
@@ -284,27 +926,61 @@ class FinalEvidenceTests(unittest.TestCase):
             self.assertEqual(metrics["kernel_stack_required_bytes"]["actual"], 101)
             self.assertEqual(metrics["boot_stack_required_bytes"]["actual"], 81)
             self.assertEqual(metrics["kernel_stack_required_bytes"]["source_line"],
-                             lines.index(canonical[8]) + 1)
+                             lines.index(kernel[8]) + 1)
+            self.assertEqual(
+                tuple((metrics[f"metadata_control_plane_{name}"]["actual"],
+                       metrics[f"metadata_control_plane_{name}"]["unit"])
+                      for name in ("source_lines", "source_bytes", "loaded_text_bytes", "bss_bytes")),
+                ((80, "lines"), (8000, "bytes"), (6000, "bytes"), (2000, "bytes")),
+            )
+            self.assertEqual(metrics["metadata_control_plane_source_lines"]["source_line"],
+                             lines.index(aggregate[1]) + 1)
+            wrong_unit = aggregate[1].replace("80 lines", "80 bytes").replace(
+                "70 lines", "70 bytes").replace("90 lines", "90 bytes")
             malformed = (
-                (canonical[:9] + [canonical[8]] + canonical[9:], "duplicate stack metric"),
-                (canonical[:10] + [canonical[9]] + canonical[10:], "duplicate stack metric"),
-                (canonical + canonical, "multiple kernel budget blocks"),
-                (canonical[:1] + canonical, "multiple kernel budget blocks"),
-                (canonical[:-1], "unterminated"),
-                (canonical[:-1] + [" " + canonical[-1]], "unterminated"),
-                (canonical[1:], "block boundary"),
-                ([canonical[-1]] + canonical, "block boundary"),
-                (canonical[:2] + [canonical[1]] + canonical[2:], "duplicate kernel metric"),
-                (canonical + [canonical[-1]], "block boundary"),
-                (outside + canonical[:8] + canonical[9:] + outside,
+                (kernel[:9] + [kernel[8]] + kernel[9:] + aggregate, "duplicate stack metric"),
+                (kernel[:10] + [kernel[9]] + kernel[10:] + aggregate, "duplicate stack metric"),
+                (canonical + kernel, "multiple kernel budget blocks"),
+                (kernel[:1] + canonical, "multiple kernel budget blocks"),
+                (kernel[:-1], "kernel budget block is unterminated"),
+                (kernel[:-1] + [" " + kernel[-1]], "kernel budget block is unterminated"),
+                (kernel[1:] + aggregate, "kernel budget block boundary"),
+                ([kernel[-1]] + canonical, "kernel budget block boundary"),
+                (kernel[:2] + [kernel[1]] + kernel[2:] + aggregate, "duplicate kernel metric"),
+                (canonical + [kernel[-1]], "kernel budget block boundary"),
+                (outside + kernel[:8] + kernel[9:] + aggregate + outside,
                  "kernel_stack_required_bytes"),
-                ([canonical[1]] + canonical[:1] + canonical[2:], "stripped_kernel_elf_bytes"),
+                ([kernel[1]] + kernel[:1] + kernel[2:] + aggregate, "stripped_kernel_elf_bytes"),
+                (kernel + aggregate[:2] + [aggregate[1]] + aggregate[2:], "duplicate metadata aggregate"),
+                (kernel + aggregate[:1] + aggregate[2:], "metadata_control_plane_source_lines"),
+                (kernel + [aggregate[1]] + aggregate, "outside its budget block"),
+                (canonical + [aggregate[1]], "outside its budget block"),
+                (kernel + aggregate[1:], "outside its budget block"),
+                (canonical[:-1], "agent module budget block is unterminated"),
+                (canonical[:-1] + [" " + aggregate[-1]], "agent module budget block is unterminated"),
+                (kernel + [aggregate[0]] + aggregate, "agent module budget block boundary"),
+                (canonical + [aggregate[-1]], "agent module budget block boundary"),
+                (kernel + [aggregate[-1]] + aggregate, "agent module budget block boundary"),
+                (kernel + aggregate[:1] + [aggregate[1].replace("source_lines", "source_words")]
+                 + aggregate[2:], "unexpected metadata aggregate metric"),
+                (kernel + aggregate[:1] + [wrong_unit] + aggregate[2:],
+                 "metadata aggregate log and configuration differ"),
             )
             for index, (contents, message) in enumerate(malformed):
                 with self.subTest(index=index, message=message):
                     full_log.write_text("\n".join(contents) + "\n")
                     with self.assertRaisesRegex(evidence_error, message):
                         parse_measurements(full_log, timing_log, config)
+            full_log.write_text("\n".join(canonical) + "\n")
+            for field in (
+                "baseline_source_lines", "max_source_lines", "baseline_source_bytes", "max_source_bytes",
+                "baseline_loaded_text_bytes", "max_loaded_text_bytes", "baseline_bss_bytes", "max_bss_bytes",
+            ):
+                with self.subTest(config_field=field):
+                    changed = json.loads(json.dumps(config))
+                    changed["agent_modules"]["aggregate_budgets"][0][field] += 1
+                    with self.assertRaisesRegex(evidence_error, "log and configuration differ"):
+                        parse_measurements(full_log, timing_log, changed)
     def test_summary_inventory_is_generated_and_atomic(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)
@@ -315,7 +991,11 @@ class FinalEvidenceTests(unittest.TestCase):
             run([sys.executable, str(COLLECTOR), "write-summary", "--stage", str(stage),
                  "--steps", str(steps), "--commit", commit], REPO)
             summary = json.loads((incoming / "verification-summary.json").read_text())
-            self.assertEqual(summary["full_verify_profile_version"], 1)
+            self.assertEqual((summary["schema_version"], summary["full_verify_profile_version"]), (6, 5))
+            canonical_steps = json.dumps(summary["steps"], ensure_ascii=True,
+                                         sort_keys=True, separators=(",", ":"))
+            self.assertEqual(summary["step_contract_sha256"],
+                             __import__("hashlib").sha256(canonical_steps.encode()).hexdigest())
             self.assertEqual([step["name"] for step in summary["steps"]], list(PROFILE_ARTIFACTS))
             self.assertEqual({item["name"] for item in summary["artifacts"]},
                              {item for items in PROFILE_ARTIFACTS.values() for item in items})
@@ -374,6 +1054,10 @@ CAPTURE_OUT={shlex.quote(str(base / 'evidence'))} run_resource_regression \
 test "$(cat {shlex.quote(str(base / 'normal'))})" = 3,5s
 test "$(cat {shlex.quote(str(base / 'evidence'))})" = 3,5s
 test -s "${{EVIDENCE_INCOMING_DIR}}/race.log"
+grep -Fq '===== runner-stdout:race =====' "${{EVIDENCE_INCOMING_DIR}}/race.log"
+grep -Fq 'runner passed' "${{EVIDENCE_INCOMING_DIR}}/race.log"
+grep -Fq '===== runner-guest-logs:race =====' "${{EVIDENCE_INCOMING_DIR}}/race.log"
+grep -Fq 'guest' "${{EVIDENCE_INCOMING_DIR}}/race.log"
 tee() {{ command cat >/dev/null; return 9; }}
 if evidence_capture "${{EVIDENCE_WORK_DIR}}/tee.log" bash -c 'echo x'; then
   exit 20
@@ -384,6 +1068,101 @@ test "${{status}}" -eq 74
 """
             result = run(["bash", "-c", script], REPO, check=False)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+    @unittest.skipUnless(os.name == "posix", "CI mechanism fixture is POSIX-only")
+    def test_ci_mechanism_preserves_runner_and_multiboot_guest_logs(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            runner = base / "runner.sh"
+            executable(runner, """#!/usr/bin/env bash
+set -eu
+printf 'runner phase one\nrunner phase two\n'
+printf '===== guest:boot1 =====\nboot1 marker\n===== end-guest:boot1 =====\n' >"${EVIDENCE_GUEST_LOG_FILE}"
+printf '===== guest:boot2 =====\nboot2 marker\n===== end-guest:boot2 =====\n' >>"${EVIDENCE_GUEST_LOG_FILE}"
+""")
+            artifacts = base / "artifacts"
+            result = run(
+                ["bash", str(CI_MECHANISM), "multiboot", str(runner)],
+                REPO,
+                check=False,
+                env={**os.environ, "CI_ARTIFACT_DIR": str(artifacts)},
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            combined = (artifacts / "multiboot-combined.log").read_text()
+            for token in ("runner-stdout:multiboot", "runner phase two",
+                          "runner-guest-logs:multiboot", "guest:boot1", "guest:boot2"):
+                self.assertIn(token, combined)
+            runner.write_text(runner.read_text() + "exit 9\n")
+            failed = run(
+                ["bash", str(CI_MECHANISM), "failed", str(runner)],
+                REPO,
+                check=False,
+                env={**os.environ, "CI_ARTIFACT_DIR": str(artifacts)},
+            )
+            self.assertEqual(failed.returncode, 9, failed.stdout + failed.stderr)
+            failed_combined = (artifacts / "failed-combined.log").read_text()
+            for token in ("runner-stdout:failed", "runner phase two",
+                          "runner-guest-logs:failed", "guest:boot1", "guest:boot2"):
+                self.assertIn(token, failed_combined)
+
+    @unittest.skipUnless(os.name == "posix", "Agent policy fixture is POSIX-only")
+    def test_agent_duration_policy_fails_before_build_with_bounded_exceptions(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            base = Path(temp)
+            policy_marker = base / "policy"
+            make_marker = base / "make-called"
+            timing = base / "timings"
+            fake_python = base / "fake-python"
+            executable(fake_python, """#!/usr/bin/env bash
+case "$1" in
+scripts/test-sync-owner-wiring.py|scripts/test-wait-atomic-wiring.py|scripts/check-wait-queue-contract.py)
+    exit 0
+    ;;
+esac
+printf '%s\n' "$*" >"${POLICY_MARKER}"
+exit 23
+""")
+            executable(base / "make", """#!/usr/bin/env bash
+printf '%s\n' "$*" >"${MAKE_MARKER}"
+exit 91
+""")
+            env = dict(os.environ)
+            env.update({
+                "PATH": f"{base}:{env['PATH']}",
+                "PYTHON_BIN": str(fake_python),
+                "POLICY_MARKER": str(policy_marker),
+                "MAKE_MARKER": str(make_marker),
+                "AGENT_TEST_TIMING_FILE": str(timing),
+                "AGENT_TEST_CALIBRATE": "0",
+                "REQUIRE_FULL_SUITE": "1",
+            })
+            for name in ("AGENT_TEST_CASE", "FINAL_EVIDENCE_STAGE"):
+                env.pop(name, None)
+
+            full = run(["bash", "scripts/run-agent-tests.sh"], REPO,
+                       check=False, env=env)
+            self.assertEqual(full.returncode, 23, full.stdout + full.stderr)
+            self.assertIn("--check agent-test-policy", policy_marker.read_text())
+            self.assertFalse(make_marker.exists())
+            self.assertEqual(timing.read_text(), "")
+
+            policy_marker.unlink()
+            targeted_env = {**env, "AGENT_TEST_CASE": "agentfinal_ucore",
+                            "REQUIRE_FULL_SUITE": "0"}
+            targeted = run(["bash", "scripts/run-agent-tests.sh"], REPO,
+                           check=False, env=targeted_env)
+            self.assertEqual(targeted.returncode, 91, targeted.stdout + targeted.stderr)
+            self.assertFalse(policy_marker.exists())
+            self.assertTrue(make_marker.exists())
+
+            make_marker.unlink()
+            calibration_env = {**env, "AGENT_TEST_CALIBRATE": "1",
+                               "REQUIRE_FULL_SUITE": "1"}
+            calibration = run(["bash", "scripts/run-agent-tests.sh"], REPO,
+                              check=False, env=calibration_env)
+            self.assertEqual(calibration.returncode, 91,
+                             calibration.stdout + calibration.stderr)
+            self.assertFalse(policy_marker.exists())
+            self.assertTrue(make_marker.exists())
     @unittest.skipUnless(os.name == "posix", "detached worktree fixture is POSIX-only")
     def test_collect_verify_and_tamper_detection(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
@@ -418,8 +1197,20 @@ test "${{status}}" -eq 74
             self.assertEqual(tuple((float(metrics[name]["limit"]), int(metrics[name]["source_line"]) > 0)
                                    for name in ("kernel_stack_required_bytes", "boot_stack_required_bytes")),
                              ((110, True), (90, True)))
+            aggregates = {
+                "metadata_control_plane_source_lines": (80, 70, 90, "lines"),
+                "metadata_control_plane_source_bytes": (8000, 7000, 9000, "bytes"),
+                "metadata_control_plane_loaded_text_bytes": (6000, 5000, 7000, "bytes"),
+                "metadata_control_plane_bss_bytes": (2000, 1500, 2500, "bytes"),
+            }
+            for name, expected in aggregates.items():
+                row = metrics[name]
+                self.assertEqual((*tuple(float(row[key]) for key in ("actual", "baseline", "limit")),
+                                  row["unit"]), expected)
+                self.assertGreater(int(row["source_line"]), 0)
+                self.assertEqual(row["source_log"], "logs/full-verify.log")
             svg = (output / "charts" / "budget-usage.svg").read_text()
-            for token in ("agent_suite_total_seconds", "actual=", "baseline=", "limit=", "usage="):
+            for token in ("agent_suite_total_seconds", *aggregates, "actual=", "baseline=", "limit=", "usage="):
                 self.assertIn(token, svg)
             self.assertIn(manifest["command"]["log_sha256"], svg)
             timing_hash = next(item["sha256"] for item in manifest["raw_artifacts"]
@@ -427,14 +1218,171 @@ test "${{status}}" -eq 74
             self.assertIn(timing_hash, svg)
             self.assertEqual(manifest["metrics"]["chart_sha256"], __import__("hashlib").sha256(svg.encode()).hexdigest())
             self.assertIn(manifest["metrics"]["source_measurements_sha256"], svg)
-            verified = run([sys.executable, str(COLLECTOR), "verify", str(output)], repo)
+            verified = run([sys.executable, str(fixture_collector(repo)), "verify", str(output)], repo)
             self.assertEqual((json.loads(verified.stdout)["status"],
                               json.loads(verified.stdout)["remote_ci"]), ("ready", "not-attached"))
+            full_log_path = output / "logs/full-verify.log"
+            full_log_original = full_log_path.read_bytes()
+            completion = b"[full-verify] all checks passed\n"
+            self.assertEqual(full_log_original.count(completion), 1)
+            for payload in (full_log_original.replace(completion, b"", 1),
+                            full_log_original.replace(completion, completion * 2, 1)):
+                originals = rebind_full_log(output, payload)
+                try:
+                    self.assert_verify_rejected(output, repo, "completion marker")
+                finally:
+                    restore_files(output, originals)
+            manifest_path = output / "manifest.json"
+            command_path = output / "metrics/commands.csv"
+            command_originals = {path: path.read_bytes() for path in (manifest_path, command_path)}
+            wrong_command = ["/bin/true"]
+            command_manifest = json.loads(command_originals[manifest_path])
+            command_manifest["command"]["argv"] = wrong_command
+            with command_path.open(newline="", encoding="utf-8") as handle:
+                command_rows = list(csv.DictReader(handle)); command_fields = list(command_rows[0])
+            command_rows[0]["argv_json"] = json.dumps(wrong_command)
+            with command_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=command_fields)
+                writer.writeheader(); writer.writerows(command_rows)
+            command_manifest["metrics"]["command_csv"]["sha256"] = \
+                __import__("hashlib").sha256(command_path.read_bytes()).hexdigest()
+            manifest_path.write_text(json.dumps(command_manifest) + "\n", encoding="utf-8")
+            self.assert_verify_rejected(output, repo, "command argv is not canonical")
+            restore_files(output, command_originals)
+            benchmark_manifest_path = output / "metrics/file-query-benchmark.json"
+            benchmark_csv_path = output / "metrics/file-query-benchmark.csv"
+            benchmark_originals = {path: path.read_bytes() for path in (
+                manifest_path, benchmark_manifest_path, benchmark_csv_path)}
+            benchmark_manifest = json.loads(benchmark_originals[benchmark_manifest_path])
+            embedded_command = json.dumps(wrong_command, separators=(",", ":"))
+            benchmark_manifest["command"] = wrong_command
+            for row in benchmark_manifest["rows"]:
+                row["source_command_json"] = embedded_command
+            benchmark_manifest_path.write_text(
+                json.dumps(benchmark_manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+            with benchmark_csv_path.open(newline="", encoding="utf-8") as handle:
+                benchmark_rows = list(csv.DictReader(handle)); benchmark_fields = list(benchmark_rows[0])
+            for row in benchmark_rows:
+                row["source_command_json"] = embedded_command
+            with benchmark_csv_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=benchmark_fields)
+                writer.writeheader(); writer.writerows(benchmark_rows)
+            benchmark_top = json.loads(benchmark_originals[manifest_path])
+            for key, path in (("file_query_benchmark_manifest", benchmark_manifest_path),
+                              ("file_query_benchmark_csv", benchmark_csv_path)):
+                benchmark_top["metrics"][key]["sha256"] = \
+                    __import__("hashlib").sha256(path.read_bytes()).hexdigest()
+            manifest_path.write_text(json.dumps(benchmark_top) + "\n", encoding="utf-8")
+            self.assert_verify_rejected(output, repo, "benchmark command differs")
+            restore_files(output, benchmark_originals)
+            selected = base / "selected-proc"
+            selected.mkdir()
+            shutil.copyfile(output / "logs/raw/proc-reap.log", selected / "proc-reap.log")
+            validate_selected_artifacts(
+                ("proc-reap",), selected, repo, require_exact_inventory=True
+            )
+            (selected / "unbound.log").write_text("passed\n", encoding="utf-8")
+            with self.assertRaisesRegex(EvidenceSemanticError, "inventory differs"):
+                validate_selected_artifacts(
+                    ("proc-reap",), selected, repo, require_exact_inventory=True
+                )
+            semantic_logs = (
+                "proc-reap.log", "syscall-fairness.log", "file-resource.log",
+                "thread-resource.log", "physical-resource.log", "metadata-recovery.log",
+                "observe-recovery.log", "virtio-disk.log", "workflow-teardown-race.log",
+                "fs-enospc.log", "fs-allocator-fault.log",
+            )
+            for name in semantic_logs:
+                with self.subTest(passed_only_artifact=name):
+                    originals = rebind_raw_artifact(
+                        output, name, f"{name} passed\n".encode("utf-8")
+                    )
+                    try:
+                        self.assert_verify_rejected(output, repo, name.removesuffix(".log"))
+                    finally:
+                        restore_raw_artifact(output, name, originals)
+            metadata_path = output / "logs/raw/metadata-recovery.log"
+            metadata_full = metadata_path.read_text(encoding="utf-8")
+            missing_tag = "metadata-agentmetatransient_ucore-large-corrupt"
+            start = f"===== guest:{missing_tag} =====\n"
+            end = f"===== end-guest:{missing_tag} =====\n"
+            before, separator, tail = metadata_full.partition(start)
+            self.assertTrue(separator)
+            _, separator, after = tail.partition(end)
+            self.assertTrue(separator)
+            originals = rebind_raw_artifact(
+                output,
+                "metadata-recovery.log",
+                (before + after).encode("utf-8"),
+            )
+            try:
+                self.assert_verify_rejected(output, repo, "Guest tag inventory differs")
+            finally:
+                restore_raw_artifact(output, "metadata-recovery.log", originals)
+            originals = rebind_raw_artifact(
+                output,
+                "observe-recovery-before-reap.img",
+                b"fixture-observe-image\0",
+            )
+            try:
+                self.assert_verify_rejected(
+                    output, repo, "observation durable disk image"
+                )
+            finally:
+                restore_raw_artifact(
+                    output, "observe-recovery-before-reap.img", originals
+                )
+            framed_proc_fake = """===== runner-stdout:proc-reap =====
+[proc-reap] both targets passed
+
+===== runner-guest-logs:proc-reap =====
+===== guest:proc-reap:agent =====
+procreap_ucore: parent passed
+===== end-guest:proc-reap:agent =====
+===== guest:proc-reap:agent-adversarial =====
+procreap_agent_ucore: parent passed
+===== end-guest:proc-reap:agent-adversarial =====
+===== guest:proc-reap:baseline =====
+procreap_ucore: parent passed
+===== end-guest:proc-reap:baseline =====
+""".encode("utf-8")
+            originals = rebind_raw_artifact(output, "proc-reap.log", framed_proc_fake)
+            try:
+                self.assert_verify_rejected(output, repo, "proc-reap")
+            finally:
+                restore_raw_artifact(output, "proc-reap.log", originals)
             summary_path = output / "verification-summary.json"
             manifest_path = output / "manifest.json"
+            fs_archive = output / "logs/raw/fs-allocator-evidence.tar"
+            original_archive = fs_archive.read_bytes()
+            original_fs_summary = summary_path.read_bytes()
+            original_fs_manifest = manifest_path.read_bytes()
+            fs_archive.write_bytes(original_archive + b"noncanonical")
+            fs_hash = __import__("hashlib").sha256(fs_archive.read_bytes()).hexdigest()
+            fs_summary = json.loads(original_fs_summary)
+            fs_record = next(item for item in fs_summary["artifacts"]
+                             if item["name"] == "fs-allocator-evidence.tar")
+            fs_record.update({"bytes": fs_archive.stat().st_size, "sha256": fs_hash})
+            summary_path.write_text(json.dumps(fs_summary) + "\n")
+            fs_manifest = json.loads(original_fs_manifest)
+            raw_record = next(item for item in fs_manifest["raw_artifacts"]
+                              if item["name"] == "fs-allocator-evidence.tar")
+            raw_record.update({"bytes": fs_archive.stat().st_size, "sha256": fs_hash})
+            fs_manifest["verification_summary"]["sha256"] = \
+                __import__("hashlib").sha256(summary_path.read_bytes()).hexdigest()
+            manifest_path.write_text(json.dumps(fs_manifest) + "\n")
+            self.assert_verify_rejected(
+                output, repo,
+                "filesystem allocator evidence archive semantic validation failed",
+            )
+            fs_archive.write_bytes(original_archive)
+            summary_path.write_bytes(original_fs_summary)
+            manifest_path.write_bytes(original_fs_manifest)
+            rewrite_checksums(output)
             original_summary, original_manifest = summary_path.read_bytes(), manifest_path.read_bytes()
             for kind, message in (("negative-duration", "step timing is invalid"),
                                   ("zero-start", "step timing is invalid"),
+                                  ("invalid-step-hash", "step contract hash differs"),
                                   ("invalid-calendar", "summary provenance is invalid")):
                 malformed = json.loads(original_summary)
                 if kind == "negative-duration":
@@ -442,6 +1390,8 @@ test "${{status}}" -eq 74
                 elif kind == "zero-start":
                     malformed["steps"][0].update(
                         {"started_epoch": 0, "ended_epoch": 1, "duration_seconds": 1})
+                elif kind == "invalid-step-hash":
+                    malformed["step_contract_sha256"] = "0" * 64
                 else:
                     malformed["completed_at_utc"] = "2026-02-30T12:00:00Z"
                 summary_path.write_text(json.dumps(malformed) + "\n")
@@ -454,6 +1404,31 @@ test "${{status}}" -eq 74
                 rewrite_checksums(output)
             self.assert_metric_tamper_rejected(output, repo, "command_csv",
                                                ("make full-verify", "forged command"), "command CSV differs")
+            command_path = output / "metrics/commands.csv"
+            original_command_csv = command_path.read_bytes()
+            original_command_manifest = manifest_path.read_bytes()
+            for kind in ("nan-elapsed", "empty-shape", "typed-shape"):
+                with self.subTest(command_contract=kind):
+                    with command_path.open(newline="", encoding="utf-8") as handle:
+                        rows = list(csv.DictReader(handle)); fields = list(rows[0])
+                    command_manifest = json.loads(original_command_manifest)
+                    if kind == "nan-elapsed":
+                        rows[0]["elapsed_seconds"] = "nan"; message = "command CSV differs"
+                    else:
+                        argv = [] if kind == "empty-shape" else [1]
+                        environment = {} if kind == "empty-shape" else {"PATH": 1}
+                        command_manifest["command"].update({"argv": argv, "environment": environment})
+                        rows[0]["argv_json"] = json.dumps(argv); message = "did not succeed"
+                    with command_path.open("w", newline="", encoding="utf-8") as handle:
+                        writer = csv.DictWriter(handle, fieldnames=fields)
+                        writer.writeheader(); writer.writerows(rows)
+                    command_manifest["metrics"]["command_csv"]["sha256"] = \
+                        __import__("hashlib").sha256(command_path.read_bytes()).hexdigest()
+                    manifest_path.write_text(json.dumps(command_manifest), encoding="utf-8")
+                    self.assert_verify_rejected(output, repo, message)
+                    command_path.write_bytes(original_command_csv)
+                    manifest_path.write_bytes(original_command_manifest)
+            rewrite_checksums(output)
             self.assert_metric_tamper_rejected(output, repo, "chart",
                                                ("</svg>", "<metadata>forged</metadata></svg>"), "chart provenance")
             original_manifest = (output / "manifest.json").read_bytes()
@@ -464,12 +1439,64 @@ test "${{status}}" -eq 74
             (output / "manifest.json").write_bytes(original_manifest)
             rewrite_checksums(output)
             metric_path = output / "metrics/measurements.csv"
-            original_metrics = metric_path.read_text(encoding="utf-8")
+            original_metrics_bytes = metric_path.read_bytes()
+            original_metrics = original_metrics_bytes.decode("utf-8")
             metric_path.write_text("\n".join(line for line in original_metrics.splitlines()
-                                              if not line.startswith("kernel_stack_required_bytes,"))
+                                              if not line.startswith("metadata_control_plane_bss_bytes,"))
                                    + "\n", encoding="utf-8")
-            self.assert_verify_rejected(output, repo, "critical metrics")
-            metric_path.write_text(original_metrics, encoding="utf-8")
+            self.assert_verify_rejected(output, repo, "critical metric")
+            metric_path.write_bytes(original_metrics_bytes)
+            rewrite_checksums(output)
+            duplicate = next(line for line in original_metrics.splitlines()
+                             if line.startswith("metadata_control_plane_source_lines,"))
+            metric_path.write_text(original_metrics + duplicate + "\n", encoding="utf-8")
+            self.assert_verify_rejected(output, repo, "critical metric")
+            metric_path.write_bytes(original_metrics_bytes)
+            rewrite_checksums(output)
+            chart_path = output / "charts/budget-usage.svg"
+            metric_manifest_path = output / "manifest.json"
+            original_chart = chart_path.read_bytes()
+            original_metric_manifest = metric_manifest_path.read_bytes()
+            with metric_path.open(newline="", encoding="utf-8") as handle:
+                metric_rows = list(csv.DictReader(handle)); metric_fields = list(metric_rows[0])
+            aggregate_row = next(row for row in metric_rows
+                                 if row["metric"] == "metadata_control_plane_source_lines")
+            aggregate_row.update({"actual": "81.0", "usage_ratio": "0.9"})
+            with metric_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=metric_fields)
+                writer.writeheader(); writer.writerows(metric_rows)
+            metric_manifest = json.loads(original_metric_manifest)
+            old_hash = metric_manifest["metrics"]["measurements_csv"]["sha256"]
+            new_hash = __import__("hashlib").sha256(metric_path.read_bytes()).hexdigest()
+            chart_path.write_text(original_chart.decode().replace(old_hash, new_hash), encoding="utf-8")
+            chart_hash = __import__("hashlib").sha256(chart_path.read_bytes()).hexdigest()
+            metric_manifest["metrics"]["measurements_csv"]["sha256"] = new_hash
+            metric_manifest["metrics"]["source_measurements_sha256"] = new_hash
+            metric_manifest["metrics"]["chart"]["sha256"] = chart_hash
+            metric_manifest["metrics"]["chart_sha256"] = chart_hash
+            metric_manifest_path.write_text(json.dumps(metric_manifest), encoding="utf-8")
+            self.assert_verify_rejected(output, repo, "measurements CSV differs from raw evidence")
+            metric_path.write_bytes(original_metrics_bytes)
+            chart_path.write_bytes(original_chart)
+            metric_manifest_path.write_bytes(original_metric_manifest)
+            rewrite_checksums(output)
+            case_path = output / "metrics/agent-case-timings.csv"
+            original_cases = case_path.read_bytes()
+            original_case_manifest = metric_manifest_path.read_bytes()
+            with case_path.open(newline="", encoding="utf-8") as handle:
+                case_rows = list(csv.DictReader(handle)); case_fields = list(case_rows[0])
+            case_rows[0]["seconds"], case_rows[-1]["seconds"] = \
+                case_rows[-1]["seconds"], case_rows[0]["seconds"]
+            with case_path.open("w", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=case_fields)
+                writer.writeheader(); writer.writerows(case_rows)
+            case_manifest = json.loads(original_case_manifest)
+            case_manifest["metrics"]["agent_timings_csv"]["sha256"] = \
+                __import__("hashlib").sha256(case_path.read_bytes()).hexdigest()
+            metric_manifest_path.write_text(json.dumps(case_manifest), encoding="utf-8")
+            self.assert_verify_rejected(output, repo, "Agent timing CSV differs from raw evidence")
+            case_path.write_bytes(original_cases)
+            metric_manifest_path.write_bytes(original_case_manifest)
             rewrite_checksums(output)
             for relative in ("metrics/measurements.csv", "metrics/agent-case-timings.csv", "metrics/commands.csv"):
                 csv_path, original = output / relative, (output / relative).read_text(encoding="utf-8")
@@ -480,7 +1507,7 @@ test "${{status}}" -eq 74
             reader_path = output / "logs/raw/reader-e2e.log"
             reader_original = reader_path.read_bytes()
             reader_path.write_text("tampered\n")
-            rejected = run([sys.executable, str(COLLECTOR), "verify", str(output)], repo,
+            rejected = run([sys.executable, str(fixture_collector(repo)), "verify", str(output)], repo,
                            check=False)
             self.assertNotEqual(rejected.returncode, 0)
             self.assertIn("checksum mismatch", rejected.stderr)
@@ -508,11 +1535,14 @@ test "${{status}}" -eq 74
             token_path = base / "gitlab-token.txt"
             token_path.write_text("fixture-token\n")
             combined = base / "combined"
-            sink, sink_thread, redirect_url, observed_tokens = start_redirect_sink()
+            job_payloads = build_remote_job_payloads(repo, local, commit)
+            sink, sink_thread, redirect_url, observed_tokens = start_redirect_sink(
+                job_payloads[804][1]
+            )
             server, thread, gitlab_url = start_gitlab_fixture(
-                commit, redirect_artifact_url=redirect_url)
+                commit, redirect_artifact_url=redirect_url, job_payloads=job_payloads)
             try:
-                run([sys.executable, str(COLLECTOR), "bind-remote-ci", "--bundle", str(local),
+                run([sys.executable, str(fixture_collector(repo)), "bind-remote-ci", "--bundle", str(local),
                      "--output", str(combined), "--gitlab-url", gitlab_url,
                      "--project-id", "39809", "--pipeline-id", "701",
                      "--token-file", str(token_path)], repo)
@@ -526,14 +1556,19 @@ test "${{status}}" -eq 74
                              ("provenance-attached", commit))
             for relative in ("remote-ci/provenance.json", "remote-ci/api/project.json",
                              "remote-ci/api/pipeline.json", "remote-ci/api/pipeline-jobs.json",
-                             "remote-ci/jobs/kernel-budgets.trace.log",
-                             "remote-ci/jobs/kernel-budgets.artifacts.zip",
-                             "remote-ci/jobs/kernel-mechanism-regression.trace.log"):
+                              "remote-ci/jobs/kernel-budgets.trace.log",
+                              "remote-ci/jobs/kernel-budgets.artifacts.zip",
+                              "remote-ci/jobs/kernel-mechanism-regression.trace.log",
+                              "remote-ci/jobs/physical-resource-regression.trace.log",
+                              "remote-ci/jobs/metadata-recovery-regression.trace.log",
+                              "remote-ci/jobs/observe-recovery-regression.trace.log",
+                              "remote-ci/jobs/virtio-disk-regression.trace.log",
+                              "remote-ci/jobs/fs-allocator-fault-regression.trace.log"):
                 self.assertTrue((combined / relative).is_file(), relative)
             self.assertNotIn("fixture-token", "".join(
                 path.read_text(encoding="utf-8", errors="ignore")
                 for path in combined.rglob("*") if path.is_file()))
-            verified = json.loads(run([sys.executable, str(COLLECTOR), "verify", str(combined)],
+            verified = json.loads(run([sys.executable, str(fixture_collector(repo)), "verify", str(combined)],
                                       repo).stdout)
             self.assertEqual((verified["status"], verified["remote_ci"]),
                              ("ready", "provenance-attached"))
@@ -555,9 +1590,10 @@ test "${{status}}" -eq 74
                 ("missing-trace", {"missing_trace": True}, "API request failed"),
             ):
                 rejected_output = base / label
-                server, thread, gitlab_url = start_gitlab_fixture(commit, **options)
+                server, thread, gitlab_url = start_gitlab_fixture(
+                    commit, job_payloads=job_payloads, **options)
                 try:
-                    result = run([sys.executable, str(COLLECTOR), "bind-remote-ci",
+                    result = run([sys.executable, str(fixture_collector(repo)), "bind-remote-ci",
                                   "--bundle", str(local), "--output", str(rejected_output),
                                   "--gitlab-url", gitlab_url, "--project-id", "39809",
                                   "--pipeline-id", "701", "--token-file", str(token_path)],
@@ -567,6 +1603,26 @@ test "${{status}}" -eq 74
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(message, result.stderr)
                 self.assertFalse(rejected_output.exists())
+            forged_payloads = build_remote_job_payloads(
+                repo, local, commit, forge_semantic_job="physical-resource-regression"
+            )
+            server, thread, gitlab_url = start_gitlab_fixture(
+                commit, job_payloads=forged_payloads
+            )
+            forged_output = base / "self-consistent-fake"
+            try:
+                forged_result = run(
+                    [sys.executable, str(fixture_collector(repo)), "bind-remote-ci",
+                     "--bundle", str(local), "--output", str(forged_output),
+                     "--gitlab-url", gitlab_url, "--project-id", "39809",
+                     "--pipeline-id", "701", "--token-file", str(token_path)],
+                    repo, check=False,
+                )
+            finally:
+                server.shutdown(); server.server_close(); thread.join(timeout=5)
+            self.assertEqual(forged_result.returncode, 1, forged_result.stdout + forged_result.stderr)
+            self.assertIn("execution attestation is invalid", forged_result.stderr)
+            self.assertFalse(forged_output.exists())
             trace = combined / "remote-ci/jobs/kernel-budgets.trace.log"
             trace.write_text("forged trace\n")
             self.assert_verify_rejected(combined, repo, "manifest file hash differs")
@@ -577,6 +1633,10 @@ test "${{status}}" -eq 74
             dirty = base / "dirty"
             dirty.mkdir()
             tools = init_fixture_repo(dirty)
+            invalid_timeout = collect_args(dirty, base / "invalid-timeout", tools)
+            invalid_timeout[-1] = "nan"
+            invalid = run(invalid_timeout, dirty, check=False)
+            self.assertIn("command timeout is invalid", invalid.stderr)
             (dirty / "dirty.txt").write_text("dirty\n")
             output = base / "dirty-release"
             result = run(collect_args(dirty, output, tools), dirty, check=False)
@@ -593,7 +1653,7 @@ test "${{status}}" -eq 74
             self.assertTrue((base / "failed-release.failed" / "failure.json").is_file())
             for label, options, message in (
                 ("bad-stack", {"bad_stack": True}, "stack capacity"),
-                ("bad-timing", {"bad_timing": True}, "timing cases"),
+                ("bad-timing", {"bad_timing": True}, "Agent suite Guest tag inventory"),
             ):
                 repo = base / label
                 repo.mkdir()
@@ -629,42 +1689,122 @@ test "${{status}}" -eq 74
             self.assertFalse(interrupt_tools["sentinel"].exists())
     def test_public_contract_grace_ci_and_trackability(self) -> None:
         collector = COLLECTOR.read_text(encoding="utf-8")
+        makefile = (REPO / "Makefile").read_text(encoding="utf-8")
         wiring = (REPO / "scripts" / "evidence-wiring.sh").read_text(encoding="utf-8")
         full = (REPO / "scripts" / "run-full-verification.sh").read_text(encoding="utf-8")
         structure = (REPO / "scripts" / "verify-dual-target-structure.sh").read_text(encoding="utf-8")
         evidence_readme = (REPO / "evidence" / "README.md").read_text(encoding="utf-8")
         ci = (REPO / ".gitlab-ci.yml").read_text(encoding="utf-8")
-        self.assertLessEqual(len(collector.splitlines()), 1400)
+        effective_ci = validate_repository_ci(
+            REPO / ".gitlab-ci.yml", REPO / "ci" / "kernel-budgets.json"
+        )
+        host_start = makefile.index("override HOST_CONTRACT_TESTS :=")
+        host_end = makefile.index("\nhost-contract-selftest:", host_start)
+        host_inventory = set(__import__("re").findall(
+            r"host_tools/test_[A-Za-z0-9_]+\.py", makefile[host_start:host_end]
+        ))
+        all_host_tests = {
+            path.relative_to(REPO).as_posix()
+            for path in (REPO / "host_tools").glob("test_*.py")
+        }
+        self.assertEqual(host_inventory, all_host_tests - {
+            "host_tools/test_capture_final_evidence.py",
+            "host_tools/test_evidence_delivery_contract.py",
+            "host_tools/test_plain_ucore_reader_e2e.py",
+        })
+        # Provenance extraction lives in a separate module; the collector only
+        # gained the fail-closed wiring and verification boundary.
+        self.assertLessEqual(len(collector.splitlines()), 1450)
+        for module, limit in (
+            (SEMANTIC_COMMON, 250), (SEMANTIC_PROFILES, 650),
+            (SEMANTIC_METADATA, 225), (SEMANTIC_REGISTRY, 225),
+            (REPO / "host_tools" / "agent_observe_disk_acceptance.py", 150),
+            (REPO / "host_tools" / "agent_observe_disk_contract.py", 400),
+            (REPO / "host_tools" / "agent_observe_disk_evidence.py", 750),
+            (REPO / "host_tools" / "agent_observe_disk_fixture.py", 350),
+        ):
+            self.assertLessEqual(len(module.read_text(encoding="utf-8").splitlines()), limit)
+        observe_host_lines = sum(
+            len((REPO / "host_tools" / name).read_text(encoding="utf-8").splitlines())
+            for name in ("agent_observe_disk_contract.py", "agent_observe_disk_evidence.py")
+        )
+        self.assertLessEqual(observe_host_lines, 980)
+        observe_acceptance_lines = observe_host_lines + len(
+            (REPO / "host_tools" / "agent_observe_disk_acceptance.py")
+            .read_text(encoding="utf-8").splitlines()
+        )
+        self.assertLessEqual(observe_acceptance_lines, 1120)
+        semantic_registry = SEMANTIC_REGISTRY.read_text(encoding="utf-8")
+        for token in ("RAW_ARTIFACT_REGISTRY", "validate_artifact",
+                      "validate_selected_artifacts", "validate_raw_artifacts"):
+            self.assertIn(token, semantic_registry)
+        self.assertLessEqual(
+            len(DELIVERY_CONTRACT.read_text(encoding="utf-8").splitlines()), 425
+        )
+        self.assertLessEqual(len(MEASUREMENT_MODULE.read_text(encoding="utf-8").splitlines()), 450)
+        # The contract now performs token-level control-flow and def-use
+        # validation instead of accepting a short list of source substrings.
+        self.assertLessEqual(
+            len(BENCHMARK_SOURCE_CONTRACT.read_text(encoding="utf-8").splitlines()),
+            400,
+        )
         self.assertLessEqual(len(wiring.splitlines()), 80)
         for token in ("write-summary", "PLAIN_UCORE_READER_E2E_LOG_DIR", "reader-e2e-log-manifest.json",
-                      'MECHANISM_MARKER_GRACE_SECONDS="${MECHANISM_MARKER_GRACE_SECONDS:-5s}"'):
+                      'MECHANISM_MARKER_GRACE_SECONDS="${MECHANISM_MARKER_GRACE_SECONDS:-5s}"',
+                      "--check agent-test-policy"):
             self.assertIn(token, full)
         self.assertLess(full.index("write-summary"), full.index("[full-verify] all checks passed"))
+        for once in ("host_tools/test_gitlab_ci_contract.py",
+                     "host_tools/test_measured_experiments.py",
+                     "host_tools/test_dual_measurement_source_contract.py"):
+            self.assertEqual(makefile.count(once), 1)
         self.assertNotIn("hash-tree", collector + full)
         self.assertNotIn("immutable CI artifact", collector)
-        for contract in ("'^SCHEMA_VERSION = 2$'", "'^FULL_VERIFY_PROFILE_VERSION = 1$'",
+        for contract in ("'^SCHEMA_VERSION = 6$'", "'^FULL_VERIFY_PROFILE_VERSION = 5$'",
                          "'^REMOTE_CI_SCHEMA_VERSION = 1$'"):
             self.assertIn(contract, structure)
         self.assertNotIn("'^SCHEMA_VERSION = 1$'", structure)
+        for document in (REPO / "README.md", REPO / "ci" / "README.md", REPO / "evidence" / "README.md"):
+            self.assertNotIn("schema v5", document.read_text(encoding="utf-8"))
         self.assertNotIn("依赖已提交的 Git 对象和不可变的 CI artifact", evidence_readme)
         for token in ("bind-remote-ci", "not-attached", "provenance-attached", "GitLab API",
                       "trace", "artifact"):
             self.assertIn(token, evidence_readme)
         for token in ("FULL_VERIFY_PROFILE_VERSION", "STEP_CONTRACT", "validate_settings",
+                      "step_contract_sha256",
                       "bind-remote-ci", "agent_marker_grace_seconds",
-                      "mechanism_marker_grace_seconds", "workflow_stability_runs"):
+                      "mechanism_marker_grace_seconds", "workflow_stability_runs",
+                      "FULL_VERIFY_TIMEOUT_SECONDS"):
             self.assertIn(token, collector)
         for name in ("reader-e2e.log", "dual-plain-qemu.log", "dual-agentos-qemu.log",
+                     "dual-targeted-agentbench-guest.log",
+                     "dual-measured-experiments.json", "dual-file-query-benchmark.csv",
                      "proc-reap.log", "syscall-fairness.log", "file-resource.log",
-                     "thread-resource.log", "workflow-teardown-race.log", "fs-enospc.log"):
+                      "thread-resource.log", "physical-resource.log", "metadata-recovery.log",
+                      "observe-recovery.log", "observe-recovery-before-reap.img", "virtio-disk.log",
+                     "workflow-teardown-race.log", "fs-enospc.log",
+                     "fs-allocator-fault.log", "fs-allocator-evidence.tar"):
             self.assertIn(f'"{name}"', collector)
         for name in ("proc-reap", "syscall-fairness", "file-resource", "thread-resource",
-                     "workflow-teardown-race", "fs-enospc"):
+                     "physical-resource", "metadata-recovery", "observe-recovery", "virtio-disk",
+                     "workflow-teardown-race", "fs-enospc", "fs-allocator-fault"):
             runner = (REPO / "scripts" / f"run-{name}-tests.sh").read_text()
             self.assertIn('MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS:-5s}"', runner)
         for token in ("MARKER_GRACE_SECONDS=2s", "MARKER_GRACE_SECONDS: 5s",
-                      "test_plain_ucore_action_runner.py", "stages:\n  - budget\n  - reader\n  - test"):
+                      "make ci-check", "stages:\n  - budget\n  - reader\n  - test"):
             self.assertIn(token, ci)
+        for token in ("physical-resource-regression", "metadata-recovery-regression",
+                      "observe-recovery-regression", "virtio-disk-regression",
+                      "fs-allocator-fault-regression", "run-ci-mechanism.sh",
+                      "ci-artifacts/"):
+            self.assertIn(token, ci)
+        for job, timeout in (("physical-resource-regression", "20m"),
+                             ("metadata-recovery-regression", "60m"),
+                             ("observe-recovery-regression", "25m"),
+                             ("virtio-disk-regression", "20m"),
+                             ("fs-allocator-fault-regression", "45m")):
+            self.assertEqual(effective_ci.definitions[job].parents(), (".agentos-mechanism",))
+            self.assertEqual(effective_ci.effective(job).field("timeout").scalar(), timeout)
         statuses = tuple(run(["git", "check-ignore", "-q", "--no-index", path], REPO, check=False).returncode
                          for path in ("probe.log", "evidence/releases/probe/logs/raw/probe.log"))
         self.assertEqual(statuses, (0, 1))

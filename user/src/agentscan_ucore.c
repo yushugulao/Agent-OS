@@ -4,10 +4,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include <exec_policy_manifest.h>
 
 static struct agent_file_query scan_query;
 static struct agent_file_query_result scan_result;
 
+static int query_physical(const char *name);
 static int query_status_physical(const char *status, const char *name);
 
 static void check(int ok, const char *msg)
@@ -21,6 +23,7 @@ static void check(int ok, const char *msg)
 static void wait_for_scan(uint64 min_runs)
 {
 	struct agent_info info;
+	int physical, indexed;
 
 	for (int i = 0; i < 1000; i++) {
 		check(agent_info(&info) == 0, "agent_info");
@@ -30,6 +33,19 @@ static void wait_for_scan(uint64 min_runs)
 			return;
 		sleep(10);
 	}
+	check(agent_info(&info) == 0, "final agent_info");
+	physical = query_physical("usershell");
+	if (physical > 0)
+		printf("agentscan_ucore: usershell_record status=%s dev=%llu inum=%llu incarnation=%llu\n",
+		       scan_result.hits[0].status, scan_result.hits[0].dev,
+		       scan_result.hits[0].inum, scan_result.hits[0].incarnation);
+	indexed = query_status_physical("present", "usershell");
+	printf("agentscan_ucore: scan_timeout runs=%llu min=%llu entries=%llu added=%llu updated=%llu removed=%llu pending=%llu failures=%llu deferred=%llu physical=%d indexed=%d\n",
+	       info.file_scan_runs, min_runs, info.file_scan_entries,
+	       info.file_scan_added, info.file_scan_updated,
+	       info.file_scan_removed,
+	       info.file_scan_pending, info.file_scan_failures,
+	       info.file_scan_deferred, physical, indexed);
 	check(0, "background scan did not finish");
 }
 
@@ -69,6 +85,7 @@ static void run_agent(void)
 	struct agent_info before;
 	struct agent_info after;
 	const char *auto_name = "autoscan_ok";
+	char worker_image[11];
 
 	check(agent_file_meta_init() == 0, "meta init");
 	check(agent_info(&before) == 0, "before info");
@@ -83,9 +100,15 @@ static void run_agent(void)
 	check(scan_result.used_index == 1, "usershell uses status index");
 	check(scan_result.hits[0].dev != 0 && scan_result.hits[0].inum != 0,
 	      "usershell inode");
+	check(query_physical("at_orch") >= 1,
+	      "trusted primary indexed");
+	exec_manifest_worker_image("agentscan_ucore", worker_image);
+	check(query_physical(worker_image) == 0,
+	      "delegation-only worker excluded from catalog");
 	printf("agentscan_ucore: background_scan usershell=1 runs=%d entries=%d added=%d\n",
 	       (int)after.file_scan_runs, (int)after.file_scan_entries,
 	       (int)after.file_scan_added);
+	printf("agentscan_ucore: scan_admission trusted=1 worker=0\n");
 
 	make_file(auto_name);
 	check(query_physical(auto_name) >= 1, "auto file query");

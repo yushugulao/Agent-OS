@@ -5,11 +5,25 @@
 #include "file.h"
 #include "proc.h"
 #include "types.h"
+#include "../user_stack_policy.h"
+
+/*
+ * This class is derived while the executable inode is still locked and its
+ * manifest and VFS profile have both been validated.  It is evidence about
+ * the image, not authority by itself; exec credential preparation still
+ * intersects it with the caller's role and inheritable capabilities.
+ */
+enum user_image_agent_class {
+	USER_IMAGE_AGENT_FORBIDDEN = 0,
+	USER_IMAGE_AGENT_TRUSTED,
+};
 
 struct user_image {
 	pagetable_t pagetable;
 	uint64 max_page;
 	uint64 ustack_base;
+	uint64 heap_base;
+	uint64 heap_break;
 	uint64 entry;
 	uint64 shared_base;
 	uint64 shared_pages;
@@ -22,16 +36,28 @@ struct user_image {
 	uint exec_rw_offset;
 	uint vfs_exec_profile;
 	uint vfs_exec_incarnation;
+	enum user_image_agent_class agent_class;
 };
 
 int load_init_app();
-int user_image_build(struct inode *, uint64, struct user_image *);
+int user_image_build(struct inode *, uint64,
+		     struct resource_account_handle,
+		     enum resource_charge_class, struct user_image *);
 void user_image_discard(struct user_image *);
 
 #define BASE_ADDRESS (0x1000)
-#define USTACK_SIZE (PAGE_SIZE)
+#define USTACK_SIZE (USER_STACK_SIZE_BYTES)
 #define TRAP_PAGE_SIZE (PAGE_SIZE)
 
+_Static_assert(USTACK_SIZE == PAGE_SIZE,
+	       "the user stack contract must remain exactly one page");
+
 #define USER_IMAGE_LIMIT (AGENT_CONTEXT_BASE)
+
+/* Keep brk results representable by the existing signed scalar ABI. */
+#define USER_HEAP_LIMIT_RAW (USER_IMAGE_LIMIT - PAGE_SIZE)
+#define USER_HEAP_LIMIT \
+	(USER_HEAP_LIMIT_RAW < 0x7ffff000ULL ? \
+	 USER_HEAP_LIMIT_RAW : 0x7ffff000ULL)
 
 #endif // LOADER_H

@@ -7,6 +7,15 @@
 #include "kernel_work.h"
 #include "trap.h"
 #include "vfs_security.h"
+#ifdef VIRTIO_DISK_TEST_PROFILE
+#include "virtio.h"
+#endif
+#ifdef FS_ALLOCATOR_FAULT_TEST_PROFILE
+#include "fs_allocator_test.h"
+#endif
+#ifdef PHYSICAL_PAGE_TEST_HOOKS
+#include "physical_page_test.h"
+#endif
 
 extern char INIT_PROC[];
 
@@ -33,9 +42,10 @@ user_image_read_exact(struct inode *ip, const struct vfs_cred *cred,
 	while (done < length) {
 		int n = readi(ip, cred, 0, (uint64)(dst + done),
 			      off + done, length - done);
-		int checkpoint = bio_request_checkpoint();
+		struct bio_checkpoint_result checkpoint =
+			bio_request_checkpoint();
 
-		if (checkpoint == BIO_CHECKPOINT_INTERRUPTED)
+		if (checkpoint.state == BIO_CHECKPOINT_INTERRUPTED)
 			return USER_IMAGE_READ_INTERRUPTED;
 		if (n < 0)
 			return USER_IMAGE_READ_ERROR;
@@ -44,10 +54,8 @@ user_image_read_exact(struct inode *ip, const struct vfs_cred *cred,
 		if ((uint)n > length - done)
 			return USER_IMAGE_READ_ERROR;
 		done += n;
-		if (checkpoint == BIO_CHECKPOINT_DEFERRED)
+		if (checkpoint.state == BIO_CHECKPOINT_DEFERRED)
 			return USER_IMAGE_READ_DEFERRED;
-		if (checkpoint < 0)
-			return USER_IMAGE_READ_ERROR;
 	}
 	return USER_IMAGE_READ_COMPLETE;
 }
@@ -59,7 +67,7 @@ static struct inode *init_image_lookup(char *path)
 
 	ip = namei_scope_status(path, VFS_POLICY_WORKFLOW,
 				VFS_SCOPE_SYSTEM, &status);
-	if (status == FS_LOOKUP_FOUND || status == FS_LOOKUP_ERROR)
+	if (status != FS_LOOKUP_ABSENT)
 		return ip;
 	return namei_scope_status(path, VFS_POLICY_PUBLIC, VFS_SCOPE_NONE,
 				  &status);
@@ -79,6 +87,8 @@ void user_image_discard(struct user_image *image)
 }
 
 int user_image_build(struct inode *ip, uint64 trapframe_pa,
+		     struct resource_account_handle account,
+		     enum resource_charge_class charge_class,
 		     struct user_image *image)
 {
 	char *page;
@@ -90,7 +100,8 @@ int user_image_build(struct inode *ip, uint64 trapframe_pa,
 	if (ip == 0 || image == 0 || trapframe_pa == 0)
 		return -1;
 	memset(image, 0, sizeof(*image));
-	ivalid(ip);
+	if (ivalid(ip) < 0)
+		return -1;
 	if (!vfs_inode_label_valid(ip) ||
 	    !exec_policy_inode_layout_valid(ip) ||
 	    !vfs_exec_profile_valid(ip->vfs_exec_profile))
@@ -105,38 +116,48 @@ int user_image_build(struct inode *ip, uint64 trapframe_pa,
 	image->exec_rw_offset = ip->exec_rw_offset;
 	image->vfs_exec_profile = ip->vfs_exec_profile;
 	image->vfs_exec_incarnation = ip->vfs_incarnation;
+	image->agent_class =
+		exec_policy_inode_trusted(ip) &&
+		ip->vfs_exec_profile != VFS_EXEC_PROFILE_NONE &&
+		ip->exec_role_mask != 0 ?
+			USER_IMAGE_AGENT_TRUSTED :
+			USER_IMAGE_AGENT_FORBIDDEN;
 	length = ip->size;
 	if (length == 0 || length > MAXVA - BASE_ADDRESS)
 		return -1;
 	va_end = PGROUNDUP(BASE_ADDRESS + length);
 	if (va_end < BASE_ADDRESS ||
-	    va_end > USER_IMAGE_LIMIT - PAGE_SIZE - NTHREAD * USTACK_SIZE)
+	    va_end > USER_HEAP_LIMIT - 3 * PAGE_SIZE -
+			     NTHREAD * USTACK_SIZE)
 		return -1;
 
-	image->pagetable = uvmcreate();
+	image->pagetable = uvmcreate_account(account, charge_class);
 	if (image->pagetable == 0)
 		return -1;
 	image->entry = BASE_ADDRESS;
 	image->ustack_base = va_end + PAGE_SIZE;
+	image->heap_base = image->ustack_base +
+		NTHREAD * USTACK_SIZE + PAGE_SIZE;
+	image->heap_break = image->heap_base;
 
 	for (uint64 va = BASE_ADDRESS, off = 0; va < va_end;
 	     va += PAGE_SIZE, off += PAGE_SIZE) {
 		uint want = MIN(PAGE_SIZE, length - off);
 
-		page = kalloc();
+		page = uvm_page_alloc(image->pagetable);
 		if (page == 0)
 			goto fail;
 		memset(page, 0, PAGE_SIZE);
 		if (user_image_read_exact(ip, &kernel_cred, page, off, want) !=
 		    USER_IMAGE_READ_COMPLETE) {
-			kfree(page);
+			(void)uvm_page_free(image->pagetable, page);
 			goto fail;
 		}
 		perm = PTE_U | PTE_R;
 		perm |= off < image->exec_rw_offset ? PTE_X : PTE_W;
 		if (mappages(image->pagetable, va, PAGE_SIZE, (uint64)page,
 			     perm) < 0) {
-			kfree(page);
+			(void)uvm_page_free(image->pagetable, page);
 			goto fail;
 		}
 		image->max_page = (va + PAGE_SIZE) / PAGE_SIZE;
@@ -177,7 +198,11 @@ int load_init_app()
 		return -1;
 	}
 	debugf("load init app %s", INIT_PROC);
-	if (user_image_build(ip, (uint64)proc_trapframe(p, 0), &image) < 0) {
+	if (user_image_build(
+		    ip, (uint64)proc_trapframe(p, 0), p->resource_account,
+		    p->resource_slot_reserved ? RESOURCE_CHARGE_RESERVED :
+					RESOURCE_CHARGE_ORDINARY,
+		    &image) < 0) {
 		iput(ip);
 		freeproc(p);
 		return -1;
@@ -194,13 +219,24 @@ int load_init_app()
 		freeproc(p);
 		return -1;
 	}
-	if (proc_install_user_image(p, &image, &staged, 0) < 0) {
+	if (proc_install_user_image(p, &image, &staged,
+				    PROC_IMAGE_INSTALL_BOOTSTRAP) < 0) {
 		user_image_discard(&image);
 		freeproc(p);
 		return -1;
 	}
 	if (exec_policy_process_bootstrap(p))
 		agent_authority_bootstrap(p);
+#ifdef VIRTIO_DISK_TEST_PROFILE
+	/* Only the kernel-loaded, boot-sealed init identity controls test faults. */
+	virtio_disk_test_bind_boot_init(p, INIT_PROC);
+#endif
+#ifdef FS_ALLOCATOR_FAULT_TEST_PROFILE
+	fs_allocator_test_bind_boot_init(p, INIT_PROC);
+#endif
+#ifdef PHYSICAL_PAGE_TEST_HOOKS
+	physical_page_test_bind_boot_init(p, INIT_PROC);
+#endif
 	struct thread *t = &p->threads[0];
 	t->trapframe->a0 = argc;
 	t->state = RUNNABLE;

@@ -13,6 +13,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from xml.sax.saxutils import escape
 
+from measured_experiments import (
+    MeasurementError,
+    verify_manifest,
+    write_csv as write_measurement_csv,
+    write_manifest,
+)
+
 
 PALETTE = {
     "plain": "#4c78a8",
@@ -157,12 +164,33 @@ def collect_rows(work_dir: Path) -> tuple[list[MetricRow], dict[str, object]]:
             "同一批宿主机请求进入两个 QEMU 目标。",
         ),
         MetricRow(
-            "主流程证据",
-            "成功记录核对",
-            as_number(state.get("checked_success_records")),
-            as_number(state.get("checked_success_records")),
+            "状态兼容性",
+            "非证据状态记录",
+            as_number(state.get("checked_compatibility_records")),
+            as_number(state.get("checked_compatibility_records")),
             0,
-            "普通目标的成功记录需要在 AgentOS 目标中被保留。",
+            "只检查两个目标的普通状态兼容性；demo/reference 与 runtime evidence 均被排除。",
+        ),
+        MetricRow(
+            "参考目录",
+            "参考产品与记录",
+            as_number(state.get("plain_reference_products"))
+            + as_number(state.get("plain_reference_records")),
+            as_number(state.get("agentos_reference_products"))
+            + as_number(state.get("agentos_reference_records")),
+            as_number(state.get("agentos_reference_products"))
+            + as_number(state.get("agentos_reference_records"))
+            - as_number(state.get("plain_reference_products"))
+            - as_number(state.get("plain_reference_records")),
+            "这些记录仅描述 demo_expected 目录，不能作为动态通过或性能证据。",
+        ),
+        MetricRow(
+            "运行证据",
+            "来源绑定运行记录",
+            None,
+            as_number(state.get("source_bound_runtime_records")),
+            as_number(state.get("source_bound_runtime_records")),
+            "仅统计同时绑定 runtime generation、源文件字节数、哈希与实际断言的记录。",
         ),
         MetricRow(
             "AgentOS 证据",
@@ -182,11 +210,12 @@ def collect_rows(work_dir: Path) -> tuple[list[MetricRow], dict[str, object]]:
         ),
         MetricRow(
             "启动方式",
-            "普通 fork 启动记录",
+            "非 Agent 启动记录",
             as_number(state.get("plain_fork_launches")),
-            as_number(state.get("agentos_fork_launches")),
-            as_number(state.get("agentos_fork_launches")) - as_number(state.get("plain_fork_launches")),
-            "增强目标仍保留普通进程路径，便于和未改动内核对照。",
+            as_number(state.get("agentos_worker_launches")),
+            as_number(state.get("agentos_worker_launches"))
+            - as_number(state.get("plain_fork_launches")),
+            "普通目标使用 fork；增强目标使用完成 exec 后身份校验的 delegated worker。",
         ),
         MetricRow(
             "启动方式",
@@ -235,12 +264,20 @@ def evaluation_items(meta: dict[str, object]) -> list[tuple[str, str]]:
     reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
     plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
     agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
+    tests = meta.get("tests", {}) if isinstance(meta.get("tests"), dict) else {}
     items: list[tuple[str, str]] = []
 
     if state.get("status") == "ready" and as_number(state.get("run_result_match")) == 1:
-        items.append(("通过", "两个目标运行结果可对照，plain target 的成功记录已在 AgentOS target 中保留。"))
+        items.append(("通过", "两个目标运行结果可对照，普通状态兼容记录已核对；该结论不包含 demo/reference 目录。"))
     else:
         items.append(("关注", "双目标状态对照没有给出 ready/match 结果，需要查看 state-compare-summary.json。"))
+    if (
+        as_number(state.get("source_bound_runtime_records")) > 0
+        and tests.get("runtime_evidence_verified") is True
+    ):
+        items.append(("通过", "来源绑定运行记录与 Host runtime assertion sets 均已独立校验。"))
+    else:
+        items.append(("关注", "缺少来源绑定运行记录或 Host runtime assertion 校验，不能把 reference 目录提升为动态通过证据。"))
     if as_number(state.get("agentos_extra_files")) > 0 and as_number(state.get("agentos_evidence_checks")) >= 20:
         items.append(("通过", "AgentOS target 额外输出内核证据文件，并通过多项内核事实检查。"))
     else:
@@ -496,7 +533,8 @@ def runtime_observation_svg(rows: list[MetricRow], meta: dict[str, object], out_
         "运行结果",
         [
             ("结果可对照", "是" if as_number(state.get("run_result_match")) == 1 else "否"),
-            ("成功记录核对", fmt_number(as_number(state.get("checked_success_records")))),
+            ("非证据状态兼容记录", fmt_number(as_number(state.get("checked_compatibility_records")))),
+            ("来源绑定运行记录", fmt_number(as_number(state.get("source_bound_runtime_records")))),
             ("预置请求", fmt_number(as_number(state.get("embedded_action_records")))),
         ],
         PALETTE["shared"],
@@ -531,7 +569,7 @@ def runtime_observation_svg(rows: list[MetricRow], meta: dict[str, object], out_
         [
             ("普通目标Agent启动", fmt_number(as_number(by_metric["Agent 启动记录"].plain))),
             ("增强目标Agent启动", fmt_number(as_number(by_metric["Agent 启动记录"].agentos))),
-            ("增强目标普通fork", fmt_number(as_number(by_metric["普通 fork 启动记录"].agentos))),
+            ("增强目标委派worker", fmt_number(as_number(by_metric["非 Agent 启动记录"].agentos))),
         ],
         PALETTE["agentos"],
     )
@@ -742,53 +780,13 @@ def write_runner_sweep_csv(meta: dict[str, object], out_path: Path) -> None:
 
 EXPERIMENT_SPECS = {
     "file_metadata": {
-        "title": "文件对象 metadata 查询",
-        "plain_path": "普通用户态逐个打开状态文件并扫描字段。",
-        "agentos_path": "AgentOS 通过内核维护的文件对象 metadata 候选集查询。",
-        "mechanism": "同一文件规模下，普通路径必须随文件数线性扫描；AgentOS 路径先按 namespace/type/state 标签收缩候选集，再读取少量对象摘要。",
-        "raw_file": "file-metadata.csv",
-    },
-    "context_timeline": {
-        "title": "Context 与 timeline 查询",
-        "plain_path": "普通用户态从日志、状态文件和事件记录中重建调用路径。",
-        "agentos_path": "AgentOS 使用内核 shadow Context、timeline cursor 与 snapshot/query 读取可信路径。",
-        "mechanism": "记录数量增加时，用户态需要重新拼接多个文件和时间戳；内核路径以 sequence/cursor 直接返回可见记录和摘要。",
-        "raw_file": "context-timeline.csv",
-    },
-    "event_loop": {
-        "title": "事件等待与唤醒",
-        "plain_path": "普通用户态用状态文件轮询确认事件是否到达。",
-        "agentos_path": "AgentOS 使用 watch/wait/event queue/heartbeat 让 Agent 睡眠并由内核唤醒。",
-        "mechanism": "事件数量增加时，轮询路径会产生重复检查；内核路径把事件入队和 wait 唤醒绑定在一起，操作数接近事件数。",
-        "raw_file": "event-loop.csv",
-    },
-    "agent_concurrency": {
-        "title": "并发 Agent 写入与授权",
-        "plain_path": "普通用户态靠锁文件和约定字段协调多 Agent 写同一对象。",
-        "agentos_path": "AgentOS 使用 lease、capability、audit 和拒绝计数处理并发写入。",
-        "mechanism": "并发 Agent 增加时，普通锁文件存在覆盖窗口；AgentOS 在内核检查租约和 capability，拒绝非法写入并保留记录。",
-        "raw_file": "agent-concurrency.csv",
-    },
-    "llm_relay": {
-        "title": "LLM Relay 模式切换",
-        "plain_path": "普通用户态把 prompt、响应、预算和错误处理分散在平台日志、状态文件和宿主机转发记录中。",
-        "agentos_path": "AgentOS 把 LLM request/response 摘要、request_id、span、预算、超时和完成事件写入 Context、timeline 和 audit。",
-        "mechanism": "Relay 模式从 template 切换到 cloud 时，普通路径需要跨多份日志重建请求状态；AgentOS 路径用结构化请求、事件唤醒和来源记录保留可查询证据。",
-        "raw_file": "llm-relay.csv",
-    },
-    "recovery_flow": {
-        "title": "失败恢复流程成本",
-        "plain_path": "普通用户态按约定扫描失败状态、查找依赖、重跑阶段、写报告并追加日志。",
-        "agentos_path": "AgentOS 用 dependency、action 去重、metadata 更新、事件通知、audit 和 provenance 记录恢复流程。",
-        "mechanism": "失败阶段数量增加时，普通路径需要重复扫描和拼接状态；AgentOS 路径把恢复动作约束为结构化 action，并由内核记录幂等、权限和来源。",
-        "raw_file": "recovery-flow.csv",
+        "title": "文件查询真实路径对照",
+        "plain_path": "Guest 强制遍历 metadata catalog，记录每次实际触达的可见记录。",
+        "agentos_path": "Guest 分别测量包含全索引重建的冷索引和索引就绪后的热索引。",
+        "mechanism": "每一行都绑定 Agent suite Guest 日志的 SHA256、行号、提交和运行标识；冷索引单列内核实际报告的重建记录数。",
+        "raw_file": "file-query-benchmark.csv",
     },
 }
-
-
-def stable_jitter(seed: int, spread: float) -> float:
-    pattern = [-2, -1, 0, 1, 2]
-    return pattern[seed % len(pattern)] * spread
 
 
 def percentile(values: list[float], ratio: float) -> float:
@@ -806,282 +804,22 @@ def percentile(values: list[float], ratio: float) -> float:
     return ordered[low] * (1 - weight) + ordered[high] * weight
 
 
-def experiment_file_rows(meta: dict[str, object]) -> list[dict[str, object]]:
-    loads = [32, 128, 512, 1024]
-    rows: list[dict[str, object]] = []
-    for load_index, file_count in enumerate(loads):
-        candidate_base = max(4, min(18, int(math.ceil(math.log2(file_count))) + 1))
-        for trial in range(1, 6):
-            plain_records = float(file_count)
-            agent_records = float(max(1, candidate_base + stable_jitter(load_index + trial, 1)))
-            plain_ticks = max(1.0, plain_records / 28.0 + trial % 3)
-            agent_ticks = max(1.0, agent_records / 8.0 + (trial % 2) * 0.25)
-            rows.append(
-                {
-                    "experiment": "file_metadata",
-                    "load": file_count,
-                    "trial": trial,
-                    "path": "plain",
-                    "primary_metric": "records_touched",
-                    "primary_value": plain_records,
-                    "tick_value": plain_ticks,
-                    "plain_path": EXPERIMENT_SPECS["file_metadata"]["plain_path"],
-                    "agentos_path": EXPERIMENT_SPECS["file_metadata"]["agentos_path"],
-                    "mechanism": EXPERIMENT_SPECS["file_metadata"]["mechanism"],
-                }
-            )
-            rows.append(
-                {
-                    "experiment": "file_metadata",
-                    "load": file_count,
-                    "trial": trial,
-                    "path": "agentos",
-                    "primary_metric": "metadata_candidates",
-                    "primary_value": agent_records,
-                    "tick_value": agent_ticks,
-                    "plain_path": EXPERIMENT_SPECS["file_metadata"]["plain_path"],
-                    "agentos_path": EXPERIMENT_SPECS["file_metadata"]["agentos_path"],
-                    "mechanism": EXPERIMENT_SPECS["file_metadata"]["mechanism"],
-                }
-            )
-    return rows
-
-
-def experiment_context_rows(meta: dict[str, object]) -> list[dict[str, object]]:
-    loads = [128, 512, 2048, 8192]
-    rows: list[dict[str, object]] = []
-    for load_index, record_count in enumerate(loads):
-        visible = min(record_count, 128)
-        for trial in range(1, 6):
-            plain_steps = float(record_count * 3 + stable_jitter(load_index + trial, 9))
-            agent_steps = float(visible + math.ceil(record_count / 512) + stable_jitter(load_index + trial, 1))
-            plain_ticks = max(1.0, plain_steps / 260.0)
-            agent_ticks = max(1.0, agent_steps / 90.0)
-            rows.append(
-                {
-                    "experiment": "context_timeline",
-                    "load": record_count,
-                    "trial": trial,
-                    "path": "plain",
-                    "primary_metric": "rebuild_steps",
-                    "primary_value": plain_steps,
-                    "tick_value": plain_ticks,
-                    "plain_path": EXPERIMENT_SPECS["context_timeline"]["plain_path"],
-                    "agentos_path": EXPERIMENT_SPECS["context_timeline"]["agentos_path"],
-                    "mechanism": EXPERIMENT_SPECS["context_timeline"]["mechanism"],
-                }
-            )
-            rows.append(
-                {
-                    "experiment": "context_timeline",
-                    "load": record_count,
-                    "trial": trial,
-                    "path": "agentos",
-                    "primary_metric": "snapshot_query_cost",
-                    "primary_value": max(1.0, agent_steps),
-                    "tick_value": agent_ticks,
-                    "plain_path": EXPERIMENT_SPECS["context_timeline"]["plain_path"],
-                    "agentos_path": EXPERIMENT_SPECS["context_timeline"]["agentos_path"],
-                    "mechanism": EXPERIMENT_SPECS["context_timeline"]["mechanism"],
-                }
-            )
-    return rows
-
-
-def experiment_event_rows(meta: dict[str, object]) -> list[dict[str, object]]:
-    loads = [8, 32, 128, 512]
-    rows: list[dict[str, object]] = []
-    for load_index, event_count in enumerate(loads):
-        for trial in range(1, 8):
-            poll_factor = 9 + (trial % 4)
-            plain_ops = float(event_count * poll_factor + stable_jitter(load_index + trial, 3))
-            agent_ops = float(event_count + max(1, event_count // 64) + stable_jitter(load_index + trial, 1))
-            plain_ticks = max(1.0, plain_ops / 120.0)
-            agent_ticks = max(1.0, agent_ops / 80.0)
-            rows.append(
-                {
-                    "experiment": "event_loop",
-                    "load": event_count,
-                    "trial": trial,
-                    "path": "plain",
-                    "primary_metric": "poll_checks",
-                    "primary_value": plain_ops,
-                    "tick_value": plain_ticks,
-                    "plain_path": EXPERIMENT_SPECS["event_loop"]["plain_path"],
-                    "agentos_path": EXPERIMENT_SPECS["event_loop"]["agentos_path"],
-                    "mechanism": EXPERIMENT_SPECS["event_loop"]["mechanism"],
-                }
-            )
-            rows.append(
-                {
-                    "experiment": "event_loop",
-                    "load": event_count,
-                    "trial": trial,
-                    "path": "agentos",
-                    "primary_metric": "wait_wake_ops",
-                    "primary_value": max(1.0, agent_ops),
-                    "tick_value": agent_ticks,
-                    "plain_path": EXPERIMENT_SPECS["event_loop"]["plain_path"],
-                    "agentos_path": EXPERIMENT_SPECS["event_loop"]["agentos_path"],
-                    "mechanism": EXPERIMENT_SPECS["event_loop"]["mechanism"],
-                }
-            )
-    return rows
-
-
-def experiment_concurrency_rows(meta: dict[str, object]) -> list[dict[str, object]]:
-    loads = [2, 4, 8, 16]
-    rows: list[dict[str, object]] = []
-    for load_index, agent_count in enumerate(loads):
-        for trial in range(1, 6):
-            plain_risk = float(max(0, (agent_count - 1) * (agent_count + 2) + stable_jitter(load_index + trial, 2)))
-            denied_effect = float(max(1, agent_count * 2 + stable_jitter(load_index + trial, 1)))
-            agent_risk = 0.0
-            rows.append(
-                {
-                    "experiment": "agent_concurrency",
-                    "load": agent_count,
-                    "trial": trial,
-                    "path": "plain",
-                    "primary_metric": "overwrite_risk_score",
-                    "primary_value": plain_risk,
-                    "tick_value": max(1.0, plain_risk / 18.0),
-                    "denied_effect": 0.0,
-                    "plain_path": EXPERIMENT_SPECS["agent_concurrency"]["plain_path"],
-                    "agentos_path": EXPERIMENT_SPECS["agent_concurrency"]["agentos_path"],
-                    "mechanism": EXPERIMENT_SPECS["agent_concurrency"]["mechanism"],
-                }
-            )
-            rows.append(
-                {
-                    "experiment": "agent_concurrency",
-                    "load": agent_count,
-                    "trial": trial,
-                    "path": "agentos",
-                    "primary_metric": "residual_write_risk",
-                    "primary_value": agent_risk,
-                    "tick_value": max(1.0, denied_effect / 24.0),
-                    "denied_effect": denied_effect,
-                    "plain_path": EXPERIMENT_SPECS["agent_concurrency"]["plain_path"],
-                    "agentos_path": EXPERIMENT_SPECS["agent_concurrency"]["agentos_path"],
-                    "mechanism": EXPERIMENT_SPECS["agent_concurrency"]["mechanism"],
-                }
-            )
-    return rows
-
-
-def experiment_llm_rows(meta: dict[str, object]) -> list[dict[str, object]]:
-    loads = [4, 16, 64, 256]
-    rows: list[dict[str, object]] = []
-    for load_index, request_count in enumerate(loads):
-        for trial in range(1, 6):
-            plain_steps = float(request_count * 5 + stable_jitter(load_index + trial, 4))
-            agent_steps = float(request_count * 2 + max(1, request_count // 32) + stable_jitter(load_index + trial, 1))
-            rows.append(
-                {
-                    "experiment": "llm_relay",
-                    "load": request_count,
-                    "trial": trial,
-                    "path": "plain",
-                    "primary_metric": "relay_rebuild_steps",
-                    "primary_value": plain_steps,
-                    "tick_value": max(1.0, plain_steps / 70.0),
-                    "plain_path": EXPERIMENT_SPECS["llm_relay"]["plain_path"],
-                    "agentos_path": EXPERIMENT_SPECS["llm_relay"]["agentos_path"],
-                    "mechanism": EXPERIMENT_SPECS["llm_relay"]["mechanism"],
-                }
-            )
-            rows.append(
-                {
-                    "experiment": "llm_relay",
-                    "load": request_count,
-                    "trial": trial,
-                    "path": "agentos",
-                    "primary_metric": "structured_relay_records",
-                    "primary_value": max(1.0, agent_steps),
-                    "tick_value": max(1.0, agent_steps / 80.0),
-                    "plain_path": EXPERIMENT_SPECS["llm_relay"]["plain_path"],
-                    "agentos_path": EXPERIMENT_SPECS["llm_relay"]["agentos_path"],
-                    "mechanism": EXPERIMENT_SPECS["llm_relay"]["mechanism"],
-                }
-            )
-    return rows
-
-
-def experiment_recovery_rows(meta: dict[str, object]) -> list[dict[str, object]]:
-    loads = [1, 3, 6, 12]
-    rows: list[dict[str, object]] = []
-    for load_index, failed_stages in enumerate(loads):
-        for trial in range(1, 6):
-            plain_steps = float(18 + failed_stages * 23 + stable_jitter(load_index + trial, 3))
-            agent_steps = float(10 + failed_stages * 8 + stable_jitter(load_index + trial, 1))
-            rows.append(
-                {
-                    "experiment": "recovery_flow",
-                    "load": failed_stages,
-                    "trial": trial,
-                    "path": "plain",
-                    "primary_metric": "recovery_user_steps",
-                    "primary_value": plain_steps,
-                    "tick_value": max(1.0, plain_steps / 22.0),
-                    "plain_path": EXPERIMENT_SPECS["recovery_flow"]["plain_path"],
-                    "agentos_path": EXPERIMENT_SPECS["recovery_flow"]["agentos_path"],
-                    "mechanism": EXPERIMENT_SPECS["recovery_flow"]["mechanism"],
-                }
-            )
-            rows.append(
-                {
-                    "experiment": "recovery_flow",
-                    "load": failed_stages,
-                    "trial": trial,
-                    "path": "agentos",
-                    "primary_metric": "recovery_kernel_actions",
-                    "primary_value": max(1.0, agent_steps),
-                    "tick_value": max(1.0, agent_steps / 24.0),
-                    "plain_path": EXPERIMENT_SPECS["recovery_flow"]["plain_path"],
-                    "agentos_path": EXPERIMENT_SPECS["recovery_flow"]["agentos_path"],
-                    "mechanism": EXPERIMENT_SPECS["recovery_flow"]["mechanism"],
-                }
-            )
-    return rows
-
-
 def experiment_rows(meta: dict[str, object]) -> list[dict[str, object]]:
-    rows: list[dict[str, object]] = []
-    rows.extend(experiment_file_rows(meta))
-    rows.extend(experiment_context_rows(meta))
-    rows.extend(experiment_event_rows(meta))
-    rows.extend(experiment_concurrency_rows(meta))
-    rows.extend(experiment_llm_rows(meta))
-    rows.extend(experiment_recovery_rows(meta))
-    return rows
+    rows = meta.get("measured_experiment_rows", [])
+    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+        raise ValueError("measured experiment rows are invalid")
+    return [dict(row) for row in rows]
 
 
 def write_experiment_raw_csvs(rows: list[dict[str, object]], out_dir: Path) -> None:
     raw_dir = out_dir / "experiments" / "raw"
     raw_dir.mkdir(parents=True, exist_ok=True)
-    columns = [
-        "experiment",
-        "load",
-        "trial",
-        "path",
-        "primary_metric",
-        "primary_value",
-        "tick_value",
-        "denied_effect",
-        "plain_path",
-        "agentos_path",
-        "mechanism",
-    ]
     for experiment, spec in EXPERIMENT_SPECS.items():
         out_path = raw_dir / str(spec["raw_file"])
-        with out_path.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=columns)
-            writer.writeheader()
-            for row in rows:
-                if row.get("experiment") != experiment:
-                    continue
-                writer.writerow({column: row.get(column, "") for column in columns})
+        write_measurement_csv(
+            out_path,
+            [row for row in rows if row.get("experiment") == experiment],
+        )
 
 
 def experiment_stats_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
@@ -1094,7 +832,10 @@ def experiment_stats_rows(rows: list[dict[str, object]]) -> list[dict[str, objec
             if str(row.get("experiment")) == experiment and int(as_number(row.get("load"))) == load and str(row.get("path")) == path
         ]
         values = [as_number(row.get("primary_value")) for row in subset]
-        ticks = [as_number(row.get("tick_value")) for row in subset]
+        durations = [as_number(row.get("duration_value")) for row in subset]
+        duration_units = {str(row.get("duration_unit", "")) for row in subset}
+        if duration_units != {"us"}:
+            raise ValueError("measured file-query durations must use raw microseconds")
         result.append(
             {
                 "experiment": experiment,
@@ -1108,9 +849,10 @@ def experiment_stats_rows(rows: list[dict[str, object]]) -> list[dict[str, objec
                 "max": max(values) if values else 0.0,
                 "p50": percentile(values, 0.50),
                 "p95": percentile(values, 0.95),
-                "tick_min": min(ticks) if ticks else 0.0,
-                "tick_avg": statistics.fmean(ticks) if ticks else 0.0,
-                "tick_max": max(ticks) if ticks else 0.0,
+                "duration_unit": "us",
+                "duration_min": min(durations) if durations else 0.0,
+                "duration_avg": statistics.fmean(durations) if durations else 0.0,
+                "duration_max": max(durations) if durations else 0.0,
                 "plain_path": EXPERIMENT_SPECS[experiment]["plain_path"],
                 "agentos_path": EXPERIMENT_SPECS[experiment]["agentos_path"],
                 "mechanism": EXPERIMENT_SPECS[experiment]["mechanism"],
@@ -1134,9 +876,10 @@ def write_experiment_stats_csv(rows: list[dict[str, object]], out_path: Path) ->
         "max",
         "p50",
         "p95",
-        "tick_min",
-        "tick_avg",
-        "tick_max",
+        "duration_unit",
+        "duration_min",
+        "duration_avg",
+        "duration_max",
         "plain_path",
         "agentos_path",
         "mechanism",
@@ -1168,74 +911,33 @@ def write_experiment_mechanism_csv(out_path: Path) -> None:
 
 def write_experiment_outputs(meta: dict[str, object], out_dir: Path) -> list[dict[str, object]]:
     rows = experiment_rows(meta)
+    if not rows:
+        return []
     write_experiment_raw_csvs(rows, out_dir)
     write_experiment_stats_csv(rows, out_dir / "experiments" / "experiment-stats.csv")
     write_experiment_mechanism_csv(out_dir / "experiments" / "mechanism-notes.csv")
     return rows
 
 
-def maybe_plot_with_seaborn(kind: str, rows: list[dict[str, object]], out_path: Path) -> bool:
-    try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-        import pandas as pd
-        import seaborn as sns
-    except Exception:
-        return False
-
-    df = pd.DataFrame(rows)
-    if df.empty:
-        return False
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    sns.set_theme(style="whitegrid", font="DejaVu Sans")
-    fig, ax = plt.subplots(figsize=(10.8, 5.8))
-    if kind == "file_bar":
-        subset = df[df["experiment"] == "file_metadata"]
-        sns.barplot(data=subset, x="load", y="primary_value", hue="path", estimator="median", errorbar=("pi", 90), ax=ax)
-        ax.set_title("文件数变化下的扫描数与 metadata 候选数")
-        ax.set_xlabel("文件数")
-        ax.set_ylabel("触达记录数")
-    elif kind == "context_line":
-        subset = df[df["experiment"] == "context_timeline"]
-        sns.lineplot(data=subset, x="load", y="primary_value", hue="path", marker="o", estimator="median", errorbar=("pi", 90), ax=ax)
-        ax.set_xscale("log", base=2)
-        ax.set_title("Context/timeline 记录数变化下的重建成本")
-        ax.set_xlabel("记录数")
-        ax.set_ylabel("步骤或查询成本")
-    elif kind == "event_box":
-        subset = df[df["experiment"] == "event_loop"]
-        subset = subset.assign(series=subset["path"].astype(str) + "-" + subset["load"].astype(str))
-        sns.boxplot(data=subset, x="load", y="primary_value", hue="path", ax=ax)
-        ax.set_title("事件数量变化下的轮询次数与 wait/wake 次数")
-        ax.set_xlabel("事件数")
-        ax.set_ylabel("操作次数")
-    elif kind == "concurrency_heatmap":
-        subset = df[df["experiment"] == "agent_concurrency"]
-        pivot = subset.pivot_table(index="path", columns="load", values="primary_value", aggfunc="mean")
-        sns.heatmap(pivot, annot=True, fmt=".1f", cmap="YlOrRd", ax=ax)
-        ax.set_title("并发 Agent 数变化下的残余写入风险")
-        ax.set_xlabel("Agent 数")
-        ax.set_ylabel("路径")
-    elif kind == "monitor_area":
-        saved = monitor_saved_rows(rows)
-        mdf = pd.DataFrame(saved)
-        for experiment in mdf["experiment"].unique():
-            part = mdf[mdf["experiment"] == experiment]
-            ax.fill_between(part["load_index"], part["saved"], alpha=0.22)
-            ax.plot(part["load_index"], part["saved"], marker="o", label=experiment)
-        ax.set_title("六组实验的累计节省操作数")
-        ax.set_xlabel("负载序号")
-        ax.set_ylabel("节省操作数")
-        ax.legend(loc="upper left")
-    else:
-        plt.close(fig)
-        return False
-    fig.tight_layout()
-    fig.savefig(out_path, format="svg")
-    plt.close(fig)
-    return True
+def write_experiment_status(meta: dict[str, object], out_dir: Path) -> dict[str, object]:
+    rows = experiment_rows(meta)
+    manifest = meta.get("measured_experiment_manifest")
+    status: dict[str, object] = {
+        "schema_version": 1,
+        "status": "measured" if rows else "unavailable",
+        "rows": len(rows),
+        "reason": "provenance-bound Guest marker verified" if rows else "measured-experiments.json is missing",
+    }
+    if rows and isinstance(manifest, dict):
+        source = manifest.get("source") if isinstance(manifest.get("source"), dict) else {}
+        status["source_log"] = source.get("path")
+        status["source_log_sha256"] = source.get("sha256")
+        status["commit"] = manifest.get("commit")
+        status["run_id"] = manifest.get("run_id")
+    path = out_dir / "experiments" / "status.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(status, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    return status
 
 
 def median_experiment_value(rows: list[dict[str, object]], experiment: str, path: str, load: int) -> float:
@@ -1248,359 +950,50 @@ def median_experiment_value(rows: list[dict[str, object]], experiment: str, path
 
 
 def experiment_file_bar_svg(rows: list[dict[str, object]], out_path: Path) -> None:
-    if maybe_plot_with_seaborn("file_bar", rows, out_path):
-        return
-    loads = [32, 128, 512, 1024]
-    grouped_bar_svg(
-        "文件数变化下的扫描数与 metadata 候选数",
-        "同一文件规模进入两条路径：普通路径逐个扫描文件，AgentOS 路径先使用内核 metadata 候选集。",
-        [str(load) for load in loads],
-        [median_experiment_value(rows, "file_metadata", "plain", load) for load in loads],
-        [median_experiment_value(rows, "file_metadata", "agentos", load) for load in loads],
-        out_path,
-        y_label="触达记录数",
+    loads = sorted(
+        {int(as_number(row.get("load"))) for row in rows if row.get("experiment") == "file_metadata"}
     )
-
-
-def experiment_context_line_svg(rows: list[dict[str, object]], out_path: Path) -> None:
-    if maybe_plot_with_seaborn("context_line", rows, out_path):
-        return
-    loads = [128, 512, 2048, 8192]
-    width, height = 1040, 560
-    margin_left, margin_right, margin_top, margin_bottom = 96, 60, 102, 76
-    plot_w = width - margin_left - margin_right
-    plot_h = height - margin_top - margin_bottom
-    plain = [median_experiment_value(rows, "context_timeline", "plain", load) for load in loads]
-    agentos = [median_experiment_value(rows, "context_timeline", "agentos", load) for load in loads]
-    max_value = max([1.0] + plain + agentos)
-    lines = svg_header(width, height)
-    lines.append('<text x="34" y="34" class="title">Context/timeline 记录数变化下的重建成本</text>')
-    append_wrapped_text(lines, 34, 58, "普通路径重建日志和状态文件；AgentOS 路径使用内核 snapshot/query 读取可信记录。", max_chars=62)
-    for tick in range(0, 6):
-        value = max_value * tick / 5
-        y = margin_top + plot_h - (value / max_value) * plot_h
-        lines.append(f'<line x1="{margin_left}" y1="{y:.1f}" x2="{width - margin_right}" y2="{y:.1f}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
-        lines.append(f'<text x="{margin_left - 12}" y="{y + 4:.1f}" text-anchor="end" class="axis">{fmt_number(value)}</text>')
-
-    def points(values: list[float]) -> str:
-        coords = []
-        for index, value in enumerate(values):
-            x = margin_left + index * (plot_w / (len(loads) - 1))
-            y = margin_top + plot_h - (value / max_value) * plot_h
-            coords.append(f"{x:.1f},{y:.1f}")
-        return " ".join(coords)
-
-    lines.append(f'<polyline points="{points(plain)}" fill="none" stroke="{PALETTE["plain"]}" stroke-width="3"/>')
-    lines.append(f'<polyline points="{points(agentos)}" fill="none" stroke="{PALETTE["agentos"]}" stroke-width="3"/>')
-    for index, load in enumerate(loads):
-        x = margin_left + index * (plot_w / (len(loads) - 1))
-        lines.append(f'<text x="{x:.1f}" y="{height - 38}" text-anchor="middle" class="label">{load}</text>')
-        for value, color, dy in [(plain[index], PALETTE["plain"], -10), (agentos[index], PALETTE["agentos"], 18)]:
-            y = margin_top + plot_h - (value / max_value) * plot_h
-            lines.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="{color}"/>')
-            lines.append(f'<text x="{x:.1f}" y="{y + dy:.1f}" text-anchor="middle" class="axis">{fmt_number(value)}</text>')
-    lines.append(f'<rect x="{width - 260}" y="78" width="14" height="14" fill="{PALETTE["plain"]}"/>')
-    lines.append(f'<text x="{width - 240}" y="90" class="label">用户态重建步骤</text>')
-    lines.append(f'<rect x="{width - 260}" y="102" width="14" height="14" fill="{PALETTE["agentos"]}"/>')
-    lines.append(f'<text x="{width - 240}" y="114" class="label">内核 snapshot/query 成本</text>')
-    lines.append(f'<text x="{margin_left}" y="{height - 14}" class="subtitle">横轴为 Context/timeline 记录数；纵轴为步骤或查询成本。</text>')
-    lines.append("</svg>")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def experiment_event_box_svg(rows: list[dict[str, object]], out_path: Path) -> None:
-    if maybe_plot_with_seaborn("event_box", rows, out_path):
-        return
-    loads = [8, 32, 128, 512]
-    width, height = 1120, 560
-    margin_left, margin_right, margin_top, margin_bottom = 90, 48, 104, 82
-    plot_w = width - margin_left - margin_right
-    plot_h = height - margin_top - margin_bottom
-    all_values = [as_number(row.get("primary_value")) for row in rows if row.get("experiment") == "event_loop"]
-    max_value = max([1.0] + all_values)
-    lines = svg_header(width, height)
-    lines.append('<text x="34" y="34" class="title">事件数量变化下的轮询次数与 wait/wake 次数</text>')
-    append_wrapped_text(lines, 34, 58, "箱形图保留每个负载下多次运行的分布：普通路径重复轮询，AgentOS 路径由内核事件唤醒。", max_chars=64)
-    for tick in range(0, 6):
-        value = max_value * tick / 5
-        y = margin_top + plot_h - (value / max_value) * plot_h
-        lines.append(f'<line x1="{margin_left}" y1="{y:.1f}" x2="{width - margin_right}" y2="{y:.1f}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
-        lines.append(f'<text x="{margin_left - 12}" y="{y + 4:.1f}" text-anchor="end" class="axis">{fmt_number(value)}</text>')
-    group_w = plot_w / len(loads)
-    box_w = min(42, group_w * 0.22)
-    for load_index, load in enumerate(loads):
-        center = margin_left + group_w * (load_index + 0.5)
-        lines.append(f'<text x="{center:.1f}" y="{height - 38}" text-anchor="middle" class="label">{load}</text>')
-        for offset, path, color in [(-box_w * 0.8, "plain", PALETTE["plain"]), (box_w * 0.8, "agentos", PALETTE["agentos"])]:
-            values = sorted(
-                as_number(row.get("primary_value"))
-                for row in rows
-                if row.get("experiment") == "event_loop" and row.get("path") == path and int(as_number(row.get("load"))) == load
-            )
-            if not values:
-                continue
-            q1 = percentile(values, 0.25)
-            q2 = percentile(values, 0.50)
-            q3 = percentile(values, 0.75)
-            low = min(values)
-            high = max(values)
-            x = center + offset
-
-            def y_for(value: float) -> float:
-                return margin_top + plot_h - (value / max_value) * plot_h
-
-            y_low, y_q1, y_q2, y_q3, y_high = [y_for(value) for value in [low, q1, q2, q3, high]]
-            lines.append(f'<line x1="{x:.1f}" y1="{y_high:.1f}" x2="{x:.1f}" y2="{y_low:.1f}" stroke="{color}" stroke-width="2"/>')
-            lines.append(f'<rect x="{x - box_w / 2:.1f}" y="{y_q3:.1f}" width="{box_w:.1f}" height="{max(1.0, y_q1 - y_q3):.1f}" fill="{color}" opacity="0.35" stroke="{color}" stroke-width="2"/>')
-            lines.append(f'<line x1="{x - box_w / 2:.1f}" y1="{y_q2:.1f}" x2="{x + box_w / 2:.1f}" y2="{y_q2:.1f}" stroke="{color}" stroke-width="2"/>')
-            lines.append(f'<line x1="{x - box_w / 3:.1f}" y1="{y_low:.1f}" x2="{x + box_w / 3:.1f}" y2="{y_low:.1f}" stroke="{color}" stroke-width="2"/>')
-            lines.append(f'<line x1="{x - box_w / 3:.1f}" y1="{y_high:.1f}" x2="{x + box_w / 3:.1f}" y2="{y_high:.1f}" stroke="{color}" stroke-width="2"/>')
-    lines.append(f'<rect x="{width - 310}" y="78" width="14" height="14" fill="{PALETTE["plain"]}"/>')
-    lines.append(f'<text x="{width - 290}" y="90" class="label">用户态轮询</text>')
-    lines.append(f'<rect x="{width - 190}" y="78" width="14" height="14" fill="{PALETTE["agentos"]}"/>')
-    lines.append(f'<text x="{width - 170}" y="90" class="label">AgentOS wait/wake</text>')
-    lines.append(f'<text x="{margin_left}" y="{height - 14}" class="subtitle">横轴为事件数；纵轴为操作次数；箱体表示 P25/P50/P75。</text>')
-    lines.append("</svg>")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def experiment_concurrency_heatmap_svg(rows: list[dict[str, object]], out_path: Path) -> None:
-    if maybe_plot_with_seaborn("concurrency_heatmap", rows, out_path):
-        return
-    loads = [2, 4, 8, 16]
-    paths = [("plain", "用户态覆盖风险"), ("agentos", "AgentOS 残余风险")]
-    width, height = 920, 450
-    cell_w, cell_h = 112, 70
-    x0, y0 = 210, 120
-    values: dict[tuple[str, int], float] = {}
-    for path, _ in paths:
-        for load in loads:
-            values[(path, load)] = median_experiment_value(rows, "agent_concurrency", path, load)
-    max_value = max([1.0] + list(values.values()))
-    lines = svg_header(width, height)
-    lines.append('<text x="34" y="34" class="title">并发 Agent 数变化下的写入风险</text>')
-    append_wrapped_text(lines, 34, 58, "普通路径依赖锁文件和约定；AgentOS 通过 lease 与 capability 拒绝非法写入，热力颜色表示残余风险。", max_chars=48)
-    for col, load in enumerate(loads):
-        x = x0 + col * cell_w + cell_w / 2
-        lines.append(f'<text x="{x:.1f}" y="{y0 - 18}" text-anchor="middle" class="value">{load} Agent</text>')
-    for row_index, (path, label) in enumerate(paths):
-        y = y0 + row_index * cell_h
-        lines.append(f'<text x="{x0 - 18}" y="{y + cell_h / 2 + 5:.1f}" text-anchor="end" class="label">{label}</text>')
-        for col, load in enumerate(loads):
-            value = values[(path, load)]
-            intensity = value / max_value if max_value else 0.0
-            red = int(255)
-            green = int(245 - 155 * intensity)
-            blue = int(224 - 190 * intensity)
-            color = f"#{red:02x}{green:02x}{blue:02x}"
-            x = x0 + col * cell_w
-            lines.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{cell_w - 8}" height="{cell_h - 8}" fill="{color}" stroke="{PALETTE["grid"]}" rx="2"/>')
-            lines.append(f'<text x="{x + (cell_w - 8) / 2:.1f}" y="{y + cell_h / 2 + 4:.1f}" text-anchor="middle" class="value">{fmt_number(value)}</text>')
-    append_wrapped_text(lines, x0, height - 92, "AgentOS 原始表同时记录 denied_effect：拒绝越多表示租约和 capability 机制真实参与。", max_chars=42, line_height=20)
-    append_wrapped_text(lines, x0, height - 46, "原始数据：experiments/raw/agent-concurrency.csv；统计：experiments/experiment-stats.csv。", max_chars=36, line_height=20)
-    lines.append("</svg>")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def experiment_llm_relay_bar_svg(rows: list[dict[str, object]], out_path: Path) -> None:
-    loads = [4, 16, 64, 256]
-    grouped_bar_svg(
-        "LLM Relay 请求数变化下的证据重建成本",
-        "同一批 LLM 请求：普通路径重建日志，AgentOS 路径保留结构化记录。",
-        [str(load) for load in loads],
-        [median_experiment_value(rows, "llm_relay", "plain", load) for load in loads],
-        [median_experiment_value(rows, "llm_relay", "agentos", load) for load in loads],
-        out_path,
-        y_label="重建或记录成本",
+    if not loads:
+        raise ValueError("file-query chart requires measured Guest rows")
+    load = loads[-1]
+    traversal = median_experiment_value(rows, "file_metadata", "traversal", load)
+    cold_candidates = median_experiment_value(rows, "file_metadata", "cold_index", load)
+    warm_candidates = median_experiment_value(rows, "file_metadata", "warm_index", load)
+    cold_rebuild = statistics.median(
+        [
+            as_number(row.get("rebuild_records"))
+            for row in rows
+            if row.get("experiment") == "file_metadata"
+            and row.get("path") == "cold_index"
+            and int(as_number(row.get("load"))) == load
+        ]
     )
-
-
-def experiment_recovery_line_svg(rows: list[dict[str, object]], out_path: Path) -> None:
-    loads = [1, 3, 6, 12]
-    width, height = 1040, 560
-    margin_left, margin_right, margin_top, margin_bottom = 96, 60, 102, 76
-    plot_w = width - margin_left - margin_right
-    plot_h = height - margin_top - margin_bottom
-    plain = [median_experiment_value(rows, "recovery_flow", "plain", load) for load in loads]
-    agentos = [median_experiment_value(rows, "recovery_flow", "agentos", load) for load in loads]
-    max_value = max([1.0] + plain + agentos)
-    lines = svg_header(width, height)
-    lines.append('<text x="34" y="34" class="title">失败阶段数量变化下的恢复流程成本</text>')
-    append_wrapped_text(lines, 34, 58, "普通路径重复扫描和拼接状态；AgentOS 路径使用结构化 action、幂等记录、事件通知和来源追踪。", max_chars=62)
-    for tick in range(0, 6):
-        value = max_value * tick / 5
-        y = margin_top + plot_h - (value / max_value) * plot_h
-        lines.append(f'<line x1="{margin_left}" y1="{y:.1f}" x2="{width - margin_right}" y2="{y:.1f}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
-        lines.append(f'<text x="{margin_left - 12}" y="{y + 4:.1f}" text-anchor="end" class="axis">{fmt_number(value)}</text>')
-
-    def points(values: list[float]) -> str:
-        coords = []
-        for index, value in enumerate(values):
-            x = margin_left + index * (plot_w / (len(loads) - 1))
-            y = margin_top + plot_h - (value / max_value) * plot_h
-            coords.append(f"{x:.1f},{y:.1f}")
-        return " ".join(coords)
-
-    lines.append(f'<polyline points="{points(plain)}" fill="none" stroke="{PALETTE["plain"]}" stroke-width="3"/>')
-    lines.append(f'<polyline points="{points(agentos)}" fill="none" stroke="{PALETTE["agentos"]}" stroke-width="3"/>')
-    for index, load in enumerate(loads):
-        x = margin_left + index * (plot_w / (len(loads) - 1))
-        lines.append(f'<text x="{x:.1f}" y="{height - 38}" text-anchor="middle" class="label">{load}</text>')
-        for value, color, dy in [(plain[index], PALETTE["plain"], -10), (agentos[index], PALETTE["agentos"], 18)]:
-            y = margin_top + plot_h - (value / max_value) * plot_h
-            lines.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="4" fill="{color}"/>')
-            lines.append(f'<text x="{x:.1f}" y="{y + dy:.1f}" text-anchor="middle" class="axis">{fmt_number(value)}</text>')
-    lines.append(f'<rect x="{width - 286}" y="78" width="14" height="14" fill="{PALETTE["plain"]}"/>')
-    lines.append(f'<text x="{width - 266}" y="90" class="label">用户态恢复步骤</text>')
-    lines.append(f'<rect x="{width - 286}" y="102" width="14" height="14" fill="{PALETTE["agentos"]}"/>')
-    lines.append(f'<text x="{width - 266}" y="114" class="label">AgentOS 结构化恢复动作</text>')
-    lines.append(f'<text x="{margin_left}" y="{height - 14}" class="subtitle">横轴为失败阶段数；纵轴为恢复流程步骤或结构化动作成本。</text>')
-    lines.append("</svg>")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def monitor_saved_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
-    result: list[dict[str, object]] = []
-    for experiment in EXPERIMENT_SPECS:
-        loads = sorted({int(as_number(row.get("load"))) for row in rows if row.get("experiment") == experiment})
-        cumulative = 0.0
-        for index, load in enumerate(loads, start=1):
-            plain = median_experiment_value(rows, experiment, "plain", load)
-            agentos = median_experiment_value(rows, experiment, "agentos", load)
-            cumulative += max(0.0, plain - agentos)
-            result.append({"experiment": experiment, "load": load, "load_index": index, "saved": cumulative})
-    return result
-
-
-def experiment_monitor_area_svg(rows: list[dict[str, object]], out_path: Path) -> None:
-    if maybe_plot_with_seaborn("monitor_area", rows, out_path):
-        return
-    saved_rows = monitor_saved_rows(rows)
-    width, height = 1060, 540
-    margin_left, margin_right, margin_top, margin_bottom = 96, 56, 104, 78
-    plot_w = width - margin_left - margin_right
-    plot_h = height - margin_top - margin_bottom
-    max_index = max([1] + [int(as_number(row["load_index"])) for row in saved_rows])
-    max_saved = max([1.0] + [as_number(row["saved"]) for row in saved_rows])
-    colors = {
-        "file_metadata": PALETTE["plain"],
-        "context_timeline": PALETTE["agentos"],
-        "event_loop": PALETTE["shared"],
-        "agent_concurrency": PALETTE["extra"],
-        "llm_relay": "#8b6fcb",
-        "recovery_flow": "#9c6b4e",
-    }
-    lines = svg_header(width, height)
-    lines.append('<text x="34" y="34" class="title">六组实验的累计节省操作数</text>')
-    append_wrapped_text(lines, 34, 58, "面积图把六组实验各自随负载增加产生的节省操作数放在同一张监控视图中。", max_chars=62)
-    for tick in range(0, 6):
-        value = max_saved * tick / 5
-        y = margin_top + plot_h - (value / max_saved) * plot_h
-        lines.append(f'<line x1="{margin_left}" y1="{y:.1f}" x2="{width - margin_right}" y2="{y:.1f}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
-        lines.append(f'<text x="{margin_left - 12}" y="{y + 4:.1f}" text-anchor="end" class="axis">{fmt_number(value)}</text>')
-    legend_x = width - 340
-    for exp_index, (experiment, spec) in enumerate(EXPERIMENT_SPECS.items()):
-        part = [row for row in saved_rows if row["experiment"] == experiment]
-        if not part:
-            continue
-        points_top = []
-        points_bottom = []
-        for row in part:
-            x = margin_left + (as_number(row["load_index"]) - 1) * (plot_w / max(1, max_index - 1))
-            y = margin_top + plot_h - (as_number(row["saved"]) / max_saved) * plot_h
-            points_top.append(f"{x:.1f},{y:.1f}")
-            points_bottom.insert(0, f"{x:.1f},{margin_top + plot_h:.1f}")
-        color = colors[experiment]
-        lines.append(f'<polygon points="{" ".join(points_top + points_bottom)}" fill="{color}" opacity="0.20"/>')
-        lines.append(f'<polyline points="{" ".join(points_top)}" fill="none" stroke="{color}" stroke-width="3"/>')
-        ly = 82 + exp_index * 22
-        lines.append(f'<rect x="{legend_x}" y="{ly - 12}" width="14" height="14" fill="{color}" opacity="0.8"/>')
-        lines.append(f'<text x="{legend_x + 22}" y="{ly}" class="label">{escape(str(spec["title"]))}</text>')
-    for index in range(1, max_index + 1):
-        x = margin_left + (index - 1) * (plot_w / max(1, max_index - 1))
-        lines.append(f'<text x="{x:.1f}" y="{height - 38}" text-anchor="middle" class="label">负载{index}</text>')
-    lines.append(f'<text x="{margin_left}" y="{height - 14}" class="subtitle">纵轴为 plain 中位数减 AgentOS 中位数的累计值。</text>')
-    lines.append("</svg>")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    grouped_bar_svg(
+        "真实 Guest 文件查询：遍历、冷索引与热索引",
+        f"本轮可见记录 {load} 条；冷索引柱包含 {fmt_number(cold_rebuild)} 条内核实际报告的重建记录，热索引不含缓存命中。",
+        ["冷索引（含重建）", "热索引"],
+        [traversal, traversal],
+        [cold_candidates + cold_rebuild, warm_candidates],
+        out_path,
+        y_label="实际检查记录数",
+    )
 
 
 def experiment_design_rows(meta: dict[str, object]) -> list[dict[str, str]]:
+    measured = experiment_rows(meta)
+    trials = len({int(as_number(row.get("trial"))) for row in measured})
+    loads = sorted({int(as_number(row.get("load"))) for row in measured})
     return [
         {
-            "scenario": "文件对象查询实验",
-            "workload": "文件数按 32、128、512、1024 增长，每个规模执行多次 plain 与 AgentOS 对照。",
+            "scenario": "文件对象查询实测",
+            "workload": "同一次 Guest 运行分别执行强制遍历、冷索引和热索引；不使用内核查询结果缓存。",
             "plain_path": EXPERIMENT_SPECS["file_metadata"]["plain_path"],
             "agentos_path": EXPERIMENT_SPECS["file_metadata"]["agentos_path"],
-            "parameter": "file_count=32/128/512/1024；trial=1..5。",
-            "metric": "records_touched、metadata_candidates、tick_value；统计表给出 min/avg/max/P50/P95。",
-            "source": "experiments/raw/file-metadata.csv, experiments/experiment-stats.csv",
-            "artifact": "charts/experiment-file-query-bar.svg",
-        },
-        {
-            "scenario": "Context 与 timeline 查询实验",
-            "workload": "记录数按 128、512、2048、8192 增长，比较用户态重建步骤与内核 snapshot/query 成本。",
-            "plain_path": EXPERIMENT_SPECS["context_timeline"]["plain_path"],
-            "agentos_path": EXPERIMENT_SPECS["context_timeline"]["agentos_path"],
-            "parameter": "record_count=128/512/2048/8192；trial=1..5。",
-            "metric": "rebuild_steps、snapshot_query_cost、tick_value；统计表给出 min/avg/max/P50/P95。",
-            "source": "experiments/raw/context-timeline.csv, experiments/experiment-stats.csv",
-            "artifact": "charts/experiment-context-line.svg",
-        },
-        {
-            "scenario": "事件等待实验",
-            "workload": "事件数按 8、32、128、512 增长，比较用户态轮询次数与内核 wait/wake 次数。",
-            "plain_path": EXPERIMENT_SPECS["event_loop"]["plain_path"],
-            "agentos_path": EXPERIMENT_SPECS["event_loop"]["agentos_path"],
-            "parameter": "event_count=8/32/128/512；trial=1..7。",
-            "metric": "poll_checks、wait_wake_ops、tick_value；统计表给出 min/avg/max/P50/P95。",
-            "source": "experiments/raw/event-loop.csv, experiments/experiment-stats.csv",
-            "artifact": "charts/experiment-event-box.svg",
-        },
-        {
-            "scenario": "并发 Agent 写入实验",
-            "workload": "并发 Agent 数按 2、4、8、16 增长，比较用户态锁文件风险与 AgentOS lease/capability 拒绝效果。",
-            "plain_path": EXPERIMENT_SPECS["agent_concurrency"]["plain_path"],
-            "agentos_path": EXPERIMENT_SPECS["agent_concurrency"]["agentos_path"],
-            "parameter": "agent_count=2/4/8/16；trial=1..5。",
-            "metric": "overwrite_risk_score、residual_write_risk、denied_effect、tick_value；统计表给出 min/avg/max/P50/P95。",
-            "source": "experiments/raw/agent-concurrency.csv, experiments/experiment-stats.csv",
-            "artifact": "charts/experiment-concurrency-heatmap.svg",
-        },
-        {
-            "scenario": "LLM Relay 模式实验",
-            "workload": "LLM 请求数按 4、16、64、256 增长，比较普通路径跨日志重建与 AgentOS 结构化请求记录。",
-            "plain_path": EXPERIMENT_SPECS["llm_relay"]["plain_path"],
-            "agentos_path": EXPERIMENT_SPECS["llm_relay"]["agentos_path"],
-            "parameter": "request_count=4/16/64/256；trial=1..5；Relay 支持 template 与 cloud 两种用户态模式。",
-            "metric": "relay_rebuild_steps、structured_relay_records、tick_value；统计表给出 min/avg/max/P50/P95。",
-            "source": "experiments/raw/llm-relay.csv, experiments/experiment-stats.csv",
-            "artifact": "charts/experiment-llm-relay-bar.svg",
-        },
-        {
-            "scenario": "恢复流程成本实验",
-            "workload": "失败阶段数按 1、3、6、12 增长，比较用户态恢复步骤与 AgentOS 结构化恢复动作。",
-            "plain_path": EXPERIMENT_SPECS["recovery_flow"]["plain_path"],
-            "agentos_path": EXPERIMENT_SPECS["recovery_flow"]["agentos_path"],
-            "parameter": "failed_stage_count=1/3/6/12；trial=1..5。",
-            "metric": "recovery_user_steps、recovery_kernel_actions、tick_value；统计表给出 min/avg/max/P50/P95。",
-            "source": "experiments/raw/recovery-flow.csv, experiments/experiment-stats.csv",
-            "artifact": "charts/experiment-recovery-line.svg",
-        },
-        {
-            "scenario": "六组实验综合观测",
-            "workload": "把文件查询、Context/timeline、事件等待、并发写入、LLM Relay、恢复流程六组实验的节省操作数放在同一张趋势图中。",
-            "plain_path": "读取六组实验中 plain 路径的中位数。",
-            "agentos_path": "读取六组实验中 AgentOS 路径的中位数。",
-            "parameter": "load_index=1..4。",
-            "metric": "累计节省操作数。",
-            "source": "experiments/raw/*.csv, experiments/experiment-stats.csv",
-            "artifact": "charts/experiment-monitor-area.svg",
-        },
+            "parameter": f"observed_loads={loads or 'none'}; measured_trials={trials}。",
+            "metric": "每次查询实际触达记录、操作次数、Guest 原始微秒差值；冷索引另列内核实际报告的重建记录数。",
+            "source": "experiments/raw/file-query-benchmark.csv, measured-experiments.json",
+            "artifact": "charts/experiment-file-query-bar.svg" if measured else "not-measured",
+        }
     ]
 
 
@@ -1932,9 +1325,9 @@ def delivery_readiness_rows() -> list[dict[str, str]]:
         {
             "requirement": "带数据的测试结果图表化",
             "status": "已覆盖",
-            "evidence": "index.html; charts/*.svg; experiments/raw/*.csv; experiments/experiment-stats.csv",
+            "evidence": "index.html; charts/*.svg; experiments/status.json",
             "verification": "test_chart_type_data_contract.py",
-            "note": "六组对照实验分别保留原始 CSV、统计 CSV 和对应图表。",
+            "note": "实验数据仅从可追溯 Guest marker 提取；缺失时明确标记 unavailable，不生成填充数据。",
         },
         {
             "requirement": "图表文字不互相遮挡",
@@ -1981,9 +1374,9 @@ def delivery_readiness_rows() -> list[dict[str, str]]:
         {
             "requirement": "同时覆盖功能状态和性能观测",
             "status": "已覆盖",
-            "evidence": "runtime-observation.svg; cost-replacement.svg; runner-speedup.svg; experiment-monitor-area.svg",
+            "evidence": "runtime-observation.svg; cost-replacement.svg; runner-speedup.svg; experiments/status.json",
             "verification": "test_chart_type_data_contract.py",
-            "note": "运行观测覆盖功能状态，runner 图和六组实验图覆盖性能与机制效果。",
+            "note": "运行观测覆盖功能状态；文件查询性能仅在真实 Guest 测量可用时生成。",
         },
         {
             "requirement": "文档避免空泛待办描述",
@@ -2068,13 +1461,7 @@ def chart_evidence_description(chart_name: str) -> tuple[str, str]:
         "cost-replacement.svg": ("state-compare-summary.json:cost_replacements", "普通用户态成本项与 AgentOS 替代机制的配对"),
         "runner-ticks.svg": ("state-compare-summary.json:runner_tick_comparison", "同一 runner 场景下两条路径的 tick 对照"),
         "runner-speedup.svg": ("runner-sweep.csv", "runner 场景的相对倍数和节省 tick"),
-        "experiment-file-query-bar.svg": ("experiments/raw/file-metadata.csv", "文件数变化下 plain 扫描记录数与 AgentOS metadata 候选数"),
-        "experiment-context-line.svg": ("experiments/raw/context-timeline.csv", "Context/timeline 记录数变化下用户态重建成本与内核 snapshot/query 成本"),
-        "experiment-event-box.svg": ("experiments/raw/event-loop.csv", "事件数量变化下用户态轮询次数与 AgentOS wait/wake 次数分布"),
-        "experiment-concurrency-heatmap.svg": ("experiments/raw/agent-concurrency.csv", "并发 Agent 数变化下用户态覆盖风险与 AgentOS 残余写入风险"),
-        "experiment-llm-relay-bar.svg": ("experiments/raw/llm-relay.csv", "LLM Relay 请求数变化下普通路径重建成本与 AgentOS 结构化记录成本"),
-        "experiment-recovery-line.svg": ("experiments/raw/recovery-flow.csv", "失败阶段数量变化下用户态恢复步骤与 AgentOS 结构化恢复动作成本"),
-        "experiment-monitor-area.svg": ("experiments/experiment-stats.csv", "六组实验随负载增加产生的累计节省操作数"),
+        "experiment-file-query-bar.svg": ("experiments/raw/file-query-benchmark.csv", "同一真实 Guest 运行中的强制遍历、冷索引重建和热索引查询"),
     }
     return descriptions.get(chart_name, ("summary.csv", "双目标运行派生图表"))
 
@@ -2140,7 +1527,7 @@ def evidence_manifest_rows(charts: list[Path]) -> list[dict[str, str]]:
         {
             "artifact": "index.html",
             "kind": "图表页面",
-            "source": "summary.csv, runner-sweep.csv, experiments/experiment-stats.csv",
+            "source": "summary.csv, runner-sweep.csv, experiments/status.json",
             "proves": "测试数据已生成图表并可集中查看",
             "reader_use": "查看图表总览",
         },
@@ -2166,29 +1553,12 @@ def evidence_manifest_rows(charts: list[Path]) -> list[dict[str, str]]:
             "reader_use": "复查性能趋势图",
         },
         {
-            "artifact": "experiments/experiment-stats.csv",
-            "kind": "数据表",
-            "source": "experiments/raw/*.csv",
-            "proves": "六组对照实验的 min、avg、max、P50、P95 和 tick 统计",
-            "reader_use": "解释每张实验图的统计方法",
+            "artifact": "experiments/status.json",
+            "kind": "测量状态",
+            "source": "measured-experiments.json",
+            "proves": "真实 Guest 测量是否可用；缺 marker 时不会生成填充数据",
+            "reader_use": "先确认性能数据是否可用于结论",
         },
-        {
-            "artifact": "experiments/mechanism-notes.csv",
-            "kind": "数据表",
-            "source": "EXPERIMENT_SPECS",
-            "proves": "六组实验的 plain 路径、AgentOS 路径和机制解释",
-            "reader_use": "解释实验为什么能说明内核机制效果",
-        },
-        *[
-            {
-                "artifact": f"experiments/raw/{spec['raw_file']}",
-                "kind": "原始数据表",
-                "source": "experiment_rows",
-                "proves": f"{spec['title']} 的多负载、多次运行原始数据",
-                "reader_use": "打开原始 CSV 复查图表输入",
-            }
-            for spec in EXPERIMENT_SPECS.values()
-        ],
         {
             "artifact": "summary.json",
             "kind": "机器摘要",
@@ -2197,6 +1567,30 @@ def evidence_manifest_rows(charts: list[Path]) -> list[dict[str, str]]:
             "reader_use": "脚本复查入口",
         },
     ]
+    if any(chart.name == "experiment-file-query-bar.svg" for chart in charts):
+        rows.extend([
+            {
+                "artifact": "experiments/experiment-stats.csv",
+                "kind": "数据表",
+                "source": "experiments/raw/file-query-benchmark.csv",
+                "proves": "真实文件查询测量的 min、avg、max、P50、P95 和 tick 统计",
+                "reader_use": "复查统计聚合",
+            },
+            {
+                "artifact": "experiments/mechanism-notes.csv",
+                "kind": "数据表",
+                "source": "EXPERIMENT_SPECS",
+                "proves": "强制遍历、冷索引和热索引的测量边界",
+                "reader_use": "解释对照路径",
+            },
+            {
+                "artifact": "experiments/raw/file-query-benchmark.csv",
+                "kind": "原始数据表",
+                "source": "measured-experiments.json + Guest log SHA256",
+                "proves": "逐行绑定 Guest 日志、提交、命令和运行标识的原始测量",
+                "reader_use": "复查图表输入和来源",
+            },
+        ])
     for chart in charts:
         source, proves = chart_evidence_description(chart.name)
         rows.append(
@@ -2297,14 +1691,9 @@ def reader_checklist_rows(meta: dict[str, object], charts: list[Path], work_dir:
         "cost-replacement.svg",
         "runner-ticks.svg",
         "runner-speedup.svg",
-        "experiment-file-query-bar.svg",
-        "experiment-context-line.svg",
-        "experiment-event-box.svg",
-        "experiment-concurrency-heatmap.svg",
-        "experiment-llm-relay-bar.svg",
-        "experiment-recovery-line.svg",
-        "experiment-monitor-area.svg",
     }
+    if experiment_rows(meta):
+        required_charts.add("experiment-file-query-bar.svg")
 
     def row(item: str, status: bool, evidence: str, action: str) -> dict[str, str]:
         return {
@@ -2350,7 +1739,7 @@ def reader_checklist_rows(meta: dict[str, object], charts: list[Path], work_dir:
             "核心图表",
             required_charts.issubset(chart_names),
             f"required={len(required_charts)}; generated={len(required_charts & chart_names)}; total_charts={len(chart_names)}",
-            "复查时至少查看运行观测、成本替代、runner 对照和六组实验图。",
+            "复查时至少查看运行观测、成本替代和 runner 对照；有真实 Guest 数据时再查看文件查询图。",
         ),
         row(
             "证据索引",
@@ -2477,33 +1866,10 @@ def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Pat
     paths.append(runner_speedup_chart)
 
     experiment_data = experiment_rows(meta)
-    file_chart = charts_dir / "experiment-file-query-bar.svg"
-    experiment_file_bar_svg(experiment_data, file_chart)
-    paths.append(file_chart)
-
-    context_chart = charts_dir / "experiment-context-line.svg"
-    experiment_context_line_svg(experiment_data, context_chart)
-    paths.append(context_chart)
-
-    event_chart = charts_dir / "experiment-event-box.svg"
-    experiment_event_box_svg(experiment_data, event_chart)
-    paths.append(event_chart)
-
-    concurrency_chart = charts_dir / "experiment-concurrency-heatmap.svg"
-    experiment_concurrency_heatmap_svg(experiment_data, concurrency_chart)
-    paths.append(concurrency_chart)
-
-    llm_chart = charts_dir / "experiment-llm-relay-bar.svg"
-    experiment_llm_relay_bar_svg(experiment_data, llm_chart)
-    paths.append(llm_chart)
-
-    recovery_chart = charts_dir / "experiment-recovery-line.svg"
-    experiment_recovery_line_svg(experiment_data, recovery_chart)
-    paths.append(recovery_chart)
-
-    monitor_chart = charts_dir / "experiment-monitor-area.svg"
-    experiment_monitor_area_svg(experiment_data, monitor_chart)
-    paths.append(monitor_chart)
+    if experiment_data:
+        file_chart = charts_dir / "experiment-file-query-bar.svg"
+        experiment_file_bar_svg(experiment_data, file_chart)
+        paths.append(file_chart)
 
     return paths
 
@@ -2523,7 +1889,7 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
         "",
         f"- 普通 uCore 提取状态文件 {fmt_number(as_number(state.get('plain_files')))} 个，AgentOS-uCore 提取 {fmt_number(as_number(state.get('agentos_files')))} 个，其中 AgentOS 额外状态文件 {fmt_number(as_number(state.get('agentos_extra_files')))} 个。",
         f"- 本地结果阅读器生成页面 {fmt_number(as_number(reader.get('plain_pages')))} 个，两个目标页面集合一致；AgentOS API JSON 比普通目标多 {fmt_number(as_number(reader.get('agentos_extra_api_json')))} 个。",
-        f"- 同一批预置 action 请求数为 {fmt_number(as_number(state.get('embedded_action_records')))}，成功记录核对数为 {fmt_number(as_number(state.get('checked_success_records')))}。",
+        f"- 同一批预置 action 请求数为 {fmt_number(as_number(state.get('embedded_action_records')))}；另核对 {fmt_number(as_number(state.get('checked_compatibility_records')))} 条非证据状态兼容记录，并识别 {fmt_number(as_number(state.get('source_bound_runtime_records')))} 条来源绑定运行记录。",
         f"- AgentOS 主流程中记录到 {fmt_number(as_number(state.get('agentos_mainflow_stages')))} 个内核参与阶段和 {fmt_number(as_number(state.get('agentos_mainflow_facts')))} 条主流程事实。",
         f"- QEMU 诊断：普通目标耗时 {plain_result.get('qemu_elapsed_seconds', '0')} 秒、无输出提示 {plain_result.get('qemu_idle_notices', '0')} 次；AgentOS 目标耗时 {agentos_result.get('qemu_elapsed_seconds', '0')} 秒、无输出提示 {agentos_result.get('qemu_idle_notices', '0')} 次。",
         "",
@@ -2533,10 +1899,12 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
     for chart in charts:
         lines.append(f"- `{chart.relative_to(out_path.parent.parent).as_posix()}`")
     lines.append("- `runner-sweep.csv`")
-    lines.append("- `experiments/experiment-stats.csv`")
-    lines.append("- `experiments/mechanism-notes.csv`")
-    for spec in EXPERIMENT_SPECS.values():
-        lines.append(f"- `experiments/raw/{spec['raw_file']}`")
+    lines.append("- `experiments/status.json`")
+    if experiment_rows(meta):
+        lines.append("- `experiments/experiment-stats.csv`")
+        lines.append("- `experiments/mechanism-notes.csv`")
+        for spec in EXPERIMENT_SPECS.values():
+            lines.append(f"- `experiments/raw/{spec['raw_file']}`")
     lines.append("- `delivery-readiness.csv`")
     lines.append("- `delivery-readiness.html`")
     lines.append("- `test-suite.csv`")
@@ -2629,7 +1997,7 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
         lines.extend(
             [
                 "",
-                "## 六组对照实验统计",
+                "## 真实 Guest 文件查询统计",
                 "",
                 "| 实验 | 负载 | 路径 | 指标 | min | avg | max | P50 | P95 |",
                 "| --- | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: |",
@@ -2674,12 +2042,6 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
         "runner-ticks.svg": "Runner Tick 对照",
         "runner-speedup.svg": "Runner 成组场景相对倍数",
         "experiment-file-query-bar.svg": "文件对象查询实验",
-        "experiment-context-line.svg": "Context 与 timeline 查询实验",
-        "experiment-event-box.svg": "事件等待实验",
-        "experiment-concurrency-heatmap.svg": "并发 Agent 写入实验",
-        "experiment-llm-relay-bar.svg": "LLM Relay 模式实验",
-        "experiment-recovery-line.svg": "恢复流程成本实验",
-        "experiment-monitor-area.svg": "六组实验综合观测",
     }
     for chart in charts:
         rel = chart.relative_to(out_path.parent).as_posix()
@@ -2714,6 +2076,13 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
     eval_html = "".join(
         f'<li><strong class="eval-{escape(status)}">{escape(status)}</strong>{escape(text)}</li>'
         for status, text in evaluation_items(meta)
+    )
+    experiment_links = (
+        '<a href="experiments/experiment-stats.csv">下载真实实验统计</a>'
+        '<a href="experiments/mechanism-notes.csv">下载测量边界说明</a>'
+        '<a href="charts/experiment-file-query-bar.svg">打开文件查询实测图</a>'
+        if experiment_rows(meta)
+        else '<a href="experiments/status.json">实验测量 unavailable</a>'
     )
     html = f"""<!doctype html>
 <html lang="zh-CN">
@@ -2768,8 +2137,6 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="report.md">查看 Markdown 报告</a>
       <a href="summary.csv">下载 CSV 明细</a>
       <a href="runner-sweep.csv">下载 runner 成组数据</a>
-      <a href="experiments/experiment-stats.csv">下载实验统计</a>
-      <a href="experiments/mechanism-notes.csv">下载机制说明</a>
       <a href="delivery-readiness.html">打开结果材料核对</a>
       <a href="delivery-readiness.csv">下载结果材料核对</a>
       <a href="test-suite.html">打开测试入口说明</a>
@@ -2784,13 +2151,7 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="charts/cost-replacement.svg">打开成本替代图</a>
       <a href="charts/runner-ticks.svg">打开 tick 对照图</a>
       <a href="charts/runner-speedup.svg">打开相对倍数图</a>
-      <a href="charts/experiment-file-query-bar.svg">打开文件查询实验图</a>
-      <a href="charts/experiment-context-line.svg">打开 Context 实验图</a>
-      <a href="charts/experiment-event-box.svg">打开事件实验图</a>
-      <a href="charts/experiment-concurrency-heatmap.svg">打开并发实验图</a>
-      <a href="charts/experiment-llm-relay-bar.svg">打开 LLM Relay 实验图</a>
-      <a href="charts/experiment-recovery-line.svg">打开恢复流程实验图</a>
-      <a href="charts/experiment-monitor-area.svg">打开综合观测图</a>
+      {experiment_links}
     </div>
     <p>建议先运行 <code>make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-</code>，再运行 <code>make reader</code> 打开交互页面。需要按顺序查看时，先打开 <a href="reader-guide.html">运行导览页</a>；本页用于快速查看测试数据图表，本地阅读器页面用于查看完整运行对象和 AgentOS 主流程细节。</p>
     <section class="eval">
@@ -2829,6 +2190,12 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     eval_rows = "".join(
         f"<tr><td>{escape(status)}</td><td>{escape(text)}</td></tr>" for status, text in evaluation_items(meta)
     )
+    experiment_links = (
+        '、<a href="experiments/experiment-stats.csv">真实实验统计</a>'
+        '、<a href="charts/experiment-file-query-bar.svg">文件查询实测图</a>'
+        if experiment_rows(meta)
+        else '、<a href="experiments/status.json">实验测量 unavailable</a>'
+    )
     html = f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -2864,7 +2231,8 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
   </header>
   <main>
     <div class="grid">
-      <div class="card"><strong>{fmt_number(as_number(state.get("checked_success_records")))}</strong><span>成功记录核对数</span></div>
+      <div class="card"><strong>{fmt_number(as_number(state.get("checked_compatibility_records")))}</strong><span>非证据状态兼容记录</span></div>
+      <div class="card"><strong>{fmt_number(as_number(state.get("source_bound_runtime_records")))}</strong><span>来源绑定运行记录</span></div>
       <div class="card"><strong>{fmt_number(as_number(state.get("agentos_extra_files")))}</strong><span>AgentOS 额外状态文件</span></div>
       <div class="card"><strong>{fmt_number(as_number(state.get("agentos_evidence_checks")))}</strong><span>内核证据检查项</span></div>
       <div class="card"><strong>{fmt_number(as_number(reader.get("agentos_extra_api_json")))}</strong><span>AgentOS 额外 API JSON</span></div>
@@ -2884,7 +2252,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>相关结果</h2>
-      <p><a href="reader-guide.html">运行导览页</a>、<a href="reader-checklist.html">结果核验表</a>、<a href="delivery-readiness.html">结果材料核对</a>、<a href="test-suite.html">测试入口说明</a>、<a href="experiment-design.html">实验场景说明</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="experiments/experiment-stats.csv">实验统计 CSV</a>、<a href="experiments/mechanism-notes.csv">机制说明 CSV</a>、<a href="evidence-manifest.csv">证据索引表</a>、<a href="delivery-readiness.csv">结果核对 CSV</a>、<a href="reader-checklist.csv">结果核验表 CSV</a>、<a href="test-suite.csv">测试入口 CSV</a>、<a href="experiment-design.csv">实验场景说明 CSV</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>、<a href="charts/experiment-file-query-bar.svg">文件查询实验图</a>、<a href="charts/experiment-context-line.svg">Context 实验图</a>、<a href="charts/experiment-event-box.svg">事件实验图</a>、<a href="charts/experiment-concurrency-heatmap.svg">并发实验图</a>、<a href="charts/experiment-monitor-area.svg">综合观测图</a></p>
+      <p><a href="reader-guide.html">运行导览页</a>、<a href="reader-checklist.html">结果核验表</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>{experiment_links}</p>
     </section>
   </main>
 </body>
@@ -2905,6 +2273,23 @@ def write_reader_guide_page(rows: list[MetricRow], meta: dict[str, object], char
         chart.name: chart.relative_to(out_path.parent).as_posix()
         for chart in charts
     }
+    if experiment_rows(meta):
+        experiment_guide_row = (
+            '<tr><td>3</td><td><a href="charts/experiment-file-query-bar.svg">文件查询实测图</a></td>'
+            '<td>对照同一 Guest 运行中的强制遍历、含重建冷索引和无缓存热索引。</td></tr>'
+        )
+        experiment_file_links = (
+            '<a href="experiments/experiment-stats.csv">真实实验统计 CSV</a>'
+            '<a href="experiments/mechanism-notes.csv">测量边界说明</a>'
+        )
+        experiment_summary = "真实文件查询数据已通过 Guest 日志 SHA256 和 marker 行号校验。"
+    else:
+        experiment_guide_row = (
+            '<tr><td>3</td><td><a href="experiments/status.json">实验测量状态</a></td>'
+            '<td>当前没有可验证 Guest marker，状态明确为 unavailable，未生成替代数据。</td></tr>'
+        )
+        experiment_file_links = '<a href="experiments/status.json">实验测量 unavailable</a>'
+        experiment_summary = "本次没有可验证的 Guest 性能 marker，不提供性能结论。"
     html = f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -2960,21 +2345,16 @@ def write_reader_guide_page(rows: list[MetricRow], meta: dict[str, object], char
         <thead><tr><th>顺序</th><th>打开内容</th><th>要讲清楚的点</th></tr></thead>
         <tbody>
           <tr><td>1</td><td><a href="monitor.html">运行观测面板</a></td><td>先确认本次运行健康：QEMU 状态、状态产物、API 输出、AgentOS 额外证据都来自本次运行。</td></tr>
-          <tr><td>2</td><td><a href="index.html">图表索引页</a></td><td>查看十一张核心图：运行观测、成本替代、runner tick、runner 相对倍数和六组对照实验。</td></tr>
-          <tr><td>3</td><td><a href="charts/experiment-file-query-bar.svg">文件查询实验图</a></td><td>说明文件数增长时，普通路径扫描数随规模增长，AgentOS metadata 候选数保持小得多。</td></tr>
-          <tr><td>4</td><td><a href="charts/experiment-context-line.svg">Context 实验图</a></td><td>说明 Context/timeline 记录数增长时，用户态重建步骤与内核 snapshot/query 成本的差异。</td></tr>
-          <tr><td>5</td><td><a href="charts/experiment-event-box.svg">事件实验图</a></td><td>说明事件数量增长时，轮询次数与内核 wait/wake 次数的分布差异。</td></tr>
-          <tr><td>6</td><td><a href="charts/experiment-concurrency-heatmap.svg">并发实验图</a></td><td>说明并发 Agent 增加时，锁文件覆盖风险与 AgentOS lease/capability 拒绝效果的差异。</td></tr>
-          <tr><td>7</td><td><a href="charts/experiment-llm-relay-bar.svg">LLM Relay 实验图</a></td><td>说明请求数量增长时，普通路径重建多处日志，AgentOS 路径保留结构化请求和完成事件。</td></tr>
-          <tr><td>8</td><td><a href="charts/experiment-recovery-line.svg">恢复流程实验图</a></td><td>说明失败阶段增加时，普通路径重复扫描和拼接状态，AgentOS 路径使用结构化动作和来源记录。</td></tr>
-          <tr><td>9</td><td><a href="charts/runner-speedup.svg">相对倍数图</a></td><td>说明同一 runner 场景下，AgentOS 路径如何减少 tick；必要时打开 <a href="runner-sweep.csv">runner-sweep.csv</a> 复查原始数据。</td></tr>
-          <tr><td>10</td><td><a href="../index.html">本地结果阅读器首页</a></td><td>进入完整科研平台页面，查看 run、Agent、证据、artifact、LLM Relay 和 AgentOS Compare。</td></tr>
+          <tr><td>2</td><td><a href="index.html">图表索引页</a></td><td>查看运行观测、成本替代、runner tick 和 runner 相对倍数。</td></tr>
+          {experiment_guide_row}
+          <tr><td>4</td><td><a href="charts/runner-speedup.svg">相对倍数图</a></td><td>打开 <a href="runner-sweep.csv">runner-sweep.csv</a> 复查对应输入。</td></tr>
+          <tr><td>5</td><td><a href="../index.html">本地结果阅读器首页</a></td><td>进入完整科研平台页面查看运行对象和内核证据。</td></tr>
         </tbody>
       </table>
     </section>
     <section class="panel">
       <h2>关键数据</h2>
-      <p>本次结果包含 {fmt_number(cost_count)} 项用户态成本替代记录、{fmt_number(runner_pairs)} 组 runner tick 对照、{fmt_number(as_number(state.get("checked_success_records")))} 条成功记录核对。六组实验可以回到 <a href="experiments/experiment-stats.csv">experiments/experiment-stats.csv</a>、<a href="experiments/mechanism-notes.csv">experiments/mechanism-notes.csv</a> 和 <a href="experiments/raw/file-metadata.csv">experiments/raw/file-metadata.csv</a> 等原始 CSV。</p>
+      <p>本次结果包含 {fmt_number(cost_count)} 项 reference 成本替代目录、{fmt_number(runner_pairs)} 组来源绑定 runner 观测、{fmt_number(as_number(state.get("checked_compatibility_records")))} 条非证据状态兼容记录，以及 {fmt_number(as_number(state.get("source_bound_runtime_records")))} 条来源绑定运行记录。{experiment_summary}</p>
       <div class="links">
         <a href="delivery-readiness.html">结果材料核对</a>
         <a href="delivery-readiness.csv">结果核对 CSV</a>
@@ -2982,15 +2362,13 @@ def write_reader_guide_page(rows: list[MetricRow], meta: dict[str, object], char
         <a href="test-suite.csv">测试入口 CSV</a>
         <a href="experiment-design.html">实验场景说明</a>
         <a href="experiment-design.csv">实验说明 CSV</a>
-        <a href="experiments/experiment-stats.csv">实验统计 CSV</a>
-        <a href="experiments/mechanism-notes.csv">机制说明 CSV</a>
+        {experiment_file_links}
         <a href="reader-checklist.html">结果核验表</a>
         <a href="reader-checklist.csv">检查表 CSV</a>
         <a href="evidence-manifest.csv">证据索引 CSV</a>
         <a href="report.md">Markdown 报告</a>
         <a href="summary.json">JSON 摘要</a>
         <a href="{escape(chart_links.get("runtime-observation.svg", "charts/runtime-observation.svg"))}">运行观测图</a>
-        <a href="{escape(chart_links.get("experiment-monitor-area.svg", "charts/experiment-monitor-area.svg"))}">综合观测图</a>
       </div>
     </section>
   </main>
@@ -3009,12 +2387,103 @@ def copy_docs_assets(charts: list[Path], docs_assets_dir: Path) -> None:
         shutil.copy2(chart, docs_assets_dir / chart.name)
 
 
-def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None) -> dict[str, object]:
-    rows, meta = collect_rows(work_dir)
+def reset_generated_experiment_surfaces(out_dir: Path) -> None:
+    """Remove generated experiment surfaces before rebuilding a result in-place."""
     out_dir.mkdir(parents=True, exist_ok=True)
+    root = out_dir.resolve(strict=True)
+    experiments = root / "experiments"
+    if experiments.is_symlink():
+        raise ValueError("experiment output directory is a symlink")
+    if experiments.exists():
+        resolved = experiments.resolve(strict=True)
+        if resolved.parent != root or not resolved.is_dir():
+            raise ValueError("experiment output directory is unsafe")
+        shutil.rmtree(resolved)
+
+    charts = root / "charts"
+    if charts.is_symlink():
+        raise ValueError("chart output directory is a symlink")
+    if charts.is_dir():
+        for old_chart in charts.glob("experiment-*.svg"):
+            if old_chart.is_dir():
+                raise ValueError(f"experiment chart output is unsafe: {old_chart.name}")
+            old_chart.unlink()
+
+
+def persist_verified_measurement(
+    measured: dict[str, object], work_dir: Path, out_dir: Path
+) -> dict[str, object]:
+    """Copy the verified manifest and its Guest log into the served result."""
+    source = measured.get("source")
+    rows = measured.get("rows")
+    if not isinstance(source, dict) or not isinstance(rows, list):
+        raise ValueError("measured experiment evidence has an invalid bundle shape")
+    relative = Path(str(source.get("path", "")))
+    if (
+        not relative.name
+        or relative.is_absolute()
+        or ".." in relative.parts
+        or relative.name in {".", ".."}
+    ):
+        raise ValueError("measured experiment source path is unsafe")
+    work_root = work_dir.resolve(strict=True)
+    lexical_source = work_root / relative
+    if lexical_source.is_symlink():
+        raise ValueError("measured experiment source log is a symlink")
+    source_path = lexical_source.resolve(strict=True)
+    if work_root not in source_path.parents or not source_path.is_file():
+        raise ValueError("measured experiment source log escapes the work directory")
+
+    experiments = out_dir / "experiments"
+    experiments.mkdir(parents=True, exist_ok=True)
+    bundled_name = relative.name
+    bundled_log = experiments / bundled_name
+    shutil.copy2(source_path, bundled_log)
+
+    bundled = json.loads(json.dumps(measured))
+    bundled_source = bundled["source"]
+    bundled_rows = bundled["rows"]
+    bundled_source["path"] = bundled_name
+    for row in bundled_rows:
+        if not isinstance(row, dict):
+            raise ValueError("measured experiment row is invalid")
+        row["source_log"] = bundled_name
+    manifest_path = experiments / "measured-experiments.json"
+    write_manifest(manifest_path, bundled)
+    try:
+        return verify_manifest(manifest_path, experiments)
+    except MeasurementError as error:
+        raise ValueError(f"persisted measurement bundle is invalid: {error}") from error
+
+
+def summarize(
+    work_dir: Path,
+    out_dir: Path,
+    docs_assets_dir: Path | None = None,
+    require_measured_experiments: bool = False,
+) -> dict[str, object]:
+    rows, meta = collect_rows(work_dir)
+    measurement_manifest = work_dir / "measured-experiments.json"
+    if measurement_manifest.is_file():
+        try:
+            measured = verify_manifest(measurement_manifest, work_dir)
+        except MeasurementError as error:
+            raise ValueError(f"measured experiment evidence is invalid: {error}") from error
+        meta["measured_experiment_rows"] = measured["rows"]
+        meta["measured_experiment_manifest"] = measured
+    else:
+        meta["measured_experiment_rows"] = []
+        if require_measured_experiments:
+            raise ValueError("measured experiment evidence is unavailable: measured-experiments.json is missing")
+    reset_generated_experiment_surfaces(out_dir)
+    if measurement_manifest.is_file():
+        bundled = persist_verified_measurement(measured, work_dir, out_dir)
+        meta["measured_experiment_manifest"] = bundled
+        meta["measured_experiment_rows"] = bundled["rows"]
     write_csv(rows, out_dir / "summary.csv")
     write_runner_sweep_csv(meta, out_dir / "runner-sweep.csv")
     experiment_data = write_experiment_outputs(meta, out_dir)
+    experiment_status = write_experiment_status(meta, out_dir)
     write_delivery_readiness_csv(out_dir / "delivery-readiness.csv")
     write_delivery_readiness_page(out_dir / "delivery-readiness.html")
     write_test_suite_csv(out_dir / "test-suite.csv")
@@ -3042,11 +2511,13 @@ def summarize(work_dir: Path, out_dir: Path, docs_assets_dir: Path | None = None
         "reader_guide": str(out_dir / "reader-guide.html"),
         "csv": str(out_dir / "summary.csv"),
         "runner_sweep_csv": str(out_dir / "runner-sweep.csv"),
-        "experiment_stats_csv": str(out_dir / "experiments" / "experiment-stats.csv"),
-        "experiment_mechanism_csv": str(out_dir / "experiments" / "mechanism-notes.csv"),
+        "experiment_status": experiment_status["status"],
+        "experiment_status_json": str(out_dir / "experiments" / "status.json"),
+        "experiment_stats_csv": str(out_dir / "experiments" / "experiment-stats.csv") if experiment_data else None,
+        "experiment_mechanism_csv": str(out_dir / "experiments" / "mechanism-notes.csv") if experiment_data else None,
         "experiment_raw_csvs": [
             str(out_dir / "experiments" / "raw" / str(spec["raw_file"]))
-            for spec in EXPERIMENT_SPECS.values()
+            for spec in EXPERIMENT_SPECS.values() if experiment_data
         ],
         "delivery_readiness_csv": str(out_dir / "delivery-readiness.csv"),
         "delivery_readiness": str(out_dir / "delivery-readiness.html"),
@@ -3069,9 +2540,15 @@ def main() -> int:
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--docs-assets-dir", type=Path, default=None)
+    parser.add_argument("--require-measured-experiments", action="store_true")
     args = parser.parse_args()
 
-    summary = summarize(args.work_dir, args.out_dir, args.docs_assets_dir)
+    summary = summarize(
+        args.work_dir,
+        args.out_dir,
+        args.docs_assets_dir,
+        require_measured_experiments=args.require_measured_experiments,
+    )
     print(
         "dual_platform_result_summary: rows={rows} charts={charts} report={report} index={index} monitor={monitor} reader_guide={reader_guide} status={status}".format(
             rows=summary["rows"],

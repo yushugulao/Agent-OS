@@ -11,11 +11,13 @@ void wait_queue_init(struct wait_queue *q, enum wait_reason reason)
 	intr_restore(enabled);
 }
 
-static int wait_queue_sleep_mode(struct wait_queue *q, int interruptible)
+static int wait_queue_sleep_mode(struct wait_queue *q, int interruptible,
+				 uint64 key)
 {
 	struct thread *t = curr_thread();
 	int enabled = intr_save();
-	int interrupted;
+	int canceled;
+	int exit_requested;
 
 	if (q == 0 || q->reason == WAIT_REASON_NONE || t == 0 ||
 	    t->state != RUNNING || t->wait_channel != 0 || t->on_run_queue) {
@@ -30,6 +32,7 @@ static int wait_queue_sleep_mode(struct wait_queue *q, int interruptible)
 	t->wait_interruptible = interruptible;
 	t->wait_channel = q;
 	t->wait_reason = q->reason;
+	t->wait_key = key;
 	t->wait_next = 0;
 	if (q->tail)
 		q->tail->wait_next = t;
@@ -43,54 +46,102 @@ static int wait_queue_sleep_mode(struct wait_queue *q, int interruptible)
 	 * never be attributed to this sleeping thread on the scheduler stack.
 	 */
 	sched();
-	interrupted = t->wait_interrupted ||
-		(interruptible && proc_thread_exit_requested());
+	/*
+	 * Queue cancellation and a normal wake followed by teardown are distinct:
+	 * resource waiters may have to pass an already-issued grant onward.
+	 */
+	canceled = t->wait_interrupted;
+	exit_requested = interruptible && proc_thread_exit_requested();
 	t->wait_interrupted = 0;
 	t->wait_interruptible = 0;
+	t->wait_key = 0;
 	intr_restore(enabled);
-	return interrupted ? WAIT_QUEUE_INTERRUPTED : WAIT_QUEUE_OK;
+	if (canceled)
+		return WAIT_QUEUE_INTERRUPTED;
+	if (exit_requested)
+		return WAIT_QUEUE_WOKEN_INTERRUPTED;
+	return WAIT_QUEUE_OK;
+}
+
+static void wait_queue_require_irq_disabled(void)
+{
+	if (intr_get())
+		panic("wait queue predicate unlocked");
 }
 
 int wait_queue_sleep(struct wait_queue *q)
 {
-	return wait_queue_sleep_mode(q, 1);
+	return wait_queue_sleep_mode(q, 1, 0);
 }
 
 int wait_queue_sleep_irq(struct wait_queue *q)
 {
-	return wait_queue_sleep_mode(q, 1);
+	wait_queue_require_irq_disabled();
+	return wait_queue_sleep_mode(q, 1, 0);
+}
+
+int wait_queue_sleep_key_irq(struct wait_queue *q, uint64 key)
+{
+	wait_queue_require_irq_disabled();
+	if (key == 0)
+		return WAIT_QUEUE_ERROR;
+	return wait_queue_sleep_mode(q, 1, key);
 }
 
 int wait_queue_sleep_irq_uninterruptible(struct wait_queue *q)
 {
-	return wait_queue_sleep_mode(q, 0);
+	wait_queue_require_irq_disabled();
+	return wait_queue_sleep_mode(q, 0, 0);
 }
 
-int wait_queue_wake_one(struct wait_queue *q)
+static struct thread *wait_queue_wake_thread(struct wait_queue *q,
+					     int keyed, uint64 key)
 {
 	struct thread *t;
+	struct thread *next;
+	struct thread *previous;
 	int enabled = intr_save();
-	int woken = 0;
+	struct thread *woken = 0;
 
-	while (q != 0 && (t = q->head) != 0) {
-		q->head = t->wait_next;
-		if (q->head == 0)
-			q->tail = 0;
+	previous = 0;
+	for (t = q != 0 ? q->head : 0; t != 0; t = next) {
+		next = t->wait_next;
+		if (keyed && t->wait_key != key) {
+			previous = t;
+			continue;
+		}
+		if (previous)
+			previous->wait_next = next;
+		else
+			q->head = next;
+		if (q->tail == t)
+			q->tail = previous;
 		t->wait_next = 0;
 		if (t->wait_channel != q)
 			continue;
 		t->wait_channel = 0;
 		t->wait_reason = WAIT_REASON_NONE;
+		t->wait_key = 0;
 		t->wait_interruptible = 0;
 		if (t->state != SLEEPING)
 			continue;
 		t->state = RUNNABLE;
 		add_task(t);
-		woken = 1;
+		woken = t;
 		break;
 	}
 	intr_restore(enabled);
 	return woken;
+}
+
+struct thread *wait_queue_wake_one_thread(struct wait_queue *q)
+{
+	return wait_queue_wake_thread(q, 0, 0);
+}
+
+int wait_queue_wake_one(struct wait_queue *q)
+{
+	return wait_queue_wake_one_thread(q) != 0;
 }
 
 int wait_queue_wake_all(struct wait_queue *q)
@@ -98,7 +149,18 @@ int wait_queue_wake_all(struct wait_queue *q)
 	int woken = 0;
 	int enabled = intr_save();
 
-	while (wait_queue_wake_one(q))
+	while (wait_queue_wake_one_thread(q) != 0)
+		woken++;
+	intr_restore(enabled);
+	return woken;
+}
+
+int wait_queue_wake_key_all(struct wait_queue *q, uint64 key)
+{
+	int woken = 0;
+	int enabled = intr_save();
+
+	while (wait_queue_wake_thread(q, 1, key) != 0)
 		woken++;
 	intr_restore(enabled);
 	return woken;
@@ -132,6 +194,7 @@ void wait_queue_cancel(struct thread *t)
 	t->wait_channel = 0;
 	t->wait_next = 0;
 	t->wait_reason = WAIT_REASON_NONE;
+	t->wait_key = 0;
 	t->wait_interrupted = 0;
 	t->wait_interruptible = 0;
 	intr_restore(enabled);

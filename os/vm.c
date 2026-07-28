@@ -9,11 +9,111 @@ pagetable_t kernel_pagetable;
 extern char e_text[]; // kernel.ld sets this to end of kernel code.
 extern char trampoline[];
 
+#define VM_ACCOUNT_BINDING_CAP (2 * NPROC + 1)
+
+struct vm_account_binding {
+	pagetable_t root;
+	struct resource_account_handle account;
+	enum resource_charge_class charge_class;
+};
+
+static struct vm_account_binding vm_accounts[VM_ACCOUNT_BINDING_CAP];
+
+static int vm_account_get(pagetable_t root,
+			  struct resource_account_handle *account,
+			  enum resource_charge_class *charge_class)
+{
+	int enabled = intr_save();
+
+	for (uint i = 0; i < VM_ACCOUNT_BINDING_CAP; i++) {
+		if (vm_accounts[i].root != root)
+			continue;
+		*account = vm_accounts[i].account;
+		*charge_class = vm_accounts[i].charge_class;
+		intr_restore(enabled);
+		return 0;
+	}
+	intr_restore(enabled);
+	return -1;
+}
+
+static int vm_account_bind(pagetable_t root,
+			   struct resource_account_handle account,
+			   enum resource_charge_class charge_class)
+{
+	int enabled = intr_save();
+	int free_slot = -1;
+
+	for (uint i = 0; i < VM_ACCOUNT_BINDING_CAP; i++) {
+		if (vm_accounts[i].root == root)
+			goto fail;
+		if (vm_accounts[i].root == 0 && free_slot < 0)
+			free_slot = (int)i;
+	}
+	if (free_slot < 0)
+		goto fail;
+	vm_accounts[free_slot].root = root;
+	vm_accounts[free_slot].account = account;
+	vm_accounts[free_slot].charge_class = charge_class;
+	intr_restore(enabled);
+	return 0;
+fail:
+	intr_restore(enabled);
+	return -1;
+}
+
+static int vm_account_unbind(pagetable_t root)
+{
+	int enabled = intr_save();
+
+	for (uint i = 0; i < VM_ACCOUNT_BINDING_CAP; i++) {
+		if (vm_accounts[i].root != root)
+			continue;
+		memset(&vm_accounts[i], 0, sizeof(vm_accounts[i]));
+		intr_restore(enabled);
+		return 0;
+	}
+	intr_restore(enabled);
+	return -1;
+}
+
+void *uvm_page_alloc(pagetable_t root)
+{
+	struct resource_account_handle account;
+	enum resource_charge_class charge_class;
+
+	if (vm_account_get(root, &account, &charge_class) < 0)
+		return 0;
+	return kalloc_account_page(account, charge_class);
+}
+
+static void *vm_page_alloc_or_raw(pagetable_t root)
+{
+	struct resource_account_handle account;
+	enum resource_charge_class charge_class;
+
+	if (vm_account_get(root, &account, &charge_class) < 0)
+		return !kalloc_physical_policy_ready() ||
+			       root == kernel_pagetable ?
+			       kalloc_system_page() : 0;
+	return kalloc_account_page(account, charge_class);
+}
+
+int uvm_page_free(pagetable_t root, void *page)
+{
+	struct resource_account_handle account;
+	enum resource_charge_class charge_class;
+
+	if (vm_account_get(root, &account, &charge_class) < 0)
+		return -1;
+	return kfree_account_page(page, account, charge_class);
+}
+
 // Make a direct-map page table for the kernel.
 pagetable_t kvmmake()
 {
 	pagetable_t kpgtbl;
-	kpgtbl = (pagetable_t)kalloc();
+	kpgtbl = (pagetable_t)kalloc_system_page();
 	if (kpgtbl == 0)
 		panic("kernel page table allocation");
 	memset(kpgtbl, 0, PGSIZE);
@@ -58,6 +158,7 @@ void kvm_init()
 //    0..11 -- 12 bits of byte offset within the page.
 pte_t *walk(pagetable_t pagetable, uint64 va, int alloc)
 {
+	pagetable_t root = pagetable;
 	if (va >= MAXVA)
 		panic("walk");
 
@@ -66,7 +167,8 @@ pte_t *walk(pagetable_t pagetable, uint64 va, int alloc)
 		if (*pte & PTE_V) {
 			pagetable = (pagetable_t)PTE2PA(*pte);
 		} else {
-			if (!alloc || (pagetable = (pde_t *)kalloc()) == 0)
+			if (!alloc ||
+			    (pagetable = (pde_t *)vm_page_alloc_or_raw(root)) == 0)
 				return 0;
 			memset(pagetable, 0, PGSIZE);
 			*pte = PA2PTE(pagetable) | PTE_V;
@@ -204,12 +306,13 @@ int uvmmap(pagetable_t pagetable, uint64 va, uint64 npages, int perm)
 		return -1;
 
 	for (mapped = 0; mapped < npages; ++mapped) {
-		mem = kalloc();
+		mem = uvm_page_alloc(pagetable);
 		if (mem == 0)
 			goto fail;
+		memset(mem, 0, PGSIZE);
 		if (mappages(pagetable, va + mapped * PGSIZE, PGSIZE,
 			     (uint64)mem, perm) < 0) {
-			kfree(mem);
+			(void)uvm_page_free(pagetable, mem);
 			goto fail;
 		}
 	}
@@ -240,24 +343,84 @@ void uvmunmap(pagetable_t pagetable, uint64 va, uint64 npages, int do_free)
 				panic("uvmunmap: not a leaf");
 			if (do_free) {
 				uint64 pa = PTE2PA(*pte);
-				kfree((void *)pa);
+				if (uvm_page_free(pagetable, (void *)pa) < 0)
+					panic("uvmunmap account");
 			}
 		}
 		*pte = 0;
 	}
 }
 
+/*
+ * Rollback and heap shrink must refund intermediate page-table pages as well
+ * as leaves. Generic uvmunmap leaves them for freewalk(), which would let a
+ * grow/shrink loop pin physical-account quota until process exit.
+ */
+static int uvm_prune_empty_walk(
+	pagetable_t pagetable, int level,
+	struct resource_account_handle account,
+	enum resource_charge_class charge_class)
+{
+	int empty = 1;
+
+	for (int i = 0; i < 512; i++) {
+		pte_t pte = pagetable[i];
+
+		if ((pte & PTE_V) == 0)
+			continue;
+		if ((pte & (PTE_R | PTE_W | PTE_X)) != 0) {
+			empty = 0;
+			continue;
+		}
+		if (level <= 0)
+			panic("uvm prune level");
+		pagetable_t child = (pagetable_t)PTE2PA(pte);
+		if (uvm_prune_empty_walk(child, level - 1, account,
+					 charge_class)) {
+			pagetable[i] = 0;
+			if (kfree_account_page(child, account, charge_class) < 0)
+				panic("uvm prune account");
+		} else {
+			empty = 0;
+		}
+		(void)kernel_work_checkpoint_cleanup(KERNEL_WORK_PAGE_UNITS);
+	}
+	return empty;
+}
+
+void uvm_unmap_reclaim(pagetable_t pagetable, uint64 va, uint64 npages)
+{
+	struct resource_account_handle account;
+	enum resource_charge_class charge_class;
+
+	if (pagetable == 0 || (va % PGSIZE) != 0 || va >= MAXVA ||
+	    npages > (MAXVA - va) / PGSIZE)
+		panic("uvm reclaim range");
+	for (uint64 page = 0; page < npages; page++) {
+		uvmunmap(pagetable, va + page * PGSIZE, 1, 1);
+		(void)kernel_work_checkpoint_cleanup(KERNEL_WORK_PAGE_UNITS);
+	}
+	if (vm_account_get(pagetable, &account, &charge_class) < 0)
+		panic("uvm reclaim account");
+	(void)uvm_prune_empty_walk(pagetable, 2, account, charge_class);
+}
+
 // create an empty user page table.
 // returns 0 if out of memory.
-pagetable_t uvmcreate()
+pagetable_t uvmcreate_account(struct resource_account_handle account,
+			      enum resource_charge_class charge_class)
 {
 	pagetable_t pagetable;
-	pagetable = (pagetable_t)kalloc();
+	pagetable = (pagetable_t)kalloc_account_page(account, charge_class);
 	if (pagetable == 0) {
 		errorf("uvmcreate: kalloc error");
 		return 0;
 	}
 	memset(pagetable, 0, PGSIZE);
+	if (vm_account_bind(pagetable, account, charge_class) < 0) {
+		(void)kfree_account_page(pagetable, account, charge_class);
+		return 0;
+	}
 	if (mappages(pagetable, TRAMPOLINE, PAGE_SIZE, (uint64)trampoline,
 		     PTE_R | PTE_X) < 0) {
 		uvmfree(pagetable, 0);
@@ -268,7 +431,9 @@ pagetable_t uvmcreate()
 
 // Recursively free page-table pages.
 // All leaf mappings must already have been removed.
-void freewalk(pagetable_t pagetable)
+static int freewalk(
+	pagetable_t pagetable, struct resource_account_handle account,
+	enum resource_charge_class charge_class)
 {
 	// there are 2^9 = 512 PTEs in a page table.
 	for (int i = 0; i < 512; i++) {
@@ -276,13 +441,15 @@ void freewalk(pagetable_t pagetable)
 		if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0) {
 			// this PTE points to a lower-level page table.
 			uint64 child = PTE2PA(pte);
-			freewalk((pagetable_t)child);
+			if (freewalk((pagetable_t)child, account,
+				     charge_class) < 0)
+				return -1;
 			pagetable[i] = 0;
 		} else if (pte & PTE_V) {
 			panic("freewalk: leaf");
 		}
 	}
-	kfree((void *)pagetable);
+	return kfree_account_page((void *)pagetable, account, charge_class);
 }
 
 /**
@@ -292,9 +459,16 @@ void freewalk(pagetable_t pagetable)
  */
 void uvmfree(pagetable_t pagetable, uint64 max_page)
 {
+	struct resource_account_handle account;
+	enum resource_charge_class charge_class;
+
 	if (max_page > 0)
 		uvmunmap(pagetable, 0, max_page, 1);
-	freewalk(pagetable);
+	if (vm_account_get(pagetable, &account, &charge_class) < 0)
+		panic("uvmfree account");
+	if (freewalk(pagetable, account, charge_class) < 0 ||
+	    vm_account_unbind(pagetable) < 0)
+		panic("uvmfree release");
 }
 
 // Terminal and rollback teardown may own a large sparse address space. Release
@@ -302,11 +476,18 @@ void uvmfree(pagetable_t pagetable, uint64 max_page)
 // all other process threads are quiescent before this function is entered.
 void uvmfree_cleanup(pagetable_t pagetable, uint64 max_page)
 {
+	struct resource_account_handle account;
+	enum resource_charge_class charge_class;
+
 	for (uint64 page = 0; page < max_page; page++) {
 		uvmunmap(pagetable, page * PGSIZE, 1, 1);
 		(void)kernel_work_checkpoint_cleanup(KERNEL_WORK_PAGE_UNITS);
 	}
-	freewalk(pagetable);
+	if (vm_account_get(pagetable, &account, &charge_class) < 0)
+		panic("uvmfree cleanup account");
+	if (freewalk(pagetable, account, charge_class) < 0 ||
+	    vm_account_unbind(pagetable) < 0)
+		panic("uvmfree cleanup release");
 }
 
 // Used in fork.
@@ -327,12 +508,12 @@ int uvmcopy(pagetable_t old, pagetable_t new, uint64 max_page)
 		if (pte != 0 && (*pte & PTE_V) != 0) {
 			pa = PTE2PA(*pte);
 			flags = PTE_FLAGS(*pte);
-			if ((mem = kalloc()) == 0)
+			if ((mem = uvm_page_alloc(new)) == 0)
 				goto err;
 			memmove(mem, (char *)pa, PGSIZE);
 			if (mappages(new, va, PGSIZE, (uint64)mem,
 				     flags) != 0) {
-				kfree(mem);
+				(void)uvm_page_free(new, mem);
 				goto err;
 			}
 		}

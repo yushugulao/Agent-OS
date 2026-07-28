@@ -5,15 +5,31 @@
 #include <string.h>
 #include <unistd.h>
 
-#define DEMO_PROVENANCE_MAX 256
+#define DEMO_OBSERVE_PAGE_RECORDS 128
+#define DEMO_PROVENANCE_MAX      128
+
+_Static_assert(DEMO_OBSERVE_PAGE_RECORDS <= AGENT_AUDIT_MAX_RECORDS,
+	       "demo audit page exceeds the UAPI limit");
+_Static_assert(DEMO_OBSERVE_PAGE_RECORDS <= AGENT_TIMELINE_MAX_RECORDS,
+	       "demo timeline page exceeds the UAPI limit");
+_Static_assert(DEMO_PROVENANCE_MAX <= AGENT_PROVENANCE_MAX_EDGES,
+	       "demo provenance page exceeds the UAPI limit");
 
 static int recovery_pid;
 static int investigator_pid;
 static int ready_fd = -1;
-static struct agent_audit_record demo_audit_records[AGENT_AUDIT_MAX_RECORDS];
-static struct agent_timeline_record demo_timeline_records[AGENT_TIMELINE_MAX_RECORDS];
-static struct agent_provenance_edge
-	demo_provenance_edges[DEMO_PROVENANCE_MAX];
+/* Snapshot formats are sequential; one scratch avoids duplicate eager copies. */
+static union {
+	struct agent_audit_record audit[DEMO_OBSERVE_PAGE_RECORDS];
+	struct agent_timeline_record timeline[DEMO_OBSERVE_PAGE_RECORDS];
+	struct agent_provenance_edge provenance[DEMO_PROVENANCE_MAX];
+	struct agent_file_prefetch_hint
+		span_prefetch[AGENT_FILE_PREFETCH_SPAN_MAX];
+} demo_observe_scratch;
+#define demo_audit_records demo_observe_scratch.audit
+#define demo_timeline_records demo_observe_scratch.timeline
+#define demo_provenance_edges demo_observe_scratch.provenance
+#define demo_span_prefetch demo_observe_scratch.span_prefetch
 static struct agent_audit_filter demo_audit_filter;
 static struct agent_timeline_filter demo_timeline_filter;
 
@@ -60,6 +76,75 @@ static uint64 digest_text(const char *text)
 		hash *= 1099511628211ULL;
 	}
 	return hash;
+}
+
+static void check_investigator_digest_observation(uint64 digest_sequence)
+{
+	int timeline_count;
+	int provenance_count;
+	int timeline_verified = 0;
+	int provenance_verified = 0;
+
+	memset(&demo_timeline_filter, 0, sizeof(demo_timeline_filter));
+	demo_timeline_filter.flags = AGENT_TIMELINE_FILTER_SOURCE_MASK |
+				     AGENT_TIMELINE_FILTER_KIND |
+				     AGENT_TIMELINE_FILTER_TOOL_ID |
+				     AGENT_TIMELINE_FILTER_STATUS;
+	demo_timeline_filter.source_mask = AGENT_TIMELINE_SOURCE_MASK_CONTEXT;
+	demo_timeline_filter.kind = AGENT_AUDIT_KIND_CONTEXT;
+	demo_timeline_filter.tool_id = AGENT_TOOL_READ_FILE_DIGEST;
+	demo_timeline_filter.status = AGENT_STATUS_OK;
+	timeline_count = agent_timeline_query(&demo_timeline_filter,
+					      demo_timeline_records,
+					      DEMO_OBSERVE_PAGE_RECORDS);
+	check(timeline_count >= 1, "investigator timeline digest");
+	for (int i = 0; i < timeline_count; i++) {
+		struct agent_timeline_record *record = &demo_timeline_records[i];
+
+		check(record->source == AGENT_TIMELINE_SOURCE_CONTEXT,
+		      "investigator timeline digest source");
+		check(record->kind == AGENT_AUDIT_KIND_CONTEXT,
+		      "investigator timeline digest kind");
+		check(record->tool_id == AGENT_TOOL_READ_FILE_DIGEST,
+		      "investigator timeline digest tool");
+		if (record->pid == getpid() &&
+		    record->source_pid == getpid() &&
+		    record->target_pid == getpid() &&
+		    record->sequence == digest_sequence &&
+		    record->value0 == strlen(DEMO_ALIGN_LOG_BODY) &&
+		    record->value1 == strlen(DEMO_ALIGN_LOG_BODY) &&
+		    record->value2 == digest_text(DEMO_ALIGN_LOG_BODY) &&
+		    (record->flags & AGENT_CONTEXT_RECORD_F_TRUNCATED) != 0 &&
+		    strlen(record->text) == AGENT_CONTEXT_TEXT_SIZE - 1 &&
+		    strncmp(DEMO_ALIGN_LOG_BODY, record->text,
+			    strlen(record->text)) == 0)
+			timeline_verified = 1;
+	}
+	check(timeline_verified, "investigator timeline digest value");
+
+	provenance_count = agent_provenance_snapshot(demo_provenance_edges,
+						      DEMO_PROVENANCE_MAX);
+	check(provenance_count >= 1, "investigator digest provenance");
+	for (int i = 0; i < provenance_count; i++) {
+		struct agent_provenance_edge *edge = &demo_provenance_edges[i];
+
+		if (edge->kind == AGENT_PROVENANCE_EDGE_CONTEXT &&
+		    edge->source_pid == getpid() &&
+		    edge->target_pid == getpid() &&
+		    edge->target_sequence == digest_sequence &&
+		    edge->tool_id == AGENT_TOOL_READ_FILE_DIGEST &&
+		    edge->status == AGENT_STATUS_OK &&
+		    edge->value0 == strlen(DEMO_ALIGN_LOG_BODY) &&
+		    edge->value1 == strlen(DEMO_ALIGN_LOG_BODY) &&
+		    (edge->flags & AGENT_CONTEXT_RECORD_F_TRUNCATED) != 0 &&
+		    strlen(edge->text) == AGENT_CONTEXT_TEXT_SIZE - 1 &&
+		    strncmp(DEMO_ALIGN_LOG_BODY, edge->text,
+			    strlen(edge->text)) == 0)
+			provenance_verified = 1;
+	}
+	check(provenance_verified, "investigator digest provenance value");
+	printf("labdemo_ucore: investigator digest_observation timeline=%d provenance=%d verified=1\n",
+	       timeline_count, provenance_count);
 }
 
 static void write_demo_file(const char *name, const char *body)
@@ -130,6 +215,7 @@ static void run_sentinel(void)
 	static struct agent_file_prefetch_hint
 		hints[AGENT_FILE_PREFETCH_MAX_HINTS];
 	int hint_count;
+	int matched = 0;
 
 	created("sentinel");
 	check(agent_heartbeat(5) == 0, "heartbeat");
@@ -140,7 +226,19 @@ static void run_sentinel(void)
 	       event_tick());
 	printf("agentos:event type=AGENT_STATE tick=%d role=sentinel state=WAITING\n",
 	       event_tick());
-	check(agent_wait(&event, 300) == AGENT_STATUS_OK, "sentinel wait");
+	for (int i = 0; i < 64; i++) {
+		check(agent_wait(&event, 300) == AGENT_STATUS_OK,
+		      "sentinel wait");
+		if (event.type == AGENT_EVENT_FILE_STATUS) {
+			matched = 1;
+			break;
+		}
+		check(event.type == AGENT_EVENT_TIMER &&
+			      strcmp(event.payload, "timer=heartbeat") == 0,
+		      "sentinel intrinsic heartbeat");
+	}
+	check(matched, "sentinel failed file event");
+	check(agent_heartbeat_stop() == 0, "sentinel heartbeat stop");
 	printf("labdemo_ucore: sentinel event payload=%s\n", event.payload);
 	printf("agentos:event type=AGENT_STATE tick=%d role=sentinel state=RUNNING event_id=%d corr_id=%d\n",
 	       event_tick(), (int)event.event_id, (int)event.corr_id);
@@ -189,8 +287,6 @@ static void run_investigator(void)
 	static struct agent_context_record records[8];
 	static struct agent_file_prefetch_hint
 		hints[AGENT_FILE_PREFETCH_MAX_HINTS];
-	static struct agent_file_prefetch_hint
-		span_hints[AGENT_FILE_PREFETCH_SPAN_MAX];
 	int n;
 	int summary_seq;
 	int digest_seq;
@@ -233,19 +329,19 @@ static void run_investigator(void)
 	       prefetch_stage, (int)hints[0].source_sequence,
 	       (int)hints[0].reason);
 	span_count = agent_file_prefetch_span_snapshot(
-		span_hints, AGENT_FILE_PREFETCH_SPAN_MAX);
+		demo_span_prefetch, AGENT_FILE_PREFETCH_SPAN_MAX);
 	check(span_count >= 1, "span prefetch hints");
 	for (int i = 0; i < span_count; i++) {
-		if (strcmp(span_hints[i].hit.stage, prefetch_stage) == 0 &&
-		    span_hints[i].target_pid == getpid() &&
-		    span_hints[i].source_pid != getpid() &&
-		    (span_hints[i].reason &
+		if (strcmp(demo_span_prefetch[i].hit.stage, prefetch_stage) == 0 &&
+		    demo_span_prefetch[i].target_pid == getpid() &&
+		    demo_span_prefetch[i].source_pid != getpid() &&
+		    (demo_span_prefetch[i].reason &
 		     AGENT_FILE_PREFETCH_REASON_HANDOFF) != 0 &&
-		    (span_hints[i].reason &
+		    (demo_span_prefetch[i].reason &
 		     AGENT_FILE_PREFETCH_REASON_SPAN_BUS) != 0) {
 			span_found = 1;
-			span_source = span_hints[i].source_pid;
-			span_target = span_hints[i].target_pid;
+			span_source = demo_span_prefetch[i].source_pid;
+			span_target = demo_span_prefetch[i].target_pid;
 			break;
 		}
 	}
@@ -253,7 +349,7 @@ static void run_investigator(void)
 	printf("labdemo_ucore: investigator span_prefetch stage=%s count=%d source_pid=%d target_pid=%d\n",
 	       prefetch_stage, span_count, span_source, span_target);
 	span_trace_count = agent_span_trace_snapshot(
-		demo_audit_records, AGENT_AUDIT_MAX_RECORDS);
+		demo_audit_records, DEMO_OBSERVE_PAGE_RECORDS);
 	check(span_trace_count >= 1, "investigator span trace");
 	for (int i = 0; i < span_trace_count; i++) {
 		check(demo_audit_records[i].span_id == event.span_id,
@@ -292,6 +388,7 @@ static void run_investigator(void)
 	       (int)res.value1, res.result, digest_seq);
 	printf("agentos:event type=TOOL_CALL tick=%d role=investigator tool=read_file_digest stage=align status=OK bytes=%d seq=%d\n",
 	       event_tick(), (int)res.value1, digest_seq);
+	check_investigator_digest_observation(digest_seq);
 	make_op(&op, AGENT_TOOL_DEPENDENCY_QUERY, 2002, 0, "label=align");
 	run_one(&op, &res, AGENT_STATUS_OK, "dependency");
 	dependency_seq = res.sequence;
@@ -467,9 +564,10 @@ static void check_global_audit(int sentinel_pid)
 	uint64 latest_sequence;
 	uint64 query_span = 0;
 
-	n = agent_audit_snapshot(demo_audit_records, AGENT_AUDIT_MAX_RECORDS);
+	n = agent_audit_snapshot(demo_audit_records,
+				 DEMO_OBSERVE_PAGE_RECORDS);
 	check(n > 0, "audit count");
-	check(n <= AGENT_AUDIT_MAX_RECORDS, "audit cap");
+	check(n <= DEMO_OBSERVE_PAGE_RECORDS, "audit page cap");
 	snapshot_count = n;
 	for (int i = 0; i < n; i++) {
 		struct agent_audit_record *r = &demo_audit_records[i];
@@ -517,7 +615,7 @@ static void check_global_audit(int sentinel_pid)
 	demo_audit_filter.flags = AGENT_AUDIT_FILTER_KIND;
 	demo_audit_filter.kind = AGENT_AUDIT_KIND_CONTEXT;
 	context_query = agent_audit_query(&demo_audit_filter, demo_audit_records,
-					  AGENT_AUDIT_MAX_RECORDS);
+					  DEMO_OBSERVE_PAGE_RECORDS);
 	check(context_query > 0, "audit query context");
 	for (int i = 0; i < context_query; i++)
 		check(demo_audit_records[i].kind == AGENT_AUDIT_KIND_CONTEXT,
@@ -527,7 +625,7 @@ static void check_global_audit(int sentinel_pid)
 	demo_audit_filter.flags = AGENT_AUDIT_FILTER_SPAN_ID;
 	demo_audit_filter.span_id = query_span;
 	span_query = agent_audit_query(&demo_audit_filter, demo_audit_records,
-				       AGENT_AUDIT_MAX_RECORDS);
+				       DEMO_OBSERVE_PAGE_RECORDS);
 	check(query_span != 0 && span_query > 0, "audit query span");
 	for (int i = 0; i < span_query; i++)
 		check(demo_audit_records[i].span_id == query_span,
@@ -539,7 +637,7 @@ static void check_global_audit(int sentinel_pid)
 	demo_audit_filter.target_pid = sentinel_pid;
 	demo_audit_filter.event_type = AGENT_EVENT_FILE_STATUS;
 	event_query = agent_audit_query(&demo_audit_filter, demo_audit_records,
-					AGENT_AUDIT_MAX_RECORDS);
+					DEMO_OBSERVE_PAGE_RECORDS);
 	check(event_query >= 2, "audit query event");
 	for (int i = 0; i < event_query; i++) {
 		check(demo_audit_records[i].target_pid == sentinel_pid,
@@ -558,7 +656,7 @@ static void check_global_audit(int sentinel_pid)
 	demo_audit_filter.target_pid = investigator_pid;
 	prefetch_query = agent_audit_query(&demo_audit_filter,
 					   demo_audit_records,
-					   AGENT_AUDIT_MAX_RECORDS);
+					   DEMO_OBSERVE_PAGE_RECORDS);
 	check(prefetch_query >= 1, "audit query prefetch");
 	for (int i = 0; i < prefetch_query; i++) {
 		check(demo_audit_records[i].kind == AGENT_AUDIT_KIND_PREFETCH,
@@ -576,7 +674,7 @@ static void check_global_audit(int sentinel_pid)
 	demo_audit_filter.flags = AGENT_AUDIT_FILTER_START_SEQUENCE;
 	demo_audit_filter.start_sequence = latest_sequence;
 	start_query = agent_audit_query(&demo_audit_filter, demo_audit_records,
-					AGENT_AUDIT_MAX_RECORDS);
+					DEMO_OBSERVE_PAGE_RECORDS);
 	check(start_query >= 1, "audit query start");
 	for (int i = 0; i < start_query; i++)
 		check(demo_audit_records[i].sequence >= latest_sequence,
@@ -595,19 +693,17 @@ static void check_unified_timeline(int sentinel_pid)
 	int n;
 	int filtered;
 	int cursor_filtered;
-	int digest_filtered;
 	int has_context = 0;
 	int has_event = 0;
 	int has_sched = 0;
 	int has_prefetch = 0;
-	int has_digest = 0;
 	uint64 last_tick = 0;
 	uint64 cursor_tick;
 	uint64 cursor_sequence;
 	int cursor_source;
 
 	n = agent_timeline_snapshot(demo_timeline_records,
-				    AGENT_TIMELINE_MAX_RECORDS);
+				    DEMO_OBSERVE_PAGE_RECORDS);
 	check(n > 0, "timeline count");
 	for (int i = 0; i < n; i++) {
 		struct agent_timeline_record *r = &demo_timeline_records[i];
@@ -648,7 +744,7 @@ static void check_unified_timeline(int sentinel_pid)
 		AGENT_FILE_PREFETCH_REASON_HANDOFF;
 	filtered = agent_timeline_query(&demo_timeline_filter,
 					demo_timeline_records,
-					AGENT_TIMELINE_MAX_RECORDS);
+					DEMO_OBSERVE_PAGE_RECORDS);
 	check(filtered >= 1, "timeline query prefetch");
 	for (int i = 0; i < filtered; i++) {
 		struct agent_timeline_record *r = &demo_timeline_records[i];
@@ -671,47 +767,17 @@ static void check_unified_timeline(int sentinel_pid)
 	demo_timeline_filter.after_sequence = cursor_sequence;
 	cursor_filtered = agent_timeline_query(&demo_timeline_filter,
 					       demo_timeline_records,
-					       AGENT_TIMELINE_MAX_RECORDS);
+					       DEMO_OBSERVE_PAGE_RECORDS);
 	check(cursor_filtered > 0, "timeline query cursor");
 	for (int i = 0; i < cursor_filtered; i++)
 		check(timeline_after_cursor(&demo_timeline_records[i],
 					    cursor_tick, cursor_source,
 					    cursor_sequence),
 		      "timeline query cursor order");
-	memset(&demo_timeline_filter, 0, sizeof(demo_timeline_filter));
-	demo_timeline_filter.flags = AGENT_TIMELINE_FILTER_SOURCE_MASK |
-				     AGENT_TIMELINE_FILTER_KIND |
-				     AGENT_TIMELINE_FILTER_TOOL_ID;
-	demo_timeline_filter.source_mask = AGENT_TIMELINE_SOURCE_MASK_AUDIT;
-	demo_timeline_filter.kind = AGENT_AUDIT_KIND_CONTEXT;
-	demo_timeline_filter.tool_id = AGENT_TOOL_READ_FILE_DIGEST;
-	digest_filtered = agent_timeline_query(&demo_timeline_filter,
-					       demo_timeline_records,
-					       AGENT_TIMELINE_MAX_RECORDS);
-	check(digest_filtered >= 1, "timeline query digest");
-	for (int i = 0; i < digest_filtered; i++) {
-		struct agent_timeline_record *r = &demo_timeline_records[i];
-
-		check(r->source == AGENT_TIMELINE_SOURCE_AUDIT,
-		      "timeline digest source");
-		check(r->kind == AGENT_AUDIT_KIND_CONTEXT,
-		      "timeline digest kind");
-		check(r->tool_id == AGENT_TOOL_READ_FILE_DIGEST,
-		      "timeline digest tool");
-		if (r->value0 == strlen(DEMO_ALIGN_LOG_BODY) &&
-		    r->value1 == strlen(DEMO_ALIGN_LOG_BODY) &&
-		    r->value2 == digest_text(DEMO_ALIGN_LOG_BODY) &&
-		    r->text[0] != 0 &&
-		    strncmp(DEMO_ALIGN_LOG_BODY, r->text,
-			    strlen(r->text)) == 0)
-			has_digest = 1;
-	}
-	check(has_digest, "timeline query digest value");
-	printf("labdemo_ucore: unified_timeline records=%d context=%d event=%d sched=%d prefetch=%d digest=%d\n",
-	       n, has_context, has_event, has_sched, has_prefetch,
-	       has_digest);
-	printf("labdemo_ucore: timeline_query prefetch=%d cursor=%d digest=%d\n",
-	       filtered, cursor_filtered, digest_filtered);
+	printf("labdemo_ucore: unified_timeline records=%d context=%d event=%d sched=%d prefetch=%d\n",
+	       n, has_context, has_event, has_sched, has_prefetch);
+	printf("labdemo_ucore: timeline_query prefetch=%d cursor=%d\n",
+	       filtered, cursor_filtered);
 }
 
 static void check_provenance_graph(int sentinel_pid)
@@ -719,7 +785,6 @@ static void check_provenance_graph(int sentinel_pid)
 	int n;
 	int has_message = 0;
 	int has_prefetch = 0;
-	int has_digest = 0;
 
 	n = agent_provenance_snapshot(demo_provenance_edges,
 				      DEMO_PROVENANCE_MAX);
@@ -739,22 +804,11 @@ static void check_provenance_graph(int sentinel_pid)
 			     AGENT_FILE_PREFETCH_REASON_HANDOFF) != 0)
 				has_prefetch = 1;
 		}
-		if (edge->tool_id == AGENT_TOOL_READ_FILE_DIGEST &&
-		    edge->source_pid == investigator_pid &&
-		    edge->target_pid == investigator_pid &&
-		    edge->value0 == strlen(DEMO_ALIGN_LOG_BODY) &&
-		    edge->value1 == strlen(DEMO_ALIGN_LOG_BODY) &&
-		    edge->value2 == digest_text(DEMO_ALIGN_LOG_BODY) &&
-		    edge->text[0] != 0 &&
-		    strncmp(DEMO_ALIGN_LOG_BODY, edge->text,
-			    strlen(edge->text)) == 0)
-			has_digest = 1;
 	}
 	check(has_message, "provenance message");
 	check(has_prefetch, "provenance prefetch");
-	check(has_digest, "provenance digest");
-	printf("labdemo_ucore: provenance_graph edges=%d message=%d prefetch=%d digest=%d\n",
-	       n, has_message, has_prefetch, has_digest);
+	printf("labdemo_ucore: provenance_graph edges=%d message=%d prefetch=%d\n",
+	       n, has_message, has_prefetch);
 }
 
 static void run_orchestrator(void)

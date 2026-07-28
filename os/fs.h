@@ -3,6 +3,12 @@
 
 #include "types.h"
 #include "resource_controller.h"
+
+#if defined(__GNUC__)
+#define FS_MUST_CHECK __attribute__((warn_unused_result))
+#else
+#define FS_MUST_CHECK
+#endif
 // On-disk file system format.
 // Both the kernel and user programs use this header file.
 
@@ -24,6 +30,11 @@
 #define FS_LOOKUP_ERROR  (-1)
 #define FS_LOOKUP_ABSENT 0
 #define FS_LOOKUP_FOUND  1
+/* Preserved device scheduling failure; callers must not treat it as absent. */
+#define FS_LOOKUP_BUSY   (-5)
+/* Namespace publication may have completed; callers must fail closed. */
+#define FS_LOOKUP_INDETERMINATE (-7)
+#define FS_CREATE_INDETERMINATE FS_LOOKUP_INDETERMINATE
 
 #define ROOTINO 1 // root i-number
 #define BSIZE 1024 // block size
@@ -108,6 +119,18 @@ _Static_assert(sizeof(struct superblock) == 64,
 #define FS_OWNER_SCOPE(id) (FS_OWNER_SCOPE_FLAG | (id))
 #define FS_OWNER_IS_SCOPE(owner) (((owner) & FS_OWNER_SCOPE_FLAG) != 0)
 #define FS_OWNER_SCOPE_ID(owner) ((owner) & FS_OWNER_ID_MASK)
+/*
+ * The qmap is also the block allocator's recovery log.  Stable workflow
+ * owners use the 10 prefix; 01 and 11 retain the 30-bit owner payload while
+ * an allocation or free is being committed.  Stable owner values are kept
+ * unchanged, so existing images remain readable.
+ */
+#define FS_QMAP_STATE_MASK 0xc0000000U
+#define FS_QMAP_OWNER_PAYLOAD_MASK 0x3fffffffU
+#define FS_QMAP_ALLOCATING_FLAG 0x40000000U
+#define FS_QMAP_WORKFLOW_LIVE_FLAG FS_OWNER_SCOPE_FLAG
+#define FS_QMAP_FREEING_FLAG 0xc0000000U
+#define FS_OWNER_MAX_PERSISTENT_ID FS_QMAP_OWNER_PAYLOAD_MASK
 // Trusted mkfs images may sponsor immutable PUBLIC objects as SYSTEM;
 // runtime PUBLIC allocations always use FS_OWNER_PUBLIC.
 #define FS_OWNER_IS_PUBLIC_OBJECT(owner) \
@@ -213,6 +236,8 @@ struct inode_reclaim {
 	uint direct_cursor;
 	uint indirect_cursor;
 	uint block_cursor;
+	struct resource_account_handle page_account;
+	enum resource_charge_class page_charge_class;
 };
 
 void fsinit();
@@ -224,28 +249,32 @@ void fs_storage_scope_account_close(struct resource_account_handle);
 int dirlink(struct inode *, char *, uint, const struct vfs_cred *);
 int dirunlink(struct inode *, char *, uint, uint, uint,
 	      const struct vfs_cred *, uint);
+int fs_rollback_created_workflow(char *, uint, uint, uint, uint);
 int fs_reclaim_scope_files(uint);
 struct inode *dirlookup(struct inode *, char *, uint *, uint, uint, int *);
-struct inode *fs_create(char *, short, int *, const struct vfs_cred *, uint);
-struct inode *ialloc(uint, short, const struct fs_storage_charge *);
+struct inode *fs_create(char *, short, int *, const struct vfs_cred *, uint,
+			int *);
+struct inode *ialloc(uint, short, const struct fs_storage_charge *, int *);
 struct inode *inode_get(uint, uint);
 void iabort(struct inode *);
 struct inode *idup(struct inode *);
 void iinit();
-void ivalid(struct inode *);
+int ivalid(struct inode *) FS_MUST_CHECK;
 void iput(struct inode *);
 int inode_remove_detach(struct inode *, struct inode_reclaim *);
 void iunlock(struct inode *);
 void iunlockput(struct inode *);
-void iupdate(struct inode *);
-struct inode *namei_scope(char *, uint, uint);
+int iupdate(struct inode *) FS_MUST_CHECK;
 struct inode *namei_scope_status(char *, uint, uint, int *);
-struct inode *root_dir();
+struct inode *root_dir_status(int *);
 int readi(struct inode *, const struct vfs_cred *, int, uint64, uint, uint);
+int readi_device(struct inode *, const struct vfs_cred *, int, uint64, uint,
+		 uint);
 int writei(struct inode *, const struct vfs_cred *, int, uint64, uint, uint);
+int fs_preallocate_inode(struct inode *, const struct vfs_cred *, uint);
 int itruncate_detach(struct inode *, const struct vfs_cred *, uint,
 			 struct inode_reclaim *);
-void itruncate_reclaim(struct inode_reclaim *);
+int itruncate_reclaim(struct inode_reclaim *) FS_MUST_CHECK;
 int itruncate_reclaim_step(struct inode_reclaim *, uint);
 int itruncate(struct inode *, const struct vfs_cred *, uint);
 int itrunc(struct inode *, const struct vfs_cred *);

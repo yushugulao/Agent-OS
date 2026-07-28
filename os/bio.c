@@ -83,6 +83,8 @@ struct io_owner_state {
 	uint64 shared_grants;
 	uint64 physical_reads;
 	uint64 physical_writes;
+	uint64 physical_flushes;
+	uint64 failed_transfers;
 	uint64 cache_hits;
 	uint64 cache_misses;
 	uint64 cache_evictions;
@@ -92,6 +94,11 @@ struct io_owner_state {
 
 struct io_background_context {
 	int active;
+	struct thread *executor;
+	uint64 executor_generation;
+	int boot_executor;
+	int cache_wait_pending;
+	uint64 cache_wait_sequence;
 	uint owner;
 	uint reservation;
 	uint device_reservation;
@@ -115,6 +122,7 @@ static struct {
 } io_policy;
 
 static struct wait_queue cache_waiters;
+static uint64 cache_progress_sequence;
 static char bio_boot_holder_token;
 static uint bio_boot_fs_atomic_depth;
 
@@ -129,6 +137,71 @@ static uint bio_cache_count(uint owner);
 static int bio_cache_assign(struct buf *, uint, int, int);
 static void bio_cache_invalidate(struct buf *b);
 static void bio_cache_record(uint owner, int hit, int eviction);
+
+static int bio_background_current(void)
+{
+	struct thread *thread = curr_thread();
+
+	if (!io_policy.background.active ||
+	    io_policy.background.executor == 0 ||
+	    io_policy.background.executor != thread ||
+	    io_policy.background.executor_generation !=
+		    thread->identity_generation)
+		return 0;
+	/* Generation zero belongs only to the permanent pre-runtime idle token. */
+	if (io_policy.background.boot_executor)
+		return !io_policy.runtime_ready &&
+		       io_policy.background.executor_generation == 0;
+	return io_policy.runtime_ready &&
+	       io_policy.background.executor_generation != 0;
+}
+
+static void bio_cache_note_progress(void)
+{
+	int enabled = intr_save();
+
+	cache_progress_sequence++;
+	if (cache_progress_sequence == 0)
+		cache_progress_sequence = 1;
+	wait_queue_wake_all(&cache_waiters);
+	intr_restore(enabled);
+}
+
+static void bio_background_cache_retry_start(void)
+{
+	if (bio_background_current())
+		io_policy.background.cache_wait_pending = 0;
+}
+
+static void bio_background_cache_blocked(void)
+{
+	if (!bio_background_current())
+		panic("foreground cache retry classification");
+	io_policy.background.cache_wait_pending = 1;
+	io_policy.background.cache_wait_sequence = cache_progress_sequence;
+}
+
+static int bio_background_wait_for_cache_progress(void)
+{
+	int enabled = intr_save();
+
+	if (!bio_background_current()) {
+		intr_restore(enabled);
+		return -1;
+	}
+	while (io_policy.background.cache_wait_pending &&
+	       io_policy.background.cache_wait_sequence ==
+		       cache_progress_sequence) {
+		if (wait_queue_sleep_irq_uninterruptible(&cache_waiters) !=
+		    WAIT_QUEUE_OK) {
+			intr_restore(enabled);
+			return -1;
+		}
+	}
+	io_policy.background.cache_wait_pending = 0;
+	intr_restore(enabled);
+	return 0;
+}
 
 static uint io_bucket_burst(uint owner, uint io_class)
 {
@@ -285,6 +358,16 @@ static int bio_cache_owner_retained(uint owner)
 	       io_policy.background.owner == owner;
 }
 
+static void bio_cache_release_closed_owner(uint owner)
+{
+	if (bio_cache_owner_retained(owner))
+		return;
+	for (uint i = 0; i < NBUF; i++)
+		if (bcache.buf[i].cache_owner == owner &&
+		    bcache.buf[i].refcnt == 0)
+			bio_cache_invalidate(&bcache.buf[i]);
+}
+
 static struct io_owner_state *io_state_find(uint owner, int create)
 {
 	struct io_owner_state *free_state = 0;
@@ -315,10 +398,21 @@ static struct io_owner_state *io_state_find(uint owner, int create)
 
 static uint io_owner_from_proc(const struct proc *p)
 {
-	if (p != 0 && p->vfs_scope_id >= VFS_SCOPE_FIRST_DYNAMIC &&
-	    p->vfs_scope_id < FS_OWNER_SCOPE_FLAG &&
-	    p->storage_principal_id == p->vfs_scope_id)
-		return FS_OWNER_SCOPE(p->vfs_scope_id);
+	struct workflow_lifecycle_key lifecycle;
+	uint scope_id;
+
+	/*
+	 * I/O accounting follows the immutable workflow membership, not the
+	 * mutable VFS credential.  Exec may intentionally drop all filesystem
+	 * authority while the process remains charged to, and revocable with,
+	 * its original workflow resource domain.
+	 */
+	lifecycle = vfs_proc_lifecycle(p);
+	if (workflow_lifecycle_key_valid(lifecycle) &&
+	    workflow_lifecycle_scope(lifecycle, &scope_id) == 0 &&
+	    scope_id >= VFS_SCOPE_FIRST_DYNAMIC &&
+	    scope_id < FS_OWNER_SCOPE_FLAG)
+		return FS_OWNER_SCOPE(scope_id);
 	return FS_OWNER_PUBLIC;
 }
 
@@ -635,6 +729,10 @@ static int io_wait_for_debt(struct io_owner_state *state, uint io_class,
 			    int cleanup)
 {
 	struct io_bucket *bucket = &state->buckets[io_class];
+	int closing_background = cleanup &&
+		io_class == IO_POLICY_CLASS_BACKGROUND &&
+		bio_background_current() && state->active_requests != 0 &&
+		state->owner == io_policy.background.owner;
 	int enabled = intr_save();
 
 	for (;;) {
@@ -647,7 +745,15 @@ static int io_wait_for_debt(struct io_owner_state *state, uint io_class,
 		}
 		if (snapshot.debt == 0)
 			break;
-		if (state->retiring || state->quiesced) {
+		/*
+		 * An admitted cleanup request pins both the owner state and its rate
+		 * account.  Let that request settle debt after lifecycle quiesce (and
+		 * even a concurrent retire) so a forward-only filesystem transaction
+		 * cannot be abandoned halfway through durable publication.  No new
+		 * background request is admitted once the owner is retiring.
+		 */
+		if ((state->retiring || state->quiesced) &&
+		    !closing_background) {
 			intr_restore(enabled);
 			return -1;
 		}
@@ -712,6 +818,8 @@ void bio_policy_start(void)
 	int enabled = intr_save();
 	struct resource_rate_snapshot snapshot;
 
+	if (io_policy.background.active)
+		panic("I/O policy started during boot background I/O");
 	for (uint i = 0; i < IO_OWNER_SLOTS; i++) {
 		struct io_owner_state *state = &io_policy.owners[i];
 
@@ -878,29 +986,55 @@ int bio_request_begin_current_cleanup(void)
 	return bio_request_begin_current_mode(1);
 }
 
-static int bio_request_checkpoint_mode(int cleanup, int quiescent)
+static struct bio_checkpoint_result
+bio_request_checkpoint_mode(int cleanup, int quiescent)
 {
 	struct thread *thread = curr_thread();
 	struct io_owner_state *state;
 	int enabled;
 
 	if (!io_policy.runtime_ready)
-		return 0;
-	// Scheduler maintenance cannot sleep. Once it consumes its bounded
-	// background quantum, resumable work returns a short result.
-	if (io_policy.background.active) {
-		if (io_policy.background.buffer_holds != 0)
-			return BIO_CHECKPOINT_DEFERRED;
+		return bio_checkpoint_make(BIO_CHECKPOINT_READY);
+	// Resumable scheduler maintenance returns after its bounded quantum.
+	// Forward-only cleanup is the sole background mode allowed to settle debt.
+	if (bio_background_current()) {
+		uint owner = io_policy.background.owner;
+
+		if (io_policy.background.buffer_holds != 0) {
+			if (quiescent)
+				panic("background quiescent checkpoint holds buffer");
+			return bio_checkpoint_make(BIO_CHECKPOINT_DEFERRED);
+		}
 		enabled = intr_save();
-		state = io_state_find(io_policy.background.owner, 0);
+		state = io_state_find(owner, 0);
+		intr_restore(enabled);
+		if (state == 0)
+			panic("background I/O owner vanished");
+		/*
+		 * Resumable background scans never sleep.  A cleanup checkpoint is
+		 * different: its caller has already published an irreversible intent,
+		 * so the admitted executor must finish paying its debt before it can
+		 * continue the forward transaction.  active_requests keeps state alive
+		 * while the executor sleeps, including across lifecycle quiesce.
+		 */
+		if (cleanup && quiescent) {
+			if (io_wait_for_debt(
+				    state, IO_POLICY_CLASS_BACKGROUND, 1) < 0 ||
+			    io_wait_for_device_debt(
+				    owner, IO_POLICY_CLASS_BACKGROUND, 1) < 0 ||
+			    bio_background_wait_for_cache_progress() < 0)
+				return bio_checkpoint_make(
+					BIO_CHECKPOINT_INTERRUPTED);
+			return bio_checkpoint_make(BIO_CHECKPOINT_READY);
+		}
+		enabled = intr_save();
 		struct resource_rate_snapshot lane;
 		struct resource_rate_snapshot device;
-		int ready = state != 0 &&
-			io_rate_snapshot(
+		int ready = io_rate_snapshot(
 				state, IO_POLICY_CLASS_BACKGROUND,
 				&lane) == 0 &&
 			lane.debt == 0 &&
-			(io_device_protected(io_policy.background.owner,
+			(io_device_protected(owner,
 					     IO_POLICY_CLASS_BACKGROUND) ||
 			 (io_rate_global_snapshot(
 				  IO_RATE_GLOBAL_DEVICE,
@@ -908,17 +1042,18 @@ static int bio_request_checkpoint_mode(int cleanup, int quiescent)
 			  device.debt == 0));
 
 		intr_restore(enabled);
-		return ready ? 0 : BIO_CHECKPOINT_DEFERRED;
+		return bio_checkpoint_make(ready ? BIO_CHECKPOINT_READY :
+						 BIO_CHECKPOINT_DEFERRED);
 	}
 	if (thread == 0 || thread->io_request_depth == 0)
-		return 0;
+		return bio_checkpoint_make(BIO_CHECKPOINT_READY);
 	if (!cleanup && proc_thread_exit_requested())
-		return BIO_CHECKPOINT_INTERRUPTED;
+		return bio_checkpoint_make(BIO_CHECKPOINT_INTERRUPTED);
 	enabled = intr_save();
 	state = io_state_find(thread->io_request_owner, 0);
 	if (state == 0) {
 		intr_restore(enabled);
-		return BIO_CHECKPOINT_INTERRUPTED;
+		return bio_checkpoint_make(BIO_CHECKPOINT_INTERRUPTED);
 	}
 	struct resource_rate_snapshot lane;
 	struct resource_rate_snapshot device;
@@ -934,7 +1069,7 @@ static int bio_request_checkpoint_mode(int cleanup, int quiescent)
 
 	intr_restore(enabled);
 	if (ready)
-		return 0;
+		return bio_checkpoint_make(BIO_CHECKPOINT_READY);
 	/*
 	 * Filesystem primitives publish several related in-memory and on-disk
 	 * fields as one single-CPU transaction. Never sleep halfway through that
@@ -944,23 +1079,24 @@ static int bio_request_checkpoint_mode(int cleanup, int quiescent)
 	if (thread->bio_buffer_holds != 0) {
 		if (quiescent)
 			panic("I/O quiescent checkpoint holds buffer");
-		return BIO_CHECKPOINT_DEFERRED;
+		return bio_checkpoint_make(BIO_CHECKPOINT_DEFERRED);
 	}
 	if (!quiescent && thread->bio_fs_atomic_depth != 0)
-		return BIO_CHECKPOINT_DEFERRED;
+		return bio_checkpoint_make(BIO_CHECKPOINT_DEFERRED);
 	if (io_wait_for_debt(state, thread->io_request_class, cleanup) < 0)
-		return BIO_CHECKPOINT_INTERRUPTED;
-	return io_wait_for_device_debt(thread->io_request_owner,
-				       thread->io_request_class, cleanup) < 0 ?
-		       BIO_CHECKPOINT_INTERRUPTED : 0;
+		return bio_checkpoint_make(BIO_CHECKPOINT_INTERRUPTED);
+	return bio_checkpoint_make(
+		io_wait_for_device_debt(thread->io_request_owner,
+					thread->io_request_class, cleanup) < 0 ?
+			BIO_CHECKPOINT_INTERRUPTED : BIO_CHECKPOINT_READY);
 }
 
-int bio_request_checkpoint(void)
+struct bio_checkpoint_result bio_request_checkpoint(void)
 {
 	return bio_request_checkpoint_mode(0, 0);
 }
 
-int bio_request_checkpoint_cleanup(void)
+struct bio_checkpoint_result bio_request_checkpoint_cleanup(void)
 {
 	return bio_request_checkpoint_mode(1, 0);
 }
@@ -972,21 +1108,26 @@ int bio_request_checkpoint_cleanup(void)
  * mutation. The cleanup variant is for a forward-only durable commit that
  * cannot be rolled back after its first block has been published.
  */
-int bio_request_checkpoint_quiescent(void)
+struct bio_checkpoint_result bio_request_checkpoint_quiescent(void)
 {
 	return bio_request_checkpoint_mode(0, 1);
 }
 
-int bio_request_checkpoint_quiescent_cleanup(void)
+int bio_request_settle_quiescent_cleanup(void)
 {
-	return bio_request_checkpoint_mode(1, 1);
+	struct bio_checkpoint_result result =
+		bio_request_checkpoint_mode(1, 1);
+
+	if (result.state == BIO_CHECKPOINT_DEFERRED)
+		panic("forward cleanup checkpoint deferred");
+	return result.state == BIO_CHECKPOINT_READY ? 0 : -1;
 }
 
 void bio_fs_atomic_enter(void)
 {
 	uint *depth;
 
-	if (io_policy.background.active)
+	if (bio_background_current())
 		depth = &io_policy.background.fs_atomic_depth;
 	else {
 		struct thread *thread = curr_thread();
@@ -1003,7 +1144,7 @@ void bio_fs_atomic_leave(void)
 {
 	uint *depth;
 
-	if (io_policy.background.active)
+	if (bio_background_current())
 		depth = &io_policy.background.fs_atomic_depth;
 	else {
 		struct thread *thread = curr_thread();
@@ -1085,9 +1226,18 @@ void bio_request_abort_thread(struct thread *thread)
 	struct io_owner_state *state;
 	int enabled;
 
-	if (thread == 0 || thread->io_request_depth == 0)
+	if (thread == 0)
 		return;
 	enabled = intr_save();
+	if (io_policy.background.active &&
+	    io_policy.background.executor == thread &&
+	    io_policy.background.executor_generation ==
+		    thread->identity_generation)
+		panic("abort active background I/O executor");
+	if (thread->io_request_depth == 0) {
+		intr_restore(enabled);
+		return;
+	}
 	state = io_state_find(thread->io_request_owner, 0);
 	if (state != 0) {
 		if (thread->io_request_transfers == 0 &&
@@ -1187,11 +1337,18 @@ static int bio_background_reserve_buffers(uint owner)
 int bio_background_begin(uint owner)
 {
 	struct io_owner_state *state;
+	struct thread *executor = curr_thread();
 	uint source = IO_RESERVATION_NONE;
 	uint device_source = IO_RESERVATION_NONE;
 	int enabled = intr_save();
 
-	if (io_policy.background.active) {
+	if (io_policy.background.active || executor == 0 ||
+	    (!io_policy.runtime_ready && executor->identity_generation != 0) ||
+	    (io_policy.runtime_ready &&
+	     (executor->state != RUNNING || executor->tid < 0 ||
+	      executor->process == 0 || executor->identity_generation == 0 ||
+	      executor->bio_buffer_holds != 0 ||
+	      executor->bio_fs_atomic_depth != 0))) {
 		intr_restore(enabled);
 		return 0;
 	}
@@ -1209,6 +1366,10 @@ int bio_background_begin(uint owner)
 	}
 	memset(&io_policy.background, 0, sizeof(io_policy.background));
 	io_policy.background.active = 1;
+	io_policy.background.executor = executor;
+	io_policy.background.executor_generation =
+		executor->identity_generation;
+	io_policy.background.boot_executor = !io_policy.runtime_ready;
 	io_policy.background.owner = owner;
 	if (!bio_background_reserve_buffers(owner)) {
 		memset(&io_policy.background, 0,
@@ -1251,7 +1412,7 @@ int bio_background_begin(uint owner)
 int bio_background_active(uint owner)
 {
 	int enabled = intr_save();
-	int active = io_policy.background.active &&
+	int active = bio_background_current() &&
 		     io_policy.background.owner == owner;
 
 	intr_restore(enabled);
@@ -1268,26 +1429,31 @@ void bio_background_end(void)
 		intr_restore(enabled);
 		return;
 	}
+	if (!bio_background_current())
+		panic("background I/O executor");
 	owner = io_policy.background.owner;
 	if (io_policy.background.buffer_holds != 0)
 		panic("background buffer hold leak");
+	if (io_policy.background.fs_atomic_depth != 0)
+		panic("background filesystem atomic leak");
 	state = io_state_find(owner, 0);
-	if (state != 0 && io_policy.background.transfers == 0) {
+	if (state == 0)
+		panic("background I/O owner vanished at end");
+	if (io_policy.background.transfers == 0) {
 		if (io_policy.background.reservation != IO_RESERVATION_NONE)
 			io_rate_lease_refund(
 				io_policy.background.reservation,
 				io_policy.background.device_reservation);
 	}
-	if (state != 0) {
-		if (state->active_requests == 0)
-			panic("background I/O request underflow");
-		state->active_requests--;
-	}
 	bio_background_release_buffers(owner);
 	memset(&io_policy.background, 0, sizeof(io_policy.background));
+	bio_cache_release_closed_owner(owner);
+	if (state->active_requests == 0)
+		panic("background I/O request underflow");
+	state->active_requests--;
 	// Cleanup buffers lose their temporary floor when the background lease
 	// ends. Re-evaluate every foreground cache waiter immediately.
-	wait_queue_wake_all(&cache_waiters);
+	bio_cache_note_progress();
 	io_owner_reap_retired();
 	intr_restore(enabled);
 }
@@ -1296,7 +1462,7 @@ uint bio_current_owner(void)
 {
 	struct thread *thread = curr_thread();
 
-	if (io_policy.background.active)
+	if (bio_background_current())
 		return io_policy.background.owner;
 	if (thread != 0 && thread->state == RUNNING &&
 	    thread->io_request_depth != 0)
@@ -1310,7 +1476,7 @@ static uint bio_current_class(uint owner)
 {
 	struct thread *thread = curr_thread();
 
-	if (io_policy.background.active)
+	if (bio_background_current())
 		return IO_POLICY_CLASS_BACKGROUND;
 	if (thread != 0 && thread->state == RUNNING &&
 	    thread->io_request_depth != 0)
@@ -1328,7 +1494,8 @@ void bio_current_sponsor(uint *owner, uint *io_class)
 	*io_class = bio_current_class(*owner);
 }
 
-void bio_account_transfer(uint owner, uint io_class, int write)
+void bio_account_transfer(uint owner, uint io_class,
+			  enum bio_transfer_type transfer, int result)
 {
 	struct thread *thread = curr_thread();
 	struct io_owner_state *state;
@@ -1350,12 +1517,20 @@ void bio_account_transfer(uint owner, uint io_class, int write)
 		intr_restore(enabled);
 		return;
 	}
-	if (write)
-		state->physical_writes++;
-	else
+	if (transfer == BIO_TRANSFER_READ)
 		state->physical_reads++;
+	else if (transfer == BIO_TRANSFER_WRITE)
+		state->physical_writes++;
+	else if (transfer == BIO_TRANSFER_FLUSH)
+		state->physical_flushes++;
+	else {
+		intr_restore(enabled);
+		return;
+	}
+	if (result < 0)
+		state->failed_transfers++;
 	state->completion_sequence = ++io_policy.completion_sequence;
-	if (io_policy.background.active &&
+	if (bio_background_current() &&
 	    io_policy.background.owner == owner &&
 	    io_class == IO_POLICY_CLASS_BACKGROUND) {
 		transfers = &io_policy.background.transfers;
@@ -1542,6 +1717,7 @@ static void bio_cache_invalidate(struct buf *b)
 	b->transient = 0;
 	b->lru_promote = 0;
 	b->background_reserved = 0;
+	bio_cache_note_progress();
 }
 
 static void bio_cache_record(uint owner, int hit, int eviction)
@@ -1563,7 +1739,7 @@ static void bio_cache_record(uint owner, int hit, int eviction)
 
 static uint bio_current_cache_owner(void)
 {
-	if (io_policy.background.active)
+	if (bio_background_current())
 		return io_policy.background.owner;
 	return bio_current_owner();
 }
@@ -1572,7 +1748,7 @@ static void *bio_cache_holder_token(void)
 {
 	struct thread *thread;
 
-	if (io_policy.background.active)
+	if (bio_background_current())
 		return &io_policy.background;
 	thread = curr_thread();
 	if (thread != 0 && thread->state == RUNNING)
@@ -1605,7 +1781,7 @@ static void bio_cache_hold_release(void *token)
 
 // Look through buffer cache for block on device dev. If not found, select an
 // idle victim without crossing an active principal's guaranteed floor.
-static struct buf *bget(uint dev, uint blockno)
+static struct buf *bget(uint dev, uint blockno, int *result)
 {
 	struct buf *b;
 	struct buf *free_candidate;
@@ -1617,6 +1793,12 @@ static struct buf *bget(uint dev, uint blockno)
 	uint owner_count;
 	uint owner_cap;
 	uint scanned;
+	int enabled = intr_save();
+
+	if (result == 0)
+		panic("bget result");
+	*result = VIRTIO_DISK_ERR_IO;
+	bio_background_cache_retry_start();
 
 	retry:
 	free_candidate = 0;
@@ -1627,10 +1809,16 @@ static struct buf *bget(uint dev, uint blockno)
 	for (b = bcache.head.next; b != &bcache.head; b = b->next) {
 		if (scanned++ >= NBUF)
 			panic("buffer-cache list cycle");
+		if (b->background_reserved)
+			continue;
 		if (b->dev == dev && b->blockno == blockno) {
 			if (b->hold_depth != 0 && b->holder != holder) {
-				if (io_policy.background.active)
-					panic("background hit busy buffer");
+				if (bio_background_current()) {
+					bio_background_cache_blocked();
+					*result = VIRTIO_DISK_ERR_BUSY;
+					intr_restore(enabled);
+					return 0;
+				}
 				if (wait_queue_sleep_irq_uninterruptible(
 					    &b->holder_waiters) != WAIT_QUEUE_OK)
 					panic("buffer holder wait invariant");
@@ -1644,6 +1832,8 @@ static struct buf *bget(uint dev, uint blockno)
 			if (b->cache_owner == owner)
 				b->lru_promote = 1;
 			bio_cache_record(owner, 1, 0);
+			*result = VIRTIO_DISK_OK;
+			intr_restore(enabled);
 			return b;
 		}
 	}
@@ -1659,9 +1849,9 @@ static struct buf *bget(uint dev, uint blockno)
 			panic("buffer-cache list cycle");
 		if (b->refcnt != 0 || b->hold_depth != 0)
 			continue;
-		if (io_policy.background.active && b->background_reserved &&
-		    b->cache_owner == owner) {
-			if (reserved_candidate == 0)
+		if (b->background_reserved) {
+			if (bio_background_current() &&
+			    b->cache_owner == owner && reserved_candidate == 0)
 				reserved_candidate = b;
 			continue;
 		}
@@ -1700,8 +1890,12 @@ static struct buf *bget(uint dev, uint blockno)
 		transient = 1;
 	}
 	if (b == 0) {
-		if (io_policy.background.active)
-			panic("background buffer-cache reservation invariant");
+		if (bio_background_current()) {
+			bio_background_cache_blocked();
+			*result = VIRTIO_DISK_ERR_BUSY;
+			intr_restore(enabled);
+			return 0;
+		}
 		if (wait_queue_sleep_irq_uninterruptible(&cache_waiters) !=
 		    WAIT_QUEUE_OK)
 			panic("buffer-cache wait invariant");
@@ -1711,9 +1905,13 @@ static struct buf *bget(uint dev, uint blockno)
 		bio_cache_record(owner, -1, 1);
 	if (!bio_cache_assign(
 		    b, owner, !transient,
-		    io_policy.background.active)) {
-		if (io_policy.background.active)
-			panic("background buffer-cache controller admission");
+		    bio_background_current())) {
+		if (bio_background_current()) {
+			bio_background_cache_blocked();
+			*result = VIRTIO_DISK_ERR_BUSY;
+			intr_restore(enabled);
+			return 0;
+		}
 		(void)bio_cache_assign(b, owner, 0, 0);
 		transient = 1;
 	}
@@ -1728,6 +1926,8 @@ static struct buf *bget(uint dev, uint blockno)
 	b->holder = holder;
 	b->hold_depth = 1;
 	bio_cache_hold_acquire(holder);
+	*result = VIRTIO_DISK_OK;
+	intr_restore(enabled);
 	return b;
 }
 
@@ -1783,29 +1983,83 @@ void binit(void)
 const int R = 0;
 const int W = 1;
 
-struct buf *bread(uint dev, uint blockno)
+int bread(uint dev, uint blockno, struct buf **out)
 {
-	struct buf *b = bget(dev, blockno);
+	struct buf *b;
+	int result = VIRTIO_DISK_OK;
+
+	if (out == 0)
+		return VIRTIO_DISK_ERR_IO;
+	*out = 0;
+	b = bget(dev, blockno, &result);
+	if (b == 0)
+		return result;
 
 	if (!b->valid) {
-		virtio_disk_rw(b, R);
-		b->valid = 1;
+		result = virtio_disk_rw(b, R);
+		b->disk_result = result;
+		if (result == VIRTIO_DISK_OK)
+			b->valid = 1;
+		else {
+			b->valid = 0;
+			memset(b->data, 0, sizeof(b->data));
+			brelse(b);
+			return result;
+		}
+	} else {
+		b->disk_result = VIRTIO_DISK_OK;
 	}
-	return b;
+	*out = b;
+	return VIRTIO_DISK_OK;
 }
 
-void bwrite(struct buf *b)
+/* Force a device transfer even when the requested block is cache-resident. */
+int bread_device(uint dev, uint blockno, struct buf **out)
+{
+	struct buf *b;
+	int result;
+
+	if (out == 0)
+		return VIRTIO_DISK_ERR_IO;
+	*out = 0;
+	b = bget(dev, blockno, &result);
+	if (b == 0)
+		return result;
+	result = virtio_disk_rw(b, R);
+	b->disk_result = result;
+	if (result != VIRTIO_DISK_OK) {
+		b->valid = 0;
+		memset(b->data, 0, sizeof(b->data));
+		brelse(b);
+		return result;
+	}
+	b->valid = 1;
+	*out = b;
+	return VIRTIO_DISK_OK;
+}
+
+int bwrite(struct buf *b)
 {
 	if (b == 0 || b->hold_depth == 0 ||
 	    b->holder != bio_cache_holder_token())
 		panic("bwrite unlocked buffer");
-	virtio_disk_rw(b, W);
+	b->disk_result = virtio_disk_rw(b, W);
+	if (b->disk_result < 0) {
+		b->valid = 0;
+		memset(b->data, 0, sizeof(b->data));
+	}
+	return b->disk_result;
+}
+
+int bio_durable_flush(void)
+{
+	return virtio_disk_durability_barrier();
 }
 
 // Reallocated data blocks start a new sponsorship lifetime. Metadata callers
 // deliberately do not use this operation, so shared filesystem structures
 // cannot be stolen from their current protected partition by a reader/writer.
-void bclaim(struct buf *b)
+int bclaim(struct buf *b)
 {
 	uint owner;
 
@@ -1819,13 +2073,17 @@ void bclaim(struct buf *b)
 
 		if (!bio_cache_assign(
 			    b, owner, stable,
-			    io_policy.background.active)) {
-			if (io_policy.background.active)
-				panic("background cache claim admission");
-			(void)bio_cache_assign(b, owner, 0, 0);
+			    bio_background_current())) {
+			if (bio_background_current()) {
+				bio_background_cache_blocked();
+				return VIRTIO_DISK_ERR_BUSY;
+			}
+			if (!bio_cache_assign(b, owner, 0, 0))
+				return VIRTIO_DISK_ERR_IO;
 		}
 	}
 	b->lru_promote = 1;
+	return VIRTIO_DISK_OK;
 }
 
 void brelse(struct buf *b)
@@ -1841,6 +2099,7 @@ void brelse(struct buf *b)
 	if (b->hold_depth == 0) {
 		b->holder = 0;
 		wait_queue_wake_all(&b->holder_waiters);
+		bio_cache_note_progress();
 	}
 	if (b->refcnt == 0) {
 		if (b->transient ||
@@ -1884,7 +2143,7 @@ void bunpin(struct buf *b)
 		bio_cache_invalidate(b);
 	}
 	if (b->refcnt == 0) {
-		wait_queue_wake_all(&cache_waiters);
+		bio_cache_note_progress();
 		io_owner_reap_retired();
 	}
 }
@@ -1985,11 +2244,8 @@ void bio_scope_quiesce(uint scope_id)
 			break;
 		}
 	}
-	for (uint i = 0; i < NBUF; i++)
-		if (bcache.buf[i].cache_owner == owner &&
-		    bcache.buf[i].refcnt == 0)
-			bio_cache_invalidate(&bcache.buf[i]);
-	wait_queue_wake_all(&cache_waiters);
+	bio_cache_release_closed_owner(owner);
+	bio_cache_note_progress();
 	intr_restore(enabled);
 }
 
@@ -2012,13 +2268,8 @@ void bio_scope_retire(uint scope_id)
 		}
 		break;
 	}
-	for (uint i = 0; i < NBUF; i++) {
-		if (bcache.buf[i].cache_owner == owner &&
-		    bcache.buf[i].refcnt == 0) {
-			bio_cache_invalidate(&bcache.buf[i]);
-		}
-	}
-	wait_queue_wake_all(&cache_waiters);
+	bio_cache_release_closed_owner(owner);
+	bio_cache_note_progress();
 	io_owner_reap_retired();
 	intr_restore(enabled);
 }
@@ -2085,6 +2336,8 @@ int bio_policy_snapshot(const struct proc *p, struct io_policy_info *info)
 	info->shared_grants = state->shared_grants;
 	info->physical_reads = state->physical_reads;
 	info->physical_writes = state->physical_writes;
+	info->physical_flushes = state->physical_flushes;
+	info->failed_transfers = state->failed_transfers;
 	info->cache_hits = state->cache_hits;
 	info->cache_misses = state->cache_misses;
 	info->cache_evictions = state->cache_evictions;

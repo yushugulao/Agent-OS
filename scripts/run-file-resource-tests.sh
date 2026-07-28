@@ -23,6 +23,10 @@ build_case() {
 	local tag="$2"
 	local prefix="${tree:+${tree}/}"
 	local user_dir="${prefix}user"
+	local mkfs_sources=("${prefix}nfs/fs.c")
+	if [[ -z "${tree}" ]]; then
+		mkfs_sources+=(nfs/host_image_snapshot.c)
+	fi
 
 	make -C "${user_dir}" \
 		TOOLPREFIX="${TOOLPREFIX}" CHAPTER=file_resource \
@@ -32,7 +36,7 @@ build_case() {
 	mkdir -p "${TMPDIR_FILE_RESOURCE}/fixture/bin"
 	printf 'file-resource-fixture\n' \
 		>"${TMPDIR_FILE_RESOURCE}/fixture/bin/frsource"
-	cc "${prefix}nfs/fs.c" -o "${TMPDIR_FILE_RESOURCE}/${tag}-mkfs"
+	cc "${mkfs_sources[@]}" -o "${TMPDIR_FILE_RESOURCE}/${tag}-mkfs"
 	"${TMPDIR_FILE_RESOURCE}/${tag}-mkfs" \
 		"${TMPDIR_FILE_RESOURCE}/${tag}.img" \
 		"${TMPDIR_FILE_RESOURCE}/${tag}-user-target/bin/fileresource_ucore" \

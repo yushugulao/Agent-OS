@@ -57,31 +57,68 @@
       "*_policy.inc"
     ],
     "exclude_paths": [
-      "os/initproc.S"
+      "os/initproc.S",
+      "os/agent_metadata_test.c",
+      "os/agent_metadata_recovery_test.c",
+      "os/agent_observe_test.c",
+      "os/wait_atomic_test.c",
+      "os/fs_allocator_test.c",
+      "os/physical_page_test.c"
     ],
-    "baseline_lines": 32793,
-    "max_lines": 34433
+    "baseline_lines": 47922,
+    "max_lines": 49628
   },
   "kernel_image": {
-    "baseline_stripped_elf_bytes": 259912,
-    "max_stripped_elf_bytes": 272908,
-    "baseline_raw_binary_bytes": 255060,
-    "max_raw_binary_bytes": 267813
+    "baseline_stripped_elf_bytes": 332544,
+    "max_stripped_elf_bytes": 349172,
+    "baseline_raw_binary_bytes": 327688,
+    "max_raw_binary_bytes": 344073
   },
   "kernel_runtime": {
-    "baseline_text_bytes": 247760,
-    "max_text_bytes": 260148,
-    "baseline_data_bytes": 5204,
-    "max_data_bytes": 5465,
-    "baseline_bss_bytes": 14836528,
-    "max_bss_bytes": 15578355,
-    "baseline_total_bytes": 15089492,
-    "max_total_bytes": 15843967
+    "baseline_text_bytes": 325648,
+    "max_text_bytes": 339957,
+    "baseline_data_bytes": 8,
+    "max_data_bytes": 9,
+    "baseline_bss_bytes": 6206424,
+    "max_bss_bytes": 6516729,
+    "baseline_total_bytes": 6532080,
+    "max_total_bytes": 6856694
   },
   "struct_proc": {
     "symbol": "kernel_budget_struct_proc",
-    "baseline_bytes": 28776,
-    "max_bytes": 30215
+    "baseline_bytes": 25936,
+    "max_bytes": 27233
+  },
+  "trapframe_pages": {
+    "per_thread_symbol": "kernel_budget_trapframe_per_thread",
+    "baseline_per_thread_bytes": 4096,
+    "max_per_thread_bytes": 4301,
+    "admitted_pool_symbol": "kernel_budget_trapframe_admitted_pool",
+    "baseline_admitted_pool_bytes": 8388608,
+    "max_admitted_pool_bytes": 8808039,
+    "reserved_pool_symbol": "kernel_budget_trapframe_reserved_pool",
+    "baseline_reserved_pool_bytes": 2097152,
+    "max_reserved_pool_bytes": 2202010
+  },
+  "legacy_mail_sidecar": {
+    "per_process_symbol": "kernel_budget_legacy_mail_sidecar_per_process",
+    "baseline_per_process_bytes": 8192,
+    "max_per_process_bytes": 8602,
+    "pool_symbol": "kernel_budget_legacy_mail_sidecar_pool",
+    "baseline_pool_bytes": 1048576,
+    "max_pool_bytes": 1101005,
+    "ordinary_pool_symbol": "kernel_budget_legacy_mail_sidecar_ordinary_pool",
+    "baseline_ordinary_pool_bytes": 786432,
+    "max_ordinary_pool_bytes": 825754,
+    "reserved_pool_symbol": "kernel_budget_legacy_mail_sidecar_reserved_pool",
+    "baseline_reserved_pool_bytes": 262144,
+    "max_reserved_pool_bytes": 275252,
+    "domain_ordinary_symbol": "kernel_budget_legacy_mail_sidecar_domain_ordinary",
+    "baseline_domain_ordinary_bytes": 524288,
+    "max_domain_ordinary_bytes": 550503,
+    "domain_reserved_symbol": "kernel_budget_legacy_mail_sidecar_domain_reserved",
+    "baseline_domain_reserved_bytes": 65536,
+    "max_domain_reserved_bytes": 68813
   },
   "agent_context_sidecar": {
     "per_process_symbol": "kernel_budget_agent_context_sidecar_per_process",
@@ -126,19 +163,37 @@
   "agent_modules": {
     "modules": [
       {
+        "name": "background",
+        "source_path": "os/agent_background.c",
+        "object_path": "build/os/agent_background.o",
+        "baseline_lines": 20,
+        "max_lines": 21,
+        "max_bss_bytes": 4,
+        "allowed_global_prefixes": [],
+        "allowed_global_symbols": [
+          "agent_background_request",
+          "agent_background_take"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [],
+        "allowed_bridge_dependencies": []
+      },
+      {
         "name": "facade",
         "source_path": "os/agent.c",
         "object_path": "build/os/agent.o",
-        "baseline_lines": 99,
-        "max_lines": 104,
+        "baseline_lines": 67,
+        "max_lines": 71,
+        "max_bss_bytes": 0,
         "allowed_global_prefixes": [],
         "allowed_global_symbols": [
           "agentinit",
+          "agent_exec_public_identity_commit",
+          "agent_process_image_install_locked",
           "agent_proc_prepare",
           "agent_proc_teardown",
-          "agent_scope_controller_departing",
           "agent_storage_init",
-          "agent_background_maintain",
+          "agent_thread_runtime_transition",
           "agent_tick",
           "agent_authority_bootstrap",
           "agent_authority_on_exec",
@@ -146,10 +201,9 @@
         ],
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
-          "context",
           "core",
           "identity",
-          "lifecycle"
+          "ipc"
         ],
         "allowed_bridge_dependencies": [
         ]
@@ -158,15 +212,19 @@
         "name": "core",
         "source_path": "os/agent_core.c",
         "object_path": "build/os/agent_core.o",
-        "baseline_lines": 1392,
-        "max_lines": 1462,
+        "baseline_lines": 1334,
+        "max_lines": 1342,
+        "max_bss_bytes": 0,
         "allowed_global_prefixes": [
           "agent_core_",
           "agent_make_",
           "agent_sched_"
         ],
         "allowed_global_symbols": [
+          "agent_background_checkpoint",
+          "agent_background_maintain",
           "agent_make",
+          "agent_scope_controller_departing",
           "sys_agent_call",
           "sys_agent_create",
           "sys_agent_create_role",
@@ -176,34 +234,91 @@
           "sys_agent_tool_list",
           "sys_agent_worker_create",
           "sys_agent_workflow_close",
-          "sys_agent_workflow_create"
+          "sys_agent_workflow_create",
+          "sys_tool_call",
+          "sys_tool_list"
         ],
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
+          "background",
           "context",
+          "durable_section",
           "identity",
+          "identity_lease",
           "ipc",
           "lifecycle",
           "metadata",
           "metadata_objects",
-          "observe"
+          "observe",
+          "observe_capacity",
+          "observe_ledger",
+          "observe_recovery",
+          "observe_store",
+          "observe_timeline",
+          "tool_protocol"
         ],
         "allowed_bridge_dependencies": [
           "proc"
         ]
       },
       {
+        "name": "tool_protocol",
+        "source_path": "os/agent_tool_protocol.c",
+        "object_path": "build/os/agent_tool_protocol.o",
+        "baseline_lines": 457,
+        "max_lines": 480,
+        "max_bss_bytes": 0,
+        "allowed_global_prefixes": [
+          "agent_tool_protocol_"
+        ],
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [],
+        "allowed_bridge_dependencies": []
+      },
+      {
+        "name": "durable_section",
+        "source_path": "os/agent_durable_section.c",
+        "object_path": "build/os/agent_durable_section.o",
+        "baseline_lines": 501,
+        "max_lines": 527,
+        "max_bss_bytes": 480,
+        "allowed_global_prefixes": [
+          "agent_durable_"
+        ],
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [],
+        "allowed_bridge_dependencies": []
+      },
+      {
         "name": "context",
         "source_path": "os/agent_context.c",
         "object_path": "build/os/agent_context.o",
-        "baseline_lines": 1161,
-        "max_lines": 1220,
-        "allowed_global_prefixes": [
-          "agent_context_"
-        ],
+        "baseline_lines": 1458,
+        "max_lines": 1531,
+        "max_bss_bytes": 0,
+        "allowed_global_prefixes": [],
         "allowed_global_symbols": [
           "agent_map_context",
           "agent_alias_exec_context",
+          "agent_context_alloc",
+          "agent_context_append",
+          "agent_context_append_prepare",
+          "agent_context_append_system",
+          "agent_context_append_system_causal",
+          "agent_context_clear",
+          "agent_context_free",
+          "agent_context_init",
+          "agent_context_is_empty",
+          "agent_context_load_actor",
+          "agent_context_load_attribution",
+          "agent_context_load_detail",
+          "agent_context_map",
+          "agent_context_proc_activate",
+          "agent_context_proc_reset",
+          "agent_context_store",
+          "agent_context_write_header",
           "agent_unmap_exec_context",
           "agent_free_proc_context",
           "sys_context_clear",
@@ -215,23 +330,104 @@
         ],
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
+          "context_path",
           "lifecycle",
           "observe",
-          "resource_controller"
+          "observe_ledger",
+          "resource_controller",
+          "workflow_lifecycle"
         ],
         "allowed_bridge_dependencies": [
         ]
       },
       {
+        "name": "context_path",
+        "source_path": "os/agent_context_path.c",
+        "object_path": "build/os/agent_context_path.o",
+        "baseline_lines": 183,
+        "max_lines": 193,
+        "max_bss_bytes": 0,
+        "required_cflags": [
+          "-Os"
+        ],
+        "allowed_global_prefixes": [],
+        "allowed_global_symbols": [
+          "agent_context_active_measure",
+          "agent_context_active_record",
+          "agent_context_read_record",
+          "agent_context_record_hash"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [],
+        "allowed_bridge_dependencies": []
+      },
+      {
         "name": "identity",
         "source_path": "os/agent_identity.c",
         "object_path": "build/os/agent_identity.o",
-        "baseline_lines": 173,
-        "max_lines": 182,
-        "allowed_global_prefixes": [
-          "agent_identity_"
+        "baseline_lines": 474,
+        "max_lines": 498,
+        "max_bss_bytes": 4,
+        "allowed_global_prefixes": [],
+        "allowed_global_symbols": [
+          "agent_identity_alloc_id",
+          "agent_identity_authority_bootstrap",
+          "agent_identity_authority_check",
+          "agent_identity_authority_on_exec",
+          "agent_identity_authorize_object",
+          "agent_identity_controller_active_locked",
+          "agent_identity_controller_close_commit",
+          "agent_identity_controller_depart",
+          "agent_identity_controls_or_self",
+          "agent_identity_controls_target",
+          "agent_identity_has_any_cap",
+          "agent_identity_has_cap",
+          "agent_identity_id_floor",
+          "agent_identity_init",
+          "agent_identity_loop_refresh_locked",
+          "agent_identity_next_id_get",
+          "agent_identity_proc_reset",
+          "agent_identity_proc_scope",
+          "agent_identity_role_policy",
+          "agent_identity_role_sched_weight",
+          "agent_identity_role_valid",
+          "agent_identity_spawn_publish_locked",
+          "agent_identity_thread_loop_set"
         ],
-        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "identity_lease",
+          "workflow_lifecycle"
+        ],
+        "allowed_bridge_dependencies": []
+      },
+      {
+        "name": "identity_lease",
+        "source_path": "os/agent_identity_lease.c",
+        "object_path": "build/os/agent_identity_lease.o",
+        "baseline_lines": 419,
+        "max_lines": 440,
+        "max_bss_bytes": 272,
+        "allowed_global_prefixes": [],
+        "allowed_global_symbols": [
+          "agent_identity_lease_admission_ready",
+          "agent_identity_lease_allocator_admit",
+          "agent_identity_lease_allocator_contains",
+          "agent_identity_lease_allocator_force_exhausted",
+          "agent_identity_lease_allocator_note_next",
+          "agent_identity_lease_allocator_renew",
+          "agent_identity_lease_init",
+          "agent_identity_lease_lifecycle_contains",
+          "agent_identity_lease_lifecycle_note_next",
+          "agent_identity_lease_lifecycle_renew",
+          "agent_identity_lease_maintain",
+          "agent_identity_lease_maintenance_pending",
+          "agent_identity_lease_recover_allocator",
+          "agent_identity_lease_recover_lifecycle",
+          "agent_identity_lease_set_persist",
+          "agent_identity_lease_snapshot",
+          "agent_identity_lease_storage_ready"
+        ],
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [],
         "allowed_bridge_dependencies": []
@@ -240,13 +436,19 @@
         "name": "ipc",
         "source_path": "os/agent_ipc.c",
         "object_path": "build/os/agent_ipc.o",
-        "baseline_lines": 1057,
-        "max_lines": 1110,
+        "baseline_lines": 1662,
+        "max_lines": 1684,
+        "max_bss_bytes": 8,
+        "required_cflags": [
+          "-Os"
+        ],
         "allowed_global_prefixes": [
           "agent_ipc_"
         ],
         "allowed_global_symbols": [
           "sys_agent_heartbeat",
+          "sys_agent_heartbeat_set",
+          "sys_agent_heartbeat_stop",
           "sys_agent_route_config",
           "sys_agent_unwatch",
           "sys_agent_wait",
@@ -260,8 +462,11 @@
           "identity",
           "lifecycle",
           "metadata",
-          "metadata_objects",
-          "observe"
+          "metadata_prefetch",
+          "observe",
+          "observe_ledger",
+          "resource_controller",
+          "workflow_lifecycle"
         ],
         "allowed_bridge_dependencies": [
         ]
@@ -270,8 +475,9 @@
         "name": "lifecycle",
         "source_path": "os/agent_lifecycle.c",
         "object_path": "build/os/agent_lifecycle.o",
-        "baseline_lines": 279,
-        "max_lines": 293,
+        "baseline_lines": 340,
+        "max_lines": 357,
+        "max_bss_bytes": 8,
         "allowed_global_prefixes": [
           "agent_lifecycle_"
         ],
@@ -280,6 +486,8 @@
         ],
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
+          "identity",
+          "identity_lease",
           "metadata",
           "workflow_lifecycle"
         ],
@@ -290,8 +498,12 @@
         "name": "metadata",
         "source_path": "os/agent_metadata.c",
         "object_path": "build/os/agent_metadata.o",
-        "baseline_lines": 322,
-        "max_lines": 339,
+        "baseline_lines": 294,
+        "max_lines": 300,
+        "max_bss_bytes": 80,
+        "required_cflags": [
+          "-Os"
+        ],
         "allowed_global_prefixes": [],
         "allowed_global_symbols": [
           "agent_metadata_init",
@@ -300,10 +512,12 @@
           "agent_metadata_reload_claim",
           "agent_metadata_reload_is_current",
           "agent_metadata_reload_release",
+          "agent_metadata_txn_checkpoint_cleanup_unlocked",
           "agent_metadata_txn_checkpoint_unlocked",
           "agent_metadata_txn_depth",
           "agent_metadata_txn_lock",
           "agent_metadata_txn_owned",
+          "agent_metadata_txn_require_owned",
           "agent_metadata_txn_projection_require_idle",
           "agent_metadata_txn_projection_transition",
           "agent_metadata_txn_relock_uninterruptible",
@@ -320,8 +534,12 @@
         "name": "file_state",
         "source_path": "os/agent_file_state.c",
         "object_path": "build/os/agent_file_state.o",
-        "baseline_lines": 1176,
-        "max_lines": 1235,
+        "baseline_lines": 1045,
+        "max_lines": 1098,
+        "max_bss_bytes": 205116,
+        "required_cflags": [
+          "-Os"
+        ],
         "allowed_global_prefixes": [
           "agent_file_state_"
         ],
@@ -349,8 +567,12 @@
         "name": "metadata_catalog",
         "source_path": "os/agent_metadata_catalog.c",
         "object_path": "build/os/agent_metadata_catalog.o",
-        "baseline_lines": 588,
-        "max_lines": 618,
+        "baseline_lines": 1220,
+        "max_lines": 1224,
+        "max_bss_bytes": 207360,
+        "required_cflags": [
+          "-Os"
+        ],
         "allowed_global_prefixes": [
           "agent_metadata_catalog_"
         ],
@@ -366,8 +588,12 @@
         "name": "metadata_query",
         "source_path": "os/agent_metadata_query.c",
         "object_path": "build/os/agent_metadata_query.o",
-        "baseline_lines": 240,
-        "max_lines": 252,
+        "baseline_lines": 217,
+        "max_lines": 228,
+        "max_bss_bytes": 0,
+        "required_cflags": [
+          "-Os"
+        ],
         "allowed_global_prefixes": [
           "agent_metadata_query_"
         ],
@@ -384,8 +610,12 @@
         "name": "metadata_scan",
         "source_path": "os/agent_metadata_scan.c",
         "object_path": "build/os/agent_metadata_scan.o",
-        "baseline_lines": 457,
-        "max_lines": 480,
+        "baseline_lines": 452,
+        "max_lines": 475,
+        "max_bss_bytes": 2136,
+        "required_cflags": [
+          "-Os"
+        ],
         "allowed_global_prefixes": [
           "agent_metadata_scan_"
         ],
@@ -394,6 +624,7 @@
         ],
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
+          "background",
           "file_state",
           "metadata",
           "metadata_catalog",
@@ -405,9 +636,12 @@
         "name": "metadata_directory",
         "source_path": "os/agent_metadata_directory.c",
         "object_path": "build/os/agent_metadata_directory.o",
-        "baseline_lines": 219,
-        "max_lines": 230,
+        "baseline_lines": 169,
+        "max_lines": 178,
         "max_bss_bytes": 0,
+        "required_cflags": [
+          "-Os"
+        ],
         "allowed_global_prefixes": [],
         "allowed_global_symbols": [
           "agent_fs_note_create",
@@ -428,20 +662,48 @@
         "allowed_bridge_dependencies": []
       },
       {
+        "name": "metadata_actions",
+        "source_path": "os/agent_metadata_actions.c",
+        "object_path": "build/os/agent_metadata_actions.o",
+        "baseline_lines": 588,
+        "max_lines": 618,
+        "max_bss_bytes": 29844,
+        "required_cflags": [
+          "-Os"
+        ],
+        "allowed_global_prefixes": [
+          "agent_metadata_actions_"
+        ],
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "file_state",
+          "metadata",
+          "metadata_catalog",
+          "metadata_store"
+        ],
+        "allowed_bridge_dependencies": []
+      },
+      {
         "name": "metadata_objects",
         "source_path": "os/agent_metadata_objects.c",
         "object_path": "build/os/agent_metadata_objects.o",
-        "baseline_lines": 2553,
-        "max_lines": 2681,
+        "baseline_lines": 1471,
+        "max_lines": 1542,
+        "max_bss_bytes": 0,
+        "required_cflags": [
+          "-Os"
+        ],
         "allowed_global_prefixes": [],
         "allowed_global_symbols": [
           "agent_metadata_inode_trackable",
           "agent_metadata_note_catalog_changes",
           "agent_metadata_background_maintain",
+          "agent_metadata_admission_status",
+          "agent_metadata_durable_status",
           "agent_metadata_execute_tool",
           "agent_metadata_fill_info",
           "agent_metadata_objects_init",
-          "agent_metadata_prefetch_handoff",
           "agent_metadata_storage_init",
           "agent_metadata_tick",
           "agent_metadata_tool_enter",
@@ -450,33 +712,110 @@
           "agent_scope_reclaim_metadata_done",
           "sys_agent_file_meta_init",
           "sys_agent_file_meta_set",
-          "sys_agent_file_prefetch_snapshot",
-          "sys_agent_file_prefetch_span_snapshot",
           "sys_agent_file_query"
         ],
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
+          "background",
           "context",
           "file_state",
           "identity",
           "ipc",
           "lifecycle",
           "metadata",
+          "metadata_actions",
           "metadata_catalog",
+          "metadata_prefetch",
           "metadata_query",
+          "metadata_recovery",
           "metadata_scan",
           "metadata_store",
-          "observe"
+          "observe",
+          "observe_ledger"
         ],
         "allowed_bridge_dependencies": [
         ]
       },
       {
+        "name": "metadata_prefetch",
+        "source_path": "os/agent_metadata_prefetch.c",
+        "object_path": "build/os/agent_metadata_prefetch.o",
+        "baseline_lines": 597,
+        "max_lines": 627,
+        "max_bss_bytes": 0,
+        "required_cflags": [
+          "-Os"
+        ],
+        "allowed_global_prefixes": [],
+        "allowed_global_symbols": [
+          "agent_metadata_prefetch_handoff",
+          "agent_metadata_prefetch_update",
+          "sys_agent_file_prefetch_snapshot",
+          "sys_agent_file_prefetch_span_snapshot"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "file_state",
+          "identity",
+          "ipc",
+          "metadata",
+          "metadata_actions",
+          "metadata_catalog",
+          "observe",
+          "observe_audit_query"
+        ],
+        "allowed_bridge_dependencies": []
+      },
+      {
+        "name": "metadata_probe",
+        "source_path": "os/agent_metadata_probe.c",
+        "object_path": "build/os/agent_metadata_probe.o",
+        "baseline_lines": 456,
+        "max_lines": 479,
+        "max_bss_bytes": 272,
+        "required_cflags": [
+          "-Os"
+        ],
+        "allowed_global_prefixes": [
+          "agent_metadata_probe_"
+        ],
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "metadata",
+          "metadata_store_format",
+          "metadata_store_io"
+        ],
+        "allowed_bridge_dependencies": []
+      },
+      {
+        "name": "metadata_recovery",
+        "source_path": "os/agent_metadata_recovery.c",
+        "object_path": "build/os/agent_metadata_recovery.o",
+        "baseline_lines": 119,
+        "max_lines": 125,
+        "max_bss_bytes": 24,
+        "required_cflags": [
+          "-Os"
+        ],
+        "allowed_global_prefixes": [
+          "agent_metadata_recovery_"
+        ],
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [],
+        "allowed_bridge_dependencies": []
+      },
+      {
         "name": "metadata_store",
         "source_path": "os/agent_metadata_store.c",
         "object_path": "build/os/agent_metadata_store.o",
-        "baseline_lines": 2047,
-        "max_lines": 2150,
+        "baseline_lines": 2224,
+        "max_lines": 2336,
+        "max_bss_bytes": 677792,
+        "required_cflags": [
+          "-Os"
+        ],
         "allowed_global_prefixes": [
           "agent_metadata_store_"
         ],
@@ -485,30 +824,239 @@
         ],
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
+          "background",
+          "durable_section",
           "file_state",
           "metadata",
-          "metadata_catalog"
+          "metadata_catalog",
+          "metadata_probe",
+          "metadata_recovery",
+          "metadata_store_format",
+          "metadata_store_io"
         ],
         "allowed_bridge_dependencies": [
         ]
       },
       {
+        "name": "metadata_store_format",
+        "source_path": "os/agent_metadata_store_format.c",
+        "object_path": "build/os/agent_metadata_store_format.o",
+        "baseline_lines": 189,
+        "max_lines": 199,
+        "max_bss_bytes": 0,
+        "required_cflags": [
+          "-Os"
+        ],
+        "allowed_global_prefixes": [
+          "agent_meta_format_"
+        ],
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "durable_section",
+          "metadata_catalog",
+          "workflow_lifecycle"
+        ],
+        "allowed_bridge_dependencies": []
+      },
+      {
+        "name": "metadata_store_io",
+        "source_path": "os/agent_metadata_store_io.c",
+        "object_path": "build/os/agent_metadata_store_io.o",
+        "baseline_lines": 106,
+        "max_lines": 112,
+        "max_bss_bytes": 4,
+        "required_cflags": [
+          "-Os"
+        ],
+        "allowed_global_prefixes": [
+          "agent_meta_store_io_"
+        ],
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [],
+        "allowed_bridge_dependencies": []
+      },
+      {
         "name": "observe",
         "source_path": "os/agent_observe.c",
         "object_path": "build/os/agent_observe.o",
-        "baseline_lines": 2414,
-        "max_lines": 2535,
-        "allowed_global_prefixes": [
-          "agent_observe_"
-        ],
+        "baseline_lines": 96,
+        "max_lines": 97,
+        "max_bss_bytes": 0,
+        "allowed_global_prefixes": [],
         "allowed_global_symbols": [
+          "agent_observe_init",
+          "agent_observe_record_context",
+          "agent_observe_record_effect",
+          "agent_observe_record_event",
+          "agent_observe_record_prefetch",
+          "agent_observe_record_prefetch_handoff_locked",
+          "agent_observe_record_sched"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "context",
+          "observe_capacity",
+          "observe_ledger",
+          "observe_recovery",
+          "observe_store",
+          "observe_timeline"
+        ],
+        "allowed_bridge_dependencies": []
+      },
+      {
+        "name": "observe_audit_query",
+        "source_path": "os/agent_observe_audit_query.c",
+        "object_path": "build/os/agent_observe_audit_query.o",
+        "baseline_lines": 457,
+        "max_lines": 480,
+        "max_bss_bytes": 0,
+        "allowed_global_prefixes": [],
+        "allowed_global_symbols": [
+          "agent_observe_prefetch_span_snapshot",
           "sys_agent_audit_query",
+          "sys_agent_audit_receipt",
           "sys_agent_audit_snapshot",
           "sys_agent_ledger_snapshot",
+          "sys_agent_span_trace_snapshot"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "identity",
+          "observe_ledger"
+        ],
+        "allowed_bridge_dependencies": []
+      },
+      {
+        "name": "observe_capacity",
+        "source_path": "os/agent_observe_capacity.c",
+        "object_path": "build/os/agent_observe_capacity.o",
+        "baseline_lines": 707,
+        "max_lines": 742,
+        "max_bss_bytes": 256,
+        "required_cflags": [
+          "-Os"
+        ],
+        "allowed_global_prefixes": [
+          "agent_observe_capacity_"
+        ],
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "background",
+          "durable_section",
+          "workflow_lifecycle"
+        ],
+        "allowed_bridge_dependencies": []
+      },
+      {
+        "name": "observe_ledger",
+        "source_path": "os/agent_observe_ledger.c",
+        "object_path": "build/os/agent_observe_ledger.o",
+        "baseline_lines": 2374,
+        "max_lines": 2374,
+        "max_bss_bytes": 223232,
+        "required_cflags": [
+          "-Os"
+        ],
+        "allowed_global_prefixes": [],
+        "allowed_global_symbols": [
+          "agent_observe_alloc_event_id",
+          "agent_observe_alloc_span_id",
+          "agent_observe_audit_scope_visible_locked",
+          "agent_observe_audit_view_open_locked",
+          "agent_observe_audit_view_record_locked",
+          "agent_observe_checkpoint_capture_scope",
+          "agent_observe_checkpoint_entry_validate",
+          "agent_observe_checkpoint_exhaust_highwater",
+          "agent_observe_checkpoint_generation_floor",
+          "agent_observe_checkpoint_generation_get",
+          "agent_observe_checkpoint_highwater",
+          "agent_observe_checkpoint_raise_highwater",
+          "agent_observe_checkpoint_record_hash",
+          "agent_observe_checkpoint_restore_scope",
+          "agent_observe_ledger_init",
+          "agent_observe_ledger_record_context",
+          "agent_observe_ledger_record_effect",
+          "agent_observe_ledger_record_event",
+          "agent_observe_ledger_record_prefetch",
+          "agent_observe_ledger_record_prefetch_handoff_locked",
+          "agent_observe_ledger_record_sched",
+          "agent_observe_prefetch_scope_count_locked",
+          "agent_observe_prefetch_scope_next_locked",
+          "agent_observe_query_reserve",
+          "agent_observe_query_reserve_to",
+          "agent_observe_receipt_persist",
+          "agent_observe_receipt_status",
+          "agent_observe_recording_suppress_begin",
+          "agent_observe_recording_suppress_end",
+          "agent_observe_recording_suppressed",
+          "agent_observe_scope_epoch",
+          "agent_observe_scope_epoch_advance_locked",
+          "agent_observe_scope_reclaim",
+          "agent_observe_timeline_from_audit",
+          "agent_observe_timeline_match",
+          "agent_observe_timeline_publish_locked",
+          "agent_observe_timeline_record_audit",
+          "agent_observe_timeline_source_enabled",
+          "agent_observe_timeline_waiter_publish",
+          "agent_observe_timeline_waiter_unpublish",
+          "agent_observe_timeline_waiter_wake",
+          "agent_observe_thread_reset"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "identity",
+          "identity_lease",
+          "lifecycle",
+          "metadata",
+          "observe_store"
+        ],
+        "allowed_bridge_dependencies": []
+      },
+      {
+        "name": "observe_recovery",
+        "source_path": "os/agent_observe_recovery.c",
+        "object_path": "build/os/agent_observe_recovery.o",
+        "baseline_lines": 374,
+        "max_lines": 393,
+        "max_bss_bytes": 240,
+        "required_cflags": [
+          "-Os"
+        ],
+        "allowed_global_prefixes": [],
+        "allowed_global_symbols": [
+          "agent_observe_recovery_bind",
+          "agent_observe_recovery_init",
+          "agent_observe_recovery_unbind_proc",
+          "sys_agent_observe_recovery"
+        ],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "metadata",
+          "observe_store"
+        ],
+        "allowed_bridge_dependencies": []
+      },
+      {
+        "name": "observe_timeline",
+        "source_path": "os/agent_observe_timeline.c",
+        "object_path": "build/os/agent_observe_timeline.o",
+        "baseline_lines": 1269,
+        "max_lines": 1333,
+        "max_bss_bytes": 0,
+        "allowed_global_prefixes": [],
+        "allowed_global_symbols": [
+          "agent_observe_proc_init",
+          "agent_observe_proc_reset",
+          "agent_observe_tick_proc",
+          "agent_observe_timeline_record_context",
+          "agent_observe_timeline_record_prefetch",
+          "agent_observe_timeline_record_sched",
           "sys_agent_provenance_snapshot",
           "sys_agent_sched_config",
           "sys_agent_sched_snapshot",
-          "sys_agent_span_trace_snapshot",
           "sys_agent_timeline_query",
           "sys_agent_timeline_read",
           "sys_agent_timeline_snapshot",
@@ -518,18 +1066,46 @@
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
           "context",
+          "context_path",
           "identity",
-          "metadata"
+          "observe_ledger",
+          "observe_recovery"
         ],
-        "allowed_bridge_dependencies": [
-        ]
+        "allowed_bridge_dependencies": []
+      },
+      {
+        "name": "observe_store",
+        "source_path": "os/agent_observe_store.c",
+        "object_path": "build/os/agent_observe_store.o",
+        "baseline_lines": 896,
+        "max_lines": 923,
+        "max_bss_bytes": 0,
+        "required_cflags": [
+          "-Os"
+        ],
+        "allowed_global_prefixes": [
+          "agent_obsstore_"
+        ],
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "durable_section",
+          "identity_lease",
+          "lifecycle",
+          "metadata",
+          "observe_capacity",
+          "observe_ledger",
+          "workflow_lifecycle"
+        ],
+        "allowed_bridge_dependencies": []
       },
       {
         "name": "resource_controller",
         "source_path": "os/resource_controller.c",
         "object_path": "build/os/resource_controller.o",
-        "baseline_lines": 1560,
-        "max_lines": 1638,
+        "baseline_lines": 1667,
+        "max_lines": 1751,
+        "max_bss_bytes": 452048,
         "allowed_global_prefixes": [
           "resource_"
         ],
@@ -542,15 +1118,115 @@
         "name": "workflow_lifecycle",
         "source_path": "os/workflow_lifecycle.c",
         "object_path": "build/os/workflow_lifecycle.o",
-        "baseline_lines": 284,
-        "max_lines": 299,
+        "baseline_lines": 451,
+        "max_lines": 474,
+        "max_bss_bytes": 384,
         "allowed_global_prefixes": [
           "workflow_lifecycle_"
         ],
         "allowed_global_symbols": [],
         "allowed_readonly_symbols": [],
-        "allowed_dependencies": [],
+        "allowed_dependencies": [
+          "identity_lease"
+        ],
         "allowed_bridge_dependencies": []
+      }
+    ],
+    "test_only_sources": [
+      {
+        "name": "metadata_crash_profile",
+        "source_path": "os/agent_metadata_test.c",
+        "header_path": "os/metadata_crash_test.h",
+        "required_macro": "AGENT_METADATA_CRASH_PHASE",
+        "baseline_lines": 229,
+        "max_lines": 241,
+        "production_object_excluded": true,
+        "allowed_profile_symbols": [
+          "agent_metadata_test_init",
+          "agent_metadata_test_bind",
+          "agent_metadata_test_checkpoint",
+          "agent_metadata_test_eio_start",
+          "agent_metadata_test_eio_cancel",
+          "agent_metadata_test_eio_pre_io",
+          "agent_metadata_test_eio_commit",
+          "sys_agent_metadata_test"
+        ]
+      },
+      {
+        "name": "metadata_boot_recovery_profile",
+        "source_path": "os/agent_metadata_recovery_test.c",
+        "header_path": "os/agent_metadata_recovery_test.h",
+        "required_macro": "AGENT_METADATA_BOOT_READ_FAULT",
+        "baseline_lines": 117,
+        "max_lines": 123,
+        "production_object_excluded": true,
+        "allowed_profile_symbols": [
+          "agent_metadata_recovery_test_init",
+          "agent_metadata_recovery_test_fault",
+          "agent_metadata_recovery_test_retry",
+          "agent_metadata_recovery_test_admission"
+        ]
+      },
+      {
+        "name": "observe_recovery_profile",
+        "source_path": "os/agent_observe_test.c",
+        "header_path": "os/agent_observe_test.h",
+        "required_macro": "AGENT_OBSERVE_TEST_PROFILE",
+        "baseline_lines": 275,
+        "max_lines": 288,
+        "production_object_excluded": true,
+        "allowed_profile_symbols": [
+          "agent_observe_test_operation",
+          "agent_observe_test_execute"
+        ]
+      },
+      {
+        "name": "wait_atomic_profile",
+        "source_path": "os/wait_atomic_test.c",
+        "header_path": "os/wait_atomic_test.h",
+        "required_macro": "WAIT_ATOMIC_TEST_PROFILE",
+        "baseline_lines": 389,
+        "max_lines": 390,
+        "production_object_excluded": true,
+        "allowed_profile_symbols": [
+          "sys_wait_atomic_test",
+          "wait_atomic_test_begin",
+          "wait_atomic_test_complete",
+          "wait_atomic_test_agent_wait",
+          "agent_ipc_wait_test_publish"
+        ]
+      },
+      {
+        "name": "fs_allocator_fault_profile",
+        "source_path": "os/fs_allocator_test.c",
+        "header_path": "os/fs_allocator_test.h",
+        "required_macro": "FS_ALLOCATOR_FAULT_TEST_PROFILE",
+        "baseline_lines": 243,
+        "max_lines": 256,
+        "production_object_excluded": true,
+        "allowed_profile_symbols": [
+          "fs_allocator_test_bind_boot_init",
+          "fs_allocator_test_authorized",
+          "fs_allocator_test_arm",
+          "fs_allocator_test_disarm",
+          "fs_allocator_test_snapshot",
+          "fs_allocator_test_before",
+          "fs_allocator_test_after",
+          "fs_allocator_test_storage_snapshot"
+        ]
+      },
+      {
+        "name": "physical_page_profile",
+        "source_path": "os/physical_page_test.c",
+        "header_path": "os/physical_page_test.h",
+        "required_macro": "PHYSICAL_PAGE_TEST_HOOKS",
+        "baseline_lines": 469,
+        "max_lines": 493,
+        "production_object_excluded": true,
+        "allowed_profile_symbols": [
+          "physical_page_test_bind_boot_init",
+          "sys_physical_page_test"
+        ]
       }
     ],
     "integration_bridges": [
@@ -560,7 +1236,8 @@
         "allowed_global_symbols": [],
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
-          "resource_controller"
+          "resource_controller",
+          "workflow_lifecycle"
         ]
       },
       {
@@ -586,6 +1263,15 @@
         ]
       },
       {
+        "name": "kalloc",
+        "object_path": "build/os/kalloc.o",
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "resource_controller"
+        ]
+      },
+      {
         "name": "loader",
         "object_path": "build/os/loader.o",
         "allowed_global_symbols": [],
@@ -604,6 +1290,15 @@
         ]
       },
       {
+        "name": "pipe",
+        "object_path": "build/os/pipe.o",
+        "allowed_global_symbols": [],
+        "allowed_readonly_symbols": [],
+        "allowed_dependencies": [
+          "resource_controller"
+        ]
+      },
+      {
         "name": "proc",
         "object_path": "build/os/proc.o",
         "allowed_global_symbols": [
@@ -617,7 +1312,9 @@
           "context",
           "core",
           "facade",
+          "ipc",
           "lifecycle",
+          "observe_ledger",
           "resource_controller"
         ]
       },
@@ -629,11 +1326,16 @@
         "allowed_dependencies": [
           "context",
           "core",
+          "facade",
           "file_state",
           "ipc",
           "lifecycle",
           "metadata_objects",
-          "observe"
+          "metadata_prefetch",
+          "observe_audit_query",
+          "observe_ledger",
+          "observe_recovery",
+          "observe_timeline"
         ]
       },
       {
@@ -642,6 +1344,7 @@
         "allowed_global_symbols": [],
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
+          "core",
           "facade"
         ]
       },
@@ -651,7 +1354,8 @@
         "allowed_global_symbols": [],
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
-          "facade",
+          "background",
+          "core",
           "metadata_objects",
           "metadata_scan",
           "resource_controller",
@@ -664,40 +1368,58 @@
         "name": "metadata_control_plane",
         "members": [
           "metadata",
+          "metadata_actions",
           "file_state",
           "metadata_objects",
+          "metadata_prefetch",
           "metadata_catalog",
           "metadata_directory",
           "metadata_query",
+          "metadata_probe",
+          "metadata_recovery",
           "metadata_scan",
           "metadata_store",
+          "metadata_store_format",
+          "metadata_store_io",
           "ipc"
         ],
         "contract_headers": [
+          "agent_metadata_disk_abi.h",
           "os/agent_file_name_policy.h",
           "os/agent_file_state_internal.h",
+          "os/agent_metadata_actions.h",
           "os/agent_metadata_internal.h",
+          "os/agent_metadata_probe.h",
           "os/agent_metadata_catalog.h",
           "os/agent_metadata_directory.h",
+          "os/agent_metadata_disk.h",
+          "os/agent_metadata_recovery.h",
+          "os/agent_metadata_recovery_test.h",
+          "os/agent_metadata_store_format.h",
+          "os/agent_metadata_store_io.h",
           "os/agent_metadata_query.h",
-          "os/agent_metadata_scan.h"
+          "os/agent_metadata_scan.h",
+          "os/agent_metadata_prefetch.h",
+          "os/agent_observe_persist_context.h"
         ],
         "contract_header_globs": [
+          "agent_metadata_disk_abi.h",
           "os/agent_metadata*.h",
           "os/agent_file*.h",
           "os/agent_query*.h",
           "os/agent_scan*.h",
-          "os/agent_directory*.h"
+          "os/agent_directory*.h",
+          "os/agent_observe_persist_context.h"
         ],
         "source_budget_policy": "5% for fixed module contract overhead; loaded text and BSS remain no-growth",
-        "baseline_source_lines": 8522,
-        "max_source_lines": 8948,
-        "baseline_source_bytes": 250823,
-        "max_source_bytes": 263364,
-        "baseline_loaded_text_bytes": 68516,
-        "max_loaded_text_bytes": 68516,
-        "baseline_bss_bytes": 1080300,
-        "max_bss_bytes": 1080300,
+      "baseline_source_lines": 11512,
+        "max_source_lines": 11848,
+      "baseline_source_bytes": 350273,
+        "max_source_bytes": 353027,
+      "baseline_loaded_text_bytes": 77896,
+      "max_loaded_text_bytes": 77896,
+      "baseline_bss_bytes": 1118596,
+      "max_bss_bytes": 1118596,
         "discarded_sections": [
           ".eh_frame"
         ]
@@ -707,18 +1429,28 @@
     "allowed_sccs": [
       [
         "context",
-        "observe"
+        "observe",
+        "observe_timeline"
+      ],
+      [
+        "observe_ledger",
+        "observe_store"
       ],
       [
         "ipc",
-        "metadata_objects"
+        "metadata_prefetch"
       ]
     ],
     "integration_max_scc_size": 3,
     "integration_allowed_sccs": [
       [
         "context",
-        "observe"
+        "observe",
+        "observe_timeline"
+      ],
+      [
+        "observe_ledger",
+        "observe_store"
       ],
       [
         "core",
@@ -727,7 +1459,7 @@
       ],
       [
         "ipc",
-        "metadata_objects"
+        "metadata_prefetch"
       ]
     ],
     "forbidden_core_authority_symbol_prefixes": [
@@ -771,45 +1503,31 @@
       "labbench_ucore",
       "labdemo_ucore",
       "agentsecurity_ucore",
+      "agenttoolabi_ucore",
       "agentscope_ucore",
       "agenttrust_ucore",
       "agentvfs_ucore",
       "iobudget_ucore",
-      "usersafety_ucore"
+      "usersafety_ucore",
+      "blocking_semantics_ucore"
     ],
-    "baseline_seconds": 255.370930671,
-    "max_seconds": 268.14,
-    "calibration_status": "calibrated_full_suite",
+    "calibration_status": "provisional_requires_full_suite",
     "runner_tag": "agentos-qemu-calibrated",
     "runner_profile": {
       "cpu": "Intel Core Ultra 9 275HX",
       "virtualization": "WSL2",
       "qemu_version": "10.2.1"
-    },
-    "calibration_samples": [
-      {
-        "sample_id": "bounded-runner-final-01",
-        "total_seconds": 261.343281873
-      },
-      {
-        "sample_id": "bounded-runner-final-02",
-        "total_seconds": 237.948978492
-      },
-      {
-        "sample_id": "bounded-runner-final-03",
-        "total_seconds": 255.370930671
-      }
-    ]
+    }
   },
   "kernel_stack": {
-    "baseline_required_bytes": 14592,
-    "max_required_bytes": 15322,
+    "baseline_required_bytes": 14864,
+    "max_required_bytes": 15607,
     "boot_root": "main",
     "boot_stack_start_symbol": "boot_stack",
     "boot_stack_end_symbol": "boot_stack_top",
     "boot_stack_size_bytes": 65536,
-    "baseline_boot_required_bytes": 10144,
-    "max_boot_required_bytes": 10652,
+    "baseline_boot_required_bytes": 10384,
+    "max_boot_required_bytes": 10903,
     "virtual_capacity_symbol": "kernel_budget_kernel_stack_virtual_capacity",
     "baseline_virtual_capacity_bytes": 33554432,
     "max_virtual_capacity_bytes": 35232154,
@@ -826,9 +1544,22 @@
     "allowed_indirect_callers": [
       "usertrapret"
     ],
+    "indirect_call_edges": [
+      "agent_durable_arena_validate=agent_observe_store_validate",
+      "agent_durable_arena_update_scope=agent_observe_store_update_scope",
+      "agent_durable_arena_recover=agent_observe_store_recover",
+      "agent_durable_arena_has_scope=agent_observe_store_has_scope",
+      "agent_durable_notify_locked=agent_meta_durable_dirty",
+      "agent_durable_section_replicated=agent_meta_durable_replicated",
+      "agent_durable_section_active_replicated=agent_meta_durable_active_replicated",
+      "agent_durable_section_persist_scope=agent_meta_durable_persist_scope",
+      "agent_durable_section_mirror_scope=agent_observe_store_replicated_scope",
+      "agent_identity_lease_progress=agent_observe_lease_persist_bridge"
+    ],
     "recursion_bounds": [
       "printf=2",
-      "freewalk=3"
+      "freewalk=3",
+      "uvm_prune_empty_walk=3"
     ]
   }
 }

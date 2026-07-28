@@ -10,6 +10,11 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
+if __package__:
+    from .research_state_manifest import load_manifest, repo_state_names, short_name_map
+else:
+    from research_state_manifest import load_manifest, repo_state_names, short_name_map
+
 
 BSIZE = 1024
 FSMAGIC_LEGACY = 0x10203040
@@ -68,8 +73,18 @@ SCOPE_DIRECTORY_RE = re.compile(r"scope-[0-9]+\Z")
 
 EXEC_MANIFEST_VERSION = 2
 EXEC_LAYOUT_VERSION = 1
+EXEC_FLAG_TRUSTED = 0x1
 EXEC_FLAG_IMMUTABLE = 0x2
+EXEC_FLAG_BOOTSTRAP = 0x4
 EXEC_FLAG_DOMAIN_SAFE = 0x8
+EXEC_FLAG_KNOWN = 0xF
+EXEC_MANIFEST_ROLE_ALL = 0x3E
+USER_PAGE_SIZE = 4096
+EXEC_IMAGE_INVALID = 0
+EXEC_IMAGE_COMPAT = 1
+EXEC_IMAGE_WORKER = 2
+EXEC_IMAGE_TRUSTED_ENDPOINT = 3
+EXEC_IMAGE_TRUSTED_AGENT = 4
 
 VFS_LABEL_MAGIC = 0x56465331
 VFS_LABEL_VERSION_LEGACY = 1
@@ -114,6 +129,81 @@ def fs_owner_is_public_object(owner_domain: int) -> bool:
     return owner_domain in {FS_OWNER_SYSTEM, FS_OWNER_PUBLIC}
 
 
+def exec_image_profile_valid(profile: int) -> bool:
+    return profile in {
+        VFS_EXEC_PROFILE_NONE,
+        VFS_EXEC_PROFILE_WORKFLOW,
+        VFS_EXEC_PROFILE_CONTENT_READ,
+        VFS_EXEC_PROFILE_ARTIFACT_WRITE,
+    }
+
+
+def exec_image_protected_classify(
+    file_type: int,
+    size: int,
+    flags: int,
+    generation: int,
+    role_mask: int,
+    layout_version: int,
+    rw_offset: int,
+    profile: int,
+) -> int:
+    required = EXEC_FLAG_IMMUTABLE | EXEC_FLAG_DOMAIN_SAFE
+    if not (
+        file_type == T_FILE
+        and exec_image_profile_valid(profile)
+        and (flags & ~EXEC_FLAG_KNOWN) == 0
+        and (flags & required) == required
+        and generation == EXEC_MANIFEST_VERSION
+        and (role_mask & ~EXEC_MANIFEST_ROLE_ALL) == 0
+        and layout_version == EXEC_LAYOUT_VERSION
+        and rw_offset >= USER_PAGE_SIZE
+        and rw_offset % USER_PAGE_SIZE == 0
+        and size > rw_offset
+    ):
+        return EXEC_IMAGE_INVALID
+    bootstrap = bool(flags & EXEC_FLAG_BOOTSTRAP)
+    trusted = bool(flags & EXEC_FLAG_TRUSTED)
+    if not trusted:
+        return (
+            EXEC_IMAGE_WORKER
+            if not bootstrap
+            and role_mask == 0
+            and profile != VFS_EXEC_PROFILE_NONE
+            else EXEC_IMAGE_INVALID
+        )
+    if profile == VFS_EXEC_PROFILE_NONE:
+        return EXEC_IMAGE_INVALID if bootstrap else EXEC_IMAGE_COMPAT
+    if role_mask == 0:
+        return EXEC_IMAGE_INVALID if bootstrap else EXEC_IMAGE_TRUSTED_ENDPOINT
+    return EXEC_IMAGE_TRUSTED_AGENT
+
+
+def exec_image_protected_shape_valid(
+    file_type: int,
+    size: int,
+    flags: int,
+    generation: int,
+    role_mask: int,
+    layout_version: int,
+    rw_offset: int,
+    profile: int,
+) -> bool:
+    return (
+        exec_image_protected_classify(
+            file_type,
+            size,
+            flags,
+            generation,
+            role_mask,
+            layout_version,
+            rw_offset,
+            profile,
+        )
+        != EXEC_IMAGE_INVALID
+    )
+
+
 @dataclass
 class Superblock:
     magic: int
@@ -144,8 +234,15 @@ class Dinode:
     type: int
     size: int
     addrs: list[int]
+    exec_flags: int | None = None
+    exec_generation: int | None = None
+    exec_role_mask: int | None = None
+    exec_layout_version: int | None = None
+    exec_rw_offset: int | None = None
+    vfs_flags: int | None = None
     vfs_policy: int | None = None
     vfs_scope_id: int | None = None
+    vfs_exec_profile: int | None = None
     fs_owner_domain: int | None = None
     fs_owner_version: int | None = None
 
@@ -245,6 +342,7 @@ def validate_vfs_label(
 ) -> int:
     exec_flags = u32(raw, 64)
     exec_generation = u32(raw, 68)
+    file_size = u32(raw, 8)
     words = [u32(raw, 84 + index * 4) for index in range(10)]
     checksum = u32(raw, 124)
     (
@@ -334,16 +432,43 @@ def validate_vfs_label(
             )
         elif policy == VFS_POLICY_WORKFLOW:
             if flags == VFS_LABEL_F_PROTECTED and domain == VFS_SCOPE_SYSTEM:
+                exec_rw_offset = u32(raw, 80)
+                if current_format:
+                    data_shape = (
+                        exec_profile == VFS_EXEC_PROFILE_NONE
+                        and exec_flags == 0
+                        and exec_generation == 0
+                        and exec_role_mask == 0
+                        and exec_layout_version == 0
+                        and exec_rw_offset == 0
+                    )
+                else:
+                    data_shape = False
+                executable_shape = (
+                    exec_image_protected_shape_valid(
+                        file_type,
+                        file_size,
+                        exec_flags,
+                        exec_generation,
+                        exec_role_mask,
+                        exec_layout_version,
+                        exec_rw_offset,
+                        exec_profile,
+                    )
+                    if current_format
+                    else (
+                        exec_profile != VFS_EXEC_PROFILE_NONE
+                        and exec_flags
+                        & (EXEC_FLAG_IMMUTABLE | EXEC_FLAG_DOMAIN_SAFE)
+                        == (EXEC_FLAG_IMMUTABLE | EXEC_FLAG_DOMAIN_SAFE)
+                        and exec_generation == EXEC_MANIFEST_VERSION
+                        and exec_layout_version == EXEC_LAYOUT_VERSION
+                    )
+                )
                 valid_shape = (
                     file_type == T_FILE
                     and fs_owner_domain == FS_OWNER_SYSTEM
-                    and (
-                        exec_flags
-                        & (EXEC_FLAG_IMMUTABLE | EXEC_FLAG_DOMAIN_SAFE)
-                    )
-                    == (EXEC_FLAG_IMMUTABLE | EXEC_FLAG_DOMAIN_SAFE)
-                    and exec_generation == EXEC_MANIFEST_VERSION
-                    and exec_layout_version == EXEC_LAYOUT_VERSION
+                    and (data_shape or executable_shape)
                 )
             elif (
                 flags == VFS_LABEL_F_PROTECTED
@@ -604,8 +729,15 @@ def read_inode(image: bytes, sb: Superblock, inum: int) -> Dinode:
         type=file_type,
         size=u32(raw, 8),
         addrs=addrs,
+        exec_flags=u32(raw, 64) if sb.dinode_size >= DINODE_SIZE_EXEC_POLICY else None,
+        exec_generation=u32(raw, 68) if sb.dinode_size >= DINODE_SIZE_EXEC_POLICY else None,
+        exec_role_mask=u32(raw, 72) if sb.dinode_size >= DINODE_SIZE_EXEC_POLICY else None,
+        exec_layout_version=u32(raw, 76) if sb.dinode_size >= DINODE_SIZE_EXEC_POLICY else None,
+        exec_rw_offset=u32(raw, 80) if sb.dinode_size >= DINODE_SIZE_EXEC_POLICY else None,
+        vfs_flags=u32(raw, 92) if sb.magic in VFS_POLICY_MAGICS else None,
         vfs_policy=vfs_policy,
         vfs_scope_id=vfs_scope_id,
+        vfs_exec_profile=u32(raw, 104) if sb.magic in VFS_POLICY_MAGICS else None,
         fs_owner_domain=fs_owner_domain,
         fs_owner_version=fs_owner_version,
     )
@@ -657,28 +789,27 @@ def root_entries(image: bytes, sb: Superblock) -> list[tuple[int, str]]:
     return entries
 
 
-def discover_name_map(repo_dir: Path | None) -> dict[str, str]:
+def discover_state_inventory(
+    repo_dir: Path | None,
+) -> tuple[dict[str, str], set[str] | None]:
     if repo_dir is None:
-        return {}
-    roots = [repo_dir / "user" / "src", repo_dir / "user" / "include", repo_dir / "README.md"]
-    candidates: set[str] = set()
-    for root in roots:
-        if root.is_dir():
-            for path in root.rglob("*"):
-                if path.suffix not in (".c", ".h", ".md"):
-                    continue
-                candidates.update(re.findall(r"rp_[A-Za-z0-9_]+", path.read_text(encoding="utf-8", errors="ignore")))
-        elif root.is_file():
-            candidates.update(re.findall(r"rp_[A-Za-z0-9_]+", root.read_text(encoding="utf-8", errors="ignore")))
-    by_short: dict[str, list[str]] = {}
-    for name in candidates:
-        by_short.setdefault(name[:DIRSIZ], []).append(name)
-    result: dict[str, str] = {}
-    for short, names in by_short.items():
-        unique = sorted(set(names))
-        if len(unique) == 1:
-            result[short] = unique[0]
-    return result
+        return {}, None
+    root = Path(__file__).resolve().parents[1]
+    manifest = load_manifest(root)
+    names = repo_state_names(repo_dir, root)
+    return (
+        short_name_map(
+            names,
+            excluded_names=manifest.host_state_files,
+            dir_size=DIRSIZ,
+        ),
+        names,
+    )
+
+
+def discover_name_map(repo_dir: Path | None) -> dict[str, str]:
+    name_map, _ = discover_state_inventory(repo_dir)
+    return name_map
 
 
 def looks_like_state_text(data: bytes) -> bool:
@@ -739,7 +870,7 @@ def extract_state_files(
         raise ValueError("scope_id and require_single_scope are mutually exclusive")
     image = image_path.read_bytes()
     sb = read_superblock(image)
-    name_map = discover_name_map(repo_dir)
+    name_map, allowed_state_names = discover_state_inventory(repo_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     extracted: list[str] = []
     workflow_names: set[tuple[int, str]] = set()
@@ -780,6 +911,11 @@ def extract_state_files(
             continue
         validate_state_name(short_name)
         full_name = validate_state_name(name_map.get(short_name, short_name))
+        if allowed_state_names is not None and full_name not in allowed_state_names:
+            raise ValueError(
+                "unmanifested state filename in guest image: "
+                f"short={short_name} resolved={full_name}"
+            )
         state_entries.append((entry_scope_id, full_name, data))
     scoped_format = sb.magic in SCOPED_MAGICS
     available_scope_ids = sorted(

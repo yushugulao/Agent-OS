@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import contextmanager
 import json
 import os
 import queue
@@ -65,6 +66,66 @@ GUEST_FAILURE_RULES = (
     ),
 )
 DEFAULT_FAILURE_PATTERN = "|".join(f"(?:{rule.pattern})" for _, rule in GUEST_FAILURE_RULES)
+
+
+class RepoRunBusy(RuntimeError):
+    """A destructive plain-uCore run is already using this repository."""
+
+
+def _run_lock_path(repo_dir: Path) -> Path:
+    repo_dir = repo_dir.resolve()
+    git_dir = repo_dir.parent / ".git"
+    lock_dir = git_dir if git_dir.is_dir() else repo_dir
+    return lock_dir / f".{repo_dir.name}-run.lock"
+
+
+def _try_lock_file(handle) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0, os.SEEK_END)
+        if handle.tell() == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def _unlock_file(handle) -> None:
+    if os.name == "nt":
+        import msvcrt
+
+        handle.seek(0)
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        return
+
+    import fcntl
+
+    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def exclusive_repo_run_lock(repo_dir: Path):
+    """Fail closed instead of letting concurrent clean/build/run phases collide."""
+
+    lock_path = _run_lock_path(repo_dir)
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+b") as handle:
+        try:
+            _try_lock_file(handle)
+        except OSError as error:
+            raise RepoRunBusy(
+                f"plain uCore repository is already running: {repo_dir.resolve()}"
+            ) from error
+        try:
+            yield
+        finally:
+            _unlock_file(handle)
 
 
 def normalize_guest_log_line(line: str) -> str:
@@ -1263,7 +1324,7 @@ def publish_next_state(next_state: Path, state_dir: Path) -> None:
             shutil.copy2(item, state_dir / item.name)
 
 
-def run_seeded_ucore(
+def _run_seeded_ucore_locked(
     repo_dir: Path,
     run_dir: Path,
     timeout_seconds: int,
@@ -1428,6 +1489,50 @@ def run_seeded_ucore(
     write_run_result_state(next_state, summary, text)
     write_json(run_dir / "ucore-run-summary.json", summary)
     return summary
+
+
+def run_seeded_ucore(
+    repo_dir: Path,
+    run_dir: Path,
+    timeout_seconds: int,
+    wsl_distro: str,
+    chapter: str = "platform_seeded",
+    init_proc: str = "rp_seed_orch",
+    pass_marker: str = "rp_orch: passed",
+) -> dict[str, object]:
+    repo_dir = repo_dir.resolve()
+    run_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        with exclusive_repo_run_lock(repo_dir):
+            return _run_seeded_ucore_locked(
+                repo_dir,
+                run_dir,
+                timeout_seconds,
+                wsl_distro,
+                chapter,
+                init_proc,
+                pass_marker,
+            )
+    except RepoRunBusy as error:
+        summary = {
+            "commands": [],
+            "returncode": 1,
+            "build_returncode": None,
+            "guest_returncode": None,
+            "guest_raw_returncode": None,
+            "embedded_action_records": 0,
+            "extracted_state_files": 0,
+            "extract_status": "skipped",
+            "passed": False,
+            "failure_phase": "coordination",
+            "failure_reason": "repo_busy",
+            "error": str(error),
+            "build_log": str(run_dir / "ucore-build.log"),
+            "log": str(run_dir / "ucore-run.log"),
+            "status": "failed",
+        }
+        write_json(run_dir / "ucore-run-summary.json", summary)
+        return summary
 
 
 def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_distro: str) -> dict[str, object]:

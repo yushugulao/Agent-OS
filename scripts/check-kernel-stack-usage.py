@@ -33,6 +33,8 @@ def parse_args():
     parser.add_argument("--boot-required-limit", type=int)
     parser.add_argument("--stack-boundary", action="append", default=[])
     parser.add_argument("--allow-indirect-from", action="append", default=[])
+    parser.add_argument("--indirect-call-edge", action="append", default=[])
+    parser.add_argument("--translation-unit", action="append", default=[])
     parser.add_argument("--recursion-bound", action="append", default=[])
     return parser.parse_args()
 
@@ -53,14 +55,43 @@ def parse_recursion_bounds(values):
     return bounds
 
 
-def read_callgraphs(directory, source_directory):
+def parse_indirect_call_edges(values):
+    edges = defaultdict(set)
+    for value in values:
+        try:
+            caller, target = value.split("=", 1)
+        except (ValueError, TypeError):
+            raise ValueError(f"invalid indirect call edge: {value}") from None
+        if not caller or not target:
+            raise ValueError(f"invalid indirect call edge: {value}")
+        edges[caller].add(target)
+    return edges
+
+
+def read_callgraphs(directory, source_directory, translation_units=()):
     callgraph_dir = Path(directory)
     source_dir = Path(source_directory)
     paths = sorted(callgraph_dir.glob("*.ci"))
-    expected = {path.stem for path in source_dir.glob("*.c")}
+    source_units = {path.stem for path in source_dir.glob("*.c")}
+    if translation_units:
+        expected = set(translation_units)
+        if (
+            len(expected) != len(translation_units)
+            or any(not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", unit)
+                   for unit in expected)
+        ):
+            raise ValueError("invalid or duplicate translation-unit inventory")
+        missing_sources = sorted(expected - source_units)
+        if missing_sources:
+            raise ValueError(
+                "translation-unit source is missing: "
+                + ", ".join(missing_sources)
+            )
+    else:
+        expected = source_units
     actual = {path.stem for path in paths}
     missing = sorted(expected - actual)
-    stale = sorted(actual - expected)
+    stale = sorted(actual - source_units)
     if missing or stale:
         details = []
         if missing:
@@ -68,6 +99,8 @@ def read_callgraphs(directory, source_directory):
         if stale:
             details.append("stale: " + ", ".join(stale))
         raise ValueError("incomplete callgraph set (" + "; ".join(details) + ")")
+    if translation_units:
+        paths = [path for path in paths if path.stem in expected]
     if not paths:
         raise ValueError(f"no GCC callgraph files found in {directory}")
 
@@ -139,6 +172,40 @@ def build_graph(title_to_name, frames, raw_edges, stack_boundaries):
             graph[source].add(target)
             incoming[target].add(source)
     return graph, incoming, nodes, definitions
+
+
+def resolve_indirect_call_edges(
+    graph, incoming, definitions, title_to_name, declared_edges
+):
+    for caller_name, target_names in declared_edges.items():
+        callers = definitions.get(caller_name, ())
+        if len(callers) != 1:
+            raise ValueError(
+                f"indirect call edge caller must resolve once: {caller_name}"
+            )
+        caller = callers[0]
+        indirect = {
+            target
+            for target in graph.get(caller, ())
+            if target == INDIRECT_NODE
+        }
+        if not indirect:
+            raise ValueError(
+                f"declared indirect call edge has no compiled call: {caller_name}"
+            )
+        for target in indirect:
+            graph[caller].remove(target)
+            incoming[target].discard(caller)
+        for target_name in target_names:
+            targets = definitions.get(target_name, ())
+            if len(targets) != 1:
+                raise ValueError(
+                    "indirect call edge target must resolve once: "
+                    f"{caller_name}={target_name}"
+                )
+            target = targets[0]
+            graph.setdefault(caller, set()).add(target)
+            incoming.setdefault(target, set()).add(caller)
 
 
 def reachable_from(root, graph):
@@ -366,10 +433,13 @@ def main():
         ):
             raise ValueError("interrupt entry frame is unsafe or exceeds the guard")
         recursion_bounds = parse_recursion_bounds(args.recursion_bound)
+        indirect_call_edges = parse_indirect_call_edges(
+            args.indirect_call_edge
+        )
         stack_boundaries = set(args.stack_boundary)
         allowed_indirect_callers = set(args.allow_indirect_from)
         title_to_name, frames, raw_edges = read_callgraphs(
-            args.callgraph_dir, args.source_dir
+            args.callgraph_dir, args.source_dir, args.translation_unit
         )
         oversized = sorted(
             (node_name(title, title_to_name), size)
@@ -381,6 +451,10 @@ def main():
             raise ValueError(f"stack frames exceed guard size: {details}")
         graph, incoming, nodes, definitions = build_graph(
             title_to_name, frames, raw_edges, stack_boundaries
+        )
+        resolve_indirect_call_edges(
+            graph, incoming, definitions, title_to_name,
+            indirect_call_edges,
         )
         user_size, user_path = longest_path(
             "usertrap",

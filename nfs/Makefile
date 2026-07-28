@@ -22,10 +22,10 @@ STORAGE_POLICY_CPPFLAGS := \
 
 .PHONY: .FORCE clean $(FS_FUSE)
 
-$(FS_FUSE): fs.c fs.h types.h ../fs_storage_policy.h $(EXEC_POLICY)
+$(FS_FUSE): fs.c host_image_snapshot.c host_image_snapshot.h fs.h types.h ../fs_storage_policy.h ../agent_metadata_disk_abi.h ../exec_image_policy.h $(EXEC_POLICY)
 	@set -e; tmp="$@.$$$$.tmp"; \
 		trap 'rm -f "$$tmp"' 0 1 2 3 15; \
-		$(HOSTCC) $(STORAGE_POLICY_CPPFLAGS) fs.c -o "$$tmp"; \
+		$(HOSTCC) $(STORAGE_POLICY_CPPFLAGS) fs.c host_image_snapshot.c -o "$$tmp"; \
 		mv -f "$$tmp" $@; \
 		trap - 0 1 2 3 15
 

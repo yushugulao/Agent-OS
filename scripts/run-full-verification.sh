@@ -13,6 +13,21 @@ MECHANISM_MARKER_GRACE_SECONDS="${MECHANISM_MARKER_GRACE_SECONDS:-5s}"
 source "${ROOT_DIR}/scripts/evidence-wiring.sh"
 evidence_initialize
 
+echo "[full-verify] Agent duration calibration policy"
+"${PYTHON_BIN}" "${ROOT_DIR}/scripts/check-kernel-budgets.py" \
+	--check agent-test-policy \
+	--config "${ROOT_DIR}/ci/kernel-budgets.json"
+
+agent_suite_guest_log=""
+agent_suite_guest_log_owned=0
+cleanup_full_verify() {
+	if [[ "${agent_suite_guest_log_owned}" == "1" &&
+	      -n "${agent_suite_guest_log}" ]]; then
+		rm -f "${agent_suite_guest_log}"
+	fi
+}
+trap cleanup_full_verify EXIT
+
 evidence_step_begin() {
 	evidence_enabled && EVIDENCE_STEP_START="$(date +%s.%N)"
 	return 0
@@ -77,6 +92,7 @@ echo "[full-verify] kernel growth budgets"
 	cd "${ROOT_DIR}"
 	make ci-check \
 		TOOLPREFIX="${TOOLPREFIX}" \
+		PYTHON_BIN="${PYTHON_BIN}" \
 		LOG=warn \
 		INIT_PROC=agentfinal_ucore \
 		CHAPTER=agent
@@ -87,21 +103,6 @@ evidence_step_begin
 echo "[full-verify] 本地结果阅读器"
 (
 	cd "${ROOT_DIR}"
-	"${PYTHON_BIN}" host_tools/test_check_host_platform_alignment.py
-	"${PYTHON_BIN}" host_tools/test_check_host_action_kind_alignment.py
-	"${PYTHON_BIN}" host_tools/test_check_seeded_action_state.py
-	"${PYTHON_BIN}" host_tools/test_check_host_surface_alignment.py
-	"${PYTHON_BIN}" host_tools/test_check_host_test_alignment.py
-	"${PYTHON_BIN}" host_tools/test_plain_ucore_action_runner.py
-	"${PYTHON_BIN}" host_tools/test_plain_ucore_fs_extract.py
-	"${PYTHON_BIN}" host_tools/test_plain_ucore_llm_relay.py
-	"${PYTHON_BIN}" host_tools/test_llm_relay_mode_contract.py
-	"${PYTHON_BIN}" host_tools/test_check_reader_output.py
-	"${PYTHON_BIN}" host_tools/test_compare_dual_platform_reader.py
-	"${PYTHON_BIN}" host_tools/test_compare_dual_platform_state.py
-	"${PYTHON_BIN}" host_tools/test_summarize_dual_platform_results.py
-	"${PYTHON_BIN}" host_tools/test_chart_svg_layout_contract.py
-	"${PYTHON_BIN}" host_tools/test_plain_ucore_reader.py
 	if evidence_enabled; then
 		reader_raw_dir="${EVIDENCE_WORK_DIR}/reader-e2e-raw"
 		reader_artifact_list="${EVIDENCE_WORK_DIR}/reader-e2e-artifacts.txt"
@@ -145,6 +146,49 @@ echo "[full-verify] host platform alignment"
 )
 evidence_step_end "host-platform-alignment"
 
+if evidence_enabled; then
+	agent_suite_guest_log="${EVIDENCE_WORK_DIR}/agent-suite-guest.log"
+else
+	agent_suite_guest_log="${TMPDIR:-/tmp}/agent-suite-guest.$$"
+	agent_suite_guest_log_owned=1
+fi
+evidence_step_begin
+echo "[full-verify] AgentOS kernel tests"
+(
+	cd "${ROOT_DIR}"
+	if evidence_enabled; then
+		timing_file="${EVIDENCE_WORK_DIR}/agent-suite-timings.log"
+		: >"${agent_suite_guest_log}"
+		env -u AGENT_TEST_CASE -u AGENT_TEST_TIMING_FILE \
+			-u AGENT_TEST_GUEST_LOG_FILE \
+			AGENT_TEST_CALIBRATE=0 REQUIRE_FULL_SUITE=1 \
+			AGENT_TEST_TIMING_FILE="${timing_file}" \
+			AGENT_TEST_GUEST_LOG_FILE="${agent_suite_guest_log}" \
+			TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \
+			PYTHON_BIN="${PYTHON_BIN}" \
+			CASE_TIMEOUT="${CASE_TIMEOUT}" \
+			IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS}" \
+			MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS}" \
+			bash scripts/run-agent-tests.sh
+		evidence_publish_file \
+			"${timing_file}" "agent-suite-timings.log"
+		evidence_publish_file \
+			"${agent_suite_guest_log}" "agent-suite-guest.log"
+	else
+		: >"${agent_suite_guest_log}"
+		env -u AGENT_TEST_CASE -u AGENT_TEST_TIMING_FILE \
+			AGENT_TEST_CALIBRATE=0 REQUIRE_FULL_SUITE=1 \
+			AGENT_TEST_GUEST_LOG_FILE="${agent_suite_guest_log}" \
+			TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \
+			PYTHON_BIN="${PYTHON_BIN}" \
+			CASE_TIMEOUT="${CASE_TIMEOUT}" \
+			IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS}" \
+			MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS}" \
+			bash scripts/run-agent-tests.sh
+	fi
+)
+evidence_step_end "agent-suite" "agent-suite-timings.log" "agent-suite-guest.log"
+
 evidence_step_begin
 echo "[full-verify] dual platforms"
 (
@@ -170,6 +214,15 @@ echo "[full-verify] dual platforms"
 		evidence_publish_file \
 			"${dual_dir}/reader-compare-summary.json" \
 			"dual-reader-compare.json"
+		evidence_publish_file \
+			"${result_dir}/experiments/dual-targeted-agentbench-guest.log" \
+			"dual-targeted-agentbench-guest.log"
+		evidence_publish_file \
+			"${result_dir}/experiments/measured-experiments.json" \
+			"dual-measured-experiments.json"
+		evidence_publish_file \
+			"${result_dir}/experiments/raw/file-query-benchmark.csv" \
+			"dual-file-query-benchmark.csv"
 	else
 		TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \
 			PYTHON_BIN="${PYTHON_BIN}" bash scripts/run-dual-platforms.sh
@@ -178,43 +231,8 @@ echo "[full-verify] dual platforms"
 evidence_step_end "dual-platforms" \
 	"dual-plain-qemu.log" "dual-agentos-qemu.log" \
 	"dual-stage-timings.csv" "dual-state-compare.json" \
-	"dual-reader-compare.json"
-
-evidence_step_begin
-echo "[full-verify] AgentOS kernel tests"
-(
-	cd "${ROOT_DIR}"
-	if evidence_enabled; then
-		timing_file="${EVIDENCE_WORK_DIR}/agent-suite-timings.log"
-		guest_file="${EVIDENCE_WORK_DIR}/agent-suite-guest.log"
-		: >"${guest_file}"
-		env -u AGENT_TEST_CASE -u AGENT_TEST_TIMING_FILE \
-			-u AGENT_TEST_GUEST_LOG_FILE \
-			AGENT_TEST_CALIBRATE=0 REQUIRE_FULL_SUITE=1 \
-			AGENT_TEST_TIMING_FILE="${timing_file}" \
-			AGENT_TEST_GUEST_LOG_FILE="${guest_file}" \
-			TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \
-			PYTHON_BIN="${PYTHON_BIN}" \
-			CASE_TIMEOUT="${CASE_TIMEOUT}" \
-			IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS}" \
-			MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS}" \
-			bash scripts/run-agent-tests.sh
-		evidence_publish_file \
-			"${timing_file}" "agent-suite-timings.log"
-		evidence_publish_file \
-			"${guest_file}" "agent-suite-guest.log"
-	else
-		env -u AGENT_TEST_CASE -u AGENT_TEST_TIMING_FILE \
-			AGENT_TEST_CALIBRATE=0 REQUIRE_FULL_SUITE=1 \
-			TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \
-			PYTHON_BIN="${PYTHON_BIN}" \
-			CASE_TIMEOUT="${CASE_TIMEOUT}" \
-			IDLE_NOTICE_SECONDS="${IDLE_NOTICE_SECONDS}" \
-			MARKER_GRACE_SECONDS="${MARKER_GRACE_SECONDS}" \
-			bash scripts/run-agent-tests.sh
-	fi
-)
-evidence_step_end "agent-suite" "agent-suite-timings.log" "agent-suite-guest.log"
+	"dual-reader-compare.json" "dual-targeted-agentbench-guest.log" \
+	"dual-measured-experiments.json" "dual-file-query-benchmark.csv"
 
 evidence_step_begin
 echo "[full-verify] process reaper tests"
@@ -257,6 +275,47 @@ echo "[full-verify] thread resource tests"
 evidence_step_end "thread-resource" "thread-resource.log"
 
 evidence_step_begin
+echo "[full-verify] physical memory resource tests"
+(
+	cd "${ROOT_DIR}"
+	run_resource_regression \
+		"physical-resource" "physical-resource.log" \
+		"scripts/run-physical-resource-tests.sh"
+)
+evidence_step_end "physical-resource" "physical-resource.log"
+
+evidence_step_begin
+echo "[full-verify] metadata crash recovery tests"
+(
+	cd "${ROOT_DIR}"
+	run_resource_regression \
+		"metadata-recovery" "metadata-recovery.log" \
+		"scripts/run-metadata-recovery-tests.sh"
+)
+evidence_step_end "metadata-recovery" "metadata-recovery.log"
+
+evidence_step_begin
+echo "[full-verify] observation durability recovery tests"
+(
+	cd "${ROOT_DIR}"
+	run_resource_regression \
+		"observe-recovery" "observe-recovery.log" \
+		"scripts/run-observe-recovery-tests.sh"
+)
+evidence_step_end "observe-recovery" "observe-recovery.log" \
+	"observe-recovery-before-reap.img"
+
+evidence_step_begin
+echo "[full-verify] VirtIO disk fault tests"
+(
+	cd "${ROOT_DIR}"
+	run_resource_regression \
+		"virtio-disk" "virtio-disk.log" \
+		"scripts/run-virtio-disk-tests.sh"
+)
+evidence_step_end "virtio-disk" "virtio-disk.log"
+
+evidence_step_begin
 echo "[full-verify] workflow teardown race tests"
 (
 	cd "${ROOT_DIR}"
@@ -276,6 +335,35 @@ echo "[full-verify] filesystem ENOSPC tests"
 		"scripts/run-fs-enospc-tests.sh"
 )
 evidence_step_end "fs-enospc" "fs-enospc.log"
+
+evidence_step_begin
+echo "[full-verify] filesystem allocator consistency fault tests"
+(
+	cd "${ROOT_DIR}"
+	if evidence_enabled; then
+		fs_allocator_dir="${EVIDENCE_WORK_DIR}/fs-allocator-evidence"
+		fs_allocator_archive="${EVIDENCE_WORK_DIR}/fs-allocator-evidence.tar"
+		run_resource_regression \
+			"fs-allocator-fault" "fs-allocator-fault.log" \
+			"scripts/run-fs-allocator-fault-tests.sh" \
+			FS_ALLOCATOR_ARTIFACT_DIR="${fs_allocator_dir}" \
+			FS_ALLOCATOR_EVIDENCE_ARCHIVE="${fs_allocator_archive}"
+		"${PYTHON_BIN}" scripts/fs-allocator-evidence.py verify-archive \
+			--archive "${fs_allocator_archive}"
+		evidence_publish_file "${fs_allocator_archive}" \
+			"fs-allocator-evidence.tar"
+	else
+		run_resource_regression \
+			"fs-allocator-fault" "fs-allocator-fault.log" \
+			"scripts/run-fs-allocator-fault-tests.sh"
+	fi
+)
+if evidence_enabled; then
+	evidence_step_end "fs-allocator-fault" \
+		"fs-allocator-fault.log" "fs-allocator-evidence.tar"
+else
+	evidence_step_end "fs-allocator-fault"
+fi
 
 if evidence_enabled; then
 	"${PYTHON_BIN}" "${ROOT_DIR}/scripts/capture-final-evidence.py" write-summary \

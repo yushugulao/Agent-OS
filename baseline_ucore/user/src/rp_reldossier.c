@@ -14,7 +14,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_campaign", "campaign_checks=108");
 	ok = ok && rp_file_contains("rp_camp_rank", "decision=select_trial_04");
 	ok = ok && rp_file_contains("rp_prov_view", "provenance_view_checks=64");
-	ok = ok && rp_file_contains("rp_backend_exec", "runner_report_rows=7");
+	ok = ok && rp_file_contains("rp_backend_exec", "reference_report_rows=7");
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_reldossier",

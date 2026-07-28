@@ -12,7 +12,9 @@ int main(void)
 {
 	int ok = 1;
 	ok = ok && rp_file_contains("rp_backend", "status=ready");
-	ok = ok && rp_file_contains("rp_backend_exec", "status=ready");
+	ok = ok && rp_file_contains("rp_backend_exec", "evidence_file_role=demo_reference");
+	ok = ok && rp_file_contains("rp_backend_exec", "evidence_file_generation=demo_expected");
+	ok = ok && rp_file_contains("rp_backend_exec", "evidence_file_status=reference_ready");
 	ok = ok && rp_file_contains("rp_query", "knowledge_index=search_documents:1685");
 	ok = ok && rp_file_contains("rp_query", "provenance_nodes:406");
 	ok = ok && rp_file_contains("rp_query", "provenance_links:544");
@@ -282,14 +284,15 @@ int main(void)
 	ok = ok && require_equal("completion_actions", completion_actions, 4);
 	ok = ok && require_equal("hook_count", hook_count, completion_actions);
 
-	int backend_cases = rp_get_int_value("rp_backend", "cases=");
-	int backend_executable = rp_get_int_value("rp_backend", "executable=");
-	int passed_cases = rp_get_int_value("rp_backend_exec", "passed_cases=");
-	int planned_cases = rp_get_int_value("rp_backend_exec", "planned_cases=");
+	int backend_cases = rp_get_int_value("rp_backend", "reference_cases=");
+	int backend_catalog = rp_get_int_value("rp_backend", "catalog_entries=");
+	int runtime_cases = rp_get_int_value("rp_backend_exec", "runtime_cases=");
+	int reference_rows = rp_get_int_value("rp_backend_exec", "reference_case_rows=");
 	int study_arms = rp_get_int_value("rp_study", "arms=");
 	ok = ok && require_equal("backend_cases", backend_cases, 7);
-	ok = ok && require_equal("backend_executable", backend_executable, passed_cases);
-	ok = ok && require_equal("backend_case_total", passed_cases + planned_cases, backend_cases);
+	ok = ok && require_equal("backend_catalog", backend_catalog, backend_cases);
+	ok = ok && require_equal("backend_runtime_cases", runtime_cases, 0);
+	ok = ok && require_equal("backend_reference_rows", reference_rows, backend_cases);
 	ok = ok && require_equal("study_arms", study_arms, 2);
 
 	int runner_stages = rp_get_int_value("rp_runner", "stages=");

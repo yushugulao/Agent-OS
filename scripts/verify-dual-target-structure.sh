@@ -3,6 +3,7 @@ set -eu
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 TMP_FILE="${TMPDIR:-/tmp}/agentos-dual-target-check.$$"
+PYTHON_BIN="${PYTHON_BIN:-python3}"
 
 cleanup() {
 	rm -f "${TMP_FILE}"
@@ -31,7 +32,7 @@ require_text() {
 	local pattern="$2"
 	local message="$3"
 
-	if ! grep -R -E -n "${pattern}" "${ROOT_DIR}/${path}" >"${TMP_FILE}" 2>/dev/null; then
+	if ! grep -R -E -n -- "${pattern}" "${ROOT_DIR}/${path}" >"${TMP_FILE}" 2>/dev/null; then
 		fail "${message}: ${path}"
 	fi
 	: >"${TMP_FILE}"
@@ -42,7 +43,7 @@ reject_text() {
 	local pattern="$2"
 	local message="$3"
 
-	if grep -R -E -n "${pattern}" "${ROOT_DIR}/${path}" >"${TMP_FILE}" 2>/dev/null; then
+	if grep -R -E -n -- "${pattern}" "${ROOT_DIR}/${path}" >"${TMP_FILE}" 2>/dev/null; then
 		fail "${message}: ${path}"
 	fi
 	: >"${TMP_FILE}"
@@ -152,6 +153,7 @@ require_path "os/agent.c" "AgentOS kernel module is missing"
 require_path "user/src/rp_agentos_orch.c" "AgentOS platform orchestrator is missing"
 require_path "user/src/agentconflict_ucore.c" "AgentOS edit lease test is missing"
 require_path "user/src/agentllm_ucore.c" "AgentOS LLM relay test is missing"
+require_path "user/src/agenttoolabi_ucore.c" "AgentOS tool ABI test is missing"
 require_path "host_tools/check_host_platform_alignment.py" "host platform alignment checker is missing"
 require_path "host_tools/check_host_action_kind_alignment.py" "host action kind alignment checker is missing"
 require_path "host_tools/check_seeded_action_state.py" "seeded action state checker is missing"
@@ -159,6 +161,26 @@ require_path "host_tools/check_host_surface_alignment.py" "host Web/API/action s
 require_path "host_tools/check_host_test_alignment.py" "host test alignment checker is missing"
 require_path "host_tools/summarize_dual_platform_results.py" "dual platform result summarizer is missing"
 require_path "host_tools/test_summarize_dual_platform_results.py" "dual platform result summarizer test is missing"
+require_path "host_tools/benchmark_source_contract.py" "measured benchmark source contract is missing"
+require_path "host_tools/test_measured_experiments.py" "measured benchmark mutation tests are missing"
+require_path "host_tools/test_dual_measurement_source_contract.py" "runner-owned measurement mutation tests are missing"
+require_path "host_tools/result_bundle_contract.py" "served result bundle contract is missing"
+require_path "host_tools/test_result_bundle_contract.py" "served result bundle mutation tests are missing"
+require_path "host_tools/backend_evidence_contract.py" "shared backend evidence contract is missing"
+require_path "host_tools/test_backend_evidence_contract.py" "backend evidence contract regressions are missing"
+require_path "host_tools/reference_catalog_contract.py" "reference catalog source contract is missing"
+require_path "host_tools/test_reference_catalog_contract.py" "reference catalog mutation tests are missing"
+require_path "host_tools/gitlab_ci_contract.py" "GitLab CI effective-job resolver is missing"
+require_path "host_tools/test_gitlab_ci_contract.py" "GitLab CI resolver mutation tests are missing"
+require_path "host_tools/remote_ci_evidence.py" "GitLab CI execution attester is missing"
+require_path "host_tools/remote_ci_archive.py" "GitLab CI archive verifier is missing"
+require_path "host_tools/remote_ci_job_semantics.py" "GitLab CI semantic adapter is missing"
+require_path "host_tools/remote_ci_bundle.py" "GitLab CI bundle bridge is missing"
+require_path "host_tools/test_remote_ci_evidence.py" "GitLab CI attestation mutations are missing"
+require_path "ci/research-state-manifest.json" "shared research state manifest is missing"
+require_path "host_tools/__init__.py" "host tools package marker is missing"
+require_path "host_tools/research_state_manifest.py" "research state manifest resolver is missing"
+require_path "host_tools/test_research_state_manifest.py" "research state manifest mutations are missing"
 require_path "host_tools/test_llm_relay_mode_contract.py" "LLM relay mode contract test is missing"
 require_path "host_tools/test_chart_svg_layout_contract.py" "chart SVG layout contract test is missing"
 require_path "scripts/check-target-readiness.sh" "target readiness checker is missing"
@@ -167,6 +189,15 @@ require_path "scripts/check-windows-prereqs.ps1" "Windows dependency checker is 
 require_path "scripts/install-ubuntu-deps.sh" "Ubuntu dependency installer is missing"
 require_path "scripts/run-dual-platforms.sh" "dual target runner is missing"
 require_path "scripts/run-full-verification.sh" "full verification runner is missing"
+require_path "scripts/run-ci-mechanism.sh" "CI mechanism evidence wrapper is missing"
+require_path "scripts/run-physical-resource-tests.sh" "physical resource runner is missing"
+require_path "scripts/run-metadata-recovery-tests.sh" "metadata recovery runner is missing"
+require_path "scripts/run-observe-recovery-tests.sh" "observation recovery runner is missing"
+require_path "scripts/run-virtio-disk-tests.sh" "VirtIO disk runner is missing"
+require_path "scripts/check-wait-queue-contract.py" "wait queue API contract is missing"
+require_path "scripts/test-wait-atomic-wiring.py" "atomic wait mutation contract is missing"
+require_text "scripts/validate-kernel-test-log.py" "WAIT_ATOMIC_MARKERS" "atomic wait log profile is missing"
+require_text "Makefile" "scripts/test-wait-atomic-wiring.py" "ordinary CI omits atomic wait mutations"
 require_path "scripts/check-agent-module-boundaries.sh" "AgentOS module boundary checker is missing"
 require_path "scripts/check-kernel-budgets.py" "kernel budget checker is missing"
 require_path "scripts/test-check-kernel-budgets.py" "kernel budget checker tests are missing"
@@ -174,13 +205,22 @@ require_path "scripts/agent_test_runner.py" "Agent test output runner is missing
 require_path "scripts/test-agent-test-runner.py" "Agent test output runner tests are missing"
 require_path "scripts/validate-kernel-test-log.py" "specialized kernel log validator is missing"
 require_path "scripts/test-validate-kernel-test-log.py" "specialized kernel log validator tests are missing"
+require_path "scripts/validate-metadata-crash-log.py" "metadata crash log validator is missing"
+require_path "scripts/test-validate-metadata-crash-log.py" "metadata crash log validator tests are missing"
 require_path "scripts/probes/struct-proc-size.c" "struct proc budget probe is missing"
+require_path "scripts/probes/agent-metadata-disk-layout.c" "metadata disk ABI probe is missing"
 require_path "ci/kernel-budgets.json" "machine-readable kernel budgets are missing"
+require_path "ci/agent-metadata-disk-format.json" "metadata disk ABI contract is missing"
+require_path "agent_metadata_disk_abi.h" "shared metadata disk ABI is missing"
 require_path "os/agent_context.c" "Agent context subsystem is missing"
 require_path "os/agent_metadata_objects.c" "Agent metadata object subsystem is missing"
 require_path "os/agent_metadata_directory.c" "Agent metadata directory subsystem is missing"
 require_path "os/agent_metadata_directory.h" "Agent metadata directory contract is missing"
+require_path "os/agent_metadata_disk.h" "Agent metadata disk contract is missing"
 require_path "os/agent_metadata_store.c" "Agent metadata store subsystem is missing"
+require_path "host_tools/agent_metadata_disk_format.py" "metadata raw-bank validator is missing"
+require_path "scripts/check-agent-metadata-disk-format.py" "metadata disk ABI checker is missing"
+require_path "scripts/test-agent-metadata-disk-format.py" "metadata raw-bank parser tests are missing"
 require_path "scripts/run-syscall-fairness-tests.sh" "syscall fairness runner is missing"
 require_path "scripts/run-file-resource-tests.sh" "file resource runner is missing"
 require_path "scripts/run-fs-enospc-tests.sh" "filesystem ENOSPC runner is missing"
@@ -190,6 +230,8 @@ require_path "scripts/run-workflow-teardown-race-tests.sh" "workflow teardown ra
 require_path "scripts/evidence-wiring.sh" "final evidence runner wiring is missing"
 require_path "scripts/capture-final-evidence.py" "final evidence collector is missing"
 require_path "host_tools/test_capture_final_evidence.py" "final evidence selftest is missing"
+require_path "host_tools/evidence_delivery_contract.py" "final evidence delivery contract is missing"
+require_path "host_tools/test_evidence_delivery_contract.py" "final evidence delivery mutations are missing"
 require_path "evidence/README.md" "final evidence documentation is missing"
 require_path "scripts/serve-reader.sh" "reader server script is missing"
 require_path "docs/windows-quickstart.md" "Windows quickstart document is missing"
@@ -223,44 +265,51 @@ require_text "Makefile" "check agent-modules" "Makefile does not enforce Agent m
 require_text "Makefile" "scripts/test-check-kernel-budgets.py" "Makefile kernel budget self-test is missing"
 require_text "Makefile" "scripts/test-agent-test-runner.py" "Makefile Agent output runner self-test is missing"
 require_text "Makefile" "scripts/test-validate-kernel-test-log.py" "Makefile specialized log validator self-test is missing"
-require_text ".gitlab-ci.yml" "make ci-check" "GitLab CI does not enforce kernel budgets"
-require_text ".gitlab-ci.yml" "verify-dual-target-structure.sh" "GitLab CI omits structure verification"
-require_text ".gitlab-ci.yml" "run-agent-tests.sh" "GitLab CI does not enforce Agent regression duration"
-require_text ".gitlab-ci.yml" "REQUIRE_FULL_SUITE=1" "GitLab CI permits a sharded Agent suite"
-require_text ".gitlab-ci.yml" "AGENT_TEST_CALIBRATE=0" "GitLab CI bypasses calibrated Agent duration enforcement"
-require_text ".gitlab-ci.yml" "run-proc-reap-tests.sh" "GitLab CI omits process teardown regression"
-require_text ".gitlab-ci.yml" "run-fs-enospc-tests.sh" "GitLab CI omits filesystem resource regression"
-require_text ".gitlab-ci.yml" "run-workflow-teardown-race-tests.sh" "GitLab CI omits workflow teardown race regression"
-require_text ".gitlab-ci.yml" "build-essential make python3 git" "GitLab CI lacks git for evidence selftests"
-require_text ".gitlab-ci.yml" "AGENT_TEST_TIMING_FILE=ci-artifacts/agent-suite-timings.log" "GitLab CI does not retain exact Agent timings"
-require_text ".gitlab-ci.yml" "EVIDENCE_GUEST_LOG_FILE=ci-artifacts/workflow-teardown-race-guest.log" "GitLab CI does not retain mechanism Guest logs"
-require_text ".gitlab-ci.yml" "when: always" "GitLab CI evidence artifacts are not retained on failure"
-require_text ".gitlab-ci.yml" "test_plain_ucore_action_runner.py" "ordinary GitLab runner omits plain action tests"
+require_text "Makefile" "scripts/test-validate-metadata-crash-log.py" "Makefile metadata crash validator self-test is missing"
+require_text "scripts/run-metadata-recovery-tests.sh" "scripts/validate-metadata-crash-log.py" \
+	"metadata recovery runner omits the explicit crash-target contract"
+require_text "scripts/run-metadata-recovery-tests.sh" "require_crash_hook_absent" \
+	"metadata recovery runner does not prove test-hook isolation"
+require_text "scripts/run-metadata-recovery-tests.sh" \
+	'--image[[:space:]]+"\$\{image\}"[[:space:]]+--stage[[:space:]]+genesis' \
+	"metadata recovery runner does not validate the mkfs genesis image"
+require_text "Makefile" "scripts/test-agent-metadata-disk-format.py" \
+	"ordinary CI omits metadata genesis mutation tests"
+require_text "ci/kernel-budgets.json" '"agent_metadata_disk_abi[.]h"' \
+	"metadata aggregate budget omits the shared disk ABI"
+if ! "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/gitlab_ci_contract.py" verify \
+	--path "${ROOT_DIR}/.gitlab-ci.yml" \
+	--budget-config "${ROOT_DIR}/ci/kernel-budgets.json" >"${TMP_FILE}" 2>&1; then
+	fail "GitLab CI effective-job contract failed"
+fi
+: >"${TMP_FILE}"
+if ! "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/research_state_manifest.py" \
+	>"${TMP_FILE}" 2>&1; then
+	fail "research state manifest contract failed"
+fi
+: >"${TMP_FILE}"
 require_text "ci/kernel-budgets.json" '"agent_modules"' "Agent module budgets are missing"
 require_text "ci/kernel-budgets.json" '"agent_context_sidecar"' "Agent sidecar budgets are missing"
 require_text "ci/kernel-budgets.json" '"boot_stack_start_symbol"' "boot stack budget is missing"
-require_text "ci/kernel-budgets.json" '"calibration_status": "calibrated_full_suite"' "Agent duration budget is not calibrated"
-require_text "scripts/check-kernel-budgets.py" "invalid_global_object_exports" "Agent writable export gate is missing"
-calibrated_runner_tag="$(
-	sed -n 's/^[[:space:]]*"runner_tag":[[:space:]]*"\([^"]*\)".*/\1/p' \
-		"${ROOT_DIR}/ci/kernel-budgets.json" | head -1
-)"
-agent_regression_runner_tag="$(
-	awk '
-		/^agent-regression:$/ { in_job = 1; next }
-		in_job && /^[^[:space:]]/ { in_job = 0; in_tags = 0 }
-		in_job && /^  tags:$/ { in_tags = 1; next }
-		in_job && in_tags && /^    - / {
-			sub(/^    - /, "")
-			print
-			exit
-		}
-	' "${ROOT_DIR}/.gitlab-ci.yml"
-)"
-if [ -z "${calibrated_runner_tag}" ] ||
-	[ "${agent_regression_runner_tag}" != "${calibrated_runner_tag}" ]; then
-	fail "GitLab Agent regression runner tag does not match calibrated profile"
+require_text "ci/kernel-budgets.json" '"calibration_status"' "Agent duration calibration state is missing"
+require_text "scripts/check-kernel-budgets.py" '"provisional_requires_full_suite"' "checker does not recognize the fail-closed calibration state"
+require_text "scripts/check-kernel-budgets.py" '"calibrated_full_suite"' "checker does not recognize the reviewed calibration state"
+require_text "scripts/run-agent-tests.sh" \
+	'^if \[\[ -z "\$\{AGENT_TEST_CASE:-\}" && "\$\{AGENT_TEST_CALIBRATE\}" == "0" \]\]; then$' \
+	"Agent duration policy does not distinguish full, targeted, and calibration modes"
+require_text "scripts/run-agent-tests.sh" '--check[[:space:]]+agent-test-policy' \
+	"full Agent suite does not reject provisional duration policy before QEMU"
+require_text "scripts/run-full-verification.sh" '--check[[:space:]]+agent-test-policy' \
+	"full verification does not reject provisional duration policy before executing its profile"
+agent_policy_line="$(grep -n -- '--check agent-test-policy' \
+	"${ROOT_DIR}/scripts/run-agent-tests.sh" | head -1 | cut -d: -f1)"
+agent_first_build_line="$(grep -n '^make -C user clean$' \
+	"${ROOT_DIR}/scripts/run-agent-tests.sh" | head -1 | cut -d: -f1)"
+if [ -z "${agent_policy_line}" ] || [ -z "${agent_first_build_line}" ] ||
+   [ "${agent_policy_line}" -ge "${agent_first_build_line}" ]; then
+	fail "full Agent duration policy must run before any suite build or QEMU"
 fi
+require_text "scripts/check-kernel-budgets.py" "invalid_global_object_exports" "Agent writable export gate is missing"
 require_text "Makefile" "scripts/run-syscall-fairness-tests.sh" "Makefile syscall fairness target does not call its runner"
 require_text "Makefile" "scripts/run-file-resource-tests.sh" "Makefile file resource target does not call its runner"
 require_text "Makefile" "scripts/run-workflow-teardown-race-tests.sh" "Makefile workflow teardown target does not call its runner"
@@ -361,31 +410,42 @@ require_text "scripts/validate-kernel-test-log.py" "cleanup_reuse=1" "fs runner 
 require_text "scripts/run-full-verification.sh" "verify-dual-target-structure" "full verification does not run the structure check"
 require_text "scripts/run-full-verification.sh" "make ci-check" "full verification does not enforce kernel budgets"
 require_text "scripts/run-agent-tests.sh" "check_suite_budget" "Agent test suite has no total duration budget"
-require_text "scripts/run-full-verification.sh" "test_check_host_platform_alignment.py" "full verification does not run host platform alignment unit test"
-require_text "scripts/run-full-verification.sh" "test_check_host_action_kind_alignment.py" "full verification does not run host action kind alignment unit test"
-require_text "scripts/run-full-verification.sh" "test_check_seeded_action_state.py" "full verification does not run seeded action state unit test"
-require_text "scripts/run-full-verification.sh" "test_check_host_surface_alignment.py" "full verification does not run host Web/API/action surface alignment unit test"
-require_text "scripts/run-full-verification.sh" "test_check_host_test_alignment.py" "full verification does not run host test alignment unit test"
-require_text "scripts/run-full-verification.sh" "test_plain_ucore_action_runner.py" "full verification does not run action runner unit test"
-require_text "scripts/run-full-verification.sh" "test_plain_ucore_fs_extract.py" "full verification does not run fs extraction unit test"
-require_text "scripts/run-full-verification.sh" "test_plain_ucore_llm_relay.py" "full verification does not run LLM relay unit test"
-require_text "scripts/run-full-verification.sh" "test_llm_relay_mode_contract.py" "full verification does not run LLM relay mode contract test"
-require_text "scripts/run-full-verification.sh" "check_host_platform_alignment.py" "full verification does not run host platform alignment check"
-require_text "scripts/run-full-verification.sh" "check_host_action_kind_alignment.py" "full verification does not run host action kind alignment check"
-require_text "scripts/run-full-verification.sh" "check_host_surface_alignment.py" "full verification does not run host Web/API/action surface alignment check"
-require_text "scripts/run-full-verification.sh" "check_host_test_alignment.py" "full verification does not run host test alignment check"
-require_text "scripts/run-full-verification.sh" "test_check_reader_output.py" "full verification does not run 本地结果输出 test"
-require_text "scripts/run-full-verification.sh" "test_compare_dual_platform_reader.py" "full verification does not run Reader comparison test"
-require_text "scripts/run-full-verification.sh" "test_compare_dual_platform_state.py" "full verification does not run state comparison test"
-require_text "scripts/run-full-verification.sh" "test_summarize_dual_platform_results.py" "full verification does not run result summary test"
-require_text "scripts/run-full-verification.sh" "test_chart_svg_layout_contract.py" "full verification does not run chart layout contract test"
-require_text "scripts/run-full-verification.sh" "test_plain_ucore_reader.py" "full verification does not run 本地结果阅读器 unit test"
+require_text "Makefile" '^ci-check: host-contract-selftest ' "ci-check bypasses the shared Host contract suite"
+require_text "Makefile" '^override HOST_CONTRACT_TESTS :=' "Host contract inventory can be overridden"
+require_text "Makefile" '^host-contract-selftest: \$\(HOST_CONTRACT_TESTS\)' "Host contract target is not inventory-bound"
+require_text "Makefile" 'for test in \$\(HOST_CONTRACT_TESTS\)' "Host contract target does not execute its inventory"
+require_text "Makefile" '^override KERNEL_BUDGET_TOOLPREFIX = \$\(TOOLPREFIX\)$' \
+	"kernel budgets do not use the selected compiler toolchain"
+require_text "Makefile" '^override KERNEL_BUDGET_PYTHON = \$\(PYTHON_BIN\)$' \
+	"kernel budgets do not use the selected Python interpreter"
+require_text "Makefile" '^override PY = \$\(PYTHON_BIN\)$' \
+	"kernel build helpers do not use the selected Python interpreter"
+for host_contract_test in \
+	test_check_host_platform_alignment test_check_host_action_kind_alignment \
+	test_check_seeded_action_state test_check_host_surface_alignment \
+	test_check_host_test_alignment test_gitlab_ci_contract test_remote_ci_evidence \
+	test_plain_ucore_action_runner test_research_state_manifest \
+	test_plain_ucore_fs_extract test_plain_ucore_llm_relay \
+	test_llm_relay_mode_contract test_check_reader_output \
+	test_compare_dual_platform_reader test_compare_dual_platform_state \
+	test_backend_evidence_contract test_reference_catalog_contract \
+	test_measured_experiments test_dual_measurement_source_contract \
+	test_summarize_dual_platform_results test_result_bundle_contract \
+	test_chart_type_data_contract test_chart_svg_layout_contract \
+	test_plain_ucore_reader; do
+	require_text "Makefile" "host_tools/${host_contract_test}[.]py" \
+		"shared Host contract suite omits ${host_contract_test}"
+done
 require_text "scripts/run-full-verification.sh" "test_plain_ucore_reader_e2e.py" "full verification does not run 本地结果阅读器 e2e test"
 require_text "scripts/run-full-verification.sh" "run-dual-platforms.sh" "full verification does not run dual platform QEMU"
 require_text "scripts/run-full-verification.sh" 'QEMU="\$\{QEMU\}"' "full verification does not pass QEMU to child runners"
 require_text "scripts/run-full-verification.sh" "run-agent-tests.sh" "full verification does not run AgentOS kernel tests"
 require_text "scripts/run-full-verification.sh" "run-syscall-fairness-tests.sh" "full verification does not run syscall fairness tests"
 require_text "scripts/run-full-verification.sh" "run-file-resource-tests.sh" "full verification does not run file resource tests"
+require_text "scripts/run-full-verification.sh" "run-physical-resource-tests.sh" "full verification does not run physical resource tests"
+require_text "scripts/run-full-verification.sh" "run-metadata-recovery-tests.sh" "full verification does not run metadata recovery tests"
+require_text "scripts/run-full-verification.sh" "run-observe-recovery-tests.sh" "full verification does not run observation recovery tests"
+require_text "scripts/run-full-verification.sh" "run-virtio-disk-tests.sh" "full verification does not run VirtIO disk tests"
 require_text "scripts/run-full-verification.sh" "run-workflow-teardown-race-tests.sh" "full verification does not run workflow teardown race tests"
 require_text "scripts/run-full-verification.sh" "evidence_initialize" "full verification does not initialize collector-owned evidence"
 require_text "scripts/run-full-verification.sh" "evidence_step_end" \
@@ -394,10 +454,12 @@ require_text "scripts/run-full-verification.sh" "write-summary" \
 	"full verification does not atomically publish its public summary"
 require_text "scripts/evidence-wiring.sh" 'pipeline_status=.*PIPESTATUS' \
 	"evidence tee status is not captured fail-closed"
-require_text "scripts/capture-final-evidence.py" '^SCHEMA_VERSION = 2$' \
+require_text "scripts/capture-final-evidence.py" '^SCHEMA_VERSION = 6$' \
 	"evidence summary schema version is not stable"
-require_text "scripts/capture-final-evidence.py" '^FULL_VERIFY_PROFILE_VERSION = 1$' \
+require_text "scripts/capture-final-evidence.py" '^FULL_VERIFY_PROFILE_VERSION = 5$' \
 	"evidence full-verify profile version is not stable"
+require_text "scripts/check-kernel-budgets.py" 'agent-modules checks begin' \
+	"Agent module budget output lacks a strict begin boundary"
 require_text "scripts/capture-final-evidence.py" '^REMOTE_CI_SCHEMA_VERSION = 1$' \
 	"evidence remote CI provenance schema version is not stable"
 require_text "scripts/capture-final-evidence.py" 'SUMMARY_NAME = "verification-summary.json"' \
@@ -413,12 +475,49 @@ for mechanism_runner in \
 	scripts/run-syscall-fairness-tests.sh \
 	scripts/run-file-resource-tests.sh \
 	scripts/run-thread-resource-tests.sh \
+	scripts/run-physical-resource-tests.sh \
+	scripts/run-metadata-recovery-tests.sh \
+	scripts/run-observe-recovery-tests.sh \
+	scripts/run-virtio-disk-tests.sh \
 	scripts/run-workflow-teardown-race-tests.sh \
-	scripts/run-fs-enospc-tests.sh
+	scripts/run-fs-enospc-tests.sh \
+	scripts/run-fs-allocator-fault-tests.sh
 do
 	require_text "${mechanism_runner}" 'MARKER_GRACE_SECONDS=.*:-5s' \
 		"${mechanism_runner} does not default to a 5s fault window"
 done
+for dynamic_runner in \
+	scripts/run-physical-resource-tests.sh \
+	scripts/run-metadata-recovery-tests.sh \
+	scripts/run-observe-recovery-tests.sh \
+	scripts/run-virtio-disk-tests.sh \
+	scripts/run-fs-allocator-fault-tests.sh
+do
+	require_text "${dynamic_runner}" "scripts/agent_test_runner.py" \
+		"mechanism runner does not execute a Guest marker contract: ${dynamic_runner}"
+	require_text "${dynamic_runner}" "evidence_append_guest_log" \
+		"mechanism runner does not retain real Guest output: ${dynamic_runner}"
+	require_text "${dynamic_runner}" "runner_status" \
+		"mechanism runner can exit before preserving a failing Guest log: ${dynamic_runner}"
+	require_text "${dynamic_runner}" "append_status" \
+		"mechanism runner does not fail closed when Guest-log preservation fails: ${dynamic_runner}"
+done
+require_text "scripts/run-full-verification.sh" "fs-allocator-evidence.tar" \
+	"full verification does not publish allocator raw-image evidence"
+reject_text "scripts/run-fs-allocator-fault-tests.sh" 'evidence_publish_file|FINAL_EVIDENCE_STAGE' \
+	"allocator runner must not publish into the final evidence stage"
+require_text "scripts/capture-final-evidence.py" "validate_fs_allocator_archive" \
+	"final evidence collector does not semantically verify allocator evidence"
+require_text ".gitlab-ci.yml" 'FS_ALLOCATOR_EVIDENCE_ARCHIVE=\$\{CI_PROJECT_DIR\}/ci-artifacts/fs-allocator-evidence.tar' \
+	"allocator CI job does not retain the canonical evidence archive"
+require_text ".gitlab-ci.yml" 'fs-allocator-evidence.py verify-archive --archive "\$\{CI_PROJECT_DIR\}/ci-artifacts/fs-allocator-evidence.tar"' \
+	"allocator CI job does not verify the exact archived artifact"
+require_text "scripts/test-fs-allocator-evidence.py" "test_archive_rejects_noncanonical_bytes" \
+	"allocator archive contract lacks canonical-byte mutation coverage"
+require_text "scripts/run-ci-mechanism.sh" "runner-stdout" \
+	"CI mechanism wrapper omits runner stdout"
+require_text "scripts/run-ci-mechanism.sh" "runner-guest-logs" \
+	"CI mechanism wrapper omits Guest logs"
 
 for header in os/kernel_work.h baseline_ucore/os/kernel_work.h; do
 	for contract in \
@@ -472,12 +571,20 @@ require_text "scripts/check-target-readiness.sh" "test_check_seeded_action_state
 require_text "scripts/check-target-readiness.sh" "test_check_host_surface_alignment.py" "target readiness checker does not run host surface unit test"
 require_text "scripts/check-target-readiness.sh" "test_check_host_test_alignment.py" "target readiness checker does not run host test unit test"
 require_text "scripts/check-target-readiness.sh" "test_plain_ucore_action_runner.py" "target readiness checker does not run action runner unit test"
+require_text "scripts/check-target-readiness.sh" "test_research_state_manifest.py" "target readiness checker does not run research state manifest test"
+require_text "scripts/check-target-readiness.sh" "unittest discover" "target readiness checker does not exercise package import discovery"
 require_text "scripts/check-target-readiness.sh" "test_plain_ucore_fs_extract.py" "target readiness checker does not run fs extraction unit test"
 require_text "scripts/check-target-readiness.sh" "test_plain_ucore_llm_relay.py" "target readiness checker does not run LLM relay unit test"
 require_text "scripts/check-target-readiness.sh" "test_llm_relay_mode_contract.py" "target readiness checker does not run LLM relay mode contract test"
 require_text "scripts/check-target-readiness.sh" "test_compare_dual_platform_state.py" "target readiness checker does not run state comparison unit test"
 require_text "scripts/check-target-readiness.sh" "test_compare_dual_platform_reader.py" "target readiness checker does not run reader comparison unit test"
+require_text "scripts/check-target-readiness.sh" "test_measured_experiments.py" "target readiness checker does not run measured experiment unit test"
+require_text "scripts/check-target-readiness.sh" "test_backend_evidence_contract.py" "target readiness checker does not run backend evidence contract test"
+require_text "scripts/check-target-readiness.sh" "test_reference_catalog_contract.py" "target readiness checker does not run reference catalog mutation tests"
+require_text "scripts/check-target-readiness.sh" "test_gitlab_ci_contract.py" "target readiness checker does not run GitLab CI resolver tests"
 require_text "scripts/check-target-readiness.sh" "test_summarize_dual_platform_results.py" "target readiness checker does not run result summary unit test"
+require_text "scripts/check-target-readiness.sh" "test_dual_measurement_source_contract.py" "target readiness checker does not test runner-owned measurement evidence"
+require_text "scripts/check-target-readiness.sh" "test_result_bundle_contract.py" "target readiness checker does not test served result provenance"
 require_text "scripts/check-target-readiness.sh" "test_check_reader_output.py" "target readiness checker does not run reader output unit test"
 require_text "scripts/check-target-readiness.sh" "test_plain_ucore_reader.py" "target readiness checker does not run 本地结果阅读器 unit test"
 require_text "scripts/check-target-readiness.sh" "test_plain_ucore_reader_e2e.py" "target readiness checker does not run 本地结果阅读器 e2e unit test"
@@ -487,6 +594,30 @@ require_text "scripts/run-dual-platforms.sh" "export TOOLPREFIX QEMU PYTHON_BIN"
 require_text "scripts/run-dual-platforms.sh" "seeded dual-target research platform" "dual platform runner does not run the seeded dual-target platform path"
 require_text "scripts/run-dual-platforms.sh" "compare_dual_platform_state.py" "dual platform runner does not compare extracted state files"
 require_text "scripts/run-dual-platforms.sh" "rp_orch_timing" "dual platform runner does not require orchestrator timing state"
+require_text "scripts/run-dual-platforms.sh" "require_plain_program_inventory" "dual platform runner does not enforce plain program evidence role"
+require_text "scripts/run-dual-platforms.sh" "require_agentos_program_inventory" "dual platform runner does not enforce AgentOS program evidence role"
+require_text "scripts/run-dual-platforms.sh" "program_source_hash" "dual platform runner does not require source-bound program evidence"
+require_text "baseline_ucore/user/src/rp_orch.c" "evidence_role=demo_reference" "plain orchestrator does not emit demo-reference inventory evidence"
+require_text "user/src/rp_orch.c" "evidence_role=runtime_verified" "AgentOS orchestrator does not emit runtime-verified inventory evidence"
+require_text "user/include/rp_program_manifest.h" "RP_PLATFORM_PROGRAMS" "AgentOS program evidence lacks an ordered trusted manifest"
+require_text "baseline_ucore/user/include/rp_program_manifest.h" "RP_PLATFORM_PROGRAMS" "plain program evidence lacks an ordered trusted manifest"
+require_text "user/include/rp_program_manifest.h" "RP_AGENTOS_ROLE_PROGRAMS" "AgentOS program manifest lacks role-launch identities"
+require_text "baseline_ucore/user/include/rp_program_manifest.h" "RP_AGENTOS_ROLE_PROGRAMS" "plain copy lacks the shared AgentOS role-launch contract"
+require_text "user/lib/main.c" "rp_report_launch_identity" "AgentOS children do not report their identity after exec"
+require_text "user/src/rp_orch.c" "child_after_exec" "AgentOS launcher ledger is not bound to post-exec child identity"
+require_text "user/src/rp_orch.c" "agent_worker_create" "AgentOS launcher does not distinguish delegated workers"
+require_text "user/src/rp_orch.c" "launcher=mixed_attested" "AgentOS launcher header still claims one launch mechanism"
+require_text "host_tools/check_host_platform_alignment.py" "mismatched attested identity" "Host program verifier ignores post-exec identity"
+require_text "host_tools/test_check_host_platform_alignment.py" "rejects_launcher_and_post_exec_identity_mutations" "program ledger lacks launcher/identity mutation coverage"
+reject_text "host_tools/compare_dual_platform_state.py" "agentos_fork_launches" "AgentOS delegated workers are still reported as fork launches"
+require_text "host_tools/check_host_platform_alignment.py" "read_expected_programs" "Host program verifier is not bound to the trusted manifest"
+require_text "host_tools/test_check_host_platform_alignment.py" "rejects_fixed_program_count" "program inventory test does not reject fixed counts"
+require_text "host_tools/test_check_host_platform_alignment.py" "rejects_self_bound_program_substitution" "program inventory test does not reject same-count substitutions"
+require_text "host_tools/test_check_host_platform_alignment.py" "impersonating_agentos_verification" "program inventory test does not reject plain evidence impersonation"
+require_text "host_tools/check_host_test_alignment.py" "EXPECTED_RUNTIME_ASSERTIONS" "runtime evidence verifier lacks exact source predicates"
+require_text "host_tools/check_host_test_alignment.py" "validate_comparator_runtime_evidence" "runtime comparator claims are not independently verified"
+require_text "host_tools/test_check_host_test_alignment.py" "requires_its_full_assertion_count" "runtime manifest test does not reject reduced assertion counts"
+require_text "host_tools/test_check_host_test_alignment.py" "rejects_matching_substring" "runtime manifest test does not reject substring-forged predicates"
 require_text "scripts/run-dual-platforms.sh" "check_host_platform_alignment.py" "dual platform runner does not check host platform capability runtime output"
 require_text "scripts/run-dual-platforms.sh" "check_host_action_kind_alignment.py" "dual platform runner does not check host action kind handling"
 require_text "scripts/run-dual-platforms.sh" "check_seeded_action_state.py" "dual platform runner does not check seeded action runtime state"
@@ -499,6 +630,11 @@ require_text "scripts/run-dual-platforms.sh" "check_reader_output.py" "dual plat
 require_text "scripts/run-dual-platforms.sh" "compare_dual_platform_reader.py" "dual platform runner does not compare 本地结果阅读器 summaries"
 require_text "scripts/run-dual-platforms.sh" "stage-timings.csv" "dual platform runner does not write stage timing diagnostics"
 require_text "scripts/run-dual-platforms.sh" "summarize_dual_platform_results.py" "dual platform runner does not generate result charts and report"
+require_text "scripts/run-dual-platforms.sh" "extract_measured_experiments.py" "dual platform runner does not extract real Guest measurements"
+require_text "scripts/run-dual-platforms.sh" "external measured Agent log injection is forbidden" "dual platform runner does not reject externally supplied measurement evidence"
+require_text "scripts/run-dual-platforms.sh" "targeted-agentbench-guest.log" "dual platform runner does not own its targeted Agent Guest log"
+require_text "scripts/run-dual-platforms.sh" "AGENT_TEST_CASE=agentbench_ucore" "dual platform runner does not execute the targeted measurement case"
+require_text "scripts/run-dual-platforms.sh" "--require-measured-experiments" "dual platform runner does not fail closed without measured experiments"
 require_text "scripts/run-dual-platforms.sh" "result monitor" "dual platform runner does not print monitor page path"
 require_text "scripts/run-dual-platforms.sh" "seeded-action-state.json" "dual platform runner does not pass seeded action state to 本地结果阅读器"
 require_text "host_tools/summarize_dual_platform_results.py" "runtime-observation.svg" "result summarizer does not generate the runtime observation chart"
@@ -506,17 +642,13 @@ require_text "host_tools/summarize_dual_platform_results.py" "cost-replacement.s
 require_text "host_tools/summarize_dual_platform_results.py" "runner-ticks.svg" "result summarizer does not generate the runner tick chart"
 require_text "host_tools/summarize_dual_platform_results.py" "runner-speedup.svg" "result summarizer does not generate the runner speedup chart"
 require_text "host_tools/summarize_dual_platform_results.py" "runner-sweep.csv" "result summarizer does not write runner sweep csv"
-require_text "host_tools/summarize_dual_platform_results.py" "file-metadata.csv" "result summarizer does not write file metadata experiment csv"
-require_text "host_tools/summarize_dual_platform_results.py" "context-timeline.csv" "result summarizer does not write context timeline experiment csv"
-require_text "host_tools/summarize_dual_platform_results.py" "event-loop.csv" "result summarizer does not write event loop experiment csv"
-require_text "host_tools/summarize_dual_platform_results.py" "agent-concurrency.csv" "result summarizer does not write concurrency experiment csv"
+require_text "host_tools/summarize_dual_platform_results.py" "file-query-benchmark.csv" "result summarizer does not write measured file query csv"
+require_text "host_tools/summarize_dual_platform_results.py" "measured-experiments.json" "result summarizer does not verify a measurement manifest"
+require_text "host_tools/summarize_dual_platform_results.py" "require_measured_experiments" "result summarizer lacks fail-closed measured mode"
+require_text "host_tools/summarize_dual_platform_results.py" '"status": "measured" if rows else "unavailable"' "result summarizer does not disclose missing measurements"
 require_text "host_tools/summarize_dual_platform_results.py" "experiment-stats.csv" "result summarizer does not write experiment stats csv"
 require_text "host_tools/summarize_dual_platform_results.py" "mechanism-notes.csv" "result summarizer does not write mechanism notes csv"
 require_text "host_tools/summarize_dual_platform_results.py" "experiment-file-query-bar.svg" "result summarizer does not generate file query experiment chart"
-require_text "host_tools/summarize_dual_platform_results.py" "experiment-context-line.svg" "result summarizer does not generate context experiment chart"
-require_text "host_tools/summarize_dual_platform_results.py" "experiment-event-box.svg" "result summarizer does not generate event experiment chart"
-require_text "host_tools/summarize_dual_platform_results.py" "experiment-concurrency-heatmap.svg" "result summarizer does not generate concurrency experiment chart"
-require_text "host_tools/summarize_dual_platform_results.py" "experiment-monitor-area.svg" "result summarizer does not generate experiment monitor chart"
 require_text "host_tools/summarize_dual_platform_results.py" "monitor.html" "result summarizer does not generate the monitor page"
 require_text "host_tools/summarize_dual_platform_results.py" "reader-guide.html" "result summarizer does not generate the reader guide page"
 require_text "host_tools/summarize_dual_platform_results.py" "evidence-manifest.csv" "result summarizer does not write evidence manifest csv"
@@ -534,17 +666,12 @@ require_text "host_tools/test_summarize_dual_platform_results.py" "cost-replacem
 require_text "host_tools/test_summarize_dual_platform_results.py" "runner-ticks.svg" "result summary test does not check the runner tick chart"
 require_text "host_tools/test_summarize_dual_platform_results.py" "runner-speedup.svg" "result summary test does not check the runner speedup chart"
 require_text "host_tools/test_summarize_dual_platform_results.py" "runner-sweep.csv" "result summary test does not check runner sweep csv"
-require_text "host_tools/test_summarize_dual_platform_results.py" "file-metadata.csv" "result summary test does not check file metadata experiment csv"
-require_text "host_tools/test_summarize_dual_platform_results.py" "context_timeline" "result summary test does not check context timeline experiment"
-require_text "host_tools/test_summarize_dual_platform_results.py" "event-loop.csv" "result summary test does not check event loop experiment csv"
-require_text "host_tools/test_summarize_dual_platform_results.py" "agent_concurrency" "result summary test does not check concurrency experiment"
+require_text "host_tools/test_summarize_dual_platform_results.py" "file-query-benchmark.csv" "result summary test does not check measured file query csv"
+require_text "host_tools/test_summarize_dual_platform_results.py" "source_log_sha256" "result summary test does not check raw-data provenance"
+require_text "host_tools/test_summarize_dual_platform_results.py" "unavailable" "result summary test does not check missing measurement disclosure"
 require_text "host_tools/test_summarize_dual_platform_results.py" "experiment-stats.csv" "result summary test does not check experiment stats csv"
 require_text "host_tools/test_summarize_dual_platform_results.py" "mechanism-notes.csv" "result summary test does not check mechanism notes csv"
 require_text "host_tools/test_summarize_dual_platform_results.py" "experiment-file-query-bar.svg" "result summary test does not check file query experiment chart"
-require_text "host_tools/test_summarize_dual_platform_results.py" "experiment-context-line.svg" "result summary test does not check context experiment chart"
-require_text "host_tools/test_summarize_dual_platform_results.py" "experiment-event-box.svg" "result summary test does not check event experiment chart"
-require_text "host_tools/test_summarize_dual_platform_results.py" "experiment-concurrency-heatmap.svg" "result summary test does not check concurrency experiment chart"
-require_text "host_tools/test_summarize_dual_platform_results.py" "experiment-monitor-area.svg" "result summary test does not check experiment monitor chart"
 require_text "host_tools/test_summarize_dual_platform_results.py" "monitor.html" "result summary test does not check the monitor page"
 require_text "host_tools/test_summarize_dual_platform_results.py" "reader-guide.html" "result summary test does not check the reader guide page"
 require_text "host_tools/test_summarize_dual_platform_results.py" "evidence-manifest.csv" "result summary test does not check evidence manifest csv"
@@ -558,18 +685,39 @@ require_text "host_tools/test_summarize_dual_platform_results.py" "test-suite.ht
 require_text "host_tools/test_summarize_dual_platform_results.py" "experiment-design.csv" "result summary test does not check experiment design csv"
 require_text "host_tools/test_summarize_dual_platform_results.py" "experiment-design.html" "result summary test does not check experiment design page"
 require_text "host_tools/test_chart_type_data_contract.py" "runner-sweep.csv" "chart data contract test does not check runner sweep csv"
-require_text "host_tools/test_chart_type_data_contract.py" "file-metadata.csv" "chart data contract test does not check file metadata experiment csv"
-require_text "host_tools/test_chart_type_data_contract.py" "context-timeline.csv" "chart data contract test does not check context timeline experiment csv"
-require_text "host_tools/test_chart_type_data_contract.py" "event-loop.csv" "chart data contract test does not check event loop experiment csv"
-require_text "host_tools/test_chart_type_data_contract.py" "agent-concurrency.csv" "chart data contract test does not check concurrency experiment csv"
-require_text "host_tools/test_chart_type_data_contract.py" "experiment-stats.csv" "chart data contract test does not check experiment stats csv"
-require_text "host_tools/test_chart_type_data_contract.py" "mechanism-notes.csv" "chart data contract test does not check mechanism notes csv"
+require_text "host_tools/test_chart_type_data_contract.py" "file-query-benchmark.csv" "chart data contract test does not check measured file query csv"
+require_text "host_tools/test_chart_type_data_contract.py" "source_log_sha256" "chart data contract test does not check measurement provenance"
 require_text "host_tools/test_chart_type_data_contract.py" "experiment-file-query-bar.svg" "chart data contract test does not check file query experiment chart"
-require_text "host_tools/test_chart_type_data_contract.py" "experiment-context-line.svg" "chart data contract test does not check context experiment chart"
-require_text "host_tools/test_chart_type_data_contract.py" "experiment-event-box.svg" "chart data contract test does not check event experiment chart"
-require_text "host_tools/test_chart_type_data_contract.py" "experiment-concurrency-heatmap.svg" "chart data contract test does not check concurrency experiment chart"
-require_text "host_tools/test_chart_type_data_contract.py" "experiment-monitor-area.svg" "chart data contract test does not check experiment monitor chart"
 require_text "host_tools/test_chart_type_data_contract.py" "evidence-manifest.csv" "chart data contract test does not check evidence manifest csv"
+require_text "host_tools/measured_experiments.py" "source_marker_sha256" "measurement extractor does not bind marker hashes"
+require_text "host_tools/measured_experiments.py" "agentbench_ucore: parent passed" "measurement extractor does not require complete Guest success"
+require_text "host_tools/benchmark_source_contract.py" "FIELD_BINDINGS" "benchmark fields are not bound to source expressions"
+require_text "host_tools/benchmark_source_contract.py" "_validate_timed_loop" "benchmark operation counts are not bound to measured loops"
+require_text "host_tools/test_measured_experiments.py" "agentbench-hardcoded-" "benchmark hard-coded field mutations are not rejected"
+require_text "host_tools/test_measured_experiments.py" "agentbench-short-loop.c" "benchmark loop-count mutations are not rejected"
+require_text "host_tools/test_measured_experiments.py" "not followed by a pass marker" "measurement test does not reject uncompleted Guest runs"
+require_text "host_tools/test_measured_experiments.py" "child-only.log" "measurement test does not reject child-only success"
+require_text "host_tools/test_backend_evidence_contract.py" "substring_matched" "backend log contract lacks strict-line regressions"
+require_text "host_tools/test_backend_evidence_contract.py" "printf_binding_mutations" "backend source wiring mutations are not rejected"
+require_text "host_tools/test_gitlab_ci_contract.py" "recursive_extends_and_child_override" "GitLab CI resolver lacks inheritance override regression"
+require_text "host_tools/test_gitlab_ci_contract.py" "unknown_parent_cycle_and_duplicate_field" "GitLab CI resolver lacks fail-closed graph regressions"
+require_text "host_tools/test_gitlab_ci_contract.py" "child_duplication_are_rejected" "GitLab CI contract permits duplicated inherited policy"
+require_text "host_tools/test_gitlab_ci_contract.py" "skip_capable_root_and_job_policies" "GitLab CI contract lacks skip-policy mutations"
+require_text "host_tools/test_gitlab_ci_contract.py" "wrapper_extra_command_and_environment_hijacks" "GitLab CI contract lacks command and environment mutations"
+require_text "host_tools/test_remote_ci_evidence.py" "real_zip_attestation_round_trip" "remote CI evidence lacks a real ZIP positive control"
+require_text "host_tools/test_remote_ci_evidence.py" "unsafe_zip_mutations" "remote CI evidence lacks unsafe ZIP mutations"
+require_text "host_tools/test_remote_ci_evidence.py" "stay_within_maintenance_budgets" "remote CI modules have no line-count budgets"
+require_text "host_tools/remote_ci_evidence.py" "host_tools/remote_ci_archive.py" "remote CI attestation does not bind its archive verifier"
+require_text "host_tools/remote_ci_evidence.py" "host_tools/evidence_semantic_profiles.py" "remote CI attestation does not bind semantic implementations"
+require_text "scripts/capture-final-evidence.py" "verify_job_execution" "final evidence does not verify downloaded CI execution attestations"
+require_text "scripts/check-target-readiness.sh" "test_remote_ci_evidence.py" "target readiness omits remote CI attestation mutations"
+reject_text "host_tools/summarize_dual_platform_results.py" "stable_jitter" "result summarizer still contains formula jitter generation"
+if find "${ROOT_DIR}/docs/assets/verification-charts" -maxdepth 1 -type f \
+	-name 'experiment-*.svg' -print -quit | grep -q .; then
+	fail "committed documentation still contains obsolete formula experiment SVGs"
+fi
+reject_text "README.md" "file-metadata\.csv|context-timeline\.csv|event-loop\.csv|agent-concurrency\.csv|llm-relay\.csv|recovery-flow\.csv" "README still claims obsolete formula experiments"
+reject_text "docs" "file-metadata\.csv|context-timeline\.csv|event-loop\.csv|agent-concurrency\.csv|llm-relay\.csv|recovery-flow\.csv" "documentation still claims obsolete formula experiments"
 require_text "scripts/check-target-readiness.sh" "test_chart_type_data_contract.py" "target readiness does not run chart data contract test"
 require_text "scripts/check-target-readiness.sh" "test_chart_svg_layout_contract.py" "target readiness does not run chart layout contract test"
 require_text "host_tools/test_chart_svg_layout_contract.py" "validate_chart" "chart layout test does not validate SVG charts"
@@ -592,8 +740,21 @@ require_text "host_tools/plain_ucore_action_runner.py" 'os.environ.get\("TOOLPRE
 require_text "host_tools/plain_ucore_action_runner.py" "run_observed_command" "action runner does not observe QEMU output directly"
 require_text "host_tools/plain_ucore_action_runner.py" "qemu_elapsed_seconds" "action runner does not write QEMU timing evidence"
 require_text "host_tools/compare_dual_platform_state.py" "verify_orch_timing" "dual platform comparison does not validate per-program timing evidence"
-require_text "scripts/run-dual-platforms.sh" "cases=7 executable=7 userland_equivalent=ready" "plain backend marker is missing"
-require_text "scripts/run-dual-platforms.sh" "cases=8 executable=8 agentos=mainflow_bound" "AgentOS backend marker is missing"
+require_text "scripts/run-dual-platforms.sh" "backend_evidence_contract.py" "dual runner does not use the shared backend contract"
+require_text "scripts/run-dual-platforms.sh" "plain_backend_summary" "dual runner does not render parsed plain backend evidence"
+require_text "scripts/run-dual-platforms.sh" "agentos_backend_summary" "dual runner does not render parsed AgentOS backend evidence"
+reject_text "scripts/run-dual-platforms.sh" "rp_backend: evidence_(role|generation)=" "dual runner duplicates backend marker literals outside the shared contract"
+if ! "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/backend_evidence_contract.py" \
+	verify-source --target plain \
+	--source "${ROOT_DIR}/baseline_ucore/user/src/rp_backend.c" >"${TMP_FILE}" 2>&1; then
+	fail "plain backend source differs from the shared evidence contract"
+fi
+if ! "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/backend_evidence_contract.py" \
+	verify-source --target agentos \
+	--source "${ROOT_DIR}/user/src/rp_backend.c" >"${TMP_FILE}" 2>&1; then
+	fail "AgentOS backend source differs from the shared evidence contract"
+fi
+: >"${TMP_FILE}"
 require_text "scripts/serve-reader.sh" "rp_agentos_mainflow" "reader script does not check AgentOS mainflow state"
 require_text "scripts/serve-reader.sh" "serve" "reader script does not start the local 本地结果服务"
 require_text "scripts/serve-reader.sh" "dual-results/monitor.html" "reader script does not expose result monitor under the 本地结果服务"
@@ -603,6 +764,8 @@ require_text "scripts/serve-reader.sh" "dual-results/test-suite.html" "reader sc
 require_text "scripts/serve-reader.sh" "dual-results/experiment-design.html" "reader script does not expose experiment design page"
 require_text "scripts/serve-reader.sh" "dual-results/evidence-map.html" "reader script does not expose evidence map page"
 require_text "scripts/serve-reader.sh" "RESULT_DIR" "reader script does not accept a result directory"
+require_text "scripts/serve-reader.sh" "result_bundle_contract.py" "reader script does not validate an existing result bundle"
+require_text "scripts/serve-reader.sh" "拒绝提供过期或伪造证据" "reader script does not fail closed on stale evidence"
 require_text "host_tools/plain_ucore_reader.py" "relative_to\\(out_dir.resolve\\(\\)\\)" "本地结果阅读器 does not guard nested static file paths"
 require_text "host_tools/test_plain_ucore_reader.py" "dual-results/monitor.html" "本地结果阅读器 test does not cover nested result monitor serving"
 require_text "host_tools/test_plain_ucore_reader.py" "dual-results/reader-guide.html" "本地结果阅读器 test does not cover nested reader guide serving"
@@ -610,6 +773,75 @@ require_text "host_tools/test_plain_ucore_reader.py" "reader-url-list.txt" "本�
 require_text "host_tools/test_plain_ucore_reader.py" "dual-results/test-suite.html" "本地结果阅读器 test does not cover nested test suite serving"
 require_text "host_tools/test_plain_ucore_reader.py" "dual-results/experiment-design.html" "本地结果阅读器 test does not cover nested experiment design serving"
 require_text "host_tools/test_plain_ucore_reader.py" "dual-results/evidence-map.html" "本地结果阅读器 test does not cover nested evidence map serving"
+
+require_text "agent_tool_abi.h" "struct agent_request_v2" "shared UAPI lacks the versioned tool request"
+require_text "agent_tool_abi.h" "AGENT_STATUS_UNKNOWN_PARAM" "versioned tool ABI lacks strict unknown-parameter status"
+require_text "os/syscall_ids.h" "SYS_tool_call 547" "kernel syscall table lacks literal sys_tool_call ABI"
+require_text "os/syscall_ids.h" "SYS_tool_list 548" "kernel syscall table lacks literal sys_tool_list ABI"
+require_text "user/lib/syscall.c" "int sys_tool_call" "user ABI lacks literal sys_tool_call wrapper"
+require_text "user/lib/syscall.c" "int sys_tool_list" "user ABI lacks literal sys_tool_list wrapper"
+require_text "user/src/agenttoolabi_ucore.c" "agenttoolabi_ucore: tool_list_contract=1" "tool ABI Guest test lacks list contract marker"
+require_text "user/src/agenttoolabi_ucore.c" "agenttoolabi_ucore: optional_schema=1 heartbeat_zero_stop=1" "tool ABI Guest test lacks descriptor semantics marker"
+require_text "user/src/agenttoolabi_ucore.c" "agenttoolabi_ucore: schema_generated=1 validated=%d" "tool ABI Guest test lacks full generated-schema marker"
+require_text "user/src/agenttoolabi_ucore.c" "agenttoolabi_ucore: key_capacity=1 llm_response_v1_v2=1 buffer_sentinel=1" "tool ABI Guest test lacks key capacity and response sentinel evidence"
+require_text "user/src/agenttoolabi_ucore.c" "agenttoolabi_ucore: strict_negative_matrix=1" "tool ABI Guest test lacks strict negative marker"
+require_text "scripts/run-agent-tests.sh" "agenttoolabi_ucore: tool_list_contract=1" "Agent runner does not require tool list contract evidence"
+require_text "scripts/run-agent-tests.sh" "agenttoolabi_ucore: optional_schema=1 heartbeat_zero_stop=1" "Agent runner does not require descriptor semantics evidence"
+require_text "scripts/run-agent-tests.sh" "agenttoolabi_ucore: schema_generated=1 validated=25" "Agent runner does not require full generated-schema evidence"
+require_text "scripts/run-agent-tests.sh" "agenttoolabi_ucore: key_capacity=1 llm_response_v1_v2=1 buffer_sentinel=1" "Agent runner does not require key capacity and response sentinel evidence"
+require_text "scripts/run-agent-tests.sh" "agenttoolabi_ucore: strict_negative_matrix=1" "Agent runner does not require strict tool ABI evidence"
+
+require_text "os/syscall_ids.h" "SYS_agent_heartbeat_set 552" "kernel syscall table lacks independent heartbeat set ABI"
+require_text "os/syscall_ids.h" "SYS_agent_heartbeat_stop 553" "kernel syscall table lacks independent heartbeat stop ABI"
+require_text "os/syscall_ids.h" "SYS_agent_heartbeat 512" "kernel syscall table lost the legacy heartbeat ABI"
+require_text "user/lib/syscall_ids.h" "SYS_agent_heartbeat 512" "user syscall table lost the legacy heartbeat ABI"
+require_text "user/lib/syscall_ids.h" "SYS_agent_heartbeat_set 552" "user syscall table lacks heartbeat set ABI"
+require_text "user/lib/syscall_ids.h" "SYS_agent_heartbeat_stop 553" "user syscall table lacks heartbeat stop ABI"
+require_text "user/lib/arch/riscv/syscall_ids.h.in" "__NR_agent_heartbeat 512" "arch syscall template lost the legacy heartbeat ABI"
+require_text "user/lib/arch/riscv/syscall_ids.h.in" "__NR_agent_heartbeat_set 552" "arch syscall template lacks heartbeat set ABI"
+require_text "user/lib/arch/riscv/syscall_ids.h.in" "__NR_agent_heartbeat_stop 553" "arch syscall template lacks heartbeat stop ABI"
+require_text "agent_tool_abi.h" "AGENT_HEARTBEAT_MAX_TICKS 0x7fffffffULL" "shared ABI lacks the heartbeat interval bound"
+require_text "user/lib/syscall.c" "int sys_agent_heartbeat_set" "user ABI lacks literal heartbeat set wrapper"
+require_text "user/lib/syscall.c" "int sys_agent_heartbeat_stop" "user ABI lacks literal heartbeat stop wrapper"
+require_text "user/src/agentloop_ucore.c" "heartbeat_intrinsic=1 dynamic=1 coalesced=1 stop=1 bounds=1 legacy=1" "heartbeat Guest test lacks strict mechanism evidence"
+require_text "scripts/run-agent-tests.sh" "heartbeat_intrinsic=1 dynamic=1 coalesced=1 stop=1 bounds=1 legacy=1" "Agent runner does not require strict heartbeat evidence"
+
+require_text "os/agent.h" "AGENT_CONTEXT_VERSION[[:space:]]+8" "kernel Context ABI is not version 8"
+require_text "user/include/agent.h" "AGENT_CONTEXT_VERSION[[:space:]]+8" "user Context ABI is not version 8"
+require_text "user/src/agentfinal_ucore.c" "context_rollback_branch=1 sequence_reuse=0 provenance_bound=1" "Context rollback Guest test lacks immutable-branch evidence"
+require_text "user/src/agentfinal_ucore.c" "context_active_path=1 archive_retained=1 direct_query=1 fifo_suffix=1" "Context rollback Guest test lacks active-path evidence"
+require_text "os/agent.h" "path_parent_sequence" "kernel Context ABI lacks local active-path parent"
+require_text "user/include/agent.h" "path_parent_sequence" "user Context ABI lacks local active-path parent"
+require_text "os/agent_context.c" "record.path_parent_sequence = p->context_path_visible_head" "Context append does not bind the active-path predecessor"
+require_text "os/agent_context.c" "agent_context_active_record" "Context query does not project the active path"
+require_text "os/agent_context_path.c" "kernel_work_checkpoint\(1\)" "Context active-path query lacks bounded fairness checkpoints"
+require_text "os/agent_context_path.c" "record->path_parent_sequence" "Context record hash omits the active-path predecessor"
+require_text "user/lib/syscall.c" "context_mirror_active_query" "user ABI lacks direct active-path mirror validation"
+require_text "user/src/agentfinal_ucore.c" "context_sync_atomic=1 append=1 rollback=1 clear=1 recovery=1" "Context Guest test lacks failed-sync atomicity evidence"
+require_text "user/src/agentfinal_ucore.c" "context_rollback_negative nonexistent=1 evicted=1" "Context rollback Guest test lacks negative evidence"
+require_text "user/src/agentfinal_ucore.c" "fifo oldest=.*policy=1" "Context Guest test does not publish FIFO policy evidence"
+require_text "user/src/agentfinal_ucore.c" "context_query_cache=1 user_managed=1 kernel_cache_hit=0" "Context Guest test lacks user-managed structured query cache evidence"
+require_text "scripts/run-agent-tests.sh" "context_rollback_branch=1 sequence_reuse=0 provenance_bound=1" "Agent runner does not require rollback branch evidence"
+require_text "scripts/run-agent-tests.sh" "context_sync_atomic=1 append=1 rollback=1 clear=1 recovery=1" "Agent runner does not require failed-sync atomicity evidence"
+require_text "scripts/run-agent-tests.sh" "wait_publication_atomic=1 event_wake_none=1 event_no_sleep=1 sibling_wake_none=1 teardown_completed=1" "Agent runner does not require atomic wait evidence"
+require_text "scripts/run-agent-tests.sh" "thread_wait_deadlines finite_infinite=1 distinct_deadlines=1 keyed_timer=1 loop_aggregate=1 slot_reuse=1" "Agent runner does not require per-thread deadline evidence"
+require_text "scripts/run-agent-tests.sh" "--profile wait-atomic" "Agent runner bypasses the atomic wait log validator"
+require_text "Makefile" 'AGENT_CONTEXT_SYNC_TEST_PROFILE=\$\(AGENT_CONTEXT_SYNC_TEST_PROFILE\)' "kernel build fingerprint omits the Context sync profile"
+require_text "Makefile" 'WAIT_ATOMIC_TEST_PROFILE=\$\(WAIT_ATOMIC_TEST_PROFILE\)' "kernel build fingerprint omits the atomic wait test profile"
+require_text "Makefile" 'AGENT_SIZE_OPTIMIZED_MODULES=\$\(AGENT_SIZE_OPTIMIZED_MODULES\)' "kernel build fingerprint omits target-specific size optimization membership"
+require_text "user/Makefile" "USER_BUILD_CONFIG" "user objects do not track their effective build configuration"
+require_text "user/Makefile" 'CFLAGS=\$\(CFLAGS\)' "user build fingerprint omits effective CFLAGS"
+require_text "scripts/run-agent-tests.sh" "agent-mechanism:context-sync-atomicity" "Context sync fault profile is not isolated from suite evidence"
+require_text "scripts/run-agent-tests.sh" "context_rollback_negative nonexistent=1 evicted=1" "Agent runner does not require rollback negative evidence"
+require_text "scripts/run-agent-tests.sh" "context_query_cache=1 user_managed=1 kernel_cache_hit=0" "Agent runner does not require user-managed query cache evidence"
+reject_text "os/agent_metadata_query.c" "agent_file_query_cache|AGENT_FILE_QUERY_REASON_CACHE_HIT" "kernel file query path still contains a global result cache"
+
+agent_suite_step_line="$(grep -n 'AgentOS kernel tests' "${ROOT_DIR}/scripts/run-full-verification.sh" | head -1 | cut -d: -f1)"
+dual_platform_step_line="$(grep -n '\[full-verify\] dual platforms' "${ROOT_DIR}/scripts/run-full-verification.sh" | head -1 | cut -d: -f1)"
+if [ -z "${agent_suite_step_line}" ] || [ -z "${dual_platform_step_line}" ] ||
+   [ "${agent_suite_step_line}" -ge "${dual_platform_step_line}" ]; then
+	fail "full verification must capture Agent Guest measurements before rendering dual-platform results"
+fi
 
 plain_platform_tests="$(make_var_words "${ROOT_DIR}/baseline_ucore/user/Makefile" "PLATFORM_TESTS")"
 agentos_platform_tests="$(make_var_words "${ROOT_DIR}/user/Makefile" "PLATFORM_TESTS")"
@@ -681,21 +913,21 @@ done
 
 plain_backend_src="${ROOT_DIR}/baseline_ucore/user/src/rp_backend.c"
 agentos_backend_src="${ROOT_DIR}/user/src/rp_backend.c"
-plain_backend_cases="$(first_number_after_key "${plain_backend_src}" "cases")"
+plain_backend_cases="$(first_number_after_key "${plain_backend_src}" "reference_cases")"
 agentos_backend_cases="$(first_number_after_key "${agentos_backend_src}" "cases")"
-plain_detail_rows="$(first_number_after_key "${plain_backend_src}" "runner_detail_rows")"
+plain_detail_rows="$(first_number_after_key "${plain_backend_src}" "reference_case_rows")"
 agentos_detail_rows="$(first_number_after_key "${agentos_backend_src}" "runner_detail_rows")"
-plain_report_rows="$(first_number_after_key "${plain_backend_src}" "runner_report_rows")"
+plain_report_rows="$(first_number_after_key "${plain_backend_src}" "reference_report_rows")"
 agentos_report_rows="$(first_number_after_key "${agentos_backend_src}" "runner_report_rows")"
 
 if [ "${agentos_backend_cases}" -lt "${plain_backend_cases}" ]; then
-	fail "AgentOS backend has fewer executable cases than plain backend: ${agentos_backend_cases} < ${plain_backend_cases}"
+	fail "AgentOS runtime catalog has fewer cases than the plain reference catalog: ${agentos_backend_cases} < ${plain_backend_cases}"
 fi
 if [ "${agentos_detail_rows}" -lt "${plain_detail_rows}" ]; then
-	fail "AgentOS backend has fewer detail rows than plain backend: ${agentos_detail_rows} < ${plain_detail_rows}"
+	fail "AgentOS runtime catalog has fewer detail rows than the plain reference catalog: ${agentos_detail_rows} < ${plain_detail_rows}"
 fi
 if [ "${agentos_report_rows}" -lt "${plain_report_rows}" ]; then
-	fail "AgentOS backend has fewer report rows than plain backend: ${agentos_report_rows} < ${plain_report_rows}"
+	fail "AgentOS runtime catalog has fewer report rows than the plain reference catalog: ${agentos_report_rows} < ${plain_report_rows}"
 fi
 
 plain_cost_count=0

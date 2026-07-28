@@ -8,6 +8,7 @@ CC := $(TOOLPREFIX)gcc
 OBJCOPY := $(TOOLPREFIX)objcopy
 OBJDUMP := $(TOOLPREFIX)objdump
 CP := cp
+PYTHON_BIN ?= python3
 
 app_dir := src
 build_dir := build
@@ -32,6 +33,23 @@ CRT_OBJ := $(obj_dir)/$(arch_dir)/crt.o
 SRCS := $(wildcard $(app_dir)/*.c)
 APPS := $(patsubst $(app_dir)/%.c,%,$(SRCS))
 GENERATED_HEADERS := $(generated_dir)/rp_host_action_seed.h
+USER_BUILD_CONFIG := $(build_dir)/.user-build-config
+USER_STACK_CONTRACT := ../user_stack_policy.h
+USER_STACK_CONTRACT_WRAPPER := include/user_stack_policy.h
+# Compile the teardown test at the runner's maximum admitted capacities so its
+# array-backed frames are measured in the largest supported build profile.
+override USER_STACK_WORKFLOW_DOMAIN_FILE_CAP := 14
+override USER_STACK_WORKFLOW_GLOBAL_RESERVED_CAP := 64
+# This helper invokes one of four fixed child roots through a function pointer;
+# model every target instead of treating the indirect edge as stackless.
+USER_STACK_INDIRECT_CALL_EDGES := \
+	src/fspquota_ucore.c:run_child=src/fspquota_ucore.c:leave_crash_orphan \
+	src/fspquota_ucore.c:run_child=src/fspquota_ucore.c:seed_or_verify \
+	src/fspquota_ucore.c:run_child=src/fspquota_ucore.c:verify_relaunch_and_cleanup \
+	src/fspquota_ucore.c:run_child=src/fspquota_ucore.c:verify_cleanup_reuse
+USER_STACK_CHECKER := ../scripts/check-user-stack-usage.py
+USER_STACK_CONTRACT_CHECKER := ../scripts/check-user-stack-contract.py
+STACK_USAGE_DIR ?= $(build_dir)/stack-usage
 
 CH2_BASE_TESTS := ch2b_
 CH3_BASE_TESTS := ch3b_ $(CH2_BASE_TESTS)
@@ -40,13 +58,17 @@ CH5_BASE_TESTS := ch5b_ $(CH3_BASE_TESTS) usershell
 CH6_BASE_TESTS := ch6b_ $(CH5_BASE_TESTS)
 CH7_BASE_TESTS := ch7b_ $(CH6_BASE_TESTS)
 CH8_BASE_TESTS := ch8b_ $(CH7_BASE_TESTS)
-SAFETY_TESTS := usersafety_ucore syscallfair_ucore
+SAFETY_TESTS := usersafety_ucore syscallfair_ucore blocking_semantics_ucore
 FS_ENOSPC_TESTS := fsenospc_ucore fsquota_ucore fspquota_ucore
 PROC_REAP_TESTS := procreap_ucore procreap_agent_ucore
 FILE_RESOURCE_TESTS := fileresource_ucore
 THREAD_RESOURCE_TESTS := threadresource_ucore
+PHYSICAL_RESOURCE_TESTS := physicalresource_ucore
 WORKFLOW_TEARDOWN_TESTS := workflow_teardown_race_ucore
-AGENT_TESTS := agentfinal_ucore agentfs_ucore agentscan_ucore agentloop_ucore agentsched_ucore agentconflict_ucore agentllm_ucore agentbench_ucore labbench_ucore labdemo_ucore agentsecurity_ucore agentscope_ucore agenttrust_ucore agentvfs_ucore agentvfs_probe iobudget_ucore $(SAFETY_TESTS)
+METADATA_RECOVERY_TESTS := agentmetacrash_ucore agentmetarecover_ucore agentmetaeio_ucore agentmetalarge_ucore agentmetatransient_ucore
+OBSERVE_RECOVERY_TESTS := agentobsreboot_ucore
+VIRTIO_DISK_TESTS := virtiodisk_ucore
+AGENT_TESTS := agentfinal_ucore agentfs_ucore agentscan_ucore agentloop_ucore agentsched_ucore agentconflict_ucore agentllm_ucore agentbench_ucore labbench_ucore labdemo_ucore agentsecurity_ucore agenttoolabi_ucore agentscope_ucore agenttrust_ucore agentvfs_ucore agentvfs_probe iobudget_ucore $(SAFETY_TESTS)
 PLATFORM_TESTS := rp_orch rp_catalog rp_state_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_workbench rp_agent_collab rp_package rp_calculation rp_realtask rp_analysisres rp_campaign rp_delta rp_release rp_dossier rp_service_surface rp_startup_doctor rp_notebook_export rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_revdash rp_modelreg rp_sysreview rp_expsched rp_traincomp rp_publication rp_runbooks rp_projectrel rp_studyproto rp_stdesign rp_opsboard rp_reviewboard rp_controlplane rp_integrityplane rp_coherenceplane rp_mature rp_prov_view rp_prov_query rp_reldossier rp_decsupport rp_usable rp_usableproject rp_compare_plain rp_test_suite
 PLATFORM_SEEDED_TESTS := rp_seed_orch rp_catalog rp_state_catalog rp_object_store rp_object_query rp_lineage rp_site_export rp_planner rp_portability rp_retriever rp_analyst rp_reviewer rp_lab rp_governance rp_writer rp_repair rp_auditor rp_query rp_evidence rp_llm_bridge rp_llm_relay rp_privacy rp_runconf rp_execobs rp_invoke rp_complete rp_artifact_ops rp_data_pipeline rp_workflow_runner rp_workbench rp_agent_collab rp_package rp_calculation rp_realtask rp_analysisres rp_campaign rp_delta rp_release rp_dossier rp_service_surface rp_startup_doctor rp_notebook_export rp_backend rp_consistency rp_metrics rp_ui_export rp_web_export rp_revdash rp_modelreg rp_sysreview rp_expsched rp_traincomp rp_publication rp_runbooks rp_projectrel rp_studyproto rp_stdesign rp_opsboard rp_reviewboard rp_controlplane rp_integrityplane rp_coherenceplane rp_mature rp_prov_view rp_prov_query rp_reldossier rp_decsupport rp_usable rp_usableproject rp_compare_plain rp_test_suite
 
@@ -94,8 +116,16 @@ else ifeq ($(CHAPTER), file_resource)
 CH_TESTS := $(FILE_RESOURCE_TESTS)
 else ifeq ($(CHAPTER), thread_resource)
 CH_TESTS := $(THREAD_RESOURCE_TESTS)
+else ifeq ($(CHAPTER), physical_resource)
+CH_TESTS := $(PHYSICAL_RESOURCE_TESTS)
 else ifeq ($(CHAPTER), workflow_teardown)
 CH_TESTS := $(WORKFLOW_TEARDOWN_TESTS)
+else ifeq ($(CHAPTER), metadata_recovery)
+CH_TESTS := $(METADATA_RECOVERY_TESTS)
+else ifeq ($(CHAPTER), observe_recovery)
+CH_TESTS := $(OBSERVE_RECOVERY_TESTS)
+else ifeq ($(CHAPTER), virtio_disk)
+CH_TESTS := $(VIRTIO_DISK_TESTS)
 else ifeq ($(CHAPTER), platform)
 CH_TESTS := $(PLATFORM_TESTS)
 else ifeq ($(CHAPTER), platform_seeded)
@@ -107,14 +137,55 @@ CH_TESTS := usershell $(AGENT_TESTS)
 endif
 
 SELECTED_APPS = $(foreach t,$(CH_TESTS),$(filter $(t)%,$(APPS)))
+STACK_USAGE_SRCS := $(sort $(LIB_C) $(SRCS))
+STACK_USAGE_OBJS = $(patsubst %.c,$(STACK_USAGE_DIR)/%.o,$(STACK_USAGE_SRCS))
+STACK_USAGE_UNIT_ARGS = \
+	$(foreach src,$(sort $(LIB_C)),--library-unit=$(src)) \
+	$(foreach src,$(sort $(SRCS)),--application-unit=$(src))
+STACK_USAGE_POLICY_ARGS = \
+	$(foreach edge,$(USER_STACK_INDIRECT_CALL_EDGES),--indirect-call-edge=$(edge))
+
+.PHONY: binary target clean stack-usage-build user-stack-check .FORCE
 
 $(GENERATED_HEADERS):
 	@mkdir -p $(@D)
 	@printf '%s\n' '#ifndef __RP_HOST_ACTION_SEED_H__' '#define __RP_HOST_ACTION_SEED_H__' '#define RP_HOST_ACTION_SEED ""' '#define RP_HOST_ACTION_BOOTSTRAP_SEED ""' '#endif' > $@
 
+$(USER_BUILD_CONFIG): .FORCE
+	@mkdir -p $(@D)
+	@printf '%s\n' \
+		'CC=$(CC)' \
+		'CFLAGS=$(CFLAGS)' \
+		'LDFLAGS=$(LDFLAGS)' \
+		'CHAPTER=$(CHAPTER)' \
+		'BASE=$(BASE)' \
+		'USER_EXTRA_CFLAGS=$(USER_EXTRA_CFLAGS)' > $@.tmp
+	@if ! test -r $@ || ! cmp -s $@.tmp $@; then mv $@.tmp $@; else rm $@.tmp; fi
+
+.FORCE:
+
 $(obj_dir)/%.o: %.c $(GENERATED_HEADERS)
 	@mkdir -p $(@D)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+$(STACK_USAGE_DIR)/%.o: %.c $(GENERATED_HEADERS)
+	@mkdir -p $(@D)
+	$(CC) $(CFLAGS) $(STACK_USAGE_PROFILE_CFLAGS) \
+		-fstack-usage -fcallgraph-info=su -c $< -o $@
+
+$(STACK_USAGE_DIR)/src/workflow_teardown_race_ucore.o: \
+	STACK_USAGE_PROFILE_CFLAGS := \
+	-DWORKFLOW_TEARDOWN_DOMAIN_FILE_CAP=$(USER_STACK_WORKFLOW_DOMAIN_FILE_CAP) \
+	-DWORKFLOW_TEARDOWN_GLOBAL_RESERVED_CAP=$(USER_STACK_WORKFLOW_GLOBAL_RESERVED_CAP)
+
+# Measure conditional test code in the same superset profiles used by its
+# QEMU runners; a default-only build would leave those call paths unaudited.
+$(STACK_USAGE_DIR)/src/agentfinal_ucore.o: STACK_USAGE_PROFILE_CFLAGS := \
+	-DAGENT_CONTEXT_SYNC_TEST_PROFILE -DWAIT_ATOMIC_TEST_PROFILE
+$(STACK_USAGE_DIR)/lib/syscall.o: STACK_USAGE_PROFILE_CFLAGS := \
+	-DWAIT_ATOMIC_TEST_PROFILE
+$(STACK_USAGE_DIR)/src/agentobsreboot_ucore.o: STACK_USAGE_PROFILE_CFLAGS := \
+	-DAGENT_OBSERVE_TEST_PROFILE
 
 $(CRT_OBJ): $(arch_dir)/crt.S
 	@mkdir -p $(@D)
@@ -126,7 +197,26 @@ $(elf_dir)/%: $(app_dir)/%.c $(LIB_OBJS) $(CRT_OBJ) $(GENERATED_HEADERS) $(arch_
 	$(OBJDUMP) -d -S $@ > $(asm_dir)/$*.asm
 	$(OBJCOPY) -O binary $@ $(bin_dir)/$*
 
+$(LIB_OBJS) $(CRT_OBJ) $(addprefix $(elf_dir)/,$(SELECTED_APPS)): \
+	$(USER_BUILD_CONFIG) $(USER_STACK_CONTRACT) $(USER_STACK_CONTRACT_WRAPPER)
+$(STACK_USAGE_OBJS): $(USER_STACK_CONTRACT) $(USER_STACK_CONTRACT_WRAPPER)
+
 binary: $(addprefix $(elf_dir)/,$(SELECTED_APPS))
+
+stack-usage-build: $(STACK_USAGE_OBJS)
+
+user-stack-check:
+	@set -eu; \
+		$(PYTHON_BIN) $(USER_STACK_CONTRACT_CHECKER) --root ..; \
+		scratch="$$(mktemp -d "$${TMPDIR:-/tmp}/agentos-user-stack.XXXXXX")"; \
+		trap 'rm -rf "$$scratch"' EXIT HUP INT TERM; \
+		$(MAKE) --no-print-directory -s stack-usage-build \
+			build_dir="$$scratch/build" \
+			STACK_USAGE_DIR="$$scratch/usage"; \
+		$(PYTHON_BIN) $(USER_STACK_CHECKER) \
+			--usage-dir "$$scratch/usage" --source-dir . \
+			--contract-header $(USER_STACK_CONTRACT) \
+			$(STACK_USAGE_UNIT_ARGS) $(STACK_USAGE_POLICY_ARGS)
 
 target: binary
 	@rm -rf $(out_dir)

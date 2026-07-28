@@ -8,6 +8,7 @@
 #include "agent.h"
 #include "resource_controller.h"
 #include "workflow_lifecycle.h"
+#include "../physical_page_policy.h"
 
 #define NPROC (128)
 #define NTHREAD (16)
@@ -16,14 +17,34 @@
 #define SYSCALL_COUNT_MAX (600)
 #define MAILBOX_SLOT_COUNT (16)
 #define MAILBOX_PAYLOAD_SIZE (256)
+#define MAILBOX_SIDECAR_PAGE_COUNT (2)
+
+struct agent_legacy_mailbox;
 #define CHILD_RECORD_CAP (NPROC)
 #define PROC_RESOURCE_DOMAIN_CAP (NPROC)
 #define PROC_RESOURCE_DOMAIN_LIMIT (NPROC / 2)
 #define PROC_RESERVED_SLOTS (NPROC / 4)
 #define PROC_ORDINARY_SLOTS (NPROC - PROC_RESERVED_SLOTS)
-#define PROC_RESERVED_DOMAIN_CAP 4
+#define PROC_RESERVED_DOMAIN_CAP PHYSICAL_PAGE_RESERVED_DOMAIN_CAP
 #define PROC_RESOURCE_DOMAIN_RESERVED_LIMIT \
 	(PROC_RESERVED_SLOTS / PROC_RESERVED_DOMAIN_CAP)
+#define AGENT_STATE_PAGE_POOL_SIZE \
+	((uint64)NPROC * AGENT_STATE_PAGE_COUNT)
+#define AGENT_STATE_PAGE_ORDINARY_LIMIT \
+	((uint64)PROC_ORDINARY_SLOTS * AGENT_STATE_PAGE_COUNT)
+#define AGENT_STATE_PAGE_RESERVED_LIMIT \
+	((uint64)PROC_RESERVED_SLOTS * AGENT_STATE_PAGE_COUNT)
+#define AGENT_STATE_PAGE_DOMAIN_ORDINARY_LIMIT \
+	((uint64)PROC_RESOURCE_DOMAIN_LIMIT * AGENT_STATE_PAGE_COUNT)
+#define AGENT_STATE_PAGE_DOMAIN_RESERVED_LIMIT \
+	((uint64)PROC_RESOURCE_DOMAIN_RESERVED_LIMIT * AGENT_STATE_PAGE_COUNT)
+
+#if PHYSICAL_PAGE_DOMAIN_RESERVED_LIMIT_DERIVED
+_Static_assert(1ULL * PHYSICAL_PAGE_DOMAIN_RESERVED_LIMIT >=
+	       1ULL * PHYSICAL_PAGE_DOMAIN_RESERVED_VM_FLOOR +
+		       AGENT_STATE_PAGE_DOMAIN_RESERVED_LIMIT,
+	       "reserved physical domains must fund VM and Agent state");
+#endif
 
 #include "../file_resource_policy.h"
 #include "../thread_resource_policy.h"
@@ -37,6 +58,7 @@
 struct file;
 struct proc;
 struct user_image;
+struct agent_timeline_wait_state;
 
 enum childstate { CHILD_FREE, CHILD_LIVE, CHILD_EXITED };
 
@@ -87,6 +109,9 @@ enum kernel_stack_state {
 struct thread {
 	enum threadstate state; // Thread state
 	int tid; // Thread ID
+	// Slot addresses and tids are reusable; this generation makes ownership
+	// references stable across waittid/recreate cycles.
+	uint64 identity_generation;
 	struct proc *process;
 	uint64 ustack; // Virtual address of user stack
 	uint64 kstack; // Virtual address of kernel stack
@@ -96,6 +121,7 @@ struct thread {
 	struct wait_queue *wait_channel;
 	struct thread *wait_next;
 	enum wait_reason wait_reason;
+	uint64 wait_key;
 	int wait_interrupted;
 	int wait_interruptible;
 	int on_run_queue;
@@ -114,6 +140,11 @@ struct thread {
 	uint64 kernel_work_redispatches;
 	uint64 kernel_syscall_preemptions_start;
 	uint64 kernel_last_syscall_preemptions;
+	uint64 kernel_receipt_generation;
+	uint64 kernel_receipt_completion_timer_epoch;
+	int kernel_receipt_syscall_id;
+	int kernel_work_target_syscall_id;
+	uint kernel_work_publish_receipt;
 	uint io_request_depth;
 	uint io_request_owner;
 	uint io_request_class;
@@ -122,6 +153,14 @@ struct thread {
 	uint io_request_transfers;
 	uint bio_buffer_holds;
 	uint bio_fs_atomic_depth;
+	/* Event-wait ownership follows this reusable thread generation. */
+	uint64 agent_wait_deadline;
+	uchar agent_wait_deadline_valid;
+	uchar agent_loop_state;
+	/* Observation persistence must not recursively evict its own evidence. */
+	uchar agent_observe_suppress_depth;
+	/* Published only while this thread is queued in timeline wait. */
+	struct agent_timeline_wait_state *agent_timeline_wait_state;
 	// Tickets belong to the calling thread's next principal creation.
 	uchar fd_delegate_ticket[FD_BUFFER_SIZE];
 };
@@ -147,6 +186,19 @@ enum proc_teardown_state {
 	PROC_TEARDOWN_RECYCLED,
 };
 
+/*
+ * Controller authority has its own one-way publication barrier because an
+ * exec downgrade retires authority without necessarily terminating the
+ * process. OPEN -> QUIESCING blocks authority and new child publication,
+ * then routes trusted children or requests subtree teardown atomically.
+ * QUIESCING -> RETIRED waits for sibling commits to quiesce.
+ */
+enum agent_control_state {
+	AGENT_CONTROL_OPEN = 0,
+	AGENT_CONTROL_QUIESCING,
+	AGENT_CONTROL_RETIRED,
+};
+
 #define PROC_TEARDOWN_OWNER_NONE (-1)
 #define PROC_TEARDOWN_OWNER_KERNEL (-2)
 
@@ -157,6 +209,8 @@ struct proc {
 	pagetable_t pagetable; // User page table
 	uint64 max_page;
 	uint64 ustack_base; // Virtual address of user stack base
+	uint64 heap_base; // First byte controlled by brk/sbrk
+	uint64 heap_break; // Published byte-granular program break
 	struct proc *parent; // Parent process; NULL means kernel-owned
 	int parent_record_index;
 	struct resource_account_handle resource_account;
@@ -210,16 +264,13 @@ struct proc {
 	struct semaphore semaphore_pool[LOCK_POOL_SIZE];
 	struct condvar condvar_pool[LOCK_POOL_SIZE];
 	uint64 syscall_count[SYSCALL_COUNT_MAX];
-	char mail_payload[MAILBOX_SLOT_COUNT][MAILBOX_PAYLOAD_SIZE];
-	int mail_len[MAILBOX_SLOT_COUNT];
-	int mail_from[MAILBOX_SLOT_COUNT];
-	int mail_head;
-	int mail_tail;
-	int mail_count;
+	struct agent_legacy_mailbox *mail_sidecar;
+	uint64 legacy_mail_endpoint_generation;
 	int is_agent;
 	int agent_type;
 	int agent_id;
 	int agent_role;
+	enum agent_control_state agent_control_state;
 	uint64 agent_control_id;
 	uint64 agent_controller_id;
 	uint64 agent_ctx_base;
@@ -234,8 +285,14 @@ struct proc {
 	uint64 context_path_head;
 	uint64 context_path_oldest;
 	uint64 context_path_latest;
+	uint64 context_path_visible_head;
+	uint64 context_active_path_count;
+	uint64 context_active_path_oldest;
+	uint64 context_branch_generation;
+	uint64 context_cause_branch_generation;
 	uint64 context_path_dropped;
 	uint64 context_path_rollback_count;
+	int context_eviction_policy;
 	uint64 latest_response_offset;
 	uint64 records_offset;
 	uint64 agent_ctx_kva[AGENT_CONTEXT_PAGES];
@@ -271,8 +328,6 @@ struct proc {
 	uint64 agent_wait_wakeup_count;
 	uint64 agent_wait_cancel_count;
 	uint64 agent_timeout_count;
-	int agent_wait_deadline_valid;
-	uint64 agent_wait_deadline;
 	int agent_wait_cancel_pending;
 	int agent_wait_cancel_source_pid;
 	uint64 agent_wait_cancel_event_id;
@@ -327,10 +382,6 @@ struct proc {
 	uint64 agent_timeline_wait_sleep_count;
 	uint64 agent_timeline_wait_wakeup_count;
 	uint64 agent_timeline_wait_timeout_count;
-	int agent_timeline_waiting;
-	int agent_timeline_wait_deadline_valid;
-	uint64 agent_timeline_wait_deadline;
-	struct agent_timeline_filter agent_timeline_wait_filter;
 };
 
 int cpuid();
@@ -339,8 +390,10 @@ struct thread *curr_thread(void);
 int proc_teardown_live(const struct proc *);
 int proc_thread_exit_requested(void);
 int proc_request_workflow_exit(struct workflow_lifecycle_key, int);
+int proc_request_controller_exit(struct workflow_lifecycle_key, uint64, int);
 int proc_vm_snapshot_begin(struct proc *);
 void proc_vm_snapshot_end(struct proc *);
+int proc_sbrk(long);
 void exit(int);
 void proc_init();
 void proc_mapstacks(pagetable_t);
@@ -382,8 +435,12 @@ void proc_file_slot_release(struct resource_account_handle, int);
 int init_stdio(struct proc *);
 int push_argv(struct proc *, char **);
 int push_argv_image(pagetable_t, uint64, struct trapframe *, char **);
+enum proc_image_install_mode {
+	PROC_IMAGE_INSTALL_BOOTSTRAP = 1,
+	PROC_IMAGE_INSTALL_LIVE_EXEC = 2,
+};
 int proc_install_user_image(struct proc *, struct user_image *,
-			    struct trapframe *, int);
+			    struct trapframe *, enum proc_image_install_mode);
 // swtch.S
 void swtch(struct context *, struct context *);
 

@@ -1,4 +1,5 @@
 #include <agent.h>
+#include <exec_policy_manifest.h>
 #include <fcntl.h>
 #include <io_policy.h>
 #include <stdio.h>
@@ -26,6 +27,13 @@
 #define IO_PRESSURE_BLOCKS (IO_POLICY_WORKFLOW_NORMAL_BURST + 16)
 #define IO_PRESSURE_BYTES (IO_PRESSURE_BLOCKS * 1024)
 #define IO_PROBE_BYTES 1024
+#define EXEC_PUBLIC_IMAGE "wf_public"
+#define PENDING_EXEC_READY_MARKER \
+	"workflow_teardown_race_ucore: pending_exec_public_image=1\n"
+#define PENDING_EXEC_ESCAPE_MARKER \
+	"workflow_teardown_race_ucore: check failed: pending PUBLIC descendant escaped\n"
+#define PENDING_EXEC_ESCAPE_DELAY 500
+#define PENDING_EXEC_VERIFY_DELAY (4 * PENDING_EXEC_ESCAPE_DELAY)
 
 /*
  * A workflow child starts before its creating helper returns, so it inherits
@@ -51,7 +59,7 @@ enum race_event_kind {
 	EVENT_FILE_PIN_MISSED,
 	EVENT_META_WAITER,
 	EVENT_IO_PINNED,
-	EVENT_IO_DEBT,
+	EVENT_IO_ACTIVITY,
 	EVENT_PUBLIC_EXIT,
 	EVENT_CPU_MEMBER,
 	EVENT_FAILURE,
@@ -60,7 +68,7 @@ enum race_event_kind {
 enum primary_flag {
 	PRIMARY_META_WAITER = 1U << 0,
 	PRIMARY_IO_PINNED = 1U << 1,
-	PRIMARY_IO_DEBT = 1U << 2,
+	PRIMARY_IO_ACTIVITY = 1U << 2,
 	PRIMARY_PUBLIC_EXIT = 1U << 3,
 	PRIMARY_CPU_MEMBER = 1U << 4,
 	PRIMARY_FILE_PIN = 1U << 5,
@@ -122,8 +130,10 @@ struct primary_report {
 	uint context_failure;
 	uint context_workers;
 	uint io_owner;
-	uint io_debt;
-	uint io_cache;
+	uint io_budget_progress;
+	uint io_cache_misses;
+	uint io_writes;
+	uint io_completions;
 	struct agent_workflow_lifecycle_info lifecycle;
 };
 
@@ -153,6 +163,11 @@ struct lifecycle_probe_report {
 struct lifecycle_probe_guard {
 	int pid;
 	uint scope_id;
+	struct agent_workflow_lifecycle_key lifecycle_key;
+};
+
+struct pending_exec_report {
+	int worker_pid;
 	struct agent_workflow_lifecycle_key lifecycle_key;
 };
 
@@ -191,6 +206,15 @@ static struct agent_file_query metadata_query;
 static struct agent_file_query_result metadata_query_result;
 static struct agent_result context_owner_result;
 static struct agent_result context_waiter_result;
+static struct agent_workflow_lifecycle_info exec_transition_lifecycle;
+static struct agent_context_record exec_transition_record;
+static struct agent_context_header exec_transition_header;
+static struct agent_context_detail exec_transition_detail;
+static struct agent_event exec_transition_event;
+static struct agent_info exec_transition_info;
+static struct agent_info exec_transition_info_before;
+static struct io_policy_info exec_transition_io;
+static struct io_policy_info exec_transition_io_after;
 static volatile int context_owner_done;
 static volatile int context_waiter_done;
 static volatile int context_owner_failed;
@@ -211,6 +235,9 @@ static int hidden_second_ready;
 static int hidden_pipe[2];
 static int metadata_scan_event_fd = -1;
 static int metadata_scan_index = -1;
+static int close_spawn_report_fd = -1;
+static int close_spawn_lifetime_fd = -1;
+static char control_worker_image[11];
 
 static void check(int ok, const char *message)
 {
@@ -229,6 +256,75 @@ static int bytes_equal(const void *left, const void *right, size_t size)
 		if (left_bytes[i] != right_bytes[i])
 			return 0;
 	return 1;
+}
+
+static void decimal_format(char *out, size_t size, int value)
+{
+	char reversed[16];
+	int count = 0;
+
+	check(out != 0 && size > 1 && value > 0, "format positive pid");
+	do {
+		reversed[count++] = '0' + value % 10;
+		value /= 10;
+	} while (value != 0 && count < (int)sizeof(reversed));
+	check((size_t)count < size, "formatted pid fits");
+	for (int i = 0; i < count; i++)
+		out[i] = reversed[count - i - 1];
+	out[count] = 0;
+}
+
+static int decimal_parse(const char *text)
+{
+	int value = 0;
+
+	if (text == 0 || *text == 0)
+		return -1;
+	for (; *text != 0; text++) {
+		if (*text < '0' || *text > '9' || value > 1000000)
+			return -1;
+		value = value * 10 + (*text - '0');
+	}
+	return value > 0 ? value : -1;
+}
+
+static void uint64_format(char *out, size_t size, uint64 value)
+{
+	char reversed[24];
+	int count = 0;
+
+	check(out != 0 && size > 1 && value != 0,
+	      "format positive lifecycle component");
+	do {
+		reversed[count++] = '0' + value % 10;
+		value /= 10;
+	} while (value != 0 && count < (int)sizeof(reversed));
+	check((size_t)count < size, "formatted lifecycle component fits");
+	for (int i = 0; i < count; i++)
+		out[i] = reversed[count - i - 1];
+	out[count] = 0;
+}
+
+static int uint64_parse(const char *text, uint64 *out)
+{
+	uint64 value = 0;
+
+	if (text == 0 || out == 0 || *text == 0)
+		return -1;
+	for (; *text != 0; text++) {
+		uint64 digit;
+
+		if (*text < '0' || *text > '9')
+			return -1;
+		digit = *text - '0';
+		if (value > (~0ULL - digit) / 10)
+			return -1;
+		value = value * 10 + digit;
+	}
+	if (value == 0)
+		return -1;
+	*out = value;
+	return 0;
 }
 
 static void write_exact(int fd, const void *buffer, size_t size,
@@ -595,8 +691,8 @@ static int create_workflow_with_fds(const int *fds, int count)
 		pid = agent_workflow_create(AGENT_ROLE_ORCHESTRATOR);
 		if (pid >= 0)
 			return pid;
-		check(get_mtime() < deadline,
-		      "workflow admission did not recover");
+		if (get_mtime() >= deadline)
+			check(0, "workflow admission did not recover");
 	}
 }
 
@@ -742,29 +838,66 @@ static TEST_PHASE_NOINLINE void io_writer(int start_fd, int event_fd)
 
 static TEST_PHASE_NOINLINE void io_observer(int start_fd, int event_fd)
 {
+	struct io_policy_info before;
 	struct io_policy_info info;
+	uint scope_id;
 	char token;
 
+	memset(&before, 0, sizeof(before));
+	if (io_policy_info(&before) < 0 ||
+	    before.io_class != IO_POLICY_CLASS_NORMAL ||
+	    (before.owner & IO_POLICY_OWNER_SCOPE_FLAG) == 0) {
+		send_event(event_fd, EVENT_FAILURE, 41, before.owner,
+			   before.io_class);
+		exit(41);
+	}
+	scope_id = before.owner & ~IO_POLICY_OWNER_SCOPE_FLAG;
+	if (scope_id < 3) {
+		send_event(event_fd, EVENT_FAILURE, 41, before.owner, scope_id);
+		exit(41);
+	}
 	send_event(event_fd, EVENT_IO_OBSERVER_READY, 0, 0, 0);
 	read_exact(start_fd, &token, 1, "release I/O observer");
 	for (;;) {
+		uint64 budget_progress;
+		uint64 cache_misses;
+		uint64 completions;
+		uint64 writes;
+
 		memset(&info, 0, sizeof(info));
 		if (io_policy_info(&info) < 0) {
-			send_event(event_fd, EVENT_FAILURE, 41, 0, 0);
-			exit(41);
-		}
-		if (info.io_class != IO_POLICY_CLASS_NORMAL ||
-		    (info.owner & IO_POLICY_OWNER_SCOPE_FLAG) == 0) {
-			send_event(event_fd, EVENT_FAILURE, 42, info.owner,
-				   info.io_class);
+			send_event(event_fd, EVENT_FAILURE, 42, 0, 0);
 			exit(42);
 		}
-		if (info.debt != 0 && info.debt_waiters != 0 &&
-		    info.cache_resident != 0) {
-			send_event(event_fd, EVENT_IO_DEBT, 0,
-				   ((uint64)info.owner << 32) | info.debt,
-				   ((uint64)info.debt_waiters << 32) |
-				   info.cache_resident);
+		if (info.io_class != IO_POLICY_CLASS_NORMAL ||
+		    info.owner != before.owner ||
+		    info.physical_writes < before.physical_writes ||
+		    info.completion_sequence < before.completion_sequence ||
+		    info.refills < before.refills ||
+		    info.throttles < before.throttles ||
+		    info.cache_misses < before.cache_misses) {
+			send_event(event_fd, EVENT_FAILURE, 43, info.owner,
+				   info.io_class);
+			exit(43);
+		}
+		budget_progress = info.refills - before.refills;
+		if (budget_progress <= ~0ULL -
+					       (info.throttles - before.throttles))
+			budget_progress += info.throttles - before.throttles;
+		else
+			budget_progress = ~0ULL;
+		writes = info.physical_writes - before.physical_writes;
+		cache_misses = info.cache_misses - before.cache_misses;
+		completions = info.completion_sequence -
+			      before.completion_sequence;
+		if (budget_progress != 0 && budget_progress <= ~0U &&
+		    writes != 0 && writes <= ~0U && completions != 0 &&
+		    completions <= ~0U && cache_misses != 0 &&
+		    cache_misses <= ~0U) {
+			send_event(event_fd, EVENT_IO_ACTIVITY, scope_id,
+				   (budget_progress << 32) |
+					   cache_misses,
+				   (writes << 32) | completions);
 			for (;;) {
 				struct agent_event event;
 
@@ -783,6 +916,105 @@ static int public_identity_is_downgraded(void)
 	return agent_info(&info) == 0 && info.is_agent == 0 &&
 	       info.capability_mask == 0 && info.filesystem_domain == 0 &&
 	       info.filesystem_capability_mask == 0;
+}
+
+static TEST_PHASE_NOINLINE void sentinel_public_exec_probe(
+	const char *id_text, const char *generation_text, const char *fd_text,
+	const char *scope_text)
+{
+	struct agent_workflow_lifecycle_key expected;
+	uint64 id = 0;
+	uint64 generation = 0;
+	uint64 scope = 0;
+	int scoped_fd = decimal_parse(fd_text);
+	int io_fd;
+	int probe[2];
+
+	check(uint64_parse(id_text, &id) == 0 && id <= ~0U &&
+	      uint64_parse(generation_text, &generation) == 0 &&
+	      uint64_parse(scope_text, &scope) == 0 && scope <= ~0U &&
+	      scope >= 3 && scoped_fd > 0,
+	      "parse exec downgrade lineage and endpoint");
+	memset(&expected, 0, sizeof(expected));
+	expected.id = (uint)id;
+	expected.generation = generation;
+	memset(&exec_transition_lifecycle, 0,
+	       sizeof(exec_transition_lifecycle));
+	check(agent_workflow_lifecycle_info(&exec_transition_lifecycle,
+					    &expected) ==
+		      AGENT_STATUS_OK &&
+	      exec_transition_lifecycle.charged == 1 &&
+	      lifecycle_key_equal(exec_transition_lifecycle.key, expected),
+	      "PUBLIC exec preserves immutable teardown lineage");
+	memset(&exec_transition_info, 0, sizeof(exec_transition_info));
+	check(agent_info(&exec_transition_info) == 0 &&
+	      exec_transition_info.is_agent == 0 &&
+	      exec_transition_info.agent_type == AGENT_TYPE_NONE &&
+	      exec_transition_info.agent_id == 0 &&
+	      exec_transition_info.agent_role == 0 &&
+	      exec_transition_info.context_base == 0 &&
+	      exec_transition_info.context_size == 0 &&
+	      exec_transition_info.capability_mask == 0 &&
+	      exec_transition_info.filesystem_domain == 0 &&
+	      exec_transition_info.filesystem_capability_mask == 0 &&
+	      exec_transition_info.event_queue_count == 0 &&
+	      exec_transition_info.watch_count == 0 &&
+	      exec_transition_info.heartbeat_interval == 0 &&
+	      exec_transition_info.loop_state == AGENT_LOOP_NONE &&
+	      exec_transition_info.legacy_mailbox_allocated == 0 &&
+	      exec_transition_info.legacy_mailbox_pages == 0 &&
+	      exec_transition_info.legacy_mailbox_queue_count == 0,
+	      "PUBLIC exec clears Agent identity and endpoints");
+	memset(&exec_transition_io, 0, sizeof(exec_transition_io));
+	check(io_policy_info(&exec_transition_io) == 0 &&
+	      exec_transition_io.version == IO_POLICY_VERSION &&
+	      exec_transition_io.struct_size == sizeof(exec_transition_io) &&
+	      exec_transition_io.owner ==
+		      (IO_POLICY_OWNER_SCOPE_FLAG | (uint)scope) &&
+	      exec_transition_io.io_class == IO_POLICY_CLASS_NORMAL,
+	      "PUBLIC exec keeps immutable workflow resource ownership");
+	memset(io_pressure, 'E', IO_PROBE_BYTES);
+	io_fd = open("execioprobe", O_CREATE | O_WRONLY | O_TRUNC);
+	check(io_fd >= 0, "create PUBLIC exec physical I/O probe");
+	write_exact(io_fd, io_pressure, IO_PROBE_BYTES,
+		    "write PUBLIC exec physical I/O probe");
+	check(close(io_fd) == 0, "close PUBLIC exec physical I/O probe");
+	memset(&exec_transition_io_after, 0,
+	       sizeof(exec_transition_io_after));
+	check(io_policy_info(&exec_transition_io_after) == 0 &&
+	      exec_transition_io_after.owner ==
+		      (IO_POLICY_OWNER_SCOPE_FLAG | (uint)scope) &&
+	      exec_transition_io_after.io_class == IO_POLICY_CLASS_NORMAL &&
+	      exec_transition_io_after.physical_writes >
+		      exec_transition_io.physical_writes &&
+	      exec_transition_io_after.completion_sequence >
+		      exec_transition_io.completion_sequence &&
+	      exec_transition_io_after.unreserved_transfers ==
+		      exec_transition_io.unreserved_transfers,
+	      "PUBLIC exec physical I/O stays on lifecycle resource account");
+	check(unlink("execioprobe") == 0,
+	      "remove PUBLIC exec physical I/O probe");
+	check(write(scoped_fd, "X", 1) == -1,
+	      "PUBLIC exec revokes delegated scoped endpoint");
+	memset(&exec_transition_record, 0, sizeof(exec_transition_record));
+	memset(&exec_transition_header, 0, sizeof(exec_transition_header));
+	memset(&exec_transition_detail, 0, sizeof(exec_transition_detail));
+	memset(&exec_transition_event, 0, sizeof(exec_transition_event));
+	check(context_push(&exec_transition_record) == -1 &&
+	      context_query(0, &exec_transition_record, 1) == -1 &&
+	      context_snapshot(&exec_transition_header,
+			       &exec_transition_record, 1) == -1 &&
+	      context_detail(1, &exec_transition_detail) == -1 &&
+	      context_rollback(1) == -1 && context_clear() == -1 &&
+	      agent_wait(&exec_transition_event, 0) == -1 &&
+	      agent_heartbeat(1) == -1,
+	      "PUBLIC exec rejects Agent and Context operations");
+	check(pipe(probe) == 0, "create Context unmap probe");
+	check(write(probe[1], (const void *)AGENT_CONTEXT_BASE, 1) == -1,
+	      "PUBLIC exec cannot read former Context mapping");
+	check(close(probe[0]) == 0 && close(probe[1]) == 0,
+	      "close Context unmap probe");
+	printf("workflow_teardown_race_ucore: sentinel_public_exec=1 identity_cleared=1 context_unmapped=1 endpoints_revoked=1 scoped_fd_revoked=1 lifecycle_preserved=1 resource_domain_preserved=1 physical_io_charged=1 normal_class=1 argv_build_rollback=1\n");
 }
 
 static TEST_PHASE_NOINLINE void public_lineage_member(
@@ -1277,9 +1509,10 @@ static TEST_PHASE_NOINLINE void primary_workflow_root(
 	check(close(start[0]) == 0 && close(start[1]) == 0,
 	      "close member start pipe");
 	while ((flags & (PRIMARY_META_WAITER | PRIMARY_IO_PINNED |
-			 PRIMARY_IO_DEBT | PRIMARY_PUBLIC_EXIT |
+			 PRIMARY_IO_ACTIVITY | PRIMARY_PUBLIC_EXIT |
 			 PRIMARY_CPU_MEMBER)) !=
-	       (PRIMARY_META_WAITER | PRIMARY_IO_PINNED | PRIMARY_IO_DEBT |
+	       (PRIMARY_META_WAITER | PRIMARY_IO_PINNED |
+		PRIMARY_IO_ACTIVITY |
 		PRIMARY_PUBLIC_EXIT | PRIMARY_CPU_MEMBER)) {
 		parent_read_exact(events[0], &event, sizeof(event),
 				  "receive armed primary resource state");
@@ -1290,11 +1523,14 @@ static TEST_PHASE_NOINLINE void primary_workflow_root(
 		case EVENT_IO_PINNED:
 			flags |= PRIMARY_IO_PINNED;
 			break;
-		case EVENT_IO_DEBT:
-			flags |= PRIMARY_IO_DEBT;
-			report->io_owner = (uint)(event.value0 >> 32);
-			report->io_debt = (uint)event.value0;
-			report->io_cache = (uint)event.value1;
+		case EVENT_IO_ACTIVITY:
+			flags |= PRIMARY_IO_ACTIVITY;
+			report->io_owner = IO_POLICY_OWNER_SCOPE_FLAG |
+					   (uint)event.value;
+			report->io_budget_progress = (uint)(event.value0 >> 32);
+			report->io_cache_misses = (uint)event.value0;
+			report->io_writes = (uint)(event.value1 >> 32);
+			report->io_completions = (uint)event.value1;
 			break;
 		case EVENT_PUBLIC_EXIT:
 			flags |= PRIMARY_PUBLIC_EXIT;
@@ -1784,7 +2020,7 @@ static TEST_PHASE_NOINLINE struct primary_report run_primary_teardown(
 	int primary;
 	int64 selection_deadline = get_mtime() + PHASE_DEADLINE_MS;
 	uint prepared_required = PRIMARY_META_WAITER | PRIMARY_IO_PINNED |
-		PRIMARY_IO_DEBT | PRIMARY_PUBLIC_EXIT | PRIMARY_CPU_MEMBER |
+		PRIMARY_IO_ACTIVITY | PRIMARY_PUBLIC_EXIT | PRIMARY_CPU_MEMBER |
 		PRIMARY_FILE_PIN | PRIMARY_LIFECYCLE_ABI |
 		PRIMARY_FRESH_RESOURCES;
 
@@ -1881,8 +2117,10 @@ static TEST_PHASE_NOINLINE struct primary_report run_primary_teardown(
 	      "Context and metadata waiters are absent before final arm");
 	check(prepared->io_owner ==
 		      (IO_POLICY_OWNER_SCOPE_FLAG | prepared->scope_id) &&
-	      prepared->io_debt != 0 && prepared->io_cache != 0,
-	      "prepared scope owns observable I/O debt and cache pressure");
+	      prepared->io_budget_progress != 0 &&
+	      prepared->io_cache_misses != 0 &&
+	      prepared->io_writes != 0 && prepared->io_completions != 0,
+	      "prepared scope owns observable I/O and cache activity");
 	check_factory_self_only_foreign_compare(prepared->lifecycle.key);
 	if (exercise_peer_scope)
 		run_dual_scope_progress(prepared->scope_id);
@@ -1927,10 +2165,613 @@ static TEST_PHASE_NOINLINE struct primary_report run_primary_teardown(
 	return *final;
 }
 
-int main(void)
+static __attribute__((noreturn)) void control_race_hold(void)
 {
+	for (;;)
+		(void)sched_yield();
+}
+
+static TEST_PHASE_NOINLINE void close_spawn_racer(void *unused)
+{
+	char ready = 'R';
+	int announced = 0;
+
+	(void)unused;
+	for (int round = 0;; round++) {
+		int pid;
+
+		check(agent_scope_delegate_fd(close_spawn_lifetime_fd) ==
+			      AGENT_STATUS_OK,
+		      "delegate close/spawn lifetime");
+		pid = (round & 1) != 0 ?
+			agent_worker_create(control_worker_image,
+					    AGENT_CAP_CONTENT_READ) :
+			agent_create_role(AGENT_ROLE_SENTINEL);
+		if (pid == 0)
+			control_race_hold();
+		if (pid > 0 && !announced) {
+			write_exact(close_spawn_report_fd, &ready, 1,
+				    "report close/spawn publication");
+			announced = 1;
+		}
+		(void)sched_yield();
+	}
+}
+
+static TEST_PHASE_NOINLINE void close_spawn_root(int report_fd,
+						 int lifetime_fd)
+{
+	uint scope_id = current_scope();
+
+	close_spawn_report_fd = report_fd;
+	close_spawn_lifetime_fd = lifetime_fd;
+	write_exact(report_fd, &scope_id, sizeof(scope_id),
+		    "report close/spawn scope");
+	check(thread_create(close_spawn_racer, 0) > 0,
+	      "create close/spawn racer");
+	control_race_hold();
+}
+
+static TEST_PHASE_NOINLINE void run_close_spawn_race(void)
+{
+	char ready = 0;
+	uint scope_id = 0;
+	int reports[2];
+	int lifetime[2];
+	int fds[2];
+	int status;
+	int pid;
+
+	check(pipe(reports) == 0 && pipe(lifetime) == 0,
+	      "create close/spawn race pipes");
+	fds[0] = reports[1];
+	fds[1] = lifetime[1];
+	pid = create_workflow_with_fds(fds, 2);
+	check(pid >= 0, "create close/spawn workflow");
+	if (pid == 0)
+		close_spawn_root(reports[1], lifetime[1]);
+	check(close(reports[1]) == 0 && close(lifetime[1]) == 0,
+	      "close factory close/spawn writers");
+	parent_read_exact(reports[0], &scope_id, sizeof(scope_id),
+			  "receive close/spawn scope");
+	parent_read_exact(reports[0], &ready, 1,
+			  "receive close/spawn publication");
+	check(ready == 'R' && agent_workflow_close(scope_id) == AGENT_STATUS_OK,
+	      "close workflow during child publication");
+	status = parent_waitpid(pid, "reap close/spawn workflow");
+	check(status == AGENT_STATUS_CANCELLED,
+	      "close/spawn workflow is cancelled");
+	parent_read_eof(lifetime[0], "drain close/spawn descendants");
+	check(close(reports[0]) == 0 && close(lifetime[0]) == 0,
+	      "close close/spawn readers");
+}
+
+static TEST_PHASE_NOINLINE void pending_exec_controller(int report_fd,
+						 int worker_gate_fd,
+						 int controller_gate_fd,
+						 int exec_proof_fd)
+{
+	struct agent_workflow_lifecycle_info lifecycle;
+	struct pending_exec_report report;
+	char id_text[24];
+	char generation_text[24];
+	char image_ready = 'I';
+	char token;
+	int worker;
+	int status;
+
+	snapshot_current_lifecycle(&lifecycle);
+	check(agent_scope_delegate_fd(worker_gate_fd) == AGENT_STATUS_OK &&
+	      agent_scope_delegate_fd(exec_proof_fd) == AGENT_STATUS_OK,
+	      "delegate pending exec endpoints");
+	worker = agent_worker_create(control_worker_image,
+				     AGENT_CAP_CONTENT_READ);
+	check(worker >= 0, "create pending exec worker");
+	if (worker == 0) {
+		char *argv[] = {
+			"workflow_teardown_race_ucore",
+			"--pending-exec-escape",
+			id_text,
+			generation_text,
+			0,
+		};
+
+		uint64_format(id_text, sizeof(id_text), lifecycle.key.id);
+		uint64_format(generation_text, sizeof(generation_text),
+			      lifecycle.key.generation);
+		read_exact(worker_gate_fd, &token, 1,
+			   "release pending exec worker");
+		write_exact(exec_proof_fd, &token, 1,
+			    "report pending exec publication");
+		if (exec("workflow_teardown_race_ucore", argv) < 0)
+			exit(91);
+		exit(92);
+	}
+	check(close(exec_proof_fd) == 0,
+	      "close pending exec controller proof writer");
+	memset(&report, 0, sizeof(report));
+	report.worker_pid = worker;
+	report.lifecycle_key = lifecycle.key;
+	write_exact(report_fd, &report, sizeof(report),
+		    "report pending exec identity");
+	check(waitpid(worker, &status) == worker && status == 0,
+	      "observe pending exec image completion");
+	write_exact(report_fd, &image_ready, 1,
+		    "report pending exec image readiness");
+	read_exact(controller_gate_fd, &token, 1,
+		   "release pending exec controller");
+	exit(0);
+}
+
+static TEST_PHASE_NOINLINE void run_pending_exec_race(void)
+{
+	struct pending_exec_report report;
+	char image_ready = 0;
+	char release = 'R';
+	char proof = 0;
+	int reports[2];
+	int worker_gate[2];
+	int controller_gate[2];
+	int exec_proof[2];
+	int controller;
+	int status;
+
+	check(pipe(reports) == 0 && pipe(worker_gate) == 0 &&
+		      pipe(controller_gate) == 0 && pipe(exec_proof) == 0,
+	      "create pending exec race pipes");
+	check(agent_scope_delegate_fd(reports[1]) == AGENT_STATUS_OK &&
+	      agent_scope_delegate_fd(worker_gate[0]) == AGENT_STATUS_OK &&
+	      agent_scope_delegate_fd(controller_gate[0]) == AGENT_STATUS_OK &&
+	      agent_scope_delegate_fd(exec_proof[1]) == AGENT_STATUS_OK,
+	      "delegate pending exec controller pipes");
+	controller = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
+	check(controller >= 0, "create pending exec controller");
+	if (controller == 0)
+		pending_exec_controller(reports[1], worker_gate[0],
+					controller_gate[0], exec_proof[1]);
+	check(close(reports[1]) == 0 && close(worker_gate[0]) == 0 &&
+	      close(controller_gate[0]) == 0 && close(exec_proof[1]) == 0,
+	      "close pending exec child endpoints");
+	memset(&report, 0, sizeof(report));
+	parent_read_exact(reports[0], &report, sizeof(report),
+			  "receive pending exec identity");
+	check(report.worker_pid > 0 && report.lifecycle_key.id != 0 &&
+	      report.lifecycle_key.generation != 0 &&
+	      write(worker_gate[1], &release, 1) == 1,
+	      "release pending exec publication");
+	parent_read_exact(exec_proof[0], &proof, 1,
+			  "receive pending exec publication");
+	parent_read_eof(exec_proof[0],
+			"successful PUBLIC exec revokes inherited endpoint");
+	check(proof == 'R', "pending exec publication proof");
+	parent_read_exact(reports[0], &image_ready, 1,
+			  "receive pending exec image readiness");
+	check(image_ready == 'I', "pending exec image readiness proof");
+	check(write(controller_gate[1], &release, 1) == 1,
+	      "retire controller after PUBLIC exec commit");
+	status = parent_waitpid(controller, "reap pending exec controller");
+	check(status == 0, "pending exec controller status");
+	parent_read_eof(reports[0], "close pending exec controller report");
+	check(sleep(PENDING_EXEC_VERIFY_DELAY) == 0,
+	      "wait pending exec escape deadline");
+	check(close(reports[0]) == 0 && close(worker_gate[1]) == 0 &&
+	      close(controller_gate[1]) == 0 && close(exec_proof[0]) == 0,
+	      "close pending exec parent endpoints");
+	printf("workflow_teardown_race_ucore: pending_exec_public_ready=1 inherited_fd_revoked=1 controller_cancelled=1\n");
+}
+
+static TEST_PHASE_NOINLINE void run_agent_public_exec_transition(void);
+
+static __attribute__((noreturn)) void controller_public_exec_rejection_member(
+	int report_fd)
+{
+	struct agent_workflow_lifecycle_key lifecycle_key;
+	char *argv[] = {
+		EXEC_PUBLIC_IMAGE,
+		"--controller-reject-unexpected",
+		0,
+	};
+	uint scope_id = current_scope();
+	char ready = 'R';
+
+	check(context_clear() == AGENT_STATUS_OK,
+	      "clear controller Context before rejected exec");
+	memset(&exec_transition_record, 0, sizeof(exec_transition_record));
+	exec_transition_record.tool_id = AGENT_TOOL_CONTEXT_PUSH;
+	exec_transition_record.request_id = 7399;
+	exec_transition_record.status = AGENT_STATUS_OK;
+	strcpy(exec_transition_record.payload, "exec-controller");
+	strcpy(exec_transition_record.result, "armed");
+	check(context_push(&exec_transition_record) == AGENT_STATUS_OK &&
+	      agent_watch(AGENT_EVENT_MESSAGE, "exec-controller") ==
+		      AGENT_STATUS_OK &&
+	      agent_heartbeat(7) == AGENT_STATUS_OK,
+	      "seed controller identity endpoints before rejected exec");
+	memset(&exec_transition_event, 0, sizeof(exec_transition_event));
+	exec_transition_event.type = AGENT_EVENT_MESSAGE;
+	exec_transition_event.corr_id = 7399;
+	strcpy(exec_transition_event.payload, "exec-controller");
+	check(agent_wake(getpid(), &exec_transition_event) == AGENT_STATUS_OK,
+	      "seed controller event before rejected exec");
+	memset(&exec_transition_info_before, 0,
+	       sizeof(exec_transition_info_before));
+	check(agent_info(&exec_transition_info_before) == 0 &&
+	      exec_transition_info_before.is_agent == 1 &&
+	      exec_transition_info_before.agent_role ==
+		      AGENT_ROLE_ORCHESTRATOR &&
+	      exec_transition_info_before.context_base == AGENT_CONTEXT_BASE &&
+	      exec_transition_info_before.filesystem_domain == scope_id &&
+	      exec_transition_info_before.watch_count != 0 &&
+	      exec_transition_info_before.event_queue_count != 0 &&
+	      exec_transition_info_before.heartbeat_interval == 7,
+	      "snapshot controller state before rejected exec");
+	snapshot_current_lifecycle(&exec_transition_lifecycle);
+	lifecycle_key = exec_transition_lifecycle.key;
+	memset(&exec_transition_io, 0, sizeof(exec_transition_io));
+	check(io_policy_info(&exec_transition_io) == 0 &&
+	      exec_transition_io.owner ==
+		      (IO_POLICY_OWNER_SCOPE_FLAG | scope_id) &&
+	      exec_transition_io.io_class == IO_POLICY_CLASS_CONTROL,
+	      "snapshot controller resource domain before rejected exec");
+	check(exec(EXEC_PUBLIC_IMAGE, argv) < 0,
+	      "scope controller rejects PUBLIC exec after prepare");
+	memset(&exec_transition_info, 0, sizeof(exec_transition_info));
+	memset(&exec_transition_record, 0, sizeof(exec_transition_record));
+	memset(&exec_transition_lifecycle, 0,
+	       sizeof(exec_transition_lifecycle));
+	memset(&exec_transition_io, 0, sizeof(exec_transition_io));
+	check(agent_info(&exec_transition_info) == 0 &&
+	      exec_transition_info.is_agent == 1 &&
+	      exec_transition_info.agent_id ==
+		      exec_transition_info_before.agent_id &&
+	      exec_transition_info.agent_role == AGENT_ROLE_ORCHESTRATOR &&
+	      exec_transition_info.context_base ==
+		      exec_transition_info_before.context_base &&
+	      exec_transition_info.capability_mask ==
+		      exec_transition_info_before.capability_mask &&
+	      exec_transition_info.filesystem_domain == scope_id &&
+	      exec_transition_info.filesystem_capability_mask ==
+		      exec_transition_info_before.filesystem_capability_mask &&
+	      exec_transition_info.watch_count != 0 &&
+	      exec_transition_info.event_queue_count != 0 &&
+	      exec_transition_info.heartbeat_interval == 7 &&
+	      context_query(1, &exec_transition_record, 1) == 1 &&
+	      exec_transition_record.request_id == 7399 &&
+	      agent_workflow_lifecycle_info(&exec_transition_lifecycle,
+					    &lifecycle_key) ==
+		      AGENT_STATUS_OK &&
+	      lifecycle_key_equal(exec_transition_lifecycle.key,
+			  lifecycle_key) &&
+	      io_policy_info(&exec_transition_io) == 0 &&
+	      exec_transition_io.owner ==
+		      (IO_POLICY_OWNER_SCOPE_FLAG | scope_id) &&
+	      exec_transition_io.io_class == IO_POLICY_CLASS_CONTROL,
+	      "rejected PUBLIC exec preserves controller state and lineage");
+	/* Both exec transitions belong to the same trusted workflow root. */
+	run_agent_public_exec_transition();
+	write_exact(report_fd, &ready, 1,
+		    "rejected PUBLIC exec preserves delegated endpoint");
+	exit(0);
+	__builtin_unreachable();
+}
+
+static TEST_PHASE_NOINLINE void run_controller_public_exec_rejection(void)
+{
+	char ready = 0;
+	int reports[2];
+	int controller;
+	int status;
+
+	check(pipe(reports) == 0,
+	      "create controller PUBLIC exec rollback pipe");
+	controller = create_workflow_with_fds(&reports[1], 1);
+	check(controller >= 0, "create controller PUBLIC exec workflow");
+	if (controller == 0)
+		controller_public_exec_rejection_member(reports[1]);
+	check(close(reports[1]) == 0,
+	      "close controller PUBLIC exec parent writer");
+	parent_read_exact(reports[0], &ready, 1,
+			  "receive controller PUBLIC exec rollback proof");
+	status = parent_waitpid(controller,
+				"reap controller PUBLIC exec workflow");
+	check(ready == 'R' && status == 0,
+	      "controller PUBLIC exec rollback status");
+	parent_read_eof(reports[0],
+			"drain controller PUBLIC exec rollback pipe");
+	check(close(reports[0]) == 0,
+	      "close controller PUBLIC exec rollback reader");
+	printf("workflow_teardown_race_ucore: controller_public_exec_rejected=1 post_prepare_rollback=1 identity_preserved=1 context_preserved=1 fd_preserved=1\n");
+}
+
+static __attribute__((noreturn)) void sentinel_public_exec_member(
+	struct agent_workflow_lifecycle_key lifecycle_key, int scoped_fd,
+	uint scope_id)
+{
+	char id_text[24];
+	char generation_text[24];
+	char fd_text[16];
+	char scope_text[24];
+	char *failed_argv[] = {
+		EXEC_PUBLIC_IMAGE,
+		io_pressure,
+		0,
+	};
+	char *argv[] = {
+		EXEC_PUBLIC_IMAGE,
+		"--sentinel-public-exec",
+		id_text,
+		generation_text,
+		fd_text,
+		scope_text,
+		0,
+	};
+
+	memset(&exec_transition_record, 0, sizeof(exec_transition_record));
+	exec_transition_record.tool_id = AGENT_TOOL_CONTEXT_PUSH;
+	exec_transition_record.request_id = 7401;
+	exec_transition_record.status = AGENT_STATUS_OK;
+	strcpy(exec_transition_record.payload, "exec-sentinel");
+	strcpy(exec_transition_record.result, "armed");
+	check(context_push(&exec_transition_record) == AGENT_STATUS_OK &&
+	      agent_watch(AGENT_EVENT_MESSAGE, "exec-downgrade") ==
+		      AGENT_STATUS_OK &&
+	      agent_heartbeat(7) == AGENT_STATUS_OK,
+	      "seed identity endpoints before PUBLIC exec");
+	memset(&exec_transition_event, 0, sizeof(exec_transition_event));
+	exec_transition_event.type = AGENT_EVENT_MESSAGE;
+	exec_transition_event.corr_id = 7401;
+	strcpy(exec_transition_event.payload, "exec-downgrade");
+	check(agent_wake(getpid(), &exec_transition_event) == AGENT_STATUS_OK,
+	      "seed queued event before PUBLIC exec");
+	/* A valid image plus an overfull argv exercises image rollback. */
+	memset(io_pressure, 'X', AGENT_PAGE_SIZE);
+	io_pressure[AGENT_PAGE_SIZE - 1] = 0;
+	check(exec(EXEC_PUBLIC_IMAGE, failed_argv) < 0,
+	      "oversized argv rejects exec before publication");
+	memset(&exec_transition_info, 0, sizeof(exec_transition_info));
+	memset(&exec_transition_record, 0, sizeof(exec_transition_record));
+	memset(&exec_transition_lifecycle, 0,
+	       sizeof(exec_transition_lifecycle));
+	check(agent_info(&exec_transition_info) == 0 &&
+	      exec_transition_info.is_agent == 1 &&
+	      exec_transition_info.agent_role == AGENT_ROLE_SENTINEL &&
+	      exec_transition_info.watch_count != 0 &&
+	      exec_transition_info.event_queue_count != 0 &&
+	      exec_transition_info.heartbeat_interval == 7 &&
+	      context_query(1, &exec_transition_record, 1) == 1 &&
+	      exec_transition_record.request_id == 7401 &&
+	      agent_workflow_lifecycle_info(&exec_transition_lifecycle,
+					    &lifecycle_key) ==
+		      AGENT_STATUS_OK &&
+	      lifecycle_key_equal(exec_transition_lifecycle.key,
+			  lifecycle_key),
+	      "failed exec preserves Agent identity, endpoints and Context");
+	write_exact(scoped_fd, "R", 1,
+		    "failed exec preserves delegated scoped endpoint");
+	uint64_format(id_text, sizeof(id_text), lifecycle_key.id);
+	uint64_format(generation_text, sizeof(generation_text),
+		      lifecycle_key.generation);
+	decimal_format(fd_text, sizeof(fd_text), scoped_fd);
+	uint64_format(scope_text, sizeof(scope_text), scope_id);
+	if (exec(EXEC_PUBLIC_IMAGE, argv) < 0)
+		exit(91);
+	exit(92);
+	__builtin_unreachable();
+}
+
+static TEST_PHASE_NOINLINE void run_agent_public_exec_transition(void)
+{
+	char ready = 0;
+	uint scope_id = current_scope();
+	int scoped[2];
+	int sentinel;
+	int status;
+
+	check(pipe(scoped) == 0, "create Sentinel scoped exec endpoint");
+	check(agent_scope_delegate_fd(scoped[1]) == AGENT_STATUS_OK,
+	      "delegate Sentinel scoped exec endpoint");
+	sentinel = agent_create_role(AGENT_ROLE_SENTINEL);
+	check(sentinel >= 0, "create Sentinel PUBLIC exec member");
+	if (sentinel == 0) {
+		snapshot_current_lifecycle(&exec_transition_lifecycle);
+		sentinel_public_exec_member(exec_transition_lifecycle.key,
+					    scoped[1], scope_id);
+	}
+	check(close(scoped[1]) == 0, "close Sentinel scoped parent writer");
+	parent_read_exact(scoped[0], &ready, 1,
+			  "receive failed exec endpoint rollback proof");
+	status = parent_waitpid(sentinel, "reap Sentinel PUBLIC exec member");
+	check(ready == 'R' && status == 0,
+	      "Sentinel PUBLIC exec probe status");
+	parent_read_eof(scoped[0],
+			"successful PUBLIC exec revokes Sentinel endpoint");
+	check(close(scoped[0]) == 0, "close Sentinel scoped exec reader");
+}
+
+static TEST_PHASE_NOINLINE void controller_exit_spinner(void *unused)
+{
+	(void)unused;
+	control_race_hold();
+}
+
+static TEST_PHASE_NOINLINE void parallel_handoff_victim(int report_fd)
+{
+	struct agent_event event;
+	char done = 'D';
+
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, -1) == AGENT_STATUS_CANCELLED,
+	      "root cancels parallel handoff victim");
+	write_exact(report_fd, &done, 1, "report parallel handoff victim");
+	exit(0);
+}
+
+static TEST_PHASE_NOINLINE void parallel_handoff_leaf(int gate_fd,
+						      int report_fd)
+{
+	char release;
+	int victim;
+
+	check(agent_scope_delegate_fd(report_fd) == AGENT_STATUS_OK,
+	      "delegate handoff victim report");
+	victim = agent_create_role(AGENT_ROLE_SENTINEL);
+	check(victim >= 0, "create parallel handoff victim");
+	if (victim == 0)
+		parallel_handoff_victim(report_fd);
+	write_exact(report_fd, &victim, sizeof(victim),
+		    "report parallel handoff victim pid");
+	check(thread_create(controller_exit_spinner, 0) > 0,
+	      "create leaf controller sibling");
+	read_exact(gate_fd, &release, 1, "release leaf controller");
+	exit(0);
+}
+
+static TEST_PHASE_NOINLINE void parallel_handoff_parent(int gate_fd,
+						int report_fd)
+{
+	char release;
+	int leaf;
+
+	check(agent_scope_delegate_fd(gate_fd) == AGENT_STATUS_OK &&
+	      agent_scope_delegate_fd(report_fd) == AGENT_STATUS_OK,
+	      "delegate leaf controller endpoints");
+	leaf = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
+	check(leaf >= 0, "create leaf handoff controller");
+	if (leaf == 0)
+		parallel_handoff_leaf(gate_fd, report_fd);
+	check(thread_create(controller_exit_spinner, 0) > 0,
+	      "create parent controller sibling");
+	read_exact(gate_fd, &release, 1, "release parent controller");
+	exit(0);
+}
+
+static TEST_PHASE_NOINLINE void parallel_handoff_root(int result_fd)
+{
+	struct agent_sched_config config;
+	char releases[2] = { 'A', 'B' };
+	char done = 0;
+	int gate[2];
+	int reports[2];
+	int parent;
+	int victim = -1;
+	int status;
+	int64 deadline;
+
+	check(pipe(gate) == 0 && pipe(reports) == 0,
+	      "create parallel handoff pipes");
+	check(agent_scope_delegate_fd(gate[0]) == AGENT_STATUS_OK &&
+	      agent_scope_delegate_fd(reports[1]) == AGENT_STATUS_OK,
+	      "delegate parent controller endpoints");
+	parent = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
+	check(parent >= 0, "create parent handoff controller");
+	if (parent == 0)
+		parallel_handoff_parent(gate[0], reports[1]);
+	check(close(gate[0]) == 0 && close(reports[1]) == 0,
+	      "close root handoff child endpoints");
+	parent_read_exact(reports[0], &victim, sizeof(victim),
+			  "receive parallel handoff victim");
+	check(victim > 0 && write(gate[1], releases, sizeof(releases)) ==
+			      (int)sizeof(releases),
+	      "release both controllers");
+	status = parent_waitpid(parent, "reap parent handoff controller");
+	check(status == 0, "parent handoff controller status");
+	memset(&config, 0, sizeof(config));
+	config.target_pid = victim;
+	config.update_mask = AGENT_SCHED_CONFIG_WEIGHT;
+	config.weight = 149;
+	deadline = get_mtime() + PHASE_DEADLINE_MS;
+	for (;;) {
+		status = agent_sched_config(&config);
+		if (status == AGENT_STATUS_OK)
+			break;
+		check(status == AGENT_STATUS_DENIED && get_mtime() < deadline,
+		      "parallel handoff reaches root");
+		(void)sched_yield();
+	}
+	check(agent_wait_cancel(victim, "parallel-handoff") == AGENT_STATUS_OK,
+	      "cancel parallel handoff victim");
+	parent_read_exact(reports[0], &done, 1,
+			  "receive parallel handoff completion");
+	check(done == 'D', "parallel handoff victim completed");
+	write_exact(result_fd, &done, 1, "report parallel handoff result");
+	check(close(gate[1]) == 0 && close(reports[0]) == 0,
+	      "close parallel handoff root endpoints");
+	exit(0);
+}
+
+static TEST_PHASE_NOINLINE void run_parallel_handoff_race(void)
+{
+	char done = 0;
+	int reports[2];
+	int pid;
+	int status;
+
+	check(pipe(reports) == 0, "create parallel handoff result pipe");
+	pid = create_workflow_with_fds(&reports[1], 1);
+	check(pid >= 0, "create parallel handoff workflow");
+	if (pid == 0)
+		parallel_handoff_root(reports[1]);
+	check(close(reports[1]) == 0, "close parallel handoff result writer");
+	parent_read_exact(reports[0], &done, 1,
+			  "receive parallel handoff result");
+	status = parent_waitpid(pid, "reap parallel handoff workflow");
+	check(done == 'D' && status == 0, "parallel handoff workflow status");
+	check(close(reports[0]) == 0, "close parallel handoff result reader");
+}
+
+int main(int argc, char **argv)
+{
+	if (argc > 5 && strcmp(argv[1], "--sentinel-public-exec") == 0) {
+		sentinel_public_exec_probe(argv[2], argv[3], argv[4], argv[5]);
+		return 0;
+	}
+	if (argc > 1 &&
+	    strcmp(argv[1], "--controller-reject-unexpected") == 0) {
+		printf("workflow_teardown_race_ucore: check failed: controller PUBLIC exec unexpectedly committed\n");
+		return 93;
+	}
+	if (argc > 3 && strcmp(argv[1], "--pending-exec-escape") == 0) {
+		struct agent_workflow_lifecycle_info lifecycle;
+		struct agent_workflow_lifecycle_key expected;
+		uint64 id = 0;
+		uint64 generation = 0;
+		int descendant;
+
+		check(uint64_parse(argv[2], &id) == 0 && id > 0 && id <= ~0U &&
+		      uint64_parse(argv[3], &generation) == 0 && generation > 0,
+		      "parse pending exec lifecycle");
+		memset(&expected, 0, sizeof(expected));
+		expected.id = (uint)id;
+		expected.generation = generation;
+		memset(&lifecycle, 0, sizeof(lifecycle));
+		check(public_identity_is_downgraded() &&
+		      agent_workflow_lifecycle_info(&lifecycle, &expected) ==
+			      AGENT_STATUS_OK &&
+		      lifecycle.charged == 1 &&
+		      lifecycle_key_equal(lifecycle.key, expected),
+		      "pending exec preserves teardown lineage");
+		descendant = fork();
+		check(descendant >= 0, "publish pending exec PUBLIC descendant");
+		if (descendant == 0) {
+			(void)sleep(PENDING_EXEC_ESCAPE_DELAY);
+			(void)write(1, PENDING_EXEC_ESCAPE_MARKER,
+				    sizeof(PENDING_EXEC_ESCAPE_MARKER) - 1);
+			return 94;
+		}
+		check(write(1, PENDING_EXEC_READY_MARKER,
+			    sizeof(PENDING_EXEC_READY_MARKER) - 1) ==
+			      (int)sizeof(PENDING_EXEC_READY_MARKER) - 1,
+		      "publish pending exec PUBLIC readiness");
+		return 0;
+	}
+	exec_manifest_worker_image("workflow_teardown_race_ucore",
+				   control_worker_image);
 	printf("workflow_teardown_race_ucore: combined teardown test\n");
 	check_factory_lifecycle_view(0);
+	run_controller_public_exec_rejection();
+	run_close_spawn_race();
+	run_pending_exec_race();
+	run_parallel_handoff_race();
 	teardown_main.factory_close =
 		run_primary_teardown(TEARDOWN_FACTORY_CLOSE, 1, 0);
 	teardown_main.retired[0] = teardown_main.factory_close.lifecycle.key;
@@ -1953,8 +2794,9 @@ int main(void)
 	      "natural-exit lifecycle receives final reclamation proof");
 	printf("workflow_teardown_race_ucore: lifecycle_abi_prefix=1 bad_param_no_write=1 factory_charged=1 self_only_stale=1\n");
 	printf("workflow_teardown_race_ucore: factory_close=1 final_snapshot=1 context_waiter=1 metadata_waiter=1 public_lineage=1 lifecycle_reclaimed=1\n");
-	printf("workflow_teardown_race_ucore: io_retire=1 debt_observed=1 cache_observed=1 dual_scope_progress=1\n");
+	printf("workflow_teardown_race_ucore: io_retire=1 activity_observed=1 cache_observed=1 dual_scope_progress=1\n");
 	printf("workflow_teardown_race_ucore: natural_exit=1 final_snapshot=1 context_waiter=1 metadata_waiter=1 lifecycle_reclaimed=1\n");
+	printf("workflow_teardown_race_ucore: spawn_descendants_drained=1 public_exec_escape_blocked=1 nested_multithread_handoff=1 root_control_reached=1\n");
 
 	for (int round = 0; round < LIFECYCLE_REUSE_MIN_ROUNDS; round++)
 		(void)run_lifecycle_reuse_round(teardown_main.retired);

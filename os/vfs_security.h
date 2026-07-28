@@ -33,6 +33,11 @@ struct vfs_proc_security_state {
 	struct workflow_lifecycle_key lifecycle;
 };
 
+enum vfs_exec_identity_policy {
+	VFS_EXEC_IDENTITY_PUBLIC = 0,
+	VFS_EXEC_IDENTITY_PRESERVE_AGENT,
+};
+
 /*
  * Exec prepares a complete credential replacement without publishing it.
  * The caller commits this state in the same interrupt-off section as the VM
@@ -41,6 +46,7 @@ struct vfs_proc_security_state {
 struct vfs_exec_transition {
 	struct vfs_proc_security_state source;
 	struct vfs_proc_security_state target;
+	enum vfs_exec_identity_policy identity_policy;
 	int prepared;
 	int drop_to_public;
 	int lifecycle_reserved;
@@ -85,6 +91,7 @@ void vfs_proc_terminal_clear(struct proc *);
 int vfs_scope_active(uint scope_id);
 int vfs_scope_retiring(uint scope_id);
 int vfs_scope_retained(uint scope_id);
+int vfs_scope_lifecycle(uint scope_id, struct workflow_lifecycle_key *);
 int vfs_scope_bind_controller(uint scope_id,
 			      struct workflow_lifecycle_key lifecycle,
 			      uint64 control_id);
@@ -96,6 +103,7 @@ int vfs_scope_close_trusted(uint scope_id,
 			    struct workflow_lifecycle_key *closed);
 uint vfs_scope_storage_guarantee(uint exempt_scope, int inode,
 				 uint guarantee);
+uint vfs_scope_metadata_inode_usage(void);
 void vfs_scope_reap_pending(void);
 int vfs_proc_spawn_scope(const struct proc *, struct proc *,
 			 enum vfs_spawn_scope_mode);
@@ -108,6 +116,8 @@ int vfs_proc_delegate_exec(const struct proc *, struct proc *, struct inode *,
 			   uint64);
 int vfs_proc_exec_prepare(struct proc *, const struct user_image *, int,
 			  struct vfs_exec_transition *);
+int vfs_proc_exec_validate_locked(struct proc *,
+				  const struct vfs_exec_transition *);
 int vfs_proc_exec_commit(struct proc *, struct vfs_exec_transition *);
 void vfs_proc_exec_abort(struct vfs_exec_transition *);
 

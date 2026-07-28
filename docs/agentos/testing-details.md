@@ -1,12 +1,14 @@
 # 测试内容详细说明
 
-本文档解释AgentOS-uCore 测试程序的内部步骤、覆盖范围和预期输出。测试入口和运行命令见 [verification.md](verification.md)。
+本文档解释AgentOS-uCore 测试程序的内部步骤、覆盖范围和预期输出。测试入口和运行命令见 [verification.md](verification.md)。预期 marker 是验收合同，不等于已经运行；发布是否通过只从 `evidence/releases/INDEX.md` 指向的 C→E release bundle 及其 `manifest.json`、canonical LF Guest 日志和强类型原始产物读取。没有远端 Runner 只令 `remote_ci.status=not-attached`、阻止 E4，不阻止干净 C 的本地完整验证形成 E3。
 
 ## 1. `agentfinal_ucore`
 
 `agentfinal_ucore` 是最终正确性测试，重点覆盖任务一、任务二、任务三，同时检查任务四文件索引和任务五事件自唤醒是否可用。
 
 ### 1.1 测试流程
+
+独立构建同时启用 `AGENT_CONTEXT_SYNC_TEST_PROFILE` 与 `WAIT_ATOMIC_TEST_PROFILE`。Context 部分先填满 128 条 FIFO，保存整个 managed mirror 与 oldest detail，再分别注入 append、rollback、clear 的预检失败；每次都在任何 snapshot 修复前逐字节比较 mirror，并核对 header、records、latest、detail、branch/hash/counter 不变，最后验证一次正常 append 淘汰 oldest 并恢复提交。wait 部分动态覆盖有限/无限与不同 deadline 的 keyed timer、线程槽 generation 重用、事件 reserve 后无 waiter 的原子发布，以及最后 sibling teardown 的重检/发布窗口，要求 `agentfinal_ucore: thread_wait_deadlines finite_infinite=1 distinct_deadlines=1 keyed_timer=1 loop_aggregate=1 slot_reuse=1` 与 `agentfinal_ucore: wait_publication_atomic=1 event_wake_none=1 event_no_sleep=1 sibling_wake_none=1 teardown_completed=1`。该 prelude 使用独立镜像和临时 timing file，与下述生产配置 18-case 分开；它不是第 19 个 case，也不得计入 18-case calibration。是否实际通过由 C 对应 bundle 的 profile 日志决定，不能由 marker 字符串推断。
 
 1. 父进程打印 `Agent-OS on uCore final verification`。
 2. 父进程调用 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)` 创建 orchestrator Agent 子进程。
@@ -19,47 +21,49 @@
    - `info.context_size == AGENT_CONTEXT_SIZE`。
 5. 子进程把 `info.context_base` 转成 `struct agent_context_header *`，直接读取 Context header。
 6. 子进程检查 header magic，并输出 Context 大小和容量。
-7. 子进程调用 `context_clear()`，保证后续 sequence 从干净状态开始。
-8. 子进程构造 64 个 echo 操作，使用一次 `agent_run()` 批量执行。
-9. 子进程检查：
+7. 子进程先建立三条旧分支记录，rollback 到第一条；snapshot/query 只能看到当前 active path，`context_detail()` 与物理 mirror 中的 archive 仍保留被放弃记录，新记录继续使用全局 sequence=4 并以独立 path parent 指回锚点。用户态 mirror helper 还要拒绝人为制造的环，随后由可信 snapshot 恢复镜像。
+8. 子进程调用 `context_clear()`，保证后续 sequence 从干净状态开始。
+9. 子进程构造 64 个 echo 操作，使用一次 `agent_run()` 批量执行。
+10. 子进程检查：
    - batch 返回值等于 64；
    - 第一条 result 的 sequence 为 1；
    - 最后一条 result 的 sequence 为 64；
    - 直接读取 latest result 的 sequence 为 64。
-10. 子进程调用 `context_snapshot()`，检查返回 64 条有序记录。
-11. 子进程检查第一条记录是 root，第二条记录指向第一条记录，并检查 span 连续。
-12. 子进程检查 header 中的当前 cause/span、provenance edge 计数和 latest record hash；单进程 Context Path 中每条记录的 `prev_hash` 必须指向上一条 Context 记录。
-13. 子进程检查第 8 条记录的 payload/result 短文本为 `ucore-final`。
-14. 子进程调用 `context_detail()`，检查完整 `agent_op`、完整 `agent_result` 和 `SYSTEM` flag。
-15. 子进程手动篡改用户态 Context 镜像中的第一条记录 sequence。
-16. 子进程再次调用 `context_snapshot()`。
-17. 子进程检查 snapshot 返回的第一条记录仍为原始 sequence，并检查用户镜像被刷新。
-18. 子进程向 `header.user_cache_offset` 写入 `cache-ok`，再次调用 `context_snapshot()` 后检查 cache 内容仍保留。
-19. 子进程以 cause=0、span=0 调用 `context_push()` 追加手动记录，检查 `MANUAL` flag 和 detail ring；可信 cause/span 由内核接入，用户非零自报值由安全测试拒绝。
-20. 子进程继续批量写入 128 条记录，使总记录达到 193 条。
-21. 子进程再次 snapshot，检查 FIFO 淘汰：
+11. 子进程调用 `context_snapshot()`，检查返回 64 条有序记录。
+12. 子进程检查第一条记录是 root，第二条记录指向第一条记录，并检查 span 连续。
+13. 子进程检查 header 中的当前 cause/span、provenance edge 计数和 latest record hash；单进程 Context Path 中每条记录的 `prev_hash` 必须指向上一条 Context 记录。
+14. 子进程检查第 8 条记录的 payload/result 短文本为 `ucore-final`。
+15. 子进程调用 `context_detail()`，检查完整 `agent_op`、完整 `agent_result` 和 `SYSTEM` flag。
+16. 子进程手动篡改用户态 Context 镜像中的第一条记录 sequence。
+17. 子进程再次调用 `context_snapshot()`。
+18. 子进程检查 snapshot 返回的第一条记录仍为原始 sequence，并检查用户镜像被刷新。
+19. 子进程向 `header.user_cache_offset` 写入结构化 query cache，再次调用 `context_snapshot()` 后检查 cache 内容仍保留。
+20. 子进程以 cause=0、span=0 调用 `context_push()` 追加手动记录，检查 `MANUAL` flag 和 detail ring；可信 cause/span 由内核接入，用户非零自报值由安全测试拒绝。
+21. 子进程继续批量写入 128 条记录，使总记录达到 193 条。
+22. 子进程再次 snapshot，检查 FIFO 淘汰：
    - count 为 128；
    - oldest 为 66；
    - latest 为 193；
    - dropped 为 65。
-22. 子进程调用 `agent_file_meta_init()` 初始化文件元数据。
-23. 子进程按示例项目、设定的模拟流程和比对处理环节查询文件。
-24. 子进程检查查询命中，且 `used_index == 1`。
-25. 子进程调用 `agent_file_prefetch_snapshot()`，检查本次文件查询产生了对象标签依赖预取提示。
-26. 子进程调用 `agent_file_prefetch_span_snapshot()`，检查同 scope/private-owner span 分区包含当前 Agent 提示，并带有 `SPAN_BUS`、source pid 和 target pid。
-27. 子进程使用只提供 `tool_name` 的 `agent_call()` 依次验证 `echo`、`query_file`、`pid_info`、`read_file_digest`、`dependency_update` 和 `dependency_query`。
-28. 子进程注册 message watch。
-29. 子进程用 `agent_wake()` 向自己投递事件。
-30. 子进程调用 `agent_wait()`，检查成功收到 `self wake`。
-31. 子进程调用 `agent_trace_snapshot()`，检查返回记录中同时包含 Context 记录、调度原因记录和 `agent_wait()` 事件消费记录，并检查记录按 tick 排列。
-32. 子进程调用 `agent_span_trace_snapshot()`，检查当前 span 的系统级短记录中包含 Context 和事件记录，并检查返回记录都属于当前 span。
-33. 子进程调用 `agent_timeline_snapshot()`，检查统一 timeline 同时包含 Context、调度、审计和预取提示来源，并检查 tick 顺序。
-34. 子进程调用 `agent_timeline_query()`，检查 source mask 只返回 audit 来源，start tick 只返回指定 tick 之后的记录，并检查 after-cursor 只返回上一条已读记录之后的记录。
-35. 子进程调用 `agent_timeline_wait()`，先验证等待未来 Context 记录会 timeout；再注册 TIMER watch 和 heartbeat，验证纯 Audit 写入不会增加 Context-only 等待的 timeline wake 计数；随后验证 AUDIT+MESSAGE 条件不会被 TIMER audit 唤醒；最后验证 AUDIT+TIMER 条件会被内核新记录唤醒，用同一 filter 查询到记录，并用 `agent_timeline_read()` 在一次 syscall 内等待和取回记录。
-36. 子进程调用 `agent_provenance_snapshot()`，检查 Context 因果边和 audit 因果边均可见。
-37. 子进程调用 `agent_ledger_snapshot()` 读取当前 scope 摘要。物理 sequence 可因其他 scope 写入而跳号，low/high/principal 滚动也会产生窗口缺口；测试只对无 gap 的相邻可见记录检查直接 hash 邻接，并要求 gap 数量能由 `dropped_records` 覆盖，链尾等于 scope-local `ledger_hash`。
-38. 子进程输出 `agentfinal_ucore: passed` 并退出。
-39. 父进程等待子进程退出，检查退出状态为 0，输出 `agentfinal_ucore: parent passed`。
+   - active path count 为 128，active oldest 为 66，证明已淘汰祖先不会钉住或泄漏到当前视图。
+23. 子进程调用 `agent_file_meta_init()` 初始化文件元数据。
+24. 子进程按示例项目、设定的模拟流程和比对处理环节查询文件。
+25. 子进程检查查询命中，且 `used_index == 1`。
+26. 子进程调用 `agent_file_prefetch_snapshot()`，检查本次文件查询产生了对象标签依赖预取提示。
+27. 子进程调用 `agent_file_prefetch_span_snapshot()`，检查同 scope/private-owner span 分区包含当前 Agent 提示，并带有 `SPAN_BUS`、source pid 和 target pid。
+28. 子进程使用只提供 `tool_name` 的 `agent_call()` 依次验证 `echo`、`query_file`、`pid_info`、`read_file_digest`、`dependency_update` 和 `dependency_query`。
+29. 子进程注册 message watch。
+30. 子进程用 `agent_wake()` 向自己投递事件。
+31. 子进程调用 `agent_wait()`，检查成功收到 `self wake`。
+32. 子进程调用 `agent_trace_snapshot()`，检查返回记录中同时包含 Context 记录、调度原因记录和 `agent_wait()` 事件消费记录，并检查记录按 tick 排列。
+33. 子进程调用 `agent_span_trace_snapshot()`，检查当前 span 的系统级短记录中包含 Context 和事件记录，并检查返回记录都属于当前 span。
+34. 子进程调用 `agent_timeline_snapshot()`，检查统一 timeline 同时包含 Context、调度、审计和预取提示来源，并检查 tick 顺序。
+35. 子进程调用 `agent_timeline_query()`，检查 source mask 只返回 audit 来源，start tick 只返回指定 tick 之后的记录，并检查 after-cursor 只返回上一条已读记录之后的记录。
+36. 子进程调用 `agent_timeline_wait()`，先验证等待未来 Context 记录会 timeout；再注册 TIMER watch 和 heartbeat，验证纯 Audit 写入不会增加 Context-only 等待的 timeline wake 计数；随后验证 AUDIT+MESSAGE 条件不会被 TIMER audit 唤醒；最后验证 AUDIT+TIMER 条件会被内核新记录唤醒，用同一 filter 查询到记录，并用 `agent_timeline_read()` 在一次 syscall 内等待和取回记录。
+37. 子进程调用 `agent_provenance_snapshot()`，检查 Context 因果边和 audit 因果边均可见。
+38. 子进程调用 `agent_ledger_snapshot()` 读取当前 scope 摘要。物理 sequence 可因其他 scope 写入而跳号，low/high/principal 滚动也会产生窗口缺口；测试只对无 gap 的相邻可见记录检查直接 hash 邻接，并要求 gap 数量能由 `dropped_records` 覆盖，链尾等于 scope-local `ledger_hash`。
+39. 子进程输出 `agentfinal_ucore: passed` 并退出。
+40. 父进程等待子进程退出，检查退出状态为 0，输出 `agentfinal_ucore: parent passed`。
 
 ### 1.2 输出阅读方式
 
@@ -74,6 +78,7 @@
 | Agent Context 映射 | 直接读取 header 和 latest result |
 | 批量工具调用 | 一次 `agent_run()` 执行 64 个 echo op |
 | Context Path 写入 | snapshot 返回 64 条记录 |
+| rollback active path | query/snapshot 只返回当前路径；detail/archive 保留旧分支；direct helper 拒绝环；sequence 不复用 |
 | 短文本历史 | payload/result 短摘要可查询 |
 | 完整详情 | `context_detail()` 返回完整 op/result 和 flags |
 | 因果链 | Context record 和 header 中 cause/span 连续 |
@@ -116,7 +121,7 @@
 12. 子进程改写同一真实文件内容，再次读取 digest，确认 hash/preview 更新且 digest cache 出现新的 miss。
 13. 子进程用 `agent_timeline_query()` 按 `source=CONTEXT` 和 `tool_id=READ_FILE_DIGEST` 查询，确认统一 timeline 中保留 size、bytes、hash 和 preview。
 14. 子进程再次调用 `agent_file_meta_init()`，确认自定义元数据来自双 bank 强制重新加载，没有被空表覆盖。
-15. 子进程重复执行同一个非强制扫描查询，确认 `plan_reason` 带有 `AGENT_FILE_QUERY_REASON_CACHE_HIT`。
+15. 子进程重复执行同一个索引查询，确认每次都实际遍历候选链，且 `plan_reason` 不带 `AGENT_FILE_QUERY_REASON_CACHE_HIT`。
 16. 子进程写入接近 128 条真实文件元数据，制造足够的数据量。
 17. 子进程分别运行扫描查询和索引查询，检查索引路径的 `scanned_records` 明显更少。
 18. 子进程检查查询计划：扫描路径必须返回 `AGENT_FILE_QUERY_PLAN_SCAN`，索引路径必须返回 `AGENT_FILE_QUERY_PLAN_STATUS_INDEX`，并带有 status 索引原因、索引桶和候选记录数。
@@ -125,13 +130,13 @@
 21. 子进程提交覆盖主对象和依赖对象的 `action_commit`，要求一次 syscall 发生 kernel-work 重调度、每个槽只更新一次、主对象与依赖对象摘要正确，并确认纯状态提交不改变 dependency generation。
 22. 子进程执行默认 align 查询并读取预取提示，要求提示由对象标签依赖产生、使用 label 索引计划、只指向当前 run、target fid 不重复、数量不超过 8，且该查询的 last-syscall 重调度计数大于 0。
 23. 子进程创建等待消息的 Recovery 目标和独立 churner；发送者在预取交接预算检查点让目标消费事件并退出，churner 随即创建 replacement 复用释放的进程槽。发送 syscall 恢复后才允许 replacement 检查状态，要求它没有收到旧目标的 hint 或 mailbox，证明交接提交按稳定端点重校验而非跨检查点保存 PCB 指针。
-24. 子进程清空某条记录的 status，确认属性更新生效，并确认旧 generation 查询缓存没有返回过期命中。
+24. 子进程清空某条记录的 status，重新执行查询并确认没有返回旧结果。
 25. 子进程删除绑定文件，确认关联元数据随文件删除被清理。
 26. 子进程调用 `action_commit` 指向不存在的 selector，确认返回 `AGENT_STATUS_NOT_FOUND`。
 
 ### 2.2 输出阅读方式
 
-本测试的输出重点是启动早期绑定、后台扫描、selector 一致性、inode 生命周期 guard、私有 `.agentmeta` 重新加载、内容摘要、查询缓存、scan/index 候选差异、显式依赖与兼容位图按需解析、字段驱动批量 action、有界预取和交接端点复用。阅读时关注 `partial_update_binding`、`preload_create_query`、`selector_consistency`、`stale_identity_guard`、`metadata_action_bounded=1 field_driven=1 batched=1`、`prefetch_hints=1 bounded=1`、`handoff_target_exit=1 endpoint_reuse=1`、`demo_inode`、`custom_inode`、`content_digest`、`digest_cache_invalidated`、`.agentmeta_reload`、`bulk_index`、`query_plan`、`dependency_update`、`delete_clears_metadata` 和最终通过标记。完整样例输出见 [test-record.md](test-record.md)。
+本测试的输出重点是启动早期绑定、后台扫描、selector 一致性、inode 生命周期 guard、私有 `.agentmeta` 重新加载、内容摘要、无内核结果 cache 的真实查询执行、scan/index 候选差异、显式依赖与兼容位图按需解析、字段驱动批量 action、有界预取和交接端点复用。阅读时关注 `partial_update_binding`、`preload_create_query`、`selector_consistency`、`stale_identity_guard`、`metadata_action_bounded=1 field_driven=1 batched=1`、`prefetch_hints=1 bounded=1`、`handoff_target_exit=1 endpoint_reuse=1`、`demo_inode`、`custom_inode`、`content_digest`、`digest_cache_invalidated`、`.agentmeta_reload`、`query_execution_isolated`、`bulk_index`、`query_plan`、`dependency_update`、`delete_clears_metadata` 和最终通过标记。完整样例输出见 [test-record.md](test-record.md)。
 
 ### 2.3 覆盖结论
 
@@ -144,7 +149,7 @@
 | 内容摘要缓存 | 两次读取同一真实文件输出 `digest_cache=1`，改写后输出 `digest_cache_invalidated=1` |
 | 内容证据进入 timeline | 输出 `digest_timeline=1`，表示可按工具 id 查询 digest Context 记录 |
 | scan/index 差异 | 接近 128 条记录下输出 `bulk_index scan=118 index=6` |
-| 查询缓存 | 重复非强制扫描查询输出 `query_cache=1`，字段更新后输出 `cache_invalidated=1` |
+| 查询执行与用户缓存边界 | 重复索引查询输出 `query_execution_isolated=1 kernel_cache_hit=0`，证明内核每次真实执行；`agentfinal_ucore` 再把完整有界 `agent_file_query_result` 写入用户 Context cache 并逐字段回读，字段更新后输出 `stale_query_result=0` |
 | 属性删除 | 清空 status 后查询行为符合预期 |
 | 文件删除同步 | 删除真实文件后关联元数据被清理 |
 | 未命中 selector | `action_commit` 对不存在目标返回 `AGENT_STATUS_NOT_FOUND` |
@@ -186,7 +191,7 @@
 
 ## 4. `agentloop_ucore`
 
-`agentloop_ucore` 是任务五事件运行机制测试，重点检查 FIFO 事件队列、单 stable source 配额、内核 TIMER 与外部事件共存、watch/unwatch、有限 timeout 睡眠、wait cancel、TIMER unwatch 和 heartbeat stop 是否都可运行。
+`agentloop_ucore` 是任务五事件运行机制测试，重点检查 FIFO 事件队列、单 stable source 配额、内核 TIMER 与外部事件共存、watch/unwatch、有限 timeout 睡眠、wait cancel，以及 intrinsic/coalesced heartbeat 的设置、动态调整、停止、边界和旧 ABI。
 
 ### 4.1 测试流程
 
@@ -195,18 +200,18 @@
 3. 子进程连续投递多个事件，调用 `agent_wait()` 检查 FIFO 顺序。
 4. 子进程检查投递和消费的事件包含 cause/span。
 5. 子进程从同一个 stable source 连续投递 4 条未消费 `MESSAGE`，第 5 条必须返回 `AGENT_STATUS_NO_SPACE`；消费首条后立即补投一条并要求成功，再按原顺序消费余下事件，确认 source=4 边界和逐槽归还。实现中的 source 计数跨 directed/attributed 共用，但该步骤没有混合两类。
-6. 另创建两个 directed source 各发送 4 条消息，把 directed IPC 填到 8，并确认继续 directed 投递被拒绝；第三个 source 触发 4 条 attributed `POLICY_DENIED`，使 external 合计达到 12。第四个 source 再触发 attributed 通知时，目标队列必须保持 12；随后 4 条 heartbeat TIMER 以显式 `KERNEL` origin 将队列填到 16。消费全部事件后，再分别投递 self directed 和第四个 source attributed 通知，确认两类都能重新接纳。
-7. 创建早期 full watcher，用 KERNEL heartbeat 把其队列填到 16；再创建 later watcher 和 attributed source，确认早期目标满队列不会终止扫描，later watcher 仍收到 `POLICY_DENIED` 广播。该用例不调用 `agent_file_meta_set()`，因此 metadata 提交不受通知背压的语义仍由实现审查支持。
+6. 另创建两个 directed source 各发送 4 条消息，把 directed IPC 填到 8，并确认继续 directed 投递被拒绝；第三个 source 触发 4 条 attributed `POLICY_DENIED`，使 external 合计达到 12。第四个 source 再触发 attributed 通知时，目标队列必须保持 12；随后不注册 TIMER watch，启动 heartbeat，确认一条 SYSTEM TIMER 可进入保留容量，并在跨越多个周期后仍只占一条。停止并消费全部事件后，再分别投递 self directed 和第四个 source attributed 通知，确认两类都能重新接纳。
+7. 创建早期 slow watcher，用两个 directed source 和一个 attributed source 将其 external admission 填到 12；只在填满后创建 later watcher，再触发 `POLICY_DENIED` 广播。早期目标拒绝该条 external 通知时扫描仍继续，later watcher 必须收到事件。该用例不调用 `agent_file_meta_set()`，因此 metadata 提交不受通知背压的语义仍由实现审查支持。
 8. 子进程删除 message watch，再投递相同事件，确认不会唤醒。
 9. 子进程重新注册 watch，调用有限 timeout wait，确认线程进入睡眠并由 timeout 唤醒，且 `wait_loop_count` 增量很小。
-10. 子进程注册 TIMER watch，启动 heartbeat，确认 heartbeat 事件可唤醒等待。
-11. 子进程删除 TIMER watch 后再次启动 heartbeat，确认不会消费 TIMER 事件。
-12. 子进程调用 `agent_heartbeat_stop()`，确认停止后不再产生 heartbeat 事件。
+10. 子进程确认没有 TIMER watch，调用独立 set syscall，仍必须由 heartbeat SYSTEM TIMER 唤醒；随后先设为极慢周期、再动态改为 1 tick，确认新频率及时生效。
+11. 子进程在不消费的情况下跨越多个周期，确认队列中只有一条 heartbeat；调用独立 stop 后先消费该旧记录，再确认有限 wait timeout，证明 stop 不再生成新事件且不会假装删除旧事件。
+12. 子进程验证 `AGENT_HEARTBEAT_MAX_TICKS` 可接受，`MAX+1`、`UINT64_MAX`、旧 ABI 负数和工具路径越界均返回 `AGENT_STATUS_BAD_PARAM` 且状态保持停止；再用 512 号旧 ABI 设置、消费和停止，最后两次调用 553 stop 验证幂等。
 13. 子进程以带 `WAIT_CANCEL` 的 orchestrator 身份创建 sentinel 等待者，作为其直接 controller 调用 `agent_wait_cancel()`，确认等待者返回 `AGENT_STATUS_CANCELLED`，事件类型为 `AGENT_EVENT_CANCELLED`，并带有 reason、cause/span 和 Context 记录。
 
 ### 4.2 输出阅读方式
 
-本测试输出围绕事件顺序、事件因果、single directed source、IPC 类、external 总量、内核 TIMER 保留容量、慢 watcher 隔离、watch 删除、有限 timeout 睡眠、TIMER watch、heartbeat stop 和 wait cancel 展开。2026-07-21 的 QEMU 运行已出现 `message_source_limit=4`、`ipc_class_limit=8`、`external_limit=12`、`system_event_reserved=4`、`external_reject_reclaim=1` 和 `broadcast_slow_watcher_isolated=1`。其中动态断言实际尝试第 13 条 external、把 4 条 KERNEL TIMER 同时填入保留容量，并在 drain 后重新接纳 directed 与 attributed；attributed=8、同一 stable source 混合跨类和 metadata 提交返回值仍没有独立断言。完整运行摘录见 [test-record.md](test-record.md)。
+本测试输出围绕事件顺序、事件因果、single directed source、IPC 类、external 总量、SYSTEM 保留容量、慢 watcher 隔离、watch 删除、有限 timeout 睡眠、严格 heartbeat 和 wait cancel 展开。当前 runner 要求精确标记 `agentloop_ucore: heartbeat_intrinsic=1 dynamic=1 coalesced=1 stop=1 bounds=1 legacy=1`。2026-07-21 的历史 QEMU 摘录曾记录 4 条 heartbeat 同时填满保留槽和 `timer_unwatch=1`；这属于已被新语义取代的旧实现证据，不能证明当前版本。当前测试改为验证第 13 条 external 被拒绝、一条 coalesced heartbeat 越过 external 边界、drain 后重新接纳，以及 external 饱和 watcher 的广播隔离；attributed=8、同一 stable source 混合跨类和 metadata 提交返回值仍没有独立断言。历史摘录及其适用范围见 [test-record.md](test-record.md)。
 
 ### 4.3 覆盖结论
 
@@ -216,15 +221,15 @@
 | 事件因果信息 | 投递和消费事件均携带 cause/span |
 | 单 stable source 上限 | 同一 stable source 的 4 条 directed event 可入队，第 5 条返回 `AGENT_STATUS_NO_SPACE`，旧事件不被覆盖；消费 1 条后立即补投成功，证明 source 槽逐次归还。混合跨类 source 计数由实现保证，尚无独立输出 |
 | directed 与 external 压力 | 两个 stable source 各 4 条消息触及 directed=8，继续 directed 投递被拒绝；第三个 source 的 4 条 attributed 通知让 external 达到 12，第四个 source 的第 13 条 external 不入队且队列保持 12 |
-| 内核 origin 保留与重接纳 | external=12 后，4 条显式 `KERNEL` origin TIMER 将总队列填到 16；全部消费后 self directed 与新的 attributed 通知均可再次入队。该重接纳证明相关 admission 可恢复，但没有单独把 attributed 计数从 8 的边界清空后再验证 |
+| 内核 origin 保留、coalesce 与重接纳 | external=12 后，一条 intrinsic SYSTEM heartbeat 越过 external admission，并在多个周期内保持单条 pending；全部消费后 self directed 与新的 attributed 通知均可再次入队。该重接纳证明相关 admission 可恢复，但没有单独把 attributed 计数从 8 的边界清空后再验证 |
 | attributed 类边界 | 当前只填入 4 条 attributed 通知，没有单独触及 `ATTRIBUTED_LIMIT=8`，属于明确的剩余测试缺口 |
-| 慢 watcher 隔离 | 较早分配的 watcher 先把队列填满；同一 `POLICY_DENIED` attributed 广播仍继续送达后续 watcher；metadata 提交路径未在该用例中动态覆盖 |
+| 慢 watcher 隔离 | 较早分配的 watcher 先耗尽 external=12 admission；同一 `POLICY_DENIED` attributed 广播在该目标被拒绝后仍继续送达后续 watcher；metadata 提交路径未在该用例中动态覆盖 |
 | watch 删除 | `agent_unwatch()` 后相同事件不再匹配 |
 | timeout 睡眠 | 有限 timeout wait 返回 `AGENT_STATUS_TIMEOUT`，并用 `wait_loop_count` 检查是否避免反复轮询 |
 | wait cancel | 受权 Agent 可取消目标 Agent 的等待；取消令牌与普通事件队列在实现上独立，但当前动态用例没有组合“队列已满 + cancel” |
-| heartbeat 唤醒 | 注册 TIMER watch 后可收到 heartbeat 事件 |
-| TIMER watch 删除 | 删除 TIMER watch 后 heartbeat 不再唤醒等待 |
-| heartbeat 停止 | stop 后不再继续产生 heartbeat 事件 |
+| heartbeat 内生唤醒与调频 | 没有 TIMER watch 时仍收到 SYSTEM heartbeat；极慢周期动态改为 1 tick 后在短 timeout 内唤醒 |
+| heartbeat coalesce 与停止 | 多周期不消费时只有一条 pending；stop 后先 drain 旧记录，再确认没有后续唤醒；stop 可重复调用 |
+| heartbeat 边界与兼容 | 最大值成功，`MAX+1`、`UINT64_MAX`、旧 ABI 负数和工具路径越界均拒绝且不改状态；旧 512 ABI 正值/0 仍可用 |
 
 ## 5. `agentsched_ucore`
 
@@ -384,7 +389,7 @@ benchmark 主进程通过 `agent_create_role(AGENT_ROLE_ORCHESTRATOR)` 创建 or
 | `batch_agent_run` vs `scalar_agent_run` | 批量 syscall 减少陷入内核次数 |
 | `direct_context` vs syscall 查询 | 用户态镜像适合高频读最新状态 |
 | `context_snapshot` vs `context_query` | 批量历史查询减少多次 syscall 和多次遍历 |
-| `file_index_query` vs `file_scan_query` | 文件元数据索引减少候选记录检查，`file_query_records` 输出候选记录数差异，`file_query_plan` 输出索引选择原因，`file_query_cache` 输出重复查询缓存命中 |
+| `file_index_query` vs `file_scan_query` | 文件元数据索引减少候选记录检查；`file_query_records` 输出候选记录数差异，`file_query_plan` 输出索引选择原因，`file_query_execution` 明确热索引仍为 `kernel_cache_hit=0` |
 | `file_digest_read` | 受权 Agent 可读取真实文件短预览和内容指纹，性能表按处理字节数呈现，`file_digest_cache` 呈现重复读取时的缓存命中 |
 | `file_prefetch_snapshot` | 文件查询之后可直接读取内核给出的后续 metadata 提示，避免下一轮重新从宽条件查询开始 |
 | `provenance_snapshot` | 页面可直接获取因果边，减少从 timeline 文本和短记录中二次推断触发关系 |
@@ -485,17 +490,17 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 
 ## 10. `agentsecurity_ucore`
 
-`agentsecurity_ucore` 是权限限制负向测试。除既有 role、route、wait cancel 和系统事件边界外，本次增加：用户态不能通过 `context_push` 自报 span/cause；跨 Agent provenance 使用可信 source control；低权限遥测和借来的 span 不能进入或淘汰 protected/high 审计效果分区。
+`agentsecurity_ucore` 是权限限制负向测试。除既有 role、route、wait cancel 和系统事件边界外，本次增加：用户态不能通过 `context_push` 自报 span/cause；跨 Agent provenance 使用可信 source control；低权限遥测和借来的 span 不能进入或淘汰 protected/high 审计效果分区；legacy mail 的按需资源分配、controller lineage 和跨 scope 拒绝也成为强制日志契约。
 
 ### 10.1 测试流程
 
 1. 内核加载的可信初始进程检查自身保持普通进程身份且业务 capability 为零；随后成功创建 orchestrator，证明内核私有 bootstrap 授权生效。
-2. 可信初始进程验证普通 mail 可用，并验证事件、IPC、metadata、scope audit、timeline 和两个 metadata bank 受能力与对象边界保护。
-3. 可信初始进程普通 `fork()` 后，子进程检查两种 Agent 创建接口和全部合法角色都返回 `AGENT_STATUS_DENIED`。
+2. 可信初始进程属于无 Agent controller 的系统 lifecycle；其 legacy mail read/send 均拒绝且不分配 sidecar。随后验证事件、IPC、metadata、scope audit、timeline 和两个 metadata bank 受能力与对象边界保护。
+3. 可信初始进程创建两个独立普通 EXEC account：跨账户裸 PID mail 必须拒绝且目标队列保持为空；其中一个普通子进程再次 `fork()`，同一 immutable account 内的 legacy mail 保持兼容。随后普通子进程检查两种 Agent 创建接口和全部合法角色都返回 `AGENT_STATUS_DENIED`。
 4. 该普通子进程再执行 `exec()`，重复验证创建授权仍为零，证明授权不会经普通派生链传播。
 5. 可信初始进程创建 controller A；A 创建并等待一个 sentinel 就绪，显式建立 A 到 sentinel 的消息路由后退出，使 sentinel 成为孤儿。随后创建 controller B，验证新 control id 即使将来发生 PID/PCB 槽复用，也不能取消该 sentinel 或继承 A 的旧消息路由；该用例本身不直接断言实际复用了同一 PID/PCB。
 6. 可信初始进程创建正常 orchestrator；orchestrator 通过 `agent_info()` 检查真实 role 和 capability mask，并通过成功委派各角色验证创建权。
-7. orchestrator 普通 `fork()` 后，子进程验证 Agent 身份、role、capability 和 Context 均已清零，且没有创建授权。
+7. bootstrap 同时保持两个独立 workflow root 为 ACTIVE；workflow B 的 PUBLIC 子进程向 workflow A 的 PUBLIC 端点发送 legacy mail 必须失败，A 的队列保持为空，且测试核对两个动态 scope 确实不同。正常 orchestrator 普通 `fork()` 后，子进程验证 Agent 身份、role、capability 和 Context 均已清零，且没有创建授权。两个同 account/lifecycle/controller lineage 的 PUBLIC 子进程完成 legacy mail 正向收发；普通同账户发送端另验证空读零分配、首次发送两页、无效用户地址不消费队首、16 槽满队列、排空保留、退出后新端点无残留、旧 PID 拒绝和新 PID 单调前进。该发送端最后带着未读消息执行 PUBLIC `exec`，新映像必须看到空队列并可通过新 endpoint 正常自收发。
 8. orchestrator 在未初始化元数据前执行带索引查询，预期返回 0 条命中且不会阻塞，随后初始化文件元数据。
 9. orchestrator 使用 legacy `agent_call()` 验证工具名、工具 ID、参数键和参数类型校验。
 10. orchestrator 分别把设定的模拟流程和另两个模拟流程的比对处理、报告生成环节置为 failed。
@@ -513,7 +518,7 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 
 ### 10.2 输出阅读方式
 
-本测试输出围绕可信根授权、`fork/exec` 不继承创建权、低权限角色不可继续委派、stable control id IPC 路由、grant/revoke、target consent、退出回收、`.agentmeta` 保护、真实 role/capability、初始化前索引查询安全、legacy 参数校验、sentinel 角色与系统事件伪造失败、recovery 定向动作和多 run 工件更新展开。2026-07-21 的 QEMU 运行已出现 `route_source_enforced=1`、`route_target_isolated=1`、`ipc_route_authorization=1`、`message_route_lifecycle=1`、`target_route_consent=1` 和 `route_slot_reclaimed=1`；旧 `message_send_preserved=1` 不再作为可信路由证据。完整运行摘录见 [test-record.md](test-record.md)。
+本测试输出围绕可信根授权、`fork/exec` 不继承创建权、低权限角色不可继续委派、stable control id IPC 路由、grant/revoke、target consent、退出回收、`.agentmeta` 保护、真实 role/capability、初始化前索引查询安全、legacy 参数校验、sentinel 角色与系统事件伪造失败、recovery 定向动作和多 run 工件更新展开。runner 逐行强制检查 `mail_lazy_empty`、`mail_queue_full`、`mail_read_failure_atomic`、`mail_endpoint_reuse_isolated`、`mail_exec_endpoint_rotated`、`mail_ordinary_domain_isolation`、`mail_active_workflow_isolation`、`mail_scoped_public` 和各跨域拒绝 marker；`physical-resource` 还要求真实账户观测得到 `legacy_mail_accounting=1 alloc_delta=2 exit_delta=0`。这些新 marker 本轮只完成定向编译和静态契约测试，尚未生成 QEMU 证据。2026-07-21 的既有 QEMU 运行已出现 `route_source_enforced=1`、`route_target_isolated=1`、`ipc_route_authorization=1`、`message_route_lifecycle=1`、`target_route_consent=1` 和 `route_slot_reclaimed=1`；旧 `message_send_preserved=1` 不再作为可信路由证据。完整运行摘录见 [test-record.md](test-record.md)。
 
 ### 10.3 覆盖结论
 
@@ -527,19 +532,20 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 | `MESSAGE_SEND` 不等于全局目标权限 | 未 grant 时 `agent_wake`、`send_message` 和 `llm_request` 均返回 `AGENT_STATUS_DENIED`；显式 grant 后成功，revoke 后再次拒绝 |
 | 路由管理有控制边界 | orchestrator 控制 source/target 的 grant/revoke 有专项断言；`target_route_consent=1` 验证 target 持有 `WATCH` 时可自主接受父 source 的 LLM_DONE，且 LLM-only route 不放行 MESSAGE |
 | 路由槽回收 | `route_slot_reclaimed=1` 让同一 target 顺序经历 `ROUTE_MAX+2` 个短命 source，每轮 route 投递均成功，证明 source 退出后槽可供后续来源使用 |
-| 慢订阅者广播隔离 | full watcher 在前、later watcher 在后；`broadcast_slow_watcher_isolated=1` 已确认后者收到同一 attributed 广播 |
+| 慢订阅者广播隔离 | external admission 已饱和的 watcher 在前、later watcher 在后；`broadcast_slow_watcher_isolated=1` 确认前者拒绝时后者仍收到同一 attributed 广播 |
 | Agent 不能用消息接口伪造系统事件 | sentinel 直接投递 `LLM_DONE` 返回 `AGENT_STATUS_DENIED` 且不入队；非法类型返回 `AGENT_STATUS_BAD_PARAM`；合法 `MESSAGE` 仍需先命中显式路由 |
 | Whole-scope 审计读取、过滤、调度配置和依赖注册权限 | 普通进程返回 `-1`，sentinel 缺相应能力时返回拒绝 |
 | 普通进程不能直接修改文件元数据 | `agent_file_meta_init()`、`agent_file_meta_set()` 返回 `-1` |
 | 普通进程不能直接访问 metadata 双 bank | 对 `.agentmeta` 和 `.agentmeta1` 的 `open`、`open(O_CREATE)`、`unlink` 均返回 `-1` |
-| 普通进程 mail 基础路径可用 | `mailwrite()` 写入，`mailread()` 读回同一内容 |
+| legacy PUBLIC mail 保持兼容但不跨域 | 同一普通 EXEC account 的后代正常收发；两个独立普通 account 互发拒绝；同 account/ACTIVE lifecycle/非零 OPEN controller lineage 的两个降权 PUBLIC 正常收发；Agent、bootstrap 缺失 controller、两个同时 ACTIVE workflow、不同 lifecycle/scope 均拒绝且不分配 sidecar |
+| legacy mail 资源按需、失败原子且可回收 | 空读保持 0 页；首次合法发送发布 2 页；无效用户地址不消费队首；16 槽满队列不扩容；旧 PID 拒绝且新端点队列为空；PUBLIC exec 清除旧队列并发布可用的新 generation；physical-resource 从 workflow account 实测分配增量 2 页、子进程退出后回到 fork 前用量 |
 | Agent 创建权有明确可信根 | 仅内核加载的初始进程获得 bootstrap 角色授权；普通 `fork` 子进程不继承 |
 | 普通派生链不可铸造 Agent | 普通子进程在 `exec` 前后调用两种创建接口均被拒绝 |
 | 角色委派不能向低权限 Agent 扩散 | orchestrator 可显式创建角色；sentinel、investigator 和 recovery 调用所有创建形式均被拒绝 |
 | Agent 进程槽复用不残留权限 | orchestrator 回收后派生普通子进程，身份、capability、Context 和创建权均为普通进程状态 |
 | bootstrap 授权按映像生命周期撤销 | 可信初始进程执行普通 `exec` 后，所有 Agent 创建请求均被拒绝 |
 | 初始化前索引查询安全 | 未调用 `agent_file_meta_init()` 前，索引查询返回 0 条命中且不阻塞 |
-| legacy 工具名和工具 ID 不一致会失败 | `agent_call()` 返回 `AGENT_STATUS_BAD_REQUEST` 和 `tool_mismatch` |
+| legacy 工具名和工具 ID 不一致会失败 | `agent_call()` 传输返回 0，`response.status` 为 `AGENT_STATUS_BAD_REQUEST`，结果文本为 `tool_mismatch` |
 | legacy 参数键和类型校验 | 错误参数返回 `AGENT_STATUS_BAD_PARAM`，syscall-only 工具不能走 batch |
 | 用户态 role 参数不可信 | sentinel 伪造 recovery 仍被拒绝 |
 | 文件状态拒绝路径无副作用 | sentinel 伪造 rerun 后 align 仍为 failed |
@@ -611,7 +617,7 @@ tick 数值随环境波动，阅读性能数据时应结合多轮 min/avg/max、
 
 该测试对应的磁盘契约将 PUBLIC principal 写入 superblock，并提升策略/owner 格式版本。挂载时从 qmap 和 dinode 分别重建 block/inode 用量；缺少该字段的旧镜像会因版本或布局不匹配被明确拒绝，而不是以空账本继续运行。
 
-该入口没有被 `make full-verify` 串联，完整验收时必须单独执行。
+profile v5 的 `make full-verify` 已串联该入口；也可用上述命令独立复现。是否实际通过仍以 C 对应 release bundle 中的该步原始日志为准。
 
 ## 15. 进程回收与配额复测
 
@@ -642,9 +648,9 @@ make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 bash scripts/run-agent-tests.sh
 ```
 
-该脚本包含 `agenttrust_ucore`、`agentvfs_ucore` 和 `usersafety_ucore`，但不单独运行 ENOSPC、进程回收或 workflow teardown race。`make full-verify` 当前先执行 `ci-check`，再串联 Host/Reader、双目标、16-case Agent、进程、syscall、file、thread、独立 teardown race 和 ENOSPC 专项。实际关系见 [verification.md](verification.md)。
+该脚本包含 `agenttrust_ucore`、`agentvfs_ucore`、`usersafety_ucore`、`agenttoolabi_ucore` 和 `blocking_semantics_ucore`，但不把 ENOSPC、进程回收或 workflow teardown race 计入普通 Agent case。每次全套或定向 `agentfinal_ucore` 前，脚本先以独立构建运行 Context-sync/WAIT_ATOMIC prelude；其临时 timing 与普通 18-case timing 分离。`make full-verify` 先要求 18-case 时长状态已经 calibrated；随后 profile v5 执行结构/`ci-check` 与 Host/Reader，运行该 prelude 和 18-case Agent 套件并用 canonical LF Guest 日志提取测量，再运行双目标 QEMU、proc/syscall/file/thread/physical、metadata/观测重启、VirtIO、独立 teardown race、ENOSPC 和 filesystem allocator fault 专项。实际关系见 [verification.md](verification.md)。
 
-Reader E2E 的历史阻塞已经修复。根因不是内核：旧 `plain_ucore_action_runner.py` 在构建阶段扫描 `panic` 子串，把 `build/riscv64/ch6b_panic` 当成 Guest panic。当前执行器明确区分 clean/build/guest，前两阶段只看退出码；QEMU guest 启动后才对去 ANSI 的完整日志行匹配 panic、trap、`check failed` 和 orchestrator failure。`test_plain_ucore_action_runner.py` 同时覆盖“构建文件名含 panic 仍通过”和“规范 Guest `[PANIC ...]` 必须失败”。提交 `75d0dfd` 的 clean `full-verify` 已通过 Reader E2E；后续 metadata 拆分后的最终 HEAD 仍需重新执行聚合验收。
+Reader E2E 的历史阻塞已经修复。根因不是内核：旧 `plain_ucore_action_runner.py` 在构建阶段扫描 `panic` 子串，把 `build/riscv64/ch6b_panic` 当成 Guest panic。当前执行器明确区分 clean/build/guest，clean 与 build 只看进程退出码；只有 QEMU guest 启动后才对去 ANSI 的完整日志行匹配 panic、trap、`check failed` 和 orchestrator failure。`test_plain_ucore_action_runner.py` 同时覆盖“构建文件名含 panic 仍通过”和“规范 Guest `[PANIC ...]` 必须失败”。本轮冻结前工作树已依次通过 `test_plain_ucore_action_runner.py`、`test_plain_ucore_reader.py` 和 `test_plain_ucore_reader_e2e.py` 三组本地测试。该结果只解除 Reader 定向验收阻塞，不代表当前工作树已经完成 clean-HEAD release 采集或远程 CI；提交 `75d0dfd` 的 clean `full-verify` 仍只是历史 checkpoint，后续发布结果必须由 C 对应 bundle 中的 Reader manifest 和原始日志重新绑定。
 
 不要在同一工作树中并行启动多个 QEMU 测试，因为 `nfs/fs-copy.img` 会被多个进程同时访问，可能造成镜像锁冲突。
 
@@ -705,7 +711,7 @@ agentscope_ucore: lifecycle_reclamation=1
 agentscope_ucore: parent passed
 ```
 
-338.4s、371.5s、128.1s、127.9s 和 126.1s 都是 generation-safe lifecycle 与 PUBLIC lineage 用例之前的历史记录。权威 lifecycle ledger 现在固定 8 槽并使用 `(id,generation)`；`vfs_scope_refs[NPROC]` 只保存清理引用。当前专项约 `93.7s`，已经实际取得上述 `public_lineage=1` 和 `parent passed`。
+338.4s、371.5s、128.1s、127.9s 和 126.1s 都是 generation-safe lifecycle 与 PUBLIC lineage 用例之前的历史记录。权威 lifecycle ledger 现在固定 8 槽并使用 `(id,generation)`；`vfs_scope_refs[NPROC]` 只保存清理引用。后续历史专项约 `93.7s`，曾实际取得上述 `public_lineage=1` 和 `parent passed`；任何后续代码的通过状态只从其 release bundle 读取。
 
 ## 19. syscall 内核工作预算复测
 
@@ -723,11 +729,11 @@ inode 阶段创建共享地址空间的 observer 线程。observer 反复从独�
 
 截断阶段先填充一个 64 KiB 文件，再在同一进程创建 observer 线程。主线程输出 TRUNC_BEGIN 后调用 `open(path, O_WRONLY | O_TRUNC)`，并用 last-syscall 重调度计数要求该 open 在内核态跨过调度边界；observer 连续两轮打开文件并读到 EOF，两轮之间主动让出，随后输出 TRUNC_PEER。脚本要求 `TRUNC_BEGIN < TRUNC_PEER < TRUNC_END`。计数提供 open 内部的因果证据，observer 独立证明原子 detach 后的 EOF 对其他线程可见；二者不依赖 open 返回后到共享标志写入前是否发生用户态 timer 抢占。
 
-三个阶段的每个标记都必须只出现一次。最外层父进程只在 fairness worker 被 `waitpid()` 完整回收后输出 `syscallfair_ucore: parent passed`；宿主 runner 随后要求 QEMU 在 5 秒内正常关机，日志不得包含 panic、非法地址或未知 syscall。这一部分验证退出完整性，不单独宣称证明退出清理内部的公平边界。两个目标都满足后输出 `[syscall-fairness] both targets passed`。统一 resource account、teardown 和 lazy stack 后的当前双目标专项已经通过，动态覆盖控制台、普通 inode I/O 和截断回收。源码检查覆盖 pipe、exec/fork 分页、VM snapshot 屏障和 Agent batch 安全点；它不等于穷尽任意 syscall 路径。目录 scanner 仍采用固定每轮上限，metadata raw I/O 由独立 COW/I/O budget 专项覆盖。
+三个阶段的每个标记都必须只出现一次。最外层父进程只在 fairness worker 被 `waitpid()` 完整回收后输出 `syscallfair_ucore: parent passed`；宿主 runner 随后要求 QEMU 在 5 秒内正常关机，日志不得包含 panic、非法地址或未知 syscall。这一部分验证退出完整性，不单独宣称证明退出清理内部的公平边界。两个目标都满足后输出 `[syscall-fairness] both targets passed`。统一 resource account、teardown 和 lazy stack 后的双目标专项有历史通过记录，覆盖控制台、普通 inode I/O 和截断回收；发布复跑由 C 对应 bundle 绑定。源码检查覆盖 pipe、exec/fork 分页、VM snapshot 屏障和 Agent batch 安全点；它不等于穷尽任意 syscall 路径。目录 scanner 仍采用固定每轮上限，metadata raw I/O 由独立 COW/I/O budget 专项覆盖。
 
 ## 20. 全局文件对象表资源配额复测
 
-入口为 `make file-resource-test` 或 `bash scripts/run-file-resource-tests.sh`。两个目标运行同一个行为契约，但实现不同：AgentOS 的唯一 file object 计入 generation-safe EXEC account，pipe 两端使用向量 reservation；baseline 保留旧 per-domain 计数。tiny 配置让 Guest 精确触发隐藏引用、ordinary 水位与 reserved 进展。当前重构后的双目标专项已经通过。
+入口为 `make file-resource-test` 或 `bash scripts/run-file-resource-tests.sh`。两个目标运行同一个行为契约，但实现不同：AgentOS 的唯一 file object 计入 generation-safe EXEC account，pipe 两端使用向量 reservation；baseline 保留旧 per-domain 计数。tiny 配置让 Guest 精确触发隐藏引用、ordinary 水位与 reserved 进展。重构后的双目标专项有历史通过记录；发布复跑由 C 对应 bundle 绑定。
 
 测试首先让线程阻塞在空 pipe 的 `read()`，随后关闭原读 FD。另一个同资源域进程仍有空闲 FD，但隐藏临时引用必须继续占用创建者域的 filepool 配额；达到域上限后的额外 `open()` 被拒绝。持有阻塞线程的进程退出后，协作撤销路径使引用降到零，随后完整容量可再次使用，分别输出 `blocking_pin_bounded=1` 和 `exit_reuse=1`。
 
@@ -781,20 +787,20 @@ threadresource_ucore: parent passed
 
 ## 22. `iobudget_ucore`
 
-`iobudget_ucore` 是块设备 I/O 与 buffer cache 分域机制的回归，随 `scripts/run-agent-tests.sh` 运行。它不通过固定 PID、文件名白名单或 sleep 时长推断公平性，而是用 syscall 544 读取 `io_policy_info()` ABI v3 的稳定 owner、class、owner/device lease/debt、物理完成和 cache sponsor 计数，再用 Guest pipe 建立 PUBLIC 压力进程与独立 workflow 的先后关系。测试还构造唯一 runnable 线程在内核 pipe 条件路径反复 `yield()` 的场景，要求 scheduler 的 idle kerneltrap 窗口仍能交付 timer/device 中断；另让持有已 unlink 文件的 PUBLIC 子进程触发 page fault，验证 terminal teardown 的清理 I/O 仍归因并结清 debt。用户 wrapper 自动传入当前 `sizeof(struct io_policy_info)`；测试同时调用较小旧结构前缀，要求 `version/struct_size` 可读且尾部哨兵不被覆盖。内核的 sized-copy 规则由 `(addr, user_size)` 分发、8 字节最小头和 `min(user_size, current_size)` copyout 实现。
+`iobudget_ucore` 是块设备 I/O 与 buffer cache 分域机制的回归，随 `scripts/run-agent-tests.sh` 运行。它不通过固定 PID、文件名白名单或固定等待时长推断公平性，而是用 syscall 544 读取 `io_policy_info()` ABI v4 的持久 owner、class、owner/device lease/debt、物理完成和 cache 分区计数，再用 Guest pipe 建立原始 workflow lineage 压力进程与独立 workflow 的先后关系。测试还构造唯一 runnable 线程在内核 pipe 条件路径反复 `yield()` 的场景，要求 scheduler 的 idle kerneltrap 窗口仍能交付 timer/device 中断；另让持有已 unlink 文件的 lineage 子进程触发 page fault，验证 terminal teardown 的清理 I/O 仍归因并结清 debt。用户 wrapper 自动传入当前 `sizeof(struct io_policy_info)`；测试同时调用较小旧结构前缀，要求 `version/struct_size` 可读且尾部哨兵不被覆盖。内核的 sized-copy 规则由 `(addr, user_size)` 分发、8 字节最小头和 `min(user_size, current_size)` copyout 实现。
 
 测试流程：
 
 1. 在创建压力进程前先检查完整 ABI 和较短前缀 sized-copy，覆盖 `version`、内核 `struct_size`、最小 8 字节头和调用者尾部不被越界写。
 2. 创建一个线程，使其阻塞在 I/O admission 后请求进程退出；等待线程展开，再比较 lease 计数，确认未完成 request 的 owner/shared/device lease 已退款。
 3. 用一对 pipe 让子进程阻塞在内核读条件路径，父进程创建超过 workflow NORMAL burst 的文件并等待 I/O refill。该场景只有反复在内核态 `yield()` 的 waiter 可运行；操作必须完成并回收 waiter，证明 scheduler 每轮短中断窗口能交付 timer/device interrupt。
-4. PUBLIC 子进程创建并写入文件、保持已 unlink 文件描述符后报告 I/O 状态，再触发用户 page fault。父进程确认退出码为 `-2`，随后用同一稳定 PUBLIC owner 读取状态：清理物理写增长、`unreserved_transfers` 不变，且 `leased`、owner debt、device debt 均为 0。
-5. bootstrap 创建 Orchestrator workflow，并只委派探针所需 pipe 端点。workflow 创建、预热并保持一个私有热块，读取 `io_policy_info()` 确认带 workflow scope 标志的 owner。
-6. 独立 PUBLIC 子进程创建循环读写文件和超过 `IO_CACHE_PUBLIC_CAP` 的冷工作集。它必须观察到 `throttles`、`waits` 和 `cache_evictions` 都增长，证明压力实际到达速率与 cache 边界。
-7. PUBLIC 探针确认 owner 为稳定 PUBLIC、class 为 `NORMAL`，并要求 `tokens + leased <= class_burst`、`shared_tokens + shared_leased <= IO_POLICY_SHARED_BURST` 且 `device_tokens + device_leased <= device_burst`。
-8. PUBLIC 压力存活期间，父进程命令 workflow 读取此前预热的块。前后 `physical_reads` 不增长而 `cache_hits` 增长，且 `0 < cache_resident <= cache_cap`，说明 PUBLIC 冷工作集没有挤掉 workflow 的稳态 cache 保留。
-9. 同一 Orchestrator 再完成真实文件写入，要求 `physical_writes` 增长且 `io_class == CONTROL`，证明 PUBLIC 压力下 workflow 控制预算仍有进展。
-10. 停止 PUBLIC 压力并等待两个子进程完整退出。PUBLIC 的 `unreserved_transfers` 不得增长，证明用户物理传输没有丢失 syscall/background 归因。
+4. lineage 子进程创建并写入文件、保持已 unlink 文件描述符后报告 I/O 状态，再触发用户 page fault。父进程确认退出码为 `-2`，随后由同一 lineage 的观察子进程读取状态：owner 与 `NORMAL` class 不变、清理物理写增长、`unreserved_transfers` 不变，且 lease、owner debt、device debt 均为 0。
+5. 测试主体创建独立 Orchestrator workflow，并只委派探针所需 pipe 端点。workflow 创建、预热并保持一个私有热块，读取 `io_policy_info()` 确认它取得不同于原 lineage 的持久 scope owner，并保存初始 resident/floor/cap。
+6. 原 lineage 的独立子进程创建循环读写文件和同时越过 workflow NORMAL 初始信用包络及 `IO_CACHE_WORKFLOW_CAP` 的冷工作集。它校验物理传输与 rate decision 的单调、覆盖和无溢出关系，要求 refill 或 throttle 前进并观察到 cache eviction，证明压力实际到达速率和自身 cache cap。
+7. 压力进程确认 owner 为不可变的原 lineage owner、class 为 `NORMAL`、profile 为 workflow NORMAL；owner/shared/device 的 token 与 lease 分别受 burst 约束，压力阶段结束时 lease 和 debt 全部结清且 completion sequence 前进。
+8. 外部压力存活期间，父进程命令 workflow 探测此前预热的块。workflow 先在 probe read 前快照压力后的 owner 驻留量，再读取并校验内容，要求读取前仍保留 `min(initial_resident, cache_floor)` 且不超过 `cache_cap`；这样探针重新装入块也不能修饰被测状态。`physical_reads` 和 `cache_hits` 是 owner 聚合计数，可能包含异步 metadata 校验，因此不再被误作单次读取凭据。
+9. 同一 Orchestrator 再成功完成真实文件写入，并要求 owner 聚合 `physical_writes` 增长且 `io_class == CONTROL`，证明 lineage 压力下 workflow 控制路径仍有进展。syscall 成功是操作完成依据；聚合计数只用于确认该 owner 确实产生物理写，不充当单次操作 receipt。
+10. 停止 lineage 压力并等待两个子进程完整退出。原 lineage 的 `unreserved_transfers` 不得增长，证明用户物理传输没有丢失 syscall/background 归因。
 
 通过标记：
 
@@ -802,7 +808,7 @@ threadresource_ucore: parent passed
 iobudget_ucore: thread_exit_lease_cleanup=1
 iobudget_ucore: scheduler_interrupt_progress=1
 iobudget_ucore: fault_exit_cleanup=1
-iobudget_ucore: public_budget_shared=1
+iobudget_ucore: lineage_rate_accounting=1 immutable_owner=1
 iobudget_ucore: nested_io_attribution=1
 iobudget_ucore: cache_scope_isolation=1
 iobudget_ucore: workflow_bounded_progress=1
@@ -810,15 +816,43 @@ iobudget_ucore: control_reserve_progress=1
 iobudget_ucore: parent passed
 ```
 
-最终 teardown 修复后的独立 QEMU 中八个具名机制 marker 与 `parent passed` 全部出现，`elapsed=2.4s`；ABI sized-copy 是第九类实质断言，但没有单独 marker。之后 pipe 安全主体委派的历史完整 Agent 脚本以约 `359.4s` 完成 16/16，确认本项继续通过。
+ABI sized-copy 是没有单独 marker 的实质断言。上面的 marker 只能说明本次 Guest 运行完成；最终交付状态必须由与候选提交绑定的原始日志和证据包判定，历史耗时或旧套件结果不能替代当前完整验收。
 
 PUBLIC 32/16、每 active workflow 24/12 + 48/24 + 8/4、每 retiring workflow `BACKGROUND` 8/4、SYSTEM 96/48 + 16/8、shared 32/16 的配置总和由编译期断言保守按 4 active + 8 retiring 放入 560/280 静态 envelope。运行时设备根对普通流量执行 token/lease/debt 限速；SYSTEM owner、`CONTROL` 和 `SYSTEM` class 在根信用耗尽时仍可凭 owner/class 保留预算带 device debt 前进，所以根 bucket 不是保护流量的硬总上限。shared fast path 在没有 admission waiter 时可直接借用，只有排队授权再按 owner/class cursor 轮转；当前测试没有断言 `shared_grants` 或排队轮转。
 
 cache 的 SYSTEM/PUBLIC/active workflow floor/cap 为 40/96、24/48、36/64，当前退役清理 job 临时使用 3/8；cap 是稳态驻留边界，transient buffer 可暂时越界并在最后释放时失效。同块用 exclusive holder 串行化；持有 buffer 时 I/O/CPU checkpoint 均不睡眠或 yield，复合文件系统原语使用 FS atomic depth，只有释放全部 buffer 后才能在 quiescent checkpoint 偿债。这些 holder/atomic 条件由源码不变量和相关回归共同覆盖，`iobudget_ucore` 不逐项输出 marker。
 
-动态 I/O 压力仍只覆盖一个 PUBLIC owner 和一个 workflow Orchestrator `CONTROL` owner。Recovery、SYSTEM/workflow `BACKGROUND`、多 workflow 同时压力、retiring 3/8、跨 owner LRU/transient、主动 device-debt 注入、启动 bank 损坏、VirtIO 错误/短 I/O/power-loss 仍缺独立用例，不能从该场景外推。统一 STORAGE account 后的当前 `make fs-enospc-test` 已覆盖双目标 generic/domain/reserve/persistent/orphan/reclaim/verify 全流程，但仍没有在 grouped qmap claim 中点注入掉电。
+`iobudget_ucore` 自身的动态压力仍只覆盖一个原始 workflow lineage 和一个独立 Orchestrator `CONTROL` owner；冷工作集能证明压力 owner 到达自身 cap/eviction，但不保证本次运行一定选择 workflow block 作为跨 owner donor，因此它验证的是公开的 owner resident floor，而不是某个具体热块的逐块保留 receipt。Recovery、SYSTEM/workflow `BACKGROUND`、多 workflow 同时压力、retiring 3/8、跨 owner LRU/transient 和主动 device-debt 注入仍不能从该场景外推。独立 `virtio-disk` runner 补充丢中断、延迟完成、描述符压力、设备状态错误、flush 禁用、timeout reset 和 stuck reset；`metadata-recovery` 的发布契约要求 primary/mirror 各八个 COW phase，并以 45 次 Guest 启动复测同盘重启、双目标 `BUSY/EIO/INTERRUPTED` 同启动重探、单次暂态 header-flush EIO，以及超过 background burst 的 32-record bank 在三类 terminal peer 下的 cursor/plan 恢复。Host mutation、构建和接线只构成 E1；45 次动态结果是否存在只能由候选提交对应 bundle 的原始产物判定。它们仍不等于永久设备故障或整机物理断电，且未覆盖启动时双 bank 同时损坏或 grouped qmap claim 中点掉电。
 
-## 23. Workflow 强制撤销复测
+## 23. 物理页、持久状态与 VirtIO 故障复测
+
+五组独立入口由 profile v5 串联，也可单独执行：
+
+```bash
+make physical-resource-test TOOLPREFIX=riscv64-linux-gnu-
+make metadata-recovery-test TOOLPREFIX=riscv64-linux-gnu-
+make observe-recovery-test TOOLPREFIX=riscv64-linux-gnu-
+make virtio-disk-test TOOLPREFIX=riscv64-linux-gnu-
+make fs-allocator-fault-test TOOLPREFIX=riscv64-linux-gnu-
+```
+
+`physical-resource` 同时检查共享 policy 的非法配置和测试钩子隔离，并在真实 Guest 中验证预留承诺生命周期、普通/保留域公平、退款、域隔离、系统保留及 teardown 归还。legacy mail 子用例在 fresh workflow account 内先取得 fork 后基线，再让 PUBLIC 子进程自投递一条消息，要求账户物理页用量精确增加 2；保持 sidecar 存活完成观测后退出子进程，账户用量必须精确回到 fork 前值。编译期负向门只约束配置，不能替代 `legacy_mail_accounting=1 alloc_delta=2 exit_delta=0`、`physicalresource_ucore: parent passed` 等动态 marker。
+
+`metadata-recovery` 现计划执行 45 次 Guest 启动。primary 与 mirror 两段各覆盖八个 COW phase：同一次 crash boot 先动态确认 baseline 已完成双 bank 复制，再通过 test-profile-only syscall 显式取得下一代 COW 事务的 scope、generation 和单调唯一 arm token，随后发起第二次更新；不再用全局提交次数猜测目标事务。独立日志验证器严格要求 quiet baseline、`target_armed`、`target_bound`、`target_fire` 和 phase marker 唯一且有序，三段目标身份一致、job 不变、目标代恰为 baseline 加一，并核对 bank/phase。认证 supervisor 只在完整 phase marker 后向稳定 QEMU leader 发送首次且唯一的 `SIGKILL`，并要求跨 session 后代全部回收。恢复 Guest 启动前，host 先直接解析磁盘镜像；格式参数来自 `os/agent_metadata_disk.h` 的 RISC-V 编译 probe 与版本化 JSON 契约，不在 runner 复制结构偏移。primary 的 payload 发布前不得出现完整新值，header 写入后允许旧值或新值；mirror 中断必须保留已验证的新 primary；任意阶段均要求至少一份完整有效 bank、禁止同 generation 异 hash。正常恢复后两 bank 必须完全一致且旧 lifecycle 记录已清理。
+
+启动读取 profile 覆盖 `BUSY/EIO/INTERRUPTED`，分别对全部 bank 和磁盘上较新的 bank 注入三次故障。首次 boot fault 只建立 pending，随后每个真实失败恰好对应一个连续 deferred attempt；`retries=N`、逐 bank remaining 倒计数、退避 deadline 和拒绝/恢复/创建/查询顺序均由完整日志行验证。另生成含 32 条记录、超过 16 个块 background burst 的真实 bank：Guest 先在同一 syscall 完成前台 live reload，再由 host 突然中止；host 分别把 peer 改为 `ABSENT`、`UNCOMMITTED`、`CORRUPT`，剩余大 bank 在 SYSTEM 预算下必须输出严格递增的读/prepare progress，最终同启动恢复且双副本一致。该组同时防止 terminal peer 反复驱逐 cursor、候选确认被跳过、prepare plan 重拷贝和 progress 被错误计入退避失败。bank selection 和 header-flush 用例继续验证较新 authority 不回滚，以及单次暂态 header-flush EIO 的显式不确定结果和副本修复。构建路径含 `panic` 不是 Guest 故障，只有完整 Guest panic 行才失败；production 对象不得引用 profile owner 或包含 marker。该用例不覆盖永久设备故障；power-cut profile 是突然中止 VM 的故障模型，`SIGKILL` 不清空宿主页缓存，因此仍不得表述为整机物理断电试验。Host mutation、生产/profile 交叉编译和 runner 接线属于 E1；45 次 Guest 是否完成只能由 C 对应 bundle 判定。
+
+`observe-recovery` 先在第一启动中分配 audit/span/event/control/agent 五类身份和一个空闲 lifecycle 槽 generation；内核在分配后的第一条 marker 处输出数值，认证 runner 立即 `SIGKILL`，不会等待 syscall copyout、后续 audit 或 checkpoint。第二启动复用同一镜像并输出 successor，Host 要求五类数值全部严格增大、lifecycle 槽相同且 generation 严格增大。随后再以同一镜像完成三阶段 checkpoint/Recovery/reap 验证，覆盖 audit/span/timeline/provenance 的可解析性与隔离。receipt 子用例先证明 `PENDING` 不是证据和伪 id 为 `STALE`，再由 bounded `WAIT` 取得 exact active record 的 `DURABLE`；负例在持久前写入超过 checkpoint retention 的同 scope 记录，目标复制后原 entry 缺失必须为 `FAILED`。live receipt 已淘汰而 `target == 0` 时，测试合同还要求精确 entry 扫描前与 active generation 二次确认后都通过 replication fence；primary 已发布但 mirror 尚未 `COMMIT` 的 generation 不得返回 `DURABLE`。普通进程、Recovery 与旧 lifecycle 也分别被拒绝。生产对象的 size/nm 检查确保这些注入点不泄漏。
+
+checkpoint v7 不再保存“最新连续后缀”。每个非空 scope 固定选择最新 tail 4 条，再从更早的可见窗口选择最多 4 个 causal diversity anchor；候选按 identity class、kind、stable principal 与可信 span 多样性评分，同分取较新的 sequence，最终 8 条按 sequence 重排。磁盘 entry sidecar 显式携带 `identity_class`、`link_flags`、`principal`、`span_owner` 和 `receipt_id`；`PREV_RETAINED` 与 `LATEST_TAIL` 分别表达直接保留前驱和固定 tail，不能用相邻数组位置臆造连续链。scope 级 `admission_drops` 记录取号/建链前的准入拒绝，成功入链但未被 retention 选中的 `hashed_omitted` 由计数关系推导；允许全部尝试都被拒绝的合法 drop-only scope。恢复必须先验证完整 v7 image，包括零保留字节、scope flags、sidecar 组合、全局 sequence/receipt 唯一性、lease 高水位、gap 与 `ledger_hash` 链尾，再在关中断窗口预检空槽并原子发布；插入失败要清除本轮槽位、索引和计数，live scope 已有新证据时不得由 reload 覆盖。
+
+容量 mutation 使用 low 64 槽模型验证每个 active stable principal 的 8 条保证份额、空闲容量下到 16 条的借用突发，以及新主体到达时只回收已离开主体或其他主体高于 8 条的溢出。causal victim 的 scratch 必须按完整 burst 16 定长；构造重复 causal bucket 只落在第 9 到 16 条的变异，仍须识别冗余并保留真正唯一的 span/kind anchor。四槽镜像仍建模为三个普通槽和一个 Recovery successor 槽：冷启动四槽全满时普通 admission 必须关闭，只有成功 bootstrap 绑定的 Recovery 能替换带 successor 授权且已经 sealed 的保留槽；active、closing、retiring、普通未授权证据和 `REAP_AUTHORIZED` 中间态均不能被替换。REAP 先复制授权标志，随后由 SYSTEM 擦除；授权/擦除控制写通过通用 durable `URGENT` 标志调用 store provider 的 `expedite`，失败后的 retry 和 provider 安装继续走同一 notify 路径。普通 receipt 使用 flags=0，保留既有 serial fence 和写回合并窗口，不能为了加速 REAP 把所有观测写都升级成同步紧急提交。active replication mutation 另要求覆写 target 在 `INVALIDATE` 前撤销 fence、boot repair 不恢复 fence、repair/fail-closed 清零，并且只有验证后的 mirror `COMMIT` 能发布新 generation。上述 layout、Host parser 和 mutation 合同属于 focused E1，不替代 checkpoint v7 的 QEMU 多启动 E2。`virtio-disk` 仍逐项注入丢中断、延迟进展、描述符压力、设备状态错误、flush 禁用、超时 reset 和 reset 卡死，并要求各 profile marker 与最终 `parent passed`。
+
+本轮 v7 之前工作树曾先通过 catalog capacity 14/14、metadata boot reprobe 47/47 和 catalog rollback fence 15/15 三组 Host 合同；随后本地 `observe-recovery` v51 完成 `boot0-cut`、`boot1`、`boot2`、`boot3` 四阶段及三次同镜像重启。每阶段的 catalog 协调均出现 `workflow_create_status=2 attempts=1` 后紧跟 `workflow_create_status=0 attempts=1`，即 PENDING 经核验转为 OK；boot3 还输出 `timeline_wait_epoch_recheck=1 injection=2 retries=1 bounded_timeout=1`、`timeline_wait_threads=1 filters=2 deadlines=2 targeted=1 timeout=1 cleanup=1`、`boot3_erased=1 generation_isolated=1 stable_identity=1` 和 `parent passed`，runner 最终输出 `[observe-recovery] power-cut lease and three-boot durable evidence lifecycle passed`。这只是 v51 的定向本地 QEMU 历史回归，不能证明 v7 已完成多启动 E2，更不能冒充 clean-HEAD release bundle、远程 CI 或完整 `full-verify`。
+
+这些多启动 runner 通过 `EVIDENCE_GUEST_LOG_FILE` 逐次追加 Guest 输出；控制台可以转发原始字节，但落盘 `.guest.log` 会把 CRLF 和孤立 CR 统一为 LF，作为 exact-line、SHA256、CSV 行号和 manifest 共同引用的 canonical transcript。full-verify 和 GitLab wrapper 都保存带 `runner-stdout`、`runner-guest-logs` 分段的组合日志。仅有 runner 汇总行而缺少非空 canonical Guest 日志时必须失败。
+
+## 24. Workflow 强制撤销复测
 
 最终专项复测命令：
 
@@ -846,11 +880,11 @@ agentscope_ucore: lifecycle_reclamation=1
 agentscope_ucore: parent passed
 ```
 
-验证时间线必须区分：371.5s、127.9s 和 126.1s 是 generation-safe lifecycle、PUBLIC 谱系、统一 teardown 和资源控制器之前的历史结果。后续 `agentscope_ucore` 专项约 `93.7s` 并取得 `public_lineage=1`；`75d0dfd` checkpoint 又完成 clean 聚合验收。最终拆分 `14a9450` 只完成具名定向复测，仍待新的 clean `full-verify`。close 与 exec/spawn 精确竞态和多线程 controller 仍是独立缺口。
+验证时间线必须区分：371.5s、127.9s 和 126.1s 是 generation-safe lifecycle、PUBLIC 谱系、统一 teardown 和资源控制器之前的历史结果。后续 `agentscope_ucore` 专项约 `93.7s` 并取得 `public_lineage=1`；`75d0dfd` checkpoint 又完成旧 profile 的 clean 聚合验收，`14a9450` 完成具名定向复测。后续代码的聚合状态只由 release bundle 绑定。close 与 exec/spawn 精确竞态和多线程 controller 仍是独立缺口。
 
-## 24. `workflow_teardown_race_ucore`
+## 25. `workflow_teardown_race_ucore`
 
-这是独立的组合竞态专项，不属于 `scripts/run-agent-tests.sh` 的 16 case。默认入口至少连续运行三轮：
+这是独立的组合竞态专项，不属于 `scripts/run-agent-tests.sh` 的 18 case。默认入口至少连续运行三轮：
 
 ```bash
 make workflow-teardown-race-test TOOLPREFIX=riscv64-linux-gnu-
@@ -868,7 +902,7 @@ make workflow-teardown-race-test TOOLPREFIX=riscv64-linux-gnu-
 
 profile validator 要求有序出现 ABI、两类退出、I/O、阻塞引用容量、generation 重用、fresh account 和 `parent passed` marker，并交叉核对 runner 注入的 domain/global file capacity。提交 `75d0dfd` 的 clean `full-verify` 已连续三轮通过；metadata 目录拆分提交 `14a9450` 后又完成三轮定向复测。该用例仍没有精确注入 close 与 spawn/pending exec 的发布瞬间或多线程 controller。
 
-## 25. 内核增长与模块边界预算
+## 26. 内核增长与模块边界预算
 
 静态门入口：
 
@@ -884,11 +918,13 @@ make ci-check
 - 9 页 Context detail sidecar 与完整 21 页 Agent 状态的单实例、全局、ordinary/reserved 池和单 account 容量；
 - 线程调用图栈深、64 KiB boot stack 的链接跨度与启动调用图、32 MiB 虚拟栈容量和 8 MiB 受信/保留物理栈池；
 - `ci/kernel-budgets.json` 版本化登记的 owner/bridge 集合的逐模块 LOC、导出符号和依赖方向，以及 core 不得重新定义已迁移权威状态；
-- metadata transaction/file-state/catalog/query/scan/directory/objects/store、IPC 和 contract headers 的 `metadata_control_plane` 聚合 source/text/BSS 预算；source 仅允许固定接口开销，loaded text/BSS no-growth；
+- metadata transaction/file-state/catalog/query/scan/directory/objects/actions/prefetch/store（含 format/I/O）、IPC 和 contract headers 的 `metadata_control_plane` 聚合 source/text/BSS 预算；source 仅允许固定接口开销，loaded text/BSS no-growth；
 - 受控符号 integration graph 的 SCC 硬上限。该图只追踪受控 Agent 符号，不是完整 uCore 调用图。
 
-预算采用 downward ratchet：体积下降后应收紧 baseline/max，不能保留足以让旧大数组或 monolith 回归的宽松上限。当前静态 probe 为 `sizeof(struct proc)=28808`；JSON 中 `28776` B 是冻结审查 baseline，`30215` B 是 max，baseline 不因当前 actual 略高而上调。每个活跃 Agent 以一次 `RESOURCE_AGENT_STATE_PAGE` 请求原子计费 21 页：9 页 detail/attribution sidecar、6 页用户 mirror、6 页可信 shadow，共 84 KiB。idle 普通进程不分配这些页；它们都从通用 `kalloc` 取得，不是全局 OOM 下的硬保留。预算 checker 的 fail-closed 自测集合以当前源码为准，具体指标见 [test-record.md](test-record.md)。
+本轮冻结前工作树的本地 `ci-check` 已完整执行到命令退出并通过，日志包含 `[kernel-budget] kernel checks passed`、`[kernel-budget] agent-modules checks passed` 和后续 user stack contract/call-path budget 检查。该入口不运行完整 Guest 套件，也尚未绑定干净 C 的 release manifest，因此只能记作本地阶段性静态/构建门通过，不能据此声明最终 clean-HEAD evidence 或远程 CI 通过。
 
-完整 Agent 时间预算与静态门分开。它只统计 16 个 QEMU case 的 monotonic 运行时间总和，不含编译；targeted `AGENT_TEST_CASE` 不能满足全套时间门。当前 JSON 为 `calibrated_full_suite`，bounded/flood-safe runner 的 `bounded-runner-final-01/02/03` 三轮总时间为 `261.343281873s`、`237.948978492s`、`255.370930671s`，基线/上限为 `255.370930671s/268.14s`；相对中位数约 5% headroom，足以覆盖最大样本且比旧门更紧。GitLab job 同时使用 `resource_group` 和 `agentos-qemu-calibrated` runner tag。
+预算采用 downward ratchet：体积下降后应收紧 baseline/max，不能保留足以让旧大数组或 monolith 回归的宽松上限。Context detail 与 legacy mail 迁出 PCB 后曾降至 25640 B；之后预冻结静态 probe 的 `sizeof(struct proc)=25936`、JSON `25936/27233` B 也只作 H-17 历史比较，不是发布 C 的最终指标。每个活跃 Agent以一次 `RESOURCE_AGENT_STATE_PAGE` 请求原子计费 21 页：9 页 detail/attribution sidecar、6 页用户 mirror、6 页可信 shadow，共 84 KiB；Context v8 只重排既有页内布局。legacy mail 的两页 sidecar 只在首次合法发送时按目标 EXEC account 另行分配。idle 普通进程不分配这些页；它们都从通用 `kalloc` 取得，不是全局 OOM 下的硬保留。最终源码、镜像、`struct proc`、栈和 metadata aggregate 数值以 C 的 canonical budget log、版本化 JSON 和 bundle metrics 为准。
 
-QEMU runner 以二进制方式读取并全量 drain 子进程输出，大小写不敏感检测包括 panic 在内的预定义 failure 模式，marker 后仍继续扫描。监控循环有界并持续重查 case/marker deadline，输出洪泛、迟到 marker、普通 case 信号退出、`SIGKILL`、非零退出和后置 panic 都不能成功。预期 fault 与持久化 checkpoint 只能由各自显式 profile 启用。通用 runner/profile validator 的自测集合以源码为准；duration checker只接受恰好包含全部 16 个预期 Agent case 且顺序一致的 timing file。Reader action runner 另按 clean/build/guest 分阶段：构建只看退出码，guest 才按完整日志行识别故障。`agentfinal_ucore` 的并发 Context 回归还要求 `context_commit_lane=1 sequence=1..3 hash=1`。
+完整 Agent 时间预算与静态门分开。它统计当前 18 个 QEMU case 的 monotonic 运行时间总和，不含编译；targeted `AGENT_TEST_CASE` 不能满足全套时间门。`bounded-runner-final-01/02/03` 的 `261.343281873s`、`237.948978492s`、`255.370930671s` 来自旧 16-case 套件，只能保留为历史校准，不能证明新增 case 后仍满足原 `268.14s` 上限。当前 18-case 契约必须在同一 `agentos-qemu-calibrated` runner 上重新取得至少三轮完整 timing file 后，才能恢复 calibrated 状态；GitLab job 继续用 `resource_group` 串行化 QEMU。
+
+QEMU runner 以二进制方式读取并全量 drain 子进程输出，大小写不敏感检测包括 panic 在内的预定义 failure 模式，marker 后仍继续扫描；持久 `.guest.log` 使用 canonical LF。监控循环有界并持续重查 case/marker deadline，输出洪泛、迟到 marker、普通 case 信号退出、非零退出和后置 panic 都不能成功。显式 checkpoint profile 只接受 runner 在完整 marker 后发送的单次 `SIGTERM`；显式 powercut profile 只接受认证 supervisor 向稳定 QEMU leader 发送的单次 `SIGKILL`，且随机 nonce、PID/starttime、镜像退出码、控制通道和完整后代回收证明必须一致。workload 自行杀死 leader/supervisor 或留下跨 `setsid()` 后代均失败。预期 fault、checkpoint 与 powercut 只能由各自显式 profile 启用。通用 runner/profile validator 的自测集合以源码为准；duration checker 只接受恰好包含全部 18 个预期 Agent case 且顺序一致的 timing file。Context-sync/WAIT_ATOMIC prelude 有独立 timing file，不得混入这 18 行。Reader action runner另按 clean/build/guest 分阶段：构建只看退出码，guest 才按完整日志行识别故障。`agentfinal_ucore` 的普通套件和 prelude 都要求 `context_commit_lane=1 sequence=1..3 hash=1`。

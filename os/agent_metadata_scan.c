@@ -7,142 +7,100 @@
 #include "file.h"
 #include "fs.h"
 #include "vfs_security.h"
-
 #define SCAN_INTERVAL 20
 #define SCAN_STEP 16
 #define SCAN_REST_MULTIPLIER 4
-
+#define SCAN_BIND_RETRY 1
+#define SCAN_BIND_DEFERRED 2
+#define SCOPE_MAX (VFS_SCOPE_MAX_ACTIVE + 1)
 static struct {
-	uint64 offset, next_tick, last_step_tick, started_tick;
-	uint64 runs, entries, added, updated, removed;
-	int seen[AGENT_FILE_META_MAX];
+	uint64 offset, next_tick, last_step_tick, start;
+	uint64 runs, entries, added, updated, removed, failures, deferred;
+	uint bad[SCOPE_MAX], nbad;
+	uchar seen[AGENT_FILE_META_MAX];
+	int retry, sweep_uncertain;
 } scan;
 static struct {
-	int enabled, pending, active;
+	int on, pending, active;
 } scan_control;
+struct scan_field { ushort offset, size; uint changes; const char *value; };
+#define SCAN_DEFAULT(field, change_bits, default_value) \
+	{ (ushort)__builtin_offsetof(struct agent_file_meta, field), \
+	  (ushort)sizeof(((struct agent_file_meta *)0)->field), change_bits, \
+	  default_value }
+static const struct scan_field scan_default_fields[] = {
+	SCAN_DEFAULT(physical_name, AGENT_FILE_CHANGE_SCOPE_KEYS, 0),
+	SCAN_DEFAULT(logical_path, AGENT_FILE_CHANGE_SCOPE_KEYS, 0),
+	SCAN_DEFAULT(project, AGENT_FILE_CHANGE_SCOPE_KEYS, "root"),
+	SCAN_DEFAULT(workflow, AGENT_FILE_CHANGE_SCOPE_KEYS, "background-scan"),
+	SCAN_DEFAULT(run_id, AGENT_FILE_CHANGE_SCOPE_KEYS, "ROOT"),
+	SCAN_DEFAULT(stage, AGENT_FILE_CHANGE_STAGE, "scan"),
+	SCAN_DEFAULT(summary, 0, "auto scanned root file"),
+};
+#undef SCAN_DEFAULT
+static const char *const rules[][3] = {
+	{ "md", "txt", "document" },
+	{ "log", "err", "log" },
+	{ "status", "ok", "status" },
+	{ "data", "csv", "dataset" },
+	{ "fail", "err", "failed" },
+	{ "ok", "pass", "ok" },
+};
 
-void
-agent_metadata_scan_init(void)
-{
-	memset(&scan, 0, sizeof(scan));
-	memset(&scan_control, 0, sizeof(scan_control));
+void agent_metadata_scan_init(void) {
+	memset(&scan, 0, sizeof(scan)); memset(&scan_control, 0, sizeof(scan_control));
 }
 
-static void
-scan_infer_kind(char *name, char *out, int n)
-{
-	if (agent_metadata_catalog_field_contains(name, "md") ||
-	    agent_metadata_catalog_field_contains(name, "txt"))
-		safestrcpy(out, "document", n);
-	else if (agent_metadata_catalog_field_contains(name, "log") ||
-		 agent_metadata_catalog_field_contains(name, "err"))
-		safestrcpy(out, "log", n);
-	else if (agent_metadata_catalog_field_contains(name, "status") ||
-		 agent_metadata_catalog_field_contains(name, "ok"))
-		safestrcpy(out, "status", n);
-	else if (agent_metadata_catalog_field_contains(name, "data") ||
-		 agent_metadata_catalog_field_contains(name, "csv"))
-		safestrcpy(out, "dataset", n);
-	else
-		safestrcpy(out, "file", n);
+static void scan_infer(char *name, char *out, int n, uint first, uint count,
+		       const char *def) {
+	for (uint i = first; i < first + count; i++)
+		if (agent_metadata_catalog_field_contains(name, rules[i][0]) ||
+		    agent_metadata_catalog_field_contains(name, rules[i][1])) {
+			safestrcpy(out, rules[i][2], n);
+			return;
+		}
+	safestrcpy(out, def, n);
 }
 
-static void
-scan_infer_status(char *name, char *out, int n)
-{
-	if (agent_metadata_catalog_field_contains(name, "fail") ||
-	    agent_metadata_catalog_field_contains(name, "err"))
-		safestrcpy(out, "failed", n);
-	else if (agent_metadata_catalog_field_contains(name, "ok") ||
-		 agent_metadata_catalog_field_contains(name, "pass"))
-		safestrcpy(out, "ok", n);
-	else
-		safestrcpy(out, "present", n);
-}
-
-uint
-agent_metadata_scan_apply_defaults(struct agent_file_meta *meta, char *path,
-				   int *changed_out)
-{
-	int changed = 0;
+uint agent_metadata_scan_apply_defaults(struct agent_file_meta *meta,
+					char *path, int *out) {
+	int dirty = 0, is_auto = meta->flags & AGENT_FILE_META_F_AUTOSCAN;
 	uint changes = 0;
+	for (uint i = 0; i < NELEM(scan_default_fields); i++) {
+		const struct scan_field *rule = &scan_default_fields[i];
+		char *field = (char *)meta + rule->offset;
+		const char *value = rule->value ? rule->value : path;
 
-	if (meta->physical_name[0] == 0 ||
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {
-		if (strncmp(meta->physical_name, path,
-			    sizeof(meta->physical_name)) != 0) {
-			safestrcpy(meta->physical_name, path,
-				   sizeof(meta->physical_name));
-			changed = 1;
-			changes |= AGENT_FILE_CHANGE_SCOPE_KEYS;
+		if ((!is_auto && rule->value) || (field[0] && (rule->value || !is_auto)))
+			continue;
+		if (strncmp(field, value, rule->size)) {
+			safestrcpy(field, value, rule->size);
+			dirty = 1;
+			changes |= rule->changes;
 		}
 	}
-	if (meta->logical_path[0] == 0 ||
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {
-		if (strncmp(meta->logical_path, path,
-			    sizeof(meta->logical_path)) != 0) {
-			safestrcpy(meta->logical_path, path,
-				   sizeof(meta->logical_path));
-			changed = 1;
-			changes |= AGENT_FILE_CHANGE_SCOPE_KEYS;
-		}
-	}
-	if (meta->project[0] == 0 &&
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {
-		safestrcpy(meta->project, "root", sizeof(meta->project));
-		changed = 1;
-		changes |= AGENT_FILE_CHANGE_SCOPE_KEYS;
-	}
-	if (meta->workflow[0] == 0 &&
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {
-		safestrcpy(meta->workflow, "background-scan",
-			   sizeof(meta->workflow));
-		changed = 1;
-		changes |= AGENT_FILE_CHANGE_SCOPE_KEYS;
-	}
-	if (meta->run_id[0] == 0 &&
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {
-		safestrcpy(meta->run_id, "ROOT", sizeof(meta->run_id));
-		changed = 1;
-		changes |= AGENT_FILE_CHANGE_SCOPE_KEYS;
-	}
-	if (meta->stage[0] == 0 &&
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {
-		safestrcpy(meta->stage, "scan", sizeof(meta->stage));
-		changed = 1;
-		changes |= AGENT_FILE_CHANGE_STAGE;
-	}
-	if (meta->kind[0] == 0 &&
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {
-		scan_infer_kind(path, meta->kind, sizeof(meta->kind));
-		changed = 1;
+	if (is_auto && !meta->kind[0]) {
+		scan_infer(path, meta->kind, sizeof(meta->kind), 0, 4, "file");
+		dirty = 1;
 		changes |= AGENT_FILE_CHANGE_KIND;
 	}
-	if (meta->status[0] == 0 &&
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {
-		scan_infer_status(path, meta->status, sizeof(meta->status));
-		changed = 1;
+	if (is_auto && !meta->status[0]) {
+		scan_infer(path, meta->status, sizeof(meta->status), 4, 2,
+			   "present");
+		dirty = 1;
 		changes |= AGENT_FILE_CHANGE_STATUS;
 	}
-	if (meta->summary[0] == 0 &&
-	    (meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {
-		safestrcpy(meta->summary, "auto scanned root file",
-			   sizeof(meta->summary));
-		changed = 1;
-	}
-	if (changed_out)
-		*changed_out = changed;
+	if (out)
+		*out = dirty;
 	return changes;
 }
 
-void
-agent_metadata_scan_catalog_sync(const struct agent_catalog_delta *delta)
-{
+void agent_metadata_scan_catalog_sync(const struct agent_catalog_delta *delta) {
 	if (!scan_control.active)
 		return;
 	if (delta->full_reset) {
 		scan.offset = 0;
-		scan.started_tick = agent_file_state_now();
+		scan.start = agent_file_state_now();
 		memset(scan.seen, 0, sizeof(scan.seen));
 	}
 	agent_metadata_txn_work_charge(AGENT_META_STALE_BYTES);
@@ -151,82 +109,89 @@ agent_metadata_scan_catalog_sync(const struct agent_catalog_delta *delta)
 			scan.seen[i] = 1;
 }
 
-void
-agent_metadata_scan_note_slot(int slot)
-{
-	if (scan_control.active)
+void agent_metadata_scan_note_slot(int slot) {
+	if (scan_control.active && slot >= 0 && slot < AGENT_FILE_META_MAX)
 		scan.seen[slot] = 1;
 }
 
-int
-agent_metadata_scan_query_stable(void)
-{
-	return !scan_control.active;
+int agent_metadata_scan_query_stable(void) { return !scan_control.active; }
+static int scan_scope_failed(uint scope, int add) {
+	for (uint i = 0; i < scan.nbad; i++)
+		if (scan.bad[i] == scope)
+			return 1;
+	if (!add || scan.nbad >= SCOPE_MAX)
+		return add && (scan.sweep_uncertain = 1);
+	scan.bad[scan.nbad++] = scope;
+	return 1;
 }
 
-static uint64
-scan_rest_deadline(uint64 started_tick, uint64 now)
-{
-	uint64 duration = now > started_tick ? now - started_tick : 0;
-	uint64 rest = SCAN_INTERVAL;
-
-	if (duration > ~0ULL / SCAN_REST_MULTIPLIER)
-		return ~0ULL;
-	duration *= SCAN_REST_MULTIPLIER;
-	if (duration > rest)
-		rest = duration;
-	if (rest > ~0ULL - now)
-		return ~0ULL;
-	return now + rest;
+static int scan_remove(int slot, uint scope, int persist) {
+	if (agent_metadata_catalog_clear_slot(slot) < 0)
+		return -1;
+	scan.removed++;
+	if (persist)
+		agent_metadata_store_mark_dirty(scope);
+	return 0;
 }
 
-static void
-scan_pause(int retry)
-{
+static int scan_matches(const struct agent_file_meta *meta, struct inode *ip) {
+	return meta->dev == ip->dev && meta->inum == ip->inum &&
+	       meta->incarnation == ip->vfs_incarnation;
+}
+
+static uint64 scan_rest_deadline(uint64 start, uint64 now) {
+	uint64 rest = now > start ? now - start : 0;
+	if (rest > ~0ULL / SCAN_REST_MULTIPLIER)
+		return ~0ULL;
+	rest *= SCAN_REST_MULTIPLIER;
+	if (rest < SCAN_INTERVAL)
+		rest = SCAN_INTERVAL;
+	return rest > ~0ULL - now ? ~0ULL : now + rest;
+}
+
+static void scan_pause(int retry, int resume) {
 	uint64 now = agent_file_state_now();
-	uint64 started;
-	uint64 deadline;
-	int enabled = intr_save();
-
-	started = scan_control.active ? scan.started_tick : now;
-	deadline = scan_rest_deadline(started, now);
+	int irq = intr_save();
+	now = scan_rest_deadline(scan_control.active ? scan.start : now, now);
 	scan_control.active = 0;
-	scan.started_tick = 0;
+	if (!retry || !resume)
+		scan.start = 0;
 	if (retry)
-		scan_control.pending = 1;
-	if (scan.next_tick < deadline)
-		scan.next_tick = deadline;
-	intr_restore(enabled);
-}
-
-void
-agent_file_request_scan(void)
-{
-	uint64 now = agent_file_state_now();
-	int enabled = intr_save();
-
-	if (!scan_control.enabled) {
-		scan_control.enabled = 1;
-		scan_control.pending = 1;
+		scan_control.pending = resume ? -1 : 1;
+	if (scan.next_tick < now)
 		scan.next_tick = now;
-	} else if (!scan_control.pending) {
-		scan_control.pending = 1;
-		if (scan_control.active)
-			scan.next_tick =
-				scan_rest_deadline(now, now);
-		else if (now >= scan.next_tick)
-			scan.next_tick = now;
-	}
-	intr_restore(enabled);
+	intr_restore(irq);
 }
 
-int
-agent_metadata_scan_plan(uint64 now)
-{
-	int plan = AGENT_METADATA_SCAN_IDLE;
-	int enabled = intr_save();
+void agent_file_request_scan(void) {
+	uint64 now = agent_file_state_now();
+	int irq = intr_save();
+	if (!scan_control.on || !scan_control.pending) {
+		if (!scan_control.on) {
+			scan_control.on = 1;
+			scan.next_tick = now;
+		} else if (scan_control.active) {
+			scan.next_tick = scan_rest_deadline(now, now);
+		} else if (now >= scan.next_tick) {
+			scan.next_tick = now;
+		}
+		scan_control.pending = 1;
+	}
+	intr_restore(irq);
+	agent_background_request();
+}
 
-	if (scan_control.enabled) {
+int agent_metadata_scan_work_pending(void) {
+	int irq = intr_save();
+	int pending = scan_control.pending || scan_control.active;
+	intr_restore(irq);
+	return pending;
+}
+
+int agent_metadata_scan_plan(uint64 now) {
+	int plan = AGENT_METADATA_SCAN_IDLE;
+	int irq = intr_save();
+	if (scan_control.on) {
 		if (!scan_control.active && !scan_control.pending &&
 		    now >= scan.next_tick)
 			scan_control.pending = 1;
@@ -236,222 +201,275 @@ agent_metadata_scan_plan(uint64 now)
 			 now >= scan.next_tick)
 			plan = AGENT_METADATA_SCAN_START;
 	}
-	intr_restore(enabled);
+	intr_restore(irq);
 	return plan;
 }
 
 static uint
-scan_bind_inode(struct inode *ip, char *path)
+scan_bind_inode(struct inode *ip, char *path, int *failed)
 {
 	struct agent_catalog_view view;
 	struct agent_catalog_edit edit;
-	struct agent_file_meta *meta;
+	struct agent_catalog_resolution resolution;
+	struct agent_file_meta selector, *meta;
 	uint64 fid = 0;
-	int slot;
-	int added = 0;
-	int changed = 0;
-	int defaults_changed = 0;
-	int inode_changed = 0;
-	int persistent;
+	int slot, dirty = 0, sidecar, pend = 0;
+	int persist;
+	short old_slot, old_flags, old_version;
+	uint scope;
 	uint changes = 0;
-
-	if (ip == 0 || path == 0 || path[0] == 0 ||
-	    agent_file_is_meta_store_name(path))
+	int mut;
+	*failed = 0;
+	scope = ip->vfs_scope_id;
+	if (!vfs_inode_label_valid(ip) || ip->vfs_policy != VFS_POLICY_WORKFLOW ||
+	    ip->type != T_FILE || !agent_object_scope_valid(scope))
 		return 0;
-	ivalid(ip);
-	if (!vfs_inode_label_valid(ip) ||
-	    ip->vfs_policy != VFS_POLICY_WORKFLOW || ip->type != T_FILE ||
-	    !agent_object_scope_valid(ip->vfs_scope_id))
+	mut = exec_policy_inode_mutable(ip);
+	if (scope == VFS_SCOPE_SYSTEM ? mut || !exec_policy_inode_trusted(ip) :
+	    !vfs_scope_active(scope) || !mut)
 		return 0;
-	if (ip->vfs_scope_id == VFS_SCOPE_SYSTEM) {
-		if (exec_policy_inode_mutable(ip))
-			return 0;
-	} else if (!vfs_scope_active(ip->vfs_scope_id) ||
-		   !exec_policy_inode_mutable(ip)) {
-		return 0;
-	}
 	slot = ip->agent_meta_slot - 1;
 	if (agent_metadata_catalog_borrow(0, slot, &view) <= 0 ||
-	    view.scope_id != ip->vfs_scope_id ||
-	    view.meta->dev != ip->dev || view.meta->inum != ip->inum ||
-	    view.meta->incarnation != ip->vfs_incarnation) {
-		slot = agent_metadata_catalog_find(ip->vfs_scope_id, 0, path);
-		if (agent_metadata_catalog_borrow(0, slot, &view) <= 0)
-			slot = -1;
+	    view.scope_id != scope || !scan_matches(view.meta, ip)) {
+		if (ip->dev == 0 || ip->inum == 0 || ip->vfs_incarnation == 0)
+			goto retry;
+		memset(&selector, 0, sizeof(selector));
+		safestrcpy(selector.physical_name, path,
+			   sizeof(selector.physical_name));
+		safestrcpy(selector.logical_path, path,
+			   sizeof(selector.logical_path));
+		selector.dev = ip->dev;
+		selector.inum = ip->inum;
+		selector.incarnation = ip->vfs_incarnation;
+		agent_metadata_catalog_resolve(scope, &selector, -1, &resolution);
+		if (resolution.slot == AGENT_CATALOG_CONFLICT ||
+		    ((resolution.matched & AGENT_CATALOG_KEY_IDENTITY) != 0 &&
+		     (resolution.matched & AGENT_CATALOG_KEY_PATH) == 0))
+			goto retry;
+		slot = (resolution.matched & AGENT_CATALOG_KEY_PATH) != 0 ?
+			       resolution.slot : -1;
+		if (slot >= 0 &&
+		    (agent_metadata_catalog_borrow_scan(slot, &view) <= 0 ||
+		     view.scope_id != scope ||
+		     agent_metadata_catalog_identity_state(view.meta) < 0 ||
+		     (strncmp(view.meta->physical_name, path,
+			      sizeof(view.meta->physical_name)) != 0 &&
+		      strncmp(view.meta->logical_path, path,
+			      sizeof(view.meta->logical_path)) != 0)))
+			goto retry;
 	}
-	if (slot >= 0 && view.meta->dev != 0 &&
-	    (view.meta->dev != ip->dev || view.meta->inum != ip->inum ||
-	     view.meta->incarnation != ip->vfs_incarnation) &&
-	    (view.meta->flags & AGENT_FILE_META_F_AUTOSCAN) == 0)
-		slot = -1;
-	if (slot < 0) {
-		slot = agent_metadata_catalog_alloc_slot(ip->vfs_scope_id);
-		if (slot < 0)
-			return 0;
-		fid = agent_metadata_catalog_alloc_fid(ip->vfs_scope_id);
-		if (fid == 0)
-			return 0;
-	}
-	if (agent_metadata_catalog_edit_begin(
-		    slot, ip->vfs_scope_id, &edit) < 0)
+	if (slot >= 0 &&
+	    (view.state & AGENT_CATALOG_STATE_QUARANTINE)) {
+		scan.seen[slot] = 1;
 		return 0;
+	}
+	if (slot >= 0 && view.meta->dev &&
+	    !scan_matches(view.meta, ip)) {
+		int old_persist = view.meta->flags & AGENT_FILE_META_F_PERSIST;
+		uint old_scope = view.scope_id;
+		scan.seen[slot] = 1;
+		if (scan_remove(slot, old_scope, old_persist) < 0)
+			goto retry;
+		changes |= AGENT_FILE_CHANGE_ALL;
+		slot = -1;
+	}
+	if (slot < 0) {
+		if ((slot = agent_metadata_catalog_alloc_slot(scope)) < 0) {
+			*failed = SCAN_BIND_DEFERRED;
+			return changes;
+		}
+		if (!(fid = agent_metadata_catalog_alloc_fid(scope))) {
+			*failed = SCAN_BIND_DEFERRED;
+			return changes;
+		}
+	} else
+		pend = view.state & AGENT_CATALOG_STATE_PENDING;
+	scan.seen[slot] = 1;
+	if (agent_metadata_catalog_edit_begin_scan(slot, scope, &edit) < 0) {
+		*failed = SCAN_BIND_RETRY;
+		return changes;
+	}
 	meta = edit.meta;
 	if (!meta->used) {
 		memset(meta, 0, sizeof(*meta));
 		meta->used = 1;
 		meta->fid = fid;
-		meta->flags = AGENT_FILE_META_F_PERSIST |
-			      AGENT_FILE_META_F_AUTOSCAN;
-		edit.scope_id = ip->vfs_scope_id;
-		added = 1;
+		meta->flags = AGENT_FILE_META_F_PERSIST | AGENT_FILE_META_F_AUTOSCAN;
+		edit.scope_id = scope;
 		changes |= AGENT_FILE_CHANGE_MEMBERSHIP;
 	}
-	if (edit.scope_id != ip->vfs_scope_id) {
+	if (edit.scope_id != scope) {
 		agent_metadata_catalog_edit_abort(&edit);
-		return 0;
+		goto retry;
 	}
-	changes |= agent_metadata_scan_apply_defaults(
-		meta, path, &defaults_changed);
-	changed |= defaults_changed;
-	if (meta->dev != ip->dev || meta->inum != ip->inum ||
-	    meta->incarnation != ip->vfs_incarnation ||
-	    meta->size != ip->size) {
+	changes |= agent_metadata_scan_apply_defaults(meta, path, &dirty);
+	if (!scan_matches(meta, ip) || meta->size != ip->size) {
 		meta->dev = ip->dev;
 		meta->inum = ip->inum;
 		meta->incarnation = ip->vfs_incarnation;
 		meta->size = ip->size;
-		changed = 1;
+		dirty = 1;
 	}
-	if (ip->agent_meta_slot != slot + 1 ||
-	    ip->agent_meta_version != AGENT_INODE_META_VERSION)
-		inode_changed = 1;
-	if (inode_changed)
-		changed = 1;
-	if (changed || added) {
+	sidecar = ip->agent_meta_slot != slot + 1 ||
+		  ip->agent_meta_version != AGENT_INODE_META_VERSION;
+	dirty |= sidecar;
+	if (dirty || fid) {
 		meta->updated_tick = agent_file_state_now();
-		meta->fs_generation =
-			agent_file_state_generation_next(edit.scope_id);
-		persistent = meta->flags & AGENT_FILE_META_F_PERSIST;
-		if (agent_metadata_catalog_edit_commit(&edit, changes) < 0)
-			return 0;
-		if (inode_changed) {
-			ip->agent_meta_slot = slot + 1;
-			ip->agent_meta_flags = persistent;
-			ip->agent_meta_version = AGENT_INODE_META_VERSION;
-			iupdate(ip);
+		meta->fs_generation = agent_file_state_generation_next(edit.scope_id);
+		persist = meta->flags & AGENT_FILE_META_F_PERSIST;
+		if (agent_metadata_catalog_edit_commit(&edit, changes) < 0) {
+			*failed = SCAN_BIND_RETRY;
+			return changes;
 		}
-		if (persistent)
+		if (persist)
 			agent_metadata_store_mark_dirty(ip->vfs_scope_id);
-		if (added)
-			scan.added++;
-		else
-			scan.updated++;
+		if (sidecar) {
+			old_slot = ip->agent_meta_slot;
+			old_flags = ip->agent_meta_flags;
+			old_version = ip->agent_meta_version;
+			ip->agent_meta_slot = slot + 1;
+			ip->agent_meta_flags = persist;
+			ip->agent_meta_version = AGENT_INODE_META_VERSION;
+			if (iupdate(ip) < 0) {
+				ip->agent_meta_slot = old_slot;
+				ip->agent_meta_flags = old_flags;
+				ip->agent_meta_version = old_version;
+				*failed = SCAN_BIND_RETRY;
+				return changes;
+			}
+		}
+		if (fid) scan.added++;
+		else scan.updated++;
 	} else {
 		agent_metadata_catalog_edit_abort(&edit);
 	}
-	scan.seen[slot] = 1;
+	if (pend) {
+		if (agent_metadata_catalog_reconcile_slot(slot) < 0)
+			goto retry;
+		changes |= AGENT_FILE_CHANGE_MEMBERSHIP;
+	}
+	return changes;
+retry:
+	*failed = SCAN_BIND_RETRY;
 	return changes;
 }
 
-uint
-agent_metadata_scan_step(uint64 now, int plan, int load_ok)
-{
-	struct inode *root;
-	struct inode *ip;
+uint agent_metadata_scan_step(uint64 now, int plan, int load_ok) {
+	struct inode *root, *ip;
 	struct dirent de;
-	struct vfs_cred kernel_cred;
+	struct vfs_cred cred;
 	char name[DIRSIZ + 1];
 	uint64 off;
-	uint changes = 0;
-	int scan_failed = 0;
-	int steps = 0;
-	int enabled;
-
+	uint mask = 0;
+	int root_status, steps = 0, irq;
 	if (plan == AGENT_METADATA_SCAN_START) {
 		if (!load_ok) {
-			scan_pause(1);
+			scan_pause(1, 0);
 			return 0;
 		}
-		enabled = intr_save();
-		scan_control.pending = 0;
+		irq = intr_save();
 		scan_control.active = 1;
-		scan.started_tick = now;
-		scan.offset = 0;
-		memset(scan.seen, 0, sizeof(scan.seen));
-		scan.runs++;
-		intr_restore(enabled);
+		if (scan_control.pending > 0) {
+			scan.start = now;
+			scan.offset = 0;
+			scan.nbad = 0;
+			scan.retry = scan.sweep_uncertain = 0;
+			memset(scan.seen, 0, sizeof(scan.seen));
+			scan.runs++;
+		}
+		scan_control.pending = 0;
+		intr_restore(irq);
 	} else if (plan != AGENT_METADATA_SCAN_CONTINUE) {
 		return 0;
 	}
 	scan.last_step_tick = now;
-	vfs_cred_kernel(&kernel_cred);
-	root = root_dir();
-	if (root == 0) {
-		scan_pause(1);
+	vfs_cred_kernel(&cred);
+	root = root_dir_status(&root_status);
+	if (root == 0 || root_status != FS_LOOKUP_FOUND) {
+		if (root)
+			iput(root);
+		scan.failures++;
+		scan_pause(1, 1);
 		return 0;
 	}
-	for (off = scan.offset;
-	     off < root->size && steps < SCAN_STEP;
+	for (off = scan.offset; off < root->size && steps < SCAN_STEP;
 	     off += sizeof(de), steps++) {
-		if (readi(root, &kernel_cred, 0, (uint64)&de, off,
-			  sizeof(de)) != sizeof(de)) {
-			scan_failed = 1;
+		if (readi(root, &cred, 0, (uint64)&de, off, sizeof(de)) != sizeof(de)) {
+			scan.failures++;
+			scan.offset = off;
+			scan_pause(1, 1);
 			break;
 		}
 		scan.entries++;
-		if (de.inum == 0)
+		if (!de.inum)
 			continue;
-		memset(name, 0, sizeof(name));
 		memmove(name, de.name, DIRSIZ);
 		name[DIRSIZ] = 0;
-		if (name[0] == 0 || agent_file_is_meta_store_name(name))
+		if (!name[0] || agent_file_is_meta_store_name(name))
 			continue;
 		ip = inode_get(root->dev, de.inum);
-		if (ip == 0)
+		if (!ip || ivalid(ip) < 0) {
+			if (ip)
+				iput(ip);
+			scan.failures++;
+			scan.retry = scan.sweep_uncertain = 1;
 			continue;
-		ivalid(ip);
-		changes |= scan_bind_inode(ip, name);
+		}
+		int bind_failed = 0;
+
+		mask |= scan_bind_inode(ip, name, &bind_failed);
+		if (bind_failed) {
+			scan.failures++;
+			scan.retry = 1;
+			if (bind_failed == SCAN_BIND_DEFERRED)
+				scan.deferred++;
+			else
+				(void)scan_scope_failed(ip->vfs_scope_id, 1);
+		}
 		iput(ip);
 	}
-	scan.offset = off;
-	if (scan_failed) {
-		scan_pause(1);
+	if (!scan_control.active) {
 		iput(root);
-		return changes;
+		return mask;
 	}
+	scan.offset = off;
 	if (scan.offset >= root->size) {
 		for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
 			struct agent_catalog_view view;
-			int removed_persistent;
-			uint removed_scope;
+			int persist;
+			uint scope;
 
-			if (agent_metadata_catalog_borrow(0, i, &view) <= 0)
+			if (agent_metadata_catalog_borrow_scan(i, &view) <= 0)
 				continue;
-			if (!scan.seen[i]) {
-				removed_scope = view.scope_id;
-				removed_persistent =
-					view.meta->flags & AGENT_FILE_META_F_PERSIST;
-				agent_metadata_catalog_clear_slot(i);
-				scan.removed++;
-				if (removed_persistent)
-					agent_metadata_store_mark_dirty(removed_scope);
-				changes |= AGENT_FILE_CHANGE_ALL;
+			if (view.state & AGENT_CATALOG_STATE_QUARANTINE)
+				continue;
+			if (scan.seen[i] || scan.sweep_uncertain ||
+			    scan_scope_failed(view.scope_id, 0))
+				continue;
+			scope = view.scope_id;
+			persist =
+				view.meta->flags & AGENT_FILE_META_F_PERSIST;
+			if (scan_remove(i, scope, persist) < 0) {
+				scan.failures++;
+				scan.retry = 1;
+				(void)scan_scope_failed(scope, 1);
+				continue;
 			}
+			mask |= AGENT_FILE_CHANGE_ALL;
 		}
-		scan_pause(0);
+		scan_pause(scan.retry, 0);
 	}
 	iput(root);
-	return changes;
+	return mask;
 }
 
-void
-agent_metadata_scan_fill_info(struct agent_info *info)
-{
-	info->file_scan_runs = scan.runs;
-	info->file_scan_entries = scan.entries;
-	info->file_scan_added = scan.added;
-	info->file_scan_updated = scan.updated;
-	info->file_scan_removed = scan.removed;
+void agent_metadata_scan_fill_info(struct agent_info *info) {
+#define SCAN_INFO(field) info->file_scan_##field = scan.field
+	SCAN_INFO(runs); SCAN_INFO(entries); SCAN_INFO(added);
+	SCAN_INFO(updated); SCAN_INFO(removed);
+#undef SCAN_INFO
+	info->file_scan_deferred = scan.deferred;
+	info->file_scan_failures = scan.failures;
 	info->file_scan_pending =
 		scan_control.pending || scan_control.active;
 }

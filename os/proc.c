@@ -7,12 +7,15 @@
 #include "kernel_work.h"
 #include "loader.h"
 #include "trap.h"
+#include "user_stack_layout.h"
 #include "vm.h"
 #include "queue.h"
 #include "vfs_security.h"
+#ifdef WAIT_ATOMIC_TEST_PROFILE
+#include "wait_atomic_test.h"
+#endif
 
 struct proc pool[NPROC];
-__attribute__((aligned(4096))) char trapframe[NPROC][NTHREAD][TRAP_PAGE_SIZE];
 static struct file fd_reservation;
 
 extern char boot_stack_top[];
@@ -51,6 +54,21 @@ static int proc_scope_id_exhausted;
 static uint kernel_stack_live_slots;
 static uint kernel_stack_live_ordinary;
 static uint kernel_stack_live_reserved;
+static uint64 thread_identity_next_generation;
+
+/* Every live thread receives one non-reusable incarnation, including boot. */
+static void thread_identity_activate(struct thread *t)
+{
+	int enabled = intr_save();
+
+	if (t->identity_generation == 0) {
+		thread_identity_next_generation++;
+		if (thread_identity_next_generation == 0)
+			thread_identity_next_generation++;
+		t->identity_generation = thread_identity_next_generation;
+	}
+	intr_restore(enabled);
+}
 
 static void proc_reset_thread_slot(struct thread *t);
 static void proc_recycle(struct proc *p);
@@ -61,17 +79,6 @@ static void proc_teardown_advance(struct proc *p,
 
 #define KSTACK_POISON 0xa5
 #define KSTACK_CANARY 0x6b737461636b4f53ULL
-#define AGENT_STATE_PAGE_POOL_SIZE \
-	((uint64)NPROC * AGENT_STATE_PAGE_COUNT)
-#define AGENT_STATE_PAGE_ORDINARY_LIMIT \
-	((uint64)PROC_ORDINARY_SLOTS * AGENT_STATE_PAGE_COUNT)
-#define AGENT_STATE_PAGE_RESERVED_LIMIT \
-	((uint64)PROC_RESERVED_SLOTS * AGENT_STATE_PAGE_COUNT)
-#define AGENT_STATE_PAGE_DOMAIN_ORDINARY_LIMIT \
-	((uint64)PROC_RESOURCE_DOMAIN_LIMIT * AGENT_STATE_PAGE_COUNT)
-#define AGENT_STATE_PAGE_DOMAIN_RESERVED_LIMIT \
-	((uint64)PROC_RESOURCE_DOMAIN_RESERVED_LIMIT * AGENT_STATE_PAGE_COUNT)
-
 _Static_assert(KSTACK_SIZE >= 2 * PGSIZE,
 	       "kernel stacks need room for calls and interrupt frames");
 _Static_assert(KSTACK_SIZE % PGSIZE == 0,
@@ -103,6 +110,8 @@ _Static_assert(AGENT_STATE_PAGE_ORDINARY_LIMIT +
 		       AGENT_STATE_PAGE_RESERVED_LIMIT ==
 		       AGENT_STATE_PAGE_POOL_SIZE,
 	       "Agent state page classes must partition the global pool");
+_Static_assert(USER_HEAP_LIMIT <= 0x7fffffffULL,
+	       "program break must fit the signed syscall result ABI");
 _Static_assert(PROC_RESOURCE_DOMAIN_LIMIT > 0 &&
 	       PROC_RESOURCE_DOMAIN_LIMIT <= PROC_ORDINARY_SLOTS,
 	       "resource domain limit must fit the ordinary process pool");
@@ -168,6 +177,50 @@ static int kernel_stack_identity(struct thread *t, struct proc **owner,
 	return 0;
 }
 
+static enum resource_charge_class
+thread_physical_charge_class(const struct thread *t)
+{
+	return t->resource_slot_reserved ? RESOURCE_CHARGE_RESERVED :
+					  RESOURCE_CHARGE_ORDINARY;
+}
+
+static int thread_trapframe_acquire(struct thread *t)
+{
+	void *page;
+
+	if (t == 0 || t == &idle || !t->resource_slot_charged ||
+	    !resource_account_handle_valid(t->resource_account))
+		panic("trapframe acquire owner");
+	if (t->trapframe != 0)
+		return 0;
+	page = kalloc_account_page(t->resource_account,
+				   thread_physical_charge_class(t));
+	if (page == 0)
+		return -1;
+	memset(page, 0, TRAP_PAGE_SIZE);
+	if (t->trapframe != 0)
+		panic("trapframe acquire race");
+	t->trapframe = page;
+	return 0;
+}
+
+static void thread_trapframe_release(struct thread *t)
+{
+	void *page;
+
+	if (t == 0 || t->trapframe == 0)
+		return;
+	if (!t->resource_slot_charged ||
+	    !resource_account_handle_valid(t->resource_account))
+		panic("trapframe release owner");
+	page = t->trapframe;
+	t->trapframe = 0;
+	memset(page, 6, TRAP_PAGE_SIZE);
+	if (kfree_account_page(page, t->resource_account,
+				thread_physical_charge_class(t)) < 0)
+		panic("trapframe resource release");
+}
+
 static void kernel_stack_reset_slot(struct proc *p, int tid)
 {
 	uint64 slot = kernel_stack_slot(p - pool, tid);
@@ -227,6 +280,13 @@ static int kernel_stack_acquire(struct thread *t)
 	int enabled;
 	uint64 slot;
 	uint64 base;
+	struct resource_request page_request = {
+		.kind = RESOURCE_PHYSICAL_PAGE,
+		.amount = KSTACK_PAGES_PER_THREAD,
+	};
+	struct resource_reservation page_reservation;
+	enum resource_charge_class page_charge_class;
+	int page_reservation_active = 0;
 
 	if (kernel_stack_identity(t, &p, &tid) < 0 ||
 	    !t->resource_slot_charged)
@@ -236,6 +296,15 @@ static int kernel_stack_acquire(struct thread *t)
 	if (t->kstack_state != KSTACK_NONE)
 		panic("kernel stack acquire state");
 	reserved = t->resource_slot_reserved != 0;
+	page_charge_class = thread_physical_charge_class(t);
+	/* Reserved stacks use the THREAD-backed stack pool, not page reserve. */
+	if (!reserved) {
+		if (resource_reserve_many(t->resource_account,
+					  page_charge_class, &page_request, 1,
+					  &page_reservation) < 0)
+			return -1;
+		page_reservation_active = 1;
+	}
 	for (; allocated < KSTACK_PAGES_PER_THREAD; allocated++) {
 		pages[allocated] = kalloc_stack_page(reserved);
 		if (pages[allocated] == 0)
@@ -273,12 +342,17 @@ static int kernel_stack_acquire(struct thread *t)
 		kernel_stack_live_reserved++;
 	else
 		kernel_stack_live_ordinary++;
+	if (page_reservation_active &&
+	    resource_reservation_commit(&page_reservation) < 0)
+		panic("kernel stack page commit");
 	intr_restore(enabled);
 	return 0;
 
 fail:
 	while (allocated > 0)
 		kfree_stack_page(pages[--allocated], reserved);
+	if (page_reservation_active)
+		resource_reservation_cancel(&page_reservation);
 	return -1;
 }
 
@@ -304,6 +378,10 @@ static void kernel_stack_release_inactive(struct thread *t)
 	int enabled;
 	uint64 slot;
 	uint64 base;
+	struct resource_request page_request = {
+		.kind = RESOURCE_PHYSICAL_PAGE,
+		.amount = KSTACK_PAGES_PER_THREAD,
+	};
 
 	if (kernel_stack_identity(t, &p, &tid) < 0)
 		panic("kernel stack release owner");
@@ -361,6 +439,11 @@ static void kernel_stack_release_inactive(struct thread *t)
 	}
 	for (int page = 0; page < KSTACK_PAGES_PER_THREAD; page++)
 		kfree_stack_page(pages[page], reserved);
+	if (!reserved &&
+	    resource_release_many(
+		    t->resource_account, RESOURCE_CHARGE_ORDINARY,
+		    &page_request, 1) < 0)
+		panic("kernel stack page release");
 	intr_restore(enabled);
 }
 
@@ -381,6 +464,8 @@ static void kernel_stack_assert_quiescent(void)
 			if (pool[proc_index].threads[tid].kstack_state !=
 			    KSTACK_NONE)
 				panic("kernel stack shutdown state");
+			if (pool[proc_index].threads[tid].trapframe != 0)
+				panic("trapframe shutdown state");
 			for (uint64 off = 0; off < KSTACK_SIZE;
 			     off += PGSIZE) {
 				pte_t *pte =
@@ -532,6 +617,77 @@ int proc_request_workflow_exit(struct workflow_lifecycle_key lifecycle,
 	return requested;
 }
 
+/*
+ * Submit an abandoned control subtree to the ordinary teardown state machine.
+ * The bounded control graph is closed before interrupts resume; destructors
+ * still run only through the ordinary per-process teardown state machine.
+ */
+int proc_request_controller_exit(struct workflow_lifecycle_key lifecycle,
+				 uint64 controller_id, int code)
+{
+	uint64 controllers[(NPROC + 63) / 64];
+	uint64 matched[(NPROC + 63) / 64];
+	int requested = 0;
+	int enabled;
+	int expanded;
+
+	if (!workflow_lifecycle_key_valid(lifecycle) || controller_id == 0)
+		return 0;
+	memset(controllers, 0, sizeof(controllers));
+	memset(matched, 0, sizeof(matched));
+	enabled = intr_save();
+	do {
+		expanded = 0;
+		for (struct proc *p = pool; p < &pool[NPROC]; p++) {
+			uint slot = p - pool;
+			uint64 bit = 1ULL << (slot & 63);
+			int controlled = p->agent_controller_id == controller_id;
+
+			if (p->state != P_USED ||
+			    !p->workflow_lifecycle_charged ||
+			    p->workflow_lifecycle_id != lifecycle.id ||
+			    p->workflow_lifecycle_generation != lifecycle.generation)
+				continue;
+			if (!controlled && p->agent_controller_id != 0)
+				for (int i = 0; i < NPROC; i++) {
+					uint64 controller_bit =
+						1ULL << (i & 63);
+
+					if ((controllers[i / 64] & controller_bit) != 0 &&
+					    pool[i].agent_control_id ==
+						    p->agent_controller_id) {
+						controlled = 1;
+						break;
+					}
+				}
+			if (!controlled)
+				continue;
+			if (p->is_agent && p->agent_control_id != 0) {
+				if ((controllers[slot / 64] & bit) == 0) {
+					controllers[slot / 64] |= bit;
+					expanded = 1;
+				}
+			}
+			if ((matched[slot / 64] & bit) != 0)
+				continue;
+			matched[slot / 64] |= bit;
+			if (p->teardown_state >= PROC_TEARDOWN_DETACHED)
+				continue;
+			requested++;
+			(void)proc_teardown_request_locked(p, code);
+			for (int tid = 0; tid < NTHREAD; tid++) {
+				struct thread *t = &p->threads[tid];
+
+				if (tid != p->teardown_owner_tid &&
+				    t->state == SLEEPING)
+					wait_queue_interrupt(t);
+			}
+		}
+	} while (expanded);
+	intr_restore(enabled);
+	return requested;
+}
+
 // A VM snapshot may yield between committed pages. While it is active, the
 // scheduler keeps sibling threads parked so the source page table cannot
 // change underneath the snapshot; unrelated processes remain schedulable.
@@ -572,6 +728,99 @@ void proc_vm_snapshot_end(struct proc *p)
 	if (p->vm_snapshot_depth == 0)
 		p->vm_snapshot_owner_tid = -1;
 	intr_restore(enabled);
+}
+
+/*
+ * The heap lives above every fixed thread-stack slot, with a guard page on
+ * each side. A VM snapshot parks sibling threads while page-by-page work may
+ * yield, making brk atomic with fork and exec-visible address-space state.
+ */
+int proc_sbrk(long delta)
+{
+	struct proc *p = curr_proc();
+	pagetable_t pagetable;
+	uint64 old_break, new_break;
+	uint64 old_end, new_end;
+	uint64 mapped_pages = 0;
+	uint64 magnitude;
+	int result = -1;
+	int enabled;
+
+	if (proc_vm_snapshot_begin(p) < 0)
+		return -1;
+	enabled = intr_save();
+	if (!proc_teardown_live(p) || p->pagetable == 0 ||
+	    p->heap_base == 0 || (p->heap_base % PGSIZE) != 0 ||
+	    p->heap_base > USER_HEAP_LIMIT ||
+	    p->heap_break < p->heap_base ||
+	    p->heap_break > USER_HEAP_LIMIT) {
+		intr_restore(enabled);
+		goto out;
+	}
+	pagetable = p->pagetable;
+	old_break = p->heap_break;
+	intr_restore(enabled);
+	if (delta == 0) {
+		result = (int)old_break;
+		goto out;
+	}
+	if (delta > 0) {
+		magnitude = (uint64)delta;
+		if (magnitude > USER_HEAP_LIMIT - old_break)
+			goto out;
+		new_break = old_break + magnitude;
+	} else {
+		/* Unsigned subtraction also handles LONG_MIN without negating it. */
+		magnitude = 0 - (uint64)delta;
+		if (magnitude > old_break - p->heap_base)
+			goto out;
+		new_break = old_break - magnitude;
+	}
+	old_end = PGROUNDUP(old_break);
+	new_end = PGROUNDUP(new_break);
+	if (new_end > old_end) {
+		uint64 pages = (new_end - old_end) / PGSIZE;
+
+		while (mapped_pages < pages) {
+			if (uvmmap(pagetable,
+				   old_end + mapped_pages * PGSIZE, 1,
+				   PTE_U | PTE_R | PTE_W) < 0)
+				goto rollback_growth;
+			mapped_pages++;
+			if (kernel_work_checkpoint(KERNEL_WORK_PAGE_UNITS) < 0)
+				goto rollback_growth;
+		}
+		enabled = intr_save();
+		if (!proc_teardown_live(p) || p->pagetable != pagetable ||
+		    p->heap_break != old_break) {
+			intr_restore(enabled);
+			goto rollback_growth;
+		}
+		p->heap_break = new_break;
+		p->max_page = MAX(p->max_page, new_end / PGSIZE);
+		intr_restore(enabled);
+	} else {
+		/* Shrink is irreversible after the first leaf refund; finish fairly. */
+		if (old_end > new_end)
+			uvm_unmap_reclaim(pagetable, new_end,
+					  (old_end - new_end) / PGSIZE);
+		enabled = intr_save();
+		if (p->pagetable != pagetable || p->heap_break != old_break)
+			panic("brk snapshot changed");
+		p->heap_break = new_break;
+		p->max_page = MAX(p->heap_base / PGSIZE,
+				  new_end / PGSIZE);
+		intr_restore(enabled);
+	}
+	result = (int)old_break;
+	goto out;
+
+rollback_growth:
+	/* Also prunes an empty page-table page left by a failed mappages(). */
+	uvm_unmap_reclaim(pagetable, old_end, mapped_pages);
+out:
+	proc_vm_snapshot_end(p);
+	return result;
 }
 
 static int proc_vm_snapshot_schedulable(const struct thread *t)
@@ -670,6 +919,12 @@ static void proc_resource_limits(
 	limits->class_limit[RESOURCE_CHARGE_RESERVED]
 			   [RESOURCE_AGENT_STATE_PAGE] =
 		AGENT_STATE_PAGE_DOMAIN_RESERVED_LIMIT;
+	limits->class_limit[RESOURCE_CHARGE_ORDINARY]
+			   [RESOURCE_PHYSICAL_PAGE] =
+		PHYSICAL_PAGE_DOMAIN_ORDINARY_LIMIT;
+	limits->class_limit[RESOURCE_CHARGE_RESERVED]
+			   [RESOURCE_PHYSICAL_PAGE] =
+		PHYSICAL_PAGE_DOMAIN_RESERVED_LIMIT;
 }
 
 static int proc_thread_resource_charge_locked(struct thread *t,
@@ -847,9 +1102,14 @@ static struct proc *proc_resource_reserve(struct proc *parent,
 	}
 	if (!agent_context_is_empty(p))
 		panic("stale Agent context state");
+	if (!agent_ipc_legacy_mailbox_empty(p))
+		panic("stale legacy mailbox state");
+	if (p->legacy_mail_endpoint_generation != 0)
+		panic("stale legacy endpoint generation");
 	for (int tid = 0; tid < NTHREAD; tid++)
 		if (p->threads[tid].resource_slot_charged ||
-		    p->threads[tid].kstack_state != KSTACK_NONE)
+		    p->threads[tid].kstack_state != KSTACK_NONE ||
+		    p->threads[tid].trapframe != 0)
 			panic("stale thread resource charge");
 	if (admission == PROC_ADMIT_BOOT || admission == PROC_ADMIT_WORKFLOW) {
 		storage_principal = proc_scope_alloc_id();
@@ -1281,6 +1541,7 @@ void proc_init()
 	kernel_stack_live_slots = 0;
 	kernel_stack_live_ordinary = 0;
 	kernel_stack_live_reserved = 0;
+	thread_identity_next_generation = 0;
 	for (p = pool; p < &pool[NPROC]; p++) {
 		p->state = P_UNUSED;
 		p->parent = 0;
@@ -1290,6 +1551,10 @@ void proc_init()
 		p->storage_principal_id = FS_OWNER_NONE;
 		p->resource_slot_reserved = 0;
 		p->resource_domain_admin = 0;
+		p->heap_base = 0;
+		p->heap_break = 0;
+		p->mail_sidecar = 0;
+		p->legacy_mail_endpoint_generation = 0;
 		agent_context_free(p);
 		p->teardown_state = PROC_TEARDOWN_RECYCLED;
 		p->teardown_owner_tid = PROC_TEARDOWN_OWNER_NONE;
@@ -1301,6 +1566,7 @@ void proc_init()
 			kernel_work_reset(t);
 			t->state = T_UNUSED;
 			t->tid = -1;
+			t->identity_generation = 0;
 			t->process = p;
 			t->ustack = 0;
 			t->kstack = kernel_stack_base(p - pool, tid);
@@ -1309,6 +1575,7 @@ void proc_init()
 			t->wait_channel = 0;
 			t->wait_next = 0;
 			t->wait_reason = WAIT_REASON_NONE;
+			t->wait_key = 0;
 			t->wait_interrupted = 0;
 			t->wait_interruptible = 0;
 			t->on_run_queue = 0;
@@ -1317,6 +1584,11 @@ void proc_init()
 			t->resource_domain_id = -1;
 			t->resource_slot_reserved = 0;
 			t->resource_slot_charged = 0;
+			t->agent_wait_deadline = 0;
+			t->agent_wait_deadline_valid = 0;
+			t->agent_observe_suppress_depth = 0;
+			t->agent_timeline_wait_state = 0;
+			t->agent_loop_state = AGENT_LOOP_NONE;
 			memset(t->fd_delegate_ticket, 0,
 			       sizeof(t->fd_delegate_ticket));
 		}
@@ -1327,9 +1599,11 @@ void proc_init()
 	// for procid() and threadid()
 	idle.process = pool;
 	idle.tid = -1;
+	idle.identity_generation = 0;
 	idle.wait_channel = 0;
 	idle.wait_next = 0;
 	idle.wait_reason = WAIT_REASON_NONE;
+	idle.wait_key = 0;
 	idle.wait_interrupted = 0;
 	idle.wait_interruptible = 0;
 	idle.on_run_queue = 0;
@@ -1338,13 +1612,25 @@ void proc_init()
 	idle.resource_domain_id = -1;
 	idle.resource_slot_reserved = 0;
 	idle.resource_slot_charged = 0;
+	idle.agent_wait_deadline = 0;
+	idle.agent_wait_deadline_valid = 0;
+	idle.agent_observe_suppress_depth = 0;
+	idle.agent_timeline_wait_state = 0;
+	idle.agent_loop_state = AGENT_LOOP_NONE;
 	kernel_work_reset(&idle);
 }
 
 int allocpid()
 {
-	static int PID = 1;
-	return PID++;
+	static uint64 next_pid = 1;
+	int enabled = intr_save();
+	int pid = -1;
+
+	/* Legacy PID ABIs stay non-reusing; exhaustion denies new processes. */
+	if (next_pid <= 0x7fffffffULL)
+		pid = (int)next_pid++;
+	intr_restore(enabled);
+	return pid;
 }
 
 int alloctid(const struct proc *process)
@@ -1678,23 +1964,39 @@ static void detach_task(struct thread *t)
 static struct proc *allocproc_admit(struct proc *parent,
 				    enum proc_admission admission)
 {
-	struct proc *p = proc_resource_reserve(parent, admission);
+	int pid;
+	struct proc *p;
 
+	p = proc_resource_reserve(parent, admission);
 	if (p == 0)
 		return 0;
+	pid = allocpid();
+	if (pid <= 0) {
+		int enabled;
+
+		proc_thread_resource_release(&p->threads[0]);
+		proc_resource_release(p);
+		enabled = intr_save();
+		p->state = P_UNUSED;
+		intr_restore(enabled);
+		return 0;
+	}
 	// init proc
-	p->pid = allocpid();
+	p->pid = pid;
 	wait_queue_init(&p->child_waiters, WAIT_REASON_CHILD);
 	wait_queue_init(&p->thread_exit_waiters, WAIT_REASON_THREAD_EXIT);
 	wait_queue_init(&p->agent_event_waiters, WAIT_REASON_EVENT);
 	wait_queue_init(&p->agent_timeline_waiters, WAIT_REASON_TIMELINE);
 	agent_lifecycle_context_lane_init(p);
 	p->max_page = 0;
+	p->heap_base = 0;
+	p->heap_break = 0;
 	p->parent = NULL;
 	p->parent_record_index = -1;
 	p->exit_code = 0;
 	p->teardown_state = PROC_TEARDOWN_LIVE;
 	p->teardown_owner_tid = PROC_TEARDOWN_OWNER_NONE;
+	p->agent_control_state = AGENT_CONTROL_OPEN;
 	p->vm_snapshot_depth = 0;
 	p->vm_snapshot_owner_tid = -1;
 	child_records_reset(p);
@@ -1711,8 +2013,15 @@ static struct proc *allocproc_admit(struct proc *parent,
 	p->workflow_lifecycle_generation = 0;
 	p->workflow_lifecycle_charged = 0;
 	vfs_proc_reset(p);
-	p->pagetable = uvmcreate();
+	p->pagetable = uvmcreate_account(
+		p->resource_account,
+		p->resource_slot_reserved ? RESOURCE_CHARGE_RESERVED :
+					    RESOURCE_CHARGE_ORDINARY);
 	if (p->pagetable == 0) {
+		freeproc(p);
+		return 0;
+	}
+	if (thread_trapframe_acquire(&p->threads[0]) < 0) {
 		freeproc(p);
 		return 0;
 	}
@@ -1726,12 +2035,6 @@ static struct proc *allocproc_admit(struct proc *parent,
 	p->next_semaphore_id = 0;
 	p->next_condvar_id = 0;
 	memset(p->syscall_count, 0, sizeof(p->syscall_count));
-	memset(p->mail_payload, 0, sizeof(p->mail_payload));
-	memset(p->mail_len, 0, sizeof(p->mail_len));
-	memset(p->mail_from, 0, sizeof(p->mail_from));
-	p->mail_head = 0;
-	p->mail_tail = 0;
-	p->mail_count = 0;
 	agent_proc_prepare(p);
 	return p;
 }
@@ -1751,7 +2054,7 @@ struct trapframe *proc_trapframe(struct proc *p, int tid)
 {
 	if (p < pool || p >= &pool[NPROC] || tid < 0 || tid >= NTHREAD)
 		return 0;
-	return (struct trapframe *)trapframe[p - pool][tid];
+	return p->threads[tid].trapframe;
 }
 
 static uint64 get_thread_ustack_base_va(struct thread *t)
@@ -1803,6 +2106,7 @@ int allocthread(struct proc *p, uint64 entry, int alloc_user_res)
 	uint64 user_stack;
 	int enabled;
 	int new_charge = 0;
+	int user_stack_mapped = 0;
 
 	if (p == 0)
 		return -1;
@@ -1849,18 +2153,25 @@ found:
 	}
 	kernel_work_reset(t);
 	t->tid = tid;
+	thread_identity_activate(t);
 	t->state = T_USED;
 	t->process = p;
 	t->exit_code = 0;
 	t->wait_channel = 0;
 	t->wait_next = 0;
 	t->wait_reason = WAIT_REASON_NONE;
+	t->wait_key = 0;
 	t->wait_interrupted = 0;
 	t->wait_interruptible = 0;
 	t->on_run_queue = 0;
 	t->run_queue_agent = -1;
 	t->ustack = user_stack;
+	t->agent_wait_deadline = 0;
+	t->agent_wait_deadline_valid = 0;
+	t->agent_observe_suppress_depth = 0;
+	t->agent_timeline_wait_state = 0;
 	memset(t->fd_delegate_ticket, 0, sizeof(t->fd_delegate_ticket));
+	agent_thread_runtime_transition(t, AGENT_THREAD_RUNTIME_ACTIVATE);
 	intr_restore(enabled);
 	// kernel stack
 	if (kernel_stack_acquire(t) < 0)
@@ -1871,20 +2182,17 @@ found:
 		if (uvmmap(p->pagetable, t->ustack, USTACK_SIZE / PAGE_SIZE,
 			   PTE_U | PTE_R | PTE_W) < 0)
 			goto fail_slot;
+		user_stack_mapped = 1;
 		p->max_page =
 			MAX(p->max_page,
 			    PGROUNDUP(t->ustack + USTACK_SIZE - 1) / PAGE_SIZE);
 	}
 	// trap frame
-	t->trapframe = proc_trapframe(p, tid);
-	memset((void *)t->trapframe, 0, TRAP_PAGE_SIZE);
-	if (mappages(p->pagetable, get_thread_trapframe_va(tid), TRAP_PAGE_SIZE,
-		     (uint64)t->trapframe, PTE_R | PTE_W) < 0) {
-		if (alloc_user_res != 0)
-			uvmunmap(p->pagetable, t->ustack,
-				 USTACK_SIZE / PAGE_SIZE, 1);
+	if (thread_trapframe_acquire(t) < 0)
 		goto fail_slot;
-	}
+	if (mappages(p->pagetable, get_thread_trapframe_va(tid), TRAP_PAGE_SIZE,
+		     (uint64)t->trapframe, PTE_R | PTE_W) < 0)
+		goto fail_slot;
 	t->trapframe->sp = t->ustack + USTACK_SIZE;
 	t->trapframe->epc = entry;
 	//task context
@@ -1898,13 +2206,23 @@ found:
 	return tid;
 
 fail_slot:
+	agent_thread_runtime_transition(t, AGENT_THREAD_RUNTIME_RELEASE);
+	agent_observe_thread_reset(t);
+	if (t->trapframe != 0) {
+		uvmunmap(p->pagetable, get_thread_trapframe_va(tid), 1, 0);
+		thread_trapframe_release(t);
+	}
+	if (user_stack_mapped)
+		uvmunmap(p->pagetable, t->ustack,
+			 USTACK_SIZE / PAGE_SIZE, 1);
 	p->max_page = old_max_page;
 	kernel_stack_release_inactive(t);
 	t->state = T_UNUSED;
 	t->tid = -1;
+	t->identity_generation = 0;
 	t->ustack = 0;
-	t->trapframe = 0;
 	t->run_queue_agent = -1;
+	t->agent_timeline_wait_state = 0;
 	if (new_charge)
 		proc_thread_resource_release(t);
 	return -1;
@@ -1941,11 +2259,20 @@ static void scheduler_finish_dying_thread(struct thread *t)
 	tid = t->tid;
 	if (t->kstack_state != KSTACK_REAP)
 		panic("dying thread kernel stack");
+	if (t->agent_wait_deadline_valid || t->agent_wait_deadline != 0 ||
+	    t->agent_loop_state != AGENT_LOOP_NONE ||
+	    t->agent_observe_suppress_depth != 0 ||
+	    t->agent_timeline_wait_state != 0)
+		panic("dying thread Agent runtime");
 	kernel_stack_release_inactive(t);
+	if (t->trapframe != 0)
+		panic("dying thread trapframe");
 	t->state = EXITED;
 	proc_thread_resource_release(t);
+	wait_queue_wake_key_all(&p->thread_exit_waiters,
+				 t->identity_generation);
 	if (tid != p->teardown_owner_tid) {
-		wait_queue_wake_all(&p->thread_exit_waiters);
+		wait_queue_wake_key_all(&p->thread_exit_waiters, 0);
 		return;
 	}
 	if (p->teardown_state != PROC_TEARDOWN_HANDOFF)
@@ -2085,23 +2412,23 @@ static void proc_clear_all_fd_delegate_tickets(struct proc *p)
 }
 
 // Open objects are part of a workflow credential, not ambient POSIX state.
-// vfs_proc_reset() is the single revocation boundary for both active and
-// pending workflow identities. A successful pending-to-active exec does not
-// reset the identity and therefore keeps explicitly delegated bootstrap pipes.
-void proc_revoke_vfs_scope_fds(struct proc *p)
+// Reset and exec share this detachment mechanism; exec detaches under its VM
+// publication guard and closes the captured references only after interrupts
+// are restored. A successful pending-to-active exec keeps delegated pipes.
+static void
+proc_detach_vfs_scope_fds_locked(struct proc *p,
+				 struct file **detached)
 {
-	struct file *files[FD_BUFFER_SIZE];
 	uint scope_id;
-	int enabled;
 
-	memset(files, 0, sizeof(files));
-	if (p == 0)
+	if (intr_get())
+		panic("exec fd revocation unlocked");
+	if (p == 0 || detached == 0)
 		return;
 	scope_id = p->vfs_scope_id >= VFS_SCOPE_FIRST_DYNAMIC ?
 			   p->vfs_scope_id : p->vfs_pending_scope_id;
 	if (scope_id < VFS_SCOPE_FIRST_DYNAMIC)
 		return;
-	enabled = intr_save();
 	proc_clear_all_fd_delegate_tickets(p);
 	for (int i = 0; i < FD_BUFFER_SIZE; i++) {
 		struct file *f = p->files[i];
@@ -2110,40 +2437,172 @@ void proc_revoke_vfs_scope_fds(struct proc *p)
 			continue;
 		p->files[i] = 0;
 		if (!fd_is_reserved(f))
-			files[i] = f;
+			detached[i] = f;
 	}
-	intr_restore(enabled);
+}
+
+static void proc_close_detached_files(struct file **files)
+{
 	for (int i = 0; i < FD_BUFFER_SIZE; i++)
 		if (files[i] != 0)
 			fileclose(files[i]);
 }
 
+void proc_revoke_vfs_scope_fds(struct proc *p)
+{
+	struct file *files[FD_BUFFER_SIZE];
+	int enabled;
+
+	memset(files, 0, sizeof(files));
+	if (p == 0)
+		return;
+	enabled = intr_save();
+	proc_detach_vfs_scope_fds_locked(p, files);
+	intr_restore(enabled);
+	proc_close_detached_files(files);
+}
+
+static int
+proc_user_image_trapframe_valid(struct proc *p, struct user_image *image)
+{
+	pte_t *pte;
+	uint64 flags;
+	uint64 expected_heap;
+
+	if (p == 0 || image == 0 || image->pagetable == 0 ||
+	    p->threads[0].trapframe == 0)
+		return 0;
+	if (image->ustack_base > USER_HEAP_LIMIT - PAGE_SIZE -
+				       NTHREAD * USTACK_SIZE)
+		return 0;
+	expected_heap = image->ustack_base + NTHREAD * USTACK_SIZE +
+			PAGE_SIZE;
+	if ((image->ustack_base % PGSIZE) != 0 ||
+	    image->heap_base != expected_heap ||
+	    image->heap_break != image->heap_base ||
+	    image->heap_base > USER_HEAP_LIMIT - PAGE_SIZE)
+		return 0;
+	pte = walk(image->pagetable, TRAPFRAME, 0);
+	if (pte == 0 || PTE2PA(*pte) != (uint64)p->threads[0].trapframe)
+		return 0;
+	flags = PTE_FLAGS(*pte);
+	return (flags & (PTE_V | PTE_R | PTE_W)) ==
+		       (PTE_V | PTE_R | PTE_W) &&
+	       (flags & (PTE_U | PTE_X)) == 0;
+}
+
+static int
+proc_image_install_state_valid_locked(struct proc *p,
+				      enum proc_image_install_mode mode)
+{
+	struct thread *main = &p->threads[0];
+
+	if (intr_get() || main->process != p || main->on_run_queue)
+		return 0;
+	if (mode == PROC_IMAGE_INSTALL_LIVE_EXEC) {
+		if (main != curr_thread() || main->state != RUNNING ||
+		    main->tid != 0 || main->identity_generation == 0)
+			return 0;
+	} else if (mode == PROC_IMAGE_INSTALL_BOOTSTRAP) {
+		if (main == curr_thread() || main->state != T_UNUSED ||
+		    main->tid != -1 || main->identity_generation != 0)
+			return 0;
+	} else {
+		return 0;
+	}
+	for (int tid = 1; tid < NTHREAD; tid++) {
+		struct thread *t = &p->threads[tid];
+
+		if (t->process != p || t->on_run_queue)
+			return 0;
+		if (mode == PROC_IMAGE_INSTALL_LIVE_EXEC) {
+			if (t->state != T_UNUSED && t->state != EXITED)
+				return 0;
+		} else if (t->state != T_UNUSED || t->tid != -1 ||
+			   t->identity_generation != 0) {
+			return 0;
+		}
+	}
+	return 1;
+}
+
 int proc_install_user_image(struct proc *p, struct user_image *image,
-			    struct trapframe *staged, int running)
+			    struct trapframe *staged,
+			    enum proc_image_install_mode mode)
 {
 	pagetable_t old_pagetable = p->pagetable;
 	uint64 old_max_page = p->max_page;
 	struct vfs_exec_transition transition;
+	struct file *revoked_files[FD_BUFFER_SIZE];
 	struct thread *main_thread;
+	int live_exec;
 	int enabled;
 
-	if (vfs_proc_exec_prepare(p, image, running, &transition) < 0)
+	memset(revoked_files, 0, sizeof(revoked_files));
+	if (mode != PROC_IMAGE_INSTALL_BOOTSTRAP &&
+	    mode != PROC_IMAGE_INSTALL_LIVE_EXEC)
+		return -1;
+	live_exec = mode == PROC_IMAGE_INSTALL_LIVE_EXEC;
+	/* Reject a malformed image before credentials or VM ownership move. */
+	if (!proc_user_image_trapframe_valid(p, image) ||
+	    vfs_proc_exec_prepare(p, image, live_exec, &transition) < 0)
 		return -1;
 	/*
+	 * Context may enter the replacement page table only after policy has
+	 * explicitly selected a trusted Agent-preserving transition.  Abort owns
+	 * the alias through user_image_discard(); PUBLIC images never see it.
+	 */
+	if (transition.identity_policy ==
+	    VFS_EXEC_IDENTITY_PRESERVE_AGENT) {
+		if (agent_alias_exec_context(p, image->pagetable) < 0) {
+			vfs_proc_exec_abort(&transition);
+			return -1;
+		}
+		image->shared_base = p->agent_ctx_base;
+		image->shared_pages = AGENT_CONTEXT_PAGES;
+	}
+	/*
 	 * Image construction and credential preparation may yield. Credential
-	 * commit and the VM pointer swap form one publication boundary: once
-	 * teardown is requested, neither half of the new identity is visible.
+	 * validation, authority revocation, Context teardown, FD detachment and
+	 * the VM pointer swap form one publication boundary. Once teardown is
+	 * requested, neither half of the new identity is visible.
 	 */
 	enabled = intr_save();
 	if (!proc_teardown_live(p) ||
-	    vfs_proc_exec_commit(p, &transition) < 0) {
+	    !proc_image_install_state_valid_locked(p, mode) ||
+	    sync_proc_exec_validate_locked(p, &p->threads[0]) < 0 ||
+	    vfs_proc_exec_validate_locked(p, &transition) < 0) {
 		intr_restore(enabled);
 		vfs_proc_exec_abort(&transition);
 		return -1;
 	}
+	if (transition.lifecycle_reserved) {
+		/* Reservation publication may still fail without changing identity. */
+		if (vfs_proc_exec_commit(p, &transition) < 0) {
+			intr_restore(enabled);
+			vfs_proc_exec_abort(&transition);
+			return -1;
+		}
+	} else {
+		if (transition.identity_policy == VFS_EXEC_IDENTITY_PUBLIC &&
+		    agent_exec_public_identity_commit(p) < 0) {
+			intr_restore(enabled);
+			vfs_proc_exec_abort(&transition);
+			return -1;
+		}
+		if (transition.drop_to_public)
+			proc_detach_vfs_scope_fds_locked(p, revoked_files);
+		/* Every irreversible revocation shares this interrupt guard. */
+		if (vfs_proc_exec_commit(p, &transition) < 0)
+			panic("validated exec credential commit");
+	}
+	agent_process_image_install_locked(p);
+	sync_proc_exec_reset_locked(p, &p->threads[0]);
 	p->pagetable = image->pagetable;
 	p->max_page = image->max_page;
 	p->ustack_base = image->ustack_base;
+	p->heap_base = image->heap_base;
+	p->heap_break = image->heap_break;
 	p->exec_dev = image->exec_dev;
 	p->exec_inum = image->exec_inum;
 	p->exec_flags = image->exec_flags;
@@ -2153,8 +2612,9 @@ int proc_install_user_image(struct proc *p, struct user_image *image,
 	p->exec_rw_offset = image->exec_rw_offset;
 	image->pagetable = 0;
 	intr_restore(enabled);
+	proc_close_detached_files(revoked_files);
 	agent_authority_on_exec(p);
-	if (running && !p->is_agent)
+	if (live_exec && !p->is_agent)
 		proc_resource_drop_admin(p);
 
 	if (!p->threads[0].resource_slot_charged ||
@@ -2164,15 +2624,20 @@ int proc_install_user_image(struct proc *p, struct user_image *image,
 	    p->threads[0].resource_slot_reserved !=
 		    p->resource_slot_reserved)
 		panic("main thread resource invariant");
+	if (old_pagetable != 0)
+		for (int tid = 0; tid < NTHREAD; tid++)
+			uvmunmap(old_pagetable, get_thread_trapframe_va(tid), 1,
+				 0);
 	for (int tid = 0; tid < NTHREAD; tid++) {
 		struct thread *slot = &p->threads[tid];
 
+		agent_observe_thread_reset(slot);
 		detach_task(slot);
 		if (tid != 0) {
 			proc_reset_thread_slot(slot);
 			continue;
 		}
-		if (!running)
+		if (!live_exec)
 			kernel_work_reset(slot);
 		slot->state = T_UNUSED;
 		slot->tid = -1;
@@ -2183,30 +2648,29 @@ int proc_install_user_image(struct proc *p, struct user_image *image,
 		slot->wait_interruptible = 0;
 		slot->on_run_queue = 0;
 		slot->run_queue_agent = -1;
+		slot->agent_timeline_wait_state = 0;
 		memset(slot->fd_delegate_ticket, 0,
 		       sizeof(slot->fd_delegate_ticket));
 	}
 	main_thread = &p->threads[0];
 	if (main_thread->kstack_state != KSTACK_LIVE)
 		panic("main thread without kernel stack");
+	thread_identity_activate(main_thread);
 	main_thread->tid = 0;
-	main_thread->state = running ? RUNNING : T_USED;
+	main_thread->state = live_exec ? RUNNING : T_USED;
 	main_thread->process = p;
 	main_thread->exit_code = 0;
 	main_thread->kstack = kernel_stack_base(p - pool, 0);
 	main_thread->ustack = p->ustack_base;
 	main_thread->trapframe = proc_trapframe(p, 0);
 	memmove(main_thread->trapframe, staged, sizeof(*staged));
-	if (!running) {
+	if (!live_exec) {
 		memset(&main_thread->context, 0, sizeof(main_thread->context));
 		main_thread->context.ra = (uint64)usertrapret;
 		main_thread->context.sp = main_thread->kstack + KSTACK_SIZE;
 	}
 
 	if (old_pagetable != 0) {
-		for (int tid = 0; tid < NTHREAD; tid++)
-			uvmunmap(old_pagetable, get_thread_trapframe_va(tid), 1,
-				 0);
 		agent_unmap_exec_context(p, old_pagetable);
 		uvmunmap(old_pagetable, TRAMPOLINE, 1, 0);
 		uvmfree_cleanup(old_pagetable, old_max_page);
@@ -2223,12 +2687,12 @@ static void thread_user_vm_release(struct thread *t)
 		return;
 	pt = t->process->pagetable;
 	detach_task(t);
-	if (t->trapframe != 0)
-		memset((void *)t->trapframe, 6, TRAP_PAGE_SIZE);
 	memset(&t->context, 6, sizeof(t->context));
+	if (pt != 0 && t->tid >= 0 && t->tid < NTHREAD)
+		uvmunmap(pt, get_thread_trapframe_va(t->tid), 1, 0);
+	thread_trapframe_release(t);
 	if (pt == 0 || t->tid < 0 || t->tid >= NTHREAD)
 		return;
-	uvmunmap(pt, get_thread_trapframe_va(t->tid), 1, 0);
 	if (t->ustack != 0)
 		uvmunmap(pt, get_thread_ustack_base_va(t),
 			 USTACK_SIZE / PAGE_SIZE, 1);
@@ -2236,23 +2700,30 @@ static void thread_user_vm_release(struct thread *t)
 
 void freethread(struct thread *t)
 {
+	agent_thread_runtime_transition(t, AGENT_THREAD_RUNTIME_RELEASE);
+	agent_observe_thread_reset(t);
+	mutex_release_thread_locks(t);
 	kernel_work_reset(t);
 	thread_user_vm_release(t);
 }
 
 static void proc_reset_thread_slot(struct thread *t)
 {
+	agent_thread_runtime_transition(t, AGENT_THREAD_RUNTIME_RELEASE);
+	agent_observe_thread_reset(t);
 	kernel_work_reset(t);
 	kernel_stack_release_inactive(t);
+	thread_trapframe_release(t);
 	proc_thread_resource_release(t);
 	memset(t->fd_delegate_ticket, 0, sizeof(t->fd_delegate_ticket));
 	t->state = T_UNUSED;
 	t->tid = -1;
+	t->identity_generation = 0;
 	t->ustack = 0;
-	t->trapframe = 0;
 	t->wait_channel = 0;
 	t->wait_next = 0;
 	t->wait_reason = WAIT_REASON_NONE;
+	t->wait_key = 0;
 	t->wait_interrupted = 0;
 	t->wait_interruptible = 0;
 	t->on_run_queue = 0;
@@ -2342,6 +2813,8 @@ static int proc_teardown_run(struct proc *p, struct thread *owner,
 	p->pagetable = 0;
 	p->max_page = 0;
 	p->ustack_base = 0;
+	p->heap_base = 0;
+	p->heap_break = 0;
 	p->exec_dev = 0;
 	p->exec_inum = 0;
 	p->exec_flags = 0;
@@ -2352,6 +2825,8 @@ static int proc_teardown_run(struct proc *p, struct thread *owner,
 	proc_teardown_advance(p, PROC_TEARDOWN_RECLAIMING,
 			      PROC_TEARDOWN_SETTLING);
 	agent_proc_teardown(p);
+	if (!agent_ipc_legacy_mailbox_empty(p))
+		panic("process teardown legacy mailbox");
 	/*
 	 * File and VM reclaim are complete. The terminal owner settles the entire
 	 * syscall/cleanup lease before lifecycle release can quiesce its BIO
@@ -2393,6 +2868,10 @@ static void proc_reset_slot(struct proc *p)
 	agent_context_free(p);
 	if (!agent_context_is_empty(p))
 		panic("process recycled with Agent context state");
+	if (!agent_ipc_legacy_mailbox_empty(p))
+		panic("process recycled with legacy mailbox");
+	if (p->legacy_mail_endpoint_generation != 0)
+		panic("process recycled with legacy endpoint");
 	proc_teardown_advance(p, PROC_TEARDOWN_PUBLISHED,
 			      PROC_TEARDOWN_RECYCLED);
 	p->workflow_lifecycle_id = WORKFLOW_LIFECYCLE_ID_NONE;
@@ -2404,6 +2883,7 @@ static void proc_reset_slot(struct proc *p)
 	p->pid = 0;
 	p->exit_code = 0;
 	p->teardown_owner_tid = PROC_TEARDOWN_OWNER_NONE;
+	p->agent_control_state = AGENT_CONTROL_OPEN;
 	p->vm_snapshot_depth = 0;
 	p->vm_snapshot_owner_tid = -1;
 	child_records_reset(p);
@@ -2553,6 +3033,8 @@ static int fork_common(int make_agent, int agent_role,
 	if (copy_status == 0) {
 		np->max_page = p->max_page;
 		np->ustack_base = p->ustack_base;
+		np->heap_base = p->heap_base;
+		np->heap_break = p->heap_break;
 		np->exec_dev = p->exec_dev;
 		np->exec_inum = p->exec_inum;
 		np->exec_flags = p->exec_flags;
@@ -2617,13 +3099,6 @@ static int fork_common(int make_agent, int agent_role,
 	}
 	fd_spawn_snapshot_release(&fds);
 	memset(np->syscall_count, 0, sizeof(np->syscall_count));
-	memset(np->mail_payload, 0, sizeof(np->mail_payload));
-	memset(np->mail_len, 0, sizeof(np->mail_len));
-	memset(np->mail_from, 0, sizeof(np->mail_from));
-	np->mail_head = 0;
-	np->mail_tail = 0;
-	np->mail_count = 0;
-
 	// A new process contains one thread, but it resumes the thread that issued
 	// the spawn. Using thread 0 here would redirect a sibling's spawn into the
 	// main thread's syscall continuation and break thread-bound delegation.
@@ -2644,7 +3119,8 @@ static int fork_common(int make_agent, int agent_role,
 	// rechecks the lifecycle barrier. A child marked for exit, or a pending
 	// credential whose scope ceased to be ACTIVE, must never become runnable.
 	publish_enabled = intr_save();
-	if (!proc_teardown_live(np) || !vfs_proc_scope_publishable(np)) {
+	if (!proc_teardown_live(np) || !vfs_proc_scope_publishable(np) ||
+	    agent_lifecycle_spawn_publish_locked(p, np) < 0) {
 		intr_restore(publish_enabled);
 		freeproc(np);
 		return -1;
@@ -2712,11 +3188,18 @@ int agent_worker_create_proc(char *path, uint64 requested_caps)
 	struct proc *p = curr_proc();
 	struct vfs_cred cred;
 	int pid;
+	int lookup_status;
 
-	if (path == 0 ||
-	    (ip = namei_scope(path, VFS_POLICY_WORKFLOW,
-			      VFS_SCOPE_SYSTEM)) == 0)
+	if (path == 0)
 		return -1;
+	ip = namei_scope_status(path, VFS_POLICY_WORKFLOW,
+			       VFS_SCOPE_SYSTEM, &lookup_status);
+	if (ip == 0 || lookup_status != FS_LOOKUP_FOUND)
+		return -1;
+	if (ivalid(ip) < 0) {
+		iput(ip);
+		return -1;
+	}
 	vfs_cred_from_proc(p, &cred);
 	if (!vfs_inode_authorize(ip, &cred, VFS_OP_EXEC)) {
 		iput(ip);
@@ -2732,14 +3215,17 @@ int push_argv_image(pagetable_t pagetable, uint64 stack_base,
 		    struct trapframe *staged, char **argv)
 {
 	uint64 argc, argp[MAX_ARG_NUM + 1];
-	uint64 sp;
-	uint64 layout_sp;
+	uint64 stack_top;
+	uint64 layout_bytes;
+	uint64 argv_sp;
+	struct user_stack_argv_layout layout;
 
 	if (pagetable == 0 || staged == 0 || argv == 0 ||
-	    stack_base > MAXVA - USTACK_SIZE)
+	    stack_base > MAXVA - USTACK_SIZE ||
+	    (stack_base & (USER_STACK_ALIGNMENT_BYTES - 1)) != 0)
 		return -1;
-	sp = stack_base + USTACK_SIZE;
-	layout_sp = sp;
+	stack_top = stack_base + USTACK_SIZE;
+	user_stack_argv_layout_init(&layout);
 	// Validate the complete layout before modifying the new user stack.
 	for (argc = 0; argv[argc]; argc++) {
 		uint64 n;
@@ -2747,35 +3233,30 @@ int push_argv_image(pagetable_t pagetable, uint64 stack_base,
 		if (argc >= MAX_ARG_NUM)
 			return -1;
 		n = strlen(argv[argc]) + 1;
-		if (n > layout_sp - stack_base)
+		if (user_stack_argv_layout_add_string(&layout, n) < 0)
 			return -1;
-		layout_sp -= n;
-		layout_sp -= layout_sp % 16;
+		argp[argc] = stack_top - layout.used;
 	}
-	uint64 pointer_bytes = (argc + 1) * sizeof(uint64);
-	if (pointer_bytes > layout_sp - stack_base)
+	if (user_stack_argv_layout_finish(&layout, &layout_bytes) < 0)
 		return -1;
-	// Push argument strings, prepare rest of stack in ustack.
-	for (argc = 0; argv[argc]; argc++) {
-		uint64 n = strlen(argv[argc]) + 1;
+	argv_sp = stack_top - layout_bytes;
+	argp[argc] = 0;
+	if (user_range_check(pagetable, argv_sp, layout_bytes, PTE_W) < 0)
+		return -1;
+	// The layout is now valid in full; only now may the new stack be changed.
+	for (uint64 index = 0; index < argc; index++) {
+		uint64 n = strlen(argv[index]) + 1;
 
-		sp -= n;
-		sp -= sp % 16; // riscv sp must be 16-byte aligned
-		if (copyout(pagetable, sp, argv[argc], n) < 0) {
+		if (copyout(pagetable, argp[index], argv[index], n) < 0) {
 			return -1;
 		}
-		argp[argc] = sp;
 	}
-	argp[argc] = 0;
-	// push the array of argv[] pointers.
-	sp -= (argc + 1) * sizeof(uint64);
-	sp -= sp % 16;
-	if (copyout(pagetable, sp, (char *)argp,
+	if (copyout(pagetable, argv_sp, (char *)argp,
 		    (argc + 1) * sizeof(uint64)) < 0) {
 		return -1;
 	}
-	staged->a1 = sp;
-	staged->sp = sp;
+	staged->a1 = argv_sp;
+	staged->sp = argv_sp;
 	return argc; // this ends up in a0, the first argument to main(argc, argv)
 }
 
@@ -2804,7 +3285,8 @@ static int proc_exec_inode_usable(struct proc *p, struct inode *ip,
 {
 	if (ip == 0)
 		return 0;
-	ivalid(ip);
+	if (ivalid(ip) < 0)
+		return 0;
 	if (!vfs_inode_authorize(ip, cred, VFS_OP_EXEC) ||
 	    !exec_policy_inode_layout_valid(ip))
 		return 0;
@@ -2840,12 +3322,15 @@ static struct inode *proc_exec_lookup(struct proc *p, char *path,
 			policies[i] == VFS_POLICY_WORKFLOW ?
 				VFS_SCOPE_SYSTEM : VFS_SCOPE_NONE,
 			&lookup_status);
-		if (lookup_status == FS_LOOKUP_ERROR)
+		if (lookup_status < 0)
 			return 0;
-		if (proc_exec_inode_usable(p, ip, cred))
-			return ip;
-		if (ip)
-			iput(ip);
+		if (lookup_status == FS_LOOKUP_FOUND) {
+			if (proc_exec_inode_usable(p, ip, cred))
+				return ip;
+			if (ip)
+				iput(ip);
+			return 0;
+		}
 	}
 	return 0;
 }
@@ -2868,19 +3353,15 @@ int exec(char *path, char **argv)
 		errorf("invalid file name %s\n", path);
 		return -1;
 	}
-	if (user_image_build(ip, (uint64)proc_trapframe(p, 0), &image) < 0) {
+	if (user_image_build(
+		    ip, (uint64)proc_trapframe(p, 0), p->resource_account,
+		    p->resource_slot_reserved ? RESOURCE_CHARGE_RESERVED :
+					RESOURCE_CHARGE_ORDINARY,
+		    &image) < 0) {
 		iput(ip);
 		return -1;
 	}
 	iput(ip);
-	if (p->is_agent) {
-		if (agent_alias_exec_context(p, image.pagetable) < 0) {
-			user_image_discard(&image);
-			return -1;
-		}
-		image.shared_base = p->agent_ctx_base;
-		image.shared_pages = AGENT_CONTEXT_PAGES;
-	}
 	memset(&staged, 0, sizeof(staged));
 	staged.epc = image.entry;
 	argc = push_argv_image(image.pagetable, image.ustack_base, &staged,
@@ -2889,7 +3370,8 @@ int exec(char *path, char **argv)
 		user_image_discard(&image);
 		return -1;
 	}
-	if (proc_install_user_image(p, &image, &staged, 1) < 0) {
+	if (proc_install_user_image(p, &image, &staged,
+				    PROC_IMAGE_INSTALL_LIVE_EXEC) < 0) {
 		user_image_discard(&image);
 		return -1;
 	}
@@ -2917,7 +3399,7 @@ int wait(int pid, int *code)
 			intr_restore(enabled);
 			return -1;
 		}
-		state = wait_queue_sleep(&p->child_waiters);
+		state = wait_queue_sleep_irq(&p->child_waiters);
 		intr_restore(enabled);
 		if (state < 0)
 			return -1;
@@ -2986,11 +3468,53 @@ void exit(int code)
 	if (claimed < 0)
 		panic("process teardown owner");
 	agent_proc_teardown(p);
+	mutex_release_thread_locks(t);
 	for (;;) {
+		int wait_status;
+
 		proc_interrupt_siblings(p, t);
-		if (proc_siblings_quiescent(p, t))
+#ifdef WAIT_ATOMIC_TEST_PROFILE
+		{
+			int test_enabled = intr_save();
+			int waiter_empty = p->thread_exit_waiters.head == 0;
+			int injected = wait_atomic_test_begin(
+				p, WAIT_ATOMIC_TEST_TEARDOWN,
+				(waiter_empty ? WAIT_ATOMIC_TEST_F_WAITER_EMPTY : 0) |
+				WAIT_ATOMIC_TEST_F_SIBLING_OBSERVED);
+
+			intr_restore(test_enabled);
+			if (injected && !waiter_empty)
+				panic("teardown wait injection queue not empty");
+			if (injected) {
+				if (proc_siblings_quiescent(p, t))
+					panic("teardown wait injection without sibling");
+				/*
+				 * Let the final sibling publish EXITED and wake an empty
+				 * queue. The production recheck below must observe that
+				 * publication instead of sleeping after the consumed wake.
+				 */
+				while (!proc_siblings_quiescent(p, t))
+					yield();
+				wait_atomic_test_complete(
+					p, WAIT_ATOMIC_TEST_TEARDOWN,
+					WAIT_ATOMIC_TEST_F_SIBLING_EXITED);
+			}
+		}
+#endif
+		enabled = intr_save();
+		/*
+		 * The last sibling publishes EXITED and wakes this queue with
+		 * interrupts disabled.  Keep the final quiescence check and queue
+		 * publication in the same interrupt-off interval so that completion
+		 * cannot wake an empty queue just before the teardown owner sleeps.
+		 */
+		if (proc_siblings_quiescent(p, t)) {
+			intr_restore(enabled);
 			break;
-		if (wait_queue_sleep(&p->thread_exit_waiters) < 0)
+		}
+		wait_status = wait_queue_sleep_irq(&p->thread_exit_waiters);
+		intr_restore(enabled);
+		if (wait_status != WAIT_QUEUE_OK)
 			yield();
 	}
 	kernel_work_begin_cleanup();
@@ -2998,6 +3522,8 @@ void exit(int code)
 		panic("process teardown I/O admission");
 	if (proc_teardown_run(p, t, 1) < 0)
 		panic("active process exit");
+	agent_thread_runtime_transition(t, AGENT_THREAD_RUNTIME_RELEASE);
+	agent_observe_thread_reset(t);
 	t->exit_code = code;
 	t->state = T_DYING;
 	kernel_stack_mark_reap(t);

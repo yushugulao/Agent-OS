@@ -108,12 +108,30 @@ static inline void exec_manifest_worker_image(const char *source,
 	X("agentsecurity_ucore", "agentsecurity_ucore", \
 	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
 	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
+	X("agenttoolabi_ucore", "agenttoolabi_ucore", \
+	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
+	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
+	X("agentmetacrash_ucore", "agentmetacrash_ucore", \
+	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
+	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
+	X("agentmetarecover_ucore", "agentmetarecover_ucore", \
+	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
+	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
+	X("agentmetaeio_ucore", "agentmetaeio_ucore", \
+	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
+	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
+	X("agentobsreboot_ucore", "agentobsreboot_ucore", \
+	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
+	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
 	X("agentscope_ucore", "agentscope_ucore", \
 	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
 	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
 	X("workflow_teardown_race_ucore", "workflow_teardown_race_ucore", \
 	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
 	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
+	X("workflow_teardown_race_ucore", "wf_public", \
+	  EXEC_MANIFEST_F_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
+	  EXEC_MANIFEST_VFS_PROFILE_NONE) \
 	X("iobudget_ucore", "iobudget_ucore", \
 	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
 	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
@@ -146,6 +164,9 @@ static inline void exec_manifest_worker_image(const char *source,
 	  EXEC_MANIFEST_F_SEALED, 0, 0, \
 	  EXEC_MANIFEST_VFS_PROFILE_NONE) \
 	X("threadresource_ucore", "threadresource_ucore", \
+	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
+	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
+	X("physicalresource_ucore", "physicalresource_ucore", \
 	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
 	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
 	X("rp_agentos_orch", "rp_agentos_orch", \

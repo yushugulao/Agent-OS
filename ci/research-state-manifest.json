@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "targets": {
+    "plain": {
+      "source_roots": [
+        "baseline_ucore/user/src",
+        "baseline_ucore/user/include"
+      ]
+    },
+    "agentos": {
+      "source_roots": [
+        "user/src",
+        "user/include"
+      ]
+    }
+  },
+  "state_file_calls": [
+    "consistency_runtime_contains",
+    "file_contains_silent",
+    "load_graph_stats",
+    "optional_file_contains",
+    "require_file_token",
+    "require_token",
+    "rp_append_file",
+    "rp_append_host_action_line",
+    "rp_count_lines",
+    "rp_count_token",
+    "rp_evidence_count_prefixed_lines",
+    "rp_evidence_get_u64",
+    "rp_evidence_measure_file",
+    "rp_file_contains",
+    "rp_get_int_value",
+    "rp_read_file",
+    "rp_write_file"
+  ],
+  "host_state_files": [
+    "rp_host_action_inbox",
+    "rp_host_action_plan",
+    "rp_host_action_queue",
+    "rp_host_action_seed",
+    "rp_host_run_result"
+  ],
+  "reader_optional_state_files": [
+    "rp_llm_conclusions",
+    "rp_metrics",
+    "rp_review_pack"
+  ]
+}

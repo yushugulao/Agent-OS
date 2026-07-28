@@ -9,7 +9,7 @@ from pathlib import Path
 from xml.etree import ElementTree as ET
 
 import summarize_dual_platform_results as summary
-from test_chart_type_data_contract import write_fixture
+from test_summarize_dual_platform_results import fixture
 
 
 SVG_NS = "{http://www.w3.org/2000/svg}"
@@ -107,14 +107,19 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as work_tmp, tempfile.TemporaryDirectory() as out_tmp:
         work_dir = Path(work_tmp)
         out_dir = Path(out_tmp)
-        write_fixture(work_dir)
-        summary.summarize(work_dir, out_dir)
+        fixture(work_dir, measured=True)
+        summary.summarize(work_dir, out_dir, require_measured_experiments=True)
         charts = sorted((out_dir / "charts").glob("*.svg"))
-        assert len(charts) >= 11, charts
+        assert len(charts) == 5, charts
         for chart in charts:
             validate_chart(chart)
     doc_charts = sorted((repo_root / "docs" / "assets" / "verification-charts").glob("*.svg"))
-    assert len(doc_charts) >= 11, doc_charts
+    assert {chart.name for chart in doc_charts} == {
+        "cost-replacement.svg",
+        "runner-speedup.svg",
+        "runner-ticks.svg",
+        "runtime-observation.svg",
+    }, doc_charts
     for chart in doc_charts:
         validate_chart(chart)
     print("test_chart_svg_layout_contract: passed")

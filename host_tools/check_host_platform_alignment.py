@@ -4,24 +4,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
-SUCCESS_MARKERS = (
-    "status=ready",
-    "status=ok",
-    "status=passed",
-    "state=ready",
-    "result=ok",
-    "result=passed",
-    "=passed",
-    "_ok=1",
-    "ok=1",
-    "passed=1",
-    "ready=1",
-    "state_ok=1",
+from check_host_test_alignment import (
+    FNV_OFFSET,
+    fnv1a64,
+    parse_positive_int,
+    parse_record,
+    read_runtime_manifest,
 )
-
 
 @dataclass(frozen=True)
 class CapabilityGroup:
@@ -450,14 +443,295 @@ def runtime_candidates(group: CapabilityGroup, sources: tuple[str, ...]) -> tupl
     return tuple(source_to_state_name(source) for source in sources)
 
 
-def has_successful_state(state_dir: Path | None, state_name: str) -> bool:
-    if state_dir is None:
-        return False
-    path = state_dir / state_name
-    if not path.is_file() or path.stat().st_size <= 0:
-        return False
-    text = path.read_text(encoding="utf-8", errors="replace").lower()
-    return any(marker in text for marker in SUCCESS_MARKERS)
+PROGRAM_MANIFEST_ENTRY = re.compile(r'^\s*APPLY\("(rp_[a-z0-9_]+)"\)\s*(?:\\)?\s*$')
+ROLE_MANIFEST_ENTRY = re.compile(
+    r'^\s*APPLY\("(rp_[a-z0-9_]+)",\s*'
+    r'"(orchestrator|recovery|artifact|investigator|sentinel)"\)\s*(?:\\)?\s*$'
+)
+AGENT_ROLE_NUMBERS = {
+    "sentinel": 1,
+    "investigator": 2,
+    "recovery": 3,
+    "orchestrator": 4,
+    "artifact": 5,
+}
+
+
+def _parse_program_manifest(
+    path: Path,
+) -> tuple[tuple[str, ...], dict[str, str], list[str]]:
+    if not path.is_file():
+        return (), {}, [f"program manifest is missing: {path}"]
+    try:
+        lines = path.read_text(encoding="utf-8", errors="strict").splitlines()
+    except UnicodeDecodeError:
+        return (), {}, [f"program manifest is not valid UTF-8: {path}"]
+    start = next(
+        (index for index, line in enumerate(lines) if line.startswith("#define RP_PLATFORM_PROGRAMS(APPLY)")),
+        None,
+    )
+    if start is None:
+        return (), {}, [f"RP_PLATFORM_PROGRAMS is missing from {path}"]
+    programs: list[str] = []
+    for line in lines[start + 1 :]:
+        match = PROGRAM_MANIFEST_ENTRY.fullmatch(line)
+        if match is None:
+            break
+        programs.append(match.group(1))
+        if not line.rstrip().endswith("\\"):
+            break
+    if not programs:
+        return (), {}, [f"RP_PLATFORM_PROGRAMS is empty in {path}"]
+    if len(programs) != len(set(programs)):
+        return (), {}, [f"RP_PLATFORM_PROGRAMS contains duplicate names in {path}"]
+    role_start = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.startswith("#define RP_AGENTOS_ROLE_PROGRAMS(APPLY)")
+        ),
+        None,
+    )
+    if role_start is None:
+        return tuple(programs), {}, [f"RP_AGENTOS_ROLE_PROGRAMS is missing from {path}"]
+    roles: dict[str, str] = {}
+    for line in lines[role_start + 1 :]:
+        match = ROLE_MANIFEST_ENTRY.fullmatch(line)
+        if match is None:
+            break
+        program, role = match.groups()
+        if program in roles:
+            return tuple(programs), {}, [f"RP_AGENTOS_ROLE_PROGRAMS contains duplicate names in {path}"]
+        roles[program] = role
+        if not line.rstrip().endswith("\\"):
+            break
+    if not roles:
+        return tuple(programs), {}, [f"RP_AGENTOS_ROLE_PROGRAMS is empty in {path}"]
+    unknown = sorted(set(roles) - set(programs))
+    if unknown:
+        return tuple(programs), roles, [
+            f"RP_AGENTOS_ROLE_PROGRAMS contains unknown programs in {path}: {','.join(unknown)}"
+        ]
+    return tuple(programs), roles, []
+
+
+def read_expected_programs(
+    root: Path,
+) -> tuple[tuple[str, ...], dict[str, str], list[str]]:
+    agentos_path = root / "user" / "include" / "rp_program_manifest.h"
+    plain_path = root / "baseline_ucore" / "user" / "include" / "rp_program_manifest.h"
+    agentos, agentos_roles, agentos_errors = _parse_program_manifest(agentos_path)
+    plain, plain_roles, plain_errors = _parse_program_manifest(plain_path)
+    errors = agentos_errors + plain_errors
+    if agentos and plain and agentos != plain:
+        errors.append("plain and AgentOS ordered program manifests differ")
+    if agentos_roles and plain_roles and agentos_roles != plain_roles:
+        errors.append("plain and AgentOS Agent-role launch manifests differ")
+    return agentos, agentos_roles, errors
+
+
+def read_program_ledger(
+    state_dir: Path,
+    expected_programs: tuple[str, ...],
+    expected_agent_roles: dict[str, str],
+    target: str,
+) -> tuple[dict[str, int], list[str]]:
+    path = state_dir / "rp_orch_timing"
+    if not path.is_file():
+        return {}, ["rp_orch_timing program ledger is missing"]
+    data = path.read_bytes()
+    errors: list[str] = []
+    if not data or not data.endswith(b"\n"):
+        return {}, ["rp_orch_timing is empty or has an incomplete final record"]
+    if b"\r" in data:
+        return {}, ["rp_orch_timing contains non-canonical line endings"]
+    try:
+        lines = data.decode("utf-8", errors="strict").splitlines()
+    except UnicodeDecodeError:
+        return {}, ["rp_orch_timing is not valid UTF-8"]
+    if len(lines) < 2:
+        return {}, ["rp_orch_timing is missing canonical headers"]
+    if len(lines) != len(expected_programs) + 2:
+        errors.append(
+            "rp_orch_timing record count does not match the trusted program manifest"
+        )
+    orchestrator = parse_record(lines[0])
+    launcher = parse_record(lines[1])
+    if orchestrator != {"orchestrator": "rp_orch"}:
+        errors.append("rp_orch_timing has an invalid orchestrator header")
+    expected_header_launcher = "fork" if target == "plain" else "mixed_attested"
+    if launcher != {"launcher": expected_header_launcher}:
+        errors.append("rp_orch_timing has an invalid launcher header")
+
+    program_digest = FNV_OFFSET
+    for number, line in enumerate(lines[2:], 3):
+        record = parse_record(line)
+        if record is None:
+            errors.append(f"rp_orch_timing line {number} is not a strict key/value record")
+            continue
+        index = number - 3
+        if index >= len(expected_programs):
+            errors.append(f"rp_orch_timing line {number} is an unexpected program record")
+            continue
+        program = record.get("program", "")
+        expected_program = expected_programs[index]
+        expected_keys = (
+            ("program", "launcher", "ok", "code", "elapsed_ms")
+            if target == "plain"
+            else (
+                "program",
+                "role",
+                "launcher",
+                "identity_source",
+                "is_agent",
+                "agent_role",
+                "filesystem_domain",
+                "filesystem_capabilities",
+                "ok",
+                "code",
+                "elapsed_ms",
+            )
+        )
+        if tuple(record) != expected_keys:
+            errors.append(f"rp_orch_timing line {number} has an invalid record schema")
+        if program != expected_program:
+            errors.append(
+                f"rp_orch_timing line {number} expected {expected_program}, found {program or '<missing>'}"
+            )
+        if record.get("ok") != "1" or record.get("code") != "0":
+            errors.append(f"rp_orch_timing program {program} did not complete successfully")
+        if record.get("elapsed_ms", "").isdecimal() is False:
+            errors.append(f"rp_orch_timing program {program} has invalid elapsed time")
+        if target == "plain":
+            if record.get("launcher") != "fork":
+                errors.append(f"rp_orch_timing program {program} has invalid plain launcher")
+        else:
+            role = record.get("role")
+            launcher_name = record.get("launcher")
+            expected_role = expected_agent_roles.get(program, "plain")
+            expected_launcher = (
+                "agent_create_role"
+                if program in expected_agent_roles
+                else "agent_worker_create"
+            )
+            if role != expected_role:
+                errors.append(f"rp_orch_timing program {program} has invalid AgentOS role")
+            if launcher_name != expected_launcher:
+                errors.append(f"rp_orch_timing program {program} has invalid AgentOS launcher")
+            expected_is_agent = "1" if program in expected_agent_roles else "0"
+            expected_role_number = str(AGENT_ROLE_NUMBERS.get(expected_role, 0))
+            if record.get("identity_source") != "child_after_exec":
+                errors.append(f"rp_orch_timing program {program} lacks post-exec identity evidence")
+            if record.get("is_agent") != expected_is_agent or record.get("agent_role") != expected_role_number:
+                errors.append(f"rp_orch_timing program {program} has mismatched attested identity")
+            if not record.get("filesystem_domain", "").isdecimal() or int(
+                record.get("filesystem_domain", "0")
+            ) <= 0:
+                errors.append(f"rp_orch_timing program {program} has invalid attested domain")
+            if not record.get("filesystem_capabilities", "").isdecimal() or int(
+                record.get("filesystem_capabilities", "0")
+            ) <= 0:
+                errors.append(f"rp_orch_timing program {program} has invalid attested capabilities")
+        program_digest = fnv1a64(
+            expected_program.encode("utf-8") + b"\0", program_digest
+        )
+    return {
+        "program_source_bytes": len(data),
+        "program_source_hash": fnv1a64(data),
+        "program_names_digest": program_digest,
+        "programs_observed": len(lines) - 2,
+    }, errors
+
+
+def _program_evidence_records(path: Path) -> tuple[list[dict[str, str]], list[str]]:
+    if not path.is_file():
+        return [], [f"{path.name} program evidence is missing"]
+    records: list[dict[str, str]] = []
+    errors: list[str] = []
+    try:
+        lines = path.read_text(encoding="utf-8", errors="strict").splitlines()
+    except UnicodeDecodeError:
+        return [], [f"{path.name} program evidence is not valid UTF-8"]
+    for number, line in enumerate(lines, 1):
+        if "program_source=" not in line and "programs_observed=" not in line:
+            continue
+        record = parse_record(line)
+        if record is None:
+            errors.append(f"{path.name} line {number} has malformed program evidence")
+            continue
+        records.append(record)
+    return records, errors
+
+
+def _validate_program_record(
+    record: dict[str, str], measured: dict[str, int], label: str
+) -> list[str]:
+    errors: list[str] = []
+    if record.get("program_source") != "rp_orch_timing":
+        errors.append(f"{label} program evidence is not bound to rp_orch_timing")
+    for key, actual in measured.items():
+        declared = parse_positive_int(record.get(key))
+        if declared != actual:
+            errors.append(f"{label} {key} does not match rp_orch_timing")
+    return errors
+
+
+def validate_program_inventory(
+    root: Path, plain_state_dir: Path, agentos_state_dir: Path
+) -> tuple[dict[str, object], list[str]]:
+    expected_programs, expected_agent_roles, manifest_errors = read_expected_programs(root)
+    plain_measured, plain_errors = read_program_ledger(
+        plain_state_dir, expected_programs, expected_agent_roles, "plain"
+    )
+    agentos_measured, agentos_errors = read_program_ledger(
+        agentos_state_dir, expected_programs, expected_agent_roles, "agentos"
+    )
+    plain_records, plain_record_errors = _program_evidence_records(
+        plain_state_dir / "rp_agentcmp"
+    )
+    agentos_records, agentos_record_errors = _program_evidence_records(
+        agentos_state_dir / "rp_agentcmp"
+    )
+    errors = list(manifest_errors)
+    errors.extend(f"plain: {error}" for error in plain_errors + plain_record_errors)
+    errors.extend(f"AgentOS: {error}" for error in agentos_errors + agentos_record_errors)
+
+    plain_observations = [
+        record
+        for record in plain_records
+        if record.get("evidence_role") == "demo_reference"
+        and record.get("observation_source") == "guest_runtime"
+        and record.get("status") == "reference_observed"
+    ]
+    agentos_verified = [
+        record
+        for record in agentos_records
+        if record.get("evidence_role") == "runtime_verified"
+        and record.get("evidence_generation") == "runtime"
+        and record.get("status") == "verified"
+    ]
+    if len(plain_observations) != 1:
+        errors.append("plain: expected exactly one demo-reference program observation")
+    elif plain_measured:
+        errors.extend(_validate_program_record(plain_observations[0], plain_measured, "plain"))
+    if len(agentos_verified) != 1:
+        errors.append("AgentOS: expected exactly one runtime-verified program inventory")
+    elif agentos_measured:
+        errors.extend(_validate_program_record(agentos_verified[0], agentos_measured, "AgentOS"))
+    if any(
+        record.get("evidence_role") == "runtime_verified"
+        or (
+            record.get("evidence_generation") == "runtime"
+            and record.get("status") == "verified"
+        )
+        for record in plain_records
+    ):
+        errors.append("plain: demo/reference evidence impersonates AgentOS runtime verification")
+    return {
+        "plain_programs_observed": plain_measured.get("programs_observed"),
+        "agentos_programs_observed": agentos_measured.get("programs_observed"),
+        "verified": not errors,
+    }, errors
 
 
 def read_reader_text(root: Path) -> str:
@@ -503,6 +777,16 @@ def run_check(
     reader_text = read_reader_text(root)
     groups: list[dict[str, object]] = []
     failures: list[str] = []
+    runtime_manifest_errors: list[str] = []
+    program_inventory: dict[str, object] = {}
+    program_inventory_errors: list[str] = []
+    if check_runtime_state:
+        _, runtime_manifest_errors = read_runtime_manifest(agentos_state_dir)
+        failures.extend(f"AgentOS runtime manifest: {error}" for error in runtime_manifest_errors)
+        program_inventory, program_inventory_errors = validate_program_inventory(
+            root, plain_state_dir, agentos_state_dir
+        )
+        failures.extend(f"program inventory: {error}" for error in program_inventory_errors)
 
     for group in CAPABILITY_GROUPS:
         missing_host = missing_items(group.host_modules, host_modules)
@@ -516,12 +800,12 @@ def run_check(
         plain_runtime_hits = [
             name
             for name in plain_runtime_candidates
-            if name in plain_state_names and has_successful_state(plain_state_dir, name)
+            if name in plain_state_names and (plain_state_dir / name).stat().st_size > 0
         ]
         agentos_runtime_hits = [
             name
             for name in agentos_runtime_candidates
-            if name in agentos_state_names and has_successful_state(agentos_state_dir, name)
+            if name in agentos_state_names and (agentos_state_dir / name).stat().st_size > 0
         ]
 
         if missing_host:
@@ -533,9 +817,9 @@ def run_check(
         if missing_reader:
             failures.append(f"{group.name}: missing Reader/doc keywords: {', '.join(missing_reader)}")
         if check_runtime_state and not plain_runtime_hits:
-            failures.append(f"{group.name}: no successful plain runtime state file was produced")
+            failures.append(f"{group.name}: no plain reference state file was produced")
         if check_runtime_state and not agentos_runtime_hits:
-            failures.append(f"{group.name}: no successful AgentOS runtime state file was produced")
+            failures.append(f"{group.name}: no AgentOS runtime state file was produced")
         group_failed = bool(
             missing_host
             or missing_plain
@@ -591,6 +875,13 @@ def run_check(
         "plain_state_files": len(plain_state_names) if check_runtime_state else None,
         "agentos_state_files": len(agentos_state_names) if check_runtime_state else None,
         "runtime_state_checked": check_runtime_state,
+        "runtime_evidence_verified": check_runtime_state
+        and not runtime_manifest_errors
+        and not program_inventory_errors,
+        "program_inventory_verified": check_runtime_state and not program_inventory_errors,
+        "plain_programs_observed": program_inventory.get("plain_programs_observed"),
+        "agentos_programs_observed": program_inventory.get("agentos_programs_observed"),
+        "plain_evidence_role": "demo_reference",
         "groups_ok": sum(1 for group in groups if group["status"] == "ok"),
         "groups_total": len(groups),
         "groups": groups,
@@ -628,6 +919,8 @@ def main() -> int:
         f"plain_sources={summary['plain_sources']} "
         f"agentos_sources={summary['agentos_sources']} "
         f"runtime_state_checked={int(bool(summary['runtime_state_checked']))} "
+        f"runtime_evidence_verified={int(bool(summary['runtime_evidence_verified']))} "
+        f"plain_evidence_role={summary['plain_evidence_role']} "
         f"groups_ok={summary['groups_ok']} "
         f"groups_total={summary['groups_total']} "
         f"untracked_host_modules={summary['untracked_host_modules']} "

@@ -3,7 +3,8 @@
 
 #include "agent.h"
 
-void agent_metadata_query_init(void);
+static inline void agent_metadata_query_init(void) {}
+int agent_metadata_query_from_payload(struct agent_file_query *, char *);
 void agent_metadata_query_invalidate_locked(uint, int);
 int agent_metadata_query_has_filter(const struct agent_file_query *);
 int agent_metadata_query_matches(uint, uint, const struct agent_file_query *,

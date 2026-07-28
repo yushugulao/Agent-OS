@@ -1,44 +1,43 @@
 #!/usr/bin/env python3
 """Build and verify a compact, commit-bound AgentOS acceptance evidence bundle."""
 from __future__ import annotations
-import argparse
-import csv
-import hashlib
-import html
-import json
-import math
-import os
-import platform
-import re
-import shutil
-import signal
-import subprocess
-import sys
-import tempfile
-import time
-from urllib import error as urlerror
+import argparse, csv, hashlib, html, json
+import math, os, platform, re, shutil
+import signal, subprocess, sys, tempfile, time
 from urllib import parse as urlparse
-from urllib import request as urlrequest
 from datetime import datetime, timezone
 from pathlib import Path
-SCHEMA_VERSION = 2
-FULL_VERIFY_PROFILE_VERSION = 1
+HOST_TOOLS = Path(__file__).resolve().parents[1] / "host_tools"
+if str(HOST_TOOLS) not in sys.path:
+    sys.path.insert(0, str(HOST_TOOLS))
+from measured_experiments import (  # noqa: E402
+    MeasurementError,
+    capture_bundle_artifacts,
+    verify_bundle_artifacts,
+    verify_measurement_artifact_set,
+)
+from evidence_delivery_contract import (DeliveryContractError, make_manifest_binding,  # noqa: E402
+                                        publish_bundle_and_index, validate_delivery_field)
+from evidence_semantic_registry import validate_raw_artifacts  # noqa: E402
+from remote_ci_bundle import decode_gitlab_json, gitlab_fetch, verify_job_execution  # noqa: E402
+from strict_json import read_strict_json, strict_json_loads  # noqa: E402
+SCHEMA_VERSION = 6
+FULL_VERIFY_PROFILE_VERSION = 5
 REMOTE_CI_SCHEMA_VERSION = 1
-REMOTE_CI_JOBS = (("kernel-budgets", "host"), ("reader-e2e", "qemu"),
-                  ("agent-regression", "qemu"), ("kernel-mechanism-regression", "qemu"))
+REMOTE_CI_JOBS = (("kernel-budgets", "host"), ("reader-e2e", "qemu"), ("agent-regression", "qemu"),
+                  ("kernel-mechanism-regression", "qemu"), ("physical-resource-regression", "qemu"), ("metadata-recovery-regression", "qemu"),
+                  ("observe-recovery-regression", "qemu"), ("virtio-disk-regression", "qemu"), ("fs-allocator-fault-regression", "qemu"))
 REMOTE_CI_TAGS = {"host": "agentos-host-calibrated", "qemu": "agentos-qemu-calibrated"}
-REMOTE_RESPONSE_LIMIT = 256 * 1024 * 1024
+FULL_VERIFY_TIMEOUT_SECONDS = 5 * 60 * 60
 SUMMARY_NAME = "verification-summary.json"
 SUCCESS_MARKER = "[full-verify] all checks passed"
 KERNEL_BUDGET_END = "[kernel-budget] kernel checks passed"
+AGENT_BUDGET_START = "[kernel-budget] agent-modules checks begin"
+AGENT_BUDGET_END = "[kernel-budget] agent-modules checks passed"
 SAFE_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,95}$")
 SHA256 = re.compile(r"^[0-9a-f]{64}$")
-SUMMARY_FIELDS = {"schema_version", "full_verify_profile_version", "kind", "status", "commit",
-                  "completed_at_utc", "settings", "steps", "artifacts",
-                  "orchestration_source_sha256"}
-MANIFEST_FIELDS = {"schema_version", "status", "commit", "collected_at_utc", "authenticity",
-                   "command", "verification_summary", "raw_artifacts", "environment",
-                   "configuration", "metrics"}
+SUMMARY_FIELDS = {"schema_version", "full_verify_profile_version", "kind", "status", "commit", "completed_at_utc", "settings", "steps", "artifacts", "step_contract_sha256"}
+MANIFEST_FIELDS = {"schema_version", "status", "commit", "collected_at_utc", "authenticity", "delivery", "command", "verification_summary", "raw_artifacts", "environment", "configuration", "metrics"}
 READER_RUN_ARTIFACTS = (
     re.compile(r"^reader-e2e-run-[a-z0-9._-]+-ucore-build\.log$"),
     re.compile(r"^reader-e2e-run-[a-z0-9._-]+-ucore-run\.log$"),
@@ -50,16 +49,23 @@ STEP_CONTRACT = (
     ("kernel-budgets", (), ()),
     ("reader-e2e", ("reader-e2e.log", "reader-e2e-log-manifest.json"), READER_RUN_ARTIFACTS),
     ("host-platform-alignment", (), ()),
-    ("dual-platforms", ("dual-plain-qemu.log", "dual-agentos-qemu.log",
-                        "dual-stage-timings.csv", "dual-state-compare.json",
-                        "dual-reader-compare.json"), ()),
     ("agent-suite", ("agent-suite-timings.log", "agent-suite-guest.log"), ()),
+    ("dual-platforms", ("dual-plain-qemu.log", "dual-agentos-qemu.log",
+                         "dual-stage-timings.csv", "dual-state-compare.json",
+                         "dual-reader-compare.json", "dual-targeted-agentbench-guest.log",
+                         "dual-measured-experiments.json",
+                         "dual-file-query-benchmark.csv"), ()),
     ("proc-reap", ("proc-reap.log",), ()),
     ("syscall-fairness", ("syscall-fairness.log",), ()),
     ("file-resource", ("file-resource.log",), ()),
     ("thread-resource", ("thread-resource.log",), ()),
+    ("physical-resource", ("physical-resource.log",), ()),
+    ("metadata-recovery", ("metadata-recovery.log",), ()),
+    ("observe-recovery", ("observe-recovery.log", "observe-recovery-before-reap.img"), ()),
+    ("virtio-disk", ("virtio-disk.log",), ()),
     ("workflow-teardown-race", ("workflow-teardown-race.log",), ()),
     ("fs-enospc", ("fs-enospc.log",), ()),
+    ("fs-allocator-fault", ("fs-allocator-fault.log", "fs-allocator-evidence.tar"), ()),
 )
 BUDGET_LINE = re.compile(
     r"^\[kernel-budget\] (?P<name>.+?): actual=(?P<actual>[0-9]+(?:\.[0-9]+)?)"
@@ -78,25 +84,37 @@ METRIC_NAMES = {
     "kernel runtime total": "kernel_runtime_total_bytes",
     "struct proc": "struct_proc_bytes",
 }
+AGGREGATE_PREFIX = "Agent aggregate metadata_control_plane "
+AGGREGATE_METRICS = {
+    "source_lines": ("metadata_control_plane_source_lines", "lines"), "source_bytes": ("metadata_control_plane_source_bytes", "bytes"),
+    "loaded_text_bytes": ("metadata_control_plane_loaded_text_bytes", "bytes"), "bss_bytes": ("metadata_control_plane_bss_bytes", "bytes"),
+}
 REQUIRED_KERNEL_METRICS = {
     "kernel_source_lines",
     *METRIC_NAMES.values(),
 }
-REQUIRED_EVIDENCE_METRICS = REQUIRED_KERNEL_METRICS | {
+REQUIRED_AGGREGATE_METRICS = {value[0] for value in AGGREGATE_METRICS.values()}
+REQUIRED_EVIDENCE_METRICS = REQUIRED_KERNEL_METRICS | REQUIRED_AGGREGATE_METRICS | {
     "kernel_stack_required_bytes", "boot_stack_required_bytes", "agent_suite_total_seconds",
 }
 CONTROLLED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 REQUIRED_RAW_FILES = {
     "reader-e2e.log", "reader-e2e-log-manifest.json", "dual-plain-qemu.log",
     "dual-agentos-qemu.log", "dual-stage-timings.csv", "dual-state-compare.json",
-    "dual-reader-compare.json", "agent-suite-timings.log", "agent-suite-guest.log",
+    "dual-reader-compare.json", "dual-targeted-agentbench-guest.log",
+    "dual-measured-experiments.json", "dual-file-query-benchmark.csv",
+    "agent-suite-timings.log", "agent-suite-guest.log",
     "proc-reap.log", "syscall-fairness.log", "file-resource.log", "thread-resource.log",
+    "physical-resource.log", "metadata-recovery.log", "observe-recovery.log", "observe-recovery-before-reap.img",
+    "virtio-disk.log",
     "workflow-teardown-race.log", "fs-enospc.log",
+    "fs-allocator-fault.log", "fs-allocator-evidence.tar",
 }
 CORE_FILES = {
     "manifest.json", SUMMARY_NAME, "checksums.sha256", "configuration/kernel-budgets.json",
     "environment/environment.json", "logs/full-verify.log", "metrics/measurements.csv",
     "metrics/agent-case-timings.csv", "metrics/commands.csv", "charts/budget-usage.svg",
+    "metrics/file-query-benchmark.csv", "metrics/file-query-benchmark.json",
 } | {f"logs/raw/{name}" for name in REQUIRED_RAW_FILES}
 TOOL_LABELS = {"git", "compiler", "qemu", "python", "make", "bash", "host_cc"}
 CSV_SCHEMAS = {
@@ -104,8 +122,7 @@ CSV_SCHEMAS = {
                          "source_line", "source_log", "source_log_sha256"],
     "agent_timings_csv": ["sequence", "case", "seconds", "source_line", "source_log",
                           "source_log_sha256"],
-    "command_csv": ["command", "argv_json", "returncode", "elapsed_seconds", "source_log",
-                    "source_log_sha256"],
+    "command_csv": ["command", "argv_json", "returncode", "elapsed_seconds", "timeout_seconds", "source_log", "source_log_sha256"],
 }
 class EvidenceError(RuntimeError):
     pass
@@ -125,6 +142,9 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+def step_contract_sha256(steps: list[dict[str, object]]) -> str:
+    payload = json.dumps(steps, ensure_ascii=True, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 def write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
@@ -261,7 +281,6 @@ def parse_steps(path: Path) -> list[dict[str, object]]:
     if not steps:
         raise EvidenceError("full-verify recorded no steps")
     return steps
-
 def validate_step_contract(steps: object) -> list[dict[str, object]]:
     if not isinstance(steps, list):
         raise EvidenceError("verification summary steps are invalid")
@@ -297,7 +316,6 @@ def validate_step_contract(steps: object) -> list[dict[str, object]]:
         if any(count < 1 for count in counts) or (not patterns and remaining):
             raise EvidenceError(f"verification summary artifact contract differs: {name}")
     return steps
-
 def validate_settings(settings: object) -> dict[str, object]:
     expected = {"agent_marker_grace_seconds", "mechanism_marker_grace_seconds",
                 "workflow_stability_runs"}
@@ -309,12 +327,11 @@ def validate_settings(settings: object) -> dict[str, object]:
             or not isinstance(runs, int) or isinstance(runs, bool) or runs < 3):
         raise EvidenceError("verification summary settings contract is invalid")
     return settings
-
 def validate_reader_inventory(directory: Path, steps: list[dict[str, object]]) -> None:
     reader_step = next(step for step in steps if step["name"] == "reader-e2e")
     try:
-        manifest = json.loads((directory / "reader-e2e-log-manifest.json").read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        manifest = read_strict_json(directory / "reader-e2e-log-manifest.json")
+    except (OSError, UnicodeDecodeError, ValueError) as error:
         raise EvidenceError(f"Reader E2E artifact manifest is invalid: {error}") from error
     runs = manifest.get("runs") if isinstance(manifest, dict) else None
     if (set(manifest) != {"schema_version", "required_files", "runs"}
@@ -335,7 +352,6 @@ def validate_reader_inventory(directory: Path, steps: list[dict[str, object]]) -
         expected.update(f"reader-e2e-{run}-{name}" for name in READER_LOG_FILENAMES)
     if set(reader_step["artifacts"]) != expected:
         raise EvidenceError("Reader E2E manifest and artifact inventory differ")
-
 def validate_summary(value: object) -> dict[str, object]:
     if (not isinstance(value, dict) or set(value) != SUMMARY_FIELDS
             or value.get("schema_version") != SCHEMA_VERSION):
@@ -346,8 +362,7 @@ def validate_summary(value: object) -> dict[str, object]:
         raise EvidenceError("verification summary did not pass")
     if not re.fullmatch(r"[0-9a-f]{40}", str(value.get("commit", ""))):
         raise EvidenceError("verification summary commit is invalid")
-    if (not SHA256.fullmatch(str(value.get("orchestration_source_sha256", "")))
-            or not valid_utc_timestamp(value.get("completed_at_utc"))):
+    if not valid_utc_timestamp(value.get("completed_at_utc")):
         raise EvidenceError("verification summary provenance is invalid")
     steps, artifacts = value.get("steps"), value.get("artifacts")
     if not isinstance(steps, list) or not steps or not isinstance(artifacts, list) or not artifacts:
@@ -379,6 +394,8 @@ def validate_summary(value: object) -> dict[str, object]:
     if len(assigned) != len(set(assigned)) or set(assigned) != artifact_names:
         raise EvidenceError("summary steps and artifact inventory differ")
     validate_step_contract(steps)
+    if value.get("step_contract_sha256") != step_contract_sha256(steps):
+        raise EvidenceError("verification summary step contract hash differs")
     validate_settings(value.get("settings"))
     return value
 def write_summary(args: argparse.Namespace) -> int:
@@ -417,7 +434,7 @@ def write_summary(args: argparse.Namespace) -> int:
         },
         "steps": steps,
         "artifacts": artifacts,
-        "orchestration_source_sha256": sha256_file(steps_path),
+        "step_contract_sha256": step_contract_sha256(steps),
     }
     validate_summary(summary)
     validate_reader_inventory(incoming, steps)
@@ -430,34 +447,56 @@ def metric_key(name: str, unit: str) -> str | None:
     return METRIC_NAMES.get(name)
 def load_budget_config(path: Path) -> dict[str, object]:
     try:
-        value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
+        value = read_strict_json(path)
+    except (OSError, UnicodeDecodeError, ValueError) as error:
         raise EvidenceError(f"invalid kernel budget configuration: {error}") from error
     if not isinstance(value, dict) or not isinstance(value.get("agent_test_suite"), dict):
         raise EvidenceError("kernel budget configuration lacks Agent suite")
     return value
-def parse_measurements(full_log: Path, timing_log: Path, config: dict[str, object]
-                       ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+def parse_measurements(full_log: Path, timing_log: Path, config: dict[str, object]) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
     text = full_log.read_text(encoding="utf-8", errors="replace")
+    modules = config.get("agent_modules")
+    groups = modules.get("aggregate_budgets") if isinstance(modules, dict) else None
+    targets = [group for group in groups if isinstance(group, dict) and group.get("name") == "metadata_control_plane"] if isinstance(groups, list) else []
+    if len(targets) != 1: raise EvidenceError("budget configuration lacks unique metadata_control_plane aggregate")
+    aggregate_expected: dict[str, tuple[float, float, str]] = {}
+    for suffix, (key, unit) in AGGREGATE_METRICS.items():
+        values = (targets[0].get(f"baseline_{suffix}"), targets[0].get(f"max_{suffix}"))
+        if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) for value in values) or values[0] < 0 or values[1] <= 0:
+            raise EvidenceError("metadata_control_plane aggregate configuration is invalid")
+        aggregate_expected[key] = (float(values[0]), float(values[1]), unit)
     metrics: dict[str, dict[str, object]] = {}
     stack_match = boot_match = None
-    stack_line = boot_line = 0; block_state = "before"
+    stack_line = boot_line = 0; kernel_state = agent_state = 0
     for line_number, line in enumerate(text.splitlines(), 1):
         stripped = line.strip(); match = BUDGET_LINE.fullmatch(stripped)
         unit = match.group("unit").strip() if match else ""
         key = metric_key(match.group("name"), unit) if match else None
-        is_start = key == "kernel_source_lines"; is_end = line == KERNEL_BUDGET_END
-        if is_start:
-            if block_state != "before":
-                raise EvidenceError("full-verify log has multiple kernel budget blocks")
-            block_state = "inside"
-        if is_end:
-            if block_state != "inside":
-                raise EvidenceError("kernel budget block boundary is invalid")
-            block_state = "after"
+        if line == AGENT_BUDGET_START:
+            if kernel_state != 2 or agent_state != 0: raise EvidenceError("agent module budget block boundary is invalid")
+            agent_state = 1; continue
+        if line == AGENT_BUDGET_END:
+            if agent_state != 1: raise EvidenceError("agent module budget block boundary is invalid")
+            agent_state = 2; continue
+        name = match.group("name") if match else ""
+        if name.startswith(AGGREGATE_PREFIX):
+            if agent_state != 1: raise EvidenceError("metadata aggregate metric is outside its budget block")
+            spec = AGGREGATE_METRICS.get(name[len(AGGREGATE_PREFIX):])
+            if spec is None: raise EvidenceError("unexpected metadata aggregate metric")
+            key, expected_unit = spec
+            logged = (float(match.group("baseline")), float(match.group("limit")), unit)
+            if logged != aggregate_expected[key] or unit != expected_unit: raise EvidenceError("metadata aggregate log and configuration differ")
+            if key in metrics: raise EvidenceError(f"duplicate metadata aggregate metric: {key}")
+            metrics[key] = {"metric": key, "actual": float(match.group("actual")),
+                            "baseline": logged[0], "limit": logged[1], "unit": unit, "source_line": line_number}
             continue
-        if block_state != "inside":
-            continue
+        if key == "kernel_source_lines":
+            if kernel_state != 0: raise EvidenceError("full-verify log has multiple kernel budget blocks")
+            kernel_state = 1
+        if line == KERNEL_BUDGET_END:
+            if kernel_state != 1: raise EvidenceError("kernel budget block boundary is invalid")
+            kernel_state = 2; continue
+        if kernel_state != 1: continue
         if match:
             if key:
                 if key in metrics:
@@ -475,46 +514,35 @@ def parse_measurements(full_log: Path, timing_log: Path, config: dict[str, objec
         stack_match, boot_match = new_stack or stack_match, new_boot or boot_match
         stack_line = line_number if new_stack else stack_line
         boot_line = line_number if new_boot else boot_line
-    if block_state == "before":
-        raise EvidenceError("full-verify log lacks kernel budget block")
-    if block_state == "inside":
-        raise EvidenceError("kernel budget block is unterminated")
-    missing = REQUIRED_KERNEL_METRICS - set(metrics)
+    if kernel_state == 0: raise EvidenceError("full-verify log lacks kernel budget block")
+    if kernel_state == 1: raise EvidenceError("kernel budget block is unterminated")
+    if agent_state == 0: raise EvidenceError("full-verify log lacks agent module budget block")
+    if agent_state == 1: raise EvidenceError("agent module budget block is unterminated")
+    missing = (REQUIRED_KERNEL_METRICS | REQUIRED_AGGREGATE_METRICS) - set(metrics)
     if stack_match is None: missing.add("kernel_stack_required_bytes")
     if boot_match is None: missing.add("boot_stack_required_bytes")
-    if missing:
-        raise EvidenceError(f"kernel budget block lacks required metrics: {sorted(missing)}")
+    if missing: raise EvidenceError(f"budget blocks lack required metrics: {sorted(missing)}")
     kernel_stack = config.get("kernel_stack")
-    if not isinstance(kernel_stack, dict):
-        raise EvidenceError("kernel stack budget configuration is invalid")
-    stack_capacity = int(stack_match.group("limit"))
-    boot_capacity = int(boot_match.group("limit"))
+    if not isinstance(kernel_stack, dict): raise EvidenceError("kernel stack budget configuration is invalid")
+    stack_capacity = int(stack_match.group("limit")); boot_capacity = int(boot_match.group("limit"))
     if (stack_capacity != int(kernel_stack["stack_size_bytes"])
             or boot_capacity != int(kernel_stack["boot_stack_size_bytes"])):
         raise EvidenceError("stack capacity log and configuration differ")
     metrics["kernel_stack_required_bytes"] = {
-        "metric": "kernel_stack_required_bytes",
-        "actual": float(stack_match.group("required")),
-        "baseline": float(kernel_stack["baseline_required_bytes"]),
-        "limit": float(kernel_stack["max_required_bytes"]),
-        "unit": "bytes", "source_line": stack_line,
-    }
+        "metric": "kernel_stack_required_bytes", "actual": float(stack_match.group("required")),
+        "baseline": float(kernel_stack["baseline_required_bytes"]), "limit": float(kernel_stack["max_required_bytes"]),
+        "unit": "bytes", "source_line": stack_line}
     metrics["boot_stack_required_bytes"] = {
-        "metric": "boot_stack_required_bytes",
-        "actual": float(boot_match.group("required")),
-        "baseline": float(kernel_stack["baseline_boot_required_bytes"]),
-        "limit": float(kernel_stack["max_boot_required_bytes"]),
-        "unit": "bytes", "source_line": boot_line,
-    }
+        "metric": "boot_stack_required_bytes", "actual": float(boot_match.group("required")),
+        "baseline": float(kernel_stack["baseline_boot_required_bytes"]), "limit": float(kernel_stack["max_boot_required_bytes"]),
+        "unit": "bytes", "source_line": boot_line}
     cases: list[dict[str, object]] = []
     for line_number, line in enumerate(timing_log.read_text(encoding="utf-8").splitlines(), 1):
         match = AGENT_TIMING_LINE.fullmatch(line.strip())
         if match is None or float(match.group("seconds")) <= 0:
             raise EvidenceError(f"invalid Agent timing row {line_number}")
-        cases.append({"sequence": len(cases) + 1, "case": match.group("case"),
-                      "seconds": match.group("seconds"), "source_line": line_number})
-    if not cases:
-        raise EvidenceError("Agent timing log is empty")
+        cases.append({"sequence": len(cases) + 1, "case": match.group("case"), "seconds": match.group("seconds"), "source_line": line_number})
+    if not cases: raise EvidenceError("Agent timing log is empty")
     suite = config["agent_test_suite"]
     expected_cases = suite.get("expected_cases")
     actual_cases = [row["case"] for row in cases]
@@ -523,10 +551,8 @@ def parse_measurements(full_log: Path, timing_log: Path, config: dict[str, objec
         raise EvidenceError("Agent timing cases do not match the configured suite")
     total = sum(float(row["seconds"]) for row in cases)
     metrics["agent_suite_total_seconds"] = {
-        "metric": "agent_suite_total_seconds", "actual": total,
-        "baseline": float(suite["baseline_seconds"]),
-        "limit": float(suite["max_seconds"]), "unit": "seconds", "source_line": 0,
-    }
+        "metric": "agent_suite_total_seconds", "actual": total, "baseline": float(suite["baseline_seconds"]),
+        "limit": float(suite["max_seconds"]), "unit": "seconds", "source_line": 0}
     rows = list(metrics.values())
     for row in rows:
         limit = float(row["limit"])
@@ -628,6 +654,22 @@ def read_exact_csv(path: Path, fields: list[str]) -> list[dict[str, str]]:
                                                      for row in rows):
         raise EvidenceError(f"CSV schema or data is invalid: {path.name}")
     return rows
+def validate_dual_measurement_inventory(directory: Path, commit: str) -> None:
+    try:
+        verify_measurement_artifact_set(
+            directory / "dual-measured-experiments.json", directory / "dual-file-query-benchmark.csv",
+            directory, commit,
+            "dual-targeted-agentbench-guest.log",
+        )
+    except MeasurementError as error:
+        raise EvidenceError(f"dual measurement evidence is invalid: {error}") from error
+def validate_fs_allocator_archive(path: Path) -> None:
+    result = subprocess.run([sys.executable, str(Path(__file__).with_name("fs-allocator-evidence.py")),
+                             "verify-archive", "--archive", str(path)],
+                            text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip() or f"exit {result.returncode}"
+        raise EvidenceError(f"filesystem allocator evidence is invalid: {detail}")
 def acquire_output_lock(output: Path):
     if os.name != "posix":
         raise EvidenceError("ready evidence collection requires POSIX file locking")
@@ -648,10 +690,8 @@ def release_output_lock(handle) -> None:
     import fcntl
     fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     handle.close()
-
 def positive_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
-
 def valid_gitlab_base_url(value: object) -> bool:
     if not isinstance(value, str):
         return False
@@ -659,14 +699,12 @@ def valid_gitlab_base_url(value: object) -> bool:
     loopback = parsed.hostname in {"127.0.0.1", "::1", "localhost"}
     return (parsed.scheme == "https" or (parsed.scheme == "http" and loopback)) and bool(parsed.netloc) \
         and parsed.path in {"", "/"} and not parsed.query and not parsed.fragment and not parsed.username
-
 def validate_remote_file(root: Path, record: object, expected_path: str) -> Path:
     path = require_file_ref(root, record, expected_path)
     if (not isinstance(record, dict) or set(record) != {"path", "bytes", "sha256"}
             or not positive_int(record.get("bytes")) or path.stat().st_size != record["bytes"]):
         raise EvidenceError(f"remote CI artifact differs: {expected_path}")
     return path
-
 def validate_remote_ci_provenance(value: object, commit: str, root: Path) -> set[str]:
     fields = {"schema_version", "kind", "capture", "project", "pipeline", "api_records", "jobs"}
     if (not isinstance(value, dict) or set(value) != fields
@@ -715,7 +753,7 @@ def validate_remote_ci_provenance(value: object, commit: str, root: Path) -> set
     remote_paths = {"remote-ci/provenance.json", *expected_api.values()}
     for job, (name, runner_class) in zip(jobs, REMOTE_CI_JOBS):
         job_fields = {"name", "job_id", "runner_id", "runner_class", "runner_tag", "status",
-                      "trace", "artifact"}
+                      "trace", "artifact", "execution_attestation"}
         if (not isinstance(job, dict) or set(job) != job_fields or job.get("name") != name
                 or not positive_int(job.get("job_id")) or job["job_id"] in job_ids
                 or not positive_int(job.get("runner_id")) or job.get("runner_class") != runner_class
@@ -728,10 +766,10 @@ def validate_remote_ci_provenance(value: object, commit: str, root: Path) -> set
             validate_remote_file(root, job[kind], relative)
             remote_paths.add(relative)
     try:
-        raw_project = json.loads(api_paths["project"].read_text(encoding="utf-8"))
-        raw_pipeline = json.loads(api_paths["pipeline"].read_text(encoding="utf-8"))
-        raw_jobs = json.loads(api_paths["pipeline-jobs"].read_text(encoding="utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raw_project = read_strict_json(api_paths["project"])
+        raw_pipeline = read_strict_json(api_paths["pipeline"])
+        raw_jobs = read_strict_json(api_paths["pipeline-jobs"])
+    except (OSError, UnicodeDecodeError, ValueError) as error:
         raise EvidenceError("remote CI API JSON is invalid") from error
     if (not isinstance(raw_project, dict) or any(raw_project.get(key) != project[key]
             for key in ("id", "path_with_namespace", "web_url"))
@@ -739,11 +777,16 @@ def validate_remote_ci_provenance(value: object, commit: str, root: Path) -> set
             for key in ("id", "sha", "ref", "source", "status", "web_url"))
             or not isinstance(raw_jobs, list)):
         raise EvidenceError("remote CI API records differ from provenance")
+    listed_names = [item.get("name") for item in raw_jobs if isinstance(item, dict)]
+    if (len(listed_names) != len(raw_jobs) or any(not isinstance(name, str) for name in listed_names)
+            or sorted(listed_names) != sorted(name for name, _ in REMOTE_CI_JOBS)
+            or len(raw_jobs) != len(REMOTE_CI_JOBS)):
+        raise EvidenceError("remote CI API job inventory differs from the required jobs")
     listed = {item.get("name"): item for item in raw_jobs if isinstance(item, dict)}
     for job in jobs:
         try:
-            raw_job = json.loads(api_paths[f"job-{job['name']}"] .read_text(encoding="utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raw_job = read_strict_json(api_paths[f"job-{job['name']}"])
+        except (OSError, UnicodeDecodeError, ValueError) as error:
             raise EvidenceError("remote CI job API JSON is invalid") from error
         listed_job = listed.get(job["name"])
         runner = raw_job.get("runner") if isinstance(raw_job, dict) else None
@@ -752,13 +795,18 @@ def validate_remote_ci_provenance(value: object, commit: str, root: Path) -> set
                 or listed_job.get("status") != "success" or not isinstance(raw_job, dict)
                 or raw_job.get("id") != job["job_id"] or raw_job.get("name") != job["name"]
                 or raw_job.get("status") != "success" or not isinstance(runner, dict)
-                or runner.get("id") != job["runner_id"] or job["runner_tag"] not in raw_job.get("tag_list", [])
+                or runner.get("id") != job["runner_id"]
+                or raw_job.get("tag_list") != [job["runner_tag"]]
                 or not isinstance(raw_pipeline_ref, dict)
                 or raw_pipeline_ref.get("id") != pipeline["id"]
                 or raw_pipeline_ref.get("sha") != commit):
             raise EvidenceError("remote CI job API record differs from provenance")
+        execution = verify_job_execution(
+            root / job["trace"]["path"], root / job["artifact"]["path"],
+            raw_project, raw_pipeline, raw_job, job["runner_tag"], Path(__file__).resolve().parents[1])
+        if job["execution_attestation"] != execution:
+            raise EvidenceError("remote CI execution result differs from provenance")
     return remote_paths
-
 def validate_authenticity(root: Path, manifest: dict[str, object], commit: str) -> set[str]:
     authenticity = manifest.get("authenticity")
     if not isinstance(authenticity, dict) or set(authenticity) != {"local", "remote_ci"}:
@@ -780,11 +828,10 @@ def validate_authenticity(root: Path, manifest: dict[str, object], commit: str) 
         raise EvidenceError("manifest remote CI binding is invalid")
     proof_path = require_file_ref(root, remote.get("provenance"), "remote-ci/provenance.json")
     try:
-        proof = json.loads(proof_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
+        proof = read_strict_json(proof_path)
+    except (OSError, UnicodeDecodeError, ValueError) as error:
         raise EvidenceError("remote CI provenance JSON is invalid") from error
     return validate_remote_ci_provenance(proof, commit, root)
-
 def verify_bundle(root: Path) -> dict[str, object]:
     root = root.resolve()
     checksum = root / "checksums.sha256"
@@ -811,17 +858,16 @@ def verify_bundle(root: Path) -> dict[str, object]:
         if sha256_file(root / safe_relative(relative)) != digest:
             raise EvidenceError(f"checksum mismatch: {relative}")
     try:
-        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
-        summary = validate_summary(
-            json.loads((root / SUMMARY_NAME).read_text(encoding="utf-8"))
-        )
-    except (OSError, json.JSONDecodeError) as error:
+        manifest = read_strict_json(root / "manifest.json")
+        summary = validate_summary(read_strict_json(root / SUMMARY_NAME))
+    except (OSError, UnicodeDecodeError, ValueError) as error:
         raise EvidenceError(f"bundle JSON is invalid: {error}") from error
     if (not isinstance(manifest, dict) or set(manifest) != MANIFEST_FIELDS
             or manifest.get("schema_version") != SCHEMA_VERSION or manifest.get("status") != "ready"):
         raise EvidenceError("manifest is not ready")
     if manifest.get("commit") != summary["commit"]:
         raise EvidenceError("manifest and summary commits differ")
+    validate_delivery_field(manifest.get("delivery"), manifest["commit"])
     remote_files = validate_authenticity(root, manifest, str(summary["commit"]))
     summary_ref = manifest.get("verification_summary")
     if not isinstance(summary_ref, dict) or summary_ref.get("path") != SUMMARY_NAME:
@@ -847,26 +893,38 @@ def verify_bundle(root: Path) -> dict[str, object]:
                 or record.get("bytes") != summary_record["bytes"]):
             raise EvidenceError(f"raw artifact differs: {record.get('name')}")
     validate_reader_inventory(root / "logs/raw", summary["steps"])
+    validate_dual_measurement_inventory(root / "logs/raw", str(summary["commit"]))
+    validate_raw_artifacts(root / "logs/raw", Path(__file__).resolve().parents[1])
+    validate_fs_allocator_archive(root / "logs/raw" / "fs-allocator-evidence.tar")
     command = manifest.get("command")
-    if (not isinstance(command, dict) or command.get("returncode") != 0
+    if (not isinstance(command, dict)
+            or set(command) != {"argv", "environment", "returncode", "elapsed_seconds", "timeout_seconds", "timed_out", "log", "log_sha256"}
+            or not isinstance(command.get("argv"), list) or not command["argv"] or any(not isinstance(item, str) or not item for item in command["argv"])
+            or not isinstance(command.get("environment"), dict) or not command["environment"] or any(not isinstance(key, str) or not key or not isinstance(item, str) for key, item in command["environment"].items())
+            or isinstance(command.get("returncode"), bool) or command.get("returncode") != 0
+            or isinstance(command.get("elapsed_seconds"), bool)
+            or not isinstance(command.get("elapsed_seconds"), (int, float)) or not math.isfinite(command["elapsed_seconds"]) or command["elapsed_seconds"] < 0
             or command.get("timed_out") is not False
+            or isinstance(command.get("timeout_seconds"), bool) or not isinstance(command.get("timeout_seconds"), (int, float))
+            or not 0 < command["timeout_seconds"] <= 86400
             or command.get("log") != "logs/full-verify.log"
             or command.get("log_sha256") != sha256_file(root / "logs/full-verify.log")):
         raise EvidenceError("full-verify command did not succeed")
+    full_log = root / "logs/full-verify.log"
+    if full_log.read_text(encoding="utf-8", errors="replace").splitlines().count(SUCCESS_MARKER) != 1: raise EvidenceError("full-verify completion marker is missing or duplicated")
     metric_paths = {"measurements_csv": "metrics/measurements.csv",
                     "agent_timings_csv": "metrics/agent-case-timings.csv", "command_csv": "metrics/commands.csv"}
     csv_rows = {key: read_exact_csv(root / path, CSV_SCHEMAS[key]) for key, path in metric_paths.items()}
     measurement_rows = csv_rows["measurements_csv"]
     metric_names = [row.get("metric") for row in measurement_rows]
-    if any(metric_names.count(name) != 1 for name in REQUIRED_EVIDENCE_METRICS):
-        raise EvidenceError("critical metrics are missing or duplicated")
+    if len(metric_names) != len(REQUIRED_EVIDENCE_METRICS) or set(metric_names) != REQUIRED_EVIDENCE_METRICS: raise EvidenceError("critical metric inventory differs")
     environment_path = require_file_ref(root, manifest.get("environment"),
                                         "environment/environment.json")
     configuration_path = require_file_ref(root, manifest.get("configuration"),
                                           "configuration/kernel-budgets.json")
     try:
-        environment_record = json.loads(environment_path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
+        environment_record = read_strict_json(environment_path)
+    except (OSError, UnicodeDecodeError, ValueError) as error:
         raise EvidenceError("environment inventory is invalid") from error
     tool_records = environment_record.get("tools") if isinstance(environment_record, dict) else None
     if not isinstance(tool_records, list) or any(not isinstance(item, dict) for item in tool_records):
@@ -874,6 +932,8 @@ def verify_bundle(root: Path) -> dict[str, object]:
     labels = [item.get("label") for item in tool_records]
     if len(labels) != len(set(labels)) or set(labels) != TOOL_LABELS:
         raise EvidenceError("environment tool labels are missing or duplicated")
+    tool_by_label = {item["label"]: item for item in tool_records}
+    if (not (compiler_path := str(tool_by_label["compiler"].get("path", ""))).endswith("gcc") or command["argv"] != [tool_by_label["make"].get("path"), "full-verify", f"TOOLPREFIX={compiler_path[:-3]}"]): raise EvidenceError("full-verify command argv is not canonical")
     version_logs = set()
     for record in tool_records:
         label, relative = record["label"], record.get("log")
@@ -899,6 +959,15 @@ def verify_bundle(root: Path) -> dict[str, object]:
         raise EvidenceError("manifest metrics references are invalid")
     for key, path in metric_paths.items():
         require_file_ref(root, metrics_ref.get(key), path)
+    try:
+        verify_bundle_artifacts(
+            root,
+            metrics_ref,
+            str(manifest["commit"]),
+            summary_by_name.get("agent-suite-guest.log"), command["argv"],
+        )
+    except MeasurementError as error:
+        raise EvidenceError(f"file-query benchmark provenance is invalid: {error}") from error
     chart_path = require_file_ref(root, metrics_ref.get("chart"), "charts/budget-usage.svg")
     measurement_hash = metrics_ref["measurements_csv"]["sha256"]
     if (metrics_ref.get("chart_sha256") != sha256_file(chart_path)
@@ -920,34 +989,38 @@ def verify_bundle(root: Path) -> dict[str, object]:
         raise EvidenceError("command CSV must contain exactly one command")
     command_row = command_rows[0]
     try:
-        command_argv = json.loads(command_row["argv_json"])
-    except json.JSONDecodeError as error:
+        command_argv = strict_json_loads(command_row["argv_json"])
+        row_elapsed, row_timeout = float(command_row["elapsed_seconds"]), float(command_row["timeout_seconds"])
+    except (json.JSONDecodeError, ValueError) as error:
         raise EvidenceError("command CSV argv is invalid") from error
     if (command_row["command"] != "make full-verify" or command_argv != command.get("argv")
             or command_row["returncode"] != str(command["returncode"])
-            or abs(float(command_row["elapsed_seconds"]) - float(command["elapsed_seconds"])) > 1e-9):
+            or not math.isfinite(row_elapsed) or not math.isfinite(row_timeout)
+            or row_timeout != command["timeout_seconds"]
+            or abs(row_elapsed - float(command["elapsed_seconds"])) > 1e-9):
         raise EvidenceError("command CSV differs from manifest command")
+    config = load_budget_config(configuration_path)
+    replayed, replayed_cases = parse_measurements(root / "logs/full-verify.log", root / "logs/raw/agent-suite-timings.log", config)
+    expected_rows = {row["metric"]: row for row in replayed}
     for row in measurement_rows:
+        expected_row = expected_rows[row["metric"]]
         try:
-            actual_value, limit = float(row["actual"]), float(row["limit"])
-            usage = float(row["usage_ratio"])
+            numeric_equal = all(float(row[key]) == float(expected_row[key]) for key in ("actual", "baseline", "limit", "usage_ratio"))
         except (KeyError, ValueError) as error:
             raise EvidenceError("measurement values are invalid") from error
-        if limit <= 0 or abs(usage - actual_value / limit) > 1e-9:
-            raise EvidenceError("measurement usage is inconsistent")
+        if (not numeric_equal or row["unit"] != expected_row["unit"] or row["source_line"] != str(expected_row["source_line"])):
+            raise EvidenceError("measurements CSV differs from raw evidence")
     agent_row = next(row for row in measurement_rows
                      if row["metric"] == "agent_suite_total_seconds")
     agent_total = metrics_ref.get("agent_total_seconds")
     if not isinstance(agent_total, dict) or agent_total.get("actual") != float(agent_row["actual"]):
         raise EvidenceError("manifest Agent total differs from metrics CSV")
-    config = load_budget_config(configuration_path)
     agent_rows = csv_rows["agent_timings_csv"]
-    actual_cases = [row["case"] for row in agent_rows]
-    if (actual_cases != config["agent_test_suite"].get("expected_cases")
-            or len(actual_cases) != len(set(actual_cases))
-            or [row["sequence"] for row in agent_rows] != [str(index) for index in range(1, len(agent_rows) + 1)]
-            or abs(sum(float(row["seconds"]) for row in agent_rows) - float(agent_row["actual"])) > 1e-9):
-        raise EvidenceError("Agent timing CSV differs from configured suite")
+    case_fields = ("sequence", "case", "seconds", "source_line")
+    if len(agent_rows) != len(replayed_cases) or any(
+            tuple(row[key] for key in case_fields) != tuple(str(expected[key]) for key in case_fields)
+            for row, expected in zip(agent_rows, replayed_cases)):
+        raise EvidenceError("Agent timing CSV differs from raw evidence")
     full_hash = command["log_sha256"]
     chart = chart_path.read_text(encoding="utf-8")
     expected_metadata = (f"source_measurements_sha256={measurement_hash} full_verify_sha256={full_hash} "
@@ -958,6 +1031,8 @@ def verify_bundle(root: Path) -> dict[str, object]:
             "remote_ci": manifest["authenticity"]["remote_ci"]["status"],
             "files_verified": len(expected)}
 def collect(args: argparse.Namespace) -> int:
+    if not math.isfinite(args.command_timeout) or not 0 < args.command_timeout <= 86400:
+        raise EvidenceError("full-verify command timeout is invalid")
     repo, output = Path(args.repo_root).resolve(), Path(args.output).resolve()
     if not (repo / ".git").exists() or output.exists():
         raise EvidenceError("repository or output path is invalid")
@@ -1036,12 +1111,15 @@ def collect(args: argparse.Namespace) -> int:
             raise EvidenceError(f"make full-verify failed with rc={returncode}")
         summary_source = evidence_stage / "incoming" / SUMMARY_NAME
         try:
-            summary = validate_summary(json.loads(summary_source.read_text(encoding="utf-8")))
-        except (OSError, json.JSONDecodeError) as error:
+            summary = validate_summary(read_strict_json(summary_source))
+        except (OSError, UnicodeDecodeError, ValueError) as error:
             raise EvidenceError(f"full-verify did not publish a valid summary: {error}") from error
         if summary["commit"] != commit:
             raise EvidenceError("full-verify summary is not bound to detached HEAD")
         validate_reader_inventory(evidence_stage / "incoming", summary["steps"])
+        validate_dual_measurement_inventory(evidence_stage / "incoming", commit)
+        validate_raw_artifacts(evidence_stage / "incoming", worktree, False)
+        validate_fs_allocator_archive(evidence_stage / "incoming" / "fs-allocator-evidence.tar")
         if full_log.read_text(encoding="utf-8", errors="replace").splitlines().count(SUCCESS_MARKER) != 1:
             raise EvidenceError("full-verify completion marker is missing or duplicated")
         shutil.copyfile(summary_source, stage / SUMMARY_NAME)
@@ -1067,6 +1145,12 @@ def collect(args: argparse.Namespace) -> int:
         timing = next((item for item in raw_records if item["name"] == "agent-suite-timings.log"), None)
         if timing is None:
             raise EvidenceError("summary lacks Agent timing artifact")
+        try:
+            benchmark_refs = capture_bundle_artifacts(
+                stage, raw_records, command, commit
+            )
+        except MeasurementError as error:
+            raise EvidenceError(f"measured file-query benchmark is missing: {error}") from error
         metrics, agent_cases = parse_measurements(full_log, stage / timing["path"], config)
         full_relative = "logs/full-verify.log"
         full_hash = sha256_file(full_log)
@@ -1090,17 +1174,19 @@ def collect(args: argparse.Namespace) -> int:
         write_json(environment_path, environment_record)
         command_record = {
             "argv": command, "environment": environment, "returncode": returncode,
-            "elapsed_seconds": round(elapsed, 9), "timed_out": timed_out,
+            "elapsed_seconds": round(elapsed, 9), "timeout_seconds": args.command_timeout,
+            "timed_out": timed_out,
             "log": full_relative, "log_sha256": full_hash,
         }
         with (stage / "metrics" / "commands.csv").open("w", encoding="utf-8", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=[
-                "command", "argv_json", "returncode", "elapsed_seconds", "source_log",
-                "source_log_sha256",
+                "command", "argv_json", "returncode", "elapsed_seconds", "timeout_seconds",
+                "source_log", "source_log_sha256",
             ])
             writer.writeheader()
             writer.writerow({"command": "make full-verify", "argv_json": json.dumps(command),
                              "returncode": returncode, "elapsed_seconds": round(elapsed, 9),
+                             "timeout_seconds": args.command_timeout,
                              "source_log": full_relative, "source_log_sha256": full_hash})
         agent_total = next(row for row in metrics if row["metric"] == "agent_suite_total_seconds")
         manifest = {
@@ -1111,6 +1197,7 @@ def collect(args: argparse.Namespace) -> int:
                           "execution": "clean-detached-worktree"},
                 "remote_ci": {"status": "not-attached"},
             },
+            "delivery": make_manifest_binding(commit, output.name),
             "command": command_record,
             "verification_summary": {"path": SUMMARY_NAME,
                                      "sha256": sha256_file(stage / SUMMARY_NAME)},
@@ -1121,6 +1208,7 @@ def collect(args: argparse.Namespace) -> int:
             "metrics": {"measurements_csv": {"path": "metrics/measurements.csv", "sha256": measurements_hash},
                         "agent_timings_csv": {"path": "metrics/agent-case-timings.csv", "sha256": sha256_file(stage / "metrics/agent-case-timings.csv")},
                         "command_csv": {"path": "metrics/commands.csv", "sha256": sha256_file(stage / "metrics/commands.csv")},
+                        **benchmark_refs,
                         "chart": {"path": "charts/budget-usage.svg", "sha256": sha256_file(chart_path)},
                         "chart_sha256": sha256_file(chart_path),
                         "source_measurements_sha256": measurements_hash,
@@ -1133,9 +1221,9 @@ def collect(args: argparse.Namespace) -> int:
         worktree_registered = False
         write_checksums(stage)
         verify_bundle(stage)
-        if output.exists():
-            raise EvidenceError(f"output appeared while collection was running: {output}")
-        os.replace(stage, output)
+        publish_bundle_and_index(
+            repo, stage, output, commit, manifest["delivery"]["release"], git=git,
+        )
         print(f"[evidence] bundle captured: {output}")
         return 0
     except BaseException as error:
@@ -1160,54 +1248,6 @@ def collect(args: argparse.Namespace) -> int:
             shutil.rmtree(worktree, ignore_errors=True)
         release_output_lock(output_lock)
         shutil.rmtree(environment_root, ignore_errors=True)
-
-class GitLabRedirectHandler(urlrequest.HTTPRedirectHandler):
-    def __init__(self, allow_cross_origin: bool):
-        super().__init__()
-        self.allow_cross_origin = allow_cross_origin
-
-    @staticmethod
-    def origin(url: str) -> tuple[str, str | None, int | None]:
-        parsed = urlparse.urlsplit(url)
-        port = parsed.port or ({"http": 80, "https": 443}.get(parsed.scheme))
-        return parsed.scheme, parsed.hostname, port
-
-    def redirect_request(self, req, fp, code, msg, headers, newurl):
-        redirected = super().redirect_request(req, fp, code, msg, headers, newurl)
-        if redirected is None or self.origin(req.full_url) == self.origin(newurl):
-            return redirected
-        old_host, new_target = urlparse.urlsplit(req.full_url).hostname, urlparse.urlsplit(newurl)
-        loopback = old_host in {"127.0.0.1", "::1", "localhost"} \
-            and new_target.hostname in {"127.0.0.1", "::1", "localhost"}
-        if not self.allow_cross_origin or (new_target.scheme != "https" and not loopback):
-            raise urlerror.HTTPError(req.full_url, code, "cross-origin redirect rejected", headers, fp)
-        for name, _ in list(redirected.header_items()):
-            if name.lower() in {"private-token", "authorization"}:
-                redirected.remove_header(name)
-        return redirected
-
-def gitlab_fetch(base_url: str, endpoint: str, token: str, timeout: float,
-                 allow_cross_origin: bool = False) -> tuple[bytes, object]:
-    request = urlrequest.Request(f"{base_url.rstrip('/')}/api/v4/{endpoint}",
-                                 headers={"PRIVATE-TOKEN": token,
-                                          "User-Agent": "agentos-evidence-collector/2"})
-    try:
-        opener = urlrequest.build_opener(GitLabRedirectHandler(allow_cross_origin))
-        with opener.open(request, timeout=timeout) as response:
-            data = response.read(REMOTE_RESPONSE_LIMIT + 1)
-            headers = response.headers
-    except (urlerror.HTTPError, urlerror.URLError, TimeoutError) as error:
-        raise EvidenceError(f"GitLab API request failed: {endpoint}") from error
-    if not data or len(data) > REMOTE_RESPONSE_LIMIT:
-        raise EvidenceError(f"GitLab API response is empty or too large: {endpoint}")
-    return data, headers
-
-def decode_gitlab_json(data: bytes, label: str) -> object:
-    try:
-        return json.loads(data.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise EvidenceError(f"GitLab API JSON is invalid: {label}") from error
-
 def bind_remote_ci(args: argparse.Namespace) -> int:
     bundle = Path(args.bundle).resolve()
     output = Path(args.output).resolve()
@@ -1232,7 +1272,7 @@ def bind_remote_ci(args: argparse.Namespace) -> int:
         raise EvidenceError("GitLab token file is invalid") from error
     if not 8 <= len(token) <= 512 or any(character.isspace() for character in token):
         raise EvidenceError("GitLab token file is invalid")
-    source_manifest = json.loads((bundle / "manifest.json").read_text(encoding="utf-8"))
+    source_manifest = read_strict_json(bundle / "manifest.json")
     if source_manifest["authenticity"]["remote_ci"] != {"status": "not-attached"}:
         raise EvidenceError("source bundle already has remote CI provenance")
     output.parent.mkdir(parents=True, exist_ok=True)
@@ -1275,13 +1315,20 @@ def bind_remote_ci(args: argparse.Namespace) -> int:
                 or pipeline.get("source") != "push" or pipeline.get("status") != "success"
                 or not str(pipeline.get("web_url", "")).startswith("https://")):
             raise EvidenceError("GitLab pipeline did not pass the final main push")
-        if not isinstance(listed_jobs, list) or str(jobs_headers.get("X-Next-Page", "")):
+        listed_names = [item.get("name") for item in listed_jobs if isinstance(item, dict)] \
+            if isinstance(listed_jobs, list) else []
+        if (not isinstance(listed_jobs, list) or len(listed_names) != len(listed_jobs)
+                or any(not isinstance(name, str) for name in listed_names)
+                or str(jobs_headers.get("X-Next-Page", ""))
+                or sorted(listed_names) != sorted(name for name, _ in REMOTE_CI_JOBS)
+                or len(listed_jobs) != len(REMOTE_CI_JOBS)):
             raise EvidenceError("GitLab pipeline job inventory is invalid or incomplete")
         job_records: list[dict[str, object]] = []
         for name, runner_class in REMOTE_CI_JOBS:
             candidates = [job for job in listed_jobs
                           if isinstance(job, dict) and job.get("name") == name]
-            if len(candidates) != 1 or not positive_int(candidates[0].get("id")):
+            if (len(candidates) != 1 or not positive_int(candidates[0].get("id"))
+                    or candidates[0].get("status") != "success"):
                 raise EvidenceError(f"GitLab pipeline lacks unique required job: {name}")
             job_id = candidates[0]["id"]
             detail_pair = fetch_json(f"job-{name}", f"{prefix}/jobs/{job_id}")
@@ -1292,7 +1339,7 @@ def bind_remote_ci(args: argparse.Namespace) -> int:
             if (not isinstance(detail, dict) or detail.get("id") != job_id
                     or detail.get("name") != name or detail.get("status") != "success"
                     or not isinstance(runner, dict) or not positive_int(runner.get("id"))
-                    or required_tag not in detail.get("tag_list", [])
+                    or detail.get("tag_list") != [required_tag]
                     or not isinstance(job_pipeline, dict) or job_pipeline.get("id") != args.pipeline_id
                     or job_pipeline.get("sha") != commit):
                 raise EvidenceError(f"GitLab required job provenance is invalid: {name}")
@@ -1308,9 +1355,13 @@ def bind_remote_ci(args: argparse.Namespace) -> int:
                 path.write_bytes(data)
                 references[kind] = {"path": relative, "bytes": len(data),
                                      "sha256": sha256_file(path)}
+            execution = verify_job_execution(
+                stage / references["trace"]["path"], stage / references["artifact"]["path"],
+                project, pipeline, detail, required_tag, Path(__file__).resolve().parents[1])
             job_records.append({"name": name, "job_id": job_id, "runner_id": runner["id"],
                                 "runner_class": runner_class, "runner_tag": required_tag,
-                                "status": "success", **references})
+                                "status": "success", "execution_attestation": execution,
+                                **references})
         proof = {
             "schema_version": REMOTE_CI_SCHEMA_VERSION,
             "kind": "agentos-gitlab-api-provenance",
@@ -1344,7 +1395,6 @@ def bind_remote_ci(args: argparse.Namespace) -> int:
         if stage is not None:
             shutil.rmtree(stage, ignore_errors=True)
         release_output_lock(lock)
-
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="operation", required=True)
@@ -1360,7 +1410,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     collect_parser.add_argument("--host-cc", default="cc")
     collect_parser.add_argument("--case-timeout", default="300s")
     collect_parser.add_argument("--idle-notice", default="20")
-    collect_parser.add_argument("--command-timeout", type=float, default=3600.0)
+    collect_parser.add_argument("--command-timeout", type=float, default=FULL_VERIFY_TIMEOUT_SECONDS)
     verify_parser = commands.add_parser("verify")
     verify_parser.add_argument("bundle")
     remote_parser = commands.add_parser("bind-remote-ci")
@@ -1393,7 +1443,7 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("[evidence] interrupted", file=sys.stderr)
         return 130
-    except (EvidenceError, OSError, ValueError, KeyError) as error:
+    except (EvidenceError, DeliveryContractError, OSError, ValueError, KeyError) as error:
         print(f"[evidence] failed: {error}", file=sys.stderr)
         return 1
 if __name__ == "__main__":

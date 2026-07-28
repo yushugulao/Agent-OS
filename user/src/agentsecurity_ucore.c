@@ -6,6 +6,8 @@
 #include <unistd.h>
 
 #define TEST_NOINLINE __attribute__((noinline))
+#define LEGACY_MAIL_TEST_SLOTS 16
+#define LOW_AUDIT_CHURN_COUNT 200
 
 static void check(int ok, const char *msg)
 {
@@ -22,11 +24,27 @@ static struct agent_provenance_edge security_provenance_edges[128];
 static struct agent_audit_filter security_audit_filter;
 static struct agent_event security_audit_event;
 static struct agent_info security_agent_info;
+static struct agent_info security_role_info;
+static struct agent_info security_sentinel_info;
+static struct agent_event security_sentinel_event;
+static struct agent_op security_sentinel_op;
+static struct agent_result security_sentinel_result;
+static struct agent_file_meta security_sentinel_meta;
+static struct agent_context_record security_sentinel_context;
 static struct agent_op security_anchor_op;
 static struct agent_result security_anchor_result;
 static struct agent_file_query security_file_query;
 static struct agent_file_query_result security_file_result;
 static uint64 security_orchestrator_span;
+
+static void check_plain_mail(void);
+static void check_plain_mail_reclaim_reuse(void);
+
+struct legacy_workflow_report {
+	uint scope_id;
+	int target_pid;
+	int result;
+};
 
 static void make_op(struct agent_op *op, int tool, uint64 id, uint64 arg0,
 		    const char *payload)
@@ -79,26 +97,30 @@ static uint64 expected_caps(int role)
 
 static void check_role(int role, const char *name)
 {
-	struct agent_info info;
-
-	check(agent_info(&info) == 0, "agent_info");
-	check(info.is_agent == 1, "is agent");
-	check(info.agent_role == role, name);
-	check(info.capability_mask == expected_caps(role), "capability mask");
+	check(agent_info(&security_role_info) == 0, "agent_info");
+	check(security_role_info.is_agent == 1, "is agent");
+	check(security_role_info.agent_role == role, name);
+	check(security_role_info.capability_mask == expected_caps(role),
+	      "capability mask");
 	if (role == AGENT_ROLE_ORCHESTRATOR) {
-		check((info.capability_mask & AGENT_CAP_WAIT_CANCEL) != 0,
+		check((security_role_info.capability_mask &
+		       AGENT_CAP_WAIT_CANCEL) != 0,
 		      "orchestrator wait cancel capability");
-		check((info.capability_mask & AGENT_CAP_ROUTE_MANAGE) != 0,
+		check((security_role_info.capability_mask &
+		       AGENT_CAP_ROUTE_MANAGE) != 0,
 		      "orchestrator route manage capability");
 	} else {
-		check((info.capability_mask & AGENT_CAP_MESSAGE_SEND) != 0,
+		check((security_role_info.capability_mask &
+		       AGENT_CAP_MESSAGE_SEND) != 0,
 		      "low role message capability");
-		check((info.capability_mask & AGENT_CAP_WAIT_CANCEL) == 0,
+		check((security_role_info.capability_mask &
+		       AGENT_CAP_WAIT_CANCEL) == 0,
 		      "low role lacks wait cancel capability");
-		check((info.capability_mask & AGENT_CAP_ROUTE_MANAGE) == 0,
+		check((security_role_info.capability_mask &
+		       AGENT_CAP_ROUTE_MANAGE) == 0,
 		      "low role lacks route manage capability");
 	}
-	check(info.filesystem_capability_mask ==
+	check(security_role_info.filesystem_capability_mask ==
 		      (expected_caps(role) &
 		       (AGENT_CAP_CONTENT_READ | AGENT_CAP_ARTIFACT_WRITE)),
 	      "filesystem capability mask");
@@ -312,6 +334,8 @@ static void check_plain_child_creation_denied(void)
 
 static TEST_NOINLINE void check_orchestrator_plain_fork_denied(void)
 {
+	char legacy[] = "agent-to-public";
+	char empty[4];
 	int pid;
 	int status = 0;
 
@@ -320,11 +344,223 @@ static TEST_NOINLINE void check_orchestrator_plain_fork_denied(void)
 	if (pid == 0) {
 		check_plain_identity();
 		check_creation_authority_denied();
+		sleep(20);
+		check(mailread(empty, sizeof(empty)) == 0,
+		      "public child legacy queue remains empty");
 		exit(0);
 	}
+	check(mailwrite(pid, legacy, sizeof(legacy)) == -1,
+	      "agent cannot use legacy mail to public endpoint");
 	check(waitpid(pid, &status) == pid, "wait orchestrator plain child");
 	check(status == 0, "orchestrator plain child status");
 	printf("agentsecurity_ucore: orchestrator_plain_fork_denied=1\n");
+}
+
+static TEST_NOINLINE void check_orchestrator_scoped_public_mail(void)
+{
+	char msg[] = "same-lineage";
+	int bootstrap_pid = getppid();
+	int source_pid;
+	int target_pid;
+	int status = 0;
+
+	target_pid = fork();
+	check(target_pid >= 0, "fork scoped public mail target");
+	if (target_pid == 0) {
+		char out[32];
+		int n = 0;
+
+		check_plain_identity();
+		memset(out, 0, sizeof(out));
+		for (int attempt = 0; attempt < 100 && n == 0; attempt++) {
+			n = mailread(out, sizeof(out));
+			if (n == 0)
+				sleep(1);
+		}
+		check(n == (int)sizeof(msg) && strcmp(out, msg) == 0,
+		      "same lineage public mail received");
+		exit(0);
+	}
+	source_pid = fork();
+	check(source_pid >= 0, "fork scoped public mail source");
+	if (source_pid == 0) {
+		check_plain_identity();
+		check(mailwrite(target_pid, msg, sizeof(msg)) ==
+			      (int)sizeof(msg),
+		      "same lineage public mail allowed");
+		check(mailwrite(bootstrap_pid, "cross-scope", 12) == -1,
+		      "cross scope public mail denied");
+		exit(0);
+	}
+	check(waitpid(source_pid, &status) == source_pid,
+	      "wait scoped public mail source");
+	check(status == 0, "scoped public mail source status");
+	check(waitpid(target_pid, &status) == target_pid,
+	      "wait scoped public mail target");
+	check(status == 0, "scoped public mail target status");
+	printf("agentsecurity_ucore: mail_scoped_public=1 same_lineage=1\n");
+	printf("agentsecurity_ucore: mail_cross_scope_denied=1\n");
+}
+
+static TEST_NOINLINE void run_legacy_workflow_a(int report_fd, int gate_fd)
+{
+	struct legacy_workflow_report report;
+	struct agent_info info;
+	char token = 0;
+	int target_gate[2];
+	int target_report[2];
+	int target_pid;
+	int status = -1;
+
+	check_role(AGENT_ROLE_ORCHESTRATOR, "legacy-workflow-a");
+	check(agent_info(&info) == AGENT_STATUS_OK,
+	      "read legacy workflow A scope");
+	check(pipe(target_gate) == 0 && pipe(target_report) == 0,
+	      "create workflow A public coordination");
+	check(agent_scope_delegate_fd(target_gate[0]) == AGENT_STATUS_OK &&
+		      agent_scope_delegate_fd(target_report[1]) ==
+			      AGENT_STATUS_OK,
+	      "delegate workflow A public coordination");
+	target_pid = fork();
+	check(target_pid >= 0, "create workflow A public target");
+	if (target_pid == 0) {
+		char out[16];
+		int result;
+
+		check_plain_identity();
+		check(read(target_gate[0], &token, 1) == 1 && token == 'R',
+		      "release workflow A public target");
+		result = mailread(out, sizeof(out));
+		check(write(target_report[1], &result, sizeof(result)) ==
+			      (int)sizeof(result),
+		      "report workflow A public mailbox state");
+		exit(result == 0 ? 0 : 1);
+	}
+	memset(&report, 0, sizeof(report));
+	report.scope_id = info.filesystem_domain;
+	report.target_pid = target_pid;
+	check(write(report_fd, &report, sizeof(report)) == (int)sizeof(report),
+	      "publish workflow A public target");
+	check(read(gate_fd, &token, 1) == 1 && token == 'R',
+	      "wait workflow B legacy send attempt");
+	check(write(target_gate[1], &token, 1) == 1,
+	      "release workflow A target inspection");
+	check(read(target_report[0], &report.result, sizeof(report.result)) ==
+		      (int)sizeof(report.result),
+	      "receive workflow A target inspection");
+	check(waitpid(target_pid, &status) == target_pid && status == 0,
+	      "wait workflow A public target");
+	check(write(report_fd, &report, sizeof(report)) == (int)sizeof(report),
+	      "publish workflow A isolation result");
+	exit(0);
+}
+
+static TEST_NOINLINE void run_legacy_workflow_b(int command_fd, int report_fd)
+{
+	struct legacy_workflow_report report;
+	struct agent_info info;
+	int source_report[2];
+	int source_pid;
+	int target_pid;
+	int status = -1;
+
+	check_role(AGENT_ROLE_ORCHESTRATOR, "legacy-workflow-b");
+	check(read(command_fd, &target_pid, sizeof(target_pid)) ==
+		      (int)sizeof(target_pid) && target_pid > 0,
+	      "receive workflow A public target");
+	check(pipe(source_report) == 0,
+	      "create workflow B public result pipe");
+	check(agent_scope_delegate_fd(source_report[1]) == AGENT_STATUS_OK,
+	      "delegate workflow B public result");
+	source_pid = fork();
+	check(source_pid >= 0, "create workflow B public source");
+	if (source_pid == 0) {
+		int result;
+
+		check_plain_identity();
+		result = mailwrite(target_pid, "cross-workflow", 15);
+		check(write(source_report[1], &result, sizeof(result)) ==
+			      (int)sizeof(result),
+		      "report cross-workflow legacy send");
+		exit(result == -1 ? 0 : 1);
+	}
+	memset(&report, 0, sizeof(report));
+	check(read(source_report[0], &report.result, sizeof(report.result)) ==
+		      (int)sizeof(report.result),
+	      "receive cross-workflow legacy send result");
+	check(waitpid(source_pid, &status) == source_pid && status == 0,
+	      "wait workflow B public source");
+	check(agent_info(&info) == AGENT_STATUS_OK,
+	      "read legacy workflow B scope");
+	report.scope_id = info.filesystem_domain;
+	report.target_pid = target_pid;
+	check(write(report_fd, &report, sizeof(report)) == (int)sizeof(report),
+	      "publish workflow B isolation result");
+	exit(0);
+}
+
+static TEST_NOINLINE void check_active_workflow_mail_isolation(void)
+{
+	struct legacy_workflow_report ready_a;
+	struct legacy_workflow_report done_a;
+	struct legacy_workflow_report done_b;
+	char token = 'R';
+	int a_report[2];
+	int a_gate[2];
+	int b_command[2];
+	int b_report[2];
+	int pid_a;
+	int pid_b;
+	int status = -1;
+
+	check(pipe(a_report) == 0 && pipe(a_gate) == 0 &&
+		      pipe(b_command) == 0 && pipe(b_report) == 0,
+	      "create active workflow legacy mail pipes");
+	check(agent_scope_delegate_fd(a_report[1]) == AGENT_STATUS_OK &&
+		      agent_scope_delegate_fd(a_gate[0]) == AGENT_STATUS_OK,
+	      "delegate workflow A legacy mail endpoints");
+	pid_a = agent_workflow_create(AGENT_ROLE_ORCHESTRATOR);
+	check(pid_a >= 0, "create active legacy workflow A");
+	if (pid_a == 0)
+		run_legacy_workflow_a(a_report[1], a_gate[0]);
+	check(close(a_report[1]) == 0 && close(a_gate[0]) == 0,
+	      "close workflow A child endpoints");
+	check(agent_scope_delegate_fd(b_command[0]) == AGENT_STATUS_OK &&
+		      agent_scope_delegate_fd(b_report[1]) == AGENT_STATUS_OK,
+	      "delegate workflow B legacy mail endpoints");
+	pid_b = agent_workflow_create(AGENT_ROLE_ORCHESTRATOR);
+	check(pid_b >= 0, "create active legacy workflow B");
+	if (pid_b == 0)
+		run_legacy_workflow_b(b_command[0], b_report[1]);
+	check(close(b_command[0]) == 0 && close(b_report[1]) == 0,
+	      "close workflow B child endpoints");
+
+	check(read(a_report[0], &ready_a, sizeof(ready_a)) ==
+		      (int)sizeof(ready_a) && ready_a.target_pid > 0,
+	      "receive active workflow A endpoint");
+	check(write(b_command[1], &ready_a.target_pid,
+		    sizeof(ready_a.target_pid)) ==
+		      (int)sizeof(ready_a.target_pid),
+	      "send workflow A endpoint to workflow B");
+	check(read(b_report[0], &done_b, sizeof(done_b)) ==
+		      (int)sizeof(done_b),
+	      "receive active workflow B result");
+	check(done_b.result == -1 && done_b.scope_id != ready_a.scope_id,
+	      "distinct active workflows reject legacy mail");
+	check(write(a_gate[1], &token, 1) == 1,
+	      "release workflow A mailbox inspection");
+	check(read(a_report[0], &done_a, sizeof(done_a)) ==
+		      (int)sizeof(done_a) && done_a.result == 0,
+	      "cross-workflow send leaves target queue empty");
+	check(waitpid(pid_b, &status) == pid_b && status == 0,
+	      "wait active legacy workflow B");
+	status = -1;
+	check(waitpid(pid_a, &status) == pid_a && status == 0,
+	      "wait active legacy workflow A");
+	check(close(a_report[0]) == 0 && close(a_gate[1]) == 0 &&
+		      close(b_command[1]) == 0 && close(b_report[0]) == 0,
+	      "close active workflow legacy mail pipes");
+	printf("agentsecurity_ucore: mail_active_workflow_isolation=1\n");
 }
 
 static void check_reaped_agent_slot_cleared(void)
@@ -393,29 +629,27 @@ static void check_wake_event_authorization(void)
 
 static TEST_NOINLINE void run_sentinel(int audit_gate_fd)
 {
-	struct agent_event event;
-	struct agent_op op;
-	struct agent_result res;
-	struct agent_file_meta meta;
-	struct agent_context_record manual;
-	struct agent_info before;
-	struct agent_info after;
+	uint64 before_span;
 	char phase = 0;
 	int n;
 
 	check_role(AGENT_ROLE_SENTINEL, "sentinel");
 	check_delegation_denied("sentinel");
-	check(agent_info(&before) == 0, "sentinel span before forge");
-	memset(&manual, 0, sizeof(manual));
-	manual.span_id = security_orchestrator_span;
-	manual.cause_sequence = 1;
-	manual.tool_id = AGENT_TOOL_ECHO;
-	manual.status = AGENT_STATUS_OK;
-	strcpy(manual.result, "forged-span");
-	check(context_push(&manual) == AGENT_STATUS_BAD_PARAM,
+	check(agent_info(&security_sentinel_info) == 0,
+	      "sentinel span before forge");
+	before_span = security_sentinel_info.current_span_id;
+	memset(&security_sentinel_context, 0,
+	       sizeof(security_sentinel_context));
+	security_sentinel_context.span_id = security_orchestrator_span;
+	security_sentinel_context.cause_sequence = 1;
+	security_sentinel_context.tool_id = AGENT_TOOL_ECHO;
+	security_sentinel_context.status = AGENT_STATUS_OK;
+	strcpy(security_sentinel_context.result, "forged-span");
+	check(context_push(&security_sentinel_context) == AGENT_STATUS_BAD_PARAM,
 	      "user provenance rejected");
-	check(agent_info(&after) == 0, "sentinel span after forge");
-	check(after.current_span_id == before.current_span_id,
+	check(agent_info(&security_sentinel_info) == 0,
+	      "sentinel span after forge");
+	check(security_sentinel_info.current_span_id == before_span,
 	      "forged span not installed");
 	n = agent_span_trace_snapshot(security_audit_records,
 				      AGENT_AUDIT_MAX_RECORDS);
@@ -426,42 +660,56 @@ static TEST_NOINLINE void run_sentinel(int audit_gate_fd)
 		      "foreign span audit hidden");
 	check(read(audit_gate_fd, &phase, 1) == 1 && phase == 'G',
 	      "wait trusted audit route");
-	memset(&event, 0, sizeof(event));
-	event.type = AGENT_EVENT_MESSAGE;
-	event.corr_id = 8699;
-	strcpy(event.payload, "audit-delegation");
-	check(agent_wake(getppid(), &event) == AGENT_STATUS_OK,
+	memset(&security_sentinel_event, 0, sizeof(security_sentinel_event));
+	security_sentinel_event.type = AGENT_EVENT_MESSAGE;
+	security_sentinel_event.corr_id = 8699;
+	strcpy(security_sentinel_event.payload, "audit-delegation");
+	check(agent_wake(getppid(), &security_sentinel_event) == AGENT_STATUS_OK,
 	      "send trusted audit delegation");
 	check(read(audit_gate_fd, &phase, 1) == 1 && phase == 'C',
 	      "wait audit delegation consume");
 	close(audit_gate_fd);
 	printf("agentsecurity_ucore: trusted_span_authority=1\n");
 	check_wake_event_authorization();
-	make_op(&op, AGENT_TOOL_CAPABILITY_CHECK, 8101,
+	make_op(&security_sentinel_op, AGENT_TOOL_CAPABILITY_CHECK, 8101,
 		AGENT_ROLE_RECOVERY, "action_commit");
-	run_one(&op, &res, AGENT_STATUS_DENIED, "sentinel spoof cap");
-	check(res.value1 == AGENT_ROLE_SENTINEL, "real sentinel role");
-	make_op(&op, AGENT_TOOL_ACTION_COMMIT, 8105, AGENT_ROLE_RECOVERY,
+	run_one(&security_sentinel_op, &security_sentinel_result,
+		AGENT_STATUS_DENIED, "sentinel spoof cap");
+	check(security_sentinel_result.value1 == AGENT_ROLE_SENTINEL,
+	      "real sentinel role");
+	make_op(&security_sentinel_op, AGENT_TOOL_ACTION_COMMIT, 8105,
+		AGENT_ROLE_RECOVERY,
 		"label=align;run_id=RUN-999;namespace=lab-gene-x");
-	run_one(&op, &res, AGENT_STATUS_DENIED, "sentinel generic action");
-	make_op(&op, AGENT_TOOL_ARTIFACT_UPDATE, 8106, AGENT_ROLE_RECOVERY,
+	run_one(&security_sentinel_op, &security_sentinel_result,
+		AGENT_STATUS_DENIED, "sentinel generic action");
+	make_op(&security_sentinel_op, AGENT_TOOL_ARTIFACT_UPDATE, 8106,
+		AGENT_ROLE_RECOVERY,
 		"label=report;run_id=RUN-999;namespace=lab-gene-x");
-	run_one(&op, &res, AGENT_STATUS_DENIED, "sentinel generic artifact");
-	make_op(&op, AGENT_TOOL_LLM_RESPONSE, 8107, getppid(),
+	run_one(&security_sentinel_op, &security_sentinel_result,
+		AGENT_STATUS_DENIED, "sentinel generic artifact");
+	make_op(&security_sentinel_op, AGENT_TOOL_LLM_RESPONSE, 8107, getppid(),
 		"template response");
-	run_one(&op, &res, AGENT_STATUS_DENIED, "sentinel llm relay");
-	make_op(&op, AGENT_TOOL_DEPENDENCY_UPDATE, 8108, 0,
+	run_one(&security_sentinel_op, &security_sentinel_result,
+		AGENT_STATUS_DENIED, "sentinel llm relay");
+	make_op(&security_sentinel_op, AGENT_TOOL_DEPENDENCY_UPDATE, 8108, 0,
 		"source=align;target=review");
-	run_one(&op, &res, AGENT_STATUS_DENIED,
+	run_one(&security_sentinel_op, &security_sentinel_result,
+		AGENT_STATUS_DENIED,
 		"sentinel dependency update denied");
-	make_op(&op, AGENT_TOOL_RERUN_STAGE, 8102, AGENT_ROLE_RECOVERY,
+	make_op(&security_sentinel_op, AGENT_TOOL_RERUN_STAGE, 8102,
+		AGENT_ROLE_RECOVERY,
 		"align");
-	run_one(&op, &res, AGENT_STATUS_DENIED, "sentinel spoof rerun");
-	make_op(&op, AGENT_TOOL_WRITE_REPORT, 8103, AGENT_ROLE_RECOVERY,
+	run_one(&security_sentinel_op, &security_sentinel_result,
+		AGENT_STATUS_DENIED, "sentinel spoof rerun");
+	make_op(&security_sentinel_op, AGENT_TOOL_WRITE_REPORT, 8103,
+		AGENT_ROLE_RECOVERY,
 		"fake report");
-	run_one(&op, &res, AGENT_STATUS_DENIED, "sentinel spoof report");
-	make_op(&op, AGENT_TOOL_READ_FILE_DIGEST, 8104, 0, "r42align");
-	run_one(&op, &res, AGENT_STATUS_DENIED, "sentinel digest denied");
+	run_one(&security_sentinel_op, &security_sentinel_result,
+		AGENT_STATUS_DENIED, "sentinel spoof report");
+	make_op(&security_sentinel_op, AGENT_TOOL_READ_FILE_DIGEST, 8104, 0,
+		"r42align");
+	run_one(&security_sentinel_op, &security_sentinel_result,
+		AGENT_STATUS_DENIED, "sentinel digest denied");
 	check(agent_audit_snapshot(0, 0) == AGENT_STATUS_DENIED,
 	      "sentinel audit denied");
 	check(agent_audit_query(0, 0, 0) == AGENT_STATUS_DENIED,
@@ -475,21 +723,23 @@ static TEST_NOINLINE void run_sentinel(int audit_gate_fd)
 	check(agent_sched_config(&security_sched_config) ==
 		      AGENT_STATUS_DENIED,
 	      "sentinel sched config denied");
-	memset(&meta, 0, sizeof(meta));
-	strcpy(meta.stage, "align");
-	strcpy(meta.status, "ok");
-	check(agent_file_meta_set(&meta) == AGENT_STATUS_DENIED,
+	memset(&security_sentinel_meta, 0, sizeof(security_sentinel_meta));
+	strcpy(security_sentinel_meta.stage, "align");
+	strcpy(security_sentinel_meta.status, "ok");
+	check(agent_file_meta_set(&security_sentinel_meta) == AGENT_STATUS_DENIED,
 	      "sentinel meta write denied");
 	check_align_status("RUN-042", "failed");
-	for (int i = 0; i < 200; i++) {
-		memset(&manual, 0, sizeof(manual));
-		manual.tool_id = AGENT_TOOL_ECHO;
-		manual.request_id = 8700 + i;
-		manual.status = AGENT_STATUS_OK;
-		strcpy(manual.payload, "low-audit-churn");
-		strcpy(manual.result,
-		       i == 199 ? "low-audit-new" : "low-audit-churn");
-		check(context_push(&manual) == AGENT_STATUS_OK,
+	for (int i = 0; i < LOW_AUDIT_CHURN_COUNT; i++) {
+		memset(&security_sentinel_context, 0,
+		       sizeof(security_sentinel_context));
+		security_sentinel_context.tool_id = AGENT_TOOL_ECHO;
+		security_sentinel_context.request_id = 8700 + i;
+		security_sentinel_context.status = AGENT_STATUS_OK;
+		strcpy(security_sentinel_context.payload, "low-audit-churn");
+		strcpy(security_sentinel_context.result,
+		       i == LOW_AUDIT_CHURN_COUNT - 1 ?
+			       "low-audit-new" : "low-audit-churn");
+		check(context_push(&security_sentinel_context) == AGENT_STATUS_OK,
 		      "bounded low audit churn");
 	}
 	printf("agentsecurity_ucore: sentinel spoof_denied=1\n");
@@ -564,23 +814,20 @@ static TEST_NOINLINE void run_artifact(void)
 static TEST_NOINLINE void run_orphan_cancel_victim(int ready_fd, int result_fd,
 					   int gate_fd)
 {
-	struct agent_event event;
+	char legacy[8];
 	char ready = 'R';
-	char result = 'T';
 	char gate = 0;
 
+	(void)result_fd;
 	check_role(AGENT_ROLE_SENTINEL, "cancel-victim");
+	check(mailread(legacy, sizeof(legacy)) == -1,
+	      "agent legacy mail receive denied");
 	check(agent_watch(AGENT_EVENT_MESSAGE, "release=controller") == 0,
 	      "watch controller release");
 	check(write(ready_fd, &ready, 1) == 1, "report cancel victim ready");
-	check(read(gate_fd, &gate, 1) == 1 && gate == 'C',
-	      "wait stale controller probe");
-	memset(&event, 0, sizeof(event));
-	check(agent_wait(&event, 0) == AGENT_STATUS_TIMEOUT,
-	      "stale controller route does not deliver");
-	check(write(result_fd, &result, 1) == 1,
-	      "report stale route timeout");
-	exit(0);
+	/* No trusted ancestor exists, so controller teardown must interrupt this. */
+	(void)read(gate_fd, &gate, 1);
+	exit(99);
 }
 
 static TEST_NOINLINE void run_retired_cancel_controller(int report_fd,
@@ -609,6 +856,8 @@ static TEST_NOINLINE void run_retired_cancel_controller(int report_fd,
 				 AGENT_IPC_EVENT_MESSAGE,
 				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_OK,
 	      "grant retired controller route");
+	check(mailwrite(victim_pid, "legacy", 7) == -1,
+	      "route does not authorize legacy agent mail");
 	check(write(report_fd, &victim_pid, sizeof(victim_pid)) ==
 		      (int)sizeof(victim_pid),
 	      "report orphan cancel victim");
@@ -618,21 +867,28 @@ static TEST_NOINLINE void run_retired_cancel_controller(int report_fd,
 static TEST_NOINLINE void run_replacement_cancel_controller(int victim_pid)
 {
 	struct agent_event event;
+	struct agent_sched_config config;
 
 	check_role(AGENT_ROLE_ORCHESTRATOR, "replacement-controller");
 	check(agent_wait_cancel(victim_pid, "stale-controller") ==
-		      AGENT_STATUS_DENIED,
-	      "replacement controller cannot cancel orphan");
+		      AGENT_STATUS_NOT_FOUND,
+	      "replacement controller cannot cancel reaped orphan");
 	check(agent_route_config(getpid(), victim_pid,
 				 AGENT_IPC_EVENT_MESSAGE,
-				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_DENIED,
-	      "replacement controller cannot inherit route authority");
+				 AGENT_IPC_ROUTE_GRANT) == AGENT_STATUS_NOT_FOUND,
+	      "replacement controller cannot route to reaped orphan");
 	memset(&event, 0, sizeof(event));
 	event.type = AGENT_EVENT_MESSAGE;
 	event.corr_id = 8301;
 	strcpy(event.payload, "release=controller");
-	check(agent_wake(victim_pid, &event) == AGENT_STATUS_DENIED,
-	      "replacement controller stale route denied");
+	check(agent_wake(victim_pid, &event) == AGENT_STATUS_NOT_FOUND,
+	      "replacement controller stale endpoint absent");
+	memset(&config, 0, sizeof(config));
+	config.target_pid = victim_pid;
+	config.update_mask = AGENT_SCHED_CONFIG_WEIGHT;
+	config.weight = 151;
+	check(agent_sched_config(&config) == AGENT_STATUS_NOT_FOUND,
+	      "replacement controller cannot schedule reaped orphan");
 	printf("agentsecurity_ucore: wait_cancel_scope=1\n");
 	printf("agentsecurity_ucore: message_route_lifecycle=1\n");
 	exit(0);
@@ -662,9 +918,15 @@ static void check_wait_cancel_controller_lifecycle(void)
 		      (int)sizeof(victim_pid),
 	      "read orphan cancel victim");
 	check(victim_pid > 0, "orphan cancel victim pid");
+	check(mailwrite(victim_pid, "public-to-agent", 16) == -1,
+	      "public legacy mail cannot reach controller child");
+	check(close(report_pipe[1]) == 0,
+	      "close bootstrap orphan report writer");
 	check(waitpid(controller_pid, &status) == controller_pid,
 	      "wait retired cancel controller");
 	check(status == 0, "retired cancel controller status");
+	check(read(report_pipe[0], &victim_result, 1) < 0,
+	      "rootless controller child is forcibly reaped");
 	replacement_pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
 	check(replacement_pid >= 0, "create replacement cancel controller");
 	if (replacement_pid == 0)
@@ -672,18 +934,105 @@ static void check_wait_cancel_controller_lifecycle(void)
 	check(waitpid(replacement_pid, &status) == replacement_pid,
 	      "wait replacement cancel controller");
 	check(status == 0, "replacement cancel controller status");
-	victim_result = 'C';
-	check(write(victim_gate[1], &victim_result, 1) == 1,
-	      "release stale route victim");
-	victim_result = 0;
-	check(read(report_pipe[0], &victim_result, 1) == 1 &&
-		      victim_result == 'T',
-	      "orphan victim rejects stale route");
 	close(report_pipe[0]);
-	close(report_pipe[1]);
 	close(victim_gate[0]);
 	close(victim_gate[1]);
 	printf("agentsecurity_ucore: wait_cancel_controller_lifecycle=1\n");
+	printf("agentsecurity_ucore: orphan_controller_reaped=1\n");
+}
+
+static TEST_NOINLINE void run_handoff_victim(int report_fd)
+{
+	struct agent_event event;
+	char done = 'C';
+
+	check_role(AGENT_ROLE_SENTINEL, "handoff-victim");
+	memset(&event, 0, sizeof(event));
+	check(agent_wait(&event, -1) == AGENT_STATUS_CANCELLED,
+	      "handoff root cancels victim");
+	check(write(report_fd, &done, 1) == 1,
+	      "report handoff cancellation");
+	exit(0);
+}
+
+static TEST_NOINLINE void run_departing_subcontroller(int report_fd)
+{
+	int victim_pid;
+
+	check_role(AGENT_ROLE_ORCHESTRATOR, "departing-subcontroller");
+	check(agent_scope_delegate_fd(report_fd) == AGENT_STATUS_OK,
+	      "delegate handoff victim report");
+	victim_pid = agent_create_role(AGENT_ROLE_SENTINEL);
+	check(victim_pid >= 0, "create handoff victim");
+	if (victim_pid == 0)
+		run_handoff_victim(report_fd);
+	check(write(report_fd, &victim_pid, sizeof(victim_pid)) ==
+		      (int)sizeof(victim_pid),
+	      "publish handoff victim");
+	exit(0);
+}
+
+static TEST_NOINLINE void run_sibling_sched_probe(int victim_pid)
+{
+	struct agent_sched_config config;
+
+	check_role(AGENT_ROLE_ORCHESTRATOR, "handoff-sibling");
+	memset(&config, 0, sizeof(config));
+	config.target_pid = victim_pid;
+	config.update_mask = AGENT_SCHED_CONFIG_WEIGHT;
+	config.weight = 152;
+	check(agent_sched_config(&config) == AGENT_STATUS_DENIED,
+	      "sibling controller cannot schedule handoff victim");
+	exit(0);
+}
+
+static TEST_NOINLINE void check_controller_handoff(void)
+{
+	struct agent_sched_config config;
+	char done = 0;
+	int report[2];
+	int controller_pid;
+	int sibling_pid;
+	int victim_pid = -1;
+	int status = -1;
+
+	check(pipe(report) == 0, "create controller handoff report");
+	check(agent_scope_delegate_fd(report[1]) == AGENT_STATUS_OK,
+	      "delegate subcontroller report");
+	controller_pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
+	check(controller_pid >= 0, "create departing subcontroller");
+	if (controller_pid == 0)
+		run_departing_subcontroller(report[1]);
+	check(close(report[1]) == 0, "close root handoff report writer");
+	check(read(report[0], &victim_pid, sizeof(victim_pid)) ==
+		      (int)sizeof(victim_pid) && victim_pid > 0,
+	      "receive handoff victim");
+	check(waitpid(controller_pid, &status) == controller_pid && status == 0,
+	      "wait departing subcontroller");
+
+	sibling_pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
+	check(sibling_pid >= 0, "create sibling scheduling probe");
+	if (sibling_pid == 0)
+		run_sibling_sched_probe(victim_pid);
+	status = -1;
+	check(waitpid(sibling_pid, &status) == sibling_pid && status == 0,
+	      "wait sibling scheduling probe");
+
+	memset(&config, 0, sizeof(config));
+	config.target_pid = victim_pid;
+	config.update_mask = AGENT_SCHED_CONFIG_WEIGHT;
+	config.weight = 153;
+	check(agent_sched_config(&config) == AGENT_STATUS_OK,
+	      "root schedules handed-off victim");
+	check(agent_wait_cancel(victim_pid, "controller-handoff") ==
+		      AGENT_STATUS_OK,
+	      "root cancels handed-off victim");
+	check(read(report[0], &done, 1) == 1 && done == 'C',
+	      "handoff victim completes cancellation");
+	check(read(report[0], &done, 1) < 0,
+	      "handoff victim releases endpoint");
+	check(close(report[0]) == 0, "close controller handoff report");
+	printf("agentsecurity_ucore: controller_handoff=1 sibling_sched_denied=1\n");
 }
 
 static void check_route_tool(int tool, int target_pid, uint64 request_id,
@@ -1028,9 +1377,11 @@ static void run_orchestrator(void)
 
 	check_role(AGENT_ROLE_ORCHESTRATOR, "orchestrator");
 	check_orchestrator_plain_fork_denied();
+	check_orchestrator_scoped_public_mail();
 	check_ipc_route_authorization();
 	check_target_route_consent();
 	check_route_slot_reclamation();
+	check_controller_handoff();
 	check_preinit_index_query();
 	check(agent_file_meta_init() == 0, "meta init");
 	check_legacy_tool_mismatch();
@@ -1109,7 +1460,8 @@ static void run_orchestrator(void)
 	security_audit_filter.kind = AGENT_AUDIT_KIND_CONTEXT;
 	n = agent_audit_query(&security_audit_filter, security_audit_records,
 			      AGENT_AUDIT_MAX_RECORDS);
-	check(n > 0 && n <= 16, "low principal audit partition bounded");
+	check(n > 0 && n <= AGENT_AUDIT_LOW_PRINCIPAL_MAX,
+	      "low principal audit partition bounded");
 	for (int i = 0; i < n; i++)
 		if (strcmp(security_audit_records[i].text,
 			   "low-audit-new") == 0)
@@ -1231,17 +1583,225 @@ static void check_plain_mail(void)
 	char out[16];
 	int n;
 
+	check(agent_info(&security_agent_info) == 0,
+	      "empty legacy mailbox info");
+	check(security_agent_info.legacy_mailbox_allocated == 0 &&
+		      security_agent_info.legacy_mailbox_pages == 0 &&
+		      security_agent_info.legacy_mailbox_queue_count == 0,
+	      "legacy mailbox starts unallocated");
 	memset(out, 0, sizeof(out));
 	check(mailread(out, sizeof(out)) == 0, "empty mail");
+	check(agent_info(&security_agent_info) == 0,
+	      "post-empty legacy mailbox info");
+	check(security_agent_info.legacy_mailbox_allocated == 0 &&
+		      security_agent_info.legacy_mailbox_pages == 0,
+	      "empty read does not allocate legacy mailbox");
 	n = strlen(msg) + 1;
 	check(mailwrite(getpid(), msg, n) == n, "mail write");
+	check(agent_info(&security_agent_info) == 0,
+	      "first legacy mailbox allocation info");
+	check(security_agent_info.legacy_mailbox_allocated == 1 &&
+		      security_agent_info.legacy_mailbox_pages == 2 &&
+		      security_agent_info.legacy_mailbox_queue_count == 1,
+	      "first legacy mailbox send allocates two pages");
+	check(mailread((void *)(unsigned long)1, sizeof(out)) == -1,
+	      "invalid legacy mail destination rejected");
+	check(agent_info(&security_agent_info) == 0 &&
+		      security_agent_info.legacy_mailbox_queue_count == 1,
+	      "failed legacy read retains queued message");
 	check(mailread(out, sizeof(out)) == n, "mail read");
 	check(strcmp(out, msg) == 0, "mail text");
+	for (int i = 0; i < LEGACY_MAIL_TEST_SLOTS; i++)
+		check(mailwrite(getpid(), msg, n) == n,
+		      "bounded public mail enqueue");
+	check(mailwrite(getpid(), msg, n) == -1,
+	      "bounded public mail queue rejects flood");
+	check(agent_info(&security_agent_info) == 0,
+	      "full legacy mailbox info");
+	check(security_agent_info.legacy_mailbox_pages == 2 &&
+		      security_agent_info.legacy_mailbox_queue_count ==
+			      LEGACY_MAIL_TEST_SLOTS,
+	      "full legacy mailbox remains a two-page sidecar");
+	for (int i = 0; i < LEGACY_MAIL_TEST_SLOTS; i++) {
+		memset(out, 0, sizeof(out));
+		check(mailread(out, sizeof(out)) == n &&
+			      strcmp(out, msg) == 0,
+		      "bounded public mail dequeue");
+	}
+	check(mailread(out, sizeof(out)) == 0,
+	      "bounded public mail queue drained");
+	check(agent_info(&security_agent_info) == 0,
+	      "drained legacy mailbox info");
+	check(security_agent_info.legacy_mailbox_allocated == 1 &&
+		      security_agent_info.legacy_mailbox_pages == 2 &&
+		      security_agent_info.legacy_mailbox_queue_count == 0,
+	      "drained legacy mailbox stays allocated until teardown");
 	printf("agentsecurity_ucore: mail_basic=1\n");
+	printf("agentsecurity_ucore: mail_public_bounded=1\n");
+	printf("agentsecurity_ucore: mail_lazy_empty=1 first_alloc_pages=2\n");
+	printf("agentsecurity_ucore: mail_queue_full=1 capacity=16\n");
+	printf("agentsecurity_ucore: mail_read_failure_atomic=1\n");
+}
+
+static void check_plain_mail_reclaim_reuse(void)
+{
+	char msg[] = "reclaim";
+	int replacement_pid;
+	int stale_pid;
+	int status = 0;
+
+	stale_pid = fork();
+	check(stale_pid >= 0, "fork legacy mailbox reclaim owner");
+	if (stale_pid == 0) {
+		check(agent_info(&security_agent_info) == 0,
+		      "fresh reclaim owner mailbox info");
+		check(security_agent_info.legacy_mailbox_allocated == 0,
+		      "fresh reclaim owner has no mailbox sidecar");
+		check(mailwrite(getpid(), msg, sizeof(msg)) == (int)sizeof(msg),
+		      "allocate reclaim owner mailbox sidecar");
+		check(agent_info(&security_agent_info) == 0 &&
+			      security_agent_info.legacy_mailbox_pages == 2,
+		      "reclaim owner mailbox sidecar allocated");
+		exit(0);
+	}
+	check(waitpid(stale_pid, &status) == stale_pid,
+	      "wait legacy mailbox reclaim owner");
+	check(status == 0, "legacy mailbox reclaim owner status");
+	check(mailwrite(stale_pid, msg, sizeof(msg)) == -1,
+	      "stale legacy PID is not an endpoint");
+	replacement_pid = fork();
+	check(replacement_pid >= 0, "fork legacy mailbox reused slot");
+	if (replacement_pid == 0) {
+		char out[16];
+
+		check(agent_info(&security_agent_info) == 0,
+		      "reused slot mailbox info");
+		check(security_agent_info.legacy_mailbox_allocated == 0 &&
+			      security_agent_info.legacy_mailbox_pages == 0 &&
+			      security_agent_info.legacy_mailbox_queue_count == 0,
+		      "reused slot has no stale mailbox sidecar");
+		check(mailread(out, sizeof(out)) == 0,
+		      "reused slot has no stale legacy message");
+		exit(0);
+	}
+	check(replacement_pid > stale_pid,
+	      "legacy endpoint PID is never silently reused");
+	check(waitpid(replacement_pid, &status) == replacement_pid,
+	      "wait legacy mailbox reused slot");
+	check(status == 0, "legacy mailbox reused slot status");
+	printf("agentsecurity_ucore: mail_endpoint_reuse_isolated=1 stale_pid_denied=1\n");
+}
+
+static TEST_NOINLINE void check_ordinary_mail_domain_isolation(void)
+{
+	char token = 'R';
+	int target_gate[2];
+	int target_report[2];
+	int target_pid;
+	int source_pid;
+	int target_result = -1;
+	int status = -1;
+
+	check(pipe(target_gate) == 0 && pipe(target_report) == 0,
+	      "create ordinary legacy mail coordination");
+	check(agent_scope_delegate_fd(target_gate[0]) == AGENT_STATUS_OK &&
+		      agent_scope_delegate_fd(target_report[1]) ==
+			      AGENT_STATUS_OK,
+	      "delegate ordinary target coordination");
+	target_pid = fork();
+	check(target_pid >= 0, "create independent ordinary mail target");
+	if (target_pid == 0) {
+		char out[16];
+
+		check_plain_identity();
+		check(read(target_gate[0], &token, 1) == 1 && token == 'R',
+		      "release ordinary target mailbox inspection");
+		target_result = mailread(out, sizeof(out));
+		check(write(target_report[1], &target_result,
+			    sizeof(target_result)) == (int)sizeof(target_result),
+		      "report ordinary target mailbox state");
+		exit(target_result == 0 ? 0 : 1);
+	}
+	check(close(target_gate[0]) == 0 && close(target_report[1]) == 0,
+	      "close ordinary target child endpoints");
+	source_pid = fork();
+	check(source_pid >= 0, "create independent ordinary mail source");
+	if (source_pid == 0) {
+		char same_message[] = "same-account";
+		char *exec_argv[] = {
+			"agentsecurity_ucore", "--legacy-exec-probe", 0
+		};
+		int peer_pid;
+
+		check_plain_identity();
+		peer_pid = fork();
+		check(peer_pid >= 0, "create same-account ordinary peer");
+		if (peer_pid == 0) {
+			char out[16];
+			int n = 0;
+
+			for (int attempt = 0; attempt < 100 && n == 0;
+			     attempt++) {
+				n = mailread(out, sizeof(out));
+				if (n == 0)
+					sleep(1);
+			}
+			check(n == (int)sizeof(same_message) &&
+				      strcmp(out, same_message) == 0,
+			      "same ordinary account receives legacy mail");
+			exit(0);
+		}
+		check(mailwrite(peer_pid, same_message,
+				 sizeof(same_message)) == (int)sizeof(same_message),
+		      "same ordinary account legacy compatibility");
+		check(waitpid(peer_pid, &status) == peer_pid && status == 0,
+		      "wait same-account ordinary peer");
+		check(mailwrite(target_pid, "cross-account", 14) == -1,
+		      "independent ordinary account legacy send denied");
+		check_plain_mail();
+		check_plain_mail_reclaim_reuse();
+		check(mailwrite(getpid(), "pre-exec", 9) == 9,
+		      "queue legacy mail before PUBLIC exec");
+		if (exec("agentsecurity_ucore", exec_argv) < 0)
+			exit(1);
+		exit(1);
+	}
+	check(waitpid(source_pid, &status) == source_pid && status == 0,
+	      "wait independent ordinary source");
+	check(write(target_gate[1], &token, 1) == 1,
+	      "release independent ordinary target");
+	check(read(target_report[0], &target_result, sizeof(target_result)) ==
+		      (int)sizeof(target_result) && target_result == 0,
+	      "cross-account legacy send leaves target queue empty");
+	status = -1;
+	check(waitpid(target_pid, &status) == target_pid && status == 0,
+	      "wait independent ordinary target");
+	check(close(target_gate[1]) == 0 && close(target_report[0]) == 0,
+	      "close ordinary target parent endpoints");
+	printf("agentsecurity_ucore: mail_ordinary_domain_isolation=1 same_account_compat=1\n");
+}
+
+static void check_system_scoped_mail_denied(void)
+{
+	char out[16];
+
+	check(agent_info(&security_agent_info) == 0 &&
+		      security_agent_info.legacy_mailbox_allocated == 0,
+	      "system scoped mailbox starts absent");
+	check(mailread(out, sizeof(out)) == -1,
+	      "system scoped PUBLIC lacks an active Agent controller");
+	check(mailwrite(getpid(), "system-scope", 13) == -1,
+	      "system scoped PUBLIC cannot self-authorize legacy mail");
+	check(agent_info(&security_agent_info) == 0 &&
+		      security_agent_info.legacy_mailbox_allocated == 0 &&
+		      security_agent_info.legacy_mailbox_queue_count == 0,
+	      "denied system scoped mail does not allocate");
+	printf("agentsecurity_ucore: mail_missing_controller_denied=1\n");
 }
 
 int main(int argc, char **argv)
 {
+	char cross_scope_out[16];
 	int pid;
 	int status = 0;
 	char *exec_probe_argv[] = {
@@ -1254,6 +1814,23 @@ int main(int argc, char **argv)
 		printf("agentsecurity_ucore: untrusted_exec_role_creation_denied=1\n");
 		return 0;
 	}
+	if (argc > 1 && strcmp(argv[1], "--legacy-exec-probe") == 0) {
+		char out[16];
+
+		check_plain_identity();
+		check(agent_info(&security_agent_info) == 0 &&
+			      security_agent_info.legacy_mailbox_allocated == 0 &&
+			      security_agent_info.legacy_mailbox_queue_count == 0,
+		      "PUBLIC exec rotates and clears legacy endpoint");
+		check(mailread(out, sizeof(out)) == 0,
+		      "PUBLIC exec cannot receive pre-exec legacy mail");
+		check(mailwrite(getpid(), "post-exec", 10) == 10 &&
+			      mailread(out, sizeof(out)) == 10 &&
+			      strcmp(out, "post-exec") == 0,
+		      "rotated PUBLIC endpoint remains usable");
+		printf("agentsecurity_ucore: mail_exec_endpoint_rotated=1\n");
+		return 0;
+	}
 	if (argc > 1 && strcmp(argv[1], "--bootstrap-exec-probe") == 0) {
 		check_plain_identity();
 		check_creation_authority_denied();
@@ -1264,7 +1841,9 @@ int main(int argc, char **argv)
 
 	printf("agentsecurity_ucore: Agent permission test\n");
 	check_bootstrap_identity();
-	check_plain_mail();
+	check_system_scoped_mail_denied();
+	check_ordinary_mail_domain_isolation();
+	check_active_workflow_mail_isolation();
 	check_plain_process_denied();
 	check_plain_child_creation_denied();
 	check_wait_cancel_controller_lifecycle();
@@ -1272,9 +1851,15 @@ int main(int argc, char **argv)
 	check(pid >= 0, "create orchestrator");
 	if (pid == 0)
 		run_orchestrator();
+	check(mailwrite(pid, "public-to-agent", 16) == -1,
+	      "public cannot use legacy mail to agent endpoint");
 	printf("agentsecurity_ucore: bootstrap_orchestrator_create=1\n");
 	check(waitpid(pid, &status) == pid, "wait orchestrator");
 	check(status == 0, "orchestrator status");
+	check(mailread(cross_scope_out, sizeof(cross_scope_out)) == -1 &&
+		      agent_info(&security_agent_info) == 0 &&
+		      security_agent_info.legacy_mailbox_allocated == 0,
+	      "cross scope public mail did not enqueue");
 	check_reaped_agent_slot_cleared();
 	if (exec("agentsecurity_ucore", exec_probe_argv) < 0)
 		check(0, "bootstrap exec probe");

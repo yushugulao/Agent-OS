@@ -130,6 +130,7 @@ def put_vfs_label(
         )
         put_u32(image, offset + 68, fsx.EXEC_MANIFEST_VERSION)
         put_u32(image, offset + 76, fsx.EXEC_LAYOUT_VERSION)
+        put_u32(image, offset + 80, fsx.USER_PAGE_SIZE)
         exec_profile = fsx.VFS_EXEC_PROFILE_WORKFLOW
     words = [
         fsx.VFS_LABEL_MAGIC,
@@ -310,10 +311,15 @@ def run_case(
             magic,
         )
 
-    binary_text = b"\x7fELF\x00rp_fake_program"
-    image[23 * fsx.BSIZE : 23 * fsx.BSIZE + len(binary_text)] = binary_text
+    binary_text = b"\x7fELF\x00rp_fake_program" + bytes(fsx.USER_PAGE_SIZE)
+    binary_blocks = [30, 31, 32, 33, 34]
+    for index, block_number in enumerate(binary_blocks):
+        chunk = binary_text[index * fsx.BSIZE : (index + 1) * fsx.BSIZE]
+        image[
+            block_number * fsx.BSIZE : block_number * fsx.BSIZE + len(chunk)
+        ] = chunk
     put_inode(
-        image, 4, fsx.T_FILE, len(binary_text), [23], dinode_size, magic
+        image, 4, fsx.T_FILE, len(binary_text), binary_blocks, dinode_size, magic
     )
     if vfs_format:
         put_vfs_label(
@@ -375,11 +381,17 @@ def run_case(
     image_path = case_dir / "fs-copy.img"
     out_dir = case_dir / "state"
     repo_dir = case_dir / "repo"
-    repo_dir.mkdir(parents=True)
-    (repo_dir / "README.md").write_text(
-        "rp_artifact_manifest\nrp_agentos_collab_ack\n",
+    source_dir = repo_dir / "user" / "src"
+    include_dir = repo_dir / "user" / "include"
+    source_dir.mkdir(parents=True)
+    include_dir.mkdir(parents=True)
+    (source_dir / "state_fixture.c").write_text(
+        'rp_write_file("rp_input", "status=ready\\n");\n'
+        'rp_write_file("rp_artifact_manifest", "status=ready\\n");\n'
+        'rp_write_file("rp_agentos_collab_ack", "status=ready\\n");\n',
         encoding="utf-8",
     )
+    (include_dir / "state_fixture.h").write_text("/* state fixture */\n", encoding="utf-8")
     image_path.write_bytes(image)
 
     superblock = fsx.read_superblock(image)
@@ -468,6 +480,26 @@ def run_case(
     assert (out_dir / "rp_agentos_collab_ack").read_text(encoding="utf-8") == ack_text.decode("utf-8")
     assert not (out_dir / "rp_orch").exists()
     assert (out_dir / "extract-summary.json").exists()
+
+    unknown = bytearray(image)
+    artifact_slot = 2 if vfs_format and public_first else 1
+    unknown_offset = 20 * fsx.BSIZE + artifact_slot * 16 + 2
+    unknown[unknown_offset : unknown_offset + fsx.DIRSIZ] = b"\0" * fsx.DIRSIZ
+    unknown_name = b"rp_unknown"
+    unknown[unknown_offset : unknown_offset + len(unknown_name)] = unknown_name
+    unknown_path = case_dir / "unknown-state.img"
+    unknown_path.write_bytes(unknown)
+    try:
+        fsx.extract_state_files(
+            unknown_path,
+            case_dir / "unknown-state",
+            repo_dir,
+            require_single_scope=True,
+        )
+    except ValueError as error:
+        assert "unmanifested state filename" in str(error), error
+    else:
+        raise AssertionError("unmanifested guest state file was extracted")
 
     if is_scoped(magic):
         stale_file = out_dir / "rp_stale"
@@ -908,6 +940,64 @@ def main() -> int:
     assert (
         fsx.FSMAGIC_BASELINE_PRINCIPAL
         != fsx.FSMAGIC_AGENT_PRINCIPAL
+    )
+    sealed = (
+        fsx.EXEC_FLAG_TRUSTED
+        | fsx.EXEC_FLAG_IMMUTABLE
+        | fsx.EXEC_FLAG_DOMAIN_SAFE
+    )
+    worker = fsx.EXEC_FLAG_IMMUTABLE | fsx.EXEC_FLAG_DOMAIN_SAFE
+
+    def classify(flags: int, profile: int, roles: int = 0) -> int:
+        return fsx.exec_image_protected_classify(
+            fsx.T_FILE,
+            fsx.USER_PAGE_SIZE + 1,
+            flags,
+            fsx.EXEC_MANIFEST_VERSION,
+            roles,
+            fsx.EXEC_LAYOUT_VERSION,
+            fsx.USER_PAGE_SIZE,
+            profile,
+        )
+
+    assert classify(sealed, fsx.VFS_EXEC_PROFILE_NONE) == fsx.EXEC_IMAGE_COMPAT
+    assert (
+        classify(sealed, fsx.VFS_EXEC_PROFILE_NONE, fsx.EXEC_MANIFEST_ROLE_ALL)
+        == fsx.EXEC_IMAGE_COMPAT
+    )
+    assert (
+        classify(worker, fsx.VFS_EXEC_PROFILE_WORKFLOW)
+        == fsx.EXEC_IMAGE_WORKER
+    )
+    assert classify(
+        sealed | fsx.EXEC_FLAG_BOOTSTRAP,
+        fsx.VFS_EXEC_PROFILE_WORKFLOW,
+        1 << 4,
+    ) == fsx.EXEC_IMAGE_TRUSTED_AGENT
+    assert (
+        classify(sealed, fsx.VFS_EXEC_PROFILE_CONTENT_READ)
+        == fsx.EXEC_IMAGE_TRUSTED_ENDPOINT
+    )
+    assert (
+        classify(fsx.EXEC_FLAG_DOMAIN_SAFE, fsx.VFS_EXEC_PROFILE_WORKFLOW)
+        == fsx.EXEC_IMAGE_INVALID
+    )
+    assert classify(
+        sealed | fsx.EXEC_FLAG_BOOTSTRAP,
+        fsx.VFS_EXEC_PROFILE_NONE,
+        1 << 4,
+    ) == fsx.EXEC_IMAGE_INVALID
+    assert (
+        classify(worker, fsx.VFS_EXEC_PROFILE_WORKFLOW, 1 << 4)
+        == fsx.EXEC_IMAGE_INVALID
+    )
+    assert (
+        classify(worker, fsx.VFS_EXEC_PROFILE_NONE)
+        == fsx.EXEC_IMAGE_INVALID
+    )
+    assert (
+        classify(worker, fsx.VFS_EXEC_PROFILE_WORKFLOW, 1 << 31)
+        == fsx.EXEC_IMAGE_INVALID
     )
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)

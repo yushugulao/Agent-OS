@@ -311,8 +311,8 @@ static void verify_workflow_versions(void)
 
 static void verify_workflow_metadata(void)
 {
-	struct agent_file_query query;
-	struct agent_file_query_result result;
+	static struct agent_file_query query;
+	static struct agent_file_query_result result;
 	int agent;
 	int status = -1;
 

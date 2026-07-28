@@ -1,7 +1,7 @@
 #ifndef IO_POLICY_H
 #define IO_POLICY_H
 
-#define IO_POLICY_VERSION 3U
+#define IO_POLICY_VERSION 4U
 
 #define IO_POLICY_OWNER_SYSTEM 1U
 #define IO_POLICY_OWNER_PUBLIC 2U
@@ -16,7 +16,8 @@ enum io_policy_class {
 };
 
 /*
- * Credits represent completed 1 KiB block transfers.  The profile is a
+ * Credits represent attempted 1 KiB block transfers and durability flushes;
+ * failed attempts are charged as well.  The profile is a
  * hierarchy flattened into protected per-owner slices: PUBLIC has one normal
  * slice, every active workflow has normal/control/background slices, every
  * retiring workflow keeps only its cleanup background slice, and SYSTEM has
@@ -84,6 +85,8 @@ struct io_policy_info {
 	unsigned long long cache_evictions;
 	unsigned long long unreserved_transfers;
 	unsigned long long completion_sequence;
+	unsigned long long physical_flushes;
+	unsigned long long failed_transfers;
 };
 
 #endif // IO_POLICY_H

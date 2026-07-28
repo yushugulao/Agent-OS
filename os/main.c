@@ -20,9 +20,13 @@ void main()
 	clean_bss();
 	printf("hello world!\n");
 	proc_init();
+	console_init();
 	agentinit();
 	kinit();
 	kvm_init();
+	if (kalloc_physical_policy_init(PHYSICAL_PAGE_SYSTEM_RESERVE,
+					PHYSICAL_PAGE_ORDINARY_LIMIT) < 0)
+		panic("physical page policy");
 	trap_init();
 	plicinit();
 	virtio_disk_init();
@@ -33,6 +37,8 @@ void main()
 	bio_policy_start();
 	load_init_app();
 	infof("start scheduler!");
+	/* Boot-only callers may poll because no schedulable thread exists yet. */
 	show_all_files();
+	virtio_disk_runtime_start();
 	scheduler();
 }

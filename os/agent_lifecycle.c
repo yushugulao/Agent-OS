@@ -1,5 +1,6 @@
 #include "agent_lifecycle.h"
 #include "agent_internal.h"
+#include "agent_identity_lease.h"
 #include "defs.h"
 #include "vfs_security.h"
 
@@ -18,6 +19,7 @@ agent_lifecycle_context_lane_init(struct proc *p)
 {
 	if (p == 0)
 		return;
+	p->agent_control_state = AGENT_CONTROL_OPEN;
 	wait_queue_init(&p->agent_context_lane_waiters,
 			WAIT_REASON_AGENT_CONTEXT);
 	p->agent_context_lane_owner_tid = AGENT_CONTEXT_LANE_OWNER_NONE;
@@ -243,37 +245,96 @@ sys_agent_workflow_lifecycle_info(uint64 addr, uint64 user_size,
 uint64
 agent_lifecycle_alloc_control_id(void)
 {
+	int enabled = intr_save();
 	uint64 id = next_control_id;
 
-	if (id == 0)
+	if (id == 0) {
+		intr_restore(enabled);
 		return 0;
-	if (id == ~0ULL)
-		next_control_id = 0;
-	else
-		next_control_id = id + 1;
-	return id;
+	}
+	if (agent_identity_lease_allocator_contains(
+		    AGENT_IDENTITY_ALLOCATOR_CONTROL, id)) {
+		next_control_id = id == ~0ULL ? 0 : id + 1;
+		intr_restore(enabled);
+		agent_identity_lease_allocator_note_next(
+			AGENT_IDENTITY_ALLOCATOR_CONTROL, next_control_id);
+		return id;
+	}
+	intr_restore(enabled);
+	(void)agent_identity_lease_allocator_renew(
+		AGENT_IDENTITY_ALLOCATOR_CONTROL);
+	return 0;
+}
+
+uint64
+agent_lifecycle_next_control_id_get(void)
+{
+	return next_control_id;
 }
 
 void
-agent_lifecycle_controller_departing(struct proc *p)
+agent_lifecycle_control_id_floor(uint64 floor)
 {
-	struct workflow_lifecycle_key lifecycle;
-	struct workflow_lifecycle_key closed;
-	uint scope_id;
-	uint64 control_id;
-
-	if (p == 0 || !p->vfs_scope_controller || !p->is_agent ||
-	    p->vfs_scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
-	    p->agent_control_id == 0)
+	if (floor == 0) {
+		next_control_id = 0;
 		return;
-	scope_id = p->vfs_scope_id;
-	control_id = p->agent_control_id;
-	lifecycle = vfs_proc_lifecycle(p);
+	}
+	if (next_control_id != 0 && floor > next_control_id)
+		next_control_id = floor;
+}
+
+uint64
+agent_lifecycle_controller_departing_locked(struct proc *p)
+{
+	struct agent_controller_departure departure;
+	struct workflow_lifecycle_key closed;
+	int finish;
+	int close_status;
+
+	if (intr_get())
+		panic("controller departure unlocked");
+	if (p == 0)
+		return 0;
+	finish = p->teardown_state == PROC_TEARDOWN_LIVE ||
+		 p->teardown_state >= PROC_TEARDOWN_RECLAIMING;
+	/* Authority is closed; final retirement waits for late lane commits. */
+	if (finish && p->teardown_state != PROC_TEARDOWN_LIVE &&
+	    !agent_lifecycle_context_lane_quiescent(p))
+		panic("controller retired with active Context lane");
+	if (agent_identity_controller_depart(p, finish, &departure) <= 0)
+		return 0;
+	/* Abandoned edges are cancelled when authority first closes. */
+	if (!departure.scope_controller) {
+		proc_request_controller_exit(departure.lifecycle,
+				     departure.control_id,
+				     AGENT_STATUS_CANCELLED);
+		return departure.control_id;
+	}
 	/*
 	 * This one-shot ownership attachment is only a close trigger.  The
 	 * immutable lifecycle key remains authoritative for descendant teardown.
 	 */
-	p->vfs_scope_controller = 0;
-	if (vfs_scope_close_owned(scope_id, lifecycle, control_id, &closed) == 0)
+	close_status = vfs_scope_close_owned(
+		departure.scope_id, departure.lifecycle,
+		departure.control_id, &closed);
+	if (close_status == 0)
 		proc_request_workflow_exit(closed, AGENT_STATUS_CANCELLED);
+	else if (workflow_lifecycle_closing(departure.lifecycle))
+		proc_request_workflow_exit(departure.lifecycle,
+				   AGENT_STATUS_CANCELLED);
+	else
+		panic("controller retirement without lifecycle close");
+	/* Phase one closes admission; phase two publishes the retired identity. */
+	if (!finish)
+		return departure.control_id;
+	/* Failed close leaves QUIESCING + attachment intact for a retry. */
+	if (agent_identity_controller_close_commit(p, &departure) < 0)
+		panic("controller lifecycle close commit");
+	return departure.control_id;
+}
+
+int
+agent_lifecycle_spawn_publish_locked(struct proc *parent, struct proc *child)
+{
+	return agent_identity_spawn_publish_locked(parent, child);
 }

@@ -154,12 +154,16 @@ struct file *filealloc(struct proc *owner)
 //Show names of all files in the root_dir.
 int show_all_files()
 {
-	struct inode *root = root_dir();
+	int root_status;
+	struct inode *root = root_dir_status(&root_status);
 	struct vfs_cred cred;
 	int result;
 
-	if (root == 0)
+	if (root == 0 || root_status != FS_LOOKUP_FOUND) {
+		if (root)
+			iput(root);
 		return -1;
+	}
 	vfs_cred_from_proc(curr_proc(), &cred);
 	result = dirls(root, &cred);
 	iput(root);
@@ -176,8 +180,7 @@ static int filetruncate(struct inode *ip, const struct vfs_cred *cred)
 	// Commit both version domains before reclaim or persistence may yield.
 	agent_edit_note_truncate(ip);
 	agent_fs_note_truncate(ip);
-	itruncate_reclaim(&reclaim);
-	return 0;
+	return itruncate_reclaim(&reclaim);
 }
 
 //A process creates or opens a file according to its path, returning the file descriptor of the created or opened file.
@@ -191,6 +194,7 @@ int fileopen(char *path, uint64 omode)
 	struct vfs_cred cred;
 	uint policy;
 	int created = 0;
+	int lookup_status = FS_LOOKUP_ERROR;
 
 	if (agent_file_is_meta_store_name(path))
 		return -1;
@@ -202,8 +206,9 @@ int fileopen(char *path, uint64 omode)
 	    !vfs_create_request_authorize(
 		    &cred, policy, !(omode & O_WRONLY),
 		    (omode & (O_WRONLY | O_RDWR)) != 0,
-		    (omode & O_TRUNC) != 0))
+		    (omode & O_TRUNC) != 0)) {
 		return -1;
+	}
 	if ((f = filealloc(curr_proc())) == 0)
 		return -1;
 	if ((fd = fdreserve()) < 0) {
@@ -212,19 +217,26 @@ int fileopen(char *path, uint64 omode)
 	}
 
 	if (omode & O_CREATE) {
-		ip = fs_create(path, T_FILE, &created, &cred, policy);
+		ip = fs_create(path, T_FILE, &created, &cred, policy,
+			       &lookup_status);
 		if (ip == 0)
 			goto fail;
 	} else {
-		if ((ip = namei_scope(path, vfs_cred_lookup_policy(&cred),
-				      cred.scope_id)) == 0) {
+		ip = namei_scope_status(path, vfs_cred_lookup_policy(&cred),
+				       cred.scope_id, &lookup_status);
+		if (ip == 0) {
+			if (lookup_status != FS_LOOKUP_ABSENT)
+				goto fail;
 			if ((omode & (O_WRONLY | O_RDWR | O_TRUNC)) != 0 ||
-			    cred.scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
-			    (ip = namei_scope(path, VFS_POLICY_WORKFLOW,
-					      VFS_SCOPE_SYSTEM)) == 0)
+			    cred.scope_id < VFS_SCOPE_FIRST_DYNAMIC)
+				goto fail;
+			ip = namei_scope_status(path, VFS_POLICY_WORKFLOW,
+					       VFS_SCOPE_SYSTEM, &lookup_status);
+			if (ip == 0 || lookup_status != FS_LOOKUP_FOUND)
 				goto fail;
 		}
-		ivalid(ip);
+		if (ivalid(ip) < 0)
+			goto fail;
 	}
 	if (ip->type != T_FILE)
 		goto fail;
@@ -272,21 +284,34 @@ int fileunlink(char *path)
 	struct vfs_cred cred;
 	uint policy;
 	uint offset;
+	int lookup_status;
+	int root_status;
 
 	if (agent_file_is_meta_store_name(path))
 		return -1;
 	vfs_cred_from_proc(curr_proc(), &cred);
 	policy = vfs_cred_lookup_policy(&cred);
 
-	dp = root_dir();
-	if (dp == 0)
+	dp = root_dir_status(&root_status);
+	if (dp == 0 || root_status != FS_LOOKUP_FOUND) {
+		if (dp)
+			iput(dp);
 		return -1;
-	ivalid(dp);
-	if ((ip = dirlookup(dp, path, &offset, policy, cred.scope_id, 0)) == 0) {
+	}
+	if (ivalid(dp) < 0) {
 		iput(dp);
 		return -1;
 	}
-	ivalid(ip);
+	if ((ip = dirlookup(dp, path, &offset, policy, cred.scope_id,
+			    &lookup_status)) == 0) {
+		iput(dp);
+		return -1;
+	}
+	if (ivalid(ip) < 0) {
+		iput(ip);
+		iput(dp);
+		return -1;
+	}
 	if (ip->type != T_FILE) {
 		iput(ip);
 		iput(dp);
@@ -336,7 +361,8 @@ uint64 inodewrite(struct file *f, uint64 va, uint64 len)
 
 	if (len == 0)
 		return 0;
-	ivalid(f->ip);
+	if (ivalid(f->ip) < 0)
+		return (uint64)-1;
 	if (f->ip->type != T_FILE)
 		return (uint64)-1;
 	if (!exec_policy_inode_mutable(f->ip))
@@ -368,7 +394,7 @@ uint64 inodewrite(struct file *f, uint64 va, uint64 len)
 		} else {
 			agent_fs_sync_write(f->ip);
 		}
-		if (bio_request_checkpoint() < 0)
+		if (bio_checkpoint_should_stop(bio_request_checkpoint()))
 			return done;
 		checkpoint = kernel_work_checkpoint((uint)r);
 		if (checkpoint != 0 || (uint)r < chunk)
@@ -391,7 +417,8 @@ uint64 inoderead(struct file *f, uint64 va, uint64 len)
 
 	if (len == 0)
 		return 0;
-	ivalid(f->ip);
+	if (ivalid(f->ip) < 0)
+		return (uint64)-1;
 	if (f->ip->type != T_FILE)
 		return (uint64)-1;
 	vfs_cred_from_proc(curr_proc(), &cred);
@@ -410,7 +437,7 @@ uint64 inoderead(struct file *f, uint64 va, uint64 len)
 
 		f->off = offset + r;
 		done += r;
-		if (bio_request_checkpoint() < 0)
+		if (bio_checkpoint_should_stop(bio_request_checkpoint()))
 			return done;
 		checkpoint = kernel_work_checkpoint((uint)r);
 		if (checkpoint != 0 || (uint)r < chunk)

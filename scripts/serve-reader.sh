@@ -25,6 +25,12 @@ fi
 mkdir -p "${OUT_DIR}"
 rm -rf "${OUT_DIR}/dual-results" "${OUT_DIR}/dual-results.html" "${OUT_DIR}/reader-url-list.txt"
 if [ -f "${RESULT_DIR}/monitor.html" ]; then
+	if ! "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/result_bundle_contract.py" \
+		--result-dir "${RESULT_DIR}"; then
+		echo "[reader] 现有结果包未通过来源与完整性校验，拒绝提供过期或伪造证据。" >&2
+		echo "[reader] 请重新运行：make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-" >&2
+		exit 1
+	fi
 	mkdir -p "${OUT_DIR}/dual-results"
 	cp -R "${RESULT_DIR}/." "${OUT_DIR}/dual-results/"
 	cat >"${OUT_DIR}/reader-url-list.txt" <<EOF
@@ -48,7 +54,7 @@ AgentOS 运行 URL 清单
    http://127.0.0.1:${PORT}/dual-results/index.html
 9. 证据索引页
    http://127.0.0.1:${PORT}/dual-results/evidence-map.html
-10. 四组实验统计 CSV
+10. 文件查询实测统计 CSV
    http://127.0.0.1:${PORT}/dual-results/experiments/experiment-stats.csv
 11. AgentOS Compare
    http://127.0.0.1:${PORT}/compare.html
@@ -96,7 +102,7 @@ EOF
       <a href="dual-results/monitor.html">5. 运行观测面板</a>
       <a href="dual-results/index.html">6. 图表索引页</a>
       <a href="dual-results/evidence-map.html">7. 证据索引页</a>
-      <a href="dual-results/experiments/experiment-stats.csv">8. 四组实验统计 CSV</a>
+      <a href="dual-results/experiments/experiment-stats.csv">8. 文件查询实测统计 CSV</a>
       <a href="compare.html">9. AgentOS Compare</a>
       <a href="llm.html">10. LLM Relay</a>
     </div>
@@ -114,7 +120,7 @@ EOF
       <a href="dual-results/report.md">Markdown 报告</a>
       <a href="dual-results/summary.csv">CSV 明细</a>
       <a href="dual-results/runner-sweep.csv">Runner 成组数据</a>
-      <a href="dual-results/experiments/experiment-stats.csv">四组实验统计 CSV</a>
+      <a href="dual-results/experiments/experiment-stats.csv">文件查询实测统计 CSV</a>
       <a href="dual-results/experiments/mechanism-notes.csv">机制说明 CSV</a>
       <a href="reader-url-list.txt">纯文本 URL 清单</a>
     </div>

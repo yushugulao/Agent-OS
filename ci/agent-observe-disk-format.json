@@ -1,0 +1,169 @@
+{
+  "descriptor": {
+    "bytes": 1032,
+    "magic": "0x41474f42534c5931",
+    "version": 2
+  },
+  "durable_arena": {
+    "bytes": 8192,
+    "fields": {
+      "bytes": 12,
+      "generation": 24,
+      "image_hash": 8184,
+      "magic": 0,
+      "payload": 96,
+      "section_count": 16,
+      "sections": 32,
+      "used_bytes": 20,
+      "version": 8
+    },
+    "magic": "0x4147445552413031",
+    "payload_bytes": 8088,
+    "section_descriptor": {
+      "bytes": 32,
+      "fields": {
+        "bytes": 12,
+        "generation": 16,
+        "kind": 0,
+        "offset": 8,
+        "payload_hash": 24,
+        "version": 4
+      }
+    },
+    "section_max": 2,
+    "version": 1
+  },
+  "hash": {
+    "algorithm": "agent-fnv1a64-v1",
+    "algorithm_id": 1,
+    "initial": "0x14650fb0739d0383",
+    "prime": "0x00000100000001b3"
+  },
+  "observation": {
+    "agent_id_max": 2147483647,
+    "allocator_exhausted_all": 31,
+    "audit_kinds": {
+      "event_consume": 3,
+      "event_enqueue": 2,
+      "max": 5
+    },
+    "bytes": 8024,
+    "diversity_anchors": 4,
+    "entry": {
+      "bytes": 240,
+      "fields": {
+        "identity_class": 212,
+        "link_flags": 213,
+        "principal": 216,
+        "receipt_id": 232,
+        "record": 0,
+        "reserved": 214,
+        "scope_id": 208,
+        "span_owner": 224
+      },
+      "identity_class_bytes": 1,
+      "link_flags_bytes": 1,
+      "reserved_bytes": 2
+    },
+    "fields": {
+      "agent_lease_end": 56,
+      "allocator_exhausted": 68,
+      "audit_lease_end": 24,
+      "bytes": 12,
+      "control_lease_end": 48,
+      "event_lease_end": 40,
+      "generation": 16,
+      "image_hash": 8016,
+      "lifecycle_lease_ends": 80,
+      "magic": 0,
+      "reserved_scope_slots": 72,
+      "retention_policy": 60,
+      "reserved": 76,
+      "scope_count": 64,
+      "scopes": 144,
+      "span_lease_end": 32,
+      "version": 8
+    },
+    "first_dynamic_scope": 3,
+    "identity_classes": {
+      "authority": 2,
+      "causal": 1,
+      "telemetry": 0
+    },
+    "latest_tail": 4,
+    "lifecycle_cap": 8,
+    "link_flags": {
+      "all": 3,
+      "latest_tail": 2,
+      "prev_retained": 1
+    },
+    "magic": "0x41474f4253323031",
+    "owner_scope_flag": 2147483648,
+    "record": {
+      "bytes": 208,
+      "fields": {
+        "actor_control_id": 56,
+        "agent_id": 152,
+        "branch_generation": 40,
+        "cause_branch_generation": 48,
+        "cause_control_id": 64,
+        "cause_record_hash": 72,
+        "cause_sequence": 16,
+        "event_type": 168,
+        "flags": 120,
+        "kind": 128,
+        "loop_state": 160,
+        "pid": 136,
+        "prev_hash": 80,
+        "record_hash": 88,
+        "role": 156,
+        "sequence": 0,
+        "source_pid": 144,
+        "span_id": 24,
+        "status": 172,
+        "target_pid": 148,
+        "text": 176,
+        "tick": 8,
+        "tid": 140,
+        "tool_id": 164,
+        "value0": 96,
+        "value1": 104,
+        "value2": 112,
+        "workflow_lifecycle_generation": 32,
+        "workflow_lifecycle_id": 132
+      },
+      "int_bytes": 4,
+      "text_bytes": 32,
+      "uint64_bytes": 8,
+      "uint_bytes": 4
+    },
+    "records_per_scope": 8,
+    "recovery_scope_slot": 3,
+    "reserved_scope_slots": 1,
+    "retention_policy": 3,
+    "scope": {
+      "bytes": 1968,
+      "fields": {
+        "admission_drops": 32,
+        "ledger_hash": 40,
+        "lifecycle_generation": 16,
+        "lifecycle_id": 8,
+        "record_count": 12,
+        "records": 48,
+        "scope_id": 4,
+        "total_records": 24,
+        "used": 0
+      }
+    },
+    "scope_flags": {
+      "all": 7,
+      "reap_authorized": 4,
+      "recovery_successor": 2,
+      "used": 1
+    },
+    "scope_slots": 4,
+    "section_kind": 1,
+    "version": 7
+  },
+  "schema": 2
+}

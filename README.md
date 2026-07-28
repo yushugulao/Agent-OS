@@ -37,7 +37,7 @@ AI Agent 平台已经能够在用户态完成任务编排、工具调用、文�
   用内核 shadow 保存可信历史，用用户态 mirror/cache 支持高频读取，记录工具调用摘要、完整 detail、cause/span、hash 链、timeline、audit 和 provenance。
 
 - **目标 4：Agent 友好的文件对象查询**
-  把文件 metadata 绑定到真实 inode，维护私有 `.agentmeta` 后端、属性索引、内容摘要、查询计划、查询缓存、预取提示和文件编辑租约。
+  把文件 metadata 绑定到真实 inode，维护私有 `.agentmeta` 后端、属性索引、内容摘要、可解释查询计划、预取提示和文件编辑租约。文件查询每次实际执行扫描或索引候选遍历；需要复用结果时，由用户态把结构化结果保存到 Agent Context cache。
 
 - **目标 5：事件驱动 Agent Loop 与多 Agent 协作**
   支持 watch、wait、wake、timeout、heartbeat、wait cancel、消息唤醒、调度原因记录、统一 timeline 查询和 LLM Relay 事件路径。
@@ -75,8 +75,8 @@ AI Agent 平台已经能够在用户态完成任务编排、工具调用、文�
 | 任务二：结构化工具调用 | name-based 兼容接口、id-based 快速接口、批量 `agent_run`、参数键/类型校验、工具权限检查和结果记录。 | `agentfinal_ucore`、`agentbench_ucore`、`agentsecurity_ucore` |
 | 任务三：Context Path | 内核 shadow 可信历史、用户态 mirror/cache、自动记录、手动 push、query、snapshot、rollback、clear、短摘要和 detail 记录。 | `agentfinal_ucore`、`agentscan_ucore` |
 | 任务四：文件属性与摘要查询 | 真实 inode 关联、私有 `.agentmeta` 后端、属性索引、根目录自动扫描、内容摘要、查询计划、文件编辑租约和预取提示。 | `agentfs_ucore`、`agentscan_ucore`、`agentconflict_ucore` |
-| 任务五：Agent Loop | FIFO 事件队列、stable control id 定向 IPC 路由、external/direct/attributed/source 分层核算、内核 origin 保留容量、watch/unwatch、睡眠等待、timeout、heartbeat、wait cancel、调度原因、资源域两级公平调度和 timeline 等待读取。 | `agentloop_ucore`、`agentsecurity_ucore`、`agentsched_ucore`、`threadresource_ucore` |
-| 任务六：综合场景 | 科研 Agent 平台作为示例负载和压力负载，运行检索、分析、复核、恢复、写作、审计和 LLM Relay 路径；双目标脚本生成可比较的状态文件、CSV 和图表。 | `make dual-platform-run`、`make full-verify` |
+| 任务五：Agent Loop | FIFO 事件队列、stable control id 定向 IPC 路由、external/direct/attributed/source 分层核算、内核 origin 保留容量、watch/unwatch、睡眠等待、timeout、独立 heartbeat set/stop 与旧 ABI、wait cancel、调度原因、资源域两级公平调度和 timeline 等待读取。 | `agentloop_ucore`、`agentsecurity_ucore`、`agentsched_ucore`、`threadresource_ucore` |
+| 任务六：综合场景 | 科研 Agent 平台作为示例负载和压力负载，运行检索、分析、复核、恢复、写作、审计和 LLM Relay 路径；双目标脚本生成可比较的状态文件，并只在原始证据可用时生成对应实验 CSV 和图表。 | `make dual-platform-run`、`make full-verify` |
 
 工程化进展如下：
 
@@ -85,7 +85,14 @@ AI Agent 平台已经能够在用户态完成任务编排、工具调用、文�
 - [x] 实现 AgentOS 专项测试、双目标 QEMU 运行、状态文件对照和状态查看工具。
 - [x] 提供默认离线 LLM Relay，并支持本机配置 cloud Relay。
 - [x] 提供 Windows/WSL 依赖检查脚本和 Ubuntu 依赖安装脚本。
-- [x] 生成文件数、上下文记录数、事件数量、并发 Agent 数、LLM Relay 和恢复阶段的对照实验数据。
+- [x] 为文件查询 benchmark 生成逐行绑定 Guest 日志、marker、commit 和 run id 的原始对照数据。
+- [ ] Context/timeline、事件等待、并发 Agent、LLM Relay 和恢复阶段当前只有动态功能证据；补齐同等级来源绑定前，不把历史公式产物称为原始实验数据。
+
+终审提出的 17 项问题按“机制、验收 oracle、当前证据等级、剩余限制”集中记录在
+[最终加固与证据状态矩阵](docs/agentos/final-hardening-matrix.md)。该矩阵是当前发布状态的
+约束：历史 QEMU 日志不能外推到最终 HEAD。schema v6 采集/语义 registry、严格 C→E 交付和
+远端 1 Host + 8 QEMU job attestation 的 Host/mutation 合同当前是 E1；尚无本轮 release
+bundle 或 E3，远端也没有可用 Runner，不能宣称远程 CI 通过或 E4。
 
 ## 四、方案设计
 
@@ -130,7 +137,7 @@ Agent Context 固定映射在用户地址空间中，内核同时维护可信 sh
 
 #### 4.2.2 结构化工具调用运行时
 
-本模块处理 Agent 的行动表达。成熟 Agent 框架通常会生成“工具名称 + 参数 + 结果”的结构化请求，操作系统如果只看到普通系统调用参数，就很难知道这次请求属于哪一轮推理、哪个工具、哪个对象和哪个错误状态。AgentOS-uCore 在内核中维护工具表、参数校验规则、工具可调用标记和权限要求，让工具调用以稳定 ABI 进入内核。
+本模块处理 Agent 的行动表达。成熟 Agent 框架通常会生成“工具名称 + 参数 + 结果”的结构化请求，操作系统如果只看到普通系统调用参数，就很难知道这次请求属于哪一轮推理、哪个工具、哪个对象和哪个错误状态。AgentOS-uCore 在内核中维护工具表、参数校验规则、工具可调用标记和权限要求，让工具调用以稳定 ABI 进入内核。参数 typed rule table 是 decoder、param count 和 V1/V2 可见 schema 的唯一来源，启动校验与 25 项 Guest 全表核对共同阻止描述和执行规则漂移。
 
 用户态有两条调用路径：名称协议用于表达赛题中的结构化工具调用，便于科研平台和 LLM Relay 使用；编号协议用于高频路径，`agent_run` 可以一次提交最多 64 个操作。内核先校验用户指针、工具编号、参数键、参数类型和 capability，再执行工具，最后把结果写回结果表、Context Path、timeline 和 audit。
 
@@ -171,7 +178,7 @@ flowchart LR
 
 本模块记录 Agent 多轮行动。Agent 每次调用工具后，内核会写入一条 Context 记录，记录工具、状态、短 payload、短 result、tick、span 和 cause。最近 128 条记录以环形方式保存；完整请求和响应摘要保存在内核详情区；超出容量后按顺序淘汰，并更新 oldest、latest 和 dropped 计数。
 
-同一进程的 Context 修改还经过可睡眠、FIFO、可重入的 commit lane。序号接纳、工具执行、结果/header 发布、Context syscall、IPC 状态记录、文件查询和 wait 归因都在这条 lane 内保持提交顺序；需要访问 metadata 时固定按 `lane -> metadata` 加锁，最终离开 lane 前断言调用者没有遗留 metadata 事务。`agent_call_count` 表示已接纳并保留序号的工具调用数，慢调用仍在执行时可以暂时领先；`latest_sequence` 只表示已经完整提交到 Context 的水位，两者不被误写成同一时刻必然相等。
+同一进程的 Context 修改还经过可睡眠、FIFO、可重入的 commit lane。序号接纳、工具执行、结果/header 发布、Context syscall、IPC 状态记录、文件查询和 wait 归因都在这条 lane 内保持提交顺序；需要访问 metadata 时固定按 `lane -> metadata` 加锁，最终离开 lane 前断言调用者没有遗留 metadata 事务。Context 发布在修改可信状态前预检全部 shadow/mirror 范围，并按 record/body、latest、header-last 提交；这只保证 Context 内部发布，不把事件、watch、文件或 metadata 的外部效果伪称为同一跨子系统事务。`agent_call_count` 表示已接纳并保留序号的工具调用数，慢调用仍在执行时可以暂时领先；`latest_sequence` 只表示已经完整提交到 Context 的水位，两者不被误写成同一时刻必然相等。直接 mirror 读取也没有 publication epoch；需要并发一致视图时使用 `context_snapshot()`。
 
 在 Context Path 之上，我们继续提供 timeline、audit ledger 和 provenance。timeline 把 Context、事件、调度、预取提示和 LLM 请求整理成统一记录；audit ledger 保存全局短记录和 hash 链摘要；provenance 把可见记录导出为因果关系。科研平台可以通过这些结构还原“哪个 Agent 先观察到失败、哪个 Agent 查询文件、哪个 Agent 触发恢复、哪个结果唤醒下一步”。
 
@@ -203,7 +210,7 @@ metadata 持久化使用私有 `.agentmeta` 双 bank，普通文件系统调用�
 
 本模块处理长期运行 Agent 的等待与协作。用户态平台可以通过轮询文件观察状态变化，但轮询会浪费 CPU，也难以说明是哪一个事件唤醒了哪个 Agent。AgentOS-uCore 为每个 Agent 维护 FIFO 事件队列、watch 列表、heartbeat、timeout deadline、wait cancel 令牌和调度原因记录。
 
-Agent 调用 wait 后，如果没有匹配事件，有限 timeout 和无限等待都会进入睡眠。事件入队、heartbeat 到期、deadline 到期或取消请求会唤醒目标 Agent。调度器先严格轮转 active 进程资源域，再在选中域内按 FIFO 或 Agent 软评分选择线程；Agent burst 只影响本域候选，不能让一个多线程域跳过其他 active 域。选择 Agent 时记录事件数量、deadline、heartbeat、priority、budget 和虚拟运行量等信息，用户态可以读取最近调度原因，解释某次运行来自消息、文件状态变化、心跳还是超时。
+Agent 调用 wait 后，如果没有匹配事件，有限 timeout 和无限等待都会进入睡眠。事件入队、heartbeat 到期、deadline 到期或取消请求会唤醒目标 Agent。heartbeat 到期产生不受 watch/unwatch 抑制的 SYSTEM TIMER；同一 Agent 最多保留一条未消费 heartbeat，避免慢消费者形成周期性积压。周期可动态重设，独立 stop 幂等关闭后续生成，512 号旧 ABI 继续兼容。调度器先严格轮转 active 进程资源域，再在选中域内按 FIFO 或 Agent 软评分选择线程；Agent burst 只影响本域候选，不能让一个多线程域跳过其他 active 域。选择 Agent 时记录事件数量、deadline、heartbeat、priority、budget 和虚拟运行量等信息，用户态可以读取最近调度原因，解释某次运行来自消息、文件状态变化、心跳还是超时。
 
 | 场景 | 普通用户态做法 | AgentOS-uCore 做法 |
 | --- | --- | --- |
@@ -245,7 +252,7 @@ Agent 专属安全链由构建期可信映像清单、loader 映像绑定、boot
 
 为防止机制性修复再次把内核推向臃肿，`.gitlab-ci.yml` 和 `make ci-check` 使用 `ci/kernel-budgets.json` 作为可审查事实源，限制内核源码行数、ELF/raw 镜像、text/data/BSS/总运行体积、`struct proc`、Context sidecar 与完整 21 页 Agent 状态的单实例/全局/分类/账户上限、线程栈深度与虚拟/物理容量、64 KiB boot stack 的实际跨度和调用图。每个 owner 模块、integration bridge、允许依赖和 SCC 边界均来自同一版本化注册集合，不在文档复制容易漂移的固定数量。metadata 拆分单元及其 contract headers 还共同进入 `metadata_control_plane` 聚合预算：source 只保留固定接口开销，loaded text 与 BSS 不得增长，因而不能靠把状态或代码迁到另一个文件绕过 downward ratchet。预算 checker、通用 QEMU monitor 和生产 profile validator 的 fail-closed 自测集合也以源码和配置为准。
 
-通用 QEMU runner 采用二进制全量 drain，并大小写不敏感识别包括 panic 在内的预定义 failure 模式；每轮最多读取一个 64 KiB 块并重新检查 case/marker deadline，持续输出不能饿死超时。每个 case 的总输出上限为 16 MiB，未终止记录最多保留 64 KiB，诊断行最多保留 4 KiB；输出或记录越界 fail closed，诊断副本有界截断。case deadline 在 checkpoint 判断之前生效，并在 feed/notice 后重新核对，迟到 marker 不能伪装成功。普通 case 必须自然 `rc=0`。marker grace 只用于终止已失败或挂起的 case，`SIGTERM` 或升级为 `SIGKILL` 都仍判失败；只有两个持久化 checkpoint 阶段显式选择 checkpoint mode 后，命中预期 marker 的单次 runner `SIGTERM` 才是该阶段的成功契约，`SIGKILL` 永不成功。该合约验证 marker 前状态的重挂载恢复，不把 SIGTERM 描述为硬掉电注入。超时、非零退出或 marker 后 panic 同样失败。完整 16 项 QEMU 套件的 monotonic case duration 只在固定、已校准 runner 上作为硬门，且不把编译耗时混入测试时间；checker 拒绝摘要式 `--agent-test-seconds` / `--agent-test-start-ns`，只接受含完整 16-case 顺序记录的 timing file。2026-07-25 在 `agentos-qemu-calibrated` runner 上以 bounded/flood-safe runner 连续三轮均为 16/16，总 case 时间为 `261.343281873s`、`237.948978492s` 和 `255.370930671s`；校准中位数 `255.370930671s`，max gate `268.14s`，相对中位数约保留 5% headroom、足以覆盖最大样本，并比旧门更紧。
+通用 QEMU runner 采用二进制全量 drain，并大小写不敏感识别包括 panic 在内的预定义 failure 模式；每轮最多读取一个 64 KiB 块并重新检查 case/marker deadline，持续输出不能饿死超时。每个 case 的总输出上限为 16 MiB，未终止记录最多保留 64 KiB，诊断行最多保留 4 KiB；输出或记录越界 fail closed，诊断副本有界截断。case deadline 在完成判断之前生效，并在 feed/notice 后重新核对，迟到 marker 不能伪装成功。普通 profile 必须自然 `rc=0`；checkpoint profile 只接受完整 marker 后 runner 发出的单次 `SIGTERM`；powercut profile 则要求认证 supervisor 在完整 marker 后以 `SIGKILL` 直接终止稳定身份的 QEMU leader，隔离并回收跨 `setsid()` 的全部后代，再提交带随机 nonce、PID/starttime 和镜像退出码的完成证明。workload 自行杀死 leader 或 supervisor、控制通道 EOF、残留后代、超时、非零退出和 marker 后 panic 均失败。powercut 是“宿主强制中止 VM 后检查原始磁盘”的突然 VM 终止模型；它比 `SIGTERM` checkpoint 更接近掉电边界，但不会清空宿主页缓存，也不等同于整机物理断电。当前 Agent 套件为 18 case，checker 只接受完整有序的 18-case timing file；2026-07-25 的三轮 16/16 与 `255.370930671s` 中位数只保留为历史校准，不能证明新增 tool ABI 与 blocking semantics 后的最终 HEAD 时长门。
 
 Reader seeded-action runner 另把 clean、build、guest 明确分阶段：clean/build 只按子进程退出码判定，只有 QEMU guest 启动后才逐条完整匹配 Guest panic/fault/check-failed 记录。构建输出中的 `build/riscv64/ch6b_panic` 因而不会再被字符串扫描误判；对应单测同时要求这种文件名通过、规范 Guest `[PANIC ...]` 行失败。
 
@@ -317,7 +324,7 @@ make agentos-platform-run TOOLPREFIX=riscv64-linux-gnu-
 
 ### 5.4 双目标运行
 
-单独运行两个目标只能证明它们各自可用；双目标运行会把两次 QEMU 输出、状态文件和实验数据放到同一目录结构下，便于后续页面和图表读取。
+单独运行两个目标只能证明它们各自可用；双目标运行会把两次 QEMU 输出、状态文件和经验证的实验数据放到同一目录结构下，便于后续页面和图表读取。当前经验证的原始实验数据仅限文件查询 benchmark。
 
 ```bash
 make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
@@ -325,8 +332,10 @@ make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
 
 该命令会先检查目录职责、平台程序覆盖、源码同步和结果文件契约，再启动两个 QEMU 目标。运行结束后，脚本会从文件系统镜像中提取 `rp_*` 状态文件，并生成：
 
+镜像中的目录项只有 14 字节。长状态名不再通过扫描任意 `rp_*` 符号猜测，而由 `ci/research-state-manifest.json` 统一限定目标源码根、合法状态文件操作、宿主状态和 Reader 可选状态；提取器、Reader `/api/state/` allowlist、双目标清单与测试 fixture 共用该派生清单，并由缺失、未知、重复和短名前缀冲突 mutation 回归 fail closed。
+
 - `/tmp/agentos-dual-platform/`：QEMU 日志、提取出的状态文件、页面渲染结果和阶段耗时。
-- `results/latest/`：`summary.csv`、`runner-sweep.csv`、`experiments/raw/*.csv`、`experiments/experiment-stats.csv`、`charts/*.svg`、`report.md`、`reader-guide.html`、`monitor.html` 等汇总材料。
+- `results/latest/`：`summary.csv`、`runner-sweep.csv`、`experiments/raw/file-query-benchmark.csv`、`experiments/status.json`、`experiments/experiment-stats.csv`、`charts/*.svg`、`report.md`、`reader-guide.html`、`monitor.html` 等本地预览材料。当前只有文件查询 benchmark 是由 Guest 日志逐行绑定的原始实测；缺少可信 marker 时，该实验必须显示为 unavailable，不能生成替代数据。
 
 如果运行长时间没有输出，优先查看：
 
@@ -361,7 +370,7 @@ http://127.0.0.1:8767/
 make full-verify TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-该命令串起结构检查、Host 工具测试、Reader 定向 E2E、双目标 QEMU 运行、16-case AgentOS 专项、进程生命周期、syscall 公平性、filepool、线程资源域、workflow teardown race 和 ENOSPC 测试。需要快速检查目录职责和 Host 工具时，可以运行：
+该命令先要求当前 18-case 时长预算已经 calibrated；provisional 会在 profile/QEMU 前 fail closed。校准有效后，profile v5 串起结构检查、Host/Reader、18-case AgentOS 专项、双目标 QEMU、proc/syscall/file/thread/physical 资源、metadata/观测重启恢复、VirtIO 故障矩阵、workflow teardown race、ENOSPC 和文件系统分配器故障一致性测试，并强制保存和复验分配器 raw-image/flush 证据归档。需要快速检查目录职责和 Host 工具时，可以运行：
 
 ```bash
 make target-readiness
@@ -371,7 +380,10 @@ make target-readiness
 
 运行命令回答“怎么跑”，测试章节回答“跑完以后应该看什么”。本节把专项测试、双目标实验、原始数据和图表结果放在同一条叙事里。
 
-测试部分按“测试对象、实验负载、原始数据、图表结果、结论解释”组织。我们不只检查某个程序是否输出 `passed`，还把普通 uCore 与 AgentOS-uCore 放在同一批输入下运行，记录扫描数、候选数、重建步骤、轮询次数、拒绝次数、tick 观测和状态文件结果。这样可以同时回答两个问题：系统功能是否完整，内核机制在同一负载下是否减少了用户态成本。
+测试部分按“测试对象、实验负载、原始数据、图表结果、结论解释”组织。我们不只检查某个程序是否输出 `passed`，还把普通 uCore 与 AgentOS-uCore 放在同一批输入下运行，记录扫描数、候选数、重建步骤、轮询次数、拒绝次数、tick 观测和状态文件结果。功能状态用于回答系统路径是否完整；只有 provenance-bound 文件查询 benchmark 当前可用于比较同一负载下的用户态查询成本，其他机制不能从派生计数外推性能结论。
+
+本章“关键输出”中的字面 `...` 只表示省略字段的格式示例，不是实际 Guest marker；验收时
+必须使用 validator 要求的完整原行。
 
 ### 6.1 测试组织方式
 
@@ -380,158 +392,71 @@ make target-readiness
 | 类型 | 入口 | 作用 |
 | --- | --- | --- |
 | AgentOS 专项测试 | `scripts/run-agent-tests.sh`、`make agentos-test` | 逐项检查 Agent 进程、工具调用、Context、文件查询、事件循环、调度、LLM、权限和冲突控制。 |
-| 安全与资源专项 | `make fs-enospc-test`、`make proc-reap-test`、`make thread-resource-test`、`make file-resource-test`、`make syscall-fairness-test`、`make workflow-teardown-race-test`、`make kernel-stack-check`；`iobudget_ucore` 随 Agent 专项运行 | 检查可恢复资源耗尽、持久 PUBLIC 配额跨域退出/重启、退出回收、进程/线程/filepool 资源域、线程域级 CPU 公平、长 syscall 公平性，以及撤销/退出/阻塞资源/metadata/I/O/lifecycle 复用的组合竞争。 |
+| 安全与资源专项 | 既有资源入口，加 `make physical-resource-test`、`make metadata-recovery-test`、`make observe-recovery-test`、`make virtio-disk-test`、`make fs-allocator-fault-test` | 检查资源耗尽/退款、物理页保留、metadata 与观测同盘重启、VirtIO 故障恢复、文件系统分配事务一致性及跨资源 teardown；必须以动态 Guest marker 判定。 |
 | 内核增长预算 | `make ci-check` | 以固定工具链/profile 检查源码、镜像、运行段、PCB、栈容量和 Agent 模块边界；不启动 QEMU，也不等同于动态回归。 |
 | 双目标运行测试 | `make dual-platform-run` | 让同一科研 Agent 请求分别进入普通 uCore 和 AgentOS-uCore，生成可比较状态文件。 |
 | 宿主机工具测试 | `host_tools/test_*.py` | 检查镜像提取、状态对照、页面渲染、图表契约和 LLM Relay 模式。 |
-| 完整验证 | `make full-verify` | 先执行 `ci-check`，再串联结构检查、Host 工具与 Reader E2E、双目标运行、16-case AgentOS 专项、进程生命周期、线程资源域、syscall 公平性、filepool、workflow teardown race 和 ENOSPC 测试；各机制仍保留独立入口。 |
+| 完整验证 | `make full-verify` | 按 profile v5 串联 Host/Reader、18-case Agent、双目标和十一类机制 runner；证据模式保留 runner stdout、Guest 合并日志及 allocator canonical archive。 |
 
 AgentOS 专项测试程序如下：
 
 | 测试程序 | 主要内容 | 关键输出 |
 | --- | --- | --- |
-| `agentfinal_ucore` | Agent 创建、21 页状态原子计费、批量工具调用、Context commit lane、用户 cache、timeline、Run Ledger、provenance。 | `context_commit_lane=1 sequence=1..3 hash=1`、`agentfinal_ucore: parent passed` |
-| `agentfs_ucore` | 真实 inode 绑定、partial update、selector 一致性、`.agentmeta`、索引查询、查询缓存、内容摘要、有界去重预取、字段驱动批量状态维护、metadata 工作预算与交接端点生命周期。 | `metadata_action_bounded=1 field_driven=1 batched=1 preemptions=5`、`prefetch_hints=1 bounded=1 ... preemptions=8`、`handoff_target_exit=1 endpoint_reuse=1 preemptions=6 ... clean=1`、`agentfs_ucore: parent passed` |
+| `agentfinal_ucore` | Agent 创建、21 页状态原子计费、批量工具调用、Context v8 不可变 archive 与 active-path rollback、FIFO、用户态结构化查询 cache、timeline、Run Ledger、provenance。 | `context_rollback_branch=1 sequence_reuse=0 provenance_bound=1`、`context_active_path=1 archive_retained=1 direct_query=1 fifo_suffix=1`、`context_rollback_negative nonexistent=1 evicted=1`、`agentfinal_ucore: parent passed` |
+| `agentfs_ucore` | 真实 inode 绑定、partial update、selector 一致性、`.agentmeta`、扫描/索引查询一致性、无内核查询结果缓存、内容摘要、有界去重预取、字段驱动批量状态维护、metadata 工作预算与交接端点生命周期。 | `metadata_action_bounded=1 field_driven=1 batched=1 preemptions=5`、`prefetch_hints=1 bounded=1 ... preemptions=8`、`handoff_target_exit=1 endpoint_reuse=1 preemptions=6 ... clean=1`、`agentfs_ucore: parent passed` |
 | `agentscan_ucore` | 根目录自动扫描、真实文件自动写入 metadata、文件创建和删除后的索引维护。 | `agentscan_ucore: parent passed` |
-| `agentloop_ucore` | FIFO 事件队列、watch/unwatch、睡眠等待、timeout、heartbeat、wait cancel。 | `agentloop_ucore: parent passed` |
+| `agentloop_ucore` | FIFO 事件队列、watch/unwatch、睡眠等待、timeout、heartbeat 内生唤醒/调频/coalesce/stop/边界/兼容、wait cancel。 | `heartbeat_intrinsic=1 dynamic=1 coalesced=1 stop=1 bounds=1 legacy=1`、`agentloop_ucore: parent passed` |
 | `agentsched_ucore` | 角色权重、受权软调度配置、事件优先、强制 burst 公平上限和普通进程进展。 | `agentsched_ucore: parent passed` |
 | `agentconflict_ucore` | 文件编辑租约、非持有者写入拒绝、版本提交检查。 | `agentconflict_ucore: parent passed` |
 | `agentllm_ucore` | LLM 请求、Relay Agent 模板响应、完成事件、Context 和 timeline 记录。 | `agentllm_ucore: parent passed` |
-| `agentbench_ucore` | 批量工具调用、Context 快照、文件查询 scan/index、查询缓存、预取提示、事件计时。 | `agentbench_ucore: parent passed` |
+| `agentbench_ucore` | 批量工具调用、Context 快照、文件查询强制遍历/冷索引/热索引实测、预取提示、事件计时。 | `agentbench_ucore: file_query_benchmark ... status=measured`、`agentbench_ucore: parent passed` |
 | `labbench_ucore` | 综合性能入口，受权创建 orchestrator 并执行 `agentbench_ucore`。 | `labbench_ucore: parent passed` |
 | `labdemo_ucore` | 多 Agent 科研恢复场景、文件查询、预取交接、消息唤醒、恢复动作、audit 和 provenance。 | `labdemo_ucore: parent passed` |
 | `agentsecurity_ucore` | 普通进程拒绝、低权限 Agent 伪造拒绝、私有 metadata 后端保护、scoped action/artifact。 | `agentsecurity_ucore: parent passed` |
+| `agenttoolabi_ucore` | V1 兼容、V2 sized typed KV、单一 typed rule 派生的 25 项 schema 全表、15 字符键容量边界、两版 LLM response、用户缓冲哨兵、可选参数/heartbeat 描述、参数重排及未知/重复/类型/size/version 负向矩阵。 | `schema_generated=1 validated=25`、`key_capacity=1 llm_response_v1_v2=1 buffer_sentinel=1`、`optional_schema=1 heartbeat_zero_stop=1`、`strict_negative_matrix=1`、`parent passed` |
 | `agenttrust_ucore` | 可信映像、不可变代码、bootstrap 授权范围和 role-image 绑定。 | `agenttrust_ucore: parent passed` |
 | `agentvfs_ucore` | public/workflow 文件安全域、能力读写、继承 fd 重新校验和普通命名空间兼容。 | `agentvfs_ucore: parent passed` |
-| `agentscope_ucore` | 动态 workflow scope、跨域对象/IPC 隔离、事务门、持久微写合并、volatile 分流、观测双索引与预算化查询、配额、线程私有一次性 fd 委派，以及根退出/factory 关闭触发的强制撤销和 lifecycle generation 回收。 | 当前专项约 `93.7s`，已输出 `scope_controller_exit_revoke=1 public_lineage=1` 和 `agentscope_ucore: parent passed` |
+| `agentscope_ucore` | 动态 workflow scope、跨域对象/IPC 隔离、事务门、持久微写合并、volatile 分流、观测双索引与预算化查询、配额、线程私有一次性 fd 委派，以及根退出/factory 关闭触发的强制撤销和 lifecycle generation 回收。 | 历史专项约 `93.7s`，曾输出 `scope_controller_exit_revoke=1 public_lineage=1` 和 `agentscope_ucore: parent passed`；最终 HEAD 待复跑 |
 | `iobudget_ucore` | PUBLIC 速率/缓存压力、稳定 owner 归因、两级 lease 上界、线程退出 lease 回收、scheduler 内核态中断交付、fault/异常退出清理归因与 debt 结算、workflow cache floor、CONTROL 保留预算和跨域有界进展。 | 最终 teardown 修复后的独立轮输出八项机制标记与 `parent passed`，`elapsed=2.4s`；完整轮本项 `2.1s` |
 | `usersafety_ucore` | syscall 坏地址、超长参数和对象私有等待队列。 | `usersafety_ucore: parent passed` |
+| `blocking_semantics_ucore` | mutex owner、递归/非 owner 拒绝、owner 退出交接、FIFO waiter，以及 waittid/pipe/close 唤醒语义。 | `mutex_owner=1 ... owner_exit_handoff=1`、`waittid_sleep=1 pipe_wait_queue=1 close_wake_all=1`、`parent passed` |
 | `syscallfair_ucore` | 纯 Guest 公平性契约，覆盖控制台、inode 大写入、截断的 last-syscall 重调度计数、observer 与 worker 完整退出。 | 当前重构后的双目标 `make syscall-fairness-test` 已通过 |
 | `threadresource_ucore` | 普通/保留域上限与复用、容量拒绝计数稳定、普通/保留全局水位与复用、系统保留进展和跨域调度公平。 | `make thread-resource-test` 输出 12 项机制标记、`parent passed` 和 `[thread-resource] all checks passed` |
 
-`workflow_teardown_race_ucore` 是独立机制专项，不改变上表 Agent 套件仍为 16 case。它通过 syscall 546 的 self-only lifecycle 快照确定竞态窗口，并连续三轮组合覆盖 factory 撤销、根自然退出、PUBLIC 后代、Context lane、metadata transaction gate、阻塞 `fdget` 临时引用、I/O debt/cache、inode/file object 回收和 lifecycle generation 重用。
+`workflow_teardown_race_ucore` 是独立机制专项，不计入上表 18-case Agent 套件。它通过 syscall 546 的 self-only lifecycle 快照确定竞态窗口，并连续三轮组合覆盖 factory 撤销、根自然退出、PUBLIC 后代、Context lane、metadata transaction gate、阻塞 `fdget` 临时引用、I/O debt/cache、inode/file object 回收和 lifecycle generation 重用。
 
 `371.5s`、`127.9s` 和 `126.1s` 保留为 Workflow 强制撤销早期实现的历史数据。2026-07-26，提交 `75d0dfde716453af90d7310c6a1521968fcf7167` 在干净环境完成一次 `make full-verify TOOLPREFIX=riscv64-linux-gnu-`，墙钟 `19:45.97`，Reader E2E、独立三轮 teardown race 及其余聚合步骤全部通过。此后又进行了 metadata query/scan/directory 的分阶段行为保持拆分；这些后续变更尚未在最终 HEAD 上完成新的 clean `full-verify`，远程普通 Runner 与 QEMU Runner 也尚无成功证据，因此不能把 checkpoint 结果外推为最终发布验收。详细环境、历史时间和证据边界见 [测试记录](docs/agentos/test-record.md)。
 
-### 6.2 双目标对照负载
+### 6.2 双目标负载与实测边界
 
-专项测试先证明内核模块单独可用，双目标实验则把这些模块放回科研平台主流程中观察。下面六组实验使用同一批模拟流程对象，只改变文件数、记录数、事件数、并发数或请求数。
+双目标运行仍会执行同一批科研 Agent 请求，生成状态文件、Reader 页面和运行诊断。不过，这些功能状态与派生计数不自动等同于“原始实验数据”。当前仓库只承认一组 provenance-bound Guest 实测：`agentbench_ucore` 的文件查询 benchmark。
 
-双目标测试使用同一批科研 Agent 请求，分别进入共享安全基底的 uCore 对照目标和 AgentOS-uCore 目标。普通目标依靠用户态文件、状态约定和轮询完成流程；增强目标在关键阶段调用 AgentOS 内核服务。两侧共有的安全加固不计作 AgentOS 性能收益，六组对照实验只比较 AgentOS 专属机制：
-
-| 实验 | plain 路径 | AgentOS 路径 | 主要指标 |
-| --- | --- | --- | --- |
-| 文件对象查询 | 扫描状态文件和命名约定 | metadata 索引候选 + 真实文件复查 | 扫描数、候选数、命中数 |
-| Context/timeline | 用户态拼接日志和状态文件 | 内核 snapshot/query | 重建步骤、记录数、读取成本 |
-| 事件等待 | 用户态轮询 | 内核 wait/wake | 轮询次数、唤醒次数、timeout |
-| 并发写入 | 锁文件和覆盖约定 | 内核租约 + capability 拒绝 | 冲突次数、拒绝次数、成功提交 |
-| LLM Relay | 用户态状态文件传递 | 结构化 LLM 请求 + 事件唤醒 + audit | 请求数、响应状态、记录命中 |
-| 失败恢复 | 扫描失败状态并重复更新 | 通用 action、去重、metadata、event | 恢复阶段数、重复请求处理、状态一致性 |
-
-双目标测试从同一批请求开始，两个目标分别运行，再由宿主机工具统一提取和汇总。
+该 benchmark 在同一次真实 AgentOS Guest 运行中测量三条路径：强制遍历 metadata catalog、包含索引重建成本的冷索引查询，以及索引已就绪后的多次热索引查询。热路径每次仍真实遍历索引候选，不使用内核查询结果缓存。Guest 必须先输出完整的 `file_query_benchmark ... status=measured` 行，并在之后输出完整的 `agentbench_ucore: parent passed`；宿主机提取器才会生成测量数据。
 
 ```mermaid
-flowchart TB
-    A["同一批科研 Agent 请求"] --> B["plain uCore 目标"]
-    A --> C["AgentOS-uCore 目标"]
-
-    B --> D["QEMU 日志"]
-    B --> E["plain rp_* 状态文件"]
-    C --> F["QEMU 日志"]
-    C --> G["AgentOS rp_* 状态文件"]
-
-    E --> H["状态文件对照"]
-    G --> H
-    D --> I["运行阶段耗时"]
-    F --> I
-
-    H --> J["summary.csv"]
-    H --> K["experiments/raw/*.csv"]
-    I --> J
-
-    J --> L["统计表"]
-    K --> L
-    L --> M["SVG 图表"]
-    L --> N["report.md"]
+flowchart LR
+    A["Agent suite Guest 原始日志"] --> B["完整 benchmark marker"]
+    B --> C["完整 parent passed marker"]
+    C --> D["校验字段、顺序与来源"]
+    D --> E["file-query-benchmark.csv"]
+    D --> F["measured-experiments.json"]
+    E --> G["统计表与文件查询图"]
+    F --> G
 ```
 
-README 中的实验表和图表都应能回到这些 CSV、日志和状态文件。
-
-#### 6.2.1 文件对象查询实验
-
-**测试背景与方法。** 科研平台运行中会产生输入、manifest、中间结果、日志、复核意见和报告。普通路径需要扫描目录和状态文件，再根据命名约定判断对象含义。AgentOS 路径先查询内核 metadata 索引，再复查真实 inode 和摘要。实验把文件数量设置为 32、128、512、1024，比较普通扫描数和 AgentOS 候选数。
-
-**测试结果读取。** 原始数据保存在 `results/latest/experiments/raw/file-metadata.csv`，图表为 `results/latest/charts/experiment-file-query-bar.svg`。CSV 中保留 plain 扫描记录数、AgentOS 候选记录数、命中数和多轮运行统计。
-
-**测试结论。** 文件数增加时，普通路径触达记录随总量增长；AgentOS 根据 namespace、type、state、label 等字段缩小候选集。该实验重点观察“同一查询目标下需要触达多少记录”，比单纯看 tick 更稳定。
-
-#### 6.2.2 Context 与 timeline 查询实验
-
-**测试背景与方法。** 长流程 Agent 会不断生成工具调用、事件、LLM 请求和恢复动作。普通路径需要从日志、状态文件和事件记录中重新拼接路径；AgentOS 路径直接从 Context shadow、timeline cursor 和 snapshot/query 读取结构化记录。实验设置 128、512、2048、8192 条记录，比较重建步骤与内核读取成本。
-
-**测试结果读取。** 原始数据保存在 `results/latest/experiments/raw/context-timeline.csv`，图表为 `results/latest/charts/experiment-context-line.svg`。统计表给出 min、avg、max、P50、P95。
-
-**测试结论。** 记录数越大，普通路径越依赖用户态拼接；AgentOS 的 snapshot/query 保持固定接口和有序记录，适合多轮推理和多 Agent 协作后的运行追溯。
-
-#### 6.2.3 事件等待实验
-
-**测试背景与方法。** 用户态 Agent 常用轮询等待状态文件变化，事件越多，轮询次数越高。AgentOS 使用 watch、wait、event queue 和 heartbeat，让 Agent 在没有事件时睡眠，由内核在事件到达、timeout 或心跳到期时唤醒。实验设置 8、32、128、512 个事件，比较用户态轮询次数和内核 wait/wake 次数。
-
-**测试结果读取。** 原始数据保存在 `results/latest/experiments/raw/event-loop.csv`，图表为 `results/latest/charts/experiment-event-box.svg`。箱形图呈现多次运行中的 P25、P50 和 P75，适合观察事件数量变化后的波动。
-
-**测试结论。** AgentOS 路径把“检查是否有事件”的重复工作交给内核事件队列和睡眠等待，用户态只处理真正到达的事件。这个实验直接对应任务五中的 watch、wait、heartbeat 和 timeout。
-
-#### 6.2.4 并发 Agent 写入实验
-
-**测试背景与方法。** 多个 Agent 同时生成报告、修改状态或更新工件时，普通用户态路径通常依靠锁文件和写入约定，容易出现覆盖、旧版本提交和权限混乱。AgentOS 使用文件编辑租约、版本提交和 capability 检查。实验设置 2、4、8、16 个并发 Agent，比较普通路径的残余写入风险和 AgentOS 的拒绝效果。
-
-**测试结果读取。** 原始数据保存在 `results/latest/experiments/raw/agent-concurrency.csv`，图表为 `results/latest/charts/experiment-concurrency-heatmap.svg`。表中保留成功提交、拒绝次数、旧版本提交处理和残余风险值。
-
-**测试结论。** AgentOS 中的拒绝次数表示内核在真实写入路径拦截非持有者或旧版本提交。并发数量上升时，这组数据能说明内核租约和 capability 对共享文件对象的保护效果。
-
-#### 6.2.5 LLM Relay 实验
-
-**测试背景与方法。** LLM 调用在用户态可以通过普通文件传递 prompt 和 response，但请求 id、span、timeout、quota、结果摘要和完成事件容易分散在多个日志中。AgentOS 路径把 LLM request/response 作为结构化记录处理，Relay 进程或宿主机转发层负责实际模型访问。实验设置 4、16、64、256 个请求，比较普通路径复原请求状态的步骤和 AgentOS 结构化记录数。
-
-**测试结果读取。** 原始数据保存在 `results/latest/experiments/raw/llm-relay.csv`，图表为 `results/latest/charts/experiment-llm-relay-bar.svg`。公开验证默认使用模板 Relay；本机配置外部密钥后，可以使用 cloud Relay 生成真实文本摘要。
-
-**测试结论。** 内核不接触密钥和网络，但能够把 LLM 调用纳入 Context、event、audit 和 provenance。这样既保留用户态模型接入灵活性，也让 LLM 参与的 Agent 工作流具备系统层记录。
-
-#### 6.2.6 失败恢复实验
-
-**测试背景与方法。** 科研平台的恢复流程包含发现失败、查询相关文件、决定恢复动作、更新工件状态、写报告和通知下一阶段。普通路径需要扫描失败状态并重复更新多个文件；AgentOS 使用通用 action、metadata、event、dedup 和 timeline 记录恢复过程。实验设置 1、3、6、12 个失败阶段，比较普通恢复步骤和 AgentOS 结构化动作成本。
-
-**测试结果读取。** 原始数据保存在 `results/latest/experiments/raw/recovery-flow.csv`，图表为 `results/latest/charts/experiment-recovery-line.svg`。状态文件中还会记录重复请求处理和最终状态一致性。
-
-**测试结论。** AgentOS 路径把恢复拆成可授权、可去重、可追踪的结构化动作。用户态仍决定恢复策略，内核负责记录、权限、幂等处理、事件通知和来源关系。
+每一行原始测量都绑定来源日志路径和 SHA256、marker SHA256、行号、实际命令、commit 与 run id。缺少 marker、通过行、来源文件或任一绑定字段时，实验状态是 `unavailable`，汇总工具不会用公式、常量或状态文件派生值补齐。Context/timeline、事件等待、并发写入、LLM Relay 和恢复流程仍有动态功能测试，但在补充同等级来源绑定前，不再宣称它们拥有独立原始实验数据或性能曲线。
 
 ### 6.3 结果产物与图表
 
-每组实验都有可回溯的原始 CSV，图表只是把 CSV 中的对照关系画出来。阅读图表时应先看指标含义，再看 plain 路径和 AgentOS 路径的差异。
-
 | 材料 | 位置 | 说明 |
 | --- | --- | --- |
-| QEMU 日志和提取状态 | `/tmp/agentos-dual-platform/` | 保存 plain 和 AgentOS 两个目标的原始运行输出、状态文件和阶段耗时。 |
-| CSV 与统计表 | `results/latest/summary.csv`、`results/latest/experiments/*.csv` | 保存可复用数值、实验原始数据、min/avg/max、P50/P95 等统计结果。 |
-| 图表和摘要 | `results/latest/charts/*.svg`、`results/latest/report.md` | 呈现扫描数、重建成本、轮询次数、冲突风险、吞吐和运行时间观察。 |
+| QEMU 日志和提取状态 | `/tmp/agentos-dual-platform/` | 保存两个目标的原始运行输出、状态文件和阶段耗时。 |
+| 文件查询原始测量 | `results/latest/experiments/raw/file-query-benchmark.csv` | 保存强制遍历、冷索引和热索引的实际操作数、触达记录数、未经补值的 Guest 微秒差值及完整 provenance 字段。 |
+| 测量状态 | `results/latest/experiments/status.json` | 明确本轮测量是 `measured` 还是 `unavailable`，并引用来源日志、commit 与 run id。 |
+| 统计和图表 | `results/latest/experiments/experiment-stats.csv`、`results/latest/charts/experiment-file-query-bar.svg` | 只从已验证的文件查询原始测量聚合；图表不是独立证据。 |
+| 最终证据包 | `evidence/releases/<bundle>/metrics/file-query-benchmark.{csv,json}` | 在 clean、已提交 HEAD 上由 `make full-verify` 采集并纳入逐文件校验和。 |
 
-关键图表如下：
-
-| 图表 | 数据来源 | 主要阅读方式 |
-| --- | --- | --- |
-| `runtime-observation.svg` | 双目标阶段耗时和状态产物 | 观察两个目标是否都完成、状态文件是否可提取、QEMU 是否健康。 |
-| `cost-replacement.svg` | `rp_backend_exec` | 对照普通用户态成本项和 AgentOS 替代机制。 |
-| `runner-ticks.svg` | `runner-sweep.csv` | 比较同类 runner 动作的 tick 观测。 |
-| `runner-speedup.svg` | `runner-sweep.csv` | 查看成组场景中的相对节省。 |
-| `experiment-file-query-bar.svg` | 文件对象查询 CSV | 查看文件数增加后扫描数和候选数的差异。 |
-| `experiment-context-line.svg` | Context/timeline CSV | 查看记录数增加后重建成本和 snapshot/query 成本的差异。 |
-| `experiment-event-box.svg` | 事件等待 CSV | 查看事件数量增加后轮询次数和 wait/wake 次数的差异。 |
-| `experiment-concurrency-heatmap.svg` | 并发 Agent CSV | 查看并发数量增加后的残余写入风险和内核拒绝效果。 |
-| `experiment-llm-relay-bar.svg` | LLM Relay CSV | 查看 LLM 请求增多后的状态复原成本差异。 |
-| `experiment-recovery-line.svg` | 恢复流程 CSV | 查看失败阶段增多后的恢复步骤差异。 |
-| `experiment-monitor-area.svg` | 六组实验汇总 | 汇总减少扫描、减少重建、减少轮询和降低冲突风险的总体趋势。 |
-
-图表生成优先使用 `pandas`、`seaborn` 和 `matplotlib`。如果本机没有安装这些包，脚本会退回到内置 SVG 生成路径，原始 CSV 和统计 CSV 仍保持不变。图表版面由 `host_tools/test_chart_svg_layout_contract.py` 检查，避免文字互相遮挡或超出画布。
+`results/latest/` 是可覆盖的本地预览，不是最终发布证据。正式结论应引用已提交的 `evidence/releases/<bundle>/`，并先用 `scripts/capture-final-evidence.py verify` 核验。
 
 ### 6.4 推荐运行命令
 
@@ -580,9 +505,7 @@ python3 host_tools/summarize_dual_platform_results.py \
 
 ### 6.5 测试小结
 
-从当前测试组织看，AgentOS-uCore 的测试由三个层次共同支撑：专项测试检查内核机制是否独立可用；双目标运行检查同一科研平台负载在两个内核目标上的差异；CSV 和图表把差异落到扫描数、重建步骤、轮询次数、拒绝次数和 tick 观测这些可复查数据上。
-
-六组对照实验分别对应 AgentOS 的核心设计：文件对象 metadata 减少扫描；Context 和 timeline 减少路径重建；事件队列减少用户态轮询；租约和 capability 降低并发写入冲突；LLM Relay 结构化记录减少跨日志复原；通用 action 和 provenance 降低恢复流程成本。详细测试方法、示例输出和图表说明见 [docs/verification.md](docs/verification.md) 与 [docs/agentos/verification.md](docs/agentos/verification.md)。
+从当前测试组织看，AgentOS-uCore 的测试由三个层次共同支撑：专项 Guest 测试检查机制是否独立可用；双目标运行检查同一科研平台负载能否在两个内核目标上完成；provenance-bound 文件查询 benchmark 提供当前唯一可作为原始性能数据的 Guest 实测。其他状态表、页面和图表用于功能验收与诊断，不能冒充尚未采集的实验数据。详细边界见 [docs/verification.md](docs/verification.md) 与 [docs/agentos/verification.md](docs/agentos/verification.md)。
 
 ## 七、文档入口
 
@@ -598,7 +521,7 @@ README 只保留项目全貌和主要运行方式。需要查看实现细节、�
 | 任务要求到实现和测试的对应关系 | [docs/agentos/requirements-traceability.md](docs/agentos/requirements-traceability.md) |
 | AgentOS 专项测试详情 | [docs/agentos/testing-details.md](docs/agentos/testing-details.md) |
 | Windows 克隆后的依赖检查 | [docs/windows-quickstart.md](docs/windows-quickstart.md) |
-| 历史设计开发报告（安全机制以当前 Markdown 文档为准，PDF 待重新生成） | [AgentOS-uCore开发者文档.pdf](AgentOS-uCore开发者文档.pdf) |
+| 当前权威开发文档 | 以本表所列 Markdown 文档为准；旧 PDF 因把 `demo_expected`/公式生成数据误作实测证据，现已撤回。 |
 
 ## 八、文件索引
 
