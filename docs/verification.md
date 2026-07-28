@@ -50,7 +50,7 @@ AgentOS 专项构建和测试命令见 [agentos/verification.md](agentos/verific
 make ci-check
 ```
 
-它使用 `ci/kernel-budgets.json` 的固定 profile 检查源码、镜像、运行段、`struct proc`、9 页 Context sidecar 和完整 21 页 Agent 状态的单实例/池/账户容量，以及线程栈与独立 64 KiB boot stack 的调用图和容量。owner 模块、integration bridge、允许依赖和 SCC 边界均来自同一版本化注册集合；metadata transaction/file-state/catalog/query/scan/directory/objects/actions/prefetch/store（含 format/I/O）、IPC 及 contract headers 还受聚合 source/text/BSS 预算约束，不能靠拆文件迁移绕过增长门。受控图不是完整 uCore 调用图。当前 Agent 套件已扩展为 18 case，旧三轮 16/16 时长仅保留为历史；预算状态为 fail-closed provisional，普通 CI 会在启动 QEMU 前拒绝把它当成最终校准。只有同一 `agentos-qemu-calibrated` runner 至少取得三轮完整 18-case timing file 并经审查更新基线/上限后，才能恢复 calibrated 状态。
+它使用 `ci/kernel-budgets.json` 的固定 profile 检查源码、镜像、运行段、`struct proc`、9 页 Context sidecar 和完整 21 页 Agent 状态的单实例/池/账户容量，以及线程栈与独立 64 KiB boot stack 的调用图和容量。owner 模块、integration bridge、允许依赖和 SCC 边界均来自同一版本化注册集合；metadata transaction/file-state/catalog/query/scan/directory/objects/actions/prefetch/store（含 format/I/O）、IPC 及 contract headers 还受聚合 source/text/BSS 预算约束，不能靠拆文件迁移绕过增长门。受控图不是完整 uCore 调用图。当前 Agent 套件已扩展为 18 case；冻结提交 `31d4ddf53695` 在固定 `agentos-qemu-calibrated` 环境串行取得三轮完整 timing，预算已恢复为 calibrated。旧三轮 16/16 时长仅保留为历史，当前样本与原始日志见 `evidence/calibrations/31d4ddf53695/`。
 
 双目标运行：
 
@@ -359,8 +359,9 @@ host_surface_alignment: api_routes=214 action_routes=95 download_refs=76 runtime
 
 ## AgentOS 专项验证
 
-增强目标的内核机制还需要单独运行专项脚本。当前时长策略处于 provisional 时，普通全套会在
-QEMU 前按设计失败；开发阶段应运行定向 case，固定 runner 校准则必须显式保存完整 timing file：
+增强目标的内核机制还需要单独运行专项脚本。若 case 集合或固定环境变化而使时长策略重新进入
+provisional，普通全套会在 QEMU 前按设计失败；开发阶段应运行定向 case，固定 runner 校准则
+必须显式保存完整 timing file：
 
 ```bash
 # 定向开发回归，不宣称完整套件或时长门通过
@@ -464,7 +465,7 @@ make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make ci-check
 ```
 
-旧 16-case 校准、进程、file、thread、I/O 与 ENOSPC 结果继续作为历史问题证据，但不能外推到当前 18-case 套件或 profile v5。18-case duration 仍须在同一 `agentos-qemu-calibrated` runner 上取得至少三轮完整 timing file；独立 Context-sync/WAIT_ATOMIC prelude 不计入这 18 行。`make full-verify` 会动态串联 physical、metadata recovery、observation recovery、VirtIO fault 和 filesystem allocator fault runner。GitLab 远端必选集合恰好是同一 C 的 1 个 Host-class job 和 8 个 QEMU-class jobs；每项都要生成绑定 checkout/CI 身份、artifact 清单和语义结果的 attestation，并由下载端以 API 身份、唯一 trace marker、安全 ZIP、逐文件哈希和共享 registry 离线复验。allocator job 还必须交付并复验固定的 `fs-allocator-evidence.tar`，不能只凭合并文本日志判定。本地 clean full-verify 是否完成及是否已有 E3 只由 `INDEX.md` 和 bundle manifest 判定，不在本文硬编码；远端没有可用 Runner 时仅 E4 不可用。完整机制和证据边界见 [agentos/security-hardening.md](agentos/security-hardening.md) 与 [agentos/verification.md](agentos/verification.md)。
+旧 16-case 校准、进程、file、thread、I/O 与 ENOSPC 结果继续作为历史问题证据，不能外推到当前 18-case 套件或 profile v5。当前 18-case 的三轮 timing 已绑定冻结提交 `31d4ddf53695`；独立 Context-sync/WAIT_ATOMIC prelude 不计入这 18 行。`make full-verify` 会动态串联 physical、metadata recovery、observation recovery、VirtIO fault 和 filesystem allocator fault runner。GitLab 远端必选集合恰好是同一 C 的 1 个 Host-class job 和 8 个 QEMU-class jobs；每项都要生成绑定 checkout/CI 身份、artifact 清单和语义结果的 attestation，并由下载端以 API 身份、唯一 trace marker、安全 ZIP、逐文件哈希和共享 registry 离线复验。allocator job 还必须交付并复验固定的 `fs-allocator-evidence.tar`，不能只凭合并文本日志判定。本地 clean full-verify 是否完成及是否已有 E3 只由 `INDEX.md` 和 bundle manifest 判定，不在本文硬编码；远端没有可用 Runner 时仅 E4 不可用。完整机制和证据边界见 [agentos/security-hardening.md](agentos/security-hardening.md) 与 [agentos/verification.md](agentos/verification.md)。
 
 ## 内核机制说明
 

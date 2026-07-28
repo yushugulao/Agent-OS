@@ -1511,7 +1511,23 @@
       "usersafety_ucore",
       "blocking_semantics_ucore"
     ],
-    "calibration_status": "provisional_requires_full_suite",
+    "calibration_status": "calibrated_full_suite",
+    "baseline_seconds": 242.927974276,
+    "max_seconds": 255.08,
+    "calibration_samples": [
+      {
+        "sample_id": "agent18-31d4ddf53695-01",
+        "total_seconds": 252.895656313
+      },
+      {
+        "sample_id": "agent18-31d4ddf53695-02",
+        "total_seconds": 242.927974276
+      },
+      {
+        "sample_id": "agent18-31d4ddf53695-03",
+        "total_seconds": 239.65810152
+      }
+    ],
     "runner_tag": "agentos-qemu-calibrated",
     "runner_profile": {
       "cpu": "Intel Core Ultra 9 275HX",

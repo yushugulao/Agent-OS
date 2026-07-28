@@ -1,0 +1,23 @@
+{
+  "commit": "31d4ddf53695d38229cb0d96da45ff9488283425",
+  "samples": [
+    {
+      "sample": "01",
+      "total_seconds": 252.895656313
+    },
+    {
+      "sample": "02",
+      "total_seconds": 242.927974276
+    },
+    {
+      "sample": "03",
+      "total_seconds": 239.65810152
+    }
+  ],
+  "baseline_seconds": 242.927974276,
+  "max_seconds": 255.08,
+  "max_to_median_ratio": 1.0410314294461425,
+  "suite_marker_verified": true,
+  "runner_pass_sequence_verified": true,
+  "guest_sections_per_sample": 19
+}

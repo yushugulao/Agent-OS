@@ -82,14 +82,14 @@ re-baselines the ledger at 2,372 lines and 223,232 BSS bytes; both maxima are
 set to those measured values, so later work must first remove code or state
 before adding more to that owner.
 
-The full-suite duration gate is currently fail-closed and provisional. The
-suite now contains 18 cases, while the former three samples covered only 16;
-those measurements are historical evidence and are deliberately absent from
-`ci/kernel-budgets.json`. Recalibration must run on the pinned
-`agentos-qemu-calibrated` WSL2 runner: Intel Core Ultra 9 275HX and QEMU
-10.2.1. At least three complete 18-case timing files are required before a
-reviewed median baseline, bounded limit, and durable sample identifiers may be
-added and the status restored to `calibrated_full_suite`.
+The full-suite duration gate is calibrated for the current 18-case contract.
+Three serial runs from clean detached commit `31d4ddf53695` on the pinned
+`agentos-qemu-calibrated` WSL2 profile measured 252.895656313,
+242.927974276, and 239.658101520 seconds. The reviewed median is
+242.927974276 seconds and the limit is 255.08 seconds. Raw timing files,
+compressed runner/Guest logs, environment data, and hashes are stored under
+`evidence/calibrations/31d4ddf53695/`. The former 16-case measurements remain
+historical evidence and are not used by `ci/kernel-budgets.json`.
 
 The GitLab duration job is both serialized with a resource group and bound to
 that calibrated runner tag. It also pins QEMU and OpenSBI. A runner hardware,

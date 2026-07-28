@@ -629,7 +629,7 @@ metadata 自动创建 backing 文件时保留三态 provenance：`existing` 表�
 | 页面和图表 | 内核输出结构化事件、状态文件、timeline、audit 和 provenance | 宿主机工具负责渲染页面、生成 SVG 和汇总 CSV。 |
 | Agent Context 状态 | 每个活跃 Agent 原子计费 21 页：9 页 detail/attribution sidecar + 6 页用户 mirror + 6 页可信 shadow | Context detail 与 legacy mail 先后迁出 PCB 后，`struct proc` 从历史 62072 字节降至 25640 字节；加入 lifecycle/resource 所有权字段和 active-path 水位后的当前静态探针为 25936 字节，CI 冻结 baseline/max 为 25936/27233 字节。完整状态 84 KiB/Agent、全局 10.5 MiB，sidecar-only 的 36 KiB/Agent 与 4.5 MiB 仍作为独立细节预算；legacy mail 的两页按需 sidecar 另行计费。 |
 | CI 模块与 runner 门 | owner、bridge、依赖和 aggregate budget 以版本化注册集合为准；受控 integration graph 的 SCC=3 为 checker 硬约束；metadata 聚合 source/text/BSS 防止跨文件迁移；各 fail-closed 自测集合随源码演进 | integration graph 不是完整 uCore 调用图；通用 runner 全量 drain 并要求普通 case 自然 `rc=0`。Reader action runner 则只在 guest 阶段按完整日志行识别故障，构建阶段仅看退出码。输出洪泛、迟到 marker、普通 marker grace、非零退出或后置 panic 都不能成功；显式 checkpoint 只接受 marker 后 runner 发出的单次 `SIGTERM`，显式 powercut 只接受认证 supervisor 对稳定 QEMU leader 发出的单次 `SIGKILL` 及完整证明。powercut 是突然 VM 终止模型，不等同于整机物理断电。 |
-| CI 时间预算 | 只统计完整 18 个 QEMU case 的 monotonic 运行时，不含编译 | 旧三轮 16-case 样本不沿用；代码提交 C 的配置必须以固定 runner 至少三轮 18-case 样本校准后才能标为 `calibrated_full_suite`，否则 full-suite/CI 在 QEMU 前 fail closed。样本、基线、上限和实际通过状态以 release bundle 为准。 |
+| CI 时间预算 | 只统计完整 18 个 QEMU case 的 monotonic 运行时，不含编译 | 旧三轮 16-case 样本不沿用；代码提交 C 的配置必须以固定 runner 至少三轮 18-case 样本校准后才能标为 `calibrated_full_suite`，否则 full-suite/CI 在 QEMU 前 fail closed。当前样本、基线和上限由 `ci/kernel-budgets.json` 与 `evidence/calibrations/31d4ddf53695/` 共同记录；最终 E3/E4 状态仍只由 release bundle 与远端 attestation 判定。 |
 
 ## 12. 术语表
 

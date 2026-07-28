@@ -11,7 +11,21 @@
 - QEMU `10.2.1`，riscv64 system emulation；
 - `riscv64-linux-gnu-gcc 15.2.0`。
 
-## 2026-07-27 当前工作树本地阶段性验收
+## 冻结提交 `31d4ddf53695` 的 18-case 校准
+
+冻结提交 `31d4ddf53695d38229cb0d96da45ff9488283425` 在干净 detached worktree 中、以上固定 profile 上预声明并串行执行三轮完整套件。每轮均以 `REQUIRE_FULL_SUITE=1` 和 `AGENT_TEST_CALIBRATE=1` 运行，父 harness 与三轮子命令退出码均为 0；主 timing 文件各含严格有序的 18 行，独立 Context-sync/WAIT_ATOMIC prelude 不计时。
+
+| 样本 | 18 case monotonic 总时间 | 结果 |
+| --- | ---: | --- |
+| `agent18-31d4ddf53695-01` | `252.895656313s` | 18/18 |
+| `agent18-31d4ddf53695-02` | `242.927974276s` | 18/18 |
+| `agent18-31d4ddf53695-03` | `239.658101520s` | 18/18 |
+
+三轮中位数为 `242.927974276s`；确定性上限按 `ceil(max(max_sample, 1.05 * median) * 100) / 100` 计算为 `255.08s`。最慢样本相对中位数为 `1.0410314294`，没有超过 110% 拒绝边界。严格复核还要求每轮 runner 最终成功标记唯一且位于最后一行、成功 case 顺序为“前置 `agentfinal_ucore` + 18-case”、Guest 日志含对应的 19 个完整分段。三轮均满足这些条件。
+
+原始 timing、确定性 gzip 压缩的 runner/Guest 日志、环境、退出状态、逐文件哈希与人工审查边界保存在 `evidence/calibrations/31d4ddf53695/`。该记录使时长门恢复为 `calibrated_full_suite`，但不替代尚待执行的干净 `make full-verify`，也不构成 `evidence/releases/INDEX.md` 所定义的 E3 release bundle。
+
+## 2026-07-27 冻结前工作树本地阶段性验收
 
 Reader action runner 已改为阶段感知故障判定：clean/build 阶段只依据子进程退出码，QEMU guest 启动后才按去 ANSI 的完整日志行识别 panic、trap、`check failed` 和 orchestrator failure。以下三组测试在当前工作树本地依次通过：
 
@@ -129,7 +143,7 @@ checkpoint 后又按阶段提交 metadata query、scan 和 directory 拆分，�
 | `bounded-runner-final-02` | `237.948978492s` | 16/16 |
 | `bounded-runner-final-03` | `255.370930671s` | 16/16 |
 
-三轮的校准中位数为 `255.370930671s`，当时的 CI 上限为 `268.14s`。上限相对中位数约保留 5% headroom，足以覆盖最大样本，同时比旧门更紧。该提交中的 `ci/kernel-budgets.json` 曾将状态设为 `calibrated_full_suite`，GitLab duration job 绑定 `agentos-qemu-calibrated` runner tag；当前 18-case 配置已回到 `provisional_requires_full_suite`，不再携带这组旧阈值和样本。targeted `AGENT_TEST_CASE` 不能代替完整时间门，异构 shared runner 的墙钟结果也不能用于调整阈值。
+三轮的校准中位数为 `255.370930671s`，当时的 CI 上限为 `268.14s`。上限相对中位数约保留 5% headroom，足以覆盖最大样本，同时比旧门更紧。该提交中的 `ci/kernel-budgets.json` 曾将状态设为 `calibrated_full_suite`，GitLab duration job 绑定 `agentos-qemu-calibrated` runner tag；后来的 18-case 配置没有沿用这组旧阈值和样本，而是由冻结提交 `31d4ddf53695` 的新三轮重新校准。targeted `AGENT_TEST_CASE` 不能代替完整时间门，异构 shared runner 的墙钟结果也不能用于调整阈值。
 
 同一版本的 `agentfinal_ucore` 还以两个并发工具调用验证 Context commit lane，得到 `context_commit_lane=1 sequence=1..3 hash=1`。lane 对单进程 FIFO 接纳且可重入，锁序固定为 `lane -> metadata`；`agent_call_count` 是已经接纳并保留的调用序号总数，允许在慢调用执行期间暂时领先，`latest_sequence` 才是完整 Context 记录的已提交水位。
 
