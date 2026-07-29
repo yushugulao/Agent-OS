@@ -11,7 +11,21 @@
 - QEMU `10.2.1`，riscv64 system emulation；
 - `riscv64-linux-gnu-gcc 15.2.0`。
 
-## 冻结提交 `31d4ddf53695` 的 18-case 校准
+## 冻结提交 `814021ab9dac` 的 18-case 校准
+
+固定 catalog 分区与验收协议冻结为提交 `814021ab9dacbce065cec94ed55d3bbfcf84227b` 后，在 `/tmp` 的干净 detached worktree 中预声明并串行执行三轮完整套件。三轮父 harness、每轮子命令和校准 checker 均以退出码 0 完成；每个主 timing 文件恰好包含按版本化清单排序的 18 行，Context-sync/WAIT_ATOMIC 前置用例单独运行且不进入总时长。
+
+| 样本 | 18 case monotonic 总时间 | 结果 |
+| --- | ---: | --- |
+| `agent18-814021ab9dac-01` | `327.098196563s` | 18/18 |
+| `agent18-814021ab9dac-02` | `310.491647311s` | 18/18 |
+| `agent18-814021ab9dac-03` | `279.293840369s` | 18/18 |
+
+三轮中位数为 `310.491647311s`；确定性上限按 `ceil(max(max_sample, 1.05 * median) * 100) / 100` 计算为 `327.10s`。最慢样本相对中位数为 `1.0534846892`，未超过 110% 拒绝边界。每轮 runner 的最终成功标记唯一且位于最后一个非空行，成功顺序均为“前置 `agentfinal_ucore` + 18-case”，Guest 日志均有顺序一致的 19 个完整分段。
+
+源码/合同指纹为 `b1dffb44dc3caa5c9c3c3ab483c8ba4d879254416b9152879102762627a698e9`，覆盖 386 个受管输入；三轮 runner 输出与当前 checker 重算结果一致。原始 timing、确定性 gzip 日志、环境、退出状态、validation 与逐文件哈希保存在 `evidence/calibrations/814021ab9dac/`。这使时长门恢复为 `calibrated_full_suite`，但尚未完成 `make full-verify`、C→E release bundle 或远程 Runner attestation，不能单独授予 E3/E4。
+
+## 冻结提交 `31d4ddf53695` 的 18-case 校准（历史）
 
 冻结提交 `31d4ddf53695d38229cb0d96da45ff9488283425` 在干净 detached worktree 中、以上固定 profile 上预声明并串行执行三轮完整套件。每轮均以 `REQUIRE_FULL_SUITE=1` 和 `AGENT_TEST_CALIBRATE=1` 运行，父 harness 与三轮子命令退出码均为 0；主 timing 文件各含严格有序的 18 行，独立 Context-sync/WAIT_ATOMIC prelude 不计时。
 
@@ -53,7 +67,7 @@ metadata aggregate: loaded text=77162/77896 bytes, BSS=1118596/1118596 bytes
 
 定向 AgentScope QEMU 输出精确 marker `scope_storage_quota=1 scope_limit=112 workflow_created=112 peer_created=112 public_created=70 overflow_no_space=1 reusable=1`，case 墙钟 `96.1s`、外层命令 `158.35s`，同时记录 writes `138`、跨 scope metadata query `833ms`；Reader 定向 E2E 以 `125.0s` 通过。独立安全复核未发现剩余 P0/P1 冻结阻塞项。唯一登记的 P2 是 runtime fail-closed 后 `prefetch_handoff` 仍可能发布同 scope 的建议性旧 hint；该 hint 不授予能力、不修改 catalog 或文件，也不改变 IPC 结果，冻结后再以行为保持的小重构统一 catalog read preflight。
 
-以上仍是未绑定 clean C 的冻结候选结果。三轮干净 18-case 时长标定、`make full-verify`、C→E release bundle 和远程 Runner attestation 尚未完成，因此不得据此声明最终 E3/E4 或可交付状态。
+以上机制定向结果已由冻结提交 `814021ab9dac` 的三轮完整套件重新覆盖。`make full-verify`、C→E release bundle 和远程 Runner attestation 仍未完成，因此不得据此声明最终 E3/E4 或可交付状态。
 
 ## 2026-07-27 冻结前工作树本地阶段性验收
 

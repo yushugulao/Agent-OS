@@ -92,14 +92,14 @@ or a metadata-envelope ledger; scoped reload instead binds and revalidates the
 immutable lifecycle id and generation. The superblock's current 342-inode
 guarantee is raw filesystem capacity, not the effective Agent catalog limit.
 
-The full-suite duration gate is currently
-`provisional_requires_full_suite`. The catalog/AgentScope and evidence changes
-altered performance-relevant inputs, so the three serial 18-case runs from
-clean detached commit `31d4ddf53695` are retained only as historical evidence
-under `evidence/calibrations/31d4ddf53695/`; their 242.927974276-second median
-and 255.08-second limit are no longer present in `ci/kernel-budgets.json`.
-Before the gate can return to `calibrated_full_suite`, the frozen candidate must
-produce at least three new serial full-suite samples on the pinned runner.
+The full-suite duration gate is currently `calibrated_full_suite`. Frozen commit
+`814021ab9dac` produced three serial clean-detached 18-case samples of
+327.098196563, 310.491647311, and 279.293840369 seconds on the pinned runner.
+The reviewed median is 310.491647311 seconds and the deterministic limit is
+327.10 seconds. Timing files, deterministic compressed Guest/runner logs,
+environment, validation, and hashes are stored under
+`evidence/calibrations/814021ab9dac/`. The older `31d4ddf53695` calibration is
+retained only as historical evidence for its own source commit.
 
 A calibrated policy also carries `source_fingerprint_sha256`. The checker
 recomputes a length-framed SHA-256 over the expected cases, canonical

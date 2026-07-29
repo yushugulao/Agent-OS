@@ -6,7 +6,7 @@
 
 本项目在 uCore 内核上实现 Agent-OS，把 Agent 进程身份、结构化工具调用、上下文历史、文件元数据索引和 Agent 事件运行机制放入内核支持层。
 
-完整专项脚本当前依次运行十八个程序。2026-07-25 固定 runner 的三次 16/16 及 `261.343281873s`、`237.948978492s`、`255.370930671s` 只作为历史 checkpoint，不能用于当前 18-case 时长验收；冻结提交 `31d4ddf53695` 后来的三轮 18/18 及中位数 `242.927974276s`、上限 `255.08s` 也只证明该提交。当前 `ci/kernel-budgets.json` 为 `provisional_requires_full_suite`，已移除旧基线、上限和样本；冻结新候选后，必须在相同 `agentos-qemu-calibrated` profile 串行取得至少三次干净完整样本，并写入与当前源码及 runner 合同匹配的 SHA-256 指纹，才能恢复 calibrated。历史独立 `agentscope_ucore` 专项约 `93.7s`，曾输出 `scope_controller_exit_revoke=1 public_lineage=1` 和 `parent passed`；历史 `agentfinal_ucore` 也曾输出 `context_commit_lane=1 sequence=1..3 hash=1`，两者均不能替代最终 HEAD 复跑。旧 `371.5s`、`127.9s`、`126.1s` 与 `13824 < 16384` 也只保留为历史快照。`workflow_teardown_race_ucore` 及 physical、metadata/observation recovery、VirtIO 故障 runner 不计入这十八项；预算 checker、通用 runner 和生产 profile validator 的 fail-closed 自测集合以当前源码为准，静态预算与 owner 注册以 `ci/kernel-budgets.json` 为准：
+完整专项脚本当前依次运行十八个程序。2026-07-25 固定 runner 的三次 16/16 和冻结提交 `31d4ddf53695` 的三轮 18/18 都只作为对应源码的历史 checkpoint。当前冻结提交 `814021ab9dac` 已在相同 `agentos-qemu-calibrated` profile 串行取得 `327.098196563s`、`310.491647311s`、`279.293840369s` 三次干净完整样本；中位基线为 `310.491647311s`、上限为 `327.10s`，并由当前源码及 runner 合同的 SHA-256 指纹绑定。历史独立 `agentscope_ucore` 和 `agentfinal_ucore` 输出不能替代最终 `full-verify`；旧 `371.5s`、`127.9s`、`126.1s` 与 `13824 < 16384` 也只保留为历史快照。`workflow_teardown_race_ucore` 及 physical、metadata/observation recovery、VirtIO 故障 runner 不计入这十八项；预算 checker、通用 runner 和生产 profile validator 的 fail-closed 自测集合以当前源码为准，静态预算与 owner 注册以 `ci/kernel-budgets.json` 为准：
 
 ```bash
 agentfinal_ucore
