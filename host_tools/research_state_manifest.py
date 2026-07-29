@@ -4,8 +4,11 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
+import os
 import re
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -21,6 +24,7 @@ TOP_LEVEL_KEYS = {
     "state_file_calls",
     "host_state_files",
     "reader_optional_state_files",
+    "archive_optional_state_files",
 }
 TARGET_KEYS = {"source_roots"}
 SUPPORTED_STATE_FILE_CALLS = {
@@ -43,10 +47,139 @@ SUPPORTED_STATE_FILE_CALLS = {
     "rp_write_file",
 }
 REQUIRED_STATE_FILE_CALLS = {"rp_append_file", "rp_read_file", "rp_write_file"}
+GUEST_STATE_RECEIPT_SCHEMA = "sha256-inventory-v1"
+_GUEST_STATE_DIGEST_DOMAIN = b"agentos-guest-state\0sha256-inventory-v1\0"
+_DIGEST_READ_CHUNK_BYTES = 1024 * 1024
 
 
 class StateManifestError(ValueError):
     """The state inventory cannot be derived without ambiguity."""
+
+
+def _path_is_link(path: Path) -> bool:
+    junction_test = getattr(path, "is_junction", None)
+    return path.is_symlink() or bool(junction_test and junction_test())
+
+
+def guest_state_inventory_sha256(
+    state_dir: Path, *, excluded_names: Iterable[str] = ()
+) -> tuple[int, str]:
+    """Return a canonical count and content digest for one Guest snapshot.
+
+    The digest commits to the sorted filename inventory, each file size, and every
+    content byte. Only canonical ``rp_*`` regular files participate; Host sidecars
+    named by ``excluded_names`` are outside this Guest-state commitment.
+    """
+    try:
+        directory_status = state_dir.lstat()
+    except OSError as error:
+        raise StateManifestError(f"Guest state directory is unavailable: {state_dir}") from error
+    if _path_is_link(state_dir) or stat.S_ISLNK(
+        directory_status.st_mode
+    ) or not stat.S_ISDIR(
+        directory_status.st_mode
+    ):
+        raise StateManifestError(f"Guest state directory is unsafe: {state_dir}")
+
+    excluded = set(excluded_names)
+    invalid_exclusions = sorted(
+        name for name in excluded if STATE_NAME_RE.fullmatch(name) is None
+    )
+    if invalid_exclusions:
+        raise StateManifestError(
+            "Guest state digest has invalid exclusions: "
+            + ", ".join(invalid_exclusions)
+        )
+
+    entries: list[tuple[str, Path, os.stat_result]] = []
+    try:
+        candidates = sorted(state_dir.iterdir(), key=lambda path: path.name)
+    except OSError as error:
+        raise StateManifestError(f"Guest state inventory is unreadable: {state_dir}") from error
+    for path in candidates:
+        name = path.name
+        if not name.startswith("rp_"):
+            continue
+        if STATE_NAME_RE.fullmatch(name) is None:
+            raise StateManifestError(f"unsafe state filename in Guest inventory: {name}")
+        if name in excluded:
+            continue
+        try:
+            path_status = path.lstat()
+        except OSError as error:
+            raise StateManifestError(f"Guest state file is unavailable: {name}") from error
+        if _path_is_link(path) or stat.S_ISLNK(
+            path_status.st_mode
+        ) or not stat.S_ISREG(path_status.st_mode):
+            raise StateManifestError(f"Guest state file is unsafe: {name}")
+        entries.append((name, path, path_status))
+
+    digest = hashlib.sha256()
+    digest.update(_GUEST_STATE_DIGEST_DOMAIN)
+    digest.update(len(entries).to_bytes(8, "big"))
+    for name, path, expected_status in entries:
+        name_bytes = name.encode("ascii")
+        flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+        try:
+            descriptor = os.open(path, flags)
+        except OSError as error:
+            raise StateManifestError(f"Guest state file cannot be opened safely: {name}") from error
+        try:
+            opened_status = os.fstat(descriptor)
+            same_identity = (
+                opened_status.st_dev == expected_status.st_dev
+                and opened_status.st_ino == expected_status.st_ino
+            )
+            if not stat.S_ISREG(opened_status.st_mode) or not same_identity:
+                raise StateManifestError(f"Guest state file changed while hashing: {name}")
+            digest.update(len(name_bytes).to_bytes(4, "big"))
+            digest.update(name_bytes)
+            digest.update(opened_status.st_size.to_bytes(8, "big"))
+            observed_size = 0
+            while True:
+                block = os.read(descriptor, _DIGEST_READ_CHUNK_BYTES)
+                if not block:
+                    break
+                observed_size += len(block)
+                digest.update(block)
+            final_status = os.fstat(descriptor)
+            if (
+                observed_size != opened_status.st_size
+                or final_status.st_size != opened_status.st_size
+                or final_status.st_mtime_ns != opened_status.st_mtime_ns
+            ):
+                raise StateManifestError(f"Guest state file changed while hashing: {name}")
+        finally:
+            os.close(descriptor)
+
+    try:
+        final_names = sorted(
+            path.name
+            for path in state_dir.iterdir()
+            if path.name.startswith("rp_") and path.name not in excluded
+        )
+    except OSError as error:
+        raise StateManifestError(f"Guest state inventory changed while hashing: {state_dir}") from error
+    if final_names != [name for name, _path, _status in entries]:
+        raise StateManifestError(f"Guest state inventory changed while hashing: {state_dir}")
+    for name, path, expected_status in entries:
+        try:
+            final_status = path.lstat()
+        except OSError as error:
+            raise StateManifestError(
+                f"Guest state file changed while hashing: {name}"
+            ) from error
+        if (
+            _path_is_link(path)
+            or stat.S_ISLNK(final_status.st_mode)
+            or not stat.S_ISREG(final_status.st_mode)
+            or final_status.st_dev != expected_status.st_dev
+            or final_status.st_ino != expected_status.st_ino
+            or final_status.st_size != expected_status.st_size
+            or final_status.st_mtime_ns != expected_status.st_mtime_ns
+        ):
+            raise StateManifestError(f"Guest state file changed while hashing: {name}")
+    return len(entries), digest.hexdigest()
 
 
 @dataclass(frozen=True)
@@ -55,6 +188,7 @@ class ResearchStateManifest:
     state_file_calls: tuple[str, ...]
     host_state_files: tuple[str, ...]
     reader_optional_state_files: tuple[str, ...]
+    archive_optional_state_files: tuple[str, ...]
 
 
 def _strict_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -113,8 +247,8 @@ def parse_manifest_text(text: str) -> ResearchStateManifest:
     if not isinstance(raw, dict):
         raise StateManifestError("state manifest root must be an object")
     _require_exact_keys(raw, TOP_LEVEL_KEYS, "state manifest")
-    if raw["schema_version"] != 1:
-        raise StateManifestError("state manifest schema_version must be 1")
+    if raw["schema_version"] != 2:
+        raise StateManifestError("state manifest schema_version must be 2")
 
     raw_targets = raw["targets"]
     if not isinstance(raw_targets, dict):
@@ -150,15 +284,29 @@ def parse_manifest_text(text: str) -> ResearchStateManifest:
             "state_file_calls is missing core operations: " + ", ".join(missing_calls)
         )
     host_files = _require_state_names(raw["host_state_files"], "host_state_files")
-    optional_files = _require_state_names(
+    reader_optional_files = _require_state_names(
         raw["reader_optional_state_files"], "reader_optional_state_files"
     )
-    overlap = sorted(set(host_files) & set(optional_files))
-    if overlap:
-        raise StateManifestError(
-            "host and optional state inventories overlap: " + ", ".join(overlap)
-        )
-    return ResearchStateManifest(source_roots, calls, host_files, optional_files)
+    archive_optional_files = _require_state_names(
+        raw["archive_optional_state_files"], "archive_optional_state_files"
+    )
+    inventories = (
+        ("host", set(host_files)),
+        ("reader optional", set(reader_optional_files)),
+        ("archive optional", set(archive_optional_files)),
+    )
+    for index, (left_label, left) in enumerate(inventories):
+        for right_label, right in inventories[index + 1 :]:
+            overlap = sorted(left & right)
+            if overlap:
+                raise StateManifestError(
+                    f"{left_label} and {right_label} state inventories overlap: "
+                    + ", ".join(overlap)
+                )
+    return ResearchStateManifest(
+        source_roots, calls, host_files, reader_optional_files,
+        archive_optional_files,
+    )
 
 
 def load_manifest(root: Path) -> ResearchStateManifest:
@@ -251,6 +399,34 @@ def target_state_names(
     )
 
 
+def archive_state_names(
+    root: Path, manifest: ResearchStateManifest, target: str
+) -> set[str]:
+    names = target_state_names(root, manifest, target)
+    optional = set(manifest.archive_optional_state_files)
+    missing_optional = sorted(optional - names)
+    if missing_optional:
+        raise StateManifestError(
+            f"target {target} does not declare archive-optional state files: "
+            + ", ".join(missing_optional)
+        )
+    return names - set(manifest.host_state_files) - optional
+
+
+def validate_archive_state_inventory(
+    root: Path, manifest: ResearchStateManifest, target: str, actual: Iterable[str]
+) -> set[str]:
+    observed = set(actual)
+    expected = archive_state_names(root, manifest, target)
+    if observed != expected:
+        raise StateManifestError(
+            f"{target} complete state archive Guest inventory differs from trusted "
+            f"manifest: missing={sorted(expected - observed)} "
+            f"extra={sorted(observed - expected)}"
+        )
+    return observed
+
+
 def repository_state_inventory(
     root: Path, manifest: ResearchStateManifest | None = None
 ) -> set[str]:
@@ -318,6 +494,8 @@ def validate_repository_state_contract(root: Path) -> dict[str, object]:
     manifest = load_manifest(root)
     plain = target_state_names(root, manifest, "plain")
     agentos = target_state_names(root, manifest, "agentos")
+    plain_archive = archive_state_names(root, manifest, "plain")
+    agentos_archive = archive_state_names(root, manifest, "agentos")
     if not plain <= agentos:
         raise StateManifestError(
             "AgentOS state inventory dropped plain target names: "
@@ -354,6 +532,9 @@ def validate_repository_state_contract(root: Path) -> dict[str, object]:
         "reader_state_names": len(reader),
         "fixture_state_names": len(fixture),
         "api_allowlist_names": len(allowed),
+        "plain_archive_state_names": len(plain_archive),
+        "agentos_archive_state_names": len(agentos_archive),
+        "archive_optional_state_files": len(manifest.archive_optional_state_files),
         "status": "ready",
     }
 

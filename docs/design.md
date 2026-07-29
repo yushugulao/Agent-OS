@@ -53,7 +53,7 @@ plain target 的运行由五部分组成：
 4. `rp_orch`，通过普通 `fork`、`exec`、`waitpid` 运行多角色科研平台程序。
 5. `rp_seed_orch`，在 Host action runner 放入紧凑 `rp_host_action_seed` 后运行 seeded 程序集。
 
-AgentOS target 使用 `rp_agentos_orch` 作为入口。它创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，再运行与 plain target 可比较的科研流程。关键阶段会把内核事实写入 `rp_agentos_mainflow` 和相关 `rp_agentos_*` 文件。runbook 服务会读取事件通知、timeline、metadata 查询和恢复工具的内核状态后再生成事故处理记录；项目交付审查会读取文件 metadata、事件、Context 和 provenance 状态后再生成交付审查记录；研究协议服务会读取 metadata 索引、Context 记录、事件队列和批量工具状态后再生成协议启动、复现实验包和数据集操作记录；控制面会读取 capability、事件投递、Agent 角色启动和工具调用账本后再生成控制面记录；运营面板会读取事件队列、Context 记录、capability 拒绝和通用恢复动作后再生成执行队列和交接记录；正式复核面板会读取 Agent 角色创建、Context 记录、事件投递、文件 metadata 索引和 provenance 状态后再生成签核记录；完整性检查会读取 Context、metadata、事件和 provenance 状态，连贯性检查会读取运行状态、工具表、交付 metadata 和 Agent 协作事件，出版工作流会读取投稿 metadata、复核事件、响应 Context 和发布控制状态；成熟平台映射程序 `rp_mature` 在 AgentOS target 中会先读取这些真实状态文件，再把 Context Path、metadata 索引、事件队列、批量工具运行、capability 检查和证据投影标记为 observed。
+AgentOS target 使用 `rp_agentos_orch` 作为入口。它创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，再运行与 plain target 可比较的科研流程。关键阶段会把内核事实写入 `rp_agentos_mainflow` 和相关 `rp_agentos_*` 文件。主流程只发布 11 个唯一、完整、顺序固定的未验证 telemetry 阶段；任何 Guest `runtime_verified` 回执都被拒绝。Host 从经提取清单约束的单层非链接目录读取 11 个规范来源，逐项复验唯一 claim、预期成功状态和阶段字段，并独立计算完整 byte count/hash；静态源码 producer 扫描不再是 Mainflow 的安全边界。runbook 服务会读取事件通知、timeline、metadata 查询和恢复工具的内核状态后再生成事故处理记录；项目交付审查会读取文件 metadata、事件、Context 和 provenance 状态后再生成交付审查记录；研究协议服务会读取 metadata 索引、Context 记录、事件队列和批量工具状态后再生成协议启动、复现实验包和数据集操作记录；控制面会读取 capability、事件投递、Agent 角色启动和工具调用账本后再生成控制面记录；运营面板会读取事件队列、Context 记录、capability 拒绝和通用恢复动作后再生成执行队列和交接记录；正式复核面板会读取 Agent 角色创建、Context 记录、事件投递、文件 metadata 索引和 provenance 状态后再生成签核记录；完整性检查会读取 Context、metadata、事件和 provenance 状态，连贯性检查会读取运行状态、工具表、交付 metadata 和 Agent 协作事件，出版工作流会读取投稿 metadata、复核事件、响应 Context 和发布控制状态；成熟平台映射程序 `rp_mature` 在 AgentOS target 中会先读取这些真实状态文件，再把 Context Path、metadata 索引、事件队列、批量工具运行、capability 检查和证据投影标记为 observed。
 
 ## 操作系统内核机制
 
@@ -105,6 +105,8 @@ Host seeded-action 执行按 clean、build、guest 三阶段记录。clean/build
 
 科研平台运行证据使用 `exact-field-v1` receipt。目标 `key=value` 不再受固定字段缓冲区限制：用户态以 128 B 分块流式读取完整状态文件，允许长无关字段和跨块长 key，但要求目标字段精确出现一次；空 key/value、CR、NUL、重复目标及仅前后缀相似的字段均 fail closed。receipt 同时绑定完整文件的字节数、hash 和行数，Host ASan/UBSan probe 已进入 `ci-check`。这仍只是解析协议和 Host 门，不能替代 Reader、双目标 QEMU 或 `full-verify` 的动态证据。
 
+seeded reference catalog 使用 target-specific registry 精确登记每个 reference product 和 `(destination, anchor)` record 的源码 owner，并在解析调用前剥除注释。完整的 `demo_reference/demo_expected/reference_ready` envelope 只能出现在登记身份中；缺失、未知、重复、跨 owner 预发布或冒充 `runtime_verified` 都 fail closed。Plain 的 runtime 程序观察还必须绑定 seeded profile、实际 QEMU 日志和 `rp_orch_timing` 的 orchestrator/launcher、程序顺序、字节数、hash 与名称摘要。状态提取清单必须与目录内单层、非链接的 `rp_[a-z0-9_]+` 普通文件精确相等。当前 runner tick 没有可信 runtime producer，只允许 `unavailable/plain_runtime_cases_zero`；不可达的 measured ABI 和推导图不属于验收面。
+
 这种分工让 plain target 不需要 AgentOS 专属内核服务，也能承载较复杂的平台表面；同时让 AgentOS target 可以复用同一状态文件协议进行对照。两侧共享的基础安全加固和只存在于增强目标的 AgentOS 安全机制见 [agentos/security-hardening.md](agentos/security-hardening.md)。
 
 ## 核心状态文件
@@ -123,7 +125,7 @@ Host seeded-action 执行按 clean、build、guest 三阶段记录。clean/build
 | Workbench/Project | `rp_workbench`、`rp_usable`、`rp_usableproj`、`rp_projectrel` | 表示工作台、项目空间、交付和项目复核 |
 | Review/Delivery | `rp_review_dashboard`、`rp_review_pack`、`rp_package`、`rp_nbexec` | 表示复核材料、交付包、notebook 和证据包 |
 | Compare | `rp_backend`、`rp_backend_exec`、`rp_study`、`rp_agentcmp` | 表示 plain 成本、AgentOS 替代路径和比较结果 |
-| AgentOS 证据 | `rp_agentos_mainflow`、`rp_agentos_query`、`rp_agentos_recovery`、`rp_agentos_timeline`、`rp_agentos_audit`、`rp_agentos_conflict` | 表示增强内核主流程事实和专项输出，包括 Context、通用依赖图、metadata 查询、事件、恢复、审计、provenance 和文件编辑租约 |
+| AgentOS 证据 | `rp_agentos_mainflow`、`rp_agentos_query`、`rp_agentos_recovery`、`rp_agentos_timeline`、`rp_agentos_audit`、`rp_agentos_conflict` | 表示增强内核主流程事实和专项输出；Guest 保存 11 个未验证 telemetry 阶段，Host 从安全状态清单独立复验 Context、通用依赖图、metadata 查询、事件、恢复、审计、provenance 和文件编辑租约等实际来源 |
 
 ## 状态查看工具
 

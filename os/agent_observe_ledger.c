@@ -1485,20 +1485,6 @@ agent_observe_checkpoint_generation_floor(uint64 generation)
 }
 
 void
-agent_observe_checkpoint_highwater(uint64 *sequence, uint64 *span,
-				   uint64 *event, uint *agent_id)
-{
-	if (sequence != 0)
-		*sequence = agent_audit_next_sequence;
-	if (span != 0)
-		*span = next_span_id;
-	if (event != 0)
-		*event = next_event_id;
-	if (agent_id != 0)
-		*agent_id = agent_identity_next_id_get();
-}
-
-void
 agent_observe_checkpoint_raise_highwater(uint64 sequence, uint64 span,
 					 uint64 event, uint agent_id)
 {

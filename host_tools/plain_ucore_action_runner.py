@@ -11,13 +11,44 @@ import queue
 import re
 import shutil
 import signal
+import stat
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
 from typing import Iterable
 
-from plain_ucore_fs_extract import extract_state_files
+if __package__:
+    from .plain_ucore_fs_extract import extract_state_files
+    from .research_state_manifest import (
+        GUEST_STATE_RECEIPT_SCHEMA,
+        guest_state_inventory_sha256,
+        load_manifest,
+    )
+    from .safe_host_paths import (
+        absolute_lexical_path as _absolute_lexical_path,
+        create_private_directory,
+        ensure_safe_directory,
+        path_is_link as _is_link_component,
+        reject_link_components,
+        require_private_directory,
+    )
+else:
+    from plain_ucore_fs_extract import extract_state_files
+    from research_state_manifest import (
+        GUEST_STATE_RECEIPT_SCHEMA,
+        guest_state_inventory_sha256,
+        load_manifest,
+    )
+    from safe_host_paths import (
+        absolute_lexical_path as _absolute_lexical_path,
+        create_private_directory,
+        ensure_safe_directory,
+        path_is_link as _is_link_component,
+        reject_link_components,
+        require_private_directory,
+    )
 
 UCORE_FS_BLOCK_SIZE = 1024
 ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
@@ -66,10 +97,60 @@ GUEST_FAILURE_RULES = (
     ),
 )
 DEFAULT_FAILURE_PATTERN = "|".join(f"(?:{rule.pattern})" for _, rule in GUEST_FAILURE_RULES)
+HOST_STATE_FILES = frozenset(
+    load_manifest(Path(__file__).resolve().parents[1]).host_state_files
+)
 
 
 class RepoRunBusy(RuntimeError):
     """A destructive plain-uCore run is already using this repository."""
+
+
+def atomic_write_bytes(path: Path, data: bytes, mode: int = 0o600) -> None:
+    """Publish bytes through an O_EXCL temporary in the destination directory."""
+
+    target = _absolute_lexical_path(path)
+    parent = reject_link_components(target.parent)
+    if not parent.is_dir():
+        raise ValueError(f"Atomic write parent is unavailable: {parent}")
+    try:
+        target_info = target.lstat()
+    except FileNotFoundError:
+        target_info = None
+    if target_info is not None and (
+        _is_link_component(target, target_info.st_mode)
+        or not stat.S_ISREG(target_info.st_mode)
+    ):
+        raise ValueError(f"Atomic write destination is unsafe: {target}")
+
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(fd, mode)
+        with os.fdopen(fd, "wb") as handle:
+            fd = -1
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        # A raced symlink is replaced as a directory entry, never followed.
+        os.replace(temporary, target)
+        if os.name != "nt" and hasattr(os, "O_DIRECTORY"):
+            directory_fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+            try:
+                os.fsync(directory_fd)
+            finally:
+                os.close(directory_fd)
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        if temporary.is_file() and not temporary.is_symlink():
+            temporary.unlink()
+
+
+def atomic_write_text(path: Path, text: str) -> None:
+    atomic_write_bytes(path, text.encode("utf-8"))
 
 
 def _run_lock_path(repo_dir: Path) -> Path:
@@ -403,14 +484,25 @@ def action_kind(path: str) -> str:
 
 
 def clean_copy_state(src: Path, dst: Path) -> None:
+    if src.is_symlink() or not src.is_dir():
+        raise ValueError("Guest state source is missing or unsafe")
+    if dst.is_symlink():
+        raise ValueError("Guest state destination is unsafe")
     if dst.exists():
+        if not dst.is_dir():
+            raise ValueError("Guest state destination is unsafe")
         shutil.rmtree(dst)
     dst.mkdir(parents=True, exist_ok=True)
-    if not src.exists():
-        return
     for item in sorted(src.iterdir()):
-        if item.is_file() and item.name.startswith("rp_"):
-            shutil.copy2(item, dst / item.name)
+        if not item.name.startswith("rp_"):
+            continue
+        if item.is_symlink() or not item.is_file():
+            raise ValueError(f"Guest state source is unsafe: {item.name}")
+        shutil.copy2(item, dst / item.name)
+
+
+def replace_path(source: Path, destination: Path) -> None:
+    source.replace(destination)
 
 
 def line_value(value: object) -> str:
@@ -608,12 +700,11 @@ def validate_reader_e2e_logs(
 
 
 def write_fs_aligned_seed(path: Path, seed_text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     data = seed_text.encode("utf-8")
     remainder = len(data) % UCORE_FS_BLOCK_SIZE
     if remainder:
         data += b"\0" * (UCORE_FS_BLOCK_SIZE - remainder)
-    path.write_bytes(data)
+    atomic_write_bytes(path, data)
 
 
 def pad_file_for_ucore_fs(path: Path) -> None:
@@ -630,7 +721,9 @@ def pad_state_files_for_ucore_fs(state_dir: Path) -> None:
 
 
 def prepare_action_state(actions: list[dict[str, object]], state_dir: Path, run_dir: Path) -> dict[str, object]:
-    run_dir.mkdir(parents=True, exist_ok=True)
+    # Reader run names are deterministic, so claiming the directory must fail
+    # rather than reuse a path planted before this action was accepted.
+    run_dir = create_private_directory(run_dir)
     next_state = run_dir / "state-next"
     clean_copy_state(state_dir, next_state)
 
@@ -1244,20 +1337,20 @@ def compact_seed_text(text: str) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
-def write_seed_header(next_state: Path, repo_dir: Path) -> int:
-    inbox = next_state / "rp_host_action_inbox"
+def write_seed_header(action_state: Path, repo_dir: Path, seed_file: Path) -> int:
+    inbox = action_state / "rp_host_action_inbox"
     text = inbox.read_text(encoding="utf-8") if inbox.is_file() else ""
     seed_text = compact_seed_text(text)
-    write_fs_aligned_seed(next_state / "rp_host_action_seed", seed_text)
+    write_fs_aligned_seed(seed_file, seed_text)
     header = repo_dir / "user" / "build" / "generated" / "rp_host_action_seed.h"
-    header.parent.mkdir(parents=True, exist_ok=True)
-    header.write_text(
+    ensure_safe_directory(header.parent)
+    atomic_write_text(
+        header,
         "#ifndef __RP_HOST_ACTION_SEED_H__\n"
         "#define __RP_HOST_ACTION_SEED_H__\n"
         f"#define RP_HOST_ACTION_SEED {c_string_literal('')}\n"
         f"#define RP_HOST_ACTION_BOOTSTRAP_SEED {c_string_literal(seed_text)}\n"
         "#endif\n",
-        encoding="utf-8",
     )
     return len([line for line in seed_text.splitlines() if line.strip()])
 
@@ -1284,12 +1377,32 @@ def write_run_result_state(next_state: Path, run_summary: dict[str, object], log
     # The summary is an internal typed contract. Treat malformed truthy values
     # as failure so diagnostic state can never advertise a successful guest.
     passed = run_summary.get("passed") is True
+    guest_state_files, guest_state_sha256 = guest_state_inventory_sha256(
+        next_state, excluded_names=HOST_STATE_FILES
+    )
+    reported_state_files = run_summary.get("extracted_state_files", 0)
+    if passed and (
+        type(reported_state_files) is not int
+        or reported_state_files != guest_state_files
+    ):
+        passed = False
+        run_summary["passed"] = False
+        run_summary["status"] = "failed"
+        run_summary["returncode"] = 1
+        run_summary["failure_phase"] = "receipt"
+        run_summary["failure_reason"] = "guest_state_count_mismatch"
     lines = [
         "host_runner=plain_ucore_action_runner",
+        f"target={line_value(run_summary.get('target_identity', ''))}",
+        f"chapter={line_value(run_summary.get('chapter', ''))}",
+        f"init_proc={line_value(run_summary.get('init_proc', ''))}",
         f"status={'ready' if passed else 'failed'}",
         f"passed={1 if passed else 0}",
         f"embedded_action_records={run_summary.get('embedded_action_records', 0)}",
         f"extracted_state_files={run_summary.get('extracted_state_files', 0)}",
+        f"guest_state_receipt_schema={GUEST_STATE_RECEIPT_SCHEMA}",
+        f"guest_state_files={guest_state_files}",
+        f"guest_state_sha256={guest_state_sha256}",
         f"build_returncode={run_summary.get('build_returncode', '')}",
         f"guest_returncode={run_summary.get('guest_returncode', '')}",
         f"guest_raw_returncode={run_summary.get('guest_raw_returncode', '')}",
@@ -1314,14 +1427,233 @@ def write_run_result_state(next_state: Path, run_summary: dict[str, object], log
         lines.append("qemu_" + host_actions_verified)
     if passed and orch_passed:
         lines.append("qemu_orch_passed=1")
-    write_text(next_state / "rp_host_run_result", "\n".join(lines) + "\n")
+    (next_state / "rp_host_run_result").write_bytes(
+        ("\n".join(lines) + "\n").encode("utf-8")
+    )
 
 
-def publish_next_state(next_state: Path, state_dir: Path) -> None:
+def revoke_published_receipt(
+    state_dir: Path, host_run_result_path: Path | None = None
+) -> None:
+    if state_dir.is_symlink() or not state_dir.is_dir():
+        raise ValueError("Guest state destination is missing or unsafe")
+    state_root = state_dir.resolve(strict=True)
+    legacy_run_result = state_dir / "rp_host_run_result"
+    if legacy_run_result.is_symlink() or (
+        legacy_run_result.exists() and not legacy_run_result.is_file()
+    ):
+        raise ValueError("Guest state receipt is unsafe")
+    if host_run_result_path is not None:
+        if host_run_result_path.name in ("", ".", ".."):
+            raise ValueError("Host run result sidecar is unsafe")
+        if host_run_result_path.parent.is_symlink() or (
+            host_run_result_path.parent.exists()
+            and not host_run_result_path.parent.is_dir()
+        ):
+            raise ValueError("Host run result sidecar parent is unsafe")
+        sidecar_candidate = (
+            host_run_result_path.parent.resolve(strict=False)
+            / host_run_result_path.name
+        )
+        try:
+            sidecar_candidate.relative_to(state_root)
+        except ValueError:
+            pass
+        else:
+            raise ValueError("Host run result sidecar must be outside Guest state")
+        if host_run_result_path.is_symlink() or (
+            host_run_result_path.exists() and not host_run_result_path.is_file()
+        ):
+            raise ValueError("Host run result sidecar is unsafe")
+
+    if legacy_run_result.is_file():
+        legacy_run_result.unlink()
+    if host_run_result_path is not None and host_run_result_path.is_file():
+        host_run_result_path.unlink()
+
+
+def publish_next_state(
+    next_state: Path, state_dir: Path, host_run_result_path: Path | None = None
+) -> None:
+    if next_state.is_symlink() or not next_state.is_dir():
+        raise ValueError("Guest state source is missing or unsafe")
+    next_root = next_state.resolve(strict=True)
+    if state_dir.is_symlink():
+        raise ValueError("Guest state destination is unsafe")
     state_dir.mkdir(parents=True, exist_ok=True)
+    if not state_dir.is_dir():
+        raise ValueError("Guest state destination is unsafe")
+    state_root = state_dir.resolve(strict=True)
+    try:
+        next_root.relative_to(state_root)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("Guest state source must be outside its destination")
+    try:
+        state_root.relative_to(next_root)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("Guest state destination must be outside its source")
+
+    existing: dict[str, Path] = {}
+    for item in sorted(state_dir.iterdir()):
+        if not item.name.startswith("rp_"):
+            continue
+        if item.is_symlink() or not item.is_file():
+            raise ValueError(f"Guest state destination is unsafe: {item.name}")
+        existing[item.name] = item
+
+    receipt_source = next_state / "rp_host_run_result"
+    receipt_temporary: Path | None = None
+    sidecar_parent: Path | None = None
+    if host_run_result_path is not None:
+        if host_run_result_path.name in ("", ".", ".."):
+            raise ValueError("Host run result sidecar is unsafe")
+        if host_run_result_path.parent.is_symlink():
+            raise ValueError("Host run result sidecar parent is unsafe")
+        host_run_result_path.parent.mkdir(parents=True, exist_ok=True)
+        if not host_run_result_path.parent.is_dir():
+            raise ValueError("Host run result sidecar parent is unsafe")
+        sidecar_parent = host_run_result_path.parent.resolve(strict=True)
+        sidecar_candidate = sidecar_parent / host_run_result_path.name
+        try:
+            sidecar_candidate.relative_to(state_root)
+        except ValueError:
+            pass
+        else:
+            raise ValueError("Host run result sidecar must be outside Guest state")
+        try:
+            sidecar_candidate.relative_to(next_root)
+        except ValueError:
+            pass
+        else:
+            raise ValueError("Host run result sidecar must be outside Guest state source")
+        if host_run_result_path.is_symlink() or (
+            host_run_result_path.exists() and not host_run_result_path.is_file()
+        ):
+            raise ValueError("Host run result sidecar is unsafe")
+
+    # A receipt is the commit marker for a Guest snapshot. Invalidate every old
+    # marker before inspecting or publishing the candidate generation.
+    revoke_published_receipt(state_dir, host_run_result_path)
+
+    sources: dict[str, Path] = {}
     for item in sorted(next_state.iterdir()):
-        if item.is_file() and item.name.startswith("rp_"):
-            shutil.copy2(item, state_dir / item.name)
+        if not item.name.startswith("rp_"):
+            continue
+        if item.is_symlink() or not item.is_file():
+            raise ValueError(f"Guest state source is unsafe: {item.name}")
+        if item.name == "rp_host_run_result":
+            continue
+        if item.name in HOST_STATE_FILES:
+            raise ValueError(
+                f"Guest snapshot contains Host-only state: {item.name}"
+            )
+        sources[item.name] = item
+    if host_run_result_path is not None and (
+        receipt_source.is_symlink() or not receipt_source.is_file()
+    ):
+        raise ValueError("Host run result source is missing or unsafe")
+
+    staged: dict[str, Path] = {}
+    backups: dict[str, Path] = {}
+    installed: set[str] = set()
+    try:
+        if host_run_result_path is not None and sidecar_parent is not None:
+            fd, temporary_name = tempfile.mkstemp(
+                prefix=f".{host_run_result_path.name}.",
+                suffix=".tmp",
+                dir=sidecar_parent,
+            )
+            os.close(fd)
+            receipt_temporary = Path(temporary_name)
+            shutil.copy2(receipt_source, receipt_temporary)
+        for name, source in sources.items():
+            fd, temporary_name = tempfile.mkstemp(
+                prefix=f".{name}.", suffix=".tmp", dir=state_root
+            )
+            os.close(fd)
+            temporary = Path(temporary_name)
+            staged[name] = temporary
+            shutil.copy2(source, temporary)
+
+        for name, destination in existing.items():
+            if name == "rp_host_run_result":
+                continue
+            if destination.is_symlink() or not destination.is_file():
+                raise ValueError(f"Guest state destination is unsafe: {name}")
+            fd, backup_name = tempfile.mkstemp(
+                prefix=f".{name}.", suffix=".bak", dir=state_root
+            )
+            os.close(fd)
+            backup = Path(backup_name)
+            try:
+                replace_path(destination, backup)
+            except Exception:
+                if backup.is_file() and not backup.is_symlink():
+                    backup.unlink()
+                raise
+            backups[name] = backup
+
+        for name, temporary in staged.items():
+            destination = state_dir / name
+            if destination.is_symlink() or destination.exists():
+                raise ValueError(f"Guest state destination is unsafe: {name}")
+            replace_path(temporary, destination)
+            installed.add(name)
+
+        if (
+            receipt_temporary is not None
+            and host_run_result_path is not None
+        ):
+            replace_path(receipt_temporary, host_run_result_path)
+    except Exception as publish_error:
+        rollback_errors: list[str] = []
+        for name in installed:
+            destination = state_dir / name
+            try:
+                if destination.is_symlink() or not destination.is_file():
+                    raise ValueError(f"unsafe installed state: {name}")
+                destination.unlink()
+            except (OSError, ValueError) as error:
+                rollback_errors.append(f"remove {name}: {error}")
+        for name, backup in backups.items():
+            destination = state_dir / name
+            try:
+                if not backup.is_file() or backup.is_symlink():
+                    raise ValueError(f"unsafe backup state: {name}")
+                if destination.exists() or destination.is_symlink():
+                    raise ValueError(f"occupied restore destination: {name}")
+                replace_path(backup, destination)
+            except (OSError, ValueError) as error:
+                rollback_errors.append(f"restore {name}: {error}")
+        for temporary in staged.values():
+            if temporary.is_file() and not temporary.is_symlink():
+                temporary.unlink()
+        if (
+            receipt_temporary is not None
+            and receipt_temporary.is_file()
+            and not receipt_temporary.is_symlink()
+        ):
+            receipt_temporary.unlink()
+        if host_run_result_path is not None and (
+            host_run_result_path.is_file() and not host_run_result_path.is_symlink()
+        ):
+            host_run_result_path.unlink()
+        if rollback_errors:
+            raise RuntimeError(
+                "Guest state publication rollback failed: "
+                + "; ".join(rollback_errors)
+            ) from publish_error
+        raise
+    for backup in backups.values():
+        try:
+            if backup.is_file() and not backup.is_symlink():
+                backup.unlink()
+        except OSError:
+            pass
 
 
 def _run_seeded_ucore_locked(
@@ -1332,14 +1664,23 @@ def _run_seeded_ucore_locked(
     chapter: str = "platform_seeded",
     init_proc: str = "rp_seed_orch",
     pass_marker: str = "rp_orch: passed",
+    target_identity: str = "plain",
 ) -> dict[str, object]:
     repo_dir = repo_dir.resolve()
     deadline_contract = seeded_ucore_deadline_contract(timeout_seconds)
     phase_timeout_seconds = int(deadline_contract["phase_timeout_seconds"])
-    run_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = require_private_directory(run_dir)
     build_log_path = run_dir / "ucore-build.log"
     log_path = run_dir / "ucore-run.log"
     next_state = run_dir / "state-next"
+    if next_state.exists() or next_state.is_symlink():
+        reject_link_components(next_state)
+        if not next_state.is_dir():
+            raise ValueError("Guest action state directory is unsafe")
+    else:
+        create_private_directory(next_state)
+    host_input_dir = run_dir / "host-input"
+    host_input_dir = create_private_directory(host_input_dir)
     repo_bash = bash_path(repo_dir)
     clean_command = (
         f"cd {shell_quote(repo_bash)} && "
@@ -1359,17 +1700,23 @@ def _run_seeded_ucore_locked(
             "guest_returncode": None,
             "guest_raw_returncode": None,
             "embedded_action_records": 0,
+            "extracted_state_files": 0,
+            "target_identity": target_identity,
+            "chapter": chapter,
+            "init_proc": init_proc,
             "passed": False,
             "build_log": str(build_log_path),
             "log": str(log_path),
             "failure_phase": "clean",
+            "failure_reason": "clean_failed",
             "status": "failed",
         }
+        write_run_result_state(next_state, summary, "")
         write_json(run_dir / "ucore-run-summary.json", summary)
         return summary
-    embedded_records = write_seed_header(next_state, repo_dir)
+    seed_file = host_input_dir / "rp_host_action_seed"
+    embedded_records = write_seed_header(next_state, repo_dir, seed_file)
     pad_state_files_for_ucore_fs(next_state)
-    seed_file = next_state / "rp_host_action_seed"
     seed_file_bash = bash_path(seed_file)
     toolprefix = toolprefix_arg()
     build_command_text = (
@@ -1396,12 +1743,18 @@ def _run_seeded_ucore_locked(
             "guest_returncode": None,
             "guest_raw_returncode": None,
             "embedded_action_records": embedded_records,
+            "extracted_state_files": 0,
+            "target_identity": target_identity,
+            "chapter": chapter,
+            "init_proc": init_proc,
             "passed": False,
             "build_log": str(build_log_path),
             "log": str(log_path),
             "failure_phase": "build",
+            "failure_reason": "build_failed",
             "status": "failed",
         }
+        write_run_result_state(next_state, summary, "")
         write_json(run_dir / "ucore-run-summary.json", summary)
         return summary
     run_command_text = (
@@ -1437,9 +1790,9 @@ def _run_seeded_ucore_locked(
                 repo_dir,
                 require_single_scope=True,
             )
-            for item in sorted((run_dir / "state-extracted").iterdir()):
-                if item.is_file() and item.name.startswith("rp_"):
-                    shutil.copy2(item, next_state / item.name)
+            # The build input contains Host-only action files. Replace it with
+            # the exact extracted Guest generation before creating its receipt.
+            clean_copy_state(run_dir / "state-extracted", next_state)
         except (OSError, ValueError) as error:
             passed = False
             if guest_passed:
@@ -1481,6 +1834,9 @@ def _run_seeded_ucore_locked(
         "embedded_action_records": embedded_records,
         "extracted_state_files": extract_summary.get("extracted_state_files", 0),
         "extract_status": extract_summary.get("status", "unknown"),
+        "target_identity": target_identity,
+        "chapter": chapter,
+        "init_proc": init_proc,
         "passed": passed,
         "build_log": str(build_log_path),
         "log": str(log_path),
@@ -1499,9 +1855,13 @@ def run_seeded_ucore(
     chapter: str = "platform_seeded",
     init_proc: str = "rp_seed_orch",
     pass_marker: str = "rp_orch: passed",
+    target_identity: str = "plain",
 ) -> dict[str, object]:
     repo_dir = repo_dir.resolve()
-    run_dir.mkdir(parents=True, exist_ok=True)
+    if run_dir.exists() or run_dir.is_symlink():
+        run_dir = require_private_directory(run_dir)
+    else:
+        run_dir = create_private_directory(run_dir)
     try:
         with exclusive_repo_run_lock(repo_dir):
             return _run_seeded_ucore_locked(
@@ -1512,6 +1872,7 @@ def run_seeded_ucore(
                 chapter,
                 init_proc,
                 pass_marker,
+                target_identity,
             )
     except RepoRunBusy as error:
         summary = {
@@ -1522,6 +1883,9 @@ def run_seeded_ucore(
             "guest_raw_returncode": None,
             "embedded_action_records": 0,
             "extracted_state_files": 0,
+            "target_identity": target_identity,
+            "chapter": chapter,
+            "init_proc": init_proc,
             "extract_status": "skipped",
             "passed": False,
             "failure_phase": "coordination",
@@ -1531,6 +1895,14 @@ def run_seeded_ucore(
             "log": str(run_dir / "ucore-run.log"),
             "status": "failed",
         }
+        next_state = run_dir / "state-next"
+        if next_state.exists() or next_state.is_symlink():
+            reject_link_components(next_state)
+            if not next_state.is_dir():
+                raise ValueError("Guest action state directory is unsafe")
+        else:
+            create_private_directory(next_state)
+        write_run_result_state(next_state, summary, "")
         write_json(run_dir / "ucore-run-summary.json", summary)
         return summary
 
@@ -1564,8 +1936,25 @@ def main() -> int:
     parser.add_argument("--repo-dir", type=Path, default=Path("."), help="Repository root for --run-ucore.")
     parser.add_argument("--timeout", type=int, default=80, help="QEMU run timeout in seconds.")
     parser.add_argument("--wsl-distro", default="Ubuntu", help="WSL distribution name on Windows.")
-    parser.add_argument("--update-state-dir", action="store_true", help="Copy prepared rp_* action state and run result back to --state-dir.")
+    parser.add_argument(
+        "--update-state-dir",
+        action="store_true",
+        help="Copy prepared Guest rp_* action state back to --state-dir; publish the Host run receipt only through --run-result-sidecar.",
+    )
+    parser.add_argument(
+        "--run-result-sidecar",
+        type=Path,
+        default=None,
+        help="Host-only run receipt destination outside --state-dir.",
+    )
     args = parser.parse_args()
+
+    if args.update_state_dir and not args.run_ucore:
+        parser.error("--update-state-dir requires --run-ucore")
+    if args.update_state_dir and args.run_result_sidecar is None:
+        parser.error("--update-state-dir requires --run-result-sidecar")
+    if args.run_result_sidecar is not None and not args.update_state_dir:
+        parser.error("--run-result-sidecar requires --update-state-dir")
 
     extra_payload: dict[str, str] = {}
     for item in args.payload:
@@ -1582,9 +1971,15 @@ def main() -> int:
         )
     )
     if args.run_ucore:
-        run_summary = run_plain_ucore(args.repo_dir, args.run_dir, args.timeout, args.wsl_distro)
         if args.update_state_dir:
-            publish_next_state(args.run_dir / "state-next", args.state_dir)
+            revoke_published_receipt(args.state_dir, args.run_result_sidecar)
+        run_summary = run_plain_ucore(args.repo_dir, args.run_dir, args.timeout, args.wsl_distro)
+        if args.update_state_dir and run_summary.get("passed") is True:
+            publish_next_state(
+                args.run_dir / "state-next",
+                args.state_dir,
+                args.run_result_sidecar,
+            )
         print("plain_ucore_action_runner: ucore_status={status} passed={passed}".format(**run_summary))
         return 0 if run_summary["passed"] else 1
     return 0

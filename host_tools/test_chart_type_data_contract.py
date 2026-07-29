@@ -17,7 +17,10 @@ def main() -> int:
         result = summary.summarize(work_dir, out_dir, require_measured_experiments=True)
 
         sweep_rows = read_csv(out_dir / "runner-sweep.csv")
-        assert len(sweep_rows) == 1 and sweep_rows[0]["speedup_x"] == "7", sweep_rows
+        assert sweep_rows == [{
+            "evidence_status": "unavailable",
+            "evidence_reason": "plain_runtime_cases_zero",
+        }], sweep_rows
 
         raw_rows = read_csv(out_dir / "experiments" / "raw" / "file-query-benchmark.csv")
         assert len(raw_rows) == 6, raw_rows
@@ -28,8 +31,6 @@ def main() -> int:
         chart_expectations = {
             "runtime-observation.svg": ("双目标运行观测", "AgentOS"),
             "cost-replacement.svg": ("用户态成本项", "AgentOS 替代机制"),
-            "runner-ticks.svg": ("Runner Tick 对照", "普通用户态路径", "AgentOS 路径"),
-            "runner-speedup.svg": ("Runner 成组场景相对倍数", "tick", "x"),
             "experiment-file-query-bar.svg": ("真实 Guest 文件查询", "冷索引（含重建）", "热索引"),
         }
         assert {Path(path).name for path in result["charts"]} == set(chart_expectations), result

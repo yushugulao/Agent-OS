@@ -196,6 +196,8 @@ flowchart LR
 
 metadata 持久化使用私有 `.agentmeta` 双 bank，普通文件系统调用不能直接打开、创建、截断或删除后端文件。内核在 `timer_init()` 之后、运行时 I/O policy 和首个用户进程发布之前完成可信启动加载；单个 bank 损坏时从另一份可验证副本恢复，不存在可验证副本或可信判定失败时 metadata API 进入 fail-closed 状态，但 scope retirement 仍可按 VFS label 清理文件并释放生命周期身份。普通 workflow 文件变化先发布内存记录或 inode sidecar；只有 `PERSIST` 记录按 scope 进入固定窗口后台写回，volatile 微写不会制造空 checkpoint。后台 checkpoint 由触发它的稳定 owner 赞助并使用硬 `BACKGROUND` I/O 预算，尝试后的固定合并窗口负责请求聚合，不再用执行耗时放大 checkpoint 休整期。双 bank 写回按块推进：先使目标 header 无效，再更新并逐段验证变化的 payload，最后发布并回读 header；新主 bank 完整验证后才切换 active generation，随后才允许用同一不可变快照更新旧 bank。未使用的高水位块可复用。在新 primary 的 header 回读验证完成前，故障保留旧 active bank；切换后 mirror 更新失败时，已验证的新 primary 仍可恢复。进程态全局 metadata 事务门按单调 ticket FIFO 接纳，最外层释放只唤醒队首；scheduler 在门空闲时可取得硬有界维护轮次，但不会二次唤醒已由前任唤醒的 serving ticket。进程态查询、索引、显式依赖和预取扫描每处理 128 条记录计入统一 kernel-work 预算。scheduler 的每轮 16 目录项扫描只发布字段变化与线性索引。依赖表只保存每 scope 有界的显式用户边；兼容 `dependency_mask` 保持在文件记录中，由查询、action 和预取在既有线性扫描内按需解析，不再在全局事务门内物化超线性派生图。维护入口按字段变化掩码区分 state 索引和依赖代数，`ACTION_COMMIT` / `RERUN_STAGE` 以一次选集扫描和一次原子提交更新目标，不再为每个依赖对象重复重建全局图。查询预取复用缓存保存的精确命中槽，收集 scope 内有配额上限的依赖选择器后只扫描一次文件表，对目标全局去重并把单次副作用限制在 8 条提示内。跨 Agent 预取交接不再让裸 `proc *` 跨预算检查点存活：消息入队时只捕获 `slot + pid + control_id + scope` 稳定端点，长阶段仅处理局部快照，预付固定扫描预算后重新解析端点并原子发布；目标退出或槽复用时直接丢弃派生提示。同步持久化操作另通过 FIFO submit lane 排队并建立不可替换的 COW job，不把调用返回解释成 primary 已验证；条件检查、事务门释放和等待入队处于同一关中断临界区，避免丢失唤醒。协调扫描仍使用独立的非滑动请求合并和四倍扫描耗时自适应休整，使 metadata 满表后的未绑定文件微写不能制造无间隔全根扫描。查询时，内核可以按 state、label、type 等字段走索引路径，也可以执行扫描路径；查询结果会返回候选数量、扫描数量、命中数量、查询计划和原因。文件内容摘要由受权 Agent 读取，重复读取同一版本可以命中 digest cache。编辑文件时，Agent 可以申请租约，内核在真实写入、截断和删除路径检查持有者和版本，降低并发覆盖风险。
 
+inode 的 `agent_meta_slot/flags/version` 不再由 catalog、scanner 或目录钩子各自写入，而只通过 `agent_file_state_set_index()` 校验并持久化；失败会恢复旧 sidecar。write、sync、truncate 和 delete 也统一进入 `agent_fs_apply_inode_event()`，create 则在 VFS 对象成功发布后进入同一目录协调边界。容量型未索引对象以明确的 deferred sidecar 状态持久保存，catalog 仍饱和时不会因后续微写反复触发全目录扫描；这套机制不让 metadata 容量失败回滚已经成功的普通 VFS create。
+
 | 设计点 | 实现方式 | 测试入口 |
 | --- | --- | --- |
 | 真实文件绑定 | metadata 记录 `dev + inum + incarnation` | `agentfs_ucore`、`agentvfs_ucore` |
@@ -252,7 +254,7 @@ Agent 专属安全链由构建期可信映像清单、loader 映像绑定、boot
 
 为防止机制性修复再次把内核推向臃肿，`.gitlab-ci.yml` 和 `make ci-check` 使用 `ci/kernel-budgets.json` 作为可审查事实源，限制内核源码行数、ELF/raw 镜像、text/data/BSS/总运行体积、`struct proc`、Context sidecar 与完整 21 页 Agent 状态的单实例/全局/分类/账户上限、线程栈深度与虚拟/物理容量、64 KiB boot stack 的实际跨度和调用图。每个 owner 模块、integration bridge、允许依赖和 SCC 边界均来自同一版本化注册集合，不在文档复制容易漂移的固定数量。metadata 拆分单元及其 contract headers 还共同进入 `metadata_control_plane` 聚合预算：source 只保留固定接口开销，loaded text 与 BSS 不得增长，因而不能靠把状态或代码迁到另一个文件绕过 downward ratchet。预算 checker、通用 QEMU monitor 和生产 profile validator 的 fail-closed 自测集合也以源码和配置为准。
 
-通用 QEMU runner 采用二进制全量 drain，并大小写不敏感识别包括 panic 在内的预定义 failure 模式；每轮最多读取一个 64 KiB 块并重新检查 case/marker deadline，持续输出不能饿死超时。每个 case 的总输出上限为 16 MiB，未终止记录最多保留 64 KiB，诊断行最多保留 4 KiB；输出或记录越界 fail closed，诊断副本有界截断。case deadline 在完成判断之前生效，并在 feed/notice 后重新核对，迟到 marker 不能伪装成功。普通 profile 必须自然 `rc=0`；checkpoint profile 只接受完整 marker 后 runner 发出的单次 `SIGTERM`；powercut profile 则要求认证 supervisor 在完整 marker 后以 `SIGKILL` 直接终止稳定身份的 QEMU leader，隔离并回收跨 `setsid()` 的全部后代，再提交带随机 nonce、PID/starttime 和镜像退出码的完成证明。workload 自行杀死 leader 或 supervisor、控制通道 EOF、残留后代、超时、非零退出和 marker 后 panic 均失败。powercut 是“宿主强制中止 VM 后检查原始磁盘”的突然 VM 终止模型；它比 `SIGTERM` checkpoint 更接近掉电边界，但不会清空宿主页缓存，也不等同于整机物理断电。当前 Agent 套件为 18 case，checker 只接受完整有序的 18-case timing file；2026-07-25 的三轮 16/16 和冻结提交 `31d4ddf53695` 的三轮 18/18 只保留为历史校准。冻结提交 `814021ab9dac` 的三轮 18/18 为 `327.098196563s`、`310.491647311s`、`279.293840369s`，当前中位基线/上限为 `310.491647311/327.10s`，原始材料位于 `evidence/calibrations/814021ab9dac/`。
+通用 QEMU runner 采用二进制全量 drain，并大小写不敏感识别包括 panic 在内的预定义 failure 模式；每轮最多读取一个 64 KiB 块并重新检查 case/marker deadline，持续输出不能饿死超时。每个 case 的总输出上限为 16 MiB，未终止记录最多保留 64 KiB，诊断行最多保留 4 KiB；输出或记录越界 fail closed，诊断副本有界截断。case deadline 在完成判断之前生效，并在 feed/notice 后重新核对，迟到 marker 不能伪装成功。普通 profile 必须自然 `rc=0`；checkpoint profile 只接受完整 marker 后 runner 发出的单次 `SIGTERM`；powercut profile 则要求认证 supervisor 在完整 marker 后以 `SIGKILL` 直接终止稳定身份的 QEMU leader，隔离并回收跨 `setsid()` 的全部后代，再提交带随机 nonce、PID/starttime 和镜像退出码的完成证明。workload 自行杀死 leader 或 supervisor、控制通道 EOF、残留后代、超时、非零退出和 marker 后 panic 均失败。powercut 是“宿主强制中止 VM 后检查原始磁盘”的突然 VM 终止模型；它比 `SIGTERM` checkpoint 更接近掉电边界，但不会清空宿主页缓存，也不等同于整机物理断电。当前 Agent 套件为 18 case，checker 只接受完整有序的 18-case timing file。提交 `814021ab9dac` 的三轮 `327.098196563s`、`310.491647311s`、`279.293840369s` 及其 `310.491647311/327.10s` 中位数/上限，只是该提交的历史校准基线，材料保存在 `evidence/calibrations/814021ab9dac/`；2026-07-25 的 16-case 和 `31d4ddf53695` 的 18-case 同样只属于各自历史提交。当前候选已因受管输入变化回到 `provisional_requires_full_suite`，不沿用这些阈值，取得至少三轮新样本前会在普通完整 QEMU 套件之前 fail closed。
 
 Reader seeded-action runner 另把 clean、build、guest 明确分阶段：clean/build 只按子进程退出码判定，只有 QEMU guest 启动后才逐条完整匹配 Guest panic/fault/check-failed 记录。构建输出中的 `build/riscv64/ch6b_panic` 因而不会再被字符串扫描误判；对应单测同时要求这种文件名通过、规范 Guest `[PANIC ...]` 行失败。
 
@@ -334,8 +336,12 @@ make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
 
 镜像中的目录项只有 14 字节。长状态名不再通过扫描任意 `rp_*` 符号猜测，而由 `ci/research-state-manifest.json` 统一限定目标源码根、合法状态文件操作、宿主状态和 Reader 可选状态；提取器、Reader `/api/state/` allowlist、双目标清单与测试 fixture 共用该派生清单，并由缺失、未知、重复和短名前缀冲突 mutation 回归 fail closed。
 
-- `/tmp/agentos-dual-platform/`：QEMU 日志、提取出的状态文件、页面渲染结果和阶段耗时。
-- `results/latest/`：`summary.csv`、`runner-sweep.csv`、`experiments/raw/file-query-benchmark.csv`、`experiments/status.json`、`experiments/experiment-stats.csv`、`charts/*.svg`、`report.md`、`reader-guide.html`、`monitor.html` 等本地预览材料。当前只有文件查询 benchmark 是由 Guest 日志逐行绑定的原始实测；缺少可信 marker 时，该实验必须显示为 unavailable，不能生成替代数据。
+seeded 参考产物另由目标相关的 reference registry 精确登记“源码 owner、目标文件、记录 anchor”身份。合同先按 C token 剥除注释，再检查真实调用；完整 `demo_reference/demo_expected/reference_ready` envelope 只能由登记 owner 生成。未知、缺失、重复、跨 owner 预发布或冒充 `runtime_verified` 都 fail closed。Plain 的程序清单还必须同时绑定 seeded profile、QEMU 日志与 `rp_orch_timing` 的 orchestrator/launcher、程序顺序、字节数、hash 和名称摘要。AgentOS 的 `rp_agentos_mainflow` 只发布 11 个唯一、完整、顺序固定的未验证 telemetry 阶段，任何 Guest `runtime_verified` 回执都 fail closed。Host 从单层、非链接且与提取清单一致的状态目录独立读取 11 个规范来源，逐项复验唯一 claim、预期成功状态和阶段的 12 类事实，并计算 telemetry 与每个来源的字节数/FNV-1a hash。
+
+双目标状态与 Host 执行回执属于不同信任域。每侧 complete-state ZIP 只包含 `extract-summary.json` 和其中精确列出的 Guest `rp_*` 普通文件，明确禁止 `rp_host_run_result`；Plain/AgentOS 的 Host run receipt 分别以 `dual-plain-host-run-result.state` 和 `dual-agentos-host-run-result.state` 作为独立 raw sidecar 保存。`sha256-inventory-v1` receipt 绑定排序后的 Guest 文件名、文件数、逐文件长度和全部内容，Reader 与双目标比较器都会重算并拒绝同文件数篡改。Host LLM relay 只发布独立的差异 overlay，不再原地修改已签收的 Guest 快照；overlay 与 action runner 共用逐组件链接检查和私有目录机制，拒绝 symlink、Windows junction 及链接祖先。离线验证会安全解包两份 ZIP，以 `min_common_files=240`、两份 receipt、seeded summary 和两份 Guest 日志显式重放 `compare_state()`，要求结果等于 `dual-state-compare.json`，并逐字核对 Mainflow、program ledger 与 backend 原件。普通 `make dual-platform-run` 只保留状态目录和 Host sidecar；只有最终采集使用的 `full-verify` evidence mode 才生成并发布 complete-state ZIP。
+
+- `/tmp/agentos-dual-platform/`：QEMU 日志、纯 Guest 状态目录、独立 Host run receipt、页面渲染结果和阶段耗时。
+- `results/latest/`：`summary.csv`、`runner-sweep.csv`、`experiments/raw/file-query-benchmark.csv`、`experiments/status.json`、`experiments/experiment-stats.csv`、`charts/*.svg`、`report.md`、`reader-guide.html`、`monitor.html` 等本地预览材料。当前只有文件查询 benchmark 是由 Guest 日志逐行绑定的原始实测；缺少可信 marker 时，该实验必须显示为 unavailable，不能生成替代数据。当前仓库没有独立、可信的 runner tick runtime producer，因此 `runner-sweep.csv` 只允许 `unavailable/plain_runtime_cases_zero` 且没有数据行；旧 measured collector 和两张推导图已删除，不能用任意 source blob 或参考目录恢复性能结论。
 
 如果运行长时间没有输出，优先查看：
 
@@ -425,7 +431,7 @@ AgentOS 专项测试程序如下：
 
 `workflow_teardown_race_ucore` 是独立机制专项，不计入上表 18-case Agent 套件。它通过 syscall 546 的 self-only lifecycle 快照确定竞态窗口，并连续三轮组合覆盖 factory 撤销、根自然退出、PUBLIC 后代、Context lane、metadata transaction gate、阻塞 `fdget` 临时引用、I/O debt/cache、inode/file object 回收和 lifecycle generation 重用。
 
-`371.5s`、`127.9s` 和 `126.1s` 保留为 Workflow 强制撤销早期实现的历史数据。2026-07-26，提交 `75d0dfde716453af90d7310c6a1521968fcf7167` 在干净环境完成一次 `make full-verify TOOLPREFIX=riscv64-linux-gnu-`，墙钟 `19:45.97`，Reader E2E、独立三轮 teardown race 及其余聚合步骤全部通过。此后又进行了 metadata query/scan/directory 的分阶段行为保持拆分；这些后续变更尚未在最终 HEAD 上完成新的 clean `full-verify`，远程普通 Runner 与 QEMU Runner 也尚无成功证据，因此不能把 checkpoint 结果外推为最终发布验收。详细环境、历史时间和证据边界见 [测试记录](docs/agentos/test-record.md)。
+`371.5s`、`127.9s` 和 `126.1s` 保留为 Workflow 强制撤销早期实现的历史数据。2026-07-26，提交 `75d0dfde716453af90d7310c6a1521968fcf7167` 在干净环境完成一次 `make full-verify TOOLPREFIX=riscv64-linux-gnu-`，墙钟 `19:45.97`；该 checkpoint 不能外推到后续代码。当前候选的 Reader、双目标、预算、聚合门和发布边界只在 [测试记录](docs/agentos/test-record.md) 集中维护，远端状态只由同一提交的 Runner attestation 判定。
 
 ### 6.2 双目标负载与实测边界
 
@@ -454,6 +460,7 @@ flowchart LR
 | 文件查询原始测量 | `results/latest/experiments/raw/file-query-benchmark.csv` | 保存强制遍历、冷索引和热索引的实际操作数、触达记录数、未经补值的 Guest 微秒差值及完整 provenance 字段。 |
 | 测量状态 | `results/latest/experiments/status.json` | 明确本轮测量是 `measured` 还是 `unavailable`，并引用来源日志、commit 与 run id。 |
 | 统计和图表 | `results/latest/experiments/experiment-stats.csv`、`results/latest/charts/experiment-file-query-bar.svg` | 只从已验证的文件查询原始测量聚合；图表不是独立证据。 |
+| 双目标完整状态 | `evidence/releases/<bundle>/logs/raw/dual-{plain,agentos}-complete-state.zip` | 确定性保存每侧完整 Guest 状态；Host run receipt 作为同目录独立 raw artifact，不混入 ZIP。 |
 | 最终证据包 | `evidence/releases/<bundle>/metrics/file-query-benchmark.{csv,json}` | 在 clean、已提交 HEAD 上由 `make full-verify` 采集并纳入逐文件校验和。 |
 
 `results/latest/` 是可覆盖的本地预览，不是最终发布证据。正式结论应引用已提交的 `evidence/releases/<bundle>/`，并先用 `scripts/capture-final-evidence.py verify` 核验。

@@ -20,16 +20,18 @@
 #define META_WRITEBACK_WAIT_ROUNDS 800
 #define OBSERVE_CROSS_QUERY_ROUNDS 32
 #define OBSERVE_CROSS_QUERY_MAX_MS 15000
-#define WORKFLOW_STORAGE_SCOPE_LIMIT 112
-#define WORKFLOW_STORAGE_OVERFLOW_COUNT \
-	(WORKFLOW_STORAGE_SCOPE_LIMIT + 1)
+#define WORKFLOW_CATALOG_SCOPE_LIMIT 112
+#define WORKFLOW_AUTOSCAN_SCOPE_LIMIT 96
+#define WORKFLOW_EXPLICIT_RESERVE 16
+#define WORKFLOW_STORAGE_PROBE_COUNT (WORKFLOW_AUTOSCAN_SCOPE_LIMIT + 1)
 #define PUBLIC_STORAGE_PROBE_COUNT 70
 #define QUOTA_PHASE_FILL 0
 #define QUOTA_PHASE_PEER_FILL 1
 #define QUOTA_PHASE_CLEANUP 2
 
-_Static_assert(WORKFLOW_STORAGE_OVERFLOW_COUNT < AGENT_FILE_META_MAX,
-	       "scope quota probe must fit the metadata table");
+_Static_assert(WORKFLOW_AUTOSCAN_SCOPE_LIMIT + WORKFLOW_EXPLICIT_RESERVE ==
+	       WORKFLOW_CATALOG_SCOPE_LIMIT,
+	       "catalog cache and explicit reserve must cover the partition");
 _Static_assert(PUBLIC_STORAGE_PROBE_COUNT <= 255,
 	       "public quota count must fit the child exit status");
 
@@ -57,6 +59,8 @@ struct observe_pressure_result {
 struct quota_fill_state {
 	int active;
 	int created;
+	int explicit_created;
+	int first_removed;
 };
 
 static struct agent_file_query_result scope_query_result;
@@ -755,37 +759,81 @@ static __attribute__((noinline)) int create_quota_files(char group, int max)
 	return created;
 }
 
-static __attribute__((noinline)) void remove_quota_files(char group, int count)
+static __attribute__((noinline)) void
+remove_quota_files_from(char group, int first, int count)
 {
 	char name[] = "qs000";
 
-	for (int i = 0; i < count; i++) {
+	for (int i = count - 1; i >= first; i--) {
 		quota_file_name(name, group, i);
 		check(unlink(name) == 0, "remove quota object");
 	}
 }
 
-static __attribute__((noinline)) void
-check_quota_file_absent(char group, int index)
+static __attribute__((noinline)) void remove_quota_files(char group, int count)
 {
-	char name[] = "qs000";
+	remove_quota_files_from(group, 0, count);
+}
 
-	quota_file_name(name, group, index);
-	check(open(name, O_RDONLY) < 0,
-	      "rejected quota path remains absent");
+static void explicit_meta_name(char *name, char group, int index)
+{
+	strcpy(name, "ms000");
+	name[1] = group;
+	name[2] = '0' + (index / 100) % 10;
+	name[3] = '0' + (index / 10) % 10;
+	name[4] = '0' + index % 10;
+}
+
+static __attribute__((noinline)) int
+create_explicit_metadata(char group, int max)
+{
+	struct agent_file_meta meta;
+	char name[] = "ms000";
+	int created = 0;
+
+	for (int i = 0; i < max; i++) {
+		explicit_meta_name(name, group, i);
+		memset(&meta, 0, sizeof(meta));
+		strcpy(meta.physical_name, name);
+		strcpy(meta.logical_path, name);
+		strcpy(meta.kind, "artifact");
+		strcpy(meta.status, "explicit");
+		meta.flags = AGENT_FILE_META_F_PERSIST;
+		if (agent_file_meta_set(&meta) != AGENT_STATUS_OK)
+			break;
+		created++;
+	}
+	return created;
 }
 
 static __attribute__((noinline)) void
-check_scope_catalog_path_count(const char *path, int expected)
+remove_explicit_metadata(char group, int count)
+{
+	char name[] = "ms000";
+
+	for (int i = count - 1; i >= 0; i--) {
+		explicit_meta_name(name, group, i);
+		check(unlink(name) == 0, "remove explicit metadata object");
+	}
+}
+
+static __attribute__((noinline)) int
+scope_catalog_path_count(const char *path)
 {
 	struct agent_file_query query;
-	int count;
 
 	memset(&query, 0, sizeof(query));
 	query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
 	strcpy(query.physical_name, path);
 	memset(&scope_query_result, 0, sizeof(scope_query_result));
-	count = agent_file_query(&query, &scope_query_result);
+	return agent_file_query(&query, &scope_query_result);
+}
+
+static __attribute__((noinline)) void
+check_scope_catalog_path_count(const char *path, int expected)
+{
+	int count = scope_catalog_path_count(path);
+
 	check(count == expected, "exact quota catalog query count");
 	check(scope_query_result.total_hits == expected &&
 		      scope_query_result.returned == expected,
@@ -799,6 +847,48 @@ check_quota_catalog_path_count(char group, int index, int expected)
 
 	quota_file_name(name, group, index);
 	check_scope_catalog_path_count(name, expected);
+}
+
+static __attribute__((noinline)) void
+wait_quota_catalog_rebuild(char group, int index, uint64 deferred_before)
+{
+	struct agent_info info;
+	char name[] = "qs000";
+	int count = -1;
+	int indexed = 0;
+	int stable = 0;
+
+	quota_file_name(name, group, index);
+	for (int i = 0; i < META_WRITEBACK_WAIT_ROUNDS; i++) {
+		if (!indexed)
+			count = scope_catalog_path_count(name);
+
+		memset(&info, 0, sizeof(info));
+		check(agent_info(&info) == 0, "read deferred catalog state");
+		if (!indexed && count == 1 && scope_query_result.total_hits == 1 &&
+		    scope_query_result.returned == 1 &&
+		    info.file_scan_deferred > deferred_before)
+			indexed = 1;
+		if (indexed && !info.file_scan_pending &&
+		    !info.metadata_writeback_pending &&
+		    info.metadata_writeback_dirty ==
+			info.metadata_writeback_durable)
+			stable++;
+		else
+			stable = 0;
+		if (stable >= 3)
+			return;
+		sleep(10);
+	}
+	printf("agentscope_ucore: rebuild timeout indexed=%d count=%d total=%d returned=%d "
+	       "deferred=%d/%d scan_pending=%d writeback=%d dirty=%d durable=%d\n",
+	       indexed, count, (int)scope_query_result.total_hits,
+	       (int)scope_query_result.returned, (int)deferred_before,
+	       (int)info.file_scan_deferred, (int)info.file_scan_pending,
+	       (int)info.metadata_writeback_pending,
+	       (int)info.metadata_writeback_dirty,
+	       (int)info.metadata_writeback_durable);
+	check(0, "deferred catalog object was not rebuilt durably");
 }
 
 static __attribute__((noinline)) int
@@ -836,12 +926,12 @@ run_scope_quota_writer(char group, int max)
 }
 
 static __attribute__((noinline)) void
-check_scope_catalog_no_space(char group)
+check_scope_catalog_no_space(char group, int index)
 {
 	struct agent_file_meta meta;
-	char name[] = "qm0";
+	char name[] = "ms000";
 
-	name[2] = group;
+	explicit_meta_name(name, group, index);
 	memset(&meta, 0, sizeof(meta));
 	strcpy(meta.physical_name, name);
 	strcpy(meta.logical_path, name);
@@ -855,25 +945,68 @@ check_scope_catalog_no_space(char group)
 }
 
 static __attribute__((noinline)) void
+check_autoscan_flag_no_space(char group)
+{
+	struct agent_file_meta meta;
+	char name[] = "xs000";
+
+	explicit_meta_name(name, group, 0);
+	name[0] = 'x';
+	memset(&meta, 0, sizeof(meta));
+	strcpy(meta.physical_name, name);
+	strcpy(meta.logical_path, name);
+	strcpy(meta.kind, "file");
+	strcpy(meta.status, "autoscan-probe");
+	meta.flags = AGENT_FILE_META_F_PERSIST | AGENT_FILE_META_F_AUTOSCAN;
+	check(agent_file_meta_set(&meta) == AGENT_STATUS_NO_SPACE,
+	      "explicit syscall cannot bypass the autoscan bound");
+	check(open(name, O_RDONLY) < 0,
+	      "rejected autoscan record was not published");
+}
+
+static __attribute__((noinline)) void
 fill_scope_storage_quota(struct quota_fill_state *state,
 			 uint64 *workflow_created, uint64 *public_created)
 {
+	struct agent_info before;
+	char released_name[] = "qs000";
 	int pid;
 	int public_count;
 
 	check(state != 0 && !state->active, "workflow quota fill state");
+	memset(&before, 0, sizeof(before));
+	check(agent_info(&before) == 0, "read catalog deferral baseline");
 
 	state->created = run_scope_quota_writer(
-		'a', WORKFLOW_STORAGE_OVERFLOW_COUNT);
-	check(state->created == WORKFLOW_STORAGE_SCOPE_LIMIT,
-	      "workflow reaches its fixed storage partition");
+		'a', WORKFLOW_STORAGE_PROBE_COUNT);
+	check(state->created == WORKFLOW_STORAGE_PROBE_COUNT,
+	      "workflow storage remains independent of catalog capacity");
 	check_quota_catalog_path_count(
-		'a', WORKFLOW_STORAGE_SCOPE_LIMIT - 1, 1);
-	check_quota_file_absent('a', WORKFLOW_STORAGE_SCOPE_LIMIT);
-	check_scope_catalog_no_space('a');
-	check(create_quota_files('c', 1) == 0,
-	      "same-scope writer cannot exceed the fixed partition");
-	check_quota_file_absent('c', 0);
+		'a', WORKFLOW_AUTOSCAN_SCOPE_LIMIT - 1, 1);
+	check_quota_catalog_path_count('a', WORKFLOW_AUTOSCAN_SCOPE_LIMIT, 0);
+	check_autoscan_flag_no_space('a');
+	state->explicit_created = create_explicit_metadata(
+		'a', WORKFLOW_EXPLICIT_RESERVE + 1);
+	check(state->explicit_created == WORKFLOW_EXPLICIT_RESERVE,
+	      "explicit metadata reserve remains available");
+	check_scope_catalog_no_space('a', WORKFLOW_EXPLICIT_RESERVE);
+	check(create_quota_files('c', 1) == 1,
+	      "full catalog does not reject a protected VFS object");
+	check_quota_catalog_path_count('c', 0, 0);
+	remove_quota_files('c', 1);
+	quota_file_name(released_name, 'a', 0);
+	check(unlink(released_name) == 0, "release autoscan catalog slot");
+	state->first_removed = 1;
+	wait_quota_catalog_rebuild(
+		'a', WORKFLOW_AUTOSCAN_SCOPE_LIMIT, before.file_scan_deferred);
+	check_quota_catalog_path_count('a', 0, 0);
+	check_quota_catalog_path_count('a', WORKFLOW_AUTOSCAN_SCOPE_LIMIT, 1);
+	check(agent_file_meta_init() == 0,
+	      "reload rebuilt autoscan catalog checkpoint");
+	check_quota_catalog_path_count('a', 0, 0);
+	check_quota_catalog_path_count('a', WORKFLOW_AUTOSCAN_SCOPE_LIMIT, 1);
+	printf("agentscope_ucore: catalog_deferred_rebuilt=1 released=1 "
+	       "durable=1 reload=1\n");
 
 	pid = fork();
 	check(pid >= 0, "create public quota writer");
@@ -897,18 +1030,26 @@ fill_scope_storage_quota(struct quota_fill_state *state,
 static __attribute__((noinline)) int probe_peer_storage_partition(void)
 {
 	int created = run_scope_quota_writer(
-		'e', WORKFLOW_STORAGE_OVERFLOW_COUNT);
+		'e', WORKFLOW_STORAGE_PROBE_COUNT);
 
-	check(created == WORKFLOW_STORAGE_SCOPE_LIMIT,
-	      "peer workflow has an independent fixed storage partition");
+	check(created == WORKFLOW_STORAGE_PROBE_COUNT,
+	      "peer workflow has independent storage capacity");
 	check_quota_catalog_path_count(
-		'e', WORKFLOW_STORAGE_SCOPE_LIMIT - 1, 1);
-	check_quota_file_absent('e', WORKFLOW_STORAGE_SCOPE_LIMIT);
-	check_scope_catalog_no_space('e');
-	check(create_quota_files('f', 1) == 0,
-	      "peer scope cannot exceed its fixed partition");
-	check_quota_file_absent('f', 0);
+		'e', WORKFLOW_AUTOSCAN_SCOPE_LIMIT - 1, 1);
+	check_quota_catalog_path_count('e', WORKFLOW_AUTOSCAN_SCOPE_LIMIT, 0);
+	check(open("qa096", O_RDONLY) < 0,
+	      "unindexed VFS object remains scope isolated");
+	check(create_explicit_metadata(
+		'e', WORKFLOW_EXPLICIT_RESERVE + 1) ==
+	      WORKFLOW_EXPLICIT_RESERVE,
+	      "peer explicit metadata reserve is independent");
+	check_scope_catalog_no_space('e', WORKFLOW_EXPLICIT_RESERVE);
+	check(create_quota_files('f', 1) == 1,
+	      "peer full catalog does not reject VFS storage");
+	check_quota_catalog_path_count('f', 0, 0);
+	remove_quota_files('f', 1);
 	remove_quota_files('e', created);
+	remove_explicit_metadata('e', WORKFLOW_EXPLICIT_RESERVE);
 	check(create_quota_files('g', 1) == 1,
 	      "peer storage partition is reusable after cleanup");
 	remove_quota_files('g', 1);
@@ -919,7 +1060,8 @@ static __attribute__((noinline)) void
 cleanup_scope_storage_quota(struct quota_fill_state *state)
 {
 	check(state != 0 && state->active, "workflow quota cleanup state");
-	remove_quota_files('a', state->created);
+	remove_quota_files_from('a', state->first_removed, state->created);
+	remove_explicit_metadata('a', state->explicit_created);
 	check(create_quota_files('d', 1) == 1,
 	      "workflow quota is reusable after cleanup");
 	remove_quota_files('d', 1);
@@ -1936,8 +2078,8 @@ int main(void)
 			      QUOTA_PHASE_PEER_FILL, 0,
 			      ready_b.scope_id,
 			      "peer scope has an independent storage partition");
-	check(quota_b.value0 == WORKFLOW_STORAGE_SCOPE_LIMIT,
-	      "peer scope fixed storage partition result");
+	check(quota_b.value0 == WORKFLOW_STORAGE_PROBE_COUNT,
+	      "peer scope storage probe result");
 	run_command(a_command[1], a_reply[0], 'T', QUOTA_PHASE_CLEANUP, 0,
 		    ready_a.scope_id, "release fixed workflow storage partition");
 
@@ -1983,10 +2125,12 @@ int main(void)
 	printf("agentscope_ucore: same_scope_collaboration=1\n");
 	printf("agentscope_ucore: pipe_redelegation_isolation=1\n");
 	printf("agentscope_ucore: metadata_transactions=1\n");
-	printf("agentscope_ucore: scope_storage_quota=1 scope_limit=%d "
-	       "workflow_created=%d peer_created=%d public_created=%d "
-	       "overflow_no_space=1 reusable=1\n",
-	       WORKFLOW_STORAGE_SCOPE_LIMIT, (int)quota_a.value0,
+	printf("agentscope_ucore: scope_storage_isolation=1 catalog_limit=%d "
+	       "autoscan_limit=%d explicit_reserve=%d workflow_created=%d "
+	       "peer_created=%d public_created=%d overflow_unindexed=1 "
+	       "autoscan_flag_no_space=1 explicit_no_space=1 reusable=1\n",
+	       WORKFLOW_CATALOG_SCOPE_LIMIT, WORKFLOW_AUTOSCAN_SCOPE_LIMIT,
+	       WORKFLOW_EXPLICIT_RESERVE, (int)quota_a.value0,
 	       (int)quota_b.value0, (int)quota_a.value1);
 	printf("agentscope_ucore: scope_reload_isolation=1\n");
 	printf("agentscope_ucore: metadata_write_coalescing=1 writes=%d commits=%d\n",

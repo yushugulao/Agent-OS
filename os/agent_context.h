@@ -27,7 +27,6 @@ int agent_context_map(struct proc *);
 int agent_context_init(struct proc *);
 int agent_context_read_record(struct proc *, uint64,
 			      struct agent_context_record *);
-int agent_context_write_header(struct proc *);
 int agent_context_append_prepare(struct proc *, uint64);
 int agent_context_append(struct proc *, struct agent_op *,
 			 struct agent_result *, uint64, int);

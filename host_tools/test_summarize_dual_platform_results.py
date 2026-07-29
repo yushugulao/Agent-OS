@@ -9,6 +9,7 @@ import tempfile
 from pathlib import Path
 
 import summarize_dual_platform_results as summary
+from dual_state_evidence_contract import RUN_RESULT_WORK_FILES
 from measured_experiments import extract_file_query_measurements, write_manifest
 from result_bundle_contract import validate_result_bundle
 
@@ -20,8 +21,6 @@ MARKER = (
     "cold_rebuild_records=512 cold_rebuild_included=1 "
     "warm_index_ops=64 warm_index_records=6 warm_index_duration_us=20 status=measured"
 )
-
-
 def write_json(path: Path, value: object) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -40,10 +39,11 @@ def fixture(work_dir: Path, measured: bool) -> None:
             "agentos_reference_products": 2,
             "plain_reference_records": 4,
             "agentos_reference_records": 4,
-            "source_bound_runtime_records": 8,
+            "guest_source_bound_runtime_records": 0,
             "embedded_action_records": 44,
             "agentos_evidence_checks": 32,
-            "agentos_mainflow_stages": 11,
+            "host_derived_mainflow_stages": 11,
+            "agentos_mainflow_verification_origin": "host_inventory",
             "agentos_mainflow_facts": 12,
             "run_result_match": 1,
             "cost_replacement_count": 1,
@@ -57,18 +57,8 @@ def fixture(work_dir: Path, measured: bool) -> None:
                     "status": "passed",
                 }
             ],
-            "runner_tick_pairs": 1,
-            "runner_tick_comparison": [
-                {
-                    "label": "文件对象查询",
-                    "plain_case": "user-fsmeta",
-                    "agentos_case": "agentos-fsmeta",
-                    "plain_ticks": 7,
-                    "agentos_ticks": 1,
-                    "saved_ticks": 6,
-                    "speedup_x100": 700,
-                }
-            ],
+            "runner_tick_status": "unavailable",
+            "runner_tick_reason": "plain_runtime_cases_zero",
             "status": "ready",
         },
     )
@@ -85,11 +75,23 @@ def fixture(work_dir: Path, measured: bool) -> None:
             "status": "ready",
         },
     )
-    for name in ("seeded-action-state", "host-platform-alignment", "host-test-alignment", "host-surface-alignment"):
+    for name in ("seeded-action-state", "host-surface-alignment"):
         write_json(work_dir / f"{name}.json", {"action_count": 44, "status": "ready"})
-    for target, elapsed in (("plain-state", "12.5"), ("agentos-state", "15.25")):
-        path = work_dir / target / "rp_host_run_result"
-        path.parent.mkdir()
+    write_json(
+        work_dir / "host-platform-alignment.json",
+        {
+            "status": "ready",
+            "mainflow_host_verified": True,
+            "mainflow_verification_origin": "host_inventory",
+            "mainflow_host_stages": 11,
+        },
+    )
+    write_json(
+        work_dir / "host-test-alignment.json",
+        {"status": "ready", "runtime_evidence_verified": True},
+    )
+    for target, elapsed in (("plain", "12.5"), ("agentos", "15.25")):
+        path = work_dir / RUN_RESULT_WORK_FILES[target]
         path.write_text(
             f"qemu_elapsed_seconds={elapsed}\nqemu_idle_notices=0\nqemu_timed_out=0\n",
             encoding="utf-8",
@@ -129,15 +131,17 @@ def main() -> int:
         assert result["status"] == "ready", result
         assert result["experiment_status"] == "measured", result
         assert result["experiment_rows"] == 6, result
+        assert result["runner_tick_status"] == "unavailable", result
+        assert result["runner_tick_reason"] == "plain_runtime_cases_zero", result
+        assert "runner_tick_pairs" not in result, result
+        assert "runner_tick_expected_pairs" not in result, result
         assert len(result["experiment_raw_csvs"]) == 1, result
-        assert len(result["charts"]) == 5, result
+        assert len(result["charts"]) == 3, result
         served = validate_result_bundle(out_dir)
         assert served["status"] == "valid" and served["rows"] == 6, served
         assert {Path(path).name for path in result["charts"]} == {
             "runtime-observation.svg",
             "cost-replacement.svg",
-            "runner-ticks.svg",
-            "runner-speedup.svg",
             "experiment-file-query-bar.svg",
         }, result
         for artifact in (
@@ -164,6 +168,11 @@ def main() -> int:
         assert all(row["source_log_sha256"] and row["source_marker_sha256"] for row in raw), raw
         assert all(row["source_command_json"] == '["make","run-agent-tests"]' for row in raw), raw
         assert {row["measurement_kind"] for row in raw} == {"guest-syscall"}, raw
+        sweep_rows = read_csv(out_dir / "runner-sweep.csv")
+        assert sweep_rows == [{
+            "evidence_status": "unavailable",
+            "evidence_reason": "plain_runtime_cases_zero",
+        }], sweep_rows
 
         status = json.loads((out_dir / "experiments" / "status.json").read_text(encoding="utf-8"))
         assert status["status"] == "measured" and status["rows"] == 6, status
@@ -205,19 +214,30 @@ def main() -> int:
         charts = out_dir / "charts"
         charts.mkdir()
         (charts / "experiment-context-line.svg").write_text("<svg/>\n", encoding="utf-8")
+        (charts / "runner-ticks.svg").write_text("<svg>stale ticks</svg>\n", encoding="utf-8")
+        (charts / "runner-speedup.svg").write_text("<svg>stale speedup</svg>\n", encoding="utf-8")
         result = summary.summarize(work_dir, out_dir)
         assert result["experiment_status"] == "unavailable", result
         assert result["experiment_rows"] == 0 and result["experiment_raw_csvs"] == [], result
-        assert len(result["charts"]) == 4, result
+        assert result["runner_tick_status"] == "unavailable", result
+        assert result["runner_tick_reason"] == "plain_runtime_cases_zero", result
+        assert "runner_tick_pairs" not in result, result
+        assert "runner_tick_expected_pairs" not in result, result
+        assert len(result["charts"]) == 2, result
         assert {Path(path).name for path in result["charts"]} == {
             "runtime-observation.svg",
             "cost-replacement.svg",
-            "runner-ticks.svg",
-            "runner-speedup.svg",
         }, result
         assert not (out_dir / "experiments" / "raw").exists()
         assert not (out_dir / "experiments" / "experiment-stats.csv").exists()
         assert not (out_dir / "charts" / "experiment-context-line.svg").exists()
+        assert not (out_dir / "charts" / "runner-ticks.svg").exists()
+        assert not (out_dir / "charts" / "runner-speedup.svg").exists()
+        sweep_rows = read_csv(out_dir / "runner-sweep.csv")
+        assert sweep_rows == [{
+            "evidence_status": "unavailable",
+            "evidence_reason": "plain_runtime_cases_zero",
+        }], sweep_rows
         status = json.loads((out_dir / "experiments" / "status.json").read_text(encoding="utf-8"))
         assert status == {
             "schema_version": 1,
@@ -225,13 +245,93 @@ def main() -> int:
             "rows": 0,
             "reason": "measured-experiments.json is missing",
         }, status
-        assert "unavailable" in (out_dir / "reader-guide.html").read_text(encoding="utf-8")
+        for artifact in ("report.md", "index.html", "monitor.html", "reader-guide.html"):
+            rendered = (out_dir / artifact).read_text(encoding="utf-8")
+            assert "unavailable" in rendered and "plain_runtime_cases_zero" in rendered, artifact
+            assert "charts/runner-" not in rendered, artifact
+        manifest_rows = read_csv(out_dir / "evidence-manifest.csv")
+        assert any(row["artifact"] == "runner-sweep.csv" for row in manifest_rows), manifest_rows
+        assert not any(row["artifact"].startswith("charts/runner-") for row in manifest_rows), manifest_rows
         try:
             summary.summarize(work_dir, out_dir, require_measured_experiments=True)
         except ValueError as error:
             assert "unavailable" in str(error), error
         else:
             raise AssertionError("required measured evidence was silently accepted")
+
+    with tempfile.TemporaryDirectory() as work_tmp, tempfile.TemporaryDirectory() as out_tmp:
+        work_dir, out_dir = Path(work_tmp), Path(out_tmp)
+        fixture(work_dir, measured=True)
+        result = summary.summarize(work_dir, out_dir, require_measured_experiments=True)
+        assert result["experiment_status"] == "measured", result
+        assert result["runner_tick_status"] == "unavailable", result
+        assert {Path(path).name for path in result["charts"]} == {
+            "runtime-observation.svg",
+            "cost-replacement.svg",
+            "experiment-file-query-bar.svg",
+        }, result
+
+    def bad_unavailable_reason(state: dict[str, object]) -> None:
+        state["runner_tick_reason"] = "unknown"
+
+    def measured_status(state: dict[str, object]) -> None:
+        state["runner_tick_status"] = "measured"
+
+    def removed_measurement_field(state: dict[str, object]) -> None:
+        state["runner_tick_pairs"] = 0
+
+    for mutate in (bad_unavailable_reason, measured_status, removed_measurement_field):
+        with tempfile.TemporaryDirectory() as work_tmp, tempfile.TemporaryDirectory() as out_tmp:
+            work_dir, out_dir = Path(work_tmp), Path(out_tmp)
+            fixture(work_dir, measured=True)
+            state_path = work_dir / "state-compare-summary.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            mutate(state)
+            write_json(state_path, state)
+            try:
+                summary.summarize(work_dir, out_dir)
+            except ValueError as error:
+                assert "runner tick" in str(error), error
+            else:
+                raise AssertionError(f"invalid runner evidence was silently accepted: {mutate.__name__}")
+
+    def legacy_mainflow_field(state: dict[str, object]) -> None:
+        state["agentos_mainflow_stages"] = 11
+
+    def guest_origin(state: dict[str, object]) -> None:
+        state["agentos_mainflow_verification_origin"] = "guest_claim"
+
+    def negative_guest_count(state: dict[str, object]) -> None:
+        state["guest_source_bound_runtime_records"] = -1
+
+    for mutate in (legacy_mainflow_field, guest_origin, negative_guest_count):
+        with tempfile.TemporaryDirectory() as work_tmp, tempfile.TemporaryDirectory() as out_tmp:
+            work_dir, out_dir = Path(work_tmp), Path(out_tmp)
+            fixture(work_dir, measured=True)
+            state_path = work_dir / "state-compare-summary.json"
+            state = json.loads(state_path.read_text(encoding="utf-8"))
+            mutate(state)
+            write_json(state_path, state)
+            try:
+                summary.summarize(work_dir, out_dir)
+            except ValueError as error:
+                assert "Mainflow" in str(error), error
+            else:
+                raise AssertionError(
+                    f"invalid Mainflow evidence was silently accepted: {mutate.__name__}"
+                )
+
+    with tempfile.TemporaryDirectory() as work_tmp, tempfile.TemporaryDirectory() as out_tmp:
+        work_dir, out_dir = Path(work_tmp), Path(out_tmp)
+        fixture(work_dir, measured=True)
+        state_path = work_dir / "state-compare-summary.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["guest_source_bound_runtime_records"] = 3
+        write_json(state_path, state)
+        result = summary.summarize(work_dir, out_dir)
+        assert result["status"] == "ready", result
+        report = (out_dir / "report.md").read_text(encoding="utf-8")
+        assert "Guest 来源绑定运行记录为 3，仅作观测计数" in report, report
 
     print("test_summarize_dual_platform_results: passed")
     return 0

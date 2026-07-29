@@ -14,6 +14,9 @@ int main(void)
 	if (!ok) return 1;
 
 	if (!rp_write_file("rp_prov_view",
+			   "evidence_file_role=demo_reference\n"
+			   "evidence_file_generation=demo_expected\n"
+			   "evidence_file_status=reference_ready\n"
 			   "run_id=RUN-042\n"
 			   "provenance_view_checks=64\n"
 			   "timeline_views=4\n"
@@ -28,6 +31,9 @@ int main(void)
 		return 1;
 	}
 	if (!rp_write_file("rp_prov_edges",
+			   "evidence_file_role=demo_reference\n"
+			   "evidence_file_generation=demo_expected\n"
+			   "evidence_file_status=reference_ready\n"
 			   "edges=12\n"
 			   "edge=1;source=rp_input;target=rp_stage_dag;kind=input_to_workflow;status=ready\n"
 			   "edge=2;source=rp_stage_dag;target=rp_stage_state;kind=workflow_to_state;status=ready\n"
@@ -44,6 +50,9 @@ int main(void)
 		return 1;
 	}
 	if (!rp_write_file("rp_evidence_packet",
+			   "evidence_file_role=demo_reference\n"
+			   "evidence_file_generation=demo_expected\n"
+			   "evidence_file_status=reference_ready\n"
 			   "packets=4\n"
 			   "packet=workflow-recovery;run=RUN-042;sources=rp_stage_state,rp_retry_plan,rp_artifact_manifest;checks=16;status=ready\n"
 			   "packet=report-source;run=RUN-042;sources=rp_report_text,rp_llm_packets,rp_review_dashboard;checks=16;status=ready\n"
@@ -52,6 +61,9 @@ int main(void)
 		return 1;
 	}
 	if (!rp_write_file("rp_timeline_view",
+			   "evidence_file_role=demo_reference\n"
+			   "evidence_file_generation=demo_expected\n"
+			   "evidence_file_status=reference_ready\n"
 			   "views=4\n"
 			   "view=run_timeline;events=9;source=rp_timeline;status=ready\n"
 			   "view=workflow_observer;events=8;source=rp_execobs;status=ready\n"
@@ -67,10 +79,10 @@ int main(void)
 			   "timeline_event=dossier;tick=42;actor=orchestrator;artifact=rp_review_pack;status=ready\n")) {
 		return 1;
 	}
-	if (!rp_append_file("rp_web_bundle", "provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=ready")) return 1;
-	if (!rp_append_file("rp_review_dashboard", "subsection=provenance_view;source=rp_prov_view;timeline=4;packets=4;checks=64;outcome=passed;status=ready")) return 1;
-	if (!rp_append_file("rp_package", "provenance_view_report=rp_prov_view;edges=12;packets=4;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "provenance_view_checks=64;timeline_views=4;subgraphs=3;packets=4;agentos_replacements=4;status=ready")) return 1;
+	if (!rp_append_file("rp_web_bundle", "evidence_role=demo_reference;catalog_generation=demo_expected;provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=reference_ready")) return 1;
+	if (!rp_append_file("rp_review_dashboard", "evidence_role=demo_reference;catalog_generation=demo_expected;subsection=provenance_view;source=rp_prov_view;timeline=4;packets=4;checks=64;outcome=passed;status=reference_ready")) return 1;
+	if (!rp_append_file("rp_package", "evidence_role=demo_reference;catalog_generation=demo_expected;provenance_view_report=rp_prov_view;edges=12;packets=4;status=reference_ready")) return 1;
+	if (!rp_append_file("rp_agentcmp", "evidence_role=demo_reference;catalog_generation=demo_expected;provenance_view_checks=64;timeline_views=4;subgraphs=3;packets=4;agentos_replacements=4;status=reference_ready")) return 1;
 	if (!rp_append_file("rp_ack", "ack=provenance_view;msg=prov;status=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=provenance_view.build_timeline")) return 1;
 	if (!rp_append_file("rp_tool", "tool=provenance_view.link_edges")) return 1;
@@ -78,6 +90,6 @@ int main(void)
 	if (!rp_append_file("rp_tool", "tool=provenance_view.publish_reader")) return 1;
 	if (!rp_append_file("rp_tool", "tool=provenance_view.compare_agentos")) return 1;
 	if (!rp_append_status("provenance_view=ready")) return 1;
-	printf("rp_prov_view: timelines=4 subgraphs=3 packets=4 checks=64 errors=0 status=ready\n");
+	printf("rp_prov_view: evidence_role=demo_reference catalog_generation=demo_expected timelines=4 subgraphs=3 packets=4 checks=64 errors=0 status=reference_ready\n");
 	return 0;
 }

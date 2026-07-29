@@ -180,7 +180,7 @@ static int run_kernel_exec_observer(void)
 		return -1;
 	}
 	if (!rp_append_file("rp_agentos_mainflow",
-			    "stage=timeline;agent_event_notify=kernel_queue;timeline_observe=kernel_snapshot;event_identity=verified;timeline_order=verified;wait=wakeup;heartbeat=verified;generation=runtime;status=verified"))
+			    "stage=timeline;agent_event_notify=kernel_queue;timeline_observe=kernel_snapshot;status=ready"))
 		return -1;
 	return 1;
 }

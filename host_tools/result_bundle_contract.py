@@ -35,9 +35,53 @@ CURRENT_RAW_FILES = {"file-query-benchmark.csv"}
 CURRENT_CHART_FILES = {
     "cost-replacement.svg",
     "experiment-file-query-bar.svg",
-    "runner-speedup.svg",
-    "runner-ticks.svg",
     "runtime-observation.svg",
+}
+SUMMARY_ARTIFACT_FIELDS = {
+    "report": Path("report.md"),
+    "index": Path("index.html"),
+    "monitor": Path("monitor.html"),
+    "reader_guide": Path("reader-guide.html"),
+    "csv": Path("summary.csv"),
+    "runner_sweep_csv": Path("runner-sweep.csv"),
+    "experiment_status_json": Path("experiments") / "status.json",
+    "experiment_stats_csv": Path("experiments") / "experiment-stats.csv",
+    "experiment_mechanism_csv": Path("experiments") / "mechanism-notes.csv",
+    "delivery_readiness_csv": Path("delivery-readiness.csv"),
+    "delivery_readiness": Path("delivery-readiness.html"),
+    "test_suite_csv": Path("test-suite.csv"),
+    "test_suite": Path("test-suite.html"),
+    "experiment_design_csv": Path("experiment-design.csv"),
+    "experiment_design": Path("experiment-design.html"),
+    "evidence_manifest_csv": Path("evidence-manifest.csv"),
+    "evidence_map": Path("evidence-map.html"),
+    "reader_checklist_csv": Path("reader-checklist.csv"),
+    "reader_checklist": Path("reader-checklist.html"),
+}
+SUMMARY_CHART_PATHS = (
+    Path("charts") / "runtime-observation.svg",
+    Path("charts") / "cost-replacement.svg",
+    Path("charts") / "experiment-file-query-bar.svg",
+)
+SUMMARY_RAW_PATHS = (Path("experiments") / "raw" / "file-query-benchmark.csv",)
+SUMMARY_FIELDS = frozenset(
+    {
+        "status",
+        "rows",
+        "charts",
+        "runner_tick_status",
+        "runner_tick_reason",
+        "experiment_status",
+        "experiment_raw_csvs",
+        "experiment_rows",
+        *SUMMARY_ARTIFACT_FIELDS,
+    }
+)
+RUNNER_SWEEP_FIELDS = ["evidence_status", "evidence_reason"]
+REMOVED_RUNNER_SUMMARY_FIELDS = {
+    "runner_tick_comparison",
+    "runner_tick_pairs",
+    "runner_tick_expected_pairs",
 }
 STATUS_FIELDS = {
     "schema_version",
@@ -182,13 +226,132 @@ def _validate_measurement_csv(path: Path, rows: list[object]) -> None:
         raise ResultBundleError("measurement raw CSV rows do not match the manifest")
 
 
-def validate_result_bundle(result_dir: Path) -> dict[str, Any]:
+def _validate_runner_evidence(root: Path, summary: dict[str, Any]) -> None:
+    sweep_path = _safe_regular_file(root, Path("runner-sweep.csv"), "runner sweep CSV")
+    try:
+        with sweep_path.open(encoding="utf-8", newline="") as handle:
+            reader = csv.DictReader(handle)
+            if reader.fieldnames != RUNNER_SWEEP_FIELDS:
+                raise ResultBundleError("runner sweep CSV fields differ")
+            rows = list(reader)
+    except ResultBundleError:
+        raise
+    except (OSError, UnicodeError, csv.Error) as error:
+        raise ResultBundleError(f"runner sweep CSV is invalid: {error}") from error
+
+    status = summary.get("runner_tick_status")
+    reason = summary.get("runner_tick_reason")
+    if status != "unavailable" or reason != "plain_runtime_cases_zero":
+        raise ResultBundleError("runner availability summary differs")
+    if rows != [
+        {
+            "evidence_status": "unavailable",
+            "evidence_reason": "plain_runtime_cases_zero",
+        }
+    ]:
+        raise ResultBundleError("runner availability sweep differs")
+
+
+def _validate_summary_artifact_path(
+    root: Path,
+    published_root: Path,
+    value: object,
+    relative: Path,
+    label: str,
+) -> None:
+    _safe_regular_file(root, relative, label)
+    if not isinstance(value, str) or not value:
+        raise ResultBundleError(f"{label} path is missing")
+    candidate = Path(value)
+    if candidate.is_absolute():
+        expected = (published_root / relative).resolve(strict=False)
+        try:
+            actual = candidate.resolve(strict=False)
+        except OSError as error:
+            raise ResultBundleError(f"{label} path is unavailable: {error}") from error
+        if actual != expected:
+            raise ResultBundleError(f"{label} path is not bound to the published result")
+        return
+    if candidate != relative or ".." in candidate.parts:
+        raise ResultBundleError(f"{label} path is not a canonical bundle-relative path")
+
+
+def _validate_summary_artifacts(
+    root: Path, published_root: Path, summary: dict[str, Any]
+) -> None:
+    for field, relative in SUMMARY_ARTIFACT_FIELDS.items():
+        _validate_summary_artifact_path(
+            root, published_root, summary.get(field), relative, f"result summary {field}"
+        )
+    for field, relatives in (
+        ("charts", SUMMARY_CHART_PATHS),
+        ("experiment_raw_csvs", SUMMARY_RAW_PATHS),
+    ):
+        values = summary.get(field)
+        if not isinstance(values, list) or len(values) != len(relatives):
+            raise ResultBundleError(f"result summary {field} inventory differs")
+        for index, (value, relative) in enumerate(zip(values, relatives)):
+            _validate_summary_artifact_path(
+                root,
+                published_root,
+                value,
+                relative,
+                f"result summary {field}[{index}]",
+            )
+
+
+def _validate_bundle_inventory(root: Path, source_name: str) -> None:
+    expected_files = {
+        Path("summary.json"),
+        Path("experiments") / "measured-experiments.json",
+        Path("experiments") / source_name,
+        *SUMMARY_ARTIFACT_FIELDS.values(),
+        *SUMMARY_CHART_PATHS,
+        *SUMMARY_RAW_PATHS,
+    }
+    actual_files: set[Path] = set()
+    actual_directories: set[Path] = set()
+    for directory, directories, files in os.walk(root, followlinks=False):
+        base = Path(directory)
+        relative_base = base.relative_to(root)
+        for name in directories:
+            actual_directories.add(relative_base / name)
+        for name in files:
+            actual_files.add(relative_base / name)
+    expected_directories = {
+        parent
+        for path in expected_files
+        for parent in path.parents
+        if parent != Path(".")
+    }
+    if actual_files != expected_files:
+        raise ResultBundleError(
+            "result bundle file inventory differs: "
+            f"missing={sorted(str(path) for path in expected_files - actual_files)} "
+            f"extra={sorted(str(path) for path in actual_files - expected_files)}"
+        )
+    if actual_directories != expected_directories:
+        raise ResultBundleError(
+            "result bundle directory inventory differs: "
+            f"missing={sorted(str(path) for path in expected_directories - actual_directories)} "
+            f"extra={sorted(str(path) for path in actual_directories - expected_directories)}"
+        )
+
+
+def validate_result_bundle(
+    result_dir: Path, published_dir: Path | None = None
+) -> dict[str, Any]:
     if _is_link(result_dir) or not result_dir.is_dir():
         raise ResultBundleError("result directory is missing or is a symlink")
     try:
         root = result_dir.resolve(strict=True)
     except OSError as error:
         raise ResultBundleError(f"result directory is unavailable: {error}") from error
+    published_root = (
+        root
+        if published_dir is None
+        else Path(os.path.abspath(published_dir)).resolve(strict=False)
+    )
 
     _reject_symlinks(root)
     _reject_legacy_products(root)
@@ -207,6 +370,12 @@ def validate_result_bundle(result_dir: Path) -> dict[str, Any]:
     summary = _read_json(summary_path, "result summary")
     status = _read_json(status_path, "experiment status")
     manifest_json = _read_json(manifest_path, "measurement manifest")
+    if REMOVED_RUNNER_SUMMARY_FIELDS & set(summary):
+        raise ResultBundleError("removed runner measurement fields are present")
+    if set(summary) != SUMMARY_FIELDS:
+        raise ResultBundleError("result summary fields do not match the closed contract")
+    _validate_runner_evidence(root, summary)
+    _validate_summary_artifacts(root, published_root, summary)
 
     source = manifest_json.get("source")
     if not isinstance(source, dict):
@@ -220,6 +389,7 @@ def validate_result_bundle(result_dir: Path) -> dict[str, Any]:
     experiments_root = (root / "experiments").resolve(strict=True)
     if source_path.parent != experiments_root:
         raise ResultBundleError("measurement source log escaped the experiments directory")
+    _validate_bundle_inventory(root, source_name)
 
     try:
         manifest = verify_manifest(manifest_path, experiments_root)
@@ -270,9 +440,10 @@ def main() -> int:
         description="Validate a provenance-bound Reader result bundle before serving it."
     )
     parser.add_argument("--result-dir", type=Path, required=True)
+    parser.add_argument("--published-dir", type=Path, default=None)
     args = parser.parse_args()
     try:
-        result = validate_result_bundle(args.result_dir)
+        result = validate_result_bundle(args.result_dir, args.published_dir)
     except ResultBundleError as error:
         print(f"result_bundle_contract: invalid: {error}", file=sys.stderr)
         return 1

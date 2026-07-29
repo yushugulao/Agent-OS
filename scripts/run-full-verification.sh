@@ -189,6 +189,34 @@ echo "[full-verify] AgentOS kernel tests"
 )
 evidence_step_end "agent-suite" "agent-suite-timings.log" "agent-suite-guest.log"
 
+mapfile -t mainflow_artifact_specs < <(
+	PYTHONPATH="${ROOT_DIR}/host_tools" "${PYTHON_BIN}" -c '
+from dual_state_evidence_contract import (
+    BACKEND_REPORT_ARTIFACTS,
+    MAIN_FLOW_SOURCE_ARTIFACTS, MAIN_FLOW_SOURCE_SPECS,
+    MAIN_FLOW_TELEMETRY_ARTIFACT, PROGRAM_LEDGER_ARTIFACTS,
+    RUN_RESULT_ARTIFACTS, RUN_RESULT_WORK_FILES, SEEDED_ACTION_SUMMARY_ARTIFACT,
+    STATE_ARCHIVE_ARTIFACTS,
+)
+print("agentos-state/rp_agentos_mainflow\t" + MAIN_FLOW_TELEMETRY_ARTIFACT)
+for spec in MAIN_FLOW_SOURCE_SPECS:
+    print("agentos-state/" + spec.source + "\t" + MAIN_FLOW_SOURCE_ARTIFACTS[spec.source])
+print("plain-state/rp_orch_timing\t" + PROGRAM_LEDGER_ARTIFACTS["plain"])
+print("agentos-state/rp_orch_timing\t" + PROGRAM_LEDGER_ARTIFACTS["agentos"])
+print("plain-state/rp_backend_exec\t" + BACKEND_REPORT_ARTIFACTS["plain"])
+print("agentos-state/rp_backend_exec\t" + BACKEND_REPORT_ARTIFACTS["agentos"])
+print(RUN_RESULT_WORK_FILES["plain"] + "\t" + RUN_RESULT_ARTIFACTS["plain"])
+print(RUN_RESULT_WORK_FILES["agentos"] + "\t" + RUN_RESULT_ARTIFACTS["agentos"])
+print("seeded-action-state.json\t" + SEEDED_ACTION_SUMMARY_ARTIFACT)
+print("plain-complete-state.zip\t" + STATE_ARCHIVE_ARTIFACTS["plain"])
+print("agentos-complete-state.zip\t" + STATE_ARCHIVE_ARTIFACTS["agentos"])
+'
+)
+mainflow_artifacts=()
+for pair in "${mainflow_artifact_specs[@]}"; do
+	mainflow_artifacts+=("${pair#*$'\t'}")
+done
+
 evidence_step_begin
 echo "[full-verify] dual platforms"
 (
@@ -199,6 +227,14 @@ echo "[full-verify] dual platforms"
 		DUAL_LOG_DIR="${dual_dir}" RESULT_DIR="${result_dir}" \
 			TOOLPREFIX="${TOOLPREFIX}" QEMU="${QEMU}" \
 			PYTHON_BIN="${PYTHON_BIN}" bash scripts/run-dual-platforms.sh
+		PYTHONPATH="${ROOT_DIR}/host_tools" "${PYTHON_BIN}" \
+			"${ROOT_DIR}/host_tools/dual_state_archive.py" \
+			--state-dir "${dual_dir}/plain-state" \
+			--output "${dual_dir}/plain-complete-state.zip"
+		PYTHONPATH="${ROOT_DIR}/host_tools" "${PYTHON_BIN}" \
+			"${ROOT_DIR}/host_tools/dual_state_archive.py" \
+			--state-dir "${dual_dir}/agentos-state" \
+			--output "${dual_dir}/agentos-complete-state.zip"
 		evidence_publish_file \
 			"${dual_dir}/seeded-action-state/plain/ucore-run.log" \
 			"dual-plain-qemu.log"
@@ -214,6 +250,15 @@ echo "[full-verify] dual platforms"
 		evidence_publish_file \
 			"${dual_dir}/reader-compare-summary.json" \
 			"dual-reader-compare.json"
+		evidence_publish_file \
+			"${dual_dir}/host-platform-alignment.json" \
+			"host-platform-alignment.json"
+		for pair in "${mainflow_artifact_specs[@]}"; do
+			source="${pair%%$'\t'*}"
+			artifact="${pair#*$'\t'}"
+			evidence_publish_file \
+				"${dual_dir}/${source}" "${artifact}"
+		done
 		evidence_publish_file \
 			"${result_dir}/experiments/dual-targeted-agentbench-guest.log" \
 			"dual-targeted-agentbench-guest.log"
@@ -231,7 +276,8 @@ echo "[full-verify] dual platforms"
 evidence_step_end "dual-platforms" \
 	"dual-plain-qemu.log" "dual-agentos-qemu.log" \
 	"dual-stage-timings.csv" "dual-state-compare.json" \
-	"dual-reader-compare.json" "dual-targeted-agentbench-guest.log" \
+	"dual-reader-compare.json" "host-platform-alignment.json" \
+	"${mainflow_artifacts[@]}" "dual-targeted-agentbench-guest.log" \
 	"dual-measured-experiments.json" "dual-file-query-benchmark.csv"
 
 evidence_step_begin

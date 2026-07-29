@@ -602,6 +602,7 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-physical-brk-wiring.py \
 	scripts/test-printf-format-contract.py \
 	scripts/test-rp-evidence-file-field.py \
+	scripts/test-rp-state-append.py \
 	scripts/test-resource-kind-policy.py \
 	scripts/test-sync-owner-wiring.py \
 	scripts/test-validate-virtio-disk-log.py \
@@ -660,7 +661,7 @@ host-contract-selftest: $(HOST_CONTRACT_TESTS)
 		$(PYTHON_BIN) "$$test"; \
 	done
 
-evidence-capture-selftest: scripts/capture-final-evidence.py scripts/fs-allocator-evidence.py host_tools/agent_metadata_disk_format.py host_tools/agent_observe_disk_acceptance.py host_tools/agent_observe_disk_contract.py host_tools/agent_observe_disk_evidence.py host_tools/agent_observe_disk_fixture.py host_tools/plain_ucore_fs_extract.py ci/agent-metadata-disk-format.json ci/agent-observe-disk-format.json host_tools/measured_experiments.py host_tools/evidence_delivery_contract.py host_tools/evidence_semantic_common.py host_tools/evidence_semantic_metadata.py host_tools/evidence_semantic_profiles.py host_tools/evidence_semantic_registry.py host_tools/remote_ci_archive.py host_tools/remote_ci_bundle.py host_tools/remote_ci_evidence.py host_tools/remote_ci_job_semantics.py host_tools/remote_ci_test_fixture.py host_tools/test_capture_final_evidence.py host_tools/test_evidence_delivery_contract.py
+evidence-capture-selftest: scripts/capture-final-evidence.py scripts/fs-allocator-evidence.py host_tools/agent_metadata_disk_format.py host_tools/agent_observe_disk_acceptance.py host_tools/agent_observe_disk_contract.py host_tools/agent_observe_disk_evidence.py host_tools/agent_observe_disk_fixture.py host_tools/plain_ucore_fs_extract.py ci/agent-metadata-disk-format.json ci/agent-observe-disk-format.json host_tools/measured_experiments.py host_tools/evidence_delivery_contract.py host_tools/dual_state_archive.py host_tools/result_bundle_publication.py host_tools/dual_state_evidence_contract.py host_tools/evidence_semantic_common.py host_tools/evidence_semantic_dual.py host_tools/evidence_semantic_metadata.py host_tools/evidence_semantic_profiles.py host_tools/evidence_semantic_registry.py host_tools/remote_ci_archive.py host_tools/remote_ci_bundle.py host_tools/remote_ci_evidence.py host_tools/remote_ci_job_semantics.py host_tools/remote_ci_test_fixture.py host_tools/test_capture_final_evidence.py host_tools/test_evidence_delivery_contract.py
 	@$(PYTHON_BIN) host_tools/test_capture_final_evidence.py
 	@$(PYTHON_BIN) host_tools/test_evidence_delivery_contract.py
 

@@ -110,8 +110,6 @@ void agent_ipc_proc_teardown(struct proc *);
 void agent_ipc_exec_public(struct proc *);
 void agent_ipc_thread_runtime_transition(struct thread *, int);
 void agent_ipc_process_image_install_locked(struct proc *);
-void agent_ipc_sched_snapshot(struct proc *,
-			      struct agent_ipc_sched_snapshot *);
 void agent_ipc_thread_sched_snapshot(struct thread *,
 				     struct agent_ipc_sched_snapshot *);
 int agent_ipc_legacy_public_send(struct proc *, int, char *, int);

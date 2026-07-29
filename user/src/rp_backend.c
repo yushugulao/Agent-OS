@@ -205,7 +205,7 @@ static int run_kernel_edit_check(void)
 		return -1;
 	}
 	if (!rp_append_file("rp_agentos_mainflow",
-			    "stage=edit_conflict;edit_lease=kernel_exclusive;holder_write=checked;version_commit=checked;resource_identity=dev_inum;status=ready")) {
+			    "stage=edit_conflict;edit_lease=kernel_exclusive;status=ready")) {
 		return -1;
 	}
 	return 1;
@@ -313,7 +313,7 @@ int main(void)
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "context_trusted=kernel_shadow");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "dependency_graph=kernel_records");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "metadata_query=used_index");
-	ok = ok && rp_file_contains("rp_agentos_mainflow", "prefetch_hint=dependency_driven");
+	ok = ok && rp_file_contains("rp_agentos_kernel", "prefetch_hint=dependency_driven");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "agent_event_notify=kernel_queue");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "failure_recovery=generic_action");
 	ok = ok && rp_file_contains("rp_agentos_mainflow", "provenance_audit=kernel_ledger");

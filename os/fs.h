@@ -166,7 +166,7 @@ struct fs_storage_charge {
 // On-disk inode structure
 struct dinode {
 	short type; // File type
-	short agent_meta_slot; // Agent metadata slot plus one; zero means none
+	short agent_meta_slot; // slot plus one; zero=unknown, -1=capacity deferred
 	short agent_meta_flags;
 	short agent_meta_version;
 	uint size; // Size of file (bytes)
@@ -246,6 +246,7 @@ int fs_storage_scope_account_create(
 	uint, struct resource_account_handle *);
 int fs_storage_owner_account(uint, struct resource_account_handle *);
 void fs_storage_scope_account_close(struct resource_account_handle);
+int fs_dirent_canonicalize(const char *, char [DIRSIZ + 1]);
 int dirlink(struct inode *, char *, uint, const struct vfs_cred *);
 int dirunlink(struct inode *, char *, uint, uint, uint,
 	      const struct vfs_cred *, uint);

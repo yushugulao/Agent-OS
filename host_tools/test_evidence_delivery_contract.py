@@ -36,14 +36,14 @@ class DeliveryFixture:
         git(root, "init", "-q")
         git(root, "config", "user.email", "evidence@example.invalid")
         git(root, "config", "user.name", "Evidence Test")
+        git(root, "config", "core.autocrlf", "false")
         index = root / INDEX_PATH
         index.parent.mkdir(parents=True)
-        index.write_text(
-            "# Final Evidence Releases\n\n"
-            "Release records below are append-only and are validated against the containing Git commit.\n",
-            encoding="ascii",
+        index.write_bytes(
+            b"# Final Evidence Releases\n\n"
+            b"Release records below are append-only and are validated against the containing Git commit.\n"
         )
-        (root / "source.txt").write_text("source C\n", encoding="ascii")
+        (root / "source.txt").write_bytes(b"source C\n")
         git(root, "add", "-A")
         git(root, "commit", "-q", "-m", "source")
         self.source = git(root, "rev-parse", "HEAD")
@@ -54,11 +54,12 @@ class DeliveryFixture:
         output = self.repo / release["release"]["path"]
         stage = output.with_name(f".{self.name}.stage")
         stage.mkdir()
-        (stage / "manifest.json").write_text(
-            json.dumps({"commit": self.source, "delivery": release}) + "\n",
-            encoding="utf-8",
+        (stage / "manifest.json").write_bytes(
+            (json.dumps({"commit": self.source, "delivery": release}) + "\n").encode(
+                "utf-8"
+            )
         )
-        (stage / "payload.log").write_text("measured evidence\n", encoding="ascii")
+        (stage / "payload.log").write_bytes(b"measured evidence\n")
         if symlink:
             os.symlink("payload.log", stage / "alias.log")
         publish_bundle_and_index(
@@ -75,7 +76,11 @@ class DeliveryFixture:
 class EvidenceDeliveryContractTests(unittest.TestCase):
     def test_exact_evidence_only_commit_is_accepted(self) -> None:
         with tempfile.TemporaryDirectory() as temp:
-            fixture = DeliveryFixture(Path(temp))
+            root = Path(temp)
+            (root / "path-alias").mkdir()
+            # Preserve a lexical alias until the production containment check.
+            # This reproduces Windows 8.3/long-path disagreement on every OS.
+            fixture = DeliveryFixture(root / "path-alias" / "..")
             bundle = fixture.publish()
             with self.assertRaisesRegex(DeliveryContractError, "dirty"):
                 verify_manifest_delivery(bundle, fixture.repo)

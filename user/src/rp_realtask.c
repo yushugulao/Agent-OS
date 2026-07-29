@@ -79,7 +79,7 @@ static int run_kernel_realtask_stage(void)
 		return -1;
 	}
 	if (!rp_append_file("rp_agentos_mainflow",
-			    "stage=real_task;real_task_context=kernel_shadow;answer_audit=kernel_audit_seen;report_metadata=kernel_index;status=ready"))
+			    "stage=real_task;real_task_context=kernel_shadow;status=ready"))
 		return -1;
 	return 1;
 }

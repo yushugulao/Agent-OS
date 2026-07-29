@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import ast
 import json
+import os
+import subprocess
 import tempfile
 import threading
 from http.server import ThreadingHTTPServer
@@ -13,6 +15,59 @@ from urllib import error, request
 
 import plain_ucore_reader
 import test_plain_ucore_reader_e2e
+
+
+def create_directory_link(link: Path, target: Path) -> bool:
+    if os.name == "nt":
+        completed = subprocess.run(
+            ["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        return completed.returncode == 0 and plain_ucore_reader.path_is_link(link)
+    try:
+        link.symlink_to(target, target_is_directory=True)
+        return True
+    except OSError:
+        return False
+
+
+def remove_directory_link(link: Path) -> None:
+    if link.is_symlink():
+        link.unlink()
+    elif plain_ucore_reader.path_is_link(link):
+        link.rmdir()
+
+
+def ready_receipt_text(state_dir: Path, embedded_action_records: int = 1) -> str:
+    state_files, state_sha256 = plain_ucore_reader.guest_state_inventory_sha256(
+        state_dir, excluded_names=plain_ucore_reader.HOST_ONLY_STATE_FILES
+    )
+    return (
+        "host_runner=plain_ucore_action_runner\n"
+        "target=plain\n"
+        "chapter=platform_seeded\n"
+        "init_proc=rp_seed_orch\n"
+        "status=ready\n"
+        "passed=1\n"
+        f"embedded_action_records={embedded_action_records}\n"
+        f"extracted_state_files={state_files}\n"
+        f"guest_state_receipt_schema={plain_ucore_reader.GUEST_STATE_RECEIPT_SCHEMA}\n"
+        f"guest_state_files={state_files}\n"
+        f"guest_state_sha256={state_sha256}\n"
+        "build_returncode=0\n"
+        "guest_returncode=0\n"
+        "guest_raw_returncode=0\n"
+        "failure_phase=\n"
+        "failure_reason=\n"
+        "qemu_timed_out=0\n"
+        "qemu_runner_terminated=0\n"
+        "qemu_runner_signals=\n"
+        "qemu_output_eof=1\n"
+        "qemu_orch_passed=1\n"
+    )
 
 
 class FakeRunner:
@@ -34,6 +89,16 @@ class FakeRunner:
         return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
 
     @staticmethod
+    def revoke_published_receipt(
+        state_dir: Path, host_run_result_path: Path | None = None
+    ) -> None:
+        legacy = state_dir / "rp_host_run_result"
+        if legacy.is_file():
+            legacy.unlink()
+        if host_run_result_path is not None and host_run_result_path.is_file():
+            host_run_result_path.unlink()
+
+    @staticmethod
     def prepare_action_state(actions: list[dict[str, object]], state_dir: Path, run_dir: Path) -> dict[str, object]:
         next_state = run_dir / "state-next"
         next_state.mkdir(parents=True, exist_ok=True)
@@ -50,17 +115,56 @@ class FakeRunner:
     @staticmethod
     def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_distro: str) -> dict[str, object]:
         next_state = run_dir / "state-next"
-        (next_state / "rp_host_run_result").write_text(
-            "host_runner=fake\npassed=1\nqemu_orch_passed=1\nstatus=ready\n",
-            encoding="utf-8",
+        for item in tuple(next_state.iterdir()):
+            if item.name in plain_ucore_reader.HOST_ONLY_STATE_FILES:
+                item.unlink()
+        (next_state / "rp_host_run_result").write_bytes(
+            ready_receipt_text(next_state).encode("utf-8")
         )
         return {"passed": True, "status": "ready", "embedded_action_records": 1, "log": str(run_dir / "fake.log")}
 
     @staticmethod
-    def publish_next_state(next_state: Path, state_dir: Path) -> None:
+    def publish_next_state(
+        next_state: Path, state_dir: Path, host_run_result_path: Path | None = None
+    ) -> None:
+        legacy = state_dir / "rp_host_run_result"
+        if legacy.exists():
+            legacy.unlink()
+        sources = {
+            item.name: item
+            for item in next_state.iterdir()
+            if item.is_file()
+            and item.name.startswith("rp_")
+            and item.name != "rp_host_run_result"
+        }
+        for name, item in sources.items():
+            (state_dir / name).write_bytes(item.read_bytes())
+        for item in tuple(state_dir.iterdir()):
+            if item.is_file() and item.name.startswith("rp_") and item.name not in sources:
+                item.unlink()
         for item in next_state.iterdir():
-            if item.is_file() and item.name.startswith("rp_"):
-                (state_dir / item.name).write_text(item.read_text(encoding="utf-8"), encoding="utf-8")
+            if item.name != "rp_host_run_result" or not item.is_file():
+                continue
+            if host_run_result_path is not None:
+                host_run_result_path.write_bytes(item.read_bytes())
+
+
+class FailedRunner(FakeRunner):
+    publish_called = False
+
+    @staticmethod
+    def run_plain_ucore(repo_dir: Path, run_dir: Path, timeout_seconds: int, wsl_distro: str) -> dict[str, object]:
+        (run_dir / "state-next" / "rp_host_run_result").write_text(
+            "status=failed\npassed=0\n", encoding="utf-8"
+        )
+        return {"passed": False, "status": "failed", "failure_reason": "fixture"}
+
+    @classmethod
+    def publish_next_state(
+        cls, next_state: Path, state_dir: Path, host_run_result_path: Path | None = None
+    ) -> None:
+        cls.publish_called = True
+        raise AssertionError("failed run must not publish Guest state")
 
 
 class FakeRelay:
@@ -1156,7 +1260,8 @@ status=ready
     ),
     "rp_agentos_collab_ack": (
         "agent=sentinel\n"
-        "event=handoff=recovery-auditor\n"
+        "event=handoff\n"
+        "route=recovery-auditor\n"
         "delivery=kernel_event_queue\n"
         "permission_control=sentinel_action_denied\n"
         "status=ready\n"
@@ -1618,6 +1723,7 @@ def main() -> int:
         assert summary["status"] == "ready", summary
         assert summary["pages"] == 40, summary
         assert summary["api_json_files"] == len(STATE_FILES) + 7, summary
+        assert summary["alignment_api_files"] == 6, summary
         assert (out_dir / "index.html").exists()
         assert (out_dir / "run.html").exists()
         assert (out_dir / "workflow.html").exists()
@@ -2330,6 +2436,58 @@ def main() -> int:
         assert "Action Impact" in actions_html
         assert "Action Delta" in actions_html
         assert "/actions/research/run" in actions_html
+
+        host_run_result = out_dir / "declared-host-run-result.state"
+        receipt_state_files, _receipt_digest = (
+            plain_ucore_reader.guest_state_inventory_sha256(
+                state_dir,
+                excluded_names=plain_ucore_reader.HOST_ONLY_STATE_FILES,
+            )
+        )
+        assert receipt_state_files == len(STATE_FILES)
+        host_run_result.write_bytes(
+            ready_receipt_text(state_dir).encode("utf-8")
+        )
+        sidecar_summary = plain_ucore_reader.render_site(
+            state_dir,
+            out_dir,
+            platform_alignment,
+            test_alignment,
+            surface_alignment,
+            seeded_action_state,
+            host_run_result,
+            "plain",
+        )
+        assert sidecar_summary["status"] == "ready", sidecar_summary
+        assert sidecar_summary["state_files"] == len(STATE_FILES), sidecar_summary
+        assert sidecar_summary["alignment_api_files"] == 6, sidecar_summary
+        assert not (state_dir / "rp_host_run_result").exists()
+        actions_html = (out_dir / "actions.html").read_text(encoding="utf-8")
+        assert "rp_host_run_result" in actions_html
+        assert "qemu_orch_passed" in actions_html
+        assert "plain_ucore_action_runner" in actions_html
+        host_api = json.loads(
+            (out_dir / "api" / "rp_host_run_result.json").read_text(encoding="utf-8")
+        )
+        assert host_api["values"]["qemu_orch_passed"] == "1", host_api
+
+        bound_path = state_dir / "rp_input"
+        bound_bytes = bound_path.read_bytes()
+        bound_path.write_bytes(bytes([bound_bytes[0] ^ 1]) + bound_bytes[1:])
+        try:
+            plain_ucore_reader.render_site(
+                state_dir,
+                out_dir,
+                host_run_result_path=host_run_result,
+                expected_target="plain",
+            )
+        except ValueError as receipt_error:
+            assert "contents" in str(receipt_error), receipt_error
+        else:
+            raise AssertionError("same-count Guest content mutation kept a valid receipt")
+        finally:
+            bound_path.write_bytes(bound_bytes)
+
         llm_html = (out_dir / "llm.html").read_text(encoding="utf-8")
         assert "LLM Relay" in llm_html
         assert "Relay Quality" in llm_html
@@ -2352,6 +2510,155 @@ def main() -> int:
         assert saved["status"] == "ready"
         assert saved["action_count"] == 0
 
+        failed_state = out_dir / "failed-action-state"
+        failed_out = out_dir / "failed-action-out"
+        failed_state.mkdir()
+        failed_out.mkdir()
+        (failed_state / "rp_input").write_text(
+            "generation=committed\n", encoding="utf-8"
+        )
+        plain_ucore_reader.append_action_record(
+            failed_out,
+            failed_state,
+            "/actions/research/run",
+            {"run_id": "RUN-FAIL"},
+            write_state=True,
+        )
+        failed_receipt = failed_out / "host-run-result.state"
+        failed_receipt.write_text("status=ready\n", encoding="utf-8")
+        FailedRunner.publish_called = False
+        failed_result = plain_ucore_reader.run_action_package(
+            failed_state,
+            failed_out,
+            Path("."),
+            failed_out / "auto-runs",
+            80,
+            "Ubuntu",
+            runner_module=FailedRunner,
+            host_run_result_path=failed_receipt,
+        )
+        assert failed_result["status"] == "failed"
+        assert not FailedRunner.publish_called
+        assert not failed_receipt.exists()
+        assert (failed_state / "rp_input").read_text(encoding="utf-8") == (
+            "generation=committed\n"
+        )
+        assert not (failed_state / "rp_host_run_result").exists()
+        assert not (failed_state / "rp_host_action_inbox").exists()
+        assert (failed_out / "host-state" / "rp_host_action_inbox").is_file()
+        assert json.loads(
+            (failed_out / "last-run.json").read_text(encoding="utf-8")
+        )["status"] == "failed"
+        forbidden_host_state = failed_state / "rp_host_action_queue"
+        forbidden_host_state.write_text("status=ready\n", encoding="utf-8")
+        try:
+            plain_ucore_reader.load_state(failed_state)
+        except ValueError as state_error:
+            assert "Host-only state" in str(state_error)
+        else:
+            raise AssertionError("Reader accepted Host-only state as Guest output")
+        forbidden_host_state.unlink()
+
+        dangling_overlay = out_dir / "dangling-overlay"
+        try:
+            dangling_overlay.symlink_to(out_dir / "missing-overlay", target_is_directory=True)
+        except OSError:
+            pass
+        else:
+            try:
+                plain_ucore_reader.load_host_overlay_state(dangling_overlay)
+            except ValueError as overlay_error:
+                assert any(
+                    marker in str(overlay_error)
+                    for marker in ("unsafe", "link", "junction")
+                ), overlay_error
+            else:
+                raise AssertionError("Reader accepted a dangling Host overlay link")
+            dangling_overlay.unlink()
+
+        linked_host_out = out_dir / "relay-linked-host-out"
+        linked_host_out.mkdir()
+        linked_host_target = out_dir / "relay-linked-host-target"
+        linked_host_target.mkdir()
+        planted_overlay = linked_host_target / "llm-relay"
+        planted_overlay.mkdir()
+        planted_response = planted_overlay / "rp_llm_resp"
+        planted_response.write_text(
+            "host_relay_process=planted;status=ready\n", encoding="utf-8"
+        )
+        linked_host_state = linked_host_out / "host-state"
+        assert create_directory_link(linked_host_state, linked_host_target)
+        try:
+            plain_ucore_reader.run_llm_relay_package(
+                state_dir,
+                linked_host_out,
+                "template",
+                FakeRelay,
+            )
+        except ValueError as link_error:
+            assert "link" in str(link_error) or "junction" in str(link_error)
+        else:
+            raise AssertionError("relay accepted a linked host-state directory")
+        assert "host_relay_process=planted" in planted_response.read_text(
+            encoding="utf-8"
+        )
+        assert not any(
+            path.name.startswith(".llm-relay-")
+            for path in linked_host_target.iterdir()
+        )
+        remove_directory_link(linked_host_state)
+
+        linked_ancestor_target = out_dir / "relay-linked-ancestor-target"
+        linked_ancestor_target.mkdir()
+        linked_ancestor = out_dir / "relay-linked-ancestor"
+        assert create_directory_link(linked_ancestor, linked_ancestor_target)
+        escaped_out = linked_ancestor / "reader-out"
+        try:
+            plain_ucore_reader.run_llm_relay_package(
+                state_dir,
+                escaped_out,
+                "template",
+                FakeRelay,
+            )
+        except ValueError as link_error:
+            assert "link" in str(link_error) or "junction" in str(link_error)
+        else:
+            raise AssertionError("relay accepted a linked output ancestor")
+        assert not (linked_ancestor_target / "reader-out").exists()
+        remove_directory_link(linked_ancestor)
+
+        transaction_out = out_dir / "relay-transaction"
+        previous_overlay = (
+            transaction_out / plain_ucore_reader.HOST_LLM_OVERLAY_RELATIVE_PATH
+        )
+        previous_overlay.mkdir(parents=True)
+        (previous_overlay / "rp_llm_resp").write_text(
+            "host_relay_process=previous;status=ready\n", encoding="utf-8"
+        )
+        original_atomic_write = plain_ucore_reader.atomic_write_bytes
+
+        def fail_summary_publish(path: Path, data: bytes) -> None:
+            raise OSError("fixture summary publish failure")
+
+        plain_ucore_reader.atomic_write_bytes = fail_summary_publish
+        try:
+            try:
+                plain_ucore_reader.run_llm_relay_package(
+                    state_dir,
+                    transaction_out,
+                    "template",
+                    FakeRelay,
+                )
+            except OSError as relay_error:
+                assert "summary publish" in str(relay_error), relay_error
+            else:
+                raise AssertionError("relay accepted a failed summary publication")
+        finally:
+            plain_ucore_reader.atomic_write_bytes = original_atomic_write
+        assert "host_relay_process=previous" in (
+            previous_overlay / "rp_llm_resp"
+        ).read_text(encoding="utf-8")
+
         handler = plain_ucore_reader.make_service_handler(
             state_dir,
             out_dir,
@@ -2368,6 +2675,23 @@ def main() -> int:
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
         base = f"http://127.0.0.1:{server.server_address[1]}"
+        oversized = request.Request(
+            base + "/actions/research/run",
+            data=b"{}",
+            headers={
+                "Content-Type": "application/json",
+                "Content-Length": str(
+                    plain_ucore_reader.ACTION_REQUEST_MAX_BYTES + 1
+                ),
+            },
+            method="POST",
+        )
+        try:
+            request.urlopen(oversized, timeout=5)
+        except error.HTTPError as http_error:
+            assert http_error.code == 413
+        else:
+            raise AssertionError("oversized action payload was accepted")
         (out_dir / "dual-results" / "charts").mkdir(parents=True, exist_ok=True)
         (out_dir / "dual-results" / "monitor.html").write_text(
             "<!doctype html><html><body>AgentOS 运行观测面板</body></html>",
@@ -2516,6 +2840,11 @@ def main() -> int:
                 raise AssertionError("Reader exposed an unmanifested state file")
             unknown_state.unlink()
 
+            guest_bytes_before_relay = {
+                path.name: path.read_bytes()
+                for path in state_dir.iterdir()
+                if path.is_file() and path.name.startswith("rp_")
+            }
             action = request.Request(
                 base + "/actions/research/run",
                 data=json.dumps({"run_id": "RUN-999", "source": "test"}).encode("utf-8"),
@@ -2530,9 +2859,36 @@ def main() -> int:
             assert result["relay"]["status"] == "ready"
             assert result["relay"]["mode"] == "template"
             assert (out_dir / "host-actions.jsonl").exists()
-            assert "path=/actions/research/run" in (state_dir / "rp_host_action_inbox").read_text(encoding="utf-8")
-            assert "qemu_orch_passed=1" in (state_dir / "rp_host_run_result").read_text(encoding="utf-8")
-            assert "host_relay_process=fake" in (state_dir / "rp_llm_resp").read_text(encoding="utf-8")
+            assert not (state_dir / "rp_host_action_inbox").exists()
+            assert "path=/actions/research/run" in (
+                out_dir / "host-state" / "rp_host_action_inbox"
+            ).read_text(encoding="utf-8")
+            assert not (state_dir / "rp_host_run_result").exists()
+            host_receipt = out_dir / "host-run-result.state"
+            assert "qemu_orch_passed=1" in host_receipt.read_text(encoding="utf-8")
+            with request.urlopen(base + "/api/state/rp_host_run_result", timeout=5) as response:
+                host_api = json.loads(response.read().decode("utf-8"))
+            assert host_api["values"]["qemu_orch_passed"] == "1"
+            guest_bytes_after_relay = {
+                path.name: path.read_bytes()
+                for path in state_dir.iterdir()
+                if path.is_file() and path.name.startswith("rp_")
+            }
+            assert guest_bytes_after_relay == guest_bytes_before_relay
+            relay_overlay = out_dir / "host-state" / "llm-relay"
+            assert "host_relay_process=fake" in (
+                relay_overlay / "rp_llm_resp"
+            ).read_text(encoding="utf-8")
+            assert list(relay_overlay.iterdir()) == [relay_overlay / "rp_llm_resp"]
+            assert "host_relay_process=fake" not in (
+                state_dir / "rp_llm_resp"
+            ).read_text(encoding="utf-8")
+            plain_ucore_reader.load_host_run_result(
+                host_receipt, state_dir, "plain"
+            )
+            with request.urlopen(base + "/api/state/rp_llm_resp", timeout=5) as response:
+                relay_api = json.loads(response.read().decode("utf-8"))
+            assert relay_api["values"]["host_relay_process"] == "fake"
             assert (out_dir / "last-run.json").exists()
             assert (out_dir / "llm-relay-summary.json").exists()
 
@@ -2564,7 +2920,10 @@ def main() -> int:
             with request.urlopen(base + "/api/live", timeout=5) as response:
                 live = json.loads(response.read().decode("utf-8"))
             assert live["action_count"] == 3, live
-            assert "path=/actions/research/export-bundle" in (state_dir / "rp_host_action_inbox").read_text(encoding="utf-8")
+            assert not (state_dir / "rp_host_action_inbox").exists()
+            assert "path=/actions/research/export-bundle" in (
+                out_dir / "host-state" / "rp_host_action_inbox"
+            ).read_text(encoding="utf-8")
             actions_html = (out_dir / "actions.html").read_text(encoding="utf-8")
             assert "Host Actions" in actions_html
             assert "Action Output Links" in actions_html

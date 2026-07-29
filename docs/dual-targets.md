@@ -68,7 +68,9 @@
 
 uCore 对照目标已经包含可由状态查看工具读取的一整套科研平台状态：Web/API 数据、动作运行器、artifact 记录、工作流记录、项目复核状态、Host LLM Relay、AgentCompare 和端到端 QEMU 路径。
 
-AgentOS-uCore 目标已经把增强内核服务接入同一科研流程。入口 `rp_agentos_orch` 创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，随后运行完整 `rp_orch` 流程。主阶段会向 `rp_agentos_mainflow` 追加 11 个内核参与阶段，并覆盖 12 类内核事实：可信 Context、通用依赖图与依赖驱动预取、metadata 索引查询、Agent 事件通知、通用动作提交与工件状态更新、ledger/provenance 观察、sentinel 越权恢复被拒绝、timeline 观察、文件编辑租约、workbench 文件校验、证据包 provenance、真实任务报告与答案审计。
+AgentOS-uCore 目标已经把增强内核服务接入同一科研流程。入口 `rp_agentos_orch` 创建 orchestrator Agent，初始化 `rp_agentos_mainflow`，随后运行完整 `rp_orch` 流程。主阶段会向 `rp_agentos_mainflow` 追加 11 个唯一、完整、有序的未验证 telemetry 阶段，并覆盖 12 类内核事实：可信 Context、通用依赖图与依赖驱动预取、metadata 索引查询、Agent 事件通知、通用动作提交与工件状态更新、ledger/provenance 观察、sentinel 越权恢复被拒绝、timeline 观察、文件编辑租约、workbench 文件校验、证据包 provenance、真实任务报告与答案审计。Guest 不再生成 Mainflow 通过回执；Host 从安全状态清单读取 11 个规范来源，逐项复验唯一 claim、预期成功状态和阶段字段，并计算 telemetry 与来源文件的完整 byte count/hash。任何 Guest `runtime_verified` 记录都 fail closed。
+
+seeded reference 数据与 runtime 证据严格分层。目标相关 registry 为每个 reference 文件和 `(destination, anchor)` 记录登记唯一源码 owner，解析前剥除注释，并拒绝缺失、未知、重复、跨 owner 预发布和 runtime 身份冒充；Plain seeded 程序清单还要同时命中 seeded profile、QEMU 日志与 `rp_orch_timing` 的 orchestrator/launcher、程序顺序和摘要。状态清单不再提供路径权威，只能与目录内单层、非链接的 `rp_[a-z0-9_]+` 文件精确比对。当前 runner tick 仅允许 `unavailable/plain_runtime_cases_zero` 且没有对照行；恢复 measured 状态前必须先提供独立、非 reference 的可信 runtime producer 和逐字段 receipt。
 
 状态查看工具会直接读取 `rp_agentos_mainflow` 和相关 `rp_agentos_*` 文件，并对照 plain target 的用户态成本与 AgentOS target 的内核替代路径。
 

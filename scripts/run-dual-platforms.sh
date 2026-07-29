@@ -8,7 +8,46 @@ PYTHON_BIN="${PYTHON_BIN:-python3}"
 DUAL_LOG_DIR="${DUAL_LOG_DIR:-/tmp/agentos-dual-platform}"
 RESULT_DIR="${RESULT_DIR:-${ROOT_DIR}/results/latest}"
 BACKEND_CONTRACT="${ROOT_DIR}/host_tools/backend_evidence_contract.py"
+RESULT_BUNDLE_CONTRACT="${ROOT_DIR}/host_tools/result_bundle_contract.py"
+RESULT_PUBLICATION="${ROOT_DIR}/host_tools/result_bundle_publication.py"
 export TOOLPREFIX QEMU PYTHON_BIN
+
+current_stage=""
+current_stage_start=0
+result_stage=""
+result_published=0
+publication_args=(
+	--result-dir "${RESULT_DIR}"
+	--protected-path "${ROOT_DIR}"
+	--protected-path "${DUAL_LOG_DIR}"
+)
+
+cleanup_dual_run() {
+	local code="$?"
+	set +e
+	trap - EXIT HUP INT TERM
+	if [ "${code}" -ne 0 ] && [ -n "${current_stage:-}" ]; then
+		stage_finish failed
+	fi
+	if [ "${result_published:-0}" -eq 0 ] && [ -n "${result_stage:-}" ]; then
+		if ! "${PYTHON_BIN}" "${RESULT_PUBLICATION}" abort \
+			"${publication_args[@]}" --stage-dir "${result_stage}"; then
+			echo "[dual-platform] failed to discard private result staging directory" >&2
+		fi
+		if [ "${code}" -eq 0 ]; then
+			code=1
+		fi
+	fi
+	exit "${code}"
+}
+
+# Invalidate the mutable result before any acceptance stage starts. The helper
+# rejects destructive targets and creates a private sibling on the same volume.
+result_stage="$("${PYTHON_BIN}" "${RESULT_PUBLICATION}" begin "${publication_args[@]}")"
+trap cleanup_dual_run EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 if [ -n "${MEASURED_AGENT_GUEST_LOG:-}" ] || \
    [ -n "${MEASURED_AGENT_COMMAND_JSON:-}" ] || \
@@ -20,8 +59,6 @@ fi
 mkdir -p "${DUAL_LOG_DIR}"
 stage_timings="${DUAL_LOG_DIR}/stage-timings.csv"
 printf "stage,start_epoch,end_epoch,duration_seconds,status\n" > "${stage_timings}"
-current_stage=""
-current_stage_start=0
 
 stage_begin() {
 	current_stage="$1"
@@ -41,8 +78,6 @@ stage_finish() {
 	current_stage=""
 	current_stage_start=0
 }
-
-trap 'code=$?; if [ -n "${current_stage:-}" ]; then stage_finish failed; fi; exit ${code}' ERR
 
 echo "[dual-platform] checking target structure"
 stage_begin "structure-check"
@@ -100,7 +135,7 @@ require_plain_program_inventory() {
 	local programs="$2"
 	local pattern
 
-	pattern="^rp_orch: evidence_role=demo_reference observation_source=guest_runtime program_source=rp_orch_timing program_source_bytes=[1-9][0-9]* program_source_hash=[1-9][0-9]* program_names_digest=[1-9][0-9]* programs_observed=${programs} status=reference_observed[[:space:]]*$"
+	pattern="^rp_orch: evidence_role=demo_reference evidence_generation=runtime observation_source=guest_runtime program_source=rp_orch_timing program_source_bytes=[1-9][0-9]* program_source_hash=[1-9][0-9]* program_names_digest=[1-9][0-9]* programs_observed=${programs} status=reference_observed[[:space:]]*$"
 	require_log "${logfile}" "${pattern}" "plain source-bound program inventory"
 	reject_log "${logfile}" '^rp_orch: .*evidence_role=runtime_verified' "plain evidence impersonates AgentOS runtime verification"
 }
@@ -135,12 +170,26 @@ expected_programs="$(platform_program_count "${ROOT_DIR}/baseline_ucore/user/Mak
 
 seeded_work_dir="${DUAL_LOG_DIR}/seeded-action-state"
 seeded_summary="${DUAL_LOG_DIR}/seeded-action-state.json"
+mapfile -t run_result_names < <(
+	PYTHONPATH="${ROOT_DIR}/host_tools" "${PYTHON_BIN}" -c '
+from dual_state_evidence_contract import RUN_RESULT_WORK_FILES
+print(RUN_RESULT_WORK_FILES["plain"])
+print(RUN_RESULT_WORK_FILES["agentos"])
+'
+)
+if [ "${#run_result_names[@]}" -ne 2 ]; then
+	echo "[dual-platform] Host run result contract is invalid" >&2
+	exit 1
+fi
+plain_run_result="${DUAL_LOG_DIR}/${run_result_names[0]}"
+agentos_run_result="${DUAL_LOG_DIR}/${run_result_names[1]}"
+rm -f "${plain_run_result}" "${agentos_run_result}"
 
 echo "[dual-platform] running seeded dual-target research platform"
 stage_begin "seeded-dual-run"
 "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/check_seeded_action_state.py" \
 	--work-dir "${seeded_work_dir}" \
-	--timeout "${SEEDED_ACTION_TIMEOUT:-480}" \
+	--timeout "${SEEDED_ACTION_TIMEOUT:-600}" \
 	--json-out "${seeded_summary}"
 stage_finish ready
 
@@ -180,19 +229,23 @@ stage_finish ready
 
 stage_begin "state-extract-copy"
 rm -rf "${DUAL_LOG_DIR}/plain-state" "${DUAL_LOG_DIR}/agentos-state"
+rm -f "${plain_run_result}" "${agentos_run_result}"
 cp -a "${plain_state_src}" "${DUAL_LOG_DIR}/plain-state"
 cp -a "${agentos_state_src}" "${DUAL_LOG_DIR}/agentos-state"
-for pair in "plain ${seeded_work_dir}/plain ${DUAL_LOG_DIR}/plain-state" "AgentOS ${seeded_work_dir}/agentos ${DUAL_LOG_DIR}/agentos-state"; do
-	set -- ${pair}
-	label="$1"
-	run_dir="$2"
-	target_dir="$3"
-	if [ ! -f "${run_dir}/state-next/rp_host_run_result" ]; then
-		echo "[dual-platform] ${label} run result is missing from action runner state" >&2
+copy_run_result() {
+	local label="$1"
+	local source="$2"
+	local destination="$3"
+	if [ -L "${source}" ] || [ ! -f "${source}" ]; then
+		echo "[dual-platform] ${label} run result is missing or unsafe" >&2
 		exit 1
 	fi
-	cp "${run_dir}/state-next/rp_host_run_result" "${target_dir}/rp_host_run_result"
-done
+	cp "${source}" "${destination}"
+}
+copy_run_result "plain" \
+	"${seeded_work_dir}/plain/state-next/rp_host_run_result" "${plain_run_result}"
+copy_run_result "AgentOS" \
+	"${seeded_work_dir}/agentos/state-next/rp_host_run_result" "${agentos_run_result}"
 
 plain_count="$("${PYTHON_BIN}" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["extracted_state_files"])' "${DUAL_LOG_DIR}/plain-state/extract-summary.json")"
 agentos_count="$("${PYTHON_BIN}" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["extracted_state_files"])' "${DUAL_LOG_DIR}/agentos-state/extract-summary.json")"
@@ -224,6 +277,9 @@ stage_begin "host-alignment"
 "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/check_host_platform_alignment.py" \
 	--plain-state-dir "${DUAL_LOG_DIR}/plain-state" \
 	--agentos-state-dir "${DUAL_LOG_DIR}/agentos-state" \
+	--plain-profile seeded \
+	--plain-log "${plain_log}" \
+	--agentos-log "${agentos_log}" \
 	--json-out "${DUAL_LOG_DIR}/host-platform-alignment.json"
 
 "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/check_host_action_kind_alignment.py" \
@@ -244,6 +300,11 @@ stage_begin "state-compare"
 "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/compare_dual_platform_state.py" \
 	--plain-dir "${DUAL_LOG_DIR}/plain-state" \
 	--agentos-dir "${DUAL_LOG_DIR}/agentos-state" \
+	--plain-run-result "${plain_run_result}" \
+	--agentos-run-result "${agentos_run_result}" \
+	--plain-log "${plain_log}" \
+	--agentos-log "${agentos_log}" \
+	--seeded-summary "${seeded_summary}" \
 	--min-common-files 240 \
 	--json-out "${DUAL_LOG_DIR}/state-compare-summary.json"
 stage_finish ready
@@ -256,14 +317,18 @@ rm -rf "${DUAL_LOG_DIR}/plain-reader" "${DUAL_LOG_DIR}/agentos-reader"
 	--host-platform-alignment "${DUAL_LOG_DIR}/host-platform-alignment.json" \
 	--host-test-alignment "${DUAL_LOG_DIR}/host-test-alignment.json" \
 	--host-surface-alignment "${DUAL_LOG_DIR}/host-surface-alignment.json" \
-	--seeded-action-state "${DUAL_LOG_DIR}/seeded-action-state.json"
+	--seeded-action-state "${DUAL_LOG_DIR}/seeded-action-state.json" \
+	--host-run-result "${plain_run_result}" \
+	--expected-target plain
 "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/plain_ucore_reader.py" \
 	--state-dir "${DUAL_LOG_DIR}/agentos-state" \
 	--out-dir "${DUAL_LOG_DIR}/agentos-reader" \
 	--host-platform-alignment "${DUAL_LOG_DIR}/host-platform-alignment.json" \
 	--host-test-alignment "${DUAL_LOG_DIR}/host-test-alignment.json" \
 	--host-surface-alignment "${DUAL_LOG_DIR}/host-surface-alignment.json" \
-	--seeded-action-state "${DUAL_LOG_DIR}/seeded-action-state.json"
+	--seeded-action-state "${DUAL_LOG_DIR}/seeded-action-state.json" \
+	--host-run-result "${agentos_run_result}" \
+	--expected-target agentos
 "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/check_reader_output.py" \
 	--reader-dir "${DUAL_LOG_DIR}/plain-reader" \
 	--json-out "${DUAL_LOG_DIR}/plain-reader-check.json"
@@ -310,12 +375,18 @@ measurement_run_id="dual-${measurement_commit%${measurement_commit#????????????}
 stage_finish ready
 
 stage_begin "result-report-chart"
-rm -rf "${RESULT_DIR}"
 "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/summarize_dual_platform_results.py" \
 	--work-dir "${DUAL_LOG_DIR}" \
-	--out-dir "${RESULT_DIR}" \
+	--out-dir "${result_stage}" \
+	--published-dir "${RESULT_DIR}" \
 	--require-measured-experiments
+"${PYTHON_BIN}" "${RESULT_BUNDLE_CONTRACT}" \
+	--result-dir "${result_stage}" \
+	--published-dir "${RESULT_DIR}"
 stage_finish ready
+"${PYTHON_BIN}" "${RESULT_PUBLICATION}" publish \
+	"${publication_args[@]}" --stage-dir "${result_stage}" >/dev/null
+result_published=1
 
 echo "[dual-platform] plain and AgentOS platforms both passed"
 echo "[dual-platform] research platform programs: ${expected_programs}"

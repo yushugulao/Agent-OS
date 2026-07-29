@@ -7,22 +7,26 @@
 #include "file.h"
 #include "fs.h"
 #include "vfs_security.h"
+
 #define SCAN_INTERVAL 20
 #define SCAN_STEP 16
 #define SCAN_REST_MULTIPLIER 4
 #define SCAN_BIND_RETRY 1
 #define SCAN_BIND_DEFERRED 2
+#define SCAN_URGENT 2
 #define SCOPE_MAX (VFS_SCOPE_MAX_ACTIVE + 1)
+
 static struct {
 	uint64 offset, next_tick, last_step_tick, start;
 	uint64 runs, entries, added, updated, removed, failures, deferred;
-	uint bad[SCOPE_MAX], nbad;
-	uchar seen[AGENT_FILE_META_MAX];
+	uint marked[SCOPE_MAX * 2], nmarked;
+	uchar seen[AGENT_META_STALE_BYTES];
 	int retry, sweep_uncertain;
 } scan;
-static struct {
-	int on, pending, active;
-} scan_control;
+#define SCAN_SEEN(slot) (scan.seen[(slot) / 8] & (1U << ((slot) % 8)))
+#define SCAN_NOTE(slot) (scan.seen[(slot) / 8] |= 1U << ((slot) % 8))
+static struct { int on, pending, active; } scan_ctl;
+
 struct scan_field { ushort offset, size; uint changes; const char *value; };
 #define SCAN_DEFAULT(field, change_bits, default_value) \
 	{ (ushort)__builtin_offsetof(struct agent_file_meta, field), \
@@ -38,6 +42,7 @@ static const struct scan_field scan_default_fields[] = {
 	SCAN_DEFAULT(summary, 0, "auto scanned root file"),
 };
 #undef SCAN_DEFAULT
+
 static const char *const rules[][3] = {
 	{ "md", "txt", "document" },
 	{ "log", "err", "log" },
@@ -48,7 +53,7 @@ static const char *const rules[][3] = {
 };
 
 void agent_metadata_scan_init(void) {
-	memset(&scan, 0, sizeof(scan)); memset(&scan_control, 0, sizeof(scan_control));
+	memset(&scan, 0, sizeof(scan)); memset(&scan_ctl, 0, sizeof(scan_ctl));
 }
 
 static void scan_infer(char *name, char *out, int n, uint first, uint count,
@@ -96,7 +101,7 @@ uint agent_metadata_scan_apply_defaults(struct agent_file_meta *meta,
 }
 
 void agent_metadata_scan_catalog_sync(const struct agent_catalog_delta *delta) {
-	if (!scan_control.active)
+	if (!scan_ctl.active)
 		return;
 	if (delta->full_reset) {
 		scan.offset = 0;
@@ -104,31 +109,36 @@ void agent_metadata_scan_catalog_sync(const struct agent_catalog_delta *delta) {
 		memset(scan.seen, 0, sizeof(scan.seen));
 	}
 	agent_metadata_txn_work_charge(AGENT_META_STALE_BYTES);
-	for (int i = 0; i < AGENT_FILE_META_MAX; i++)
-		if (delta->applied_slots[i / 8] & (1U << (i % 8)))
-			scan.seen[i] = 1;
+	for (int i = 0; i < AGENT_META_STALE_BYTES; i++)
+		scan.seen[i] |= delta->applied_slots[i];
 }
 
 void agent_metadata_scan_note_slot(int slot) {
-	if (scan_control.active && slot >= 0 && slot < AGENT_FILE_META_MAX)
-		scan.seen[slot] = 1;
+	if (scan_ctl.active && slot >= 0 && slot < AGENT_FILE_META_MAX)
+		SCAN_NOTE(slot);
 }
 
-int agent_metadata_scan_query_stable(void) { return !scan_control.active; }
-static int scan_scope_failed(uint scope, int add) {
-	for (uint i = 0; i < scan.nbad; i++)
-		if (scan.bad[i] == scope)
+int agent_metadata_scan_query_stable(void) { return !scan_ctl.active; }
+
+static int scan_mark(uint scope, int add, int saturated) {
+	uint mark = scope | (saturated ? FS_OWNER_SCOPE_FLAG : 0);
+	for (uint i = 0; i < scan.nmarked; i++)
+		if (scan.marked[i] == mark)
 			return 1;
-	if (!add || scan.nbad >= SCOPE_MAX)
-		return add && (scan.sweep_uncertain = 1);
-	scan.bad[scan.nbad++] = scope;
+	if (!add || scan.nmarked >= NELEM(scan.marked))
+		return add && !saturated && (scan.sweep_uncertain = 1);
+	scan.marked[scan.nmarked++] = mark;
 	return 1;
 }
+
+#define scan_scope_failed(scope, add) scan_mark(scope, add, 0)
+#define scan_scope_full(scope, add) scan_mark(scope, add, 1)
 
 static int scan_remove(int slot, uint scope, int persist) {
 	if (agent_metadata_catalog_clear_slot(slot) < 0)
 		return -1;
 	scan.removed++;
+	agent_metadata_scan_slot_freed(scope);
 	if (persist)
 		agent_metadata_store_mark_dirty(scope);
 	return 0;
@@ -150,40 +160,63 @@ static uint64 scan_rest_deadline(uint64 start, uint64 now) {
 }
 
 static void scan_pause(int retry, int resume) {
-	uint64 now = agent_file_state_now();
+	uint64 current = agent_file_state_now(), now = current;
 	int irq = intr_save();
-	now = scan_rest_deadline(scan_control.active ? scan.start : now, now);
-	scan_control.active = 0;
+	now = scan_rest_deadline(scan_ctl.active ? scan.start : now, now);
+	scan_ctl.active = 0;
 	if (!retry || !resume)
 		scan.start = 0;
-	if (retry)
-		scan_control.pending = resume ? -1 : 1;
-	if (scan.next_tick < now)
-		scan.next_tick = now;
+	if (scan_ctl.pending == SCAN_URGENT) {
+		scan.start = 0;
+		scan_ctl.pending = 1;
+		scan.next_tick = current;
+	} else {
+		if (retry) {
+			if (!resume || scan_ctl.pending > 0)
+				scan_ctl.pending = 1;
+			else if (scan_ctl.pending == 0)
+				scan_ctl.pending = -1;
+		}
+		if (scan.next_tick < now)
+			scan.next_tick = now;
+	}
 	intr_restore(irq);
 }
 
 void agent_file_request_scan(void) {
 	uint64 now = agent_file_state_now();
 	int irq = intr_save();
-	if (!scan_control.on || !scan_control.pending) {
-		if (!scan_control.on) {
-			scan_control.on = 1;
+	if (!scan_ctl.on || !scan_ctl.pending) {
+		if (!scan_ctl.on) {
+			scan_ctl.on = 1;
 			scan.next_tick = now;
-		} else if (scan_control.active) {
+		} else if (scan_ctl.active) {
 			scan.next_tick = scan_rest_deadline(now, now);
 		} else if (now >= scan.next_tick) {
 			scan.next_tick = now;
 		}
-		scan_control.pending = 1;
+		scan_ctl.pending = 1;
 	}
+	intr_restore(irq);
+	agent_background_request();
+}
+
+void agent_metadata_scan_slot_freed(uint scope) {
+	int irq = intr_save();
+	if (!scan_scope_full(scope, 0)) {
+		intr_restore(irq);
+		return;
+	}
+	scan_ctl.on = 1;
+	scan_ctl.pending = SCAN_URGENT;
+	scan.next_tick = agent_file_state_now();
 	intr_restore(irq);
 	agent_background_request();
 }
 
 int agent_metadata_scan_work_pending(void) {
 	int irq = intr_save();
-	int pending = scan_control.pending || scan_control.active;
+	int pending = scan_ctl.pending || scan_ctl.active;
 	intr_restore(irq);
 	return pending;
 }
@@ -191,13 +224,13 @@ int agent_metadata_scan_work_pending(void) {
 int agent_metadata_scan_plan(uint64 now) {
 	int plan = AGENT_METADATA_SCAN_IDLE;
 	int irq = intr_save();
-	if (scan_control.on) {
-		if (!scan_control.active && !scan_control.pending &&
+	if (scan_ctl.on) {
+		if (!scan_ctl.active && !scan_ctl.pending &&
 		    now >= scan.next_tick)
-			scan_control.pending = 1;
-		if (scan_control.active && scan.last_step_tick != now)
+			scan_ctl.pending = 1;
+		if (scan_ctl.active && scan.last_step_tick != now)
 			plan = AGENT_METADATA_SCAN_CONTINUE;
-		else if (!scan_control.active && scan_control.pending &&
+		else if (!scan_ctl.active && scan_ctl.pending &&
 			 now >= scan.next_tick)
 			plan = AGENT_METADATA_SCAN_START;
 	}
@@ -205,20 +238,15 @@ int agent_metadata_scan_plan(uint64 now) {
 	return plan;
 }
 
-static uint
-scan_bind_inode(struct inode *ip, char *path, int *failed)
-{
+uint agent_metadata_scan_index_inode(struct inode *ip, char *path, int *failed) {
 	struct agent_catalog_view view;
 	struct agent_catalog_edit edit;
 	struct agent_catalog_resolution resolution;
 	struct agent_file_meta selector, *meta;
 	uint64 fid = 0;
-	int slot, dirty = 0, sidecar, pend = 0;
-	int persist;
-	short old_slot, old_flags, old_version;
-	uint scope;
-	uint changes = 0;
-	int mut;
+	int slot, dirty = 0, sidecar, stale_sidecar = 0, pend = 0;
+	int persist, mut;
+	uint scope, changes = 0;
 	*failed = 0;
 	scope = ip->vfs_scope_id;
 	if (!vfs_inode_label_valid(ip) || ip->vfs_policy != VFS_POLICY_WORKFLOW ||
@@ -229,8 +257,14 @@ scan_bind_inode(struct inode *ip, char *path, int *failed)
 	    !vfs_scope_active(scope) || !mut)
 		return 0;
 	slot = ip->agent_meta_slot - 1;
+	if (agent_file_state_index_deferred(ip) &&
+	    scan_scope_full(scope, 0)) {
+		scan.deferred++;
+		return 0;
+	}
 	if (agent_metadata_catalog_borrow(0, slot, &view) <= 0 ||
 	    view.scope_id != scope || !scan_matches(view.meta, ip)) {
+		stale_sidecar = ip->agent_meta_slot > 0;
 		if (ip->dev == 0 || ip->inum == 0 || ip->vfs_incarnation == 0)
 			goto retry;
 		memset(&selector, 0, sizeof(selector));
@@ -260,35 +294,40 @@ scan_bind_inode(struct inode *ip, char *path, int *failed)
 	}
 	if (slot >= 0 &&
 	    (view.state & AGENT_CATALOG_STATE_QUARANTINE)) {
-		scan.seen[slot] = 1;
+		SCAN_NOTE(slot);
 		return 0;
 	}
 	if (slot >= 0 && view.meta->dev &&
 	    !scan_matches(view.meta, ip)) {
 		int old_persist = view.meta->flags & AGENT_FILE_META_F_PERSIST;
 		uint old_scope = view.scope_id;
-		scan.seen[slot] = 1;
+		SCAN_NOTE(slot);
 		if (scan_remove(slot, old_scope, old_persist) < 0)
 			goto retry;
 		changes |= AGENT_FILE_CHANGE_ALL;
 		slot = -1;
 	}
 	if (slot < 0) {
-		if ((slot = agent_metadata_catalog_alloc_slot(scope)) < 0) {
-			*failed = SCAN_BIND_DEFERRED;
+		slot = agent_metadata_catalog_alloc_slot(
+			scope, AGENT_FILE_META_F_AUTOSCAN);
+		if (slot == AGENT_CATALOG_NO_SPACE) {
+			(void)scan_scope_full(scope, 1);
+			scan.deferred++;
+			if (agent_file_state_set_index(ip,
+			    AGENT_INODE_META_DEFERRED_SLOT, 0, stale_sidecar) < 0)
+				goto retry;
 			return changes;
 		}
-		if (!(fid = agent_metadata_catalog_alloc_fid(scope))) {
+		if (slot < 0 || !(fid = agent_metadata_catalog_alloc_fid(scope))) {
+			(void)scan_scope_full(scope, 1);
 			*failed = SCAN_BIND_DEFERRED;
 			return changes;
 		}
 	} else
 		pend = view.state & AGENT_CATALOG_STATE_PENDING;
-	scan.seen[slot] = 1;
-	if (agent_metadata_catalog_edit_begin_scan(slot, scope, &edit) < 0) {
-		*failed = SCAN_BIND_RETRY;
-		return changes;
-	}
+	SCAN_NOTE(slot);
+	if (agent_metadata_catalog_edit_begin_scan(slot, scope, &edit) < 0)
+		goto retry;
 	meta = edit.meta;
 	if (!meta->used) {
 		memset(meta, 0, sizeof(*meta));
@@ -310,34 +349,21 @@ scan_bind_inode(struct inode *ip, char *path, int *failed)
 		meta->size = ip->size;
 		dirty = 1;
 	}
+	persist = meta->flags & AGENT_FILE_META_F_PERSIST;
 	sidecar = ip->agent_meta_slot != slot + 1 ||
+		  ip->agent_meta_flags != persist ||
 		  ip->agent_meta_version != AGENT_INODE_META_VERSION;
 	dirty |= sidecar;
 	if (dirty || fid) {
 		meta->updated_tick = agent_file_state_now();
 		meta->fs_generation = agent_file_state_generation_next(edit.scope_id);
-		persist = meta->flags & AGENT_FILE_META_F_PERSIST;
-		if (agent_metadata_catalog_edit_commit(&edit, changes) < 0) {
-			*failed = SCAN_BIND_RETRY;
-			return changes;
-		}
+		if (agent_metadata_catalog_edit_commit(&edit, changes) < 0)
+			goto retry;
 		if (persist)
 			agent_metadata_store_mark_dirty(ip->vfs_scope_id);
-		if (sidecar) {
-			old_slot = ip->agent_meta_slot;
-			old_flags = ip->agent_meta_flags;
-			old_version = ip->agent_meta_version;
-			ip->agent_meta_slot = slot + 1;
-			ip->agent_meta_flags = persist;
-			ip->agent_meta_version = AGENT_INODE_META_VERSION;
-			if (iupdate(ip) < 0) {
-				ip->agent_meta_slot = old_slot;
-				ip->agent_meta_flags = old_flags;
-				ip->agent_meta_version = old_version;
-				*failed = SCAN_BIND_RETRY;
-				return changes;
-			}
-		}
+		if (sidecar &&
+		    agent_file_state_set_index(ip, slot + 1, persist, 0) < 0)
+			goto retry;
 		if (fid) scan.added++;
 		else scan.updated++;
 	} else {
@@ -368,16 +394,16 @@ uint agent_metadata_scan_step(uint64 now, int plan, int load_ok) {
 			return 0;
 		}
 		irq = intr_save();
-		scan_control.active = 1;
-		if (scan_control.pending > 0) {
+		scan_ctl.active = 1;
+		if (scan_ctl.pending > 0) {
 			scan.start = now;
 			scan.offset = 0;
-			scan.nbad = 0;
+			scan.nmarked = 0;
 			scan.retry = scan.sweep_uncertain = 0;
 			memset(scan.seen, 0, sizeof(scan.seen));
 			scan.runs++;
 		}
-		scan_control.pending = 0;
+		scan_ctl.pending = 0;
 		intr_restore(irq);
 	} else if (plan != AGENT_METADATA_SCAN_CONTINUE) {
 		return 0;
@@ -416,8 +442,7 @@ uint agent_metadata_scan_step(uint64 now, int plan, int load_ok) {
 			continue;
 		}
 		int bind_failed = 0;
-
-		mask |= scan_bind_inode(ip, name, &bind_failed);
+		mask |= agent_metadata_scan_index_inode(ip, name, &bind_failed);
 		if (bind_failed) {
 			scan.failures++;
 			scan.retry = 1;
@@ -428,7 +453,7 @@ uint agent_metadata_scan_step(uint64 now, int plan, int load_ok) {
 		}
 		iput(ip);
 	}
-	if (!scan_control.active) {
+	if (!scan_ctl.active) {
 		iput(root);
 		return mask;
 	}
@@ -443,7 +468,7 @@ uint agent_metadata_scan_step(uint64 now, int plan, int load_ok) {
 				continue;
 			if (view.state & AGENT_CATALOG_STATE_QUARANTINE)
 				continue;
-			if (scan.seen[i] || scan.sweep_uncertain ||
+			if (SCAN_SEEN(i) || scan.sweep_uncertain ||
 			    scan_scope_failed(view.scope_id, 0))
 				continue;
 			scope = view.scope_id;
@@ -471,5 +496,5 @@ void agent_metadata_scan_fill_info(struct agent_info *info) {
 	info->file_scan_deferred = scan.deferred;
 	info->file_scan_failures = scan.failures;
 	info->file_scan_pending =
-		scan_control.pending || scan_control.active;
+		scan_ctl.pending || scan_ctl.active;
 }

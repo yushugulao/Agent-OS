@@ -611,7 +611,7 @@ if grep -n -E 'agent_metadata_store_(load|reload|storage_init|install_empty)\([^
 fi
 : >"${TMP_FILE}"
 
-if grep -n -E '\bscan_control\b|\bscan\.(offset|seen|next_tick|last_step_tick|started_tick|runs|entries|added|updated|removed)\b|root_dir\(' \
+if grep -n -E '\bscan_(ctl|control)\b|\bscan\.(offset|seen|next_tick|last_step_tick|started_tick|runs|entries|added|updated|removed)\b|root_dir\(' \
 	"${objects_source}" >"${TMP_FILE}"; then
 	fail "metadata objects retained scan-owned state or directory traversal"
 fi
@@ -651,8 +651,8 @@ fi
 : >"${TMP_FILE}"
 for scan_owner_operation in 'root_dir_status(&root_status)' \
 	'root_status != FS_LOOKUP_FOUND' 'readi(' 'inode_get(' \
-	'scan_bind_inode(ip, name, &bind_failed)' 'if (bind_failed)' \
-	'scan.seen[slot] = 1' 'agent_metadata_store_mark_dirty' \
+	'agent_metadata_scan_index_inode(ip, name, &bind_failed)' 'if (bind_failed)' \
+	'SCAN_NOTE(slot)' 'agent_metadata_store_mark_dirty' \
 	'steps < SCAN_STEP'; do
 	grep -q -F "${scan_owner_operation}" "${scan_source}" ||
 		fail "metadata scan lost owner operation: ${scan_owner_operation}"
@@ -663,7 +663,7 @@ if grep -n -E '^void[[:space:]]+agent_fs_(note_create|note_write|sync_write|note
 	fail "metadata objects retained a directory hook"
 fi
 : >"${TMP_FILE}"
-if grep -n -E 'agent_metadata_query_|agent_file_store_load|bio_background_|agent_metadata_store_persist[[:space:]]*\(|agent_metadata_txn_lock[[:space:]]*\(|agent_dependency_generation|\bscan_control\b|\bscan\.(offset|seen|next_tick|last_step_tick|started_tick|runs|entries|added|updated|removed)\b|\(\*[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\)[[:space:]]*\(' \
+if grep -n -E 'agent_metadata_query_|agent_file_store_load|bio_background_|agent_metadata_store_persist[[:space:]]*\(|agent_metadata_txn_lock[[:space:]]*\(|agent_dependency_generation|\bscan_(ctl|control)\b|\bscan\.(offset|seen|next_tick|last_step_tick|started_tick|runs|entries|added|updated|removed)\b|\(\*[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*\)[[:space:]]*\(' \
 	"${directory_source}" >"${TMP_FILE}"; then
 	fail "metadata directory acquired coordination state or blocking work"
 fi
@@ -674,8 +674,9 @@ if grep -n -E '^static[[:space:]]+(char|short|int|long|uint|uint64|struct[[:spac
 fi
 : >"${TMP_FILE}"
 for directory_operation in 'agent_metadata_txn_try_external()' \
-	'agent_metadata_scan_note_slot(slot)' \
-	'agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL)' \
+	'fs_dirent_canonicalize(path, key)' \
+	'agent_metadata_scan_index_inode(ip, key, &failed)' \
+	'agent_metadata_note_catalog_changes(changes)' \
 	'agent_metadata_store_mark_dirty(scope_id)'; do
 	grep -q -F "${directory_operation}" "${directory_source}" ||
 		fail "metadata directory lost owner operation: ${directory_operation}"

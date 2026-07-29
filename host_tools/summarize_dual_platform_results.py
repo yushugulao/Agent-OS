@@ -19,6 +19,7 @@ from measured_experiments import (
     write_csv as write_measurement_csv,
     write_manifest,
 )
+from dual_state_evidence_contract import MAIN_FLOW_SOURCE_SPECS, RUN_RESULT_WORK_FILES
 
 
 PALETTE = {
@@ -41,6 +42,11 @@ STAGE_LABELS = {
     "reader-render-check": "本地页面渲染与检查",
     "result-report-chart": "结果报告与图表生成",
 }
+
+RUNNER_TICK_STATUS_UNAVAILABLE = "unavailable"
+RUNNER_TICK_REASON_PLAIN_ZERO = "plain_runtime_cases_zero"
+MAIN_FLOW_VERIFICATION_ORIGIN = "host_inventory"
+MAIN_FLOW_STAGE_COUNT = len(MAIN_FLOW_SOURCE_SPECS)
 
 
 @dataclass(frozen=True)
@@ -119,8 +125,8 @@ def collect_rows(work_dir: Path) -> tuple[list[MetricRow], dict[str, object]]:
     tests = read_json(work_dir / "host-test-alignment.json")
     surface = read_json(work_dir / "host-surface-alignment.json")
     stage_rows = load_stage_timings(work_dir / "stage-timings.csv")
-    plain_result = read_state_values(work_dir / "plain-state" / "rp_host_run_result")
-    agentos_result = read_state_values(work_dir / "agentos-state" / "rp_host_run_result")
+    plain_result = read_state_values(work_dir / RUN_RESULT_WORK_FILES["plain"])
+    agentos_result = read_state_values(work_dir / RUN_RESULT_WORK_FILES["agentos"])
 
     rows = [
         MetricRow(
@@ -186,11 +192,11 @@ def collect_rows(work_dir: Path) -> tuple[list[MetricRow], dict[str, object]]:
         ),
         MetricRow(
             "运行证据",
-            "来源绑定运行记录",
+            "Guest 来源绑定运行记录",
             None,
-            as_number(state.get("source_bound_runtime_records")),
-            as_number(state.get("source_bound_runtime_records")),
-            "仅统计同时绑定 runtime generation、源文件字节数、哈希与实际断言的记录。",
+            as_number(state.get("guest_source_bound_runtime_records")),
+            as_number(state.get("guest_source_bound_runtime_records")),
+            "仅作观测计数，不参与 Mainflow readiness；Mainflow 只能由 Host 从原始清单复验。",
         ),
         MetricRow(
             "AgentOS 证据",
@@ -204,9 +210,9 @@ def collect_rows(work_dir: Path) -> tuple[list[MetricRow], dict[str, object]]:
             "AgentOS 证据",
             "主流程内核阶段事实",
             None,
-            as_number(state.get("agentos_mainflow_stages")),
-            as_number(state.get("agentos_mainflow_stages")),
-            "科研平台主流程中使用 AgentOS 能力的阶段数量。",
+            as_number(state.get("host_derived_mainflow_stages")),
+            as_number(state.get("host_derived_mainflow_stages")),
+            "Host 从安全状态清单独立复验的有序 AgentOS 主流程阶段数量。",
         ),
         MetricRow(
             "启动方式",
@@ -259,6 +265,69 @@ def collect_rows(work_dir: Path) -> tuple[list[MetricRow], dict[str, object]]:
     return rows, meta
 
 
+def runner_tick_evidence(
+    meta: dict[str, object],
+) -> tuple[str, str]:
+    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
+    if {
+        "runner_tick_comparison",
+        "runner_tick_pairs",
+        "runner_tick_expected_pairs",
+    } & set(state):
+        raise ValueError("removed runner tick measurement fields are present")
+    status = state.get("runner_tick_status")
+    reason = state.get("runner_tick_reason")
+    if (
+        status != RUNNER_TICK_STATUS_UNAVAILABLE
+        or reason != RUNNER_TICK_REASON_PLAIN_ZERO
+    ):
+        raise ValueError("runner tick availability evidence is inconsistent")
+    return status, reason
+
+
+def runner_tick_summary_text(meta: dict[str, object]) -> str:
+    _, reason = runner_tick_evidence(meta)
+    return (
+        "runner tick 状态为 unavailable：普通目标明确声明 runtime_cases=0；"
+        f"原因码为 {reason}，未从参考目录补值，也不生成 tick 或 speedup 图。"
+    )
+
+
+def mainflow_evidence(meta: dict[str, object]) -> tuple[int, int]:
+    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
+    platform = meta.get("platform", {}) if isinstance(meta.get("platform"), dict) else {}
+    legacy = {"source_bound_runtime_records", "agentos_mainflow_stages"} & set(state)
+    if legacy:
+        raise ValueError(
+            "removed Guest Mainflow evidence fields are present: "
+            + ", ".join(sorted(legacy))
+        )
+    guest_records = state.get("guest_source_bound_runtime_records")
+    host_stages = state.get("host_derived_mainflow_stages")
+    platform_stages = platform.get("mainflow_host_stages")
+    if (
+        not isinstance(guest_records, int)
+        or isinstance(guest_records, bool)
+        or guest_records < 0
+        or not isinstance(host_stages, int)
+        or isinstance(host_stages, bool)
+        or not isinstance(platform_stages, int)
+        or isinstance(platform_stages, bool)
+    ):
+        raise ValueError("Mainflow evidence counters are not canonical integers")
+    if (
+        state.get("agentos_mainflow_verification_origin")
+        != MAIN_FLOW_VERIFICATION_ORIGIN
+        or platform.get("mainflow_verification_origin")
+        != MAIN_FLOW_VERIFICATION_ORIGIN
+        or platform.get("mainflow_host_verified") is not True
+        or host_stages != MAIN_FLOW_STAGE_COUNT
+        or platform_stages != MAIN_FLOW_STAGE_COUNT
+    ):
+        raise ValueError("Host-derived Mainflow evidence is incomplete or inconsistent")
+    return guest_records, host_stages
+
+
 def evaluation_items(meta: dict[str, object]) -> list[tuple[str, str]]:
     state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
     reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
@@ -266,24 +335,28 @@ def evaluation_items(meta: dict[str, object]) -> list[tuple[str, str]]:
     agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
     tests = meta.get("tests", {}) if isinstance(meta.get("tests"), dict) else {}
     items: list[tuple[str, str]] = []
+    guest_records, host_stages = mainflow_evidence(meta)
 
     if state.get("status") == "ready" and as_number(state.get("run_result_match")) == 1:
         items.append(("通过", "两个目标运行结果可对照，普通状态兼容记录已核对；该结论不包含 demo/reference 目录。"))
     else:
         items.append(("关注", "双目标状态对照没有给出 ready/match 结果，需要查看 state-compare-summary.json。"))
-    if (
-        as_number(state.get("source_bound_runtime_records")) > 0
-        and tests.get("runtime_evidence_verified") is True
-    ):
-        items.append(("通过", "来源绑定运行记录与 Host runtime assertion sets 均已独立校验。"))
+    if tests.get("runtime_evidence_verified") is True:
+        items.append(("通过", "Host runtime assertion sets 已独立校验；Guest 来源绑定记录只作观测计数，不构成 Mainflow 通过证据。"))
     else:
-        items.append(("关注", "缺少来源绑定运行记录或 Host runtime assertion 校验，不能把 reference 目录提升为动态通过证据。"))
+        items.append(("关注", "Host runtime assertion 校验缺失，Guest 记录不能替代该验证。"))
+    _, tick_reason = runner_tick_evidence(meta)
+    items.append((
+        "通过",
+        "runner tick 明确标记为 unavailable：普通目标 runtime_cases=0，"
+        f"原因码为 {tick_reason}，没有用参考目录合成性能数据。",
+    ))
     if as_number(state.get("agentos_extra_files")) > 0 and as_number(state.get("agentos_evidence_checks")) >= 20:
         items.append(("通过", "AgentOS target 额外输出内核证据文件，并通过多项内核事实检查。"))
     else:
         items.append(("关注", "AgentOS 额外内核证据不足，需要检查 rp_agentos_* 状态文件。"))
-    if as_number(state.get("agentos_mainflow_stages")) >= 10:
-        items.append(("通过", "科研主流程中记录到足够多的 AgentOS 内核参与阶段。"))
+    if host_stages == MAIN_FLOW_STAGE_COUNT:
+        items.append(("通过", "Host 已从安全状态清单复验全部有序 AgentOS 主流程阶段。"))
     else:
         items.append(("关注", "AgentOS 主流程阶段数量偏少，需要检查 rp_agentos_mainflow。"))
     if reader.get("status") == "ready" and as_number(reader.get("plain_pages")) == as_number(reader.get("agentos_pages")):
@@ -534,7 +607,7 @@ def runtime_observation_svg(rows: list[MetricRow], meta: dict[str, object], out_
         [
             ("结果可对照", "是" if as_number(state.get("run_result_match")) == 1 else "否"),
             ("非证据状态兼容记录", fmt_number(as_number(state.get("checked_compatibility_records")))),
-            ("来源绑定运行记录", fmt_number(as_number(state.get("source_bound_runtime_records")))),
+            ("Guest 运行记录（非通过门）", fmt_number(as_number(state.get("guest_source_bound_runtime_records")))),
             ("预置请求", fmt_number(as_number(state.get("embedded_action_records")))),
         ],
         PALETTE["shared"],
@@ -696,86 +769,13 @@ def cost_replacement_svg(meta: dict[str, object], out_path: Path) -> None:
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def runner_tick_svg(meta: dict[str, object], out_path: Path) -> None:
-    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
-    raw_rows = state.get("runner_tick_comparison", [])
-    rows = [row for row in raw_rows if isinstance(row, dict)] if isinstance(raw_rows, list) else []
-    if not rows:
-        rows = [{"label": "未记录 runner tick", "plain_ticks": 0, "agentos_ticks": 0, "saved_ticks": 0}]
-
-    width, height = 1080, max(460, 160 + len(rows) * 54)
-    margin_left, margin_right, margin_top = 190, 130, 92
-    plot_w = width - margin_left - margin_right
-    max_value = max([1.0] + [as_number(row.get("plain_ticks")) for row in rows] + [as_number(row.get("agentos_ticks")) for row in rows])
-    lines = svg_header(width, height)
-    lines.append('<text x="34" y="34" class="title">Runner Tick 对照</text>')
-    lines.append('<text x="34" y="58" class="subtitle">同一科研负载中的 runner case 成对比较：蓝色为普通用户态路径，橙色为 AgentOS 内核辅助路径。</text>')
-    tick_step = max(1, int(math.ceil(max_value / 5)))
-    tick = 0
-    while tick <= max_value:
-        x = margin_left + (tick / max_value) * plot_w if max_value else margin_left
-        lines.append(f'<line x1="{x:.1f}" y1="{margin_top - 12}" x2="{x:.1f}" y2="{height - 48}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
-        lines.append(f'<text x="{x:.1f}" y="{height - 26}" text-anchor="middle" class="axis">{tick}</text>')
-        tick += tick_step
-    for index, row in enumerate(rows):
-        y = margin_top + index * 54
-        label = str(row.get("label", ""))[:18]
-        plain_ticks = as_number(row.get("plain_ticks"))
-        agentos_ticks = as_number(row.get("agentos_ticks"))
-        plain_w = (plain_ticks / max_value) * plot_w if max_value else 0
-        agentos_w = (agentos_ticks / max_value) * plot_w if max_value else 0
-        saved = as_number(row.get("saved_ticks"))
-        lines.append(f'<text x="{margin_left - 14}" y="{y + 24}" text-anchor="end" class="label">{escape(label)}</text>')
-        lines.append(f'<rect x="{margin_left}" y="{y + 3}" width="{plain_w:.1f}" height="18" fill="{PALETTE["plain"]}" rx="2"/>')
-        lines.append(f'<rect x="{margin_left}" y="{y + 27}" width="{agentos_w:.1f}" height="18" fill="{PALETTE["agentos"]}" rx="2"/>')
-        lines.append(f'<text x="{margin_left + plain_w + 8:.1f}" y="{y + 17}" class="axis">{fmt_number(plain_ticks)}</text>')
-        lines.append(f'<text x="{margin_left + agentos_w + 8:.1f}" y="{y + 41}" class="axis">{fmt_number(agentos_ticks)}</text>')
-        lines.append(f'<text x="{width - 118}" y="{y + 31}" class="value">省 {fmt_number(saved)}</text>')
-    legend_y = height - 26
-    lines.append(f'<rect x="{width - 360}" y="{legend_y - 12}" width="14" height="14" fill="{PALETTE["plain"]}"/>')
-    lines.append(f'<text x="{width - 338}" y="{legend_y}" class="axis">普通用户态路径</text>')
-    lines.append(f'<rect x="{width - 220}" y="{legend_y - 12}" width="14" height="14" fill="{PALETTE["agentos"]}"/>')
-    lines.append(f'<text x="{width - 198}" y="{legend_y}" class="axis">AgentOS 路径</text>')
-    lines.append("</svg>")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def runner_tick_rows(meta: dict[str, object]) -> list[dict[str, object]]:
-    state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
-    raw_rows = state.get("runner_tick_comparison", [])
-    return [row for row in raw_rows if isinstance(row, dict)] if isinstance(raw_rows, list) else []
-
-
 def write_runner_sweep_csv(meta: dict[str, object], out_path: Path) -> None:
-    rows = runner_tick_rows(meta)
+    status, reason = runner_tick_evidence(meta)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
-        writer.writerow(
-            [
-                "scene",
-                "plain_case",
-                "agentos_case",
-                "plain_ticks",
-                "agentos_ticks",
-                "saved_ticks",
-                "speedup_x",
-            ]
-        )
-        for row in rows:
-            speedup = as_number(row.get("speedup_x100")) / 100.0
-            writer.writerow(
-                [
-                    row.get("label", ""),
-                    row.get("plain_case", ""),
-                    row.get("agentos_case", ""),
-                    fmt_number(as_number(row.get("plain_ticks"))),
-                    fmt_number(as_number(row.get("agentos_ticks"))),
-                    fmt_number(as_number(row.get("saved_ticks"))),
-                    fmt_number(speedup),
-                ]
-            )
+        writer.writerow(["evidence_status", "evidence_reason"])
+        writer.writerow([status, reason])
 
 
 EXPERIMENT_SPECS = {
@@ -1080,117 +1080,6 @@ def write_experiment_design_page(meta: dict[str, object], out_path: Path) -> Non
     out_path.write_text(html, encoding="utf-8")
 
 
-def runner_speedup_svg(meta: dict[str, object], out_path: Path) -> None:
-    rows = runner_tick_rows(meta)
-    if not rows:
-        rows = [{"label": "未记录", "plain_ticks": 0, "agentos_ticks": 0, "saved_ticks": 0, "speedup_x100": 0}]
-    rows = rows[:10]
-    width, height = 1120, max(460, 190 + len(rows) * 44)
-    margin_left, margin_right, margin_top = 210, 160, 92
-    plot_w = width - margin_left - margin_right
-    max_speed = max([1.0] + [as_number(row.get("speedup_x100")) / 100.0 for row in rows])
-    lines = svg_header(width, height)
-    lines.append('<text x="34" y="34" class="title">Runner 成组场景相对倍数</text>')
-    append_wrapped_text(
-        lines,
-        34,
-        58,
-        "横向条来自 runner-sweep.csv，表示 AgentOS 相对普通路径的 tick 倍数和节省量。",
-        max_chars=58,
-    )
-    tick_step = max(1, int(math.ceil(max_speed / 5)))
-    tick = 0
-    while tick <= max_speed:
-        x = margin_left + (tick / max_speed) * plot_w if max_speed else margin_left
-        lines.append(f'<line x1="{x:.1f}" y1="{margin_top - 12}" x2="{x:.1f}" y2="{height - 78}" stroke="{PALETTE["grid"]}" stroke-width="1"/>')
-        lines.append(f'<text x="{x:.1f}" y="{height - 58}" text-anchor="middle" class="axis">{tick}x</text>')
-        tick += tick_step
-    for index, row in enumerate(rows):
-        y = margin_top + index * 44
-        label = str(row.get("label", ""))[:18]
-        speedup = as_number(row.get("speedup_x100")) / 100.0
-        saved = as_number(row.get("saved_ticks"))
-        bar_w = (speedup / max_speed) * plot_w if max_speed else 0
-        color = PALETTE["agentos"] if saved > 0 else PALETTE["neutral"]
-        value_x = margin_left + bar_w + 8
-        value_anchor = ""
-        if value_x > width - 260:
-            value_x = margin_left + max(40, bar_w - 10)
-            value_anchor = ' text-anchor="end"'
-        lines.append(f'<text x="{margin_left - 14}" y="{y + 22}" text-anchor="end" class="label">{escape(label)}</text>')
-        lines.append(f'<rect x="{margin_left}" y="{y + 4}" width="{bar_w:.1f}" height="24" fill="{color}" rx="2"/>')
-        lines.append(f'<text x="{value_x:.1f}" y="{y + 21}" class="value"{value_anchor}>{fmt_number(speedup)}x</text>')
-        lines.append(f'<text x="{width - 130}" y="{y + 21}" class="axis">省 {fmt_number(saved)} tick</text>')
-    lines.append(f'<text x="52" y="{height - 18}" class="subtitle">读图方法：1x 表示两条路径 tick 相同；超过 1x 表示 AgentOS 用更少 tick 完成。</text>')
-    lines.append("</svg>")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
-
-
-def value_stats(values: list[float]) -> tuple[int, float, float, float]:
-    if not values:
-        return (0, 0.0, 0.0, 0.0)
-    return (len(values), min(values), sum(values) / len(values), max(values))
-
-
-def runner_statistics_rows(meta: dict[str, object]) -> list[dict[str, object]]:
-    rows = runner_tick_rows(meta)
-    values = {
-        "普通路径 tick": [as_number(row.get("plain_ticks")) for row in rows],
-        "AgentOS 路径 tick": [as_number(row.get("agentos_ticks")) for row in rows],
-        "节省 tick": [as_number(row.get("saved_ticks")) for row in rows],
-        "相对倍数": [as_number(row.get("speedup_x100")) / 100.0 for row in rows],
-    }
-    units = {
-        "普通路径 tick": "tick",
-        "AgentOS 路径 tick": "tick",
-        "节省 tick": "tick",
-        "相对倍数": "x",
-    }
-    reading = {
-        "普通路径 tick": "普通用户态路径完成同一 runner 场景的 tick 分布。",
-        "AgentOS 路径 tick": "AgentOS 路径完成同一 runner 场景的 tick 分布。",
-        "节省 tick": "普通路径 tick 减去 AgentOS 路径 tick。",
-        "相对倍数": "普通路径 tick 除以 AgentOS 路径 tick；大于 1 表示 AgentOS 使用更少 tick。",
-    }
-    result: list[dict[str, object]] = []
-    for metric, metric_values in values.items():
-        count, min_value, avg_value, max_value = value_stats(metric_values)
-        result.append(
-            {
-                "metric": metric,
-                "count": count,
-                "min": min_value,
-                "avg": avg_value,
-                "max": max_value,
-                "unit": units[metric],
-                "source": "runner-sweep.csv",
-                "reading": reading[metric],
-            }
-        )
-    return result
-
-
-def write_runner_statistics_csv(meta: dict[str, object], out_path: Path) -> None:
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(["metric", "count", "min", "avg", "max", "unit", "source", "reading"])
-        for row in runner_statistics_rows(meta):
-            writer.writerow(
-                [
-                    row["metric"],
-                    row["count"],
-                    fmt_number(as_number(row["min"])),
-                    fmt_number(as_number(row["avg"])),
-                    fmt_number(as_number(row["max"])),
-                    row["unit"],
-                    row["source"],
-                    row["reading"],
-                ]
-            )
-
-
 def test_suite_rows() -> list[dict[str, str]]:
     return [
         {
@@ -1374,9 +1263,9 @@ def delivery_readiness_rows() -> list[dict[str, str]]:
         {
             "requirement": "同时覆盖功能状态和性能观测",
             "status": "已覆盖",
-            "evidence": "runtime-observation.svg; cost-replacement.svg; runner-speedup.svg; experiments/status.json",
+            "evidence": "runtime-observation.svg; cost-replacement.svg; runner-sweep.csv; experiments/status.json",
             "verification": "test_chart_type_data_contract.py",
-            "note": "运行观测覆盖功能状态；文件查询性能仅在真实 Guest 测量可用时生成。",
+            "note": "runner 只披露 unavailable 状态；文件查询仅在可信测量可用时生成图，不生成零值占位图。",
         },
         {
             "requirement": "文档避免空泛待办描述",
@@ -1459,8 +1348,6 @@ def chart_evidence_description(chart_name: str) -> tuple[str, str]:
     descriptions = {
         "runtime-observation.svg": ("summary.csv, stage-timings.csv", "运行健康、状态产物、内核事实和 QEMU 诊断"),
         "cost-replacement.svg": ("state-compare-summary.json:cost_replacements", "普通用户态成本项与 AgentOS 替代机制的配对"),
-        "runner-ticks.svg": ("state-compare-summary.json:runner_tick_comparison", "同一 runner 场景下两条路径的 tick 对照"),
-        "runner-speedup.svg": ("runner-sweep.csv", "runner 场景的相对倍数和节省 tick"),
         "experiment-file-query-bar.svg": ("experiments/raw/file-query-benchmark.csv", "同一真实 Guest 运行中的强制遍历、冷索引重建和热索引查询"),
     }
     return descriptions.get(chart_name, ("summary.csv", "双目标运行派生图表"))
@@ -1520,7 +1407,7 @@ def evidence_manifest_rows(charts: list[Path]) -> list[dict[str, str]]:
         {
             "artifact": "monitor.html",
             "kind": "观测页面",
-            "source": "summary.csv, stage-timings.csv, rp_host_run_result",
+            "source": "summary.csv, stage-timings.csv, Host run receipts",
             "proves": "本次运行是否健康、AgentOS 是否有额外内核事实",
             "reader_use": "先确认运行可信度",
         },
@@ -1548,9 +1435,9 @@ def evidence_manifest_rows(charts: list[Path]) -> list[dict[str, str]]:
         {
             "artifact": "runner-sweep.csv",
             "kind": "数据表",
-            "source": "state-compare-summary.json:runner_tick_comparison",
-            "proves": "runner 场景、tick、节省 tick 和相对倍数",
-            "reader_use": "复查性能趋势图",
+            "source": "state-compare-summary.json:runner_tick_status,runner_tick_reason",
+            "proves": "普通目标没有动态 runner 样本，且没有从参考数据合成性能数值",
+            "reader_use": "核对 unavailable 状态与原因",
         },
         {
             "artifact": "experiments/status.json",
@@ -1686,11 +1573,10 @@ def reader_checklist_rows(meta: dict[str, object], charts: list[Path], work_dir:
     plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
     agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
     chart_names = {chart.name for chart in charts}
+    runner_status, runner_reason = runner_tick_evidence(meta)
     required_charts = {
         "runtime-observation.svg",
         "cost-replacement.svg",
-        "runner-ticks.svg",
-        "runner-speedup.svg",
     }
     if experiment_rows(meta):
         required_charts.add("experiment-file-query-bar.svg")
@@ -1739,7 +1625,13 @@ def reader_checklist_rows(meta: dict[str, object], charts: list[Path], work_dir:
             "核心图表",
             required_charts.issubset(chart_names),
             f"required={len(required_charts)}; generated={len(required_charts & chart_names)}; total_charts={len(chart_names)}",
-            "复查时至少查看运行观测、成本替代和 runner 对照；有真实 Guest 数据时再查看文件查询图。",
+            "复查时至少查看运行观测和成本替代；文件查询图只在可信测量可用时出现。",
+        ),
+        row(
+            "Runner tick 证据状态",
+            runner_status == RUNNER_TICK_STATUS_UNAVAILABLE,
+            f"status={runner_status}; reason={runner_reason}",
+            "查看 runner-sweep.csv 的 unavailable 原因；本轮不得给出 runner 性能结论。",
         ),
         row(
             "证据索引",
@@ -1755,20 +1647,23 @@ def reader_checklist_rows(meta: dict[str, object], charts: list[Path], work_dir:
         ),
         row(
             "原始运行状态",
-            (work_dir / "plain-state" / "rp_host_run_result").is_file()
-            and (work_dir / "agentos-state" / "rp_host_run_result").is_file()
+            (work_dir / RUN_RESULT_WORK_FILES["plain"]).is_file()
+            and (work_dir / RUN_RESULT_WORK_FILES["agentos"]).is_file()
             and (work_dir / "stage-timings.csv").is_file(),
-            "plain-state/rp_host_run_result; agentos-state/rp_host_run_result; stage-timings.csv",
+            f"{RUN_RESULT_WORK_FILES['plain']}; {RUN_RESULT_WORK_FILES['agentos']}; stage-timings.csv",
             "出现争议时直接回到原始状态文件和阶段耗时表。",
         ),
         row(
             "AgentOS 主流程证据",
-            as_number(state.get("agentos_evidence_checks")) >= 20 and as_number(state.get("agentos_mainflow_stages")) >= 10,
-            "agentos_evidence_checks={}; agentos_mainflow_stages={}".format(
+            as_number(state.get("agentos_evidence_checks")) >= 20
+            and as_number(state.get("host_derived_mainflow_stages")) == MAIN_FLOW_STAGE_COUNT
+            and state.get("agentos_mainflow_verification_origin") == MAIN_FLOW_VERIFICATION_ORIGIN,
+            "agentos_evidence_checks={}; host_derived_mainflow_stages={}; origin={}".format(
                 fmt_number(as_number(state.get("agentos_evidence_checks"))),
-                fmt_number(as_number(state.get("agentos_mainflow_stages"))),
+                fmt_number(as_number(state.get("host_derived_mainflow_stages"))),
+                state.get("agentos_mainflow_verification_origin", "missing"),
             ),
-            "科研流程不是旁路测试，它在主流程中使用 AgentOS 机制。",
+            "Host 从原始 telemetry 和安全来源清单独立复验主流程，Guest 不签发通过结论。",
         ),
     ]
 
@@ -1857,13 +1752,12 @@ def write_charts(rows: list[MetricRow], meta: dict[str, object], charts_dir: Pat
     cost_replacement_svg(meta, cost_chart)
     paths.append(cost_chart)
 
-    runner_tick_chart = charts_dir / "runner-ticks.svg"
-    runner_tick_svg(meta, runner_tick_chart)
-    paths.append(runner_tick_chart)
-
-    runner_speedup_chart = charts_dir / "runner-speedup.svg"
-    runner_speedup_svg(meta, runner_speedup_chart)
-    paths.append(runner_speedup_chart)
+    runner_tick_evidence(meta)
+    for stale in (charts_dir / "runner-ticks.svg", charts_dir / "runner-speedup.svg"):
+        if stale.is_symlink() or stale.is_file():
+            stale.unlink()
+        elif stale.exists():
+            raise ValueError(f"stale runner chart path is not a file: {stale}")
 
     experiment_data = experiment_rows(meta)
     if experiment_data:
@@ -1879,6 +1773,7 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
     reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
     plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
     agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
+    runner_status, runner_reason = runner_tick_evidence(meta)
 
     lines = [
         "# 双目标运行结果摘要",
@@ -1889,9 +1784,10 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
         "",
         f"- 普通 uCore 提取状态文件 {fmt_number(as_number(state.get('plain_files')))} 个，AgentOS-uCore 提取 {fmt_number(as_number(state.get('agentos_files')))} 个，其中 AgentOS 额外状态文件 {fmt_number(as_number(state.get('agentos_extra_files')))} 个。",
         f"- 本地结果阅读器生成页面 {fmt_number(as_number(reader.get('plain_pages')))} 个，两个目标页面集合一致；AgentOS API JSON 比普通目标多 {fmt_number(as_number(reader.get('agentos_extra_api_json')))} 个。",
-        f"- 同一批预置 action 请求数为 {fmt_number(as_number(state.get('embedded_action_records')))}；另核对 {fmt_number(as_number(state.get('checked_compatibility_records')))} 条非证据状态兼容记录，并识别 {fmt_number(as_number(state.get('source_bound_runtime_records')))} 条来源绑定运行记录。",
-        f"- AgentOS 主流程中记录到 {fmt_number(as_number(state.get('agentos_mainflow_stages')))} 个内核参与阶段和 {fmt_number(as_number(state.get('agentos_mainflow_facts')))} 条主流程事实。",
+        f"- 同一批预置 action 请求数为 {fmt_number(as_number(state.get('embedded_action_records')))}；另核对 {fmt_number(as_number(state.get('checked_compatibility_records')))} 条非证据状态兼容记录；Guest 来源绑定运行记录为 {fmt_number(as_number(state.get('guest_source_bound_runtime_records')))}，仅作观测计数。",
+        f"- Host 从安全状态清单独立复验 {fmt_number(as_number(state.get('host_derived_mainflow_stages')))} 个有序 AgentOS 主流程阶段和 {fmt_number(as_number(state.get('agentos_mainflow_facts')))} 条主流程事实。",
         f"- QEMU 诊断：普通目标耗时 {plain_result.get('qemu_elapsed_seconds', '0')} 秒、无输出提示 {plain_result.get('qemu_idle_notices', '0')} 次；AgentOS 目标耗时 {agentos_result.get('qemu_elapsed_seconds', '0')} 秒、无输出提示 {agentos_result.get('qemu_idle_notices', '0')} 次。",
+        f"- {runner_tick_summary_text(meta)}",
         "",
         "## 图表",
         "",
@@ -1969,29 +1865,15 @@ def write_report(rows: list[MetricRow], meta: dict[str, object], charts: list[Pa
                         preserved=preserved,
                     )
                 )
-    runner_rows = state.get("runner_tick_comparison", []) if isinstance(state, dict) else []
-    if isinstance(runner_rows, list) and runner_rows:
-        lines.extend(
-            [
-                "",
-                "## Runner Tick 对照",
-                "",
-                "| 场景 | 普通用户态 case | AgentOS case | 普通 tick | AgentOS tick | 节省 tick |",
-                "| --- | --- | --- | ---: | ---: | ---: |",
-            ]
-        )
-        for row in runner_rows:
-            if isinstance(row, dict):
-                lines.append(
-                    "| {label} | {plain_case} | {agentos_case} | {plain_ticks} | {agentos_ticks} | {saved_ticks} |".format(
-                        label=row.get("label", ""),
-                        plain_case=row.get("plain_case", ""),
-                        agentos_case=row.get("agentos_case", ""),
-                        plain_ticks=fmt_number(as_number(row.get("plain_ticks"))),
-                        agentos_ticks=fmt_number(as_number(row.get("agentos_ticks"))),
-                        saved_ticks=fmt_number(as_number(row.get("saved_ticks"))),
-                    )
-                )
+    lines.extend(
+        [
+            "",
+            "## Runner Tick 对照",
+            "",
+            f"- 证据状态：`{runner_status}`；原因码：`{runner_reason}`。",
+            "- 普通目标声明 `runtime_cases=0`，本轮没有可比较的 tick 测量；摘要只保留状态原因，不提供 runner 性能结论或占位图。",
+        ]
+    )
     exp_stats = experiment_stats_rows(experiment_rows(meta))
     if exp_stats:
         lines.extend(
@@ -2035,12 +1917,11 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
     reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
     plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
     agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
+    _, runner_reason = runner_tick_evidence(meta)
     chart_cards = []
     chart_titles = {
         "runtime-observation.svg": "双目标运行观测面板",
         "cost-replacement.svg": "用户态成本项与 AgentOS 替代机制",
-        "runner-ticks.svg": "Runner Tick 对照",
-        "runner-speedup.svg": "Runner 成组场景相对倍数",
         "experiment-file-query-bar.svg": "文件对象查询实验",
     }
     for chart in charts:
@@ -2084,6 +1965,11 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
         if experiment_rows(meta)
         else '<a href="experiments/status.json">实验测量 unavailable</a>'
     )
+    runner_links = (
+        '<a href="runner-sweep.csv">Runner tick unavailable：'
+        f'{escape(runner_reason)}</a>'
+    )
+    runner_summary = escape(runner_tick_summary_text(meta))
     html = f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -2136,7 +2022,7 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="monitor.html">打开运行观测面板</a>
       <a href="report.md">查看 Markdown 报告</a>
       <a href="summary.csv">下载 CSV 明细</a>
-      <a href="runner-sweep.csv">下载 runner 成组数据</a>
+      <a href="runner-sweep.csv">下载 runner 状态</a>
       <a href="delivery-readiness.html">打开结果材料核对</a>
       <a href="delivery-readiness.csv">下载结果材料核对</a>
       <a href="test-suite.html">打开测试入口说明</a>
@@ -2149,10 +2035,10 @@ def write_index(rows: list[MetricRow], meta: dict[str, object], charts: list[Pat
       <a href="experiment-design.csv">下载实验场景说明</a>
       <a href="charts/runtime-observation.svg">打开观测图</a>
       <a href="charts/cost-replacement.svg">打开成本替代图</a>
-      <a href="charts/runner-ticks.svg">打开 tick 对照图</a>
-      <a href="charts/runner-speedup.svg">打开相对倍数图</a>
+      {runner_links}
       {experiment_links}
     </div>
+    <p>{runner_summary}</p>
     <p>建议先运行 <code>make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-</code>，再运行 <code>make reader</code> 打开交互页面。需要按顺序查看时，先打开 <a href="reader-guide.html">运行导览页</a>；本页用于快速查看测试数据图表，本地阅读器页面用于查看完整运行对象和 AgentOS 主流程细节。</p>
     <section class="eval">
       <h2>自动判读</h2>
@@ -2185,6 +2071,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
     plain_result = meta.get("plain_result", {}) if isinstance(meta.get("plain_result"), dict) else {}
     agentos_result = meta.get("agentos_result", {}) if isinstance(meta.get("agentos_result"), dict) else {}
+    _, runner_reason = runner_tick_evidence(meta)
     observation = next((chart for chart in charts if chart.name == "runtime-observation.svg"), None)
     observation_rel = observation.relative_to(out_path.parent).as_posix() if observation is not None else ""
     eval_rows = "".join(
@@ -2195,6 +2082,10 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
         '、<a href="charts/experiment-file-query-bar.svg">文件查询实测图</a>'
         if experiment_rows(meta)
         else '、<a href="experiments/status.json">实验测量 unavailable</a>'
+    )
+    runner_links = (
+        '、<a href="runner-sweep.csv">runner tick unavailable：'
+        f'{escape(runner_reason)}</a>'
     )
     html = f"""<!doctype html>
 <html lang="zh-CN">
@@ -2232,7 +2123,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
   <main>
     <div class="grid">
       <div class="card"><strong>{fmt_number(as_number(state.get("checked_compatibility_records")))}</strong><span>非证据状态兼容记录</span></div>
-      <div class="card"><strong>{fmt_number(as_number(state.get("source_bound_runtime_records")))}</strong><span>来源绑定运行记录</span></div>
+      <div class="card"><strong>{fmt_number(as_number(state.get("guest_source_bound_runtime_records")))}</strong><span>Guest 运行记录（非通过门）</span></div>
       <div class="card"><strong>{fmt_number(as_number(state.get("agentos_extra_files")))}</strong><span>AgentOS 额外状态文件</span></div>
       <div class="card"><strong>{fmt_number(as_number(state.get("agentos_evidence_checks")))}</strong><span>内核证据检查项</span></div>
       <div class="card"><strong>{fmt_number(as_number(reader.get("agentos_extra_api_json")))}</strong><span>AgentOS 额外 API JSON</span></div>
@@ -2252,7 +2143,7 @@ def write_monitor_page(rows: list[MetricRow], meta: dict[str, object], charts: l
     </section>
     <section class="panel">
       <h2>相关结果</h2>
-      <p><a href="reader-guide.html">运行导览页</a>、<a href="reader-checklist.html">结果核验表</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 成组数据</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>、<a href="charts/runner-ticks.svg">tick 对照图</a>、<a href="charts/runner-speedup.svg">相对倍数图</a>{experiment_links}</p>
+      <p><a href="reader-guide.html">运行导览页</a>、<a href="reader-checklist.html">结果核验表</a>、<a href="evidence-map.html">证据索引页</a>、<a href="index.html">图表索引页</a>、<a href="report.md">Markdown 报告</a>、<a href="summary.csv">CSV 明细</a>、<a href="runner-sweep.csv">runner 状态</a>、<a href="charts/runtime-observation.svg">运行观测图</a>、<a href="charts/cost-replacement.svg">成本替代图</a>{runner_links}{experiment_links}</p>
     </section>
   </main>
 </body>
@@ -2266,9 +2157,9 @@ def write_reader_guide_page(rows: list[MetricRow], meta: dict[str, object], char
     state = meta.get("state", {}) if isinstance(meta.get("state"), dict) else {}
     reader = meta.get("reader", {}) if isinstance(meta.get("reader"), dict) else {}
     seeded = meta.get("seeded", {}) if isinstance(meta.get("seeded"), dict) else {}
+    _, runner_reason = runner_tick_evidence(meta)
     scenario_count = len(state.get("scenario_evidence", [])) if isinstance(state.get("scenario_evidence"), list) else 0
     cost_count = as_number(state.get("cost_replacement_count"))
-    runner_pairs = as_number(state.get("runner_tick_pairs"))
     chart_links = {
         chart.name: chart.relative_to(out_path.parent).as_posix()
         for chart in charts
@@ -2290,6 +2181,13 @@ def write_reader_guide_page(rows: list[MetricRow], meta: dict[str, object], char
         )
         experiment_file_links = '<a href="experiments/status.json">实验测量 unavailable</a>'
         experiment_summary = "本次没有可验证的 Guest 性能 marker，不提供性能结论。"
+    runner_guide_row = (
+        '<tr><td>4</td><td><a href="runner-sweep.csv">Runner tick 状态</a></td>'
+        f'<td>状态为 unavailable，原因码为 {escape(runner_reason)}；本轮不提供 runner 性能结论。</td></tr>'
+    )
+    runner_file_links = '<a href="runner-sweep.csv">Runner tick unavailable</a>'
+    runner_index_summary = "查看本轮可用图表；runner tick 只保留 unavailable 状态，不显示占位性能图。"
+    runner_summary = escape(runner_tick_summary_text(meta))
     html = f"""<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -2345,16 +2243,16 @@ def write_reader_guide_page(rows: list[MetricRow], meta: dict[str, object], char
         <thead><tr><th>顺序</th><th>打开内容</th><th>要讲清楚的点</th></tr></thead>
         <tbody>
           <tr><td>1</td><td><a href="monitor.html">运行观测面板</a></td><td>先确认本次运行健康：QEMU 状态、状态产物、API 输出、AgentOS 额外证据都来自本次运行。</td></tr>
-          <tr><td>2</td><td><a href="index.html">图表索引页</a></td><td>查看运行观测、成本替代、runner tick 和 runner 相对倍数。</td></tr>
+          <tr><td>2</td><td><a href="index.html">图表索引页</a></td><td>{runner_index_summary}</td></tr>
           {experiment_guide_row}
-          <tr><td>4</td><td><a href="charts/runner-speedup.svg">相对倍数图</a></td><td>打开 <a href="runner-sweep.csv">runner-sweep.csv</a> 复查对应输入。</td></tr>
+          {runner_guide_row}
           <tr><td>5</td><td><a href="../index.html">本地结果阅读器首页</a></td><td>进入完整科研平台页面查看运行对象和内核证据。</td></tr>
         </tbody>
       </table>
     </section>
     <section class="panel">
       <h2>关键数据</h2>
-      <p>本次结果包含 {fmt_number(cost_count)} 项 reference 成本替代目录、{fmt_number(runner_pairs)} 组来源绑定 runner 观测、{fmt_number(as_number(state.get("checked_compatibility_records")))} 条非证据状态兼容记录，以及 {fmt_number(as_number(state.get("source_bound_runtime_records")))} 条来源绑定运行记录。{experiment_summary}</p>
+      <p>本次结果包含 {fmt_number(cost_count)} 项 reference 成本替代目录、{fmt_number(as_number(state.get("checked_compatibility_records")))} 条非证据状态兼容记录；Guest 来源绑定运行记录为 {fmt_number(as_number(state.get("guest_source_bound_runtime_records")))}，仅作观测计数，Host 独立复验 {fmt_number(as_number(state.get("host_derived_mainflow_stages")))} 个有序阶段。{runner_summary}{experiment_summary}</p>
       <div class="links">
         <a href="delivery-readiness.html">结果材料核对</a>
         <a href="delivery-readiness.csv">结果核对 CSV</a>
@@ -2369,6 +2267,7 @@ def write_reader_guide_page(rows: list[MetricRow], meta: dict[str, object], char
         <a href="report.md">Markdown 报告</a>
         <a href="summary.json">JSON 摘要</a>
         <a href="{escape(chart_links.get("runtime-observation.svg", "charts/runtime-observation.svg"))}">运行观测图</a>
+        {runner_file_links}
       </div>
     </section>
   </main>
@@ -2456,13 +2355,28 @@ def persist_verified_measurement(
         raise ValueError(f"persisted measurement bundle is invalid: {error}") from error
 
 
+def _published_artifact_path(
+    artifact: Path, out_dir: Path, published_dir: Path
+) -> str:
+    physical_root = out_dir.resolve(strict=True)
+    physical = artifact.resolve(strict=True)
+    try:
+        relative = physical.relative_to(physical_root)
+    except ValueError as error:
+        raise ValueError("generated result artifact escaped its staging directory") from error
+    return str(published_dir.resolve(strict=False) / relative)
+
+
 def summarize(
     work_dir: Path,
     out_dir: Path,
     docs_assets_dir: Path | None = None,
     require_measured_experiments: bool = False,
+    published_dir: Path | None = None,
 ) -> dict[str, object]:
     rows, meta = collect_rows(work_dir)
+    mainflow_evidence(meta)
+    runner_status, runner_reason = runner_tick_evidence(meta)
     measurement_manifest = work_dir / "measured-experiments.json"
     if measurement_manifest.is_file():
         try:
@@ -2501,34 +2415,43 @@ def summarize(
     write_reader_guide_page(rows, meta, charts, out_dir / "reader-guide.html")
     if docs_assets_dir is not None:
         copy_docs_assets(charts, docs_assets_dir)
+    logical_root = published_dir if published_dir is not None else out_dir
+
+    def published(relative: str) -> str:
+        return _published_artifact_path(out_dir / relative, out_dir, logical_root)
+
     summary = {
         "status": "ready",
         "rows": len(rows),
-        "charts": [str(path) for path in charts],
-        "report": str(out_dir / "report.md"),
-        "index": str(out_dir / "index.html"),
-        "monitor": str(out_dir / "monitor.html"),
-        "reader_guide": str(out_dir / "reader-guide.html"),
-        "csv": str(out_dir / "summary.csv"),
-        "runner_sweep_csv": str(out_dir / "runner-sweep.csv"),
+        "charts": [
+            _published_artifact_path(path, out_dir, logical_root) for path in charts
+        ],
+        "report": published("report.md"),
+        "index": published("index.html"),
+        "monitor": published("monitor.html"),
+        "reader_guide": published("reader-guide.html"),
+        "csv": published("summary.csv"),
+        "runner_sweep_csv": published("runner-sweep.csv"),
+        "runner_tick_status": runner_status,
+        "runner_tick_reason": runner_reason,
         "experiment_status": experiment_status["status"],
-        "experiment_status_json": str(out_dir / "experiments" / "status.json"),
-        "experiment_stats_csv": str(out_dir / "experiments" / "experiment-stats.csv") if experiment_data else None,
-        "experiment_mechanism_csv": str(out_dir / "experiments" / "mechanism-notes.csv") if experiment_data else None,
+        "experiment_status_json": published("experiments/status.json"),
+        "experiment_stats_csv": published("experiments/experiment-stats.csv") if experiment_data else None,
+        "experiment_mechanism_csv": published("experiments/mechanism-notes.csv") if experiment_data else None,
         "experiment_raw_csvs": [
-            str(out_dir / "experiments" / "raw" / str(spec["raw_file"]))
+            published("experiments/raw/" + str(spec["raw_file"]))
             for spec in EXPERIMENT_SPECS.values() if experiment_data
         ],
-        "delivery_readiness_csv": str(out_dir / "delivery-readiness.csv"),
-        "delivery_readiness": str(out_dir / "delivery-readiness.html"),
-        "test_suite_csv": str(out_dir / "test-suite.csv"),
-        "test_suite": str(out_dir / "test-suite.html"),
-        "experiment_design_csv": str(out_dir / "experiment-design.csv"),
-        "experiment_design": str(out_dir / "experiment-design.html"),
-        "evidence_manifest_csv": str(out_dir / "evidence-manifest.csv"),
-        "evidence_map": str(out_dir / "evidence-map.html"),
-        "reader_checklist_csv": str(out_dir / "reader-checklist.csv"),
-        "reader_checklist": str(out_dir / "reader-checklist.html"),
+        "delivery_readiness_csv": published("delivery-readiness.csv"),
+        "delivery_readiness": published("delivery-readiness.html"),
+        "test_suite_csv": published("test-suite.csv"),
+        "test_suite": published("test-suite.html"),
+        "experiment_design_csv": published("experiment-design.csv"),
+        "experiment_design": published("experiment-design.html"),
+        "evidence_manifest_csv": published("evidence-manifest.csv"),
+        "evidence_map": published("evidence-map.html"),
+        "reader_checklist_csv": published("reader-checklist.csv"),
+        "reader_checklist": published("reader-checklist.html"),
         "experiment_rows": len(experiment_data),
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -2539,6 +2462,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Create chart and report artifacts from dual-platform verification outputs.")
     parser.add_argument("--work-dir", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
+    parser.add_argument("--published-dir", type=Path, default=None)
     parser.add_argument("--docs-assets-dir", type=Path, default=None)
     parser.add_argument("--require-measured-experiments", action="store_true")
     args = parser.parse_args()
@@ -2548,6 +2472,7 @@ def main() -> int:
         args.out_dir,
         args.docs_assets_dir,
         require_measured_experiments=args.require_measured_experiments,
+        published_dir=args.published_dir,
     )
     print(
         "dual_platform_result_summary: rows={rows} charts={charts} report={report} index={index} monitor={monitor} reader_guide={reader_guide} status={status}".format(

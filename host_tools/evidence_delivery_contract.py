@@ -221,7 +221,12 @@ def prepare_index_update(
 ) -> tuple[Path, bytes] | None:
     """Return an exact append-only index update for in-repository collection."""
     repo = repo.resolve()
-    output = output.absolute()
+    # Canonicalize both sides before the containment check.  On Windows a
+    # temporary path may use an 8.3 component while resolve() expands the
+    # repository path, and lexical ``..`` components have the same issue on
+    # every platform.  The release directory does not exist yet, so keep the
+    # non-strict resolution semantics.
+    output = output.resolve(strict=False)
     try:
         relative = output.relative_to(repo).as_posix()
     except ValueError:

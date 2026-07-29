@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "targets": {
     "plain": {
       "source_roots": [
@@ -44,5 +44,9 @@
     "rp_llm_conclusions",
     "rp_metrics",
     "rp_review_pack"
+  ],
+  "archive_optional_state_files": [
+    "rp_input_fastq",
+    "rp_object_records"
   ]
 }

@@ -682,6 +682,43 @@ agent_file_state_scope_reclaim(uint scope_id)
 }
 
 int
+agent_file_state_index_deferred(struct inode *ip)
+{
+	return ip != 0 &&
+	       ip->agent_meta_slot == AGENT_INODE_META_DEFERRED_SLOT &&
+	       ip->agent_meta_flags == 0 &&
+	       ip->agent_meta_version == AGENT_INODE_META_VERSION;
+}
+
+int
+agent_file_state_set_index(struct inode *ip, short slot, short flags, int stale)
+{
+	short old_slot, old_flags, old_version;
+	short version = slot ? AGENT_INODE_META_VERSION : 0;
+
+	if (ip == 0 || slot < AGENT_INODE_META_DEFERRED_SLOT ||
+	    slot > AGENT_FILE_META_MAX || (slot <= 0 && flags) ||
+	    (slot == AGENT_INODE_META_DEFERRED_SLOT &&
+	    !stale && ip->agent_meta_slot > 0))
+		return -1;
+	if (ip->agent_meta_slot == slot && ip->agent_meta_flags == flags &&
+	    ip->agent_meta_version == version)
+		return 0;
+	old_slot = ip->agent_meta_slot;
+	old_flags = ip->agent_meta_flags;
+	old_version = ip->agent_meta_version;
+	ip->agent_meta_slot = slot;
+	ip->agent_meta_flags = flags;
+	ip->agent_meta_version = version;
+	if (iupdate(ip) >= 0)
+		return 0;
+	ip->agent_meta_slot = old_slot;
+	ip->agent_meta_flags = old_flags;
+	ip->agent_meta_version = old_version;
+	return -1;
+}
+
+int
 agent_file_state_digest_cacheable(struct inode *ip)
 {
 	return ip != 0 && ip->agent_meta_slot > 0 &&

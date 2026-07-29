@@ -11,7 +11,7 @@ Kernel measurements are normalized and deterministic under the pinned Ubuntu
 
 - source size counts physical lines in committed production kernel C, headers,
   assembly, linker scripts, and top-level policy headers. It excludes generated
-  `os/initproc.S` and the exact five standalone profile owners registered under
+  `os/initproc.S` and the standalone profile owners registered under
   `test_only_sources`; each excluded owner has its own LOC ratchet, while
   profile hooks embedded in production units remain charged to production;
 - ELF size is measured after removing all symbols and non-runtime toolchain
@@ -67,39 +67,43 @@ Agent and 4.5 MiB across all 128 process slots, partitioned into 3.375 MiB
 ordinary and 1.125 MiB reserved capacity. Both are logical admission budgets
 over the general page allocator, not physically pinned reserves.
 
-A JSON `baseline_*` is a frozen review ratchet, not necessarily a duplicate of
-the current measurement. The `struct proc` baseline is 25,936 bytes, the
-current probe is 26,448 bytes, and the reviewed maximum is 27,233 bytes. The
-production kernel source baseline is 47,922 lines; the current measurement and
-reviewed maximum are both 49,705 lines. A future measurement below its frozen
-maximum still passes without raising the baseline merely to match it.
-
-The metadata control-plane aggregate currently measures 11,719 source lines,
-357,485 source bytes, 77,337 loaded-text bytes, and 1,118,596 BSS bytes. Its
-loaded-text baseline/maximum remains frozen at 77,896/77,896 bytes, while its
-BSS baseline/maximum is frozen at 1,118,596/1,118,596 bytes. Observation v7
-re-baselines the ledger at 2,372 lines and 223,232 BSS bytes; both maxima are
-set to those measured values, so later work must first remove code or state
-before adding more to that owner.
+A JSON `baseline_*` or `max_*` value is a frozen review ratchet, not a duplicate
+of the current measurement. Current source, image, runtime, `struct proc`, stack,
+and metadata-control-plane measurements are intentionally not copied into this
+document: they must come from the candidate's canonical `make ci-check` log,
+the same versioned JSON, and the selected release bundle. A measurement below
+its frozen maximum passes without raising the baseline merely to match it.
 
 The frozen catalog-capacity contract is deliberately static: 512 slots split
-into 64 SYSTEM slots and four 112-slot workflow partitions. ACTIVE, CLOSING,
-and RETIRING scopes share the four admission positions, and a RETIRING scope
-keeps its position until catalog reclaim completes. The workflow filesystem
-inode account is also capped at 112. Capacity checks reject elastic cross-scope
+into 64 SYSTEM slots and four 112-slot workflow partitions. Each workflow may
+grow to at most 96 live AUTOSCAN entries, leaving 16 slots for explicit
+metadata. That soft growth policy is not part of the v7 disk-validity contract:
+same-version snapshots with 97 through 112 AUTOSCAN entries load intact, while
+113 entries remain corrupt. An over-limit live scope may keep or reduce its
+AUTOSCAN count and may grow again only after reaching 95; exact receipt rollback
+uses hard partition and uniqueness checks rather than the newer soft policy.
+ACTIVE, CLOSING, and RETIRING scopes share the four admission positions, and a
+RETIRING scope keeps its position until catalog reclaim completes. The 112-slot
+number is an index-capacity contract, not a filesystem inode quota. The earlier
+candidate that also capped a workflow inode account at 112 is retained only as
+a historical failed baseline. Current workflow inode admission uses the
+independent STORAGE policy: its hard floor is 320 and the current image records
+about 342 inodes per workflow. Capacity checks reject elastic cross-scope
 borrowing, a separate catalog resource kind, global union/max approximations,
 or a metadata-envelope ledger; scoped reload instead binds and revalidates the
-immutable lifecycle id and generation. The superblock's current 342-inode
-guarantee is raw filesystem capacity, not the effective Agent catalog limit.
+immutable lifecycle id and generation.
 
-The full-suite duration gate is currently `calibrated_full_suite`. Frozen commit
-`814021ab9dac` produced three serial clean-detached 18-case samples of
-327.098196563, 310.491647311, and 279.293840369 seconds on the pinned runner.
-The reviewed median is 310.491647311 seconds and the deterministic limit is
-327.10 seconds. Timing files, deterministic compressed Guest/runner logs,
-environment, validation, and hashes are stored under
-`evidence/calibrations/814021ab9dac/`. The older `31d4ddf53695` calibration is
-retained only as historical evidence for its own source commit.
+The current candidate's full-suite duration gate is
+`provisional_requires_full_suite`. It intentionally carries no source
+fingerprint, baseline, limit, or calibration samples and therefore fails closed
+before a normal full-suite QEMU run. Frozen commit `814021ab9dac` produced three
+serial clean-detached 18-case samples of 327.098196563, 310.491647311, and
+279.293840369 seconds on the pinned runner; its median 310.491647311 seconds and
+limit 327.10 seconds are historical baselines for that source commit only.
+Their timing files, deterministic compressed Guest/runner logs, environment,
+validation, and hashes are stored under `evidence/calibrations/814021ab9dac/`.
+The older `31d4ddf53695` calibration is likewise historical evidence for its
+own source commit. Neither calibration is a threshold for the current candidate.
 
 A calibrated policy also carries `source_fingerprint_sha256`. The checker
 recomputes a length-framed SHA-256 over the expected cases, canonical

@@ -95,9 +95,6 @@ static uchar fs_scrub_reachable_inodes[FS_SCRUB_BITMAP_BYTES(NINODE)];
 
 _Static_assert(VFS_SCOPE_MAX_ACTIVE == FS_WORKFLOW_SCOPE_SLOTS,
 	       "storage and workflow admission slots must match");
-_Static_assert(VFS_SCOPE_MAX_ACTIVE * AGENT_FILE_SCOPE_LIMIT ==
-		       AGENT_FILE_ORDINARY_LIMIT,
-	       "metadata inode limits must preserve catalog partitions");
 _Static_assert(FS_LOOKUP_BUSY == VIRTIO_DISK_ERR_BUSY,
 	       "filesystem lookup BUSY must preserve the device result");
 _Static_assert(FS_OWNER_SYSTEM <= FS_QMAP_OWNER_PAYLOAD_MASK &&
@@ -1197,9 +1194,7 @@ int fs_storage_scope_account_create(
 	limits.class_limit[RESOURCE_CHARGE_RESERVED][RESOURCE_FS_BLOCK] =
 		fs_storage.workflow_block_domain_limit;
 	limits.class_limit[RESOURCE_CHARGE_RESERVED][RESOURCE_FS_INODE] =
-		fs_storage.workflow_inode_domain_limit < AGENT_FILE_SCOPE_LIMIT ?
-			fs_storage.workflow_inode_domain_limit :
-			AGENT_FILE_SCOPE_LIMIT;
+		fs_storage.workflow_inode_domain_limit;
 	limits.class_limit[RESOURCE_CHARGE_RESERVED][RESOURCE_BUFFER_CACHE] =
 		IO_CACHE_WORKFLOW_CAP;
 	limits.class_limit[RESOURCE_CHARGE_RESERVED][RESOURCE_PHYSICAL_PAGE] =
@@ -3568,6 +3563,23 @@ out:
 	return result;
 }
 
+int fs_dirent_canonicalize(const char *input, char out[DIRSIZ + 1])
+{
+	uint i;
+
+	if (input == 0 || out == 0 || input[0] == 0)
+		return -1;
+	memset(out, 0, DIRSIZ + 1);
+	for (i = 0; i < DIRSIZ && input[i] != 0; i++)
+		out[i] = input[i];
+	return 0;
+}
+
+/*
+ * Prebuilt images historically use a fixed DIRSIZ dirent as their lookup key.
+ * Canonicalize every operation to that on-disk key. Target inode policy and
+ * scope are still checked after the name match, so aliases cannot widen access.
+ */
 // Look for a directory entry in a directory.
 // If found, set *poff to byte offset of entry.
 struct inode *dirlookup(struct inode *dp, char *name, uint *poff,
@@ -3578,11 +3590,13 @@ struct inode *dirlookup(struct inode *dp, char *name, uint *poff,
 	struct inode *found = 0;
 	struct inode *target;
 	struct vfs_cred kernel_cred;
+	char key[DIRSIZ + 1];
 	int result;
 
 	if (status)
 		*status = FS_LOOKUP_ERROR;
-	if (dp == 0 || dp->type != T_DIR || policy == 0)
+	if (fs_dirent_canonicalize(name, key) < 0 || dp == 0 ||
+	    dp->type != T_DIR || policy == 0)
 		return 0;
 	vfs_cred_kernel(&kernel_cred);
 
@@ -3598,7 +3612,7 @@ struct inode *dirlookup(struct inode *dp, char *name, uint *poff,
 		}
 		if (de.inum == 0)
 			continue;
-		if (strncmp(name, de.name, DIRSIZ) == 0) {
+		if (strncmp(key, de.name, DIRSIZ) == 0) {
 			target = inode_get(dp->dev, de.inum);
 			if (target == 0) {
 				if (found)
@@ -3709,9 +3723,11 @@ int dirlink(struct inode *dp, char *name, uint inum,
 	};
 	uint target_policy;
 	uint target_scope_id;
+	char key[DIRSIZ + 1];
 	int lookup_status;
 	int result;
-	if (dp == 0 || dp->type != T_DIR)
+	if (fs_dirent_canonicalize(name, key) < 0 || dp == 0 ||
+	    dp->type != T_DIR)
 		return -1;
 	if (!vfs_inode_authorize(dp, cred, VFS_OP_CREATE))
 		return -1;
@@ -3751,7 +3767,7 @@ int dirlink(struct inode *dp, char *name, uint inum,
 				empty_off = off;
 			continue;
 		}
-		if (strncmp(name, de.name, DIRSIZ) != 0)
+		if (strncmp(key, de.name, DIRSIZ) != 0)
 			continue;
 		ip = inode_get(dp->dev, de.inum);
 		if (ip == 0)
@@ -3782,7 +3798,7 @@ int dirlink(struct inode *dp, char *name, uint inum,
 	if (empty_off < 0)
 		return -1;
 	off = empty_off;
-	strncpy(de.name, name, DIRSIZ);
+	memmove(de.name, key, DIRSIZ);
 	de.inum = inum;
 	result = writei_charged(dp, &kernel_cred, &charge, 0,
 				(uint64)&de, off, sizeof(de));
@@ -3802,13 +3818,15 @@ int dirunlink(struct inode *dp, char *name, uint offset, uint expected_inum,
 	struct dirent de;
 	struct inode *target;
 	struct vfs_cred kernel_cred;
+	char key[DIRSIZ + 1];
 	struct fs_storage_charge charge = {
 		.owner = FS_OWNER_SYSTEM,
 		.level = FS_CHARGE_SYSTEM,
 	};
 	int result;
 
-	if (dp == 0 || dp->type != T_DIR)
+	if (fs_dirent_canonicalize(name, key) < 0 || dp == 0 ||
+	    dp->type != T_DIR)
 		return -1;
 	if (!vfs_inode_authorize(dp, cred, VFS_OP_DELETE))
 		return -1;
@@ -3820,7 +3838,7 @@ int dirunlink(struct inode *dp, char *name, uint offset, uint expected_inum,
 	if (result != sizeof(de))
 		return result < 0 ? result : -1;
 	if (de.inum != expected_inum ||
-	    strncmp(name, de.name, DIRSIZ) != 0)
+	    strncmp(key, de.name, DIRSIZ) != 0)
 		return -1;
 	target = inode_get(dp->dev, de.inum);
 	if (target == 0)
@@ -3856,11 +3874,12 @@ int fs_rollback_created_workflow(char *path, uint expected_dev,
 {
 	struct inode *dp, *ip;
 	struct vfs_cred cred;
+	char key[DIRSIZ + 1];
 	uint offset;
 	int status;
 
-	if (path == 0 || path[0] == 0 || strlen(path) > DIRSIZ ||
-	    expected_dev == 0 || expected_inum == 0 ||
+	if (fs_dirent_canonicalize(path, key) < 0 || expected_dev == 0 ||
+	    expected_inum == 0 ||
 	    expected_incarnation == 0 ||
 	    scope_id < VFS_SCOPE_FIRST_DYNAMIC ||
 	    scope_id >= FS_OWNER_SCOPE_FLAG || !vfs_scope_retained(scope_id))
@@ -3869,7 +3888,7 @@ int fs_rollback_created_workflow(char *path, uint expected_dev,
 	dp = root_dir_status(&status);
 	if (dp == 0 || status != FS_LOOKUP_FOUND || dp->dev != expected_dev)
 		goto fail_parent;
-	ip = dirlookup(dp, path, &offset, VFS_POLICY_WORKFLOW, scope_id,
+	ip = dirlookup(dp, key, &offset, VFS_POLICY_WORKFLOW, scope_id,
 		       &status);
 	if (ip == 0 || status != FS_LOOKUP_FOUND || ip->dev != expected_dev ||
 	    ip->inum != expected_inum ||
@@ -3877,7 +3896,7 @@ int fs_rollback_created_workflow(char *path, uint expected_dev,
 	    ip->agent_meta_slot != 0 || ip->agent_meta_flags != 0 ||
 	    ip->agent_meta_version != 0 || !agent_edit_unlink_allowed(ip))
 		goto fail_target;
-	if (dirunlink(dp, path, offset, expected_inum, expected_incarnation,
+	if (dirunlink(dp, key, offset, expected_inum, expected_incarnation,
 		      &cred, VFS_POLICY_WORKFLOW) < 0)
 		goto fail_target;
 	agent_edit_note_delete(ip);
@@ -4167,6 +4186,7 @@ struct inode *fs_create(char *path, short type, int *created,
 	struct inode *ip;
 	struct fs_storage_charge charge;
 	uint intent_owner;
+	char key[DIRSIZ + 1];
 	int lookup_status;
 	int root_status;
 	int result;
@@ -4175,6 +4195,8 @@ struct inode *fs_create(char *path, short type, int *created,
 		*created = 0;
 	if (status)
 		*status = FS_LOOKUP_ERROR;
+	if (fs_dirent_canonicalize(path, key) < 0)
+		return 0;
 	dp = root_dir_status(&root_status);
 	if (dp == 0 || root_status != FS_LOOKUP_FOUND) {
 		root_status = fs_create_failure_status(root_status);
@@ -4190,7 +4212,7 @@ struct inode *fs_create(char *path, short type, int *created,
 		iput(dp);
 		return 0;
 	}
-	ip = dirlookup(dp, path, 0, policy,
+	ip = dirlookup(dp, key, 0, policy,
 		       policy == VFS_POLICY_WORKFLOW ? cred->scope_id :
 						 VFS_SCOPE_NONE,
 		       &lookup_status);
@@ -4271,7 +4293,7 @@ struct inode *fs_create(char *path, short type, int *created,
 	if (result < 0)
 		goto fail_allocated;
 	FS_ALLOCATOR_FAULT_AFTER(FSALLOC_OP_IALLOC, FSALLOC_PHASE_OWNER);
-	result = dirlink(dp, path, ip->inum, cred);
+	result = dirlink(dp, key, ip->inum, cred);
 	if (result < 0)
 		goto fail_allocated;
 	iput(dp);

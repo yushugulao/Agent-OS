@@ -87,17 +87,11 @@ def validate_sources(sources: dict[str, str]) -> None:
         "workflow_lifecycle_closing(*lifecycle)",
     ):
         require(scope_admissible, token, "catalog lifecycle admission")
-    admission = function_body(catalog, "agent_catalog_admission(")
-    for token in (
-        "AGENT_FILE_SYSTEM_LIMIT : AGENT_FILE_SCOPE_LIMIT",
-        "result.owned >= limit",
-        "result.ordinary >= AGENT_FILE_ORDINARY_LIMIT",
-        "return AGENT_CATALOG_NO_SPACE",
-        "!growth || scope_id == VFS_SCOPE_SYSTEM",
-        "!agent_catalog_scope_admissible(scope_id, &lifecycle)",
-        "return AGENT_CATALOG_INTERRUPTED",
-    ):
-        require(admission, token, "fixed per-scope catalog admission")
+    admission = function_body(catalog, "static int agent_catalog_admission(")
+    require_order(admission,
+                  ("const struct agent_file_meta *candidate,", "uint flags,",
+                   "flags & AGENT_FILE_META_F_AUTOSCAN"),
+                  "rollback candidate admission")
     plan_count = function_body(catalog, "agent_catalog_plan_count(")
     for token in (
         "AGENT_FILE_SYSTEM_LIMIT",
@@ -129,15 +123,9 @@ def validate_sources(sources: dict[str, str]) -> None:
         "key.lifecycle_generation = lifecycle.generation",
     ):
         require(plan_key, token, "scoped reload key construction")
-    plan_matches = function_body(catalog, "agent_catalog_plan_matches(")
-    for token in (
-        "left->lifecycle_id == right->lifecycle_id",
-        "left->lifecycle_generation == right->lifecycle_generation",
-    ):
-        require(plan_matches, token, "scoped reload key comparison")
     prepare = function_body(catalog, "agent_metadata_catalog_prepare_snapshot(")
     prepare_key = prepare.find("key = agent_catalog_plan_key(")
-    prepare_match = prepare.find("if (!agent_catalog_plan_matches(")
+    prepare_match = prepare.find("memcmp(&result->plan_key, &key, sizeof(key))")
     if prepare_key < 0 or prepare_match < prepare_key:
         raise ContractError("scoped reload prepare key order is incomplete")
     initial_revalidation = prepare[:prepare_key]
@@ -208,24 +196,25 @@ def validate_sources(sources: dict[str, str]) -> None:
 
     binding = function_body(catalog, "agent_catalog_undo_binding(")
     for token in ("&undo->fence_token", "&undo->catalog_generation",
-                  "&undo->reserved", "&slot",
-                  "&agent_catalog_scopes[slot]",
+                   "&undo->reserved", "&slot",
+                   "&agent_catalog_scopes[slot]",
                   "&agent_catalog_states[slot]",
                   "&agent_catalog_files[slot]"):
         require(binding, token, "full post-state binding")
     capture = function_body(catalog, "agent_metadata_catalog_undo_capture(")
     for token in ("agent_catalog_fence_owned(fence)",
-                  "undo->fence_token = fence->token",
-                  "undo->catalog_generation = agent_catalog_generation",
-                  "undo->slot_binding = agent_catalog_undo_binding("):
+                   "memset(undo, 0, sizeof(*undo))",
+                   "undo->fence_token = fence->token",
+                   "undo->catalog_generation = agent_catalog_generation",
+                   "undo->slot_binding = agent_catalog_undo_binding("):
         require(capture, token, "catalog-issued undo token")
     created = function_body(
         catalog, "agent_metadata_catalog_undo_note_created("
     )
     for token in ("agent_catalog_fence_owned(fence)",
-                  "undo->reserved != 0",
-                  "agent_metadata_catalog_identity_state(&agent_catalog_files[slot]) <= 0",
-                  "undo->slot_binding != agent_catalog_undo_binding(undo, slot)",
+                   "undo->reserved != 0",
+                   "agent_metadata_catalog_identity_state(&agent_catalog_files[slot]) <= 0",
+                   "undo->slot_binding != agent_catalog_undo_binding(undo, slot)",
                   "undo->reserved = AGENT_CATALOG_UNDO_CREATED",
                   "undo->slot_binding = agent_catalog_undo_binding(undo, slot)"):
         require(created, token, "catalog-issued creation receipt")
@@ -242,8 +231,8 @@ def validate_sources(sources: dict[str, str]) -> None:
                   "(undo->reserved & ~AGENT_CATALOG_UNDO_CREATED) != 0",
                   "undo->fence_token != fence->token",
                   "undo->slot_binding != agent_catalog_undo_binding(undo, slot)",
-                  "agent_catalog_admission(",
-                  "previous_scope, slot, previous, 0",
+                  "agent_catalog_hard_admission(",
+                  "previous_scope, slot, previous, &result",
                   "agent_catalog_unbind(slot",
                   "undo->reserved & AGENT_CATALOG_UNDO_CREATED",
                   "fs_rollback_created_workflow("):
@@ -251,14 +240,15 @@ def validate_sources(sources: dict[str, str]) -> None:
     require_order(
         restore,
         ("undo->slot_binding != agent_catalog_undo_binding(undo, slot)",
-         "agent_catalog_admission(",
+         "agent_catalog_hard_admission(",
          "agent_catalog_unbind(slot",
          "fs_rollback_created_workflow(",
          "agent_catalog_state_clear(slot)"),
         "validate and admit before rollback write",
     )
-    if "previous_scope, slot, previous, 1" in restore:
-        raise ContractError("exact rollback is incorrectly classified as growth")
+    if "agent_catalog_admission(" in restore or \
+            "AGENT_FILE_AUTOSCAN_SCOPE_LIMIT" in restore:
+        raise ContractError("exact rollback depends on live soft admission")
     if "undo->catalog_generation != agent_catalog_generation" in restore:
         raise ContractError("unrelated catalog generation became a rollback veto")
     restore_cleanup = restore[
@@ -305,7 +295,7 @@ def validate_sources(sources: dict[str, str]) -> None:
         require(bind_status, token, "bind-local create rollback")
     mismatch = bind_status[
         bind_status.find("if ((meta->dev"):
-        bind_status.find("old_slot = ip->agent_meta_slot")
+        bind_status.find("agent_file_state_set_index(")
     ]
     if "iput(ip)" in mismatch:
         raise ContractError("bind-local cleanup drops the creation identity early")
@@ -326,7 +316,8 @@ def validate_sources(sources: dict[str, str]) -> None:
     for token in ("FS_LOOKUP_INDETERMINATE", "FS_CREATE_INDETERMINATE"):
         require(fs_h, token, "namespace publication state")
     dirlink = function_body(fs, "int dirlink(")
-    for token in ("fs_io_health == FS_IO_INDETERMINATE ?\n"
+    for token in ("fs_dirent_canonicalize(name, key) < 0",
+                  "fs_io_health == FS_IO_INDETERMINATE ?\n"
                   "\t\t\tFS_LOOKUP_INDETERMINATE",
                   "result = fs_durable_barrier_forward()",
                   "return FS_LOOKUP_INDETERMINATE;"):
@@ -338,7 +329,8 @@ def validate_sources(sources: dict[str, str]) -> None:
     create_inode = function_body(fs, "struct inode *fs_create(")
     if create_inode.count("fs_create_failure_status(") < 6:
         raise ContractError("create failures bypass the health classifier")
-    for token in ("result = dirlink(dp, path, ip->inum, cred);\n"
+    for token in ("fs_dirent_canonicalize(path, key) < 0",
+                  "result = dirlink(dp, key, ip->inum, cred);\n"
                   "\tif (result < 0)\n\t\tgoto fail_allocated;",
                   "fail_allocated:",
                   "result = fs_create_failure_status(result)",
@@ -352,8 +344,9 @@ def validate_sources(sources: dict[str, str]) -> None:
         raise ContractError("create failure uses unchecked inode abort")
     require_order(
         create_inode,
-        ("result = iupdate(ip)", "result = fs_durable_barrier_forward()",
-         "result = dirlink(dp, path, ip->inum, cred)", "fail_allocated:"),
+        ("fs_dirent_canonicalize(path, key)", "result = iupdate(ip)",
+         "result = fs_durable_barrier_forward()",
+         "result = dirlink(dp, key, ip->inum, cred)", "fail_allocated:"),
         "classify before checked create cleanup",
     )
     allocated_cleanup = create_inode[create_inode.find("fail_allocated:"):]
@@ -414,7 +407,8 @@ def validate_sources(sources: dict[str, str]) -> None:
                   "return itruncate_reclaim(&reclaim)"):
         require(removed_put, token, "checked created-inode reclaim")
     discard = function_body(fs, "int fs_rollback_created_workflow(")
-    for token in ("expected_dev == 0", "expected_inum == 0",
+    for token in ("fs_dirent_canonicalize(path, key) < 0",
+                  "expected_dev == 0", "expected_inum == 0",
                   "expected_incarnation == 0", "vfs_scope_retained(scope_id)",
                   "dp->dev != expected_dev", "ip->dev != expected_dev",
                   "ip->inum != expected_inum",
@@ -423,14 +417,15 @@ def validate_sources(sources: dict[str, str]) -> None:
                    "ip->agent_meta_flags != 0",
                    "ip->agent_meta_version != 0",
                    "agent_edit_unlink_allowed(ip)",
-                   "dirunlink(dp, path, offset, expected_inum, expected_incarnation",
+                   "dirunlink(dp, key, offset, expected_inum, expected_incarnation",
                    "agent_edit_note_delete(ip)", "ip->removed = 1",
                    "status = fs_put_removed_checked(ip)", "return status;"):
         require(discard, token, "exact created-inode rollback")
     require_order(
         discard,
-        ("dirlookup(dp, path", "ip->dev != expected_dev",
-         "dirunlink(dp, path, offset, expected_inum, expected_incarnation",
+        ("fs_dirent_canonicalize(path, key)", "dirlookup(dp, key",
+         "ip->dev != expected_dev",
+         "dirunlink(dp, key, offset, expected_inum, expected_incarnation",
           "ip->removed = 1", "status = fs_put_removed_checked(ip)"),
         "identity check before created-inode removal",
     )
@@ -439,7 +434,7 @@ def validate_sources(sources: dict[str, str]) -> None:
     if meta_set.count("agent_metadata_catalog_mutation_begin(") != 1:
         raise ContractError("metadata mutation does not use one syscall fence")
     if meta_set.count("agent_metadata_catalog_undo_capture(") < 3:
-        raise ContractError("post-commit/bind/delete states are not all bound")
+        raise ContractError("delete/set mutations do not issue refreshed undo tokens")
     if meta_set.count("agent_metadata_catalog_mutation_end(") != 1:
         raise ContractError("metadata syscall lacks a single fence cleanup")
     require_order(meta_set,
@@ -454,7 +449,7 @@ def validate_sources(sources: dict[str, str]) -> None:
     set_path = meta_set[set_start:]
     require_order(
         set_path,
-        ("agent_metadata_catalog_alloc_slot(scope_id)",
+        ("agent_metadata_catalog_alloc_slot(scope_id, 0)",
          "result = agent_catalog_error_status(slot)",
          "agent_metadata_catalog_edit_begin("),
         "catalog allocation status before fenced edit",

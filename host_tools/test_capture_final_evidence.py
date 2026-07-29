@@ -2,9 +2,12 @@
 """No-QEMU regression tests for the compact final-evidence pipeline."""
 from __future__ import annotations
 import csv
+import copy
 import importlib.util
+import io
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -13,6 +16,7 @@ import tempfile
 import threading
 import time
 import unittest
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from gitlab_ci_contract import validate_repository_ci
@@ -21,6 +25,32 @@ from evidence_semantic_registry import (
     EvidenceSemanticError,
     validate_selected_artifacts,
 )
+from evidence_semantic_profiles import _validate_dual_state
+from evidence_semantic_common import ValidationContext
+from evidence_semantic_dual import _validate_telemetry
+import dual_state_archive
+from dual_state_archive import _canonical_zip
+from dual_state_evidence_contract import (
+    AGENTOS_REQUIRED_AGENT_ROLES,
+    AGENT_TO_PLAIN_CASE,
+    BACKEND_REPORT_ARTIFACTS,
+    BACKEND_REPORT_CASES,
+    DUAL_STATE_RAW_ARTIFACTS,
+    MAIN_FLOW_RAW_ARTIFACTS,
+    MAIN_FLOW_SOURCE_ARTIFACTS,
+    MAIN_FLOW_SOURCE_SPECS,
+    MAIN_FLOW_TELEMETRY_ARTIFACT,
+    PLATFORM_PROGRAMS,
+    PROGRAM_LEDGER_ARTIFACTS,
+    RUN_RESULT_ARTIFACTS,
+    SEEDED_ACTION_SUMMARY_ARTIFACT,
+    STATE_ARCHIVE_ARTIFACTS,
+    evidence_check_count,
+    expected_scenario_rows,
+    fnv1a64,
+)
+from reference_catalog_contract import expected_reference_identities
+from research_state_manifest import load_manifest, target_state_names
 from remote_ci_test_fixture import JOB_SPECS, build_remote_job_payloads
 REPO = Path(__file__).resolve().parents[1]
 COLLECTOR = REPO / "scripts" / "capture-final-evidence.py"
@@ -33,6 +63,15 @@ SEMANTIC_REGISTRY = REPO / "host_tools" / "evidence_semantic_registry.py"
 SEMANTIC_COMMON = REPO / "host_tools" / "evidence_semantic_common.py"
 SEMANTIC_PROFILES = REPO / "host_tools" / "evidence_semantic_profiles.py"
 SEMANTIC_METADATA = REPO / "host_tools" / "evidence_semantic_metadata.py"
+SEMANTIC_DUAL = REPO / "host_tools" / "evidence_semantic_dual.py"
+DUAL_STATE_CONTRACT = REPO / "host_tools" / "dual_state_evidence_contract.py"
+DUAL_STATE_ARCHIVE = REPO / "host_tools" / "dual_state_archive.py"
+RESULT_PUBLICATION = REPO / "host_tools" / "result_bundle_publication.py"
+REFERENCE_CATALOG_CONTRACT = REPO / "host_tools" / "reference_catalog_contract.py"
+COMPARE_DUAL_STATE = REPO / "host_tools" / "compare_dual_platform_state.py"
+CHECK_HOST_PLATFORM = REPO / "host_tools" / "check_host_platform_alignment.py"
+CHECK_HOST_TEST = REPO / "host_tools" / "check_host_test_alignment.py"
+COMPARE_DUAL_TEST = REPO / "host_tools" / "test_compare_dual_platform_state.py"
 OBSERVE_EVIDENCE_MODULES = tuple(
     REPO / "host_tools" / name
     for name in (
@@ -44,7 +83,10 @@ OBSERVE_EVIDENCE_MODULES = tuple(
 )
 OBSERVE_EVIDENCE_CONTRACTS = tuple(
     REPO / "ci" / name
-    for name in ("agent-metadata-disk-format.json", "agent-observe-disk-format.json")
+    for name in (
+        "agent-metadata-disk-format.json", "agent-observe-disk-format.json",
+        "research-state-manifest.json",
+    )
 )
 BACKEND_EVIDENCE_CONTRACT = REPO / "host_tools" / "backend_evidence_contract.py"
 KERNEL_LOG_VALIDATOR = REPO / "scripts" / "validate-kernel-test-log.py"
@@ -87,7 +129,8 @@ PROFILE_ARTIFACTS = {
     "agent-suite": ["agent-suite-timings.log", "agent-suite-guest.log"],
     "dual-platforms": ["dual-plain-qemu.log", "dual-agentos-qemu.log",
                         "dual-stage-timings.csv", "dual-state-compare.json",
-                        "dual-reader-compare.json",
+                        "dual-reader-compare.json", "host-platform-alignment.json",
+                        *DUAL_STATE_RAW_ARTIFACTS,
                         "dual-targeted-agentbench-guest.log",
                         "dual-measured-experiments.json",
                         "dual-file-query-benchmark.csv"],
@@ -230,6 +273,24 @@ ROOT = Path(__file__).resolve().parents[1]
 OUT = Path(sys.argv[1])
 sys.path.insert(0, str(ROOT / "host_tools"))
 from agent_observe_disk_fixture import write_fixture
+from dual_state_evidence_contract import (
+    AGENTOS_EVIDENCE_REQUIREMENTS, AGENTOS_MAINFLOW_FACTS,
+    AGENTOS_REQUIRED_AGENT_ROLES, AGENTOS_ROLE_NUMBERS,
+    AGENT_TO_PLAIN_CASE,
+    BACKEND_REPORT_ARTIFACTS, BACKEND_REPORT_CASES, MAIN_FLOW_SOURCE_ARTIFACTS, MAIN_FLOW_SOURCE_SPECS,
+    MAIN_FLOW_TELEMETRY_ARTIFACT, PLATFORM_PROGRAMS, PROGRAM_LEDGER_ARTIFACTS,
+    RUN_RESULT_ARTIFACTS, SEEDED_ACTION_SUMMARY_ARTIFACT,
+    STATE_ARCHIVE_ARTIFACTS, evidence_check_count,
+    expected_scenario_rows, fnv1a64,
+)
+from reference_catalog_contract import expected_reference_identities
+import compare_dual_platform_state as compare_state_module
+import test_compare_dual_platform_state as state_fixture
+from check_host_platform_alignment import (
+    CAPABILITY_GROUPS, collect_source_names, runtime_candidates,
+)
+from dual_state_archive import pack_state
+from research_state_manifest import archive_state_names, load_manifest
 
 def load(name):
     source = ROOT / "scripts" / name
@@ -416,48 +477,299 @@ write("agent-suite-timings.log", "\n".join(
 write("dual-targeted-agentbench-guest.log",
       section("agent-case:agentbench_ucore", [benchmark, "agentbench_ucore: parent passed"]))
 
+programs = list(PLATFORM_PROGRAMS)
+plain_ledger = ["orchestrator=rp_seed_orch", "launcher=fork_seeded"] + [
+    f"program={program};launcher=fork_seeded;ok=1;code=0;elapsed_ms={index}"
+    for index, program in enumerate(programs, 1)
+]
+agent_ledger = ["orchestrator=rp_orch", "launcher=mixed_attested"]
+for index, program in enumerate(programs, 1):
+    role = AGENTOS_REQUIRED_AGENT_ROLES.get(program)
+    is_agent = role is not None
+    agent_ledger.append(
+        f"program={program};role={role if is_agent else 'plain'};"
+        f"launcher={'agent_create_role' if is_agent else 'agent_worker_create'};"
+        f"identity_source=child_after_exec;is_agent={int(is_agent)};"
+        f"agent_role={AGENTOS_ROLE_NUMBERS[role] if is_agent else 0};"
+        f"filesystem_domain=3;filesystem_capabilities=66;ok=1;code=0;elapsed_ms={index}"
+    )
+write(PROGRAM_LEDGER_ARTIFACTS["plain"], "\n".join(plain_ledger))
+write(PROGRAM_LEDGER_ARTIFACTS["agentos"], "\n".join(agent_ledger))
+
+def program_receipt(target):
+    raw = (OUT / PROGRAM_LEDGER_ARTIFACTS[target]).read_bytes()
+    digest = 1469598103934665603
+    for program in programs:
+        digest = fnv1a64(program.encode() + b"\0", digest)
+    return f"program_source_bytes={len(raw)} program_source_hash={fnv1a64(raw)} program_names_digest={digest} programs_observed={len(programs)}"
+
 write("dual-plain-qemu.log", "\n".join([
     "rp_backend: evidence_role=demo_reference catalog_generation=demo_expected cases=7 status=reference_ready",
-    "rp_orch: evidence_role=demo_reference observation_source=guest_runtime program_source=rp_orch_timing program_source_bytes=1 program_source_hash=1 program_names_digest=1 programs_observed=69 status=reference_observed",
-    "rp_orch: programs_ok=69 programs_total=69",
+    "rp_backend: runtime_cases=0",
+    "rp_orch: evidence_role=demo_reference evidence_generation=runtime observation_source=guest_runtime program_source=rp_orch_timing " + program_receipt("plain") + " status=reference_observed",
+    f"rp_orch: programs_ok={len(programs)} programs_total={len(programs)}",
+    "rp_web_export: host_reader_actions=1",
+    "rp_compare_plain: host_actions=1 verified",
     "rp_compare_plain: evidence_role=demo_reference catalog_generation=demo_expected status=reference_ready",
     "rp_orch: passed",
 ]))
 write("dual-agentos-qemu.log", "\n".join([
     "rp_backend: evidence_generation=runtime runtime_cases=8 source_reads=8 kernel_checks=4 context_sequence=1 query_returned=1 query_used_index=1 status=verified",
-    "rp_orch: evidence_role=runtime_verified evidence_generation=runtime program_source=rp_orch_timing program_source_bytes=1 program_source_hash=1 program_names_digest=1 programs_observed=69 status=verified",
-    "rp_orch: programs_ok=69 programs_total=69",
+    "rp_orch: evidence_role=runtime_verified evidence_generation=runtime program_source=rp_orch_timing " + program_receipt("agentos") + " status=verified",
+    f"rp_orch: programs_ok={len(programs)} programs_total={len(programs)}",
+    "rp_web_export: host_reader_actions=1",
+    "rp_compare_plain: host_actions=1 verified",
     "rp_compare_plain: evidence_generation=runtime runtime_assertions_executed=8 runtime_assertions_passed=8 status=verified",
     "rp_agentos_orch: kernel_agent=1 workflow=rp_orch status=ready",
     "rp_agentos_orch: passed",
 ]))
+(OUT / SEEDED_ACTION_SUMMARY_ARTIFACT).write_text(json.dumps({
+    "status": "ready", "action": "/actions/research/rerun", "action_count": 1,
+    "action_kinds": ["fixture_action"],
+}) + "\n", encoding="utf-8", newline="\n")
 stages = ("structure-check", "seeded-dual-run", "qemu-log-marker-check",
           "state-extract-copy", "host-alignment", "state-compare",
           "reader-render-check", "measured-file-query", "result-report-chart")
 write("dual-stage-timings.csv", "stage,start_epoch,end_epoch,duration_seconds,status\n" +
       "\n".join("%s,%d,%d,1,ready" % (stage, index, index + 1)
                   for index, stage in enumerate(stages, 1)))
+cost_rows = []
+for index, case in enumerate(BACKEND_REPORT_CASES["agentos"], 1):
+    plain_case = AGENT_TO_PLAIN_CASE[case]
+    cost_rows.append({
+        "case": case, "plain_cost": f"fixture_cost_{index}",
+        "agentos_replace": f"fixture_replace_{index}", "risk": f"fixture_risk_{index}",
+        "plain_case": plain_case, "preserved_from_plain": int(bool(plain_case)),
+        "status": "reference_ready",
+    })
+plain_cost_by_case = {
+    row["plain_case"]: row for row in cost_rows if row["plain_case"]
+}
+plain_backend_rows = [
+    f"runner_report={case};plain_cost={plain_cost_by_case[case]['plain_cost']};"
+    f"agentos_replace={plain_cost_by_case[case]['agentos_replace']};"
+    f"risk={plain_cost_by_case[case]['risk']};status=reference_ready"
+    for case in BACKEND_REPORT_CASES["plain"]
+]
+write(BACKEND_REPORT_ARTIFACTS["plain"], "\n".join([
+    "evidence_file_role=demo_reference",
+    "evidence_file_generation=demo_expected",
+    "runtime_cases=0",
+    *plain_backend_rows,
+    "evidence_file_status=reference_ready",
+]))
+write(BACKEND_REPORT_ARTIFACTS["agentos"], "\n".join(
+    f"evidence_role=demo_reference;catalog_generation=demo_expected;"
+    f"runner_report={row['case']};plain_cost={row['plain_cost']};"
+    f"agentos_replace={row['agentos_replace']};risk={row['risk']};"
+    f"status=reference_ready" for row in cost_rows
+))
 (OUT / "dual-state-compare.json").write_text(json.dumps({
     "plain_files": 300, "agentos_files": 320, "common_files": 300,
     "agentos_extra_files": 20, "checked_compatibility_records": 10,
-    "plain_reference_products": 7, "agentos_reference_products": 7,
-    "plain_reference_records": 7, "agentos_reference_records": 7,
-    "source_bound_runtime_records": 8, "preserved_plain_costs": 8,
-    "cost_replacements": [{"case": index} for index in range(8)],
-    "cost_replacement_count": 8,
-    "runner_tick_comparison": [{"case": index} for index in range(7)],
-    "runner_tick_pairs": 7, "embedded_action_records": 1,
-    "run_result_match": 1, "agentos_evidence_checks": 8,
-    "scenario_evidence": [{"status": "ready"}],
-    "agentos_mainflow_stages": 11, "agentos_mainflow_facts": 12,
-    "plain_timing_records": 7, "plain_agent_launches": 7,
-    "plain_fork_launches": 7, "agentos_timing_records": 8,
-    "agentos_agent_launches": 8, "agentos_worker_launches": 8,
+    "plain_reference_products": 17, "agentos_reference_products": 6,
+    "plain_reference_records": 19, "agentos_reference_records": 24,
+    "plain_reference_identities": list(expected_reference_identities("plain")),
+    "agentos_reference_identities": list(expected_reference_identities("agentos")),
+    "guest_source_bound_runtime_records": 0, "preserved_plain_costs": 7,
+    "cost_replacements": cost_rows,
+    "cost_replacement_count": 8, "runner_tick_status": "unavailable",
+    "runner_tick_reason": "plain_runtime_cases_zero", "embedded_action_records": 1,
+    "run_result_match": 1, "agentos_evidence_checks": evidence_check_count(),
+    "scenario_evidence": expected_scenario_rows(),
+    "host_derived_mainflow_stages": len(MAIN_FLOW_SOURCE_SPECS),
+    "agentos_mainflow_facts": len(AGENTOS_MAINFLOW_FACTS),
+    "agentos_mainflow_verification_origin": "host_inventory",
+    "plain_timing_records": len(programs), "plain_agent_launches": 0,
+    "plain_fork_launches": len(programs), "agentos_timing_records": len(programs),
+    "agentos_agent_launches": len(AGENTOS_REQUIRED_AGENT_ROLES),
+    "agentos_worker_launches": len(programs) - len(AGENTOS_REQUIRED_AGENT_ROLES),
     "status": "ready",
 }) + "\n", encoding="utf-8")
+
+telemetry = []
+source_rows = []
+producer_source_lines = {
+    "rp_agentos_kernel": (
+        "target=agentos_ucore",
+        "mode=kernel_agent_orchestrated",
+        "context_snapshot=present",
+        "status=ready",
+        "dependency_update=generic_record",
+        "dependency_query=generic_record",
+        "metadata_query=stage_index",
+        "prefetch_hint=dependency_driven",
+    ),
+    "rp_agentos_collab_ack": (
+        "agent=sentinel",
+        "event=handoff",
+        "route=recovery-auditor",
+        "delivery=kernel_event_queue",
+        "permission_control=sentinel_action_denied",
+        "status=ready",
+    ),
+}
+for spec in MAIN_FLOW_SOURCE_SPECS:
+    telemetry.append(";".join([
+        f"stage={spec.stage}",
+        *(f"{key}={value}" for key, value in spec.telemetry_fields),
+        "status=ready",
+    ]))
+    source_lines = producer_source_lines.get(
+        spec.source,
+        (*AGENTOS_EVIDENCE_REQUIREMENTS[spec.source], f"status={spec.source_status}"),
+    )
+    raw = ("\n".join(source_lines) + "\n").encode()
+    (OUT / MAIN_FLOW_SOURCE_ARTIFACTS[spec.source]).write_bytes(raw)
+    source_rows.append({
+        "stage": spec.stage, "source": spec.source,
+        "claim_key": spec.claim_key, "claim_value": spec.claim_value,
+        "source_status": spec.source_status, "source_bytes": len(raw),
+        "source_hash": fnv1a64(raw), "claim_verified": True,
+        "status_verified": True,
+        "telemetry_fields": [
+            {"key": key, "value": value} for key, value in spec.telemetry_fields
+        ],
+        "telemetry_verified": True,
+    })
+write(MAIN_FLOW_TELEMETRY_ARTIFACT, "\n".join(telemetry))
+telemetry_raw = (OUT / MAIN_FLOW_TELEMETRY_ARTIFACT).read_bytes()
+
+state_root = OUT.parent / "fixture-complete-state"
+plain_state, agentos_state = state_root / "plain", state_root / "agentos"
+plain_state.mkdir(parents=True)
+agentos_state.mkdir(parents=True)
+state_manifest = load_manifest(ROOT)
+archive_inventories = {
+    target: archive_state_names(ROOT, state_manifest, target)
+    for target in ("plain", "agentos")
+}
+for target, state_dir in (("plain", plain_state), ("agentos", agentos_state)):
+    for name in sorted(archive_inventories[target]):
+        state_fixture.write_state_file(state_dir, name, f"fixture={target}\n")
+state_fixture.write_state_file(
+    plain_state, "rp_backend", "runner_report=file_scan\nruntime_cases=0\nstatus=ready\n"
+)
+state_fixture.write_state_file(
+    agentos_state, "rp_backend",
+    "runner_report=file_scan;status=ready;kernel=observed\nstatus=ready\n",
+)
+state_fixture.write_backend_catalog(plain_state, "plain")
+state_fixture.write_backend_catalog(agentos_state, "agentos")
+for target, state_dir in (("plain", plain_state), ("agentos", agentos_state)):
+    (state_dir / "rp_orch_timing").write_bytes(
+        (OUT / PROGRAM_LEDGER_ARTIFACTS[target]).read_bytes()
+    )
+    state_fixture.write_state_file(
+        state_dir, "rp_agentcmp",
+        "plain_kernel=passed;status=ready\n" +
+        state_fixture.program_inventory_line(state_dir, target),
+    )
+    state_fixture.seed_reference_inventory(state_dir, target)
+for spec in MAIN_FLOW_SOURCE_SPECS:
+    (agentos_state / spec.source).write_bytes(
+        (OUT / MAIN_FLOW_SOURCE_ARTIFACTS[spec.source]).read_bytes()
+    )
+(agentos_state / "rp_agentos_mainflow").write_bytes(telemetry_raw)
+for group in CAPABILITY_GROUPS:
+    for target, state_dir, sources in (
+        ("plain", plain_state, group.plain_sources),
+        ("agentos", agentos_state, group.agentos_sources),
+    ):
+        candidates = runtime_candidates(group, sources)
+        candidate = next(
+            (name for name in candidates if name in archive_inventories[target]),
+            None,
+        )
+        if candidate is None:
+            raise RuntimeError(
+                f"{target} capability group {group.name} has no manifested runtime state"
+            )
+for target, state_dir in (("plain", plain_state), ("agentos", agentos_state)):
+    names = sorted(path.name for path in state_dir.iterdir() if path.is_file())
+    if set(names) != archive_inventories[target]:
+        raise RuntimeError(f"{target} fixture state inventory differs from manifest")
+    state_fixture.write_summary(state_dir, names)
+state_fixture.write_host_run_result(
+    OUT / RUN_RESULT_ARTIFACTS["plain"], target="plain",
+    state_dir=plain_state,
+    extracted_state_files=len(archive_inventories["plain"]),
+)
+state_fixture.write_host_run_result(
+    OUT / RUN_RESULT_ARTIFACTS["agentos"], target="agentos",
+    state_dir=agentos_state,
+    extracted_state_files=len(archive_inventories["agentos"]),
+)
+state_summary = compare_state_module.compare_state(
+    plain_state,
+    agentos_state,
+    min_common_files=240,
+    plain_run_result=OUT / RUN_RESULT_ARTIFACTS["plain"],
+    agentos_run_result=OUT / RUN_RESULT_ARTIFACTS["agentos"],
+    plain_log=OUT / "dual-plain-qemu.log",
+    agentos_log=OUT / "dual-agentos-qemu.log",
+    seeded_summary=OUT / SEEDED_ACTION_SUMMARY_ARTIFACT,
+)
+(OUT / "dual-state-compare.json").write_text(
+    json.dumps(state_summary) + "\n", encoding="utf-8"
+)
+for target, state_dir in (("plain", plain_state), ("agentos", agentos_state)):
+    (OUT / BACKEND_REPORT_ARTIFACTS[target]).write_bytes(
+        (state_dir / "rp_backend_exec").read_bytes()
+    )
+    pack_state(state_dir, OUT / STATE_ARCHIVE_ARTIFACTS[target])
+
+plain_inventory = set(json.loads((plain_state / "extract-summary.json").read_text())["files"])
+agentos_inventory = set(json.loads((agentos_state / "extract-summary.json").read_text())["files"])
+alignment_groups = []
+for group in CAPABILITY_GROUPS:
+    alignment_groups.append({
+        "name": group.name, "host_modules": len(group.host_modules),
+        "plain_sources": len(group.plain_sources),
+        "agentos_sources": len(group.agentos_sources),
+        "reader_keywords": len(group.reader_keywords), "status": "ok",
+        "missing_host": [], "missing_plain": [], "missing_agentos": [],
+        "missing_reader": [],
+        "plain_runtime_hits": [
+            name for name in runtime_candidates(group, group.plain_sources)
+            if name in plain_inventory
+        ],
+        "agentos_runtime_hits": [
+            name for name in runtime_candidates(group, group.agentos_sources)
+            if name in agentos_inventory
+        ],
+    })
+tracked_host_modules = {
+    module for group in CAPABILITY_GROUPS for module in group.host_modules
+}
+(OUT / "host-platform-alignment.json").write_text(json.dumps({
+    "status": "ready", "host_dir": "fixture",
+    "host_modules": len(tracked_host_modules),
+    "tracked_host_modules": len(tracked_host_modules), "untracked_host_modules": 0,
+    "plain_sources": len(collect_source_names(ROOT, "baseline_ucore/user/src")),
+    "agentos_sources": len(collect_source_names(ROOT, "user/src")),
+    "plain_state_files": len(plain_inventory),
+    "agentos_state_files": len(agentos_inventory), "runtime_state_checked": True,
+    "runtime_evidence_verified": True, "program_inventory_verified": True,
+    "mainflow_host_verified": True, "mainflow_verification_origin": "host_inventory",
+    "mainflow_host_stages": len(MAIN_FLOW_SOURCE_SPECS),
+    "mainflow_host_assertions_executed": 2 * len(MAIN_FLOW_SOURCE_SPECS),
+    "mainflow_host_assertions_passed": 2 * len(MAIN_FLOW_SOURCE_SPECS),
+    "mainflow_host_telemetry_sequence": [spec.stage for spec in MAIN_FLOW_SOURCE_SPECS],
+    "mainflow_host_telemetry_source": "rp_agentos_mainflow",
+    "mainflow_host_telemetry_bytes": len(telemetry_raw),
+    "mainflow_host_telemetry_hash": fnv1a64(telemetry_raw),
+    "mainflow_host_sources": source_rows, "plain_programs_observed": len(programs),
+    "agentos_programs_observed": len(programs), "plain_evidence_role": "demo_reference",
+    "groups_ok": len(alignment_groups), "groups_total": len(alignment_groups),
+    "groups": alignment_groups,
+    "failures": [], "untracked_host_module_sample": [],
+}) + "\n", encoding="utf-8")
 (OUT / "dual-reader-compare.json").write_text(json.dumps({
-    "plain_pages": 10, "agentos_pages": 10, "plain_state_files": 300,
-    "agentos_state_files": 320, "agentos_extra_state_files": 20,
+    "plain_pages": 10, "agentos_pages": 10,
+    "plain_state_files": len(plain_inventory),
+    "agentos_state_files": len(agentos_inventory),
+    "agentos_extra_state_files": len(agentos_inventory - plain_inventory),
     "plain_api_json": 20, "agentos_api_json": 25, "agentos_extra_api_json": 5,
     "checked_pages": 10, "checked_api_json": 20, "status": "ready",
 }) + "\n", encoding="utf-8")
@@ -625,7 +937,10 @@ def init_fixture_repo(root: Path, failing_make: bool = False, slow_make: bool = 
     shutil.copyfile(STRICT_JSON, root / "host_tools" / STRICT_JSON.name)
     for module in (
         SEMANTIC_REGISTRY, SEMANTIC_COMMON, SEMANTIC_PROFILES,
-        SEMANTIC_METADATA,
+        SEMANTIC_METADATA, SEMANTIC_DUAL, DUAL_STATE_ARCHIVE,
+        RESULT_PUBLICATION,
+        DUAL_STATE_CONTRACT, REFERENCE_CATALOG_CONTRACT, COMPARE_DUAL_STATE,
+        CHECK_HOST_PLATFORM, CHECK_HOST_TEST, COMPARE_DUAL_TEST,
     ):
         shutil.copyfile(module, root / "host_tools" / module.name)
     for module in OBSERVE_EVIDENCE_MODULES:
@@ -641,6 +956,27 @@ def init_fixture_repo(root: Path, failing_make: bool = False, slow_make: bool = 
     shutil.copyfile(FS_ALLOCATOR_IMAGE, root / "scripts" / FS_ALLOCATOR_IMAGE.name)
     (root / "user" / "src").mkdir(parents=True)
     shutil.copyfile(BENCHMARK_SOURCE, root / "user" / "src" / BENCHMARK_SOURCE.name)
+    for target in ("user", "baseline_ucore/user"):
+        source_dir = root / target / "src"
+        source_dir.mkdir(parents=True, exist_ok=True)
+        for source in (REPO / target / "src").glob("rp_*.c"):
+            destination = source_dir / source.name
+            if not destination.exists():
+                destination.write_text("/* fixture source inventory */\n", encoding="ascii")
+    for target in ("user", "baseline_ucore/user"):
+        include = root / target / "include"
+        include.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(REPO / target / "include" / "rp_program_manifest.h",
+                        include / "rp_program_manifest.h")
+    source_manifest = load_manifest(REPO)
+    for label, relative in (("plain", "baseline_ucore/user"), ("agentos", "user")):
+        names = sorted(target_state_names(REPO, source_manifest, label))
+        lines = ["static void fixture_state_inventory(void) {"]
+        lines.extend(f'  rp_write_file("{name}", "");' for name in names)
+        lines.append("}")
+        (root / relative / "src" / "state_inventory_fixture.c").write_text(
+            "\n".join(lines) + "\n", encoding="ascii"
+        )
     write_fs_evidence_fixture(root / "fs-allocator-evidence.tar")
     write_fixture_fs_verifier(root / "scripts" / "fs-allocator-evidence.py",
                               root / "fs-allocator-evidence.tar")
@@ -725,7 +1061,10 @@ manifest = extract_file_query_measurements(
 write_manifest(incoming / "dual-measured-experiments.json", manifest)
 write_csv(incoming / "dual-file-query-benchmark.csv", manifest["rows"])
 PY
-printf 'target-structure\t1\t2\nkernel-budgets\t2\t3\nreader-e2e\t3\t4\treader-e2e.log\treader-e2e-log-manifest.json\treader-e2e-run-fixture-ucore-build.log\treader-e2e-run-fixture-ucore-run.log\treader-e2e-run-fixture-ucore-run-summary.json\nhost-platform-alignment\t4\t5\nagent-suite\t5\t6\tagent-suite-timings.log\tagent-suite-guest.log\ndual-platforms\t6\t7\tdual-plain-qemu.log\tdual-agentos-qemu.log\tdual-stage-timings.csv\tdual-state-compare.json\tdual-reader-compare.json\tdual-targeted-agentbench-guest.log\tdual-measured-experiments.json\tdual-file-query-benchmark.csv\nproc-reap\t7\t8\tproc-reap.log\nsyscall-fairness\t8\t9\tsyscall-fairness.log\nfile-resource\t9\t10\tfile-resource.log\nthread-resource\t10\t11\tthread-resource.log\nphysical-resource\t11\t12\tphysical-resource.log\nmetadata-recovery\t12\t13\tmetadata-recovery.log\nobserve-recovery\t13\t14\tobserve-recovery.log\tobserve-recovery-before-reap.img\nvirtio-disk\t14\t15\tvirtio-disk.log\nworkflow-teardown-race\t15\t16\tworkflow-teardown-race.log\nfs-enospc\t16\t17\tfs-enospc.log\nfs-allocator-fault\t17\t18\tfs-allocator-fault.log\tfs-allocator-evidence.tar\n' >"${runtime}/steps.tsv"
+mainflow_artifacts="$(PYTHONPATH=host_tools python3 -c \
+  'from dual_state_evidence_contract import DUAL_STATE_RAW_ARTIFACTS; print("\t".join(DUAL_STATE_RAW_ARTIFACTS))')"
+printf 'target-structure\t1\t2\nkernel-budgets\t2\t3\nreader-e2e\t3\t4\treader-e2e.log\treader-e2e-log-manifest.json\treader-e2e-run-fixture-ucore-build.log\treader-e2e-run-fixture-ucore-run.log\treader-e2e-run-fixture-ucore-run-summary.json\nhost-platform-alignment\t4\t5\nagent-suite\t5\t6\tagent-suite-timings.log\tagent-suite-guest.log\ndual-platforms\t6\t7\tdual-plain-qemu.log\tdual-agentos-qemu.log\tdual-stage-timings.csv\tdual-state-compare.json\tdual-reader-compare.json\thost-platform-alignment.json\t%s\tdual-targeted-agentbench-guest.log\tdual-measured-experiments.json\tdual-file-query-benchmark.csv\nproc-reap\t7\t8\tproc-reap.log\nsyscall-fairness\t8\t9\tsyscall-fairness.log\nfile-resource\t9\t10\tfile-resource.log\nthread-resource\t10\t11\tthread-resource.log\nphysical-resource\t11\t12\tphysical-resource.log\nmetadata-recovery\t12\t13\tmetadata-recovery.log\nobserve-recovery\t13\t14\tobserve-recovery.log\tobserve-recovery-before-reap.img\nvirtio-disk\t14\t15\tvirtio-disk.log\nworkflow-teardown-race\t15\t16\tworkflow-teardown-race.log\nfs-enospc\t16\t17\tfs-enospc.log\nfs-allocator-fault\t17\t18\tfs-allocator-fault.log\tfs-allocator-evidence.tar\n' \
+  "${mainflow_artifacts}" >"${runtime}/steps.tsv"
 python3 scripts/capture-final-evidence.py write-summary \
   --stage "${FINAL_EVIDENCE_STAGE}" --steps "${runtime}/steps.tsv" \
   --commit "$(git rev-parse HEAD)" --agent-grace 2s --mechanism-grace 5s --workflow-runs 3
@@ -759,6 +1098,15 @@ echo '[full-verify] all checks passed'
                 "if [[ ${1:-} == --version ]]; then echo 'fixture make 1.0'; exit 0; fi\n",
                 "if [[ ${1:-} == --version ]]; then echo 'fixture make 1.0'; exit 0; fi\n" + slow_body)
     executable(make, make_body)
+    for relative in (
+        "host_tools/check_seeded_action_state.py",
+        "host_tools/plain_ucore_action_runner.py",
+        "scripts/run-dual-platforms.sh",
+        "scripts/run-full-verification.sh",
+    ):
+        destination = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(REPO / relative, destination)
     run(["git", "add", "-A"], root)
     run(["git", "commit", "-q", "-m", "fixture"], root)
     return {"make": make, "compiler_prefix": tools / "riscv64-linux-gnu-",
@@ -838,6 +1186,178 @@ def start_redirect_sink(payload: bytes) -> tuple[ThreadingHTTPServer, threading.
     thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
     return server, thread, f"http://127.0.0.1:{server.server_address[1]}/artifact.zip", observed
 class FinalEvidenceTests(unittest.TestCase):
+    def test_state_archive_is_bounded_deterministic_and_link_safe(self) -> None:
+        def write_state(root: Path, image: str, payloads: dict[str, bytes]) -> None:
+            root.mkdir()
+            for name, payload in payloads.items():
+                (root / name).write_bytes(payload)
+            (root / "extract-summary.json").write_text(
+                json.dumps(
+                    {
+                        "image": image,
+                        "extracted_state_files": len(payloads),
+                        "files": sorted(payloads),
+                        "status": "ready",
+                    }
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            first = root / "first"
+            second = root / "second"
+            payloads = {"rp_a": b"value=a\n", "rp_b": b"value=b\n"}
+            write_state(first, "/checkout/one/fs.img", payloads)
+            write_state(second, "/other/checkout/fs.img", payloads)
+            first_archive = root / "missing" / "first.zip"
+            second_archive = root / "second.zip"
+            dual_state_archive.pack_state(first, first_archive)
+            dual_state_archive.pack_state(second, second_archive)
+            self.assertEqual(first_archive.read_bytes(), second_archive.read_bytes())
+
+            victim = root / "victim.txt"
+            victim.write_text("unchanged\n", encoding="utf-8")
+            predictable = second_archive.with_name(second_archive.name + ".tmp")
+            try:
+                os.symlink(victim, predictable)
+            except OSError:
+                predictable = None
+            dual_state_archive.pack_state(second, second_archive)
+            self.assertEqual(victim.read_text(encoding="utf-8"), "unchanged\n")
+            if predictable is not None:
+                self.assertTrue(predictable.is_symlink())
+
+            old_file_limit = dual_state_archive.MAX_FILE_BYTES
+            old_archive_limit = dual_state_archive.MAX_ARCHIVE_BYTES
+            try:
+                dual_state_archive.MAX_FILE_BYTES = 128
+                oversized = root / "oversized"
+                write_state(oversized, "/image", {"rp_a": b"x" * 129})
+                with self.assertRaisesRegex(ValueError, "invalid size"):
+                    dual_state_archive.pack_state(oversized, root / "oversized.zip")
+
+                dual_state_archive.MAX_FILE_BYTES = 1024
+                dual_state_archive.MAX_ARCHIVE_BYTES = 128
+                total = root / "total"
+                write_state(
+                    total,
+                    "/image",
+                    {"rp_a": b"a" * 32, "rp_b": b"b" * 32},
+                )
+                with self.assertRaisesRegex(ValueError, "total-size limit"):
+                    dual_state_archive.pack_state(total, root / "total.zip")
+            finally:
+                dual_state_archive.MAX_FILE_BYTES = old_file_limit
+                dual_state_archive.MAX_ARCHIVE_BYTES = old_archive_limit
+
+    def test_mainflow_telemetry_has_a_closed_record_schema(self) -> None:
+        lines = [
+            ";".join(
+                [f"stage={spec.stage}"]
+                + [f"{key}={value}" for key, value in spec.telemetry_fields]
+                + ["status=ready"]
+            )
+            for spec in MAIN_FLOW_SOURCE_SPECS
+        ]
+        mutations = {
+            "extra failed record": lines
+            + ["diagnostic=guest_failure;status=failed"],
+            "unknown field": [lines[0] + ";debug=forged", *lines[1:]],
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            raw_dir = Path(temp)
+            telemetry = raw_dir / MAIN_FLOW_TELEMETRY_ARTIFACT
+            context = ValidationContext(raw_dir=raw_dir, repo_root=REPO)
+            telemetry.write_bytes(("\n".join(lines) + "\n").encode("ascii"))
+            stages, _raw = _validate_telemetry(context)
+            self.assertEqual(stages, tuple(spec.stage for spec in MAIN_FLOW_SOURCE_SPECS))
+            for label, mutated in mutations.items():
+                with self.subTest(label=label):
+                    telemetry.write_bytes(
+                        ("\n".join(mutated) + "\n").encode("ascii")
+                    )
+                    with self.assertRaises(EvidenceSemanticError):
+                        _validate_telemetry(context)
+
+    def test_semantic_program_manifest_matches_both_targets(self) -> None:
+        pattern = re.compile(r'^\s*APPLY\("(rp_[a-z0-9_]+)"\)\s*\\?\s*$', re.MULTILINE)
+        for relative in (
+            "user/include/rp_program_manifest.h",
+            "baseline_ucore/user/include/rp_program_manifest.h",
+        ):
+            with self.subTest(relative=relative):
+                observed = tuple(pattern.findall((REPO / relative).read_text(encoding="utf-8")))
+                self.assertEqual(observed, PLATFORM_PROGRAMS)
+
+    def test_dual_state_aggregates_are_bound_to_exact_rows(self) -> None:
+        cost_rows = []
+        for index, case in enumerate(BACKEND_REPORT_CASES["agentos"], 1):
+            plain_case = AGENT_TO_PLAIN_CASE[case]
+            cost_rows.append({
+                "case": case, "plain_cost": f"fixture_cost_{index}",
+                "agentos_replace": f"fixture_replace_{index}",
+                "risk": f"fixture_risk_{index}", "plain_case": plain_case,
+                "preserved_from_plain": int(bool(plain_case)),
+                "status": "reference_ready",
+            })
+        references = {
+            target: list(expected_reference_identities(target))
+            for target in ("plain", "agentos")
+        }
+        state = {
+            "plain_files": 300, "agentos_files": 320, "common_files": 300,
+            "agentos_extra_files": 20, "checked_compatibility_records": 1,
+            "plain_reference_products": sum(row.startswith("file:") for row in references["plain"]),
+            "agentos_reference_products": sum(row.startswith("file:") for row in references["agentos"]),
+            "plain_reference_records": sum(not row.startswith("file:") for row in references["plain"]),
+            "agentos_reference_records": sum(not row.startswith("file:") for row in references["agentos"]),
+            "plain_reference_identities": references["plain"],
+            "agentos_reference_identities": references["agentos"],
+            "guest_source_bound_runtime_records": 0, "preserved_plain_costs": 7,
+            "cost_replacements": cost_rows, "cost_replacement_count": 8,
+            "runner_tick_status": "unavailable",
+            "runner_tick_reason": "plain_runtime_cases_zero",
+            "embedded_action_records": 1, "run_result_match": 1,
+            "agentos_evidence_checks": evidence_check_count(),
+            "scenario_evidence": expected_scenario_rows(),
+            "host_derived_mainflow_stages": len(MAIN_FLOW_SOURCE_SPECS),
+            "agentos_mainflow_facts": 12,
+            "agentos_mainflow_verification_origin": "host_inventory",
+            "plain_timing_records": len(PLATFORM_PROGRAMS), "plain_agent_launches": 0,
+            "plain_fork_launches": len(PLATFORM_PROGRAMS),
+            "agentos_timing_records": len(PLATFORM_PROGRAMS),
+            "agentos_agent_launches": len(AGENTOS_REQUIRED_AGENT_ROLES),
+            "agentos_worker_launches": len(PLATFORM_PROGRAMS) - len(AGENTOS_REQUIRED_AGENT_ROLES),
+            "status": "ready",
+        }
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "dual-state-compare.json"
+
+            def validate(candidate: dict[str, object]) -> None:
+                path.write_text(json.dumps(candidate) + "\n", encoding="utf-8")
+                _validate_dual_state(path, len(PLATFORM_PROGRAMS), len(PLATFORM_PROGRAMS))
+
+            validate(state)
+            mutations = {
+                "legacy runner ABI": lambda item: item.update(runner_tick_pairs=0),
+                "file identity": lambda item: item.update(common_files=299),
+                "cost row": lambda item: item["cost_replacements"].pop(),
+                "scenario row": lambda item: item["scenario_evidence"][0].update(matched=99),
+                "evidence aggregate": lambda item: item.update(agentos_evidence_checks=1),
+                "launch/log binding": lambda item: item.update(plain_timing_records=68),
+                "host origin": lambda item: item.update(
+                    agentos_mainflow_verification_origin="guest_claim"
+                ),
+            }
+            for label, mutate in mutations.items():
+                with self.subTest(label=label):
+                    candidate = copy.deepcopy(state)
+                    mutate(candidate)
+                    with self.assertRaises(EvidenceSemanticError):
+                        validate(candidate)
+
     def assert_verify_rejected(self, bundle: Path, cwd: Path, message: str) -> None:
         rewrite_checksums(bundle)
         result = run([sys.executable, str(fixture_collector(cwd)), "verify", str(bundle)], cwd,
@@ -1221,6 +1741,227 @@ exit 91
             verified = run([sys.executable, str(fixture_collector(repo)), "verify", str(output)], repo)
             self.assertEqual((json.loads(verified.stdout)["status"],
                               json.loads(verified.stdout)["remote_ci"]), ("ready", "not-attached"))
+            alignment_name = "host-platform-alignment.json"
+            alignment = json.loads(
+                (output / "logs/raw" / alignment_name).read_text(encoding="utf-8")
+            )
+            alignment["mainflow_host_sources"][0]["source_hash"] ^= 1
+            originals = rebind_raw_artifact(
+                output, alignment_name, (json.dumps(alignment) + "\n").encode()
+            )
+            try:
+                self.assert_verify_rejected(
+                    output, repo, "Host-derived Mainflow receipt differs"
+                )
+            finally:
+                restore_raw_artifact(output, alignment_name, originals)
+            alignment = json.loads(
+                (output / "logs/raw" / alignment_name).read_text(encoding="utf-8")
+            )
+            alignment["groups"][0]["name"] = "forged_group"
+            originals = rebind_raw_artifact(
+                output, alignment_name, (json.dumps(alignment) + "\n").encode()
+            )
+            try:
+                self.assert_verify_rejected(output, repo, "Host alignment group semantics differ")
+            finally:
+                restore_raw_artifact(output, alignment_name, originals)
+            source_name = MAIN_FLOW_SOURCE_ARTIFACTS[MAIN_FLOW_SOURCE_SPECS[0].source]
+            source_payload = (output / "logs/raw" / source_name).read_bytes().replace(
+                b"context_snapshot=present", b"context_snapshot=absent", 1
+            )
+            source_originals = rebind_raw_artifact(output, source_name, source_payload)
+            alignment = json.loads(
+                (output / "logs/raw" / alignment_name).read_text(encoding="utf-8")
+            )
+            alignment["mainflow_host_sources"][0]["source_bytes"] = len(source_payload)
+            alignment["mainflow_host_sources"][0]["source_hash"] = fnv1a64(source_payload)
+            alignment_originals = rebind_raw_artifact(
+                output, alignment_name, (json.dumps(alignment) + "\n").encode()
+            )
+            try:
+                self.assert_verify_rejected(output, repo, "selected state source differs")
+            finally:
+                restore_raw_artifact(output, alignment_name, alignment_originals)
+                restore_raw_artifact(output, source_name, source_originals)
+            source_payload = (output / "logs/raw" / source_name).read_bytes().replace(
+                b"prefetch_hint=dependency_driven", b"prefetch_hint=dependency_forged", 1
+            )
+            source_originals = rebind_raw_artifact(output, source_name, source_payload)
+            alignment = json.loads(
+                (output / "logs/raw" / alignment_name).read_text(encoding="utf-8")
+            )
+            alignment["mainflow_host_sources"][0]["source_bytes"] = len(source_payload)
+            alignment["mainflow_host_sources"][0]["source_hash"] = fnv1a64(source_payload)
+            alignment_originals = rebind_raw_artifact(
+                output, alignment_name, (json.dumps(alignment) + "\n").encode()
+            )
+            try:
+                self.assert_verify_rejected(output, repo, "selected state source differs")
+            finally:
+                restore_raw_artifact(output, alignment_name, alignment_originals)
+                restore_raw_artifact(output, source_name, source_originals)
+            telemetry_path = output / "logs/raw" / MAIN_FLOW_TELEMETRY_ARTIFACT
+            telemetry_lines = telemetry_path.read_bytes().splitlines()
+            telemetry_lines[0], telemetry_lines[1] = telemetry_lines[1], telemetry_lines[0]
+            originals = rebind_raw_artifact(
+                output, MAIN_FLOW_TELEMETRY_ARTIFACT, b"\n".join(telemetry_lines) + b"\n"
+            )
+            try:
+                self.assert_verify_rejected(output, repo, "selected state source differs")
+            finally:
+                restore_raw_artifact(output, MAIN_FLOW_TELEMETRY_ARTIFACT, originals)
+            state_name = "dual-state-compare.json"
+            state = json.loads((output / "logs/raw" / state_name).read_text())
+            state["plain_timing_records"] -= 1
+            state["plain_fork_launches"] -= 1
+            originals = rebind_raw_artifact(
+                output, state_name, (json.dumps(state) + "\n").encode()
+            )
+            try:
+                self.assert_verify_rejected(output, repo, "program inventory")
+            finally:
+                restore_raw_artifact(output, state_name, originals)
+            state = json.loads((output / "logs/raw" / state_name).read_text())
+            state["cost_replacements"][0]["agentos_replace"] = "forged_replace"
+            originals = rebind_raw_artifact(
+                output, state_name, (json.dumps(state) + "\n").encode()
+            )
+            try:
+                self.assert_verify_rejected(
+                    output, repo, "dual state summary differs from complete state replay"
+                )
+            finally:
+                restore_raw_artifact(output, state_name, originals)
+            ledger_name = PROGRAM_LEDGER_ARTIFACTS["plain"]
+            ledger_payload = (output / "logs/raw" / ledger_name).read_bytes().replace(
+                b"program=rp_catalog;", b"program=rp_forgery;", 1
+            )
+            names = tuple(
+                line.split(b";", 1)[0].split(b"=", 1)[1]
+                for line in ledger_payload.splitlines()[2:]
+            )
+            digest = 1469598103934665603
+            for name in names:
+                digest = fnv1a64(name + b"\0", digest)
+            plain_log_name = "dual-plain-qemu.log"
+            plain_log = (output / "logs/raw" / plain_log_name).read_bytes()
+            receipt = (
+                f"program_source_bytes={len(ledger_payload)} "
+                f"program_source_hash={fnv1a64(ledger_payload)} "
+                f"program_names_digest={digest} programs_observed={len(names)}"
+            ).encode()
+            plain_log = re.sub(
+                rb"program_source_bytes=[1-9][0-9]* program_source_hash=[1-9][0-9]* "
+                rb"program_names_digest=[1-9][0-9]* programs_observed=[1-9][0-9]*",
+                receipt, plain_log, count=1,
+            )
+            ledger_originals = rebind_raw_artifact(output, ledger_name, ledger_payload)
+            log_originals = rebind_raw_artifact(output, plain_log_name, plain_log)
+            try:
+                self.assert_verify_rejected(output, repo, "selected state source differs")
+            finally:
+                restore_raw_artifact(output, plain_log_name, log_originals)
+                restore_raw_artifact(output, ledger_name, ledger_originals)
+            run_result_name = RUN_RESULT_ARTIFACTS["plain"]
+            run_result_payload = (
+                output / "logs/raw" / run_result_name
+            ).read_bytes().replace(
+                b"embedded_action_records=1", b"embedded_action_records=2", 1
+            )
+            originals = rebind_raw_artifact(
+                output, run_result_name, run_result_payload
+            )
+            try:
+                self.assert_verify_rejected(
+                    output, repo, "embedded action record count differs"
+                )
+            finally:
+                restore_raw_artifact(output, run_result_name, originals)
+            archive_name = STATE_ARCHIVE_ARTIFACTS["plain"]
+            archive_path = output / "logs/raw" / archive_name
+            archive_raw = archive_path.read_bytes()
+            originals = rebind_raw_artifact(output, archive_name, archive_raw + b"trailing")
+            try:
+                self.assert_verify_rejected(output, repo, "is not canonical")
+            finally:
+                restore_raw_artifact(output, archive_name, originals)
+            with zipfile.ZipFile(io.BytesIO(archive_raw), "r") as archive:
+                archive_files = {info.filename: archive.read(info) for info in archive.infolist()}
+            reserved_files = dict(archive_files)
+            reserved_summary = json.loads(
+                reserved_files["extract-summary.json"].decode("utf-8")
+            )
+            reserved_summary["files"].append("rp_host_run_result")
+            reserved_summary["files"].sort()
+            reserved_summary["extracted_state_files"] += 1
+            reserved_files["extract-summary.json"] = (
+                json.dumps(reserved_summary, indent=2) + "\n"
+            ).encode("utf-8")
+            reserved_files["rp_host_run_result"] = b"status=ready\n"
+            reserved_files = {
+                "extract-summary.json": reserved_files["extract-summary.json"],
+                **{
+                    name: reserved_files[name]
+                    for name in sorted(reserved_files)
+                    if name != "extract-summary.json"
+                },
+            }
+            originals = rebind_raw_artifact(
+                output, archive_name, _canonical_zip(reserved_files)
+            )
+            try:
+                self.assert_verify_rejected(output, repo, "member inventory differs")
+            finally:
+                restore_raw_artifact(output, archive_name, originals)
+            missing_name = next(
+                name for name in sorted(archive_files) if name.startswith("rp_")
+            )
+            missing_files = dict(archive_files)
+            del missing_files[missing_name]
+            missing_files["extract-summary.json"] = (
+                dual_state_archive._canonical_extract_summary(
+                    sorted(name for name in missing_files if name.startswith("rp_"))
+                )
+            )
+            originals = rebind_raw_artifact(
+                output, archive_name, _canonical_zip(missing_files)
+            )
+            try:
+                self.assert_verify_rejected(output, repo, "missing=")
+            finally:
+                restore_raw_artifact(output, archive_name, originals)
+            extra_files = dict(archive_files)
+            extra_files["rp_forged"] = b"status=ready\n"
+            extra_files["extract-summary.json"] = (
+                dual_state_archive._canonical_extract_summary(
+                    sorted(name for name in extra_files if name.startswith("rp_"))
+                )
+            )
+            extra_files = {
+                "extract-summary.json": extra_files["extract-summary.json"],
+                **{
+                    name: extra_files[name]
+                    for name in sorted(extra_files)
+                    if name != "extract-summary.json"
+                },
+            }
+            originals = rebind_raw_artifact(
+                output, archive_name, _canonical_zip(extra_files)
+            )
+            try:
+                self.assert_verify_rejected(output, repo, "extra=")
+            finally:
+                restore_raw_artifact(output, archive_name, originals)
+            traversal_files = dict(archive_files)
+            traversal_files["../escape"] = b"forged\n"
+            originals = rebind_raw_artifact(
+                output, archive_name, _canonical_zip(traversal_files)
+            )
+            try:
+                self.assert_verify_rejected(output, repo, "member inventory differs")
+            finally:
+                restore_raw_artifact(output, archive_name, originals)
             full_log_path = output / "logs/full-verify.log"
             full_log_original = full_log_path.read_bytes()
             completion = b"[full-verify] all checks passed\n"
@@ -1718,6 +2459,8 @@ procreap_ucore: parent passed
         for module, limit in (
             (SEMANTIC_COMMON, 250), (SEMANTIC_PROFILES, 650),
             (SEMANTIC_METADATA, 225), (SEMANTIC_REGISTRY, 225),
+            (SEMANTIC_DUAL, 425), (DUAL_STATE_ARCHIVE, 250),
+            (DUAL_STATE_CONTRACT, 450),
             (REPO / "host_tools" / "agent_observe_disk_acceptance.py", 150),
             (REPO / "host_tools" / "agent_observe_disk_contract.py", 400),
             (REPO / "host_tools" / "agent_observe_disk_evidence.py", 750),

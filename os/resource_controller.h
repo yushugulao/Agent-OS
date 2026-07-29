@@ -156,9 +156,6 @@ int resource_account_matches(struct resource_account_handle,
 enum resource_account_state
 resource_account_state_get(struct resource_account_handle);
 int resource_account_active(struct resource_account_handle);
-int resource_account_set_limits(
-	struct resource_account_handle,
-	const struct resource_account_limits *);
 int resource_account_member_acquire(struct resource_account_handle);
 int resource_account_member_release(struct resource_account_handle, int);
 int resource_account_close(struct resource_account_handle);
@@ -197,8 +194,6 @@ uint64 resource_account_usage(struct resource_account_handle,
 uint64 resource_account_class_usage(struct resource_account_handle,
 				    enum resource_charge_class,
 				    enum resource_kind);
-uint64 resource_account_pending(struct resource_account_handle,
-				enum resource_kind);
 int resource_account_kind_snapshot(struct resource_account_handle,
 				   enum resource_kind,
 				   struct resource_account_kind_snapshot *);

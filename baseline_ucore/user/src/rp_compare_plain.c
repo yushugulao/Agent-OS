@@ -1718,8 +1718,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_prov_edges", "edge=12;source=rp_agent_run;target=rp_prov_view;kind=agent_to_trace;status=ready");
 	ok = ok && rp_file_contains("rp_evidence_packet", "packet=agentos-readiness;run=RUN-042");
 	ok = ok && rp_file_contains("rp_timeline_view", "view=agent_decision_flow;events=6;source=rp_agent_run;status=ready");
-	ok = ok && rp_file_contains("rp_web_bundle", "provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=ready");
-	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=provenance_view;source=rp_prov_view;timeline=4;packets=4;checks=64;outcome=passed;status=ready");
+	ok = ok && rp_file_contains("rp_web_bundle", "evidence_role=demo_reference;catalog_generation=demo_expected;provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=reference_ready");
+	ok = ok && rp_file_contains("rp_review_dashboard", "evidence_role=demo_reference;catalog_generation=demo_expected;subsection=provenance_view;source=rp_prov_view;timeline=4;packets=4;checks=64;outcome=passed;status=reference_ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "provenance_view_checks=64");
 	ok = ok && rp_file_contains("rp_prov_query", "provenance_query_checks=72");
 	ok = ok && rp_file_contains("rp_prov_specs", "template=provenance-query-template:calculation-root-neighborhood");
@@ -1728,8 +1728,8 @@ int main(void)
 	ok = ok && rp_file_contains("rp_prov_exec", "row=calculation-job:lab-gene-x:run042-qc");
 	ok = ok && rp_file_contains("rp_prov_query_pkg", "comparison=provenance-query-comparison:RUN-042:rendered-vs-direct");
 	ok = ok && rp_file_contains("rp_prov_query_pkg", "packet=provenance-query-packet:RUN-042:lineage-review");
-	ok = ok && rp_file_contains("rp_web_bundle", "provenance_queries_page=rp_prov_query;specs=3;executions=3;packets=1;status=ready");
-	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=provenance_queries;source=rp_prov_query;queries=3;executions=3;checks=72;outcome=passed;status=ready");
+	ok = ok && rp_file_contains("rp_web_bundle", "evidence_role=demo_reference;catalog_generation=demo_expected;provenance_queries_page=rp_prov_query;specs=3;executions=3;packets=1;status=reference_ready");
+	ok = ok && rp_file_contains("rp_review_dashboard", "evidence_role=demo_reference;catalog_generation=demo_expected;subsection=provenance_queries;source=rp_prov_query;queries=3;executions=3;checks=72;outcome=passed;status=reference_ready");
 	ok = ok && rp_file_contains("rp_agentcmp", "provenance_query_checks=72");
 	int portability_imports = rp_get_int_value("rp_wfio", "portability_imports=");
 	int portability_adapters = rp_get_int_value("rp_wfio", "adapter_specs=");
@@ -1806,7 +1806,6 @@ int main(void)
 	if (!rp_append_file("rp_agentcmp", "experiment_scheduling_checks=88;schedules=1;tasks=3;bookings=4;conflicts=1;executions=2;charts=4;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "training_compliance_checks=92;requirements=4;training_records=4;competency=4;authorizations=3;gaps=1;open_gaps=0;charts=4;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "analysis_results_checks=96;plans=1;runs=2;tables=2;statistics=2;figures=2;interpretations=2;charts=4;agentos_replacements=4;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "evidence_role=demo_reference;catalog_generation=demo_expected;decision_support_checks=80;options=3;criteria=5;scores=15;review_packets=1;selected=agentos_ucore_hybrid;agentos_replacements=4;status=reference_ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "usable_research_checks=100;templates=3;datasets=3;library_sources=3;dag_stages=9;plan_queue=4;action_queue=5;handoffs=3;deliverables=8;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "usable_project_checks=120;scaffold_templates=3;project_launches=2;project_bundles=2;doctor_checks=10;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "knowledge_index=search_documents:1685;provenance_nodes:406;provenance_links:544;events:8966;context_records:380;usable_artifacts:507;usable_runs:23;status=ready")) return 1;
@@ -1828,11 +1827,8 @@ int main(void)
 	if (!rp_append_file("rp_agentcmp", "review_board_checks=24;boards=1;requests=1;votes=4;signoffs=4;assignments=4;workloads=4;filters=2;decision=approved;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "control_plane_checks=30;approvals=4;notifications=4;queue_items=4;plugins=3;workspaces=1;permissions=5;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "integrity_plane_checks=36;evidence_contracts=8;reference_contracts=8;namespace_checks=5;status_checks=5;review_alignment_checks=4;report_source_checks=3;package_trace_checks=3;agentos_replacements=4;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "evidence_role=demo_reference;catalog_generation=demo_expected;coherence_plane_checks=40;delivery_contracts=7;run_state_contracts=7;lifecycle_contracts=6;workflow_lint=5;tool_protocol=5;report_validation=5;agent_coordination=3;agentos_replacements=4;status=reference_ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "publication_checks=48;targets=2;submissions=2;review_rounds=2;revision_tasks=3;response_packages=2;response_items=4;decisions=2;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "mature_capability_checks=72;profiles=6;mappings=6;checks=72;platforms=Galaxy,AiiDA,DVC,MLflow,Nextflow,Snakemake;agentos_replacements=5;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "provenance_view_checks=64;timeline_views=4;subgraphs=3;packets=4;agentos_replacements=4;status=ready")) return 1;
-	if (!rp_append_file("rp_agentcmp", "provenance_query_checks=72;specs=3;templates=1;executions=3;comparisons=1;exports=1;packets=1;agentos_replacements=4;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "llm_delivery_checks=16;llm_queue=3;llm_packets=3;llm_responses=3;llm_eval=7;llm_guard=3;llm_hostreq=3;llm_review_links=2;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "workflow_portability_checks=14;portability_imports=5;adapter_specs=6;migration_steps=9;rehearsal_cases=4;blocking_items=0;portability_package=workflow-portability;status=ready")) return 1;
 	if (!rp_append_file("rp_agentcmp", "evidence_role=demo_reference;catalog_generation=demo_expected;portability_backend_reference_checks=18;execution_plan=workflow-migration-execution-plan:RUN-042:agentcompare;backend_scenario=backend-scenario:RUN-042:agentcompare;compare_profile=compare-profile:RUN-042:migration;reference_cases=7;runtime_cases=0;status=reference_ready")) return 1;

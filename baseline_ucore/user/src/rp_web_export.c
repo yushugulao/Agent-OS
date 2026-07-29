@@ -1390,7 +1390,6 @@ int main(void)
 			   "calculations_page=rp_calculation;jobs=1;retrieved=3;parser_results=1;status=ready\n"
 			   "real_task_page=rp_realtask;dataset=palmer-penguins;rows=344;answer_audit=pass;status=ready\n"
 			   "analysis_results_page=rp_analysisres;runs=2;tables=2;statistics=2;figures=2;status=ready\n"
-			   "evidence_role=demo_reference;catalog_generation=demo_expected;decision_support_page=rp_decsupport;options=3;criteria=5;scores=15;selected=agentos_ucore_hybrid;status=reference_ready\n"
 			   "usable_research_page=rp_usable;templates=3;datasets=3;library_sources=3;dag_stages=9;queues=2;status=ready\n"
 			   "usable_project_page=rp_usableproj;scaffolds=3;launches=2;bundles=2;doctor=pass;status=ready\n"
 			   "experiment_campaigns_page=rp_campaign;campaigns=1;trials=4;best_trial=04;status=ready\n"

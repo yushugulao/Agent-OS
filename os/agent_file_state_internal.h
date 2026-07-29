@@ -4,6 +4,7 @@
 #include "agent.h"
 
 #define AGENT_INODE_META_VERSION 2
+#define AGENT_INODE_META_DEFERRED_SLOT (-1)
 
 /* Incarnation-bound file versions, edit leases, and digest cache. */
 void agent_file_state_init(void);
@@ -16,6 +17,8 @@ int agent_file_state_snapshot_begin(uint64 *);
 void agent_file_state_snapshot_overlay(struct agent_file_meta *, uint);
 void agent_file_state_snapshot_end(int);
 void agent_file_state_content_bump(struct inode *);
+int agent_file_state_index_deferred(struct inode *);
+int agent_file_state_set_index(struct inode *, short, short, int);
 int agent_file_state_size_publish(struct inode *, int);
 void agent_file_state_overlay_published_size(struct agent_file_meta *, uint);
 void agent_file_state_project_hit(struct agent_file_hit *,

@@ -2573,7 +2573,7 @@ def require_source_tokens(body, tokens, context):
 
 def validate_metadata_scan_boundary_text(objects, scan):
     state = (
-        r"\bscan_control\b|\bscan\.(?:offset|seen|next_tick|last_step_tick|"
+        r"\bscan_(?:ctl|control)\b|\bscan\.(?:offset|seen|next_tick|last_step_tick|"
         r"started_tick|runs|entries|added|updated|removed|failures|deferred|"
         r"retry|sweep_uncertain|failed_scopes|failed_scope_count)\b|"
         r"\broot_dir\s*\("
@@ -2616,7 +2616,10 @@ def validate_metadata_scan_boundary_text(objects, scan):
         "agent_metadata_scan_catalog_sync(const struct agent_catalog_delta *delta)",
     )
     require_source_tokens(
-        scan_sync, ("delta->applied_slots", "scan.seen[i] = 1"), "scan delta sync"
+        scan_sync,
+        ("i < AGENT_META_STALE_BYTES",
+         "scan.seen[i] |= delta->applied_slots[i]"),
+        "scan delta sync",
     )
     if "agent_metadata_txn_projection_ack" in scan_sync:
         raise BudgetError("metadata scan must not ACK the catalog projection")
@@ -2650,7 +2653,7 @@ def validate_metadata_scan_boundary_text(objects, scan):
             "root_status != FS_LOOKUP_FOUND",
             "readi(",
             "inode_get(",
-            "scan_bind_inode(ip, name, &bind_failed)",
+            "agent_metadata_scan_index_inode(ip, name, &bind_failed)",
             "if (bind_failed) {\n"
             "\t\t\tscan.failures++;\n"
             "\t\t\tscan.retry = 1;",
@@ -2661,58 +2664,60 @@ def validate_metadata_scan_boundary_text(objects, scan):
         ),
         "metadata scan step",
     )
-    bind = source_function_body(scan, "scan_bind_inode(struct inode *ip")
+    bind = source_function_body(
+        scan, "agent_metadata_scan_index_inode(struct inode *ip"
+    )
     if "if (failed)" in bind:
         raise BudgetError("metadata scan bind failure output became optional")
     require_source_order(
         bind,
         (
-            "scan.seen[slot] = 1",
+            "SCAN_NOTE(slot)",
             "agent_metadata_catalog_edit_begin_scan(",
             "agent_metadata_catalog_edit_commit(&edit, changes)",
             "agent_metadata_store_mark_dirty(ip->vfs_scope_id)",
-            "iupdate(ip)",
+            "agent_file_state_set_index(ip, slot + 1, persist, 0)",
             "return changes",
         ),
         "metadata scan bind fail-stop protocol",
     )
+    require_source_tokens(
+        bind,
+        ("SCAN_NOTE(slot);\n\tif (agent_metadata_catalog_edit_begin_scan",),
+        "metadata scan mutation visibility",
+    )
     for operation in (
         "agent_metadata_catalog_edit_begin_scan(",
         "agent_metadata_catalog_edit_commit(&edit, changes)",
-        "iupdate(ip)",
+        "agent_file_state_set_index(ip, slot + 1, persist, 0)",
     ):
         start = bind.find(operation)
-        if start < 0 or "*failed = SCAN_BIND_RETRY" not in bind[start : start + 500]:
+        if start < 0 or "goto retry" not in bind[start : start + 500]:
             raise BudgetError(
                 f"metadata scan bind failure is not propagated: {operation}"
             )
     require_source_tokens(
         bind,
-        (
-            "if (iupdate(ip) < 0) {\n"
-            "\t\t\t\tip->agent_meta_slot = old_slot;\n"
-            "\t\t\t\tip->agent_meta_flags = old_flags;\n"
-            "\t\t\t\tip->agent_meta_version = old_version;\n"
-            "\t\t\t\t*failed = SCAN_BIND_RETRY;\n"
-            "\t\t\t\treturn changes;",
-        ),
+        ("agent_file_state_set_index(ip, slot + 1, persist, 0) < 0)\n"
+         "\t\t\tgoto retry;",),
         "metadata scan inode sidecar failure",
     )
     require_source_order(
         step,
         (
-            "scan_bind_inode(ip, name, &bind_failed)",
+            "agent_metadata_scan_index_inode(ip, name, &bind_failed)",
             "if (bind_failed)",
             "scan.retry = 1",
             "scan_scope_failed(ip->vfs_scope_id, 1)",
-            "if (!scan_control.active)",
+            "if (!scan_ctl.active)",
             "if (scan.offset >= root->size)",
             "scan_scope_failed(view.scope_id, 0)",
             "scan_pause(scan.retry, 0)",
         ),
         "metadata scan isolated retry protocol",
     )
-    if "scan_failed" in step or "int seen[AGENT_FILE_META_MAX]" in scan:
+    if ("scan_failed" in step or "seen[AGENT_FILE_META_MAX]" in scan or
+            "uchar seen[AGENT_META_STALE_BYTES]" not in scan):
         raise BudgetError("metadata scan restored global abort or oversized seen state")
     plan = source_function_body(scan, "agent_metadata_scan_plan(uint64 now)")
     require_source_tokens(
@@ -2723,7 +2728,7 @@ def validate_metadata_scan_boundary_text(objects, scan):
     request = source_function_body(scan, "agent_file_request_scan(void)")
     require_source_tokens(
         request,
-        ("!scan_control.pending", "scan_rest_deadline(now, now)"),
+        ("!scan_ctl.pending", "scan_rest_deadline(now, now)"),
         "metadata scan request coalescing",
     )
     if "agent_file_request_scan(void)" in objects:
@@ -2760,7 +2765,7 @@ def validate_metadata_directory_boundary_text(objects, directory):
     if re.search(
         r"agent_metadata_query_|agent_file_store_load|bio_background_|"
         r"agent_metadata_store_persist\s*\(|agent_metadata_txn_lock\s*\(|"
-        r"\bscan_control\b|\bscan\.(?:offset|seen|next_tick|last_step_tick|"
+        r"\bscan_(?:ctl|control)\b|\bscan\.(?:offset|seen|next_tick|last_step_tick|"
         r"started_tick|runs|entries|added|updated|removed)\b",
         directory,
     ):
@@ -2784,29 +2789,45 @@ def validate_metadata_directory_boundary_text(objects, directory):
         "metadata directory leaf operations",
     )
 
+    indexable = source_function_body(directory, "static int fs_create_indexable(")
+    require_source_tokens(
+        indexable,
+        ("agent_metadata_inode_trackable(ip)",
+         "agent_scope_valid(ip->vfs_scope_id)",
+         "ip->agent_meta_slot <= 0"),
+        "metadata directory create predicate",
+    )
     create = source_function_body(directory, "agent_fs_note_create(struct inode *ip")
     require_source_order(
         create,
         (
+            "fs_dirent_canonicalize(path, key)",
             "agent_metadata_txn_try_external()",
-            "agent_metadata_catalog_edit_commit(",
-            "agent_metadata_scan_note_slot(slot)",
-            "agent_metadata_catalog_bind(slot, 0, 0)",
-            "agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL)",
-            "agent_metadata_store_mark_dirty(scope_id)",
+            "agent_metadata_store_loaded()",
+            "agent_metadata_scan_index_inode(ip, key, &failed)",
+            "agent_metadata_note_catalog_changes(changes)",
             "agent_metadata_txn_unlock()",
         ),
         "metadata directory create hook",
     )
     require_source_tokens(
         create,
-        ("agent_metadata_inode_trackable(ip)", "agent_file_request_scan()"),
+        ("fs_create_indexable(ip)", "agent_file_request_scan()"),
         "metadata directory create revalidation",
     )
     if create.count("agent_metadata_txn_unlock()") != 1:
         raise BudgetError("metadata directory create must unlock exactly once")
-    update = source_function_body(
-        directory, "agent_fs_update_inode_meta(struct inode *ip"
+    update = source_function_body(directory, "agent_fs_apply_inode_event(struct inode *ip")
+    require_source_order(
+        update,
+        (
+            "agent_file_state_content_bump(ip)",
+            "agent_file_state_size_publish(ip, dirty)",
+            "if (!remove && !dirty && !published)",
+            "agent_file_state_index_deferred(ip)",
+            "agent_metadata_txn_try_external()",
+        ),
+        "metadata directory shared content state machine",
     )
     require_source_order(
         update,
@@ -2831,8 +2852,10 @@ def validate_metadata_directory_boundary_text(objects, directory):
     if update.count("agent_metadata_txn_unlock()") != 1:
         raise BudgetError("metadata directory inode update must unlock exactly once")
     delete = source_function_body(directory, "agent_fs_note_delete(struct inode *ip")
+    require_source_tokens(delete, ("agent_fs_apply_inode_event(ip, 0, 0, 1)",),
+                          "metadata directory delete delegation")
     require_source_order(
-        delete,
+        update,
         (
             "agent_file_state_content_bump(ip)",
             "agent_metadata_txn_try_external()",
@@ -2848,12 +2871,12 @@ def validate_metadata_directory_boundary_text(objects, directory):
         ),
         "metadata directory delete hook",
     )
-    if re.search(r"ip->agent_meta_(?:slot|flags|version)\s*=|iupdate\s*\(", delete):
+    if re.search(r"ip->agent_meta_(?:slot|flags|version)\s*=|iupdate\s*\(", update):
         raise BudgetError(
             "metadata directory delete must unbind through the catalog API"
         )
-    if delete.count("agent_metadata_txn_unlock()") != 1:
-        raise BudgetError("metadata directory delete must unlock exactly once")
+    if delete.count("agent_metadata_txn_unlock()") != 0:
+        raise BudgetError("metadata directory delete bypassed the shared event state machine")
 
 
 def validate_metadata_directory_store_symbols(undefined):

@@ -216,7 +216,8 @@ static int append_program_inventory_evidence(void)
 	int expected_programs = (int)(sizeof(PROGRAM_NAMES) /
 				     sizeof(PROGRAM_NAMES[0]));
 
-	if (!rp_evidence_measure_program_ledger("rp_orch_timing", PROGRAM_NAMES,
+	if (!rp_evidence_measure_program_ledger("rp_orch_timing", "rp_orch",
+						PROGRAM_NAMES,
 						expected_programs,
 						"mixed_attested", 1,
 						&inventory))
@@ -234,9 +235,11 @@ static int append_program_inventory_evidence(void)
 	rp_append_text(line, sizeof(line), ";status=verified");
 	if (!rp_append_file("rp_agentcmp", line))
 		return 0;
-	printf("rp_orch: evidence_role=runtime_verified evidence_generation=runtime program_source=rp_orch_timing program_source_bytes=%llu program_source_hash=%llu program_names_digest=%llu programs_observed=%d status=verified\n",
-	       inventory.source_bytes, inventory.source_hash,
-	       inventory.program_names_digest, inventory.programs_observed);
+	for (int i = 0; line[i]; i++)
+		if (line[i] == ';')
+			line[i] = ' ';
+	printf("rp_orch: ");
+	puts(line);
 	return 1;
 }
 

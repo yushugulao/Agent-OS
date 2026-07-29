@@ -19,6 +19,7 @@ from measured_experiments import (  # noqa: E402
 from evidence_delivery_contract import (DeliveryContractError, make_manifest_binding,  # noqa: E402
                                         publish_bundle_and_index, validate_delivery_field)
 from evidence_semantic_registry import validate_raw_artifacts  # noqa: E402
+from dual_state_evidence_contract import DUAL_STATE_RAW_ARTIFACTS  # noqa: E402
 from remote_ci_bundle import decode_gitlab_json, gitlab_fetch, verify_job_execution  # noqa: E402
 from strict_json import read_strict_json, strict_json_loads  # noqa: E402
 SCHEMA_VERSION = 6
@@ -51,10 +52,8 @@ STEP_CONTRACT = (
     ("host-platform-alignment", (), ()),
     ("agent-suite", ("agent-suite-timings.log", "agent-suite-guest.log"), ()),
     ("dual-platforms", ("dual-plain-qemu.log", "dual-agentos-qemu.log",
-                         "dual-stage-timings.csv", "dual-state-compare.json",
-                         "dual-reader-compare.json", "dual-targeted-agentbench-guest.log",
-                         "dual-measured-experiments.json",
-                         "dual-file-query-benchmark.csv"), ()),
+                         "dual-stage-timings.csv", "dual-state-compare.json", "dual-reader-compare.json", "host-platform-alignment.json", *DUAL_STATE_RAW_ARTIFACTS,
+                         "dual-targeted-agentbench-guest.log", "dual-measured-experiments.json", "dual-file-query-benchmark.csv"), ()),
     ("proc-reap", ("proc-reap.log",), ()),
     ("syscall-fairness", ("syscall-fairness.log",), ()),
     ("file-resource", ("file-resource.log",), ()),
@@ -101,7 +100,8 @@ CONTROLLED_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 REQUIRED_RAW_FILES = {
     "reader-e2e.log", "reader-e2e-log-manifest.json", "dual-plain-qemu.log",
     "dual-agentos-qemu.log", "dual-stage-timings.csv", "dual-state-compare.json",
-    "dual-reader-compare.json", "dual-targeted-agentbench-guest.log",
+    "dual-reader-compare.json", "host-platform-alignment.json",
+    *DUAL_STATE_RAW_ARTIFACTS, "dual-targeted-agentbench-guest.log",
     "dual-measured-experiments.json", "dual-file-query-benchmark.csv",
     "agent-suite-timings.log", "agent-suite-guest.log",
     "proc-reap.log", "syscall-fairness.log", "file-resource.log", "thread-resource.log",

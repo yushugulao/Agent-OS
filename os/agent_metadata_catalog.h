@@ -7,6 +7,9 @@
 #define AGENT_META_STALE_BYTES ((AGENT_FILE_META_MAX + 7) / 8)
 /* A reload can retain both active and retiring workflow generations. */
 #define AGENT_CATALOG_SCOPE_PLAN_MAX 8
+#define AGENT_FILE_EXPLICIT_RESERVE 16
+#define AGENT_FILE_AUTOSCAN_SCOPE_LIMIT \
+	(AGENT_FILE_SCOPE_LIMIT - AGENT_FILE_EXPLICIT_RESERVE)
 
 #define AGENT_FILE_CHANGE_STATUS       (1U << 0)
 #define AGENT_FILE_CHANGE_STAGE        (1U << 1)
@@ -78,7 +81,7 @@ struct agent_catalog_undo_token {
 #define AGENT_CATALOG_UNDO_CREATED (1U << 0)
 
 struct agent_catalog_resolution {
-	int slot, owned, ordinary;
+	int slot, owned, ordinary, autoscan;
 	uint provided, matched, states;
 };
 
@@ -173,7 +176,7 @@ int agent_metadata_catalog_restore(
 	const struct agent_file_meta *, uint, int);
 void agent_metadata_catalog_resolve(uint, const struct agent_file_meta *, int,
 				    struct agent_catalog_resolution *);
-int agent_metadata_catalog_alloc_slot(uint);
+int agent_metadata_catalog_alloc_slot(uint, uint);
 uint64 agent_metadata_catalog_alloc_fid(uint);
 int agent_metadata_catalog_index_seek(uint64, int, char *, int, int *, int *);
 int agent_metadata_catalog_reclaim_scope(uint);

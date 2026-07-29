@@ -27,6 +27,15 @@ from evidence_semantic_common import (
     _text,
 )
 from evidence_semantic_metadata import validate_metadata as _validate_metadata
+from evidence_semantic_dual import (
+    validate_complete_dual_state, validate_dual_alignment, validate_program_ledgers,
+)
+from dual_state_evidence_contract import (
+    DualStateContractError,
+    validate_dual_state,
+)
+from reference_catalog_contract import expected_reference_identities
+
 
 def _validate_reader(ctx: ValidationContext) -> None:
     _require_line(
@@ -171,19 +180,6 @@ DUAL_STAGES = (
     "reader-render-check", "measured-file-query", "result-report-chart",
 )
 
-DUAL_STATE_FIELDS = {
-    "plain_files", "agentos_files", "common_files", "agentos_extra_files",
-    "checked_compatibility_records", "plain_reference_products",
-    "agentos_reference_products", "plain_reference_records",
-    "agentos_reference_records", "source_bound_runtime_records",
-    "preserved_plain_costs", "cost_replacements", "cost_replacement_count",
-    "runner_tick_comparison", "runner_tick_pairs", "embedded_action_records",
-    "run_result_match", "agentos_evidence_checks", "scenario_evidence",
-    "agentos_mainflow_stages", "agentos_mainflow_facts", "plain_timing_records",
-    "plain_agent_launches", "plain_fork_launches", "agentos_timing_records",
-    "agentos_agent_launches", "agentos_worker_launches", "status",
-}
-
 DUAL_READER_FIELDS = {
     "plain_pages", "agentos_pages", "plain_state_files", "agentos_state_files",
     "agentos_extra_state_files", "plain_api_json", "agentos_api_json",
@@ -216,39 +212,22 @@ def _validate_dual_stage_csv(path: Path) -> None:
         previous_end = ended
 
 
-def _validate_dual_state(path: Path) -> None:
+def _validate_dual_state(
+    path: Path,
+    plain_programs: int | None = None,
+    agentos_programs: int | None = None,
+) -> dict[str, object]:
     value = _json(path, "dual state comparison")
-    if not isinstance(value, dict) or set(value) != DUAL_STATE_FIELDS or value.get("status") != "ready":
-        raise EvidenceSemanticError("dual state comparison schema or status differs")
-    integer_fields = DUAL_STATE_FIELDS - {
-        "status", "cost_replacements", "runner_tick_comparison", "scenario_evidence"
+    references = {
+        target: expected_reference_identities(target) for target in ("plain", "agentos")
     }
-    if any(not _nonnegative_int(value.get(name)) for name in integer_fields):
-        raise EvidenceSemanticError("dual state comparison counters are invalid")
-    if (
-        value["plain_files"] < 240
-        or value["agentos_files"] < 240
-        or value["common_files"] < 240
-        or value["run_result_match"] != 1
-        or value["source_bound_runtime_records"] <= 0
-        or value["checked_compatibility_records"] <= 0
-        or value["agentos_evidence_checks"] <= 0
-        or value["agentos_mainflow_stages"] != 11
-        or value["agentos_mainflow_facts"] != 12
-        or value["preserved_plain_costs"] <= 0
-        or not isinstance(value["cost_replacements"], list)
-        or value["cost_replacement_count"] != len(value["cost_replacements"])
-        or value["cost_replacement_count"] != value["preserved_plain_costs"]
-        or not isinstance(value["runner_tick_comparison"], list)
-        or value["runner_tick_pairs"] != len(value["runner_tick_comparison"])
-        or value["runner_tick_pairs"] != 7
-        or not isinstance(value["scenario_evidence"], list)
-        or not value["scenario_evidence"]
-    ):
-        raise EvidenceSemanticError("dual state comparison claims are incomplete")
+    try:
+        return validate_dual_state(value, references, plain_programs, agentos_programs)
+    except DualStateContractError as error:
+        raise EvidenceSemanticError(str(error)) from error
 
 
-def _validate_dual_reader(path: Path) -> None:
+def _validate_dual_reader(path: Path) -> dict[str, object]:
     value = _json(path, "dual reader comparison")
     if not isinstance(value, dict) or set(value) != DUAL_READER_FIELDS or value.get("status") != "ready":
         raise EvidenceSemanticError("dual reader comparison schema or status differs")
@@ -270,14 +249,26 @@ def _validate_dual_reader(path: Path) -> None:
         or value["checked_api_json"] != value["plain_api_json"]
     ):
         raise EvidenceSemanticError("dual reader comparison claims are inconsistent")
+    return value
 
 
 def _validate_dual(ctx: ValidationContext) -> None:
     backend = _load_module(ctx, "host_tools/backend_evidence_contract.py")
     plain_path = ctx.raw_dir / "dual-plain-qemu.log"
     agentos_path = ctx.raw_dir / "dual-agentos-qemu.log"
-    _call(backend, "parse_log", "plain dual Guest log", "plain", plain_path)
-    _call(backend, "parse_log", "AgentOS dual Guest log", "agentos", agentos_path)
+    plain_backend = _call(
+        backend, "parse_log", "plain dual Guest log", "plain", plain_path
+    )
+    agentos_backend = _call(
+        backend, "parse_log", "AgentOS dual Guest log", "agentos", agentos_path
+    )
+    if (
+        not isinstance(plain_backend, dict)
+        or plain_backend.get("cases") != 7
+        or not isinstance(agentos_backend, dict)
+        or agentos_backend.get("cases") != 8
+    ):
+        raise EvidenceSemanticError("dual backend case inventory differs")
     plain = _text(plain_path, "plain dual Guest log")
     agentos = _text(agentos_path, "AgentOS dual Guest log")
     _require_line(plain, "rp_orch: passed", "plain dual Guest log")
@@ -290,9 +281,10 @@ def _validate_dual(ctx: ValidationContext) -> None:
     plain_inventory = _require_regex(
         plain,
         re.compile(
-            r"rp_orch: evidence_role=demo_reference observation_source=guest_runtime "
-            r"program_source=rp_orch_timing program_source_bytes=[1-9][0-9]* "
-            r"program_source_hash=[1-9][0-9]* program_names_digest=[1-9][0-9]* "
+            r"rp_orch: evidence_role=demo_reference evidence_generation=runtime "
+            r"observation_source=guest_runtime "
+            r"program_source=rp_orch_timing program_source_bytes=([1-9][0-9]*) "
+            r"program_source_hash=([1-9][0-9]*) program_names_digest=([1-9][0-9]*) "
             r"programs_observed=([1-9][0-9]*) status=reference_observed"
         ),
         "plain dual program inventory",
@@ -301,14 +293,20 @@ def _validate_dual(ctx: ValidationContext) -> None:
         agentos,
         re.compile(
             r"rp_orch: evidence_role=runtime_verified evidence_generation=runtime "
-            r"program_source=rp_orch_timing program_source_bytes=[1-9][0-9]* "
-            r"program_source_hash=[1-9][0-9]* program_names_digest=[1-9][0-9]* "
+            r"program_source=rp_orch_timing program_source_bytes=([1-9][0-9]*) "
+            r"program_source_hash=([1-9][0-9]*) program_names_digest=([1-9][0-9]*) "
             r"programs_observed=([1-9][0-9]*) status=verified"
         ),
         "AgentOS dual program inventory",
     )
-    plain_count = int(plain_inventory.group(1))
-    agent_count = int(agent_inventory.group(1))
+    receipt_keys = (
+        "program_source_bytes", "program_source_hash", "program_names_digest",
+        "programs_observed",
+    )
+    plain_receipt = dict(zip(receipt_keys, map(int, plain_inventory.groups())))
+    agent_receipt = dict(zip(receipt_keys, map(int, agent_inventory.groups())))
+    plain_count = plain_receipt["programs_observed"]
+    agent_count = agent_receipt["programs_observed"]
     if plain_count != agent_count:
         raise EvidenceSemanticError("dual program inventories use different program counts")
     for text, label in ((plain, "plain dual Guest log"), (agentos, "AgentOS dual Guest log")):
@@ -337,8 +335,15 @@ def _validate_dual(ctx: ValidationContext) -> None:
     if compared.group(1) != compared.group(2):
         raise EvidenceSemanticError("AgentOS dual comparison did not pass every assertion")
     _validate_dual_stage_csv(ctx.raw_dir / "dual-stage-timings.csv")
-    _validate_dual_state(ctx.raw_dir / "dual-state-compare.json")
-    _validate_dual_reader(ctx.raw_dir / "dual-reader-compare.json")
+    state = _validate_dual_state(
+        ctx.raw_dir / "dual-state-compare.json", plain_count, agent_count
+    )
+    reader = _validate_dual_reader(ctx.raw_dir / "dual-reader-compare.json")
+    inventories = validate_complete_dual_state(ctx, state)
+    validate_program_ledgers(ctx, state, plain_receipt, agent_receipt)
+    validate_dual_alignment(
+        ctx, state, reader, plain_count, agent_count, inventories
+    )
     targeted = _parse_guest_stream(
         ctx.raw_dir / "dual-targeted-agentbench-guest.log",
         "dual targeted Agent benchmark Guest log",

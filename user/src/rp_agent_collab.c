@@ -132,7 +132,8 @@ static int run_kernel_collaboration(void)
 		return -1;
 	if (!rp_write_file("rp_agentos_collab_ack",
 			   "agent=sentinel\n"
-			   "event=handoff=recovery-auditor\n"
+			   "event=handoff\n"
+			   "route=recovery-auditor\n"
 			   "delivery=kernel_event_queue\n"
 			   "permission_control=sentinel_action_denied\n"
 			   "status=ready\n"))
@@ -151,7 +152,7 @@ static int run_kernel_collaboration(void)
 		return -1;
 	}
 	if (!rp_append_file("rp_agentos_mainflow",
-			    "stage=collaboration;agent_event_notify=kernel_queue;delivery=kernel_event_queue;capability_control=kernel_role;permission_control=sentinel_action_denied;status=ready"))
+			    "stage=collaboration;permission_control=sentinel_action_denied;status=ready"))
 		return -1;
 	return 1;
 }

@@ -187,8 +187,8 @@ class KernelBudgetTests(unittest.TestCase):
         )
         self.assertIn("delta->applied_slots", scan_sync)
         self.assertLess(
-            scan_sync.index("delta->applied_slots"),
-            scan_sync.index("scan.seen[i] = 1"),
+            scan_sync.index("i < AGENT_META_STALE_BYTES"),
+            scan_sync.index("scan.seen[i] |= delta->applied_slots[i]"),
         )
         self.assertNotIn("agent_metadata_txn_projection_ack", scan_sync)
 
@@ -345,20 +345,15 @@ agent_file_store_complete(&commit, result);
             1,
         )
         unseen_on_failure = scan.replace(
-            "scan.seen[slot] = 1;", "scan.seen[slot] = 0;"
+            "\tSCAN_NOTE(slot);\n\tif (agent_metadata_catalog_edit_begin_scan",
+            "\t(void)slot;\n\tif (agent_metadata_catalog_edit_begin_scan",
+            1,
         )
-        lost_iupdate_failure = scan.replace(
-            "\t\t\tif (iupdate(ip) < 0) {\n"
-            "\t\t\t\tip->agent_meta_slot = old_slot;\n"
-            "\t\t\t\tip->agent_meta_flags = old_flags;\n"
-            "\t\t\t\tip->agent_meta_version = old_version;\n"
-            "\t\t\t\t*failed = SCAN_BIND_RETRY;\n"
-            "\t\t\t\treturn changes;",
-            "\t\t\tif (iupdate(ip) < 0) {\n"
-            "\t\t\t\tip->agent_meta_slot = old_slot;\n"
-            "\t\t\t\tip->agent_meta_flags = old_flags;\n"
-            "\t\t\t\tip->agent_meta_version = old_version;\n"
-            "\t\t\t\treturn changes;",
+        lost_sidecar_failure = scan.replace(
+            "agent_file_state_set_index(ip, slot + 1, persist, 0) < 0)\n"
+            "\t\t\tgoto retry;",
+            "agent_file_state_set_index(ip, slot + 1, persist, 0) < 0)\n"
+            "\t\t\treturn changes;",
             1,
         )
         optional_failure_output = scan.replace(
@@ -393,7 +388,7 @@ agent_file_store_complete(&commit, result);
             ("ignored root status", objects, ignored_root_status),
             ("ignored bind failure", objects, ignored_bind_failure),
             ("unseen mutation failure", objects, unseen_on_failure),
-            ("lost iupdate failure", objects, lost_iupdate_failure),
+            ("lost sidecar failure", objects, lost_sidecar_failure),
             ("optional bind failure output", objects, optional_failure_output),
             ("lost resumable offset", objects, lost_resume),
             ("lost scope isolation", objects, lost_scope_isolation),
@@ -440,19 +435,24 @@ agent_file_store_complete(&commit, result);
         indirect_callback = directory + (
             "\nvoid bad(void) { void (*callback)(void); callback(); }\n"
         )
+        raw_create_path = directory.replace(
+            "agent_metadata_scan_index_inode(ip, key, &failed)",
+            "agent_metadata_scan_index_inode(ip, path, &failed)",
+            1,
+        )
         missing_scan_note = directory.replace(
-            "\tagent_metadata_scan_note_slot(slot);\n", "", 1
+            "\tchanges = agent_metadata_scan_index_inode(ip, key, &failed);\n", "", 1
         )
         early_unlock = directory.replace(
-            "\tagent_metadata_scan_note_slot(slot);",
+            "\tchanges = agent_metadata_scan_index_inode(ip, key, &failed);",
             "\tagent_metadata_txn_unlock();\n"
-            "\tagent_metadata_scan_note_slot(slot);",
+            "\tchanges = agent_metadata_scan_index_inode(ip, key, &failed);",
             1,
         )
         direct_inode_unbind = directory.replace(
-            "\tif (agent_metadata_catalog_clear_slot(slot) < 0) {",
+            "\t\tif (agent_metadata_catalog_clear_slot(slot) < 0)",
             "\tip->agent_meta_slot = 0;\n"
-            "\tif (agent_metadata_catalog_clear_slot(slot) < 0) {",
+            "\t\tif (agent_metadata_catalog_clear_slot(slot) < 0)",
             1,
         )
         cases = (
@@ -463,6 +463,7 @@ agent_file_store_complete(&commit, result);
             ("direct generation state", objects, direct_generation),
             ("writable directory state", objects, writable_state),
             ("indirect callback", objects, indirect_callback),
+            ("raw create metadata path", objects, raw_create_path),
             ("missing scan note", objects, missing_scan_note),
             ("early transaction unlock", objects, early_unlock),
             ("directory bypasses catalog unbind", objects, direct_inode_unbind),
@@ -481,18 +482,12 @@ agent_file_store_complete(&commit, result);
             "view.meta->incarnation != ip->vfs_incarnation",
         )
         for field in identity_fields:
-            self.assertEqual(directory.count(field), 2)
-            missing_update = directory.replace(field, "0", 1)
-            missing_delete = "0".join(directory.rsplit(field, 1))
-            for owner, weakened in (
-                ("update", missing_update),
-                ("delete", missing_delete),
-            ):
-                with self.subTest(owner=owner, missing=field):
-                    with self.assertRaises(kernel_budgets.BudgetError):
-                        kernel_budgets.validate_metadata_directory_boundary_text(
-                            objects, weakened
-                        )
+            self.assertEqual(directory.count(field), 1)
+            with self.subTest(missing=field):
+                with self.assertRaises(kernel_budgets.BudgetError):
+                    kernel_budgets.validate_metadata_directory_boundary_text(
+                        objects, directory.replace(field, "0", 1)
+                    )
 
     def test_metadata_directory_store_symbol_whitelist(self):
         allowed = set(
@@ -1468,7 +1463,9 @@ agent_metadata_txn_projection_require_idle();
             for entry in duplicate_exact_owner["agent_modules"]["modules"]
             if entry["name"] == "identity"
         )
-        duplicate_identity["allowed_global_symbols"].append("agent_make")
+        duplicate_identity["allowed_global_symbols"].append(
+            "agent_scope_controller_departing"
+        )
         with self.assertRaisesRegex(
             kernel_budgets.BudgetError,
             "duplicate Agent module exact export owner",
@@ -2316,13 +2313,13 @@ agent_metadata_txn_projection_require_idle();
             if entry["name"] == "lifecycle"
         )
         source = SCRIPT.parent.parent / lifecycle["source_path"]
-        self.assertEqual(lifecycle["baseline_lines"], 340)
-        self.assertEqual(lifecycle["max_lines"], 357)
+        self.assertEqual(lifecycle["baseline_lines"], 334)
+        self.assertEqual(lifecycle["max_lines"], 351)
         self.assertEqual(
             lifecycle["allowed_dependencies"],
             ["identity", "identity_lease", "metadata", "workflow_lifecycle"],
         )
-        self.assertEqual(len(source.read_text(encoding="utf-8").splitlines()), 340)
+        self.assertEqual(len(source.read_text(encoding="utf-8").splitlines()), 334)
         metadata = next(
             entry
             for entry in config["agent_modules"]["modules"]

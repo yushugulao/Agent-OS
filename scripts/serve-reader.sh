@@ -9,6 +9,11 @@ OUT_DIR="${OUT_DIR:-${DUAL_LOG_DIR}/agentos-reader-live}"
 RESULT_DIR="${RESULT_DIR:-${ROOT_DIR}/results/latest}"
 PORT="${PORT:-8767}"
 LLM_RELAY_MODE="${LLM_RELAY_MODE:-cloud}"
+host_run_result_name="$(PYTHONPATH="${ROOT_DIR}/host_tools" "${PYTHON_BIN}" -c '
+from dual_state_evidence_contract import RUN_RESULT_WORK_FILES
+print(RUN_RESULT_WORK_FILES["agentos"])
+')"
+HOST_RUN_RESULT="${HOST_RUN_RESULT:-${DUAL_LOG_DIR}/${host_run_result_name}}"
 
 if [ ! -d "${STATE_DIR}" ]; then
 	echo "[reader] 找不到状态目录：${STATE_DIR}" >&2
@@ -18,6 +23,12 @@ fi
 
 if [ ! -f "${STATE_DIR}/rp_agentos_mainflow" ]; then
 	echo "[reader] AgentOS 状态不完整，缺少：${STATE_DIR}/rp_agentos_mainflow" >&2
+	echo "[reader] 请重新运行：make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-" >&2
+	exit 1
+fi
+
+if [ -L "${HOST_RUN_RESULT}" ] || [ ! -f "${HOST_RUN_RESULT}" ]; then
+	echo "[reader] 找不到独立 Host 运行回执：${HOST_RUN_RESULT}" >&2
 	echo "[reader] 请重新运行：make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-" >&2
 	exit 1
 fi
@@ -154,6 +165,8 @@ fi
 	--host-test-alignment "${DUAL_LOG_DIR}/host-test-alignment.json" \
 	--host-surface-alignment "${DUAL_LOG_DIR}/host-surface-alignment.json" \
 	--seeded-action-state "${DUAL_LOG_DIR}/seeded-action-state.json" \
+	--host-run-result "${HOST_RUN_RESULT}" \
+	--expected-target agentos \
 	--serve \
 	--auto-run-llm-relay \
 	--llm-relay-mode "${LLM_RELAY_MODE}" \

@@ -112,7 +112,6 @@ int agent_observe_checkpoint_capture_scope(
 	struct agent_observe_checkpoint_scope *);
 int agent_observe_checkpoint_restore_scope(
 	const struct agent_observe_checkpoint_scope *);
-void agent_observe_checkpoint_highwater(uint64 *, uint64 *, uint64 *, uint *);
 void agent_observe_checkpoint_raise_highwater(uint64, uint64, uint64, uint);
 void agent_observe_checkpoint_exhaust_highwater(uint);
 uint64 agent_observe_checkpoint_generation_get(void);

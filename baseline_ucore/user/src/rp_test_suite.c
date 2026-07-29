@@ -2171,8 +2171,8 @@ int main(void)
 	ok = ok && require_file_token("rp_timeline_view", "views=4");
 	ok = ok && require_file_token("rp_timeline_view", "view=agent_decision_flow;events=6;source=rp_agent_run;status=ready");
 	ok = ok && require_file_token("rp_timeline_view", "timeline_event=dossier;tick=42;actor=orchestrator;artifact=rp_review_pack;status=ready");
-	ok = ok && require_file_token("rp_web_bundle", "provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=ready");
-	ok = ok && require_file_token("rp_review_dashboard", "subsection=provenance_view;source=rp_prov_view;timeline=4;packets=4;checks=64;outcome=passed;status=ready");
+	ok = ok && require_file_token("rp_web_bundle", "evidence_role=demo_reference;catalog_generation=demo_expected;provenance_page=rp_prov_view;timeline_views=4;subgraphs=3;packets=4;status=reference_ready");
+	ok = ok && require_file_token("rp_review_dashboard", "evidence_role=demo_reference;catalog_generation=demo_expected;subsection=provenance_view;source=rp_prov_view;timeline=4;packets=4;checks=64;outcome=passed;status=reference_ready");
 	ok = ok && require_file_token("rp_agentcmp", "provenance_view_checks=64");
 	ok = ok && require_file_token("rp_prov_query", "provenance_query_checks=72");
 	ok = ok && require_file_token("rp_prov_query", "specs=3");
@@ -2188,8 +2188,8 @@ int main(void)
 	ok = ok && require_file_token("rp_prov_query_pkg", "comparison=provenance-query-comparison:RUN-042:rendered-vs-direct");
 	ok = ok && require_file_token("rp_prov_query_pkg", "export=provenance-query-export:RUN-042:calculation-lineage");
 	ok = ok && require_file_token("rp_prov_query_pkg", "packet=provenance-query-packet:RUN-042:lineage-review");
-	ok = ok && require_file_token("rp_web_bundle", "provenance_queries_page=rp_prov_query;specs=3;executions=3;packets=1;status=ready");
-	ok = ok && require_file_token("rp_review_dashboard", "subsection=provenance_queries;source=rp_prov_query;queries=3;executions=3;checks=72;outcome=passed;status=ready");
+	ok = ok && require_file_token("rp_web_bundle", "evidence_role=demo_reference;catalog_generation=demo_expected;provenance_queries_page=rp_prov_query;specs=3;executions=3;packets=1;status=reference_ready");
+	ok = ok && require_file_token("rp_review_dashboard", "evidence_role=demo_reference;catalog_generation=demo_expected;subsection=provenance_queries;source=rp_prov_query;queries=3;executions=3;checks=72;outcome=passed;status=reference_ready");
 	ok = ok && require_file_token("rp_agentcmp", "provenance_query_checks=72");
 	ok = ok && require_file_token("rp_web_bundle", "custom_research_files=1");
 	ok = ok && require_file_token("rp_web_bundle", "custom_research_runs=3");

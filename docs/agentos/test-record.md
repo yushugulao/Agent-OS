@@ -11,7 +11,7 @@
 - QEMU `10.2.1`，riscv64 system emulation；
 - `riscv64-linux-gnu-gcc 15.2.0`。
 
-## 冻结提交 `814021ab9dac` 的 18-case 校准
+## 冻结提交 `814021ab9dac` 的 18-case 校准（历史基线）
 
 固定 catalog 分区与验收协议冻结为提交 `814021ab9dacbce065cec94ed55d3bbfcf84227b` 后，在 `/tmp` 的干净 detached worktree 中预声明并串行执行三轮完整套件。三轮父 harness、每轮子命令和校准 checker 均以退出码 0 完成；每个主 timing 文件恰好包含按版本化清单排序的 18 行，Context-sync/WAIT_ATOMIC 前置用例单独运行且不进入总时长。
 
@@ -23,7 +23,7 @@
 
 三轮中位数为 `310.491647311s`；确定性上限按 `ceil(max(max_sample, 1.05 * median) * 100) / 100` 计算为 `327.10s`。最慢样本相对中位数为 `1.0534846892`，未超过 110% 拒绝边界。每轮 runner 的最终成功标记唯一且位于最后一个非空行，成功顺序均为“前置 `agentfinal_ucore` + 18-case”，Guest 日志均有顺序一致的 19 个完整分段。
 
-源码/合同指纹为 `b1dffb44dc3caa5c9c3c3ab483c8ba4d879254416b9152879102762627a698e9`，覆盖 386 个受管输入；三轮 runner 输出与当前 checker 重算结果一致。原始 timing、确定性 gzip 日志、环境、退出状态、validation 与逐文件哈希保存在 `evidence/calibrations/814021ab9dac/`。这使时长门恢复为 `calibrated_full_suite`，但尚未完成 `make full-verify`、C→E release bundle 或远程 Runner attestation，不能单独授予 E3/E4。
+源码/合同指纹为 `b1dffb44dc3caa5c9c3c3ab483c8ba4d879254416b9152879102762627a698e9`，覆盖当时的 386 个受管输入；三轮 runner 输出与该提交上的 checker 重算结果一致。原始 timing、确定性 gzip 日志、环境、退出状态、validation 与逐文件哈希保存在 `evidence/calibrations/814021ab9dac/`。它只使 `814021ab9dac` 的时长门达到 `calibrated_full_suite`，不适用于受管输入已经变化的后续候选；本文件末节单独记录当前候选。
 
 ## 冻结提交 `31d4ddf53695` 的 18-case 校准（历史）
 
@@ -45,7 +45,7 @@
 
 同一候选还把 `exact-field-v1` 改为 128 B 分块流式匹配。长无关字段和跨块长 key 不再因 191 B 临时字段上限失败；目标字段必须精确且唯一，空 key/value、CR、NUL、重复目标和相似前后缀均 fail closed。Host probe 使用 ASan/UBSan，并进入 `ci-check` 的两个测试清单。
 
-当前工作树的完整 `make ci-check` 退出码为 0。静态合同为 capacity `17/17`、rollback fence `15/15`、boot reprobe `57/57`；canonical 预算摘要如下：
+该阶段工作树的完整 `make ci-check` 退出码为 0。静态合同为 capacity `17/17`、rollback fence `15/15`、boot reprobe `57/57`；其历史预算摘要如下：
 
 ```text
 kernel source=49711/49711 lines, raw image=339976/344073 bytes
@@ -57,17 +57,19 @@ metadata aggregate: loaded text=77162/77896 bytes, BSS=1118596/1118596 bytes
 
 定向 `agentscope_ucore` QEMU 在 96.0 秒墙钟内通过，当时镜像输出 `workflow_created=400 public_created=70 aggregate_blocked=1`。这里的 400 和 peer 16 仅属于上述未冻结弹性实验。mkfs 写入的 342 是四个 workflow 可同时兑现的原始 inode 保证；它同样不能证明后来的 Agent catalog 有效上限。
 
-修复 exact-field 消费者后，单独的 seeded AgentOS action 执行通过：Guest/QEMU 阶段 `401.623s`、外层 `474.690s`，提取 272 个状态文件。因此双目标脚本的默认 seeded action timeout 从 300 秒校准为 480 秒，runner 仍额外保留 30 秒阶段清理余量。随后当前候选的 Reader 定向 E2E 也以 `108.4s` 墙钟通过。以上单目标、Reader、Host 与定向 AgentScope 结果都尚未绑定 clean C；重新校准后的 18-case、`full-verify` 与 C→E bundle 仍须后续完成，不能据此声明 E3/E4。
+修复 exact-field 消费者后，该阶段单独的 seeded AgentOS action 执行通过：Guest/QEMU 阶段 `401.623s`、外层 `474.690s`，提取 272 个状态文件。因此双目标脚本的默认 seeded action timeout 从 300 秒校准为 480 秒，runner 仍额外保留 30 秒阶段清理余量。随后该阶段候选的 Reader 定向 E2E 也以 `108.4s` 墙钟通过。以上单目标、Reader、Host 与定向 AgentScope 数据都只是历史结果，不能外推；当前候选见本文件末节。
 
 ## 2026-07-29 固定 catalog 分区冻结候选
 
+本节保存同日较早候选的原始结果和 marker，已由文末“2026-07-29 持久存储与 catalog 解耦回归”更正；以下 `workflow inode=112` 及旧 marker 只具有历史意义，不是当前合同。
+
 审查后按“做减法”收敛容量机制：catalog 固定为 SYSTEM 64 与 4 个 workflow 各 112；ACTIVE、CLOSING、RETIRING 合计最多占 4 个准入槽，RETIRING 在目录回收完成前保持原槽。workflow inode 账户也限制为 112；superblock 的 342 inode 仍只表示原始文件系统保证，metadata tracked 有效上限为 112。实现不再引入跨 scope 借用、全局 union/max、`RESOURCE_AGENT_CATALOG`、backing lease 或 metadata envelope 账本。scoped snapshot 继续绑定不可变 `(lifecycle_id,generation)` 并在 prepare/apply 重验；容量、lifecycle 变化、键冲突与不确定提交分别保留明确错误。新的 AgentScope 合同为 A/B 各自创建 112、第 113 个失败、PUBLIC 70 及清理后复用。
 
-当前工作树的固定分区 Host 合同已通过：capacity `19/19`、rollback fence `18/18`、boot reprobe `74/74`；`exact-field-v1` 的 ASan/UBSan Host probe 也通过。`make ci-check` 以退出码 0 完成，墙钟 `212.5s`。其 canonical 预算测量为：kernel source `49705` 行，stripped ELF `344832` B，raw image `339976` B，runtime text `339164` B，BSS `6271992` B，`struct proc` `26448` B，kernel stack `15072/16384` B，boot stack `10560/65536` B；metadata aggregate 为 source `11719` 行、`357485` B，loaded text `77337` B，BSS `1118596` B。
+该历史候选的固定分区 Host 合同曾通过：capacity `19/19`、rollback fence `18/18`、boot reprobe `74/74`；`exact-field-v1` 的 ASan/UBSan Host probe 也通过。`make ci-check` 以退出码 0 完成，墙钟 `212.5s`。其历史预算测量为：kernel source `49705` 行，stripped ELF `344832` B，raw image `339976` B，runtime text `339164` B，BSS `6271992` B，`struct proc` `26448` B，kernel stack `15072/16384` B，boot stack `10560/65536` B；metadata aggregate 为 source `11719` 行、`357485` B，loaded text `77337` B，BSS `1118596` B。
 
-定向 AgentScope QEMU 输出精确 marker `scope_storage_quota=1 scope_limit=112 workflow_created=112 peer_created=112 public_created=70 overflow_no_space=1 reusable=1`，case 墙钟 `96.1s`、外层命令 `158.35s`，同时记录 writes `138`、跨 scope metadata query `833ms`；Reader 定向 E2E 以 `125.0s` 通过。独立安全复核未发现剩余 P0/P1 冻结阻塞项。唯一登记的 P2 是 runtime fail-closed 后 `prefetch_handoff` 仍可能发布同 scope 的建议性旧 hint；该 hint 不授予能力、不修改 catalog 或文件，也不改变 IPC 结果，冻结后再以行为保持的小重构统一 catalog read preflight。
+该历史候选的定向 AgentScope QEMU 输出 marker `scope_storage_quota=1 scope_limit=112 workflow_created=112 peer_created=112 public_created=70 overflow_no_space=1 reusable=1`，case 墙钟 `96.1s`、外层命令 `158.35s`；Reader 定向 E2E 曾以 `125.0s` 通过。这里的 `inode/scope_limit=112` 耦合、AgentScope marker 和 Reader 耗时均是已被后续机制取代的历史基线，不是当前合同或当前通过证据。
 
-以上机制定向结果已由冻结提交 `814021ab9dac` 的三轮完整套件重新覆盖。`make full-verify`、C→E release bundle 和远程 Runner attestation 仍未完成，因此不得据此声明最终 E3/E4 或可交付状态。
+以上机制定向结果只曾由 `814021ab9dac` 的三轮完整套件覆盖，历史数据不得授予其他候选 E2/E3/E4；当前候选见本文件末节。
 
 ## 2026-07-27 冻结前工作树本地阶段性验收
 
@@ -118,7 +120,7 @@ agentobsreboot_ucore: parent passed
 
 块 I/O 定向验收还修正了测试自身的竞态：owner 聚合 `physical_reads/cache_hits` 不能充当单次 read receipt，metadata 后台校验会合法改变这些计数。当前探针保存预热后的初始 resident/floor/cap，在外部压力完成后、读取热块之前取得 `pressured` 快照，并要求 `resident >= min(initial_resident, floor)` 且不超过 cap；这样 probe read 不能通过重新装入块修饰被测状态。对应 Host 合同拒绝把快照移到 read 之后以及删除 owner/floor/cap 绑定，25 项 mutation 通过；最终定向 Guest 输出 `cache_scope_isolation=1`、`workflow_bounded_progress=1`、`control_reserve_progress=1` 和 `parent passed`，耗时 19.0 秒。
 
-以上只是在尚未冻结的当前工作树上取得的本地阶段性验收：Reader 三组测试、`ci-check`、v51 定向多启动 QEMU 和 I/O 定向回归均未绑定 clean-HEAD C→E bundle，也没有远端 Runner attestation。它们不能写成最终 E3/E4、完整 18-case 套件或 `make full-verify` 已通过；最终发布状态仍只由 `evidence/releases/INDEX.md` 指向的 bundle 与远程 CI 记录决定。
+以上只是在当时尚未冻结的阶段工作树上取得的本地阶段性验收：Reader 三组测试、`ci-check`、v51 定向多启动 QEMU 和 I/O 定向回归均未绑定 clean-HEAD C→E bundle，也没有远端 Runner attestation。它们不能写成最终 E3/E4、完整 18-case 套件或 `make full-verify` 已通过；最终发布状态仍只由 `evidence/releases/INDEX.md` 指向的 bundle 与远程 CI 记录决定。
 
 ## 2026-07-27 早期 Host 门禁快照
 
@@ -255,7 +257,7 @@ runner 控制台可以转发原始字节；持久 `.guest.log` 将 CRLF 和孤�
 | --- | --- | --- |
 | 通过标记 | `passed`、`parent passed` | 判断测试是否完成 |
 | 状态事实 | `key=value`，例如 `used_index=1`、`stale_commit=1`、`tamper_protected=1` | 提取成完成情况和功能结论 |
-| 计时观测 | `ops ticks ops_per_tick speedup_x100`、`scan_records`、`index_records` | 提取成性能表和对比说明 |
+| 计时观测 | `ops ticks ops_per_tick speedup_x100`、`scan_records`、`index_records` | 只作当次 Guest 路径诊断；性能结论仅来自 provenance-bound 文件查询 benchmark |
 
 这种提取方式避免只呈现大段 QEMU 日志。下面每个样例都保留最能说明功能的输出行，并在结论中说明这些输出对应的内核能力。
 
@@ -272,7 +274,7 @@ runner 控制台可以转发原始字节；持久 `.guest.log` 将 CRLF 和孤�
 | `agentsched_ucore` | `role_weights ...`、`event_priority=1`、`reason_trace=1` | Agent 感知调度和调度原因记录可用 |
 | `agentconflict_ucore` | `conflict_denied=1`、`direct_write_denied=1`、`stale_commit=1` | 文件编辑冲突由内核真实文件路径阻止 |
 | `agentllm_ucore` | `relay_timeline=1`、`requester_done=1` | LLM Relay 事件、唤醒和 timeline 摘要可用 |
-| `agentbench_ucore` | `batch_agent_run`、`file_index_query`、`timeline_query_prefetch` | 性能主路径和文件索引/Timeline 查询可观测 |
+| `agentbench_ucore` | `batch_agent_run`、`file_index_query`、`timeline_query_prefetch` | 机制负载、文件索引和 Timeline 查询路径可观测；未绑定 tick 不构成性能证据 |
 | `labdemo_ucore` | `type=INCIDENT_CREATED`、`prefetch_handoff=analyze`、`provenance_graph edges=...` | 设定的模拟流程 多 Agent 恢复场景可复现 |
 | `agentsecurity_ucore` | `route_source_enforced=1`、`route_target_isolated=1`、`ipc_route_authorization=1`、`message_route_lifecycle=1`、`target_route_consent=1`、`route_slot_reclaimed=1` | 系统事件防伪、未授权注入拒绝、grant/revoke、target LLM_DONE consent、MESSAGE 位图隔离、stable control id 生命周期和 source 退出槽回收均通过 |
 | `agentscope_ucore` | `scope_close_authority=1`、`scope_controller_exit_revoke=1 public_lineage=1`、`scope_forced_cleanup=1`、`scope_replacement_admitted=1`，以及既有 observe/pipe 标记 | 唯一根/factory 可信关闭、PUBLIC child/grandchild 谱系撤销、阻塞成员资源释放和 9 轮 generation 回收通过；观测查询预算和 pipe 单跳委派继续通过 |
@@ -959,9 +961,9 @@ elapsed=126.1s
 
 并发/生命周期审查未发现会导致 panic、UAF、双重释放或 I/O/cache owner 提前退休的阻断问题：关闭先在第一段关中断区发布不可逆 CLOSING 屏障，调用路径不主动让出并在第二段关中断区扫描成员；最终 spawn 发布在自己的关中断区复核 active 状态，pending 凭据激活也复核 active 状态。CLOSING 在最后成员释放前保持完整 owner 驻留，退出请求不抢占已有 terminal owner，controller-departure 可重复调用。仍有 close 与 spawn/pending exec 的精确竞态、多线程 controller、纯 CPU 成员，以及关闭期间主动 I/O debt/inode 压力缺口。该段 `126.1s` 输出、随后三轮 16/16 和 `93.7s` 专项都是历史证据，不能替代 C 对应 18-case release bundle 的完整复跑。
 
-## 2026-07-27 Metadata catalog 容量与扫描公平 E1
+## 2026-07-27 Metadata catalog 容量与扫描公平 E1（历史）
 
-本轮把 catalog 容量从调用方约定收敛为中央机制：总表 512 槽，普通 workflow 合计 448，SYSTEM 独立保留 64；四个 workflow 各上限 112，并为 active/future scope 保证至少 16。workflow inode 在目录发布前取得的 `RESOURCE_FS_INODE` 记账同时作为保守的 catalog backing lease，失败和回收沿文件系统事务退款；ACTIVE、CLOSING、RETIRING 的实际占用均参与 admission。权威 edit commit、启动磁盘格式校验和 catalog allocator 共同冻结边界。
+该历史机制曾把 catalog 容量从调用方约定收敛为中央机制：总表 512 槽，普通 workflow 合计 448，SYSTEM 独立保留 64；四个 workflow 各上限 112，并为 active/future scope 保证至少 16。当时 workflow inode 的 `RESOURCE_FS_INODE` 记账被误作 catalog backing lease，因而把 inode 也钳制为 112；这一耦合已废弃，只保留为历史失败基线。当前 112 仅表示每 scope 的 catalog 索引容量。
 
 协调扫描现在区分 capacity deferred 与 transient retry。目录读取失败保留 offset；单对象失败继续后续对象；无法确认目录完整性时保护全表，其余 mutation 失败只保护精确 scope，容量不足仍可先清理 stale record。`agent_info` 尾部新增 `file_scan_deferred` 和 `file_scan_failures`，kernel/user/frozen UAPI 同步。
 
@@ -984,3 +986,93 @@ Ran 1 test ... OK
 ```
 
 四个相关 production 对象和完整 kernel 在该 2026-07-27 阶段性工作树的隔离构建目录交叉编译、链接成功；当时栈预算为 `user=8688`、`interrupt=2768`、`margin=4096`、`required=15552 < limit=16384`。当时对象指标为 scan `text=5275 B/BSS=648 B`、catalog `text=15103 B/BSS=206848 B`、objects `text=14747 B/BSS=0 B`、store `text=17505 B/BSS=677784 B`；完整 kernel 为 `text=337112 B/data=8 B/BSS=6206400 B`，并由 `metadata_control_plane source_lines=12581 > 11848` 正确阻断。它们是 H-17 减重前的 E1 历史快照，不能外推为待发布代码的 module/text/BSS、栈或 kernel 最终值；最终数值留给 C 的 canonical budget log、版本化 JSON 和 bundle metrics 冻结。该历史轮没有 QEMU、聚合或远程证据，不能把聚焦通过写成全仓验收完成。
+
+## 2026-07-29 持久存储与 catalog 解耦回归
+
+seeded AgentOS 的完整工作集暴露了旧容量合同的错误耦合：scope 已占用 4 个显式 `r42*` inode 和 108 个运行期 `rp_*` inode，`rp_ac_ready` 成为第 112 个文件后，`rp_agentos_collab_ack` 作为第 113 个文件在 filesystem inode admission 被拒绝。失败镜像仍有充足全局 inode，且 mkfs policy 已为每 workflow 写入约 342 个 inode 保证，因此这不是物理 ENOSPC，而是旧实现把 metadata catalog 的 112 条容量误当成 STORAGE inode backing lease。
+
+本轮保留 catalog 的静态隔离边界：总量 512、SYSTEM 64、ordinary 448、每 workflow 112；但每 scope 只允许最多 96 条 AUTOSCAN 物化记录，并为显式 metadata 保留 16 条。workflow inode 账户改为直接使用独立 STORAGE policy domain limit，每 scope 硬下限仍为 320，当前镜像约为 342。catalog 或 AUTOSCAN 视图饱和时，只要 block/inode STORAGE admission 成功，普通 VFS 文件仍发布并保持 workflow 标签、逐操作 capability/scope 鉴权；它只是暂不进入 metadata 查询视图。所有 `agent_meta_slot/flags/version` 更新统一经 `agent_file_state_set_index()` 校验并调用 `iupdate()`，失败时恢复旧字段；write/sync/truncate/delete 统一经 `agent_fs_apply_inode_event()`，create 则在 VFS 成功发布后才进入 metadata 协调，因此索引容量不足不会撤销已经成功的文件创建。
+
+容量型未索引状态以当前 inode identity 和 sidecar 版本持久编码为 `agent_meta_slot=-1`。create/write/truncate/delete 看到该状态且本 scope 仍饱和时不会重复排队全目录扫描。扫描已标记 scope 饱和且 catalog slot 实际清除时，会触发 scoped urgent full restart；metadata gate busy 的 delete 没有释放槽，只登记普通协调扫描，lifecycle 等其他变化也遵守普通 cooldown。冷启动 snapshot prepare 先按不可变 lifecycle key 淘汰旧动态 scope，再按 v7 表示及 SYSTEM 64、ordinary 448、每 scope 112 等稳定硬边界装载；97 至 112 条同版本旧 AUTOSCAN 不再被当前 96 条新增长度误判为损坏，第 113 条仍 fail closed。加载后的超额域不静默删表，只允许数量不变或下降；降至 95 后才能新增，失败事务 receipt restore 只复核硬边界、唯一键和 exact post-state。当前 AgentScope fresh-image 动态链路不变：deferred 的第 97 个文件在释放一个槽后被重建，完成写回并强制 reload 后仍能查询。
+
+该机制变更阶段的定向 AgentScope 曾通过，历史容量 marker 为：
+
+```text
+agentscope_ucore: scope_storage_isolation=1 catalog_limit=112 autoscan_limit=96 explicit_reserve=16 workflow_created=97 peer_created=97 public_created=70 overflow_unindexed=1 autoscan_flag_no_space=1 explicit_no_space=1 reusable=1
+```
+
+该用例在两个 workflow 中分别验证 97 个普通文件、96 条 AUTOSCAN、显式 AUTOSCAN 不能绕过该上限、16 条非 AUTOSCAN 显式 metadata、第 17 条显式请求 `NO_SPACE`、catalog 满后的额外 VFS create、跨 scope 拒绝、PUBLIC 70 和清理复用。seeded AgentOS 定向随后完成并抽取 272 个状态文件，原先第 113 个 inode 阻塞不再复现。以上只记录机制重构前后衔接阶段的历史结果，不能由这些 marker 推断其他候选通过；当前候选见本文件末节。
+
+## 2026-07-29 双目标冻结前验收（历史基线）
+
+在修复 Plain 参考 provenance 产物的证据分类后，当时的工作树执行：
+
+```bash
+make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
+```
+
+当前冻结机制比该次历史运行更严格：Plain 的每种 reference 产品必须由 target-specific `REFERENCE_SOURCES` 指定唯一 source owner，源码先剥除注释再检查真实调用；文件形成完整 `demo_reference/demo_expected/reference_ready` envelope，记录以 `(destination,anchor)` 唯一，缺失、未知、重复、跨 owner 预发布或冒名均 fail closed。seeded program observation 另绑定 seeded profile、QEMU 日志以及 `rp_orch_timing` 的 orchestrator/launcher/program 顺序、数量、字节、哈希和名称摘要。AgentOS 的 `rp_agentos_mainflow` 现在只保存 11 个唯一、完整、有序的未验证 telemetry stage；Guest `runtime_verified` 回执一律拒绝。Host 从安全状态清单独立读取 11 个规范来源，复验唯一 claim、预期 source status 和阶段字段，并计算完整 source/telemetry bytes/hash；最终证据保存逐来源明细和原始文件以供离线重放。下方历史日志中的旧字段仅记录当时输出，不是当前合同。
+
+该次历史结果：
+
+```text
+seeded_action_state: plain done passed=1 extracted_state_files=258 status=ready
+seeded_action_state: agentos done passed=1 extracted_state_files=272 status=ready
+dual_platform_state_compare: plain_files=258 agentos_files=272 common_files=258 agentos_extra_files=14 checked_compatibility_records=1029 source_bound_runtime_records=13 preserved_plain_costs=7 embedded_action_records=44 run_result_match=1 agentos_evidence_checks=32 agentos_mainflow_stages=11 agentos_mainflow_facts=12 plain_timing_records=70 plain_agent_launches=0 plain_fork_launches=70 agentos_timing_records=70 agentos_agent_launches=10 agentos_worker_launches=60 status=ready
+dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=260 agentos_state_files=274 agentos_extra_state_files=14 plain_api_json=267 agentos_api_json=281 agentos_extra_api_json=14 checked_pages=40 checked_api_json=267 status=ready
+agentbench_ucore: file_query_benchmark schema=2 unit=us load=125 traversal_ops=64 traversal_records=125 traversal_duration_us=153986 cold_index_ops=1 cold_index_records=6 cold_index_duration_us=1235 cold_rebuild_records=512 cold_rebuild_included=1 warm_index_ops=64 warm_index_records=6 warm_index_duration_us=49945 status=measured
+[dual-platform] plain and AgentOS platforms both passed
+```
+
+双目标总墙钟约 731 秒，其中 seeded 双 Guest 为 604 秒，真实文件查询阶段为 97 秒；这些数字及上方状态计数只属于该次历史工作树。生产链没有可信 runner tick runtime producer，`runner-sweep.csv` 只接受一条 `evidence_status=unavailable,evidence_reason=plain_runtime_cases_zero` availability 记录和零 measurement 行；不可达的 measured collector、重复身份 ABI 与两张推导图已删除。恢复测量必须另行引入非 reference runtime source 和日志/commit 绑定，不能从历史 fixture 复活。当前候选的唯一状态见下一节。
+
+## 2026-07-29 当前冻结候选验收（未形成 E3）
+
+本轮只收敛已有机制和验收边界，不新增内核功能或 ABI。reference registry、Host-derived Mainflow、精确状态清单、Reader 分阶段故障检测、统一 14 字节目录键、metadata 空 catalog 重协调及 dead runner ABI 删除均进入同一候选工作树。
+
+双目标状态与 Host 执行回执已分离。`plain-state` 和 `agentos-state` 只保存从 Guest 镜像提取并由 `extract-summary.json` 精确列出的 `rp_*` 普通文件；`rp_host_run_result` 明确不属于 Guest 清单。Plain/AgentOS Host run receipt 作为独立 sidecar 传给比较器，并以 `sha256-inventory-v1` 绑定排序后的 Guest 文件名、文件数、逐文件长度和全部字节，同时与 seeded summary 及两份 Guest 日志中的唯一 action marker 交叉绑定。Reader 和比较器都会重算摘要，同文件数的内容替换也会失败。Host LLM relay 只把相对 Guest 有变化的文件事务化发布到独立 overlay，页面和 API 在 receipt 验证后显式合成，Guest 快照保持不变；overlay 使用共享的逐组件路径校验和私有目录机制，拒绝 symlink、Windows junction 及链接祖先，旧 generation 只按已验证的平面文件清单删除，不执行越界递归清理。最终证据模式才会把两侧纯 Guest 状态分别打成确定性 complete-state ZIP；普通 `make dual-platform-run` 不生成最终证据 ZIP。
+
+Host action 输入也与 Guest 输出分代保存。runner 以独占 `0700` 目录建立每个 run 和 `host-input`，拒绝既有路径、符号链接、junction 及链接祖先；seed 与生成头使用同目录独占临时文件、`fsync` 和原子替换。`host-input/rp_host_action_seed` 保留实际构建输入并从该路径装入镜像；成功提取后，`state-next` 被精确 Guest 快照整体替换，Host seed、inbox、queue 和 plan 均不得混入发布状态。seeded 验收一方面核对 Host 输入种类和值，另一方面核对 Guest 产生的业务状态，并显式拒绝 seed 泄漏到 Guest 输出；因此输入存在性不再靠残留文件冒充输出证明。
+
+上述最终阻断项的 Windows 聚焦测试均通过；同一代码在 WSL/DrvFS 顺序执行 action runner、状态清单、双目标比较、Reader 与 14 项最终证据回归也全部通过，其中 POSIX 最终证据用例为 14/14。它们补足链接预置、同数内容篡改、relay 不改 Guest、旧 receipt 继续有效、dangling overlay、Windows junction、链接祖先与事务回滚场景，但不替代下方完整双目标和 `full-verify` 门。
+
+当前工作树的实际命令与结果如下。它们是提交前的本地 E1/动态回归事实，不是 clean C 的 release bundle，也不能授予 E3：
+
+```text
+make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
+  PASS，墙钟 669.7s
+  structure=12s，seeded dual Guest=553s，marker=0s，state copy=0s
+  host alignment=2s，state compare=0s，Reader=9s，measured query=91s，report=1s
+  plain=258，agentos=272，common=258，agentos_extra=14
+  checked_compatibility_records=1029
+  guest_source_bound_runtime_records=13
+  embedded_action_records=44，run_result_match=1
+  host_derived_mainflow_stages=11，agentos_mainflow_facts=12
+  Reader pages=40/40，API JSON=266/280
+  measured traversal=147186us，cold index=1117us，warm index=46521us
+
+PYTHONPATH=host_tools python3 host_tools/test_plain_ucore_reader_e2e.py
+  PASS，墙钟 113.4s
+
+AGENT_TEST_CASE=agentscope_ucore bash scripts/run-agent-tests.sh
+  PASS，runner elapsed=82.2s，外层墙钟 140.16s
+  agentscope_ucore: catalog_deferred_rebuilt=1 released=1 durable=1 reload=1
+  agentscope_ucore: scope_storage_isolation=1 catalog_limit=112 autoscan_limit=96 explicit_reserve=16 workflow_created=97 peer_created=97 public_created=70 overflow_unindexed=1 autoscan_flag_no_space=1 explicit_no_space=1 reusable=1
+
+make clean && make ci-check TOOLPREFIX=riscv64-linux-gnu- PYTHON_BIN=python3
+  PASS，墙钟 244.3s
+  kernel source=49595/49705 lines
+  stripped ELF=340736/349172 B，raw=335880/344073 B
+  runtime text=334980/339957 B，BSS=6271992/6516729 B
+  struct proc=26448/27233 B
+  kernel stack=15072/16384 B，boot stack=10592/65536 B
+  metadata aggregate=11701 lines，357766 B，loaded text=77355 B，BSS=1118172 B
+
+make full-verify TOOLPREFIX=riscv64-linux-gnu-
+  EXPECTED FAIL before build/profile/QEMU
+  reason=provisional_requires_full_suite
+```
+
+`full-verify` 的失败是时长策略按设计 fail closed：当前受管输入尚缺固定 runner 上同版本 18-case 完整套件的至少三轮校准样本。不得绕过该门或复用旧提交样本。本轮没有生成 `results/latest`、C→E release bundle 或最终证据包，不声明 E3；远端仍无可用 Runner，也不声明远程 CI 通过或 E4。
+
+候选提交后冻结新内核功能和 ABI。下一阶段只允许完成三轮校准、形成 C→E 证据，以及按“保留、合并、删除”执行行为保持的减法审计；每个小提交继续验证 source、ELF/raw、text/BSS、`struct proc`、线程/boot 栈和测试耗时不增长。

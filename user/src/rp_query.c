@@ -82,7 +82,7 @@ static int run_kernel_query(void)
 		return -1;
 	}
 	if (!rp_append_file("rp_agentos_mainflow",
-			    "stage=query;metadata_query=used_index;tool=query_file;align_query=indexed;report_query=indexed;context_sequence=observed;status=ready"))
+			    "stage=query;metadata_query=used_index;status=ready"))
 		return -1;
 	return 1;
 }

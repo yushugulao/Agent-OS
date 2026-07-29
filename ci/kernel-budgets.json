@@ -223,7 +223,6 @@
         "allowed_global_symbols": [
           "agent_background_checkpoint",
           "agent_background_maintain",
-          "agent_make",
           "agent_scope_controller_departing",
           "sys_agent_call",
           "sys_agent_create",
@@ -300,7 +299,6 @@
         "max_bss_bytes": 0,
         "allowed_global_prefixes": [],
         "allowed_global_symbols": [
-          "agent_map_context",
           "agent_alias_exec_context",
           "agent_context_alloc",
           "agent_context_append",
@@ -318,7 +316,6 @@
           "agent_context_proc_activate",
           "agent_context_proc_reset",
           "agent_context_store",
-          "agent_context_write_header",
           "agent_unmap_exec_context",
           "agent_free_proc_context",
           "sys_context_clear",
@@ -475,8 +472,8 @@
         "name": "lifecycle",
         "source_path": "os/agent_lifecycle.c",
         "object_path": "build/os/agent_lifecycle.o",
-        "baseline_lines": 340,
-        "max_lines": 357,
+        "baseline_lines": 334,
+        "max_lines": 351,
         "max_bss_bytes": 8,
         "allowed_global_prefixes": [
           "agent_lifecycle_"
@@ -611,9 +608,9 @@
         "name": "metadata_scan",
         "source_path": "os/agent_metadata_scan.c",
         "object_path": "build/os/agent_metadata_scan.o",
-        "baseline_lines": 452,
-        "max_lines": 475,
-        "max_bss_bytes": 2136,
+        "baseline_lines": 500,
+        "max_lines": 500,
+        "max_bss_bytes": 220,
         "required_cflags": [
           "-Os"
         ],
@@ -637,8 +634,8 @@
         "name": "metadata_directory",
         "source_path": "os/agent_metadata_directory.c",
         "object_path": "build/os/agent_metadata_directory.o",
-        "baseline_lines": 169,
-        "max_lines": 178,
+        "baseline_lines": 118,
+        "max_lines": 124,
         "max_bss_bytes": 0,
         "required_cflags": [
           "-Os"
@@ -973,7 +970,6 @@
           "agent_observe_checkpoint_exhaust_highwater",
           "agent_observe_checkpoint_generation_floor",
           "agent_observe_checkpoint_generation_get",
-          "agent_observe_checkpoint_highwater",
           "agent_observe_checkpoint_raise_highwater",
           "agent_observe_checkpoint_record_hash",
           "agent_observe_checkpoint_restore_scope",
@@ -1413,14 +1409,14 @@
           "os/agent_observe_persist_context.h"
         ],
         "source_budget_policy": "5% for fixed module contract overhead; loaded text and BSS remain no-growth",
-      "baseline_source_lines": 11512,
-        "max_source_lines": 11848,
-      "baseline_source_bytes": 350273,
-        "max_source_bytes": 357485,
-      "baseline_loaded_text_bytes": 77896,
-      "max_loaded_text_bytes": 77896,
-      "baseline_bss_bytes": 1118596,
-      "max_bss_bytes": 1118596,
+        "baseline_source_lines": 11703,
+        "max_source_lines": 11703,
+        "baseline_source_bytes": 357796,
+        "max_source_bytes": 357796,
+        "baseline_loaded_text_bytes": 77367,
+        "max_loaded_text_bytes": 77367,
+        "baseline_bss_bytes": 1118172,
+        "max_bss_bytes": 1118172,
         "discarded_sections": [
           ".eh_frame"
         ]
@@ -1512,24 +1508,7 @@
       "usersafety_ucore",
       "blocking_semantics_ucore"
     ],
-    "calibration_status": "calibrated_full_suite",
-    "baseline_seconds": 310.491647311,
-    "max_seconds": 327.1,
-    "calibration_samples": [
-      {
-        "sample_id": "agent18-814021ab9dac-01",
-        "total_seconds": 327.098196563
-      },
-      {
-        "sample_id": "agent18-814021ab9dac-02",
-        "total_seconds": 310.491647311
-      },
-      {
-        "sample_id": "agent18-814021ab9dac-03",
-        "total_seconds": 279.293840369
-      }
-    ],
-    "source_fingerprint_sha256": "b1dffb44dc3caa5c9c3c3ab483c8ba4d879254416b9152879102762627a698e9",
+    "calibration_status": "provisional_requires_full_suite",
     "runner_tag": "agentos-qemu-calibrated",
     "runner_profile": {
       "cpu": "Intel Core Ultra 9 275HX",

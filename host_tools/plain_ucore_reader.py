@@ -7,16 +7,47 @@ import argparse
 import html
 import importlib
 import json
+import os
+import re
+import shutil
+import tempfile
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from threading import Lock
+from threading import RLock
 from typing import Iterable
 from urllib.parse import parse_qs, unquote, urlparse
 
 if __package__:
-    from .research_state_manifest import repository_state_inventory
+    from .dual_state_evidence_contract import RUN_RESULT_IDENTITIES
+    from .research_state_manifest import (
+        GUEST_STATE_RECEIPT_SCHEMA,
+        guest_state_inventory_sha256,
+        load_manifest,
+        repository_state_inventory,
+    )
+    from .safe_host_paths import (
+        absolute_lexical_path,
+        ensure_private_directory,
+        ensure_safe_directory,
+        path_is_link,
+        reject_link_components,
+    )
 else:
-    from research_state_manifest import repository_state_inventory
+    from dual_state_evidence_contract import RUN_RESULT_IDENTITIES
+    from research_state_manifest import (
+        GUEST_STATE_RECEIPT_SCHEMA,
+        guest_state_inventory_sha256,
+        load_manifest,
+        repository_state_inventory,
+    )
+    from safe_host_paths import (
+        absolute_lexical_path,
+        ensure_private_directory,
+        ensure_safe_directory,
+        path_is_link,
+        reject_link_components,
+    )
 
 
 ACTION_DEADLINE_CONTRACT = "plain_ucore_action_deadline_v1"
@@ -25,9 +56,16 @@ ACTION_DEADLINE_PHASES = ("clean", "build", "guest")
 ACTION_DEADLINE_PHASE_TIMEOUT_MARGIN_SECONDS = 30
 ACTION_DEADLINE_CLEANUP_ALLOWANCE_SECONDS = 10
 ACTION_DEADLINE_MAX_RUNNER_TIMEOUT_SECONDS = 3600
+CONTRACT_ROOT = Path(__file__).resolve().parents[1]
+STATE_MANIFEST = load_manifest(CONTRACT_ROOT)
 STATE_API_ALLOWLIST = frozenset(
-    repository_state_inventory(Path(__file__).resolve().parents[1])
+    repository_state_inventory(CONTRACT_ROOT, STATE_MANIFEST)
 )
+HOST_ONLY_STATE_FILES = frozenset(STATE_MANIFEST.host_state_files)
+HOST_RUN_RESULT_MAX_BYTES = 64 * 1024
+ACTION_REQUEST_MAX_BYTES = 1024 * 1024
+ACTION_REQUEST_READ_TIMEOUT_SECONDS = 5
+HOST_LLM_OVERLAY_RELATIVE_PATH = Path("host-state/llm-relay")
 
 
 PAGE_SPECS = [
@@ -91,12 +129,21 @@ def parse_state_text(text: str) -> dict[str, str]:
 
 
 def load_state(state_dir: Path) -> dict[str, dict[str, object]]:
+    state_dir = reject_link_components(state_dir)
+    if not state_dir.is_dir():
+        raise ValueError(f"Guest state directory is missing or unsafe: {state_dir}")
     state: dict[str, dict[str, object]] = {}
     for path in sorted(state_dir.iterdir()):
-        if not path.is_file() or path.name.startswith("."):
+        if path.name.startswith("."):
             continue
-        if path.name.startswith("rp_") and path.name not in STATE_API_ALLOWLIST:
+        if path.name in HOST_ONLY_STATE_FILES:
+            raise ValueError(
+                f"Host-only state must not appear in Guest state: {path.name}"
+            )
+        if path.name not in STATE_API_ALLOWLIST:
             continue
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"Guest state file is missing or unsafe: {path.name}")
         text = path.read_text(encoding="utf-8", errors="replace")
         state[path.name] = {
             "text": text,
@@ -104,6 +151,202 @@ def load_state(state_dir: Path) -> dict[str, dict[str, object]]:
             "lines": [line for line in text.splitlines() if line.strip()],
         }
     return state
+
+
+def validated_host_overlay_entries(
+    overlay_dir: Path,
+    *,
+    allow_relay_summary: bool = False,
+) -> tuple[Path, list[Path]]:
+    """Validate a flat Host overlay without following any path component."""
+    overlay_dir = reject_link_components(overlay_dir)
+    if not overlay_dir.exists():
+        return overlay_dir, []
+    if not overlay_dir.is_dir():
+        raise ValueError(f"Host overlay directory is unsafe: {overlay_dir}")
+    entries: list[Path] = []
+    for path in sorted(overlay_dir.iterdir()):
+        if allow_relay_summary and path.name == ".relay-summary.json":
+            if path_is_link(path) or not path.is_file():
+                raise ValueError("Host overlay relay summary is unsafe")
+            entries.append(path)
+            continue
+        if path.name.startswith("."):
+            raise ValueError(f"Host overlay contains an unknown sidecar: {path.name}")
+        if path.name in HOST_ONLY_STATE_FILES:
+            raise ValueError(f"Host overlay contains a reserved sidecar: {path.name}")
+        if path.name not in STATE_API_ALLOWLIST:
+            raise ValueError(f"Host overlay contains unknown state: {path.name}")
+        if path_is_link(path) or not path.is_file():
+            raise ValueError(f"Host overlay file is unsafe: {path.name}")
+        entries.append(path)
+    return overlay_dir, entries
+
+
+def load_host_overlay_state(
+    overlay_dir: Path | None,
+) -> dict[str, dict[str, object]]:
+    """Load a declared Host projection without treating it as Guest evidence."""
+    if overlay_dir is None:
+        return {}
+    _overlay_dir, entries = validated_host_overlay_entries(overlay_dir)
+    overlay: dict[str, dict[str, object]] = {}
+    for path in entries:
+        text = path.read_text(encoding="utf-8", errors="replace")
+        overlay[path.name] = {
+            "text": text,
+            "values": parse_state_text(text),
+            "lines": [line for line in text.splitlines() if line.strip()],
+        }
+    return overlay
+
+
+def prune_unchanged_host_overlay(state_dir: Path, overlay_dir: Path) -> None:
+    """Reduce relay output to files whose bytes differ from the Guest snapshot."""
+    state_dir = reject_link_components(state_dir)
+    _overlay_dir, entries = validated_host_overlay_entries(
+        overlay_dir, allow_relay_summary=True
+    )
+    for path in entries:
+        if path.name == ".relay-summary.json":
+            continue
+        guest_path = state_dir / path.name
+        if path_is_link(guest_path) or (
+            guest_path.exists() and not guest_path.is_file()
+        ):
+            raise ValueError(f"Guest state file is unsafe: {path.name}")
+        if guest_path.is_file() and guest_path.read_bytes() == path.read_bytes():
+            path.unlink()
+
+
+def remove_host_overlay_directory(
+    overlay_dir: Path,
+    *,
+    allow_relay_summary: bool = False,
+) -> None:
+    """Remove a validated flat overlay without recursive traversal."""
+    overlay_dir, entries = validated_host_overlay_entries(
+        overlay_dir, allow_relay_summary=allow_relay_summary
+    )
+    if not overlay_dir.exists():
+        return
+    for path in entries:
+        path.unlink()
+    overlay_dir.rmdir()
+
+
+def canonical_nonnegative(values: dict[str, str], key: str) -> int:
+    value = values.get(key, "")
+    if re.fullmatch(r"0|[1-9][0-9]*", value) is None:
+        raise ValueError(f"Host run result has a non-canonical {key}")
+    return int(value)
+
+
+def load_host_run_result(
+    path: Path | None,
+    state_dir: Path,
+    expected_target: str | None,
+) -> dict[str, object] | None:
+    if path is None:
+        return None
+    if expected_target not in RUN_RESULT_IDENTITIES:
+        raise ValueError("Host run result requires a declared target")
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"Host run result is missing or unsafe: {path}")
+    resolved = path.resolve(strict=True)
+    try:
+        resolved.relative_to(state_dir.resolve(strict=True))
+    except ValueError:
+        pass
+    else:
+        raise ValueError("Host run result must be outside Guest state")
+    data = path.read_bytes()
+    if (
+        not data
+        or len(data) > HOST_RUN_RESULT_MAX_BYTES
+        or not data.endswith(b"\n")
+        or b"\r" in data
+        or b"\x00" in data
+    ):
+        raise ValueError("Host run result has an invalid size or encoding")
+    text = data.decode("utf-8", errors="strict")
+    values: dict[str, str] = {}
+    for line_no, raw in enumerate(text.splitlines(), 1):
+        if not raw or raw.count("=") != 1:
+            raise ValueError(
+                f"Host run result has a malformed record at line {line_no}"
+            )
+        key, value = raw.split("=", 1)
+        if (
+            not key
+            or key.strip() != key
+            or value.strip() != value
+            or key in values
+        ):
+            raise ValueError(
+                f"Host run result has a non-canonical record at line {line_no}"
+            )
+        values[key] = value
+
+    chapter, init_proc = RUN_RESULT_IDENTITIES[expected_target]
+    if values.get("host_runner") != "plain_ucore_action_runner":
+        raise ValueError("Host run result has an invalid producer")
+    if (
+        values.get("target") != expected_target
+        or values.get("chapter") != chapter
+        or values.get("init_proc") != init_proc
+    ):
+        raise ValueError("Host run result has an invalid target identity")
+    if (
+        values.get("status") != "ready"
+        or values.get("passed") != "1"
+        or values.get("qemu_orch_passed") != "1"
+    ):
+        raise ValueError("Host run result is not ready")
+    success_fields = {
+        "build_returncode": "0",
+        "guest_returncode": "0",
+        "failure_phase": "",
+        "failure_reason": "",
+        "qemu_timed_out": "0",
+        "qemu_output_eof": "1",
+    }
+    natural_exit = (
+        values.get("guest_raw_returncode") == "0"
+        and values.get("qemu_runner_terminated") == "0"
+        and values.get("qemu_runner_signals") == ""
+    )
+    controlled_exit = (
+        re.fullmatch(r"-?[1-9][0-9]*", values.get("guest_raw_returncode", ""))
+        is not None
+        and values.get("qemu_runner_terminated") == "1"
+        and values.get("qemu_runner_signals") == "15"
+    )
+    if (
+        any(values.get(key) != value for key, value in success_fields.items())
+        or not (natural_exit or controlled_exit)
+    ):
+        raise ValueError("Host run result has contradictory success fields")
+    canonical_nonnegative(values, "embedded_action_records")
+    expected_state_files, expected_state_sha256 = guest_state_inventory_sha256(
+        state_dir, excluded_names=HOST_ONLY_STATE_FILES
+    )
+    if values.get("guest_state_receipt_schema") != GUEST_STATE_RECEIPT_SCHEMA:
+        raise ValueError("Host run result has an unsupported Guest state receipt schema")
+    if canonical_nonnegative(values, "guest_state_files") != expected_state_files:
+        raise ValueError("Host run result does not bind the Guest state count")
+    if canonical_nonnegative(values, "extracted_state_files") != expected_state_files:
+        raise ValueError("Host run result contradicts the Guest state count")
+    receipt_digest = values.get("guest_state_sha256", "")
+    if re.fullmatch(r"[0-9a-f]{64}", receipt_digest) is None:
+        raise ValueError("Host run result has a non-canonical Guest state digest")
+    if receipt_digest != expected_state_sha256:
+        raise ValueError("Host run result does not bind the Guest state contents")
+    return {
+        "text": text,
+        "values": values,
+        "lines": [line for line in text.splitlines() if line.strip()],
+    }
 
 
 def state_values(state: dict[str, dict[str, object]], name: str) -> dict[str, str]:
@@ -188,13 +431,49 @@ def validate_contract(contract: dict[str, object]) -> list[str]:
 
 
 def write_json(path: Path, data: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    atomic_write_bytes(
+        path,
+        (json.dumps(data, indent=2, ensure_ascii=False) + "\n").encode("utf-8"),
+    )
+
+
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    path = absolute_lexical_path(path)
+    parent = ensure_safe_directory(path.parent)
+    if path_is_link(path) or (path.exists() and not path.is_file()):
+        raise ValueError(f"Output path is unsafe: {path}")
+    fd, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        for attempt in range(5):
+            try:
+                temporary.replace(path)
+                break
+            except PermissionError:
+                if os.name != "nt" or attempt == 4:
+                    raise
+                time.sleep(0.01 * (attempt + 1))
+    except Exception:
+        if temporary.is_file() and not temporary.is_symlink():
+            temporary.unlink()
+        raise
+
+
+def write_text_file(path: Path, text: str) -> None:
+    atomic_write_bytes(path, text.encode("utf-8"))
 
 
 def read_json_file(path: Path) -> dict[str, object]:
     if not path.exists():
         return {}
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"JSON input is unsafe: {path}")
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(data, dict):
@@ -381,6 +660,20 @@ def seeded_action_state_item(data: dict[str, object]) -> dict[str, object]:
         "values": parse_state_text(text),
         "lines": [line for line in text.splitlines() if line.strip()],
     }
+
+
+def compose_render_state(
+    guest_state: dict[str, dict[str, object]],
+    declared_sidecars: dict[str, dict[str, object] | None],
+    host_overlay: dict[str, dict[str, object]] | None = None,
+) -> dict[str, dict[str, object]]:
+    """Compose view inputs without changing the validated Guest-state contract."""
+    render_state = dict(guest_state)
+    render_state.update(host_overlay or {})
+    for name, item in declared_sidecars.items():
+        if item:
+            render_state[name] = item
+    return render_state
 
 
 def read_jsonl_file(path: Path) -> list[dict[str, object]]:
@@ -4801,31 +5094,68 @@ def render_site(
     host_test_alignment_path: Path | None = None,
     host_surface_alignment_path: Path | None = None,
     seeded_action_state_path: Path | None = None,
+    host_run_result_path: Path | None = None,
+    expected_target: str | None = None,
+    host_overlay_dir: Path | None = None,
 ) -> dict[str, object]:
     state = load_state(state_dir)
     host_platform_alignment = load_optional_json(host_platform_alignment_path)
     host_test_alignment = load_optional_json(host_test_alignment_path)
     host_surface_alignment = load_optional_json(host_surface_alignment_path)
     seeded_action_state = load_optional_json(seeded_action_state_path)
-    render_state = dict(state)
-    if host_platform_alignment:
-        render_state["host_platform_alignment"] = alignment_state_item("platform", host_platform_alignment)
-    if host_test_alignment:
-        render_state["host_test_alignment"] = alignment_state_item("tests", host_test_alignment)
-    if host_surface_alignment:
-        render_state["host_surface_alignment"] = alignment_state_item("surface", host_surface_alignment)
-    if seeded_action_state:
-        render_state["host_seeded_action"] = seeded_action_state_item(seeded_action_state)
+    host_run_result = load_host_run_result(
+        host_run_result_path,
+        state_dir,
+        expected_target,
+    )
+    host_overlay = load_host_overlay_state(host_overlay_dir)
+    render_state = compose_render_state(
+        state,
+        {
+            "rp_host_run_result": host_run_result,
+            "host_platform_alignment": (
+                alignment_state_item("platform", host_platform_alignment)
+                if host_platform_alignment
+                else None
+            ),
+            "host_test_alignment": (
+                alignment_state_item("tests", host_test_alignment)
+                if host_test_alignment
+                else None
+            ),
+            "host_surface_alignment": (
+                alignment_state_item("surface", host_surface_alignment)
+                if host_surface_alignment
+                else None
+            ),
+            "host_seeded_action": (
+                seeded_action_state_item(seeded_action_state)
+                if seeded_action_state
+                else None
+            ),
+        },
+        host_overlay,
+    )
     contract = reader_contract(state)
     problems = validate_contract(contract)
+    if out_dir.is_symlink():
+        raise ValueError(f"Reader output directory is unsafe: {out_dir}")
     out_dir.mkdir(parents=True, exist_ok=True)
+    if not out_dir.is_dir():
+        raise ValueError(f"Reader output directory is unsafe: {out_dir}")
     api_dir = out_dir / "api"
+    if api_dir.is_symlink():
+        raise ValueError(f"Reader API directory is unsafe: {api_dir}")
     api_dir.mkdir(parents=True, exist_ok=True)
     for old_api in api_dir.glob("*.json"):
+        if old_api.is_symlink() or not old_api.is_file():
+            raise ValueError(f"Reader API output is unsafe: {old_api}")
         old_api.unlink()
     action_log = out_dir / "host-actions.jsonl"
     actions = read_jsonl_file(action_log)
     last_run = read_json_file(out_dir / "last-run.json")
+    if host_run_result is None:
+        last_run = {}
 
     for name, item in render_state.items():
         write_json(api_dir / f"{name}.json", {"name": name, "values": item["values"], "lines": item["lines"]})
@@ -4833,6 +5163,14 @@ def render_site(
     extra_api_files += write_optional_api(api_dir, "host_platform_alignment_raw", host_platform_alignment)
     extra_api_files += write_optional_api(api_dir, "host_test_alignment_raw", host_test_alignment)
     extra_api_files += write_optional_api(api_dir, "host_surface_alignment_raw", host_surface_alignment)
+    alignment_state_files = sum(
+        int(bool(item))
+        for item in (
+            host_platform_alignment,
+            host_test_alignment,
+            host_surface_alignment,
+        )
+    )
 
     for file_name, title, primary, extras in PAGE_SPECS:
         nav = "<nav>{}</nav>".format(
@@ -4861,87 +5199,87 @@ def render_site(
             sections.append(action_delta_panel("Run Action Delta", render_state, actions, {"run", "inputs", "workflow", "artifact", "llm", "workbench", "review", "delivery"}))
         if file_name == "workflow.html":
             sections.append(action_trace_panel("Workflow Action Trace", actions, {"workflow", "artifact"}))
-            sections.append(action_output_panel("Workflow Action Output Links", state, actions, {"workflow", "artifact"}))
-            sections.append(action_output_detail_panel("Workflow Action Output Details", state, actions, {"workflow", "artifact"}))
-            sections.append(action_impact_panel("Workflow Action Impact", state, actions, {"workflow", "artifact"}))
-            sections.append(action_delta_panel("Workflow Action Delta", state, actions, {"workflow", "artifact"}))
+            sections.append(action_output_panel("Workflow Action Output Links", render_state, actions, {"workflow", "artifact"}))
+            sections.append(action_output_detail_panel("Workflow Action Output Details", render_state, actions, {"workflow", "artifact"}))
+            sections.append(action_impact_panel("Workflow Action Impact", render_state, actions, {"workflow", "artifact"}))
+            sections.append(action_delta_panel("Workflow Action Delta", render_state, actions, {"workflow", "artifact"}))
         if file_name == "workbench.html":
             sections.append(action_trace_panel("Workbench Action Trace", actions, {"studio", "workbench", "review", "delivery", "operations", "project"}))
-            sections.append(action_output_panel("Workbench Action Output Links", state, actions, {"studio", "workbench", "review", "delivery", "operations", "project"}))
-            sections.append(action_output_detail_panel("Workbench Action Output Details", state, actions, {"studio", "workbench", "review", "delivery", "operations", "project"}))
-            sections.append(action_impact_panel("Workbench Action Impact", state, actions, {"studio", "workbench", "review", "delivery", "operations", "project"}))
-            sections.append(action_delta_panel("Workbench Action Delta", state, actions, {"studio", "workbench", "review", "delivery", "operations", "project"}))
+            sections.append(action_output_panel("Workbench Action Output Links", render_state, actions, {"studio", "workbench", "review", "delivery", "operations", "project"}))
+            sections.append(action_output_detail_panel("Workbench Action Output Details", render_state, actions, {"studio", "workbench", "review", "delivery", "operations", "project"}))
+            sections.append(action_impact_panel("Workbench Action Impact", render_state, actions, {"studio", "workbench", "review", "delivery", "operations", "project"}))
+            sections.append(action_delta_panel("Workbench Action Delta", render_state, actions, {"studio", "workbench", "review", "delivery", "operations", "project"}))
         if file_name == "studio.html":
             sections.append(action_trace_panel("Studio Action Trace", actions, {"studio", "workbench", "run", "inputs"}))
-            sections.append(action_output_panel("Studio Action Output Links", state, actions, {"studio", "workbench", "run", "inputs"}))
-            sections.append(action_output_detail_panel("Studio Action Output Details", state, actions, {"studio", "workbench", "run", "inputs"}))
-            sections.append(action_impact_panel("Studio Action Impact", state, actions, {"studio", "workbench", "run", "inputs"}))
-            sections.append(action_delta_panel("Studio Action Delta", state, actions, {"studio", "workbench", "run", "inputs"}))
+            sections.append(action_output_panel("Studio Action Output Links", render_state, actions, {"studio", "workbench", "run", "inputs"}))
+            sections.append(action_output_detail_panel("Studio Action Output Details", render_state, actions, {"studio", "workbench", "run", "inputs"}))
+            sections.append(action_impact_panel("Studio Action Impact", render_state, actions, {"studio", "workbench", "run", "inputs"}))
+            sections.append(action_delta_panel("Studio Action Delta", render_state, actions, {"studio", "workbench", "run", "inputs"}))
         if file_name == "compare.html":
             sections.append(action_trace_panel("Compare Action Trace", actions, {"compare", "portability", "workflow", "artifact"}))
-            sections.append(action_output_panel("Compare Action Output Links", state, actions, {"compare", "portability", "workflow", "artifact"}))
-            sections.append(action_output_detail_panel("Compare Action Output Details", state, actions, {"compare", "portability", "workflow", "artifact"}))
-            sections.append(action_impact_panel("Compare Action Impact", state, actions, {"compare", "portability", "workflow", "artifact"}))
-            sections.append(action_delta_panel("Compare Action Delta", state, actions, {"compare", "portability", "workflow", "artifact"}))
+            sections.append(action_output_panel("Compare Action Output Links", render_state, actions, {"compare", "portability", "workflow", "artifact"}))
+            sections.append(action_output_detail_panel("Compare Action Output Details", render_state, actions, {"compare", "portability", "workflow", "artifact"}))
+            sections.append(action_impact_panel("Compare Action Impact", render_state, actions, {"compare", "portability", "workflow", "artifact"}))
+            sections.append(action_delta_panel("Compare Action Delta", render_state, actions, {"compare", "portability", "workflow", "artifact"}))
         if file_name == "review.html":
             sections.append(action_trace_panel("Review Action Trace", actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
-            sections.append(action_output_panel("Review Action Output Links", state, actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
-            sections.append(action_output_detail_panel("Review Action Output Details", state, actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
-            sections.append(action_impact_panel("Review Action Impact", state, actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
-            sections.append(action_delta_panel("Review Action Delta", state, actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
+            sections.append(action_output_panel("Review Action Output Links", render_state, actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
+            sections.append(action_output_detail_panel("Review Action Output Details", render_state, actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
+            sections.append(action_impact_panel("Review Action Impact", render_state, actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
+            sections.append(action_delta_panel("Review Action Delta", render_state, actions, {"review", "delivery", "operations", "workbench", "project", "llm", "compare"}))
         if file_name == "artifacts.html":
-            sections.append(action_output_panel("Artifact Action Output Links", state, actions, {"artifact", "workflow"}))
-            sections.append(action_output_detail_panel("Artifact Action Output Details", state, actions, {"artifact", "workflow"}))
-            sections.append(action_impact_panel("Artifact Action Impact", state, actions, {"artifact", "workflow"}))
-            sections.append(action_delta_panel("Artifact Action Delta", state, actions, {"artifact", "workflow"}))
+            sections.append(action_output_panel("Artifact Action Output Links", render_state, actions, {"artifact", "workflow"}))
+            sections.append(action_output_detail_panel("Artifact Action Output Details", render_state, actions, {"artifact", "workflow"}))
+            sections.append(action_impact_panel("Artifact Action Impact", render_state, actions, {"artifact", "workflow"}))
+            sections.append(action_delta_panel("Artifact Action Delta", render_state, actions, {"artifact", "workflow"}))
         if file_name == "delivery.html":
             sections.append(action_trace_panel("Delivery Action Trace", actions, {"delivery", "workbench", "operations", "project", "artifact"}))
-            sections.append(action_output_panel("Delivery Action Output Links", state, actions, {"delivery", "workbench", "operations", "project", "artifact"}))
-            sections.append(action_output_detail_panel("Delivery Action Output Details", state, actions, {"delivery", "workbench", "operations", "project", "artifact"}))
-            sections.append(action_impact_panel("Delivery Action Impact", state, actions, {"delivery", "workbench", "operations", "project", "artifact"}))
-            sections.append(action_delta_panel("Delivery Action Delta", state, actions, {"delivery", "workbench", "operations", "project", "artifact"}))
+            sections.append(action_output_panel("Delivery Action Output Links", render_state, actions, {"delivery", "workbench", "operations", "project", "artifact"}))
+            sections.append(action_output_detail_panel("Delivery Action Output Details", render_state, actions, {"delivery", "workbench", "operations", "project", "artifact"}))
+            sections.append(action_impact_panel("Delivery Action Impact", render_state, actions, {"delivery", "workbench", "operations", "project", "artifact"}))
+            sections.append(action_delta_panel("Delivery Action Delta", render_state, actions, {"delivery", "workbench", "operations", "project", "artifact"}))
         if file_name == "data.html":
             sections.append(action_trace_panel("Data Action Trace", actions, {"run", "inputs", "workbench", "artifact"}))
-            sections.append(action_output_panel("Data Action Output Links", state, actions, {"run", "inputs", "workbench", "artifact"}))
-            sections.append(action_output_detail_panel("Data Action Output Details", state, actions, {"run", "inputs", "workbench", "artifact"}))
-            sections.append(action_impact_panel("Data Action Impact", state, actions, {"run", "inputs", "workbench", "artifact"}))
-            sections.append(action_delta_panel("Data Action Delta", state, actions, {"run", "inputs", "workbench", "artifact"}))
+            sections.append(action_output_panel("Data Action Output Links", render_state, actions, {"run", "inputs", "workbench", "artifact"}))
+            sections.append(action_output_detail_panel("Data Action Output Details", render_state, actions, {"run", "inputs", "workbench", "artifact"}))
+            sections.append(action_impact_panel("Data Action Impact", render_state, actions, {"run", "inputs", "workbench", "artifact"}))
+            sections.append(action_delta_panel("Data Action Delta", render_state, actions, {"run", "inputs", "workbench", "artifact"}))
         if file_name == "project.html":
             sections.append(action_trace_panel("Project Action Trace", actions, {"studio", "project", "operations", "workbench", "review", "delivery"}))
-            sections.append(action_output_panel("Project Action Output Links", state, actions, {"studio", "project", "operations", "workbench", "review", "delivery"}))
-            sections.append(action_output_detail_panel("Project Action Output Details", state, actions, {"studio", "project", "operations", "workbench", "review", "delivery"}))
-            sections.append(action_impact_panel("Project Action Impact", state, actions, {"studio", "project", "operations", "workbench", "review", "delivery"}))
-            sections.append(action_delta_panel("Project Action Delta", state, actions, {"studio", "project", "operations", "workbench", "review", "delivery"}))
+            sections.append(action_output_panel("Project Action Output Links", render_state, actions, {"studio", "project", "operations", "workbench", "review", "delivery"}))
+            sections.append(action_output_detail_panel("Project Action Output Details", render_state, actions, {"studio", "project", "operations", "workbench", "review", "delivery"}))
+            sections.append(action_impact_panel("Project Action Impact", render_state, actions, {"studio", "project", "operations", "workbench", "review", "delivery"}))
+            sections.append(action_delta_panel("Project Action Delta", render_state, actions, {"studio", "project", "operations", "workbench", "review", "delivery"}))
         if file_name == "project-review.html":
             sections.append(action_trace_panel("Project Review Action Trace", actions, {"project", "delivery", "operations", "workbench"}))
-            sections.append(action_output_panel("Project Review Action Output Links", state, actions, {"project", "delivery", "operations", "workbench"}))
-            sections.append(action_output_detail_panel("Project Review Action Output Details", state, actions, {"project", "delivery", "operations", "workbench"}))
-            sections.append(action_impact_panel("Project Review Action Impact", state, actions, {"project", "delivery", "operations", "workbench"}))
-            sections.append(action_delta_panel("Project Review Action Delta", state, actions, {"project", "delivery", "operations", "workbench"}))
+            sections.append(action_output_panel("Project Review Action Output Links", render_state, actions, {"project", "delivery", "operations", "workbench"}))
+            sections.append(action_output_detail_panel("Project Review Action Output Details", render_state, actions, {"project", "delivery", "operations", "workbench"}))
+            sections.append(action_impact_panel("Project Review Action Impact", render_state, actions, {"project", "delivery", "operations", "workbench"}))
+            sections.append(action_delta_panel("Project Review Action Delta", render_state, actions, {"project", "delivery", "operations", "workbench"}))
         if file_name == "llm.html":
             sections.append(action_trace_panel("LLM Action Trace", actions, {"llm"}))
-            sections.append(action_output_panel("LLM Action Output Links", state, actions, {"llm"}))
-            sections.append(action_output_detail_panel("LLM Action Output Details", state, actions, {"llm"}))
-            sections.append(action_impact_panel("LLM Action Impact", state, actions, {"llm"}))
-            sections.append(action_delta_panel("LLM Action Delta", state, actions, {"llm"}))
+            sections.append(action_output_panel("LLM Action Output Links", render_state, actions, {"llm"}))
+            sections.append(action_output_detail_panel("LLM Action Output Details", render_state, actions, {"llm"}))
+            sections.append(action_impact_panel("LLM Action Impact", render_state, actions, {"llm"}))
+            sections.append(action_delta_panel("LLM Action Delta", render_state, actions, {"llm"}))
         if file_name == "actions.html":
             sections.append(render_action_panel())
-            sections.append(action_output_panel("Action Output Links", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "studio", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
-            sections.append(action_output_detail_panel("Action Output Details", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "studio", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
-            sections.append(action_impact_panel("Action Impact", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "studio", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
-            sections.append(action_delta_panel("Action Delta", state, actions, {"run", "inputs", "workflow", "artifact", "llm", "studio", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
+            sections.append(action_output_panel("Action Output Links", render_state, actions, {"run", "inputs", "workflow", "artifact", "llm", "studio", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
+            sections.append(action_output_detail_panel("Action Output Details", render_state, actions, {"run", "inputs", "workflow", "artifact", "llm", "studio", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
+            sections.append(action_impact_panel("Action Impact", render_state, actions, {"run", "inputs", "workflow", "artifact", "llm", "studio", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
+            sections.append(action_delta_panel("Action Delta", render_state, actions, {"run", "inputs", "workflow", "artifact", "llm", "studio", "workbench", "review", "delivery", "operations", "project", "compare", "portability"}))
             sections.append(render_action_log(actions))
-        sections.append(render_table(primary, state_lines(state, primary)))
+        sections.append(render_table(primary, state_lines(render_state, primary)))
         for extra in extras:
-            sections.append(render_table(extra, state_lines(state, extra)))
-        (out_dir / file_name).write_text(page_html(title, nav, sections), encoding="utf-8")
+            sections.append(render_table(extra, state_lines(render_state, extra)))
+        write_text_file(out_dir / file_name, page_html(title, nav, sections))
 
     summary = {
         "state_dir": str(state_dir),
         "state_files": len(state),
         "pages": len(PAGE_SPECS),
         "api_json_files": len(render_state) + extra_api_files,
-        "alignment_api_files": extra_api_files + len(render_state) - len(state),
+        "alignment_api_files": extra_api_files + alignment_state_files,
         "action_count": len(actions),
         "last_run_status": last_run.get("status", ""),
         "contract": contract,
@@ -4986,7 +5324,15 @@ def append_action_records(
         for record in records:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
     if write_state:
-        inbox = state_dir / "rp_host_action_inbox"
+        host_state_dir = out_dir / "host-state"
+        if host_state_dir.is_symlink() or (
+            host_state_dir.exists() and not host_state_dir.is_dir()
+        ):
+            raise ValueError("Host action state directory is unsafe")
+        host_state_dir.mkdir(parents=True, exist_ok=True)
+        inbox = host_state_dir / "rp_host_action_inbox"
+        if inbox.is_symlink() or (inbox.exists() and not inbox.is_file()):
+            raise ValueError("Host action inbox is unsafe")
         with inbox.open("a", encoding="utf-8") as handle:
             for record in records:
                 handle.write(f"action={record['sequence']};path={record['path']};status=accepted\n")
@@ -5030,22 +5376,37 @@ def run_action_package(
     timeout_seconds: int,
     wsl_distro: str,
     runner_module: object | None = None,
+    host_run_result_path: Path | None = None,
 ) -> dict[str, object]:
     runner = runner_module or importlib.import_module("plain_ucore_action_runner")
     action_log = out_dir / "host-actions.jsonl"
     actions = runner.read_jsonl(action_log)  # type: ignore[attr-defined]
     run_root.mkdir(parents=True, exist_ok=True)
     run_dir = run_root / f"run-{len(actions):04d}"
+    last_run_path = out_dir / "last-run.json"
+    if last_run_path.is_symlink() or (
+        last_run_path.exists() and not last_run_path.is_file()
+    ):
+        raise ValueError("Last-run state is unsafe")
+    if last_run_path.is_file():
+        last_run_path.unlink()
+    runner.revoke_published_receipt(  # type: ignore[attr-defined]
+        state_dir, host_run_result_path
+    )
     package_summary = runner.prepare_action_state(actions, state_dir, run_dir)  # type: ignore[attr-defined]
     run_summary = runner.run_plain_ucore(repo_dir, run_dir, timeout_seconds, wsl_distro)  # type: ignore[attr-defined]
-    runner.publish_next_state(run_dir / "state-next", state_dir)  # type: ignore[attr-defined]
+    run_passed = run_summary.get("passed") is True
+    if run_passed:
+        runner.publish_next_state(  # type: ignore[attr-defined]
+            run_dir / "state-next", state_dir, host_run_result_path
+        )
     result = {
         "package": package_summary,
         "run": run_summary,
         "run_dir": str(run_dir),
-        "status": "ready" if run_summary.get("passed") else "failed",
+        "status": "ready" if run_passed else "failed",
     }
-    write_json(out_dir / "last-run.json", result)
+    write_json(last_run_path, result)
     return result
 
 
@@ -5056,7 +5417,70 @@ def run_llm_relay_package(
     relay_module: object | None = None,
 ) -> dict[str, object]:
     relay = relay_module or importlib.import_module("plain_ucore_llm_relay")
-    return relay.run_relay(state_dir, state_dir, mode, out_dir / "llm-relay-summary.json")  # type: ignore[attr-defined]
+    out_dir = ensure_safe_directory(out_dir)
+    host_state_dir = ensure_private_directory(out_dir / "host-state")
+
+    overlay_dir = reject_link_components(out_dir / HOST_LLM_OVERLAY_RELATIVE_PATH)
+    temporary_overlay = Path(
+        tempfile.mkdtemp(prefix=".llm-relay-next-", dir=host_state_dir)
+    )
+    temporary_summary = temporary_overlay / ".relay-summary.json"
+    previous_overlay: Path | None = None
+    try:
+        result = relay.run_relay(  # type: ignore[attr-defined]
+            state_dir, temporary_overlay, mode, temporary_summary
+        )
+        prune_unchanged_host_overlay(state_dir, temporary_overlay)
+        validated_host_overlay_entries(
+            temporary_overlay, allow_relay_summary=True
+        )
+        if temporary_summary.is_symlink() or not temporary_summary.is_file():
+            raise ValueError("LLM relay did not produce a safe summary")
+        summary_data = temporary_summary.read_bytes()
+        temporary_summary.unlink()
+
+        if overlay_dir.exists():
+            load_host_overlay_state(overlay_dir)
+            previous_overlay = Path(
+                tempfile.mkdtemp(prefix=".llm-relay-old-", dir=host_state_dir)
+            )
+            previous_overlay.rmdir()
+            overlay_dir.replace(previous_overlay)
+        try:
+            temporary_overlay.replace(overlay_dir)
+        except Exception:
+            if previous_overlay is not None and previous_overlay.is_dir():
+                previous_overlay.replace(overlay_dir)
+                previous_overlay = None
+            raise
+        try:
+            atomic_write_bytes(out_dir / "llm-relay-summary.json", summary_data)
+        except Exception:
+            if path_is_link(overlay_dir) or not overlay_dir.is_dir():
+                raise ValueError(f"Published Host LLM overlay is unsafe: {overlay_dir}")
+            remove_host_overlay_directory(overlay_dir)
+            if previous_overlay is not None:
+                previous_overlay.replace(overlay_dir)
+                previous_overlay = None
+            raise
+        if previous_overlay is not None:
+            try:
+                remove_host_overlay_directory(previous_overlay)
+            except (OSError, ValueError):
+                pass
+            previous_overlay = None
+        return result
+    finally:
+        if temporary_overlay.exists() or path_is_link(temporary_overlay):
+            try:
+                remove_host_overlay_directory(
+                    temporary_overlay, allow_relay_summary=True
+                )
+            except (OSError, ValueError):
+                pass
+        if previous_overlay is not None and previous_overlay.exists():
+            if not overlay_dir.exists() and not path_is_link(overlay_dir):
+                previous_overlay.replace(overlay_dir)
 
 
 def parse_request_body(headers: object, body: bytes) -> dict[str, object]:
@@ -5180,10 +5604,35 @@ def make_service_handler(
     auto_llm_relay: bool = False,
     llm_relay_mode: str = "auto",
     llm_relay_module: object | None = None,
+    host_run_result_path: Path | None = None,
+    expected_target: str | None = None,
+    host_overlay_dir: Path | None = None,
 ) -> type[BaseHTTPRequestHandler]:
-    action_lock = Lock()
+    service_lock = RLock()
     actual_repo_dir = repo_dir or Path(".")
     actual_run_root = run_root or (out_dir / "auto-runs")
+    actual_host_run_result = host_run_result_path
+    actual_expected_target = expected_target
+    actual_host_overlay = host_overlay_dir or (
+        out_dir / HOST_LLM_OVERLAY_RELATIVE_PATH if auto_llm_relay else None
+    )
+    if auto_run_ucore and actual_host_run_result is None:
+        actual_host_run_result = out_dir / "host-run-result.state"
+    if auto_run_ucore and actual_expected_target is None:
+        actual_expected_target = "plain"
+    if actual_host_run_result is not None and actual_expected_target not in RUN_RESULT_IDENTITIES:
+        raise ValueError("Host run result requires an expected target")
+
+    def active_host_run_result() -> Path | None:
+        if actual_host_run_result is None:
+            return None
+        if actual_host_run_result.is_symlink() or (
+            actual_host_run_result.exists() and not actual_host_run_result.is_file()
+        ):
+            raise ValueError("Host run result sidecar is unsafe")
+        if actual_host_run_result.is_file():
+            return actual_host_run_result
+        return None
     action_deadline_contract = service_action_deadline_contract(
         auto_run_ucore, runner_timeout, runner_module
     )
@@ -5211,10 +5660,20 @@ def make_service_handler(
             self.wfile.write(data)
 
         def do_GET(self) -> None:
+            with service_lock:
+                self._do_GET_serialized()
+
+        def _do_GET_serialized(self) -> None:
             parsed = urlparse(self.path)
             path = parsed.path
             if path == "/api/reader-summary":
-                self.send_json(200, render_site(state_dir, out_dir))
+                self.send_json(200, render_site(
+                    state_dir,
+                    out_dir,
+                    host_run_result_path=active_host_run_result(),
+                    expected_target=actual_expected_target,
+                    host_overlay_dir=actual_host_overlay,
+                ))
                 return
             if path == "/api/contract":
                 state = load_state(state_dir)
@@ -5225,7 +5684,13 @@ def make_service_handler(
                 self.send_json(200, {"action_contract": action_deadline_contract})
                 return
             if path == "/api/live":
-                summary = render_site(state_dir, out_dir)
+                summary = render_site(
+                    state_dir,
+                    out_dir,
+                    host_run_result_path=active_host_run_result(),
+                    expected_target=actual_expected_target,
+                    host_overlay_dir=actual_host_overlay,
+                )
                 action_log = out_dir / "host-actions.jsonl"
                 action_count = 0
                 if action_log.exists():
@@ -5239,15 +5704,31 @@ def make_service_handler(
                 if name not in STATE_API_ALLOWLIST:
                     self.send_json(404, {"error": "state_name_not_allowed", "name": name})
                     return
-                state = load_state(state_dir)
-                item = state.get(name)
+                guest_state = load_state(state_dir)
+                host_overlay = load_host_overlay_state(actual_host_overlay)
+                active_receipt = active_host_run_result()
+                item = (
+                    load_host_run_result(
+                        active_receipt,
+                        state_dir,
+                        actual_expected_target,
+                    )
+                    if name == "rp_host_run_result" and active_receipt is not None
+                    else host_overlay.get(name, guest_state.get(name))
+                )
                 if not item:
                     self.send_json(404, {"error": "state_not_found", "name": name})
                     return
                 self.send_json(200, {"name": name, "values": item["values"], "lines": item["lines"]})
                 return
 
-            render_site(state_dir, out_dir)
+            render_site(
+                state_dir,
+                out_dir,
+                host_run_result_path=active_host_run_result(),
+                expected_target=actual_expected_target,
+                host_overlay_dir=actual_host_overlay,
+            )
             rel = "index.html" if path in ("", "/") else unquote(path.lstrip("/"))
             if "\\" in rel or any(part in ("", ".", "..") for part in Path(rel).parts):
                 self.send_json(404, {"error": "not_found"})
@@ -5279,40 +5760,70 @@ def make_service_handler(
             if not parsed.path.startswith("/actions/"):
                 self.send_json(404, {"error": "action_not_found"})
                 return
-            length = int(self.headers.get("Content-Length", "0") or "0")
-            body = self.rfile.read(length) if length > 0 else b""
+            length_text = self.headers.get("Content-Length", "0") or "0"
+            if re.fullmatch(r"0|[1-9][0-9]*", length_text) is None:
+                self.send_json(400, {"error": "invalid_content_length"})
+                return
+            length = int(length_text)
+            if length > ACTION_REQUEST_MAX_BYTES:
+                self.send_json(413, {"error": "action_payload_too_large"})
+                return
+            previous_timeout = self.connection.gettimeout()
+            try:
+                self.connection.settimeout(ACTION_REQUEST_READ_TIMEOUT_SECONDS)
+                body = self.rfile.read(length) if length > 0 else b""
+            except TimeoutError:
+                self.send_json(408, {"error": "action_payload_timeout"})
+                return
+            finally:
+                self.connection.settimeout(previous_timeout)
+            if len(body) != length:
+                self.send_json(400, {"error": "incomplete_action_payload"})
+                return
             payload = parse_request_body(self.headers, body)
-            with action_lock:
-                batch_records: list[dict[str, object]] = []
-                record: dict[str, object] = {}
-                if parsed.path == "/actions/batch":
-                    batch_actions, error = parse_batch_actions(payload)
-                    if error:
-                        self.send_json(400, {"error": "invalid_batch", "detail": error})
-                        return
-                    batch_records = append_action_records(out_dir, state_dir, batch_actions, write_state)
-                else:
-                    record = append_action_record(out_dir, state_dir, parsed.path, payload, write_state)
-                run_result = {}
-                if auto_run_ucore:
-                    run_result = run_action_package(
-                        state_dir,
-                        out_dir,
-                        actual_repo_dir,
-                        actual_run_root,
-                        runner_timeout,
-                        wsl_distro,
-                        runner_module,
-                    )
-                relay_result = {}
-                if auto_llm_relay:
-                    relay_result = run_llm_relay_package(
-                        state_dir,
-                        out_dir,
-                        llm_relay_mode,
-                        llm_relay_module,
-                    )
-                render_site(state_dir, out_dir)
+            with service_lock:
+                self._do_POST_serialized(parsed, payload)
+
+        def _do_POST_serialized(
+            self, parsed: object, payload: dict[str, object]
+        ) -> None:
+            batch_records: list[dict[str, object]] = []
+            record: dict[str, object] = {}
+            if parsed.path == "/actions/batch":
+                batch_actions, error = parse_batch_actions(payload)
+                if error:
+                    self.send_json(400, {"error": "invalid_batch", "detail": error})
+                    return
+                batch_records = append_action_records(out_dir, state_dir, batch_actions, write_state)
+            else:
+                record = append_action_record(out_dir, state_dir, parsed.path, payload, write_state)
+            run_result = {}
+            if auto_run_ucore:
+                run_result = run_action_package(
+                    state_dir,
+                    out_dir,
+                    actual_repo_dir,
+                    actual_run_root,
+                    runner_timeout,
+                    wsl_distro,
+                    runner_module,
+                    actual_host_run_result,
+                )
+            relay_result = {}
+            if auto_llm_relay:
+                relay_result = run_llm_relay_package(
+                    state_dir,
+                    out_dir,
+                    llm_relay_mode,
+                    llm_relay_module,
+                )
+            render_site(
+                state_dir,
+                out_dir,
+                host_run_result_path=active_host_run_result(),
+                expected_target=actual_expected_target,
+                host_overlay_dir=actual_host_overlay,
+            )
             status = 202
             if run_result and run_result.get("status") != "ready":
                 status = 500
@@ -5336,6 +5847,9 @@ def serve_dir(
     wsl_distro: str,
     auto_llm_relay: bool,
     llm_relay_mode: str,
+    host_run_result_path: Path | None = None,
+    expected_target: str | None = None,
+    host_overlay_dir: Path | None = None,
 ) -> None:
     handler = make_service_handler(
         state_dir,
@@ -5348,6 +5862,9 @@ def serve_dir(
         wsl_distro,
         auto_llm_relay=auto_llm_relay,
         llm_relay_mode=llm_relay_mode,
+        host_run_result_path=host_run_result_path,
+        expected_target=expected_target,
+        host_overlay_dir=host_overlay_dir,
     )
     server = ThreadingHTTPServer(("127.0.0.1", port), handler)
     print(f"plain_ucore_reader: serving http://127.0.0.1:{port}/")
@@ -5360,7 +5877,11 @@ def main() -> int:
     parser.add_argument("--out-dir", type=Path, required=True, help="Output directory for static HTML and JSON.")
     parser.add_argument("--serve", action="store_true", help="Serve dynamic host pages, APIs, and POST action capture.")
     parser.add_argument("--port", type=int, default=8767, help="Local port for --serve.")
-    parser.add_argument("--write-state-actions", action="store_true", help="Also append POST action records to the state directory.")
+    parser.add_argument(
+        "--write-state-actions",
+        action="store_true",
+        help="Also maintain a Host-only action projection under --out-dir/host-state.",
+    )
     parser.add_argument("--auto-run-ucore", action="store_true", help="After each POST action, prepare action state, run rp_orch, and refresh the served state directory.")
     parser.add_argument("--auto-run-llm-relay", action="store_true", help="After each POST action, run the host LLM relay over refreshed rp_* state files.")
     parser.add_argument("--llm-relay-mode", default="auto", choices=["auto", "template", "mock", "openai-compatible", "cloud"], help="Execution mode for --auto-run-llm-relay.")
@@ -5372,7 +5893,28 @@ def main() -> int:
     parser.add_argument("--host-test-alignment", type=Path, default=None, help="Optional host platform test theme alignment JSON.")
     parser.add_argument("--host-surface-alignment", type=Path, default=None, help="Optional host Web/API/action surface alignment JSON.")
     parser.add_argument("--seeded-action-state", type=Path, default=None, help="Optional seeded action runtime state JSON.")
+    parser.add_argument("--host-run-result", type=Path, default=None, help="Optional Host run receipt rendered outside the Guest state contract.")
+    parser.add_argument(
+        "--host-overlay-dir",
+        type=Path,
+        default=None,
+        help="Optional Host-only state overlay composed after Guest receipt validation.",
+    )
+    parser.add_argument(
+        "--expected-target",
+        choices=sorted(RUN_RESULT_IDENTITIES),
+        default=None,
+        help="Trusted target identity expected in --host-run-result.",
+    )
     args = parser.parse_args()
+
+    if args.host_run_result is not None and args.expected_target is None:
+        parser.error("--host-run-result requires --expected-target")
+    if args.auto_run_ucore and args.expected_target not in (None, "plain"):
+        parser.error("--auto-run-ucore only publishes the plain target")
+    expected_target = args.expected_target or (
+        "plain" if args.auto_run_ucore else None
+    )
 
     summary = render_site(
         args.state_dir,
@@ -5381,6 +5923,9 @@ def main() -> int:
         args.host_test_alignment,
         args.host_surface_alignment,
         args.seeded_action_state,
+        args.host_run_result,
+        expected_target,
+        args.host_overlay_dir,
     )
     print(
         "plain_ucore_reader: pages={pages} api_json={api_json_files} state_files={state_files} status={status}".format(
@@ -5404,6 +5949,9 @@ def main() -> int:
             args.wsl_distro,
             args.auto_run_llm_relay,
             args.llm_relay_mode,
+            args.host_run_result,
+            expected_target,
+            args.host_overlay_dir,
         )
     return 0
 

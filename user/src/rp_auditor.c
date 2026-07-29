@@ -286,7 +286,7 @@ static int run_kernel_audit(void)
 		return -1;
 	}
 	if (!rp_append_file("rp_agentos_mainflow",
-			    "stage=audit;provenance_audit=kernel_ledger;ledger_hash=verified;audit_records=runtime;provenance_edges=runtime_nonzero;context_records=runtime;cause_sequence=verified;generation=runtime;status=verified"))
+			    "stage=audit;provenance_audit=kernel_ledger;status=ready"))
 		return -1;
 	return 1;
 }

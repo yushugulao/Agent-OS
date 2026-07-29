@@ -417,46 +417,6 @@ int resource_account_active(struct resource_account_handle handle)
 	return resource_account_state_get(handle) == RESOURCE_ACCOUNT_ACTIVE;
 }
 
-int resource_account_set_limits(
-	struct resource_account_handle handle,
-	const struct resource_account_limits *limits)
-{
-	int enabled;
-	struct resource_account *account;
-
-	if (limits == 0)
-		return -1;
-	enabled = intr_save();
-	account = resource_account_lookup(handle);
-	if (account == 0 || account->state != RESOURCE_ACCOUNT_ACTIVE)
-		goto fail;
-	for (uint charge_class = 0;
-	     charge_class < RESOURCE_CHARGE_CLASS_COUNT; charge_class++)
-		for (uint kind = 0; kind < RESOURCE_KIND_COUNT; kind++) {
-			uint64 occupied;
-
-			if (resource_u64_add(
-				    account->used[charge_class][kind],
-				    account->pending[charge_class][kind],
-				    &occupied) < 0 ||
-			    limits->class_limit[charge_class][kind] <
-				    occupied)
-				goto fail;
-		}
-	if (!resource_promises_replace(account, account->charge_grants,
-				       limits, 0))
-		goto fail;
-	if (!resource_promises_replace(account, account->charge_grants,
-				       limits, 1))
-		panic("reserved promise limits");
-	memmove(&account->limits, limits, sizeof(account->limits));
-	intr_restore(enabled);
-	return 0;
-fail:
-	intr_restore(enabled);
-	return -1;
-}
-
 int resource_account_member_acquire(struct resource_account_handle handle)
 {
 	int enabled = intr_save();
@@ -1112,26 +1072,6 @@ int resource_account_kind_snapshot(
 	}
 	intr_restore(enabled);
 	return 0;
-}
-
-uint64 resource_account_pending(struct resource_account_handle handle,
-				enum resource_kind kind)
-{
-	int enabled;
-	struct resource_account *account;
-	uint64 pending = 0;
-
-	if (!resource_kind_valid(kind))
-		return 0;
-	enabled = intr_save();
-	account = resource_account_lookup(handle);
-	if (account != 0)
-		for (uint charge_class = 0;
-		     charge_class < RESOURCE_CHARGE_CLASS_COUNT;
-		     charge_class++)
-			pending += account->pending[charge_class][kind];
-	intr_restore(enabled);
-	return pending;
 }
 
 static int resource_rate_profile_valid(

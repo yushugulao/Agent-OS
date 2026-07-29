@@ -728,9 +728,20 @@ static RP_UNUSED int rp_append_file(const char *path, const char *line)
 	}
 	int used = (int)strlen(buf);
 	int add = (int)strlen(line);
-	if (used + add + 2 >= RP_STATE_BUFFER_SIZE) {
+	while (add > 0 && line[add - 1] == '\n') {
+		add--;
+	}
+	if (add == 0) {
+		printf("rp_state: append_empty path=%s\n", path);
+		return 0;
+	}
+	int separator = used > 0 && buf[used - 1] != '\n';
+	if (used + separator + add + 2 > RP_STATE_BUFFER_SIZE) {
 		printf("rp_state: append_full path=%s\n", path);
 		return 0;
+	}
+	if (separator) {
+		buf[used++] = '\n';
 	}
 	for (int i = 0; i < add; i++) {
 		buf[used + i] = line[i];

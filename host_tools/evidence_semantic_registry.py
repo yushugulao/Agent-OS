@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
+from dual_state_evidence_contract import DUAL_STATE_RAW_ARTIFACTS
+
 from evidence_semantic_common import (
     EvidenceSemanticError,
     ValidationContext,
@@ -52,6 +54,7 @@ RAW_ARTIFACT_REGISTRY = (
         (
             "dual-plain-qemu.log", "dual-agentos-qemu.log", "dual-stage-timings.csv",
             "dual-state-compare.json", "dual-reader-compare.json",
+            "host-platform-alignment.json", *DUAL_STATE_RAW_ARTIFACTS,
             "dual-targeted-agentbench-guest.log", "dual-measured-experiments.json",
             "dual-file-query-benchmark.csv",
         ),

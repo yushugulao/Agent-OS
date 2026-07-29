@@ -8,11 +8,12 @@
 
 AgentOS-uCore 当前实现的是内核级文件元数据服务：
 
-- 支持最多 512 条文件元数据：SYSTEM 固定 64 条，最多 4 个 ACTIVE/CLOSING/RETIRING workflow 各固定 112 条；RETIRING 在目录回收完成前继续占用准入槽和原分区，由生命周期账本与轮转 reaper 有界清理；
+- 支持最多 512 条文件元数据：SYSTEM 固定 64 条，最多 4 个 ACTIVE/CLOSING/RETIRING workflow 各固定 112 条；每个 workflow 的自动扫描物化视图最多 96 条，并为显式 metadata 保留 16 条；RETIRING 在目录回收完成前继续占用准入槽和原分区，由生命周期账本与轮转 reaper 有界清理；
 - 以真实文件的 `dev + inum + incarnation` 作为主要身份，避免 inode 号复用后继承旧状态；
 - 要求 `physical_name` 能解析到 uCore 根目录中的真实文件名；
 - 使用根目录私有 `.agentmeta` / `.agentmeta1` 双 bank 保存带 generation/hash 的版本化快照，并以可恢复分块 COW 状态机发布；
 - 使用按 workflow scope 记账的固定窗口后台写回和稳定 sponsor `BACKGROUND` I/O 预算，把普通文件微小变化合并为有界 metadata checkpoint；
+- 把 catalog 作为有界索引而不是 inode 准入租约；索引饱和时普通 workflow 文件仍按独立 STORAGE 配额创建并保持 VFS 隔离，持久 deferred sidecar 抑制重复扫描；sidecar setter 与目录 inode-event 入口保持唯一，create 只在 VFS 成功后协调 metadata；
 - 使用 FIFO ticket 事务门、统一 metadata 工作预算和按字段变化驱动的维护入口，为跨 workflow 请求提供有界接纳；
 - 在普通 `open/read/write/truncate/unlink` 路径执行 public/workflow/kernel-private 数据访问策略，防止绕过 Agent 工具 capability；
 - 支持扫描查询；
@@ -78,13 +79,15 @@ AgentOS-uCore 当前实现的是内核级文件元数据服务：
 
 启动时，可信 bank 不再等到首个 Agent 查询才懒加载。`main()` 在文件系统和 timer 初始化完成后立即调用 `agent_storage_init()`，只有加载/恢复结束后才启动运行时 I/O policy 并发布首个用户进程。mkfs 通过共享纯磁盘 ABI 预装两个字节一致、完整预分配、尾部清零的 v7 generation-1 空 bank，并标记为 `KERNEL_PRIVATE/SYSTEM`；运行时不再生成初始 authority。bank probe 以 authority、bank、inode identity/size 和捕获 header 绑定可恢复 cursor，在 SYSTEM `BACKGROUND` 预算内有界推进；`ABSENT/UNCOMMITTED/CORRUPT` 等 terminal 分类会缓存，候选 payload 完成后还必须重读 header 确认。`BUSY/EIO/INTERRUPTED` 只形成有界重探，确认的 identity、header、generation 或 hash 冲突仍 fail closed。原始已验证 bank 保持不可变，catalog 只在 inactive shadow 中 prepare 绑定 candidate epoch、catalog generation 与 hash 的 plan；取得 owner-token mutation fence 后才恢复身份和执行不再分配的 apply，foreign fence 在任何改写前返回 `INTERRUPTED`。full boot 检查 SYSTEM 64、ordinary 448、每 scope 112 和唯一键等硬边界；live scoped reload 只绑定目标 scope 的不可变 `(lifecycle_id,generation)`，并在 prepare/apply 重验同一身份。固定分区不依赖 peer topology、全局 union/max、metadata envelope 或新增 catalog 账本。任一 v5/v7 bank 有效时仍可加载、迁移和修复另一副本；稳定状态下没有有效 bank 则一律 fail closed，旧的双缺失镜像需要重建。前台 scope reload 在一次 syscall 内等待 I/O debt 并完成 plan，不保留跨 syscall 候选。`metadata-recovery` 在设备 flush/durable-barrier 契约上，对 primary/mirror 各八个 COW phase 使用认证 QEMU `SIGKILL` 后重启的故障模型，并在恢复启动前用由 C ABI probe 校验的版本化 host parser 检查原始 bank；它另计划动态覆盖双目标三轮 `BUSY/EIO/INTERRUPTED`，以及超过 background burst 的 32-record bank 在 `ABSENT/UNCOMMITTED/CORRUPT` peer 下的同启动进度与恢复。单次暂态 header-flush EIO 仍要求显式不确定结果与副本修复。mkfs 的临时镜像、`fsync()`、rename 是离线构建发布边界；上述 fault model 不模拟物理控制器易失缓存、整机供电中断或永久介质故障，因此不构成完整物理掉电原子性声明。seed 的信任根是受控构建镜像和普通进程不可访问的 raw disk/KERNEL_PRIVATE 路径，不是密码学签名。启动时双 bank 同时损坏仍按 fail-closed 处理。上述当前 HEAD Guest 尚未执行，证据等级仍为 E1。
 
+冷启动先按不可变 lifecycle key 淘汰已经失效的动态 scope，之后只按 v7 表示和 SYSTEM 64、ordinary 448、每 scope 112 等稳定硬边界校验。AUTOSCAN 96 是 live 新增长度，不是同版本磁盘格式条件；旧合法 scope 的 97 至 112 条自动记录会完整加载，第 113 条仍按损坏 fail closed。超额 scope 不做静默删除，只允许 AUTOSCAN 数保持或下降；降到 95 条后才能再增长。当前活跃 scope 的容量恢复不依赖快照迁移：新镜像中的第 97 个文件持久标记 deferred，槽位释放后由有界扫描重建，并在写回和强制 reload 后继续存在。
+
 普通持久文件变化采用写回而不是直写：write/truncate 通过 inode incarnation sidecar 先发布最新 size、更新时间和文件代数，查询及 bank 快照都会覆盖内存主表中的旧值；create/delete 则先完成内存记录变化。带 `PERSIST` 的记录随后让对应 scope 的 `dirty_generation` 进入固定一秒的非滑动合并窗口；不进入快照的 volatile 记录只更新内存/sidecar，不制造空 checkpoint。后台维护在事务门空闲时每轮只推进 COW 状态机的一个步骤；dirty scope 轮转成为整个 job 的稳定 sponsor，物理传输使用该 owner 的硬 `BACKGROUND` burst/refill。checkpoint 成功或失败后的 not-before deadline 都是固定合并窗口，不再按 checkpoint 执行耗时延长；I/O debt 决定何时能推进下一步。到期写回先于扫描获得维护机会，持续 scan pending 不能使其永久饥饿。快照开始时捕获各 scope 的脏代数，提交后只推进期间没有新增变化的 `durable_generation`，所以并发写入不会被错误标成已持久化；失败则保留脏状态等待固定窗口和 budget。
 
 全局 metadata transaction gate 对进程请求使用单调 ticket FIFO，并只唤醒队首。线程取得 ticket 后不可中断地等到自己的 turn；若进程已经请求退出，也会先接过并立即传递事务门，不能遗弃 ticket。scheduler 在门空闲时可取得硬有界维护轮次，以免后台写回和扫描被持续进程请求饿死；该轮次不会重复唤醒已由前任唤醒的 serving ticket，普通进程态 VFS callback 仍不能插队。进程态表扫描、索引维护、显式依赖和预取工作按 128 records 进入统一 kernel-work 安全点；scheduler 每轮最多扫描 16 个目录项，字段变化只发布线性索引。显式用户依赖保存在每 scope 最多 16 条的固定表中；兼容 `dependency_mask` 留在源文件记录，由依赖查询、action 和预取在已有线性扫描中按需解释，不再物化全局派生图。字段变化掩码分别维护 status/stage/kind 索引和依赖代数，纯状态变化不推进依赖 generation。通用 action 先用位图形成目标与依赖选集；status 原子批次独立限制为 112 条，超限会在修改任何槽位前返回 `NO_SPACE`。准入后只更新每个选中槽一次、重建 status 索引一次并合并持久写回，复杂度为固定次数的有界表扫描。
 
 显式持久 metadata set/delete、reload 和 scope retirement 还会同步进入单调 ticket 的 FIFO submit lane，并建立不可替换的 COW job；该语义保证有序接纳，不保证调用返回时 primary 已完成回读验证。条件不满足时，中断从失败检查一直保持关闭，直到事务门释放且线程已经进入 submit condition queue，避免 unlock-to-sleep 丢失唤醒。持久化在预算边界暂时释放事务门时，immutable job 保持同一 `job_id`，后来提交者不能替换。metadata exact-read 在文件系统原子段之外偿还 I/O 预算，并从正数短读前缀继续；临时 interruption 不会被记成 bank corruption。scanner 仍独立使用 `max(20 tick, 4 * 扫描耗时)` 自适应 cooldown，不能与 checkpoint 的固定窗口混为一谈。
 
-同步 catalog 写还取得绑定 metadata transaction token 的 mutation fence。fence 跨持久化阶段保持，foreign writer 在改写前重试；undo token 保存精确 slot post-state，并在恢复前重做固定分区、唯一键和 exact post-state 校验。count-neutral edit 与 exact receipt rollback 不增加记录，但仍须满足 SYSTEM 64、scope 112 和 ordinary 448 的边界。读取不会被 fence 阻塞，因而持久化期间可能看见暂态 post-state；只有确定 commit 后才能把结果称为已提交。容量耗尽、lifecycle 变化、键冲突与不可逆边界分别保留 `NO_SPACE`、可重试状态、`CONFLICT` 和 `AGENT_STATUS_INDETERMINATE`，而不是统一伪装成 I/O 失败。
+同步 catalog 写还取得绑定 metadata transaction token 的 mutation fence。fence 跨持久化阶段保持，foreign writer 在改写前重试；undo token 保存精确 slot post-state，并在恢复前重做固定分区、唯一键和 exact post-state 校验。count-neutral edit 与 exact receipt rollback 不增加记录，但仍须满足 SYSTEM 64、scope 112、AUTOSCAN 96 和 ordinary 448 的边界。读取不会被 fence 阻塞，因而持久化期间可能看见暂态 post-state；只有确定 commit 后才能把结果称为已提交。显式 metadata 容量耗尽、lifecycle 变化、键冲突与不可逆边界分别保留 `NO_SPACE`、可重试状态、`CONFLICT` 和 `AGENT_STATUS_INDETERMINATE`，而不是统一伪装成 I/O 失败。
 
 ### 自动创建与精确回滚
 
@@ -356,7 +359,7 @@ align+analyze+report+archive
 | 文件系统扫描范围 | 当前自动扫描 uCore 根目录短文件名，不做多级目录递归 |
 | 持久化索引 | 元数据表事务写入并重新加载 `.agentmeta` / `.agentmeta1`；内存索引启动后根据元数据重建 |
 | 查询语法 | 当前支持结构体字段查询和简单 `key=value` 字符串 |
-| 查询规模 | catalog 总量 512，其中 SYSTEM 固定 64、最多 4 个 ACTIVE/CLOSING/RETIRING workflow 各固定 112；每 scope workflow inode 账户也最多 112，单次最多返回 8 条 hit。mkfs 当前写入 superblock 的 342 inode 是原始文件系统保证，不是 Agent catalog 的有效上限；冻结设计的 metadata tracked 上限为 112 |
+| 查询规模 | catalog 总量 512，其中 SYSTEM 固定 64、最多 4 个 ACTIVE/CLOSING/RETIRING workflow 各固定 112；每 scope 自动扫描物化最多 96 条并保留 16 条显式 metadata，单次最多返回 8 条 hit。workflow inode 账户由独立 STORAGE policy 控制，每 scope 硬下限 320，当前镜像保证约 342；catalog 饱和后的普通 VFS 文件仍受 scope 隔离，但在槽位可用并被扫描重建前不属于 metadata 查询结果 |
 | 内容摘要 | 当前读取最多 4096 字节计算指纹，返回短预览，不做全文索引 |
 | 预取提示 | 当前只生成 metadata 提示，提示本身不预读文件内容，不保存到磁盘 |
 | 文件安全域 | 当前实现 PUBLIC、SYSTEM 和动态 workflow；8 槽 ledger 保存 generation-safe 身份，但冻结期 ACTIVE/CLOSING/RETIRING admission 合计最多 4 个，身份槽只在 `used == 0` 且 catalog 回收完成后复用；尚未提供任意数量的用户命名域或用户可编程动态策略语言 |

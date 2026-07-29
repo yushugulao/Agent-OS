@@ -297,7 +297,8 @@ rp_evidence_parse_program_record(const char *line, int len,
 		    (!plain && !rp_evidence_field_equal(launcher, launcher_len,
 							  expected_agent_launcher)))
 			return 0;
-	} else if (!rp_evidence_field_equal(launcher, launcher_len, "fork")) {
+	} else if (!rp_evidence_field_equal(launcher, launcher_len,
+					     expected_agent_launcher)) {
 		return 0;
 	}
 	if (!rp_evidence_consume_field(line, len, &pos, "ok", &value,
@@ -317,6 +318,7 @@ rp_evidence_parse_program_record(const char *line, int len,
 
 static RP_UNUSED int
 rp_evidence_measure_program_ledger(const char *path,
+				   const char *expected_orchestrator,
 				   const char *const *expected_programs,
 				   int expected_program_count,
 				   const char *expected_launcher,
@@ -328,16 +330,23 @@ rp_evidence_measure_program_ledger(const char *path,
 	unsigned long long source_bytes = 0;
 	char chunk[128];
 	char line[RP_EVIDENCE_PROGRAM_LINE_MAX];
+	char orchestrator_header[64];
 	char launcher_header[64];
 	int line_len = 0;
 	int programs = 0;
 	int line_number = 0;
 	int fd;
 
-	if (path == 0 || expected_programs == 0 || expected_launcher == 0 ||
+	if (path == 0 || expected_orchestrator == 0 || expected_programs == 0 ||
+	    expected_launcher == 0 ||
 	    out == 0 || expected_program_count <= 0 ||
 	    expected_program_count > RP_EVIDENCE_PROGRAM_MAX)
 		return 0;
+	orchestrator_header[0] = 0;
+	rp_append_text(orchestrator_header, sizeof(orchestrator_header),
+		       "orchestrator=");
+	rp_append_text(orchestrator_header, sizeof(orchestrator_header),
+		       expected_orchestrator);
 	launcher_header[0] = 0;
 	rp_append_text(launcher_header, sizeof(launcher_header), "launcher=");
 	rp_append_text(launcher_header, sizeof(launcher_header), expected_launcher);
@@ -382,7 +391,7 @@ rp_evidence_measure_program_ledger(const char *path,
 			}
 			if (line_number == 0) {
 				if (!rp_evidence_field_equal(line, line_len,
-							     "orchestrator=rp_orch")) {
+							     orchestrator_header)) {
 					close(fd);
 					return 0;
 				}

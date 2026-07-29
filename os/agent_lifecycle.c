@@ -266,12 +266,6 @@ agent_lifecycle_alloc_control_id(void)
 	return 0;
 }
 
-uint64
-agent_lifecycle_next_control_id_get(void)
-{
-	return next_control_id;
-}
-
 void
 agent_lifecycle_control_id_floor(uint64 floor)
 {

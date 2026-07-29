@@ -25,6 +25,9 @@ FILES = {
     "agent_h": ROOT / "os/agent.h",
     "catalog_h": ROOT / "os/agent_metadata_catalog.h",
     "catalog": ROOT / "os/agent_metadata_catalog.c",
+    "file_state_h": ROOT / "os/agent_file_state_internal.h",
+    "file_state": ROOT / "os/agent_file_state.c",
+    "scan": ROOT / "os/agent_metadata_scan.c",
     "vfs": ROOT / "os/vfs_security.c",
     "store": ROOT / "os/agent_metadata_store.c",
     "objects": ROOT / "os/agent_metadata_objects.c",
@@ -141,6 +144,9 @@ def validate(sources: dict[str, str]) -> None:
     agent_h = sources["agent_h"]
     catalog_h = sources["catalog_h"]
     catalog = sources["catalog"]
+    file_state_h = sources["file_state_h"]
+    file_state = sources["file_state"]
+    scan = sources["scan"]
     vfs = sources["vfs"]
     store = sources["store"]
     objects = sources["objects"]
@@ -773,11 +779,75 @@ def validate(sources: dict[str, str]) -> None:
         "AGENT_FILE_SYSTEM_LIMIT+AGENT_FILE_ORDINARY_LIMIT==AGENT_FILE_META_MAX",
         "VFS_SCOPE_MAX_ACTIVE*AGENT_FILE_SCOPE_LIMIT==AGENT_FILE_ORDINARY_LIMIT",
         "AGENT_FILE_SYSTEM_LIMIT:AGENT_FILE_SCOPE_LIMIT",
-        "result.owned>=limit",
-        "result.ordinary>=AGENT_FILE_ORDINARY_LIMIT",
-        "++result->plan_scope_counts[i]<=AGENT_FILE_SCOPE_LIMIT",
+        "result->owned>=limit",
+        "result->ordinary>=AGENT_FILE_ORDINARY_LIMIT",
+        "++result->plan_scope_counts[scope_index]>AGENT_FILE_SCOPE_LIMIT",
     ):
         require(token in compact_catalog, f"fixed catalog bound lost: {token}")
+
+    # Same-version history is governed by representation and hard partition
+    # bounds. The newer AUTOSCAN reserve is a live growth policy, not a reason
+    # to classify an otherwise valid v7 bank as corrupt.
+    catalog_plan_count = compact(
+        function_body(catalog, "static int agent_catalog_plan_count(")
+    )
+    for token in (
+        "++result->plan_system_count<=AGENT_FILE_SYSTEM_LIMIT",
+        "++result->plan_ordinary_count>AGENT_FILE_ORDINARY_LIMIT",
+        "++result->plan_scope_counts[scope_index]>AGENT_FILE_SCOPE_LIMIT",
+    ):
+        require(token in catalog_plan_count,
+                f"snapshot hard bound lost: {token}")
+    require("AUTOSCAN" not in catalog_plan_count and
+            "flags" not in catalog_plan_count,
+            "snapshot validation depends on the current autoscan policy")
+
+    hard_admission = compact(function_body(
+        catalog, "static int agent_catalog_hard_admission(\n\tuint scope_id"
+    ))
+    require("AGENT_FILE_AUTOSCAN_SCOPE_LIMIT" not in hard_admission,
+            "rollback hard admission depends on the autoscan reserve")
+    live_admission = compact(function_body(
+        catalog, "static int agent_catalog_admission(\n\tuint scope_id"
+    ))
+    for token in (
+        "agent_catalog_hard_admission(scope_id,except_slot,candidate,&result)",
+        "(flags&AGENT_FILE_META_F_AUTOSCAN)",
+        "!(old_flags&AGENT_FILE_META_F_AUTOSCAN)",
+        "result.autoscan>=AGENT_FILE_AUTOSCAN_SCOPE_LIMIT",
+    ):
+        require(token in live_admission,
+                f"live autoscan delta admission lost: {token}")
+    restore = compact(function_body(
+        catalog, "int agent_metadata_catalog_restore("
+    ))
+    require("agent_catalog_hard_admission(" in restore and
+            "agent_catalog_admission(" not in restore,
+            "receipt rollback is constrained by a newer soft policy")
+
+    # A catalog miss may leave a positive but stale inode sidecar. The scanner
+    # must verify that mismatch before using the stale-only converter.
+    compact_file_state_h = compact(file_state_h)
+    require("intagent_file_state_set_index(structinode*,short,short,int)"
+            in compact_file_state_h, "shared sidecar updater is not declared")
+    stale_defer = compact(function_body(file_state, "agent_file_state_set_index("))
+    require(
+        "slot==AGENT_INODE_META_DEFERRED_SLOT&&!stale&&ip->agent_meta_slot>0"
+        in stale_defer,
+        "verified stale sidecar cannot transition from positive to -1",
+    )
+    scan_bind = compact(function_body(scan, "agent_metadata_scan_index_inode("))
+    require_order(
+        scan_bind,
+        (
+            "if(agent_metadata_catalog_borrow(0,slot,&view)<=0",
+            "stale_sidecar=ip->agent_meta_slot>0",
+            "agent_metadata_catalog_resolve(scope,&selector,-1,&resolution)",
+            "if(slot==AGENT_CATALOG_NO_SPACE)",
+            "agent_file_state_set_index(ip,AGENT_INODE_META_DEFERRED_SLOT,0,stale_sidecar)",
+        ),
+        "verified stale sidecar conversion after catalog miss",
+    )
     compact_scope_create = compact(function_body(vfs, "static int vfs_scope_create("))
     require(
         "if(ref->retiring)retiring++" in compact_scope_create
@@ -809,6 +879,8 @@ def validate(sources: dict[str, str]) -> None:
         "uintplan_cursor,plan_catalog_cursor,plan_next_slot;",
     ):
         require(token in catalog_result, f"catalog plan binding lost: {token}")
+    require("plan_scope_autoscan_counts" not in catalog_result,
+            "snapshot retains redundant autoscan policy state")
     catalog_prepare = compact(
         function_body(catalog, "agent_metadata_catalog_prepare_snapshot(")
     )
@@ -820,11 +892,39 @@ def validate(sources: dict[str, str]) -> None:
         "key.catalog_generation=result->plan_catalog_generation",
         "result->plan_lifecycle_id!=lifecycle.id",
         "result->plan_lifecycle_generation!=lifecycle.generation",
-        "agent_catalog_plan_matches(&result->plan_key,&key)",
+        "memcmp(&result->plan_key,&key,sizeof(key))!=0",
         "result->plan_catalog_generation!=agent_catalog_generation",
         "result->plan_token!=binding",
     ):
         require(token in catalog_prepare, f"catalog continuation is unbound: {token}")
+    require_order(
+        catalog_prepare,
+        (
+            "if(record->scope_id!=VFS_SCOPE_SYSTEM&&(",
+            "vfs_scope_lifecycle(record->scope_id,&lifecycle)<0",
+            "agent_catalog_bit_set(result->missing_slots,original_slot)",
+            "gotohash_record",
+            "if(agent_catalog_plan_count(result,record->scope_id)<0)",
+            "AGENT_METADATA_LOAD_CORRUPT",
+        ),
+        "cold boot stale lifecycle filtering before capacity admission",
+    )
+    require("count_status" not in catalog_prepare,
+            "partial snapshot overflow migration state remains")
+    require("AGENT_FILE_AUTOSCAN_SCOPE_LIMIT" not in catalog_prepare,
+            "snapshot prepare treats a live soft limit as corruption")
+    classify_missing = compact(function_body(store, "classify_missing("))
+    require_order(
+        classify_missing,
+        (
+            "if(reload_one_scope)",
+            "if(apply->layout_changed||store_missing(apply))",
+            "agent_metadata_store_mark_dirty(reload_scope)",
+            "if((apply->missing_slots[record->slot/8]&",
+            "agent_metadata_store_mark_dirty(record->scope_id)",
+        ),
+        "missing snapshot reconciliation",
+    )
     require(
         "reload_one_scope?AGENT_FILE_META_MAX:AGENT_CATALOG_PREPARE_STEP"
         in catalog_prepare
@@ -853,7 +953,7 @@ def validate(sources: dict[str, str]) -> None:
         "result->plan_lifecycle_id!=lifecycle.id",
         "result->plan_lifecycle_generation!=lifecycle.generation",
         "agent_catalog_plan_key(records,count,reload_one_scope,reload_scope,candidate_epoch,agent_catalog_generation,lifecycle)",
-        "agent_catalog_plan_matches(&result->plan_key,&key)",
+        "memcmp(&result->plan_key,&key,sizeof(key))!=0",
         "panic(\"Agentcatalogapplybindinginvariant\")",
         "hash!=result->plan_hash",
         "agent_catalog_plan_final_token(binding,hash)",
@@ -880,8 +980,19 @@ def validate(sources: dict[str, str]) -> None:
             "agent_meta_bank_shadow_install(",
             "agent_meta_store_active_bank=selected_bank",
             "agent_metadata_probe_finish(candidate_epoch)",
+            "agent_meta_reconcile_required=1",
+            "agent_background_request()",
+            "agent_meta_store_io_leave()",
         ),
         "prepare/recover/apply/publication order",
+    )
+    reconcile_start = load.find("agent_metadata_probe_finish(candidate_epoch)")
+    reconcile_end = load.find("agent_meta_store_io_leave()", reconcile_start)
+    reconcile_path = load[reconcile_start:reconcile_end]
+    require(
+        all(gate not in reconcile_path for gate in
+            ("if(", "for(", "while(", "switch(")),
+        "complete snapshot reconciliation is conditionally gated",
     )
     out_store = load[load.find("out_store:") : load.find("out_txn:")]
     require(
@@ -1242,7 +1353,8 @@ def validate(sources: dict[str, str]) -> None:
     unexpected_test_owners = [
         name.removeprefix("os_source:")
         for name, source in sources.items()
-        if name.startswith("os_source:")
+        if (name.startswith("os_source:")
+            or name in {"file_state", "scan"})
         and "agent_metadata_recovery_test" in source
     ]
     require(
@@ -1731,8 +1843,85 @@ def main() -> int:
         replacement(
             "drop fixed per-scope snapshot bound",
             "catalog",
-            "\t\t\t       AGENT_FILE_SCOPE_LIMIT ? 0 : -1;",
-            "\t\t\t       AGENT_FILE_ORDINARY_LIMIT ? 0 : -1;",
+            "++result->plan_scope_counts[scope_index] > "
+            "AGENT_FILE_SCOPE_LIMIT",
+            "++result->plan_scope_counts[scope_index] > "
+            "AGENT_FILE_ORDINARY_LIMIT",
+        ),
+        replacement(
+            "disable live autoscan delta admission",
+            "catalog",
+            "\t    !(old_flags & AGENT_FILE_META_F_AUTOSCAN) &&",
+            "\t    0 &&",
+        ),
+        replacement(
+            "allow live autoscan overflow",
+            "catalog",
+            "result.autoscan >= AGENT_FILE_AUTOSCAN_SCOPE_LIMIT",
+            "result.autoscan > AGENT_FILE_AUTOSCAN_SCOPE_LIMIT",
+        ),
+        replacement(
+            "bind snapshot corruption to live autoscan flags",
+            "catalog",
+            "agent_catalog_plan_count(result, record->scope_id) < 0",
+            "agent_catalog_plan_count(result, record->scope_id, "
+            "record->meta.flags) < 0",
+        ),
+        replacement(
+            "apply live autoscan policy to receipt rollback",
+            "catalog",
+            "agent_catalog_hard_admission(\n"
+            "\t\t\t    previous_scope, slot, previous, &result)",
+            "agent_catalog_admission(\n"
+            "\t\t\t    previous_scope, slot, previous, 0, 0, 0)",
+        ),
+        replacement(
+            "admit stale lifecycle records before capacity checks",
+            "catalog",
+            "vfs_scope_lifecycle(record->scope_id, &lifecycle) < 0",
+            "vfs_scope_lifecycle(record->scope_id, &lifecycle) >= 0",
+        ),
+        replacement(
+            "skip scoped missing-record reconciliation",
+            "store",
+            "\t\tif (apply->layout_changed || store_missing(apply))\n"
+            "\t\t\tagent_metadata_store_mark_dirty(reload_scope);",
+            "\t\tif (0)\n"
+            "\t\t\tagent_metadata_store_mark_dirty(reload_scope);",
+        ),
+        replacement(
+            "skip boot missing-record reconciliation",
+            "store",
+            "\t\t\tagent_metadata_store_mark_dirty(record->scope_id);",
+            "\t\t\t(void)record;",
+        ),
+        replacement(
+            "skip empty complete snapshot reconciliation",
+            "store",
+            "\tagent_meta_reconcile_required = 1;\n"
+            "\tagent_background_request();",
+            "\tif (apply->used != 0) {\n"
+            "\t\tagent_meta_reconcile_required = 1;\n"
+            "\t\tagent_background_request();\n"
+            "\t}",
+        ),
+        replacement(
+            "disable verified stale sidecar conversion",
+            "file_state",
+            "!stale && ip->agent_meta_slot > 0",
+            "ip->agent_meta_slot > 0",
+        ),
+        replacement(
+            "forget the stale positive sidecar classification",
+            "scan",
+            "stale_sidecar = ip->agent_meta_slot > 0;",
+            "stale_sidecar = 0;",
+        ),
+        replacement(
+            "route stale positive sidecars through ordinary deferral",
+            "scan",
+            "AGENT_INODE_META_DEFERRED_SLOT, 0, stale_sidecar",
+            "AGENT_INODE_META_DEFERRED_SLOT, 0, 0",
         ),
         replacement(
             "free retiring catalog partition early",

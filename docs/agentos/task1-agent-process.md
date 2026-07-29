@@ -116,7 +116,7 @@ sequenceDiagram
     participant P as 已获 role grant 的父进程
     participant S as Agent 创建系统调用
     participant K as proc.c
-    participant A as agent_make
+    participant A as agent_make_role
     participant C as Agent Context
     P->>S: agent_workflow_create(role) / agent_create_role(role)
     S->>K: fresh scope factory / same-scope role delegation

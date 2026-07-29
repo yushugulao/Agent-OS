@@ -756,18 +756,6 @@ agent_context_write_header_shadow(struct proc *p)
 	agent_context_fill_header(p, header);
 }
 
-int
-agent_context_write_header(struct proc *p)
-{
-	int result;
-
-	if (agent_lifecycle_context_lane_enter(p) < 0)
-		return -1;
-	result = agent_context_write_header_locked(p);
-	agent_lifecycle_context_lane_leave(p);
-	return result;
-}
-
 static int
 agent_context_write_latest(struct proc *p, struct agent_result *latest)
 {
@@ -903,12 +891,6 @@ bad:
 	agent_context_free_shadow(shadow_kva, p->agent_state_account,
 				  p->agent_state_charge_class);
 	return -1;
-}
-
-int
-agent_map_context(struct proc *p)
-{
-	return agent_context_map(p);
 }
 
 int

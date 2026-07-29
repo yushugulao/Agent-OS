@@ -38,20 +38,36 @@ def require(source: str, token: str, label: str) -> None:
         raise ContractError(f"{label}: missing {token}")
 
 
+def require_order(source: str, tokens: tuple[str, ...], label: str) -> None:
+    position = -1
+    for token in tokens:
+        position = source.find(token, position + 1)
+        if position < 0:
+            raise ContractError(f"{label}: missing or out of order {token}")
+
+
 def validate_sources(sources: dict[str, str]) -> None:
     agent = sources["agent"]
     actions = sources["actions"]
     catalog = sources["catalog"]
     catalog_h = sources["catalog_h"]
+    directory = sources["directory"]
+    file_source = sources["file"]
+    file_state = sources["file_state"]
+    file_state_h = sources["file_state_h"]
     fs = sources["fs"]
+    fs_program = sources["fs_program"]
     internal = sources["internal"]
     objects = sources["objects"]
     recovery = sources["recovery"]
     scan = sources["scan"]
+    scan_h = sources["scan_h"]
     store = sources["store"]
     store_format = sources["store_format"]
+    storage_policy = sources["storage_policy"]
     vfs = sources["vfs"]
     user = sources["user"]
+    scope_program = sources["scope_program"]
 
     legacy_selector = re.compile(r"\bagent_metadata_catalog_find(?:_scan)?\s*\(")
     for name, source in sources.items():
@@ -120,6 +136,12 @@ def validate_sources(sources: dict[str, str]) -> None:
     )
     require(catalog_h, "#define AGENT_CATALOG_SCOPE_PLAN_MAX 8",
             "retained lifecycle scope accounting")
+    for token in (
+        "#define AGENT_FILE_EXPLICIT_RESERVE 16",
+        "#define AGENT_FILE_AUTOSCAN_SCOPE_LIMIT \\\n"
+        "\t(AGENT_FILE_SCOPE_LIMIT - AGENT_FILE_EXPLICIT_RESERVE)",
+    ):
+        require(catalog_h, token, "per-scope explicit metadata reserve")
     require(catalog,
             "VFS_SCOPE_LIFECYCLE_CAP == AGENT_CATALOG_SCOPE_PLAN_MAX",
             "retained lifecycle scope bound")
@@ -180,10 +202,14 @@ def validate_sources(sources: dict[str, str]) -> None:
     key_match = function_body(catalog, "agent_catalog_key_matches(")
     for token in ("agent_metadata_txn_work_charge(1)", "i == except_slot",
                   "result->ordinary++", "result->owned++",
+                  "result->autoscan++",
+                  "agent_catalog_files[i].flags & AGENT_FILE_META_F_AUTOSCAN",
                   "result->matched |= matched",
                   "result->states |= agent_catalog_states[i]",
                   "result->slot = AGENT_CATALOG_CONFLICT"):
         require(resolver, token, "single catalog selector resolver")
+    require(catalog_h, "int slot, owned, ordinary, autoscan;",
+            "per-scope autoscan accounting")
     for token in ("selector->fid", "selector->physical_name",
                   "selector->logical_path", "selector->dev",
                   "selector->inum", "selector->incarnation"):
@@ -247,44 +273,63 @@ def validate_sources(sources: dict[str, str]) -> None:
         )
     if storage_guarantee.count("allocated++") != 1:
         raise ContractError("each retained scope must occupy exactly one guarantee slot")
-    admission = function_body(catalog, "agent_catalog_admission(")
+    hard_admission = function_body(
+        catalog, "static int agent_catalog_hard_admission("
+    )
     for token in ("agent_metadata_catalog_resolve(scope_id, candidate, except_slot",
-                  "result.matched", "AGENT_CATALOG_CONFLICT",
-                  "AGENT_FILE_SCOPE_LIMIT", "result.owned >= limit",
-                  "result.ordinary >= AGENT_FILE_ORDINARY_LIMIT",
+                  "result->matched", "AGENT_CATALOG_CONFLICT",
+                  "AGENT_FILE_SCOPE_LIMIT", "result->owned >= limit",
+                  "result->ordinary >= AGENT_FILE_ORDINARY_LIMIT"):
+        require(hard_admission, token, "hard catalog admission")
+    if "AGENT_FILE_AUTOSCAN_SCOPE_LIMIT" in hard_admission:
+        raise ContractError("hard admission depends on the live autoscan policy")
+    admission = function_body(catalog, "static int agent_catalog_admission(")
+    for token in ("agent_catalog_hard_admission(", "old_flags", "flags",
+                  "flags & AGENT_FILE_META_F_AUTOSCAN",
+                  "!(old_flags & AGENT_FILE_META_F_AUTOSCAN)",
+                  "scope_id != VFS_SCOPE_SYSTEM",
+                  "result.autoscan >= AGENT_FILE_AUTOSCAN_SCOPE_LIMIT",
                   "if (!growth || scope_id == VFS_SCOPE_SYSTEM)",
                   "agent_catalog_scope_admissible(scope_id, &lifecycle)",
                   "return AGENT_CATALOG_INTERRUPTED"):
-        require(admission, token, "fixed-partition catalog admission")
-    hard_pos = admission.find("result.owned >= limit")
+        require(admission, token, "live catalog admission")
+    hard_pos = admission.find("agent_catalog_hard_admission(")
+    autoscan_pos = admission.find(
+        "result.autoscan >= AGENT_FILE_AUTOSCAN_SCOPE_LIMIT"
+    )
     bypass_pos = admission.find("if (!growth || scope_id == VFS_SCOPE_SYSTEM)")
     lifecycle_pos = admission.find("agent_catalog_scope_admissible(")
-    if not (0 <= hard_pos < bypass_pos < lifecycle_pos):
+    if not (0 <= hard_pos < autoscan_pos < bypass_pos < lifecycle_pos):
         raise ContractError(
-            "only ordinary growth may cross lifecycle admission"
+            "hard capacity and autoscan delta must precede lifecycle admission"
         )
     require(catalog, "scope_id != VFS_SCOPE_SYSTEM", "SYSTEM partition")
     commit = function_body(catalog, "int agent_metadata_catalog_edit_commit(")
     for token in ("!agent_catalog_files[edit->slot].used",
                   "admission = agent_catalog_admission(",
-                  "edit->scope_id, edit->slot, edit->meta, growth)",
+                  "edit->scope_id, edit->slot, edit->meta,",
+                  "growth ? 0 : agent_catalog_files[edit->slot].flags",
+                  "edit->meta->flags, growth)",
                   "admission <= 0", "AGENT_CATALOG_CONFLICT"):
         require(commit, token, "authoritative commit admission")
     normalize_pos = commit.find("agent_catalog_normalize_physical(edit->slot, edit->meta)")
-    admission_pos = commit.find("growth = edit->slot")
+    admission_pos = commit.find("growth = !agent_catalog_files[edit->slot].used")
     if not (0 <= normalize_pos < admission_pos):
         raise ContractError("physical key normalization must precede commit admission")
     require(commit, "agent_catalog_scopes[edit->slot] != edit->scope_id",
             "immutable record scope")
     allocate = function_body(catalog, "int agent_metadata_catalog_alloc_slot(")
-    for token in ("agent_catalog_admission(scope_id, -1, 0, 1)",
+    for token in ("agent_catalog_admission(scope_id, -1, 0, 0, flags, 1)",
                   "agent_metadata_txn_work_charge(1)"):
-        require(allocate, token, "fair slot allocation")
+        require(allocate, token, "candidate-bound slot allocation")
+    require(catalog_h, "int agent_metadata_catalog_alloc_slot(uint, uint);",
+            "flag-aware allocator declaration")
     restore = function_body(catalog, "int agent_metadata_catalog_restore(")
-    require(restore, "previous_scope, slot, previous, 0)",
+    require(restore, "agent_catalog_hard_admission(",
             "receipt-authorized hard rollback")
-    if "previous_scope, slot, previous, 1)" in restore:
-        raise ContractError("exact undo restore must not depend on live admission")
+    if "agent_catalog_admission(" in restore or \
+            "AGENT_FILE_AUTOSCAN_SCOPE_LIMIT" in restore:
+        raise ContractError("exact undo restore depends on live soft admission")
     if "agent_catalog_admission_topology" in catalog + catalog_h:
         raise ContractError("catalog restored a duplicate lifecycle topology")
     key_start = catalog_h.find("struct agent_catalog_plan_key {")
@@ -310,14 +355,15 @@ def validate_sources(sources: dict[str, str]) -> None:
                   "key.lifecycle_id = lifecycle.id",
                   "key.lifecycle_generation = lifecycle.generation"):
         require(plan_key, token, "canonical scalar lifecycle binding")
-    plan_matches = function_body(catalog, "agent_catalog_plan_matches(")
-    for token in ("left->lifecycle_id == right->lifecycle_id",
-                  "left->lifecycle_generation == right->lifecycle_generation"):
-        require(plan_matches, token, "exact scalar lifecycle match")
     plan_count = function_body(catalog, "agent_catalog_plan_count(")
     for token in ("AGENT_FILE_SYSTEM_LIMIT", "AGENT_FILE_ORDINARY_LIMIT",
-                  "AGENT_FILE_SCOPE_LIMIT"):
+                  "AGENT_FILE_SCOPE_LIMIT",
+                  "result->plan_scope_counts[scope_index]"):
         require(plan_count, token, "hard snapshot bounds")
+    if "AUTOSCAN" in plan_count or "flags" in plan_count:
+        raise ContractError("durable snapshot uses the current autoscan policy")
+    if "plan_scope_autoscan_counts" in catalog_h:
+        raise ContractError("snapshot retained redundant autoscan policy state")
     if "agent_catalog_scope_admissible(" in plan_count:
         raise ContractError("full boot plan counting gained live lifecycle policy")
     prepare = function_body(catalog, "agent_metadata_catalog_prepare_snapshot(")
@@ -328,6 +374,8 @@ def validate_sources(sources: dict[str, str]) -> None:
                   "result->plan_lifecycle_generation != lifecycle.generation",
                   "AGENT_METADATA_LOAD_INTERRUPTED"):
         require(prepare, token, "scoped reload lifecycle-bound prepare")
+    require(prepare, "agent_catalog_plan_count(result, record->scope_id) < 0",
+            "snapshot representation bounds")
     lifecycle_check = prepare.find("agent_catalog_scope_admissible(")
     plan_key_build = prepare.find("key = agent_catalog_plan_key(")
     lifecycle_revalidate = prepare.find(
@@ -337,6 +385,17 @@ def validate_sources(sources: dict[str, str]) -> None:
         raise ContractError(
             "scoped prepare must bind and revalidate immutable lifecycle identity"
         )
+    record_lifecycle = prepare.find("vfs_scope_lifecycle(record->scope_id")
+    missing_record = prepare.find(
+        "agent_catalog_bit_set(result->missing_slots", record_lifecycle
+    )
+    count_record = prepare.find("agent_catalog_plan_count(", record_lifecycle)
+    if not (0 <= record_lifecycle < missing_record < count_record):
+        raise ContractError(
+            "cold boot must discard stale lifecycle records before capacity admission"
+        )
+    if "AGENT_FILE_AUTOSCAN_SCOPE_LIMIT" in prepare:
+        raise ContractError("snapshot prepare treats a live soft limit as corruption")
     apply = function_body(catalog, "agent_metadata_catalog_apply_snapshot(")
     for token in ("if (reload_one_scope &&\n\t    (!agent_catalog_scope_admissible(reload_scope, &lifecycle)",
                   "!agent_catalog_scope_admissible(reload_scope, &lifecycle)",
@@ -384,6 +443,10 @@ def validate_sources(sources: dict[str, str]) -> None:
         "prior->meta.incarnation == record->meta.incarnation",
     ):
         require(restart_validator, token, "shared restart record validation")
+    if "AGENT_FILE_AUTOSCAN_SCOPE_LIMIT" in restart_validator:
+        raise ContractError(
+            "raw validation must leave stale-scope filtering to lifecycle projection"
+        )
     if restart_validator.count("* stride)") != 2:
         raise ContractError("restart validator must stride current and prior records")
     current_validator = function_body(
@@ -404,21 +467,15 @@ def validate_sources(sources: dict[str, str]) -> None:
     )
 
     account = function_body(fs, "int fs_storage_scope_account_create(")
-    require(account,
-            "fs_storage.workflow_inode_domain_limit < AGENT_FILE_SCOPE_LIMIT ?",
-            "fixed workflow inode account limit")
     for token in (
         "RESOURCE_FS_INODE",
-        "fs_storage.workflow_inode_domain_limit :\n"
-        "\t\t\tAGENT_FILE_SCOPE_LIMIT",
+        "fs_storage.workflow_inode_domain_limit;",
     ):
-        require(account, token, "fixed workflow inode account limit")
-    require(
-        fs,
-        "VFS_SCOPE_MAX_ACTIVE * AGENT_FILE_SCOPE_LIMIT ==\n"
-        "\t\t       AGENT_FILE_ORDINARY_LIMIT",
-        "catalog/inode fixed-partition correspondence",
-    )
+        require(account, token, "independent workflow inode account limit")
+    if "AGENT_FILE_SCOPE_LIMIT" in fs:
+        raise ContractError("filesystem source was recoupled to catalog capacity")
+    require(storage_policy, "#define FS_WORKFLOW_INODE_MIN_PER_SCOPE 320U",
+            "workflow inode capacity floor")
 
     status_select = function_body(actions, "agent_status_select(")
     for token in (
@@ -467,7 +524,7 @@ def validate_sources(sources: dict[str, str]) -> None:
         require(error_status, token, "catalog-to-Agent ABI status mapping")
     meta_set = function_body(objects, "int sys_agent_file_meta_set(uint64 metaaddr)")
     for token in (
-        "slot = agent_metadata_catalog_alloc_slot(scope_id)",
+        "slot = agent_metadata_catalog_alloc_slot(scope_id, 0)",
         "result = agent_catalog_error_status(slot)",
         "commit_status = agent_metadata_catalog_edit_commit(&edit, changes)",
         "result = agent_catalog_error_status(commit_status)",
@@ -479,16 +536,218 @@ def validate_sources(sources: dict[str, str]) -> None:
     create = function_body(fs, "struct inode *fs_create(")
     if not (create.find("dirlookup(") < create.find("ialloc(") < create.find("dirlink(")):
         raise ContractError("create ordering must lookup, reserve inode, then publish")
+    if "agent_metadata_catalog" in create or "agent_file_request_scan" in create:
+        raise ContractError("VFS create became conditional on metadata catalog capacity")
+    canonicalize = function_body(fs, "int fs_dirent_canonicalize(")
+    for token in (
+        "input == 0 || out == 0 || input[0] == 0",
+        "memset(out, 0, DIRSIZ + 1)",
+        "i < DIRSIZ && input[i] != 0",
+        "out[i] = input[i]",
+    ):
+        require(canonicalize, token, "single bounded dirent canonicalizer")
+    if "strlen(" in canonicalize:
+        raise ContractError("dirent canonicalization must not reject legacy long aliases")
+    for signature, argument, first_effect in (
+        ("struct inode *dirlookup(", "name", "vfs_cred_kernel("),
+        ("int dirlink(", "name", "vfs_inode_authorize("),
+        ("int dirunlink(", "name", "vfs_inode_authorize("),
+        ("int fs_rollback_created_workflow(", "path", "vfs_cred_kernel("),
+        ("struct inode *fs_create(", "path", "dp = root_dir_status("),
+    ):
+        body = function_body(fs, signature)
+        require_order(
+            body,
+            (f"fs_dirent_canonicalize({argument}, key)", first_effect),
+            f"{signature} canonical dirent key",
+        )
+    for signature, token in (
+        ("struct inode *dirlookup(", "strncmp(key, de.name, DIRSIZ) == 0"),
+        ("int dirlink(", "strncmp(key, de.name, DIRSIZ) != 0"),
+        ("int dirunlink(", "strncmp(key, de.name, DIRSIZ) != 0"),
+        ("int fs_rollback_created_workflow(", "dirlookup(dp, key,"),
+        ("struct inode *fs_create(", "dirlookup(dp, key,"),
+    ):
+        require(function_body(fs, signature), token,
+                f"{signature} uses canonical dirent key")
+    lookup = function_body(fs, "struct inode *dirlookup(")
+    require_order(
+        lookup,
+        ("strncmp(key, de.name, DIRSIZ) == 0", "target = inode_get(",
+         "target->vfs_policy != policy", "target->vfs_scope_id != scope_id"),
+        "canonical aliases preserve inode policy and scope checks",
+    )
+    note_create = function_body(directory, "void agent_fs_note_create(")
+    require_order(
+        note_create,
+        ("fs_dirent_canonicalize(path, key)",
+         "agent_metadata_scan_index_inode(ip, key, &failed)"),
+        "create metadata uses the published canonical dirent key",
+    )
+    fs_name_test = function_body(
+        fs_program, "static void check_dirent_name_boundary(")
+    for token in (
+        'const char *canonical = "nmlimit1234567";',
+        'const char *long_name = "nmlimit1234567x";',
+        'const char *same_alias = "nmlimit1234567y";',
+        "open(long_name, O_CREATE | O_RDWR | O_TRUNC)",
+        "append through long-name create",
+        "same prefix reopens one legacy alias",
+        "query_physical(canonical)",
+        "agent_file_meta_init() == AGENT_STATUS_OK",
+        "canonical metadata delete remains durable",
+        "dirent_name_bound=14 legacy_alias=1 metadata_canonical=1",
+    ):
+        require(fs_name_test, token, "Guest dirent-name boundary regression")
+    require(function_body(fs_program, "static void run_agent("),
+            "check_dirent_name_boundary();",
+            "Guest dirent-name boundary execution")
     ialloc = function_body(fs, "struct inode *ialloc(")
     if not (ialloc.find("fs_storage_reserve(charge, 1)") <
             ialloc.find("dip->type = type")):
         raise ContractError("inode lease must precede persistent allocation intent")
     require(ialloc, "fs_storage_release(charge->owner, 1)", "allocation refund")
 
-    require(scan, "uchar seen[AGENT_FILE_META_MAX]", "bounded scan bitmap")
+    require(file_state_h, "#define AGENT_INODE_META_DEFERRED_SLOT (-1)",
+            "persistent capacity-deferred marker")
+    for token in (
+        "dip->agent_meta_slot = ip->agent_meta_slot",
+        "ip->agent_meta_slot = dip->agent_meta_slot",
+    ):
+        require(fs, token, "deferred marker disk round-trip")
+    deferred_state = function_body(file_state, "agent_file_state_index_deferred(")
+    for token in (
+        "ip->agent_meta_slot == AGENT_INODE_META_DEFERRED_SLOT",
+        "ip->agent_meta_flags == 0",
+        "ip->agent_meta_version == AGENT_INODE_META_VERSION",
+    ):
+        require(deferred_state, token, "unambiguous deferred sidecar state")
+    set_index = function_body(file_state, "agent_file_state_set_index(")
+    for token in (
+        "!stale && ip->agent_meta_slot > 0",
+        "short version = slot ? AGENT_INODE_META_VERSION : 0",
+        "slot < AGENT_INODE_META_DEFERRED_SLOT",
+        "slot > AGENT_FILE_META_MAX",
+        "slot <= 0 && flags",
+        "ip->agent_meta_slot = slot",
+        "ip->agent_meta_flags = flags",
+        "ip->agent_meta_version = version",
+        "if (iupdate(ip) >= 0",
+    ):
+        require(set_index, token, "durable sidecar update")
+    require(file_state_h,
+            "int agent_file_state_set_index(struct inode *, short, short, int);",
+            "shared sidecar updater declaration")
+    for name, source in sources.items():
+        if name in {"file_state", "file_state_h", "catalog", "scan", "kernel_other"}:
+            continue
+        if "agent_file_state_set_index(" in source:
+            raise ContractError(
+                f"sidecar update escaped into {name}"
+            )
+
+    note_create = function_body(directory, "void agent_fs_note_create(")
+    for token in (
+        "agent_metadata_txn_try_external()",
+        "agent_metadata_store_loaded()",
+        "agent_file_state_content_bump(ip)",
+        "agent_metadata_scan_index_inode(ip, key, &failed)",
+        "agent_metadata_note_catalog_changes(changes)",
+        "agent_file_state_index_deferred(ip)",
+        "agent_file_request_scan()",
+    ):
+        require(note_create, token, "shared VFS create indexing")
+    index_pos = note_create.find("agent_metadata_scan_index_inode(ip, key, &failed)")
+    changes_pos = note_create.find("agent_metadata_note_catalog_changes(changes)")
+    deferred_pos = note_create.find("agent_file_state_index_deferred(ip)")
+    schedule_scan = note_create.find("agent_file_request_scan()", index_pos)
+    if not (0 <= index_pos < changes_pos < deferred_pos < schedule_scan):
+        raise ContractError(
+            "catalog saturation can roll back VFS create or strand deferred state"
+        )
+    fileopen = function_body(file_source, "int fileopen(")
+    require(fileopen, "if (created)\n\t\tagent_fs_note_create(ip, path)",
+            "post-create metadata hook")
+    fs_create_pos = fileopen.find("ip = fs_create(")
+    note_create_pos = fileopen.find("agent_fs_note_create(ip, path)")
+    success_pos = fileopen.find("return fd", note_create_pos)
+    if not (0 <= fs_create_pos < note_create_pos < success_pos):
+        raise ContractError("catalog hook can still roll back successful VFS creation")
+
+    update_inode = function_body(directory, "agent_fs_apply_inode_event(")
+    deferred_pos = update_inode.find("agent_file_state_index_deferred(ip)")
+    txn_pos = update_inode.find("agent_metadata_txn_try_external()")
+    rescan_pos = update_inode.find("agent_file_request_scan()")
+    if not (0 <= deferred_pos < txn_pos < rescan_pos):
+        raise ContractError("writes to deferred inodes can repeatedly request scans")
+    busy_remove_pos = update_inode.find("else if (remove)", txn_pos)
+    busy_scan_pos = update_inode.find("agent_file_request_scan()", busy_remove_pos)
+    busy_next_pos = update_inode.find("else if (published < 0)", busy_remove_pos)
+    busy_return_pos = update_inode.find("return;", busy_next_pos)
+    if not (txn_pos < busy_remove_pos < busy_scan_pos < busy_next_pos <
+            busy_return_pos):
+        raise ContractError("metadata-gate busy delete can strand catalog cleanup")
+    if "agent_metadata_scan_slot_freed" in update_inode[
+            busy_remove_pos:busy_next_pos]:
+        raise ContractError("metadata-gate busy delete claims unreleased capacity")
+    remove_pos = update_inode.find("if (remove) {")
+    clear_pos = update_inode.find("agent_metadata_catalog_clear_slot(slot)", remove_pos)
+    retry_pos = update_inode.find(
+        "agent_metadata_scan_slot_freed(scope_id)", clear_pos)
+    update_pos = update_inode.find("} else {", retry_pos)
+    if not (0 <= remove_pos < clear_pos < retry_pos < update_pos):
+        raise ContractError("catalog capacity release can strand deferred inodes")
+    require(scan_h, "void agent_metadata_scan_slot_freed(uint);",
+            "capacity-release retry declaration")
+    retry_deferred = function_body(scan, "agent_metadata_scan_slot_freed(")
+    for token in (
+        "if (!scan_scope_full(scope, 0))",
+        "scan_ctl.on = 1",
+        "scan_ctl.pending = SCAN_URGENT",
+        "scan.next_tick = agent_file_state_now()",
+        "agent_background_request()",
+    ):
+        require(retry_deferred, token, "urgent deferred retry")
+    pause = function_body(scan, "scan_pause(")
+    require_order(
+        pause,
+        ("if (scan_ctl.pending == SCAN_URGENT)", "scan.start = 0",
+         "scan_ctl.pending = 1", "scan.next_tick = current",
+         "} else {", "if (retry) {",
+         "if (!resume || scan_ctl.pending > 0)",
+         "else if (scan_ctl.pending == 0)",
+         "scan_ctl.pending = -1", "if (scan.next_tick < now)"),
+        "urgent full restart must outrank cursor resume and bypass one rest window",
+    )
+    scan_remove = function_body(scan, "scan_remove(")
+    require_order(
+        scan_remove,
+        ("agent_metadata_catalog_clear_slot(slot)",
+         "agent_metadata_scan_slot_freed(scope)",
+         "agent_metadata_store_mark_dirty(scope)"),
+        "stale sweep releases capacity before scheduling a deferred retry",
+    )
+    require(scan, "uint marked[SCOPE_MAX * 2], nmarked;",
+            "per-scan scope outcome cache")
+    marked = function_body(scan, "scan_mark(")
+    for token in ("FS_OWNER_SCOPE_FLAG", "scan.nmarked >= NELEM(scan.marked)",
+                  "scan.marked[scan.nmarked++] = mark"):
+        require(marked, token, "bounded scope cache")
+    require(scan,
+            "scan_scope_full(scope, add) scan_mark(scope, add, 1)",
+            "bounded saturated-scope cache")
+    require(scan, "uchar seen[AGENT_META_STALE_BYTES]", "bounded scan bitmap")
     require(scan, "SCAN_BIND_DEFERRED", "capacity failure class")
-    if scan.count("*failed = SCAN_BIND_DEFERRED;") != 2:
-        raise ContractError("both slot and fid exhaustion must defer")
+    if scan.count("*failed = SCAN_BIND_DEFERRED;") != 1:
+        raise ContractError("slot and fid exhaustion must share one deferral path")
+    require(scan, "slot < 0 || !(fid = agent_metadata_catalog_alloc_fid(scope))",
+            "shared slot/fid deferral")
+    fid_pos = scan.find(
+        "slot < 0 || !(fid = agent_metadata_catalog_alloc_fid(scope))")
+    fid_mark_pos = scan.find("scan_scope_full(scope, 1)", fid_pos)
+    fid_defer_pos = scan.find("*failed = SCAN_BIND_DEFERRED", fid_mark_pos)
+    if not (0 <= fid_pos < fid_mark_pos < fid_defer_pos):
+        raise ContractError("fid exhaustion lacks a scoped deferred hint")
     require(scan, "scan.deferred++", "deferred observation")
     require(scan, "scan.failures++", "failure observation")
     require(scan, "scan_pause(1, 1)", "resumable root scan")
@@ -497,6 +756,41 @@ def validate_sources(sources: dict[str, str]) -> None:
     require(scan, "scan_scope_failed(view.scope_id, 0)", "scope isolation")
     require(scan, "file_scan_deferred = scan.deferred", "deferred ABI")
     require(scan, "file_scan_failures = scan.failures", "failure ABI")
+
+    quota_wait = function_body(scope_program, "wait_quota_catalog_rebuild(")
+    for token in (
+        "scope_catalog_path_count(name)",
+        "info.file_scan_deferred > deferred_before",
+        "!info.file_scan_pending",
+        "!info.metadata_writeback_pending",
+        "info.metadata_writeback_dirty ==\n\t\t\tinfo.metadata_writeback_durable",
+        "stable >= 3",
+    ):
+        require(quota_wait, token, "Guest deferred catalog rebuild")
+    quota_fill = function_body(scope_program, "fill_scope_storage_quota(")
+    quota_order = (
+        "check_quota_catalog_path_count('a', WORKFLOW_AUTOSCAN_SCOPE_LIMIT, 0)",
+        "state->explicit_created = create_explicit_metadata(",
+        "unlink(released_name)",
+        "state->first_removed = 1",
+        "wait_quota_catalog_rebuild(",
+        "agent_file_meta_init() == 0",
+        "catalog_deferred_rebuilt=1",
+    )
+    position = -1
+    for token in quota_order:
+        next_position = quota_fill.find(token, position + 1)
+        if next_position < 0:
+            raise ContractError(
+                f"Guest deferred catalog rebuild is incomplete: {token}"
+            )
+        position = next_position
+    quota_cleanup = function_body(scope_program, "cleanup_scope_storage_quota(")
+    require(
+        quota_cleanup,
+        "remove_quota_files_from('a', state->first_removed, state->created)",
+        "Guest released-slot cleanup",
+    )
     for token in (
         "SCAN_DEFAULT(physical_name, AGENT_FILE_CHANGE_SCOPE_KEYS, 0)",
         "SCAN_DEFAULT(logical_path, AGENT_FILE_CHANGE_SCOPE_KEYS, 0)",
@@ -547,14 +841,6 @@ def validate_sources(sources: dict[str, str]) -> None:
                   "key.candidate_epoch = candidate_epoch",
                   "key.catalog_generation = catalog_generation"):
         require(plan_key, token, "immutable candidate plan key")
-    plan_match = function_body(catalog, "agent_catalog_plan_matches(")
-    for token in ("left->records == right->records",
-                  "left->count == right->count",
-                  "left->reload_one_scope == right->reload_one_scope",
-                  "left->reload_scope == right->reload_scope",
-                  "left->candidate_epoch == right->candidate_epoch",
-                  "left->catalog_generation == right->catalog_generation"):
-        require(plan_match, token, "single plan binding validator")
     plan_binding = function_body(catalog, "agent_catalog_plan_binding(")
     for token in ("agent_catalog_hash_bytes", "sizeof(*key)"):
         require(plan_binding, token, "full plan-key token binding")
@@ -564,7 +850,7 @@ def validate_sources(sources: dict[str, str]) -> None:
         "result->plan_key = key",
         "agent_catalog_plan_key(records, count, reload_one_scope",
         "key.catalog_generation = result->plan_catalog_generation",
-        "agent_catalog_plan_matches(&result->plan_key, &key)",
+        "memcmp(&result->plan_key, &key, sizeof(key)) != 0",
         "result->plan_token = agent_catalog_plan_binding(",
         "result->plan_hash = agent_catalog_hash_bytes(",
         "result->plan_catalog_generation != agent_catalog_generation",
@@ -601,14 +887,18 @@ def validate_sources(sources: dict[str, str]) -> None:
     lookup = unbind.find("namei_scope_status(")
     if guard < 0 or lookup < 0 or guard > lookup:
         raise ContractError("zero/quarantine unbind guard must precede pathname lookup")
+    require(unbind, "agent_file_state_set_index(ip, 0, 0, 0)",
+            "shared catalog sidecar clear")
     bind_status = function_body(catalog, "static int agent_catalog_bind_status(")
     if "agent_catalog_normalize_physical(" in bind_status:
         raise ContractError("bind mutates the physical key after commit admission")
     require(bind_status, "strlen(meta->physical_name) > DIRSIZ",
             "exact DIRSIZ catalog binding")
+    require(bind_status, "agent_file_state_set_index(",
+            "shared catalog sidecar bind")
     rollback_created = function_body(fs, "int fs_rollback_created_workflow(")
-    require(rollback_created, "strlen(path) > DIRSIZ",
-            "exact DIRSIZ creation rollback")
+    require(rollback_created, "fs_dirent_canonicalize(path, key) < 0",
+            "canonical creation rollback")
     reconcile = function_body(catalog, "agent_metadata_catalog_reconcile_slot(")
     for token in ("AGENT_CATALOG_STATE_PENDING",
                   "agent_catalog_state_clear(slot)",
@@ -624,7 +914,7 @@ def validate_sources(sources: dict[str, str]) -> None:
     apply = function_body(catalog, "agent_metadata_catalog_apply_snapshot(")
     for token in (
         "agent_catalog_plan_key(records, count, reload_one_scope",
-        "agent_catalog_plan_matches(&result->plan_key, &key)",
+        "memcmp(&result->plan_key, &key, sizeof(key)) != 0",
         "panic(\"Agent catalog apply binding invariant\")",
         "hash != result->plan_hash",
         "panic(\"Agent catalog apply plan invariant\")",
@@ -655,7 +945,7 @@ def validate_sources(sources: dict[str, str]) -> None:
     require(scan, "AGENT_CATALOG_STATE_QUARANTINE", "quarantine scan policy")
     require(scan, "agent_metadata_catalog_reconcile_slot(slot)",
             "pending scan policy")
-    bind_scan = function_body(scan, "scan_bind_inode(struct inode *ip")
+    bind_scan = function_body(scan, "agent_metadata_scan_index_inode(struct inode *ip")
     if "if (failed)" in bind_scan:
         raise ContractError("scanner bind failure output became optional")
     require(bind_scan, "*failed = 0", "scanner bind failure output")
@@ -666,7 +956,46 @@ def validate_sources(sources: dict[str, str]) -> None:
     )
     require(bind_scan, "slot = ip->agent_meta_slot - 1",
             "scanner sidecar hint")
+    deferred_guard = (
+        "if (agent_file_state_index_deferred(ip) &&\n"
+        "\t    scan_scope_full(scope, 0)) {\n"
+        "\t\tscan.deferred++;\n"
+        "\t\treturn 0;\n"
+        "\t}"
+    )
+    for token in (
+        deferred_guard,
+        "stale_sidecar = ip->agent_meta_slot > 0",
+        "agent_metadata_catalog_alloc_slot(",
+        "scope, AGENT_FILE_META_F_AUTOSCAN)",
+        "if (slot == AGENT_CATALOG_NO_SPACE)",
+        "scan_scope_full(scope, 1)",
+        "AGENT_INODE_META_DEFERRED_SLOT, 0, stale_sidecar) < 0",
+        "ip->agent_meta_flags != persist",
+        "agent_file_state_set_index(ip, slot + 1, persist, 0) < 0",
+    ):
+        require(bind_scan, token, "durable capacity deferral")
     ordinary_pos = bind_scan.find("agent_metadata_catalog_borrow(0, slot, &view)")
+    stale_pos = bind_scan.find("stale_sidecar = ip->agent_meta_slot > 0")
+    allocate_pos = bind_scan.find("agent_metadata_catalog_alloc_slot(")
+    no_space_pos = bind_scan.find("if (slot == AGENT_CATALOG_NO_SPACE)")
+    saturate_pos = bind_scan.find("scan_scope_full(scope, 1)")
+    persist_pos = bind_scan.find("AGENT_INODE_META_DEFERRED_SLOT, 0, stale_sidecar)")
+    return_pos = bind_scan.find("return changes", persist_pos)
+    if not (0 <= ordinary_pos < stale_pos < allocate_pos < no_space_pos <
+            saturate_pos < persist_pos < return_pos):
+        raise ContractError("scanner deferral is not checked and persisted in order")
+    persist_value_pos = bind_scan.find(
+        "persist = meta->flags & AGENT_FILE_META_F_PERSIST"
+    )
+    sidecar_flag_pos = bind_scan.find("ip->agent_meta_flags != persist")
+    sidecar_write_pos = bind_scan.find(
+        "agent_file_state_set_index(ip, slot + 1, persist, 0)"
+    )
+    if not (0 <= persist_value_pos < sidecar_flag_pos < sidecar_write_pos):
+        raise ContractError(
+            "scanner sidecar persist flag is not derived, compared, and repaired in order"
+        )
     for token in (
         "memset(&selector, 0, sizeof(selector))",
         "safestrcpy(selector.physical_name, path,",
@@ -730,7 +1059,7 @@ def validate_sources(sources: dict[str, str]) -> None:
         raise ContractError("scanner replacement retained a flag-based exception")
     remove_pos = bind_scan.find("scan_remove(slot, old_scope, old_persist)")
     fresh_pos = bind_scan.find("slot = -1", remove_pos)
-    alloc_pos = bind_scan.find("agent_metadata_catalog_alloc_slot(scope)")
+    alloc_pos = bind_scan.find("agent_metadata_catalog_alloc_slot(")
     if not (revalidate_pos < remove_pos < fresh_pos < alloc_pos):
         raise ContractError("scanner replacement can inherit an old object identity")
     quarantine_pos = bind_scan.find("AGENT_CATALOG_STATE_QUARANTINE")
@@ -738,13 +1067,16 @@ def validate_sources(sources: dict[str, str]) -> None:
     if not (0 <= quarantine_pos < edit_pos):
         raise ContractError("quarantine can reach the scanner edit path")
     step_scan = function_body(scan, "agent_metadata_scan_step(uint64 now")
+    require(step_scan, "scan.nmarked = 0", "per-run scope outcome reset")
     dirent_name = (
         "char name[DIRSIZ + 1]"
     )
     require(step_scan, dirent_name, "scanner bounded dirent name")
     dirent_copy_pos = step_scan.find("memmove(name, de.name, DIRSIZ)")
     dirent_nul_pos = step_scan.find("name[DIRSIZ] = 0")
-    bind_inode_pos = step_scan.find("scan_bind_inode(ip, name, &bind_failed)")
+    bind_inode_pos = step_scan.find(
+        "agent_metadata_scan_index_inode(ip, name, &bind_failed)"
+    )
     if not (0 <= dirent_copy_pos < dirent_nul_pos < bind_inode_pos):
         raise ContractError("scanner fallback path is not the bounded dirent name")
     for token in ("agent_metadata_catalog_borrow_scan(i, &view)",
@@ -766,9 +1098,25 @@ def validate_sources(sources: dict[str, str]) -> None:
         "result = agent_metadata_catalog_apply_snapshot(",
         "reload_scope, candidate_epoch, apply",
         "if (result != AGENT_METADATA_LOAD_PROGRESS)\n\t\tagent_meta_store_apply_abort();",
-        "if (apply->used != 0) {\n\t\tagent_meta_reconcile_required = 1;",
     ):
         require(load, token, "persistent snapshot plan")
+    require_order(
+        load,
+        (
+            "agent_metadata_probe_finish(candidate_epoch)",
+            "agent_meta_reconcile_required = 1",
+            "agent_background_request()",
+            "agent_meta_store_io_leave()",
+        ),
+        "complete snapshot reconciliation",
+    )
+    reconcile_start = load.find("agent_metadata_probe_finish(candidate_epoch)")
+    reconcile_end = load.find("agent_meta_store_io_leave()", reconcile_start)
+    reconcile_path = load[reconcile_start:reconcile_end]
+    if re.search(r"\b(?:if|for|while|switch)\s*\(", reconcile_path):
+        raise ContractError(
+            "complete snapshot reconciliation is conditionally gated"
+        )
     if "struct agent_metadata_apply_result apply;" in load:
         raise ContractError("load projection plan is still stack-local")
     store_prepare = function_body(store, "agent_meta_store_apply_prepare(")
@@ -807,15 +1155,23 @@ def load_sources(root: Path) -> dict[str, str]:
         "actions": root / "os/agent_metadata_actions.c",
         "catalog": root / "os/agent_metadata_catalog.c",
         "catalog_h": root / "os/agent_metadata_catalog.h",
+        "directory": root / "os/agent_metadata_directory.c",
+        "file": root / "os/file.c",
+        "file_state": root / "os/agent_file_state.c",
+        "file_state_h": root / "os/agent_file_state_internal.h",
         "fs": root / "os/fs.c",
+        "fs_program": root / "user/src/agentfs_ucore.c",
         "internal": root / "os/agent_metadata_internal.h",
         "objects": root / "os/agent_metadata_objects.c",
         "recovery": root / "os/agent_metadata_recovery.c",
         "scan": root / "os/agent_metadata_scan.c",
+        "scan_h": root / "os/agent_metadata_scan.h",
         "store": root / "os/agent_metadata_store.c",
         "store_format": root / "os/agent_metadata_store_format.c",
+        "storage_policy": root / "fs_storage_policy.h",
         "vfs": root / "os/vfs_security.c",
         "user": root / "user/include/agent.h",
+        "scope_program": root / "user/src/agentscope_ucore.c",
     }
     sources = {
         name: path.read_text(encoding="utf-8") for name, path in paths.items()
@@ -824,6 +1180,7 @@ def load_sources(root: Path) -> dict[str, str]:
         (root / "os/agent_metadata_catalog.c").resolve(),
         (root / "os/agent_metadata_catalog.h").resolve(),
         (root / "os/agent_metadata_scan.c").resolve(),
+        (root / "os/agent_metadata_scan.h").resolve(),
     }
     kernel_sources = sorted(
         [*(root / "os").glob("*.c"), *(root / "os").glob("*.h")]

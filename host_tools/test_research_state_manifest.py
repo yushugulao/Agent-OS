@@ -15,7 +15,9 @@ if __package__:
     from .research_state_manifest import (
         MANIFEST_RELATIVE_PATH,
         StateManifestError,
+        archive_state_names,
         fixture_state_names,
+        guest_state_inventory_sha256,
         load_manifest,
         parse_manifest_text,
         repo_state_names,
@@ -29,7 +31,9 @@ else:
     from research_state_manifest import (
         MANIFEST_RELATIVE_PATH,
         StateManifestError,
+        archive_state_names,
         fixture_state_names,
+        guest_state_inventory_sha256,
         load_manifest,
         parse_manifest_text,
         repo_state_names,
@@ -81,13 +85,29 @@ def test_manifest_mutations() -> None:
     unknown_call["state_file_calls"].append("accept_any_rp_symbol")
     expect_error(json.dumps(unknown_call), "unsupported entries")
 
+    missing_archive_optional = json.loads(text)
+    del missing_archive_optional["archive_optional_state_files"]
+    expect_error(json.dumps(missing_archive_optional), "missing keys")
+
+    duplicate_archive_optional = json.loads(text)
+    duplicate_archive_optional["archive_optional_state_files"].append(
+        duplicate_archive_optional["archive_optional_state_files"][0]
+    )
+    expect_error(json.dumps(duplicate_archive_optional), "duplicate entries")
+
+    overlapping_archive_optional = json.loads(text)
+    overlapping_archive_optional["archive_optional_state_files"].append(
+        overlapping_archive_optional["host_state_files"][0]
+    )
+    expect_error(json.dumps(overlapping_archive_optional), "inventories overlap")
+
     duplicate_key = text.replace(
-        '"schema_version": 1,',
-        '"schema_version": 1,\n  "schema_version": 1,',
+        '"schema_version": 2,',
+        '"schema_version": 2,\n  "schema_version": 2,',
         1,
     )
     expect_error(duplicate_key, "duplicate manifest key")
-    assert raw["schema_version"] == 1
+    assert raw["schema_version"] == 2
 
 
 def test_repository_contract() -> None:
@@ -99,12 +119,26 @@ def test_repository_contract() -> None:
     manifest = load_manifest(ROOT)
     plain = target_state_names(ROOT, manifest, "plain")
     agentos = target_state_names(ROOT, manifest, "agentos")
+    plain_archive = archive_state_names(ROOT, manifest, "plain")
+    agentos_archive = archive_state_names(ROOT, manifest, "agentos")
     inventory = repository_state_inventory(ROOT, manifest)
     fixture = fixture_state_names(ROOT / "host_tools/test_plain_ucore_reader.py")
     assert plain <= agentos
     assert fixture <= inventory
     assert "rp_evidence_packet" in plain
     assert "rp_evidence_packet" in fixture
+    assert set(manifest.archive_optional_state_files) == {
+        "rp_input_fastq", "rp_object_records"
+    }
+    for target, derived, archive in (
+        ("plain", plain, plain_archive), ("agentos", agentos, agentos_archive)
+    ):
+        assert archive == (
+            derived
+            - set(manifest.host_state_files)
+            - set(manifest.archive_optional_state_files)
+        ), target
+        assert not set(manifest.archive_optional_state_files) & archive, target
     assert plain_ucore_reader.STATE_API_ALLOWLIST == frozenset(inventory)
 
     plain_map = short_name_map(
@@ -143,6 +177,51 @@ def test_ambiguous_guest_names_fail_closed() -> None:
         assert "prefixes are ambiguous" in str(error), error
     else:
         raise AssertionError("ambiguous guest state filenames were accepted")
+
+
+def test_guest_state_digest_binds_inventory_and_contents() -> None:
+    with tempfile.TemporaryDirectory(prefix="guest-state-digest-") as tmp:
+        state_dir = Path(tmp)
+        (state_dir / "rp_alpha").write_bytes(b"alpha\n")
+        (state_dir / "rp_beta").write_bytes(b"beta\x00payload")
+        (state_dir / "rp_host_run_result").write_bytes(b"ignored\n")
+        first = guest_state_inventory_sha256(
+            state_dir, excluded_names={"rp_host_run_result"}
+        )
+        second = guest_state_inventory_sha256(
+            state_dir, excluded_names={"rp_host_run_result"}
+        )
+        assert first == second
+        assert first[0] == 2
+        assert len(first[1]) == 64
+
+        (state_dir / "rp_alpha").write_bytes(b"omega\n")
+        content_changed = guest_state_inventory_sha256(
+            state_dir, excluded_names={"rp_host_run_result"}
+        )
+        assert content_changed[0] == first[0]
+        assert content_changed[1] != first[1]
+
+        (state_dir / "rp_gamma").write_bytes(b"")
+        inventory_changed = guest_state_inventory_sha256(
+            state_dir, excluded_names={"rp_host_run_result"}
+        )
+        assert inventory_changed[0] == 3
+        assert inventory_changed[1] != content_changed[1]
+
+        unsafe = state_dir / "rp_unsafe"
+        try:
+            unsafe.symlink_to(state_dir / "rp_alpha")
+        except OSError:
+            return
+        try:
+            guest_state_inventory_sha256(
+                state_dir, excluded_names={"rp_host_run_result"}
+            )
+        except StateManifestError as error:
+            assert "unsafe" in str(error), error
+        else:
+            raise AssertionError("Guest state digest followed a symlink")
 
 
 def test_import_modes() -> None:
@@ -187,6 +266,9 @@ class ResearchStateManifestTests(unittest.TestCase):
 
     def test_ambiguous_guest_names_fail_closed(self) -> None:
         test_ambiguous_guest_names_fail_closed()
+
+    def test_guest_state_digest_binds_inventory_and_contents(self) -> None:
+        test_guest_state_digest_binds_inventory_and_contents()
 
     def test_import_modes(self) -> None:
         test_import_modes()

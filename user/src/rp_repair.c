@@ -91,7 +91,7 @@ static int run_kernel_recovery(void)
 		return -1;
 	}
 	if (!rp_append_file("rp_agentos_mainflow",
-			    "stage=recovery;failure_recovery=generic_action;kernel_action_commit=ok;kernel_artifact_update=ok;context_snapshot=trusted;metadata_after_repair=used_index;status=ready"))
+			    "stage=recovery;failure_recovery=generic_action;status=ready"))
 		return -1;
 	return 1;
 }

@@ -1261,13 +1261,6 @@ out:
 }
 
 void
-agent_ipc_sched_snapshot(struct proc *p,
-			 struct agent_ipc_sched_snapshot *snapshot)
-{
-	agent_ipc_sched_snapshot_take(p, 0, snapshot);
-}
-
-void
 agent_ipc_thread_sched_snapshot(struct thread *t,
 				struct agent_ipc_sched_snapshot *snapshot)
 {

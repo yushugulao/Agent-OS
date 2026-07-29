@@ -4,79 +4,14 @@
 #include <fcntl.h>
 #include <string.h>
 #include <research_platform_state.h>
+#include <rp_evidence.h>
+#include <rp_program_manifest.h>
 
+#define RP_PROGRAM_NAME(name) name,
 static const char *PROGRAMS[] = {
-	"rp_catalog",
-	"rp_state_catalog",
-	"rp_object_store",
-	"rp_object_query",
-	"rp_lineage",
-	"rp_site_export",
-	"rp_planner",
-	"rp_portability",
-	"rp_retriever",
-	"rp_analyst",
-	"rp_reviewer",
-	"rp_lab",
-	"rp_governance",
-	"rp_writer",
-	"rp_repair",
-	"rp_auditor",
-	"rp_query",
-	"rp_evidence",
-	"rp_llm_bridge",
-	"rp_llm_relay",
-	"rp_privacy",
-	"rp_runconf",
-	"rp_execobs",
-	"rp_invoke",
-	"rp_complete",
-	"rp_artifact_ops",
-	"rp_data_pipeline",
-	"rp_workflow_runner",
-	"rp_workbench",
-	"rp_agent_collab",
-	"rp_package",
-	"rp_calculation",
-	"rp_realtask",
-	"rp_analysisres",
-	"rp_campaign",
-	"rp_delta",
-	"rp_release",
-	"rp_dossier",
-	"rp_service_surface",
-	"rp_startup_doctor",
-	"rp_notebook_export",
-	"rp_backend",
-	"rp_consistency",
-	"rp_metrics",
-	"rp_ui_export",
-	"rp_web_export",
-	"rp_revdash",
-	"rp_modelreg",
-	"rp_sysreview",
-	"rp_expsched",
-	"rp_traincomp",
-	"rp_publication",
-	"rp_runbooks",
-	"rp_projectrel",
-	"rp_studyproto",
-	"rp_stdesign",
-	"rp_opsboard",
-	"rp_reviewboard",
-	"rp_controlplane",
-	"rp_integrityplane",
-	"rp_coherenceplane",
-	"rp_mature",
-	"rp_prov_view",
-	"rp_prov_query",
-	"rp_reldossier",
-	"rp_decsupport",
-	"rp_usable",
-	"rp_usableproject",
-	"rp_compare_plain",
-	"rp_test_suite",
+	RP_PLATFORM_PROGRAMS(RP_PROGRAM_NAME)
 };
+#undef RP_PROGRAM_NAME
 
 static int keeps_same_name_state(const char *program)
 {
@@ -157,6 +92,37 @@ static void record_timing(const char *program, int ok, int code,
 	rp_append_file("rp_orch_timing", line);
 }
 
+static int append_program_inventory_evidence(void)
+{
+	struct rp_evidence_program_inventory inventory;
+	char line[384];
+	int expected_programs = (int)(sizeof(PROGRAMS) / sizeof(PROGRAMS[0]));
+
+	if (!rp_evidence_measure_program_ledger(
+		    "rp_orch_timing", "rp_seed_orch", PROGRAMS,
+		    expected_programs, "fork_seeded", 0, &inventory))
+		return 0;
+	line[0] = 0;
+	rp_append_text(line, sizeof(line),
+		       "evidence_role=demo_reference;evidence_generation=runtime;observation_source=guest_runtime;program_source=rp_orch_timing;program_source_bytes=");
+	rp_append_uint_text(line, sizeof(line), inventory.source_bytes);
+	rp_append_text(line, sizeof(line), ";program_source_hash=");
+	rp_append_uint_text(line, sizeof(line), inventory.source_hash);
+	rp_append_text(line, sizeof(line), ";program_names_digest=");
+	rp_append_uint_text(line, sizeof(line), inventory.program_names_digest);
+	rp_append_text(line, sizeof(line), ";programs_observed=");
+	rp_append_uint_text(line, sizeof(line), inventory.programs_observed);
+	rp_append_text(line, sizeof(line), ";status=reference_observed");
+	if (!rp_append_file("rp_agentcmp", line))
+		return 0;
+	for (int i = 0; line[i]; i++)
+		if (line[i] == ';')
+			line[i] = ' ';
+	printf("rp_orch: ");
+	puts(line);
+	return 1;
+}
+
 static int run_child(const char *program)
 {
 	int64 start = get_mtime();
@@ -215,6 +181,10 @@ int main(void)
 	printf("rp_orch: programs_ok=%d programs_total=%d\n", ok, total);
 	if (ok != total) {
 		printf("rp_orch: failed\n");
+		return 1;
+	}
+	if (!append_program_inventory_evidence()) {
+		printf("rp_orch: program_inventory_failed\n");
 		return 1;
 	}
 	printf("rp_orch: state_ok=1\n");

@@ -10,11 +10,12 @@ from pathlib import Path
 
 from check_host_test_alignment import (
     FNV_OFFSET,
+    U64_MASK,
     fnv1a64,
-    parse_positive_int,
     parse_record,
     read_runtime_manifest,
 )
+from dual_state_evidence_contract import MAIN_FLOW_SOURCE_SPECS
 
 @dataclass(frozen=True)
 class CapabilityGroup:
@@ -455,6 +456,123 @@ AGENT_ROLE_NUMBERS = {
     "orchestrator": 4,
     "artifact": 5,
 }
+PROGRAM_LEDGER_LINE_MAX = 255
+PLAIN_PROGRAM_PROFILES = {
+    "standard": ("rp_orch", "fork"),
+    "seeded": ("rp_seed_orch", "fork_seeded"),
+}
+PLAIN_PROGRAM_EVIDENCE_SCHEMA = (
+    "evidence_role",
+    "evidence_generation",
+    "observation_source",
+    "program_source",
+    "program_source_bytes",
+    "program_source_hash",
+    "program_names_digest",
+    "programs_observed",
+    "status",
+)
+AGENTOS_PROGRAM_EVIDENCE_SCHEMA = (
+    "evidence_role",
+    "evidence_generation",
+    "program_source",
+    "program_source_bytes",
+    "program_source_hash",
+    "program_names_digest",
+    "programs_observed",
+    "status",
+)
+MAINFLOW_RUNTIME_SPECS = MAIN_FLOW_SOURCE_SPECS
+
+
+def parse_canonical_mainflow_telemetry(
+    data: bytes,
+    *,
+    label: str = "mainflow telemetry",
+) -> tuple[dict[str, str], ...]:
+    """Parse the complete, closed-schema Mainflow telemetry stream."""
+    if not data or not data.endswith(b"\n"):
+        raise ValueError(f"{label} is empty or has an incomplete final record")
+    if b"\r" in data or b"\0" in data:
+        raise ValueError(f"{label} has non-canonical line content")
+
+    raw_lines = data[:-1].split(b"\n")
+    if any(not line for line in raw_lines):
+        raise ValueError(f"{label} contains an empty record")
+
+    records: list[dict[str, str]] = []
+    for number, raw_line in enumerate(raw_lines, 1):
+        try:
+            line = raw_line.decode("ascii", errors="strict")
+        except UnicodeDecodeError as error:
+            raise ValueError(
+                f"{label} line {number} is not canonical ASCII"
+            ) from error
+        record = parse_record(line)
+        if record is None:
+            raise ValueError(f"{label} line {number} is malformed")
+        generation = record.get(
+            "generation", record.get("evidence_generation", "")
+        )
+        if record.get("evidence_role") == "runtime_verified" or (
+            generation == "runtime" and record.get("status") == "verified"
+        ):
+            raise ValueError(
+                f"{label} Guest runtime verification is forbidden at line {number}"
+            )
+        if "stage" not in record:
+            raise ValueError(f"{label} contains a non-stage record at line {number}")
+        records.append(record)
+
+    expected_stages = tuple(spec.stage for spec in MAIN_FLOW_SOURCE_SPECS)
+    found_stages = tuple(record["stage"] for record in records)
+    unknown = [stage for stage in found_stages if stage not in expected_stages]
+    if unknown:
+        raise ValueError(f"{label} has an unknown telemetry stage: {unknown[0]}")
+    if len(found_stages) != len(set(found_stages)):
+        raise ValueError(f"{label} telemetry stages are duplicated")
+    missing = [stage for stage in expected_stages if stage not in found_stages]
+    if missing:
+        raise ValueError(
+            f"{label} telemetry stages are missing: " + ",".join(missing)
+        )
+    if len(records) != len(MAIN_FLOW_SOURCE_SPECS):
+        raise ValueError(
+            f"{label} must contain exactly {len(MAIN_FLOW_SOURCE_SPECS)} records"
+        )
+    if found_stages != expected_stages:
+        raise ValueError(f"{label} telemetry stages are out of order")
+
+    for number, (record, spec) in enumerate(
+        zip(records, MAIN_FLOW_SOURCE_SPECS), 1
+    ):
+        expected = {
+            "stage": spec.stage,
+            **dict(spec.telemetry_fields),
+            "status": "ready",
+        }
+        if record != expected:
+            raise ValueError(
+                f"{label} stage {spec.stage} schema differs at line {number}"
+            )
+    return tuple(records)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 def _parse_program_manifest(
@@ -535,6 +653,7 @@ def read_program_ledger(
     expected_programs: tuple[str, ...],
     expected_agent_roles: dict[str, str],
     target: str,
+    plain_profile: str = "standard",
 ) -> tuple[dict[str, int], list[str]]:
     path = state_dir / "rp_orch_timing"
     if not path.is_file():
@@ -546,9 +665,18 @@ def read_program_ledger(
     if b"\r" in data:
         return {}, ["rp_orch_timing contains non-canonical line endings"]
     try:
-        lines = data.decode("utf-8", errors="strict").splitlines()
+        raw_lines = data[:-1].split(b"\n")
+        lines = [line.decode("ascii", errors="strict") for line in raw_lines]
     except UnicodeDecodeError:
-        return {}, ["rp_orch_timing is not valid UTF-8"]
+        return {}, ["rp_orch_timing is not canonical ASCII"]
+    if any(not line for line in raw_lines):
+        return {}, ["rp_orch_timing contains an empty record"]
+    if any(len(line) > PROGRAM_LEDGER_LINE_MAX for line in raw_lines):
+        return {}, ["rp_orch_timing contains a record longer than the Guest parser limit"]
+    if not 1 <= len(expected_programs) <= 128 or len(set(expected_programs)) != len(
+        expected_programs
+    ):
+        return {}, ["trusted program manifest has an invalid count or duplicate name"]
     if len(lines) < 2:
         return {}, ["rp_orch_timing is missing canonical headers"]
     if len(lines) != len(expected_programs) + 2:
@@ -557,11 +685,24 @@ def read_program_ledger(
         )
     orchestrator = parse_record(lines[0])
     launcher = parse_record(lines[1])
-    if orchestrator != {"orchestrator": "rp_orch"}:
-        errors.append("rp_orch_timing has an invalid orchestrator header")
-    expected_header_launcher = "fork" if target == "plain" else "mixed_attested"
-    if launcher != {"launcher": expected_header_launcher}:
-        errors.append("rp_orch_timing has an invalid launcher header")
+    expected_plain_launcher = "fork"
+    if target == "plain":
+        profile = PLAIN_PROGRAM_PROFILES.get(plain_profile)
+        if profile is None:
+            errors.append(f"unknown plain program profile: {plain_profile}")
+        else:
+            expected_orchestrator, expected_plain_launcher = profile
+            if orchestrator != {"orchestrator": expected_orchestrator} or launcher != {
+                "launcher": expected_plain_launcher
+            }:
+                errors.append(
+                    f"rp_orch_timing does not match the required plain {plain_profile} profile"
+                )
+    else:
+        if orchestrator != {"orchestrator": "rp_orch"}:
+            errors.append("rp_orch_timing has an invalid orchestrator header")
+        if launcher != {"launcher": "mixed_attested"}:
+            errors.append("rp_orch_timing has an invalid launcher header")
 
     program_digest = FNV_OFFSET
     for number, line in enumerate(lines[2:], 3):
@@ -600,10 +741,10 @@ def read_program_ledger(
             )
         if record.get("ok") != "1" or record.get("code") != "0":
             errors.append(f"rp_orch_timing program {program} did not complete successfully")
-        if record.get("elapsed_ms", "").isdecimal() is False:
+        if re.fullmatch(r"[0-9]+", record.get("elapsed_ms", "")) is None:
             errors.append(f"rp_orch_timing program {program} has invalid elapsed time")
         if target == "plain":
-            if record.get("launcher") != "fork":
+            if record.get("launcher") != expected_plain_launcher:
                 errors.append(f"rp_orch_timing program {program} has invalid plain launcher")
         else:
             role = record.get("role")
@@ -624,13 +765,17 @@ def read_program_ledger(
                 errors.append(f"rp_orch_timing program {program} lacks post-exec identity evidence")
             if record.get("is_agent") != expected_is_agent or record.get("agent_role") != expected_role_number:
                 errors.append(f"rp_orch_timing program {program} has mismatched attested identity")
-            if not record.get("filesystem_domain", "").isdecimal() or int(
-                record.get("filesystem_domain", "0")
-            ) <= 0:
+            domain = record.get("filesystem_domain", "")
+            capabilities = record.get("filesystem_capabilities", "")
+            if (
+                re.fullmatch(r"[0-9]+", domain) is None
+                or not 0 < int(domain) <= U64_MASK
+            ):
                 errors.append(f"rp_orch_timing program {program} has invalid attested domain")
-            if not record.get("filesystem_capabilities", "").isdecimal() or int(
-                record.get("filesystem_capabilities", "0")
-            ) <= 0:
+            if (
+                re.fullmatch(r"[0-9]+", capabilities) is None
+                or not 0 < int(capabilities) <= U64_MASK
+            ):
                 errors.append(f"rp_orch_timing program {program} has invalid attested capabilities")
         program_digest = fnv1a64(
             expected_program.encode("utf-8") + b"\0", program_digest
@@ -643,15 +788,25 @@ def read_program_ledger(
     }, errors
 
 
-def _program_evidence_records(path: Path) -> tuple[list[dict[str, str]], list[str]]:
+def _program_evidence_records(
+    path: Path, expected_schema: tuple[str, ...]
+) -> tuple[list[dict[str, str]], list[str]]:
     if not path.is_file():
         return [], [f"{path.name} program evidence is missing"]
     records: list[dict[str, str]] = []
     errors: list[str] = []
+    data = path.read_bytes()
+    if not data or not data.endswith(b"\n"):
+        return [], [f"{path.name} is empty or has an incomplete final record"]
+    if b"\r" in data:
+        return [], [f"{path.name} contains non-canonical line endings"]
+    raw_lines = data[:-1].split(b"\n")
+    if any(not line for line in raw_lines):
+        return [], [f"{path.name} contains an empty record"]
     try:
-        lines = path.read_text(encoding="utf-8", errors="strict").splitlines()
+        lines = [line.decode("ascii", errors="strict") for line in raw_lines]
     except UnicodeDecodeError:
-        return [], [f"{path.name} program evidence is not valid UTF-8"]
+        return [], [f"{path.name} program evidence is not canonical ASCII"]
     for number, line in enumerate(lines, 1):
         if "program_source=" not in line and "programs_observed=" not in line:
             continue
@@ -659,6 +814,8 @@ def _program_evidence_records(path: Path) -> tuple[list[dict[str, str]], list[st
         if record is None:
             errors.append(f"{path.name} line {number} has malformed program evidence")
             continue
+        if tuple(record) != expected_schema:
+            errors.append(f"{path.name} line {number} has an invalid program evidence schema")
         records.append(record)
     return records, errors
 
@@ -670,27 +827,61 @@ def _validate_program_record(
     if record.get("program_source") != "rp_orch_timing":
         errors.append(f"{label} program evidence is not bound to rp_orch_timing")
     for key, actual in measured.items():
-        declared = parse_positive_int(record.get(key))
+        value = record.get(key)
+        declared = (
+            int(value)
+            if value is not None and re.fullmatch(r"[1-9][0-9]*", value)
+            else None
+        )
         if declared != actual:
             errors.append(f"{label} {key} does not match rp_orch_timing")
     return errors
 
 
+def _validate_program_log(
+    path: Path, record: dict[str, str], label: str
+) -> list[str]:
+    if not path.is_file():
+        return [f"{label} QEMU log is missing"]
+    canonical = ";".join(f"{key}={value}" for key, value in record.items())
+    marker = ("rp_orch: " + canonical.replace(";", " ")).encode("ascii")
+    prefix = f"rp_orch: evidence_role={record['evidence_role']} ".encode("ascii")
+    lines = [
+        line[:-1] if line.endswith(b"\r") else line
+        for line in path.read_bytes().split(b"\n")
+    ]
+    candidates = [
+        line
+        for line in lines
+        if line.startswith(prefix) and b"program_source=rp_orch_timing " in line
+    ]
+    if len(candidates) != 1:
+        return [f"{label} QEMU log does not contain exactly one program inventory marker"]
+    if candidates[0] != marker:
+        return [f"{label} QEMU program inventory marker does not match extracted state"]
+    return []
+
+
 def validate_program_inventory(
-    root: Path, plain_state_dir: Path, agentos_state_dir: Path
+    root: Path,
+    plain_state_dir: Path,
+    agentos_state_dir: Path,
+    plain_profile: str = "standard",
+    plain_log: Path | None = None,
+    agentos_log: Path | None = None,
 ) -> tuple[dict[str, object], list[str]]:
     expected_programs, expected_agent_roles, manifest_errors = read_expected_programs(root)
     plain_measured, plain_errors = read_program_ledger(
-        plain_state_dir, expected_programs, expected_agent_roles, "plain"
+        plain_state_dir, expected_programs, expected_agent_roles, "plain", plain_profile
     )
     agentos_measured, agentos_errors = read_program_ledger(
         agentos_state_dir, expected_programs, expected_agent_roles, "agentos"
     )
     plain_records, plain_record_errors = _program_evidence_records(
-        plain_state_dir / "rp_agentcmp"
+        plain_state_dir / "rp_agentcmp", PLAIN_PROGRAM_EVIDENCE_SCHEMA
     )
     agentos_records, agentos_record_errors = _program_evidence_records(
-        agentos_state_dir / "rp_agentcmp"
+        agentos_state_dir / "rp_agentcmp", AGENTOS_PROGRAM_EVIDENCE_SCHEMA
     )
     errors = list(manifest_errors)
     errors.extend(f"plain: {error}" for error in plain_errors + plain_record_errors)
@@ -700,6 +891,7 @@ def validate_program_inventory(
         record
         for record in plain_records
         if record.get("evidence_role") == "demo_reference"
+        and record.get("evidence_generation") == "runtime"
         and record.get("observation_source") == "guest_runtime"
         and record.get("status") == "reference_observed"
     ]
@@ -718,6 +910,16 @@ def validate_program_inventory(
         errors.append("AgentOS: expected exactly one runtime-verified program inventory")
     elif agentos_measured:
         errors.extend(_validate_program_record(agentos_verified[0], agentos_measured, "AgentOS"))
+    logs_supplied = plain_log is not None or agentos_log is not None
+    if logs_supplied and (plain_log is None or agentos_log is None):
+        errors.append("plain and AgentOS QEMU logs must be supplied together")
+    if plain_profile == "seeded" and not logs_supplied:
+        errors.append("seeded program inventory requires QEMU log binding")
+    if plain_log is not None and agentos_log is not None:
+        if len(plain_observations) == 1:
+            errors.extend(_validate_program_log(plain_log, plain_observations[0], "plain"))
+        if len(agentos_verified) == 1:
+            errors.extend(_validate_program_log(agentos_log, agentos_verified[0], "AgentOS"))
     if any(
         record.get("evidence_role") == "runtime_verified"
         or (
@@ -732,6 +934,178 @@ def validate_program_inventory(
         "agentos_programs_observed": agentos_measured.get("programs_observed"),
         "verified": not errors,
     }, errors
+
+
+
+
+def _read_bound_state_source(state_dir: Path, source: str) -> bytes | None:
+    state_root = state_dir.resolve(strict=True)
+    path = state_dir / source
+    if path.is_symlink():
+        return None
+    try:
+        resolved = path.resolve(strict=True)
+    except (FileNotFoundError, OSError):
+        return None
+    if resolved.parent != state_root or not resolved.is_file():
+        return None
+    return resolved.read_bytes()
+
+
+def source_records_are_canonical(data: bytes) -> bool:
+    if (
+        not data
+        or not data.endswith(b"\n")
+        or b"\r" in data
+        or b"\0" in data
+    ):
+        return False
+    try:
+        lines = data[:-1].decode("ascii", errors="strict").split("\n")
+    except UnicodeDecodeError:
+        return False
+    if any(not line for line in lines):
+        return False
+    records = [parse_record(line) for line in lines]
+    return not any(record is None for record in records)
+
+
+def source_has_unique_exact_field(data: bytes, key: str, value: str) -> bool:
+    if (
+        not data
+        or not data.endswith(b"\n")
+        or b"\r" in data
+        or b"\0" in data
+        or not key
+        or not value
+    ):
+        return False
+    try:
+        lines = data[:-1].decode("ascii", errors="strict").split("\n")
+    except UnicodeDecodeError:
+        return False
+    if any(not line for line in lines):
+        return False
+    values = [
+        field.split("=", 1)[1]
+        for line in lines
+        for field in line.split(";")
+        if "=" in field and field.split("=", 1)[0] == key
+    ]
+    return values == [value]
+
+
+def validate_mainflow_runtime_evidence(
+    state_dir: Path,
+) -> tuple[dict[str, object], list[str]]:
+    data = _read_bound_state_source(state_dir, "rp_agentos_mainflow")
+    empty_summary: dict[str, object] = {
+        "verification_origin": "host_inventory",
+        "stages": 0,
+        "assertions_executed": 0,
+        "assertions_passed": 0,
+        "telemetry_source": "rp_agentos_mainflow",
+        "telemetry_bytes": 0,
+        "telemetry_hash": None,
+        "telemetry_sequence": [],
+        "sources": [],
+        "verified": False,
+    }
+    if data is None:
+        return empty_summary, [
+            "mainflow host verification: rp_agentos_mainflow is missing or unsafe"
+        ]
+    errors: list[str] = []
+    try:
+        telemetry_records = parse_canonical_mainflow_telemetry(
+            data, label="mainflow host verification: telemetry"
+        )
+    except ValueError as error:
+        errors.append(str(error))
+        telemetry_records = ()
+    found_stages = tuple(record["stage"] for record in telemetry_records)
+    telemetry_by_stage = {stage: True for stage in found_stages}
+
+    assertions_executed = 0
+    assertions_passed = 0
+    verified_stages = 0
+    derived_sources: list[dict[str, object]] = []
+    for spec in MAINFLOW_RUNTIME_SPECS:
+        source_data = _read_bound_state_source(state_dir, spec.source)
+        assertions_executed += 2
+        claim_verified = False
+        status_verified = False
+        telemetry_verified = telemetry_by_stage.get(spec.stage, False)
+        if source_data is None:
+            errors.append(
+                f"mainflow host verification: stage {spec.stage} source is missing or unsafe"
+            )
+            source_bytes = 0
+            source_hash = None
+        else:
+            source_bytes = len(source_data)
+            source_hash = fnv1a64(source_data)
+            source_canonical = source_records_are_canonical(source_data)
+            claim_verified = source_has_unique_exact_field(
+                source_data, spec.claim_key, spec.claim_value
+            )
+            status_verified = source_has_unique_exact_field(
+                source_data, "status", spec.source_status
+            )
+            assertions_passed += int(claim_verified) + int(status_verified)
+            if not claim_verified:
+                errors.append(
+                    f"mainflow host verification: stage {spec.stage} exact-field assertion failed"
+                )
+            if not status_verified:
+                errors.append(
+                    f"mainflow host verification: stage {spec.stage} source-status assertion failed"
+                )
+            if not source_canonical:
+                errors.append(
+                    f"mainflow host verification: stage {spec.stage} source records are not canonical"
+                )
+            if (
+                source_canonical
+                and claim_verified
+                and status_verified
+                and telemetry_verified
+            ):
+                verified_stages += 1
+        derived_sources.append(
+            {
+                "stage": spec.stage,
+                "source": spec.source,
+                "claim_key": spec.claim_key,
+                "claim_value": spec.claim_value,
+                "source_status": spec.source_status,
+                "source_bytes": source_bytes,
+                "source_hash": source_hash,
+                "claim_verified": claim_verified,
+                "status_verified": status_verified,
+                "telemetry_fields": [
+                    {"key": key, "value": value}
+                    for key, value in spec.telemetry_fields
+                ],
+                "telemetry_verified": telemetry_verified,
+            }
+        )
+
+    summary: dict[str, object] = {
+        "verification_origin": "host_inventory",
+        "stages": verified_stages,
+        "assertions_executed": assertions_executed,
+        "assertions_passed": assertions_passed,
+        "telemetry_source": "rp_agentos_mainflow",
+        "telemetry_bytes": len(data),
+        "telemetry_hash": fnv1a64(data),
+        "telemetry_sequence": list(found_stages),
+        "sources": derived_sources,
+        "verified": not errors,
+    }
+    return summary, errors
+
+
 
 
 def read_reader_text(root: Path) -> str:
@@ -756,6 +1130,9 @@ def run_check(
     require_host: bool,
     plain_state_dir: Path | None = None,
     agentos_state_dir: Path | None = None,
+    plain_profile: str = "standard",
+    plain_log: Path | None = None,
+    agentos_log: Path | None = None,
 ) -> dict[str, object]:
     if not host_dir.exists():
         if require_host:
@@ -780,13 +1157,24 @@ def run_check(
     runtime_manifest_errors: list[str] = []
     program_inventory: dict[str, object] = {}
     program_inventory_errors: list[str] = []
+    mainflow_runtime: dict[str, object] = {}
+    mainflow_runtime_errors: list[str] = []
     if check_runtime_state:
         _, runtime_manifest_errors = read_runtime_manifest(agentos_state_dir)
         failures.extend(f"AgentOS runtime manifest: {error}" for error in runtime_manifest_errors)
         program_inventory, program_inventory_errors = validate_program_inventory(
-            root, plain_state_dir, agentos_state_dir
+            root,
+            plain_state_dir,
+            agentos_state_dir,
+            plain_profile,
+            plain_log,
+            agentos_log,
         )
         failures.extend(f"program inventory: {error}" for error in program_inventory_errors)
+        mainflow_runtime, mainflow_runtime_errors = (
+            validate_mainflow_runtime_evidence(agentos_state_dir)
+        )
+        failures.extend(mainflow_runtime_errors)
 
     for group in CAPABILITY_GROUPS:
         missing_host = missing_items(group.host_modules, host_modules)
@@ -877,8 +1265,27 @@ def run_check(
         "runtime_state_checked": check_runtime_state,
         "runtime_evidence_verified": check_runtime_state
         and not runtime_manifest_errors
-        and not program_inventory_errors,
+        and not program_inventory_errors
+        and not mainflow_runtime_errors,
         "program_inventory_verified": check_runtime_state and not program_inventory_errors,
+        "mainflow_host_verified": check_runtime_state and not mainflow_runtime_errors,
+        "mainflow_verification_origin": mainflow_runtime.get("verification_origin"),
+        "mainflow_host_stages": mainflow_runtime.get("stages"),
+        "mainflow_host_assertions_executed": mainflow_runtime.get(
+            "assertions_executed"
+        ),
+        "mainflow_host_assertions_passed": mainflow_runtime.get(
+            "assertions_passed"
+        ),
+        "mainflow_host_telemetry_source": mainflow_runtime.get(
+            "telemetry_source"
+        ),
+        "mainflow_host_telemetry_bytes": mainflow_runtime.get("telemetry_bytes"),
+        "mainflow_host_telemetry_hash": mainflow_runtime.get("telemetry_hash"),
+        "mainflow_host_telemetry_sequence": mainflow_runtime.get(
+            "telemetry_sequence"
+        ),
+        "mainflow_host_sources": mainflow_runtime.get("sources"),
         "plain_programs_observed": program_inventory.get("plain_programs_observed"),
         "agentos_programs_observed": program_inventory.get("agentos_programs_observed"),
         "plain_evidence_role": "demo_reference",
@@ -895,13 +1302,27 @@ def main() -> int:
     parser.add_argument("--host-dir", type=Path, default=None)
     parser.add_argument("--plain-state-dir", type=Path, default=None)
     parser.add_argument("--agentos-state-dir", type=Path, default=None)
+    parser.add_argument(
+        "--plain-profile", choices=tuple(PLAIN_PROGRAM_PROFILES), default="standard"
+    )
+    parser.add_argument("--plain-log", type=Path, default=None)
+    parser.add_argument("--agentos-log", type=Path, default=None)
     parser.add_argument("--json-out", type=Path, default=None)
     parser.add_argument("--require-host", action="store_true")
     args = parser.parse_args()
 
     root = repo_root()
     host_dir = args.host_dir or default_host_dir(root)
-    summary = run_check(root, host_dir, args.require_host, args.plain_state_dir, args.agentos_state_dir)
+    summary = run_check(
+        root,
+        host_dir,
+        args.require_host,
+        args.plain_state_dir,
+        args.agentos_state_dir,
+        args.plain_profile,
+        args.plain_log,
+        args.agentos_log,
+    )
 
     if args.json_out:
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
@@ -920,6 +1341,7 @@ def main() -> int:
         f"agentos_sources={summary['agentos_sources']} "
         f"runtime_state_checked={int(bool(summary['runtime_state_checked']))} "
         f"runtime_evidence_verified={int(bool(summary['runtime_evidence_verified']))} "
+        f"mainflow_host_verified={int(bool(summary['mainflow_host_verified']))} "
         f"plain_evidence_role={summary['plain_evidence_role']} "
         f"groups_ok={summary['groups_ok']} "
         f"groups_total={summary['groups_total']} "

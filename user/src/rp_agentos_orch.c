@@ -155,7 +155,7 @@ static int verify_kernel_dependency_path(void)
 		return -1;
 	}
 	if (!rp_append_file("rp_agentos_mainflow",
-			    "stage=entry_dependency;dependency_graph=kernel_records;metadata_query=stage_index;prefetch_hint=dependency_driven;status=ready")) {
+			    "stage=entry_dependency;dependency_graph=kernel_records;status=ready")) {
 		return -1;
 	}
 	if (!rp_append_file("rp_tool", "tool=agentos.dependency_update"))
@@ -231,17 +231,9 @@ static int run_research_orchestrator(void)
 		return 1;
 	}
 	if (!rp_write_file("rp_agentos_mainflow",
-			   "flow=RUN-042\n"
-			   "entry=rp_agentos_orch\n"
-			   "kernel_agent=orchestrator\n"
-			   "same_research_flow=rp_orch\n"
-			   "plain_baseline=user_state_files\n"
-			   "agentos_target=kernel_services_in_mainflow\n"
-			   "status=started\n")) {
+			   "stage=entry;context_trusted=kernel_shadow;status=ready\n")) {
 		return 1;
 	}
-	if (!rp_append_file("rp_agentos_mainflow",
-			    "stage=entry;context_trusted=kernel_shadow;timeline_records=observed;provenance_edges=observed;ledger_hash=observed;status=ready")) return 1;
 	if (!rp_append_status("agentos_kernel=ready")) return 1;
 	if (!rp_append_file("rp_tool", "tool=agentos.agent_run.echo")) return 1;
 	if (!rp_append_file("rp_tool", "tool=agentos.context_snapshot")) return 1;

@@ -97,6 +97,44 @@ static void query_physical(const char *name)
 	      "physical metadata identity");
 }
 
+static void check_dirent_name_boundary(void)
+{
+	const char *canonical = "nmlimit1234567";
+	const char *long_name = "nmlimit1234567x";
+	const char *same_alias = "nmlimit1234567y";
+	char body[3] = {0};
+	int fd;
+
+	check(strlen(canonical) == 14 && strlen(long_name) == 15,
+	      "dirent name boundary fixture");
+	fd = open(long_name, O_CREATE | O_RDWR | O_TRUNC);
+	check(fd >= 0, "create canonical long-name alias");
+	check(write(fd, "A", 1) == 1 && write(fd, "B", 1) == 1,
+	      "append through long-name create");
+	check(close(fd) == 0, "close long-name create");
+	fd = open(same_alias, O_RDONLY);
+	check(fd >= 0 && read(fd, body, 2) == 2 && strcmp(body, "AB") == 0,
+	      "same prefix reopens one legacy alias");
+	check(close(fd) == 0, "close long-name reopen");
+	query_physical(canonical);
+	check(agent_file_meta_init() == AGENT_STATUS_OK,
+	      "canonical metadata reload");
+	query_physical(canonical);
+	check(unlink(same_alias) == 0, "remove canonical long-name alias");
+	memset(&fs_query, 0, sizeof(fs_query));
+	fs_query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(fs_query.physical_name, canonical);
+	memset(&fs_result, 0, sizeof(fs_result));
+	check(agent_file_query(&fs_query, &fs_result) == 0,
+	      "canonical metadata delete");
+	check(agent_file_meta_init() == AGENT_STATUS_OK,
+	      "metadata reload after canonical delete");
+	memset(&fs_result, 0, sizeof(fs_result));
+	check(agent_file_query(&fs_query, &fs_result) == 0,
+	      "canonical metadata delete remains durable");
+	printf("agentfs_ucore: dirent_name_bound=14 legacy_alias=1 metadata_canonical=1\n");
+}
+
 static void check_preload_create_query(void)
 {
 	const char *name = PRELOAD_QUERY_FILE;
@@ -968,6 +1006,7 @@ static void run_agent(void)
 	make_file(PRELOAD_PARTIAL_FILE);
 	check_partial_update_binding();
 	check_preload_create_query();
+	check_dirent_name_boundary();
 	seed_demo_metadata();
 	check_selector_consistency();
 	check_same_name_recreate_persist();
@@ -1084,7 +1123,7 @@ int main(void)
 	pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
 	check(pid >= 0, "create orchestrator");
 	if (pid == 0)
-		run_agent();
+		 run_agent();
 	check(waitpid(pid, &status) == pid, "wait child");
 	check(status == 0, "child status");
 	printf("agentfs_ucore: parent passed\n");

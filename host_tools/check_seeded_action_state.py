@@ -600,7 +600,7 @@ def require_contains(failures: list[str], label: str, state_dir: Path, name: str
 
 def validate_seed_package(label: str, run_dir: Path) -> list[str]:
     failures: list[str] = []
-    state_dir = run_dir / "state-next"
+    state_dir = run_dir / "host-input"
     for kind in seeded_action_kinds():
         require_contains(failures, label, state_dir, "rp_host_action_seed", f"kind={kind}")
     require_contains(failures, label, state_dir, "rp_host_action_seed", "run_id=RUN-999-rerun")
@@ -611,6 +611,8 @@ def validate_seed_package(label: str, run_dir: Path) -> list[str]:
     require_contains(failures, label, state_dir, "rp_host_action_seed", "request_id=host-q1")
     require_contains(failures, label, state_dir, "rp_host_action_seed", "response_id=host-r1")
     require_contains(failures, label, state_dir, "rp_host_action_seed", "compare_profile=compare-profile:host-nextflow:migration")
+    if (run_dir / "state-next" / "rp_host_action_seed").exists():
+        failures.append(f"{label}: Host action seed leaked into Guest output state")
     return failures
 
 
@@ -691,10 +693,17 @@ def run_target(
     init_proc: str,
     pass_marker: str,
 ) -> dict[str, object]:
+    if work_dir.is_symlink():
+        raise ValueError(f"seeded action work directory is a symlink: {work_dir}")
+    work_dir.mkdir(parents=True, exist_ok=True)
     run_dir = work_dir / label
-    state_dir = run_dir / "state-current"
+    state_dir = work_dir / f".{label}-state-current"
+    if run_dir.is_symlink() or state_dir.is_symlink():
+        raise ValueError(f"seeded action target path is a symlink: {label}")
     if run_dir.exists():
         shutil.rmtree(run_dir)
+    if state_dir.exists():
+        shutil.rmtree(state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
 
     print(
@@ -710,6 +719,7 @@ def run_target(
         chapter=chapter,
         init_proc=init_proc,
         pass_marker=pass_marker,
+        target_identity=label,
     )
     failures = validate_seed_package(label, run_dir) + validate_extracted_state(label, run_dir)
     if not run_summary.get("passed"):

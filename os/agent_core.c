@@ -553,11 +553,6 @@ fail:
 	return -1;
 }
 
-int agent_make(struct proc *p)
-{
-	return agent_make_role(p, AGENT_ROLE_SENTINEL);
-}
-
 static void agent_info_fill(struct proc *p, struct agent_info *info)
 {
 	memset(info, 0, sizeof(*info));

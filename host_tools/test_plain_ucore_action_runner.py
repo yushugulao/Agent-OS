@@ -20,6 +20,26 @@ def read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def symlinks_available(root: Path) -> bool:
+    target_dir = root / ".symlink-target-dir"
+    target_file = root / ".symlink-target-file"
+    directory_link = root / ".symlink-directory-link"
+    file_link = root / ".symlink-file-link"
+    target_dir.mkdir()
+    target_file.write_text("target\n", encoding="utf-8")
+    try:
+        directory_link.symlink_to(target_dir, target_is_directory=True)
+        file_link.symlink_to(target_file)
+    except (NotImplementedError, OSError):
+        return False
+    finally:
+        directory_link.unlink(missing_ok=True)
+        file_link.unlink(missing_ok=True)
+        target_file.unlink(missing_ok=True)
+        target_dir.rmdir()
+    return True
+
+
 def main() -> int:
     original_toolprefix = os.environ.get("TOOLPREFIX")
     try:
@@ -43,8 +63,126 @@ def main() -> int:
             assert busy["failure_phase"] == "coordination"
             assert busy["failure_reason"] == "repo_busy"
             assert busy["commands"] == []
+            busy_receipt = read(root / "busy-run" / "state-next" / "rp_host_run_result")
+            assert "status=failed" in busy_receipt
+            assert "failure_reason=repo_busy" in busy_receipt
         with runner.exclusive_repo_run_lock(repo):
             pass
+
+        security_state = root / "security-state"
+        security_state.mkdir()
+        (security_state / "rp_input").write_text("status=ready\n", encoding="utf-8")
+        occupied_run = root / "occupied-run"
+        occupied_run.mkdir()
+        occupied_marker = occupied_run / "marker"
+        occupied_marker.write_text("keep\n", encoding="utf-8")
+        try:
+            runner.prepare_action_state([], security_state, occupied_run)
+        except ValueError as error:
+            assert "already exists" in str(error)
+        else:
+            raise AssertionError("preexisting deterministic run directory was reused")
+        assert read(occupied_marker) == "keep\n"
+
+        if symlinks_available(root):
+            planted_target = root / "planted-run-target"
+            planted_target.mkdir()
+            planted_run = root / "planted-run"
+            planted_run.symlink_to(planted_target, target_is_directory=True)
+            try:
+                runner.prepare_action_state([], security_state, planted_run)
+            except ValueError as error:
+                assert "symbolic link" in str(error)
+            else:
+                raise AssertionError("preplanted run-directory symlink was accepted")
+            assert not list(planted_target.iterdir())
+
+            ancestor_target = root / "run-parent-target"
+            ancestor_target.mkdir()
+            ancestor_link = root / "run-parent-link"
+            ancestor_link.symlink_to(ancestor_target, target_is_directory=True)
+            try:
+                runner.prepare_action_state(
+                    [], security_state, ancestor_link / "run-0000"
+                )
+            except ValueError as error:
+                assert "symbolic link" in str(error)
+            else:
+                raise AssertionError("run-directory link ancestor was accepted")
+            assert not list(ancestor_target.iterdir())
+
+            host_input_run = root / "host-input-run"
+            runner.prepare_action_state([], security_state, host_input_run)
+            host_input_target = root / "host-input-target"
+            host_input_target.mkdir()
+            (host_input_run / "host-input").symlink_to(
+                host_input_target, target_is_directory=True
+            )
+            try:
+                runner.run_seeded_ucore(repo, host_input_run, 5, "")
+            except ValueError as error:
+                assert "symbolic link" in str(error)
+            else:
+                raise AssertionError("preplanted host-input symlink was accepted")
+            assert not list(host_input_target.iterdir())
+
+            seed_run = root / "seed-symlink-run"
+            runner.prepare_action_state([], security_state, seed_run)
+            seed_input = runner.create_private_directory(seed_run / "host-input")
+            seed_victim = root / "seed-victim"
+            seed_victim.write_text("do-not-overwrite\n", encoding="utf-8")
+            seed_link = seed_input / "rp_host_action_seed"
+            seed_link.symlink_to(seed_victim)
+            try:
+                runner.write_seed_header(
+                    seed_run / "state-next", repo, seed_link
+                )
+            except ValueError as error:
+                assert "unsafe" in str(error)
+            else:
+                raise AssertionError("preplanted seed symlink was accepted")
+            assert read(seed_victim) == "do-not-overwrite\n"
+
+            header_run = root / "header-symlink-run"
+            runner.prepare_action_state([], security_state, header_run)
+            header_input = runner.create_private_directory(
+                header_run / "host-input"
+            )
+            generated_target = root / "generated-target"
+            generated_target.mkdir()
+            (repo / "user" / "build").mkdir(parents=True)
+            generated_link = repo / "user" / "build" / "generated"
+            generated_link.symlink_to(generated_target, target_is_directory=True)
+            try:
+                runner.write_seed_header(
+                    header_run / "state-next",
+                    repo,
+                    header_input / "rp_host_action_seed",
+                )
+            except ValueError as error:
+                assert "symbolic link" in str(error)
+            else:
+                raise AssertionError("generated-header link ancestor was accepted")
+            assert not list(generated_target.iterdir())
+
+            generated_link.unlink()
+            generated_link.mkdir()
+            header_victim = root / "header-victim"
+            header_victim.write_text("do-not-overwrite\n", encoding="utf-8")
+            header_link = generated_link / "rp_host_action_seed.h"
+            header_link.symlink_to(header_victim)
+            try:
+                runner.write_seed_header(
+                    header_run / "state-next",
+                    repo,
+                    header_input / "rp_host_action_seed",
+                )
+            except ValueError as error:
+                assert "unsafe" in str(error)
+            else:
+                raise AssertionError("preplanted generated-header symlink was accepted")
+            assert read(header_victim) == "do-not-overwrite\n"
+            assert not list(generated_link.glob(".*.tmp"))
 
         build_log = root / "build.log"
         build_code = runner.run_command(
@@ -1376,9 +1514,12 @@ def main() -> int:
         assert runner.action_kind("/actions/research/export-notebook") == "notebook_export"
         assert runner.action_kind("/actions/unknown") == "generic"
 
-        records = runner.write_seed_header(next_state, root)
+        seed_path = run_dir / "host-input" / "rp_host_action_seed"
+        runner.create_private_directory(seed_path.parent)
+        records = runner.write_seed_header(next_state, root, seed_path)
         header = read(root / "user" / "build" / "generated" / "rp_host_action_seed.h")
-        seed_file = read(next_state / "rp_host_action_seed")
+        seed_file = read(seed_path)
+        assert not (next_state / "rp_host_action_seed").exists()
         assert records == expected_actions
         assert "#define RP_HOST_ACTION_SEED" in header
         assert "kind=research_run" in seed_file
@@ -1476,18 +1617,40 @@ def main() -> int:
         assert "action=template_response" in seed_file
         assert "source_text=" not in seed_file
 
+        receipt_state_files, receipt_state_sha256 = (
+            runner.guest_state_inventory_sha256(
+                next_state, excluded_names=runner.HOST_STATE_FILES
+            )
+        )
         runner.write_run_result_state(
             next_state,
             {
                 "passed": True,
+                "target_identity": "plain",
+                "chapter": "platform_seeded",
+                "init_proc": "rp_seed_orch",
                 "embedded_action_records": expected_actions,
+                "extracted_state_files": receipt_state_files,
+                "build_returncode": 0,
+                "guest_returncode": 0,
+                "guest_raw_returncode": 0,
+                "timed_out": False,
+                "runner_terminated": False,
+                "runner_signals": [],
+                "output_eof": True,
                 "log": str(run_dir / "ucore-run.log"),
             },
             f"rp_web_export: host_reader_actions={expected_actions}\nrp_compare_plain: host_actions={expected_actions} verified\nrp_orch: passed\n",
         )
         result_state = read(next_state / "rp_host_run_result")
         assert "passed=1" in result_state
+        result_bytes = (next_state / "rp_host_run_result").read_bytes()
+        assert result_bytes.endswith(b"\n") and b"\r" not in result_bytes
+        assert "target=plain" in result_state
         assert f"embedded_action_records={expected_actions}" in result_state
+        assert f"guest_state_files={receipt_state_files}" in result_state
+        assert f"guest_state_sha256={receipt_state_sha256}" in result_state
+        assert "guest_state_receipt_schema=sha256-inventory-v1" in result_state
         assert f"qemu_rp_web_export: host_reader_actions={expected_actions}" in result_state
         assert f"qemu_rp_compare_plain: host_actions={expected_actions} verified" in result_state
         assert "qemu_orch_passed=1" in result_state
@@ -1536,9 +1699,111 @@ def main() -> int:
         assert "qemu_orch_passed=1" not in malformed_passed_result
 
         publish_dir = root / "published"
-        runner.publish_next_state(next_state, publish_dir)
-        assert (publish_dir / "rp_host_run_result").exists()
-        assert (publish_dir / "rp_host_action_inbox").exists()
+        rejected_receipt = root / "rejected-host-run-result.state"
+        try:
+            runner.publish_next_state(next_state, publish_dir, rejected_receipt)
+        except ValueError as error:
+            assert "Host-only state" in str(error)
+        else:
+            raise AssertionError("Host action input was published as Guest output")
+        assert not rejected_receipt.exists()
+
+        guest_next = root / "guest-next"
+        runner.clean_copy_state(state_dir, guest_next)
+        (guest_next / "rp_host_run_result").write_bytes(
+            (next_state / "rp_host_run_result").read_bytes()
+        )
+        assert not (guest_next / "rp_host_action_inbox").exists()
+        runner.publish_next_state(guest_next, publish_dir)
+        assert not (publish_dir / "rp_host_run_result").exists()
+        assert (publish_dir / "rp_input").exists()
+        assert not (publish_dir / "rp_host_action_inbox").exists()
+        receipt_sidecar = root / "published-host-run-result.state"
+        runner.publish_next_state(guest_next, publish_dir, receipt_sidecar)
+        assert receipt_sidecar.read_bytes() == (guest_next / "rp_host_run_result").read_bytes()
+        try:
+            runner.publish_next_state(
+                guest_next, publish_dir, publish_dir / "rp_host_run_result"
+            )
+        except ValueError as error:
+            assert "outside Guest state" in str(error)
+        else:
+            raise AssertionError("Host receipt was published into Guest state")
+        missing_next = root / "missing-receipt-next"
+        missing_next.mkdir()
+        (missing_next / "rp_state").write_text("status=ready\n", encoding="utf-8")
+        receipt_sidecar.write_text(
+            "status=ready\nqemu_orch_passed=1\n", encoding="utf-8"
+        )
+        try:
+            runner.publish_next_state(missing_next, publish_dir, receipt_sidecar)
+        except ValueError as error:
+            assert "source is missing or unsafe" in str(error)
+        else:
+            raise AssertionError("missing Host receipt source was accepted")
+        assert not receipt_sidecar.exists()
+        failing_next = root / "failing-publish-next"
+        failing_next.mkdir()
+        (failing_next / "rp_state").write_text("status=ready\n", encoding="utf-8")
+        (failing_next / "rp_host_run_result").write_text(
+            "status=ready\nqemu_orch_passed=1\n", encoding="utf-8"
+        )
+        receipt_sidecar.write_text(
+            "status=ready\nqemu_orch_passed=1\n", encoding="utf-8"
+        )
+        original_copy2 = runner.shutil.copy2
+
+        def failing_copy(source: Path, destination: Path) -> None:
+            if Path(source).name == "rp_state":
+                raise OSError("fixture publish failure")
+            original_copy2(source, destination)
+
+        runner.shutil.copy2 = failing_copy
+        try:
+            runner.publish_next_state(failing_next, publish_dir, receipt_sidecar)
+        except OSError as error:
+            assert "fixture publish failure" in str(error)
+        else:
+            raise AssertionError("partial Guest state publish exposed a ready receipt")
+        finally:
+            runner.shutil.copy2 = original_copy2
+        assert not receipt_sidecar.exists()
+
+        transactional_state = root / "transactional-state"
+        transactional_state.mkdir()
+        (transactional_state / "rp_a").write_text("value=old-a\n", encoding="utf-8")
+        (transactional_state / "rp_b").write_text("value=old-b\n", encoding="utf-8")
+        transactional_next = root / "transactional-next"
+        transactional_next.mkdir()
+        (transactional_next / "rp_a").write_text("value=new-a\n", encoding="utf-8")
+        (transactional_next / "rp_b").write_text("value=new-b\n", encoding="utf-8")
+        (transactional_next / "rp_host_run_result").write_text(
+            "status=ready\nqemu_orch_passed=1\n", encoding="utf-8"
+        )
+        transactional_receipt = root / "transactional-receipt.state"
+        original_replace_path = runner.replace_path
+
+        def fail_second_install(source: Path, destination: Path) -> None:
+            if destination.name == "rp_b" and source.suffix == ".tmp":
+                raise OSError("fixture commit failure")
+            original_replace_path(source, destination)
+
+        runner.replace_path = fail_second_install
+        try:
+            runner.publish_next_state(
+                transactional_next, transactional_state, transactional_receipt
+            )
+        except OSError as error:
+            assert "fixture commit failure" in str(error)
+        else:
+            raise AssertionError("partial Guest state commit was accepted")
+        finally:
+            runner.replace_path = original_replace_path
+        assert read(transactional_state / "rp_a") == "value=old-a\n"
+        assert read(transactional_state / "rp_b") == "value=old-b\n"
+        assert not transactional_receipt.exists()
+        assert not list(transactional_state.glob(".*.tmp"))
+        assert not list(transactional_state.glob(".*.bak"))
 
     repo_root = Path(__file__).resolve().parents[1]
     ci = validate_repository_ci(

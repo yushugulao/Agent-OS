@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation and arithmetic tests for fixed catalog partitions and scans."""
+"""Mutation and model tests for catalog reserves and durable deferral."""
 
 from __future__ import annotations
 
@@ -16,6 +16,12 @@ SPEC = importlib.util.spec_from_file_location(
 assert SPEC and SPEC.loader
 CONTRACT = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CONTRACT)
+
+CATALOG_SCOPE_LIMIT = 112
+AUTOSCAN_SCOPE_LIMIT = 96
+EXPLICIT_RESERVE = 16
+WORKFLOW_INODE_DOMAIN_LIMIT = 320
+DEFERRED_META_SLOT = -1
 
 
 def mutate(sources: dict[str, str], name: str, old: str, new: str) -> dict[str, str]:
@@ -43,21 +49,33 @@ def storage_guarantee_required(
     return required + max(4 - len(retained), 0) * guarantee
 
 
-def workflow_inode_allocation_allowed(owned: int) -> bool:
-    return owned < 112
+def workflow_inode_allocation_allowed(
+    owned: int, domain_limit: int = WORKFLOW_INODE_DOMAIN_LIMIT,
+) -> bool:
+    return owned < domain_limit
 
 
-def catalog_slot_allowed(system: bool, owned: int, ordinary: int) -> bool:
+def catalog_slot_allowed(
+    system: bool, owned: int, ordinary: int, *, old_autoscan: bool = False,
+    new_autoscan: bool = False, autoscan_owned: int = 0,
+) -> bool:
     if system:
         return owned < 64 and owned + ordinary < 512
-    return owned < 112 and ordinary < 448
+    if owned >= CATALOG_SCOPE_LIMIT or ordinary >= 448:
+        return False
+    return not (new_autoscan and not old_autoscan and
+                autoscan_owned >= AUTOSCAN_SCOPE_LIMIT)
 
 
 def catalog_admission_allowed(
     system: bool, owned: int, ordinary: int, *, growth: bool,
-    lifecycle_admitted: bool,
+    lifecycle_admitted: bool, old_autoscan: bool = False,
+    new_autoscan: bool = False, autoscan_owned: int = 0,
 ) -> bool:
-    if not catalog_slot_allowed(system, owned, ordinary):
+    if not catalog_slot_allowed(
+        system, owned, ordinary, old_autoscan=old_autoscan,
+        new_autoscan=new_autoscan, autoscan_owned=autoscan_owned,
+    ):
         return False
     if not growth or system:
         return True
@@ -71,6 +89,32 @@ def catalog_workflow_allocation_allowed(
         False, records.get(target, 0), sum(records.values()), growth=True,
         lifecycle_admitted=target in live_scopes,
     )
+
+
+def defer_sidecar(sidecar_slot: int, stale_validated: bool) -> tuple[bool, int]:
+    if sidecar_slot > 0 and not stale_validated:
+        return False, sidecar_slot
+    return True, DEFERRED_META_SLOT
+
+
+def deferred_scan_state(scan_on: bool, autoscan_owned: int) -> str:
+    if not scan_on:
+        return "stranded"
+    if autoscan_owned >= AUTOSCAN_SCOPE_LIMIT:
+        return "deferred"
+    return "indexed"
+
+
+def boot_reconcile_deferred_sidecar(
+    snapshot_status: str, catalog_used: int, sidecar_slot: int,
+) -> tuple[str, int, int]:
+    if snapshot_status != "trusted-complete":
+        return "fail-closed", catalog_used, sidecar_slot
+    if sidecar_slot != DEFERRED_META_SLOT:
+        return "scan-complete", catalog_used, sidecar_slot
+    if catalog_used >= AUTOSCAN_SCOPE_LIMIT:
+        return "deferred", catalog_used, sidecar_slot
+    return "indexed", catalog_used + 1, catalog_used + 1
 
 
 def stale_sweep(records: list[tuple[int, bool]], failed: set[int],
@@ -103,6 +147,42 @@ def scoped_reload_plan_allowed(
         return False
     ordinary = sum(records.values())
     return ordinary <= 448
+
+
+def cold_boot_snapshot_status(
+    records: list[tuple[str, bool]], live_scopes: set[str],
+) -> tuple[str, int]:
+    counts: dict[str, int] = {}
+    discarded = 0
+    for scope, _is_autoscan in records:
+        if scope not in live_scopes:
+            discarded += 1
+            continue
+        counts[scope] = counts.get(scope, 0) + 1
+        if counts[scope] > CATALOG_SCOPE_LIMIT:
+            return "corrupt", discarded
+    return "ok", discarded
+
+
+def catalog_flag_transaction(
+    records: list[bool], index: int, new_autoscan: bool, persist: bool,
+) -> tuple[list[bool], str]:
+    before = list(records)
+    old_autoscan = records[index]
+    autoscan_owned = sum(records) - int(old_autoscan)
+    if not catalog_admission_allowed(
+        False, len(records) - 1, len(records) - 1, growth=False,
+        lifecycle_admitted=False, old_autoscan=old_autoscan,
+        new_autoscan=new_autoscan, autoscan_owned=autoscan_owned,
+    ):
+        return before, "rejected"
+    records[index] = new_autoscan
+    if persist:
+        return records, "committed"
+    # Receipt-authorized undo applies the old image against hard bounds only.
+    if not catalog_slot_allowed(False, len(records) - 1, len(records) - 1):
+        raise AssertionError("hard rollback admission failed")
+    return before, "rolled_back"
 
 
 def classify_identity(scope: str, autoscan: bool,
@@ -281,6 +361,32 @@ class CatalogCapacityContractTests(unittest.TestCase):
         self.assertFalse(catalog_admission_allowed(
             False, 111, 447, growth=True, lifecycle_admitted=False))
 
+    def test_autoscan_cache_preserves_sixteen_explicit_slots(self) -> None:
+        self.assertEqual(AUTOSCAN_SCOPE_LIMIT + EXPLICIT_RESERVE,
+                         CATALOG_SCOPE_LIMIT)
+        self.assertTrue(catalog_admission_allowed(
+            False, 95, 95, growth=True, lifecycle_admitted=True,
+            new_autoscan=True, autoscan_owned=95))
+        self.assertFalse(catalog_admission_allowed(
+            False, 96, 96, growth=True, lifecycle_admitted=True,
+            new_autoscan=True, autoscan_owned=96))
+        # Only a transition into AUTOSCAN consumes the new-growth reserve.
+        self.assertFalse(catalog_admission_allowed(
+            False, 96, 96, growth=False, lifecycle_admitted=False,
+            new_autoscan=True, autoscan_owned=96))
+        self.assertTrue(catalog_admission_allowed(
+            False, 111, 111, growth=False, lifecycle_admitted=False,
+            old_autoscan=True, new_autoscan=True, autoscan_owned=111))
+        self.assertTrue(catalog_admission_allowed(
+            False, 111, 111, growth=False, lifecycle_admitted=False,
+            old_autoscan=True, new_autoscan=False, autoscan_owned=111))
+        self.assertTrue(catalog_admission_allowed(
+            False, 111, 111, growth=True, lifecycle_admitted=True,
+            new_autoscan=False, autoscan_owned=96))
+        self.assertFalse(catalog_admission_allowed(
+            False, 112, 112, growth=True, lifecycle_admitted=True,
+            new_autoscan=False, autoscan_owned=96))
+
     def test_reload_binds_lifecycle_and_fixed_partitions(self) -> None:
         # Full boot must be able to load bounded retiring history so the reaper
         # can observe and release it.
@@ -292,6 +398,52 @@ class CatalogCapacityContractTests(unittest.TestCase):
             {"a": 112, "b": 112}, {"a", "b"}, "a"))
         self.assertFalse(scoped_reload_plan_allowed(
             {"retiring": 112}, set(), "retiring"))
+        # Disk compatibility is bounded by the v7 representation, not today's
+        # stricter AUTOSCAN growth policy.
+        self.assertTrue(scoped_reload_plan_allowed(
+            {"a": 112}, {"a"}, "a"))
+
+    def test_cold_boot_preserves_legacy_autoscan_within_hard_bound(self) -> None:
+        old = [("old", True)] * CATALOG_SCOPE_LIMIT
+        self.assertEqual(cold_boot_snapshot_status(old, set()),
+                         ("ok", CATALOG_SCOPE_LIMIT))
+        self.assertEqual(cold_boot_snapshot_status(old, {"old"}),
+                         ("ok", 0))
+        self.assertEqual(cold_boot_snapshot_status(
+            old + [("old", True)], {"old"}), ("corrupt", 0))
+
+    def test_loaded_overquota_scope_can_only_reduce_autoscan(self) -> None:
+        records = [True] * CATALOG_SCOPE_LIMIT
+        records, status = catalog_flag_transaction(records, 0, True, True)
+        self.assertEqual((sum(records), status), (112, "committed"))
+        records, status = catalog_flag_transaction(records, 0, False, True)
+        self.assertEqual((sum(records), status), (111, "committed"))
+        records, status = catalog_flag_transaction(records, 0, True, True)
+        self.assertEqual((sum(records), status), (111, "rejected"))
+        for index in range(1, 17):
+            records, status = catalog_flag_transaction(
+                records, index, False, True)
+            self.assertEqual(status, "committed")
+        self.assertEqual(sum(records), 95)
+        records, status = catalog_flag_transaction(records, 0, True, True)
+        self.assertEqual((sum(records), status), (96, "committed"))
+        shrinking = [True] * CATALOG_SCOPE_LIMIT
+        del shrinking[:16]
+        self.assertFalse(catalog_admission_allowed(
+            False, len(shrinking), len(shrinking), growth=True,
+            lifecycle_admitted=True, new_autoscan=True,
+            autoscan_owned=sum(shrinking)))
+        shrinking.pop()
+        self.assertTrue(catalog_admission_allowed(
+            False, len(shrinking), len(shrinking), growth=True,
+            lifecycle_admitted=True, new_autoscan=True,
+            autoscan_owned=sum(shrinking)))
+
+    def test_failed_overquota_reduction_restores_exact_prestate(self) -> None:
+        records = [True] * CATALOG_SCOPE_LIMIT
+        restored, status = catalog_flag_transaction(records, 0, False, False)
+        self.assertEqual(status, "rolled_back")
+        self.assertEqual(restored, [True] * CATALOG_SCOPE_LIMIT)
 
     def test_fid_bitmap_covers_the_inclusive_boundary(self) -> None:
         bitmap = bytearray((512 + 7) // 8)
@@ -301,11 +453,34 @@ class CatalogCapacityContractTests(unittest.TestCase):
             self.assertTrue(bitmap[(fid - 1) // 8] &
                             (1 << ((fid - 1) % 8)))
 
-    def test_inode_account_uses_the_same_fixed_scope_limit(self) -> None:
+    def test_inode_account_is_independent_of_catalog_capacity(self) -> None:
         self.assertTrue(workflow_inode_allocation_allowed(111))
-        self.assertFalse(workflow_inode_allocation_allowed(112))
+        self.assertTrue(workflow_inode_allocation_allowed(112))
+        self.assertTrue(workflow_inode_allocation_allowed(319))
+        self.assertFalse(workflow_inode_allocation_allowed(320))
+        self.assertTrue(workflow_inode_allocation_allowed(0, domain_limit=1))
+        self.assertFalse(workflow_inode_allocation_allowed(1, domain_limit=1))
         # Peer usage is deliberately irrelevant to this account-local bound.
         self.assertTrue(workflow_inode_allocation_allowed(0))
+
+    def test_full_catalog_defers_index_without_rejecting_vfs_create(self) -> None:
+        created = workflow_inode_allocation_allowed(112)
+        indexed = catalog_admission_allowed(
+            False, 112, 112, growth=True, lifecycle_admitted=True,
+            new_autoscan=True, autoscan_owned=96)
+        self.assertEqual((created, indexed), (True, False))
+        self.assertEqual(defer_sidecar(0, False),
+                         (True, DEFERRED_META_SLOT))
+
+    def test_successful_deferral_keeps_reindex_progress_live(self) -> None:
+        self.assertEqual(deferred_scan_state(False, 96), "stranded")
+        self.assertEqual(deferred_scan_state(True, 96), "deferred")
+        self.assertEqual(deferred_scan_state(True, 95), "indexed")
+
+    def test_only_validated_stale_positive_sidecars_can_be_deferred(self) -> None:
+        self.assertEqual(defer_sidecar(7, False), (False, 7))
+        self.assertEqual(defer_sidecar(7, True),
+                         (True, DEFERRED_META_SLOT))
 
     def test_failed_scope_isolated_from_stale_sweep(self) -> None:
         records = [(3, False), (4, False), (5, True)]
@@ -389,6 +564,16 @@ class CatalogCapacityContractTests(unittest.TestCase):
         self.assertEqual(reconcile_sweep(records, {3}, False), [2])
         self.assertEqual(reconcile_sweep(records, set(), True), [])
 
+    def test_empty_snapshot_reconciles_persistent_deferred_sidecar(self) -> None:
+        self.assertEqual(
+            boot_reconcile_deferred_sidecar("trusted-complete", 0, -1),
+            ("indexed", 1, 1),
+        )
+        self.assertEqual(
+            boot_reconcile_deferred_sidecar("corrupt", 0, -1),
+            ("fail-closed", 0, -1),
+        )
+
     def test_pending_is_the_only_global_admission_barrier(self) -> None:
         self.assertFalse(any(state == "pending" for state in
                              ("ready", "quarantine")))
@@ -445,10 +630,21 @@ class CatalogCapacityContractTests(unittest.TestCase):
              "agent_catalog_files[AGENT_FILE_META_MAX + 64]"),
             ("catalog_h", "#define AGENT_CATALOG_SCOPE_PLAN_MAX 8",
              "#define AGENT_CATALOG_SCOPE_PLAN_MAX 4"),
+            ("catalog_h", "#define AGENT_FILE_EXPLICIT_RESERVE 16",
+             "#define AGENT_FILE_EXPLICIT_RESERVE 8"),
             ("agent", "#define AGENT_FILE_SCOPE_LIMIT    112",
              "#define AGENT_FILE_SCOPE_LIMIT    448"),
-            ("catalog", "result.ordinary >= AGENT_FILE_ORDINARY_LIMIT",
-             "result.ordinary >= AGENT_FILE_META_MAX"),
+            ("catalog", "result->ordinary >= AGENT_FILE_ORDINARY_LIMIT",
+             "result->ordinary >= AGENT_FILE_META_MAX"),
+            ("catalog",
+             "agent_catalog_files[i].flags & AGENT_FILE_META_F_AUTOSCAN",
+             "agent_catalog_files[i].flags & AGENT_FILE_META_F_PERSIST"),
+            ("catalog",
+             "result.autoscan >= AGENT_FILE_AUTOSCAN_SCOPE_LIMIT",
+             "result.autoscan > AGENT_FILE_AUTOSCAN_SCOPE_LIMIT"),
+            ("catalog", "if (result->owned >= limit ||",
+             "if (result->autoscan >= AGENT_FILE_AUTOSCAN_SCOPE_LIMIT ||\n"
+             "\t    result->owned >= limit ||"),
             ("catalog", "static struct agent_file_meta agent_catalog_files",
              "/* RESOURCE_AGENT_CATALOG */\n"
              "static struct agent_file_meta agent_catalog_files"),
@@ -490,12 +686,20 @@ class CatalogCapacityContractTests(unittest.TestCase):
              "if (0)"),
             ("catalog", "AGENT_FILE_SYSTEM_LIMIT : AGENT_FILE_SCOPE_LIMIT",
              "AGENT_FILE_SYSTEM_LIMIT : AGENT_FILE_META_MAX"),
-            ("catalog", "edit->scope_id, edit->slot, edit->meta, growth)",
-             "edit->scope_id, edit->slot, edit->meta, 0)"),
-            ("catalog", "previous_scope, slot, previous, 0)",
-             "previous_scope, slot, previous, 1)"),
-            ("catalog", "agent_catalog_admission(scope_id, -1, 0, 1)",
-             "agent_catalog_admission(scope_id, -1, 0, 0)"),
+            ("catalog",
+             "growth ? 0 : agent_catalog_files[edit->slot].flags",
+             "0"),
+            ("catalog",
+             "agent_catalog_hard_admission(\n"
+             "\t\t\t    previous_scope, slot, previous, &result)",
+             "agent_catalog_admission(\n"
+             "\t\t\t    previous_scope, slot, previous, 0, 0, 0)"),
+            ("catalog", "agent_catalog_admission(scope_id, -1, 0, 0, flags, 1)",
+             "agent_catalog_admission(scope_id, -1, 0, 0, flags, 0)"),
+            ("catalog", "flags & AGENT_FILE_META_F_AUTOSCAN",
+             "flags & AGENT_FILE_META_F_PERSIST"),
+            ("catalog", "!(old_flags & AGENT_FILE_META_F_AUTOSCAN)",
+             "(old_flags & AGENT_FILE_META_F_AUTOSCAN)"),
             ("catalog_h",
              "uint64 candidate_epoch, catalog_generation, lifecycle_generation;",
              "uint64 candidate_epoch, catalog_generation;"),
@@ -506,11 +710,8 @@ class CatalogCapacityContractTests(unittest.TestCase):
              "key.lifecycle_id = 0;"),
             ("catalog", "key.lifecycle_generation = lifecycle.generation;",
              "key.lifecycle_generation = 0;"),
-            ("catalog", "left->lifecycle_id == right->lifecycle_id",
-             "left->lifecycle_id == left->lifecycle_id"),
-            ("catalog",
-             "left->lifecycle_generation == right->lifecycle_generation",
-             "left->lifecycle_generation == left->lifecycle_generation"),
+            ("catalog", "memcmp(&result->plan_key, &key, sizeof(key)) != 0",
+             "memcmp(&result->plan_key, &result->plan_key, sizeof(key)) != 0"),
             ("catalog",
              "reload_one_scope &&\n\t    !agent_catalog_scope_admissible(reload_scope, &lifecycle)",
              "!agent_catalog_scope_admissible(reload_scope, &lifecycle)"),
@@ -529,8 +730,28 @@ class CatalogCapacityContractTests(unittest.TestCase):
              "strlen(meta->physical_name) >= DIRSIZ"),
             ("catalog", "strlen(meta->physical_name) <= DIRSIZ",
              "strlen(meta->physical_name) < DIRSIZ"),
-            ("fs", "strlen(path) > DIRSIZ",
-             "strlen(path) >= DIRSIZ"),
+            ("fs", "i < DIRSIZ && input[i] != 0",
+             "i <= DIRSIZ && input[i] != 0"),
+            ("fs", "input == 0 || out == 0 || input[0] == 0",
+             "input == 0 || out == 0 || input[0] != 0"),
+            ("fs",
+             "if (fs_dirent_canonicalize(path, key) < 0)\n\t\treturn 0;",
+             "if (0)\n\t\treturn 0;"),
+            ("fs",
+             "fs_dirent_canonicalize(name, key) < 0 || dp == 0 ||\n"
+             "\t    dp->type != T_DIR || policy == 0",
+             "dp == 0 || dp->type != T_DIR || policy == 0"),
+            ("fs",
+             "if (fs_dirent_canonicalize(path, key) < 0 || expected_dev == 0",
+             "if (expected_dev == 0"),
+            ("fs", "strncmp(key, de.name, DIRSIZ) == 0",
+             "strncmp(name, de.name, DIRSIZ) == 0"),
+            ("directory",
+             "agent_metadata_scan_index_inode(ip, key, &failed)",
+             "agent_metadata_scan_index_inode(ip, path, &failed)"),
+            ("fs_program",
+             "dirent_name_bound=14 legacy_alias=1 metadata_canonical=1",
+             "dirent_name_bound=14 legacy_alias=0 metadata_canonical=1"),
             ("catalog", "uchar used_fids[(AGENT_FILE_META_MAX + 7) / 8]",
              "int used_fids[AGENT_FILE_META_MAX]"),
             ("catalog", "used_fids[(fid - 1) / 8]",
@@ -557,12 +778,63 @@ class CatalogCapacityContractTests(unittest.TestCase):
             ("store_format",
              "return records_valid(store, sizeof(struct agent_meta_record_v5), 1);",
              "return records_valid(store, sizeof(struct agent_meta_record_v5), 0);"),
-            ("fs", "fs_storage.workflow_inode_domain_limit < AGENT_FILE_SCOPE_LIMIT ?",
-             "fs_storage.workflow_inode_domain_limit < AGENT_FILE_META_MAX ?"),
-            ("fs", "\t\t\tAGENT_FILE_SCOPE_LIMIT;",
-             "\t\t\tAGENT_FILE_META_MAX;"),
-            ("fs", "VFS_SCOPE_MAX_ACTIVE * AGENT_FILE_SCOPE_LIMIT ==",
-             "VFS_SCOPE_MAX_ACTIVE * AGENT_FILE_META_MAX =="),
+            ("fs", "\t\tfs_storage.workflow_inode_domain_limit;",
+             "\t\tAGENT_FILE_SCOPE_LIMIT;"),
+            ("storage_policy", "#define FS_WORKFLOW_INODE_MIN_PER_SCOPE 320U",
+             "#define FS_WORKFLOW_INODE_MIN_PER_SCOPE 112U"),
+            ("file_state_h", "#define AGENT_INODE_META_DEFERRED_SLOT (-1)",
+             "#define AGENT_INODE_META_DEFERRED_SLOT 0"),
+            ("file_state",
+             "ip->agent_meta_slot == AGENT_INODE_META_DEFERRED_SLOT",
+             "ip->agent_meta_slot == 0"),
+            ("file_state", "!stale && ip->agent_meta_slot > 0",
+             "ip->agent_meta_slot > 0"),
+            ("file_state", "short version = slot ? AGENT_INODE_META_VERSION : 0;",
+             "short version = AGENT_INODE_META_VERSION;"),
+            ("file_state", "slot <= 0 && flags", "slot < 0 && flags"),
+            ("directory", "agent_metadata_scan_index_inode(ip, key, &failed)",
+             "0"),
+            ("file_state", "if (iupdate(ip) >= 0)", "if (1)"),
+            ("directory", "failed || agent_file_state_index_deferred(ip)",
+             "failed"),
+            ("directory", "rescan:\n\tagent_file_request_scan();",
+             "rescan:\n\t;"),
+            ("directory",
+             "if (agent_file_state_index_deferred(ip))\n\t\treturn;",
+             "if (0)\n\t\treturn;"),
+            ("directory",
+             "else if (remove)\n\t\t\tagent_file_request_scan();",
+             "else if (remove)\n\t\t\tagent_metadata_scan_slot_freed(scope_id);"),
+            ("directory",
+             "else if (remove)\n\t\t\tagent_file_request_scan();",
+             "else if (remove)\n\t\t\t;"),
+            ("directory",
+             "agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL);\n"
+             "\t\tagent_metadata_scan_slot_freed(scope_id);",
+             "agent_metadata_note_catalog_changes(AGENT_FILE_CHANGE_ALL);"),
+            ("scan_h", "void agent_metadata_scan_slot_freed(uint);",
+             "void agent_metadata_scan_slot_freed(void);"),
+            ("scan", "if (!scan_scope_full(scope, 0)) {",
+             "if (0) {"),
+            ("scan",
+             "scan_ctl.pending = SCAN_URGENT;",
+             "scan_ctl.pending = 1;"),
+            ("scan", "if (scan_ctl.pending == SCAN_URGENT) {",
+             "if (0) {"),
+            ("scan",
+             "if (scan_ctl.pending == SCAN_URGENT) {\n"
+             "\t\tscan.start = 0;\n"
+             "\t\tscan_ctl.pending = 1;",
+             "if (scan_ctl.pending == SCAN_URGENT) {\n"
+             "\t\tscan.start = 0;\n"
+             "\t\tscan_ctl.pending = -1;"),
+            ("scan", "if (!resume || scan_ctl.pending > 0)",
+             "if (!resume)"),
+            ("scan",
+             "scan.removed++;\n\tagent_metadata_scan_slot_freed(scope);",
+             "scan.removed++;"),
+            ("file", "if (created)\n\t\tagent_fs_note_create(ip, path);",
+             "if (0)\n\t\tagent_fs_note_create(ip, path);"),
             ("actions", "count >= AGENT_FILE_STATUS_BATCH_LIMIT",
              "count > AGENT_FILE_STATUS_BATCH_LIMIT"),
             ("actions", "if (primary_updated < 0)",
@@ -589,12 +861,32 @@ class CatalogCapacityContractTests(unittest.TestCase):
              "result = AGENT_STATUS_IO_ERROR;"),
             ("scan", "*failed = SCAN_BIND_DEFERRED;",
              "*failed = SCAN_BIND_RETRY;"),
+            ("scan", "uint marked[SCOPE_MAX * 2], nmarked;",
+             "uint marked[1], nmarked;"),
+            ("scan", "scan.nmarked = 0;", "scan.nmarked = NELEM(scan.marked);"),
+            ("scan", "scope, AGENT_FILE_META_F_AUTOSCAN);",
+             "scope, 0);"),
+            ("scan", "(void)scan_scope_full(scope, 1);",
+             "(void)scan_scope_full(scope, 0);"),
+            ("scan",
+             "if (slot < 0 || !(fid = agent_metadata_catalog_alloc_fid(scope))) {\n"
+             "\t\t\t(void)scan_scope_full(scope, 1);",
+             "if (slot < 0 || !(fid = agent_metadata_catalog_alloc_fid(scope))) {"),
+            ("scan", "AGENT_INODE_META_DEFERRED_SLOT, 0, stale_sidecar",
+             "AGENT_INODE_META_DEFERRED_SLOT, 0, 0"),
+            ("scan", "ip->agent_meta_flags != persist",
+             "ip->agent_meta_flags == persist"),
+            ("scan",
+             "if (agent_file_state_index_deferred(ip) &&\n"
+             "\t    scan_scope_full(scope, 0)) {",
+             "if (agent_file_state_index_deferred(ip) &&\n"
+             "\t    scan_scope_full(scope, 1)) {"),
             ("scan", "scan.offset = off;\n\t\t\tscan_pause(1, 1);",
              "scan.offset = 0;\n\t\t\tscan_pause(1, 0);"),
             ("scan", "(void)scan_scope_failed(ip->vfs_scope_id, 1);",
              "scan.sweep_uncertain = 0;"),
-            ("scan", "uchar seen[AGENT_FILE_META_MAX]",
-             "int seen[AGENT_FILE_META_MAX]"),
+            ("scan", "uchar seen[AGENT_META_STALE_BYTES]",
+             "uchar seen[AGENT_FILE_META_MAX]"),
             ("scan", "info->file_scan_failures = scan.failures;",
              "info->file_scan_failures = 0;"),
             ("scan", 'SCAN_DEFAULT(summary, 0, "auto scanned root file")',
@@ -630,6 +922,27 @@ class CatalogCapacityContractTests(unittest.TestCase):
              "\t    !(view.meta->flags & AGENT_FILE_META_F_AUTOSCAN)) {"),
             ("catalog", "candidate_epoch == 0 ||",
              "namei_scope_status(\"candidate\", 0, 0, 0); candidate_epoch == 0 ||"),
+            ("catalog", "agent_catalog_plan_count(result, record->scope_id) < 0",
+             "agent_catalog_plan_count(result, record->scope_id, "
+             "record->meta.flags) < 0"),
+            ("catalog",
+             "if (++result->plan_ordinary_count > AGENT_FILE_ORDINARY_LIMIT ||",
+             "if (result->plan_scope_counts[scope_index] >=\n"
+             "\t    AGENT_FILE_AUTOSCAN_SCOPE_LIMIT)\n"
+             "\t\treturn -1;\n"
+             "\tif (++result->plan_ordinary_count > AGENT_FILE_ORDINARY_LIMIT ||"),
+            ("scope_program",
+             "check(unlink(released_name) == 0, \"release autoscan catalog slot\");",
+             "check(1, \"release autoscan catalog slot\");"),
+            ("scope_program", "info.file_scan_deferred > deferred_before",
+             "info.file_scan_deferred >= deferred_before"),
+            ("scope_program",
+             "check(agent_file_meta_init() == 0,\n"
+             "\t      \"reload rebuilt autoscan catalog checkpoint\");",
+             "check(1, \"reload rebuilt autoscan catalog checkpoint\");"),
+            ("scope_program",
+             "remove_quota_files_from('a', state->first_removed, state->created)",
+             "remove_quota_files_from('a', 0, state->created)"),
             ("catalog", "agent_metadata_txn_projection_begin();\n\tif (reload_one_scope)",
              "agent_metadata_txn_projection_begin();\n\treturn AGENT_METADATA_LOAD_IO;\n\tif (reload_one_scope)"),
             ("catalog", "key.candidate_epoch = candidate_epoch;",
@@ -673,6 +986,13 @@ class CatalogCapacityContractTests(unittest.TestCase):
              "if (0)\n\t\t\t\tcontinue;"),
             ("objects", "agent_metadata_store_take_reconcile_request())\n\t\tagent_file_request_scan();",
              "agent_metadata_store_take_reconcile_request())\n\t\tagent_background_request();"),
+            ("store",
+             "\tagent_meta_reconcile_required = 1;\n"
+             "\tagent_background_request();",
+             "\tif (apply->used != 0) {\n"
+             "\t\tagent_meta_reconcile_required = 1;\n"
+             "\t\tagent_background_request();\n"
+             "\t}"),
         )
         for name, old, new in cases:
             with self.subTest(name=name, mutation=old):

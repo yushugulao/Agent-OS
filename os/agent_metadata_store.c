@@ -1118,10 +1118,8 @@ agent_file_load_snapshot(int force, uint reload_scope,
 	store_failure = AGENT_METADATA_PERSIST_NONE;
 	agent_meta_store_failed_closed = 0;
 	agent_metadata_probe_finish(candidate_epoch);
-	if (apply->used != 0) {
-		agent_meta_reconcile_required = 1;
-		agent_background_request();
-	}
+	agent_meta_reconcile_required = 1;
+	agent_background_request();
 	agent_meta_store_io_leave();
 	store_locked = 0;
 	if (orphan_stale) {
@@ -2227,24 +2225,12 @@ agent_metadata_store_take_reconcile_request(void)
 }
 
 int
-agent_metadata_store_persist(void)
-{
-	return agent_file_persist(0);
-}
-
-int
 agent_metadata_store_persist_commit(
 	struct agent_metadata_persist_result *completion)
 {
 	if (completion == 0)
 		return -1;
 	return agent_file_persist(completion);
-}
-
-int
-agent_metadata_store_persist_system(void)
-{
-	return agent_file_persist_system();
 }
 
 int

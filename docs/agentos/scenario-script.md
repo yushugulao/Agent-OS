@@ -6,7 +6,7 @@
 
 本项目在 uCore 内核上实现 Agent-OS，把 Agent 进程身份、结构化工具调用、上下文历史、文件元数据索引和 Agent 事件运行机制放入内核支持层。
 
-完整专项脚本当前依次运行十八个程序。2026-07-25 固定 runner 的三次 16/16 和冻结提交 `31d4ddf53695` 的三轮 18/18 都只作为对应源码的历史 checkpoint。当前冻结提交 `814021ab9dac` 已在相同 `agentos-qemu-calibrated` profile 串行取得 `327.098196563s`、`310.491647311s`、`279.293840369s` 三次干净完整样本；中位基线为 `310.491647311s`、上限为 `327.10s`，并由当前源码及 runner 合同的 SHA-256 指纹绑定。历史独立 `agentscope_ucore` 和 `agentfinal_ucore` 输出不能替代最终 `full-verify`；旧 `371.5s`、`127.9s`、`126.1s` 与 `13824 < 16384` 也只保留为历史快照。`workflow_teardown_race_ucore` 及 physical、metadata/observation recovery、VirtIO 故障 runner 不计入这十八项；预算 checker、通用 runner 和生产 profile validator 的 fail-closed 自测集合以当前源码为准，静态预算与 owner 注册以 `ci/kernel-budgets.json` 为准：
+完整专项脚本当前依次运行十八个程序。2026-07-25 固定 runner 的三次 16/16、`31d4ddf53695` 和 `814021ab9dac` 的三轮 18/18 都只作为对应源码的历史 checkpoint；后者的历史样本为 `327.098196563s`、`310.491647311s`、`279.293840369s`，中位基线 `310.491647311s`、上限 `327.10s`。当前 candidate 的受管输入已经变化，`ci/kernel-budgets.json` 状态为 `provisional_requires_full_suite`，不得复用旧校准。历史独立 `agentscope_ucore`、Reader 和 `agentfinal_ucore` 输出不能替代最终 `full-verify`；旧 `371.5s`、`127.9s`、`126.1s` 与 `13824 < 16384` 也只保留为历史快照。`workflow_teardown_race_ucore` 及 physical、metadata/observation recovery、VirtIO 故障 runner 不计入这十八项；预算 checker、通用 runner 和生产 profile validator 的 fail-closed 自测集合以当前源码为准，静态预算与 owner 注册以版本化配置为准：
 
 ```bash
 agentfinal_ucore
@@ -330,7 +330,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=usersafety_ucore CHAP
 
 `agentsecurity_ucore` 覆盖普通进程 mail 最小路径；普通进程不能直接投递事件、取消 Agent 等待或修改 Agent 文件元数据；usershell 等价的普通 `fork/exec` 路径不能创建任何 Agent；低权限 Agent 不能继续委派。普通 exec 会撤销 bootstrap grant，之后执行同名或清单中的 bootstrap 映像也不会恢复启动授权。初始化前索引查询不会卡住；legacy 工具 ID/名称不一致会失败；sentinel 不能通过伪造 `AGENT_ROLE_RECOVERY` 获得动作权限；recovery 只会更新 selector 指定的 run。
 
-`agentscope_ucore` 同时建立多个由可信 factory 签发的 workflow scope，验证 capability 只有在 active scope 和精确 owner 同时命中时才生效；同名文件、metadata、action、audit、lease 和 IPC 不能跨域。冻结期配额阶段要求 scope A 恰好创建 112 个对象，第 113 个失败；A 满载时 scope B 仍独立创建 112 个对象且第 113 个同样失败，PUBLIC 主体另行创建并删除 70 个对象，清理后 A 的固定分区可复用。ACTIVE/CLOSING/RETIRING 最多合计 4 个 scope，RETIRING 在 catalog 回收完成前保持原准入槽。mkfs 写入 superblock 的 342 inode 是底层原始存储保证，不是 Agent catalog 的有效上限；workflow inode 账户和 metadata tracked 上限均为 112。随后低权限 Artifact 才在 guest pipe 存活屏障后持续微写一个已绑定 `PERSIST` 对象，另一 scope 必须在 5 秒内完成 32 次查询；测试同时检查写回批次数、dirty/durable 最终一致和强制重载后的 size/generation，不再把未绑定满表写入或全局 scan 次数当作证据。另一个 Artifact 对 volatile 文件执行 32 次微写，request/commit 计数不得增长且 reload 不能清除内存态对象。事务门、存储/进程保留量、单跳 pipe fd 委派及 scope retirement 均有实际 QEMU 回归入口；当前候选是否通过仍以 release bundle 为准。
+`agentscope_ucore` 同时建立多个由可信 factory 签发的 workflow scope，验证 capability 只有在 active scope 和精确 owner 同时命中时才生效；同名文件、metadata、action、audit、lease 和 IPC 不能跨域。配额阶段让 scope A/B 各创建 97 个普通文件：前 96 个进入 AUTOSCAN 物化视图，第 97 个仍由独立 STORAGE policy 接纳但保持未索引；显式 syscall 携带 AUTOSCAN 标志也不能越过 96 条边界，每域随后还能建立 16 个非 AUTOSCAN 显式 metadata，第 17 个显式请求才返回 `NO_SPACE`。catalog 满后新增普通 VFS 文件仍可创建且不能被 peer scope 打开，PUBLIC 主体另行创建并删除 70 个对象，清理后存储与 catalog 槽均可复用。ACTIVE/CLOSING/RETIRING 最多合计 4 个 scope，RETIRING 在 catalog 回收完成前保持原准入槽。每 scope STORAGE inode 硬下限为 320，当前镜像保证约 342；catalog 每 scope 112 由 AUTOSCAN 96 与显式保留 16 组成，不再充当 inode 上限。随后低权限 Artifact 才在 guest pipe 存活屏障后持续微写一个已绑定 `PERSIST` 对象，另一 scope 必须在 5 秒内完成 32 次查询；测试同时检查写回批次数、dirty/durable 最终一致和强制重载后的 size/generation。另一个 Artifact 对 volatile 文件执行 32 次微写，request/commit 计数不得增长且 reload 不能清除内存态对象。事务门、存储/进程保留量、单跳 pipe fd 委派及 scope retirement 均有实际 QEMU 回归入口；当前候选是否通过仍以 release bundle 为准。
 
 同一程序还验证 workflow 的可信终止协议。低权限 Sentinel 和后创建的 Orchestrator 调用 `agent_workflow_close()` 必须返回 `AGENT_STATUS_DENIED`，带高位别名的 64 位 scope id 必须返回 `AGENT_STATUS_BAD_PARAM`；只有创建时绑定的根 controller 或仍运行可信 bootstrap 的 factory 可以发起关闭。显式关闭和根自然退出都会先把 scope 置为 CLOSING、撤销授权，再让一个阻塞在 `agent_wait()` 且持有 pipe 的低权限成员沿正常退出路径释放端点。测试在 pipe EOF 前设置返回后 poison 写入，避免把“等待意外返回”误判为成功清理；自动根退出重复 9 轮，超过 `VFS_SCOPE_LIFECYCLE_CAP=8` 后仍能接纳 replacement workflow。
 
@@ -338,7 +338,7 @@ make run TOOLPREFIX=riscv64-linux-gnu- LOG=error INIT_PROC=usersafety_ucore CHAP
 
 ```text
 agentscope_ucore: pipe_redelegation_isolation=1
-agentscope_ucore: scope_storage_quota=1 scope_limit=112 workflow_created=112 peer_created=112 public_created=70 overflow_no_space=1 reusable=1
+agentscope_ucore: scope_storage_isolation=1 catalog_limit=112 autoscan_limit=96 explicit_reserve=16 workflow_created=97 peer_created=97 public_created=70 overflow_unindexed=1 autoscan_flag_no_space=1 explicit_no_space=1 reusable=1
 agentscope_ucore: metadata_volatile_reload_isolation=1 writes=32
 agentscope_ucore: scope_close_authority=1
 agentscope_ucore: scope_controller_exit_revoke=1

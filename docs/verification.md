@@ -50,7 +50,7 @@ AgentOS 专项构建和测试命令见 [agentos/verification.md](agentos/verific
 make ci-check
 ```
 
-它使用 `ci/kernel-budgets.json` 的固定 profile 检查源码、镜像、运行段、`struct proc`、9 页 Context sidecar 和完整 21 页 Agent 状态的单实例/池/账户容量，以及线程栈与独立 64 KiB boot stack 的调用图和容量。owner 模块、integration bridge、允许依赖和 SCC 边界均来自同一版本化注册集合；metadata transaction/file-state/catalog/query/scan/directory/objects/actions/prefetch/store（含 format/I/O）、IPC 及 contract headers 还受聚合 source/text/BSS 预算约束，不能靠拆文件迁移绕过增长门。受控图不是完整 uCore 调用图。Agent 套件为 18 case；冻结提交 `31d4ddf53695` 的三轮完整 timing 只保留为历史。当前冻结提交 `814021ab9dac` 已重新取得三轮完整样本并恢复 `calibrated_full_suite`；SHA-256 绑定构建、内核、用户程序、镜像和 runner 输入，相关字节变化会在 QEMU 前使策略失效。
+它使用 `ci/kernel-budgets.json` 的固定 profile 检查源码、镜像、运行段、`struct proc`、9 页 Context sidecar 和完整 21 页 Agent 状态的单实例/池/账户容量，以及线程栈与独立 64 KiB boot stack 的调用图和容量。owner 模块、integration bridge、允许依赖和 SCC 边界均来自同一版本化注册集合；metadata transaction/file-state/catalog/query/scan/directory/objects/actions/prefetch/store（含 format/I/O）、IPC 及 contract headers 还受聚合 source/text/BSS 预算约束，不能靠拆文件迁移绕过增长门。受控图不是完整 uCore 调用图。Agent 套件为 18 case；`31d4ddf53695` 和 `814021ab9dac` 的三轮完整 timing 都只保留为各自源码提交的历史校准基线。当前候选的受管输入已经变化，`ci/kernel-budgets.json` 明确为 `provisional_requires_full_suite`，不携带旧 SHA-256、阈值或样本，并会在普通完整 QEMU 套件前 fail closed。
 
 双目标运行：
 
@@ -191,7 +191,7 @@ rp_agentos_real_task
 rp_agentos_conflict
 ```
 
-其中 `rp_agentos_mainflow` 是增强目标主证据文件，应包含可信 Context、metadata 查询、事件通知、失败恢复、权限拒绝、timeline、ledger/provenance、文件编辑租约、workbench 文件校验、证据包 provenance 和真实任务 Context。
+其中 `rp_agentos_mainflow` 是增强目标的原始 telemetry 文件，不是 Guest 可自行签发的通过证据。它必须按固定顺序保存 11 个唯一、完整的未验证阶段并覆盖可信 Context、metadata 查询、事件通知、失败恢复、权限拒绝、timeline、ledger/provenance、文件编辑租约、workbench 文件校验、证据包 provenance 和真实任务 Context 等 12 类事实；任何 Guest `runtime_verified` 或 `generation=runtime;status=verified` 记录都 fail closed。Host 只从与提取清单一致的单层非链接目录读取该文件和 11 个规范来源，逐项复验唯一 claim、预期成功状态与阶段 telemetry，并独立计算完整 byte count/FNV-1a hash。
 
 ## 双目标验证
 
@@ -201,20 +201,7 @@ rp_agentos_conflict
 bash scripts/verify-dual-target-structure.sh
 ```
 
-以下是旧轮次的关键标记摘录，只用于说明输出形状。旧 `agentos_fork_launches=61` 把实际由 `agent_worker_create()` 创建的 delegated worker 错记成普通 fork，已从当前证据契约废止；发布 C 必须由子进程在 exec 后调用 `agent_info()` 回传身份，并在 bundle 的 Guest 日志中分别汇总 `agentos_agent_launches` 与 `agentos_worker_launches`。旧日志或源码字符串不能代替这次动态记录。
-
-```text
-[dual-target-check] baseline AgentOS surface: absent
-[dual-target-check] AgentOS kernel: present
-[dual-target-check] platform source coverage: 73 baseline rp sources mirrored
-[dual-target-check] platform app coverage: 71 build-list apps mirrored
-[dual-target-check] platform source sync: identical=30 adapted=43
-[dual-target-check] backend evidence coverage: plain=7 agentos=8 preserved_costs=7
-[dual-target-check] platform runners: present
-[dual-target-check] docs: wording scan passed
-```
-
-这里的 `baseline AgentOS surface: absent` 只表示结构检查没有在 baseline 中发现 Agent syscall、Agent Context、Agent 文件 metadata 或 Agent 事件服务，不表示 `baseline_ucore/` 与上游 uCore 源码逐字相同。baseline 与主目标共享 syscall、同步、文件系统和进程生命周期等通用安全加固。
+结构检查的数量随注册表变化，不在文档中硬编码。`baseline AgentOS surface: absent` 只表示检查器没有在 baseline 中发现 Agent syscall、Agent Context、Agent 文件 metadata 或 Agent 事件服务，不表示 `baseline_ucore/` 与上游 uCore 源码逐字相同。baseline 与主目标共享 syscall、同步、文件系统和进程生命周期等通用安全加固。
 
 运行：
 
@@ -222,44 +209,29 @@ bash scripts/verify-dual-target-structure.sh
 make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
 ```
 
-期望关键标记：
+语义成功标记的形状如下；实际计数只从本次日志和 [AgentOS 测试记录](agentos/test-record.md) 读取：
 
 ```text
 [dual-platform] checking target structure
 [dual-platform] running seeded dual-target research platform
-seeded_action_state: plain start chapter=platform_seeded init=rp_seed_orch action_count=44 log=/tmp/agentos-dual-platform/seeded-action-state/plain/ucore-run.log
-seeded_action_state: plain done passed=1 extracted_state_files=258 status=ready
-seeded_action_state: agentos start chapter=platform_agentos init=rp_agentos_orch action_count=44 log=/tmp/agentos-dual-platform/seeded-action-state/agentos/ucore-run.log
-seeded_action_state: agentos done passed=1 extracted_state_files=271 status=ready
-seeded_action_state: action=/actions/research/rerun action_count=44 host_routes=95 seeded_routes=21 seeded_kinds=21 plain=ready agentos=ready status=ready
-[dual-platform] plain uCore research platform log: /tmp/agentos-dual-platform/seeded-action-state/plain/ucore-run.log
+seeded_action_state: plain done passed=1 ... status=ready
+seeded_action_state: agentos done passed=1 ... status=ready
 rp_orch: passed
-rp_orch: programs_ok=70 programs_total=70
-plain backend reference: expected_cases=7 runtime_cases=0
-[dual-platform] AgentOS-uCore research platform log: /tmp/agentos-dual-platform/seeded-action-state/agentos/ucore-run.log
 rp_agentos_orch: passed
 rp_agentos_orch: kernel_agent=1 workflow=rp_orch status=ready
-rp_orch: programs_ok=70 programs_total=70
-AgentOS backend runtime: cases=8 source_reads=8 kernel_checks=4
-[dual-platform] plain extracted state files: 258
-[dual-platform] AgentOS extracted state files: 271
-host_platform_alignment: host_modules=154 tracked_host_modules=154 plain_sources=73 agentos_sources=74 runtime_state_checked=1 groups_ok=13 groups_total=13 untracked_host_modules=0 status=ready
-host_test_alignment: host_tests=142 themes_ok=7 themes_total=7 unclassified_tests=0 runtime_state_checked=1 status=ready
-host_action_kind_alignment: action_routes=95 action_kinds=95 generic_routes=0 plain_missing=0 agentos_missing=0 plain_handler_missing=0 agentos_handler_missing=0 status=ready
-host_surface_alignment: api_routes=214 action_routes=95 download_refs=76 runtime_state_checked=1 status=ready
-dual_platform_state_compare: ... plain_fork_launches=70 ... agentos_agent_launches=9 agentos_fork_launches=61 status=ready  # historical, invalid launcher classification
-plain_ucore_reader: pages=40 api_json=267 state_files=260 status=ready
-plain_ucore_reader: pages=40 api_json=280 state_files=273 status=ready
-reader_output_check: pages=40 api_json=267 state_files=260 required_pages=6 spec_pages=40 agentos_compare_markers=0 status=ready
-reader_output_check: pages=40 api_json=280 state_files=273 required_pages=6 spec_pages=40 agentos_compare_markers=13 status=ready
-dual_platform_reader_compare: plain_pages=40 agentos_pages=40 plain_state_files=260 agentos_state_files=273 agentos_extra_state_files=13 plain_api_json=267 agentos_api_json=280 agentos_extra_api_json=13 checked_pages=40 checked_api_json=267 status=ready
+host_platform_alignment: ... status=ready
+dual_platform_state_compare: ... run_result_match=1 ... status=ready
+dual_platform_reader_compare: ... status=ready
+[dual-platform] plain and AgentOS platforms both passed
 ```
 
-这条命令的意义是：用同一批 seeded 请求分别运行共享安全基底的 uCore 对照目标和 AgentOS-uCore 目标，并检查两个目标是否实际跑完同一批科研平台程序、围绕同一设定的模拟流程输出可比较结果。该流程包含数据准备、比对处理、结果分析、报告生成和归档交付；脚本会从两个文件系统镜像中提取 `rp_*` 状态文件，并执行状态文件对照：plain target 产出的状态文件必须全部能在 AgentOS target 中找到；只有普通的非证据状态兼容记录才要求 AgentOS 保留同一标识和状态。`demo_reference`/`demo_expected` 目录与 `runtime_verified` 记录从兼容性计数中排除，前者只作为参考目录展示，后者必须单独通过来源文件、字节数、hash 和动态断言绑定。AgentOS target 可以额外增加内核证据文件和内核观测字段，并且 `rp_agentos_mainflow` 必须按平台程序执行顺序写入 11 个内核参与阶段、覆盖 12 类内核事实。随后脚本会把两个目标的真实状态文件交给状态渲染工具，检查 HTML 和 API JSON 能否从同一批 `rp_*` 文件生成，并确认 AgentOS 目标多出的 Context、metadata、事件、ledger、真实任务和文件编辑租约字段可被读取。最后比较渲染摘要，确认两个目标生成同一套结果入口，AgentOS target 的状态产物和 API JSON 不少于 plain target，并直接输出 `agentos_extra_state_files` 与 `agentos_extra_api_json` 说明增强目标多出的内核证据规模。两侧共有的通用安全加固不是本组对照的 AgentOS 增量。
+这条命令的意义是：用同一批 seeded 请求分别运行共享安全基底的 uCore 对照目标和 AgentOS-uCore 目标，并检查两个目标是否实际跑完同一批科研平台程序、围绕同一设定的模拟流程输出可比较结果。该流程包含数据准备、比对处理、结果分析、报告生成和归档交付；脚本会从两个文件系统镜像中提取 `rp_*` 状态文件，并执行状态文件对照：plain target 产出的状态文件必须全部能在 AgentOS target 中找到；只有普通的非证据状态兼容记录才要求 AgentOS 保留同一标识和状态。提取 summary 不是路径权威，必须与目录内单层、非链接、名字匹配 `rp_[a-z0-9_]+` 的普通文件精确相等，目录穿越、链接、重复或计数不符都失败。`demo_reference`/`demo_expected` 目录与 `runtime_verified` 记录从兼容性计数中排除。参考目录只能包含 target-specific registry 登记的文件和 `(destination, anchor)` 记录，并在去注释的源码中精确绑定唯一 owner；缺失、未知、重复、跨 owner 预发布和 reference/runtime 身份混用都会失败。Plain seeded 程序清单还要同时绑定 seeded profile、QEMU 日志和 `rp_orch_timing` 的 orchestrator/launcher、程序顺序、字节数、hash 与名称摘要。AgentOS target 可以额外增加内核证据文件和内核观测字段；`rp_agentos_mainflow` 只提供 11 个唯一、完整、有序的未验证 telemetry 阶段并覆盖 12 类内核事实，Host 再从安全状态清单独立复验每个来源的唯一 claim、成功状态、阶段字段、byte count 和 hash。任何 Guest runtime 验证回执都被拒绝。随后脚本会把两个目标的真实状态文件交给状态渲染工具，检查 HTML 和 API JSON 能否从同一批 `rp_*` 文件生成，并确认 AgentOS 目标多出的 Context、metadata、事件、ledger、真实任务和文件编辑租约字段可被读取。最后比较渲染摘要，确认两个目标生成同一套结果入口，AgentOS target 的状态产物和 API JSON 不少于 plain target。两侧共有的通用安全加固不是本组对照的 AgentOS 增量。
+
+双目标状态与 Host 执行回执不混用。每侧 complete-state ZIP 只含 `extract-summary.json` 和其中精确列出的纯 Guest `rp_*` 普通文件，禁止 `rp_host_run_result`；Plain/AgentOS Host run receipt 分别作为 `dual-plain-host-run-result.state` 和 `dual-agentos-host-run-result.state` 独立 raw artifact。receipt 使用 `sha256-inventory-v1` 规范绑定排序文件名、文件数、长度与全部字节，Reader 和比较器均重算校验；Host LLM relay 的变化只进入事务化差异 overlay，不改变该 Guest generation。离线验证安全解包，以 `min_common_files=240`、两份 receipt、seeded summary 和两份 Guest 日志显式重放 `compare_state()`，要求结果等于 `dual-state-compare.json`，并逐字核对 Mainflow、program ledger 与 backend 原件。普通 `make dual-platform-run` 只保留状态目录和 Host sidecar，只有最终采集启用的 `full-verify` evidence mode 才生成并发布 complete-state ZIP。
 
 ## 结果产物和实测边界
 
-`make dual-platform-run` 会把原始日志和提取状态保存在 `/tmp/agentos-dual-platform/`，并把状态对照、Reader 页面和诊断汇总写入 `results/latest/`。这些文件证明两个目标执行了哪些功能路径，但状态计数、模板记录和页面汇总不能自动视为原始性能实验。
+`make dual-platform-run` 会把原始日志、纯 Guest 提取状态和独立 Host run receipt 保存在 `/tmp/agentos-dual-platform/`，并把状态对照、Reader 页面和诊断汇总写入 `results/latest/`。普通运行不生成最终 complete-state ZIP。这些文件证明两个目标执行了哪些功能路径，但状态计数、模板记录和页面汇总不能自动视为原始性能实验。
 
 当前仓库只承认一组 provenance-bound Guest 实测：`agentbench_ucore` 的文件查询 benchmark。它在真实 Guest 中输出强制遍历、包含索引重建的冷索引和索引已就绪后的热索引测量。热索引每次都实际遍历候选链，不使用内核查询结果缓存。提取器同时要求后续存在完整的 `agentbench_ucore: parent passed` 行，任何字段、顺序或来源检查失败都会拒绝整组数据。
 
@@ -277,6 +249,10 @@ results/latest/charts/experiment-file-query-bar.svg
 evidence/releases/<bundle>/metrics/file-query-benchmark.csv
 evidence/releases/<bundle>/metrics/file-query-benchmark.json
 evidence/releases/<bundle>/logs/raw/agent-suite-guest.log
+evidence/releases/<bundle>/logs/raw/dual-plain-complete-state.zip
+evidence/releases/<bundle>/logs/raw/dual-agentos-complete-state.zip
+evidence/releases/<bundle>/logs/raw/dual-plain-host-run-result.state
+evidence/releases/<bundle>/logs/raw/dual-agentos-host-run-result.state
 ```
 
 其中 `results/latest/` 只是可覆盖的本地预览。`measured-experiments.json` 不存在时，`experiments/status.json` 必须标记 `unavailable`，原始 CSV、统计和图表不得由公式、固定常量或功能状态推导。正式发布只引用 clean、已提交 HEAD 对应的 `evidence/releases/<bundle>/`；CSV 每行都保存来源日志 SHA256、marker SHA256、行号、命令、commit 和 run id，JSON manifest 再绑定完整来源文件。
@@ -287,7 +263,7 @@ Context/timeline、事件等待、并发写入、LLM Relay 和恢复流程仍由
 
 这张图只是 `rp_backend_exec` 演示目录的架构示意：左侧列出普通用户态平台可能承担的成本，右侧列出 AgentOS 对应机制。它没有 provenance-bound Guest 原始测量，不能用于声称某项机制已动态通过，也不能给出性能收益。
 
-`runtime-observation.svg`、`runner-ticks.svg` 和 `runner-speedup.svg` 来自未绑定原始 Guest 日志的 `rp_*` 派生字段。仓库只为页面布局契约保留它们，并在本文不作为结果图嵌入；它们与 `summary.csv`、`runner-sweep.csv` 一样只能用于本地演示和诊断。在补充来源日志 SHA256、实际动态断言和 commit/run 绑定前，它们不是验收证据或性能原始数据。
+`runtime-observation.svg` 来自运行状态派生字段，只用于本地演示和诊断。当前完整生产链没有独立、可信的 runner tick runtime producer；因此删除 `runner-ticks.svg`、`runner-speedup.svg` 及不可达的 measured 分支，`runner-sweep.csv` 只能记录 `unavailable/plain_runtime_cases_zero` 且没有对照行。任意部分记录、伪造 ticks 或参考目录内容都不能升级成性能结论。以后若恢复 measured 状态，必须先引入非 reference 的 runtime 文件、逐字段来源 receipt、日志 SHA256 和 commit/run 绑定，再作为新的协议版本审查。
 
 文件查询图只在 provenance-bound 测量可用时生成。阅读时必须同时打开 `file-query-benchmark.csv` 和 JSON manifest，核对三条路径的 `operations`、`primary_value`、`duration_unit=us`、`duration_value`、`rebuild_records` 以及来源绑定。时间来自 Guest `gettimeofday` 的原始微秒差值，允许真实的零差值，禁止 floor 或公式补值。图表只是同一 CSV 的可视化，不是额外证据，也不能用来外推 Context、事件、并发写入、LLM Relay 或恢复路径的性能。
 
@@ -318,7 +294,7 @@ LLM Relay 模式契约测试由 `host_tools/test_llm_relay_mode_contract.py` 完
 宿主机科研 Agent 平台能力对齐检查由 `host_tools/check_host_platform_alignment.py` 完成。它默认读取同级目录 `research-agent-platform-userland`，把其中的工作流、项目工作台、artifact、数据与实验室对象、LLM Relay、多 Agent 协作、provenance、治理、运行控制、复核发布、页面/API 和 AgentOS 对照等核心模块，映射到 `baseline_ucore/` 普通目标与根目录 AgentOS-uCore 的 `rp_*` 程序和状态输出入口。下列行只说明输出形态，发布数值以 bundle 中本次日志为准：
 
 ```text
-host_platform_alignment: host_modules=154 tracked_host_modules=154 plain_sources=73 agentos_sources=74 runtime_state_checked=1 groups_ok=13 groups_total=13 untracked_host_modules=0 status=ready
+host_platform_alignment: ... runtime_state_checked=1 ... untracked_host_modules=0 status=ready
 ```
 
 如果公开环境没有仓库外的宿主机平台目录，该检查会输出 `status=skipped`，不影响仓库内双目标验证；在本机开发时应以 `status=ready` 作为宿主机平台和 uCore 迁移层仍保持主要能力对齐的证据。双目标脚本会在提取两个文件系统镜像后再次运行该检查，并传入 `plain-state` 与 `agentos-state` 目录；此时 `runtime_state_checked=1` 表示清单中的能力族都已经在两个目标里产出真实状态文件。模块总数和 `untracked_host_modules` 必须从本次日志读取，不把历史数量外推；宿主机平台新增模块时，检查器要求先归入能力族，再判断是否需要增加 uCore 侧程序、状态文件或页面入口。
@@ -326,7 +302,7 @@ host_platform_alignment: host_modules=154 tracked_host_modules=154 plain_sources
 宿主机科研 Agent 平台测试主题对齐检查由 `host_tools/check_host_test_alignment.py` 完成。它默认读取同级目录 `research-agent-platform-userland/tests/test_platform.py`，把宿主机平台的测试方法归入状态配置、工作流运行、科研工作台、数据与实验室、Agent/LLM/对照、页面/API/交付、provenance/复核/治理等主题，并检查 plain target 与 AgentOS target 的 `rp_test_suite.c` 是否保留对应证据项。下列行只说明输出形态，发布数值以 bundle 中本次日志为准：
 
 ```text
-host_test_alignment: host_tests=142 themes_ok=7 themes_total=7 unclassified_tests=0 runtime_state_checked=1 status=ready
+host_test_alignment: ... unclassified_tests=0 runtime_state_checked=1 status=ready
 ```
 
 `runtime_state_checked=1` 表示检查器已经读取 plain target 与 AgentOS target 在 QEMU 运行后抽取出的 `rp_tests` 状态文件，并确认七类测试主题都由运行时状态给出证据。
@@ -336,7 +312,7 @@ host_test_alignment: host_tests=142 themes_ok=7 themes_total=7 unclassified_test
 宿主机 action kind 对齐检查由 `host_tools/check_host_action_kind_alignment.py` 完成。它读取宿主机 `api_server.py` 里的 `/actions/...` 路由，用 `plain_ucore_action_runner.py` 的映射函数转换成 seed kind，再检查 plain target 与 AgentOS target 的用户态源码中是否都有对应 `kind=...` 处理。检查器还会排除 `rp_compare_plain.c`、`rp_test_suite.c` 这类只负责验证的文件，要求每个 kind 至少出现在一个真实运行程序里。下列行只说明输出形态，发布数值以 bundle 中本次日志为准：
 
 ```text
-host_action_kind_alignment: action_routes=95 action_kinds=95 generic_routes=0 plain_missing=0 agentos_missing=0 plain_handler_missing=0 agentos_handler_missing=0 status=ready
+host_action_kind_alignment: ... plain_missing=0 agentos_missing=0 plain_handler_missing=0 agentos_handler_missing=0 status=ready
 ```
 
 这项检查用于发现“路由数量已经跟上，但 uCore seed 路径没有真正处理某个 action”的问题。例如宿主机提供 `/actions/research/rerun` 时，两个 uCore 目标都应当能接收 `kind=research_rerun`，并在 `rp_input`、`rp_runner`、`rp_report_text` 或相关状态文件中留下可读结果。
@@ -344,7 +320,7 @@ host_action_kind_alignment: action_routes=95 action_kinds=95 generic_routes=0 pl
 预置 action 状态检查由 `host_tools/check_seeded_action_state.py` 完成。它构造 44 个代表性宿主机请求，以 `/actions/research/rerun` 为主，同时覆盖研究输入、证据处理、artifact 输入与派生、Host workflow 主流程和阶段动作、LLM Relay 请求与返回、workbench 文件校验、数据集操作、项目生命周期、研究协议、项目复核、workflow 可移植性和 AgentCompare；随后分别运行 plain uCore 与 AgentOS-uCore 的预置入口，并从两个文件系统镜像中检查 `rp_input`、`rp_runner`、`rp_report_text`、`rp_artifact_manifest`、`rp_stage_dag`、`rp_llm_packets`、`rp_wfio`、`rp_usableproj`、`rp_studyproto` 等状态文件是否都写入同一组关键状态。该脚本还会读取宿主机 action 路由，报告 `host_routes`、`seeded_routes` 和 `seeded_kinds`：前者表示宿主机 action 路由总数，后两者表示 44 个实跑请求中能与当前宿主机 API 路由逐字对应的路由和 kind 数量；其余实跑请求是 uCore 迁移层保留的代表性样本，会作为 `seeded_extra_routes` 写入渲染摘要。`make dual-platform-run` 直接复用这次检查得到的镜像提取目录作为状态对照和渲染输入，因此它也是双目标主运行路径。下列行是契约输出形态，不是预填的发布结果：
 
 ```text
-seeded_action_state: action=/actions/research/rerun action_count=44 host_routes=95 seeded_routes=21 seeded_kinds=21 plain=ready agentos=ready status=ready
+seeded_action_state: action=/actions/research/rerun action_count=44 ... plain=ready agentos=ready status=ready
 ```
 
 这项检查补充了 action kind 检查：action kind 检查回答“源码是否有对应处理”，预置 action 状态检查回答“代表性宿主机请求进入 QEMU 后是否真的产生可读结果”。当前批次以 rerun action 作为主线，因为它会同时影响输入、运行器、报告文本和 artifact manifest；其余请求用于覆盖数据、证据、artifact、workflow、LLM、workbench、项目生命周期、研究协议、项目复核和可移植性状态，避免只验证单一路径。未进入 QEMU 实跑的宿主机 action 仍由 action kind 检查约束源码处理路径；如果某个新路由需要成为示例主证据，应加入预置请求，并补充对应状态文件断言。
@@ -352,7 +328,7 @@ seeded_action_state: action=/actions/research/rerun action_count=44 host_routes=
 宿主机 Web/API/action 规模检查由 `host_tools/check_host_surface_alignment.py` 完成。它直接读取仓库外宿主机平台的 `agent_platform/api_server.py`，统计显式 API 路由、action 路由和下载引用数量，再检查 `baseline_ucore/` 普通目标与根目录 AgentOS-uCore 的 `rp_web_export.c` 和双目标运行状态文件是否保留对应规模。下列行只说明输出形态，发布数值以 bundle 中本次日志为准：
 
 ```text
-host_surface_alignment: api_routes=214 action_routes=95 download_refs=76 runtime_state_checked=1 status=ready
+host_surface_alignment: ... runtime_state_checked=1 status=ready
 ```
 
 如果宿主机平台新增 API 或 action，本机验证会要求更新两个 uCore 目标的状态输出和状态查看入口。该检查关注平台能力是否在迁移层保留，不要求把宿主机 Python Web 服务复制进 uCore 镜像。
@@ -362,6 +338,8 @@ host_surface_alignment: api_routes=214 action_routes=95 download_refs=76 runtime
 增强目标的内核机制还需要单独运行专项脚本。若 case 集合或固定环境变化而使时长策略重新进入
 provisional，普通全套会在 QEMU 前按设计失败；开发阶段应运行定向 case，固定 runner 校准则
 必须显式保存完整 timing file：
+
+当前容量合同把持久存储与 metadata catalog 分开验收：每 workflow 的 inode STORAGE policy 硬下限为 320，当前镜像约为 342；catalog 仍为每 scope 112 条，其中 live AUTOSCAN 新增长度最多 96 条并为显式 metadata 保留 16 条。旧候选把 workflow inode 同样钳制为 112 的做法只保留为历史失败基线。定向 AgentScope 必须证明第 97 个普通文件及 catalog 满后的额外文件仍能创建且保持 scope 隔离，同时第 17 个显式 metadata 请求稳定返回 `NO_SPACE`。所有 sidecar bind/clear/deferred 更新统一通过 `agent_file_state_set_index()` 校验、持久化并在失败时恢复旧值；write/sync/truncate/delete 统一通过 `agent_fs_apply_inode_event()`，create 只在 VFS 成功发布后进入目录协调。Host 合同还检查持久 deferred 状态、饱和时重复扫描抑制、释放后重建和强制 reload 后的持久结果。v7 快照加载只按表示、SYSTEM 64、ordinary 448、每 scope 112、lifecycle 与唯一键等稳定磁盘合同判定；同版本旧快照中 97 至 112 条 AUTOSCAN 会完整装载而不静默删除，第 113 条仍判损坏。加载后的超额 scope 只允许 AUTOSCAN 数量不变或减少；新增及显式记录转 AUTOSCAN 均被拒绝，降至 95 条后才可再次增长。精确 receipt 回滚只复核硬边界、唯一键与 post-state，不受后来收紧的软准入策略阻断。
 
 ```bash
 # 定向开发回归，不宣称完整套件或时长门通过
@@ -391,7 +369,7 @@ labdemo_ucore: parent passed
 agentsecurity_ucore: parent passed
 agenttoolabi_ucore: parent passed
 agentscope_ucore: pipe_redelegation_isolation=1
-agentscope_ucore: scope_storage_quota=1 scope_limit=112 workflow_created=112 peer_created=112 public_created=70 overflow_no_space=1 reusable=1
+agentscope_ucore: scope_storage_isolation=1 catalog_limit=112 autoscan_limit=96 explicit_reserve=16 workflow_created=97 peer_created=97 public_created=70 overflow_unindexed=1 autoscan_flag_no_space=1 explicit_no_space=1 reusable=1
 agentscope_ucore: metadata_write_coalescing=1 writes=<at-least-128> commits=<bounded>
 agentscope_ucore: metadata_cross_scope_progress=1 queries=32 latency_ms=<at-most-5000>
 agentscope_ucore: metadata_final_consistency=1
@@ -466,7 +444,7 @@ make -C baseline_ucore kernel-stack-check TOOLPREFIX=riscv64-linux-gnu-
 make ci-check
 ```
 
-旧 16-case 校准、进程、file、thread、I/O 与 ENOSPC 结果继续作为历史问题证据，不能外推到当前 18-case 套件或 profile v5。提交 `31d4ddf53695` 的三轮 18-case timing 同样不能证明已变化的当前源码；冻结提交 `814021ab9dac` 已完成新的三轮校准。独立 Context-sync/WAIT_ATOMIC prelude 不计入这 18 行。`make full-verify` 会动态串联 physical、metadata recovery、observation recovery、VirtIO fault 和 filesystem allocator fault runner。GitLab 远端必选集合恰好是同一 C 的 1 个 Host-class job 和 8 个 QEMU-class jobs；每项都要生成绑定 checkout/CI 身份、artifact 清单和语义结果的 attestation，并由下载端以 API 身份、唯一 trace marker、安全 ZIP、逐文件哈希和共享 registry 离线复验。allocator job 还必须交付并复验固定的 `fs-allocator-evidence.tar`，不能只凭合并文本日志判定。本地 clean full-verify 是否完成及是否已有 E3 只由 `INDEX.md` 和 bundle manifest 判定，不在本文硬编码；远端没有可用 Runner 时仅 E4 不可用。完整机制和证据边界见 [agentos/security-hardening.md](agentos/security-hardening.md) 与 [agentos/verification.md](agentos/verification.md)。
+旧 16-case 校准、进程、file、thread、I/O 与 ENOSPC 结果继续作为历史问题证据，不能外推到当前 18-case 套件或 profile v5。提交 `31d4ddf53695` 和 `814021ab9dac` 的三轮 18-case timing 同样只证明各自提交；当前候选是 `provisional_requires_full_suite`，至少三轮新校准完成前没有有效时长阈值。独立 Context-sync/WAIT_ATOMIC prelude 不计入这 18 行。`make full-verify` 会动态串联 physical、metadata recovery、observation recovery、VirtIO fault 和 filesystem allocator fault runner。GitLab 远端必选集合恰好是同一 C 的 1 个 Host-class job 和 8 个 QEMU-class jobs；每项都要生成绑定 checkout/CI 身份、artifact 清单和语义结果的 attestation，并由下载端以 API 身份、唯一 trace marker、安全 ZIP、逐文件哈希和共享 registry 离线复验。allocator job 还必须交付并复验固定的 `fs-allocator-evidence.tar`，不能只凭合并文本日志判定。本地 clean full-verify 是否完成及是否已有 E3 只由 `INDEX.md` 和 bundle manifest 判定，不在本文硬编码；远端没有可用 Runner 时仅 E4 不可用。完整机制和证据边界见 [agentos/security-hardening.md](agentos/security-hardening.md) 与 [agentos/verification.md](agentos/verification.md)。
 
 ## 内核机制说明
 

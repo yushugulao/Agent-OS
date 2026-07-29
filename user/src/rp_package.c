@@ -74,7 +74,7 @@ static int run_kernel_package_stage(void)
 		return -1;
 	}
 	if (!rp_append_file("rp_agentos_mainflow",
-			    "stage=package;package_provenance=kernel_ledger;report_metadata=kernel_index;context_trusted=kernel_shadow;status=ready"))
+			    "stage=package;package_provenance=kernel_ledger;status=ready"))
 		return -1;
 	return 1;
 }

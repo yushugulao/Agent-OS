@@ -78,7 +78,7 @@ static int run_kernel_workbench_stage(void)
 		return -1;
 	}
 	if (!rp_append_file("rp_agentos_mainflow",
-			    "stage=workbench;workbench_file_verify=kernel_metadata_index;context_trusted=kernel_shadow;report_file=verified;status=ready"))
+			    "stage=workbench;workbench_file_verify=kernel_metadata_index;status=ready"))
 		return -1;
 	return 1;
 }

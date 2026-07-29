@@ -34,13 +34,14 @@ static int append_program_inventory_evidence(void)
 	char line[384];
 	int expected_programs = (int)(sizeof(PROGRAMS) / sizeof(PROGRAMS[0]));
 
-	if (!rp_evidence_measure_program_ledger("rp_orch_timing", PROGRAMS,
+	if (!rp_evidence_measure_program_ledger("rp_orch_timing", "rp_orch",
+						PROGRAMS,
 						expected_programs, "fork", 0,
 						&inventory))
 		return 0;
 	line[0] = 0;
 	rp_append_text(line, sizeof(line),
-		       "evidence_role=demo_reference;observation_source=guest_runtime;program_source=rp_orch_timing;program_source_bytes=");
+		       "evidence_role=demo_reference;evidence_generation=runtime;observation_source=guest_runtime;program_source=rp_orch_timing;program_source_bytes=");
 	rp_append_uint_text(line, sizeof(line), inventory.source_bytes);
 	rp_append_text(line, sizeof(line), ";program_source_hash=");
 	rp_append_uint_text(line, sizeof(line), inventory.source_hash);
@@ -51,9 +52,11 @@ static int append_program_inventory_evidence(void)
 	rp_append_text(line, sizeof(line), ";status=reference_observed");
 	if (!rp_append_file("rp_agentcmp", line))
 		return 0;
-	printf("rp_orch: evidence_role=demo_reference observation_source=guest_runtime program_source=rp_orch_timing program_source_bytes=%llu program_source_hash=%llu program_names_digest=%llu programs_observed=%d status=reference_observed\n",
-	       inventory.source_bytes, inventory.source_hash,
-	       inventory.program_names_digest, inventory.programs_observed);
+	for (int i = 0; line[i]; i++)
+		if (line[i] == ';')
+			line[i] = ' ';
+	printf("rp_orch: ");
+	puts(line);
 	return 1;
 }
 
