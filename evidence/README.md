@@ -72,11 +72,12 @@ python3 scripts/capture-final-evidence.py collect \
 该总上限只为容纳串行 recovery/allocator 矩阵，不能把无期限挂起误当成慢速成功；实际采用的
 上限同时写入 manifest 和 command CSV，离线复验要求两处一致。
 
-当前 18-case 时长预算已由冻结提交 `31d4ddf53695` 的三轮串行完整套件校准为
-`calibrated_full_suite`。原始 timing、压缩 runner/Guest 日志、环境、哈希和人工复核边界保存在
-`evidence/calibrations/31d4ddf53695/`；该记录只解除 full-suite 的时长门，不是 release bundle，
-也不把校准运行冒充最终 E3。旧 16-case 样本没有沿用。更换 case 集合、硬件、虚拟化层或
-QEMU 后必须重新进入 provisional 并重新校准。
+当前 18-case 时长预算已由冻结提交 `814021ab9dac` 的三轮串行完整套件校准为
+`calibrated_full_suite`，中位基线为 `310.491647311s`、上限为 `327.10s`。原始 timing、
+确定性压缩 runner/Guest 日志、环境、源码/合同指纹和逐文件哈希保存在
+`evidence/calibrations/814021ab9dac/`；该记录只解除 full-suite 的时长门，不是 release bundle，
+也不把校准运行冒充最终 E3。旧 16-case 与 `31d4ddf53695` 样本均只作历史记录。更换 case
+集合、硬件、虚拟化层或 QEMU 后必须重新进入 provisional 并重新校准。
 
 离线验证文件集合、引用和 SHA256：
 

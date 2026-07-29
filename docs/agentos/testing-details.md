@@ -904,7 +904,7 @@ make workflow-teardown-race-test TOOLPREFIX=riscv64-linux-gnu-
 4. teardown 期间的 I/O debt、cache sponsor、inode 和 file object 被结算，另一 scope 保持进展；
 5. factory-close 与 natural-exit 的 lifecycle id 都只有在退休完成后才能以更高 generation 重用，旧 key 返回 stale，新 account 为零债务且 inode 可复用。
 
-profile validator 要求有序出现 ABI、两类退出、I/O、阻塞引用容量、generation 重用、fresh account 和 `parent passed` marker，并交叉核对 runner 注入的 domain/global file capacity。提交 `75d0dfd` 的 clean `full-verify` 已连续三轮通过；metadata 目录拆分提交 `14a9450` 后又完成三轮定向复测。该用例仍没有精确注入 close 与 spawn/pending exec 的发布瞬间或多线程 controller。
+profile validator 要求有序出现 ABI、两类退出、I/O、阻塞引用容量、generation 重用、fresh account 和 `parent passed` marker，并交叉核对 runner 注入的 domain/global file capacity。提交 `75d0dfd` 的一次 clean `full-verify` 中，该 teardown-race 专项按配置连续运行三轮并通过；metadata 目录拆分提交 `14a9450` 后又完成三轮定向复测。该用例仍没有精确注入 close 与 spawn/pending exec 的发布瞬间或多线程 controller。
 
 ## 26. 内核增长与模块边界预算
 
