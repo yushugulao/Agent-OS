@@ -184,6 +184,8 @@ check_case_contract() {
 		;;
 	agentscope_ucore)
 		require_exact_case_marker "${log_file}" \
+			"agentscope_ucore: scope_storage_quota=1 scope_limit=112 workflow_created=112 peer_created=112 public_created=70 overflow_no_space=1 reusable=1"
+		require_exact_case_marker "${log_file}" \
 			"agentscope_ucore: scope_controller_exit_revoke=1 public_lineage=1"
 		require_exact_case_marker "${log_file}" \
 			"agentscope_ucore: lifecycle_reclamation=1"

@@ -16,6 +16,9 @@ _Static_assert(VFS_SCOPE_MAX_ACTIVE *
 _Static_assert(VFS_SCOPE_MAX_ACTIVE * AGENT_ACTION_SCOPE_LIMIT <=
 	       AGENT_ACTION_HISTORY_MAX,
 	       "action table must reserve every workflow partition");
+_Static_assert(AGENT_FILE_STATUS_BATCH_LIMIT <=
+	       AGENT_FILE_SCOPE_LIMIT,
+	       "status batch must fit one workflow catalog partition");
 
 struct agent_action_history_entry {
 	int tool_id;
@@ -65,9 +68,9 @@ static struct agent_metadata_dependency_view
 	agent_dependencies[AGENT_METADATA_DEPENDENCY_MAX];
 static uint64 agent_action_next_sequence;
 static uint64 agent_dependency_generation;
-/* Serialized by the metadata transaction; bounded by one workflow partition. */
+/* Serialized by the metadata transaction; selection rejects overflow first. */
 static struct agent_status_batch_undo
-	agent_status_batch_undo[AGENT_FILE_SCOPE_LIMIT];
+	agent_status_batch_undo[AGENT_FILE_STATUS_BATCH_LIMIT];
 
 static void
 agent_text_append(char *dst, int n, const char *src)
@@ -448,10 +451,10 @@ agent_metadata_actions_reclaim_scope(uint scope_id)
 
 static int
 agent_status_select(uint scope_id, char *project, char *run_id,
-		    char *stage, uint64 dependency_mask, uchar *selected)
+		    char *stage, uint64 dependency_mask, uchar *selected,
+		    int count)
 {
 	struct agent_catalog_view view;
-	int count = 0;
 
 	for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
 		agent_metadata_txn_work_charge(1);
@@ -462,10 +465,16 @@ agent_status_select(uint scope_id, char *project, char *run_id,
 					   view.meta->run_id, run_id) &&
 		    (stage ? strncmp(view.meta->stage, stage,
 				     sizeof(view.meta->stage)) == 0 :
-		     (dependency_mask & agent_metadata_actions_label_bit(
+			     (dependency_mask & agent_metadata_actions_label_bit(
 					    view.meta->stage)) != 0)) {
-			selected[i / 8] |= 1U << (i % 8);
-			count++;
+			uchar bit = 1U << (i % 8);
+
+			if ((selected[i / 8] & bit) == 0) {
+				if (count >= AGENT_FILE_STATUS_BATCH_LIMIT)
+					return AGENT_STATUS_NO_SPACE;
+				selected[i / 8] |= bit;
+				count++;
+			}
 		}
 		view.meta = 0;
 	}
@@ -514,19 +523,27 @@ agent_metadata_actions_update_status_locked(
 	struct agent_status_batch_undo *undo;
 	int persistent_updated = 0;
 	int primary_updated = 0;
+	int selected_count;
 	int updated = 0;
 	int undo_count = 0;
 
 	memset(selected, 0, sizeof(selected));
 	memset(primary, 0, sizeof(primary));
 	primary_updated = agent_status_select(
-		scope_id, project, run_id, stage, 0, primary);
+		scope_id, project, run_id, stage, 0, primary, 0);
+	if (primary_updated < 0)
+		return primary_updated;
 	if (primary_updated == 0)
 		return 0;
 	memmove(selected, primary, sizeof(selected));
-	if (propagate_dependencies && dependency_mask != 0)
-		agent_status_select(scope_id, project, run_id, 0,
-				    dependency_mask, selected);
+	selected_count = primary_updated;
+	if (propagate_dependencies && dependency_mask != 0) {
+		selected_count = agent_status_select(
+			scope_id, project, run_id, 0, dependency_mask,
+			selected, selected_count);
+		if (selected_count < 0)
+			return selected_count;
+	}
 	for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
 		agent_metadata_txn_work_charge(1);
 		if ((selected[i / 8] & (1U << (i % 8))) == 0)
@@ -537,7 +554,6 @@ agent_metadata_actions_update_status_locked(
 			agent_metadata_catalog_edit_abort(&edit);
 			continue;
 		}
-		/* Catalog admission bounds this scope to the undo partition. */
 		meta = edit.meta;
 		undo = &agent_status_batch_undo[undo_count];
 		undo->slot = i;

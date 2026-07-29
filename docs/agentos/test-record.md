@@ -25,6 +25,36 @@
 
 原始 timing、确定性 gzip 压缩的 runner/Guest 日志、环境、退出状态、逐文件哈希与人工审查边界保存在 `evidence/calibrations/31d4ddf53695/`。该记录使时长门恢复为 `calibrated_full_suite`，但不替代尚待执行的干净 `make full-verify`，也不构成 `evidence/releases/INDEX.md` 所定义的 E3 release bundle。
 
+## 2026-07-27 弹性 catalog 实验与证据解析（历史，未冻结）
+
+该阶段性工作树曾把旧的“每 workflow 固定 112 条”分区改为弹性实验：catalog 仍为 512 条，SYSTEM 64 条、ordinary 448 条；每个 admission/future workflow 保证 16 条，单 scope 最多借用到 400 条。这套未提交实验后来在审查中暴露跨 scope ownership、RETIRING debt 与重复资源账本问题，未进入冻结设计。以下数值仅保留当时事实，不能解释为当前合同。action status batch 当时仍独立限制为 112。
+
+同一候选还把 `exact-field-v1` 改为 128 B 分块流式匹配。长无关字段和跨块长 key 不再因 191 B 临时字段上限失败；目标字段必须精确且唯一，空 key/value、CR、NUL、重复目标和相似前后缀均 fail closed。Host probe 使用 ASan/UBSan，并进入 `ci-check` 的两个测试清单。
+
+当前工作树的完整 `make ci-check` 退出码为 0。静态合同为 capacity `17/17`、rollback fence `15/15`、boot reprobe `57/57`；canonical 预算摘要如下：
+
+```text
+kernel source=49711/49711 lines, raw image=339976/344073 bytes
+runtime text=339156/339957 bytes, BSS=6271992/6516729 bytes
+struct proc=26448/27233 bytes, kernel stack=15072/16384 bytes
+metadata aggregate: source=11670/11848 lines, bytes=356267/356267
+metadata aggregate: loaded text=77162/77896 bytes, BSS=1118596/1118596 bytes
+```
+
+定向 `agentscope_ucore` QEMU 在 96.0 秒墙钟内通过，当时镜像输出 `workflow_created=400 public_created=70 aggregate_blocked=1`。这里的 400 和 peer 16 仅属于上述未冻结弹性实验。mkfs 写入的 342 是四个 workflow 可同时兑现的原始 inode 保证；它同样不能证明后来的 Agent catalog 有效上限。
+
+修复 exact-field 消费者后，单独的 seeded AgentOS action 执行通过：Guest/QEMU 阶段 `401.623s`、外层 `474.690s`，提取 272 个状态文件。因此双目标脚本的默认 seeded action timeout 从 300 秒校准为 480 秒，runner 仍额外保留 30 秒阶段清理余量。随后当前候选的 Reader 定向 E2E 也以 `108.4s` 墙钟通过。以上单目标、Reader、Host 与定向 AgentScope 结果都尚未绑定 clean C；重新校准后的 18-case、`full-verify` 与 C→E bundle 仍须后续完成，不能据此声明 E3/E4。
+
+## 2026-07-29 固定 catalog 分区冻结候选
+
+审查后按“做减法”收敛容量机制：catalog 固定为 SYSTEM 64 与 4 个 workflow 各 112；ACTIVE、CLOSING、RETIRING 合计最多占 4 个准入槽，RETIRING 在目录回收完成前保持原槽。workflow inode 账户也限制为 112；superblock 的 342 inode 仍只表示原始文件系统保证，metadata tracked 有效上限为 112。实现不再引入跨 scope 借用、全局 union/max、`RESOURCE_AGENT_CATALOG`、backing lease 或 metadata envelope 账本。scoped snapshot 继续绑定不可变 `(lifecycle_id,generation)` 并在 prepare/apply 重验；容量、lifecycle 变化、键冲突与不确定提交分别保留明确错误。新的 AgentScope 合同为 A/B 各自创建 112、第 113 个失败、PUBLIC 70 及清理后复用。
+
+当前工作树的固定分区 Host 合同已通过：capacity `19/19`、rollback fence `18/18`、boot reprobe `74/74`；`exact-field-v1` 的 ASan/UBSan Host probe 也通过。`make ci-check` 以退出码 0 完成，墙钟 `212.5s`。其 canonical 预算测量为：kernel source `49705` 行，stripped ELF `344832` B，raw image `339976` B，runtime text `339164` B，BSS `6271992` B，`struct proc` `26448` B，kernel stack `15072/16384` B，boot stack `10560/65536` B；metadata aggregate 为 source `11719` 行、`357485` B，loaded text `77337` B，BSS `1118596` B。
+
+定向 AgentScope QEMU 输出精确 marker `scope_storage_quota=1 scope_limit=112 workflow_created=112 peer_created=112 public_created=70 overflow_no_space=1 reusable=1`，case 墙钟 `96.1s`、外层命令 `158.35s`，同时记录 writes `138`、跨 scope metadata query `833ms`；Reader 定向 E2E 以 `125.0s` 通过。独立安全复核未发现剩余 P0/P1 冻结阻塞项。唯一登记的 P2 是 runtime fail-closed 后 `prefetch_handoff` 仍可能发布同 scope 的建议性旧 hint；该 hint 不授予能力、不修改 catalog 或文件，也不改变 IPC 结果，冻结后再以行为保持的小重构统一 catalog read preflight。
+
+以上仍是未绑定 clean C 的冻结候选结果。三轮干净 18-case 时长标定、`make full-verify`、C→E release bundle 和远程 Runner attestation 尚未完成，因此不得据此声明最终 E3/E4 或可交付状态。
+
 ## 2026-07-27 冻结前工作树本地阶段性验收
 
 Reader action runner 已改为阶段感知故障判定：clean/build 阶段只依据子进程退出码，QEMU guest 启动后才按去 ANSI 的完整日志行识别 panic、trap、`check failed` 和 orchestrator failure。以下三组测试在当前工作树本地依次通过：
@@ -778,7 +808,7 @@ iobudget_ucore: parent passed
 
 最终修复后的独立运行 `elapsed=2.4s`。ABI sized-copy、线程退出 lease、scheduler 中断交付、fault 退出清理、PUBLIC budget/shared 上界、完成归因、cache 服务隔离、workflow 进展和 CONTROL class 共九类实质断言；日志中是八个具名机制 marker 加 `parent passed`。2026-07-24 的 pipe 安全主体委派改动后，完整 Agent 脚本以墙钟约 `359.4s` 完成 16/16。ABI v3 的设备 burst/refill 为 560/280：普通流量必须取得根信用，SYSTEM/CONTROL 可在根信用耗尽时带 device debt 前进，因此根 bucket 不是保护流量的硬总上限。静态 envelope 只约束配置总和。cache 的 SYSTEM/PUBLIC/active workflow floor/cap 为 40/96、24/48、36/64，退役清理 job 临时为 3/8。
 
-历史 metadata/I/O 完整轮的 `agentscope_ucore` 观察到 `metadata_txn_contentions=3`、`metadata_cross_scope_progress=1 queries=32 latency_ms=684`、metadata transaction/COW、微写合并、最终一致性、容量、`lifecycle_reclamation=1` 和 `parent passed`，`elapsed=139.9s`。该轮的生命周期状态后来扩展为 ACTIVE/CLOSING/RETIRING；当前 `NPROC` 身份账本仍只复用 `used == 0` 的记录，计入 admission 的 ACTIVE/CLOSING 与 RETIRING scope 合计不超过 8，并由 reaper 在 `NPROC` 身份账本范围轮转选择 retiring 清理。
+历史 metadata/I/O 完整轮的 `agentscope_ucore` 观察到 `metadata_txn_contentions=3`、`metadata_cross_scope_progress=1 queries=32 latency_ms=684`、metadata transaction/COW、微写合并、最终一致性、容量、`lifecycle_reclamation=1` 和 `parent passed`，`elapsed=139.9s`。该阶段的生命周期状态后来扩展为 ACTIVE/CLOSING/RETIRING；当时的 `NPROC` 身份账本只复用 `used == 0` 的记录，计入 admission 的 ACTIVE/CLOSING 与 RETIRING scope 合计不超过 8，并由 reaper 在 `NPROC` 身份账本范围轮转选择 retiring 清理。冻结候选随后把运行时 admission 收紧为三种状态合计最多 4 个；这不反向改写该历史结果。
 
 该动态 I/O 用例只覆盖一个 PUBLIC 与一个 workflow Orchestrator `CONTROL` owner；没有断言 `shared_grants` 或排队轮转，也未覆盖 Recovery、SYSTEM/workflow `BACKGROUND`、多 workflow 同时压力、retiring 3/8、跨 owner LRU/transient、主动 device-debt 注入，以及启动 bank 损坏、VirtIO 设备错误/短 I/O/metadata COW 中途掉电。线程资源域改动前的冻结源码曾以 `75.1s` 通过 `make fs-enospc-test` 的 quota/domain/persistent principal/orphan/reboot 全流程，但其中没有专门在 grouped qmap claim 中点断电。以上历史专项不能外推到任何后续 C；其聚合结果必须由 release bundle 证明。
 

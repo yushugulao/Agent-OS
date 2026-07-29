@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Static contract for metadata catalog admission and fair reconciliation."""
+"""Static contract for fixed metadata-catalog partitions and reconciliation."""
 
 from __future__ import annotations
 
@@ -40,6 +40,7 @@ def require(source: str, token: str, label: str) -> None:
 
 def validate_sources(sources: dict[str, str]) -> None:
     agent = sources["agent"]
+    actions = sources["actions"]
     catalog = sources["catalog"]
     catalog_h = sources["catalog_h"]
     fs = sources["fs"]
@@ -85,10 +86,24 @@ def validate_sources(sources: dict[str, str]) -> None:
         "#define AGENT_FILE_META_MAX       512",
         "#define AGENT_FILE_SYSTEM_LIMIT   64",
         "#define AGENT_FILE_SCOPE_LIMIT    112",
-        "#define AGENT_FILE_SCOPE_GUARANTEE 16",
         "(AGENT_FILE_META_MAX - AGENT_FILE_SYSTEM_LIMIT)",
+        "#define AGENT_FILE_STATUS_BATCH_LIMIT 112",
     ):
         require(agent, token, "catalog partition")
+    for forbidden in (
+        "AGENT_FILE_SCOPE_GUARANTEE",
+        "AGENT_FILE_SCOPE_BURST_LIMIT",
+        "RESOURCE_AGENT_CATALOG",
+        "agent_catalog_pressure_admissible",
+        "agent_catalog_resource_",
+        "vfs_scope_metadata_envelope",
+    ):
+        for name, source in sources.items():
+            if forbidden in source:
+                raise ContractError(
+                    f"obsolete elastic catalog mechanism remains in {name}: "
+                    f"{forbidden}"
+                )
     for token in (
         "agent_catalog_files[AGENT_FILE_META_MAX]",
         "agent_catalog_scopes[AGENT_FILE_META_MAX]",
@@ -97,9 +112,12 @@ def validate_sources(sources: dict[str, str]) -> None:
         require(catalog, token, "fixed catalog storage")
     if "agent_catalog_apply_slots" in catalog:
         raise ContractError("snapshot plans must not use a shared slot array")
-    require(catalog,
-            "VFS_SCOPE_MAX_ACTIVE * AGENT_FILE_SCOPE_LIMIT ==\n\t       AGENT_FILE_ORDINARY_LIMIT",
-            "exact ordinary partition")
+    require(
+        catalog,
+        "VFS_SCOPE_MAX_ACTIVE * AGENT_FILE_SCOPE_LIMIT ==\n"
+        "\t       AGENT_FILE_ORDINARY_LIMIT",
+        "fixed ordinary partitions",
+    )
     require(catalog_h, "#define AGENT_CATALOG_SCOPE_PLAN_MAX 8",
             "retained lifecycle scope accounting")
     require(catalog,
@@ -161,6 +179,7 @@ def validate_sources(sources: dict[str, str]) -> None:
     resolver = function_body(catalog, "agent_metadata_catalog_resolve(")
     key_match = function_body(catalog, "agent_catalog_key_matches(")
     for token in ("agent_metadata_txn_work_charge(1)", "i == except_slot",
+                  "result->ordinary++", "result->owned++",
                   "result->matched |= matched",
                   "result->states |= agent_catalog_states[i]",
                   "result->slot = AGENT_CATALOG_CONFLICT"):
@@ -178,25 +197,162 @@ def validate_sources(sources: dict[str, str]) -> None:
         "return present ? 1 : absent ? 0 : -1",
     ):
         require(catalog_h, token, "shared catalog identity classification")
-    capacity = function_body(catalog, "agent_catalog_capacity_available(")
+    scope_admission = function_body(catalog, "agent_catalog_scope_admissible(")
+    for token in ("vfs_scope_lifecycle(scope_id, lifecycle)",
+                  "workflow_lifecycle_active(*lifecycle)",
+                  "workflow_lifecycle_closing(*lifecycle)"):
+        require(scope_admission, token, "trusted target lifecycle admission")
+    scope_create = function_body(vfs, "static int vfs_scope_create(")
+    for token in (
+        "if (ref->retiring)\n\t\t\t\tretiring++",
+        "workflow_lifecycle_active(ref->lifecycle) ||",
+        "workflow_lifecycle_closing(ref->lifecycle)",
+        "allocated++",
+        "allocated + retiring < VFS_SCOPE_MAX_ACTIVE",
+        "allocated + retiring < VFS_SCOPE_LIFECYCLE_CAP",
+    ):
+        require(scope_create, token, "active/closing/retiring scope slots")
+    if not (scope_create.find("if (ref->retiring)") <
+            scope_create.find("allocated + retiring < VFS_SCOPE_MAX_ACTIVE")):
+        raise ContractError("retiring scopes must occupy admission slots")
+    storage_guarantee = function_body(vfs, "vfs_scope_storage_guarantee(")
+    for token in (
+        "(!ref->retiring &&",
+        "!workflow_lifecycle_active(ref->lifecycle)",
+        "!workflow_lifecycle_closing(ref->lifecycle)",
+        "allocated++",
+        "if (ref->scope_id == exempt_scope)",
+        "used = resource_account_usage(",
+        "inode ? RESOURCE_FS_INODE : RESOURCE_FS_BLOCK",
+        "if (used < guarantee)",
+        "required += guarantee - used",
+        "if (allocated < VFS_SCOPE_MAX_ACTIVE)",
+        "(VFS_SCOPE_MAX_ACTIVE - allocated) * guarantee",
+    ):
+        require(storage_guarantee, token, "retained-scope storage guarantee")
+    if "!ref->used || ref->retiring ||" in storage_guarantee:
+        raise ContractError("retiring scope was skipped by storage guarantee")
+    retained_pos = storage_guarantee.find("(!ref->retiring &&")
+    allocated_pos = storage_guarantee.find("allocated++")
+    exempt_pos = storage_guarantee.find("if (ref->scope_id == exempt_scope)")
+    usage_pos = storage_guarantee.find("used = resource_account_usage(")
+    deficit_pos = storage_guarantee.find("required += guarantee - used")
+    future_pos = storage_guarantee.find(
+        "(VFS_SCOPE_MAX_ACTIVE - allocated) * guarantee"
+    )
+    if not (0 <= retained_pos < allocated_pos < exempt_pos < usage_pos <
+            deficit_pos < future_pos):
+        raise ContractError(
+            "retiring/active usage must offset its slot before future guarantees"
+        )
+    if storage_guarantee.count("allocated++") != 1:
+        raise ContractError("each retained scope must occupy exactly one guarantee slot")
+    admission = function_body(catalog, "agent_catalog_admission(")
     for token in ("agent_metadata_catalog_resolve(scope_id, candidate, except_slot",
                   "result.matched", "AGENT_CATALOG_CONFLICT",
-                  "result.ordinary < AGENT_FILE_ORDINARY_LIMIT"):
-        require(capacity, token, "authoritative duplicate admission")
+                  "AGENT_FILE_SCOPE_LIMIT", "result.owned >= limit",
+                  "result.ordinary >= AGENT_FILE_ORDINARY_LIMIT",
+                  "if (!growth || scope_id == VFS_SCOPE_SYSTEM)",
+                  "agent_catalog_scope_admissible(scope_id, &lifecycle)",
+                  "return AGENT_CATALOG_INTERRUPTED"):
+        require(admission, token, "fixed-partition catalog admission")
+    hard_pos = admission.find("result.owned >= limit")
+    bypass_pos = admission.find("if (!growth || scope_id == VFS_SCOPE_SYSTEM)")
+    lifecycle_pos = admission.find("agent_catalog_scope_admissible(")
+    if not (0 <= hard_pos < bypass_pos < lifecycle_pos):
+        raise ContractError(
+            "only ordinary growth may cross lifecycle admission"
+        )
     require(catalog, "scope_id != VFS_SCOPE_SYSTEM", "SYSTEM partition")
     commit = function_body(catalog, "int agent_metadata_catalog_edit_commit(")
-    for token in ("admission = agent_catalog_capacity_available(",
-                  "edit->scope_id, edit->slot, edit->meta)",
+    for token in ("!agent_catalog_files[edit->slot].used",
+                  "admission = agent_catalog_admission(",
+                  "edit->scope_id, edit->slot, edit->meta, growth)",
                   "admission <= 0", "AGENT_CATALOG_CONFLICT"):
         require(commit, token, "authoritative commit admission")
     normalize_pos = commit.find("agent_catalog_normalize_physical(edit->slot, edit->meta)")
-    admission_pos = commit.find("admission = agent_catalog_capacity_available(")
+    admission_pos = commit.find("growth = edit->slot")
     if not (0 <= normalize_pos < admission_pos):
         raise ContractError("physical key normalization must precede commit admission")
     require(commit, "agent_catalog_scopes[edit->slot] != edit->scope_id",
             "immutable record scope")
     allocate = function_body(catalog, "int agent_metadata_catalog_alloc_slot(")
-    require(allocate, "agent_metadata_txn_work_charge(1)", "slot search budget")
+    for token in ("agent_catalog_admission(scope_id, -1, 0, 1)",
+                  "agent_metadata_txn_work_charge(1)"):
+        require(allocate, token, "fair slot allocation")
+    restore = function_body(catalog, "int agent_metadata_catalog_restore(")
+    require(restore, "previous_scope, slot, previous, 0)",
+            "receipt-authorized hard rollback")
+    if "previous_scope, slot, previous, 1)" in restore:
+        raise ContractError("exact undo restore must not depend on live admission")
+    if "agent_catalog_admission_topology" in catalog + catalog_h:
+        raise ContractError("catalog restored a duplicate lifecycle topology")
+    key_start = catalog_h.find("struct agent_catalog_plan_key {")
+    key_end = catalog_h.find("};", key_start)
+    if key_start < 0 or key_end < 0:
+        raise ContractError("catalog plan key declaration missing")
+    key_decl = catalog_h[key_start:key_end]
+    for token in (
+        "const struct agent_meta_record *records;",
+        "uint64 candidate_epoch, catalog_generation, lifecycle_generation;",
+        "uint count, reload_scope;",
+        "int reload_one_scope;",
+        "uint lifecycle_id;",
+    ):
+        require(key_decl, token, "scalar lifecycle plan binding")
+    for token in ("struct workflow_lifecycle_key", "reserved", "topology"):
+        if token in key_decl:
+            raise ContractError(
+                "raw plan key contains lifecycle padding or duplicate topology"
+            )
+    plan_key = function_body(catalog, "agent_catalog_plan_key(")
+    for token in ("memset(&key, 0, sizeof(key))",
+                  "key.lifecycle_id = lifecycle.id",
+                  "key.lifecycle_generation = lifecycle.generation"):
+        require(plan_key, token, "canonical scalar lifecycle binding")
+    plan_matches = function_body(catalog, "agent_catalog_plan_matches(")
+    for token in ("left->lifecycle_id == right->lifecycle_id",
+                  "left->lifecycle_generation == right->lifecycle_generation"):
+        require(plan_matches, token, "exact scalar lifecycle match")
+    plan_count = function_body(catalog, "agent_catalog_plan_count(")
+    for token in ("AGENT_FILE_SYSTEM_LIMIT", "AGENT_FILE_ORDINARY_LIMIT",
+                  "AGENT_FILE_SCOPE_LIMIT"):
+        require(plan_count, token, "hard snapshot bounds")
+    if "agent_catalog_scope_admissible(" in plan_count:
+        raise ContractError("full boot plan counting gained live lifecycle policy")
+    prepare = function_body(catalog, "agent_metadata_catalog_prepare_snapshot(")
+    for token in ("struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none()",
+                  "reload_one_scope &&\n\t    !agent_catalog_scope_admissible(reload_scope, &lifecycle)",
+                  "agent_catalog_generation, lifecycle",
+                  "result->plan_lifecycle_id != lifecycle.id",
+                  "result->plan_lifecycle_generation != lifecycle.generation",
+                  "AGENT_METADATA_LOAD_INTERRUPTED"):
+        require(prepare, token, "scoped reload lifecycle-bound prepare")
+    lifecycle_check = prepare.find("agent_catalog_scope_admissible(")
+    plan_key_build = prepare.find("key = agent_catalog_plan_key(")
+    lifecycle_revalidate = prepare.find(
+        "result->plan_lifecycle_generation != lifecycle.generation"
+    )
+    if not (0 <= lifecycle_check < plan_key_build < lifecycle_revalidate):
+        raise ContractError(
+            "scoped prepare must bind and revalidate immutable lifecycle identity"
+        )
+    apply = function_body(catalog, "agent_metadata_catalog_apply_snapshot(")
+    for token in ("if (reload_one_scope &&\n\t    (!agent_catalog_scope_admissible(reload_scope, &lifecycle)",
+                  "!agent_catalog_scope_admissible(reload_scope, &lifecycle)",
+                  "result->plan_lifecycle_id != lifecycle.id",
+                  "result->plan_lifecycle_generation != lifecycle.generation",
+                  "agent_catalog_generation, lifecycle",
+                  "AGENT_METADATA_LOAD_INTERRUPTED",
+                  'panic("Agent catalog apply binding invariant")'):
+        require(apply, token, "scoped reload lifecycle recheck")
+    lifecycle_check = apply.find("agent_catalog_scope_admissible(")
+    plan_key_build = apply.find("key = agent_catalog_plan_key(")
+    projection_begin = apply.find("agent_metadata_txn_projection_begin()")
+    if not (0 <= lifecycle_check < plan_key_build < projection_begin):
+        raise ContractError(
+            "scoped lifecycle generation must be rechecked before apply"
+        )
     allocate_fid = function_body(catalog, "uint64 agent_metadata_catalog_alloc_fid(")
     for token in ("uchar used_fids[(AGENT_FILE_META_MAX + 7) / 8]",
                   "memset(used_fids, 0, sizeof(used_fids))",
@@ -217,6 +373,7 @@ def validate_sources(sources: dict[str, str]) -> None:
         "workflow_lifecycle_key_valid(lifecycle)",
         "lifecycle.id > WORKFLOW_LIFECYCLE_CAP",
         "AGENT_FILE_SYSTEM_LIMIT : AGENT_FILE_SCOPE_LIMIT",
+        "++ordinary > AGENT_FILE_ORDINARY_LIMIT",
         "prior->slot == record->slot",
         "prior->meta.fid == record->meta.fid",
         "prior->meta.physical_name",
@@ -249,23 +406,75 @@ def validate_sources(sources: dict[str, str]) -> None:
     account = function_body(fs, "int fs_storage_scope_account_create(")
     require(account,
             "fs_storage.workflow_inode_domain_limit < AGENT_FILE_SCOPE_LIMIT ?",
-            "scope account limit")
-    admission = function_body(fs, "int fs_storage_scope_admissible(void)")
+            "fixed workflow inode account limit")
     for token in (
-        "AGENT_FILE_SCOPE_GUARANTEE",
-        "vfs_scope_metadata_inode_usage()",
-        "AGENT_FILE_ORDINARY_LIMIT - required_metadata",
+        "RESOURCE_FS_INODE",
+        "fs_storage.workflow_inode_domain_limit :\n"
+        "\t\t\tAGENT_FILE_SCOPE_LIMIT",
     ):
-        require(admission, token, "workflow admission")
-    reserve = function_body(fs, "static int fs_storage_reserve(")
+        require(account, token, "fixed workflow inode account limit")
+    require(
+        fs,
+        "VFS_SCOPE_MAX_ACTIVE * AGENT_FILE_SCOPE_LIMIT ==\n"
+        "\t\t       AGENT_FILE_ORDINARY_LIMIT",
+        "catalog/inode fixed-partition correspondence",
+    )
+
+    status_select = function_body(actions, "agent_status_select(")
     for token in (
-        "inode && charge->level == FS_CHARGE_WORKFLOW",
-        "vfs_scope_metadata_inode_usage()",
-        "vfs_scope_storage_guarantee(",
-        "metadata_reserve >=",
-        "AGENT_FILE_ORDINARY_LIMIT - metadata_used",
+        "count >= AGENT_FILE_STATUS_BATCH_LIMIT",
+        "return AGENT_STATUS_NO_SPACE",
+        "(selected[i / 8] & bit) == 0",
     ):
-        require(reserve, token, "inode lease")
+        require(status_select, token, "bounded status selection")
+    status_update = function_body(
+        actions, "agent_metadata_actions_update_status_locked("
+    )
+    select_end = status_update.rfind("agent_status_select(")
+    edit_start = status_update.find("agent_metadata_catalog_edit_begin(")
+    if not (0 <= select_end < edit_start):
+        raise ContractError("status selection must reject overflow before mutation")
+    for token in (
+        "agent_status_batch_undo[AGENT_FILE_STATUS_BATCH_LIMIT]",
+        "if (primary_updated < 0)",
+        "if (selected_count < 0)",
+    ):
+        require(actions, token, "bounded status rollback")
+    require(objects, "if (updated < 0)", "status batch error propagation")
+
+    for token in (
+        "#define AGENT_CATALOG_STALE       -2",
+        "#define AGENT_CATALOG_CONFLICT    -3",
+        "#define AGENT_CATALOG_INDETERMINATE -4",
+        "#define AGENT_CATALOG_NO_SPACE    -5",
+        "#define AGENT_CATALOG_INTERRUPTED -6",
+    ):
+        require(catalog_h, token, "structured catalog errors")
+    error_status = function_body(objects, "agent_catalog_error_status(")
+    for token in (
+        "case AGENT_CATALOG_NO_SPACE:",
+        "return AGENT_STATUS_NO_SPACE",
+        "case AGENT_CATALOG_INTERRUPTED:",
+        "case AGENT_CATALOG_STALE:",
+        "return AGENT_STATUS_RETRY",
+        "case AGENT_CATALOG_CONFLICT:",
+        "return AGENT_STATUS_CONFLICT",
+        "case AGENT_CATALOG_INDETERMINATE:",
+        "return AGENT_STATUS_INDETERMINATE",
+        "default:",
+        "return AGENT_STATUS_IO_ERROR",
+    ):
+        require(error_status, token, "catalog-to-Agent ABI status mapping")
+    meta_set = function_body(objects, "int sys_agent_file_meta_set(uint64 metaaddr)")
+    for token in (
+        "slot = agent_metadata_catalog_alloc_slot(scope_id)",
+        "result = agent_catalog_error_status(slot)",
+        "commit_status = agent_metadata_catalog_edit_commit(&edit, changes)",
+        "result = agent_catalog_error_status(commit_status)",
+    ):
+        require(meta_set, token, "catalog error propagation to Agent ABI")
+    if meta_set.count("result = agent_catalog_error_status(commit_status)") != 2:
+        raise ContractError("clear and edit commit must both preserve catalog errors")
 
     create = function_body(fs, "struct inode *fs_create(")
     if not (create.find("dirlookup(") < create.find("ialloc(") < create.find("dirlink(")):
@@ -275,14 +484,6 @@ def validate_sources(sources: dict[str, str]) -> None:
             ialloc.find("dip->type = type")):
         raise ContractError("inode lease must precede persistent allocation intent")
     require(ialloc, "fs_storage_release(charge->owner, 1)", "allocation refund")
-
-    usage = function_body(vfs, "vfs_scope_metadata_inode_usage(void)")
-    require(usage,
-            "(!ref->retiring &&\n\t\t     !workflow_lifecycle_key_valid",
-            "retiring refund")
-    if "ref->retiring ||" in usage or "workflow_lifecycle_active" in usage:
-        raise ContractError("retiring metadata inode leases were excluded")
-    require(usage, "RESOURCE_FS_INODE", "generic resource lease")
 
     require(scan, "uchar seen[AGENT_FILE_META_MAX]", "bounded scan bitmap")
     require(scan, "SCAN_BIND_DEFERRED", "capacity failure class")
@@ -549,8 +750,6 @@ def validate_sources(sources: dict[str, str]) -> None:
     for token in ("agent_metadata_catalog_borrow_scan(i, &view)",
                   "view.state & AGENT_CATALOG_STATE_QUARANTINE"):
         require(step_scan, token, "quarantine-preserving stale sweep")
-    require(objects, "commit_status == AGENT_CATALOG_CONFLICT ?",
-            "hidden duplicate conflict status")
     meta_set = function_body(objects, "int sys_agent_file_meta_set(uint64 metaaddr)")
     for token in ("agent_metadata_catalog_resolve(scope_id, &meta, -1, &selector)",
                   "selector.states & AGENT_CATALOG_STATE_PENDING",
@@ -605,6 +804,7 @@ def validate_sources(sources: dict[str, str]) -> None:
 def load_sources(root: Path) -> dict[str, str]:
     paths = {
         "agent": root / "os/agent.h",
+        "actions": root / "os/agent_metadata_actions.c",
         "catalog": root / "os/agent_metadata_catalog.c",
         "catalog_h": root / "os/agent_metadata_catalog.h",
         "fs": root / "os/fs.c",

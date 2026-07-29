@@ -1876,11 +1876,11 @@ int main(void)
 	ok = ok && rp_file_contains("rp_prov_query", "agentos_kernel_timeline=observed");
 	ok = ok && rp_file_contains("rp_prov_query", "agentos_kernel_provenance=observed");
 	ok = ok && rp_file_contains("rp_prov_query", "agentos_kernel_ledger=observed");
-	ok = ok && rp_file_contains("rp_prov_specs", "template=provenance-query-template:calculation-root-neighborhood");
+	ok = ok && rp_file_contains("rp_prov_specs", "template=provenance-query-template:graph-neighborhood");
 	ok = ok && rp_file_contains("rp_prov_specs", "spec=provenance-query:RUN-042:workflow-recovery");
 	ok = ok && rp_file_contains("rp_prov_exec", "execution=provenance-query-execution:workflow-recovery");
 	ok = ok && rp_file_contains("rp_prov_exec", "row=rp_stage_state");
-	ok = ok && rp_file_contains("rp_prov_query_pkg", "comparison=provenance-query-comparison:RUN-042:rendered-vs-direct");
+	ok = ok && rp_file_contains("rp_prov_query_pkg", "comparison=provenance-query-comparison:RUN-042:replay-vs-direct");
 	ok = ok && rp_file_contains("rp_prov_query_pkg", "packet=provenance-query-packet:RUN-042:lineage-review");
 	ok = ok && rp_file_contains("rp_web_bundle", "provenance_queries_page=rp_prov_query;specs=3;executions=3;packets=1;status=ready");
 	ok = ok && rp_file_contains("rp_review_dashboard", "subsection=provenance_queries;source=rp_prov_query;queries=3;executions=3;demo_expected_checks=72;catalog_outcome=matched;status=verified");
@@ -1998,17 +1998,27 @@ int main(void)
 			if (!rp_evidence_measure_file_field(
 				    COMPARE_RUNTIME_SPECS[i].source,
 				    COMPARE_RUNTIME_SPECS[i].key,
-				    COMPARE_RUNTIME_SPECS[i].value, &measured))
+				    COMPARE_RUNTIME_SPECS[i].value, &measured)) {
+				printf("rp_compare_plain: runtime_exact_field_failed case=%s source=%s key=%s\n",
+				       COMPARE_RUNTIME_SPECS[i].name,
+				       COMPARE_RUNTIME_SPECS[i].source,
+				       COMPARE_RUNTIME_SPECS[i].key);
 				return 1;
+			}
 			compare_runtime_assertions_passed++;
 			if (!append_compare_runtime_case(&COMPARE_RUNTIME_SPECS[i],
-							 &measured))
+							 &measured)) {
+				printf("rp_compare_plain: runtime_receipt_failed case=%s\n",
+				       COMPARE_RUNTIME_SPECS[i].name);
 				return 1;
+			}
 			runtime_sources[i] = COMPARE_RUNTIME_SPECS[i].source;
 		}
 		if (!rp_evidence_fold_files(runtime_sources, runtime_case_count,
-					    &source_digest))
+					    &source_digest)) {
+			printf("rp_compare_plain: runtime_digest_failed\n");
 			return 1;
+		}
 		compare_line[0] = 0;
 		rp_append_text(compare_line, sizeof(compare_line),
 			       "evidence_role=runtime_verified;evidence_generation=runtime;claim_protocol=exact-field-v1;runtime_compare_cases=");

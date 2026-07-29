@@ -7,6 +7,13 @@
 
 #define AUDITOR_AUDIT_CAP 128
 #define AUDITOR_EDGE_CAP 128
+#define AUDITOR_ECHO_MARKER_1 "audit-e2e-1"
+#define AUDITOR_ECHO_MARKER_2 "audit-e2e-2"
+
+_Static_assert(sizeof(AUDITOR_ECHO_MARKER_1) <= AGENT_CONTEXT_TEXT_SIZE &&
+	       sizeof(AUDITOR_ECHO_MARKER_2) <= AGENT_CONTEXT_TEXT_SIZE,
+	       "auditor markers must survive Context projection");
+
 static struct agent_audit_record kernel_audit_records[AUDITOR_AUDIT_CAP];
 static struct agent_provenance_edge kernel_edges[AUDITOR_EDGE_CAP];
 static struct agent_ledger_summary kernel_ledger;
@@ -124,8 +131,8 @@ static int run_kernel_audit(void)
 		auditor_ops[i].tool_id = AGENT_TOOL_ECHO;
 		auditor_ops[i].request_id = 4101 + i;
 	}
-	strcpy(auditor_ops[0].payload, "audit-kernel-check-1");
-	strcpy(auditor_ops[1].payload, "audit-kernel-check-2");
+	strcpy(auditor_ops[0].payload, AUDITOR_ECHO_MARKER_1);
+	strcpy(auditor_ops[1].payload, AUDITOR_ECHO_MARKER_2);
 	if (agent_run(auditor_ops, auditor_results, 2, 0) != 2 ||
 	    auditor_results[0].status != AGENT_STATUS_OK ||
 	    auditor_results[1].status != AGENT_STATUS_OK ||
@@ -173,8 +180,8 @@ static int run_kernel_audit(void)
 		if (record->kind == AGENT_AUDIT_KIND_CONTEXT &&
 		    record->pid == self_pid && record->tool_id == AGENT_TOOL_ECHO &&
 		    record->status == AGENT_STATUS_OK &&
-		    (strcmp(record->text, "audit-kernel-check-1") == 0 ||
-		     strcmp(record->text, "audit-kernel-check-2") == 0))
+		    (strcmp(record->text, AUDITOR_ECHO_MARKER_1) == 0 ||
+		     strcmp(record->text, AUDITOR_ECHO_MARKER_2) == 0))
 			exact_audit_records++;
 	}
 	if ((uint64)auditor_chain_gaps > kernel_ledger.dropped_records ||

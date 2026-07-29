@@ -2,6 +2,7 @@
 """Enforce reproducible kernel growth and Agent test-suite budgets."""
 
 import argparse
+import hashlib
 import json
 import math
 import re
@@ -24,8 +25,55 @@ AGENT_TEST_CALIBRATION_STATUSES = frozenset(
     (AGENT_TEST_CALIBRATION_READY, AGENT_TEST_CALIBRATION_PROVISIONAL)
 )
 AGENT_TEST_CALIBRATED_FIELDS = frozenset(
-    ("baseline_seconds", "max_seconds", "calibration_samples")
+    (
+        "baseline_seconds",
+        "max_seconds",
+        "calibration_samples",
+        "source_fingerprint_sha256",
+    )
 )
+AGENT_TEST_SOURCE_FINGERPRINT_VERSION = "agent-test-source-contract-v1"
+AGENT_TEST_SOURCE_REQUIRED_PATHS = (
+    "Makefile",
+    ".gitlab-ci.yml",
+    "user/Makefile",
+    "nfs/Makefile",
+    "scripts/run-agent-tests.sh",
+    "scripts/evidence-wiring.sh",
+    "scripts/agent_test_runner.py",
+    "scripts/validate-kernel-test-log.py",
+    "scripts/initproc.py",
+    "scripts/test-sync-owner-wiring.py",
+    "scripts/test-wait-atomic-wiring.py",
+    "scripts/check-wait-queue-contract.py",
+    "scripts/check-kernel-budgets.py",
+)
+AGENT_TEST_SOURCE_GLOBS = (
+    "os/**/*.c",
+    "os/**/*.h",
+    "os/**/*.S",
+    "os/**/*.ld",
+    "os/**/*.inc",
+    "os/**/*.py",
+    "user/src/**/*.c",
+    "user/src/**/*.h",
+    "user/src/**/*.S",
+    "user/include/**/*.h",
+    "user/lib/**/*.c",
+    "user/lib/**/*.h",
+    "user/lib/**/*.S",
+    "user/lib/**/*.ld",
+    "user/lib/**/*.inc",
+    "nfs/**/*.c",
+    "nfs/**/*.h",
+    "nfs/**/*.S",
+    "nfs/**/*.ld",
+    "nfs/**/*.inc",
+    "*_abi.h",
+    "*_policy.h",
+    "*_policy.inc",
+)
+AGENT_TEST_SOURCE_EXCLUDES = frozenset(("os/initproc.S",))
 REQUIRED_KERNEL_SOURCE_GLOBS = frozenset(
     (
         "os/**/*.c",
@@ -339,6 +387,94 @@ def require_string_array(mapping, name):
     return value
 
 
+def collect_agent_test_source_paths(root):
+    root = Path(root).resolve()
+    if not root.is_dir():
+        raise BudgetError(f"Agent test source root is not a directory: {root}")
+
+    paths = set()
+    for relative in AGENT_TEST_SOURCE_REQUIRED_PATHS:
+        path = root / relative
+        if not path.is_file():
+            raise BudgetError(
+                "Agent test source/contract input is missing: " + relative
+            )
+        paths.add(path)
+    for pattern in AGENT_TEST_SOURCE_GLOBS:
+        for path in root.glob(pattern):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(root).as_posix()
+            if relative not in AGENT_TEST_SOURCE_EXCLUDES:
+                paths.add(path)
+
+    relative_paths = tuple(
+        sorted(path.relative_to(root).as_posix() for path in paths)
+    )
+    if not relative_paths:
+        raise BudgetError("Agent test source/contract inventory is empty")
+    return relative_paths
+
+
+def agent_test_source_fingerprint(root, config):
+    root = Path(root).resolve()
+    paths = collect_agent_test_source_paths(root)
+    tests = config["agent_test_suite"]
+    contract = {
+        "canonical_toolchain": config["canonical_toolchain"],
+        "expected_cases": tests["expected_cases"],
+        "runner_profile": tests["runner_profile"],
+        "runner_tag": tests["runner_tag"],
+    }
+    contract_bytes = json.dumps(
+        contract,
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("ascii")
+
+    digest = hashlib.sha256()
+
+    def add_record(label, data):
+        label_bytes = label.encode("utf-8")
+        digest.update(len(label_bytes).to_bytes(8, "big"))
+        digest.update(label_bytes)
+        digest.update(len(data).to_bytes(8, "big"))
+        digest.update(data)
+
+    add_record("version", AGENT_TEST_SOURCE_FINGERPRINT_VERSION.encode("ascii"))
+    add_record("contract", contract_bytes)
+    for relative in paths:
+        try:
+            data = (root / relative).read_bytes()
+        except OSError as error:
+            raise BudgetError(
+                f"cannot read Agent test source/contract input {relative}: "
+                f"{error}"
+            ) from error
+        add_record(relative, data)
+    return digest.hexdigest(), paths
+
+
+def check_agent_test_source_fingerprint(root, config):
+    tests = config["agent_test_suite"]
+    if tests["calibration_status"] != AGENT_TEST_CALIBRATION_READY:
+        return None
+    actual, paths = agent_test_source_fingerprint(root, config)
+    expected = tests["source_fingerprint_sha256"]
+    if actual != expected:
+        raise BudgetError(
+            "Agent test source/contract fingerprint mismatch: "
+            f"expected={expected}, actual={actual}; return duration policy "
+            "to provisional and recalibrate the complete suite"
+        )
+    print(
+        "[kernel-budget] Agent source/contract fingerprint: "
+        f"sha256={actual}, inputs={len(paths)}"
+    )
+    return actual
+
+
 def validate_pair(
     section, baseline_name, maximum_name, integer=False, max_headroom=0.05
 ):
@@ -631,6 +767,15 @@ def validate_config(config):
                 f"agent_test_suite.runner_profile.{name} must be a string"
             )
     if calibration_status == AGENT_TEST_CALIBRATION_READY:
+        fingerprint = tests.get("source_fingerprint_sha256")
+        if (
+            not isinstance(fingerprint, str)
+            or not re.fullmatch(r"[0-9a-f]{64}", fingerprint)
+        ):
+            raise BudgetError(
+                "calibrated Agent duration requires a lowercase SHA-256 "
+                "source_fingerprint_sha256"
+            )
         validate_pair(
             tests,
             "baseline_seconds",
@@ -3054,6 +3199,13 @@ def check_agent_tests(args, config):
             "[kernel-budget] Agent test suite calibration: "
             f"actual={elapsed:.3f} seconds"
         )
+        fingerprint, paths = agent_test_source_fingerprint(
+            getattr(args, "root", "."), config
+        )
+        print(
+            "[kernel-budget] Agent calibration source/contract: "
+            f"sha256={fingerprint}, inputs={len(paths)}"
+        )
         print(
             "[kernel-budget] Agent test calibration captured; "
             "review repeated dedicated-runner samples before marking calibrated"
@@ -3092,6 +3244,7 @@ def main():
                 "--agent-test-calibration requires --check agent-tests"
             )
         config = load_config(args.config)
+        check_agent_test_source_fingerprint(args.root, config)
         if args.check == "kernel":
             check_kernel(args, config)
         elif args.check == "agent-modules":

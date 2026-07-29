@@ -103,6 +103,8 @@ Host 侧负责浏览器页面、动作提交、可选云端 LLM Relay 和文件�
 
 Host seeded-action 执行按 clean、build、guest 三阶段记录。clean/build 阶段只以进程退出码判定，构建日志中的目标名或源文件名不参与 Guest 故障识别；QEMU guest 启动后才对规范化的完整日志行匹配 panic、trap、check-failed 和 orchestrator failure。回归测试明确要求 `build/riscv64/ch6b_panic` 通过，同时要求规范的 Guest `[PANIC ...]` 行失败。
 
+科研平台运行证据使用 `exact-field-v1` receipt。目标 `key=value` 不再受固定字段缓冲区限制：用户态以 128 B 分块流式读取完整状态文件，允许长无关字段和跨块长 key，但要求目标字段精确出现一次；空 key/value、CR、NUL、重复目标及仅前后缀相似的字段均 fail closed。receipt 同时绑定完整文件的字节数、hash 和行数，Host ASan/UBSan probe 已进入 `ci-check`。这仍只是解析协议和 Host 门，不能替代 Reader、双目标 QEMU 或 `full-verify` 的动态证据。
+
 这种分工让 plain target 不需要 AgentOS 专属内核服务，也能承载较复杂的平台表面；同时让 AgentOS target 可以复用同一状态文件协议进行对照。两侧共享的基础安全加固和只存在于增强目标的 AgentOS 安全机制见 [agentos/security-hardening.md](agentos/security-hardening.md)。
 
 ## 核心状态文件

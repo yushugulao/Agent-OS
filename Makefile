@@ -601,6 +601,7 @@ override KERNEL_BUDGET_PYTHON_SELFTESTS := \
 	scripts/test-observe-recovery-contract.py \
 	scripts/test-physical-brk-wiring.py \
 	scripts/test-printf-format-contract.py \
+	scripts/test-rp-evidence-file-field.py \
 	scripts/test-resource-kind-policy.py \
 	scripts/test-sync-owner-wiring.py \
 	scripts/test-validate-virtio-disk-log.py \

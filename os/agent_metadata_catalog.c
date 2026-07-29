@@ -12,12 +12,11 @@
 #define AGENT_CATALOG_PREPARE_STEP 32
 #define AGENT_CATALOG_PLAN_HASH 1469598103934665603ULL
 _Static_assert(AGENT_FILE_SYSTEM_LIMIT +
-	       VFS_SCOPE_MAX_ACTIVE * AGENT_FILE_SCOPE_LIMIT <=
-	       AGENT_FILE_META_MAX,
-	       "file catalog must reserve every workflow partition");
+	       AGENT_FILE_ORDINARY_LIMIT == AGENT_FILE_META_MAX,
+	       "file catalog partitions must cover the fixed table");
 _Static_assert(VFS_SCOPE_MAX_ACTIVE * AGENT_FILE_SCOPE_LIMIT ==
 	       AGENT_FILE_ORDINARY_LIMIT,
-	       "workflow catalog partitions must leave the SYSTEM reserve");
+	       "workflow catalog partitions must cover the ordinary table");
 _Static_assert(VFS_SCOPE_LIFECYCLE_CAP == AGENT_CATALOG_SCOPE_PLAN_MAX,
 	       "catalog prepare scope accounting must cover retained workflows");
 _Static_assert(AGENT_FILE_META_MAX <= 32767,
@@ -44,8 +43,8 @@ static int agent_catalog_unbind(int, struct agent_file_meta *, uint);
 static void agent_catalog_normalize_physical(int, struct agent_file_meta *);
 static void agent_catalog_require_txn(void);
 static int agent_catalog_mutation_allowed(void);
-static int agent_catalog_capacity_available(uint, int,
-					    const struct agent_file_meta *);
+static int agent_catalog_admission(
+	uint, int, const struct agent_file_meta *, int);
 static uint agent_catalog_key_matches(
 	const struct agent_file_meta *selector,
 	const struct agent_file_meta *meta) {
@@ -352,6 +351,7 @@ int agent_metadata_catalog_edit_begin_scan(
 
 int agent_metadata_catalog_edit_commit(struct agent_catalog_edit *edit, uint changes) {
 	int admission = 1;
+	int growth = 0;
 	agent_catalog_require_txn();
 	if (!agent_catalog_mutation_allowed()) {
 		agent_metadata_catalog_edit_abort(edit);
@@ -367,9 +367,12 @@ int agent_metadata_catalog_edit_commit(struct agent_catalog_edit *edit, uint cha
 	}
 	if (edit->meta == &agent_catalog_edit_buffer && edit->meta->used &&
 	    agent_object_scope_valid(edit->scope_id) &&
-	    agent_metadata_catalog_identity_state(edit->meta) >= 0)
-		admission = agent_catalog_capacity_available(
-			edit->scope_id, edit->slot, edit->meta);
+	    agent_metadata_catalog_identity_state(edit->meta) >= 0) {
+		growth = edit->slot >= 0 && edit->slot < AGENT_FILE_META_MAX &&
+			 !agent_catalog_files[edit->slot].used;
+		admission = agent_catalog_admission(
+			edit->scope_id, edit->slot, edit->meta, growth);
+	}
 	if (edit->meta != &agent_catalog_edit_buffer ||
 	    edit->slot < 0 || edit->slot >= AGENT_FILE_META_MAX ||
 	    (edit->meta->used &&
@@ -377,10 +380,10 @@ int agent_metadata_catalog_edit_commit(struct agent_catalog_edit *edit, uint cha
 	      agent_metadata_catalog_identity_state(edit->meta) < 0 ||
 	      admission <= 0 ||
 	      (agent_catalog_files[edit->slot].used &&
-	       agent_catalog_scopes[edit->slot] != edit->scope_id)))) {
+	       agent_catalog_scopes[edit->slot] != edit->scope_id))) ||
+	    (agent_catalog_files[edit->slot].used && !edit->meta->used)) {
 		agent_metadata_catalog_edit_abort(edit);
-		return admission == AGENT_CATALOG_CONFLICT ?
-		       AGENT_CATALOG_CONFLICT : -1;
+		return admission < 0 ? admission : -1;
 	}
 	if (agent_catalog_files[edit->slot].used && edit->meta->used &&
 	    (agent_catalog_files[edit->slot].dev != edit->meta->dev ||
@@ -709,8 +712,8 @@ int agent_metadata_catalog_restore(
 		    previous->physical_name[0] == 0 ||
 		    agent_metadata_catalog_identity_state(previous) < 0)
 			return -1;
-		if (agent_catalog_capacity_available(
-			    previous_scope, slot, previous) <= 0)
+		if (agent_catalog_admission(
+			    previous_scope, slot, previous, 0) <= 0)
 			return AGENT_CATALOG_CONFLICT;
 	}
 	if (agent_catalog_unbind(slot, &agent_catalog_files[slot],
@@ -738,27 +741,51 @@ int agent_metadata_catalog_restore(
 	return 0;
 }
 
-static int agent_catalog_capacity_available(
-	uint scope_id, int except_slot, const struct agent_file_meta *candidate) {
+static int agent_catalog_scope_admissible(
+	uint scope_id, struct workflow_lifecycle_key *lifecycle)
+{
+	if (vfs_scope_lifecycle(scope_id, lifecycle) < 0)
+		return 0;
+	return workflow_lifecycle_active(*lifecycle) ||
+	       workflow_lifecycle_closing(*lifecycle);
+}
+
+static int agent_catalog_admission(
+	uint scope_id, int except_slot, const struct agent_file_meta *candidate,
+	int growth)
+{
 	struct agent_catalog_resolution result;
-	int limit = scope_id == VFS_SCOPE_SYSTEM ? AGENT_FILE_SYSTEM_LIMIT : AGENT_FILE_SCOPE_LIMIT;
+	struct workflow_lifecycle_key lifecycle;
+	int limit = scope_id == VFS_SCOPE_SYSTEM ?
+		AGENT_FILE_SYSTEM_LIMIT : AGENT_FILE_SCOPE_LIMIT;
+
 	agent_catalog_require_txn();
 	agent_metadata_catalog_resolve(scope_id, candidate, except_slot, &result);
 	if (result.matched)
 		return AGENT_CATALOG_CONFLICT;
-	return result.owned < limit && (scope_id == VFS_SCOPE_SYSTEM ||
-					 result.ordinary < AGENT_FILE_ORDINARY_LIMIT);
+	if (result.owned >= limit ||
+	    (scope_id != VFS_SCOPE_SYSTEM &&
+	     result.ordinary >= AGENT_FILE_ORDINARY_LIMIT))
+		return AGENT_CATALOG_NO_SPACE;
+	if (!growth || scope_id == VFS_SCOPE_SYSTEM)
+		return 1;
+	if (!agent_catalog_scope_admissible(scope_id, &lifecycle))
+		return AGENT_CATALOG_INTERRUPTED;
+	return 1;
 }
 int agent_metadata_catalog_alloc_slot(uint scope_id) {
+	int admission;
+
 	agent_catalog_require_txn();
-	if (!agent_catalog_capacity_available(scope_id, -1, 0))
-		return -1;
+	admission = agent_catalog_admission(scope_id, -1, 0, 1);
+	if (admission <= 0)
+		return admission;
 	for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
 		agent_metadata_txn_work_charge(1);
 		if (!agent_catalog_files[i].used)
 			return i;
 	}
-	return -1;
+	return AGENT_CATALOG_NO_SPACE;
 }
 
 uint64 agent_metadata_catalog_alloc_fid(uint scope_id) {
@@ -827,7 +854,8 @@ int agent_metadata_catalog_reclaim_scope(uint scope_id) {
 
 static struct agent_catalog_plan_key agent_catalog_plan_key(
 	const struct agent_meta_record *records, uint count, int reload_one_scope,
-	uint reload_scope, uint64 candidate_epoch, uint64 catalog_generation) {
+	uint reload_scope, uint64 candidate_epoch, uint64 catalog_generation,
+	struct workflow_lifecycle_key lifecycle) {
 	struct agent_catalog_plan_key key;
 	memset(&key, 0, sizeof(key));
 	key.records = records;
@@ -836,6 +864,8 @@ static struct agent_catalog_plan_key agent_catalog_plan_key(
 	key.reload_scope = reload_scope;
 	key.candidate_epoch = candidate_epoch;
 	key.catalog_generation = catalog_generation;
+	key.lifecycle_id = lifecycle.id;
+	key.lifecycle_generation = lifecycle.generation;
 	return key;
 }
 
@@ -846,7 +876,9 @@ static int agent_catalog_plan_matches(
 	       left->reload_one_scope == right->reload_one_scope &&
 	       left->reload_scope == right->reload_scope &&
 	       left->candidate_epoch == right->candidate_epoch &&
-	       left->catalog_generation == right->catalog_generation;
+	       left->catalog_generation == right->catalog_generation &&
+	       left->lifecycle_id == right->lifecycle_id &&
+	       left->lifecycle_generation == right->lifecycle_generation;
 }
 
 static uint64 agent_catalog_plan_binding(
@@ -891,7 +923,6 @@ static int agent_catalog_plan_count(
 	result->plan_scope_counts[result->plan_scope_used++] = 1;
 	return 0;
 }
-
 static int agent_catalog_plan_slot_free(
 	const struct agent_metadata_apply_result *result, uint slot) {
 	return slot < AGENT_FILE_META_MAX &&
@@ -927,6 +958,7 @@ int agent_metadata_catalog_prepare_snapshot(
 	uint reload_scope, uint64 candidate_epoch,
 	struct agent_metadata_apply_result *result) {
 	uint limit;
+	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
 	struct agent_catalog_plan_key key;
 	uint64 binding;
 
@@ -935,9 +967,12 @@ int agent_metadata_catalog_prepare_snapshot(
 	    candidate_epoch == 0 ||
 	    (reload_one_scope && !agent_scope_valid(reload_scope)))
 		return AGENT_METADATA_LOAD_CORRUPT;
+	if (reload_one_scope &&
+	    !agent_catalog_scope_admissible(reload_scope, &lifecycle))
+		return AGENT_METADATA_LOAD_INTERRUPTED;
 	key = agent_catalog_plan_key(records, count, reload_one_scope,
 				     reload_scope, candidate_epoch,
-				     agent_catalog_generation);
+				     agent_catalog_generation, lifecycle);
 	if (!result->plan_active) {
 		memset(result, 0, sizeof(*result));
 		result->plan_active = 1;
@@ -948,6 +983,11 @@ int agent_metadata_catalog_prepare_snapshot(
 		result->plan_token = agent_catalog_plan_binding(&key);
 	}
 	key.catalog_generation = result->plan_catalog_generation;
+	if (reload_one_scope &&
+	    (result->plan_lifecycle_id != lifecycle.id ||
+	     result->plan_lifecycle_generation != lifecycle.generation))
+		return agent_catalog_prepare_fail(
+			result, AGENT_METADATA_LOAD_INTERRUPTED);
 	if (!agent_catalog_plan_matches(&result->plan_key, &key))
 		return agent_catalog_prepare_fail(
 			result, AGENT_METADATA_LOAD_CORRUPT);
@@ -1059,6 +1099,7 @@ int agent_metadata_catalog_apply_snapshot(
 	uint reload_scope, uint64 candidate_epoch,
 	struct agent_metadata_apply_result *result) {
 	uchar verified_slots[AGENT_META_STALE_BYTES];
+	struct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();
 	struct agent_catalog_plan_key key;
 	uint64 binding, hash = AGENT_CATALOG_PLAN_HASH;
 	uint live_pending = 0, removed_pending = 0;
@@ -1066,13 +1107,20 @@ int agent_metadata_catalog_apply_snapshot(
 	agent_catalog_require_txn();
 	if (!agent_catalog_mutation_allowed())
 		return AGENT_METADATA_LOAD_INTERRUPTED;
+	if (records == 0 || result == 0 || !result->plan_active ||
+	    !result->prepared)
+		panic("Agent catalog apply input invariant");
+	if (reload_one_scope &&
+	    (!agent_catalog_scope_admissible(reload_scope, &lifecycle) ||
+	     result->plan_lifecycle_id != lifecycle.id ||
+	     result->plan_lifecycle_generation != lifecycle.generation))
+		return agent_catalog_prepare_fail(
+			result, AGENT_METADATA_LOAD_INTERRUPTED);
 	memset(verified_slots, 0, sizeof(verified_slots));
 	key = agent_catalog_plan_key(records, count, reload_one_scope,
 				     reload_scope, candidate_epoch,
-				     agent_catalog_generation);
-	if (records == 0 || result == 0 || !result->plan_active ||
-	    !result->prepared ||
-	    !agent_catalog_plan_matches(&result->plan_key, &key))
+				     agent_catalog_generation, lifecycle);
+	if (!agent_catalog_plan_matches(&result->plan_key, &key))
 		panic("Agent catalog apply binding invariant");
 	binding = agent_catalog_plan_binding(&key);
 	for (uint i = 0; i < count; i++) {

@@ -74,7 +74,7 @@ int main(void)
 		"rp_report_text", "rp_llm_packets", "rp_review_dashboard",
 	};
 	static const char *packet3[] = {
-		"rp_package", "rp_review_pack", "rp_dossier",
+		"rp_package", "rp_review_dashboard", "rp_dossier",
 	};
 	static const char *packet4[] = {
 		"rp_mature", "rp_agentcmp", "rp_backend_exec",
@@ -190,7 +190,7 @@ int main(void)
 			   "rp_report_text,rp_llm_packets,rp_review_dashboard",
 			   packet2, 3) ||
 	    !append_packet(prov_body, sizeof(prov_body), "delivery-handoff",
-			   "rp_package,rp_review_pack,rp_dossier", packet3, 3) ||
+			   "rp_package,rp_review_dashboard,rp_dossier", packet3, 3) ||
 	    !append_packet(prov_body, sizeof(prov_body), "agentos-readiness",
 			   "rp_mature,rp_agentcmp,rp_backend_exec", packet4, 3) ||
 	    !rp_write_file("rp_evidence_packet", prov_body))

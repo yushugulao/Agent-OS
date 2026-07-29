@@ -71,25 +71,44 @@ A JSON `baseline_*` is a frozen review ratchet, not necessarily a duplicate of
 the current measurement. The `struct proc` baseline is 25,936 bytes, the
 current probe is 26,448 bytes, and the reviewed maximum is 27,233 bytes. The
 production kernel source baseline is 47,922 lines; the current measurement and
-reviewed maximum are both 49,628 lines. A future measurement below its frozen
+reviewed maximum are both 49,705 lines. A future measurement below its frozen
 maximum still passes without raising the baseline merely to match it.
 
-The metadata control-plane aggregate currently measures 11,576 source lines,
-352,996 source bytes, 76,454 loaded-text bytes, and 1,118,596 BSS bytes. Its
+The metadata control-plane aggregate currently measures 11,719 source lines,
+357,485 source bytes, 77,337 loaded-text bytes, and 1,118,596 BSS bytes. Its
 loaded-text baseline/maximum remains frozen at 77,896/77,896 bytes, while its
 BSS baseline/maximum is frozen at 1,118,596/1,118,596 bytes. Observation v7
 re-baselines the ledger at 2,372 lines and 223,232 BSS bytes; both maxima are
 set to those measured values, so later work must first remove code or state
 before adding more to that owner.
 
-The full-suite duration gate is calibrated for the current 18-case contract.
-Three serial runs from clean detached commit `31d4ddf53695` on the pinned
-`agentos-qemu-calibrated` WSL2 profile measured 252.895656313,
-242.927974276, and 239.658101520 seconds. The reviewed median is
-242.927974276 seconds and the limit is 255.08 seconds. Raw timing files,
-compressed runner/Guest logs, environment data, and hashes are stored under
-`evidence/calibrations/31d4ddf53695/`. The former 16-case measurements remain
-historical evidence and are not used by `ci/kernel-budgets.json`.
+The frozen catalog-capacity contract is deliberately static: 512 slots split
+into 64 SYSTEM slots and four 112-slot workflow partitions. ACTIVE, CLOSING,
+and RETIRING scopes share the four admission positions, and a RETIRING scope
+keeps its position until catalog reclaim completes. The workflow filesystem
+inode account is also capped at 112. Capacity checks reject elastic cross-scope
+borrowing, a separate catalog resource kind, global union/max approximations,
+or a metadata-envelope ledger; scoped reload instead binds and revalidates the
+immutable lifecycle id and generation. The superblock's current 342-inode
+guarantee is raw filesystem capacity, not the effective Agent catalog limit.
+
+The full-suite duration gate is currently
+`provisional_requires_full_suite`. The catalog/AgentScope and evidence changes
+altered performance-relevant inputs, so the three serial 18-case runs from
+clean detached commit `31d4ddf53695` are retained only as historical evidence
+under `evidence/calibrations/31d4ddf53695/`; their 242.927974276-second median
+and 255.08-second limit are no longer present in `ci/kernel-budgets.json`.
+Before the gate can return to `calibrated_full_suite`, the frozen candidate must
+produce at least three new serial full-suite samples on the pinned runner.
+
+A calibrated policy also carries `source_fingerprint_sha256`. The checker
+recomputes a length-framed SHA-256 over the expected cases, canonical
+toolchain, runner profile/tag, root build contract, production kernel inputs,
+Agent user programs, NFS image inputs, and the Agent runner's direct scripts.
+Generated images/build output, `os/initproc.S`, documentation, release evidence,
+and `ci/kernel-budgets.json` itself are excluded. Any relevant byte or contract
+change invalidates the duration policy before QEMU; provisional configuration
+must omit the fingerprint, baseline, maximum, and calibration samples.
 
 The GitLab duration job is both serialized with a resource group and bound to
 that calibrated runner tag. It also pins QEMU and OpenSBI. A runner hardware,

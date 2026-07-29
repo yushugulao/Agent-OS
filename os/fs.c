@@ -95,11 +95,9 @@ static uchar fs_scrub_reachable_inodes[FS_SCRUB_BITMAP_BYTES(NINODE)];
 
 _Static_assert(VFS_SCOPE_MAX_ACTIVE == FS_WORKFLOW_SCOPE_SLOTS,
 	       "storage and workflow admission slots must match");
-_Static_assert(AGENT_FILE_SCOPE_GUARANTEE > 0 &&
-	       AGENT_FILE_SCOPE_GUARANTEE <= AGENT_FILE_SCOPE_LIMIT &&
-	       VFS_SCOPE_MAX_ACTIVE * AGENT_FILE_SCOPE_LIMIT ==
+_Static_assert(VFS_SCOPE_MAX_ACTIVE * AGENT_FILE_SCOPE_LIMIT ==
 		       AGENT_FILE_ORDINARY_LIMIT,
-	       "metadata inode leases must preserve catalog partitions");
+	       "metadata inode limits must preserve catalog partitions");
 _Static_assert(FS_LOOKUP_BUSY == VIRTIO_DISK_ERR_BUSY,
 	       "filesystem lookup BUSY must preserve the device result");
 _Static_assert(FS_OWNER_SYSTEM <= FS_QMAP_OWNER_PAYLOAD_MASK &&
@@ -1253,8 +1251,6 @@ int fs_storage_scope_admissible(void)
 {
 	uint required_blocks;
 	uint required_inodes;
-	uint required_metadata;
-	uint metadata_used;
 	int admissible = 0;
 	int enabled = intr_save();
 
@@ -1266,14 +1262,8 @@ int fs_storage_scope_admissible(void)
 	required_inodes = fs_storage.system_inode_reserve_remaining +
 		vfs_scope_storage_guarantee(VFS_SCOPE_NONE, 1,
 					    fs_storage.workflow_inode_guarantee);
-	required_metadata = vfs_scope_storage_guarantee(
-		VFS_SCOPE_NONE, 1, AGENT_FILE_SCOPE_GUARANTEE);
-	metadata_used = vfs_scope_metadata_inode_usage();
 	admissible = fs_storage.free_blocks >= required_blocks &&
-		     fs_storage.free_inodes >= required_inodes &&
-		     required_metadata <= AGENT_FILE_ORDINARY_LIMIT &&
-		     metadata_used <=
-			     AGENT_FILE_ORDINARY_LIMIT - required_metadata;
+		     fs_storage.free_inodes >= required_inodes;
 out:
 	intr_restore(enabled);
 	return admissible;
@@ -1348,19 +1338,6 @@ static int fs_storage_reserve(const struct fs_storage_charge *charge,
 	if (charge->level == FS_CHARGE_WORKFLOW)
 		scope_id = FS_OWNER_SCOPE_ID(charge->owner);
 	enabled = intr_save();
-	if (inode && charge->level == FS_CHARGE_WORKFLOW) {
-		uint metadata_used = vfs_scope_metadata_inode_usage();
-		uint metadata_reserve = vfs_scope_storage_guarantee(
-			scope_id, 1, AGENT_FILE_SCOPE_GUARANTEE);
-
-		/* The inode charge is the durable lease acquired before dirlink. */
-		if (metadata_used >= AGENT_FILE_ORDINARY_LIMIT ||
-		    metadata_reserve >=
-			    AGENT_FILE_ORDINARY_LIMIT - metadata_used) {
-			intr_restore(enabled);
-			return -1;
-		}
-	}
 	if (charge->level != FS_CHARGE_SYSTEM) {
 		reserve = *system_remaining;
 		reserve += vfs_scope_storage_guarantee(scope_id, inode,

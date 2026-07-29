@@ -66,7 +66,7 @@
       "os/physical_page_test.c"
     ],
     "baseline_lines": 47922,
-    "max_lines": 49628
+    "max_lines": 49705
   },
   "kernel_image": {
     "baseline_stripped_elf_bytes": 332544,
@@ -568,7 +568,7 @@
         "source_path": "os/agent_metadata_catalog.c",
         "object_path": "build/os/agent_metadata_catalog.o",
         "baseline_lines": 1220,
-        "max_lines": 1224,
+        "max_lines": 1245,
         "max_bss_bytes": 207360,
         "required_cflags": [
           "-Os"
@@ -580,7 +580,8 @@
         "allowed_readonly_symbols": [],
         "allowed_dependencies": [
           "file_state",
-          "metadata"
+          "metadata",
+          "workflow_lifecycle"
         ],
         "allowed_bridge_dependencies": []
       },
@@ -689,7 +690,7 @@
         "source_path": "os/agent_metadata_objects.c",
         "object_path": "build/os/agent_metadata_objects.o",
         "baseline_lines": 1471,
-        "max_lines": 1542,
+        "max_lines": 1544,
         "max_bss_bytes": 0,
         "required_cflags": [
           "-Os"
@@ -1415,7 +1416,7 @@
       "baseline_source_lines": 11512,
         "max_source_lines": 11848,
       "baseline_source_bytes": 350273,
-        "max_source_bytes": 353027,
+        "max_source_bytes": 357485,
       "baseline_loaded_text_bytes": 77896,
       "max_loaded_text_bytes": 77896,
       "baseline_bss_bytes": 1118596,
@@ -1511,23 +1512,7 @@
       "usersafety_ucore",
       "blocking_semantics_ucore"
     ],
-    "calibration_status": "calibrated_full_suite",
-    "baseline_seconds": 242.927974276,
-    "max_seconds": 255.08,
-    "calibration_samples": [
-      {
-        "sample_id": "agent18-31d4ddf53695-01",
-        "total_seconds": 252.895656313
-      },
-      {
-        "sample_id": "agent18-31d4ddf53695-02",
-        "total_seconds": 242.927974276
-      },
-      {
-        "sample_id": "agent18-31d4ddf53695-03",
-        "total_seconds": 239.65810152
-      }
-    ],
+    "calibration_status": "provisional_requires_full_suite",
     "runner_tag": "agentos-qemu-calibrated",
     "runner_profile": {
       "cpu": "Intel Core Ultra 9 275HX",

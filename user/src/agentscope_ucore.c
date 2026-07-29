@@ -20,6 +20,18 @@
 #define META_WRITEBACK_WAIT_ROUNDS 800
 #define OBSERVE_CROSS_QUERY_ROUNDS 32
 #define OBSERVE_CROSS_QUERY_MAX_MS 15000
+#define WORKFLOW_STORAGE_SCOPE_LIMIT 112
+#define WORKFLOW_STORAGE_OVERFLOW_COUNT \
+	(WORKFLOW_STORAGE_SCOPE_LIMIT + 1)
+#define PUBLIC_STORAGE_PROBE_COUNT 70
+#define QUOTA_PHASE_FILL 0
+#define QUOTA_PHASE_PEER_FILL 1
+#define QUOTA_PHASE_CLEANUP 2
+
+_Static_assert(WORKFLOW_STORAGE_OVERFLOW_COUNT < AGENT_FILE_META_MAX,
+	       "scope quota probe must fit the metadata table");
+_Static_assert(PUBLIC_STORAGE_PROBE_COUNT <= 255,
+	       "public quota count must fit the child exit status");
 
 struct scope_command {
 	int operation;
@@ -40,6 +52,11 @@ struct observe_pressure_result {
 	uint64 context_records;
 	uint64 span_records;
 	uint64 timeline_records;
+};
+
+struct quota_fill_state {
+	int active;
+	int created;
 };
 
 static struct agent_file_query_result scope_query_result;
@@ -711,18 +728,24 @@ static __attribute__((noinline)) void check_metadata_transactions(void)
 		}
 }
 
+static void quota_file_name(char *name, char group, int index)
+{
+	strcpy(name, "qs000");
+	name[1] = group;
+	name[2] = '0' + (index / 100) % 10;
+	name[3] = '0' + (index / 10) % 10;
+	name[4] = '0' + index % 10;
+}
+
 static __attribute__((noinline)) int create_quota_files(char group, int max)
 {
 	char name[] = "qs000";
 	int created = 0;
 
-	name[1] = group;
 	for (int i = 0; i < max; i++) {
 		int fd;
 
-		name[2] = '0' + (i / 100) % 10;
-		name[3] = '0' + (i / 10) % 10;
-		name[4] = '0' + i % 10;
+		quota_file_name(name, group, i);
 		fd = open(name, O_CREATE | O_WRONLY | O_TRUNC);
 		if (fd < 0)
 			break;
@@ -736,51 +759,171 @@ static __attribute__((noinline)) void remove_quota_files(char group, int count)
 {
 	char name[] = "qs000";
 
-	name[1] = group;
 	for (int i = 0; i < count; i++) {
-		name[2] = '0' + (i / 100) % 10;
-		name[3] = '0' + (i / 10) % 10;
-		name[4] = '0' + i % 10;
-		check(unlink(name) == 0, "remove workflow quota object");
+		quota_file_name(name, group, i);
+		check(unlink(name) == 0, "remove quota object");
 	}
 }
 
 static __attribute__((noinline)) void
-check_scope_storage_quota(uint64 *workflow_created, uint64 *public_created)
+check_quota_file_absent(char group, int index)
 {
-	int first;
-	int blocked;
-	int second;
+	char name[] = "qs000";
+
+	quota_file_name(name, group, index);
+	check(open(name, O_RDONLY) < 0,
+	      "rejected quota path remains absent");
+}
+
+static __attribute__((noinline)) void
+check_scope_catalog_path_count(const char *path, int expected)
+{
+	struct agent_file_query query;
+	int count;
+
+	memset(&query, 0, sizeof(query));
+	query.max_hits = AGENT_FILE_QUERY_MAX_HITS;
+	strcpy(query.physical_name, path);
+	memset(&scope_query_result, 0, sizeof(scope_query_result));
+	count = agent_file_query(&query, &scope_query_result);
+	check(count == expected, "exact quota catalog query count");
+	check(scope_query_result.total_hits == expected &&
+		      scope_query_result.returned == expected,
+	      "exact quota catalog query result");
+}
+
+static __attribute__((noinline)) void
+check_quota_catalog_path_count(char group, int index, int expected)
+{
+	char name[] = "qs000";
+
+	quota_file_name(name, group, index);
+	check_scope_catalog_path_count(name, expected);
+}
+
+static __attribute__((noinline)) int
+run_scope_quota_writer(char group, int max)
+{
+	int count_pipe[2];
+	int created;
 	int pid;
+	int status = -1;
 
+	check(pipe(count_pipe) == 0, "create quota writer result pipe");
+	check(agent_scope_delegate_fd(count_pipe[1]) == AGENT_STATUS_OK,
+	      "delegate quota writer result pipe");
 	pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
-	check(pid >= 0, "create first quota writer");
-	if (pid == 0)
-		exit(create_quota_files('a', 120));
-	check(waitpid(pid, &first) == pid, "wait first quota writer");
-	check(first > 0 && first < 120,
-	      "first writer reaches shared workflow quota");
+	check(pid >= 0, "create quota writer");
+	if (pid == 0) {
+		check(close(count_pipe[0]) < 0,
+		      "quota writer cannot inherit result reader");
+		created = create_quota_files(group, max);
+		write_exact(count_pipe[1], &created, sizeof(created),
+			    "publish quota writer count");
+		check(close(count_pipe[1]) == 0,
+		      "close quota writer result pipe");
+		exit(0);
+	}
+	check(close(count_pipe[1]) == 0,
+	      "close parent quota result writer");
+	read_exact(count_pipe[0], &created, sizeof(created),
+		   "receive quota writer count");
+	check(close(count_pipe[0]) == 0,
+	      "close parent quota result reader");
+	check(waitpid(pid, &status) == pid, "wait quota writer");
+	check(status == 0, "quota writer status");
+	return created;
+}
 
-	pid = agent_create_role(AGENT_ROLE_ORCHESTRATOR);
-	check(pid >= 0, "create aggregate quota probe");
-	if (pid == 0)
-		exit(create_quota_files('c', 1));
-	check(waitpid(pid, &blocked) == pid, "wait aggregate quota probe");
-	check(blocked == 0, "same-scope writer shares exhausted quota");
+static __attribute__((noinline)) void
+check_scope_catalog_no_space(char group)
+{
+	struct agent_file_meta meta;
+	char name[] = "qm0";
+
+	name[2] = group;
+	memset(&meta, 0, sizeof(meta));
+	strcpy(meta.physical_name, name);
+	strcpy(meta.logical_path, name);
+	strcpy(meta.kind, "artifact");
+	strcpy(meta.status, "quota-probe");
+	check(agent_file_meta_set(&meta) == AGENT_STATUS_NO_SPACE,
+	      "scope catalog overflow returns no space");
+	check(open(name, O_RDONLY) < 0,
+	      "rejected scope catalog object was not published");
+	check_scope_catalog_path_count(name, 0);
+}
+
+static __attribute__((noinline)) void
+fill_scope_storage_quota(struct quota_fill_state *state,
+			 uint64 *workflow_created, uint64 *public_created)
+{
+	int pid;
+	int public_count;
+
+	check(state != 0 && !state->active, "workflow quota fill state");
+
+	state->created = run_scope_quota_writer(
+		'a', WORKFLOW_STORAGE_OVERFLOW_COUNT);
+	check(state->created == WORKFLOW_STORAGE_SCOPE_LIMIT,
+	      "workflow reaches its fixed storage partition");
+	check_quota_catalog_path_count(
+		'a', WORKFLOW_STORAGE_SCOPE_LIMIT - 1, 1);
+	check_quota_file_absent('a', WORKFLOW_STORAGE_SCOPE_LIMIT);
+	check_scope_catalog_no_space('a');
+	check(create_quota_files('c', 1) == 0,
+	      "same-scope writer cannot exceed the fixed partition");
+	check_quota_file_absent('c', 0);
 
 	pid = fork();
 	check(pid >= 0, "create public quota writer");
-	if (pid == 0)
-		exit(create_quota_files('b', 70));
-	check(waitpid(pid, &second) == pid, "wait public quota writer");
-	check(second == 70,
+	if (pid == 0) {
+		int created = create_quota_files(
+			'b', PUBLIC_STORAGE_PROBE_COUNT);
+
+		/* The downgraded PUBLIC child owns these names, not its parent. */
+		remove_quota_files('b', created);
+		exit(created);
+	}
+	check(waitpid(pid, &public_count) == pid,
+	      "wait public quota writer");
+	check(public_count == PUBLIC_STORAGE_PROBE_COUNT,
 	      "public principal is independent of workflow resource domain");
-	remove_quota_files('a', first);
+	state->active = 1;
+	*workflow_created = state->created;
+	*public_created = public_count;
+}
+
+static __attribute__((noinline)) int probe_peer_storage_partition(void)
+{
+	int created = run_scope_quota_writer(
+		'e', WORKFLOW_STORAGE_OVERFLOW_COUNT);
+
+	check(created == WORKFLOW_STORAGE_SCOPE_LIMIT,
+	      "peer workflow has an independent fixed storage partition");
+	check_quota_catalog_path_count(
+		'e', WORKFLOW_STORAGE_SCOPE_LIMIT - 1, 1);
+	check_quota_file_absent('e', WORKFLOW_STORAGE_SCOPE_LIMIT);
+	check_scope_catalog_no_space('e');
+	check(create_quota_files('f', 1) == 0,
+	      "peer scope cannot exceed its fixed partition");
+	check_quota_file_absent('f', 0);
+	remove_quota_files('e', created);
+	check(create_quota_files('g', 1) == 1,
+	      "peer storage partition is reusable after cleanup");
+	remove_quota_files('g', 1);
+	return created;
+}
+
+static __attribute__((noinline)) void
+cleanup_scope_storage_quota(struct quota_fill_state *state)
+{
+	check(state != 0 && state->active, "workflow quota cleanup state");
+	remove_quota_files('a', state->created);
 	check(create_quota_files('d', 1) == 1,
 	      "workflow quota is reusable after cleanup");
 	remove_quota_files('d', 1);
-	*workflow_created = first;
-	*public_created = second;
+	memset(state, 0, sizeof(*state));
 }
 
 static __attribute__((noinline)) void
@@ -1072,6 +1215,7 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 	int writeback_ready[2] = {-1, -1};
 	int writeback_stop[2] = {-1, -1};
 	int writeback_child = -1;
+	struct quota_fill_state quota_fill = {0};
 	uint scope_id = current_scope();
 
 	check(agent_workflow_create(AGENT_ROLE_ORCHESTRATOR) ==
@@ -1126,8 +1270,19 @@ static void run_scope_root(char identity, int command_fd, int reply_fd,
 			check(waitpid(pid, &status) == pid, "wait same-scope child");
 			check(status == 0, "same-scope child status");
 		} else if (command.operation == 'T') {
-			check(identity == 'A', "storage quota command owner");
-			check_scope_storage_quota(&value0, &value1);
+			if (command.arg0 == QUOTA_PHASE_FILL) {
+				check(identity == 'A', "storage quota fill owner");
+				fill_scope_storage_quota(&quota_fill, &value0,
+							 &value1);
+			} else if (command.arg0 == QUOTA_PHASE_PEER_FILL) {
+				check(identity == 'B', "peer storage partition owner");
+				value0 = probe_peer_storage_partition();
+			} else if (command.arg0 == QUOTA_PHASE_CLEANUP) {
+				check(identity == 'A', "storage quota cleanup owner");
+				cleanup_scope_storage_quota(&quota_fill);
+			} else {
+				check(0, "storage quota command phase");
+			}
 		} else if (command.operation == 'Y') {
 			check(identity == 'A', "metadata transaction owner");
 			check_metadata_transactions();
@@ -1730,6 +1885,7 @@ int main(void)
 	struct scope_reply writeback_a;
 	struct scope_reply progress_b;
 	struct scope_reply quota_a;
+	struct scope_reply quota_b;
 	int a_command[2];
 	int a_reply[2];
 	int b_command[2];
@@ -1771,6 +1927,19 @@ int main(void)
 	ready_b = receive_reply(b_reply[0], "scope B ready");
 	check(ready_a.scope_id != ready_b.scope_id,
 	      "fresh workflows have distinct scopes");
+	/* Run before test-owned files so fixtures do not offset the measurement. */
+	quota_a = run_command(a_command[1], a_reply[0], 'T',
+			      QUOTA_PHASE_FILL, 0,
+			      ready_a.scope_id,
+			      "scope A fixed storage partition");
+	quota_b = run_command(b_command[1], b_reply[0], 'T',
+			      QUOTA_PHASE_PEER_FILL, 0,
+			      ready_b.scope_id,
+			      "peer scope has an independent storage partition");
+	check(quota_b.value0 == WORKFLOW_STORAGE_SCOPE_LIMIT,
+	      "peer scope fixed storage partition result");
+	run_command(a_command[1], a_reply[0], 'T', QUOTA_PHASE_CLEANUP, 0,
+		    ready_a.scope_id, "release fixed workflow storage partition");
 
 	run_command(a_command[1], a_reply[0], 'C', 0, 0, ready_a.scope_id,
 		    "scope A creates object");
@@ -1798,9 +1967,6 @@ int main(void)
 		    "pipe delegation remains single hop");
 	run_command(a_command[1], a_reply[0], 'Y', 0, 0, ready_a.scope_id,
 		    "serialize concurrent metadata transactions");
-	quota_a = run_command(a_command[1], a_reply[0], 'T', 0, 0,
-			      ready_a.scope_id,
-			      "same-scope aggregate storage quota");
 	run_command(a_command[1], a_reply[0], 'F', 0, 0, ready_a.scope_id,
 		    "start low-privilege metadata write flood");
 	progress_b = run_command(b_command[1], b_reply[0], 'P', 0, 0,
@@ -1817,8 +1983,11 @@ int main(void)
 	printf("agentscope_ucore: same_scope_collaboration=1\n");
 	printf("agentscope_ucore: pipe_redelegation_isolation=1\n");
 	printf("agentscope_ucore: metadata_transactions=1\n");
-	printf("agentscope_ucore: scope_storage_quota=1 workflow_created=%d public_created=%d aggregate_blocked=1\n",
-	       (int)quota_a.value0, (int)quota_a.value1);
+	printf("agentscope_ucore: scope_storage_quota=1 scope_limit=%d "
+	       "workflow_created=%d peer_created=%d public_created=%d "
+	       "overflow_no_space=1 reusable=1\n",
+	       WORKFLOW_STORAGE_SCOPE_LIMIT, (int)quota_a.value0,
+	       (int)quota_b.value0, (int)quota_a.value1);
 	printf("agentscope_ucore: scope_reload_isolation=1\n");
 	printf("agentscope_ucore: metadata_write_coalescing=1 writes=%d commits=%d\n",
 	       (int)writeback_a.value0, (int)writeback_a.value1);

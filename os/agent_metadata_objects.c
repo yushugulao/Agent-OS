@@ -208,6 +208,15 @@ agent_persist_agent_status(const struct agent_metadata_persist_result *persist)
 	}
 }
 
+static int
+agent_metadata_load_agent_status(int load_status)
+{
+	return load_status == AGENT_METADATA_LOAD_INTERRUPTED ||
+	       load_status == AGENT_METADATA_LOAD_BUSY ||
+	       load_status == AGENT_METADATA_LOAD_PROGRESS ?
+		       AGENT_STATUS_RETRY : AGENT_STATUS_IO_ERROR;
+}
+
 static char *
 agent_persist_error_text(const struct agent_metadata_persist_result *persist)
 {
@@ -274,6 +283,24 @@ agent_lookup_error_status(int fs_status)
 	return fs_status == FS_LOOKUP_ABSENT ? AGENT_STATUS_NOT_FOUND :
 	       fs_status == FS_LOOKUP_BUSY ? AGENT_STATUS_RETRY :
 					     AGENT_STATUS_IO_ERROR;
+}
+
+static int
+agent_catalog_error_status(int catalog_status)
+{
+	switch (catalog_status) {
+	case AGENT_CATALOG_NO_SPACE:
+		return AGENT_STATUS_NO_SPACE;
+	case AGENT_CATALOG_INTERRUPTED:
+	case AGENT_CATALOG_STALE:
+		return AGENT_STATUS_RETRY;
+	case AGENT_CATALOG_CONFLICT:
+		return AGENT_STATUS_CONFLICT;
+	case AGENT_CATALOG_INDETERMINATE:
+		return AGENT_STATUS_INDETERMINATE;
+	default:
+		return AGENT_STATUS_IO_ERROR;
+	}
 }
 
 void
@@ -447,8 +474,9 @@ static int __attribute__((noinline)) agent_file_query_internal(uint scope_id,
 	}
 	r->plan = AGENT_FILE_QUERY_PLAN_SCAN;
 	r->index_bucket = -1;
-	if (agent_file_store_load() < 0) {
-		result = AGENT_STATUS_NO_SPACE;
+	result = agent_file_store_load();
+	if (result < 0) {
+		result = agent_metadata_load_agent_status(result);
 		goto out_txn;
 	}
 	result = agent_metadata_query_execute_locked(
@@ -461,8 +489,11 @@ out_txn:
 static int agent_file_find(uint scope_id, char *selector)
 {
 	struct agent_catalog_view view;
+	int result;
 
-	agent_file_store_load();
+	result = agent_file_store_load();
+	if (result < 0)
+		return agent_metadata_load_agent_status(result);
 	for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
 		if (agent_file_read_slot(i, &view) <= 0 ||
 		    view.scope_id != scope_id)
@@ -476,7 +507,7 @@ static int agent_file_find(uint scope_id, char *selector)
 			return i;
 		view.meta = 0;
 	}
-	return -1;
+	return AGENT_STATUS_NOT_FOUND;
 }
 
 static int
@@ -486,9 +517,11 @@ agent_file_summary_read(uint scope_id, char *selector,
 	struct agent_catalog_view view;
 	int slot = agent_file_find(scope_id, selector);
 
-	if (slot < 0 || agent_file_read_slot(slot, &view) <= 0 ||
+	if (slot < 0)
+		return slot;
+	if (agent_file_read_slot(slot, &view) <= 0 ||
 	    view.scope_id != scope_id)
-		return -1;
+		return AGENT_STATUS_IO_ERROR;
 	res->value0 = view.meta->fid;
 	res->value1 = view.meta->dependency_mask;
 	res->value2 = view.meta->updated_tick;
@@ -512,7 +545,9 @@ static int agent_file_digest_select(uint scope_id, char *selector,
 			return AGENT_STATUS_BAD_PARAM;
 		if (!agent_metadata_query_has_filter(&query))
 			return AGENT_STATUS_BAD_PARAM;
-		agent_file_store_load();
+		found = agent_file_store_load();
+		if (found < 0)
+			return agent_metadata_load_agent_status(found);
 		for (int i = 0; i < AGENT_FILE_META_MAX; i++) {
 			if (agent_file_read_slot(i, &view) <= 0 ||
 			    view.scope_id != scope_id)
@@ -528,6 +563,8 @@ static int agent_file_digest_select(uint scope_id, char *selector,
 		return AGENT_STATUS_NOT_FOUND;
 	}
 	found = agent_file_find(scope_id, selector);
+	if (found < 0 && found != AGENT_STATUS_NOT_FOUND)
+		return found;
 	if (found >= 0 && agent_file_read_slot(found, &view) > 0 &&
 	    view.scope_id == scope_id) {
 		safestrcpy(physical, view.meta->physical_name, n);
@@ -572,8 +609,11 @@ static void agent_file_digest_read(struct proc *p, char *selector,
 	rc = agent_file_digest_select(agent_identity_proc_scope(p), selector, physical,
 				      sizeof(physical));
 	if (rc < 0) {
-		agent_result_status(res, rc, rc == AGENT_STATUS_NOT_FOUND ?
-				    "digest_not_found" : "bad_selector");
+		agent_result_status(
+			res, rc, rc == AGENT_STATUS_NOT_FOUND ?
+					 "digest_not_found" :
+				 rc == AGENT_STATUS_BAD_PARAM ?
+					 "bad_selector" : "metadata_unavailable");
 		return;
 	}
 	if (agent_file_is_meta_store_name(physical)) {
@@ -696,6 +736,7 @@ agent_file_update_status_batch_locked(
 {
 	struct agent_catalog_mutation_fence mutation_fence;
 	int updated = 0;
+	int load_status;
 
 	memset(&mutation_fence, 0, sizeof(mutation_fence));
 	memset(persist, 0, sizeof(*persist));
@@ -707,8 +748,9 @@ agent_file_update_status_batch_locked(
 		persist->cause = AGENT_METADATA_PERSIST_FAIL_CLOSED;
 		return 0;
 	}
-	if (agent_file_store_load() < 0)
-		return 0;
+	load_status = agent_file_store_load();
+	if (load_status < 0)
+		return agent_metadata_load_agent_status(load_status);
 	if (agent_metadata_catalog_mutation_begin(&mutation_fence) < 0) {
 		persist->durable = 0;
 		persist->status = -1;
@@ -778,6 +820,15 @@ static void agent_object_state_update(struct proc *p, struct agent_op *op,
 		res->value0 = persistence.completion_token;
 		res->value1 = persistence.job_id;
 		agent_result_text(res, agent_persist_error_text(&persistence));
+		return;
+	}
+	if (updated < 0) {
+		agent_result_status(res, updated,
+			updated == AGENT_STATUS_NO_SPACE ?
+				"status_batch_too_large" :
+			updated == AGENT_STATUS_RETRY ||
+			updated == AGENT_STATUS_IO_ERROR ?
+				"metadata_unavailable" : "state_update_failed");
 		return;
 	}
 	if (updated == 0) {
@@ -921,7 +972,9 @@ agent_metadata_execute_tool(struct proc *p, struct agent_op *op,
 			agent_identity_proc_scope(p));
 		res->value0 = agent_file_store_load();
 		if ((long)res->value0 < 0) {
-			agent_result_status(res, AGENT_STATUS_NO_SPACE,
+			agent_result_status(
+				res, agent_metadata_load_agent_status(
+					     (int)(long)res->value0),
 					    "metadata_unavailable");
 			break;
 		}
@@ -931,10 +984,13 @@ agent_metadata_execute_tool(struct proc *p, struct agent_op *op,
 	case AGENT_TOOL_READ_FILE_SUMMARY:
 		if (!agent_tool_require_cap(p, res, AGENT_CAP_CONTENT_READ))
 			break;
-		if (agent_file_summary_read(agent_identity_proc_scope(p),
-					   op->payload, res) < 0) {
-			agent_result_status(res, AGENT_STATUS_NOT_FOUND,
-					    "summary_not_found");
+		found = agent_file_summary_read(agent_identity_proc_scope(p),
+					     op->payload, res);
+		if (found < 0) {
+			agent_result_status(
+				res, found, found == AGENT_STATUS_NOT_FOUND ?
+						    "summary_not_found" :
+						    "metadata_unavailable");
 		}
 		break;
 	case AGENT_TOOL_READ_FILE_DIGEST:
@@ -948,6 +1004,13 @@ agent_metadata_execute_tool(struct proc *p, struct agent_op *op,
 		if (agent_parse_selector(op->payload, &dependency) < 0) {
 			agent_result_status(res, AGENT_STATUS_BAD_PARAM,
 					    "bad_selector");
+			break;
+		}
+		found = agent_file_store_load();
+		if (found < 0) {
+			agent_result_status(res,
+				agent_metadata_load_agent_status(found),
+				"metadata_unavailable");
 			break;
 		}
 		if (agent_metadata_actions_dependency_query(
@@ -1038,8 +1101,10 @@ int sys_agent_file_meta_init(void)
 		goto out_txn;
 	}
 	loaded = agent_file_store_reload(agent_identity_proc_scope(p));
-	if (loaded < 0)
+	if (loaded < 0) {
+		result = agent_metadata_load_agent_status(loaded);
 		goto out_txn;
+	}
 	agent_metadata_actions_clear_history(agent_identity_proc_scope(p));
 	agent_file_request_scan();
 	agent_direct_effect_audit(p, AGENT_TOOL_FILE_META_INIT,
@@ -1154,8 +1219,11 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 			AGENT_STATUS_RETRY : AGENT_STATUS_IO_ERROR;
 		goto out_txn;
 	}
-	if (agent_file_store_load() < 0)
+	commit_status = agent_file_store_load();
+	if (commit_status < 0) {
+		result = agent_metadata_load_agent_status(commit_status);
 		goto out_txn;
+	}
 	agent_metadata_catalog_resolve(scope_id, &meta, -1, &selector);
 	if (agent_metadata_catalog_mutation_begin(&mutation_fence) < 0) {
 		result = AGENT_STATUS_RETRY;
@@ -1205,8 +1273,9 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 		previous_scope = view.scope_id;
 		audit_fid = previous.fid;
 		view.meta = 0;
-		if (agent_metadata_catalog_clear_slot(slot) < 0) {
-			result = AGENT_STATUS_IO_ERROR;
+		commit_status = agent_metadata_catalog_clear_slot(slot);
+		if (commit_status < 0) {
+			result = agent_catalog_error_status(commit_status);
 			agent_direct_effect_audit(
 				p, AGENT_TOOL_FILE_META_INIT, result,
 				"meta_delete_sidecar_io", audit_fid, mask, 0,
@@ -1226,10 +1295,13 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 			had_previous, 1, audit_fid, "meta_delete", 0);
 		goto out_txn;
 	}
-	if (slot < 0)
+	if (slot < 0) {
 		slot = agent_metadata_catalog_alloc_slot(scope_id);
-	if (slot < 0)
-		goto out_txn;
+		if (slot < 0) {
+			result = agent_catalog_error_status(slot);
+			goto out_txn;
+		}
+	}
 	memset(&previous, 0, sizeof(previous));
 	had_previous = agent_file_read_slot(slot, &view) > 0;
 	if (had_previous) {
@@ -1305,8 +1377,7 @@ int sys_agent_file_meta_set(uint64 metaaddr)
 		changes |= AGENT_FILE_CHANGE_DEPENDENCY;
 	commit_status = agent_metadata_catalog_edit_commit(&edit, changes);
 	if (commit_status < 0) {
-		result = commit_status == AGENT_CATALOG_CONFLICT ?
-			 AGENT_STATUS_CONFLICT : AGENT_STATUS_IO_ERROR;
+		result = agent_catalog_error_status(commit_status);
 		goto out_txn;
 	}
 	working = 0;

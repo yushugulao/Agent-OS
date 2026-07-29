@@ -2364,13 +2364,13 @@ int main(void)
 	ok = ok && require_file_token("rp_prov_query", "agentos_kernel_timeline=observed");
 	ok = ok && require_file_token("rp_prov_query", "agentos_kernel_provenance=observed");
 	ok = ok && require_file_token("rp_prov_query", "agentos_kernel_ledger=observed");
-	ok = ok && require_file_token("rp_prov_specs", "template=provenance-query-template:calculation-root-neighborhood");
+	ok = ok && require_file_token("rp_prov_specs", "template=provenance-query-template:graph-neighborhood");
 	ok = ok && require_file_token("rp_prov_specs", "spec=provenance-query:RUN-042:workflow-recovery");
 	ok = ok && require_file_token("rp_prov_specs", "spec=provenance-query:RUN-042:workflow-replay");
 	ok = ok && require_file_token("rp_prov_exec", "execution=provenance-query-execution:workflow-recovery");
 	ok = ok && require_file_token("rp_prov_exec", "execution=provenance-query-execution:workflow-replay");
 	ok = ok && require_file_token("rp_prov_exec", "row=rp_stage_state");
-	ok = ok && require_file_token("rp_prov_query_pkg", "comparison=provenance-query-comparison:RUN-042:rendered-vs-direct");
+	ok = ok && require_file_token("rp_prov_query_pkg", "comparison=provenance-query-comparison:RUN-042:replay-vs-direct");
 	ok = ok && require_file_token("rp_prov_query_pkg", "export=provenance-query-export:RUN-042:workflow-recovery");
 	ok = ok && require_file_token("rp_prov_query_pkg", "packet=provenance-query-packet:RUN-042:lineage-review");
 	ok = ok && require_file_token("rp_web_bundle", "provenance_queries_page=rp_prov_query;specs=3;executions=3;packets=1;status=ready");

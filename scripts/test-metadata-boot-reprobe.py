@@ -22,8 +22,10 @@ FILES = {
     "profile": ROOT / "os/agent_metadata_recovery_test.c",
     "persist_profile_h": ROOT / "os/metadata_crash_test.h",
     "persist_profile": ROOT / "os/agent_metadata_test.c",
+    "agent_h": ROOT / "os/agent.h",
     "catalog_h": ROOT / "os/agent_metadata_catalog.h",
     "catalog": ROOT / "os/agent_metadata_catalog.c",
+    "vfs": ROOT / "os/vfs_security.c",
     "store": ROOT / "os/agent_metadata_store.c",
     "objects": ROOT / "os/agent_metadata_objects.c",
     "core": ROOT / "os/agent_core.c",
@@ -136,8 +138,10 @@ def validate(sources: dict[str, str]) -> None:
     profile = sources["profile"]
     persist_profile_h = sources["persist_profile_h"]
     persist_profile = sources["persist_profile"]
+    agent_h = sources["agent_h"]
     catalog_h = sources["catalog_h"]
     catalog = sources["catalog"]
+    vfs = sources["vfs"]
     store = sources["store"]
     objects = sources["objects"]
     core = sources["core"]
@@ -157,6 +161,237 @@ def validate(sources: dict[str, str]) -> None:
         "AGENT_METADATA_LOAD_PROGRESS = -5",
     ):
         require(token in internal, f"load status lost: {token}")
+
+    # Kernel load outcomes have one Agent ABI mapping. Callers may still use
+    # NO_SPACE for transaction admission, but never as a catch-all load error.
+    load_mapping = compact(
+        function_body(objects, "agent_metadata_load_agent_status(")
+    )
+    require(
+        "returnload_status==AGENT_METADATA_LOAD_INTERRUPTED||"
+        "load_status==AGENT_METADATA_LOAD_BUSY||"
+        "load_status==AGENT_METADATA_LOAD_PROGRESS?"
+        "AGENT_STATUS_RETRY:AGENT_STATUS_IO_ERROR;" in load_mapping,
+        "metadata load status no longer has one fail-closed Agent ABI mapping",
+    )
+    require(
+        "AGENT_STATUS_NO_SPACE" not in load_mapping,
+        "metadata load status is collapsed into NO_SPACE",
+    )
+
+    meta_init = compact(function_body(objects, "int sys_agent_file_meta_init("))
+    require_order(
+        meta_init,
+        (
+            "loaded=agent_file_store_reload(agent_identity_proc_scope(p))",
+            "if(loaded<0)",
+            "result=agent_metadata_load_agent_status(loaded)",
+            "gotoout_txn",
+            "agent_metadata_actions_clear_history(",
+        ),
+        "scoped metadata reload status mapping",
+    )
+    meta_init_load = meta_init[
+        meta_init.find("loaded=agent_file_store_reload(") :
+        meta_init.find("agent_metadata_actions_clear_history(")
+    ]
+    require(
+        "AGENT_STATUS_NO_SPACE" not in meta_init_load,
+        "scoped metadata reload failure is collapsed into NO_SPACE",
+    )
+
+    meta_set = compact(function_body(objects, "int sys_agent_file_meta_set("))
+    require_order(
+        meta_set,
+        (
+            "commit_status=agent_file_store_load()",
+            "if(commit_status<0)",
+            "result=agent_metadata_load_agent_status(commit_status)",
+            "gotoout_txn",
+            "agent_metadata_catalog_resolve(",
+        ),
+        "metadata set pre-load status mapping",
+    )
+    meta_set_load = meta_set[
+        meta_set.find("commit_status=agent_file_store_load()") :
+        meta_set.find("agent_metadata_catalog_resolve(")
+    ]
+    require(
+        "AGENT_STATUS_NO_SPACE" not in meta_set_load,
+        "metadata set pre-load failure is collapsed into NO_SPACE",
+    )
+
+    query = compact(function_body(objects, "agent_file_query_internal("))
+    require_order(
+        query,
+        (
+            "result=agent_file_store_load()",
+            "if(result<0)",
+            "result=agent_metadata_load_agent_status(result)",
+            "gotoout_txn",
+            "agent_metadata_query_execute_locked(",
+        ),
+        "metadata query load status mapping",
+    )
+    query_load = query[
+        query.find("result=agent_file_store_load()") :
+        query.find("agent_metadata_query_execute_locked(")
+    ]
+    require(
+        "AGENT_STATUS_NO_SPACE" not in query_load,
+        "metadata query load failure is collapsed into NO_SPACE",
+    )
+
+    execute_tool = compact(
+        function_body(objects, "agent_metadata_execute_tool(")
+    )
+    tool_init = execute_tool[
+        execute_tool.find("caseAGENT_TOOL_FILE_META_INIT:") :
+        execute_tool.find("caseAGENT_TOOL_READ_FILE_SUMMARY:")
+    ]
+    require_order(
+        tool_init,
+        (
+            "res->value0=agent_file_store_load()",
+            "if((long)res->value0<0)",
+            "agent_result_status(res,agent_metadata_load_agent_status("
+            "(int)(long)res->value0),\"metadata_unavailable\")",
+            "break",
+            "agent_file_request_scan()",
+        ),
+        "FILE_META_INIT tool load status mapping",
+    )
+    require(
+        "AGENT_STATUS_NO_SPACE" not in tool_init,
+        "FILE_META_INIT load failure is collapsed into NO_SPACE",
+    )
+
+    # Every foreground catalog lookup must classify a failed load before it
+    # can inspect the old in-memory catalog or reinterpret absence as success.
+    require(
+        objects.count("agent_file_store_load()") == 9,
+        "metadata load call inventory changed without classification review",
+    )
+    file_find = compact(function_body(objects, "static int agent_file_find("))
+    require_order(
+        file_find,
+        (
+            "result=agent_file_store_load()",
+            "if(result<0)",
+            "returnagent_metadata_load_agent_status(result)",
+            "for(inti=0;i<AGENT_FILE_META_MAX;i++)",
+            "returnAGENT_STATUS_NOT_FOUND",
+        ),
+        "summary and plain digest lookup load status mapping",
+    )
+
+    summary = compact(function_body(objects, "agent_file_summary_read("))
+    require_order(
+        summary,
+        (
+            "slot=agent_file_find(scope_id,selector)",
+            "if(slot<0)",
+            "returnslot",
+            "agent_file_read_slot(slot,&view)",
+        ),
+        "summary lookup status propagation",
+    )
+    summary_tool = execute_tool[
+        execute_tool.find("caseAGENT_TOOL_READ_FILE_SUMMARY:") :
+        execute_tool.find("caseAGENT_TOOL_READ_FILE_DIGEST:")
+    ]
+    require_order(
+        summary_tool,
+        (
+            "found=agent_file_summary_read(",
+            "if(found<0)",
+            "agent_result_status(res,found,found==AGENT_STATUS_NOT_FOUND?"
+            '"summary_not_found":"metadata_unavailable")',
+        ),
+        "summary tool load status propagation",
+    )
+
+    digest_select = compact(
+        function_body(objects, "static int agent_file_digest_select(")
+    )
+    require_order(
+        digest_select,
+        (
+            "found=agent_file_store_load()",
+            "if(found<0)",
+            "returnagent_metadata_load_agent_status(found)",
+            "for(inti=0;i<AGENT_FILE_META_MAX;i++)",
+            "found=agent_file_find(scope_id,selector)",
+            "if(found<0&&found!=AGENT_STATUS_NOT_FOUND)",
+            "returnfound",
+            "safestrcpy(physical,selector,n)",
+        ),
+        "digest selector load status propagation",
+    )
+    digest_read = compact(function_body(objects, "agent_file_digest_read("))
+    require(
+        "rc==AGENT_STATUS_NOT_FOUND?\"digest_not_found\":"
+        "rc==AGENT_STATUS_BAD_PARAM?\"bad_selector\":\"metadata_unavailable\""
+        in digest_read,
+        "digest load failure is presented as selector absence or syntax failure",
+    )
+
+    dependency_tool = execute_tool[
+        execute_tool.find("caseAGENT_TOOL_DEPENDENCY_QUERY:") :
+        execute_tool.find("caseAGENT_TOOL_DEPENDENCY_UPDATE:")
+    ]
+    require_order(
+        dependency_tool,
+        (
+            "agent_parse_selector(op->payload,&dependency)",
+            "found=agent_file_store_load()",
+            "if(found<0)",
+            "agent_result_status(res,agent_metadata_load_agent_status(found),"
+            '"metadata_unavailable")',
+            "break",
+            "agent_metadata_actions_dependency_query(",
+        ),
+        "dependency query load status mapping",
+    )
+    dependency_load = dependency_tool[
+        dependency_tool.find("found=agent_file_store_load()") :
+        dependency_tool.find("agent_metadata_actions_dependency_query(")
+    ]
+    require(
+        "AGENT_STATUS_NO_SPACE" not in dependency_load,
+        "dependency query load failure is collapsed into NO_SPACE",
+    )
+
+    status_batch = compact(
+        function_body(objects, "agent_file_update_status_batch_locked(")
+    )
+    require_order(
+        status_batch,
+        (
+            "load_status=agent_file_store_load()",
+            "if(load_status<0)",
+            "returnagent_metadata_load_agent_status(load_status)",
+            "agent_metadata_catalog_mutation_begin(",
+        ),
+        "status batch load status propagation",
+    )
+    state_update = compact(
+        function_body(objects, "static void agent_object_state_update(")
+    )
+    require_order(
+        state_update,
+        (
+            "updated=agent_file_update_status_batch_locked(",
+            "if(updated<0)",
+            "agent_result_status(res,updated,",
+            '"metadata_unavailable"',
+            "return",
+            "if(updated==0)",
+            "AGENT_STATUS_NOT_FOUND",
+        ),
+        "status batch error before true not-found mapping",
+    )
+
     for token in (
         "AGENT_META_BANK_VALID 0",
         "AGENT_META_BANK_ABSENT 1",
@@ -517,23 +752,60 @@ def validate(sources: dict[str, str]) -> None:
     catalog_key = compact(
         declaration_body(catalog_h, "struct agent_catalog_plan_key")
     )
+    compact_agent_h = compact(agent_h)
+    for token in (
+        "#defineAGENT_FILE_META_MAX512",
+        "#defineAGENT_FILE_SYSTEM_LIMIT64",
+        "#defineAGENT_FILE_SCOPE_LIMIT112",
+        "#defineAGENT_FILE_ORDINARY_LIMIT\\(AGENT_FILE_META_MAX-AGENT_FILE_SYSTEM_LIMIT)",
+    ):
+        require(token in compact_agent_h, f"fixed catalog partition lost: {token}")
+    for token in (
+        "AGENT_FILE_SCOPE_GUARANTEE",
+        "AGENT_FILE_SCOPE_BURST_LIMIT",
+    ):
+        require(
+            token not in agent_h + catalog + vfs,
+            f"fixed catalog partition regained an elastic limit: {token}",
+        )
+    compact_catalog = compact(catalog)
+    for token in (
+        "AGENT_FILE_SYSTEM_LIMIT+AGENT_FILE_ORDINARY_LIMIT==AGENT_FILE_META_MAX",
+        "VFS_SCOPE_MAX_ACTIVE*AGENT_FILE_SCOPE_LIMIT==AGENT_FILE_ORDINARY_LIMIT",
+        "AGENT_FILE_SYSTEM_LIMIT:AGENT_FILE_SCOPE_LIMIT",
+        "result.owned>=limit",
+        "result.ordinary>=AGENT_FILE_ORDINARY_LIMIT",
+        "++result->plan_scope_counts[i]<=AGENT_FILE_SCOPE_LIMIT",
+    ):
+        require(token in compact_catalog, f"fixed catalog bound lost: {token}")
+    compact_scope_create = compact(function_body(vfs, "static int vfs_scope_create("))
+    require(
+        "if(ref->retiring)retiring++" in compact_scope_create
+        and "allocated+retiring<VFS_SCOPE_MAX_ACTIVE" in compact_scope_create,
+        "retiring scope no longer retains its fixed catalog partition",
+    )
     for token in (
         "conststructagent_meta_record*records;",
-        "uint64candidate_epoch,catalog_generation;",
+        "uint64candidate_epoch,catalog_generation,lifecycle_generation;",
         "uintcount,reload_scope;",
         "intreload_one_scope;",
-        "uintreserved;",
+        "uintlifecycle_id;",
     ):
         require(token in catalog_key, f"catalog immutable plan key lost: {token}")
+    for token in ("structworkflow_lifecycle_key", "reserved", "topology"):
+        require(
+            token not in catalog_key,
+            f"catalog raw plan key regained lifecycle padding: {token}",
+        )
     for token in (
         "intused,layout_changed,prepared,plan_active;",
         "structagent_catalog_plan_keyplan_key;",
         "conststructagent_meta_record*plan_records;",
-        "uint64plan_candidate_epoch,plan_catalog_generation;",
+        "uint64plan_candidate_epoch,plan_catalog_generation,plan_lifecycle_generation;",
         "uint64plan_token,plan_hash;",
         "uintplan_count,plan_reload_scope;",
         "intplan_reload_one_scope;",
-        "uintplan_reserved;",
+        "uintplan_lifecycle_id;",
         "uintplan_cursor,plan_catalog_cursor,plan_next_slot;",
     ):
         require(token in catalog_result, f"catalog plan binding lost: {token}")
@@ -542,8 +814,12 @@ def validate(sources: dict[str, str]) -> None:
     )
     for token in (
         "result->plan_key=key",
-        "agent_catalog_plan_key(records,count,reload_one_scope,reload_scope,candidate_epoch,agent_catalog_generation)",
+        "structworkflow_lifecycle_keylifecycle=workflow_lifecycle_none()",
+        "if(reload_one_scope&&!agent_catalog_scope_admissible(reload_scope,&lifecycle))returnAGENT_METADATA_LOAD_INTERRUPTED",
+        "agent_catalog_plan_key(records,count,reload_one_scope,reload_scope,candidate_epoch,agent_catalog_generation,lifecycle)",
         "key.catalog_generation=result->plan_catalog_generation",
+        "result->plan_lifecycle_id!=lifecycle.id",
+        "result->plan_lifecycle_generation!=lifecycle.generation",
         "agent_catalog_plan_matches(&result->plan_key,&key)",
         "result->plan_catalog_generation!=agent_catalog_generation",
         "result->plan_token!=binding",
@@ -571,7 +847,12 @@ def validate(sources: dict[str, str]) -> None:
     for token in (
         "!result->plan_active",
         "!result->prepared",
-        "agent_catalog_plan_key(records,count,reload_one_scope,reload_scope,candidate_epoch,agent_catalog_generation)",
+        "structworkflow_lifecycle_keylifecycle=workflow_lifecycle_none()",
+        "if(reload_one_scope&&(!agent_catalog_scope_admissible(reload_scope,&lifecycle)",
+        "!agent_catalog_scope_admissible(reload_scope,&lifecycle)",
+        "result->plan_lifecycle_id!=lifecycle.id",
+        "result->plan_lifecycle_generation!=lifecycle.generation",
+        "agent_catalog_plan_key(records,count,reload_one_scope,reload_scope,candidate_epoch,agent_catalog_generation,lifecycle)",
         "agent_catalog_plan_matches(&result->plan_key,&key)",
         "panic(\"Agentcatalogapplybindinginvariant\")",
         "hash!=result->plan_hash",
@@ -661,7 +942,8 @@ def validate(sources: dict[str, str]) -> None:
     meta_init = compact(function_body(objects, "int sys_agent_file_meta_init(void)"))
     require(
         "loaded=agent_file_store_reload(agent_identity_proc_scope(p));"
-        "if(loaded<0)gotoout_txn;" in meta_init,
+        "if(loaded<0){result=agent_metadata_load_agent_status(loaded);"
+        "gotoout_txn;}" in meta_init,
         "metadata init can bypass a failed durable reload",
     )
 
@@ -1082,6 +1364,142 @@ def main() -> int:
     validate(original)
     mutations: tuple[Mutation, ...] = (
         replacement(
+            "map retryable metadata load to I/O error",
+            "objects",
+            "\t       load_status == AGENT_METADATA_LOAD_PROGRESS ?\n"
+            "\t\t       AGENT_STATUS_RETRY : AGENT_STATUS_IO_ERROR;",
+            "\t       load_status == AGENT_METADATA_LOAD_PROGRESS ?\n"
+            "\t\t       AGENT_STATUS_IO_ERROR : AGENT_STATUS_IO_ERROR;",
+        ),
+        replacement(
+            "map terminal metadata load to retry",
+            "objects",
+            "\treturn load_status == AGENT_METADATA_LOAD_INTERRUPTED ||\n"
+            "\t       load_status == AGENT_METADATA_LOAD_BUSY ||\n"
+            "\t       load_status == AGENT_METADATA_LOAD_PROGRESS ?\n"
+            "\t\t       AGENT_STATUS_RETRY : AGENT_STATUS_IO_ERROR;",
+            "\treturn load_status == AGENT_METADATA_LOAD_INTERRUPTED ||\n"
+            "\t       load_status == AGENT_METADATA_LOAD_BUSY ||\n"
+            "\t       load_status == AGENT_METADATA_LOAD_PROGRESS ?\n"
+            "\t\t       AGENT_STATUS_RETRY : AGENT_STATUS_RETRY;",
+        ),
+        replacement(
+            "collapse scoped reload failure into NO_SPACE",
+            "objects",
+            "\t\tresult = agent_metadata_load_agent_status(loaded);",
+            "\t\tresult = AGENT_STATUS_NO_SPACE;",
+        ),
+        replacement(
+            "collapse metadata set pre-load failure into NO_SPACE",
+            "objects",
+            "\t\tresult = agent_metadata_load_agent_status(commit_status);",
+            "\t\tresult = AGENT_STATUS_NO_SPACE;",
+        ),
+        replacement(
+            "collapse metadata query load failure into NO_SPACE",
+            "objects",
+            "\t\tresult = agent_metadata_load_agent_status(result);",
+            "\t\tresult = AGENT_STATUS_NO_SPACE;",
+        ),
+        replacement(
+            "collapse FILE_META_INIT load failure into NO_SPACE",
+            "objects",
+            "\t\t\t\tres, agent_metadata_load_agent_status(\n"
+            "\t\t\t\t\t     (int)(long)res->value0),",
+            "\t\t\t\tres, AGENT_STATUS_NO_SPACE,",
+        ),
+        replacement(
+            "scan stale catalog after summary load failure",
+            "objects",
+            "\tif (result < 0)\n"
+            "\t\treturn agent_metadata_load_agent_status(result);\n"
+            "\tfor (int i = 0; i < AGENT_FILE_META_MAX; i++) {",
+            "\tif (result < 0)\n"
+            "\t\tresult = AGENT_STATUS_NOT_FOUND;\n"
+            "\tfor (int i = 0; i < AGENT_FILE_META_MAX; i++) {",
+        ),
+        replacement(
+            "scan stale catalog after structured digest load failure",
+            "objects",
+            "\t\tif (found < 0)\n"
+            "\t\t\treturn agent_metadata_load_agent_status(found);\n"
+            "\t\tfor (int i = 0; i < AGENT_FILE_META_MAX; i++) {",
+            "\t\tif (found < 0)\n"
+            "\t\t\tfound = AGENT_STATUS_NOT_FOUND;\n"
+            "\t\tfor (int i = 0; i < AGENT_FILE_META_MAX; i++) {",
+        ),
+        replacement(
+            "fallback plain digest after metadata load failure",
+            "objects",
+            "\tif (found < 0 && found != AGENT_STATUS_NOT_FOUND)\n"
+            "\t\treturn found;",
+            "\tif (0 && found < 0 && found != AGENT_STATUS_NOT_FOUND)\n"
+            "\t\treturn found;",
+        ),
+        replacement(
+            "collapse summary load failure into not found",
+            "objects",
+            "\t\t\tagent_result_status(\n"
+            "\t\t\t\tres, found, found == AGENT_STATUS_NOT_FOUND ?\n"
+            "\t\t\t\t\t\t    \"summary_not_found\" :\n"
+            "\t\t\t\t\t\t    \"metadata_unavailable\");",
+            "\t\t\tagent_result_status(\n"
+            "\t\t\t\tres, AGENT_STATUS_NOT_FOUND, \"summary_not_found\");",
+        ),
+        replacement(
+            "present digest load failure as bad selector",
+            "objects",
+            "\t\t\t\t rc == AGENT_STATUS_BAD_PARAM ?\n"
+            "\t\t\t\t\t \"bad_selector\" : \"metadata_unavailable\");",
+            "\t\t\t\t rc == AGENT_STATUS_BAD_PARAM ?\n"
+            "\t\t\t\t\t \"bad_selector\" : \"bad_selector\");",
+        ),
+        replacement(
+            "collapse status batch load failure into zero updates",
+            "objects",
+            "\tload_status = agent_file_store_load();\n"
+            "\tif (load_status < 0)\n"
+            "\t\treturn agent_metadata_load_agent_status(load_status);",
+            "\tload_status = agent_file_store_load();\n"
+            "\tif (load_status < 0)\n"
+            "\t\treturn 0;",
+        ),
+        replacement(
+            "skip status batch ABI error branch",
+            "objects",
+            "\tif (updated < 0) {\n"
+            "\t\tagent_result_status(res, updated,",
+            "\tif (0 && updated < 0) {\n"
+            "\t\tagent_result_status(res, updated,",
+        ),
+        replacement(
+            "bypass dependency query load failure",
+            "objects",
+            "\t\tfound = agent_file_store_load();\n"
+            "\t\tif (found < 0) {\n"
+            "\t\t\tagent_result_status(res,\n"
+            "\t\t\t\tagent_metadata_load_agent_status(found),\n"
+            "\t\t\t\t\"metadata_unavailable\");",
+            "\t\tfound = agent_file_store_load();\n"
+            "\t\tif (0 && found < 0) {\n"
+            "\t\t\tagent_result_status(res,\n"
+            "\t\t\t\tagent_metadata_load_agent_status(found),\n"
+            "\t\t\t\t\"metadata_unavailable\");",
+        ),
+        replacement(
+            "collapse dependency query load failure into NO_SPACE",
+            "objects",
+            "\t\tfound = agent_file_store_load();\n"
+            "\t\tif (found < 0) {\n"
+            "\t\t\tagent_result_status(res,\n"
+            "\t\t\t\tagent_metadata_load_agent_status(found),\n"
+            "\t\t\t\t\"metadata_unavailable\");",
+            "\t\tfound = agent_file_store_load();\n"
+            "\t\tif (found < 0) {\n"
+            "\t\t\tagent_result_status(res, AGENT_STATUS_NO_SPACE,\n"
+            "\t\t\t\t\"metadata_unavailable\");",
+        ),
+        replacement(
             "bypass profile read-fault hook",
             "probe",
             "\treturn agent_metadata_recovery_test_fault(bank, allowed);",
@@ -1277,6 +1695,52 @@ def main() -> int:
             "\t    (0 ||",
         ),
         replacement(
+            "drop catalog lifecycle generation key",
+            "catalog_h",
+            "\tuint64 candidate_epoch, catalog_generation, lifecycle_generation;",
+            "\tuint64 candidate_epoch, catalog_generation;",
+        ),
+        replacement(
+            "replace scalar lifecycle key with padded struct",
+            "catalog_h",
+            "\tuint lifecycle_id;",
+            "\tstruct workflow_lifecycle_key lifecycle;",
+        ),
+        replacement(
+            "under-bind prepared lifecycle generation",
+            "catalog",
+            "\t    (result->plan_lifecycle_id != lifecycle.id ||\n"
+            "\t     result->plan_lifecycle_generation != lifecycle.generation))",
+            "\t    (result->plan_lifecycle_id != lifecycle.id ||\n"
+            "\t     0))",
+        ),
+        replacement(
+            "bypass apply lifecycle revalidation",
+            "catalog",
+            "\t    (!agent_catalog_scope_admissible(reload_scope, &lifecycle) ||\n"
+            "\t     result->plan_lifecycle_id != lifecycle.id ||",
+            "\t    (0 ||\n"
+            "\t     result->plan_lifecycle_id != lifecycle.id ||",
+        ),
+        replacement(
+            "expand the fixed workflow partition",
+            "agent_h",
+            "#define AGENT_FILE_SCOPE_LIMIT    112",
+            "#define AGENT_FILE_SCOPE_LIMIT    400",
+        ),
+        replacement(
+            "drop fixed per-scope snapshot bound",
+            "catalog",
+            "\t\t\t       AGENT_FILE_SCOPE_LIMIT ? 0 : -1;",
+            "\t\t\t       AGENT_FILE_ORDINARY_LIMIT ? 0 : -1;",
+        ),
+        replacement(
+            "free retiring catalog partition early",
+            "vfs",
+            "allocated + retiring < VFS_SCOPE_MAX_ACTIVE",
+            "allocated < VFS_SCOPE_MAX_ACTIVE",
+        ),
+        replacement(
             "discard apply plan on progress",
             "store",
             "\tif (result != AGENT_METADATA_LOAD_PROGRESS)\n\t\tagent_meta_store_apply_abort();",
@@ -1325,8 +1789,8 @@ def main() -> int:
         replacement(
             "return indirect foreground progress",
             "catalog",
-            "{\n\tuint limit;\n\tstruct agent_catalog_plan_key key;\n\tuint64 binding;\n\n\tagent_catalog_require_txn();",
-            "{\n\tuint limit;\n\tstruct agent_catalog_plan_key key;\n\tuint64 binding;\n"
+            "{\n\tuint limit;\n\tstruct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();\n\tstruct agent_catalog_plan_key key;\n\tuint64 binding;\n\n\tagent_catalog_require_txn();",
+            "{\n\tuint limit;\n\tstruct workflow_lifecycle_key lifecycle = workflow_lifecycle_none();\n\tstruct agent_catalog_plan_key key;\n\tuint64 binding;\n"
             "\tint forced = AGENT_METADATA_LOAD_PROGRESS;\n\n"
             "\tagent_catalog_require_txn();\n"
             "\tif (reload_one_scope)\n\t\treturn forced;",

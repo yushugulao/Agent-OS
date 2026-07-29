@@ -1231,7 +1231,12 @@ agent_metadata_txn_projection_require_idle();
             expected_statuses,
         )
         calibrated_fields = frozenset(
-            ("baseline_seconds", "max_seconds", "calibration_samples")
+            (
+                "baseline_seconds",
+                "max_seconds",
+                "calibration_samples",
+                "source_fingerprint_sha256",
+            )
         )
         self.assertEqual(
             kernel_budgets.AGENT_TEST_CALIBRATED_FIELDS,
@@ -1938,7 +1943,12 @@ agent_metadata_txn_projection_require_idle();
             config = json.load(stream)
 
         calibrated_fields = frozenset(
-            ("baseline_seconds", "max_seconds", "calibration_samples")
+            (
+                "baseline_seconds",
+                "max_seconds",
+                "calibration_samples",
+                "source_fingerprint_sha256",
+            )
         )
         self.assertEqual(
             kernel_budgets.AGENT_TEST_CALIBRATED_FIELDS,
@@ -1959,6 +1969,7 @@ agent_metadata_txn_projection_require_idle();
                 "calibration_status": (
                     kernel_budgets.AGENT_TEST_CALIBRATION_READY
                 ),
+                "source_fingerprint_sha256": "0" * 64,
                 "calibration_samples": [
                     {
                         "sample_id": "bounded-runner-final-01",
@@ -2053,6 +2064,16 @@ agent_metadata_txn_projection_require_idle();
         ):
             kernel_budgets.validate_config(excessive_headroom)
 
+        malformed_fingerprint = copy.deepcopy(config)
+        malformed_fingerprint["agent_test_suite"][
+            "source_fingerprint_sha256"
+        ] = "A" * 64
+        with self.assertRaisesRegex(
+            kernel_budgets.BudgetError,
+            "requires a lowercase SHA-256",
+        ):
+            kernel_budgets.validate_config(malformed_fingerprint)
+
         for stale_field in calibrated_fields:
             provisional = copy.deepcopy(config)
             provisional_suite = provisional["agent_test_suite"]
@@ -2066,6 +2087,127 @@ agent_metadata_txn_projection_require_idle();
                 "must not carry stale calibrated fields",
             ):
                 kernel_budgets.validate_config(provisional)
+
+    def test_agent_duration_fingerprint_covers_sources_and_contract(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            for relative in kernel_budgets.AGENT_TEST_SOURCE_REQUIRED_PATHS:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"required:{relative}\n", encoding="utf-8")
+
+            representatives = (
+                "os/core.c",
+                "os/core.h",
+                "os/entry.S",
+                "os/kernel.ld",
+                "os/format.inc",
+                "os/kernelld.py",
+                "user/src/case.c",
+                "user/src/case.h",
+                "user/src/entry.S",
+                "user/include/api.h",
+                "user/lib/library.c",
+                "user/lib/library.h",
+                "user/lib/arch/start.S",
+                "user/lib/arch/user.ld",
+                "user/lib/format.inc",
+                "nfs/fs.c",
+                "nfs/fs.h",
+                "nfs/entry.S",
+                "nfs/fs.ld",
+                "nfs/format.inc",
+                "agent_contract_abi.h",
+                "agent_contract_policy.h",
+                "agent_contract_policy.inc",
+            )
+            for relative in representatives:
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(f"source:{relative}\n", encoding="utf-8")
+
+            generated = root / "os" / "initproc.S"
+            generated.write_text("generated one\n", encoding="utf-8")
+            tests = {
+                "expected_cases": ["one", "two"],
+                "runner_tag": "agentos-qemu-calibrated",
+                "runner_profile": {
+                    "cpu": "test cpu",
+                    "virtualization": "test vm",
+                    "qemu_version": "test qemu",
+                },
+                "calibration_status": (
+                    kernel_budgets.AGENT_TEST_CALIBRATION_READY
+                ),
+            }
+            config = {
+                "canonical_toolchain": {
+                    "prefix": "test-toolchain-",
+                    "gcc_version": "test gcc",
+                },
+                "agent_test_suite": tests,
+            }
+            fingerprint, paths = kernel_budgets.agent_test_source_fingerprint(
+                root, config
+            )
+            self.assertTrue(set(representatives).issubset(paths))
+            self.assertTrue(
+                set(kernel_budgets.AGENT_TEST_SOURCE_REQUIRED_PATHS).issubset(
+                    paths
+                )
+            )
+            self.assertNotIn("os/initproc.S", paths)
+            tests["source_fingerprint_sha256"] = fingerprint
+            with redirect_stdout(io.StringIO()):
+                kernel_budgets.check_agent_test_source_fingerprint(root, config)
+
+            for relative in paths:
+                path = root / relative
+                original = path.read_bytes()
+                path.write_bytes(original + b"mutation\n")
+                with self.subTest(source=relative), self.assertRaisesRegex(
+                    kernel_budgets.BudgetError, "fingerprint mismatch"
+                ):
+                    kernel_budgets.check_agent_test_source_fingerprint(
+                        root, config
+                    )
+                path.write_bytes(original)
+
+            (root / "docs").mkdir()
+            (root / "docs" / "unrelated.md").write_text(
+                "not a suite input\n", encoding="utf-8"
+            )
+            generated.write_text("generated two\n", encoding="utf-8")
+            with redirect_stdout(io.StringIO()):
+                kernel_budgets.check_agent_test_source_fingerprint(root, config)
+
+            changed_contract = copy.deepcopy(config)
+            changed_contract["agent_test_suite"]["runner_profile"][
+                "qemu_version"
+            ] = "different qemu"
+            with self.assertRaisesRegex(
+                kernel_budgets.BudgetError, "fingerprint mismatch"
+            ):
+                kernel_budgets.check_agent_test_source_fingerprint(
+                    root, changed_contract
+                )
+
+            changed_toolchain = copy.deepcopy(config)
+            changed_toolchain["canonical_toolchain"]["gcc_version"] = (
+                "different gcc"
+            )
+            with self.assertRaisesRegex(
+                kernel_budgets.BudgetError, "fingerprint mismatch"
+            ):
+                kernel_budgets.check_agent_test_source_fingerprint(
+                    root, changed_toolchain
+                )
+
+            (root / kernel_budgets.AGENT_TEST_SOURCE_REQUIRED_PATHS[0]).unlink()
+            with self.assertRaisesRegex(
+                kernel_budgets.BudgetError, "input is missing"
+            ):
+                kernel_budgets.agent_test_source_fingerprint(root, config)
 
     def test_agent_module_inventory_and_object_paths_are_fail_closed(self):
         config_path = SCRIPT.parent.parent / "ci" / "kernel-budgets.json"
@@ -2454,17 +2596,31 @@ agent_metadata_txn_projection_require_idle();
                 agent_test_start_ns=None,
                 agent_test_timing_file=str(timings),
                 agent_test_calibration=True,
+                root=str(SCRIPT.parent.parent),
             )
             config = {
+                "canonical_toolchain": {
+                    "prefix": "test-toolchain-",
+                    "gcc_version": "test gcc",
+                },
                 "agent_test_suite": {
                     "expected_cases": ["one", "two"],
                     "calibration_status": "provisional_requires_full_suite",
+                    "runner_tag": "agentos-qemu-calibrated",
+                    "runner_profile": {
+                        "cpu": "test cpu",
+                        "virtualization": "test vm",
+                        "qemu_version": "test qemu",
+                    },
                 }
             }
             output = io.StringIO()
             with redirect_stdout(output):
                 kernel_budgets.check_agent_tests(args, config)
             self.assertIn("actual=26.000 seconds", output.getvalue())
+            self.assertRegex(
+                output.getvalue(), r"source/contract: sha256=[0-9a-f]{64}"
+            )
             self.assertEqual(
                 timings.read_text(encoding="utf-8"),
                 "one 12.5\ntwo 13.5\n",

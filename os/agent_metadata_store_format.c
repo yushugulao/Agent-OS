@@ -74,6 +74,8 @@ agent_meta_format_store_hash(struct agent_meta_store *store)
 static int
 records_valid(struct agent_meta_store *store, uint stride, int legacy)
 {
+	uint ordinary = 0;
+
 	for (uint64 i = 0; i < store->header.count; i++) {
 		struct agent_meta_record_v5 *record =
 			(void *)((char *)store->records + i * stride);
@@ -83,6 +85,9 @@ records_valid(struct agent_meta_store *store, uint stride, int legacy)
 
 		if (!agent_metadata_catalog_record_base_valid(
 			    &record->meta, record->scope_id, record->slot))
+			return 0;
+		if (record->scope_id != VFS_SCOPE_SYSTEM &&
+		    ++ordinary > AGENT_FILE_ORDINARY_LIMIT)
 			return 0;
 		if (!legacy) {
 			struct workflow_lifecycle_key lifecycle =

@@ -73,9 +73,8 @@ enum vfs_operation {
 #define VFS_CAP_WORKFLOW \
 	(VFS_CAP_CONTENT_READ | VFS_CAP_ARTIFACT_WRITE)
 
-// At most four workflows may be active or closing. Closing identities retain
-// their full admission slot until all members finish teardown; retiring
-// identities remain in the lifecycle ledger until reclamation ends.
+// At most four workflows may be active, closing, or still retiring. A retiring
+// identity keeps its fixed catalog partition until reclamation settles it.
 #define VFS_SCOPE_MAX_ACTIVE WORKFLOW_LIFECYCLE_MAX_ACTIVE
 // The resumable filesystem reclaimer owns one cursor per retiring scope.
 // Admission-counted active/closing and retiring identities share this bounded
@@ -103,7 +102,6 @@ int vfs_scope_close_trusted(uint scope_id,
 			    struct workflow_lifecycle_key *closed);
 uint vfs_scope_storage_guarantee(uint exempt_scope, int inode,
 				 uint guarantee);
-uint vfs_scope_metadata_inode_usage(void);
 void vfs_scope_reap_pending(void);
 int vfs_proc_spawn_scope(const struct proc *, struct proc *,
 			 enum vfs_spawn_scope_mode);

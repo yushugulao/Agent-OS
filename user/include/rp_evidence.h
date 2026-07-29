@@ -5,6 +5,7 @@
 
 #define RP_EVIDENCE_FNV_OFFSET 1469598103934665603ULL
 #define RP_EVIDENCE_FNV_PRIME  1099511628211ULL
+#define RP_EVIDENCE_READ_CHUNK_SIZE 128
 
 struct rp_evidence_file_measurement {
 	unsigned long long bytes;
@@ -36,7 +37,7 @@ static RP_UNUSED int
 rp_evidence_measure_file(const char *path,
 			 struct rp_evidence_file_measurement *out)
 {
-	char chunk[128];
+	char chunk[RP_EVIDENCE_READ_CHUNK_SIZE];
 	unsigned long long hash = RP_EVIDENCE_FNV_OFFSET;
 	unsigned long long bytes = 0;
 	int lines = 0;
@@ -79,12 +80,14 @@ rp_evidence_measure_file_field(const char *path, const char *key,
 			       const char *value,
 			       struct rp_evidence_file_measurement *out)
 {
-	char target[192];
-	char field[192];
-	char chunk[128];
+	char chunk[RP_EVIDENCE_READ_CHUNK_SIZE];
 	unsigned long long hash = RP_EVIDENCE_FNV_OFFSET;
 	unsigned long long bytes = 0;
-	int field_len = 0;
+	size_t key_len;
+	size_t value_len;
+	size_t target_len;
+	size_t field_pos = 0;
+	int field_matches = 1;
 	int matches = 0;
 	int lines = 0;
 	int last = -1;
@@ -93,12 +96,12 @@ rp_evidence_measure_file_field(const char *path, const char *key,
 	if (path == 0 || key == 0 || value == 0 || out == 0 ||
 	    key[0] == 0 || value[0] == 0)
 		return 0;
-	if ((int)strlen(key) + (int)strlen(value) + 2 > (int)sizeof(target))
+	key_len = strlen(key);
+	value_len = strlen(value);
+	if (key_len == (size_t)-1 ||
+	    value_len > (size_t)-1 - key_len - 1)
 		return 0;
-	target[0] = 0;
-	rp_append_text(target, sizeof(target), key);
-	rp_append_text(target, sizeof(target), "=");
-	rp_append_text(target, sizeof(target), value);
+	target_len = key_len + value_len + 1;
 	fd = open(path, O_RDONLY);
 	if (fd < 0)
 		return 0;
@@ -115,22 +118,35 @@ rp_evidence_measure_file_field(const char *path, const char *key,
 		bytes += (unsigned long long)n;
 		for (int i = 0; i < n; i++) {
 			int delimiter = chunk[i] == ';' || chunk[i] == '\n';
+			char expected = 0;
 
 			if (chunk[i] == '\r' || chunk[i] == 0) {
 				close(fd);
 				return 0;
 			}
 			if (!delimiter) {
-				if (field_len + 1 >= (int)sizeof(field)) {
+				if (field_matches && field_pos < target_len) {
+					if (field_pos < key_len)
+						expected = key[field_pos];
+					else if (field_pos == key_len)
+						expected = '=';
+					else
+						expected = value[field_pos - key_len - 1];
+					if (chunk[i] != expected)
+						field_matches = 0;
+				} else {
+					field_matches = 0;
+				}
+				if (field_pos < target_len)
+					field_pos++;
+			} else {
+				if (field_matches && field_pos == target_len &&
+				    ++matches > 1) {
 					close(fd);
 					return 0;
 				}
-				field[field_len++] = chunk[i];
-			} else {
-				field[field_len] = 0;
-				if (strcmp(field, target) == 0)
-					matches++;
-				field_len = 0;
+				field_pos = 0;
+				field_matches = 1;
 				if (chunk[i] == '\n')
 					lines++;
 			}
@@ -138,9 +154,8 @@ rp_evidence_measure_file_field(const char *path, const char *key,
 		}
 	}
 	close(fd);
-	if (field_len > 0) {
-		field[field_len] = 0;
-		if (strcmp(field, target) == 0)
+	if (field_pos > 0) {
+		if (field_matches && field_pos == target_len)
 			matches++;
 		lines++;
 	} else if (bytes > 0 && last != '\n') {

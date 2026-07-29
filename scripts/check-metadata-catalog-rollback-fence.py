@@ -44,6 +44,7 @@ def require_order(source: str, tokens: tuple[str, ...], label: str) -> None:
 
 
 def validate_sources(sources: dict[str, str]) -> None:
+    agent_h = sources["agent_h"]
     catalog = sources["catalog"]
     catalog_h = sources["catalog_h"]
     metadata = sources["metadata"]
@@ -54,6 +55,121 @@ def validate_sources(sources: dict[str, str]) -> None:
     file_source = sources["file"]
     store_io = sources["store_io"]
     store = sources["store"]
+    vfs = sources["vfs"]
+
+    for token in (
+        "#define AGENT_FILE_META_MAX       512",
+        "#define AGENT_FILE_SYSTEM_LIMIT   64",
+        "#define AGENT_FILE_SCOPE_LIMIT    112",
+        "(AGENT_FILE_META_MAX - AGENT_FILE_SYSTEM_LIMIT)",
+    ):
+        require(agent_h, token, "fixed catalog partition")
+    for token in (
+        "AGENT_FILE_SCOPE_GUARANTEE",
+        "AGENT_FILE_SCOPE_BURST_LIMIT",
+    ):
+        if token in agent_h + catalog + fs + vfs:
+            raise ContractError(
+                f"fixed catalog partition regained an elastic limit: {token}"
+            )
+
+    for token in (
+        "AGENT_FILE_SYSTEM_LIMIT +",
+        "AGENT_FILE_ORDINARY_LIMIT == AGENT_FILE_META_MAX",
+        "VFS_SCOPE_MAX_ACTIVE * AGENT_FILE_SCOPE_LIMIT ==",
+        "AGENT_FILE_ORDINARY_LIMIT",
+    ):
+        require(catalog, token, "fixed catalog partition proof")
+    scope_admissible = function_body(catalog, "agent_catalog_scope_admissible(")
+    for token in (
+        "vfs_scope_lifecycle(scope_id, lifecycle)",
+        "workflow_lifecycle_active(*lifecycle)",
+        "workflow_lifecycle_closing(*lifecycle)",
+    ):
+        require(scope_admissible, token, "catalog lifecycle admission")
+    admission = function_body(catalog, "agent_catalog_admission(")
+    for token in (
+        "AGENT_FILE_SYSTEM_LIMIT : AGENT_FILE_SCOPE_LIMIT",
+        "result.owned >= limit",
+        "result.ordinary >= AGENT_FILE_ORDINARY_LIMIT",
+        "return AGENT_CATALOG_NO_SPACE",
+        "!growth || scope_id == VFS_SCOPE_SYSTEM",
+        "!agent_catalog_scope_admissible(scope_id, &lifecycle)",
+        "return AGENT_CATALOG_INTERRUPTED",
+    ):
+        require(admission, token, "fixed per-scope catalog admission")
+    plan_count = function_body(catalog, "agent_catalog_plan_count(")
+    for token in (
+        "AGENT_FILE_SYSTEM_LIMIT",
+        "AGENT_FILE_ORDINARY_LIMIT",
+        "AGENT_FILE_SCOPE_LIMIT",
+    ):
+        require(plan_count, token, "snapshot fixed partition admission")
+    scope_create = function_body(vfs, "static int vfs_scope_create(")
+    for token in (
+        "if (ref->retiring)",
+        "retiring++",
+        "workflow_lifecycle_active(ref->lifecycle)",
+        "workflow_lifecycle_closing(ref->lifecycle)",
+        "allocated + retiring < VFS_SCOPE_MAX_ACTIVE",
+    ):
+        require(scope_create, token, "retiring catalog partition retention")
+
+    for token in (
+        "uint64 candidate_epoch, catalog_generation, lifecycle_generation;",
+        "uint lifecycle_id;",
+        "plan_lifecycle_generation",
+        "plan_lifecycle_id",
+    ):
+        require(catalog_h, token, "immutable scoped reload lifecycle key")
+    plan_key = function_body(catalog, "static struct agent_catalog_plan_key agent_catalog_plan_key(")
+    for token in (
+        "memset(&key, 0, sizeof(key))",
+        "key.lifecycle_id = lifecycle.id",
+        "key.lifecycle_generation = lifecycle.generation",
+    ):
+        require(plan_key, token, "scoped reload key construction")
+    plan_matches = function_body(catalog, "agent_catalog_plan_matches(")
+    for token in (
+        "left->lifecycle_id == right->lifecycle_id",
+        "left->lifecycle_generation == right->lifecycle_generation",
+    ):
+        require(plan_matches, token, "scoped reload key comparison")
+    prepare = function_body(catalog, "agent_metadata_catalog_prepare_snapshot(")
+    prepare_key = prepare.find("key = agent_catalog_plan_key(")
+    prepare_match = prepare.find("if (!agent_catalog_plan_matches(")
+    if prepare_key < 0 or prepare_match < prepare_key:
+        raise ContractError("scoped reload prepare key order is incomplete")
+    initial_revalidation = prepare[:prepare_key]
+    continuation_revalidation = prepare[prepare_key:prepare_match]
+    for token in (
+        "reload_one_scope &&",
+        "!agent_catalog_scope_admissible(reload_scope, &lifecycle)",
+        "AGENT_METADATA_LOAD_INTERRUPTED",
+    ):
+        require(initial_revalidation, token, "scoped reload prepare admission")
+    for token in (
+        "result->plan_lifecycle_id != lifecycle.id",
+        "result->plan_lifecycle_generation != lifecycle.generation",
+        "agent_catalog_prepare_fail(",
+        "AGENT_METADATA_LOAD_INTERRUPTED",
+    ):
+        require(continuation_revalidation, token,
+                "scoped reload prepare continuation")
+    apply = function_body(catalog, "agent_metadata_catalog_apply_snapshot(")
+    apply_key = apply.find("key = agent_catalog_plan_key(")
+    if apply_key < 0:
+        raise ContractError("scoped reload apply key is missing")
+    apply_revalidation = apply[:apply_key]
+    for token in (
+        "reload_one_scope &&",
+        "!agent_catalog_scope_admissible(reload_scope, &lifecycle)",
+        "result->plan_lifecycle_id != lifecycle.id",
+        "result->plan_lifecycle_generation != lifecycle.generation",
+        "agent_catalog_prepare_fail(",
+        "AGENT_METADATA_LOAD_INTERRUPTED",
+    ):
+        require(apply_revalidation, token, "scoped reload apply revalidation")
 
     for token in (
         "struct agent_catalog_mutation_fence",
@@ -126,8 +242,8 @@ def validate_sources(sources: dict[str, str]) -> None:
                   "(undo->reserved & ~AGENT_CATALOG_UNDO_CREATED) != 0",
                   "undo->fence_token != fence->token",
                   "undo->slot_binding != agent_catalog_undo_binding(undo, slot)",
-                  "agent_catalog_capacity_available(",
-                  "previous_scope, slot, previous",
+                  "agent_catalog_admission(",
+                  "previous_scope, slot, previous, 0",
                   "agent_catalog_unbind(slot",
                   "undo->reserved & AGENT_CATALOG_UNDO_CREATED",
                   "fs_rollback_created_workflow("):
@@ -135,12 +251,14 @@ def validate_sources(sources: dict[str, str]) -> None:
     require_order(
         restore,
         ("undo->slot_binding != agent_catalog_undo_binding(undo, slot)",
-         "agent_catalog_capacity_available(",
+         "agent_catalog_admission(",
          "agent_catalog_unbind(slot",
          "fs_rollback_created_workflow(",
          "agent_catalog_state_clear(slot)"),
         "validate and admit before rollback write",
     )
+    if "previous_scope, slot, previous, 1" in restore:
+        raise ContractError("exact rollback is incorrectly classified as growth")
     if "undo->catalog_generation != agent_catalog_generation" in restore:
         raise ContractError("unrelated catalog generation became a rollback veto")
     restore_cleanup = restore[
@@ -168,7 +286,6 @@ def validate_sources(sources: dict[str, str]) -> None:
         body = function_body(catalog, signature)
         require(body, "if (!agent_catalog_mutation_allowed())",
                 f"mutation guard {signature}")
-    apply = function_body(catalog, "agent_metadata_catalog_apply_snapshot(")
     require(apply, "return AGENT_METADATA_LOAD_INTERRUPTED;",
             "reload fence retry")
 
@@ -331,9 +448,17 @@ def validate_sources(sources: dict[str, str]) -> None:
                    "agent_metadata_catalog_clear_slot(slot)",
                    "agent_metadata_catalog_undo_capture("),
                   "write entry fence and delete token")
-    set_path = meta_set[meta_set.find(
-        "if (slot < 0)\n\t\tslot = agent_metadata_catalog_alloc_slot"
-    ):]
+    set_start = meta_set.find("if (slot < 0) {")
+    if set_start < 0:
+        raise ContractError("metadata set allocation branch is missing")
+    set_path = meta_set[set_start:]
+    require_order(
+        set_path,
+        ("agent_metadata_catalog_alloc_slot(scope_id)",
+         "result = agent_catalog_error_status(slot)",
+         "agent_metadata_catalog_edit_begin("),
+        "catalog allocation status before fenced edit",
+    )
     set_positions = [
         set_path.find("agent_metadata_catalog_edit_begin("),
         set_path.find("agent_metadata_catalog_edit_commit("),
@@ -431,7 +556,7 @@ def validate_sources(sources: dict[str, str]) -> None:
         "batch persistence receipt ownership",
     )
     submit_start = batch.find("if (!agent_metadata_store_submit_wait_locked())")
-    load_start = batch.find("if (agent_file_store_load() < 0)")
+    load_start = batch.find("load_status = agent_file_store_load()")
     require_order(
         batch[submit_start:load_start],
         ("persist->durable = 0", "persist->status = -1",
@@ -439,6 +564,12 @@ def validate_sources(sources: dict[str, str]) -> None:
         "submit failure receipt before catalog load",
     )
     begin_start = batch.find("if (agent_metadata_catalog_mutation_begin(")
+    require_order(
+        batch[load_start:begin_start],
+        ("load_status = agent_file_store_load()", "if (load_status < 0)",
+         "return agent_metadata_load_agent_status(load_status)"),
+        "catalog load ABI status before mutation fence",
+    )
     update_start = batch.find("agent_metadata_actions_update_status_locked(")
     require_order(
         batch[begin_start:update_start],
@@ -482,6 +613,7 @@ def validate_sources(sources: dict[str, str]) -> None:
 
 def load_sources(root: Path) -> dict[str, str]:
     paths = {
+        "agent_h": root / "os/agent.h",
         "catalog": root / "os/agent_metadata_catalog.c",
         "catalog_h": root / "os/agent_metadata_catalog.h",
         "metadata": root / "os/agent_metadata.c",
@@ -492,6 +624,7 @@ def load_sources(root: Path) -> dict[str, str]:
         "file": root / "os/file.c",
         "store_io": root / "os/agent_metadata_store_io.c",
         "store": root / "os/agent_metadata_store.c",
+        "vfs": root / "os/vfs_security.c",
     }
     return {name: path.read_text(encoding="utf-8")
             for name, path in paths.items()}

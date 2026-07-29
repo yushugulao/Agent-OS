@@ -1,0 +1,3 @@
+#ifndef __RESEARCH_PLATFORM_STATE_H__
+#define __RESEARCH_PLATFORM_STATE_H__
+#endif

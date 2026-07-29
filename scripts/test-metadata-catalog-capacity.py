@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Mutation and arithmetic tests for catalog capacity/fair scan contracts."""
+"""Mutation and arithmetic tests for fixed catalog partitions and scans."""
 
 from __future__ import annotations
 
@@ -26,29 +26,51 @@ def mutate(sources: dict[str, str], name: str, old: str, new: str) -> dict[str, 
     return changed
 
 
-def workflow_admissible(usages: list[tuple[str, int]]) -> bool:
-    active = sum(1 for state, _ in usages if state == "active")
-    used = sum(value for state, value in usages if state != "preserved")
-    deficit = sum(max(0, 16 - value) for state, value in usages
-                  if state == "active")
-    return used + deficit + (4 - active) * 16 <= 448
+def workflow_scope_create_allowed(states: list[str]) -> bool:
+    occupied = sum(state in {"active", "closing", "retiring"}
+                   for state in states)
+    return occupied < 4
 
 
-def workflow_inode_allocation_allowed(
-    usages: list[tuple[str, str, int]], target: str
-) -> bool:
-    active = sum(1 for _, state, _ in usages if state == "active")
-    used = sum(value for _, state, value in usages if state != "preserved")
-    reserve = sum(max(0, 16 - value) for name, state, value in usages
-                  if state == "active" and name != target)
-    reserve += (4 - active) * 16
-    return used < 448 and reserve < 448 - used
+def storage_guarantee_required(
+    scopes: list[tuple[str, str, int]], exempt: str | None,
+    guarantee: int = 16,
+) -> int:
+    retained = [(name, used) for name, state, used in scopes
+                if state in {"active", "closing", "retiring"}]
+    required = sum(max(guarantee - used, 0) for name, used in retained
+                   if name != exempt)
+    return required + max(4 - len(retained), 0) * guarantee
+
+
+def workflow_inode_allocation_allowed(owned: int) -> bool:
+    return owned < 112
 
 
 def catalog_slot_allowed(system: bool, owned: int, ordinary: int) -> bool:
     if system:
         return owned < 64 and owned + ordinary < 512
     return owned < 112 and ordinary < 448
+
+
+def catalog_admission_allowed(
+    system: bool, owned: int, ordinary: int, *, growth: bool,
+    lifecycle_admitted: bool,
+) -> bool:
+    if not catalog_slot_allowed(system, owned, ordinary):
+        return False
+    if not growth or system:
+        return True
+    return lifecycle_admitted
+
+
+def catalog_workflow_allocation_allowed(
+    records: dict[str, int], live_scopes: set[str], target: str,
+) -> bool:
+    return catalog_admission_allowed(
+        False, records.get(target, 0), sum(records.values()), growth=True,
+        lifecycle_admitted=target in live_scopes,
+    )
 
 
 def stale_sweep(records: list[tuple[int, bool]], failed: set[int],
@@ -70,6 +92,17 @@ def retained_scope_plan_allowed(scopes: list[int]) -> bool:
         if len(counts) > 8 or counts[scope] > 112:
             return False
     return len(scopes) <= 448
+
+
+def scoped_reload_plan_allowed(
+    records: dict[str, int], live_scopes: set[str], target: str,
+) -> bool:
+    if target not in live_scopes or len(live_scopes) > 4:
+        return False
+    if len(records) > 8 or any(count > 112 for count in records.values()):
+        return False
+    ordinary = sum(records.values())
+    return ordinary <= 448
 
 
 def classify_identity(scope: str, autoscan: bool,
@@ -184,16 +217,81 @@ class CatalogCapacityContractTests(unittest.TestCase):
         with self.assertRaises(CONTRACT.ContractError):
             CONTRACT.validate_sources(broken)
 
-    def test_active_retiring_and_system_reserve_model(self) -> None:
-        self.assertFalse(workflow_admissible([("retiring", 112)] * 4))
-        self.assertTrue(workflow_admissible([("retiring", 112)] * 3))
-        self.assertTrue(workflow_admissible([("active", 16)] * 4))
-        self.assertFalse(workflow_admissible(
-            [("active", 112)] * 3 + [("retiring", 112)]))
-        self.assertTrue(workflow_admissible([("preserved", 112)] * 4))
+    def test_active_closing_and_retiring_share_four_slots(self) -> None:
+        self.assertTrue(workflow_scope_create_allowed(["retiring"] * 3))
+        self.assertFalse(workflow_scope_create_allowed(["retiring"] * 4))
+        self.assertFalse(workflow_scope_create_allowed(
+            ["active", "closing", "retiring", "active"]))
+        self.assertTrue(workflow_scope_create_allowed(
+            ["active", "retiring", "reclaimed"]))
         self.assertFalse(catalog_slot_allowed(False, 111, 448))
+        self.assertTrue(catalog_slot_allowed(False, 111, 447))
+        self.assertFalse(catalog_slot_allowed(False, 112, 112))
         self.assertTrue(catalog_slot_allowed(True, 63, 448))
         self.assertFalse(catalog_slot_allowed(True, 64, 448))
+
+    def test_retiring_usage_offsets_its_guarantee_slot(self) -> None:
+        self.assertEqual(storage_guarantee_required([], None), 64)
+        self.assertEqual(storage_guarantee_required(
+            [("old", "retiring", 0)], None), 64)
+        self.assertEqual(storage_guarantee_required(
+            [("old", "retiring", 8)], None), 56)
+        self.assertEqual(storage_guarantee_required(
+            [("old", "retiring", 16)], None), 48)
+        self.assertEqual(storage_guarantee_required(
+            [("old", "retiring", 112)], None), 48)
+        self.assertEqual(storage_guarantee_required(
+            [("old", "retiring", 8)], "old"), 48)
+
+    def test_active_allocation_does_not_double_count_retiring_slot(self) -> None:
+        scopes = [
+            ("target", "active", 0),
+            ("old", "retiring", 112),
+        ]
+        # target is exempt from its own allocation. The retiring scope occupies
+        # one slot and its existing usage fully offsets that slot's guarantee;
+        # only the two genuinely empty future slots remain.
+        self.assertEqual(storage_guarantee_required(scopes, "target"), 32)
+        # The obsolete skip-retiring model treated old as an empty future slot.
+        legacy_skip_retiring = (4 - 1) * 16
+        self.assertEqual(legacy_skip_retiring, 48)
+        self.assertNotEqual(storage_guarantee_required(scopes, "target"),
+                            legacy_skip_retiring)
+
+    def test_fixed_catalog_partitions_isolate_scopes(self) -> None:
+        self.assertTrue(catalog_workflow_allocation_allowed(
+            {"a": 111}, {"a"}, "a"))
+        self.assertFalse(catalog_workflow_allocation_allowed(
+            {"a": 112}, {"a"}, "a"))
+        # A full partition cannot consume B's independent 112-slot partition.
+        self.assertTrue(catalog_workflow_allocation_allowed(
+            {"a": 112, "b": 111}, {"a", "b"}, "b"))
+        self.assertFalse(catalog_workflow_allocation_allowed(
+            {"a": 112, "b": 112}, {"a", "b"}, "b"))
+        self.assertFalse(catalog_workflow_allocation_allowed(
+            {"retiring": 1}, set(), "retiring"))
+        # All four fixed partitions exactly fill the ordinary table.
+        self.assertFalse(catalog_workflow_allocation_allowed(
+            {"a": 112, "b": 112, "c": 112, "d": 112},
+            {"a", "b", "c", "d"}, "a"))
+        # Receipt-bound replacement/undo remains possible without a live owner
+        # when it does not grow the fixed partition.
+        self.assertTrue(catalog_admission_allowed(
+            False, 111, 447, growth=False, lifecycle_admitted=False))
+        self.assertFalse(catalog_admission_allowed(
+            False, 111, 447, growth=True, lifecycle_admitted=False))
+
+    def test_reload_binds_lifecycle_and_fixed_partitions(self) -> None:
+        # Full boot must be able to load bounded retiring history so the reaper
+        # can observe and release it.
+        self.assertTrue(retained_scope_plan_allowed([3] * 112))
+        self.assertFalse(retained_scope_plan_allowed([3] * 113))
+        self.assertFalse(scoped_reload_plan_allowed(
+            {"a": 113, "b": 1}, {"a", "b"}, "a"))
+        self.assertTrue(scoped_reload_plan_allowed(
+            {"a": 112, "b": 112}, {"a", "b"}, "a"))
+        self.assertFalse(scoped_reload_plan_allowed(
+            {"retiring": 112}, set(), "retiring"))
 
     def test_fid_bitmap_covers_the_inclusive_boundary(self) -> None:
         bitmap = bytearray((512 + 7) // 8)
@@ -203,17 +301,11 @@ class CatalogCapacityContractTests(unittest.TestCase):
             self.assertTrue(bitmap[(fid - 1) // 8] &
                             (1 << ((fid - 1) % 8)))
 
-    def test_allocation_preserves_guarantees_until_lifecycle_refund(self) -> None:
-        pressure = [(f"old-{i}", "retiring", 112) for i in range(3)]
-        self.assertTrue(workflow_inode_allocation_allowed(
-            pressure + [("target", "active", 63)], "target"))
-        self.assertFalse(workflow_inode_allocation_allowed(
-            pressure + [("target", "active", 64)], "target"))
-        self.assertTrue(workflow_inode_allocation_allowed(
-            pressure[1:] + [("target", "active", 64)], "target"))
-        self.assertTrue(workflow_inode_allocation_allowed(
-            pressure + [("archive", "preserved", 112),
-                        ("target", "active", 63)], "target"))
+    def test_inode_account_uses_the_same_fixed_scope_limit(self) -> None:
+        self.assertTrue(workflow_inode_allocation_allowed(111))
+        self.assertFalse(workflow_inode_allocation_allowed(112))
+        # Peer usage is deliberately irrelevant to this account-local bound.
+        self.assertTrue(workflow_inode_allocation_allowed(0))
 
     def test_failed_scope_isolated_from_stale_sweep(self) -> None:
         records = [(3, False), (4, False), (5, True)]
@@ -235,7 +327,10 @@ class CatalogCapacityContractTests(unittest.TestCase):
         self.assertFalse(retained_scope_plan_allowed(list(range(3, 12))))
         self.assertTrue(retained_scope_plan_allowed(
             [scope for scope in range(3, 11) for _ in range(56)]))
+        self.assertTrue(retained_scope_plan_allowed([3] * 112))
         self.assertFalse(retained_scope_plan_allowed([3] * 113))
+        self.assertFalse(retained_scope_plan_allowed(
+            [3] * 112 + [4] * 112 + [5] * 112 + [6] * 113))
 
     def test_zero_identity_classification_and_visibility(self) -> None:
         self.assertEqual(classify_identity("workflow", False, (0, 0, 0)),
@@ -350,10 +445,84 @@ class CatalogCapacityContractTests(unittest.TestCase):
              "agent_catalog_files[AGENT_FILE_META_MAX + 64]"),
             ("catalog_h", "#define AGENT_CATALOG_SCOPE_PLAN_MAX 8",
              "#define AGENT_CATALOG_SCOPE_PLAN_MAX 4"),
-            ("catalog", "result.ordinary < AGENT_FILE_ORDINARY_LIMIT",
-             "result.ordinary < AGENT_FILE_META_MAX"),
-            ("catalog", "edit->scope_id, edit->slot, edit->meta)",
-             "edit->scope_id, -1, edit->meta)"),
+            ("agent", "#define AGENT_FILE_SCOPE_LIMIT    112",
+             "#define AGENT_FILE_SCOPE_LIMIT    448"),
+            ("catalog", "result.ordinary >= AGENT_FILE_ORDINARY_LIMIT",
+             "result.ordinary >= AGENT_FILE_META_MAX"),
+            ("catalog", "static struct agent_file_meta agent_catalog_files",
+             "/* RESOURCE_AGENT_CATALOG */\n"
+             "static struct agent_file_meta agent_catalog_files"),
+            ("catalog", "static int agent_catalog_admission(\n",
+             "static int agent_catalog_pressure_admissible(void);\n"
+             "static int agent_catalog_admission(\n"),
+            ("vfs", "if (ref->retiring)\n\t\t\t\tretiring++",
+             "if (ref->retiring)\n\t\t\t\tretiring += 0"),
+            ("vfs", "workflow_lifecycle_closing(ref->lifecycle)",
+             "workflow_lifecycle_active(ref->lifecycle)"),
+            ("vfs", "allocated + retiring < VFS_SCOPE_MAX_ACTIVE",
+             "allocated < VFS_SCOPE_MAX_ACTIVE"),
+            ("vfs", "allocated + retiring < VFS_SCOPE_LIFECYCLE_CAP",
+             "allocated < VFS_SCOPE_LIFECYCLE_CAP"),
+            ("vfs", "if (!ref->used ||\n\t\t    (!ref->retiring &&",
+             "if (!ref->used || ref->retiring ||\n"
+             "\t\t    (!ref->retiring &&"),
+            ("vfs", "\t\tallocated++;\n"
+             "\t\tif (ref->scope_id == exempt_scope)\n"
+             "\t\t\tcontinue;\n"
+             "\t\tused = resource_account_usage(",
+             "\t\tif (ref->scope_id == exempt_scope)\n"
+             "\t\t\tcontinue;\n"
+             "\t\tallocated++;\n"
+             "\t\tused = resource_account_usage("),
+            ("vfs", "used = resource_account_usage(",
+             "used = 0; /* resource_account_usage( */"),
+            ("vfs", "if (used < guarantee)",
+             "if (used == 0)"),
+            ("vfs", "required += guarantee - used;",
+             "required += guarantee;"),
+            ("vfs", "if (allocated < VFS_SCOPE_MAX_ACTIVE)",
+             "if (1)"),
+            ("vfs", "(VFS_SCOPE_MAX_ACTIVE - allocated) * guarantee",
+             "VFS_SCOPE_MAX_ACTIVE * guarantee"),
+            ("catalog", "if (!growth || scope_id == VFS_SCOPE_SYSTEM)",
+             "if (scope_id == VFS_SCOPE_SYSTEM)"),
+            ("catalog", "if (!agent_catalog_scope_admissible(scope_id, &lifecycle))",
+             "if (0)"),
+            ("catalog", "AGENT_FILE_SYSTEM_LIMIT : AGENT_FILE_SCOPE_LIMIT",
+             "AGENT_FILE_SYSTEM_LIMIT : AGENT_FILE_META_MAX"),
+            ("catalog", "edit->scope_id, edit->slot, edit->meta, growth)",
+             "edit->scope_id, edit->slot, edit->meta, 0)"),
+            ("catalog", "previous_scope, slot, previous, 0)",
+             "previous_scope, slot, previous, 1)"),
+            ("catalog", "agent_catalog_admission(scope_id, -1, 0, 1)",
+             "agent_catalog_admission(scope_id, -1, 0, 0)"),
+            ("catalog_h",
+             "uint64 candidate_epoch, catalog_generation, lifecycle_generation;",
+             "uint64 candidate_epoch, catalog_generation;"),
+            ("catalog_h", "uint lifecycle_id;", "uint reserved;"),
+            ("catalog", "memset(&key, 0, sizeof(key));",
+             "key.records = 0;"),
+            ("catalog", "key.lifecycle_id = lifecycle.id;",
+             "key.lifecycle_id = 0;"),
+            ("catalog", "key.lifecycle_generation = lifecycle.generation;",
+             "key.lifecycle_generation = 0;"),
+            ("catalog", "left->lifecycle_id == right->lifecycle_id",
+             "left->lifecycle_id == left->lifecycle_id"),
+            ("catalog",
+             "left->lifecycle_generation == right->lifecycle_generation",
+             "left->lifecycle_generation == left->lifecycle_generation"),
+            ("catalog",
+             "reload_one_scope &&\n\t    !agent_catalog_scope_admissible(reload_scope, &lifecycle)",
+             "!agent_catalog_scope_admissible(reload_scope, &lifecycle)"),
+            ("catalog",
+             "result->plan_lifecycle_id != lifecycle.id ||",
+             "result->plan_lifecycle_id == lifecycle.id ||"),
+            ("catalog",
+             "!agent_catalog_scope_admissible(reload_scope, &lifecycle) ||",
+             "0 ||"),
+            ("catalog",
+             "if (reload_one_scope &&\n\t    (!agent_catalog_scope_admissible(reload_scope, &lifecycle)",
+             "if (1 &&\n\t    (!agent_catalog_scope_admissible(reload_scope, &lifecycle)"),
             ("catalog", "agent_catalog_normalize_physical(edit->slot, edit->meta);",
              "edit->meta->physical_name[0] = 0;"),
             ("catalog", "strlen(meta->physical_name) > DIRSIZ",
@@ -390,10 +559,34 @@ class CatalogCapacityContractTests(unittest.TestCase):
              "return records_valid(store, sizeof(struct agent_meta_record_v5), 0);"),
             ("fs", "fs_storage.workflow_inode_domain_limit < AGENT_FILE_SCOPE_LIMIT ?",
              "fs_storage.workflow_inode_domain_limit < AGENT_FILE_META_MAX ?"),
-            ("fs", "metadata_reserve >=\n\t\t\t    AGENT_FILE_ORDINARY_LIMIT - metadata_used",
-             "metadata_reserve >\n\t\t\t    AGENT_FILE_ORDINARY_LIMIT - metadata_used"),
-            ("vfs", "if (!ref->used ||\n\t\t    (!ref->retiring &&",
-             "if (!ref->used || ref->retiring ||\n\t\t    (!ref->retiring &&"),
+            ("fs", "\t\t\tAGENT_FILE_SCOPE_LIMIT;",
+             "\t\t\tAGENT_FILE_META_MAX;"),
+            ("fs", "VFS_SCOPE_MAX_ACTIVE * AGENT_FILE_SCOPE_LIMIT ==",
+             "VFS_SCOPE_MAX_ACTIVE * AGENT_FILE_META_MAX =="),
+            ("actions", "count >= AGENT_FILE_STATUS_BATCH_LIMIT",
+             "count > AGENT_FILE_STATUS_BATCH_LIMIT"),
+            ("actions", "if (primary_updated < 0)",
+             "if (primary_updated == 0)"),
+            ("actions", "if (selected_count < 0)",
+             "if (selected_count == 0)"),
+            ("objects", "if (updated < 0)",
+             "if (updated == 0)"),
+            ("catalog_h", "#define AGENT_CATALOG_NO_SPACE    -5",
+             "#define AGENT_CATALOG_NO_SPACE    -1"),
+            ("objects", "case AGENT_CATALOG_NO_SPACE:\n"
+             "\t\treturn AGENT_STATUS_NO_SPACE;",
+             "case AGENT_CATALOG_NO_SPACE:\n"
+             "\t\treturn AGENT_STATUS_IO_ERROR;"),
+            ("objects", "case AGENT_CATALOG_INTERRUPTED:\n"
+             "\tcase AGENT_CATALOG_STALE:\n"
+             "\t\treturn AGENT_STATUS_RETRY;",
+             "case AGENT_CATALOG_INTERRUPTED:\n"
+             "\tcase AGENT_CATALOG_STALE:\n"
+             "\t\treturn AGENT_STATUS_IO_ERROR;"),
+            ("objects", "result = agent_catalog_error_status(slot);",
+             "result = AGENT_STATUS_IO_ERROR;"),
+            ("objects", "result = agent_catalog_error_status(commit_status);",
+             "result = AGENT_STATUS_IO_ERROR;"),
             ("scan", "*failed = SCAN_BIND_DEFERRED;",
              "*failed = SCAN_BIND_RETRY;"),
             ("scan", "scan.offset = off;\n\t\t\tscan_pause(1, 1);",

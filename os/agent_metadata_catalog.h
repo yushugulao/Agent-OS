@@ -27,6 +27,8 @@
 #define AGENT_CATALOG_STALE       -2
 #define AGENT_CATALOG_CONFLICT    -3
 #define AGENT_CATALOG_INDETERMINATE -4
+#define AGENT_CATALOG_NO_SPACE    -5
+#define AGENT_CATALOG_INTERRUPTED -6
 
 #define AGENT_CATALOG_STATE_PENDING    (1U << 0)
 #define AGENT_CATALOG_STATE_QUARANTINE (1U << 1)
@@ -96,10 +98,10 @@ struct agent_catalog_delta {
 
 struct agent_catalog_plan_key {
 	const struct agent_meta_record *records;
-	uint64 candidate_epoch, catalog_generation;
+	uint64 candidate_epoch, catalog_generation, lifecycle_generation;
 	uint count, reload_scope;
 	int reload_one_scope;
-	uint reserved;
+	uint lifecycle_id;
 };
 
 struct agent_metadata_apply_result {
@@ -108,10 +110,11 @@ struct agent_metadata_apply_result {
 		struct agent_catalog_plan_key plan_key;
 		struct {
 			const struct agent_meta_record *plan_records;
-			uint64 plan_candidate_epoch, plan_catalog_generation;
+			uint64 plan_candidate_epoch, plan_catalog_generation,
+				plan_lifecycle_generation;
 			uint plan_count, plan_reload_scope;
 			int plan_reload_one_scope;
-			uint plan_reserved;
+			uint plan_lifecycle_id;
 		};
 	};
 	uint64 plan_token, plan_hash;

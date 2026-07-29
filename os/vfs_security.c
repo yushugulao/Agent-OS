@@ -84,7 +84,7 @@ static int vfs_scope_create(uint scope_id,
 			free_slot = i;
 		}
 	}
-	if (free_slot >= 0 && allocated < VFS_SCOPE_MAX_ACTIVE &&
+	if (free_slot >= 0 && allocated + retiring < VFS_SCOPE_MAX_ACTIVE &&
 	    allocated + retiring < VFS_SCOPE_LIFECYCLE_CAP &&
 	    fs_storage_scope_admissible() &&
 	    fs_storage_scope_account_create(scope_id, &storage) == 0 &&
@@ -551,9 +551,9 @@ int vfs_scope_close_trusted(uint scope_id,
 }
 
 // Return the unconsumed storage guarantee that an allocation must leave for
-// every active, closing, or future workflow slot. Retiring scopes keep their
-// exact usage charged, while their unused guarantee becomes available to a
-// new active scope.
+// every admitted or future workflow slot. Retiring scopes still occupy an
+// admission slot, so their charged usage offsets that slot's guarantee rather
+// than being counted again as a completely empty future slot.
 uint vfs_scope_storage_guarantee(uint exempt_scope, int inode, uint guarantee)
 {
 	uint required = 0;
@@ -567,8 +567,9 @@ uint vfs_scope_storage_guarantee(uint exempt_scope, int inode, uint guarantee)
 		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
 		uint used;
 
-		if (!ref->used || ref->retiring ||
-		    (!workflow_lifecycle_active(ref->lifecycle) &&
+		if (!ref->used ||
+		    (!ref->retiring &&
+		     !workflow_lifecycle_active(ref->lifecycle) &&
 		     !workflow_lifecycle_closing(ref->lifecycle)))
 			continue;
 		allocated++;
@@ -584,33 +585,6 @@ uint vfs_scope_storage_guarantee(uint exempt_scope, int inode, uint guarantee)
 		required += (VFS_SCOPE_MAX_ACTIVE - allocated) * guarantee;
 	intr_restore(enabled);
 	return required;
-}
-
-uint
-vfs_scope_metadata_inode_usage(void)
-{
-	uint64 total = 0;
-	int enabled = intr_save();
-
-	for (int i = 0; i < NPROC; i++) {
-		struct vfs_scope_ref *ref = &vfs_scope_refs[i];
-		uint64 used;
-
-		if (!ref->used ||
-		    (!ref->retiring &&
-		     !workflow_lifecycle_key_valid(ref->lifecycle)) ||
-		    !resource_account_handle_valid(ref->storage_account))
-			continue;
-		used = resource_account_usage(ref->storage_account,
-					      RESOURCE_FS_INODE);
-		if (used > (uint)-1 - total) {
-			total = (uint)-1;
-			break;
-		}
-		total += used;
-	}
-	intr_restore(enabled);
-	return (uint)total;
 }
 
 uint vfs_label_checksum(uint inum, uint magic, uint version, uint flags,

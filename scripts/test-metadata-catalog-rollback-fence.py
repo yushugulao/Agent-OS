@@ -142,6 +142,33 @@ class PersistCompletionModel:
         return "io", False, "agent_io_error"
 
 
+class FixedPartitionModel:
+    SCOPE_LIMIT = 112
+    ACTIVE_SLOTS = 4
+
+    @classmethod
+    def can_grow(cls, owned: int, state: str) -> bool:
+        return state in ("active", "closing") and owned < cls.SCOPE_LIMIT
+
+    @classmethod
+    def can_create_scope(cls, active: int, closing: int, retiring: int) -> bool:
+        return active + closing + retiring < cls.ACTIVE_SLOTS
+
+
+class ScopedReloadModel:
+    def __init__(self, lifecycle_id: int, generation: int,
+                 catalog_generation: int) -> None:
+        self.plan = (lifecycle_id, generation, catalog_generation)
+
+    def apply(self, lifecycle_id: int, generation: int,
+              catalog_generation: int, state: str) -> str:
+        if state not in ("active", "closing"):
+            return "interrupted"
+        if self.plan != (lifecycle_id, generation, catalog_generation):
+            return "interrupted"
+        return "ok"
+
+
 class CatalogRollbackFenceTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -281,6 +308,22 @@ class CatalogRollbackFenceTests(unittest.TestCase):
         self.assertTrue(irrevocable)
         self.assertEqual(status, "agent_indeterminate")
 
+    def test_fixed_partition_holds_retiring_identity_until_reclaim(self) -> None:
+        self.assertTrue(FixedPartitionModel.can_grow(111, "active"))
+        self.assertFalse(FixedPartitionModel.can_grow(112, "active"))
+        self.assertFalse(FixedPartitionModel.can_grow(0, "retiring"))
+        self.assertFalse(FixedPartitionModel.can_create_scope(3, 0, 1))
+        self.assertTrue(FixedPartitionModel.can_create_scope(3, 0, 0))
+
+    def test_scoped_reload_revalidates_immutable_lifecycle(self) -> None:
+        plan = ScopedReloadModel(3, 9, 41)
+        self.assertEqual(plan.apply(3, 9, 41, "active"), "ok")
+        self.assertEqual(plan.apply(3, 9, 41, "closing"), "ok")
+        self.assertEqual(plan.apply(3, 10, 41, "active"), "interrupted")
+        self.assertEqual(plan.apply(4, 9, 41, "active"), "interrupted")
+        self.assertEqual(plan.apply(3, 9, 42, "active"), "interrupted")
+        self.assertEqual(plan.apply(3, 9, 41, "retiring"), "interrupted")
+
     def test_batch_locked_transaction_contract_mutations_are_rejected(self) -> None:
         altered = mutate(
             self.sources,
@@ -310,7 +353,11 @@ class CatalogRollbackFenceTests(unittest.TestCase):
             "\t\treturn 0;\n"
             "\t}"
         )
-        load_block = "if (agent_file_store_load() < 0)\n\t\treturn 0;"
+        load_block = (
+            "load_status = agent_file_store_load();\n"
+            "\tif (load_status < 0)\n"
+            "\t\treturn agent_metadata_load_agent_status(load_status);"
+        )
         altered = mutate(
             self.sources,
             "objects",
@@ -378,7 +425,7 @@ class CatalogRollbackFenceTests(unittest.TestCase):
              "agent_catalog_active_edit != 0 || !agent_catalog_mutation_allowed()",
              "agent_catalog_active_edit != 0"),
             ("catalog",
-             "if (agent_catalog_capacity_available(\n\t\t\t    previous_scope, slot, previous) <= 0)",
+             "if (agent_catalog_admission(\n\t\t\t    previous_scope, slot, previous, 0) <= 0)",
              "if (0)"),
             ("objects",
              "if (agent_metadata_catalog_mutation_begin(&mutation_fence) < 0)",
@@ -386,6 +433,47 @@ class CatalogRollbackFenceTests(unittest.TestCase):
             ("objects",
              "agent_metadata_catalog_mutation_end(&mutation_fence) < 0",
              "0"),
+        )
+        for name, old, new in cases:
+            with self.subTest(name=name, anchor=old):
+                altered = mutate(self.sources, name, old, new)
+                with self.assertRaises(CONTRACT.ContractError):
+                    CONTRACT.validate_sources(altered)
+
+    def test_fixed_partition_and_lifecycle_mutations_are_rejected(self) -> None:
+        cases = (
+            ("agent_h",
+             "#define AGENT_FILE_SCOPE_LIMIT    112",
+             "#define AGENT_FILE_SCOPE_LIMIT    400"),
+            ("catalog",
+             "AGENT_FILE_SYSTEM_LIMIT : AGENT_FILE_SCOPE_LIMIT;",
+             "AGENT_FILE_SYSTEM_LIMIT : AGENT_FILE_ORDINARY_LIMIT;"),
+            ("catalog",
+             "\t\t\t       AGENT_FILE_SCOPE_LIMIT ? 0 : -1;",
+             "\t\t\t       AGENT_FILE_ORDINARY_LIMIT ? 0 : -1;"),
+            ("vfs",
+             "allocated + retiring < VFS_SCOPE_MAX_ACTIVE",
+             "allocated < VFS_SCOPE_MAX_ACTIVE"),
+            ("catalog",
+             "workflow_lifecycle_active(*lifecycle) ||\n"
+             "\t       workflow_lifecycle_closing(*lifecycle)",
+             "workflow_lifecycle_active(*lifecycle)"),
+            ("catalog",
+             "left->lifecycle_generation == right->lifecycle_generation;",
+             "1;"),
+            ("catalog",
+             "\tif (reload_one_scope &&\n"
+             "\t    !agent_catalog_scope_admissible(reload_scope, &lifecycle))",
+             "\tif (0)"),
+            ("catalog",
+             "\t    (result->plan_lifecycle_id != lifecycle.id ||\n"
+             "\t     result->plan_lifecycle_generation != lifecycle.generation))",
+             "\t    (0)"),
+            ("catalog",
+             "\t    (!agent_catalog_scope_admissible(reload_scope, &lifecycle) ||\n"
+             "\t     result->plan_lifecycle_id != lifecycle.id ||",
+             "\t    (0 ||\n"
+             "\t     result->plan_lifecycle_id != lifecycle.id ||"),
         )
         for name, old, new in cases:
             with self.subTest(name=name, anchor=old):
