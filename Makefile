@@ -1,10 +1,22 @@
-.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check ci-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test fs-allocator-fault-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test reader target-readiness dual-platform-run full-verify dual-clean .FORCE
+.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check ci-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test fs-allocator-fault-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test reader target-readiness dual-platform-run full-verify dual-clean clean-workspace-dry-run clean-workspace .FORCE
 .DELETE_ON_ERROR:
 all: build
 
 K = os
 U = user
 F = nfs
+
+WORKSPACE_GENERATED_PATHS = \
+	build build-* target target-* asm-* \
+	user/build user/build-* user/target user/target-* user/asm user/asm-* \
+	baseline_ucore/build baseline_ucore/build-* \
+	baseline_ucore/target baseline_ucore/target-* baseline_ucore/asm-* \
+	baseline_ucore/user/build baseline_ucore/user/build-* \
+	baseline_ucore/user/target baseline_ucore/user/target-* \
+	baseline_ucore/user/asm baseline_ucore/user/asm-* \
+	nfs/*.img nfs/fs os/initproc.S \
+	baseline_ucore/nfs/*.img baseline_ucore/nfs/fs baseline_ucore/os/initproc.S \
+	host_tools/__pycache__ scripts/__pycache__
 
 TOOLPREFIX ?= $(shell if command -v riscv64-unknown-elf-gcc >/dev/null 2>&1; then echo riscv64-unknown-elf-; else echo riscv64-linux-gnu-; fi)
 CC = $(TOOLPREFIX)gcc
@@ -847,3 +859,10 @@ plain-clean:
 	$(MAKE) -C baseline_ucore clean
 
 dual-clean: clean plain-clean
+
+# Preview or remove only ignored, allowlisted build artifacts.
+clean-workspace-dry-run:
+	git clean -ndX -- $(WORKSPACE_GENERATED_PATHS)
+
+clean-workspace:
+	git clean -fdX -- $(WORKSPACE_GENERATED_PATHS)

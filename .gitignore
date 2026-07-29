@@ -5,10 +5,12 @@ build
 target
 /build-*
 /target-*
+/asm-*
 user/build
 user/target
 /user/build-*
 /user/target-*
+/user/asm-*
 user/asm
 baseline_ucore/build
 baseline_ucore/user/build
@@ -17,6 +19,7 @@ baseline_ucore/user/target
 /baseline_ucore/target-*
 /baseline_ucore/user/build-*
 /baseline_ucore/user/target-*
+/baseline_ucore/user/asm-*
 baseline_ucore/user/asm
 link_app.S
 initproc.S

@@ -324,6 +324,8 @@ make agentos-platform-run TOOLPREFIX=riscv64-linux-gnu-
 
 直接调试内核时，`make run` 会原子安装当前源码生成的全新可写镜像，确保用户程序、可信清单和 `INIT_PROC` 不会沿用旧版本。需要验证同一磁盘的持久状态时使用 `make run-persist`；该目标只在可写镜像不存在时初始化一次，之后原样重启 `nfs/fs-copy.img`，不自动迁移或覆盖不兼容格式。`baseline_ucore/` 下提供同名的两种入口。
 
+日常重建可用 `make clean` 清理 AgentOS 默认产物，或用 `make dual-clean` 同时清理对照目标。长期调试产生大量命名构建目录后，先运行 `make clean-workspace-dry-run` 预览，再运行 `make clean-workspace` 统一删除白名单内且被 Git 忽略的 `build-*`、`target-*`、`asm-*`、镜像和缓存。该目标不会删除本地验收结果、受版本控制的源码与 `evidence/` 发布证据。
+
 ### 5.4 双目标运行
 
 单独运行两个目标只能证明它们各自可用；双目标运行会把两次 QEMU 输出、状态文件和经验证的实验数据放到同一目录结构下，便于后续页面和图表读取。当前经验证的原始实验数据仅限文件查询 benchmark。
