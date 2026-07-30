@@ -310,7 +310,7 @@ make plain-platform-run TOOLPREFIX=riscv64-linux-gnu-
 
 ### 5.3 AgentOS-uCore 目标
 
-增强目标运行同一套科研 Agent 负载，但关键阶段会进入 AgentOS syscall。这样后续对照中的差异可以归因到内核机制，避免不同应用实现造成干扰。
+增强目标运行同一套科研 Agent 负载，但关键阶段会进入 AgentOS syscall。这一对照衡量完整系统路径的综合效果；由于两侧入口和内核机制并不完全相同，不能把场景差异单独归因给某一个 syscall。单机制因果结论由 5.4 节的同内核消融实验提供。
 
 ```bash
 make agentos-user TOOLPREFIX=riscv64-linux-gnu-
@@ -326,9 +326,34 @@ make agentos-platform-run TOOLPREFIX=riscv64-linux-gnu-
 
 日常重建可用 `make clean` 清理 AgentOS 默认产物，或用 `make dual-clean` 同时清理对照目标。长期调试产生大量命名构建目录后，先运行 `make clean-workspace-dry-run` 预览，再运行 `make clean-workspace` 统一删除白名单内且被 Git 忽略的 `build-*`、`target-*`、`asm-*`、镜像和缓存。该目标不会删除本地验收结果、受版本控制的源码与 `evidence/` 发布证据。
 
-### 5.4 双目标运行
+### 5.4 实验评价体系
 
-单独运行两个目标只能证明它们各自可用；双目标运行会把两次 QEMU 输出、状态文件和经验证的实验数据放到同一目录结构下，便于后续页面和图表读取。当前经验证的原始实验数据仅限文件查询 benchmark。
+实验分支把“采集、验证、展示”拆成独立入口，避免页面或旧结果反向成为性能证据：
+
+```bash
+make evaluation-smoke
+make evaluation-run EVALUATION_BOOTS=7 TOOLPREFIX=riscv64-linux-gnu-
+make evaluation-verify
+make evaluation-kernel-cost TOOLPREFIX=riscv64-linux-gnu-
+make evaluation-dashboard
+make evaluation-package
+make evaluation-package-development EVALUATION_RUN_DIR=<run-dir> EVALUATION_BUNDLE_DIR=<output-dir>
+make evaluation-package-verify EVALUATION_BUNDLE_DIR=evidence/evaluation-releases/<run-id>
+```
+
+`evaluation-run` 只允许在 clean commit 上运行，并分别预检微基准与科研场景实际执行域中的 QEMU、交叉工具链和 shell。关键工具以绝对路径、版本和 SHA256 写入清单，每个 boot 前后重新核验；campaign 还绑定创建时的仓库相对 artifact root，拒绝仅后缀相同的外部日志或镜像。默认正式评价包含 7 次独立的同内核微基准 boot，以及 7 轮 Plain/AgentOS 科研场景配对（共 14 次场景 QEMU 启动），所以耗时明显长于普通回归。微基准使用唯一非零 64-bit challenge；场景使用另一组唯一 `ch-<12 digits>` 输入，并跨 boot 交替 Plain→AgentOS 与 AgentOS→Plain。两套 challenge、顺序和规范命令都在第一次 QEMU 启动前写入 plan。整轮采集先取得 `git-common-dir` 下独立的 campaign 锁，不同 worktree 的正式评价因此串行；每个 build/QEMU/archive 阶段再取得现有 repo 锁，并在锁内复检计划状态、clean HEAD、工具身份，清空本轮日志以及归档 Guest/runner 日志、内核和运行前后文件系统镜像。这些 Host 复核位于 Guest 计时窗口之外。微基准单 boot 默认总期限为 900 秒，可用 `EVALUATION_MICRO_TIMEOUT=60..3600` 调整；超时会终止该 boot 的进程组、保留部分日志并把 manifest 标为失败。正式采集期间仍不得从不遵守这些锁的外部终端并发构建同一 worktree。任何 boot 失败都会保留当次材料并使采集失败，不会删除失败样本或补零。仅开发接线时可显式设置 `EVALUATION_INCLUDE_SCENARIO=0`；这种运行的任务六状态必须是未测量，不能用于正式结论。
+
+`evaluation-verify` 从原始日志重算 workload challenge、Task 1-5 动态功能回执、结果等价性、每 boot 聚合和跨 boot 配对统计；只有合同验证通过才产生 summary。三个机制 headline 作为同一预注册假设族，以 Bonferroni 将 `0.05` 的族错误率分配为每项 `0.05/3`，且每项必须让全部负载共同过门。`evaluation-dashboard` 不只检查 summary：它还读取每个 canonical evidence path，复核文件 SHA256、字节数和 marker 行摘要，并重放原始合同，生成确定性的 `dashboard-verification.json`；科研场景页展示最终 parent 验收在内的 cold-start、逐程序时间、四类功能模块和预注册关键 outcome。成本 sidecar 完整时另显示 ELF/text/data/BSS；缺一项则 fail closed。完整方法、赛题任务映射、统计门和不可外推边界见 [AgentOS 竞赛评价方法](docs/evaluation.md)。这组实验入口暂不改变既有远端 1 Host + 8 QEMU attestation 拓扑。
+
+`evaluation-package` 默认只生成 `formal` profile：它在再次执行 campaign、场景和统计复验后，把 suite、plan、全部 raw 工件、metrics、summary 与离线 Dashboard 复制到 `evidence/evaluation-releases/<run-id>/`，要求 scenario preflight、已封存的场景 plan/report 和 Task 1-6 动态功能验收全部通过，再生成严格 manifest、逐文件大小/SHA256、按 boot 标识的工件回执和 checksum 清单，并立即在临时位置进行可搬运复验后再原子发布。若已运行 `evaluation-kernel-cost`，可信构建 sidecar、成本报告和 Dashboard fragment 必须完整出现并通过 portable 重放；部分组合会失败。未知顶层文件、symlink/junction 或链接祖先、路径逃逸、缺失/多余 raw 数据、Dashboard 重放差异或任一 hash 变化都会失败。仅调试接线时可显式运行 `scripts/package-evaluation-evidence.sh create <run-dir> <output-dir> --development`；这会把不可冒充正式证据的醒目警告永久写入 manifest。包生成后应作为独立 evidence commit 纳入仓库；没有实际 QEMU campaign 和已提交 formal bundle 时，只能说评价机制就绪，不能宣称新性能结论已经成立。
+
+完整 `evaluation-verify` 还会重新探测 manifest 记录的绝对工具路径，因此它是采集主机上的环境复验入口，不承诺 Windows/WSL 与 Linux 间直接搬运。可移交证据由 run plan、scenario plan、内容摘要和 raw 日志组成；跨机器审计只复验这些内容绑定与统计合同，不把另一台机器的工具安装状态冒充原采集环境。
+
+内核体积是独立护栏，不与延迟拼成“总分”。`make evaluation-kernel-cost` 使用 `evaluation_kernel_build.py` 在仓库锁内从同一 clean commit 固定执行两侧 clean/build，逐命令复检源码、记录真实退出码与有界输出并验证最终 RISC-V ELF；随后 `evaluation_kernel_cost.py` 采集 ELF/text/data/BSS，以 `verify` 进行可搬运复验、以 `verify-local` 重放本机工具、以 `fragment` 生成 Dashboard 数据。`make evaluation-smoke` 会运行构建者、成本合同及篡改回归。build manifest 把 clean commit、环境 SHA256、构建配置、原始构建日志、固定命令、目标相对路径及 ELF SHA256 绑定在一起。缺失目标保持 `null + unavailable`，不能从源码行数估算二进制大小，也不能把体积护栏写成 CPU 性能优势。精确 schema 与命令见 [评价方法](docs/evaluation.md#51-内核成本证据)。
+
+### 5.5 双目标运行
+
+单独运行两个目标只能证明它们各自可用；双目标运行会把两次 QEMU 输出、状态文件和经验证的实验数据放到同一目录结构下，便于后续页面和图表读取。旧 `dual-platform-run` 的发布级性能证据仍只覆盖文件查询 benchmark；5.4 节的新评价套件另外采集 Context 读取、工具批处理和完整科研 workflow，但只有正式 campaign 通过并生成绑定 summary 后才能形成新结论。
 
 ```bash
 make dual-platform-run TOOLPREFIX=riscv64-linux-gnu-
@@ -355,7 +380,7 @@ seeded 参考产物另由目标相关的 reference registry 精确登记“源�
 
 日志会记录 QEMU 无输出次数、最后输出片段、通过标记和超时状态，用于区分构建慢、QEMU 未启动、用户程序卡住和程序已经报错。
 
-### 5.5 页面查看和完整验证
+### 5.6 页面查看和完整验证
 
 双目标脚本生成的是原始日志、状态文件、CSV 和 SVG。为了人工查看和复查更方便，`reader` 会把这些结果整理成本地页面入口。
 

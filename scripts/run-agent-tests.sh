@@ -6,8 +6,26 @@ source "${SCRIPT_DIR}/evidence-wiring.sh"
 cd "${SCRIPT_DIR}/.."
 
 TOOLPREFIX="${TOOLPREFIX:-riscv64-linux-gnu-}"
+MAKE_TOOL="${MAKE_TOOL:-make}"
 LOG="${LOG:-error}"
-CHAPTER="${CHAPTER:-agent}"
+if [[ "${AGENT_TEST_CASE:-}" == "agenteval_ucore" ]]; then
+	CHAPTER="${CHAPTER:-agent_eval}"
+	if [[ "${CHAPTER}" != "agent_eval" ]]; then
+		echo "[agent-tests] agenteval_ucore requires CHAPTER=agent_eval" >&2
+		exit 1
+	fi
+	if [[ -z "${AGENT_EVAL_CHALLENGE_HEX:-}" ]]; then
+		AGENT_EVAL_CHALLENGE_HEX="$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+	fi
+	if [[ ! "${AGENT_EVAL_CHALLENGE_HEX}" =~ ^[0-9a-f]{16}$ ||
+	      "${AGENT_EVAL_CHALLENGE_HEX}" == "0000000000000000" ]]; then
+		echo "[agent-tests] AGENT_EVAL_CHALLENGE_HEX must be 16 nonzero lowercase hex digits" >&2
+		exit 1
+	fi
+	export AGENT_EVAL_CHALLENGE_HEX
+else
+	CHAPTER="${CHAPTER:-agent}"
+fi
 CASE_TIMEOUT="${CASE_TIMEOUT:-180s}"
 QEMU="${QEMU:-qemu-system-riscv64}"
 PYTHON_BIN="${PYTHON_BIN:-python3}"
@@ -92,6 +110,201 @@ check_case_contract() {
 	local context_sync_profile="${3:-0}"
 
 	case "${init_proc}" in
+	agenteval_ucore)
+		require_exact_case_marker "${log_file}" \
+			"agenteval_ucore: worker passed"
+		"${PYTHON_BIN}" - "${log_file}" <<'PY'
+import os
+import re
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path.cwd() / "host_tools"))
+from evaluation_contract import (  # noqa: E402
+    _expected_result,
+    _expected_workload,
+    _operations_for,
+    _parse_diagnostic,
+    _parse_marker,
+    load_suite,
+    validate_functional_log,
+)
+
+log_path = sys.argv[1]
+suite = load_suite(Path("ci/evaluation-suite.json"))
+experiments = {item["id"]: item for item in suite["experiments"]}
+variants = {
+    item["id"]: (
+        (item["baseline"]["id"], item["baseline"]["cache"]),
+        (item["treatment"]["id"], item["treatment"]["cache"]),
+    )
+    for item in suite["experiments"]
+}
+pairs = range(1, 8)
+samples = {}
+diagnostics = {}
+challenge = None
+physical_events = []
+
+with open(log_path, "r", encoding="utf-8", errors="replace") as handle:
+    for line_number, raw_line in enumerate(handle, start=1):
+        line = raw_line.rstrip("\r\n")
+        if line.startswith("agenteval_ucore: challenge="):
+            match = re.fullmatch(r"agenteval_ucore: challenge=([0-9a-f]{16})", line)
+            if match is None or challenge is not None or int(match.group(1), 16) == 0:
+                raise SystemExit(f"invalid or duplicate agenteval challenge: {line}")
+            challenge = int(match.group(1), 16)
+        elif line.startswith("agenteval_ucore: sample "):
+            record = _parse_marker(line, line_number)
+            experiment = experiments.get(record["experiment"])
+            if experiment is None or record["load"] not in experiment["loads"]:
+                raise SystemExit(f"unconfigured agenteval sample line: {line}")
+            role = next(
+                (
+                    role for role in ("baseline", "treatment")
+                    if experiment[role]["id"] == record["variant"]
+                ),
+                None,
+            )
+            if role is None:
+                raise SystemExit(f"unconfigured agenteval variant line: {line}")
+            record["role"] = role
+            record["line"] = line_number
+            samples.setdefault(
+                (record["experiment"], record["load"], record["pair"]), []
+            ).append(record)
+            physical_events.append(
+                (line_number, "sample", record["experiment"], record["load"], record["pair"], role)
+            )
+        elif line.startswith("agenteval_ucore: diagnostic "):
+            diagnostic = _parse_diagnostic(line, line_number)
+            load = diagnostic["load"]
+            if load in diagnostics:
+                raise SystemExit(f"duplicate agenteval diagnostic load={load}")
+            diagnostics[load] = diagnostic
+            physical_events.append(
+                (line_number, "diagnostic", "file_query", load, 0, "readiness")
+            )
+
+expected_keys = {
+    (experiment["id"], load, pair)
+    for experiment in suite["experiments"]
+    for load in experiment["loads"]
+    for pair in pairs
+}
+if set(samples) != expected_keys:
+    missing = sorted(expected_keys - set(samples))
+    extra = sorted(set(samples) - expected_keys)
+    raise SystemExit(f"agenteval sample matrix mismatch missing={missing} extra={extra}")
+if challenge is None:
+    raise SystemExit("agenteval log lacks a nonzero workload challenge")
+expected_challenge_text = os.environ.get("AGENT_EVAL_CHALLENGE_HEX", "")
+if not re.fullmatch(r"[0-9a-f]{16}", expected_challenge_text):
+    raise SystemExit("agenteval validator lacks the planned challenge")
+if challenge != int(expected_challenge_text, 16):
+    raise SystemExit("agenteval Guest challenge differs from the build plan")
+challenge_text = f"{challenge:016x}"
+
+expected_physical = []
+for experiment in suite["experiments"]:
+    for load in experiment["loads"]:
+        if experiment["id"] == "file_query":
+            expected_physical.append(
+                ("diagnostic", "file_query", load, 0, "readiness")
+            )
+        for pair in pairs:
+            order = "AB" if (pair & 1) == (challenge & 1) else "BA"
+            roles = (
+                ("baseline", "treatment")
+                if order == "AB"
+                else ("treatment", "baseline")
+            )
+            expected_physical.extend(
+                ("sample", experiment["id"], load, pair, role)
+                for role in roles
+            )
+if [event[1:] for event in sorted(physical_events)] != expected_physical:
+    raise SystemExit("agenteval physical marker order differs from preregistration")
+
+for key in sorted(expected_keys):
+    experiment, load, pair = key
+    experiment_contract = experiments[experiment]
+    records = samples[key]
+    if len(records) != 2:
+        raise SystemExit(f"agenteval pair must contain two samples: {key}")
+    expected_order = "AB" if (pair & 1) == (challenge & 1) else "BA"
+    expected_variants = variants[experiment]
+    if expected_order == "BA":
+        expected_variants = tuple(reversed(expected_variants))
+    observed = tuple((record["variant"], record["cache"]) for record in records)
+    if observed != expected_variants:
+        raise SystemExit(f"agenteval execution order mismatch {key}: {observed}")
+    if any(record["order"] != expected_order for record in records):
+        raise SystemExit(f"agenteval order label mismatch: {key}")
+    operations = _operations_for(experiment_contract, load)
+    if any(record["operations"] != operations for record in records):
+        raise SystemExit(f"agenteval operation count mismatch: {key}")
+    if any(record["result_items"] != operations for record in records):
+        raise SystemExit(f"agenteval result count mismatch: {key}")
+    if experiment == "file_query":
+        by_variant = {record["variant"]: record for record in records}
+        if any(record["dataset_size"] != load for record in records):
+            raise SystemExit(f"agenteval file dataset size mismatch: {key}")
+        if any(
+            record["work_units"] != record["records_examined"]
+            for record in records
+        ):
+            raise SystemExit(f"agenteval file work receipt mismatch: {key}")
+        if by_variant["scan"]["work_units"] < load * operations:
+            raise SystemExit(f"agenteval file work is not measured traversal: {key}")
+        if by_variant["index"]["work_units"] != operations:
+            raise SystemExit(f"agenteval index work was not measured: {key}")
+    elif (
+        any(record["dataset_size"] != 0 or record["records_examined"] != 0 for record in records)
+        or records[0]["work_units"] != records[1]["work_units"]
+        or records[0]["work_units"] != operations
+    ):
+        raise SystemExit(f"agenteval completed work mismatch: {key}")
+    if records[0]["workload_fingerprint"] != records[1]["workload_fingerprint"]:
+        raise SystemExit(f"agenteval workload mismatch: {key}")
+    expected_workload = _expected_workload(
+        experiment_contract, load, pair, challenge_text
+    )
+    if records[0]["workload_fingerprint"] != expected_workload:
+        raise SystemExit(f"agenteval workload fingerprint is not challenge-bound: {key}")
+    expected_result = _expected_result(
+        experiment_contract, load, pair, challenge_text
+    )
+    if any(record["result_fingerprint"] != expected_result for record in records):
+        raise SystemExit(f"agenteval result differs from Host semantic oracle: {key}")
+    if records[0]["result_fingerprint"] != records[1]["result_fingerprint"]:
+        raise SystemExit(f"agenteval result mismatch: {key}")
+    if int(records[0]["workload_fingerprint"], 16) == 0 or int(records[0]["result_fingerprint"], 16) == 0:
+        raise SystemExit(f"agenteval zero fingerprint: {key}")
+file_loads = set(experiments["file_query"]["loads"])
+if set(diagnostics) != file_loads:
+    raise SystemExit("agenteval requires one index-readiness diagnostic per load")
+for load, diagnostic in diagnostics.items():
+    if diagnostic["work_units"] <= 0:
+        raise SystemExit(f"agenteval diagnostic lacks measured work load={load}")
+    if diagnostic["cache"] == "cold-rebuild" and diagnostic["index_rebuild_records"] == 0:
+        raise SystemExit(f"agenteval cold rebuild lacks measured work load={load}")
+    if diagnostic["cache"] == "ready" and diagnostic["index_rebuild_records"] != 0:
+        raise SystemExit(f"agenteval readiness label conflicts with rebuild load={load}")
+    first_sample_line = min(
+        record["line"]
+        for pair in pairs
+        for record in samples[("file_query", load, pair)]
+    )
+    if diagnostic["line"] >= first_sample_line:
+        raise SystemExit(f"agenteval readiness diagnostic is not before samples load={load}")
+validate_functional_log(
+    Path(log_path).read_text(encoding="utf-8").splitlines(),
+    challenge_text,
+    [record for records in samples.values() for record in records],
+)
+PY
+		;;
 	agentloop_ucore)
 		require_exact_case_marker "${log_file}" \
 			"agentloop_ucore: broadcast_slow_watcher_isolated=1"
@@ -206,7 +419,7 @@ build_user_image() {
 
 	# nfs/fs.img depends on the user target.  Keep both compilation and image
 	# construction in one make invocation so profile flags cannot be dropped.
-	make nfs/fs.img TOOLPREFIX="${TOOLPREFIX}" CHAPTER="${CHAPTER}" \
+	"${MAKE_TOOL}" nfs/fs.img TOOLPREFIX="${TOOLPREFIX}" CHAPTER="${CHAPTER}" \
 		USER_EXTRA_CFLAGS="${user_extra_cflags}"
 }
 
@@ -235,7 +448,7 @@ run_case() {
 
 	echo "[agent-tests] running ${init_proc}"
 	rm -f nfs/fs-copy.img os/initproc.S build/os/initproc.o
-	make build \
+	"${MAKE_TOOL}" build \
 		TOOLPREFIX="${TOOLPREFIX}" \
 		LOG="${LOG}" \
 		INIT_PROC="${init_proc}" \
@@ -275,20 +488,20 @@ run_case() {
 	echo "[agent-tests] ${init_proc} passed"
 }
 
-make -C user clean
-make clean
+"${MAKE_TOOL}" -C user clean
+"${MAKE_TOOL}" clean
 
 if [[ -z "${AGENT_TEST_CASE:-}" ||
 	  "${AGENT_TEST_CASE}" == "agentfinal_ucore" ]]; then
 	: >"${CONTEXT_SYNC_TIMING_FILE}"
 	build_user_image "${CONTEXT_SYNC_USER_CFLAGS}"
 	run_case agentfinal_ucore "agentfinal_ucore: parent passed" "" 1
-	make -C user clean
-	make clean
+	"${MAKE_TOOL}" -C user clean
+	"${MAKE_TOOL}" clean
 fi
 
 build_user_image
-make build TOOLPREFIX="${TOOLPREFIX}" LOG=warn INIT_PROC=agentfinal_ucore
+"${MAKE_TOOL}" build TOOLPREFIX="${TOOLPREFIX}" LOG=warn INIT_PROC=agentfinal_ucore
 
 if [[ -n "${AGENT_TEST_CASE:-}" ]]; then
 	expected_bad_addr_marker=""

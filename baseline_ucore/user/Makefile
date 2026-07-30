@@ -8,6 +8,12 @@ CC := $(TOOLPREFIX)gcc
 OBJCOPY := $(TOOLPREFIX)objcopy
 OBJDUMP := $(TOOLPREFIX)objdump
 CP := cp
+# Keep raw tool identities available to callers and quote only executable
+# words at the recipe boundary.
+shell_quote = '$(subst ','"'"',$(1))'
+CC_CMD = $(call shell_quote,$(CC))
+OBJCOPY_CMD = $(call shell_quote,$(OBJCOPY))
+OBJDUMP_CMD = $(call shell_quote,$(OBJDUMP))
 
 app_dir := src
 build_dir := build
@@ -122,17 +128,17 @@ $(GENERATED_HEADERS):
 
 $(obj_dir)/%.o: %.c $(GENERATED_HEADERS)
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC_CMD) $(CFLAGS) -c $< -o $@
 
 $(CRT_OBJ): $(arch_dir)/crt.S
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC_CMD) $(CFLAGS) -c $< -o $@
 
 $(elf_dir)/%: $(app_dir)/%.c $(LIB_OBJS) $(CRT_OBJ)
 	@mkdir -p $(elf_dir) $(bin_dir) $(asm_dir)
-	$(CC) $(CFLAGS) $(LDFLAGS) $(CRT_OBJ) $(LIB_OBJS) $< -o $@
-	$(OBJDUMP) -d -S $@ > $(asm_dir)/$*.asm
-	$(OBJCOPY) -O binary $@ $(bin_dir)/$*
+	$(CC_CMD) $(CFLAGS) $(LDFLAGS) $(CRT_OBJ) $(LIB_OBJS) $< -o $@
+	$(OBJDUMP_CMD) -d -S $@ > $(asm_dir)/$*.asm
+	$(OBJCOPY_CMD) -O binary $@ $(bin_dir)/$*
 
 binary: $(addprefix $(elf_dir)/,$(SELECTED_APPS))
 

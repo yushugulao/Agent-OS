@@ -13,6 +13,53 @@ def write(path: Path, text: str) -> None:
 
 
 class SeededActionStateTests(unittest.TestCase):
+    def test_challenge_derives_dynamic_rerun_workflow_and_artifact_values(self) -> None:
+        challenge = "ch-000000000123"
+        values = checker.derive_challenge(challenge)
+        actions = checker.seeded_actions(challenge)
+
+        self.assertEqual(values.run_id, "RUN-123")
+        self.assertEqual(actions[0]["payload"]["run_id"], "RUN-123-rerun")
+        self.assertEqual(actions[12]["payload"]["workflow_id"], "wf-host-123")
+        self.assertEqual(actions[8]["payload"]["sha256"], "sha-derived-123")
+        self.assertEqual(actions[14]["payload"]["cache_key"], "cache:RUN-123:profile")
+        with self.assertRaises(ValueError):
+            checker.derive_challenge("ch-123")
+        with self.assertRaises(ValueError):
+            checker.derive_challenge("ch-00000000012a")
+
+    def test_challenge_receipt_and_run_summary_are_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            run_dir = Path(tmp)
+            challenge = "ch-000000000123"
+            actions = checker.seeded_actions(challenge)
+            checker.write_json(run_dir / "actions.json", actions)
+            receipt = checker.write_challenge_input_receipt(
+                run_dir, challenge, actions
+            )
+            checker.bind_run_summary_to_challenge(run_dir, {"status": "ready"}, receipt)
+
+            self.assertEqual(
+                checker.validate_challenge_binding("agentos", run_dir, challenge), []
+            )
+            (run_dir / "actions.json").write_text("[]\n", encoding="utf-8")
+            failures = checker.validate_challenge_binding(
+                "agentos", run_dir, challenge
+            )
+            self.assertTrue(any("actions do not match challenge" in item for item in failures))
+
+    def test_target_order_is_explicit_and_balanced_campaign_ready(self) -> None:
+        self.assertEqual(
+            checker.normalize_target_order("plain-agentos"),
+            ("plain", "agentos"),
+        )
+        self.assertEqual(
+            checker.normalize_target_order("agentos-plain"),
+            ("agentos", "plain"),
+        )
+        with self.assertRaises(ValueError):
+            checker.normalize_target_order("plain-plain")
+
     def test_seeded_action_payload_is_representative(self) -> None:
         actions = checker.seeded_actions()
         self.assertEqual(len(actions), 44)

@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 from contextlib import contextmanager
+import hashlib
 import json
 import os
 import queue
 import re
+import secrets
 import shutil
 import signal
 import stat
@@ -61,6 +63,15 @@ SEEDED_ACTION_PHASES = ("clean", "build", "guest")
 SEEDED_ACTION_PHASE_TIMEOUT_MARGIN_SECONDS = 30
 SEEDED_ACTION_OBSERVER_CLEANUP_ALLOWANCE_SECONDS = 10
 SEEDED_ACTION_MAX_TIMEOUT_SECONDS = 3600
+WSL_COMMAND_ID_ENV = "AGENTOS_UCORE_RUN_ID"
+WSL_COMMAND_ID_RE = re.compile(r"\bAGENTOS_UCORE_RUN_ID=([0-9a-f]{32})\b")
+WSL_TIMEOUT_KILL_AFTER_SECONDS = 5
+# GNU timeout must finish its KILL escalation before the Host-side deadline.
+# This leaves enough time for an independent /proc scan from a fresh WSL client.
+WSL_HOST_DEADLINE_MARGIN_SECONDS = 10
+WSL_QUIESCENCE_VERIFY_TIMEOUT_SECONDS = 8
+WSL_CLEANUP_UNVERIFIED_EXIT_CODE = 125
+SOURCE_COMMIT_RE = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})")
 GUEST_FAILURE_RULES = (
     (
         "kernel_panic",
@@ -128,7 +139,10 @@ def atomic_write_bytes(path: Path, data: bytes, mode: int = 0o600) -> None:
     )
     temporary = Path(temporary_name)
     try:
-        os.fchmod(fd, mode)
+        if hasattr(os, "fchmod"):
+            os.fchmod(fd, mode)
+        else:
+            os.chmod(temporary, mode)
         with os.fdopen(fd, "wb") as handle:
             fd = -1
             handle.write(data)
@@ -153,10 +167,153 @@ def atomic_write_text(path: Path, text: str) -> None:
     atomic_write_bytes(path, text.encode("utf-8"))
 
 
+def archive_runtime_artifacts(repo_dir: Path, run_dir: Path) -> dict[str, object]:
+    artifact_dir = create_private_directory(run_dir / "artifacts")
+    sources = {
+        "kernel": repo_dir / "build" / "kernel",
+        "image_input": repo_dir / "nfs" / "fs.img",
+        "image_final": repo_dir / "nfs" / "fs-copy.img",
+    }
+    archived: dict[str, object] = {}
+    for name, source in sources.items():
+        if not source.is_file() or source.is_symlink():
+            raise ValueError(f"runtime artifact is unavailable or link-backed: {source}")
+        destination = artifact_dir / name
+        fd, temporary_name = tempfile.mkstemp(
+            prefix=f".{name}.", suffix=".tmp", dir=str(artifact_dir)
+        )
+        os.close(fd)
+        temporary = Path(temporary_name)
+        try:
+            shutil.copyfile(source, temporary)
+            os.replace(temporary, destination)
+        finally:
+            if temporary.exists():
+                temporary.unlink()
+        digest = hashlib.sha256()
+        size = 0
+        with destination.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                size += len(chunk)
+                digest.update(chunk)
+        if size <= 0:
+            raise ValueError(f"runtime artifact is empty: {source}")
+        archived[name] = {
+            "path": f"artifacts/{name}",
+            "bytes": size,
+            "sha256": digest.hexdigest(),
+        }
+    return archived
+
+
+def capture_source_identity(repo_dir: Path) -> dict[str, object]:
+    """Capture HEAD, tracked cleanliness, and an exact tracked-state digest."""
+
+    repo_dir = repo_dir.resolve()
+    common_kwargs: dict[str, object] = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "strict",
+        "timeout": 5,
+        "check": False,
+    }
+    try:
+        head = subprocess.run(
+            ["git", "-C", str(repo_dir), "rev-parse", "--verify", "HEAD^{commit}"],
+            **common_kwargs,
+        )
+        status = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo_dir),
+                "status",
+                "--porcelain=v1",
+                "--untracked-files=no",
+                "--ignore-submodules=none",
+            ],
+            **common_kwargs,
+        )
+        tracked_diff = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(repo_dir),
+                "diff",
+                "--binary",
+                "--no-ext-diff",
+                "--no-textconv",
+                "HEAD",
+                "--",
+            ],
+            **common_kwargs,
+        )
+    except (OSError, subprocess.SubprocessError, UnicodeError) as error:
+        raise ValueError(f"source identity probe failed: {error}") from error
+    commit = head.stdout.strip()
+    if head.returncode != 0 or SOURCE_COMMIT_RE.fullmatch(commit) is None:
+        diagnostic = (head.stderr or "").strip()
+        raise ValueError(f"source HEAD is unavailable: {diagnostic or 'invalid commit'}")
+    if status.returncode != 0:
+        diagnostic = (status.stderr or "").strip()
+        raise ValueError(f"tracked source status is unavailable: {diagnostic}")
+    if tracked_diff.returncode != 0:
+        diagnostic = (tracked_diff.stderr or "").strip()
+        raise ValueError(f"tracked source diff is unavailable: {diagnostic}")
+    tracked_fingerprint = hashlib.sha256(
+        (status.stdout + "\0" + tracked_diff.stdout).encode("utf-8")
+    ).hexdigest()
+    return {
+        "source_commit": commit,
+        "source_tree_clean": status.stdout == "",
+        "source_tracked_sha256": tracked_fingerprint,
+    }
+
+
+def verify_source_identity(
+    repo_dir: Path, expected: dict[str, object]
+) -> dict[str, object]:
+    """Re-probe under the repository lock and reject mid-run source changes."""
+
+    current = capture_source_identity(repo_dir)
+    if current != expected:
+        raise ValueError("source identity changed while the runtime artifacts were built")
+    return current
+
+
 def _run_lock_path(repo_dir: Path) -> Path:
     repo_dir = repo_dir.resolve()
-    git_dir = repo_dir.parent / ".git"
-    lock_dir = git_dir if git_dir.is_dir() else repo_dir
+    lock_dir: Path | None = None
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(repo_dir), "rev-parse", "--git-common-dir"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            encoding="utf-8",
+            errors="strict",
+            timeout=5,
+            check=False,
+        )
+        lines = result.stdout.splitlines()
+        if result.returncode == 0 and len(lines) == 1 and lines[0]:
+            candidate = Path(lines[0])
+            if not candidate.is_absolute():
+                candidate = repo_dir / candidate
+            candidate = candidate.resolve()
+            if candidate.is_dir() and not candidate.is_symlink():
+                lock_dir = candidate
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        pass
+    if lock_dir is None:
+        marker = repo_dir / ".git"
+        if marker.is_dir() and not marker.is_symlink():
+            lock_dir = marker.resolve()
+    if lock_dir is None:
+        identity = hashlib.sha256(str(repo_dir).encode("utf-8")).hexdigest()[:16]
+        lock_dir = Path(tempfile.gettempdir()) / "agentos-repo-locks" / identity
     return lock_dir / f".{repo_dir.name}-run.lock"
 
 
@@ -781,23 +938,238 @@ def bash_path(path: Path, base: Path | None = None) -> str:
     return windows_path_to_wsl(resolved)
 
 
-def run_command(command: list[str], log_path: Path, timeout_seconds: int, append: bool = False) -> int:
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        errors="replace",
-        timeout=timeout_seconds,
+def wsl_command_identity(command: list[str]) -> str:
+    """Return the unguessable identity embedded by make_wsl_command."""
+
+    matches: list[str] = []
+    for argument in command:
+        matches.extend(WSL_COMMAND_ID_RE.findall(argument))
+    return matches[0] if len(matches) == 1 else ""
+
+
+def _wsl_quiescence_script(command_identity: str) -> str:
+    needle = f"{WSL_COMMAND_ID_ENV}={command_identity}"
+    return f"""set -u
+needle={shell_quote(needle)}
+process_has_token() {{
+    local entry
+    while IFS= read -r -d '' entry; do
+        if [ "$entry" = "$needle" ]; then
+            return 0
+        fi
+    done < "$1"
+    return 1
+}}
+token_pids() {{
+    local env_file pid
+    for env_file in /proc/[0-9]*/environ; do
+        [ -r "$env_file" ] || continue
+        if process_has_token "$env_file" 2>/dev/null; then
+            pid=${{env_file#/proc/}}
+            pid=${{pid%/environ}}
+            case "$pid" in (*[!0-9]*|'') continue;; esac
+            printf '%s\\n' "$pid"
+        fi
+    done
+}}
+count_pids() {{
+    set -- $1
+    printf '%s' "$#"
+}}
+signal_tagged() {{
+    local sig pid env_file
+    sig="$1"
+    for pid in $(token_pids); do
+        env_file="/proc/$pid/environ"
+        if [ -r "$env_file" ] && process_has_token "$env_file" 2>/dev/null; then
+            kill "-$sig" "$pid" 2>/dev/null || true
+        fi
+    done
+}}
+initial="$(token_pids)"
+initial_count="$(count_pids "$initial")"
+if [ -n "$initial" ]; then
+    signal_tagged TERM
+    for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+        [ -z "$(token_pids)" ] && break
+        sleep 0.1
+    done
+fi
+if [ -n "$(token_pids)" ]; then
+    signal_tagged KILL
+    for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+        [ -z "$(token_pids)" ] && break
+        sleep 0.1
+    done
+fi
+remaining="$(token_pids)"
+quiet_scans=0
+# Require two consecutive quiet scans so a just-forked tagged child cannot
+# escape a single /proc glob expansion.
+for _attempt in 1 2 3 4 5 6 7 8 9 10; do
+    current="$(token_pids)"
+    if [ -z "$current" ]; then
+        quiet_scans=$((quiet_scans + 1))
+        if [ "$quiet_scans" -ge 2 ]; then
+            remaining=""
+            break
+        fi
+    else
+        quiet_scans=0
+        remaining="$current"
+        signal_tagged KILL
+    fi
+    sleep 0.1
+done
+remaining_count="$(count_pids "$remaining")"
+printf 'AGENTOS_WSL_CLEANUP initial=%s remaining=%s\\n' \
+    "$initial_count" "$remaining_count"
+[ "$remaining_count" -eq 0 ]
+"""
+
+
+def _wsl_verification_command(command: list[str], script: str) -> list[str]:
+    if command and command[0].lower().endswith("wsl.exe"):
+        try:
+            separator = command.index("--")
+        except ValueError as error:
+            raise ValueError("tagged WSL command has no argument separator") from error
+        return [*command[: separator + 1], "bash", "-lc", script]
+    if command and Path(command[0]).name in {"bash", "bash.exe"}:
+        return [command[0], "-lc", script]
+    raise ValueError("tagged WSL command has an unsupported launcher")
+
+
+def verify_wsl_command_quiesced(command: list[str]) -> dict[str, object]:
+    """Reap and independently prove absence of this command's WSL descendants."""
+
+    identity = wsl_command_identity(command)
+    if not identity:
+        malformed_tag = any(
+            f"{WSL_COMMAND_ID_ENV}=" in argument for argument in command
+        )
+        if malformed_tag:
+            return {
+                "applicable": True,
+                "verified": False,
+                "initial_survivors": None,
+                "remaining_survivors": None,
+                "error": "malformed or ambiguous WSL command identity",
+            }
+        return {
+            "applicable": False,
+            "verified": True,
+            "initial_survivors": 0,
+            "remaining_survivors": 0,
+            "error": "",
+        }
+    try:
+        verification_command = _wsl_verification_command(
+            command, _wsl_quiescence_script(identity)
+        )
+        result = subprocess.run(
+            verification_command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=WSL_QUIESCENCE_VERIFY_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        return {
+            "applicable": True,
+            "verified": False,
+            "initial_survivors": None,
+            "remaining_survivors": None,
+            "error": f"{type(error).__name__}: {error}",
+        }
+    receipt = re.search(
+        r"^AGENTOS_WSL_CLEANUP initial=(\d+) remaining=(\d+)$",
+        result.stdout or "",
+        re.MULTILINE,
     )
-    text = (result.stdout or "") + (result.stderr or "")
+    initial = int(receipt.group(1)) if receipt else None
+    remaining = int(receipt.group(2)) if receipt else None
+    verified = result.returncode == 0 and remaining == 0
+    diagnostic = ""
+    if not verified:
+        diagnostic = (result.stderr or result.stdout or "invalid cleanup receipt").strip()
+    return {
+        "applicable": True,
+        "verified": verified,
+        "initial_survivors": initial,
+        "remaining_survivors": remaining,
+        "error": diagnostic,
+    }
+
+
+def _wsl_cleanup_log_line(cleanup: dict[str, object]) -> str:
+    if not cleanup.get("applicable"):
+        return ""
+    return (
+        "[runner] wsl cleanup verified={verified} initial={initial} remaining={remaining}"
+        "{error}\n"
+    ).format(
+        verified=1 if cleanup.get("verified") else 0,
+        initial=cleanup.get("initial_survivors"),
+        remaining=cleanup.get("remaining_survivors"),
+        error=(f" error={cleanup.get('error')}" if cleanup.get("error") else ""),
+    )
+
+
+def run_command(command: list[str], log_path: Path, timeout_seconds: int, append: bool = False) -> int:
+    popen_kwargs: dict[str, object] = {
+        "stdout": subprocess.PIPE,
+        "stderr": subprocess.PIPE,
+        "text": True,
+        "encoding": "utf-8",
+        "errors": "replace",
+    }
+    if os.name == "nt":
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
+    proc = subprocess.Popen(command, **popen_kwargs)
+    timed_out = False
+    host_process_quiesced = True
+    try:
+        stdout, stderr = proc.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as error:
+        timed_out = True
+        partial_stdout = error.stdout if isinstance(error.stdout, str) else ""
+        partial_stderr = error.stderr if isinstance(error.stderr, str) else ""
+        termination = terminate_process(proc)
+        host_process_quiesced = bool(termination["host_process_quiesced"])
+        try:
+            stdout, stderr = proc.communicate(timeout=2)
+        except subprocess.TimeoutExpired:
+            stdout, stderr = partial_stdout, partial_stderr
+            host_process_quiesced = False
+        stdout = stdout or partial_stdout
+        stderr = stderr or partial_stderr
+    cleanup = verify_wsl_command_quiesced(command)
+    text = (stdout or "") + (stderr or "") + _wsl_cleanup_log_line(cleanup)
+    if (
+        not timed_out
+        and cleanup.get("applicable")
+        and proc.returncode == 124
+    ):
+        text += "[runner] inner WSL deadline expired\n"
+    if timed_out:
+        text += f"\n[runner] exceeded {timeout_seconds}s\n"
+    if not host_process_quiesced:
+        text += "[runner] Host launcher process did not quiesce\n"
     if append:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(text)
     else:
         write_text(log_path, text)
-    return result.returncode
+    if not cleanup.get("verified") or not host_process_quiesced:
+        return WSL_CLEANUP_UNVERIFIED_EXIT_CODE
+    return 124 if timed_out else int(proc.returncode)
 
 
 def parse_seconds(value: str | int | float) -> float:
@@ -864,9 +1236,17 @@ def signal_process_tree(
         try:
             if os.name == "nt":
                 if sig == signal.SIGTERM:
-                    proc.terminate()
+                    proc.send_signal(signal.CTRL_BREAK_EVENT)
                 else:
-                    proc.kill()
+                    tree = subprocess.run(
+                        ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=5,
+                        check=False,
+                    )
+                    if tree.returncode != 0 and proc.poll() is None:
+                        proc.kill()
             else:
                 os.kill(proc.pid, sig)
             leader_sent = True
@@ -906,9 +1286,13 @@ def terminate_process(proc: subprocess.Popen[str]) -> dict[str, object]:
         kill_sent, _ = signal_process_tree(proc, signal.SIGKILL)
         if kill_sent:
             signals_sent.append(int(signal.SIGKILL))
-        proc.wait(timeout=2)
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            pass
 
     raw_returncode = proc.returncode
+    host_process_quiesced = proc.poll() is not None and not process_group_alive(proc)
     if os.name == "nt":
         term_leader_confirmed = term_sent_to_leader
     else:
@@ -922,6 +1306,7 @@ def terminate_process(proc: subprocess.Popen[str]) -> dict[str, object]:
         "signals_sent": tuple(signals_sent),
         "term_leader_confirmed": term_leader_confirmed,
         "raw_returncode": raw_returncode,
+        "host_process_quiesced": host_process_quiesced,
     }
 
 
@@ -981,6 +1366,14 @@ def run_observed_command(
         "signals_sent": (),
         "term_leader_confirmed": False,
         "raw_returncode": None,
+        "host_process_quiesced": True,
+    }
+    cleanup: dict[str, object] = {
+        "applicable": False,
+        "verified": True,
+        "initial_survivors": 0,
+        "remaining_survivors": 0,
+        "error": "",
     }
     output_eof = False
     output_error = ""
@@ -1073,6 +1466,11 @@ def run_observed_command(
         natural_completion = proc.poll() is not None and output_eof
         if not natural_completion:
             termination = terminate_process(proc)
+        cleanup = verify_wsl_command_quiesced(command)
+        cleanup_log_line = _wsl_cleanup_log_line(cleanup)
+        if cleanup_log_line:
+            handle.write(cleanup_log_line)
+            handle.flush()
 
         drain_deadline = time.monotonic() + 2
         while not output_eof and time.monotonic() < drain_deadline:
@@ -1090,6 +1488,13 @@ def run_observed_command(
             except queue.Empty:
                 break
             consume_output_event(event)
+        if (
+            not timed_out
+            and cleanup.get("applicable")
+            and proc.returncode == 124
+        ):
+            timed_out = True
+            handle.write("[runner] inner WSL deadline expired\n")
         if (
             timed_out
             or failure_seen
@@ -1110,6 +1515,7 @@ def run_observed_command(
         and not timed_out
         and signals_sent == (int(signal.SIGTERM),)
         and bool(termination["term_leader_confirmed"])
+        and bool(termination["host_process_quiesced"])
         and output_eof
     )
     natural_exit_ok = raw_returncode == 0 and not signals_sent
@@ -1118,6 +1524,8 @@ def run_observed_command(
         not timed_out
         and not failure_seen
         and not output_error
+        and bool(termination["host_process_quiesced"])
+        and bool(cleanup.get("verified"))
         and (not normalized_marker or marker_seen)
         and output_eof
         and exit_ok
@@ -1125,6 +1533,10 @@ def run_observed_command(
     if not ok and not failure_reason:
         if timed_out:
             failure_reason = "guest_timeout"
+        elif not termination["host_process_quiesced"]:
+            failure_reason = "host_launcher_cleanup_unverified"
+        elif not cleanup.get("verified"):
+            failure_reason = "wsl_cleanup_unverified"
         elif output_error:
             failure_reason = "guest_output_error"
         elif raw_returncode not in (0, None):
@@ -1152,17 +1564,61 @@ def run_observed_command(
         "runner_terminated": runner_terminated,
         "runner_signals": signals_sent,
         "raw_returncode": raw_returncode,
+        "host_process_quiesced": bool(termination["host_process_quiesced"]),
         "output_eof": output_eof,
         "output_error": output_error,
+        "wsl_cleanup_applicable": bool(cleanup.get("applicable")),
+        "wsl_cleanup_verified": bool(cleanup.get("verified")),
+        "wsl_cleanup_initial_survivors": cleanup.get("initial_survivors"),
+        "wsl_cleanup_remaining_survivors": cleanup.get("remaining_survivors"),
+        "wsl_cleanup_error": str(cleanup.get("error") or ""),
         "idle_notices": idle_notices,
         "elapsed_seconds": round(elapsed, 3),
     }
 
 
-def make_wsl_command(command_text: str, wsl_distro: str) -> list[str]:
+def make_wsl_command(
+    command_text: str,
+    wsl_distro: str,
+    timeout_seconds: int | None = None,
+    command_identity: str | None = None,
+) -> list[str]:
+    identity = command_identity or secrets.token_hex(16)
+    if re.fullmatch(r"[0-9a-f]{32}", identity) is None:
+        raise ValueError("WSL command identity must be 128-bit lowercase hex")
+    bash_executable = os.environ.get("AGENTOS_WSL_BASH", "bash")
+    timeout_executable = os.environ.get("AGENTOS_WSL_TIMEOUT", "timeout")
+    launcher_executable = os.environ.get(
+        "AGENTOS_WSL_LAUNCHER", "wsl.exe" if os.name == "nt" else "bash"
+    )
+    bash_command = "bash" if bash_executable == "bash" else shell_quote(bash_executable)
+    timeout_command = (
+        "timeout" if timeout_executable == "timeout" else shell_quote(timeout_executable)
+    )
+    if timeout_seconds is not None:
+        reserved = (
+            WSL_TIMEOUT_KILL_AFTER_SECONDS + WSL_HOST_DEADLINE_MARGIN_SECONDS
+        )
+        if timeout_seconds <= reserved:
+            raise ValueError(
+                "WSL command timeout must exceed the inner escalation and "
+                "Host verification margin"
+            )
+        inner_timeout = timeout_seconds - reserved
+        command_text = (
+            f"exec env {WSL_COMMAND_ID_ENV}={identity} "
+            f"{timeout_command} --signal=TERM "
+            f"--kill-after={WSL_TIMEOUT_KILL_AFTER_SECONDS}s "
+            f"{inner_timeout}s {bash_command} -lc {shell_quote(command_text)}"
+        )
+    else:
+        command_text = (
+            f"exec env {WSL_COMMAND_ID_ENV}={identity} "
+            f"{bash_command} -lc {shell_quote(command_text)}"
+        )
     if os.name == "nt":
-        return ["wsl.exe", "-d", wsl_distro, "--", "bash", "-lc", command_text]
-    return ["bash", "-lc", command_text]
+        return [launcher_executable, "-d", wsl_distro, "--", bash_executable, "-lc", command_text]
+    return [launcher_executable, "-lc", command_text]
 
 
 def c_string_literal(text: str) -> str:
@@ -1681,14 +2137,41 @@ def _run_seeded_ucore_locked(
         create_private_directory(next_state)
     host_input_dir = run_dir / "host-input"
     host_input_dir = create_private_directory(host_input_dir)
+    try:
+        source_identity = capture_source_identity(repo_dir)
+    except ValueError as error:
+        write_text(build_log_path, f"[runner] source identity rejected: {error}\n")
+        summary = {
+            "commands": [],
+            "returncode": 1,
+            "build_returncode": None,
+            "guest_returncode": None,
+            "guest_raw_returncode": None,
+            "embedded_action_records": 0,
+            "extracted_state_files": 0,
+            "target_identity": target_identity,
+            "chapter": chapter,
+            "init_proc": init_proc,
+            "passed": False,
+            "build_log": str(build_log_path),
+            "log": str(log_path),
+            "failure_phase": "source",
+            "failure_reason": "source_identity_unavailable",
+            "error": str(error),
+            "status": "failed",
+        }
+        write_run_result_state(next_state, summary, "")
+        write_json(run_dir / "ucore-run-summary.json", summary)
+        return summary
     repo_bash = bash_path(repo_dir)
+    make_executable = shell_quote(os.environ.get("AGENTOS_WSL_MAKE", "make"))
     clean_command = (
         f"cd {shell_quote(repo_bash)} && "
-        "make -C user clean >/dev/null && "
-        "make clean >/dev/null"
+        f"{make_executable} -C user clean >/dev/null && "
+        f"{make_executable} clean >/dev/null"
     )
     clean_code = run_command(
-        make_wsl_command(clean_command, wsl_distro),
+        make_wsl_command(clean_command, wsl_distro, phase_timeout_seconds),
         build_log_path,
         phase_timeout_seconds,
     )
@@ -1721,16 +2204,16 @@ def _run_seeded_ucore_locked(
     toolprefix = toolprefix_arg()
     build_command_text = (
         f"cd {shell_quote(repo_bash)} && "
-        f"make user {toolprefix} CHAPTER={chapter}"
+        f"{make_executable} user {toolprefix} CHAPTER={chapter}"
         " && "
         f"cp {shell_quote(seed_file_bash)} user/target/bin/rp_host_action_seed"
         " && "
         "rm -rf nfs/fs nfs/fs.img nfs/fs-copy.img && "
-        f"make nfs/fs-copy.img {toolprefix} CHAPTER={chapter} && "
-        f"make build {toolprefix} CHAPTER={chapter} LOG=warn INIT_PROC={init_proc}"
+        f"{make_executable} nfs/fs-copy.img {toolprefix} CHAPTER={chapter} && "
+        f"{make_executable} build {toolprefix} CHAPTER={chapter} LOG=warn INIT_PROC={init_proc}"
     )
     build_code = run_command(
-        make_wsl_command(build_command_text, wsl_distro),
+        make_wsl_command(build_command_text, wsl_distro, phase_timeout_seconds),
         build_log_path,
         phase_timeout_seconds,
         append=True,
@@ -1759,10 +2242,10 @@ def _run_seeded_ucore_locked(
         return summary
     run_command_text = (
         f"cd {shell_quote(repo_bash)} && "
-        f"make run-prebuilt {toolprefix} CHAPTER={chapter} LOG=warn INIT_PROC={init_proc}"
+        f"{make_executable} run-prebuilt {toolprefix} CHAPTER={chapter} LOG=warn INIT_PROC={init_proc}"
     )
     observed = run_observed_command(
-        make_wsl_command(run_command_text, wsl_distro),
+        make_wsl_command(run_command_text, wsl_distro, phase_timeout_seconds),
         log_path,
         phase_timeout_seconds,
         append=False,
@@ -1809,6 +2292,24 @@ def _run_seeded_ucore_locked(
             failure_phase = "extract"
             failure_reason = "missing_image"
         extract_summary = {"status": "missing_image", "extracted_state_files": 0}
+    runtime_artifacts: dict[str, object] = {}
+    if passed:
+        try:
+            runtime_artifacts = archive_runtime_artifacts(repo_dir, run_dir)
+        except (OSError, ValueError) as error:
+            passed = False
+            failure_phase = "archive"
+            failure_reason = "artifact_archive_failed"
+            runtime_artifacts = {"error": str(error)}
+    if passed:
+        try:
+            verify_source_identity(repo_dir, source_identity)
+        except ValueError as error:
+            passed = False
+            failure_phase = "source"
+            failure_reason = "source_identity_changed"
+            runtime_artifacts = {**runtime_artifacts, "source_error": str(error)}
+    successful_source_identity = source_identity if passed else {}
     summary = {
         "commands": [
             clean_command,
@@ -1829,11 +2330,20 @@ def _run_seeded_ucore_locked(
         "runner_terminated": bool(observed["runner_terminated"]),
         "runner_signals": list(observed["runner_signals"]),
         "output_eof": bool(observed["output_eof"]),
+        "wsl_cleanup_applicable": bool(observed["wsl_cleanup_applicable"]),
+        "wsl_cleanup_verified": bool(observed["wsl_cleanup_verified"]),
+        "wsl_cleanup_initial_survivors": observed[
+            "wsl_cleanup_initial_survivors"
+        ],
+        "wsl_cleanup_remaining_survivors": observed[
+            "wsl_cleanup_remaining_survivors"
+        ],
         "idle_notices": int(observed["idle_notices"]),
         "elapsed_seconds": observed["elapsed_seconds"],
         "embedded_action_records": embedded_records,
         "extracted_state_files": extract_summary.get("extracted_state_files", 0),
         "extract_status": extract_summary.get("status", "unknown"),
+        "runtime_artifacts": runtime_artifacts,
         "target_identity": target_identity,
         "chapter": chapter,
         "init_proc": init_proc,
@@ -1841,6 +2351,7 @@ def _run_seeded_ucore_locked(
         "build_log": str(build_log_path),
         "log": str(log_path),
         "status": "ready" if passed else "failed",
+        **successful_source_identity,
     }
     write_run_result_state(next_state, summary, text)
     write_json(run_dir / "ucore-run-summary.json", summary)

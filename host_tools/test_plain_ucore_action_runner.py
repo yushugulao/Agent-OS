@@ -3,13 +3,16 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
 import signal
+import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest import mock
 
 import plain_ucore_action_runner as runner
 import test_plain_ucore_reader_e2e as reader_e2e
@@ -68,6 +71,281 @@ def main() -> int:
             assert "failure_reason=repo_busy" in busy_receipt
         with runner.exclusive_repo_run_lock(repo):
             pass
+        assert list(repo.iterdir()) == [], "run coordination must not dirty the repository"
+
+        worktree = root / "worktree"
+        common_git = root / "common.git"
+        worktree.mkdir()
+        common_git.mkdir()
+        (worktree / ".git").write_text("gitdir: ../common.git/worktrees/w1\n", encoding="utf-8")
+        git_result = subprocess.CompletedProcess(
+            ["git", "rev-parse", "--git-common-dir"],
+            0,
+            stdout="../common.git\n",
+            stderr="",
+        )
+        with mock.patch.object(runner.subprocess, "run", return_value=git_result):
+            lock_path = runner._run_lock_path(worktree)
+            assert lock_path.parent == common_git.resolve()
+        with runner.exclusive_repo_run_lock(worktree):
+            pass
+        assert sorted(path.name for path in worktree.iterdir()) == [".git"]
+
+        timeout_log = root / "timed-command.log"
+        timeout_code = runner.run_command(
+            [
+                sys.executable,
+                "-c",
+                "import time; print('partial-output', flush=True); time.sleep(30)",
+            ],
+            timeout_log,
+            1,
+        )
+        timeout_text = timeout_log.read_text(encoding="utf-8")
+        assert timeout_code == 124
+        assert "partial-output" in timeout_text
+        assert "[runner] exceeded 1s" in timeout_text
+        command_identity = "a" * 32
+        bounded_wsl = runner.make_wsl_command(
+            "printf ready", "Ubuntu", 20, command_identity
+        )
+        assert (
+            "exec env AGENTOS_UCORE_RUN_ID=" + command_identity
+        ) in bounded_wsl[-1]
+        assert "timeout --signal=TERM --kill-after=5s 5s" in bounded_wsl[-1]
+        assert "bash -lc 'printf ready'" in bounded_wsl[-1]
+        assert runner.wsl_command_identity(bounded_wsl) == command_identity
+        malformed_tagged = [
+            *bounded_wsl[:-1],
+            bounded_wsl[-1] + " AGENTOS_UCORE_RUN_ID=" + "b" * 32,
+        ]
+        malformed_cleanup = runner.verify_wsl_command_quiesced(malformed_tagged)
+        assert malformed_cleanup["applicable"] is True
+        assert malformed_cleanup["verified"] is False
+        assert (
+            5
+            + runner.WSL_TIMEOUT_KILL_AFTER_SECONDS
+            + runner.WSL_HOST_DEADLINE_MARGIN_SECONDS
+            == 20
+        )
+        try:
+            runner.make_wsl_command(
+                "printf ready",
+                "Ubuntu",
+                runner.WSL_TIMEOUT_KILL_AFTER_SECONDS
+                + runner.WSL_HOST_DEADLINE_MARGIN_SECONDS,
+                command_identity,
+            )
+        except ValueError:
+            pass
+        else:
+            raise AssertionError("WSL timeout without a Host cleanup margin was accepted")
+
+        cleanup_receipt = subprocess.CompletedProcess(
+            [],
+            0,
+            stdout="AGENTOS_WSL_CLEANUP initial=3 remaining=0\n",
+            stderr="",
+        )
+        with mock.patch.object(
+            runner.subprocess, "run", return_value=cleanup_receipt
+        ) as cleanup_run:
+            cleanup = runner.verify_wsl_command_quiesced(bounded_wsl)
+        assert cleanup["verified"] is True
+        assert cleanup["initial_survivors"] == 3
+        assert cleanup["remaining_survivors"] == 0
+        cleanup_command = cleanup_run.call_args.args[0]
+        cleanup_script = cleanup_command[-1]
+        assert cleanup_command[:4] == ["wsl.exe", "-d", "Ubuntu", "--"] or (
+            cleanup_command[:2] == ["bash", "-lc"]
+        )
+        assert f"needle='AGENTOS_UCORE_RUN_ID={command_identity}'" in cleanup_script
+        assert 'env_file="/proc/$pid/environ"' in cleanup_script
+        assert 'process_has_token "$env_file"' in cleanup_script
+        assert "pkill" not in cleanup_script and "killall" not in cleanup_script
+
+        failed_cleanup_receipt = subprocess.CompletedProcess(
+            [],
+            1,
+            stdout="AGENTOS_WSL_CLEANUP initial=1 remaining=1\n",
+            stderr="tagged process survived",
+        )
+        with mock.patch.object(
+            runner.subprocess, "run", return_value=failed_cleanup_receipt
+        ):
+            failed_cleanup = runner.verify_wsl_command_quiesced(bounded_wsl)
+        assert failed_cleanup["verified"] is False
+        assert failed_cleanup["remaining_survivors"] == 1
+
+        unverified_cleanup = {
+            "applicable": True,
+            "verified": False,
+            "initial_survivors": 1,
+            "remaining_survivors": 1,
+            "error": "synthetic verifier failure",
+        }
+        with mock.patch.object(
+            runner, "verify_wsl_command_quiesced", return_value=unverified_cleanup
+        ):
+            cleanup_failure_code = runner.run_command(
+                [sys.executable, "-c", "print('command completed')"],
+                root / "cleanup-unverified.log",
+                5,
+            )
+        assert cleanup_failure_code == runner.WSL_CLEANUP_UNVERIFIED_EXIT_CODE
+        assert "wsl cleanup verified=0" in read(root / "cleanup-unverified.log")
+
+        commit = "1" * 40
+        clean_head = subprocess.CompletedProcess(
+            [], 0, stdout=commit + "\n", stderr=""
+        )
+        clean_status = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        clean_diff = subprocess.CompletedProcess([], 0, stdout="", stderr="")
+        with mock.patch.object(
+            runner.subprocess,
+            "run",
+            side_effect=[clean_head, clean_status, clean_diff],
+        ) as source_run:
+            source_identity = runner.capture_source_identity(repo)
+        assert source_identity == {
+            "source_commit": commit,
+            "source_tree_clean": True,
+            "source_tracked_sha256": hashlib.sha256(b"\0").hexdigest(),
+        }
+        assert "--untracked-files=no" in source_run.call_args_list[1].args[0]
+        dirty_status = subprocess.CompletedProcess(
+            [], 0, stdout=" M os/proc.c\n", stderr=""
+        )
+        dirty_diff = subprocess.CompletedProcess(
+            [], 0, stdout="diff --git a/os/proc.c b/os/proc.c\n", stderr=""
+        )
+        with mock.patch.object(
+            runner.subprocess,
+            "run",
+            side_effect=[clean_head, dirty_status, dirty_diff],
+        ):
+            dirty_identity = runner.capture_source_identity(repo)
+        assert dirty_identity["source_commit"] == commit
+        assert dirty_identity["source_tree_clean"] is False
+        assert dirty_identity["source_tracked_sha256"] != source_identity[
+            "source_tracked_sha256"
+        ]
+        changed_head = subprocess.CompletedProcess(
+            [], 0, stdout="2" * 40 + "\n", stderr=""
+        )
+        with mock.patch.object(
+            runner.subprocess,
+            "run",
+            side_effect=[changed_head, clean_status, clean_diff],
+        ):
+            try:
+                runner.verify_source_identity(repo, source_identity)
+            except ValueError as error:
+                assert "changed" in str(error)
+            else:
+                raise AssertionError("mid-run HEAD change was accepted")
+
+        artifact_repo = root / "artifact-repo"
+        (artifact_repo / "build").mkdir(parents=True)
+        (artifact_repo / "nfs").mkdir()
+        for path, data in (
+            (artifact_repo / "build" / "kernel", b"kernel"),
+            (artifact_repo / "nfs" / "fs.img", b"input"),
+            (artifact_repo / "nfs" / "fs-copy.img", b"final"),
+        ):
+            path.write_bytes(data)
+        artifact_run = root / "artifact-run"
+        artifact_run.mkdir()
+        artifacts = runner.archive_runtime_artifacts(artifact_repo, artifact_run)
+        assert set(artifacts) == {"kernel", "image_input", "image_final"}
+        for name, receipt in artifacts.items():
+            archived = artifact_run / receipt["path"]
+            assert archived.stat().st_size == receipt["bytes"]
+            assert hashlib.sha256(archived.read_bytes()).hexdigest() == receipt["sha256"]
+
+        bound_repo = root / "bound-repo"
+        (bound_repo / "nfs").mkdir(parents=True)
+        (bound_repo / "nfs" / "fs-copy.img").write_bytes(b"image")
+        bound_run = root / "bound-run"
+        bound_identity = {
+            "source_commit": commit,
+            "source_tree_clean": False,
+            "source_tracked_sha256": hashlib.sha256(b"dirty tracked state").hexdigest(),
+        }
+
+        def fake_observed(
+            command: list[str], log_path: Path, timeout_seconds: int, **kwargs: object
+        ) -> dict[str, object]:
+            del command, timeout_seconds, kwargs
+            log_path.write_text("rp_orch: passed\n", encoding="utf-8")
+            return {
+                "returncode": 0,
+                "raw_returncode": 0,
+                "marker_seen": True,
+                "failure_seen": False,
+                "failure_line": "",
+                "failure_reason": "",
+                "timed_out": False,
+                "runner_terminated": False,
+                "runner_signals": (),
+                "output_eof": True,
+                "host_process_quiesced": True,
+                "wsl_cleanup_applicable": True,
+                "wsl_cleanup_verified": True,
+                "wsl_cleanup_initial_survivors": 0,
+                "wsl_cleanup_remaining_survivors": 0,
+                "wsl_cleanup_error": "",
+                "idle_notices": 0,
+                "elapsed_seconds": 0.1,
+            }
+
+        def fake_extract(
+            image_path: Path,
+            destination: Path,
+            repo_dir: Path,
+            require_single_scope: bool,
+        ) -> dict[str, object]:
+            del image_path, repo_dir, require_single_scope
+            destination.mkdir()
+            (destination / "rp_state").write_text(
+                "status=ready\n", encoding="utf-8"
+            )
+            return {"status": "ready", "extracted_state_files": 1}
+
+        with (
+            mock.patch.object(
+                runner, "capture_source_identity", return_value=bound_identity
+            ) as source_capture,
+            mock.patch.object(
+                runner, "verify_source_identity", return_value=bound_identity
+            ) as source_verify,
+            mock.patch.object(runner, "run_command", side_effect=[0, 0]),
+            mock.patch.object(runner, "write_seed_header", return_value=0),
+            mock.patch.object(runner, "pad_state_files_for_ucore_fs"),
+            mock.patch.object(runner, "run_observed_command", side_effect=fake_observed),
+            mock.patch.object(runner, "extract_state_files", side_effect=fake_extract),
+            mock.patch.object(
+                runner,
+                "archive_runtime_artifacts",
+                return_value={"kernel": {"sha256": "3" * 64}},
+            ),
+        ):
+            bound_summary = runner.run_seeded_ucore(
+                bound_repo, bound_run, 5, "Ubuntu"
+            )
+        assert bound_summary["passed"] is True
+        assert bound_summary["source_commit"] == commit
+        assert bound_summary["source_tree_clean"] is False
+        assert bound_summary["source_tracked_sha256"] == bound_identity[
+            "source_tracked_sha256"
+        ]
+        source_capture.assert_called_once_with(bound_repo.resolve())
+        source_verify.assert_called_once_with(bound_repo.resolve(), bound_identity)
+        persisted_bound_summary = json.loads(
+            read(bound_run / "ucore-run-summary.json")
+        )
+        assert persisted_bound_summary["source_commit"] == commit
+        assert persisted_bound_summary["source_tree_clean"] is False
 
         security_state = root / "security-state"
         security_state.mkdir()
@@ -243,6 +521,50 @@ def main() -> int:
         assert observed_ok["marker_seen"] is True
         assert observed_ok["failure_seen"] is False
         assert "rp_orch: passed" in read(root / "observed-ok.log")
+
+        with mock.patch.object(
+            runner,
+            "verify_wsl_command_quiesced",
+            return_value=unverified_cleanup,
+        ):
+            observed_cleanup_failure = runner.run_observed_command(
+                [sys.executable, "-c", "print('rp_orch: passed')"],
+                root / "observed-cleanup-unverified.log",
+                timeout_seconds=5,
+                pass_marker="rp_orch: passed",
+                idle_notice_seconds=1,
+            )
+        assert observed_cleanup_failure["marker_seen"] is True
+        assert observed_cleanup_failure["wsl_cleanup_verified"] is False
+        assert observed_cleanup_failure["returncode"] != 0
+        assert (
+            observed_cleanup_failure["failure_reason"]
+            == "wsl_cleanup_unverified"
+        )
+
+        verified_tagged_cleanup = {
+            "applicable": True,
+            "verified": True,
+            "initial_survivors": 0,
+            "remaining_survivors": 0,
+            "error": "",
+        }
+        with mock.patch.object(
+            runner,
+            "verify_wsl_command_quiesced",
+            return_value=verified_tagged_cleanup,
+        ):
+            observed_inner_timeout = runner.run_observed_command(
+                [sys.executable, "-c", "raise SystemExit(124)"],
+                root / "observed-inner-timeout.log",
+                timeout_seconds=5,
+                idle_notice_seconds=1,
+            )
+        assert observed_inner_timeout["timed_out"] is True
+        assert observed_inner_timeout["failure_reason"] == "guest_timeout"
+        assert "inner WSL deadline expired" in read(
+            root / "observed-inner-timeout.log"
+        )
 
         observed_diagnostic = runner.run_observed_command(
             [

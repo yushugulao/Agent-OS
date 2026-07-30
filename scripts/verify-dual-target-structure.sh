@@ -303,7 +303,7 @@ require_text "scripts/run-full-verification.sh" '--check[[:space:]]+agent-test-p
 	"full verification does not reject provisional duration policy before executing its profile"
 agent_policy_line="$(grep -n -- '--check agent-test-policy' \
 	"${ROOT_DIR}/scripts/run-agent-tests.sh" | head -1 | cut -d: -f1)"
-agent_first_build_line="$(grep -n '^make -C user clean$' \
+agent_first_build_line="$(grep -n '^"${MAKE_TOOL}" -C user clean$' \
 	"${ROOT_DIR}/scripts/run-agent-tests.sh" | head -1 | cut -d: -f1)"
 if [ -z "${agent_policy_line}" ] || [ -z "${agent_first_build_line}" ] ||
    [ "${agent_policy_line}" -ge "${agent_first_build_line}" ]; then

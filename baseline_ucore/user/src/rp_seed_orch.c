@@ -75,6 +75,21 @@ static void release_self_image(void)
 	}
 }
 
+static void release_program_images(void)
+{
+	int total = (int)(sizeof(PROGRAMS) / sizeof(PROGRAMS[0]));
+
+	for (int i = 0; i < total; i++) {
+		int fd;
+
+		if (keeps_same_name_state(PROGRAMS[i]))
+			continue;
+		fd = open(PROGRAMS[i], O_WRONLY | O_TRUNC);
+		if (fd >= 0)
+			close(fd);
+	}
+}
+
 static void record_timing(const char *program, int ok, int code,
 			  unsigned long long elapsed_ms)
 {
@@ -90,6 +105,40 @@ static void record_timing(const char *program, int ok, int code,
 	rp_append_text(line, sizeof(line), ";elapsed_ms=");
 	rp_append_uint_text(line, sizeof(line), elapsed_ms);
 	rp_append_file("rp_orch_timing", line);
+}
+
+static int record_workflow_timing(int64 workflow_start, int64 steady_start)
+{
+	char line[512];
+	int64 workflow_end = get_mtime();
+	unsigned long long setup_elapsed;
+	unsigned long long steady_elapsed;
+	unsigned long long workflow_elapsed;
+
+	if (workflow_start < 0 || steady_start < workflow_start ||
+	    workflow_end < steady_start)
+		return 0;
+	setup_elapsed = (unsigned long long)(steady_start - workflow_start);
+	steady_elapsed = (unsigned long long)(workflow_end - steady_start);
+	workflow_elapsed = (unsigned long long)(workflow_end - workflow_start);
+
+	rp_copy_text(line, sizeof(line),
+		     "schema=guest_workflow_timing_v3;clock=monotonic_mtime_ms;entry=rp_seed_orch;handoff=direct;init_phase_mask=0;completion=local_final_validation;completion_phase_mask=1;start_ms=");
+	rp_append_uint_text(line, sizeof(line), workflow_start);
+	rp_append_text(line, sizeof(line), ";ready_ms=");
+	rp_append_uint_text(line, sizeof(line), steady_start);
+	rp_append_text(line, sizeof(line), ";steady_start_ms=");
+	rp_append_uint_text(line, sizeof(line), steady_start);
+	rp_append_text(line, sizeof(line), ";end_ms=");
+	rp_append_uint_text(line, sizeof(line), workflow_end);
+	rp_append_text(line, sizeof(line), ";setup_elapsed_ms=");
+	rp_append_uint_text(line, sizeof(line), setup_elapsed);
+	rp_append_text(line, sizeof(line), ";exec_elapsed_ms=0;steady_elapsed_ms=");
+	rp_append_uint_text(line, sizeof(line), steady_elapsed);
+	rp_append_text(line, sizeof(line), ";workflow_elapsed_ms=");
+	rp_append_uint_text(line, sizeof(line), workflow_elapsed);
+	rp_append_text(line, sizeof(line), "\n");
+	return rp_write_file("rp_workflow_timing", line);
 }
 
 static int append_program_inventory_evidence(void)
@@ -155,18 +204,15 @@ static int run_child(const char *program)
 		return 0;
 	}
 	record_timing(program, 1, code, elapsed);
-	if (keeps_same_name_state(program)) {
-		return 1;
-	}
-	int fd = open(program, O_WRONLY | O_TRUNC);
-	if (fd >= 0) {
-		close(fd);
-	}
 	return 1;
 }
 
 int main(void)
 {
+	int64 workflow_start;
+	int64 steady_start;
+
+	/* Image reclamation is fixture preparation, not workflow work. */
 	release_self_image();
 	int total = (int)(sizeof(PROGRAMS) / sizeof(PROGRAMS[0]));
 	int ok = 0;
@@ -174,6 +220,8 @@ int main(void)
 			   "orchestrator=rp_seed_orch\nlauncher=fork_seeded\n")) {
 		return 1;
 	}
+	workflow_start = get_mtime();
+	steady_start = get_mtime();
 	printf("rp_orch: start programs=%d\n", total);
 	for (int i = 0; i < total; i++) {
 		ok += run_child(PROGRAMS[i]);
@@ -187,6 +235,12 @@ int main(void)
 		printf("rp_orch: program_inventory_failed\n");
 		return 1;
 	}
+	if (!record_workflow_timing(workflow_start, steady_start)) {
+		printf("rp_orch: workflow_timing_failed\n");
+		return 1;
+	}
+	/* Keep asymmetric executable cleanup outside the measured interval. */
+	release_program_images();
 	printf("rp_orch: state_ok=1\n");
 	printf("rp_orch: passed\n");
 	return 0;

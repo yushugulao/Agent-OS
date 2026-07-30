@@ -2,21 +2,136 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import asdict, dataclass
+import hashlib
 import json
+import os
+import re
 import shutil
 from pathlib import Path
 from typing import Any
 
-from check_host_action_kind_alignment import collect_action_routes, default_host_dir
-from plain_ucore_action_runner import action_kind, prepare_action_state, run_seeded_ucore
+try:
+    from .plain_ucore_action_runner import action_kind, prepare_action_state, run_seeded_ucore
+except ImportError:  # Direct execution from host_tools/.
+    from plain_ucore_action_runner import action_kind, prepare_action_state, run_seeded_ucore
+
+
+DEFAULT_CHALLENGE = "ch-000000000999"
+CHALLENGE_RE = re.compile(r"ch-[0-9]{12}\Z")
+CHALLENGE_RECEIPT_SCHEMA = "seeded-action-challenge-v1"
+CHALLENGE_RECEIPT_NAME = "challenge-input-receipt.json"
+
+
+@dataclass(frozen=True)
+class ChallengeValues:
+    challenge: str
+    run_id: str
+    rerun_id: str
+    workflow_id: str
+    input_sha256: str
+    derived_sha256: str
+
+
+def derive_challenge(challenge: str) -> ChallengeValues:
+    """Derive bounded Guest identifiers from one canonical Host challenge."""
+
+    if not isinstance(challenge, str) or CHALLENGE_RE.fullmatch(challenge) is None:
+        raise ValueError("challenge must match ch-[0-9]{12}")
+    suffix = str(int(challenge[3:]))
+    run_id = f"RUN-{suffix}"
+    return ChallengeValues(
+        challenge=challenge,
+        run_id=run_id,
+        rerun_id=f"{run_id}-rerun",
+        workflow_id=f"wf-host-{suffix}",
+        input_sha256=f"sha-input-{suffix}",
+        derived_sha256=f"sha-derived-{suffix}",
+    )
+
+
+def parse_challenge(value: str) -> str:
+    try:
+        derive_challenge(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError(str(error)) from error
+    return value
+
+
+def _canonical_json_bytes(value: object) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8")
+
+
+def _binding_sha256(value: object, domain: str) -> str:
+    return hashlib.sha256(
+        domain.encode("ascii") + b"\0" + _canonical_json_bytes(value)
+    ).hexdigest()
+
+
+def challenge_input_receipt(
+    challenge: str,
+    actions: list[dict[str, object]],
+    actions_file_sha256: str,
+) -> dict[str, object]:
+    values = derive_challenge(challenge)
+    if not re.fullmatch(r"[0-9a-f]{64}", actions_file_sha256):
+        raise ValueError("actions_file_sha256 must be lowercase SHA-256")
+    body: dict[str, object] = {
+        "schema": CHALLENGE_RECEIPT_SCHEMA,
+        "challenge": challenge,
+        "derived": asdict(values),
+        "action_count": len(actions),
+        "actions_sha256": hashlib.sha256(_canonical_json_bytes(actions)).hexdigest(),
+        "actions_file_sha256": actions_file_sha256,
+    }
+    return {
+        **body,
+        "receipt_sha256": _binding_sha256(body, CHALLENGE_RECEIPT_SCHEMA),
+    }
+
+
+def _replace_challenge_tokens(value: object, replacements: dict[str, str]) -> object:
+    if isinstance(value, str):
+        for source in sorted(replacements, key=len, reverse=True):
+            value = value.replace(source, replacements[source])
+        return value
+    if isinstance(value, list):
+        return [_replace_challenge_tokens(item, replacements) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _replace_challenge_tokens(item, replacements)
+            for key, item in value.items()
+        }
+    return value
 
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
 
 
-def seeded_actions() -> list[dict[str, object]]:
-    return [
+def default_host_dir(root: Path) -> Path:
+    override = os.environ.get("HOST_PLATFORM_DIR")
+    return Path(override) if override else root.parent / "research-agent-platform-userland"
+
+
+def collect_action_routes(host_dir: Path) -> list[str]:
+    source = host_dir / "agent_platform" / "api_server.py"
+    if not source.exists():
+        raise FileNotFoundError(f"host API server is missing: {source}")
+    return sorted(
+        set(re.findall(r'path == "(/actions/[^"]+)"', source.read_text(encoding="utf-8")))
+    )
+
+
+def seeded_actions(challenge: str = DEFAULT_CHALLENGE) -> list[dict[str, object]]:
+    values = derive_challenge(challenge)
+    actions = [
         {
             "sequence": 1,
             "path": "/actions/research/rerun",
@@ -531,10 +646,21 @@ def seeded_actions() -> list[dict[str, object]]:
             },
         },
     ]
+    replacements = {
+        "RUN-999-rerun": values.rerun_id,
+        "wf-host-999": values.workflow_id,
+        "sha-input-999": values.input_sha256,
+        "sha-derived-999": values.derived_sha256,
+        "RUN-999": values.run_id,
+    }
+    derived = _replace_challenge_tokens(actions, replacements)
+    if not isinstance(derived, list):
+        raise AssertionError("seeded action template must remain a list")
+    return derived
 
 
-def seeded_action_kinds() -> list[str]:
-    return [action_kind(str(action["path"])) for action in seeded_actions()]
+def seeded_action_kinds(challenge: str = DEFAULT_CHALLENGE) -> list[str]:
+    return [action_kind(str(action["path"])) for action in seeded_actions(challenge)]
 
 
 def seeded_route_coverage(root: Path, host_dir: Path | None = None) -> dict[str, object]:
@@ -598,16 +724,110 @@ def require_contains(failures: list[str], label: str, state_dir: Path, name: str
         failures.append(f"{label}: {name} missing {token}")
 
 
-def validate_seed_package(label: str, run_dir: Path) -> list[str]:
+def write_challenge_input_receipt(
+    run_dir: Path,
+    challenge: str,
+    actions: list[dict[str, object]],
+) -> dict[str, object]:
+    actions_path = run_dir / "actions.json"
+    actions_data = actions_path.read_bytes()
+    receipt = challenge_input_receipt(
+        challenge,
+        actions,
+        hashlib.sha256(actions_data).hexdigest(),
+    )
+    path = run_dir / CHALLENGE_RECEIPT_NAME
+    with path.open("x", encoding="utf-8", newline="\n") as handle:
+        json.dump(receipt, handle, indent=2, ensure_ascii=False, allow_nan=False)
+        handle.write("\n")
+        handle.flush()
+    return receipt
+
+
+def bind_run_summary_to_challenge(
+    run_dir: Path,
+    run_summary: dict[str, object],
+    receipt: dict[str, object],
+) -> None:
+    receipt_path = run_dir / CHALLENGE_RECEIPT_NAME
+    run_summary.update(
+        {
+            "challenge": receipt["challenge"],
+            "challenge_receipt": CHALLENGE_RECEIPT_NAME,
+            "challenge_receipt_sha256": hashlib.sha256(
+                receipt_path.read_bytes()
+            ).hexdigest(),
+            "challenge_binding_sha256": receipt["receipt_sha256"],
+        }
+    )
+    write_json(run_dir / "ucore-run-summary.json", run_summary)
+
+
+def validate_challenge_binding(
+    label: str,
+    run_dir: Path,
+    challenge: str = DEFAULT_CHALLENGE,
+) -> list[str]:
+    failures: list[str] = []
+    paths = {
+        "actions": run_dir / "actions.json",
+        "receipt": run_dir / CHALLENGE_RECEIPT_NAME,
+        "summary": run_dir / "ucore-run-summary.json",
+    }
+    for name, path in paths.items():
+        if path.is_symlink() or not path.is_file():
+            failures.append(f"{label}: missing or unsafe challenge {name}")
+    if failures:
+        return failures
+    try:
+        actions_data = paths["actions"].read_bytes()
+        receipt_data = paths["receipt"].read_bytes()
+        summary_data = paths["summary"].read_bytes()
+        actions = json.loads(actions_data)
+        receipt = json.loads(receipt_data)
+        summary = json.loads(summary_data)
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        return [f"{label}: invalid challenge binding JSON: {error}"]
+    expected_actions = seeded_actions(challenge)
+    if actions != expected_actions:
+        failures.append(f"{label}: actions do not match challenge {challenge}")
+        return failures
+    expected_receipt = challenge_input_receipt(
+        challenge,
+        expected_actions,
+        hashlib.sha256(actions_data).hexdigest(),
+    )
+    if receipt != expected_receipt:
+        failures.append(f"{label}: challenge input receipt is inconsistent")
+        return failures
+    expected_summary = {
+        "challenge": challenge,
+        "challenge_receipt": CHALLENGE_RECEIPT_NAME,
+        "challenge_receipt_sha256": hashlib.sha256(receipt_data).hexdigest(),
+        "challenge_binding_sha256": expected_receipt["receipt_sha256"],
+    }
+    if not isinstance(summary, dict) or any(
+        summary.get(key) != value for key, value in expected_summary.items()
+    ):
+        failures.append(f"{label}: run summary does not bind challenge {challenge}")
+    return failures
+
+
+def validate_seed_package(
+    label: str,
+    run_dir: Path,
+    challenge: str = DEFAULT_CHALLENGE,
+) -> list[str]:
+    values = derive_challenge(challenge)
     failures: list[str] = []
     state_dir = run_dir / "host-input"
-    for kind in seeded_action_kinds():
+    for kind in seeded_action_kinds(challenge):
         require_contains(failures, label, state_dir, "rp_host_action_seed", f"kind={kind}")
-    require_contains(failures, label, state_dir, "rp_host_action_seed", "run_id=RUN-999-rerun")
-    require_contains(failures, label, state_dir, "rp_host_action_seed", "parent_run=RUN-999")
+    require_contains(failures, label, state_dir, "rp_host_action_seed", f"run_id={values.rerun_id}")
+    require_contains(failures, label, state_dir, "rp_host_action_seed", f"parent_run={values.run_id}")
     require_contains(failures, label, state_dir, "rp_host_action_seed", "title=Reusable response table")
     require_contains(failures, label, state_dir, "rp_host_action_seed", "citation_key=agentlibrary2026")
-    require_contains(failures, label, state_dir, "rp_host_action_seed", "workflow_id=wf-host-999")
+    require_contains(failures, label, state_dir, "rp_host_action_seed", f"workflow_id={values.workflow_id}")
     require_contains(failures, label, state_dir, "rp_host_action_seed", "request_id=host-q1")
     require_contains(failures, label, state_dir, "rp_host_action_seed", "response_id=host-r1")
     require_contains(failures, label, state_dir, "rp_host_action_seed", "compare_profile=compare-profile:host-nextflow:migration")
@@ -616,40 +836,45 @@ def validate_seed_package(label: str, run_dir: Path) -> list[str]:
     return failures
 
 
-def validate_extracted_state(label: str, run_dir: Path) -> list[str]:
+def validate_extracted_state(
+    label: str,
+    run_dir: Path,
+    challenge: str = DEFAULT_CHALLENGE,
+) -> list[str]:
+    values = derive_challenge(challenge)
     failures: list[str] = []
     state_dir = run_dir / "state-extracted"
     if not state_dir.is_dir():
         return [f"{label}: missing extracted state"]
 
-    require_contains(failures, label, state_dir, "rp_input", "host_action_rerun_id=RUN-999-rerun")
-    require_contains(failures, label, state_dir, "rp_input", "host_action_rerun_parent=RUN-999")
+    require_contains(failures, label, state_dir, "rp_input", f"host_action_rerun_id={values.rerun_id}")
+    require_contains(failures, label, state_dir, "rp_input", f"host_action_rerun_parent={values.run_id}")
     require_contains(failures, label, state_dir, "rp_input", "host_action_rerun_provider=template")
     require_contains(failures, label, state_dir, "rp_input", "host_action_dataset=registered")
     require_contains(failures, label, state_dir, "rp_input", "host_action_dataset_title=Reusable response table")
     require_contains(failures, label, state_dir, "rp_input", "host_action_library_citation=agentlibrary2026")
     require_contains(failures, label, state_dir, "rp_input", "host_action_template_name=Reusable response comparison")
-    require_contains(failures, label, state_dir, "rp_runner", "host_action_rerun=usable-run:RUN-999-rerun;parent=RUN-999;status=completed")
+    require_contains(failures, label, state_dir, "rp_runner", f"host_action_rerun=usable-run:{values.rerun_id};parent={values.run_id};status=completed")
     require_contains(failures, label, state_dir, "rp_runner", "host_action_kind=research_rerun")
     require_contains(failures, label, state_dir, "rp_lit", "host_action_literature_query=agent workflow provenance")
     require_contains(failures, label, state_dir, "rp_lit", "host_action_protocol_title=Agent workflow evidence protocol")
     require_contains(failures, label, state_dir, "rp_knowledge", "host_action_evidence_included=3")
-    require_contains(failures, label, state_dir, "rp_report_text", "host_report_rerun_id=RUN-999-rerun")
-    require_contains(failures, label, state_dir, "rp_report_text", "host_report_rerun_parent=RUN-999")
-    require_contains(failures, label, state_dir, "rp_artifact_manifest", "host_manifest_rerun=RUN-999-rerun;parent=RUN-999;status=ready")
-    require_contains(failures, label, state_dir, "rp_artifact", "host_artifact_input=reads_R1.fastq;kind=fastq;sha256=sha-input-999;bytes=2048;source=upload")
-    require_contains(failures, label, state_dir, "rp_artifact", "host_artifact_derive=raw-counts.csv;output=normalized-counts.csv;operation=normalize;stage=analyze;sha256=sha-derived-999")
+    require_contains(failures, label, state_dir, "rp_report_text", f"host_report_rerun_id={values.rerun_id}")
+    require_contains(failures, label, state_dir, "rp_report_text", f"host_report_rerun_parent={values.run_id}")
+    require_contains(failures, label, state_dir, "rp_artifact_manifest", f"host_manifest_rerun={values.rerun_id};parent={values.run_id};status=ready")
+    require_contains(failures, label, state_dir, "rp_artifact", f"host_artifact_input=reads_R1.fastq;kind=fastq;sha256={values.input_sha256};bytes=2048;source=upload")
+    require_contains(failures, label, state_dir, "rp_artifact", f"host_artifact_derive=raw-counts.csv;output=normalized-counts.csv;operation=normalize;stage=analyze;sha256={values.derived_sha256}")
     require_contains(failures, label, state_dir, "rp_stage_log", "host_artifact_log=align.log;stage=align;level=warn;message=quality_gate_retry")
     require_contains(failures, label, state_dir, "rp_chart_data", "host_artifact_chart=qc-chart.json;type=line;data_file=normalized-counts.csv;points=12")
     require_contains(failures, label, state_dir, "rp_package", "host_artifact_package=artifact-bundle.zip;manifest=artifact-manifest.json;files=5;status=ready")
-    require_contains(failures, label, state_dir, "rp_artifact_manifest", "host_artifact_manifest_derive=raw-counts.csv;output=normalized-counts.csv;operation=normalize;stage=analyze;sha256=sha-derived-999")
-    require_contains(failures, label, state_dir, "rp_stage_dag", "host_workflow_id=wf-host-999")
+    require_contains(failures, label, state_dir, "rp_artifact_manifest", f"host_artifact_manifest_derive=raw-counts.csv;output=normalized-counts.csv;operation=normalize;stage=analyze;sha256={values.derived_sha256}")
+    require_contains(failures, label, state_dir, "rp_stage_dag", f"host_workflow_id={values.workflow_id}")
     require_contains(failures, label, state_dir, "rp_stage_dag", "host_workflow_dag=ingest>analyze>report")
-    require_contains(failures, label, state_dir, "rp_stage_state", "host_workflow_run_id=RUN-999")
+    require_contains(failures, label, state_dir, "rp_stage_state", f"host_workflow_run_id={values.run_id}")
     require_contains(failures, label, state_dir, "rp_stage_state", "host_workflow_stage_action=align;attempt=2;status=failed;command=align_reads;duration_ms=1200")
-    require_contains(failures, label, state_dir, "rp_cache_index", "host_workflow_cache_action=profile;key=cache:RUN-999:profile;result=hit;policy=content")
+    require_contains(failures, label, state_dir, "rp_cache_index", f"host_workflow_cache_action=profile;key=cache:{values.run_id}:profile;result=hit;policy=content")
     require_contains(failures, label, state_dir, "rp_retry_plan", "host_workflow_retry_action=align;reason=quality_gate;next_attempt=3;decision=rerun_stage")
-    require_contains(failures, label, state_dir, "rp_runner", "host_action_workflow=wf-host-999;run_id=RUN-999;engine=host-runner;status=ready")
+    require_contains(failures, label, state_dir, "rp_runner", f"host_action_workflow={values.workflow_id};run_id={values.run_id};engine=host-runner;status=ready")
     require_contains(failures, label, state_dir, "rp_artifact_manifest", "host_workflow_artifact_action=align.bam;kind=alignment;sha256=sha-host-artifact;bytes=4096")
     require_contains(failures, label, state_dir, "rp_report_text", "host_workflow_report_action=workflow-report.md;format=markdown;sections=5;status=ready")
     require_contains(failures, label, state_dir, "rp_llm_packets", "host_llm_packet_request=host-q1")
@@ -692,6 +917,7 @@ def run_target(
     chapter: str,
     init_proc: str,
     pass_marker: str,
+    challenge: str = DEFAULT_CHALLENGE,
 ) -> dict[str, object]:
     if work_dir.is_symlink():
         raise ValueError(f"seeded action work directory is a symlink: {work_dir}")
@@ -706,11 +932,13 @@ def run_target(
         shutil.rmtree(state_dir)
     state_dir.mkdir(parents=True, exist_ok=True)
 
+    actions = seeded_actions(challenge)
     print(
-        f"seeded_action_state: {label} start chapter={chapter} init={init_proc} action_count={len(seeded_actions())} log={run_dir / 'ucore-run.log'}",
+        f"seeded_action_state: {label} start chapter={chapter} init={init_proc} action_count={len(actions)} challenge={challenge} log={run_dir / 'ucore-run.log'}",
         flush=True,
     )
-    prepare_summary = prepare_action_state(seeded_actions(), state_dir, run_dir)
+    prepare_summary = prepare_action_state(actions, state_dir, run_dir)
+    challenge_receipt = write_challenge_input_receipt(run_dir, challenge, actions)
     run_summary = run_seeded_ucore(
         repo_dir,
         run_dir,
@@ -721,7 +949,12 @@ def run_target(
         pass_marker=pass_marker,
         target_identity=label,
     )
-    failures = validate_seed_package(label, run_dir) + validate_extracted_state(label, run_dir)
+    bind_run_summary_to_challenge(run_dir, run_summary, challenge_receipt)
+    failures = (
+        validate_challenge_binding(label, run_dir, challenge)
+        + validate_seed_package(label, run_dir, challenge)
+        + validate_extracted_state(label, run_dir, challenge)
+    )
     if not run_summary.get("passed"):
         failures.append(f"{label}: qemu run failed")
     if int(run_summary.get("extracted_state_files", 0) or 0) < 200:
@@ -740,6 +973,8 @@ def run_target(
         "label": label,
         "repo_dir": str(repo_dir),
         "run_dir": str(run_dir),
+        "challenge": challenge,
+        "challenge_receipt": challenge_receipt,
         "prepare": prepare_summary,
         "run": run_summary,
         "failures": failures,
@@ -747,27 +982,56 @@ def run_target(
     }
 
 
-def run_check(root: Path, work_dir: Path, timeout: int, wsl_distro: str) -> dict[str, object]:
-    plain = run_target(
-        "plain",
-        root / "baseline_ucore",
-        work_dir,
-        timeout,
-        wsl_distro,
-        chapter="platform_seeded",
-        init_proc="rp_seed_orch",
-        pass_marker="rp_orch: passed",
-    )
-    agentos = run_target(
-        "agentos",
-        root,
-        work_dir,
-        timeout,
-        wsl_distro,
-        chapter="platform_agentos",
-        init_proc="rp_agentos_orch",
-        pass_marker="rp_agentos_orch: passed",
-    )
+def normalize_target_order(value: str) -> tuple[str, str]:
+    orders = {
+        "plain-agentos": ("plain", "agentos"),
+        "agentos-plain": ("agentos", "plain"),
+    }
+    try:
+        return orders[value]
+    except KeyError as error:
+        raise ValueError(f"unsupported target order: {value}") from error
+
+
+def run_check(
+    root: Path,
+    work_dir: Path,
+    timeout: int,
+    wsl_distro: str,
+    target_order: str = "plain-agentos",
+    challenge: str = DEFAULT_CHALLENGE,
+) -> dict[str, object]:
+    derive_challenge(challenge)
+    target_specs = {
+        "plain": {
+            "repo_dir": root / "baseline_ucore",
+            "chapter": "platform_seeded",
+            "init_proc": "rp_seed_orch",
+            "pass_marker": "rp_orch: passed",
+        },
+        "agentos": {
+            "repo_dir": root,
+            "chapter": "platform_agentos",
+            "init_proc": "rp_agentos_orch",
+            "pass_marker": "rp_agentos_orch: passed",
+        },
+    }
+    results: dict[str, dict[str, object]] = {}
+    for label in normalize_target_order(target_order):
+        spec = target_specs[label]
+        results[label] = run_target(
+            label,
+            spec["repo_dir"],
+            work_dir,
+            timeout,
+            wsl_distro,
+            chapter=str(spec["chapter"]),
+            init_proc=str(spec["init_proc"]),
+            pass_marker=str(spec["pass_marker"]),
+            challenge=challenge,
+        )
+    plain = results["plain"]
+    agentos = results["agentos"]
     failures = list(plain["failures"]) + list(agentos["failures"])
     coverage = seeded_route_coverage(root)
     if coverage.get("status") == "failed":
@@ -775,8 +1039,10 @@ def run_check(root: Path, work_dir: Path, timeout: int, wsl_distro: str) -> dict
     return {
         "status": "ready" if not failures else "failed",
         "action": "/actions/research/rerun",
-        "action_count": len(seeded_actions()),
-        "action_kinds": seeded_action_kinds(),
+        "action_count": len(seeded_actions(challenge)),
+        "action_kinds": seeded_action_kinds(challenge),
+        "challenge": challenge,
+        "target_order": target_order,
         "coverage": coverage,
         "plain": plain,
         "agentos": agentos,
@@ -795,19 +1061,38 @@ def main() -> int:
     parser.add_argument("--work-dir", type=Path, default=Path("/tmp/agentos-seeded-action-state"))
     parser.add_argument("--timeout", type=int, default=180)
     parser.add_argument("--wsl-distro", default="Ubuntu")
+    parser.add_argument(
+        "--target-order",
+        choices=("plain-agentos", "agentos-plain"),
+        default="plain-agentos",
+    )
+    parser.add_argument(
+        "--challenge",
+        type=parse_challenge,
+        default=DEFAULT_CHALLENGE,
+        help="Per-boot challenge matching ch-[0-9]{12}; the default preserves full-verify compatibility.",
+    )
     parser.add_argument("--json-out", type=Path)
     args = parser.parse_args()
 
-    summary = run_check(root, args.work_dir, args.timeout, args.wsl_distro)
+    summary = run_check(
+        root,
+        args.work_dir,
+        args.timeout,
+        args.wsl_distro,
+        args.target_order,
+        args.challenge,
+    )
     if args.json_out:
         write_json(args.json_out, summary)
     coverage = summary.get("coverage", {})
     if not isinstance(coverage, dict):
         coverage = {}
     print(
-        "seeded_action_state: action={action} action_count={action_count} host_routes={host_routes} seeded_routes={seeded_routes} seeded_kinds={seeded_kinds} plain={plain_status} agentos={agentos_status} status={status}".format(
+        "seeded_action_state: action={action} action_count={action_count} challenge={challenge} host_routes={host_routes} seeded_routes={seeded_routes} seeded_kinds={seeded_kinds} plain={plain_status} agentos={agentos_status} status={status}".format(
             action=summary["action"],
             action_count=summary["action_count"],
+            challenge=summary["challenge"],
             host_routes=coverage.get("host_action_routes", "skipped"),
             seeded_routes=coverage.get("seeded_known_routes", "skipped"),
             seeded_kinds=coverage.get("seeded_host_kinds", coverage.get("seeded_kinds", "skipped")),

@@ -1,0 +1,72 @@
+{
+  "experiments": [
+    {
+      "baseline": {"cache": "forced-scan", "id": "scan", "label": "Forced metadata scan"},
+      "direction": "lower_is_better",
+      "id": "file_query",
+      "label": "Metadata file query",
+      "loads": [24, 64, 96],
+      "operation_counts": [16, 16, 16],
+      "claim_gate": {
+        "minimum_absolute_improvement_us": 5,
+        "minimum_baseline_duration_us": 20,
+        "minimum_relative_improvement_percent": 5
+      },
+      "selector": 17,
+      "task": "task4",
+      "treatment": {"cache": "ready-index", "id": "index", "label": "Ready metadata index"},
+      "unit": "us/query"
+    },
+    {
+      "baseline": {"cache": "warm", "id": "scalar", "label": "Scalar tool calls"},
+      "direction": "lower_is_better",
+      "id": "tool_batch",
+      "label": "Tool batch execution",
+      "loads": [24, 64, 96],
+      "operation_counts": [24, 64, 96],
+      "claim_gate": {
+        "minimum_absolute_improvement_us": 5,
+        "minimum_baseline_duration_us": 20,
+        "minimum_relative_improvement_percent": 5
+      },
+      "selector": 1,
+      "task": "task2",
+      "treatment": {"cache": "warm", "id": "batch", "label": "Batched tool calls"},
+      "unit": "us"
+    },
+    {
+      "baseline": {"cache": "warm", "id": "syscall", "label": "Context syscall"},
+      "direction": "lower_is_better",
+      "id": "context_access",
+      "label": "Agent context access",
+      "loads": [24, 64, 96],
+      "operation_counts": [24, 64, 96],
+      "claim_gate": {
+        "minimum_absolute_improvement_us": 5,
+        "minimum_baseline_duration_us": 20,
+        "minimum_relative_improvement_percent": 5
+      },
+      "selector": 4703800163073925169,
+      "task": "task1",
+      "treatment": {"cache": "warm", "id": "direct", "label": "Mapped context view"},
+      "unit": "us"
+    }
+  ],
+  "claim_family": {
+    "familywise_alpha": 0.05,
+    "hypotheses": ["file_query", "tool_batch", "context_access"],
+    "id": "agentos-mechanism-headlines-v1",
+    "load_gate": "intersection",
+    "method": "bonferroni"
+  },
+  "kind": "agentos-evaluation-suite",
+  "pairing": {
+    "independent_unit": "guest_boot",
+    "maximum_order_imbalance": 1,
+    "minimum_boots": 7,
+    "minimum_inner_pairs": 7,
+    "orders": ["AB", "BA"]
+  },
+  "schema_version": 1,
+  "suite_id": "agentos-mechanism-evaluation-v1"
+}

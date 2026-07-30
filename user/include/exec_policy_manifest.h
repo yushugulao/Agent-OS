@@ -101,6 +101,10 @@ static inline void exec_manifest_worker_image(const char *source,
 	X("agentbench_ucore", "agentbench_ucore", \
 	  EXEC_MANIFEST_F_BOOT_SEALED, EXEC_MANIFEST_ROLE_ALL, 0, \
 	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
+	X("agenteval_ucore", "agenteval_ucore", \
+	  EXEC_MANIFEST_F_BOOT_SEALED, \
+	  EXEC_MANIFEST_ROLE_BIT(EXEC_MANIFEST_ROLE_ORCHESTRATOR), 0, \
+	  EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
 	X("labbench_ucore", "labbench_ucore", EXEC_MANIFEST_F_BOOT_SEALED, \
 	  EXEC_MANIFEST_ROLE_ALL, 0, EXEC_MANIFEST_VFS_PROFILE_WORKFLOW) \
 	X("labdemo_ucore", "labdemo_ucore", EXEC_MANIFEST_F_BOOT_SEALED, \

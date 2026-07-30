@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "kind": "agentos-kernel-cost-config",
+  "targets": [
+    {
+      "id": "baseline",
+      "role": "baseline",
+      "label": "baseline_ucore",
+      "required_relative_path": "baseline_ucore/build/kernel"
+    },
+    {
+      "id": "agentos",
+      "role": "treatment",
+      "label": "AgentOS",
+      "required_relative_path": "build/kernel"
+    }
+  ],
+  "metrics": [
+    {
+      "id": "elf_file_bytes",
+      "label": "Kernel ELF file size",
+      "unit": "bytes",
+      "direction": "lower_is_better",
+      "source": "filesystem",
+      "task": "task6"
+    },
+    {
+      "id": "text_bytes",
+      "label": "Kernel text size",
+      "unit": "bytes",
+      "direction": "lower_is_better",
+      "source": "gnu-size",
+      "task": "task6"
+    },
+    {
+      "id": "data_bytes",
+      "label": "Kernel data size",
+      "unit": "bytes",
+      "direction": "lower_is_better",
+      "source": "gnu-size",
+      "task": "task6"
+    },
+    {
+      "id": "bss_bytes",
+      "label": "Kernel BSS size",
+      "unit": "bytes",
+      "direction": "lower_is_better",
+      "source": "gnu-size",
+      "task": "task6"
+    }
+  ],
+  "tool": {
+    "output_format": "gnu-berkeley-decimal",
+    "version_arguments": [
+      "--version"
+    ],
+    "measurement_arguments": [
+      "-B"
+    ]
+  },
+  "limits": {
+    "timeout_seconds": 10,
+    "max_output_bytes": 65536
+  }
+}

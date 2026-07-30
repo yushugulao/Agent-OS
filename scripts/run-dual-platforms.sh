@@ -190,6 +190,7 @@ stage_begin "seeded-dual-run"
 "${PYTHON_BIN}" "${ROOT_DIR}/host_tools/check_seeded_action_state.py" \
 	--work-dir "${seeded_work_dir}" \
 	--timeout "${SEEDED_ACTION_TIMEOUT:-600}" \
+	--target-order "${SEEDED_TARGET_ORDER:-plain-agentos}" \
 	--json-out "${seeded_summary}"
 stage_finish ready
 

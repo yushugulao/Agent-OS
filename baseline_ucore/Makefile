@@ -12,8 +12,19 @@ AS = $(TOOLPREFIX)gcc
 LD = $(TOOLPREFIX)ld
 OBJCOPY = $(TOOLPREFIX)objcopy
 OBJDUMP = $(TOOLPREFIX)objdump
-PY = python3
+PYTHON_BIN ?= python3
+PY = $(PYTHON_BIN)
 GDB = $(TOOLPREFIX)gdb
+# Preserve raw tool identities for configuration and recursive-make
+# propagation.  Quote complete executable words only when the shell sees them.
+shell_quote = '$(subst ','"'"',$(1))'
+CC_CMD = $(call shell_quote,$(CC))
+AS_CMD = $(call shell_quote,$(AS))
+LD_CMD = $(call shell_quote,$(LD))
+OBJCOPY_CMD = $(call shell_quote,$(OBJCOPY))
+OBJDUMP_CMD = $(call shell_quote,$(OBJDUMP))
+PYTHON_CMD = $(call shell_quote,$(PY))
+GDB_CMD = $(call shell_quote,$(GDB))
 CP = cp
 BUILDDIR = build
 C_SRCS = $(wildcard $K/*.c)
@@ -32,7 +43,7 @@ INIT_PROC ?= usershell
 
 $(BUILDDIR)/$(K)/initproc.o: $(K)/initproc.S .FORCE
 $(K)/initproc.S: scripts/initproc.py .FORCE
-	@$(PY) scripts/initproc.py $(INIT_PROC)
+	@$(PYTHON_CMD) scripts/initproc.py $(INIT_PROC)
 
 CFLAGS = -Wall -Werror -O -fno-omit-frame-pointer -ggdb
 CFLAGS += -MD
@@ -40,7 +51,7 @@ CFLAGS += -march=rv64imac_zicsr_zifencei -mabi=lp64
 CFLAGS += -mcmodel=medany
 CFLAGS += -ffreestanding -fno-common -nostdlib -mno-relax
 CFLAGS += -I$K
-CFLAGS += $(shell $(CC) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
+CFLAGS += $(shell $(CC_CMD) -fno-stack-protector -E -x c /dev/null >/dev/null 2>&1 && echo -fno-stack-protector)
 
 KSTACK_SIZE_BYTES ?= 16384
 KSTACK_BOOT_SIZE_BYTES ?= 65536
@@ -64,7 +75,7 @@ override KSTACK_REQUIRED_CFLAGS += -DKERNELVEC_FRAME_SIZE=$(KERNELVEC_FRAME_SIZE
 override KSTACK_REQUIRED_CFLAGS += -fcallgraph-info=su
 override KSTACK_REQUIRED_CFLAGS += -Wframe-larger-than=$(KSTACK_FRAME_BUDGET)
 override KSTACK_REQUIRED_CFLAGS += -Wstack-usage=$(KSTACK_FRAME_BUDGET) -Wvla -Walloca
-override KSTACK_REQUIRED_CFLAGS += $(shell $(CC) -fstack-clash-protection -E -x c /dev/null >/dev/null 2>&1 && echo -fstack-clash-protection)
+override KSTACK_REQUIRED_CFLAGS += $(shell $(CC_CMD) -fstack-clash-protection -E -x c /dev/null >/dev/null 2>&1 && echo -fstack-clash-protection)
 
 ifneq ($(FS_ICACHE_SIZE),)
 CFLAGS += -DFS_ICACHE_SIZE=$(FS_ICACHE_SIZE)
@@ -111,10 +122,10 @@ CFLAGS += -D LOG_LEVEL_TRACE
 endif
 
 # Disable PIE when possible (for Ubuntu 16.10 toolchain)
-ifneq ($(shell $(CC) -dumpspecs 2>/dev/null | grep -e '[^f]no-pie'),)
+ifneq ($(shell $(CC_CMD) -dumpspecs 2>/dev/null | grep -e '[^f]no-pie'),)
 CFLAGS += -fno-pie -no-pie
 endif
-ifneq ($(shell $(CC) -dumpspecs 2>/dev/null | grep -e '[^f]nopie'),)
+ifneq ($(shell $(CC_CMD) -dumpspecs 2>/dev/null | grep -e '[^f]nopie'),)
 CFLAGS += -fno-pie -nopie
 endif
 
@@ -145,16 +156,16 @@ LDFLAGS = -z max-page-size=4096
 
 $(AS_OBJS): $(BUILDDIR)/$K/%.o : $K/%.S
 	@mkdir -p $(@D)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC_CMD) $(CFLAGS) -c $< -o $@
 
 $(C_OBJS): $(BUILDDIR)/$K/%.o : $K/%.c  $(BUILDDIR)/$K/%.d
 	@mkdir -p $(@D)
 	@rm -f $(patsubst %.o,%.ci,$@)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC_CMD) $(CFLAGS) -c $< -o $@
 
 $(HEADER_DEP): $(BUILDDIR)/$K/%.d : $K/%.c
 	@mkdir -p $(@D)
-	@set -e; rm -f $@; $(CC) -MM $< $(INCLUDEFLAGS) > $@.$$$$; \
+	@set -e; rm -f $@; $(CC_CMD) -MM $< $(INCLUDEFLAGS) > $@.$$$$; \
         sed 's,\($*\)\.o[ :]*,\1.o $@ : ,g' < $@.$$$$ > $@; \
         rm -f $@.$$$$
 
@@ -166,20 +177,20 @@ INIT_PROC ?= usershell
 build: build/kernel
 
 build/kernel: $(OBJS) os/kernel.ld ../scripts/check-kernel-stack-usage.py $(KSTACK_BUILD_CONFIG) Makefile
-	$(PY) ../scripts/check-kernel-stack-usage.py \
+	$(PYTHON_CMD) ../scripts/check-kernel-stack-usage.py \
 		--callgraph-dir $(BUILDDIR)/$(K) --source-dir $(K) \
 		--stack-size $(KSTACK_SIZE_BYTES) --guard-size $(KSTACK_GUARD_SIZE_BYTES) \
 		--boot-stack-size $(KSTACK_BOOT_SIZE_BYTES) \
 		--boot-root $(KSTACK_BOOT_ROOT) \
 		--safety-margin $(KSTACK_SAFETY_MARGIN) \
 		--interrupt-entry $(KERNELVEC_FRAME_SIZE_BYTES) $(KSTACK_POLICY_ARGS)
-	$(LD) $(LDFLAGS) -T os/kernel.ld -o $(BUILDDIR)/kernel $(OBJS)
-	$(OBJDUMP) -S $(BUILDDIR)/kernel > $(BUILDDIR)/kernel.asm
-	$(OBJDUMP) -t $(BUILDDIR)/kernel | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(BUILDDIR)/kernel.sym
+	$(LD_CMD) $(LDFLAGS) -T os/kernel.ld -o $(BUILDDIR)/kernel $(OBJS)
+	$(OBJDUMP_CMD) -S $(BUILDDIR)/kernel > $(BUILDDIR)/kernel.asm
+	$(OBJDUMP_CMD) -t $(BUILDDIR)/kernel | sed '1,/SYMBOL TABLE/d; s/ .* / /; /^$$/d' > $(BUILDDIR)/kernel.sym
 	@echo 'Build kernel done'
 
 kernel-stack-check: build/kernel
-	@$(PY) ../scripts/check-kernel-stack-usage.py \
+	@$(PYTHON_CMD) ../scripts/check-kernel-stack-usage.py \
 		--callgraph-dir $(BUILDDIR)/$(K) --source-dir $(K) \
 		--stack-size $(KSTACK_SIZE_BYTES) --guard-size $(KSTACK_GUARD_SIZE_BYTES) \
 		--boot-stack-size $(KSTACK_BOOT_SIZE_BYTES) \
@@ -202,6 +213,7 @@ BOOTLOADER	:= default
 endif
 
 QEMU ?= qemu-system-riscv64
+QEMU_CMD = $(call shell_quote,$(QEMU))
 QEMUOPTS = \
 	-nographic \
 	-machine virt \
@@ -221,41 +233,42 @@ $(F)/fs-copy.img: $(F)/fs.img
 		trap - 0 1 2 3 15
 
 run: build/kernel $(F)/fs-copy.img
-	$(QEMU) $(QEMUOPTS)
+	$(QEMU_CMD) $(QEMUOPTS)
 
 # Start only already-built artifacts. Host-side observers use this target so
 # compiler output can never be interpreted as guest runtime output.
 run-prebuilt:
 	@test -f build/kernel || { echo "missing prebuilt kernel" >&2; exit 1; }
 	@test -f $(F)/fs-copy.img || { echo "missing prebuilt filesystem image" >&2; exit 1; }
-	$(QEMU) $(QEMUOPTS)
+	$(QEMU_CMD) $(QEMUOPTS)
 
 # Reboot the current writable disk explicitly.  Normal `run` always installs
 # the freshly built userspace image so code updates cannot go stale.
 run-persist: build/kernel
 	@if [ ! -f "$(F)/fs-copy.img" ]; then $(MAKE) $(F)/fs-copy.img; fi
-	$(QEMU) $(QEMUOPTS)
+	$(QEMU_CMD) $(QEMUOPTS)
 
 # QEMU's gdb stub command line changed in 0.11
-QEMUGDB = $(shell if $(QEMU) -help | grep -q '^-gdb'; \
+QEMUGDB = $(shell if $(QEMU_CMD) -help | grep -q '^-gdb'; \
 	then echo "-gdb tcp::15234"; \
 	else echo "-s -p 15234"; fi)
 
 debug: build/kernel .gdbinit
 	@tmux new-session -d \
-		$(QEMU) $(QEMUOPTS) -S $(QEMUGDB) && \
-		tmux split-window -h "$(GDB) -ex 'target remote localhost:15234'" && \
+		$(QEMU_CMD) $(QEMUOPTS) -S $(QEMUGDB) && \
+		tmux split-window -h $(call shell_quote,$(GDB_CMD) -ex 'target remote localhost:15234') && \
 		tmux -2 attach-session -d
 
 gdbserver: build/kernel
-	$(QEMU) $(QEMUOPTS) -S $(QEMUGDB)
+	$(QEMU_CMD) $(QEMUOPTS) -S $(QEMUGDB)
 
 gdbclient:
-	$(GDB) -ex "target remote localhost:15234"
+	$(GDB_CMD) -ex "target remote localhost:15234"
 
 CHAPTER ?= $(shell git rev-parse --abbrev-ref HEAD | grep -oP 'ch\K[0-9]' || echo 8)
 
 user:
-	make -C user CHAPTER=$(CHAPTER) BASE=$(BASE)
+	$(MAKE) -C user CHAPTER=$(CHAPTER) BASE=$(BASE) \
+		TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX))
 
 test: user run

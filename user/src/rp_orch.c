@@ -28,6 +28,126 @@ static const char *const PROGRAM_NAMES[] = {
 };
 #undef RP_PROGRAM_NAME
 
+#define RP_WORKFLOW_HANDOFF_MAGIC 0x52505754U
+#define RP_WORKFLOW_COMPLETION_MAGIC 0x52505743U
+#define RP_WORKFLOW_HANDOFF_VERSION 1U
+#define RP_WORKFLOW_HANDOFF_PREFIX "--rp-workflow-timing-fd="
+#define RP_WORKFLOW_COMPLETION_PREFIX "--rp-workflow-completion-fd="
+#define RP_WORKFLOW_PHASE_ALL ((1ULL << 8) - 1)
+
+struct rp_workflow_handoff {
+	uint magic;
+	uint version;
+	uint64 start_ms;
+	uint64 ready_ms;
+	uint64 steady_start_ms;
+	uint64 phase_mask;
+	uint64 guard;
+};
+
+static uint64 workflow_handoff_mix(uint64 hash, uint64 value)
+{
+	for (int i = 0; i < 8; i++) {
+		hash ^= value & 0xff;
+		hash *= 1099511628211ULL;
+		value >>= 8;
+	}
+	return hash;
+}
+
+static uint64 workflow_handoff_guard(const struct rp_workflow_handoff *record)
+{
+	uint64 hash = 1469598103934665603ULL;
+
+	hash = workflow_handoff_mix(hash, record->magic);
+	hash = workflow_handoff_mix(hash, record->version);
+	hash = workflow_handoff_mix(hash, record->start_ms);
+	hash = workflow_handoff_mix(hash, record->ready_ms);
+	hash = workflow_handoff_mix(hash, record->steady_start_ms);
+	return workflow_handoff_mix(hash, record->phase_mask);
+}
+
+static int workflow_handoff_fd(int argc, char **argv, int argument,
+			       const char *prefix)
+{
+	int prefix_len = strlen(prefix);
+	const char *digits;
+	int fd = 0;
+
+	if (argc != 3 || argv == 0 || argv[argument] == 0 ||
+	    strncmp(argv[argument], prefix, prefix_len) != 0)
+		return -1;
+	digits = argv[argument] + prefix_len;
+	if (*digits == 0 || (digits[0] == '0' && digits[1] != 0))
+		return -1;
+	for (; *digits; digits++) {
+		int value;
+
+		if (*digits < '0' || *digits > '9')
+			return -1;
+		value = *digits - '0';
+		if (fd > (1024 - value) / 10)
+			return -1;
+		fd = fd * 10 + value;
+	}
+	return fd;
+}
+
+static int read_workflow_handoff(int argc, char **argv,
+				 struct rp_workflow_handoff *record)
+{
+	char *bytes = (char *)record;
+	char extra;
+	int received = 0;
+	int fd = workflow_handoff_fd(argc, argv, 1,
+				     RP_WORKFLOW_HANDOFF_PREFIX);
+
+	if (fd < 0)
+		return 0;
+	memset(record, 0, sizeof(*record));
+	while (received < (int)sizeof(*record)) {
+		int n = read(fd, bytes + received, sizeof(*record) - received);
+
+		if (n <= 0) {
+			close(fd);
+			return 0;
+		}
+		received += n;
+	}
+	if (read(fd, &extra, 1) != 0) {
+		close(fd);
+		return 0;
+	}
+	close(fd);
+	return record->magic == RP_WORKFLOW_HANDOFF_MAGIC &&
+	       record->version == RP_WORKFLOW_HANDOFF_VERSION &&
+	       record->phase_mask == RP_WORKFLOW_PHASE_ALL &&
+	       record->guard == workflow_handoff_guard(record) &&
+	       record->ready_ms >= record->start_ms &&
+	       record->steady_start_ms == 0;
+}
+
+static int write_workflow_completion(int fd,
+				     const struct rp_workflow_handoff *start,
+				     uint64 steady_start_ms)
+{
+	struct rp_workflow_handoff record = *start;
+	const char *bytes = (const char *)&record;
+	int written = 0;
+
+	record.magic = RP_WORKFLOW_COMPLETION_MAGIC;
+	record.steady_start_ms = steady_start_ms;
+	record.guard = workflow_handoff_guard(&record);
+	while (written < (int)sizeof(record)) {
+		int n = write(fd, bytes + written, sizeof(record) - written);
+
+		if (n <= 0)
+			return 0;
+		written += n;
+	}
+	return 1;
+}
+
 struct trusted_launch_policy {
 	const char *program;
 	const char *image;
@@ -209,6 +329,53 @@ static void record_timing(const char *program, const char *launcher,
 	rp_append_file("rp_orch_timing", line);
 }
 
+static int record_workflow_timing(uint64 workflow_start, uint64 ready_ms,
+				  uint64 steady_start, uint64 phase_mask,
+				  const char *entry, const char *handoff)
+{
+	char line[512];
+	uint64 workflow_end = get_mtime();
+	uint64 setup_elapsed;
+	uint64 exec_elapsed;
+	uint64 steady_elapsed;
+	uint64 workflow_elapsed;
+
+	if (ready_ms < workflow_start || steady_start < ready_ms ||
+	    workflow_end < steady_start)
+		return 0;
+	setup_elapsed = ready_ms - workflow_start;
+	exec_elapsed = steady_start - ready_ms;
+	steady_elapsed = workflow_end - steady_start;
+	workflow_elapsed = workflow_end - workflow_start;
+
+	rp_copy_text(line, sizeof(line),
+		     "schema=guest_workflow_timing_v3;clock=monotonic_mtime_ms;entry=");
+	rp_append_text(line, sizeof(line), entry);
+	rp_append_text(line, sizeof(line), ";handoff=");
+	rp_append_text(line, sizeof(line), handoff);
+	rp_append_text(line, sizeof(line), ";init_phase_mask=");
+	rp_append_uint_text(line, sizeof(line), phase_mask);
+	rp_append_text(line, sizeof(line),
+		       ";completion=local_final_validation;completion_phase_mask=1;start_ms=");
+	rp_append_uint_text(line, sizeof(line), workflow_start);
+	rp_append_text(line, sizeof(line), ";ready_ms=");
+	rp_append_uint_text(line, sizeof(line), ready_ms);
+	rp_append_text(line, sizeof(line), ";steady_start_ms=");
+	rp_append_uint_text(line, sizeof(line), steady_start);
+	rp_append_text(line, sizeof(line), ";end_ms=");
+	rp_append_uint_text(line, sizeof(line), workflow_end);
+	rp_append_text(line, sizeof(line), ";setup_elapsed_ms=");
+	rp_append_uint_text(line, sizeof(line), setup_elapsed);
+	rp_append_text(line, sizeof(line), ";exec_elapsed_ms=");
+	rp_append_uint_text(line, sizeof(line), exec_elapsed);
+	rp_append_text(line, sizeof(line), ";steady_elapsed_ms=");
+	rp_append_uint_text(line, sizeof(line), steady_elapsed);
+	rp_append_text(line, sizeof(line), ";workflow_elapsed_ms=");
+	rp_append_uint_text(line, sizeof(line), workflow_elapsed);
+	rp_append_text(line, sizeof(line), "\n");
+	return rp_write_file("rp_workflow_timing", line);
+}
+
 static int append_program_inventory_evidence(void)
 {
 	struct rp_evidence_program_inventory inventory;
@@ -340,11 +507,39 @@ static int run_child(const struct program_launch_policy *launch,
 	return 1;
 }
 
-int main(void)
+int main(int argc, char **argv)
 {
+	int64 steady_clock = get_mtime();
+	struct rp_workflow_handoff timing_handoff;
+	uint64 workflow_start;
+	uint64 ready_ms;
+	uint64 phase_mask;
+	int completion_fd = -1;
 	int total = (int)(sizeof(PROGRAMS) / sizeof(PROGRAMS[0]));
 	int ok = 0;
 	int in_orchestrator = orchestrator_context();
+
+	if (steady_clock < 0) {
+		printf("rp_orch: workflow_clock_failed\n");
+		return 1;
+	}
+	if (in_orchestrator) {
+		if (!read_workflow_handoff(argc, argv, &timing_handoff) ||
+		    timing_handoff.ready_ms > (uint64)steady_clock ||
+		    (completion_fd = workflow_handoff_fd(
+			     argc, argv, 2,
+			     RP_WORKFLOW_COMPLETION_PREFIX)) < 0) {
+			printf("rp_orch: workflow_handoff_invalid\n");
+			return 1;
+		}
+		workflow_start = timing_handoff.start_ms;
+		ready_ms = timing_handoff.ready_ms;
+		phase_mask = timing_handoff.phase_mask;
+	} else {
+		workflow_start = (uint64)steady_clock;
+		ready_ms = (uint64)steady_clock;
+		phase_mask = 0;
+	}
 	if (!launch_manifest_valid()) {
 		printf("rp_orch: launch_manifest_invalid\n");
 		return 1;
@@ -378,6 +573,19 @@ int main(void)
 	}
 	if (!append_program_inventory_evidence()) {
 		printf("rp_orch: program_inventory_failed\n");
+		return 1;
+	}
+	if (in_orchestrator) {
+		if (!write_workflow_completion(completion_fd, &timing_handoff,
+					       (uint64)steady_clock)) {
+			printf("rp_orch: workflow_completion_failed\n");
+			return 1;
+		}
+		close(completion_fd);
+	} else if (!record_workflow_timing(
+			   workflow_start, ready_ms, (uint64)steady_clock,
+			   phase_mask, "rp_orch", "direct")) {
+		printf("rp_orch: workflow_timing_failed\n");
 		return 1;
 	}
 	printf("rp_orch: state_ok=1\n");
