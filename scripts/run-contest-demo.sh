@@ -18,7 +18,8 @@ fi
 
 # Bind every result to committed source. Generated build/results paths are
 # ignored, so the same check remains valid after the Guest runs finish.
-commit="$("${PYTHON_BIN}" -I -S host_tools/contest_demo.py identity --root .)"
+commit="$("${PYTHON_BIN}" -I -S scripts/trusted-python-entry.py \
+	host_tools/contest_demo.py identity --root .)"
 run_id="$("${PYTHON_BIN}" -I -S -c \
 	'import secrets; print(secrets.token_hex(8))')"
 started_seconds="$("${PYTHON_BIN}" -I -S -c \
@@ -78,7 +79,8 @@ elapsed_seconds="$("${PYTHON_BIN}" -I -S -c \
 	"${started_seconds}" "${finished_seconds}")"
 
 echo "[contest-demo] 5/5 从本轮原始 Guest 日志核验并生成离线报告"
-"${PYTHON_BIN}" -I -S host_tools/contest_demo.py render \
+"${PYTHON_BIN}" -I -S scripts/trusted-python-entry.py \
+	host_tools/contest_demo.py render \
 	--source-root . \
 	--functional-log "${OUTPUT_DIR}/functional-qemu.log" \
 	--benchmark-log "${OUTPUT_DIR}/benchmark-qemu.log" \

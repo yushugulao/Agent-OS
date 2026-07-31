@@ -222,8 +222,9 @@ def test_repository_wiring_and_fstat_reauthorization() -> None:
     assert runner.count("build_and_run ") == 3
     for case in ("agentfinal_ucore", "agentbench_ucore", "labdemo_ucore"):
         assert case in runner
-    assert "contest_demo.py identity --root ." in runner
-    assert "contest_demo.py render" in runner
+    assert "host_tools/contest_demo.py identity --root ." in runner
+    assert "host_tools/contest_demo.py render" in runner
+    assert runner.count("scripts/trusted-python-entry.py") == 2
     assert not any(token in runner for token in ("curl ", "wget ", "http://", "https://"))
     assert "vfs_cred_from_proc(p, &cred);" in syscall
     assert "vfs_inode_authorize(f->ip, &cred, VFS_OP_READ)" in syscall
