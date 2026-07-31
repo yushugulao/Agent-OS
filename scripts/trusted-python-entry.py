@@ -16,6 +16,7 @@ ALLOWED_ENTRYPOINTS = frozenset(
     {
         "host_tools/agenteval_measurement_source_contract.py",
         "host_tools/compatibility_overhead.py",
+        "host_tools/contest_demo.py",
         "host_tools/evaluation_bundle.py",
         "host_tools/evaluation_campaign.py",
         "host_tools/evaluation_contract.py",

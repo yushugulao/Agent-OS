@@ -217,6 +217,7 @@ def test_repository_wiring_and_fstat_reauthorization() -> None:
     runner = (ROOT / "scripts" / "run-contest-demo.sh").read_text(encoding="utf-8")
     syscall = (ROOT / "os" / "syscall.c").read_text(encoding="utf-8")
     agentvfs = (ROOT / "user" / "src" / "agentvfs_ucore.c").read_text(encoding="utf-8")
+    trusted_entry = (ROOT / "scripts" / "trusted-python-entry.py").read_text(encoding="utf-8")
     assert "contest-demo:" in makefile and "contest-demo-check:" in makefile
     assert runner.count("scripts/agent_test_runner.py") == 1
     assert runner.count("build_and_run ") == 3
@@ -225,6 +226,7 @@ def test_repository_wiring_and_fstat_reauthorization() -> None:
     assert "host_tools/contest_demo.py identity --root ." in runner
     assert "host_tools/contest_demo.py render" in runner
     assert runner.count("scripts/trusted-python-entry.py") == 2
+    assert '"host_tools/contest_demo.py"' in trusted_entry
     assert not any(token in runner for token in ("curl ", "wget ", "http://", "https://"))
     assert "vfs_cred_from_proc(p, &cred);" in syscall
     assert "vfs_inode_authorize(f->ip, &cred, VFS_OP_READ)" in syscall
