@@ -277,6 +277,24 @@ class CalibrationTests(unittest.TestCase):
             self.assertEqual(list(root.rglob("*.pyc")), [])
             self.assertFalse((scripts / "__pycache__").exists())
 
+    def test_msys_python_identity_uses_the_native_executable_path(self):
+        with tempfile.TemporaryDirectory() as temp:
+            alias = Path(temp) / "python3"
+            native = Path(temp) / "python3.exe"
+            alias.write_bytes(b"same-python")
+            native.write_bytes(b"same-python")
+            with mock.patch.object(calibration.sys, "platform", "cygwin"), \
+                    mock.patch.object(calibration.sys, "executable", str(alias)):
+                self.assertEqual(
+                    calibration.canonical_python_executable(),
+                    str(native.resolve()),
+                )
+                native.write_bytes(b"different-python")
+                with self.assertRaisesRegex(
+                    calibration.CalibrationError, "aliases differ"
+                ):
+                    calibration.canonical_python_executable()
+
     def test_calibration_child_environment_preserves_windows_system_paths(self):
         windows_paths = {
             "ALLUSERSPROFILE": r"C:\ProgramData",

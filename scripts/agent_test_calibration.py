@@ -521,6 +521,26 @@ def locked_tool_path(tools):
     return os.pathsep.join(directories)
 
 
+def canonical_python_executable():
+    executable = str(sys.executable)
+    if sys.platform != "cygwin" or executable.casefold().endswith(".exe"):
+        return executable
+    executable_alias = Path(executable)
+    native_executable = Path(executable + ".exe")
+    if not native_executable.is_file():
+        raise CalibrationError("MSYS2 Python executable lacks its native path")
+    _, alias_identity = regular_file(executable_alias, "Python executable alias")
+    native_path, native_identity = regular_file(
+        native_executable, "Python native executable"
+    )
+    if (
+        alias_identity["bytes"] != native_identity["bytes"]
+        or alias_identity["sha256"] != native_identity["sha256"]
+    ):
+        raise CalibrationError("MSYS2 Python executable aliases differ")
+    return str(native_path)
+
+
 def run_command(argv, root, label, allow_failure=False, environment=None):
     try:
         result = subprocess.run(
@@ -1905,7 +1925,7 @@ def capture_environment_tools(profile):
             os.environ.get("HOST_CC", os.environ.get("HOSTCC", "cc")),
             "host C compiler",
         ),
-        "python": executable_identity(sys.executable, "Python"),
+        "python": executable_identity(canonical_python_executable(), "Python"),
         "bash": executable_identity(
             os.environ.get("BASH_BIN", "bash"), "Bash"
         ),
