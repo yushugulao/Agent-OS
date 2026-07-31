@@ -19,6 +19,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import agent_test_calibration as calibration
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 class CalibrationTests(unittest.TestCase):
     def git(self, root, *args):
         return subprocess.run(
@@ -203,6 +206,18 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(environment["PYTHONHASHSEED"], "0")
         self.assertEqual(environment["PYTHONNOUSERSITE"], "1")
         self.assertEqual(environment["TMPDIR"], "/tmp")
+
+    def test_calibration_runner_python_cannot_pollute_source_checkout(self):
+        runner = (ROOT / "scripts" / "run-agent-tests.sh").read_text(
+            encoding="utf-8"
+        )
+        invocations = [
+            line for line in runner.splitlines() if '"${PYTHON_BIN}"' in line
+        ]
+        self.assertEqual(len(invocations), 13)
+        self.assertTrue(
+            all('"${PYTHON_BIN}" -I -S -B' in line for line in invocations)
+        )
 
     def test_calibration_child_environment_preserves_windows_system_paths(self):
         windows_paths = {

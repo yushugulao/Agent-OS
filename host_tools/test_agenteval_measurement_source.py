@@ -209,7 +209,7 @@ def main() -> int:
     python_shadow = dict(dependency_texts)
     python_shadow["scripts/run-agent-tests.sh"] = _replace_once(
         python_shadow["scripts/run-agent-tests.sh"],
-        '"${PYTHON_BIN}" -I -S scripts/agent_test_runner.py',
+        '"${PYTHON_BIN}" -I -S -B scripts/agent_test_runner.py',
         '"${PYTHON_BIN}" scripts/agent_test_runner.py',
     )
     _reject_compile(python_shadow)

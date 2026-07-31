@@ -125,7 +125,7 @@ if [[ "${AGENT_TEST_CALIBRATE}" == "1" ]]; then
 		echo "[agent-tests] calibration outputs must start new and empty" >&2
 		exit 1
 	fi
-	AGENT_TEST_CALIBRATION_PLAN_SHA256="$("${PYTHON_BIN}" -I -S - "${AGENT_TEST_CALIBRATION_PLAN}" <<'PY'
+	AGENT_TEST_CALIBRATION_PLAN_SHA256="$("${PYTHON_BIN}" -I -S -B - "${AGENT_TEST_CALIBRATION_PLAN}" <<'PY'
 import hashlib
 import sys
 from pathlib import Path
@@ -140,7 +140,7 @@ PY
 		local output_name="$1"
 		local nonce
 		while :; do
-			nonce="$("${PYTHON_BIN}" -I -S -c 'import secrets; print(secrets.token_hex(32))')"
+			nonce="$("${PYTHON_BIN}" -I -S -B -c 'import secrets; print(secrets.token_hex(32))')"
 			if [[ -z "${calibration_nonce_seen[${nonce}]:-}" ]]; then
 				calibration_nonce_seen["${nonce}"]=1
 				printf -v "${output_name}" '%s' "${nonce}"
@@ -159,12 +159,12 @@ fi
 if [[ "${AGENT_TEST_CALIBRATE}" == "0" ]]; then
 	: >"${AGENT_TEST_TIMING_FILE}"
 fi
-"${PYTHON_BIN}" -I -S scripts/test-sync-owner-wiring.py
-"${PYTHON_BIN}" -I -S scripts/test-wait-atomic-wiring.py
-"${PYTHON_BIN}" -I -S scripts/check-wait-queue-contract.py
+"${PYTHON_BIN}" -I -S -B scripts/test-sync-owner-wiring.py
+"${PYTHON_BIN}" -I -S -B scripts/test-wait-atomic-wiring.py
+"${PYTHON_BIN}" -I -S -B scripts/check-wait-queue-contract.py
 if [[ -z "${AGENT_TEST_CASE:-}" && "${AGENT_TEST_CALIBRATE}" == "0" &&
       "${AGENT_TEST_DURATION_PROFILE}" == "local-e3" ]]; then
-	"${PYTHON_BIN}" -I -S scripts/check-kernel-budgets.py \
+	"${PYTHON_BIN}" -I -S -B scripts/check-kernel-budgets.py \
 		--check agent-test-policy \
 		--config ci/kernel-budgets.json
 fi
@@ -172,7 +172,7 @@ fi
 check_suite_budget() {
 	local calibration_args=()
 	if [[ "${AGENT_TEST_DURATION_PROFILE}" == "none" ]]; then
-		"${PYTHON_BIN}" -I -S scripts/check-kernel-budgets.py \
+		"${PYTHON_BIN}" -I -S -B scripts/check-kernel-budgets.py \
 			--check agent-test-timing-inventory \
 			--config ci/kernel-budgets.json \
 			--agent-test-timing-file "${AGENT_TEST_TIMING_FILE}"
@@ -182,7 +182,7 @@ check_suite_budget() {
 	if [[ "${AGENT_TEST_CALIBRATE}" == "1" ]]; then
 		calibration_args+=(--agent-test-calibration)
 	fi
-	"${PYTHON_BIN}" -I -S scripts/check-kernel-budgets.py \
+	"${PYTHON_BIN}" -I -S -B scripts/check-kernel-budgets.py \
 		--check agent-tests \
 		--config ci/kernel-budgets.json \
 		--agent-test-timing-file "${AGENT_TEST_TIMING_FILE}" \
@@ -207,7 +207,7 @@ check_case_contract() {
 
 	case "${init_proc}" in
 	agenteval_ucore)
-		"${PYTHON_BIN}" -I -S scripts/trusted-python-entry.py \
+		"${PYTHON_BIN}" -I -S -B scripts/trusted-python-entry.py \
 			host_tools/evaluation_contract.py validate-guest \
 			--suite ci/evaluation-suite.json \
 			--log "${log_file}" \
@@ -408,7 +408,7 @@ run_case() {
 		FUNCTIONAL_REVIEW_BUILD=1 \
 		"${build_profile_args[@]}"
 	cp nfs/fs.img nfs/fs-copy.img
-	if "${PYTHON_BIN}" -I -S scripts/agent_test_runner.py \
+	if "${PYTHON_BIN}" -I -S -B scripts/agent_test_runner.py \
 		--init-proc "${init_proc}" \
 		--marker "${marker}" \
 		--marker-mode exact-line \
@@ -437,7 +437,7 @@ run_case() {
 		return 1
 	fi
 	if [[ "${context_sync_profile}" == "1" ]]; then
-		"${PYTHON_BIN}" -I -S scripts/validate-kernel-test-log.py \
+		"${PYTHON_BIN}" -I -S -B scripts/validate-kernel-test-log.py \
 			--log-file "${log_file}" \
 			--tag "wait-atomic" \
 			--profile wait-atomic
@@ -450,7 +450,7 @@ run_case() {
 "${MAKE_TOOL}" -rR -C user -f Makefile clean
 "${MAKE_TOOL}" -rR -f Makefile clean FUNCTIONAL_REVIEW_BUILD=1
 if [[ "${AGENT_TEST_CALIBRATE}" == "1" ]]; then
-	"${PYTHON_BIN}" -I -S scripts/agent_test_calibration.py check-source \
+	"${PYTHON_BIN}" -I -S -B scripts/agent_test_calibration.py check-source \
 		--root . \
 		--source-commit "${AGENT_TEST_SOURCE_COMMIT}"
 fi
@@ -505,7 +505,7 @@ if [[ "${AGENT_TEST_CALIBRATE}" == "1" ]]; then
 		echo "[agent-tests] calibration did not execute exactly 18 cases" >&2
 		exit 1
 	fi
-	"${PYTHON_BIN}" -I -S scripts/agent_test_calibration.py derive-round \
+	"${PYTHON_BIN}" -I -S -B scripts/agent_test_calibration.py derive-round \
 		--root . \
 		--plan "${AGENT_TEST_CALIBRATION_PLAN}" \
 		--round "$((10#${AGENT_TEST_CALIBRATION_ROUND}))" \

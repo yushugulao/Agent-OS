@@ -241,7 +241,7 @@ COMPILE_DEPENDENCY_PATHS = (
 # translation phase input exact prevents line splices, directives, assembly,
 # or linker syntax from disappearing during normalization.
 COMPILE_CLOSURE_FINGERPRINT = (
-    "0db5b9792ad6fb11d822da6b0a83ba101727a4168d4316bc429351c3c2ceb45f"
+    "7d9542aed29030350e65934931ca8d253d639e0eefa7e4d26dfe24dd94ab82c3"
 )
 
 USER_TRANSLATION_UNITS = (
@@ -904,7 +904,7 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
             "functional kernel build",
         ),
         (
-            '"${PYTHON_BIN}" -I -S scripts/agent_test_runner.py \\\n'
+            '"${PYTHON_BIN}" -I -S -B scripts/agent_test_runner.py \\\n'
             '\t\t--init-proc "${init_proc}" \\\n'
             '\t\t--marker "${marker}" \\\n'
             '\t\t--marker-mode exact-line',
@@ -926,9 +926,11 @@ def _validate_build_selectors(texts: dict[str, str]) -> None:
         line for line in runner.splitlines() if '"${PYTHON_BIN}"' in line
     ]
     if len(python_lines) != 13 or any(
-        '"${PYTHON_BIN}" -I -S' not in line for line in python_lines
+        '"${PYTHON_BIN}" -I -S -B' not in line for line in python_lines
     ):
-        raise ValueError("functional runner has a non-isolated Python invocation")
+        raise ValueError(
+            "functional runner has a non-isolated or source-polluting Python invocation"
+        )
 
     initproc = texts["scripts/initproc.py"].replace("\r\n", "\n")
     for fragment, label in (
