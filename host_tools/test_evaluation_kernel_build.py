@@ -115,7 +115,7 @@ class FakeMake:
         self.calls: list[tuple[list[str], dict[str, str]]] = []
         self.fail: tuple[str, str] | None = None
         self.mutate_source = False
-        self.leave_stale = False
+        self.recreate_stale_after_clean = False
         self.mutate_previous_artifact = False
         self.mutate_toolchain = False
 
@@ -163,7 +163,10 @@ class FakeMake:
         if self.fail == (target_id, phase):
             return builder.CommandExecution(23, b"", b"fixture failure\n", 4)
         if phase == "clean":
-            if not self.leave_stale:
+            if self.recreate_stale_after_clean:
+                artifact.parent.mkdir(parents=True, exist_ok=True)
+                artifact.write_bytes(_valid_elf(b"stale-after-clean"))
+            else:
                 artifact.unlink(missing_ok=True)
         else:
             artifact.parent.mkdir(parents=True, exist_ok=True)
@@ -441,7 +444,7 @@ class TrustedKernelBuildTests(unittest.TestCase):
         artifact = self.fixture.root / "baseline_ucore" / "build" / "kernel"
         artifact.parent.mkdir(parents=True)
         artifact.write_bytes(_valid_elf(b"stale"))
-        self.fixture.runner.leave_stale = True
+        self.fixture.runner.recreate_stale_after_clean = True
         with self.assertRaisesRegex(builder.KernelBuildError, "stale kernel"):
             self.fixture.build()
         self.assertFalse(self.fixture.output.exists())
