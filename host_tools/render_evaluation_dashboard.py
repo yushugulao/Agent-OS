@@ -1687,6 +1687,7 @@ def validate_summary(raw: Any) -> dict[str, Any]:
             estimate_values[key] = (value, p95, lower, upper)
         sample_values: dict[tuple[str, str], dict[str, float]] = {}
         receipt_constants: dict[tuple[str, str], tuple[int, int, int]] = {}
+        table_ambient_by_boot: dict[str, int] = {}
         for sample_index, raw_sample in enumerate(samples):
             sample_path = f"{path}.samples[{sample_index}]"
             sample = _require_object(raw_sample, sample_path)
@@ -1744,12 +1745,37 @@ def validate_summary(raw: Any) -> dict[str, Any]:
                         if benchmark["id"] == FILE_QUERY_PATH_INDEX
                         else FILE_META_CAPACITY * operations
                     )
-                    expected_records = dataset_size * operations
-                    if work_units != expected_work or records_examined != expected_records:
+                    if work_units != expected_work:
                         _fail(
                             f"{sample_path} baseline receipt does not prove the "
                             "registered complete traversal"
                         )
+                    if benchmark["id"] == FILE_QUERY_PATH_INDEX:
+                        if records_examined != dataset_size * operations:
+                            _fail(
+                                f"{sample_path} baseline receipt does not prove the "
+                                "registered complete traversal"
+                            )
+                    else:
+                        if records_examined % operations != 0:
+                            _fail(
+                                f"{sample_path} metadata ambient census is not integral"
+                            )
+                        ambient_records = records_examined // operations - dataset_size
+                        if ambient_records < 0:
+                            _fail(
+                                f"{sample_path} metadata ambient census is below fixture load"
+                            )
+                        previous_ambient = table_ambient_by_boot.get(boot_id)
+                        if (
+                            previous_ambient is not None
+                            and previous_ambient != ambient_records
+                        ):
+                            _fail(
+                                f"{sample_path} metadata ambient census is inconsistent "
+                                "within one boot"
+                            )
+                        table_ambient_by_boot[boot_id] = ambient_records
                 elif (
                     work_units < operations
                     or work_units > FILE_META_CAPACITY * operations

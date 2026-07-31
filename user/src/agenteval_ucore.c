@@ -41,6 +41,8 @@ static struct agent_file_meta file_meta;
 static struct agent_file_query file_query;
 static struct agent_file_query_result file_result;
 static struct agent_info eval_info;
+static int ambient_file_records;
+static int expected_visible_file_records;
 
 static struct agent_context_header functional_context_header;
 static struct agent_context_record
@@ -537,6 +539,36 @@ static void seed_file_metadata(int first, int limit)
 	}
 }
 
+static int census_visible_file_records(void)
+{
+	char challenge[17];
+	int returned;
+
+	memset(&file_query, 0, sizeof(file_query));
+	file_query.flags = AGENT_FILE_QUERY_SCAN;
+	file_query.max_hits = 1;
+	strcpy(file_query.physical_name, "census-");
+	format_hex16(AGENTEVAL_CHALLENGE, file_query.physical_name + 7);
+	returned = agent_file_query(&file_query, &file_result);
+	check(returned == 0 && file_result.total_hits == 0 &&
+		      file_result.returned == 0 && !file_result.truncated,
+	      "metadata census selector remains absent");
+	check(file_result.used_index == 0 &&
+		      file_result.plan == AGENT_FILE_QUERY_PLAN_SCAN &&
+		      (file_result.plan_reason &
+		       AGENT_FILE_QUERY_REASON_FORCED_SCAN) != 0,
+	      "metadata census uses forced scan");
+	check(file_result.scanned_records == AGENT_FILE_META_MAX &&
+		      file_result.candidate_records >= 0 &&
+		      file_result.candidate_records <= file_result.scanned_records &&
+		      file_result.index_rebuild_records == 0,
+	      "metadata census reports complete table work");
+	format_hex16(AGENTEVAL_CHALLENGE, challenge);
+	check(strcmp(file_query.physical_name + 7, challenge) == 0,
+	      "metadata census binds boot challenge");
+	return file_result.candidate_records;
+}
+
 static void prepare_file_query(struct agent_file_query *query,
 			       int target_meta)
 {
@@ -831,6 +863,10 @@ static void finalize_agent_file_variant(
 
 		validate_agent_file_observation(
 			observation, prepared_file_targets[i], use_index);
+		if (!use_index)
+			check(observation->candidate_records ==
+				      expected_visible_file_records,
+			      "metadata scan visible census remains stable");
 		if (validate_physical)
 			validate_index_physical_identity(
 				observation, &prepared_file_queries[i],
@@ -861,7 +897,8 @@ static void finalize_agent_file_variant(
 		check(measurement->work_units ==
 			      (uint64)AGENT_FILE_META_MAX * (uint64)(uint)operations &&
 			      measurement->records_examined ==
-				      (uint64)(uint)load * (uint64)(uint)operations,
+				      (uint64)(uint)expected_visible_file_records *
+					      (uint64)(uint)operations,
 		      "metadata scan reports full table work");
 	}
 }
@@ -1126,11 +1163,24 @@ static void run_file_query_experiment(void)
 {
 	int seeded = 0;
 
+	ambient_file_records = census_visible_file_records();
+	check(ambient_file_records <= AGENT_FILE_META_MAX - EVAL_MAX_LOAD,
+	      "metadata census leaves fixture capacity");
+
 	for (int i = 0; i < EVAL_UNION_LOADS; i++) {
 		int load = eval_union_loads[i];
 		int path_operations;
+		int before_seed = census_visible_file_records();
+		int after_seed;
 
+		check(before_seed == ambient_file_records + seeded,
+		      "metadata census stable before fixture seed");
 		seed_file_metadata(seeded, load);
+		after_seed = census_visible_file_records();
+		check(after_seed - before_seed == load - seeded &&
+			      after_seed == ambient_file_records + load,
+		      "metadata census observes exact fixture seed delta");
+		expected_visible_file_records = after_seed;
 		seeded = load;
 		path_operations = path_operations_for_load(load);
 		if (path_operations > 0)

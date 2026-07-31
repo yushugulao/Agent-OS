@@ -472,7 +472,7 @@ def marker(
         records_examined = work_units if role == "baseline" else operations
     elif experiment["id"] == "file_query_table_ablation":
         work_units = 512 * operations if role == "baseline" else operations
-        records_examined = operations * load if role == "baseline" else operations
+        records_examined = operations * (load + 2) if role == "baseline" else operations
     else:
         work_units = operations
         records_examined = 0
@@ -2779,8 +2779,8 @@ def main() -> int:
         for index, line in enumerate(shallow_lines):
             if "experiment=file_query_table_ablation load=96 pair=1 variant=scan " in line:
                 shallow_lines[index] = line.replace(
-                    "work_units=8192 records_examined=1536",
-                    "work_units=1536 records_examined=1536",
+                    "work_units=8192 records_examined=1568",
+                    "work_units=1568 records_examined=1568",
                 )
                 break
         shallow_scan_log.write_text("\n".join(shallow_lines) + "\n", encoding="utf-8")
@@ -2788,6 +2788,56 @@ def main() -> int:
         expect_rejected(
             lambda: build(SUITE_PATH, shallow_scan_plan, shallow_scan),
             "not a full-table scan",
+        )
+
+        drifting_census = root / "drifting-metadata-census"
+        drifting_census.mkdir()
+        drifting_census_plan = write_campaign(drifting_census, suite)
+        drifting_census_log = drifting_census / "boot-01/guest.log"
+        drifting_lines = drifting_census_log.read_text(
+            encoding="utf-8"
+        ).splitlines()
+        for index, line in enumerate(drifting_lines):
+            if (
+                "experiment=file_query_table_ablation load=24 pair=1 "
+                "variant=scan " in line
+            ):
+                drifting_lines[index] = line.replace(
+                    "records_examined=416", "records_examined=432"
+                )
+                break
+        drifting_census_log.write_text(
+            "\n".join(drifting_lines) + "\n", encoding="utf-8"
+        )
+        refresh_plan_hash(drifting_census_plan, drifting_census)
+        expect_rejected(
+            lambda: build(SUITE_PATH, drifting_census_plan, drifting_census),
+            "ambient census is inconsistent",
+        )
+
+        fractional_census = root / "fractional-metadata-census"
+        fractional_census.mkdir()
+        fractional_census_plan = write_campaign(fractional_census, suite)
+        fractional_census_log = fractional_census / "boot-01/guest.log"
+        fractional_lines = fractional_census_log.read_text(
+            encoding="utf-8"
+        ).splitlines()
+        for index, line in enumerate(fractional_lines):
+            if (
+                "experiment=file_query_table_ablation load=24 pair=1 "
+                "variant=scan " in line
+            ):
+                fractional_lines[index] = line.replace(
+                    "records_examined=416", "records_examined=417"
+                )
+                break
+        fractional_census_log.write_text(
+            "\n".join(fractional_lines) + "\n", encoding="utf-8"
+        )
+        refresh_plan_hash(fractional_census_plan, fractional_census)
+        expect_rejected(
+            lambda: build(SUITE_PATH, fractional_census_plan, fractional_census),
+            "ambient census is not integral",
         )
 
         shallow_index = root / "shallow-file-index"

@@ -2637,6 +2637,7 @@ def _validate_complete_boot(
     if actual_combinations != expected_combinations:
         raise EvaluationError(f"missing configured samples in {source_ref}")
     experiments = _experiment_map(suite)
+    table_ambient_records: int | None = None
     for combination in expected_combinations:
         experiment = experiments[combination[0]]
         expected_operations = _operations_for(experiment, combination[1])
@@ -2702,15 +2703,30 @@ def _validate_complete_boot(
                         raise EvaluationError(
                             f"Task 4 baseline did not examine all N paths in {source_ref}"
                         )
-                elif (
-                    by_role["baseline"]["work_units"]
-                    != FILE_META_CAPACITY * expected_operations
-                    or by_role["baseline"]["records_examined"]
-                    != combination[1] * expected_operations
-                ):
-                    raise EvaluationError(
-                        f"metadata ablation baseline is not a full-table scan in {source_ref}"
+                else:
+                    baseline = by_role["baseline"]
+                    if baseline["work_units"] != FILE_META_CAPACITY * expected_operations:
+                        raise EvaluationError(
+                            f"metadata ablation baseline is not a full-table scan in {source_ref}"
+                        )
+                    if baseline["records_examined"] % expected_operations != 0:
+                        raise EvaluationError(
+                            f"metadata ablation ambient census is not integral in {source_ref}"
+                        )
+                    visible_records = (
+                        baseline["records_examined"] // expected_operations
                     )
+                    ambient_records = visible_records - combination[1]
+                    if ambient_records < 0:
+                        raise EvaluationError(
+                            f"metadata ablation ambient census is below fixture load in {source_ref}"
+                        )
+                    if table_ambient_records is None:
+                        table_ambient_records = ambient_records
+                    elif table_ambient_records != ambient_records:
+                        raise EvaluationError(
+                            f"metadata ablation ambient census is inconsistent in {source_ref}"
+                        )
                 treatment = by_role["treatment"]
                 if (
                     treatment["work_units"] < expected_operations

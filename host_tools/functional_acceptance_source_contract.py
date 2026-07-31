@@ -53,7 +53,8 @@ TRANSLATION_UNIT_FUNCTIONS = (
     "make_code", "eval_file_record_hash", "eval_file_record_build",
     "eval_file_record_valid", "eval_file_field_matches",
     "eval_file_record_matches_query", "eval_file_record_project",
-    "seed_file_metadata", "prepare_file_query", "prepare_file_query_workload",
+    "seed_file_metadata", "census_visible_file_records", "prepare_file_query",
+    "prepare_file_query_workload",
     "set_file_query_flags", "file_workload_fingerprint",
     "capture_file_observation", "hash_file_semantics",
     "time_file_contest_variant", "time_file_table_variant",
@@ -87,10 +88,10 @@ TRANSLATION_UNIT_FUNCTIONS = (
 )
 
 TRANSLATION_UNIT_FINGERPRINT = (
-    "7e34dcb17b5d46ea373a8ee10cfa5e3b790d328b22b53914e13caa071f3ec365"
+    "bac347af97d2156cdb2da0921fa22b7f657dc960ab11d55de670cbc38ca222ae"
 )
 NORMALIZED_CALL_GRAPH_FINGERPRINT = (
-    "1ded28a2173210c1bd25f2163d7f428ca2f22f805ef452e39063e1b2619b1dca"
+    "22376152fd56e411e8be3931e4ed289e710f1e92d664307a9f9bbe70f9130b78"
 )
 
 # This is the complete reviewed function closure that can create, validate,

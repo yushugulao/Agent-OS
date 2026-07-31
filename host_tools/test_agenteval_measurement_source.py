@@ -507,6 +507,21 @@ def main() -> int:
         "seed_file_metadata(seeded, load);",
         "seed_file_metadata(seeded, load - 1);",
     ))
+    _reject(_mutate(
+        source, "run_file_query_experiment",
+        "after_seed = census_visible_file_records();",
+        "after_seed = ambient_file_records + load;",
+    ))
+    _reject(_mutate(
+        source, "run_file_query_experiment",
+        "expected_visible_file_records = after_seed;",
+        "expected_visible_file_records = load;",
+    ))
+    _reject(_mutate(
+        source, "census_visible_file_records",
+        "file_result.scanned_records == AGENT_FILE_META_MAX",
+        "file_result.scanned_records > 0",
+    ))
     _reject(_mutate_nth(
         source, "run_tool_batch_experiment", "if (pair_runs_ab(pair)) {",
         "if (!pair_runs_ab(pair)) {", 1,
@@ -520,7 +535,7 @@ def main() -> int:
 
     commit = "a" * 40
     receipt = build_measurement_source_receipt(ROOT, source_commit=commit)
-    assert CONTRACT_VERSION == "agenteval-measurement-source-v8"
+    assert CONTRACT_VERSION == "agenteval-measurement-source-v9"
     assert FORMAL_BOOT_COUNT == 7
     assert receipt["formal_boot_count"] == FORMAL_BOOT_COUNT
     assert receipt["contract_versions"]["functional"] == (

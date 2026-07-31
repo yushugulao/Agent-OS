@@ -29,7 +29,7 @@ else:
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / SOURCE_RELATIVE
-CONTRACT_VERSION = "agenteval-measurement-source-v8"
+CONTRACT_VERSION = "agenteval-measurement-source-v9"
 PRINT_FORMAT = (
     r'"agenteval_ucore: sample schema=2 experiment=%s load=%d pair=%d '
     r'variant=%s order=%s cache=%s operations=%d dataset_size=%d '
@@ -440,6 +440,28 @@ def _validate_file_query(tokens: list[str]) -> None:
     ):
         _require_once(tokens, declaration, label)
 
+    for declaration, label in (
+        (("static", "int", "ambient_file_records", ";"),
+         "ambient metadata census state"),
+        (("static", "int", "expected_visible_file_records", ";"),
+         "visible metadata census state"),
+    ):
+        _require_once(tokens, declaration, label)
+
+    census = _function_tokens(tokens, "census_visible_file_records")
+    for operation, label in (
+        (("file_query", ".", "flags", "=", "AGENT_FILE_QUERY_SCAN", ";"),
+         "forced metadata census selector"),
+        (("returned", "=", "agent_file_query", "(", "&", "file_query", ",",
+          "&", "file_result", ")", ";"),
+         "metadata census production syscall"),
+        (("file_result", ".", "scanned_records", "==",
+          "AGENT_FILE_META_MAX"), "metadata census full-table proof"),
+        (("return", "file_result", ".", "candidate_records", ";"),
+         "metadata census observed cardinality"),
+    ):
+        _require_once(census, operation, label)
+
     contest_loop = (
         "for", "(", "int", "operation", "=", "0", ";", "operation", "<",
         "operations", ";", "operation", "++", ")", "{",
@@ -585,6 +607,18 @@ def _validate_file_query(tokens: list[str]) -> None:
                 f"{finalize_name} must derive examined records from observations"
             )
 
+    finalize_agent = _function_tokens(tokens, "finalize_agent_file_variant")
+    for operation, label in (
+        (("observation", "->", "candidate_records", "==",
+          "expected_visible_file_records"),
+         "per-query visible metadata census"),
+        (("uint64", ")", "(", "uint", ")",
+          "expected_visible_file_records", "*", "(", "uint64", ")", "(",
+          "uint", ")", "operations"),
+         "aggregate visible metadata census"),
+    ):
+        _require_once(finalize_agent, operation, label)
+
     dispatcher = _function_tokens(tokens, "run_file_query_experiment")
     union_loop = (
         "for", "(", "int", "i", "=", "0", ";", "i", "<",
@@ -593,9 +627,25 @@ def _validate_file_query(tokens: list[str]) -> None:
     union_at = _require_once(dispatcher, union_loop, "incremental union load loop")
     union_open = union_at + len(union_loop) - 1
     union_close = _matching(dispatcher, union_open, "{", "}")
+    ambient = _require_once(
+        dispatcher,
+        ("ambient_file_records", "=", "census_visible_file_records", "(",
+         ")", ";"),
+        "pre-fixture ambient metadata census",
+    )
+    if ambient >= union_at:
+        raise ValueError("ambient metadata census must precede fixture loads")
     for operation, label in (
+        (("before_seed", "=", "census_visible_file_records", "(", ")", ";"),
+         "pre-seed metadata census"),
         (("seed_file_metadata", "(", "seeded", ",", "load", ")", ";"),
          "incremental fixture seed"),
+        (("after_seed", "=", "census_visible_file_records", "(", ")", ";"),
+         "post-seed metadata census"),
+        (("after_seed", "-", "before_seed", "==", "load", "-", "seeded"),
+         "exact fixture census delta"),
+        (("expected_visible_file_records", "=", "after_seed", ";"),
+         "timed visible census binding"),
         (("seeded", "=", "load", ";"), "incremental seed frontier"),
         (("run_file_query_path_index", "(", "load", ",", "path_operations", ")", ";"),
          "contest file experiment dispatch"),
