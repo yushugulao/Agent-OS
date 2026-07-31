@@ -204,6 +204,32 @@ class CalibrationTests(unittest.TestCase):
         self.assertEqual(environment["PYTHONNOUSERSITE"], "1")
         self.assertEqual(environment["TMPDIR"], "/tmp")
 
+    def test_calibration_child_environment_preserves_windows_system_paths(self):
+        windows_paths = {
+            "ALLUSERSPROFILE": r"C:\ProgramData",
+            "PROGRAMDATA": r"C:\ProgramData",
+            "SYSTEMDRIVE": "C:",
+        }
+        with mock.patch.object(calibration.sys, "platform", "msys"), mock.patch.dict(
+            os.environ, windows_paths, clear=False
+        ):
+            environment = calibration.calibration_child_environment()
+        for name, value in windows_paths.items():
+            self.assertEqual(environment[name], value)
+
+    def test_calibration_child_environment_rejects_windows_placeholders(self):
+        windows_paths = {
+            "ALLUSERSPROFILE": r"%SystemDrive%\ProgramData",
+            "PROGRAMDATA": r"%SystemDrive%\ProgramData",
+            "SYSTEMDRIVE": "C:",
+        }
+        with mock.patch.object(calibration.sys, "platform", "msys"), mock.patch.dict(
+            os.environ, windows_paths, clear=False
+        ), self.assertRaisesRegex(
+            calibration.CalibrationError, "canonical system paths"
+        ):
+            calibration.calibration_child_environment()
+
     def test_calibration_child_python_does_not_execute_user_site_pth(self):
         with tempfile.TemporaryDirectory() as temp:
             home = Path(temp) / "home"

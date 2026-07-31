@@ -83,10 +83,13 @@ CALIBRATION_TOOL_NAMES = (
 )
 CALIBRATION_HOST_ENV_ALLOWLIST = frozenset(
     {
+        "ALLUSERSPROFILE",
         "COMSPEC",
         "HOME",
         "MSYSTEM",
         "PATHEXT",
+        "PROGRAMDATA",
+        "SYSTEMDRIVE",
         "SYSTEMROOT",
         "USERPROFILE",
         "WINDIR",
@@ -561,6 +564,24 @@ def isolated_git_environment():
 
 def calibration_child_environment():
     isolated = isolated_git_environment()
+    if sys.platform in {"cygwin", "msys"} or os.name == "nt":
+        required = {
+            "ALLUSERSPROFILE": r"^[A-Za-z]:[\\/]",
+            "PROGRAMDATA": r"^[A-Za-z]:[\\/]",
+            "SYSTEMDRIVE": r"^[A-Za-z]:$",
+        }
+        inherited = {name.upper(): value for name, value in isolated.items()}
+        invalid = sorted(
+            name
+            for name, pattern in required.items()
+            if not re.match(pattern, inherited.get(name, ""))
+            or "%" in inherited.get(name, "")
+        )
+        if invalid:
+            raise CalibrationError(
+                "Windows calibration environment lacks canonical system paths: "
+                + ", ".join(invalid)
+            )
     environment = {
         name: value
         for name, value in isolated.items()
