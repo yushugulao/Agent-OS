@@ -220,7 +220,9 @@ def _verify_benchmark(path: Path, commit: str, run_id: str) -> tuple[dict[str, A
             "operations": operations,
             "us_per_operation": round(int(row["duration_value"]) / operations, 3),
             "records": int(row["primary_value"]),
-            "records_per_operation": round(int(row["primary_value"]) / operations, 3),
+            # The Guest receipt stores one query's candidate count, not a
+            # total accumulated across the timed repetitions.
+            "records_per_query": int(row["primary_value"]),
             "rebuild_records": int(row["rebuild_records"]),
         }
     baseline = paths["traversal"]["us_per_operation"]
@@ -295,8 +297,9 @@ def build_report(
             for path in artifact_paths
         },
         "interpretation": (
-            "本页来自本次三次真实 RISC-V QEMU 启动。性能只比较同一 Guest 内的"
-            "metadata 全表遍历、冷索引和暖索引路径，是现场单次观测，不替代正式多启动统计。"
+            "本页来自本次三次真实 RISC-V QEMU 启动。任务覆盖是本提交 Guest 的"
+            "自检回执；性能只比较同一 Guest 内的 metadata 全表遍历、冷索引和暖索引"
+            "路径，是现场单次观测，不构成源码语义证明，也不替代正式多启动统计。"
         ),
     }
 
@@ -331,7 +334,7 @@ def render_markdown(report: dict[str, Any]) -> str:
             "",
             "## 现场性能观测",
             "",
-            "| 路径 | us/op | records/op | 重建记录 |",
+            "| 路径 | us/op | records/query | 重建记录 |",
             "| --- | ---: | ---: | ---: |",
         ]
     )
@@ -340,7 +343,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         row = report["performance"]["paths"][name]
         lines.append(
             f"| {labels[name]} | {_fmt(row['us_per_operation'], 3)} | "
-            f"{_fmt(row['records_per_operation'], 3)} | {row['rebuild_records']} |"
+            f"{row['records_per_query']} | {row['rebuild_records']} |"
         )
     comparison = report["performance"]["comparison"]
     lines.extend(
@@ -357,7 +360,7 @@ def render_markdown(report: dict[str, Any]) -> str:
 
 def render_html(report: dict[str, Any]) -> str:
     task_cards = "".join(
-        '<article class="task"><span>{task}</span><h3>{label}</h3><p>Guest 动态通过</p></article>'.format(
+        '<article class="task"><span>{task}</span><h3>{label}</h3><p>Guest 自检回执</p></article>'.format(
             task=html.escape(task.upper()), label=html.escape(item["label"])
         )
         for task, item in report["tasks"].items()
@@ -369,7 +372,7 @@ def render_html(report: dict[str, Any]) -> str:
             label=labels[name],
             name=name,
             duration=_fmt(report["performance"]["paths"][name]["us_per_operation"], 3),
-            records=_fmt(report["performance"]["paths"][name]["records_per_operation"], 3),
+            records=report["performance"]["paths"][name]["records_per_query"],
             rebuild=report["performance"]["paths"][name]["rebuild_records"],
         )
         for name in ("traversal", "cold_index", "warm_index")
@@ -392,9 +395,9 @@ h2{{font-size:20px;margin:28px 0 12px}}.tasks{{display:grid;grid-template-column
 @media(max-width:760px){{h1{{font-size:30px}}.status{{grid-template-columns:1fr 1fr}}.status>div{{border-bottom:1px solid var(--line)}}.tasks{{grid-template-columns:1fr}}main{{padding:16px}}}}
 </style></head><body>
 <header><h1>AgentOS 竞赛现场演示</h1><p>真实 RISC-V QEMU，离线验证任务一至六与关键优化路径</p></header><main>
-<section class="status"><div><span>验收状态</span><b>动态通过</b><small>不是仅凭通过字符串</small></div><div><span>QEMU 启动</span><b>{report['qemu_boots']}</b><small>隔离 Guest 语料</small></div><div><span>覆盖任务</span><b>6 / 6</b><small>必做与选做模块</small></div><div><span>现场耗时</span><b>{report['elapsed_seconds']:.1f}s</b><small>构建、运行、核验</small></div></section>
-<h2>赛题任务动态覆盖</h2><section class="tasks">{task_cards}</section>
-<h2>真实计时对照</h2><div class="table-wrap"><table><thead><tr><th>路径</th><th>us/op</th><th>records/op</th><th>重建记录</th></tr></thead><tbody>{metric_rows}</tbody></table></div>
+<section class="status"><div><span>现场状态</span><b>Guest 自检通过</b><small>本提交的机制回执</small></div><div><span>QEMU 启动</span><b>{report['qemu_boots']}</b><small>隔离 Guest 语料</small></div><div><span>覆盖任务</span><b>6 / 6</b><small>必做与选做模块</small></div><div><span>现场耗时</span><b>{report['elapsed_seconds']:.1f}s</b><small>构建、运行、核验</small></div></section>
+<h2>赛题任务 Guest 自检覆盖</h2><section class="tasks">{task_cards}</section>
+<h2>真实计时对照</h2><div class="table-wrap"><table><thead><tr><th>路径</th><th>us/op</th><th>records/query</th><th>重建记录</th></tr></thead><tbody>{metric_rows}</tbody></table></div>
 <p class="note">暖索引相对全表遍历：<strong>{_fmt(comparison['speedup'])}x</strong>。{html.escape(report['interpretation'])}</p>
 <h2>可追溯身份</h2><section class="proof"><code>commit {html.escape(report['commit'])}<br>run {html.escape(report['run_id'])}<br>benchmark log sha256 {artifact_digest}</code></section>
 <footer>页面由本轮已核验的 Guest 原始日志生成，不读取历史 results，也不访问云 API。</footer>
@@ -450,7 +453,7 @@ def main(argv: list[str] | None = None) -> int:
         publish(report, args.output_dir)
     except (ContestDemoError, OSError, UnicodeError, ValueError) as error:
         raise SystemExit(f"contest demo failed: {error}") from error
-    print("[contest-demo] Task 1-6 dynamic verification: passed")
+    print("[contest-demo] Task 1-6 Guest self-check receipts: passed")
     print(f"[contest-demo] QEMU boots=3 elapsed={report['elapsed_seconds']:.1f}s")
     comparison = report["performance"]["comparison"]
     print(

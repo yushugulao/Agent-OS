@@ -117,6 +117,8 @@ def test_report_is_derived_from_verified_logs() -> None:
         assert tuple(report["tasks"]) == tuple(f"task{number}" for number in range(1, 7))
         assert report["qemu_boots"] == 3
         assert report["performance"]["comparison"]["speedup"] == 10.0
+        assert report["performance"]["paths"]["traversal"]["records_per_query"] == 800
+        assert report["performance"]["paths"]["warm_index"]["records_per_query"] == 80
         output = root / "output"
         contest_demo.publish(report, output)
         published = json.loads((output / "summary.json").read_text("utf-8"))
@@ -124,7 +126,8 @@ def test_report_is_derived_from_verified_logs() -> None:
         page = (output / "index.html").read_text("utf-8")
         assert "6 / 6" in page
         assert "真实 RISC-V QEMU" in page
-        assert "不是仅凭通过字符串" in page
+        assert "Guest 自检通过" in page
+        assert "records/query" in page
         assert "http://" not in page and "https://" not in page
         assert "不替代正式多启动统计" in page
 
