@@ -315,6 +315,10 @@ check_case_contract() {
 		require_exact_case_marker "${log_file}" \
 			"agentscope_ucore: lifecycle_reclamation=1"
 		;;
+	agentvfs_ucore)
+		require_exact_case_marker "${log_file}" \
+			"agentvfs_ucore: fstat_reauthorize=1"
+		;;
 	iobudget_ucore)
 		require_exact_case_marker "${log_file}" \
 			"iobudget_ucore: lineage_rate_accounting=1 immutable_owner=1"

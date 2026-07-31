@@ -11,6 +11,7 @@
 #include "timer.h"
 #include "trap.h"
 #include "user_stack_layout.h"
+#include "vfs_security.h"
 #ifdef VIRTIO_DISK_TEST_PROFILE
 #include "virtio.h"
 #endif
@@ -140,6 +141,17 @@ enum trace_request {
 	TRACE_SYSCALL,
 };
 
+/* Keep the Linux-compatible user Stat layout from user/include/stddef.h. */
+struct user_stat {
+	uint64 dev;
+	uint64 ino;
+	uint mode;
+	uint nlink;
+	uint64 pad[7];
+};
+
+_Static_assert(sizeof(struct user_stat) == 80, "user Stat ABI");
+
 uint64 console_write(uint64 va, uint64 len)
 {
 	struct proc *p = curr_proc();
@@ -249,6 +261,36 @@ uint64 sys_read(int fd, uint64 va, uint64 len)
 		break;
 	default:
 		panic("unknown file type %d\n", f->type);
+	}
+	fileclose(f);
+	return result;
+}
+
+uint64 sys_fstat(int fd, uint64 stataddr)
+{
+	struct user_stat status;
+	struct file *f;
+	struct proc *p = curr_proc();
+	struct vfs_cred cred;
+	int result = -1;
+
+	if (fd < 0 || fd >= FD_BUFFER_SIZE || stataddr == 0 ||
+	    user_range_check(p->pagetable, stataddr, sizeof(status), PTE_W) < 0)
+		return -1;
+	f = fdget(fd);
+	if (f == 0)
+		return -1;
+	memset(&status, 0, sizeof(status));
+	vfs_cred_from_proc(p, &cred);
+	if (f->type == FD_INODE && ivalid(f->ip) == 0 &&
+	    vfs_inode_authorize(f->ip, &cred, VFS_OP_READ)) {
+		status.dev = f->ip->dev;
+		status.ino = f->ip->inum;
+		status.mode = f->ip->type == T_DIR ? 0x040000U : 0x100000U;
+		/* This filesystem has no linkat: a named inode has one link. */
+		status.nlink = f->ip->removed ? 0U : 1U;
+		result = copyout(p->pagetable, stataddr, (char *)&status,
+				 sizeof(status));
 	}
 	fileclose(f);
 	return result;
@@ -877,6 +919,9 @@ void syscall()
 		break;
 	case SYS_read:
 		ret = sys_read(args[0], args[1], args[2]);
+		break;
+	case SYS_fstat:
+		ret = sys_fstat(args[0], args[1]);
 		break;
 	case SYS_openat:
 		ret = sys_openat(args[0], args[1], args[2]);

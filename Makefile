@@ -1,4 +1,4 @@
-.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check ci-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test fs-allocator-fault-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test reader target-readiness dual-platform-run full-verify evaluation-doctor evaluation-smoke evaluation-run evaluation-verify evaluation-kernel-cost evaluation-full-verify evaluation-dashboard evaluation-package evaluation-package-development evaluation-package-verify compatibility-overhead-selftest compatibility-overhead-run dual-clean clean-workspace-dry-run clean-workspace .FORCE
+.PHONY: clean build user user-stack-check run run-prebuilt run-persist debug test doctor kernel-stack-check kernel-budget-check kernel-budget-selftest host-contract-selftest evidence-capture-selftest agent-module-check agent-uapi-check agent-observe-disk-format-check printf-format-static-check printf-format-check ci-check plain-clean plain-platform-build plain-platform-run agentos-user agentos-build agentos-clean agentos-test contest-demo contest-demo-check agentos-platform-user agentos-platform-build agentos-platform-run fs-enospc-test fs-allocator-fault-test proc-reap-test syscall-fairness-test file-resource-test thread-resource-test physical-resource-test workflow-teardown-race-test metadata-recovery-test observe-recovery-test virtio-disk-test reader target-readiness dual-platform-run full-verify evaluation-doctor evaluation-smoke evaluation-run evaluation-verify evaluation-kernel-cost evaluation-full-verify evaluation-dashboard evaluation-package evaluation-package-development evaluation-package-verify compatibility-overhead-selftest compatibility-overhead-run dual-clean clean-workspace-dry-run clean-workspace .FORCE
 .DELETE_ON_ERROR:
 unexport BASH_ENV ENV
 all: build
@@ -700,6 +700,7 @@ override HOST_CONTRACT_TESTS := \
 	host_tools/test_evaluation_kernel_cost.py \
 	host_tools/test_evaluation_scenario.py \
 	host_tools/test_evaluation_dashboard.py \
+	host_tools/test_contest_demo.py \
 	host_tools/test_full_verification_payload.py \
 	host_tools/test_evaluation_bundle.py \
 	host_tools/test_compatibility_overhead.py \
@@ -833,6 +834,19 @@ agentos-build:
 agentos-test:
 	rm -f $(F)/fs.img $(F)/fs-copy.img
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-agent-tests.sh
+
+# Three isolated Guest boots: Task 1-5, a measured metadata-path comparison,
+# and the integrated Task 6 workflow. No cloud API or prior result is read.
+contest-demo:
+	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) \
+		QEMU=$(call shell_quote,$(QEMU)) \
+		PYTHON_BIN=$(call shell_quote,$(PYTHON_BIN)) \
+		MAKE_TOOL=$(call shell_quote,$(MAKE)) \
+		$(call shell_quote,$(BASH_BIN)) scripts/run-contest-demo.sh
+
+contest-demo-check: scripts/run-contest-demo.sh host_tools/contest_demo.py host_tools/test_contest_demo.py
+	@$(call shell_quote,$(BASH_BIN)) -n scripts/run-contest-demo.sh
+	@$(PYTHON_CMD) host_tools/test_contest_demo.py
 
 fs-enospc-test:
 	TOOLPREFIX=$(call shell_quote,$(TOOLPREFIX)) bash scripts/run-fs-enospc-tests.sh

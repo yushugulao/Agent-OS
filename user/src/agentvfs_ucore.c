@@ -216,6 +216,23 @@ int main(void)
 		uint64 processes_before;
 		uint64 processes_after;
 		char gate = 'G';
+		Stat inherited_status;
+
+		worker = agent_create_role(AGENT_ROLE_SENTINEL);
+		check(worker >= 0, "create attenuated fstat probe");
+		if (worker == 0) {
+			memset(&inherited_status, 0, sizeof(inherited_status));
+			check(fstat(INHERITED_FD, &inherited_status) == -1,
+			      "reauthorize inherited fstat");
+			check(close(INHERITED_FD) == 0,
+			      "attenuated probe inherited descriptor");
+			exit(0);
+		}
+		check(waitpid(worker, &worker_status) == worker,
+		      "wait attenuated fstat probe");
+		check(worker_status == 0, "attenuated fstat probe status");
+		printf("agentvfs_ucore: fstat_reauthorize=1\n");
+		worker_status = -1;
 
 		check(agent_worker_create(READER_IMAGE, 0) ==
 			      AGENT_STATUS_BAD_PARAM,

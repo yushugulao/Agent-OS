@@ -332,6 +332,22 @@ make agentos-platform-run TOOLPREFIX=riscv64-linux-gnu-
 
 增强目标运行同一科研流程，关键阶段会调用 AgentOS 内核服务。`agentos-test` 会执行 AgentOS 专项测试，覆盖 Agent Context、工具调用、Context Path、文件 metadata、事件循环、调度、LLM Relay 模板路径、权限拒绝和并发冲突控制。
 
+#### 5.3.1 竞赛现场快速演示
+
+```bash
+make contest-demo TOOLPREFIX=riscv64-linux-gnu-
+make contest-demo-check
+```
+
+`contest-demo` 只接受干净提交，不读取历史 `results/`，也不连接云 API。它分别为
+`agentfinal_ucore`、`agentbench_ucore` 和 `labdemo_ucore` 构建隔离镜像并启动三次真实
+RISC-V QEMU：第一条路径动态验证任务一至五的机制语义，第二条路径采集 metadata
+全表遍历、冷索引和暖索引的真实 Guest 计时，第三条路径运行多 Agent 恢复、审计、
+时间线和 provenance 综合场景。Host 通过既有 measurement parser 和逐项机制回执核验
+原始日志，才会在 `results/contest-demo/` 生成终端摘要和离线 `index.html`。该入口用于
+短时现场展示；性能数字明确是单次启动、同内核路径观测，不替代正式多启动统计或
+`evidence/releases/` 发布证据。
+
 直接调试内核时，`make run` 会原子安装当前源码生成的全新可写镜像，确保用户程序、可信清单和 `INIT_PROC` 不会沿用旧版本。需要验证同一磁盘的持久状态时使用 `make run-persist`；该目标只在可写镜像不存在时初始化一次，之后原样重启 `nfs/fs-copy.img`，不自动迁移或覆盖不兼容格式。`baseline_ucore/` 下提供同名的两种入口。
 
 日常重建可用 `make clean` 清理 AgentOS 默认产物，或用 `make dual-clean` 同时清理对照目标。长期调试产生大量命名构建目录后，先运行 `make clean-workspace-dry-run` 预览，再运行 `make clean-workspace` 统一删除白名单内且被 Git 忽略的 `build-*`、`target-*`、`asm-*`、镜像和缓存。该目标不会删除本地验收结果、受版本控制的源码与 `evidence/` 发布证据。
