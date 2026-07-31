@@ -2,6 +2,16 @@
 
 [TOC]
 
+## 评委快速入口
+
+首次审阅请从 [竞赛评审入口](docs/contest/README.md) 开始。该页把赛题任务映射、最短验证路径、
+提交材料、第三方来源和当前证据边界集中在一起；完整技术说明仍保留在本文后续章节。
+
+> 当前仓库已经包含任务实现、测试与评价工具，但 `evidence/releases/INDEX.md` 尚未登记当前
+> 提交的正式证据包，18-case 时长策略仍为 `provisional_requires_full_suite`。因此历史日志、
+> 预览页面和评价框架不能表述为当前提交已经通过最终验收。发布前剩余事项见
+> [提交清单](docs/contest/submission-checklist.md)。
+
 ## 一、基本信息
 
 | 项目 | 内容 |
