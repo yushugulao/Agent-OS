@@ -369,9 +369,13 @@ def main() -> int:
         target = root / "real-guest.log"
         target.write_bytes(source.read_bytes())
         source.unlink()
+        real_symlink = False
         try:
             os.symlink(target, source)
+            real_symlink = source.is_symlink()
         except OSError:
+            pass
+        if not real_symlink:
             real_is_symlink = Path.is_symlink
 
             def report_source_symlink(path: Path) -> bool:
@@ -387,6 +391,9 @@ def main() -> int:
     )
     assert "result_bundle_contract.py" in script, "serve-reader does not validate result bundles"
     assert "exit 1" in script, "serve-reader does not fail closed"
+    assert 'LLM_RELAY_MODE="${LLM_RELAY_MODE:-template}"' in script, (
+        "serve-reader must default to the deterministic offline relay"
+    )
     if os.name != "nt":
         with tempfile.TemporaryDirectory() as temp:
             base = Path(temp)

@@ -41,8 +41,8 @@
 
 - [ ] 赛队负责人确认[AI 工具使用披露](ai-usage-disclosure.md)覆盖所有实际使用的模型和工具。
 - [ ] 赛队负责人确认[第三方与原创增量说明](third-party-and-originality.md)与 Git 历史一致。
-- [ ] 确认三个 `.clang-format` 文件的 `GPL-2.0` SPDX 标记来源和兼容口径；必要时更新 `NOTICE`，
-  不得在来源不明时直接删除或改写标记。
+- [x] 三个 `.clang-format` 文件的 Linux 内核来源和独立 `GPL-2.0` 许可已写入 `NOTICE`，
+  原 SPDX 标记保持不变。
 - [ ] 检查仓库未包含 GitLab token、LLM API key、个人路径、临时日志或未授权数据。
 - [ ] 确认 PPT、视频、图片、字体、样例数据和引用材料均可提交并已正确署名。
 - [ ] 创建只指向冻结提交的最终 tag，并在提交平台核对默认分支、commit ID 和材料版本。

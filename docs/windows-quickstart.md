@@ -170,4 +170,4 @@ python3 host_tools/plain_ucore_llm_relay.py \
   --mode cloud
 ```
 
-`make reader` 启动的本地查看服务已经带上 `--auto-run-llm-relay --llm-relay-mode cloud`。当 LLM 相关 action 触发时，Relay 会生成复核摘要、方法检查、恢复说明、写作摘要、项目复核意见和最终报告摘要，并刷新相关状态文件。密钥文件不要放入仓库目录。运行脚本和结果文件不会写入密钥内容。
+`make reader` 默认带上 `--auto-run-llm-relay --llm-relay-mode template`，因此现场演示不依赖网络或密钥。需要验证云端适配时，可显式设置 `LLM_RELAY_MODE=cloud`；LLM 相关 action 会生成复核摘要、方法检查、恢复说明、写作摘要、项目复核意见和最终报告摘要，并刷新相关状态文件。密钥文件不要放入仓库目录，运行脚本和结果文件不会写入密钥内容。

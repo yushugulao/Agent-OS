@@ -8,7 +8,7 @@ STATE_DIR="${STATE_DIR:-${DUAL_LOG_DIR}/agentos-state}"
 OUT_DIR="${OUT_DIR:-${DUAL_LOG_DIR}/agentos-reader-live}"
 RESULT_DIR="${RESULT_DIR:-${ROOT_DIR}/results/latest}"
 PORT="${PORT:-8767}"
-LLM_RELAY_MODE="${LLM_RELAY_MODE:-cloud}"
+LLM_RELAY_MODE="${LLM_RELAY_MODE:-template}"
 host_run_result_name="$(PYTHONPATH="${ROOT_DIR}/host_tools" "${PYTHON_BIN}" -c '
 from dual_state_evidence_contract import RUN_RESULT_WORK_FILES
 print(RUN_RESULT_WORK_FILES["agentos"])
