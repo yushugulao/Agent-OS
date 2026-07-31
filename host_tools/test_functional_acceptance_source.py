@@ -262,6 +262,12 @@ def main() -> int:
             "values[11] = functional_event.tick;",
             '"task5 second heartbeat");',
         ),
+        "task5-stale-delay-clock": _move_after(
+            source, "run_functional_sentinel",
+            'check(agent_info(&sentinel_info) == AGENT_STATUS_OK,\n'
+            '\t      "task5 Sentinel delay start");',
+            "wake_tick = sentinel_info.current_tick + TASK5_DELAY_TICKS;",
+        ),
         "sink-forged-hash": _mutate(
             source, "functional_receipt", "return hash;", "return 7;"
         ),

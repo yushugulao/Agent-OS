@@ -2653,6 +2653,7 @@ static void run_functional_task4(void)
 static void run_functional_sentinel(int gate_fd, uint64 corr_id)
 {
 	struct agent_info sentinel_info;
+	uint64 wake_tick;
 	char gate;
 	int parent_pid = getppid();
 
@@ -2663,7 +2664,14 @@ static void run_functional_sentinel(int gate_fd, uint64 corr_id)
 	check(read(gate_fd, &gate, 1) == 1 && gate == 'G',
 	      "task5 Sentinel gate");
 	close(gate_fd);
-	sleep(TASK5_DELAY_TICKS);
+	check(agent_info(&sentinel_info) == AGENT_STATUS_OK,
+	      "task5 Sentinel delay start");
+	wake_tick = sentinel_info.current_tick + TASK5_DELAY_TICKS;
+	do {
+		sleep(1);
+		check(agent_info(&sentinel_info) == AGENT_STATUS_OK,
+		      "task5 Sentinel delay clock");
+	} while (sentinel_info.current_tick < wake_tick);
 	memset(&functional_event, 0, sizeof(functional_event));
 	functional_event.type = AGENT_EVENT_MESSAGE;
 	functional_event.corr_id = corr_id;

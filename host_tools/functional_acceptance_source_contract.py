@@ -88,10 +88,10 @@ TRANSLATION_UNIT_FUNCTIONS = (
 )
 
 TRANSLATION_UNIT_FINGERPRINT = (
-    "bac347af97d2156cdb2da0921fa22b7f657dc960ab11d55de670cbc38ca222ae"
+    "4748bda19d4a31be6a8fe0087f3b7919c8864ad4827cd28e74007480be8a8dca"
 )
 NORMALIZED_CALL_GRAPH_FINGERPRINT = (
-    "22376152fd56e411e8be3931e4ed289e710f1e92d664307a9f9bbe70f9130b78"
+    "2593f790f08ebde5dbf0a9238931051eee6c177addb8952a3994844ceca930ef"
 )
 
 # This is the complete reviewed function closure that can create, validate,
@@ -198,7 +198,7 @@ FUNCTION_FINGERPRINTS: dict[str, str] = {
     "task4_query_semantic": "73bf2d612ba98213c13e8509a2301b2d06aabeea561b4c34f1adf4bcc99c055a",
     "task4_delete_metadata": "56024658bc4be4dbcdcbcda69fdcccb5db2511a960f35e0cf78a8b7977ceb653",
     "run_functional_task4": "659552807589f250eaed57140d23e1606f691a6ac2a3eff7efb741e3202841a0",
-    "run_functional_sentinel": "08f8539be8e7c0c93a77d3febc4b43d140317aad7184532bb9ba309fcac5c73c",
+    "run_functional_sentinel": "1f05236f344ac930c21a4fe99476c7d2c83ee91464e41dae20e898deb9893bad",
     "run_functional_task5": "5b5eb4b7489b3d58064ce0fb814bbb3c646d7d279ee6ac081301d688d317eaee",
 }
 
@@ -1007,8 +1007,38 @@ def _validate_task5(tokens: list[str], values: dict[int, tuple[str, ...]]) -> No
     ):
         raise ValueError("Task5 wait/heartbeat result capture order differs")
     sentinel = _function_tokens(tokens, "run_functional_sentinel")
-    for name, count in (("agent_info", 1), ("read", 1), ("sleep", 1), ("agent_wake", 1)):
+    for name, count in (("agent_info", 3), ("read", 1), ("sleep", 1), ("agent_wake", 1)):
         _require_call_count(sentinel, name, count, "Task5 Sentinel")
+    gate_read = _require_sequence(
+        sentinel,
+        ("read", "(", "gate_fd", ",", "&", "gate", ",", "1", ")"),
+        "Task5 Sentinel gate read",
+    )
+    clock_reads = _locations(
+        sentinel, ("agent_info", "(", "&", "sentinel_info", ")")
+    )
+    deadline = _require_sequence(
+        sentinel,
+        (
+            "wake_tick", "=", "sentinel_info", ".", "current_tick", "+",
+            "TASK5_DELAY_TICKS", ";",
+        ),
+        "Task5 Sentinel tick deadline",
+    )
+    if not (
+        len(clock_reads) == 3
+        and clock_reads[0] < gate_read < clock_reads[1] < deadline
+        < clock_reads[2]
+    ):
+        raise ValueError("Task5 Sentinel delay clock is stale")
+    _require_sequence(
+        sentinel,
+        (
+            "while", "(", "sentinel_info", ".", "current_tick", "<",
+            "wake_tick", ")", ";",
+        ),
+        "Task5 Sentinel tick wait",
+    )
 
 
 def _validate_execution_control(tokens: list[str]) -> None:
